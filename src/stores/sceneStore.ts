@@ -74,7 +74,21 @@ const projectTree: ProjectDirectory[] = [
         assets: [
           { id: 'asset-crate', name: 'SciFi Crate', type: 'model', previewColor: '#26C6DA' },
           { id: 'asset-platform', name: 'Floating Platform', type: 'model', previewColor: '#FF7043' },
-          { id: 'asset-light', name: 'Neon Light', type: 'model', previewColor: '#AB47BC' },
+          { id: 'asset-light2', name: 'Neon Light', type: 'model', previewColor: '#AB47BC' },
+          { id: 'asset-light3', name: 'Neon Light', type: 'model', previewColor: '#AB47BC' },
+          { id: 'asset-light4', name: 'Neon Light', type: 'model', previewColor: '#AB47BC' },
+          { id: 'asset-light5', name: 'Neon Light', type: 'model', previewColor: '#AB47BC' },
+          { id: 'asset-light6', name: 'Neon Light', type: 'model', previewColor: '#AB47BC' },
+          { id: 'asset-light222', name: 'Neon Light', type: 'model', previewColor: '#AB47BC' },
+          { id: 'asset-light62', name: 'Neon Light', type: 'model', previewColor: '#AB47BC' },
+          { id: 'asset-light22', name: 'Neon Light', type: 'model', previewColor: '#AB47BC' },
+          { id: 'asset-light3', name: 'Neon Light', type: 'model', previewColor: '#AB47BC' },
+          { id: 'asset-light4', name: 'Neon Light', type: 'model', previewColor: '#AB47BC' },
+          { id: 'asset-light5', name: 'Neon Light', type: 'model', previewColor: '#AB47BC' },
+          { id: 'asset-light6', name: 'Neon Light', type: 'model', previewColor: '#AB47BC' },
+          { id: 'asset-light222', name: 'Neon Light', type: 'model', previewColor: '#AB47BC' },
+          { id: 'asset-light62', name: 'Neon Light', type: 'model', previewColor: '#AB47BC' },
+          { id: 'asset-light22', name: 'Neon Light', type: 'model', previewColor: '#AB47BC' },
         ],
       },
       {
@@ -88,6 +102,46 @@ const projectTree: ProjectDirectory[] = [
       },
       {
         id: 'dir-assets-materials',
+        name: 'Materials',
+        assets: [
+          { id: 'asset-steel', name: 'Brushed Steel', type: 'image', previewColor: '#90A4AE' },
+          { id: 'asset-holo', name: 'Holographic', type: 'image', previewColor: '#7E57C2' },
+        ],
+      },
+      {
+        id: 'dir-assets-materials2',
+        name: 'Materials',
+        assets: [
+          { id: 'asset-steel', name: 'Brushed Steel', type: 'image', previewColor: '#90A4AE' },
+          { id: 'asset-holo', name: 'Holographic', type: 'image', previewColor: '#7E57C2' },
+        ],
+      },
+      {
+        id: 'dir-assets-materials3',
+        name: 'Materials',
+        assets: [
+          { id: 'asset-steel', name: 'Brushed Steel', type: 'image', previewColor: '#90A4AE' },
+          { id: 'asset-holo', name: 'Holographic', type: 'image', previewColor: '#7E57C2' },
+        ],
+      },
+      {
+        id: 'dir-assets-materials4',
+        name: 'Materials',
+        assets: [
+          { id: 'asset-steel', name: 'Brushed Steel', type: 'image', previewColor: '#90A4AE' },
+          { id: 'asset-holo', name: 'Holographic', type: 'image', previewColor: '#7E57C2' },
+        ],
+      },
+      {
+        id: 'dir-assets-materials5',
+        name: 'Materials',
+        assets: [
+          { id: 'asset-steel', name: 'Brushed Steel', type: 'image', previewColor: '#90A4AE' },
+          { id: 'asset-holo', name: 'Holographic', type: 'image', previewColor: '#7E57C2' },
+        ],
+      },
+      {
+        id: 'dir-assets-materials6',
         name: 'Materials',
         assets: [
           { id: 'asset-steel', name: 'Brushed Steel', type: 'image', previewColor: '#90A4AE' },

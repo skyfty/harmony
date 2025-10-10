@@ -63,7 +63,11 @@ function assetIcon(type: ProjectAsset['type']) {
 
 <template>
   <v-card class="panel-card" elevation="8">
-    <v-toolbar density="compact" title="Project" class="panel-toolbar" height="40">
+    <v-toolbar density="compact" class="panel-toolbar" height="40">
+      <v-toolbar-title class="toolbar-title">
+        <v-icon start size="18">mdi-folder-outline</v-icon>
+        Project
+      </v-toolbar-title>
       <v-spacer />
       <v-btn icon="mdi-window-minimize" variant="text" @click="emit('collapse')" />
     </v-toolbar>
@@ -227,6 +231,13 @@ function assetIcon(type: ProjectAsset['type']) {
   font-size: 0.85rem;
   font-weight: 600;
   letter-spacing: 0.08em;
+  margin-inline-start: 0px;
+}
+
+.toolbar-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .panel-toolbar :deep(.v-btn) {
