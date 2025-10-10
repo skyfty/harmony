@@ -99,35 +99,37 @@ function assetIcon(type: ProjectAsset['type']) {
           <v-toolbar-title class="text-subtitle-2">Thumbnails</v-toolbar-title>
         </v-toolbar>
         <v-divider />
-        <div v-if="currentAssets.length" class="gallery-grid">
-          <v-card
-            v-for="asset in currentAssets"
-            :key="asset.id"
-            :class="['asset-card', { 'is-selected': selectedAssetId === asset.id }]"
-            elevation="4"
-            @click="selectAsset(asset)"
-          >
-            <div class="asset-preview" :style="{ background: asset.previewColor }">
-              <v-icon size="32" color="white">{{ assetIcon(asset.type) }}</v-icon>
-            </div>
-            <v-card-item>
-              <v-card-title>{{ asset.name }}</v-card-title>
-              <v-card-subtitle class="text-uppercase">{{ asset.type }}</v-card-subtitle>
-            </v-card-item>
-            <v-card-actions>
-              <v-btn
-                color="primary"
-                variant="tonal"
-                density="comfortable"
-                block
-                @click.stop="addAssetToScene(asset)"
-              >
-                Add to Scene
-              </v-btn>
-            </v-card-actions>
-          </v-card>
+        <div class="project-gallery-scroll">
+          <div v-if="currentAssets.length" class="gallery-grid">
+            <v-card
+              v-for="asset in currentAssets"
+              :key="asset.id"
+              :class="['asset-card', { 'is-selected': selectedAssetId === asset.id }]"
+              elevation="4"
+              @click="selectAsset(asset)"
+            >
+              <div class="asset-preview" :style="{ background: asset.previewColor }">
+                <v-icon size="32" color="white">{{ assetIcon(asset.type) }}</v-icon>
+              </div>
+              <v-card-item>
+                <v-card-title>{{ asset.name }}</v-card-title>
+                <v-card-subtitle class="text-uppercase">{{ asset.type }}</v-card-subtitle>
+              </v-card-item>
+              <v-card-actions>
+                <v-btn
+                  color="primary"
+                  variant="tonal"
+                  density="comfortable"
+                  block
+                  @click.stop="addAssetToScene(asset)"
+                >
+                  Add to Scene
+                </v-btn>
+              </v-card-actions>
+            </v-card>
+          </div>
+          <div v-else class="placeholder-text">Select a folder to preview assets.</div>
         </div>
-        <div v-else class="placeholder-text">Select a folder to preview assets.</div>
       </div>
     </div>
   </v-card>
@@ -169,6 +171,11 @@ function assetIcon(type: ProjectAsset['type']) {
   min-height: 0;
 }
 
+.project-gallery-scroll {
+  flex: 1;
+  overflow-y: auto;
+}
+
 .tree-view {
   flex: 1;
   overflow-y: auto;
@@ -183,12 +190,10 @@ function assetIcon(type: ProjectAsset['type']) {
 }
 
 .gallery-grid {
-  flex: 1;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
   gap: 12px;
   padding: 12px;
-  overflow-y: auto;
 }
 
 .asset-card {
