@@ -170,6 +170,14 @@ function assetIcon(type: ProjectAsset['type']) {
   overflow-y: auto;
 }
 
+.tree-view :deep(.v-treeview-node__root) {
+  padding-inline-start: 12px;
+}
+
+.tree-view :deep(.v-treeview-node__level) {
+  margin-inline-start: 12px;
+}
+
 .gallery-grid {
   flex: 1;
   display: grid;
