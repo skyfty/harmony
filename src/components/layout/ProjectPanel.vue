@@ -227,7 +227,6 @@ function assetIcon(type: ProjectAsset['type']) {
   font-size: 0.85rem;
   font-weight: 600;
   letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .panel-toolbar :deep(.v-btn) {

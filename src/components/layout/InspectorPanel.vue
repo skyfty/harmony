@@ -217,7 +217,6 @@ function updateWireframe(value: boolean | null) {
   font-size: 0.85rem;
   font-weight: 600;
   letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .inspector-section :deep(.v-list-item-title) {
@@ -232,7 +231,6 @@ function updateWireframe(value: boolean | null) {
   font-size: 0.85rem;
   font-weight: 600;
   letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .panel-toolbar :deep(.v-btn) {
@@ -251,14 +249,13 @@ function updateWireframe(value: boolean | null) {
   grid-template-columns: 1fr repeat(3, 1fr);
   align-items: center;
   gap: 8px;
-  padding: 0.5rem 1rem;
+  padding: 0.5rem 0.7rem;
 }
 
 .vector-label {
   font-size: 0.8rem;
   letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: rgba(233, 236, 241, 0.72);
+  color: rgba(233, 236, 241, 1.0);
 }
 
 .vector-input {
