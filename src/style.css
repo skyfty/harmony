@@ -3,6 +3,7 @@
     Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
+  font-size: 15px;
   color: #e9ecf1;
   background-color: #0e1116;
   font-synthesis: none;
@@ -22,6 +23,7 @@ body {
   min-height: 100vh;
   background-color: #0e1116;
   color: inherit;
+  font-size: 0.95rem;
 }
 
 #app {

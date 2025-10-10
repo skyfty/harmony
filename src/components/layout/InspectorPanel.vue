@@ -116,7 +116,7 @@ function updateWireframe(value: boolean | null) {
 
 <template>
   <v-card class="panel-card" elevation="4">
-    <v-toolbar density="compact" title="Inspector" class="panel-toolbar">
+    <v-toolbar density="compact" title="Inspector" class="panel-toolbar" height="40">
       <v-spacer />
       <v-btn icon="mdi-window-minimize" variant="text" @click="emit('collapse')" />
     </v-toolbar>
@@ -201,6 +201,8 @@ function updateWireframe(value: boolean | null) {
 .panel-toolbar {
   background-color: transparent;
   color: #e9ecf1;
+  min-height: 40px;
+  padding: 0 8px;
 }
 
 .panel-body {
@@ -210,6 +212,34 @@ function updateWireframe(value: boolean | null) {
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
+}
+
+.panel-toolbar :deep(.v-toolbar-title),
+.inspector-section :deep(.v-list-subheader__text) {
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.inspector-section :deep(.v-list-item-title) {
+  font-size: 0.8rem;
+}
+
+.inspector-section :deep(.v-list-item-subtitle) {
+  font-size: 0.7rem;
+}
+
+.panel-toolbar :deep(.v-toolbar-title) {
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.panel-toolbar :deep(.v-btn) {
+  width: 32px;
+  height: 32px;
 }
 
 .inspector-section {

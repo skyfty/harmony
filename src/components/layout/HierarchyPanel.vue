@@ -44,7 +44,7 @@ function expandAll(items: Array<{ id: string; children?: Array<unknown> }>): str
 
 <template>
   <v-card class="panel-card" elevation="4">
-    <v-toolbar density="compact" title="Hierarchy" class="panel-toolbar">
+    <v-toolbar density="compact" title="Hierarchy" class="panel-toolbar" height="40">
       <v-spacer />
       <v-btn icon="mdi-window-minimize" variant="text" @click="emit('collapse')" />
     </v-toolbar>
@@ -81,6 +81,20 @@ function expandAll(items: Array<{ id: string; children?: Array<unknown> }>): str
 .panel-toolbar {
   background-color: transparent;
   color: #e9ecf1;
+  min-height: 40px;
+  padding: 0 8px;
+}
+
+.panel-toolbar :deep(.v-toolbar-title) {
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.panel-toolbar :deep(.v-btn) {
+  width: 32px;
+  height: 32px;
 }
 
 .panel-body {
@@ -96,5 +110,13 @@ function expandAll(items: Array<{ id: string; children?: Array<unknown> }>): str
 .hierarchy-tree {
   height: 100%;
   overflow-y: auto;
+}
+
+.hierarchy-tree :deep(.v-treeview-node__root) {
+  min-height: 32px;
+}
+
+.hierarchy-tree :deep(.v-treeview-node__label-text) {
+  font-size: 0.85rem;
 }
 </style>

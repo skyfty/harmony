@@ -63,14 +63,14 @@ function assetIcon(type: ProjectAsset['type']) {
 
 <template>
   <v-card class="panel-card" elevation="8">
-    <v-toolbar density="compact" title="Project" class="panel-toolbar">
+    <v-toolbar density="compact" title="Project" class="panel-toolbar" height="40">
       <v-spacer />
       <v-btn icon="mdi-window-minimize" variant="text" @click="emit('collapse')" />
     </v-toolbar>
     <v-divider />
     <div class="project-content">
       <div class="project-tree">
-        <v-toolbar density="compact" flat>
+        <v-toolbar density="compact" flat height="36">
           <v-toolbar-title class="text-subtitle-2">Assets</v-toolbar-title>
         </v-toolbar>
         <v-divider />
@@ -90,7 +90,7 @@ function assetIcon(type: ProjectAsset['type']) {
         </v-treeview>
       </div>
       <div class="project-gallery">
-        <v-toolbar density="compact" flat>
+        <v-toolbar density="compact" flat height="36">
           <v-toolbar-title class="text-subtitle-2">Thumbnails</v-toolbar-title>
         </v-toolbar>
         <v-divider />
@@ -140,6 +140,8 @@ function assetIcon(type: ProjectAsset['type']) {
 .panel-toolbar {
   background-color: transparent;
   color: #e9ecf1;
+  min-height: 40px;
+  padding: 0 8px;
 }
 
 .project-content {
@@ -208,5 +210,28 @@ function assetIcon(type: ProjectAsset['type']) {
   font-size: 0.9rem;
   text-align: center;
   margin: auto;
+}
+
+.panel-toolbar :deep(.v-toolbar-title),
+.project-tree :deep(.v-toolbar-title),
+.project-gallery :deep(.v-toolbar-title) {
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.panel-toolbar :deep(.v-btn) {
+  width: 32px;
+  height: 32px;
+}
+
+.asset-card :deep(.v-card-title) {
+  font-size: 0.85rem;
+}
+
+.asset-card :deep(.v-card-subtitle) {
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
 }
 </style>
