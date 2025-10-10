@@ -175,7 +175,6 @@ function updateWireframe(value: boolean | null) {
             <v-switch
               :model-value="materialForm.wireframe"
               hide-details
-              inset
               color="primary"
               @update:model-value="updateWireframe"
             />

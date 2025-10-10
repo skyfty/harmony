@@ -34,3 +34,10 @@ a {
   color: inherit;
   text-decoration: none;
 }
+
+.v-field {
+  font-size: 0.8rem;
+}
+.v-field__input {
+  min-height: 12px;
+}

@@ -79,7 +79,9 @@ function initScene() {
   renderer.shadowMap.enabled = true
 
   scene = new THREE.Scene()
+
   scene.background = new THREE.Color(0x101318)
+  scene.fog = new THREE.Fog( scene.background, 1, 5000 );
   scene.add(rootGroup)
   scene.add(gridHelper)
   scene.add(axesHelper)
@@ -132,6 +134,11 @@ function animate() {
     orbitControls.update()
   }
 
+  if (gridHelper) {
+    gridHelper.position.x = Math.round(camera.position.x / 1) * 1;
+    gridHelper.position.z = Math.round(camera.position.z / 1) * 1;
+    gridHelper.position.y = 0;
+  }
   renderer.render(scene, camera)
 }
 

@@ -4,6 +4,7 @@ import App from './App.vue'
 import router from './router'
 import vuetify from './plugins/vuetify'
 import './style.css'
+import 'vuetify_densest/src/densest.css'
 
 const app = createApp(App)
 

@@ -8,11 +8,10 @@
       :model-value="props.modelValue[axis]"
       type="number"
       density="compact"
-      variant="outlined"
+      variant="underlined"
       color="primary"
       hide-details
       class="vector-input"
-      :min="props.min"
       @change="onChange(axis, $event)"
     />
   </div>
@@ -39,14 +38,12 @@ function onChange(axis: keyof Vector3Like, event: Event) {
   display: grid;
   grid-template-columns: 1fr repeat(3, 1fr);
   align-items: center;
-  gap: 8px;
+  gap: 3px;
   padding: 0.5rem 1rem;
 }
 
 .vector-label {
   font-size: 0.8rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
   color: rgba(233, 236, 241, 0.72);
 }
 
