@@ -142,7 +142,6 @@ function updateWireframe(value: boolean | null) {
         />
       </v-list>
 
-      <v-divider class="my-4" />
 
       <v-list class="inspector-section" lines="two" density="compact">
         <v-list-subheader>Material</v-list-subheader>
@@ -207,10 +206,10 @@ function updateWireframe(value: boolean | null) {
 .panel-body {
   flex: 1;
   overflow-y: auto;
-  padding: 1rem;
+    padding: 0.2rem;
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap:0.3rem;
 }
 
 .panel-toolbar :deep(.v-toolbar-title),
@@ -242,8 +241,7 @@ function updateWireframe(value: boolean | null) {
 }
 
 .inspector-section {
-  background-color: rgba(15, 18, 23, 0.8);
-  border-radius: 12px;
+  border-radius: 3px;
   border: 1px solid rgba(255, 255, 255, 0.04);
   padding: 0.25rem 0;
 }

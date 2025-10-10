@@ -105,7 +105,7 @@ function expandAll(items: Array<{ id: string; children?: Array<unknown> }>): str
 }
 
 .hierarchy-body {
-  padding: 0.75rem;
+  padding: 0.2rem;
 }
 
 .hierarchy-tree {
