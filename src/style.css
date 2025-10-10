@@ -41,3 +41,10 @@ a {
 .v-field__input {
   min-height: 12px;
 }
+.v-treeview-item__level {
+  width: 28px;
+}
+
+.v-treeview .v-list-item--slim > .v-list-item__prepend > .v-icon ~ .v-list-item__spacer {
+    width: 1px;
+}

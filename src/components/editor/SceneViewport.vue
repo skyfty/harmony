@@ -40,6 +40,8 @@ let camera: THREE.PerspectiveCamera | null = null
 let orbitControls: OrbitControls | null = null
 let transformControls: TransformControls | null = null
 let resizeObserver: ResizeObserver | null = null
+let selectionBoxHelper: THREE.Box3Helper | null = null
+let selectionTrackedObject: THREE.Object3D | null = null
 
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
@@ -53,13 +55,57 @@ const draggingChangedHandler = (event: unknown) => {
   }
 }
 
-const gridHelper = new THREE.GridHelper(40, 40, 0x4dd0e1, 0x263238)
+const gridHelper = new THREE.GridHelper(500, 500, 0x4dd0e1, 0x263238)
 const gridMaterial = gridHelper.material as THREE.Material
 gridMaterial.depthWrite = false
 gridMaterial.opacity = 0.25
 gridMaterial.transparent = true
 
 const axesHelper = new THREE.AxesHelper(4)
+
+function clearSelectionBox() {
+  if (!selectionBoxHelper) return
+
+  if (selectionBoxHelper.parent) {
+    selectionBoxHelper.parent.remove(selectionBoxHelper)
+  }
+
+  selectionBoxHelper.geometry.dispose()
+  if (Array.isArray(selectionBoxHelper.material)) {
+    selectionBoxHelper.material.forEach((material) => material.dispose())
+  } else {
+    selectionBoxHelper.material.dispose()
+  }
+
+  selectionBoxHelper = null
+  selectionTrackedObject = null
+}
+
+function updateSelectionBox(object: THREE.Object3D | null) {
+  if (!scene) {
+    selectionTrackedObject = object
+    return
+  }
+
+  if (!object) {
+    clearSelectionBox()
+    return
+  }
+
+  if (!selectionBoxHelper) {
+    const box = new THREE.Box3().setFromObject(object)
+    selectionBoxHelper = new THREE.Box3Helper(box, 0x82b1ff)
+    selectionBoxHelper.frustumCulled = false
+    scene.add(selectionBoxHelper)
+  } else {
+    selectionBoxHelper.box.setFromObject(object)
+    if (!selectionBoxHelper.parent) {
+      scene.add(selectionBoxHelper)
+    }
+  }
+
+  selectionTrackedObject = object
+}
 
 function initScene() {
   if (!canvasRef.value || !viewportEl.value) {
@@ -80,11 +126,14 @@ function initScene() {
 
   scene = new THREE.Scene()
 
-  scene.background = new THREE.Color(0x101318)
+  scene.background = new THREE.Color(0x696969)
   scene.fog = new THREE.Fog( scene.background, 1, 5000 );
   scene.add(rootGroup)
   scene.add(gridHelper)
   scene.add(axesHelper)
+  if (selectionTrackedObject) {
+    updateSelectionBox(selectionTrackedObject)
+  }
 
   const hemiLight = new THREE.HemisphereLight(0xb3e5fc, 0x1c313a, 0.5)
   scene.add(hemiLight)
@@ -139,6 +188,10 @@ function animate() {
     gridHelper.position.z = Math.round(camera.position.z / 1) * 1;
     gridHelper.position.y = 0;
   }
+
+  if (selectionBoxHelper && selectionTrackedObject) {
+    selectionBoxHelper.box.setFromObject(selectionTrackedObject)
+  }
   renderer.render(scene, camera)
 }
 
@@ -160,6 +213,8 @@ function disposeScene() {
 
   renderer?.dispose()
   renderer = null
+
+  clearSelectionBox()
 
   scene = null
   camera = null
@@ -200,6 +255,8 @@ function handleTransformChange() {
     return
   }
 
+  updateSelectionBox(target)
+
   emit('updateNodeTransform', {
     id: target.userData.nodeId as string,
     position: toVector3Like(target.position),
@@ -225,6 +282,7 @@ function syncSceneGraph() {
 }
 
 function disposeSceneNodes() {
+  clearSelectionBox()
   rootGroup.traverse((child) => {
     if ((child as THREE.Mesh).geometry) {
       (child as THREE.Mesh).geometry.dispose()
@@ -286,6 +344,9 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
 }
 
 function attachSelection(nodeId: string | null, tool: EditorTool = props.activeTool) {
+  const target = nodeId ? objectMap.get(nodeId) ?? null : null
+  updateSelectionBox(target)
+
   if (!transformControls) return
 
   if (!nodeId) {
@@ -293,8 +354,7 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
     return
   }
 
-  const object = objectMap.get(nodeId)
-  if (!object) {
+  if (!target) {
     transformControls.detach()
     return
   }
@@ -306,7 +366,7 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
 
   // 确保在附加前设置正确的模式
   transformControls.setMode(tool)
-  transformControls.attach(object)
+  transformControls.attach(target)
 }
 
 function updateToolMode(tool: EditorTool) {
