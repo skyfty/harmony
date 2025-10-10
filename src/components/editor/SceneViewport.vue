@@ -104,7 +104,7 @@ function initScene() {
   transformControls = new TransformControls(camera, canvasRef.value)
   transformControls.addEventListener('dragging-changed', draggingChangedHandler as any)
   transformControls.addEventListener('objectChange', handleTransformChange)
-  scene.add(transformControls as unknown as THREE.Object3D)
+  scene.add(transformControls.getHelper())
 
   canvasRef.value.addEventListener('pointerdown', handlePointerDown)
 
@@ -213,7 +213,8 @@ function syncSceneGraph() {
     rootGroup.add(object)
   }
 
-  attachSelection(props.selectedNodeId)
+  // 重新附加选择并确保工具模式正确
+  attachSelection(props.selectedNodeId, props.activeTool)
 }
 
 function disposeSceneNodes() {
@@ -296,6 +297,8 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
     return
   }
 
+  // 确保在附加前设置正确的模式
+  transformControls.setMode(tool)
   transformControls.attach(object)
 }
 

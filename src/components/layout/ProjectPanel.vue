@@ -78,6 +78,7 @@ function assetIcon(type: ProjectAsset['type']) {
           v-model:opened="openedDirectories"
           v-model:selected="selectedDirectory"
           :items="projectTree"
+          density="compact"
           item-title="name"
           item-value="id"
           activatable
@@ -140,7 +141,7 @@ function assetIcon(type: ProjectAsset['type']) {
 .panel-toolbar {
   background-color: transparent;
   color: #e9ecf1;
-  min-height: 40px;
+  min-height: 20px;
   padding: 0 8px;
 }
 

@@ -53,6 +53,7 @@ function expandAll(items: Array<{ id: string; children?: Array<unknown> }>): str
       <v-treeview
         v-model:opened="opened"
         v-model:selected="selected"
+        density="compact"
         :items="hierarchyItems"
         item-title="name"
         item-value="id"
@@ -81,7 +82,7 @@ function expandAll(items: Array<{ id: string; children?: Array<unknown> }>): str
 .panel-toolbar {
   background-color: transparent;
   color: #e9ecf1;
-  min-height: 40px;
+  min-height: 20px;
   padding: 0 8px;
 }
 

@@ -201,7 +201,7 @@ function updateWireframe(value: boolean | null) {
 .panel-toolbar {
   background-color: transparent;
   color: #e9ecf1;
-  min-height: 40px;
+  min-height: 20px;
   padding: 0 8px;
 }
 
