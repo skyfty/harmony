@@ -97,12 +97,11 @@ function initScene() {
   camera.lookAt(new THREE.Vector3(0, 1, 0))
 
   orbitControls = new OrbitControls(camera, canvasRef.value)
-  orbitControls.enableDamping = true
+  orbitControls.enableDamping = false
   orbitControls.dampingFactor = 0.05
   orbitControls.target.set(0, 1, 0)
 
   transformControls = new TransformControls(camera, canvasRef.value)
-  transformControls.setSize(0.9)
   transformControls.addEventListener('dragging-changed', draggingChangedHandler as any)
   transformControls.addEventListener('objectChange', handleTransformChange)
   scene.add(transformControls as unknown as THREE.Object3D)
@@ -278,7 +277,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
   return mesh
 }
 
-function attachSelection(nodeId: string | null) {
+function attachSelection(nodeId: string | null, tool: EditorTool = props.activeTool) {
   if (!transformControls) return
 
   if (!nodeId) {
@@ -292,7 +291,7 @@ function attachSelection(nodeId: string | null) {
     return
   }
 
-  if (props.activeTool === 'select') {
+  if (tool === 'select') {
     transformControls.detach()
     return
   }
@@ -303,18 +302,16 @@ function attachSelection(nodeId: string | null) {
 function updateToolMode(tool: EditorTool) {
   if (!transformControls) return
 
+  transformControls.enabled = tool !== 'select'
+
   if (tool === 'select') {
-    transformControls.enabled = false
     transformControls.detach()
-  } else {
-    transformControls.enabled = true
-    transformControls.setMode(tool)
-    if (props.selectedNodeId) {
-      const selected = objectMap.get(props.selectedNodeId)
-      if (selected) {
-        transformControls.attach(selected)
-      }
-    }
+    return
+  }
+
+  transformControls.setMode(tool)
+  if (props.selectedNodeId) {
+    attachSelection(props.selectedNodeId, tool)
   }
 }
 
