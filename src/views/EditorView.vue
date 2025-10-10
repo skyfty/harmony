@@ -262,8 +262,8 @@ function handleMenuAction(action: string) {
     'menu menu menu'
     'hierarchy scene inspector'
     'project project project';
-  gap: 12px;
-  padding: 16px;
+  gap: 5px;
+  padding: 5px;
   box-sizing: border-box;
 }
 
@@ -326,7 +326,6 @@ function handleMenuAction(action: string) {
 }
 
 .menu-dropdown {
-  min-width: 180px;
   background: rgba(18, 21, 26, 0.95);
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -340,7 +339,6 @@ function handleMenuAction(action: string) {
 }
 
 .menu-list-item.has-children {
-  padding-right: 32px;
 }
 
 .menu-list-item.has-children :deep(.v-list-item__append) {
