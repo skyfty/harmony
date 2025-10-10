@@ -85,7 +85,7 @@ function assetIcon(type: ProjectAsset['type']) {
           open-on-click
           class="tree-view"
         >
-          <template #append>
+          <template #prepend>
             <v-icon size="small">mdi-folder</v-icon>
           </template>
         </v-treeview>

@@ -12,7 +12,7 @@ const { hierarchyItems, selectedNodeId } = storeToRefs(sceneStore)
 
 const opened = ref<string[]>([])
 
-const selected = computed({
+const active = computed({
   get: () => (selectedNodeId.value ? [selectedNodeId.value] : []),
   set: (ids: string[]) => {
     const nextId = ids[0] ?? null
@@ -52,7 +52,7 @@ function expandAll(items: Array<{ id: string; children?: Array<unknown> }>): str
     <div class="panel-body hierarchy-body">
       <v-treeview
         v-model:opened="opened"
-        v-model:selected="selected"
+        v-model:active="active"
         density="compact"
         :items="hierarchyItems"
         item-title="name"
