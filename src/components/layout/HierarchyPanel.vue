@@ -52,7 +52,7 @@ function expandAll(items: Array<{ id: string; children?: Array<unknown> }>): str
     <div class="panel-body hierarchy-body">
       <v-treeview
         v-model:opened="opened"
-        v-model:active="active"
+        v-model:activated="active"
         density="compact"
         :items="hierarchyItems"
         item-title="name"
