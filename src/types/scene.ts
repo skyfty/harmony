@@ -24,4 +24,5 @@ export interface SceneNode {
    * Values in this field are not persisted across sessions.
    */
   resourceId?: string
+  visible?: boolean
 }

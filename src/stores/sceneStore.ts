@@ -40,6 +40,8 @@ export interface SceneCameraState {
 
 export type EditorPanel = 'hierarchy' | 'inspector' | 'project'
 
+export type HierarchyDropPosition = 'before' | 'after' | 'inside'
+
 export interface PanelVisibilityState {
   hierarchy: boolean
   inspector: boolean
@@ -249,6 +251,107 @@ function findDirectory(directories: ProjectDirectory[], id: string): ProjectDire
   return null
 }
 
+function findNodeById(nodes: SceneNode[], id: string): SceneNode | null {
+  for (const node of nodes) {
+    if (node.id === id) return node
+    if (node.children) {
+      const match = findNodeById(node.children, id)
+      if (match) return match
+    }
+  }
+  return null
+}
+
+function nodeContainsId(node: SceneNode, maybeChildId: string): boolean {
+  if (!node.children) return false
+  for (const child of node.children) {
+    if (child.id === maybeChildId) return true
+    if (nodeContainsId(child, maybeChildId)) return true
+  }
+  return false
+}
+
+function isDescendantNode(nodes: SceneNode[], ancestorId: string, childId: string): boolean {
+  const ancestor = findNodeById(nodes, ancestorId)
+  if (!ancestor) return false
+  return nodeContainsId(ancestor, childId)
+}
+
+interface DetachResult {
+  tree: SceneNode[]
+  node: SceneNode | null
+}
+
+function detachNodeImmutable(nodes: SceneNode[], targetId: string): DetachResult {
+  const nextTree: SceneNode[] = []
+  let removed: SceneNode | null = null
+
+  for (const node of nodes) {
+    if (node.id === targetId) {
+      removed = cloneNode(node)
+      continue
+    }
+
+    const cloned = cloneNode(node)
+    if (node.children) {
+      const { tree: childTree, node: childRemoved } = detachNodeImmutable(node.children, targetId)
+      if (childRemoved) {
+        removed = childRemoved
+      }
+      if (childTree.length > 0) {
+        cloned.children = childTree
+      } else {
+        delete cloned.children
+      }
+    }
+
+    nextTree.push(cloned)
+  }
+
+  return { tree: nextTree, node: removed }
+}
+
+function insertNodeMutable(
+  nodes: SceneNode[],
+  targetId: string | null,
+  node: SceneNode,
+  position: HierarchyDropPosition,
+): boolean {
+  if (targetId === null) {
+    if (position === 'before') {
+      nodes.unshift(node)
+    } else {
+      nodes.push(node)
+    }
+    return true
+  }
+
+  for (let index = 0; index < nodes.length; index += 1) {
+    const current = nodes[index]!
+    if (current.id === targetId) {
+      if (position === 'inside') {
+        const children = current.children ? [...current.children, node] : [node]
+        current.children = children
+      } else if (position === 'before') {
+        nodes.splice(index, 0, node)
+      } else {
+        nodes.splice(index + 1, 0, node)
+      }
+      return true
+    }
+
+    if (current.children) {
+      const inserted = insertNodeMutable(current.children, targetId, node, position)
+      if (inserted) {
+        current.children = [...current.children]
+        return true
+      }
+    }
+  }
+
+  return false
+}
+
 
 export const useSceneStore = defineStore('scene', {
   state: (): SceneState => ({
@@ -350,6 +453,31 @@ export const useSceneStore = defineStore('scene', {
     },
     togglePanelVisibility(panel: EditorPanel) {
       this.setPanelVisibility(panel, !this.panelVisibility[panel])
+    },
+
+    isDescendant(ancestorId: string, maybeChildId: string) {
+      if (!ancestorId || !maybeChildId) return false
+      if (ancestorId === maybeChildId) return true
+      return isDescendantNode(this.nodes, ancestorId, maybeChildId)
+    },
+
+    moveNode(payload: { nodeId: string; targetId: string | null; position: HierarchyDropPosition }) {
+      const { nodeId, targetId, position } = payload
+      if (!nodeId) return false
+      if (targetId && nodeId === targetId) return false
+
+      if (targetId && isDescendantNode(this.nodes, nodeId, targetId)) {
+        return false
+      }
+
+      const { tree, node } = detachNodeImmutable(this.nodes, nodeId)
+      if (!node) return false
+
+      const inserted = insertNodeMutable(tree, targetId, node, position)
+      if (!inserted) return false
+
+      this.nodes = tree
+      return true
     },
 
     addSceneNode(payload: {
