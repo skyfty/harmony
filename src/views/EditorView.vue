@@ -7,11 +7,13 @@ import ProjectPanel from '@/components/layout/ProjectPanel.vue'
 import SceneViewport from '@/components/editor/SceneViewport.vue'
 import MenuBar from './MenuBar.vue'
 import { useSceneStore, type EditorTool, type EditorPanel, type SceneCameraState } from '@/stores/sceneStore'
+import { useUiStore } from '@/stores/uiStore'
 import type { Vector3Like } from '@/types/scene'
 import Loader from '@/plugins/loader'
 import { useFileDialog } from '@vueuse/core'
 
 const sceneStore = useSceneStore()
+const uiStore = useUiStore()
 const { nodes: sceneNodes, selectedNodeId, activeTool, camera, panelVisibility } = storeToRefs(sceneStore)
 
 const hierarchyOpen = computed({
@@ -64,26 +66,54 @@ function reopenPanel(panel: EditorPanel) {
 
 function handleMenuImport() {
   const loaderFile = new Loader()
+
   loaderFile.$on('loaded', (obj: any | null) => {
     if (obj) {
       console.log('Loaded object:', obj)
-      // You can add the loaded object to your scene here
-    } else {
-      console.error('Failed to load object.')
+      uiStore.updateLoadingOverlay({
+        message: `${obj.name ?? '资源'}导入完成`,
+        progress: 100,
+      })
+      uiStore.updateLoadingProgress(100)
+      return
     }
-  })
-  loaderFile.$on('progress', (payload: { loaded: number; total: number; filename: string }) => {
-    console.log(`Loading ${payload.filename}: ${((payload.loaded / payload.total) * 100).toFixed(2)}%`)
+
+    console.error('Failed to load object.')
+    uiStore.updateLoadingOverlay({
+      message: '导入失败，请重试',
+      closable: true,
+      autoClose: false,
+    })
   })
 
-  const {
-    open: openFileDialog, // 打开对话框的方法，重命名为 openFileDialog
-    onChange: onFileChange
-  } = useFileDialog()
-  onFileChange((files:any) => {
-    loaderFile.loadFiles(files)
+  loaderFile.$on('progress', (payload: { loaded: number; total: number; filename: string }) => {
+    const percent = (payload.loaded / payload.total) * 100
+    uiStore.updateLoadingOverlay({
+      mode: 'determinate',
+      message: `正在导入：${payload.filename}`,
+    })
+    uiStore.updateLoadingProgress(percent)
+    console.log(`Loading ${payload.filename}: ${percent.toFixed(2)}%`)
   })
-  openFileDialog() // 打开文件选择对话框
+
+  const { open: openFileDialog, onChange: onFileChange } = useFileDialog()
+
+  onFileChange((files: FileList | File[] | null) => {
+    if (!files || (files instanceof FileList && files.length === 0) || (Array.isArray(files) && files.length === 0)) {
+      uiStore.hideLoadingOverlay(true)
+      return
+    }
+
+    const fileArray = Array.isArray(files) ? files : Array.from(files)
+    uiStore.startIndeterminateLoading({
+      title: '导入资源',
+      message: '正在准备文件…',
+      closable: true,
+    })
+    loaderFile.loadFiles(fileArray)
+  })
+
+  openFileDialog()
 }
 
 // Add this function to handle menu actions
