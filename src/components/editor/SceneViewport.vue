@@ -69,7 +69,7 @@ const draggingChangedHandler = (event: unknown) => {
   }
 }
 
-const gridHelper = new THREE.GridHelper(500, 500, 0x4dd0e1, 0x263238)
+const gridHelper = new THREE.GridHelper(1000, 1000, 0x4dd0e1, 0x263238)
 const gridMaterial = gridHelper.material as THREE.Material
 gridMaterial.depthWrite = false
 gridMaterial.opacity = 0.25
