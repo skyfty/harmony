@@ -8,6 +8,8 @@ import SceneViewport from '@/components/editor/SceneViewport.vue'
 import MenuBar from './MenuBar.vue'
 import { useSceneStore, type EditorTool, type EditorPanel, type SceneCameraState } from '@/stores/sceneStore'
 import type { Vector3Like } from '@/types/scene'
+import Loader from '@/plugins/loader'
+import { useFileDialog } from '@vueuse/core'
 
 const sceneStore = useSceneStore()
 const { nodes: sceneNodes, selectedNodeId, activeTool, camera, panelVisibility } = storeToRefs(sceneStore)
@@ -59,8 +61,53 @@ function reopenPanel(panel: EditorPanel) {
   sceneStore.setPanelVisibility(panel, true)
 }
 
+
+function handleMenuImport() {
+  const loaderFile = new Loader()
+  loaderFile.$on('loaded', (obj: any | null) => {
+    if (obj) {
+      console.log('Loaded object:', obj)
+      // You can add the loaded object to your scene here
+    } else {
+      console.error('Failed to load object.')
+    }
+  })
+  loaderFile.$on('progress', (payload: { loaded: number; total: number; filename: string }) => {
+    console.log(`Loading ${payload.filename}: ${((payload.loaded / payload.total) * 100).toFixed(2)}%`)
+  })
+
+  const {
+    open: openFileDialog, // 打开对话框的方法，重命名为 openFileDialog
+    onChange: onFileChange
+  } = useFileDialog()
+  onFileChange((files:any) => {
+    loaderFile.loadFiles(files)
+  })
+  openFileDialog() // 打开文件选择对话框
+}
+
 // Add this function to handle menu actions
 function handleMenuAction(action: string) {
+  switch (action) {
+    case 'Open':
+      // Handle open action
+      break
+    case 'Save':
+      // Handle save action
+      break
+    case 'Import':
+      handleMenuImport()
+      break
+    case 'Export':
+      // Implement your export logic here
+      console.log('Export action triggered')
+      break
+    case 'Preview':
+      // Handle preview action
+      break
+    default:
+      console.warn(`Unknown menu action: ${action}`)
+  }
   // Implement your menu action logic here
   // Example: console.log('Menu action:', action)
 }

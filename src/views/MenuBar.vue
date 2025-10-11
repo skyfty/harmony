@@ -1,9 +1,4 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { storeToRefs } from 'pinia'
-import { useSceneStore } from '@/stores/sceneStore'
-
-
 const quickActions = [
   { icon: 'mdi-content-save-outline', label: 'Save' },
   { icon: 'mdi-export-variant', label: 'Export' },
@@ -15,10 +10,6 @@ const emit = defineEmits<{
 function handleMenuAction(action: string) {
   emit('menu-action', action)
 }
-
-const sceneStore = useSceneStore()
-
-
 </script>
 
 <template>
@@ -35,6 +26,7 @@ const sceneStore = useSceneStore()
               rounded="xl"
             >
               <v-icon size="18" class="ml-1">mdi-menu-down</v-icon>
+
                 <v-menu>
                 <template #activator="{ props }">
                   <span v-bind="props">File</span>
@@ -90,6 +82,7 @@ const sceneStore = useSceneStore()
                   </v-menu>
                 </v-list>
                 </v-menu>
+
             </v-btn>
             <v-btn
               class="menu-button"
