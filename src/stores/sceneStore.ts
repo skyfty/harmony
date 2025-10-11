@@ -134,46 +134,7 @@ const projectTree: ProjectDirectory[] = [
           { id: 'asset-holo', name: 'Holographic', type: 'image', previewColor: '#7E57C2' },
         ],
       },
-      {
-        id: 'dir-assets-materials2',
-        name: 'Materials',
-        assets: [
-          { id: 'asset-steel', name: 'Brushed Steel', type: 'image', previewColor: '#90A4AE' },
-          { id: 'asset-holo', name: 'Holographic', type: 'image', previewColor: '#7E57C2' },
-        ],
-      },
-      {
-        id: 'dir-assets-materials3',
-        name: 'Materials',
-        assets: [
-          { id: 'asset-steel', name: 'Brushed Steel', type: 'image', previewColor: '#90A4AE' },
-          { id: 'asset-holo', name: 'Holographic', type: 'image', previewColor: '#7E57C2' },
-        ],
-      },
-      {
-        id: 'dir-assets-materials4',
-        name: 'Materials',
-        assets: [
-          { id: 'asset-steel', name: 'Brushed Steel', type: 'image', previewColor: '#90A4AE' },
-          { id: 'asset-holo', name: 'Holographic', type: 'image', previewColor: '#7E57C2' },
-        ],
-      },
-      {
-        id: 'dir-assets-materials5',
-        name: 'Materials',
-        assets: [
-          { id: 'asset-steel', name: 'Brushed Steel', type: 'image', previewColor: '#90A4AE' },
-          { id: 'asset-holo', name: 'Holographic', type: 'image', previewColor: '#7E57C2' },
-        ],
-      },
-      {
-        id: 'dir-assets-materials6',
-        name: 'Materials',
-        assets: [
-          { id: 'asset-steel', name: 'Brushed Steel', type: 'image', previewColor: '#90A4AE' },
-          { id: 'asset-holo', name: 'Holographic', type: 'image', previewColor: '#7E57C2' },
-        ],
-      },
+    
     ],
   },
 ]

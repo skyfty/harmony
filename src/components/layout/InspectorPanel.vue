@@ -122,6 +122,22 @@ function updateWireframe(value: boolean | null) {
     </v-toolbar>
     <v-divider />
     <div class="panel-body" v-if="selectedNode">
+      <div style="display: flex; align-items: center; gap: 0.2rem; padding: 0.2rem 0.7rem;">
+        <v-icon color="primary" size="40">mdi-cube-outline</v-icon>
+        <v-text-field
+          v-model="selectedNode.name"
+          label="Name"
+          variant="outlined"
+          density="comfortable"
+          hide-details
+        />
+        <v-checkbox
+          v-model="selectedNode.visible"
+          density="comfortable"
+          hide-details
+        />
+      </div>
+
       <v-list class="inspector-section" lines="two" density="compact">
         <v-list-subheader>Transform</v-list-subheader>
         <InspectorVectorControls
@@ -283,13 +299,4 @@ function updateWireframe(value: boolean | null) {
   color: rgba(233, 236, 241, 0.72);
 }
 
-.placeholder-text {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 2rem;
-  color: rgba(233, 236, 241, 0.32);
-  text-align: center;
-}
 </style>
