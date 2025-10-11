@@ -39,6 +39,7 @@ const tools: Array<{ label: string; icon: string; value: EditorTool }> = [
 
 const viewportEl = ref<HTMLDivElement | null>(null)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
+const surfaceRef = ref<HTMLDivElement | null>(null)
 
 let renderer: THREE.WebGLRenderer | null = null
 let scene: THREE.Scene | null = null
@@ -54,6 +55,10 @@ const pointer = new THREE.Vector2()
 const rootGroup = new THREE.Group()
 const objectMap = new Map<string, THREE.Object3D>()
 let isApplyingCameraState = false
+const ASSET_DRAG_MIME = 'application/x-harmony-asset'
+const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+
+const isDragHovering = ref(false)
 
 const draggingChangedHandler = (event: unknown) => {
   const value = (event as { value?: boolean })?.value ?? false
@@ -286,6 +291,91 @@ function handlePointerDown(event: PointerEvent) {
     emit('selectNode', nodeId)
   } else {
     emit('selectNode', null)
+  }
+}
+
+function extractAssetPayload(event: DragEvent): { assetId: string } | null {
+  if (!event.dataTransfer) return null
+  const raw = event.dataTransfer.getData(ASSET_DRAG_MIME)
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed?.assetId && typeof parsed.assetId === 'string') {
+      return { assetId: parsed.assetId }
+    }
+  } catch (error) {
+    console.warn('Failed to parse drag payload', error)
+  }
+  return null
+}
+
+function isAssetDrag(event: DragEvent): boolean {
+  if (!event.dataTransfer) return false
+  return Array.from(event.dataTransfer.types ?? []).includes(ASSET_DRAG_MIME)
+}
+
+function computeDropPoint(event: DragEvent): THREE.Vector3 | null {
+  if (!camera || !canvasRef.value) return null
+  const rect = canvasRef.value.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) return null
+  const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  pointer.set(ndcX, ndcY)
+  raycaster.setFromCamera(pointer, camera)
+  const planeHit = new THREE.Vector3()
+  if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
+    return planeHit.clone()
+  }
+  const intersections = raycaster.intersectObjects(rootGroup.children, true)
+  if (intersections.length > 0) {
+    const first = intersections[0]
+    return first?.point.clone() ?? null
+  }
+  return null
+}
+
+function handleViewportDragEnter(event: DragEvent) {
+  if (!isAssetDrag(event)) return
+  event.preventDefault()
+  isDragHovering.value = true
+}
+
+function handleViewportDragOver(event: DragEvent) {
+  if (!isAssetDrag(event)) return
+  computeDropPoint(event)
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy'
+  }
+  isDragHovering.value = true
+}
+
+function handleViewportDragLeave(event: DragEvent) {
+  if (!isAssetDrag(event)) return
+  const surface = surfaceRef.value
+  const related = event.relatedTarget as Node | null
+  if (surface && related && surface.contains(related)) {
+    return
+  }
+  isDragHovering.value = false
+}
+
+function handleViewportDrop(event: DragEvent) {
+  if (!isAssetDrag(event)) return
+  const payload = extractAssetPayload(event)
+  const point = computeDropPoint(event)
+  event.preventDefault()
+  event.stopPropagation()
+  isDragHovering.value = false
+  if (!payload) return
+
+  const spawnPoint = point ?? new THREE.Vector3(0, 0, 0)
+  if (spawnPoint.y < 0.5) {
+    spawnPoint.y = 0.5
+  }
+  const created = sceneStore.spawnAssetAtPosition(payload.assetId, toVector3Like(spawnPoint))
+  if (!created) {
+    console.warn('No asset found for drag payload', payload.assetId)
   }
 }
 
@@ -527,8 +617,20 @@ watch(
         />
       </v-card>
     </div>
-    <div class="viewport-surface">
+    <div
+      ref="surfaceRef"
+      class="viewport-surface"
+      :class="{ 'is-drag-hover': isDragHovering }"
+      @dragenter="handleViewportDragEnter"
+      @dragover="handleViewportDragOver"
+      @dragleave="handleViewportDragLeave"
+      @drop="handleViewportDrop"
+    >
       <canvas ref="canvasRef" class="viewport-canvas" />
+      <div v-if="isDragHovering" class="drop-overlay">
+        <v-icon size="36" color="white">mdi-plus-circle-outline</v-icon>
+        <span>释放以添加资源</span>
+      </div>
     </div>
   </div>
 </template>
@@ -568,6 +670,32 @@ watch(
 .viewport-surface {
   flex: 1;
   position: relative;
+}
+
+.viewport-surface.is-drag-hover::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(77, 208, 225, 0.12);
+  border: 1px dashed rgba(77, 208, 225, 0.6);
+  pointer-events: none;
+  border-radius: 8px;
+  z-index: 3;
+}
+
+.drop-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: rgba(233, 236, 241, 0.9);
+  font-size: 0.95rem;
+  pointer-events: none;
+  z-index: 4;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
 }
 
 .viewport-canvas {

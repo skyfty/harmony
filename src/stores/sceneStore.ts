@@ -251,6 +251,20 @@ function findDirectory(directories: ProjectDirectory[], id: string): ProjectDire
   return null
 }
 
+function findAssetInTree(directories: ProjectDirectory[], assetId: string): ProjectAsset | null {
+  for (const dir of directories) {
+    if (dir.assets) {
+      const asset = dir.assets.find((item) => item.id === assetId)
+      if (asset) return asset
+    }
+    if (dir.children) {
+      const found = findAssetInTree(dir.children, assetId)
+      if (found) return found
+    }
+  }
+  return null
+}
+
 function findNodeById(nodes: SceneNode[], id: string): SceneNode | null {
   for (const node of nodes) {
     if (node.id === id) return node
@@ -425,19 +439,25 @@ export const useSceneStore = defineStore('scene', {
     selectAsset(id: string | null) {
       this.selectedAssetId = id
     },
-    addNodeFromAsset(asset: ProjectAsset) {
+    addNodeFromAsset(asset: ProjectAsset, position?: Vector3Like) {
       const id = crypto.randomUUID()
       const newNode: SceneNode = {
         id,
         name: asset.name,
         geometry: 'box',
         material: { color: asset.previewColor },
-        position: { x: 0, y: 1, z: 0 },
+        position: position ? cloneVector(position) : { x: 0, y: 1, z: 0 },
         rotation: { x: 0, y: 0, z: 0 },
         scale: { x: 1, y: 1, z: 1 },
       }
       this.nodes = [...this.nodes, newNode]
       this.selectedNodeId = id
+    },
+    spawnAssetAtPosition(assetId: string, position: Vector3Like) {
+      const asset = findAssetInTree(this.projectTree, assetId)
+      if (!asset) return null
+      this.addNodeFromAsset(asset, position)
+      return asset
     },
     setCameraState(camera: SceneCameraState) {
       this.camera = cloneCameraState(camera)

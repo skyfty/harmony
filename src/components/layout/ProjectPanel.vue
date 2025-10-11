@@ -11,6 +11,8 @@ const sceneStore = useSceneStore()
 const { projectTree, activeDirectoryId, currentAssets, selectedAssetId } = storeToRefs(sceneStore)
 
 const openedDirectories = ref<string[]>([])
+const draggingAssetId = ref<string | null>(null)
+const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 
 const selectedDirectory = computed({
   get: () => (activeDirectoryId.value ? [activeDirectoryId.value] : []),
@@ -51,6 +53,25 @@ function addAssetToScene(asset: ProjectAsset) {
 
 function refreshGallery() {
 }
+
+function handleAssetDragStart(event: DragEvent, asset: ProjectAsset) {
+  draggingAssetId.value = asset.id
+  selectAsset(asset)
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'copyMove'
+    event.dataTransfer.setData(ASSET_DRAG_MIME, JSON.stringify({ assetId: asset.id }))
+    event.dataTransfer.dropEffect = 'copy'
+  }
+}
+
+function handleAssetDragEnd() {
+  draggingAssetId.value = null
+}
+
+function isAssetDragging(assetId: string) {
+  return draggingAssetId.value === assetId
+}
+
 const searchLoaded = ref(false)
 const searchLoading = ref(false)
 
@@ -127,9 +148,18 @@ function assetIcon(type: ProjectAsset['type']) {
             <v-card
               v-for="asset in currentAssets"
               :key="asset.id"
-              :class="['asset-card', { 'is-selected': selectedAssetId === asset.id }]"
+              :class="[
+                'asset-card',
+                {
+                  'is-selected': selectedAssetId === asset.id,
+                  'is-dragging': isAssetDragging(asset.id),
+                },
+              ]"
               elevation="4"
+              draggable="true"
               @click="selectAsset(asset)"
+              @dragstart.stop="handleAssetDragStart($event, asset)"
+              @dragend="handleAssetDragEnd"
             >
               <div class="asset-preview" :style="{ background: asset.previewColor }">
                 <v-icon size="32" color="white">{{ assetIcon(asset.type) }}</v-icon>
@@ -236,6 +266,11 @@ function assetIcon(type: ProjectAsset['type']) {
 .asset-card.is-selected {
   border-color: rgba(0, 172, 193, 0.9);
   box-shadow: 0 0 12px rgba(0, 172, 193, 0.35);
+}
+
+.asset-card.is-dragging {
+  opacity: 0.75;
+  border-color: rgba(77, 208, 225, 0.6);
 }
 
 .asset-preview {
