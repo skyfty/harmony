@@ -59,6 +59,7 @@ const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
 const MIN_CAMERA_HEIGHT = 0.25
 const MIN_TARGET_HEIGHT = 0
+const GRID_CELL_SIZE = 1
 
 const isDragHovering = ref(false)
 
@@ -104,6 +105,12 @@ function clampCameraAboveGround(forceUpdate = true) {
   }
 
   return adjusted
+}
+
+function snapVectorToGrid(vec: THREE.Vector3) {
+  vec.x = Math.floor(vec.x / GRID_CELL_SIZE) * GRID_CELL_SIZE + GRID_CELL_SIZE / 2
+  vec.z = Math.floor(vec.z / GRID_CELL_SIZE) * GRID_CELL_SIZE + GRID_CELL_SIZE / 2
+  return vec
 }
 
 function clearSelectionBox() {
@@ -354,12 +361,13 @@ function computeDropPoint(event: DragEvent): THREE.Vector3 | null {
   raycaster.setFromCamera(pointer, camera)
   const planeHit = new THREE.Vector3()
   if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
-    return planeHit.clone()
+    return snapVectorToGrid(planeHit.clone())
   }
   const intersections = raycaster.intersectObjects(rootGroup.children, true)
   if (intersections.length > 0) {
     const first = intersections[0]
-    return first?.point.clone() ?? null
+    const point = first?.point.clone() ?? null
+    return point ? snapVectorToGrid(point) : null
   }
   return null
 }
@@ -399,10 +407,8 @@ function handleViewportDrop(event: DragEvent) {
   isDragHovering.value = false
   if (!payload) return
 
-  const spawnPoint = point ?? new THREE.Vector3(0, 0, 0)
-  if (spawnPoint.y < 0.5) {
-    spawnPoint.y = 0.5
-  }
+  const spawnPoint = point ? point.clone() : new THREE.Vector3(0, 0, 0)
+  snapVectorToGrid(spawnPoint)
   const created = sceneStore.spawnAssetAtPosition(payload.assetId, toVector3Like(spawnPoint))
   if (!created) {
     console.warn('No asset found for drag payload', payload.assetId)
@@ -414,6 +420,10 @@ function handleTransformChange() {
   const target = transformControls.object as THREE.Object3D | null
   if (!target || !target.userData?.nodeId) {
     return
+  }
+
+  if (transformControls.getMode() === 'translate') {
+    snapVectorToGrid(target.position)
   }
 
   updateSelectionBox(target)
