@@ -49,6 +49,20 @@ function addAssetToScene(asset: ProjectAsset) {
   sceneStore.addNodeFromAsset(asset)
 }
 
+function refreshGallery() {
+}
+const searchLoaded = ref(false)
+const searchLoading = ref(false)
+
+function searchAsset () {
+  searchLoading.value = true
+  setTimeout(() => {
+    searchLoading.value = false
+    searchLoaded.value = true
+  }, 2000)
+}
+
+
 function assetIcon(type: ProjectAsset['type']) {
   switch (type) {
     case 'texture':
@@ -63,11 +77,8 @@ function assetIcon(type: ProjectAsset['type']) {
 
 <template>
   <v-card class="panel-card" elevation="8">
-    <v-toolbar density="compact" class="panel-toolbar" height="40">
-      <v-toolbar-title class="toolbar-title">
-        <v-icon start size="18">mdi-folder-outline</v-icon>
-        Project
-      </v-toolbar-title>
+    <v-toolbar density="compact" class="panel-toolbar"  title="Project" height="40">
+
       <v-spacer />
       <v-btn icon="mdi-window-minimize" variant="text" @click="emit('collapse')" />
     </v-toolbar>
@@ -97,6 +108,18 @@ function assetIcon(type: ProjectAsset['type']) {
       <div class="project-gallery">
         <v-toolbar density="compact" flat height="36">
           <v-toolbar-title class="text-subtitle-2">Thumbnails</v-toolbar-title>
+           <v-spacer />
+          <v-text-field
+            :loading="searchLoading"
+            append-inner-icon="mdi-magnify"
+            density="compact"
+            label="Search..."
+            variant="solo"
+            hide-details
+            single-line
+            @click:append-inner="searchAsset"
+          ></v-text-field>
+           <v-btn icon="mdi-refresh" variant="text" @click="refreshGallery" />
         </v-toolbar>
         <v-divider />
         <div class="project-gallery-scroll">

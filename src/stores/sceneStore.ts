@@ -31,6 +31,15 @@ interface TransformUpdatePayload {
   scale?: Vector3Like
 }
 
+interface SceneState {
+  nodes: SceneNode[]
+  selectedNodeId: string | null
+  activeTool: EditorTool
+  projectTree: ProjectDirectory[]
+  activeDirectoryId: string | null
+  selectedAssetId: string | null
+}
+
 const initialNodes: SceneNode[] = [
   {
     id: 'node-root-cube',
@@ -190,14 +199,15 @@ function findDirectory(directories: ProjectDirectory[], id: string): ProjectDire
   return null
 }
 
+
 export const useSceneStore = defineStore('scene', {
-  state: () => ({
+  state: (): SceneState => ({
     nodes: initialNodes as SceneNode[],
     selectedNodeId: initialNodes[0]?.id ?? null,
-    activeTool: 'select' as EditorTool,
+    activeTool: 'select',
     projectTree,
     activeDirectoryId: defaultDirectoryId,
-    selectedAssetId: null as string | null,
+    selectedAssetId: null,
   }),
   getters: {
     selectedNode(state): SceneNode | null {
@@ -273,6 +283,18 @@ export const useSceneStore = defineStore('scene', {
       }
       this.nodes = [...this.nodes, newNode]
       this.selectedNodeId = id
+    },
+  },
+  persist: {
+    key: 'scene-store',
+    storage: 'local',
+    version: 2,
+    pick: ['nodes', 'selectedNodeId', 'activeTool', 'activeDirectoryId', 'selectedAssetId'],
+    migrations: {
+      2: (state) => ({
+        ...state,
+        activeTool: (state.activeTool as EditorTool | undefined) ?? 'select',
+      }),
     },
   },
 })

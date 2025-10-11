@@ -3,12 +3,16 @@ import { createPinia } from 'pinia'
 import App from './App.vue'
 import router from './router'
 import vuetify from './plugins/vuetify'
+import { createPersistedStatePlugin } from './plugins/piniaPersist'
 import './style.css'
 import 'vuetify_densest/src/densest.css'
 
 const app = createApp(App)
 
-app.use(createPinia())
+const pinia = createPinia()
+pinia.use(createPersistedStatePlugin({ keyPrefix: 'harmony' }))
+
+app.use(pinia)
 app.use(router)
 app.use(vuetify)
 
