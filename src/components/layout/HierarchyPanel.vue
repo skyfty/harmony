@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
+import HierarchyAddMenu from './HierarchyAddMenu.vue'
 
 const emit = defineEmits<{
   (event: 'collapse'): void
@@ -78,14 +79,6 @@ function handleCheckboxChange(id: string, value: boolean | null) {
   }
 }
 
-function handleAddNode() {
-  const node = sceneStore.addSceneNode()
-  if (node) {
-    active.value = [node.id]
-    checkboxSelection.value = [node.id]
-  }
-}
-
 function handleSelectAll() {
   if (!allNodeIds.value.length) return
   checkboxSelection.value = [...allNodeIds.value]
@@ -112,8 +105,18 @@ function handleDeleteSelected() {
     <v-divider />
     <div class="panel-body hierarchy-body">
       <v-toolbar density="compact" class="tree-toolbar" flat height="36">
-        <v-btn icon="mdi-plus" variant="text" density="compact" @click="handleAddNode" />
-        <v-divider vertical class="tree-toolbar-separator" />
+    
+        <HierarchyAddMenu />
+
+        <v-btn
+          icon="mdi-delete-outline"
+          variant="text"
+          density="compact"
+          color="error"
+          :disabled="!hasSelection"
+          @click="handleDeleteSelected"
+        />
+        <v-spacer />
         <v-btn
           icon="mdi-select-all"
           variant="text"
@@ -128,17 +131,7 @@ function handleDeleteSelected() {
           :disabled="!hasSelection"
           @click="handleClearSelection"
         />
-        <v-divider vertical class="tree-toolbar-separator" />
-        <v-btn
-          icon="mdi-delete-outline"
-          variant="text"
-          density="compact"
-          color="error"
-          :disabled="!hasSelection"
-          @click="handleDeleteSelected"
-        />
       </v-toolbar>
-      <v-divider class="tree-toolbar-divider" />
       <v-treeview
         v-model:opened="opened"
         v-model:activated="active"
@@ -216,8 +209,8 @@ function handleDeleteSelected() {
 
 .tree-toolbar {
   background: rgba(255, 255, 255, 0.02);
-  border-radius: 8px;
-  padding-inline: 6px;
+  border-radius: 2px;
+  padding-inline: 1px;
   gap: 2px;
 }
 
@@ -246,7 +239,7 @@ function handleDeleteSelected() {
 }
 
 .tree-toolbar-divider {
-  margin: 2px 0 6px;
+  margin: 0px;
   opacity: 0.08;
 }
 

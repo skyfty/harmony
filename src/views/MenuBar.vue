@@ -39,9 +39,6 @@ function handleMenuAction(action: string) {
                   Save
                   </v-list-item>
                   <v-divider />
-                  <v-list-item @click="handleMenuAction('Import')" class="menu-list-item">
-                  Import
-                  </v-list-item>
                   <v-menu
                     location="end"
                     offset="8"

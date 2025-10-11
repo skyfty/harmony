@@ -375,29 +375,6 @@ export const useSceneStore = defineStore('scene', {
       this.nodes = [...this.nodes, newNode]
       this.selectedNodeId = id
     },
-    addSceneNode(payload: {
-      name?: string
-      geometry?: SceneNode['geometry']
-      materialColor?: string
-      position?: Vector3Like
-      rotation?: Vector3Like
-      scale?: Vector3Like
-    } = {}) {
-      const id = crypto.randomUUID()
-      const node: SceneNode = {
-        id,
-        name: payload.name ?? `New Node ${this.nodes.length + 1}`,
-        geometry: payload.geometry ?? 'box',
-        material: { color: payload.materialColor ?? '#90CAF9' },
-        position: payload.position ? cloneVector(payload.position) : { x: 0, y: 1, z: 0 },
-        rotation: payload.rotation ? cloneVector(payload.rotation) : { x: 0, y: 0, z: 0 },
-        scale: payload.scale ? cloneVector(payload.scale) : { x: 1, y: 1, z: 1 },
-      }
-
-      this.nodes = [...this.nodes, node]
-      this.selectedNodeId = id
-      return node
-    },
     setCameraState(camera: SceneCameraState) {
       this.camera = cloneCameraState(camera)
     },
@@ -413,7 +390,8 @@ export const useSceneStore = defineStore('scene', {
     togglePanelVisibility(panel: EditorPanel) {
       this.setPanelVisibility(panel, !this.panelVisibility[panel])
     },
-    addImportedSceneObject(payload: {
+
+    addSceneNode(payload: {
       object: Object3D
       name?: string
       position?: Vector3Like

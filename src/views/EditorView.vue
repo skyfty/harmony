@@ -1,20 +1,16 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
-import * as THREE from 'three'
 import HierarchyPanel from '@/components/layout/HierarchyPanel.vue'
 import InspectorPanel from '@/components/layout/InspectorPanel.vue'
 import ProjectPanel from '@/components/layout/ProjectPanel.vue'
 import SceneViewport from '@/components/editor/SceneViewport.vue'
 import MenuBar from './MenuBar.vue'
 import { useSceneStore, type EditorTool, type EditorPanel, type SceneCameraState } from '@/stores/sceneStore'
-import { useUiStore } from '@/stores/uiStore'
 import type { Vector3Like } from '@/types/scene'
-import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from '@/plugins/loader'
-import { useFileDialog } from '@vueuse/core'
+
 
 const sceneStore = useSceneStore()
-const uiStore = useUiStore()
 const { nodes: sceneNodes, selectedNodeId, activeTool, camera, panelVisibility } = storeToRefs(sceneStore)
 
 const hierarchyOpen = computed({
@@ -64,104 +60,11 @@ function reopenPanel(panel: EditorPanel) {
   sceneStore.setPanelVisibility(panel, true)
 }
 
-function prepareImportedObject(object: THREE.Object3D) {
-  object.removeFromParent()
-
-  object.traverse((child) => {
-    const mesh = child as THREE.Mesh
-    if (mesh?.isMesh) {
-      mesh.castShadow = true
-      mesh.receiveShadow = true
-    }
-    child.matrixAutoUpdate = true
-  })
-
-  object.updateMatrixWorld(true)
-
-  const boundingBox = new THREE.Box3().setFromObject(object)
-  if (!boundingBox.isEmpty()) {
-    const center = boundingBox.getCenter(new THREE.Vector3())
-    const minY = boundingBox.min.y
-
-    object.position.sub(center)
-    object.position.y -= (minY - center.y)
-    object.updateMatrixWorld(true)
-  }
-}
-
-function addImportedObjectToScene(object: THREE.Object3D) {
-  prepareImportedObject(object)
-
-  sceneStore.addImportedSceneObject({
-    object,
-    name: object.name,
-    position: { x: 0, y: 0, z: 0 },
-    rotation: { x: 0, y: 0, z: 0 },
-    scale: { x: 1, y: 1, z: 1 },
-  })
-}
-
-function handleMenuImport() {
-  const loaderFile = new Loader()
-
-  loaderFile.$on('loaded', (object: LoaderLoadedPayload) => {
-    if (object) {
-      const imported = object as THREE.Object3D
-      console.log('Loaded object:', imported)
-      addImportedObjectToScene(imported)
-      uiStore.updateLoadingOverlay({
-        message: `${imported.name ?? '资源'}导入完成`,
-        progress: 100,
-      })
-      uiStore.updateLoadingProgress(100)
-    } else {
-      console.error('Failed to load object.')
-      uiStore.updateLoadingOverlay({
-        message: '导入失败，请重试',
-        closable: true,
-        autoClose: false,
-      })
-    }
-  })
-
-  loaderFile.$on('progress', (payload: LoaderProgressPayload) => {
-    const percent = (payload.loaded / payload.total) * 100
-    uiStore.updateLoadingOverlay({
-      mode: 'determinate',
-      message: `正在导入：${payload.filename}`,
-    })
-    uiStore.updateLoadingProgress(percent)
-    console.log(`Loading ${payload.filename}: ${percent.toFixed(2)}%`)
-  })
-
-  const { open: openFileDialog, onChange: onFileChange } = useFileDialog()
-
-  onFileChange((files: FileList | File[] | null) => {
-    if (!files || (files instanceof FileList && files.length === 0) || (Array.isArray(files) && files.length === 0)) {
-      uiStore.hideLoadingOverlay(true)
-      return
-    }
-
-    const fileArray = Array.isArray(files) ? files : Array.from(files)
-    uiStore.startIndeterminateLoading({
-      title: '导入资源',
-      message: '正在准备文件…',
-      closable: true,
-    })
-    loaderFile.loadFiles(fileArray)
-  })
-
-  openFileDialog()
-}
-
 function handleMenuAction(action: string) {
   switch (action) {
     case 'Open':
       break
     case 'Save':
-      break
-    case 'Import':
-      handleMenuImport()
       break
     case 'Export':
       console.log('Export action triggered')
