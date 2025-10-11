@@ -57,6 +57,8 @@ const objectMap = new Map<string, THREE.Object3D>()
 let isApplyingCameraState = false
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+const MIN_CAMERA_HEIGHT = 0.25
+const MIN_TARGET_HEIGHT = 0
 
 const isDragHovering = ref(false)
 
@@ -74,6 +76,35 @@ gridMaterial.opacity = 0.25
 gridMaterial.transparent = true
 
 const axesHelper = new THREE.AxesHelper(4)
+
+function clampCameraAboveGround(forceUpdate = true) {
+  if (!camera || !orbitControls) return false
+
+  let adjusted = false
+
+  if (camera.position.y < MIN_CAMERA_HEIGHT) {
+    camera.position.y = MIN_CAMERA_HEIGHT
+    adjusted = true
+  }
+
+  if (orbitControls.target.y < MIN_TARGET_HEIGHT) {
+    orbitControls.target.y = MIN_TARGET_HEIGHT
+    adjusted = true
+  }
+
+  if (adjusted && forceUpdate) {
+    const prevApplying = isApplyingCameraState
+    if (!prevApplying) {
+      isApplyingCameraState = true
+    }
+    orbitControls.update()
+    if (!prevApplying) {
+      isApplyingCameraState = false
+    }
+  }
+
+  return adjusted
+}
 
 function clearSelectionBox() {
   if (!selectionBoxHelper) return
@@ -132,15 +163,20 @@ function applyCameraState(state: SceneCameraState | null | undefined) {
   if (!state || !camera || !orbitControls) return
   isApplyingCameraState = true
   camera.position.set(state.position.x, state.position.y, state.position.z)
+  if (camera.position.y < MIN_CAMERA_HEIGHT) {
+    camera.position.y = MIN_CAMERA_HEIGHT
+  }
   camera.fov = state.fov
   camera.updateProjectionMatrix()
-  orbitControls.target.set(state.target.x, state.target.y, state.target.z)
+  const clampedTargetY = Math.max(state.target.y, MIN_TARGET_HEIGHT)
+  orbitControls.target.set(state.target.x, clampedTargetY, state.target.z)
   orbitControls.update()
   isApplyingCameraState = false
 }
 
 function handleControlsChange() {
   if (isApplyingCameraState) return
+  clampCameraAboveGround()
   const snapshot = buildCameraState()
   if (snapshot) {
     emit('updateCamera', snapshot)
@@ -224,12 +260,6 @@ function animate() {
 
   if (orbitControls) {
     orbitControls.update()
-  }
-
-  if (gridHelper) {
-    gridHelper.position.x = Math.round(camera.position.x / 1) * 1;
-    gridHelper.position.z = Math.round(camera.position.z / 1) * 1;
-    gridHelper.position.y = 0;
   }
 
   if (selectionBoxHelper && selectionTrackedObject) {

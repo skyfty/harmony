@@ -398,7 +398,6 @@ function handleTreeDragLeave(event: DragEvent) {
     font-size: 12px;
     margin-left: 3px;
 }
-
 .tree-toolbar :deep(.v-btn .v-icon) {
   font-size: 16px;
 }
@@ -463,7 +462,7 @@ function handleTreeDragLeave(event: DragEvent) {
   display: flex;
   align-items: center;
   position: relative;
-  padding: 4px 8px;
+  padding: 4px 1px;
   border-radius: 6px;
   cursor: grab;
   user-select: none;
@@ -545,6 +544,5 @@ function handleTreeDragLeave(event: DragEvent) {
 
 .node-icon {
   opacity: 0.7;
-  margin-right: 6px;
 }
 </style>
