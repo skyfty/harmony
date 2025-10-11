@@ -5,6 +5,7 @@ import HierarchyPanel from '@/components/layout/HierarchyPanel.vue'
 import InspectorPanel from '@/components/layout/InspectorPanel.vue'
 import ProjectPanel from '@/components/layout/ProjectPanel.vue'
 import SceneViewport from '@/components/editor/SceneViewport.vue'
+import MenuBar from './MenuBar.vue'
 import { useSceneStore, type EditorTool, type EditorPanel, type SceneCameraState } from '@/stores/sceneStore'
 import type { Vector3Like } from '@/types/scene'
 
@@ -38,39 +39,6 @@ const reopenButtons = computed(() => ({
   showProject: !panelVisibility.value.project,
 }))
 
-type MenuEntry = {
-  label: string
-  items?: MenuEntry[]
-}
-
-const menuItems: MenuEntry[] = [
-  {
-    label: 'File',
-    items: [
-      { label: 'Open' },
-      { label: 'Save' },
-      { label: 'Import' },
-      {
-        label: 'Export',
-        items: [
-          { label: 'PLY' },
-          { label: 'STL' },
-        ],
-      },
-    ],
-  },
-  { label: 'Edit' },
-  { label: 'View' },
-  { label: 'Create' },
-  { label: 'Help' },
-]
-
-const quickActions = [
-  { icon: 'mdi-content-save-outline', label: 'Save' },
-  { icon: 'mdi-export-variant', label: 'Export' },
-  { icon: 'mdi-play-circle-outline', label: 'Preview' },
-]
-
 function setTool(tool: EditorTool) {
   sceneStore.setActiveTool(tool)
 }
@@ -83,10 +51,6 @@ function updateNodeTransform(payload: { id: string; position: Vector3Like; rotat
   sceneStore.updateNodeTransform(payload)
 }
 
-function handleMenuAction(action: string) {
-  console.debug(`[menu] ${action}`)
-}
-
 function updateCamera(state: SceneCameraState) {
   sceneStore.setCameraState(state)
 }
@@ -94,110 +58,21 @@ function updateCamera(state: SceneCameraState) {
 function reopenPanel(panel: EditorPanel) {
   sceneStore.setPanelVisibility(panel, true)
 }
+
+// Add this function to handle menu actions
+function handleMenuAction(action: string) {
+  // Implement your menu action logic here
+  // Example: console.log('Menu action:', action)
+}
+
 </script>
 
 <template>
   <div class="editor-view">
     <div class="editor-layout" :class="layoutClasses">
-      <section class="menu-bar">
-        <div class="menu-left">
-          <div class="brand">Harmony</div>
-          <div class="menu-items">
-            <div
-              v-for="item in menuItems"
-              :key="item.label"
-              class="menu-item"
-            >
-              <v-menu
-                v-if="item.items"
-                location="bottom"
-                offset-y
-                open-on-hover
-              >
-                <template #activator="{ props: menuActivatorProps }">
-                  <v-btn
-                    v-bind="menuActivatorProps"
-                    class="menu-button"
-                    variant="text"
-                    color="rgba(255, 255, 255, 0.72)"
-                    density="comfortable"
-                    rounded="xl"
-                  >
-                    {{ item.label }}
-                    <v-icon end size="16">mdi-menu-down</v-icon>
-                  </v-btn>
-                </template>
-                <v-list class="menu-dropdown" density="compact">
-                  <template v-for="entry in item.items" :key="entry.label">
-                    <v-menu
-                      v-if="entry.items"
-                      :key="`submenu-${entry.label}`"
-                      location="end"
-                      offset-x
-                      open-on-hover
-                    >
-                      <template #activator="{ props: submenuActivator }">
-                        <v-list-item
-                          v-bind="submenuActivator"
-                          class="menu-list-item has-children"
-                          :title="entry.label"
-                        >
-                          <template #append>
-                            <v-icon size="16">mdi-menu-right</v-icon>
-                          </template>
-                        </v-list-item>
-                      </template>
-                      <v-list class="menu-dropdown" density="compact">
-                        <v-list-item
-                          v-for="child in entry.items"
-                          :key="child.label"
-                          class="menu-list-item"
-                          :title="child.label"
-                          @click="handleMenuAction(`${item.label} > ${entry.label} > ${child.label}`)"
-                        />
-                      </v-list>
-                    </v-menu>
-                    <v-list-item
-                      v-else
-                      :key="`item-${entry.label}`"
-                      class="menu-list-item"
-                      :title="entry.label"
-                      @click="handleMenuAction(`${item.label} > ${entry.label}`)"
-                    />
-                  </template>
-                </v-list>
-              </v-menu>
-              <v-btn
-                v-else
-                class="menu-button"
-                variant="text"
-                color="rgba(255, 255, 255, 0.72)"
-                density="comfortable"
-                rounded="xl"
-                @click="handleMenuAction(item.label)"
-              >
-                {{ item.label }}
-              </v-btn>
-            </div>
-          </div>
-        </div>
-        <div class="menu-right">
-          <v-btn
-            v-for="action in quickActions"
-            :key="action.icon"
-            class="action-button"
-            variant="tonal"
-            color="primary"
-            density="comfortable"
-            size="small"
-            rounded
-          >
-            <v-icon start>{{ action.icon }}</v-icon>
-            {{ action.label }}
-          </v-btn>
-        </div>
-      </section>
-
+      <MenuBar 
+        @menu-action="handleMenuAction"
+      />
       <transition name="slide-left">
         <section v-if="hierarchyOpen" class="panel hierarchy-panel">
           <HierarchyPanel @collapse="hierarchyOpen = false" />
@@ -303,75 +178,6 @@ function reopenPanel(panel: EditorPanel) {
 .panel {
   min-height: 0;
   min-width: 0;
-}
-
-.menu-bar {
-  grid-area: menu;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 12px;
-  background: rgba(16, 19, 24, 0.82);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: 12px;
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
-  backdrop-filter: blur(12px);
-}
-
-.menu-left {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.brand {
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #f4f6fb;
-}
-
-.menu-items {
-  display: flex;
-  gap: 4px;
-}
-
-.menu-item {
-  position: relative;
-}
-
-.menu-button {
-  color: rgba(244, 247, 255, 0.76);
-  font-weight: 500;
-  text-transform: none;
-}
-
-.menu-dropdown {
-  background: rgba(18, 21, 26, 0.95);
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
-  backdrop-filter: blur(12px);
-}
-
-.menu-list-item {
-  color: rgba(244, 247, 255, 0.9);
-  font-size: 0.9rem;
-}
-
-.menu-list-item.has-children :deep(.v-list-item__append) {
-  margin-inline-start: auto;
-}
-
-.menu-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.action-button {
-  font-weight: 500;
-  text-transform: none;
 }
 
 .hierarchy-panel {
