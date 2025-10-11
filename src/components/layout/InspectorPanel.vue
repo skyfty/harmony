@@ -107,11 +107,6 @@ function updateOpacity(value: number) {
   sceneStore.updateNodeMaterial(selectedNodeId.value, { opacity: value })
 }
 
-function updateWireframe(value: boolean | null) {
-  if (!selectedNodeId.value) return
-  materialForm.wireframe = Boolean(value)
-  sceneStore.updateNodeMaterial(selectedNodeId.value, { wireframe: Boolean(value) })
-}
 </script>
 
 <template>
@@ -183,16 +178,6 @@ function updateWireframe(value: boolean | null) {
               @update:model-value="updateOpacity"
             />
             <div class="slider-value">{{ materialForm.opacity.toFixed(2) }}</div>
-          </template>
-        </v-list-item>
-        <v-list-item title="Wireframe">
-          <template #append>
-            <v-switch
-              :model-value="materialForm.wireframe"
-              hide-details
-              color="primary"
-              @update:model-value="updateWireframe"
-            />
           </template>
         </v-list-item>
       </v-list>

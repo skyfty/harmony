@@ -166,17 +166,17 @@ function assetIcon(type: ProjectAsset['type']) {
               </div>
               <v-card-item>
                 <v-card-title>{{ asset.name }}</v-card-title>
-                <v-card-subtitle class="text-uppercase">{{ asset.type }}</v-card-subtitle>
               </v-card-item>
               <v-card-actions>
                 <v-btn
                   color="primary"
                   variant="tonal"
-                  density="comfortable"
-                  block
+                  density="compact"
+                  icon="mdi-plus"
+                  size="small"
+                  style="min-width: 20px; height: 20px;"
                   @click.stop="addAssetToScene(asset)"
                 >
-                  Add to Scene
                 </v-btn>
               </v-card-actions>
             </v-card>
@@ -277,7 +277,7 @@ function assetIcon(type: ProjectAsset['type']) {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 96px;
+  height: 76px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
