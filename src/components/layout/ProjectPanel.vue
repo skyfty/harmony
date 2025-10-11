@@ -86,7 +86,7 @@ function assetIcon(type: ProjectAsset['type']) {
     <div class="project-content">
       <div class="project-tree">
         <v-toolbar density="compact" flat height="36">
-          <v-toolbar-title class="text-subtitle-2">Assets</v-toolbar-title>
+          <v-toolbar-title class="text-subtitle-2 project-tree-subtitle">Assets</v-toolbar-title>
         </v-toolbar>
         <v-divider />
         <v-treeview
@@ -107,7 +107,7 @@ function assetIcon(type: ProjectAsset['type']) {
       </div>
       <div class="project-gallery">
         <v-toolbar density="compact" flat height="36">
-          <v-toolbar-title class="text-subtitle-2">Thumbnails</v-toolbar-title>
+          <v-toolbar-title class="text-subtitle-2 project-tree-subtitle">Thumbnails</v-toolbar-title>
            <v-spacer />
           <v-text-field
             :loading="searchLoading"
@@ -260,6 +260,10 @@ function assetIcon(type: ProjectAsset['type']) {
   font-weight: 600;
   letter-spacing: 0.08em;
   margin-inline-start: 0px;
+}
+
+.project-tree-subtitle {
+    margin-inline-start: 12px !important;
 }
 
 .toolbar-title {

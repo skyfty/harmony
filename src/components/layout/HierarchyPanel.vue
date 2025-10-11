@@ -11,6 +11,7 @@ const sceneStore = useSceneStore()
 const { hierarchyItems, selectedNodeId } = storeToRefs(sceneStore)
 
 const opened = ref<string[]>([])
+const checkboxSelection = ref<string[]>([])
 
 const active = computed({
   get: () => (selectedNodeId.value ? [selectedNodeId.value] : []),
@@ -27,8 +28,18 @@ watch(
   (items) => {
     opened.value = expandAll(items)
   },
-  { immediate: true }
+  { immediate: true },
 )
+
+const allNodeIds = computed(() => flattenIds(hierarchyItems.value))
+const hasSelection = computed(() => checkboxSelection.value.length > 0)
+const isAllSelected = computed(
+  () => allNodeIds.value.length > 0 && checkboxSelection.value.length === allNodeIds.value.length,
+)
+
+watch(allNodeIds, (ids) => {
+  checkboxSelection.value = checkboxSelection.value.filter((id) => ids.includes(id))
+})
 
 function expandAll(items: Array<{ id: string; children?: Array<unknown> }>): string[] {
   const collected: string[] = []
@@ -40,6 +51,56 @@ function expandAll(items: Array<{ id: string; children?: Array<unknown> }>): str
   }
   return collected
 }
+
+function flattenIds(items: Array<{ id: string; children?: Array<unknown> }>): string[] {
+  const ids: string[] = []
+  for (const item of items) {
+    ids.push(item.id)
+    if (Array.isArray(item.children) && item.children.length) {
+      ids.push(...flattenIds(item.children as Array<{ id: string; children?: Array<unknown> }>))
+    }
+  }
+  return ids
+}
+
+function isItemSelected(id: string) {
+  return checkboxSelection.value.includes(id)
+}
+
+function handleCheckboxChange(id: string, value: boolean | null) {
+  const nextState = Boolean(value)
+  if (nextState) {
+    if (!checkboxSelection.value.includes(id)) {
+      checkboxSelection.value = [...checkboxSelection.value, id]
+    }
+  } else {
+    checkboxSelection.value = checkboxSelection.value.filter((itemId) => itemId !== id)
+  }
+}
+
+function handleAddNode() {
+  const node = sceneStore.addSceneNode()
+  if (node) {
+    active.value = [node.id]
+    checkboxSelection.value = [node.id]
+  }
+}
+
+function handleSelectAll() {
+  if (!allNodeIds.value.length) return
+  checkboxSelection.value = [...allNodeIds.value]
+}
+
+function handleClearSelection() {
+  checkboxSelection.value = []
+}
+
+function handleDeleteSelected() {
+  if (!checkboxSelection.value.length) return
+  sceneStore.removeSceneNodes(checkboxSelection.value)
+  checkboxSelection.value = []
+}
+
 </script>
 
 <template>
@@ -50,6 +111,34 @@ function expandAll(items: Array<{ id: string; children?: Array<unknown> }>): str
     </v-toolbar>
     <v-divider />
     <div class="panel-body hierarchy-body">
+      <v-toolbar density="compact" class="tree-toolbar" flat height="36">
+        <v-btn icon="mdi-plus" variant="text" density="compact" @click="handleAddNode" />
+        <v-divider vertical class="tree-toolbar-separator" />
+        <v-btn
+          icon="mdi-select-all"
+          variant="text"
+          density="compact"
+          :disabled="isAllSelected"
+          @click="handleSelectAll"
+        />
+        <v-btn
+          icon="mdi-select-off"
+          variant="text"
+          density="compact"
+          :disabled="!hasSelection"
+          @click="handleClearSelection"
+        />
+        <v-divider vertical class="tree-toolbar-separator" />
+        <v-btn
+          icon="mdi-delete-outline"
+          variant="text"
+          density="compact"
+          color="error"
+          :disabled="!hasSelection"
+          @click="handleDeleteSelected"
+        />
+      </v-toolbar>
+      <v-divider class="tree-toolbar-divider" />
       <v-treeview
         v-model:opened="opened"
         v-model:activated="active"
@@ -63,7 +152,20 @@ function expandAll(items: Array<{ id: string; children?: Array<unknown> }>): str
         class="hierarchy-tree"
       >
         <template #prepend>
-          <v-icon size="small" class="mr-1">mdi-cube-outline</v-icon>
+          <v-icon size="small" class="node-icon">mdi-cube-outline</v-icon>
+        </template>
+        <template #append="{ item }">
+          <div class="tree-node-trailing" @mousedown.stop @click.stop>
+            <v-checkbox
+              :model-value="isItemSelected(item.id)"
+              :class="['node-checkbox', { 'is-selected': isItemSelected(item.id) }]"
+              density="compact"
+              hide-details
+              color="primary"
+              :ripple="false"
+              @update:modelValue="handleCheckboxChange(item.id, $event)"
+            />
+          </div>
         </template>
       </v-treeview>
     </div>
@@ -106,18 +208,99 @@ function expandAll(items: Array<{ id: string; children?: Array<unknown> }>): str
 
 .hierarchy-body {
   padding: 0.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tree-toolbar {
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 8px;
+  padding-inline: 6px;
+  gap: 2px;
+}
+
+.tree-toolbar :deep(.v-btn) {
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  padding: 0;
+}
+
+.v-toolbar .v-toolbar__content .v-btn {
+    height: 20px;
+    padding: 0 12px 0 12px;
+    min-width: 20px;
+    font-size: 12px;
+    margin-left: 3px;
+}
+
+.tree-toolbar :deep(.v-btn .v-icon) {
+  font-size: 16px;
+}
+
+.tree-toolbar-separator {
+  margin: 0 4px;
+  opacity: 0.12;
+}
+
+.tree-toolbar-divider {
+  margin: 2px 0 6px;
+  opacity: 0.08;
 }
 
 .hierarchy-tree {
-  height: 100%;
+  flex: 1;
   overflow-y: auto;
 }
 
-.hierarchy-tree :deep(.v-treeview-node__root) {
-  min-height: 32px;
+
+.hierarchy-tree :deep(.v-treeview-item) {
+  min-height: 30px;
 }
 
-.hierarchy-tree :deep(.v-treeview-node__label-text) {
+.hierarchy-tree :deep(.v-list-item-title) {
   font-size: 0.85rem;
+}
+
+
+.tree-node-trailing {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 32px;
+}
+
+.hierarchy-tree :deep(.node-checkbox) {
+  opacity: 0;
+  transform: scale(0.75);
+  pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.hierarchy-tree :deep(.v-treeview-item:hover .node-checkbox),
+.hierarchy-tree :deep(.v-treeview-item:focus-within .node-checkbox),
+.hierarchy-tree :deep(.node-checkbox.is-selected) {
+  opacity: 1;
+  transform: scale(0.9);
+  pointer-events: auto;
+}
+
+.hierarchy-tree :deep(.node-checkbox .v-selection-control) {
+  min-height: 18px;
+}
+
+.hierarchy-tree :deep(.node-checkbox .v-selection-control__input) {
+  width: 16px;
+  height: 16px;
+}
+
+.hierarchy-tree :deep(.node-checkbox .v-icon) {
+  font-size: 16px;
+}
+
+.node-icon {
+  opacity: 0.7;
+  margin-right: 6px;
 }
 </style>

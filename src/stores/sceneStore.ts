@@ -239,6 +239,44 @@ function toHierarchyItem(node: SceneNode): HierarchyTreeItem {
   }
 }
 
+function cloneNode(node: SceneNode): SceneNode {
+  return {
+    ...node,
+    position: cloneVector(node.position),
+    rotation: cloneVector(node.rotation),
+    scale: cloneVector(node.scale),
+    children: node.children ? node.children.map(cloneNode) : undefined,
+  }
+}
+
+function releaseRuntimeTree(node: SceneNode) {
+  unregisterRuntimeObject(node.id)
+  if (node.resourceId && node.resourceId !== node.id) {
+    unregisterRuntimeObject(node.resourceId)
+  }
+  node.children?.forEach(releaseRuntimeTree)
+}
+
+function pruneNodes(nodes: SceneNode[], idSet: Set<string>, removed: string[]): SceneNode[] {
+  const result: SceneNode[] = []
+  for (const node of nodes) {
+    if (idSet.has(node.id)) {
+      removed.push(node.id)
+      releaseRuntimeTree(node)
+      continue
+    }
+    const cloned = cloneNode(node)
+    if (cloned.children) {
+      cloned.children = pruneNodes(cloned.children, idSet, removed)
+      if (cloned.children.length === 0) {
+        delete cloned.children
+      }
+    }
+    result.push(cloned)
+  }
+  return result
+}
+
 function findDirectory(directories: ProjectDirectory[], id: string): ProjectDirectory | null {
   for (const dir of directories) {
     if (dir.id === id) return dir
@@ -337,6 +375,29 @@ export const useSceneStore = defineStore('scene', {
       this.nodes = [...this.nodes, newNode]
       this.selectedNodeId = id
     },
+    addSceneNode(payload: {
+      name?: string
+      geometry?: SceneNode['geometry']
+      materialColor?: string
+      position?: Vector3Like
+      rotation?: Vector3Like
+      scale?: Vector3Like
+    } = {}) {
+      const id = crypto.randomUUID()
+      const node: SceneNode = {
+        id,
+        name: payload.name ?? `New Node ${this.nodes.length + 1}`,
+        geometry: payload.geometry ?? 'box',
+        material: { color: payload.materialColor ?? '#90CAF9' },
+        position: payload.position ? cloneVector(payload.position) : { x: 0, y: 1, z: 0 },
+        rotation: payload.rotation ? cloneVector(payload.rotation) : { x: 0, y: 0, z: 0 },
+        scale: payload.scale ? cloneVector(payload.scale) : { x: 1, y: 1, z: 1 },
+      }
+
+      this.nodes = [...this.nodes, node]
+      this.selectedNodeId = id
+      return node
+    },
     setCameraState(camera: SceneCameraState) {
       this.camera = cloneCameraState(camera)
     },
@@ -384,6 +445,19 @@ export const useSceneStore = defineStore('scene', {
     },
     releaseRuntimeObject(id: string) {
       unregisterRuntimeObject(id)
+    },
+    removeSceneNodes(ids: string[]) {
+      const idSet = new Set(ids)
+      if (idSet.size === 0) return
+
+      const removed: string[] = []
+      this.nodes = pruneNodes(this.nodes, idSet, removed)
+
+      if (this.nodes.length === 0) {
+        this.selectedNodeId = null
+      } else if (this.selectedNodeId && removed.includes(this.selectedNodeId)) {
+        this.selectedNodeId = this.nodes[0]?.id ?? null
+      }
     },
   },
   persist: {
