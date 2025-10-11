@@ -31,6 +31,20 @@ interface TransformUpdatePayload {
   scale?: Vector3Like
 }
 
+export interface SceneCameraState {
+  position: Vector3Like
+  target: Vector3Like
+  fov: number
+}
+
+export type EditorPanel = 'hierarchy' | 'inspector' | 'project'
+
+export interface PanelVisibilityState {
+  hierarchy: boolean
+  inspector: boolean
+  project: boolean
+}
+
 interface SceneState {
   nodes: SceneNode[]
   selectedNodeId: string | null
@@ -38,6 +52,8 @@ interface SceneState {
   projectTree: ProjectDirectory[]
   activeDirectoryId: string | null
   selectedAssetId: string | null
+  camera: SceneCameraState
+  panelVisibility: PanelVisibilityState
 }
 
 const initialNodes: SceneNode[] = [
@@ -163,8 +179,28 @@ const projectTree: ProjectDirectory[] = [
 
 const defaultDirectoryId = projectTree[0]?.children?.[0]?.id ?? projectTree[0]?.id ?? null
 
+const defaultCameraState: SceneCameraState = {
+  position: { x: 12, y: 9, z: 12 },
+  target: { x: 0, y: 1, z: 0 },
+  fov: 60,
+}
+
+const defaultPanelVisibility: PanelVisibilityState = {
+  hierarchy: true,
+  inspector: true,
+  project: true,
+}
+
 function cloneVector(vector: Vector3Like): Vector3Like {
   return { x: vector.x, y: vector.y, z: vector.z }
+}
+
+function cloneCameraState(camera: SceneCameraState): SceneCameraState {
+  return {
+    position: cloneVector(camera.position),
+    target: cloneVector(camera.target),
+    fov: camera.fov,
+  }
 }
 
 function visitNode(nodes: SceneNode[], id: string, mutate: (node: SceneNode) => void): boolean {
@@ -208,6 +244,8 @@ export const useSceneStore = defineStore('scene', {
     projectTree,
     activeDirectoryId: defaultDirectoryId,
     selectedAssetId: null,
+    camera: cloneCameraState(defaultCameraState),
+    panelVisibility: { ...defaultPanelVisibility },
   }),
   getters: {
     selectedNode(state): SceneNode | null {
@@ -284,17 +322,58 @@ export const useSceneStore = defineStore('scene', {
       this.nodes = [...this.nodes, newNode]
       this.selectedNodeId = id
     },
+    setCameraState(camera: SceneCameraState) {
+      this.camera = cloneCameraState(camera)
+    },
+    resetCameraState() {
+      this.camera = cloneCameraState(defaultCameraState)
+    },
+    setPanelVisibility(panel: EditorPanel, visible: boolean) {
+      this.panelVisibility = {
+        ...this.panelVisibility,
+        [panel]: visible,
+      }
+    },
+    togglePanelVisibility(panel: EditorPanel) {
+      this.setPanelVisibility(panel, !this.panelVisibility[panel])
+    },
   },
   persist: {
     key: 'scene-store',
     storage: 'local',
-    version: 2,
-    pick: ['nodes', 'selectedNodeId', 'activeTool', 'activeDirectoryId', 'selectedAssetId'],
+    version: 3,
+    pick: [
+      'nodes',
+      'selectedNodeId',
+      'activeTool',
+      'activeDirectoryId',
+      'selectedAssetId',
+      'camera',
+      'panelVisibility',
+    ],
     migrations: {
       2: (state) => ({
         ...state,
         activeTool: (state.activeTool as EditorTool | undefined) ?? 'select',
       }),
+      3: (state) => {
+        const cameraState = state.camera as Partial<SceneCameraState> | undefined
+        const panelState = state.panelVisibility as Partial<PanelVisibilityState> | undefined
+
+        return {
+          ...state,
+          camera: {
+            position: cloneVector(cameraState?.position ?? defaultCameraState.position),
+            target: cloneVector(cameraState?.target ?? defaultCameraState.target),
+            fov: cameraState?.fov ?? defaultCameraState.fov,
+          },
+          panelVisibility: {
+            hierarchy: panelState?.hierarchy ?? defaultPanelVisibility.hierarchy,
+            inspector: panelState?.inspector ?? defaultPanelVisibility.inspector,
+            project: panelState?.project ?? defaultPanelVisibility.project,
+          },
+        }
+      },
     },
   },
 })

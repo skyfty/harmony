@@ -1,30 +1,41 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import HierarchyPanel from '@/components/layout/HierarchyPanel.vue'
 import InspectorPanel from '@/components/layout/InspectorPanel.vue'
 import ProjectPanel from '@/components/layout/ProjectPanel.vue'
 import SceneViewport from '@/components/editor/SceneViewport.vue'
-import { useSceneStore, type EditorTool } from '@/stores/sceneStore'
+import { useSceneStore, type EditorTool, type EditorPanel, type SceneCameraState } from '@/stores/sceneStore'
 import type { Vector3Like } from '@/types/scene'
 
 const sceneStore = useSceneStore()
-const { nodes: sceneNodes, selectedNodeId, activeTool } = storeToRefs(sceneStore)
+const { nodes: sceneNodes, selectedNodeId, activeTool, camera, panelVisibility } = storeToRefs(sceneStore)
 
-const hierarchyOpen = ref(true)
-const inspectorOpen = ref(true)
-const projectOpen = ref(true)
+const hierarchyOpen = computed({
+  get: () => panelVisibility.value.hierarchy,
+  set: (visible: boolean) => sceneStore.setPanelVisibility('hierarchy', visible),
+})
+
+const inspectorOpen = computed({
+  get: () => panelVisibility.value.inspector,
+  set: (visible: boolean) => sceneStore.setPanelVisibility('inspector', visible),
+})
+
+const projectOpen = computed({
+  get: () => panelVisibility.value.project,
+  set: (visible: boolean) => sceneStore.setPanelVisibility('project', visible),
+})
 
 const layoutClasses = computed(() => ({
-  'is-hierarchy-closed': !hierarchyOpen.value,
-  'is-inspector-closed': !inspectorOpen.value,
-  'is-project-closed': !projectOpen.value,
+  'is-hierarchy-closed': !panelVisibility.value.hierarchy,
+  'is-inspector-closed': !panelVisibility.value.inspector,
+  'is-project-closed': !panelVisibility.value.project,
 }))
 
 const reopenButtons = computed(() => ({
-  showHierarchy: !hierarchyOpen.value,
-  showInspector: !inspectorOpen.value,
-  showProject: !projectOpen.value,
+  showHierarchy: !panelVisibility.value.hierarchy,
+  showInspector: !panelVisibility.value.inspector,
+  showProject: !panelVisibility.value.project,
 }))
 
 type MenuEntry = {
@@ -74,6 +85,14 @@ function updateNodeTransform(payload: { id: string; position: Vector3Like; rotat
 
 function handleMenuAction(action: string) {
   console.debug(`[menu] ${action}`)
+}
+
+function updateCamera(state: SceneCameraState) {
+  sceneStore.setCameraState(state)
+}
+
+function reopenPanel(panel: EditorPanel) {
+  sceneStore.setPanelVisibility(panel, true)
 }
 </script>
 
@@ -190,9 +209,11 @@ function handleMenuAction(action: string) {
           :active-tool="activeTool"
           :scene-nodes="sceneNodes"
           :selected-node-id="selectedNodeId"
+          :camera-state="camera"
           @change-tool="setTool"
           @select-node="selectNode"
           @update-node-transform="updateNodeTransform"
+          @update-camera="updateCamera"
         />
       </section>
 
@@ -216,7 +237,7 @@ function handleMenuAction(action: string) {
         rounded
         icon="mdi-chevron-right"
         density="comfortable"
-        @click="hierarchyOpen = true"
+        @click="reopenPanel('hierarchy')"
       />
 
       <v-btn
@@ -227,7 +248,7 @@ function handleMenuAction(action: string) {
         rounded
         icon="mdi-chevron-left"
         density="comfortable"
-        @click="inspectorOpen = true"
+        @click="reopenPanel('inspector')"
       />
 
       <v-btn
@@ -236,7 +257,7 @@ function handleMenuAction(action: string) {
         color="primary"
         variant="tonal"
         density="comfortable"
-        @click="projectOpen = true"
+        @click="reopenPanel('project')"
       >
         <v-icon start>mdi-folder</v-icon>
         Project
@@ -336,9 +357,6 @@ function handleMenuAction(action: string) {
 .menu-list-item {
   color: rgba(244, 247, 255, 0.9);
   font-size: 0.9rem;
-}
-
-.menu-list-item.has-children {
 }
 
 .menu-list-item.has-children :deep(.v-list-item__append) {

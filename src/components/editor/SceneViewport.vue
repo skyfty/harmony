@@ -4,6 +4,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import type { SceneNode, Vector3Like } from '@/types/scene'
+import type { SceneCameraState } from '@/stores/sceneStore'
 
 type EditorTool = 'select' | 'translate' | 'rotate' | 'scale'
 
@@ -11,6 +12,7 @@ const props = defineProps<{
   activeTool: EditorTool
   sceneNodes: SceneNode[]
   selectedNodeId: string | null
+  cameraState: SceneCameraState
 }>()
 
 const emit = defineEmits<{
@@ -22,6 +24,7 @@ const emit = defineEmits<{
     rotation: Vector3Like
     scale: Vector3Like
   }): void
+  (event: 'updateCamera', payload: SceneCameraState): void
 }>()
 
 const tools: Array<{ label: string; icon: string; value: EditorTool }> = [
@@ -47,6 +50,7 @@ const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
 const rootGroup = new THREE.Group()
 const objectMap = new Map<string, THREE.Object3D>()
+let isApplyingCameraState = false
 
 const draggingChangedHandler = (event: unknown) => {
   const value = (event as { value?: boolean })?.value ?? false
@@ -107,6 +111,34 @@ function updateSelectionBox(object: THREE.Object3D | null) {
   selectionTrackedObject = object
 }
 
+function buildCameraState(): SceneCameraState | null {
+  if (!camera || !orbitControls) return null
+  return {
+    position: toVector3Like(camera.position),
+    target: toVector3Like(orbitControls.target),
+    fov: camera.fov,
+  }
+}
+
+function applyCameraState(state: SceneCameraState | null | undefined) {
+  if (!state || !camera || !orbitControls) return
+  isApplyingCameraState = true
+  camera.position.set(state.position.x, state.position.y, state.position.z)
+  camera.fov = state.fov
+  camera.updateProjectionMatrix()
+  orbitControls.target.set(state.target.x, state.target.y, state.target.z)
+  orbitControls.update()
+  isApplyingCameraState = false
+}
+
+function handleControlsChange() {
+  if (isApplyingCameraState) return
+  const snapshot = buildCameraState()
+  if (snapshot) {
+    emit('updateCamera', snapshot)
+  }
+}
+
 function initScene() {
   if (!canvasRef.value || !viewportEl.value) {
     return
@@ -151,6 +183,7 @@ function initScene() {
   orbitControls.enableDamping = false
   orbitControls.dampingFactor = 0.05
   orbitControls.target.set(0, 1, 0)
+  orbitControls.addEventListener('change', handleControlsChange)
 
   transformControls = new TransformControls(camera, canvasRef.value)
   transformControls.addEventListener('dragging-changed', draggingChangedHandler as any)
@@ -170,6 +203,8 @@ function initScene() {
   resizeObserver.observe(viewportEl.value)
 
   animate()
+  
+  applyCameraState(props.cameraState)
 }
 
 function animate() {
@@ -208,7 +243,10 @@ function disposeScene() {
   transformControls?.dispose()
   transformControls = null
 
-  orbitControls?.dispose()
+  if (orbitControls) {
+    orbitControls.removeEventListener('change', handleControlsChange)
+    orbitControls.dispose()
+  }
   orbitControls = null
 
   renderer?.dispose()
@@ -410,6 +448,14 @@ watch(
   () => {
     syncSceneGraph()
   }
+)
+
+watch(
+  () => props.cameraState,
+  (state) => {
+    applyCameraState(state)
+  },
+  { deep: true }
 )
 
 watch(
