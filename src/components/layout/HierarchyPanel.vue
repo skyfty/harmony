@@ -156,6 +156,7 @@ function handleDeleteSelected() {
         </template>
         <template #append="{ item }">
           <div class="tree-node-trailing" @mousedown.stop @click.stop>
+            
             <v-checkbox
               :model-value="isItemSelected(item.id)"
               :class="['node-checkbox', { 'is-selected': isItemSelected(item.id) }]"
