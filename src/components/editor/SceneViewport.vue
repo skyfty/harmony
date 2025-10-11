@@ -4,6 +4,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import type { SceneNode, Vector3Like } from '@/types/scene'
+import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
 import type { SceneCameraState } from '@/stores/sceneStore'
 
 type EditorTool = 'select' | 'translate' | 'rotate' | 'scale'
@@ -26,6 +27,8 @@ const emit = defineEmits<{
   }): void
   (event: 'updateCamera', payload: SceneCameraState): void
 }>()
+
+const sceneStore = useSceneStore()
 
 const tools: Array<{ label: string; icon: string; value: EditorTool }> = [
   { label: 'Select', icon: 'mdi-cursor-default', value: 'select' },
@@ -322,11 +325,17 @@ function syncSceneGraph() {
 function disposeSceneNodes() {
   clearSelectionBox()
   rootGroup.traverse((child) => {
-    if ((child as THREE.Mesh).geometry) {
-      (child as THREE.Mesh).geometry.dispose()
+    const nodeId = child.userData?.nodeId as string | undefined
+    if (nodeId && sceneStore.hasRuntimeObject(nodeId)) {
+      return
     }
-    if ((child as THREE.Mesh).material) {
-      const material = (child as THREE.Mesh).material
+
+    const meshLike = child as THREE.Mesh
+    if (meshLike.geometry) {
+      meshLike.geometry.dispose()
+    }
+    if (meshLike.material) {
+      const material = meshLike.material
       if (Array.isArray(material)) {
         material.forEach((mat) => mat.dispose())
       } else {
@@ -337,48 +346,77 @@ function disposeSceneNodes() {
 }
 
 function createObjectFromNode(node: SceneNode): THREE.Object3D {
-  let mesh: THREE.Mesh
+  let object: THREE.Object3D
 
-  const material = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(node.material.color),
-    wireframe: node.material.wireframe ?? false,
-    opacity: node.material.opacity ?? 1,
-    transparent: (node.material.opacity ?? 1) < 1,
-    metalness: 0.1,
-    roughness: 0.6,
-  })
+  if (node.geometry === 'external') {
+    const container = new THREE.Group()
+    container.userData.nodeId = node.id
 
-  switch (node.geometry) {
-    case 'sphere':
-      mesh = new THREE.Mesh(new THREE.SphereGeometry(0.5, 32, 32), material)
-      break
-    case 'plane':
-      mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material)
-      mesh.rotateX(-Math.PI / 2)
-      break
-    case 'box':
-    default:
-      mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), material)
-      break
+    const runtimeObject = getRuntimeObject(node.resourceId ?? node.id)
+    if (runtimeObject) {
+      runtimeObject.removeFromParent()
+      runtimeObject.userData.nodeId = node.id
+      runtimeObject.traverse((child) => {
+        const meshChild = child as THREE.Mesh
+        if (meshChild?.isMesh) {
+          meshChild.castShadow = true
+          meshChild.receiveShadow = true
+        }
+      })
+      container.add(runtimeObject)
+    } else {
+      const fallbackMaterial = new THREE.MeshBasicMaterial({ color: 0xff5252, wireframe: true })
+      const fallback = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), fallbackMaterial)
+      fallback.userData.nodeId = node.id
+      container.add(fallback)
+    }
+
+    object = container
+  } else {
+    const material = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(node.material.color),
+      wireframe: node.material.wireframe ?? false,
+      opacity: node.material.opacity ?? 1,
+      transparent: (node.material.opacity ?? 1) < 1,
+      metalness: 0.1,
+      roughness: 0.6,
+    })
+
+    switch (node.geometry) {
+      case 'sphere':
+        object = new THREE.Mesh(new THREE.SphereGeometry(0.5, 32, 32), material)
+        break
+      case 'plane': {
+        const plane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material)
+        plane.rotateX(-Math.PI / 2)
+        object = plane
+        break
+      }
+      case 'box':
+      default:
+        object = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), material)
+        break
+    }
+
+    const mesh = object as THREE.Mesh
+    mesh.castShadow = true
+    mesh.receiveShadow = true
+    mesh.userData.nodeId = node.id
   }
 
-  mesh.position.set(node.position.x, node.position.y, node.position.z)
-  mesh.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z)
-  mesh.scale.set(node.scale.x, node.scale.y, node.scale.z)
+  object.position.set(node.position.x, node.position.y, node.position.z)
+  object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z)
+  object.scale.set(node.scale.x, node.scale.y, node.scale.z)
 
-  mesh.castShadow = true
-  mesh.receiveShadow = true
-  mesh.userData.nodeId = node.id
-
-  objectMap.set(node.id, mesh)
+  objectMap.set(node.id, object)
 
   if (node.children) {
     for (const child of node.children) {
-      mesh.add(createObjectFromNode(child))
+      object.add(createObjectFromNode(child))
     }
   }
 
-  return mesh
+  return object
 }
 
 function attachSelection(nodeId: string | null, tool: EditorTool = props.activeTool) {

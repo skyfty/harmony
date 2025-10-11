@@ -1,4 +1,4 @@
-export type GeometryType = 'box' | 'sphere' | 'plane'
+export type GeometryType = 'box' | 'sphere' | 'plane' | 'external'
 
 export interface Vector3Like {
   x: number
@@ -19,4 +19,9 @@ export interface SceneNode {
   rotation: Vector3Like
   scale: Vector3Like
   children?: SceneNode[]
+  /**
+   * Optional runtime resource identifier used for externally loaded meshes.
+   * Values in this field are not persisted across sessions.
+   */
+  resourceId?: string
 }

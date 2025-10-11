@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import type { Object3D } from 'three'
 import type { SceneNode, Vector3Like } from '@/types/scene'
 
 export type EditorTool = 'select' | 'translate' | 'rotate' | 'scale'
@@ -191,6 +192,20 @@ const defaultPanelVisibility: PanelVisibilityState = {
   project: true,
 }
 
+const runtimeObjectRegistry = new Map<string, Object3D>()
+
+function registerRuntimeObject(id: string, object: Object3D) {
+  runtimeObjectRegistry.set(id, object)
+}
+
+function unregisterRuntimeObject(id: string) {
+  runtimeObjectRegistry.delete(id)
+}
+
+export function getRuntimeObject(id: string): Object3D | null {
+  return runtimeObjectRegistry.get(id) ?? null
+}
+
 function cloneVector(vector: Vector3Like): Vector3Like {
   return { x: vector.x, y: vector.y, z: vector.z }
 }
@@ -337,11 +352,44 @@ export const useSceneStore = defineStore('scene', {
     togglePanelVisibility(panel: EditorPanel) {
       this.setPanelVisibility(panel, !this.panelVisibility[panel])
     },
+    addImportedSceneObject(payload: {
+      object: Object3D
+      name?: string
+      position?: Vector3Like
+      rotation?: Vector3Like
+      scale?: Vector3Like
+    }) {
+      const id = crypto.randomUUID()
+      const node: SceneNode = {
+        id,
+        name: payload.name ?? payload.object.name ?? 'Imported Mesh',
+        geometry: 'external',
+        material: { color: '#ffffff' },
+        position: payload.position ?? { x: 0, y: 0, z: 0 },
+        rotation: payload.rotation ?? { x: 0, y: 0, z: 0 },
+        scale: payload.scale ?? { x: 1, y: 1, z: 1 },
+        resourceId: id,
+      }
+
+      registerRuntimeObject(id, payload.object)
+      payload.object.userData.nodeId = id
+
+      this.nodes = [...this.nodes, node]
+      this.selectedNodeId = id
+
+      return node
+    },
+    hasRuntimeObject(id: string) {
+      return runtimeObjectRegistry.has(id)
+    },
+    releaseRuntimeObject(id: string) {
+      unregisterRuntimeObject(id)
+    },
   },
   persist: {
     key: 'scene-store',
     storage: 'local',
-    version: 3,
+    version: 4,
     pick: [
       'nodes',
       'selectedNodeId',
@@ -372,6 +420,15 @@ export const useSceneStore = defineStore('scene', {
             inspector: panelState?.inspector ?? defaultPanelVisibility.inspector,
             project: panelState?.project ?? defaultPanelVisibility.project,
           },
+        }
+      },
+      4: (state) => {
+        const rawNodes = state.nodes as SceneNode[] | undefined
+        return {
+          ...state,
+          nodes: Array.isArray(rawNodes)
+            ? rawNodes.filter((node) => (node as SceneNode).geometry !== 'external')
+            : rawNodes,
         }
       },
     },
