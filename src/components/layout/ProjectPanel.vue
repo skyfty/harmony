@@ -16,7 +16,10 @@ const draggingAssetId = ref<string | null>(null)
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 let dragPreviewEl: HTMLDivElement | null = null
 
-const selectedProviderId = ref<string>(resourceProviders[0]!.id)
+const selectedProviderId = computed<string>({
+  get: () => sceneStore.resourceProviderId,
+  set: (providerId) => sceneStore.setResourceProviderId(providerId),
+})
 const providerLoading = ref(false)
 const providerError = ref<string | null>(null)
 const providerCache = new Map<string, ProjectDirectory[]>()
@@ -249,13 +252,13 @@ async function loadResourceProvider(providerId: string) {
                 icon="mdi-database-cog"
                 variant="text"
                 color="primary"
-                density="comfortable"
+                density="compact"
                 class="resource-menu-btn"
                 :loading="providerLoading"
               />
             </template>
             <v-sheet class="resource-menu" elevation="8">
-              <v-list density="comfortable">
+              <v-list density="compact">
                 <v-list-item
                   v-for="provider in resourceProviders"
                   :key="provider.id"

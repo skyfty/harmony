@@ -56,6 +56,7 @@ export interface StoredSceneDocument {
   nodes: SceneNode[]
   selectedNodeId: string | null
   camera: SceneCameraState
+  resourceProviderId: string
 }
 
 export interface SceneSummary {
@@ -75,6 +76,7 @@ interface SceneState {
   selectedAssetId: string | null
   camera: SceneCameraState
   panelVisibility: PanelVisibilityState
+  resourceProviderId: string
 }
 
 const initialNodes: SceneNode[] = [
@@ -189,6 +191,7 @@ const defaultPanelVisibility: PanelVisibilityState = {
 const initialSceneDocument = createSceneDocument('Sample Scene', {
   nodes: initialNodes,
   selectedNodeId: initialNodes[0]?.id ?? null,
+  resourceProviderId: 'builtin',
 })
 
 const runtimeObjectRegistry = new Map<string, Object3D>()
@@ -260,6 +263,7 @@ function createSceneDocument(
     selectedNodeId?: string | null
     camera?: SceneCameraState
     thumbnail?: string | null
+    resourceProviderId?: string
   } = {},
 ): StoredSceneDocument {
   const id = options.id ?? crypto.randomUUID()
@@ -277,6 +281,7 @@ function createSceneDocument(
     nodes,
     selectedNodeId,
     camera,
+    resourceProviderId: options.resourceProviderId ?? 'builtin',
   }
 }
 
@@ -297,6 +302,7 @@ function commitSceneSnapshot(
     nodes: updateNodes ? cloneSceneNodes(store.nodes) : current.nodes,
     selectedNodeId: store.selectedNodeId,
     camera: updateCamera ? cloneCameraState(store.camera) : current.camera,
+    resourceProviderId: store.resourceProviderId,
   }
 
   store.scenes = [
@@ -468,11 +474,12 @@ export const useSceneStore = defineStore('scene', {
     nodes: cloneSceneNodes(initialSceneDocument.nodes),
     selectedNodeId: initialSceneDocument.selectedNodeId,
     activeTool: 'select',
-  projectTree: cloneProjectTree(builtinProjectTree),
+    projectTree: cloneProjectTree(builtinProjectTree),
     activeDirectoryId: defaultDirectoryId,
     selectedAssetId: null,
     camera: cloneCameraState(initialSceneDocument.camera),
     panelVisibility: { ...defaultPanelVisibility },
+    resourceProviderId: initialSceneDocument.resourceProviderId,
   }),
   getters: {
     currentScene(state): StoredSceneDocument | null {
@@ -608,6 +615,13 @@ export const useSceneStore = defineStore('scene', {
       this.activeDirectoryId = findFirstDirectoryId(this.projectTree)
       this.selectedAssetId = null
     },
+    setResourceProviderId(providerId: string) {
+      if (this.resourceProviderId === providerId) {
+        return
+      }
+      this.resourceProviderId = providerId
+      commitSceneSnapshot(this, { updateNodes: false, updateCamera: false })
+    },
     setCameraState(camera: SceneCameraState) {
       this.camera = cloneCameraState(camera)
       commitSceneSnapshot(this, { updateNodes: false })
@@ -703,12 +717,16 @@ export const useSceneStore = defineStore('scene', {
     createScene(name = 'Untitled Scene', thumbnail?: string | null) {
       commitSceneSnapshot(this)
       const displayName = name.trim() || 'Untitled Scene'
-      const scene = createSceneDocument(displayName, { thumbnail: thumbnail ?? null })
+      const scene = createSceneDocument(displayName, {
+        thumbnail: thumbnail ?? null,
+        resourceProviderId: this.resourceProviderId,
+      })
       this.scenes = [...this.scenes, scene]
       this.currentSceneId = scene.id
       this.nodes = cloneSceneNodes(scene.nodes)
       this.selectedNodeId = scene.selectedNodeId
       this.camera = cloneCameraState(scene.camera)
+      this.resourceProviderId = scene.resourceProviderId
       return scene.id
     },
     selectScene(sceneId: string) {
@@ -724,6 +742,7 @@ export const useSceneStore = defineStore('scene', {
       this.nodes = cloneSceneNodes(scene.nodes)
       this.selectedNodeId = scene.selectedNodeId
       this.camera = cloneCameraState(scene.camera)
+      this.resourceProviderId = scene.resourceProviderId ?? 'builtin'
       return true
     },
     deleteScene(sceneId: string) {
@@ -739,12 +758,13 @@ export const useSceneStore = defineStore('scene', {
       const remaining = this.scenes.filter((scene) => scene.id !== sceneId)
 
       if (remaining.length === 0) {
-        const fallback = createSceneDocument('Untitled Scene')
+        const fallback = createSceneDocument('Untitled Scene', { resourceProviderId: 'builtin' })
         this.scenes = [fallback]
         this.currentSceneId = fallback.id
         this.nodes = cloneSceneNodes(fallback.nodes)
         this.selectedNodeId = fallback.selectedNodeId
         this.camera = cloneCameraState(fallback.camera)
+        this.resourceProviderId = fallback.resourceProviderId
         return true
       }
 
@@ -756,6 +776,7 @@ export const useSceneStore = defineStore('scene', {
         this.nodes = cloneSceneNodes(next.nodes)
         this.selectedNodeId = next.selectedNodeId
         this.camera = cloneCameraState(next.camera)
+        this.resourceProviderId = next.resourceProviderId ?? 'builtin'
       }
 
       return true
@@ -800,12 +821,13 @@ export const useSceneStore = defineStore('scene', {
     },
     ensureCurrentSceneLoaded() {
       if (!this.scenes.length) {
-        const fallback = createSceneDocument('Untitled Scene')
+        const fallback = createSceneDocument('Untitled Scene', { resourceProviderId: 'builtin' })
         this.scenes = [fallback]
         this.currentSceneId = fallback.id
         this.nodes = cloneSceneNodes(fallback.nodes)
         this.selectedNodeId = fallback.selectedNodeId
         this.camera = cloneCameraState(fallback.camera)
+        this.resourceProviderId = fallback.resourceProviderId
         return
       }
       if (!this.currentSceneId || !this.scenes.some((scene) => scene.id === this.currentSceneId)) {
@@ -814,6 +836,7 @@ export const useSceneStore = defineStore('scene', {
         this.nodes = cloneSceneNodes(first.nodes)
         this.selectedNodeId = first.selectedNodeId
         this.camera = cloneCameraState(first.camera)
+        this.resourceProviderId = first.resourceProviderId ?? 'builtin'
         return
       }
       const current = this.scenes.find((scene) => scene.id === this.currentSceneId)
@@ -821,13 +844,14 @@ export const useSceneStore = defineStore('scene', {
         this.nodes = cloneSceneNodes(current.nodes)
         this.selectedNodeId = current.selectedNodeId
         this.camera = cloneCameraState(current.camera)
+        this.resourceProviderId = current.resourceProviderId ?? 'builtin'
       }
     },
   },
   persist: {
     key: 'scene-store',
     storage: 'local',
-    version: 5,
+    version: 6,
     pick: [
       'scenes',
       'currentSceneId',
@@ -838,6 +862,7 @@ export const useSceneStore = defineStore('scene', {
       'selectedAssetId',
       'camera',
       'panelVisibility',
+      'resourceProviderId',
     ],
     migrations: {
       2: (state) => ({
@@ -891,6 +916,7 @@ export const useSceneStore = defineStore('scene', {
           nodes: rawNodes,
           selectedNodeId,
           camera,
+          resourceProviderId: (state.resourceProviderId as string | undefined) ?? 'builtin',
         })
 
         return {
@@ -900,6 +926,21 @@ export const useSceneStore = defineStore('scene', {
           nodes: cloneSceneNodes(recoveredScene.nodes),
           selectedNodeId: recoveredScene.selectedNodeId,
           camera: cloneCameraState(recoveredScene.camera),
+        }
+      },
+      6: (state) => {
+        const scenes = state.scenes as StoredSceneDocument[] | undefined
+        const updatedScenes = Array.isArray(scenes)
+          ? scenes.map((scene) => ({
+              ...scene,
+              resourceProviderId: scene.resourceProviderId ?? 'builtin',
+            }))
+          : scenes
+
+        return {
+          ...state,
+          scenes: updatedScenes,
+          resourceProviderId: (state.resourceProviderId as string | undefined) ?? 'builtin',
         }
       },
     },
