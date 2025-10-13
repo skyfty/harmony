@@ -38,9 +38,6 @@ a {
 .v-field {
   font-size: 0.8rem;
 }
-.v-field__input {
-  min-height: 12px;
-}
 .v-treeview-item__level {
   width: 28px;
 }
@@ -48,19 +45,12 @@ a {
 .v-treeview .v-list-item--slim > .v-list-item__prepend > .v-icon ~ .v-list-item__spacer {
     width: 1px;
 }
-.v-list-item--density-compact:not(.v-list-item--nav).v-list-item--one-line {
-    padding-inline: 9px;
-}
-
 .v-list--slim .v-list-group {
     --prepend-width: 11px;
 }
 
-.v-list--density-compact .v-list-subheader {
-    min-height: 32px;
-    padding-inline-start: calc(4px + var(--indent-padding)) !important;
-}
-
-.v-list-item--density-compact:not(.v-list-item--nav).v-list-item--two-line {
-    padding-inline: 11px;
+.v-list--slim .v-list-item {
+    min-height: 28px;
+    padding-top: 0px;
+    padding-bottom: 0px;
 }
