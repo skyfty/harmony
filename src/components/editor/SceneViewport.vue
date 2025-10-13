@@ -402,7 +402,9 @@ function handlePointerDown(event: PointerEvent) {
   raycaster.setFromCamera(pointer, camera)
   const intersects = raycaster.intersectObjects(rootGroup.children, true)
 
-  const hit = intersects.find((intersection) => intersection.object.userData?.nodeId)
+  const hit = intersects.find((intersection) => {
+    return intersection.object.userData?.nodeId
+  })
 
   if (hit) {
     const nodeId = hit.object.userData.nodeId as string

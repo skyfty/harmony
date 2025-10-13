@@ -721,7 +721,9 @@ export const useSceneStore = defineStore('scene', {
 
       registerRuntimeObject(id, payload.object)
       payload.object.userData.nodeId = id
-
+		  payload.object.traverse( function ( child ) {
+        child.userData.nodeId = id
+		  } );
       this.nodes = [...this.nodes, node]
       this.selectedNodeId = id
       commitSceneSnapshot(this)
