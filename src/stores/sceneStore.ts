@@ -109,7 +109,7 @@ const initialNodes: SceneNode[] = [
   },
 ]
 
-const projectTree: ProjectDirectory[] = [
+const builtinProjectTree: ProjectDirectory[] = [
   {
     id: 'dir-assets',
     name: 'Assets',
@@ -149,7 +149,30 @@ const projectTree: ProjectDirectory[] = [
   },
 ]
 
-const defaultDirectoryId = projectTree[0]?.children?.[0]?.id ?? projectTree[0]?.id ?? null
+function cloneProjectTree(tree: ProjectDirectory[]): ProjectDirectory[] {
+  return tree.map((directory) => ({
+    ...directory,
+    children: directory.children ? cloneProjectTree(directory.children) : undefined,
+    assets: directory.assets ? directory.assets.map((asset) => ({ ...asset })) : undefined,
+  }))
+}
+
+function findFirstDirectoryId(tree: ProjectDirectory[]): string | null {
+  for (const directory of tree) {
+    if (directory.assets && directory.assets.length) {
+      return directory.id
+    }
+    if (directory.children) {
+      const nested = findFirstDirectoryId(directory.children)
+      if (nested) {
+        return nested
+      }
+    }
+  }
+  return tree[0]?.id ?? null
+}
+
+const defaultDirectoryId = findFirstDirectoryId(builtinProjectTree)
 
 const defaultCameraState: SceneCameraState = {
   position: { x: 12, y: 9, z: 12 },
@@ -445,7 +468,7 @@ export const useSceneStore = defineStore('scene', {
     nodes: cloneSceneNodes(initialSceneDocument.nodes),
     selectedNodeId: initialSceneDocument.selectedNodeId,
     activeTool: 'select',
-    projectTree,
+  projectTree: cloneProjectTree(builtinProjectTree),
     activeDirectoryId: defaultDirectoryId,
     selectedAssetId: null,
     camera: cloneCameraState(initialSceneDocument.camera),
@@ -574,6 +597,16 @@ export const useSceneStore = defineStore('scene', {
       if (!asset) return null
       this.addNodeFromAsset(asset, position)
       return asset
+    },
+    resetProjectTree() {
+      this.projectTree = cloneProjectTree(builtinProjectTree)
+      this.activeDirectoryId = findFirstDirectoryId(this.projectTree)
+      this.selectedAssetId = null
+    },
+    setProjectTree(directories: ProjectDirectory[]) {
+      this.projectTree = cloneProjectTree(directories)
+      this.activeDirectoryId = findFirstDirectoryId(this.projectTree)
+      this.selectedAssetId = null
     },
     setCameraState(camera: SceneCameraState) {
       this.camera = cloneCameraState(camera)

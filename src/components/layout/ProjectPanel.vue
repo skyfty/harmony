@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useSceneStore, type ProjectAsset } from '@/stores/sceneStore'
+import { useSceneStore, type ProjectAsset, type ProjectDirectory } from '@/stores/sceneStore'
+import { resourceProviders } from '@/resources/projectProviders'
 
 const emit = defineEmits<{
   (event: 'collapse'): void
@@ -14,6 +15,11 @@ const openedDirectories = ref<string[]>([])
 const draggingAssetId = ref<string | null>(null)
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 let dragPreviewEl: HTMLDivElement | null = null
+
+const selectedProviderId = ref<string>(resourceProviders[0]!.id)
+const providerLoading = ref(false)
+const providerError = ref<string | null>(null)
+const providerCache = new Map<string, ProjectDirectory[]>()
 
 const selectedDirectory = computed({
   get: () => (activeDirectoryId.value ? [activeDirectoryId.value] : []),
@@ -29,6 +35,14 @@ watch(
   projectTree,
   (tree) => {
     openedDirectories.value = expandAllDirectories(tree)
+  },
+  { immediate: true }
+)
+
+watch(
+  selectedProviderId,
+  (providerId) => {
+    loadResourceProvider(providerId)
   },
   { immediate: true }
 )
@@ -178,6 +192,41 @@ function destroyDragPreview() {
 onBeforeUnmount(() => {
   destroyDragPreview()
 })
+
+async function loadResourceProvider(providerId: string) {
+  const provider = resourceProviders.find((entry) => entry.id === providerId)
+  if (!provider) {
+    return
+  }
+
+  providerError.value = null
+
+  if (!provider.url) {
+    sceneStore.resetProjectTree()
+    return
+  }
+
+  if (providerCache.has(providerId)) {
+    sceneStore.setProjectTree(providerCache.get(providerId) ?? [])
+    return
+  }
+
+  providerLoading.value = true
+  try {
+    const response = await fetch(provider.url)
+    if (!response.ok) {
+      throw new Error(`资源加载失败（${response.status}）`)
+    }
+    const json = await response.json()
+    const transformed = provider.transform ? provider.transform(json) : []
+    providerCache.set(providerId, transformed)
+    sceneStore.setProjectTree(transformed)
+  } catch (error) {
+    providerError.value = (error as Error).message ?? '资源加载失败'
+  } finally {
+    providerLoading.value = false
+  }
+}
 </script>
 
 <template>
@@ -194,6 +243,33 @@ onBeforeUnmount(() => {
           <v-toolbar-title class="text-subtitle-2 project-tree-subtitle">Assets</v-toolbar-title>
         </v-toolbar>
         <v-divider />
+        <div class="resource-source">
+          <v-select
+            v-model="selectedProviderId"
+            :items="resourceProviders"
+            item-title="name"
+            item-value="id"
+            density="compact"
+            variant="outlined"
+            label="资源来源"
+            hide-details
+            class="resource-source-select"
+          />
+          <v-progress-linear
+            v-if="providerLoading"
+            color="primary"
+            indeterminate
+            height="2"
+            class="mt-2"
+          />
+          <v-alert
+            v-if="providerError"
+            type="error"
+            density="compact"
+            variant="tonal"
+            class="mt-2"
+          >{{ providerError }}</v-alert>
+        </div>
         <v-treeview
           v-model:opened="openedDirectories"
           v-model:selected="selectedDirectory"
@@ -300,6 +376,18 @@ onBeforeUnmount(() => {
   flex-direction: column;
   border-right: 1px solid rgba(255, 255, 255, 0.05);
   min-height: 0;
+}
+
+.resource-source {
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.resource-source-select {
+  background-color: rgba(33, 37, 43, 0.8);
+  border-radius: 10px;
 }
 
 .project-gallery {
