@@ -69,7 +69,7 @@ function selectAsset(asset: ProjectAsset) {
 }
 
 function isFileAsset(asset: ProjectAsset) {
-  return true
+  return asset.type === 'file'
 }
 
 function isAssetCached(asset: ProjectAsset) {
@@ -440,13 +440,11 @@ async function loadResourceProvider(providerId: string) {
                 <div v-else-if="assetDownloadError(asset)" class="asset-error-indicator">
                   <v-icon size="20" color="error">mdi-alert-circle-outline</v-icon>
                 </div>
+                <div class="asset-info-overlay">
+                  <span class="asset-title">{{ asset.name }}</span>
+                  <span v-if="assetDownloadError(asset)" class="asset-subtitle">{{ assetDownloadError(asset) }}</span>
+                </div>
               </div>
-              <v-card-item>
-                <v-card-title>{{ asset.name }}</v-card-title>
-                <v-card-subtitle v-if="assetDownloadError(asset)" class="asset-error-text">
-                  {{ assetDownloadError(asset) }}
-                </v-card-subtitle>
-              </v-card-item>
               <v-card-actions class="asset-actions">
                 <div class="asset-progress" v-if="isAssetDownloading(asset)">
                   <v-progress-linear
@@ -613,9 +611,10 @@ async function loadResourceProvider(providerId: string) {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 76px;
+  height: 116px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   position: relative;
+  overflow: hidden;
 }
 
 .asset-progress-overlay {
@@ -635,6 +634,34 @@ async function loadResourceProvider(providerId: string) {
   align-items: flex-start;
   justify-content: flex-end;
   padding: 6px;
+}
+
+.asset-info-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.6) 100%);
+  backdrop-filter: blur(1px);
+}
+
+.asset-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #ffffff;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+  line-height: 1.1;
+}
+
+.asset-subtitle {
+  font-size: 0.7rem;
+  color: #ff8a80;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  line-height: 1.1;
 }
 
 .placeholder-text {
