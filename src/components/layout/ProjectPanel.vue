@@ -173,15 +173,72 @@ function isAssetDragging(assetId: string) {
   return draggingAssetId.value === assetId
 }
 
+const searchQuery = ref('')
+const searchResults = ref<ProjectAsset[]>([])
 const searchLoaded = ref(false)
 const searchLoading = ref(false)
 
-function searchAsset () {
-  searchLoading.value = true
-  setTimeout(() => {
+const normalizedSearchQuery = computed(() => searchQuery.value.trim())
+const isSearchActive = computed(() => searchLoaded.value && normalizedSearchQuery.value.length > 0)
+const displayedAssets = computed(() => (isSearchActive.value ? searchResults.value : currentAssets.value))
+
+watch(searchQuery, (value) => {
+  if (!value.trim()) {
+    searchResults.value = []
+    searchLoaded.value = false
     searchLoading.value = false
+  }
+})
+
+watch(projectTree, () => {
+  if (normalizedSearchQuery.value) {
+    searchAsset()
+  }
+})
+
+function collectAssets(directories: ProjectDirectory[], matches: ProjectAsset[], query: string, seen: Set<string>) {
+  for (const directory of directories) {
+    if (directory.assets) {
+      for (const asset of directory.assets) {
+        if (seen.has(asset.id)) continue
+        if (asset.name.toLowerCase().includes(query)) {
+          matches.push(asset)
+          seen.add(asset.id)
+        }
+      }
+    }
+    if (directory.children?.length) {
+      collectAssets(directory.children, matches, query, seen)
+    }
+  }
+}
+
+function searchAsset() {
+  const query = normalizedSearchQuery.value.toLowerCase()
+  if (!query) {
+    searchResults.value = []
+    searchLoaded.value = false
+    return
+  }
+
+  searchLoading.value = true
+  try {
+    const matches: ProjectAsset[] = []
+    const seen = new Set<string>()
+    collectAssets(projectTree.value ?? [], matches, query, seen)
+    matches.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+    searchResults.value = matches
     searchLoaded.value = true
-  }, 2000)
+  } finally {
+    searchLoading.value = false
+  }
+}
+
+function handleSearchClear() {
+  searchQuery.value = ''
+  searchResults.value = []
+  searchLoaded.value = false
+  searchLoading.value = false
 }
 
 
@@ -383,8 +440,9 @@ async function loadResourceProvider(providerId: string) {
       <div class="project-gallery">
         <v-toolbar density="compact" flat height="46">
           <v-toolbar-title class="text-subtitle-2 project-tree-subtitle">Thumbnails</v-toolbar-title>
-           <v-spacer />
+          <v-spacer />
           <v-text-field
+            v-model="searchQuery"
             :loading="searchLoading"
             append-inner-icon="mdi-magnify"
             density="compact"
@@ -393,15 +451,18 @@ async function loadResourceProvider(providerId: string) {
             hide-details
             size="small"
             single-line
+            clearable
+            @keydown.enter.stop.prevent="searchAsset"
             @click:append-inner="searchAsset"
-          ></v-text-field>
-           <v-btn icon="mdi-refresh" variant="text" @click="refreshGallery" />
+            @click:clear="handleSearchClear"
+          />
+          <v-btn icon="mdi-refresh" variant="text" @click="refreshGallery" />
         </v-toolbar>
         <v-divider />
         <div class="project-gallery-scroll">
-          <div v-if="currentAssets.length" class="gallery-grid">
+          <div v-if="displayedAssets.length" class="gallery-grid">
             <v-card
-              v-for="asset in currentAssets"
+              v-for="asset in displayedAssets"
               :key="asset.id"
               :class="[
                 'asset-card',
@@ -480,7 +541,14 @@ async function loadResourceProvider(providerId: string) {
               </v-card-actions>
             </v-card>
           </div>
-          <div v-else class="placeholder-text">Select a folder to preview assets.</div>
+          <div v-else class="placeholder-text">
+            <template v-if="isSearchActive">
+              No assets found for "{{ normalizedSearchQuery }}".
+            </template>
+            <template v-else>
+              Select a folder to preview assets.
+            </template>
+          </div>
         </div>
       </div>
     </div>
