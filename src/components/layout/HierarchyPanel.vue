@@ -90,6 +90,10 @@ function isItemSelected(id: string) {
   return checkboxSelection.value.includes(id)
 }
 
+function toggleNodeVisibility(id: string) {
+  sceneStore.toggleNodeVisibility(id)
+}
+
 function handleCheckboxChange(id: string, value: boolean | null) {
   const nextState = Boolean(value)
   if (nextState) {
@@ -325,6 +329,7 @@ function handleTreeDragLeave(event: DragEvent) {
           </template>
           <template #append="{ item }">
             <div class="tree-node-trailing" @mousedown.stop @click.stop>
+
               <v-checkbox
                 :model-value="isItemSelected(item.id)"
                 :class="['node-checkbox', { 'is-selected': isItemSelected(item.id) }]"
@@ -333,6 +338,16 @@ function handleTreeDragLeave(event: DragEvent) {
                 color="primary"
                 :ripple="false"
                 @update:modelValue="handleCheckboxChange(item.id, $event)"
+              />
+              <v-btn
+                :icon="(item.visible ?? true) ? 'mdi-eye-outline' : 'mdi-eye-off-outline'"
+                variant="text"
+                density="compact"
+                size="26"
+                class="visibility-btn"
+                :class="{ 'is-hidden': !(item.visible ?? true) }"
+                :title="(item.visible ?? true) ? '隐藏模型' : '显示模型'"
+                @click.stop="toggleNodeVisibility(item.id)"
               />
             </div>
           </template>
@@ -441,7 +456,9 @@ function handleTreeDragLeave(event: DragEvent) {
 
 .hierarchy-tree :deep(.v-treeview-item) {
   min-height: 30px;
+  padding-inline: 10px 6px;
 }
+
 
 .hierarchy-tree :deep(.v-list-item-title) {
   font-size: 0.85rem;
@@ -501,6 +518,20 @@ function handleTreeDragLeave(event: DragEvent) {
   align-items: center;
   justify-content: flex-end;
   min-width: 32px;
+}
+
+.visibility-btn {
+  margin-right: 4px;
+  color: rgba(233, 236, 241, 0.72);
+  transition: color 120ms ease;
+}
+
+.visibility-btn.is-hidden {
+  color: rgba(233, 236, 241, 0.38);
+}
+
+.visibility-btn :deep(.v-icon) {
+  font-size: 18px;
 }
 
 .hierarchy-tree :deep(.node-checkbox) {

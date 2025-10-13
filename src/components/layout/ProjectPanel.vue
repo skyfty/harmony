@@ -392,6 +392,7 @@ async function loadResourceProvider(providerId: string) {
             label="Search..."
             variant="solo"
             hide-details
+            size="small"
             single-line
             @click:append-inner="searchAsset"
           ></v-text-field>

@@ -107,6 +107,11 @@ function updateOpacity(value: number) {
   sceneStore.updateNodeMaterial(selectedNodeId.value, { opacity: value })
 }
 
+function updateVisibility(value: boolean | null) {
+  if (!selectedNodeId.value) return
+  sceneStore.setNodeVisibility(selectedNodeId.value, Boolean(value))
+}
+
 </script>
 
 <template>
@@ -127,9 +132,10 @@ function updateOpacity(value: number) {
           hide-details
         />
         <v-checkbox
-          v-model="selectedNode.visible"
+          :model-value="selectedNode.visible ?? true"
           density="comfortable"
           hide-details
+          @update:modelValue="updateVisibility"
         />
       </div>
 

@@ -715,6 +715,9 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     }
   }
 
+  const isVisible = node.visible ?? true
+  object.visible = isVisible
+
   return object
 }
 

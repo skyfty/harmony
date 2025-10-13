@@ -26,6 +26,7 @@ export interface ProjectDirectory {
 export interface HierarchyTreeItem {
   id: string
   name: string
+  visible: boolean
   children?: HierarchyTreeItem[]
 }
 
@@ -97,6 +98,7 @@ const initialNodes: SceneNode[] = [
     position: { x: 0, y: 0.75, z: 0 },
     rotation: { x: 0, y: Math.PI / 4, z: 0 },
     scale: { x: 1.5, y: 1, z: 1.5 },
+    visible: true,
     children: [
       {
         id: 'node-child-sphere',
@@ -106,6 +108,7 @@ const initialNodes: SceneNode[] = [
         position: { x: 1.5, y: 1.2, z: 0 },
         rotation: { x: 0, y: 0, z: 0 },
         scale: { x: 0.65, y: 0.65, z: 0.65 },
+        visible: true,
       },
     ],
   },
@@ -117,6 +120,7 @@ const initialNodes: SceneNode[] = [
     position: { x: 0, y: 0, z: 0 },
     rotation: { x: 0, y: 0, z: 0 },
     scale: { x: 12, y: 12, z: 12 },
+    visible: true,
   },
 ]
 
@@ -246,6 +250,7 @@ function toHierarchyItem(node: SceneNode): HierarchyTreeItem {
   return {
     id: node.id,
     name: node.name,
+    visible: node.visible ?? true,
     children: node.children?.map(toHierarchyItem),
   }
 }
@@ -588,6 +593,26 @@ export const useSceneStore = defineStore('scene', {
       this.nodes = [...this.nodes]
       commitSceneSnapshot(this)
     },
+    isNodeVisible(id: string) {
+      const node = findNodeById(this.nodes, id)
+      return node?.visible ?? true
+    },
+    setNodeVisibility(id: string, visible: boolean) {
+      let updated = false
+      visitNode(this.nodes, id, (node) => {
+        node.visible = visible
+        updated = true
+      })
+      if (!updated) {
+        return
+      }
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
+    },
+    toggleNodeVisibility(id: string) {
+      const current = this.isNodeVisible(id)
+      this.setNodeVisibility(id, !current)
+    },
     setActiveDirectory(id: string) {
       this.activeDirectoryId = id
     },
@@ -734,6 +759,7 @@ export const useSceneStore = defineStore('scene', {
         position: payload.position ?? { x: 0, y: 0, z: 0 },
         rotation: payload.rotation ?? { x: 0, y: 0, z: 0 },
         scale: payload.scale ?? { x: 1, y: 1, z: 1 },
+        visible: true,
         resourceId: id,
         sourceAssetId: payload.sourceAssetId,
       }
