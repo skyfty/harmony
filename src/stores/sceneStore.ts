@@ -542,14 +542,28 @@ export const useSceneStore = defineStore('scene', {
     },
     addNodeFromAsset(asset: ProjectAsset, position?: Vector3Like) {
       const id = crypto.randomUUID()
+      const scale: Vector3Like = { x: 1, y: 1, z: 1 }
+
+      const spawnPosition = position ? cloneVector(position) : { x: 0, y: 0, z: 0 }
+
+      if (!position && asset.type !== 'model') {
+        spawnPosition.y = 1
+      }
+
+      if (asset.type === 'model') {
+        const baseHeight = Math.max(scale.y, 0)
+        const offset = baseHeight / 2
+        spawnPosition.y = (position?.y ?? spawnPosition.y) + offset
+      }
+
       const newNode: SceneNode = {
         id,
         name: asset.name,
         geometry: 'box',
         material: { color: asset.previewColor },
-        position: position ? cloneVector(position) : { x: 0, y: 1, z: 0 },
+        position: spawnPosition,
         rotation: { x: 0, y: 0, z: 0 },
-        scale: { x: 1, y: 1, z: 1 },
+        scale,
       }
       this.nodes = [...this.nodes, newNode]
       this.selectedNodeId = id
