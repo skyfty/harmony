@@ -373,7 +373,6 @@ async function loadResourceProvider(providerId: string) {
           item-title="name"
           item-value="id"
           activatable
-          open-on-click
           class="tree-view"
         >
           <template #prepend>

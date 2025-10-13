@@ -306,7 +306,6 @@ function handleTreeDragLeave(event: DragEvent) {
           item-value="id"
           color="primary"
           activatable
-          open-on-click
           class="hierarchy-tree"
         >
           <template #prepend>
