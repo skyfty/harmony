@@ -24,5 +24,9 @@ export interface SceneNode {
    * Values in this field are not persisted across sessions.
    */
   resourceId?: string
+  /**
+   * Identifier of the project asset that generated this node. Used for cache bookkeeping.
+   */
+  sourceAssetId?: string
   visible?: boolean
 }

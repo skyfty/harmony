@@ -36,6 +36,7 @@ function transformZlgccnResponse(payload: unknown): ProjectDirectory[] {
       previewColor: '#26C6DA',
       thumbnail: null,
       description: file,
+      downloadUrl: file,
     }
 
     if (!seriesMap.has(series)) {

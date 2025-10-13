@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import type { Object3D } from 'three'
 import type { SceneNode, Vector3Like } from '@/types/scene'
+import { useAssetCacheStore } from './assetCacheStore'
 
 export type EditorTool = 'select' | 'translate' | 'rotate' | 'scale'
 
@@ -9,6 +10,7 @@ export interface ProjectAsset {
   name: string
   type: 'model' | 'texture' | 'image' | 'audio' | 'file'
   description?: string
+  downloadUrl?: string | null
   previewColor: string
   thumbnail?: string | null
 }
@@ -594,14 +596,27 @@ export const useSceneStore = defineStore('scene', {
         position: spawnPosition,
         rotation: { x: 0, y: 0, z: 0 },
         scale,
+        sourceAssetId: asset.id,
       }
       this.nodes = [...this.nodes, newNode]
       this.selectedNodeId = id
       commitSceneSnapshot(this)
+
+      if (asset.type === 'file') {
+        const assetCache = useAssetCacheStore()
+        assetCache.registerUsage(asset.id)
+      }
     },
     spawnAssetAtPosition(assetId: string, position: Vector3Like) {
       const asset = findAssetInTree(this.projectTree, assetId)
       if (!asset) return null
+      if (asset.type === 'file') {
+        const assetCache = useAssetCacheStore()
+        if (!assetCache.hasCache(asset.id)) {
+          return null
+        }
+        assetCache.touch(asset.id)
+      }
       this.addNodeFromAsset(asset, position)
       return asset
     },
@@ -712,6 +727,8 @@ export const useSceneStore = defineStore('scene', {
       } else if (this.selectedNodeId && removed.includes(this.selectedNodeId)) {
         this.selectedNodeId = this.nodes[0]?.id ?? null
       }
+      const assetCache = useAssetCacheStore()
+      assetCache.recalculateUsage(this.nodes)
       commitSceneSnapshot(this)
     },
     createScene(name = 'Untitled Scene', thumbnail?: string | null) {
@@ -727,6 +744,7 @@ export const useSceneStore = defineStore('scene', {
       this.selectedNodeId = scene.selectedNodeId
       this.camera = cloneCameraState(scene.camera)
       this.resourceProviderId = scene.resourceProviderId
+      useAssetCacheStore().recalculateUsage(this.nodes)
       return scene.id
     },
     selectScene(sceneId: string) {
@@ -743,6 +761,7 @@ export const useSceneStore = defineStore('scene', {
       this.selectedNodeId = scene.selectedNodeId
       this.camera = cloneCameraState(scene.camera)
       this.resourceProviderId = scene.resourceProviderId ?? 'builtin'
+      useAssetCacheStore().recalculateUsage(this.nodes)
       return true
     },
     deleteScene(sceneId: string) {
@@ -765,6 +784,7 @@ export const useSceneStore = defineStore('scene', {
         this.selectedNodeId = fallback.selectedNodeId
         this.camera = cloneCameraState(fallback.camera)
         this.resourceProviderId = fallback.resourceProviderId
+        useAssetCacheStore().recalculateUsage(this.nodes)
         return true
       }
 
@@ -777,6 +797,7 @@ export const useSceneStore = defineStore('scene', {
         this.selectedNodeId = next.selectedNodeId
         this.camera = cloneCameraState(next.camera)
         this.resourceProviderId = next.resourceProviderId ?? 'builtin'
+        useAssetCacheStore().recalculateUsage(this.nodes)
       }
 
       return true

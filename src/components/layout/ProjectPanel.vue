@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore, type ProjectAsset, type ProjectDirectory } from '@/stores/sceneStore'
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { resourceProviders } from '@/resources/projectProviders'
 
 const emit = defineEmits<{
@@ -9,12 +10,14 @@ const emit = defineEmits<{
 }>()
 
 const sceneStore = useSceneStore()
+const assetCacheStore = useAssetCacheStore()
 const { projectTree, activeDirectoryId, currentAssets, selectedAssetId } = storeToRefs(sceneStore)
 
 const openedDirectories = ref<string[]>([])
 const draggingAssetId = ref<string | null>(null)
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 let dragPreviewEl: HTMLDivElement | null = null
+const addPendingAssetId = ref<string | null>(null)
 
 const selectedProviderId = computed<string>({
   get: () => sceneStore.resourceProviderId,
@@ -65,16 +68,99 @@ function selectAsset(asset: ProjectAsset) {
   sceneStore.selectAsset(asset.id)
 }
 
-function addAssetToScene(asset: ProjectAsset) {
-  sceneStore.addNodeFromAsset(asset)
+function isFileAsset(asset: ProjectAsset) {
+  return true
+}
+
+function isAssetCached(asset: ProjectAsset) {
+  if (!isFileAsset(asset)) {
+    return true
+  }
+  return assetCacheStore.hasCache(asset.id)
+}
+
+function isAssetDownloading(asset: ProjectAsset) {
+  return assetCacheStore.isDownloading(asset.id)
+}
+
+function assetDownloadProgress(asset: ProjectAsset) {
+  return assetCacheStore.getProgress(asset.id)
+}
+
+function assetDownloadError(asset: ProjectAsset) {
+  return assetCacheStore.getError(asset.id)
+}
+
+function showDownloadButton(asset: ProjectAsset) {
+  if (!isFileAsset(asset)) {
+    return false
+  }
+  if (isAssetDownloading(asset)) {
+    return false
+  }
+  return !isAssetCached(asset)
+}
+
+async function ensureAssetCached(asset: ProjectAsset) {
+  if (!isFileAsset(asset)) {
+    return
+  }
+  const entry = await assetCacheStore.downloadAsset(asset)
+  if (!assetCacheStore.hasCache(asset.id)) {
+    throw new Error(entry.error ?? '资源未下载完成')
+  }
+}
+
+async function handleDownloadAsset(asset: ProjectAsset) {
+  if (!isFileAsset(asset)) {
+    return
+  }
+  try {
+    await ensureAssetCached(asset)
+  } catch (error) {
+    console.error('下载资源失败', error)
+  }
+}
+
+function handleCancelDownload(asset: ProjectAsset) {
+  if (!isFileAsset(asset)) {
+    return
+  }
+  assetCacheStore.cancelDownload(asset.id)
+}
+
+function isAssetDraggable(asset: ProjectAsset) {
+  return !isFileAsset(asset) || isAssetCached(asset)
+}
+
+async function handleAddAsset(asset: ProjectAsset) {
+  if (addPendingAssetId.value === asset.id) {
+    return
+  }
+  addPendingAssetId.value = asset.id
+  try {
+    await ensureAssetCached(asset)
+    sceneStore.addNodeFromAsset(asset)
+  } catch (error) {
+    console.error('添加资源失败', error)
+  } finally {
+    addPendingAssetId.value = null
+  }
 }
 
 function refreshGallery() {
 }
 
 function handleAssetDragStart(event: DragEvent, asset: ProjectAsset) {
+  if (!isAssetDraggable(asset)) {
+    event.preventDefault()
+    return
+  }
   draggingAssetId.value = asset.id
   selectAsset(asset)
+  if (isFileAsset(asset)) {
+    assetCacheStore.touch(asset.id)
+  }
   if (event.dataTransfer) {
     event.dataTransfer.effectAllowed = 'copyMove'
     event.dataTransfer.setData(ASSET_DRAG_MIME, JSON.stringify({ assetId: asset.id }))
@@ -331,21 +417,66 @@ async function loadResourceProvider(providerId: string) {
                 {
                   'is-selected': selectedAssetId === asset.id,
                   'is-dragging': isAssetDragging(asset.id),
+                  'is-unavailable': !isAssetDraggable(asset),
+                  'is-downloading': isAssetDownloading(asset),
                 },
               ]"
               elevation="4"
-              draggable="true"
+              :draggable="isAssetDraggable(asset)"
               @click="selectAsset(asset)"
               @dragstart.stop="handleAssetDragStart($event, asset)"
               @dragend="handleAssetDragEnd"
             >
               <div class="asset-preview" :style="{ background: asset.previewColor }">
                 <v-icon size="32" color="white">{{ assetIcon(asset.type) }}</v-icon>
+                <div v-if="isAssetDownloading(asset)" class="asset-progress-overlay">
+                  <v-progress-circular
+                    :model-value="assetDownloadProgress(asset)"
+                    color="primary"
+                    size="36"
+                    width="4"
+                  />
+                </div>
+                <div v-else-if="assetDownloadError(asset)" class="asset-error-indicator">
+                  <v-icon size="20" color="error">mdi-alert-circle-outline</v-icon>
+                </div>
               </div>
               <v-card-item>
                 <v-card-title>{{ asset.name }}</v-card-title>
+                <v-card-subtitle v-if="assetDownloadError(asset)" class="asset-error-text">
+                  {{ assetDownloadError(asset) }}
+                </v-card-subtitle>
               </v-card-item>
-              <v-card-actions>
+              <v-card-actions class="asset-actions">
+                <div class="asset-progress" v-if="isAssetDownloading(asset)">
+                  <v-progress-linear
+                    :model-value="assetDownloadProgress(asset)"
+                    color="primary"
+                    height="4"
+                    rounded
+                  />
+                </div>
+                <div class="asset-progress" v-else-if="assetDownloadError(asset)">
+                  <v-icon size="18" color="error">mdi-alert-circle-outline</v-icon>
+                </div>
+                <v-spacer />
+                <v-btn
+                  v-if="showDownloadButton(asset)"
+                  icon="mdi-download"
+                  variant="text"
+                  density="compact"
+                  size="small"
+                  @click.stop="handleDownloadAsset(asset)"
+                />
+                <v-btn
+                  v-else-if="isAssetDownloading(asset)"
+                  icon="mdi-close"
+                  variant="text"
+                  density="compact"
+                  size="small"
+                  color="secondary"
+                  @click.stop="handleCancelDownload(asset)"
+                />
                 <v-btn
                   color="primary"
                   variant="tonal"
@@ -353,7 +484,8 @@ async function loadResourceProvider(providerId: string) {
                   icon="mdi-plus"
                   size="small"
                   style="min-width: 20px; height: 20px;"
-                  @click.stop="addAssetToScene(asset)"
+                  :loading="addPendingAssetId === asset.id"
+                  @click.stop="handleAddAsset(asset)"
                 >
                 </v-btn>
               </v-card-actions>
@@ -463,12 +595,46 @@ async function loadResourceProvider(providerId: string) {
   border-color: rgba(77, 208, 225, 0.6);
 }
 
+.asset-card.is-unavailable {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.asset-card.is-unavailable:hover {
+  transform: none;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.asset-card.is-downloading {
+  border-color: rgba(77, 208, 225, 0.35);
+}
+
 .asset-preview {
   display: flex;
   align-items: center;
   justify-content: center;
   height: 76px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  position: relative;
+}
+
+.asset-progress-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(1px);
+}
+
+.asset-error-indicator {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 6px;
 }
 
 .placeholder-text {
@@ -509,5 +675,27 @@ async function loadResourceProvider(providerId: string) {
 .asset-card :deep(.v-card-subtitle) {
   font-size: 0.7rem;
   letter-spacing: 0.08em;
+}
+
+.asset-actions {
+  align-items: center;
+  gap: 8px;
+  padding-inline: 12px;
+  padding-block: 6px;
+}
+
+.asset-progress {
+  flex: 1;
+}
+
+.asset-error-text {
+  color: #ff8a80;
+  white-space: normal;
+}
+
+.asset-status-text {
+  font-size: 0.7rem;
+  color: rgba(233, 236, 241, 0.7);
+  letter-spacing: 0.06em;
 }
 </style>
