@@ -197,7 +197,8 @@ const previewScene = computed(() => {
       <v-card-text class="scene-manager-body">
         <div class="scene-content" v-if="hasScenes">
           <div class="scene-list-panel">
-            <v-list class="scene-list" lines="one" density="comfortable">
+            <div class="scene-list-scroll">
+              <v-list class="scene-list" lines="one" density="comfortable">
               <v-list-item
                 v-for="scene in scenes"
                 :key="scene.id"
@@ -234,7 +235,8 @@ const previewScene = computed(() => {
                   />
                 </template>
               </v-list-item>
-            </v-list>
+              </v-list>
+            </div>
           </div>
           <div class="scene-preview-panel">
             <div v-if="previewScene" class="scene-preview-card">
@@ -250,33 +252,29 @@ const previewScene = computed(() => {
                 />
                 <div v-else class="scene-preview-placeholder">
                   <v-icon size="72">mdi-image-outline</v-icon>
-                  <p>暂无缩略图</p>
+                    <p>No thumbnail available</p>
                 </div>
               </div>
             </div>
             <div v-else class="scene-preview-empty">
               <v-icon size="48">mdi-cube-outline</v-icon>
-              <p>请选择左侧场景查看缩略图</p>
+                <p>Please select a scene on the left to view its thumbnail.</p>
             </div>
           </div>
         </div>
         <template v-else>
           <div class="empty-state">
             <v-icon size="40" color="primary">mdi-folder-outline</v-icon>
-            <p>暂无场景, 点击 “New Scene” 创建一个新的工程。</p>
+            <p>No scenes yet. Click "New Scene" to create a new project.</p>
           </div>
         </template>
       </v-card-text>
       <v-card-actions class="scene-manager-actions">
-        <div class="actions-left">
-          <v-chip v-if="previewScene && previewScene.id === currentSceneId" color="primary" label variant="tonal">
-            当前场景
-          </v-chip>
-        </div>
+
         <v-spacer />
-        <v-btn variant="text" color="primary" @click="dialogOpen = false">关闭</v-btn>
+        <v-btn variant="text" color="primary" @click="dialogOpen = false">Close</v-btn>
         <v-btn color="primary" variant="flat" :disabled="!previewScene" @click="confirmSelection">
-          使用场景
+          Open
         </v-btn>
       </v-card-actions>
     </v-card>
@@ -307,7 +305,7 @@ const previewScene = computed(() => {
       <v-card>
         <v-card-title class="text-error">Delete Scene</v-card-title>
         <v-card-text>
-          确认删除场景 “{{ pendingDeleteName }}” 吗？此操作无法撤销。
+            Are you sure you want to delete the scene "{{ pendingDeleteName }}"? This action cannot be undone.
         </v-card-text>
         <v-card-actions>
           <v-spacer />
@@ -349,14 +347,39 @@ const previewScene = computed(() => {
 .scene-list-panel {
   width: 260px;
   flex-shrink: 0;
-  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.scene-list-scroll {
+  flex: 1;
+  min-height: 0;
+  max-height: 500px;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(129, 212, 250, 0.5) transparent;
+}
+
+.scene-list-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.scene-list-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scene-list-scroll::-webkit-scrollbar-thumb {
+  background-color: rgba(129, 212, 250, 0.35);
+  border-radius: 999px;
 }
 
 .scene-list {
   background: transparent;
+  flex: 1;
+  min-height: 0;
   max-height: 100%;
-  overflow-y: auto;
-  padding-right: 4px;
 }
 
 .scene-list-item {
