@@ -68,8 +68,9 @@ function selectAsset(asset: ProjectAsset) {
   sceneStore.selectAsset(asset.id)
 }
 
+
 function isAssetCached(asset: ProjectAsset) {
- 
+
   return assetCacheStore.hasCache(asset.id)
 }
 
@@ -125,10 +126,15 @@ async function handleAddAsset(asset: ProjectAsset) {
   }
   addPendingAssetId.value = asset.id
   try {
+    assetCacheStore.setError(asset.id, null)
     await ensureAssetCached(asset)
-    sceneStore.addNodeFromAsset(asset)
+    const node = await sceneStore.addNodeFromAsset(asset)
+    if (!node) {
+      throw new Error('资源尚未准备就绪')
+    }
   } catch (error) {
     console.error('添加资源失败', error)
+    assetCacheStore.setError(asset.id, (error as Error).message ?? '添加资源失败')
   } finally {
     addPendingAssetId.value = null
   }

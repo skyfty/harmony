@@ -15,6 +15,9 @@ export interface AssetCacheEntry {
   refCount: number
   lastUsedAt: number
   abortController: AbortController | null
+  mimeType: string | null
+  filename: string | null
+  downloadUrl: string | null
 }
 
 export interface DownloadOptions {
@@ -25,20 +28,65 @@ const MAX_CACHE_ENTRIES = 10
 
 const ABORT_ERROR_NAME = 'AbortError'
 
-async function fetchAssetBlob(
+interface FetchedAssetData {
+  blob: Blob
+  contentType: string | null
+  filename: string | null
+}
+
+function extractFilenameFromHeaders(headers: Headers, url: string, fallbackName: string): string {
+  const contentDisposition = headers.get('content-disposition')
+  if (contentDisposition) {
+    const filenameMatch = /filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i.exec(contentDisposition)
+    if (filenameMatch) {
+      const encoded = filenameMatch[1] ?? filenameMatch[2]
+      if (encoded) {
+        try {
+          return decodeURIComponent(encoded)
+        } catch (error) {
+          console.warn('无法解析响应头中的文件名', error)
+          return encoded
+        }
+      }
+    }
+  }
+
+  try {
+    const parsed = new URL(url, window.location.href)
+    const segment = parsed.pathname.split('/').filter(Boolean).pop()
+    if (segment) {
+      return decodeURIComponent(segment)
+    }
+  } catch (error) {
+    console.warn('无法从 URL 中解析文件名', error)
+  }
+
+  return fallbackName
+}
+
+async function fetchAssetData(
   url: string,
   controller: AbortController,
   onProgress: (progress: number) => void,
-): Promise<Blob> {
+  fallbackName: string,
+): Promise<FetchedAssetData> {
   const response = await fetch(url, { signal: controller.signal })
   if (!response.ok) {
     throw new Error(`资源下载失败（${response.status}）`)
   }
 
+  const finalize = (blob: Blob): FetchedAssetData => {
+    onProgress(100)
+    return {
+      blob,
+      contentType: response.headers.get('content-type'),
+      filename: extractFilenameFromHeaders(response.headers, url, fallbackName),
+    }
+  }
+
   if (!response.body) {
     const blob = await response.blob()
-    onProgress(100)
-    return blob
+    return finalize(blob)
   }
 
   const contentLengthHeader = response.headers.get('content-length')
@@ -58,7 +106,6 @@ async function fetchAssetBlob(
       if (total > 0) {
         onProgress(Math.min(99, Math.round((received / total) * 100)))
       } else {
-        // 无法获取总长度时，按照分段递增 5%
         const estimated = Math.min(95, received % 100)
         onProgress(estimated)
       }
@@ -66,8 +113,7 @@ async function fetchAssetBlob(
   }
 
   const blob = new Blob(chunks)
-  onProgress(100)
-  return blob
+  return finalize(blob)
 }
 
 function now() {
@@ -86,6 +132,9 @@ function createDefaultEntry(assetId: string): AssetCacheEntry {
     refCount: 0,
     lastUsedAt: 0,
     abortController: null,
+    mimeType: null,
+    filename: null,
+    downloadUrl: null,
   }
 }
 
@@ -128,6 +177,19 @@ export const useAssetCacheStore = defineStore('assetCache', {
     getBlobUrl(assetId: string): string | null {
       return this.entries[assetId]?.blobUrl ?? null
     },
+    createFileFromCache(asset: ProjectAsset): File | null {
+      const entry = this.entries[asset.id]
+      if (!entry || entry.status !== 'cached' || !entry.blob) {
+        return null
+      }
+      const filename = entry.filename && entry.filename.trim().length ? entry.filename : `${asset.id}`
+      const mimeType = entry.mimeType ?? 'application/octet-stream'
+      return new File([entry.blob], filename, { type: mimeType })
+    },
+    setError(assetId: string, message: string | null) {
+      const entry = this.ensureEntry(assetId)
+      entry.error = message
+    },
     async downloadAsset(asset: ProjectAsset, options: DownloadOptions = {}): Promise<AssetCacheEntry> {
       const entry = this.ensureEntry(asset.id)
       if (entry.status === 'cached' && !options.force) {
@@ -151,23 +213,31 @@ export const useAssetCacheStore = defineStore('assetCache', {
       entry.abortController = controller
       entry.lastUsedAt = now()
 
-      const promise = fetchAssetBlob(downloadUrl, controller, (progress) => {
-        const current = this.ensureEntry(asset.id)
-        current.progress = progress
-      })
-        .then((blob) => {
+      const promise = fetchAssetData(
+        downloadUrl,
+        controller,
+        (progress: number) => {
+          const current = this.ensureEntry(asset.id)
+          current.progress = progress
+        },
+        asset.name,
+      )
+        .then((data) => {
           const current = this.ensureEntry(asset.id)
           if (current.blobUrl) {
             URL.revokeObjectURL(current.blobUrl)
           }
-          current.blob = blob
-          current.blobUrl = URL.createObjectURL(blob)
+          current.blob = data.blob
+          current.blobUrl = URL.createObjectURL(data.blob)
           current.status = 'cached'
           current.progress = 100
           current.error = null
-          current.size = blob.size
+          current.size = data.blob.size
           current.abortController = null
           current.lastUsedAt = now()
+          current.mimeType = data.contentType
+          current.filename = data.filename ?? `${asset.id}`
+          current.downloadUrl = downloadUrl
           this.evictIfNeeded(asset.id)
           return current
         })

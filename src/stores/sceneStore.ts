@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia'
-import type { Object3D } from 'three'
+import { type Object3D } from 'three'
 import type { SceneNode, Vector3Like } from '@/types/scene'
 import { useAssetCacheStore } from './assetCacheStore'
+import { loadObjectFromFile } from '@/plugins/assetImport'
 
 export type EditorTool = 'select' | 'translate' | 'rotate' | 'scale'
 
@@ -572,11 +573,9 @@ export const useSceneStore = defineStore('scene', {
     selectAsset(id: string | null) {
       this.selectedAssetId = id
     },
-    addNodeFromAsset(asset: ProjectAsset, position?: Vector3Like) {
-      const id = crypto.randomUUID()
-      const scale: Vector3Like = { x: 1, y: 1, z: 1 }
-
+  async addNodeFromAsset(asset: ProjectAsset, position?: Vector3Like): Promise<SceneNode | null> {
       const spawnPosition = position ? cloneVector(position) : { x: 0, y: 0, z: 0 }
+      const scale: Vector3Like = { x: 1, y: 1, z: 1 }
 
       if (!position && asset.type !== 'model') {
         spawnPosition.y = 1
@@ -588,37 +587,38 @@ export const useSceneStore = defineStore('scene', {
         spawnPosition.y = (position?.y ?? spawnPosition.y) + offset
       }
 
-      const newNode: SceneNode = {
-        id,
+      const assetCache = useAssetCacheStore()
+      if (!assetCache.hasCache(asset.id)) {
+        return null
+      }
+      const file = assetCache.createFileFromCache(asset)
+      if (!file) {
+        throw new Error('缓存中缺少资源数据')
+      }
+
+      const object = await loadObjectFromFile(file)
+      const node = this.addSceneNode({
+        object,
         name: asset.name,
-        geometry: 'box',
-        material: { color: asset.previewColor },
         position: spawnPosition,
         rotation: { x: 0, y: 0, z: 0 },
-        scale,
+        scale: { x: 1, y: 1, z: 1 },
         sourceAssetId: asset.id,
-      }
-      this.nodes = [...this.nodes, newNode]
-      this.selectedNodeId = id
-      commitSceneSnapshot(this)
-
-      if (asset.type === 'file') {
-        const assetCache = useAssetCacheStore()
-        assetCache.registerUsage(asset.id)
-      }
+      })
+      assetCache.registerUsage(asset.id)
+      assetCache.touch(asset.id)
+      return node
     },
-    spawnAssetAtPosition(assetId: string, position: Vector3Like) {
+    async spawnAssetAtPosition(assetId: string, position: Vector3Like): Promise<{ asset: ProjectAsset; node: SceneNode }> {
       const asset = findAssetInTree(this.projectTree, assetId)
-      if (!asset) return null
-      if (asset.type === 'file') {
-        const assetCache = useAssetCacheStore()
-        if (!assetCache.hasCache(asset.id)) {
-          return null
-        }
-        assetCache.touch(asset.id)
+      if (!asset) {
+        throw new Error('未找到对应的资源')
       }
-      this.addNodeFromAsset(asset, position)
-      return asset
+      const node = await this.addNodeFromAsset(asset, position)
+      if (!node) {
+        throw new Error('资源尚未就绪，无法添加到场景')
+      }
+      return { asset, node }
     },
     resetProjectTree() {
       this.projectTree = cloneProjectTree(builtinProjectTree)
@@ -687,6 +687,7 @@ export const useSceneStore = defineStore('scene', {
       position?: Vector3Like
       rotation?: Vector3Like
       scale?: Vector3Like
+      sourceAssetId?: string
     }) {
       const id = crypto.randomUUID()
       const node: SceneNode = {
@@ -698,6 +699,7 @@ export const useSceneStore = defineStore('scene', {
         rotation: payload.rotation ?? { x: 0, y: 0, z: 0 },
         scale: payload.scale ?? { x: 1, y: 1, z: 1 },
         resourceId: id,
+        sourceAssetId: payload.sourceAssetId,
       }
 
       registerRuntimeObject(id, payload.object)

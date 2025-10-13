@@ -173,8 +173,10 @@ export default class Loader {
             loader.setLibraryPath('three/addons/libs/rhino3dm/');
             loader.parse(contents as ArrayBuffer, (object) => {
               object.name = filename;
+              scope.emit('loaded', object);
             }, (error) => {
               console.error(error);
+              scope.emit('loaded', null);
             });
           });
           reader.readAsArrayBuffer(file);
@@ -188,6 +190,7 @@ export default class Loader {
             const loader = new TDSLoader();
             const object = loader.parse(event.target?.result as ArrayBuffer, '');
             object.name = filename;
+            scope.emit('loaded', object);
           });
           reader.readAsArrayBuffer(file);
           break;
@@ -200,6 +203,8 @@ export default class Loader {
             const loader = new ThreeMFLoader() as any;
             const object = loader.parse(event.target?.result as ArrayBuffer, '');
             object.name = filename;
+            loader.dispose();
+            scope.emit('loaded', object);
           });
           reader.readAsArrayBuffer(file);
           break;
@@ -210,7 +215,8 @@ export default class Loader {
             const { AMFLoader } = await import('three/addons/loaders/AMFLoader.js');
 
             const loader = new AMFLoader();
-            loader.parse(event.target?.result as ArrayBuffer);
+            const amfobject = loader.parse(event.target?.result as ArrayBuffer);
+            scope.emit('loaded', amfobject);
           });
           reader.readAsArrayBuffer(file);
           break;
@@ -227,6 +233,7 @@ export default class Loader {
             const collada = loader.parse(contents, '');
 
             collada.scene.name = filename;
+            scope.emit('loaded', collada.scene);
           });
           reader.readAsText(file);
           break;
@@ -273,6 +280,7 @@ export default class Loader {
             const loader = new FBXLoader(manager);
             const object = loader.parse(contents, '');
             object.name = filename;
+            scope.emit('loaded', object);
           });
           reader.readAsArrayBuffer(file);
           break;
@@ -369,6 +377,7 @@ export default class Loader {
             const collada = loader.parse(event.target?.result as ArrayBuffer, '');
 
             collada.scene.name = filename;
+            scope.emit('loaded', collada.scene);
           });
           reader.readAsArrayBuffer(file);
           break;
@@ -384,6 +393,7 @@ export default class Loader {
             loader.parse(event.target?.result as string, (group) => {
               group.name = filename;
               group.rotation.x = Math.PI;
+              scope.emit('loaded', group);
             });
           });
           reader.readAsText(file);

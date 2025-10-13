@@ -481,7 +481,7 @@ function handleViewportDragLeave(event: DragEvent) {
   updateGridHighlight(null)
 }
 
-function handleViewportDrop(event: DragEvent) {
+async function handleViewportDrop(event: DragEvent) {
   if (!isAssetDrag(event)) return
   const payload = extractAssetPayload(event)
   const point = computeDropPoint(event)
@@ -492,11 +492,11 @@ function handleViewportDrop(event: DragEvent) {
 
   const spawnPoint = point ? point.clone() : new THREE.Vector3(0, 0, 0)
   snapVectorToGrid(spawnPoint)
-  const created = sceneStore.spawnAssetAtPosition(payload.assetId, toVector3Like(spawnPoint))
-  if (!created) {
-    console.warn('No asset found for drag payload', payload.assetId)
-  } else {
+  try {
+    await sceneStore.spawnAssetAtPosition(payload.assetId, toVector3Like(spawnPoint))
     scheduleThumbnailCapture()
+  } catch (error) {
+    console.warn('Failed to spawn asset for drag payload', payload.assetId, error)
   }
   updateGridHighlight(null)
 }
