@@ -1,17 +1,28 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import HierarchyPanel from '@/components/layout/HierarchyPanel.vue'
 import InspectorPanel from '@/components/layout/InspectorPanel.vue'
 import ProjectPanel from '@/components/layout/ProjectPanel.vue'
 import SceneViewport from '@/components/editor/SceneViewport.vue'
 import MenuBar from './MenuBar.vue'
+import SceneManagerDialog from '@/components/layout/SceneManagerDialog.vue'
 import { useSceneStore, type EditorTool, type EditorPanel, type SceneCameraState } from '@/stores/sceneStore'
 import type { Vector3Like } from '@/types/scene'
 
 
 const sceneStore = useSceneStore()
-const { nodes: sceneNodes, selectedNodeId, activeTool, camera, panelVisibility } = storeToRefs(sceneStore)
+const {
+  nodes: sceneNodes,
+  selectedNodeId,
+  activeTool,
+  camera,
+  panelVisibility,
+  sceneSummaries,
+  currentSceneId,
+} = storeToRefs(sceneStore)
+
+const isSceneManagerOpen = ref(false)
 
 const hierarchyOpen = computed({
   get: () => panelVisibility.value.hierarchy,
@@ -40,6 +51,10 @@ const reopenButtons = computed(() => ({
   showProject: !panelVisibility.value.project,
 }))
 
+onMounted(() => {
+  sceneStore.ensureCurrentSceneLoaded()
+})
+
 function setTool(tool: EditorTool) {
   sceneStore.setActiveTool(tool)
 }
@@ -60,9 +75,20 @@ function reopenPanel(panel: EditorPanel) {
   sceneStore.setPanelVisibility(panel, true)
 }
 
-function handleMenuAction(action: string) {
+function handleNewAction() {
+  sceneStore.createScene('Untitled Scene')
+}
+
+function handleOpenAction() {
+  isSceneManagerOpen.value = true
+}
+function handleAction(action: string) {
   switch (action) {
+    case 'New':
+      handleNewAction()
+      break
     case 'Open':
+      handleOpenAction()
       break
     case 'Save':
       break
@@ -76,13 +102,33 @@ function handleMenuAction(action: string) {
   }
 }
 
+function handleCreateScene(name: string) {
+  sceneStore.createScene(name)
+  isSceneManagerOpen.value = false
+}
+
+function handleSelectScene(sceneId: string) {
+  const changed = sceneStore.selectScene(sceneId)
+  if (changed) {
+    isSceneManagerOpen.value = false
+  }
+}
+
+function handleDeleteScene(sceneId: string) {
+  sceneStore.deleteScene(sceneId)
+}
+
+function handleRenameScene(payload: { id: string; name: string }) {
+  sceneStore.renameScene(payload.id, payload.name)
+}
+
 </script>
 
 <template>
   <div class="editor-view">
     <div class="editor-layout" :class="layoutClasses">
       <MenuBar 
-        @menu-action="handleMenuAction"
+        @menu-action="handleAction"
       />
       <transition name="slide-left">
         <section v-if="hierarchyOpen" class="panel hierarchy-panel">
@@ -149,6 +195,15 @@ function handleMenuAction(action: string) {
         Project
       </v-btn>
     </div>
+    <SceneManagerDialog
+      v-model="isSceneManagerOpen"
+      :scenes="sceneSummaries"
+      :current-scene-id="currentSceneId"
+      @create="handleCreateScene"
+      @select="handleSelectScene"
+      @delete="handleDeleteScene"
+      @rename="handleRenameScene"
+    />
   </div>
 </template>
 

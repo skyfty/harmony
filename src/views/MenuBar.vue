@@ -32,6 +32,9 @@ function handleMenuAction(action: string) {
                   <span v-bind="props">File</span>
                 </template>
                 <v-list class="menu-dropdown">
+                  <v-list-item @click="handleMenuAction('New')" class="menu-list-item">
+                  New
+                  </v-list-item>
                   <v-list-item @click="handleMenuAction('Open')" class="menu-list-item">
                   Open
                   </v-list-item>
