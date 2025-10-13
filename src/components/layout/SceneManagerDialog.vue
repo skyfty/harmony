@@ -208,14 +208,6 @@ const previewScene = computed(() => {
                 }"
                 @click="handleListSelect(scene.id)"
               >
-                <template #prepend>
-                  <div class="scene-thumb">
-                    <v-img v-if="scene.thumbnail" :src="scene.thumbnail" cover />
-                    <div v-else class="scene-thumb-placeholder">
-                      <v-icon size="28">mdi-image-outline</v-icon>
-                    </div>
-                  </div>
-                </template>
                 <div class="scene-info" @dblclick.stop="startRename(scene)">
                   <div v-if="editingSceneId === scene.id" class="scene-name-edit">
                     <v-text-field

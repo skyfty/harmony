@@ -55,6 +55,8 @@ const pointer = new THREE.Vector2()
 const rootGroup = new THREE.Group()
 const objectMap = new Map<string, THREE.Object3D>()
 let isApplyingCameraState = false
+const THUMBNAIL_CAPTURE_DELAY_MS = 1500
+let thumbnailCaptureTimeout: ReturnType<typeof setTimeout> | null = null
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
 const MIN_CAMERA_HEIGHT = 0.25
@@ -202,6 +204,7 @@ function initScene() {
     canvas: canvasRef.value,
     antialias: true,
     powerPreference: 'high-performance',
+    preserveDrawingBuffer: true,
   })
   renderer.setPixelRatio(window.devicePixelRatio)
   renderer.setSize(width, height)
@@ -294,6 +297,11 @@ function disposeScene() {
   }
   orbitControls = null
 
+  if (thumbnailCaptureTimeout) {
+    clearTimeout(thumbnailCaptureTimeout)
+    thumbnailCaptureTimeout = null
+  }
+
   renderer?.dispose()
   renderer = null
 
@@ -303,6 +311,32 @@ function disposeScene() {
   camera = null
 
   objectMap.clear()
+}
+
+function scheduleThumbnailCapture() {
+  if (!renderer) {
+    return
+  }
+  if (thumbnailCaptureTimeout) {
+    clearTimeout(thumbnailCaptureTimeout)
+  }
+  thumbnailCaptureTimeout = setTimeout(() => {
+    thumbnailCaptureTimeout = null
+    captureThumbnail()
+  }, THUMBNAIL_CAPTURE_DELAY_MS)
+}
+
+function captureThumbnail() {
+  if (!renderer || !sceneStore.currentSceneId) {
+    return
+  }
+
+  try {
+    const thumbnail = renderer.domElement.toDataURL('image/png')
+    sceneStore.updateSceneThumbnail(sceneStore.currentSceneId, thumbnail)
+  } catch (error) {
+    console.warn('Failed to capture scene thumbnail', error)
+  }
 }
 
 function handlePointerDown(event: PointerEvent) {
@@ -412,6 +446,8 @@ function handleViewportDrop(event: DragEvent) {
   const created = sceneStore.spawnAssetAtPosition(payload.assetId, toVector3Like(spawnPoint))
   if (!created) {
     console.warn('No asset found for drag payload', payload.assetId)
+  } else {
+    scheduleThumbnailCapture()
   }
 }
 
@@ -434,6 +470,8 @@ function handleTransformChange() {
     rotation: toEulerLike(target.rotation),
     scale: toVector3Like(target.scale),
   })
+
+  scheduleThumbnailCapture()
 }
 
 function syncSceneGraph() {
@@ -450,6 +488,8 @@ function syncSceneGraph() {
 
   // 重新附加选择并确保工具模式正确
   attachSelection(props.selectedNodeId, props.activeTool)
+
+  scheduleThumbnailCapture()
 }
 
 function disposeSceneNodes() {

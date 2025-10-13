@@ -552,7 +552,7 @@ export const useSceneStore = defineStore('scene', {
       }
       this.nodes = [...this.nodes, newNode]
       this.selectedNodeId = id
-  commitSceneSnapshot(this)
+      commitSceneSnapshot(this)
     },
     spawnAssetAtPosition(assetId: string, position: Vector3Like) {
       const asset = findAssetInTree(this.projectTree, assetId)
