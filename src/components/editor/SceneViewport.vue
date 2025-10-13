@@ -49,6 +49,7 @@ let transformControls: TransformControls | null = null
 let resizeObserver: ResizeObserver | null = null
 let selectionBoxHelper: THREE.Box3Helper | null = null
 let selectionTrackedObject: THREE.Object3D | null = null
+let gridHighlight: THREE.Mesh | null = null
 
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
@@ -62,6 +63,7 @@ const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
 const MIN_CAMERA_HEIGHT = 0.25
 const MIN_TARGET_HEIGHT = 0
 const GRID_CELL_SIZE = 1
+const GRID_HIGHLIGHT_HEIGHT = 0.02
 
 const isDragHovering = ref(false)
 
@@ -69,6 +71,12 @@ const draggingChangedHandler = (event: unknown) => {
   const value = (event as { value?: boolean })?.value ?? false
   if (orbitControls) {
     orbitControls.enabled = !value
+  }
+
+  if (!value) {
+    updateGridHighlight(null)
+  } else if (transformControls?.getMode() === 'translate' && transformControls?.object) {
+    updateGridHighlight((transformControls.object as THREE.Object3D).position)
   }
 }
 
@@ -217,6 +225,8 @@ function initScene() {
   scene.add(rootGroup)
   scene.add(gridHelper)
   scene.add(axesHelper)
+  gridHighlight = createGridHighlight()
+  scene.add(gridHighlight)
   if (selectionTrackedObject) {
     updateSelectionBox(selectionTrackedObject)
   }
@@ -305,6 +315,14 @@ function disposeScene() {
   renderer?.dispose()
   renderer = null
 
+  if (gridHighlight) {
+    gridHighlight.removeFromParent()
+    gridHighlight.geometry.dispose()
+    const highlightMaterial = gridHighlight.material as THREE.Material
+    highlightMaterial.dispose()
+    gridHighlight = null
+  }
+
   clearSelectionBox()
 
   scene = null
@@ -337,6 +355,35 @@ function captureThumbnail() {
   } catch (error) {
     console.warn('Failed to capture scene thumbnail', error)
   }
+}
+
+function createGridHighlight() {
+  const geometry = new THREE.PlaneGeometry(GRID_CELL_SIZE, GRID_CELL_SIZE)
+  const material = new THREE.MeshBasicMaterial({
+    color: 0x4dd0e1,
+    opacity: 0.3,
+    transparent: true,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  })
+  const highlight = new THREE.Mesh(geometry, material)
+  highlight.rotation.x = -Math.PI / 2
+  highlight.position.y = GRID_HIGHLIGHT_HEIGHT
+  highlight.visible = false
+  highlight.renderOrder = 1
+  return highlight
+}
+
+function updateGridHighlight(position: THREE.Vector3 | null) {
+  if (!gridHighlight) {
+    return
+  }
+  if (!position) {
+    gridHighlight.visible = false
+    return
+  }
+  gridHighlight.visible = true
+  gridHighlight.position.set(position.x, GRID_HIGHLIGHT_HEIGHT, position.z)
 }
 
 function handlePointerDown(event: PointerEvent) {
@@ -414,12 +461,13 @@ function handleViewportDragEnter(event: DragEvent) {
 
 function handleViewportDragOver(event: DragEvent) {
   if (!isAssetDrag(event)) return
-  computeDropPoint(event)
+  const point = computeDropPoint(event)
   event.preventDefault()
   if (event.dataTransfer) {
     event.dataTransfer.dropEffect = 'copy'
   }
   isDragHovering.value = true
+  updateGridHighlight(point)
 }
 
 function handleViewportDragLeave(event: DragEvent) {
@@ -430,6 +478,7 @@ function handleViewportDragLeave(event: DragEvent) {
     return
   }
   isDragHovering.value = false
+  updateGridHighlight(null)
 }
 
 function handleViewportDrop(event: DragEvent) {
@@ -449,6 +498,7 @@ function handleViewportDrop(event: DragEvent) {
   } else {
     scheduleThumbnailCapture()
   }
+  updateGridHighlight(null)
 }
 
 function handleTransformChange() {
@@ -472,6 +522,9 @@ function handleTransformChange() {
   })
 
   scheduleThumbnailCapture()
+  if (transformControls?.getMode() === 'translate') {
+    updateGridHighlight(target.position)
+  }
 }
 
 function syncSceneGraph() {
@@ -597,16 +650,19 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
 
   if (!nodeId) {
     transformControls.detach()
+    updateGridHighlight(null)
     return
   }
 
   if (!target) {
     transformControls.detach()
+    updateGridHighlight(null)
     return
   }
 
   if (tool === 'select') {
     transformControls.detach()
+    updateGridHighlight(null)
     return
   }
 
@@ -622,10 +678,14 @@ function updateToolMode(tool: EditorTool) {
 
   if (tool === 'select') {
     transformControls.detach()
+    updateGridHighlight(null)
     return
   }
 
   transformControls.setMode(tool)
+  if (tool !== 'translate') {
+    updateGridHighlight(null)
+  }
   if (props.selectedNodeId) {
     attachSelection(props.selectedNodeId, tool)
   }
