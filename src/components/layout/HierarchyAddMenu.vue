@@ -279,12 +279,4 @@ function handleAddNode(geometry:string) {
   opacity: 0.2;
 }
 
-.v-toolbar .v-toolbar__content .v-btn {
-    height: 20px;
-    padding: 0 12px 0 12px;
-    min-width: 20px;
-    font-size: 12px;
-    margin-left: 3px;
-}
-
 </style>

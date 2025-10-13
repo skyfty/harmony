@@ -254,13 +254,13 @@ function handleTreeDragLeave(event: DragEvent) {
 
 <template>
   <v-card class="panel-card" elevation="4">
-    <v-toolbar density="compact" title="Hierarchy" class="panel-toolbar" height="40">
+    <v-toolbar density="compact" title="Hierarchy" class="panel-toolbar" height="40px">
       <v-spacer />
       <v-btn icon="mdi-window-minimize" variant="text" @click="emit('collapse')" />
     </v-toolbar>
     <v-divider />
     <div class="panel-body hierarchy-body">
-      <v-toolbar density="compact" class="tree-toolbar" flat height="40">
+      <v-toolbar density="compact" class="tree-toolbar" flat height="40px">
         <HierarchyAddMenu />
         <v-btn
           icon="mdi-delete-outline"
@@ -354,7 +354,7 @@ function handleTreeDragLeave(event: DragEvent) {
 .panel-toolbar {
   background-color: transparent;
   color: #e9ecf1;
-  min-height: 30px;
+  min-height: 20px;
   padding: 0 8px;
 }
 
@@ -390,20 +390,6 @@ function handleTreeDragLeave(event: DragEvent) {
   gap: 2px;
 }
 
-.tree-toolbar :deep(.v-btn) {
-  width: 30px;
-  height: 30px;
-  padding: 0;
-}
-
-.v-toolbar .v-btn {
-    padding: 0 12px 0 12px;
-    font-size: 12px;
-    margin-left: 3px;
-}
-.tree-toolbar :deep(.v-btn .v-icon) {
-  font-size: 16px;
-}
 
 .tree-toolbar-separator {
   margin: 0 4px;
