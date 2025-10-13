@@ -7,9 +7,10 @@ export type EditorTool = 'select' | 'translate' | 'rotate' | 'scale'
 export interface ProjectAsset {
   id: string
   name: string
-  type: 'model' | 'texture' | 'image'
+  type: 'model' | 'texture' | 'image' | 'audio' | 'file'
   description?: string
   previewColor: string
+  thumbnail?: string | null
 }
 
 export interface ProjectDirectory {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore, type ProjectAsset } from '@/stores/sceneStore'
 
@@ -13,6 +13,7 @@ const { projectTree, activeDirectoryId, currentAssets, selectedAssetId } = store
 const openedDirectories = ref<string[]>([])
 const draggingAssetId = ref<string | null>(null)
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
+let dragPreviewEl: HTMLDivElement | null = null
 
 const selectedDirectory = computed({
   get: () => (activeDirectoryId.value ? [activeDirectoryId.value] : []),
@@ -61,11 +62,17 @@ function handleAssetDragStart(event: DragEvent, asset: ProjectAsset) {
     event.dataTransfer.effectAllowed = 'copyMove'
     event.dataTransfer.setData(ASSET_DRAG_MIME, JSON.stringify({ assetId: asset.id }))
     event.dataTransfer.dropEffect = 'copy'
+    const preview = createDragPreview(asset)
+    if (preview) {
+      const rect = preview.getBoundingClientRect()
+      event.dataTransfer.setDragImage(preview, rect.width / 2, rect.height / 2)
+    }
   }
 }
 
 function handleAssetDragEnd() {
   draggingAssetId.value = null
+  destroyDragPreview()
 }
 
 function isAssetDragging(assetId: string) {
@@ -85,15 +92,92 @@ function searchAsset () {
 
 
 function assetIcon(type: ProjectAsset['type']) {
+  return iconForAssetType(type)
+}
+
+function iconForAssetType(type: ProjectAsset['type']) {
   switch (type) {
     case 'texture':
       return 'mdi-texture-box'
     case 'image':
       return 'mdi-image-outline'
+    case 'audio':
+      return 'mdi-music-note-outline'
+    case 'file':
+      return 'mdi-file-outline'
     default:
       return 'mdi-cube'
   }
 }
+
+function createDragPreview(asset: ProjectAsset) {
+  destroyDragPreview()
+
+  const wrapper = document.createElement('div')
+  wrapper.style.position = 'absolute'
+  wrapper.style.top = '-9999px'
+  wrapper.style.left = '-9999px'
+  wrapper.style.pointerEvents = 'none'
+  wrapper.style.padding = '12px'
+  wrapper.style.borderRadius = '12px'
+  wrapper.style.background = 'rgba(22, 25, 32, 0.12)'
+  wrapper.style.border = '1px solid rgba(77, 208, 225, 0.45)'
+  wrapper.style.boxShadow = '0 8px 30px rgba(0, 0, 0, 0.4)'
+  wrapper.style.display = 'flex'
+  wrapper.style.flexDirection = 'column'
+  wrapper.style.alignItems = 'center'
+  wrapper.style.gap = '8px'
+  wrapper.style.minWidth = '96px'
+  wrapper.style.minHeight = '96px'
+  wrapper.style.backdropFilter = 'blur(4px)'
+
+  if (asset.type === 'model' && asset.thumbnail) {
+    const thumbnail = document.createElement('div')
+    thumbnail.style.width = '64px'
+    thumbnail.style.height = '64px'
+    thumbnail.style.borderRadius = '10px'
+    thumbnail.style.backgroundColor = asset.previewColor ?? '#455A64'
+    thumbnail.style.backgroundSize = 'cover'
+    thumbnail.style.backgroundPosition = 'center'
+    thumbnail.style.backgroundImage = `url("${asset.thumbnail}")`
+    thumbnail.style.boxShadow = '0 6px 18px rgba(0, 0, 0, 0.35)'
+    wrapper.appendChild(thumbnail)
+  } else {
+    const iconSpan = document.createElement('span')
+    iconSpan.className = `mdi ${iconForAssetType(asset.type)}`
+    iconSpan.style.fontSize = '48px'
+    iconSpan.style.color = '#FFFFFF'
+    iconSpan.style.textShadow = '0 4px 14px rgba(0,0,0,0.4)'
+    wrapper.appendChild(iconSpan)
+  }
+
+  const label = document.createElement('div')
+  label.textContent = asset.name
+  label.style.fontSize = '13px'
+  label.style.fontWeight = '500'
+  label.style.color = '#E9ECF1'
+  label.style.textAlign = 'center'
+  label.style.maxWidth = '120px'
+  label.style.whiteSpace = 'nowrap'
+  label.style.overflow = 'hidden'
+  label.style.textOverflow = 'ellipsis'
+  wrapper.appendChild(label)
+
+  document.body.appendChild(wrapper)
+  dragPreviewEl = wrapper
+  return wrapper
+}
+
+function destroyDragPreview() {
+  if (dragPreviewEl && dragPreviewEl.parentNode) {
+    dragPreviewEl.parentNode.removeChild(dragPreviewEl)
+  }
+  dragPreviewEl = null
+}
+
+onBeforeUnmount(() => {
+  destroyDragPreview()
+})
 </script>
 
 <template>
