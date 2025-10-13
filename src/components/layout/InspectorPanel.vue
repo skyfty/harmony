@@ -176,7 +176,7 @@ function handleNameUpdate(value: string) {
             </div>
             <div class="section-block">
               <InspectorVectorControls
-                label="Rotation (deg)"
+                label="Rotation"
                 :model-value="transformForm.rotation"
                 @update:axis="handleRotationUpdate"
               />
@@ -277,18 +277,18 @@ function handleNameUpdate(value: string) {
   font-weight: 600;
   letter-spacing: 0.08em;
   min-height: 34px;
-  padding-block: 4px;
-  
-  
+  padding-block: 2px;
+    padding: 0px 10px;
 }
 
-
+.v-expansion-panel--active > .v-expansion-panel-title:not(.v-expansion-panel-title--static) {
+    min-height: 34px;
+}
 .inspector-panels :deep(.v-expansion-panel-text__wrapper) {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
-  padding-top: 0.6rem;
-  padding-bottom: 0.6rem;
+  gap: 0.2rem;
+  padding: 8px 10px 16px;
 }
 
 .section-block {
@@ -323,7 +323,7 @@ function handleNameUpdate(value: string) {
   grid-template-columns: 1fr repeat(3, 1fr);
   align-items: center;
   gap: 8px;
-  padding: 0.5rem 0.7rem;
+  padding: 0.5rem 0.0rem;
 }
 
 .vector-label {
