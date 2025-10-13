@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, watch } from 'vue'
+import { reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import InspectorVectorControls from '@/components/inspector/InspectorVectorControls.vue'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -11,6 +11,8 @@ const emit = defineEmits<{
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
+
+const nodeName = ref('')
 
 const transformForm = reactive({
   position: { x: 0, y: 0, z: 0 },
@@ -28,6 +30,7 @@ watch(
   selectedNode,
   (node) => {
     if (!node) return
+    nodeName.value = node.name
     transformForm.position = { ...node.position }
     transformForm.rotation = {
       x: radToDeg(node.rotation.x),
@@ -112,6 +115,20 @@ function updateVisibility(value: boolean | null) {
   sceneStore.setNodeVisibility(selectedNodeId.value, Boolean(value))
 }
 
+function handleNameUpdate(value: string) {
+  if (!selectedNodeId.value) return
+  nodeName.value = value
+  const trimmed = value.trim()
+  if (!trimmed) {
+    nodeName.value = selectedNode.value?.name ?? ''
+    return
+  }
+  if (trimmed === selectedNode.value?.name) {
+    return
+  }
+  sceneStore.renameNode(selectedNodeId.value, trimmed)
+}
+
 </script>
 
 <template>
@@ -125,15 +142,15 @@ function updateVisibility(value: boolean | null) {
       <div style="display: flex; align-items: center; gap: 0.2rem; padding: 0.2rem 0.7rem;">
         <v-icon color="primary" size="40">mdi-cube-outline</v-icon>
         <v-text-field
-          v-model="selectedNode.name"
-          label="Name"
-          variant="outlined"
-          density="comfortable"
+          :model-value="nodeName"
+          variant="solo"
+          density="compact"
           hide-details
+          @update:modelValue="handleNameUpdate"
         />
         <v-checkbox
           :model-value="selectedNode.visible ?? true"
-          density="comfortable"
+          density="compact"
           hide-details
           @update:modelValue="updateVisibility"
         />
