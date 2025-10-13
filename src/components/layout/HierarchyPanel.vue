@@ -41,9 +41,32 @@ watch(
 
 const allNodeIds = computed(() => flattenIds(hierarchyItems.value))
 const hasSelection = computed(() => checkboxSelection.value.length > 0)
-const isAllSelected = computed(
-  () => allNodeIds.value.length > 0 && checkboxSelection.value.length === allNodeIds.value.length,
-)
+const selectionState = computed<'none' | 'partial' | 'all'>(() => {
+  if (!checkboxSelection.value.length) return 'none'
+  if (checkboxSelection.value.length === allNodeIds.value.length) return 'all'
+  return 'partial'
+})
+const selectionToggleIcon = computed(() => {
+  switch (selectionState.value) {
+    case 'all':
+      return 'mdi-checkbox-marked'
+    case 'partial':
+      return 'mdi-checkbox-intermediate'
+    default:
+      return 'mdi-checkbox-blank-outline'
+  }
+})
+const selectionToggleTitle = computed(() => {
+  switch (selectionState.value) {
+    case 'all':
+      return '清除选择'
+    case 'partial':
+      return '补全选择'
+    default:
+      return '全选节点'
+  }
+})
+const canToggleSelection = computed(() => allNodeIds.value.length > 0)
 
 watch(allNodeIds, (ids) => {
   checkboxSelection.value = checkboxSelection.value.filter((id) => ids.includes(id))
@@ -112,6 +135,15 @@ function handleSelectAll() {
 
 function handleClearSelection() {
   checkboxSelection.value = []
+}
+
+function handleSelectionToggle() {
+  if (!allNodeIds.value.length) return
+  if (selectionState.value === 'all') {
+    handleClearSelection()
+    return
+  }
+  handleSelectAll()
 }
 
 function handleDeleteSelected() {
@@ -276,18 +308,13 @@ function handleTreeDragLeave(event: DragEvent) {
         />
         <v-spacer />
         <v-btn
-          icon="mdi-select-all"
+          :icon="selectionToggleIcon"
           variant="text"
           density="compact"
-          :disabled="isAllSelected"
-          @click="handleSelectAll"
-        />
-        <v-btn
-          icon="mdi-select-off"
-          variant="text"
-          density="compact"
-          :disabled="!hasSelection"
-          @click="handleClearSelection"
+          :color="selectionState === 'none' ? undefined : 'primary'"
+          :disabled="!canToggleSelection"
+          :title="selectionToggleTitle"
+          @click="handleSelectionToggle"
         />
       </v-toolbar>
       <div
@@ -329,15 +356,6 @@ function handleTreeDragLeave(event: DragEvent) {
           <template #append="{ item }">
             <div class="tree-node-trailing" @mousedown.stop @click.stop>
 
-              <v-checkbox
-                :model-value="isItemSelected(item.id)"
-                :class="['node-checkbox', { 'is-selected': isItemSelected(item.id) }]"
-                density="compact"
-                hide-details
-                color="primary"
-                :ripple="false"
-                @update:modelValue="handleCheckboxChange(item.id, $event)"
-              />
               <v-btn
                 :icon="(item.visible ?? true) ? 'mdi-eye-outline' : 'mdi-eye-off-outline'"
                 variant="text"
@@ -347,6 +365,15 @@ function handleTreeDragLeave(event: DragEvent) {
                 :class="{ 'is-hidden': !(item.visible ?? true) }"
                 :title="(item.visible ?? true) ? '隐藏模型' : '显示模型'"
                 @click.stop="toggleNodeVisibility(item.id)"
+              />
+              <v-checkbox
+                :model-value="isItemSelected(item.id)"
+                :class="['node-checkbox', { 'is-selected': isItemSelected(item.id) }]"
+                density="compact"
+                hide-details
+                color="primary"
+                :ripple="false"
+                @update:modelValue="handleCheckboxChange(item.id, $event)"
               />
             </div>
           </template>
