@@ -33,6 +33,7 @@ const pendingDeleteId = ref<string | null>(null)
 const pendingDeleteName = ref('')
 const editingSceneId = ref<string | null>(null)
 const editingSceneName = ref('')
+const selectedSceneId = ref<string | null>(null)
 
 watch(dialogOpen, (open) => {
   if (!open) {
@@ -40,8 +41,33 @@ watch(dialogOpen, (open) => {
     deleteDialogOpen.value = false
     editingSceneId.value = null
     newSceneName.value = 'Untitled Scene'
+    selectedSceneId.value = null
   }
 })
+
+watch(
+  () => props.modelValue,
+  (open) => {
+    if (open) {
+      selectedSceneId.value = props.currentSceneId ?? props.scenes[0]?.id ?? null
+    }
+  },
+  { immediate: true },
+)
+
+watch(
+  () => props.scenes,
+  (scenes) => {
+    if (!scenes.length) {
+      selectedSceneId.value = null
+      return
+    }
+    if (!selectedSceneId.value || !scenes.some((scene) => scene.id === selectedSceneId.value)) {
+      selectedSceneId.value = props.currentSceneId ?? scenes[0]?.id ?? null
+    }
+  },
+  { deep: true },
+)
 
 function openCreateDialog() {
   newSceneName.value = 'Untitled Scene'
@@ -84,9 +110,14 @@ function cancelDelete() {
   pendingDeleteName.value = ''
 }
 
-function handleSelect(sceneId: string) {
+function handleListSelect(sceneId: string) {
   editingSceneId.value = null
-  emit('select', sceneId)
+  selectedSceneId.value = sceneId
+}
+
+function confirmSelection() {
+  if (!selectedSceneId.value) return
+  emit('select', selectedSceneId.value)
   emit('update:modelValue', false)
 }
 
@@ -139,10 +170,15 @@ function handleRenameKeydown(event: KeyboardEvent) {
 
 const hasScenes = computed(() => props.scenes.length > 0)
 
+const previewScene = computed(() => {
+  if (!selectedSceneId.value) return null
+  return props.scenes.find((scene) => scene.id === selectedSceneId.value) ?? null
+})
+
 </script>
 
 <template>
-  <v-dialog v-model="dialogOpen" width="520">
+  <v-dialog v-model="dialogOpen" width="880" max-width="960">
     <v-card class="scene-manager-card" elevation="8">
       <v-card-title class="scene-manager-header">
         <span>Manage Scenes</span>
@@ -159,51 +195,79 @@ const hasScenes = computed(() => props.scenes.length > 0)
       </v-card-title>
       <v-divider />
       <v-card-text class="scene-manager-body">
-        <template v-if="hasScenes">
-          <v-list class="scene-list" lines="one" density="comfortable">
-            <v-list-item
-              v-for="scene in scenes"
-              :key="scene.id"
-              class="scene-list-item"
-              :class="{ 'is-active': scene.id === currentSceneId }"
-              @click="handleSelect(scene.id)"
-            >
-              <template #prepend>
-                <div class="scene-thumb">
-                  <v-img v-if="scene.thumbnail" :src="scene.thumbnail" cover />
-                  <div v-else class="scene-thumb-placeholder">
-                    <v-icon size="28">mdi-image-outline</v-icon>
+        <div class="scene-content" v-if="hasScenes">
+          <div class="scene-list-panel">
+            <v-list class="scene-list" lines="one" density="comfortable">
+              <v-list-item
+                v-for="scene in scenes"
+                :key="scene.id"
+                class="scene-list-item"
+                :class="{
+                  'is-active': scene.id === selectedSceneId,
+                  'is-current': scene.id === currentSceneId,
+                }"
+                @click="handleListSelect(scene.id)"
+              >
+                <template #prepend>
+                  <div class="scene-thumb">
+                    <v-img v-if="scene.thumbnail" :src="scene.thumbnail" cover />
+                    <div v-else class="scene-thumb-placeholder">
+                      <v-icon size="28">mdi-image-outline</v-icon>
+                    </div>
                   </div>
+                </template>
+                <div class="scene-info" @dblclick.stop="startRename(scene)">
+                  <div v-if="editingSceneId === scene.id" class="scene-name-edit">
+                    <v-text-field
+                      :id="`scene-rename-${scene.id}`"
+                      v-model="editingSceneName"
+                      variant="solo"
+                      density="comfortable"
+                      hide-details
+                      single-line
+                      autofocus
+                      @keydown="handleRenameKeydown"
+                      @blur="commitRename"
+                    />
+                  </div>
+                  <div v-else class="scene-name">{{ scene.name }}</div>
                 </div>
-              </template>
-              <div class="scene-info" @dblclick.stop="startRename(scene)">
-                <div v-if="editingSceneId === scene.id" class="scene-name-edit">
-                  <v-text-field
-                    :id="`scene-rename-${scene.id}`"
-                    v-model="editingSceneName"
-                    variant="solo"
+                <template #append>
+                  <v-btn
+                    icon="mdi-delete-outline"
+                    color="error"
+                    variant="text"
                     density="comfortable"
-                    hide-details
-                    single-line
-                    autofocus
-                    @keydown="handleRenameKeydown"
-                    @blur="commitRename"
+                    @click.stop="requestDelete(scene)"
                   />
-                </div>
-                <div v-else class="scene-name">{{ scene.name }}</div>
+                </template>
+              </v-list-item>
+            </v-list>
+          </div>
+          <div class="scene-preview-panel">
+            <div v-if="previewScene" class="scene-preview-card">
+              <div class="scene-preview-header">
+                <span class="preview-title">{{ previewScene.name }}</span>
+                <span v-if="previewScene.id === currentSceneId" class="preview-badge">当前</span>
               </div>
-              <template #append>
-                <v-btn
-                  icon="mdi-delete-outline"
-                  color="error"
-                  variant="text"
-                  density="comfortable"
-                  @click.stop="requestDelete(scene)"
+              <div class="scene-preview-media">
+                <v-img
+                  v-if="previewScene.thumbnail"
+                  :src="previewScene.thumbnail"
+                  cover
                 />
-              </template>
-            </v-list-item>
-          </v-list>
-        </template>
+                <div v-else class="scene-preview-placeholder">
+                  <v-icon size="72">mdi-image-outline</v-icon>
+                  <p>暂无缩略图</p>
+                </div>
+              </div>
+            </div>
+            <div v-else class="scene-preview-empty">
+              <v-icon size="48">mdi-cube-outline</v-icon>
+              <p>请选择左侧场景查看缩略图</p>
+            </div>
+          </div>
+        </div>
         <template v-else>
           <div class="empty-state">
             <v-icon size="40" color="primary">mdi-folder-outline</v-icon>
@@ -212,8 +276,16 @@ const hasScenes = computed(() => props.scenes.length > 0)
         </template>
       </v-card-text>
       <v-card-actions class="scene-manager-actions">
+        <div class="actions-left">
+          <v-chip v-if="previewScene && previewScene.id === currentSceneId" color="primary" label variant="tonal">
+            当前场景
+          </v-chip>
+        </div>
         <v-spacer />
-        <v-btn variant="text" color="primary" @click="dialogOpen = false">Close</v-btn>
+        <v-btn variant="text" color="primary" @click="dialogOpen = false">关闭</v-btn>
+        <v-btn color="primary" variant="flat" :disabled="!previewScene" @click="confirmSelection">
+          使用场景
+        </v-btn>
       </v-card-actions>
     </v-card>
 
@@ -260,6 +332,7 @@ const hasScenes = computed(() => props.scenes.length > 0)
   background: rgba(18, 21, 26, 0.96);
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.06);
+  min-height: 540px;
 }
 
 .scene-manager-header {
@@ -271,20 +344,38 @@ const hasScenes = computed(() => props.scenes.length > 0)
 }
 
 .scene-manager-body {
-  max-height: 420px;
-  overflow-y: auto;
-  padding-top: 12px;
-  padding-bottom: 12px;
+  max-height: 520px;
+  padding: 12px 0;
+}
+
+.scene-content {
+  display: flex;
+  gap: 16px;
+  height: 100%;
+}
+
+.scene-list-panel {
+  width: 260px;
+  flex-shrink: 0;
+  overflow: hidden;
 }
 
 .scene-list {
   background: transparent;
+  max-height: 100%;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .scene-list-item {
   border-radius: 10px;
   transition: background-color 0.18s ease, border-color 0.18s ease;
   border: 1px solid transparent;
+  margin-bottom: 6px;
+}
+
+.scene-list-item:last-of-type {
+  margin-bottom: 0;
 }
 
 .scene-list-item:hover {
@@ -295,6 +386,17 @@ const hasScenes = computed(() => props.scenes.length > 0)
 .scene-list-item.is-active {
   background-color: rgba(129, 212, 250, 0.14);
   border-color: rgba(129, 212, 250, 0.45);
+}
+
+.scene-list-item.is-current::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 8px;
+  bottom: 8px;
+  width: 4px;
+  border-radius: 999px;
+  background: rgba(129, 212, 250, 0.7);
 }
 
 .scene-thumb {
@@ -338,9 +440,89 @@ const hasScenes = computed(() => props.scenes.length > 0)
   font-weight: 500;
 }
 
+.scene-preview-panel {
+  flex: 1;
+  min-width: 0;
+  background: rgba(15, 17, 22, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.scene-preview-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: 100%;
+}
+
+.scene-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.preview-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: rgba(233, 236, 241, 0.96);
+}
+
+.preview-badge {
+  font-size: 0.75rem;
+  color: rgba(129, 212, 250, 0.95);
+  border: 1px solid rgba(129, 212, 250, 0.4);
+  border-radius: 999px;
+  padding: 2px 10px;
+  letter-spacing: 0.06em;
+}
+
+.scene-preview-media {
+  flex: 1;
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.04);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scene-preview-media :deep(img) {
+  object-fit: cover;
+}
+
+.scene-preview-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: rgba(233, 236, 241, 0.68);
+}
+
+.scene-preview-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: rgba(233, 236, 241, 0.65);
+}
+
 .scene-manager-actions {
   padding-inline: 16px;
   padding-bottom: 12px;
+  gap: 8px;
+}
+
+.actions-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .empty-state {
