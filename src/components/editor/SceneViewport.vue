@@ -767,10 +767,6 @@ watch(
       @drop="handleViewportDrop"
     >
       <canvas ref="canvasRef" class="viewport-canvas" />
-      <div v-if="isDragHovering" class="drop-overlay">
-        <v-icon size="36" color="white">mdi-plus-circle-outline</v-icon>
-        <span>释放以添加资源</span>
-      </div>
     </div>
   </div>
 </template>
@@ -816,8 +812,6 @@ watch(
   content: '';
   position: absolute;
   inset: 0;
-  background: rgba(77, 208, 225, 0.12);
-  border: 1px dashed rgba(77, 208, 225, 0.6);
   pointer-events: none;
   border-radius: 8px;
   z-index: 3;
