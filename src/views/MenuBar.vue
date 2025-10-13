@@ -180,7 +180,7 @@ function handleMenuAction(action: string) {
 
 .menu-items {
   display: flex;
-  gap: 4px;
+  gap: 2px;
 }
 
 .menu-item {
@@ -209,10 +209,11 @@ function handleMenuAction(action: string) {
 .menu-list-item {
   color: rgba(244, 247, 255, 0.9);
   font-size: 0.9rem;
-  padding: 12px 18px;
+  padding: 0px 18px;
   border-radius: 8px;
   transition: background-color 0.18s ease;
   min-width: 160px;
+  min-height: 28px;
   
 }
 
