@@ -14,6 +14,8 @@ const props = defineProps<{
   sceneNodes: SceneNode[]
   selectedNodeId: string | null
   cameraState: SceneCameraState
+  focusNodeId: string | null
+  focusRequestId: number
 }>()
 
 const emit = defineEmits<{
@@ -189,6 +191,78 @@ function applyCameraState(state: SceneCameraState | null | undefined) {
   orbitControls.target.set(state.target.x, clampedTargetY, state.target.z)
   orbitControls.update()
   isApplyingCameraState = false
+}
+
+function findSceneNode(nodes: SceneNode[], nodeId: string): SceneNode | null {
+  for (const node of nodes) {
+    if (node.id === nodeId) {
+      return node
+    }
+    if (node.children) {
+      const result = findSceneNode(node.children, nodeId)
+      if (result) {
+        return result
+      }
+    }
+  }
+  return null
+}
+
+function focusCameraOnNode(nodeId: string): boolean {
+  if (!camera || !orbitControls) {
+    return false
+  }
+
+  const target = new THREE.Vector3()
+  let sizeEstimate = 1
+
+  const object = objectMap.get(nodeId)
+  if (object) {
+    object.updateWorldMatrix(true, true)
+    const box = new THREE.Box3().setFromObject(object)
+    if (!box.isEmpty()) {
+      box.getCenter(target)
+      const boxSize = new THREE.Vector3()
+      box.getSize(boxSize)
+      sizeEstimate = Math.max(boxSize.x, boxSize.y, boxSize.z)
+    } else {
+      object.getWorldPosition(target)
+    }
+  } else {
+    const node = findSceneNode(props.sceneNodes, nodeId)
+    if (!node) {
+      return false
+    }
+    target.set(node.position.x, node.position.y, node.position.z)
+    sizeEstimate = Math.max(node.scale?.x ?? 1, node.scale?.y ?? 1, node.scale?.z ?? 1, 1)
+  }
+
+  sizeEstimate = Math.max(sizeEstimate, 0.5)
+
+  const distance = Math.max(sizeEstimate * 2.75, 6)
+  const height = Math.max(sizeEstimate * 1.6, 4)
+  const offset = new THREE.Vector3(distance, height, distance)
+  const newPosition = target.clone().add(offset)
+
+  isApplyingCameraState = true
+  camera.position.copy(newPosition)
+  if (camera.position.y < MIN_CAMERA_HEIGHT) {
+    camera.position.y = MIN_CAMERA_HEIGHT
+  }
+
+  const clampedTargetY = Math.max(target.y, MIN_TARGET_HEIGHT)
+  orbitControls.target.set(target.x, clampedTargetY, target.z)
+  orbitControls.update()
+  isApplyingCameraState = false
+
+  clampCameraAboveGround(false)
+
+  const snapshot = buildCameraState()
+  if (snapshot) {
+    emit('updateCamera', snapshot)
+  }
+
+  return true
 }
 
 function handleControlsChange() {
@@ -739,6 +813,21 @@ watch(
   () => props.activeTool,
   (tool) => {
     updateToolMode(tool)
+  }
+)
+
+watch(
+  () => props.focusRequestId,
+  (token, previous) => {
+    if (!props.focusNodeId) {
+      return
+    }
+    if (!token || token === previous) {
+      return
+    }
+    if (focusCameraOnNode(props.focusNodeId)) {
+      sceneStore.clearCameraFocusRequest(props.focusNodeId)
+    }
   }
 )
 </script>

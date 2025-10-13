@@ -205,6 +205,11 @@ function handleDrop(event: DragEvent, targetId: string) {
   resetDragState()
 }
 
+function handleNodeDoubleClick(nodeId: string) {
+  sceneStore.selectNode(nodeId)
+  sceneStore.requestCameraFocus(nodeId)
+}
+
 function handleTreeDragOver(event: DragEvent) {
   const { sourceId } = dragState.value
   if (!sourceId) return
@@ -255,7 +260,7 @@ function handleTreeDragLeave(event: DragEvent) {
     </v-toolbar>
     <v-divider />
     <div class="panel-body hierarchy-body">
-      <v-toolbar density="compact" class="tree-toolbar" flat height="36">
+      <v-toolbar density="compact" class="tree-toolbar" flat height="40">
         <HierarchyAddMenu />
         <v-btn
           icon="mdi-delete-outline"
@@ -313,6 +318,7 @@ function handleTreeDragLeave(event: DragEvent) {
               @dragover="handleDragOver($event, item.id)"
               @dragleave="handleDragLeave($event, item.id)"
               @drop="handleDrop($event, item.id)"
+              @dblclick.stop.prevent="handleNodeDoubleClick(item.id)"
             >
               <span class="node-label-text">{{ item.name }}</span>
             </div>
@@ -348,7 +354,7 @@ function handleTreeDragLeave(event: DragEvent) {
 .panel-toolbar {
   background-color: transparent;
   color: #e9ecf1;
-  min-height: 20px;
+  min-height: 30px;
   padding: 0 8px;
 }
 
@@ -385,16 +391,13 @@ function handleTreeDragLeave(event: DragEvent) {
 }
 
 .tree-toolbar :deep(.v-btn) {
-  width: 20px;
-  height: 20px;
-  min-width: 20px;
+  width: 30px;
+  height: 30px;
   padding: 0;
 }
 
-.v-toolbar .v-toolbar__content .v-btn {
-    height: 20px;
+.v-toolbar .v-btn {
     padding: 0 12px 0 12px;
-    min-width: 20px;
     font-size: 12px;
     margin-left: 3px;
 }

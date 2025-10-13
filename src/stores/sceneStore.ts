@@ -84,6 +84,8 @@ interface SceneState {
   camera: SceneCameraState
   panelVisibility: PanelVisibilityState
   resourceProviderId: string
+  cameraFocusNodeId: string | null
+  cameraFocusRequestId: number
 }
 
 const initialNodes: SceneNode[] = [
@@ -496,6 +498,8 @@ export const useSceneStore = defineStore('scene', {
     camera: cloneCameraState(initialSceneDocument.camera),
     panelVisibility: { ...defaultPanelVisibility },
     resourceProviderId: initialSceneDocument.resourceProviderId,
+    cameraFocusNodeId: null,
+    cameraFocusRequestId: 0,
   }),
   getters: {
     currentScene(state): StoredSceneDocument | null {
@@ -670,6 +674,21 @@ export const useSceneStore = defineStore('scene', {
     },
     togglePanelVisibility(panel: EditorPanel) {
       this.setPanelVisibility(panel, !this.panelVisibility[panel])
+    },
+
+    requestCameraFocus(nodeId: string | null) {
+      if (!nodeId) {
+        return
+      }
+      this.cameraFocusNodeId = nodeId
+      this.cameraFocusRequestId += 1
+    },
+
+    clearCameraFocusRequest(nodeId?: string | null) {
+      if (nodeId && this.cameraFocusNodeId && nodeId !== this.cameraFocusNodeId) {
+        return
+      }
+      this.cameraFocusNodeId = null
     },
 
     isDescendant(ancestorId: string, maybeChildId: string) {

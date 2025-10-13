@@ -20,6 +20,8 @@ const {
   panelVisibility,
   sceneSummaries,
   currentSceneId,
+  cameraFocusNodeId,
+  cameraFocusRequestId,
 } = storeToRefs(sceneStore)
 
 const isSceneManagerOpen = ref(false)
@@ -142,6 +144,8 @@ function handleRenameScene(payload: { id: string; name: string }) {
           :scene-nodes="sceneNodes"
           :selected-node-id="selectedNodeId"
           :camera-state="camera"
+          :focus-node-id="cameraFocusNodeId"
+          :focus-request-id="cameraFocusRequestId"
           @change-tool="setTool"
           @select-node="selectNode"
           @update-node-transform="updateNodeTransform"
