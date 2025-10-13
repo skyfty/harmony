@@ -68,14 +68,8 @@ function selectAsset(asset: ProjectAsset) {
   sceneStore.selectAsset(asset.id)
 }
 
-function isFileAsset(asset: ProjectAsset) {
-  return asset.type === 'file'
-}
-
 function isAssetCached(asset: ProjectAsset) {
-  if (!isFileAsset(asset)) {
-    return true
-  }
+ 
   return assetCacheStore.hasCache(asset.id)
 }
 
@@ -92,9 +86,7 @@ function assetDownloadError(asset: ProjectAsset) {
 }
 
 function showDownloadButton(asset: ProjectAsset) {
-  if (!isFileAsset(asset)) {
-    return false
-  }
+
   if (isAssetDownloading(asset)) {
     return false
   }
@@ -102,9 +94,7 @@ function showDownloadButton(asset: ProjectAsset) {
 }
 
 async function ensureAssetCached(asset: ProjectAsset) {
-  if (!isFileAsset(asset)) {
-    return
-  }
+
   const entry = await assetCacheStore.downloadAsset(asset)
   if (!assetCacheStore.hasCache(asset.id)) {
     throw new Error(entry.error ?? '资源未下载完成')
@@ -112,9 +102,7 @@ async function ensureAssetCached(asset: ProjectAsset) {
 }
 
 async function handleDownloadAsset(asset: ProjectAsset) {
-  if (!isFileAsset(asset)) {
-    return
-  }
+
   try {
     await ensureAssetCached(asset)
   } catch (error) {
@@ -123,14 +111,12 @@ async function handleDownloadAsset(asset: ProjectAsset) {
 }
 
 function handleCancelDownload(asset: ProjectAsset) {
-  if (!isFileAsset(asset)) {
-    return
-  }
+
   assetCacheStore.cancelDownload(asset.id)
 }
 
 function isAssetDraggable(asset: ProjectAsset) {
-  return !isFileAsset(asset) || isAssetCached(asset)
+  return isAssetCached(asset)
 }
 
 async function handleAddAsset(asset: ProjectAsset) {
@@ -158,9 +144,8 @@ function handleAssetDragStart(event: DragEvent, asset: ProjectAsset) {
   }
   draggingAssetId.value = asset.id
   selectAsset(asset)
-  if (isFileAsset(asset)) {
-    assetCacheStore.touch(asset.id)
-  }
+  assetCacheStore.touch(asset.id)
+  
   if (event.dataTransfer) {
     event.dataTransfer.effectAllowed = 'copyMove'
     event.dataTransfer.setData(ASSET_DRAG_MIME, JSON.stringify({ assetId: asset.id }))
@@ -702,6 +687,10 @@ async function loadResourceProvider(providerId: string) {
 .asset-card :deep(.v-card-subtitle) {
   font-size: 0.7rem;
   letter-spacing: 0.08em;
+}
+
+.v-card-actions {
+  min-height: 32px;
 }
 
 .asset-actions {
