@@ -239,40 +239,55 @@ async function loadResourceProvider(providerId: string) {
     <v-divider />
     <div class="project-content">
       <div class="project-tree">
-        <v-toolbar density="compact" flat height="36">
+        <v-toolbar density="compact" flat height="46">
           <v-toolbar-title class="text-subtitle-2 project-tree-subtitle">Assets</v-toolbar-title>
+          <v-spacer />
+          <v-menu location="bottom end" transition="fade-transition">
+            <template #activator="{ props }">
+              <v-btn
+                v-bind="props"
+                icon="mdi-database-cog"
+                variant="text"
+                color="primary"
+                density="comfortable"
+                class="resource-menu-btn"
+                :loading="providerLoading"
+              />
+            </template>
+            <v-sheet class="resource-menu" elevation="8">
+              <v-list density="comfortable">
+                <v-list-item
+                  v-for="provider in resourceProviders"
+                  :key="provider.id"
+                  :value="provider.id"
+                  :active="selectedProviderId === provider.id"
+                  @click="selectedProviderId = provider.id"
+                >
+                  <template #prepend>
+                    <v-icon size="20" color="primary">
+                      {{ provider.id === 'builtin' ? 'mdi-database' : 'mdi-web' }}
+                    </v-icon>
+                  </template>
+                  <v-list-item-title>{{ provider.name }}</v-list-item-title>
+                  <template #append>
+                    <v-icon v-if="selectedProviderId === provider.id" color="primary">mdi-check</v-icon>
+                  </template>
+                </v-list-item>
+              </v-list>
+              <v-alert
+                v-if="providerError"
+                type="error"
+                density="compact"
+                variant="tonal"
+                class="mt-2"
+              >{{ providerError }}</v-alert>
+            </v-sheet>
+          </v-menu>
         </v-toolbar>
         <v-divider />
-        <div class="resource-source">
-          <v-select
-            v-model="selectedProviderId"
-            :items="resourceProviders"
-            item-title="name"
-            item-value="id"
-            density="compact"
-            variant="outlined"
-            label="资源来源"
-            hide-details
-            class="resource-source-select"
-          />
-          <v-progress-linear
-            v-if="providerLoading"
-            color="primary"
-            indeterminate
-            height="2"
-            class="mt-2"
-          />
-          <v-alert
-            v-if="providerError"
-            type="error"
-            density="compact"
-            variant="tonal"
-            class="mt-2"
-          >{{ providerError }}</v-alert>
-        </div>
         <v-treeview
           v-model:opened="openedDirectories"
-          v-model:selected="selectedDirectory"
+          v-model:activated="selectedDirectory"
           :items="projectTree"
           density="compact"
           item-title="name"
@@ -287,7 +302,7 @@ async function loadResourceProvider(providerId: string) {
         </v-treeview>
       </div>
       <div class="project-gallery">
-        <v-toolbar density="compact" flat height="36">
+        <v-toolbar density="compact" flat height="46">
           <v-toolbar-title class="text-subtitle-2 project-tree-subtitle">Thumbnails</v-toolbar-title>
            <v-spacer />
           <v-text-field
@@ -378,16 +393,16 @@ async function loadResourceProvider(providerId: string) {
   min-height: 0;
 }
 
-.resource-source {
-  padding: 8px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.resource-menu-btn {
+  color: rgba(233, 236, 241, 0.85) !important;
 }
 
-.resource-source-select {
-  background-color: rgba(33, 37, 43, 0.8);
-  border-radius: 10px;
+.resource-menu {
+  min-width: 220px;
+  padding: 8px 0 4px;
+  background-color: rgba(25, 28, 33, 0.96);
+  border: 1px solid rgba(77, 208, 225, 0.16);
+  border-radius: 12px;
 }
 
 .project-gallery {
