@@ -13,6 +13,7 @@ const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
 const nodeName = ref('')
+const expandedPanels = ref<string[]>(['transform', 'material'])
 
 const transformForm = reactive({
   position: { x: 0, y: 0, z: 0 },
@@ -31,6 +32,7 @@ watch(
   (node) => {
     if (!node) return
     nodeName.value = node.name
+    expandedPanels.value = ['transform', 'material']
     transformForm.position = { ...node.position }
     transformForm.rotation = {
       x: radToDeg(node.rotation.x),
@@ -156,54 +158,70 @@ function handleNameUpdate(value: string) {
         />
       </div>
 
-      <v-list class="inspector-section" lines="two" density="compact">
-        <v-list-subheader>Transform</v-list-subheader>
-        <InspectorVectorControls
-          label="Position"
-          :model-value="transformForm.position"
-          @update:axis="handlePositionUpdate"
-        />
-        <InspectorVectorControls
-          label="Rotation (deg)"
-          :model-value="transformForm.rotation"
-          @update:axis="handleRotationUpdate"
-        />
-        <InspectorVectorControls
-          label="Scale"
-          :model-value="transformForm.scale"
-          min="0.01"
-          @update:axis="handleScaleUpdate"
-        />
-      </v-list>
+      <v-expansion-panels
+        v-model="expandedPanels"
+        multiple
+        variant="accordion"
+        class="inspector-panels"
+      >
+        <v-expansion-panel value="transform">
+          <v-expansion-panel-title>Transform</v-expansion-panel-title>
+          <v-expansion-panel-text>
+            <div class="section-block">
+              <InspectorVectorControls
+                label="Position"
+                :model-value="transformForm.position"
+                @update:axis="handlePositionUpdate"
+              />
+            </div>
+            <div class="section-block">
+              <InspectorVectorControls
+                label="Rotation (deg)"
+                :model-value="transformForm.rotation"
+                @update:axis="handleRotationUpdate"
+              />
+            </div>
+            <div class="section-block">
+              <InspectorVectorControls
+                label="Scale"
+                :model-value="transformForm.scale"
+                min="0.01"
+                @update:axis="handleScaleUpdate"
+              />
+            </div>
+          </v-expansion-panel-text>
+        </v-expansion-panel>
 
-
-      <v-list class="inspector-section" lines="two" density="compact">
-        <v-list-subheader>Material</v-list-subheader>
-        <v-list-item title="Base Color">
-          <template #append>
-            <input
-              class="color-input"
-              type="color"
-              :value="materialForm.color"
-              @input="updateColor(($event.target as HTMLInputElement).value)"
-            />
-          </template>
-        </v-list-item>
-        <v-list-item title="Opacity">
-          <template #append>
-            <v-slider
-              :model-value="materialForm.opacity"
-              min="0"
-              max="1"
-              step="0.05"
-              hide-details
-              class="opacity-slider"
-              @update:model-value="updateOpacity"
-            />
-            <div class="slider-value">{{ materialForm.opacity.toFixed(2) }}</div>
-          </template>
-        </v-list-item>
-      </v-list>
+        <v-expansion-panel value="material">
+          <v-expansion-panel-title>Material</v-expansion-panel-title>
+          <v-expansion-panel-text>
+            <div class="section-block material-row">
+              <span class="row-label">Base Color</span>
+              <input
+                class="color-input"
+                type="color"
+                :value="materialForm.color"
+                @input="updateColor(($event.target as HTMLInputElement).value)"
+              />
+            </div>
+            <div class="section-block material-row">
+              <span class="row-label">Opacity</span>
+              <div class="row-controls">
+                <v-slider
+                  :model-value="materialForm.opacity"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  hide-details
+                  class="opacity-slider"
+                  @update:model-value="updateOpacity"
+                />
+                <div class="slider-value">{{ materialForm.opacity.toFixed(2) }}</div>
+              </div>
+            </div>
+          </v-expansion-panel-text>
+        </v-expansion-panel>
+      </v-expansion-panels>
     </div>
     <div v-else class="placeholder-text">
       Select an object to inspect its properties.
@@ -236,21 +254,6 @@ function handleNameUpdate(value: string) {
   gap:0.3rem;
 }
 
-.panel-toolbar :deep(.v-toolbar-title),
-.inspector-section :deep(.v-list-subheader__text) {
-  font-size: 0.85rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-}
-
-.inspector-section :deep(.v-list-item-title) {
-  font-size: 0.8rem;
-}
-
-.inspector-section :deep(.v-list-item-subtitle) {
-  font-size: 0.7rem;
-}
-
 .panel-toolbar :deep(.v-toolbar-title) {
   font-size: 0.85rem;
   font-weight: 600;
@@ -263,10 +266,56 @@ function handleNameUpdate(value: string) {
   height: 32px;
 }
 
-.inspector-section {
+.inspector-panels {
   border-radius: 3px;
   border: 1px solid rgba(255, 255, 255, 0.04);
-  padding: 0.25rem 0;
+  background-color: rgba(14, 16, 18, 0.35);
+}
+
+.inspector-panels :deep(.v-expansion-panel-title) {
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  min-height: 34px;
+  padding-block: 4px;
+  
+  
+}
+
+
+.inspector-panels :deep(.v-expansion-panel-text__wrapper) {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding-top: 0.6rem;
+  padding-bottom: 0.6rem;
+}
+
+.section-block {
+  margin-bottom: 0.4rem;
+}
+
+.section-block:last-of-type {
+  margin-bottom: 0;
+}
+
+.material-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.row-label {
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  color: rgba(233, 236, 241, 0.86);
+}
+
+.row-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 
 .vector-group {
