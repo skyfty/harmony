@@ -177,17 +177,29 @@ const searchQuery = ref('')
 const searchResults = ref<ProjectAsset[]>([])
 const searchLoaded = ref(false)
 const searchLoading = ref(false)
+const SEARCH_DEBOUNCE_DELAY = 320
+let searchDebounceHandle: ReturnType<typeof setTimeout> | null = null
 
 const normalizedSearchQuery = computed(() => searchQuery.value.trim())
 const isSearchActive = computed(() => searchLoaded.value && normalizedSearchQuery.value.length > 0)
 const displayedAssets = computed(() => (isSearchActive.value ? searchResults.value : currentAssets.value))
 
-watch(searchQuery, (value) => {
-  if (!value.trim()) {
+watch(normalizedSearchQuery, (value) => {
+  if (searchDebounceHandle !== null) {
+    clearTimeout(searchDebounceHandle)
+    searchDebounceHandle = null
+  }
+
+  if (!value) {
     searchResults.value = []
     searchLoaded.value = false
     searchLoading.value = false
+    return
   }
+
+  searchDebounceHandle = setTimeout(() => {
+    searchAsset()
+  }, SEARCH_DEBOUNCE_DELAY)
 })
 
 watch(projectTree, () => {
@@ -214,6 +226,11 @@ function collectAssets(directories: ProjectDirectory[], matches: ProjectAsset[],
 }
 
 function searchAsset() {
+  if (searchDebounceHandle !== null) {
+    clearTimeout(searchDebounceHandle)
+    searchDebounceHandle = null
+  }
+
   const query = normalizedSearchQuery.value.toLowerCase()
   if (!query) {
     searchResults.value = []
@@ -235,6 +252,10 @@ function searchAsset() {
 }
 
 function handleSearchClear() {
+  if (searchDebounceHandle !== null) {
+    clearTimeout(searchDebounceHandle)
+    searchDebounceHandle = null
+  }
   searchQuery.value = ''
   searchResults.value = []
   searchLoaded.value = false
@@ -328,6 +349,10 @@ function destroyDragPreview() {
 
 onBeforeUnmount(() => {
   destroyDragPreview()
+  if (searchDebounceHandle !== null) {
+    clearTimeout(searchDebounceHandle)
+    searchDebounceHandle = null
+  }
 })
 
 async function loadResourceProvider(providerId: string) {
@@ -449,7 +474,6 @@ async function loadResourceProvider(providerId: string) {
             label="Search..."
             variant="solo"
             hide-details
-            size="small"
             single-line
             clearable
             @keydown.enter.stop.prevent="searchAsset"
