@@ -5,6 +5,8 @@ interface SceneSummaryItem {
   id: string
   name: string
   thumbnail?: string | null
+  createdAt: string
+  updatedAt: string
 }
 
 const props = defineProps<{
@@ -175,6 +177,22 @@ const previewScene = computed(() => {
   return props.scenes.find((scene) => scene.id === selectedSceneId.value) ?? null
 })
 
+const dateFormatter = new Intl.DateTimeFormat(undefined, {
+  year: 'numeric',
+  month: 'short',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+})
+
+function formatDateTime(value: string) {
+  const timestamp = new Date(value)
+  if (Number.isNaN(timestamp.getTime())) {
+    return '—'
+  }
+  return dateFormatter.format(timestamp)
+}
+
 </script>
 
 <template>
@@ -223,7 +241,10 @@ const previewScene = computed(() => {
                       @blur="commitRename"
                     />
                   </div>
-                  <div v-else class="scene-name">{{ scene.name }}</div>
+                  <div v-else class="scene-text">
+                    <div class="scene-name">{{ scene.name }}</div>
+                    <div class="scene-meta">Updated {{ formatDateTime(scene.updatedAt) }}</div>
+                  </div>
                 </div>
                 <template #append>
                   <v-btn
@@ -243,6 +264,12 @@ const previewScene = computed(() => {
               <div class="scene-preview-header">
                 <span class="preview-title">{{ previewScene.name }}</span>
                 <span v-if="previewScene.id === currentSceneId" class="preview-badge">当前</span>
+              </div>
+              <div class="scene-preview-meta">
+                <div class="scene-preview-meta-label">Created</div>
+                <div class="scene-preview-meta-value">{{ formatDateTime(previewScene.createdAt) }}</div>
+                <div class="scene-preview-meta-label">Last updated</div>
+                <div class="scene-preview-meta-value">{{ formatDateTime(previewScene.updatedAt) }}</div>
               </div>
               <div class="scene-preview-media">
                 <v-img
@@ -414,21 +441,42 @@ const previewScene = computed(() => {
   background: rgba(129, 212, 250, 0.7);
 }
 
-.scene-thumb {
-  width: 60px;
-  height: 42px;
-  border-radius: 8px;
-  overflow: hidden;
+.scene-info {
+  flex: 1;
   display: flex;
-  align-items: center;
+  flex-direction: column;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.05);
+  align-items: flex-start;
+  gap: 4px;
+  min-height: 48px;
 }
 
-.scene-thumb :deep(img) {
-  object-fit: cover;
+.scene-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
 }
 
+.scene-name {
+  font-weight: 500;
+  color: rgba(233, 236, 241, 0.94);
+}
+
+.scene-meta {
+  font-size: 0.75rem;
+  color: rgba(233, 236, 241, 0.6);
+  letter-spacing: 0.01em;
+}
+
+.scene-name-edit {
+  width: 100%;
+}
+
+.scene-name-edit :deep(.v-field__input) {
+  padding-block: 6px;
+  font-weight: 500;
+}
 .scene-thumb-placeholder {
   width: 100%;
   height: 100%;
@@ -472,6 +520,22 @@ const previewScene = computed(() => {
   flex-direction: column;
   gap: 16px;
   height: 100%;
+}
+
+.scene-preview-meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 16px;
+  font-size: 0.85rem;
+  color: rgba(233, 236, 241, 0.75);
+}
+
+.scene-preview-meta-label {
+  opacity: 0.7;
+}
+
+.scene-preview-meta-value {
+  font-weight: 500;
 }
 
 .scene-preview-header {

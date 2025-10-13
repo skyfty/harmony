@@ -60,12 +60,16 @@ export interface StoredSceneDocument {
   selectedNodeId: string | null
   camera: SceneCameraState
   resourceProviderId: string
+  createdAt: string
+  updatedAt: string
 }
 
 export interface SceneSummary {
   id: string
   name: string
   thumbnail?: string | null
+  createdAt: string
+  updatedAt: string
 }
 
 interface SceneState {
@@ -267,6 +271,8 @@ function createSceneDocument(
     camera?: SceneCameraState
     thumbnail?: string | null
     resourceProviderId?: string
+    createdAt?: string
+    updatedAt?: string
   } = {},
 ): StoredSceneDocument {
   const id = options.id ?? crypto.randomUUID()
@@ -276,6 +282,9 @@ function createSceneDocument(
   if (selectedNodeId && !nodes.some((node) => node.id === selectedNodeId)) {
     selectedNodeId = nodes[0]?.id ?? null
   }
+  const now = new Date().toISOString()
+  const createdAt = options.createdAt ?? now
+  const updatedAt = options.updatedAt ?? createdAt
 
   return {
     id,
@@ -285,6 +294,8 @@ function createSceneDocument(
     selectedNodeId,
     camera,
     resourceProviderId: options.resourceProviderId ?? 'builtin',
+    createdAt,
+    updatedAt,
   }
 }
 
@@ -299,6 +310,7 @@ function commitSceneSnapshot(
   const updateNodes = options.updateNodes ?? true
   const updateCamera = options.updateCamera ?? true
   const current = store.scenes[index]!
+  const updatedAt = new Date().toISOString()
 
   const updatedScene: StoredSceneDocument = {
     ...current,
@@ -306,6 +318,7 @@ function commitSceneSnapshot(
     selectedNodeId: store.selectedNodeId,
     camera: updateCamera ? cloneCameraState(store.camera) : current.camera,
     resourceProviderId: store.resourceProviderId,
+    updatedAt,
   }
 
   store.scenes = [
@@ -509,11 +522,15 @@ export const useSceneStore = defineStore('scene', {
       return state.nodes.map(toHierarchyItem)
     },
     sceneSummaries(state): SceneSummary[] {
-      return state.scenes.map((scene) => ({
-        id: scene.id,
-        name: scene.name,
-        thumbnail: scene.thumbnail ?? null,
-      }))
+      return [...state.scenes]
+        .map((scene) => ({
+          id: scene.id,
+          name: scene.name,
+          thumbnail: scene.thumbnail ?? null,
+          createdAt: scene.createdAt,
+          updatedAt: scene.updatedAt,
+        }))
+        .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))
     },
     currentDirectory(state): ProjectDirectory | null {
       if (!state.activeDirectoryId) return state.projectTree[0] ?? null
@@ -817,6 +834,7 @@ export const useSceneStore = defineStore('scene', {
       const updated: StoredSceneDocument = {
         ...scene,
         name: trimmed,
+        updatedAt: new Date().toISOString(),
       }
       this.scenes = [
         ...this.scenes.slice(0, index),
@@ -834,6 +852,7 @@ export const useSceneStore = defineStore('scene', {
       const updated: StoredSceneDocument = {
         ...scene,
         thumbnail,
+        updatedAt: new Date().toISOString(),
       }
       this.scenes = [
         ...this.scenes.slice(0, index),
@@ -874,7 +893,7 @@ export const useSceneStore = defineStore('scene', {
   persist: {
     key: 'scene-store',
     storage: 'local',
-    version: 6,
+    version: 7,
     pick: [
       'scenes',
       'currentSceneId',
@@ -964,6 +983,26 @@ export const useSceneStore = defineStore('scene', {
           ...state,
           scenes: updatedScenes,
           resourceProviderId: (state.resourceProviderId as string | undefined) ?? 'builtin',
+        }
+      },
+      7: (state) => {
+        const scenes = state.scenes as Partial<StoredSceneDocument>[] | undefined
+        const now = new Date().toISOString()
+        const upgradedScenes = Array.isArray(scenes)
+          ? scenes.map((scene) => {
+              const createdAt = scene.createdAt ?? now
+              const updatedAt = scene.updatedAt ?? scene.createdAt ?? createdAt ?? now
+              return {
+                ...scene,
+                createdAt,
+                updatedAt,
+              }
+            })
+          : scenes
+
+        return {
+          ...state,
+          scenes: upgradedScenes as StoredSceneDocument[] | undefined,
         }
       },
     },
