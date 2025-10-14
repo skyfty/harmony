@@ -651,7 +651,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     const container = new THREE.Group()
     container.userData.nodeId = node.id
 
-    const runtimeObject = getRuntimeObject(node.resourceId ?? node.id)
+    const runtimeObject = getRuntimeObject(node.id)
     if (runtimeObject) {
       runtimeObject.removeFromParent()
       runtimeObject.userData.nodeId = node.id

@@ -19,14 +19,6 @@ export interface SceneNode {
   rotation: Vector3Like
   scale: Vector3Like
   children?: SceneNode[]
-  /**
-   * Optional runtime resource identifier used for externally loaded meshes.
-   * Values in this field are not persisted across sessions.
-   */
-  resourceId?: string
-  /**
-   * Identifier of the project asset that generated this node. Used for cache bookkeeping.
-   */
   sourceAssetId?: string
   visible?: boolean
 }

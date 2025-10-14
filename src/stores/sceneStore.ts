@@ -304,9 +304,6 @@ function commitSceneSnapshot(
 
 function releaseRuntimeTree(node: SceneNode) {
   unregisterRuntimeObject(node.id)
-  if (node.resourceId && node.resourceId !== node.id) {
-    unregisterRuntimeObject(node.resourceId)
-  }
   node.children?.forEach(releaseRuntimeTree)
 }
 
@@ -727,7 +724,6 @@ export const useSceneStore = defineStore('scene', {
         rotation: payload.rotation ?? { x: 0, y: 0, z: 0 },
         scale: payload.scale ?? { x: 1, y: 1, z: 1 },
         visible: true,
-        resourceId: id,
         sourceAssetId: payload.sourceAssetId,
       }
 
