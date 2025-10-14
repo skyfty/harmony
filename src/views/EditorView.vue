@@ -236,6 +236,7 @@ function handleRenameScene(payload: { id: string; name: string }) {
   sceneStore.renameScene(payload.id, payload.name)
 }
 
+
 </script>
 
 <template>

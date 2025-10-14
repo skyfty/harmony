@@ -40,11 +40,11 @@ const emit = defineEmits<{
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
 
-const tools: Array<{ label: string; icon: string; value: EditorTool }> = [
-  { label: 'Select', icon: 'mdi-cursor-default', value: 'select' },
-  { label: 'Move', icon: 'mdi-axis-arrow', value: 'translate' },
-  { label: 'Rotate', icon: 'mdi-rotate-3d-variant', value: 'rotate' },
-  { label: 'Scale', icon: 'mdi-cube-scan', value: 'scale' },
+const tools: Array<{ label: string; icon: string; value: EditorTool, key: string }> = [
+  { label: 'Select', icon: 'mdi-cursor-default', value: 'select', key: 'KeyQ' },
+  { label: 'Move', icon: 'mdi-axis-arrow', value: 'translate', key: 'KeyW' },
+  { label: 'Rotate', icon: 'mdi-rotate-3d-variant', value: 'rotate', key: 'KeyE' },
+  { label: 'Scale', icon: 'mdi-cube-scan', value: 'scale', key: 'KeyR' },
 ]
 
 const viewportEl = ref<HTMLDivElement | null>(null)
@@ -1047,33 +1047,56 @@ function isEditableKeyboardTarget(target: EventTarget | null): boolean {
 
 function shouldHandleViewportShortcut(event: KeyboardEvent): boolean {
   if (event.defaultPrevented) return false
-  if (!(event.ctrlKey || event.metaKey)) return false
-  if (event.shiftKey || event.altKey) return false
   if (isEditableKeyboardTarget(event.target)) return false
-  const targetNode = event.target as Node | null
-  if (!viewportEl.value) return true
-  if (!targetNode || targetNode === document.body) return true
-  return viewportEl.value.contains(targetNode)
+  return true
 }
 
 function handleViewportShortcut(event: KeyboardEvent) {
   if (!shouldHandleViewportShortcut(event)) return
-
   let handled = false
-  switch (event.code) {
-    case 'KeyC':
-      handled = sceneStore.selectedNodeId ? sceneStore.copyNodes([sceneStore.selectedNodeId]) : false
-      break
-    case 'KeyX':
-      handled = sceneStore.selectedNodeId ? sceneStore.cutNodes([sceneStore.selectedNodeId]) : false
-      break
-    case 'KeyV':
-      handled = (sceneStore.clipboard?.entries.length ?? 0) > 0
-        ? sceneStore.pasteClipboard(sceneStore.selectedNodeId)
-        : false
-      break
-    default:
-      break
+
+  if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+    switch (event.code) {
+      case 'Escape':
+        if (props.selectedNodeId) {
+          emit('selectNode', null)
+          handled = true
+        }
+        break;
+      case 'Delete':
+      case 'Backspace':
+        sceneStore.removeSceneNodes(sceneStore.selectedNodeIds)
+        handled = true
+        break;
+      default:
+        const tool = tools.find((t) => t.key === event.code);
+        if (tool) {
+          emit('changeTool', tool.value)
+          handled = true
+        }
+        break
+    }
+  }
+
+
+  if (!handled) {
+    if ((event.ctrlKey || event.metaKey) && !(event.altKey || event.shiftKey)) {
+      switch (event.code) {
+        case 'KeyC':
+          handled = sceneStore.selectedNodeId ? sceneStore.copyNodes([sceneStore.selectedNodeId]) : false
+          break
+        case 'KeyX':
+          handled = sceneStore.selectedNodeId ? sceneStore.cutNodes([sceneStore.selectedNodeId]) : false
+          break
+        case 'KeyV':
+          handled = (sceneStore.clipboard?.entries.length ?? 0) > 0
+            ? sceneStore.pasteClipboard(sceneStore.selectedNodeId)
+            : false
+          break
+        default:
+          break
+      }
+    }
   }
 
   if (handled) {

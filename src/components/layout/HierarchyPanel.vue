@@ -347,31 +347,41 @@ function isEditableTarget(target: EventTarget | null): boolean {
 
 function shouldHandleShortcut(event: KeyboardEvent): boolean {
   if (event.defaultPrevented) return false
-  if (!(event.ctrlKey || event.metaKey)) return false
-  if (event.shiftKey || event.altKey) return false
   if (isEditableTarget(event.target)) return false
-  const targetNode = event.target as Node | null
-  if (!panelRef.value) return true
-  if (!targetNode || targetNode === document.body) return true
-  return panelRef.value.contains(targetNode)
+  return true;
 }
 
 function handleShortcut(event: KeyboardEvent) {
   if (!shouldHandleShortcut(event)) return
 
   let handled = false
-  switch (event.code) {
-    case 'KeyC':
-      handled = handleCopy()
-      break
-    case 'KeyX':
-      handled = handleCut()
-      break
-    case 'KeyV':
-      handled = handlePaste()
-      break
-    default:
-      break
+  if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+    switch (event.code) {
+      case 'Delete':
+      case 'Backspace':
+        if (selectedNodeIds.value) {
+          sceneStore.removeSceneNodes(selectedNodeIds.value)
+          handled = true
+        }
+        break;
+      default:
+        break
+    }
+  }
+  if ((event.ctrlKey || event.metaKey) && !(event.altKey || event.shiftKey)) {
+    switch (event.code) {
+      case 'KeyC':
+        handled = handleCopy()
+        break
+      case 'KeyX':
+        handled = handleCut()
+        break
+      case 'KeyV':
+        handled = handlePaste()
+        break
+      default:
+        break
+    }
   }
 
   if (handled) {
