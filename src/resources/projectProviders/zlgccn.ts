@@ -23,20 +23,21 @@ function transformZlgccnResponse(payload: unknown): ProjectDirectory[] {
       return
     }
     const item = itemRaw as Record<string, unknown>
+    if (item.file == null || typeof item.file !== 'string' || !item.file.trim().length) {
+      return
+    }
     const assetIdSource = item.id ?? item.file ?? `temp-${Math.random().toString(36).slice(2, 10)}`
-    const assetId = `zlgccn-${String(assetIdSource)}`
     const name = typeof item.name === 'string' && item.name.trim().length ? item.name : `模型 ${assetIdSource}`
-    const file = typeof item.file === 'string' ? item.file : undefined
     const series = typeof item.series === 'string' && item.series.trim().length ? item.series.trim() : '未分组'
 
     const asset: ProjectAsset = {
-      id: assetId,
+      id: item.file,
       name,
       type: 'model',
       previewColor: '#26C6DA',
       thumbnail: null,
-      description: file,
-      downloadUrl: file,
+      description: item.file,
+      downloadUrl: item.file,
     }
 
     if (!seriesMap.has(series)) {

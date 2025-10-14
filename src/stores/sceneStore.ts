@@ -89,40 +89,7 @@ interface SceneState {
   cameraFocusRequestId: number
 }
 
-const initialNodes: SceneNode[] = [
-  {
-    id: 'node-root-cube',
-    name: 'Prototype Cube',
-    geometry: 'box',
-    material: { color: '#4DD0E1' },
-    position: { x: 0, y: 0.75, z: 0 },
-    rotation: { x: 0, y: Math.PI / 4, z: 0 },
-    scale: { x: 1.5, y: 1, z: 1.5 },
-    visible: true,
-    children: [
-      {
-        id: 'node-child-sphere',
-        name: 'Detail Sphere',
-        geometry: 'sphere',
-        material: { color: '#FFB74D' },
-        position: { x: 1.5, y: 1.2, z: 0 },
-        rotation: { x: 0, y: 0, z: 0 },
-        scale: { x: 0.65, y: 0.65, z: 0.65 },
-        visible: true,
-      },
-    ],
-  },
-  {
-    id: 'node-ground-plane',
-    name: 'Ground',
-    geometry: 'plane',
-    material: { color: '#37474F', opacity: 0.8 },
-    position: { x: 0, y: 0, z: 0 },
-    rotation: { x: 0, y: 0, z: 0 },
-    scale: { x: 12, y: 12, z: 12 },
-    visible: true,
-  },
-]
+const initialNodes: SceneNode[] = []
 
 const builtinProjectTree: ProjectDirectory[] = [
   {
