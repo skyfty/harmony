@@ -60,6 +60,7 @@ export interface StoredSceneDocument {
   thumbnail?: string | null
   nodes: SceneNode[]
   selectedNodeId: string | null
+  selectedNodeIds?: string[]
   camera: SceneCameraState
   resourceProviderId: string
   createdAt: string
@@ -79,6 +80,7 @@ interface SceneState {
   currentSceneId: string | null
   nodes: SceneNode[]
   selectedNodeId: string | null
+  selectedNodeIds: string[]
   activeTool: EditorTool
   projectTree: ProjectDirectory[]
   activeDirectoryId: string | null
@@ -387,12 +389,59 @@ function cloneSceneNodes(nodes: SceneNode[]): SceneNode[] {
   return nodes.map(cloneNode)
 }
 
+function collectNodeIds(node: SceneNode, buffer: string[]) {
+  buffer.push(node.id)
+  node.children?.forEach((child) => collectNodeIds(child, buffer))
+}
+
+function flattenNodeIds(nodes: SceneNode[]): string[] {
+  const buffer: string[] = []
+  nodes.forEach((node) => collectNodeIds(node, buffer))
+  return buffer
+}
+
+function normalizeSelectionIds(nodes: SceneNode[], ids?: string[] | null): string[] {
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return []
+  }
+  const validIds = new Set(flattenNodeIds(nodes))
+  const seen = new Set<string>()
+  const normalized: string[] = []
+  ids.forEach((id) => {
+    if (!validIds.has(id) || seen.has(id)) {
+      return
+    }
+    normalized.push(id)
+    seen.add(id)
+  })
+  return normalized
+}
+
+function cloneSelection(ids: string[] | undefined | null): string[] {
+  if (!Array.isArray(ids) || !ids.length) {
+    return []
+  }
+  return [...ids]
+}
+
+function areSelectionsEqual(a: string[], b: string[]): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) {
+      return false
+    }
+  }
+  return true
+}
+
 function createSceneDocument(
   name: string,
   options: {
     id?: string
     nodes?: SceneNode[]
     selectedNodeId?: string | null
+    selectedNodeIds?: string[]
     camera?: SceneCameraState
     thumbnail?: string | null
     resourceProviderId?: string
@@ -407,6 +456,7 @@ function createSceneDocument(
   if (selectedNodeId && !nodes.some((node) => node.id === selectedNodeId)) {
     selectedNodeId = nodes[0]?.id ?? null
   }
+  const selectedNodeIds = normalizeSelectionIds(nodes, options.selectedNodeIds ?? (selectedNodeId ? [selectedNodeId] : []))
   const now = new Date().toISOString()
   const createdAt = options.createdAt ?? now
   const updatedAt = options.updatedAt ?? createdAt
@@ -417,6 +467,7 @@ function createSceneDocument(
     thumbnail: options.thumbnail ?? null,
     nodes,
     selectedNodeId,
+    selectedNodeIds,
     camera,
     resourceProviderId: options.resourceProviderId ?? 'builtin',
     createdAt,
@@ -441,6 +492,7 @@ function commitSceneSnapshot(
     ...current,
     nodes: updateNodes ? cloneSceneNodes(store.nodes) : current.nodes,
     selectedNodeId: store.selectedNodeId,
+    selectedNodeIds: cloneSelection(store.selectedNodeIds),
     camera: updateCamera ? cloneCameraState(store.camera) : current.camera,
     resourceProviderId: store.resourceProviderId,
     updatedAt,
@@ -611,6 +663,7 @@ export const useSceneStore = defineStore('scene', {
     currentSceneId: initialSceneDocument.id,
     nodes: cloneSceneNodes(initialSceneDocument.nodes),
     selectedNodeId: initialSceneDocument.selectedNodeId,
+    selectedNodeIds: cloneSelection(initialSceneDocument.selectedNodeIds),
     activeTool: 'select',
     projectTree: cloneProjectTree(builtinProjectTree),
     activeDirectoryId: defaultDirectoryId,
@@ -672,10 +725,33 @@ export const useSceneStore = defineStore('scene', {
     setActiveTool(tool: EditorTool) {
       this.activeTool = tool
     },
-    selectNode(id: string | null) {
-      this.selectedNodeId = id
-      commitSceneSnapshot(this, { updateNodes: false, updateCamera: false })
+    setSelection(ids: string[], options: { commit?: boolean } = {}) {
+      const commitChange = options.commit ?? true
+      const normalized = normalizeSelectionIds(this.nodes, ids)
+      const nextPrimary = normalized[normalized.length - 1] ?? null
+      const primaryChanged = this.selectedNodeId !== nextPrimary
+      const selectionChanged = !areSelectionsEqual(normalized, this.selectedNodeIds)
+      if (!primaryChanged && !selectionChanged) {
+        return false
+      }
+      this.selectedNodeIds = normalized
+      this.selectedNodeId = nextPrimary
+      if (commitChange) {
+        commitSceneSnapshot(this, { updateNodes: false, updateCamera: false })
+      }
+      return true
     },
+    selectNode(id: string | null) {
+      this.setSelection(id ? [id] : [], { commit: true })
+    },
+    selectAllNodes() {
+      const allIds = flattenNodeIds(this.nodes)
+      this.setSelection(allIds, { commit: true })
+    },
+    clearSelection() {
+      this.setSelection([], { commit: true })
+    },
+
     updateNodeTransform(payload: { id: string; position: Vector3Like; rotation: Vector3Like; scale: Vector3Like }) {
       visitNode(this.nodes, payload.id, (node) => {
         node.position = cloneVector(payload.position)
@@ -1011,7 +1087,7 @@ export const useSceneStore = defineStore('scene', {
       registerRuntimeObject(id, payload.object)
     tagObjectWithNodeId(payload.object, id)
       this.nodes = [...this.nodes, node]
-      this.selectedNodeId = id
+      this.setSelection([id], { commit: false })
       commitSceneSnapshot(this)
 
       return node
@@ -1029,11 +1105,13 @@ export const useSceneStore = defineStore('scene', {
       const removed: string[] = []
       this.nodes = pruneNodes(this.nodes, idSet, removed)
 
-      if (this.nodes.length === 0) {
-        this.selectedNodeId = null
-      } else if (this.selectedNodeId && removed.includes(this.selectedNodeId)) {
-        this.selectedNodeId = this.nodes[0]?.id ?? null
+      const fallbackId = this.nodes[0]?.id ?? null
+      const prevSelection = cloneSelection(this.selectedNodeIds)
+      let nextSelection = prevSelection.filter((id) => !removed.includes(id))
+      if (!nextSelection.length && fallbackId) {
+        nextSelection = [fallbackId]
       }
+      this.setSelection(nextSelection, { commit: false })
       const assetCache = useAssetCacheStore()
       assetCache.recalculateUsage(this.nodes)
       commitSceneSnapshot(this)
@@ -1096,7 +1174,10 @@ export const useSceneStore = defineStore('scene', {
       })
 
       this.nodes = working
-      this.selectedNodeId = duplicates[duplicates.length - 1]?.id ?? this.selectedNodeId
+      const duplicateIds = duplicates.map((duplicate) => duplicate.id)
+      if (duplicateIds.length) {
+        this.setSelection(duplicateIds, { commit: false })
+      }
       commitSceneSnapshot(this)
       assetCache.recalculateUsage(this.nodes)
 
@@ -1119,7 +1200,9 @@ export const useSceneStore = defineStore('scene', {
       this.scenes = [...this.scenes, scene]
       this.currentSceneId = scene.id
       this.nodes = cloneSceneNodes(scene.nodes)
-      this.selectedNodeId = scene.selectedNodeId
+      this.setSelection(scene.selectedNodeIds ?? (scene.selectedNodeId ? [scene.selectedNodeId] : []), {
+        commit: false,
+      })
       this.camera = cloneCameraState(scene.camera)
       this.resourceProviderId = scene.resourceProviderId
       useAssetCacheStore().recalculateUsage(this.nodes)
@@ -1146,7 +1229,9 @@ export const useSceneStore = defineStore('scene', {
 
       this.currentSceneId = sceneId
       this.nodes = cloneSceneNodes(scene.nodes)
-      this.selectedNodeId = scene.selectedNodeId
+      this.setSelection(scene.selectedNodeIds ?? (scene.selectedNodeId ? [scene.selectedNodeId] : []), {
+        commit: false,
+      })
       this.camera = cloneCameraState(scene.camera)
       this.resourceProviderId = scene.resourceProviderId ?? 'builtin'
       useAssetCacheStore().recalculateUsage(this.nodes)
@@ -1169,7 +1254,9 @@ export const useSceneStore = defineStore('scene', {
         this.scenes = [fallback]
         this.currentSceneId = fallback.id
         this.nodes = cloneSceneNodes(fallback.nodes)
-        this.selectedNodeId = fallback.selectedNodeId
+        this.setSelection(fallback.selectedNodeIds ?? (fallback.selectedNodeId ? [fallback.selectedNodeId] : []), {
+          commit: false,
+        })
         this.camera = cloneCameraState(fallback.camera)
         this.resourceProviderId = fallback.resourceProviderId
         useAssetCacheStore().recalculateUsage(this.nodes)
@@ -1187,7 +1274,9 @@ export const useSceneStore = defineStore('scene', {
         })
         this.currentSceneId = next.id
         this.nodes = cloneSceneNodes(next.nodes)
-        this.selectedNodeId = next.selectedNodeId
+        this.setSelection(next.selectedNodeIds ?? (next.selectedNodeId ? [next.selectedNodeId] : []), {
+          commit: false,
+        })
         this.camera = cloneCameraState(next.camera)
         this.resourceProviderId = next.resourceProviderId ?? 'builtin'
         useAssetCacheStore().recalculateUsage(this.nodes)
@@ -1241,7 +1330,9 @@ export const useSceneStore = defineStore('scene', {
         this.scenes = [fallback]
         this.currentSceneId = fallback.id
         this.nodes = cloneSceneNodes(fallback.nodes)
-        this.selectedNodeId = fallback.selectedNodeId
+        this.setSelection(fallback.selectedNodeIds ?? (fallback.selectedNodeId ? [fallback.selectedNodeId] : []), {
+          commit: false,
+        })
         this.camera = cloneCameraState(fallback.camera)
         this.resourceProviderId = fallback.resourceProviderId
         return
@@ -1260,7 +1351,9 @@ export const useSceneStore = defineStore('scene', {
       })
 
       this.nodes = cloneSceneNodes(target.nodes)
-      this.selectedNodeId = target.selectedNodeId
+      this.setSelection(target.selectedNodeIds ?? (target.selectedNodeId ? [target.selectedNodeId] : []), {
+        commit: false,
+      })
       this.camera = cloneCameraState(target.camera)
       this.resourceProviderId = target.resourceProviderId ?? 'builtin'
       useAssetCacheStore().recalculateUsage(this.nodes)
@@ -1269,12 +1362,13 @@ export const useSceneStore = defineStore('scene', {
   persist: {
     key: 'scene-store',
     storage: 'local',
-    version: 7,
+  version: 8,
     pick: [
       'scenes',
       'currentSceneId',
       'nodes',
       'selectedNodeId',
+      'selectedNodeIds',
       'activeTool',
       'activeDirectoryId',
       'selectedAssetId',
@@ -1343,6 +1437,7 @@ export const useSceneStore = defineStore('scene', {
           currentSceneId: recoveredScene.id,
           nodes: cloneSceneNodes(recoveredScene.nodes),
           selectedNodeId: recoveredScene.selectedNodeId,
+          selectedNodeIds: cloneSelection(recoveredScene.selectedNodeIds),
           camera: cloneCameraState(recoveredScene.camera),
         }
       },
@@ -1379,6 +1474,38 @@ export const useSceneStore = defineStore('scene', {
         return {
           ...state,
           scenes: upgradedScenes as StoredSceneDocument[] | undefined,
+        }
+      },
+      8: (state) => {
+        const scenes = state.scenes as Partial<StoredSceneDocument>[] | undefined
+        const updatedScenes = Array.isArray(scenes)
+          ? scenes.map((scene) => {
+              const nodes = Array.isArray(scene.nodes) ? (scene.nodes as SceneNode[]) : []
+              const existingSelection = Array.isArray(scene.selectedNodeIds) ? scene.selectedNodeIds : undefined
+              const fallbackId = scene.selectedNodeId ?? null
+              const normalizedSelection = normalizeSelectionIds(nodes, existingSelection ?? (fallbackId ? [fallbackId] : []))
+              return {
+                ...scene,
+                selectedNodeIds: normalizedSelection,
+                selectedNodeId: normalizedSelection[normalizedSelection.length - 1] ?? (fallbackId ?? null),
+              }
+            })
+          : scenes
+
+        const nodes = Array.isArray(state.nodes) ? (state.nodes as SceneNode[]) : []
+        const stateSelection = normalizeSelectionIds(nodes, state.selectedNodeIds as string[] | undefined)
+        const fallbackId = (state.selectedNodeId as string | null | undefined) ?? null
+        const normalizedStateSelection = stateSelection.length
+          ? stateSelection
+          : fallbackId
+            ? [fallbackId]
+            : []
+
+        return {
+          ...state,
+          scenes: updatedScenes as StoredSceneDocument[] | undefined,
+          selectedNodeIds: normalizedStateSelection,
+          selectedNodeId: normalizedStateSelection[normalizedStateSelection.length - 1] ?? null,
         }
       },
     },

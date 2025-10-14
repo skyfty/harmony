@@ -124,6 +124,14 @@ function handleAction(action: string) {
       }
       break
     }
+    case 'Select All': {
+      sceneStore.selectAllNodes()
+      break
+    }
+    case 'Deselect All': {
+      sceneStore.clearSelection()
+      break
+    }
     default:
       console.warn(`Unknown menu action: ${action}`)
   }

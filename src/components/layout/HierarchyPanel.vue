@@ -9,10 +9,9 @@ const emit = defineEmits<{
 }>()
 
 const sceneStore = useSceneStore()
-const { hierarchyItems, selectedNodeId, clipboard } = storeToRefs(sceneStore)
+const { hierarchyItems, selectedNodeId, selectedNodeIds, clipboard } = storeToRefs(sceneStore)
 
 const opened = ref<string[]>([])
-const selectedNodeIds = ref<string[]>([])
 const selectionAnchorId = ref<string | null>(null)
 const suppressSelectionSync = ref(false)
 const dragState = ref<{ sourceId: string | null; targetId: string | null; position: HierarchyDropPosition | null }>(
@@ -47,34 +46,26 @@ const hasSelection = computed(() => selectedNodeIds.value.length > 0)
 const canPaste = computed(() => (clipboard.value?.entries.length ?? 0) > 0)
 
 watch(allNodeIds, (ids) => {
-  const filtered = selectedNodeIds.value.filter((id) => ids.includes(id))
-  if (filtered.length !== selectedNodeIds.value.length) {
-    selectedNodeIds.value = filtered
-  }
   if (selectionAnchorId.value && !ids.includes(selectionAnchorId.value)) {
-    selectionAnchorId.value = filtered[filtered.length - 1] ?? null
+    selectionAnchorId.value = selectedNodeIds.value[selectedNodeIds.value.length - 1] ?? null
   }
 })
 
 watch(
-  selectedNodeId,
-  (id) => {
+  selectedNodeIds,
+  (ids) => {
     if (suppressSelectionSync.value) {
       suppressSelectionSync.value = false
-      selectionAnchorId.value = id
-      return
     }
-    if (!id) {
-      selectedNodeIds.value = []
+    if (ids.length === 0) {
       selectionAnchorId.value = null
       return
     }
-    selectionAnchorId.value = id
-    if (!selectedNodeIds.value.includes(id)) {
-      selectedNodeIds.value = [id]
+    if (!selectionAnchorId.value || !ids.includes(selectionAnchorId.value)) {
+      selectionAnchorId.value = ids[ids.length - 1] ?? null
     }
   },
-  { immediate: true },
+  { immediate: true, deep: true },
 )
 
 const rootDropClasses = computed(() => ({
@@ -128,16 +119,15 @@ function toggleNodeVisibility(id: string) {
 
 function setActiveNode(id: string | null) {
   selectionAnchorId.value = id
-  if (selectedNodeId.value === id) return
   suppressSelectionSync.value = true
   sceneStore.selectNode(id)
 }
 
 function handleDeleteSelected() {
   if (!selectedNodeIds.value.length) return
-  sceneStore.removeSceneNodes(selectedNodeIds.value)
-  selectedNodeIds.value = []
-  selectionAnchorId.value = null
+  const idsToRemove = [...selectedNodeIds.value]
+  sceneStore.removeSceneNodes(idsToRemove)
+  selectionAnchorId.value = selectedNodeIds.value[selectedNodeIds.value.length - 1] ?? null
 }
 
 function handleCopy(): boolean {
@@ -154,6 +144,9 @@ function handlePaste(): boolean {
   if (!canPaste.value) return false
   const anchor = selectedNodeIds.value[selectedNodeIds.value.length - 1] ?? selectedNodeId.value ?? null
   const pasted = sceneStore.pasteClipboard(anchor)
+  if (pasted) {
+    selectionAnchorId.value = selectedNodeIds.value[selectedNodeIds.value.length - 1] ?? null
+  }
   return pasted
 }
 
@@ -174,7 +167,8 @@ function handleNodeClick(event: MouseEvent, nodeId: string) {
   const isRangeSelect = event.shiftKey && selectionAnchorId.value
   const currentlySelected = isItemSelected(nodeId)
 
-  let nextSelection = selectedNodeIds.value
+  const currentSelection = [...selectedNodeIds.value]
+  let nextSelection: string[] = currentSelection
 
   if (isRangeSelect) {
     const anchorId = selectionAnchorId.value
@@ -183,30 +177,31 @@ function handleNodeClick(event: MouseEvent, nodeId: string) {
     if (anchorIndex !== -1 && targetIndex !== -1) {
       const [start, end] = anchorIndex < targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex]
       const rangeIds = allNodeIds.value.slice(start, end + 1)
-      const base = isToggle ? selectedNodeIds.value : []
+      const base = isToggle ? currentSelection : []
       nextSelection = Array.from(new Set([...base, ...rangeIds]))
     } else {
       nextSelection = [nodeId]
     }
   } else if (isToggle) {
     nextSelection = currentlySelected
-      ? selectedNodeIds.value.filter((id) => id !== nodeId)
-      : [...selectedNodeIds.value, nodeId]
+      ? currentSelection.filter((id) => id !== nodeId)
+      : [...currentSelection, nodeId]
   } else {
-    if (selectedNodeIds.value.length !== 1 || !currentlySelected) {
+    if (currentSelection.length !== 1 || !currentlySelected) {
       nextSelection = [nodeId]
     }
   }
 
   if (!nextSelection.length) {
-    selectedNodeIds.value = []
-    setActiveNode(null)
+    suppressSelectionSync.value = true
+    sceneStore.clearSelection()
+    selectionAnchorId.value = null
     return
   }
 
-  selectedNodeIds.value = nextSelection
-  const nextActive = nextSelection[nextSelection.length - 1] ?? null
-  setActiveNode(nextActive)
+  suppressSelectionSync.value = true
+  sceneStore.setSelection(nextSelection)
+  selectionAnchorId.value = nextSelection[nextSelection.length - 1] ?? null
 }
 
 function resetDragState() {
