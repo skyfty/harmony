@@ -102,6 +102,18 @@ function handleMenuImport() {
 function handleAddNode(geometry:string) {
   let mesh: THREE.Mesh
   switch(geometry) {
+    case 'Group': {
+      const group = new THREE.Group()
+      group.name = 'Group'
+      sceneStore.addSceneNode({
+        object: group,
+        name: group.name,
+        position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      })
+      return
+    }
     case 'Capsule': {
       const geometry = new THREE.CapsuleGeometry( 1, 1, 4, 8, 1 );
       const material = new THREE.MeshStandardMaterial();
@@ -195,6 +207,11 @@ function handleAddNode(geometry:string) {
     />
     </template>
   <v-list class="add-menu-list">
+      <v-list-item
+          title="Group"
+          @click="handleAddNode('Group')"
+      />
+      <v-divider class="add-menu-divider" />
       <v-list-item
           title="Box"
           @click="handleAddNode('Box')"
