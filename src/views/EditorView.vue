@@ -9,7 +9,7 @@ import MenuBar from './MenuBar.vue'
 import SceneManagerDialog from '@/components/layout/SceneManagerDialog.vue'
 import { useSceneStore, type EditorTool, type EditorPanel, type SceneCameraState } from '@/stores/sceneStore'
 import type { Vector3Like } from '@/types/scene'
-
+import Exporter from '@/plugins/exporter'
 
 const sceneStore = useSceneStore()
 const {
@@ -25,6 +25,7 @@ const {
 } = storeToRefs(sceneStore)
 
 const isSceneManagerOpen = ref(false)
+
 
 const hierarchyOpen = computed({
   get: () => panelVisibility.value.hierarchy,
@@ -124,6 +125,21 @@ function handleAction(action: string) {
     }
     case 'Deselect All': {
       sceneStore.clearSelection()
+      break
+    }
+    case 'Export:GLTF': {
+      break
+    }
+    case 'Export:OBJ': {
+      break
+    }
+    case 'Export:PLY': {
+      break
+    }
+    case 'Export:STL': {
+      break
+    }
+    case 'Export:GLB': {
       break
     }
     default:

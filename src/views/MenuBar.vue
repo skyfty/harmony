@@ -12,6 +12,7 @@ const emit = defineEmits<{
 function handleMenuAction(action: string) {
   emit('menu-action', action)
 }
+
 </script>
 
 <template>
@@ -86,6 +87,18 @@ function handleMenuAction(action: string) {
                         @click="handleMenuAction('Export:STL')"
                       >
                         STL
+                      </v-list-item>
+                      <v-list-item
+                        class="menu-list-item"
+                        @click="handleMenuAction('Export:GLB')"
+                      >
+                        GLB
+                      </v-list-item>
+                      <v-list-item
+                        class="menu-list-item"
+                        @click="handleMenuAction('Export:GLTF')"
+                      >
+                        GLTF
                       </v-list-item>
                     </v-list>
                   </v-menu>
