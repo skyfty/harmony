@@ -149,6 +149,9 @@ function handleAssetDragStart(event: DragEvent, asset: ProjectAsset) {
     return
   }
   draggingAssetId.value = asset.id
+  if (asset.type === 'model') {
+    sceneStore.setDraggingAssetObject(asset)
+  }
   selectAsset(asset)
   assetCacheStore.touch(asset.id)
   
@@ -166,6 +169,7 @@ function handleAssetDragStart(event: DragEvent, asset: ProjectAsset) {
 
 function handleAssetDragEnd() {
   draggingAssetId.value = null
+  sceneStore.setDraggingAssetObject(null)
   destroyDragPreview()
 }
 

@@ -208,6 +208,8 @@ async function loadDragPreviewForAsset(asset: ProjectAsset): Promise<boolean> {
     return false
   }
 
+  console.log('Loading drag preview for asset', asset.id, asset.name)
+
   try {
     const object = await loadObjectFromFile(file)
     if (token !== dragPreviewLoadToken) {
@@ -242,13 +244,6 @@ function prepareDragPreview(assetId: string) {
     disposeDragPreview()
     return
   }
-
-  if (!assetCacheStore.hasCache(asset.id)) {
-    disposeDragPreview()
-    return
-  }
-
-  assetCacheStore.touch(asset.id)
 
   if (dragPreviewAssetId === asset.id && dragPreviewObject) {
     if (lastDragPoint) {
@@ -737,16 +732,18 @@ function handlePointerDown(event: PointerEvent) {
 }
 
 function extractAssetPayload(event: DragEvent): { assetId: string } | null {
-  if (!event.dataTransfer) return null
-  const raw = event.dataTransfer.getData(ASSET_DRAG_MIME)
-  if (!raw) return null
-  try {
-    const parsed = JSON.parse(raw)
-    if (parsed?.assetId && typeof parsed.assetId === 'string') {
-      return { assetId: parsed.assetId }
+  if (event.dataTransfer) {
+    const raw = event.dataTransfer.getData(ASSET_DRAG_MIME)
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw)
+        if (parsed?.assetId && typeof parsed.assetId === 'string') {
+          return { assetId: parsed.assetId }
+        }
+      } catch (error) {
+        console.warn('Failed to parse drag payload', error)
+      }
     }
-  } catch (error) {
-    console.warn('Failed to parse drag payload', error)
   }
   return null
 }
@@ -781,12 +778,6 @@ function handleViewportDragEnter(event: DragEvent) {
   if (!isAssetDrag(event)) return
   event.preventDefault()
   isDragHovering.value = true
-  const payload = extractAssetPayload(event)
-  if (payload) {
-    prepareDragPreview(payload.assetId)
-  } else {
-    disposeDragPreview()
-  }
 }
 
 function handleViewportDragOver(event: DragEvent) {
@@ -798,13 +789,14 @@ function handleViewportDragOver(event: DragEvent) {
   }
   isDragHovering.value = true
   updateGridHighlight(point)
-  setDragPreviewPosition(point)
-  const payload = extractAssetPayload(event)
-  if (payload) {
-    prepareDragPreview(payload.assetId)
-  } else {
-    disposeDragPreview()
-  }
+
+  // setDragPreviewPosition(point)
+  // const payload = extractAssetPayload(event)
+  // if (payload) {
+  //   prepareDragPreview(payload.assetId)
+  // } else {
+  //   disposeDragPreview()
+  // }
 }
 
 function handleViewportDragLeave(event: DragEvent) {
@@ -827,7 +819,10 @@ async function handleViewportDrop(event: DragEvent) {
   event.stopPropagation()
   isDragHovering.value = false
   disposeDragPreview()
-  if (!payload) return
+  if (!payload) {
+    sceneStore.setDraggingAssetObject(null)
+    return
+  }
 
   const spawnPoint = point ? point.clone() : new THREE.Vector3(0, 0, 0)
   snapVectorToGrid(spawnPoint)
@@ -836,6 +831,8 @@ async function handleViewportDrop(event: DragEvent) {
     scheduleThumbnailCapture()
   } catch (error) {
     console.warn('Failed to spawn asset for drag payload', payload.assetId, error)
+  } finally {
+    sceneStore.setDraggingAssetObject(null)
   }
   updateGridHighlight(null)
 }

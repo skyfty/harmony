@@ -91,6 +91,7 @@ interface SceneState {
   cameraFocusNodeId: string | null
   cameraFocusRequestId: number
   clipboard: SceneClipboard | null
+  draggingAssetObject: Object3D | null
 }
 
 interface EnsureSceneAssetsOptions {
@@ -674,6 +675,7 @@ export const useSceneStore = defineStore('scene', {
     cameraFocusNodeId: null,
     cameraFocusRequestId: 0,
     clipboard: null,
+    draggingAssetObject: null,
   }),
   getters: {
     currentScene(state): StoredSceneDocument | null {
@@ -750,6 +752,9 @@ export const useSceneStore = defineStore('scene', {
     },
     clearSelection() {
       this.setSelection([], { commit: true })
+    },
+    setDraggingAssetObject(assetObject: Object3D | null) {
+      this.draggingAssetObject = assetObject
     },
 
     updateNodeTransform(payload: { id: string; position: Vector3Like; rotation: Vector3Like; scale: Vector3Like }) {
