@@ -13,19 +13,6 @@ export interface SceneExportOptions {
     onProgress?: (progress: number, message?: string) => void
 }
 
-function triggerDownload(blob: Blob, fileName: string) {
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.style.display = 'none'
-    anchor.href = url
-    anchor.download = fileName
-    document.body.appendChild(anchor)
-    anchor.click()
-    document.body.removeChild(anchor)
-    requestAnimationFrame(() => URL.revokeObjectURL(url))
-}
-
-
 function getAnimations(scene: THREE.Scene) {
 
     const animations: THREE.AnimationClip[] = [];
@@ -39,51 +26,48 @@ function getAnimations(scene: THREE.Scene) {
     return animations;
 
 }
-export function exportGLB(scene: THREE.Scene, fileName: string) {
+export async function exportGLB(scene: THREE.Scene) {
     const animations = getAnimations(scene)
     const optimizedAnimations = []
     for ( const animation of animations ) {
         optimizedAnimations.push( animation.clone().optimize() );
     }
     const exporter = new GLTFExporter()
-    exporter.parse( scene, function ( result ) {
-        const blob = new Blob([result as ArrayBuffer], { type: 'model/gltf-binary' })
-        triggerDownload(blob, `${fileName}.glb`)
-    }, () => {}, { binary: true, animations: optimizedAnimations } )
+    const result = await exporter.parseAsync( scene,{ binary: true, animations: optimizedAnimations });
+    const blob = new Blob([result as ArrayBuffer], { type: 'model/gltf-binary' })
+    return blob;
 }
 
-export function exportGLTF(scene: THREE.Scene, fileName: string) {
+export async function exportGLTF(scene: THREE.Scene) {
     const exporter = new GLTFExporter()
     const animations = getAnimations(scene)
     const optimizedAnimations = []
     for ( const animation of animations ) {
         optimizedAnimations.push( animation.clone().optimize() );
     }
-    exporter.parse( scene, function ( result ) {
-        const json = JSON.stringify(result, null, 2)
-        const blob = new Blob([json], { type: 'model/gltf+json' })
-        triggerDownload(blob, `${fileName}.gltf`)
-    }, () => {}, { binary: false, animations: optimizedAnimations } )
+    const result = await exporter.parseAsync( scene, { binary: false, animations: optimizedAnimations } );
+    const json = JSON.stringify(result, null, 2)
+    const blob = new Blob([json], { type: 'model/gltf+json' })
+    return blob;
 }
 
-export function exportOBJ(object: THREE.Object3D, fileName: string) {
+export function exportOBJ(object: THREE.Object3D) {
     const exporter = new OBJExporter()
     const data = exporter.parse(object)
     const blob = new Blob([data], { type: 'text/plain' })
-    triggerDownload(blob, `${fileName}.obj`)
+    return blob;
 }
 
-export  function exportPLY(scene: THREE.Scene, fileName: string) {
+export  function exportPLY(scene: THREE.Scene) {
     const exporter = new PLYExporter()
-    exporter.parse(scene, function ( result ) {
-        const blob = new Blob([result], { type: 'application/octet-stream' })
-        triggerDownload(blob, `${fileName}.ply`)
-    }, { binary: true });
+    const result = exporter.parse(scene, () =>{}, { binary: true }) as ArrayBuffer ;
+    const blob = new Blob([result], { type: 'application/octet-stream' })
+    return blob;
 }
 
-export function exportSTL(scene: THREE.Scene, fileName: string) {
+export function exportSTL(scene: THREE.Scene) {
     const exporter = new STLExporter()
     const result = exporter.parse(scene, { binary: true });
     const blob = new Blob([result], { type: 'model/stl' })
-    triggerDownload(blob, `${fileName}.stl`)
+    return blob;
 }

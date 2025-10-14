@@ -133,41 +133,64 @@ export type SceneViewportHandle = {
 function sanitizeFileName(input: string): string {
     return input.replace(/[^a-zA-Z0-9-_\.]+/g, '_') || 'scene'
 }
+
+function triggerDownload(blob: Blob, fileName: string) {
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.style.display = 'none'
+    anchor.href = url
+    anchor.download = fileName
+    document.body.appendChild(anchor)
+    anchor.click()
+    document.body.removeChild(anchor)
+    requestAnimationFrame(() => URL.revokeObjectURL(url))
+}
+
+
 async function exportScene(options: SceneExportOptions): Promise<void> {
   if (!scene) {
     throw new Error('Scene not initialized')
   }
   const { format, onProgress } = options
-  const fileName = sanitizeFileName(options.fileName ?? 'scene-export')
+  let fileName = sanitizeFileName(options.fileName ?? 'scene-export')
 
   onProgress?.(10, 'Preparing scene…')
-
+  let blob: Blob | null  = null
   try {
       switch (format) {
           case 'GLTF':
-              exportGLTF(scene, fileName)
+              fileName += '.gltf'
+              blob = await exportGLTF(scene)
               break
           case 'GLB':
-              exportGLB(scene, fileName)
+              fileName += '.glb'
+              blob = await exportGLB(scene)
               break
           case 'OBJ': {
+            fileName += '.obj'
               if (selectionTrackedObject) {
-                exportOBJ(selectionTrackedObject, fileName)
+                blob = exportOBJ(selectionTrackedObject)
               }
               break
           }
           case 'PLY':
-              exportPLY(scene, fileName)
+              fileName += '.ply'
+              blob = exportPLY(scene)
               break
           case 'STL':
-              exportSTL(scene, fileName)
+              fileName += '.stl'
+              blob = exportSTL(scene)
               break
           default:
               throw new Error(`Unsupported export format: ${format}`)
       }
       onProgress?.(95, 'Export complete, preparing download…')
+
   } finally {
       onProgress?.(100, 'Export complete')
+  }
+  if (blob) {
+      triggerDownload(blob, `${fileName}`)
   }
 
 }
