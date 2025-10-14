@@ -13,6 +13,7 @@ const { hierarchyItems, selectedNodeId } = storeToRefs(sceneStore)
 
 const opened = ref<string[]>([])
 const selectedNodeIds = ref<string[]>([])
+const selectionAnchorId = ref<string | null>(null)
 const suppressSelectionSync = ref(false)
 const dragState = ref<{ sourceId: string | null; targetId: string | null; position: HierarchyDropPosition | null }>(
   {
@@ -42,50 +43,37 @@ watch(
 
 const allNodeIds = computed(() => flattenIds(hierarchyItems.value))
 const hasSelection = computed(() => selectedNodeIds.value.length > 0)
-const selectionState = computed<'none' | 'partial' | 'all'>(() => {
-  if (!selectedNodeIds.value.length) return 'none'
-  if (selectedNodeIds.value.length === allNodeIds.value.length) return 'all'
-  return 'partial'
-})
-const selectionToggleIcon = computed(() => {
-  switch (selectionState.value) {
-    case 'all':
-      return 'mdi-checkbox-marked'
-    case 'partial':
-      return 'mdi-checkbox-intermediate'
-    default:
-      return 'mdi-checkbox-blank-outline'
-  }
-})
-const selectionToggleTitle = computed(() => {
-  switch (selectionState.value) {
-    case 'all':
-      return '清除选择'
-    case 'partial':
-      return '补全选择'
-    default:
-      return '全选节点'
-  }
-})
-const canToggleSelection = computed(() => allNodeIds.value.length > 0)
 
 watch(allNodeIds, (ids) => {
-  selectedNodeIds.value = selectedNodeIds.value.filter((id) => ids.includes(id))
+  const filtered = selectedNodeIds.value.filter((id) => ids.includes(id))
+  if (filtered.length !== selectedNodeIds.value.length) {
+    selectedNodeIds.value = filtered
+  }
+  if (selectionAnchorId.value && !ids.includes(selectionAnchorId.value)) {
+    selectionAnchorId.value = filtered[filtered.length - 1] ?? null
+  }
 })
 
-watch(selectedNodeId, (id) => {
-  if (suppressSelectionSync.value) {
-    suppressSelectionSync.value = false
-    return
-  }
-  if (!id) {
-    selectedNodeIds.value = []
-    return
-  }
-  if (!selectedNodeIds.value.includes(id)) {
-    selectedNodeIds.value = [id]
-  }
-})
+watch(
+  selectedNodeId,
+  (id) => {
+    if (suppressSelectionSync.value) {
+      suppressSelectionSync.value = false
+      selectionAnchorId.value = id
+      return
+    }
+    if (!id) {
+      selectedNodeIds.value = []
+      selectionAnchorId.value = null
+      return
+    }
+    selectionAnchorId.value = id
+    if (!selectedNodeIds.value.includes(id)) {
+      selectedNodeIds.value = [id]
+    }
+  },
+  { immediate: true },
+)
 
 const rootDropClasses = computed(() => ({
   'root-drop-active':
@@ -137,39 +125,17 @@ function toggleNodeVisibility(id: string) {
 }
 
 function setActiveNode(id: string | null) {
+  selectionAnchorId.value = id
   if (selectedNodeId.value === id) return
   suppressSelectionSync.value = true
   sceneStore.selectNode(id)
-}
-
-function handleSelectAll() {
-  if (!allNodeIds.value.length) return
-  selectedNodeIds.value = [...allNodeIds.value]
-  const nextActive =
-    selectedNodeId.value && selectedNodeIds.value.includes(selectedNodeId.value)
-      ? selectedNodeId.value
-      : selectedNodeIds.value[0] ?? null
-  setActiveNode(nextActive)
-}
-
-function handleClearSelection() {
-  selectedNodeIds.value = []
-  setActiveNode(null)
-}
-
-function handleSelectionToggle() {
-  if (!allNodeIds.value.length) return
-  if (selectionState.value === 'all') {
-    handleClearSelection()
-    return
-  }
-  handleSelectAll()
 }
 
 function handleDeleteSelected() {
   if (!selectedNodeIds.value.length) return
   sceneStore.removeSceneNodes(selectedNodeIds.value)
   selectedNodeIds.value = []
+  selectionAnchorId.value = null
 }
 
 function getNodeInteractionClasses(id: string) {
@@ -183,26 +149,45 @@ function getNodeInteractionClasses(id: string) {
 function handleNodeClick(event: MouseEvent, nodeId: string) {
   event.stopPropagation()
   event.preventDefault()
+  if (event.button !== 0) return
+
   const isToggle = event.ctrlKey || event.metaKey
+  const isRangeSelect = event.shiftKey && selectionAnchorId.value
   const currentlySelected = isItemSelected(nodeId)
 
-  if (isToggle) {
-    if (currentlySelected) {
-      const nextSelection = selectedNodeIds.value.filter((id) => id !== nodeId)
-      selectedNodeIds.value = nextSelection
-      const nextActive = nextSelection[nextSelection.length - 1] ?? null
-      setActiveNode(nextActive)
+  let nextSelection = selectedNodeIds.value
+
+  if (isRangeSelect) {
+    const anchorId = selectionAnchorId.value
+    const anchorIndex = anchorId ? allNodeIds.value.indexOf(anchorId) : -1
+    const targetIndex = allNodeIds.value.indexOf(nodeId)
+    if (anchorIndex !== -1 && targetIndex !== -1) {
+      const [start, end] = anchorIndex < targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex]
+      const rangeIds = allNodeIds.value.slice(start, end + 1)
+      const base = isToggle ? selectedNodeIds.value : []
+      nextSelection = Array.from(new Set([...base, ...rangeIds]))
     } else {
-      selectedNodeIds.value = [...selectedNodeIds.value, nodeId]
-      setActiveNode(nodeId)
+      nextSelection = [nodeId]
     }
+  } else if (isToggle) {
+    nextSelection = currentlySelected
+      ? selectedNodeIds.value.filter((id) => id !== nodeId)
+      : [...selectedNodeIds.value, nodeId]
+  } else {
+    if (selectedNodeIds.value.length !== 1 || !currentlySelected) {
+      nextSelection = [nodeId]
+    }
+  }
+
+  if (!nextSelection.length) {
+    selectedNodeIds.value = []
+    setActiveNode(null)
     return
   }
 
-  if (selectedNodeIds.value.length !== 1 || !currentlySelected) {
-    selectedNodeIds.value = [nodeId]
-  }
-  setActiveNode(nodeId)
+  selectedNodeIds.value = nextSelection
+  const nextActive = nextSelection[nextSelection.length - 1] ?? null
+  setActiveNode(nextActive)
 }
 
 function resetDragState() {
@@ -490,6 +475,19 @@ function handleTreeDragLeave(event: DragEvent) {
   border-radius: 6px;
 }
 
+.hierarchy-tree :deep(.v-treeview-item__checkbox),
+.hierarchy-tree :deep(.v-treeview-item__selection) {
+  display: none !important;
+}
+
+.hierarchy-tree :deep(.v-treeview-item--active > .v-treeview-item__content) {
+  background: transparent;
+}
+
+.hierarchy-tree :deep(.v-treeview-item__content) {
+  padding-inline-end: 6px;
+}
+
 .tree-container.root-drop-before::before,
 .tree-container.root-drop-after::before {
   content: '';
@@ -535,6 +533,7 @@ function handleTreeDragLeave(event: DragEvent) {
   cursor: grab;
   user-select: none;
   transition: background-color 140ms ease;
+  width: 100%;
 }
 
 .node-label:active {
