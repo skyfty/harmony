@@ -4,8 +4,15 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import type { SceneNode, Vector3Like } from '@/types/scene'
-import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
-import type { SceneCameraState } from '@/stores/sceneStore'
+import {
+  useSceneStore,
+  getRuntimeObject,
+  type ProjectAsset,
+  type ProjectDirectory,
+  type SceneCameraState,
+} from '@/stores/sceneStore'
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { loadObjectFromFile } from '@/plugins/assetImport'
 
 type EditorTool = 'select' | 'translate' | 'rotate' | 'scale'
 
@@ -31,6 +38,7 @@ const emit = defineEmits<{
 }>()
 
 const sceneStore = useSceneStore()
+const assetCacheStore = useAssetCacheStore()
 
 const tools: Array<{ label: string; icon: string; value: EditorTool }> = [
   { label: 'Select', icon: 'mdi-cursor-default', value: 'select' },
@@ -89,6 +97,173 @@ gridMaterial.opacity = 0.25
 gridMaterial.transparent = true
 
 const axesHelper = new THREE.AxesHelper(4)
+
+const dragPreviewGroup = new THREE.Group()
+dragPreviewGroup.visible = false
+dragPreviewGroup.name = 'DragPreview'
+
+let dragPreviewObject: THREE.Object3D | null = null
+let dragPreviewAssetId: string | null = null
+let pendingPreviewAssetId: string | null = null
+let dragPreviewLoadToken = 0
+let lastDragPoint: THREE.Vector3 | null = null
+
+function findAssetMetadata(assetId: string): ProjectAsset | null {
+  const search = (directories: ProjectDirectory[] | undefined): ProjectAsset | null => {
+    if (!directories) {
+      return null
+    }
+    for (const directory of directories) {
+      if (directory.assets) {
+        const match = directory.assets.find((asset) => asset.id === assetId)
+        if (match) {
+          return match
+        }
+      }
+      if (directory.children && directory.children.length > 0) {
+        const nested = search(directory.children)
+        if (nested) {
+          return nested
+        }
+      }
+    }
+    return null
+  }
+
+  return search(sceneStore.projectTree)
+}
+
+function disposeObjectResources(object: THREE.Object3D) {
+  object.traverse((child) => {
+    const meshChild = child as THREE.Mesh
+    if (meshChild?.isMesh) {
+      if (meshChild.geometry) {
+        meshChild.geometry.dispose()
+      }
+      const materials = Array.isArray(meshChild.material) ? meshChild.material : [meshChild.material]
+      for (const material of materials) {
+        material?.dispose()
+      }
+    }
+  })
+}
+
+function clearDragPreviewObject(disposeResources = true) {
+  if (dragPreviewObject && disposeResources) {
+    disposeObjectResources(dragPreviewObject)
+  }
+  dragPreviewGroup.clear()
+  dragPreviewObject = null
+  dragPreviewAssetId = null
+  dragPreviewGroup.visible = false
+}
+
+function disposeDragPreview(cancelLoad = true) {
+  if (cancelLoad) {
+    dragPreviewLoadToken += 1
+    pendingPreviewAssetId = null
+  }
+  lastDragPoint = null
+  clearDragPreviewObject()
+}
+
+function applyPreviewVisualTweaks(object: THREE.Object3D) {
+  object.traverse((child) => {
+    const meshChild = child as THREE.Mesh
+    if (meshChild?.isMesh) {
+      const materials = Array.isArray(meshChild.material) ? meshChild.material : [meshChild.material]
+      for (const material of materials) {
+        if (!material) {
+          continue
+        }
+        material.transparent = true
+        material.opacity = Math.min(0.75, material.opacity ?? 1)
+        material.depthWrite = false
+      }
+    }
+  })
+}
+
+function setDragPreviewPosition(point: THREE.Vector3 | null) {
+  lastDragPoint = point ? point.clone() : null
+  if (!dragPreviewObject || !point) {
+    dragPreviewGroup.visible = false
+    return
+  }
+  dragPreviewGroup.position.copy(point)
+  dragPreviewGroup.visible = true
+}
+
+async function loadDragPreviewForAsset(asset: ProjectAsset): Promise<boolean> {
+  if (pendingPreviewAssetId === asset.id) {
+    return false
+  }
+
+  pendingPreviewAssetId = asset.id
+  clearDragPreviewObject()
+  const token = ++dragPreviewLoadToken
+  const file = assetCacheStore.createFileFromCache(asset)
+  if (!file) {
+    pendingPreviewAssetId = null
+    return false
+  }
+
+  try {
+    const object = await loadObjectFromFile(file)
+    if (token !== dragPreviewLoadToken) {
+      disposeObjectResources(object)
+      return false
+    }
+    applyPreviewVisualTweaks(object)
+    dragPreviewObject = object
+    dragPreviewAssetId = asset.id
+    dragPreviewGroup.add(object)
+    if (lastDragPoint) {
+      dragPreviewGroup.position.copy(lastDragPoint)
+      dragPreviewGroup.visible = true
+    } else {
+      dragPreviewGroup.visible = false
+    }
+    pendingPreviewAssetId = null
+    return true
+  } catch (error) {
+    if (token === dragPreviewLoadToken) {
+      clearDragPreviewObject()
+    }
+    pendingPreviewAssetId = null
+    console.warn('Failed to load drag preview object', error)
+    return false
+  }
+}
+
+function prepareDragPreview(assetId: string) {
+  const asset = findAssetMetadata(assetId)
+  if (!asset || asset.type !== 'model') {
+    disposeDragPreview()
+    return
+  }
+
+  if (!assetCacheStore.hasCache(asset.id)) {
+    disposeDragPreview()
+    return
+  }
+
+  assetCacheStore.touch(asset.id)
+
+  if (dragPreviewAssetId === asset.id && dragPreviewObject) {
+    if (lastDragPoint) {
+      dragPreviewGroup.position.copy(lastDragPoint)
+      dragPreviewGroup.visible = true
+    }
+    return
+  }
+
+  if (pendingPreviewAssetId === asset.id) {
+    return
+  }
+
+  void loadDragPreviewForAsset(asset)
+}
 
 function clampCameraAboveGround(forceUpdate = true) {
   if (!camera || !orbitControls) return false
@@ -369,6 +544,7 @@ function initScene() {
   scene.add(rootGroup)
   scene.add(gridHelper)
   scene.add(axesHelper)
+  scene.add(dragPreviewGroup)
   gridHighlight = createGridHighlight()
   scene.add(gridHighlight)
   if (selectionTrackedObject) {
@@ -468,6 +644,8 @@ function disposeScene() {
   }
 
   clearSelectionBox()
+  disposeDragPreview()
+  dragPreviewGroup.removeFromParent()
 
   scene = null
   camera = null
@@ -603,6 +781,12 @@ function handleViewportDragEnter(event: DragEvent) {
   if (!isAssetDrag(event)) return
   event.preventDefault()
   isDragHovering.value = true
+  const payload = extractAssetPayload(event)
+  if (payload) {
+    prepareDragPreview(payload.assetId)
+  } else {
+    disposeDragPreview()
+  }
 }
 
 function handleViewportDragOver(event: DragEvent) {
@@ -614,6 +798,13 @@ function handleViewportDragOver(event: DragEvent) {
   }
   isDragHovering.value = true
   updateGridHighlight(point)
+  setDragPreviewPosition(point)
+  const payload = extractAssetPayload(event)
+  if (payload) {
+    prepareDragPreview(payload.assetId)
+  } else {
+    disposeDragPreview()
+  }
 }
 
 function handleViewportDragLeave(event: DragEvent) {
@@ -625,6 +816,7 @@ function handleViewportDragLeave(event: DragEvent) {
   }
   isDragHovering.value = false
   updateGridHighlight(null)
+  disposeDragPreview()
 }
 
 async function handleViewportDrop(event: DragEvent) {
@@ -634,6 +826,7 @@ async function handleViewportDrop(event: DragEvent) {
   event.preventDefault()
   event.stopPropagation()
   isDragHovering.value = false
+  disposeDragPreview()
   if (!payload) return
 
   const spawnPoint = point ? point.clone() : new THREE.Vector3(0, 0, 0)
