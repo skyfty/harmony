@@ -27,9 +27,7 @@ function handleMenuAction(action: string) {
               density="comfortable"
               rounded="xl"
             >
-              <v-icon size="18" class="ml-1">mdi-menu-down</v-icon>
-
-                <v-menu>
+              <v-menu>
                 <template #activator="{ props }">
                   <span v-bind="props">File</span>
                 </template>
@@ -93,6 +91,7 @@ function handleMenuAction(action: string) {
                   </v-menu>
                 </v-list>
                 </v-menu>
+                <v-icon size="18" class="ml-1">mdi-menu-down</v-icon>
 
             </v-btn>
             <v-btn
@@ -102,9 +101,7 @@ function handleMenuAction(action: string) {
               density="comfortable"
               rounded="xl"
             >
-              <v-icon size="18" class="ml-1">mdi-menu-down</v-icon>
-
-                <v-menu>
+              <v-menu>
                 <template #activator="{ props }">
                   <span v-bind="props">Edit</span>
                 </template>
@@ -148,27 +145,8 @@ function handleMenuAction(action: string) {
                   </v-list-item>
                 </v-list>
                 </v-menu>
+                <v-icon size="18" class="ml-1">mdi-menu-down</v-icon>
 
-            </v-btn>
-            <v-btn
-              class="menu-button"
-              variant="text"
-              color="rgba(255, 255, 255, 0.72)"
-              density="comfortable"
-              rounded="xl"
-              @click="handleMenuAction('View')"
-            >
-              View
-            </v-btn>
-            <v-btn
-              class="menu-button"
-              variant="text"
-              color="rgba(255, 255, 255, 0.72)"
-              density="comfortable"
-              rounded="xl"
-              @click="handleMenuAction('Create')"
-            >
-              Create
             </v-btn>
             <v-btn
               class="menu-button"
