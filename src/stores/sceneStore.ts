@@ -88,12 +88,29 @@ interface SceneState {
   resourceProviderId: string
   cameraFocusNodeId: string | null
   cameraFocusRequestId: number
+  clipboard: SceneClipboard | null
 }
 
 interface EnsureSceneAssetsOptions {
   nodes?: SceneNode[]
   showOverlay?: boolean
   refreshViewport?: boolean
+}
+
+interface ClipboardEntry {
+  sourceId: string
+  node: SceneNode
+}
+
+interface SceneClipboard {
+  entries: ClipboardEntry[]
+  runtimeSnapshots: Map<string, Object3D>
+  cut: boolean
+}
+
+interface DuplicateContext {
+  assetCache: ReturnType<typeof useAssetCacheStore>
+  runtimeSnapshots: Map<string, Object3D>
 }
 
 const initialNodes: SceneNode[] = []
@@ -241,6 +258,85 @@ function createPlaceholderAsset(assetId: string, nodes: SceneNode[], entry?: Ass
     description: downloadUrl ?? entry?.filename ?? fallbackName,
     downloadUrl,
   }
+}
+
+function buildParentMap(
+  nodes: SceneNode[],
+  parentId: string | null = null,
+  map: Map<string, string | null> = new Map(),
+): Map<string, string | null> {
+  nodes.forEach((node) => {
+    map.set(node.id, parentId)
+    if (node.children?.length) {
+      buildParentMap(node.children, node.id, map)
+    }
+  })
+  return map
+}
+
+function filterTopLevelNodeIds(ids: string[], parentMap: Map<string, string | null>): string[] {
+  const idSet = new Set(ids)
+  return ids.filter((id) => {
+    let parent = parentMap.get(id) ?? null
+    while (parent) {
+      if (idSet.has(parent)) {
+        return false
+      }
+      parent = parentMap.get(parent) ?? null
+    }
+    return true
+  })
+}
+
+function collectRuntimeSnapshots(node: SceneNode, bucket: Map<string, Object3D>) {
+  const runtime = getRuntimeObject(node.id)
+  if (runtime) {
+    bucket.set(node.id, runtime.clone(true))
+  }
+  node.children?.forEach((child) => collectRuntimeSnapshots(child, bucket))
+}
+
+function collectClipboardPayload(nodes: SceneNode[], ids: string[]): { entries: ClipboardEntry[]; runtimeSnapshots: Map<string, Object3D> } {
+  const runtimeSnapshots = new Map<string, Object3D>()
+  if (!ids.length) {
+    return { entries: [], runtimeSnapshots }
+  }
+  const uniqueIds = Array.from(new Set(ids))
+  const parentMap = buildParentMap(nodes)
+  const topLevelIds = filterTopLevelNodeIds(uniqueIds, parentMap)
+  const entries: ClipboardEntry[] = []
+  topLevelIds.forEach((id) => {
+    const found = findNodeById(nodes, id)
+    if (found) {
+      entries.push({ sourceId: id, node: cloneNode(found) })
+      collectRuntimeSnapshots(found, runtimeSnapshots)
+    }
+  })
+  return { entries, runtimeSnapshots }
+}
+
+function duplicateNodeTree(original: SceneNode, context: DuplicateContext): SceneNode {
+  const duplicated = cloneNode(original)
+  duplicated.id = crypto.randomUUID()
+
+  if (original.children?.length) {
+    duplicated.children = original.children.map((child) => duplicateNodeTree(child, context))
+  } else {
+    delete duplicated.children
+  }
+
+  if (duplicated.sourceAssetId) {
+    context.assetCache.registerUsage(duplicated.sourceAssetId)
+  }
+
+  const runtimeObject = getRuntimeObject(original.id) ?? context.runtimeSnapshots.get(original.id) ?? null
+  if (runtimeObject) {
+    const clonedObject = runtimeObject.clone(true)
+    tagObjectWithNodeId(clonedObject, duplicated.id)
+    registerRuntimeObject(duplicated.id, clonedObject)
+  }
+
+  return duplicated
 }
 
 function cloneVector(vector: Vector3Like): Vector3Like {
@@ -524,6 +620,7 @@ export const useSceneStore = defineStore('scene', {
     resourceProviderId: initialSceneDocument.resourceProviderId,
     cameraFocusNodeId: null,
     cameraFocusRequestId: 0,
+    clipboard: null,
   }),
   getters: {
     currentScene(state): StoredSceneDocument | null {
@@ -912,7 +1009,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       registerRuntimeObject(id, payload.object)
-  tagObjectWithNodeId(payload.object, id)
+    tagObjectWithNodeId(payload.object, id)
       this.nodes = [...this.nodes, node]
       this.selectedNodeId = id
       commitSceneSnapshot(this)
@@ -940,6 +1037,77 @@ export const useSceneStore = defineStore('scene', {
       const assetCache = useAssetCacheStore()
       assetCache.recalculateUsage(this.nodes)
       commitSceneSnapshot(this)
+    },
+    copyNodes(nodeIds: string[]) {
+      const { entries, runtimeSnapshots } = collectClipboardPayload(this.nodes, nodeIds)
+      if (!entries.length) {
+        this.clipboard = null
+        return false
+      }
+      this.clipboard = {
+        entries,
+        runtimeSnapshots,
+        cut: false,
+      }
+      return true
+    },
+    cutNodes(nodeIds: string[]) {
+      const success = this.copyNodes(nodeIds)
+      if (!success || !this.clipboard) {
+        return false
+      }
+      this.clipboard.cut = true
+      const idsToRemove = this.clipboard.entries.map((entry) => entry.sourceId)
+      if (idsToRemove.length) {
+        this.removeSceneNodes(idsToRemove)
+      }
+      return true
+    },
+    pasteClipboard(targetId?: string | null) {
+      if (!this.clipboard || !this.clipboard.entries.length) {
+        return false
+      }
+
+      const assetCache = useAssetCacheStore()
+      const context: DuplicateContext = {
+        assetCache,
+        runtimeSnapshots: this.clipboard.runtimeSnapshots,
+      }
+      const duplicates = this.clipboard.entries.map((entry) => duplicateNodeTree(entry.node, context))
+      if (!duplicates.length) {
+        return false
+      }
+
+      const working = cloneSceneNodes(this.nodes)
+
+      let anchorId: string | null = null
+      if (targetId && findNodeById(working, targetId)) {
+        anchorId = targetId
+      } else if (this.selectedNodeId && findNodeById(working, this.selectedNodeId)) {
+        anchorId = this.selectedNodeId
+      }
+
+      duplicates.forEach((duplicate) => {
+        const inserted = insertNodeMutable(working, anchorId, duplicate, anchorId ? 'after' : 'after')
+        if (!inserted) {
+          insertNodeMutable(working, null, duplicate, 'after')
+        }
+        anchorId = duplicate.id
+      })
+
+      this.nodes = working
+      this.selectedNodeId = duplicates[duplicates.length - 1]?.id ?? this.selectedNodeId
+      commitSceneSnapshot(this)
+      assetCache.recalculateUsage(this.nodes)
+
+      if (this.clipboard.cut) {
+        this.clipboard = null
+      }
+
+      return true
+    },
+    clearClipboard() {
+      this.clipboard = null
     },
     createScene(name = 'Untitled Scene', thumbnail?: string | null) {
       commitSceneSnapshot(this)

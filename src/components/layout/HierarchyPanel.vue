@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore, type HierarchyDropPosition } from '@/stores/sceneStore'
 import HierarchyAddMenu from './HierarchyAddMenu.vue'
@@ -9,7 +9,7 @@ const emit = defineEmits<{
 }>()
 
 const sceneStore = useSceneStore()
-const { hierarchyItems, selectedNodeId } = storeToRefs(sceneStore)
+const { hierarchyItems, selectedNodeId, clipboard } = storeToRefs(sceneStore)
 
 const opened = ref<string[]>([])
 const selectedNodeIds = ref<string[]>([])
@@ -22,6 +22,7 @@ const dragState = ref<{ sourceId: string | null; targetId: string | null; positi
     position: null,
   },
 )
+const panelRef = ref<HTMLDivElement | null>(null)
 
 const active = computed({
   get: () => (selectedNodeId.value ? [selectedNodeId.value] : []),
@@ -43,6 +44,7 @@ watch(
 
 const allNodeIds = computed(() => flattenIds(hierarchyItems.value))
 const hasSelection = computed(() => selectedNodeIds.value.length > 0)
+const canPaste = computed(() => (clipboard.value?.entries.length ?? 0) > 0)
 
 watch(allNodeIds, (ids) => {
   const filtered = selectedNodeIds.value.filter((id) => ids.includes(id))
@@ -136,6 +138,23 @@ function handleDeleteSelected() {
   sceneStore.removeSceneNodes(selectedNodeIds.value)
   selectedNodeIds.value = []
   selectionAnchorId.value = null
+}
+
+function handleCopy(): boolean {
+  if (!selectedNodeIds.value.length) return false
+  return sceneStore.copyNodes(selectedNodeIds.value)
+}
+
+function handleCut(): boolean {
+  if (!selectedNodeIds.value.length) return false
+  return sceneStore.cutNodes(selectedNodeIds.value)
+}
+
+function handlePaste(): boolean {
+  if (!canPaste.value) return false
+  const anchor = selectedNodeIds.value[selectedNodeIds.value.length - 1] ?? selectedNodeId.value ?? null
+  const pasted = sceneStore.pasteClipboard(anchor)
+  return pasted
 }
 
 function getNodeInteractionClasses(id: string) {
@@ -324,10 +343,60 @@ function handleTreeDragLeave(event: DragEvent) {
   }
 }
 
+function isEditableTarget(target: EventTarget | null): boolean {
+  const element = target as HTMLElement | null
+  if (!element) return false
+  const tag = element.tagName
+  return element.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+}
+
+function shouldHandleShortcut(event: KeyboardEvent): boolean {
+  if (event.defaultPrevented) return false
+  if (!(event.ctrlKey || event.metaKey)) return false
+  if (event.shiftKey || event.altKey) return false
+  if (isEditableTarget(event.target)) return false
+  const targetNode = event.target as Node | null
+  if (!panelRef.value) return true
+  if (!targetNode || targetNode === document.body) return true
+  return panelRef.value.contains(targetNode)
+}
+
+function handleShortcut(event: KeyboardEvent) {
+  if (!shouldHandleShortcut(event)) return
+
+  let handled = false
+  switch (event.code) {
+    case 'KeyC':
+      handled = handleCopy()
+      break
+    case 'KeyX':
+      handled = handleCut()
+      break
+    case 'KeyV':
+      handled = handlePaste()
+      break
+    default:
+      break
+  }
+
+  if (handled) {
+    event.preventDefault()
+    event.stopPropagation()
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', handleShortcut, { capture: true })
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleShortcut, { capture: true })
+})
+
 </script>
 
 <template>
-  <v-card class="panel-card" elevation="4">
+  <v-card ref="panelRef" class="panel-card" elevation="4">
     <v-toolbar density="compact" title="Hierarchy" class="panel-toolbar" height="40px">
       <v-spacer />
       <v-btn icon="mdi-window-minimize" variant="text" @click="emit('collapse')" />
@@ -336,6 +405,27 @@ function handleTreeDragLeave(event: DragEvent) {
     <div class="panel-body hierarchy-body">
       <v-toolbar density="compact" class="tree-toolbar" flat height="40px">
         <HierarchyAddMenu />
+        <v-btn
+          icon="mdi-content-copy"
+          variant="text"
+          density="compact"
+          :disabled="!hasSelection"
+          @click="handleCopy"
+        />
+        <v-btn
+          icon="mdi-content-cut"
+          variant="text"
+          density="compact"
+          :disabled="!hasSelection"
+          @click="handleCut"
+        />
+        <v-btn
+          icon="mdi-content-paste"
+          variant="text"
+          density="compact"
+          :disabled="!canPaste"
+          @click="handlePaste"
+        />
         <v-btn
           icon="mdi-delete-outline"
           variant="text"

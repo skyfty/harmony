@@ -778,16 +778,62 @@ function toEulerLike(euler: THREE.Euler): Vector3Like {
   return { x: euler.x, y: euler.y, z: euler.z }
 }
 
+function isEditableKeyboardTarget(target: EventTarget | null): boolean {
+  const element = target as HTMLElement | null
+  if (!element) return false
+  const tag = element.tagName
+  return element.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+}
+
+function shouldHandleViewportShortcut(event: KeyboardEvent): boolean {
+  if (event.defaultPrevented) return false
+  if (!(event.ctrlKey || event.metaKey)) return false
+  if (event.shiftKey || event.altKey) return false
+  if (isEditableKeyboardTarget(event.target)) return false
+  const targetNode = event.target as Node | null
+  if (!viewportEl.value) return true
+  if (!targetNode || targetNode === document.body) return true
+  return viewportEl.value.contains(targetNode)
+}
+
+function handleViewportShortcut(event: KeyboardEvent) {
+  if (!shouldHandleViewportShortcut(event)) return
+
+  let handled = false
+  switch (event.code) {
+    case 'KeyC':
+      handled = sceneStore.selectedNodeId ? sceneStore.copyNodes([sceneStore.selectedNodeId]) : false
+      break
+    case 'KeyX':
+      handled = sceneStore.selectedNodeId ? sceneStore.cutNodes([sceneStore.selectedNodeId]) : false
+      break
+    case 'KeyV':
+      handled = (sceneStore.clipboard?.entries.length ?? 0) > 0
+        ? sceneStore.pasteClipboard(sceneStore.selectedNodeId)
+        : false
+      break
+    default:
+      break
+  }
+
+  if (handled) {
+    event.preventDefault()
+    event.stopPropagation()
+  }
+}
+
 onMounted(() => {
   initScene()
   syncSceneGraph()
   updateToolMode(props.activeTool)
   attachSelection(props.selectedNodeId)
+  window.addEventListener('keydown', handleViewportShortcut, { capture: true })
 })
 
 onBeforeUnmount(() => {
   disposeSceneNodes()
   disposeScene()
+  window.removeEventListener('keydown', handleViewportShortcut, { capture: true })
 })
 
 watch(
