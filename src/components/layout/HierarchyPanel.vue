@@ -12,7 +12,8 @@ const sceneStore = useSceneStore()
 const { hierarchyItems, selectedNodeId } = storeToRefs(sceneStore)
 
 const opened = ref<string[]>([])
-const checkboxSelection = ref<string[]>([])
+const selectedNodeIds = ref<string[]>([])
+const suppressSelectionSync = ref(false)
 const dragState = ref<{ sourceId: string | null; targetId: string | null; position: HierarchyDropPosition | null }>(
   {
     sourceId: null,
@@ -40,10 +41,10 @@ watch(
 )
 
 const allNodeIds = computed(() => flattenIds(hierarchyItems.value))
-const hasSelection = computed(() => checkboxSelection.value.length > 0)
+const hasSelection = computed(() => selectedNodeIds.value.length > 0)
 const selectionState = computed<'none' | 'partial' | 'all'>(() => {
-  if (!checkboxSelection.value.length) return 'none'
-  if (checkboxSelection.value.length === allNodeIds.value.length) return 'all'
+  if (!selectedNodeIds.value.length) return 'none'
+  if (selectedNodeIds.value.length === allNodeIds.value.length) return 'all'
   return 'partial'
 })
 const selectionToggleIcon = computed(() => {
@@ -69,7 +70,21 @@ const selectionToggleTitle = computed(() => {
 const canToggleSelection = computed(() => allNodeIds.value.length > 0)
 
 watch(allNodeIds, (ids) => {
-  checkboxSelection.value = checkboxSelection.value.filter((id) => ids.includes(id))
+  selectedNodeIds.value = selectedNodeIds.value.filter((id) => ids.includes(id))
+})
+
+watch(selectedNodeId, (id) => {
+  if (suppressSelectionSync.value) {
+    suppressSelectionSync.value = false
+    return
+  }
+  if (!id) {
+    selectedNodeIds.value = []
+    return
+  }
+  if (!selectedNodeIds.value.includes(id)) {
+    selectedNodeIds.value = [id]
+  }
 })
 
 const rootDropClasses = computed(() => ({
@@ -110,31 +125,36 @@ function flattenIds(items: Array<{ id: string; children?: Array<unknown> }>): st
 }
 
 function isItemSelected(id: string) {
-  return checkboxSelection.value.includes(id)
+  return selectedNodeIds.value.includes(id)
+}
+
+function isItemActive(id: string) {
+  return selectedNodeId.value === id
 }
 
 function toggleNodeVisibility(id: string) {
   sceneStore.toggleNodeVisibility(id)
 }
 
-function handleCheckboxChange(id: string, value: boolean | null) {
-  const nextState = Boolean(value)
-  if (nextState) {
-    if (!checkboxSelection.value.includes(id)) {
-      checkboxSelection.value = [...checkboxSelection.value, id]
-    }
-  } else {
-    checkboxSelection.value = checkboxSelection.value.filter((itemId) => itemId !== id)
-  }
+function setActiveNode(id: string | null) {
+  if (selectedNodeId.value === id) return
+  suppressSelectionSync.value = true
+  sceneStore.selectNode(id)
 }
 
 function handleSelectAll() {
   if (!allNodeIds.value.length) return
-  checkboxSelection.value = [...allNodeIds.value]
+  selectedNodeIds.value = [...allNodeIds.value]
+  const nextActive =
+    selectedNodeId.value && selectedNodeIds.value.includes(selectedNodeId.value)
+      ? selectedNodeId.value
+      : selectedNodeIds.value[0] ?? null
+  setActiveNode(nextActive)
 }
 
 function handleClearSelection() {
-  checkboxSelection.value = []
+  selectedNodeIds.value = []
+  setActiveNode(null)
 }
 
 function handleSelectionToggle() {
@@ -147,9 +167,42 @@ function handleSelectionToggle() {
 }
 
 function handleDeleteSelected() {
-  if (!checkboxSelection.value.length) return
-  sceneStore.removeSceneNodes(checkboxSelection.value)
-  checkboxSelection.value = []
+  if (!selectedNodeIds.value.length) return
+  sceneStore.removeSceneNodes(selectedNodeIds.value)
+  selectedNodeIds.value = []
+}
+
+function getNodeInteractionClasses(id: string) {
+  return {
+    ...getNodeDropClasses(id),
+    'is-selected': isItemSelected(id),
+    'is-active': isItemActive(id),
+  }
+}
+
+function handleNodeClick(event: MouseEvent, nodeId: string) {
+  event.stopPropagation()
+  event.preventDefault()
+  const isToggle = event.ctrlKey || event.metaKey
+  const currentlySelected = isItemSelected(nodeId)
+
+  if (isToggle) {
+    if (currentlySelected) {
+      const nextSelection = selectedNodeIds.value.filter((id) => id !== nodeId)
+      selectedNodeIds.value = nextSelection
+      const nextActive = nextSelection[nextSelection.length - 1] ?? null
+      setActiveNode(nextActive)
+    } else {
+      selectedNodeIds.value = [...selectedNodeIds.value, nodeId]
+      setActiveNode(nodeId)
+    }
+    return
+  }
+
+  if (selectedNodeIds.value.length !== 1 || !currentlySelected) {
+    selectedNodeIds.value = [nodeId]
+  }
+  setActiveNode(nodeId)
 }
 
 function resetDragState() {
@@ -242,7 +295,7 @@ function handleDrop(event: DragEvent, targetId: string) {
 }
 
 function handleNodeDoubleClick(nodeId: string) {
-  sceneStore.selectNode(nodeId)
+  setActiveNode(nodeId)
   sceneStore.requestCameraFocus(nodeId)
 }
 
@@ -307,15 +360,6 @@ function handleTreeDragLeave(event: DragEvent) {
           @click="handleDeleteSelected"
         />
         <v-spacer />
-        <v-btn
-          :icon="selectionToggleIcon"
-          variant="text"
-          density="compact"
-          :color="selectionState === 'none' ? undefined : 'primary'"
-          :disabled="!canToggleSelection"
-          :title="selectionToggleTitle"
-          @click="handleSelectionToggle"
-        />
       </v-toolbar>
       <div
         class="tree-container"
@@ -341,13 +385,14 @@ function handleTreeDragLeave(event: DragEvent) {
           <template #title="{ item }">
             <div
               class="node-label"
-              :class="getNodeDropClasses(item.id)"
+              :class="getNodeInteractionClasses(item.id)"
               draggable="true"
               @dragstart="handleDragStart($event, item.id)"
               @dragend="handleDragEnd"
               @dragover="handleDragOver($event, item.id)"
               @dragleave="handleDragLeave($event, item.id)"
               @drop="handleDrop($event, item.id)"
+              @click="handleNodeClick($event, item.id)"
               @dblclick.stop.prevent="handleNodeDoubleClick(item.id)"
             >
               <span class="node-label-text">{{ item.name }}</span>
@@ -365,15 +410,6 @@ function handleTreeDragLeave(event: DragEvent) {
                 :class="{ 'is-hidden': !(item.visible ?? true) }"
                 :title="(item.visible ?? true) ? '隐藏模型' : '显示模型'"
                 @click.stop="toggleNodeVisibility(item.id)"
-              />
-              <v-checkbox
-                :model-value="isItemSelected(item.id)"
-                :class="['node-checkbox', { 'is-selected': isItemSelected(item.id) }]"
-                density="compact"
-                hide-details
-                color="primary"
-                :ripple="false"
-                @update:modelValue="handleCheckboxChange(item.id, $event)"
               />
             </div>
           </template>
@@ -538,6 +574,19 @@ function handleTreeDragLeave(event: DragEvent) {
   background: rgba(244, 67, 54, 0.1);
 }
 
+.node-label.is-selected {
+  background: rgba(77, 208, 225, 0.08);
+}
+
+.node-label.is-active {
+  background: rgba(77, 208, 225, 0.16);
+  box-shadow: 0 0 0 1px rgba(77, 208, 225, 0.3) inset;
+}
+
+.node-label.is-active.is-selected {
+  background: rgba(77, 208, 225, 0.2);
+}
+
 
 .tree-node-trailing {
   display: inline-flex;
@@ -558,34 +607,6 @@ function handleTreeDragLeave(event: DragEvent) {
 
 .visibility-btn :deep(.v-icon) {
   font-size: 18px;
-}
-
-.hierarchy-tree :deep(.node-checkbox) {
-  opacity: 0;
-  transform: scale(0.75);
-  pointer-events: none;
-  transition: opacity 120ms ease, transform 120ms ease;
-}
-
-.hierarchy-tree :deep(.v-treeview-item:hover .node-checkbox),
-.hierarchy-tree :deep(.v-treeview-item:focus-within .node-checkbox),
-.hierarchy-tree :deep(.node-checkbox.is-selected) {
-  opacity: 1;
-  transform: scale(0.9);
-  pointer-events: auto;
-}
-
-.hierarchy-tree :deep(.node-checkbox .v-selection-control) {
-  min-height: 18px;
-}
-
-.hierarchy-tree :deep(.node-checkbox .v-selection-control__input) {
-  width: 16px;
-  height: 16px;
-}
-
-.hierarchy-tree :deep(.node-checkbox .v-icon) {
-  font-size: 16px;
 }
 
 .node-icon {
