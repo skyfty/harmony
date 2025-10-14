@@ -100,16 +100,13 @@ function handleAction(action: string) {
     case 'Preview':
       break
     case 'Copy': {
-      const id = sceneStore.selectedNodeId
-      if (id) {
-        sceneStore.copyNodes([id])
-      }
+      sceneStore.copyNodes(sceneStore.selectedNodeIds)
       break
     }
     case 'Cut': {
       const id = sceneStore.selectedNodeId
       if (id) {
-        sceneStore.cutNodes([id])
+        sceneStore.cutNodes(sceneStore.selectedNodeIds)
       }
       break
     }
@@ -118,10 +115,7 @@ function handleAction(action: string) {
       break
     }
     case 'Delete': {
-      const id = sceneStore.selectedNodeId
-      if (id) {
-        sceneStore.removeSceneNodes([id])
-      }
+      sceneStore.removeSceneNodes(sceneStore.selectedNodeIds)
       break
     }
     case 'Select All': {

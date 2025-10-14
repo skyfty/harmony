@@ -1,4 +1,5 @@
 <script setup lang="ts">
+
 const quickActions = [
   { icon: 'mdi-content-save-outline', label: 'Save' },
   { icon: 'mdi-export-variant', label: 'Export' },
