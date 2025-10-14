@@ -55,7 +55,6 @@ function handleMenuAction(action: string) {
                   <v-menu
                     location="end"
                     offset="8"
-                    open-on-hover
                     transition="slide-x-transition"
                   >
                     <template #activator="{ props }">

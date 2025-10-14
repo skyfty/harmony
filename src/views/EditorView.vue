@@ -8,10 +8,12 @@ import SceneViewport from '@/components/editor/SceneViewport.vue'
 import MenuBar from './MenuBar.vue'
 import SceneManagerDialog from '@/components/layout/SceneManagerDialog.vue'
 import { useSceneStore, type EditorTool, type EditorPanel, type SceneCameraState } from '@/stores/sceneStore'
+import { useUiStore } from '@/stores/uiStore'
 import type { Vector3Like } from '@/types/scene'
-import Exporter from '@/plugins/exporter'
+import { exportScene, type ExportFormat } from '@/plugins/exporter'
 
 const sceneStore = useSceneStore()
+const uiStore = useUiStore()
 const {
   nodes: sceneNodes,
   selectedNodeId,
@@ -25,6 +27,7 @@ const {
 } = storeToRefs(sceneStore)
 
 const isSceneManagerOpen = ref(false)
+const isExporting = ref(false)
 
 
 const hierarchyOpen = computed({
@@ -85,7 +88,69 @@ function handleNewAction() {
 function handleOpenAction() {
   isSceneManagerOpen.value = true
 }
-function handleAction(action: string) {
+function updateExportProgress(progress: number, message?: string) {
+  const displayMessage = message ?? `Exporting ${Math.round(progress)}%`
+  uiStore.updateLoadingOverlay({
+    title: 'Export Scene',
+    message: displayMessage,
+  })
+  uiStore.updateLoadingProgress(progress, { autoClose: false })
+}
+
+async function handleExport(format: ExportFormat) {
+  if (isExporting.value) {
+    return
+  }
+
+  isExporting.value = true
+  const sceneName = sceneStore.currentScene?.name ?? 'scene'
+  uiStore.showLoadingOverlay({
+    title: 'Export Scene',
+    message: `Preparing export ${format}…`,
+    mode: 'determinate',
+    progress: 0,
+    closable: false,
+    autoClose: false,
+  })
+
+  try {
+    await sceneStore.ensureSceneAssetsReady({
+      nodes: sceneNodes.value,
+      showOverlay: false,
+      refreshViewport: false,
+    })
+
+    await exportScene({
+      format,
+      nodes: sceneNodes.value,
+      fileName: `${sceneName}-${format.toLowerCase()}`,
+      onProgress: updateExportProgress,
+    })
+
+    uiStore.updateLoadingOverlay({
+      title: 'Export Scene',
+      message: 'Export Complete',
+      closable: true,
+      autoClose: true,
+      autoCloseDelay: 800,
+    })
+    uiStore.updateLoadingProgress(100, { autoClose: true, autoCloseDelay: 800 })
+  } catch (error) {
+    const message = (error as Error)?.message ?? 'Unknown error'
+    console.error('Scene export failed', error)
+    uiStore.updateLoadingOverlay({
+      title: 'Export Scene',
+      message: `${message}`,
+      closable: true,
+      autoClose: false,
+    })
+    uiStore.updateLoadingProgress(100, { autoClose: false })
+  } finally {
+    isExporting.value = false
+  }
+}
+
+async function handleAction(action: string) {
   switch (action) {
     case 'New':
       handleNewAction()
@@ -128,25 +193,29 @@ function handleAction(action: string) {
       break
     }
     case 'Export:GLTF': {
+      await handleExport('GLTF')
       break
     }
     case 'Export:OBJ': {
+      await handleExport('OBJ')
       break
     }
     case 'Export:PLY': {
+      await handleExport('PLY')
       break
     }
     case 'Export:STL': {
+      await handleExport('STL')
       break
     }
     case 'Export:GLB': {
+      await handleExport('GLB')
       break
     }
     default:
       console.warn(`Unknown menu action: ${action}`)
   }
 }
-
 function handleCreateScene(name: string) {
   sceneStore.createScene(name)
   isSceneManagerOpen.value = false
