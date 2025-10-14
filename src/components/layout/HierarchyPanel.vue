@@ -406,27 +406,6 @@ onBeforeUnmount(() => {
       <v-toolbar density="compact" class="tree-toolbar" flat height="40px">
         <HierarchyAddMenu />
         <v-btn
-          icon="mdi-content-copy"
-          variant="text"
-          density="compact"
-          :disabled="!hasSelection"
-          @click="handleCopy"
-        />
-        <v-btn
-          icon="mdi-content-cut"
-          variant="text"
-          density="compact"
-          :disabled="!hasSelection"
-          @click="handleCut"
-        />
-        <v-btn
-          icon="mdi-content-paste"
-          variant="text"
-          density="compact"
-          :disabled="!canPaste"
-          @click="handlePaste"
-        />
-        <v-btn
           icon="mdi-delete-outline"
           variant="text"
           density="compact"

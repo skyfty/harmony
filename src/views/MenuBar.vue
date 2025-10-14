@@ -4,6 +4,7 @@ const quickActions = [
   { icon: 'mdi-export-variant', label: 'Export' },
   { icon: 'mdi-play-circle-outline', label: 'Preview' },
 ]
+
 const emit = defineEmits<{
   (event: 'menu-action', action: string): void
 }>()
@@ -33,13 +34,22 @@ function handleMenuAction(action: string) {
                 </template>
                 <v-list class="menu-dropdown">
                   <v-list-item @click="handleMenuAction('New')" class="menu-list-item">
-                  New
+                    New
+                    <template  #append>
+                      <span class="shortcut-label">Ctrl+N</span>
+                    </template>
                   </v-list-item>
                   <v-list-item @click="handleMenuAction('Open')" class="menu-list-item">
-                  Open
+                    Open
+                    <template #append>
+                      <span class="shortcut-label">Ctrl+O</span>
+                    </template>
                   </v-list-item>
                   <v-list-item @click="handleMenuAction('Save')" class="menu-list-item">
-                  Save
+                    Save
+                    <template   #append>
+                      <span class="shortcut-label">Ctrl+S</span>
+                    </template>
                   </v-list-item>
                   <v-divider />
                   <v-menu
@@ -90,9 +100,54 @@ function handleMenuAction(action: string) {
               color="rgba(255, 255, 255, 0.72)"
               density="comfortable"
               rounded="xl"
-              @click="handleMenuAction('Edit')"
             >
-              Edit
+              <v-icon size="18" class="ml-1">mdi-menu-down</v-icon>
+
+                <v-menu>
+                <template #activator="{ props }">
+                  <span v-bind="props">Edit</span>
+                </template>
+                <v-list class="menu-dropdown">
+                  <v-list-item @click="handleMenuAction('Copy')" class="menu-list-item">
+                    Copy
+                    <template #append>
+                      <span class="shortcut-label">Ctrl+C</span>
+                    </template>
+                  </v-list-item>
+                  <v-list-item @click="handleMenuAction('Cut')" class="menu-list-item">
+                    Cut
+                    <template  #append>
+                      <span class="shortcut-label">Ctrl+X</span>
+                    </template>
+                  </v-list-item>
+                  <v-list-item @click="handleMenuAction('Paste')" class="menu-list-item">
+                    Paste
+                    <template #append>
+                      <span class="shortcut-label">Ctrl+V</span>
+                    </template>
+                  </v-list-item>
+                  <v-list-item @click="handleMenuAction('Delete')" class="menu-list-item">
+                    Delete
+                    <template   #append>
+                      <span class="shortcut-label">Ctrl+D</span>
+                    </template>
+                  </v-list-item>
+                  <v-divider />
+                  <v-list-item @click="handleMenuAction('Select All')" class="menu-list-item">
+                    Select All
+                    <template #append>
+                      <span class="shortcut-label">Ctrl+A</span>
+                    </template>
+                  </v-list-item>
+                  <v-list-item @click="handleMenuAction('Deselect All')" class="menu-list-item">
+                    Deselect All
+                    <template  #append>
+                      <span class="shortcut-label">Ctrl+D</span>
+                    </template>
+                  </v-list-item>
+                </v-list>
+                </v-menu>
+
             </v-btn>
             <v-btn
               class="menu-button"
@@ -243,6 +298,14 @@ function handleMenuAction(action: string) {
 .action-button {
   font-weight: 500;
   text-transform: none;
+}
+
+.shortcut-label {
+  margin-inline-start: 24px;
+  font-size: 0.75rem;
+  color: rgba(244, 247, 255, 0.62);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 </style>

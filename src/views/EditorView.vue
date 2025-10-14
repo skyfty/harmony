@@ -99,6 +99,31 @@ function handleAction(action: string) {
       break
     case 'Preview':
       break
+    case 'Copy': {
+      const id = sceneStore.selectedNodeId
+      if (id) {
+        sceneStore.copyNodes([id])
+      }
+      break
+    }
+    case 'Cut': {
+      const id = sceneStore.selectedNodeId
+      if (id) {
+        sceneStore.cutNodes([id])
+      }
+      break
+    }
+    case 'Paste': {
+      sceneStore.pasteClipboard(sceneStore.selectedNodeId)
+      break
+    }
+    case 'Delete': {
+      const id = sceneStore.selectedNodeId
+      if (id) {
+        sceneStore.removeSceneNodes([id])
+      }
+      break
+    }
     default:
       console.warn(`Unknown menu action: ${action}`)
   }
