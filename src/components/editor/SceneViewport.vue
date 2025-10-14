@@ -10,8 +10,8 @@ import type { SceneCameraState } from '@/stores/sceneStore'
 type EditorTool = 'select' | 'translate' | 'rotate' | 'scale'
 
 const props = defineProps<{
-  activeTool: EditorTool
   sceneNodes: SceneNode[]
+  activeTool: EditorTool
   selectedNodeId: string | null
   cameraState: SceneCameraState
   focusNodeId: string | null
@@ -123,6 +123,18 @@ function snapVectorToGrid(vec: THREE.Vector3) {
   vec.x = Math.floor(vec.x / GRID_CELL_SIZE) * GRID_CELL_SIZE + GRID_CELL_SIZE / 2
   vec.z = Math.floor(vec.z / GRID_CELL_SIZE) * GRID_CELL_SIZE + GRID_CELL_SIZE / 2
   return vec
+}
+
+import { exportScene as runSceneExport, type SceneExportOptions } from '@/plugins/exporter'
+
+export type SceneViewportHandle = {
+  exportScene(options: SceneExportOptions): Promise<void>
+}
+async function exportScene(options: SceneExportOptions): Promise<void> {
+  if (!scene) {
+    throw new Error('Scene not initialized')
+  }
+  await runSceneExport(scene, options)
 }
 
 function clearSelectionBox() {
@@ -879,6 +891,10 @@ watch(
     }
   }
 )
+
+defineExpose<SceneViewportHandle>({
+  exportScene,
+})
 </script>
 
 <template>

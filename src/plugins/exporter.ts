@@ -11,7 +11,6 @@ export type ExportFormat = 'OBJ' | 'PLY' | 'STL' | 'GLTF' | 'GLB'
 
 export interface SceneExportOptions {
     format: ExportFormat
-    nodes: SceneNode[]
     fileName?: string
     onProgress?: (progress: number, message?: string) => void
 }
@@ -195,12 +194,11 @@ function exportSTL(scene: THREE.Scene, fileName: string, onProgress?: SceneExpor
     triggerDownload(blob, `${fileName}.stl`)
 }
 
-export async function exportScene(options: SceneExportOptions): Promise<void> {
-    const { format, nodes, onProgress } = options
+export async function exportScene(scene: THREE.Scene, options: SceneExportOptions): Promise<void> {
+    const { format, onProgress } = options
     const fileName = sanitizeFileName(options.fileName ?? 'scene-export')
 
     onProgress?.(10, 'Preparing scene…')
-    const scene = buildExportScene(nodes)
 
     try {
         switch (format) {

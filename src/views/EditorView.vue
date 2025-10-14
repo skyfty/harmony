@@ -4,13 +4,13 @@ import { storeToRefs } from 'pinia'
 import HierarchyPanel from '@/components/layout/HierarchyPanel.vue'
 import InspectorPanel from '@/components/layout/InspectorPanel.vue'
 import ProjectPanel from '@/components/layout/ProjectPanel.vue'
-import SceneViewport from '@/components/editor/SceneViewport.vue'
+import SceneViewport, { type SceneViewportHandle } from '@/components/editor/SceneViewport.vue'
 import MenuBar from './MenuBar.vue'
 import SceneManagerDialog from '@/components/layout/SceneManagerDialog.vue'
 import { useSceneStore, type EditorTool, type EditorPanel, type SceneCameraState } from '@/stores/sceneStore'
 import { useUiStore } from '@/stores/uiStore'
 import type { Vector3Like } from '@/types/scene'
-import { exportScene, type ExportFormat } from '@/plugins/exporter'
+import { type ExportFormat } from '@/plugins/exporter'
 
 const sceneStore = useSceneStore()
 const uiStore = useUiStore()
@@ -28,6 +28,7 @@ const {
 
 const isSceneManagerOpen = ref(false)
 const isExporting = ref(false)
+const viewportRef = ref<SceneViewportHandle | null>(null)
 
 
 const hierarchyOpen = computed({
@@ -102,6 +103,12 @@ async function handleExport(format: ExportFormat) {
     return
   }
 
+  const viewport = viewportRef.value
+  if (!viewport) {
+    console.warn('Scene viewport unavailable for export')
+    return
+  }
+
   isExporting.value = true
   const sceneName = sceneStore.currentScene?.name ?? 'scene'
   uiStore.showLoadingOverlay({
@@ -114,15 +121,8 @@ async function handleExport(format: ExportFormat) {
   })
 
   try {
-    await sceneStore.ensureSceneAssetsReady({
-      nodes: sceneNodes.value,
-      showOverlay: false,
-      refreshViewport: false,
-    })
-
-    await exportScene({
+    await viewport.exportScene({
       format,
-      nodes: sceneNodes.value,
       fileName: `${sceneName}-${format.toLowerCase()}`,
       onProgress: updateExportProgress,
     })
@@ -252,8 +252,9 @@ function handleRenameScene(payload: { id: string; name: string }) {
 
       <section class="scene-panel">
         <SceneViewport
-          :active-tool="activeTool"
+          ref="viewportRef"
           :scene-nodes="sceneNodes"
+          :active-tool="activeTool"
           :selected-node-id="selectedNodeId"
           :camera-state="camera"
           :focus-node-id="cameraFocusNodeId"

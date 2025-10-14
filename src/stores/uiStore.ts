@@ -32,7 +32,7 @@ const defaultOverlayState: LoadingOverlayState = {
   visible: false,
   mode: 'indeterminate',
   progress: 0,
-  title: '正在加载',
+  title: '加载中…',
   message: '请稍候…',
   closable: false,
   autoClose: true,
