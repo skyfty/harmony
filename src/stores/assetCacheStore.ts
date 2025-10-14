@@ -34,6 +34,167 @@ interface FetchedAssetData {
   filename: string | null
 }
 
+const INDEXED_DB_NAME = 'harmony-asset-cache'
+const INDEXED_DB_VERSION = 2
+const INDEXED_DB_STORE = 'assets'
+const INDEXED_DB_MAX_RECORDS = 1000
+const INDEXED_DB_PRUNE_BATCH = 100
+
+interface StoredAssetRecord {
+  assetId: string
+  blob: Blob
+  mimeType: string | null
+  filename: string | null
+  downloadUrl: string | null
+  size: number
+  cachedAt: number
+}
+
+let dbPromise: Promise<IDBDatabase | null> | null = null
+
+function isIndexedDbSupported(): boolean {
+  return typeof window !== 'undefined' && typeof window.indexedDB !== 'undefined'
+}
+
+function openIndexedDb(): Promise<IDBDatabase | null> {
+  if (!isIndexedDbSupported()) {
+    return Promise.resolve(null)
+  }
+  if (!dbPromise) {
+    dbPromise = new Promise((resolve) => {
+      const request = window.indexedDB.open(INDEXED_DB_NAME, INDEXED_DB_VERSION)
+      request.onerror = () => {
+        console.warn('无法打开 IndexedDB', request.error)
+        resolve(null)
+      }
+      request.onupgradeneeded = () => {
+        const db = request.result
+        let store: IDBObjectStore
+        if (!db.objectStoreNames.contains(INDEXED_DB_STORE)) {
+          store = db.createObjectStore(INDEXED_DB_STORE, { keyPath: 'assetId' })
+        } else {
+          store = request.transaction!.objectStore(INDEXED_DB_STORE)
+        }
+        if (!store.indexNames.contains('cachedAt')) {
+          store.createIndex('cachedAt', 'cachedAt', { unique: false })
+        }
+      }
+      request.onsuccess = () => {
+        const db = request.result
+        db.onversionchange = () => {
+          db.close()
+          dbPromise = null
+        }
+        resolve(db)
+      }
+    })
+  }
+  return dbPromise
+}
+
+async function runIndexedDbOperation<T>(
+  mode: IDBTransactionMode,
+  operation: (store: IDBObjectStore) => IDBRequest<T>,
+): Promise<T | null> {
+  const db = await openIndexedDb()
+  if (!db) {
+    return null
+  }
+  return new Promise<T | null>((resolve) => {
+    try {
+      const transaction = db.transaction(INDEXED_DB_STORE, mode)
+      const store = transaction.objectStore(INDEXED_DB_STORE)
+      const request = operation(store)
+      request.onerror = () => {
+        console.warn('IndexedDB 操作失败', request.error)
+        resolve(null)
+      }
+      transaction.oncomplete = () => {
+        resolve(request.result ?? null)
+      }
+      transaction.onerror = () => {
+        console.warn('IndexedDB 事务错误', transaction.error)
+        resolve(null)
+      }
+      transaction.onabort = () => {
+        console.warn('IndexedDB 事务已中止', transaction.error)
+        resolve(null)
+      }
+    } catch (error) {
+      console.warn('IndexedDB 操作抛出异常', error)
+      resolve(null)
+    }
+  })
+}
+
+function readAssetFromIndexedDb(assetId: string) {
+  return runIndexedDbOperation<StoredAssetRecord>('readonly', (store) => store.get(assetId))
+}
+
+async function writeAssetToIndexedDb(record: StoredAssetRecord) {
+  await runIndexedDbOperation<IDBValidKey>('readwrite', (store) => store.put(record))
+  await enforceIndexedDbLimit()
+}
+
+function deleteAssetFromIndexedDb(assetId: string) {
+  return runIndexedDbOperation<undefined>('readwrite', (store) => store.delete(assetId))
+}
+
+function countAssetsInIndexedDb() {
+  return runIndexedDbOperation<number>('readonly', (store) => store.count())
+}
+
+async function enforceIndexedDbLimit() {
+  const total = await countAssetsInIndexedDb()
+  if (!total || total <= INDEXED_DB_MAX_RECORDS) {
+    return
+  }
+  const pruneCount = Math.min(INDEXED_DB_PRUNE_BATCH, total)
+  await deleteOldestAssetsFromIndexedDb(pruneCount)
+}
+
+async function deleteOldestAssetsFromIndexedDb(count: number) {
+  if (count <= 0) {
+    return
+  }
+  const db = await openIndexedDb()
+  if (!db) {
+    return
+  }
+  await new Promise<void>((resolve) => {
+    try {
+      const transaction = db.transaction(INDEXED_DB_STORE, 'readwrite')
+      const store = transaction.objectStore(INDEXED_DB_STORE)
+      const index = store.index('cachedAt')
+      let remaining = count
+      const request = index.openCursor()
+      request.onsuccess = () => {
+        const cursor = request.result
+        if (cursor && remaining > 0) {
+          cursor.delete()
+          remaining -= 1
+          cursor.continue()
+        }
+      }
+      request.onerror = () => {
+        console.warn('IndexedDB 删除旧缓存失败', request.error)
+      }
+      transaction.oncomplete = () => resolve()
+      transaction.onerror = () => {
+        console.warn('IndexedDB 删除事务失败', transaction.error)
+        resolve()
+      }
+      transaction.onabort = () => {
+        console.warn('IndexedDB 删除事务中止', transaction.error)
+        resolve()
+      }
+    } catch (error) {
+      console.warn('IndexedDB 删除旧缓存异常', error)
+      resolve()
+    }
+  })
+}
+
 function extractFilenameFromHeaders(headers: Headers, url: string, fallbackName: string): string {
   const contentDisposition = headers.get('content-disposition')
   if (contentDisposition) {
@@ -138,6 +299,28 @@ function createDefaultEntry(assetId: string): AssetCacheEntry {
   }
 }
 
+function applyBlobToEntry(entry: AssetCacheEntry, payload: {
+  blob: Blob
+  mimeType: string | null
+  filename: string | null
+  downloadUrl: string | null
+}) {
+  if (entry.blobUrl) {
+    URL.revokeObjectURL(entry.blobUrl)
+  }
+  entry.blob = payload.blob
+  entry.blobUrl = URL.createObjectURL(payload.blob)
+  entry.status = 'cached'
+  entry.progress = 100
+  entry.error = null
+  entry.size = payload.blob.size
+  entry.abortController = null
+  entry.lastUsedAt = now()
+  entry.mimeType = payload.mimeType
+  entry.filename = payload.filename ?? `${entry.assetId}`
+  entry.downloadUrl = payload.downloadUrl
+}
+
 export const useAssetCacheStore = defineStore('assetCache', {
   state: () => ({
     entries: {} as Record<string, AssetCacheEntry>,
@@ -190,6 +373,26 @@ export const useAssetCacheStore = defineStore('assetCache', {
       const entry = this.ensureEntry(assetId)
       entry.error = message
     },
+    async loadFromIndexedDb(assetId: string): Promise<AssetCacheEntry | null> {
+      if (this.hasCache(assetId)) {
+        this.touch(assetId)
+        return this.entries[assetId] ?? null
+      }
+      const stored = await readAssetFromIndexedDb(assetId)
+      if (!stored?.blob) {
+        return null
+      }
+      const entry = this.ensureEntry(assetId)
+      applyBlobToEntry(entry, {
+        blob: stored.blob,
+        mimeType: stored.mimeType ?? stored.blob.type ?? null,
+        filename: stored.filename,
+        downloadUrl: stored.downloadUrl ?? null,
+      })
+      entry.lastUsedAt = now()
+      this.evictIfNeeded(assetId)
+      return entry
+    },
     async downloadAsset(asset: ProjectAsset, options: DownloadOptions = {}): Promise<AssetCacheEntry> {
       const entry = this.ensureEntry(asset.id)
       if (entry.status === 'cached' && !options.force) {
@@ -201,60 +404,78 @@ export const useAssetCacheStore = defineStore('assetCache', {
         return this.pending[asset.id]!
       }
 
-      const downloadUrl = asset.downloadUrl ?? asset.description ?? null
-      if (!downloadUrl) {
-        throw new Error('该资源没有可用的下载地址')
-      }
-
-      const controller = new AbortController()
-      entry.status = 'downloading'
-      entry.progress = 0
-      entry.error = null
-      entry.abortController = controller
-      entry.lastUsedAt = now()
-
-      const promise = fetchAssetData(
-        downloadUrl,
-        controller,
-        (progress: number) => {
-          const current = this.ensureEntry(asset.id)
-          current.progress = progress
-        },
-        asset.name,
-      )
-        .then((data) => {
-          const current = this.ensureEntry(asset.id)
-          if (current.blobUrl) {
-            URL.revokeObjectURL(current.blobUrl)
+      const promise = (async () => {
+        if (!options.force) {
+          const restored = await this.loadFromIndexedDb(asset.id)
+          if (restored) {
+            if (!restored.downloadUrl) {
+              restored.downloadUrl = asset.downloadUrl ?? asset.description ?? null
+            }
+            return restored
           }
-          current.blob = data.blob
-          current.blobUrl = URL.createObjectURL(data.blob)
-          current.status = 'cached'
-          current.progress = 100
-          current.error = null
-          current.size = data.blob.size
-          current.abortController = null
-          current.lastUsedAt = now()
-          current.mimeType = data.contentType
-          current.filename = data.filename ?? `${asset.id}`
-          current.downloadUrl = downloadUrl
+        }
+
+        const downloadUrl = asset.downloadUrl ?? asset.description ?? null
+        if (!downloadUrl) {
+          throw new Error('该资源没有可用的下载地址')
+        }
+
+        const controller = new AbortController()
+        const current = this.ensureEntry(asset.id)
+        current.status = 'downloading'
+        current.progress = 0
+        current.error = null
+        current.abortController = controller
+        current.lastUsedAt = now()
+
+        try {
+          const data = await fetchAssetData(
+            downloadUrl,
+            controller,
+            (progress: number) => {
+              const updating = this.ensureEntry(asset.id)
+              updating.progress = progress
+            },
+            asset.name,
+          )
+
+          const updated = this.ensureEntry(asset.id)
+          applyBlobToEntry(updated, {
+            blob: data.blob,
+            mimeType: data.contentType,
+            filename: data.filename,
+            downloadUrl,
+          })
+          updated.size = data.blob.size
+          updated.lastUsedAt = now()
+
+          await writeAssetToIndexedDb({
+            assetId: asset.id,
+            blob: data.blob,
+            mimeType: data.contentType,
+            filename: updated.filename,
+            downloadUrl,
+            size: data.blob.size,
+            cachedAt: now(),
+          })
+
           this.evictIfNeeded(asset.id)
-          return current
-        })
-        .catch((error: unknown) => {
-          const current = this.ensureEntry(asset.id)
-          current.abortController = null
+          return updated
+        } catch (error) {
+          const failed = this.ensureEntry(asset.id)
+          failed.abortController = null
           if ((error as Error).name === ABORT_ERROR_NAME) {
-            current.status = 'idle'
-            current.progress = 0
-            current.error = '下载已取消'
-            return current
+            failed.status = 'idle'
+            failed.progress = 0
+            failed.error = '下载已取消'
+            return failed
           }
-          current.status = 'error'
-          current.error = (error as Error).message ?? '未知错误'
-          current.progress = 0
+          failed.status = 'error'
+          failed.error = (error as Error).message ?? '未知错误'
+          failed.progress = 0
           throw error
-        })
+        }
+      })()
         .finally(() => {
           delete this.pending[asset.id]
         })
@@ -297,6 +518,8 @@ export const useAssetCacheStore = defineStore('assetCache', {
         abortController: null,
         error: null,
       }
+
+      void deleteAssetFromIndexedDb(assetId)
     },
     touch(assetId: string) {
       const entry = this.ensureEntry(assetId)

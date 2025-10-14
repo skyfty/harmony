@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch, watchEffect } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore, type ProjectAsset, type ProjectDirectory } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -183,6 +183,46 @@ let searchDebounceHandle: ReturnType<typeof setTimeout> | null = null
 const normalizedSearchQuery = computed(() => searchQuery.value.trim())
 const isSearchActive = computed(() => searchLoaded.value && normalizedSearchQuery.value.length > 0)
 const displayedAssets = computed(() => (isSearchActive.value ? searchResults.value : currentAssets.value))
+
+const indexedDbLoadQueue = new Set<string>()
+
+function assetPreviewUrl(asset: ProjectAsset): string | undefined {
+  const entry = assetCacheStore.entries[asset.id]
+  if (!entry || entry.status !== 'cached' || !entry.blobUrl) {
+    return undefined
+  }
+  const mime = entry.mimeType ?? ''
+  if (mime.startsWith('image/')) {
+    return entry.blobUrl
+  }
+  if (!mime && (asset.type === 'image' || asset.type === 'texture')) {
+    return entry.blobUrl
+  }
+  return undefined
+}
+
+async function ensureAssetPreview(asset: ProjectAsset) {
+  if (assetCacheStore.hasCache(asset.id) || assetCacheStore.isDownloading(asset.id)) {
+    return
+  }
+  if (indexedDbLoadQueue.has(asset.id)) {
+    return
+  }
+  indexedDbLoadQueue.add(asset.id)
+  try {
+    await assetCacheStore.loadFromIndexedDb(asset.id)
+  } catch (error) {
+    console.warn('从 IndexedDB 加载资源失败', error)
+  } finally {
+    indexedDbLoadQueue.delete(asset.id)
+  }
+}
+
+watchEffect(() => {
+  displayedAssets.value.forEach((asset) => {
+    void ensureAssetPreview(asset)
+  })
+})
 
 watch(normalizedSearchQuery, (value) => {
   if (searchDebounceHandle !== null) {
@@ -504,7 +544,14 @@ async function loadResourceProvider(providerId: string) {
               @dragend="handleAssetDragEnd"
             >
               <div class="asset-preview" :style="{ background: asset.previewColor }">
-                <v-icon size="32" color="white">{{ assetIcon(asset.type) }}</v-icon>
+                <img
+                  v-if="assetPreviewUrl(asset)"
+                  :src="assetPreviewUrl(asset)"
+                  class="asset-preview-image"
+                  :alt="`${asset.name} preview`"
+                  draggable="false"
+                />
+                <v-icon v-else size="32" color="white">{{ assetIcon(asset.type) }}</v-icon>
                 <div v-if="isAssetDownloading(asset)" class="asset-progress-overlay">
                   <v-progress-circular
                     :model-value="assetDownloadProgress(asset)"
@@ -698,6 +745,14 @@ async function loadResourceProvider(providerId: string) {
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   position: relative;
   overflow: hidden;
+}
+
+.asset-preview-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .asset-progress-overlay {
