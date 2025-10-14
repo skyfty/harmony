@@ -125,16 +125,51 @@ function snapVectorToGrid(vec: THREE.Vector3) {
   return vec
 }
 
-import { exportScene as runSceneExport, type SceneExportOptions } from '@/plugins/exporter'
-
+import { exportGLTF, exportGLB,exportOBJ, exportPLY, exportSTL,type SceneExportOptions } from '@/plugins/exporter'
 export type SceneViewportHandle = {
   exportScene(options: SceneExportOptions): Promise<void>
+}
+
+function sanitizeFileName(input: string): string {
+    return input.replace(/[^a-zA-Z0-9-_\.]+/g, '_') || 'scene'
 }
 async function exportScene(options: SceneExportOptions): Promise<void> {
   if (!scene) {
     throw new Error('Scene not initialized')
   }
-  await runSceneExport(scene, options)
+  const { format, onProgress } = options
+  const fileName = sanitizeFileName(options.fileName ?? 'scene-export')
+
+  onProgress?.(10, 'Preparing scene…')
+
+  try {
+      switch (format) {
+          case 'GLTF':
+              exportGLTF(scene, fileName)
+              break
+          case 'GLB':
+              exportGLB(scene, fileName)
+              break
+          case 'OBJ': {
+              if (selectionTrackedObject) {
+                exportOBJ(selectionTrackedObject, fileName)
+              }
+              break
+          }
+          case 'PLY':
+              exportPLY(scene, fileName)
+              break
+          case 'STL':
+              exportSTL(scene, fileName)
+              break
+          default:
+              throw new Error(`Unsupported export format: ${format}`)
+      }
+      onProgress?.(95, 'Export complete, preparing download…')
+  } finally {
+      onProgress?.(100, 'Export complete')
+  }
+
 }
 
 function clearSelectionBox() {
