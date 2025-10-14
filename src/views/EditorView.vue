@@ -170,10 +170,7 @@ async function handleAction(action: string) {
       break
     }
     case 'Cut': {
-      const id = sceneStore.selectedNodeId
-      if (id) {
-        sceneStore.cutNodes(sceneStore.selectedNodeIds)
-      }
+      sceneStore.cutNodes(sceneStore.selectedNodeIds)
       break
     }
     case 'Paste': {
@@ -256,15 +253,13 @@ function handleEditorViewShortcut(event: KeyboardEvent) {
   if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
     switch (event.code) {
       case 'Delete':
-      case 'Backspace':
-        sceneStore.removeSceneNodes(sceneStore.selectedNodeIds)
+        handleAction(event.code)
         handled = true
         break;
       default:
         break
     }
   }
-
 
   if (!handled) {
     if ((event.ctrlKey || event.metaKey) && !(event.altKey || event.shiftKey)) {

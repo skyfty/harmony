@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore, type HierarchyDropPosition } from '@/stores/sceneStore'
 import HierarchyAddMenu from './HierarchyAddMenu.vue'
@@ -407,7 +407,7 @@ function handleTreeDragLeave(event: DragEvent) {
                 size="26"
                 class="visibility-btn"
                 :class="{ 'is-hidden': !(item.visible ?? true) }"
-                :title="(item.visible ?? true) ? '隐藏模型' : '显示模型'"
+                :title="(item.visible ?? true) ? 'Hide' : 'Show'"
                 @click.stop="toggleNodeVisibility(item.id)"
               />
             </div>
@@ -498,6 +498,7 @@ function handleTreeDragLeave(event: DragEvent) {
   background: transparent;
 }
 
+
 .hierarchy-tree :deep(.v-treeview-item__content) {
   padding-inline-end: 6px;
 }
@@ -546,21 +547,9 @@ function handleTreeDragLeave(event: DragEvent) {
   border-radius: 6px;
   cursor: grab;
   user-select: none;
-  transition: background-color 140ms ease;
+  color: rgba(233, 236, 241, 0.8);
+  transition: background-color 140ms ease, color 140ms ease;
   width: 100%;
-}
-
-.node-label::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  right: 4px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #575b65;
-  transform: translateY(-50%);
-  transition: background-color 140ms ease;
 }
 
 .node-label:active {
@@ -570,6 +559,15 @@ function handleTreeDragLeave(event: DragEvent) {
 .node-label-text {
   flex: 1;
   min-width: 0;
+  color: inherit;
+}
+
+.node-label.is-selected {
+  color: #4dd0e1;
+}
+
+.node-label.is-active {
+  color: #fafafa;
 }
 
 .node-label.drop-inside {
@@ -598,15 +596,6 @@ function handleTreeDragLeave(event: DragEvent) {
 
 .node-label.drop-disabled {
   background: rgba(244, 67, 54, 0.1);
-}
-
-.node-label.is-selected::after {
-  background: #4dd0e1;
-}
-
-.node-label.is-active::after,
-.node-label.is-active.is-selected::after {
-  background: #ffb74d;
 }
 
 
