@@ -270,10 +270,10 @@ function handleEditorViewShortcut(event: KeyboardEvent) {
     if ((event.ctrlKey || event.metaKey) && !(event.altKey || event.shiftKey)) {
       switch (event.code) {
         case 'KeyC':
-          handled = sceneStore.selectedNodeId ? sceneStore.copyNodes([sceneStore.selectedNodeId]) : false
+          handled = sceneStore.selectedNodeIds.length ? sceneStore.copyNodes(sceneStore.selectedNodeIds) : false
           break
         case 'KeyX':
-          handled = sceneStore.selectedNodeId ? sceneStore.cutNodes([sceneStore.selectedNodeId]) : false
+          handled = sceneStore.selectedNodeIds.length ? sceneStore.cutNodes(sceneStore.selectedNodeIds) : false
           break
         case 'KeyV':
           handled = (sceneStore.clipboard?.entries.length ?? 0) > 0
