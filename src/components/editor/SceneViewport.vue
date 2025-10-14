@@ -1063,11 +1063,6 @@ function handleViewportShortcut(event: KeyboardEvent) {
           handled = true
         }
         break;
-      case 'Delete':
-      case 'Backspace':
-        sceneStore.removeSceneNodes(sceneStore.selectedNodeIds)
-        handled = true
-        break;
       default:
         const tool = tools.find((t) => t.key === event.code);
         if (tool) {
@@ -1075,27 +1070,6 @@ function handleViewportShortcut(event: KeyboardEvent) {
           handled = true
         }
         break
-    }
-  }
-
-
-  if (!handled) {
-    if ((event.ctrlKey || event.metaKey) && !(event.altKey || event.shiftKey)) {
-      switch (event.code) {
-        case 'KeyC':
-          handled = sceneStore.selectedNodeId ? sceneStore.copyNodes([sceneStore.selectedNodeId]) : false
-          break
-        case 'KeyX':
-          handled = sceneStore.selectedNodeId ? sceneStore.cutNodes([sceneStore.selectedNodeId]) : false
-          break
-        case 'KeyV':
-          handled = (sceneStore.clipboard?.entries.length ?? 0) > 0
-            ? sceneStore.pasteClipboard(sceneStore.selectedNodeId)
-            : false
-          break
-        default:
-          break
-      }
     }
   }
 
@@ -1110,13 +1084,13 @@ onMounted(() => {
   syncSceneGraph()
   updateToolMode(props.activeTool)
   attachSelection(props.selectedNodeId)
-  window.addEventListener('keydown', handleViewportShortcut, { capture: true })
+  window.addEventListener('keyup', handleViewportShortcut, { capture: true })
 })
 
 onBeforeUnmount(() => {
   disposeSceneNodes()
   disposeScene()
-  window.removeEventListener('keydown', handleViewportShortcut, { capture: true })
+  window.removeEventListener('keyup', handleViewportShortcut, { capture: true })
 })
 
 watch(

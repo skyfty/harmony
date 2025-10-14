@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted,onBeforeUnmount, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import HierarchyPanel from '@/components/layout/HierarchyPanel.vue'
 import InspectorPanel from '@/components/layout/InspectorPanel.vue'
@@ -235,6 +235,70 @@ async function handleDeleteScene(sceneId: string) {
 function handleRenameScene(payload: { id: string; name: string }) {
   sceneStore.renameScene(payload.id, payload.name)
 }
+
+function isEditableKeyboardTarget(target: EventTarget | null): boolean {
+  const element = target as HTMLElement | null
+  if (!element) return false
+  const tag = element.tagName
+  return element.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+}
+
+function shouldHandleViewportShortcut(event: KeyboardEvent): boolean {
+  if (event.defaultPrevented) return false
+  if (isEditableKeyboardTarget(event.target)) return false
+  return true
+}
+
+function handleEditorViewShortcut(event: KeyboardEvent) {
+  if (!shouldHandleViewportShortcut(event)) return
+  let handled = false
+
+  if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+    switch (event.code) {
+      case 'Delete':
+      case 'Backspace':
+        sceneStore.removeSceneNodes(sceneStore.selectedNodeIds)
+        handled = true
+        break;
+      default:
+        break
+    }
+  }
+
+
+  if (!handled) {
+    if ((event.ctrlKey || event.metaKey) && !(event.altKey || event.shiftKey)) {
+      switch (event.code) {
+        case 'KeyC':
+          handled = sceneStore.selectedNodeId ? sceneStore.copyNodes([sceneStore.selectedNodeId]) : false
+          break
+        case 'KeyX':
+          handled = sceneStore.selectedNodeId ? sceneStore.cutNodes([sceneStore.selectedNodeId]) : false
+          break
+        case 'KeyV':
+          handled = (sceneStore.clipboard?.entries.length ?? 0) > 0
+            ? sceneStore.pasteClipboard(sceneStore.selectedNodeId)
+            : false
+          break
+        default:
+          break
+      }
+    }
+  }
+
+  if (handled) {
+    event.preventDefault()
+    event.stopPropagation()
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('keyup', handleEditorViewShortcut, { capture: true })
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keyup', handleEditorViewShortcut, { capture: true })
+})
 
 
 </script>

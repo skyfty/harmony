@@ -338,66 +338,6 @@ function handleTreeDragLeave(event: DragEvent) {
   }
 }
 
-function isEditableTarget(target: EventTarget | null): boolean {
-  const element = target as HTMLElement | null
-  if (!element) return false
-  const tag = element.tagName
-  return element.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
-}
-
-function shouldHandleShortcut(event: KeyboardEvent): boolean {
-  if (event.defaultPrevented) return false
-  if (isEditableTarget(event.target)) return false
-  return true;
-}
-
-function handleShortcut(event: KeyboardEvent) {
-  if (!shouldHandleShortcut(event)) return
-
-  let handled = false
-  if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
-    switch (event.code) {
-      case 'Delete':
-      case 'Backspace':
-        if (selectedNodeIds.value) {
-          sceneStore.removeSceneNodes(selectedNodeIds.value)
-          handled = true
-        }
-        break;
-      default:
-        break
-    }
-  }
-  if ((event.ctrlKey || event.metaKey) && !(event.altKey || event.shiftKey)) {
-    switch (event.code) {
-      case 'KeyC':
-        handled = handleCopy()
-        break
-      case 'KeyX':
-        handled = handleCut()
-        break
-      case 'KeyV':
-        handled = handlePaste()
-        break
-      default:
-        break
-    }
-  }
-
-  if (handled) {
-    event.preventDefault()
-    event.stopPropagation()
-  }
-}
-
-onMounted(() => {
-  window.addEventListener('keydown', handleShortcut, { capture: true })
-})
-
-onBeforeUnmount(() => {
-  window.removeEventListener('keydown', handleShortcut, { capture: true })
-})
-
 </script>
 
 <template>
