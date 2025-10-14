@@ -528,12 +528,25 @@ function handleTreeDragLeave(event: DragEvent) {
   display: flex;
   align-items: center;
   position: relative;
-  padding: 4px 1px;
+  padding: 4px 8px 4px 1px;
   border-radius: 6px;
   cursor: grab;
   user-select: none;
   transition: background-color 140ms ease;
   width: 100%;
+}
+
+.node-label::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #575b65;
+  transform: translateY(-50%);
+  transition: background-color 140ms ease;
 }
 
 .node-label:active {
@@ -573,17 +586,13 @@ function handleTreeDragLeave(event: DragEvent) {
   background: rgba(244, 67, 54, 0.1);
 }
 
-.node-label.is-selected {
-  background: rgba(77, 208, 225, 0.08);
+.node-label.is-selected::after {
+  background: #4dd0e1;
 }
 
-.node-label.is-active {
-  background: rgba(77, 208, 225, 0.16);
-  box-shadow: 0 0 0 1px rgba(77, 208, 225, 0.3) inset;
-}
-
-.node-label.is-active.is-selected {
-  background: rgba(77, 208, 225, 0.2);
+.node-label.is-active::after,
+.node-label.is-active.is-selected::after {
+  background: #ffb74d;
 }
 
 
