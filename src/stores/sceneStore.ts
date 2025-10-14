@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia'
 import { type Object3D } from 'three'
 import type { SceneNode, Vector3Like } from '@/types/scene'
-import { useAssetCacheStore } from './assetCacheStore'
+import { useAssetCacheStore, type AssetCacheEntry } from './assetCacheStore'
+import { useUiStore } from './uiStore'
 import { loadObjectFromFile } from '@/plugins/assetImport'
 
 export type EditorTool = 'select' | 'translate' | 'rotate' | 'scale'
@@ -87,6 +88,12 @@ interface SceneState {
   resourceProviderId: string
   cameraFocusNodeId: string | null
   cameraFocusRequestId: number
+}
+
+interface EnsureSceneAssetsOptions {
+  nodes?: SceneNode[]
+  showOverlay?: boolean
+  refreshViewport?: boolean
 }
 
 const initialNodes: SceneNode[] = []
@@ -186,6 +193,54 @@ function unregisterRuntimeObject(id: string) {
 
 export function getRuntimeObject(id: string): Object3D | null {
   return runtimeObjectRegistry.get(id) ?? null
+}
+
+function tagObjectWithNodeId(object: Object3D, nodeId: string) {
+  object.userData = {
+    ...(object.userData ?? {}),
+    nodeId,
+  }
+  object.traverse((child) => {
+    child.userData = {
+      ...(child.userData ?? {}),
+      nodeId,
+    }
+  })
+}
+
+function collectNodesByAssetId(nodes: SceneNode[]): Map<string, SceneNode[]> {
+  const map = new Map<string, SceneNode[]>()
+
+  const traverse = (list: SceneNode[]) => {
+    list.forEach((node) => {
+      if (node.sourceAssetId) {
+        if (!map.has(node.sourceAssetId)) {
+          map.set(node.sourceAssetId, [])
+        }
+        map.get(node.sourceAssetId)!.push(node)
+      }
+      if (node.children?.length) {
+        traverse(node.children)
+      }
+    })
+  }
+
+  traverse(nodes)
+  return map
+}
+
+function createPlaceholderAsset(assetId: string, nodes: SceneNode[], entry?: AssetCacheEntry | null): ProjectAsset {
+  const fallbackName = nodes[0]?.name ?? assetId
+  const downloadUrl = entry?.downloadUrl ?? null
+  return {
+    id: assetId,
+    name: fallbackName,
+    type: 'model',
+    previewColor: '#26C6DA',
+    thumbnail: null,
+    description: downloadUrl ?? entry?.filename ?? fallbackName,
+    downloadUrl,
+  }
 }
 
 function cloneVector(vector: Vector3Like): Vector3Like {
@@ -583,6 +638,135 @@ export const useSceneStore = defineStore('scene', {
     selectAsset(id: string | null) {
       this.selectedAssetId = id
     },
+    async ensureSceneAssetsReady(options: EnsureSceneAssetsOptions = {}) {
+      const targetNodes = Array.isArray(options.nodes) ? options.nodes : this.nodes
+      if (!targetNodes.length) {
+        if (options.showOverlay) {
+          useUiStore().hideLoadingOverlay(true)
+        }
+        return
+      }
+
+      const assetNodeMap = collectNodesByAssetId(targetNodes)
+      if (assetNodeMap.size === 0) {
+        if (options.showOverlay) {
+          useUiStore().hideLoadingOverlay(true)
+        }
+        return
+      }
+
+      const assetCache = useAssetCacheStore()
+      const uiStore = useUiStore()
+      const shouldShowOverlay = options.showOverlay ?? true
+      const refreshViewport = options.refreshViewport ?? options.nodes === undefined
+
+      if (shouldShowOverlay) {
+        uiStore.showLoadingOverlay({
+          title: '加载场景资源',
+          message: '正在准备资源…',
+          mode: 'determinate',
+          progress: 0,
+          closable: false,
+          autoClose: false,
+        })
+      }
+
+      const total = assetNodeMap.size
+      let completed = 0
+      const errors: Array<{ assetId: string; message: string }> = []
+
+      for (const [assetId, nodesForAsset] of assetNodeMap.entries()) {
+        const assetMeta = findAssetInTree(this.projectTree, assetId)
+        const assetLabel = assetMeta?.name ?? nodesForAsset[0]?.name ?? assetId
+
+        try {
+          if (shouldShowOverlay) {
+            uiStore.updateLoadingOverlay({
+              message: `正在加载资源：${assetLabel}`,
+            })
+          }
+
+          let entry = assetCache.getEntry(assetId)
+          if (entry.status !== 'cached') {
+            await assetCache.loadFromIndexedDb(assetId)
+            entry = assetCache.getEntry(assetId)
+          }
+
+          let effectiveAsset = assetMeta ?? createPlaceholderAsset(assetId, nodesForAsset, entry)
+
+          if (!assetCache.hasCache(assetId)) {
+            if (!effectiveAsset.downloadUrl && entry.downloadUrl) {
+              effectiveAsset = {
+                ...effectiveAsset,
+                downloadUrl: entry.downloadUrl,
+                description: entry.downloadUrl,
+              }
+            }
+
+            if (!effectiveAsset.downloadUrl && !effectiveAsset.description) {
+              throw new Error('缺少资源下载地址')
+            }
+
+            await assetCache.downloadAsset(effectiveAsset)
+            entry = assetCache.getEntry(assetId)
+          } else {
+            assetCache.touch(assetId)
+          }
+
+          const file = assetCache.createFileFromCache(effectiveAsset)
+          if (!file) {
+            throw new Error('缓存中缺少资源文件')
+          }
+
+          const baseObject = await loadObjectFromFile(file)
+
+          nodesForAsset.forEach((node, index) => {
+            const object = index === 0 ? baseObject : baseObject.clone(true)
+            tagObjectWithNodeId(object, node.id)
+            registerRuntimeObject(node.id, object)
+          })
+        } catch (error) {
+          const message = (error as Error).message ?? '未知错误'
+          errors.push({ assetId, message })
+          console.warn(`资源 ${assetId} 加载失败`, error)
+          if (shouldShowOverlay) {
+            uiStore.updateLoadingOverlay({
+              message: `资源 ${assetLabel} 加载失败：${message}`,
+              closable: true,
+              autoClose: false,
+            })
+          }
+        } finally {
+          completed += 1
+          if (shouldShowOverlay) {
+            const percent = Math.round((completed / total) * 100)
+            uiStore.updateLoadingProgress(percent, { autoClose: false })
+          }
+        }
+      }
+
+      if (shouldShowOverlay) {
+        if (errors.length === 0) {
+          uiStore.updateLoadingOverlay({
+            message: '资源加载完成',
+            autoClose: true,
+            autoCloseDelay: 600,
+          })
+          uiStore.updateLoadingProgress(100, { autoClose: true, autoCloseDelay: 600 })
+        } else {
+          uiStore.updateLoadingOverlay({
+            message: `有 ${errors.length} 个资源加载失败，请查看日志`,
+            closable: true,
+            autoClose: false,
+          })
+          uiStore.updateLoadingProgress(100, { autoClose: false })
+        }
+      }
+
+      if (errors.length === 0 && refreshViewport) {
+        this.nodes = [...this.nodes]
+      }
+    },
   async addNodeFromAsset(asset: ProjectAsset, position?: Vector3Like): Promise<SceneNode | null> {
       const spawnPosition = position ? cloneVector(position) : { x: 0, y: 0, z: 0 }
       const scale: Vector3Like = { x: 1, y: 1, z: 1 }
@@ -728,10 +912,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       registerRuntimeObject(id, payload.object)
-      payload.object.userData.nodeId = id
-		  payload.object.traverse( function ( child ) {
-        child.userData.nodeId = id
-		  } );
+  tagObjectWithNodeId(payload.object, id)
       this.nodes = [...this.nodes, node]
       this.selectedNodeId = id
       commitSceneSnapshot(this)
@@ -776,8 +957,9 @@ export const useSceneStore = defineStore('scene', {
       useAssetCacheStore().recalculateUsage(this.nodes)
       return scene.id
     },
-    selectScene(sceneId: string) {
+    async selectScene(sceneId: string) {
       if (sceneId === this.currentSceneId) {
+        await this.ensureSceneAssetsReady({ showOverlay: true })
         return true
       }
       commitSceneSnapshot(this)
@@ -785,6 +967,15 @@ export const useSceneStore = defineStore('scene', {
       if (!scene) {
         return false
       }
+
+      this.nodes.forEach((node) => releaseRuntimeTree(node))
+
+      await this.ensureSceneAssetsReady({
+        nodes: scene.nodes,
+        showOverlay: true,
+        refreshViewport: false,
+      })
+
       this.currentSceneId = sceneId
       this.nodes = cloneSceneNodes(scene.nodes)
       this.selectedNodeId = scene.selectedNodeId
@@ -793,7 +984,7 @@ export const useSceneStore = defineStore('scene', {
       useAssetCacheStore().recalculateUsage(this.nodes)
       return true
     },
-    deleteScene(sceneId: string) {
+    async deleteScene(sceneId: string) {
       commitSceneSnapshot(this)
       const index = this.scenes.findIndex((scene) => scene.id === sceneId)
       if (index === -1) {
@@ -821,6 +1012,11 @@ export const useSceneStore = defineStore('scene', {
 
       if (this.currentSceneId === sceneId) {
         const next = remaining[0]!
+        await this.ensureSceneAssetsReady({
+          nodes: next.nodes,
+          showOverlay: true,
+          refreshViewport: false,
+        })
         this.currentSceneId = next.id
         this.nodes = cloneSceneNodes(next.nodes)
         this.selectedNodeId = next.selectedNodeId
@@ -871,7 +1067,7 @@ export const useSceneStore = defineStore('scene', {
       ]
       return true
     },
-    ensureCurrentSceneLoaded() {
+    async ensureCurrentSceneLoaded() {
       if (!this.scenes.length) {
         const fallback = createSceneDocument('Untitled Scene', { resourceProviderId: 'builtin' })
         this.scenes = [fallback]
@@ -882,22 +1078,24 @@ export const useSceneStore = defineStore('scene', {
         this.resourceProviderId = fallback.resourceProviderId
         return
       }
-      if (!this.currentSceneId || !this.scenes.some((scene) => scene.id === this.currentSceneId)) {
-        const first = this.scenes[0]!
-        this.currentSceneId = first.id
-        this.nodes = cloneSceneNodes(first.nodes)
-        this.selectedNodeId = first.selectedNodeId
-        this.camera = cloneCameraState(first.camera)
-        this.resourceProviderId = first.resourceProviderId ?? 'builtin'
-        return
+
+      let target = this.scenes.find((scene) => scene.id === this.currentSceneId) ?? null
+      if (!target) {
+        target = this.scenes[0]!
+        this.currentSceneId = target.id
       }
-      const current = this.scenes.find((scene) => scene.id === this.currentSceneId)
-      if (current) {
-        this.nodes = cloneSceneNodes(current.nodes)
-        this.selectedNodeId = current.selectedNodeId
-        this.camera = cloneCameraState(current.camera)
-        this.resourceProviderId = current.resourceProviderId ?? 'builtin'
-      }
+
+      await this.ensureSceneAssetsReady({
+        nodes: target.nodes,
+        showOverlay: false,
+        refreshViewport: false,
+      })
+
+      this.nodes = cloneSceneNodes(target.nodes)
+      this.selectedNodeId = target.selectedNodeId
+      this.camera = cloneCameraState(target.camera)
+      this.resourceProviderId = target.resourceProviderId ?? 'builtin'
+      useAssetCacheStore().recalculateUsage(this.nodes)
     },
   },
   persist: {

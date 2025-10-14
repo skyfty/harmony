@@ -53,8 +53,8 @@ const reopenButtons = computed(() => ({
   showProject: !panelVisibility.value.project,
 }))
 
-onMounted(() => {
-  sceneStore.ensureCurrentSceneLoaded()
+onMounted(async () => {
+  await sceneStore.ensureCurrentSceneLoaded()
 })
 
 function setTool(tool: EditorTool) {
@@ -109,15 +109,15 @@ function handleCreateScene(name: string) {
   isSceneManagerOpen.value = false
 }
 
-function handleSelectScene(sceneId: string) {
-  const changed = sceneStore.selectScene(sceneId)
+async function handleSelectScene(sceneId: string) {
+  const changed = await sceneStore.selectScene(sceneId)
   if (changed) {
     isSceneManagerOpen.value = false
   }
 }
 
-function handleDeleteScene(sceneId: string) {
-  sceneStore.deleteScene(sceneId)
+async function handleDeleteScene(sceneId: string) {
+  await sceneStore.deleteScene(sceneId)
 }
 
 function handleRenameScene(payload: { id: string; name: string }) {
