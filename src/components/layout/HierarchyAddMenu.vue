@@ -550,11 +550,11 @@ function handleAddNode(geometry:string) {
   <v-divider class="add-menu-divider" />
 
       <v-list-item
-          title="File Import"
+          title="File"
           @click="handleMenuImportFromFile()"
       />
       <v-list-item
-          title="URL Import"
+          title="URL"
           @click="handleMenuImportFromUrl()"
       />
     </v-list>

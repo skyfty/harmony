@@ -130,26 +130,6 @@ function handleDeleteSelected() {
   selectionAnchorId.value = selectedNodeIds.value[selectedNodeIds.value.length - 1] ?? null
 }
 
-function handleCopy(): boolean {
-  if (!selectedNodeIds.value.length) return false
-  return sceneStore.copyNodes(selectedNodeIds.value)
-}
-
-function handleCut(): boolean {
-  if (!selectedNodeIds.value.length) return false
-  return sceneStore.cutNodes(selectedNodeIds.value)
-}
-
-function handlePaste(): boolean {
-  if (!canPaste.value) return false
-  const anchor = selectedNodeIds.value[selectedNodeIds.value.length - 1] ?? selectedNodeId.value ?? null
-  const pasted = sceneStore.pasteClipboard(anchor)
-  if (pasted) {
-    selectionAnchorId.value = selectedNodeIds.value[selectedNodeIds.value.length - 1] ?? null
-  }
-  return pasted
-}
-
 function getNodeInteractionClasses(id: string) {
   return {
     ...getNodeDropClasses(id),

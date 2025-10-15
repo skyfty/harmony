@@ -1,3 +1,4 @@
+import { watch, type WatchStopHandle } from 'vue'
 import { defineStore } from 'pinia'
 import { type Object3D } from 'three'
 import type { SceneNode, Vector3Like } from '@/types/scene'
@@ -831,16 +832,60 @@ export const useSceneStore = defineStore('scene', {
             entry = assetCache.getEntry(assetId)
           }
           const downloadUrl = entry?.downloadUrl ?? null
-     
-          if (!assetCache.hasCache(assetId)) {
-            if (!downloadUrl) {
-              throw new Error('Missing asset download URL')
+
+          let stopDownloadWatcher: WatchStopHandle | null = null
+          const completedBeforeAsset = completed
+          const overlayTotal = total > 0 ? total : 1
+
+          try {
+            if (!assetCache.hasCache(assetId)) {
+              if (!downloadUrl) {
+                throw new Error('Missing asset download URL')
+              }
+
+              if (shouldShowOverlay) {
+                stopDownloadWatcher = watch(
+                  () => {
+                    const current = assetCache.getEntry(assetId)
+                    return [current.status, current.progress, current.filename] as const
+                  },
+                  ([status, progress, filename]) => {
+                    if (status !== 'downloading') {
+                      return
+                    }
+                    const normalizedProgress = Number.isFinite(progress)
+                      ? Math.max(0, Math.round(progress))
+                      : 0
+                    const displayName = filename?.trim() || assetLabel
+                    const aggregateProgress = Math.max(
+                      0,
+                      Math.min(100, Math.round(((completedBeforeAsset + normalizedProgress / 100) / overlayTotal) * 100)),
+                    )
+                    uiStore.updateLoadingOverlay({
+                      message: `Downloading asset: ${displayName} (${normalizedProgress}%)`,
+                      progress: aggregateProgress,
+                      mode: 'determinate',
+                    })
+                    uiStore.updateLoadingProgress(aggregateProgress, { autoClose: false })
+                  },
+                  { immediate: true },
+                )
+              }
+
+              await assetCache.downloadAsset(assetId, downloadUrl, assetLabel)
+              if (shouldShowOverlay) {
+                uiStore.updateLoadingOverlay({
+                  message: `Loading asset: ${assetLabel}`,
+                })
+              }
+            } else {
+              assetCache.touch(assetId)
             }
-            await assetCache.downloadAsset(assetId, downloadUrl, assetLabel)
-            entry = assetCache.getEntry(assetId)
-          } else {
-            assetCache.touch(assetId)
+          } finally {
+            stopDownloadWatcher?.()
           }
+
+          entry = assetCache.getEntry(assetId)
 
           const file = assetCache.createFileFromCache(assetId)
           if (!file) {
