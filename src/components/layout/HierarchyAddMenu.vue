@@ -83,6 +83,7 @@ function addImportedObjectToScene(object: THREE.Object3D, assetId?: string) {
 }
 
 async function handleMenuImportFromUrl() {
+
  
 }
 
