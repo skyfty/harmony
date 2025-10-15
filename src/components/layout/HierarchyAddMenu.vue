@@ -34,7 +34,7 @@ function prepareImportedObject(object: THREE.Object3D) {
   }
 }
 
-function addImportedObjectToScene(object: THREE.Object3D) {
+function addImportedObjectToScene(object: THREE.Object3D, assetId: string) {
   prepareImportedObject(object)
 
   sceneStore.addSceneNode({
@@ -43,17 +43,24 @@ function addImportedObjectToScene(object: THREE.Object3D) {
     position: { x: 0, y: 0, z: 0 },
     rotation: { x: 0, y: 0, z: 0 },
     scale: { x: 1, y: 1, z: 1 },
+    sourceAssetId: assetId,
   })
 }
 
-function importAssetFromFile(file: File[]) {
-  const loader = new Loader()
+function handleMenuImportFromUrl() {
+
+
+}
+
+function handleMenuImportFromFile() {
+    const loader = new Loader()
 
   loader.$on('loaded', (object: LoaderLoadedPayload) => {
     if (object) {
       const imported = object as THREE.Object3D
-      console.log('Loaded object:', imported)
-      addImportedObjectToScene(imported)
+      const assetId = crypto.randomUUID()
+      addImportedObjectToScene(imported, assetId)
+
       uiStore.updateLoadingOverlay({
         message: `${imported.name ?? '资源'}导入完成`,
         progress: 100,
@@ -79,15 +86,6 @@ function importAssetFromFile(file: File[]) {
     console.log(`Loading ${payload.filename}: ${percent.toFixed(2)}%`)
   })
 
-  loader.loadFiles(file)
-}
-
-function handleMenuImportFromUrl() {
-
-
-}
-
-function handleMenuImportFromFile() {
   const { open: openFileDialog, onChange: onFileChange } = useFileDialog()
 
   onFileChange((files: FileList | File[] | null) => {
@@ -102,7 +100,7 @@ function handleMenuImportFromFile() {
       message: '正在准备文件…',
       closable: true,
     })
-    importAssetFromFile(fileArray)
+    loader.loadFiles(fileArray)
   })
 
   openFileDialog()
