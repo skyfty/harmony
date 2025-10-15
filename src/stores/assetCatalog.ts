@@ -17,7 +17,7 @@ export const ASSET_CATEGORY_CONFIG: AssetCategoryDefinition[] = [
   {
     key: 'models',
     id: `${ASSETS_ROOT_DIRECTORY_ID}-models`,
-    label: '3D Models',
+    label: 'Models',
     extensions: ['.glb', '.gltf', '.fbx', '.obj', '.stl', '.dae', '.3ds', '.ply', '.usdz', '.blend', '.3mf'],
   },
   {
