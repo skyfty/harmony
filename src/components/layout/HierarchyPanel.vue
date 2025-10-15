@@ -323,11 +323,11 @@ function handleTreeDragLeave(event: DragEvent) {
   <v-card ref="panelRef" class="panel-card" elevation="4">
     <v-toolbar density="compact" title="Hierarchy" class="panel-toolbar" height="40px">
       <v-spacer />
-      <v-btn icon="mdi-window-minimize" variant="text" @click="emit('collapse')" />
+      <v-btn icon="mdi-window-minimize"  size="small" variant="text" @click="emit('collapse')" />
     </v-toolbar>
     <v-divider />
     <div class="panel-body hierarchy-body">
-      <v-toolbar density="compact" class="tree-toolbar" flat height="40px">
+      <v-toolbar density="compact" class="tree-toolbar" height="40px">
         <HierarchyAddMenu />
         <v-btn
           icon="mdi-delete-outline"

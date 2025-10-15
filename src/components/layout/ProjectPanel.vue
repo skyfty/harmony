@@ -378,10 +378,6 @@ const selectedAssets = computed(() =>
     .map((id) => displayedAssets.value.find((asset) => asset.id === id))
     .filter((asset): asset is ProjectAsset => !!asset && canDeleteAsset(asset)),
 )
-const allSelectedAssetsCached = computed(() =>
-  selectedAssets.value.length > 0 && selectedAssets.value.every((asset) => assetCacheStore.hasCache(resolveAssetCacheId(asset))),
-)
-const isToolbarDeleteVisible = computed(() => allSelectedAssetsCached.value)
 const deletionDialogTitle = computed(() => (isBatchDeletion.value ? 'Delete Selected Assets' : 'Delete Asset'))
 const deletionConfirmLabel = computed(() => (isBatchDeletion.value ? 'Delete Assets' : 'Delete'))
 const deletionSummary = computed(() => {
@@ -667,15 +663,14 @@ onBeforeUnmount(() => {
 
 <template>
   <v-card class="panel-card" elevation="8">
-    <v-toolbar density="compact" class="panel-toolbar"  title="Project" height="40">
-
+    <v-toolbar  class="panel-toolbar" height="40px"  title="Project">
       <v-spacer />
-      <v-btn icon="mdi-window-minimize" variant="text" @click="emit('collapse')" />
+      <v-btn icon="mdi-window-minimize" size="small" variant="text" @click="emit('collapse')" />
     </v-toolbar>
     <v-divider />
     <div class="project-content">
       <div class="project-tree">
-        <v-toolbar density="compact" flat height="46">
+        <v-toolbar density="compact"  height="46">
           <v-toolbar-title class="text-subtitle-2 project-tree-subtitle">Resource</v-toolbar-title>
           <v-spacer />
         </v-toolbar>
@@ -684,14 +679,13 @@ onBeforeUnmount(() => {
           v-model:opened="openedDirectories"
           v-model:activated="selectedDirectory"
           :items="projectTree"
-          density="compact"
           item-title="name"
           item-value="id"
           activatable
           class="tree-view"
         >
           <template #prepend>
-            <v-icon size="small">mdi-folder</v-icon>
+            <v-icon >mdi-folder</v-icon>
           </template>
           <template #title="{ item }">
             <div class="tree-node-title">
@@ -709,36 +703,34 @@ onBeforeUnmount(() => {
         </v-treeview>
       </div>
       <div class="project-gallery">
-        <v-toolbar density="compact" flat height="46">
+        <v-toolbar density="compact" height="46">
           <v-toolbar-title class="text-subtitle-2 project-tree-subtitle">Thumbnails</v-toolbar-title>
           <v-spacer />
-          <v-tooltip v-if="isToolbarDeleteVisible" text="Delete Selected Assets">
-            <template #activator="{ props }">
-              <v-btn
-                v-bind="props"
-                color="error"
-                variant="tonal"
-                icon="mdi-trash-can-outline"
-                size="small"
-                @click="requestDeleteSelection"
-              />
-            </template>
-          </v-tooltip>
+          <v-btn
+            color="error"
+            variant="tonal"
+            icon="mdi-trash-can-outline"
+            size="small"
+            @click="requestDeleteSelection"
+          />
+          <v-divider vertical class="mx-2" />
           <v-text-field
             v-model="searchQuery"
             :loading="searchLoading"
             append-inner-icon="mdi-magnify"
             density="compact"
+            size="small"
             label="Search..."
             variant="solo"
             hide-details
             single-line
             clearable
+            style="max-width: 350px;"
             @keydown.enter.stop.prevent="searchAsset"
             @click:append-inner="searchAsset"
             @click:clear="handleSearchClear"
           />
-          <v-btn icon="mdi-refresh" variant="text" @click="refreshGallery" />
+          <v-btn icon="mdi-refresh"  size="small" variant="text" @click="refreshGallery" />
         </v-toolbar>
         <v-divider />
         <div class="project-gallery-scroll">
@@ -890,7 +882,6 @@ onBeforeUnmount(() => {
 .panel-toolbar {
   background-color: transparent;
   color: #e9ecf1;
-  min-height: 20px;
   padding: 0 8px;
 }
 
@@ -905,7 +896,6 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   border-right: 1px solid rgba(255, 255, 255, 0.05);
-  min-height: 0;
 }
 
 .project-gallery {
@@ -1093,12 +1083,6 @@ onBeforeUnmount(() => {
 
 .project-tree-subtitle {
     margin-inline-start: 12px !important;
-}
-
-.toolbar-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 
 .panel-toolbar :deep(.v-btn) {

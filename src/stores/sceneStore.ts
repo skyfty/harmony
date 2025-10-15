@@ -1486,6 +1486,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
+      commitSceneSnapshot(this, { updateNodes: false, updateCamera: false })
       return registeredAsset
     },
     copyPackageAssetToAssets(providerId: string, asset: ProjectAsset): ProjectAsset {
@@ -1640,6 +1641,10 @@ export const useSceneStore = defineStore('scene', {
       deletableIds.forEach((assetId) => {
         assetCache.removeCache(assetId)
       })
+
+      if (deletableIds.length) {
+        commitSceneSnapshot(this, { updateNodes: false, updateCamera: false })
+      }
 
       return deletableIds
     },

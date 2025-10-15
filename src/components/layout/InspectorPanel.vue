@@ -48,9 +48,9 @@ function handleNameUpdate(value: string) {
 
 <template>
   <v-card class="panel-card" elevation="4">
-    <v-toolbar density="compact" title="Inspector" class="panel-toolbar" height="40">
+    <v-toolbar density="compact" title="Inspector" class="panel-toolbar" height="40px">
       <v-spacer />
-      <v-btn icon="mdi-window-minimize" variant="text" @click="emit('collapse')" />
+      <v-btn icon="mdi-window-minimize"  size="small" variant="text" @click="emit('collapse')" />
     </v-toolbar>
     <v-divider />
     <div class="panel-body" v-if="selectedNode">
