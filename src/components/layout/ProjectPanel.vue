@@ -215,7 +215,14 @@ function isAssetDownloading(asset: ProjectAsset) {
   return assetCacheStore.isDownloading(resolveAssetCacheId(asset))
 }
 
+function isAssetFromAssetsDirectory(asset: ProjectAsset) {
+  return providerIdForAsset(asset) === null
+}
+
 function canDeleteAsset(asset: ProjectAsset) {
+  if (!isAssetFromAssetsDirectory(asset)) {
+    return false
+  }
   return assetCacheStore.hasCache(resolveAssetCacheId(asset)) && !isAssetDownloading(asset)
 }
 
@@ -298,7 +305,7 @@ function isAssetSelected(assetId: string) {
 function toggleAssetSelection(asset: ProjectAsset) {
   const assetId = asset.id
   const cacheId = resolveAssetCacheId(asset)
-  if (!assetCacheStore.hasCache(cacheId) || isAssetDownloading(asset)) {
+  if (!isAssetFromAssetsDirectory(asset) || !assetCacheStore.hasCache(cacheId) || isAssetDownloading(asset)) {
     return
   }
   if (isAssetSelected(assetId)) {
@@ -312,7 +319,7 @@ function openDeleteDialog(assets: ProjectAsset[], batch: boolean) {
   if (!assets.length) {
     return
   }
-  const filtered = assets.filter((asset) => assetCacheStore.hasCache(resolveAssetCacheId(asset)))
+  const filtered = assets.filter((asset) => canDeleteAsset(asset))
   if (!filtered.length) {
     return
   }
@@ -373,7 +380,7 @@ const displayedAssets = computed(() => (isSearchActive.value ? searchResults.val
 const selectedAssets = computed(() =>
   selectedAssetIds.value
     .map((id) => displayedAssets.value.find((asset) => asset.id === id))
-    .filter((asset): asset is ProjectAsset => !!asset),
+    .filter((asset): asset is ProjectAsset => !!asset && canDeleteAsset(asset)),
 )
 const allSelectedAssetsCached = computed(() =>
   selectedAssets.value.length > 0 && selectedAssets.value.every((asset) => assetCacheStore.hasCache(resolveAssetCacheId(asset))),
@@ -481,7 +488,13 @@ watchEffect(() => {
 
 watch(displayedAssets, () => {
   const availableIds = new Set(displayedAssets.value.map((asset) => asset.id))
-  selectedAssetIds.value = selectedAssetIds.value.filter((id) => availableIds.has(id))
+  selectedAssetIds.value = selectedAssetIds.value.filter((id) => {
+    if (!availableIds.has(id)) {
+      return false
+    }
+    const asset = displayedAssets.value.find((item) => item.id === id)
+    return asset ? canDeleteAsset(asset) : false
+  })
 })
 
 watch(normalizedSearchQuery, (value) => {
