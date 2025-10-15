@@ -1302,7 +1302,7 @@ export const useSceneStore = defineStore('scene', {
 
       await this.ensureSceneAssetsReady({
         nodes: target.nodes,
-        showOverlay: false,
+        showOverlay: true,
         refreshViewport: false,
       })
 
