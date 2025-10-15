@@ -789,14 +789,13 @@ function handleViewportDragOver(event: DragEvent) {
   }
   isDragHovering.value = true
   updateGridHighlight(point)
-
-  // setDragPreviewPosition(point)
-  // const payload = extractAssetPayload(event)
-  // if (payload) {
-  //   prepareDragPreview(payload.assetId)
-  // } else {
-  //   disposeDragPreview()
-  // }
+  setDragPreviewPosition(point)
+  const payload = extractAssetPayload(event)
+  if (payload) {
+    prepareDragPreview(payload.assetId)
+  } else {
+    disposeDragPreview()
+  }
 }
 
 function handleViewportDragLeave(event: DragEvent) {

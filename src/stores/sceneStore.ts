@@ -93,6 +93,9 @@ interface SceneState {
   cameraFocusRequestId: number
   clipboard: SceneClipboard | null
   draggingAssetObject: Object3D | null
+  undoStack: SceneHistoryEntry[]
+  redoStack: SceneHistoryEntry[]
+  isRestoringHistory: boolean
 }
 
 interface EnsureSceneAssetsOptions {
@@ -116,6 +119,17 @@ interface DuplicateContext {
   assetCache: ReturnType<typeof useAssetCacheStore>
   runtimeSnapshots: Map<string, Object3D>
 }
+
+interface SceneHistoryEntry {
+  nodes: SceneNode[]
+  selectedNodeIds: string[]
+  selectedNodeId: string | null
+  camera: SceneCameraState
+  resourceProviderId: string
+  runtimeSnapshots: Map<string, Object3D>
+}
+
+const HISTORY_LIMIT = 50
 
 const initialNodes: SceneNode[] = []
 
@@ -351,6 +365,27 @@ function cloneNode(node: SceneNode): SceneNode {
 
 function cloneSceneNodes(nodes: SceneNode[]): SceneNode[] {
   return nodes.map(cloneNode)
+}
+
+function vectorsEqual(a: Vector3Like, b: Vector3Like): boolean {
+  return a.x === b.x && a.y === b.y && a.z === b.z
+}
+
+function collectSceneRuntimeSnapshots(nodes: SceneNode[]): Map<string, Object3D> {
+  const runtimeSnapshots = new Map<string, Object3D>()
+  nodes.forEach((node) => collectRuntimeSnapshots(node, runtimeSnapshots))
+  return runtimeSnapshots
+}
+
+function createHistorySnapshot(store: SceneState): SceneHistoryEntry {
+  return {
+    nodes: cloneSceneNodes(store.nodes),
+    selectedNodeIds: cloneSelection(store.selectedNodeIds),
+    selectedNodeId: store.selectedNodeId,
+    camera: cloneCameraState(store.camera),
+    resourceProviderId: store.resourceProviderId,
+    runtimeSnapshots: collectSceneRuntimeSnapshots(store.nodes),
+  }
 }
 
 function collectNodeIds(node: SceneNode, buffer: string[]) {
@@ -639,6 +674,9 @@ export const useSceneStore = defineStore('scene', {
     cameraFocusRequestId: 0,
     clipboard: null,
     draggingAssetObject: null,
+    undoStack: [],
+    redoStack: [],
+    isRestoringHistory: false,
   }),
   getters: {
     currentScene(state): StoredSceneDocument | null {
@@ -685,8 +723,87 @@ export const useSceneStore = defineStore('scene', {
         : state.projectTree[0] ?? null
       return directory?.assets ?? []
     },
+    canUndo(state): boolean {
+      return state.undoStack.length > 0
+    },
+    canRedo(state): boolean {
+      return state.redoStack.length > 0
+    },
   },
   actions: {
+    captureHistorySnapshot(options: { resetRedo?: boolean } = {}) {
+      if (this.isRestoringHistory) {
+        return
+      }
+      const snapshot = createHistorySnapshot(this)
+      const nextUndoStack = [...this.undoStack, snapshot]
+      this.undoStack = nextUndoStack.length > HISTORY_LIMIT
+        ? nextUndoStack.slice(nextUndoStack.length - HISTORY_LIMIT)
+        : nextUndoStack
+      const resetRedo = options.resetRedo ?? true
+      if (resetRedo && this.redoStack.length) {
+        this.redoStack = []
+      }
+    },
+    pushRedoSnapshot() {
+      const snapshot = createHistorySnapshot(this)
+      const nextRedoStack = [...this.redoStack, snapshot]
+      this.redoStack = nextRedoStack.length > HISTORY_LIMIT
+        ? nextRedoStack.slice(nextRedoStack.length - HISTORY_LIMIT)
+        : nextRedoStack
+    },
+    async restoreFromHistory(snapshot: SceneHistoryEntry) {
+      const assetCache = useAssetCacheStore()
+      this.isRestoringHistory = true
+      try {
+        this.nodes.forEach((node) => releaseRuntimeTree(node))
+        this.nodes = cloneSceneNodes(snapshot.nodes)
+        this.selectedNodeIds = cloneSelection(snapshot.selectedNodeIds)
+        this.selectedNodeId = snapshot.selectedNodeId
+        this.camera = cloneCameraState(snapshot.camera)
+        this.resourceProviderId = snapshot.resourceProviderId
+
+        assetCache.recalculateUsage(this.nodes)
+
+        snapshot.runtimeSnapshots.forEach((object, nodeId) => {
+          const clonedObject = object.clone(true)
+          tagObjectWithNodeId(clonedObject, nodeId)
+          registerRuntimeObject(nodeId, clonedObject)
+        })
+
+        const nodeIds = flattenNodeIds(this.nodes)
+        const missingRuntimeObjects = nodeIds.filter((id) => !runtimeObjectRegistry.has(id))
+        if (missingRuntimeObjects.length) {
+          await this.ensureSceneAssetsReady({ nodes: this.nodes, showOverlay: false, refreshViewport: false })
+        }
+
+        // trigger reactivity for consumers relying on node array reference
+        this.nodes = [...this.nodes]
+        commitSceneSnapshot(this)
+      } finally {
+        this.isRestoringHistory = false
+      }
+    },
+    async undo() {
+      if (!this.undoStack.length || this.isRestoringHistory) {
+        return false
+      }
+      const snapshot = this.undoStack[this.undoStack.length - 1]!
+      this.undoStack = this.undoStack.slice(0, -1)
+      this.pushRedoSnapshot()
+      await this.restoreFromHistory(snapshot)
+      return true
+    },
+    async redo() {
+      if (!this.redoStack.length || this.isRestoringHistory) {
+        return false
+      }
+      const snapshot = this.redoStack[this.redoStack.length - 1]!
+      this.redoStack = this.redoStack.slice(0, -1)
+      this.captureHistorySnapshot({ resetRedo: false })
+      await this.restoreFromHistory(snapshot)
+      return true
+    },
     setActiveTool(tool: EditorTool) {
       this.activeTool = tool
     },
@@ -721,6 +838,17 @@ export const useSceneStore = defineStore('scene', {
     },
 
     updateNodeTransform(payload: { id: string; position: Vector3Like; rotation: Vector3Like; scale: Vector3Like }) {
+      const target = findNodeById(this.nodes, payload.id)
+      if (!target) {
+        return
+      }
+      const positionChanged = !vectorsEqual(target.position, payload.position)
+      const rotationChanged = !vectorsEqual(target.rotation, payload.rotation)
+      const scaleChanged = !vectorsEqual(target.scale, payload.scale)
+      if (!positionChanged && !rotationChanged && !scaleChanged) {
+        return
+      }
+      this.captureHistorySnapshot()
       visitNode(this.nodes, payload.id, (node) => {
         node.position = cloneVector(payload.position)
         node.rotation = cloneVector(payload.rotation)
@@ -730,6 +858,24 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
     },
     updateNodeProperties(payload: TransformUpdatePayload) {
+      const target = findNodeById(this.nodes, payload.id)
+      if (!target) {
+        return
+      }
+      let changed = false
+      if (payload.position && !vectorsEqual(target.position, payload.position)) {
+        changed = true
+      }
+      if (payload.rotation && !vectorsEqual(target.rotation, payload.rotation)) {
+        changed = true
+      }
+      if (payload.scale && !vectorsEqual(target.scale, payload.scale)) {
+        changed = true
+      }
+      if (!changed) {
+        return
+      }
+      this.captureHistorySnapshot()
       visitNode(this.nodes, payload.id, (node) => {
         if (payload.position) node.position = cloneVector(payload.position)
         if (payload.rotation) node.rotation = cloneVector(payload.rotation)
@@ -740,8 +886,17 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
     },
     renameNode(id: string, name: string) {
+      const trimmed = name.trim()
+      if (!trimmed) {
+        return
+      }
+      const target = findNodeById(this.nodes, id)
+      if (!target || target.name === trimmed) {
+        return
+      }
+      this.captureHistorySnapshot()
       visitNode(this.nodes, id, (node) => {
-        node.name = name
+        node.name = trimmed
       })
       this.nodes = [...this.nodes]
       commitSceneSnapshot(this)
@@ -1059,6 +1214,7 @@ export const useSceneStore = defineStore('scene', {
       const inserted = insertNodeMutable(tree, targetId, node, position)
       if (!inserted) return false
 
+      this.captureHistorySnapshot()
       this.nodes = tree
       commitSceneSnapshot(this)
       return true
@@ -1072,6 +1228,7 @@ export const useSceneStore = defineStore('scene', {
       scale?: Vector3Like
       sourceAssetId?: string
     }) {
+      this.captureHistorySnapshot()
       const id = crypto.randomUUID()
       const node: SceneNode = {
         id,
@@ -1086,7 +1243,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       registerRuntimeObject(id, payload.object)
-    tagObjectWithNodeId(payload.object, id)
+      tagObjectWithNodeId(payload.object, id)
       this.nodes = [...this.nodes, node]
       this.setSelection([id], { commit: false })
       commitSceneSnapshot(this)
@@ -1100,8 +1257,16 @@ export const useSceneStore = defineStore('scene', {
       unregisterRuntimeObject(id)
     },
     removeSceneNodes(ids: string[]) {
-      const idSet = new Set(ids)
-      if (idSet.size === 0) return
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return
+      }
+      const existingIds = ids.filter((id) => !!findNodeById(this.nodes, id))
+      if (!existingIds.length) {
+        return
+      }
+      const idSet = new Set(existingIds)
+
+      this.captureHistorySnapshot()
 
       const removed: string[] = []
       this.nodes = pruneNodes(this.nodes, idSet, removed)
@@ -1174,6 +1339,7 @@ export const useSceneStore = defineStore('scene', {
         anchorId = duplicate.id
       })
 
+      this.captureHistorySnapshot()
       this.nodes = working
       const duplicateIds = duplicates.map((duplicate) => duplicate.id)
       if (duplicateIds.length) {

@@ -9,7 +9,7 @@ const emit = defineEmits<{
 }>()
 
 const sceneStore = useSceneStore()
-const { hierarchyItems, selectedNodeId, selectedNodeIds, clipboard } = storeToRefs(sceneStore)
+const { hierarchyItems, selectedNodeId, selectedNodeIds } = storeToRefs(sceneStore)
 
 const opened = ref<string[]>([])
 const selectionAnchorId = ref<string | null>(null)
@@ -43,7 +43,6 @@ watch(
 
 const allNodeIds = computed(() => flattenIds(hierarchyItems.value))
 const hasSelection = computed(() => selectedNodeIds.value.length > 0)
-const canPaste = computed(() => (clipboard.value?.entries.length ?? 0) > 0)
 
 watch(allNodeIds, (ids) => {
   if (selectionAnchorId.value && !ids.includes(selectionAnchorId.value)) {

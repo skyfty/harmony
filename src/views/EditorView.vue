@@ -166,9 +166,15 @@ async function handleAction(action: string) {
     case 'Preview':
       break
     case 'Undo': {
+      if (sceneStore.canUndo) {
+        await sceneStore.undo()
+      }
       break
     }
     case 'Redo': {
+      if (sceneStore.canRedo) {
+        await sceneStore.redo()
+      }
       break
     }
     case 'Copy': {
@@ -252,7 +258,7 @@ function shouldHandleViewportShortcut(event: KeyboardEvent): boolean {
   return true
 }
 
-function handleEditorViewShortcut(event: KeyboardEvent) {
+async function handleEditorViewShortcut(event: KeyboardEvent) {
   if (!shouldHandleViewportShortcut(event)) return
   let handled = false
 
@@ -267,23 +273,40 @@ function handleEditorViewShortcut(event: KeyboardEvent) {
     }
   }
 
-  if (!handled) {
-    if ((event.ctrlKey || event.metaKey) && !(event.altKey || event.shiftKey)) {
-      switch (event.code) {
-        case 'KeyC':
+  if (!handled && (event.ctrlKey || event.metaKey) && !event.altKey) {
+    switch (event.code) {
+      case 'KeyZ': {
+        handled = event.shiftKey ? await sceneStore.redo() : await sceneStore.undo()
+        break
+      }
+      case 'KeyY': {
+        if (!event.shiftKey) {
+          handled = await sceneStore.redo()
+        }
+        break
+      }
+      case 'KeyC': {
+        if (!event.shiftKey) {
           handled = sceneStore.selectedNodeIds.length ? sceneStore.copyNodes(sceneStore.selectedNodeIds) : false
-          break
-        case 'KeyX':
+        }
+        break
+      }
+      case 'KeyX': {
+        if (!event.shiftKey) {
           handled = sceneStore.selectedNodeIds.length ? sceneStore.cutNodes(sceneStore.selectedNodeIds) : false
-          break
-        case 'KeyV':
+        }
+        break
+      }
+      case 'KeyV': {
+        if (!event.shiftKey) {
           handled = (sceneStore.clipboard?.entries.length ?? 0) > 0
             ? sceneStore.pasteClipboard(sceneStore.selectedNodeId)
             : false
-          break
-        default:
-          break
+        }
+        break
       }
+      default:
+        break
     }
   }
 

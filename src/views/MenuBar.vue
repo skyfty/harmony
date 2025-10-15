@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { storeToRefs } from 'pinia'
+import { useSceneStore } from '@/stores/sceneStore'
 
 const quickActions = [
   { icon: 'mdi-content-save-outline', label: 'Save' },
@@ -6,10 +8,16 @@ const quickActions = [
   { icon: 'mdi-play-circle-outline', label: 'Preview' },
 ]
 
+const sceneStore = useSceneStore()
+const { canUndo, canRedo } = storeToRefs(sceneStore)
+
 const emit = defineEmits<{
   (event: 'menu-action', action: string): void
 }>()
 function handleMenuAction(action: string) {
+  if ((action === 'Undo' && !canUndo.value) || (action === 'Redo' && !canRedo.value)) {
+    return
+  }
   emit('menu-action', action)
 }
 
@@ -118,13 +126,21 @@ function handleMenuAction(action: string) {
                   <span v-bind="props">Edit</span>
                 </template>
                 <v-list class="menu-dropdown">
-                  <v-list-item @click="handleMenuAction('Undo')" class="menu-list-item">
+                  <v-list-item
+                    @click="handleMenuAction('Undo')"
+                    class="menu-list-item"
+                    :disabled="!canUndo"
+                  >
                     Undo
                     <template  #append>
                       <span class="shortcut-label">Ctrl+Z</span>
                     </template>
                   </v-list-item>
-                  <v-list-item @click="handleMenuAction('Redo')" class="menu-list-item">
+                  <v-list-item
+                    @click="handleMenuAction('Redo')"
+                    class="menu-list-item"
+                    :disabled="!canRedo"
+                  >
                     Redo
                     <template   #append>
                       <span class="shortcut-label">Ctrl+Y</span>
