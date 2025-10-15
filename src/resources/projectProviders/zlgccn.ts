@@ -1,5 +1,5 @@
-import type { ProjectAsset } from '@/types/scene-store/project-asset'
-import type { ProjectDirectory } from '@/types/scene-store/project-directory'
+import type { ProjectAsset } from '@/types/project-asset'
+import type { ProjectDirectory } from '@/types/project-directory'
 import type { ResourceProvider } from './types'
 
 function transformZlgccnResponse(payload: unknown): ProjectDirectory[] {
