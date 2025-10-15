@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, type WatchStopHandle } from 'vue'
 import { useSceneStore } from '@/stores/sceneStore'
+import type { ProjectAsset } from '@/types/project-asset'
 import * as THREE from 'three'
 
 import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from '@/plugins/loader'
@@ -205,6 +206,17 @@ async function importAssetFromUrl(normalizedUrl: string) {
     assetCacheStore.touch(normalizedUrl)
 
     const displayName = object.name || entry.filename || fallbackName
+    const importedAsset: ProjectAsset = {
+      id: normalizedUrl,
+      name: displayName,
+      type: 'model',
+      downloadUrl: normalizedUrl,
+      previewColor: '#26C6DA',
+      thumbnail: null,
+      description: normalizedUrl,
+    }
+    sceneStore.registerAsset(importedAsset, { source: { type: 'url' } })
+
     uiStore.updateLoadingOverlay({
       mode: 'determinate',
       message: `${displayName} 导入完成`,
@@ -337,6 +349,18 @@ function handleMenuImportFromFile() {
       assetCacheStore.registerUsage(assetId)
       assetCacheStore.touch(assetId)
     }
+
+    const displayName = imported.name || matchedFile?.name || 'Imported Asset'
+    const importedAsset: ProjectAsset = {
+      id: assetId,
+      name: displayName,
+      type: 'model',
+      downloadUrl: assetId,
+      previewColor: '#26C6DA',
+      thumbnail: null,
+      description: matchedFile?.name ?? undefined,
+    }
+    sceneStore.registerAsset(importedAsset, { source: { type: 'local' } })
 
     uiStore.updateLoadingOverlay({
       message: `${imported.name ?? '资源'}导入完成`,

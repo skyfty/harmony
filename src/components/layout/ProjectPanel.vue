@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch, watchEffect } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useSceneStore } from '@/stores/sceneStore'
+import { useSceneStore, ASSETS_ROOT_DIRECTORY_ID, extractProviderIdFromPackageDirectoryId } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -15,19 +15,36 @@ const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
 const { projectTree, activeDirectoryId, currentAssets, selectedAssetId } = storeToRefs(sceneStore)
 
-const openedDirectories = ref<string[]>([])
+const openedDirectories = ref<string[]>([ASSETS_ROOT_DIRECTORY_ID])
 const draggingAssetId = ref<string | null>(null)
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 let dragPreviewEl: HTMLDivElement | null = null
 const addPendingAssetId = ref<string | null>(null)
 
-const selectedProviderId = computed<string>({
-  get: () => sceneStore.resourceProviderId,
-  set: (providerId) => sceneStore.setResourceProviderId(providerId),
-})
-const providerLoading = ref(false)
-const providerError = ref<string | null>(null)
-const providerCache = new Map<string, ProjectDirectory[]>()
+const providerLoading = ref<Record<string, boolean>>({})
+const providerErrors = ref<Record<string, string | null>>({})
+
+function setProviderLoading(providerId: string, value: boolean) {
+  providerLoading.value = {
+    ...providerLoading.value,
+    [providerId]: value,
+  }
+}
+
+function isProviderLoading(providerId: string): boolean {
+  return providerLoading.value[providerId] ?? false
+}
+
+function setProviderError(providerId: string, message: string | null) {
+  providerErrors.value = {
+    ...providerErrors.value,
+    [providerId]: message,
+  }
+}
+
+function getProviderError(providerId: string): string | null {
+  return providerErrors.value[providerId] ?? null
+}
 
 const selectedDirectory = computed({
   get: () => (activeDirectoryId.value ? [activeDirectoryId.value] : []),
@@ -42,29 +59,130 @@ const selectedDirectory = computed({
 watch(
   projectTree,
   (tree) => {
-    openedDirectories.value = expandAllDirectories(tree)
+    if (!tree) {
+      return
+    }
+    if (!openedDirectories.value.includes(ASSETS_ROOT_DIRECTORY_ID)) {
+      openedDirectories.value = [...openedDirectories.value, ASSETS_ROOT_DIRECTORY_ID]
+    }
   },
   { immediate: true }
 )
 
 watch(
-  selectedProviderId,
-  (providerId) => {
-    loadResourceProvider(providerId)
+  () => [...openedDirectories.value],
+  (next, prev = []) => {
+    const prevSet = new Set(prev)
+    next.forEach((id) => {
+      if (prevSet.has(id)) {
+        return
+      }
+      const providerId = extractProviderIdFromPackageDirectoryId(id)
+      if (providerId) {
+        void loadPackageDirectory(providerId)
+      }
+    })
+  },
+)
+
+watch(
+  activeDirectoryId,
+  (directoryId) => {
+    const providerId = findProviderIdForDirectoryId(directoryId ?? null)
+    if (providerId) {
+      sceneStore.setResourceProviderId(providerId)
+      if (!sceneStore.isPackageLoaded(providerId) && !isProviderLoading(providerId)) {
+        void loadPackageDirectory(providerId)
+      }
+    } else {
+      sceneStore.setResourceProviderId('scene')
+    }
   },
   { immediate: true }
 )
 
-function expandAllDirectories(tree: Array<{ id: string; children?: unknown[] }>): string[] {
-  const ids: string[] = []
-  for (const node of tree) {
-    ids.push(node.id)
-    if (Array.isArray(node.children) && node.children.length) {
-      ids.push(...expandAllDirectories(node.children as Array<{ id: string; children?: unknown[] }>))
+function findDirectoryPath(
+  tree: ProjectDirectory[] | undefined,
+  targetId: string,
+  trail: ProjectDirectory[] = [],
+): ProjectDirectory[] | null {
+  if (!tree?.length) {
+    return null
+  }
+  for (const directory of tree) {
+    const nextTrail = [...trail, directory]
+    if (directory.id === targetId) {
+      return nextTrail
+    }
+    if (directory.children?.length) {
+      const found = findDirectoryPath(directory.children, targetId, nextTrail)
+      if (found) {
+        return found
+      }
     }
   }
-  return ids
+  return null
 }
+
+function findProviderIdForDirectoryId(directoryId: string | null): string | null {
+  if (!directoryId) {
+    return null
+  }
+  const direct = extractProviderIdFromPackageDirectoryId(directoryId)
+  if (direct) {
+    return direct
+  }
+  const path = findDirectoryPath(projectTree.value, directoryId)
+  if (!path) {
+    return null
+  }
+  for (let index = path.length - 1; index >= 0; index -= 1) {
+    const candidate = extractProviderIdFromPackageDirectoryId(path[index]!.id)
+    if (candidate) {
+      return candidate
+    }
+  }
+  return null
+}
+
+async function loadPackageDirectory(providerId: string, options: { force?: boolean } = {}) {
+  const force = options.force ?? false
+  if (isProviderLoading(providerId)) {
+    return
+  }
+  if (!force && sceneStore.isPackageLoaded(providerId)) {
+    return
+  }
+  const provider = resourceProviders.find((entry) => entry.id === providerId)
+  if (!provider) {
+    return
+  }
+  if (!provider.url) {
+    sceneStore.setPackageDirectories(providerId, [])
+    setProviderError(providerId, null)
+    return
+  }
+  setProviderLoading(providerId, true)
+  setProviderError(providerId, null)
+  try {
+    const response = await fetch(provider.url)
+    if (!response.ok) {
+      throw new Error(`资源加载失败（${response.status}）`)
+    }
+    const payload = await response.json()
+    const directories = provider.transform ? provider.transform(payload) : []
+    sceneStore.setPackageDirectories(providerId, directories)
+    setProviderError(providerId, null)
+  } catch (error) {
+    setProviderError(providerId, (error as Error).message ?? '资源加载失败')
+  } finally {
+    setProviderLoading(providerId, false)
+  }
+}
+
+const activeProviderId = computed(() => findProviderIdForDirectoryId(activeDirectoryId.value ?? null))
+const activeProviderError = computed(() => (activeProviderId.value ? getProviderError(activeProviderId.value) : null))
+const activeProviderLoading = computed(() => (activeProviderId.value ? isProviderLoading(activeProviderId.value) : false))
 
 function selectAsset(asset: ProjectAsset) {
   sceneStore.selectAsset(asset.id)
@@ -72,20 +190,19 @@ function selectAsset(asset: ProjectAsset) {
 
 
 function isAssetCached(asset: ProjectAsset) {
-
-  return assetCacheStore.hasCache(asset.id)
+  return assetCacheStore.hasCache(resolveAssetCacheId(asset))
 }
 
 function isAssetDownloading(asset: ProjectAsset) {
-  return assetCacheStore.isDownloading(asset.id)
+  return assetCacheStore.isDownloading(resolveAssetCacheId(asset))
 }
 
 function assetDownloadProgress(asset: ProjectAsset) {
-  return assetCacheStore.getProgress(asset.id)
+  return assetCacheStore.getProgress(resolveAssetCacheId(asset))
 }
 
 function assetDownloadError(asset: ProjectAsset) {
-  return assetCacheStore.getError(asset.id)
+  return assetCacheStore.getError(resolveAssetCacheId(asset))
 }
 
 function showDownloadButton(asset: ProjectAsset) {
@@ -98,6 +215,9 @@ function showDownloadButton(asset: ProjectAsset) {
 
 async function ensureAssetCached(asset: ProjectAsset) {
 
+  if (assetCacheStore.hasCache(asset.id)) {
+    return
+  }
   const entry = await assetCacheStore.downloaProjectAsset(asset)
   if (!assetCacheStore.hasCache(asset.id)) {
     throw new Error(entry.error ?? '资源未下载完成')
@@ -107,7 +227,9 @@ async function ensureAssetCached(asset: ProjectAsset) {
 async function handleDownloadAsset(asset: ProjectAsset) {
 
   try {
-    await ensureAssetCached(asset)
+    const prepared = prepareAssetForOperations(asset)
+    assetCacheStore.setError(prepared.id, null)
+    await ensureAssetCached(prepared)
   } catch (error) {
     console.error('下载资源失败', error)
   }
@@ -115,7 +237,7 @@ async function handleDownloadAsset(asset: ProjectAsset) {
 
 function handleCancelDownload(asset: ProjectAsset) {
 
-  assetCacheStore.cancelDownload(asset.id)
+  assetCacheStore.cancelDownload(resolveAssetCacheId(asset))
 }
 
 function isAssetDraggable(asset: ProjectAsset) {
@@ -127,22 +249,29 @@ async function handleAddAsset(asset: ProjectAsset) {
     return
   }
   addPendingAssetId.value = asset.id
+  let preparedAsset: ProjectAsset | null = null
   try {
-    assetCacheStore.setError(asset.id, null)
-    await ensureAssetCached(asset)
-    const node = await sceneStore.addNodeFromAsset(asset)
+    preparedAsset = prepareAssetForOperations(asset)
+    assetCacheStore.setError(preparedAsset.id, null)
+    await ensureAssetCached(preparedAsset)
+    const node = await sceneStore.addNodeFromAsset(preparedAsset)
     if (!node) {
       throw new Error('资源尚未准备就绪')
     }
   } catch (error) {
     console.error('添加资源失败', error)
-    assetCacheStore.setError(asset.id, (error as Error).message ?? '添加资源失败')
+    const cacheId = preparedAsset?.id ?? resolveAssetCacheId(asset)
+    assetCacheStore.setError(cacheId, (error as Error).message ?? '添加资源失败')
   } finally {
     addPendingAssetId.value = null
   }
 }
 
 function refreshGallery() {
+  const providerId = activeProviderId.value
+  if (providerId) {
+    void loadPackageDirectory(providerId, { force: true })
+  }
 }
 
 function handleAssetDragStart(event: DragEvent, asset: ProjectAsset) {
@@ -150,13 +279,14 @@ function handleAssetDragStart(event: DragEvent, asset: ProjectAsset) {
     event.preventDefault()
     return
   }
+  const preparedAsset = prepareAssetForOperations(asset)
   draggingAssetId.value = asset.id
   selectAsset(asset)
-  assetCacheStore.touch(asset.id)
+  assetCacheStore.touch(preparedAsset.id)
   
   if (event.dataTransfer) {
     event.dataTransfer.effectAllowed = 'copyMove'
-    event.dataTransfer.setData(ASSET_DRAG_MIME, JSON.stringify({ assetId: asset.id }))
+    event.dataTransfer.setData(ASSET_DRAG_MIME, JSON.stringify({ assetId: preparedAsset.id }))
     event.dataTransfer.dropEffect = 'copy'
     const preview = createDragPreview(asset)
     if (preview) {
@@ -186,10 +316,54 @@ const normalizedSearchQuery = computed(() => searchQuery.value.trim())
 const isSearchActive = computed(() => searchLoaded.value && normalizedSearchQuery.value.length > 0)
 const displayedAssets = computed(() => (isSearchActive.value ? searchResults.value : currentAssets.value))
 
+const assetProviderMap = computed(() => {
+  const map = new Map<string, string>()
+  const traverse = (directories: ProjectDirectory[] | undefined, inheritedProviderId: string | null) => {
+    if (!directories?.length) {
+      return
+    }
+    directories.forEach((directory) => {
+      const directoryProviderId = extractProviderIdFromPackageDirectoryId(directory.id) ?? inheritedProviderId
+      if (directory.assets?.length && directoryProviderId) {
+        directory.assets.forEach((asset) => {
+          map.set(asset.id, directoryProviderId)
+        })
+      }
+      if (directory.children?.length) {
+        traverse(directory.children, directoryProviderId)
+      }
+    })
+  }
+  traverse(projectTree.value, null)
+  return map
+})
+
+function providerIdForAsset(asset: ProjectAsset): string | null {
+  return assetProviderMap.value.get(asset.id) ?? null
+}
+
+function resolveAssetCacheId(asset: ProjectAsset): string {
+  const providerId = providerIdForAsset(asset)
+  if (!providerId) {
+    return asset.id
+  }
+  const mapKey = `${providerId}::${asset.id}`
+  return sceneStore.packageAssetMap[mapKey] ?? asset.id
+}
+
+function prepareAssetForOperations(asset: ProjectAsset): ProjectAsset {
+  const providerId = providerIdForAsset(asset)
+  if (!providerId) {
+    return asset
+  }
+  return sceneStore.copyPackageAssetToAssets(providerId, asset)
+}
+
 const indexedDbLoadQueue = new Set<string>()
 
 function assetPreviewUrl(asset: ProjectAsset): string | undefined {
-  const entry = assetCacheStore.entries[asset.id]
+  const cacheId = resolveAssetCacheId(asset)
+  const entry = assetCacheStore.entries[cacheId]
   if (!entry || entry.status !== 'cached' || !entry.blobUrl) {
     return undefined
   }
@@ -204,19 +378,20 @@ function assetPreviewUrl(asset: ProjectAsset): string | undefined {
 }
 
 async function ensureAssetPreview(asset: ProjectAsset) {
-  if (assetCacheStore.hasCache(asset.id) || assetCacheStore.isDownloading(asset.id)) {
+  const cacheId = resolveAssetCacheId(asset)
+  if (assetCacheStore.hasCache(cacheId) || assetCacheStore.isDownloading(cacheId)) {
     return
   }
-  if (indexedDbLoadQueue.has(asset.id)) {
+  if (indexedDbLoadQueue.has(cacheId)) {
     return
   }
-  indexedDbLoadQueue.add(asset.id)
+  indexedDbLoadQueue.add(cacheId)
   try {
-    await assetCacheStore.loadFromIndexedDb(asset.id)
+    await assetCacheStore.loadFromIndexedDb(cacheId)
   } catch (error) {
     console.warn('从 IndexedDB 加载资源失败', error)
   } finally {
-    indexedDbLoadQueue.delete(asset.id)
+    indexedDbLoadQueue.delete(cacheId)
   }
 }
 
@@ -396,41 +571,6 @@ onBeforeUnmount(() => {
     searchDebounceHandle = null
   }
 })
-
-async function loadResourceProvider(providerId: string) {
-  const provider = resourceProviders.find((entry) => entry.id === providerId)
-  if (!provider) {
-    return
-  }
-
-  providerError.value = null
-
-  if (!provider.url) {
-    sceneStore.resetProjectTree()
-    return
-  }
-
-  if (providerCache.has(providerId)) {
-    sceneStore.setProjectTree(providerCache.get(providerId) ?? [])
-    return
-  }
-
-  providerLoading.value = true
-  try {
-    const response = await fetch(provider.url)
-    if (!response.ok) {
-      throw new Error(`资源加载失败（${response.status}）`)
-    }
-    const json = await response.json()
-    const transformed = provider.transform ? provider.transform(json) : []
-    providerCache.set(providerId, transformed)
-    sceneStore.setProjectTree(transformed)
-  } catch (error) {
-    providerError.value = (error as Error).message ?? '资源加载失败'
-  } finally {
-    providerLoading.value = false
-  }
-}
 </script>
 
 <template>
@@ -446,47 +586,6 @@ async function loadResourceProvider(providerId: string) {
         <v-toolbar density="compact" flat height="46">
           <v-toolbar-title class="text-subtitle-2 project-tree-subtitle">Assets</v-toolbar-title>
           <v-spacer />
-          <v-menu location="bottom end" transition="fade-transition">
-            <template #activator="{ props }">
-              <v-btn
-                v-bind="props"
-                icon="mdi-database-cog"
-                variant="text"
-                color="primary"
-                density="compact"
-                class="resource-menu-btn"
-                :loading="providerLoading"
-              />
-            </template>
-            <v-sheet class="resource-menu" elevation="8">
-              <v-list density="compact">
-                <v-list-item
-                  v-for="provider in resourceProviders"
-                  :key="provider.id"
-                  :value="provider.id"
-                  :active="selectedProviderId === provider.id"
-                  @click="selectedProviderId = provider.id"
-                >
-                  <template #prepend>
-                    <v-icon size="20" color="primary">
-                      {{ provider.id === 'builtin' ? 'mdi-database' : 'mdi-web' }}
-                    </v-icon>
-                  </template>
-                  <v-list-item-title>{{ provider.name }}</v-list-item-title>
-                  <template #append>
-                    <v-icon v-if="selectedProviderId === provider.id" color="primary">mdi-check</v-icon>
-                  </template>
-                </v-list-item>
-              </v-list>
-              <v-alert
-                v-if="providerError"
-                type="error"
-                density="compact"
-                variant="tonal"
-                class="mt-2"
-              >{{ providerError }}</v-alert>
-            </v-sheet>
-          </v-menu>
         </v-toolbar>
         <v-divider />
         <v-treeview
@@ -618,6 +717,15 @@ async function loadResourceProvider(providerId: string) {
             <template v-if="isSearchActive">
               No assets found for "{{ normalizedSearchQuery }}".
             </template>
+            <template v-else-if="activeProviderLoading">
+              Loading package assets…
+            </template>
+            <template v-else-if="activeProviderError">
+              {{ activeProviderError }}
+            </template>
+            <template v-else-if="activeProviderId">
+              Select a package directory to preview assets.
+            </template>
             <template v-else>
               Select a folder to preview assets.
             </template>
@@ -656,18 +764,6 @@ async function loadResourceProvider(providerId: string) {
   flex-direction: column;
   border-right: 1px solid rgba(255, 255, 255, 0.05);
   min-height: 0;
-}
-
-.resource-menu-btn {
-  color: rgba(233, 236, 241, 0.85) !important;
-}
-
-.resource-menu {
-  min-width: 220px;
-  padding: 8px 0 4px;
-  background-color: rgba(25, 28, 33, 0.96);
-  border: 1px solid rgba(77, 208, 225, 0.16);
-  border-radius: 12px;
 }
 
 .project-gallery {

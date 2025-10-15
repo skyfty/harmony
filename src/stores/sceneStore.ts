@@ -11,6 +11,7 @@ import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { PanelVisibilityState } from '@/types/panel-visibility-state'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
+import type { AssetIndexEntry, AssetSourceMetadata } from '@/types/asset-index-entry'
 import type { SceneCameraState } from '@/types/scene-camera-state'
 import type { SceneHistoryEntry } from '@/types/scene-history-entry'
 import type { SceneState } from '@/types/scene-state'
@@ -20,6 +21,16 @@ import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import { useAssetCacheStore } from './assetCacheStore'
 import { useUiStore } from './uiStore'
 import { loadObjectFromFile } from '@/plugins/assetImport'
+import {
+  cloneAssetList,
+  cloneProjectTree,
+  createEmptyAssetCatalog,
+  createProjectTreeFromCache,
+  defaultDirectoryId,
+  determineAssetCategoryId,
+} from './assetCatalog'
+
+export { ASSETS_ROOT_DIRECTORY_ID, buildPackageDirectoryId, extractProviderIdFromPackageDirectoryId } from './assetCatalog'
 
 export type EditorPanel = 'hierarchy' | 'inspector' | 'project'
 
@@ -29,46 +40,6 @@ const HISTORY_LIMIT = 50
 
 const initialNodes: SceneNode[] = []
 
-const builtinProjectTree: ProjectDirectory[] = [
-  {
-    id: 'dir-assets',
-    name: 'Assets',
-    children: [
-      {
-        id: 'dir-assets-models',
-        name: 'Models',
-        assets: [
-        ],
-      },
-    
-    ],
-  },
-]
-
-function cloneProjectTree(tree: ProjectDirectory[]): ProjectDirectory[] {
-  return tree.map((directory) => ({
-    ...directory,
-    children: directory.children ? cloneProjectTree(directory.children) : undefined,
-    assets: directory.assets ? directory.assets.map((asset) => ({ ...asset })) : undefined,
-  }))
-}
-
-function findFirstDirectoryId(tree: ProjectDirectory[]): string | null {
-  for (const directory of tree) {
-    if (directory.assets && directory.assets.length) {
-      return directory.id
-    }
-    if (directory.children) {
-      const nested = findFirstDirectoryId(directory.children)
-      if (nested) {
-        return nested
-      }
-    }
-  }
-  return tree[0]?.id ?? null
-}
-
-const defaultDirectoryId = findFirstDirectoryId(builtinProjectTree)
 
 const defaultCameraState: SceneCameraState = {
   position: { x: 12, y: 9, z: 12 },
@@ -477,6 +448,61 @@ function normalizeSceneSelections(state: ScenePersistedState): ScenePersistedSta
   }
 }
 
+function ensureAssetCatalogState(state: ScenePersistedState): ScenePersistedState {
+  const rawCatalog = (state as { assetCatalog?: unknown }).assetCatalog
+  const rawIndex = (state as { assetIndex?: unknown }).assetIndex
+  const rawPackageAssetMap = (state as { packageAssetMap?: unknown }).packageAssetMap
+
+  const normalizedCatalogBase = createEmptyAssetCatalog()
+  const normalizedCatalogEntries: Record<string, ProjectAsset[]> = { ...normalizedCatalogBase }
+  if (rawCatalog && typeof rawCatalog === 'object') {
+    const source = rawCatalog as Record<string, ProjectAsset[] | undefined>
+    Object.keys(normalizedCatalogEntries).forEach((categoryId) => {
+      const list = source[categoryId]
+      normalizedCatalogEntries[categoryId] = Array.isArray(list) ? cloneAssetList(list) : []
+    })
+    Object.keys(source).forEach((categoryId) => {
+      if (!(categoryId in normalizedCatalogEntries)) {
+        const list = source[categoryId]
+        if (Array.isArray(list)) {
+          normalizedCatalogEntries[categoryId] = cloneAssetList(list)
+        }
+      }
+    })
+  }
+
+  const normalizedIndex = rawIndex && typeof rawIndex === 'object'
+    ? { ...(rawIndex as Record<string, AssetIndexEntry>) }
+    : {}
+
+  const normalizedPackageAssetMap = rawPackageAssetMap && typeof rawPackageAssetMap === 'object'
+    ? { ...(rawPackageAssetMap as Record<string, string>) }
+    : {}
+
+  return {
+    ...state,
+    assetCatalog: normalizedCatalogEntries,
+    assetIndex: normalizedIndex,
+    packageAssetMap: normalizedPackageAssetMap,
+  }
+}
+
+function ensurePackageDirectoryState(state: ScenePersistedState): ScenePersistedState {
+  const rawCache = (state as { packageDirectoryCache?: unknown }).packageDirectoryCache
+  const rawLoaded = (state as { packageDirectoryLoaded?: unknown }).packageDirectoryLoaded
+  const normalizedCache: Record<string, ProjectDirectory[]> = rawCache && typeof rawCache === 'object'
+    ? { ...(rawCache as Record<string, ProjectDirectory[]>) }
+    : {}
+  const normalizedLoaded: Record<string, boolean> = rawLoaded && typeof rawLoaded === 'object'
+    ? { ...(rawLoaded as Record<string, boolean>) }
+    : {}
+  return {
+    ...state,
+    packageDirectoryCache: normalizedCache,
+    packageDirectoryLoaded: normalizedLoaded,
+  }
+}
+
 const sceneStoreMigrationSteps: Array<(state: ScenePersistedState) => ScenePersistedState> = [
   ensureActiveTool,
   ensureCameraAndPanelState,
@@ -485,6 +511,8 @@ const sceneStoreMigrationSteps: Array<(state: ScenePersistedState) => ScenePersi
   ensureResourceProvider,
   ensureSceneTimestamps,
   normalizeSceneSelections,
+  ensureAssetCatalogState,
+  ensurePackageDirectoryState,
 ]
 
 function migrateScenePersistedState(
@@ -719,29 +747,38 @@ function insertNodeMutable(
 
 
 export const useSceneStore = defineStore('scene', {
-  state: (): SceneState => ({
-    scenes: [initialSceneDocument],
-    currentSceneId: initialSceneDocument.id,
-    nodes: cloneSceneNodes(initialSceneDocument.nodes),
-    selectedNodeId: initialSceneDocument.selectedNodeId,
-    selectedNodeIds: cloneSelection(initialSceneDocument.selectedNodeIds),
-    activeTool: 'select',
-    projectTree: cloneProjectTree(builtinProjectTree),
-    activeDirectoryId: defaultDirectoryId,
-    selectedAssetId: null,
-    camera: cloneCameraState(initialSceneDocument.camera),
-    panelVisibility: { ...defaultPanelVisibility },
-    resourceProviderId: initialSceneDocument.resourceProviderId,
-    cameraFocusNodeId: null,
-    cameraFocusRequestId: 0,
-    clipboard: null,
-    draggingAssetObject: null,
-    undoStack: [],
-    redoStack: [],
-    isRestoringHistory: false,
-    activeTransformNodeId: null,
-    transformSnapshotCaptured: false,
-  }),
+  state: (): SceneState => {
+    const assetCatalog = createEmptyAssetCatalog()
+    const packageDirectoryCache: Record<string, ProjectDirectory[]> = {}
+    return {
+      scenes: [initialSceneDocument],
+      currentSceneId: initialSceneDocument.id,
+      nodes: cloneSceneNodes(initialSceneDocument.nodes),
+      selectedNodeId: initialSceneDocument.selectedNodeId,
+      selectedNodeIds: cloneSelection(initialSceneDocument.selectedNodeIds),
+      activeTool: 'select',
+      assetCatalog,
+      assetIndex: {},
+      packageAssetMap: {},
+      packageDirectoryCache,
+      packageDirectoryLoaded: {},
+      projectTree: createProjectTreeFromCache(assetCatalog, packageDirectoryCache),
+      activeDirectoryId: defaultDirectoryId,
+      selectedAssetId: null,
+      camera: cloneCameraState(initialSceneDocument.camera),
+      panelVisibility: { ...defaultPanelVisibility },
+      resourceProviderId: initialSceneDocument.resourceProviderId,
+      cameraFocusNodeId: null,
+      cameraFocusRequestId: 0,
+      clipboard: null,
+      draggingAssetObject: null,
+      undoStack: [],
+      redoStack: [],
+      isRestoringHistory: false,
+      activeTransformNodeId: null,
+      transformSnapshotCaptured: false,
+    }
+  },
   getters: {
     currentScene(state): StoredSceneDocument | null {
       if (!state.scenes.length) {
@@ -1239,14 +1276,103 @@ export const useSceneStore = defineStore('scene', {
       return { asset, node }
     },
     resetProjectTree() {
-      this.projectTree = cloneProjectTree(builtinProjectTree)
-      this.activeDirectoryId = findFirstDirectoryId(this.projectTree)
+      this.packageDirectoryCache = {}
+      this.packageDirectoryLoaded = {}
+      this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
+      this.activeDirectoryId = defaultDirectoryId
       this.selectedAssetId = null
     },
-    setProjectTree(directories: ProjectDirectory[]) {
-      this.projectTree = cloneProjectTree(directories)
-      this.activeDirectoryId = findFirstDirectoryId(this.projectTree)
+    getPackageDirectories(providerId: string): ProjectDirectory[] | null {
+      const cached = this.packageDirectoryCache[providerId]
+      if (!cached) {
+        return null
+      }
+      return cloneProjectTree(cached)
+    },
+    isPackageLoaded(providerId: string): boolean {
+      return !!this.packageDirectoryLoaded[providerId]
+    },
+    setPackageDirectories(providerId: string, directories: ProjectDirectory[]) {
+  this.packageDirectoryCache[providerId] = cloneProjectTree(directories)
+      this.packageDirectoryLoaded[providerId] = true
+  const nextTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
+      this.projectTree = nextTree
+      if (!this.activeDirectoryId || !findDirectory(nextTree, this.activeDirectoryId)) {
+        this.activeDirectoryId = defaultDirectoryId
+      }
       this.selectedAssetId = null
+    },
+    getAsset(assetId: string): ProjectAsset | null {
+      const meta = this.assetIndex[assetId]
+      if (meta) {
+        const catalogList = this.assetCatalog[meta.categoryId] ?? []
+        const found = catalogList.find((item) => item.id === assetId)
+        if (found) {
+          return found
+        }
+      }
+      return findAssetInTree(this.projectTree, assetId)
+    },
+    registerAsset(asset: ProjectAsset, options: { categoryId?: string; source?: AssetSourceMetadata } = {}) {
+      const categoryId = options.categoryId ?? determineAssetCategoryId(asset)
+      const existingEntry = this.assetIndex[asset.id]
+      const nextCatalog: Record<string, ProjectAsset[]> = { ...this.assetCatalog }
+
+      if (existingEntry) {
+        const previousCategoryId = existingEntry.categoryId
+        if (nextCatalog[previousCategoryId]) {
+          nextCatalog[previousCategoryId] = nextCatalog[previousCategoryId]!.filter((item) => item.id !== asset.id)
+        }
+      }
+
+      const registeredAsset: ProjectAsset = { ...asset }
+      const currentList = nextCatalog[categoryId] ?? []
+      nextCatalog[categoryId] = [...currentList.filter((item) => item.id !== registeredAsset.id), registeredAsset]
+
+      this.assetCatalog = nextCatalog
+      this.assetIndex = {
+        ...this.assetIndex,
+        [registeredAsset.id]: {
+          categoryId,
+          source: options.source,
+        },
+      }
+
+      this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
+      return registeredAsset
+    },
+    copyPackageAssetToAssets(providerId: string, asset: ProjectAsset): ProjectAsset {
+      const mapKey = `${providerId}::${asset.id}`
+      const existingId = this.packageAssetMap[mapKey]
+      if (existingId) {
+        const existingAsset = this.getAsset(existingId)
+        if (existingAsset) {
+          return existingAsset
+        }
+        const { [mapKey]: _removed, ...rest } = this.packageAssetMap
+        this.packageAssetMap = rest
+      }
+
+      const assetClone: ProjectAsset = {
+        ...asset,
+        id: asset.id,
+      }
+      const categoryId = determineAssetCategoryId(assetClone)
+      const registered = this.registerAsset(assetClone, {
+        categoryId,
+        source: {
+          type: 'package',
+          providerId,
+          originalAssetId: asset.id,
+        },
+      })
+
+      this.packageAssetMap = {
+        ...this.packageAssetMap,
+        [mapKey]: registered.id,
+      }
+
+      return registered
     },
     setResourceProviderId(providerId: string) {
       if (this.resourceProviderId === providerId) {
