@@ -202,7 +202,7 @@ async function loadDragPreviewForAsset(asset: ProjectAsset): Promise<boolean> {
   pendingPreviewAssetId = asset.id
   clearDragPreviewObject()
   const token = ++dragPreviewLoadToken
-  const file = assetCacheStore.createFileFromCache(asset)
+  const file = assetCacheStore.createFileFromCache(asset.id)
   if (!file) {
     pendingPreviewAssetId = null
     return false

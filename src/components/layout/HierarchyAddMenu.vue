@@ -5,9 +5,11 @@ import * as THREE from 'three'
 import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from '@/plugins/loader'
 import { useFileDialog } from '@vueuse/core'
 import { useUiStore } from '@/stores/uiStore'
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
 
 const sceneStore = useSceneStore()
 const uiStore = useUiStore()
+const assetCacheStore = useAssetCacheStore()
 
 function prepareImportedObject(object: THREE.Object3D) {
   object.removeFromParent()
@@ -34,7 +36,40 @@ function prepareImportedObject(object: THREE.Object3D) {
   }
 }
 
-function addImportedObjectToScene(object: THREE.Object3D, assetId: string) {
+function resolveFilenameFromUrl(url: string, headers?: Headers): string {
+  if (headers) {
+    const contentDisposition = headers.get('content-disposition')
+    if (contentDisposition) {
+      const match = /filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i.exec(contentDisposition)
+      if (match) {
+        const encoded = match[1] ?? match[2]
+        if (encoded) {
+          try {
+            return decodeURIComponent(encoded)
+          } catch (error) {
+            console.warn('无法解析响应头中的文件名', error)
+            return encoded
+          }
+        }
+      }
+    }
+  }
+
+  try {
+    const parsed = new URL(url, window.location.href)
+    const segments = parsed.pathname.split('/').filter(Boolean)
+    const last = segments.pop()
+    if (last) {
+      return decodeURIComponent(last)
+    }
+  } catch (error) {
+    console.warn('无法从 URL 解析文件名', error)
+  }
+
+  return 'remote-asset'
+}
+
+function addImportedObjectToScene(object: THREE.Object3D, assetId?: string) {
   prepareImportedObject(object)
 
   sceneStore.addSceneNode({
@@ -47,33 +82,85 @@ function addImportedObjectToScene(object: THREE.Object3D, assetId: string) {
   })
 }
 
-function handleMenuImportFromUrl() {
-
-
+async function handleMenuImportFromUrl() {
+ 
 }
 
 function handleMenuImportFromFile() {
-    const loader = new Loader()
+  const loader = new Loader()
+  const sourceFiles = new Map<string, File[]>()
 
-  loader.$on('loaded', (object: LoaderLoadedPayload) => {
-    if (object) {
-      const imported = object as THREE.Object3D
-      const assetId = crypto.randomUUID()
-      addImportedObjectToScene(imported, assetId)
-
-      uiStore.updateLoadingOverlay({
-        message: `${imported.name ?? '资源'}导入完成`,
-        progress: 100,
-      })
-      uiStore.updateLoadingProgress(100)
-    } else {
+  loader.$on('loaded', async (object: LoaderLoadedPayload) => {
+    if (!object) {
       console.error('Failed to load object.')
       uiStore.updateLoadingOverlay({
         message: '导入失败，请重试',
         closable: true,
         autoClose: false,
       })
+      return
     }
+
+    const imported = object as THREE.Object3D
+    const assetId = crypto.randomUUID()
+
+    let matchedFile: File | null = null
+    if (imported.name && sourceFiles.has(imported.name)) {
+      const list = sourceFiles.get(imported.name) ?? []
+      matchedFile = list.shift() ?? null
+      if (list.length) {
+        sourceFiles.set(imported.name, list)
+      } else {
+        sourceFiles.delete(imported.name)
+      }
+    }
+
+    if (!matchedFile) {
+      for (const [key, list] of sourceFiles.entries()) {
+        if (!list.length) {
+          sourceFiles.delete(key)
+          continue
+        }
+        matchedFile = list.shift() ?? null
+        if (list.length) {
+          sourceFiles.set(key, list)
+        } else {
+          sourceFiles.delete(key)
+        }
+        if (matchedFile) {
+          break
+        }
+      }
+    }
+
+    let cached = false
+    if (matchedFile) {
+      try {
+        await assetCacheStore.storeAssetBlob(assetId, {
+          blob: matchedFile,
+          mimeType: matchedFile.type || null,
+          filename: matchedFile.name,
+        })
+        cached = true
+      } catch (error) {
+        console.error('缓存导入资源失败', error)
+      }
+    } else {
+      console.warn('未能匹配到导入文件，无法缓存资源', imported.name)
+    }
+
+    addImportedObjectToScene(imported, assetId)
+
+    if (cached) {
+      assetCacheStore.registerUsage(assetId)
+      assetCacheStore.touch(assetId)
+    }
+
+    uiStore.updateLoadingOverlay({
+      message: `${imported.name ?? '资源'}导入完成`,
+      progress: 100,
+    })
+    uiStore.updateLoadingProgress(100)
   })
 
   loader.$on('progress', (payload: LoaderProgressPayload) => {
@@ -95,6 +182,17 @@ function handleMenuImportFromFile() {
     }
 
     const fileArray = Array.isArray(files) ? files : Array.from(files)
+
+    sourceFiles.clear()
+    for (const file of fileArray) {
+      const list = sourceFiles.get(file.name)
+      if (list) {
+        list.push(file)
+      } else {
+        sourceFiles.set(file.name, [file])
+      }
+    }
+
     uiStore.startIndeterminateLoading({
       title: '导入资源',
       message: '正在准备文件…',

@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { type Object3D } from 'three'
 import type { SceneNode, Vector3Like } from '@/types/scene'
-import { useAssetCacheStore, type AssetCacheEntry } from './assetCacheStore'
+import { useAssetCacheStore } from './assetCacheStore'
 import { useUiStore } from './uiStore'
 import { loadObjectFromFile } from '@/plugins/assetImport'
 
@@ -12,7 +12,7 @@ export interface ProjectAsset {
   name: string
   type: 'model' | 'texture' | 'image' | 'audio' | 'file'
   description?: string
-  downloadUrl?: string | null
+  downloadUrl: string
   previewColor: string
   thumbnail?: string | null
 }
@@ -223,20 +223,6 @@ function collectNodesByAssetId(nodes: SceneNode[]): Map<string, SceneNode[]> {
 
   traverse(nodes)
   return map
-}
-
-function createPlaceholderAsset(assetId: string, nodes: SceneNode[], entry?: AssetCacheEntry | null): ProjectAsset {
-  const fallbackName = nodes[0]?.name ?? assetId
-  const downloadUrl = entry?.downloadUrl ?? null
-  return {
-    id: assetId,
-    name: fallbackName,
-    type: 'model',
-    previewColor: '#26C6DA',
-    thumbnail: null,
-    description: downloadUrl ?? entry?.filename ?? fallbackName,
-    downloadUrl,
-  }
 }
 
 function buildParentMap(
@@ -816,8 +802,8 @@ export const useSceneStore = defineStore('scene', {
 
       if (shouldShowOverlay) {
         uiStore.showLoadingOverlay({
-          title: '加载场景资源',
-          message: '正在准备资源…',
+          title: 'Loading Scene Assets',
+          message: 'Preparing assets…',
           mode: 'determinate',
           progress: 0,
           closable: false,
@@ -830,13 +816,12 @@ export const useSceneStore = defineStore('scene', {
       const errors: Array<{ assetId: string; message: string }> = []
 
       for (const [assetId, nodesForAsset] of assetNodeMap.entries()) {
-        const assetMeta = findAssetInTree(this.projectTree, assetId)
-        const assetLabel = assetMeta?.name ?? nodesForAsset[0]?.name ?? assetId
-
+        const assetLabel = nodesForAsset[0]?.name ?? assetId
+    
         try {
           if (shouldShowOverlay) {
             uiStore.updateLoadingOverlay({
-              message: `正在加载资源：${assetLabel}`,
+              message: `Loading asset: ${assetLabel}`,
             })
           }
 
@@ -845,31 +830,21 @@ export const useSceneStore = defineStore('scene', {
             await assetCache.loadFromIndexedDb(assetId)
             entry = assetCache.getEntry(assetId)
           }
-
-          let effectiveAsset = assetMeta ?? createPlaceholderAsset(assetId, nodesForAsset, entry)
-
+          const downloadUrl = entry?.downloadUrl ?? null
+     
           if (!assetCache.hasCache(assetId)) {
-            if (!effectiveAsset.downloadUrl && entry.downloadUrl) {
-              effectiveAsset = {
-                ...effectiveAsset,
-                downloadUrl: entry.downloadUrl,
-                description: entry.downloadUrl,
-              }
+            if (!downloadUrl) {
+              throw new Error('Missing asset download URL')
             }
-
-            if (!effectiveAsset.downloadUrl && !effectiveAsset.description) {
-              throw new Error('缺少资源下载地址')
-            }
-
-            await assetCache.downloadAsset(effectiveAsset)
+            await assetCache.downloadAsset(assetId, downloadUrl, assetLabel)
             entry = assetCache.getEntry(assetId)
           } else {
             assetCache.touch(assetId)
           }
 
-          const file = assetCache.createFileFromCache(effectiveAsset)
+          const file = assetCache.createFileFromCache(assetId)
           if (!file) {
-            throw new Error('缓存中缺少资源文件')
+            throw new Error('Missing asset file in cache')
           }
 
           const baseObject = await loadObjectFromFile(file)
@@ -880,12 +855,12 @@ export const useSceneStore = defineStore('scene', {
             registerRuntimeObject(node.id, object)
           })
         } catch (error) {
-          const message = (error as Error).message ?? '未知错误'
+          const message = (error as Error).message ?? 'Unknown error'
           errors.push({ assetId, message })
-          console.warn(`资源 ${assetId} 加载失败`, error)
+          console.warn(`Failed to load asset ${assetId}`, error)
           if (shouldShowOverlay) {
             uiStore.updateLoadingOverlay({
-              message: `资源 ${assetLabel} 加载失败：${message}`,
+              message: `Failed to load asset ${assetLabel}: ${message}`,
               closable: true,
               autoClose: false,
             })
@@ -902,14 +877,14 @@ export const useSceneStore = defineStore('scene', {
       if (shouldShowOverlay) {
         if (errors.length === 0) {
           uiStore.updateLoadingOverlay({
-            message: '资源加载完成',
+            message: 'Assets loaded successfully',
             autoClose: true,
             autoCloseDelay: 600,
           })
           uiStore.updateLoadingProgress(100, { autoClose: true, autoCloseDelay: 600 })
         } else {
           uiStore.updateLoadingOverlay({
-            message: `有 ${errors.length} 个资源加载失败，请查看日志`,
+            message: `${errors.length} assets failed to load. Please check the logs.`,
             closable: true,
             autoClose: false,
           })
@@ -939,9 +914,9 @@ export const useSceneStore = defineStore('scene', {
       if (!assetCache.hasCache(asset.id)) {
         return null
       }
-      const file = assetCache.createFileFromCache(asset)
+      const file = assetCache.createFileFromCache(asset.id)
       if (!file) {
-        throw new Error('缓存中缺少资源数据')
+        throw new Error('Missing asset data in cache')
       }
 
       const object = await loadObjectFromFile(file)
@@ -960,11 +935,11 @@ export const useSceneStore = defineStore('scene', {
     async spawnAssetAtPosition(assetId: string, position: Vector3Like): Promise<{ asset: ProjectAsset; node: SceneNode }> {
       const asset = findAssetInTree(this.projectTree, assetId)
       if (!asset) {
-        throw new Error('未找到对应的资源')
+        throw new Error('Unable to find the requested asset')
       }
       const node = await this.addNodeFromAsset(asset, position)
       if (!node) {
-        throw new Error('资源尚未就绪，无法添加到场景')
+        throw new Error('Asset is not ready and cannot be added to the scene')
       }
       return { asset, node }
     },

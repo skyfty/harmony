@@ -96,7 +96,7 @@ function showDownloadButton(asset: ProjectAsset) {
 
 async function ensureAssetCached(asset: ProjectAsset) {
 
-  const entry = await assetCacheStore.downloadAsset(asset)
+  const entry = await assetCacheStore.downloaProjectAsset(asset)
   if (!assetCacheStore.hasCache(asset.id)) {
     throw new Error(entry.error ?? '资源未下载完成')
   }

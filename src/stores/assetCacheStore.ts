@@ -20,7 +20,7 @@ export interface AssetCacheEntry {
   downloadUrl: string | null
 }
 
-export interface DownloadOptions {
+export interface AssetDownloadOptions {
   force?: boolean
 }
 
@@ -360,12 +360,12 @@ export const useAssetCacheStore = defineStore('assetCache', {
     getBlobUrl(assetId: string): string | null {
       return this.entries[assetId]?.blobUrl ?? null
     },
-    createFileFromCache(asset: ProjectAsset): File | null {
-      const entry = this.entries[asset.id]
+    createFileFromCache(assetId: string): File | null {
+      const entry = this.entries[assetId]
       if (!entry || entry.status !== 'cached' || !entry.blob) {
         return null
       }
-      const filename = entry.filename && entry.filename.trim().length ? entry.filename : `${asset.id}`
+      const filename = entry.filename && entry.filename.trim().length ? entry.filename : `${assetId}`
       const mimeType = entry.mimeType ?? 'application/octet-stream'
       return new File([entry.blob], filename, { type: mimeType })
     },
@@ -393,35 +393,76 @@ export const useAssetCacheStore = defineStore('assetCache', {
       this.evictIfNeeded(assetId)
       return entry
     },
-    async downloadAsset(asset: ProjectAsset, options: DownloadOptions = {}): Promise<AssetCacheEntry> {
-      const entry = this.ensureEntry(asset.id)
+
+    async storeAssetBlob(
+      assetId: string,
+      payload: {
+        blob: Blob
+        mimeType?: string | null
+        filename?: string | null
+        downloadUrl?: string | null
+      },
+    ): Promise<AssetCacheEntry> {
+      const entry = this.ensureEntry(assetId)
+      const filename = payload.filename ?? (payload.blob instanceof File ? payload.blob.name : null)
+
+      applyBlobToEntry(entry, {
+        blob: payload.blob,
+        mimeType: payload.mimeType ?? payload.blob.type ?? entry.mimeType ?? null,
+        filename,
+        downloadUrl: payload.downloadUrl ?? entry.downloadUrl ?? null,
+      })
+
+      entry.size = payload.blob.size
+      entry.lastUsedAt = now()
+
+      try {
+        await writeAssetToIndexedDb({
+          assetId,
+          blob: payload.blob,
+          mimeType: entry.mimeType,
+          filename: entry.filename,
+          downloadUrl: entry.downloadUrl,
+          size: payload.blob.size,
+          cachedAt: now(),
+        })
+      } catch (error) {
+        console.warn('写入 IndexedDB 失败', error)
+      }
+
+      this.evictIfNeeded(assetId)
+      return entry
+    },
+
+    async downloadAsset(assetId:string, downloadUrl: string, name: string, options: AssetDownloadOptions = {}): Promise<AssetCacheEntry> {
+      const scope = this
+      const entry = scope.ensureEntry(assetId)
       if (entry.status === 'cached' && !options.force) {
-        this.touch(asset.id)
+        scope.touch(assetId)
         return entry
       }
 
-      if (this.pending[asset.id]) {
-        return this.pending[asset.id]!
+      if (scope.pending[assetId]) {
+        return scope.pending[assetId]!
       }
 
       const promise = (async () => {
         if (!options.force) {
-          const restored = await this.loadFromIndexedDb(asset.id)
+          const restored = await scope.loadFromIndexedDb(assetId)
           if (restored) {
             if (!restored.downloadUrl) {
-              restored.downloadUrl = asset.downloadUrl ?? asset.description ?? null
+              restored.downloadUrl = downloadUrl
             }
             return restored
           }
         }
 
-        const downloadUrl = asset.downloadUrl ?? asset.description ?? null
         if (!downloadUrl) {
           throw new Error('该资源没有可用的下载地址')
         }
 
         const controller = new AbortController()
-        const current = this.ensureEntry(asset.id)
+        const current = scope.ensureEntry(assetId)
         current.status = 'downloading'
         current.progress = 0
         current.error = null
@@ -433,36 +474,20 @@ export const useAssetCacheStore = defineStore('assetCache', {
             downloadUrl,
             controller,
             (progress: number) => {
-              const updating = this.ensureEntry(asset.id)
+              const updating = scope.ensureEntry(assetId)
               updating.progress = progress
             },
-            asset.name,
+            name,
           )
-
-          const updated = this.ensureEntry(asset.id)
-          applyBlobToEntry(updated, {
+          return await scope.storeAssetBlob(assetId, {
             blob: data.blob,
             mimeType: data.contentType,
             filename: data.filename,
             downloadUrl,
           })
-          updated.size = data.blob.size
-          updated.lastUsedAt = now()
 
-          await writeAssetToIndexedDb({
-            assetId: asset.id,
-            blob: data.blob,
-            mimeType: data.contentType,
-            filename: updated.filename,
-            downloadUrl,
-            size: data.blob.size,
-            cachedAt: now(),
-          })
-
-          this.evictIfNeeded(asset.id)
-          return updated
         } catch (error) {
-          const failed = this.ensureEntry(asset.id)
+          const failed = scope.ensureEntry(assetId)
           failed.abortController = null
           if ((error as Error).name === ABORT_ERROR_NAME) {
             failed.status = 'idle'
@@ -477,12 +502,22 @@ export const useAssetCacheStore = defineStore('assetCache', {
         }
       })()
         .finally(() => {
-          delete this.pending[asset.id]
+          delete scope.pending[assetId]
         })
 
-      this.pending[asset.id] = promise
+      scope.pending[assetId] = promise
       return promise
     },
+
+    async downloaProjectAsset(asset: ProjectAsset, options: AssetDownloadOptions = {}): Promise<AssetCacheEntry> {
+      const scope = this
+      const url = asset.downloadUrl ?? asset.description ?? null
+      if (!url) {
+        throw new Error('该资源没有可用的下载地址')
+      }
+      return scope.downloadAsset(asset.id, url, asset.name, options)
+    },
+    
     cancelDownload(assetId: string) {
       const entry = this.entries[assetId]
       if (!entry || entry.status !== 'downloading') {
