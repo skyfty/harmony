@@ -1414,6 +1414,128 @@ export const useSceneStore = defineStore('scene', {
 
       return registered
     },
+    deleteProjectAssets(assetIds: string[]): string[] {
+      const uniqueIds = Array.from(
+        new Set(
+          assetIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0),
+        ),
+      )
+      if (!uniqueIds.length) {
+        return []
+      }
+
+      const catalogAssets = new Map<string, ProjectAsset>()
+      Object.values(this.assetCatalog).forEach((list) => {
+        list.forEach((asset) => {
+          catalogAssets.set(asset.id, asset)
+        })
+      })
+
+      const deletableIds = uniqueIds.filter((id) => catalogAssets.has(id))
+      if (!deletableIds.length) {
+        return []
+      }
+
+      const assetIdSet = new Set(deletableIds)
+      const assetCache = useAssetCacheStore()
+
+      const assetNodeMap = collectNodesByAssetId(this.nodes)
+      const nodeIdsToRemove: string[] = []
+      deletableIds.forEach((assetId) => {
+        const nodes = assetNodeMap.get(assetId)
+        if (nodes?.length) {
+          nodes.forEach((node) => {
+            nodeIdsToRemove.push(node.id)
+          })
+        }
+      })
+      if (nodeIdsToRemove.length) {
+        this.removeSceneNodes(nodeIdsToRemove)
+      }
+
+      const now = new Date().toISOString()
+      const updatedScenes = this.scenes.map((scene) => {
+        if (scene.id === this.currentSceneId) {
+          return scene
+        }
+        const sceneAssetNodeMap = collectNodesByAssetId(scene.nodes)
+        const sceneNodeIds: string[] = []
+        deletableIds.forEach((assetId) => {
+          const nodes = sceneAssetNodeMap.get(assetId)
+          if (nodes?.length) {
+            nodes.forEach((node) => sceneNodeIds.push(node.id))
+          }
+        })
+        if (!sceneNodeIds.length) {
+          return scene
+        }
+        const removedNodeIds: string[] = []
+        const prunedNodes = pruneNodes(scene.nodes, new Set(sceneNodeIds), removedNodeIds)
+        const removedSet = new Set(removedNodeIds)
+
+        let selectedNodeIds = Array.isArray(scene.selectedNodeIds)
+          ? scene.selectedNodeIds.filter((id) => !removedSet.has(id))
+          : []
+        let selectedNodeId = scene.selectedNodeId
+        if (selectedNodeId && removedSet.has(selectedNodeId)) {
+          selectedNodeId = null
+        }
+        if (!selectedNodeId && prunedNodes.length > 0) {
+          selectedNodeId = prunedNodes[0]!.id
+        }
+        if (!selectedNodeIds.length && selectedNodeId) {
+          selectedNodeIds = [selectedNodeId]
+        }
+        selectedNodeIds = normalizeSelectionIds(prunedNodes, selectedNodeIds)
+        if (selectedNodeId && !selectedNodeIds.includes(selectedNodeId)) {
+          selectedNodeId = selectedNodeIds[selectedNodeIds.length - 1] ?? null
+        }
+
+        return {
+          ...scene,
+          nodes: prunedNodes,
+          selectedNodeId,
+          selectedNodeIds,
+          updatedAt: now,
+        }
+      })
+      this.scenes = updatedScenes
+
+      const nextCatalog: Record<string, ProjectAsset[]> = {}
+      Object.entries(this.assetCatalog).forEach(([categoryId, list]) => {
+        nextCatalog[categoryId] = list
+          .filter((asset) => !assetIdSet.has(asset.id))
+          .map((asset) => ({ ...asset }))
+      })
+      this.assetCatalog = nextCatalog
+      this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
+      if (this.activeDirectoryId && !findDirectory(this.projectTree, this.activeDirectoryId)) {
+        this.activeDirectoryId = defaultDirectoryId
+      }
+      if (this.selectedAssetId && assetIdSet.has(this.selectedAssetId)) {
+        this.selectedAssetId = null
+      }
+
+      const nextIndex = { ...this.assetIndex }
+      deletableIds.forEach((assetId) => {
+        delete nextIndex[assetId]
+      })
+      this.assetIndex = nextIndex
+
+      const nextPackageMap: Record<string, string> = {}
+      Object.entries(this.packageAssetMap).forEach(([key, value]) => {
+        if (!assetIdSet.has(value)) {
+          nextPackageMap[key] = value
+        }
+      })
+      this.packageAssetMap = nextPackageMap
+
+      deletableIds.forEach((assetId) => {
+        assetCache.removeCache(assetId)
+      })
+
+      return deletableIds
+    },
     setResourceProviderId(providerId: string) {
       if (this.resourceProviderId === providerId) {
         return

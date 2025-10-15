@@ -11,7 +11,6 @@ import { resourceProviders } from '@/resources/projectProviders'
 const emit = defineEmits<{
   (event: 'collapse'): void
 }>()
-
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
 const { projectTree, activeDirectoryId, currentAssets, selectedAssetId } = storeToRefs(sceneStore)
@@ -21,6 +20,10 @@ const draggingAssetId = ref<string | null>(null)
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 let dragPreviewEl: HTMLDivElement | null = null
 const addPendingAssetId = ref<string | null>(null)
+const deleteDialogOpen = ref(false)
+const pendingDeleteAssets = ref<ProjectAsset[]>([])
+const isBatchDeletion = ref(false)
+const selectedAssetIds = ref<string[]>([])
 
 const providerLoading = ref<Record<string, boolean>>({})
 const providerErrors = ref<Record<string, string | null>>({})
@@ -212,6 +215,10 @@ function isAssetDownloading(asset: ProjectAsset) {
   return assetCacheStore.isDownloading(resolveAssetCacheId(asset))
 }
 
+function canDeleteAsset(asset: ProjectAsset) {
+  return assetCacheStore.hasCache(resolveAssetCacheId(asset)) && !isAssetDownloading(asset)
+}
+
 function assetDownloadProgress(asset: ProjectAsset) {
   return assetCacheStore.getProgress(resolveAssetCacheId(asset))
 }
@@ -284,6 +291,71 @@ function handleAssetDragEnd() {
   destroyDragPreview()
 }
 
+function isAssetSelected(assetId: string) {
+  return selectedAssetIds.value.includes(assetId)
+}
+
+function toggleAssetSelection(asset: ProjectAsset) {
+  const assetId = asset.id
+  const cacheId = resolveAssetCacheId(asset)
+  if (!assetCacheStore.hasCache(cacheId) || isAssetDownloading(asset)) {
+    return
+  }
+  if (isAssetSelected(assetId)) {
+    selectedAssetIds.value = selectedAssetIds.value.filter((id) => id !== assetId)
+  } else {
+    selectedAssetIds.value = [...selectedAssetIds.value, assetId]
+  }
+}
+
+function openDeleteDialog(assets: ProjectAsset[], batch: boolean) {
+  if (!assets.length) {
+    return
+  }
+  const filtered = assets.filter((asset) => assetCacheStore.hasCache(resolveAssetCacheId(asset)))
+  if (!filtered.length) {
+    return
+  }
+  pendingDeleteAssets.value = filtered
+  isBatchDeletion.value = batch
+  deleteDialogOpen.value = true
+}
+
+function requestDeleteAsset(asset: ProjectAsset) {
+  openDeleteDialog([asset], false)
+}
+
+function requestDeleteSelection() {
+  openDeleteDialog(selectedAssets.value, true)
+}
+
+function cancelDeleteAssets() {
+  deleteDialogOpen.value = false
+  pendingDeleteAssets.value = []
+  isBatchDeletion.value = false
+}
+
+async function performDeleteAssets() {
+  const assets = pendingDeleteAssets.value
+  if (!assets.length) {
+    cancelDeleteAssets()
+    return
+  }
+  try {
+    const assetIds = assets.map((asset) => asset.id)
+    const removedIds = sceneStore.deleteProjectAssets(assetIds)
+    if (removedIds.length) {
+      sceneStore.selectAsset(null)
+      searchResults.value = searchResults.value.filter((item) => !removedIds.includes(item.id))
+      selectedAssetIds.value = selectedAssetIds.value.filter((id) => !removedIds.includes(id))
+    }
+  } catch (error) {
+    console.error('删除资源失败', error)
+  } finally {
+    cancelDeleteAssets()
+  }
+}
+
 function isAssetDragging(assetId: string) {
   return draggingAssetId.value === assetId
 }
@@ -298,6 +370,29 @@ let searchDebounceHandle: ReturnType<typeof setTimeout> | null = null
 const normalizedSearchQuery = computed(() => searchQuery.value.trim())
 const isSearchActive = computed(() => searchLoaded.value && normalizedSearchQuery.value.length > 0)
 const displayedAssets = computed(() => (isSearchActive.value ? searchResults.value : currentAssets.value))
+const selectedAssets = computed(() =>
+  selectedAssetIds.value
+    .map((id) => displayedAssets.value.find((asset) => asset.id === id))
+    .filter((asset): asset is ProjectAsset => !!asset),
+)
+const allSelectedAssetsCached = computed(() =>
+  selectedAssets.value.length > 0 && selectedAssets.value.every((asset) => assetCacheStore.hasCache(resolveAssetCacheId(asset))),
+)
+const isToolbarDeleteVisible = computed(() => allSelectedAssetsCached.value)
+const deletionDialogTitle = computed(() => (isBatchDeletion.value ? 'Delete Selected Assets' : 'Delete Asset'))
+const deletionConfirmLabel = computed(() => (isBatchDeletion.value ? 'Delete Assets' : 'Delete'))
+const deletionSummary = computed(() => {
+  if (!pendingDeleteAssets.value.length) {
+    return ''
+  }
+  const names = pendingDeleteAssets.value.map((asset) => `“${asset.name}”`).join('、')
+  const prefix = isBatchDeletion.value
+    ? `Are you sure you want to delete the selected assets ${names}?`
+    : `Are you sure you want to delete asset ${names}?`
+  const warning =
+    ' This will remove the asset, its placeholders, and all objects referencing it in the scene. This action cannot be undone.'
+  return `${prefix}${warning}`
+})
 
 const assetProviderMap = computed(() => {
   const map = new Map<string, string>()
@@ -382,6 +477,11 @@ watchEffect(() => {
   displayedAssets.value.forEach((asset) => {
     void ensureAssetPreview(asset)
   })
+})
+
+watch(displayedAssets, () => {
+  const availableIds = new Set(displayedAssets.value.map((asset) => asset.id))
+  selectedAssetIds.value = selectedAssetIds.value.filter((id) => availableIds.has(id))
 })
 
 watch(normalizedSearchQuery, (value) => {
@@ -603,6 +703,18 @@ onBeforeUnmount(() => {
         <v-toolbar density="compact" flat height="46">
           <v-toolbar-title class="text-subtitle-2 project-tree-subtitle">Thumbnails</v-toolbar-title>
           <v-spacer />
+          <v-tooltip v-if="isToolbarDeleteVisible" text="Delete Selected Assets">
+            <template #activator="{ props }">
+              <v-btn
+                v-bind="props"
+                color="error"
+                variant="tonal"
+                icon="mdi-trash-can-outline"
+                size="small"
+                @click="requestDeleteSelection"
+              />
+            </template>
+          </v-tooltip>
           <v-text-field
             v-model="searchQuery"
             :loading="searchLoading"
@@ -640,6 +752,21 @@ onBeforeUnmount(() => {
               @dragend="handleAssetDragEnd"
             >
               <div class="asset-preview" :style="{ background: asset.previewColor }">
+                <div class="asset-select-control">
+                  <v-tooltip text="Select for deletion">
+                    <template #activator="{ props }">
+                      <v-checkbox-btn
+                        v-bind="props"
+                        :model-value="isAssetSelected(asset.id)"
+                        density="compact"
+                        color="primary"
+                        :disabled="!canDeleteAsset(asset)"
+                        @click.stop
+                        @update:model-value="() => toggleAssetSelection(asset)"
+                      />
+                    </template>
+                  </v-tooltip>
+                </div>
                 <img
                   v-if="assetPreviewUrl(asset)"
                   :src="assetPreviewUrl(asset)"
@@ -677,6 +804,20 @@ onBeforeUnmount(() => {
                   <v-icon size="18" color="error">mdi-alert-circle-outline</v-icon>
                 </div>
                 <v-spacer />
+                <v-tooltip v-if="canDeleteAsset(asset)" text="Delete Asset">
+                  <template #activator="{ props }">
+                    <v-btn
+                      v-bind="props"
+                      color="error"
+                      variant="tonal"
+                      density="compact"
+                      icon="mdi-trash-can-outline"
+                      size="small"
+                      style="min-width: 20px; height: 20px;"
+                      @click.stop="requestDeleteAsset(asset)"
+                    />
+                  </template>
+                </v-tooltip>
                 <v-btn
                   color="primary"
                   variant="tonal"
@@ -711,6 +852,20 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+
+      <v-dialog v-model="deleteDialogOpen" max-width="420">
+        <v-card>
+          <v-card-title class="text-error">{{ deletionDialogTitle }}</v-card-title>
+          <v-card-text>
+            <p class="delete-dialog-text">{{ deletionSummary }}</p>
+          </v-card-text>
+          <v-card-actions>
+            <v-spacer />
+            <v-btn variant="text" @click="cancelDeleteAssets">Cancel</v-btn>
+            <v-btn color="error" variant="flat" @click="performDeleteAssets">{{ deletionConfirmLabel }}</v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
   </v-card>
 </template>
 
@@ -839,6 +994,23 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
+.asset-select-control {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+}
+
+.asset-select-control :deep(.v-selection-control) {
+  margin: 0;
+  padding: 0;
+}
+
+.asset-select-control :deep(.v-selection-control__input) {
+  width: 24px;
+  height: 24px;
+}
+
 .asset-preview-image {
   position: absolute;
   inset: 0;
@@ -958,5 +1130,11 @@ onBeforeUnmount(() => {
   font-size: 0.7rem;
   color: rgba(233, 236, 241, 0.7);
   letter-spacing: 0.06em;
+}
+
+.delete-dialog-text {
+  margin: 0;
+  color: rgba(233, 236, 241, 0.88);
+  line-height: 1.5;
 }
 </style>
