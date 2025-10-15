@@ -896,7 +896,7 @@ onBeforeUnmount(() => {
 
 .project-content {
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: 300px 1fr;
   flex: 1;
   min-height: 0;
 }
