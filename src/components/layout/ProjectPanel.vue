@@ -35,6 +35,24 @@ function isProviderLoading(providerId: string): boolean {
   return providerLoading.value[providerId] ?? false
 }
 
+function isProviderDirectory(directoryId: string | null | undefined): boolean {
+  if (!directoryId) {
+    return false
+  }
+  return extractProviderIdFromPackageDirectoryId(directoryId) !== null
+}
+
+function isDirectoryLoading(directoryId: string | null | undefined): boolean {
+  if (!directoryId) {
+    return false
+  }
+  const providerId = extractProviderIdFromPackageDirectoryId(directoryId)
+  if (!providerId) {
+    return false
+  }
+  return isProviderLoading(providerId)
+}
+
 function setProviderError(providerId: string, message: string | null) {
   providerErrors.value = {
     ...providerErrors.value,
@@ -601,6 +619,19 @@ onBeforeUnmount(() => {
           <template #prepend>
             <v-icon size="small">mdi-folder</v-icon>
           </template>
+          <template #title="{ item }">
+            <div class="tree-node-title">
+              <span class="tree-node-text">{{ item.name }}</span>
+              <v-progress-circular
+                v-if="isProviderDirectory(item?.id) && isDirectoryLoading(item?.id)"
+                class="tree-node-spinner"
+                indeterminate
+                size="14"
+                width="3"
+                color="primary"
+              />
+            </div>
+          </template>
         </v-treeview>
       </div>
       <div class="project-gallery">
@@ -790,6 +821,26 @@ onBeforeUnmount(() => {
   margin-inline-start: 12px;
 }
 
+.tree-node-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tree-node-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.tree-node-spinner {
+  flex-shrink: 0;
+}
+.v-list-item {
+  padding-top: 4px;
+  padding-bottom: 4px;
+  min-height: 24px;
+}
 .gallery-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
