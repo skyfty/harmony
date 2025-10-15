@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue'
+import { ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import InspectorMaterialPanel from '@/components/inspector/MaterialPanel.vue'
 import InspectorTransformPanel from '@/components/inspector/TransformPanel.vue'
 import { useSceneStore } from '@/stores/sceneStore'
-import type { Vector3Like } from '@/types/scene'
 
 const emit = defineEmits<{
   (event: 'collapse'): void
@@ -16,102 +15,15 @@ const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 const nodeName = ref('')
 const expandedPanels = ref<string[]>(['transform', 'material'])
 
-const transformForm = reactive({
-  position: { x: 0, y: 0, z: 0 },
-  rotation: { x: 0, y: 0, z: 0 },
-  scale: { x: 1, y: 1, z: 1 },
-})
-
-const materialForm = reactive({
-  color: '#ffffff',
-  opacity: 1,
-  wireframe: false,
-})
-
 watch(
   selectedNode,
   (node) => {
     if (!node) return
     nodeName.value = node.name
     expandedPanels.value = ['transform', 'material']
-    transformForm.position = { ...node.position }
-    transformForm.rotation = {
-      x: radToDeg(node.rotation.x),
-      y: radToDeg(node.rotation.y),
-      z: radToDeg(node.rotation.z),
-    }
-    transformForm.scale = { ...node.scale }
-    materialForm.color = node.material.color
-    materialForm.opacity = node.material.opacity ?? 1
-    materialForm.wireframe = node.material.wireframe ?? false
   },
   { immediate: true }
 )
-
-function radToDeg(value: number) {
-  return +(value * (180 / Math.PI)).toFixed(2)
-}
-
-function degToRad(value: number) {
-  return value * (Math.PI / 180)
-}
-
-function updateVector(section: 'position' | 'rotation' | 'scale', axis: keyof Vector3Like, value: string) {
-  if (!selectedNodeId.value) return
-  const numeric = parseFloat(value)
-  if (Number.isNaN(numeric)) {
-    return
-  }
-
-  if (section === 'rotation') {
-    transformForm.rotation[axis] = numeric
-    sceneStore.updateNodeProperties({
-      id: selectedNodeId.value,
-      rotation: {
-        x: degToRad(transformForm.rotation.x),
-        y: degToRad(transformForm.rotation.y),
-        z: degToRad(transformForm.rotation.z),
-      },
-    })
-  } else if (section === 'position') {
-    transformForm.position[axis] = numeric
-    sceneStore.updateNodeProperties({
-      id: selectedNodeId.value,
-      position: { ...transformForm.position },
-    })
-  } else {
-    const clamped = section === 'scale' ? Math.max(0.01, numeric) : numeric
-    transformForm.scale[axis] = clamped
-    sceneStore.updateNodeProperties({
-      id: selectedNodeId.value,
-      scale: { ...transformForm.scale },
-    })
-  }
-}
-
-function handlePositionUpdate(axis: keyof Vector3Like, value: string) {
-  updateVector('position', axis, value)
-}
-
-function handleRotationUpdate(axis: keyof Vector3Like, value: string) {
-  updateVector('rotation', axis, value)
-}
-
-function handleScaleUpdate(axis: keyof Vector3Like, value: string) {
-  updateVector('scale', axis, value)
-}
-
-function updateColor(value: string) {
-  if (!selectedNodeId.value) return
-  materialForm.color = value
-  sceneStore.updateNodeMaterial(selectedNodeId.value, { color: value })
-}
-
-function updateOpacity(value: number) {
-  if (!selectedNodeId.value) return
-  materialForm.opacity = value
-  sceneStore.updateNodeMaterial(selectedNodeId.value, { opacity: value })
-}
 
 function updateVisibility(value: boolean | null) {
   if (!selectedNodeId.value) return
@@ -165,21 +77,9 @@ function handleNameUpdate(value: string) {
         variant="accordion"
         class="inspector-panels"
       >
-        <InspectorTransformPanel
-          :position="transformForm.position"
-          :rotation="transformForm.rotation"
-          :scale="transformForm.scale"
-          @update:position="handlePositionUpdate"
-          @update:rotation="handleRotationUpdate"
-          @update:scale="handleScaleUpdate"
-        />
+        <InspectorTransformPanel />
 
-        <InspectorMaterialPanel
-          :color="materialForm.color"
-          :opacity="materialForm.opacity"
-          @update:color="updateColor"
-          @update:opacity="updateOpacity"
-        />
+        <InspectorMaterialPanel />
       </v-expansion-panels>
     </div>
     <div v-else class="placeholder-text">

@@ -1,20 +1,43 @@
 <script setup lang="ts">
-const props = defineProps<{
-  color: string
-  opacity: number
-}>()
+import { reactive, watch } from 'vue'
+import { storeToRefs } from 'pinia'
+import { useSceneStore } from '@/stores/sceneStore'
 
-const emit = defineEmits<{
-  (event: 'update:color', value: string): void
-  (event: 'update:opacity', value: number): void
-}>()
+const sceneStore = useSceneStore()
+const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
+
+const materialForm = reactive({
+  color: '#ffffff',
+  opacity: 1,
+  wireframe: false,
+})
+
+watch(
+  selectedNode,
+  (node) => {
+    if (!node) return
+    materialForm.color = node.material.color ?? '#ffffff'
+    materialForm.opacity = node.material.opacity ?? 1
+    materialForm.wireframe = node.material.wireframe ?? false
+  },
+  { immediate: true }
+)
 
 function handleColorInput(event: Event) {
-  emit('update:color', (event.target as HTMLInputElement).value)
+  if (!selectedNodeId.value) return
+  const value = (event.target as HTMLInputElement).value
+  materialForm.color = value
+  sceneStore.updateNodeMaterial(selectedNodeId.value, { color: value })
 }
 
-function handleOpacity(value: number) {
-  emit('update:opacity', value)
+function handleOpacity(value: number | number[]) {
+  if (!selectedNodeId.value) return
+  const numeric = Array.isArray(value) ? value[0] : value
+  if (typeof numeric !== 'number' || Number.isNaN(numeric)) {
+    return
+  }
+  materialForm.opacity = numeric
+  sceneStore.updateNodeMaterial(selectedNodeId.value, { opacity: numeric })
 }
 </script>
 
@@ -24,13 +47,13 @@ function handleOpacity(value: number) {
     <v-expansion-panel-text>
       <div class="section-block material-row">
         <span class="row-label">Base Color</span>
-        <input class="color-input" type="color" :value="props.color" @input="handleColorInput" />
+  <input class="color-input" type="color" :value="materialForm.color" @input="handleColorInput" />
       </div>
       <div class="section-block material-row">
         <span class="row-label">Opacity</span>
         <div class="row-controls">
           <v-slider
-            :model-value="props.opacity"
+            :model-value="materialForm.opacity"
             min="0"
             max="1"
             step="0.05"
@@ -38,7 +61,7 @@ function handleOpacity(value: number) {
             class="opacity-slider"
             @update:model-value="handleOpacity"
           />
-          <div class="slider-value">{{ props.opacity.toFixed(2) }}</div>
+          <div class="slider-value">{{ materialForm.opacity.toFixed(2) }}</div>
         </div>
       </div>
     </v-expansion-panel-text>

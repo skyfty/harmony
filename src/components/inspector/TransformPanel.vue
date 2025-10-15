@@ -1,29 +1,85 @@
 <script setup lang="ts">
+import { reactive, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import InspectorVectorControls from '@/components/inspector/VectorControls.vue'
+import { useSceneStore } from '@/stores/sceneStore'
 import type { Vector3Like } from '@/types/scene'
 
-const props = defineProps<{
-  position: Vector3Like
-  rotation: Vector3Like
-  scale: Vector3Like
-}>()
+const sceneStore = useSceneStore()
+const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
-const emit = defineEmits<{
-  (event: 'update:position', axis: keyof Vector3Like, value: string): void
-  (event: 'update:rotation', axis: keyof Vector3Like, value: string): void
-  (event: 'update:scale', axis: keyof Vector3Like, value: string): void
-}>()
+const transformForm = reactive({
+  position: { x: 0, y: 0, z: 0 },
+  rotation: { x: 0, y: 0, z: 0 },
+  scale: { x: 1, y: 1, z: 1 },
+})
+
+watch(
+  selectedNode,
+  (node) => {
+    if (!node) return
+    transformForm.position = { ...node.position }
+    transformForm.rotation = {
+      x: radToDeg(node.rotation.x),
+      y: radToDeg(node.rotation.y),
+      z: radToDeg(node.rotation.z),
+    }
+    transformForm.scale = { ...node.scale }
+  },
+  { immediate: true }
+)
+
+function radToDeg(value: number) {
+  return +(value * (180 / Math.PI)).toFixed(2)
+}
+
+function degToRad(value: number) {
+  return value * (Math.PI / 180)
+}
+
+function updateVector(section: 'position' | 'rotation' | 'scale', axis: keyof Vector3Like, value: string) {
+  if (!selectedNodeId.value) return
+  const numeric = parseFloat(value)
+  if (Number.isNaN(numeric)) {
+    return
+  }
+
+  if (section === 'rotation') {
+    transformForm.rotation[axis] = numeric
+    sceneStore.updateNodeProperties({
+      id: selectedNodeId.value,
+      rotation: {
+        x: degToRad(transformForm.rotation.x),
+        y: degToRad(transformForm.rotation.y),
+        z: degToRad(transformForm.rotation.z),
+      },
+    })
+  } else if (section === 'position') {
+    transformForm.position[axis] = numeric
+    sceneStore.updateNodeProperties({
+      id: selectedNodeId.value,
+      position: { ...transformForm.position },
+    })
+  } else {
+    const clamped = Math.max(0.01, numeric)
+    transformForm.scale[axis] = clamped
+    sceneStore.updateNodeProperties({
+      id: selectedNodeId.value,
+      scale: { ...transformForm.scale },
+    })
+  }
+}
 
 function handlePosition(axis: keyof Vector3Like, value: string) {
-  emit('update:position', axis, value)
+  updateVector('position', axis, value)
 }
 
 function handleRotation(axis: keyof Vector3Like, value: string) {
-  emit('update:rotation', axis, value)
+  updateVector('rotation', axis, value)
 }
 
 function handleScale(axis: keyof Vector3Like, value: string) {
-  emit('update:scale', axis, value)
+  updateVector('scale', axis, value)
 }
 </script>
 
@@ -34,21 +90,21 @@ function handleScale(axis: keyof Vector3Like, value: string) {
       <div class="section-block">
         <InspectorVectorControls
           label="Position"
-          :model-value="props.position"
+          :model-value="transformForm.position"
           @update:axis="handlePosition"
         />
       </div>
       <div class="section-block">
         <InspectorVectorControls
           label="Rotation"
-          :model-value="props.rotation"
+          :model-value="transformForm.rotation"
           @update:axis="handleRotation"
         />
       </div>
       <div class="section-block">
         <InspectorVectorControls
           label="Scale"
-          :model-value="props.scale"
+          :model-value="transformForm.scale"
           min="0.01"
           @update:axis="handleScale"
         />
