@@ -270,6 +270,43 @@ function vectorsEqual(a: Vector3Like, b: Vector3Like): boolean {
   return a.x === b.x && a.y === b.y && a.z === b.z
 }
 
+function cloneAssetCatalog(catalog: Record<string, ProjectAsset[]>): Record<string, ProjectAsset[]> {
+  const clone: Record<string, ProjectAsset[]> = {}
+  Object.entries(catalog).forEach(([categoryId, list]) => {
+    clone[categoryId] = cloneAssetList(list ?? [])
+  })
+  return clone
+}
+
+function cloneAssetIndex(index: Record<string, AssetIndexEntry>): Record<string, AssetIndexEntry> {
+  const clone: Record<string, AssetIndexEntry> = {}
+  Object.entries(index).forEach(([assetId, entry]) => {
+    clone[assetId] = {
+      categoryId: entry.categoryId,
+      source: entry.source ? { ...entry.source } : undefined,
+    }
+  })
+  return clone
+}
+
+function clonePackageAssetMap(map: Record<string, string>): Record<string, string> {
+  return { ...map }
+}
+
+function applySceneAssetState(store: SceneState, scene: StoredSceneDocument) {
+  store.assetCatalog = cloneAssetCatalog(scene.assetCatalog)
+  store.assetIndex = cloneAssetIndex(scene.assetIndex)
+  store.packageAssetMap = clonePackageAssetMap(scene.packageAssetMap)
+  const nextTree = createProjectTreeFromCache(store.assetCatalog, store.packageDirectoryCache)
+  store.projectTree = nextTree
+  if (store.activeDirectoryId && !findDirectory(nextTree, store.activeDirectoryId)) {
+    store.activeDirectoryId = defaultDirectoryId
+  }
+  if (store.selectedAssetId && !findAssetInTree(nextTree, store.selectedAssetId)) {
+    store.selectedAssetId = null
+  }
+}
+
 function collectSceneRuntimeSnapshots(nodes: SceneNode[]): Map<string, Object3D> {
   const runtimeSnapshots = new Map<string, Object3D>()
   nodes.forEach((node) => collectRuntimeSnapshots(node, runtimeSnapshots))
@@ -380,6 +417,9 @@ function ensureSceneCollection(state: ScenePersistedState): ScenePersistedState 
   const rawNodes = (state.nodes as SceneNode[] | undefined) ?? []
   const selectedNodeId = (state.selectedNodeId as string | null | undefined) ?? null
   const cameraState = state.camera as Partial<SceneCameraState> | undefined
+  const rawCatalog = (state.assetCatalog as Record<string, ProjectAsset[]> | undefined) ?? null
+  const rawIndex = (state.assetIndex as Record<string, AssetIndexEntry> | undefined) ?? null
+  const rawPackageMap = (state.packageAssetMap as Record<string, string> | undefined) ?? null
 
   const camera: SceneCameraState = {
     position: cloneVector(cameraState?.position ?? defaultCameraState.position),
@@ -392,6 +432,9 @@ function ensureSceneCollection(state: ScenePersistedState): ScenePersistedState 
     selectedNodeId,
     camera,
     resourceProviderId: (state.resourceProviderId as string | undefined) ?? 'builtin',
+    assetCatalog: rawCatalog ?? undefined,
+    assetIndex: rawIndex ?? undefined,
+    packageAssetMap: rawPackageMap ?? undefined,
   })
 
   return {
@@ -402,6 +445,9 @@ function ensureSceneCollection(state: ScenePersistedState): ScenePersistedState 
     selectedNodeId: recoveredScene.selectedNodeId,
     selectedNodeIds: cloneSelection(recoveredScene.selectedNodeIds),
     camera: cloneCameraState(recoveredScene.camera),
+    assetCatalog: cloneAssetCatalog(recoveredScene.assetCatalog),
+    assetIndex: cloneAssetIndex(recoveredScene.assetIndex),
+    packageAssetMap: clonePackageAssetMap(recoveredScene.packageAssetMap),
   }
 }
 
@@ -573,6 +619,9 @@ function createSceneDocument(
     resourceProviderId?: string
     createdAt?: string
     updatedAt?: string
+    assetCatalog?: Record<string, ProjectAsset[]>
+    assetIndex?: Record<string, AssetIndexEntry>
+    packageAssetMap?: Record<string, string>
   } = {},
 ): StoredSceneDocument {
   const id = options.id ?? crypto.randomUUID()
@@ -586,6 +635,9 @@ function createSceneDocument(
   const now = new Date().toISOString()
   const createdAt = options.createdAt ?? now
   const updatedAt = options.updatedAt ?? createdAt
+  const assetCatalog = options.assetCatalog ? cloneAssetCatalog(options.assetCatalog) : createEmptyAssetCatalog()
+  const assetIndex = options.assetIndex ? cloneAssetIndex(options.assetIndex) : {}
+  const packageAssetMap = options.packageAssetMap ? clonePackageAssetMap(options.packageAssetMap) : {}
 
   return {
     id,
@@ -598,6 +650,9 @@ function createSceneDocument(
     resourceProviderId: options.resourceProviderId ?? 'builtin',
     createdAt,
     updatedAt,
+    assetCatalog,
+    assetIndex,
+    packageAssetMap,
   }
 }
 
@@ -622,6 +677,9 @@ function commitSceneSnapshot(
     camera: updateCamera ? cloneCameraState(store.camera) : current.camera,
     resourceProviderId: store.resourceProviderId,
     updatedAt,
+    assetCatalog: cloneAssetCatalog(store.assetCatalog),
+    assetIndex: cloneAssetIndex(store.assetIndex),
+    packageAssetMap: clonePackageAssetMap(store.packageAssetMap),
   }
 
   store.scenes = [
@@ -1936,6 +1994,7 @@ export const useSceneStore = defineStore('scene', {
       })
       this.scenes = [...this.scenes, scene]
       this.currentSceneId = scene.id
+      applySceneAssetState(this, scene)
       this.nodes = cloneSceneNodes(scene.nodes)
       this.setSelection(scene.selectedNodeIds ?? (scene.selectedNodeId ? [scene.selectedNodeId] : []), {
         commit: false,
@@ -1965,6 +2024,7 @@ export const useSceneStore = defineStore('scene', {
       })
 
       this.currentSceneId = sceneId
+      applySceneAssetState(this, scene)
       this.nodes = cloneSceneNodes(scene.nodes)
       this.setSelection(scene.selectedNodeIds ?? (scene.selectedNodeId ? [scene.selectedNodeId] : []), {
         commit: false,
@@ -1990,6 +2050,7 @@ export const useSceneStore = defineStore('scene', {
         const fallback = createSceneDocument('Untitled Scene', { resourceProviderId: 'builtin' })
         this.scenes = [fallback]
         this.currentSceneId = fallback.id
+        applySceneAssetState(this, fallback)
         this.nodes = cloneSceneNodes(fallback.nodes)
         this.setSelection(fallback.selectedNodeIds ?? (fallback.selectedNodeId ? [fallback.selectedNodeId] : []), {
           commit: false,
@@ -2010,6 +2071,7 @@ export const useSceneStore = defineStore('scene', {
           refreshViewport: false,
         })
         this.currentSceneId = next.id
+        applySceneAssetState(this, next)
         this.nodes = cloneSceneNodes(next.nodes)
         this.setSelection(next.selectedNodeIds ?? (next.selectedNodeId ? [next.selectedNodeId] : []), {
           commit: false,
@@ -2066,6 +2128,7 @@ export const useSceneStore = defineStore('scene', {
         const fallback = createSceneDocument('Untitled Scene', { resourceProviderId: 'builtin' })
         this.scenes = [fallback]
         this.currentSceneId = fallback.id
+        applySceneAssetState(this, fallback)
         this.nodes = cloneSceneNodes(fallback.nodes)
         this.setSelection(fallback.selectedNodeIds ?? (fallback.selectedNodeId ? [fallback.selectedNodeId] : []), {
           commit: false,
@@ -2093,6 +2156,7 @@ export const useSceneStore = defineStore('scene', {
       })
       this.camera = cloneCameraState(target.camera)
       this.resourceProviderId = target.resourceProviderId ?? 'builtin'
+      applySceneAssetState(this, target)
       useAssetCacheStore().recalculateUsage(this.nodes)
     },
   },

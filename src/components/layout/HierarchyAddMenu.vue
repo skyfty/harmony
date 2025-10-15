@@ -214,6 +214,7 @@ async function importAssetFromUrl(normalizedUrl: string) {
       previewColor: '#26C6DA',
       thumbnail: null,
       description: normalizedUrl,
+      gleaned: true,
     }
     sceneStore.registerAsset(importedAsset, { source: { type: 'url' } })
 
@@ -359,6 +360,7 @@ function handleMenuImportFromFile() {
       previewColor: '#26C6DA',
       thumbnail: null,
       description: matchedFile?.name ?? undefined,
+      gleaned: true,
     }
     sceneStore.registerAsset(importedAsset, { source: { type: 'local' } })
 
