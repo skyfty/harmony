@@ -118,6 +118,19 @@ function handleMenuAction(action: string) {
                   <span v-bind="props">Edit</span>
                 </template>
                 <v-list class="menu-dropdown">
+                  <v-list-item @click="handleMenuAction('Undo')" class="menu-list-item">
+                    Undo
+                    <template  #append>
+                      <span class="shortcut-label">Ctrl+Z</span>
+                    </template>
+                  </v-list-item>
+                  <v-list-item @click="handleMenuAction('Redo')" class="menu-list-item">
+                    Redo
+                    <template   #append>
+                      <span class="shortcut-label">Ctrl+Y</span>
+                    </template>
+                  </v-list-item>
+                  <v-divider />
                   <v-list-item @click="handleMenuAction('Copy')" class="menu-list-item">
                     Copy
                     <template #append>

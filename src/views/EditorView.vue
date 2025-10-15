@@ -165,6 +165,12 @@ async function handleAction(action: string) {
       break
     case 'Preview':
       break
+    case 'Undo': {
+      break
+    }
+    case 'Redo': {
+      break
+    }
     case 'Copy': {
       sceneStore.copyNodes(sceneStore.selectedNodeIds)
       break
