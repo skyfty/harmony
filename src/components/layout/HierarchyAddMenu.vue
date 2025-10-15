@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, type WatchStopHandle } from 'vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import * as THREE from 'three'
 
@@ -156,7 +156,31 @@ async function importAssetFromUrl(normalizedUrl: string) {
     closable: true,
   })
 
+  let stopDownloadWatcher: WatchStopHandle | null = null
+
   try {
+    stopDownloadWatcher = watch(
+      () => {
+        const entry = assetCacheStore.getEntry(normalizedUrl)
+        return [entry.status, entry.progress, entry.filename] as const
+      },
+      ([status, progress, filename]) => {
+        if (status !== 'downloading') {
+          return
+        }
+        const normalizedProgress = Number.isFinite(progress) ? Math.max(0, Math.round(progress)) : 0
+        const displayName = filename?.trim() || fallbackName
+        uiStore.updateLoadingOverlay({
+          mode: 'determinate',
+          message: `正在下载：${displayName} (${normalizedProgress}%)`,
+          progress: normalizedProgress,
+          closable: true,
+          autoClose: false,
+        })
+      },
+      { immediate: true },
+    )
+
     const entry = await assetCacheStore.downloadAsset(normalizedUrl, normalizedUrl, fallbackName)
     if (entry.status !== 'cached' || !entry.blob) {
       throw new Error(entry.error ?? '资源下载失败')
@@ -198,6 +222,7 @@ async function importAssetFromUrl(normalizedUrl: string) {
       autoClose: false,
     })
   } finally {
+    stopDownloadWatcher?.()
     urlImporting.value = false
   }
 }
