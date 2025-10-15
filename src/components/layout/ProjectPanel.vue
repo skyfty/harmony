@@ -77,7 +77,10 @@ const selectedDirectory = computed({
     }
   },
 })
-
+const allSelectedAssetsCached = computed(() =>
+  selectedAssets.value.length > 0 && selectedAssets.value.every((asset) => assetCacheStore.hasCache(resolveAssetCacheId(asset))),
+)
+const isToolbarDeleteVisible = computed(() => allSelectedAssetsCached.value)
 watch(
   projectTree,
   (tree) => {
@@ -703,17 +706,16 @@ onBeforeUnmount(() => {
         </v-treeview>
       </div>
       <div class="project-gallery">
-        <v-toolbar density="compact" height="46">
-          <v-toolbar-title class="text-subtitle-2 project-tree-subtitle">Thumbnails</v-toolbar-title>
-          <v-spacer />
+        <v-toolbar density="compact" height="45">
           <v-btn
             color="error"
-            variant="tonal"
-            icon="mdi-trash-can-outline"
-            size="small"
+            variant="text"
+            density="compact"
+            icon="mdi-delete-outline"
+            :style="{ visibility: isToolbarDeleteVisible ? 'visible' : 'hidden' }"
             @click="requestDeleteSelection"
           />
-          <v-divider vertical class="mx-2" />
+          <v-spacer />
           <v-text-field
             v-model="searchQuery"
             :loading="searchLoading"
@@ -730,7 +732,7 @@ onBeforeUnmount(() => {
             @click:append-inner="searchAsset"
             @click:clear="handleSearchClear"
           />
-          <v-btn icon="mdi-refresh"  size="small" variant="text" @click="refreshGallery" />
+          <v-btn icon="mdi-refresh" density="compact" variant="text" @click="refreshGallery" />
         </v-toolbar>
         <v-divider />
         <div class="project-gallery-scroll">
@@ -898,11 +900,6 @@ onBeforeUnmount(() => {
   border-right: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-.project-gallery {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
 
 .project-gallery-scroll {
   flex: 1;
@@ -1073,8 +1070,7 @@ onBeforeUnmount(() => {
 }
 
 .panel-toolbar :deep(.v-toolbar-title),
-.project-tree :deep(.v-toolbar-title),
-.project-gallery :deep(.v-toolbar-title) {
+.project-tree :deep(.v-toolbar-title) {
   font-size: 0.85rem;
   font-weight: 600;
   letter-spacing: 0.08em;

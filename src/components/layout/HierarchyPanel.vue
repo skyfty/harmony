@@ -331,7 +331,7 @@ function handleTreeDragLeave(event: DragEvent) {
         <HierarchyAddMenu />
         <v-btn
           icon="mdi-delete-outline"
-          variant="text"
+          variant="tonal"
           density="compact"
           color="error"
           :disabled="!hasSelection"
