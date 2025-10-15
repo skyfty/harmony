@@ -84,9 +84,14 @@ const draggingChangedHandler = (event: unknown) => {
   }
 
   if (!value) {
+    sceneStore.endTransformInteraction()
     updateGridHighlight(null)
-  } else if (transformControls?.getMode() === 'translate' && transformControls?.object) {
-    updateGridHighlight((transformControls.object as THREE.Object3D).position)
+  } else {
+    const nodeId = (transformControls?.object as THREE.Object3D | null)?.userData?.nodeId as string | undefined
+    sceneStore.beginTransformInteraction(nodeId ?? null)
+    if (transformControls?.getMode() === 'translate' && transformControls.object) {
+      updateGridHighlight((transformControls.object as THREE.Object3D).position)
+    }
   }
 }
 

@@ -96,6 +96,8 @@ interface SceneState {
   undoStack: SceneHistoryEntry[]
   redoStack: SceneHistoryEntry[]
   isRestoringHistory: boolean
+  activeTransformNodeId: string | null
+  transformSnapshotCaptured: boolean
 }
 
 interface EnsureSceneAssetsOptions {
@@ -848,6 +850,8 @@ export const useSceneStore = defineStore('scene', {
     undoStack: [],
     redoStack: [],
     isRestoringHistory: false,
+    activeTransformNodeId: null,
+    transformSnapshotCaptured: false,
   }),
   getters: {
     currentScene(state): StoredSceneDocument | null {
@@ -926,6 +930,8 @@ export const useSceneStore = defineStore('scene', {
     async restoreFromHistory(snapshot: SceneHistoryEntry) {
       const assetCache = useAssetCacheStore()
       this.isRestoringHistory = true
+      this.activeTransformNodeId = null
+      this.transformSnapshotCaptured = false
       try {
         this.nodes.forEach((node) => releaseRuntimeTree(node))
         this.nodes = cloneSceneNodes(snapshot.nodes)
@@ -975,6 +981,21 @@ export const useSceneStore = defineStore('scene', {
       await this.restoreFromHistory(snapshot)
       return true
     },
+    beginTransformInteraction(nodeId: string | null) {
+      if (!nodeId) {
+        this.activeTransformNodeId = null
+        this.transformSnapshotCaptured = false
+        return
+      }
+      if (this.activeTransformNodeId !== nodeId) {
+        this.activeTransformNodeId = nodeId
+      }
+      this.transformSnapshotCaptured = false
+    },
+    endTransformInteraction() {
+      this.activeTransformNodeId = null
+      this.transformSnapshotCaptured = false
+    },
     setActiveTool(tool: EditorTool) {
       this.activeTool = tool
     },
@@ -1019,7 +1040,14 @@ export const useSceneStore = defineStore('scene', {
       if (!positionChanged && !rotationChanged && !scaleChanged) {
         return
       }
-      this.captureHistorySnapshot()
+      if (this.activeTransformNodeId === payload.id) {
+        if (!this.transformSnapshotCaptured) {
+          this.captureHistorySnapshot()
+          this.transformSnapshotCaptured = true
+        }
+      } else {
+        this.captureHistorySnapshot()
+      }
       visitNode(this.nodes, payload.id, (node) => {
         node.position = cloneVector(payload.position)
         node.rotation = cloneVector(payload.rotation)
@@ -1046,7 +1074,14 @@ export const useSceneStore = defineStore('scene', {
       if (!changed) {
         return
       }
-      this.captureHistorySnapshot()
+      if (this.activeTransformNodeId === payload.id) {
+        if (!this.transformSnapshotCaptured) {
+          this.captureHistorySnapshot()
+          this.transformSnapshotCaptured = true
+        }
+      } else {
+        this.captureHistorySnapshot()
+      }
       visitNode(this.nodes, payload.id, (node) => {
         if (payload.position) node.position = cloneVector(payload.position)
         if (payload.rotation) node.rotation = cloneVector(payload.rotation)
