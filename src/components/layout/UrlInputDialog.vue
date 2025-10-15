@@ -62,6 +62,11 @@ function validateUrl(value: string) {
     if (!parsed.protocol || !parsed.host) {
       throw new TypeError('Invalid URL structure')
     }
+    const allowedProtocols = ['http:', 'https:']
+    if (!allowedProtocols.includes(parsed.protocol)) {
+      errorMessage.value = '仅支持 HTTP 或 HTTPS 地址'
+      return false
+    }
     errorMessage.value = ''
     return true
   } catch (error) {

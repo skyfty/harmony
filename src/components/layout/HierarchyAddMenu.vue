@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref, watch } from 'vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import * as THREE from 'three'
 
@@ -6,10 +7,50 @@ import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from '@/
 import { useFileDialog } from '@vueuse/core'
 import { useUiStore } from '@/stores/uiStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import UrlInputDialog from './UrlInputDialog.vue'
 
 const sceneStore = useSceneStore()
 const uiStore = useUiStore()
 const assetCacheStore = useAssetCacheStore()
+
+const urlDialogOpen = ref(false)
+const urlDialogInitialValue = ref('')
+const urlImporting = ref(false)
+let resolveUrlDialog: ((value: string | null) => void) | null = null
+
+function requestUrlFromDialog(initialUrl = ''): Promise<string | null> {
+  if (resolveUrlDialog) {
+    resolveUrlDialog(null)
+    resolveUrlDialog = null
+  }
+  urlDialogInitialValue.value = initialUrl
+  urlDialogOpen.value = true
+  return new Promise((resolve) => {
+    resolveUrlDialog = resolve
+  })
+}
+
+function handleUrlDialogConfirm(value: string) {
+  const resolver = resolveUrlDialog
+  resolveUrlDialog = null
+  resolver?.(value)
+  urlDialogOpen.value = false
+}
+
+function handleUrlDialogCancel() {
+  const resolver = resolveUrlDialog
+  resolveUrlDialog = null
+  resolver?.(null)
+  urlDialogOpen.value = false
+}
+
+watch(urlDialogOpen, (open) => {
+  if (!open && resolveUrlDialog) {
+    const resolver = resolveUrlDialog
+    resolveUrlDialog = null
+    resolver(null)
+  }
+})
 
 function prepareImportedObject(object: THREE.Object3D) {
   object.removeFromParent()
@@ -83,8 +124,123 @@ function addImportedObjectToScene(object: THREE.Object3D, assetId?: string) {
 }
 
 async function handleMenuImportFromUrl() {
+  if (urlImporting.value) {
+    return
+  }
 
- 
+  const input = await requestUrlFromDialog(urlDialogInitialValue.value)
+  if (!input) {
+    return
+  }
+
+  let parsedUrl: URL
+  try {
+    parsedUrl = new URL(input.trim())
+  } catch (error) {
+    console.warn('无法解析提供的 URL', error)
+    return
+  }
+  const normalizedUrl = parsedUrl.toString()
+  urlDialogInitialValue.value = normalizedUrl
+
+  await importAssetFromUrl(normalizedUrl)
+}
+
+async function importAssetFromUrl(normalizedUrl: string) {
+  const fallbackName = resolveFilenameFromUrl(normalizedUrl)
+
+  urlImporting.value = true
+  uiStore.startIndeterminateLoading({
+    title: '导入资源',
+    message: '正在下载资源…',
+    closable: true,
+  })
+
+  try {
+    const entry = await assetCacheStore.downloadAsset(normalizedUrl, normalizedUrl, fallbackName)
+    if (entry.status !== 'cached' || !entry.blob) {
+      throw new Error(entry.error ?? '资源下载失败')
+    }
+
+    uiStore.updateLoadingOverlay({
+      mode: 'determinate',
+      message: '正在解析资源…',
+      progress: 55,
+      closable: true,
+      autoClose: false,
+    })
+
+    const file = assetCacheStore.createFileFromCache(normalizedUrl)
+    if (!file) {
+      throw new Error('下载的资源数据不可用')
+    }
+
+    const object = await loadObjectFromRemoteFile(file)
+    addImportedObjectToScene(object, normalizedUrl)
+    assetCacheStore.registerUsage(normalizedUrl)
+    assetCacheStore.touch(normalizedUrl)
+
+    const displayName = object.name || entry.filename || fallbackName
+    uiStore.updateLoadingOverlay({
+      mode: 'determinate',
+      message: `${displayName} 导入完成`,
+      progress: 100,
+      autoClose: true,
+      autoCloseDelay: 900,
+      closable: true,
+    })
+  } catch (error) {
+    console.error('通过 URL 导入资源失败', error)
+    uiStore.updateLoadingOverlay({
+      mode: 'indeterminate',
+      message: (error as Error).message ?? '导入失败，请重试',
+      closable: true,
+      autoClose: false,
+    })
+  } finally {
+    urlImporting.value = false
+  }
+}
+
+function loadObjectFromRemoteFile(file: File): Promise<THREE.Object3D> {
+  return new Promise<THREE.Object3D>((resolve, reject) => {
+    const loader = new Loader()
+
+    const handleLoaded = (payload: LoaderLoadedPayload) => {
+      cleanup()
+      if (!payload) {
+        reject(new Error('解析资源失败'))
+        return
+      }
+      resolve(payload as THREE.Object3D)
+    }
+
+    const handleProgress = (payload: LoaderProgressPayload) => {
+      uiStore.updateLoadingOverlay({
+        mode: 'determinate',
+        message: `正在解析：${payload.filename}`,
+      })
+      if (payload.total > 0) {
+        const progress = 60 + Math.round((payload.loaded / payload.total) * 35)
+        uiStore.updateLoadingProgress(Math.min(99, progress), { autoClose: false })
+      }
+    }
+
+    const cleanup = () => {
+      loader.$off('loaded', handleLoaded)
+      loader.$off('progress', handleProgress)
+    }
+
+    loader.$on('loaded', handleLoaded)
+    loader.$on('progress', handleProgress)
+
+    try {
+      loader.loadFile(file)
+    } catch (error) {
+      cleanup()
+      reject(error)
+    }
+  })
 }
 
 function handleMenuImportFromFile() {
@@ -378,6 +534,16 @@ function handleAddNode(geometry:string) {
       />
     </v-list>
 </v-menu>
+<UrlInputDialog
+  v-model="urlDialogOpen"
+  :initial-url="urlDialogInitialValue"
+  title="从 URL 导入资源"
+  label="资源 URL"
+  confirm-text="导入"
+  cancel-text="取消"
+  @confirm="handleUrlDialogConfirm"
+  @cancel="handleUrlDialogCancel"
+/>
 </template>
 
 <style scoped>
