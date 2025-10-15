@@ -40,6 +40,15 @@ const HISTORY_LIMIT = 50
 
 const initialNodes: SceneNode[] = []
 
+const placeholderDownloadWatchers = new Map<string, WatchStopHandle>()
+
+function stopPlaceholderWatcher(nodeId: string) {
+  const stop = placeholderDownloadWatchers.get(nodeId)
+  if (stop) {
+    stop()
+    placeholderDownloadWatchers.delete(nodeId)
+  }
+}
 
 const defaultCameraState: SceneCameraState = {
   position: { x: 12, y: 9, z: 12 },
@@ -188,6 +197,28 @@ function duplicateNodeTree(original: SceneNode, context: DuplicateContext): Scen
 
 function cloneVector(vector: Vector3Like): Vector3Like {
   return { x: vector.x, y: vector.y, z: vector.z }
+}
+
+function computeAssetSpawnTransform(asset: ProjectAsset, position?: Vector3Like) {
+  const spawnPosition = position ? cloneVector(position) : { x: 0, y: 0, z: 0 }
+  const rotation: Vector3Like = { x: 0, y: 0, z: 0 }
+  const scale: Vector3Like = { x: 1, y: 1, z: 1 }
+
+  if (!position && asset.type !== 'model') {
+    spawnPosition.y = 1
+  }
+
+  if (asset.type === 'model') {
+    const baseHeight = Math.max(scale.y, 0)
+    const offset = baseHeight / 2
+    spawnPosition.y = (position?.y ?? spawnPosition.y) + offset
+  }
+
+  return {
+    position: spawnPosition,
+    rotation,
+    scale,
+  }
 }
 
 function cloneCameraState(camera: SceneCameraState): SceneCameraState {
@@ -1228,19 +1259,8 @@ export const useSceneStore = defineStore('scene', {
         this.nodes = [...this.nodes]
       }
     },
-  async addNodeFromAsset(asset: ProjectAsset, position?: Vector3Like): Promise<SceneNode | null> {
-      const spawnPosition = position ? cloneVector(position) : { x: 0, y: 0, z: 0 }
-      const scale: Vector3Like = { x: 1, y: 1, z: 1 }
-
-      if (!position && asset.type !== 'model') {
-        spawnPosition.y = 1
-      }
-
-      if (asset.type === 'model') {
-        const baseHeight = Math.max(scale.y, 0)
-        const offset = baseHeight / 2
-        spawnPosition.y = (position?.y ?? spawnPosition.y) + offset
-      }
+    async addNodeFromAsset(asset: ProjectAsset, position?: Vector3Like): Promise<SceneNode | null> {
+      const { position: spawnPosition, rotation, scale } = computeAssetSpawnTransform(asset, position)
 
       const assetCache = useAssetCacheStore()
       if (!assetCache.hasCache(asset.id)) {
@@ -1256,8 +1276,8 @@ export const useSceneStore = defineStore('scene', {
         object,
         name: asset.name,
         position: spawnPosition,
-        rotation: { x: 0, y: 0, z: 0 },
-        scale: { x: 1, y: 1, z: 1 },
+        rotation,
+        scale,
         sourceAssetId: asset.id,
       })
       assetCache.registerUsage(asset.id)
@@ -1269,11 +1289,31 @@ export const useSceneStore = defineStore('scene', {
       if (!asset) {
         throw new Error('Unable to find the requested asset')
       }
-      const node = await this.addNodeFromAsset(asset, position)
-      if (!node) {
-        throw new Error('Asset is not ready and cannot be added to the scene')
+
+      const assetCache = useAssetCacheStore()
+
+      if (assetCache.hasCache(asset.id)) {
+        const node = await this.addNodeFromAsset(asset, position)
+        if (!node) {
+          throw new Error('Asset is not ready and cannot be added to the scene')
+        }
+        return { asset, node }
       }
-      return { asset, node }
+
+      const transform = computeAssetSpawnTransform(asset, position)
+      const placeholder = this.addPlaceholderNode(asset, transform)
+      this.observeAssetDownloadForNode(placeholder.id, asset)
+      assetCache.setError(asset.id, null)
+      void assetCache.downloaProjectAsset(asset).catch((error) => {
+        const target = findNodeById(this.nodes, placeholder.id)
+        if (target) {
+          target.downloadStatus = 'error'
+          target.downloadError = (error as Error).message ?? '资源下载失败'
+          this.nodes = [...this.nodes]
+        }
+      })
+
+      return { asset, node: placeholder }
     },
     resetProjectTree() {
       this.packageDirectoryCache = {}
@@ -1441,6 +1481,142 @@ export const useSceneStore = defineStore('scene', {
       return true
     },
 
+    addPlaceholderNode(asset: ProjectAsset, transform: { position: Vector3Like; rotation: Vector3Like; scale: Vector3Like }) {
+      this.captureHistorySnapshot()
+      const id = crypto.randomUUID()
+      const node: SceneNode = {
+        id,
+        name: asset.name,
+        geometry: 'external',
+        material: { color: '#90a4ae', opacity: 0.6 },
+        position: cloneVector(transform.position),
+        rotation: cloneVector(transform.rotation),
+        scale: cloneVector(transform.scale),
+        visible: true,
+        sourceAssetId: asset.id,
+        isPlaceholder: true,
+        downloadProgress: 0,
+        downloadStatus: 'downloading',
+        downloadError: null,
+      }
+
+      this.nodes = [...this.nodes, node]
+      this.setSelection([id], { commit: false })
+      commitSceneSnapshot(this)
+
+      return node
+    },
+
+    observeAssetDownloadForNode(nodeId: string, asset: ProjectAsset) {
+      const assetCache = useAssetCacheStore()
+      stopPlaceholderWatcher(nodeId)
+
+      const stop = watch(
+        () => {
+          const entry = assetCache.entries[asset.id]
+          if (!entry) {
+            return null
+          }
+          return {
+            status: entry.status,
+            progress: entry.progress ?? 0,
+            error: entry.error ?? null,
+          }
+        },
+        (snapshot) => {
+          const target = findNodeById(this.nodes, nodeId)
+          if (!target) {
+            stopPlaceholderWatcher(nodeId)
+            return
+          }
+
+          if (!snapshot) {
+            return
+          }
+
+          let changed = false
+
+          if (target.downloadProgress !== snapshot.progress) {
+            target.downloadProgress = snapshot.progress
+            changed = true
+          }
+
+          if (target.downloadError !== snapshot.error) {
+            target.downloadError = snapshot.error
+            changed = true
+          }
+
+          if (snapshot.status === 'cached') {
+            target.downloadStatus = 'ready'
+            target.downloadProgress = 100
+            changed = true
+            stopPlaceholderWatcher(nodeId)
+            this.nodes = [...this.nodes]
+            void this.finalizePlaceholderNode(nodeId, asset)
+            return
+          }
+
+          if (snapshot.status === 'error') {
+            target.downloadStatus = 'error'
+            changed = true
+            stopPlaceholderWatcher(nodeId)
+            if (changed) {
+              this.nodes = [...this.nodes]
+            }
+            return
+          }
+
+          const nextStatus = snapshot.status === 'downloading' ? 'downloading' : 'idle'
+          if (target.downloadStatus !== nextStatus) {
+            target.downloadStatus = nextStatus
+            changed = true
+          }
+
+          if (changed) {
+            this.nodes = [...this.nodes]
+          }
+        },
+        { immediate: true },
+      )
+
+      placeholderDownloadWatchers.set(nodeId, stop)
+    },
+
+    async finalizePlaceholderNode(nodeId: string, asset: ProjectAsset) {
+      const assetCache = useAssetCacheStore()
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target) {
+        return
+      }
+
+      try {
+        const file = assetCache.createFileFromCache(asset.id)
+        if (!file) {
+          throw new Error('资源未缓存完成')
+        }
+
+        const object = await loadObjectFromFile(file)
+        tagObjectWithNodeId(object, nodeId)
+        registerRuntimeObject(nodeId, object)
+        assetCache.registerUsage(asset.id)
+        assetCache.touch(asset.id)
+
+        target.isPlaceholder = false
+  target.downloadStatus = undefined
+  target.downloadProgress = undefined
+        target.downloadError = null
+        target.name = asset.name
+
+        this.nodes = [...this.nodes]
+        commitSceneSnapshot(this)
+      } catch (error) {
+        target.isPlaceholder = true
+        target.downloadStatus = 'error'
+        target.downloadError = (error as Error).message ?? '资源加载失败'
+        this.nodes = [...this.nodes]
+      }
+    },
+
     addSceneNode(payload: {
       object: Object3D
       name?: string
@@ -1491,6 +1667,8 @@ export const useSceneStore = defineStore('scene', {
 
       const removed: string[] = []
       this.nodes = pruneNodes(this.nodes, idSet, removed)
+
+  removed.forEach((id) => stopPlaceholderWatcher(id))
 
       const fallbackId = this.nodes[0]?.id ?? null
       const prevSelection = cloneSelection(this.selectedNodeIds)

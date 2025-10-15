@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
@@ -72,6 +72,21 @@ const GRID_CELL_SIZE = 1
 const GRID_HIGHLIGHT_HEIGHT = 0.02
 
 const isDragHovering = ref(false)
+
+interface PlaceholderOverlayState {
+  id: string
+  name: string
+  progress: number
+  error: string | null
+  visible: boolean
+  x: number
+  y: number
+}
+
+const overlayContainerRef = ref<HTMLDivElement | null>(null)
+const placeholderOverlays = reactive<Record<string, PlaceholderOverlayState>>({})
+const placeholderOverlayList = computed(() => Object.values(placeholderOverlays))
+const overlayPositionHelper = new THREE.Vector3()
 
 const draggingChangedHandler = (event: unknown) => {
   const value = (event as { value?: boolean })?.value ?? false
@@ -166,6 +181,92 @@ function disposeDragPreview(cancelLoad = true) {
   }
   lastDragPoint = null
   clearDragPreviewObject()
+}
+
+function refreshPlaceholderOverlays() {
+  const activeIds = new Set<string>()
+
+  const visit = (nodes: SceneNode[]) => {
+    nodes.forEach((node) => {
+      if (node.isPlaceholder) {
+        activeIds.add(node.id)
+        const progress = Math.min(100, Math.max(0, node.downloadProgress ?? 0))
+        const error = node.downloadError ?? null
+        const existing = placeholderOverlays[node.id]
+        if (existing) {
+          existing.name = node.name
+          existing.progress = progress
+          existing.error = error
+        } else {
+          placeholderOverlays[node.id] = {
+            id: node.id,
+            name: node.name,
+            progress,
+            error,
+            visible: true,
+            x: 0,
+            y: 0,
+          }
+        }
+      }
+
+      if (node.children?.length) {
+        visit(node.children)
+      }
+    })
+  }
+
+  visit(props.sceneNodes)
+
+  Object.keys(placeholderOverlays).forEach((id) => {
+    if (!activeIds.has(id)) {
+      delete placeholderOverlays[id]
+    }
+  })
+}
+
+function clearPlaceholderOverlays() {
+  Object.keys(placeholderOverlays).forEach((id) => {
+    delete placeholderOverlays[id]
+  })
+}
+
+function updatePlaceholderOverlayPositions() {
+  const activeCamera = camera
+  if (!activeCamera || !overlayContainerRef.value) {
+    return
+  }
+
+  const bounds = overlayContainerRef.value.getBoundingClientRect()
+  const width = bounds.width
+  const height = bounds.height
+
+  if (width === 0 || height === 0) {
+    placeholderOverlayList.value.forEach((overlay) => {
+      overlay.visible = false
+    })
+    return
+  }
+
+  placeholderOverlayList.value.forEach((overlay) => {
+    const object = objectMap.get(overlay.id)
+    if (!object) {
+      overlay.visible = false
+      return
+    }
+
+    overlayPositionHelper.setFromMatrixPosition(object.matrixWorld)
+    overlayPositionHelper.project(activeCamera)
+
+    if (overlayPositionHelper.z < -1 || overlayPositionHelper.z > 1) {
+      overlay.visible = false
+      return
+    }
+
+    overlay.visible = true
+    overlay.x = (overlayPositionHelper.x * 0.5 + 0.5) * width
+    overlay.y = (-overlayPositionHelper.y * 0.5 + 0.5) * height
+  })
 }
 
 function applyPreviewVisualTweaks(object: THREE.Object3D) {
@@ -601,6 +702,7 @@ function animate() {
   if (selectionBoxHelper && selectionTrackedObject) {
     selectionBoxHelper.box.setFromObject(selectionTrackedObject)
   }
+  updatePlaceholderOverlayPositions()
   renderer.render(scene, camera)
 }
 
@@ -646,6 +748,7 @@ function disposeScene() {
   scene = null
   camera = null
 
+  clearPlaceholderOverlays()
   objectMap.clear()
 }
 
@@ -879,6 +982,7 @@ function syncSceneGraph() {
   attachSelection(props.selectedNodeId, props.activeTool)
 
   scheduleThumbnailCapture()
+  refreshPlaceholderOverlays()
 }
 
 function disposeSceneNodes() {
@@ -924,7 +1028,9 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       })
       container.add(runtimeObject)
     } else {
-      const fallbackMaterial = new THREE.MeshBasicMaterial({ color: 0xff5252, wireframe: true })
+      const fallbackMaterial = node.isPlaceholder
+        ? new THREE.MeshBasicMaterial({ color: 0x4dd0e1, wireframe: true, opacity: 0.65, transparent: true })
+        : new THREE.MeshBasicMaterial({ color: 0xff5252, wireframe: true })
       const fallback = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), fallbackMaterial)
       fallback.userData.nodeId = node.id
       container.add(fallback)
@@ -1097,6 +1203,7 @@ watch(
   () => props.sceneNodes,
   () => {
     syncSceneGraph()
+    refreshPlaceholderOverlays()
   }
 )
 
@@ -1167,6 +1274,30 @@ defineExpose<SceneViewportHandle>({
       @dragleave="handleViewportDragLeave"
       @drop="handleViewportDrop"
     >
+      <div ref="overlayContainerRef" class="placeholder-overlay-layer">
+        <div
+          v-for="overlay in placeholderOverlayList"
+          :key="overlay.id"
+          class="placeholder-overlay-card"
+          :class="{
+            'is-hidden': !overlay.visible,
+            'has-error': !!overlay.error,
+          }"
+          :style="{ left: `${overlay.x}px`, top: `${overlay.y}px` }"
+        >
+          <div class="placeholder-overlay-name">{{ overlay.name }}</div>
+          <div v-if="overlay.error" class="placeholder-overlay-error">{{ overlay.error }}</div>
+          <div v-else class="placeholder-overlay-progress">
+            <div class="placeholder-overlay-progress-bar">
+              <div
+                class="placeholder-overlay-progress-value"
+                :style="{ width: `${Math.min(100, Math.max(0, overlay.progress))}%` }"
+              ></div>
+            </div>
+            <div class="placeholder-overlay-percent">{{ Math.round(overlay.progress) }}%</div>
+          </div>
+        </div>
+      </div>
       <canvas ref="canvasRef" class="viewport-canvas" />
     </div>
   </div>
@@ -1216,6 +1347,77 @@ defineExpose<SceneViewportHandle>({
   pointer-events: none;
   border-radius: 8px;
   z-index: 3;
+}
+
+.placeholder-overlay-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 6;
+  font-size: 12px;
+}
+
+.placeholder-overlay-card {
+  position: absolute;
+  transform: translate(-50%, -110%);
+  background-color: rgba(13, 17, 23, 0.92);
+  border: 1px solid rgba(77, 208, 225, 0.4);
+  border-radius: 8px;
+  padding: 8px 12px;
+  min-width: 140px;
+  color: #e9ecf1;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+  transition: opacity 120ms ease;
+  opacity: 1;
+}
+
+.placeholder-overlay-card.is-hidden {
+  opacity: 0;
+}
+
+.placeholder-overlay-card.has-error {
+  border-color: rgba(244, 67, 54, 0.8);
+}
+
+.placeholder-overlay-name {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.placeholder-overlay-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.placeholder-overlay-progress-bar {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.placeholder-overlay-progress-value {
+  position: absolute;
+  inset: 0;
+  width: 0;
+  background: linear-gradient(90deg, rgba(0, 188, 212, 0.9), rgba(0, 131, 143, 0.9));
+}
+
+.placeholder-overlay-percent {
+  text-align: right;
+  font-size: 11px;
+  color: #4dd0e1;
+  font-weight: 500;
+}
+
+.placeholder-overlay-error {
+  font-size: 11px;
+  color: #ff8a80;
+  max-width: 180px;
 }
 
 .drop-overlay {

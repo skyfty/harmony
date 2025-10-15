@@ -208,10 +208,6 @@ function selectAsset(asset: ProjectAsset) {
 }
 
 
-function isAssetCached(asset: ProjectAsset) {
-  return assetCacheStore.hasCache(resolveAssetCacheId(asset))
-}
-
 function isAssetDownloading(asset: ProjectAsset) {
   return assetCacheStore.isDownloading(resolveAssetCacheId(asset))
 }
@@ -224,14 +220,6 @@ function assetDownloadError(asset: ProjectAsset) {
   return assetCacheStore.getError(resolveAssetCacheId(asset))
 }
 
-function showDownloadButton(asset: ProjectAsset) {
-
-  if (isAssetDownloading(asset)) {
-    return false
-  }
-  return !isAssetCached(asset)
-}
-
 async function ensureAssetCached(asset: ProjectAsset) {
 
   if (assetCacheStore.hasCache(asset.id)) {
@@ -241,26 +229,6 @@ async function ensureAssetCached(asset: ProjectAsset) {
   if (!assetCacheStore.hasCache(asset.id)) {
     throw new Error(entry.error ?? '资源未下载完成')
   }
-}
-
-async function handleDownloadAsset(asset: ProjectAsset) {
-
-  try {
-    const prepared = prepareAssetForOperations(asset)
-    assetCacheStore.setError(prepared.id, null)
-    await ensureAssetCached(prepared)
-  } catch (error) {
-    console.error('下载资源失败', error)
-  }
-}
-
-function handleCancelDownload(asset: ProjectAsset) {
-
-  assetCacheStore.cancelDownload(resolveAssetCacheId(asset))
-}
-
-function isAssetDraggable(asset: ProjectAsset) {
-  return isAssetCached(asset)
 }
 
 async function handleAddAsset(asset: ProjectAsset) {
@@ -294,10 +262,6 @@ function refreshGallery() {
 }
 
 function handleAssetDragStart(event: DragEvent, asset: ProjectAsset) {
-  if (!isAssetDraggable(asset)) {
-    event.preventDefault()
-    return
-  }
   const preparedAsset = prepareAssetForOperations(asset)
   draggingAssetId.value = asset.id
   selectAsset(asset)
@@ -666,12 +630,11 @@ onBeforeUnmount(() => {
                 {
                   'is-selected': selectedAssetId === asset.id,
                   'is-dragging': isAssetDragging(asset.id),
-                  'is-unavailable': !isAssetDraggable(asset),
                   'is-downloading': isAssetDownloading(asset),
                 },
               ]"
               elevation="4"
-              :draggable="isAssetDraggable(asset)"
+              :draggable="true"
               @click="selectAsset(asset)"
               @dragstart.stop="handleAssetDragStart($event, asset)"
               @dragend="handleAssetDragEnd"
@@ -714,23 +677,6 @@ onBeforeUnmount(() => {
                   <v-icon size="18" color="error">mdi-alert-circle-outline</v-icon>
                 </div>
                 <v-spacer />
-                <v-btn
-                  v-if="showDownloadButton(asset)"
-                  icon="mdi-download"
-                  variant="text"
-                  density="compact"
-                  size="small"
-                  @click.stop="handleDownloadAsset(asset)"
-                />
-                <v-btn
-                  v-else-if="isAssetDownloading(asset)"
-                  icon="mdi-close"
-                  variant="text"
-                  density="compact"
-                  size="small"
-                  color="secondary"
-                  @click.stop="handleCancelDownload(asset)"
-                />
                 <v-btn
                   color="primary"
                   variant="tonal"
@@ -877,16 +823,6 @@ onBeforeUnmount(() => {
 .asset-card.is-dragging {
   opacity: 0.75;
   border-color: rgba(77, 208, 225, 0.6);
-}
-
-.asset-card.is-unavailable {
-  cursor: default;
-  opacity: 0.6;
-}
-
-.asset-card.is-unavailable:hover {
-  transform: none;
-  border-color: rgba(255, 255, 255, 0.08);
 }
 
 .asset-card.is-downloading {

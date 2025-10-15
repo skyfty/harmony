@@ -21,4 +21,8 @@ export interface SceneNode {
   children?: SceneNode[]
   sourceAssetId?: string
   visible?: boolean
+  isPlaceholder?: boolean
+  downloadProgress?: number
+  downloadStatus?: 'idle' | 'downloading' | 'ready' | 'error'
+  downloadError?: string | null
 }
