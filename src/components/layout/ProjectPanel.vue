@@ -215,12 +215,8 @@ function isAssetDownloading(asset: ProjectAsset) {
   return assetCacheStore.isDownloading(resolveAssetCacheId(asset))
 }
 
-function isAssetFromAssetsDirectory(asset: ProjectAsset) {
-  return providerIdForAsset(asset) === null
-}
-
 function canDeleteAsset(asset: ProjectAsset) {
-  if (!isAssetFromAssetsDirectory(asset)) {
+  if (!asset.gleaned) {
     return false
   }
   return assetCacheStore.hasCache(resolveAssetCacheId(asset)) && !isAssetDownloading(asset)
@@ -305,7 +301,7 @@ function isAssetSelected(assetId: string) {
 function toggleAssetSelection(asset: ProjectAsset) {
   const assetId = asset.id
   const cacheId = resolveAssetCacheId(asset)
-  if (!isAssetFromAssetsDirectory(asset) || !assetCacheStore.hasCache(cacheId) || isAssetDownloading(asset)) {
+  if (!asset.gleaned || !assetCacheStore.hasCache(cacheId) || isAssetDownloading(asset)) {
     return
   }
   if (isAssetSelected(assetId)) {
@@ -773,7 +769,7 @@ onBeforeUnmount(() => {
                         :model-value="isAssetSelected(asset.id)"
                         density="compact"
                         color="primary"
-                        :disabled="!canDeleteAsset(asset)"
+                        :style="{ visibility: canDeleteAsset(asset) ? 'visible' : 'hidden' }"
                         @click.stop
                         @update:model-value="() => toggleAssetSelection(asset)"
                       />

@@ -28,6 +28,7 @@ import {
   createProjectTreeFromCache,
   defaultDirectoryId,
   determineAssetCategoryId,
+  PACKAGES_ROOT_DIRECTORY_ID,
 } from './assetCatalog'
 
 export { ASSETS_ROOT_DIRECTORY_ID, buildPackageDirectoryId, extractProviderIdFromPackageDirectoryId } from './assetCatalog'
@@ -666,6 +667,36 @@ function findDirectory(directories: ProjectDirectory[], id: string): ProjectDire
   return null
 }
 
+function findDirectoryPathInTree(
+  directories: ProjectDirectory[],
+  targetId: string,
+  trail: ProjectDirectory[] = [],
+): ProjectDirectory[] | null {
+  for (const directory of directories) {
+    const nextTrail = [...trail, directory]
+    if (directory.id === targetId) {
+      return nextTrail
+    }
+    if (directory.children?.length) {
+      const found = findDirectoryPathInTree(directory.children, targetId, nextTrail)
+      if (found) {
+        return found
+      }
+    }
+  }
+  return null
+}
+
+function collectDirectoryAssets(directory: ProjectDirectory | null, bucket: ProjectAsset[]) {
+  if (!directory) {
+    return
+  }
+  if (directory.assets?.length) {
+    bucket.push(...directory.assets)
+  }
+  directory.children?.forEach((child) => collectDirectoryAssets(child, bucket))
+}
+
 function findAssetInTree(directories: ProjectDirectory[], assetId: string): ProjectAsset | null {
   for (const dir of directories) {
     if (dir.assets) {
@@ -853,7 +884,25 @@ export const useSceneStore = defineStore('scene', {
       const directory = state.activeDirectoryId
         ? findDirectory(state.projectTree, state.activeDirectoryId)
         : state.projectTree[0] ?? null
-      return directory?.assets ?? []
+      if (!state.activeDirectoryId) {
+        return directory?.assets ?? []
+      }
+      if (state.activeDirectoryId === PACKAGES_ROOT_DIRECTORY_ID) {
+        return []
+      }
+      if (!directory) {
+        return []
+      }
+
+      const path = findDirectoryPathInTree(state.projectTree, state.activeDirectoryId)
+      const isUnderPackages = path ? path.some((entry) => entry.id === PACKAGES_ROOT_DIRECTORY_ID) : false
+      if (isUnderPackages) {
+        const collected: ProjectAsset[] = []
+        collectDirectoryAssets(directory, collected)
+        return collected
+      }
+
+      return directory.assets ?? []
     },
     canUndo(state): boolean {
       return state.undoStack.length > 0
@@ -1395,7 +1444,7 @@ export const useSceneStore = defineStore('scene', {
 
       const assetClone: ProjectAsset = {
         ...asset,
-        id: asset.id,
+        gleaned: true
       }
       const categoryId = determineAssetCategoryId(assetClone)
       const registered = this.registerAsset(assetClone, {

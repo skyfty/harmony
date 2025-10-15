@@ -39,6 +39,7 @@ function transformZlgccnResponse(payload: unknown): ProjectDirectory[] {
       thumbnail: null,
       description: item.file,
       downloadUrl: item.file,
+      gleaned: false,
     }
 
     if (!seriesMap.has(series)) {
