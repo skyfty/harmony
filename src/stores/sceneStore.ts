@@ -434,6 +434,177 @@ function areSelectionsEqual(a: string[], b: string[]): boolean {
   return true
 }
 
+type ScenePersistedState = Partial<SceneState>
+
+function ensureActiveTool(state: ScenePersistedState): ScenePersistedState {
+  return {
+    ...state,
+    activeTool: (state.activeTool as EditorTool | undefined) ?? 'select',
+  }
+}
+
+function ensureCameraAndPanelState(state: ScenePersistedState): ScenePersistedState {
+  const cameraState = state.camera as Partial<SceneCameraState> | undefined
+  const panelState = state.panelVisibility as Partial<PanelVisibilityState> | undefined
+
+  return {
+    ...state,
+    camera: {
+      position: cloneVector(cameraState?.position ?? defaultCameraState.position),
+      target: cloneVector(cameraState?.target ?? defaultCameraState.target),
+      fov: cameraState?.fov ?? defaultCameraState.fov,
+    },
+    panelVisibility: {
+      hierarchy: panelState?.hierarchy ?? defaultPanelVisibility.hierarchy,
+      inspector: panelState?.inspector ?? defaultPanelVisibility.inspector,
+      project: panelState?.project ?? defaultPanelVisibility.project,
+    },
+  }
+}
+
+function removeLegacyExternalNodes(state: ScenePersistedState): ScenePersistedState {
+  const rawNodes = state.nodes as SceneNode[] | undefined
+  return {
+    ...state,
+    nodes: Array.isArray(rawNodes)
+      ? rawNodes.filter((node) => (node as SceneNode).geometry !== 'external')
+      : rawNodes,
+  }
+}
+
+function ensureSceneCollection(state: ScenePersistedState): ScenePersistedState {
+  const existingScenes = state.scenes as StoredSceneDocument[] | undefined
+  if (Array.isArray(existingScenes) && existingScenes.length > 0) {
+    return state
+  }
+
+  const rawNodes = (state.nodes as SceneNode[] | undefined) ?? []
+  const selectedNodeId = (state.selectedNodeId as string | null | undefined) ?? null
+  const cameraState = state.camera as Partial<SceneCameraState> | undefined
+
+  const camera: SceneCameraState = {
+    position: cloneVector(cameraState?.position ?? defaultCameraState.position),
+    target: cloneVector(cameraState?.target ?? defaultCameraState.target),
+    fov: cameraState?.fov ?? defaultCameraState.fov,
+  }
+
+  const recoveredScene = createSceneDocument('Recovered Scene', {
+    nodes: rawNodes,
+    selectedNodeId,
+    camera,
+    resourceProviderId: (state.resourceProviderId as string | undefined) ?? 'builtin',
+  })
+
+  return {
+    ...state,
+    scenes: [recoveredScene],
+    currentSceneId: recoveredScene.id,
+    nodes: cloneSceneNodes(recoveredScene.nodes),
+    selectedNodeId: recoveredScene.selectedNodeId,
+    selectedNodeIds: cloneSelection(recoveredScene.selectedNodeIds),
+    camera: cloneCameraState(recoveredScene.camera),
+  }
+}
+
+function ensureResourceProvider(state: ScenePersistedState): ScenePersistedState {
+  const scenes = state.scenes as StoredSceneDocument[] | undefined
+  const updatedScenes = Array.isArray(scenes)
+    ? scenes.map((scene) => ({
+        ...scene,
+        resourceProviderId: scene.resourceProviderId ?? 'builtin',
+      }))
+    : scenes
+
+  return {
+    ...state,
+    scenes: updatedScenes,
+    resourceProviderId: (state.resourceProviderId as string | undefined) ?? 'builtin',
+  }
+}
+
+function ensureSceneTimestamps(state: ScenePersistedState): ScenePersistedState {
+  const scenes = state.scenes as Partial<StoredSceneDocument>[] | undefined
+  if (!Array.isArray(scenes)) {
+    return state
+  }
+
+  const now = new Date().toISOString()
+  const upgradedScenes = scenes.map((scene) => {
+    const createdAt = scene.createdAt ?? now
+    const updatedAt = scene.updatedAt ?? scene.createdAt ?? createdAt ?? now
+    return {
+      ...scene,
+      createdAt,
+      updatedAt,
+    } as StoredSceneDocument
+  })
+
+  return {
+    ...state,
+    scenes: upgradedScenes,
+  }
+}
+
+function normalizeSceneSelections(state: ScenePersistedState): ScenePersistedState {
+  const scenes = state.scenes as Partial<StoredSceneDocument>[] | undefined
+  const updatedScenes = Array.isArray(scenes)
+    ? scenes.map((scene) => {
+        const nodes = Array.isArray(scene.nodes) ? (scene.nodes as SceneNode[]) : []
+        const existingSelection = Array.isArray(scene.selectedNodeIds) ? scene.selectedNodeIds : undefined
+        const fallbackId = scene.selectedNodeId ?? null
+        const normalizedSelection = normalizeSelectionIds(
+          nodes,
+          existingSelection ?? (fallbackId ? [fallbackId] : []),
+        )
+        return {
+          ...scene,
+          selectedNodeIds: normalizedSelection,
+          selectedNodeId: normalizedSelection[normalizedSelection.length - 1] ?? (fallbackId ?? null),
+        } as StoredSceneDocument
+      })
+    : scenes
+
+  const nodes = Array.isArray(state.nodes) ? (state.nodes as SceneNode[]) : []
+  const stateSelection = normalizeSelectionIds(nodes, state.selectedNodeIds as string[] | undefined)
+  const fallbackId = (state.selectedNodeId as string | null | undefined) ?? null
+  const normalizedStateSelection = stateSelection.length
+    ? stateSelection
+    : fallbackId
+      ? [fallbackId]
+      : []
+
+  return {
+    ...state,
+    scenes: updatedScenes as StoredSceneDocument[] | undefined,
+    selectedNodeIds: normalizedStateSelection,
+    selectedNodeId: normalizedStateSelection[normalizedStateSelection.length - 1] ?? null,
+  }
+}
+
+const sceneStoreMigrationSteps: Array<(state: ScenePersistedState) => ScenePersistedState> = [
+  ensureActiveTool,
+  ensureCameraAndPanelState,
+  removeLegacyExternalNodes,
+  ensureSceneCollection,
+  ensureResourceProvider,
+  ensureSceneTimestamps,
+  normalizeSceneSelections,
+]
+
+function migrateScenePersistedState(
+  state: ScenePersistedState,
+  _fromVersion: number,
+  _toVersion: number,
+): ScenePersistedState {
+  if (!state || typeof state !== 'object') {
+    return state
+  }
+
+  return sceneStoreMigrationSteps.reduce<ScenePersistedState>((current, step) => step(current), {
+    ...state,
+  })
+}
+
 function createSceneDocument(
   name: string,
   options: {
@@ -1529,7 +1700,7 @@ export const useSceneStore = defineStore('scene', {
   persist: {
     key: 'scene-store',
     storage: 'local',
-  version: 8,
+    version: 0,
     pick: [
       'scenes',
       'currentSceneId',
@@ -1543,138 +1714,6 @@ export const useSceneStore = defineStore('scene', {
       'panelVisibility',
       'resourceProviderId',
     ],
-    migrations: {
-      2: (state) => ({
-        ...state,
-        activeTool: (state.activeTool as EditorTool | undefined) ?? 'select',
-      }),
-      3: (state) => {
-        const cameraState = state.camera as Partial<SceneCameraState> | undefined
-        const panelState = state.panelVisibility as Partial<PanelVisibilityState> | undefined
-
-        return {
-          ...state,
-          camera: {
-            position: cloneVector(cameraState?.position ?? defaultCameraState.position),
-            target: cloneVector(cameraState?.target ?? defaultCameraState.target),
-            fov: cameraState?.fov ?? defaultCameraState.fov,
-          },
-          panelVisibility: {
-            hierarchy: panelState?.hierarchy ?? defaultPanelVisibility.hierarchy,
-            inspector: panelState?.inspector ?? defaultPanelVisibility.inspector,
-            project: panelState?.project ?? defaultPanelVisibility.project,
-          },
-        }
-      },
-      4: (state) => {
-        const rawNodes = state.nodes as SceneNode[] | undefined
-        return {
-          ...state,
-          nodes: Array.isArray(rawNodes)
-            ? rawNodes.filter((node) => (node as SceneNode).geometry !== 'external')
-            : rawNodes,
-        }
-      },
-      5: (state) => {
-        const existingScenes = state.scenes as StoredSceneDocument[] | undefined
-        if (Array.isArray(existingScenes) && existingScenes.length > 0) {
-          return state
-        }
-
-        const rawNodes = (state.nodes as SceneNode[] | undefined) ?? []
-        const selectedNodeId = (state.selectedNodeId as string | null | undefined) ?? null
-        const cameraState = state.camera as Partial<SceneCameraState> | undefined
-
-        const camera: SceneCameraState = {
-          position: cloneVector(cameraState?.position ?? defaultCameraState.position),
-          target: cloneVector(cameraState?.target ?? defaultCameraState.target),
-          fov: cameraState?.fov ?? defaultCameraState.fov,
-        }
-
-        const recoveredScene = createSceneDocument('Recovered Scene', {
-          nodes: rawNodes,
-          selectedNodeId,
-          camera,
-          resourceProviderId: (state.resourceProviderId as string | undefined) ?? 'builtin',
-        })
-
-        return {
-          ...state,
-          scenes: [recoveredScene],
-          currentSceneId: recoveredScene.id,
-          nodes: cloneSceneNodes(recoveredScene.nodes),
-          selectedNodeId: recoveredScene.selectedNodeId,
-          selectedNodeIds: cloneSelection(recoveredScene.selectedNodeIds),
-          camera: cloneCameraState(recoveredScene.camera),
-        }
-      },
-      6: (state) => {
-        const scenes = state.scenes as StoredSceneDocument[] | undefined
-        const updatedScenes = Array.isArray(scenes)
-          ? scenes.map((scene) => ({
-              ...scene,
-              resourceProviderId: scene.resourceProviderId ?? 'builtin',
-            }))
-          : scenes
-
-        return {
-          ...state,
-          scenes: updatedScenes,
-          resourceProviderId: (state.resourceProviderId as string | undefined) ?? 'builtin',
-        }
-      },
-      7: (state) => {
-        const scenes = state.scenes as Partial<StoredSceneDocument>[] | undefined
-        const now = new Date().toISOString()
-        const upgradedScenes = Array.isArray(scenes)
-          ? scenes.map((scene) => {
-              const createdAt = scene.createdAt ?? now
-              const updatedAt = scene.updatedAt ?? scene.createdAt ?? createdAt ?? now
-              return {
-                ...scene,
-                createdAt,
-                updatedAt,
-              }
-            })
-          : scenes
-
-        return {
-          ...state,
-          scenes: upgradedScenes as StoredSceneDocument[] | undefined,
-        }
-      },
-      8: (state) => {
-        const scenes = state.scenes as Partial<StoredSceneDocument>[] | undefined
-        const updatedScenes = Array.isArray(scenes)
-          ? scenes.map((scene) => {
-              const nodes = Array.isArray(scene.nodes) ? (scene.nodes as SceneNode[]) : []
-              const existingSelection = Array.isArray(scene.selectedNodeIds) ? scene.selectedNodeIds : undefined
-              const fallbackId = scene.selectedNodeId ?? null
-              const normalizedSelection = normalizeSelectionIds(nodes, existingSelection ?? (fallbackId ? [fallbackId] : []))
-              return {
-                ...scene,
-                selectedNodeIds: normalizedSelection,
-                selectedNodeId: normalizedSelection[normalizedSelection.length - 1] ?? (fallbackId ?? null),
-              }
-            })
-          : scenes
-
-        const nodes = Array.isArray(state.nodes) ? (state.nodes as SceneNode[]) : []
-        const stateSelection = normalizeSelectionIds(nodes, state.selectedNodeIds as string[] | undefined)
-        const fallbackId = (state.selectedNodeId as string | null | undefined) ?? null
-        const normalizedStateSelection = stateSelection.length
-          ? stateSelection
-          : fallbackId
-            ? [fallbackId]
-            : []
-
-        return {
-          ...state,
-          scenes: updatedScenes as StoredSceneDocument[] | undefined,
-          selectedNodeIds: normalizedStateSelection,
-          selectedNodeId: normalizedStateSelection[normalizedStateSelection.length - 1] ?? null,
-        }
-      },
-    },
+    migrations: migrateScenePersistedState,
   },
 })
