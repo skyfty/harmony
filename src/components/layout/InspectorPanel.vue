@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import InspectorVectorControls from '@/components/inspector/InspectorVectorControls.vue'
+import InspectorMaterialPanel from '@/components/inspector/MaterialPanel.vue'
+import InspectorTransformPanel from '@/components/inspector/TransformPanel.vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { Vector3Like } from '@/types/scene'
 
@@ -164,63 +165,21 @@ function handleNameUpdate(value: string) {
         variant="accordion"
         class="inspector-panels"
       >
-        <v-expansion-panel value="transform">
-          <v-expansion-panel-title>Transform</v-expansion-panel-title>
-          <v-expansion-panel-text>
-            <div class="section-block">
-              <InspectorVectorControls
-                label="Position"
-                :model-value="transformForm.position"
-                @update:axis="handlePositionUpdate"
-              />
-            </div>
-            <div class="section-block">
-              <InspectorVectorControls
-                label="Rotation"
-                :model-value="transformForm.rotation"
-                @update:axis="handleRotationUpdate"
-              />
-            </div>
-            <div class="section-block">
-              <InspectorVectorControls
-                label="Scale"
-                :model-value="transformForm.scale"
-                min="0.01"
-                @update:axis="handleScaleUpdate"
-              />
-            </div>
-          </v-expansion-panel-text>
-        </v-expansion-panel>
+        <InspectorTransformPanel
+          :position="transformForm.position"
+          :rotation="transformForm.rotation"
+          :scale="transformForm.scale"
+          @update:position="handlePositionUpdate"
+          @update:rotation="handleRotationUpdate"
+          @update:scale="handleScaleUpdate"
+        />
 
-        <v-expansion-panel value="material">
-          <v-expansion-panel-title>Material</v-expansion-panel-title>
-          <v-expansion-panel-text>
-            <div class="section-block material-row">
-              <span class="row-label">Base Color</span>
-              <input
-                class="color-input"
-                type="color"
-                :value="materialForm.color"
-                @input="updateColor(($event.target as HTMLInputElement).value)"
-              />
-            </div>
-            <div class="section-block material-row">
-              <span class="row-label">Opacity</span>
-              <div class="row-controls">
-                <v-slider
-                  :model-value="materialForm.opacity"
-                  min="0"
-                  max="1"
-                  step="0.05"
-                  hide-details
-                  class="opacity-slider"
-                  @update:model-value="updateOpacity"
-                />
-                <div class="slider-value">{{ materialForm.opacity.toFixed(2) }}</div>
-              </div>
-            </div>
-          </v-expansion-panel-text>
-        </v-expansion-panel>
+        <InspectorMaterialPanel
+          :color="materialForm.color"
+          :opacity="materialForm.opacity"
+          @update:color="updateColor"
+          @update:opacity="updateOpacity"
+        />
       </v-expansion-panels>
     </div>
     <div v-else class="placeholder-text">
@@ -248,10 +207,10 @@ function handleNameUpdate(value: string) {
 .panel-body {
   flex: 1;
   overflow-y: auto;
-    padding: 0.2rem;
+  padding: 0.2rem;
   display: flex;
   flex-direction: column;
-  gap:0.3rem;
+  gap: 0.3rem;
 }
 
 .panel-toolbar :deep(.v-toolbar-title) {
@@ -278,11 +237,11 @@ function handleNameUpdate(value: string) {
   letter-spacing: 0.08em;
   min-height: 34px;
   padding-block: 2px;
-    padding: 0px 10px;
+  padding: 0 10px;
 }
 
 .v-expansion-panel--active > .v-expansion-panel-title:not(.v-expansion-panel-title--static) {
-    min-height: 34px;
+  min-height: 34px;
 }
 .inspector-panels :deep(.v-expansion-panel-text__wrapper) {
   display: flex;
@@ -291,69 +250,5 @@ function handleNameUpdate(value: string) {
   padding: 8px 10px 16px;
 }
 
-.section-block {
-  margin-bottom: 0.4rem;
-}
-
-.section-block:last-of-type {
-  margin-bottom: 0;
-}
-
-.material-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.6rem;
-}
-
-.row-label {
-  font-size: 0.8rem;
-  letter-spacing: 0.06em;
-  color: rgba(233, 236, 241, 0.86);
-}
-
-.row-controls {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.vector-group {
-  display: grid;
-  grid-template-columns: 1fr repeat(3, 1fr);
-  align-items: center;
-  gap: 8px;
-  padding: 0.5rem 0.0rem;
-}
-
-.vector-label {
-  font-size: 0.8rem;
-  letter-spacing: 0.08em;
-  color: rgba(233, 236, 241, 1.0);
-}
-
-.vector-input {
-  max-width: 90px;
-}
-
-.color-input {
-  width: 48px;
-  height: 28px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  cursor: pointer;
-}
-
-.opacity-slider {
-  width: 140px;
-}
-
-.slider-value {
-  width: 48px;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  color: rgba(233, 236, 241, 0.72);
-}
 
 </style>
