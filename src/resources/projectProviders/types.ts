@@ -1,4 +1,4 @@
-import type { ProjectDirectory } from '@/stores/sceneStore'
+import type { ProjectDirectory } from '@/types/scene-store/project-directory'
 
 export interface ResourceProvider {
   id: string

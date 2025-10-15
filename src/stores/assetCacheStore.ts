@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import type { ProjectAsset } from './sceneStore'
+import type { ProjectAsset } from '@/types/scene-store/project-asset'
 import type { SceneNode } from '@/types/scene'
 
 export type AssetCacheStatus = 'idle' | 'downloading' | 'cached' | 'error'

@@ -2,134 +2,28 @@ import { watch, type WatchStopHandle } from 'vue'
 import { defineStore } from 'pinia'
 import { type Object3D } from 'three'
 import type { SceneNode, Vector3Like } from '@/types/scene'
+import type { ClipboardEntry } from '@/types/scene-store/clipboard-entry'
+import type { DetachResult } from '@/types/scene-store/detach-result'
+import type { DuplicateContext } from '@/types/scene-store/duplicate-context'
+import type { EditorTool } from '@/types/scene-store/editor-tool'
+import type { EnsureSceneAssetsOptions } from '@/types/scene-store/ensure-scene-assets-options'
+import type { HierarchyTreeItem } from '@/types/scene-store/hierarchy-tree-item'
+import type { PanelVisibilityState } from '@/types/scene-store/panel-visibility-state'
+import type { ProjectAsset } from '@/types/scene-store/project-asset'
+import type { ProjectDirectory } from '@/types/scene-store/project-directory'
+import type { SceneCameraState } from '@/types/scene-store/scene-camera-state'
+import type { SceneHistoryEntry } from '@/types/scene-store/scene-history-entry'
+import type { SceneState } from '@/types/scene-store/scene-state'
+import type { SceneSummary } from '@/types/scene-store/scene-summary'
+import type { StoredSceneDocument } from '@/types/scene-store/stored-scene-document'
+import type { TransformUpdatePayload } from '@/types/scene-store/transform-update-payload'
 import { useAssetCacheStore } from './assetCacheStore'
 import { useUiStore } from './uiStore'
 import { loadObjectFromFile } from '@/plugins/assetImport'
 
-export type EditorTool = 'select' | 'translate' | 'rotate' | 'scale'
-
-export interface ProjectAsset {
-  id: string
-  name: string
-  type: 'model' | 'texture' | 'image' | 'audio' | 'file'
-  description?: string
-  downloadUrl: string
-  previewColor: string
-  thumbnail?: string | null
-}
-
-export interface ProjectDirectory {
-  id: string
-  name: string
-  children?: ProjectDirectory[]
-  assets?: ProjectAsset[]
-}
-
-export interface HierarchyTreeItem {
-  id: string
-  name: string
-  visible: boolean
-  children?: HierarchyTreeItem[]
-}
-
-interface TransformUpdatePayload {
-  id: string
-  position?: Vector3Like
-  rotation?: Vector3Like
-  scale?: Vector3Like
-}
-
-export interface SceneCameraState {
-  position: Vector3Like
-  target: Vector3Like
-  fov: number
-}
-
 export type EditorPanel = 'hierarchy' | 'inspector' | 'project'
 
 export type HierarchyDropPosition = 'before' | 'after' | 'inside'
-
-export interface PanelVisibilityState {
-  hierarchy: boolean
-  inspector: boolean
-  project: boolean
-}
-
-export interface StoredSceneDocument {
-  id: string
-  name: string
-  thumbnail?: string | null
-  nodes: SceneNode[]
-  selectedNodeId: string | null
-  selectedNodeIds?: string[]
-  camera: SceneCameraState
-  resourceProviderId: string
-  createdAt: string
-  updatedAt: string
-}
-
-export interface SceneSummary {
-  id: string
-  name: string
-  thumbnail?: string | null
-  createdAt: string
-  updatedAt: string
-}
-
-interface SceneState {
-  scenes: StoredSceneDocument[]
-  currentSceneId: string | null
-  nodes: SceneNode[]
-  selectedNodeId: string | null
-  selectedNodeIds: string[]
-  activeTool: EditorTool
-  projectTree: ProjectDirectory[]
-  activeDirectoryId: string | null
-  selectedAssetId: string | null
-  camera: SceneCameraState
-  panelVisibility: PanelVisibilityState
-  resourceProviderId: string
-  cameraFocusNodeId: string | null
-  cameraFocusRequestId: number
-  clipboard: SceneClipboard | null
-  draggingAssetObject: Object3D | null
-  undoStack: SceneHistoryEntry[]
-  redoStack: SceneHistoryEntry[]
-  isRestoringHistory: boolean
-  activeTransformNodeId: string | null
-  transformSnapshotCaptured: boolean
-}
-
-interface EnsureSceneAssetsOptions {
-  nodes?: SceneNode[]
-  showOverlay?: boolean
-  refreshViewport?: boolean
-}
-
-interface ClipboardEntry {
-  sourceId: string
-  node: SceneNode
-}
-
-interface SceneClipboard {
-  entries: ClipboardEntry[]
-  runtimeSnapshots: Map<string, Object3D>
-  cut: boolean
-}
-
-interface DuplicateContext {
-  assetCache: ReturnType<typeof useAssetCacheStore>
-  runtimeSnapshots: Map<string, Object3D>
-}
-
-interface SceneHistoryEntry {
-  nodes: SceneNode[]
-  selectedNodeIds: string[]
-  selectedNodeId: string | null
-  camera: SceneCameraState
-  resourceProviderId: string
-  runtimeSnapshots: Map<string, Object3D>
-}
 
 const HISTORY_LIMIT = 50
 
@@ -751,11 +645,6 @@ function isDescendantNode(nodes: SceneNode[], ancestorId: string, childId: strin
   const ancestor = findNodeById(nodes, ancestorId)
   if (!ancestor) return false
   return nodeContainsId(ancestor, childId)
-}
-
-interface DetachResult {
-  tree: SceneNode[]
-  node: SceneNode | null
 }
 
 function detachNodeImmutable(nodes: SceneNode[], targetId: string): DetachResult {

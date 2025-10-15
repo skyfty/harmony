@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch, watchEffect } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useSceneStore, type ProjectAsset, type ProjectDirectory } from '@/stores/sceneStore'
+import { useSceneStore } from '@/stores/sceneStore'
+import type { ProjectAsset } from '@/types/scene-store/project-asset'
+import type { ProjectDirectory } from '@/types/scene-store/project-directory'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { resourceProviders } from '@/resources/projectProviders'
 

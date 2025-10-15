@@ -4,17 +4,13 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import type { SceneNode, Vector3Like } from '@/types/scene'
-import {
-  useSceneStore,
-  getRuntimeObject,
-  type ProjectAsset,
-  type ProjectDirectory,
-  type SceneCameraState,
-} from '@/stores/sceneStore'
+import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
+import type { ProjectAsset } from '@/types/scene-store/project-asset'
+import type { ProjectDirectory } from '@/types/scene-store/project-directory'
+import type { SceneCameraState } from '@/types/scene-store/scene-camera-state'
+import type { EditorTool } from '@/types/scene-store/editor-tool'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { loadObjectFromFile } from '@/plugins/assetImport'
-
-type EditorTool = 'select' | 'translate' | 'rotate' | 'scale'
 
 const props = defineProps<{
   sceneNodes: SceneNode[]
