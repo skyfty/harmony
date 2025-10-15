@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch, watchEffect } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useSceneStore, ASSETS_ROOT_DIRECTORY_ID, extractProviderIdFromPackageDirectoryId } from '@/stores/sceneStore'
+import { useSceneStore, extractProviderIdFromPackageDirectoryId } from '@/stores/sceneStore'
+import { PACKAGES_ROOT_DIRECTORY_ID } from '@/stores/assetCatalog'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -15,7 +16,7 @@ const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
 const { projectTree, activeDirectoryId, currentAssets, selectedAssetId } = storeToRefs(sceneStore)
 
-const openedDirectories = ref<string[]>([ASSETS_ROOT_DIRECTORY_ID])
+const openedDirectories = ref<string[]>([PACKAGES_ROOT_DIRECTORY_ID])
 const draggingAssetId = ref<string | null>(null)
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 let dragPreviewEl: HTMLDivElement | null = null
@@ -80,8 +81,8 @@ watch(
     if (!tree) {
       return
     }
-    if (!openedDirectories.value.includes(ASSETS_ROOT_DIRECTORY_ID)) {
-      openedDirectories.value = [...openedDirectories.value, ASSETS_ROOT_DIRECTORY_ID]
+    if (!openedDirectories.value.includes(PACKAGES_ROOT_DIRECTORY_ID)) {
+      openedDirectories.value = [...openedDirectories.value, PACKAGES_ROOT_DIRECTORY_ID]
     }
   },
   { immediate: true }
@@ -602,7 +603,7 @@ onBeforeUnmount(() => {
     <div class="project-content">
       <div class="project-tree">
         <v-toolbar density="compact" flat height="46">
-          <v-toolbar-title class="text-subtitle-2 project-tree-subtitle">Assets</v-toolbar-title>
+          <v-toolbar-title class="text-subtitle-2 project-tree-subtitle">Resource</v-toolbar-title>
           <v-spacer />
         </v-toolbar>
         <v-divider />
@@ -813,18 +814,25 @@ onBeforeUnmount(() => {
   overflow-y: auto;
 }
 
+
 .tree-view :deep(.v-treeview-node__root) {
-  padding-inline-start: 12px;
+  padding-inline: 10px 8px;
+  padding-block: 2px;
 }
 
 .tree-view :deep(.v-treeview-node__level) {
   margin-inline-start: 12px;
 }
 
+.tree-view :deep(.v-treeview-node__content) {
+  min-height: 26px;
+  padding-block: 0;
+}
+
 .tree-node-title {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -836,10 +844,9 @@ onBeforeUnmount(() => {
 .tree-node-spinner {
   flex-shrink: 0;
 }
-.v-list-item {
-  padding-top: 4px;
-  padding-bottom: 4px;
-  min-height: 24px;
+.tree-view :deep(.v-list-item) {
+  padding-block: 1px;
+  min-height: 22px;
 }
 .gallery-grid {
   display: grid;

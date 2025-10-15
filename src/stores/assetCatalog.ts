@@ -3,7 +3,7 @@ import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 
 export interface AssetCategoryDefinition {
-  key: 'models' | 'images' | 'videos' | 'audio' | 'others'
+  key: 'models' | 'images'  | 'others'
   id: string
   label: string
   extensions: string[]
@@ -25,18 +25,6 @@ export const ASSET_CATEGORY_CONFIG: AssetCategoryDefinition[] = [
     id: `${ASSETS_ROOT_DIRECTORY_ID}-images`,
     label: 'Images',
     extensions: ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff', '.svg', '.hdr', '.exr'],
-  },
-  {
-    key: 'videos',
-    id: `${ASSETS_ROOT_DIRECTORY_ID}-videos`,
-    label: 'Videos',
-    extensions: ['.mp4', '.mov', '.webm', '.avi', '.mkv', '.m4v', '.flv', '.mpg', '.mpeg'],
-  },
-  {
-    key: 'audio',
-    id: `${ASSETS_ROOT_DIRECTORY_ID}-audio`,
-    label: 'Audio',
-    extensions: ['.mp3', '.wav', '.ogg', '.flac', '.aac', '.m4a', '.aiff', '.oga'],
   },
   {
     key: 'others',
@@ -115,8 +103,6 @@ export function determineAssetCategoryId(asset: ProjectAsset): string {
     case 'texture':
     case 'image':
       return ASSET_CATEGORY_ID_BY_KEY.images
-    case 'audio':
-      return ASSET_CATEGORY_ID_BY_KEY.audio
     default:
       break
   }
