@@ -127,30 +127,6 @@ const builtinProjectTree: ProjectDirectory[] = [
         id: 'dir-assets-models',
         name: 'Models',
         assets: [
-          { id: 'asset-crate', name: 'SciFi Crate', type: 'model', previewColor: '#26C6DA' },
-          { id: 'asset-platform', name: 'Floating Platform', type: 'model', previewColor: '#FF7043' },
-          { id: 'asset-light2', name: 'Neon Light', type: 'model', previewColor: '#AB47BC' },
-          { id: 'asset-light3', name: 'Neon Light', type: 'model', previewColor: '#AB47BC' },
-          { id: 'asset-light4', name: 'Neon Light', type: 'model', previewColor: '#AB47BC' },
-          { id: 'asset-light5', name: 'Neon Light', type: 'model', previewColor: '#AB47BC' },
-          { id: 'asset-light6', name: 'Neon Light', type: 'model', previewColor: '#AB47BC' },
-        ],
-      },
-      {
-        id: 'dir-assets-textures',
-        name: 'Textures',
-        assets: [
-          { id: 'asset-grid', name: 'Grid Floor', type: 'texture', previewColor: '#546E7A' },
-          { id: 'asset-carbon', name: 'Carbon Fiber', type: 'texture', previewColor: '#263238' },
-          { id: 'asset-emissive', name: 'Emissive Strip', type: 'texture', previewColor: '#82B1FF' },
-        ],
-      },
-      {
-        id: 'dir-assets-materials',
-        name: 'Materials',
-        assets: [
-          { id: 'asset-steel', name: 'Brushed Steel', type: 'image', previewColor: '#90A4AE' },
-          { id: 'asset-holo', name: 'Holographic', type: 'image', previewColor: '#7E57C2' },
         ],
       },
     

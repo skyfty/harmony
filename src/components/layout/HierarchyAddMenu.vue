@@ -46,10 +46,10 @@ function addImportedObjectToScene(object: THREE.Object3D) {
   })
 }
 
-function handleMenuImport() {
-  const loaderFile = new Loader()
+function importAssetFromFile(file: File[]) {
+  const loader = new Loader()
 
-  loaderFile.$on('loaded', (object: LoaderLoadedPayload) => {
+  loader.$on('loaded', (object: LoaderLoadedPayload) => {
     if (object) {
       const imported = object as THREE.Object3D
       console.log('Loaded object:', imported)
@@ -69,7 +69,7 @@ function handleMenuImport() {
     }
   })
 
-  loaderFile.$on('progress', (payload: LoaderProgressPayload) => {
+  loader.$on('progress', (payload: LoaderProgressPayload) => {
     const percent = (payload.loaded / payload.total) * 100
     uiStore.updateLoadingOverlay({
       mode: 'determinate',
@@ -79,6 +79,15 @@ function handleMenuImport() {
     console.log(`Loading ${payload.filename}: ${percent.toFixed(2)}%`)
   })
 
+  loader.loadFiles(file)
+}
+
+function handleMenuImportFromUrl() {
+
+
+}
+
+function handleMenuImportFromFile() {
   const { open: openFileDialog, onChange: onFileChange } = useFileDialog()
 
   onFileChange((files: FileList | File[] | null) => {
@@ -93,7 +102,7 @@ function handleMenuImport() {
       message: '正在准备文件…',
       closable: true,
     })
-    loaderFile.loadFiles(fileArray)
+    importAssetFromFile(fileArray)
   })
 
   openFileDialog()
@@ -263,8 +272,12 @@ function handleAddNode(geometry:string) {
   <v-divider class="add-menu-divider" />
 
       <v-list-item
-          title="Import"
-          @click="handleMenuImport()"
+          title="File Import"
+          @click="handleMenuImportFromFile()"
+      />
+      <v-list-item
+          title="URL Import"
+          @click="handleMenuImportFromUrl()"
       />
     </v-list>
 </v-menu>
