@@ -314,6 +314,25 @@ function toggleAssetSelection(asset: ProjectAsset) {
   }
 }
 
+function setSelectableAssetSelection(select: boolean) {
+  const selectableIds = selectableAssetIds.value
+  if (!selectableIds.length) {
+    return
+  }
+  if (select) {
+    const merged = new Set([...selectedAssetIds.value, ...selectableIds])
+    selectedAssetIds.value = Array.from(merged)
+  } else {
+    const deselectSet = new Set(selectableIds)
+    selectedAssetIds.value = selectedAssetIds.value.filter((id) => !deselectSet.has(id))
+  }
+}
+
+function handleSelectAllChange(value: boolean) {
+  setSelectableAssetSelection(value)
+}
+
+
 function openDeleteDialog(assets: ProjectAsset[], batch: boolean) {
   if (!assets.length) {
     return
@@ -381,6 +400,21 @@ const selectedAssets = computed(() =>
     .map((id) => displayedAssets.value.find((asset) => asset.id === id))
     .filter((asset): asset is ProjectAsset => !!asset && canDeleteAsset(asset)),
 )
+const selectableAssetIds = computed(() =>
+  displayedAssets.value.filter((asset) => canDeleteAsset(asset)).map((asset) => asset.id),
+)
+const selectableAssetIdSet = computed(() => new Set(selectableAssetIds.value))
+const selectedSelectableCount = computed(() =>
+  selectedAssetIds.value.reduce((count, id) => (selectableAssetIdSet.value.has(id) ? count + 1 : count), 0),
+)
+const isSelectAllActive = computed(() => {
+  const total = selectableAssetIds.value.length
+  return total > 0 && selectedSelectableCount.value === total
+})
+const isSelectAllIndeterminate = computed(() => {
+  const total = selectableAssetIds.value.length
+  return total > 0 && selectedSelectableCount.value > 0 && selectedSelectableCount.value < total
+})
 const deletionDialogTitle = computed(() => (isBatchDeletion.value ? 'Delete Selected Assets' : 'Delete Asset'))
 const deletionConfirmLabel = computed(() => (isBatchDeletion.value ? 'Delete Assets' : 'Delete'))
 const deletionSummary = computed(() => {
@@ -706,16 +740,26 @@ onBeforeUnmount(() => {
         </v-treeview>
       </div>
       <div class="project-gallery">
-        <v-toolbar density="compact" height="45">
-          <v-btn
+        <v-toolbar density="compact" height="46">
+            <v-checkbox-btn
+              class="toolbar-select-checkbox"
+              :model-value="isSelectAllActive"
+              :indeterminate="isSelectAllIndeterminate"
+              :disabled="!selectableAssetIds.length"
+              density="compact"
+              color="primary"
+              @update:model-value="handleSelectAllChange"
+            />
+
+            <v-btn
             color="error"
             variant="text"
             density="compact"
             icon="mdi-delete-outline"
-            :style="{ visibility: isToolbarDeleteVisible ? 'visible' : 'hidden' }"
+            :disabled="!isToolbarDeleteVisible"
             @click="requestDeleteSelection"
-          />
-          <v-spacer />
+            />
+            <v-divider vertical class="mx-1" />
           <v-text-field
             v-model="searchQuery"
             :loading="searchLoading"
@@ -756,19 +800,14 @@ onBeforeUnmount(() => {
             >
               <div class="asset-preview" :style="{ background: asset.previewColor }">
                 <div class="asset-select-control">
-                  <v-tooltip text="Select for deletion">
-                    <template #activator="{ props }">
-                      <v-checkbox-btn
-                        v-bind="props"
-                        :model-value="isAssetSelected(asset.id)"
-                        density="compact"
-                        color="primary"
-                        :style="{ visibility: canDeleteAsset(asset) ? 'visible' : 'hidden' }"
-                        @click.stop
-                        @update:model-value="() => toggleAssetSelection(asset)"
-                      />
-                    </template>
-                  </v-tooltip>
+                    <v-checkbox-btn
+                      :model-value="isAssetSelected(asset.id)"
+                      density="compact"
+                      color="primary"
+                      :style="{ visibility: canDeleteAsset(asset) ? 'visible' : 'hidden' }"
+                      @click.stop
+                      @update:model-value="() => toggleAssetSelection(asset)"
+                    />
                 </div>
                 <img
                   v-if="assetPreviewUrl(asset)"
@@ -807,20 +846,6 @@ onBeforeUnmount(() => {
                   <v-icon size="18" color="error">mdi-alert-circle-outline</v-icon>
                 </div>
                 <v-spacer />
-                <v-tooltip v-if="canDeleteAsset(asset)" text="Delete Asset">
-                  <template #activator="{ props }">
-                    <v-btn
-                      v-bind="props"
-                      color="error"
-                      variant="tonal"
-                      density="compact"
-                      icon="mdi-trash-can-outline"
-                      size="small"
-                      style="min-width: 20px; height: 20px;"
-                      @click.stop="requestDeleteAsset(asset)"
-                    />
-                  </template>
-                </v-tooltip>
                 <v-btn
                   color="primary"
                   variant="tonal"
@@ -912,6 +937,12 @@ onBeforeUnmount(() => {
 }
 
 
+.project-gallery {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .tree-view :deep(.v-treeview-node__root) {
   padding-inline: 10px 8px;
   padding-block: 2px;
@@ -950,6 +981,21 @@ onBeforeUnmount(() => {
   grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
   gap: 12px;
   padding: 12px;
+}
+
+.toolbar-select-checkbox {
+  display: flex;
+  align-items: center;
+  padding-inline: 4px;
+}
+
+.toolbar-select-checkbox :deep(.v-selection-control) {
+  margin: 0;
+}
+
+.toolbar-select-checkbox :deep(.v-selection-control__input) {
+  width: 22px;
+  height: 22px;
 }
 
 .asset-card {
