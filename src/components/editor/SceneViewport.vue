@@ -931,14 +931,21 @@ function selectNodeAtPointer(event: PointerEvent) {
   raycaster.setFromCamera(pointer, camera)
   const intersects = raycaster.intersectObjects(rootGroup.children, true)
 
-  const hit = intersects.find((intersection) => intersection.object.userData?.nodeId)
+  const hit = intersects.find((intersection) => {
+    const nodeId = intersection.object.userData?.nodeId as string | undefined
+    if (!nodeId) {
+      return false
+    }
+    return !sceneStore.isNodeLocked(nodeId)
+  })
 
-  if (hit) {
-    const nodeId = hit.object.userData.nodeId as string
-    emit('selectNode', nodeId)
-  } else {
+  if (!hit) {
     emit('selectNode', null)
+    return
   }
+
+  const nodeId = hit.object.userData.nodeId as string
+  emit('selectNode', nodeId)
 }
 
 function extractAssetPayload(event: DragEvent): { assetId: string } | null {
@@ -1300,12 +1307,13 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
 }
 
 function attachSelection(nodeId: string | null, tool: EditorTool = props.activeTool) {
-  const target = nodeId ? objectMap.get(nodeId) ?? null : null
+  const locked = nodeId ? sceneStore.isNodeLocked(nodeId) : false
+  const target = !locked && nodeId ? objectMap.get(nodeId) ?? null : null
   updateSelectionBox(target)
 
   if (!transformControls) return
 
-  if (!nodeId) {
+  if (!nodeId || locked) {
     transformControls.detach()
     updateGridHighlight(null)
     return

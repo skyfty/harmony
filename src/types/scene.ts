@@ -37,6 +37,7 @@ export interface SceneNode {
   children?: SceneNode[]
   sourceAssetId?: string
   visible?: boolean
+  locked?: boolean
   isPlaceholder?: boolean
   downloadProgress?: number
   downloadStatus?: 'idle' | 'downloading' | 'ready' | 'error'

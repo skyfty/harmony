@@ -19,6 +19,7 @@ const expandedPanels = ref<string[]>(['transform', 'material'])
 const isLightNode = computed(() => selectedNode.value?.nodeType === 'light')
 const showMaterialPanel = computed(() => !isLightNode.value && !!selectedNode.value?.material)
 const inspectorIcon = computed(() => (isLightNode.value ? 'mdi-lightbulb-on-outline' : 'mdi-cube-outline'))
+const isLocked = computed(() => selectedNode.value?.locked ?? false)
 
 watch(
   selectedNode,
@@ -33,6 +34,11 @@ watch(
 function updateVisibility(value: boolean | null) {
   if (!selectedNodeId.value) return
   sceneStore.setNodeVisibility(selectedNodeId.value, Boolean(value))
+}
+
+function toggleLock() {
+  if (!selectedNodeId.value) return
+  sceneStore.toggleNodeLock(selectedNodeId.value)
 }
 
 function handleNameUpdate(value: string) {
@@ -67,6 +73,15 @@ function handleNameUpdate(value: string) {
           density="compact"
           hide-details
           @update:modelValue="handleNameUpdate"
+        />
+        <v-btn
+          :icon="isLocked ? 'mdi-lock-outline' : 'mdi-lock-open-variant-outline'"
+          variant="text"
+          density="comfortable"
+          class="lock-toggle"
+          :class="{ 'is-locked': isLocked }"
+          :title="isLocked ? 'Unlock node' : 'Lock node'"
+          @click="toggleLock"
         />
         <v-checkbox
           :model-value="selectedNode.visible ?? true"
@@ -129,6 +144,20 @@ function handleNameUpdate(value: string) {
 .panel-toolbar :deep(.v-btn) {
   width: 32px;
   height: 32px;
+}
+
+.lock-toggle {
+  color: rgba(233, 236, 241, 0.55);
+  min-width: 32px;
+  transition: color 120ms ease;
+}
+
+.lock-toggle.is-locked {
+  color: #ffca28;
+}
+
+.lock-toggle :deep(.v-icon) {
+  font-size: 20px;
 }
 
 .inspector-panels {

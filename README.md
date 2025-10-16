@@ -12,6 +12,8 @@ npm run dev
 npm run build
 ```
 
+> Optional Python helpers: if you install Python dependencies (for asset generation or tooling), append the Aliyun mirror flag, e.g. `pip install pillow -i http://mirrors.aliyun.com/pypi/simple --trusted-host mirrors.aliyun.com`.
+
 The dev server runs on port `5173` by default. When it starts, open the printed URL in your browser.
 
 ## 🧭 Editor layout
