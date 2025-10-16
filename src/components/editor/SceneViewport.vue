@@ -62,6 +62,9 @@ const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
 const rootGroup = new THREE.Group()
 const objectMap = new Map<string, THREE.Object3D>()
+type LightHelperObject = THREE.Object3D & { dispose?: () => void; update?: () => void }
+const lightHelpers: LightHelperObject[] = []
+const lightHelpersNeedingUpdate = new Set<LightHelperObject>()
 let isApplyingCameraState = false
 const THUMBNAIL_CAPTURE_DELAY_MS = 1500
 let thumbnailCaptureTimeout: ReturnType<typeof setTimeout> | null = null
@@ -71,6 +74,8 @@ const MIN_CAMERA_HEIGHT = 0.25
 const MIN_TARGET_HEIGHT = 0
 const GRID_CELL_SIZE = 1
 const GRID_HIGHLIGHT_HEIGHT = 0.02
+const POINT_LIGHT_HELPER_SIZE = 0.5
+const DIRECTIONAL_LIGHT_HELPER_SIZE = 5
 
 const isDragHovering = ref(false)
 
@@ -694,6 +699,13 @@ function animate() {
     orbitControls.update()
   }
 
+  if (lightHelpersNeedingUpdate.size > 0 && scene) {
+    scene.updateMatrixWorld(true)
+    lightHelpersNeedingUpdate.forEach((helper) => {
+      helper.update?.()
+    })
+  }
+
   if (selectionBoxHelper && selectionTrackedObject) {
     selectionBoxHelper.box.setFromObject(selectionTrackedObject)
   }
@@ -713,6 +725,8 @@ function disposeScene() {
   transformControls?.removeEventListener('objectChange', handleTransformChange)
   transformControls?.dispose()
   transformControls = null
+
+  clearLightHelpers()
 
   if (scene && fallbackLightGroup) {
     scene.remove(fallbackLightGroup)
@@ -989,6 +1003,7 @@ function syncSceneGraph() {
 
 function disposeSceneNodes() {
   clearSelectionBox()
+  clearLightHelpers()
   rootGroup.traverse((child) => {
     const nodeId = child.userData?.nodeId as string | undefined
     if (nodeId && sceneStore.hasRuntimeObject(nodeId)) {
@@ -1010,6 +1025,24 @@ function disposeSceneNodes() {
   })
 }
 
+function registerLightHelper(nodeId: string, helper: LightHelperObject, requiresContinuousUpdate = false) {
+  helper.userData.nodeId = nodeId
+  helper.frustumCulled = false
+  lightHelpers.push(helper)
+  if (requiresContinuousUpdate) {
+    lightHelpersNeedingUpdate.add(helper)
+  }
+}
+
+function clearLightHelpers() {
+  lightHelpers.forEach((helper) => {
+    helper.dispose?.()
+    helper.removeFromParent()
+  })
+  lightHelpers.length = 0
+  lightHelpersNeedingUpdate.clear()
+}
+
 function createLightObject(node: SceneNode): THREE.Object3D {
   const container = new THREE.Group()
   container.name = `${node.name}-Light`
@@ -1021,6 +1054,8 @@ function createLightObject(node: SceneNode): THREE.Object3D {
   }
 
   let light: THREE.Light
+  let helper: LightHelperObject | null = null
+  let requiresHelperUpdate = false
 
   switch (config.type) {
     case 'directional': {
@@ -1036,12 +1071,15 @@ function createLightObject(node: SceneNode): THREE.Object3D {
         )
       }
       container.add(target)
+      helper = new THREE.DirectionalLightHelper(directional, DIRECTIONAL_LIGHT_HELPER_SIZE, config.color)
+      requiresHelperUpdate = true
       break
     }
     case 'point': {
       const point = new THREE.PointLight(config.color, config.intensity, config.distance ?? 0, config.decay ?? 1)
       point.castShadow = config.castShadow ?? false
       light = point
+      helper = new THREE.PointLightHelper(point, POINT_LIGHT_HELPER_SIZE, config.color)
       break
     }
     case 'spot': {
@@ -1063,6 +1101,8 @@ function createLightObject(node: SceneNode): THREE.Object3D {
         container.add(spot.target)
       }
       light = spot
+      helper = new THREE.SpotLightHelper(spot, config.color)
+      requiresHelperUpdate = true
       break
     }
     case 'ambient':
@@ -1074,6 +1114,14 @@ function createLightObject(node: SceneNode): THREE.Object3D {
 
   light.userData.nodeId = node.id
   container.add(light)
+
+  if (helper) {
+    helper.name = `${node.name}-LightHelper`
+    registerLightHelper(node.id, helper, requiresHelperUpdate)
+    container.add(helper)
+    helper.update?.()
+  }
+
   return container
 }
 
@@ -1146,7 +1194,6 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
   object.position.set(node.position.x, node.position.y, node.position.z)
   object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z)
   object.scale.set(node.scale.x, node.scale.y, node.scale.z)
-
   objectMap.set(node.id, object)
 
   if (node.children) {
@@ -1178,7 +1225,6 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
     updateGridHighlight(null)
     return
   }
-
   if (tool === 'select') {
     transformControls.detach()
     updateGridHighlight(null)
