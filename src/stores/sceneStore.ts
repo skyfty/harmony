@@ -393,6 +393,8 @@ function toHierarchyItem(node: SceneNode): HierarchyTreeItem {
     name: node.name,
     visible: node.visible ?? true,
     locked: node.locked ?? false,
+    nodeType: node.nodeType,
+    lightType: node.light?.type,
     children: node.children?.map(toHierarchyItem),
   }
 }

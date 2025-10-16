@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore, type HierarchyDropPosition } from '@/stores/sceneStore'
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
+import type { LightNodeType, SceneNodeType } from '@/types/scene'
 import AddNodeMenu from '../common/AddNodeMenu.vue'
 
 const emit = defineEmits<{
@@ -23,6 +24,19 @@ const dragState = ref<{ sourceId: string | null; targetId: string | null; positi
   },
 )
 const panelRef = ref<HTMLDivElement | null>(null)
+
+const NODE_TYPE_ICONS: Record<SceneNodeType, string> = {
+  mesh: 'mdi-cube-outline',
+  light: 'mdi-lightbulb-outline',
+  group: 'mdi-folder-outline',
+}
+
+const LIGHT_TYPE_ICONS: Record<LightNodeType, string> = {
+  directional: 'mdi-white-balance-sunny',
+  point: 'mdi-lightbulb-on-outline',
+  spot: 'mdi-spotlight-beam',
+  ambient: 'mdi-weather-night',
+}
 
 const active = computed({
   get: () => (selectedNodeId.value ? [selectedNodeId.value] : []),
@@ -167,6 +181,25 @@ function getNodeInteractionClasses(id: string) {
     'is-active': isItemActive(id),
     'is-locked': isNodeSelectionLocked(id),
   }
+}
+
+function resolveNodeIcon(item: HierarchyTreeItem) {
+  if (item.nodeType === 'light') {
+    if (item.lightType && item.lightType in LIGHT_TYPE_ICONS) {
+      return LIGHT_TYPE_ICONS[item.lightType]
+    }
+    return NODE_TYPE_ICONS.light
+  }
+
+  if (item.nodeType && item.nodeType in NODE_TYPE_ICONS) {
+    return NODE_TYPE_ICONS[item.nodeType]
+  }
+
+  if (item.children?.length) {
+    return NODE_TYPE_ICONS.group
+  }
+
+  return NODE_TYPE_ICONS.mesh
 }
 
 function handleNodeClick(event: MouseEvent, nodeId: string) {
@@ -423,8 +456,8 @@ function handleTreeDragLeave(event: DragEvent) {
           activatable
           class="hierarchy-tree"
         >
-          <template #prepend>
-            <v-icon size="small" class="node-icon">mdi-cube-outline</v-icon>
+          <template #prepend="{ item }">
+            <v-icon size="small" class="node-icon" :icon="resolveNodeIcon(item)" />
           </template>
           <template #title="{ item }">
             <div
