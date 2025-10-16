@@ -159,7 +159,6 @@ const initialNodes: SceneNode[] = [
     id: crypto.randomUUID(),
     name: 'Ground',
     nodeType: 'mesh',
-    geometry: 'external',
     material: {
       color: '#707070',
       wireframe: false,
@@ -568,7 +567,7 @@ function removeLegacyExternalNodes(state: ScenePersistedState): ScenePersistedSt
   return {
     ...state,
     nodes: Array.isArray(rawNodes)
-      ? rawNodes.filter((node) => (node as SceneNode).geometry !== 'external')
+      ? rawNodes.filter((node) => (node as SceneNode).nodeType !== 'mesh')
       : rawNodes,
   }
 }
@@ -1938,7 +1937,7 @@ export const useSceneStore = defineStore('scene', {
       const node: SceneNode = {
         id,
         name: asset.name,
-        geometry: 'external',
+        nodeType: 'mesh',
         material: { color: '#90a4ae', opacity: 0.6 },
         position: cloneVector(transform.position),
         rotation: cloneVector(transform.rotation),
@@ -2100,7 +2099,7 @@ export const useSceneStore = defineStore('scene', {
       const node: SceneNode = {
         id,
         name: payload.name ?? payload.object.name ?? 'Imported Mesh',
-        geometry: 'external',
+        nodeType: 'mesh',
         material: { color: '#ffffff' },
         position: payload.position ?? { x: 0, y: 0, z: 0 },
         rotation: payload.rotation ?? { x: 0, y: 0, z: 0 },

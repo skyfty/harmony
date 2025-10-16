@@ -1,6 +1,5 @@
-export type GeometryType = 'box' | 'sphere' | 'plane' | 'external'
 
-export type SceneNodeKind = 'mesh' | 'light' | 'group'
+export type SceneNodeType = 'mesh' | 'light' | 'group'
 
 export type LightNodeType = 'directional' | 'point' | 'spot' | 'ambient'
 
@@ -25,8 +24,7 @@ export interface Vector3Like {
 export interface SceneNode {
   id: string
   name: string
-  nodeType?: SceneNodeKind
-  geometry?: GeometryType
+  nodeType?: SceneNodeType
   material?: {
     color: string
     wireframe?: boolean

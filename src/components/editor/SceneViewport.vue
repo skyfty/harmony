@@ -12,6 +12,7 @@ import type { EditorTool } from '@/types/editor-tool'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { loadObjectFromFile } from '@/plugins/assetImport'
 
+
 const props = defineProps<{
   sceneNodes: SceneNode[]
   activeTool: EditorTool
@@ -1114,7 +1115,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
 
   if (nodeType === 'light') {
     object = createLightObject(node)
-  } else if (node.geometry === 'external') {
+  } else {
     const container = new THREE.Group()
     container.userData.nodeId = node.id
 
@@ -1140,37 +1141,6 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     }
 
     object = container
-  } else {
-    const materialConfig = node.material ?? { color: '#ffffff', wireframe: false, opacity: 1 }
-    const material = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(materialConfig.color),
-      wireframe: materialConfig.wireframe ?? false,
-      opacity: materialConfig.opacity ?? 1,
-      transparent: (materialConfig.opacity ?? 1) < 1,
-      metalness: 0.1,
-      roughness: 0.6,
-    })
-
-    switch (node.geometry ?? 'box') {
-      case 'sphere':
-        object = new THREE.Mesh(new THREE.SphereGeometry(0.5, 32, 32), material)
-        break
-      case 'plane': {
-        const plane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material)
-        plane.rotateX(-Math.PI / 2)
-        object = plane
-        break
-      }
-      case 'box':
-      default:
-        object = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), material)
-        break
-    }
-
-    const mesh = object as THREE.Mesh
-    mesh.castShadow = true
-    mesh.receiveShadow = true
-    mesh.userData.nodeId = node.id
   }
 
   object.position.set(node.position.x, node.position.y, node.position.z)
