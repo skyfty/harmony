@@ -19,7 +19,6 @@ const expandedPanels = ref<string[]>(['transform', 'material'])
 const isLightNode = computed(() => selectedNode.value?.nodeType === 'light')
 const showMaterialPanel = computed(() => !isLightNode.value && !!selectedNode.value?.material)
 const inspectorIcon = computed(() => (isLightNode.value ? 'mdi-lightbulb-on-outline' : 'mdi-cube-outline'))
-const isLocked = computed(() => selectedNode.value?.locked ?? false)
 
 watch(
   selectedNode,
@@ -31,20 +30,9 @@ watch(
   { immediate: true }
 )
 
-function updateVisibility(value: boolean | null) {
-  if (!selectedNodeId.value) return
-  if (isLocked.value) return
-  sceneStore.setNodeVisibility(selectedNodeId.value, Boolean(value))
-}
-
-function toggleLock() {
-  if (!selectedNodeId.value) return
-  sceneStore.toggleNodeLock(selectedNodeId.value)
-}
 
 function handleNameUpdate(value: string) {
   if (!selectedNodeId.value) return
-  if (isLocked.value) return
   nodeName.value = value
   const trimmed = value.trim()
   if (!trimmed) {
@@ -74,25 +62,7 @@ function handleNameUpdate(value: string) {
           variant="solo"
           density="compact"
           hide-details
-          :readonly="isLocked"
-          :disabled="isLocked"
           @update:modelValue="handleNameUpdate"
-        />
-        <v-btn
-          :icon="isLocked ? 'mdi-lock-outline' : 'mdi-lock-open-variant-outline'"
-          variant="text"
-          density="comfortable"
-          class="lock-toggle"
-          :class="{ 'is-locked': isLocked }"
-          :title="isLocked ? 'Unlock node' : 'Lock node'"
-          @click="toggleLock"
-        />
-        <v-checkbox
-          :model-value="selectedNode.visible ?? true"
-          density="compact"
-          hide-details
-          :disabled="isLocked"
-          @update:modelValue="updateVisibility"
         />
       </div>
 
@@ -102,10 +72,10 @@ function handleNameUpdate(value: string) {
         variant="accordion"
         class="inspector-panels"
       >
-        <InspectorTransformPanel :disabled="isLocked" />
+        <InspectorTransformPanel  />
 
-        <InspectorLightPanel v-if="isLightNode" :disabled="isLocked" />
-        <InspectorMaterialPanel v-else-if="showMaterialPanel" :disabled="isLocked" />
+        <InspectorLightPanel v-if="isLightNode"/>
+        <InspectorMaterialPanel v-else-if="showMaterialPanel" />
       </v-expansion-panels>
     </div>
     <div v-else class="placeholder-text">
@@ -151,19 +121,6 @@ function handleNameUpdate(value: string) {
   height: 32px;
 }
 
-.lock-toggle {
-  color: rgba(233, 236, 241, 0.55);
-  min-width: 32px;
-  transition: color 120ms ease;
-}
-
-.lock-toggle.is-locked {
-  color: #ffca28;
-}
-
-.lock-toggle :deep(.v-icon) {
-  font-size: 20px;
-}
 
 .inspector-panels {
   border-radius: 3px;
