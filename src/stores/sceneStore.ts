@@ -18,6 +18,7 @@ import type { SceneState } from '@/types/scene-state'
 import type { SceneSummary } from '@/types/scene-summary'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
+import type { CameraProjectionMode, SceneViewportSettings } from '@/types/scene-viewport-settings'
 import { useAssetCacheStore } from './assetCacheStore'
 import { useUiStore } from './uiStore'
 import { loadObjectFromFile } from '@/plugins/assetImport'
@@ -203,6 +204,30 @@ const defaultPanelVisibility: PanelVisibilityState = {
   hierarchy: true,
   inspector: true,
   project: true,
+}
+
+const defaultViewportSettings: SceneViewportSettings = {
+  showGrid: true,
+  showAxes: false,
+  cameraProjection: 'perspective',
+}
+
+function isCameraProjectionMode(value: unknown): value is CameraProjectionMode {
+  return value === 'perspective' || value === 'orthographic'
+}
+
+function cloneViewportSettings(settings?: Partial<SceneViewportSettings> | null): SceneViewportSettings {
+  return {
+    showGrid: settings?.showGrid ?? defaultViewportSettings.showGrid,
+    showAxes: settings?.showAxes ?? defaultViewportSettings.showAxes,
+    cameraProjection: isCameraProjectionMode(settings?.cameraProjection)
+      ? settings!.cameraProjection
+      : defaultViewportSettings.cameraProjection,
+  }
+}
+
+function viewportSettingsEqual(a: SceneViewportSettings, b: SceneViewportSettings): boolean {
+  return a.showGrid === b.showGrid && a.showAxes === b.showAxes && a.cameraProjection === b.cameraProjection
 }
 
 const initialSceneDocument = createSceneDocument('Sample Scene', {
@@ -479,6 +504,7 @@ function createHistorySnapshot(store: SceneState): SceneHistoryEntry {
     selectedNodeIds: cloneSelection(store.selectedNodeIds),
     selectedNodeId: store.selectedNodeId,
     camera: cloneCameraState(store.camera),
+    viewportSettings: cloneViewportSettings(store.viewportSettings),
     resourceProviderId: store.resourceProviderId,
     runtimeSnapshots: collectSceneRuntimeSnapshots(store.nodes),
   }
@@ -558,6 +584,23 @@ function ensureCameraAndPanelState(state: ScenePersistedState): ScenePersistedSt
   }
 }
 
+function ensureViewportSettings(state: ScenePersistedState): ScenePersistedState {
+  const normalizedSettings = cloneViewportSettings(state.viewportSettings as Partial<SceneViewportSettings> | undefined)
+  const scenes = state.scenes as Partial<StoredSceneDocument>[] | undefined
+  const normalizedScenes = Array.isArray(scenes)
+    ? scenes.map((scene) => ({
+        ...scene,
+        viewportSettings: cloneViewportSettings(scene.viewportSettings as Partial<SceneViewportSettings> | undefined),
+      }) as StoredSceneDocument)
+    : scenes
+
+  return {
+    ...state,
+    viewportSettings: normalizedSettings,
+    scenes: normalizedScenes as StoredSceneDocument[] | undefined,
+  }
+}
+
 function removeLegacyExternalNodes(state: ScenePersistedState): ScenePersistedState {
   const rawNodes = state.nodes as SceneNode[] | undefined
   return {
@@ -586,6 +629,7 @@ function ensureSceneCollection(state: ScenePersistedState): ScenePersistedState 
     target: cloneVector(cameraState?.target ?? defaultCameraState.target),
     fov: cameraState?.fov ?? defaultCameraState.fov,
   }
+  const viewportSettings = cloneViewportSettings(state.viewportSettings as Partial<SceneViewportSettings> | undefined)
 
   const recoveredScene = createSceneDocument('Recovered Scene', {
     nodes: rawNodes,
@@ -595,6 +639,7 @@ function ensureSceneCollection(state: ScenePersistedState): ScenePersistedState 
     assetCatalog: rawCatalog ?? undefined,
     assetIndex: rawIndex ?? undefined,
     packageAssetMap: rawPackageMap ?? undefined,
+    viewportSettings,
   })
 
   return {
@@ -605,6 +650,7 @@ function ensureSceneCollection(state: ScenePersistedState): ScenePersistedState 
     selectedNodeId: recoveredScene.selectedNodeId,
     selectedNodeIds: cloneSelection(recoveredScene.selectedNodeIds),
     camera: cloneCameraState(recoveredScene.camera),
+  viewportSettings: cloneViewportSettings(recoveredScene.viewportSettings),
     assetCatalog: cloneAssetCatalog(recoveredScene.assetCatalog),
     assetIndex: cloneAssetIndex(recoveredScene.assetIndex),
     packageAssetMap: clonePackageAssetMap(recoveredScene.packageAssetMap),
@@ -744,6 +790,7 @@ function ensurePackageDirectoryState(state: ScenePersistedState): ScenePersisted
 const sceneStoreMigrationSteps: Array<(state: ScenePersistedState) => ScenePersistedState> = [
   ensureActiveTool,
   ensureCameraAndPanelState,
+  ensureViewportSettings,
   removeLegacyExternalNodes,
   ensureSceneCollection,
   ensureResourceProvider,
@@ -782,6 +829,7 @@ function createSceneDocument(
     assetCatalog?: Record<string, ProjectAsset[]>
     assetIndex?: Record<string, AssetIndexEntry>
     packageAssetMap?: Record<string, string>
+    viewportSettings?: Partial<SceneViewportSettings>
   } = {},
 ): StoredSceneDocument {
   const id = options.id ?? crypto.randomUUID()
@@ -798,6 +846,7 @@ function createSceneDocument(
   const assetCatalog = options.assetCatalog ? cloneAssetCatalog(options.assetCatalog) : createEmptyAssetCatalog()
   const assetIndex = options.assetIndex ? cloneAssetIndex(options.assetIndex) : {}
   const packageAssetMap = options.packageAssetMap ? clonePackageAssetMap(options.packageAssetMap) : {}
+  const viewportSettings = cloneViewportSettings(options.viewportSettings)
 
   return {
     id,
@@ -807,6 +856,7 @@ function createSceneDocument(
     selectedNodeId,
     selectedNodeIds,
     camera,
+    viewportSettings,
     resourceProviderId: options.resourceProviderId ?? 'builtin',
     createdAt,
     updatedAt,
@@ -835,6 +885,7 @@ function commitSceneSnapshot(
     selectedNodeId: store.selectedNodeId,
     selectedNodeIds: cloneSelection(store.selectedNodeIds),
     camera: updateCamera ? cloneCameraState(store.camera) : current.camera,
+    viewportSettings: cloneViewportSettings(store.viewportSettings),
     resourceProviderId: store.resourceProviderId,
     updatedAt,
     assetCatalog: cloneAssetCatalog(store.assetCatalog),
@@ -1031,6 +1082,7 @@ export const useSceneStore = defineStore('scene', {
     const assetCatalog = cloneAssetCatalog(initialSceneDocument.assetCatalog)
     const assetIndex = cloneAssetIndex(initialSceneDocument.assetIndex)
     const packageDirectoryCache: Record<string, ProjectDirectory[]> = {}
+    const viewportSettings = cloneViewportSettings(initialSceneDocument.viewportSettings)
     return {
       scenes: [initialSceneDocument],
       currentSceneId: initialSceneDocument.id,
@@ -1047,6 +1099,7 @@ export const useSceneStore = defineStore('scene', {
       activeDirectoryId: defaultDirectoryId,
       selectedAssetId: null,
       camera: cloneCameraState(initialSceneDocument.camera),
+      viewportSettings,
       panelVisibility: { ...defaultPanelVisibility },
       resourceProviderId: initialSceneDocument.resourceProviderId,
       cameraFocusNodeId: null,
@@ -1170,6 +1223,7 @@ export const useSceneStore = defineStore('scene', {
         this.selectedNodeIds = cloneSelection(snapshot.selectedNodeIds)
         this.selectedNodeId = snapshot.selectedNodeId
         this.camera = cloneCameraState(snapshot.camera)
+  this.viewportSettings = cloneViewportSettings(snapshot.viewportSettings)
         this.resourceProviderId = snapshot.resourceProviderId
 
         assetCache.recalculateUsage(this.nodes)
@@ -1963,6 +2017,38 @@ export const useSceneStore = defineStore('scene', {
       this.camera = cloneCameraState(defaultCameraState)
       commitSceneSnapshot(this, { updateNodes: false })
     },
+    setViewportSettings(partial: Partial<SceneViewportSettings>) {
+      const next = cloneViewportSettings({ ...this.viewportSettings, ...partial })
+      if (viewportSettingsEqual(this.viewportSettings, next)) {
+        return
+      }
+      this.viewportSettings = next
+      commitSceneSnapshot(this, { updateNodes: false, updateCamera: false })
+    },
+    setViewportGridVisible(visible: boolean) {
+      this.setViewportSettings({ showGrid: visible })
+    },
+    toggleViewportGridVisible() {
+      this.setViewportGridVisible(!this.viewportSettings.showGrid)
+    },
+    setViewportAxesVisible(visible: boolean) {
+      this.setViewportSettings({ showAxes: visible })
+    },
+    toggleViewportAxesVisible() {
+      this.setViewportAxesVisible(!this.viewportSettings.showAxes)
+    },
+    setViewportCameraProjection(mode: CameraProjectionMode) {
+      if (!isCameraProjectionMode(mode)) {
+        return
+      }
+      this.setViewportSettings({ cameraProjection: mode })
+    },
+    toggleViewportCameraProjection() {
+      const next: CameraProjectionMode = this.viewportSettings.cameraProjection === 'perspective'
+        ? 'orthographic'
+        : 'perspective'
+      this.setViewportCameraProjection(next)
+    },
     setPanelVisibility(panel: EditorPanel, visible: boolean) {
       this.panelVisibility = {
         ...this.panelVisibility,
@@ -2316,6 +2402,7 @@ export const useSceneStore = defineStore('scene', {
       const scene = createSceneDocument(displayName, {
         thumbnail: thumbnail ?? null,
         resourceProviderId: this.resourceProviderId,
+        viewportSettings: this.viewportSettings,
       })
       this.scenes = [...this.scenes, scene]
       this.currentSceneId = scene.id
@@ -2325,6 +2412,7 @@ export const useSceneStore = defineStore('scene', {
         commit: false,
       })
       this.camera = cloneCameraState(scene.camera)
+      this.viewportSettings = cloneViewportSettings(scene.viewportSettings)
       this.resourceProviderId = scene.resourceProviderId
       useAssetCacheStore().recalculateUsage(this.nodes)
       this.isSceneReady = true
@@ -2363,6 +2451,7 @@ export const useSceneStore = defineStore('scene', {
           commit: false,
         })
         this.camera = cloneCameraState(scene.camera)
+        this.viewportSettings = cloneViewportSettings(scene.viewportSettings)
         this.resourceProviderId = scene.resourceProviderId ?? 'builtin'
         useAssetCacheStore().recalculateUsage(this.nodes)
       } finally {
@@ -2477,6 +2566,7 @@ export const useSceneStore = defineStore('scene', {
           commit: false,
         })
         this.camera = cloneCameraState(fallback.camera)
+        this.viewportSettings = cloneViewportSettings(fallback.viewportSettings)
         this.resourceProviderId = fallback.resourceProviderId
         this.isSceneReady = true
         return
@@ -2499,6 +2589,7 @@ export const useSceneStore = defineStore('scene', {
         commit: false,
       })
       this.camera = cloneCameraState(target.camera)
+      this.viewportSettings = cloneViewportSettings(target.viewportSettings)
       this.resourceProviderId = target.resourceProviderId ?? 'builtin'
       applySceneAssetState(this, target)
       useAssetCacheStore().recalculateUsage(this.nodes)
@@ -2508,7 +2599,7 @@ export const useSceneStore = defineStore('scene', {
   persist: {
     key: 'scene-store',
     storage: 'local',
-    version: 0,
+    version: 1,
     pick: [
       'scenes',
       'currentSceneId',
@@ -2519,6 +2610,7 @@ export const useSceneStore = defineStore('scene', {
       'activeDirectoryId',
       'selectedAssetId',
       'camera',
+      'viewportSettings',
       'panelVisibility',
       'resourceProviderId',
       'assetCatalog',

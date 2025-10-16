@@ -11,7 +11,9 @@ import type { SceneCameraState } from '@/types/scene-camera-state'
 import type { EditorTool } from '@/types/editor-tool'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { loadObjectFromFile } from '@/plugins/assetImport'
-import { createGeometry, type GeometryType } from '@/plugins/geometry'
+import { createGeometry } from '@/plugins/geometry'
+import type { CameraProjectionMode } from '@/types/scene-viewport-settings'
+import ViewportToolbar from './ViewportToolbar.vue'
 
 
 const props = defineProps<{
@@ -52,7 +54,9 @@ const surfaceRef = ref<HTMLDivElement | null>(null)
 
 let renderer: THREE.WebGLRenderer | null = null
 let scene: THREE.Scene | null = null
-let camera: THREE.PerspectiveCamera | null = null
+let perspectiveCamera: THREE.PerspectiveCamera | null = null
+let orthographicCamera: THREE.OrthographicCamera | null = null
+let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera | null = null
 let orbitControls: OrbitControls | null = null
 let transformControls: TransformControls | null = null
 let resizeObserver: ResizeObserver | null = null
@@ -79,8 +83,16 @@ const GRID_CELL_SIZE = 1
 const GRID_HIGHLIGHT_HEIGHT = 0.02
 const POINT_LIGHT_HELPER_SIZE = 0.5
 const DIRECTIONAL_LIGHT_HELPER_SIZE = 5
+const DEFAULT_CAMERA_POSITION = { x: 5, y: 5, z: 5 } as const
+const DEFAULT_CAMERA_TARGET = { x: 0, y: 0, z: 0 } as const
+const DEFAULT_PERSPECTIVE_FOV = 60
+const ORTHO_FRUSTUM_SIZE = 20
 
 const isDragHovering = ref(false)
+const gridVisible = computed(() => sceneStore.viewportSettings.showGrid)
+const axesVisible = computed(() => sceneStore.viewportSettings.showAxes)
+const cameraProjectionMode = computed(() => sceneStore.viewportSettings.cameraProjection)
+let activeCameraMode: CameraProjectionMode = cameraProjectionMode.value
 
 interface PointerTrackingState {
   pointerId: number
@@ -131,13 +143,16 @@ const draggingChangedHandler = (event: unknown) => {
   }
 }
 
-const gridHelper = new THREE.GridHelper(1000, 1000, 0x4dd0e1, 0xFFFFFF)
-const gridMaterial = gridHelper.material as THREE.Material
-gridMaterial.depthWrite = false
-gridMaterial.opacity = 0.35
-gridMaterial.transparent = true
+const gridHelper = new THREE.GridHelper(1000, 1000, 0x4dd0e1, 0x4dd0e1)
+const gridMaterials = Array.isArray(gridHelper.material) ? gridHelper.material : [gridHelper.material]
+gridMaterials.forEach((material) => {
+  material.depthWrite = false
+  material.transparent = true
+  material.opacity = 0.35
+})
 
 const axesHelper = new THREE.AxesHelper(4)
+axesHelper.visible = false
 
 const dragPreviewGroup = new THREE.Group()
 dragPreviewGroup.visible = false
@@ -417,6 +432,170 @@ function clampCameraAboveGround(forceUpdate = true) {
   return adjusted
 }
 
+function updateOrthographicFrustum(camera: THREE.OrthographicCamera, width: number, height: number) {
+  const aspect = height === 0 ? 1 : width / height
+  const halfHeight = ORTHO_FRUSTUM_SIZE / 2
+  const halfWidth = halfHeight * aspect
+  camera.left = -halfWidth
+  camera.right = halfWidth
+  camera.top = halfHeight
+  camera.bottom = -halfHeight
+  camera.updateProjectionMatrix()
+}
+
+function ensureOrthographicCamera(width: number, height: number): THREE.OrthographicCamera {
+  if (!orthographicCamera) {
+    orthographicCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 500)
+  }
+  updateOrthographicFrustum(orthographicCamera, width, height)
+  return orthographicCamera
+}
+
+function bindControlsToCamera(newCamera: THREE.PerspectiveCamera | THREE.OrthographicCamera) {
+  if (orbitControls) {
+    orbitControls.object = newCamera
+    orbitControls.update()
+  }
+  if (transformControls) {
+    transformControls.camera = newCamera
+  }
+}
+
+function activateCamera(newCamera: THREE.PerspectiveCamera | THREE.OrthographicCamera, mode: CameraProjectionMode) {
+  camera = newCamera
+  activeCameraMode = mode
+  bindControlsToCamera(newCamera)
+}
+
+function getViewportSize() {
+  if (viewportEl.value) {
+    const width = viewportEl.value.clientWidth || 1
+    const height = viewportEl.value.clientHeight || 1
+    return { width, height }
+  }
+  const width = renderer?.domElement?.clientWidth ?? 1
+  const height = renderer?.domElement?.clientHeight ?? 1
+  return { width, height }
+}
+
+function applyProjectionMode(mode: CameraProjectionMode) {
+  const { width, height } = getViewportSize()
+  const previousCamera = camera
+
+  if (mode === 'orthographic') {
+    const newCamera = ensureOrthographicCamera(width, height)
+    if (previousCamera) {
+      newCamera.position.copy(previousCamera.position)
+      newCamera.quaternion.copy(previousCamera.quaternion)
+    }
+    activateCamera(newCamera, 'orthographic')
+  } else {
+    if (!perspectiveCamera) {
+      perspectiveCamera = new THREE.PerspectiveCamera(DEFAULT_PERSPECTIVE_FOV, width / height || 1, 0.1, 500)
+    }
+    perspectiveCamera.aspect = height === 0 ? 1 : width / height
+    perspectiveCamera.updateProjectionMatrix()
+    if (previousCamera) {
+      perspectiveCamera.position.copy(previousCamera.position)
+      perspectiveCamera.quaternion.copy(previousCamera.quaternion)
+    }
+    activateCamera(perspectiveCamera, 'perspective')
+  }
+
+  clampCameraAboveGround()
+  updatePlaceholderOverlayPositions()
+}
+
+function toggleCameraProjection() {
+  sceneStore.toggleViewportCameraProjection()
+}
+
+function applyGridVisibility(visible: boolean) {
+  gridHelper.visible = visible
+  if (!visible) {
+    updateGridHighlight(null)
+  } else if (lastDragPoint) {
+    updateGridHighlight(lastDragPoint)
+  }
+}
+
+function toggleGridVisibility() {
+  sceneStore.toggleViewportGridVisible()
+}
+
+function applyAxesVisibility(visible: boolean) {
+  axesHelper.visible = visible
+}
+
+function toggleAxesVisibility() {
+  sceneStore.toggleViewportAxesVisible()
+}
+
+watch(gridVisible, (visible, previous) => {
+  applyGridVisibility(visible)
+  if (previous !== undefined && visible !== previous && sceneStore.isSceneReady) {
+    scheduleThumbnailCapture()
+  }
+}, { immediate: true })
+
+watch(axesVisible, (visible, previous) => {
+  applyAxesVisibility(visible)
+  if (previous !== undefined && visible !== previous && sceneStore.isSceneReady) {
+    scheduleThumbnailCapture()
+  }
+}, { immediate: true })
+
+watch(cameraProjectionMode, (mode, previous) => {
+  if (!scene || !renderer) {
+    activeCameraMode = mode
+    return
+  }
+  if (previous !== undefined && mode === previous && mode === activeCameraMode) {
+    return
+  }
+  applyProjectionMode(mode)
+  if (sceneStore.isSceneReady) {
+    scheduleThumbnailCapture()
+  }
+}, { immediate: true })
+
+function resetCameraView() {
+  if (!camera || !orbitControls) return
+
+  const targetY = Math.max(DEFAULT_CAMERA_TARGET.y, MIN_TARGET_HEIGHT)
+  const position = new THREE.Vector3(DEFAULT_CAMERA_POSITION.x, DEFAULT_CAMERA_POSITION.y, DEFAULT_CAMERA_POSITION.z)
+  const target = new THREE.Vector3(DEFAULT_CAMERA_TARGET.x, targetY, DEFAULT_CAMERA_TARGET.z)
+
+  isApplyingCameraState = true
+  camera.position.copy(position)
+  if (camera instanceof THREE.PerspectiveCamera) {
+    camera.fov = DEFAULT_PERSPECTIVE_FOV
+    camera.updateProjectionMatrix()
+  } else if (orthographicCamera) {
+    orthographicCamera.zoom = 1
+    orthographicCamera.updateProjectionMatrix()
+  }
+
+  if (perspectiveCamera && camera !== perspectiveCamera) {
+    perspectiveCamera.position.copy(position)
+    perspectiveCamera.fov = DEFAULT_PERSPECTIVE_FOV
+    perspectiveCamera.updateProjectionMatrix()
+  }
+
+  orbitControls.target.copy(target)
+  orbitControls.update()
+  isApplyingCameraState = false
+
+  clampCameraAboveGround()
+
+  const snapshot = buildCameraState()
+  if (snapshot) {
+    emit('updateCamera', snapshot)
+  }
+
+  scheduleThumbnailCapture()
+}
+
 function snapVectorToGrid(vec: THREE.Vector3) {
   vec.x = Math.floor(vec.x / GRID_CELL_SIZE) * GRID_CELL_SIZE + GRID_CELL_SIZE / 2
   vec.z = Math.floor(vec.z / GRID_CELL_SIZE) * GRID_CELL_SIZE + GRID_CELL_SIZE / 2
@@ -539,22 +718,41 @@ function updateSelectionBox(object: THREE.Object3D | null) {
 
 function buildCameraState(): SceneCameraState | null {
   if (!camera || !orbitControls) return null
+  const fov = camera instanceof THREE.PerspectiveCamera
+    ? camera.fov
+    : perspectiveCamera?.fov ?? DEFAULT_PERSPECTIVE_FOV
   return {
     position: toVector3Like(camera.position),
     target: toVector3Like(orbitControls.target),
-    fov: camera.fov,
+    fov,
   }
 }
 
 function applyCameraState(state: SceneCameraState | null | undefined) {
-  if (!state || !camera || !orbitControls) return
+  if (!state || !orbitControls) return
+
+  if (perspectiveCamera) {
+    perspectiveCamera.position.set(state.position.x, state.position.y, state.position.z)
+    if (perspectiveCamera.position.y < MIN_CAMERA_HEIGHT) {
+      perspectiveCamera.position.y = MIN_CAMERA_HEIGHT
+    }
+    perspectiveCamera.fov = state.fov
+    perspectiveCamera.updateProjectionMatrix()
+  }
+
+  if (!camera) return
+
   isApplyingCameraState = true
   camera.position.set(state.position.x, state.position.y, state.position.z)
   if (camera.position.y < MIN_CAMERA_HEIGHT) {
     camera.position.y = MIN_CAMERA_HEIGHT
   }
-  camera.fov = state.fov
-  camera.updateProjectionMatrix()
+
+  if (camera instanceof THREE.PerspectiveCamera) {
+    camera.fov = state.fov
+    camera.updateProjectionMatrix()
+  }
+
   const clampedTargetY = Math.max(state.target.y, MIN_TARGET_HEIGHT)
   orbitControls.target.set(state.target.x, clampedTargetY, state.target.z)
   orbitControls.update()
@@ -623,6 +821,11 @@ function focusCameraOnNode(nodeId: string): boolean {
   orbitControls.update()
   isApplyingCameraState = false
 
+  if (perspectiveCamera && camera !== perspectiveCamera) {
+    perspectiveCamera.position.copy(camera.position)
+    perspectiveCamera.quaternion.copy(camera.quaternion)
+  }
+
   clampCameraAboveGround(false)
 
   const snapshot = buildCameraState()
@@ -670,19 +873,27 @@ function initScene() {
   scene.add(dragPreviewGroup)
   gridHighlight = createGridHighlight()
   scene.add(gridHighlight)
+  applyGridVisibility(gridVisible.value)
+  applyAxesVisibility(axesVisible.value)
   ensureFallbackLighting()
   if (selectionTrackedObject) {
     updateSelectionBox(selectionTrackedObject)
   }
 
-  camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 500)
-  camera.position.set(30, 20, 30)
-  camera.lookAt(new THREE.Vector3(0, 5, 0))
+  perspectiveCamera = new THREE.PerspectiveCamera(DEFAULT_PERSPECTIVE_FOV, width / height || 1, 0.1, 500)
+  perspectiveCamera.position.set(DEFAULT_CAMERA_POSITION.x, DEFAULT_CAMERA_POSITION.y, DEFAULT_CAMERA_POSITION.z)
+  perspectiveCamera.lookAt(new THREE.Vector3(DEFAULT_CAMERA_TARGET.x, DEFAULT_CAMERA_TARGET.y, DEFAULT_CAMERA_TARGET.z))
+  camera = perspectiveCamera
+  activeCameraMode = 'perspective'
+
+  orthographicCamera = ensureOrthographicCamera(width, height)
+  orthographicCamera.position.copy(perspectiveCamera.position)
+  orthographicCamera.lookAt(new THREE.Vector3(DEFAULT_CAMERA_TARGET.x, DEFAULT_CAMERA_TARGET.y, DEFAULT_CAMERA_TARGET.z))
 
   orbitControls = new OrbitControls(camera, canvasRef.value)
   orbitControls.enableDamping = false
   orbitControls.dampingFactor = 0.05
-  orbitControls.target.set(0, 5, 0)
+  orbitControls.target.set(DEFAULT_CAMERA_TARGET.x, DEFAULT_CAMERA_TARGET.y, DEFAULT_CAMERA_TARGET.z)
   orbitControls.addEventListener('change', handleControlsChange)
 
   transformControls = new TransformControls(camera, canvasRef.value)
@@ -690,6 +901,11 @@ function initScene() {
   transformControls.addEventListener('objectChange', handleTransformChange)
   scene.add(transformControls.getHelper())
   scene.add(new THREE.HemisphereLight(0xffffff, 0x888888, 2))
+
+  bindControlsToCamera(camera)
+  if (cameraProjectionMode.value !== activeCameraMode && (cameraProjectionMode.value === 'orthographic' || cameraProjectionMode.value === 'perspective')) {
+    applyProjectionMode(cameraProjectionMode.value)
+  }
 
   canvasRef.value.addEventListener('pointerdown', handlePointerDown)
   if (typeof window !== 'undefined') {
@@ -699,12 +915,17 @@ function initScene() {
   }
 
   resizeObserver = new ResizeObserver(() => {
-    if (!renderer || !camera || !viewportEl.value) return
+    if (!renderer || !viewportEl.value) return
     const w = viewportEl.value.clientWidth
     const h = viewportEl.value.clientHeight
     renderer.setSize(w, h)
-    camera.aspect = w / h
-    camera.updateProjectionMatrix()
+    if (perspectiveCamera) {
+      perspectiveCamera.aspect = h === 0 ? 1 : w / h
+      perspectiveCamera.updateProjectionMatrix()
+    }
+    if (orthographicCamera) {
+      updateOrthographicFrustum(orthographicCamera, w, h)
+    }
   })
   resizeObserver.observe(viewportEl.value)
 
@@ -793,6 +1014,8 @@ function disposeScene() {
 
   scene = null
   camera = null
+  perspectiveCamera = null
+  orthographicCamera = null
 
   clearPlaceholderOverlays()
   objectMap.clear()
@@ -846,6 +1069,10 @@ function updateGridHighlight(position: THREE.Vector3 | null) {
     return
   }
   if (!position) {
+    gridHighlight.visible = false
+    return
+  }
+  if (!gridVisible.value) {
     gridHighlight.visible = false
     return
   }
@@ -1502,6 +1729,15 @@ defineExpose<SceneViewportHandle>({
         />
       </v-card>
     </div>
+    <ViewportToolbar
+      :show-grid="gridVisible"
+      :show-axes="axesVisible"
+      :camera-mode="cameraProjectionMode"
+      @toggle-grid="toggleGridVisibility"
+      @toggle-axes="toggleAxesVisibility"
+      @reset-camera="resetCameraView"
+      @toggle-camera-mode="toggleCameraProjection"
+    />
     <div
       ref="surfaceRef"
       class="viewport-surface"

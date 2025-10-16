@@ -9,6 +9,7 @@ import type { SceneClipboard } from './scene-clipboard'
 import type { SceneHistoryEntry } from './scene-history-entry'
 import type { StoredSceneDocument } from './stored-scene-document'
 import type { AssetIndexEntry } from './asset-index-entry'
+import type { SceneViewportSettings } from './scene-viewport-settings'
 
 export interface SceneState {
   scenes: StoredSceneDocument[]
@@ -26,6 +27,7 @@ export interface SceneState {
   activeDirectoryId: string | null
   selectedAssetId: string | null
   camera: SceneCameraState
+  viewportSettings: SceneViewportSettings
   panelVisibility: PanelVisibilityState
   resourceProviderId: string
   cameraFocusNodeId: string | null
