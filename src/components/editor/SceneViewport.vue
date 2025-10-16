@@ -60,6 +60,7 @@ let gridHighlight: THREE.Mesh | null = null
 
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
+const CLICK_DRAG_THRESHOLD_PX = 4
 const rootGroup = new THREE.Group()
 const objectMap = new Map<string, THREE.Object3D>()
 type LightHelperObject = THREE.Object3D & { dispose?: () => void; update?: () => void }
@@ -78,6 +79,15 @@ const POINT_LIGHT_HELPER_SIZE = 0.5
 const DIRECTIONAL_LIGHT_HELPER_SIZE = 5
 
 const isDragHovering = ref(false)
+
+interface PointerTrackingState {
+  pointerId: number
+  startX: number
+  startY: number
+  moved: boolean
+}
+
+let pointerTrackingState: PointerTrackingState | null = null
 
 interface PlaceholderOverlayState {
   id: string
@@ -672,6 +682,11 @@ function initScene() {
   scene.add(transformControls.getHelper())
 
   canvasRef.value.addEventListener('pointerdown', handlePointerDown)
+  if (typeof window !== 'undefined') {
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerUp)
+    window.addEventListener('pointercancel', handlePointerCancel)
+  }
 
   resizeObserver = new ResizeObserver(() => {
     if (!renderer || !camera || !viewportEl.value) return
@@ -720,6 +735,12 @@ function disposeScene() {
   if (canvasRef.value) {
     canvasRef.value.removeEventListener('pointerdown', handlePointerDown)
   }
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('pointermove', handlePointerMove)
+    window.removeEventListener('pointerup', handlePointerUp)
+    window.removeEventListener('pointercancel', handlePointerCancel)
+  }
+  pointerTrackingState = null
 
   transformControls?.removeEventListener('dragging-changed', draggingChangedHandler as any)
   transformControls?.removeEventListener('objectChange', handleTransformChange)
@@ -824,23 +845,92 @@ function updateGridHighlight(position: THREE.Vector3 | null) {
 
 function handlePointerDown(event: PointerEvent) {
   if (!canvasRef.value || !camera || !scene) {
+    pointerTrackingState = null
+    return
+  }
+
+  if (!event.isPrimary) {
+    pointerTrackingState = null
+    return
+  }
+
+  if (event.pointerType !== 'touch' && event.button !== 0) {
+    pointerTrackingState = null
     return
   }
 
   if (transformControls?.dragging) {
+    pointerTrackingState = null
+    return
+  }
+
+  pointerTrackingState = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    moved: false,
+  }
+}
+
+function handlePointerMove(event: PointerEvent) {
+  if (!pointerTrackingState || event.pointerId !== pointerTrackingState.pointerId) {
+    return
+  }
+
+  if (pointerTrackingState.moved) {
+    return
+  }
+
+  if (transformControls?.dragging) {
+    pointerTrackingState.moved = true
+    return
+  }
+
+  const dx = event.clientX - pointerTrackingState.startX
+  const dy = event.clientY - pointerTrackingState.startY
+  if (Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
+    pointerTrackingState.moved = true
+  }
+}
+
+function handlePointerUp(event: PointerEvent) {
+  if (!pointerTrackingState || event.pointerId !== pointerTrackingState.pointerId) {
+    return
+  }
+
+  const trackingState = pointerTrackingState
+  pointerTrackingState = null
+
+  if (trackingState.moved || transformControls?.dragging) {
+    return
+  }
+
+  selectNodeAtPointer(event)
+}
+
+function handlePointerCancel(event: PointerEvent) {
+  if (pointerTrackingState && event.pointerId === pointerTrackingState.pointerId) {
+    pointerTrackingState = null
+  }
+}
+
+function selectNodeAtPointer(event: PointerEvent) {
+  if (!canvasRef.value || !camera || !scene) {
     return
   }
 
   const rect = canvasRef.value.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) {
+    return
+  }
+
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
 
   raycaster.setFromCamera(pointer, camera)
   const intersects = raycaster.intersectObjects(rootGroup.children, true)
 
-  const hit = intersects.find((intersection) => {
-    return intersection.object.userData?.nodeId
-  })
+  const hit = intersects.find((intersection) => intersection.object.userData?.nodeId)
 
   if (hit) {
     const nodeId = hit.object.userData.nodeId as string
