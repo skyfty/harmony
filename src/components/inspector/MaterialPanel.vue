@@ -15,7 +15,12 @@ const materialForm = reactive({
 watch(
   selectedNode,
   (node) => {
-    if (!node) return
+    if (!node || !node.material) {
+      materialForm.color = '#ffffff'
+      materialForm.opacity = 1
+      materialForm.wireframe = false
+      return
+    }
     materialForm.color = node.material.color ?? '#ffffff'
     materialForm.opacity = node.material.opacity ?? 1
     materialForm.wireframe = node.material.wireframe ?? false

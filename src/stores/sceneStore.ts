@@ -1,7 +1,7 @@
 import { watch, type WatchStopHandle } from 'vue'
 import { defineStore } from 'pinia'
 import { type Object3D } from 'three'
-import type { SceneNode, Vector3Like } from '@/types/scene'
+import type { LightNodeProperties, LightNodeType, SceneNode, Vector3Like } from '@/types/scene'
 import type { ClipboardEntry } from '@/types/clipboard-entry'
 import type { DetachResult } from '@/types/detach-result'
 import type { DuplicateContext } from '@/types/duplicate-context'
@@ -21,6 +21,9 @@ import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import { useAssetCacheStore } from './assetCacheStore'
 import { useUiStore } from './uiStore'
 import { loadObjectFromFile } from '@/plugins/assetImport'
+
+import groundModelUrl from '@/preset/models/basic/ground.gltf?url'
+import groundTextureUrl from '@/preset/images/textures/ground.png?url'
 import {
   cloneAssetList,
   cloneProjectTree,
@@ -40,7 +43,153 @@ export type HierarchyDropPosition = 'before' | 'after' | 'inside'
 
 const HISTORY_LIMIT = 50
 
-const initialNodes: SceneNode[] = []
+const DEFAULT_GROUND_SIZE = 100
+
+function createVector(x: number, y: number, z: number): Vector3Like {
+  return { x, y, z }
+}
+
+type LightNodeExtras = Partial<Omit<LightNodeProperties, 'type' | 'color' | 'intensity' | 'target'>>
+
+const groundAsset: ProjectAsset = {
+  id: 'preset:models/basic/ground.gltf',
+  name: 'Ground Plane',
+  type: 'model',
+  downloadUrl: groundModelUrl,
+  previewColor: '#8d6e63',
+  thumbnail: groundTextureUrl,
+  description: 'Preset/Models/Basic/Ground',
+  gleaned: false,
+}
+
+const groundAssetCategoryId = determineAssetCategoryId(groundAsset)
+const groundAssetSource: AssetSourceMetadata = {
+  type: 'package',
+  providerId: 'preset',
+  originalAssetId: groundAsset.id,
+}
+
+const initialAssetCatalog = createEmptyAssetCatalog()
+initialAssetCatalog[groundAssetCategoryId] = [groundAsset]
+
+const initialAssetIndex: Record<string, AssetIndexEntry> = {
+  [groundAsset.id]: {
+    categoryId: groundAssetCategoryId,
+    source: groundAssetSource,
+  },
+}
+
+function createLightNode(options: {
+  name: string
+  type: LightNodeType
+  color: string
+  intensity: number
+  position: Vector3Like
+  rotation?: Vector3Like
+  target?: Vector3Like
+  extras?: LightNodeExtras
+}): SceneNode {
+  const light: LightNodeProperties = {
+    type: options.type,
+    color: options.color,
+    intensity: options.intensity,
+    ...(options.extras ?? {}),
+  }
+
+  if (options.target) {
+    light.target = createVector(options.target.x, options.target.y, options.target.z)
+  }
+
+  return {
+    id: crypto.randomUUID(),
+    name: options.name,
+    nodeType: 'light',
+    light,
+    position: createVector(options.position.x, options.position.y, options.position.z),
+    rotation: options.rotation
+      ? createVector(options.rotation.x, options.rotation.y, options.rotation.z)
+      : createVector(0, 0, 0),
+    scale: createVector(1, 1, 1),
+    visible: true,
+  }
+}
+
+function getLightPreset(type: LightNodeType) {
+  switch (type) {
+    case 'directional':
+      return {
+        name: 'Directional Light',
+        color: '#ffffff',
+        intensity: 1.2,
+        position: createVector(20, 40, 20),
+        target: createVector(0, 0, 0),
+        extras: { castShadow: true } as LightNodeExtras,
+      }
+    case 'point':
+      return {
+        name: 'Point Light',
+        color: '#ffffff',
+        intensity: 1,
+        position: createVector(0, 8, 0),
+        extras: { distance: 60, decay: 2, castShadow: false } as LightNodeExtras,
+      }
+    case 'spot':
+      return {
+        name: 'Spot Light',
+        color: '#ffffff',
+        intensity: 1,
+        position: createVector(12, 18, 12),
+        target: createVector(0, 0, 0),
+        extras: { angle: Math.PI / 5, penumbra: 0.35, distance: 80, decay: 2, castShadow: true } as LightNodeExtras,
+      }
+    case 'ambient':
+    default:
+      return {
+        name: 'Ambient Light',
+        color: '#ffffff',
+        intensity: 0.35,
+        position: createVector(0, 25, 0),
+        extras: {} as LightNodeExtras,
+      }
+  }
+}
+
+const initialNodes: SceneNode[] = [
+  {
+    id: crypto.randomUUID(),
+    name: 'Ground',
+    nodeType: 'mesh',
+    geometry: 'external',
+    material: {
+      color: '#707070',
+      wireframe: false,
+      opacity: 1,
+    },
+    position: createVector(0, 0, 0),
+    rotation: createVector(0, 0, 0),
+    scale: createVector(DEFAULT_GROUND_SIZE, 1, DEFAULT_GROUND_SIZE),
+    visible: true,
+    sourceAssetId: groundAsset.id,
+  },
+  createLightNode({
+    name: 'Directional Light',
+    type: 'directional',
+    color: '#ffffff',
+    intensity: 1.2,
+    position: createVector(30, 40, 20),
+    target: createVector(0, 0, 0),
+    extras: {
+      castShadow: true,
+    },
+  }),
+  createLightNode({
+    name: 'Ambient Light',
+    type: 'ambient',
+    color: '#ffffff',
+    intensity: 0.35,
+    position: createVector(0, 30, 0),
+  }),
+]
 
 const placeholderDownloadWatchers = new Map<string, WatchStopHandle>()
 
@@ -53,8 +202,8 @@ function stopPlaceholderWatcher(nodeId: string) {
 }
 
 const defaultCameraState: SceneCameraState = {
-  position: { x: 12, y: 9, z: 12 },
-  target: { x: 0, y: 1, z: 0 },
+  position: createVector(30, 20, 30),
+  target: createVector(0, 5, 0),
   fov: 60,
 }
 
@@ -68,6 +217,8 @@ const initialSceneDocument = createSceneDocument('Sample Scene', {
   nodes: initialNodes,
   selectedNodeId: initialNodes[0]?.id ?? null,
   resourceProviderId: 'builtin',
+  assetCatalog: initialAssetCatalog,
+  assetIndex: initialAssetIndex,
 })
 
 const runtimeObjectRegistry = new Map<string, Object3D>()
@@ -256,6 +407,19 @@ function toHierarchyItem(node: SceneNode): HierarchyTreeItem {
 function cloneNode(node: SceneNode): SceneNode {
   return {
     ...node,
+    material: node.material
+      ? {
+          color: node.material.color,
+          wireframe: node.material.wireframe,
+          opacity: node.material.opacity,
+        }
+      : undefined,
+    light: node.light
+      ? {
+          ...node.light,
+          target: node.light.target ? cloneVector(node.light.target) : undefined,
+        }
+      : undefined,
     position: cloneVector(node.position),
     rotation: cloneVector(node.rotation),
     scale: cloneVector(node.scale),
@@ -869,7 +1033,8 @@ function insertNodeMutable(
 
 export const useSceneStore = defineStore('scene', {
   state: (): SceneState => {
-    const assetCatalog = createEmptyAssetCatalog()
+    const assetCatalog = cloneAssetCatalog(initialSceneDocument.assetCatalog)
+    const assetIndex = cloneAssetIndex(initialSceneDocument.assetIndex)
     const packageDirectoryCache: Record<string, ProjectDirectory[]> = {}
     return {
       scenes: [initialSceneDocument],
@@ -878,12 +1043,12 @@ export const useSceneStore = defineStore('scene', {
       selectedNodeId: initialSceneDocument.selectedNodeId,
       selectedNodeIds: cloneSelection(initialSceneDocument.selectedNodeIds),
       activeTool: 'select',
-      assetCatalog,
-      assetIndex: {},
+  assetCatalog,
+  assetIndex,
       packageAssetMap: {},
       packageDirectoryCache,
       packageDirectoryLoaded: {},
-      projectTree: createProjectTreeFromCache(assetCatalog, packageDirectoryCache),
+  projectTree: createProjectTreeFromCache(assetCatalog, packageDirectoryCache),
       activeDirectoryId: defaultDirectoryId,
       selectedAssetId: null,
       camera: cloneCameraState(initialSceneDocument.camera),
@@ -1178,9 +1343,54 @@ export const useSceneStore = defineStore('scene', {
       this.nodes = [...this.nodes]
       commitSceneSnapshot(this)
     },
-    updateNodeMaterial(id: string, material: Partial<SceneNode['material']>) {
+    updateNodeMaterial(id: string, material: Partial<NonNullable<SceneNode['material']>>) {
+      let updated = false
       visitNode(this.nodes, id, (node) => {
-        node.material = { ...node.material, ...material }
+        if (!node.material) {
+          if ((node.nodeType ?? 'mesh') !== 'mesh') {
+            return
+          }
+          node.material = {
+            color: material.color ?? '#ffffff',
+            wireframe: material.wireframe ?? false,
+            opacity: material.opacity ?? 1,
+          }
+          updated = true
+          return
+        }
+        node.material = {
+          color: material.color ?? node.material.color,
+          wireframe: material.wireframe ?? node.material.wireframe,
+          opacity: material.opacity ?? node.material.opacity,
+        }
+        updated = true
+      })
+      if (!updated) {
+        return
+      }
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
+    },
+    updateLightProperties(id: string, properties: Partial<LightNodeProperties>) {
+      const target = findNodeById(this.nodes, id)
+      if (!target || !target.light) {
+        return
+      }
+      this.captureHistorySnapshot()
+      visitNode(this.nodes, id, (node) => {
+        if (!node.light) {
+          return
+        }
+        const next: LightNodeProperties = {
+          ...node.light,
+          ...properties,
+        }
+        if (properties.target) {
+          next.target = cloneVector(properties.target)
+        } else if (properties.target === null) {
+          next.target = undefined
+        }
+        node.light = next
       })
       this.nodes = [...this.nodes]
       commitSceneSnapshot(this)
@@ -1856,6 +2066,25 @@ export const useSceneStore = defineStore('scene', {
         target.downloadError = (error as Error).message ?? '资源加载失败'
         this.nodes = [...this.nodes]
       }
+    },
+
+    addLightNode(type: LightNodeType, options: { position?: Vector3Like; name?: string } = {}) {
+      const preset = getLightPreset(type)
+      const node = createLightNode({
+        name: options.name ?? preset.name,
+        type,
+        color: preset.color,
+        intensity: preset.intensity,
+        position: options.position ?? preset.position,
+        target: preset.target,
+        extras: preset.extras,
+      })
+
+      this.captureHistorySnapshot()
+      this.nodes = [...this.nodes, node]
+      this.setSelection([node.id], { commit: false })
+      commitSceneSnapshot(this)
+      return node
     },
 
     addSceneNode(payload: {

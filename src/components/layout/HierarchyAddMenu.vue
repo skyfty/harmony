@@ -9,6 +9,7 @@ import { useFileDialog } from '@vueuse/core'
 import { useUiStore } from '@/stores/uiStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import UrlInputDialog from './UrlInputDialog.vue'
+import type { LightNodeType } from '@/types/scene'
 
 const sceneStore = useSceneStore()
 const uiStore = useUiStore()
@@ -508,6 +509,10 @@ function handleAddNode(geometry:string) {
   })
 }
 
+function handleAddLight(type: LightNodeType) {
+  sceneStore.addLightNode(type)
+}
+
 </script>
 <template>
 <v-menu>
@@ -524,56 +529,88 @@ function handleAddNode(geometry:string) {
           title="Group"
           @click="handleAddNode('Group')"
       />
+      <v-menu location="end" offset="8">
+        <template #activator="{ props: lightMenuProps }">
+          <v-list-item
+            title="Light"
+            append-icon="mdi-chevron-right"
+            v-bind="lightMenuProps"
+          />
+        </template>
+        <v-list class="add-submenu-list">
+          <v-list-item
+            title="Directional Light"
+            @click="handleAddLight('directional')"
+          />
+          <v-list-item
+            title="Point Light"
+            @click="handleAddLight('point')"
+          />
+          <v-list-item
+            title="Spot Light"
+            @click="handleAddLight('spot')"
+          />
+        </v-list>
+      </v-menu>
+      <v-menu location="end" offset="8">
+        <template #activator="{ props: geometryMenuProps }">
+          <v-list-item
+            title="Geometry"
+            append-icon="mdi-chevron-right"
+            v-bind="geometryMenuProps"
+          />
+        </template>
+        <v-list class="add-submenu-list">
+          <v-list-item
+                  title="Box"
+                  @click="handleAddNode('Box')"
+              />
+              <v-list-item
+                  title="Capsule"
+                  @click="handleAddNode('Capsule')"
+              />
+              <v-list-item
+                  title="Circle"
+                  @click="handleAddNode('Circle')"
+              />
+              <v-list-item
+                  title="Cylinder"
+                  @click="handleAddNode('Cylinder')"
+              />
+              <v-list-item
+                  title="Dodecahedron"
+                  @click="handleAddNode('Dodecahedron')"
+              />
+              <v-list-item
+                  title="Icosahedron"
+                  @click="handleAddNode('Icosahedron')"
+              />
+              <v-list-item
+                  title="Lathe"
+                  @click="handleAddNode('Lathe')"
+              />
+              <v-list-item
+                  title="Octahedron"
+                  @click="handleAddNode('Octahedron')"
+              />
+              <v-list-item
+                  title="Plane"
+                  @click="handleAddNode('Plane')"
+              />
+              <v-list-item
+                  title="Ring"
+                  @click="handleAddNode('Ring')"
+              />
+              <v-list-item
+                  title="Sphere"
+                  @click="handleAddNode('Sphere')"
+              />
+        </v-list>
+      </v-menu>
       <v-divider class="add-menu-divider" />
-      <v-list-item
-          title="Box"
-          @click="handleAddNode('Box')"
-      />
-      <v-list-item
-          title="Capsule"
-          @click="handleAddNode('Capsule')"
-      />
-      <v-list-item
-          title="Circle"
-          @click="handleAddNode('Circle')"
-      />
-      <v-list-item
-          title="Cylinder"
-          @click="handleAddNode('Cylinder')"
-      />
-      <v-list-item
-          title="Dodecahedron"
-          @click="handleAddNode('Dodecahedron')"
-      />
-      <v-list-item
-          title="Icosahedron"
-          @click="handleAddNode('Icosahedron')"
-      />
-      <v-list-item
-          title="Lathe"
-          @click="handleAddNode('Lathe')"
-      />
-      <v-list-item
-          title="Octahedron"
-          @click="handleAddNode('Octahedron')"
-      />
-      <v-list-item
-          title="Plane"
-          @click="handleAddNode('Plane')"
-      />
-      <v-list-item
-          title="Ring"
-          @click="handleAddNode('Ring')"
-      />
-      <v-list-item
-          title="Sphere"
-          @click="handleAddNode('Sphere')"
-      />
-      <v-list-item
-          title="Sprite"
-          @click="handleAddNode('Sprite')"
-      />
-  <v-divider class="add-menu-divider" />
+      
+      
+      
 
       <v-list-item
           title="File"
@@ -621,6 +658,19 @@ function handleAddNode(geometry:string) {
   align-self: stretch;
   margin: 4px 0;
   opacity: 0.2;
+}
+
+.add-submenu-list {
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.add-submenu-list :deep(.v-list-item) {
+  min-height: 26px;
+  border-radius: 8px;
+  padding-inline: 12px;
 }
 
 </style>

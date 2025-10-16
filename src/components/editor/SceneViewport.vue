@@ -123,6 +123,7 @@ let dragPreviewAssetId: string | null = null
 let pendingPreviewAssetId: string | null = null
 let dragPreviewLoadToken = 0
 let lastDragPoint: THREE.Vector3 | null = null
+let fallbackLightGroup: THREE.Group | null = null
 
 function findAssetMetadata(assetId: string): ProjectAsset | null {
   const search = (directories: ProjectDirectory[] | undefined): ProjectAsset | null => {
@@ -644,26 +645,19 @@ function initScene() {
   scene.add(dragPreviewGroup)
   gridHighlight = createGridHighlight()
   scene.add(gridHighlight)
+  ensureFallbackLighting()
   if (selectionTrackedObject) {
     updateSelectionBox(selectionTrackedObject)
   }
 
-  const hemiLight = new THREE.HemisphereLight(0xb3e5fc, 0x1c313a, 0.5)
-  scene.add(hemiLight)
-
-  const dirLight = new THREE.DirectionalLight(0xffffff, 0.8)
-  dirLight.position.set(10, 20, 10)
-  dirLight.castShadow = true
-  scene.add(dirLight)
-
   camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 500)
-  camera.position.set(12, 9, 12)
-  camera.lookAt(new THREE.Vector3(0, 1, 0))
+  camera.position.set(30, 20, 30)
+  camera.lookAt(new THREE.Vector3(0, 5, 0))
 
   orbitControls = new OrbitControls(camera, canvasRef.value)
   orbitControls.enableDamping = false
   orbitControls.dampingFactor = 0.05
-  orbitControls.target.set(0, 1, 0)
+  orbitControls.target.set(0, 5, 0)
   orbitControls.addEventListener('change', handleControlsChange)
 
   transformControls = new TransformControls(camera, canvasRef.value)
@@ -718,6 +712,12 @@ function disposeScene() {
   transformControls?.removeEventListener('objectChange', handleTransformChange)
   transformControls?.dispose()
   transformControls = null
+
+  if (scene && fallbackLightGroup) {
+    scene.remove(fallbackLightGroup)
+    fallbackLightGroup.clear()
+  }
+  fallbackLightGroup = null
 
   if (orbitControls) {
     orbitControls.removeEventListener('change', handleControlsChange)
@@ -983,6 +983,7 @@ function syncSceneGraph() {
 
   scheduleThumbnailCapture()
   refreshPlaceholderOverlays()
+  ensureFallbackLighting()
 }
 
 function disposeSceneNodes() {
@@ -1008,10 +1009,112 @@ function disposeSceneNodes() {
   })
 }
 
+function createLightObject(node: SceneNode): THREE.Object3D {
+  const container = new THREE.Group()
+  container.name = `${node.name}-Light`
+  container.userData.nodeId = node.id
+
+  const config = node.light
+  if (!config) {
+    return container
+  }
+
+  let light: THREE.Light
+
+  switch (config.type) {
+    case 'directional': {
+      const directional = new THREE.DirectionalLight(config.color, config.intensity)
+      directional.castShadow = config.castShadow ?? false
+      light = directional
+      const target = directional.target
+      if (config.target) {
+        target.position.set(
+          config.target.x - node.position.x,
+          config.target.y - node.position.y,
+          config.target.z - node.position.z,
+        )
+      }
+      container.add(target)
+      break
+    }
+    case 'point': {
+      const point = new THREE.PointLight(config.color, config.intensity, config.distance ?? 0, config.decay ?? 1)
+      point.castShadow = config.castShadow ?? false
+      light = point
+      break
+    }
+    case 'spot': {
+      const spot = new THREE.SpotLight(
+        config.color,
+        config.intensity,
+        config.distance ?? 0,
+        config.angle ?? Math.PI / 6,
+        config.penumbra ?? 0.3,
+        config.decay ?? 1,
+      )
+      spot.castShadow = config.castShadow ?? false
+      if (config.target) {
+        spot.target.position.set(
+          config.target.x - node.position.x,
+          config.target.y - node.position.y,
+          config.target.z - node.position.z,
+        )
+        container.add(spot.target)
+      }
+      light = spot
+      break
+    }
+    case 'ambient':
+    default: {
+      light = new THREE.AmbientLight(config.color, config.intensity)
+      break
+    }
+  }
+
+  light.userData.nodeId = node.id
+  container.add(light)
+  return container
+}
+
+function ensureFallbackLighting() {
+  if (!scene) {
+    return
+  }
+
+  if (!fallbackLightGroup) {
+    fallbackLightGroup = new THREE.Group()
+    fallbackLightGroup.name = 'FallbackLights'
+    scene.add(fallbackLightGroup)
+  }
+
+  fallbackLightGroup.clear()
+
+  let hasLight = false
+  rootGroup.traverse((child) => {
+    const candidate = child as THREE.Light & { isLight?: boolean }
+    if (candidate?.isLight) {
+      hasLight = true
+    }
+  })
+
+  if (!hasLight) {
+    const ambient = new THREE.AmbientLight(0xffffff, 0.35)
+    const directional = new THREE.DirectionalLight(0xffffff, 0.8)
+    directional.position.set(15, 30, 20)
+    directional.castShadow = true
+    fallbackLightGroup.add(ambient)
+    fallbackLightGroup.add(directional)
+  }
+}
+
 function createObjectFromNode(node: SceneNode): THREE.Object3D {
   let object: THREE.Object3D
 
-  if (node.geometry === 'external') {
+  const nodeType = node.nodeType ?? (node.light ? 'light' : 'mesh')
+
+  if (nodeType === 'light') {
+    object = createLightObject(node)
+  } else if (node.geometry === 'external') {
     const container = new THREE.Group()
     container.userData.nodeId = node.id
 
@@ -1038,16 +1141,17 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
 
     object = container
   } else {
+    const materialConfig = node.material ?? { color: '#ffffff', wireframe: false, opacity: 1 }
     const material = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(node.material.color),
-      wireframe: node.material.wireframe ?? false,
-      opacity: node.material.opacity ?? 1,
-      transparent: (node.material.opacity ?? 1) < 1,
+      color: new THREE.Color(materialConfig.color),
+      wireframe: materialConfig.wireframe ?? false,
+      opacity: materialConfig.opacity ?? 1,
+      transparent: (materialConfig.opacity ?? 1) < 1,
       metalness: 0.1,
       roughness: 0.6,
     })
 
-    switch (node.geometry) {
+    switch (node.geometry ?? 'box') {
       case 'sphere':
         object = new THREE.Mesh(new THREE.SphereGeometry(0.5, 32, 32), material)
         break

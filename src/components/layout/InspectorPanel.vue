@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import InspectorMaterialPanel from '@/components/inspector/MaterialPanel.vue'
 import InspectorTransformPanel from '@/components/inspector/TransformPanel.vue'
+import InspectorLightPanel from '@/components/inspector/LightPanel.vue'
 import { useSceneStore } from '@/stores/sceneStore'
 
 const emit = defineEmits<{
@@ -15,12 +16,16 @@ const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 const nodeName = ref('')
 const expandedPanels = ref<string[]>(['transform', 'material'])
 
+const isLightNode = computed(() => selectedNode.value?.nodeType === 'light')
+const showMaterialPanel = computed(() => !isLightNode.value && !!selectedNode.value?.material)
+const inspectorIcon = computed(() => (isLightNode.value ? 'mdi-lightbulb-on-outline' : 'mdi-cube-outline'))
+
 watch(
   selectedNode,
   (node) => {
     if (!node) return
     nodeName.value = node.name
-    expandedPanels.value = ['transform', 'material']
+    expandedPanels.value = isLightNode.value ? ['transform', 'light'] : ['transform', 'material']
   },
   { immediate: true }
 )
@@ -55,7 +60,7 @@ function handleNameUpdate(value: string) {
     <v-divider />
     <div class="panel-body" v-if="selectedNode">
       <div style="display: flex; align-items: center; gap: 0.2rem; padding: 0.2rem 0.7rem;">
-        <v-icon color="primary" size="40">mdi-cube-outline</v-icon>
+        <v-icon color="primary" size="40">{{ inspectorIcon }}</v-icon>
         <v-text-field
           :model-value="nodeName"
           variant="solo"
@@ -79,7 +84,8 @@ function handleNameUpdate(value: string) {
       >
         <InspectorTransformPanel />
 
-        <InspectorMaterialPanel />
+        <InspectorLightPanel v-if="isLightNode" />
+        <InspectorMaterialPanel v-else-if="showMaterialPanel" />
       </v-expansion-panels>
     </div>
     <div v-else class="placeholder-text">
