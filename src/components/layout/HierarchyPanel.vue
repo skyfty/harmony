@@ -416,6 +416,7 @@ function handleTreeDragLeave(event: DragEvent) {
                 size="26"
                 class="selection-lock-btn"
                 :class="{ 'is-locked': item.locked }"
+                
                 :title="item.locked ? '解除禁止鼠标选择' : '禁止鼠标选择'"
                 @click.stop="toggleNodeSelectionLock(item.id)"
               />
@@ -614,16 +615,32 @@ function handleTreeDragLeave(event: DragEvent) {
   justify-content: flex-end;
   gap: 2px;
   min-width: 24px;
+  transition: opacity 120ms ease;
 }
+
 
 .visibility-btn {
   margin-right: 0;
   color: rgba(233, 236, 241, 0.72);
   transition: color 120ms ease;
+
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
+.hierarchy-tree :deep(.v-treeview-item:hover .tree-node-trailing) .visibility-btn,
+.hierarchy-tree :deep(.v-treeview-item__append:hover .tree-node-trailing) .visibility-btn,
+.hierarchy-tree :deep(.v-treeview-item__append:focus-within .tree-node-trailing) .visibility-btn {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
 .visibility-btn.is-hidden {
   color: rgba(233, 236, 241, 0.38);
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
 }
 
 .visibility-btn:disabled {
@@ -639,10 +656,23 @@ function handleTreeDragLeave(event: DragEvent) {
   margin-right: 0;
   color: rgba(233, 236, 241, 0.58);
   transition: color 120ms ease;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
+.hierarchy-tree :deep(.v-treeview-item:hover .tree-node-trailing) .selection-lock-btn ,
+.hierarchy-tree :deep(.v-treeview-item__append:hover .tree-node-trailing) .selection-lock-btn ,
+.hierarchy-tree :deep(.v-treeview-item__append:focus-within .tree-node-trailing) .selection-lock-btn  {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
 .selection-lock-btn.is-locked {
   color: rgba(233, 236, 241, 0.9);
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
 }
 
 .selection-lock-btn :deep(.v-icon) {
@@ -653,7 +683,4 @@ function handleTreeDragLeave(event: DragEvent) {
   opacity: 0.7;
 }
 
-.node-label.is-locked {
-  opacity: 0.65;
-}
 </style>
