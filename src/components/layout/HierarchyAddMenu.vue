@@ -414,32 +414,46 @@ function handleMenuImportFromFile() {
   openFileDialog()
 }
 
-function handleAddNode(geometry:string) {
-  let mesh: THREE.Mesh
-  switch(geometry) {
-    case 'Group': {
-      const group = new THREE.Group()
-      group.name = 'Group'
-      sceneStore.addSceneNode({
-        object: group,
-        name: group.name,
-        position: { x: 0, y: 0, z: 0 },
-        rotation: { x: 0, y: 0, z: 0 },
-        scale: { x: 1, y: 1, z: 1 },
-      })
-      return
-    }
-    default: {
-      mesh = createGeometry(geometry)
-      mesh.name = geometry
-      break
-    }
-    
+function handleAddGroup() {
+  const group = new THREE.Group()
+  group.name = 'Group'
+  sceneStore.addSceneNode({
+    object: group,
+    name: group.name,
+    position: { x: 0, y: 0, z: 0 },
+    rotation: { x: 0, y: 0, z: 0 },
+    scale: { x: 1, y: 1, z: 1 },
+  })
+}
+
+function handleAddNode(geometry: string) {
+  let mesh = createGeometry(geometry)
+  mesh.name = geometry
+
+  mesh.castShadow = true
+  mesh.receiveShadow = true
+
+  let spawnY = 0
+  const bufferGeometry = mesh.geometry as THREE.BufferGeometry
+  if (!bufferGeometry.boundingBox) {
+    bufferGeometry.computeBoundingBox()
   }
+  const boundingBox = bufferGeometry.boundingBox
+  if (boundingBox) {
+    const minY = boundingBox.min.y
+    if (Number.isFinite(minY) && minY < 0) {
+      const EPSILON = 1e-3
+      spawnY = -minY + EPSILON
+    }
+  }
+
+  mesh.position.set(0, spawnY, 0)
+  mesh.updateMatrixWorld(true)
+
   sceneStore.addSceneNode({
     object: mesh,
     name: mesh.name,
-    position: { x: 0, y: 0, z: 0 },
+    position: { x: 0, y: spawnY, z: 0 },
     rotation: { x: 0, y: 0, z: 0 },
     scale: { x: 1, y: 1, z: 1 },
   })
@@ -463,7 +477,7 @@ function handleAddLight(type: LightNodeType) {
   <v-list class="add-menu-list">
       <v-list-item
           title="Group"
-          @click="handleAddNode('Group')"
+          @click="handleAddGroup()"
       />
       <v-menu location="end" offset="8">
         <template #activator="{ props: lightMenuProps }">
