@@ -21,23 +21,14 @@
         title="切换坐标轴"
         @click="$emit('toggle-axes')"
       />
+      <v-divider vertical />
       <v-btn
-        icon="mdi-camera-restore"
+        icon="mdi-camera"
         density="compact"
         size="small"
         class="toolbar-button"
         title="回到默认视角"
         @click="$emit('reset-camera')"
-      />
-      <v-btn
-        :icon="cameraMode === 'perspective' ? 'mdi-vector-perspective' : 'mdi-vector-square'"
-        :color="cameraMode === 'perspective' ? 'primary' : 'secondary'"
-        variant="flat"
-        density="compact"
-        size="small"
-        class="toolbar-button"
-        title="切换透视/正交"
-        @click="$emit('toggle-camera-mode')"
       />
     </v-card>
   </div>
@@ -65,8 +56,8 @@ defineEmits<{
 <style scoped>
 .viewport-toolbar {
   position: absolute;
-  top: 12px;
-  right: 12px;
+  top: 3px;
+  right: 3px;
   z-index: 5;
 }
 
@@ -76,15 +67,15 @@ defineEmits<{
   align-items: center;
   gap: 6px;
   background-color: rgba(18, 21, 26, 0.88);
-  border-radius: 14px;
+  border-radius: 12px;
   padding: 6px 10px;
   backdrop-filter: blur(6px);
   border: 1px solid rgba(77, 208, 225, 0.25);
 }
 
 .toolbar-button {
-  border-radius: 10px;
-  min-width: 32px;
-  height: 32px;
+  border-radius: 3px;
+  min-width: 22px;
+  height: 22px;
 }
 </style>
