@@ -22,7 +22,7 @@ import { useAssetCacheStore } from './assetCacheStore'
 import { useUiStore } from './uiStore'
 import { loadObjectFromFile } from '@/plugins/assetImport'
 
-import groundModelUrl from '@/preset/models/ground.gltf?url'
+import groundModelUrl from '@/preset/models/ground.glb?url'
 import {
   cloneAssetList,
   cloneProjectTree,
@@ -51,7 +51,7 @@ function createVector(x: number, y: number, z: number): Vector3Like {
 type LightNodeExtras = Partial<Omit<LightNodeProperties, 'type' | 'color' | 'intensity' | 'target'>>
 
 const groundAsset: ProjectAsset = {
-  id: 'preset:models/ground.gltf',
+  id: 'preset:models/ground.glb',
   name: 'Ground Plane',
   type: 'model',
   downloadUrl: groundModelUrl,
