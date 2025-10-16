@@ -1,5 +1,6 @@
+import type { GeometryType } from '@/plugins/geometry'
 
-export type SceneNodeType = 'mesh' | 'light' | 'group'
+export type SceneNodeType = 'mesh' | 'light' | 'group' | GeometryType
 
 export type LightNodeType = 'directional' | 'point' | 'spot' | 'ambient'
 
@@ -24,7 +25,7 @@ export interface Vector3Like {
 export interface SceneNode {
   id: string
   name: string
-  nodeType?: SceneNodeType
+  nodeType: SceneNodeType
   material?: {
     color: string
     wireframe?: boolean

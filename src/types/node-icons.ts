@@ -4,6 +4,19 @@ export const NODE_TYPE_ICONS: Record<SceneNodeType, string> = {
   mesh: 'mdi-cube-outline',
   light: 'mdi-lightbulb-outline',
   group: 'mdi-folder-outline',
+  Capsule: 'mdi-shape-outline',
+  Circle: 'mdi-circle-outline',
+  Cylinder: 'mdi-cylinder',
+  Dodecahedron: 'mdi-dodecahedron',
+  Icosahedron: 'mdi-icosahedron',
+  Lathe: 'mdi-saw-blade',
+  Octahedron: 'mdi-octahedron',
+  Plane: 'mdi-vector-square',
+  Ring: 'mdi-ring-outline',
+  Sphere: 'mdi-sphere',
+  Torus: 'mdi-torus',
+  TorusKnot: 'mdi-torus-knot',
+  Box: 'mdi-cube-outline',
 }
 
 export const LIGHT_TYPE_ICONS: Record<LightNodeType, string> = {

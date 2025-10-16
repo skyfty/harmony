@@ -11,6 +11,7 @@ import type { SceneCameraState } from '@/types/scene-camera-state'
 import type { EditorTool } from '@/types/editor-tool'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { loadObjectFromFile } from '@/plugins/assetImport'
+import { createGeometry, type GeometryType } from '@/plugins/geometry'
 
 
 const props = defineProps<{
@@ -1269,7 +1270,8 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
 
   if (nodeType === 'light') {
     object = createLightObject(node)
-  } else {
+    object.name = node.name
+  } else if (nodeType === 'mesh') {
     const container = new THREE.Group()
     container.userData.nodeId = node.id
 
@@ -1293,8 +1295,15 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       fallback.userData.nodeId = node.id
       container.add(fallback)
     }
-
     object = container
+  } else if (nodeType === 'group') {
+    object = new THREE.Group()
+    object.name = node.name
+    object.userData.nodeId = node.id
+  } else {
+    object = createGeometry(nodeType)
+    object.name = node.name
+    object.userData.nodeId = node.id
   }
 
   object.position.set(node.position.x, node.position.y, node.position.z)

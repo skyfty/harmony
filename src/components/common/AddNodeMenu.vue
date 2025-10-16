@@ -5,7 +5,7 @@ import type { ProjectAsset } from '@/types/project-asset'
 import * as THREE from 'three'
 
 import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from '@/plugins/loader'
-import { createGeometry } from '@/plugins/geometry'
+import { createGeometry, type GeometryType } from '@/plugins/geometry'
 import { useFileDialog } from '@vueuse/core'
 import { useUiStore } from '@/stores/uiStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -117,6 +117,7 @@ function addImportedObjectToScene(object: THREE.Object3D, assetId?: string) {
   prepareImportedObject(object)
 
   sceneStore.addSceneNode({
+    nodeType: 'mesh',
     object,
     name: object.name,
     position: { x: 0, y: 0, z: 0 },
@@ -450,6 +451,7 @@ function handleAddGroup() {
   const group = new THREE.Group()
   group.name = groupName
   sceneStore.addSceneNode({
+    nodeType: 'group',
     object: group,
     name: groupName,
     position: { x: 0, y: 0, z: 0 },
@@ -458,7 +460,7 @@ function handleAddGroup() {
   })
 }
 
-function handleAddNode(geometry: string) {
+function handleAddNode(geometry: GeometryType) {
   const mesh = createGeometry(geometry)
   mesh.name = geometry
 
@@ -483,6 +485,7 @@ function handleAddNode(geometry: string) {
   mesh.updateMatrixWorld(true)
 
   sceneStore.addSceneNode({
+    nodeType: geometry,
     object: mesh,
     name: mesh.name,
     position: { x: 0, y: spawnY, z: 0 },

@@ -1,6 +1,7 @@
 import * as THREE from 'three'
+export type GeometryType = "Box" | "Sphere" | "Capsule" | "Circle" | "Cylinder" | "Dodecahedron" | "Icosahedron" | "Lathe" | "Octahedron" | "Plane" | "Ring" | "Sphere" | "Torus" | "TorusKnot"
 
-export function createGeometry(type: string):THREE.Mesh {
+export function createGeometry(type: GeometryType):THREE.Mesh {
  let mesh: THREE.Mesh
   switch(type) {
     case 'Capsule': {

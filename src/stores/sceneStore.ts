@@ -1,7 +1,7 @@
 import { watch, type WatchStopHandle } from 'vue'
 import { defineStore } from 'pinia'
 import { type Object3D } from 'three'
-import type { LightNodeProperties, LightNodeType, SceneNode, Vector3Like } from '@/types/scene'
+import type { LightNodeProperties, LightNodeType, SceneNode, SceneNodeType, Vector3Like } from '@/types/scene'
 import type { ClipboardEntry } from '@/types/clipboard-entry'
 import type { DetachResult } from '@/types/detach-result'
 import type { DuplicateContext } from '@/types/duplicate-context'
@@ -1679,6 +1679,7 @@ export const useSceneStore = defineStore('scene', {
 
       const object = await loadObjectFromFile(file)
       const node = this.addSceneNode({
+        nodeType: 'mesh',
         object,
         name: asset.name,
         position: spawnPosition,
@@ -2170,6 +2171,7 @@ export const useSceneStore = defineStore('scene', {
     },
 
     addSceneNode(payload: {
+      nodeType: SceneNodeType,
       object: Object3D
       name?: string
       position?: Vector3Like
@@ -2182,7 +2184,7 @@ export const useSceneStore = defineStore('scene', {
       const node: SceneNode = {
         id,
         name: payload.name ?? payload.object.name ?? 'Imported Mesh',
-        nodeType: 'mesh',
+        nodeType: payload.nodeType,
         material: { color: '#ffffff' },
         position: payload.position ?? { x: 0, y: 0, z: 0 },
         rotation: payload.rotation ?? { x: 0, y: 0, z: 0 },
