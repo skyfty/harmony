@@ -112,21 +112,11 @@ function isItemActive(id: string) {
   return selectedNodeId.value === id
 }
 
-function toggleNodeVisibility(id: string, locked: boolean) {
-  if (locked) {
-    return
-  }
+function toggleNodeVisibility(id: string) {
   sceneStore.toggleNodeVisibility(id)
 }
 
-function toggleNodeLock(id: string) {
-  sceneStore.toggleNodeLock(id)
-}
-
 function setActiveNode(id: string | null) {
-  if (id && sceneStore.isNodeLocked(id)) {
-    return
-  }
   selectionAnchorId.value = id
   suppressSelectionSync.value = true
   sceneStore.selectNode(id)
@@ -139,19 +129,18 @@ function handleDeleteSelected() {
   selectionAnchorId.value = selectedNodeIds.value[selectedNodeIds.value.length - 1] ?? null
 }
 
-function getNodeInteractionClasses(id: string, locked: boolean) {
+function getNodeInteractionClasses(id: string) {
   return {
     ...getNodeDropClasses(id),
     'is-selected': isItemSelected(id),
     'is-active': isItemActive(id),
-    'is-locked': locked,
   }
 }
 
-function handleNodeClick(event: MouseEvent, nodeId: string, locked: boolean) {
+function handleNodeClick(event: MouseEvent, nodeId: string) {
   event.stopPropagation()
   event.preventDefault()
-  if (locked || event.button !== 0) return
+  if (event.button !== 0) return
 
   const isToggle = event.ctrlKey || event.metaKey
   const isRangeSelect = event.shiftKey && selectionAnchorId.value
@@ -222,11 +211,7 @@ function getNodeDropClasses(id: string) {
   }
 }
 
-function handleDragStart(event: DragEvent, nodeId: string, locked: boolean) {
-  if (locked) {
-    event.preventDefault()
-    return
-  }
+function handleDragStart(event: DragEvent, nodeId: string) {
   dragState.value = { sourceId: nodeId, targetId: null, position: null }
   event.dataTransfer?.setData('text/plain', nodeId)
   if (event.dataTransfer) {
@@ -241,18 +226,6 @@ function handleDragEnd() {
 function handleDragOver(event: DragEvent, targetId: string) {
   const sourceId = dragState.value.sourceId
   if (!sourceId || targetId === sourceId) return
-  if (sceneStore.isNodeLocked(sourceId)) {
-    return
-  }
-  if (sceneStore.isNodeLocked(targetId)) {
-    dragState.value = { sourceId, targetId, position: null }
-    if (event.dataTransfer) {
-      event.dataTransfer.dropEffect = 'none'
-    }
-    event.preventDefault()
-    event.stopPropagation()
-    return
-  }
 
   const isInvalid = sceneStore.isDescendant(sourceId, targetId)
   if (isInvalid) {
@@ -290,12 +263,6 @@ function handleDrop(event: DragEvent, targetId: string) {
     resetDragState()
     return
   }
-  if (sceneStore.isNodeLocked(sourceId) || sceneStore.isNodeLocked(targetId)) {
-    event.preventDefault()
-    event.stopPropagation()
-    resetDragState()
-    return
-  }
   event.preventDefault()
   event.stopPropagation()
   const moved = sceneStore.moveNode({ nodeId: sourceId, targetId, position })
@@ -305,15 +272,14 @@ function handleDrop(event: DragEvent, targetId: string) {
   resetDragState()
 }
 
-function handleNodeDoubleClick(nodeId: string, locked: boolean) {
-  if (locked) return
+function handleNodeDoubleClick(nodeId: string) {
   setActiveNode(nodeId)
   sceneStore.requestCameraFocus(nodeId)
 }
 
 function handleTreeDragOver(event: DragEvent) {
   const { sourceId } = dragState.value
-  if (!sourceId || sceneStore.isNodeLocked(sourceId)) return
+  if (!sourceId) return
   const container = event.currentTarget as HTMLElement | null
   if (!container) return
   const rect = container.getBoundingClientRect()
@@ -328,7 +294,7 @@ function handleTreeDragOver(event: DragEvent) {
 
 function handleTreeDrop(event: DragEvent) {
   const { sourceId, position } = dragState.value
-  if (!sourceId || !position || sceneStore.isNodeLocked(sourceId)) {
+  if (!sourceId || !position) {
     event.preventDefault()
     resetDragState()
     return
@@ -409,15 +375,15 @@ function handleTreeDragLeave(event: DragEvent) {
           <template #title="{ item }">
             <div
               class="node-label"
-              :class="getNodeInteractionClasses(item.id, item.locked)"
-              :draggable="!item.locked"
-              @dragstart="handleDragStart($event, item.id, item.locked)"
+              :class="getNodeInteractionClasses(item.id)"
+              draggable="true"
+              @dragstart="handleDragStart($event, item.id)"
               @dragend="handleDragEnd"
               @dragover="handleDragOver($event, item.id)"
               @dragleave="handleDragLeave($event, item.id)"
               @drop="handleDrop($event, item.id)"
-              @click="handleNodeClick($event, item.id, item.locked)"
-              @dblclick.stop.prevent="handleNodeDoubleClick(item.id, item.locked)"
+              @click="handleNodeClick($event, item.id)"
+              @dblclick.stop.prevent="handleNodeDoubleClick(item.id)"
             >
               <span class="node-label-text">{{ item.name }}</span>
             </div>
@@ -425,25 +391,14 @@ function handleTreeDragLeave(event: DragEvent) {
           <template #append="{ item }">
             <div class="tree-node-trailing" @mousedown.stop @click.stop>
               <v-btn
-                :icon="item.locked ? 'mdi-lock-outline' : 'mdi-lock-open-variant-outline'"
-                variant="text"
-                density="compact"
-                size="26"
-                class="lock-btn"
-                :class="{ 'is-locked': item.locked }"
-                :title="item.locked ? 'Unlock' : 'Lock'"
-                @click.stop="toggleNodeLock(item.id)"
-              />
-              <v-btn
                 :icon="(item.visible ?? true) ? 'mdi-eye-outline' : 'mdi-eye-off-outline'"
                 variant="text"
                 density="compact"
                 size="26"
                 class="visibility-btn"
                 :class="{ 'is-hidden': !(item.visible ?? true) }"
-                :title="item.locked ? 'Unlock to change visibility' : (item.visible ?? true) ? 'Hide' : 'Show'"
-                :disabled="item.locked"
-                @click.stop="toggleNodeVisibility(item.id, item.locked)"
+                :title="(item.visible ?? true) ? 'Hide' : 'Show'"
+                @click.stop="toggleNodeVisibility(item.id)"
               />
             </div>
           </template>
@@ -605,11 +560,6 @@ function handleTreeDragLeave(event: DragEvent) {
   color: #fafafa;
 }
 
-.node-label.is-locked {
-  opacity: 0.55;
-  cursor: default;
-}
-
 .node-label.drop-inside {
   background: rgba(77, 208, 225, 0.12);
 }
@@ -644,20 +594,7 @@ function handleTreeDragLeave(event: DragEvent) {
   align-items: center;
   justify-content: flex-end;
   gap: 2px;
-  min-width: 44px;
-}
-
-.lock-btn {
-  color: rgba(233, 236, 241, 0.38);
-  transition: color 120ms ease;
-}
-
-.lock-btn.is-locked {
-  color: #ffca28;
-}
-
-.lock-btn :deep(.v-icon) {
-  font-size: 18px;
+  min-width: 24px;
 }
 
 .visibility-btn {

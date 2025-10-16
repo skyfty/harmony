@@ -391,7 +391,6 @@ function toHierarchyItem(node: SceneNode): HierarchyTreeItem {
     id: node.id,
     name: node.name,
     visible: node.visible ?? true,
-    locked: node.locked ?? false,
     children: node.children?.map(toHierarchyItem),
   }
 }
@@ -486,17 +485,6 @@ function collectNodeIds(node: SceneNode, buffer: string[]) {
   node.children?.forEach((child) => collectNodeIds(child, buffer))
 }
 
-function collectLockedNodeIds(nodes: SceneNode[], bucket: Set<string>) {
-  nodes.forEach((node) => {
-    if (node.locked) {
-      bucket.add(node.id)
-    }
-    if (node.children?.length) {
-      collectLockedNodeIds(node.children, bucket)
-    }
-  })
-}
-
 function flattenNodeIds(nodes: SceneNode[]): string[] {
   const buffer: string[] = []
   nodes.forEach((node) => collectNodeIds(node, buffer))
@@ -508,12 +496,10 @@ function normalizeSelectionIds(nodes: SceneNode[], ids?: string[] | null): strin
     return []
   }
   const validIds = new Set(flattenNodeIds(nodes))
-  const lockedIds = new Set<string>()
-  collectLockedNodeIds(nodes, lockedIds)
   const seen = new Set<string>()
   const normalized: string[] = []
   ids.forEach((id) => {
-    if (!validIds.has(id) || seen.has(id) || lockedIds.has(id)) {
+    if (!validIds.has(id) || seen.has(id)) {
       return
     }
     normalized.push(id)
@@ -1271,9 +1257,6 @@ export const useSceneStore = defineStore('scene', {
     },
 
     updateNodeTransform(payload: { id: string; position: Vector3Like; rotation: Vector3Like; scale: Vector3Like }) {
-      if (this.isNodeLocked(payload.id)) {
-        return
-      }
       const target = findNodeById(this.nodes, payload.id)
       if (!target) {
         return
@@ -1301,9 +1284,6 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
     },
     updateNodeProperties(payload: TransformUpdatePayload) {
-      if (this.isNodeLocked(payload.id)) {
-        return
-      }
       const target = findNodeById(this.nodes, payload.id)
       if (!target) {
         return
@@ -1339,9 +1319,6 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
     },
     renameNode(id: string, name: string) {
-      if (this.isNodeLocked(id)) {
-        return
-      }
       const trimmed = name.trim()
       if (!trimmed) {
         return
@@ -1358,9 +1335,6 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
     },
     updateNodeMaterial(id: string, material: Partial<NonNullable<SceneNode['material']>>) {
-      if (this.isNodeLocked(id)) {
-        return
-      }
       let updated = false
       visitNode(this.nodes, id, (node) => {
         if (!node.material) {
@@ -1389,9 +1363,6 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
     },
     updateLightProperties(id: string, properties: Partial<LightNodeProperties>) {
-      if (this.isNodeLocked(id)) {
-        return
-      }
       const target = findNodeById(this.nodes, id)
       if (!target || !target.light) {
         return
@@ -1420,9 +1391,6 @@ export const useSceneStore = defineStore('scene', {
       return node?.visible ?? true
     },
     setNodeVisibility(id: string, visible: boolean) {
-      if (this.isNodeLocked(id)) {
-        return
-      }
       let updated = false
       visitNode(this.nodes, id, (node) => {
         node.visible = visible
@@ -1437,40 +1405,6 @@ export const useSceneStore = defineStore('scene', {
     toggleNodeVisibility(id: string) {
       const current = this.isNodeVisible(id)
       this.setNodeVisibility(id, !current)
-    },
-    isNodeLocked(id: string) {
-      const node = findNodeById(this.nodes, id)
-      return node?.locked ?? false
-    },
-    setNodeLocked(id: string, locked: boolean) {
-      let updated = false
-      visitNode(this.nodes, id, (node) => {
-        const current = node.locked ?? false
-        if (current !== locked) {
-          node.locked = locked
-          updated = true
-        }
-      })
-      if (!updated) {
-        return
-      }
-
-      if (locked) {
-        if (this.activeTransformNodeId === id) {
-          this.endTransformInteraction()
-        }
-        const filteredSelection = this.selectedNodeIds.filter((selectedId) => selectedId !== id)
-        if (filteredSelection.length !== this.selectedNodeIds.length || this.selectedNodeId === id) {
-          this.setSelection(filteredSelection, { commit: true })
-        }
-      }
-
-      this.nodes = [...this.nodes]
-      commitSceneSnapshot(this)
-    },
-    toggleNodeLock(id: string) {
-      const next = !this.isNodeLocked(id)
-      this.setNodeLocked(id, next)
     },
     setActiveDirectory(id: string) {
       this.activeDirectoryId = id
@@ -1987,8 +1921,6 @@ export const useSceneStore = defineStore('scene', {
       const { nodeId, targetId, position } = payload
       if (!nodeId) return false
       if (targetId && nodeId === targetId) return false
-      if (this.isNodeLocked(nodeId)) return false
-      if (targetId && this.isNodeLocked(targetId)) return false
 
       if (targetId && isDescendantNode(this.nodes, nodeId, targetId)) {
         return false
