@@ -28,6 +28,7 @@ import {
   createProjectTreeFromCache,
   defaultDirectoryId,
   determineAssetCategoryId,
+  ASSETS_ROOT_DIRECTORY_ID,
   PACKAGES_ROOT_DIRECTORY_ID,
 } from './assetCatalog'
 
@@ -950,6 +951,12 @@ export const useSceneStore = defineStore('scene', {
       }
       if (!directory) {
         return []
+      }
+
+      if (state.activeDirectoryId === ASSETS_ROOT_DIRECTORY_ID) {
+        const collected: ProjectAsset[] = []
+        collectDirectoryAssets(directory, collected)
+        return collected
       }
 
       const path = findDirectoryPathInTree(state.projectTree, state.activeDirectoryId)

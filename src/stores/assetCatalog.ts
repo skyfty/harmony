@@ -137,7 +137,7 @@ function createPackagesBranch(cache: Record<string, ProjectDirectory[]> = {}): P
     id: PACKAGES_ROOT_DIRECTORY_ID,
     name: 'Packages',
     children: resourceProviders
-      .filter((provider) => provider.url)
+      .filter((provider) => provider.includeInPackages !== false && (provider.url || provider.load))
       .map((provider) => ({
         id: buildPackageDirectoryId(provider.id),
         name: provider.name,
@@ -161,4 +161,4 @@ export function cloneProjectTree(tree: ProjectDirectory[]): ProjectDirectory[] {
   }))
 }
 
-export const defaultDirectoryId = ASSET_CATEGORY_CONFIG.length ? ASSET_CATEGORY_CONFIG[0]!.id : null
+export const defaultDirectoryId = ASSETS_ROOT_DIRECTORY_ID

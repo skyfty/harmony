@@ -27,7 +27,15 @@ The dev server runs on port `5173` by default. When it starts, open the printed 
 - Three.js integration with orbit and transform controls wired to Pinia state.
 - Live synchronization between the viewport, hierarchy, and inspector panels.
 - Mock project browser with directory tree, asset thumbnails, and one-click instancing.
+- Package catalog caching backed by IndexedDB to avoid redundant fetches and enable instant reloads.
+- Local “preset” provider that ships ready-to-use models, images, and documents without any network calls.
 - Strong TypeScript typings for scene graph entities and editor state.
+
+## 📦 Resource packages & presets
+
+- Third-party package catalogs are cached in `window.indexedDB` after the first download. The **Refresh** button in the Project panel forces a re-download and updates the cache.
+- The tree view remembers the folders you expanded and the last directory you opened, so the Project panel restores your previous context on reload.
+- A built-in **Preset** provider is bundled under `src/preset/` with sample models, images, and documents. Double-click a provider card in the Packages view to enter it and browse its assets.
 
 ## 📂 Project structure highlights
 

@@ -5,4 +5,6 @@ export interface ResourceProvider {
   name: string
   url: string | null
   transform?: (payload: unknown) => ProjectDirectory[]
+  load?: () => Promise<ProjectDirectory[]> | ProjectDirectory[]
+  includeInPackages?: boolean
 }

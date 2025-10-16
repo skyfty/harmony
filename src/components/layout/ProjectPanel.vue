@@ -7,15 +7,97 @@ import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { resourceProviders } from '@/resources/projectProviders'
+import { loadProviderCatalog, storeProviderCatalog } from '@/utils/providerCatalogCache'
+
+const OPENED_DIRECTORIES_STORAGE_KEY = 'harmony:project-panel:opened-directories'
+
+function restoreOpenedDirectories(): string[] {
+  if (typeof window === 'undefined') {
+    return [PACKAGES_ROOT_DIRECTORY_ID]
+  }
+  try {
+    const stored = window.localStorage.getItem(OPENED_DIRECTORIES_STORAGE_KEY)
+    if (!stored) {
+      return [PACKAGES_ROOT_DIRECTORY_ID]
+    }
+    const parsed = JSON.parse(stored) as unknown
+    if (!Array.isArray(parsed)) {
+      return [PACKAGES_ROOT_DIRECTORY_ID]
+    }
+    const filtered = parsed.filter((value): value is string => typeof value === 'string' && value.length > 0)
+    return filtered.length ? Array.from(new Set(filtered)) : [PACKAGES_ROOT_DIRECTORY_ID]
+  } catch (error) {
+    console.warn('恢复 ProjectPanel 打开目录状态失败', error)
+    return [PACKAGES_ROOT_DIRECTORY_ID]
+  }
+}
+
+function persistOpenedDirectories(ids: string[]): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+  try {
+    const uniqueIds = Array.from(new Set(ids))
+    window.localStorage.setItem(OPENED_DIRECTORIES_STORAGE_KEY, JSON.stringify(uniqueIds))
+  } catch (error) {
+    console.warn('持久化 ProjectPanel 打开目录状态失败', error)
+  }
+}
+
+function collectDirectoryIds(directories: ProjectDirectory[] | undefined, bucket: Set<string>): void {
+  if (!directories?.length) {
+    return
+  }
+  directories.forEach((directory) => {
+    bucket.add(directory.id)
+    if (directory.children?.length) {
+      collectDirectoryIds(directory.children, bucket)
+    }
+  })
+}
+
+function sanitizeOpenedDirectories(
+  ids: string[],
+  tree: ProjectDirectory[] | undefined,
+): string[] {
+  if (!tree?.length) {
+    return [...new Set(ids)]
+  }
+  const available = new Set<string>()
+  collectDirectoryIds(tree, available)
+  return ids.filter((id, index) => available.has(id) && ids.indexOf(id) === index)
+}
+
+function arraysEqual(a: string[], b: string[]): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) {
+      return false
+    }
+  }
+  return true
+}
+
+function countDirectoryAssets(directory: ProjectDirectory | undefined): number {
+  if (!directory) {
+    return 0
+  }
+  const directCount = directory.assets?.length ?? 0
+  if (!directory.children?.length) {
+    return directCount
+  }
+  return directory.children.reduce((total, child) => total + countDirectoryAssets(child), directCount)
+}
 
 const emit = defineEmits<{
   (event: 'collapse'): void
 }>()
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
-const { projectTree, activeDirectoryId, currentAssets, selectedAssetId } = storeToRefs(sceneStore)
+const { projectTree, activeDirectoryId, currentAssets, selectedAssetId, currentDirectory } = storeToRefs(sceneStore)
 
-const openedDirectories = ref<string[]>([PACKAGES_ROOT_DIRECTORY_ID])
+const openedDirectories = ref<string[]>(restoreOpenedDirectories())
 const draggingAssetId = ref<string | null>(null)
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 let dragPreviewEl: HTMLDivElement | null = null
@@ -87,8 +169,12 @@ watch(
     if (!tree) {
       return
     }
-    if (!openedDirectories.value.includes(PACKAGES_ROOT_DIRECTORY_ID)) {
-      openedDirectories.value = [...openedDirectories.value, PACKAGES_ROOT_DIRECTORY_ID]
+    const sanitized = sanitizeOpenedDirectories(openedDirectories.value, tree)
+    const withPackages = sanitized.includes(PACKAGES_ROOT_DIRECTORY_ID)
+      ? sanitized
+      : [...sanitized, PACKAGES_ROOT_DIRECTORY_ID]
+    if (!arraysEqual(withPackages, openedDirectories.value)) {
+      openedDirectories.value = withPackages
     }
   },
   { immediate: true }
@@ -108,6 +194,14 @@ watch(
       }
     })
   },
+)
+
+watch(
+  () => [...openedDirectories.value],
+  (ids) => {
+    persistOpenedDirectories(ids)
+  },
+  { deep: false }
 )
 
 watch(
@@ -175,16 +269,43 @@ async function loadPackageDirectory(providerId: string, options: { force?: boole
   if (isProviderLoading(providerId)) {
     return
   }
-  if (!force && sceneStore.isPackageLoaded(providerId)) {
-    return
-  }
   const provider = resourceProviders.find((entry) => entry.id === providerId)
   if (!provider) {
     return
   }
+  if (!force && sceneStore.isPackageLoaded(providerId)) {
+    return
+  }
+
+  if (!force) {
+    const cachedDirectories = await loadProviderCatalog(providerId)
+    if (cachedDirectories) {
+      sceneStore.setPackageDirectories(providerId, cachedDirectories)
+      setProviderError(providerId, null)
+      return
+    }
+  }
+
+  if (typeof provider.load === 'function') {
+    setProviderLoading(providerId, true)
+    setProviderError(providerId, null)
+    try {
+      const directories = await provider.load()
+      sceneStore.setPackageDirectories(providerId, directories)
+      setProviderError(providerId, null)
+      await storeProviderCatalog(providerId, directories)
+    } catch (error) {
+      setProviderError(providerId, (error as Error).message ?? '资源加载失败')
+    } finally {
+      setProviderLoading(providerId, false)
+    }
+    return
+  }
+
   if (!provider.url) {
     sceneStore.setPackageDirectories(providerId, [])
     setProviderError(providerId, null)
+    await storeProviderCatalog(providerId, [])
     return
   }
   setProviderLoading(providerId, true)
@@ -198,6 +319,7 @@ async function loadPackageDirectory(providerId: string, options: { force?: boole
     const directories = provider.transform ? provider.transform(payload) : []
     sceneStore.setPackageDirectories(providerId, directories)
     setProviderError(providerId, null)
+    await storeProviderCatalog(providerId, directories)
   } catch (error) {
     setProviderError(providerId, (error as Error).message ?? '资源加载失败')
   } finally {
@@ -346,10 +468,6 @@ function openDeleteDialog(assets: ProjectAsset[], batch: boolean) {
   deleteDialogOpen.value = true
 }
 
-function requestDeleteAsset(asset: ProjectAsset) {
-  openDeleteDialog([asset], false)
-}
-
 function requestDeleteSelection() {
   openDeleteDialog(selectedAssets.value, true)
 }
@@ -395,6 +513,30 @@ let searchDebounceHandle: ReturnType<typeof setTimeout> | null = null
 const normalizedSearchQuery = computed(() => searchQuery.value.trim())
 const isSearchActive = computed(() => searchLoaded.value && normalizedSearchQuery.value.length > 0)
 const displayedAssets = computed(() => (isSearchActive.value ? searchResults.value : currentAssets.value))
+
+const galleryDirectories = computed(() => {
+  if (isSearchActive.value) {
+    return []
+  }
+  if (activeDirectoryId.value !== PACKAGES_ROOT_DIRECTORY_ID) {
+    return []
+  }
+  return currentDirectory.value?.children ?? []
+})
+
+function ensureDirectoryOpened(directoryId: string) {
+  if (!openedDirectories.value.includes(directoryId)) {
+    openedDirectories.value = [...openedDirectories.value, directoryId]
+  }
+}
+
+function enterDirectory(directory: ProjectDirectory) {
+  if (!directory?.id) {
+    return
+  }
+  ensureDirectoryOpened(directory.id)
+  sceneStore.setActiveDirectory(directory.id)
+}
 const selectedAssets = computed(() =>
   selectedAssetIds.value
     .map((id) => displayedAssets.value.find((asset) => asset.id === id))
@@ -780,7 +922,28 @@ onBeforeUnmount(() => {
         </v-toolbar>
         <v-divider />
         <div class="project-gallery-scroll">
-          <div v-if="displayedAssets.length" class="gallery-grid">
+          <div v-if="galleryDirectories.length" class="gallery-grid gallery-grid--directories">
+            <v-card
+              v-for="directory in galleryDirectories"
+              :key="directory.id"
+              :class="['directory-card', { 'is-active': activeDirectoryId === directory.id }]"
+              elevation="4"
+              tabindex="0"
+              @dblclick.stop="enterDirectory(directory)"
+              @keyup.enter.prevent="enterDirectory(directory)"
+              @keyup.space.prevent="enterDirectory(directory)"
+            >
+              <div class="directory-card-body">
+                <v-icon size="40" color="primary">mdi-folder</v-icon>
+                <div class="directory-card-text">
+                  <span class="directory-card-title">{{ directory.name }}</span>
+                  <span class="directory-card-subtitle">{{ countDirectoryAssets(directory) }} 个资源</span>
+                </div>
+                <v-icon class="directory-card-hint" size="18" color="primary">mdi-gesture-double-tap</v-icon>
+              </div>
+            </v-card>
+          </div>
+          <div v-else-if="displayedAssets.length" class="gallery-grid">
             <v-card
               v-for="asset in displayedAssets"
               :key="asset.id"
@@ -983,6 +1146,10 @@ onBeforeUnmount(() => {
   padding: 12px;
 }
 
+.gallery-grid--directories {
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+}
+
 .toolbar-select-checkbox {
   display: flex;
   align-items: center;
@@ -1171,5 +1338,61 @@ onBeforeUnmount(() => {
   margin: 0;
   color: rgba(233, 236, 241, 0.88);
   line-height: 1.5;
+}
+
+.directory-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  background-color: rgba(18, 20, 24, 0.82);
+  border: 1px solid transparent;
+  min-height: 120px;
+  transition: border-color 150ms ease, transform 150ms ease;
+  outline: none;
+  cursor: pointer;
+  padding: 16px;
+}
+
+.directory-card:hover,
+.directory-card:focus-visible {
+  border-color: rgba(77, 208, 225, 0.45);
+  transform: translateY(-2px);
+}
+
+.directory-card.is-active {
+  border-color: rgba(0, 172, 193, 0.9);
+  box-shadow: 0 0 12px rgba(0, 172, 193, 0.35);
+}
+
+.directory-card-body {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.directory-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.directory-card-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #ffffff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.directory-card-subtitle {
+  font-size: 0.78rem;
+  color: rgba(233, 236, 241, 0.7);
+}
+
+.directory-card-hint {
+  opacity: 0.6;
 }
 </style>
