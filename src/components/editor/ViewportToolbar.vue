@@ -66,7 +66,7 @@ defineEmits<{
   flex-direction: row;
   align-items: center;
   gap: 6px;
-  background-color: rgba(18, 21, 26, 0.88);
+  background-color: rgba(18, 21, 26, 0.48);
   border-radius: 12px;
   padding: 6px 10px;
   backdrop-filter: blur(6px);
