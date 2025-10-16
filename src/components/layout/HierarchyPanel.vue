@@ -112,7 +112,10 @@ function isItemActive(id: string) {
   return selectedNodeId.value === id
 }
 
-function toggleNodeVisibility(id: string) {
+function toggleNodeVisibility(id: string, locked: boolean) {
+  if (locked) {
+    return
+  }
   sceneStore.toggleNodeVisibility(id)
 }
 
@@ -438,8 +441,9 @@ function handleTreeDragLeave(event: DragEvent) {
                 size="26"
                 class="visibility-btn"
                 :class="{ 'is-hidden': !(item.visible ?? true) }"
-                :title="(item.visible ?? true) ? 'Hide' : 'Show'"
-                @click.stop="toggleNodeVisibility(item.id)"
+                :title="item.locked ? 'Unlock to change visibility' : (item.visible ?? true) ? 'Hide' : 'Show'"
+                :disabled="item.locked"
+                @click.stop="toggleNodeVisibility(item.id, item.locked)"
               />
             </div>
           </template>
@@ -664,6 +668,11 @@ function handleTreeDragLeave(event: DragEvent) {
 
 .visibility-btn.is-hidden {
   color: rgba(233, 236, 241, 0.38);
+}
+
+.visibility-btn:disabled {
+  color: rgba(233, 236, 241, 0.28);
+  cursor: not-allowed;
 }
 
 .visibility-btn :deep(.v-icon) {

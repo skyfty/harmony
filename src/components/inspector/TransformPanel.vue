@@ -8,6 +8,8 @@ import type { Vector3Like } from '@/types/scene'
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
+const props = defineProps<{ disabled?: boolean }>()
+
 const transformForm = reactive({
   position: { x: 0, y: 0, z: 0 },
   rotation: { x: 0, y: 0, z: 0 },
@@ -38,7 +40,7 @@ function degToRad(value: number) {
 }
 
 function updateVector(section: 'position' | 'rotation' | 'scale', axis: keyof Vector3Like, value: string) {
-  if (!selectedNodeId.value) return
+  if (!selectedNodeId.value || props.disabled) return
   const numeric = parseFloat(value)
   if (Number.isNaN(numeric)) {
     return
@@ -91,6 +93,7 @@ function handleScale(axis: keyof Vector3Like, value: string) {
         <InspectorVectorControls
           label="Position"
           :model-value="transformForm.position"
+          :disabled="props.disabled"
           @update:axis="handlePosition"
         />
       </div>
@@ -98,6 +101,7 @@ function handleScale(axis: keyof Vector3Like, value: string) {
         <InspectorVectorControls
           label="Rotation"
           :model-value="transformForm.rotation"
+          :disabled="props.disabled"
           @update:axis="handleRotation"
         />
       </div>
@@ -106,6 +110,7 @@ function handleScale(axis: keyof Vector3Like, value: string) {
           label="Scale"
           :model-value="transformForm.scale"
           min="0.01"
+          :disabled="props.disabled"
           @update:axis="handleScale"
         />
       </div>

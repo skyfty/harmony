@@ -1339,6 +1339,9 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
     },
     renameNode(id: string, name: string) {
+      if (this.isNodeLocked(id)) {
+        return
+      }
       const trimmed = name.trim()
       if (!trimmed) {
         return
@@ -1355,6 +1358,9 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
     },
     updateNodeMaterial(id: string, material: Partial<NonNullable<SceneNode['material']>>) {
+      if (this.isNodeLocked(id)) {
+        return
+      }
       let updated = false
       visitNode(this.nodes, id, (node) => {
         if (!node.material) {
@@ -1383,6 +1389,9 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
     },
     updateLightProperties(id: string, properties: Partial<LightNodeProperties>) {
+      if (this.isNodeLocked(id)) {
+        return
+      }
       const target = findNodeById(this.nodes, id)
       if (!target || !target.light) {
         return
@@ -1411,6 +1420,9 @@ export const useSceneStore = defineStore('scene', {
       return node?.visible ?? true
     },
     setNodeVisibility(id: string, visible: boolean) {
+      if (this.isNodeLocked(id)) {
+        return
+      }
       let updated = false
       visitNode(this.nodes, id, (node) => {
         node.visible = visible
@@ -1448,8 +1460,8 @@ export const useSceneStore = defineStore('scene', {
           this.endTransformInteraction()
         }
         const filteredSelection = this.selectedNodeIds.filter((selectedId) => selectedId !== id)
-        if (filteredSelection.length !== this.selectedNodeIds.length) {
-          this.setSelection(filteredSelection, { commit: false })
+        if (filteredSelection.length !== this.selectedNodeIds.length || this.selectedNodeId === id) {
+          this.setSelection(filteredSelection, { commit: true })
         }
       }
 

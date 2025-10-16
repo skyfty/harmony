@@ -33,6 +33,7 @@ watch(
 
 function updateVisibility(value: boolean | null) {
   if (!selectedNodeId.value) return
+  if (isLocked.value) return
   sceneStore.setNodeVisibility(selectedNodeId.value, Boolean(value))
 }
 
@@ -43,6 +44,7 @@ function toggleLock() {
 
 function handleNameUpdate(value: string) {
   if (!selectedNodeId.value) return
+  if (isLocked.value) return
   nodeName.value = value
   const trimmed = value.trim()
   if (!trimmed) {
@@ -72,6 +74,8 @@ function handleNameUpdate(value: string) {
           variant="solo"
           density="compact"
           hide-details
+          :readonly="isLocked"
+          :disabled="isLocked"
           @update:modelValue="handleNameUpdate"
         />
         <v-btn
@@ -87,6 +91,7 @@ function handleNameUpdate(value: string) {
           :model-value="selectedNode.visible ?? true"
           density="compact"
           hide-details
+          :disabled="isLocked"
           @update:modelValue="updateVisibility"
         />
       </div>
@@ -97,10 +102,10 @@ function handleNameUpdate(value: string) {
         variant="accordion"
         class="inspector-panels"
       >
-        <InspectorTransformPanel />
+        <InspectorTransformPanel :disabled="isLocked" />
 
-        <InspectorLightPanel v-if="isLightNode" />
-        <InspectorMaterialPanel v-else-if="showMaterialPanel" />
+        <InspectorLightPanel v-if="isLightNode" :disabled="isLocked" />
+        <InspectorMaterialPanel v-else-if="showMaterialPanel" :disabled="isLocked" />
       </v-expansion-panels>
     </div>
     <div v-else class="placeholder-text">

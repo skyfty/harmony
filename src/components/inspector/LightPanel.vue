@@ -7,6 +7,8 @@ import type { LightNodeProperties, LightNodeType } from '@/types/scene'
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
+const props = defineProps<{ disabled?: boolean }>()
+
 const lightForm = reactive({
   color: '#ffffff',
   intensity: 1,
@@ -40,7 +42,7 @@ function coerceNumber(value: number | number[]): number | null {
 
 function patchLight(properties: Partial<LightNodeProperties>) {
   const id = selectedNodeId.value
-  if (!id) {
+  if (!id || props.disabled) {
     return
   }
   sceneStore.updateLightProperties(id, properties)
@@ -126,7 +128,7 @@ function handleCastShadowChange(value: boolean | null) {
     <v-expansion-panel-text>
       <div class="section-block material-row">
         <span class="row-label">Color</span>
-        <input class="color-input" type="color" :value="lightForm.color" @input="handleColorInput" />
+  <input class="color-input" type="color" :value="lightForm.color" :disabled="props.disabled" @input="handleColorInput" />
       </div>
       <div class="section-block material-row">
         <span class="row-label">Intensity</span>
@@ -138,6 +140,7 @@ function handleCastShadowChange(value: boolean | null) {
             step="0.05"
             hide-details
             class="slider"
+            :disabled="props.disabled"
             @update:model-value="handleIntensityChange"
           />
           <div class="slider-value">{{ lightForm.intensity.toFixed(2) }}</div>
@@ -154,6 +157,7 @@ function handleCastShadowChange(value: boolean | null) {
               step="1"
               hide-details
               class="slider"
+              :disabled="props.disabled"
               @update:model-value="handleDistanceChange"
             />
             <div class="slider-value">{{ Math.round(lightForm.distance) }}</div>
@@ -169,6 +173,7 @@ function handleCastShadowChange(value: boolean | null) {
               step="0.1"
               hide-details
               class="slider"
+              :disabled="props.disabled"
               @update:model-value="handleDecayChange"
             />
             <div class="slider-value">{{ lightForm.decay.toFixed(1) }}</div>
@@ -186,6 +191,7 @@ function handleCastShadowChange(value: boolean | null) {
               step="1"
               hide-details
               class="slider"
+              :disabled="props.disabled"
               @update:model-value="handleAngleChange"
             />
             <div class="slider-value">{{ Math.round(lightForm.angle) }}°</div>
@@ -201,6 +207,7 @@ function handleCastShadowChange(value: boolean | null) {
               step="0.05"
               hide-details
               class="slider"
+              :disabled="props.disabled"
               @update:model-value="handlePenumbraChange"
             />
             <div class="slider-value">{{ lightForm.penumbra.toFixed(2) }}</div>
@@ -215,6 +222,7 @@ function handleCastShadowChange(value: boolean | null) {
           hide-details
           inset
           color="primary"
+          :disabled="props.disabled"
           @update:model-value="handleCastShadowChange"
         />
       </div>
@@ -257,6 +265,11 @@ function handleCastShadowChange(value: boolean | null) {
   border-radius: 6px;
   background: transparent;
   cursor: pointer;
+}
+
+.color-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .slider {

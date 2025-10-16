@@ -6,6 +6,8 @@ import { useSceneStore } from '@/stores/sceneStore'
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
+const props = defineProps<{ disabled?: boolean }>()
+
 const materialForm = reactive({
   color: '#ffffff',
   opacity: 1,
@@ -29,14 +31,14 @@ watch(
 )
 
 function handleColorInput(event: Event) {
-  if (!selectedNodeId.value) return
+  if (!selectedNodeId.value || props.disabled) return
   const value = (event.target as HTMLInputElement).value
   materialForm.color = value
   sceneStore.updateNodeMaterial(selectedNodeId.value, { color: value })
 }
 
 function handleOpacity(value: number | number[]) {
-  if (!selectedNodeId.value) return
+  if (!selectedNodeId.value || props.disabled) return
   const numeric = Array.isArray(value) ? value[0] : value
   if (typeof numeric !== 'number' || Number.isNaN(numeric)) {
     return
@@ -52,7 +54,7 @@ function handleOpacity(value: number | number[]) {
     <v-expansion-panel-text>
       <div class="section-block material-row">
         <span class="row-label">Base Color</span>
-  <input class="color-input" type="color" :value="materialForm.color" @input="handleColorInput" />
+  <input class="color-input" type="color" :value="materialForm.color" :disabled="props.disabled" @input="handleColorInput" />
       </div>
       <div class="section-block material-row">
         <span class="row-label">Opacity</span>
@@ -64,6 +66,7 @@ function handleOpacity(value: number | number[]) {
             step="0.05"
             hide-details
             class="opacity-slider"
+            :disabled="props.disabled"
             @update:model-value="handleOpacity"
           />
           <div class="slider-value">{{ materialForm.opacity.toFixed(2) }}</div>
@@ -108,6 +111,11 @@ function handleOpacity(value: number | number[]) {
   border-radius: 6px;
   background: transparent;
   cursor: pointer;
+}
+
+.color-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .opacity-slider {

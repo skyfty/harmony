@@ -12,6 +12,8 @@
       color="primary"
       hide-details
       class="vector-input"
+      :disabled="props.disabled"
+      :readonly="props.disabled"
       @change="onChange(axis, $event)"
     />
   </div>
@@ -20,7 +22,7 @@
 <script setup lang="ts">
 import type { Vector3Like } from '@/types/scene'
 
-const props = defineProps<{ label: string; modelValue: Vector3Like; min?: number | string }>()
+const props = defineProps<{ label: string; modelValue: Vector3Like; min?: number | string; disabled?: boolean }>()
 
 const emit = defineEmits<{
   (event: 'update:axis', axis: keyof Vector3Like, value: string): void
@@ -29,6 +31,9 @@ const emit = defineEmits<{
 const axes: Array<keyof Vector3Like> = ['x', 'y', 'z']
 
 function onChange(axis: keyof Vector3Like, event: Event) {
+  if (props.disabled) {
+    return
+  }
   emit('update:axis', axis, (event.target as HTMLInputElement).value)
 }
 </script>
