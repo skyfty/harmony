@@ -680,6 +680,7 @@ function initScene() {
   transformControls.addEventListener('dragging-changed', draggingChangedHandler as any)
   transformControls.addEventListener('objectChange', handleTransformChange)
   scene.add(transformControls.getHelper())
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x888888, 2))
 
   canvasRef.value.addEventListener('pointerdown', handlePointerDown)
   if (typeof window !== 'undefined') {
