@@ -333,17 +333,16 @@ function handleTreeDragLeave(event: DragEvent) {
         <template #activator="{ props }">
           <v-btn
             icon="mdi-plus"
-            variant="tonal"
+            variant="text"
           density="compact"
             color="primary"
             v-bind="props"
-            :title="'添加节点'"
           />
         </template>
       </AddNodeMenu>
         <v-btn
           icon="mdi-delete-outline"
-          variant="tonal"
+          variant="text"
           density="compact"
           color="error"
           :disabled="!hasSelection"
