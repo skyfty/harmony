@@ -140,6 +140,7 @@ function handleCastShadowChange(value: boolean | null) {
             step="0.05"
             hide-details
             class="slider"
+          size="small"
             :disabled="props.disabled"
             @update:model-value="handleIntensityChange"
           />
@@ -157,6 +158,7 @@ function handleCastShadowChange(value: boolean | null) {
               step="1"
               hide-details
               class="slider"
+          size="small"
               :disabled="props.disabled"
               @update:model-value="handleDistanceChange"
             />
@@ -173,6 +175,7 @@ function handleCastShadowChange(value: boolean | null) {
               step="0.1"
               hide-details
               class="slider"
+          size="small"
               :disabled="props.disabled"
               @update:model-value="handleDecayChange"
             />
@@ -190,6 +193,7 @@ function handleCastShadowChange(value: boolean | null) {
               max="90"
               step="1"
               hide-details
+          size="small"
               class="slider"
               :disabled="props.disabled"
               @update:model-value="handleAngleChange"
@@ -206,6 +210,7 @@ function handleCastShadowChange(value: boolean | null) {
               max="1"
               step="0.05"
               hide-details
+              size="small"
               class="slider"
               :disabled="props.disabled"
               @update:model-value="handlePenumbraChange"
@@ -220,6 +225,7 @@ function handleCastShadowChange(value: boolean | null) {
           :model-value="lightForm.castShadow"
           density="compact"
           hide-details
+          size="small"
           inset
           color="primary"
           :disabled="props.disabled"

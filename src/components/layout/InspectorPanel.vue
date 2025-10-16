@@ -5,6 +5,7 @@ import InspectorMaterialPanel from '@/components/inspector/MaterialPanel.vue'
 import InspectorTransformPanel from '@/components/inspector/TransformPanel.vue'
 import InspectorLightPanel from '@/components/inspector/LightPanel.vue'
 import { useSceneStore } from '@/stores/sceneStore'
+import { getNodeIcon } from '@/types/node-icons'
 
 const emit = defineEmits<{
   (event: 'collapse'): void
@@ -18,7 +19,13 @@ const expandedPanels = ref<string[]>(['transform', 'material'])
 
 const isLightNode = computed(() => selectedNode.value?.nodeType === 'light')
 const showMaterialPanel = computed(() => !isLightNode.value && !!selectedNode.value?.material)
-const inspectorIcon = computed(() => (isLightNode.value ? 'mdi-lightbulb-on-outline' : 'mdi-cube-outline'))
+const inspectorIcon = computed(() =>
+  getNodeIcon({
+    nodeType: selectedNode.value?.nodeType ?? null,
+    lightType: selectedNode.value?.light?.type ?? null,
+    hasChildren: Boolean(selectedNode.value?.children?.length),
+  }),
+)
 
 watch(
   selectedNode,
