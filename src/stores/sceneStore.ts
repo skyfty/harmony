@@ -167,6 +167,7 @@ const initialNodes: SceneNode[] = [
     rotation: createVector(0, 0, 0),
     scale: createVector(DEFAULT_GROUND_SIZE, 1, DEFAULT_GROUND_SIZE),
     visible: true,
+    locked: true,
     sourceAssetId: groundAsset.id,
   },
   createLightNode({
@@ -1407,6 +1408,26 @@ export const useSceneStore = defineStore('scene', {
       const current = this.isNodeVisible(id)
       this.setNodeVisibility(id, !current)
     },
+    setAllNodesVisibility(visible: boolean) {
+      let updated = false
+      const apply = (nodes: SceneNode[]) => {
+        nodes.forEach((node) => {
+          if ((node.visible ?? true) !== visible) {
+            node.visible = visible
+            updated = true
+          }
+          if (node.children?.length) {
+            apply(node.children)
+          }
+        })
+      }
+      apply(this.nodes)
+      if (!updated) {
+        return
+      }
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
+    },
     isNodeSelectionLocked(id: string) {
       const node = findNodeById(this.nodes, id)
       return node?.locked ?? false
@@ -1433,6 +1454,30 @@ export const useSceneStore = defineStore('scene', {
     toggleNodeSelectionLock(id: string) {
       const next = !this.isNodeSelectionLocked(id)
       this.setNodeSelectionLock(id, next)
+    },
+    setAllNodesSelectionLock(locked: boolean) {
+      let updated = false
+      const apply = (nodes: SceneNode[]) => {
+        nodes.forEach((node) => {
+          const current = node.locked ?? false
+          if (current !== locked) {
+            node.locked = locked
+            updated = true
+          }
+          if (node.children?.length) {
+            apply(node.children)
+          }
+        })
+      }
+      apply(this.nodes)
+      if (!updated) {
+        return
+      }
+      if (locked && this.selectedNodeIds.length) {
+        this.setSelection([], { commit: false })
+      }
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
     },
     setActiveDirectory(id: string) {
       this.activeDirectoryId = id

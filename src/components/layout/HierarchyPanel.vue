@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore, type HierarchyDropPosition } from '@/stores/sceneStore'
+import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import AddNodeMenu from '../common/AddNodeMenu.vue'
 
 const emit = defineEmits<{
@@ -41,8 +42,20 @@ watch(
   { immediate: true },
 )
 
-const allNodeIds = computed(() => flattenIds(hierarchyItems.value))
+const flattenedHierarchyItems = computed(() => flattenHierarchyItems(hierarchyItems.value))
+const allNodeIds = computed(() => flattenedHierarchyItems.value.map((item) => item.id))
 const hasSelection = computed(() => selectedNodeIds.value.length > 0)
+const hasHierarchyNodes = computed(() => flattenedHierarchyItems.value.length > 0)
+const areAllNodesVisible = computed(() => flattenedHierarchyItems.value.every((item) => item.visible))
+const anyNodeHidden = computed(() => flattenedHierarchyItems.value.some((item) => !item.visible))
+const visibilityToggleIcon = computed(() => (areAllNodesVisible.value ? 'mdi-eye-off-outline' : 'mdi-eye-outline'))
+const visibilityToggleTitle = computed(() => (areAllNodesVisible.value ? '隐藏所有节点' : '显示所有节点'))
+const anyNodeLocked = computed(() => flattenedHierarchyItems.value.some((item) => item.locked))
+const areAllNodesLocked = computed(
+  () => hasHierarchyNodes.value && flattenedHierarchyItems.value.every((item) => item.locked),
+)
+const lockToggleIcon = computed(() => (areAllNodesLocked.value ? 'mdi-lock-open-variant-outline' : 'mdi-lock-outline'))
+const lockToggleTitle = computed(() => (areAllNodesLocked.value ? '解除全部锁定' : '锁定全部节点'))
 
 watch(allNodeIds, (ids) => {
   if (selectionAnchorId.value && !ids.includes(selectionAnchorId.value)) {
@@ -82,26 +95,26 @@ const rootDropClasses = computed(() => ({
     dragState.value.position === 'after',
 }))
 
-function expandAll(items: Array<{ id: string; children?: Array<unknown> }>): string[] {
+function expandAll(items: HierarchyTreeItem[]): string[] {
   const collected: string[] = []
   for (const item of items) {
     collected.push(item.id)
     if (Array.isArray(item.children) && item.children.length) {
-      collected.push(...expandAll(item.children as Array<{ id: string; children?: Array<unknown> }>))
+      collected.push(...expandAll(item.children))
     }
   }
   return collected
 }
 
-function flattenIds(items: Array<{ id: string; children?: Array<unknown> }>): string[] {
-  const ids: string[] = []
+function flattenHierarchyItems(items: HierarchyTreeItem[]): HierarchyTreeItem[] {
+  const result: HierarchyTreeItem[] = []
   for (const item of items) {
-    ids.push(item.id)
+    result.push(item)
     if (Array.isArray(item.children) && item.children.length) {
-      ids.push(...flattenIds(item.children as Array<{ id: string; children?: Array<unknown> }>))
+      result.push(...flattenHierarchyItems(item.children))
     }
   }
-  return ids
+  return result
 }
 
 function isItemSelected(id: string) {
@@ -135,6 +148,16 @@ function handleDeleteSelected() {
   const idsToRemove = [...selectedNodeIds.value]
   sceneStore.removeSceneNodes(idsToRemove)
   selectionAnchorId.value = selectedNodeIds.value[selectedNodeIds.value.length - 1] ?? null
+}
+
+function handleToggleAllVisibility() {
+  const nextVisible = !areAllNodesVisible.value
+  sceneStore.setAllNodesVisibility(nextVisible)
+}
+
+function handleToggleAllSelectionLock() {
+  const nextLocked = !areAllNodesLocked.value
+  sceneStore.setAllNodesSelectionLock(nextLocked)
 }
 
 function getNodeInteractionClasses(id: string) {
@@ -339,17 +362,17 @@ function handleTreeDragLeave(event: DragEvent) {
     <v-divider />
     <div class="panel-body hierarchy-body">
       <v-toolbar density="compact" class="tree-toolbar" height="40px">
-      <AddNodeMenu>
-        <template #activator="{ props }">
-          <v-btn
-            icon="mdi-plus"
-            variant="text"
-          density="compact"
-            color="primary"
-            v-bind="props"
-          />
-        </template>
-      </AddNodeMenu>
+        <AddNodeMenu>
+          <template #activator="{ props }">
+            <v-btn
+              icon="mdi-plus"
+              variant="text"
+              density="compact"
+              color="primary"
+              v-bind="props"
+            />
+          </template>
+        </AddNodeMenu>
         <v-btn
           icon="mdi-delete-outline"
           variant="text"
@@ -359,6 +382,28 @@ function handleTreeDragLeave(event: DragEvent) {
           @click="handleDeleteSelected"
         />
         <v-spacer />
+        <v-btn
+          class="global-toggle-btn"
+          :class="{ 'is-active': anyNodeHidden }"
+          :icon="visibilityToggleIcon"
+          variant="text"
+          density="compact"
+          size="small"
+          :title="visibilityToggleTitle"
+          :disabled="!hasHierarchyNodes"
+          @click="handleToggleAllVisibility"
+        />
+        <v-btn
+          class="global-toggle-btn"
+          :class="{ 'is-active': anyNodeLocked }"
+          :icon="lockToggleIcon"
+          variant="text"
+          density="compact"
+          size="small"
+          :title="lockToggleTitle"
+          :disabled="!hasHierarchyNodes"
+          @click="handleToggleAllSelectionLock"
+        />
       </v-toolbar>
       <div
         class="tree-container"
@@ -474,6 +519,19 @@ function handleTreeDragLeave(event: DragEvent) {
   border-radius: 2px;
   padding-inline: 1px;
   gap: 2px;
+}
+
+.global-toggle-btn {
+  color: rgba(233, 236, 241, 0.64);
+  transition: color 120ms ease;
+}
+
+.global-toggle-btn.is-active {
+  color: #4dd0e1;
+}
+
+.global-toggle-btn:disabled {
+  color: rgba(233, 236, 241, 0.28);
 }
 
 
