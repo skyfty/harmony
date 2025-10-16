@@ -7,7 +7,7 @@ import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { resourceProviders } from '@/resources/projectProviders'
-import { loadProviderCatalog, storeProviderCatalog } from '@/utils/providerCatalogCache'
+import { loadProviderCatalog, storeProviderCatalog } from '@/stores/providerCatalogCache'
 
 const OPENED_DIRECTORIES_STORAGE_KEY = 'harmony:project-panel:opened-directories'
 

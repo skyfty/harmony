@@ -206,7 +206,7 @@ const PRESET_DIRECTORIES = buildPresetDirectories()
 
 export const presetProvider: ResourceProvider = {
   id: 'preset',
-  name: '预设资源',
+  name: 'Preset',
   url: null,
   includeInPackages: true,
   load: async () => cloneDirectoryTree(PRESET_DIRECTORIES),
