@@ -1441,6 +1441,13 @@ export const useSceneStore = defineStore('scene', {
       const uiStore = useUiStore()
       const shouldShowOverlay = options.showOverlay ?? true
       const refreshViewport = options.refreshViewport ?? options.nodes === undefined
+      const normalizeUrl = (value: string | null | undefined): string | null => {
+        if (!value) {
+          return null
+        }
+        const trimmed = value.trim()
+        return trimmed.length > 0 ? trimmed : null
+      }
 
       if (shouldShowOverlay) {
         uiStore.showLoadingOverlay({
@@ -1458,7 +1465,9 @@ export const useSceneStore = defineStore('scene', {
       const errors: Array<{ assetId: string; message: string }> = []
 
       for (const [assetId, nodesForAsset] of assetNodeMap.entries()) {
-        const assetLabel = nodesForAsset[0]?.name ?? assetId
+        const asset = this.getAsset(assetId)
+        const assetLabel = normalizeUrl(asset?.name) ?? nodesForAsset[0]?.name ?? assetId
+        const fallbackDownloadUrl = normalizeUrl(asset?.downloadUrl) ?? normalizeUrl(asset?.description)
     
         try {
           if (shouldShowOverlay) {
@@ -1468,11 +1477,17 @@ export const useSceneStore = defineStore('scene', {
           }
 
           let entry = assetCache.getEntry(assetId)
+          if (!normalizeUrl(entry.downloadUrl) && fallbackDownloadUrl) {
+            entry.downloadUrl = fallbackDownloadUrl
+          }
           if (entry.status !== 'cached') {
             await assetCache.loadFromIndexedDb(assetId)
             entry = assetCache.getEntry(assetId)
+            if (!normalizeUrl(entry.downloadUrl) && fallbackDownloadUrl) {
+              entry.downloadUrl = fallbackDownloadUrl
+            }
           }
-          const downloadUrl = entry?.downloadUrl ?? null
+          const downloadUrl = normalizeUrl(entry?.downloadUrl) ?? fallbackDownloadUrl
 
           let stopDownloadWatcher: WatchStopHandle | null = null
           const completedBeforeAsset = completed
