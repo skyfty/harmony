@@ -116,6 +116,14 @@ function toggleNodeVisibility(id: string) {
   sceneStore.toggleNodeVisibility(id)
 }
 
+function toggleNodeSelectionLock(id: string) {
+  sceneStore.toggleNodeSelectionLock(id)
+}
+
+function isNodeSelectionLocked(id: string) {
+  return sceneStore.isNodeSelectionLocked(id)
+}
+
 function setActiveNode(id: string | null) {
   selectionAnchorId.value = id
   suppressSelectionSync.value = true
@@ -134,6 +142,7 @@ function getNodeInteractionClasses(id: string) {
     ...getNodeDropClasses(id),
     'is-selected': isItemSelected(id),
     'is-active': isItemActive(id),
+    'is-locked': isNodeSelectionLocked(id),
   }
 }
 
@@ -400,6 +409,16 @@ function handleTreeDragLeave(event: DragEvent) {
                 :title="(item.visible ?? true) ? 'Hide' : 'Show'"
                 @click.stop="toggleNodeVisibility(item.id)"
               />
+              <v-btn
+                :icon="item.locked ? 'mdi-lock-outline' : 'mdi-lock-open-variant-outline'"
+                variant="text"
+                density="compact"
+                size="26"
+                class="selection-lock-btn"
+                :class="{ 'is-locked': item.locked }"
+                :title="item.locked ? '解除禁止鼠标选择' : '禁止鼠标选择'"
+                @click.stop="toggleNodeSelectionLock(item.id)"
+              />
             </div>
           </template>
         </v-treeview>
@@ -616,7 +635,25 @@ function handleTreeDragLeave(event: DragEvent) {
   font-size: 18px;
 }
 
+.selection-lock-btn {
+  margin-right: 0;
+  color: rgba(233, 236, 241, 0.58);
+  transition: color 120ms ease;
+}
+
+.selection-lock-btn.is-locked {
+  color: rgba(233, 236, 241, 0.9);
+}
+
+.selection-lock-btn :deep(.v-icon) {
+  font-size: 18px;
+}
+
 .node-icon {
   opacity: 0.7;
+}
+
+.node-label.is-locked {
+  opacity: 0.65;
 }
 </style>

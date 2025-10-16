@@ -391,6 +391,7 @@ function toHierarchyItem(node: SceneNode): HierarchyTreeItem {
     id: node.id,
     name: node.name,
     visible: node.visible ?? true,
+    locked: node.locked ?? false,
     children: node.children?.map(toHierarchyItem),
   }
 }
@@ -1405,6 +1406,33 @@ export const useSceneStore = defineStore('scene', {
     toggleNodeVisibility(id: string) {
       const current = this.isNodeVisible(id)
       this.setNodeVisibility(id, !current)
+    },
+    isNodeSelectionLocked(id: string) {
+      const node = findNodeById(this.nodes, id)
+      return node?.locked ?? false
+    },
+    setNodeSelectionLock(id: string, locked: boolean) {
+      let updated = false
+      visitNode(this.nodes, id, (node) => {
+        const current = node.locked ?? false
+        if (current !== locked) {
+          node.locked = locked
+          updated = true
+        }
+      })
+      if (!updated) {
+        return
+      }
+      if (locked && this.selectedNodeIds.includes(id)) {
+        const nextSelection = this.selectedNodeIds.filter((selectedId) => selectedId !== id)
+        this.setSelection(nextSelection, { commit: false })
+      }
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
+    },
+    toggleNodeSelectionLock(id: string) {
+      const next = !this.isNodeSelectionLocked(id)
+      this.setNodeSelectionLock(id, next)
     },
     setActiveDirectory(id: string) {
       this.activeDirectoryId = id

@@ -915,9 +915,37 @@ function handlePointerCancel(event: PointerEvent) {
   }
 }
 
-function selectNodeAtPointer(_event: PointerEvent) {
-  // Selecting nodes via the viewport is disabled to prevent accidental edits.
-  // Node selection can still be performed through the hierarchy panel.
+function selectNodeAtPointer(event: PointerEvent) {
+  if (!canvasRef.value || !camera || !scene) {
+    return
+  }
+
+  const rect = canvasRef.value.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) {
+    return
+  }
+
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+
+  raycaster.setFromCamera(pointer, camera)
+  const intersects = raycaster.intersectObjects(rootGroup.children, true)
+
+  const hit = intersects.find((intersection) => {
+    const nodeId = intersection.object.userData?.nodeId as string | undefined
+    if (!nodeId) {
+      return false
+    }
+    return !sceneStore.isNodeSelectionLocked(nodeId)
+  })
+
+  if (!hit) {
+    emit('selectNode', null)
+    return
+  }
+
+  const nodeId = hit.object.userData.nodeId as string
+  emit('selectNode', nodeId)
 }
 
 function extractAssetPayload(event: DragEvent): { assetId: string } | null {
@@ -1279,12 +1307,13 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
 }
 
 function attachSelection(nodeId: string | null, tool: EditorTool = props.activeTool) {
-  const target = nodeId ? objectMap.get(nodeId) ?? null : null
+  const locked = nodeId ? sceneStore.isNodeSelectionLocked(nodeId) : false
+  const target = !locked && nodeId ? objectMap.get(nodeId) ?? null : null
   updateSelectionBox(target)
 
   if (!transformControls) return
 
-  if (!nodeId) {
+  if (!nodeId || locked) {
     transformControls.detach()
     updateGridHighlight(null)
     return
@@ -1305,6 +1334,7 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
   transformControls.setMode(tool)
   transformControls.attach(target)
 }
+
 
 function updateToolMode(tool: EditorTool) {
   if (!transformControls) return
