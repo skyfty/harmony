@@ -36,6 +36,7 @@ const emit = defineEmits<{
 
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
+const isSceneReady = computed(() => sceneStore.isSceneReady)
 
 const tools: Array<{ label: string; icon: string; value: EditorTool, key: string }> = [
   { label: 'Select', icon: 'mdi-cursor-default', value: 'select', key: 'KeyQ' },
@@ -108,6 +109,13 @@ const draggingChangedHandler = (event: unknown) => {
   const value = (event as { value?: boolean })?.value ?? false
   if (orbitControls) {
     orbitControls.enabled = !value
+  }
+
+  if (!isSceneReady.value) {
+    if (!value) {
+      updateGridHighlight(null)
+    }
+    return
   }
 
   if (!value) {
@@ -625,7 +633,7 @@ function focusCameraOnNode(nodeId: string): boolean {
 }
 
 function handleControlsChange() {
-  if (isApplyingCameraState) return
+  if (!isSceneReady.value || isApplyingCameraState) return
   clampCameraAboveGround()
   const snapshot = buildCameraState()
   if (snapshot) {
@@ -1054,7 +1062,7 @@ async function handleViewportDrop(event: DragEvent) {
 }
 
 function handleTransformChange() {
-  if (!transformControls) return
+  if (!transformControls || !isSceneReady.value) return
   const target = transformControls.object as THREE.Object3D | null
   if (!target || !target.userData?.nodeId) {
     return

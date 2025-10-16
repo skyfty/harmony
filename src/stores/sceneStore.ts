@@ -1058,6 +1058,7 @@ export const useSceneStore = defineStore('scene', {
       isRestoringHistory: false,
       activeTransformNodeId: null,
       transformSnapshotCaptured: false,
+      isSceneReady: false,
     }
   },
   getters: {
@@ -2324,11 +2325,17 @@ export const useSceneStore = defineStore('scene', {
       this.camera = cloneCameraState(scene.camera)
       this.resourceProviderId = scene.resourceProviderId
       useAssetCacheStore().recalculateUsage(this.nodes)
+      this.isSceneReady = true
       return scene.id
     },
     async selectScene(sceneId: string) {
       if (sceneId === this.currentSceneId) {
-        await this.ensureSceneAssetsReady({ showOverlay: true })
+        this.isSceneReady = false
+        try {
+          await this.ensureSceneAssetsReady({ showOverlay: true })
+        } finally {
+          this.isSceneReady = true
+        }
         return true
       }
       commitSceneSnapshot(this)
@@ -2339,21 +2346,26 @@ export const useSceneStore = defineStore('scene', {
 
       this.nodes.forEach((node) => releaseRuntimeTree(node))
 
-      await this.ensureSceneAssetsReady({
-        nodes: scene.nodes,
-        showOverlay: true,
-        refreshViewport: false,
-      })
+      this.isSceneReady = false
+      try {
+        await this.ensureSceneAssetsReady({
+          nodes: scene.nodes,
+          showOverlay: true,
+          refreshViewport: false,
+        })
 
-      this.currentSceneId = sceneId
-      applySceneAssetState(this, scene)
-      this.nodes = cloneSceneNodes(scene.nodes)
-      this.setSelection(scene.selectedNodeIds ?? (scene.selectedNodeId ? [scene.selectedNodeId] : []), {
-        commit: false,
-      })
-      this.camera = cloneCameraState(scene.camera)
-      this.resourceProviderId = scene.resourceProviderId ?? 'builtin'
-      useAssetCacheStore().recalculateUsage(this.nodes)
+        this.currentSceneId = sceneId
+        applySceneAssetState(this, scene)
+        this.nodes = cloneSceneNodes(scene.nodes)
+        this.setSelection(scene.selectedNodeIds ?? (scene.selectedNodeId ? [scene.selectedNodeId] : []), {
+          commit: false,
+        })
+        this.camera = cloneCameraState(scene.camera)
+        this.resourceProviderId = scene.resourceProviderId ?? 'builtin'
+        useAssetCacheStore().recalculateUsage(this.nodes)
+      } finally {
+        this.isSceneReady = true
+      }
       return true
     },
     async deleteScene(sceneId: string) {
@@ -2380,6 +2392,7 @@ export const useSceneStore = defineStore('scene', {
         this.camera = cloneCameraState(fallback.camera)
         this.resourceProviderId = fallback.resourceProviderId
         useAssetCacheStore().recalculateUsage(this.nodes)
+        this.isSceneReady = true
         return true
       }
 
@@ -2387,20 +2400,25 @@ export const useSceneStore = defineStore('scene', {
 
       if (this.currentSceneId === sceneId) {
         const next = remaining[0]!
-        await this.ensureSceneAssetsReady({
-          nodes: next.nodes,
-          showOverlay: true,
-          refreshViewport: false,
-        })
-        this.currentSceneId = next.id
-        applySceneAssetState(this, next)
-        this.nodes = cloneSceneNodes(next.nodes)
-        this.setSelection(next.selectedNodeIds ?? (next.selectedNodeId ? [next.selectedNodeId] : []), {
-          commit: false,
-        })
-        this.camera = cloneCameraState(next.camera)
-        this.resourceProviderId = next.resourceProviderId ?? 'builtin'
-        useAssetCacheStore().recalculateUsage(this.nodes)
+        this.isSceneReady = false
+        try {
+          await this.ensureSceneAssetsReady({
+            nodes: next.nodes,
+            showOverlay: true,
+            refreshViewport: false,
+          })
+          this.currentSceneId = next.id
+          applySceneAssetState(this, next)
+          this.nodes = cloneSceneNodes(next.nodes)
+          this.setSelection(next.selectedNodeIds ?? (next.selectedNodeId ? [next.selectedNodeId] : []), {
+            commit: false,
+          })
+          this.camera = cloneCameraState(next.camera)
+          this.resourceProviderId = next.resourceProviderId ?? 'builtin'
+          useAssetCacheStore().recalculateUsage(this.nodes)
+        } finally {
+          this.isSceneReady = true
+        }
       }
 
       return true
@@ -2446,6 +2464,7 @@ export const useSceneStore = defineStore('scene', {
       return true
     },
     async ensureCurrentSceneLoaded() {
+      this.isSceneReady = false
       if (!this.scenes.length) {
         const fallback = createSceneDocument('Untitled Scene', { resourceProviderId: 'builtin' })
         this.scenes = [fallback]
@@ -2457,6 +2476,7 @@ export const useSceneStore = defineStore('scene', {
         })
         this.camera = cloneCameraState(fallback.camera)
         this.resourceProviderId = fallback.resourceProviderId
+        this.isSceneReady = true
         return
       }
 
@@ -2480,6 +2500,7 @@ export const useSceneStore = defineStore('scene', {
       this.resourceProviderId = target.resourceProviderId ?? 'builtin'
       applySceneAssetState(this, target)
       useAssetCacheStore().recalculateUsage(this.nodes)
+      this.isSceneReady = true
     },
   },
   persist: {
