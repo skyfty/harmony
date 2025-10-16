@@ -10,7 +10,7 @@ import { useFileDialog } from '@vueuse/core'
 import { useUiStore } from '@/stores/uiStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import UrlInputDialog from './UrlInputDialog.vue'
-import type { LightNodeType } from '@/types/scene'
+import type { LightNodeType, SceneNode } from '@/types/scene'
 
 const sceneStore = useSceneStore()
 const uiStore = useUiStore()
@@ -414,12 +414,44 @@ function handleMenuImportFromFile() {
   openFileDialog()
 }
 
+function collectGroupIndices(nodes: SceneNode[] | undefined, used: Set<number>) {
+  if (!nodes?.length) {
+    return
+  }
+  nodes.forEach((node) => {
+    const name = node.name?.trim()
+    if (name) {
+      const match = /^Group(?:\s+(\d+))?$/i.exec(name)
+      if (match) {
+        const index = match[1] ? Number.parseInt(match[1], 10) : 1
+        if (Number.isFinite(index)) {
+          used.add(index)
+        }
+      }
+    }
+    if (node.children?.length) {
+      collectGroupIndices(node.children, used)
+    }
+  })
+}
+
+function getNextGroupName(): string {
+  const usedIndices = new Set<number>()
+  collectGroupIndices(sceneStore.nodes, usedIndices)
+  let candidate = 1
+  while (usedIndices.has(candidate)) {
+    candidate += 1
+  }
+  return `Group ${candidate}`
+}
+
 function handleAddGroup() {
+  const groupName = getNextGroupName()
   const group = new THREE.Group()
-  group.name = 'Group'
+  group.name = groupName
   sceneStore.addSceneNode({
     object: group,
-    name: group.name,
+    name: groupName,
     position: { x: 0, y: 0, z: 0 },
     rotation: { x: 0, y: 0, z: 0 },
     scale: { x: 1, y: 1, z: 1 },
