@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
+import AddNodeMenu from '@/components/common/AddNodeMenu.vue'
 
 const quickActions = [
   { icon: 'mdi-content-save-outline', label: 'Save' },
@@ -188,6 +189,20 @@ function handleMenuAction(action: string) {
                 </v-menu>
                 <v-icon size="18" class="ml-1">mdi-menu-down</v-icon>
 
+            </v-btn>
+            <v-btn
+              class="menu-button"
+              variant="text"
+              color="rgba(255, 255, 255, 0.72)"
+              density="comfortable"
+              rounded="xl"
+            >
+              <AddNodeMenu>
+                <template #activator="{ props }">
+                  <span v-bind="props">Node</span>
+                </template>
+              </AddNodeMenu>
+              <v-icon size="18" class="ml-1">mdi-menu-down</v-icon>
             </v-btn>
             <v-btn
               class="menu-button"

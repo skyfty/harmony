@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore, type HierarchyDropPosition } from '@/stores/sceneStore'
-import HierarchyAddMenu from './HierarchyAddMenu.vue'
+import AddNodeMenu from '../common/AddNodeMenu.vue'
 
 const emit = defineEmits<{
   (event: 'collapse'): void
@@ -322,13 +322,25 @@ function handleTreeDragLeave(event: DragEvent) {
 <template>
   <v-card ref="panelRef" class="panel-card" elevation="4">
     <v-toolbar density="compact" title="Hierarchy" class="panel-toolbar" height="40px">
+
       <v-spacer />
-      <v-btn icon="mdi-window-minimize"  size="small" variant="text" @click="emit('collapse')" />
+      <v-btn icon="mdi-window-minimize" size="small" variant="text" @click="emit('collapse')" />
     </v-toolbar>
     <v-divider />
     <div class="panel-body hierarchy-body">
       <v-toolbar density="compact" class="tree-toolbar" height="40px">
-        <HierarchyAddMenu />
+      <AddNodeMenu>
+        <template #activator="{ props }">
+          <v-btn
+            icon="mdi-plus"
+            variant="tonal"
+          density="compact"
+            color="primary"
+            v-bind="props"
+            :title="'添加节点'"
+          />
+        </template>
+      </AddNodeMenu>
         <v-btn
           icon="mdi-delete-outline"
           variant="tonal"

@@ -9,9 +9,8 @@ import { createGeometry } from '@/plugins/geometry'
 import { useFileDialog } from '@vueuse/core'
 import { useUiStore } from '@/stores/uiStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import UrlInputDialog from '../common/UrlInputDialog.vue'
+import UrlInputDialog from './UrlInputDialog.vue'
 import type { LightNodeType, SceneNode } from '@/types/scene'
-import AddNodeMenu from './AddNodeMenu.vue'
 
 const sceneStore = useSceneStore()
 const uiStore = useUiStore()
@@ -76,7 +75,7 @@ function prepareImportedObject(object: THREE.Object3D) {
     const minY = boundingBox.min.y
 
     object.position.sub(center)
-    object.position.y -= (minY - center.y)
+    object.position.y -= minY - center.y
     object.updateMatrixWorld(true)
   }
 }
@@ -460,7 +459,7 @@ function handleAddGroup() {
 }
 
 function handleAddNode(geometry: string) {
-  let mesh = createGeometry(geometry)
+  const mesh = createGeometry(geometry)
   mesh.name = geometry
 
   mesh.castShadow = true
@@ -497,117 +496,47 @@ function handleAddLight(type: LightNodeType) {
 }
 
 </script>
-<template>
-  <AddNodeMenu>
-    <template #activator="slotProps">
-      <slot name="activator" v-bind="slotProps">
-        <slot />
-      </slot>
-    </template>
-  </AddNodeMenu>
 
+<template>
   <v-menu>
     <template #activator="{ props }">
-      <v-btn
-        icon="mdi-plus"
-        variant="text"
-        density="compact"
-        v-bind="props"
-      />
+      <slot name="activator" :props="props">
+        <v-btn icon="mdi-plus" variant="text" density="compact" v-bind="props" />
+      </slot>
     </template>
     <v-list class="add-menu-list">
-      <v-list-item
-        title="Group"
-        @click="handleAddGroup()"
-      />
+      <v-list-item title="Group" @click="handleAddGroup()" />
       <v-menu location="end" offset="8">
         <template #activator="{ props: lightMenuProps }">
-          <v-list-item
-            title="Light"
-            append-icon="mdi-chevron-right"
-            v-bind="lightMenuProps"
-          />
+          <v-list-item title="Light" append-icon="mdi-chevron-right" v-bind="lightMenuProps" />
         </template>
         <v-list class="add-submenu-list">
-          <v-list-item
-            title="Directional Light"
-            @click="handleAddLight('directional')"
-          />
-          <v-list-item
-            title="Point Light"
-            @click="handleAddLight('point')"
-          />
-          <v-list-item
-            title="Spot Light"
-            @click="handleAddLight('spot')"
-          />
+          <v-list-item title="Directional Light" @click="handleAddLight('directional')" />
+          <v-list-item title="Point Light" @click="handleAddLight('point')" />
+          <v-list-item title="Spot Light" @click="handleAddLight('spot')" />
         </v-list>
       </v-menu>
       <v-menu location="end" offset="8">
         <template #activator="{ props: geometryMenuProps }">
-          <v-list-item
-            title="Geometry"
-            append-icon="mdi-chevron-right"
-            v-bind="geometryMenuProps"
-          />
+          <v-list-item title="Geometry" append-icon="mdi-chevron-right" v-bind="geometryMenuProps" />
         </template>
         <v-list class="add-submenu-list">
-          <v-list-item
-            title="Box"
-            @click="handleAddNode('Box')"
-          />
-          <v-list-item
-            title="Capsule"
-            @click="handleAddNode('Capsule')"
-          />
-          <v-list-item
-            title="Circle"
-            @click="handleAddNode('Circle')"
-          />
-          <v-list-item
-            title="Cylinder"
-            @click="handleAddNode('Cylinder')"
-          />
-          <v-list-item
-            title="Dodecahedron"
-            @click="handleAddNode('Dodecahedron')"
-          />
-          <v-list-item
-            title="Icosahedron"
-            @click="handleAddNode('Icosahedron')"
-          />
-          <v-list-item
-            title="Lathe"
-            @click="handleAddNode('Lathe')"
-          />
-          <v-list-item
-            title="Octahedron"
-            @click="handleAddNode('Octahedron')"
-          />
-          <v-list-item
-            title="Plane"
-            @click="handleAddNode('Plane')"
-          />
-          <v-list-item
-            title="Ring"
-            @click="handleAddNode('Ring')"
-          />
-          <v-list-item
-            title="Sphere"
-            @click="handleAddNode('Sphere')"
-          />
+          <v-list-item title="Box" @click="handleAddNode('Box')" />
+          <v-list-item title="Capsule" @click="handleAddNode('Capsule')" />
+          <v-list-item title="Circle" @click="handleAddNode('Circle')" />
+          <v-list-item title="Cylinder" @click="handleAddNode('Cylinder')" />
+          <v-list-item title="Dodecahedron" @click="handleAddNode('Dodecahedron')" />
+          <v-list-item title="Icosahedron" @click="handleAddNode('Icosahedron')" />
+          <v-list-item title="Lathe" @click="handleAddNode('Lathe')" />
+          <v-list-item title="Octahedron" @click="handleAddNode('Octahedron')" />
+          <v-list-item title="Plane" @click="handleAddNode('Plane')" />
+          <v-list-item title="Ring" @click="handleAddNode('Ring')" />
+          <v-list-item title="Sphere" @click="handleAddNode('Sphere')" />
         </v-list>
       </v-menu>
       <v-divider class="add-menu-divider" />
-
-      <v-list-item
-        title="File"
-        @click="handleMenuImportFromFile()"
-      />
-      <v-list-item
-        title="URL"
-        @click="handleMenuImportFromUrl()"
-      />
+      <v-list-item title="File" @click="handleMenuImportFromFile()" />
+      <v-list-item title="URL" @click="handleMenuImportFromUrl()" />
     </v-list>
   </v-menu>
   <UrlInputDialog
@@ -623,7 +552,6 @@ function handleAddLight(type: LightNodeType) {
 </template>
 
 <style scoped>
-
 .add-menu-list {
   padding: 8px 6px;
   display: flex;
@@ -660,5 +588,4 @@ function handleAddLight(type: LightNodeType) {
   border-radius: 8px;
   padding-inline: 12px;
 }
-
 </style>
