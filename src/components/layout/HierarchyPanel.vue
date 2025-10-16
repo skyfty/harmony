@@ -392,6 +392,7 @@ function handleTreeDragLeave(event: DragEvent) {
           @click="handleDeleteSelected"
         />
         <v-spacer />
+        <div class="tree-toolbar-right">
         <v-btn
           class="global-toggle-btn"
           :class="{ 'is-active': anyNodeHidden }"
@@ -414,6 +415,8 @@ function handleTreeDragLeave(event: DragEvent) {
           :disabled="!hasHierarchyNodes"
           @click="handleToggleAllSelectionLock"
         />
+        </div>
+
       </v-toolbar>
       <div
         class="tree-container"
@@ -509,6 +512,13 @@ function handleTreeDragLeave(event: DragEvent) {
 .panel-toolbar :deep(.v-btn) {
   width: 32px;
   height: 32px;
+}
+
+.tree-toolbar-right {
+    grid-auto-flow: column;
+    grid-gap: 10px;
+    display: inline-grid;
+    margin-right: 6px;
 }
 
 .panel-body {
