@@ -181,13 +181,6 @@ const initialNodes: SceneNode[] = [
       castShadow: true,
     },
   }),
-  createLightNode({
-    name: 'Ambient Light',
-    type: 'ambient',
-    color: '#ffffff',
-    intensity: 0.35,
-    position: createVector(0, 30, 0),
-  }),
 ]
 
 const placeholderDownloadWatchers = new Map<string, WatchStopHandle>()
