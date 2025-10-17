@@ -232,6 +232,20 @@ function rotateSelectedNodeClockwise(nodeId: string) {
   scheduleThumbnailCapture()
 }
 
+function disableOrbitForSelectDrag() {
+  if (orbitControls && !isSelectDragOrbitDisabled) {
+    isSelectDragOrbitDisabled = true
+    orbitControls.enabled = false
+  }
+}
+
+function restoreOrbitAfterSelectDrag() {
+  if (orbitControls && isSelectDragOrbitDisabled) {
+    orbitControls.enabled = true
+    isSelectDragOrbitDisabled = false
+  }
+}
+
 function handleViewportContextMenu(event: MouseEvent) {
   event.preventDefault()
 }
@@ -298,6 +312,7 @@ let pendingPreviewAssetId: string | null = null
 let dragPreviewLoadToken = 0
 let lastDragPoint: THREE.Vector3 | null = null
 let fallbackLightGroup: THREE.Group | null = null
+let isSelectDragOrbitDisabled = false
 
 function findAssetMetadata(assetId: string): ProjectAsset | null {
   const search = (directories: ProjectDirectory[] | undefined): ProjectAsset | null => {
@@ -1328,6 +1343,10 @@ function handlePointerDown(event: PointerEvent) {
     ? createSelectionDragState(hit.nodeId, hit.object, hit.point)
     : null
 
+  if (selectionDrag) {
+    disableOrbitForSelectDrag()
+  }
+
   pointerTrackingState = {
     pointerId: event.pointerId,
     startX: event.clientX,
@@ -1412,6 +1431,10 @@ function handlePointerUp(event: PointerEvent) {
     return
   }
 
+  if (trackingState.selectionDrag) {
+    restoreOrbitAfterSelectDrag()
+  }
+
   if (trackingState.selectionDrag && trackingState.selectionDrag.hasDragged) {
     scheduleThumbnailCapture()
     return
@@ -1444,6 +1467,10 @@ function handlePointerCancel(event: PointerEvent) {
 
   if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
     canvasRef.value.releasePointerCapture(event.pointerId)
+  }
+
+  if (pointerTrackingState.selectionDrag) {
+    restoreOrbitAfterSelectDrag()
   }
 
   if (pointerTrackingState.selectionDrag && pointerTrackingState.selectionDrag.hasDragged) {
