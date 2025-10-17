@@ -1945,6 +1945,113 @@ function ensureFallbackLighting() {
   }
 }
 
+const MATERIAL_CLONED_KEY = '__harmonyMaterialCloned'
+const MATERIAL_ORIGINAL_KEY = '__harmonyMaterialOriginal'
+
+type HarmonyMaterialState = {
+  color?: THREE.Color
+  opacity: number
+  transparent: boolean
+  depthWrite: boolean
+  wireframe?: boolean
+}
+
+function ensureMeshMaterialsUnique(mesh: THREE.Mesh) {
+  const userData = mesh.userData ?? (mesh.userData = {})
+  if (userData[MATERIAL_CLONED_KEY]) {
+    return
+  }
+
+  if (!mesh.material) {
+    userData[MATERIAL_CLONED_KEY] = true
+    return
+  }
+
+  if (Array.isArray(mesh.material)) {
+    mesh.material = mesh.material.map((material) => material.clone())
+  } else if (mesh.material) {
+    mesh.material = mesh.material.clone()
+  }
+
+  userData[MATERIAL_CLONED_KEY] = true
+}
+
+function getMaterialBaseline(material: THREE.Material): HarmonyMaterialState {
+  const userData = material.userData ?? (material.userData = {})
+  let state = userData[MATERIAL_ORIGINAL_KEY] as HarmonyMaterialState | undefined
+  if (state) {
+    return state
+  }
+
+  const typed = material as THREE.Material & { color?: THREE.Color; wireframe?: boolean }
+  state = {
+    color: typed.color ? typed.color.clone() : undefined,
+    opacity: material.opacity,
+    transparent: material.transparent,
+    depthWrite: material.depthWrite,
+    wireframe: typeof typed.wireframe === 'boolean' ? typed.wireframe : undefined,
+  }
+  userData[MATERIAL_ORIGINAL_KEY] = state
+  return state
+}
+
+function applyMaterialOverrides(target: THREE.Object3D, materialConfig?: NonNullable<SceneNode['material']>) {
+  if (!materialConfig) {
+    return
+  }
+
+  const color = materialConfig.color ? new THREE.Color(materialConfig.color) : null
+  const opacity = typeof materialConfig.opacity === 'number' ? THREE.MathUtils.clamp(materialConfig.opacity, 0, 1) : undefined
+  const wireframe = materialConfig.wireframe
+
+  target.traverse((child) => {
+    const mesh = child as THREE.Mesh
+    if (!mesh?.isMesh) {
+      return
+    }
+
+    ensureMeshMaterialsUnique(mesh)
+    const currentMaterial = mesh.material
+    if (!currentMaterial) {
+      return
+    }
+
+    const materials = Array.isArray(currentMaterial) ? currentMaterial : [currentMaterial]
+
+    materials.forEach((material) => {
+      const typed = material as THREE.Material & { color?: THREE.Color; wireframe?: boolean }
+      const baseline = getMaterialBaseline(material)
+      let needsUpdate = false
+
+      if (color && typed.color) {
+        typed.color.copy(color)
+        needsUpdate = true
+      }
+
+      if (opacity !== undefined) {
+        typed.opacity = opacity
+        if (opacity < 0.999) {
+          typed.transparent = true
+          typed.depthWrite = false
+        } else {
+          typed.transparent = baseline.transparent
+          typed.depthWrite = baseline.depthWrite
+        }
+        needsUpdate = true
+      }
+
+      if (typeof wireframe === 'boolean' && typeof typed.wireframe === 'boolean') {
+        typed.wireframe = wireframe
+        needsUpdate = true
+      }
+
+      if (needsUpdate) {
+        typed.needsUpdate = true
+      }
+    })
+  })
+}
+
 function createObjectFromNode(node: SceneNode): THREE.Object3D {
   let object: THREE.Object3D
 
@@ -2001,6 +2108,10 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
 
   const isVisible = node.visible ?? true
   object.visible = isVisible
+
+  if (node.material) {
+    applyMaterialOverrides(object, node.material)
+  }
 
   return object
 }
