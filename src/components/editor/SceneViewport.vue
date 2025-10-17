@@ -67,14 +67,19 @@ let pmremGenerator: THREE.PMREMGenerator | null = null
 let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null
 let fallbackDirectionalLight: THREE.DirectionalLight | null = null
 const skySunPosition = new THREE.Vector3()
-const DEFAULT_BACKGROUND_COLOR = 0xbfd1e5
+const DEFAULT_BACKGROUND_COLOR = 0x516175
+const SKY_ENVIRONMENT_INTENSITY = 0.35
+const TONE_MAPPING_EXPOSURE = 0.6
+const FALLBACK_AMBIENT_INTENSITY = 0.2
+const FALLBACK_DIRECTIONAL_INTENSITY = 0.65
+const FALLBACK_DIRECTIONAL_SHADOW_MAP_SIZE = 2048
 const SKY_SETTINGS = {
   scale: 2500,
-  turbidity: 8,
-  rayleigh: 2,
-  mieCoefficient: 0.005,
-  mieDirectionalG: 0.8,
-  elevation: 35,
+  turbidity: 4,
+  rayleigh: 1.25,
+  mieCoefficient: 0.0025,
+  mieDirectionalG: 0.75,
+  elevation: 22,
   azimuth: 145,
 } as const
 const SKY_FALLBACK_LIGHT_DISTANCE = 75
@@ -1404,6 +1409,10 @@ function initScene() {
   renderer.setPixelRatio(window.devicePixelRatio)
   renderer.setSize(width, height)
   renderer.shadowMap.enabled = true
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap
+  renderer.toneMapping = THREE.ACESFilmicToneMapping
+  renderer.toneMappingExposure = TONE_MAPPING_EXPOSURE
+  renderer.outputColorSpace = THREE.SRGBColorSpace
 
   pmremGenerator?.dispose()
   pmremGenerator = new THREE.PMREMGenerator(renderer)
@@ -1554,6 +1563,7 @@ function updateSkyLighting(elevation = SKY_SETTINGS.elevation, azimuth = SKY_SET
   skyEnvironmentTarget = pmremGenerator.fromScene(sky as unknown as THREE.Scene)
   if (scene) {
     scene.environment = skyEnvironmentTarget.texture
+    scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY
   }
 }
 
@@ -1590,6 +1600,7 @@ function disposeSkyResources() {
 
   if (scene) {
     scene.environment = null
+    scene.environmentIntensity = 1
   }
 
   pmremGenerator?.dispose()
@@ -2646,9 +2657,12 @@ function ensureFallbackLighting() {
   })
 
   if (!hasLight) {
-    const ambient = new THREE.AmbientLight(0xffffff, 0.35)
-    const directional = new THREE.DirectionalLight(0xffffff, 0.8)
+    const ambient = new THREE.AmbientLight(0xffffff, FALLBACK_AMBIENT_INTENSITY)
+    const directional = new THREE.DirectionalLight(0xffffff, FALLBACK_DIRECTIONAL_INTENSITY)
     directional.castShadow = true
+    directional.shadow.mapSize.set(FALLBACK_DIRECTIONAL_SHADOW_MAP_SIZE, FALLBACK_DIRECTIONAL_SHADOW_MAP_SIZE)
+    directional.shadow.normalBias = 0.02
+    directional.shadow.bias = -0.0001
     directional.target.position.set(0, 0, 0)
     fallbackLightGroup.add(ambient)
     fallbackLightGroup.add(directional)
