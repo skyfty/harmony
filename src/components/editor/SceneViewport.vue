@@ -82,6 +82,10 @@ const MIN_CAMERA_HEIGHT = 0.25
 const MIN_TARGET_HEIGHT = 0
 const GRID_CELL_SIZE = 1
 const GRID_HIGHLIGHT_HEIGHT = 0.02
+const GRID_HIGHLIGHT_PADDING = 0.1
+const GRID_HIGHLIGHT_MIN_SIZE = GRID_CELL_SIZE * 1.3
+const DEFAULT_GRID_HIGHLIGHT_SIZE = GRID_CELL_SIZE * 1.5
+const DEFAULT_GRID_HIGHLIGHT_DIMENSIONS = { width: DEFAULT_GRID_HIGHLIGHT_SIZE, depth: DEFAULT_GRID_HIGHLIGHT_SIZE } as const
 const POINT_LIGHT_HELPER_SIZE = 0.5
 const DIRECTIONAL_LIGHT_HELPER_SIZE = 5
 const DEFAULT_CAMERA_POSITION = { x: 5, y: 5, z: 5 } as const
@@ -221,6 +225,7 @@ function rotateSelectedNodeClockwise(nodeId: string) {
   object.rotation.y -= SELECT_ROTATE_STEP_RAD
   object.updateMatrixWorld(true)
   updateSelectionBox(object)
+  updateGridHighlightFromObject(object)
 
   emit('updateNodeTransform', {
     id: nodeId,
@@ -253,7 +258,7 @@ function updateSelectDragPosition(drag: SelectionDragState, event: PointerEvent)
   drag.object.getWorldQuaternion(selectDragWorldQuaternion)
 
   updateSelectionBox(drag.object)
-  updateGridHighlight(selectDragWorldPosition, selectDragWorldQuaternion)
+  updateGridHighlightFromObject(drag.object)
 
   emit('updateNodeTransform', {
     id: drag.nodeId,
@@ -301,7 +306,8 @@ const cameraOffsetHelper = new THREE.Vector3()
 const selectDragWorldPosition = new THREE.Vector3()
 const selectDragWorldQuaternion = new THREE.Quaternion()
 const gridHighlightPositionHelper = new THREE.Vector3()
-const gridHighlightQuaternionHelper = new THREE.Quaternion()
+const gridHighlightBoundingBox = new THREE.Box3()
+const gridHighlightSizeHelper = new THREE.Vector3()
 
 const draggingChangedHandler = (event: unknown) => {
   const value = (event as { value?: boolean })?.value ?? false
@@ -309,24 +315,23 @@ const draggingChangedHandler = (event: unknown) => {
     orbitControls.enabled = !value
   }
 
+  const targetObject = transformControls?.object as THREE.Object3D | null
+
   if (!isSceneReady.value) {
     if (!value) {
-      updateGridHighlight(null)
+      updateGridHighlightFromObject(targetObject)
     }
     return
   }
 
   if (!value) {
     sceneStore.endTransformInteraction()
-    updateGridHighlight(null)
+    updateGridHighlightFromObject(targetObject)
   } else {
     const nodeId = (transformControls?.object as THREE.Object3D | null)?.userData?.nodeId as string | undefined
     sceneStore.beginTransformInteraction(nodeId ?? null)
-    if (transformControls?.getMode() === 'translate' && transformControls.object) {
-      const object = transformControls.object as THREE.Object3D
-      object.getWorldPosition(gridHighlightPositionHelper)
-      object.getWorldQuaternion(gridHighlightQuaternionHelper)
-      updateGridHighlight(gridHighlightPositionHelper, gridHighlightQuaternionHelper)
+    if (targetObject) {
+      updateGridHighlightFromObject(targetObject)
     }
   }
 }
@@ -762,9 +767,15 @@ function applyGridVisibility(visible: boolean) {
   gridHelper.visible = visible
   if (!visible) {
     updateGridHighlight(null)
-  } else if (lastDragPoint) {
-    updateGridHighlight(lastDragPoint)
+    return
   }
+
+  if (isDragHovering.value && lastDragPoint) {
+  updateGridHighlight(lastDragPoint, DEFAULT_GRID_HIGHLIGHT_DIMENSIONS)
+    return
+  }
+
+  restoreGridHighlightForSelection()
 }
 
 function toggleGridVisibility() {
@@ -1325,59 +1336,41 @@ function createGridHighlight() {
   group.visible = false
   group.renderOrder = 1
 
-  const planeGeometry = new THREE.PlaneGeometry(GRID_CELL_SIZE, GRID_CELL_SIZE)
-  const planeMaterial = new THREE.MeshBasicMaterial({
-    color: 0x4dd0e1,
-    opacity: 0.3,
+  const planeGeometry = new THREE.PlaneGeometry(1, 1, 1, 1)
+  const planeMaterial = new THREE.MeshPhysicalMaterial({
+    color: 0xfff176,
+    emissive: 0xffca28,
+    emissiveIntensity: 0.35,
+    metalness: 0.75,
+    roughness: 0.25,
+    clearcoat: 0.55,
+    clearcoatRoughness: 0.2,
     transparent: true,
+    opacity: 0.75,
     side: THREE.DoubleSide,
     depthWrite: false,
+    toneMapped: false,
   })
+  planeMaterial.polygonOffset = true
+  planeMaterial.polygonOffsetFactor = 1
+  planeMaterial.polygonOffsetUnits = 1
   const plane = new THREE.Mesh(planeGeometry, planeMaterial)
   plane.name = 'GridHighlightPlane'
   plane.rotation.x = -Math.PI / 2
+  plane.receiveShadow = false
+  plane.castShadow = false
   plane.renderOrder = 1
   group.add(plane)
 
-  const arrowColor = 0x4dd0e1
-  const arrowLength = GRID_CELL_SIZE * 0.75
-  const arrowHeadLength = Math.min(GRID_CELL_SIZE * 0.35, arrowLength * 0.6)
-  const arrowHeadWidth = arrowHeadLength * 0.75
-  const arrowOrigin = new THREE.Vector3(0, GRID_HIGHLIGHT_HEIGHT * 0.5, 0)
-  const arrow = new THREE.ArrowHelper(
-    new THREE.Vector3(1, 0, 0),
-    arrowOrigin,
-    arrowLength,
-    arrowColor,
-    arrowHeadLength,
-    arrowHeadWidth,
-  )
-  arrow.name = 'GridHighlightArrow'
-
-  const arrowLineMaterials = Array.isArray(arrow.line.material) ? arrow.line.material : [arrow.line.material]
-  arrowLineMaterials.forEach((material) => {
-    material.depthWrite = false
-    material.transparent = true
-    material.opacity = 0.9
-  })
-
-  const arrowConeMaterials = Array.isArray(arrow.cone.material) ? arrow.cone.material : [arrow.cone.material]
-  arrowConeMaterials.forEach((material) => {
-    material.depthWrite = false
-    material.transparent = true
-    material.opacity = 0.9
-  })
-
-  group.add(arrow)
-  group.userData.arrowHelper = arrow
   group.userData.plane = plane
+  group.userData.lastDimensions = { width: 0, depth: 0 }
 
   return group
 }
 
-const gridHighlightDirectionHelper = new THREE.Vector3(1, 0, 0)
+type GridHighlightDimensions = { width: number; depth: number }
 
-function updateGridHighlight(position: THREE.Vector3 | null, orientation?: THREE.Quaternion | THREE.Euler) {
+function updateGridHighlight(position: THREE.Vector3 | null, dimensions?: GridHighlightDimensions) {
   if (!gridHighlight) {
     return
   }
@@ -1389,27 +1382,52 @@ function updateGridHighlight(position: THREE.Vector3 | null, orientation?: THREE
   gridHighlight.visible = true
   gridHighlight.position.set(position.x, GRID_HIGHLIGHT_HEIGHT, position.z)
 
-  const arrow = gridHighlight.userData.arrowHelper as THREE.ArrowHelper | undefined
-  if (!arrow) {
+  const width = Math.max(dimensions?.width ?? DEFAULT_GRID_HIGHLIGHT_SIZE, GRID_HIGHLIGHT_MIN_SIZE)
+  const depth = Math.max(dimensions?.depth ?? DEFAULT_GRID_HIGHLIGHT_SIZE, GRID_HIGHLIGHT_MIN_SIZE)
+
+  const plane = gridHighlight.userData.plane as THREE.Mesh | undefined
+
+  const lastDimensions = gridHighlight.userData.lastDimensions as GridHighlightDimensions | undefined
+  if (!lastDimensions || Math.abs(lastDimensions.width - width) > 1e-3 || Math.abs(lastDimensions.depth - depth) > 1e-3) {
+    if (plane) {
+      plane.scale.set(width, depth, 1)
+    }
+    gridHighlight.userData.lastDimensions = { width, depth }
+  }
+}
+
+function updateGridHighlightFromObject(object: THREE.Object3D | null) {
+  if (!object) {
+    updateGridHighlight(null)
     return
   }
 
-  gridHighlightDirectionHelper.set(1, 0, 0)
-  if (orientation) {
-    if (orientation instanceof THREE.Quaternion) {
-      gridHighlightDirectionHelper.applyQuaternion(orientation)
-    } else {
-      gridHighlightQuaternionHelper.setFromEuler(orientation)
-      gridHighlightDirectionHelper.applyQuaternion(gridHighlightQuaternionHelper)
-    }
+  object.updateMatrixWorld(true)
+  object.getWorldPosition(gridHighlightPositionHelper)
+  gridHighlightBoundingBox.setFromObject(object)
+  if (gridHighlightBoundingBox.isEmpty()) {
+    gridHighlightSizeHelper.setScalar(0)
+  } else {
+    gridHighlightBoundingBox.getSize(gridHighlightSizeHelper)
   }
 
-  gridHighlightDirectionHelper.y = 0
-  if (gridHighlightDirectionHelper.lengthSq() < 1e-6) {
-    gridHighlightDirectionHelper.set(1, 0, 0)
+  const width = Math.max(gridHighlightSizeHelper.x + GRID_HIGHLIGHT_PADDING * 2, GRID_HIGHLIGHT_MIN_SIZE)
+  const depth = Math.max(gridHighlightSizeHelper.z + GRID_HIGHLIGHT_PADDING * 2, GRID_HIGHLIGHT_MIN_SIZE)
+  updateGridHighlight(gridHighlightPositionHelper, { width, depth })
+}
+
+function restoreGridHighlightForSelection() {
+  if (!gridVisible.value) {
+    updateGridHighlight(null)
+    return
   }
-  gridHighlightDirectionHelper.normalize()
-  arrow.setDirection(gridHighlightDirectionHelper)
+
+  const nodeId = props.selectedNodeId
+  const target = nodeId && !sceneStore.isNodeSelectionLocked(nodeId)
+    ? objectMap.get(nodeId) ?? null
+    : null
+
+  updateGridHighlightFromObject(target)
 }
 
 function handlePointerDown(event: PointerEvent) {
@@ -1529,7 +1547,7 @@ function handlePointerUp(event: PointerEvent) {
 
   if (trackingState.selectionDrag) {
     restoreOrbitAfterSelectDrag()
-    updateGridHighlight(null)
+    updateGridHighlightFromObject(trackingState.selectionDrag.object)
   }
 
   if (trackingState.selectionDrag && trackingState.selectionDrag.hasDragged) {
@@ -1568,7 +1586,7 @@ function handlePointerCancel(event: PointerEvent) {
 
   if (pointerTrackingState.selectionDrag) {
     restoreOrbitAfterSelectDrag()
-    updateGridHighlight(null)
+    updateGridHighlightFromObject(pointerTrackingState.selectionDrag.object)
   }
 
   if (pointerTrackingState.selectionDrag && pointerTrackingState.selectionDrag.hasDragged) {
@@ -1650,7 +1668,7 @@ function handleViewportDragOver(event: DragEvent) {
     event.dataTransfer.dropEffect = 'copy'
   }
   isDragHovering.value = true
-  updateGridHighlight(point)
+  updateGridHighlight(point, DEFAULT_GRID_HIGHLIGHT_DIMENSIONS)
   setDragPreviewPosition(point)
   const payload = extractAssetPayload(event)
   if (payload) {
@@ -1670,6 +1688,7 @@ function handleViewportDragLeave(event: DragEvent) {
   isDragHovering.value = false
   updateGridHighlight(null)
   disposeDragPreview()
+  restoreGridHighlightForSelection()
 }
 
 async function handleViewportDrop(event: DragEvent) {
@@ -1696,6 +1715,7 @@ async function handleViewportDrop(event: DragEvent) {
     sceneStore.setDraggingAssetObject(null)
   }
   updateGridHighlight(null)
+  restoreGridHighlightForSelection()
 }
 
 function handleTransformChange() {
@@ -1710,6 +1730,7 @@ function handleTransformChange() {
   }
 
   updateSelectionBox(target)
+  updateGridHighlightFromObject(target)
 
   emit('updateNodeTransform', {
     id: target.userData.nodeId as string,
@@ -1719,11 +1740,6 @@ function handleTransformChange() {
   })
 
   scheduleThumbnailCapture()
-  if (transformControls?.getMode() === 'translate') {
-    target.getWorldPosition(gridHighlightPositionHelper)
-    target.getWorldQuaternion(gridHighlightQuaternionHelper)
-    updateGridHighlight(gridHighlightPositionHelper, gridHighlightQuaternionHelper)
-  }
 }
 
 function syncSceneGraph() {
@@ -1966,22 +1982,25 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
   const target = !locked && nodeId ? objectMap.get(nodeId) ?? null : null
   updateSelectionBox(target)
 
+  if (!nodeId || locked || !target) {
+    updateGridHighlight(null)
+  } else {
+    updateGridHighlightFromObject(target)
+  }
+
   if (!transformControls) return
 
   if (!nodeId || locked) {
     transformControls.detach()
-    updateGridHighlight(null)
     return
   }
 
   if (!target) {
     transformControls.detach()
-    updateGridHighlight(null)
     return
   }
   if (tool === 'select') {
     transformControls.detach()
-    updateGridHighlight(null)
     return
   }
 
@@ -1998,16 +2017,14 @@ function updateToolMode(tool: EditorTool) {
 
   if (tool === 'select') {
     transformControls.detach()
-    updateGridHighlight(null)
-    return
+  } else {
+    transformControls.setMode(tool)
   }
 
-  transformControls.setMode(tool)
-  if (tool !== 'translate') {
-    updateGridHighlight(null)
-  }
   if (props.selectedNodeId) {
     attachSelection(props.selectedNodeId, tool)
+  } else {
+    updateGridHighlight(null)
   }
 }
 
