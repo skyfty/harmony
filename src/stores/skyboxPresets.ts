@@ -4,7 +4,7 @@ import type { SkyboxPresetDefinition } from '@/types/skybox'
 export const SKYBOX_PRESETS: SkyboxPresetDefinition[] = [
   {
     id: 'clear-day',
-    name: '晴朗白昼',
+    name: 'Clear Day',
     settings: {
       exposure: 0.6,
       turbidity: 4,
@@ -17,7 +17,7 @@ export const SKYBOX_PRESETS: SkyboxPresetDefinition[] = [
   },
   {
     id: 'golden-hour',
-    name: '日落氛围',
+    name: 'Golden Hour',
     settings: {
       exposure: 0.5,
       turbidity: 6,
@@ -30,7 +30,7 @@ export const SKYBOX_PRESETS: SkyboxPresetDefinition[] = [
   },
   {
     id: 'overcast',
-    name: '阴天漫射',
+    name: 'Overcast Diffuse',
     settings: {
       exposure: 0.35,
       turbidity: 10,
@@ -43,7 +43,7 @@ export const SKYBOX_PRESETS: SkyboxPresetDefinition[] = [
   },
   {
     id: 'midnight',
-    name: '夜幕星空',
+    name: 'Starry Night',
     settings: {
       exposure: 0.22,
       turbidity: 2.5,

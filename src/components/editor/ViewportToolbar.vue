@@ -6,7 +6,7 @@
         density="compact"
         size="small"
         class="toolbar-button"
-        title="落到地面"
+        title="Drop to Ground"
         :disabled="!canDropSelection"
         @click="emit('drop-to-ground')"
       />
@@ -29,7 +29,7 @@
         density="compact"
         size="small"
         class="toolbar-button"
-        title="切换网格"
+        title="Toggle Grid"
         @click="emit('toggle-grid')"
       />
       <v-btn
@@ -39,7 +39,7 @@
         density="compact"
         size="small"
         class="toolbar-button"
-        title="切换坐标轴"
+        title="Toggle Axes"
         @click="emit('toggle-axes')"
       />
       <v-menu
@@ -58,13 +58,13 @@
             class="toolbar-button"
             :color="skyboxMenuOpen ? 'primary' : undefined"
             :variant="skyboxMenuOpen ? 'flat' : 'text'"
-            title="天空盒设置"
+            title="Skybox Settings"
           />
         </template>
         <v-card class="skybox-card" elevation="8">
           <v-card-text class="skybox-card-content">
             <div class="skybox-section">
-              <div class="skybox-section-header">天空盒预设</div>
+              <div class="skybox-section-header">Skybox Presets</div>
               <v-select
                 :items="presetOptions"
                 :model-value="skyboxSettings.presetId"
@@ -76,7 +76,7 @@
               />
             </div>
             <div class="skybox-section">
-              <div class="skybox-section-header">参数调整</div>
+              <div class="skybox-section-header">Parameter Adjustments</div>
               <div
                 v-for="control in skyboxParameterDefinitions"
                 :key="control.key"
@@ -107,7 +107,7 @@
         density="compact"
         size="small"
         class="toolbar-button"
-        title="回到默认视角"
+        title="Reset to Default View"
         @click="emit('reset-camera')"
       />
     </v-card>
@@ -157,25 +157,24 @@ const presetOptions = computed(() => [
     title: preset.name,
     value: preset.id,
   })),
-  { title: '自定义', value: CUSTOM_SKYBOX_PRESET_ID },
+  { title: 'Custom', value: CUSTOM_SKYBOX_PRESET_ID },
 ])
 
 const alignButtons = [
-  { mode: 'center', icon: 'mdi-align-horizontal-center', title: '对齐到中心' },
-  { mode: 'left', icon: 'mdi-align-horizontal-left', title: '对齐到左侧' },
-  { mode: 'right', icon: 'mdi-align-horizontal-right', title: '对齐到右侧' },
-  { mode: 'top', icon: 'mdi-align-vertical-top', title: '对齐到顶部' },
-  { mode: 'bottom', icon: 'mdi-align-vertical-bottom', title: '对齐到底部' },
+  { mode: 'center', icon: 'mdi-align-horizontal-center', title: 'Align to Center' },
+  { mode: 'left', icon: 'mdi-align-horizontal-left', title: 'Align to Left' },
+  { mode: 'right', icon: 'mdi-align-horizontal-right', title: 'Align to Right' },
+  { mode: 'top', icon: 'mdi-align-vertical-top', title: 'Align to Top' },
+  { mode: 'bottom', icon: 'mdi-align-vertical-bottom', title: 'Align to Bottom' },
 ] satisfies Array<{ mode: AlignMode; icon: string; title: string }>
-
 const skyboxParameterDefinitions = [
-  { key: 'exposure', label: '曝光度', min: 0.05, max: 2, step: 0.01 },
-  { key: 'turbidity', label: '浑浊度', min: 1, max: 20, step: 0.1 },
-  { key: 'rayleigh', label: '瑞利散射', min: 0, max: 5, step: 0.05 },
-  { key: 'mieCoefficient', label: '米氏系数', min: 0, max: 0.05, step: 0.0005 },
-  { key: 'mieDirectionalG', label: '米氏方向', min: 0, max: 1, step: 0.01 },
-  { key: 'elevation', label: '太阳高度', min: -10, max: 90, step: 1 },
-  { key: 'azimuth', label: '太阳方位', min: 0, max: 360, step: 1 },
+  { key: 'exposure', label: 'Exposure', min: 0.05, max: 2, step: 0.01 },
+  { key: 'turbidity', label: 'Turbidity', min: 1, max: 20, step: 0.1 },
+  { key: 'rayleigh', label: 'Rayleigh Scattering', min: 0, max: 5, step: 0.05 },
+  { key: 'mieCoefficient', label: 'Mie Coefficient', min: 0, max: 0.05, step: 0.0005 },
+  { key: 'mieDirectionalG', label: 'Mie Directionality', min: 0, max: 1, step: 0.01 },
+  { key: 'elevation', label: 'Sun Elevation', min: -10, max: 90, step: 1 },
+  { key: 'azimuth', label: 'Sun Azimuth', min: 0, max: 360, step: 1 },
 ] satisfies Array<{ key: SkyboxParameterKey; label: string; min: number; max: number; step: number }>
 
 function handlePresetSelect(value: string) {
