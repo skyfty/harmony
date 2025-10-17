@@ -1,6 +1,6 @@
 import { watch, type WatchStopHandle } from 'vue'
 import { defineStore } from 'pinia'
-import { type Object3D } from 'three'
+import { Matrix4, Quaternion, Vector3, Euler, type Object3D } from 'three'
 import type { LightNodeProperties, LightNodeType, SceneNode, SceneNodeType, Vector3Like } from '@/types/scene'
 import type { ClipboardEntry } from '@/types/clipboard-entry'
 import type { DetachResult } from '@/types/detach-result'
@@ -389,6 +389,37 @@ function computeAssetSpawnTransform(asset: ProjectAsset, position?: Vector3Like)
     rotation,
     scale,
   }
+}
+
+function composeNodeMatrix(node: SceneNode): Matrix4 {
+  const position = new Vector3(node.position.x, node.position.y, node.position.z)
+  const rotation = new Euler(node.rotation.x, node.rotation.y, node.rotation.z, 'XYZ')
+  const quaternion = new Quaternion().setFromEuler(rotation)
+  const scale = new Vector3(node.scale.x, node.scale.y, node.scale.z)
+  return new Matrix4().compose(position, quaternion, scale)
+}
+
+function computeWorldMatrixForNode(nodes: SceneNode[], targetId: string): Matrix4 | null {
+  const identity = new Matrix4()
+
+  const traverse = (list: SceneNode[], parentMatrix: Matrix4): Matrix4 | null => {
+    for (const node of list) {
+      const localMatrix = composeNodeMatrix(node)
+      const worldMatrix = new Matrix4().multiplyMatrices(parentMatrix, localMatrix)
+      if (node.id === targetId) {
+        return worldMatrix
+      }
+      if (node.children) {
+        const found = traverse(node.children, worldMatrix)
+        if (found) {
+          return found
+        }
+      }
+    }
+    return null
+  }
+
+  return traverse(nodes, identity)
 }
 
 function cloneCameraState(camera: SceneCameraState): SceneCameraState {
@@ -2102,8 +2133,65 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
+      const parentMap = buildParentMap(this.nodes)
+      if (!parentMap.has(nodeId)) {
+        return false
+      }
+      const oldParentId = parentMap.get(nodeId) ?? null
+
+      let newParentId: string | null
+      if (targetId === null) {
+        newParentId = null
+      } else if (position === 'inside') {
+        newParentId = targetId
+      } else {
+        if (!parentMap.has(targetId)) {
+          return false
+        }
+        newParentId = parentMap.get(targetId) ?? null
+      }
+
+      let updatedLocal: { position: Vector3Like; rotation: Vector3Like; scale: Vector3Like } | null = null
+
+      if (newParentId !== oldParentId) {
+        const nodeWorldMatrix = computeWorldMatrixForNode(this.nodes, nodeId)
+        if (!nodeWorldMatrix) {
+          return false
+        }
+
+        let parentInverse = new Matrix4()
+        if (newParentId) {
+          const parentWorldMatrix = computeWorldMatrixForNode(this.nodes, newParentId)
+          if (!parentWorldMatrix) {
+            return false
+          }
+          parentInverse = parentInverse.copy(parentWorldMatrix).invert()
+        } else {
+          parentInverse.identity()
+        }
+
+        const localMatrix = new Matrix4().multiplyMatrices(parentInverse, nodeWorldMatrix)
+        const positionVec = new Vector3()
+        const rotationQuat = new Quaternion()
+        const scaleVec = new Vector3()
+        localMatrix.decompose(positionVec, rotationQuat, scaleVec)
+        const euler = new Euler().setFromQuaternion(rotationQuat, 'XYZ')
+
+        updatedLocal = {
+          position: createVector(positionVec.x, positionVec.y, positionVec.z),
+          rotation: createVector(euler.x, euler.y, euler.z),
+          scale: createVector(scaleVec.x, scaleVec.y, scaleVec.z),
+        }
+      }
+
       const { tree, node } = detachNodeImmutable(this.nodes, nodeId)
       if (!node) return false
+
+      if (updatedLocal) {
+        node.position = updatedLocal.position
+        node.rotation = updatedLocal.rotation
+        node.scale = updatedLocal.scale
+      }
 
       const inserted = insertNodeMutable(tree, targetId, node, position)
       if (!inserted) return false
