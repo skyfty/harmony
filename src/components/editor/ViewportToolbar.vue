@@ -2,6 +2,16 @@
   <div class="viewport-toolbar">
     <v-card class="toolbar-card" elevation="6">
       <v-btn
+        icon="mdi-arrow-collapse-down"
+        density="compact"
+        size="small"
+        class="toolbar-button"
+        title="落到地面"
+        :disabled="!canDropSelection"
+        @click="$emit('drop-to-ground')"
+      />
+      <v-divider vertical />
+      <v-btn
         :icon="showGrid ? 'mdi-grid' : 'mdi-grid-off'"
         :color="showGrid ? 'primary' : undefined"
         :variant="showGrid ? 'flat' : 'text'"
@@ -20,15 +30,6 @@
         class="toolbar-button"
         title="切换坐标轴"
         @click="$emit('toggle-axes')"
-      />
-      <v-btn
-        icon="mdi-arrow-collapse-down"
-        density="compact"
-        size="small"
-        class="toolbar-button"
-        title="落到地面"
-        :disabled="!canDropSelection"
-        @click="$emit('drop-to-ground')"
       />
       <v-divider vertical />
       <v-btn
