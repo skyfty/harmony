@@ -566,7 +566,6 @@ function createHistorySnapshot(store: SceneState): SceneHistoryEntry {
     nodes: cloneSceneNodes(store.nodes),
     selectedNodeIds: cloneSelection(store.selectedNodeIds),
     selectedNodeId: store.selectedNodeId,
-    camera: cloneCameraState(store.camera),
     viewportSettings: cloneViewportSettings(store.viewportSettings),
     resourceProviderId: store.resourceProviderId,
     runtimeSnapshots: collectSceneRuntimeSnapshots(store.nodes),
@@ -1284,9 +1283,8 @@ export const useSceneStore = defineStore('scene', {
         this.nodes.forEach((node) => releaseRuntimeTree(node))
         this.nodes = cloneSceneNodes(snapshot.nodes)
         this.selectedNodeIds = cloneSelection(snapshot.selectedNodeIds)
-        this.selectedNodeId = snapshot.selectedNodeId
-        this.camera = cloneCameraState(snapshot.camera)
-  this.viewportSettings = cloneViewportSettings(snapshot.viewportSettings)
+    this.selectedNodeId = snapshot.selectedNodeId
+    this.viewportSettings = cloneViewportSettings(snapshot.viewportSettings)
         this.resourceProviderId = snapshot.resourceProviderId
 
         assetCache.recalculateUsage(this.nodes)
