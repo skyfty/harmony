@@ -1146,15 +1146,42 @@ function handleOrbitRight() {
   orbitCameraHorizontally(1)
 }
 
+function calculateOptimalRotationDistance(): number {
+  if (!camera) {
+    return 10 // 默认距离
+  }
+  
+  // 基于远近裁剪面计算距离
+  const near = camera.near
+  const far = camera.far
+  
+  // 使用对数比例，因为透视投影中的深度感知是对数的
+  const logNear = Math.log(near)
+  const logFar = Math.log(far)
+  const logDistance = (logNear + logFar) / 2
+  
+  // 返回指数值
+  return Math.exp(logDistance)
+}
 function orbitCameraHorizontally(direction: number) {
-  if (!camera || !orbitControls) {
+ if (!camera || !orbitControls) {
     return
   }
 
-  const ORBIT_ANGLE = THREE.MathUtils.degToRad(2) // 每次旋转2度
+  const ORBIT_ANGLE = THREE.MathUtils.degToRad(2)
   
-  // 定义旋转中心为场景中心，Y轴坐标为0
-  const rotationCenter = new THREE.Vector3(0, 0, 0)
+  // 获取相机方向
+  const cameraDirection = new THREE.Vector3()
+  camera.getWorldDirection(cameraDirection)
+  
+  // 计算合适的旋转中心距离
+  let targetDistance = calculateOptimalRotationDistance()
+  
+  // 计算旋转中心点
+  const rotationCenter = new THREE.Vector3()
+  rotationCenter.copy(camera.position)
+  rotationCenter.add(cameraDirection.multiplyScalar(targetDistance))
+  rotationCenter.y = 0 // 强制Y坐标为0
   
   // 计算相机到旋转中心的向量
   const cameraToCenter = new THREE.Vector3().subVectors(camera.position, rotationCenter)
@@ -1190,6 +1217,7 @@ function orbitCameraHorizontally(direction: number) {
   }
   
   scheduleThumbnailCapture()
+
 }
 
 watch(gridVisible, (visible, previous) => {
