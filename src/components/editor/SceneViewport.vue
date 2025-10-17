@@ -12,10 +12,12 @@ import type { EditorTool } from '@/types/editor-tool'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { loadObjectFromFile } from '@/plugins/assetImport'
 import { createGeometry } from '@/plugins/geometry'
-import type { CameraProjectionMode } from '@/types/scene-viewport-settings'
+import type { CameraProjectionMode, SceneSkyboxSettings } from '@/types/scene-viewport-settings'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
+import type { SkyboxParameterKey } from '@/types/skybox'
+import { SKYBOX_PRESETS, CUSTOM_SKYBOX_PRESET_ID, cloneSkyboxSettings } from '@/stores/skyboxPresets'
 import ViewportToolbar from './ViewportToolbar.vue'
-import { Sky } from 'three/addons/objects/Sky.js';
+import { Sky } from 'three/addons/objects/Sky.js'
 
 
 const props = defineProps<{
@@ -69,19 +71,10 @@ let fallbackDirectionalLight: THREE.DirectionalLight | null = null
 const skySunPosition = new THREE.Vector3()
 const DEFAULT_BACKGROUND_COLOR = 0x516175
 const SKY_ENVIRONMENT_INTENSITY = 0.35
-const TONE_MAPPING_EXPOSURE = 0.6
 const FALLBACK_AMBIENT_INTENSITY = 0.2
 const FALLBACK_DIRECTIONAL_INTENSITY = 0.65
 const FALLBACK_DIRECTIONAL_SHADOW_MAP_SIZE = 2048
-const SKY_SETTINGS = {
-  scale: 2500,
-  turbidity: 4,
-  rayleigh: 1.25,
-  mieCoefficient: 0.0025,
-  mieDirectionalG: 0.75,
-  elevation: 22,
-  azimuth: 145,
-} as const
+const SKY_SCALE = 2500
 const SKY_FALLBACK_LIGHT_DISTANCE = 75
 
 const raycaster = new THREE.Raycaster()
@@ -119,11 +112,21 @@ const MAX_ORTHOGRAPHIC_ZOOM = 8
 const CAMERA_DISTANCE_EPSILON = 1e-3
 const ORTHO_FRUSTUM_SIZE = 20
 const DROP_TO_GROUND_EPSILON = 1e-4
+const ALIGN_DELTA_EPSILON = 1e-6
 
 const isDragHovering = ref(false)
 const gridVisible = computed(() => sceneStore.viewportSettings.showGrid)
 const axesVisible = computed(() => sceneStore.viewportSettings.showAxes)
 const cameraProjectionMode = computed(() => sceneStore.viewportSettings.cameraProjection)
+const skyboxSettings = computed(() => sceneStore.viewportSettings.skybox)
+const canAlignSelection = computed(() => {
+  const primaryId = sceneStore.selectedNodeId
+  if (!primaryId) {
+    return false
+  }
+  return sceneStore.selectedNodeIds.some((id) => id !== primaryId && !sceneStore.isNodeSelectionLocked(id))
+})
+const skyboxPresetList = SKYBOX_PRESETS
 let activeCameraMode: CameraProjectionMode = cameraProjectionMode.value
 
 interface NodeHitResult {
@@ -185,6 +188,9 @@ interface TransformGroupState {
 }
 
 let transformGroupState: TransformGroupState | null = null
+let pendingSkyboxSettings: SceneSkyboxSettings | null = null
+
+type AlignMode = 'center' | 'top' | 'bottom' | 'left' | 'right'
 
 function resolveNodeIdFromObject(object: THREE.Object3D | null): string | null {
   let current: THREE.Object3D | null = object
@@ -408,6 +414,127 @@ function dropSelectionToGround() {
   scheduleThumbnailCapture()
 }
 
+function setBoundingBoxFromObject(box: THREE.Box3, object: THREE.Object3D) {
+  box.setFromObject(object)
+  if (box.isEmpty()) {
+    object.getWorldPosition(alignTempVector)
+    box.min.copy(alignTempVector)
+    box.max.copy(alignTempVector)
+  }
+}
+
+function computeAlignmentDelta(mode: AlignMode, referenceBox: THREE.Box3, targetBox: THREE.Box3): THREE.Vector3 {
+  alignDeltaHelper.set(0, 0, 0)
+  switch (mode) {
+    case 'center': {
+      referenceBox.getCenter(alignReferenceCenterHelper)
+      targetBox.getCenter(alignTargetCenterHelper)
+      alignDeltaHelper.set(
+        alignReferenceCenterHelper.x - alignTargetCenterHelper.x,
+        0,
+        alignReferenceCenterHelper.z - alignTargetCenterHelper.z,
+      )
+      break
+    }
+    case 'top': {
+      alignDeltaHelper.y = referenceBox.max.y - targetBox.max.y
+      break
+    }
+    case 'bottom': {
+      alignDeltaHelper.y = referenceBox.min.y - targetBox.min.y
+      break
+    }
+    case 'left': {
+      alignDeltaHelper.x = referenceBox.min.x - targetBox.min.x
+      break
+    }
+    case 'right': {
+      alignDeltaHelper.x = referenceBox.max.x - targetBox.max.x
+      break
+    }
+  }
+  return alignDeltaHelper
+}
+
+function alignSelection(mode: AlignMode) {
+  const primaryId = sceneStore.selectedNodeId
+  if (!primaryId) {
+    return
+  }
+
+  const referenceObject = objectMap.get(primaryId)
+  if (!referenceObject) {
+    return
+  }
+
+  const unlockedSelection = sceneStore.selectedNodeIds.filter((id) => id !== primaryId && !sceneStore.isNodeSelectionLocked(id))
+  if (!unlockedSelection.length) {
+    return
+  }
+
+  const parentMap = buildParentIndex(props.sceneNodes, null, new Map<string, string | null>())
+  const topLevelIds = filterTopLevelSelection(unlockedSelection, parentMap)
+  if (!topLevelIds.length) {
+    return
+  }
+
+  referenceObject.updateMatrixWorld(true)
+  setBoundingBoxFromObject(alignReferenceBoundingBox, referenceObject)
+
+  const updates: TransformUpdatePayload[] = []
+
+  for (const nodeId of topLevelIds) {
+    const targetObject = objectMap.get(nodeId)
+    if (!targetObject) {
+      continue
+    }
+
+    targetObject.updateMatrixWorld(true)
+    setBoundingBoxFromObject(alignTargetBoundingBox, targetObject)
+
+    const delta = computeAlignmentDelta(mode, alignReferenceBoundingBox, alignTargetBoundingBox)
+    if (delta.lengthSq() <= ALIGN_DELTA_EPSILON) {
+      continue
+    }
+
+    targetObject.getWorldPosition(alignWorldPositionHelper)
+    alignWorldPositionHelper.add(delta)
+    alignLocalPositionHelper.copy(alignWorldPositionHelper)
+    if (targetObject.parent) {
+      targetObject.parent.worldToLocal(alignLocalPositionHelper)
+    }
+
+    targetObject.position.copy(alignLocalPositionHelper)
+    targetObject.updateMatrixWorld(true)
+
+    updates.push({
+      id: nodeId,
+      position: {
+        x: alignLocalPositionHelper.x,
+        y: alignLocalPositionHelper.y,
+        z: alignLocalPositionHelper.z,
+      },
+    })
+  }
+
+  if (!updates.length) {
+    return
+  }
+
+  if (typeof sceneStore.updateNodePropertiesBatch === 'function') {
+    sceneStore.updateNodePropertiesBatch(updates)
+  } else {
+    updates.forEach((update) => sceneStore.updateNodeProperties(update))
+  }
+
+  const primaryObject = objectMap.get(primaryId) ?? null
+  updateSelectionBox(primaryObject)
+  updateGridHighlightFromObject(primaryObject)
+  updatePlaceholderOverlayPositions()
+  updateSelectionHighlights()
+  scheduleThumbnailCapture()
+}
+
 function updateSelectDragPosition(drag: SelectionDragState, event: PointerEvent): boolean {
   const planePoint = projectPointerToPlane(event, drag.plane)
   if (!planePoint) {
@@ -515,6 +642,14 @@ const dropLocalPositionHelper = new THREE.Vector3()
 const selectionHighlightPositionHelper = new THREE.Vector3()
 const selectionHighlightBoundingBox = new THREE.Box3()
 const selectionHighlightSizeHelper = new THREE.Vector3()
+const alignReferenceBoundingBox = new THREE.Box3()
+const alignTargetBoundingBox = new THREE.Box3()
+const alignReferenceCenterHelper = new THREE.Vector3()
+const alignTargetCenterHelper = new THREE.Vector3()
+const alignDeltaHelper = new THREE.Vector3()
+const alignWorldPositionHelper = new THREE.Vector3()
+const alignLocalPositionHelper = new THREE.Vector3()
+const alignTempVector = new THREE.Vector3()
 
 function buildTransformGroupState(primaryId: string | null): TransformGroupState | null {
   const selectedIds = sceneStore.selectedNodeIds.filter((id) => !sceneStore.isNodeSelectionLocked(id))
@@ -1049,6 +1184,29 @@ function toggleAxesVisibility() {
   sceneStore.toggleViewportAxesVisible()
 }
 
+function handleSkyboxPresetSelect(presetId: string) {
+  if (!presetId || presetId === CUSTOM_SKYBOX_PRESET_ID) {
+    return
+  }
+  sceneStore.applySkyboxPreset(presetId)
+}
+
+function handleSkyboxParameterChange(payload: { key: SkyboxParameterKey; value: number }) {
+  if (Number.isNaN(payload.value)) {
+    return
+  }
+  sceneStore.setSkyboxSettings(
+    {
+      [payload.key]: payload.value,
+    } as Partial<SceneSkyboxSettings>,
+    { markCustom: true },
+  )
+}
+
+function handleAlignSelection(mode: AlignMode) {
+  alignSelection(mode)
+}
+
 watch(gridVisible, (visible, previous) => {
   applyGridVisibility(visible)
   if (previous !== undefined && visible !== previous && sceneStore.isSceneReady) {
@@ -1076,6 +1234,10 @@ watch(cameraProjectionMode, (mode, previous) => {
     scheduleThumbnailCapture()
   }
 }, { immediate: true })
+
+watch(skyboxSettings, (settings) => {
+  applySkyboxSettingsToScene(settings)
+}, { deep: true, immediate: true })
 
 function resetCameraView() {
   if (!camera || !orbitControls) return
@@ -1411,7 +1573,7 @@ function initScene() {
   renderer.shadowMap.enabled = true
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
   renderer.toneMapping = THREE.ACESFilmicToneMapping
-  renderer.toneMappingExposure = TONE_MAPPING_EXPOSURE
+  renderer.toneMappingExposure = skyboxSettings.value.exposure
   renderer.outputColorSpace = THREE.SRGBColorSpace
 
   pmremGenerator?.dispose()
@@ -1422,7 +1584,7 @@ function initScene() {
   scene.background = backgroundColor
   scene.fog = new THREE.Fog(backgroundColor.getHex(), 1, 5000)
   scene.fog.color.copy(backgroundColor)
-  initSky()
+  ensureSkyExists()
   scene.add(rootGroup)
   scene.add(gridHelper)
   scene.add(axesHelper)
@@ -1436,6 +1598,11 @@ function initScene() {
   ensureFallbackLighting()
   if (selectionTrackedObject) {
     updateSelectionBox(selectionTrackedObject)
+  }
+
+  applySkyboxSettingsToScene(skyboxSettings.value)
+  if (pendingSkyboxSettings) {
+    applySkyboxSettingsToScene(pendingSkyboxSettings)
   }
 
   perspectiveCamera = new THREE.PerspectiveCamera(DEFAULT_PERSPECTIVE_FOV, width / height || 1, 0.1, 500)
@@ -1497,40 +1664,66 @@ function initScene() {
   applyCameraState(props.cameraState)
 }
 
-function initSky() {
-  if (!scene) {
+function ensureSkyExists() {
+  if (!scene || sky) {
     return
   }
 
   sky = new Sky()
   sky.name = 'HarmonySky'
-  sky.scale.setScalar(SKY_SETTINGS.scale)
+  sky.scale.setScalar(SKY_SCALE)
   sky.frustumCulled = false
   scene.add(sky)
+}
+
+function applySkyboxSettingsToScene(settings: SceneSkyboxSettings | null) {
+  if (!settings) {
+    return
+  }
+
+  if (!scene || !renderer) {
+    pendingSkyboxSettings = cloneSkyboxSettings(settings)
+    return
+  }
+
+  ensureSkyExists()
+  if (!sky) {
+    pendingSkyboxSettings = cloneSkyboxSettings(settings)
+    return
+  }
 
   const skyMaterial = sky.material as THREE.ShaderMaterial
   const uniforms = skyMaterial.uniforms
-  const turbidity = uniforms['turbidity']
-  if (turbidity) {
-    turbidity.value = SKY_SETTINGS.turbidity
-  }
-  const rayleigh = uniforms['rayleigh']
-  if (rayleigh) {
-    rayleigh.value = SKY_SETTINGS.rayleigh
-  }
-  const mieCoefficient = uniforms['mieCoefficient']
-  if (mieCoefficient) {
-    mieCoefficient.value = SKY_SETTINGS.mieCoefficient
-  }
-  const mieDirectionalG = uniforms['mieDirectionalG']
-  if (mieDirectionalG) {
-    mieDirectionalG.value = SKY_SETTINGS.mieDirectionalG
+
+  const assignUniform = (key: string, value: number) => {
+    const uniform = uniforms[key]
+    if (!uniform) {
+      return
+    }
+    if (typeof uniform.value === 'number') {
+      uniform.value = value
+    } else if (uniform.value && typeof uniform.value === 'object' && 'setScalar' in uniform.value) {
+      uniform.value.setScalar?.(value)
+    } else {
+      uniform.value = value
+    }
   }
 
-  updateSkyLighting(SKY_SETTINGS.elevation, SKY_SETTINGS.azimuth)
+  assignUniform('turbidity', settings.turbidity)
+  assignUniform('rayleigh', settings.rayleigh)
+  assignUniform('mieCoefficient', settings.mieCoefficient)
+  assignUniform('mieDirectionalG', settings.mieDirectionalG)
+
+  updateSkyLighting(settings)
+
+  renderer.toneMappingExposure = settings.exposure
+  pendingSkyboxSettings = pmremGenerator ? null : cloneSkyboxSettings(settings)
+  if (sceneStore.isSceneReady) {
+    scheduleThumbnailCapture()
+  }
 }
 
-function updateSkyLighting(elevation = SKY_SETTINGS.elevation, azimuth = SKY_SETTINGS.azimuth) {
+function updateSkyLighting(settings: SceneSkyboxSettings) {
   if (!sky) {
     return
   }
@@ -1538,8 +1731,8 @@ function updateSkyLighting(elevation = SKY_SETTINGS.elevation, azimuth = SKY_SET
   const skyMaterial = sky.material as THREE.ShaderMaterial
   const uniforms = skyMaterial.uniforms
 
-  const phi = THREE.MathUtils.degToRad(90 - elevation)
-  const theta = THREE.MathUtils.degToRad(azimuth)
+  const phi = THREE.MathUtils.degToRad(90 - settings.elevation)
+  const theta = THREE.MathUtils.degToRad(settings.azimuth)
   skySunPosition.setFromSphericalCoords(1, phi, theta)
 
   const sunUniform = uniforms['sunPosition']
@@ -3037,11 +3230,17 @@ defineExpose<SceneViewportHandle>({
       :show-axes="axesVisible"
       :camera-mode="cameraProjectionMode"
       :can-drop-selection="canDropSelection"
+      :can-align-selection="canAlignSelection"
+      :skybox-settings="skyboxSettings"
+      :skybox-presets="skyboxPresetList"
       @toggle-grid="toggleGridVisibility"
       @toggle-axes="toggleAxesVisibility"
       @reset-camera="resetCameraView"
       @toggle-camera-mode="toggleCameraProjection"
       @drop-to-ground="dropSelectionToGround"
+      @select-skybox-preset="handleSkyboxPresetSelect"
+      @change-skybox-parameter="handleSkyboxParameterChange"
+      @align-selection="handleAlignSelection"
     />
     <div
       ref="surfaceRef"

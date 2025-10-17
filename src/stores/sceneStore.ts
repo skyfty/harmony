@@ -18,7 +18,14 @@ import type { SceneState } from '@/types/scene-state'
 import type { SceneSummary } from '@/types/scene-summary'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
-import type { CameraProjectionMode, SceneViewportSettings } from '@/types/scene-viewport-settings'
+import type { CameraProjectionMode, SceneSkyboxSettings, SceneViewportSettings } from '@/types/scene-viewport-settings'
+import {
+  CUSTOM_SKYBOX_PRESET_ID,
+  DEFAULT_SKYBOX_SETTINGS,
+  cloneSkyboxSettings,
+  normalizeSkyboxSettings,
+  resolveSkyboxPreset,
+} from '@/stores/skyboxPresets'
 import { useAssetCacheStore } from './assetCacheStore'
 import { useUiStore } from './uiStore'
 import { loadObjectFromFile } from '@/plugins/assetImport'
@@ -195,10 +202,13 @@ const defaultPanelVisibility: PanelVisibilityState = {
   project: true,
 }
 
+const defaultSkyboxSettings = cloneSkyboxSettings(DEFAULT_SKYBOX_SETTINGS)
+
 const defaultViewportSettings: SceneViewportSettings = {
   showGrid: true,
   showAxes: false,
   cameraProjection: 'perspective',
+  skybox: cloneSkyboxSettings(defaultSkyboxSettings),
 }
 
 function isCameraProjectionMode(value: unknown): value is CameraProjectionMode {
@@ -206,17 +216,37 @@ function isCameraProjectionMode(value: unknown): value is CameraProjectionMode {
 }
 
 function cloneViewportSettings(settings?: Partial<SceneViewportSettings> | null): SceneViewportSettings {
+  const baseSkybox = settings?.skybox ?? defaultSkyboxSettings
   return {
     showGrid: settings?.showGrid ?? defaultViewportSettings.showGrid,
     showAxes: settings?.showAxes ?? defaultViewportSettings.showAxes,
     cameraProjection: isCameraProjectionMode(settings?.cameraProjection)
       ? settings!.cameraProjection
       : defaultViewportSettings.cameraProjection,
+    skybox: normalizeSkyboxSettings(baseSkybox),
   }
 }
 
+function skyboxSettingsEqual(a: SceneSkyboxSettings, b: SceneSkyboxSettings): boolean {
+  return (
+    a.presetId === b.presetId &&
+    a.exposure === b.exposure &&
+    a.turbidity === b.turbidity &&
+    a.rayleigh === b.rayleigh &&
+    a.mieCoefficient === b.mieCoefficient &&
+    a.mieDirectionalG === b.mieDirectionalG &&
+    a.elevation === b.elevation &&
+    a.azimuth === b.azimuth
+  )
+}
+
 function viewportSettingsEqual(a: SceneViewportSettings, b: SceneViewportSettings): boolean {
-  return a.showGrid === b.showGrid && a.showAxes === b.showAxes && a.cameraProjection === b.cameraProjection
+  return (
+    a.showGrid === b.showGrid &&
+    a.showAxes === b.showAxes &&
+    a.cameraProjection === b.cameraProjection &&
+    skyboxSettingsEqual(a.skybox, b.skybox)
+  )
 }
 
 const initialSceneDocument = createSceneDocument('Sample Scene', {
@@ -2147,6 +2177,31 @@ export const useSceneStore = defineStore('scene', {
         ? 'orthographic'
         : 'perspective'
       this.setViewportCameraProjection(next)
+    },
+    setSkyboxSettings(partial: Partial<SceneSkyboxSettings>, options: { markCustom?: boolean } = {}) {
+      const current = cloneSkyboxSettings(this.viewportSettings.skybox)
+      const next = normalizeSkyboxSettings({ ...current, ...partial })
+      if (options.markCustom && !partial.presetId) {
+        next.presetId = CUSTOM_SKYBOX_PRESET_ID
+      }
+      if (skyboxSettingsEqual(this.viewportSettings.skybox, next)) {
+        return
+      }
+      this.setViewportSettings({ skybox: next })
+    },
+    applySkyboxPreset(presetId: string) {
+      const preset = resolveSkyboxPreset(presetId)
+      if (!preset) {
+        return
+      }
+      const next = normalizeSkyboxSettings({
+        presetId,
+        ...preset.settings,
+      })
+      if (skyboxSettingsEqual(this.viewportSettings.skybox, next)) {
+        return
+      }
+      this.setViewportSettings({ skybox: next })
     },
     setPanelVisibility(panel: EditorPanel, visible: boolean) {
       this.panelVisibility = {

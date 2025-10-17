@@ -8,7 +8,18 @@
         class="toolbar-button"
         title="落到地面"
         :disabled="!canDropSelection"
-        @click="$emit('drop-to-ground')"
+        @click="emit('drop-to-ground')"
+      />
+      <v-btn
+        v-for="button in alignButtons"
+        :key="button.mode"
+        :icon="button.icon"
+        density="compact"
+        size="small"
+        class="toolbar-button"
+        :disabled="!canAlignSelection"
+        :title="button.title"
+        @click="emitAlign(button.mode)"
       />
       <v-divider vertical />
       <v-btn
@@ -19,7 +30,7 @@
         size="small"
         class="toolbar-button"
         title="切换网格"
-        @click="$emit('toggle-grid')"
+        @click="emit('toggle-grid')"
       />
       <v-btn
         :icon="showAxes ? 'mdi-axis-arrow-info' : 'mdi-axis-arrow'"
@@ -29,8 +40,61 @@
         size="small"
         class="toolbar-button"
         title="切换坐标轴"
-        @click="$emit('toggle-axes')"
+        @click="emit('toggle-axes')"
       />
+      <v-menu v-model="skyboxMenuOpen" location="bottom" origin="top right" offset="8">
+        <template #activator="{ props: menuActivatorProps }">
+          <v-btn
+            v-bind="menuActivatorProps"
+            icon="mdi-weather-partly-cloudy"
+            density="compact"
+            size="small"
+            class="toolbar-button"
+            :color="skyboxMenuOpen ? 'primary' : undefined"
+            :variant="skyboxMenuOpen ? 'flat' : 'text'"
+            title="天空盒设置"
+          />
+        </template>
+        <v-card class="skybox-card" elevation="8">
+          <v-card-text class="skybox-card-content">
+            <div class="skybox-section">
+              <div class="skybox-section-header">天空盒预设</div>
+              <v-select
+                :items="presetOptions"
+                :model-value="skyboxSettings.presetId"
+                density="compact"
+                hide-details
+                variant="outlined"
+                class="skybox-select"
+                @update:modelValue="handlePresetSelect"
+              />
+            </div>
+            <div class="skybox-section">
+              <div class="skybox-section-header">参数调整</div>
+              <div
+                v-for="control in skyboxParameterDefinitions"
+                :key="control.key"
+                class="skybox-slider"
+              >
+                <div class="slider-label">
+                  <span>{{ control.label }}</span>
+                  <span class="slider-value">{{ formatSkyboxValue(control.key, localSkyboxSettings[control.key]) }}</span>
+                </div>
+                <v-slider
+                  :model-value="localSkyboxSettings[control.key]"
+                  :min="control.min"
+                  :max="control.max"
+                  :step="control.step"
+                  density="compact"
+                  hide-details
+                  color="primary"
+                  @update:modelValue="(value) => handleSliderInput(control.key, value as number)"
+                />
+              </div>
+            </div>
+          </v-card-text>
+        </v-card>
+      </v-menu>
       <v-divider vertical />
       <v-btn
         icon="mdi-camera"
@@ -38,31 +102,115 @@
         size="small"
         class="toolbar-button"
         title="回到默认视角"
-        @click="$emit('reset-camera')"
+        @click="emit('reset-camera')"
       />
     </v-card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { toRefs } from 'vue'
+import { computed, ref, toRefs, watch } from 'vue'
+import type { SceneSkyboxSettings } from '@/types/scene-viewport-settings'
+import type { SkyboxParameterKey, SkyboxPresetDefinition } from '@/types/skybox'
+import { CUSTOM_SKYBOX_PRESET_ID, cloneSkyboxSettings } from '@/stores/skyboxPresets'
+
+type AlignMode = 'center' | 'top' | 'bottom' | 'left' | 'right'
 
 const props = defineProps<{
   showGrid: boolean
   showAxes: boolean
   cameraMode: 'perspective' | 'orthographic'
   canDropSelection: boolean
+  canAlignSelection: boolean
+  skyboxSettings: SceneSkyboxSettings
+  skyboxPresets: SkyboxPresetDefinition[]
 }>()
 
-const { showGrid, showAxes, canDropSelection } = toRefs(props)
-
-defineEmits<{
+const emit = defineEmits<{
   (event: 'toggle-grid'): void
   (event: 'toggle-axes'): void
   (event: 'reset-camera'): void
   (event: 'toggle-camera-mode'): void
   (event: 'drop-to-ground'): void
+  (event: 'select-skybox-preset', presetId: string): void
+  (event: 'change-skybox-parameter', payload: { key: SkyboxParameterKey; value: number }): void
+  (event: 'align-selection', mode: AlignMode): void
 }>()
+
+const { showGrid, showAxes, canDropSelection, canAlignSelection, skyboxSettings, skyboxPresets } = toRefs(props)
+
+const skyboxMenuOpen = ref(false)
+const localSkyboxSettings = ref<SceneSkyboxSettings>(cloneSkyboxSettings(skyboxSettings.value))
+
+watch(skyboxSettings, (next) => {
+  localSkyboxSettings.value = cloneSkyboxSettings(next)
+})
+
+const presetOptions = computed(() => [
+  ...skyboxPresets.value.map((preset) => ({
+    title: preset.name,
+    value: preset.id,
+  })),
+  { title: '自定义', value: CUSTOM_SKYBOX_PRESET_ID },
+])
+
+const alignButtons = [
+  { mode: 'center', icon: 'mdi-align-horizontal-center', title: '对齐到中心' },
+  { mode: 'left', icon: 'mdi-align-horizontal-left', title: '对齐到左侧' },
+  { mode: 'right', icon: 'mdi-align-horizontal-right', title: '对齐到右侧' },
+  { mode: 'top', icon: 'mdi-align-vertical-top', title: '对齐到顶部' },
+  { mode: 'bottom', icon: 'mdi-align-vertical-bottom', title: '对齐到底部' },
+] satisfies Array<{ mode: AlignMode; icon: string; title: string }>
+
+const skyboxParameterDefinitions = [
+  { key: 'exposure', label: '曝光度', min: 0.05, max: 2, step: 0.01 },
+  { key: 'turbidity', label: '浑浊度', min: 1, max: 20, step: 0.1 },
+  { key: 'rayleigh', label: '瑞利散射', min: 0, max: 5, step: 0.05 },
+  { key: 'mieCoefficient', label: '米氏系数', min: 0, max: 0.05, step: 0.0005 },
+  { key: 'mieDirectionalG', label: '米氏方向', min: 0, max: 1, step: 0.01 },
+  { key: 'elevation', label: '太阳高度', min: -10, max: 90, step: 1 },
+  { key: 'azimuth', label: '太阳方位', min: 0, max: 360, step: 1 },
+] satisfies Array<{ key: SkyboxParameterKey; label: string; min: number; max: number; step: number }>
+
+function handlePresetSelect(value: string) {
+  if (!value || value === CUSTOM_SKYBOX_PRESET_ID) {
+    return
+  }
+  emit('select-skybox-preset', value)
+}
+
+function handleSliderInput(key: SkyboxParameterKey, value: number) {
+  if (Number.isNaN(value)) {
+    return
+  }
+  const config = skyboxParameterDefinitions.find((entry) => entry.key === key)
+  if (!config) {
+    return
+  }
+  const clamped = Math.min(config.max, Math.max(config.min, value))
+  localSkyboxSettings.value = {
+    ...localSkyboxSettings.value,
+    [key]: clamped,
+  }
+  emit('change-skybox-parameter', { key, value: clamped })
+}
+
+function emitAlign(mode: AlignMode) {
+  emit('align-selection', mode)
+}
+
+function formatSkyboxValue(key: SkyboxParameterKey, value: number): string {
+  if (key === 'azimuth' || key === 'elevation') {
+    return `${Math.round(value)}°`
+  }
+  if (key === 'mieCoefficient') {
+    return value.toFixed(4)
+  }
+  if (key === 'mieDirectionalG' || key === 'exposure') {
+    return value.toFixed(2)
+  }
+  return value.toFixed(2)
+}
 </script>
 
 <style scoped>
@@ -77,10 +225,10 @@ defineEmits<{
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   background-color: rgba(18, 21, 26, 0.48);
   border-radius: 12px;
-  padding: 6px 10px;
+  padding: 6px 8px;
   backdrop-filter: blur(6px);
   border: 1px solid rgba(77, 208, 225, 0.25);
 }
@@ -89,5 +237,56 @@ defineEmits<{
   border-radius: 3px;
   min-width: 22px;
   height: 22px;
+}
+
+.skybox-card {
+  min-width: 280px;
+  background-color: rgba(18, 21, 26, 0.94);
+  border-radius: 12px;
+  border: 1px solid rgba(77, 208, 225, 0.25);
+}
+
+.skybox-card-content {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+}
+
+.skybox-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.skybox-section-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: #9fb5c7;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.skybox-select {
+  width: 100%;
+}
+
+.skybox-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.slider-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: #cfd8e3;
+}
+
+.slider-value {
+  color: #4dd0e1;
+  font-variant-numeric: tabular-nums;
 }
 </style>
