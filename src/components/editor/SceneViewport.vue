@@ -1945,24 +1945,17 @@ function animate() {
       perspectiveCamera.quaternion.copy(camera.quaternion)
     }
 
-    const snapshot = buildCameraState()
-    if (snapshot) {
-      emit('updateCamera', snapshot)
-    }
-
     if (progress >= 1) {
       cameraTransitionState = null
-      const zoomAdjusted = clampCameraZoom()
-      const heightAdjusted = clampCameraAboveGround()
+  clampCameraZoom()
+  clampCameraAboveGround()
       if (perspectiveCamera && camera !== perspectiveCamera) {
         perspectiveCamera.position.copy(camera.position)
         perspectiveCamera.quaternion.copy(camera.quaternion)
       }
-      if (zoomAdjusted || heightAdjusted) {
-        const finalSnapshot = buildCameraState()
-        if (finalSnapshot) {
-          emit('updateCamera', finalSnapshot)
-        }
+      const finalSnapshot = buildCameraState()
+      if (finalSnapshot) {
+        emit('updateCamera', finalSnapshot)
       }
     }
   }
