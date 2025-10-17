@@ -17,10 +17,10 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'update:modelValue', value: boolean): void
-  (event: 'create', name: string): void
   (event: 'select', sceneId: string): void
   (event: 'delete', sceneId: string): void
   (event: 'rename', payload: { id: string; name: string }): void
+  (event: 'request-new'): void
 }>()
 
 const dialogOpen = computed({
@@ -28,8 +28,6 @@ const dialogOpen = computed({
   set: (value) => emit('update:modelValue', value),
 })
 
-const createDialogOpen = ref(false)
-const newSceneName = ref('Untitled Scene')
 const deleteDialogOpen = ref(false)
 const pendingDeleteId = ref<string | null>(null)
 const pendingDeleteName = ref('')
@@ -39,10 +37,8 @@ const selectedSceneId = ref<string | null>(null)
 
 watch(dialogOpen, (open) => {
   if (!open) {
-    createDialogOpen.value = false
     deleteDialogOpen.value = false
     editingSceneId.value = null
-    newSceneName.value = 'Untitled Scene'
     selectedSceneId.value = null
   }
 })
@@ -72,23 +68,7 @@ watch(
 )
 
 function openCreateDialog() {
-  newSceneName.value = 'Untitled Scene'
-  createDialogOpen.value = true
-  nextTick(() => {
-    const input = document.getElementById('scene-new-name') as HTMLInputElement | null
-    input?.focus()
-    input?.select()
-  })
-}
-
-function confirmCreate() {
-  const name = newSceneName.value.trim() || 'Untitled Scene'
-  emit('create', name)
-  createDialogOpen.value = false
-}
-
-function cancelCreate() {
-  createDialogOpen.value = false
+  emit('request-new')
 }
 
 function requestDelete(scene: SceneSummaryItem) {
@@ -305,28 +285,6 @@ function formatDateTime(value: string) {
         </v-btn>
       </v-card-actions>
     </v-card>
-
-    <v-dialog v-model="createDialogOpen" max-width="420">
-      <v-card>
-        <v-card-title>New Scene</v-card-title>
-        <v-card-text>
-          <v-text-field
-            id="scene-new-name"
-            v-model="newSceneName"
-            label="Scene Name"
-            variant="outlined"
-            density="comfortable"
-            autofocus
-            @keydown.enter.prevent="confirmCreate"
-          />
-        </v-card-text>
-        <v-card-actions>
-          <v-spacer />
-          <v-btn variant="text" @click="cancelCreate">Cancel</v-btn>
-          <v-btn color="primary" variant="flat" @click="confirmCreate">Create</v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
 
     <v-dialog v-model="deleteDialogOpen" max-width="380">
       <v-card>

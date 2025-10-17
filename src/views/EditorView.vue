@@ -7,6 +7,7 @@ import ProjectPanel from '@/components/layout/ProjectPanel.vue'
 import SceneViewport, { type SceneViewportHandle } from '@/components/editor/SceneViewport.vue'
 import MenuBar from './MenuBar.vue'
 import SceneManagerDialog from '@/components/layout/SceneManagerDialog.vue'
+import NewSceneDialog from '@/components/layout/NewSceneDialog.vue'
 import { useSceneStore, type EditorPanel } from '@/stores/sceneStore'
 import type { EditorTool } from '@/types/editor-tool'
 import type { SceneCameraState } from '@/types/scene-camera-state'
@@ -31,6 +32,7 @@ const {
 const isSceneManagerOpen = ref(false)
 const isExporting = ref(false)
 const viewportRef = ref<SceneViewportHandle | null>(null)
+const isNewSceneDialogOpen = ref(false)
 
 
 const hierarchyOpen = computed({
@@ -84,8 +86,15 @@ function reopenPanel(panel: EditorPanel) {
   sceneStore.setPanelVisibility(panel, true)
 }
 
+function openNewSceneDialog(source: 'menu' | 'scene-manager') {
+  if (source === 'scene-manager') {
+    isSceneManagerOpen.value = false
+  }
+  isNewSceneDialogOpen.value = true
+}
+
 function handleNewAction() {
-  sceneStore.createScene('Untitled Scene')
+  openNewSceneDialog('menu')
 }
 
 function handleOpenAction() {
@@ -229,7 +238,11 @@ async function handleAction(action: string) {
 }
 function handleCreateScene(name: string) {
   sceneStore.createScene(name)
-  isSceneManagerOpen.value = false
+  isNewSceneDialogOpen.value = false
+}
+
+function handleSceneManagerCreateRequest() {
+  openNewSceneDialog('scene-manager')
 }
 
 async function handleSelectScene(sceneId: string) {
@@ -407,10 +420,14 @@ onBeforeUnmount(() => {
       v-model="isSceneManagerOpen"
       :scenes="sceneSummaries"
       :current-scene-id="currentSceneId"
-      @create="handleCreateScene"
       @select="handleSelectScene"
       @delete="handleDeleteScene"
       @rename="handleRenameScene"
+      @request-new="handleSceneManagerCreateRequest"
+    />
+    <NewSceneDialog
+      v-model="isNewSceneDialogOpen"
+      @confirm="handleCreateScene"
     />
   </div>
 </template>

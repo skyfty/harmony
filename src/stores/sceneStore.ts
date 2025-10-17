@@ -447,6 +447,19 @@ function cloneNode(node: SceneNode): SceneNode {
   }
 }
 
+function cloneNodeWithFreshIds(node: SceneNode): SceneNode {
+  const cloned = cloneNode(node)
+  cloned.id = crypto.randomUUID()
+  if (cloned.children?.length) {
+    cloned.children = cloned.children.map((child) => cloneNodeWithFreshIds(child))
+  }
+  return cloned
+}
+
+function createDefaultSceneNodes(): SceneNode[] {
+  return initialNodes.map((node) => cloneNodeWithFreshIds(node))
+}
+
 function cloneSceneNodes(nodes: SceneNode[]): SceneNode[] {
   return nodes.map(cloneNode)
 }
@@ -2399,10 +2412,18 @@ export const useSceneStore = defineStore('scene', {
     createScene(name = 'Untitled Scene', thumbnail?: string | null) {
       commitSceneSnapshot(this)
       const displayName = name.trim() || 'Untitled Scene'
+      const baseNodes = createDefaultSceneNodes()
+      const baseAssetCatalog = cloneAssetCatalog(initialAssetCatalog)
+      const baseAssetIndex = cloneAssetIndex(initialAssetIndex)
       const scene = createSceneDocument(displayName, {
         thumbnail: thumbnail ?? null,
         resourceProviderId: this.resourceProviderId,
         viewportSettings: this.viewportSettings,
+        nodes: baseNodes,
+        selectedNodeId: baseNodes[0]?.id ?? null,
+        assetCatalog: baseAssetCatalog,
+        assetIndex: baseAssetIndex,
+        packageAssetMap: {},
       })
       this.scenes = [...this.scenes, scene]
       this.currentSceneId = scene.id
