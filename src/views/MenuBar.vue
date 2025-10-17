@@ -61,55 +61,10 @@ function handleMenuAction(action: string) {
                     </template>
                   </v-list-item>
                   <v-divider />
-                  <v-menu
-                    location="end"
-                    offset="8"
-                    transition="slide-x-transition"
-                  >
-                    <template #activator="{ props }">
-                      <v-list-item
-                        class="menu-list-item has-children"
-                        v-bind="props"
-                      >
-                        Export
-                        <template #append>
-                          <v-icon size="16">mdi-chevron-right</v-icon>
-                        </template>
-                      </v-list-item>
-                    </template>
-                    <v-list class="menu-dropdown menu-submenu">
-                      <v-list-item
-                        class="menu-list-item"
-                        @click="handleMenuAction('Export:PLY')"
-                      >
-                        PLY
-                      </v-list-item>
-                      <v-list-item
-                        class="menu-list-item"
-                        @click="handleMenuAction('Export:OBJ')"
-                      >
-                        OBJ
-                      </v-list-item>
-                      <v-list-item
-                        class="menu-list-item"
-                        @click="handleMenuAction('Export:STL')"
-                      >
-                        STL
-                      </v-list-item>
-                      <v-list-item
-                        class="menu-list-item"
-                        @click="handleMenuAction('Export:GLB')"
-                      >
-                        GLB
-                      </v-list-item>
-                      <v-list-item
-                        class="menu-list-item"
-                        @click="handleMenuAction('Export:GLTF')"
-                      >
-                        GLTF
-                      </v-list-item>
-                    </v-list>
-                  </v-menu>
+                  <v-list-item @click="handleMenuAction('Export:GLB')" class="menu-list-item">
+                    Export
+                  </v-list-item>
+       
                 </v-list>
                 </v-menu>
                 <v-icon size="18" class="ml-1">mdi-menu-down</v-icon>
