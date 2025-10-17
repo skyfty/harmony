@@ -471,14 +471,17 @@ function formatDateTime(value: string) {
   padding: 16px;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  justify-content: center;
 }
 
 .scene-preview-card {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  height: 100%;
+  width: min(520px, 100%);
+  height: 420px;
+  margin: 0 auto;
+  flex: none;
 }
 
 .scene-preview-meta {
@@ -527,8 +530,9 @@ function formatDateTime(value: string) {
   display: flex;
   align-items: center;
   justify-content: center;
-  max-height: clamp(220px, 45vh, 360px);
   width: 100%;
+  max-height: 100%;
+  min-height: 0;
 }
 
 .scene-preview-media :deep(img) {
