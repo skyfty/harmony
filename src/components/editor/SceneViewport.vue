@@ -81,7 +81,6 @@ const SKY_FALLBACK_LIGHT_DISTANCE = 75
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
 const CLICK_DRAG_THRESHOLD_PX = 5
-const SELECT_ROTATE_STEP_RAD = THREE.MathUtils.degToRad(15)
 const rootGroup = new THREE.Group()
 const objectMap = new Map<string, THREE.Object3D>()
 type LightHelperObject = THREE.Object3D & { dispose?: () => void; update?: () => void }
@@ -114,6 +113,7 @@ const CAMERA_DISTANCE_EPSILON = 1e-3
 const ORTHO_FRUSTUM_SIZE = 20
 const DROP_TO_GROUND_EPSILON = 1e-4
 const ALIGN_DELTA_EPSILON = 1e-6
+const CAMERA_RECENTER_DURATION_MS = 320
 
 const isDragHovering = ref(false)
 const gridVisible = computed(() => sceneStore.viewportSettings.showGrid)
@@ -132,6 +132,17 @@ const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((too
 let activeCameraMode: CameraProjectionMode = cameraProjectionMode.value
 
 let pointerTrackingState: PointerTrackingState | null = null
+
+type CameraTransitionState = {
+  startPosition: THREE.Vector3
+  startTarget: THREE.Vector3
+  endPosition: THREE.Vector3
+  endTarget: THREE.Vector3
+  startTime: number
+  duration: number
+}
+
+let cameraTransitionState: CameraTransitionState | null = null
 
 let transformGroupState: TransformGroupState | null = null
 let pendingSkyboxSettings: SceneSkyboxSettings | null = null
@@ -240,48 +251,6 @@ function projectPointerToPlane(event: PointerEvent, plane: THREE.Plane): THREE.V
     return intersectionPoint
   }
   return null
-}
-
-function rotateSelectedNodeClockwise(nodeId: string) {
-  const object = objectMap.get(nodeId)
-  if (!object) {
-    return
-  }
-
-  object.rotation.y -= SELECT_ROTATE_STEP_RAD
-  object.updateMatrixWorld(true)
-  const updates: TransformUpdatePayload[] = [
-    {
-      id: nodeId,
-      position: toVector3Like(object.position),
-      rotation: toEulerLike(object.rotation),
-      scale: toVector3Like(object.scale),
-    },
-  ]
-
-  const companionIds = sceneStore.selectedNodeIds.filter((id) => id !== nodeId && !sceneStore.isNodeSelectionLocked(id))
-  companionIds.forEach((id) => {
-    const companion = objectMap.get(id)
-    if (!companion) {
-      return
-    }
-    companion.rotation.y -= SELECT_ROTATE_STEP_RAD
-    companion.updateMatrixWorld(true)
-    updates.push({
-      id,
-      position: toVector3Like(companion.position),
-      rotation: toEulerLike(companion.rotation),
-      scale: toVector3Like(companion.scale),
-    })
-  })
-
-  updateSelectionBox(object)
-  updateGridHighlightFromObject(object)
-  updateSelectionHighlights()
-
-  emit('updateNodeTransform', updates)
-
-  scheduleThumbnailCapture()
 }
 
 function dropSelectionToGround() {
@@ -515,6 +484,120 @@ function handleViewportContextMenu(event: MouseEvent) {
   event.preventDefault()
 }
 
+function easeInOutCubic(t: number): number {
+  if (t <= 0) return 0
+  if (t >= 1) return 1
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
+}
+
+function startCameraTransition(targetPosition: THREE.Vector3, targetLookAt: THREE.Vector3, duration = CAMERA_RECENTER_DURATION_MS) {
+  if (!camera || !orbitControls) {
+    return
+  }
+
+  const startPosition = camera.position.clone()
+  const startTarget = orbitControls.target.clone()
+  const endPosition = targetPosition.clone()
+  const endTarget = targetLookAt.clone()
+  const positionDeltaSq = startPosition.distanceToSquared(endPosition)
+  const targetDeltaSq = startTarget.distanceToSquared(endTarget)
+  const effectiveDuration = duration <= 0 ? 0 : Math.max(duration, 0)
+
+  if (positionDeltaSq < 1e-6 && targetDeltaSq < 1e-6) {
+    cameraTransitionState = null
+    const previousApplying = isApplyingCameraState
+    if (!previousApplying) {
+      isApplyingCameraState = true
+    }
+    camera.position.copy(endPosition)
+    orbitControls.target.copy(endTarget)
+    orbitControls.update()
+    if (!previousApplying) {
+      isApplyingCameraState = false
+    }
+
+    if (perspectiveCamera && camera !== perspectiveCamera) {
+      perspectiveCamera.position.copy(camera.position)
+      perspectiveCamera.quaternion.copy(camera.quaternion)
+    }
+
+    clampCameraZoom()
+    clampCameraAboveGround()
+
+    const snapshot = buildCameraState()
+    if (snapshot) {
+      emit('updateCamera', snapshot)
+    }
+
+    scheduleThumbnailCapture()
+    return
+  }
+
+  const transitionDuration = effectiveDuration === 0 ? CAMERA_RECENTER_DURATION_MS : effectiveDuration
+
+  cameraTransitionState = {
+    startPosition,
+    startTarget,
+    endPosition,
+    endTarget,
+    startTime: performance.now(),
+    duration: transitionDuration,
+  }
+
+  scheduleThumbnailCapture()
+}
+
+function recenterCameraOnPointer(event: MouseEvent) {
+  if (!camera || !orbitControls || !canvasRef.value) {
+    return
+  }
+
+  if (transformControls?.dragging) {
+    return
+  }
+
+  const rect = canvasRef.value.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) {
+    return
+  }
+
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  raycaster.setFromCamera(pointer, camera)
+
+  const clipBasedDistance = THREE.MathUtils.clamp((camera.near + camera.far) * 0.05, MIN_CAMERA_DISTANCE, MAX_CAMERA_DISTANCE)
+
+  const intersections = raycaster.intersectObjects(rootGroup.children, true)
+  let targetResolved = false
+  if (intersections.length > 0) {
+    const intersection = intersections[0]
+    if (intersection?.point) {
+      cameraFocusTargetHelper.copy(intersection.point)
+      targetResolved = true
+    }
+  }
+
+  if (!targetResolved) {
+    if (raycaster.ray.intersectPlane(groundPlane, cameraFocusTargetHelper)) {
+      targetResolved = true
+    } else {
+      cameraFocusTargetHelper.copy(raycaster.ray.origin).addScaledVector(raycaster.ray.direction, clipBasedDistance * 2)
+      targetResolved = true
+    }
+  }
+
+  cameraFocusDirectionHelper.copy(raycaster.ray.direction).normalize()
+  cameraFocusPositionHelper.copy(cameraFocusTargetHelper).addScaledVector(cameraFocusDirectionHelper, -clipBasedDistance)
+
+  if (cameraFocusPositionHelper.y < MIN_CAMERA_HEIGHT) {
+    cameraFocusPositionHelper.y = MIN_CAMERA_HEIGHT
+  }
+
+  cameraFocusTargetHelper.y = Math.max(cameraFocusTargetHelper.y, MIN_TARGET_HEIGHT)
+
+  startCameraTransition(cameraFocusPositionHelper, cameraFocusTargetHelper)
+}
+
 const overlayContainerRef = ref<HTMLDivElement | null>(null)
 const placeholderOverlays = reactive<Record<string, PlaceholderOverlayState>>({})
 const placeholderOverlayList = computed(() => Object.values(placeholderOverlays))
@@ -544,6 +627,11 @@ const alignReferenceWorldPositionHelper = new THREE.Vector3()
 const alignDeltaHelper = new THREE.Vector3()
 const alignWorldPositionHelper = new THREE.Vector3()
 const alignLocalPositionHelper = new THREE.Vector3()
+const cameraFocusTargetHelper = new THREE.Vector3()
+const cameraFocusDirectionHelper = new THREE.Vector3()
+const cameraFocusPositionHelper = new THREE.Vector3()
+const cameraTransitionCurrentPosition = new THREE.Vector3()
+const cameraTransitionCurrentTarget = new THREE.Vector3()
 
 function buildTransformGroupState(primaryId: string | null): TransformGroupState | null {
   const selectedIds = sceneStore.selectedNodeIds.filter((id) => !sceneStore.isNodeSelectionLocked(id))
@@ -1429,6 +1517,8 @@ function buildCameraState(): SceneCameraState | null {
 function applyCameraState(state: SceneCameraState | null | undefined) {
   if (!state || !orbitControls) return
 
+  cameraTransitionState = null
+
   if (perspectiveCamera) {
     perspectiveCamera.position.set(state.position.x, state.position.y, state.position.z)
     if (perspectiveCamera.position.y < MIN_CAMERA_HEIGHT) {
@@ -1824,7 +1914,60 @@ function animate() {
 
   requestAnimationFrame(animate)
 
-  if (orbitControls) {
+  let controlsUpdated = false
+
+  if (cameraTransitionState && orbitControls) {
+    const { startTime, duration, startPosition, startTarget, endPosition, endTarget } = cameraTransitionState
+    const elapsed = Math.max(performance.now() - startTime, 0)
+    const progress = duration === 0 ? 1 : Math.min(elapsed / duration, 1)
+    const eased = easeInOutCubic(progress)
+
+    cameraTransitionCurrentPosition.copy(startPosition).lerp(endPosition, eased)
+    cameraTransitionCurrentTarget.copy(startTarget).lerp(endTarget, eased)
+
+    const previousApplying = isApplyingCameraState
+    if (!previousApplying) {
+      isApplyingCameraState = true
+    }
+
+    camera.position.copy(cameraTransitionCurrentPosition)
+    orbitControls.target.copy(cameraTransitionCurrentTarget)
+    orbitControls.update()
+
+    if (!previousApplying) {
+      isApplyingCameraState = false
+    }
+
+    controlsUpdated = true
+
+    if (perspectiveCamera && camera !== perspectiveCamera) {
+      perspectiveCamera.position.copy(cameraTransitionCurrentPosition)
+      perspectiveCamera.quaternion.copy(camera.quaternion)
+    }
+
+    const snapshot = buildCameraState()
+    if (snapshot) {
+      emit('updateCamera', snapshot)
+    }
+
+    if (progress >= 1) {
+      cameraTransitionState = null
+      const zoomAdjusted = clampCameraZoom()
+      const heightAdjusted = clampCameraAboveGround()
+      if (perspectiveCamera && camera !== perspectiveCamera) {
+        perspectiveCamera.position.copy(camera.position)
+        perspectiveCamera.quaternion.copy(camera.quaternion)
+      }
+      if (zoomAdjusted || heightAdjusted) {
+        const finalSnapshot = buildCameraState()
+        if (finalSnapshot) {
+          emit('updateCamera', finalSnapshot)
+        }
+      }
+    }
+  }
+
+  if (orbitControls && !controlsUpdated) {
     orbitControls.update()
   }
 
@@ -2334,18 +2477,13 @@ function handlePointerDown(event: PointerEvent) {
     return
   }
 
-  const hit = pickNodeAtPointer(event)
-  const activeTransformAxis = props.activeTool === 'select' ? null : (transformControls?.axis ?? null)
-
   if (button === 2) {
-    if (props.activeTool === 'select' && hit?.nodeId === props.selectedNodeId) {
-      event.preventDefault()
-      event.stopPropagation()
-      rotateSelectedNodeClockwise(hit.nodeId)
-    }
-    pointerTrackingState = null
-    return
+    event.preventDefault()
+    event.stopPropagation()
   }
+
+  const hit = button === 0 ? pickNodeAtPointer(event) : null
+  const activeTransformAxis = button === 0 && props.activeTool !== 'select' ? (transformControls?.axis ?? null) : null
 
   try {
     canvasRef.value.setPointerCapture(event.pointerId)
@@ -2353,7 +2491,7 @@ function handlePointerDown(event: PointerEvent) {
     /* noop */
   }
 
-  const selectionDrag = props.activeTool === 'select' && hit && hit.nodeId === props.selectedNodeId
+  const selectionDrag = button === 0 && props.activeTool === 'select' && hit && hit.nodeId === props.selectedNodeId
     ? createSelectionDragState(hit.nodeId, hit.object, hit.point)
     : null
 
@@ -2386,16 +2524,24 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
 
+  const dx = event.clientX - pointerTrackingState.startX
+  const dy = event.clientY - pointerTrackingState.startY
+  const distance = Math.hypot(dx, dy)
+
+  if (pointerTrackingState.button === 2) {
+    if (!pointerTrackingState.moved && distance >= CLICK_DRAG_THRESHOLD_PX) {
+      pointerTrackingState.moved = true
+    }
+    return
+  }
+
   if (pointerTrackingState.button !== 0) {
     return
   }
 
-  const dx = event.clientX - pointerTrackingState.startX
-  const dy = event.clientY - pointerTrackingState.startY
   const drag = pointerTrackingState.selectionDrag
 
   if (drag) {
-    const distance = Math.hypot(dx, dy)
     if (!drag.hasDragged) {
       if (distance < CLICK_DRAG_THRESHOLD_PX) {
         return
@@ -2412,7 +2558,7 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
 
-  if (!pointerTrackingState.moved && Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
+  if (!pointerTrackingState.moved && distance >= CLICK_DRAG_THRESHOLD_PX) {
     pointerTrackingState.moved = true
   }
 }
@@ -2443,6 +2589,15 @@ function handlePointerUp(event: PointerEvent) {
       scheduleThumbnailCapture()
       return
     }
+  }
+
+  if (trackingState.button === 2) {
+    if (!trackingState.moved) {
+      event.preventDefault()
+      event.stopPropagation()
+      recenterCameraOnPointer(event)
+    }
+    return
   }
 
   if (trackingState.button !== 0) {
