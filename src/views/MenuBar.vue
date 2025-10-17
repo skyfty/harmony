@@ -1,16 +1,16 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import AddNodeMenu from '@/components/common/AddNodeMenu.vue'
 
 const quickActions = [
-  { icon: 'mdi-content-save-outline', label: 'Save' },
-  { icon: 'mdi-export-variant', label: 'Export' },
   { icon: 'mdi-play-circle-outline', label: 'Preview' },
 ]
 
 const sceneStore = useSceneStore()
-const { canUndo, canRedo } = storeToRefs(sceneStore)
+const { canUndo, canRedo, currentScene } = storeToRefs(sceneStore)
+const sceneName = computed(() => currentScene.value?.name ?? 'Untitled Scene')
 
 const emit = defineEmits<{
   (event: 'menu-action', action: string): void
@@ -221,6 +221,10 @@ function handleMenuAction(action: string) {
         
         </div>
       </div>
+      <div class="menu-center">
+  <v-icon class="scene-icon" size="18">mdi-shape-outline</v-icon>
+        <span class="scene-title">{{ sceneName }}</span>
+      </div>
       <div class="menu-right">
         <v-btn
           v-for="action in quickActions"
@@ -244,15 +248,16 @@ function handleMenuAction(action: string) {
 
 .menu-bar {
   grid-area: menu;
-  display: flex;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
-  justify-content: space-between;
   padding: 0 12px;
   background: rgba(16, 19, 24, 0.82);
   border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: 12px;
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(12px);
+  column-gap: 16px;
 }
 
 .menu-left {
@@ -328,6 +333,24 @@ function handleMenuAction(action: string) {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.menu-center {
+  justify-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #f4f6fb;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.scene-icon {
+  color: rgba(244, 247, 255, 0.72);
+}
+
+.scene-title {
+  white-space: nowrap;
 }
 
 .action-button {
