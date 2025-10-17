@@ -56,6 +56,17 @@ function createVector(x: number, y: number, z: number): Vector3Like {
   return { x, y, z }
 }
 
+function computeForwardVector(position: Vector3Like, target: Vector3Like): Vector3Like {
+  const dx = target.x - position.x
+  const dy = target.y - position.y
+  const dz = target.z - position.z
+  const length = Math.sqrt(dx * dx + dy * dy + dz * dz)
+  if (!Number.isFinite(length) || length <= 1e-6) {
+    return createVector(0, 0, -1)
+  }
+  return createVector(dx / length, dy / length, dz / length)
+}
+
 type LightNodeExtras = Partial<Omit<LightNodeProperties, 'type' | 'color' | 'intensity' | 'target'>>
 
 const groundAsset: ProjectAsset = {
@@ -190,11 +201,16 @@ function stopPlaceholderWatcher(nodeId: string) {
   }
 }
 
-const defaultCameraState: SceneCameraState = {
-  position: createVector(30, 20, 30),
-  target: createVector(0, 5, 0),
-  fov: 60,
-}
+const defaultCameraState: SceneCameraState = (() => {
+  const position = createVector(30, 20, 30)
+  const target = createVector(0, 5, 0)
+  return {
+    position,
+    target,
+    fov: 60,
+    forward: computeForwardVector(position, target),
+  }
+})()
 
 const defaultPanelVisibility: PanelVisibilityState = {
   hierarchy: true,
@@ -442,10 +458,14 @@ function computeWorldMatrixForNode(nodes: SceneNode[], targetId: string): Matrix
 }
 
 function cloneCameraState(camera: SceneCameraState): SceneCameraState {
+  const position = cloneVector(camera.position)
+  const target = cloneVector(camera.target)
+  const forwardSource = camera.forward ?? computeForwardVector(camera.position, camera.target)
   return {
-    position: cloneVector(camera.position),
-    target: cloneVector(camera.target),
+    position,
+    target,
     fov: camera.fov,
+    forward: cloneVector(forwardSource),
   }
 }
 
@@ -633,11 +653,17 @@ function ensureCameraAndPanelState(state: ScenePersistedState): ScenePersistedSt
 
   return {
     ...state,
-    camera: {
-      position: cloneVector(cameraState?.position ?? defaultCameraState.position),
-      target: cloneVector(cameraState?.target ?? defaultCameraState.target),
-      fov: cameraState?.fov ?? defaultCameraState.fov,
-    },
+    camera: (() => {
+      const position = cloneVector(cameraState?.position ?? defaultCameraState.position)
+      const target = cloneVector(cameraState?.target ?? defaultCameraState.target)
+      const forward = cameraState?.forward ? cloneVector(cameraState.forward) : computeForwardVector(position, target)
+      return {
+        position,
+        target,
+        fov: cameraState?.fov ?? defaultCameraState.fov,
+        forward,
+      }
+    })(),
     panelVisibility: {
       hierarchy: panelState?.hierarchy ?? defaultPanelVisibility.hierarchy,
       inspector: panelState?.inspector ?? defaultPanelVisibility.inspector,
@@ -686,10 +712,14 @@ function ensureSceneCollection(state: ScenePersistedState): ScenePersistedState 
   const rawIndex = (state.assetIndex as Record<string, AssetIndexEntry> | undefined) ?? null
   const rawPackageMap = (state.packageAssetMap as Record<string, string> | undefined) ?? null
 
+  const cameraPosition = cloneVector(cameraState?.position ?? defaultCameraState.position)
+  const cameraTarget = cloneVector(cameraState?.target ?? defaultCameraState.target)
+  const cameraForward = cameraState?.forward ? cloneVector(cameraState.forward) : computeForwardVector(cameraPosition, cameraTarget)
   const camera: SceneCameraState = {
-    position: cloneVector(cameraState?.position ?? defaultCameraState.position),
-    target: cloneVector(cameraState?.target ?? defaultCameraState.target),
+    position: cameraPosition,
+    target: cameraTarget,
     fov: cameraState?.fov ?? defaultCameraState.fov,
+    forward: cameraForward,
   }
   const viewportSettings = cloneViewportSettings(state.viewportSettings as Partial<SceneViewportSettings> | undefined)
 

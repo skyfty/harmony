@@ -1151,22 +1151,39 @@ function orbitCameraHorizontally(direction: number) {
     return
   }
 
-  const ORBIT_ANGLE = THREE.MathUtils.degToRad(15) // 15 degrees per step
-  const target = orbitControls.target.clone()
-  const offset = camera.position.clone().sub(target)
+  const ORBIT_ANGLE = THREE.MathUtils.degToRad(2) // 每次旋转2度
   
-  // Calculate horizontal rotation around Y axis
-  const angle = direction * ORBIT_ANGLE
-  const rotationMatrix = new THREE.Matrix4().makeRotationY(angle)
-  offset.applyMatrix4(rotationMatrix)
+  // 定义旋转中心为场景中心，Y轴坐标为0
+  const rotationCenter = new THREE.Vector3(0, 0, 0)
   
-  // Update camera position
-  camera.position.copy(target).add(offset)
+  // 计算相机到旋转中心的向量
+  const cameraToCenter = new THREE.Vector3().subVectors(camera.position, rotationCenter)
   
-  // Update orbit controls
+  // 转换为球坐标
+  const spherical = new THREE.Spherical()
+  spherical.setFromVector3(cameraToCenter)
+  
+  // 调整方位角（水平旋转）
+  spherical.theta += direction * ORBIT_ANGLE
+  
+  // 将球坐标转换回直角坐标
+  const newCameraToCenter = new THREE.Vector3()
+  newCameraToCenter.setFromSpherical(spherical)
+  
+  // 计算新的相机位置
+  const newCameraPosition = new THREE.Vector3().addVectors(rotationCenter, newCameraToCenter)
+  
+  // 更新相机位置
+  camera.position.copy(newCameraPosition)
+  
+  // 确保相机看向旋转中心
+  camera.lookAt(rotationCenter)
+  
+  // 更新orbitControls的目标点为旋转中心
+  orbitControls.target.copy(rotationCenter)
   orbitControls.update()
   
-  // Update camera state
+  // 更新相机状态
   const snapshot = buildCameraState()
   if (snapshot) {
     emit('updateCamera', snapshot)
@@ -1370,10 +1387,14 @@ function buildCameraState(): SceneCameraState | null {
   const fov = camera instanceof THREE.PerspectiveCamera
     ? camera.fov
     : perspectiveCamera?.fov ?? DEFAULT_PERSPECTIVE_FOV
+  const forward = new THREE.Vector3()
+  camera.getWorldDirection(forward)
+  forward.normalize()
   return {
     position: toVector3Like(camera.position),
     target: toVector3Like(orbitControls.target),
     fov,
+    forward: toVector3Like(forward),
   }
 }
 
