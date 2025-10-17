@@ -56,6 +56,19 @@ const layoutClasses = computed(() => ({
   'is-project-closed': !panelVisibility.value.project,
 }))
 
+const layoutStyles = computed(() => ({
+  gridTemplateColumns: [
+    panelVisibility.value.hierarchy ? 'minmax(0, 280px)' : '0',
+    'minmax(0, 1fr)',
+    panelVisibility.value.inspector ? 'minmax(0, 320px)' : '0',
+  ].join(' '),
+  gridTemplateRows: [
+    'auto',
+    'minmax(0, 1fr)',
+    panelVisibility.value.project ? 'minmax(0, 260px)' : '0',
+  ].join(' '),
+}))
+
 const reopenButtons = computed(() => ({
   showHierarchy: !panelVisibility.value.hierarchy,
   showInspector: !panelVisibility.value.inspector,
@@ -344,7 +357,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="editor-view">
-    <div class="editor-layout" :class="layoutClasses">
+  <div class="editor-layout" :class="layoutClasses" :style="layoutStyles">
       <MenuBar 
         @menu-action="handleAction"
       />
