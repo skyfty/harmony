@@ -1329,10 +1329,19 @@ export const useSceneStore = defineStore('scene', {
     setActiveTool(tool: EditorTool) {
       this.activeTool = tool
     },
-    setSelection(ids: string[], options: { commit?: boolean } = {}) {
+    setSelection(ids: string[], options: { commit?: boolean; primaryId?: string | null } = {}) {
       const commitChange = options.commit ?? true
       const normalized = normalizeSelectionIds(this.nodes, ids)
-      const nextPrimary = normalized[normalized.length - 1] ?? null
+      const requestedPrimary = options.primaryId ?? null
+      const previousPrimary = this.selectedNodeId ?? null
+      let nextPrimary: string | null = null
+      if (requestedPrimary && normalized.includes(requestedPrimary)) {
+        nextPrimary = requestedPrimary
+      } else if (previousPrimary && normalized.includes(previousPrimary)) {
+        nextPrimary = previousPrimary
+      } else {
+        nextPrimary = normalized[normalized.length - 1] ?? null
+      }
       const primaryChanged = this.selectedNodeId !== nextPrimary
       const selectionChanged = !areSelectionsEqual(normalized, this.selectedNodeIds)
       if (!primaryChanged && !selectionChanged) {
@@ -1346,7 +1355,7 @@ export const useSceneStore = defineStore('scene', {
       return true
     },
     selectNode(id: string | null) {
-      this.setSelection(id ? [id] : [], { commit: true })
+      this.setSelection(id ? [id] : [], { commit: true, primaryId: id })
     },
     selectAllNodes() {
       const allIds = flattenNodeIds(this.nodes)

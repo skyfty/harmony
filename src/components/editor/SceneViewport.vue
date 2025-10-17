@@ -28,13 +28,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'changeTool', tool: EditorTool): void
-  (event: 'selectNode', nodeId: string | null): void
-  (event: 'updateNodeTransform', payload: {
-    id: string
-    position: Vector3Like
-    rotation: Vector3Like
-    scale: Vector3Like
-  }): void
+  (event: 'selectNode', payload: { primaryId: string | null; selectedIds: string[] }): void
+  (event: 'updateNodeTransform', payload: TransformUpdatePayload | TransformUpdatePayload[]): void
   (event: 'updateCamera', payload: SceneCameraState): void
 }>()
 
@@ -65,6 +60,7 @@ let resizeObserver: ResizeObserver | null = null
 let selectionBoxHelper: THREE.Box3Helper | null = null
 let selectionTrackedObject: THREE.Object3D | null = null
 let gridHighlight: THREE.Group | null = null
+const selectionHighlights = new Map<string, THREE.Group>()
 
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
@@ -108,17 +104,19 @@ const axesVisible = computed(() => sceneStore.viewportSettings.showAxes)
 const cameraProjectionMode = computed(() => sceneStore.viewportSettings.cameraProjection)
 let activeCameraMode: CameraProjectionMode = cameraProjectionMode.value
 
-interface PointerTrackingState {
-  pointerId: number
-  startX: number
-  startY: number
-  moved: boolean
-  button: number
-  hitNodeId: string | null
-  selectionDrag: SelectionDragState | null
+interface NodeHitResult {
+  nodeId: string
+  object: THREE.Object3D
+  point: THREE.Vector3
 }
 
-let pointerTrackingState: PointerTrackingState | null = null
+interface SelectionDragCompanion {
+  nodeId: string
+  object: THREE.Object3D
+  parent: THREE.Object3D | null
+  initialLocalPosition: THREE.Vector3
+  initialWorldPosition: THREE.Vector3
+}
 
 interface SelectionDragState {
   nodeId: string
@@ -126,10 +124,45 @@ interface SelectionDragState {
   plane: THREE.Plane
   pointerOffset: THREE.Vector3
   initialLocalPosition: THREE.Vector3
+  initialWorldPosition: THREE.Vector3
   initialRotation: THREE.Euler
   parent: THREE.Object3D | null
+  companions: SelectionDragCompanion[]
   hasDragged: boolean
 }
+
+interface PointerTrackingState {
+  pointerId: number
+  startX: number
+  startY: number
+  moved: boolean
+  button: number
+  hitResult: NodeHitResult | null
+  selectionDrag: SelectionDragState | null
+  ctrlKey: boolean
+  metaKey: boolean
+  shiftKey: boolean
+}
+
+let pointerTrackingState: PointerTrackingState | null = null
+
+interface TransformGroupEntry {
+  nodeId: string
+  object: THREE.Object3D
+  parent: THREE.Object3D | null
+  initialPosition: THREE.Vector3
+  initialQuaternion: THREE.Quaternion
+  initialScale: THREE.Vector3
+  initialWorldPosition: THREE.Vector3
+  initialWorldQuaternion: THREE.Quaternion
+}
+
+interface TransformGroupState {
+  primaryId: string | null
+  entries: Map<string, TransformGroupEntry>
+}
+
+let transformGroupState: TransformGroupState | null = null
 
 function resolveNodeIdFromObject(object: THREE.Object3D | null): string | null {
   let current: THREE.Object3D | null = object
@@ -188,14 +221,34 @@ function createSelectionDragState(nodeId: string, object: THREE.Object3D, hitPoi
   const worldPosition = new THREE.Vector3()
   object.getWorldPosition(worldPosition)
   const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 1, 0), worldPosition)
+  const companions: SelectionDragCompanion[] = []
+  const selectedIds = sceneStore.selectedNodeIds.filter((id) => id !== nodeId && !sceneStore.isNodeSelectionLocked(id))
+  selectedIds.forEach((id) => {
+    const companionObject = objectMap.get(id)
+    if (!companionObject) {
+      return
+    }
+    companionObject.updateMatrixWorld(true)
+    const companionWorldPosition = new THREE.Vector3()
+    companionObject.getWorldPosition(companionWorldPosition)
+    companions.push({
+      nodeId: id,
+      object: companionObject,
+      parent: companionObject.parent ?? null,
+      initialLocalPosition: companionObject.position.clone(),
+      initialWorldPosition: companionWorldPosition,
+    })
+  })
   return {
     nodeId,
     object,
     plane,
     pointerOffset: hitPoint.clone().sub(worldPosition),
     initialLocalPosition: object.position.clone(),
+    initialWorldPosition: worldPosition.clone(),
     initialRotation: object.rotation.clone(),
     parent: object.parent ?? null,
+    companions,
     hasDragged: false,
   }
 }
@@ -228,15 +281,36 @@ function rotateSelectedNodeClockwise(nodeId: string) {
 
   object.rotation.y -= SELECT_ROTATE_STEP_RAD
   object.updateMatrixWorld(true)
+  const updates: TransformUpdatePayload[] = [
+    {
+      id: nodeId,
+      position: toVector3Like(object.position),
+      rotation: toEulerLike(object.rotation),
+      scale: toVector3Like(object.scale),
+    },
+  ]
+
+  const companionIds = sceneStore.selectedNodeIds.filter((id) => id !== nodeId && !sceneStore.isNodeSelectionLocked(id))
+  companionIds.forEach((id) => {
+    const companion = objectMap.get(id)
+    if (!companion) {
+      return
+    }
+    companion.rotation.y -= SELECT_ROTATE_STEP_RAD
+    companion.updateMatrixWorld(true)
+    updates.push({
+      id,
+      position: toVector3Like(companion.position),
+      rotation: toEulerLike(companion.rotation),
+      scale: toVector3Like(companion.scale),
+    })
+  })
+
   updateSelectionBox(object)
   updateGridHighlightFromObject(object)
+  updateSelectionHighlights()
 
-  emit('updateNodeTransform', {
-    id: nodeId,
-    position: toVector3Like(object.position),
-    rotation: toEulerLike(object.rotation),
-    scale: toVector3Like(object.scale),
-  })
+  emit('updateNodeTransform', updates)
 
   scheduleThumbnailCapture()
 }
@@ -308,6 +382,7 @@ function dropSelectionToGround() {
   updateSelectionBox(primaryObject)
   updateGridHighlightFromObject(primaryObject)
   updatePlaceholderOverlayPositions()
+  updateSelectionHighlights()
   scheduleThumbnailCapture()
 }
 
@@ -330,16 +405,37 @@ function updateSelectDragPosition(drag: SelectionDragState, event: PointerEvent)
   drag.object.updateMatrixWorld(true)
   drag.object.getWorldPosition(selectDragWorldPosition)
   drag.object.getWorldQuaternion(selectDragWorldQuaternion)
+  selectDragDelta.copy(selectDragWorldPosition).sub(drag.initialWorldPosition)
+
+  const updates: TransformUpdatePayload[] = [
+    {
+      id: drag.nodeId,
+      position: toVector3Like(drag.object.position),
+      rotation: toEulerLike(drag.object.rotation),
+      scale: toVector3Like(drag.object.scale),
+    },
+  ]
+
+  drag.companions.forEach((companion) => {
+    const companionWorldPosition = companion.initialWorldPosition.clone().add(selectDragDelta)
+    const localPosition = companionWorldPosition.clone()
+    if (companion.parent) {
+      companion.parent.worldToLocal(localPosition)
+    }
+    localPosition.y = companion.initialLocalPosition.y
+    companion.object.position.copy(localPosition)
+    companion.object.updateMatrixWorld(true)
+    updates.push({
+      id: companion.nodeId,
+      position: toVector3Like(companion.object.position),
+    })
+  })
 
   updateSelectionBox(drag.object)
   updateGridHighlightFromObject(drag.object)
+  updateSelectionHighlights()
 
-  emit('updateNodeTransform', {
-    id: drag.nodeId,
-    position: toVector3Like(drag.object.position),
-    rotation: toEulerLike(drag.object.rotation),
-    scale: toVector3Like(drag.object.scale),
-  })
+  emit('updateNodeTransform', updates)
 
   return true
 }
@@ -379,12 +475,67 @@ const overlayPositionHelper = new THREE.Vector3()
 const cameraOffsetHelper = new THREE.Vector3()
 const selectDragWorldPosition = new THREE.Vector3()
 const selectDragWorldQuaternion = new THREE.Quaternion()
+const selectDragDelta = new THREE.Vector3()
+const transformDeltaPosition = new THREE.Vector3()
+const transformWorldPositionBuffer = new THREE.Vector3()
+const transformLocalPositionHelper = new THREE.Vector3()
+const transformScaleFactor = new THREE.Vector3(1, 1, 1)
+const transformQuaternionDelta = new THREE.Quaternion()
+const transformQuaternionHelper = new THREE.Quaternion()
+const transformQuaternionInverseHelper = new THREE.Quaternion()
+const transformCurrentWorldPosition = new THREE.Vector3()
 const gridHighlightPositionHelper = new THREE.Vector3()
 const gridHighlightBoundingBox = new THREE.Box3()
 const gridHighlightSizeHelper = new THREE.Vector3()
 const dropBoundingBoxHelper = new THREE.Box3()
 const dropWorldPositionHelper = new THREE.Vector3()
 const dropLocalPositionHelper = new THREE.Vector3()
+const selectionHighlightPositionHelper = new THREE.Vector3()
+const selectionHighlightBoundingBox = new THREE.Box3()
+const selectionHighlightSizeHelper = new THREE.Vector3()
+
+function buildTransformGroupState(primaryId: string | null): TransformGroupState | null {
+  const selectedIds = sceneStore.selectedNodeIds.filter((id) => !sceneStore.isNodeSelectionLocked(id))
+  const relevantIds = new Set(selectedIds)
+  if (primaryId) {
+    relevantIds.add(primaryId)
+  }
+  if (relevantIds.size === 0) {
+    return null
+  }
+
+  const entries = new Map<string, TransformGroupEntry>()
+  relevantIds.forEach((id) => {
+    const object = objectMap.get(id)
+    if (!object) {
+      return
+    }
+    object.updateMatrixWorld(true)
+    const worldPosition = new THREE.Vector3()
+    object.getWorldPosition(worldPosition)
+    const worldQuaternion = new THREE.Quaternion()
+    object.getWorldQuaternion(worldQuaternion)
+    entries.set(id, {
+      nodeId: id,
+      object,
+      parent: object.parent ?? null,
+      initialPosition: object.position.clone(),
+      initialQuaternion: object.quaternion.clone(),
+      initialScale: object.scale.clone(),
+      initialWorldPosition: worldPosition,
+      initialWorldQuaternion: worldQuaternion,
+    })
+  })
+
+  if (!entries.size) {
+    return null
+  }
+
+  return {
+    primaryId,
+    entries,
+  }
+}
 
 const draggingChangedHandler = (event: unknown) => {
   const value = (event as { value?: boolean })?.value ?? false
@@ -403,13 +554,17 @@ const draggingChangedHandler = (event: unknown) => {
 
   if (!value) {
     sceneStore.endTransformInteraction()
+    transformGroupState = null
     updateGridHighlightFromObject(targetObject)
+    updateSelectionHighlights()
   } else {
     const nodeId = (transformControls?.object as THREE.Object3D | null)?.userData?.nodeId as string | undefined
     sceneStore.beginTransformInteraction(nodeId ?? null)
+    transformGroupState = buildTransformGroupState(nodeId ?? null)
     if (targetObject) {
       updateGridHighlightFromObject(targetObject)
     }
+    updateSelectionHighlights()
   }
 }
 
@@ -1355,6 +1510,7 @@ function disposeScene() {
   transformControls?.removeEventListener('objectChange', handleTransformChange)
   transformControls?.dispose()
   transformControls = null
+  transformGroupState = null
 
   clearLightHelpers()
 
@@ -1401,6 +1557,7 @@ function disposeScene() {
   disposeDragPreview()
   dragPreviewGroup.removeFromParent()
 
+  clearSelectionHighlights()
   scene = null
   camera = null
   perspectiveCamera = null
@@ -1492,6 +1649,159 @@ function createGridHighlight() {
   return group
 }
 
+function createSelectionIndicator(): THREE.Group {
+  const group = new THREE.Group()
+  group.name = 'SelectionIndicator'
+  group.visible = false
+  group.renderOrder = 2
+
+  const planeGeometry = new THREE.PlaneGeometry(1, 1, 1, 1)
+  const planeMaterial = new THREE.MeshPhysicalMaterial({
+    color: 0x82b1ff,
+    emissive: 0x1565c0,
+    emissiveIntensity: 0.3,
+    metalness: 0.25,
+    roughness: 0.55,
+    clearcoat: 0.2,
+    clearcoatRoughness: 0.4,
+    transparent: true,
+    opacity: 0.5,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    toneMapped: false,
+  })
+  planeMaterial.polygonOffset = true
+  planeMaterial.polygonOffsetFactor = 0.5
+  planeMaterial.polygonOffsetUnits = 0.5
+  const plane = new THREE.Mesh(planeGeometry, planeMaterial)
+  plane.name = 'SelectionIndicatorPlane'
+  plane.rotation.x = -Math.PI / 2
+  plane.receiveShadow = false
+  plane.castShadow = false
+  plane.renderOrder = 2
+  group.add(plane)
+
+  const outlineGeometry = new THREE.EdgesGeometry(new THREE.PlaneGeometry(1, 1))
+  const outlineMaterial = new THREE.LineBasicMaterial({
+    color: 0xbbdefb,
+    transparent: true,
+    opacity: 0.85,
+    depthWrite: false,
+    toneMapped: false,
+  })
+  outlineMaterial.polygonOffset = true
+  outlineMaterial.polygonOffsetFactor = 0.5
+  outlineMaterial.polygonOffsetUnits = 0.5
+  const outline = new THREE.LineSegments(outlineGeometry, outlineMaterial)
+  outline.name = 'SelectionIndicatorOutline'
+  outline.rotation.x = -Math.PI / 2
+  outline.renderOrder = 3
+  group.add(outline)
+
+  group.userData.plane = plane
+  group.userData.outline = outline
+  group.userData.lastDimensions = { width: 0, depth: 0 }
+
+  return group
+}
+
+function disposeSelectionIndicator(group: THREE.Group) {
+  group.removeFromParent()
+  const plane = group.userData.plane as THREE.Mesh | undefined
+  if (plane) {
+    plane.geometry.dispose()
+    const materials = Array.isArray(plane.material) ? plane.material : [plane.material]
+    materials.forEach((material) => material?.dispose?.())
+  }
+  const outline = group.userData.outline as THREE.LineSegments | undefined
+  if (outline) {
+    outline.geometry.dispose()
+    const materials = Array.isArray(outline.material) ? outline.material : [outline.material]
+    materials.forEach((material) => material?.dispose?.())
+  }
+}
+
+function ensureSelectionIndicator(nodeId: string): THREE.Group | null {
+  if (!scene) {
+    return null
+  }
+  let group = selectionHighlights.get(nodeId) ?? null
+  if (!group) {
+    group = createSelectionIndicator()
+    selectionHighlights.set(nodeId, group)
+  }
+  if (group.parent !== scene) {
+    scene.add(group)
+  }
+  return group
+}
+
+function updateSelectionIndicatorFromObject(group: THREE.Group, object: THREE.Object3D) {
+  object.updateMatrixWorld(true)
+  object.getWorldPosition(selectionHighlightPositionHelper)
+  selectionHighlightBoundingBox.setFromObject(object)
+  if (selectionHighlightBoundingBox.isEmpty()) {
+    selectionHighlightSizeHelper.setScalar(0)
+  } else {
+    selectionHighlightBoundingBox.getSize(selectionHighlightSizeHelper)
+  }
+
+  const width = Math.max(selectionHighlightSizeHelper.x + GRID_HIGHLIGHT_PADDING * 2, GRID_HIGHLIGHT_MIN_SIZE)
+  const depth = Math.max(selectionHighlightSizeHelper.z + GRID_HIGHLIGHT_PADDING * 2, GRID_HIGHLIGHT_MIN_SIZE)
+
+  group.position.set(selectionHighlightPositionHelper.x, GRID_HIGHLIGHT_HEIGHT, selectionHighlightPositionHelper.z)
+
+  const plane = group.userData.plane as THREE.Mesh | undefined
+  const outline = group.userData.outline as THREE.LineSegments | undefined
+  const lastDimensions = group.userData.lastDimensions as GridHighlightDimensions | undefined
+  if (!lastDimensions || Math.abs(lastDimensions.width - width) > 1e-3 || Math.abs(lastDimensions.depth - depth) > 1e-3) {
+    if (plane) {
+      plane.scale.set(width, depth, 1)
+    }
+    if (outline) {
+      outline.scale.set(width, depth, 1)
+    }
+    group.userData.lastDimensions = { width, depth }
+  }
+
+  group.visible = true
+}
+
+function updateSelectionHighlights() {
+  const selectedIds = sceneStore.selectedNodeIds.filter((id) => !!id && id !== props.selectedNodeId)
+  const selectedIdSet = new Set(selectedIds)
+
+  selectionHighlights.forEach((group, id) => {
+    if (!selectedIdSet.has(id)) {
+      group.visible = false
+    }
+  })
+
+  if (!scene) {
+    return
+  }
+
+  selectedIds.forEach((id) => {
+    const object = objectMap.get(id)
+    const group = ensureSelectionIndicator(id)
+    if (!group) {
+      return
+    }
+    if (!object) {
+      group.visible = false
+      return
+    }
+    updateSelectionIndicatorFromObject(group, object)
+  })
+}
+
+function clearSelectionHighlights() {
+  selectionHighlights.forEach((group) => {
+    disposeSelectionIndicator(group)
+  })
+  selectionHighlights.clear()
+}
+
 type GridHighlightDimensions = { width: number; depth: number }
 
 function updateGridHighlight(position: THREE.Vector3 | null, dimensions?: GridHighlightDimensions) {
@@ -1567,6 +1877,83 @@ function restoreGridHighlightForSelection() {
   updateGridHighlightFromObject(target)
 }
 
+function dedupeSelection(ids: string[]): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  ids.forEach((id) => {
+    if (!id || seen.has(id)) {
+      return
+    }
+    seen.add(id)
+    result.push(id)
+  })
+  return result
+}
+
+function selectionsAreEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) {
+    return false
+  }
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) {
+      return false
+    }
+  }
+  return true
+}
+
+function emitSelectionChange(nextSelection: string[]) {
+  const deduped = dedupeSelection(nextSelection)
+  const current = sceneStore.selectedNodeIds
+  if (selectionsAreEqual(deduped, current)) {
+    return
+  }
+  const desiredPrimary = props.selectedNodeId && deduped.includes(props.selectedNodeId)
+    ? props.selectedNodeId
+    : deduped[0] ?? null
+  emit('selectNode', {
+    primaryId: desiredPrimary,
+    selectedIds: deduped,
+  })
+}
+
+function handleClickSelection(event: PointerEvent, trackingState: PointerTrackingState) {
+  if (!scene) {
+    return
+  }
+
+  const hit = pickNodeAtPointer(event) ?? trackingState.hitResult
+  const isToggle = event.ctrlKey || event.metaKey || trackingState.ctrlKey || trackingState.metaKey
+  const isRange = event.shiftKey || trackingState.shiftKey
+  const currentSelection = sceneStore.selectedNodeIds
+
+  if (!hit) {
+    if (!isToggle && !isRange) {
+      emitSelectionChange([])
+    }
+    return
+  }
+
+  const nodeId = hit.nodeId
+  const alreadySelected = currentSelection.includes(nodeId)
+
+  if (isToggle || isRange) {
+    if (alreadySelected) {
+      emitSelectionChange(currentSelection.filter((id) => id !== nodeId))
+    } else {
+      emitSelectionChange([...currentSelection, nodeId])
+    }
+    return
+  }
+
+  if (currentSelection.length === 1 && alreadySelected) {
+    emitSelectionChange([])
+    return
+  }
+
+  emitSelectionChange([nodeId])
+}
+
 function handlePointerDown(event: PointerEvent) {
   if (!canvasRef.value || !camera || !scene) {
     pointerTrackingState = null
@@ -1621,8 +2008,11 @@ function handlePointerDown(event: PointerEvent) {
     startY: event.clientY,
     moved: false,
     button,
-    hitNodeId: hit?.nodeId ?? null,
+    hitResult: hit,
     selectionDrag,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
+    shiftKey: event.shiftKey,
   }
 }
 
@@ -1652,6 +2042,7 @@ function handlePointerMove(event: PointerEvent) {
       }
       drag.hasDragged = true
       pointerTrackingState.moved = true
+      sceneStore.beginTransformInteraction(drag.nodeId)
     }
 
     if (updateSelectDragPosition(drag, event)) {
@@ -1682,14 +2073,16 @@ function handlePointerUp(event: PointerEvent) {
     return
   }
 
-  if (trackingState.selectionDrag) {
+  const drag = trackingState.selectionDrag
+  if (drag) {
     restoreOrbitAfterSelectDrag()
-    updateGridHighlightFromObject(trackingState.selectionDrag.object)
-  }
-
-  if (trackingState.selectionDrag && trackingState.selectionDrag.hasDragged) {
-    scheduleThumbnailCapture()
-    return
+    updateGridHighlightFromObject(drag.object)
+    if (drag.hasDragged) {
+      sceneStore.endTransformInteraction()
+      updateSelectionHighlights()
+      scheduleThumbnailCapture()
+      return
+    }
   }
 
   if (trackingState.button !== 0) {
@@ -1700,16 +2093,11 @@ function handlePointerUp(event: PointerEvent) {
     return
   }
 
-  if (
-    props.activeTool === 'select' &&
-    trackingState.hitNodeId &&
-    trackingState.hitNodeId === props.selectedNodeId
-  ) {
-    emit('selectNode', null)
+  if (props.activeTool !== 'select') {
     return
   }
 
-  selectNodeAtPointer(event)
+  handleClickSelection(event, trackingState)
 }
 
 function handlePointerCancel(event: PointerEvent) {
@@ -1727,25 +2115,12 @@ function handlePointerCancel(event: PointerEvent) {
   }
 
   if (pointerTrackingState.selectionDrag && pointerTrackingState.selectionDrag.hasDragged) {
+    sceneStore.endTransformInteraction()
     scheduleThumbnailCapture()
   }
 
+  updateSelectionHighlights()
   pointerTrackingState = null
-}
-
-function selectNodeAtPointer(event: PointerEvent) {
-  if (!scene) {
-    return
-  }
-
-  const hit = pickNodeAtPointer(event)
-
-  if (!hit) {
-    emit('selectNode', null)
-    return
-  }
-
-  emit('selectNode', hit.nodeId)
 }
 
 function extractAssetPayload(event: DragEvent): { assetId: string } | null {
@@ -1862,19 +2237,107 @@ function handleTransformChange() {
     return
   }
 
-  if (transformControls.getMode() === 'translate') {
+  const mode = transformControls.getMode()
+  if (mode === 'translate') {
     snapVectorToGrid(target.position)
+  }
+
+  target.updateMatrixWorld(true)
+
+  const nodeId = target.userData.nodeId as string
+  const updates: TransformUpdatePayload[] = []
+  const groupState = transformGroupState
+  const primaryEntry = groupState?.entries.get(nodeId)
+
+  if (groupState && primaryEntry) {
+    switch (mode) {
+      case 'translate': {
+        target.getWorldPosition(transformCurrentWorldPosition)
+        transformDeltaPosition.copy(transformCurrentWorldPosition).sub(primaryEntry.initialWorldPosition)
+        groupState.entries.forEach((entry, entryId) => {
+          if (entryId === nodeId) {
+            return
+          }
+          transformWorldPositionBuffer.copy(entry.initialWorldPosition).add(transformDeltaPosition)
+          transformLocalPositionHelper.copy(transformWorldPositionBuffer)
+          if (entry.parent) {
+            entry.parent.worldToLocal(transformLocalPositionHelper)
+          }
+          entry.object.position.copy(transformLocalPositionHelper)
+          entry.object.updateMatrixWorld(true)
+        })
+        break
+      }
+      case 'rotate': {
+        transformQuaternionInverseHelper.copy(primaryEntry.initialQuaternion).invert()
+        transformQuaternionDelta.copy(target.quaternion).multiply(transformQuaternionInverseHelper)
+        groupState.entries.forEach((entry, entryId) => {
+          if (entryId === nodeId) {
+            return
+          }
+          transformQuaternionHelper.copy(entry.initialQuaternion)
+          transformQuaternionHelper.premultiply(transformQuaternionDelta)
+          entry.object.quaternion.copy(transformQuaternionHelper)
+          entry.object.rotation.setFromQuaternion(transformQuaternionHelper)
+          entry.object.updateMatrixWorld(true)
+        })
+        break
+      }
+      case 'scale': {
+        transformScaleFactor.set(1, 1, 1)
+        transformScaleFactor.x = primaryEntry.initialScale.x === 0
+          ? 1
+          : target.scale.x / primaryEntry.initialScale.x
+        transformScaleFactor.y = primaryEntry.initialScale.y === 0
+          ? 1
+          : target.scale.y / primaryEntry.initialScale.y
+        transformScaleFactor.z = primaryEntry.initialScale.z === 0
+          ? 1
+          : target.scale.z / primaryEntry.initialScale.z
+        groupState.entries.forEach((entry, entryId) => {
+          if (entryId === nodeId) {
+            return
+          }
+          entry.object.scale.set(
+            entry.initialScale.x * transformScaleFactor.x,
+            entry.initialScale.y * transformScaleFactor.y,
+            entry.initialScale.z * transformScaleFactor.z,
+          )
+          entry.object.updateMatrixWorld(true)
+        })
+        break
+      }
+      default:
+        break
+    }
+
+    groupState.entries.forEach((entry) => {
+      updates.push({
+        id: entry.nodeId,
+        position: toVector3Like(entry.object.position),
+        rotation: toEulerLike(entry.object.rotation),
+        scale: toVector3Like(entry.object.scale),
+      })
+    })
+  } else {
+    updates.push({
+      id: nodeId,
+      position: toVector3Like(target.position),
+      rotation: toEulerLike(target.rotation),
+      scale: toVector3Like(target.scale),
+    })
   }
 
   updateSelectionBox(target)
   updateGridHighlightFromObject(target)
+  updateSelectionHighlights()
 
-  emit('updateNodeTransform', {
-    id: target.userData.nodeId as string,
-    position: toVector3Like(target.position),
-    rotation: toEulerLike(target.rotation),
-    scale: toVector3Like(target.scale),
-  })
+  if (!updates.length) {
+    return
+  }
+
+  const payload = updates.length === 1 ? updates[0]! : updates
+  emit('updateNodeTransform', payload)
 
   scheduleThumbnailCapture()
 }
@@ -1897,6 +2360,7 @@ function syncSceneGraph() {
   scheduleThumbnailCapture()
   refreshPlaceholderOverlays()
   ensureFallbackLighting()
+  updateSelectionHighlights()
 }
 
 function disposeSceneNodes() {
@@ -2306,7 +2770,7 @@ function handleViewportShortcut(event: KeyboardEvent) {
     switch (event.code) {
       case 'Escape':
         if (props.selectedNodeId) {
-          emit('selectNode', null)
+          emitSelectionChange([])
           handled = true
         }
         break;
@@ -2331,6 +2795,7 @@ onMounted(() => {
   syncSceneGraph()
   updateToolMode(props.activeTool)
   attachSelection(props.selectedNodeId)
+  updateSelectionHighlights()
   window.addEventListener('keyup', handleViewportShortcut, { capture: true })
 })
 
@@ -2360,6 +2825,14 @@ watch(
   () => props.selectedNodeId,
   (id) => {
     attachSelection(id)
+    updateSelectionHighlights()
+  }
+)
+
+watch(
+  () => sceneStore.selectedNodeIds.slice(),
+  () => {
+    updateSelectionHighlights()
   }
 )
 

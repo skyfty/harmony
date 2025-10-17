@@ -12,7 +12,7 @@ import { useSceneStore, type EditorPanel } from '@/stores/sceneStore'
 import type { EditorTool } from '@/types/editor-tool'
 import type { SceneCameraState } from '@/types/scene-camera-state'
 import { useUiStore } from '@/stores/uiStore'
-import type { Vector3Like } from '@/types/scene'
+import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import { type ExportFormat } from '@/plugins/exporter'
 
 const sceneStore = useSceneStore()
@@ -83,12 +83,34 @@ function setTool(tool: EditorTool) {
   sceneStore.setActiveTool(tool)
 }
 
-function selectNode(nodeId: string | null) {
-  sceneStore.selectNode(nodeId)
+type ViewportSelectionPayload = { primaryId: string | null; selectedIds: string[] }
+
+function handleViewportSelection(payload: ViewportSelectionPayload) {
+  if (!payload || !Array.isArray(payload.selectedIds)) {
+    return
+  }
+  sceneStore.setSelection(payload.selectedIds, { primaryId: payload.primaryId ?? null })
 }
 
-function updateNodeTransform(payload: { id: string; position: Vector3Like; rotation: Vector3Like; scale: Vector3Like }) {
-  sceneStore.updateNodeTransform(payload)
+type ViewportTransformPayload = TransformUpdatePayload | TransformUpdatePayload[]
+
+function handleViewportTransform(payload: ViewportTransformPayload) {
+  if (Array.isArray(payload)) {
+    sceneStore.updateNodePropertiesBatch(payload)
+    return
+  }
+
+  if (payload.position && payload.rotation && payload.scale) {
+    sceneStore.updateNodeTransform({
+      id: payload.id,
+      position: payload.position,
+      rotation: payload.rotation,
+      scale: payload.scale,
+    })
+    return
+  }
+
+  sceneStore.updateNodeProperties(payload)
 }
 
 function updateCamera(state: SceneCameraState) {
@@ -377,8 +399,8 @@ onBeforeUnmount(() => {
           :focus-node-id="cameraFocusNodeId"
           :focus-request-id="cameraFocusRequestId"
           @change-tool="setTool"
-          @select-node="selectNode"
-          @update-node-transform="updateNodeTransform"
+          @select-node="handleViewportSelection"
+          @update-node-transform="handleViewportTransform"
           @update-camera="updateCamera"
         />
       </section>
