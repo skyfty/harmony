@@ -167,6 +167,7 @@ interface PointerTrackingState {
   ctrlKey: boolean
   metaKey: boolean
   shiftKey: boolean
+  transformAxis: string | null
 }
 
 let pointerTrackingState: PointerTrackingState | null = null
@@ -2224,7 +2225,7 @@ function emitSelectionChange(nextSelection: string[]) {
   })
 }
 
-function handleClickSelection(event: PointerEvent, trackingState: PointerTrackingState) {
+function handleClickSelection(event: PointerEvent, trackingState: PointerTrackingState, options?: { allowDeselectOnReselect?: boolean }) {
   if (!scene) {
     return
   }
@@ -2233,6 +2234,7 @@ function handleClickSelection(event: PointerEvent, trackingState: PointerTrackin
   const isToggle = event.ctrlKey || event.metaKey || trackingState.ctrlKey || trackingState.metaKey
   const isRange = event.shiftKey || trackingState.shiftKey
   const currentSelection = sceneStore.selectedNodeIds
+  const allowDeselectOnReselect = options?.allowDeselectOnReselect ?? true
 
   if (!hit) {
     if (!isToggle && !isRange) {
@@ -2253,7 +2255,7 @@ function handleClickSelection(event: PointerEvent, trackingState: PointerTrackin
     return
   }
 
-  if (currentSelection.length === 1 && alreadySelected) {
+  if (allowDeselectOnReselect && currentSelection.length === 1 && alreadySelected) {
     emitSelectionChange([])
     return
   }
@@ -2284,6 +2286,7 @@ function handlePointerDown(event: PointerEvent) {
   }
 
   const hit = pickNodeAtPointer(event)
+  const activeTransformAxis = props.activeTool === 'select' ? null : (transformControls?.axis ?? null)
 
   if (button === 2) {
     if (props.activeTool === 'select' && hit?.nodeId === props.selectedNodeId) {
@@ -2320,6 +2323,7 @@ function handlePointerDown(event: PointerEvent) {
     ctrlKey: event.ctrlKey,
     metaKey: event.metaKey,
     shiftKey: event.shiftKey,
+    transformAxis: activeTransformAxis,
   }
 }
 
@@ -2400,11 +2404,13 @@ function handlePointerUp(event: PointerEvent) {
     return
   }
 
-  if (props.activeTool !== 'select') {
+  if (props.activeTool !== 'select' && trackingState.transformAxis) {
     return
   }
 
-  handleClickSelection(event, trackingState)
+  handleClickSelection(event, trackingState, {
+    allowDeselectOnReselect: props.activeTool === 'select',
+  })
 }
 
 function handlePointerCancel(event: PointerEvent) {
