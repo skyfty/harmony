@@ -1421,6 +1421,63 @@ export const useSceneStore = defineStore('scene', {
       this.nodes = [...this.nodes]
       commitSceneSnapshot(this)
     },
+    updateNodePropertiesBatch(payloads: TransformUpdatePayload[]) {
+      if (!Array.isArray(payloads) || payloads.length === 0) {
+        return
+      }
+
+      const prepared: TransformUpdatePayload[] = []
+
+      payloads.forEach((payload) => {
+        if (!payload || !payload.id) {
+          return
+        }
+        const target = findNodeById(this.nodes, payload.id)
+        if (!target) {
+          return
+        }
+        let changed = false
+        const next: TransformUpdatePayload = { id: payload.id }
+        if (payload.position && !vectorsEqual(target.position, payload.position)) {
+          next.position = cloneVector(payload.position)
+          changed = true
+        }
+        if (payload.rotation && !vectorsEqual(target.rotation, payload.rotation)) {
+          next.rotation = cloneVector(payload.rotation)
+          changed = true
+        }
+        if (payload.scale && !vectorsEqual(target.scale, payload.scale)) {
+          next.scale = cloneVector(payload.scale)
+          changed = true
+        }
+        if (changed) {
+          prepared.push(next)
+        }
+      })
+
+      if (!prepared.length) {
+        return
+      }
+
+      this.captureHistorySnapshot()
+
+      prepared.forEach((update) => {
+        visitNode(this.nodes, update.id, (node) => {
+          if (update.position) {
+            node.position = cloneVector(update.position!)
+          }
+          if (update.rotation) {
+            node.rotation = cloneVector(update.rotation!)
+          }
+          if (update.scale) {
+            node.scale = cloneVector(update.scale!)
+          }
+        })
+      })
+
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
+    },
     renameNode(id: string, name: string) {
       const trimmed = name.trim()
       if (!trimmed) {

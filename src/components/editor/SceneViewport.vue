@@ -13,6 +13,7 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { loadObjectFromFile } from '@/plugins/assetImport'
 import { createGeometry } from '@/plugins/geometry'
 import type { CameraProjectionMode } from '@/types/scene-viewport-settings'
+import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import ViewportToolbar from './ViewportToolbar.vue'
 
 
@@ -40,6 +41,7 @@ const emit = defineEmits<{
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
 const isSceneReady = computed(() => sceneStore.isSceneReady)
+const canDropSelection = computed(() => sceneStore.selectedNodeIds.some((id) => !sceneStore.isNodeSelectionLocked(id)))
 
 const tools: Array<{ label: string; icon: string; value: EditorTool, key: string }> = [
   { label: 'Select', icon: 'mdi-hand-back-right', value: 'select', key: 'KeyQ' },
@@ -98,6 +100,7 @@ const MIN_ORTHOGRAPHIC_ZOOM = 0.25
 const MAX_ORTHOGRAPHIC_ZOOM = 8
 const CAMERA_DISTANCE_EPSILON = 1e-3
 const ORTHO_FRUSTUM_SIZE = 20
+const DROP_TO_GROUND_EPSILON = 1e-4
 
 const isDragHovering = ref(false)
 const gridVisible = computed(() => sceneStore.viewportSettings.showGrid)
@@ -238,6 +241,76 @@ function rotateSelectedNodeClockwise(nodeId: string) {
   scheduleThumbnailCapture()
 }
 
+function dropSelectionToGround() {
+  const unlockedSelection = sceneStore.selectedNodeIds.filter((id) => !sceneStore.isNodeSelectionLocked(id))
+  if (!unlockedSelection.length) {
+    return
+  }
+
+  const parentMap = buildParentIndex(props.sceneNodes, null, new Map<string, string | null>())
+  const topLevelIds = filterTopLevelSelection(unlockedSelection, parentMap)
+  if (!topLevelIds.length) {
+    return
+  }
+
+  const updates: TransformUpdatePayload[] = []
+
+  for (const nodeId of topLevelIds) {
+    const object = objectMap.get(nodeId)
+    if (!object) {
+      continue
+    }
+
+    object.updateMatrixWorld(true)
+    dropBoundingBoxHelper.setFromObject(object)
+    if (dropBoundingBoxHelper.isEmpty()) {
+      continue
+    }
+
+    const deltaY = -dropBoundingBoxHelper.min.y
+    if (Math.abs(deltaY) <= DROP_TO_GROUND_EPSILON) {
+      continue
+    }
+
+    object.getWorldPosition(dropWorldPositionHelper)
+    dropWorldPositionHelper.y += deltaY
+
+    dropLocalPositionHelper.copy(dropWorldPositionHelper)
+    if (object.parent) {
+      object.parent.worldToLocal(dropLocalPositionHelper)
+    }
+
+    object.position.set(dropLocalPositionHelper.x, dropLocalPositionHelper.y, dropLocalPositionHelper.z)
+    object.updateMatrixWorld(true)
+
+    updates.push({
+      id: nodeId,
+      position: {
+        x: dropLocalPositionHelper.x,
+        y: dropLocalPositionHelper.y,
+        z: dropLocalPositionHelper.z,
+      },
+    })
+  }
+
+  if (!updates.length) {
+    return
+  }
+
+  if (typeof sceneStore.updateNodePropertiesBatch === 'function') {
+    sceneStore.updateNodePropertiesBatch(updates)
+  } else {
+    updates.forEach((update) => sceneStore.updateNodeProperties(update))
+  }
+
+  const primaryId = sceneStore.selectedNodeId
+  const primaryObject = primaryId ? objectMap.get(primaryId) ?? null : null
+  updateSelectionBox(primaryObject)
+  updateGridHighlightFromObject(primaryObject)
+  updatePlaceholderOverlayPositions()
+  scheduleThumbnailCapture()
+}
+
 function updateSelectDragPosition(drag: SelectionDragState, event: PointerEvent): boolean {
   const planePoint = projectPointerToPlane(event, drag.plane)
   if (!planePoint) {
@@ -309,6 +382,9 @@ const selectDragWorldQuaternion = new THREE.Quaternion()
 const gridHighlightPositionHelper = new THREE.Vector3()
 const gridHighlightBoundingBox = new THREE.Box3()
 const gridHighlightSizeHelper = new THREE.Vector3()
+const dropBoundingBoxHelper = new THREE.Box3()
+const dropWorldPositionHelper = new THREE.Vector3()
+const dropLocalPositionHelper = new THREE.Vector3()
 
 const draggingChangedHandler = (event: unknown) => {
   const value = (event as { value?: boolean })?.value ?? false
@@ -1040,6 +1116,30 @@ function findSceneNode(nodes: SceneNode[], nodeId: string): SceneNode | null {
     }
   }
   return null
+}
+
+function buildParentIndex(nodes: SceneNode[], parentId: string | null, map: Map<string, string | null>) {
+  nodes.forEach((node) => {
+    map.set(node.id, parentId)
+    if (node.children?.length) {
+      buildParentIndex(node.children, node.id, map)
+    }
+  })
+  return map
+}
+
+function filterTopLevelSelection(ids: string[], parentMap: Map<string, string | null>): string[] {
+  const idSet = new Set(ids)
+  return ids.filter((id) => {
+    let parentId = parentMap.get(id) ?? null
+    while (parentId) {
+      if (idSet.has(parentId)) {
+        return false
+      }
+      parentId = parentMap.get(parentId) ?? null
+    }
+    return true
+  })
 }
 
 function focusCameraOnNode(nodeId: string): boolean {
@@ -2310,10 +2410,12 @@ defineExpose<SceneViewportHandle>({
       :show-grid="gridVisible"
       :show-axes="axesVisible"
       :camera-mode="cameraProjectionMode"
+      :can-drop-selection="canDropSelection"
       @toggle-grid="toggleGridVisibility"
       @toggle-axes="toggleAxesVisibility"
       @reset-camera="resetCameraView"
       @toggle-camera-mode="toggleCameraProjection"
+      @drop-to-ground="dropSelectionToGround"
     />
     <div
       ref="surfaceRef"

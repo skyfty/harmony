@@ -21,6 +21,15 @@
         title="切换坐标轴"
         @click="$emit('toggle-axes')"
       />
+      <v-btn
+        icon="mdi-arrow-collapse-down"
+        density="compact"
+        size="small"
+        class="toolbar-button"
+        title="落到地面"
+        :disabled="!canDropSelection"
+        @click="$emit('drop-to-ground')"
+      />
       <v-divider vertical />
       <v-btn
         icon="mdi-camera"
@@ -41,15 +50,17 @@ const props = defineProps<{
   showGrid: boolean
   showAxes: boolean
   cameraMode: 'perspective' | 'orthographic'
+  canDropSelection: boolean
 }>()
 
-const { showGrid, showAxes } = toRefs(props)
+const { showGrid, showAxes, canDropSelection } = toRefs(props)
 
 defineEmits<{
   (event: 'toggle-grid'): void
   (event: 'toggle-axes'): void
   (event: 'reset-camera'): void
   (event: 'toggle-camera-mode'): void
+  (event: 'drop-to-ground'): void
 }>()
 </script>
 
