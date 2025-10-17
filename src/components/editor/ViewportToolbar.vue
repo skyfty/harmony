@@ -30,7 +30,7 @@
         size="small"
         class="toolbar-button"
         title="Toggle Grid"
-        @click="emit('toggle-grid')"
+        @click="toggleGridVisibility"
       />
       <v-btn
         :icon="showAxes ? 'mdi-axis-arrow-info' : 'mdi-axis-arrow'"
@@ -40,7 +40,7 @@
         size="small"
         class="toolbar-button"
         title="Toggle Axes"
-        @click="emit('toggle-axes')"
+        @click="toggleAxesVisibility"
       />
       <v-menu
         v-model="skyboxMenuOpen"
@@ -120,6 +120,7 @@ import type { SceneSkyboxSettings } from '@/types/scene-viewport-settings'
 import type { SkyboxParameterKey, SkyboxPresetDefinition } from '@/types/skybox'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
 import { CUSTOM_SKYBOX_PRESET_ID, cloneSkyboxSettings } from '@/stores/skyboxPresets'
+import { useSceneStore } from '@/stores/sceneStore'
 
 const props = defineProps<{
   showGrid: boolean
@@ -132,10 +133,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (event: 'toggle-grid'): void
-  (event: 'toggle-axes'): void
   (event: 'reset-camera'): void
-  (event: 'toggle-camera-mode'): void
   (event: 'drop-to-ground'): void
   (event: 'select-skybox-preset', presetId: string): void
   (event: 'change-skybox-parameter', payload: { key: SkyboxParameterKey; value: number }): void
@@ -143,6 +141,7 @@ const emit = defineEmits<{
 }>()
 
 const { showGrid, showAxes, canDropSelection, canAlignSelection, skyboxSettings, skyboxPresets } = toRefs(props)
+const sceneStore = useSceneStore()
 
 const skyboxMenuOpen = ref(false)
 const localSkyboxSettings = ref<SceneSkyboxSettings>(cloneSkyboxSettings(skyboxSettings.value))
@@ -212,6 +211,14 @@ function formatSkyboxValue(key: SkyboxParameterKey, value: number): string {
     return value.toFixed(2)
   }
   return value.toFixed(2)
+}
+
+function toggleGridVisibility() {
+  sceneStore.toggleViewportGridVisible()
+}
+
+function toggleAxesVisibility() {
+  sceneStore.toggleViewportAxesVisible()
 }
 </script>
 

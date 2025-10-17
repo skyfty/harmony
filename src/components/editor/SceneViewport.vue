@@ -1065,10 +1065,6 @@ function applyProjectionMode(mode: CameraProjectionMode) {
   updatePlaceholderOverlayPositions()
 }
 
-function toggleCameraProjection() {
-  sceneStore.toggleViewportCameraProjection()
-}
-
 function applyGridVisibility(visible: boolean) {
   gridHelper.visible = visible
   if (!visible) {
@@ -1084,16 +1080,8 @@ function applyGridVisibility(visible: boolean) {
   restoreGridHighlightForSelection()
 }
 
-function toggleGridVisibility() {
-  sceneStore.toggleViewportGridVisible()
-}
-
 function applyAxesVisibility(visible: boolean) {
   axesHelper.visible = visible
-}
-
-function toggleAxesVisibility() {
-  sceneStore.toggleViewportAxesVisible()
 }
 
 function handleSkyboxPresetSelect(presetId: string) {
@@ -3146,10 +3134,7 @@ defineExpose<SceneViewportHandle>({
       :can-align-selection="canAlignSelection"
       :skybox-settings="skyboxSettings"
       :skybox-presets="skyboxPresetList"
-      @toggle-grid="toggleGridVisibility"
-      @toggle-axes="toggleAxesVisibility"
       @reset-camera="resetCameraView"
-      @toggle-camera-mode="toggleCameraProjection"
       @drop-to-ground="dropSelectionToGround"
       @select-skybox-preset="handleSkyboxPresetSelect"
       @change-skybox-parameter="handleSkyboxParameterChange"
