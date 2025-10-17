@@ -190,6 +190,7 @@ interface TransformGroupState {
 
 let transformGroupState: TransformGroupState | null = null
 let pendingSkyboxSettings: SceneSkyboxSettings | null = null
+let pendingSceneGraphSync = false
 
 type AlignMode = 'axis-x' | 'axis-y' | 'axis-z'
 const ALIGN_MODE_AXIS: Record<AlignMode, 'x' | 'y' | 'z'> = {
@@ -683,6 +684,11 @@ const draggingChangedHandler = (event: unknown) => {
     transformGroupState = null
     updateGridHighlightFromObject(targetObject)
     updateSelectionHighlights()
+    if (pendingSceneGraphSync) {
+      pendingSceneGraphSync = false
+      syncSceneGraph()
+      refreshPlaceholderOverlays()
+    }
   } else {
     const nodeId = (transformControls?.object as THREE.Object3D | null)?.userData?.nodeId as string | undefined
     sceneStore.beginTransformInteraction(nodeId ?? null)
@@ -692,6 +698,19 @@ const draggingChangedHandler = (event: unknown) => {
     }
     updateSelectionHighlights()
   }
+}
+
+function shouldDeferSceneGraphSync(): boolean {
+  if (!sceneStore.isSceneReady) {
+    return false
+  }
+  if (transformControls?.dragging) {
+    return true
+  }
+  if (sceneStore.activeTransformNodeId) {
+    return true
+  }
+  return false
 }
 
 const gridHelper = new THREE.GridHelper(1000, 1000, 0x4dd0e1, 0x4dd0e1)
@@ -1873,6 +1892,7 @@ function disposeScene() {
 
   clearPlaceholderOverlays()
   objectMap.clear()
+  pendingSceneGraphSync = false
 }
 
 function scheduleThumbnailCapture() {
@@ -3128,6 +3148,10 @@ onBeforeUnmount(() => {
 watch(
   () => props.sceneNodes,
   () => {
+    if (shouldDeferSceneGraphSync()) {
+      pendingSceneGraphSync = true
+      return
+    }
     syncSceneGraph()
     refreshPlaceholderOverlays()
   }
