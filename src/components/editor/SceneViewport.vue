@@ -62,7 +62,7 @@ let transformControls: TransformControls | null = null
 let resizeObserver: ResizeObserver | null = null
 let selectionBoxHelper: THREE.Box3Helper | null = null
 let selectionTrackedObject: THREE.Object3D | null = null
-let gridHighlight: THREE.Mesh | null = null
+let gridHighlight: THREE.Group | null = null
 
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
@@ -250,9 +250,10 @@ function updateSelectDragPosition(drag: SelectionDragState, event: PointerEvent)
   drag.object.position.copy(newLocalPosition)
   drag.object.updateMatrixWorld(true)
   drag.object.getWorldPosition(selectDragWorldPosition)
+  drag.object.getWorldQuaternion(selectDragWorldQuaternion)
 
   updateSelectionBox(drag.object)
-  updateGridHighlight(selectDragWorldPosition)
+  updateGridHighlight(selectDragWorldPosition, selectDragWorldQuaternion)
 
   emit('updateNodeTransform', {
     id: drag.nodeId,
@@ -298,6 +299,9 @@ const placeholderOverlayList = computed(() => Object.values(placeholderOverlays)
 const overlayPositionHelper = new THREE.Vector3()
 const cameraOffsetHelper = new THREE.Vector3()
 const selectDragWorldPosition = new THREE.Vector3()
+const selectDragWorldQuaternion = new THREE.Quaternion()
+const gridHighlightPositionHelper = new THREE.Vector3()
+const gridHighlightQuaternionHelper = new THREE.Quaternion()
 
 const draggingChangedHandler = (event: unknown) => {
   const value = (event as { value?: boolean })?.value ?? false
@@ -319,7 +323,10 @@ const draggingChangedHandler = (event: unknown) => {
     const nodeId = (transformControls?.object as THREE.Object3D | null)?.userData?.nodeId as string | undefined
     sceneStore.beginTransformInteraction(nodeId ?? null)
     if (transformControls?.getMode() === 'translate' && transformControls.object) {
-      updateGridHighlight((transformControls.object as THREE.Object3D).position)
+      const object = transformControls.object as THREE.Object3D
+      object.getWorldPosition(gridHighlightPositionHelper)
+      object.getWorldQuaternion(gridHighlightQuaternionHelper)
+      updateGridHighlight(gridHighlightPositionHelper, gridHighlightQuaternionHelper)
     }
   }
 }
@@ -1118,7 +1125,9 @@ function initScene() {
   scene.add(axesHelper)
   scene.add(dragPreviewGroup)
   gridHighlight = createGridHighlight()
-  scene.add(gridHighlight)
+  if (gridHighlight) {
+    scene.add(gridHighlight)
+  }
   applyGridVisibility(gridVisible.value)
   applyAxesVisibility(axesVisible.value)
   ensureFallbackLighting()
@@ -1254,9 +1263,20 @@ function disposeScene() {
 
   if (gridHighlight) {
     gridHighlight.removeFromParent()
-    gridHighlight.geometry.dispose()
-    const highlightMaterial = gridHighlight.material as THREE.Material
-    highlightMaterial.dispose()
+    gridHighlight.traverse((child) => {
+      const mesh = child as THREE.Mesh
+      if (mesh?.isMesh) {
+        mesh.geometry?.dispose()
+        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+        materials.forEach((material) => material?.dispose?.())
+      }
+      const line = child as THREE.Line
+      if (line?.isLine) {
+        line.geometry?.dispose()
+        const materials = Array.isArray(line.material) ? line.material : [line.material]
+        materials.forEach((material) => material?.dispose?.())
+      }
+    })
     gridHighlight = null
   }
 
@@ -1300,36 +1320,96 @@ function captureThumbnail() {
 }
 
 function createGridHighlight() {
-  const geometry = new THREE.PlaneGeometry(GRID_CELL_SIZE, GRID_CELL_SIZE)
-  const material = new THREE.MeshBasicMaterial({
+  const group = new THREE.Group()
+  group.name = 'GridHighlight'
+  group.visible = false
+  group.renderOrder = 1
+
+  const planeGeometry = new THREE.PlaneGeometry(GRID_CELL_SIZE, GRID_CELL_SIZE)
+  const planeMaterial = new THREE.MeshBasicMaterial({
     color: 0x4dd0e1,
     opacity: 0.3,
     transparent: true,
     side: THREE.DoubleSide,
     depthWrite: false,
   })
-  const highlight = new THREE.Mesh(geometry, material)
-  highlight.rotation.x = -Math.PI / 2
-  highlight.position.y = GRID_HIGHLIGHT_HEIGHT
-  highlight.visible = false
-  highlight.renderOrder = 1
-  return highlight
+  const plane = new THREE.Mesh(planeGeometry, planeMaterial)
+  plane.name = 'GridHighlightPlane'
+  plane.rotation.x = -Math.PI / 2
+  plane.renderOrder = 1
+  group.add(plane)
+
+  const arrowColor = 0x4dd0e1
+  const arrowLength = GRID_CELL_SIZE * 0.75
+  const arrowHeadLength = Math.min(GRID_CELL_SIZE * 0.35, arrowLength * 0.6)
+  const arrowHeadWidth = arrowHeadLength * 0.75
+  const arrowOrigin = new THREE.Vector3(0, GRID_HIGHLIGHT_HEIGHT * 0.5, 0)
+  const arrow = new THREE.ArrowHelper(
+    new THREE.Vector3(1, 0, 0),
+    arrowOrigin,
+    arrowLength,
+    arrowColor,
+    arrowHeadLength,
+    arrowHeadWidth,
+  )
+  arrow.name = 'GridHighlightArrow'
+
+  const arrowLineMaterials = Array.isArray(arrow.line.material) ? arrow.line.material : [arrow.line.material]
+  arrowLineMaterials.forEach((material) => {
+    material.depthWrite = false
+    material.transparent = true
+    material.opacity = 0.9
+  })
+
+  const arrowConeMaterials = Array.isArray(arrow.cone.material) ? arrow.cone.material : [arrow.cone.material]
+  arrowConeMaterials.forEach((material) => {
+    material.depthWrite = false
+    material.transparent = true
+    material.opacity = 0.9
+  })
+
+  group.add(arrow)
+  group.userData.arrowHelper = arrow
+  group.userData.plane = plane
+
+  return group
 }
 
-function updateGridHighlight(position: THREE.Vector3 | null) {
+const gridHighlightDirectionHelper = new THREE.Vector3(1, 0, 0)
+
+function updateGridHighlight(position: THREE.Vector3 | null, orientation?: THREE.Quaternion | THREE.Euler) {
   if (!gridHighlight) {
     return
   }
-  if (!position) {
+  if (!position || !gridVisible.value) {
     gridHighlight.visible = false
     return
   }
-  if (!gridVisible.value) {
-    gridHighlight.visible = false
-    return
-  }
+
   gridHighlight.visible = true
   gridHighlight.position.set(position.x, GRID_HIGHLIGHT_HEIGHT, position.z)
+
+  const arrow = gridHighlight.userData.arrowHelper as THREE.ArrowHelper | undefined
+  if (!arrow) {
+    return
+  }
+
+  gridHighlightDirectionHelper.set(1, 0, 0)
+  if (orientation) {
+    if (orientation instanceof THREE.Quaternion) {
+      gridHighlightDirectionHelper.applyQuaternion(orientation)
+    } else {
+      gridHighlightQuaternionHelper.setFromEuler(orientation)
+      gridHighlightDirectionHelper.applyQuaternion(gridHighlightQuaternionHelper)
+    }
+  }
+
+  gridHighlightDirectionHelper.y = 0
+  if (gridHighlightDirectionHelper.lengthSq() < 1e-6) {
+    gridHighlightDirectionHelper.set(1, 0, 0)
+  }
+  gridHighlightDirectionHelper.normalize()
+  arrow.setDirection(gridHighlightDirectionHelper)
 }
 
 function handlePointerDown(event: PointerEvent) {
@@ -1378,8 +1458,6 @@ function handlePointerDown(event: PointerEvent) {
 
   if (selectionDrag) {
     disableOrbitForSelectDrag()
-    selectionDrag.object.getWorldPosition(selectDragWorldPosition)
-    updateGridHighlight(selectDragWorldPosition)
   }
 
   pointerTrackingState = {
@@ -1642,7 +1720,9 @@ function handleTransformChange() {
 
   scheduleThumbnailCapture()
   if (transformControls?.getMode() === 'translate') {
-    updateGridHighlight(target.position)
+    target.getWorldPosition(gridHighlightPositionHelper)
+    target.getWorldQuaternion(gridHighlightQuaternionHelper)
+    updateGridHighlight(gridHighlightPositionHelper, gridHighlightQuaternionHelper)
   }
 }
 
