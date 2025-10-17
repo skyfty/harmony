@@ -79,7 +79,7 @@ function handleNameUpdate(value: string) {
         variant="accordion"
         class="inspector-panels"
       >
-        <InspectorTransformPanel  />
+        <!-- <InspectorTransformPanel  /> -->
 
         <InspectorLightPanel v-if="isLightNode"/>
         <InspectorMaterialPanel v-else-if="showMaterialPanel" />
