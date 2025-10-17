@@ -839,8 +839,8 @@ function resetCameraView() {
 }
 
 function snapVectorToGrid(vec: THREE.Vector3) {
-  vec.x = Math.floor(vec.x / GRID_CELL_SIZE) * GRID_CELL_SIZE + GRID_CELL_SIZE / 2
-  vec.z = Math.floor(vec.z / GRID_CELL_SIZE) * GRID_CELL_SIZE + GRID_CELL_SIZE / 2
+  vec.x = Math.round(vec.x / GRID_CELL_SIZE) * GRID_CELL_SIZE
+  vec.z = Math.round(vec.z / GRID_CELL_SIZE) * GRID_CELL_SIZE
   return vec
 }
 
