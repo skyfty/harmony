@@ -86,6 +86,11 @@ const DIRECTIONAL_LIGHT_HELPER_SIZE = 5
 const DEFAULT_CAMERA_POSITION = { x: 5, y: 5, z: 5 } as const
 const DEFAULT_CAMERA_TARGET = { x: 0, y: 0, z: 0 } as const
 const DEFAULT_PERSPECTIVE_FOV = 60
+const MIN_CAMERA_DISTANCE = 2
+const MAX_CAMERA_DISTANCE = 30
+const MIN_ORTHOGRAPHIC_ZOOM = 0.25
+const MAX_ORTHOGRAPHIC_ZOOM = 8
+const CAMERA_DISTANCE_EPSILON = 1e-3
 const ORTHO_FRUSTUM_SIZE = 20
 
 const isDragHovering = ref(false)
@@ -117,6 +122,7 @@ const overlayContainerRef = ref<HTMLDivElement | null>(null)
 const placeholderOverlays = reactive<Record<string, PlaceholderOverlayState>>({})
 const placeholderOverlayList = computed(() => Object.values(placeholderOverlays))
 const overlayPositionHelper = new THREE.Vector3()
+const cameraOffsetHelper = new THREE.Vector3()
 
 const draggingChangedHandler = (event: unknown) => {
   const value = (event as { value?: boolean })?.value ?? false
@@ -432,6 +438,64 @@ function clampCameraAboveGround(forceUpdate = true) {
   return adjusted
 }
 
+function clampCameraDistance(target: THREE.Vector3, cam: THREE.PerspectiveCamera | THREE.OrthographicCamera): boolean {
+  cameraOffsetHelper.copy(cam.position).sub(target)
+  const distance = cameraOffsetHelper.length()
+  if (distance >= MIN_CAMERA_DISTANCE && distance <= MAX_CAMERA_DISTANCE) {
+    return false
+  }
+
+  if (distance < CAMERA_DISTANCE_EPSILON) {
+    cameraOffsetHelper.set(0, 1, 0)
+  } else {
+    cameraOffsetHelper.normalize()
+  }
+
+  const desiredDistance = THREE.MathUtils.clamp(distance, MIN_CAMERA_DISTANCE, MAX_CAMERA_DISTANCE)
+  cameraOffsetHelper.multiplyScalar(desiredDistance).add(target)
+  cam.position.copy(cameraOffsetHelper)
+  return true
+}
+
+function clampCameraZoom(forceUpdate = true) {
+  if (!camera || !orbitControls) return false
+
+  let adjusted = false
+  const target = orbitControls.target
+
+  if (clampCameraDistance(target, camera)) {
+    adjusted = true
+  }
+
+  if (camera instanceof THREE.OrthographicCamera) {
+    const clampedZoom = THREE.MathUtils.clamp(camera.zoom, MIN_ORTHOGRAPHIC_ZOOM, MAX_ORTHOGRAPHIC_ZOOM)
+    if (clampedZoom !== camera.zoom) {
+      camera.zoom = clampedZoom
+      camera.updateProjectionMatrix()
+      adjusted = true
+    }
+  }
+
+  if (perspectiveCamera && camera !== perspectiveCamera) {
+    if (clampCameraDistance(target, perspectiveCamera)) {
+      adjusted = true
+    }
+  }
+
+  if (adjusted && forceUpdate) {
+    const prevApplying = isApplyingCameraState
+    if (!prevApplying) {
+      isApplyingCameraState = true
+    }
+    orbitControls.update()
+    if (!prevApplying) {
+      isApplyingCameraState = false
+    }
+  }
+
+  return adjusted
+}
+
 function updateOrthographicFrustum(camera: THREE.OrthographicCamera, width: number, height: number) {
   const aspect = height === 0 ? 1 : width / height
   const halfHeight = ORTHO_FRUSTUM_SIZE / 2
@@ -502,6 +566,7 @@ function applyProjectionMode(mode: CameraProjectionMode) {
     activateCamera(perspectiveCamera, 'perspective')
   }
 
+  clampCameraZoom()
   clampCameraAboveGround()
   updatePlaceholderOverlayPositions()
 }
@@ -586,6 +651,7 @@ function resetCameraView() {
   orbitControls.update()
   isApplyingCameraState = false
 
+  clampCameraZoom()
   clampCameraAboveGround()
 
   const snapshot = buildCameraState()
@@ -756,6 +822,8 @@ function applyCameraState(state: SceneCameraState | null | undefined) {
   const clampedTargetY = Math.max(state.target.y, MIN_TARGET_HEIGHT)
   orbitControls.target.set(state.target.x, clampedTargetY, state.target.z)
   orbitControls.update()
+  clampCameraZoom()
+  clampCameraAboveGround()
   isApplyingCameraState = false
 }
 
@@ -821,12 +889,13 @@ function focusCameraOnNode(nodeId: string): boolean {
   orbitControls.update()
   isApplyingCameraState = false
 
+  clampCameraZoom()
+  clampCameraAboveGround()
+
   if (perspectiveCamera && camera !== perspectiveCamera) {
     perspectiveCamera.position.copy(camera.position)
     perspectiveCamera.quaternion.copy(camera.quaternion)
   }
-
-  clampCameraAboveGround(false)
 
   const snapshot = buildCameraState()
   if (snapshot) {
@@ -838,6 +907,7 @@ function focusCameraOnNode(nodeId: string): boolean {
 
 function handleControlsChange() {
   if (!isSceneReady.value || isApplyingCameraState) return
+  clampCameraZoom()
   clampCameraAboveGround()
   const snapshot = buildCameraState()
   if (snapshot) {
@@ -893,6 +963,10 @@ function initScene() {
   orbitControls = new OrbitControls(camera, canvasRef.value)
   orbitControls.enableDamping = false
   orbitControls.dampingFactor = 0.05
+  orbitControls.minDistance = MIN_CAMERA_DISTANCE
+  orbitControls.maxDistance = MAX_CAMERA_DISTANCE
+  orbitControls.minZoom = MIN_ORTHOGRAPHIC_ZOOM
+  orbitControls.maxZoom = MAX_ORTHOGRAPHIC_ZOOM
   orbitControls.target.set(DEFAULT_CAMERA_TARGET.x, DEFAULT_CAMERA_TARGET.y, DEFAULT_CAMERA_TARGET.z)
   orbitControls.addEventListener('change', handleControlsChange)
 

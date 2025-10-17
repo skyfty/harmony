@@ -43,7 +43,7 @@ const props = defineProps<{
   cameraMode: 'perspective' | 'orthographic'
 }>()
 
-const { showGrid, showAxes, cameraMode } = toRefs(props)
+const { showGrid, showAxes } = toRefs(props)
 
 defineEmits<{
   (event: 'toggle-grid'): void
