@@ -1138,6 +1138,43 @@ function handleCaptureScreenshot() {
   }
 }
 
+function handleOrbitLeft() {
+  orbitCameraHorizontally(-1)
+}
+
+function handleOrbitRight() {
+  orbitCameraHorizontally(1)
+}
+
+function orbitCameraHorizontally(direction: number) {
+  if (!camera || !orbitControls) {
+    return
+  }
+
+  const ORBIT_ANGLE = THREE.MathUtils.degToRad(15) // 15 degrees per step
+  const target = orbitControls.target.clone()
+  const offset = camera.position.clone().sub(target)
+  
+  // Calculate horizontal rotation around Y axis
+  const angle = direction * ORBIT_ANGLE
+  const rotationMatrix = new THREE.Matrix4().makeRotationY(angle)
+  offset.applyMatrix4(rotationMatrix)
+  
+  // Update camera position
+  camera.position.copy(target).add(offset)
+  
+  // Update orbit controls
+  orbitControls.update()
+  
+  // Update camera state
+  const snapshot = buildCameraState()
+  if (snapshot) {
+    emit('updateCamera', snapshot)
+  }
+  
+  scheduleThumbnailCapture()
+}
+
 watch(gridVisible, (visible, previous) => {
   applyGridVisibility(visible)
   if (previous !== undefined && visible !== previous && sceneStore.isSceneReady) {
@@ -3171,6 +3208,8 @@ defineExpose<SceneViewportHandle>({
       @change-skybox-parameter="handleSkyboxParameterChange"
       @align-selection="handleAlignSelection"
       @capture-screenshot="handleCaptureScreenshot"
+      @orbit-left="handleOrbitLeft"
+      @orbit-right="handleOrbitRight"
     />
     <div
       ref="surfaceRef"
