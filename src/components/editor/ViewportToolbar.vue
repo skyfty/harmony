@@ -42,7 +42,13 @@
         title="切换坐标轴"
         @click="emit('toggle-axes')"
       />
-      <v-menu v-model="skyboxMenuOpen" location="bottom" origin="top right" offset="8">
+      <v-menu
+        v-model="skyboxMenuOpen"
+        location="bottom"
+        origin="top right"
+        offset="8"
+        :close-on-content-click="false"
+      >
         <template #activator="{ props: menuActivatorProps }">
           <v-btn
             v-bind="menuActivatorProps"
