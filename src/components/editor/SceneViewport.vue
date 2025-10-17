@@ -1107,6 +1107,37 @@ function handleAlignSelection(mode: AlignMode) {
   alignSelection(mode)
 }
 
+function createScreenshotFileName(): string {
+  const sceneName = sceneStore.currentScene?.name ?? 'scene'
+  const normalized = sceneName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  const pad = (value: number) => value.toString().padStart(2, '0')
+  const now = new Date()
+  const dateStamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+  const base = normalized || 'scene'
+  return `${base}-${dateStamp}.png`
+}
+
+function handleCaptureScreenshot() {
+  if (!renderer || !scene || !camera) {
+    return
+  }
+
+  try {
+    renderer.render(scene, camera)
+    const dataUrl = renderer.domElement.toDataURL('image/png')
+    const link = document.createElement('a')
+    link.href = dataUrl
+    link.download = createScreenshotFileName()
+    link.rel = 'noopener'
+    link.style.display = 'none'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  } catch (error) {
+    console.warn('Failed to capture viewport screenshot', error)
+  }
+}
+
 watch(gridVisible, (visible, previous) => {
   applyGridVisibility(visible)
   if (previous !== undefined && visible !== previous && sceneStore.isSceneReady) {
@@ -3139,6 +3170,7 @@ defineExpose<SceneViewportHandle>({
       @select-skybox-preset="handleSkyboxPresetSelect"
       @change-skybox-parameter="handleSkyboxParameterChange"
       @align-selection="handleAlignSelection"
+      @capture-screenshot="handleCaptureScreenshot"
     />
     <div
       ref="surfaceRef"

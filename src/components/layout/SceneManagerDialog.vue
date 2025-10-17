@@ -255,7 +255,8 @@ function formatDateTime(value: string) {
                 <v-img
                   v-if="previewScene.thumbnail"
                   :src="previewScene.thumbnail"
-                  cover
+                  contain
+                  class="scene-preview-image"
                 />
                 <div v-else class="scene-preview-placeholder">
                   <v-icon size="72">mdi-image-outline</v-icon>
@@ -526,10 +527,19 @@ function formatDateTime(value: string) {
   display: flex;
   align-items: center;
   justify-content: center;
+  max-height: clamp(220px, 45vh, 360px);
+  width: 100%;
 }
 
 .scene-preview-media :deep(img) {
-  object-fit: cover;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.scene-preview-image {
+  width: 100%;
+  height: 100%;
 }
 
 .scene-preview-placeholder {

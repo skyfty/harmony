@@ -2,6 +2,15 @@
   <div class="viewport-toolbar">
     <v-card class="toolbar-card" elevation="6">
       <v-btn
+        icon="mdi-camera-outline"
+        density="compact"
+        size="small"
+        class="toolbar-button"
+        title="Capture Screenshot"
+        @click="emit('capture-screenshot')"
+      />
+      <v-divider vertical />
+      <v-btn
         icon="mdi-arrow-collapse-down"
         density="compact"
         size="small"
@@ -138,6 +147,7 @@ const emit = defineEmits<{
   (event: 'select-skybox-preset', presetId: string): void
   (event: 'change-skybox-parameter', payload: { key: SkyboxParameterKey; value: number }): void
   (event: 'align-selection', mode: AlignMode): void
+  (event: 'capture-screenshot'): void
 }>()
 
 const { showGrid, showAxes, canDropSelection, canAlignSelection, skyboxSettings, skyboxPresets } = toRefs(props)
