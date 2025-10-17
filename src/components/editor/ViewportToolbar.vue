@@ -118,9 +118,8 @@
 import { computed, ref, toRefs, watch } from 'vue'
 import type { SceneSkyboxSettings } from '@/types/scene-viewport-settings'
 import type { SkyboxParameterKey, SkyboxPresetDefinition } from '@/types/skybox'
+import type { AlignMode } from '@/types/scene-viewport-align-mode'
 import { CUSTOM_SKYBOX_PRESET_ID, cloneSkyboxSettings } from '@/stores/skyboxPresets'
-
-type AlignMode = 'axis-x' | 'axis-y' | 'axis-z'
 
 const props = defineProps<{
   showGrid: boolean

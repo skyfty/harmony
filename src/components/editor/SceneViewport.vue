@@ -17,7 +17,15 @@ import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SkyboxParameterKey } from '@/types/skybox'
 import { SKYBOX_PRESETS, CUSTOM_SKYBOX_PRESET_ID, cloneSkyboxSettings } from '@/stores/skyboxPresets'
 import ViewportToolbar from './ViewportToolbar.vue'
+import TransformToolbar from './TransformToolbar.vue'
+import { TRANSFORM_TOOLS } from '@/types/scene-transform-tools'
+import { ALIGN_MODE_AXIS, type AlignMode } from '@/types/scene-viewport-align-mode'
 import { Sky } from 'three/addons/objects/Sky.js'
+import type { NodeHitResult } from '@/types/scene-viewport-node-hit-result'
+import type { SelectionDragCompanion, SelectionDragState } from '@/types/scene-viewport-selection-drag'
+import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracking-state'
+import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-viewport-transform-group'
+import type { PlaceholderOverlayState } from '@/types/scene-viewport-placeholder-overlay-state'
 
 
 const props = defineProps<{
@@ -40,13 +48,6 @@ const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
 const isSceneReady = computed(() => sceneStore.isSceneReady)
 const canDropSelection = computed(() => sceneStore.selectedNodeIds.some((id) => !sceneStore.isNodeSelectionLocked(id)))
-
-const tools: Array<{ label: string; icon: string; value: EditorTool, key: string }> = [
-  { label: 'Select', icon: 'mdi-hand-back-right', value: 'select', key: 'KeyQ' },
-  { label: 'Move', icon: 'mdi-axis-arrow', value: 'translate', key: 'KeyW' },
-  { label: 'Rotate', icon: 'mdi-rotate-3d-variant', value: 'rotate', key: 'KeyE' },
-  { label: 'Scale', icon: 'mdi-cube-scan', value: 'scale', key: 'KeyR' },
-]
 
 const viewportEl = ref<HTMLDivElement | null>(null)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -127,77 +128,14 @@ const canAlignSelection = computed(() => {
   return sceneStore.selectedNodeIds.some((id) => id !== primaryId && !sceneStore.isNodeSelectionLocked(id))
 })
 const skyboxPresetList = SKYBOX_PRESETS
+const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((tool) => [tool.key, tool.value]))
 let activeCameraMode: CameraProjectionMode = cameraProjectionMode.value
 
-interface NodeHitResult {
-  nodeId: string
-  object: THREE.Object3D
-  point: THREE.Vector3
-}
-
-interface SelectionDragCompanion {
-  nodeId: string
-  object: THREE.Object3D
-  parent: THREE.Object3D | null
-  initialLocalPosition: THREE.Vector3
-  initialWorldPosition: THREE.Vector3
-}
-
-interface SelectionDragState {
-  nodeId: string
-  object: THREE.Object3D
-  plane: THREE.Plane
-  pointerOffset: THREE.Vector3
-  initialLocalPosition: THREE.Vector3
-  initialWorldPosition: THREE.Vector3
-  initialRotation: THREE.Euler
-  parent: THREE.Object3D | null
-  companions: SelectionDragCompanion[]
-  hasDragged: boolean
-}
-
-interface PointerTrackingState {
-  pointerId: number
-  startX: number
-  startY: number
-  moved: boolean
-  button: number
-  hitResult: NodeHitResult | null
-  selectionDrag: SelectionDragState | null
-  ctrlKey: boolean
-  metaKey: boolean
-  shiftKey: boolean
-  transformAxis: string | null
-}
-
 let pointerTrackingState: PointerTrackingState | null = null
-
-interface TransformGroupEntry {
-  nodeId: string
-  object: THREE.Object3D
-  parent: THREE.Object3D | null
-  initialPosition: THREE.Vector3
-  initialQuaternion: THREE.Quaternion
-  initialScale: THREE.Vector3
-  initialWorldPosition: THREE.Vector3
-  initialWorldQuaternion: THREE.Quaternion
-}
-
-interface TransformGroupState {
-  primaryId: string | null
-  entries: Map<string, TransformGroupEntry>
-}
 
 let transformGroupState: TransformGroupState | null = null
 let pendingSkyboxSettings: SceneSkyboxSettings | null = null
 let pendingSceneGraphSync = false
-
-type AlignMode = 'axis-x' | 'axis-y' | 'axis-z'
-const ALIGN_MODE_AXIS: Record<AlignMode, 'x' | 'y' | 'z'> = {
-  'axis-x': 'x',
-  'axis-y': 'y',
-  'axis-z': 'z',
-} as const
 
 function resolveNodeIdFromObject(object: THREE.Object3D | null): string | null {
   let current: THREE.Object3D | null = object
@@ -211,11 +149,7 @@ function resolveNodeIdFromObject(object: THREE.Object3D | null): string | null {
   return null
 }
 
-function pickNodeAtPointer(event: PointerEvent): {
-  nodeId: string
-  object: THREE.Object3D
-  point: THREE.Vector3
-} | null {
+function pickNodeAtPointer(event: PointerEvent): NodeHitResult | null {
   if (!canvasRef.value || !camera) {
     return null
   }
@@ -579,16 +513,6 @@ function restoreOrbitAfterSelectDrag() {
 
 function handleViewportContextMenu(event: MouseEvent) {
   event.preventDefault()
-}
-
-interface PlaceholderOverlayState {
-  id: string
-  name: string
-  progress: number
-  error: string | null
-  visible: boolean
-  x: number
-  y: number
 }
 
 const overlayContainerRef = ref<HTMLDivElement | null>(null)
@@ -3113,14 +3037,15 @@ function handleViewportShortcut(event: KeyboardEvent) {
           emitSelectionChange([])
           handled = true
         }
-        break;
-      default:
-        const tool = tools.find((t) => t.key === event.code);
+        break
+      default: {
+        const tool = transformToolKeyMap.get(event.code)
         if (tool) {
-          emit('changeTool', tool.value)
+          emit('changeTool', tool)
           handled = true
         }
         break
+      }
     }
   }
 
@@ -3209,20 +3134,10 @@ defineExpose<SceneViewportHandle>({
 
 <template>
   <div ref="viewportEl" class="scene-viewport">
-    <div class="tool-strip">
-      <v-card class="tool-card" elevation="6">
-        <v-btn
-          v-for="tool in tools"
-          :key="tool.value"
-          :icon="tool.icon"
-          :color="props.activeTool === tool.value ? 'primary' : undefined"
-          :variant="props.activeTool === tool.value ? 'flat' : 'text'"
-          density="comfortable"
-          class="tool-button"
-          @click="emit('changeTool', tool.value)"
-        />
-      </v-card>
-    </div>
+    <TransformToolbar
+      :active-tool="props.activeTool"
+      @change-tool="emit('changeTool', $event)"
+    />
     <ViewportToolbar
       :show-grid="gridVisible"
       :show-axes="axesVisible"
@@ -3288,26 +3203,6 @@ defineExpose<SceneViewportHandle>({
   border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: 10px;
   overflow: hidden;
-}
-
-.tool-strip {
-  position: absolute;
-  top: 16px;
-  left: 16px;
-  z-index: 5;
-}
-
-.tool-card {
-  display: flex;
-  flex-direction: column;
-  background-color: rgba(18, 21, 26, 0.92);
-  border-radius: 12px;
-  padding: 8px;
-  gap: 4px;
-}
-
-.tool-button {
-  border-radius: 10px;
 }
 
 .viewport-surface {
