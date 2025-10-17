@@ -171,17 +171,6 @@ const initialNodes: SceneNode[] = [
     locked: true,
     sourceAssetId: groundAsset.id,
   },
-  createLightNode({
-    name: 'Directional Light',
-    type: 'directional',
-    color: '#ffffff',
-    intensity: 1.2,
-    position: createVector(30, 40, 20),
-    target: createVector(0, 0, 0),
-    extras: {
-      castShadow: true,
-    },
-  }),
 ]
 
 const placeholderDownloadWatchers = new Map<string, WatchStopHandle>()

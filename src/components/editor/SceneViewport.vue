@@ -15,6 +15,7 @@ import { createGeometry } from '@/plugins/geometry'
 import type { CameraProjectionMode } from '@/types/scene-viewport-settings'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import ViewportToolbar from './ViewportToolbar.vue'
+import { Sky } from 'three/addons/objects/Sky.js';
 
 
 const props = defineProps<{
@@ -61,6 +62,22 @@ let selectionBoxHelper: THREE.Box3Helper | null = null
 let selectionTrackedObject: THREE.Object3D | null = null
 let gridHighlight: THREE.Group | null = null
 const selectionHighlights = new Map<string, THREE.Group>()
+let sky: Sky | null = null
+let pmremGenerator: THREE.PMREMGenerator | null = null
+let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null
+let fallbackDirectionalLight: THREE.DirectionalLight | null = null
+const skySunPosition = new THREE.Vector3()
+const DEFAULT_BACKGROUND_COLOR = 0xbfd1e5
+const SKY_SETTINGS = {
+  scale: 2500,
+  turbidity: 8,
+  rayleigh: 2,
+  mieCoefficient: 0.005,
+  mieDirectionalG: 0.8,
+  elevation: 35,
+  azimuth: 145,
+} as const
+const SKY_FALLBACK_LIGHT_DISTANCE = 75
 
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
@@ -1388,10 +1405,15 @@ function initScene() {
   renderer.setSize(width, height)
   renderer.shadowMap.enabled = true
 
-  scene = new THREE.Scene()
+  pmremGenerator?.dispose()
+  pmremGenerator = new THREE.PMREMGenerator(renderer)
 
-  scene.background = new THREE.Color(0x696969)
-  scene.fog = new THREE.Fog( scene.background, 1, 5000 );
+  scene = new THREE.Scene()
+  const backgroundColor = new THREE.Color(DEFAULT_BACKGROUND_COLOR)
+  scene.background = backgroundColor
+  scene.fog = new THREE.Fog(backgroundColor.getHex(), 1, 5000)
+  scene.fog.color.copy(backgroundColor)
+  initSky()
   scene.add(rootGroup)
   scene.add(gridHelper)
   scene.add(axesHelper)
@@ -1466,6 +1488,114 @@ function initScene() {
   applyCameraState(props.cameraState)
 }
 
+function initSky() {
+  if (!scene) {
+    return
+  }
+
+  sky = new Sky()
+  sky.name = 'HarmonySky'
+  sky.scale.setScalar(SKY_SETTINGS.scale)
+  sky.frustumCulled = false
+  scene.add(sky)
+
+  const skyMaterial = sky.material as THREE.ShaderMaterial
+  const uniforms = skyMaterial.uniforms
+  const turbidity = uniforms['turbidity']
+  if (turbidity) {
+    turbidity.value = SKY_SETTINGS.turbidity
+  }
+  const rayleigh = uniforms['rayleigh']
+  if (rayleigh) {
+    rayleigh.value = SKY_SETTINGS.rayleigh
+  }
+  const mieCoefficient = uniforms['mieCoefficient']
+  if (mieCoefficient) {
+    mieCoefficient.value = SKY_SETTINGS.mieCoefficient
+  }
+  const mieDirectionalG = uniforms['mieDirectionalG']
+  if (mieDirectionalG) {
+    mieDirectionalG.value = SKY_SETTINGS.mieDirectionalG
+  }
+
+  updateSkyLighting(SKY_SETTINGS.elevation, SKY_SETTINGS.azimuth)
+}
+
+function updateSkyLighting(elevation = SKY_SETTINGS.elevation, azimuth = SKY_SETTINGS.azimuth) {
+  if (!sky) {
+    return
+  }
+
+  const skyMaterial = sky.material as THREE.ShaderMaterial
+  const uniforms = skyMaterial.uniforms
+
+  const phi = THREE.MathUtils.degToRad(90 - elevation)
+  const theta = THREE.MathUtils.degToRad(azimuth)
+  skySunPosition.setFromSphericalCoords(1, phi, theta)
+
+  const sunUniform = uniforms['sunPosition']
+  if (sunUniform?.value instanceof THREE.Vector3) {
+    sunUniform.value.copy(skySunPosition)
+  } else if (sunUniform) {
+    sunUniform.value = skySunPosition.clone()
+  }
+
+  applySunDirectionToFallbackLight()
+
+  if (!pmremGenerator) {
+    return
+  }
+
+  if (skyEnvironmentTarget) {
+    skyEnvironmentTarget.dispose()
+    skyEnvironmentTarget = null
+  }
+
+  skyEnvironmentTarget = pmremGenerator.fromScene(sky as unknown as THREE.Scene)
+  if (scene) {
+    scene.environment = skyEnvironmentTarget.texture
+  }
+}
+
+function applySunDirectionToFallbackLight() {
+  if (!fallbackDirectionalLight) {
+    return
+  }
+
+  fallbackDirectionalLight.position.copy(skySunPosition).multiplyScalar(SKY_FALLBACK_LIGHT_DISTANCE)
+  if (fallbackDirectionalLight.position.y < 10) {
+    fallbackDirectionalLight.position.y = 10
+  }
+  fallbackDirectionalLight.target.position.set(0, 0, 0)
+  fallbackDirectionalLight.target.updateMatrixWorld()
+}
+
+function disposeSkyResources() {
+  if (skyEnvironmentTarget) {
+    skyEnvironmentTarget.dispose()
+    skyEnvironmentTarget = null
+  }
+
+  if (sky) {
+    sky.removeFromParent()
+    sky.geometry.dispose()
+    const material = sky.material
+    if (Array.isArray(material)) {
+      material.forEach((entry) => entry?.dispose?.())
+    } else {
+      material?.dispose?.()
+    }
+    sky = null
+  }
+
+  if (scene) {
+    scene.environment = null
+  }
+
+  pmremGenerator?.dispose()
+  pmremGenerator = null
+}
+
 function animate() {
   if (!renderer || !scene || !camera) {
     return
@@ -1488,6 +1618,9 @@ function animate() {
     selectionBoxHelper.box.setFromObject(selectionTrackedObject)
   }
   updatePlaceholderOverlayPositions()
+  if (sky) {
+    sky.position.copy(camera.position)
+  }
   renderer.render(scene, camera)
 }
 
@@ -1513,12 +1646,14 @@ function disposeScene() {
   transformGroupState = null
 
   clearLightHelpers()
+  disposeSkyResources()
 
   if (scene && fallbackLightGroup) {
     scene.remove(fallbackLightGroup)
     fallbackLightGroup.clear()
   }
   fallbackLightGroup = null
+  fallbackDirectionalLight = null
 
   if (orbitControls) {
     orbitControls.removeEventListener('change', handleControlsChange)
@@ -2500,6 +2635,7 @@ function ensureFallbackLighting() {
   }
 
   fallbackLightGroup.clear()
+  fallbackDirectionalLight = null
 
   let hasLight = false
   rootGroup.traverse((child) => {
@@ -2512,10 +2648,13 @@ function ensureFallbackLighting() {
   if (!hasLight) {
     const ambient = new THREE.AmbientLight(0xffffff, 0.35)
     const directional = new THREE.DirectionalLight(0xffffff, 0.8)
-    directional.position.set(15, 30, 20)
     directional.castShadow = true
+    directional.target.position.set(0, 0, 0)
     fallbackLightGroup.add(ambient)
     fallbackLightGroup.add(directional)
+    fallbackLightGroup.add(directional.target)
+    fallbackDirectionalLight = directional
+    applySunDirectionToFallbackLight()
   }
 }
 
