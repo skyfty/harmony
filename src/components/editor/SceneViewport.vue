@@ -190,7 +190,12 @@ interface TransformGroupState {
 let transformGroupState: TransformGroupState | null = null
 let pendingSkyboxSettings: SceneSkyboxSettings | null = null
 
-type AlignMode = 'center' | 'top' | 'bottom' | 'left' | 'right'
+type AlignMode = 'axis-x' | 'axis-y' | 'axis-z'
+const ALIGN_MODE_AXIS: Record<AlignMode, 'x' | 'y' | 'z'> = {
+  'axis-x': 'x',
+  'axis-y': 'y',
+  'axis-z': 'z',
+} as const
 
 function resolveNodeIdFromObject(object: THREE.Object3D | null): string | null {
   let current: THREE.Object3D | null = object
@@ -414,49 +419,14 @@ function dropSelectionToGround() {
   scheduleThumbnailCapture()
 }
 
-function setBoundingBoxFromObject(box: THREE.Box3, object: THREE.Object3D) {
-  box.setFromObject(object)
-  if (box.isEmpty()) {
-    object.getWorldPosition(alignTempVector)
-    box.min.copy(alignTempVector)
-    box.max.copy(alignTempVector)
-  }
-}
-
-function computeAlignmentDelta(mode: AlignMode, referenceBox: THREE.Box3, targetBox: THREE.Box3): THREE.Vector3 {
-  alignDeltaHelper.set(0, 0, 0)
-  switch (mode) {
-    case 'center': {
-      referenceBox.getCenter(alignReferenceCenterHelper)
-      targetBox.getCenter(alignTargetCenterHelper)
-      alignDeltaHelper.set(
-        alignReferenceCenterHelper.x - alignTargetCenterHelper.x,
-        0,
-        alignReferenceCenterHelper.z - alignTargetCenterHelper.z,
-      )
-      break
-    }
-    case 'top': {
-      alignDeltaHelper.y = referenceBox.max.y - targetBox.max.y
-      break
-    }
-    case 'bottom': {
-      alignDeltaHelper.y = referenceBox.min.y - targetBox.min.y
-      break
-    }
-    case 'left': {
-      alignDeltaHelper.x = referenceBox.min.x - targetBox.min.x
-      break
-    }
-    case 'right': {
-      alignDeltaHelper.x = referenceBox.max.x - targetBox.max.x
-      break
-    }
-  }
-  return alignDeltaHelper
+function snapValueToGrid(value: number): number {
+  // Round to the nearest grid cell so aligned nodes land on gridHelper lines.
+  return Math.round(value / GRID_CELL_SIZE) * GRID_CELL_SIZE
 }
 
 function alignSelection(mode: AlignMode) {
+  const axis = ALIGN_MODE_AXIS[mode]
+
   const primaryId = sceneStore.selectedNodeId
   if (!primaryId) {
     return
@@ -479,7 +449,8 @@ function alignSelection(mode: AlignMode) {
   }
 
   referenceObject.updateMatrixWorld(true)
-  setBoundingBoxFromObject(alignReferenceBoundingBox, referenceObject)
+  referenceObject.getWorldPosition(alignReferenceWorldPositionHelper)
+  const targetAxisValue = snapValueToGrid(alignReferenceWorldPositionHelper[axis])
 
   const updates: TransformUpdatePayload[] = []
 
@@ -490,15 +461,16 @@ function alignSelection(mode: AlignMode) {
     }
 
     targetObject.updateMatrixWorld(true)
-    setBoundingBoxFromObject(alignTargetBoundingBox, targetObject)
+    targetObject.getWorldPosition(alignWorldPositionHelper)
 
-    const delta = computeAlignmentDelta(mode, alignReferenceBoundingBox, alignTargetBoundingBox)
-    if (delta.lengthSq() <= ALIGN_DELTA_EPSILON) {
+    const deltaValue = targetAxisValue - alignWorldPositionHelper[axis]
+    if (Math.abs(deltaValue) <= ALIGN_DELTA_EPSILON) {
       continue
     }
 
-    targetObject.getWorldPosition(alignWorldPositionHelper)
-    alignWorldPositionHelper.add(delta)
+    alignDeltaHelper.set(0, 0, 0)
+    alignDeltaHelper[axis] = deltaValue
+    alignWorldPositionHelper.add(alignDeltaHelper)
     alignLocalPositionHelper.copy(alignWorldPositionHelper)
     if (targetObject.parent) {
       targetObject.parent.worldToLocal(alignLocalPositionHelper)
@@ -642,14 +614,10 @@ const dropLocalPositionHelper = new THREE.Vector3()
 const selectionHighlightPositionHelper = new THREE.Vector3()
 const selectionHighlightBoundingBox = new THREE.Box3()
 const selectionHighlightSizeHelper = new THREE.Vector3()
-const alignReferenceBoundingBox = new THREE.Box3()
-const alignTargetBoundingBox = new THREE.Box3()
-const alignReferenceCenterHelper = new THREE.Vector3()
-const alignTargetCenterHelper = new THREE.Vector3()
+const alignReferenceWorldPositionHelper = new THREE.Vector3()
 const alignDeltaHelper = new THREE.Vector3()
 const alignWorldPositionHelper = new THREE.Vector3()
 const alignLocalPositionHelper = new THREE.Vector3()
-const alignTempVector = new THREE.Vector3()
 
 function buildTransformGroupState(primaryId: string | null): TransformGroupState | null {
   const selectedIds = sceneStore.selectedNodeIds.filter((id) => !sceneStore.isNodeSelectionLocked(id))

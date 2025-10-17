@@ -120,7 +120,7 @@ import type { SceneSkyboxSettings } from '@/types/scene-viewport-settings'
 import type { SkyboxParameterKey, SkyboxPresetDefinition } from '@/types/skybox'
 import { CUSTOM_SKYBOX_PRESET_ID, cloneSkyboxSettings } from '@/stores/skyboxPresets'
 
-type AlignMode = 'center' | 'top' | 'bottom' | 'left' | 'right'
+type AlignMode = 'axis-x' | 'axis-y' | 'axis-z'
 
 const props = defineProps<{
   showGrid: boolean
@@ -161,11 +161,9 @@ const presetOptions = computed(() => [
 ])
 
 const alignButtons = [
-  { mode: 'center', icon: 'mdi-align-horizontal-center', title: 'Align to Center' },
-  { mode: 'left', icon: 'mdi-align-horizontal-left', title: 'Align to Left' },
-  { mode: 'right', icon: 'mdi-align-horizontal-right', title: 'Align to Right' },
-  { mode: 'top', icon: 'mdi-align-vertical-top', title: 'Align to Top' },
-  { mode: 'bottom', icon: 'mdi-align-vertical-bottom', title: 'Align to Bottom' },
+  { mode: 'axis-x', icon: 'mdi-axis-x-arrow', title: 'Align X Axis' },
+  { mode: 'axis-y', icon: 'mdi-axis-y-arrow', title: 'Align Y Axis' },
+  { mode: 'axis-z', icon: 'mdi-axis-z-arrow', title: 'Align Z Axis' },
 ] satisfies Array<{ mode: AlignMode; icon: string; title: string }>
 const skyboxParameterDefinitions = [
   { key: 'exposure', label: 'Exposure', min: 0.05, max: 2, step: 0.01 },
