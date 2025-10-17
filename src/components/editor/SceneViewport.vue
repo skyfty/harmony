@@ -232,6 +232,38 @@ function rotateSelectedNodeClockwise(nodeId: string) {
   scheduleThumbnailCapture()
 }
 
+function updateSelectDragPosition(drag: SelectionDragState, event: PointerEvent): boolean {
+  const planePoint = projectPointerToPlane(event, drag.plane)
+  if (!planePoint) {
+    return false
+  }
+
+  const worldPosition = planePoint.sub(drag.pointerOffset)
+  snapVectorToGrid(worldPosition)
+
+  const newLocalPosition = worldPosition.clone()
+  if (drag.parent) {
+    drag.parent.worldToLocal(newLocalPosition)
+  }
+  newLocalPosition.y = drag.initialLocalPosition.y
+
+  drag.object.position.copy(newLocalPosition)
+  drag.object.updateMatrixWorld(true)
+  drag.object.getWorldPosition(selectDragWorldPosition)
+
+  updateSelectionBox(drag.object)
+  updateGridHighlight(selectDragWorldPosition)
+
+  emit('updateNodeTransform', {
+    id: drag.nodeId,
+    position: toVector3Like(drag.object.position),
+    rotation: toEulerLike(drag.object.rotation),
+    scale: toVector3Like(drag.object.scale),
+  })
+
+  return true
+}
+
 function disableOrbitForSelectDrag() {
   if (orbitControls && !isSelectDragOrbitDisabled) {
     isSelectDragOrbitDisabled = true
@@ -265,6 +297,7 @@ const placeholderOverlays = reactive<Record<string, PlaceholderOverlayState>>({}
 const placeholderOverlayList = computed(() => Object.values(placeholderOverlays))
 const overlayPositionHelper = new THREE.Vector3()
 const cameraOffsetHelper = new THREE.Vector3()
+const selectDragWorldPosition = new THREE.Vector3()
 
 const draggingChangedHandler = (event: unknown) => {
   const value = (event as { value?: boolean })?.value ?? false
@@ -1345,6 +1378,8 @@ function handlePointerDown(event: PointerEvent) {
 
   if (selectionDrag) {
     disableOrbitForSelectDrag()
+    selectionDrag.object.getWorldPosition(selectDragWorldPosition)
+    updateGridHighlight(selectDragWorldPosition)
   }
 
   pointerTrackingState = {
@@ -1386,27 +1421,10 @@ function handlePointerMove(event: PointerEvent) {
       pointerTrackingState.moved = true
     }
 
-    const intersection = projectPointerToPlane(event, drag.plane)
-    if (!intersection) {
+    if (updateSelectDragPosition(drag, event)) {
       return
     }
 
-  intersection.sub(drag.pointerOffset)
-    const newLocalPosition = intersection.clone()
-    if (drag.parent) {
-      drag.parent.worldToLocal(newLocalPosition)
-    }
-    newLocalPosition.y = drag.initialLocalPosition.y
-    drag.object.position.copy(newLocalPosition)
-    drag.object.updateMatrixWorld(true)
-    updateSelectionBox(drag.object)
-
-    emit('updateNodeTransform', {
-      id: drag.nodeId,
-      position: toVector3Like(drag.object.position),
-      rotation: toEulerLike(drag.object.rotation),
-      scale: toVector3Like(drag.object.scale),
-    })
     return
   }
 
@@ -1433,6 +1451,7 @@ function handlePointerUp(event: PointerEvent) {
 
   if (trackingState.selectionDrag) {
     restoreOrbitAfterSelectDrag()
+    updateGridHighlight(null)
   }
 
   if (trackingState.selectionDrag && trackingState.selectionDrag.hasDragged) {
@@ -1471,6 +1490,7 @@ function handlePointerCancel(event: PointerEvent) {
 
   if (pointerTrackingState.selectionDrag) {
     restoreOrbitAfterSelectDrag()
+    updateGridHighlight(null)
   }
 
   if (pointerTrackingState.selectionDrag && pointerTrackingState.selectionDrag.hasDragged) {
