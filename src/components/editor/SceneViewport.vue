@@ -1430,6 +1430,15 @@ function updateGridHighlightFromObject(object: THREE.Object3D | null) {
     return
   }
 
+  let current: THREE.Object3D | null = object
+  while (current) {
+    if (current.userData?.suppressGridHighlight) {
+      updateGridHighlight(null)
+      return
+    }
+    current = current.parent ?? null
+  }
+
   object.updateMatrixWorld(true)
   object.getWorldPosition(gridHighlightPositionHelper)
   gridHighlightBoundingBox.setFromObject(object)
@@ -1836,6 +1845,7 @@ function createLightObject(node: SceneNode): THREE.Object3D {
   const container = new THREE.Group()
   container.name = `${node.name}-Light`
   container.userData.nodeId = node.id
+  container.userData.suppressGridHighlight = true
 
   const config = node.light
   if (!config) {
