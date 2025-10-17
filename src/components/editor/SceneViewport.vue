@@ -66,7 +66,8 @@ let gridHighlight: THREE.Mesh | null = null
 
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
-const CLICK_DRAG_THRESHOLD_PX = 4
+const CLICK_DRAG_THRESHOLD_PX = 5
+const SELECT_ROTATE_STEP_RAD = THREE.MathUtils.degToRad(15)
 const rootGroup = new THREE.Group()
 const objectMap = new Map<string, THREE.Object3D>()
 type LightHelperObject = THREE.Object3D & { dispose?: () => void; update?: () => void }
@@ -104,9 +105,136 @@ interface PointerTrackingState {
   startX: number
   startY: number
   moved: boolean
+  button: number
+  hitNodeId: string | null
+  selectionDrag: SelectionDragState | null
 }
 
 let pointerTrackingState: PointerTrackingState | null = null
+
+interface SelectionDragState {
+  nodeId: string
+  object: THREE.Object3D
+  plane: THREE.Plane
+  pointerOffset: THREE.Vector3
+  initialLocalPosition: THREE.Vector3
+  initialRotation: THREE.Euler
+  parent: THREE.Object3D | null
+  hasDragged: boolean
+}
+
+function resolveNodeIdFromObject(object: THREE.Object3D | null): string | null {
+  let current: THREE.Object3D | null = object
+  while (current) {
+    const nodeId = current.userData?.nodeId as string | undefined
+    if (nodeId) {
+      return nodeId
+    }
+    current = current.parent ?? null
+  }
+  return null
+}
+
+function pickNodeAtPointer(event: PointerEvent): {
+  nodeId: string
+  object: THREE.Object3D
+  point: THREE.Vector3
+} | null {
+  if (!canvasRef.value || !camera) {
+    return null
+  }
+
+  const rect = canvasRef.value.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) {
+    return null
+  }
+
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  raycaster.setFromCamera(pointer, camera)
+  const intersections = raycaster.intersectObjects(rootGroup.children, true)
+
+  for (const intersection of intersections) {
+    const nodeId = resolveNodeIdFromObject(intersection.object)
+    if (!nodeId) {
+      continue
+    }
+    if (sceneStore.isNodeSelectionLocked(nodeId)) {
+      continue
+    }
+    const baseObject = objectMap.get(nodeId)
+    if (!baseObject) {
+      continue
+    }
+    return {
+      nodeId,
+      object: baseObject,
+      point: intersection.point.clone(),
+    }
+  }
+
+  return null
+}
+
+function createSelectionDragState(nodeId: string, object: THREE.Object3D, hitPoint: THREE.Vector3): SelectionDragState {
+  const worldPosition = new THREE.Vector3()
+  object.getWorldPosition(worldPosition)
+  const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 1, 0), worldPosition)
+  return {
+    nodeId,
+    object,
+    plane,
+    pointerOffset: hitPoint.clone().sub(worldPosition),
+    initialLocalPosition: object.position.clone(),
+    initialRotation: object.rotation.clone(),
+    parent: object.parent ?? null,
+    hasDragged: false,
+  }
+}
+
+function projectPointerToPlane(event: PointerEvent, plane: THREE.Plane): THREE.Vector3 | null {
+  if (!camera || !canvasRef.value) {
+    return null
+  }
+
+  const rect = canvasRef.value.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) {
+    return null
+  }
+
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  raycaster.setFromCamera(pointer, camera)
+  const intersectionPoint = new THREE.Vector3()
+  if (raycaster.ray.intersectPlane(plane, intersectionPoint)) {
+    return intersectionPoint
+  }
+  return null
+}
+
+function rotateSelectedNodeClockwise(nodeId: string) {
+  const object = objectMap.get(nodeId)
+  if (!object) {
+    return
+  }
+
+  object.rotation.y -= SELECT_ROTATE_STEP_RAD
+  object.updateMatrixWorld(true)
+  updateSelectionBox(object)
+
+  emit('updateNodeTransform', {
+    id: nodeId,
+    position: toVector3Like(object.position),
+    rotation: toEulerLike(object.rotation),
+    scale: toVector3Like(object.scale),
+  })
+
+  scheduleThumbnailCapture()
+}
+
+function handleViewportContextMenu(event: MouseEvent) {
+  event.preventDefault()
+}
 
 interface PlaceholderOverlayState {
   id: string
@@ -982,6 +1110,7 @@ function initScene() {
   }
 
   canvasRef.value.addEventListener('pointerdown', handlePointerDown)
+  canvasRef.value.addEventListener('contextmenu', handleViewportContextMenu)
   if (typeof window !== 'undefined') {
     window.addEventListener('pointermove', handlePointerMove)
     window.addEventListener('pointerup', handlePointerUp)
@@ -1039,6 +1168,7 @@ function disposeScene() {
 
   if (canvasRef.value) {
     canvasRef.value.removeEventListener('pointerdown', handlePointerDown)
+    canvasRef.value.removeEventListener('contextmenu', handleViewportContextMenu)
   }
   if (typeof window !== 'undefined') {
     window.removeEventListener('pointermove', handlePointerMove)
@@ -1165,7 +1295,8 @@ function handlePointerDown(event: PointerEvent) {
     return
   }
 
-  if (event.pointerType !== 'touch' && event.button !== 0) {
+  const button = event.button
+  if (button !== 0 && button !== 2) {
     pointerTrackingState = null
     return
   }
@@ -1175,11 +1306,36 @@ function handlePointerDown(event: PointerEvent) {
     return
   }
 
+  const hit = pickNodeAtPointer(event)
+
+  if (button === 2) {
+    if (props.activeTool === 'select' && hit?.nodeId === props.selectedNodeId) {
+      event.preventDefault()
+      event.stopPropagation()
+      rotateSelectedNodeClockwise(hit.nodeId)
+    }
+    pointerTrackingState = null
+    return
+  }
+
+  try {
+    canvasRef.value.setPointerCapture(event.pointerId)
+  } catch (error) {
+    /* noop */
+  }
+
+  const selectionDrag = props.activeTool === 'select' && hit && hit.nodeId === props.selectedNodeId
+    ? createSelectionDragState(hit.nodeId, hit.object, hit.point)
+    : null
+
   pointerTrackingState = {
     pointerId: event.pointerId,
     startX: event.clientX,
     startY: event.clientY,
     moved: false,
+    button,
+    hitNodeId: hit?.nodeId ?? null,
+    selectionDrag,
   }
 }
 
@@ -1188,18 +1344,54 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
 
-  if (pointerTrackingState.moved) {
-    return
-  }
-
   if (transformControls?.dragging) {
     pointerTrackingState.moved = true
     return
   }
 
+  if (pointerTrackingState.button !== 0) {
+    return
+  }
+
   const dx = event.clientX - pointerTrackingState.startX
   const dy = event.clientY - pointerTrackingState.startY
-  if (Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
+  const drag = pointerTrackingState.selectionDrag
+
+  if (drag) {
+    const distance = Math.hypot(dx, dy)
+    if (!drag.hasDragged) {
+      if (distance < CLICK_DRAG_THRESHOLD_PX) {
+        return
+      }
+      drag.hasDragged = true
+      pointerTrackingState.moved = true
+    }
+
+    const intersection = projectPointerToPlane(event, drag.plane)
+    if (!intersection) {
+      return
+    }
+
+  intersection.sub(drag.pointerOffset)
+    const newLocalPosition = intersection.clone()
+    if (drag.parent) {
+      drag.parent.worldToLocal(newLocalPosition)
+    }
+    newLocalPosition.y = drag.initialLocalPosition.y
+    drag.object.position.copy(newLocalPosition)
+    drag.object.updateMatrixWorld(true)
+    updateSelectionBox(drag.object)
+
+    emit('updateNodeTransform', {
+      id: drag.nodeId,
+      position: toVector3Like(drag.object.position),
+      rotation: toEulerLike(drag.object.rotation),
+      scale: toVector3Like(drag.object.scale),
+    })
+    return
+  }
+
+  if (!pointerTrackingState.moved && Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
     pointerTrackingState.moved = true
   }
 }
@@ -1212,7 +1404,33 @@ function handlePointerUp(event: PointerEvent) {
   const trackingState = pointerTrackingState
   pointerTrackingState = null
 
-  if (trackingState.moved || transformControls?.dragging) {
+  if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
+    canvasRef.value.releasePointerCapture(event.pointerId)
+  }
+
+  if (transformControls?.dragging) {
+    return
+  }
+
+  if (trackingState.selectionDrag && trackingState.selectionDrag.hasDragged) {
+    scheduleThumbnailCapture()
+    return
+  }
+
+  if (trackingState.button !== 0) {
+    return
+  }
+
+  if (trackingState.moved) {
+    return
+  }
+
+  if (
+    props.activeTool === 'select' &&
+    trackingState.hitNodeId &&
+    trackingState.hitNodeId === props.selectedNodeId
+  ) {
+    emit('selectNode', null)
     return
   }
 
@@ -1220,42 +1438,34 @@ function handlePointerUp(event: PointerEvent) {
 }
 
 function handlePointerCancel(event: PointerEvent) {
-  if (pointerTrackingState && event.pointerId === pointerTrackingState.pointerId) {
-    pointerTrackingState = null
+  if (!pointerTrackingState || event.pointerId !== pointerTrackingState.pointerId) {
+    return
   }
+
+  if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
+    canvasRef.value.releasePointerCapture(event.pointerId)
+  }
+
+  if (pointerTrackingState.selectionDrag && pointerTrackingState.selectionDrag.hasDragged) {
+    scheduleThumbnailCapture()
+  }
+
+  pointerTrackingState = null
 }
 
 function selectNodeAtPointer(event: PointerEvent) {
-  if (!canvasRef.value || !camera || !scene) {
+  if (!scene) {
     return
   }
 
-  const rect = canvasRef.value.getBoundingClientRect()
-  if (rect.width === 0 || rect.height === 0) {
-    return
-  }
-
-  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
-  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
-
-  raycaster.setFromCamera(pointer, camera)
-  const intersects = raycaster.intersectObjects(rootGroup.children, true)
-
-  const hit = intersects.find((intersection) => {
-    const nodeId = intersection.object.userData?.nodeId as string | undefined
-    if (!nodeId) {
-      return false
-    }
-    return !sceneStore.isNodeSelectionLocked(nodeId)
-  })
+  const hit = pickNodeAtPointer(event)
 
   if (!hit) {
     emit('selectNode', null)
     return
   }
 
-  const nodeId = hit.object.userData.nodeId as string
-  emit('selectNode', nodeId)
+  emit('selectNode', hit.nodeId)
 }
 
 function extractAssetPayload(event: DragEvent): { assetId: string } | null {
