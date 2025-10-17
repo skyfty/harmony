@@ -81,6 +81,7 @@ const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
 const MIN_CAMERA_HEIGHT = 0.25
 const MIN_TARGET_HEIGHT = 0
 const GRID_CELL_SIZE = 1
+const GRID_BASE_HEIGHT = 0.0015
 const GRID_HIGHLIGHT_HEIGHT = 0.02
 const GRID_HIGHLIGHT_PADDING = 0.1
 const GRID_HIGHLIGHT_MIN_SIZE = GRID_CELL_SIZE * 1.3
@@ -337,11 +338,16 @@ const draggingChangedHandler = (event: unknown) => {
 }
 
 const gridHelper = new THREE.GridHelper(1000, 1000, 0x4dd0e1, 0x4dd0e1)
+gridHelper.position.y = GRID_BASE_HEIGHT
 const gridMaterials = Array.isArray(gridHelper.material) ? gridHelper.material : [gridHelper.material]
 gridMaterials.forEach((material) => {
   material.depthWrite = false
   material.transparent = true
   material.opacity = 0.35
+  material.toneMapped = false
+  material.polygonOffset = true
+  material.polygonOffsetFactor = -2
+  material.polygonOffsetUnits = -2
 })
 
 const axesHelper = new THREE.AxesHelper(4)
@@ -1338,15 +1344,15 @@ function createGridHighlight() {
 
   const planeGeometry = new THREE.PlaneGeometry(1, 1, 1, 1)
   const planeMaterial = new THREE.MeshPhysicalMaterial({
-    color: 0xfff176,
-    emissive: 0xffca28,
-    emissiveIntensity: 0.35,
-    metalness: 0.75,
-    roughness: 0.25,
-    clearcoat: 0.55,
-    clearcoatRoughness: 0.2,
+    color: 0xffecb3,
+    emissive: 0xffc107,
+    emissiveIntensity: 0.45,
+    metalness: 0.6,
+    roughness: 0.3,
+    clearcoat: 0.4,
+    clearcoatRoughness: 0.25,
     transparent: true,
-    opacity: 0.75,
+    opacity: 0.6,
     side: THREE.DoubleSide,
     depthWrite: false,
     toneMapped: false,
@@ -1362,7 +1368,25 @@ function createGridHighlight() {
   plane.renderOrder = 1
   group.add(plane)
 
+  const outlineGeometry = new THREE.EdgesGeometry(new THREE.PlaneGeometry(1, 1))
+  const outlineMaterial = new THREE.LineBasicMaterial({
+    color: 0xfff176,
+    transparent: true,
+    opacity: 0.9,
+    depthWrite: false,
+    toneMapped: false,
+  })
+  outlineMaterial.polygonOffset = true
+  outlineMaterial.polygonOffsetFactor = 1
+  outlineMaterial.polygonOffsetUnits = 1
+  const outline = new THREE.LineSegments(outlineGeometry, outlineMaterial)
+  outline.name = 'GridHighlightOutline'
+  outline.rotation.x = -Math.PI / 2
+  outline.renderOrder = 2
+  group.add(outline)
+
   group.userData.plane = plane
+  group.userData.outline = outline
   group.userData.lastDimensions = { width: 0, depth: 0 }
 
   return group
@@ -1386,11 +1410,15 @@ function updateGridHighlight(position: THREE.Vector3 | null, dimensions?: GridHi
   const depth = Math.max(dimensions?.depth ?? DEFAULT_GRID_HIGHLIGHT_SIZE, GRID_HIGHLIGHT_MIN_SIZE)
 
   const plane = gridHighlight.userData.plane as THREE.Mesh | undefined
+  const outline = gridHighlight.userData.outline as THREE.LineSegments | undefined
 
   const lastDimensions = gridHighlight.userData.lastDimensions as GridHighlightDimensions | undefined
   if (!lastDimensions || Math.abs(lastDimensions.width - width) > 1e-3 || Math.abs(lastDimensions.depth - depth) > 1e-3) {
     if (plane) {
       plane.scale.set(width, depth, 1)
+    }
+    if (outline) {
+      outline.scale.set(width, depth, 1)
     }
     gridHighlight.userData.lastDimensions = { width, depth }
   }
