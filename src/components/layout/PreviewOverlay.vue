@@ -463,12 +463,12 @@ function updateFirstPerson(delta: number) {
   const verticalSpeed = state.pointerLocked ? VERTICAL_SPEED_UNITS_PER_SECOND : VERTICAL_SPEED_UNITS_PER_SECOND * 0.5
   const distance = walkSpeed * delta
 
-  const forwardInput = (pressedKeys.has('ArrowUp') ? 1 : 0) - (pressedKeys.has('ArrowDown') ? 1 : 0)
+  const forwardInput = (pressedKeys.has('ArrowUp') || pressedKeys.has('KeyW') ? 1 : 0) - (pressedKeys.has('ArrowDown') || pressedKeys.has('KeyS') ? 1 : 0)
   if (forwardInput !== 0) {
     pointerControls.moveForward(forwardInput * distance)
   }
 
-  const strafeInput = (pressedKeys.has('ArrowRight') ? 1 : 0) - (pressedKeys.has('ArrowLeft') ? 1 : 0)
+  const strafeInput = (pressedKeys.has('ArrowRight') || pressedKeys.has('KeyD') ? 1 : 0) - (pressedKeys.has('ArrowLeft') || pressedKeys.has('KeyA') ? 1 : 0)
   if (strafeInput !== 0) {
     pointerControls.moveRight(strafeInput * distance)
   }
@@ -522,6 +522,7 @@ function isTextInputTarget(target: EventTarget | null): target is HTMLElement {
 }
 
 function onKeyDown(event: KeyboardEvent) {
+  console.log('Key down:', event.code)
   if (isTextInputTarget(event.target)) {
     return
   }
@@ -542,13 +543,14 @@ function onKeyDown(event: KeyboardEvent) {
     event.preventDefault()
     return
   }
-  if (event.code === 'ArrowUp' || event.code === 'ArrowDown' || event.code === 'ArrowLeft' || event.code === 'ArrowRight') {
+  if (event.code === 'ArrowUp' || event.code === 'KeyW' || event.code === 'ArrowDown' || event.code === 'KeyS' || event.code === 'ArrowLeft' || event.code === 'KeyA' || event.code === 'ArrowRight' || event.code === 'KeyD') {
     event.preventDefault()
   }
 }
 
 function onKeyUp(event: KeyboardEvent) {
   pressedKeys.delete(event.code)
+  console.log('Key up:', event.code)
   if (event.code === 'Escape') {
     resetKeyState()
     return
