@@ -120,6 +120,28 @@
       <v-divider vertical />
 
       <v-btn
+        density="compact"
+        size="small"
+        class="toolbar-button camera-control-button"
+        :title="cameraControlMode === 'orbit' ? '切换到建筑模式控制' : '切换到轨道模式控制'"
+        @click="sceneStore.toggleViewportCameraControl()"
+      >
+        <div class="camera-control-button-icons">
+          <v-icon
+            size="16"
+            :class="['camera-control-icon', { 'is-active': cameraControlMode === 'orbit' }]"
+          >
+            mdi-orbit-variant
+          </v-icon>
+          <v-icon
+            size="16"
+            :class="['camera-control-icon', { 'is-active': cameraControlMode === 'building' }]"
+          >
+            mdi-city-variant-outline
+          </v-icon>
+        </div>
+      </v-btn>
+      <v-btn
         icon="mdi-rotate-left"
         density="compact"
         color="undefined"
@@ -177,7 +199,7 @@
 
 <script setup lang="ts">
 import { computed, ref, toRefs, watch } from 'vue'
-import type { SceneSkyboxSettings } from '@/types/scene-viewport-settings'
+import type { CameraControlMode, SceneSkyboxSettings } from '@/types/scene-viewport-settings'
 import type { SkyboxParameterKey, SkyboxPresetDefinition } from '@/types/skybox'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
 import { CUSTOM_SKYBOX_PRESET_ID, cloneSkyboxSettings } from '@/stores/skyboxPresets'
@@ -187,6 +209,7 @@ const props = defineProps<{
   showGrid: boolean
   showAxes: boolean
   cameraMode: 'perspective' | 'orthographic'
+  cameraControlMode: CameraControlMode
   canDropSelection: boolean
   canAlignSelection: boolean
   skyboxSettings: SceneSkyboxSettings
@@ -423,5 +446,26 @@ function stopOrbitRotation() {
 .slider-value {
   color: #4dd0e1;
   font-variant-numeric: tabular-nums;
+}
+
+.camera-control-button {
+  padding: 0 2px;
+}
+
+.camera-control-button-icons {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.camera-control-icon {
+  opacity: 0.45;
+  color: rgba(255, 255, 255, 0.72);
+  transition: opacity 120ms ease, color 120ms ease;
+}
+
+.camera-control-icon.is-active {
+  opacity: 1;
+  color: #4dd0e1;
 }
 </style>
