@@ -1,4 +1,5 @@
 export type CameraProjectionMode = 'perspective' | 'orthographic'
+export type CameraControlMode = 'orbit' | 'building'
 
 export interface SceneSkyboxSettings {
   presetId: string
@@ -15,5 +16,6 @@ export interface SceneViewportSettings {
   showGrid: boolean
   showAxes: boolean
   cameraProjection: CameraProjectionMode
+  cameraControl: CameraControlMode
   skybox: SceneSkyboxSettings
 }
