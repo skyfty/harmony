@@ -12,7 +12,7 @@ import type { EditorTool } from '@/types/editor-tool'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { loadObjectFromFile } from '@/plugins/assetImport'
 import { createGeometry } from '@/plugins/geometry'
-import type { CameraProjectionMode, SceneSkyboxSettings } from '@/types/scene-viewport-settings'
+import type { CameraProjectionMode, CameraControlMode, SceneSkyboxSettings } from '@/types/scene-viewport-settings'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SkyboxParameterKey } from '@/types/skybox'
 import { SKYBOX_PRESETS, CUSTOM_SKYBOX_PRESET_ID, cloneSkyboxSettings } from '@/stores/skyboxPresets'
@@ -121,8 +121,14 @@ const DROP_TO_GROUND_EPSILON = 1e-4
 const ALIGN_DELTA_EPSILON = 1e-6
 const CAMERA_RECENTER_DURATION_MS = 320
 
-type CameraControlMode = 'orbit' | 'building'
-const cameraControlMode = ref<CameraControlMode>('orbit')
+const cameraControlMode = computed<CameraControlMode>({
+  get: () => sceneStore.viewportSettings.cameraControlMode,
+  set: (mode) => {
+    if (mode !== sceneStore.viewportSettings.cameraControlMode) {
+      sceneStore.setCameraControlMode(mode)
+    }
+  },
+})
 const BUILDING_MODE_POLAR_ANGLE = THREE.MathUtils.degToRad(60)
 const BUILDING_MOVE_SPEED = 6
 const BUILDING_BOOST_MULTIPLIER = 2

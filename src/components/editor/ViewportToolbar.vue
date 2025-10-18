@@ -5,6 +5,8 @@
         icon="mdi-camera-outline"
         density="compact"
         size="small"
+        color="undefined"
+        variant="text"
         class="toolbar-button"
         title="Capture Screenshot"
         @click="emit('capture-screenshot')"
@@ -14,6 +16,8 @@
         icon="mdi-arrow-collapse-down"
         density="compact"
         size="small"
+        color="undefined"
+        variant="text"
         class="toolbar-button"
         title="Drop to Ground"
         :disabled="!canDropSelection"
@@ -26,31 +30,13 @@
         density="compact"
         size="small"
         class="toolbar-button"
+        color="undefined"
+        variant="text"
         :disabled="!canAlignSelection"
         :title="button.title"
         @click="emitAlign(button.mode)"
       />
       <v-divider vertical />
-      <v-btn
-        density="compact"
-        size="small"
-        class="toolbar-button camera-mode-button"
-        :title="cameraModeTitle"
-        @click="emit('toggle-camera-control')"
-      >
-        <v-icon
-          size="16"
-          :class="['camera-mode-icon', { 'is-active': cameraControlMode === 'orbit' }]"
-        >
-          mdi-orbit
-        </v-icon>
-        <v-icon
-          size="16"
-          :class="['camera-mode-icon', { 'is-active': cameraControlMode === 'building' }]"
-        >
-          mdi-city-variant-outline
-        </v-icon>
-      </v-btn>
       <v-btn
         :icon="showGrid ? 'mdi-grid' : 'mdi-grid-off'"
         :color="showGrid ? 'primary' : undefined"
@@ -71,6 +57,7 @@
         title="Toggle Axes"
         @click="toggleAxesVisibility"
       />
+
       <v-menu
         v-model="skyboxMenuOpen"
         location="bottom"
@@ -131,9 +118,12 @@
         </v-card>
       </v-menu>
       <v-divider vertical />
+
       <v-btn
         icon="mdi-rotate-left"
         density="compact"
+        color="undefined"
+        variant="text"
         size="small"
         class="toolbar-button"
         title="Orbit Left"
@@ -148,6 +138,8 @@
         icon="mdi-rotate-right"
         density="compact"
         size="small"
+        color="undefined"
+        variant="text"
         class="toolbar-button"
         title="Orbit Right"
         @mousedown="handleOrbitRightStart"
@@ -157,11 +149,24 @@
         @touchend="handleOrbitStop"
         @click.prevent
       />
+      <v-btn
+        :icon="cameraControlModeIcon"
+ 
+        color="undefined"
+        variant="text"
+        density="compact"
+        size="small"
+        class="toolbar-button"
+        :title="cameraModeTitle"
+        @click="emit('toggle-camera-control')"
+      />
       <v-divider vertical />
       <v-btn
         icon="mdi-camera"
         density="compact"
         size="small"
+        color="undefined"
+        variant="text"
         class="toolbar-button"
         title="Reset to Default View"
         @click="emit('reset-camera')"
@@ -242,6 +247,10 @@ const cameraModeTitle = computed(() =>
   cameraControlMode.value === 'orbit'
     ? 'Switch to Building Camera Controls'
     : 'Switch to Orbit Camera Controls',
+)
+
+const cameraControlModeIcon = computed(() =>
+  cameraControlMode.value === 'orbit' ? 'mdi-orbit' : 'mdi-city-variant-outline',
 )
 
 function handlePresetSelect(value: string) {
@@ -363,22 +372,6 @@ function stopOrbitRotation() {
   border-radius: 3px;
   min-width: 22px;
   height: 22px;
-}
-
-.camera-mode-button {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 0 6px;
-}
-
-.camera-mode-icon {
-  color: rgba(207, 216, 227, 0.6);
-  transition: color 0.2s ease;
-}
-
-.camera-mode-icon.is-active {
-  color: var(--v-theme-primary);
 }
 
 .skybox-card {
