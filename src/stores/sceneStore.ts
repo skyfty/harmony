@@ -1192,12 +1192,12 @@ export const useSceneStore = defineStore('scene', {
       selectedNodeId: initialSceneDocument.selectedNodeId,
       selectedNodeIds: cloneSelection(initialSceneDocument.selectedNodeIds),
       activeTool: 'select',
-  assetCatalog,
-  assetIndex,
+      assetCatalog,
+      assetIndex,
       packageAssetMap: {},
       packageDirectoryCache,
       packageDirectoryLoaded: {},
-  projectTree: createProjectTreeFromCache(assetCatalog, packageDirectoryCache),
+      projectTree: createProjectTreeFromCache(assetCatalog, packageDirectoryCache),
       activeDirectoryId: defaultDirectoryId,
       selectedAssetId: null,
       camera: cloneCameraState(initialSceneDocument.camera),
@@ -1207,6 +1207,7 @@ export const useSceneStore = defineStore('scene', {
       cameraFocusNodeId: null,
       cameraFocusRequestId: 0,
       clipboard: null,
+    draggingAssetId: null,
       draggingAssetObject: null,
       undoStack: [],
       redoStack: [],
@@ -1423,6 +1424,9 @@ export const useSceneStore = defineStore('scene', {
     },
     setDraggingAssetObject(assetObject: Object3D | null) {
       this.draggingAssetObject = assetObject
+    },
+    setDraggingAssetId(assetId: string | null) {
+      this.draggingAssetId = assetId
     },
 
     updateNodeTransform(payload: { id: string; position: Vector3Like; rotation: Vector3Like; scale: Vector3Like }) {

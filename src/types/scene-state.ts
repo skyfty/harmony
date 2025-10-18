@@ -33,6 +33,7 @@ export interface SceneState {
   cameraFocusNodeId: string | null
   cameraFocusRequestId: number
   clipboard: SceneClipboard | null
+  draggingAssetId: string | null
   draggingAssetObject: Object3D | null
   undoStack: SceneHistoryEntry[]
   redoStack: SceneHistoryEntry[]

@@ -95,10 +95,16 @@ const emit = defineEmits<{
 }>()
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
-const { projectTree, activeDirectoryId, currentAssets, selectedAssetId, currentDirectory } = storeToRefs(sceneStore)
+const { 
+  projectTree, 
+  activeDirectoryId, 
+  currentAssets, 
+  selectedAssetId, 
+  currentDirectory, 
+  draggingAssetId 
+} = storeToRefs(sceneStore)
 
 const openedDirectories = ref<string[]>(restoreOpenedDirectories())
-const draggingAssetId = ref<string | null>(null)
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 let dragPreviewEl: HTMLDivElement | null = null
 const addPendingAssetId = ref<string | null>(null)
@@ -398,7 +404,7 @@ function refreshGallery() {
 
 function handleAssetDragStart(event: DragEvent, asset: ProjectAsset) {
   const preparedAsset = prepareAssetForOperations(asset)
-  draggingAssetId.value = asset.id
+  sceneStore.setDraggingAssetId(asset.id)
   selectAsset(asset)
   assetCacheStore.touch(preparedAsset.id)
   
@@ -415,7 +421,7 @@ function handleAssetDragStart(event: DragEvent, asset: ProjectAsset) {
 }
 
 function handleAssetDragEnd() {
-  draggingAssetId.value = null
+  sceneStore.setDraggingAssetId(null)
   destroyDragPreview()
 }
 
@@ -833,6 +839,7 @@ function destroyDragPreview() {
 
 onBeforeUnmount(() => {
   destroyDragPreview()
+  sceneStore.setDraggingAssetId(null)
   if (searchDebounceHandle !== null) {
     clearTimeout(searchDebounceHandle)
     searchDebounceHandle = null
