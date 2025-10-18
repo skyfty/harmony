@@ -28,14 +28,17 @@ import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-vie
 import type { PlaceholderOverlayState } from '@/types/scene-viewport-placeholder-overlay-state'
 
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   sceneNodes: SceneNode[]
   activeTool: EditorTool
   selectedNodeId: string | null
   cameraState: SceneCameraState
   focusNodeId: string | null
   focusRequestId: number
-}>()
+  previewActive?: boolean
+}>(), {
+  previewActive: false,
+})
 
 const emit = defineEmits<{
   (event: 'changeTool', tool: EditorTool): void
@@ -3537,6 +3540,7 @@ function shouldHandleBuildingInput(event: KeyboardEvent): boolean {
   if (cameraControlMode.value !== 'building') return false
   if (event.defaultPrevented) return false
   if (isEditableKeyboardTarget(event.target)) return false
+  if (props.previewActive) return false
   return true
 }
 
@@ -3642,6 +3646,7 @@ function handleWindowBlur() {
 function shouldHandleViewportShortcut(event: KeyboardEvent): boolean {
   if (event.defaultPrevented) return false
   if (isEditableKeyboardTarget(event.target)) return false
+  if (props.previewActive) return false
   return true
 }
 

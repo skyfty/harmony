@@ -436,6 +436,7 @@ function isEditableKeyboardTarget(target: EventTarget | null): boolean {
 function shouldHandleViewportShortcut(event: KeyboardEvent): boolean {
   if (event.defaultPrevented) return false
   if (isEditableKeyboardTarget(event.target)) return false
+  if (previewSession.value) return false
   return true
 }
 
@@ -530,6 +531,7 @@ onBeforeUnmount(() => {
           :camera-state="camera"
           :focus-node-id="cameraFocusNodeId"
           :focus-request-id="cameraFocusRequestId"
+          :preview-active="!!previewSession"
           @change-tool="setTool"
           @select-node="handleViewportSelection"
           @update-node-transform="handleViewportTransform"
