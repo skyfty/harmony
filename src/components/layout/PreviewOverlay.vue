@@ -463,12 +463,12 @@ function updateFirstPerson(delta: number) {
   const verticalSpeed = state.pointerLocked ? VERTICAL_SPEED_UNITS_PER_SECOND : VERTICAL_SPEED_UNITS_PER_SECOND * 0.5
   const distance = walkSpeed * delta
 
-  const forwardInput = (pressedKeys.has('KeyW') ? 1 : 0) - (pressedKeys.has('KeyS') ? 1 : 0)
+  const forwardInput = (pressedKeys.has('ArrowUp') ? 1 : 0) - (pressedKeys.has('ArrowDown') ? 1 : 0)
   if (forwardInput !== 0) {
     pointerControls.moveForward(forwardInput * distance)
   }
 
-  const strafeInput = (pressedKeys.has('KeyD') ? 1 : 0) - (pressedKeys.has('KeyA') ? 1 : 0)
+  const strafeInput = (pressedKeys.has('ArrowRight') ? 1 : 0) - (pressedKeys.has('ArrowLeft') ? 1 : 0)
   if (strafeInput !== 0) {
     pointerControls.moveRight(strafeInput * distance)
   }
@@ -530,17 +530,29 @@ function onKeyDown(event: KeyboardEvent) {
     event.preventDefault()
     return
   }
+  if (event.code === 'Escape') {
+    resetKeyState()
+    return
+  }
   if (state.viewMode !== 'first-person') {
     return
   }
   pressedKeys.add(event.code)
   if (event.code === 'Space') {
     event.preventDefault()
+    return
+  }
+  if (event.code === 'ArrowUp' || event.code === 'ArrowDown' || event.code === 'ArrowLeft' || event.code === 'ArrowRight') {
+    event.preventDefault()
   }
 }
 
 function onKeyUp(event: KeyboardEvent) {
   pressedKeys.delete(event.code)
+  if (event.code === 'Escape') {
+    resetKeyState()
+    return
+  }
 }
 
 function resetKeyState() {
