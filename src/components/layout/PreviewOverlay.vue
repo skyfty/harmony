@@ -475,7 +475,7 @@ function updateFirstPerson(delta: number) {
 
   const verticalDelta = verticalSpeed * delta
   const controlCamera = camera
-  const upKeys = (pressedKeys.has('Space') ? 1 : 0) + (pressedKeys.has('KeyQ') ? 1 : 0)
+  const upKeys = (pressedKeys.has('KeyQ') ? 1 : 0)
   const downKeys =
     (pressedKeys.has('ShiftLeft') ? 1 : 0) +
     (pressedKeys.has('ShiftRight') ? 1 : 0) +
@@ -538,10 +538,6 @@ function onKeyDown(event: KeyboardEvent) {
     return
   }
   pressedKeys.add(event.code)
-  if (event.code === 'Space') {
-    event.preventDefault()
-    return
-  }
   if (event.code === 'ArrowUp' || event.code === 'KeyW' || event.code === 'ArrowDown' || event.code === 'KeyS' || event.code === 'ArrowLeft' || event.code === 'KeyA' || event.code === 'ArrowRight' || event.code === 'KeyD') {
     event.preventDefault()
   }
