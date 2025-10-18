@@ -120,39 +120,6 @@ const ORTHO_FRUSTUM_SIZE = 20
 const DROP_TO_GROUND_EPSILON = 1e-4
 const ALIGN_DELTA_EPSILON = 1e-6
 const CAMERA_RECENTER_DURATION_MS = 320
-const BUILDING_POLAR_ANGLE = THREE.MathUtils.degToRad(55)
-const ORBIT_STATE_PAN = 2
-const ORBIT_STATE_TOUCH_PAN = 4
-const ORBIT_STATE_TOUCH_DOLLY_PAN = 5
-
-const cameraControlMode = computed<CameraControlMode>({
-  get: () => sceneStore.viewportSettings.cameraControlMode,
-  set: (mode) => {
-    if (mode !== sceneStore.viewportSettings.cameraControlMode) {
-      sceneStore.setCameraControlMode(mode)
-    }
-  },
-})
-const BUILDING_MODE_POLAR_ANGLE = THREE.MathUtils.degToRad(60)
-const BUILDING_MOVE_SPEED = 6
-const BUILDING_BOOST_MULTIPLIER = 2
-const BUILDING_ROTATE_SPEED = THREE.MathUtils.degToRad(90)
-const buildingInputState = reactive({
-  forward: false,
-  backward: false,
-  left: false,
-  right: false,
-  rotateLeft: false,
-  rotateRight: false,
-  boost: false,
-})
-const worldUpDirection = new THREE.Vector3(0, 1, 0)
-const buildingForwardHelper = new THREE.Vector3()
-const buildingRightHelper = new THREE.Vector3()
-const buildingMoveHelper = new THREE.Vector3()
-const buildingOffsetHelper = new THREE.Vector3()
-const buildingSphericalHelper = new THREE.Spherical()
-let lastFrameTime: number | null = null
 
 const cameraControlMode = computed<CameraControlMode>({
   get: () => sceneStore.viewportSettings.cameraControlMode,
@@ -187,7 +154,6 @@ const isDragHovering = ref(false)
 const gridVisible = computed(() => sceneStore.viewportSettings.showGrid)
 const axesVisible = computed(() => sceneStore.viewportSettings.showAxes)
 const cameraProjectionMode = computed(() => sceneStore.viewportSettings.cameraProjection)
-const cameraControlMode = computed(() => sceneStore.viewportSettings.cameraControl)
 const skyboxSettings = computed(() => sceneStore.viewportSettings.skybox)
 const canAlignSelection = computed(() => {
   const primaryId = sceneStore.selectedNodeId
@@ -199,19 +165,8 @@ const canAlignSelection = computed(() => {
 const skyboxPresetList = SKYBOX_PRESETS
 const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((tool) => [tool.key, tool.value]))
 let activeCameraMode: CameraProjectionMode = cameraProjectionMode.value
-let activeCameraControlMode: CameraControlMode = cameraControlMode.value
 
 let pointerTrackingState: PointerTrackingState | null = null
-const buildingOffsetHelper = new THREE.Vector3()
-const worldUp = new THREE.Vector3(0, 1, 0)
-const buildingPrevTarget = new THREE.Vector3()
-const buildingPrevPosition = new THREE.Vector3()
-const buildingTargetDelta = new THREE.Vector3()
-const buildingCameraDelta = new THREE.Vector3()
-const buildingHorizontalAxis = new THREE.Vector3()
-const buildingVerticalAxis = new THREE.Vector3()
-const buildingForwardVector = new THREE.Vector3()
-const buildingNewDelta = new THREE.Vector3()
 
 type CameraTransitionState = {
   startPosition: THREE.Vector3
@@ -227,23 +182,6 @@ let cameraTransitionState: CameraTransitionState | null = null
 let transformGroupState: TransformGroupState | null = null
 let pendingSkyboxSettings: SceneSkyboxSettings | null = null
 let pendingSceneGraphSync = false
-let pendingCameraControlMode: CameraControlMode | null = null
-
-type OrbitControlBaseline = {
-  minPolarAngle: number
-  maxPolarAngle: number
-  enablePan: boolean
-  enableRotate: boolean
-  enableZoom: boolean
-  screenSpacePanning: boolean
-  panSpeed: number
-  zoomSpeed: number
-  rotateSpeed: number
-  mouseButtons: { LEFT: number; MIDDLE: number; RIGHT: number }
-  touches: { ONE: number; TWO: number }
-}
-
-let orbitControlBaseline: OrbitControlBaseline | null = null
 
 function resolveNodeIdFromObject(object: THREE.Object3D | null): string | null {
   let current: THREE.Object3D | null = object
@@ -1198,9 +1136,6 @@ function bindControlsToCamera(newCamera: THREE.PerspectiveCamera | THREE.Orthogr
   if (orbitControls) {
     orbitControls.object = newCamera
     orbitControls.update()
-    if (activeCameraControlMode === 'building') {
-      applyCameraControlMode('building')
-    }
   }
   if (transformControls) {
     transformControls.camera = newCamera
@@ -1412,173 +1347,6 @@ function orbitCameraHorizontally(direction: number) {
 
 }
 
-function captureOrbitControlBaseline(controls: OrbitControls): OrbitControlBaseline {
-  return {
-    minPolarAngle: controls.minPolarAngle,
-    maxPolarAngle: controls.maxPolarAngle,
-    enablePan: controls.enablePan,
-    enableRotate: controls.enableRotate,
-    enableZoom: controls.enableZoom,
-    screenSpacePanning: controls.screenSpacePanning,
-    panSpeed: controls.panSpeed,
-    zoomSpeed: controls.zoomSpeed,
-    rotateSpeed: controls.rotateSpeed,
-    mouseButtons: {
-      LEFT: controls.mouseButtons.LEFT,
-      MIDDLE: controls.mouseButtons.MIDDLE,
-      RIGHT: controls.mouseButtons.RIGHT,
-    },
-    touches: {
-      ONE: controls.touches.ONE,
-      TWO: controls.touches.TWO,
-    },
-  }
-}
-
-function restoreOrbitControlBaseline(controls: OrbitControls, baseline: OrbitControlBaseline) {
-  controls.minPolarAngle = baseline.minPolarAngle
-  controls.maxPolarAngle = baseline.maxPolarAngle
-  controls.enablePan = baseline.enablePan
-  controls.enableRotate = baseline.enableRotate
-  controls.enableZoom = baseline.enableZoom
-  controls.screenSpacePanning = baseline.screenSpacePanning
-  controls.panSpeed = baseline.panSpeed
-  controls.zoomSpeed = baseline.zoomSpeed
-  controls.rotateSpeed = baseline.rotateSpeed
-  controls.mouseButtons.LEFT = baseline.mouseButtons.LEFT
-  controls.mouseButtons.MIDDLE = baseline.mouseButtons.MIDDLE
-  controls.mouseButtons.RIGHT = baseline.mouseButtons.RIGHT
-  controls.touches.ONE = baseline.touches.ONE
-  controls.touches.TWO = baseline.touches.TWO
-}
-
-function configureOrbitControlsForBuilding(controls: OrbitControls) {
-  controls.enablePan = true
-  controls.enableRotate = true
-  controls.enableZoom = true
-  controls.screenSpacePanning = true
-  controls.minPolarAngle = BUILDING_POLAR_ANGLE
-  controls.maxPolarAngle = BUILDING_POLAR_ANGLE
-  controls.panSpeed = 0.9
-  controls.rotateSpeed = 1.1
-  controls.mouseButtons.LEFT = THREE.MOUSE.PAN
-  controls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY
-  controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE
-  controls.touches.ONE = THREE.TOUCH.PAN
-  controls.touches.TWO = THREE.TOUCH.DOLLY_PAN
-}
-
-function enforceBuildingPolarAngle() {
-  if (!camera || !orbitControls) {
-    return
-  }
-
-  buildingOffsetHelper.subVectors(camera.position, orbitControls.target)
-  if (buildingOffsetHelper.lengthSq() < 1e-6) {
-    buildingOffsetHelper.set(0, Math.cos(BUILDING_POLAR_ANGLE), Math.sin(BUILDING_POLAR_ANGLE)).multiplyScalar(MIN_CAMERA_DISTANCE * 2)
-  }
-
-  const spherical = new THREE.Spherical().setFromVector3(buildingOffsetHelper)
-  spherical.phi = BUILDING_POLAR_ANGLE
-  spherical.makeSafe()
-  buildingOffsetHelper.setFromSpherical(spherical)
-
-  camera.position.copy(orbitControls.target).add(buildingOffsetHelper)
-  if (camera.position.y < MIN_CAMERA_HEIGHT) {
-    camera.position.y = MIN_CAMERA_HEIGHT
-  }
-  clampCameraAboveGround(false)
-}
-
-function applyCameraControlMode(mode: CameraControlMode) {
-  if (!orbitControls || !camera) {
-    activeCameraControlMode = mode
-    pendingCameraControlMode = mode
-    return
-  }
-
-  if (!orbitControlBaseline) {
-    orbitControlBaseline = captureOrbitControlBaseline(orbitControls)
-  }
-
-  if (mode === 'orbit') {
-    if (orbitControlBaseline) {
-      restoreOrbitControlBaseline(orbitControls, orbitControlBaseline)
-    }
-    activeCameraControlMode = mode
-    pendingCameraControlMode = null
-    orbitControls.update()
-    return
-  }
-
-  configureOrbitControlsForBuilding(orbitControls)
-  enforceBuildingPolarAngle()
-  orbitControls.update()
-  activeCameraControlMode = mode
-  pendingCameraControlMode = null
-}
-
-// Re-map vertical drag motion to move along the current view direction while building mode is active.
-function adjustBuildingPan(previousTarget: THREE.Vector3, previousPosition: THREE.Vector3): boolean {
-  if (!orbitControls || !camera) {
-    return false
-  }
-
-  const state = (orbitControls as any).state as number | undefined
-  if (state !== ORBIT_STATE_PAN && state !== ORBIT_STATE_TOUCH_PAN && state !== ORBIT_STATE_TOUCH_DOLLY_PAN) {
-    return false
-  }
-
-  buildingTargetDelta.copy(orbitControls.target).sub(previousTarget)
-  buildingCameraDelta.copy(camera.position).sub(previousPosition)
-
-  if (buildingTargetDelta.lengthSq() < 1e-10 && buildingCameraDelta.lengthSq() < 1e-10) {
-    return false
-  }
-        console.log('Building pan delta:', buildingCameraDelta)
-
-  buildingForwardVector.copy(previousTarget).sub(previousPosition)
-  if (buildingForwardVector.lengthSq() < 1e-8) {
-    buildingForwardVector.set(0, -1, 0)
-  }
-  buildingForwardVector.normalize()
-
-  buildingHorizontalAxis.crossVectors(buildingForwardVector, worldUp)
-  if (buildingHorizontalAxis.lengthSq() < 1e-8) {
-    buildingHorizontalAxis.set(1, 0, 0)
-  }
-  buildingHorizontalAxis.normalize()
-
-  buildingVerticalAxis.crossVectors(buildingHorizontalAxis, buildingForwardVector)
-  if (buildingVerticalAxis.lengthSq() < 1e-8) {
-    buildingVerticalAxis.set(0, 1, 0)
-  }
-  buildingVerticalAxis.normalize()
-
-  const horizontalAmount = buildingTargetDelta.dot(buildingHorizontalAxis)
-  const verticalAmount = buildingTargetDelta.dot(buildingVerticalAxis)
-
-  buildingNewDelta.set(0, 0, 0)
-  buildingNewDelta.addScaledVector(buildingHorizontalAxis, horizontalAmount)
-  buildingNewDelta.addScaledVector(buildingForwardVector, verticalAmount)
-
-  if (buildingNewDelta.distanceToSquared(buildingTargetDelta) < 1e-12) {
-    return false
-  }
-
-  orbitControls.target.copy(previousTarget).add(buildingNewDelta)
-
-  buildingCameraDelta.set(0, 0, 0)
-  buildingCameraDelta.addScaledVector(buildingHorizontalAxis, horizontalAmount)
-  buildingCameraDelta.addScaledVector(buildingForwardVector, verticalAmount)
-  camera.position.copy(previousPosition).add(buildingCameraDelta)
-
-  enforceBuildingPolarAngle()
-  clampCameraAboveGround(false)
-
-  return true
-}
-
 watch(gridVisible, (visible, previous) => {
   applyGridVisibility(visible)
   if (previous !== undefined && visible !== previous && sceneStore.isSceneReady) {
@@ -1602,16 +1370,6 @@ watch(cameraProjectionMode, (mode, previous) => {
     return
   }
   applyProjectionMode(mode)
-  if (sceneStore.isSceneReady) {
-    scheduleThumbnailCapture()
-  }
-}, { immediate: true })
-
-watch(cameraControlMode, (mode, previous) => {
-  if (previous !== undefined && mode === previous && activeCameraControlMode === mode && pendingCameraControlMode === null) {
-    return
-  }
-  applyCameraControlMode(mode)
   if (sceneStore.isSceneReady) {
     scheduleThumbnailCapture()
   }
@@ -1845,10 +1603,6 @@ function applyCameraState(state: SceneCameraState | null | undefined) {
   const clampedTargetY = Math.max(state.target.y, MIN_TARGET_HEIGHT)
   orbitControls.target.set(state.target.x, clampedTargetY, state.target.z)
   orbitControls.update()
-  if (activeCameraControlMode === 'building') {
-    enforceBuildingPolarAngle()
-    orbitControls.update()
-  }
   clampCameraZoom()
   clampCameraAboveGround()
   isApplyingCameraState = false
@@ -2157,9 +1911,6 @@ function initScene() {
   scene.add(new THREE.HemisphereLight(0xffffff, 0x888888, 2))
 
   bindControlsToCamera(camera)
-  const initialControlMode = pendingCameraControlMode ?? cameraControlMode.value
-  applyCameraControlMode(initialControlMode)
-  pendingCameraControlMode = null
   if (cameraProjectionMode.value !== activeCameraMode && (cameraProjectionMode.value === 'orthographic' || cameraProjectionMode.value === 'perspective')) {
     applyProjectionMode(cameraProjectionMode.value)
   }
@@ -2416,11 +2167,6 @@ function animate() {
 
   let controlsUpdated = false
 
-  if (orbitControls && camera) {
-    buildingPrevTarget.copy(orbitControls.target)
-    buildingPrevPosition.copy(camera.position)
-  }
-
   if (cameraTransitionState && orbitControls) {
     const { startTime, duration, startPosition, startTarget, endPosition, endTarget } = cameraTransitionState
     const elapsed = Math.max(performance.now() - startTime, 0)
@@ -2437,10 +2183,6 @@ function animate() {
 
     camera.position.copy(cameraTransitionCurrentPosition)
     orbitControls.target.copy(cameraTransitionCurrentTarget)
-    if (activeCameraControlMode === 'building') {
-      enforceBuildingPolarAngle()
-      cameraTransitionCurrentPosition.copy(camera.position)
-    }
     orbitControls.update()
 
     if (!previousApplying) {
@@ -2456,11 +2198,8 @@ function animate() {
 
     if (progress >= 1) {
       cameraTransitionState = null
-      if (activeCameraControlMode === 'building') {
-        enforceBuildingPolarAngle()
-      }
-      clampCameraZoom()
-      clampCameraAboveGround()
+  clampCameraZoom()
+  clampCameraAboveGround()
       if (perspectiveCamera && camera !== perspectiveCamera) {
         perspectiveCamera.position.copy(camera.position)
         perspectiveCamera.quaternion.copy(camera.quaternion)
@@ -2476,15 +2215,6 @@ function animate() {
 
   if (orbitControls && !controlsUpdated) {
     orbitControls.update()
-    if (activeCameraControlMode === 'building' && !cameraTransitionState) {
-
-      const adjusted = adjustBuildingPan(buildingPrevTarget, buildingPrevPosition)
-      if (adjusted) {
-        orbitControls.update()
-        controlsUpdated = true
-        handleControlsChange()
-      }
-    }
   }
 
   if (lightHelpersNeedingUpdate.size > 0 && scene) {
