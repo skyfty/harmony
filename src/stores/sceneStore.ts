@@ -215,7 +215,7 @@ const defaultCameraState: SceneCameraState = (() => {
 
 const defaultPanelVisibility: PanelVisibilityState = {
   hierarchy: true,
-  inspector: true,
+  inspector: false,
   project: true,
 }
 
