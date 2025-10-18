@@ -976,9 +976,6 @@ async function loadDragPreviewForAsset(asset: ProjectAsset): Promise<boolean> {
     pendingPreviewAssetId = null
     return false
   }
-
-  console.log('Loading drag preview for asset', asset.id, asset.name)
-
   try {
     const object = await loadObjectFromFile(file)
     if (token !== dragPreviewLoadToken) {
@@ -2908,6 +2905,9 @@ function extractAssetPayload(event: DragEvent): { assetId: string } | null {
       } catch (error) {
         console.warn('Failed to parse drag payload', error)
       }
+    }
+    if (sceneStore.draggingAssetId) {
+      return { assetId: sceneStore.draggingAssetId }
     }
   }
   return null

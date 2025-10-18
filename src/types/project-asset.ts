@@ -1,7 +1,7 @@
 export interface ProjectAsset {
   id: string
   name: string
-  type: 'model' | 'texture' | 'image' | 'audio' | 'file'
+  type: 'model'  | 'image'   | 'file'
   description?: string
   downloadUrl: string
   previewColor: string
