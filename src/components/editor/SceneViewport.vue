@@ -1262,10 +1262,6 @@ function handleCaptureScreenshot() {
   }
 }
 
-function handleToggleCameraControlMode() {
-  sceneStore.toggleViewportCameraControl()
-}
-
 function handleOrbitLeft() {
   orbitCameraHorizontally(-1)
 }
@@ -1471,6 +1467,7 @@ function adjustBuildingPan(previousTarget: THREE.Vector3, previousPosition: THRE
   if (buildingTargetDelta.lengthSq() < 1e-10 && buildingCameraDelta.lengthSq() < 1e-10) {
     return false
   }
+        console.log('Building pan delta:', buildingCameraDelta)
 
   buildingForwardVector.copy(previousTarget).sub(previousPosition)
   if (buildingForwardVector.lengthSq() < 1e-8) {
@@ -2218,6 +2215,7 @@ function animate() {
   if (orbitControls && !controlsUpdated) {
     orbitControls.update()
     if (activeCameraControlMode === 'building' && !cameraTransitionState) {
+
       const adjusted = adjustBuildingPan(buildingPrevTarget, buildingPrevPosition)
       if (adjusted) {
         orbitControls.update()
@@ -3672,7 +3670,6 @@ defineExpose<SceneViewportHandle>({
       @capture-screenshot="handleCaptureScreenshot"
       @orbit-left="handleOrbitLeft"
       @orbit-right="handleOrbitRight"
-      @toggle-camera-control-mode="handleToggleCameraControlMode"
     />
     <div
       ref="surfaceRef"

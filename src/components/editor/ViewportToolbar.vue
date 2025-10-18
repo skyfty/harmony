@@ -116,7 +116,7 @@
         size="small"
         class="toolbar-button camera-control-button"
         :title="cameraControlMode === 'orbit' ? '切换到建筑模式控制' : '切换到轨道模式控制'"
-        @click="emit('toggle-camera-control-mode')"
+        @click="sceneStore.toggleViewportCameraControl()"
       >
         <div class="camera-control-button-icons">
           <v-icon
@@ -200,7 +200,6 @@ const emit = defineEmits<{
   (event: 'capture-screenshot'): void
   (event: 'orbit-left'): void
   (event: 'orbit-right'): void
-  (event: 'toggle-camera-control-mode'): void
 }>()
 
 const { showGrid, showAxes, canDropSelection, canAlignSelection, skyboxSettings, skyboxPresets, cameraControlMode } = toRefs(props)
