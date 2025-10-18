@@ -1919,8 +1919,9 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const assetCache = useAssetCacheStore()
+      const shouldUseCachedModel = asset.type === 'model' && assetCache.hasCache(asset.id)
 
-      if (assetCache.hasCache(asset.id)) {
+      if (shouldUseCachedModel) {
         const node = await this.addNodeFromAsset(asset, position)
         if (!node) {
           throw new Error('Asset is not ready and cannot be added to the scene')
