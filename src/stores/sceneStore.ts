@@ -225,7 +225,7 @@ const defaultViewportSettings: SceneViewportSettings = {
   showGrid: true,
   showAxes: false,
   cameraProjection: 'perspective',
-  cameraControlMode: 'orbit',
+  cameraControlMode: 'building',
   skybox: cloneSkyboxSettings(defaultSkyboxSettings),
 }
 

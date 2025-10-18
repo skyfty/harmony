@@ -3546,24 +3546,20 @@ function handleBuildingKeyDown(event: KeyboardEvent) {
   let handled = false
 
   switch (event.code) {
-    case 'KeyW':
     case 'ArrowUp':
       buildingInputState.forward = true
       buildingInputState.backward = false
       handled = true
       break
-    case 'KeyS':
     case 'ArrowDown':
       buildingInputState.backward = true
       buildingInputState.forward = false
       handled = true
       break
-    case 'KeyA':
     case 'ArrowLeft':
       buildingInputState.left = true
       handled = true
       break
-    case 'KeyD':
     case 'ArrowRight':
       buildingInputState.right = true
       handled = true
@@ -3599,22 +3595,18 @@ function handleBuildingKeyUp(event: KeyboardEvent) {
   let handled = false
 
   switch (event.code) {
-    case 'KeyW':
     case 'ArrowUp':
       buildingInputState.forward = false
       handled = true
       break
-    case 'KeyS':
     case 'ArrowDown':
       buildingInputState.backward = false
       handled = true
       break
-    case 'KeyA':
     case 'ArrowLeft':
       buildingInputState.left = false
       handled = true
       break
-    case 'KeyD':
     case 'ArrowRight':
       buildingInputState.right = false
       handled = true
