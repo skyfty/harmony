@@ -522,7 +522,6 @@ function isTextInputTarget(target: EventTarget | null): target is HTMLElement {
 }
 
 function onKeyDown(event: KeyboardEvent) {
-  console.log('Key down:', event.code)
   if (isTextInputTarget(event.target)) {
     return
   }
@@ -550,7 +549,6 @@ function onKeyDown(event: KeyboardEvent) {
 
 function onKeyUp(event: KeyboardEvent) {
   pressedKeys.delete(event.code)
-  console.log('Key up:', event.code)
   if (event.code === 'Escape') {
     resetKeyState()
     return
