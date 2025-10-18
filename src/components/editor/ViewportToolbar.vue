@@ -32,6 +32,26 @@
       />
       <v-divider vertical />
       <v-btn
+        density="compact"
+        size="small"
+        class="toolbar-button camera-mode-button"
+        :title="cameraModeTitle"
+        @click="emit('toggle-camera-control')"
+      >
+        <v-icon
+          size="16"
+          :class="['camera-mode-icon', { 'is-active': cameraControlMode === 'orbit' }]"
+        >
+          mdi-orbit
+        </v-icon>
+        <v-icon
+          size="16"
+          :class="['camera-mode-icon', { 'is-active': cameraControlMode === 'building' }]"
+        >
+          mdi-city-variant-outline
+        </v-icon>
+      </v-btn>
+      <v-btn
         :icon="showGrid ? 'mdi-grid' : 'mdi-grid-off'"
         :color="showGrid ? 'primary' : undefined"
         :variant="showGrid ? 'flat' : 'text'"
@@ -165,6 +185,7 @@ const props = defineProps<{
   canDropSelection: boolean
   canAlignSelection: boolean
   skyboxSettings: SceneSkyboxSettings
+  cameraControlMode: 'orbit' | 'building'
   skyboxPresets: SkyboxPresetDefinition[]
 }>()
 
@@ -177,9 +198,10 @@ const emit = defineEmits<{
   (event: 'capture-screenshot'): void
   (event: 'orbit-left'): void
   (event: 'orbit-right'): void
+  (event: 'toggle-camera-control'): void
 }>()
 
-const { showGrid, showAxes, canDropSelection, canAlignSelection, skyboxSettings, skyboxPresets } = toRefs(props)
+const { showGrid, showAxes, canDropSelection, canAlignSelection, skyboxSettings, skyboxPresets, cameraControlMode } = toRefs(props)
 const sceneStore = useSceneStore()
 
 const skyboxMenuOpen = ref(false)
@@ -215,6 +237,12 @@ const skyboxParameterDefinitions = [
   { key: 'elevation', label: 'Sun Elevation', min: -10, max: 90, step: 1 },
   { key: 'azimuth', label: 'Sun Azimuth', min: 0, max: 360, step: 1 },
 ] satisfies Array<{ key: SkyboxParameterKey; label: string; min: number; max: number; step: number }>
+
+const cameraModeTitle = computed(() =>
+  cameraControlMode.value === 'orbit'
+    ? 'Switch to Building Camera Controls'
+    : 'Switch to Orbit Camera Controls',
+)
 
 function handlePresetSelect(value: string) {
   if (!value || value === CUSTOM_SKYBOX_PRESET_ID) {
@@ -335,6 +363,22 @@ function stopOrbitRotation() {
   border-radius: 3px;
   min-width: 22px;
   height: 22px;
+}
+
+.camera-mode-button {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+}
+
+.camera-mode-icon {
+  color: rgba(207, 216, 227, 0.6);
+  transition: color 0.2s ease;
+}
+
+.camera-mode-icon.is-active {
+  color: var(--v-theme-primary);
 }
 
 .skybox-card {
