@@ -115,8 +115,9 @@ const DROP_TO_GROUND_EPSILON = 1e-4
 const ALIGN_DELTA_EPSILON = 1e-6
 const CAMERA_RECENTER_DURATION_MS = 320
 const BUILDING_POLAR_ANGLE = THREE.MathUtils.degToRad(55)
-const BUILDING_KEY_PAN_SPEED = 8
-const BUILDING_KEY_ROTATE_SPEED = THREE.MathUtils.degToRad(90)
+const ORBIT_STATE_PAN = 2
+const ORBIT_STATE_TOUCH_PAN = 4
+const ORBIT_STATE_TOUCH_DOLLY_PAN = 5
 
 const isDragHovering = ref(false)
 const gridVisible = computed(() => sceneStore.viewportSettings.showGrid)
@@ -137,17 +138,16 @@ let activeCameraMode: CameraProjectionMode = cameraProjectionMode.value
 let activeCameraControlMode: CameraControlMode = cameraControlMode.value
 
 let pointerTrackingState: PointerTrackingState | null = null
-const buildingPressedKeys = new Set<string>()
-const buildingInputState = {
-  forward: 0,
-  right: 0,
-  rotate: 0,
-}
-const buildingForwardHelper = new THREE.Vector3()
-const buildingRightHelper = new THREE.Vector3()
-const buildingMoveHelper = new THREE.Vector3()
 const buildingOffsetHelper = new THREE.Vector3()
 const worldUp = new THREE.Vector3(0, 1, 0)
+const buildingPrevTarget = new THREE.Vector3()
+const buildingPrevPosition = new THREE.Vector3()
+const buildingTargetDelta = new THREE.Vector3()
+const buildingCameraDelta = new THREE.Vector3()
+const buildingHorizontalAxis = new THREE.Vector3()
+const buildingVerticalAxis = new THREE.Vector3()
+const buildingForwardVector = new THREE.Vector3()
+const buildingNewDelta = new THREE.Vector3()
 
 type CameraTransitionState = {
   startPosition: THREE.Vector3
@@ -180,7 +180,6 @@ type OrbitControlBaseline = {
 }
 
 let orbitControlBaseline: OrbitControlBaseline | null = null
-let lastAnimationTime = performance.now()
 
 function resolveNodeIdFromObject(object: THREE.Object3D | null): string | null {
   let current: THREE.Object3D | null = object
@@ -1427,13 +1426,6 @@ function enforceBuildingPolarAngle() {
   clampCameraAboveGround(false)
 }
 
-function resetBuildingInputState() {
-  buildingPressedKeys.clear()
-  buildingInputState.forward = 0
-  buildingInputState.right = 0
-  buildingInputState.rotate = 0
-}
-
 function applyCameraControlMode(mode: CameraControlMode) {
   if (!orbitControls || !camera) {
     activeCameraControlMode = mode
@@ -1449,7 +1441,6 @@ function applyCameraControlMode(mode: CameraControlMode) {
     if (orbitControlBaseline) {
       restoreOrbitControlBaseline(orbitControls, orbitControlBaseline)
     }
-    resetBuildingInputState()
     activeCameraControlMode = mode
     pendingCameraControlMode = null
     orbitControls.update()
@@ -1463,118 +1454,64 @@ function applyCameraControlMode(mode: CameraControlMode) {
   pendingCameraControlMode = null
 }
 
-function updateBuildingInputFromKeys() {
-  const forwardPositive = buildingPressedKeys.has('KeyW') || buildingPressedKeys.has('ArrowUp')
-  const forwardNegative = buildingPressedKeys.has('KeyS') || buildingPressedKeys.has('ArrowDown')
-  const rightPositive = buildingPressedKeys.has('KeyD') || buildingPressedKeys.has('ArrowRight')
-  const rightNegative = buildingPressedKeys.has('KeyA') || buildingPressedKeys.has('ArrowLeft')
-  const rotatePositive = buildingPressedKeys.has('KeyE')
-  const rotateNegative = buildingPressedKeys.has('KeyQ')
-
-  buildingInputState.forward = (forwardPositive ? 1 : 0) - (forwardNegative ? 1 : 0)
-  buildingInputState.right = (rightPositive ? 1 : 0) - (rightNegative ? 1 : 0)
-  buildingInputState.rotate = (rotatePositive ? 1 : 0) - (rotateNegative ? 1 : 0)
-}
-
-function shouldHandleBuildingKeyboard(event: KeyboardEvent): boolean {
-  if (event.defaultPrevented) return false
-  if (event.ctrlKey || event.metaKey || event.altKey) return false
-  if (isEditableKeyboardTarget(event.target)) return false
-  return activeCameraControlMode === 'building'
-}
-
-function handleBuildingKeyDown(event: KeyboardEvent) {
-  if (!shouldHandleBuildingKeyboard(event)) {
-    return
-  }
-
-  const code = event.code
-  if (!code.startsWith('Key') && !code.startsWith('Arrow')) {
-    return
-  }
-
-  buildingPressedKeys.add(code)
-  updateBuildingInputFromKeys()
-  event.preventDefault()
-  event.stopPropagation()
-}
-
-function handleBuildingKeyUp(event: KeyboardEvent) {
-  if (!shouldHandleBuildingKeyboard(event)) {
-    return
-  }
-
-  const code = event.code
-  if (!code.startsWith('Key') && !code.startsWith('Arrow')) {
-    return
-  }
-
-  buildingPressedKeys.delete(code)
-  updateBuildingInputFromKeys()
-  event.preventDefault()
-  event.stopPropagation()
-}
-
-function updateBuildingControls(deltaSeconds: number): boolean {
-  if (!camera || !orbitControls || activeCameraControlMode !== 'building') {
+// Re-map vertical drag motion to move along the current view direction while building mode is active.
+function adjustBuildingPan(previousTarget: THREE.Vector3, previousPosition: THREE.Vector3): boolean {
+  if (!orbitControls || !camera) {
     return false
   }
 
-  let changed = false
-
-  if (buildingInputState.forward !== 0 || buildingInputState.right !== 0) {
-    buildingForwardHelper.subVectors(orbitControls.target, camera.position)
-    buildingForwardHelper.y = 0
-    if (buildingForwardHelper.lengthSq() > 1e-6) {
-      buildingForwardHelper.normalize()
-    } else {
-      buildingForwardHelper.set(0, 0, -1)
-    }
-
-  buildingRightHelper.copy(buildingForwardHelper).cross(worldUp)
-    if (buildingRightHelper.lengthSq() > 1e-6) {
-      buildingRightHelper.normalize()
-    } else {
-      buildingRightHelper.set(1, 0, 0)
-    }
-
-    buildingMoveHelper.set(0, 0, 0)
-    if (buildingInputState.forward !== 0) {
-      buildingMoveHelper.addScaledVector(buildingForwardHelper, buildingInputState.forward)
-    }
-    if (buildingInputState.right !== 0) {
-      buildingMoveHelper.addScaledVector(buildingRightHelper, buildingInputState.right)
-    }
-
-    if (buildingMoveHelper.lengthSq() > 0) {
-      buildingMoveHelper.normalize().multiplyScalar(BUILDING_KEY_PAN_SPEED * deltaSeconds)
-      camera.position.add(buildingMoveHelper)
-      orbitControls.target.add(buildingMoveHelper)
-      changed = true
-    }
+  const state = (orbitControls as any).state as number | undefined
+  if (state !== ORBIT_STATE_PAN && state !== ORBIT_STATE_TOUCH_PAN && state !== ORBIT_STATE_TOUCH_DOLLY_PAN) {
+    return false
   }
 
-  if (buildingInputState.rotate !== 0) {
-    const angle = buildingInputState.rotate * BUILDING_KEY_ROTATE_SPEED * deltaSeconds
-    if (Math.abs(angle) > 1e-4) {
-      buildingOffsetHelper.subVectors(camera.position, orbitControls.target)
-      const originalY = buildingOffsetHelper.y
-      const cos = Math.cos(angle)
-      const sin = Math.sin(angle)
-      const rotatedX = buildingOffsetHelper.x * cos - buildingOffsetHelper.z * sin
-      const rotatedZ = buildingOffsetHelper.x * sin + buildingOffsetHelper.z * cos
-      buildingOffsetHelper.set(rotatedX, originalY, rotatedZ)
-      camera.position.copy(orbitControls.target).add(buildingOffsetHelper)
-      changed = true
-    }
+  buildingTargetDelta.copy(orbitControls.target).sub(previousTarget)
+  buildingCameraDelta.copy(camera.position).sub(previousPosition)
+
+  if (buildingTargetDelta.lengthSq() < 1e-10 && buildingCameraDelta.lengthSq() < 1e-10) {
+    return false
   }
 
-  if (changed) {
-    enforceBuildingPolarAngle()
-    orbitControls.update()
+  buildingForwardVector.copy(previousTarget).sub(previousPosition)
+  if (buildingForwardVector.lengthSq() < 1e-8) {
+    buildingForwardVector.set(0, -1, 0)
+  }
+  buildingForwardVector.normalize()
+
+  buildingHorizontalAxis.crossVectors(buildingForwardVector, worldUp)
+  if (buildingHorizontalAxis.lengthSq() < 1e-8) {
+    buildingHorizontalAxis.set(1, 0, 0)
+  }
+  buildingHorizontalAxis.normalize()
+
+  buildingVerticalAxis.crossVectors(buildingHorizontalAxis, buildingForwardVector)
+  if (buildingVerticalAxis.lengthSq() < 1e-8) {
+    buildingVerticalAxis.set(0, 1, 0)
+  }
+  buildingVerticalAxis.normalize()
+
+  const horizontalAmount = buildingTargetDelta.dot(buildingHorizontalAxis)
+  const verticalAmount = buildingTargetDelta.dot(buildingVerticalAxis)
+
+  buildingNewDelta.set(0, 0, 0)
+  buildingNewDelta.addScaledVector(buildingHorizontalAxis, horizontalAmount)
+  buildingNewDelta.addScaledVector(buildingForwardVector, verticalAmount)
+
+  if (buildingNewDelta.distanceToSquared(buildingTargetDelta) < 1e-12) {
+    return false
   }
 
-  return changed
+  orbitControls.target.copy(previousTarget).add(buildingNewDelta)
+
+  buildingCameraDelta.set(0, 0, 0)
+  buildingCameraDelta.addScaledVector(buildingHorizontalAxis, horizontalAmount)
+  buildingCameraDelta.addScaledVector(buildingForwardVector, verticalAmount)
+  camera.position.copy(previousPosition).add(buildingCameraDelta)
+
+  enforceBuildingPolarAngle()
+  clampCameraAboveGround(false)
+
+  return true
 }
 
 watch(gridVisible, (visible, previous) => {
@@ -2221,11 +2158,12 @@ function animate() {
 
   requestAnimationFrame(animate)
 
-  const now = performance.now()
-  const deltaSeconds = Math.min((now - lastAnimationTime) / 1000, 0.1)
-  lastAnimationTime = now
-
   let controlsUpdated = false
+
+  if (orbitControls && camera) {
+    buildingPrevTarget.copy(orbitControls.target)
+    buildingPrevPosition.copy(camera.position)
+  }
 
   if (cameraTransitionState && orbitControls) {
     const { startTime, duration, startPosition, startTarget, endPosition, endTarget } = cameraTransitionState
@@ -2277,17 +2215,16 @@ function animate() {
       }
     }
   }
-
-  if (!controlsUpdated) {
-    const buildingChanged = updateBuildingControls(deltaSeconds)
-    if (buildingChanged) {
-      controlsUpdated = true
-      handleControlsChange()
-    }
-  }
-
   if (orbitControls && !controlsUpdated) {
     orbitControls.update()
+    if (activeCameraControlMode === 'building' && !cameraTransitionState) {
+      const adjusted = adjustBuildingPan(buildingPrevTarget, buildingPrevPosition)
+      if (adjusted) {
+        orbitControls.update()
+        controlsUpdated = true
+        handleControlsChange()
+      }
+    }
   }
 
   if (lightHelpersNeedingUpdate.size > 0 && scene) {
@@ -2319,8 +2256,6 @@ function disposeScene() {
     window.removeEventListener('pointermove', handlePointerMove)
     window.removeEventListener('pointerup', handlePointerUp)
     window.removeEventListener('pointercancel', handlePointerCancel)
-    window.removeEventListener('keydown', handleBuildingKeyDown, true)
-    window.removeEventListener('keyup', handleBuildingKeyUp, true)
   }
   pointerTrackingState = null
 
@@ -2345,7 +2280,6 @@ function disposeScene() {
     orbitControls.dispose()
   }
   orbitControls = null
-  resetBuildingInputState()
 
   if (thumbnailCaptureTimeout) {
     clearTimeout(thumbnailCaptureTimeout)
@@ -3605,12 +3539,6 @@ function isEditableKeyboardTarget(target: EventTarget | null): boolean {
 function shouldHandleViewportShortcut(event: KeyboardEvent): boolean {
   if (event.defaultPrevented) return false
   if (isEditableKeyboardTarget(event.target)) return false
-  if (cameraControlMode.value === 'building') {
-    const code = event.code
-    if (code === 'KeyW' || code === 'KeyA' || code === 'KeyS' || code === 'KeyD' || code === 'KeyQ' || code === 'KeyE' || code === 'ArrowUp' || code === 'ArrowDown' || code === 'ArrowLeft' || code === 'ArrowRight') {
-      return false
-    }
-  }
   return true
 }
 
@@ -3649,16 +3577,12 @@ onMounted(() => {
   updateToolMode(props.activeTool)
   attachSelection(props.selectedNodeId)
   updateSelectionHighlights()
-  window.addEventListener('keydown', handleBuildingKeyDown, { capture: true })
-  window.addEventListener('keyup', handleBuildingKeyUp, { capture: true })
   window.addEventListener('keyup', handleViewportShortcut, { capture: true })
 })
 
 onBeforeUnmount(() => {
   disposeSceneNodes()
   disposeScene()
-  window.removeEventListener('keydown', handleBuildingKeyDown, { capture: true })
-  window.removeEventListener('keyup', handleBuildingKeyUp, { capture: true })
   window.removeEventListener('keyup', handleViewportShortcut, { capture: true })
 })
 
