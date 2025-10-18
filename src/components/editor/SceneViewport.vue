@@ -1384,29 +1384,36 @@ function snapVectorToGrid(vec: THREE.Vector3) {
   return vec
 }
 
-import { exportGLTF, exportGLB,exportOBJ, exportPLY, exportSTL,type SceneExportOptions } from '@/plugins/exporter'
+import { exportGLTF, exportGLB, exportOBJ, exportPLY, exportSTL, type SceneExportOptions } from '@/plugins/exporter'
+
+export type SceneExportResult = {
+  blob: Blob
+  fileName: string
+}
+
 export type SceneViewportHandle = {
   exportScene(options: SceneExportOptions): Promise<void>
+  generateSceneBlob(options: SceneExportOptions): Promise<SceneExportResult>
 }
 
 function sanitizeFileName(input: string): string {
-    return input.replace(/[^a-zA-Z0-9-_\.]+/g, '_') || 'scene'
+  return input.replace(/[^a-zA-Z0-9-_\.]+/g, '_') || 'scene'
 }
 
 function triggerDownload(blob: Blob, fileName: string) {
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.style.display = 'none'
-    anchor.href = url
-    anchor.download = fileName
-    document.body.appendChild(anchor)
-    anchor.click()
-    document.body.removeChild(anchor)
-    requestAnimationFrame(() => URL.revokeObjectURL(url))
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.style.display = 'none'
+  anchor.href = url
+  anchor.download = fileName
+  document.body.appendChild(anchor)
+  anchor.click()
+  document.body.removeChild(anchor)
+  requestAnimationFrame(() => URL.revokeObjectURL(url))
 }
 
 
-async function exportScene(options: SceneExportOptions): Promise<void> {
+async function prepareSceneExport(options: SceneExportOptions): Promise<SceneExportResult> {
   if (!scene) {
     throw new Error('Scene not initialized')
   }
@@ -1414,44 +1421,57 @@ async function exportScene(options: SceneExportOptions): Promise<void> {
   let fileName = sanitizeFileName(options.fileName ?? 'scene-export')
 
   onProgress?.(10, 'Preparing scene…')
-  let blob: Blob | null  = null
+  let blob: Blob | null = null
   try {
-      switch (format) {
-          case 'GLTF':
-              fileName += '.gltf'
-              blob = await exportGLTF(scene)
-              break
-          case 'GLB':
-              fileName += '.glb'
-              blob = await exportGLB(scene)
-              break
-          case 'OBJ': {
-            fileName += '.obj'
-              if (selectionTrackedObject) {
-                blob = exportOBJ(selectionTrackedObject)
-              }
-              break
-          }
-          case 'PLY':
-              fileName += '.ply'
-              blob = exportPLY(scene)
-              break
-          case 'STL':
-              fileName += '.stl'
-              blob = exportSTL(scene)
-              break
-          default:
-              throw new Error(`Unsupported export format: ${format}`)
+    switch (format) {
+      case 'GLTF':
+        fileName += '.gltf'
+        blob = await exportGLTF(scene)
+        break
+      case 'GLB':
+        fileName += '.glb'
+        blob = await exportGLB(scene)
+        break
+      case 'OBJ': {
+        fileName += '.obj'
+        if (selectionTrackedObject) {
+          blob = exportOBJ(selectionTrackedObject)
+        }
+        break
       }
-      onProgress?.(95, 'Export complete, preparing download…')
-
+      case 'PLY':
+        fileName += '.ply'
+        blob = exportPLY(scene)
+        break
+      case 'STL':
+        fileName += '.stl'
+        blob = exportSTL(scene)
+        break
+      default:
+        throw new Error(`Unsupported export format: ${format}`)
+    }
+    onProgress?.(95, 'Export complete, preparing data…')
   } finally {
-      onProgress?.(100, 'Export complete')
-  }
-  if (blob) {
-      triggerDownload(blob, `${fileName}`)
+    onProgress?.(100, 'Export complete')
   }
 
+  if (!blob) {
+    throw new Error('No data available to export')
+  }
+
+  return {
+    blob,
+    fileName,
+  }
+}
+
+async function exportScene(options: SceneExportOptions): Promise<void> {
+  const { blob, fileName } = await prepareSceneExport(options)
+  triggerDownload(blob, fileName)
+}
+
+async function generateSceneBlob(options: SceneExportOptions): Promise<SceneExportResult> {
+  return prepareSceneExport(options)
 }
 
 function clearSelectionBox() {
@@ -3382,6 +3402,7 @@ watch(
 
 defineExpose<SceneViewportHandle>({
   exportScene,
+  generateSceneBlob,
 })
 </script>
 

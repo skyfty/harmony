@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted,onBeforeUnmount, ref } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import HierarchyPanel from '@/components/layout/HierarchyPanel.vue'
 import InspectorPanel from '@/components/layout/InspectorPanel.vue'
 import ProjectPanel from '@/components/layout/ProjectPanel.vue'
 import SceneViewport, { type SceneViewportHandle } from '@/components/editor/SceneViewport.vue'
+import PreviewOverlay from '@/components/preview/PreviewOverlay.vue'
 import MenuBar from './MenuBar.vue'
 import SceneManagerDialog from '@/components/layout/SceneManagerDialog.vue'
 import NewSceneDialog from '@/components/layout/NewSceneDialog.vue'
@@ -33,6 +34,14 @@ const isSceneManagerOpen = ref(false)
 const isExporting = ref(false)
 const viewportRef = ref<SceneViewportHandle | null>(null)
 const isNewSceneDialogOpen = ref(false)
+const isPreviewing = ref(false)
+type PreviewCameraSeed = Pick<SceneCameraState, 'position' | 'target'>
+type PreviewSessionState = {
+  url: string
+  sceneName: string
+  cameraSeed: PreviewCameraSeed | null
+}
+const previewSession = ref<PreviewSessionState | null>(null)
 
 
 const hierarchyOpen = computed({
@@ -196,6 +205,127 @@ async function handleExport(format: ExportFormat) {
   }
 }
 
+function updatePreviewProgress(progress: number, message?: string) {
+  const displayMessage = message ?? `Preparing preview ${Math.round(progress)}%`
+  uiStore.updateLoadingOverlay({
+    title: 'Preview Scene',
+    message: displayMessage,
+  })
+  uiStore.updateLoadingProgress(progress, { autoClose: false })
+}
+
+function releasePreviewSession() {
+  if (previewSession.value) {
+    URL.revokeObjectURL(previewSession.value.url)
+    previewSession.value = null
+  }
+}
+
+function handlePreviewReady() {
+  uiStore.updateLoadingOverlay({
+    title: 'Preview Scene',
+    message: 'Preview ready',
+    mode: 'determinate',
+    progress: 100,
+    closable: true,
+    autoClose: true,
+    autoCloseDelay: 600,
+  })
+  uiStore.updateLoadingProgress(100, { autoClose: true, autoCloseDelay: 600 })
+}
+
+function handlePreviewError(message: string) {
+  uiStore.updateLoadingOverlay({
+    title: 'Preview Scene',
+    message,
+    mode: 'determinate',
+    progress: 100,
+    closable: true,
+    autoClose: false,
+  })
+  uiStore.updateLoadingProgress(100, { autoClose: false })
+}
+
+function handlePreviewClose() {
+  releasePreviewSession()
+  uiStore.hideLoadingOverlay(true)
+}
+
+async function handlePreview() {
+  if (isPreviewing.value || previewSession.value) {
+    return
+  }
+
+  const viewport = viewportRef.value
+  if (!viewport) {
+    console.warn('Scene viewport unavailable for preview')
+    return
+  }
+
+  isPreviewing.value = true
+  const sceneName = sceneStore.currentScene?.name ?? 'scene'
+  uiStore.showLoadingOverlay({
+    title: 'Preview Scene',
+    message: 'Preparing preview…',
+    mode: 'determinate',
+    progress: 0,
+    closable: false,
+    autoClose: false,
+  })
+
+  let previewBlobUrl: string | null = null
+
+  try {
+    const { blob } = await viewport.generateSceneBlob({
+      format: 'GLB',
+      fileName: `${sceneName}-preview`,
+      onProgress: updatePreviewProgress,
+    })
+
+    previewBlobUrl = URL.createObjectURL(blob)
+
+    const cameraSeed: PreviewCameraSeed | null = sceneStore.camera
+      ? {
+          position: { ...sceneStore.camera.position },
+          target: { ...sceneStore.camera.target },
+        }
+      : null
+
+    previewSession.value = {
+      url: previewBlobUrl,
+      sceneName,
+      cameraSeed,
+    }
+    previewBlobUrl = null
+
+    uiStore.updateLoadingOverlay({
+      title: 'Preview Scene',
+      message: 'Loading preview scene…',
+      mode: 'indeterminate',
+      closable: false,
+      autoClose: false,
+    })
+  } catch (error) {
+    const message = (error as Error)?.message ?? 'Unknown error'
+    if (previewBlobUrl) {
+      URL.revokeObjectURL(previewBlobUrl)
+      previewBlobUrl = null
+    }
+    uiStore.updateLoadingOverlay({
+      title: 'Preview Scene',
+      message,
+      closable: true,
+      autoClose: false,
+    })
+    uiStore.updateLoadingProgress(100, { autoClose: false })
+  } finally {
+    isPreviewing.value = false
+    if (previewBlobUrl) {
+      URL.revokeObjectURL(previewBlobUrl)
+    }
+  }
+}
+
 async function handleAction(action: string) {
   switch (action) {
     case 'New':
@@ -210,6 +340,7 @@ async function handleAction(action: string) {
       console.log('Export action triggered')
       break
     case 'Preview':
+      await handlePreview()
       break
     case 'Undo': {
       if (sceneStore.canUndo) {
@@ -371,6 +502,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  releasePreviewSession()
   window.removeEventListener('keyup', handleEditorViewShortcut, { capture: true })
 })
 
@@ -464,6 +596,16 @@ onBeforeUnmount(() => {
       v-model="isNewSceneDialogOpen"
       @confirm="handleCreateScene"
     />
+    <div v-if="previewSession" class="preview-overlay-container">
+      <PreviewOverlay
+        :src="previewSession.url"
+        :scene-name="previewSession.sceneName"
+        :camera-seed="previewSession.cameraSeed ?? undefined"
+        @ready="handlePreviewReady"
+        @error="handlePreviewError"
+        @close="handlePreviewClose"
+      />
+    </div>
   </div>
 </template>
 
@@ -472,6 +614,12 @@ onBeforeUnmount(() => {
   height: 100vh;
   width: 100%;
   background: radial-gradient(circle at top left, #21262d, #11141a 60%);
+}
+
+.preview-overlay-container {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
 }
 
 .editor-layout {

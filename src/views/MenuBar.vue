@@ -4,8 +4,14 @@ import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import AddNodeMenu from '@/components/common/AddNodeMenu.vue'
 
-const quickActions = [
-  { icon: 'mdi-play-circle-outline', label: 'Preview' },
+type QuickAction = {
+  icon: string
+  label: string
+  action: string
+}
+
+const quickActions: QuickAction[] = [
+  { icon: 'mdi-play-circle-outline', label: 'Preview', action: 'Preview' },
 ]
 
 const sceneStore = useSceneStore()
@@ -190,6 +196,7 @@ function handleMenuAction(action: string) {
           density="comfortable"
           size="small"
           rounded
+          @click="handleMenuAction(action.action)"
         >
           <v-icon start>{{ action.icon }}</v-icon>
           {{ action.label }}
