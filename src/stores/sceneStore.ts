@@ -29,6 +29,7 @@ import {
 import { useAssetCacheStore } from './assetCacheStore'
 import { useUiStore } from './uiStore'
 import { loadObjectFromFile } from '@/plugins/assetImport'
+import { generateUuid } from '@/plugins/uuid'
 
 import groundModelUrl from '@/preset/models/ground.glb?url'
 import {
@@ -119,7 +120,7 @@ function createLightNode(options: {
   }
 
   return {
-    id: crypto.randomUUID(),
+  id: generateUuid(),
     name: options.name,
     nodeType: 'light',
     light,
@@ -174,7 +175,7 @@ function getLightPreset(type: LightNodeType) {
 
 const initialNodes: SceneNode[] = [
   {
-    id: crypto.randomUUID(),
+  id: generateUuid(),
     name: 'Ground',
     nodeType: 'mesh',
     material: {
@@ -378,7 +379,7 @@ function collectClipboardPayload(nodes: SceneNode[], ids: string[]): { entries: 
 
 function duplicateNodeTree(original: SceneNode, context: DuplicateContext): SceneNode {
   const duplicated = cloneNode(original)
-  duplicated.id = crypto.randomUUID()
+  duplicated.id = generateUuid()
 
   if (original.children?.length) {
     duplicated.children = original.children.map((child) => duplicateNodeTree(child, context))
@@ -519,7 +520,7 @@ function cloneNode(node: SceneNode): SceneNode {
 
 function cloneNodeWithFreshIds(node: SceneNode): SceneNode {
   const cloned = cloneNode(node)
-  cloned.id = crypto.randomUUID()
+  cloned.id = generateUuid()
   if (cloned.children?.length) {
     cloned.children = cloned.children.map((child) => cloneNodeWithFreshIds(child))
   }
@@ -924,7 +925,7 @@ function createSceneDocument(
     viewportSettings?: Partial<SceneViewportSettings>
   } = {},
 ): StoredSceneDocument {
-  const id = options.id ?? crypto.randomUUID()
+  const id = options.id ?? generateUuid()
   const nodes = options.nodes ? cloneSceneNodes(options.nodes) : []
   const camera = options.camera ? cloneCameraState(options.camera) : cloneCameraState(defaultCameraState)
   let selectedNodeId = options.selectedNodeId ?? (nodes[0]?.id ?? null)
@@ -2342,7 +2343,7 @@ export const useSceneStore = defineStore('scene', {
 
     addPlaceholderNode(asset: ProjectAsset, transform: { position: Vector3Like; rotation: Vector3Like; scale: Vector3Like }) {
       this.captureHistorySnapshot()
-      const id = crypto.randomUUID()
+  const id = generateUuid()
       const node: SceneNode = {
         id,
         name: asset.name,
@@ -2505,7 +2506,7 @@ export const useSceneStore = defineStore('scene', {
       sourceAssetId?: string
     }) {
       this.captureHistorySnapshot()
-      const id = crypto.randomUUID()
+  const id = generateUuid()
       const node: SceneNode = {
         id,
         name: payload.name ?? payload.object.name ?? 'Imported Mesh',

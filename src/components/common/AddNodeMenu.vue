@@ -11,6 +11,7 @@ import { useUiStore } from '@/stores/uiStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import UrlInputDialog from './UrlInputDialog.vue'
 import type { LightNodeType, SceneNode, Vector3Like } from '@/types/scene'
+import { generateUuid } from '@/plugins/uuid'
 
 const sceneStore = useSceneStore()
 const uiStore = useUiStore()
@@ -475,8 +476,8 @@ function handleMenuImportFromFile() {
       return
     }
 
-    const imported = object as THREE.Object3D
-    const assetId = crypto.randomUUID()
+  const imported = object as THREE.Object3D
+  const assetId = generateUuid()
 
     let matchedFile: File | null = null
     if (imported.name && sourceFiles.has(imported.name)) {
