@@ -5,6 +5,8 @@
         icon="mdi-camera-outline"
         density="compact"
         size="small"
+        color="undefined"
+        variant="text"
         class="toolbar-button"
         title="Capture Screenshot"
         @click="emit('capture-screenshot')"
@@ -14,6 +16,8 @@
         icon="mdi-arrow-collapse-down"
         density="compact"
         size="small"
+        color="undefined"
+        variant="text"
         class="toolbar-button"
         title="Drop to Ground"
         :disabled="!canDropSelection"
@@ -26,6 +30,8 @@
         density="compact"
         size="small"
         class="toolbar-button"
+        color="undefined"
+        variant="text"
         :disabled="!canAlignSelection"
         :title="button.title"
         @click="emitAlign(button.mode)"
@@ -51,6 +57,7 @@
         title="Toggle Axes"
         @click="toggleAxesVisibility"
       />
+
       <v-menu
         v-model="skyboxMenuOpen"
         location="bottom"
@@ -111,9 +118,12 @@
         </v-card>
       </v-menu>
       <v-divider vertical />
+
       <v-btn
         icon="mdi-rotate-left"
         density="compact"
+        color="undefined"
+        variant="text"
         size="small"
         class="toolbar-button"
         title="Orbit Left"
@@ -128,6 +138,8 @@
         icon="mdi-rotate-right"
         density="compact"
         size="small"
+        color="undefined"
+        variant="text"
         class="toolbar-button"
         title="Orbit Right"
         @mousedown="handleOrbitRightStart"
@@ -137,11 +149,24 @@
         @touchend="handleOrbitStop"
         @click.prevent
       />
+      <v-btn
+        :icon="cameraControlModeIcon"
+ 
+        color="undefined"
+        variant="text"
+        density="compact"
+        size="small"
+        class="toolbar-button"
+        :title="cameraModeTitle"
+        @click="emit('toggle-camera-control')"
+      />
       <v-divider vertical />
       <v-btn
         icon="mdi-camera"
         density="compact"
         size="small"
+        color="undefined"
+        variant="text"
         class="toolbar-button"
         title="Reset to Default View"
         @click="emit('reset-camera')"
@@ -165,6 +190,7 @@ const props = defineProps<{
   canDropSelection: boolean
   canAlignSelection: boolean
   skyboxSettings: SceneSkyboxSettings
+  cameraControlMode: 'orbit' | 'building'
   skyboxPresets: SkyboxPresetDefinition[]
 }>()
 
@@ -177,9 +203,10 @@ const emit = defineEmits<{
   (event: 'capture-screenshot'): void
   (event: 'orbit-left'): void
   (event: 'orbit-right'): void
+  (event: 'toggle-camera-control'): void
 }>()
 
-const { showGrid, showAxes, canDropSelection, canAlignSelection, skyboxSettings, skyboxPresets } = toRefs(props)
+const { showGrid, showAxes, canDropSelection, canAlignSelection, skyboxSettings, skyboxPresets, cameraControlMode } = toRefs(props)
 const sceneStore = useSceneStore()
 
 const skyboxMenuOpen = ref(false)
@@ -215,6 +242,16 @@ const skyboxParameterDefinitions = [
   { key: 'elevation', label: 'Sun Elevation', min: -10, max: 90, step: 1 },
   { key: 'azimuth', label: 'Sun Azimuth', min: 0, max: 360, step: 1 },
 ] satisfies Array<{ key: SkyboxParameterKey; label: string; min: number; max: number; step: number }>
+
+const cameraModeTitle = computed(() =>
+  cameraControlMode.value === 'orbit'
+    ? 'Switch to Building Camera Controls'
+    : 'Switch to Orbit Camera Controls',
+)
+
+const cameraControlModeIcon = computed(() =>
+  cameraControlMode.value === 'orbit' ? 'mdi-orbit' : 'mdi-city-variant-outline',
+)
 
 function handlePresetSelect(value: string) {
   if (!value || value === CUSTOM_SKYBOX_PRESET_ID) {

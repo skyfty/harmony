@@ -18,7 +18,7 @@ import type { SceneState } from '@/types/scene-state'
 import type { SceneSummary } from '@/types/scene-summary'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
-import type { CameraProjectionMode, SceneSkyboxSettings, SceneViewportSettings } from '@/types/scene-viewport-settings'
+import type { CameraProjectionMode, CameraControlMode, SceneSkyboxSettings, SceneViewportSettings } from '@/types/scene-viewport-settings'
 import {
   CUSTOM_SKYBOX_PRESET_ID,
   DEFAULT_SKYBOX_SETTINGS,
@@ -225,11 +225,16 @@ const defaultViewportSettings: SceneViewportSettings = {
   showGrid: true,
   showAxes: false,
   cameraProjection: 'perspective',
+  cameraControlMode: 'orbit',
   skybox: cloneSkyboxSettings(defaultSkyboxSettings),
 }
 
 function isCameraProjectionMode(value: unknown): value is CameraProjectionMode {
   return value === 'perspective' || value === 'orthographic'
+}
+
+function isCameraControlMode(value: unknown): value is CameraControlMode {
+  return value === 'orbit' || value === 'building'
 }
 
 function cloneViewportSettings(settings?: Partial<SceneViewportSettings> | null): SceneViewportSettings {
@@ -240,6 +245,9 @@ function cloneViewportSettings(settings?: Partial<SceneViewportSettings> | null)
     cameraProjection: isCameraProjectionMode(settings?.cameraProjection)
       ? settings!.cameraProjection
       : defaultViewportSettings.cameraProjection,
+    cameraControlMode: isCameraControlMode(settings?.cameraControlMode)
+      ? settings!.cameraControlMode
+      : defaultViewportSettings.cameraControlMode,
     skybox: normalizeSkyboxSettings(baseSkybox),
   }
 }
@@ -262,6 +270,7 @@ function viewportSettingsEqual(a: SceneViewportSettings, b: SceneViewportSetting
     a.showGrid === b.showGrid &&
     a.showAxes === b.showAxes &&
     a.cameraProjection === b.cameraProjection &&
+    a.cameraControlMode === b.cameraControlMode &&
     skyboxSettingsEqual(a.skybox, b.skybox)
   )
 }
@@ -2206,6 +2215,12 @@ export const useSceneStore = defineStore('scene', {
         ? 'orthographic'
         : 'perspective'
       this.setViewportCameraProjection(next)
+    },
+    setCameraControlMode(mode: CameraControlMode) {
+      if (!isCameraControlMode(mode)) {
+        return
+      }
+      this.setViewportSettings({ cameraControlMode: mode })
     },
     setSkyboxSettings(partial: Partial<SceneSkyboxSettings>, options: { markCustom?: boolean } = {}) {
       const current = cloneSkyboxSettings(this.viewportSettings.skybox)
