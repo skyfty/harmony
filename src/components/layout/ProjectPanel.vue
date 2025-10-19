@@ -633,7 +633,7 @@ function assetPreviewUrl(asset: ProjectAsset): string | undefined {
   if (mime.startsWith('image/')) {
     return entry.blobUrl
   }
-  if (!mime && (asset.type === 'image' || asset.type === 'texture')) {
+  if (!mime && (asset.type === 'image')) {
     return entry.blobUrl
   }
   return undefined
@@ -759,12 +759,8 @@ function assetIcon(type: ProjectAsset['type']) {
 
 function iconForAssetType(type: ProjectAsset['type']) {
   switch (type) {
-    case 'texture':
-      return 'mdi-texture-box'
     case 'image':
       return 'mdi-image-outline'
-    case 'audio':
-      return 'mdi-music-note-outline'
     case 'file':
       return 'mdi-file-outline'
     default:

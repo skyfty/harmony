@@ -100,7 +100,6 @@ export function determineAssetCategoryId(asset: ProjectAsset): string {
   switch (asset.type) {
     case 'model':
       return ASSET_CATEGORY_ID_BY_KEY.models
-    case 'texture':
     case 'image':
       return ASSET_CATEGORY_ID_BY_KEY.images
     default:
