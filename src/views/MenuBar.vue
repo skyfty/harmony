@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useSceneStore } from '@/stores/sceneStore'
+import { useSceneStore, type EditorPanel } from '@/stores/sceneStore'
 import AddNodeMenu from '@/components/common/AddNodeMenu.vue'
 
 type QuickAction = {
@@ -15,7 +15,7 @@ const quickActions: QuickAction[] = [
 ]
 
 const sceneStore = useSceneStore()
-const { canUndo, canRedo, currentScene } = storeToRefs(sceneStore)
+const { canUndo, canRedo, currentScene, panelVisibility } = storeToRefs(sceneStore)
 const sceneName = computed(() => currentScene.value?.name ?? 'Untitled Scene')
 
 const emit = defineEmits<{
@@ -26,6 +26,10 @@ function handleMenuAction(action: string) {
     return
   }
   emit('menu-action', action)
+}
+
+function handleTogglePanel(panel: EditorPanel) {
+  sceneStore.togglePanelVisibility(panel)
 }
 
 </script>
@@ -171,6 +175,55 @@ function handleMenuAction(action: string) {
               color="rgba(255, 255, 255, 0.72)"
               density="comfortable"
               rounded="xl"
+            >
+              <v-menu>
+                <template #activator="{ props }">
+                  <span v-bind="props">Views</span>
+                </template>
+                <v-list class="menu-dropdown">
+                  <v-list-item
+                    class="menu-list-item"
+                    @click="handleTogglePanel('hierarchy')"
+                  >
+                    Hierarchy Panel
+                    <template #append>
+                      <span class="menu-item-check">
+                        <v-icon v-if="panelVisibility.hierarchy" size="18">mdi-check</v-icon>
+                      </span>
+                    </template>
+                  </v-list-item>
+                  <v-list-item
+                    class="menu-list-item"
+                    @click="handleTogglePanel('inspector')"
+                  >
+                    Inspector Panel
+                    <template #append>
+                      <span class="menu-item-check">
+                        <v-icon v-if="panelVisibility.inspector" size="18">mdi-check</v-icon>
+                      </span>
+                    </template>
+                  </v-list-item>
+                  <v-list-item
+                    class="menu-list-item"
+                    @click="handleTogglePanel('project')"
+                  >
+                    Project Panel
+                    <template #append>
+                      <span class="menu-item-check">
+                        <v-icon v-if="panelVisibility.project" size="18">mdi-check</v-icon>
+                      </span>
+                    </template>
+                  </v-list-item>
+                </v-list>
+              </v-menu>
+              <v-icon size="18" class="ml-1">mdi-menu-down</v-icon>
+            </v-btn>
+            <v-btn
+              class="menu-button"
+              variant="text"
+              color="rgba(255, 255, 255, 0.72)"
+              density="comfortable"
+              rounded="xl"
               @click="handleMenuAction('Help')"
             >
               Help
@@ -280,6 +333,14 @@ function handleMenuAction(action: string) {
 
 .menu-list-item:hover {
   background-color: rgba(74, 106, 187, 0.18);
+}
+
+.menu-item-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
 }
 
 .menu-dropdown :deep(.v-divider) {
