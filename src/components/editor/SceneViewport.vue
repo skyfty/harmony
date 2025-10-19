@@ -102,12 +102,14 @@ const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
 const MIN_CAMERA_HEIGHT = 0.25
 const MIN_TARGET_HEIGHT = 0
-const GRID_CELL_SIZE = 1
+const GRID_MAJOR_SPACING = 1
+const GRID_MINOR_SPACING = 0.5
+const GRID_SNAP_SPACING = GRID_MINOR_SPACING
 const GRID_BASE_HEIGHT = 0.03
 const GRID_HIGHLIGHT_HEIGHT = 0.03
 const GRID_HIGHLIGHT_PADDING = 0.1
-const GRID_HIGHLIGHT_MIN_SIZE = GRID_CELL_SIZE * 1.3
-const DEFAULT_GRID_HIGHLIGHT_SIZE = GRID_CELL_SIZE * 1.5
+const GRID_HIGHLIGHT_MIN_SIZE = GRID_MAJOR_SPACING * 1.3
+const DEFAULT_GRID_HIGHLIGHT_SIZE = GRID_MAJOR_SPACING * 1.5
 const DEFAULT_GRID_HIGHLIGHT_DIMENSIONS = { width: DEFAULT_GRID_HIGHLIGHT_SIZE, depth: DEFAULT_GRID_HIGHLIGHT_SIZE } as const
 const POINT_LIGHT_HELPER_SIZE = 0.5
 const DIRECTIONAL_LIGHT_HELPER_SIZE = 5
@@ -371,8 +373,8 @@ function dropSelectionToGround() {
 }
 
 function snapValueToGrid(value: number): number {
-  // Round to the nearest grid cell so aligned nodes land on gridHelper lines.
-  return Math.round(value / GRID_CELL_SIZE) * GRID_CELL_SIZE
+  // Round to the nearest snap interval so aligned nodes land on grid intersections.
+  return Math.round(value / GRID_SNAP_SPACING) * GRID_SNAP_SPACING
 }
 
 function alignSelection(mode: AlignMode) {
@@ -771,18 +773,75 @@ function shouldDeferSceneGraphSync(): boolean {
   return false
 }
 
-const gridHelper = new THREE.GridHelper(1000, 1000, 0x4dd0e1, 0x4dd0e1)
-gridHelper.position.y = GRID_BASE_HEIGHT
-const gridMaterials = Array.isArray(gridHelper.material) ? gridHelper.material : [gridHelper.material]
-gridMaterials.forEach((material) => {
-  material.depthWrite = false
-  material.transparent = true
-  material.opacity = 0.15
-  material.toneMapped = false
-  material.polygonOffset = true
-  material.polygonOffsetFactor = -2
-  material.polygonOffsetUnits = -2
-})
+const GRID_EXTENT = 1000
+const GRID_MAJOR_COLOR = 0x3a8ca3
+const GRID_MINOR_COLOR = 0x94d5e1
+
+const gridGroup = new THREE.Group()
+gridGroup.name = 'GridHelper'
+
+function applyGridMaterialSettings(materials: THREE.Material | THREE.Material[], opacity: number, polygonOffsetUnits = -2) {
+  const list = Array.isArray(materials) ? materials : [materials]
+  list.forEach((material) => {
+    const lineMaterial = material as THREE.LineBasicMaterial
+    lineMaterial.depthWrite = false
+    lineMaterial.transparent = true
+    lineMaterial.opacity = opacity
+    lineMaterial.toneMapped = false
+    lineMaterial.polygonOffset = true
+    lineMaterial.polygonOffsetFactor = -2
+    lineMaterial.polygonOffsetUnits = polygonOffsetUnits
+  })
+}
+
+const majorGrid = new THREE.GridHelper(
+  GRID_EXTENT,
+  GRID_EXTENT / GRID_MAJOR_SPACING,
+  GRID_MAJOR_COLOR,
+  GRID_MAJOR_COLOR,
+)
+majorGrid.position.y = GRID_BASE_HEIGHT
+applyGridMaterialSettings(majorGrid.material, 0.2)
+gridGroup.add(majorGrid)
+
+const createDashedGridMaterial = () =>
+  new THREE.LineDashedMaterial({
+    color: GRID_MINOR_COLOR,
+    transparent: true,
+    opacity: 0.12,
+    dashSize: GRID_MINOR_SPACING * 0.5,
+    gapSize: GRID_MINOR_SPACING * 0.5,
+    toneMapped: false,
+  })
+
+function createMinorGrid(): THREE.LineSegments {
+  const halfSize = GRID_EXTENT / 2
+  const positions: number[] = []
+
+  for (let offset = -halfSize; offset <= halfSize; offset += GRID_MINOR_SPACING) {
+    const nearestMultiple = Math.round(offset / GRID_MAJOR_SPACING) * GRID_MAJOR_SPACING
+    if (Math.abs(offset - nearestMultiple) <= 1e-6) {
+      continue
+    }
+
+    positions.push(-halfSize, GRID_BASE_HEIGHT, offset, halfSize, GRID_BASE_HEIGHT, offset)
+    positions.push(offset, GRID_BASE_HEIGHT, -halfSize, offset, GRID_BASE_HEIGHT, halfSize)
+  }
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geometry.computeBoundingSphere()
+
+  const material = createDashedGridMaterial()
+  applyGridMaterialSettings(material, material.opacity, -1)
+
+  const lines = new THREE.LineSegments(geometry, material)
+  lines.computeLineDistances()
+  return lines
+}
+
+const minorGrid = createMinorGrid()
+gridGroup.add(minorGrid)
 
 const axesHelper = new THREE.AxesHelper(4)
 axesHelper.visible = false
@@ -1197,14 +1256,14 @@ function applyProjectionMode(mode: CameraProjectionMode) {
 }
 
 function applyGridVisibility(visible: boolean) {
-  gridHelper.visible = visible
+  gridGroup.visible = visible
   if (!visible) {
     updateGridHighlight(null)
     return
   }
 
   if (isDragHovering.value && lastDragPoint) {
-  updateGridHighlight(lastDragPoint, DEFAULT_GRID_HIGHLIGHT_DIMENSIONS)
+    updateGridHighlight(lastDragPoint, DEFAULT_GRID_HIGHLIGHT_DIMENSIONS)
     return
   }
 
@@ -1426,8 +1485,8 @@ function resetCameraView() {
 }
 
 function snapVectorToGrid(vec: THREE.Vector3) {
-  vec.x = Math.round(vec.x / GRID_CELL_SIZE) * GRID_CELL_SIZE
-  vec.z = Math.round(vec.z / GRID_CELL_SIZE) * GRID_CELL_SIZE
+  vec.x = Math.round(vec.x / GRID_SNAP_SPACING) * GRID_SNAP_SPACING
+  vec.z = Math.round(vec.z / GRID_SNAP_SPACING) * GRID_SNAP_SPACING
   return vec
 }
 
@@ -1866,7 +1925,7 @@ function initScene() {
   scene.fog.color.copy(backgroundColor)
   ensureSkyExists()
   scene.add(rootGroup)
-  scene.add(gridHelper)
+  scene.add(gridGroup)
   scene.add(axesHelper)
   scene.add(dragPreviewGroup)
   gridHighlight = createGridHighlight()
