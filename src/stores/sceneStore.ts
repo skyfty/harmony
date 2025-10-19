@@ -1,6 +1,6 @@
 import { watch, type WatchStopHandle } from 'vue'
 import { defineStore } from 'pinia'
-import { Matrix4, Quaternion, Vector3, Euler, type Object3D } from 'three'
+import { Matrix4, Quaternion, Vector3, Euler, Box3, MathUtils, type Object3D } from 'three'
 import type { LightNodeProperties, LightNodeType, SceneNode, SceneNodeType, Vector3Like } from '@/types/scene'
 import type { ClipboardEntry } from '@/types/clipboard-entry'
 import type { DetachResult } from '@/types/detach-result'
@@ -53,6 +53,15 @@ export type HierarchyDropPosition = 'before' | 'after' | 'inside'
 const HISTORY_LIMIT = 50
 
 const DEFAULT_GROUND_SIZE = 100
+
+const GRID_CELL_SIZE = 1
+const CAMERA_NEAR = 0.1
+const CAMERA_FAR = 500
+const CAMERA_DISTANCE_EPSILON = 1e-6
+const MAX_SPAWN_ATTEMPTS = 64
+const COLLISION_MARGIN = 0.35
+const DEFAULT_SPAWN_RADIUS = GRID_CELL_SIZE * 0.75
+const GROUND_ASSET_ID = 'preset:models/ground.glb'
 
 function createVector(x: number, y: number, z: number): Vector3Like {
   return { x, y, z }
@@ -447,6 +456,163 @@ function composeNodeMatrix(node: SceneNode): Matrix4 {
   const quaternion = new Quaternion().setFromEuler(rotation)
   const scale = new Vector3(node.scale.x, node.scale.y, node.scale.z)
   return new Matrix4().compose(position, quaternion, scale)
+}
+
+type CollisionSphere = {
+  center: Vector3
+  radius: number
+}
+
+type ObjectMetrics = {
+  bounds: Box3
+  center: Vector3
+  radius: number
+}
+
+function snapAxisToGrid(value: number): number {
+  return Math.round(value / GRID_CELL_SIZE) * GRID_CELL_SIZE
+}
+
+function toPlainVector(vector: Vector3): Vector3Like {
+  return { x: vector.x, y: vector.y, z: vector.z }
+}
+
+function collectCollisionSpheres(nodes: SceneNode[]): CollisionSphere[] {
+  const spheres: CollisionSphere[] = []
+  const traverse = (list: SceneNode[], parentMatrix: Matrix4) => {
+    list.forEach((node) => {
+      const nodeMatrix = composeNodeMatrix(node)
+      const worldMatrix = new Matrix4().multiplyMatrices(parentMatrix, nodeMatrix)
+
+      if (!node.isPlaceholder && node.nodeType !== 'light') {
+        const runtimeObject = getRuntimeObject(node.id)
+        if (runtimeObject && node.sourceAssetId !== GROUND_ASSET_ID) {
+          runtimeObject.updateMatrixWorld(true)
+          const bounds = new Box3().setFromObject(runtimeObject)
+          if (!bounds.isEmpty()) {
+            const localCenter = bounds.getCenter(new Vector3())
+            const size = bounds.getSize(new Vector3())
+            const localRadius = Math.max(size.length() * 0.5, DEFAULT_SPAWN_RADIUS)
+            const worldCenter = localCenter.clone().applyMatrix4(worldMatrix)
+
+            const position = new Vector3()
+            const quaternion = new Quaternion()
+            const scale = new Vector3()
+            worldMatrix.decompose(position, quaternion, scale)
+            const scaleFactor = Math.max(Math.abs(scale.x), Math.abs(scale.y), Math.abs(scale.z), 1)
+            const radius = localRadius * scaleFactor
+            spheres.push({ center: worldCenter, radius })
+          }
+        }
+      }
+
+      if (node.children?.length) {
+        traverse(node.children, worldMatrix)
+      }
+    })
+  }
+
+  traverse(nodes, new Matrix4())
+  return spheres
+}
+
+function computeObjectMetrics(object: Object3D): ObjectMetrics {
+  object.updateMatrixWorld(true)
+  const bounds = new Box3().setFromObject(object)
+  if (bounds.isEmpty()) {
+    return {
+      bounds,
+      center: new Vector3(),
+      radius: DEFAULT_SPAWN_RADIUS,
+    }
+  }
+  const center = bounds.getCenter(new Vector3())
+  const size = bounds.getSize(new Vector3())
+  const radius = Math.max(size.length() * 0.5, DEFAULT_SPAWN_RADIUS)
+  return { bounds, center, radius }
+}
+
+function resolveSpawnPosition(params: {
+  baseY: number
+  radius: number
+  localCenter?: Vector3
+  camera: SceneCameraState | null | undefined
+  nodes: SceneNode[]
+}): Vector3 {
+  const { baseY, radius, localCenter, camera } = params
+  if (!camera) {
+    return new Vector3(snapAxisToGrid(0), baseY, snapAxisToGrid(0))
+  }
+
+  const cameraPosition = new Vector3(camera.position.x, camera.position.y, camera.position.z)
+  const cameraTarget = new Vector3(camera.target.x, camera.target.y, camera.target.z)
+
+  let direction = camera.forward
+    ? new Vector3(camera.forward.x, camera.forward.y, camera.forward.z)
+    : cameraTarget.clone().sub(cameraPosition)
+
+  if (direction.lengthSq() < CAMERA_DISTANCE_EPSILON) {
+    direction = cameraTarget.clone().sub(cameraPosition)
+  }
+  if (direction.lengthSq() < CAMERA_DISTANCE_EPSILON) {
+    direction.set(0, 0, -1)
+  }
+  direction.normalize()
+
+  if (Math.abs(direction.y) > 0.95) {
+    direction.y = 0
+    if (direction.lengthSq() < CAMERA_DISTANCE_EPSILON) {
+      direction.set(0, 0, -1)
+    } else {
+      direction.normalize()
+    }
+  }
+
+  const collisions = collectCollisionSpheres(params.nodes)
+  const margin = Math.max(radius * 0.25, COLLISION_MARGIN)
+  const minDistance = Math.max(CAMERA_NEAR * 10, radius * 2)
+  const maxDistance = Math.max(minDistance + GRID_CELL_SIZE, CAMERA_FAR * 0.9)
+  const targetDistance = cameraPosition.distanceTo(cameraTarget)
+  let baseDistance = Number.isFinite(targetDistance)
+    ? MathUtils.clamp(targetDistance, minDistance, maxDistance)
+    : minDistance
+  if (!Number.isFinite(baseDistance) || baseDistance < minDistance) {
+    baseDistance = minDistance
+  }
+
+  const step = Math.max(radius, GRID_CELL_SIZE)
+  const candidate = new Vector3()
+  const worldCenter = new Vector3()
+  const localCenterVec = localCenter ? localCenter.clone() : new Vector3()
+
+  for (let attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt += 1) {
+    const distance = baseDistance + attempt * step
+    if (distance > maxDistance) {
+      break
+    }
+
+    candidate.copy(cameraPosition).addScaledVector(direction, distance)
+    candidate.x = snapAxisToGrid(candidate.x)
+    candidate.z = snapAxisToGrid(candidate.z)
+    candidate.y = baseY
+
+    worldCenter.copy(localCenterVec).add(candidate)
+
+    const collides = collisions.some((sphere) => {
+      const separation = worldCenter.distanceTo(sphere.center)
+      return separation < sphere.radius + radius + margin
+    })
+
+    if (!collides) {
+      return candidate
+    }
+  }
+
+  candidate.copy(cameraPosition).addScaledVector(direction, Math.min(baseDistance, maxDistance))
+  candidate.x = snapAxisToGrid(candidate.x)
+  candidate.z = snapAxisToGrid(candidate.z)
+  candidate.y = baseY
+  return candidate
 }
 
 function computeWorldMatrixForNode(nodes: SceneNode[], targetId: string): Matrix4 | null {
@@ -1932,49 +2098,13 @@ export const useSceneStore = defineStore('scene', {
         this.nodes = [...this.nodes]
       }
     },
-    async addNodeFromAsset(asset: ProjectAsset, position?: Vector3Like): Promise<SceneNode | null> {
-      const { position: spawnPosition, rotation, scale } = computeAssetSpawnTransform(asset, position)
-
-      const assetCache = useAssetCacheStore()
-      const shouldCacheModelObject = asset.type === 'model'
-      const cachedModel = shouldCacheModelObject ? getCachedModelObject(asset.id) : null
-      let baseObject: Object3D
-
-      if (cachedModel) {
-        baseObject = cachedModel
-      } else {
-        if (!assetCache.hasCache(asset.id)) {
-          return null
-        }
-        const file = assetCache.createFileFromCache(asset.id)
-        if (!file) {
-          throw new Error('Missing asset data in cache')
-        }
-        baseObject = shouldCacheModelObject
-          ? await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
-          : await loadObjectFromFile(file)
-      }
-      const object = shouldCacheModelObject ? baseObject.clone(true) : baseObject
-      const node = this.addSceneNode({
-        nodeType: 'mesh',
-        object,
-        name: asset.name,
-        position: spawnPosition,
-        rotation,
-        scale,
-        sourceAssetId: asset.id,
-      })
-      assetCache.registerUsage(asset.id)
-      assetCache.touch(asset.id)
-      return node
-    },
     async spawnAssetAtPosition(assetId: string, position: Vector3Like): Promise<{ asset: ProjectAsset; node: SceneNode }> {
       const asset = findAssetInTree(this.projectTree, assetId)
       if (!asset) {
         throw new Error('Unable to find the requested asset')
       }
 
-      const node = await this.addNodeFromAsset(asset, position)
+      const node = await this.addModelNode({ asset, position })
       if (node) {
         return { asset, node }
       }
@@ -2564,6 +2694,103 @@ export const useSceneStore = defineStore('scene', {
       this.nodes = [...this.nodes, node]
       this.setSelection([node.id], { commit: false })
       commitSceneSnapshot(this)
+      return node
+    },
+
+    async addModelNode(payload: {
+      object?: Object3D
+      asset?: ProjectAsset
+      nodeType?: SceneNodeType
+      position?: Vector3Like
+      baseY?: number
+      name?: string
+      sourceAssetId?: string
+      rotation?: Vector3Like
+      scale?: Vector3Like
+    }): Promise<SceneNode | null> {
+      if (!payload.object && !payload.asset) {
+        throw new Error('addModelNode requires either an object or an asset')
+      }
+
+      const nodeType = payload.nodeType ?? 'mesh'
+      const rotation: Vector3Like = payload.rotation ?? { x: 0, y: 0, z: 0 }
+      const scale: Vector3Like = payload.scale ?? { x: 1, y: 1, z: 1 }
+      let baseY = payload.baseY ?? 0
+
+      let workingObject: Object3D
+      let name = payload.name
+      let sourceAssetId = payload.sourceAssetId
+      let assetCache: ReturnType<typeof useAssetCacheStore> | null = null
+      let registerAssetId: string | null = null
+
+      if (payload.asset) {
+        const asset = payload.asset
+        if (asset.type !== 'model') {
+          return null
+        }
+
+        assetCache = useAssetCacheStore()
+        const cached = getCachedModelObject(asset.id)
+        if (cached) {
+          workingObject = cached.clone(true)
+        } else {
+          if (!assetCache.hasCache(asset.id)) {
+            return null
+          }
+          const file = assetCache.createFileFromCache(asset.id)
+          if (!file) {
+            throw new Error('Missing asset data in cache')
+          }
+          const baseObject = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
+          workingObject = baseObject.clone(true)
+        }
+
+        name = name ?? asset.name
+        sourceAssetId = sourceAssetId ?? asset.id
+        registerAssetId = asset.id
+      } else {
+        workingObject = payload.object!
+        name = name ?? workingObject.name ?? 'Imported Mesh'
+      }
+
+      const metrics = computeObjectMetrics(workingObject)
+
+      if (payload.baseY === undefined) {
+        const minY = metrics.bounds.min.y
+        if (Number.isFinite(minY) && minY < 0) {
+          const EPSILON = 1e-3
+          baseY = Math.max(baseY, -minY + EPSILON)
+        }
+      }
+
+      let spawnVector: Vector3
+      if (payload.position) {
+        spawnVector = new Vector3(payload.position.x, payload.position.y + baseY, payload.position.z)
+      } else {
+        spawnVector = resolveSpawnPosition({
+          baseY,
+          radius: metrics.radius,
+          localCenter: metrics.center,
+          camera: this.camera,
+          nodes: this.nodes,
+        })
+      }
+
+      const node = this.addSceneNode({
+        nodeType,
+        object: workingObject,
+        name: name ?? workingObject.name ?? 'Imported Mesh',
+        position: toPlainVector(spawnVector),
+        rotation,
+        scale,
+        sourceAssetId: sourceAssetId ?? undefined,
+      })
+
+      if (registerAssetId && assetCache) {
+        assetCache.registerUsage(registerAssetId)
+        assetCache.touch(registerAssetId)
+      }
+
       return node
     },
 

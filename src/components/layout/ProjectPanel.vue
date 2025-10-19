@@ -412,7 +412,7 @@ async function handleAddAsset(asset: ProjectAsset) {
     preparedAsset = prepareAssetForOperations(asset)
     assetCacheStore.setError(preparedAsset.id, null)
     await ensureAssetCached(preparedAsset)
-    const node = await sceneStore.addNodeFromAsset(preparedAsset)
+    const node = await sceneStore.addModelNode({ asset: preparedAsset })
     if (!node) {
       throw new Error('资源尚未准备就绪')
     }

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, type WatchStopHandle } from 'vue'
-import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
+import { useSceneStore } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import * as THREE from 'three'
 
@@ -10,7 +10,7 @@ import { useFileDialog } from '@vueuse/core'
 import { useUiStore } from '@/stores/uiStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import UrlInputDialog from './UrlInputDialog.vue'
-import type { LightNodeType, SceneNode, Vector3Like } from '@/types/scene'
+import type { LightNodeType, SceneNode } from '@/types/scene'
 import { generateUuid } from '@/plugins/uuid'
 
 const sceneStore = useSceneStore()
@@ -56,177 +56,6 @@ watch(urlDialogOpen, (open) => {
   }
 })
 
-const GRID_CELL_SIZE = 1
-const CAMERA_NEAR = 0.1
-const CAMERA_FAR = 500
-const CAMERA_DISTANCE_EPSILON = 1e-6
-const MAX_SPAWN_ATTEMPTS = 64
-const COLLISION_MARGIN = 0.35
-const DEFAULT_SPAWN_RADIUS = GRID_CELL_SIZE * 0.75
-const GROUND_ASSET_ID = 'preset:models/ground.glb'
-
-type CollisionSphere = {
-  center: THREE.Vector3
-  radius: number
-}
-
-type ObjectMetrics = {
-  bounds: THREE.Box3
-  center: THREE.Vector3
-  radius: number
-}
-
-function snapAxisToGrid(value: number): number {
-  return Math.round(value / GRID_CELL_SIZE) * GRID_CELL_SIZE
-}
-
-function toPlainVector(vector: THREE.Vector3): Vector3Like {
-  return {
-    x: vector.x,
-    y: vector.y,
-    z: vector.z,
-  }
-}
-
-function createNodeMatrix(node: SceneNode): THREE.Matrix4 {
-  const position = new THREE.Vector3(node.position?.x ?? 0, node.position?.y ?? 0, node.position?.z ?? 0)
-  const rotation = new THREE.Euler(node.rotation?.x ?? 0, node.rotation?.y ?? 0, node.rotation?.z ?? 0, 'XYZ')
-  const quaternion = new THREE.Quaternion().setFromEuler(rotation)
-  const scale = new THREE.Vector3(node.scale?.x ?? 1, node.scale?.y ?? 1, node.scale?.z ?? 1)
-  return new THREE.Matrix4().compose(position, quaternion, scale)
-}
-
-function collectCollisionSpheres(nodes: SceneNode[]): CollisionSphere[] {
-  const spheres: CollisionSphere[] = []
-  const traverse = (list: SceneNode[], parentMatrix: THREE.Matrix4) => {
-    list.forEach((node) => {
-      const nodeMatrix = createNodeMatrix(node)
-      const worldMatrix = new THREE.Matrix4().multiplyMatrices(parentMatrix, nodeMatrix)
-
-      if (!node.isPlaceholder && node.nodeType !== 'light') {
-        const runtimeObject = getRuntimeObject(node.id)
-        if (runtimeObject && node.sourceAssetId !== GROUND_ASSET_ID) {
-          runtimeObject.updateMatrixWorld(true)
-          const bounds = new THREE.Box3().setFromObject(runtimeObject)
-          if (!bounds.isEmpty()) {
-            const localCenter = bounds.getCenter(new THREE.Vector3())
-            const size = bounds.getSize(new THREE.Vector3())
-            const localRadius = Math.max(size.length() * 0.5, DEFAULT_SPAWN_RADIUS)
-            const worldCenter = localCenter.clone().applyMatrix4(worldMatrix)
-            const position = new THREE.Vector3()
-            const quaternion = new THREE.Quaternion()
-            const scale = new THREE.Vector3()
-            worldMatrix.decompose(position, quaternion, scale)
-            const scaleFactor = Math.max(Math.abs(scale.x), Math.abs(scale.y), Math.abs(scale.z), 1)
-            const radius = localRadius * scaleFactor
-            spheres.push({ center: worldCenter, radius })
-          }
-        }
-      }
-
-      if (node.children?.length) {
-        traverse(node.children, worldMatrix)
-      }
-    })
-  }
-
-  traverse(nodes, new THREE.Matrix4().identity())
-  return spheres
-}
-
-function computeObjectMetrics(object: THREE.Object3D): ObjectMetrics {
-  object.updateMatrixWorld(true)
-  const bounds = new THREE.Box3().setFromObject(object)
-  if (bounds.isEmpty()) {
-    return {
-      bounds,
-      center: new THREE.Vector3(),
-      radius: DEFAULT_SPAWN_RADIUS,
-    }
-  }
-  const center = bounds.getCenter(new THREE.Vector3())
-  const size = bounds.getSize(new THREE.Vector3())
-  const radius = Math.max(size.length() * 0.5, DEFAULT_SPAWN_RADIUS)
-  return { bounds, center, radius }
-}
-
-function resolveSpawnPosition(params: { baseY: number; radius: number; localCenter?: THREE.Vector3 }): THREE.Vector3 {
-  const { baseY, radius, localCenter } = params
-  const cameraState = sceneStore.camera
-  if (!cameraState) {
-    return new THREE.Vector3(snapAxisToGrid(0), baseY, snapAxisToGrid(0))
-  }
-
-  const cameraPosition = new THREE.Vector3(cameraState.position.x, cameraState.position.y, cameraState.position.z)
-  const cameraTarget = new THREE.Vector3(cameraState.target.x, cameraState.target.y, cameraState.target.z)
-
-  let direction = cameraState.forward
-    ? new THREE.Vector3(cameraState.forward.x, cameraState.forward.y, cameraState.forward.z)
-    : cameraTarget.clone().sub(cameraPosition)
-
-  if (direction.lengthSq() < CAMERA_DISTANCE_EPSILON) {
-    direction = cameraTarget.clone().sub(cameraPosition)
-  }
-  if (direction.lengthSq() < CAMERA_DISTANCE_EPSILON) {
-    direction.set(0, 0, -1)
-  }
-  direction.normalize()
-
-  if (Math.abs(direction.y) > 0.95) {
-    direction.y = 0
-    if (direction.lengthSq() < CAMERA_DISTANCE_EPSILON) {
-      direction.set(0, 0, -1)
-    } else {
-      direction.normalize()
-    }
-  }
-
-  const collisions = collectCollisionSpheres(sceneStore.nodes)
-  const margin = Math.max(radius * 0.25, COLLISION_MARGIN)
-  const minDistance = Math.max(CAMERA_NEAR * 10, radius * 2)
-  const maxDistance = Math.max(minDistance + GRID_CELL_SIZE, CAMERA_FAR * 0.9)
-  const targetDistance = cameraPosition.distanceTo(cameraTarget)
-  let baseDistance = Number.isFinite(targetDistance)
-    ? THREE.MathUtils.clamp(targetDistance, minDistance, maxDistance)
-    : minDistance
-  if (!Number.isFinite(baseDistance) || baseDistance < minDistance) {
-    baseDistance = minDistance
-  }
-
-  const step = Math.max(radius, GRID_CELL_SIZE)
-  const candidate = new THREE.Vector3()
-  const worldCenter = new THREE.Vector3()
-  const localCenterVec = localCenter ? localCenter.clone() : new THREE.Vector3()
-
-  for (let attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt += 1) {
-    const distance = baseDistance + attempt * step
-    if (distance > maxDistance) {
-      break
-    }
-
-    candidate.copy(cameraPosition).addScaledVector(direction, distance)
-    candidate.x = snapAxisToGrid(candidate.x)
-    candidate.z = snapAxisToGrid(candidate.z)
-    candidate.y = baseY
-
-    worldCenter.copy(localCenterVec).add(candidate)
-
-    const collides = collisions.some((sphere) => {
-      const separation = worldCenter.distanceTo(sphere.center)
-      return separation < sphere.radius + radius + margin
-    })
-
-    if (!collides) {
-      return candidate
-    }
-  }
-
-  candidate.copy(cameraPosition).addScaledVector(direction, Math.min(baseDistance, maxDistance))
-  candidate.x = snapAxisToGrid(candidate.x)
-  candidate.z = snapAxisToGrid(candidate.z)
-  candidate.y = baseY
-  return candidate
-}
 
 function prepareImportedObject(object: THREE.Object3D) {
   object.removeFromParent()
@@ -286,20 +115,11 @@ function resolveFilenameFromUrl(url: string, headers?: Headers): string {
   return 'remote-asset'
 }
 
-function addImportedObjectToScene(object: THREE.Object3D, assetId?: string) {
+async function addImportedObjectToScene(object: THREE.Object3D, assetId?: string) {
   prepareImportedObject(object)
-
-  const metrics = computeObjectMetrics(object)
-  const spawnVector = resolveSpawnPosition({ baseY: 0, radius: metrics.radius, localCenter: metrics.center })
-  const spawnPosition = toPlainVector(spawnVector)
-
-  sceneStore.addSceneNode({
-    nodeType: 'mesh',
+  await sceneStore.addModelNode({
     object,
     name: object.name,
-    position: spawnPosition,
-    rotation: { x: 0, y: 0, z: 0 },
-    scale: { x: 1, y: 1, z: 1 },
     sourceAssetId: assetId,
   })
 }
@@ -381,7 +201,7 @@ async function importAssetFromUrl(normalizedUrl: string) {
     }
 
     const object = await loadObjectFromRemoteFile(file)
-    addImportedObjectToScene(object, normalizedUrl)
+    await addImportedObjectToScene(object, normalizedUrl)
     assetCacheStore.registerUsage(normalizedUrl)
     assetCacheStore.touch(normalizedUrl)
 
@@ -476,8 +296,8 @@ function handleMenuImportFromFile() {
       return
     }
 
-  const imported = object as THREE.Object3D
-  const assetId = generateUuid()
+    const imported = object as THREE.Object3D
+    const assetId = generateUuid()
 
     let matchedFile: File | null = null
     if (imported.name && sourceFiles.has(imported.name)) {
@@ -524,7 +344,7 @@ function handleMenuImportFromFile() {
       console.warn('未能匹配到导入文件，无法缓存资源', imported.name)
     }
 
-    addImportedObjectToScene(imported, assetId)
+    await addImportedObjectToScene(imported, assetId)
 
     if (cached) {
       assetCacheStore.registerUsage(assetId)
@@ -637,7 +457,7 @@ function handleAddGroup() {
   })
 }
 
-function handleAddNode(geometry: GeometryType) {
+async function handleAddNode(geometry: GeometryType) {
   const mesh = createGeometry(geometry)
   mesh.name = geometry
 
@@ -661,17 +481,11 @@ function handleAddNode(geometry: GeometryType) {
   mesh.position.set(0, 0, 0)
   mesh.updateMatrixWorld(true)
 
-  const metrics = computeObjectMetrics(mesh)
-  const spawnVector = resolveSpawnPosition({ baseY: spawnY, radius: metrics.radius, localCenter: metrics.center })
-  const spawnPosition = toPlainVector(spawnVector)
-
-  sceneStore.addSceneNode({
-    nodeType: geometry,
+  await sceneStore.addModelNode({
     object: mesh,
+    nodeType: geometry,
     name: mesh.name,
-    position: spawnPosition,
-    rotation: { x: 0, y: 0, z: 0 },
-    scale: { x: 1, y: 1, z: 1 },
+    baseY: spawnY,
   })
 }
 

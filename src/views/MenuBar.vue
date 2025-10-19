@@ -185,7 +185,7 @@ function handleTogglePanel(panel: EditorPanel) {
                     class="menu-list-item"
                     @click="handleTogglePanel('hierarchy')"
                   >
-                    Hierarchy Panel
+                    Hierarchy
                     <template #append>
                       <span class="menu-item-check">
                         <v-icon v-if="panelVisibility.hierarchy" size="18">mdi-check</v-icon>
@@ -196,7 +196,7 @@ function handleTogglePanel(panel: EditorPanel) {
                     class="menu-list-item"
                     @click="handleTogglePanel('inspector')"
                   >
-                    Inspector Panel
+                    Inspector
                     <template #append>
                       <span class="menu-item-check">
                         <v-icon v-if="panelVisibility.inspector" size="18">mdi-check</v-icon>
@@ -207,7 +207,7 @@ function handleTogglePanel(panel: EditorPanel) {
                     class="menu-list-item"
                     @click="handleTogglePanel('project')"
                   >
-                    Project Panel
+                    Project
                     <template #append>
                       <span class="menu-item-check">
                         <v-icon v-if="panelVisibility.project" size="18">mdi-check</v-icon>
