@@ -1517,7 +1517,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   background-color: rgba(0, 0, 0, 0.35);
-  border-radius: 8px;
+  border-radius: 10px;
   backdrop-filter: blur(2px);
   z-index: 2;
 }

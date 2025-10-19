@@ -2621,12 +2621,8 @@ export const useSceneStore = defineStore('scene', {
 
   removed.forEach((id) => stopPlaceholderWatcher(id))
 
-      const fallbackId = this.nodes[0]?.id ?? null
       const prevSelection = cloneSelection(this.selectedNodeIds)
-      let nextSelection = prevSelection.filter((id) => !removed.includes(id))
-      if (!nextSelection.length && fallbackId) {
-        nextSelection = [fallbackId]
-      }
+      const nextSelection = prevSelection.filter((id) => !removed.includes(id))
       this.setSelection(nextSelection, { commit: false })
       const assetCache = useAssetCacheStore()
       assetCache.recalculateUsage(this.nodes)
