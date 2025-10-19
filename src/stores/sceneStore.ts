@@ -30,6 +30,7 @@ import { useAssetCacheStore } from './assetCacheStore'
 import { useUiStore } from './uiStore'
 import { loadObjectFromFile } from '@/plugins/assetImport'
 import { generateUuid } from '@/plugins/uuid'
+import { getOrLoadModelObject } from './modelObjectCache'
 
 import groundModelUrl from '@/preset/models/ground.glb?url'
 import {
@@ -1841,10 +1842,13 @@ export const useSceneStore = defineStore('scene', {
             throw new Error('Missing asset file in cache')
           }
 
-          const baseObject = await loadObjectFromFile(file)
+          const shouldCacheModelObject = asset?.type === 'model'
+          const baseObject = shouldCacheModelObject
+            ? await getOrLoadModelObject(assetId, () => loadObjectFromFile(file))
+            : await loadObjectFromFile(file)
 
           nodesForAsset.forEach((node, index) => {
-            const object = index === 0 ? baseObject : baseObject.clone(true)
+            const object = shouldCacheModelObject || index > 0 ? baseObject.clone(true) : baseObject
             tagObjectWithNodeId(object, node.id)
             registerRuntimeObject(node.id, object)
           })
@@ -1902,7 +1906,11 @@ export const useSceneStore = defineStore('scene', {
         throw new Error('Missing asset data in cache')
       }
 
-      const object = await loadObjectFromFile(file)
+      const shouldCacheModelObject = asset.type === 'model'
+      const baseObject = shouldCacheModelObject
+        ? await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
+        : await loadObjectFromFile(file)
+      const object = shouldCacheModelObject ? baseObject.clone(true) : baseObject
       const node = this.addSceneNode({
         nodeType: 'mesh',
         object,
@@ -2475,7 +2483,11 @@ export const useSceneStore = defineStore('scene', {
           throw new Error('资源未缓存完成')
         }
 
-        const object = await loadObjectFromFile(file)
+        const shouldCacheModelObject = asset.type === 'model'
+        const baseObject = shouldCacheModelObject
+          ? await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
+          : await loadObjectFromFile(file)
+        const object = shouldCacheModelObject ? baseObject.clone(true) : baseObject
         tagObjectWithNodeId(object, nodeId)
         registerRuntimeObject(nodeId, object)
         assetCache.registerUsage(asset.id)

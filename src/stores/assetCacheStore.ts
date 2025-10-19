@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneNode } from '@/types/scene'
+import { invalidateModelObject } from './modelObjectCache'
 
 export type AssetCacheStatus = 'idle' | 'downloading' | 'cached' | 'error'
 
@@ -404,6 +405,7 @@ export const useAssetCacheStore = defineStore('assetCache', {
       },
     ): Promise<AssetCacheEntry> {
       const entry = this.ensureEntry(assetId)
+      invalidateModelObject(assetId)
       const filename = payload.filename ?? (payload.blob instanceof File ? payload.blob.name : null)
 
       applyBlobToEntry(entry, {
@@ -534,6 +536,8 @@ export const useAssetCacheStore = defineStore('assetCache', {
       if (!entry) {
         return
       }
+
+      invalidateModelObject(assetId)
 
       if (entry.abortController) {
         entry.abortController.abort()
