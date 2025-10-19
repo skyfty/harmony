@@ -222,7 +222,7 @@ const defaultPanelVisibility: PanelVisibilityState = {
 
 const PROJECT_PANEL_TREE_MIN_SIZE = 10
 const PROJECT_PANEL_TREE_MAX_SIZE = 90
-const DEFAULT_PROJECT_PANEL_TREE_SIZE = 30
+const DEFAULT_PROJECT_PANEL_TREE_SIZE = 20
 
 const defaultSkyboxSettings = cloneSkyboxSettings(DEFAULT_SKYBOX_SETTINGS)
 
