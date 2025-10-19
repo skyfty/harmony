@@ -2594,6 +2594,74 @@ export const useSceneStore = defineStore('scene', {
       assetCache.recalculateUsage(this.nodes)
       commitSceneSnapshot(this)
     },
+    duplicateNodes(nodeIds: string[], options: { select?: boolean } = {}): string[] {
+      const selectDuplicates = options.select ?? true
+      if (!Array.isArray(nodeIds) || nodeIds.length === 0) {
+        return []
+      }
+
+      const uniqueIds = Array.from(new Set(nodeIds)).filter((id): id is string => typeof id === 'string' && id.length > 0)
+      if (!uniqueIds.length) {
+        return []
+      }
+
+      const existingIds = uniqueIds.filter((id) => !!findNodeById(this.nodes, id) && !this.isNodeSelectionLocked(id))
+      if (!existingIds.length) {
+        return []
+      }
+
+      const parentMap = buildParentMap(this.nodes)
+      const topLevelIds = filterTopLevelNodeIds(existingIds, parentMap)
+      if (!topLevelIds.length) {
+        return []
+      }
+
+      const assetCache = useAssetCacheStore()
+      const runtimeSnapshots = new Map<string, Object3D>()
+      topLevelIds.forEach((id) => {
+        const original = findNodeById(this.nodes, id)
+        if (original) {
+          collectRuntimeSnapshots(original, runtimeSnapshots)
+        }
+      })
+
+      const working = cloneSceneNodes(this.nodes)
+      const duplicateIdMap = new Map<string, string>()
+      const duplicates: SceneNode[] = []
+
+      this.captureHistorySnapshot()
+
+      topLevelIds.forEach((id) => {
+        const source = findNodeById(this.nodes, id)
+        if (!source) {
+          return
+        }
+        const duplicate = duplicateNodeTree(source, { assetCache, runtimeSnapshots })
+        const inserted = insertNodeMutable(working, id, duplicate, 'after')
+        if (!inserted) {
+          working.push(duplicate)
+        }
+        duplicates.push(duplicate)
+        duplicateIdMap.set(id, duplicate.id)
+      })
+
+      if (!duplicates.length) {
+        return []
+      }
+
+      this.nodes = working
+      assetCache.recalculateUsage(this.nodes)
+
+      if (selectDuplicates) {
+        const duplicateIds = duplicates.map((node) => node.id)
+        const previousPrimary = this.selectedNodeId ?? null
+        const nextPrimary = previousPrimary ? duplicateIdMap.get(previousPrimary) ?? duplicateIds[0] ?? null : duplicateIds[0] ?? null
+        this.setSelection(duplicateIds, { commit: false, primaryId: nextPrimary })
+      }
+
+      commitSceneSnapshot(this)
+      return duplicates.map((node) => node.id)
+    },
     copyNodes(nodeIds: string[]) {
       const { entries, runtimeSnapshots } = collectClipboardPayload(this.nodes, nodeIds)
       if (!entries.length) {

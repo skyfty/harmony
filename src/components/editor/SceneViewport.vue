@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
@@ -2782,7 +2782,7 @@ function handleClickSelection(event: PointerEvent, trackingState: PointerTrackin
   emitSelectionChange([nodeId])
 }
 
-function handlePointerDown(event: PointerEvent) {
+async function handlePointerDown(event: PointerEvent) {
   if (!canvasRef.value || !camera || !scene) {
     pointerTrackingState = null
     return
@@ -2809,7 +2809,52 @@ function handlePointerDown(event: PointerEvent) {
     event.stopPropagation()
   }
 
-  const hit = button === 0 ? pickNodeAtPointer(event) : null
+  const primaryBeforeDuplicate = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  let hit = button === 0 ? pickNodeAtPointer(event) : null
+  const initialHitPoint = hit ? hit.point.clone() : null
+
+  if (
+    button === 0 &&
+    props.activeTool === 'select' &&
+    hit &&
+    (event.ctrlKey || event.metaKey) &&
+    primaryBeforeDuplicate &&
+    hit.nodeId === primaryBeforeDuplicate &&
+    !sceneStore.isNodeSelectionLocked(hit.nodeId)
+  ) {
+    const unlockedSelection = sceneStore.selectedNodeIds.filter((id) => !sceneStore.isNodeSelectionLocked(id))
+    const idsToDuplicate = unlockedSelection.length ? unlockedSelection : [hit.nodeId]
+    const duplicateIds = sceneStore.duplicateNodes(idsToDuplicate, { select: true })
+    if (duplicateIds.length) {
+      await nextTick()
+      await nextTick()
+      const updatedHit = pickNodeAtPointer(event)
+      if (updatedHit && duplicateIds.includes(updatedHit.nodeId)) {
+        hit = updatedHit
+      } else {
+        const primaryId = sceneStore.selectedNodeId ?? null
+        if (primaryId) {
+          const object = objectMap.get(primaryId) ?? null
+          if (object) {
+            object.updateMatrixWorld(true)
+            const fallbackPoint = initialHitPoint
+              ? initialHitPoint.clone()
+              : (() => {
+                  const world = new THREE.Vector3()
+                  object.getWorldPosition(world)
+                  return world
+                })()
+            hit = {
+              nodeId: primaryId,
+              object,
+              point: fallbackPoint,
+            }
+          }
+        }
+      }
+    }
+  }
+
   const activeTransformAxis = button === 0 && props.activeTool !== 'select' ? (transformControls?.axis ?? null) : null
 
   try {
@@ -2818,7 +2863,8 @@ function handlePointerDown(event: PointerEvent) {
     /* noop */
   }
 
-  const selectionDrag = button === 0 && props.activeTool === 'select' && hit && hit.nodeId === props.selectedNodeId
+  const currentPrimaryId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  const selectionDrag = button === 0 && props.activeTool === 'select' && hit && currentPrimaryId && hit.nodeId === currentPrimaryId
     ? createSelectionDragState(hit.nodeId, hit.object, hit.point, event)
     : null
 
