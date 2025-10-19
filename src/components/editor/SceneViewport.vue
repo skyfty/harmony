@@ -105,6 +105,8 @@ const MIN_TARGET_HEIGHT = 0
 const GRID_MAJOR_SPACING = 1
 const GRID_MINOR_SPACING = 0.5
 const GRID_SNAP_SPACING = GRID_MINOR_SPACING
+const GRID_MINOR_DASH_SIZE = GRID_MINOR_SPACING * 0.12
+const GRID_MINOR_GAP_SIZE = GRID_MINOR_SPACING * 0.2
 const GRID_BASE_HEIGHT = 0.03
 const GRID_HIGHLIGHT_HEIGHT = 0.03
 const GRID_HIGHLIGHT_PADDING = 0.1
@@ -774,8 +776,8 @@ function shouldDeferSceneGraphSync(): boolean {
 }
 
 const GRID_EXTENT = 1000
-const GRID_MAJOR_COLOR = 0x3a8ca3
-const GRID_MINOR_COLOR = 0x94d5e1
+const GRID_MAJOR_COLOR = 0x1f6f8a
+const GRID_MINOR_COLOR = 0x9dddf0
 
 const gridGroup = new THREE.Group()
 gridGroup.name = 'GridHelper'
@@ -801,16 +803,21 @@ const majorGrid = new THREE.GridHelper(
   GRID_MAJOR_COLOR,
 )
 majorGrid.position.y = GRID_BASE_HEIGHT
-applyGridMaterialSettings(majorGrid.material, 0.2)
+applyGridMaterialSettings(majorGrid.material, 0.25)
+const majorMaterials = Array.isArray(majorGrid.material) ? majorGrid.material : [majorGrid.material]
+majorMaterials.forEach((material) => {
+  const lineMaterial = material as THREE.LineBasicMaterial
+  lineMaterial.linewidth = 1.5
+})
 gridGroup.add(majorGrid)
 
 const createDashedGridMaterial = () =>
   new THREE.LineDashedMaterial({
     color: GRID_MINOR_COLOR,
     transparent: true,
-    opacity: 0.12,
-    dashSize: GRID_MINOR_SPACING * 0.5,
-    gapSize: GRID_MINOR_SPACING * 0.5,
+    opacity: 0.08,
+    dashSize: GRID_MINOR_DASH_SIZE,
+    gapSize: GRID_MINOR_GAP_SIZE,
     toneMapped: false,
   })
 
