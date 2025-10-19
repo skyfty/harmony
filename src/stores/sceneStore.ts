@@ -30,7 +30,7 @@ import { useAssetCacheStore } from './assetCacheStore'
 import { useUiStore } from './uiStore'
 import { loadObjectFromFile } from '@/plugins/assetImport'
 import { generateUuid } from '@/plugins/uuid'
-import { getOrLoadModelObject } from './modelObjectCache'
+import { getCachedModelObject, getOrLoadModelObject } from './modelObjectCache'
 
 import groundModelUrl from '@/preset/models/ground.glb?url'
 import {
@@ -1898,18 +1898,24 @@ export const useSceneStore = defineStore('scene', {
       const { position: spawnPosition, rotation, scale } = computeAssetSpawnTransform(asset, position)
 
       const assetCache = useAssetCacheStore()
-      if (!assetCache.hasCache(asset.id)) {
-        return null
-      }
-      const file = assetCache.createFileFromCache(asset.id)
-      if (!file) {
-        throw new Error('Missing asset data in cache')
-      }
-
       const shouldCacheModelObject = asset.type === 'model'
-      const baseObject = shouldCacheModelObject
-        ? await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
-        : await loadObjectFromFile(file)
+      const cachedModel = shouldCacheModelObject ? getCachedModelObject(asset.id) : null
+      let baseObject: Object3D
+
+      if (cachedModel) {
+        baseObject = cachedModel
+      } else {
+        if (!assetCache.hasCache(asset.id)) {
+          return null
+        }
+        const file = assetCache.createFileFromCache(asset.id)
+        if (!file) {
+          throw new Error('Missing asset data in cache')
+        }
+        baseObject = shouldCacheModelObject
+          ? await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
+          : await loadObjectFromFile(file)
+      }
       const object = shouldCacheModelObject ? baseObject.clone(true) : baseObject
       const node = this.addSceneNode({
         nodeType: 'mesh',
@@ -1930,17 +1936,12 @@ export const useSceneStore = defineStore('scene', {
         throw new Error('Unable to find the requested asset')
       }
 
-      const assetCache = useAssetCacheStore()
-      const shouldUseCachedModel = asset.type === 'model' && assetCache.hasCache(asset.id)
-
-      if (shouldUseCachedModel) {
-        const node = await this.addNodeFromAsset(asset, position)
-        if (!node) {
-          throw new Error('Asset is not ready and cannot be added to the scene')
-        }
+      const node = await this.addNodeFromAsset(asset, position)
+      if (node) {
         return { asset, node }
       }
 
+      const assetCache = useAssetCacheStore()
       const transform = computeAssetSpawnTransform(asset, position)
       const placeholder = this.addPlaceholderNode(asset, transform)
       this.observeAssetDownloadForNode(placeholder.id, asset)
