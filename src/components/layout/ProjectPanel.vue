@@ -1135,14 +1135,37 @@ onBeforeUnmount(() => {
                 >
                   <div class="asset-preview" :style="{ background: asset.previewColor }">
                     <div class="asset-select-control">
-                        <v-checkbox-btn
-                          :model-value="isAssetSelected(asset.id)"
-                          density="compact"
+                      <v-checkbox-btn
+                        :model-value="isAssetSelected(asset.id)"
+                        density="compact"
+                        color="primary"
+                        :style="{ visibility: canDeleteAsset(asset) ? 'visible' : 'hidden' }"
+                        @click.stop
+                        @update:model-value="() => toggleAssetSelection(asset)"
+                      />
+                    </div>
+                    <div class="asset-actions">
+                      <div class="asset-progress" v-if="isAssetDownloading(asset)">
+                        <v-progress-linear
+                          :model-value="assetDownloadProgress(asset)"
                           color="primary"
-                          :style="{ visibility: canDeleteAsset(asset) ? 'visible' : 'hidden' }"
-                          @click.stop
-                          @update:model-value="() => toggleAssetSelection(asset)"
+                          height="4"
+                          rounded
                         />
+                      </div>
+                      <div class="asset-progress" v-else-if="assetDownloadError(asset)">
+                        <v-icon size="18" color="error">mdi-alert-circle-outline</v-icon>
+                      </div>
+                      <v-btn
+                        color="primary"
+                        variant="tonal"
+                        density="compact"
+                        icon="mdi-plus"
+                        size="small"
+                        style="min-width: 20px; height: 20px;"
+                        :loading="addPendingAssetId === asset.id"
+                        @click.stop="handleAddAsset(asset)"
+                      />
                     </div>
                     <img
                       v-if="assetPreviewUrl(asset)"
@@ -1168,31 +1191,6 @@ onBeforeUnmount(() => {
                       <span v-if="assetDownloadError(asset)" class="asset-subtitle">{{ assetDownloadError(asset) }}</span>
                     </div>
                   </div>
-                  <v-card-actions class="asset-actions">
-                    <div class="asset-progress" v-if="isAssetDownloading(asset)">
-                      <v-progress-linear
-                        :model-value="assetDownloadProgress(asset)"
-                        color="primary"
-                        height="4"
-                        rounded
-                      />
-                    </div>
-                    <div class="asset-progress" v-else-if="assetDownloadError(asset)">
-                      <v-icon size="18" color="error">mdi-alert-circle-outline</v-icon>
-                    </div>
-                    <v-spacer />
-                    <v-btn
-                      color="primary"
-                      variant="tonal"
-                      density="compact"
-                      icon="mdi-plus"
-                      size="small"
-                      style="min-width: 20px; height: 20px;"
-                      :loading="addPendingAssetId === asset.id"
-                      @click.stop="handleAddAsset(asset)"
-                    >
-                    </v-btn>
-                  </v-card-actions>
                 </v-card>
               </div>
               <div v-else class="placeholder-text">
@@ -1401,7 +1399,6 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   height: 116px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   position: relative;
   overflow: hidden;
 }
@@ -1409,8 +1406,8 @@ onBeforeUnmount(() => {
 .asset-select-control {
   position: absolute;
   top: 6px;
-  right: 6px;
-  z-index: 2;
+  left: 6px;
+  z-index: 3;
 }
 
 .asset-select-control :deep(.v-selection-control) {
@@ -1511,19 +1508,27 @@ onBeforeUnmount(() => {
   letter-spacing: 0.08em;
 }
 
-.v-card-actions {
-  min-height: 32px;
-}
 
 .asset-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
   align-items: center;
   gap: 8px;
-  padding-inline: 12px;
-  padding-block: 6px;
+  background-color: rgba(0, 0, 0, 0.35);
+  border-radius: 8px;
+  backdrop-filter: blur(2px);
+  z-index: 2;
 }
 
 .asset-progress {
-  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+.asset-actions :deep(.v-progress-linear) {
+  width: 76px;
 }
 
 .asset-error-text {
