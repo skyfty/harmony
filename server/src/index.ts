@@ -1,3 +1,4 @@
+import '@/utils/cjsCompat'
 import Koa from 'koa'
 import cors from '@koa/cors'
 import logger from 'koa-logger'
