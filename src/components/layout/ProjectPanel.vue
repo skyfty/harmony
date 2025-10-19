@@ -8,6 +8,7 @@ import type { ProjectDirectory } from '@/types/project-directory'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { resourceProviders } from '@/resources/projectProviders'
 import { loadProviderCatalog, storeProviderCatalog } from '@/stores/providerCatalogCache'
+import { getCachedModelObject } from '@/stores/modelObjectCache'
 
 const OPENED_DIRECTORIES_STORAGE_KEY = 'harmony:project-panel:opened-directories'
 
@@ -107,6 +108,13 @@ const {
 const openedDirectories = ref<string[]>(restoreOpenedDirectories())
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 let dragPreviewEl: HTMLDivElement | null = null
+let dragImageOffset: { x: number; y: number } | null = null
+let dragSuppressionPreparedAssetId: string | null = null
+let dragSuppressionActive = false
+let dragSuppressionSourceAssetId: string | null = null
+let windowDragOverListener: ((event: DragEvent) => void) | null = null
+let windowDropListener: ((event: DragEvent) => void) | null = null
+let hiddenDragImageEl: HTMLDivElement | null = null
 const addPendingAssetId = ref<string | null>(null)
 const deleteDialogOpen = ref(false)
 const pendingDeleteAssets = ref<ProjectAsset[]>([])
@@ -407,22 +415,155 @@ function handleAssetDragStart(event: DragEvent, asset: ProjectAsset) {
   sceneStore.setDraggingAssetId(asset.id)
   selectAsset(asset)
   assetCacheStore.touch(preparedAsset.id)
-  
+
+  let preview: HTMLDivElement | null = null
+
   if (event.dataTransfer) {
     event.dataTransfer.effectAllowed = 'copyMove'
     event.dataTransfer.setData(ASSET_DRAG_MIME, JSON.stringify({ assetId: preparedAsset.id }))
     event.dataTransfer.dropEffect = 'copy'
-    const preview = createDragPreview(asset)
+    preview = createDragPreview(asset)
     if (preview) {
       const rect = preview.getBoundingClientRect()
-      event.dataTransfer.setDragImage(preview, rect.width / 2, rect.height / 2)
+      dragImageOffset = {
+        x: rect.width / 2,
+        y: rect.height / 2,
+      }
+      event.dataTransfer.setDragImage(preview, dragImageOffset.x, dragImageOffset.y)
+    } else {
+      dragImageOffset = null
     }
+  } else {
+    dragImageOffset = null
   }
+
+  initializeDragSuppression(preparedAsset, asset.id)
 }
 
 function handleAssetDragEnd() {
   sceneStore.setDraggingAssetId(null)
   destroyDragPreview()
+  detachDragSuppressionListeners()
+}
+
+function ensureHiddenDragImage(): HTMLDivElement | null {
+  if (typeof document === 'undefined') {
+    return null
+  }
+  if (!hiddenDragImageEl) {
+    const placeholder = document.createElement('div')
+    placeholder.style.width = '1px'
+    placeholder.style.height = '1px'
+    placeholder.style.opacity = '0'
+    placeholder.style.position = 'absolute'
+    placeholder.style.top = '-9999px'
+    placeholder.style.left = '-9999px'
+    placeholder.style.pointerEvents = 'none'
+    document.body.appendChild(placeholder)
+    hiddenDragImageEl = placeholder
+  }
+  return hiddenDragImageEl
+}
+
+function applyHiddenDragImage(event: DragEvent) {
+  if (!event.dataTransfer) {
+    return
+  }
+  const placeholder = ensureHiddenDragImage()
+  if (!placeholder) {
+    return
+  }
+  event.dataTransfer.setDragImage(placeholder, 0, 0)
+}
+
+function restorePreviewDragImage(event: DragEvent) {
+  if (!dragPreviewEl || !dragImageOffset || !event.dataTransfer) {
+    return
+  }
+  event.dataTransfer.setDragImage(dragPreviewEl, dragImageOffset.x, dragImageOffset.y)
+}
+
+function handleWindowDragOver(event: DragEvent) {
+  if (!dragSuppressionPreparedAssetId || !dragSuppressionSourceAssetId) {
+    return
+  }
+  if (!event.dataTransfer) {
+    return
+  }
+  const types = Array.from(event.dataTransfer.types ?? [])
+  if (!types.includes(ASSET_DRAG_MIME)) {
+    return
+  }
+  if (sceneStore.draggingAssetId !== dragSuppressionSourceAssetId) {
+    return
+  }
+  if (typeof document === 'undefined') {
+    return
+  }
+  const cachedObjectReady = !!getCachedModelObject(dragSuppressionPreparedAssetId)
+  if (!cachedObjectReady) {
+    if (dragSuppressionActive) {
+      restorePreviewDragImage(event)
+      dragSuppressionActive = false
+    }
+    return
+  }
+  const currentElement = document.elementFromPoint(event.clientX, event.clientY)
+  const inViewport = !!currentElement?.closest('[data-scene-viewport]')
+  if (inViewport) {
+    if (!dragSuppressionActive) {
+      applyHiddenDragImage(event)
+      dragSuppressionActive = true
+    }
+  } else if (dragSuppressionActive) {
+    restorePreviewDragImage(event)
+    dragSuppressionActive = false
+  }
+}
+
+function attachDragSuppressionListeners() {
+  if (typeof window === 'undefined') {
+    return
+  }
+  if (!windowDragOverListener) {
+    windowDragOverListener = (event: DragEvent) => {
+      handleWindowDragOver(event)
+    }
+    window.addEventListener('dragover', windowDragOverListener, true)
+  }
+  if (!windowDropListener) {
+    windowDropListener = () => {
+      detachDragSuppressionListeners()
+    }
+    window.addEventListener('drop', windowDropListener, true)
+  }
+}
+
+function detachDragSuppressionListeners() {
+  if (typeof window !== 'undefined') {
+    if (windowDragOverListener) {
+      window.removeEventListener('dragover', windowDragOverListener, true)
+      windowDragOverListener = null
+    }
+    if (windowDropListener) {
+      window.removeEventListener('drop', windowDropListener, true)
+      windowDropListener = null
+    }
+  }
+  dragSuppressionActive = false
+  dragSuppressionPreparedAssetId = null
+  dragSuppressionSourceAssetId = null
+}
+
+function initializeDragSuppression(preparedAsset: ProjectAsset, sourceAssetId: string) {
+  detachDragSuppressionListeners()
+  const preparedAssetId = preparedAsset.type === 'model' ? preparedAsset.id : null
+  dragSuppressionSourceAssetId = sourceAssetId
+  dragSuppressionPreparedAssetId = preparedAssetId
+  dragSuppressionActive = false
+  if (dragSuppressionPreparedAssetId) {
+    attachDragSuppressionListeners()
+  }
 }
 
 function isAssetSelected(assetId: string) {
@@ -831,10 +972,12 @@ function destroyDragPreview() {
     dragPreviewEl.parentNode.removeChild(dragPreviewEl)
   }
   dragPreviewEl = null
+  dragImageOffset = null
 }
 
 onBeforeUnmount(() => {
   destroyDragPreview()
+  detachDragSuppressionListeners()
   sceneStore.setDraggingAssetId(null)
   if (searchDebounceHandle !== null) {
     clearTimeout(searchDebounceHandle)

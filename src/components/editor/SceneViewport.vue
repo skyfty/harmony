@@ -3869,6 +3869,7 @@ defineExpose<SceneViewportHandle>({
     <div
       ref="surfaceRef"
       class="viewport-surface"
+      data-scene-viewport="true"
       :class="{ 'is-drag-hover': isDragHovering }"
       @dragenter="handleViewportDragEnter"
       @dragover="handleViewportDragOver"
