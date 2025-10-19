@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch, watchEffect } from 'vue'
 import { storeToRefs } from 'pinia'
+import { Splitpanes, Pane } from 'splitpanes'
+import 'splitpanes/dist/splitpanes.css'
 import { useSceneStore, extractProviderIdFromPackageDirectoryId } from '@/stores/sceneStore'
 import { PACKAGES_ROOT_DIRECTORY_ID } from '@/stores/assetCatalog'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -102,6 +104,7 @@ const {
   currentAssets, 
   selectedAssetId, 
   currentDirectory, 
+  projectPanelTreeSize,
   draggingAssetId 
 } = storeToRefs(sceneStore)
 
@@ -344,6 +347,25 @@ async function loadPackageDirectory(providerId: string, options: { force?: boole
 const activeProviderId = computed(() => findProviderIdForDirectoryId(activeDirectoryId.value ?? null))
 const activeProviderError = computed(() => (activeProviderId.value ? getProviderError(activeProviderId.value) : null))
 const activeProviderLoading = computed(() => (activeProviderId.value ? isProviderLoading(activeProviderId.value) : false))
+
+const treePaneSize = computed(() => Math.min(Math.max(projectPanelTreeSize.value, 0), 100))
+const galleryPaneSize = computed(() => Math.max(Math.round((100 - treePaneSize.value) * 100) / 100, 0))
+
+interface SplitpanesPaneInfo {
+  size: number
+}
+
+interface SplitpanesResizedEvent {
+  panes: SplitpanesPaneInfo[]
+}
+
+function handleProjectSplitResized(event: SplitpanesResizedEvent) {
+  const nextSize = event?.panes?.[0]?.size
+  if (typeof nextSize !== 'number' || !Number.isFinite(nextSize)) {
+    return
+  }
+  sceneStore.setProjectPanelTreeSize(nextSize)
+}
 
 function selectAsset(asset: ProjectAsset) {
   sceneStore.selectAsset(asset.id)
@@ -994,200 +1016,206 @@ onBeforeUnmount(() => {
     </v-toolbar>
     <v-divider />
     <div class="project-content">
-      <div class="project-tree">
-        <v-toolbar density="compact"  height="46">
-          <v-toolbar-title class="text-subtitle-2 project-tree-subtitle">Resource</v-toolbar-title>
-          <v-spacer />
-        </v-toolbar>
-        <v-divider />
-        <v-treeview
-          v-model:opened="openedDirectories"
-          v-model:activated="selectedDirectory"
-          :items="projectTree"
-          item-title="name"
-          item-value="id"
-          activatable
-          class="tree-view"
-        >
-          <template #prepend>
-            <v-icon >mdi-folder</v-icon>
-          </template>
-          <template #title="{ item }">
-            <div class="tree-node-title">
-              <span class="tree-node-text">{{ item.name }}</span>
-              <v-progress-circular
-                v-if="isProviderDirectory(item?.id) && isDirectoryLoading(item?.id)"
-                class="tree-node-spinner"
-                indeterminate
-                size="14"
-                width="3"
-                color="primary"
-              />
-            </div>
-          </template>
-        </v-treeview>
-      </div>
-      <div class="project-gallery">
-        <v-toolbar density="compact" height="46">
-            <v-checkbox-btn
-              class="toolbar-select-checkbox"
-              :model-value="isSelectAllActive"
-              :indeterminate="isSelectAllIndeterminate"
-              :disabled="!selectableAssetIds.length"
-              density="compact"
-              color="primary"
-              @update:model-value="handleSelectAllChange"
-            />
-
-            <v-btn
-            color="error"
-            variant="text"
-            density="compact"
-            icon="mdi-delete-outline"
-            :disabled="!isToolbarDeleteVisible"
-            @click="requestDeleteSelection"
-            />
-            <v-divider vertical class="mx-1" />
-          <v-text-field
-            v-model="searchQuery"
-            :loading="searchLoading"
-            append-inner-icon="mdi-magnify"
-            density="compact"
-            size="small"
-            label="Search..."
-            variant="solo"
-            hide-details
-            single-line
-            clearable
-            style="max-width: 350px;"
-            @keydown.enter.stop.prevent="searchAsset"
-            @click:append-inner="searchAsset"
-            @click:clear="handleSearchClear"
-          />
-          <v-btn icon="mdi-refresh" density="compact" variant="text" @click="refreshGallery" />
-        </v-toolbar>
-        <v-divider />
-        <div class="project-gallery-scroll">
-          <div v-if="galleryDirectories.length" class="gallery-grid gallery-grid--directories">
-            <v-card
-              v-for="directory in galleryDirectories"
-              :key="directory.id"
-              :class="['directory-card', { 'is-active': activeDirectoryId === directory.id }]"
-              elevation="4"
-              tabindex="0"
-              @dblclick.stop="enterDirectory(directory)"
-              @keyup.enter.prevent="enterDirectory(directory)"
-              @keyup.space.prevent="enterDirectory(directory)"
+      <Splitpanes class="project-split" @resized="handleProjectSplitResized">
+        <Pane :size="treePaneSize">
+          <div class="project-tree">
+            <v-toolbar density="compact"  height="46">
+              <v-toolbar-title class="text-subtitle-2 project-tree-subtitle">Resource</v-toolbar-title>
+              <v-spacer />
+            </v-toolbar>
+            <v-divider />
+            <v-treeview
+              v-model:opened="openedDirectories"
+              v-model:activated="selectedDirectory"
+              :items="projectTree"
+              item-title="name"
+              item-value="id"
+              activatable
+              class="tree-view"
             >
-              <div class="directory-card-body">
-                <v-icon size="40" color="primary">mdi-folder</v-icon>
-                <div class="directory-card-text">
-                  <span class="directory-card-title">{{ directory.name }}</span>
-                  <span class="directory-card-subtitle">{{ countDirectoryAssets(directory) }} 个资源</span>
-                </div>
-                <v-icon class="directory-card-hint" size="18" color="primary">mdi-gesture-double-tap</v-icon>
-              </div>
-            </v-card>
-          </div>
-          <div v-else-if="displayedAssets.length" class="gallery-grid">
-            <v-card
-              v-for="asset in displayedAssets"
-              :key="asset.id"
-              :class="[
-                'asset-card',
-                {
-                  'is-selected': selectedAssetId === asset.id,
-                  'is-dragging': isAssetDragging(asset.id),
-                  'is-downloading': isAssetDownloading(asset),
-                },
-              ]"
-              elevation="4"
-              :draggable="true"
-              @click="selectAsset(asset)"
-              @dragstart.stop="handleAssetDragStart($event, asset)"
-              @dragend="handleAssetDragEnd"
-            >
-              <div class="asset-preview" :style="{ background: asset.previewColor }">
-                <div class="asset-select-control">
-                    <v-checkbox-btn
-                      :model-value="isAssetSelected(asset.id)"
-                      density="compact"
-                      color="primary"
-                      :style="{ visibility: canDeleteAsset(asset) ? 'visible' : 'hidden' }"
-                      @click.stop
-                      @update:model-value="() => toggleAssetSelection(asset)"
-                    />
-                </div>
-                <img
-                  v-if="assetPreviewUrl(asset)"
-                  :src="assetPreviewUrl(asset)"
-                  class="asset-preview-image"
-                  :alt="`${asset.name} preview`"
-                  draggable="false"
-                />
-                <v-icon v-else size="32" color="white">{{ assetIcon(asset.type) }}</v-icon>
-                <div v-if="isAssetDownloading(asset)" class="asset-progress-overlay">
+              <template #prepend>
+                <v-icon >mdi-folder</v-icon>
+              </template>
+              <template #title="{ item }">
+                <div class="tree-node-title">
+                  <span class="tree-node-text">{{ item.name }}</span>
                   <v-progress-circular
-                    :model-value="assetDownloadProgress(asset)"
+                    v-if="isProviderDirectory(item?.id) && isDirectoryLoading(item?.id)"
+                    class="tree-node-spinner"
+                    indeterminate
+                    size="14"
+                    width="3"
                     color="primary"
-                    size="36"
-                    width="4"
                   />
                 </div>
-                <div v-else-if="assetDownloadError(asset)" class="asset-error-indicator">
-                  <v-icon size="20" color="error">mdi-alert-circle-outline</v-icon>
-                </div>
-                <div class="asset-info-overlay">
-                  <span class="asset-title">{{ asset.name }}</span>
-                  <span v-if="assetDownloadError(asset)" class="asset-subtitle">{{ assetDownloadError(asset) }}</span>
-                </div>
-              </div>
-              <v-card-actions class="asset-actions">
-                <div class="asset-progress" v-if="isAssetDownloading(asset)">
-                  <v-progress-linear
-                    :model-value="assetDownloadProgress(asset)"
-                    color="primary"
-                    height="4"
-                    rounded
-                  />
-                </div>
-                <div class="asset-progress" v-else-if="assetDownloadError(asset)">
-                  <v-icon size="18" color="error">mdi-alert-circle-outline</v-icon>
-                </div>
-                <v-spacer />
-                <v-btn
-                  color="primary"
-                  variant="tonal"
+              </template>
+            </v-treeview>
+          </div>
+        </Pane>
+        <Pane :size="galleryPaneSize">
+          <div class="project-gallery">
+            <v-toolbar density="compact" height="46">
+                <v-checkbox-btn
+                  class="toolbar-select-checkbox"
+                  :model-value="isSelectAllActive"
+                  :indeterminate="isSelectAllIndeterminate"
+                  :disabled="!selectableAssetIds.length"
                   density="compact"
-                  icon="mdi-plus"
-                  size="small"
-                  style="min-width: 20px; height: 20px;"
-                  :loading="addPendingAssetId === asset.id"
-                  @click.stop="handleAddAsset(asset)"
+                  color="primary"
+                  @update:model-value="handleSelectAllChange"
+                />
+
+                <v-btn
+                color="error"
+                variant="text"
+                density="compact"
+                icon="mdi-delete-outline"
+                :disabled="!isToolbarDeleteVisible"
+                @click="requestDeleteSelection"
+                />
+                <v-divider vertical class="mx-1" />
+              <v-text-field
+                v-model="searchQuery"
+                :loading="searchLoading"
+                append-inner-icon="mdi-magnify"
+                density="compact"
+                size="small"
+                label="Search..."
+                variant="solo"
+                hide-details
+                single-line
+                clearable
+                style="max-width: 350px;"
+                @keydown.enter.stop.prevent="searchAsset"
+                @click:append-inner="searchAsset"
+                @click:clear="handleSearchClear"
+              />
+              <v-btn icon="mdi-refresh" density="compact" variant="text" @click="refreshGallery" />
+            </v-toolbar>
+            <v-divider />
+            <div class="project-gallery-scroll">
+              <div v-if="galleryDirectories.length" class="gallery-grid gallery-grid--directories">
+                <v-card
+                  v-for="directory in galleryDirectories"
+                  :key="directory.id"
+                  :class="['directory-card', { 'is-active': activeDirectoryId === directory.id }]"
+                  elevation="4"
+                  tabindex="0"
+                  @dblclick.stop="enterDirectory(directory)"
+                  @keyup.enter.prevent="enterDirectory(directory)"
+                  @keyup.space.prevent="enterDirectory(directory)"
                 >
-                </v-btn>
-              </v-card-actions>
-            </v-card>
+                  <div class="directory-card-body">
+                    <v-icon size="40" color="primary">mdi-folder</v-icon>
+                    <div class="directory-card-text">
+                      <span class="directory-card-title">{{ directory.name }}</span>
+                      <span class="directory-card-subtitle">{{ countDirectoryAssets(directory) }} 个资源</span>
+                    </div>
+                    <v-icon class="directory-card-hint" size="18" color="primary">mdi-gesture-double-tap</v-icon>
+                  </div>
+                </v-card>
+              </div>
+              <div v-else-if="displayedAssets.length" class="gallery-grid">
+                <v-card
+                  v-for="asset in displayedAssets"
+                  :key="asset.id"
+                  :class="[
+                    'asset-card',
+                    {
+                      'is-selected': selectedAssetId === asset.id,
+                      'is-dragging': isAssetDragging(asset.id),
+                      'is-downloading': isAssetDownloading(asset),
+                    },
+                  ]"
+                  elevation="4"
+                  :draggable="true"
+                  @click="selectAsset(asset)"
+                  @dragstart.stop="handleAssetDragStart($event, asset)"
+                  @dragend="handleAssetDragEnd"
+                >
+                  <div class="asset-preview" :style="{ background: asset.previewColor }">
+                    <div class="asset-select-control">
+                        <v-checkbox-btn
+                          :model-value="isAssetSelected(asset.id)"
+                          density="compact"
+                          color="primary"
+                          :style="{ visibility: canDeleteAsset(asset) ? 'visible' : 'hidden' }"
+                          @click.stop
+                          @update:model-value="() => toggleAssetSelection(asset)"
+                        />
+                    </div>
+                    <img
+                      v-if="assetPreviewUrl(asset)"
+                      :src="assetPreviewUrl(asset)"
+                      class="asset-preview-image"
+                      :alt="`${asset.name} preview`"
+                      draggable="false"
+                    />
+                    <v-icon v-else size="32" color="white">{{ assetIcon(asset.type) }}</v-icon>
+                    <div v-if="isAssetDownloading(asset)" class="asset-progress-overlay">
+                      <v-progress-circular
+                        :model-value="assetDownloadProgress(asset)"
+                        color="primary"
+                        size="36"
+                        width="4"
+                      />
+                    </div>
+                    <div v-else-if="assetDownloadError(asset)" class="asset-error-indicator">
+                      <v-icon size="20" color="error">mdi-alert-circle-outline</v-icon>
+                    </div>
+                    <div class="asset-info-overlay">
+                      <span class="asset-title">{{ asset.name }}</span>
+                      <span v-if="assetDownloadError(asset)" class="asset-subtitle">{{ assetDownloadError(asset) }}</span>
+                    </div>
+                  </div>
+                  <v-card-actions class="asset-actions">
+                    <div class="asset-progress" v-if="isAssetDownloading(asset)">
+                      <v-progress-linear
+                        :model-value="assetDownloadProgress(asset)"
+                        color="primary"
+                        height="4"
+                        rounded
+                      />
+                    </div>
+                    <div class="asset-progress" v-else-if="assetDownloadError(asset)">
+                      <v-icon size="18" color="error">mdi-alert-circle-outline</v-icon>
+                    </div>
+                    <v-spacer />
+                    <v-btn
+                      color="primary"
+                      variant="tonal"
+                      density="compact"
+                      icon="mdi-plus"
+                      size="small"
+                      style="min-width: 20px; height: 20px;"
+                      :loading="addPendingAssetId === asset.id"
+                      @click.stop="handleAddAsset(asset)"
+                    >
+                    </v-btn>
+                  </v-card-actions>
+                </v-card>
+              </div>
+              <div v-else class="placeholder-text">
+                <template v-if="isSearchActive">
+                  No assets found for "{{ normalizedSearchQuery }}".
+                </template>
+                <template v-else-if="activeProviderLoading">
+                  Loading package assets…
+                </template>
+                <template v-else-if="activeProviderError">
+                  {{ activeProviderError }}
+                </template>
+                <template v-else-if="activeProviderId">
+                  Select a package directory to preview assets.
+                </template>
+                <template v-else>
+                  Select a folder to preview assets.
+                </template>
+              </div>
+            </div>
           </div>
-          <div v-else class="placeholder-text">
-            <template v-if="isSearchActive">
-              No assets found for "{{ normalizedSearchQuery }}".
-            </template>
-            <template v-else-if="activeProviderLoading">
-              Loading package assets…
-            </template>
-            <template v-else-if="activeProviderError">
-              {{ activeProviderError }}
-            </template>
-            <template v-else-if="activeProviderId">
-              Select a package directory to preview assets.
-            </template>
-            <template v-else>
-              Select a folder to preview assets.
-            </template>
-          </div>
-        </div>
-      </div>
+        </Pane>
+      </Splitpanes>
     </div>
 
       <v-dialog v-model="deleteDialogOpen" max-width="420">
@@ -1222,17 +1250,43 @@ onBeforeUnmount(() => {
 }
 
 .project-content {
-  display: grid;
-  grid-template-columns: 300px 1fr;
+  display: flex;
   flex: 1;
   min-height: 0;
+  overflow: hidden;
+}
+
+.project-split {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.project-split :deep(.splitpanes__pane) {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.project-split :deep(.splitpanes__splitter) {
+  position: relative;
+  width: 6px;
+  background-color: rgba(255, 255, 255, 0.04);
+  border-left: 1px solid rgba(255, 255, 255, 0.02);
+  border-right: 1px solid rgba(0, 0, 0, 0.4);
+  cursor: col-resize;
+  transition: background-color 120ms ease;
+}
+
+.project-split :deep(.splitpanes__splitter:hover),
+.project-split :deep(.splitpanes__splitter:focus-visible) {
+  background-color: rgba(77, 208, 225, 0.35);
 }
 
 .project-tree {
   display: flex;
   flex-direction: column;
-  border-right: 1px solid rgba(255, 255, 255, 0.05);
-
   min-height: 0;
 }
 
@@ -1251,6 +1305,7 @@ onBeforeUnmount(() => {
 .project-gallery {
   display: flex;
   flex-direction: column;
+  flex: 1;
   min-height: 0;
 }
 

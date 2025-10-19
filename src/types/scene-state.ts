@@ -29,6 +29,7 @@ export interface SceneState {
   camera: SceneCameraState
   viewportSettings: SceneViewportSettings
   panelVisibility: PanelVisibilityState
+  projectPanelTreeSize: number
   resourceProviderId: string
   cameraFocusNodeId: string | null
   cameraFocusRequestId: number

@@ -220,6 +220,10 @@ const defaultPanelVisibility: PanelVisibilityState = {
   project: true,
 }
 
+const PROJECT_PANEL_TREE_MIN_SIZE = 10
+const PROJECT_PANEL_TREE_MAX_SIZE = 90
+const DEFAULT_PROJECT_PANEL_TREE_SIZE = 30
+
 const defaultSkyboxSettings = cloneSkyboxSettings(DEFAULT_SKYBOX_SETTINGS)
 
 const defaultViewportSettings: SceneViewportSettings = {
@@ -700,6 +704,30 @@ function ensureViewportSettings(state: ScenePersistedState): ScenePersistedState
   }
 }
 
+function normalizeProjectPanelTreeSize(value: unknown): number {
+  const numeric = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number.parseFloat(value)
+      : Number.NaN
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_PROJECT_PANEL_TREE_SIZE
+  }
+  const clamped = Math.min(
+    Math.max(Math.round(numeric * 100) / 100, PROJECT_PANEL_TREE_MIN_SIZE),
+    PROJECT_PANEL_TREE_MAX_SIZE,
+  )
+  return clamped
+}
+
+function ensureProjectPanelTreeSize(state: ScenePersistedState): ScenePersistedState {
+  const value = (state as { projectPanelTreeSize?: unknown }).projectPanelTreeSize
+  return {
+    ...state,
+    projectPanelTreeSize: normalizeProjectPanelTreeSize(value),
+  }
+}
+
 function removeLegacyExternalNodes(state: ScenePersistedState): ScenePersistedState {
   const rawNodes = state.nodes as SceneNode[] | undefined
   return {
@@ -894,6 +922,7 @@ const sceneStoreMigrationSteps: Array<(state: ScenePersistedState) => ScenePersi
   ensureActiveTool,
   ensureCameraAndPanelState,
   ensureViewportSettings,
+  ensureProjectPanelTreeSize,
   removeLegacyExternalNodes,
   ensureSceneCollection,
   ensureResourceProvider,
@@ -1204,6 +1233,7 @@ export const useSceneStore = defineStore('scene', {
       camera: cloneCameraState(initialSceneDocument.camera),
       viewportSettings,
       panelVisibility: { ...defaultPanelVisibility },
+  projectPanelTreeSize: DEFAULT_PROJECT_PANEL_TREE_SIZE,
       resourceProviderId: initialSceneDocument.resourceProviderId,
       cameraFocusNodeId: null,
       cameraFocusRequestId: 0,
@@ -1428,6 +1458,14 @@ export const useSceneStore = defineStore('scene', {
     },
     setDraggingAssetId(assetId: string | null) {
       this.draggingAssetId = assetId
+    },
+
+    setProjectPanelTreeSize(size: number) {
+      const normalized = normalizeProjectPanelTreeSize(size)
+      if (this.projectPanelTreeSize === normalized) {
+        return
+      }
+      this.projectPanelTreeSize = normalized
     },
 
     updateNodeTransform(payload: { id: string; position: Vector3Like; rotation: Vector3Like; scale: Vector3Like }) {
@@ -2961,6 +2999,7 @@ export const useSceneStore = defineStore('scene', {
       'camera',
       'viewportSettings',
       'panelVisibility',
+  'projectPanelTreeSize',
       'resourceProviderId',
       'assetCatalog',
       'assetIndex',
