@@ -10,10 +10,8 @@
     "preview": "vite preview",
     "electron::start": "electron-vite preview",
     "electron::dev": "electron-vite dev",
-    "electron::prebuild": "electron-vite build",
-    "electron::package": "npm run electron::prebuild && electron-builder",
-    "electron::package:dir": "npm run electron::prebuild && electron-builder --dir",
-    "postinstall": "electron-builder install-app-deps"
+    "electron::build": "electron-vite build",
+    "electron::package": "npm run electron::build && electron-builder"
   },
   "dependencies": {
     "@mdi/font": "^7.4.47",
