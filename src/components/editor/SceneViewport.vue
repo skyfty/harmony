@@ -235,10 +235,18 @@ function pickNodeAtPointer(event: PointerEvent): NodeHitResult | null {
   return null
 }
 
-function createSelectionDragState(nodeId: string, object: THREE.Object3D, hitPoint: THREE.Vector3): SelectionDragState {
+function createSelectionDragState(nodeId: string, object: THREE.Object3D, hitPoint: THREE.Vector3, event: PointerEvent): SelectionDragState {
   const worldPosition = new THREE.Vector3()
   object.getWorldPosition(worldPosition)
-  const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 1, 0), worldPosition)
+  // Lock the drag plane to the grab point height so pointer distance does not change drag speed.
+  const planeAnchor = worldPosition.clone()
+  planeAnchor.y = hitPoint.y
+  const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 1, 0), planeAnchor)
+  const pointerPlanePoint = projectPointerToPlane(event, plane)
+  // Capture the pointer offset on the drag plane itself so the object stays put when dragging begins.
+  const pointerOffset = (pointerPlanePoint ?? hitPoint.clone().setY(planeAnchor.y))
+    .sub(worldPosition)
+    .projectOnPlane(plane.normal)
   const companions: SelectionDragCompanion[] = []
   const selectedIds = sceneStore.selectedNodeIds.filter((id) => id !== nodeId && !sceneStore.isNodeSelectionLocked(id))
   selectedIds.forEach((id) => {
@@ -261,7 +269,7 @@ function createSelectionDragState(nodeId: string, object: THREE.Object3D, hitPoi
     nodeId,
     object,
     plane,
-    pointerOffset: hitPoint.clone().sub(worldPosition),
+    pointerOffset,
     initialLocalPosition: object.position.clone(),
     initialWorldPosition: worldPosition.clone(),
     initialRotation: object.rotation.clone(),
@@ -2745,7 +2753,7 @@ function handlePointerDown(event: PointerEvent) {
   }
 
   const selectionDrag = button === 0 && props.activeTool === 'select' && hit && hit.nodeId === props.selectedNodeId
-    ? createSelectionDragState(hit.nodeId, hit.object, hit.point)
+    ? createSelectionDragState(hit.nodeId, hit.object, hit.point, event)
     : null
 
   if (selectionDrag) {
