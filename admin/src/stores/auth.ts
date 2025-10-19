@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { fetchProfile, login as loginRequest, logout as logoutRequest } from '@/services/modules/auth'
-import { persistToken, readPersistedToken } from '@/services/http'
+import { fetchProfile, login as loginRequest, logout as logoutRequest } from '@/api/modules/auth'
+import { persistToken, readPersistedToken } from '@/api/http'
 import type {
   AuthProfileResponse,
   LoginRequest,

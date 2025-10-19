@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import { createUser, listUsers, removeUser, updateUser } from '@/services/modules/users'
-import { listRoles } from '@/services/modules/roles'
+import { createUser, listUsers, removeUser, updateUser } from '@/api/modules/users'
+import { listRoles } from '@/api/modules/roles'
 import type { RoleSummary, UserMutationPayload, UserSummary } from '@/types'
 
 const loading = ref(false)

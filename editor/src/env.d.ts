@@ -8,9 +8,7 @@ declare module 'splitpanes' {
 	export const Pane: DefineComponent<Record<string, unknown>, Record<string, unknown>, any>
 }
 
-interface ImportMetaEnv {
-	readonly VITE_ADMIN_API_BASE?: string
-}
+interface ImportMetaEnv {}
 
 interface ImportMeta {
 	readonly env: ImportMetaEnv

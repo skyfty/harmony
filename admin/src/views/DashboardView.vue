@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { fetchDashboardMetrics } from '@/services/modules/dashboard'
+import { fetchDashboardMetrics } from '@/api/modules/dashboard'
 import type { DashboardMetrics } from '@/types'
 
 const metrics = ref<DashboardMetrics | null>(null)

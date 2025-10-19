@@ -1,4 +1,4 @@
-import { apiClient } from '@/services/http'
+import { apiClient } from '@/api/http'
 import type { DashboardMetrics } from '@/types'
 
 export async function fetchDashboardMetrics(): Promise<DashboardMetrics> {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
-import { listResourceCategories, uploadAsset } from '@/services/modules/resources'
+import { listResourceCategories, uploadAsset } from '@/api/modules/resources'
 import { useUiStore } from '@/stores/ui'
 import type { ManagedAsset, ResourceCategory } from '@/types'
 

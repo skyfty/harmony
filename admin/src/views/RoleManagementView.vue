@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import { createRole, listRoles, removeRole, updateRole } from '@/services/modules/roles'
-import { listPermissions } from '@/services/modules/permissions'
+import { createRole, listRoles, removeRole, updateRole } from '@/api/modules/roles'
+import { listPermissions } from '@/api/modules/permissions'
 import type {
   PermissionSummary,
   RoleMutationPayload,

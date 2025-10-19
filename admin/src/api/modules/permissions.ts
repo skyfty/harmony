@@ -1,4 +1,4 @@
-import { apiClient } from '@/services/http'
+import { apiClient } from '@/api/http'
 import type { PagedRequest, PagedResponse, PermissionMutationPayload, PermissionSummary } from '@/types'
 
 export async function listPermissions(params: PagedRequest = {}): Promise<PagedResponse<PermissionSummary>> {

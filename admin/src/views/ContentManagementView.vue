@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import { createContent, listContents, removeContent, updateContent } from '@/services/modules/contents'
+import { createContent, listContents, removeContent, updateContent } from '@/api/modules/contents'
 import type { ContentEntry, ContentMutationPayload } from '@/types'
 
 const contents = ref<ContentEntry[]>([])

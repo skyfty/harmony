@@ -1,4 +1,4 @@
-import { apiClient } from '@/services/http'
+import { apiClient } from '@/api/http'
 import type { PagedRequest, PagedResponse, UserMutationPayload, UserSummary } from '@/types'
 
 export async function listUsers(params: PagedRequest = {}): Promise<PagedResponse<UserSummary>> {

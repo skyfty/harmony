@@ -1,4 +1,4 @@
-import { apiClient } from '@/services/http'
+import { apiClient } from '@/api/http'
 import type { ContentEntry, ContentMutationPayload, PagedRequest, PagedResponse } from '@/types'
 
 export async function listContents(params: PagedRequest = {}): Promise<PagedResponse<ContentEntry>> {

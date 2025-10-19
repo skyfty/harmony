@@ -1,4 +1,4 @@
-import { apiClient } from '@/services/http'
+import { apiClient } from '@/api/http'
 import type { AuthProfileResponse, LoginRequest, LoginResponse } from '@/types'
 
 export async function login(payload: LoginRequest): Promise<LoginResponse> {

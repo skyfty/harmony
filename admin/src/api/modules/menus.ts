@@ -1,4 +1,4 @@
-import { apiClient } from '@/services/http'
+import { apiClient } from '@/api/http'
 import type { MenuItem, MenuMutationPayload } from '@/types'
 
 export async function listMenus(): Promise<MenuItem[]> {

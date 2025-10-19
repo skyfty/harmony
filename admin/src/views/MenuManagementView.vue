@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { createMenu, listMenus, removeMenu, updateMenu } from '@/services/modules/menus'
+import { createMenu, listMenus, removeMenu, updateMenu } from '@/api/modules/menus'
 import type { MenuItem, MenuMutationPayload } from '@/types'
 
 const menus = ref<MenuItem[]>([])
@@ -18,7 +18,6 @@ const form = reactive<MenuMutationPayload>({
   parentId: null,
 })
 
-const currentMenu = computed(() => findMenuById(selected.value, menus.value))
 const menuOptions = computed(() => flattenMenuOptions(menus.value))
 
 function findMenuById(id: string | null, items: MenuItem[]): MenuItem | null {

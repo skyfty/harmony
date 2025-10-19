@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import { createPermission, listPermissions, removePermission, updatePermission } from '@/services/modules/permissions'
+import { createPermission, listPermissions, removePermission, updatePermission } from '@/api/modules/permissions'
 import type { PagedResponse, PermissionMutationPayload, PermissionSummary } from '@/types'
 
 const permissions = ref<PermissionSummary[]>([])

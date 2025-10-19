@@ -1,5 +1,5 @@
-import axios from 'axios'
-import type { AxiosError, AxiosRequestConfig, AxiosResponse } from 'axios'
+import axios, { AxiosHeaders } from 'axios'
+import type { AxiosError, AxiosResponse, InternalAxiosRequestConfig } from 'axios'
 
 const TOKEN_STORAGE_KEY = 'harmony_admin_token'
 
@@ -38,11 +38,12 @@ const http = axios.create({
   timeout: 15000,
 })
 
-http.interceptors.request.use((config: AxiosRequestConfig) => {
+http.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const token = readPersistedToken()
   if (token) {
-    config.headers = config.headers ?? {}
-    config.headers.Authorization = `Bearer ${token}`
+    const headers = config.headers instanceof AxiosHeaders ? config.headers : new AxiosHeaders(config.headers ?? {})
+    headers.set('Authorization', `Bearer ${token}`)
+    config.headers = headers
   }
   return config
 })

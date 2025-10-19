@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref, watch } from 'vue'
 import ResourceUploadDialog from '@/components/ResourceUploadDialog.vue'
-import { listResourceCategories, listAssets, removeAsset } from '@/services/modules/resources'
+import { listResourceCategories, listAssets, removeAsset } from '@/api/modules/resources'
 import { useUiStore } from '@/stores/ui'
 import type { ManagedAsset, ResourceCategory } from '@/types'
 
