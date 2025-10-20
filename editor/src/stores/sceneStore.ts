@@ -9,6 +9,7 @@ import type { EditorTool } from '@/types/editor-tool'
 import type { EnsureSceneAssetsOptions } from '@/types/ensure-scene-assets-options'
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { PanelVisibilityState } from '@/types/panel-visibility-state'
+import type { PanelPlacementState, PanelPlacement } from '@/types/panel-placement-state'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import type { AssetIndexEntry, AssetSourceMetadata } from '@/types/asset-index-entry'
@@ -85,6 +86,12 @@ const COLLISION_MARGIN = 0.35
 const DEFAULT_SPAWN_RADIUS = GRID_CELL_SIZE * 0.75
 const GROUND_ASSET_ID = 'preset:models/ground.glb'
 const SEMI_TRANSPARENT_OPACITY = 0.35
+
+declare module '@/types/scene-state' {
+  interface SceneState {
+    panelPlacement: PanelPlacementState
+  }
+}
 const OPACITY_EPSILON = 1e-3
 
 function createVector(x: number, y: number, z: number): Vector3Like {
@@ -251,6 +258,34 @@ const defaultPanelVisibility: PanelVisibilityState = {
   hierarchy: false,
   inspector: false,
   project: true,
+}
+
+const defaultPanelPlacement: PanelPlacementState = {
+  hierarchy: 'floating',
+  inspector: 'floating',
+  project: 'floating',
+}
+
+function normalizePanelVisibilityState(input?: Partial<PanelVisibilityState> | null): PanelVisibilityState {
+  const coerce = (value: unknown, fallback: boolean): boolean =>
+    typeof value === 'boolean' ? value : fallback
+
+  return {
+    hierarchy: coerce(input?.hierarchy, defaultPanelVisibility.hierarchy),
+    inspector: coerce(input?.inspector, defaultPanelVisibility.inspector),
+    project: coerce(input?.project, defaultPanelVisibility.project),
+  }
+}
+
+function normalizePanelPlacementStateInput(input?: Partial<PanelPlacementState> | null): PanelPlacementState {
+  const coerce = (value: unknown, fallback: PanelPlacement): PanelPlacement =>
+    value === 'docked' ? 'docked' : value === 'floating' ? 'floating' : fallback
+
+  return {
+    hierarchy: coerce(input?.hierarchy, defaultPanelPlacement.hierarchy),
+    inspector: coerce(input?.inspector, defaultPanelPlacement.inspector),
+    project: coerce(input?.project, defaultPanelPlacement.project),
+  }
 }
 
 const PROJECT_PANEL_TREE_MIN_SIZE = 10
@@ -754,6 +789,8 @@ function cloneSceneDocumentForExport(scene: StoredSceneDocument): StoredSceneDoc
     assetIndex: scene.assetIndex,
     packageAssetMap: scene.packageAssetMap,
     viewportSettings: scene.viewportSettings,
+    panelVisibility: scene.panelVisibility,
+    panelPlacement: scene.panelPlacement,
   })
 }
 
@@ -803,6 +840,49 @@ function normalizeViewportSettingsInput(value: unknown): Partial<SceneViewportSe
     delete (input as Record<string, unknown>).skybox
   }
   return input
+}
+
+function normalizePanelVisibilityInput(value: unknown): Partial<PanelVisibilityState> | undefined {
+  if (!isPlainObject(value)) {
+    return undefined
+  }
+  const input = value as Partial<Record<keyof PanelVisibilityState, unknown>>
+  const normalized: Partial<PanelVisibilityState> = {}
+  if (typeof input.hierarchy === 'boolean') {
+    normalized.hierarchy = input.hierarchy
+  }
+  if (typeof input.inspector === 'boolean') {
+    normalized.inspector = input.inspector
+  }
+  if (typeof input.project === 'boolean') {
+    normalized.project = input.project
+  }
+  return normalized
+}
+
+function normalizePanelPlacementInput(value: unknown): Partial<PanelPlacementState> | undefined {
+  if (!isPlainObject(value)) {
+    return undefined
+  }
+  const input = value as Partial<Record<keyof PanelPlacementState, unknown>>
+  const normalized: Partial<PanelPlacementState> = {}
+  const coerce = (candidate: unknown): PanelPlacement | undefined =>
+    candidate === 'floating' ? 'floating' : candidate === 'docked' ? 'docked' : undefined
+
+  const hierarchy = coerce(input.hierarchy)
+  if (hierarchy) {
+    normalized.hierarchy = hierarchy
+  }
+  const inspector = coerce(input.inspector)
+  if (inspector) {
+    normalized.inspector = inspector
+  }
+  const project = coerce(input.project)
+  if (project) {
+    normalized.project = project
+  }
+
+  return normalized
 }
 
 function isAssetCatalog(value: unknown): value is Record<string, ProjectAsset[]> {
@@ -955,7 +1035,7 @@ function ensureActiveTool(state: ScenePersistedState): ScenePersistedState {
 
 function ensureCameraAndPanelState(state: ScenePersistedState): ScenePersistedState {
   const cameraState = state.camera as Partial<SceneCameraState> | undefined
-  const panelState = state.panelVisibility as Partial<PanelVisibilityState> | undefined
+  const panelState = normalizePanelVisibilityState(state.panelVisibility as Partial<PanelVisibilityState> | undefined)
 
   return {
     ...state,
@@ -970,11 +1050,36 @@ function ensureCameraAndPanelState(state: ScenePersistedState): ScenePersistedSt
         forward,
       }
     })(),
-    panelVisibility: {
-      hierarchy: panelState?.hierarchy ?? defaultPanelVisibility.hierarchy,
-      inspector: panelState?.inspector ?? defaultPanelVisibility.inspector,
-      project: panelState?.project ?? defaultPanelVisibility.project,
-    },
+    panelVisibility: panelState,
+  }
+}
+
+function ensurePanelPlacement(state: ScenePersistedState): ScenePersistedState {
+  const placementState = normalizePanelPlacementStateInput(
+    (state as { panelPlacement?: Partial<PanelPlacementState> | undefined }).panelPlacement,
+  )
+
+  return {
+    ...state,
+    panelPlacement: placementState,
+  }
+}
+
+function ensureScenePanelState(state: ScenePersistedState): ScenePersistedState {
+  const scenes = state.scenes as Partial<StoredSceneDocument>[] | undefined
+  if (!Array.isArray(scenes)) {
+    return state
+  }
+
+  const normalizedScenes = scenes.map((scene) => ({
+    ...scene,
+    panelVisibility: normalizePanelVisibilityState(scene.panelVisibility as Partial<PanelVisibilityState> | undefined),
+    panelPlacement: normalizePanelPlacementStateInput(scene.panelPlacement as Partial<PanelPlacementState> | undefined),
+  }))
+
+  return {
+    ...state,
+    scenes: normalizedScenes as StoredSceneDocument[],
   }
 }
 
@@ -985,6 +1090,8 @@ function ensureViewportSettings(state: ScenePersistedState): ScenePersistedState
     ? scenes.map((scene) => ({
         ...scene,
         viewportSettings: cloneViewportSettings(scene.viewportSettings as Partial<SceneViewportSettings> | undefined),
+        panelVisibility: normalizePanelVisibilityState(scene.panelVisibility as Partial<PanelVisibilityState> | undefined),
+        panelPlacement: normalizePanelPlacementStateInput(scene.panelPlacement as Partial<PanelPlacementState> | undefined),
       }) as StoredSceneDocument)
     : scenes
 
@@ -1062,6 +1169,8 @@ function ensureSceneCollection(state: ScenePersistedState): ScenePersistedState 
     assetIndex: rawIndex ?? undefined,
     packageAssetMap: rawPackageMap ?? undefined,
     viewportSettings,
+    panelVisibility: state.panelVisibility as Partial<PanelVisibilityState> | undefined,
+    panelPlacement: (state as { panelPlacement?: Partial<PanelPlacementState> }).panelPlacement,
   })
 
   return {
@@ -1072,7 +1181,9 @@ function ensureSceneCollection(state: ScenePersistedState): ScenePersistedState 
     selectedNodeId: recoveredScene.selectedNodeId,
     selectedNodeIds: cloneSelection(recoveredScene.selectedNodeIds),
     camera: cloneCameraState(recoveredScene.camera),
-  viewportSettings: cloneViewportSettings(recoveredScene.viewportSettings),
+    viewportSettings: cloneViewportSettings(recoveredScene.viewportSettings),
+    panelVisibility: normalizePanelVisibilityState(recoveredScene.panelVisibility),
+    panelPlacement: normalizePanelPlacementStateInput(recoveredScene.panelPlacement),
     assetCatalog: cloneAssetCatalog(recoveredScene.assetCatalog),
     assetIndex: cloneAssetIndex(recoveredScene.assetIndex),
     packageAssetMap: clonePackageAssetMap(recoveredScene.packageAssetMap),
@@ -1109,6 +1220,8 @@ function ensureSceneTimestamps(state: ScenePersistedState): ScenePersistedState 
       ...scene,
       createdAt,
       updatedAt,
+      panelVisibility: normalizePanelVisibilityState(scene.panelVisibility as Partial<PanelVisibilityState> | undefined),
+      panelPlacement: normalizePanelPlacementStateInput(scene.panelPlacement as Partial<PanelPlacementState> | undefined),
     } as StoredSceneDocument
   })
 
@@ -1133,6 +1246,8 @@ function normalizeSceneSelections(state: ScenePersistedState): ScenePersistedSta
           ...scene,
           selectedNodeIds: normalizedSelection,
           selectedNodeId: normalizedSelection[normalizedSelection.length - 1] ?? (fallbackId ?? null),
+          panelVisibility: normalizePanelVisibilityState(scene.panelVisibility as Partial<PanelVisibilityState> | undefined),
+          panelPlacement: normalizePanelPlacementStateInput(scene.panelPlacement as Partial<PanelPlacementState> | undefined),
         } as StoredSceneDocument
       })
     : scenes
@@ -1212,6 +1327,8 @@ function ensurePackageDirectoryState(state: ScenePersistedState): ScenePersisted
 const sceneStoreMigrationSteps: Array<(state: ScenePersistedState) => ScenePersistedState> = [
   ensureActiveTool,
   ensureCameraAndPanelState,
+  ensurePanelPlacement,
+  ensureScenePanelState,
   ensureViewportSettings,
   ensureProjectPanelTreeSize,
   removeLegacyExternalNodes,
@@ -1253,6 +1370,8 @@ function createSceneDocument(
     assetIndex?: Record<string, AssetIndexEntry>
     packageAssetMap?: Record<string, string>
     viewportSettings?: Partial<SceneViewportSettings>
+    panelVisibility?: Partial<PanelVisibilityState>
+    panelPlacement?: Partial<PanelPlacementState>
   } = {},
 ): StoredSceneDocument {
   const id = options.id ?? generateUuid()
@@ -1270,6 +1389,8 @@ function createSceneDocument(
   const assetIndex = options.assetIndex ? cloneAssetIndex(options.assetIndex) : {}
   const packageAssetMap = options.packageAssetMap ? clonePackageAssetMap(options.packageAssetMap) : {}
   const viewportSettings = cloneViewportSettings(options.viewportSettings)
+  const panelVisibility = normalizePanelVisibilityState(options.panelVisibility)
+  const panelPlacement = normalizePanelPlacementStateInput(options.panelPlacement)
 
   return {
     id,
@@ -1280,6 +1401,8 @@ function createSceneDocument(
     selectedNodeIds,
     camera,
     viewportSettings,
+  panelVisibility,
+  panelPlacement,
     resourceProviderId: options.resourceProviderId ?? 'builtin',
     createdAt,
     updatedAt,
@@ -1309,6 +1432,8 @@ function commitSceneSnapshot(
     selectedNodeIds: cloneSelection(store.selectedNodeIds),
     camera: updateCamera ? cloneCameraState(store.camera) : current.camera,
     viewportSettings: cloneViewportSettings(store.viewportSettings),
+    panelVisibility: normalizePanelVisibilityState(store.panelVisibility),
+    panelPlacement: normalizePanelPlacementStateInput(store.panelPlacement),
     resourceProviderId: store.resourceProviderId,
     updatedAt,
     assetCatalog: cloneAssetCatalog(store.assetCatalog),
@@ -1524,6 +1649,7 @@ export const useSceneStore = defineStore('scene', {
       camera: cloneCameraState(initialSceneDocument.camera),
       viewportSettings,
       panelVisibility: { ...defaultPanelVisibility },
+    panelPlacement: { ...defaultPanelPlacement },
   projectPanelTreeSize: DEFAULT_PROJECT_PANEL_TREE_SIZE,
       resourceProviderId: initialSceneDocument.resourceProviderId,
       cameraFocusNodeId: null,
@@ -2685,10 +2811,29 @@ export const useSceneStore = defineStore('scene', {
       this.setViewportSettings({ skybox: next })
     },
     setPanelVisibility(panel: EditorPanel, visible: boolean) {
+      if (this.panelVisibility[panel] === visible) {
+        return
+      }
       this.panelVisibility = {
         ...this.panelVisibility,
         [panel]: visible,
       }
+      commitSceneSnapshot(this, { updateNodes: false, updateCamera: false })
+    },
+    setPanelPlacement(panel: EditorPanel, placement: PanelPlacement) {
+      const safePlacement: PanelPlacement = placement === 'docked' ? 'docked' : 'floating'
+      if (this.panelPlacement[panel] === safePlacement) {
+        return
+      }
+      this.panelPlacement = {
+        ...this.panelPlacement,
+        [panel]: safePlacement,
+      }
+      commitSceneSnapshot(this, { updateNodes: false, updateCamera: false })
+    },
+    togglePanelPlacement(panel: EditorPanel) {
+      const next = this.panelPlacement[panel] === 'floating' ? 'docked' : 'floating'
+      this.setPanelPlacement(panel, next)
     },
     togglePanelVisibility(panel: EditorPanel) {
       this.setPanelVisibility(panel, !this.panelVisibility[panel])
@@ -3268,6 +3413,8 @@ export const useSceneStore = defineStore('scene', {
         assetCatalog: baseAssetCatalog,
         assetIndex: baseAssetIndex,
         packageAssetMap: {},
+        panelVisibility: this.panelVisibility,
+        panelPlacement: this.panelPlacement,
       })
       this.scenes = [...this.scenes, scene]
       this.currentSceneId = scene.id
@@ -3278,6 +3425,8 @@ export const useSceneStore = defineStore('scene', {
       })
       this.camera = cloneCameraState(scene.camera)
       this.viewportSettings = cloneViewportSettings(scene.viewportSettings)
+  this.panelVisibility = normalizePanelVisibilityState(scene.panelVisibility)
+  this.panelPlacement = normalizePanelPlacementStateInput(scene.panelPlacement)
       this.resourceProviderId = scene.resourceProviderId
       useAssetCacheStore().recalculateUsage(this.nodes)
       this.isSceneReady = true
@@ -3317,6 +3466,8 @@ export const useSceneStore = defineStore('scene', {
         })
         this.camera = cloneCameraState(scene.camera)
         this.viewportSettings = cloneViewportSettings(scene.viewportSettings)
+        this.panelVisibility = normalizePanelVisibilityState(scene.panelVisibility)
+        this.panelPlacement = normalizePanelPlacementStateInput(scene.panelPlacement)
         this.resourceProviderId = scene.resourceProviderId ?? 'builtin'
         useAssetCacheStore().recalculateUsage(this.nodes)
       } finally {
@@ -3346,6 +3497,8 @@ export const useSceneStore = defineStore('scene', {
           commit: false,
         })
         this.camera = cloneCameraState(fallback.camera)
+        this.panelVisibility = normalizePanelVisibilityState(fallback.panelVisibility)
+        this.panelPlacement = normalizePanelPlacementStateInput(fallback.panelPlacement)
         this.resourceProviderId = fallback.resourceProviderId
         useAssetCacheStore().recalculateUsage(this.nodes)
         this.isSceneReady = true
@@ -3370,6 +3523,8 @@ export const useSceneStore = defineStore('scene', {
             commit: false,
           })
           this.camera = cloneCameraState(next.camera)
+          this.panelVisibility = normalizePanelVisibilityState(next.panelVisibility)
+          this.panelPlacement = normalizePanelPlacementStateInput(next.panelPlacement)
           this.resourceProviderId = next.resourceProviderId ?? 'builtin'
           useAssetCacheStore().recalculateUsage(this.nodes)
         } finally {
@@ -3493,6 +3648,8 @@ export const useSceneStore = defineStore('scene', {
             ? (entry.packageAssetMap as Record<string, string>)
             : undefined,
           viewportSettings: normalizeViewportSettingsInput(entry.viewportSettings),
+          panelVisibility: normalizePanelVisibilityInput(entry.panelVisibility),
+          panelPlacement: normalizePanelPlacementInput(entry.panelPlacement),
         })
 
         imported.push(sceneDocument)
@@ -3522,6 +3679,8 @@ export const useSceneStore = defineStore('scene', {
         })
         this.camera = cloneCameraState(fallback.camera)
         this.viewportSettings = cloneViewportSettings(fallback.viewportSettings)
+        this.panelVisibility = normalizePanelVisibilityState(fallback.panelVisibility)
+        this.panelPlacement = normalizePanelPlacementStateInput(fallback.panelPlacement)
         this.resourceProviderId = fallback.resourceProviderId
         this.isSceneReady = true
         return
@@ -3545,6 +3704,8 @@ export const useSceneStore = defineStore('scene', {
       })
       this.camera = cloneCameraState(target.camera)
       this.viewportSettings = cloneViewportSettings(target.viewportSettings)
+      this.panelVisibility = normalizePanelVisibilityState(target.panelVisibility)
+      this.panelPlacement = normalizePanelPlacementStateInput(target.panelPlacement)
       this.resourceProviderId = target.resourceProviderId ?? 'builtin'
       applySceneAssetState(this, target)
       useAssetCacheStore().recalculateUsage(this.nodes)
@@ -3567,7 +3728,8 @@ export const useSceneStore = defineStore('scene', {
       'camera',
       'viewportSettings',
       'panelVisibility',
-  'projectPanelTreeSize',
+      'panelPlacement',
+      'projectPanelTreeSize',
       'resourceProviderId',
       'assetCatalog',
       'assetIndex',
