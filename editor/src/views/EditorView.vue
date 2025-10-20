@@ -1079,7 +1079,7 @@ onBeforeUnmount(() => {
   top: calc(var(--floating-menu-offset) + var(--floating-edge-gap));
   right: var(--floating-edge-gap);
   bottom: calc(var(--project-floating-height) + (var(--floating-edge-gap) * 2));
-  width: min(290px, 40vw);
+  width: min(300px, 40vw);
   max-height: var(--panel-floating-height);
   min-height: 240px;
 }
