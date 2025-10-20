@@ -23,7 +23,10 @@ import { type SceneExportOptions } from '@/plugins/exporter'
 import { prepareSceneExport, triggerDownload, type SceneExportResult } from '../../plugins/sceneExport'
 import ViewportToolbar from './ViewportToolbar.vue'
 import TransformToolbar from './TransformToolbar.vue'
+<<<<<<< HEAD
 import GroundToolbar from './GroundToolbar.vue'
+=======
+>>>>>>> parent of 6bd13c7 (要)
 import { TRANSFORM_TOOLS } from '@/types/scene-transform-tools'
 import { ALIGN_MODE_AXIS, type AlignMode } from '@/types/scene-viewport-align-mode'
 import { Sky } from 'three/addons/objects/Sky.js'
@@ -32,9 +35,6 @@ import type { SelectionDragCompanion, SelectionDragState } from '@/types/scene-v
 import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracking-state'
 import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-viewport-transform-group'
 import type { PlaceholderOverlayState } from '@/types/scene-viewport-placeholder-overlay-state'
-import type { GroundDynamicMesh } from '@/types/dynamic-mesh'
-import type { BuildTool } from '@/types/build-tool'
-import { createGroundMesh, updateGroundMesh } from '@/plugins/groundMesh'
 
 
 const props = withDefaults(defineProps<{
@@ -83,7 +83,6 @@ let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null
 let fallbackDirectionalLight: THREE.DirectionalLight | null = null
 const skySunPosition = new THREE.Vector3()
 const DEFAULT_BACKGROUND_COLOR = 0x516175
-const GROUND_NODE_ID = 'harmony:ground'
 const SKY_ENVIRONMENT_INTENSITY = 0.35
 const FALLBACK_AMBIENT_INTENSITY = 0.2
 const FALLBACK_DIRECTIONAL_INTENSITY = 0.65
@@ -132,7 +131,6 @@ const DROP_TO_GROUND_EPSILON = 1e-4
 const ALIGN_DELTA_EPSILON = 1e-6
 const CAMERA_RECENTER_DURATION_MS = 320
 const RIGHT_CLICK_ROTATION_STEP = THREE.MathUtils.degToRad(15)
-const GROUND_HEIGHT_STEP = 0.5
 
 const cameraControlMode = computed<CameraControlMode>({
   get: () => sceneStore.viewportSettings.cameraControlMode,
@@ -158,8 +156,6 @@ const canAlignSelection = computed(() => {
 const skyboxPresetList = SKYBOX_PRESETS
 const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((tool) => [tool.key, tool.value]))
 let activeCameraMode: CameraProjectionMode = cameraProjectionMode.value
-
-const activeBuildTool = ref<BuildTool | null>(null)
 
 type PanelPlacementHolder = { panelPlacement?: PanelPlacementState | null }
 
@@ -204,6 +200,7 @@ const viewportToolbarHostRef = ref<HTMLDivElement | null>(null)
 
 let pointerTrackingState: PointerTrackingState | null = null
 
+<<<<<<< HEAD
 type GroundSelectionDragState = {
   pointerId: number
   startRow: number
@@ -230,6 +227,8 @@ const groundSelectionToolbarStyle = reactive<{ left: string; top: string; opacit
 })
 const groundTextureInputRef = ref<HTMLInputElement | null>(null)
 
+=======
+>>>>>>> parent of 6bd13c7 (要)
 type CameraTransitionState = {
   startPosition: THREE.Vector3
   startTarget: THREE.Vector3
@@ -281,55 +280,6 @@ function getInspectorPanelElement(): HTMLElement | null {
     return document.querySelector('.floating-panel.inspector-floating .panel-card') as HTMLElement | null
   }
   return document.querySelector('.panel.inspector-panel .panel-card') as HTMLElement | null
-}
-
-function findGroundNodeInTree(nodes: SceneNode[]): SceneNode | null {
-  for (const node of nodes) {
-    if (node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'ground') {
-      return node
-    }
-    if (node.children?.length) {
-      const nested = findGroundNodeInTree(node.children)
-      if (nested) {
-        return nested
-      }
-    }
-  }
-  return null
-}
-
-function getGroundNodeFromScene(): SceneNode | null {
-  return findGroundNodeInTree(sceneStore.nodes)
-}
-
-function getGroundNodeFromProps(): SceneNode | null {
-  return findGroundNodeInTree(props.sceneNodes)
-}
-
-function getGroundDynamicMeshDefinition(): GroundDynamicMesh | null {
-  const node = getGroundNodeFromScene() ?? getGroundNodeFromProps()
-  if (node?.dynamicMesh?.type === 'ground') {
-    return node.dynamicMesh
-  }
-  return null
-}
-
-function getGroundMeshObject(): THREE.Mesh | null {
-  const container = objectMap.get(GROUND_NODE_ID)
-  if (!container) {
-    return null
-  }
-  let mesh: THREE.Mesh | null = null
-  container.traverse((child) => {
-    if (mesh) {
-      return
-    }
-    const candidate = child as THREE.Mesh
-    if (candidate?.isMesh && candidate !== container) {
-      mesh = candidate
-    }
-  })
-  return mesh
 }
 
 function updateTransformToolbarPosition() {
@@ -443,20 +393,17 @@ function scheduleToolbarUpdate() {
         updateTransformToolbarPosition()
         updateViewportToolbarPosition()
         refreshPanelObservers()
-        updateGroundSelectionToolbarPosition()
       })
     } else {
       updateTransformToolbarPosition()
       updateViewportToolbarPosition()
       refreshPanelObservers()
-      updateGroundSelectionToolbarPosition()
     }
   })
 }
 
 function handleViewportOverlayResize() {
   scheduleToolbarUpdate()
-  updateGroundSelectionToolbarPosition()
 }
 
 function resolveNodeIdFromObject(object: THREE.Object3D | null): string | null {
@@ -1063,9 +1010,6 @@ const transformScaleFactor = new THREE.Vector3(1, 1, 1)
 const transformQuaternionDelta = new THREE.Quaternion()
 const transformQuaternionHelper = new THREE.Quaternion()
 const transformQuaternionInverseHelper = new THREE.Quaternion()
-const groundSelectionCenterHelper = new THREE.Vector3()
-const groundSelectionScreenHelper = new THREE.Vector3()
-const groundPointerHelper = new THREE.Vector3()
 const transformCurrentWorldPosition = new THREE.Vector3()
 const gridHighlightPositionHelper = new THREE.Vector3()
 const gridHighlightBoundingBox = new THREE.Box3()
@@ -1261,37 +1205,6 @@ axesHelper.visible = false
 const dragPreviewGroup = new THREE.Group()
 dragPreviewGroup.visible = false
 dragPreviewGroup.name = 'DragPreview'
-
-const groundSelectionGroup = new THREE.Group()
-groundSelectionGroup.visible = false
-groundSelectionGroup.name = 'GroundSelection'
-
-const groundSelectionOutlineMaterial = new THREE.LineBasicMaterial({
-  color: 0x4dd0e1,
-  linewidth: 2,
-  transparent: true,
-  opacity: 0.9,
-  depthTest: true,
-  depthWrite: false,
-})
-
-const groundSelectionOutlineGeometry = new THREE.BufferGeometry()
-groundSelectionOutlineGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(15), 3))
-const groundSelectionOutline = new THREE.LineLoop(groundSelectionOutlineGeometry, groundSelectionOutlineMaterial)
-
-const groundSelectionFillMaterial = new THREE.MeshBasicMaterial({
-  color: 0x4dd0e1,
-  transparent: true,
-  opacity: 0.2,
-  depthWrite: false,
-  side: THREE.DoubleSide,
-})
-
-const groundSelectionFill = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), groundSelectionFillMaterial)
-groundSelectionFill.rotation.x = -Math.PI / 2
-
-groundSelectionGroup.add(groundSelectionFill)
-groundSelectionGroup.add(groundSelectionOutline)
 
 let dragPreviewObject: THREE.Object3D | null = null
 let dragPreviewAssetId: string | null = null
@@ -2243,7 +2156,6 @@ function initScene() {
   scene.add(rootGroup)
   scene.add(gridGroup)
   scene.add(axesHelper)
-  scene.add(groundSelectionGroup)
   scene.add(dragPreviewGroup)
   gridHighlight = createGridHighlight()
   if (gridHighlight) {
@@ -2552,8 +2464,6 @@ function disposeScene() {
   }
   fallbackLightGroup = null
   fallbackDirectionalLight = null
-
-  groundSelectionGroup.removeFromParent()
 
   if (orbitControls) {
     orbitControls.removeEventListener('change', handleControlsChange)
@@ -2994,6 +2904,7 @@ function handleClickSelection(event: PointerEvent, trackingState: PointerTrackin
   emitSelectionChange([nodeId])
 }
 
+<<<<<<< HEAD
 function raycastGroundPoint(event: PointerEvent, result: THREE.Vector3): boolean {
   if (!camera || !canvasRef.value) {
     return false
@@ -3165,6 +3076,8 @@ function refreshGroundMesh(definition: GroundDynamicMesh | null) {
   }
 }
 
+=======
+>>>>>>> parent of 6bd13c7 (要)
 async function handlePointerDown(event: PointerEvent) {
   if (!canvasRef.value || !camera || !scene) {
     pointerTrackingState = null
@@ -3179,6 +3092,7 @@ async function handlePointerDown(event: PointerEvent) {
   const button = event.button
   const isSelectionButton = button === 0 || button === 2
 
+<<<<<<< HEAD
   if (activeBuildTool.value === 'ground' && button === 2) {
     const definition = getGroundDynamicMeshDefinition()
     if (!definition || !raycastGroundPoint(event, groundPointerHelper)) {
@@ -3218,6 +3132,8 @@ async function handlePointerDown(event: PointerEvent) {
     return
   }
 
+=======
+>>>>>>> parent of 6bd13c7 (要)
   if (transformControls?.dragging) {
     pointerTrackingState = null
     return
@@ -3319,6 +3235,7 @@ async function handlePointerDown(event: PointerEvent) {
 }
 
 function handlePointerMove(event: PointerEvent) {
+<<<<<<< HEAD
   if (groundSelectionDragState && event.pointerId === groundSelectionDragState.pointerId) {
     const definition = getGroundDynamicMeshDefinition()
     if (!definition) {
@@ -3353,6 +3270,8 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
 
+=======
+>>>>>>> parent of 6bd13c7 (要)
   if (!pointerTrackingState || event.pointerId !== pointerTrackingState.pointerId) {
     return
   }
@@ -3402,6 +3321,7 @@ function handlePointerMove(event: PointerEvent) {
 }
 
 function handlePointerUp(event: PointerEvent) {
+<<<<<<< HEAD
   if (groundSelectionDragState && event.pointerId === groundSelectionDragState.pointerId) {
     if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
       canvasRef.value.releasePointerCapture(event.pointerId)
@@ -3435,6 +3355,8 @@ function handlePointerUp(event: PointerEvent) {
     return
   }
 
+=======
+>>>>>>> parent of 6bd13c7 (要)
   if (!pointerTrackingState || event.pointerId !== pointerTrackingState.pointerId) {
     return
   }
@@ -3505,6 +3427,7 @@ function handlePointerUp(event: PointerEvent) {
 }
 
 function handlePointerCancel(event: PointerEvent) {
+<<<<<<< HEAD
   if (groundSelectionDragState && event.pointerId === groundSelectionDragState.pointerId) {
     if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
       canvasRef.value.releasePointerCapture(event.pointerId)
@@ -3519,6 +3442,8 @@ function handlePointerCancel(event: PointerEvent) {
     return
   }
 
+=======
+>>>>>>> parent of 6bd13c7 (要)
   if (!pointerTrackingState || event.pointerId !== pointerTrackingState.pointerId) {
     return
   }
@@ -3539,73 +3464,6 @@ function handlePointerCancel(event: PointerEvent) {
 
   updateSelectionHighlights()
   pointerTrackingState = null
-}
-
-function commitGroundModification(
-  modifier: (bounds: { minRow: number; maxRow: number; minColumn: number; maxColumn: number }) => boolean,
-) {
-  const selection = groundSelection.value
-  const definition = getGroundDynamicMeshDefinition()
-  if (!selection || !definition) {
-    return
-  }
-  const bounds = cellSelectionToVertexBounds(selection, definition)
-  const changed = modifier(bounds)
-  if (!changed) {
-    return
-  }
-  refreshGroundMesh(getGroundDynamicMeshDefinition())
-  scheduleThumbnailCapture()
-  updateGroundSelectionToolbarPosition()
-}
-
-function handleGroundRaise() {
-  commitGroundModification((bounds) => sceneStore.raiseGroundRegion(bounds, GROUND_HEIGHT_STEP))
-}
-
-function handleGroundLower() {
-  commitGroundModification((bounds) => sceneStore.lowerGroundRegion(bounds, GROUND_HEIGHT_STEP))
-}
-
-function handleGroundReset() {
-  commitGroundModification((bounds) => sceneStore.resetGroundRegion(bounds))
-}
-
-function handleGroundTextureSelectRequest() {
-  if (!groundTextureInputRef.value) {
-    return
-  }
-  groundTextureInputRef.value.value = ''
-  groundTextureInputRef.value.click()
-}
-
-function handleGroundTextureFileChange(event: Event) {
-  const input = event.target as HTMLInputElement | null
-  if (!input?.files || input.files.length === 0) {
-    return
-  }
-  const file = input.files[0]
-  if (!file) {
-    return
-  }
-  const reader = new FileReader()
-  reader.onload = () => {
-    const result = typeof reader.result === 'string' ? reader.result : null
-    if (!result) {
-      return
-    }
-    const changed = sceneStore.setGroundTexture({ dataUrl: result, name: file.name ?? null })
-    if (!changed) {
-      return
-    }
-    refreshGroundMesh(getGroundDynamicMeshDefinition())
-    scheduleThumbnailCapture()
-  }
-  reader.readAsDataURL(file)
-}
-
-function handleBuildToolChange(tool: BuildTool | null) {
-  activeBuildTool.value = tool
 }
 
 function extractAssetPayload(event: DragEvent): { assetId: string } | null {
@@ -4133,32 +3991,25 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     const container = new THREE.Group()
     container.userData.nodeId = node.id
 
-    if (node.dynamicMesh?.type === 'ground') {
-      const groundMesh = createGroundMesh(node.dynamicMesh)
-      groundMesh.userData.nodeId = node.id
-      container.add(groundMesh)
-      container.userData.groundMesh = groundMesh
+    const runtimeObject = getRuntimeObject(node.id)
+    if (runtimeObject) {
+      runtimeObject.removeFromParent()
+      runtimeObject.userData.nodeId = node.id
+      runtimeObject.traverse((child) => {
+        const meshChild = child as THREE.Mesh
+        if (meshChild?.isMesh) {
+          meshChild.castShadow = true
+          meshChild.receiveShadow = true
+        }
+      })
+      container.add(runtimeObject)
     } else {
-      const runtimeObject = getRuntimeObject(node.id)
-      if (runtimeObject) {
-        runtimeObject.removeFromParent()
-        runtimeObject.userData.nodeId = node.id
-        runtimeObject.traverse((child) => {
-          const meshChild = child as THREE.Mesh
-          if (meshChild?.isMesh) {
-            meshChild.castShadow = true
-            meshChild.receiveShadow = true
-          }
-        })
-        container.add(runtimeObject)
-      } else {
-        const fallbackMaterial = node.isPlaceholder
-          ? new THREE.MeshBasicMaterial({ color: 0x4dd0e1, wireframe: true, opacity: 0.65, transparent: true })
-          : new THREE.MeshBasicMaterial({ color: 0xff5252, wireframe: true })
-        const fallback = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), fallbackMaterial)
-        fallback.userData.nodeId = node.id
-        container.add(fallback)
-      }
+      const fallbackMaterial = node.isPlaceholder
+        ? new THREE.MeshBasicMaterial({ color: 0x4dd0e1, wireframe: true, opacity: 0.65, transparent: true })
+        : new THREE.MeshBasicMaterial({ color: 0xff5252, wireframe: true })
+      const fallback = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), fallbackMaterial)
+      fallback.userData.nodeId = node.id
+      container.add(fallback)
     }
     object = container
   } else if (nodeType === 'group') {
@@ -4426,6 +4277,7 @@ watch(
   }
 )
 
+<<<<<<< HEAD
 watch(activeBuildTool, (tool) => {
   if (tool !== 'ground') {
     groundSelectionDragState = null
@@ -4434,6 +4286,8 @@ watch(activeBuildTool, (tool) => {
   }
 })
 
+=======
+>>>>>>> parent of 6bd13c7 (要)
 watch(
   () => props.focusRequestId,
   (token, previous) => {
@@ -4520,6 +4374,7 @@ defineExpose<SceneViewportHandle>({
           </div>
         </div>
       </div>
+<<<<<<< HEAD
       <GroundToolbar
         v-if="groundSelection"
         :visible="isGroundToolbarVisible"
@@ -4531,15 +4386,10 @@ defineExpose<SceneViewportHandle>({
         @reset="handleGroundReset"
         @texture="handleGroundTextureSelectRequest"
       />
+=======
+>>>>>>> parent of 6bd13c7 (要)
       <canvas ref="canvasRef" class="viewport-canvas" />
     </div>
-    <input
-      ref="groundTextureInputRef"
-      class="ground-texture-input"
-      type="file"
-      accept="image/*"
-      @change="handleGroundTextureFileChange"
-    >
   </div>
 </template>
 
@@ -4684,9 +4534,5 @@ defineExpose<SceneViewportHandle>({
 
 .viewport-canvas:active {
   cursor: grabbing;
-}
-
-.ground-texture-input {
-  display: none;
 }
 </style>
