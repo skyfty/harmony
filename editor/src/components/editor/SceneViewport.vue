@@ -124,6 +124,7 @@ const ORTHO_FRUSTUM_SIZE = 20
 const DROP_TO_GROUND_EPSILON = 1e-4
 const ALIGN_DELTA_EPSILON = 1e-6
 const CAMERA_RECENTER_DURATION_MS = 320
+const RIGHT_CLICK_ROTATION_STEP = THREE.MathUtils.degToRad(15)
 
 const cameraControlMode = computed<CameraControlMode>({
   get: () => sceneStore.viewportSettings.cameraControlMode,
@@ -537,6 +538,38 @@ function updateSelectDragPosition(drag: SelectionDragState, event: PointerEvent)
   emit('updateNodeTransform', updates)
 
   return true
+}
+
+function rotateActiveSelection(nodeId: string) {
+  if (sceneStore.isNodeSelectionLocked(nodeId)) {
+    return
+  }
+
+  const target = objectMap.get(nodeId)
+  if (!target) {
+    return
+  }
+
+  const nextRotation = target.rotation.clone()
+  nextRotation.y += RIGHT_CLICK_ROTATION_STEP
+  target.rotation.copy(nextRotation)
+  target.updateMatrixWorld(true)
+
+  updateSelectionBox(target)
+  updateGridHighlightFromObject(target)
+  updatePlaceholderOverlayPositions()
+  updateSelectionHighlights()
+
+  const update: TransformUpdatePayload = {
+    id: nodeId,
+    position: toVector3Like(target.position),
+    rotation: toEulerLike(target.rotation),
+    scale: toVector3Like(target.scale),
+  }
+
+  emit('updateNodeTransform', update)
+
+  scheduleThumbnailCapture()
 }
 
 function disableOrbitForSelectDrag() {
@@ -2603,7 +2636,8 @@ async function handlePointerDown(event: PointerEvent) {
   }
 
   const primaryBeforeDuplicate = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-  let hit = button === 0 ? pickNodeAtPointer(event) : null
+  const shouldPickForRightClick = button === 2 && props.activeTool === 'select'
+  let hit = button === 0 || shouldPickForRightClick ? pickNodeAtPointer(event) : null
   const initialHitPoint = hit ? hit.point.clone() : null
 
   if (
@@ -2645,6 +2679,13 @@ async function handlePointerDown(event: PointerEvent) {
           }
         }
       }
+    }
+  }
+
+  if (!hit && shouldPickForRightClick) {
+    const boundingHit = pickActiveSelectionBoundingBoxHit(event)
+    if (boundingHit) {
+      hit = boundingHit
     }
   }
 
@@ -2764,6 +2805,22 @@ function handlePointerUp(event: PointerEvent) {
 
   if (trackingState.button === 2) {
     if (!trackingState.moved) {
+      if (props.activeTool === 'select') {
+        const primaryId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+        if (primaryId && !sceneStore.isNodeSelectionLocked(primaryId)) {
+          let hit = pickNodeAtPointer(event) ?? trackingState.hitResult
+          if (!hit) {
+            hit = pickActiveSelectionBoundingBoxHit(event)
+          }
+          if (hit && hit.nodeId === primaryId) {
+            event.preventDefault()
+            event.stopPropagation()
+            rotateActiveSelection(primaryId)
+            return
+          }
+        }
+      }
+
       event.preventDefault()
       event.stopPropagation()
       recenterCameraOnPointer(event)
