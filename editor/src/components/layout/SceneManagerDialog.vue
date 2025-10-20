@@ -364,7 +364,7 @@ function formatDateTime(value: string) {
             prepend-icon="mdi-upload"
             @click="requestImportScenes"
           >
-            导入场景
+            Import
           </v-btn>
           <v-btn
             variant="tonal"
@@ -374,7 +374,7 @@ function formatDateTime(value: string) {
             :disabled="!canExportScenes"
             @click="requestExportScenes"
           >
-            导出场景
+            Export
           </v-btn>
         </div>
         <v-spacer />

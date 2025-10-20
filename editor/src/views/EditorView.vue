@@ -335,6 +335,31 @@ async function handlePreview() {
   }
 }
 
+function exportCurrentScene() {
+        const currentSceneId = sceneStore.currentSceneId
+      if (!currentSceneId) {
+        console.warn('No current scene to save')
+        return
+      }
+      const bundle = sceneStore.exportSceneBundle([currentSceneId])
+      if (!bundle || !bundle.scenes.length) {
+        console.warn('Failed to export current scene')
+        return
+      }
+      const json = JSON.stringify(bundle.scenes[0], null, 2)
+      const blob = new Blob([json], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const sceneName = sceneStore.currentScene?.name ?? 'scene'
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${sceneName}-${timestamp}.json`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+}
+
 async function handleAction(action: string) {
   switch (action) {
     case 'New':
@@ -343,8 +368,10 @@ async function handleAction(action: string) {
     case 'Open':
       handleOpenAction()
       break
-    case 'Save':
+    case 'Save': {
+      exportCurrentScene()
       break
+    }
     case 'Export':
       console.log('Export action triggered')
       break
