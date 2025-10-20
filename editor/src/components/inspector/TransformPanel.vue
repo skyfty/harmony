@@ -3,85 +3,65 @@ import { reactive, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import InspectorVectorControls from '@/components/inspector/VectorControls.vue'
 import { useSceneStore } from '@/stores/sceneStore'
-import type { Vector3Like } from '@/types/scene'
 
-const sceneStore = useSceneStore()
-const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
+const { selectedNode } = storeToRefs(useSceneStore())
 
 const props = defineProps<{ disabled?: boolean }>()
 
+type VectorDisplay = { x: string; y: string; z: string }
+
 const transformForm = reactive({
-  position: { x: 0, y: 0, z: 0 },
-  rotation: { x: 0, y: 0, z: 0 },
-  scale: { x: 1, y: 1, z: 1 },
+  position: createZeroVector(),
+  rotation: createZeroVector(),
+  scale: createScaleVector(),
 })
 
 watch(
   selectedNode,
   (node) => {
-    if (!node) return
-    transformForm.position = { ...node.position }
+    if (!node) {
+      resetTransformForm()
+      return
+    }
+    transformForm.position = {
+      x: formatNumeric(node.position.x),
+      y: formatNumeric(node.position.y),
+      z: formatNumeric(node.position.z),
+    }
     transformForm.rotation = {
       x: radToDeg(node.rotation.x),
       y: radToDeg(node.rotation.y),
       z: radToDeg(node.rotation.z),
     }
-    transformForm.scale = { ...node.scale }
+    transformForm.scale = {
+      x: formatNumeric(node.scale.x),
+      y: formatNumeric(node.scale.y),
+      z: formatNumeric(node.scale.z),
+    }
   },
-  { immediate: true }
+  { immediate: true, deep: true }
 )
 
 function radToDeg(value: number) {
-  return +(value * (180 / Math.PI)).toFixed(2)
+  return formatNumeric(value * (180 / Math.PI))
 }
 
-function degToRad(value: number) {
-  return value * (Math.PI / 180)
+function resetTransformForm() {
+  transformForm.position = createZeroVector()
+  transformForm.rotation = createZeroVector()
+  transformForm.scale = createScaleVector()
 }
 
-function updateVector(section: 'position' | 'rotation' | 'scale', axis: keyof Vector3Like, value: string) {
-  if (!selectedNodeId.value || props.disabled) return
-  const numeric = parseFloat(value)
-  if (Number.isNaN(numeric)) {
-    return
-  }
-
-  if (section === 'rotation') {
-    transformForm.rotation[axis] = numeric
-    sceneStore.updateNodeProperties({
-      id: selectedNodeId.value,
-      rotation: {
-        x: degToRad(transformForm.rotation.x),
-        y: degToRad(transformForm.rotation.y),
-        z: degToRad(transformForm.rotation.z),
-      },
-    })
-  } else if (section === 'position') {
-    transformForm.position[axis] = numeric
-    sceneStore.updateNodeProperties({
-      id: selectedNodeId.value,
-      position: { ...transformForm.position },
-    })
-  } else {
-    const clamped = Math.max(0.01, numeric)
-    transformForm.scale[axis] = clamped
-    sceneStore.updateNodeProperties({
-      id: selectedNodeId.value,
-      scale: { ...transformForm.scale },
-    })
-  }
+function formatNumeric(value: number) {
+  return value.toFixed(1)
 }
 
-function handlePosition(axis: keyof Vector3Like, value: string) {
-  updateVector('position', axis, value)
+function createZeroVector(): VectorDisplay {
+  return { x: '0.0', y: '0.0', z: '0.0' }
 }
 
-function handleRotation(axis: keyof Vector3Like, value: string) {
-  updateVector('rotation', axis, value)
-}
-
-function handleScale(axis: keyof Vector3Like, value: string) {
-  updateVector('scale', axis, value)
+function createScaleVector(): VectorDisplay {
+  return { x: '1.0', y: '1.0', z: '1.0' }
 }
 </script>
 
@@ -94,7 +74,7 @@ function handleScale(axis: keyof Vector3Like, value: string) {
           label="Position"
           :model-value="transformForm.position"
           :disabled="props.disabled"
-          @update:axis="handlePosition"
+          :readonly="true"
         />
       </div>
       <div class="section-block">
@@ -102,7 +82,7 @@ function handleScale(axis: keyof Vector3Like, value: string) {
           label="Rotation"
           :model-value="transformForm.rotation"
           :disabled="props.disabled"
-          @update:axis="handleRotation"
+          :readonly="true"
         />
       </div>
       <div class="section-block">
@@ -111,7 +91,7 @@ function handleScale(axis: keyof Vector3Like, value: string) {
           :model-value="transformForm.scale"
           min="0.01"
           :disabled="props.disabled"
-          @update:axis="handleScale"
+          :readonly="true"
         />
       </div>
     </v-expansion-panel-text>

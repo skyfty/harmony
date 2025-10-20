@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import InspectorMaterialPanel from '@/components/inspector/MaterialPanel.vue'
 import InspectorLightPanel from '@/components/inspector/LightPanel.vue'
+import InspectorTransformPanel from '@/components/inspector/TransformPanel.vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 
@@ -78,7 +79,7 @@ function handleNameUpdate(value: string) {
         variant="accordion"
         class="inspector-panels"
       >
-        <!-- <InspectorTransformPanel  /> -->
+        <InspectorTransformPanel  />
 
         <InspectorLightPanel v-if="isLightNode"/>
         <InspectorMaterialPanel v-else-if="showMaterialPanel" />

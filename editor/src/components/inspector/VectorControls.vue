@@ -5,15 +5,16 @@
       v-for="axis in axes"
       :key="axis"
       :label="axis.toUpperCase()"
-      :model-value="props.modelValue[axis]"
-      type="number"
+      :model-value="formatValue(props.modelValue[axis])"
+      :type="props.readonly ? 'text' : 'number'"
       density="compact"
       variant="underlined"
       color="primary"
       hide-details
       class="vector-input"
       :disabled="props.disabled"
-      :readonly="props.disabled"
+      :readonly="props.readonly || props.disabled"
+      inputmode="decimal"
       @change="onChange(axis, $event)"
     />
   </div>
@@ -22,7 +23,16 @@
 <script setup lang="ts">
 import type { Vector3Like } from '@/types/scene'
 
-const props = defineProps<{ label: string; modelValue: Vector3Like; min?: number | string; disabled?: boolean }>()
+type VectorValue = number | string
+type VectorDisplay = Record<keyof Vector3Like, VectorValue>
+
+const props = defineProps<{
+  label: string
+  modelValue: VectorDisplay
+  min?: number | string
+  disabled?: boolean
+  readonly?: boolean
+}>()
 
 const emit = defineEmits<{
   (event: 'update:axis', axis: keyof Vector3Like, value: string): void
@@ -31,10 +41,14 @@ const emit = defineEmits<{
 const axes: Array<keyof Vector3Like> = ['x', 'y', 'z']
 
 function onChange(axis: keyof Vector3Like, event: Event) {
-  if (props.disabled) {
+  if (props.disabled || props.readonly) {
     return
   }
   emit('update:axis', axis, (event.target as HTMLInputElement).value)
+}
+
+function formatValue(value: VectorValue): string {
+  return typeof value === 'number' ? value.toString() : value
 }
 </script>
 
