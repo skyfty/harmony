@@ -5,7 +5,8 @@
     "types": ["vite/client", "vuetify"],
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["src/*"],
+      "@/stores/*": ["src/stores/*"]
     },
     "strict": true,
     "noUnusedLocals": true,

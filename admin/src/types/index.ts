@@ -1,24 +1,11 @@
-export interface RoleSummary {
-  id: string
-  name: string
-  code: string
-  description?: string
-  permissions: string[]
-}
-
-export interface RoleMutationPayload {
-  name: string
-  code: string
-  description?: string
-  permissionIds: string[]
-}
-
 export interface PermissionSummary {
   id: string
   name: string
   code: string
   description?: string
   group?: string
+  createdAt?: string
+  updatedAt?: string
 }
 
 export interface PermissionMutationPayload {
@@ -28,15 +15,32 @@ export interface PermissionMutationPayload {
   group?: string
 }
 
+export interface RoleSummary {
+  id: string
+  name: string
+  code: string
+  description?: string
+  permissions: string[]
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface RoleMutationPayload {
+  name: string
+  code: string
+  description?: string
+  permissionIds: string[]
+}
+
 export interface UserSummary {
   id: string
   username: string
   email?: string
   displayName?: string
-  roles: RoleSummary[]
   status: 'active' | 'disabled'
   createdAt?: string
   updatedAt?: string
+  roles: RoleSummary[]
 }
 
 export interface UserMutationPayload {
@@ -48,25 +52,6 @@ export interface UserMutationPayload {
   status?: 'active' | 'disabled'
 }
 
-export interface MenuItem {
-  id: string
-  name: string
-  icon?: string
-  routeName?: string
-  order?: number
-  permission?: string
-  children?: MenuItem[]
-}
-
-export interface MenuMutationPayload {
-  name: string
-  icon?: string
-  routeName?: string
-  order?: number
-  permission?: string
-  parentId?: string | null
-}
-
 export interface LoginRequest {
   username: string
   password: string
@@ -76,13 +61,11 @@ export interface LoginResponse {
   token: string
   user: UserSummary
   permissions: string[]
-  menus: MenuItem[]
 }
 
 export interface AuthProfileResponse {
   user: UserSummary
   permissions: string[]
-  menus: MenuItem[]
 }
 
 export interface DashboardMetrics {
@@ -134,25 +117,6 @@ export interface ProjectDirectory {
   name: string
   children?: ProjectDirectory[]
   assets?: ProjectAssetSummary[]
-}
-
-export interface ContentEntry {
-  id: string
-  slug: string
-  title: string
-  summary?: string
-  body?: string
-  status: 'draft' | 'published'
-  createdAt: string
-  updatedAt: string
-}
-
-export interface ContentMutationPayload {
-  slug: string
-  title: string
-  summary?: string
-  body?: string
-  status?: 'draft' | 'published'
 }
 
 export interface ManagedAsset {

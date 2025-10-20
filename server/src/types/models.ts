@@ -29,27 +29,6 @@ export interface UserDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
-export interface MenuDocument extends Document<Types.ObjectId> {
-  name: string
-  icon?: string
-  routeName?: string
-  order?: number
-  permission?: string
-  parentId?: Types.ObjectId | null
-  createdAt: Date
-  updatedAt: Date
-}
-
-export interface ContentDocument extends Document<Types.ObjectId> {
-  slug: string
-  title: string
-  summary?: string
-  body?: string
-  status: 'draft' | 'published'
-  createdAt: Date
-  updatedAt: Date
-}
-
 export interface AssetCategoryDocument extends Document<Types.ObjectId> {
   name: string
   type: 'model' | 'image' | 'texture' | 'file'

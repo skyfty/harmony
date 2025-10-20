@@ -1,5 +1,4 @@
 import { Types } from 'mongoose'
-import { MenuModel } from '@/models/Menu'
 import { PermissionModel } from '@/models/Permission'
 import { RoleModel } from '@/models/Role'
 import { UserModel } from '@/models/User'
@@ -22,16 +21,6 @@ type PermissionLean = {
   group?: string
 }
 
-type MenuLean = {
-  _id: Types.ObjectId
-  name: string
-  icon?: string
-  routeName?: string
-  order?: number
-  permission?: string
-  parentId?: Types.ObjectId | null
-}
-
 type UserLean = {
   _id: Types.ObjectId
   username: string
@@ -42,16 +31,6 @@ type UserLean = {
   roles: Types.ObjectId[]
   createdAt: Date
   updatedAt: Date
-}
-
-interface MenuNode {
-  id: string
-  name: string
-  icon?: string
-  routeName?: string
-  order?: number
-  permission?: string
-  children?: MenuNode[]
 }
 
 interface SessionUser {
@@ -74,7 +53,6 @@ export interface AuthSessionResponse {
   token?: string
   user: SessionUser
   permissions: string[]
-  menus: MenuNode[]
 }
 
 async function resolveRoleDetails(roleIds: Types.ObjectId[]): Promise<SessionUser['roles']> {
@@ -108,62 +86,6 @@ async function resolvePermissionCodes(roleIds: Types.ObjectId[]): Promise<string
   return permissions.map((permission) => permission.code)
 }
 
-function buildMenuTree(
-  menus: Array<{
-    _id: Types.ObjectId
-    name: string
-    icon?: string
-    routeName?: string
-    order?: number
-    permission?: string
-    parentId?: Types.ObjectId | null
-  }>,
-): MenuNode[] {
-  const nodeMap = new Map<string, MenuNode & { parentId: string | null }>()
-  menus
-    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-    .forEach((menu) => {
-      nodeMap.set(menu._id.toString(), {
-        id: menu._id.toString(),
-        parentId: menu.parentId ? menu.parentId.toString() : null,
-        name: menu.name,
-        icon: menu.icon ?? undefined,
-        routeName: menu.routeName ?? undefined,
-        order: menu.order,
-        permission: menu.permission ?? undefined,
-        children: [],
-      })
-    })
-
-  const roots: MenuNode[] = []
-  nodeMap.forEach((node) => {
-    if (node.parentId && nodeMap.has(node.parentId)) {
-      const parent = nodeMap.get(node.parentId)
-      parent?.children?.push(node)
-    } else {
-      roots.push(node)
-    }
-  })
-
-  const pruneParentId = (nodes: MenuNode[]): MenuNode[] =>
-    nodes.map((node) => ({
-      id: node.id,
-      name: node.name,
-      icon: node.icon,
-      routeName: node.routeName,
-      order: node.order,
-      permission: node.permission,
-      children: node.children?.length ? pruneParentId(node.children) : undefined,
-    }))
-
-  return pruneParentId(roots)
-}
-
-async function resolveMenus(): Promise<MenuNode[]> {
-  const menus = (await MenuModel.find().lean().exec()) as MenuLean[]
-  return buildMenuTree(menus)
-}
-
 function buildSessionUser(user: UserLean): SessionUser {
   if (!user) {
     throw new Error('User not found')
@@ -193,10 +115,9 @@ export async function loginWithCredentials(username: string, password: string): 
     throw new Error('Invalid credentials')
   }
   const roleIds = user.roles as Types.ObjectId[]
-  const [roles, permissions, menus] = await Promise.all([
+  const [roles, permissions] = await Promise.all([
     resolveRoleDetails(roleIds),
     resolvePermissionCodes(roleIds),
-    resolveMenus(),
   ])
   const permissionSet = new Set(permissions)
   if (roles.some((role) => role.code === 'admin')) {
@@ -214,7 +135,6 @@ export async function loginWithCredentials(username: string, password: string): 
     token,
     user: sessionUser,
     permissions: Array.from(permissionSet),
-    menus,
   }
 }
 
@@ -224,10 +144,9 @@ export async function getProfile(userId: string): Promise<AuthSessionResponse> {
     throw new Error('User not found')
   }
   const roleIds = user.roles as Types.ObjectId[]
-  const [roles, permissions, menus] = await Promise.all([
+  const [roles, permissions] = await Promise.all([
     resolveRoleDetails(roleIds),
     resolvePermissionCodes(roleIds),
-    resolveMenus(),
   ])
   const permissionSet = new Set(permissions)
   if (roles.some((role) => role.code === 'admin')) {
@@ -238,7 +157,6 @@ export async function getProfile(userId: string): Promise<AuthSessionResponse> {
   return {
     user: sessionUser,
     permissions: Array.from(permissionSet),
-    menus,
   }
 }
 

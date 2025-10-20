@@ -2,40 +2,16 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { fetchProfile, login as loginRequest, logout as logoutRequest } from '@/api/modules/auth'
 import { persistToken, readPersistedToken } from '@/api/http'
-import type {
-  AuthProfileResponse,
-  LoginRequest,
-  LoginResponse,
-  MenuItem,
-  UserSummary,
-} from '@/types'
-
-function flattenMenuPermissions(menus: MenuItem[]): string[] {
-  const permissions: string[] = []
-  const traverse = (items: MenuItem[]): void => {
-    items.forEach((item) => {
-      if (item.permission) {
-        permissions.push(item.permission)
-      }
-      if (item.children?.length) {
-        traverse(item.children)
-      }
-    })
-  }
-  traverse(menus)
-  return permissions
-}
+import type { AuthProfileResponse, LoginRequest, LoginResponse, UserSummary } from '@/types'
 
 export const useAuthStore = defineStore('auth', () => {
   const token = ref<string | null>(null)
   const user = ref<UserSummary | null>(null)
   const permissions = ref<string[]>([])
-  const menus = ref<MenuItem[]>([])
   const loading = ref(false)
 
   const derivedPermissions = computed(() => {
     const allPermissions = new Set<string>(permissions.value)
-    flattenMenuPermissions(menus.value).forEach((item) => allPermissions.add(item))
     return Array.from(allPermissions)
   })
 
@@ -48,14 +24,12 @@ export const useAuthStore = defineStore('auth', () => {
     }
     user.value = payload.user
     permissions.value = payload.permissions
-    menus.value = payload.menus
   }
 
   function clearSession(): void {
     token.value = null
     user.value = null
     permissions.value = []
-    menus.value = []
     persistToken(null)
   }
 
@@ -122,19 +96,6 @@ export const useAuthStore = defineStore('auth', () => {
     if (hasPermission(`route:${name}`)) {
       return true
     }
-    const stack: MenuItem[] = [...menus.value]
-    while (stack.length) {
-      const item = stack.pop()
-      if (!item) {
-        continue
-      }
-      if (item.routeName === name) {
-        return hasPermission(item.permission)
-      }
-      if (item.children?.length) {
-        stack.push(...item.children)
-      }
-    }
     return true
   }
 
@@ -142,7 +103,6 @@ export const useAuthStore = defineStore('auth', () => {
     token,
     user,
     permissions,
-    menus,
     loading,
     isAuthenticated,
     bootstrapFromStorage,

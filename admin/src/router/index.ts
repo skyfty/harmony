@@ -2,13 +2,12 @@ import { createRouter, createWebHistory } from 'vue-router'
 import AdminLayout from '@/layouts/AdminLayout.vue'
 import DashboardView from '@/views/DashboardView.vue'
 import LoginView from '@/views/LoginView.vue'
+import AccountSettingsView from '@/views/AccountSettingsView.vue'
 import UserManagementView from '@/views/UserManagementView.vue'
 import RoleManagementView from '@/views/RoleManagementView.vue'
 import PermissionManagementView from '@/views/PermissionManagementView.vue'
-import MenuManagementView from '@/views/MenuManagementView.vue'
-import ContentManagementView from '@/views/ContentManagementView.vue'
 import ResourceManagementView from '@/views/ResourceManagementView.vue'
-import { useAuthStore } from '@/stores/auth'
+import { useAuthStore } from '../stores/auth'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -59,27 +58,19 @@ const router = createRouter({
           },
         },
         {
-          path: 'menus',
-          name: 'menus',
-          component: MenuManagementView,
-          meta: {
-            title: '菜单管理',
-          },
-        },
-        {
-          path: 'contents',
-          name: 'contents',
-          component: ContentManagementView,
-          meta: {
-            title: '内容管理',
-          },
-        },
-        {
           path: 'resources',
           name: 'resources',
           component: ResourceManagementView,
           meta: {
             title: '资源管理',
+          },
+        },
+        {
+          path: 'account/settings',
+          name: 'account-settings',
+          component: AccountSettingsView,
+          meta: {
+            title: '账户设置',
           },
         },
       ],
