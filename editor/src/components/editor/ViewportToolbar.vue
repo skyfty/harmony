@@ -1,6 +1,20 @@
 <template>
   <div class="viewport-toolbar">
     <v-card class="toolbar-card" elevation="6">
+
+      <v-btn
+        v-for="tool in buildToolButtons"
+        :key="tool.id"
+        :icon="tool.icon"
+        density="compact"
+        size="small"
+        class="toolbar-button"
+        :color="activeBuildTool === tool.id ? 'primary' : undefined"
+        :variant="activeBuildTool === tool.id ? 'flat' : 'text'"
+        :title="tool.label"
+        @click="handleBuildToolToggle(tool.id)"
+      />
+      <v-divider vertical />
       <v-btn
         icon="mdi-camera-outline"
         density="compact"
@@ -182,6 +196,7 @@ import type { SkyboxParameterKey, SkyboxPresetDefinition } from '@/types/skybox'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
 import { CUSTOM_SKYBOX_PRESET_ID, cloneSkyboxSettings } from '@/stores/skyboxPresets'
 import { useSceneStore } from '@/stores/sceneStore'
+import type { BuildTool } from '@/types/build-tool'
 
 const props = defineProps<{
   showGrid: boolean
@@ -192,6 +207,7 @@ const props = defineProps<{
   skyboxSettings: SceneSkyboxSettings
   cameraControlMode: 'orbit' | 'map'
   skyboxPresets: SkyboxPresetDefinition[]
+  activeBuildTool: BuildTool | null
 }>()
 
 const emit = defineEmits<{
@@ -204,9 +220,19 @@ const emit = defineEmits<{
   (event: 'orbit-left'): void
   (event: 'orbit-right'): void
   (event: 'toggle-camera-control'): void
+  (event: 'change-build-tool', tool: BuildTool | null): void
 }>()
 
-const { showGrid, showAxes, canDropSelection, canAlignSelection, skyboxSettings, skyboxPresets, cameraControlMode } = toRefs(props)
+const {
+  showGrid,
+  showAxes,
+  canDropSelection,
+  canAlignSelection,
+  skyboxSettings,
+  skyboxPresets,
+  cameraControlMode,
+  activeBuildTool,
+} = toRefs(props)
 const sceneStore = useSceneStore()
 
 const skyboxMenuOpen = ref(false)
@@ -233,6 +259,11 @@ const alignButtons = [
   { mode: 'axis-y', icon: 'mdi-axis-y-arrow', title: 'Align Y Axis' },
   { mode: 'axis-z', icon: 'mdi-axis-z-arrow', title: 'Align Z Axis' },
 ] satisfies Array<{ mode: AlignMode; icon: string; title: string }>
+const buildToolButtons = [
+  { id: 'ground', icon: 'mdi-terrain', label: 'Ground Tool' },
+  { id: 'wall', icon: 'mdi-wall', label: 'Wall Tool' },
+  { id: 'platform', icon: 'mdi-layers-triple', label: 'Platform Tool' },
+] satisfies Array<{ id: BuildTool; icon: string; label: string }>
 const skyboxParameterDefinitions = [
   { key: 'exposure', label: 'Exposure', min: 0.05, max: 2, step: 0.01 },
   { key: 'turbidity', label: 'Turbidity', min: 1, max: 20, step: 0.1 },
@@ -278,6 +309,11 @@ function handleSliderInput(key: SkyboxParameterKey, value: number) {
 
 function emitAlign(mode: AlignMode) {
   emit('align-selection', mode)
+}
+
+function handleBuildToolToggle(tool: BuildTool) {
+  const next = activeBuildTool.value === tool ? null : tool
+  emit('change-build-tool', next)
 }
 
 function formatSkyboxValue(key: SkyboxParameterKey, value: number): string {

@@ -23,7 +23,7 @@ import { type SceneExportOptions } from '@/plugins/exporter'
 import { prepareSceneExport, triggerDownload, type SceneExportResult } from '../../plugins/sceneExport'
 import ViewportToolbar from './ViewportToolbar.vue'
 import TransformToolbar from './TransformToolbar.vue'
-import BuildToolbar from './BuildToolbar.vue'
+import GroundToolbar from './GroundToolbar.vue'
 import { TRANSFORM_TOOLS } from '@/types/scene-transform-tools'
 import { ALIGN_MODE_AXIS, type AlignMode } from '@/types/scene-viewport-align-mode'
 import { Sky } from 'three/addons/objects/Sky.js'
@@ -192,11 +192,6 @@ const viewportToolbarStyle = reactive<{ top: string; left: string }>({
   left: `${TOOLBAR_MIN_MARGIN}px`,
 })
 
-const buildToolbarStyle = reactive<{ top: string; left: string }>({
-  top: `${TOOLBAR_MIN_MARGIN}px`,
-  left: `${TOOLBAR_MIN_MARGIN}px`,
-})
-
 let hierarchyPanelObserver: ResizeObserver | null = null
 let inspectorPanelObserver: ResizeObserver | null = null
 let observedHierarchyElement: Element | null = null
@@ -204,10 +199,8 @@ let observedInspectorElement: Element | null = null
 let viewportResizeObserver: ResizeObserver | null = null
 let transformToolbarResizeObserver: ResizeObserver | null = null
 let viewportToolbarResizeObserver: ResizeObserver | null = null
-let buildToolbarResizeObserver: ResizeObserver | null = null
 const transformToolbarHostRef = ref<HTMLDivElement | null>(null)
 const viewportToolbarHostRef = ref<HTMLDivElement | null>(null)
-const buildToolbarHostRef = ref<HTMLDivElement | null>(null)
 
 let pointerTrackingState: PointerTrackingState | null = null
 
@@ -229,6 +222,7 @@ type GroundCellSelection = {
 
 let groundSelectionDragState: GroundSelectionDragState | null = null
 const groundSelection = ref<GroundCellSelection | null>(null)
+const isGroundToolbarVisible = ref(false)
 const groundSelectionToolbarStyle = reactive<{ left: string; top: string; opacity: number }>({
   left: '0px',
   top: '0px',
@@ -409,25 +403,6 @@ function updateViewportToolbarPosition() {
   viewportToolbarStyle.top = `${computedTop}px`
 }
 
-function updateBuildToolbarPosition() {
-  const viewport = viewportEl.value
-  const host = buildToolbarHostRef.value
-  if (!viewport || !host) {
-    return
-  }
-  const viewportRect = viewport.getBoundingClientRect()
-  if (viewportRect.width <= 0 || viewportRect.height <= 0) {
-    return
-  }
-
-  const toolbarWidth = host.offsetWidth ?? 0
-  const maxLeft = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.width - toolbarWidth - TOOLBAR_MIN_MARGIN)
-  const centeredLeft = (viewportRect.width - toolbarWidth) * 0.5
-  const computedLeft = clampToRange(centeredLeft, TOOLBAR_MIN_MARGIN, maxLeft)
-  buildToolbarStyle.left = `${computedLeft}px`
-  buildToolbarStyle.top = `${TOOLBAR_MIN_MARGIN}px`
-}
-
 function refreshPanelObservers() {
   if (typeof ResizeObserver === 'undefined') {
     return
@@ -467,14 +442,12 @@ function scheduleToolbarUpdate() {
       window.requestAnimationFrame(() => {
         updateTransformToolbarPosition()
         updateViewportToolbarPosition()
-        updateBuildToolbarPosition()
         refreshPanelObservers()
         updateGroundSelectionToolbarPosition()
       })
     } else {
       updateTransformToolbarPosition()
       updateViewportToolbarPosition()
-      updateBuildToolbarPosition()
       refreshPanelObservers()
       updateGroundSelectionToolbarPosition()
     }
@@ -909,17 +882,51 @@ function rotateActiveSelection(nodeId: string) {
   scheduleThumbnailCapture()
 }
 
-function disableOrbitForSelectDrag() {
-  if (orbitControls && !isSelectDragOrbitDisabled) {
-    isSelectDragOrbitDisabled = true
+function requestOrbitControlDisable() {
+  if (!orbitControls) {
+    return
+  }
+  orbitDisableCount += 1
+  if (orbitDisableCount === 1) {
     orbitControls.enabled = false
   }
 }
 
-function restoreOrbitAfterSelectDrag() {
-  if (orbitControls && isSelectDragOrbitDisabled) {
+function releaseOrbitControlDisable() {
+  if (!orbitControls || orbitDisableCount === 0) {
+    return
+  }
+  orbitDisableCount = Math.max(0, orbitDisableCount - 1)
+  if (orbitDisableCount === 0) {
     orbitControls.enabled = true
+  }
+}
+
+function disableOrbitForSelectDrag() {
+  if (!isSelectDragOrbitDisabled) {
+    isSelectDragOrbitDisabled = true
+    requestOrbitControlDisable()
+  }
+}
+
+function restoreOrbitAfterSelectDrag() {
+  if (isSelectDragOrbitDisabled) {
     isSelectDragOrbitDisabled = false
+    releaseOrbitControlDisable()
+  }
+}
+
+function disableOrbitForGroundSelection() {
+  if (!isGroundSelectionOrbitDisabled) {
+    isGroundSelectionOrbitDisabled = true
+    requestOrbitControlDisable()
+  }
+}
+
+function restoreOrbitAfterGroundSelection() {
+  if (isGroundSelectionOrbitDisabled) {
+    isGroundSelectionOrbitDisabled = false
+    releaseOrbitControlDisable()
   }
 }
 
@@ -1173,7 +1180,7 @@ function shouldDeferSceneGraphSync(): boolean {
   return false
 }
 
-const GRID_EXTENT = 1000
+const GRID_EXTENT = 500
 const GRID_MAJOR_COLOR = 0x1f6f8a
 const GRID_MINOR_COLOR = 0x9dddf0
 
@@ -1293,6 +1300,8 @@ let dragPreviewLoadToken = 0
 let lastDragPoint: THREE.Vector3 | null = null
 let fallbackLightGroup: THREE.Group | null = null
 let isSelectDragOrbitDisabled = false
+let isGroundSelectionOrbitDisabled = false
+let orbitDisableCount = 0
 
 function findAssetMetadata(assetId: string): ProjectAsset | null {
   const search = (directories: ProjectDirectory[] | undefined): ProjectAsset | null => {
@@ -2275,7 +2284,7 @@ function initScene() {
     applyProjectionMode(cameraProjectionMode.value)
   }
 
-  canvasRef.value.addEventListener('pointerdown', handlePointerDown)
+  canvasRef.value.addEventListener('pointerdown', handlePointerDown, { capture: true })
   canvasRef.value.addEventListener('contextmenu', handleViewportContextMenu)
   if (typeof window !== 'undefined') {
     window.addEventListener('pointermove', handlePointerMove)
@@ -2518,7 +2527,7 @@ function disposeScene() {
   resizeObserver = null
 
   if (canvasRef.value) {
-    canvasRef.value.removeEventListener('pointerdown', handlePointerDown)
+    canvasRef.value.removeEventListener('pointerdown', handlePointerDown, { capture: true })
     canvasRef.value.removeEventListener('contextmenu', handleViewportContextMenu)
   }
   if (typeof window !== 'undefined') {
@@ -2551,6 +2560,9 @@ function disposeScene() {
     orbitControls.dispose()
   }
   orbitControls = null
+  orbitDisableCount = 0
+  isSelectDragOrbitDisabled = false
+  isGroundSelectionOrbitDisabled = false
 
   if (thumbnailCaptureTimeout) {
     clearTimeout(thumbnailCaptureTimeout)
@@ -3140,6 +3152,7 @@ function clearGroundSelection() {
   groundSelectionGroup.visible = false
   groundSelection.value = null
   groundSelectionToolbarStyle.opacity = 0
+  isGroundToolbarVisible.value = false
 }
 
 function refreshGroundMesh(definition: GroundDynamicMesh | null) {
@@ -3164,19 +3177,16 @@ async function handlePointerDown(event: PointerEvent) {
   }
 
   const button = event.button
-  if (button !== 0 && button !== 2) {
-    pointerTrackingState = null
-    return
-  }
+  const isSelectionButton = button === 0 || button === 2
 
-  if (activeBuildTool.value === 'ground' && button === 0) {
+  if (activeBuildTool.value === 'ground' && button === 2) {
     const definition = getGroundDynamicMeshDefinition()
-    if (!definition) {
+    if (!definition || !raycastGroundPoint(event, groundPointerHelper)) {
       groundSelectionDragState = null
-      return
-    }
-    if (!raycastGroundPoint(event, groundPointerHelper)) {
-      groundSelectionDragState = null
+      isGroundToolbarVisible.value = false
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
       return
     }
     clampPointToGround(definition, groundPointerHelper)
@@ -3189,13 +3199,22 @@ async function handlePointerDown(event: PointerEvent) {
       currentColumn: cell.column,
     }
     applyGroundSelectionVisuals(createGroundSelectionFromCells(definition, cell, cell), definition)
+    disableOrbitForGroundSelection()
+    isGroundToolbarVisible.value = false
     try {
       canvasRef.value.setPointerCapture(event.pointerId)
     } catch (error) {
       /* noop */
     }
+    pointerTrackingState = null
     event.preventDefault()
     event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
+  if (!isSelectionButton) {
+    pointerTrackingState = null
     return
   }
 
@@ -3206,7 +3225,6 @@ async function handlePointerDown(event: PointerEvent) {
 
   if (button === 2) {
     event.preventDefault()
-    event.stopPropagation()
   }
 
   const primaryBeforeDuplicate = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
@@ -3306,9 +3324,15 @@ function handlePointerMove(event: PointerEvent) {
     if (!definition) {
       groundSelectionDragState = null
       clearGroundSelection()
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
       return
     }
     if (!raycastGroundPoint(event, groundPointerHelper)) {
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
       return
     }
     clampPointToGround(definition, groundPointerHelper)
@@ -3323,6 +3347,9 @@ function handlePointerMove(event: PointerEvent) {
       )
       applyGroundSelectionVisuals(selection, definition)
     }
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
     return
   }
 
@@ -3395,8 +3422,16 @@ function handlePointerUp(event: PointerEvent) {
       clearGroundSelection()
     }
     groundSelectionDragState = null
+    restoreOrbitAfterGroundSelection()
+    if (groundSelection.value) {
+      isGroundToolbarVisible.value = true
+      updateGroundSelectionToolbarPosition()
+    } else {
+      isGroundToolbarVisible.value = false
+    }
     event.preventDefault()
     event.stopPropagation()
+    event.stopImmediatePropagation()
     return
   }
 
@@ -3476,6 +3511,11 @@ function handlePointerCancel(event: PointerEvent) {
     }
     groundSelectionDragState = null
     clearGroundSelection()
+    restoreOrbitAfterGroundSelection()
+    isGroundToolbarVisible.value = false
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
     return
   }
 
@@ -4300,10 +4340,6 @@ onBeforeUnmount(() => {
     viewportToolbarResizeObserver.disconnect()
     viewportToolbarResizeObserver = null
   }
-  if (buildToolbarResizeObserver) {
-    buildToolbarResizeObserver.disconnect()
-    buildToolbarResizeObserver = null
-  }
 })
 
 watch(cameraControlMode, (mode) => {
@@ -4368,18 +4404,6 @@ watch(viewportToolbarHostRef, (host) => {
   scheduleToolbarUpdate()
 })
 
-watch(buildToolbarHostRef, (host) => {
-  if (buildToolbarResizeObserver) {
-    buildToolbarResizeObserver.disconnect()
-    buildToolbarResizeObserver = null
-  }
-  if (host && typeof ResizeObserver !== 'undefined') {
-    buildToolbarResizeObserver = new ResizeObserver(() => scheduleToolbarUpdate())
-    buildToolbarResizeObserver.observe(host)
-  }
-  scheduleToolbarUpdate()
-})
-
 watch(
   () => props.selectedNodeId,
   (id) => {
@@ -4406,6 +4430,7 @@ watch(activeBuildTool, (tool) => {
   if (tool !== 'ground') {
     groundSelectionDragState = null
     clearGroundSelection()
+    restoreOrbitAfterGroundSelection()
   }
 })
 
@@ -4432,12 +4457,6 @@ defineExpose<SceneViewportHandle>({
 
 <template>
   <div ref="viewportEl" class="scene-viewport">
-    <div ref="buildToolbarHostRef" class="build-toolbar-host" :style="buildToolbarStyle">
-      <BuildToolbar
-        :active-tool="activeBuildTool"
-        @change="handleBuildToolChange"
-      />
-    </div>
     <div ref="transformToolbarHostRef" class="transform-toolbar-host" :style="transformToolbarStyle">
       <TransformToolbar
         :active-tool="props.activeTool"
@@ -4454,6 +4473,7 @@ defineExpose<SceneViewportHandle>({
         :can-align-selection="canAlignSelection"
         :skybox-settings="skyboxSettings"
         :skybox-presets="skyboxPresetList"
+        :active-build-tool="activeBuildTool"
         @reset-camera="resetCameraView"
         @drop-to-ground="dropSelectionToGround"
         @select-skybox-preset="handleSkyboxPresetSelect"
@@ -4463,6 +4483,7 @@ defineExpose<SceneViewportHandle>({
         @orbit-left="handleOrbitLeft"
         @orbit-right="handleOrbitRight"
         @toggle-camera-control="handleToggleCameraControlMode"
+        @change-build-tool="handleBuildToolChange"
       />
     </div>
     <div
@@ -4499,43 +4520,17 @@ defineExpose<SceneViewportHandle>({
           </div>
         </div>
       </div>
-      <div
+      <GroundToolbar
         v-if="groundSelection"
-        class="ground-selection-toolbar"
-        :class="{ 'is-visible': groundSelectionToolbarStyle.opacity > 0 }"
-        :style="{
-          left: groundSelectionToolbarStyle.left,
-          top: groundSelectionToolbarStyle.top,
-          opacity: groundSelectionToolbarStyle.opacity,
-        }"
-      >
-        <v-card class="ground-toolbar-card" elevation="10">
-          <v-btn
-            icon="mdi-arrow-up-bold"
-            density="comfortable"
-            title="抬升地面"
-            @click="handleGroundRaise"
-          />
-          <v-btn
-            icon="mdi-arrow-down-bold"
-            density="comfortable"
-            title="下压地面"
-            @click="handleGroundLower"
-          />
-          <v-btn
-            icon="mdi-restore"
-            density="comfortable"
-            title="重置高度"
-            @click="handleGroundReset"
-          />
-          <v-btn
-            icon="mdi-texture-box"
-            density="comfortable"
-            title="设置纹理"
-            @click="handleGroundTextureSelectRequest"
-          />
-        </v-card>
-      </div>
+        :visible="isGroundToolbarVisible"
+        :left="groundSelectionToolbarStyle.left"
+        :top="groundSelectionToolbarStyle.top"
+        :opacity="groundSelectionToolbarStyle.opacity"
+        @raise="handleGroundRaise"
+        @lower="handleGroundLower"
+        @reset="handleGroundReset"
+        @texture="handleGroundTextureSelectRequest"
+      />
       <canvas ref="canvasRef" class="viewport-canvas" />
     </div>
     <input
@@ -4558,17 +4553,6 @@ defineExpose<SceneViewportHandle>({
   border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: 10px;
   overflow: hidden;
-}
-
-.build-toolbar-host {
-  position: absolute;
-  z-index: 6;
-  pointer-events: none;
-  transition: top 180ms ease, left 180ms ease;
-}
-
-.build-toolbar-host > :deep(*) {
-  pointer-events: auto;
 }
 
 .transform-toolbar-host,
@@ -4611,31 +4595,6 @@ defineExpose<SceneViewportHandle>({
   pointer-events: none;
   z-index: 6;
   font-size: 12px;
-}
-
-.ground-selection-toolbar {
-  position: absolute;
-  transform: translate(-50%, -120%);
-  pointer-events: none;
-  transition: opacity 150ms ease;
-  opacity: 0;
-  z-index: 8;
-}
-
-.ground-selection-toolbar.is-visible {
-  pointer-events: auto;
-}
-
-.ground-toolbar-card {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-radius: 12px;
-  background-color: rgba(18, 21, 26, 0.88);
-  border: 1px solid rgba(77, 208, 225, 0.42);
-  backdrop-filter: blur(12px);
 }
 
 .placeholder-overlay-card {
