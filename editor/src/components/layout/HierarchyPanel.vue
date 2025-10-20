@@ -602,7 +602,8 @@ function handleTreeDragLeave(event: DragEvent) {
 .tree-container {
   position: relative;
   flex: 1;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   border-radius: 6px;
 }
 

@@ -496,7 +496,7 @@ function handleAddLight(type: LightNodeType) {
 </script>
 
 <template>
-  <v-menu>
+  <v-menu  transition="none">
     <template #activator="{ props }">
       <slot name="activator" :props="props">
         <v-btn icon="mdi-plus" variant="text" density="compact" v-bind="props" />
@@ -504,7 +504,7 @@ function handleAddLight(type: LightNodeType) {
     </template>
     <v-list class="add-menu-list">
       <v-list-item title="Group" @click="handleAddGroup()" />
-      <v-menu location="end" offset="8">
+      <v-menu  transition="none" location="end" offset="8">
         <template #activator="{ props: lightMenuProps }">
           <v-list-item title="Light" append-icon="mdi-chevron-right" v-bind="lightMenuProps" />
         </template>
@@ -514,7 +514,7 @@ function handleAddLight(type: LightNodeType) {
           <v-list-item title="Spot Light" @click="handleAddLight('spot')" />
         </v-list>
       </v-menu>
-      <v-menu location="end" offset="8">
+      <v-menu  transition="none" location="end" offset="8">
         <template #activator="{ props: geometryMenuProps }">
           <v-list-item title="Geometry" append-icon="mdi-chevron-right" v-bind="geometryMenuProps" />
         </template>
