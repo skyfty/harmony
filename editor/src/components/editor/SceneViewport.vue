@@ -216,6 +216,52 @@ function pickNodeAtPointer(event: PointerEvent): NodeHitResult | null {
   return null
 }
 
+function pickActiveSelectionBoundingBoxHit(event: PointerEvent): NodeHitResult | null {
+  if (!canvasRef.value || !camera) {
+    return null
+  }
+
+  const primaryId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  if (!primaryId) {
+    return null
+  }
+
+  if (sceneStore.isNodeSelectionLocked(primaryId)) {
+    return null
+  }
+
+  const targetObject = objectMap.get(primaryId)
+  if (!targetObject) {
+    return null
+  }
+
+  targetObject.updateMatrixWorld(true)
+  selectionDragBoundingBox.setFromObject(targetObject)
+  if (selectionDragBoundingBox.isEmpty()) {
+    return null
+  }
+
+  const rect = canvasRef.value.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) {
+    return null
+  }
+
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  raycaster.setFromCamera(pointer, camera)
+
+  const intersection = raycaster.ray.intersectBox(selectionDragBoundingBox, selectionDragIntersectionHelper)
+  if (!intersection) {
+    return null
+  }
+
+  return {
+    nodeId: primaryId,
+    object: targetObject,
+    point: intersection.clone(),
+  }
+}
+
 function createSelectionDragState(nodeId: string, object: THREE.Object3D, hitPoint: THREE.Vector3, event: PointerEvent): SelectionDragState {
   const worldPosition = new THREE.Vector3()
   object.getWorldPosition(worldPosition)
@@ -650,6 +696,8 @@ const dropLocalPositionHelper = new THREE.Vector3()
 const selectionHighlightPositionHelper = new THREE.Vector3()
 const selectionHighlightBoundingBox = new THREE.Box3()
 const selectionHighlightSizeHelper = new THREE.Vector3()
+const selectionDragBoundingBox = new THREE.Box3()
+const selectionDragIntersectionHelper = new THREE.Vector3()
 const alignReferenceWorldPositionHelper = new THREE.Vector3()
 const alignDeltaHelper = new THREE.Vector3()
 const alignWorldPositionHelper = new THREE.Vector3()
@@ -2594,6 +2642,11 @@ async function handlePointerDown(event: PointerEvent) {
     }
   }
 
+  let dragHit = hit
+  if (!dragHit && button === 0 && props.activeTool === 'select') {
+    dragHit = pickActiveSelectionBoundingBoxHit(event)
+  }
+
   const activeTransformAxis = button === 0 && props.activeTool !== 'select' ? (transformControls?.axis ?? null) : null
 
   try {
@@ -2603,8 +2656,8 @@ async function handlePointerDown(event: PointerEvent) {
   }
 
   const currentPrimaryId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-  const selectionDrag = button === 0 && props.activeTool === 'select' && hit && currentPrimaryId && hit.nodeId === currentPrimaryId
-    ? createSelectionDragState(hit.nodeId, hit.object, hit.point, event)
+  const selectionDrag = button === 0 && props.activeTool === 'select' && dragHit && currentPrimaryId && dragHit.nodeId === currentPrimaryId
+    ? createSelectionDragState(dragHit.nodeId, dragHit.object, dragHit.point, event)
     : null
 
   if (selectionDrag) {
