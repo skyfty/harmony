@@ -1772,6 +1772,12 @@ function applyCameraControlMode(mode: CameraControlMode) {
   orbitControls.minZoom = MIN_ORTHOGRAPHIC_ZOOM
   orbitControls.maxZoom = MAX_ORTHOGRAPHIC_ZOOM
   orbitControls.screenSpacePanning = false
+  if (mode === 'map') {
+    orbitControls.minPolarAngle = orbitControls.maxPolarAngle = THREE.MathUtils.degToRad(50)
+  } else {
+    orbitControls.maxPolarAngle = Math.PI
+    orbitControls.minPolarAngle = 0
+  }
   if (previousTarget) {
     orbitControls.target.copy(previousTarget)
   } else {
