@@ -35,19 +35,18 @@ function handleToolSelect(tool: TransformToolDefinition) {
 
 <style scoped>
 .tool-strip {
-  position: absolute;
-  top: 16px;
-  left: 16px;
-  z-index: 5;
+  position: relative;
 }
 
 .tool-card {
   display: flex;
   flex-direction: column;
-  background-color: rgba(18, 21, 26, 0.92);
+  background-color: rgba(18, 21, 26, 0.72);
   border-radius: 12px;
   padding: 8px;
   gap: 4px;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(77, 208, 225, 0.24);
 }
 
 .tool-button {

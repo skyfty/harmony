@@ -350,10 +350,7 @@ function stopOrbitRotation() {
 
 <style scoped>
 .viewport-toolbar {
-  position: absolute;
-  top: 3px;
-  right: 3px;
-  z-index: 5;
+  position: relative;
 }
 
 .toolbar-card {
@@ -361,10 +358,10 @@ function stopOrbitRotation() {
   flex-direction: row;
   align-items: center;
   gap: 4px;
-  background-color: rgba(18, 21, 26, 0.48);
+  background-color: rgba(18, 21, 26, 0.64);
   border-radius: 12px;
   padding: 6px 8px;
-  backdrop-filter: blur(6px);
+  backdrop-filter: blur(10px);
   border: 1px solid rgba(77, 208, 225, 0.25);
 }
 

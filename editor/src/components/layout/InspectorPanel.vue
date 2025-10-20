@@ -7,8 +7,11 @@ import InspectorTransformPanel from '@/components/inspector/TransformPanel.vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 
+const props = defineProps<{ floating?: boolean }>()
+
 const emit = defineEmits<{
   (event: 'collapse'): void
+  (event: 'toggle-placement'): void
 }>()
 
 const sceneStore = useSceneStore()
@@ -16,6 +19,9 @@ const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
 const nodeName = ref('')
 const expandedPanels = ref<string[]>(['transform', 'material'])
+const floating = computed(() => props.floating ?? false)
+const placementIcon = computed(() => (floating.value ? 'mdi-dock-right' : 'mdi-arrow-expand'))
+const placementTitle = computed(() => (floating.value ? '停靠到右侧' : '浮动显示'))
 
 const isLightNode = computed(() => selectedNode.value?.nodeType === 'light')
 const showMaterialPanel = computed(() => !isLightNode.value && !!selectedNode.value?.material)
@@ -55,8 +61,19 @@ function handleNameUpdate(value: string) {
 </script>
 
 <template>
-  <v-card class="panel-card" elevation="4">
+  <v-card
+    :class="['panel-card', { 'is-floating': floating } ]"
+    :elevation="floating ? 12 : 4"
+  >
     <v-toolbar density="compact" title="Inspector" class="panel-toolbar" height="40px">
+      <v-btn
+        class="placement-toggle"
+        variant="text"
+        size="small"
+        :icon="placementIcon"
+        :title="placementTitle"
+        @click="emit('toggle-placement')"
+      />
       <v-spacer />
       <v-btn icon="mdi-window-minimize"  size="small" variant="text" @click="emit('collapse')" />
     </v-toolbar>
@@ -96,8 +113,14 @@ function handleNameUpdate(value: string) {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background-color: rgba(36, 38, 41, 0.96);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  background-color: rgba(18, 22, 28, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+}
+
+.panel-card.is-floating {
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.35);
 }
 
 .panel-toolbar {
@@ -105,6 +128,10 @@ function handleNameUpdate(value: string) {
   color: #e9ecf1;
   min-height: 20px;
   padding: 0 8px;
+}
+
+.placement-toggle {
+  color: rgba(233, 236, 241, 0.72);
 }
 
 .panel-body {

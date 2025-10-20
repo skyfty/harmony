@@ -6,8 +6,11 @@ import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import { getNodeIcon } from '@/types/node-icons'
 import AddNodeMenu from '../common/AddNodeMenu.vue'
 
+const props = defineProps<{ floating?: boolean }>()
+
 const emit = defineEmits<{
   (event: 'collapse'): void
+  (event: 'toggle-placement'): void
 }>()
 
 const sceneStore = useSceneStore()
@@ -24,6 +27,10 @@ const dragState = ref<{ sourceId: string | null; targetId: string | null; positi
   },
 )
 const panelRef = ref<HTMLDivElement | null>(null)
+
+const floating = computed(() => props.floating ?? false)
+const placementIcon = computed(() => (floating.value ? 'mdi-dock-left' : 'mdi-arrow-expand'))
+const placementTitle = computed(() => (floating.value ? '停靠到左侧' : '浮动显示'))
 
 
 const active = computed({
@@ -363,9 +370,20 @@ function handleTreeDragLeave(event: DragEvent) {
 </script>
 
 <template>
-  <v-card ref="panelRef" class="panel-card" elevation="4">
+  <v-card
+    ref="panelRef"
+    :class="['panel-card', { 'is-floating': floating } ]"
+    :elevation="floating ? 12 : 4"
+  >
     <v-toolbar density="compact" title="Hierarchy" class="panel-toolbar" height="40px">
-
+      <v-btn
+        class="placement-toggle"
+        variant="text"
+        size="small"
+        :icon="placementIcon"
+        :title="placementTitle"
+        @click="emit('toggle-placement')"
+      />
       <v-spacer />
       <v-btn icon="mdi-window-minimize" size="small" variant="text" @click="emit('collapse')" />
     </v-toolbar>
@@ -491,8 +509,14 @@ function handleTreeDragLeave(event: DragEvent) {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background-color: rgba(36, 38, 41, 0.96);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  background-color: rgba(18, 22, 28, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+}
+
+.panel-card.is-floating {
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.35);
 }
 
 .panel-toolbar {
@@ -500,6 +524,10 @@ function handleTreeDragLeave(event: DragEvent) {
   color: #e9ecf1;
   min-height: 20px;
   padding: 0 8px;
+}
+
+.placement-toggle {
+  color: rgba(233, 236, 241, 0.72);
 }
 
 .panel-toolbar :deep(.v-toolbar-title) {

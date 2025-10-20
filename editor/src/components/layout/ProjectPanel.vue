@@ -93,8 +93,11 @@ function countDirectoryAssets(directory: ProjectDirectory | undefined): number {
   return directory.children.reduce((total, child) => total + countDirectoryAssets(child), directCount)
 }
 
+const props = defineProps<{ floating?: boolean }>()
+
 const emit = defineEmits<{
   (event: 'collapse'): void
+  (event: 'toggle-placement'): void
 }>()
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
@@ -126,6 +129,9 @@ const selectedAssetIds = ref<string[]>([])
 
 const providerLoading = ref<Record<string, boolean>>({})
 const providerErrors = ref<Record<string, string | null>>({})
+const floating = computed(() => props.floating ?? false)
+const placementIcon = computed(() => (floating.value ? 'mdi-dock-bottom' : 'mdi-arrow-expand'))
+const placementTitle = computed(() => (floating.value ? '停靠到底部' : '浮动显示'))
 
 function setProviderLoading(providerId: string, value: boolean) {
   providerLoading.value = {
@@ -1009,8 +1015,19 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <v-card class="panel-card" elevation="8">
+  <v-card
+    :class="['panel-card', { 'is-floating': floating } ]"
+    :elevation="floating ? 12 : 8"
+  >
     <v-toolbar  class="panel-toolbar" height="40px"  title="Project">
+      <v-btn
+        class="placement-toggle"
+        variant="text"
+        size="small"
+        :icon="placementIcon"
+        :title="placementTitle"
+        @click="emit('toggle-placement')"
+      />
       <v-spacer />
       <v-btn icon="mdi-window-minimize" size="small" variant="text" @click="emit('collapse')" />
     </v-toolbar>
@@ -1237,14 +1254,24 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background-color: rgba(28, 30, 33, 0.98);
+  background-color: rgba(18, 22, 28, 0.72);
   border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+}
+
+.panel-card.is-floating {
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.35);
 }
 
 .panel-toolbar {
   background-color: transparent;
   color: #e9ecf1;
   padding: 0 8px;
+}
+
+.placement-toggle {
+  color: rgba(233, 236, 241, 0.72);
 }
 
 .project-content {
@@ -1379,7 +1406,6 @@ onBeforeUnmount(() => {
   border-color: rgba(77, 208, 225, 0.45);
   transform: translateY(-2px);
 }
-
 .asset-card.is-selected {
   border-color: rgba(0, 172, 193, 0.9);
   box-shadow: 0 0 12px rgba(0, 172, 193, 0.35);

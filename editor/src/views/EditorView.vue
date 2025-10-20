@@ -24,6 +24,7 @@ import type { EditorTool } from '@/types/editor-tool'
 import type { SceneCameraState } from '@/types/scene-camera-state'
 import { useUiStore } from '@/stores/uiStore'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
+import type { PanelPlacementState } from '@/types/panel-placement-state'
 
 const sceneStore = useSceneStore()
 const uiStore = useUiStore()
@@ -38,6 +39,23 @@ const {
   cameraFocusNodeId,
   cameraFocusRequestId,
 } = storeToRefs(sceneStore)
+
+type PanelPlacementHolder = { panelPlacement?: PanelPlacementState | null }
+
+function normalizePanelPlacementState(input?: PanelPlacementState | null): PanelPlacementState {
+  return {
+    hierarchy: input?.hierarchy === 'floating' ? 'floating' : 'docked',
+    inspector: input?.inspector === 'floating' ? 'floating' : 'docked',
+    project: input?.project === 'floating' ? 'floating' : 'docked',
+  }
+}
+
+const panelPlacement = computed<PanelPlacementState>(() => {
+  const source = (sceneStore.$state as unknown as PanelPlacementHolder).panelPlacement ??
+    (sceneStore as unknown as PanelPlacementHolder).panelPlacement ??
+    null
+  return normalizePanelPlacementState(source)
+})
 
 const isSceneManagerOpen = ref(false)
 const isExportDialogOpen = ref(false)
@@ -86,22 +104,34 @@ const projectOpen = computed({
   set: (visible: boolean) => sceneStore.setPanelVisibility('project', visible),
 })
 
+const hierarchyPlacement = computed(() => panelPlacement.value.hierarchy)
+const inspectorPlacement = computed(() => panelPlacement.value.inspector)
+const projectPlacement = computed(() => panelPlacement.value.project)
+
+const showHierarchyDocked = computed(() => hierarchyOpen.value && hierarchyPlacement.value === 'docked')
+const showInspectorDocked = computed(() => inspectorOpen.value && inspectorPlacement.value === 'docked')
+const showProjectDocked = computed(() => projectOpen.value && projectPlacement.value === 'docked')
+
+const showHierarchyFloating = computed(() => hierarchyOpen.value && hierarchyPlacement.value === 'floating')
+const showInspectorFloating = computed(() => inspectorOpen.value && inspectorPlacement.value === 'floating')
+const showProjectFloating = computed(() => projectOpen.value && projectPlacement.value === 'floating')
+
 const layoutClasses = computed(() => ({
-  'is-hierarchy-closed': !panelVisibility.value.hierarchy,
-  'is-inspector-closed': !panelVisibility.value.inspector,
-  'is-project-closed': !panelVisibility.value.project,
+  'is-hierarchy-docked': showHierarchyDocked.value,
+  'is-inspector-docked': showInspectorDocked.value,
+  'is-project-docked': showProjectDocked.value,
 }))
 
 const layoutStyles = computed(() => ({
   gridTemplateColumns: [
-    panelVisibility.value.hierarchy ? 'minmax(0, 280px)' : '0',
+    showHierarchyDocked.value ? 'minmax(0, 280px)' : '0',
     'minmax(0, 1fr)',
-    panelVisibility.value.inspector ? 'minmax(0, 320px)' : '0',
+    showInspectorDocked.value ? 'minmax(0, 320px)' : '0',
   ].join(' '),
   gridTemplateRows: [
     'auto',
     'minmax(0, 1fr)',
-    panelVisibility.value.project ? 'minmax(0, 260px)' : '0',
+    showProjectDocked.value ? 'minmax(0, 260px)' : '0',
   ].join(' '),
 }))
 
@@ -155,6 +185,19 @@ function updateCamera(state: SceneCameraState) {
 
 function reopenPanel(panel: EditorPanel) {
   sceneStore.setPanelVisibility(panel, true)
+}
+
+function togglePanelPlacement(panel: EditorPanel) {
+  const current = panelPlacement.value[panel]
+  const next: 'docked' | 'floating' = current === 'floating' ? 'docked' : 'floating'
+  sceneStore.$patch((draft) => {
+    const typedState = draft as unknown as PanelPlacementHolder
+    const current = normalizePanelPlacementState(typedState.panelPlacement ?? panelPlacement.value)
+    typedState.panelPlacement = {
+      ...current,
+      [panel]: next,
+    }
+  })
 }
 
 function openNewSceneDialog(source: 'menu' | 'scene-manager') {
@@ -808,8 +851,12 @@ onBeforeUnmount(() => {
         @menu-action="handleAction"
       />
       <transition name="slide-left">
-        <section v-if="hierarchyOpen" class="panel hierarchy-panel">
-          <HierarchyPanel @collapse="hierarchyOpen = false" />
+        <section v-if="showHierarchyDocked" class="panel hierarchy-panel">
+          <HierarchyPanel
+            :floating="false"
+            @collapse="hierarchyOpen = false"
+            @toggle-placement="togglePanelPlacement('hierarchy')"
+          />
         </section>
       </transition>
 
@@ -831,16 +878,54 @@ onBeforeUnmount(() => {
       </section>
 
       <transition name="slide-right">
-        <section v-if="inspectorOpen" class="panel inspector-panel">
-          <InspectorPanel @collapse="inspectorOpen = false" />
+        <section v-if="showInspectorDocked" class="panel inspector-panel">
+          <InspectorPanel
+            :floating="false"
+            @collapse="inspectorOpen = false"
+            @toggle-placement="togglePanelPlacement('inspector')"
+          />
         </section>
       </transition>
 
       <transition name="slide-up">
-        <section v-if="projectOpen" class="panel project-panel">
-          <ProjectPanel @collapse="projectOpen = false" />
+        <section v-if="showProjectDocked" class="panel project-panel">
+          <ProjectPanel
+            :floating="false"
+            @collapse="projectOpen = false"
+            @toggle-placement="togglePanelPlacement('project')"
+          />
         </section>
       </transition>
+
+      <div class="floating-panels">
+        <transition name="fade-down">
+          <div v-if="showHierarchyFloating" class="floating-panel hierarchy-floating">
+            <HierarchyPanel
+              :floating="true"
+              @collapse="hierarchyOpen = false"
+              @toggle-placement="togglePanelPlacement('hierarchy')"
+            />
+          </div>
+        </transition>
+        <transition name="fade-down">
+          <div v-if="showInspectorFloating" class="floating-panel inspector-floating">
+            <InspectorPanel
+              :floating="true"
+              @collapse="inspectorOpen = false"
+              @toggle-placement="togglePanelPlacement('inspector')"
+            />
+          </div>
+        </transition>
+        <transition name="fade-up">
+          <div v-if="showProjectFloating" class="floating-panel project-floating">
+            <ProjectPanel
+              :floating="true"
+              @collapse="projectOpen = false"
+              @toggle-placement="togglePanelPlacement('project')"
+            />
+          </div>
+        </transition>
+      </div>
 
       <v-btn
         v-if="reopenButtons.showHierarchy"
@@ -945,21 +1030,13 @@ onBeforeUnmount(() => {
     'menu menu menu'
     'hierarchy scene inspector'
     'project project project';
-  gap: 5px;
-  padding: 5px;
+  gap: 12px;
+  padding: 12px;
   box-sizing: border-box;
-}
-
-.editor-layout.is-hierarchy-closed {
-  grid-template-columns: 0 minmax(0, 1fr) minmax(0, 320px);
-}
-
-.editor-layout.is-inspector-closed {
-  grid-template-columns: minmax(0, 280px) minmax(0, 1fr) 0;
-}
-
-.editor-layout.is-project-closed {
-  grid-template-rows: auto minmax(0, 1fr) 0;
+  --floating-edge-gap: 18px;
+  --floating-menu-offset: 68px;
+  --panel-floating-height: clamp(260px, 52vh, 560px);
+  --project-floating-height: clamp(240px, 38vh, 420px);
 }
 
 .panel {
@@ -969,6 +1046,73 @@ onBeforeUnmount(() => {
 
 .hierarchy-panel {
   grid-area: hierarchy;
+}
+
+.floating-panels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.floating-panel {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+  max-height: calc(100% - (var(--floating-edge-gap) * 2));
+}
+
+.floating-panel :deep(.panel-card) {
+  height: 100%;
+}
+
+.hierarchy-floating {
+  top: calc(var(--floating-menu-offset) + var(--floating-edge-gap));
+  left: var(--floating-edge-gap);
+  bottom: calc(var(--project-floating-height) + (var(--floating-edge-gap) * 2));
+  width: min(360px, 40vw);
+  max-height: var(--panel-floating-height);
+  min-height: 240px;
+}
+
+.inspector-floating {
+  top: calc(var(--floating-menu-offset) + var(--floating-edge-gap));
+  right: var(--floating-edge-gap);
+  bottom: calc(var(--project-floating-height) + (var(--floating-edge-gap) * 2));
+  width: min(360px, 40vw);
+  max-height: var(--panel-floating-height);
+  min-height: 240px;
+}
+
+.project-floating {
+  left: var(--floating-edge-gap);
+  right: var(--floating-edge-gap);
+  bottom: var(--floating-edge-gap);
+  height: var(--project-floating-height);
+  max-height: var(--project-floating-height);
+}
+
+@media (max-width: 960px) {
+  .editor-layout {
+    gap: 10px;
+    padding: 10px;
+    --floating-menu-offset: 60px;
+    --floating-edge-gap: 14px;
+    --panel-floating-height: clamp(220px, 48vh, 520px);
+    --project-floating-height: clamp(220px, 42vh, 380px);
+  }
+
+  .hierarchy-floating,
+  .inspector-floating {
+    top: calc(var(--floating-menu-offset) + var(--floating-edge-gap));
+    width: min(320px, 88vw);
+  }
+
+  .project-floating {
+    bottom: var(--floating-edge-gap);
+    left: var(--floating-edge-gap);
+    right: var(--floating-edge-gap);
+  }
 }
 
 .scene-panel {
@@ -1033,6 +1177,25 @@ onBeforeUnmount(() => {
 .slide-up-enter-from,
 .slide-up-leave-to {
   transform: translateY(20px);
+  opacity: 0;
+}
+
+.fade-down-enter-active,
+.fade-down-leave-active,
+.fade-up-enter-active,
+.fade-up-leave-active {
+  transition: all 180ms ease;
+}
+
+.fade-down-enter-from,
+.fade-down-leave-to {
+  transform: translateY(-12px);
+  opacity: 0;
+}
+
+.fade-up-enter-from,
+.fade-up-leave-to {
+  transform: translateY(12px);
   opacity: 0;
 }
 </style>

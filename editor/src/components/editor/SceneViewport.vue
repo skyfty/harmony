@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
@@ -17,6 +18,7 @@ import type { CameraProjectionMode, CameraControlMode, SceneSkyboxSettings } fro
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SkyboxParameterKey } from '@/types/skybox'
 import { SKYBOX_PRESETS, CUSTOM_SKYBOX_PRESET_ID, cloneSkyboxSettings } from '@/stores/skyboxPresets'
+import type { PanelPlacementState } from '@/types/panel-placement-state'
 import { type SceneExportOptions } from '@/plugins/exporter'
 import { prepareSceneExport, triggerDownload, type SceneExportResult } from '../../plugins/sceneExport'
 import ViewportToolbar from './ViewportToolbar.vue'
@@ -151,6 +153,47 @@ const skyboxPresetList = SKYBOX_PRESETS
 const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((tool) => [tool.key, tool.value]))
 let activeCameraMode: CameraProjectionMode = cameraProjectionMode.value
 
+type PanelPlacementHolder = { panelPlacement?: PanelPlacementState | null }
+
+const { panelVisibility } = storeToRefs(sceneStore)
+function normalizePanelPlacementState(input?: PanelPlacementState | null): PanelPlacementState {
+  return {
+    hierarchy: input?.hierarchy === 'floating' ? 'floating' : 'docked',
+    inspector: input?.inspector === 'floating' ? 'floating' : 'docked',
+    project: input?.project === 'floating' ? 'floating' : 'docked',
+  }
+}
+
+const panelPlacement = computed<PanelPlacementState>(() => {
+  const source = (sceneStore.$state as unknown as PanelPlacementHolder).panelPlacement ??
+    (sceneStore as unknown as PanelPlacementHolder).panelPlacement ??
+    null
+  return normalizePanelPlacementState(source)
+})
+
+const TOOLBAR_OFFSET = 12
+const TOOLBAR_MIN_MARGIN = 16
+
+const transformToolbarStyle = reactive<{ top: string; left: string }>({
+  top: `${TOOLBAR_MIN_MARGIN}px`,
+  left: `${TOOLBAR_MIN_MARGIN}px`,
+})
+
+const viewportToolbarStyle = reactive<{ top: string; left: string }>({
+  top: `${TOOLBAR_MIN_MARGIN}px`,
+  left: `${TOOLBAR_MIN_MARGIN}px`,
+})
+
+let hierarchyPanelObserver: ResizeObserver | null = null
+let inspectorPanelObserver: ResizeObserver | null = null
+let observedHierarchyElement: Element | null = null
+let observedInspectorElement: Element | null = null
+let viewportResizeObserver: ResizeObserver | null = null
+let transformToolbarResizeObserver: ResizeObserver | null = null
+let viewportToolbarResizeObserver: ResizeObserver | null = null
+const transformToolbarHostRef = ref<HTMLDivElement | null>(null)
+const viewportToolbarHostRef = ref<HTMLDivElement | null>(null)
+
 let pointerTrackingState: PointerTrackingState | null = null
 
 type CameraTransitionState = {
@@ -167,6 +210,168 @@ let cameraTransitionState: CameraTransitionState | null = null
 let transformGroupState: TransformGroupState | null = null
 let pendingSkyboxSettings: SceneSkyboxSettings | null = null
 let pendingSceneGraphSync = false
+
+function clampToRange(value: number, min: number, max: number) {
+  if (Number.isNaN(value)) {
+    return min
+  }
+  if (max <= min) {
+    return min
+  }
+  return Math.min(Math.max(value, min), max)
+}
+
+function getHierarchyPanelElement(): HTMLElement | null {
+  if (typeof document === 'undefined') {
+    return null
+  }
+  if (!panelVisibility.value.hierarchy) {
+    return null
+  }
+  const placement = panelPlacement.value.hierarchy
+  if (placement === 'floating') {
+    return document.querySelector('.floating-panel.hierarchy-floating .panel-card') as HTMLElement | null
+  }
+  return document.querySelector('.panel.hierarchy-panel .panel-card') as HTMLElement | null
+}
+
+function getInspectorPanelElement(): HTMLElement | null {
+  if (typeof document === 'undefined') {
+    return null
+  }
+  if (!panelVisibility.value.inspector) {
+    return null
+  }
+  const placement = panelPlacement.value.inspector
+  if (placement === 'floating') {
+    return document.querySelector('.floating-panel.inspector-floating .panel-card') as HTMLElement | null
+  }
+  return document.querySelector('.panel.inspector-panel .panel-card') as HTMLElement | null
+}
+
+function updateTransformToolbarPosition() {
+  const viewport = viewportEl.value
+  if (!viewport) {
+    return
+  }
+  const viewportRect = viewport.getBoundingClientRect()
+  if (viewportRect.width <= 0 || viewportRect.height <= 0) {
+    return
+  }
+
+  const panelEl = getHierarchyPanelElement()
+  const toolbarEl = transformToolbarHostRef.value
+  const toolbarWidth = toolbarEl?.offsetWidth ?? 0
+  const toolbarHeight = toolbarEl?.offsetHeight ?? 0
+
+  if (!panelEl) {
+    const maxLeftFallback = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.width - toolbarWidth - TOOLBAR_MIN_MARGIN)
+    const fallbackLeft = clampToRange(TOOLBAR_MIN_MARGIN, TOOLBAR_MIN_MARGIN, maxLeftFallback)
+    transformToolbarStyle.left = `${fallbackLeft}px`
+    const maxTopFallback = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.height - toolbarHeight - TOOLBAR_MIN_MARGIN)
+    const fallbackTop = clampToRange(TOOLBAR_MIN_MARGIN, TOOLBAR_MIN_MARGIN, maxTopFallback)
+    transformToolbarStyle.top = `${fallbackTop}px`
+    return
+  }
+
+  const panelRect = panelEl.getBoundingClientRect()
+  const maxLeft = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.width - toolbarWidth - TOOLBAR_MIN_MARGIN)
+  const maxTop = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.height - toolbarHeight - TOOLBAR_MIN_MARGIN)
+  const candidateLeft = panelRect.right - viewportRect.left + TOOLBAR_OFFSET
+  const candidateTop = panelRect.top - viewportRect.top + TOOLBAR_OFFSET
+  const computedLeft = clampToRange(candidateLeft, TOOLBAR_MIN_MARGIN, maxLeft)
+  const computedTop = clampToRange(candidateTop, TOOLBAR_MIN_MARGIN, maxTop)
+  transformToolbarStyle.left = `${computedLeft}px`
+  transformToolbarStyle.top = `${computedTop}px`
+}
+
+function updateViewportToolbarPosition() {
+  const viewport = viewportEl.value
+  if (!viewport) {
+    return
+  }
+  const viewportRect = viewport.getBoundingClientRect()
+  if (viewportRect.width <= 0 || viewportRect.height <= 0) {
+    return
+  }
+
+  const panelEl = getInspectorPanelElement()
+  const toolbarEl = viewportToolbarHostRef.value
+  const toolbarWidth = toolbarEl?.offsetWidth ?? 0
+  const toolbarHeight = toolbarEl?.offsetHeight ?? 0
+
+  if (!panelEl) {
+    const defaultLeft = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.width - toolbarWidth - TOOLBAR_MIN_MARGIN)
+    viewportToolbarStyle.left = `${defaultLeft}px`
+    const maxTopFallback = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.height - toolbarHeight - TOOLBAR_MIN_MARGIN)
+    const fallbackTop = clampToRange(TOOLBAR_MIN_MARGIN, TOOLBAR_MIN_MARGIN, maxTopFallback)
+    viewportToolbarStyle.top = `${fallbackTop}px`
+    return
+  }
+
+  const panelRect = panelEl.getBoundingClientRect()
+  const maxLeft = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.width - toolbarWidth - TOOLBAR_MIN_MARGIN)
+  const maxTop = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.height - toolbarHeight - TOOLBAR_MIN_MARGIN)
+  const candidateLeft = panelRect.left - viewportRect.left - toolbarWidth - TOOLBAR_OFFSET
+  const candidateTop = panelRect.top - viewportRect.top + TOOLBAR_OFFSET
+  const computedLeft = clampToRange(candidateLeft, TOOLBAR_MIN_MARGIN, maxLeft)
+  const computedTop = clampToRange(candidateTop, TOOLBAR_MIN_MARGIN, maxTop)
+  viewportToolbarStyle.left = `${computedLeft}px`
+  viewportToolbarStyle.top = `${computedTop}px`
+}
+
+function refreshPanelObservers() {
+  if (typeof ResizeObserver === 'undefined') {
+    return
+  }
+  const hierarchyEl = getHierarchyPanelElement()
+  if (observedHierarchyElement !== hierarchyEl) {
+    if (hierarchyPanelObserver && observedHierarchyElement) {
+      hierarchyPanelObserver.unobserve(observedHierarchyElement)
+    }
+    observedHierarchyElement = hierarchyEl
+    if (hierarchyEl) {
+      if (!hierarchyPanelObserver) {
+        hierarchyPanelObserver = new ResizeObserver(() => scheduleToolbarUpdate())
+      }
+      hierarchyPanelObserver.observe(hierarchyEl)
+    }
+  }
+
+  const inspectorEl = getInspectorPanelElement()
+  if (observedInspectorElement !== inspectorEl) {
+    if (inspectorPanelObserver && observedInspectorElement) {
+      inspectorPanelObserver.unobserve(observedInspectorElement)
+    }
+    observedInspectorElement = inspectorEl
+    if (inspectorEl) {
+      if (!inspectorPanelObserver) {
+        inspectorPanelObserver = new ResizeObserver(() => scheduleToolbarUpdate())
+      }
+      inspectorPanelObserver.observe(inspectorEl)
+    }
+  }
+}
+
+function scheduleToolbarUpdate() {
+  nextTick(() => {
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(() => {
+        updateTransformToolbarPosition()
+        updateViewportToolbarPosition()
+        refreshPanelObservers()
+      })
+    } else {
+      updateTransformToolbarPosition()
+      updateViewportToolbarPosition()
+      refreshPanelObservers()
+    }
+  })
+}
+
+function handleViewportOverlayResize() {
+  scheduleToolbarUpdate()
+}
 
 function resolveNodeIdFromObject(object: THREE.Object3D | null): string | null {
   let current: THREE.Object3D | null = object
@@ -1915,7 +2120,7 @@ function initScene() {
   transformControls.addEventListener('dragging-changed', draggingChangedHandler as any)
   transformControls.addEventListener('objectChange', handleTransformChange)
   scene.add(transformControls.getHelper())
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x888888, 2))
+  
 
   bindControlsToCamera(camera)
   if (cameraProjectionMode.value !== activeCameraMode && (cameraProjectionMode.value === 'orthographic' || cameraProjectionMode.value === 'perspective')) {
@@ -3573,12 +3778,45 @@ onMounted(() => {
   attachSelection(props.selectedNodeId)
   updateSelectionHighlights()
   window.addEventListener('keyup', handleViewportShortcut, { capture: true })
+  if (typeof window !== 'undefined') {
+    window.addEventListener('resize', handleViewportOverlayResize, { passive: true })
+  }
+  scheduleToolbarUpdate()
+  if (viewportEl.value && typeof ResizeObserver !== 'undefined') {
+    viewportResizeObserver = new ResizeObserver(() => scheduleToolbarUpdate())
+    viewportResizeObserver.observe(viewportEl.value)
+  }
 })
 
 onBeforeUnmount(() => {
   disposeSceneNodes()
   disposeScene()
   window.removeEventListener('keyup', handleViewportShortcut, { capture: true })
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('resize', handleViewportOverlayResize)
+  }
+  if (hierarchyPanelObserver) {
+    hierarchyPanelObserver.disconnect()
+    hierarchyPanelObserver = null
+    observedHierarchyElement = null
+  }
+  if (inspectorPanelObserver) {
+    inspectorPanelObserver.disconnect()
+    inspectorPanelObserver = null
+    observedInspectorElement = null
+  }
+  if (viewportResizeObserver) {
+    viewportResizeObserver.disconnect()
+    viewportResizeObserver = null
+  }
+  if (transformToolbarResizeObserver) {
+    transformToolbarResizeObserver.disconnect()
+    transformToolbarResizeObserver = null
+  }
+  if (viewportToolbarResizeObserver) {
+    viewportToolbarResizeObserver.disconnect()
+    viewportToolbarResizeObserver = null
+  }
 })
 
 watch(cameraControlMode, (mode) => {
@@ -3604,6 +3842,44 @@ watch(
   },
   { deep: true }
 )
+
+watch(
+  () => [panelVisibility.value.hierarchy, panelPlacement.value.hierarchy],
+  () => {
+    scheduleToolbarUpdate()
+  }
+)
+
+watch(
+  () => [panelVisibility.value.inspector, panelPlacement.value.inspector],
+  () => {
+    scheduleToolbarUpdate()
+  }
+)
+
+watch(transformToolbarHostRef, (host) => {
+  if (transformToolbarResizeObserver) {
+    transformToolbarResizeObserver.disconnect()
+    transformToolbarResizeObserver = null
+  }
+  if (host && typeof ResizeObserver !== 'undefined') {
+    transformToolbarResizeObserver = new ResizeObserver(() => scheduleToolbarUpdate())
+    transformToolbarResizeObserver.observe(host)
+  }
+  scheduleToolbarUpdate()
+})
+
+watch(viewportToolbarHostRef, (host) => {
+  if (viewportToolbarResizeObserver) {
+    viewportToolbarResizeObserver.disconnect()
+    viewportToolbarResizeObserver = null
+  }
+  if (host && typeof ResizeObserver !== 'undefined') {
+    viewportToolbarResizeObserver = new ResizeObserver(() => scheduleToolbarUpdate())
+    viewportToolbarResizeObserver.observe(host)
+  }
+  scheduleToolbarUpdate()
+})
 
 watch(
   () => props.selectedNodeId,
@@ -3650,29 +3926,33 @@ defineExpose<SceneViewportHandle>({
 
 <template>
   <div ref="viewportEl" class="scene-viewport">
-    <TransformToolbar
-      :active-tool="props.activeTool"
-      @change-tool="emit('changeTool', $event)"
-    />
-    <ViewportToolbar
-      :show-grid="gridVisible"
-      :show-axes="axesVisible"
-      :camera-mode="cameraProjectionMode"
-      :camera-control-mode="cameraControlMode"
-      :can-drop-selection="canDropSelection"
-      :can-align-selection="canAlignSelection"
-      :skybox-settings="skyboxSettings"
-      :skybox-presets="skyboxPresetList"
-      @reset-camera="resetCameraView"
-      @drop-to-ground="dropSelectionToGround"
-      @select-skybox-preset="handleSkyboxPresetSelect"
-      @change-skybox-parameter="handleSkyboxParameterChange"
-      @align-selection="handleAlignSelection"
-      @capture-screenshot="handleCaptureScreenshot"
-      @orbit-left="handleOrbitLeft"
-      @orbit-right="handleOrbitRight"
-      @toggle-camera-control="handleToggleCameraControlMode"
-    />
+    <div ref="transformToolbarHostRef" class="transform-toolbar-host" :style="transformToolbarStyle">
+      <TransformToolbar
+        :active-tool="props.activeTool"
+        @change-tool="emit('changeTool', $event)"
+      />
+    </div>
+    <div ref="viewportToolbarHostRef" class="viewport-toolbar-host" :style="viewportToolbarStyle">
+      <ViewportToolbar
+        :show-grid="gridVisible"
+        :show-axes="axesVisible"
+        :camera-mode="cameraProjectionMode"
+        :camera-control-mode="cameraControlMode"
+        :can-drop-selection="canDropSelection"
+        :can-align-selection="canAlignSelection"
+        :skybox-settings="skyboxSettings"
+        :skybox-presets="skyboxPresetList"
+        @reset-camera="resetCameraView"
+        @drop-to-ground="dropSelectionToGround"
+        @select-skybox-preset="handleSkyboxPresetSelect"
+        @change-skybox-parameter="handleSkyboxParameterChange"
+        @align-selection="handleAlignSelection"
+        @capture-screenshot="handleCaptureScreenshot"
+        @orbit-left="handleOrbitLeft"
+        @orbit-right="handleOrbitRight"
+        @toggle-camera-control="handleToggleCameraControlMode"
+      />
+    </div>
     <div
       ref="surfaceRef"
       class="viewport-surface"
@@ -3722,6 +4002,26 @@ defineExpose<SceneViewportHandle>({
   border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: 10px;
   overflow: hidden;
+}
+
+.transform-toolbar-host,
+.viewport-toolbar-host {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.transform-toolbar-host > :deep(*) {
+  pointer-events: auto;
+}
+
+.viewport-toolbar-host > :deep(*) {
+  pointer-events: auto;
+}
+
+.transform-toolbar-host,
+.viewport-toolbar-host {
+  transition: top 180ms ease, left 180ms ease;
 }
 
 .viewport-surface {
