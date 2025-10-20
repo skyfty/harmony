@@ -487,6 +487,24 @@ async function handleEditorViewShortcut(event: KeyboardEvent) {
         }
         break
       }
+      case 'KeyL': {
+        if (event.shiftKey) {
+          handled = sceneStore.toggleSelectionLock()
+        }
+        break
+      }
+      case 'KeyH': {
+        if (event.shiftKey) {
+          handled = sceneStore.toggleSelectionVisibility()
+        }
+        break
+      }
+      case 'KeyT': {
+        if (event.shiftKey) {
+          handled = sceneStore.toggleSelectionTransparency()
+        }
+        break
+      }
       default:
         break
     }

@@ -62,6 +62,8 @@ const MAX_SPAWN_ATTEMPTS = 64
 const COLLISION_MARGIN = 0.35
 const DEFAULT_SPAWN_RADIUS = GRID_CELL_SIZE * 0.75
 const GROUND_ASSET_ID = 'preset:models/ground.glb'
+const SEMI_TRANSPARENT_OPACITY = 0.35
+const OPACITY_EPSILON = 1e-3
 
 function createVector(x: number, y: number, z: number): Vector3Like {
   return { x, y, z }
@@ -1861,6 +1863,31 @@ export const useSceneStore = defineStore('scene', {
       this.nodes = [...this.nodes]
       commitSceneSnapshot(this)
     },
+    toggleSelectionVisibility(): boolean {
+      const selection = [...this.selectedNodeIds]
+      if (!selection.length) {
+        return false
+      }
+      const nodes = selection
+        .map((id) => findNodeById(this.nodes, id))
+        .filter((node): node is SceneNode => Boolean(node))
+      if (!nodes.length) {
+        return false
+      }
+      const anyVisible = nodes.some((node) => node.visible ?? true)
+      const targetVisible = anyVisible ? false : true
+      const shouldUpdate = nodes.some((node) => (node.visible ?? true) !== targetVisible)
+      if (!shouldUpdate) {
+        return false
+      }
+      this.captureHistorySnapshot()
+      nodes.forEach((node) => {
+        node.visible = targetVisible
+      })
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
+      return true
+    },
     isNodeSelectionLocked(id: string) {
       const node = findNodeById(this.nodes, id)
       return node?.locked ?? false
@@ -1911,6 +1938,75 @@ export const useSceneStore = defineStore('scene', {
       }
       this.nodes = [...this.nodes]
       commitSceneSnapshot(this)
+    },
+    toggleSelectionLock(): boolean {
+      const selection = [...this.selectedNodeIds]
+      if (!selection.length) {
+        return false
+      }
+      const nodes = selection
+        .map((id) => findNodeById(this.nodes, id))
+        .filter((node): node is SceneNode => Boolean(node))
+      if (!nodes.length) {
+        return false
+      }
+      const shouldLock = nodes.some((node) => !(node.locked ?? false))
+      const targetLock = shouldLock
+      const shouldUpdate = nodes.some((node) => (node.locked ?? false) !== targetLock)
+      if (!shouldUpdate) {
+        return false
+      }
+      this.captureHistorySnapshot()
+      const processed = new Set<string>()
+      nodes.forEach((node) => {
+        const current = node.locked ?? false
+        if (current !== targetLock) {
+          node.locked = targetLock
+          processed.add(node.id)
+        }
+      })
+      if (!processed.size) {
+        return false
+      }
+      if (targetLock) {
+        const remainingSelection = this.selectedNodeIds.filter((id) => !processed.has(id))
+        const nextPrimary = remainingSelection[remainingSelection.length - 1] ?? null
+        this.setSelection(remainingSelection, { commit: false, primaryId: nextPrimary })
+      }
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
+      return true
+    },
+    toggleSelectionTransparency(): boolean {
+      const selection = [...this.selectedNodeIds]
+      if (!selection.length) {
+        return false
+      }
+      const nodes = selection
+        .map((id) => findNodeById(this.nodes, id))
+        .filter((node): node is SceneNode => Boolean(node && node.material))
+      if (!nodes.length) {
+        return false
+      }
+      const resolveOpacity = (node: SceneNode) => {
+        const raw = node.material?.opacity
+        return typeof raw === 'number' && Number.isFinite(raw) ? raw : 1
+      }
+      const anyOpaque = nodes.some((node) => resolveOpacity(node) > 0.5)
+      const targetOpacity = anyOpaque ? SEMI_TRANSPARENT_OPACITY : 1
+      const shouldUpdate = nodes.some((node) => Math.abs(resolveOpacity(node) - targetOpacity) > OPACITY_EPSILON)
+      if (!shouldUpdate) {
+        return false
+      }
+      this.captureHistorySnapshot()
+      nodes.forEach((node) => {
+        if (node.material) {
+          node.material.opacity = targetOpacity
+        }
+      })
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
+      return true
     },
     setActiveDirectory(id: string) {
       this.activeDirectoryId = id

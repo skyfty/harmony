@@ -47,7 +47,7 @@ function handleTogglePanel(panel: EditorPanel) {
               density="comfortable"
               rounded="xl"
             >
-              <v-menu>
+              <v-menu transition="none">
                 <template #activator="{ props }">
                   <span v-bind="props">File</span>
                 </template>
@@ -87,7 +87,7 @@ function handleTogglePanel(panel: EditorPanel) {
               density="comfortable"
               rounded="xl"
             >
-              <v-menu>
+              <v-menu transition="none">
                 <template #activator="{ props }">
                   <span v-bind="props">Edit</span>
                 </template>
@@ -176,7 +176,7 @@ function handleTogglePanel(panel: EditorPanel) {
               density="comfortable"
               rounded="xl"
             >
-              <v-menu>
+              <v-menu transition="none">
                 <template #activator="{ props }">
                   <span v-bind="props">Views</span>
                 </template>
