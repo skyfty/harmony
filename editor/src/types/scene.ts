@@ -1,4 +1,5 @@
 import type { GeometryType } from '@/plugins/geometry'
+import type { SceneDynamicMesh } from '@/types/dynamic-mesh'
 
 export type SceneNodeType = 'mesh' | 'light' | 'group' | GeometryType
 
@@ -43,4 +44,5 @@ export interface SceneNode {
   downloadProgress?: number
   downloadStatus?: 'idle' | 'downloading' | 'ready' | 'error'
   downloadError?: string | null
+  dynamicMesh?: SceneDynamicMesh
 }

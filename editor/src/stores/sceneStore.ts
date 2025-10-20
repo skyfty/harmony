@@ -20,6 +20,7 @@ import type { SceneSummary } from '@/types/scene-summary'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { CameraProjectionMode, CameraControlMode, SceneSkyboxSettings, SceneViewportSettings } from '@/types/scene-viewport-settings'
+import type { DynamicMeshVector3, GroundDynamicMesh, SceneDynamicMesh } from '@/types/dynamic-mesh'
 import {
   CUSTOM_SKYBOX_PRESET_ID,
   DEFAULT_SKYBOX_SETTINGS,
@@ -33,7 +34,6 @@ import { loadObjectFromFile } from '@/plugins/assetImport'
 import { generateUuid } from '@/plugins/uuid'
 import { getCachedModelObject, getOrLoadModelObject } from './modelObjectCache'
 
-import groundModelUrl from '@/preset/models/ground.glb?url'
 import {
   cloneAssetList,
   cloneProjectTree,
@@ -75,8 +75,6 @@ export interface SceneImportResult {
 
 const HISTORY_LIMIT = 50
 
-const DEFAULT_GROUND_SIZE = 100
-
 const GRID_CELL_SIZE = 1
 const CAMERA_NEAR = 0.1
 const CAMERA_FAR = 500
@@ -84,8 +82,11 @@ const CAMERA_DISTANCE_EPSILON = 1e-6
 const MAX_SPAWN_ATTEMPTS = 64
 const COLLISION_MARGIN = 0.35
 const DEFAULT_SPAWN_RADIUS = GRID_CELL_SIZE * 0.75
-const GROUND_ASSET_ID = 'preset:models/ground.glb'
+const GROUND_NODE_ID = 'harmony:ground'
+const DEFAULT_GROUND_EXTENT = 1000
+const DEFAULT_GROUND_CELL_SIZE = GRID_CELL_SIZE
 const SEMI_TRANSPARENT_OPACITY = 0.35
+const HEIGHT_EPSILON = 1e-5
 
 declare module '@/types/scene-state' {
   interface SceneState {
@@ -111,33 +112,273 @@ function computeForwardVector(position: Vector3Like, target: Vector3Like): Vecto
 
 type LightNodeExtras = Partial<Omit<LightNodeProperties, 'type' | 'color' | 'intensity' | 'target'>>
 
-const groundAsset: ProjectAsset = {
-  id: 'preset:models/ground.glb',
-  name: 'Ground Plane',
-  type: 'model',
-  downloadUrl: groundModelUrl,
-  previewColor: '#8d6e63',
-  thumbnail: null,
-  description: 'Preset/Models/Ground',
-  gleaned: false,
+const LEGACY_GROUND_ASSET_ID = 'preset:models/ground.glb'
+
+function cloneDynamicMeshVector3(vec: DynamicMeshVector3): DynamicMeshVector3 {
+  return { x: vec.x, y: vec.y, z: vec.z }
 }
 
-const groundAssetCategoryId = determineAssetCategoryId(groundAsset)
-const groundAssetSource: AssetSourceMetadata = {
-  type: 'package',
-  providerId: 'preset',
-  originalAssetId: groundAsset.id,
+function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMesh {
+  return {
+    type: 'ground',
+    width: definition.width,
+    depth: definition.depth,
+    rows: definition.rows,
+    columns: definition.columns,
+    cellSize: definition.cellSize,
+    heightMap: { ...(definition.heightMap ?? {}) },
+    textureDataUrl: definition.textureDataUrl ?? null,
+    textureName: definition.textureName ?? null,
+  }
+}
+
+function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh | undefined {
+  if (!mesh) {
+    return undefined
+  }
+  switch (mesh.type) {
+    case 'ground':
+      return cloneGroundDynamicMesh(mesh)
+    case 'wall':
+      return {
+        type: 'wall',
+        segments: mesh.segments.map((segment) => ({
+          start: cloneDynamicMeshVector3(segment.start),
+          end: cloneDynamicMeshVector3(segment.end),
+          height: segment.height,
+          thickness: segment.thickness,
+        })),
+      }
+    case 'platform':
+      return {
+        type: 'platform',
+        footprint: mesh.footprint.map(cloneDynamicMeshVector3),
+        height: mesh.height,
+      }
+    default:
+      return undefined
+  }
+}
+
+function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynamicMesh> = {}): GroundDynamicMesh {
+  const cellSize = overrides.cellSize ?? DEFAULT_GROUND_CELL_SIZE
+  const derivedColumns = overrides.columns ?? (overrides.width
+    ? Math.max(1, Math.round(overrides.width / cellSize))
+    : Math.max(1, Math.round(DEFAULT_GROUND_EXTENT / cellSize)))
+  const derivedRows = overrides.rows ?? (overrides.depth
+    ? Math.max(1, Math.round(overrides.depth / cellSize))
+    : Math.max(1, Math.round(DEFAULT_GROUND_EXTENT / cellSize)))
+  const width = overrides.width ?? derivedColumns * cellSize
+  const depth = overrides.depth ?? derivedRows * cellSize
+  return {
+    type: 'ground',
+    width,
+    depth,
+    rows: derivedRows,
+    columns: derivedColumns,
+    cellSize,
+    heightMap: { ...(overrides.heightMap ?? {}) },
+    textureDataUrl: overrides.textureDataUrl ?? null,
+    textureName: overrides.textureName ?? null,
+  }
+}
+
+function createGroundSceneNode(overrides: { dynamicMesh?: Partial<GroundDynamicMesh> } = {}): SceneNode {
+  const dynamicMesh = createGroundDynamicMeshDefinition(overrides.dynamicMesh)
+  return {
+    id: GROUND_NODE_ID,
+    name: 'Ground',
+    nodeType: 'mesh',
+    material: {
+      color: '#707070',
+      wireframe: false,
+      opacity: 1,
+    },
+    position: createVector(0, 0, 0),
+    rotation: createVector(0, 0, 0),
+    scale: createVector(1, 1, 1),
+    visible: true,
+    locked: true,
+    dynamicMesh,
+  }
+}
+
+function isGroundNode(node: SceneNode): boolean {
+  return node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'ground' || node.sourceAssetId === LEGACY_GROUND_ASSET_ID
+}
+
+function normalizeGroundSceneNode(node: SceneNode | null | undefined): SceneNode {
+  if (!node) {
+    return createGroundSceneNode()
+  }
+  if (node.dynamicMesh?.type === 'ground') {
+    return {
+      ...node,
+      id: GROUND_NODE_ID,
+      name: 'Ground',
+      nodeType: 'mesh',
+      material: {
+        color: node.material?.color ?? '#707070',
+        wireframe: false,
+        opacity: 1,
+      },
+      position: createVector(0, 0, 0),
+      rotation: createVector(0, 0, 0),
+      scale: createVector(1, 1, 1),
+      visible: node.visible ?? true,
+      locked: true,
+      dynamicMesh: createGroundDynamicMeshDefinition(node.dynamicMesh),
+      sourceAssetId: undefined,
+    }
+  }
+  if (node.sourceAssetId === LEGACY_GROUND_ASSET_ID) {
+    return createGroundSceneNode()
+  }
+  return createGroundSceneNode()
+}
+
+function ensureGroundNode(nodes: SceneNode[]): SceneNode[] {
+  let groundNode: SceneNode | null = null
+  const others: SceneNode[] = []
+  nodes.forEach((node) => {
+    if (!groundNode && isGroundNode(node)) {
+      groundNode = normalizeGroundSceneNode(node)
+    } else {
+      others.push(node)
+    }
+  })
+  if (!groundNode) {
+    groundNode = createGroundSceneNode()
+  }
+  return [groundNode, ...others]
+}
+
+function findGroundNode(nodes: SceneNode[]): SceneNode | null {
+  for (const node of nodes) {
+    if (isGroundNode(node)) {
+      return node
+    }
+    if (node.children?.length) {
+      const nested = findGroundNode(node.children)
+      if (nested) {
+        return nested
+      }
+    }
+  }
+  return null
+}
+
+function stripLegacyGroundAssetFromCatalog(
+  catalog?: Record<string, ProjectAsset[]> | null,
+): Record<string, ProjectAsset[]> | null | undefined {
+  if (!catalog) {
+    return catalog
+  }
+  let mutated = false
+  const next: Record<string, ProjectAsset[]> = {}
+  Object.entries(catalog).forEach(([categoryId, assets]) => {
+    if (!Array.isArray(assets) || assets.length === 0) {
+      next[categoryId] = assets ?? []
+      return
+    }
+    const filtered = assets.filter((asset) => asset.id !== LEGACY_GROUND_ASSET_ID)
+    if (filtered.length !== assets.length) {
+      mutated = true
+    }
+    next[categoryId] = filtered
+  })
+  return mutated ? next : catalog
+}
+
+function stripLegacyGroundAssetFromIndex(
+  index?: Record<string, AssetIndexEntry> | null,
+): Record<string, AssetIndexEntry> | null | undefined {
+  if (!index) {
+    return index
+  }
+  if (!(LEGACY_GROUND_ASSET_ID in index)) {
+    return index
+  }
+  const { [LEGACY_GROUND_ASSET_ID]: _removed, ...rest } = index
+  return rest
+}
+
+function stripLegacyGroundAssetFromPackageMap(
+  packageMap?: Record<string, string> | null,
+): Record<string, string> | null | undefined {
+  if (!packageMap) {
+    return packageMap
+  }
+  if (!Object.values(packageMap).some((value) => value === LEGACY_GROUND_ASSET_ID)) {
+    return packageMap
+  }
+  const next: Record<string, string> = {}
+  Object.entries(packageMap).forEach(([key, value]) => {
+    if (value !== LEGACY_GROUND_ASSET_ID) {
+      next[key] = value
+    }
+  })
+  return next
+}
+
+type GroundRegionBounds = {
+  minRow: number
+  maxRow: number
+  minColumn: number
+  maxColumn: number
+}
+
+function groundVertexKey(row: number, column: number): string {
+  return `${row}:${column}`
+}
+
+function normalizeGroundBounds(definition: GroundDynamicMesh, bounds: GroundRegionBounds): GroundRegionBounds {
+  const minRow = Math.max(0, Math.min(definition.rows, Math.min(bounds.minRow, bounds.maxRow)))
+  const maxRow = Math.max(0, Math.min(definition.rows, Math.max(bounds.minRow, bounds.maxRow)))
+  const minColumn = Math.max(0, Math.min(definition.columns, Math.min(bounds.minColumn, bounds.maxColumn)))
+  const maxColumn = Math.max(0, Math.min(definition.columns, Math.max(bounds.minColumn, bounds.maxColumn)))
+  return { minRow, maxRow, minColumn, maxColumn }
+}
+
+function applyGroundRegionTransform(
+  definition: GroundDynamicMesh,
+  bounds: GroundRegionBounds,
+  transform: (current: number, row: number, column: number) => number,
+): { definition: GroundDynamicMesh; changed: boolean } {
+  const normalized = normalizeGroundBounds(definition, bounds)
+  const nextHeightMap = { ...definition.heightMap }
+  let changed = false
+  for (let row = normalized.minRow; row <= normalized.maxRow; row += 1) {
+    for (let column = normalized.minColumn; column <= normalized.maxColumn; column += 1) {
+      const key = groundVertexKey(row, column)
+      const current = nextHeightMap[key] ?? 0
+      const next = transform(current, row, column)
+      if (Math.abs(next) <= HEIGHT_EPSILON) {
+        if (key in nextHeightMap) {
+          delete nextHeightMap[key]
+          changed = true
+        }
+      } else if (Math.abs(next - current) > HEIGHT_EPSILON) {
+        nextHeightMap[key] = next
+        changed = true
+      }
+    }
+  }
+  if (!changed) {
+    return { definition, changed: false }
+  }
+  return {
+    definition: {
+      ...definition,
+      heightMap: nextHeightMap,
+    },
+    changed: true,
+  }
 }
 
 const initialAssetCatalog = createEmptyAssetCatalog()
-initialAssetCatalog[groundAssetCategoryId] = [groundAsset]
 
-const initialAssetIndex: Record<string, AssetIndexEntry> = {
-  [groundAsset.id]: {
-    categoryId: groundAssetCategoryId,
-    source: groundAssetSource,
-  },
-}
+const initialAssetIndex: Record<string, AssetIndexEntry> = {}
 
 function createLightNode(options: {
   name: string
@@ -214,24 +455,7 @@ function getLightPreset(type: LightNodeType) {
   }
 }
 
-const initialNodes: SceneNode[] = [
-  {
-  id: generateUuid(),
-    name: 'Ground',
-    nodeType: 'mesh',
-    material: {
-      color: '#707070',
-      wireframe: false,
-      opacity: 1,
-    },
-    position: createVector(0, 0, 0),
-    rotation: createVector(0, 0, 0),
-    scale: createVector(DEFAULT_GROUND_SIZE, 1, DEFAULT_GROUND_SIZE),
-    visible: true,
-    locked: true,
-    sourceAssetId: groundAsset.id,
-  },
-]
+const initialNodes: SceneNode[] = [createGroundSceneNode()]
 
 const placeholderDownloadWatchers = new Map<string, WatchStopHandle>()
 
@@ -545,7 +769,7 @@ function collectCollisionSpheres(nodes: SceneNode[]): CollisionSphere[] {
 
       if (!node.isPlaceholder && node.nodeType !== 'light') {
         const runtimeObject = getRuntimeObject(node.id)
-        if (runtimeObject && node.sourceAssetId !== GROUND_ASSET_ID) {
+  if (runtimeObject && node.dynamicMesh?.type !== 'ground') {
           runtimeObject.updateMatrixWorld(true)
           const bounds = new Box3().setFromObject(runtimeObject)
           if (!bounds.isEmpty()) {
@@ -754,20 +978,12 @@ function cloneNode(node: SceneNode): SceneNode {
     rotation: cloneVector(node.rotation),
     scale: cloneVector(node.scale),
     children: node.children ? node.children.map(cloneNode) : undefined,
+    dynamicMesh: cloneDynamicMeshDefinition(node.dynamicMesh),
   }
-}
-
-function cloneNodeWithFreshIds(node: SceneNode): SceneNode {
-  const cloned = cloneNode(node)
-  cloned.id = generateUuid()
-  if (cloned.children?.length) {
-    cloned.children = cloned.children.map((child) => cloneNodeWithFreshIds(child))
-  }
-  return cloned
 }
 
 function createDefaultSceneNodes(): SceneNode[] {
-  return initialNodes.map((node) => cloneNodeWithFreshIds(node))
+  return initialNodes.map((node) => cloneNode(node))
 }
 
 function cloneSceneNodes(nodes: SceneNode[]): SceneNode[] {
@@ -1324,6 +1540,42 @@ function ensurePackageDirectoryState(state: ScenePersistedState): ScenePersisted
   }
 }
 
+function normalizeGroundState(state: ScenePersistedState): ScenePersistedState {
+  const processedScenes = Array.isArray(state.scenes)
+    ? state.scenes.map((scene) => {
+        if (!scene || typeof scene !== 'object') {
+          return scene
+        }
+        const typedScene = scene as StoredSceneDocument
+        const nodesSource = Array.isArray(typedScene.nodes) ? (typedScene.nodes as SceneNode[]) : []
+        const normalizedNodes = ensureGroundNode(cloneSceneNodes(nodesSource))
+        const selectedIdsSource = Array.isArray(typedScene.selectedNodeIds)
+          ? typedScene.selectedNodeIds.filter((id) => normalizedNodes.some((node) => node.id === id && !isGroundNode(node)))
+          : []
+        const selectedNodeId = selectedIdsSource.includes(typedScene.selectedNodeId ?? '')
+          ? typedScene.selectedNodeId
+          : selectedIdsSource[0] ?? null
+        return {
+          ...typedScene,
+          nodes: normalizedNodes,
+          selectedNodeId,
+          selectedNodeIds: selectedIdsSource,
+          assetCatalog: stripLegacyGroundAssetFromCatalog(typedScene.assetCatalog) ?? typedScene.assetCatalog,
+          assetIndex: stripLegacyGroundAssetFromIndex(typedScene.assetIndex) ?? typedScene.assetIndex,
+          packageAssetMap: stripLegacyGroundAssetFromPackageMap(typedScene.packageAssetMap) ?? typedScene.packageAssetMap,
+        }
+      })
+    : state.scenes
+
+  return {
+    ...state,
+    assetCatalog: stripLegacyGroundAssetFromCatalog(state.assetCatalog) ?? state.assetCatalog,
+    assetIndex: stripLegacyGroundAssetFromIndex(state.assetIndex) ?? state.assetIndex,
+    packageAssetMap: stripLegacyGroundAssetFromPackageMap(state.packageAssetMap) ?? state.packageAssetMap,
+    scenes: processedScenes,
+  }
+}
+
 const sceneStoreMigrationSteps: Array<(state: ScenePersistedState) => ScenePersistedState> = [
   ensureActiveTool,
   ensureCameraAndPanelState,
@@ -1338,6 +1590,7 @@ const sceneStoreMigrationSteps: Array<(state: ScenePersistedState) => ScenePersi
   normalizeSceneSelections,
   ensureAssetCatalogState,
   ensurePackageDirectoryState,
+  normalizeGroundState,
 ]
 
 function migrateScenePersistedState(
@@ -1375,11 +1628,11 @@ function createSceneDocument(
   } = {},
 ): StoredSceneDocument {
   const id = options.id ?? generateUuid()
-  const nodes = options.nodes ? cloneSceneNodes(options.nodes) : []
+  const nodes = ensureGroundNode(options.nodes ? cloneSceneNodes(options.nodes) : [])
   const camera = options.camera ? cloneCameraState(options.camera) : cloneCameraState(defaultCameraState)
-  let selectedNodeId = options.selectedNodeId ?? (nodes[0]?.id ?? null)
+  let selectedNodeId = options.selectedNodeId ?? (nodes.find((node) => !isGroundNode(node))?.id ?? null)
   if (selectedNodeId && !nodes.some((node) => node.id === selectedNodeId)) {
-    selectedNodeId = nodes[0]?.id ?? null
+    selectedNodeId = nodes.find((node) => !isGroundNode(node))?.id ?? null
   }
   const selectedNodeIds = normalizeSelectionIds(nodes, options.selectedNodeIds ?? (selectedNodeId ? [selectedNodeId] : []))
   const now = new Date().toISOString()
@@ -1845,6 +2098,60 @@ export const useSceneStore = defineStore('scene', {
     },
     setActiveTool(tool: EditorTool) {
       this.activeTool = tool
+    },
+    modifyGroundRegion(bounds: GroundRegionBounds, transformer: (current: number, row: number, column: number) => number) {
+      const groundNode = findGroundNode(this.nodes)
+      if (!groundNode) {
+        return false
+      }
+      if (groundNode.dynamicMesh?.type !== 'ground') {
+        groundNode.dynamicMesh = createGroundDynamicMeshDefinition()
+      }
+      const currentDefinition = groundNode.dynamicMesh as GroundDynamicMesh
+      const result = applyGroundRegionTransform(currentDefinition, bounds, transformer)
+      if (!result.changed) {
+        return false
+      }
+      this.captureHistorySnapshot()
+      groundNode.dynamicMesh = result.definition
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
+      return true
+    },
+    raiseGroundRegion(bounds: GroundRegionBounds, amount = 1) {
+      const delta = Number.isFinite(amount) ? amount : 1
+      return this.modifyGroundRegion(bounds, (current) => current + delta)
+    },
+    lowerGroundRegion(bounds: GroundRegionBounds, amount = 1) {
+      const delta = Number.isFinite(amount) ? -Math.abs(amount) : -1
+      return this.modifyGroundRegion(bounds, (current) => current + delta)
+    },
+    resetGroundRegion(bounds: GroundRegionBounds) {
+      return this.modifyGroundRegion(bounds, () => 0)
+    },
+    setGroundTexture(payload: { dataUrl: string | null; name?: string | null }) {
+      const groundNode = findGroundNode(this.nodes)
+      if (!groundNode) {
+        return false
+      }
+      if (groundNode.dynamicMesh?.type !== 'ground') {
+        groundNode.dynamicMesh = createGroundDynamicMeshDefinition()
+      }
+      const definition = groundNode.dynamicMesh as GroundDynamicMesh
+      const nextDataUrl = payload.dataUrl ?? null
+      const nextName = payload.name ?? null
+      if (definition.textureDataUrl === nextDataUrl && definition.textureName === nextName) {
+        return false
+      }
+      this.captureHistorySnapshot()
+      groundNode.dynamicMesh = {
+        ...definition,
+        textureDataUrl: nextDataUrl,
+        textureName: nextName,
+      }
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
+      return true
     },
     setSelection(ids: string[], options: { commit?: boolean; primaryId?: string | null } = {}) {
       const commitChange = options.commit ?? true
@@ -3235,7 +3542,7 @@ export const useSceneStore = defineStore('scene', {
       if (!Array.isArray(ids) || ids.length === 0) {
         return
       }
-      const existingIds = ids.filter((id) => !!findNodeById(this.nodes, id))
+      const existingIds = ids.filter((id) => id !== GROUND_NODE_ID && !!findNodeById(this.nodes, id))
       if (!existingIds.length) {
         return
       }
@@ -3409,7 +3716,6 @@ export const useSceneStore = defineStore('scene', {
         resourceProviderId: this.resourceProviderId,
         viewportSettings: this.viewportSettings,
         nodes: baseNodes,
-        selectedNodeId: baseNodes[0]?.id ?? null,
         assetCatalog: baseAssetCatalog,
         assetIndex: baseAssetIndex,
         packageAssetMap: {},
