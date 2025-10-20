@@ -263,7 +263,7 @@ const defaultViewportSettings: SceneViewportSettings = {
   showGrid: true,
   showAxes: false,
   cameraProjection: 'perspective',
-  cameraControlMode: 'building',
+  cameraControlMode: 'map',
   skybox: cloneSkyboxSettings(defaultSkyboxSettings),
 }
 
@@ -272,7 +272,7 @@ function isCameraProjectionMode(value: unknown): value is CameraProjectionMode {
 }
 
 function isCameraControlMode(value: unknown): value is CameraControlMode {
-  return value === 'orbit' || value === 'building'
+  return value === 'orbit' || value === 'map'
 }
 
 function cloneViewportSettings(settings?: Partial<SceneViewportSettings> | null): SceneViewportSettings {

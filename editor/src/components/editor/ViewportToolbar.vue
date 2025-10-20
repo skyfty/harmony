@@ -190,7 +190,7 @@ const props = defineProps<{
   canDropSelection: boolean
   canAlignSelection: boolean
   skyboxSettings: SceneSkyboxSettings
-  cameraControlMode: 'orbit' | 'building'
+  cameraControlMode: 'orbit' | 'map'
   skyboxPresets: SkyboxPresetDefinition[]
 }>()
 
@@ -245,12 +245,12 @@ const skyboxParameterDefinitions = [
 
 const cameraModeTitle = computed(() =>
   cameraControlMode.value === 'orbit'
-    ? 'Switch to Building Camera Controls'
+    ? 'Switch to Map Camera Controls'
     : 'Switch to Orbit Camera Controls',
 )
 
 const cameraControlModeIcon = computed(() =>
-  cameraControlMode.value === 'orbit' ? 'mdi-orbit' : 'mdi-city-variant-outline',
+  cameraControlMode.value === 'orbit' ? 'mdi-orbit' : 'mdi-map',
 )
 
 function handlePresetSelect(value: string) {

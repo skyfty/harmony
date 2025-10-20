@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import type { SceneNode, Vector3Like } from '@/types/scene'
 import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
@@ -63,13 +64,7 @@ let scene: THREE.Scene | null = null
 let perspectiveCamera: THREE.PerspectiveCamera | null = null
 let orthographicCamera: THREE.OrthographicCamera | null = null
 let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera | null = null
-let orbitControls: OrbitControls | null = null
-type OrbitMouseButtonsConfig = OrbitControls['mouseButtons']
-type OrbitTouchConfig = OrbitControls['touches']
-let defaultOrbitMouseButtons: OrbitMouseButtonsConfig | null = null
-let defaultOrbitTouches: OrbitTouchConfig | null = null
-let defaultOrbitMinPolarAngle = 0
-let defaultOrbitMaxPolarAngle = Math.PI
+let orbitControls: OrbitControls | MapControls | null = null
 let transformControls: TransformControls | null = null
 let resizeObserver: ResizeObserver | null = null
 let selectionBoxHelper: THREE.Box3Helper | null = null
@@ -138,26 +133,6 @@ const cameraControlMode = computed<CameraControlMode>({
     }
   },
 })
-const BUILDING_MODE_POLAR_ANGLE = THREE.MathUtils.degToRad(60)
-const BUILDING_MOVE_SPEED = 6
-const BUILDING_BOOST_MULTIPLIER = 2
-const BUILDING_ROTATE_SPEED = THREE.MathUtils.degToRad(90)
-const buildingInputState = reactive({
-  forward: false,
-  backward: false,
-  left: false,
-  right: false,
-  rotateLeft: false,
-  rotateRight: false,
-  boost: false,
-})
-const worldUpDirection = new THREE.Vector3(0, 1, 0)
-const buildingForwardHelper = new THREE.Vector3()
-const buildingRightHelper = new THREE.Vector3()
-const buildingMoveHelper = new THREE.Vector3()
-const buildingOffsetHelper = new THREE.Vector3()
-const buildingSphericalHelper = new THREE.Spherical()
-let lastFrameTime: number | null = null
 
 const isDragHovering = ref(false)
 const gridVisible = computed(() => sceneStore.viewportSettings.showGrid)
@@ -1338,7 +1313,7 @@ function handleCaptureScreenshot() {
 }
 
 function handleToggleCameraControlMode() {
-  cameraControlMode.value = cameraControlMode.value === 'orbit' ? 'building' : 'orbit'
+  cameraControlMode.value = cameraControlMode.value === 'orbit' ? 'map' : 'orbit'
 }
 
 function handleOrbitLeft() {
@@ -1726,103 +1701,38 @@ function handleControlsChange() {
   }
 }
 
-function resetBuildingInputState() {
-  buildingInputState.forward = false
-  buildingInputState.backward = false
-  buildingInputState.left = false
-  buildingInputState.right = false
-  buildingInputState.rotateLeft = false
-  buildingInputState.rotateRight = false
-  buildingInputState.boost = false
-}
-
-function ensureCameraMatchesBuildingAngle() {
-  if (!camera || !orbitControls) {
-    return
-  }
-
-  const offset = buildingOffsetHelper
-  offset.copy(camera.position).sub(orbitControls.target)
-  if (offset.lengthSq() < 1e-6) {
-    offset.set(0, 0, 1)
-  }
-
-  buildingSphericalHelper.setFromVector3(offset)
-  buildingSphericalHelper.phi = BUILDING_MODE_POLAR_ANGLE
-  offset.setFromSpherical(buildingSphericalHelper)
-
-  const target = orbitControls.target
-  camera.position.set(target.x + offset.x, target.y + offset.y, target.z + offset.z)
-  if (camera.position.y < MIN_CAMERA_HEIGHT) {
-    camera.position.y = MIN_CAMERA_HEIGHT
-  }
-
-  const previousApplying = isApplyingCameraState
-  if (!previousApplying) {
-    isApplyingCameraState = true
-  }
-  orbitControls.update()
-  if (!previousApplying) {
-    isApplyingCameraState = false
-  }
-
-  clampCameraAboveGround()
-
-  if (perspectiveCamera && camera !== perspectiveCamera) {
-    perspectiveCamera.position.copy(camera.position)
-    perspectiveCamera.quaternion.copy(camera.quaternion)
-  }
-
-  cameraTransitionState = null
-}
-
 function applyCameraControlMode(mode: CameraControlMode) {
-  if (!orbitControls || !camera) {
+  if (!camera || !canvasRef.value) {
     return
   }
 
-  if (!defaultOrbitMouseButtons) {
-    defaultOrbitMouseButtons = { ...orbitControls.mouseButtons }
-  }
-  if (!defaultOrbitTouches) {
-    defaultOrbitTouches = { ...orbitControls.touches }
-  }
-  if (mode === 'building') {
-    orbitControls.mouseButtons = {
-      LEFT: THREE.MOUSE.PAN,
-      MIDDLE: THREE.MOUSE.DOLLY,
-      RIGHT: THREE.MOUSE.ROTATE,
-    }
-    orbitControls.touches.ONE = THREE.TOUCH.PAN
-    orbitControls.touches.TWO = THREE.TOUCH.DOLLY_ROTATE
-    orbitControls.minPolarAngle = BUILDING_MODE_POLAR_ANGLE
-    orbitControls.maxPolarAngle = BUILDING_MODE_POLAR_ANGLE
-    orbitControls.enablePan = true
-    orbitControls.enableRotate = true
-    orbitControls.enableZoom = true
-    orbitControls.screenSpacePanning = false
-    ensureCameraMatchesBuildingAngle()
-  } else {
-    if (defaultOrbitMouseButtons) {
-      orbitControls.mouseButtons = { ...defaultOrbitMouseButtons }
-    }
-    if (defaultOrbitTouches) {
-      orbitControls.touches.ONE = defaultOrbitTouches.ONE
-      orbitControls.touches.TWO = defaultOrbitTouches.TWO
-    }
-  orbitControls.minPolarAngle = defaultOrbitMinPolarAngle
-  orbitControls.maxPolarAngle = defaultOrbitMaxPolarAngle
-    resetBuildingInputState()
+  const previousControls = orbitControls
+  const previousTarget = previousControls ? previousControls.target.clone() : null
+  const previousEnabled = previousControls?.enabled ?? true
+
+  if (previousControls) {
+    previousControls.removeEventListener('change', handleControlsChange)
+    previousControls.dispose()
   }
 
-  const previousApplying = isApplyingCameraState
-  if (!previousApplying) {
-    isApplyingCameraState = true
+  const domElement = canvasRef.value
+  orbitControls = mode === 'map' ? new MapControls(camera, domElement) : new OrbitControls(camera, domElement)
+  orbitControls.enableDamping = false
+  orbitControls.dampingFactor = 0.05
+  orbitControls.minDistance = MIN_CAMERA_DISTANCE
+  orbitControls.maxDistance = MAX_CAMERA_DISTANCE
+  orbitControls.minZoom = MIN_ORTHOGRAPHIC_ZOOM
+  orbitControls.maxZoom = MAX_ORTHOGRAPHIC_ZOOM
+  orbitControls.screenSpacePanning = false
+  if (previousTarget) {
+    orbitControls.target.copy(previousTarget)
+  } else {
+    orbitControls.target.set(DEFAULT_CAMERA_TARGET.x, DEFAULT_CAMERA_TARGET.y, DEFAULT_CAMERA_TARGET.z)
   }
+  orbitControls.enabled = previousEnabled
+  orbitControls.addEventListener('change', handleControlsChange)
+  bindControlsToCamera(camera)
   orbitControls.update()
-  if (!previousApplying) {
-    isApplyingCameraState = false
-  }
 
   clampCameraAboveGround()
 
@@ -1892,21 +1802,6 @@ function initScene() {
   orthographicCamera = ensureOrthographicCamera(width, height)
   orthographicCamera.position.copy(perspectiveCamera.position)
   orthographicCamera.lookAt(new THREE.Vector3(DEFAULT_CAMERA_TARGET.x, DEFAULT_CAMERA_TARGET.y, DEFAULT_CAMERA_TARGET.z))
-
-  orbitControls = new OrbitControls(camera, canvasRef.value)
-  orbitControls.enableDamping = false
-  orbitControls.dampingFactor = 0.05
-  orbitControls.minDistance = MIN_CAMERA_DISTANCE
-  orbitControls.maxDistance = MAX_CAMERA_DISTANCE
-  orbitControls.minZoom = MIN_ORTHOGRAPHIC_ZOOM
-  orbitControls.maxZoom = MAX_ORTHOGRAPHIC_ZOOM
-  orbitControls.target.set(DEFAULT_CAMERA_TARGET.x, DEFAULT_CAMERA_TARGET.y, DEFAULT_CAMERA_TARGET.z)
-  orbitControls.screenSpacePanning = false
-  orbitControls.addEventListener('change', handleControlsChange)
-  defaultOrbitMouseButtons = { ...orbitControls.mouseButtons } as OrbitMouseButtonsConfig
-  defaultOrbitTouches = { ...orbitControls.touches } as OrbitTouchConfig
-  defaultOrbitMinPolarAngle = orbitControls.minPolarAngle
-  defaultOrbitMaxPolarAngle = orbitControls.maxPolarAngle
 
   applyCameraControlMode(cameraControlMode.value)
 
@@ -2085,91 +1980,12 @@ function disposeSkyResources() {
   pmremGenerator = null
 }
 
-function updateBuildingCamera(deltaSeconds: number): boolean {
-  if (
-    cameraControlMode.value !== 'building' ||
-    !camera ||
-    !orbitControls ||
-    !orbitControls.enabled ||
-    deltaSeconds <= 0
-  ) {
-    return false
-  }
-
-  let updated = false
-
-  buildingMoveHelper.set(0, 0, 0)
-
-  if (buildingInputState.forward || buildingInputState.backward || buildingInputState.left || buildingInputState.right) {
-    camera.getWorldDirection(buildingForwardHelper)
-    buildingForwardHelper.y = 0
-    if (buildingForwardHelper.lengthSq() < 1e-6) {
-      buildingForwardHelper.set(0, 0, -1)
-    } else {
-      buildingForwardHelper.normalize()
-    }
-
-    buildingRightHelper.crossVectors(buildingForwardHelper, worldUpDirection)
-    if (buildingRightHelper.lengthSq() < 1e-6) {
-      buildingRightHelper.set(1, 0, 0)
-    } else {
-      buildingRightHelper.normalize()
-    }
-
-    if (buildingInputState.forward) {
-      buildingMoveHelper.add(buildingForwardHelper)
-    }
-    if (buildingInputState.backward) {
-      buildingMoveHelper.sub(buildingForwardHelper)
-    }
-    if (buildingInputState.left) {
-      buildingMoveHelper.sub(buildingRightHelper)
-    }
-    if (buildingInputState.right) {
-      buildingMoveHelper.add(buildingRightHelper)
-    }
-
-    if (buildingMoveHelper.lengthSq() > 0) {
-      buildingMoveHelper.normalize()
-      const speed = BUILDING_MOVE_SPEED * (buildingInputState.boost ? BUILDING_BOOST_MULTIPLIER : 1)
-      buildingMoveHelper.multiplyScalar(speed * deltaSeconds)
-      camera.position.add(buildingMoveHelper)
-      orbitControls.target.add(buildingMoveHelper)
-      updated = true
-    }
-  }
-
-  let rotationDirection = 0
-  if (buildingInputState.rotateLeft) {
-    rotationDirection += 1
-  }
-  if (buildingInputState.rotateRight) {
-    rotationDirection -= 1
-  }
-
-  if (rotationDirection !== 0) {
-    ;(orbitControls as any).rotateLeft?.(rotationDirection * BUILDING_ROTATE_SPEED * deltaSeconds)
-    updated = true
-  }
-
-  if (updated) {
-    cameraTransitionState = null
-    clampCameraAboveGround(false)
-  }
-
-  return updated
-}
-
 function animate() {
   if (!renderer || !scene || !camera) {
     return
   }
 
   requestAnimationFrame(animate)
-
-  const now = performance.now()
-  const deltaSeconds = lastFrameTime === null ? 0 : (now - lastFrameTime) / 1000
-  lastFrameTime = now
 
   let controlsUpdated = false
 
@@ -2216,8 +2032,6 @@ function animate() {
       }
     }
   }
-
-  updateBuildingCamera(deltaSeconds)
 
   if (orbitControls && !controlsUpdated) {
     orbitControls.update()
@@ -2276,13 +2090,6 @@ function disposeScene() {
     orbitControls.dispose()
   }
   orbitControls = null
-
-  resetBuildingInputState()
-  defaultOrbitMouseButtons = null
-  defaultOrbitTouches = null
-  defaultOrbitMinPolarAngle = 0
-  defaultOrbitMaxPolarAngle = Math.PI
-  lastFrameTime = null
 
   if (thumbnailCaptureTimeout) {
     clearTimeout(thumbnailCaptureTimeout)
@@ -3588,113 +3395,6 @@ function isEditableKeyboardTarget(target: EventTarget | null): boolean {
   return element.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
 }
 
-function shouldHandleBuildingInput(event: KeyboardEvent): boolean {
-  if (cameraControlMode.value !== 'building') return false
-  if (event.defaultPrevented) return false
-  if (isEditableKeyboardTarget(event.target)) return false
-  if (props.previewActive) return false
-  return true
-}
-
-function handleBuildingKeyDown(event: KeyboardEvent) {
-  if (!shouldHandleBuildingInput(event)) return
-
-  let handled = false
-
-  switch (event.code) {
-    case 'ArrowUp':
-      buildingInputState.forward = true
-      buildingInputState.backward = false
-      handled = true
-      break
-    case 'ArrowDown':
-      buildingInputState.backward = true
-      buildingInputState.forward = false
-      handled = true
-      break
-    case 'ArrowLeft':
-      buildingInputState.left = true
-      handled = true
-      break
-    case 'ArrowRight':
-      buildingInputState.right = true
-      handled = true
-      break
-    case 'KeyQ':
-      buildingInputState.rotateLeft = true
-      buildingInputState.rotateRight = false
-      handled = true
-      break
-    case 'KeyE':
-      buildingInputState.rotateRight = true
-      buildingInputState.rotateLeft = false
-      handled = true
-      break
-    case 'ShiftLeft':
-    case 'ShiftRight':
-      buildingInputState.boost = true
-      handled = true
-      break
-    default:
-      break
-  }
-
-  if (handled) {
-    event.preventDefault()
-    event.stopPropagation()
-  }
-}
-
-function handleBuildingKeyUp(event: KeyboardEvent) {
-  if (!shouldHandleBuildingInput(event)) return
-
-  let handled = false
-
-  switch (event.code) {
-    case 'ArrowUp':
-      buildingInputState.forward = false
-      handled = true
-      break
-    case 'ArrowDown':
-      buildingInputState.backward = false
-      handled = true
-      break
-    case 'ArrowLeft':
-      buildingInputState.left = false
-      handled = true
-      break
-    case 'ArrowRight':
-      buildingInputState.right = false
-      handled = true
-      break
-    case 'KeyQ':
-      buildingInputState.rotateLeft = false
-      handled = true
-      break
-    case 'KeyE':
-      buildingInputState.rotateRight = false
-      handled = true
-      break
-    case 'ShiftLeft':
-    case 'ShiftRight':
-      buildingInputState.boost = false
-      handled = true
-      break
-    default:
-      break
-  }
-
-  if (handled) {
-    event.preventDefault()
-    event.stopPropagation()
-  }
-}
-
-function handleWindowBlur() {
-  resetBuildingInputState()
-  lastFrameTime = null
-}
-
 function shouldHandleViewportShortcut(event: KeyboardEvent): boolean {
   if (event.defaultPrevented) return false
   if (isEditableKeyboardTarget(event.target)) return false
@@ -3738,18 +3438,12 @@ onMounted(() => {
   attachSelection(props.selectedNodeId)
   updateSelectionHighlights()
   window.addEventListener('keyup', handleViewportShortcut, { capture: true })
-  window.addEventListener('keydown', handleBuildingKeyDown, { capture: true })
-  window.addEventListener('keyup', handleBuildingKeyUp, { capture: true })
-  window.addEventListener('blur', handleWindowBlur)
 })
 
 onBeforeUnmount(() => {
   disposeSceneNodes()
   disposeScene()
   window.removeEventListener('keyup', handleViewportShortcut, { capture: true })
-  window.removeEventListener('keydown', handleBuildingKeyDown, { capture: true })
-  window.removeEventListener('keyup', handleBuildingKeyUp, { capture: true })
-  window.removeEventListener('blur', handleWindowBlur)
 })
 
 watch(cameraControlMode, (mode) => {
