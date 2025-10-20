@@ -71,7 +71,7 @@ function handleTogglePanel(panel: EditorPanel) {
                     </template>
                   </v-list-item>
                   <v-divider />
-                  <v-list-item @click="handleMenuAction('Export:GLB')" class="menu-list-item">
+                  <v-list-item @click="handleMenuAction('Export')" class="menu-list-item">
                     Export
                   </v-list-item>
        

@@ -10,7 +10,21 @@ export type ExportFormat = 'OBJ' | 'PLY' | 'STL' | 'GLTF' | 'GLB'
 export interface SceneExportOptions {
     format: ExportFormat
     fileName?: string
+    includeTextures?: boolean
+    includeAnimations?: boolean
+    includeSkybox?: boolean
+    includeLights?: boolean
+    includeHiddenNodes?: boolean
+    includeSkeletons?: boolean
+    includeCameras?: boolean
+    includeExtras?: boolean
     onProgress?: (progress: number, message?: string) => void
+}
+
+export interface GLBExportSettings {
+    includeAnimations?: boolean
+    onlyVisible?: boolean
+    includeCustomExtensions?: boolean
 }
 
 type RemovedSceneObject = {
@@ -130,16 +144,24 @@ function restoreRemovedObjects(removed: RemovedSceneObject[]) {
     }
 }
 
-export async function exportGLB(scene: THREE.Scene) {
-    const animations = getAnimations(scene)
+export async function exportGLB(scene: THREE.Scene, settings?: GLBExportSettings) {
+    const includeAnimations = settings?.includeAnimations !== false
+    const animations = includeAnimations ? getAnimations(scene) : []
     const optimizedAnimations = []
-    for ( const animation of animations ) {
-        optimizedAnimations.push( animation.clone().optimize() );
+    if (includeAnimations) {
+        for ( const animation of animations ) {
+            optimizedAnimations.push( animation.clone().optimize() );
+        }
     }
     const exporter = new GLTFExporter()
     const removedHelpers = removeEditorHelpers(scene)
     try {
-        const result = await exporter.parseAsync( scene,{ binary: true, animations: optimizedAnimations });
+        const result = await exporter.parseAsync( scene,{
+            binary: true,
+            animations: optimizedAnimations,
+            onlyVisible: settings?.onlyVisible ?? true,
+            includeCustomExtensions: settings?.includeCustomExtensions ?? true,
+        });
         const blob = new Blob([result as ArrayBuffer], { type: 'model/gltf-binary' })
         return blob;
     } finally {

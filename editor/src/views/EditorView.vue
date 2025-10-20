@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import HierarchyPanel from '@/components/layout/HierarchyPanel.vue'
 import InspectorPanel from '@/components/layout/InspectorPanel.vue'
@@ -9,6 +9,10 @@ import PreviewOverlay from '@/components/layout/PreviewOverlay.vue'
 import MenuBar from './MenuBar.vue'
 import SceneManagerDialog from '@/components/layout/SceneManagerDialog.vue'
 import NewSceneDialog from '@/components/layout/NewSceneDialog.vue'
+import SceneExportDialog, {
+  type SceneExportDialogOptions,
+  type SceneExportDialogPayload,
+} from '@/components/layout/SceneExportDialog.vue'
 import {
   useSceneStore,
   type EditorPanel,
@@ -20,7 +24,6 @@ import type { EditorTool } from '@/types/editor-tool'
 import type { SceneCameraState } from '@/types/scene-camera-state'
 import { useUiStore } from '@/stores/uiStore'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
-import { type ExportFormat } from '@/plugins/exporter'
 
 const sceneStore = useSceneStore()
 const uiStore = useUiStore()
@@ -37,7 +40,22 @@ const {
 } = storeToRefs(sceneStore)
 
 const isSceneManagerOpen = ref(false)
+const isExportDialogOpen = ref(false)
 const isExporting = ref(false)
+const exportProgress = ref(0)
+const exportProgressMessage = ref('')
+const exportErrorMessage = ref<string | null>(null)
+const exportDialogFileName = ref('scene')
+const exportPreferences = ref<SceneExportDialogOptions>({
+  includeTextures: true,
+  includeAnimations: true,
+  includeSkybox: true,
+  includeLights: true,
+  includeHiddenNodes: false,
+  includeSkeletons: true,
+  includeCameras: true,
+  includeExtras: true,
+})
 const viewportRef = ref<SceneViewportHandle | null>(null)
 const isNewSceneDialogOpen = ref(false)
 const isPreviewing = ref(false)
@@ -153,16 +171,22 @@ function handleNewAction() {
 function handleOpenAction() {
   isSceneManagerOpen.value = true
 }
-function updateExportProgress(progress: number, message?: string) {
-  const displayMessage = message ?? `Exporting ${Math.round(progress)}%`
-  uiStore.updateLoadingOverlay({
-    title: 'Export Scene',
-    message: displayMessage,
-  })
-  uiStore.updateLoadingProgress(progress, { autoClose: false })
+function openExportDialog() {
+  const rawName = sceneStore.currentScene?.name ?? 'scene'
+  const trimmed = rawName.trim()
+  exportDialogFileName.value = trimmed || 'scene'
+  exportProgress.value = 0
+  exportProgressMessage.value = ''
+  exportErrorMessage.value = null
+  isExportDialogOpen.value = true
 }
 
-async function handleExport(format: ExportFormat) {
+function sanitizeExportFileName(input: string): string {
+  const trimmed = input.trim()
+  return trimmed || 'scene'
+}
+
+async function handleExportDialogConfirm(payload: SceneExportDialogPayload) {
   if (isExporting.value) {
     return
   }
@@ -170,49 +194,71 @@ async function handleExport(format: ExportFormat) {
   const viewport = viewportRef.value
   if (!viewport) {
     console.warn('Scene viewport unavailable for export')
+    exportErrorMessage.value = 'Unable to access the scene viewport; export was cancelled.'
     return
   }
 
   isExporting.value = true
-  const sceneName = sceneStore.currentScene?.name ?? 'scene'
-  uiStore.showLoadingOverlay({
-    title: 'Export Scene',
-    message: `Preparing export ${format}…`,
-    mode: 'determinate',
-    progress: 0,
-    closable: false,
-    autoClose: false,
-  })
+  exportErrorMessage.value = null
+  exportProgress.value = 5
+  exportProgressMessage.value = 'Preparing export...'
+
+  const { fileName, ...preferenceSnapshot } = payload
+  exportPreferences.value = { ...preferenceSnapshot }
+
+  let exportSucceeded = false
 
   try {
     await viewport.exportScene({
-      format,
-      fileName: `${sceneName}-${format.toLowerCase()}`,
-      onProgress: updateExportProgress,
+      format: 'GLB',
+      fileName: sanitizeExportFileName(fileName),
+      includeTextures: payload.includeTextures,
+      includeAnimations: payload.includeAnimations,
+      includeSkybox: payload.includeSkybox,
+      includeLights: payload.includeLights,
+      includeHiddenNodes: payload.includeHiddenNodes,
+      includeSkeletons: payload.includeSkeletons,
+      includeCameras: payload.includeCameras,
+      includeExtras: payload.includeExtras,
+      onProgress: (progress, message) => {
+        exportProgress.value = progress
+        exportProgressMessage.value = message ?? `Export progress ${Math.round(progress)}%`
+      },
     })
 
-    uiStore.updateLoadingOverlay({
-      title: 'Export Scene',
-      message: 'Export Complete',
-      closable: true,
-      autoClose: true,
-      autoCloseDelay: 800,
-    })
-    uiStore.updateLoadingProgress(100, { autoClose: true, autoCloseDelay: 800 })
+    exportSucceeded = true
+    exportProgress.value = 100
+    exportProgressMessage.value = 'Export complete'
   } catch (error) {
-    const message = (error as Error)?.message ?? 'Unknown error'
+    const message = (error as Error)?.message ?? 'Export failed'
+    exportErrorMessage.value = message
+    exportProgressMessage.value = message
     console.error('Scene export failed', error)
-    uiStore.updateLoadingOverlay({
-      title: 'Export Scene',
-      message: `${message}`,
-      closable: true,
-      autoClose: false,
-    })
-    uiStore.updateLoadingProgress(100, { autoClose: false })
   } finally {
     isExporting.value = false
+    if (exportSucceeded) {
+      setTimeout(() => {
+        isExportDialogOpen.value = false
+        exportProgress.value = 0
+        exportProgressMessage.value = ''
+      }, 600)
+    }
   }
 }
+
+function handleExportDialogCancel() {
+  exportProgress.value = 0
+  exportProgressMessage.value = ''
+  exportErrorMessage.value = null
+}
+
+watch(isExportDialogOpen, (open) => {
+  if (!open && !isExporting.value) {
+    exportProgress.value = 0
+    exportProgressMessage.value = ''
+    exportErrorMessage.value = null
+  }
+})
 
 function updatePreviewProgress(progress: number, message?: string) {
   const displayMessage = message ?? `Preparing preview ${Math.round(progress)}%`
@@ -372,9 +418,6 @@ async function handleAction(action: string) {
       exportCurrentScene()
       break
     }
-    case 'Export':
-      console.log('Export action triggered')
-      break
     case 'Preview':
       await handlePreview()
       break
@@ -414,24 +457,9 @@ async function handleAction(action: string) {
       sceneStore.clearSelection()
       break
     }
-    case 'Export:GLTF': {
-      await handleExport('GLTF')
-      break
-    }
-    case 'Export:OBJ': {
-      await handleExport('OBJ')
-      break
-    }
-    case 'Export:PLY': {
-      await handleExport('PLY')
-      break
-    }
-    case 'Export:STL': {
-      await handleExport('STL')
-      break
-    }
+    case 'Export':
     case 'Export:GLB': {
-      await handleExport('GLB')
+      openExportDialog()
       break
     }
     default:
@@ -869,6 +897,17 @@ onBeforeUnmount(() => {
     <NewSceneDialog
       v-model="isNewSceneDialogOpen"
       @confirm="handleCreateScene"
+    />
+    <SceneExportDialog
+      v-model="isExportDialogOpen"
+      :default-file-name="exportDialogFileName"
+      :initial-options="exportPreferences"
+      :exporting="isExporting"
+      :progress="exportProgress"
+      :progress-message="exportProgressMessage"
+      :error-message="exportErrorMessage"
+      @confirm="handleExportDialogConfirm"
+      @cancel="handleExportDialogCancel"
     />
     <div v-if="previewSession" class="preview-overlay-container">
       <PreviewOverlay
