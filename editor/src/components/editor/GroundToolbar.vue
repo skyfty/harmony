@@ -13,6 +13,7 @@ const emit = defineEmits<{
   (event: 'lower'): void
   (event: 'reset'): void
   (event: 'texture'): void
+  (event: 'cancel'): void
 }>()
 
 const isActive = computed(() => props.visible && props.opacity > 0)
@@ -38,6 +39,10 @@ function handleReset() {
 function handleTexture() {
   emit('texture')
 }
+
+function handleCancel() {
+  emit('cancel')
+}
 </script>
 
 <template>
@@ -47,6 +52,12 @@ function handleTexture() {
     :style="containerStyle"
   >
     <v-card class="ground-toolbar-card" elevation="10">
+      <v-btn
+        icon="mdi-close"
+        density="comfortable"
+        title="取消选择"
+        @click="handleCancel"
+      />
       <v-btn
         icon="mdi-arrow-up-bold"
         density="comfortable"

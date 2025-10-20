@@ -3149,10 +3149,29 @@ function updateGroundSelectionToolbarPosition() {
 }
 
 function clearGroundSelection() {
+  if (groundSelectionDragState) {
+    if (canvasRef.value && canvasRef.value.hasPointerCapture(groundSelectionDragState.pointerId)) {
+      canvasRef.value.releasePointerCapture(groundSelectionDragState.pointerId)
+    }
+    groundSelectionDragState = null
+    restoreOrbitAfterGroundSelection()
+  }
   groundSelectionGroup.visible = false
   groundSelection.value = null
   groundSelectionToolbarStyle.opacity = 0
   isGroundToolbarVisible.value = false
+}
+
+function cancelGroundSelection(): boolean {
+  if (!groundSelection.value && !groundSelectionDragState) {
+    return false
+  }
+  clearGroundSelection()
+  return true
+}
+
+function cancelWallSelection(): boolean {
+  return false
 }
 
 function refreshGroundMesh(definition: GroundDynamicMesh | null) {
@@ -3602,6 +3621,36 @@ function handleGroundTextureFileChange(event: Event) {
     scheduleThumbnailCapture()
   }
   reader.readAsDataURL(file)
+}
+
+function handleGroundCancel() {
+  cancelGroundSelection()
+}
+
+function cancelActiveBuildOperation(): boolean {
+  const tool = activeBuildTool.value
+  if (!tool) {
+    return false
+  }
+  switch (tool) {
+    case 'ground':
+      if (cancelGroundSelection()) {
+        return true
+      }
+      activeBuildTool.value = null
+      return true
+    case 'wall':
+      if (cancelWallSelection()) {
+        return true
+      }
+      activeBuildTool.value = null
+      return true
+    case 'platform':
+      activeBuildTool.value = null
+      return true
+    default:
+      return false
+  }
 }
 
 function handleBuildToolChange(tool: BuildTool | null) {
@@ -4272,6 +4321,10 @@ function handleViewportShortcut(event: KeyboardEvent) {
   if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
     switch (event.code) {
       case 'Escape':
+        if (cancelActiveBuildOperation()) {
+          handled = true
+          break
+        }
         if (props.selectedNodeId) {
           emitSelectionChange([])
           handled = true
@@ -4526,6 +4579,7 @@ defineExpose<SceneViewportHandle>({
         :left="groundSelectionToolbarStyle.left"
         :top="groundSelectionToolbarStyle.top"
         :opacity="groundSelectionToolbarStyle.opacity"
+        @cancel="handleGroundCancel"
         @raise="handleGroundRaise"
         @lower="handleGroundLower"
         @reset="handleGroundReset"
