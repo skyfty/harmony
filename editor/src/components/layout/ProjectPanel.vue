@@ -1020,6 +1020,7 @@ onBeforeUnmount(() => {
     :elevation="floating ? 12 : 8"
   >
     <v-toolbar  class="panel-toolbar" height="40px"  title="Project">
+      <v-spacer />
       <v-btn
         class="placement-toggle"
         variant="text"
@@ -1028,7 +1029,6 @@ onBeforeUnmount(() => {
         :title="placementTitle"
         @click="emit('toggle-placement')"
       />
-      <v-spacer />
       <v-btn icon="mdi-window-minimize" size="small" variant="text" @click="emit('collapse')" />
     </v-toolbar>
     <v-divider />

@@ -1030,7 +1030,7 @@ onBeforeUnmount(() => {
     'menu menu menu'
     'hierarchy scene inspector'
     'project project project';
-  gap: 12px;
+  gap: 7px;
   padding: 12px;
   box-sizing: border-box;
   --floating-edge-gap: 18px;

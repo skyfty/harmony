@@ -376,6 +376,8 @@ function handleTreeDragLeave(event: DragEvent) {
     :elevation="floating ? 12 : 4"
   >
     <v-toolbar density="compact" title="Hierarchy" class="panel-toolbar" height="40px">
+
+      <v-spacer />
       <v-btn
         class="placement-toggle"
         variant="text"
@@ -384,7 +386,6 @@ function handleTreeDragLeave(event: DragEvent) {
         :title="placementTitle"
         @click="emit('toggle-placement')"
       />
-      <v-spacer />
       <v-btn icon="mdi-window-minimize" size="small" variant="text" @click="emit('collapse')" />
     </v-toolbar>
     <v-divider />
