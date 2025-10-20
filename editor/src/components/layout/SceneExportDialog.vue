@@ -146,10 +146,9 @@ function handleConfirm() {
     <v-card>
       <v-card-title class="dialog-title">Scene Export</v-card-title>
       <v-card-text>
-        <p class="dialog-hint">Enter a file name and choose what to include in the export. The resulting file is saved as <code>.glb</code>.</p>
         <v-text-field
           v-model="form.fileName"
-          label="文件名"
+          label="File name"
           :disabled="exporting"
           :error="!!fileNameError"
           :error-messages="fileNameError ? [fileNameError] : []"
