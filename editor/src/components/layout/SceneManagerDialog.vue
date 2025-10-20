@@ -21,6 +21,8 @@ const emit = defineEmits<{
   (event: 'delete', sceneId: string): void
   (event: 'rename', payload: { id: string; name: string }): void
   (event: 'request-new'): void
+  (event: 'import-scenes'): void
+  (event: 'export-scenes', sceneIds: string[]): void
 }>()
 
 const dialogOpen = computed({
@@ -34,12 +36,49 @@ const pendingDeleteName = ref('')
 const editingSceneId = ref<string | null>(null)
 const editingSceneName = ref('')
 const selectedSceneId = ref<string | null>(null)
+const selectedSceneIds = ref<string[]>([])
+
+const availableSceneIdSet = computed(() => new Set(props.scenes.map((scene) => scene.id)))
+
+function normalizeSelection(ids: string[]): string[] {
+  if (!ids.length) {
+    return []
+  }
+  const set = availableSceneIdSet.value
+  const seen = new Set<string>()
+  const normalized: string[] = []
+  ids.forEach((id) => {
+    if (set.has(id) && !seen.has(id)) {
+      normalized.push(id)
+      seen.add(id)
+    }
+  })
+  return normalized
+}
+
+function applySelection(ids: string[]) {
+  if (!props.scenes.length) {
+    selectedSceneIds.value = []
+    selectedSceneId.value = null
+    return
+  }
+  const normalized = normalizeSelection(ids)
+  if (!normalized.length) {
+    const fallback = props.currentSceneId ?? props.scenes[0]?.id ?? null
+    selectedSceneIds.value = fallback ? [fallback] : []
+    selectedSceneId.value = fallback
+    return
+  }
+  selectedSceneIds.value = normalized
+  selectedSceneId.value = normalized[normalized.length - 1] ?? null
+}
 
 watch(dialogOpen, (open) => {
   if (!open) {
     deleteDialogOpen.value = false
     editingSceneId.value = null
     selectedSceneId.value = null
+    selectedSceneIds.value = []
   }
 })
 
@@ -47,7 +86,8 @@ watch(
   () => props.modelValue,
   (open) => {
     if (open) {
-      selectedSceneId.value = props.currentSceneId ?? props.scenes[0]?.id ?? null
+      const initial = props.currentSceneId ?? props.scenes[0]?.id ?? null
+      applySelection(initial ? [initial] : [])
     }
   },
   { immediate: true },
@@ -58,10 +98,18 @@ watch(
   (scenes) => {
     if (!scenes.length) {
       selectedSceneId.value = null
+      selectedSceneIds.value = []
       return
     }
-    if (!selectedSceneId.value || !scenes.some((scene) => scene.id === selectedSceneId.value)) {
-      selectedSceneId.value = props.currentSceneId ?? scenes[0]?.id ?? null
+    const nextSelection = normalizeSelection(selectedSceneIds.value)
+    if (!nextSelection.length) {
+      const fallback = props.currentSceneId ?? scenes[0]?.id ?? null
+      applySelection(fallback ? [fallback] : [])
+      return
+    }
+    selectedSceneIds.value = nextSelection
+    if (!selectedSceneId.value || !nextSelection.includes(selectedSceneId.value)) {
+      selectedSceneId.value = nextSelection[nextSelection.length - 1] ?? null
     }
   },
   { deep: true },
@@ -90,11 +138,6 @@ function cancelDelete() {
   deleteDialogOpen.value = false
   pendingDeleteId.value = null
   pendingDeleteName.value = ''
-}
-
-function handleListSelect(sceneId: string) {
-  editingSceneId.value = null
-  selectedSceneId.value = sceneId
 }
 
 function confirmSelection() {
@@ -152,6 +195,40 @@ function handleRenameKeydown(event: KeyboardEvent) {
 
 const hasScenes = computed(() => props.scenes.length > 0)
 
+const selectedSceneIdsSet = computed(() => new Set(selectedSceneIds.value))
+
+const canExportScenes = computed(() => selectedSceneIds.value.length > 0)
+
+function handleListClick(sceneId: string, event: MouseEvent | KeyboardEvent) {
+  editingSceneId.value = null
+  const multi = event.ctrlKey || event.metaKey
+  if (!multi) {
+    applySelection([sceneId])
+    return
+  }
+  const set = new Set(selectedSceneIds.value)
+  if (set.has(sceneId)) {
+    set.delete(sceneId)
+  } else {
+    set.add(sceneId)
+  }
+  const next = Array.from(set)
+  if (!next.length) {
+    applySelection([sceneId])
+    return
+  }
+  applySelection(next)
+}
+
+function requestImportScenes() {
+  emit('import-scenes')
+}
+
+function requestExportScenes() {
+  if (!canExportScenes.value) return
+  emit('export-scenes', [...selectedSceneIds.value])
+}
+
 const previewScene = computed(() => {
   if (!selectedSceneId.value) return null
   return props.scenes.find((scene) => scene.id === selectedSceneId.value) ?? null
@@ -204,8 +281,9 @@ function formatDateTime(value: string) {
                 :class="{
                   'is-active': scene.id === selectedSceneId,
                   'is-current': scene.id === currentSceneId,
+                  'is-selected': selectedSceneIdsSet.has(scene.id),
                 }"
-                @click="handleListSelect(scene.id)"
+                @click="handleListClick(scene.id, $event)"
               >
                 <div class="scene-info" @dblclick.stop="startRename(scene)">
                   <div v-if="editingSceneId === scene.id" class="scene-name-edit">
@@ -278,7 +356,27 @@ function formatDateTime(value: string) {
         </template>
       </v-card-text>
       <v-card-actions class="scene-manager-actions">
-
+        <div class="actions-left">
+          <v-btn
+            variant="tonal"
+            color="primary"
+            density="comfortable"
+            prepend-icon="mdi-upload"
+            @click="requestImportScenes"
+          >
+            导入场景
+          </v-btn>
+          <v-btn
+            variant="tonal"
+            color="primary"
+            density="comfortable"
+            prepend-icon="mdi-download"
+            :disabled="!canExportScenes"
+            @click="requestExportScenes"
+          >
+            导出场景
+          </v-btn>
+        </div>
         <v-spacer />
         <v-btn variant="text" color="primary" @click="dialogOpen = false">Close</v-btn>
         <v-btn color="primary" variant="flat" :disabled="!previewScene" @click="confirmSelection">
@@ -387,6 +485,11 @@ function formatDateTime(value: string) {
 .scene-list-item.is-active {
   background-color: rgba(129, 212, 250, 0.14);
   border-color: rgba(129, 212, 250, 0.45);
+}
+
+.scene-list-item.is-selected:not(.is-active) {
+  background-color: rgba(129, 212, 250, 0.08);
+  border-color: rgba(129, 212, 250, 0.3);
 }
 
 .scene-list-item.is-current::before {

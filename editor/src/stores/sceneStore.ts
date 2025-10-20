@@ -50,6 +50,28 @@ export type EditorPanel = 'hierarchy' | 'inspector' | 'project'
 
 export type HierarchyDropPosition = 'before' | 'after' | 'inside'
 
+export const SCENE_BUNDLE_FORMAT_VERSION = 1
+
+export interface SceneBundleExportPayload {
+  formatVersion: number
+  exportedAt: string
+  scenes: StoredSceneDocument[]
+}
+
+export interface SceneBundleImportScene {
+  [key: string]: unknown
+}
+
+export interface SceneBundleImportPayload {
+  formatVersion: number
+  scenes: SceneBundleImportScene[]
+}
+
+export interface SceneImportResult {
+  importedSceneIds: string[]
+  renamedScenes: Array<{ originalName: string; renamedName: string }>
+}
+
 const HISTORY_LIMIT = 50
 
 const DEFAULT_GROUND_SIZE = 100
@@ -715,6 +737,107 @@ function createDefaultSceneNodes(): SceneNode[] {
 
 function cloneSceneNodes(nodes: SceneNode[]): SceneNode[] {
   return nodes.map(cloneNode)
+}
+
+function cloneSceneDocumentForExport(scene: StoredSceneDocument): StoredSceneDocument {
+  return createSceneDocument(scene.name, {
+    id: scene.id,
+    nodes: scene.nodes,
+    selectedNodeId: scene.selectedNodeId,
+    selectedNodeIds: scene.selectedNodeIds,
+    camera: scene.camera,
+    thumbnail: scene.thumbnail ?? null,
+    resourceProviderId: scene.resourceProviderId,
+    createdAt: scene.createdAt,
+    updatedAt: scene.updatedAt,
+    assetCatalog: scene.assetCatalog,
+    assetIndex: scene.assetIndex,
+    packageAssetMap: scene.packageAssetMap,
+    viewportSettings: scene.viewportSettings,
+  })
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function parseVector3Like(value: unknown): Vector3Like | null {
+  if (!isPlainObject(value)) {
+    return null
+  }
+  const { x, y, z } = value
+  const nx = typeof x === 'number' ? x : Number(x)
+  const ny = typeof y === 'number' ? y : Number(y)
+  const nz = typeof z === 'number' ? z : Number(z)
+  if (!Number.isFinite(nx) || !Number.isFinite(ny) || !Number.isFinite(nz)) {
+    return null
+  }
+  return createVector(nx, ny, nz)
+}
+
+function normalizeCameraStateInput(value: unknown): SceneCameraState | undefined {
+  if (!isPlainObject(value)) {
+    return undefined
+  }
+  const position = parseVector3Like(value.position)
+  const target = parseVector3Like(value.target)
+  const fovValue = typeof value.fov === 'number' ? value.fov : Number(value.fov)
+  if (!position || !target || !Number.isFinite(fovValue)) {
+    return undefined
+  }
+  const forward = parseVector3Like(value.forward)
+  return {
+    position,
+    target,
+    fov: fovValue,
+    forward: forward ?? undefined,
+  }
+}
+
+function normalizeViewportSettingsInput(value: unknown): Partial<SceneViewportSettings> | undefined {
+  if (!isPlainObject(value)) {
+    return undefined
+  }
+  const input = { ...value } as Partial<SceneViewportSettings>
+  if (input.skybox && !isPlainObject(input.skybox)) {
+    delete (input as Record<string, unknown>).skybox
+  }
+  return input
+}
+
+function isAssetCatalog(value: unknown): value is Record<string, ProjectAsset[]> {
+  if (!isPlainObject(value)) {
+    return false
+  }
+  return Object.values(value).every((entry) => Array.isArray(entry))
+}
+
+function isAssetIndex(value: unknown): value is Record<string, AssetIndexEntry> {
+  if (!isPlainObject(value)) {
+    return false
+  }
+  return Object.values(value).every((entry) => isPlainObject(entry))
+}
+
+function isPackageAssetMap(value: unknown): value is Record<string, string> {
+  if (!isPlainObject(value)) {
+    return false
+  }
+  return Object.values(value).every((entry) => typeof entry === 'string')
+}
+
+function resolveUniqueSceneName(baseName: string, existing: Set<string>): string {
+  const normalized = baseName.trim() || 'Imported Scene'
+  if (!existing.has(normalized)) {
+    return normalized
+  }
+  let counter = 2
+  let candidate = `${normalized} (${counter})`
+  while (existing.has(candidate)) {
+    counter += 1
+    candidate = `${normalized} (${counter})`
+  }
+  return candidate
 }
 
 function vectorsEqual(a: Vector3Like, b: Vector3Like): boolean {
@@ -3259,6 +3382,96 @@ export const useSceneStore = defineStore('scene', {
         ...this.scenes.slice(index + 1),
       ]
       return true
+    },
+    exportSceneBundle(sceneIds: string[]): SceneBundleExportPayload | null {
+      if (!Array.isArray(sceneIds) || !sceneIds.length) {
+        return null
+      }
+      const uniqueIds = Array.from(new Set(sceneIds))
+      const idSet = new Set(uniqueIds)
+      const selected = this.scenes.filter((scene) => idSet.has(scene.id))
+      if (!selected.length) {
+        return null
+      }
+      return {
+        formatVersion: SCENE_BUNDLE_FORMAT_VERSION,
+        exportedAt: new Date().toISOString(),
+        scenes: selected.map((scene) => cloneSceneDocumentForExport(scene)),
+      }
+    },
+    importSceneBundle(payload: SceneBundleImportPayload): SceneImportResult {
+      const formatVersionRaw = (payload as { formatVersion?: unknown })?.formatVersion
+      const formatVersion = typeof formatVersionRaw === 'number'
+        ? formatVersionRaw
+        : Number.isFinite(formatVersionRaw)
+          ? Number(formatVersionRaw)
+          : SCENE_BUNDLE_FORMAT_VERSION
+      if (!Number.isFinite(formatVersion)) {
+        throw new Error('场景文件版本无效')
+      }
+      if (formatVersion > SCENE_BUNDLE_FORMAT_VERSION) {
+        throw new Error('暂不支持该版本的场景文件')
+      }
+      if (!Array.isArray(payload.scenes) || !payload.scenes.length) {
+        throw new Error('场景文件不包含任何场景数据')
+      }
+
+      const existingNames = new Set(this.scenes.map((scene) => scene.name))
+      const imported: StoredSceneDocument[] = []
+      const renamedScenes: Array<{ originalName: string; renamedName: string }> = []
+
+      payload.scenes.forEach((entry, index) => {
+        if (!isPlainObject(entry)) {
+          throw new Error(`场景数据格式错误 (索引 ${index})`)
+        }
+        if (!Array.isArray(entry.nodes)) {
+          throw new Error(`场景数据缺少节点信息 (索引 ${index})`)
+        }
+
+        const baseName = typeof entry.name === 'string' ? entry.name : `Imported Scene ${index + 1}`
+        const normalizedName = baseName.trim() || `Imported Scene ${index + 1}`
+        const uniqueName = resolveUniqueSceneName(normalizedName, existingNames)
+        if (uniqueName !== normalizedName) {
+          renamedScenes.push({ originalName: normalizedName, renamedName: uniqueName })
+        }
+        existingNames.add(uniqueName)
+
+        const sceneDocument = createSceneDocument(uniqueName, {
+          nodes: entry.nodes as SceneNode[],
+          selectedNodeId: typeof entry.selectedNodeId === 'string' ? entry.selectedNodeId : null,
+          selectedNodeIds: Array.isArray(entry.selectedNodeIds)
+            ? (entry.selectedNodeIds as unknown[]).filter((id): id is string => typeof id === 'string')
+            : undefined,
+          camera: normalizeCameraStateInput(entry.camera),
+          thumbnail: typeof entry.thumbnail === 'string' ? entry.thumbnail : null,
+          resourceProviderId: typeof entry.resourceProviderId === 'string' ? entry.resourceProviderId : undefined,
+          createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : undefined,
+          updatedAt: typeof entry.updatedAt === 'string' ? entry.updatedAt : undefined,
+          assetCatalog: isAssetCatalog(entry.assetCatalog)
+            ? (entry.assetCatalog as Record<string, ProjectAsset[]>)
+            : undefined,
+          assetIndex: isAssetIndex(entry.assetIndex)
+            ? (entry.assetIndex as Record<string, AssetIndexEntry>)
+            : undefined,
+          packageAssetMap: isPackageAssetMap(entry.packageAssetMap)
+            ? (entry.packageAssetMap as Record<string, string>)
+            : undefined,
+          viewportSettings: normalizeViewportSettingsInput(entry.viewportSettings),
+        })
+
+        imported.push(sceneDocument)
+      })
+
+      if (!imported.length) {
+        throw new Error('场景文件不包含任何有效场景')
+      }
+
+      this.scenes = [...this.scenes, ...imported]
+
+      return {
+        importedSceneIds: imported.map((scene) => scene.id),
+        renamedScenes,
+      }
     },
     async ensureCurrentSceneLoaded() {
       this.isSceneReady = false

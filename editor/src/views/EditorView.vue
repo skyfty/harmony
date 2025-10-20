@@ -9,7 +9,13 @@ import PreviewOverlay from '@/components/layout/PreviewOverlay.vue'
 import MenuBar from './MenuBar.vue'
 import SceneManagerDialog from '@/components/layout/SceneManagerDialog.vue'
 import NewSceneDialog from '@/components/layout/NewSceneDialog.vue'
-import { useSceneStore, type EditorPanel } from '@/stores/sceneStore'
+import {
+  useSceneStore,
+  type EditorPanel,
+  type SceneBundleImportPayload,
+  type SceneBundleImportScene,
+  SCENE_BUNDLE_FORMAT_VERSION,
+} from '@/stores/sceneStore'
 import type { EditorTool } from '@/types/editor-tool'
 import type { SceneCameraState } from '@/types/scene-camera-state'
 import { useUiStore } from '@/stores/uiStore'
@@ -42,6 +48,9 @@ type PreviewSessionState = {
   cameraSeed: PreviewCameraSeed | null
 }
 const previewSession = ref<PreviewSessionState | null>(null)
+const sceneImportInputRef = ref<HTMLInputElement | null>(null)
+const isImportingScenes = ref(false)
+const isSceneBundleExporting = ref(false)
 
 
 const hierarchyOpen = computed({
@@ -426,6 +435,215 @@ function handleRenameScene(payload: { id: string; name: string }) {
   sceneStore.renameScene(payload.id, payload.name)
 }
 
+function handleSceneManagerImportRequest() {
+  if (isImportingScenes.value) {
+    return
+  }
+  const input = sceneImportInputRef.value
+  if (!input) {
+    console.warn('Import input element not available')
+    return
+  }
+  input.value = ''
+  input.click()
+}
+
+async function handleSceneImportFileChange(event: Event) {
+  const input = (event.target as HTMLInputElement | null) ?? sceneImportInputRef.value
+  const file = input?.files?.[0] ?? null
+  if (!input || !file || isImportingScenes.value) {
+    if (input) {
+      input.value = ''
+    }
+    return
+  }
+  isImportingScenes.value = true
+  uiStore.showLoadingOverlay({
+    title: '导入场景',
+    message: '读取文件…',
+    mode: 'determinate',
+    progress: 5,
+    closable: false,
+    autoClose: false,
+  })
+
+  try {
+    const text = await readSceneFileAsText(file, (percent) => {
+      const progress = 5 + Math.round((percent / 100) * 35)
+      uiStore.updateLoadingProgress(Math.min(progress, 45))
+    })
+
+    uiStore.updateLoadingOverlay({ message: '解析数据…' })
+    uiStore.updateLoadingProgress(55)
+
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(text)
+    } catch (error) {
+      throw new Error('文件格式错误: 无法解析 JSON')
+    }
+
+    uiStore.updateLoadingOverlay({ message: '验证场景数据…' })
+    uiStore.updateLoadingProgress(65)
+
+    const bundle = normalizeSceneBundle(parsed)
+
+    uiStore.updateLoadingOverlay({ message: '导入场景…' })
+    uiStore.updateLoadingProgress(80)
+
+    const result = sceneStore.importSceneBundle(bundle)
+    const importedCount = result.importedSceneIds.length
+    const renameCount = result.renamedScenes.length
+    let message = `成功导入 ${importedCount} 个场景`
+    if (renameCount) {
+      message += `，已自动重命名 ${renameCount} 个重名场景`
+    }
+
+    uiStore.updateLoadingOverlay({
+      title: '导入场景',
+      message,
+      closable: true,
+      autoClose: true,
+      autoCloseDelay: 1200,
+    })
+    uiStore.updateLoadingProgress(100, { autoClose: true, autoCloseDelay: 1200 })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '导入失败'
+    uiStore.updateLoadingOverlay({
+      title: '导入场景',
+      message,
+      closable: true,
+      autoClose: false,
+    })
+    uiStore.updateLoadingProgress(100, { autoClose: false })
+  } finally {
+    input.value = ''
+    isImportingScenes.value = false
+  }
+}
+
+async function handleSceneManagerExport(sceneIds: string[]) {
+  if (!sceneIds.length || isSceneBundleExporting.value) {
+    return
+  }
+  isSceneBundleExporting.value = true
+  uiStore.showLoadingOverlay({
+    title: '导出场景',
+    message: '准备导出…',
+    mode: 'determinate',
+    progress: 5,
+    closable: false,
+    autoClose: false,
+  })
+
+  try {
+    const bundle = sceneStore.exportSceneBundle(sceneIds)
+    if (!bundle || !bundle.scenes.length) {
+      throw new Error('没有可导出的场景')
+    }
+
+    uiStore.updateLoadingOverlay({ message: '整理场景数据…' })
+    uiStore.updateLoadingProgress(40)
+
+    const json = JSON.stringify(bundle, null, 2)
+
+    uiStore.updateLoadingOverlay({ message: '生成导出文件…' })
+    uiStore.updateLoadingProgress(70)
+
+    const blob = new Blob([json], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `scenes-${timestamp}.json`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+
+    uiStore.updateLoadingOverlay({
+      title: '导出场景',
+      message: '导出完成',
+      closable: true,
+      autoClose: true,
+      autoCloseDelay: 800,
+    })
+    uiStore.updateLoadingProgress(100, { autoClose: true, autoCloseDelay: 800 })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '导出失败'
+    uiStore.updateLoadingOverlay({
+      title: '导出场景',
+      message,
+      closable: true,
+      autoClose: false,
+    })
+    uiStore.updateLoadingProgress(100, { autoClose: false })
+  } finally {
+    isSceneBundleExporting.value = false
+  }
+}
+
+function readSceneFileAsText(file: File, onProgress?: (percent: number) => void): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error('读取文件失败'))
+    reader.onprogress = (event) => {
+      if (onProgress && event.lengthComputable && event.total > 0) {
+        const percent = (event.loaded / event.total) * 100
+        onProgress(Math.min(Math.max(percent, 0), 100))
+      }
+    }
+    reader.onload = () => {
+      resolve(typeof reader.result === 'string' ? reader.result : '')
+    }
+    reader.readAsText(file)
+  })
+}
+
+function normalizeSceneBundle(raw: unknown): SceneBundleImportPayload {
+  if (Array.isArray(raw)) {
+    return {
+      formatVersion: SCENE_BUNDLE_FORMAT_VERSION,
+      scenes: raw.map((entry, index) => normalizeSceneEntry(entry, index)),
+    }
+  }
+
+  if (isPlainObject(raw)) {
+    if (Array.isArray(raw.scenes)) {
+      const versionRaw = raw.formatVersion
+      const version = typeof versionRaw === 'number' ? versionRaw : Number(versionRaw)
+      const formatVersion = Number.isFinite(version) ? version : SCENE_BUNDLE_FORMAT_VERSION
+      return {
+        formatVersion,
+        scenes: raw.scenes.map((entry, index) => normalizeSceneEntry(entry, index)),
+      }
+    }
+
+    if (Array.isArray(raw.nodes)) {
+      return {
+        formatVersion: SCENE_BUNDLE_FORMAT_VERSION,
+        scenes: [normalizeSceneEntry(raw, 0)],
+      }
+    }
+  }
+
+  throw new Error('文件格式错误: 未找到场景数据')
+}
+
+function normalizeSceneEntry(entry: unknown, index: number): SceneBundleImportScene {
+  if (!isPlainObject(entry)) {
+    throw new Error(`文件格式错误: 第 ${index + 1} 个场景数据无效`)
+  }
+  if (!Array.isArray(entry.nodes)) {
+    throw new Error(`文件格式错误: 第 ${index + 1} 个场景缺少 nodes 信息`)
+  }
+  return entry as SceneBundleImportScene
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 function isEditableKeyboardTarget(target: EventTarget | null): boolean {
   const element = target as HTMLElement | null
   if (!element) return false
@@ -611,6 +829,15 @@ onBeforeUnmount(() => {
       @delete="handleDeleteScene"
       @rename="handleRenameScene"
       @request-new="handleSceneManagerCreateRequest"
+      @import-scenes="handleSceneManagerImportRequest"
+      @export-scenes="handleSceneManagerExport"
+    />
+    <input
+      ref="sceneImportInputRef"
+      type="file"
+      accept="application/json"
+      style="display: none"
+      @change="handleSceneImportFileChange"
     />
     <NewSceneDialog
       v-model="isNewSceneDialogOpen"
