@@ -1536,6 +1536,7 @@ export const useSceneStore = defineStore('scene', {
       isRestoringHistory: false,
       activeTransformNodeId: null,
       transformSnapshotCaptured: false,
+      pendingTransformSnapshot: null,
       isSceneReady: false,
     }
   },
@@ -1616,11 +1617,7 @@ export const useSceneStore = defineStore('scene', {
     },
   },
   actions: {
-    captureHistorySnapshot(options: { resetRedo?: boolean } = {}) {
-      if (this.isRestoringHistory) {
-        return
-      }
-      const snapshot = createHistorySnapshot(this)
+    appendUndoSnapshot(snapshot: SceneHistoryEntry, options: { resetRedo?: boolean } = {}) {
       const nextUndoStack = [...this.undoStack, snapshot]
       this.undoStack = nextUndoStack.length > HISTORY_LIMIT
         ? nextUndoStack.slice(nextUndoStack.length - HISTORY_LIMIT)
@@ -1629,6 +1626,13 @@ export const useSceneStore = defineStore('scene', {
       if (resetRedo && this.redoStack.length) {
         this.redoStack = []
       }
+    },
+    captureHistorySnapshot(options: { resetRedo?: boolean } = {}) {
+      if (this.isRestoringHistory) {
+        return
+      }
+      const snapshot = createHistorySnapshot(this)
+      this.appendUndoSnapshot(snapshot, options)
     },
     pushRedoSnapshot() {
       const snapshot = createHistorySnapshot(this)
@@ -1642,6 +1646,7 @@ export const useSceneStore = defineStore('scene', {
       this.isRestoringHistory = true
       this.activeTransformNodeId = null
       this.transformSnapshotCaptured = false
+      this.pendingTransformSnapshot = null
       try {
         this.nodes.forEach((node) => releaseRuntimeTree(node))
         this.nodes = cloneSceneNodes(snapshot.nodes)
@@ -1695,14 +1700,20 @@ export const useSceneStore = defineStore('scene', {
       if (!nodeId) {
         this.activeTransformNodeId = null
         this.transformSnapshotCaptured = false
+        this.pendingTransformSnapshot = null
         return
       }
       if (this.activeTransformNodeId !== nodeId) {
         this.activeTransformNodeId = nodeId
       }
       this.transformSnapshotCaptured = false
+      this.pendingTransformSnapshot = this.isRestoringHistory ? null : createHistorySnapshot(this)
     },
     endTransformInteraction() {
+      if (this.pendingTransformSnapshot && this.transformSnapshotCaptured && !this.isRestoringHistory) {
+        this.appendUndoSnapshot(this.pendingTransformSnapshot)
+      }
+      this.pendingTransformSnapshot = null
       this.activeTransformNodeId = null
       this.transformSnapshotCaptured = false
     },
@@ -1770,10 +1781,15 @@ export const useSceneStore = defineStore('scene', {
       if (!positionChanged && !rotationChanged && !scaleChanged) {
         return
       }
-      if (this.activeTransformNodeId === payload.id) {
+      const isActiveTransform = this.activeTransformNodeId === payload.id
+      if (isActiveTransform) {
         if (!this.transformSnapshotCaptured) {
-          this.captureHistorySnapshot()
-          this.transformSnapshotCaptured = true
+          if (this.pendingTransformSnapshot) {
+            this.transformSnapshotCaptured = true
+          } else {
+            this.captureHistorySnapshot()
+            this.transformSnapshotCaptured = true
+          }
         }
       } else {
         this.captureHistorySnapshot()
@@ -1804,10 +1820,15 @@ export const useSceneStore = defineStore('scene', {
       if (!changed) {
         return
       }
-      if (this.activeTransformNodeId === payload.id) {
+      const isActiveTransform = this.activeTransformNodeId === payload.id
+      if (isActiveTransform) {
         if (!this.transformSnapshotCaptured) {
-          this.captureHistorySnapshot()
-          this.transformSnapshotCaptured = true
+          if (this.pendingTransformSnapshot) {
+            this.transformSnapshotCaptured = true
+          } else {
+            this.captureHistorySnapshot()
+            this.transformSnapshotCaptured = true
+          }
         }
       } else {
         this.captureHistorySnapshot()
@@ -1859,7 +1880,22 @@ export const useSceneStore = defineStore('scene', {
         return
       }
 
-      this.captureHistorySnapshot()
+      const interactsWithActive = this.activeTransformNodeId !== null
+        ? prepared.some((update) => update.id === this.activeTransformNodeId)
+        : false
+
+      if (interactsWithActive) {
+        if (!this.transformSnapshotCaptured) {
+          if (this.pendingTransformSnapshot) {
+            this.transformSnapshotCaptured = true
+          } else {
+            this.captureHistorySnapshot()
+            this.transformSnapshotCaptured = true
+          }
+        }
+      } else {
+        this.captureHistorySnapshot()
+      }
 
       prepared.forEach((update) => {
         visitNode(this.nodes, update.id, (node) => {

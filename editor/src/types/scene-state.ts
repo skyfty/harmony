@@ -41,5 +41,6 @@ export interface SceneState {
   isRestoringHistory: boolean
   activeTransformNodeId: string | null
   transformSnapshotCaptured: boolean
+  pendingTransformSnapshot: SceneHistoryEntry | null
   isSceneReady: boolean
 }
