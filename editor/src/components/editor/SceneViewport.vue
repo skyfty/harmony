@@ -545,29 +545,48 @@ function rotateActiveSelection(nodeId: string) {
     return
   }
 
-  const target = objectMap.get(nodeId)
-  if (!target) {
+  const primaryObject = objectMap.get(nodeId)
+  if (!primaryObject) {
     return
   }
 
-  const nextRotation = target.rotation.clone()
-  nextRotation.y += RIGHT_CLICK_ROTATION_STEP
-  target.rotation.copy(nextRotation)
-  target.updateMatrixWorld(true)
+  const selectionIds = sceneStore.selectedNodeIds.filter((id) => !sceneStore.isNodeSelectionLocked(id))
+  if (!selectionIds.includes(nodeId)) {
+    selectionIds.push(nodeId)
+  }
 
-  updateSelectionBox(target)
-  updateGridHighlightFromObject(target)
+  const updates: TransformUpdatePayload[] = []
+
+  selectionIds.forEach((id) => {
+    const object = objectMap.get(id)
+    if (!object) {
+      return
+    }
+
+    const nextRotation = object.rotation.clone()
+    nextRotation.y += RIGHT_CLICK_ROTATION_STEP
+    object.rotation.copy(nextRotation)
+    object.updateMatrixWorld(true)
+
+    updates.push({
+      id,
+      position: toVector3Like(object.position),
+      rotation: toEulerLike(object.rotation),
+      scale: toVector3Like(object.scale),
+    })
+  })
+
+  if (!updates.length) {
+    return
+  }
+
+  updateSelectionBox(primaryObject)
+  updateGridHighlightFromObject(primaryObject)
   updatePlaceholderOverlayPositions()
   updateSelectionHighlights()
 
-  const update: TransformUpdatePayload = {
-    id: nodeId,
-    position: toVector3Like(target.position),
-    rotation: toEulerLike(target.rotation),
-    scale: toVector3Like(target.scale),
-  }
-
-  emit('updateNodeTransform', update)
+  const transformPayload = updates.length === 1 ? updates[0]! : updates
+  emit('updateNodeTransform', transformPayload)
 
   scheduleThumbnailCapture()
 }
