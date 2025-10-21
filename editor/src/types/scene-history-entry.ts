@@ -2,9 +2,11 @@ import type { Object3D } from 'three'
 import type { SceneNode } from '@/types/scene'
 import type { SceneViewportSettings } from './scene-viewport-settings'
 import type { GroundSettings } from './ground-settings'
+import type { SceneMaterial } from '@/types/material'
 
 export interface SceneHistoryEntry {
   nodes: SceneNode[]
+  materials: SceneMaterial[]
   selectedNodeIds: string[]
   selectedNodeId: string | null
   viewportSettings: SceneViewportSettings

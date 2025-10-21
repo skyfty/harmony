@@ -24,17 +24,6 @@ const containerStyle = computed(() => ({
   opacity: isActive.value ? props.opacity : 0,
 }))
 
-function handleRaise() {
-  emit('raise')
-}
-
-function handleLower() {
-  emit('lower')
-}
-
-function handleReset() {
-  emit('reset')
-}
 
 function handleTexture() {
   emit('texture')

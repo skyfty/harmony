@@ -6,12 +6,14 @@ import type { SceneViewportSettings } from './scene-viewport-settings'
 import type { PanelVisibilityState } from './panel-visibility-state'
 import type { PanelPlacementState } from './panel-placement-state'
 import type { GroundSettings } from './ground-settings'
+import type { SceneMaterial } from '@/types/material'
 
 export interface StoredSceneDocument {
   id: string
   name: string
   thumbnail?: string | null
   nodes: SceneNode[]
+  materials: SceneMaterial[]
   selectedNodeId: string | null
   selectedNodeIds?: string[]
   camera: SceneCameraState

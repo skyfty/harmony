@@ -22,6 +22,13 @@ import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { CameraProjectionMode, CameraControlMode, SceneSkyboxSettings, SceneViewportSettings } from '@/types/scene-viewport-settings'
 import type { DynamicMeshVector3, GroundDynamicMesh, SceneDynamicMesh, WallDynamicMesh } from '@/types/dynamic-mesh'
 import type { GroundSettings } from '@/types/ground-settings'
+import type {
+  SceneMaterial,
+  SceneMaterialComputed,
+  SceneMaterialProps,
+  SceneMaterialTextureRef,
+  SceneMaterialTextureSlot,
+} from '@/types/material'
 
 import {
   CUSTOM_SKYBOX_PRESET_ID,
@@ -106,6 +113,162 @@ declare module '@/types/scene-state' {
   }
 }
 const OPACITY_EPSILON = 1e-3
+
+const MATERIAL_TEXTURE_SLOTS: SceneMaterialTextureSlot[] = ['albedo', 'normal', 'metalness', 'roughness', 'ao', 'emissive']
+
+type MaterialTextureMap = Partial<Record<SceneMaterialTextureSlot, SceneMaterialTextureRef | null>>
+
+const DEFAULT_MATERIAL_PROPS: SceneMaterialProps = {
+  color: '#ffffff',
+  transparent: false,
+  opacity: 1,
+  side: 'front',
+  wireframe: false,
+  metalness: 0.5,
+  roughness: 0.5,
+  emissive: '#000000',
+  emissiveIntensity: 0,
+  aoStrength: 1,
+  envMapIntensity: 1,
+  textures: Object.freeze(createEmptyTextureMap()) as MaterialTextureMap,
+}
+
+function createEmptyTextureMap(input?: MaterialTextureMap | null): MaterialTextureMap {
+  const map: MaterialTextureMap = {}
+  MATERIAL_TEXTURE_SLOTS.forEach((slot) => {
+    const value = input?.[slot] ?? null
+    map[slot] = value ? { assetId: value.assetId, name: value.name } : null
+  })
+  return map
+}
+
+function cloneTextureMap(input?: MaterialTextureMap | null): MaterialTextureMap {
+  return createEmptyTextureMap(input)
+}
+
+function mergeMaterialProps(base: SceneMaterialProps, overrides?: Partial<SceneMaterialProps> | null): SceneMaterialProps {
+  if (!overrides) {
+    return {
+      ...base,
+      textures: cloneTextureMap(base.textures),
+    }
+  }
+  const next: SceneMaterialProps = {
+    ...base,
+    ...overrides,
+    textures: cloneTextureMap(base.textures),
+  }
+  if (overrides.textures) {
+    MATERIAL_TEXTURE_SLOTS.forEach((slot) => {
+      if (slot in overrides.textures!) {
+        const value = overrides.textures?.[slot] ?? null
+        next.textures![slot] = value ? { assetId: value.assetId, name: value.name } : null
+      }
+    })
+  }
+  return next
+}
+
+function createMaterialProps(overrides?: Partial<SceneMaterialProps> | null): SceneMaterialProps {
+  return mergeMaterialProps({
+    ...DEFAULT_MATERIAL_PROPS,
+    textures: cloneTextureMap(DEFAULT_MATERIAL_PROPS.textures),
+  }, overrides)
+}
+
+function cloneMaterialProps(props: SceneMaterialProps): SceneMaterialProps {
+  return mergeMaterialProps({
+    ...DEFAULT_MATERIAL_PROPS,
+    ...props,
+    textures: cloneTextureMap(props.textures),
+  })
+}
+
+function createSceneMaterial(name = 'New Material', props?: Partial<SceneMaterialProps>): SceneMaterial {
+  const now = new Date().toISOString()
+  const resolvedName = name.trim() || 'New Material'
+  const resolvedProps = createMaterialProps(props)
+  return {
+    id: generateUuid(),
+    name: resolvedName,
+    description: undefined,
+    createdAt: now,
+    updatedAt: now,
+    ...resolvedProps,
+  }
+}
+
+function cloneSceneMaterial(material: SceneMaterial): SceneMaterial {
+  return {
+    ...material,
+    ...cloneMaterialProps(material),
+    id: material.id,
+    name: material.name,
+    description: material.description,
+    createdAt: material.createdAt,
+    updatedAt: material.updatedAt,
+  }
+}
+
+function cloneSceneMaterials(materials: SceneMaterial[]): SceneMaterial[] {
+  return materials.map((material) => cloneSceneMaterial(material))
+}
+
+function createComputedMaterial(materialId: string | null, props: SceneMaterialProps): SceneMaterialComputed {
+  return {
+    materialId,
+    ...cloneMaterialProps(props),
+  }
+}
+
+function extractMaterialProps(material: SceneNode['material'] | undefined | null): SceneMaterialProps {
+  if (!material) {
+    return createMaterialProps()
+  }
+  const partial: Partial<SceneMaterialProps> = {
+    color: material.color,
+    transparent: material.transparent,
+    opacity: material.opacity,
+    side: material.side,
+    wireframe: material.wireframe,
+    metalness: material.metalness,
+    roughness: material.roughness,
+    emissive: material.emissive,
+    emissiveIntensity: material.emissiveIntensity,
+    aoStrength: material.aoStrength,
+    envMapIntensity: material.envMapIntensity,
+    textures: material.textures,
+  }
+  return createMaterialProps(partial)
+}
+
+function materialUpdateToProps(update: Partial<SceneNode['material']> | Partial<SceneMaterialProps>): Partial<SceneMaterialProps> {
+  if (!update) {
+    return {}
+  }
+  const result: Partial<SceneMaterialProps> = {}
+  if (update.color !== undefined) result.color = update.color
+  if (update.transparent !== undefined) result.transparent = update.transparent
+  if (update.opacity !== undefined) result.opacity = update.opacity
+  if (update.side !== undefined) result.side = update.side
+  if (update.wireframe !== undefined) result.wireframe = update.wireframe
+  if (update.metalness !== undefined) result.metalness = update.metalness
+  if (update.roughness !== undefined) result.roughness = update.roughness
+  if (update.emissive !== undefined) result.emissive = update.emissive
+  if (update.emissiveIntensity !== undefined) result.emissiveIntensity = update.emissiveIntensity
+  if (update.aoStrength !== undefined) result.aoStrength = update.aoStrength
+  if (update.envMapIntensity !== undefined) result.envMapIntensity = update.envMapIntensity
+  if (update.textures) {
+    result.textures = {}
+    MATERIAL_TEXTURE_SLOTS.forEach((slot) => {
+      if (slot in update.textures!) {
+        const value = update.textures?.[slot] ?? null
+        result.textures![slot] = value ? { assetId: value.assetId, name: value.name } : null
+      }
+    })
+  }
+  return result
+}
 
 function createVector(x: number, y: number, z: number): Vector3Like {
   return { x, y, z }
@@ -332,11 +495,12 @@ function createGroundSceneNode(
     id: GROUND_NODE_ID,
     name: 'Ground',
     nodeType: 'mesh',
-    material: {
+    material: createComputedMaterial(null, createMaterialProps({
       color: '#707070',
       wireframe: false,
       opacity: 1,
-    },
+      transparent: false,
+    })),
     position: createVector(0, 0, 0),
     rotation: createVector(0, 0, 0),
     scale: createVector(1, 1, 1),
@@ -360,11 +524,12 @@ function normalizeGroundSceneNode(node: SceneNode | null | undefined, settings?:
       id: GROUND_NODE_ID,
       name: 'Ground',
       nodeType: 'mesh',
-      material: {
+      material: createComputedMaterial(null, createMaterialProps({
         color: node.material?.color ?? '#707070',
         wireframe: false,
         opacity: 1,
-      },
+        transparent: false,
+      })),
       position: createVector(0, 0, 0),
       rotation: createVector(0, 0, 0),
       scale: createVector(1, 1, 1),
@@ -598,6 +763,14 @@ function getLightPreset(type: LightNodeType) {
   }
 }
 
+const initialMaterials: SceneMaterial[] = [
+  createSceneMaterial('Default Material', {
+    color: '#ffffff',
+    metalness: 0,
+    roughness: 0.8,
+  }),
+]
+
 const initialNodes: SceneNode[] = [createGroundSceneNode()]
 
 const placeholderDownloadWatchers = new Map<string, WatchStopHandle>()
@@ -722,6 +895,7 @@ function viewportSettingsEqual(a: SceneViewportSettings, b: SceneViewportSetting
 
 const initialSceneDocument = createSceneDocument('Sample Scene', {
   nodes: initialNodes,
+  materials: initialMaterials,
   selectedNodeId: initialNodes[0]?.id ?? null,
   resourceProviderId: 'builtin',
   assetCatalog: initialAssetCatalog,
@@ -1094,6 +1268,44 @@ function visitNode(nodes: SceneNode[], id: string, mutate: (node: SceneNode) => 
   return false
 }
 
+function applyMaterialPropsToNodeTree(
+  nodes: SceneNode[],
+  materialId: string,
+  props: SceneMaterialProps,
+  assignedId: string | null = materialId,
+): boolean {
+  let changed = false
+  nodes.forEach((node) => {
+    if (node.material?.materialId === materialId) {
+      node.material = createComputedMaterial(assignedId, props)
+      changed = true
+    }
+    if (node.children?.length) {
+      if (applyMaterialPropsToNodeTree(node.children, materialId, props, assignedId)) {
+        changed = true
+      }
+    }
+  })
+  return changed
+}
+
+function reassignMaterialInNodeTree(nodes: SceneNode[], fromId: string, target: SceneMaterial): boolean {
+  let changed = false
+  const targetId = target.id
+  nodes.forEach((node) => {
+    if (node.material?.materialId === fromId) {
+      node.material = createComputedMaterial(targetId, target)
+      changed = true
+    }
+    if (node.children?.length) {
+      if (reassignMaterialInNodeTree(node.children, fromId, target)) {
+        changed = true
+      }
+    }
+  })
+  return changed
+}
+
 function toHierarchyItem(node: SceneNode): HierarchyTreeItem {
   return {
     id: node.id,
@@ -1109,13 +1321,7 @@ function toHierarchyItem(node: SceneNode): HierarchyTreeItem {
 function cloneNode(node: SceneNode): SceneNode {
   return {
     ...node,
-    material: node.material
-      ? {
-          color: node.material.color,
-          wireframe: node.material.wireframe,
-          opacity: node.material.opacity,
-        }
-      : undefined,
+    material: node.material ? createComputedMaterial(node.material.materialId ?? null, extractMaterialProps(node.material)) : undefined,
     light: node.light
       ? {
           ...node.light,
@@ -1156,6 +1362,7 @@ function cloneSceneDocumentForExport(scene: StoredSceneDocument): StoredSceneDoc
     assetCatalog: scene.assetCatalog,
     assetIndex: scene.assetIndex,
     packageAssetMap: scene.packageAssetMap,
+  materials: scene.materials,
     viewportSettings: scene.viewportSettings,
     panelVisibility: scene.panelVisibility,
     panelPlacement: scene.panelPlacement,
@@ -1320,6 +1527,7 @@ function applySceneAssetState(store: SceneState, scene: StoredSceneDocument) {
   store.assetCatalog = cloneAssetCatalog(scene.assetCatalog)
   store.assetIndex = cloneAssetIndex(scene.assetIndex)
   store.packageAssetMap = clonePackageAssetMap(scene.packageAssetMap)
+  store.materials = cloneSceneMaterials(Array.isArray(scene.materials) ? scene.materials : initialMaterials)
   const nextTree = createProjectTreeFromCache(store.assetCatalog, store.packageDirectoryCache)
   store.projectTree = nextTree
   if (store.activeDirectoryId && !findDirectory(nextTree, store.activeDirectoryId)) {
@@ -1339,6 +1547,7 @@ function collectSceneRuntimeSnapshots(nodes: SceneNode[]): Map<string, Object3D>
 function createHistorySnapshot(store: SceneState): SceneHistoryEntry {
   return {
     nodes: cloneSceneNodes(store.nodes),
+    materials: cloneSceneMaterials(store.materials),
     selectedNodeIds: cloneSelection(store.selectedNodeIds),
     selectedNodeId: store.selectedNodeId,
     viewportSettings: cloneViewportSettings(store.viewportSettings),
@@ -1795,6 +2004,7 @@ function createSceneDocument(
   options: {
     id?: string
     nodes?: SceneNode[]
+    materials?: SceneMaterial[]
     selectedNodeId?: string | null
     selectedNodeIds?: string[]
     camera?: SceneCameraState
@@ -1813,6 +2023,7 @@ function createSceneDocument(
 ): StoredSceneDocument {
   const id = options.id ?? generateUuid()
   const clonedNodes = options.nodes ? cloneSceneNodes(options.nodes) : []
+  const materials = options.materials ? cloneSceneMaterials(options.materials) : cloneSceneMaterials(initialMaterials)
   const existingGround = findGroundNode(clonedNodes)
   const groundSettings = cloneGroundSettings(
     options.groundSettings ??
@@ -1842,6 +2053,7 @@ function createSceneDocument(
     name,
     thumbnail: options.thumbnail ?? null,
     nodes,
+    materials,
     selectedNodeId,
     selectedNodeIds,
     camera,
@@ -1874,6 +2086,7 @@ function commitSceneSnapshot(
   const updatedScene: StoredSceneDocument = {
     ...current,
     nodes: updateNodes ? cloneSceneNodes(store.nodes) : current.nodes,
+    materials: cloneSceneMaterials(store.materials),
     selectedNodeId: store.selectedNodeId,
     selectedNodeIds: cloneSelection(store.selectedNodeIds),
     camera: updateCamera ? cloneCameraState(store.camera) : current.camera,
@@ -2082,6 +2295,7 @@ export const useSceneStore = defineStore('scene', {
       scenes: [initialSceneDocument],
       currentSceneId: initialSceneDocument.id,
       nodes: cloneSceneNodes(initialSceneDocument.nodes),
+      materials: cloneSceneMaterials(initialSceneDocument.materials),
       selectedNodeId: initialSceneDocument.selectedNodeId,
       selectedNodeIds: cloneSelection(initialSceneDocument.selectedNodeIds),
       activeTool: 'select',
@@ -2224,6 +2438,7 @@ export const useSceneStore = defineStore('scene', {
       try {
         this.nodes.forEach((node) => releaseRuntimeTree(node))
         this.nodes = cloneSceneNodes(snapshot.nodes)
+  this.materials = cloneSceneMaterials(snapshot.materials)
         this.selectedNodeIds = cloneSelection(snapshot.selectedNodeIds)
     this.selectedNodeId = snapshot.selectedNodeId
     this.viewportSettings = cloneViewportSettings(snapshot.viewportSettings)
@@ -2598,32 +2813,145 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
     },
     updateNodeMaterial(id: string, material: Partial<NonNullable<SceneNode['material']>>) {
+      const target = findNodeById(this.nodes, id)
+      if (!target || (target.nodeType ?? 'mesh') !== 'mesh') {
+        return
+      }
+
+      this.captureHistorySnapshot()
+
       let updated = false
       visitNode(this.nodes, id, (node) => {
-        if (!node.material) {
-          if ((node.nodeType ?? 'mesh') !== 'mesh') {
-            return
-          }
-          node.material = {
-            color: material.color ?? '#ffffff',
-            wireframe: material.wireframe ?? false,
-            opacity: material.opacity ?? 1,
-          }
-          updated = true
+        if ((node.nodeType ?? 'mesh') !== 'mesh') {
           return
         }
-        node.material = {
-          color: material.color ?? node.material.color,
-          wireframe: material.wireframe ?? node.material.wireframe,
-          opacity: material.opacity ?? node.material.opacity,
-        }
+
+        const requestedMaterialId = material.materialId !== undefined
+          ? material.materialId
+          : node.material?.materialId ?? null
+
+        const baseMaterial = requestedMaterialId
+          ? this.materials.find((entry) => entry.id === requestedMaterialId) ?? null
+          : null
+
+        const baseProps = baseMaterial
+          ? cloneMaterialProps(baseMaterial)
+          : extractMaterialProps(node.material)
+
+        const overrides = materialUpdateToProps(material)
+        const mergedProps = mergeMaterialProps(baseProps, overrides)
+
+        node.material = createComputedMaterial(requestedMaterialId ?? null, mergedProps)
         updated = true
       })
+
       if (!updated) {
         return
       }
+
       this.nodes = [...this.nodes]
       commitSceneSnapshot(this)
+    },
+    createMaterial(payload: { name?: string; props?: Partial<SceneMaterialProps> | null } = {}) {
+      const material = createSceneMaterial(payload.name ?? 'New Material', payload.props ?? undefined)
+      this.captureHistorySnapshot()
+      this.materials = [...this.materials, material]
+      commitSceneSnapshot(this, { updateNodes: false })
+      return material
+    },
+    duplicateMaterial(materialId: string) {
+      const source = this.materials.find((entry) => entry.id === materialId)
+      if (!source) {
+        return null
+      }
+      const duplicated = createSceneMaterial(`${source.name} Copy`, source)
+      duplicated.description = source.description
+      this.captureHistorySnapshot()
+      this.materials = [...this.materials, duplicated]
+      commitSceneSnapshot(this, { updateNodes: false })
+      return duplicated
+    },
+    updateMaterialDefinition(materialId: string, update: Partial<SceneMaterialProps> & { name?: string; description?: string }) {
+      const existingIndex = this.materials.findIndex((entry) => entry.id === materialId)
+      if (existingIndex === -1) {
+        return false
+      }
+
+  const current = this.materials[existingIndex]!
+      const overrides = materialUpdateToProps(update)
+      const hasPropChanges = Object.keys(overrides).length > 0
+      const trimmedName = typeof update.name === 'string' ? update.name.trim() : undefined
+      const nameChanged = trimmedName !== undefined && trimmedName.length > 0 && trimmedName !== current.name
+      const descriptionChanged = update.description !== undefined && update.description !== current.description
+
+      if (!hasPropChanges && !nameChanged && !descriptionChanged) {
+        return false
+      }
+
+      const nextProps = mergeMaterialProps(current, overrides)
+      const nextMaterial: SceneMaterial = {
+        ...current,
+        ...nextProps,
+        id: current.id,
+        name: nameChanged && trimmedName ? trimmedName : current.name,
+        description: update.description !== undefined ? update.description : current.description,
+        updatedAt: new Date().toISOString(),
+        createdAt: current.createdAt,
+      }
+
+      this.captureHistorySnapshot()
+      const nextList = [...this.materials]
+      nextList.splice(existingIndex, 1, nextMaterial)
+      this.materials = nextList
+
+      let changedNodes = false
+      if (applyMaterialPropsToNodeTree(this.nodes, materialId, nextMaterial)) {
+        changedNodes = true
+      }
+
+      if (changedNodes) {
+        this.nodes = [...this.nodes]
+      }
+
+      commitSceneSnapshot(this, { updateNodes: changedNodes })
+      return true
+    },
+    deleteMaterial(materialId: string, options: { fallbackMaterialId?: string | null } = {}) {
+      if (!materialId) {
+        return false
+      }
+      const index = this.materials.findIndex((entry) => entry.id === materialId)
+      if (index === -1) {
+        return false
+      }
+
+      const fallbackId = options.fallbackMaterialId ?? this.materials.find((entry) => entry.id !== materialId)?.id ?? null
+  const fallbackMaterial = fallbackId ? this.materials.find((entry) => entry.id === fallbackId) ?? null : null
+
+      this.captureHistorySnapshot()
+
+      const nextMaterials = [...this.materials]
+      nextMaterials.splice(index, 1)
+      this.materials = nextMaterials
+
+      let changedNodes = false
+      if (fallbackMaterial) {
+        if (reassignMaterialInNodeTree(this.nodes, materialId, fallbackMaterial)) {
+          changedNodes = true
+        }
+      } else {
+        const defaultProps = createMaterialProps()
+        if (applyMaterialPropsToNodeTree(this.nodes, materialId, defaultProps, null)) {
+          changedNodes = true
+        }
+      }
+
+      if (changedNodes) {
+        this.nodes = [...this.nodes]
+      }
+
+      commitSceneSnapshot(this, { updateNodes: changedNodes })
+      return true
     },
     updateLightProperties(id: string, properties: Partial<LightNodeProperties>) {
       const target = findNodeById(this.nodes, id)
@@ -3492,7 +3820,11 @@ export const useSceneStore = defineStore('scene', {
         id,
         name: asset.name,
         nodeType: 'mesh',
-        material: { color: '#90a4ae', opacity: 0.6 },
+        material: createComputedMaterial(null, createMaterialProps({
+          color: '#90a4ae',
+          opacity: 0.6,
+          transparent: true,
+        })),
         position: cloneVector(transform.position),
         rotation: cloneVector(transform.rotation),
         scale: cloneVector(transform.scale),
@@ -3753,11 +4085,15 @@ export const useSceneStore = defineStore('scene', {
     }) {
       this.captureHistorySnapshot()
   const id = generateUuid()
+      const baseMaterial = this.materials[0] ?? null
+      const computedMaterial = baseMaterial
+        ? createComputedMaterial(baseMaterial.id, baseMaterial)
+        : createComputedMaterial(null, createMaterialProps())
       const node: SceneNode = {
         id,
         name: payload.name ?? payload.object.name ?? 'Imported Mesh',
         nodeType: payload.nodeType,
-        material: { color: '#ffffff' },
+        material: computedMaterial,
         position: payload.position ?? { x: 0, y: 0, z: 0 },
         rotation: payload.rotation ?? { x: 0, y: 0, z: 0 },
         scale: payload.scale ?? { x: 1, y: 1, z: 1 },
@@ -4094,10 +4430,11 @@ export const useSceneStore = defineStore('scene', {
       const baseAssetCatalog = cloneAssetCatalog(initialAssetCatalog)
       const baseAssetIndex = cloneAssetIndex(initialAssetIndex)
       const scene = createSceneDocument(displayName, {
-  thumbnail: resolvedThumbnail ?? null,
+        thumbnail: resolvedThumbnail ?? null,
         resourceProviderId: this.resourceProviderId,
         viewportSettings: this.viewportSettings,
         nodes: baseNodes,
+        materials: this.materials,
         groundSettings,
         assetCatalog: baseAssetCatalog,
         assetIndex: baseAssetIndex,

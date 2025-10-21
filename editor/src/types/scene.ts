@@ -1,5 +1,6 @@
 import type { GeometryType } from '@/plugins/geometry'
 import type { SceneDynamicMesh } from '@/types/dynamic-mesh'
+import type { SceneMaterialComputed } from '@/types/material'
 
 export type SceneNodeType = 'mesh' | 'light' | 'group' | GeometryType
 
@@ -27,11 +28,7 @@ export interface SceneNode {
   id: string
   name: string
   nodeType: SceneNodeType
-  material?: {
-    color: string
-    wireframe?: boolean
-    opacity?: number
-  }
+  material?: SceneMaterialComputed | null
   light?: LightNodeProperties
   position: Vector3Like
   rotation: Vector3Like

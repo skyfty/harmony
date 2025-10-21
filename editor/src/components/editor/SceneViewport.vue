@@ -7,6 +7,7 @@ import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import type { SceneNode, Vector3Like } from '@/types/scene'
+import type { SceneMaterialTextureSlot, SceneMaterialTextureRef } from '@/types/material'
 import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
@@ -90,6 +91,19 @@ const skySunPosition = new THREE.Vector3()
 let stats: Stats | null = null
 let statsPanelIndex = 0
 let statsPointerHandler: ((event: MouseEvent) => void) | null = null
+
+const textureLoader = new THREE.TextureLoader()
+const textureCache = new Map<string, THREE.Texture>()
+const pendingTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
+const TEXTURE_SLOT_STATE_KEY = '__harmonyTextureSlots'
+const MATERIAL_TEXTURE_ASSIGNMENTS: Record<SceneMaterialTextureSlot, { key: keyof THREE.MeshStandardMaterial; colorSpace?: THREE.ColorSpace }> = {
+  albedo: { key: 'map', colorSpace: THREE.SRGBColorSpace },
+  normal: { key: 'normalMap' },
+  metalness: { key: 'metalnessMap' },
+  roughness: { key: 'roughnessMap' },
+  ao: { key: 'aoMap' },
+  emissive: { key: 'emissiveMap', colorSpace: THREE.SRGBColorSpace },
+}
 
 function applyRendererShadowSetting() {
   if (!renderer) {
@@ -5119,6 +5133,19 @@ type HarmonyMaterialState = {
   transparent: boolean
   depthWrite: boolean
   wireframe?: boolean
+  metalness?: number
+  roughness?: number
+  emissive?: THREE.Color
+  emissiveIntensity?: number
+  side?: THREE.Side
+  aoMapIntensity?: number
+  envMapIntensity?: number
+  map?: THREE.Texture | null
+  normalMap?: THREE.Texture | null
+  metalnessMap?: THREE.Texture | null
+  roughnessMap?: THREE.Texture | null
+  aoMap?: THREE.Texture | null
+  emissiveMap?: THREE.Texture | null
 }
 
 function ensureMeshMaterialsUnique(mesh: THREE.Mesh) {
@@ -5149,15 +5176,149 @@ function getMaterialBaseline(material: THREE.Material): HarmonyMaterialState {
   }
 
   const typed = material as THREE.Material & { color?: THREE.Color; wireframe?: boolean }
+  const standard = material as THREE.MeshStandardMaterial & { emissive?: THREE.Color }
   state = {
     color: typed.color ? typed.color.clone() : undefined,
     opacity: material.opacity,
     transparent: material.transparent,
     depthWrite: material.depthWrite,
     wireframe: typeof typed.wireframe === 'boolean' ? typed.wireframe : undefined,
+    metalness: 'metalness' in standard ? standard.metalness : undefined,
+    roughness: 'roughness' in standard ? standard.roughness : undefined,
+    emissive: standard.emissive ? standard.emissive.clone() : undefined,
+    emissiveIntensity: 'emissiveIntensity' in standard ? standard.emissiveIntensity : undefined,
+    side: material.side,
+    aoMapIntensity: 'aoMapIntensity' in standard ? standard.aoMapIntensity : undefined,
+    envMapIntensity: 'envMapIntensity' in standard ? standard.envMapIntensity : undefined,
+    map: 'map' in standard ? standard.map ?? null : undefined,
+    normalMap: 'normalMap' in standard ? standard.normalMap ?? null : undefined,
+    metalnessMap: 'metalnessMap' in standard ? standard.metalnessMap ?? null : undefined,
+    roughnessMap: 'roughnessMap' in standard ? standard.roughnessMap ?? null : undefined,
+    aoMap: 'aoMap' in standard ? standard.aoMap ?? null : undefined,
+    emissiveMap: 'emissiveMap' in standard ? standard.emissiveMap ?? null : undefined,
   }
   userData[MATERIAL_ORIGINAL_KEY] = state
   return state
+}
+
+function disposeCachedTextures() {
+  textureCache.forEach((texture) => texture.dispose())
+  textureCache.clear()
+  pendingTextureRequests.clear()
+}
+
+async function ensureMaterialTexture(ref: SceneMaterialTextureRef, slot: SceneMaterialTextureSlot): Promise<THREE.Texture | null> {
+  const cacheKey = ref.assetId
+  if (!cacheKey) {
+    return null
+  }
+  if (textureCache.has(cacheKey)) {
+    return textureCache.get(cacheKey) ?? null
+  }
+  if (pendingTextureRequests.has(cacheKey)) {
+    return pendingTextureRequests.get(cacheKey) ?? null
+  }
+
+  const loader = async (): Promise<THREE.Texture | null> => {
+    let entry = assetCacheStore.getEntry(cacheKey)
+    if (entry.status !== 'cached') {
+      await assetCacheStore.loadFromIndexedDb(cacheKey)
+      entry = assetCacheStore.getEntry(cacheKey)
+    }
+
+    if (entry.status !== 'cached') {
+      const asset = sceneStore.getAsset(cacheKey)
+      const url = entry.downloadUrl ?? asset?.downloadUrl ?? asset?.description ?? null
+      if (!url) {
+        console.warn('Texture asset missing download URL', cacheKey)
+        return null
+      }
+      try {
+        await assetCacheStore.downloadAsset(cacheKey, url, asset?.name ?? cacheKey)
+      } catch (error) {
+        console.warn('Failed to download texture asset', cacheKey, error)
+        return null
+      }
+      entry = assetCacheStore.getEntry(cacheKey)
+      if (entry.status !== 'cached') {
+        return null
+      }
+    }
+
+    const file = assetCacheStore.createFileFromCache(cacheKey)
+    if (!file) {
+      return null
+    }
+
+    const blobUrl = URL.createObjectURL(file)
+    try {
+      const texture = await textureLoader.loadAsync(blobUrl)
+      texture.name = ref.name ?? file.name ?? cacheKey
+      texture.needsUpdate = true
+      textureCache.set(cacheKey, texture)
+      return texture
+    } catch (error) {
+      console.warn('Failed to load texture data', cacheKey, error)
+      return null
+    } finally {
+      URL.revokeObjectURL(blobUrl)
+    }
+  }
+
+  const pending = loader()
+  pendingTextureRequests.set(cacheKey, pending)
+  try {
+    const texture = await pending
+    if (!texture) {
+      textureCache.delete(cacheKey)
+      return null
+    }
+    return texture
+  } finally {
+    pendingTextureRequests.delete(cacheKey)
+  }
+}
+
+function assignTextureToMaterial(
+  material: THREE.Material,
+  slot: SceneMaterialTextureSlot,
+  ref: SceneMaterialTextureRef | null | undefined,
+) {
+  const assignment = MATERIAL_TEXTURE_ASSIGNMENTS[slot]
+  if (!assignment) {
+    return
+  }
+  const typed = material as THREE.MeshStandardMaterial & { [key: string]: unknown }
+  const userData = material.userData ?? (material.userData = {})
+  const slotState = (userData[TEXTURE_SLOT_STATE_KEY] ??= {} as Record<SceneMaterialTextureSlot, string | null>)
+
+  if (!ref) {
+    slotState[slot] = null
+    if (assignment.key in typed && typed[assignment.key] !== null) {
+      typed[assignment.key] = null
+      material.needsUpdate = true
+    }
+    return
+  }
+
+  slotState[slot] = ref.assetId
+  void ensureMaterialTexture(ref, slot).then((texture) => {
+    if (!texture) {
+      return
+    }
+    if (slotState[slot] !== ref.assetId) {
+      return
+    }
+    if (!(assignment.key in typed)) {
+      return
+    }
+    if (assignment.colorSpace) {
+      texture.colorSpace = assignment.colorSpace
+      texture.needsUpdate = true
+    }
+    typed[assignment.key] = texture
+    material.needsUpdate = true
+  })
 }
 
 function applyMaterialOverrides(target: THREE.Object3D, materialConfig?: NonNullable<SceneNode['material']>) {
@@ -5168,6 +5329,9 @@ function applyMaterialOverrides(target: THREE.Object3D, materialConfig?: NonNull
   const color = materialConfig.color ? new THREE.Color(materialConfig.color) : null
   const opacity = typeof materialConfig.opacity === 'number' ? THREE.MathUtils.clamp(materialConfig.opacity, 0, 1) : undefined
   const wireframe = materialConfig.wireframe
+  const transparent = typeof materialConfig.transparent === 'boolean' ? materialConfig.transparent : undefined
+  const emissiveColor = materialConfig.emissive ? new THREE.Color(materialConfig.emissive) : null
+  const side = materialConfig.side
 
   target.traverse((child) => {
     const mesh = child as THREE.Mesh
@@ -5193,22 +5357,88 @@ function applyMaterialOverrides(target: THREE.Object3D, materialConfig?: NonNull
         needsUpdate = true
       }
 
-      if (opacity !== undefined) {
-        typed.opacity = opacity
-        if (opacity < 0.999) {
-          typed.transparent = true
-          typed.depthWrite = false
-        } else {
-          typed.transparent = baseline.transparent
-          typed.depthWrite = baseline.depthWrite
-        }
-        needsUpdate = true
-      }
-
       if (typeof wireframe === 'boolean' && typeof typed.wireframe === 'boolean') {
         typed.wireframe = wireframe
         needsUpdate = true
       }
+
+      const standard = material as THREE.MeshStandardMaterial & { [key: string]: unknown }
+
+      let desiredTransparent = baseline.transparent
+      let desiredDepthWrite = baseline.depthWrite
+
+      if (transparent !== undefined) {
+        desiredTransparent = transparent
+        desiredDepthWrite = transparent ? false : baseline.depthWrite
+      }
+
+      if (opacity !== undefined) {
+        typed.opacity = opacity
+        if (opacity < 0.999) {
+          desiredTransparent = true
+          desiredDepthWrite = false
+        }
+        needsUpdate = true
+      }
+
+      if (typed.transparent !== desiredTransparent) {
+        typed.transparent = desiredTransparent
+        needsUpdate = true
+      }
+      if (typed.depthWrite !== desiredDepthWrite) {
+        typed.depthWrite = desiredDepthWrite
+        needsUpdate = true
+      }
+
+      if (typeof side === 'string') {
+        let sideValue = baseline.side ?? material.side
+        if (side === 'front') {
+          sideValue = THREE.FrontSide
+        } else if (side === 'back') {
+          sideValue = THREE.BackSide
+        } else if (side === 'double') {
+          sideValue = THREE.DoubleSide
+        }
+        if (material.side !== sideValue) {
+          material.side = sideValue
+          needsUpdate = true
+        }
+      }
+
+      if ('metalness' in standard && typeof materialConfig.metalness === 'number' && standard.metalness !== materialConfig.metalness) {
+        standard.metalness = materialConfig.metalness
+        needsUpdate = true
+      }
+
+      if ('roughness' in standard && typeof materialConfig.roughness === 'number' && standard.roughness !== materialConfig.roughness) {
+        standard.roughness = materialConfig.roughness
+        needsUpdate = true
+      }
+
+      if (standard.emissive && emissiveColor) {
+        standard.emissive.copy(emissiveColor)
+        needsUpdate = true
+      }
+
+      if ('emissiveIntensity' in standard && typeof materialConfig.emissiveIntensity === 'number' && standard.emissiveIntensity !== materialConfig.emissiveIntensity) {
+        standard.emissiveIntensity = materialConfig.emissiveIntensity
+        needsUpdate = true
+      }
+
+      if ('aoMapIntensity' in standard && typeof materialConfig.aoStrength === 'number' && standard.aoMapIntensity !== materialConfig.aoStrength) {
+        standard.aoMapIntensity = materialConfig.aoStrength
+        needsUpdate = true
+      }
+
+      if ('envMapIntensity' in standard && typeof materialConfig.envMapIntensity === 'number' && standard.envMapIntensity !== materialConfig.envMapIntensity) {
+        standard.envMapIntensity = materialConfig.envMapIntensity
+        needsUpdate = true
+      }
+
+      ;(Object.keys(MATERIAL_TEXTURE_ASSIGNMENTS) as SceneMaterialTextureSlot[]).forEach((slot) => {
+        const ref = materialConfig.textures?.[slot] ?? null
+        assignTextureToMaterial(material, slot, ref)
+      })
 
       if (needsUpdate) {
         typed.needsUpdate = true
@@ -5245,6 +5475,52 @@ function resetMaterialOverrides(target: THREE.Object3D) {
       typed.depthWrite = baseline.depthWrite
       if (typeof baseline.wireframe === 'boolean' && typeof typed.wireframe === 'boolean') {
         typed.wireframe = baseline.wireframe
+      }
+      material.side = baseline.side ?? material.side
+
+      const standard = material as THREE.MeshStandardMaterial & { [key: string]: unknown }
+      if (baseline.metalness !== undefined && 'metalness' in standard) {
+        standard.metalness = baseline.metalness
+      }
+      if (baseline.roughness !== undefined && 'roughness' in standard) {
+        standard.roughness = baseline.roughness
+      }
+      if (baseline.emissive && 'emissive' in standard && standard.emissive) {
+        standard.emissive.copy(baseline.emissive)
+      }
+      if (baseline.emissiveIntensity !== undefined && 'emissiveIntensity' in standard) {
+        standard.emissiveIntensity = baseline.emissiveIntensity
+      }
+      if (baseline.aoMapIntensity !== undefined && 'aoMapIntensity' in standard) {
+        standard.aoMapIntensity = baseline.aoMapIntensity
+      }
+      if (baseline.envMapIntensity !== undefined && 'envMapIntensity' in standard) {
+        standard.envMapIntensity = baseline.envMapIntensity
+      }
+      if (baseline.map !== undefined && 'map' in standard) {
+        standard.map = baseline.map ?? null
+      }
+      if (baseline.normalMap !== undefined && 'normalMap' in standard) {
+        standard.normalMap = baseline.normalMap ?? null
+      }
+      if (baseline.metalnessMap !== undefined && 'metalnessMap' in standard) {
+        standard.metalnessMap = baseline.metalnessMap ?? null
+      }
+      if (baseline.roughnessMap !== undefined && 'roughnessMap' in standard) {
+        standard.roughnessMap = baseline.roughnessMap ?? null
+      }
+      if (baseline.aoMap !== undefined && 'aoMap' in standard) {
+        standard.aoMap = baseline.aoMap ?? null
+      }
+      if (baseline.emissiveMap !== undefined && 'emissiveMap' in standard) {
+        standard.emissiveMap = baseline.emissiveMap ?? null
+      }
+
+      const slotState = typed.userData?.[TEXTURE_SLOT_STATE_KEY] as Record<SceneMaterialTextureSlot, string | null> | undefined
+      if (slotState) {
+        (Object.keys(MATERIAL_TEXTURE_ASSIGNMENTS) as SceneMaterialTextureSlot[]).forEach((slot) => {
+          slotState[slot] = null
+        })
       }
       typed.needsUpdate = true
     })
@@ -5477,6 +5753,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   disposeSceneNodes()
   disposeScene()
+  disposeCachedTextures()
   window.removeEventListener('keyup', handleViewportShortcut, { capture: true })
   if (typeof window !== 'undefined') {
     window.removeEventListener('resize', handleViewportOverlayResize)

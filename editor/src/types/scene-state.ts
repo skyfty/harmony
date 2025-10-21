@@ -11,11 +11,13 @@ import type { StoredSceneDocument } from './stored-scene-document'
 import type { AssetIndexEntry } from './asset-index-entry'
 import type { SceneViewportSettings } from './scene-viewport-settings'
 import type { GroundSettings } from './ground-settings'
+import type { SceneMaterial } from '@/types/material'
 
 export interface SceneState {
   scenes: StoredSceneDocument[]
   currentSceneId: string | null
   nodes: SceneNode[]
+  materials: SceneMaterial[]
   selectedNodeId: string | null
   selectedNodeIds: string[]
   activeTool: EditorTool
