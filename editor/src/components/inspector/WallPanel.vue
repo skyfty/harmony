@@ -16,7 +16,10 @@ function syncLocalInputs() {
   if (!hasWallNode.value) {
     return
   }
-  const definition = selectedNode.value!.dynamicMesh!
+  const definition = selectedNode.value?.dynamicMesh
+  if (!definition || definition.type !== 'wall' || definition.segments.length === 0) {
+    return
+  }
   const segment = definition.segments[0]
   localHeight.value = segment?.height ?? localHeight.value
   localWidth.value = segment?.width ?? localWidth.value

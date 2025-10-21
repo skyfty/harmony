@@ -96,7 +96,8 @@ const textureLoader = new THREE.TextureLoader()
 const textureCache = new Map<string, THREE.Texture>()
 const pendingTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
 const TEXTURE_SLOT_STATE_KEY = '__harmonyTextureSlots'
-const MATERIAL_TEXTURE_ASSIGNMENTS: Record<SceneMaterialTextureSlot, { key: keyof THREE.MeshStandardMaterial; colorSpace?: THREE.ColorSpace }> = {
+type MeshStandardTextureKey = 'map' | 'normalMap' | 'metalnessMap' | 'roughnessMap' | 'aoMap' | 'emissiveMap'
+const MATERIAL_TEXTURE_ASSIGNMENTS: Record<SceneMaterialTextureSlot, { key: MeshStandardTextureKey; colorSpace?: THREE.ColorSpace }> = {
   albedo: { key: 'map', colorSpace: THREE.SRGBColorSpace },
   normal: { key: 'normalMap' },
   metalness: { key: 'metalnessMap' },
@@ -4176,6 +4177,7 @@ function hydrateWallBuildSessionFromSelection(session: WallBuildSession) {
 }
 
 function beginWallSegmentDrag(startPoint: THREE.Vector3) {
+  disableOrbitForWallBuild()
   const session = ensureWallBuildSession()
   hydrateWallBuildSessionFromSelection(session)
   session.pointerId = null
@@ -4994,6 +4996,9 @@ function clearLightHelpers() {
 function unregisterLightHelpersForNode(nodeId: string) {
   for (let index = lightHelpers.length - 1; index >= 0; index -= 1) {
     const helper = lightHelpers[index]
+    if (!helper) {
+      continue
+    }
     if (helper.userData?.nodeId === nodeId) {
       helper.dispose?.()
       helper.removeFromParent()
@@ -5207,7 +5212,7 @@ function disposeCachedTextures() {
   pendingTextureRequests.clear()
 }
 
-async function ensureMaterialTexture(ref: SceneMaterialTextureRef, slot: SceneMaterialTextureSlot): Promise<THREE.Texture | null> {
+async function ensureMaterialTexture(ref: SceneMaterialTextureRef): Promise<THREE.Texture | null> {
   const cacheKey = ref.assetId
   if (!cacheKey) {
     return null
@@ -5288,7 +5293,7 @@ function assignTextureToMaterial(
   if (!assignment) {
     return
   }
-  const typed = material as THREE.MeshStandardMaterial & { [key: string]: unknown }
+  const typed = material as THREE.MeshStandardMaterial & Record<MeshStandardTextureKey, THREE.Texture | null>
   const userData = material.userData ?? (material.userData = {})
   const slotState = (userData[TEXTURE_SLOT_STATE_KEY] ??= {} as Record<SceneMaterialTextureSlot, string | null>)
 
@@ -5302,7 +5307,7 @@ function assignTextureToMaterial(
   }
 
   slotState[slot] = ref.assetId
-  void ensureMaterialTexture(ref, slot).then((texture) => {
+  void ensureMaterialTexture(ref).then((texture) => {
     if (!texture) {
       return
     }

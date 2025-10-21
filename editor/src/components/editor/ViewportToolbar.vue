@@ -320,7 +320,7 @@ function handleSliderInput(key: SkyboxParameterKey, value: number) {
   emit('change-skybox-parameter', { key, value: clamped })
 }
 
-function handleShadowToggle(value: boolean) {
+const handleShadowToggle = (value: boolean | null) => {
   emit('change-shadows-enabled', Boolean(value))
 }
 
