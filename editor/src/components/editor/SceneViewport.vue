@@ -292,6 +292,7 @@ let wallBuildSession: WallBuildSession | null = null
 let wallPreviewNeedsSync = false
 let wallPreviewSignature: string | null = null
 let lastWallPlacementClick: { time: number; x: number; y: number } | null = null
+let wallPlacementSuppressedPointerId: number | null = null
 
 function registerWallPlacementClick(event: PointerEvent): boolean {
   const now = Date.now()
@@ -313,6 +314,15 @@ function registerWallPlacementClick(event: PointerEvent): boolean {
 
 function resetWallPlacementClickTracker() {
   lastWallPlacementClick = null
+}
+
+function pointerHitsSelectableObject(event: PointerEvent): boolean {
+  const nodeHit = pickNodeAtPointer(event)
+  if (nodeHit) {
+    return true
+  }
+  const selectionHit = pickActiveSelectionBoundingBoxHit(event)
+  return !!selectionHit
 }
 
 function normalizeWallDimensionsForViewport(values: { height?: number; width?: number; thickness?: number }): {
@@ -3497,11 +3507,18 @@ async function handlePointerDown(event: PointerEvent) {
 
   if (activeBuildTool.value === 'wall') {
     if (button === 0) {
-      pointerTrackingState = null
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
-      return
+      const hitsSelectable = pointerHitsSelectableObject(event)
+      if (hitsSelectable) {
+        wallPlacementSuppressedPointerId = event.pointerId
+        resetWallPlacementClickTracker()
+      } else {
+        wallPlacementSuppressedPointerId = null
+        pointerTrackingState = null
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
     }
     if (button === 2) {
       pointerTrackingState = null
@@ -3740,15 +3757,21 @@ function handlePointerUp(event: PointerEvent) {
 
   if (activeBuildTool.value === 'wall') {
     if (event.button === 0) {
-      const handled = handleWallPlacementClick(event)
-      if (handled) {
-        event.preventDefault()
-        event.stopPropagation()
-        event.stopImmediatePropagation()
+      const suppressed = wallPlacementSuppressedPointerId === event.pointerId
+      if (!suppressed) {
+        const handled = handleWallPlacementClick(event)
+        wallPlacementSuppressedPointerId = null
+        if (handled) {
+          event.preventDefault()
+          event.stopPropagation()
+          event.stopImmediatePropagation()
+        }
+        return
       }
+      wallPlacementSuppressedPointerId = null
+    } else {
       return
     }
-    return
   }
 
   if (!pointerTrackingState || event.pointerId !== pointerTrackingState.pointerId) {
@@ -3835,12 +3858,17 @@ function handlePointerCancel(event: PointerEvent) {
     return
   }
 
-  if (activeBuildTool.value === 'wall' && wallBuildSession) {
-    cancelWallDrag()
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
-    return
+  if (activeBuildTool.value === 'wall') {
+    if (wallPlacementSuppressedPointerId === event.pointerId) {
+      wallPlacementSuppressedPointerId = null
+    }
+    if (wallBuildSession) {
+      cancelWallDrag()
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
   }
 
   if (!pointerTrackingState || event.pointerId !== pointerTrackingState.pointerId) {
@@ -4160,6 +4188,7 @@ function clearWallBuildSession(options: { disposePreview?: boolean } = {}) {
   wallBuildSession = null
   wallPreviewSignature = null
   resetWallPlacementClickTracker()
+  wallPlacementSuppressedPointerId = null
 }
 
 function ensureWallBuildSession(): WallBuildSession {
@@ -4211,6 +4240,18 @@ function constrainWallEndPoint(start: THREE.Vector3, target: THREE.Vector3): THR
 }
 
 function hydrateWallBuildSessionFromSelection(session: WallBuildSession) {
+  const isFreshSession = !session.nodeId && session.segments.length === 0
+  if (isFreshSession) {
+    const selectedId = sceneStore.selectedNodeId
+    if (selectedId) {
+      const selectedNode = findSceneNode(sceneStore.nodes, selectedId)
+      if (selectedNode?.dynamicMesh?.type === 'wall') {
+        session.dimensions = getWallNodeDimensions(selectedNode)
+      }
+    }
+    session.dimensions = normalizeWallDimensionsForViewport(session.dimensions)
+    return
+  }
   if (!session.nodeId) {
     const selectedId = sceneStore.selectedNodeId
     if (selectedId) {
@@ -4274,6 +4315,7 @@ function cancelWallDrag() {
   wallBuildSession.dragEnd = null
   resetWallDragState()
   updateWallPreview()
+  wallPlacementSuppressedPointerId = null
 }
 
 function commitWallSegmentDrag(): boolean {
