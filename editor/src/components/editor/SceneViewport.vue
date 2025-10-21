@@ -270,14 +270,12 @@ type WallSessionSegment = {
 }
 
 type WallBuildSession = {
-  pointerId: number | null
   dragStart: THREE.Vector3 | null
   dragEnd: THREE.Vector3 | null
   segments: WallSessionSegment[]
   previewGroup: THREE.Group | null
   nodeId: string | null
   dimensions: { height: number; width: number; thickness: number }
-  finalizePointer: { pointerId: number; startX: number; startY: number; moved: boolean } | null
 }
 
 const WALL_DEFAULT_HEIGHT = 3
@@ -287,9 +285,35 @@ const WALL_MIN_HEIGHT = 0.5
 const WALL_MIN_WIDTH = 0.1
 const WALL_MIN_THICKNESS = 0.05
 
+const WALL_DOUBLE_CLICK_MAX_DELAY_MS = 350
+const WALL_DOUBLE_CLICK_MAX_DISTANCE_SQ = 64
+
 let wallBuildSession: WallBuildSession | null = null
 let wallPreviewNeedsSync = false
 let wallPreviewSignature: string | null = null
+let lastWallPlacementClick: { time: number; x: number; y: number } | null = null
+
+function registerWallPlacementClick(event: PointerEvent): boolean {
+  const now = Date.now()
+  const previous = lastWallPlacementClick
+  let isDoubleClick = false
+  if (previous) {
+    const elapsed = now - previous.time
+    if (elapsed <= WALL_DOUBLE_CLICK_MAX_DELAY_MS) {
+      const dx = event.clientX - previous.x
+      const dy = event.clientY - previous.y
+      if (dx * dx + dy * dy <= WALL_DOUBLE_CLICK_MAX_DISTANCE_SQ) {
+        isDoubleClick = true
+      }
+    }
+  }
+  lastWallPlacementClick = { time: now, x: event.clientX, y: event.clientY }
+  return isDoubleClick
+}
+
+function resetWallPlacementClickTracker() {
+  lastWallPlacementClick = null
+}
 
 function normalizeWallDimensionsForViewport(values: { height?: number; width?: number; thickness?: number }): {
   height: number
@@ -3392,9 +3416,6 @@ function cancelWallSelection(): boolean {
   if (!wallBuildSession) {
     return false
   }
-  if (wallBuildSession.pointerId !== null && canvasRef.value && canvasRef.value.hasPointerCapture(wallBuildSession.pointerId)) {
-    canvasRef.value.releasePointerCapture(wallBuildSession.pointerId)
-  }
   cancelWallDrag()
   clearWallBuildSession()
   restoreOrbitAfterWallBuild()
@@ -3484,14 +3505,6 @@ async function handlePointerDown(event: PointerEvent) {
     }
     if (button === 2) {
       pointerTrackingState = null
-      if (wallBuildSession) {
-        wallBuildSession.finalizePointer = {
-          pointerId: event.pointerId,
-          startX: event.clientX,
-          startY: event.clientY,
-          moved: false,
-        }
-      }
       return
     }
   }
@@ -3620,18 +3633,8 @@ function handlePointerMove(event: PointerEvent) {
   }
 
   if (activeBuildTool.value === 'wall' && wallBuildSession) {
-    if (wallBuildSession.finalizePointer && wallBuildSession.finalizePointer.pointerId === event.pointerId) {
-      const dx = event.clientX - wallBuildSession.finalizePointer.startX
-      const dy = event.clientY - wallBuildSession.finalizePointer.startY
-      if (!wallBuildSession.finalizePointer.moved && Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
-        wallBuildSession.finalizePointer.moved = true
-      }
-    }
     if (wallBuildSession.dragStart) {
-      const isRightButtonActive =
-        !!wallBuildSession.finalizePointer &&
-        wallBuildSession.finalizePointer.pointerId === event.pointerId &&
-        (event.buttons & 2) !== 0
+      const isRightButtonActive = (event.buttons & 2) !== 0
       if (!isRightButtonActive) {
         updateWallSegmentDrag(event)
         return
@@ -3735,32 +3738,7 @@ function handlePointerUp(event: PointerEvent) {
     return
   }
 
-  if (wallBuildSession && wallBuildSession.pointerId === event.pointerId) {
-    if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
-      canvasRef.value.releasePointerCapture(event.pointerId)
-    }
-    commitWallSegmentDrag()
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
-    return
-  }
-
   if (activeBuildTool.value === 'wall') {
-    if (event.button === 2) {
-      if (wallBuildSession) {
-        if (wallBuildSession.finalizePointer && wallBuildSession.finalizePointer.pointerId === event.pointerId) {
-          const shouldFinalize = !wallBuildSession.finalizePointer.moved
-          wallBuildSession.finalizePointer = null
-          if (shouldFinalize) {
-            finalizeWallBuildSession()
-          }
-        } else {
-          wallBuildSession.finalizePointer = null
-        }
-      }
-      return
-    }
     if (event.button === 0) {
       const handled = handleWallPlacementClick(event)
       if (handled) {
@@ -3770,6 +3748,7 @@ function handlePointerUp(event: PointerEvent) {
       }
       return
     }
+    return
   }
 
   if (!pointerTrackingState || event.pointerId !== pointerTrackingState.pointerId) {
@@ -4180,6 +4159,7 @@ function clearWallBuildSession(options: { disposePreview?: boolean } = {}) {
   }
   wallBuildSession = null
   wallPreviewSignature = null
+  resetWallPlacementClickTracker()
 }
 
 function ensureWallBuildSession(): WallBuildSession {
@@ -4187,7 +4167,6 @@ function ensureWallBuildSession(): WallBuildSession {
     return wallBuildSession
   }
   wallBuildSession = {
-    pointerId: null,
     dragStart: null,
     dragEnd: null,
     segments: [],
@@ -4198,7 +4177,6 @@ function ensureWallBuildSession(): WallBuildSession {
       width: WALL_DEFAULT_WIDTH,
       thickness: WALL_DEFAULT_THICKNESS,
     }),
-    finalizePointer: null,
   }
   return wallBuildSession
 }
@@ -4257,10 +4235,8 @@ function beginWallSegmentDrag(startPoint: THREE.Vector3) {
   disableOrbitForWallBuild()
   const session = ensureWallBuildSession()
   hydrateWallBuildSessionFromSelection(session)
-  session.pointerId = null
   session.dragStart = startPoint.clone()
   session.dragEnd = startPoint.clone()
-  session.finalizePointer = null
   updateWallPreview()
 }
 
@@ -4287,7 +4263,6 @@ function resetWallDragState() {
   if (!wallBuildSession) {
     return
   }
-  wallBuildSession.pointerId = null
   restoreOrbitAfterWallBuild()
 }
 
@@ -4297,7 +4272,6 @@ function cancelWallDrag() {
   }
   wallBuildSession.dragStart = null
   wallBuildSession.dragEnd = null
-  wallBuildSession.finalizePointer = null
   resetWallDragState()
   updateWallPreview()
 }
@@ -4354,8 +4328,6 @@ function commitWallSegmentDrag(): boolean {
 
   wallBuildSession.dragStart = end.clone()
   wallBuildSession.dragEnd = end.clone()
-  wallBuildSession.pointerId = null
-  wallBuildSession.finalizePointer = null
   wallBuildSession.dimensions = normalizeWallDimensionsForViewport(wallBuildSession.dimensions)
   updateWallPreview()
   scheduleThumbnailCapture()
@@ -4371,9 +4343,13 @@ function handleWallPlacementClick(event: PointerEvent): boolean {
   }
   const snappedPoint = snapVectorToGrid(groundPointerHelper.clone())
   const session = ensureWallBuildSession()
+  const isDoubleClick = registerWallPlacementClick(event)
 
   if (!session.dragStart) {
     beginWallSegmentDrag(snappedPoint)
+    if (isDoubleClick) {
+      finalizeWallBuildSession()
+    }
     return true
   }
 
@@ -4384,10 +4360,15 @@ function handleWallPlacementClick(event: PointerEvent): boolean {
     updateWallPreview()
   }
 
-  if (!commitWallSegmentDrag()) {
+  const committed = commitWallSegmentDrag()
+  if (!committed) {
     session.dragStart = constrained.clone()
     session.dragEnd = constrained.clone()
     updateWallPreview()
+  }
+
+  if (isDoubleClick) {
+    finalizeWallBuildSession()
   }
   return true
 }
