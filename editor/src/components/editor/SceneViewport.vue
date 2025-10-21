@@ -4667,17 +4667,224 @@ function applyWallScaleTransform(target: THREE.Object3D, node: SceneNode): boole
   return true
 }
 
+function updateLightObjectProperties(container: THREE.Object3D, node: SceneNode) {
+  const config = node.light
+  if (!config) {
+    container.userData.lightType = null
+    return
+  }
+
+  const light = container.children.find((child) => (child as THREE.Light).isLight) as THREE.Light | undefined
+  if (!light) {
+    container.userData.lightType = config.type
+    return
+  }
+
+  light.color.set(config.color)
+  light.intensity = config.intensity
+  light.castShadow = config.castShadow ?? light.castShadow
+
+  if (light instanceof THREE.PointLight) {
+    light.distance = config.distance ?? light.distance
+    light.decay = config.decay ?? light.decay
+  } else if (light instanceof THREE.SpotLight) {
+    light.distance = config.distance ?? light.distance
+    light.angle = config.angle ?? light.angle
+    light.penumbra = config.penumbra ?? light.penumbra
+    light.decay = config.decay ?? light.decay
+    if (config.target) {
+      light.target.position.set(
+        config.target.x - node.position.x,
+        config.target.y - node.position.y,
+        config.target.z - node.position.z,
+      )
+      if (!light.target.parent) {
+        container.add(light.target)
+      }
+    }
+  } else if (light instanceof THREE.DirectionalLight) {
+    if (config.target) {
+      light.target.position.set(
+        config.target.x - node.position.x,
+        config.target.y - node.position.y,
+        config.target.z - node.position.z,
+      )
+      if (!light.target.parent) {
+        container.add(light.target)
+      }
+    }
+    light.castShadow = config.castShadow ?? light.castShadow
+  }
+
+  container.userData.lightType = config.type
+  light.userData = { ...(light.userData ?? {}), nodeId: node.id }
+
+  const helper = container.children.find((child) => (child as LightHelperObject).update && child.userData?.nodeId === node.id) as LightHelperObject | undefined
+  helper?.update?.()
+}
+
+function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
+  const nodeType = node.nodeType ?? (node.light ? 'light' : 'mesh')
+  const userData = object.userData ?? (object.userData = {})
+
+  userData.nodeId = node.id
+  userData.nodeType = nodeType
+  userData.dynamicMeshType = node.dynamicMesh?.type ?? null
+  userData.lightType = node.light?.type ?? null
+  userData.sourceAssetId = node.sourceAssetId ?? null
+  userData.usesRuntimeObject = nodeType === 'mesh' ? sceneStore.hasRuntimeObject(node.id) : false
+
+  object.name = node.name
+  object.position.set(node.position.x, node.position.y, node.position.z)
+  object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z)
+  object.scale.set(node.scale.x, node.scale.y, node.scale.z)
+  object.visible = node.visible ?? true
+
+  if (node.dynamicMesh?.type === 'ground') {
+    const groundMesh = userData.groundMesh as THREE.Mesh | undefined
+    if (groundMesh) {
+      updateGroundMesh(groundMesh, node.dynamicMesh)
+    }
+  } else if (node.dynamicMesh?.type === 'wall') {
+    const wallGroup = userData.wallGroup as THREE.Group | undefined
+    if (wallGroup) {
+      updateWallGroup(wallGroup, node.dynamicMesh)
+    }
+  }
+
+  if (node.material) {
+    applyMaterialOverrides(object, node.material)
+  } else {
+    resetMaterialOverrides(object)
+  }
+
+  if (nodeType === 'light') {
+    updateLightObjectProperties(object, node)
+  }
+}
+
+function shouldRecreateNode(object: THREE.Object3D, node: SceneNode): boolean {
+  const nodeType = node.nodeType ?? (node.light ? 'light' : 'mesh')
+  const userData = object.userData ?? {}
+  if (userData.nodeType !== nodeType) {
+    return true
+  }
+  const nextDynamicMeshType = node.dynamicMesh?.type ?? null
+  if ((userData.dynamicMeshType ?? null) !== nextDynamicMeshType) {
+    return true
+  }
+  const nextLightType = node.light?.type ?? null
+  if ((userData.lightType ?? null) !== nextLightType) {
+    return true
+  }
+  const nextSourceAssetId = node.sourceAssetId ?? null
+  if ((userData.sourceAssetId ?? null) !== nextSourceAssetId) {
+    return true
+  }
+  const expectsRuntime = nodeType === 'mesh' ? sceneStore.hasRuntimeObject(node.id) : false
+  if (Boolean(userData.usesRuntimeObject) !== expectsRuntime) {
+    return true
+  }
+  return false
+}
+
+function disposeNodeObjectRecursive(object: THREE.Object3D) {
+  const children = [...object.children]
+  for (const child of children) {
+    const childNodeId = child.userData?.nodeId as string | undefined
+    if (childNodeId) {
+      disposeNodeObjectRecursive(child)
+    } else {
+      child.removeFromParent()
+      if (child.userData?.dynamicMeshType === 'ground') {
+        continue
+      }
+      if (object.userData?.usesRuntimeObject) {
+        continue
+      }
+      disposeObjectResources(child)
+    }
+  }
+
+  const nodeId = object.userData?.nodeId as string | undefined
+  if (nodeId) {
+    objectMap.delete(nodeId)
+    unregisterLightHelpersForNode(nodeId)
+  }
+
+  object.removeFromParent()
+
+  const isGroundMesh = object.userData?.dynamicMeshType === 'ground'
+  const shouldDispose = !isGroundMesh && (!nodeId || !sceneStore.hasRuntimeObject(nodeId))
+  if (shouldDispose) {
+    disposeObjectResources(object)
+  }
+}
+
+function disposeNodeSubtree(nodeId: string) {
+  const target = objectMap.get(nodeId)
+  if (!target) {
+    return
+  }
+  disposeNodeObjectRecursive(target)
+}
+
+function reconcileNodeList(nodes: SceneNode[], parent: THREE.Object3D, encountered: Set<string>) {
+  const existingChildren = new Map<string, THREE.Object3D>()
+  parent.children.forEach((child) => {
+    const childId = child.userData?.nodeId as string | undefined
+    if (childId) {
+      existingChildren.set(childId, child)
+    }
+  })
+
+  nodes.forEach((node) => {
+    reconcileNode(node, parent, encountered)
+    existingChildren.delete(node.id)
+  })
+}
+
+function reconcileNode(node: SceneNode, parent: THREE.Object3D, encountered: Set<string>): THREE.Object3D {
+  encountered.add(node.id)
+  let object = objectMap.get(node.id) ?? null
+
+  if (object && shouldRecreateNode(object, node)) {
+    disposeNodeSubtree(node.id)
+    object = null
+  }
+
+  if (!object) {
+    object = createObjectFromNode(node)
+    if (object.parent !== parent) {
+      parent.add(object)
+    }
+  } else if (object.parent !== parent) {
+    parent.add(object)
+  }
+
+  updateNodeObject(object, node)
+  reconcileNodeList(node.children ?? [], object, encountered)
+  return object
+}
+
 function syncSceneGraph() {
   if (!scene) return
 
-  disposeSceneNodes()
-  rootGroup.clear()
-  objectMap.clear()
+  const encountered = new Set<string>()
+  reconcileNodeList(props.sceneNodes, rootGroup, encountered)
 
-  for (const node of props.sceneNodes) {
-    const object = createObjectFromNode(node)
-    rootGroup.add(object)
-  }
+  const removable: string[] = []
+  objectMap.forEach((_object, id) => {
+    if (!encountered.has(id)) {
+      removable.push(id)
+    }
+  })
+
+  removable.forEach((id) => {
+    if (objectMap.has(id)) {
+      disposeNodeSubtree(id)
+    }
+  })
 
   // 重新附加选择并确保工具模式正确
   attachSelection(props.selectedNodeId, props.activeTool)
@@ -4691,29 +4898,10 @@ function syncSceneGraph() {
 function disposeSceneNodes() {
   clearSelectionBox()
   clearLightHelpers()
-  rootGroup.traverse((child) => {
-    const nodeId = child.userData?.nodeId as string | undefined
-    if (nodeId && sceneStore.hasRuntimeObject(nodeId)) {
-      return
-    }
-
-    const meshLike = child as THREE.Mesh
-    if (!meshLike?.isMesh) {
-      continue
-    }
-    if (meshLike.userData?.dynamicMeshType === 'ground') {
-      continue
-    }
-    if (meshLike.geometry) {
-      meshLike.geometry.dispose()
-    }
-    if (meshLike.material) {
-      const material = meshLike.material
-      if (Array.isArray(material)) {
-        material.forEach((mat) => mat.dispose())
-      } else {
-        material.dispose()
-      }
+  const nodeIds = Array.from(objectMap.keys())
+  nodeIds.forEach((id) => {
+    if (objectMap.has(id)) {
+      disposeNodeSubtree(id)
     }
   })
 }
@@ -4734,6 +4922,18 @@ function clearLightHelpers() {
   })
   lightHelpers.length = 0
   lightHelpersNeedingUpdate.clear()
+}
+
+function unregisterLightHelpersForNode(nodeId: string) {
+  for (let index = lightHelpers.length - 1; index >= 0; index -= 1) {
+    const helper = lightHelpers[index]
+    if (helper.userData?.nodeId === nodeId) {
+      helper.dispose?.()
+      helper.removeFromParent()
+      lightHelpers.splice(index, 1)
+      lightHelpersNeedingUpdate.delete(helper)
+    }
+  }
 }
 
 function createLightObject(node: SceneNode): THREE.Object3D {
@@ -4964,6 +5164,40 @@ function applyMaterialOverrides(target: THREE.Object3D, materialConfig?: NonNull
   })
 }
 
+function resetMaterialOverrides(target: THREE.Object3D) {
+  target.traverse((child) => {
+    const mesh = child as THREE.Mesh
+    if (!mesh?.isMesh) {
+      return
+    }
+
+    const currentMaterial = mesh.material
+    if (!currentMaterial) {
+      return
+    }
+
+    const materials = Array.isArray(currentMaterial) ? currentMaterial : [currentMaterial]
+    materials.forEach((material) => {
+      const typed = material as THREE.Material & { color?: THREE.Color; wireframe?: boolean }
+      const baseline = (typed.userData?.[MATERIAL_ORIGINAL_KEY] ?? null) as HarmonyMaterialState | null
+      if (!baseline) {
+        return
+      }
+
+      if (baseline.color && typed.color) {
+        typed.color.copy(baseline.color)
+      }
+      typed.opacity = baseline.opacity
+      typed.transparent = baseline.transparent
+      typed.depthWrite = baseline.depthWrite
+      if (typeof baseline.wireframe === 'boolean' && typeof typed.wireframe === 'boolean') {
+        typed.wireframe = baseline.wireframe
+      }
+      typed.needsUpdate = true
+    })
+  })
+}
+
 function createObjectFromNode(node: SceneNode): THREE.Object3D {
   let object: THREE.Object3D
 
@@ -4974,19 +5208,23 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     object.name = node.name
   } else if (nodeType === 'mesh') {
     const container = new THREE.Group()
-    container.userData.nodeId = node.id
+    container.name = node.name
+    const containerData = container.userData ?? (container.userData = {})
+    containerData.nodeId = node.id
 
     if (node.dynamicMesh?.type === 'ground') {
       const groundMesh = createGroundMesh(node.dynamicMesh)
       groundMesh.removeFromParent()
       groundMesh.userData.nodeId = node.id
       container.add(groundMesh)
-      container.userData.groundMesh = groundMesh
+      containerData.groundMesh = groundMesh
+      containerData.dynamicMeshType = 'ground'
     } else if (node.dynamicMesh?.type === 'wall') {
       const wallGroup = createWallGroup(node.dynamicMesh as WallDynamicMesh)
       wallGroup.userData.nodeId = node.id
       container.add(wallGroup)
-      container.userData.wallGroup = wallGroup
+      containerData.wallGroup = wallGroup
+      containerData.dynamicMeshType = 'wall'
     } else {
       const runtimeObject = getRuntimeObject(node.id)
       if (runtimeObject) {
@@ -5000,6 +5238,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
           }
         })
         container.add(runtimeObject)
+        containerData.usesRuntimeObject = true
       } else {
         const fallbackMaterial = node.isPlaceholder
           ? new THREE.MeshBasicMaterial({ color: 0x4dd0e1, wireframe: true, opacity: 0.65, transparent: true })
@@ -5007,7 +5246,13 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
         const fallback = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), fallbackMaterial)
         fallback.userData.nodeId = node.id
         container.add(fallback)
+        containerData.usesRuntimeObject = false
       }
+    }
+
+    containerData.sourceAssetId = node.sourceAssetId ?? null
+    if (typeof containerData.dynamicMeshType === 'undefined') {
+      containerData.dynamicMeshType = node.dynamicMesh?.type ?? null
     }
     object = container
   } else if (nodeType === 'group') {
@@ -5029,6 +5274,18 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     for (const child of node.children) {
       object.add(createObjectFromNode(child))
     }
+  }
+
+  const userData = object.userData ?? (object.userData = {})
+  userData.nodeId = node.id
+  userData.nodeType = nodeType
+  userData.dynamicMeshType = node.dynamicMesh?.type ?? userData.dynamicMeshType ?? null
+  userData.lightType = node.light?.type ?? null
+  userData.sourceAssetId = node.sourceAssetId ?? null
+  if (nodeType !== 'mesh') {
+    userData.usesRuntimeObject = false
+  } else if (typeof userData.usesRuntimeObject !== 'boolean') {
+    userData.usesRuntimeObject = sceneStore.hasRuntimeObject(node.id)
   }
 
   const isVisible = node.visible ?? true
