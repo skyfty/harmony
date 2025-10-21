@@ -14,12 +14,15 @@ const quickActions: QuickAction[] = [
   { icon: 'mdi-play-circle-outline', label: 'Preview', action: 'Preview' },
 ]
 
+const props = defineProps<{ showStats: boolean }>()
+
 const sceneStore = useSceneStore()
 const { canUndo, canRedo, currentScene, panelVisibility } = storeToRefs(sceneStore)
 const sceneName = computed(() => currentScene.value?.name ?? 'Untitled Scene')
 
 const emit = defineEmits<{
   (event: 'menu-action', action: string): void
+  (event: 'toggle-stats'): void
 }>()
 function handleMenuAction(action: string) {
   if ((action === 'Undo' && !canUndo.value) || (action === 'Redo' && !canRedo.value)) {
@@ -30,6 +33,10 @@ function handleMenuAction(action: string) {
 
 function handleTogglePanel(panel: EditorPanel) {
   sceneStore.togglePanelVisibility(panel)
+}
+
+function handleToggleStats() {
+  emit('toggle-stats')
 }
 
 </script>
@@ -211,6 +218,18 @@ function handleTogglePanel(panel: EditorPanel) {
                     <template #append>
                       <span class="menu-item-check">
                         <v-icon v-if="panelVisibility.project" size="18">mdi-check</v-icon>
+                      </span>
+                    </template>
+                  </v-list-item>
+                  <v-divider />
+                  <v-list-item
+                    class="menu-list-item"
+                    @click="handleToggleStats"
+                  >
+                    Stats Panel
+                    <template #append>
+                      <span class="menu-item-check">
+                        <v-icon v-if="props.showStats" size="18">mdi-check</v-icon>
                       </span>
                     </template>
                   </v-list-item>

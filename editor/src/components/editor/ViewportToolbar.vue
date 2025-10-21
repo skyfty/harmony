@@ -104,6 +104,16 @@
                 class="skybox-select"
                 @update:modelValue="handlePresetSelect"
               />
+              <v-switch
+                class="skybox-switch"
+                inset
+                density="compact"
+                hide-details
+                color="primary"
+                :model-value="shadowsEnabled"
+                label="Enable Shadows"
+                @update:modelValue="handleShadowToggle"
+              />
             </div>
             <div class="skybox-section">
               <div class="skybox-section-header">Parameter Adjustments</div>
@@ -208,6 +218,7 @@ const props = defineProps<{
   cameraControlMode: 'orbit' | 'map'
   skyboxPresets: SkyboxPresetDefinition[]
   activeBuildTool: BuildTool | null
+  shadowsEnabled: boolean
 }>()
 
 const emit = defineEmits<{
@@ -221,6 +232,7 @@ const emit = defineEmits<{
   (event: 'orbit-right'): void
   (event: 'toggle-camera-control'): void
   (event: 'change-build-tool', tool: BuildTool | null): void
+  (event: 'change-shadows-enabled', enabled: boolean): void
 }>()
 
 const {
@@ -232,6 +244,7 @@ const {
   skyboxPresets,
   cameraControlMode,
   activeBuildTool,
+  shadowsEnabled,
 } = toRefs(props)
 const sceneStore = useSceneStore()
 
@@ -305,6 +318,10 @@ function handleSliderInput(key: SkyboxParameterKey, value: number) {
     [key]: clamped,
   }
   emit('change-skybox-parameter', { key, value: clamped })
+}
+
+function handleShadowToggle(value: boolean) {
+  emit('change-shadows-enabled', Boolean(value))
 }
 
 function emitAlign(mode: AlignMode) {
@@ -437,6 +454,10 @@ function stopOrbitRotation() {
 
 .skybox-select {
   width: 100%;
+}
+
+.skybox-switch {
+  margin-top: -4px;
 }
 
 .skybox-slider {

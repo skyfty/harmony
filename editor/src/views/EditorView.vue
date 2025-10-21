@@ -77,6 +77,7 @@ const exportPreferences = ref<SceneExportDialogOptions>({
 const viewportRef = ref<SceneViewportHandle | null>(null)
 const isNewSceneDialogOpen = ref(false)
 const isPreviewing = ref(false)
+const showStatsPanel = ref(true)
 type PreviewCameraSeed = Pick<SceneCameraState, 'position' | 'target'>
 type PreviewSessionState = {
   url: string
@@ -347,6 +348,10 @@ function handlePreviewError(message: string) {
 function handlePreviewClose() {
   releasePreviewSession()
   uiStore.hideLoadingOverlay(true)
+}
+
+function toggleStatsPanelVisibility() {
+  showStatsPanel.value = !showStatsPanel.value
 }
 
 async function handlePreview() {
@@ -849,6 +854,8 @@ onBeforeUnmount(() => {
   <div class="editor-layout" :class="layoutClasses" :style="layoutStyles">
       <MenuBar 
         @menu-action="handleAction"
+        :show-stats="showStatsPanel"
+        @toggle-stats="toggleStatsPanelVisibility"
       />
       <transition name="slide-left">
         <section v-if="showHierarchyDocked" class="panel hierarchy-panel">
@@ -870,6 +877,7 @@ onBeforeUnmount(() => {
           :focus-node-id="cameraFocusNodeId"
           :focus-request-id="cameraFocusRequestId"
           :preview-active="!!previewSession"
+      :show-stats="showStatsPanel"
           @change-tool="setTool"
           @select-node="handleViewportSelection"
           @update-node-transform="handleViewportTransform"

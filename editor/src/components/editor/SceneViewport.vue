@@ -47,8 +47,10 @@ const props = withDefaults(defineProps<{
   focusNodeId: string | null
   focusRequestId: number
   previewActive?: boolean
+  showStats?: boolean
 }>(), {
   previewActive: false,
+  showStats: true,
 })
 
 const emit = defineEmits<{
@@ -88,6 +90,13 @@ const skySunPosition = new THREE.Vector3()
 let stats: Stats | null = null
 let statsPanelIndex = 0
 let statsPointerHandler: ((event: MouseEvent) => void) | null = null
+
+function applyRendererShadowSetting() {
+  if (!renderer) {
+    return
+  }
+  renderer.shadowMap.enabled = Boolean(shadowsEnabled.value)
+}
 const DEFAULT_BACKGROUND_COLOR = 0x516175
 const GROUND_NODE_ID = 'harmony:ground'
 const SKY_ENVIRONMENT_INTENSITY = 0.35
@@ -152,6 +161,7 @@ const cameraControlMode = computed<CameraControlMode>({
 const isDragHovering = ref(false)
 const gridVisible = computed(() => sceneStore.viewportSettings.showGrid)
 const axesVisible = computed(() => sceneStore.viewportSettings.showAxes)
+const shadowsEnabled = computed(() => sceneStore.viewportSettings.shadowsEnabled)
 const cameraProjectionMode = computed(() => sceneStore.viewportSettings.cameraProjection)
 const skyboxSettings = computed(() => sceneStore.viewportSettings.skybox)
 const canAlignSelection = computed(() => {
@@ -1804,6 +1814,10 @@ function handleSkyboxParameterChange(payload: { key: SkyboxParameterKey; value: 
   )
 }
 
+function handleShadowsEnabledChange(enabled: boolean) {
+  sceneStore.setViewportShadowsEnabled(Boolean(enabled))
+}
+
 function handleAlignSelection(mode: AlignMode) {
   alignSelection(mode)
 }
@@ -2276,6 +2290,11 @@ function applyCameraControlMode(mode: CameraControlMode) {
 }
 
 function ensureStatsPanel() {
+  if (!props.showStats) {
+    disposeStats()
+    return
+  }
+
   const host = statsHostRef.value
   if (!host) {
     return
@@ -2312,6 +2331,26 @@ function ensureStatsPanel() {
   stats.showPanel(statsPanelIndex)
 }
 
+function disposeStats() {
+  if (stats && statsPointerHandler) {
+    stats.dom.removeEventListener('click', statsPointerHandler)
+  }
+  if (stats) {
+    stats.dom.remove()
+  }
+  stats = null
+  statsPointerHandler = null
+  statsPanelIndex = 0
+}
+
+function updateStatsVisibility() {
+  if (!props.showStats) {
+    disposeStats()
+    return
+  }
+  ensureStatsPanel()
+}
+
 function initScene() {
   if (!canvasRef.value || !viewportEl.value) {
     return
@@ -2320,7 +2359,7 @@ function initScene() {
   const width = viewportEl.value.clientWidth
   const height = viewportEl.value.clientHeight
 
-  ensureStatsPanel()
+  updateStatsVisibility()
 
   renderer = new THREE.WebGLRenderer({
     canvas: canvasRef.value,
@@ -2330,7 +2369,7 @@ function initScene() {
   })
   renderer.setPixelRatio(window.devicePixelRatio)
   renderer.setSize(width, height)
-  renderer.shadowMap.enabled = true
+  renderer.shadowMap.enabled = Boolean(shadowsEnabled.value)
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
   renderer.toneMapping = THREE.ACESFilmicToneMapping
   renderer.toneMappingExposure = skyboxSettings.value.exposure
@@ -2632,15 +2671,7 @@ function animate() {
 }
 
 function disposeScene() {
-  if (stats && statsPointerHandler) {
-    stats.dom.removeEventListener('click', statsPointerHandler)
-  }
-  if (stats) {
-    stats.dom.remove()
-    stats = null
-  }
-  statsPointerHandler = null
-  statsPanelIndex = 0
+  disposeStats()
 
   resizeObserver?.disconnect()
   resizeObserver = null
@@ -5216,7 +5247,18 @@ watch(viewportToolbarHostRef, (host) => {
 })
 
 watch(statsHostRef, () => {
-  ensureStatsPanel()
+  updateStatsVisibility()
+})
+
+watch(
+  () => props.showStats,
+  () => {
+    updateStatsVisibility()
+  },
+)
+
+watch(shadowsEnabled, () => {
+  applyRendererShadowSetting()
 })
 
 watch(
@@ -5294,6 +5336,7 @@ defineExpose<SceneViewportHandle>({
         :skybox-settings="skyboxSettings"
         :skybox-presets="skyboxPresetList"
         :active-build-tool="activeBuildTool"
+        :shadows-enabled="shadowsEnabled"
         @reset-camera="resetCameraView"
         @drop-to-ground="dropSelectionToGround"
         @select-skybox-preset="handleSkyboxPresetSelect"
@@ -5304,9 +5347,10 @@ defineExpose<SceneViewportHandle>({
         @orbit-right="handleOrbitRight"
         @toggle-camera-control="handleToggleCameraControlMode"
         @change-build-tool="handleBuildToolChange"
+        @change-shadows-enabled="handleShadowsEnabledChange"
       />
     </div>
-    <div ref="statsHostRef" class="stats-host"></div>
+  <div ref="statsHostRef" class="stats-host" v-show="props.showStats"></div>
     <div
       ref="surfaceRef"
       class="viewport-surface"

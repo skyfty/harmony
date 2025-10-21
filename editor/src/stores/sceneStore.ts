@@ -625,6 +625,7 @@ const defaultViewportSettings: SceneViewportSettings = {
   showAxes: false,
   cameraProjection: 'perspective',
   cameraControlMode: 'map',
+  shadowsEnabled: true,
   skybox: cloneSkyboxSettings(defaultSkyboxSettings),
 }
 
@@ -647,6 +648,9 @@ function cloneViewportSettings(settings?: Partial<SceneViewportSettings> | null)
     cameraControlMode: isCameraControlMode(settings?.cameraControlMode)
       ? settings!.cameraControlMode
       : defaultViewportSettings.cameraControlMode,
+    shadowsEnabled: typeof settings?.shadowsEnabled === 'boolean'
+      ? settings.shadowsEnabled
+      : defaultViewportSettings.shadowsEnabled,
     skybox: normalizeSkyboxSettings(baseSkybox),
   }
 }
@@ -670,6 +674,7 @@ function viewportSettingsEqual(a: SceneViewportSettings, b: SceneViewportSetting
     a.showAxes === b.showAxes &&
     a.cameraProjection === b.cameraProjection &&
     a.cameraControlMode === b.cameraControlMode &&
+    a.shadowsEnabled === b.shadowsEnabled &&
     skyboxSettingsEqual(a.skybox, b.skybox)
   )
 }
@@ -3175,6 +3180,12 @@ export const useSceneStore = defineStore('scene', {
     },
     toggleViewportAxesVisible() {
       this.setViewportAxesVisible(!this.viewportSettings.showAxes)
+    },
+    setViewportShadowsEnabled(enabled: boolean) {
+      this.setViewportSettings({ shadowsEnabled: enabled })
+    },
+    toggleViewportShadowsEnabled() {
+      this.setViewportShadowsEnabled(!this.viewportSettings.shadowsEnabled)
     },
     setViewportCameraProjection(mode: CameraProjectionMode) {
       if (!isCameraProjectionMode(mode)) {

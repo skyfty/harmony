@@ -17,5 +17,6 @@ export interface SceneViewportSettings {
   showAxes: boolean
   cameraProjection: CameraProjectionMode
   cameraControlMode: CameraControlMode
+  shadowsEnabled: boolean
   skybox: SceneSkyboxSettings
 }
