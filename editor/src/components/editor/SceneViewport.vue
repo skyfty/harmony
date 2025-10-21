@@ -220,12 +220,15 @@ const viewportToolbarHostRef = ref<HTMLDivElement | null>(null)
 
 let pointerTrackingState: PointerTrackingState | null = null
 
+type GroundSelectionPhase = 'pending' | 'sizing' | 'finalizing'
+
 type GroundSelectionDragState = {
   pointerId: number
   startRow: number
   startColumn: number
   currentRow: number
   currentColumn: number
+  phase: GroundSelectionPhase
 }
 
 type GroundCellSelection = {
@@ -3324,6 +3327,44 @@ function cancelGroundSelection(): boolean {
   return true
 }
 
+function updateGroundSelectionFromPointer(
+  event: PointerEvent,
+  definition: GroundDynamicMesh,
+  options: { forceApply?: boolean } = {},
+): boolean {
+  if (!groundSelectionDragState) {
+    return false
+  }
+  if (!raycastGroundPoint(event, groundPointerHelper)) {
+    if (options.forceApply) {
+      const selection = createGroundSelectionFromCells(
+        definition,
+        { row: groundSelectionDragState.startRow, column: groundSelectionDragState.startColumn },
+        { row: groundSelectionDragState.currentRow, column: groundSelectionDragState.currentColumn },
+      )
+      applyGroundSelectionVisuals(selection, definition)
+      return true
+    }
+    return false
+  }
+  clampPointToGround(definition, groundPointerHelper)
+  const cell = getGroundCellFromPoint(definition, groundPointerHelper)
+  const changed = cell.row !== groundSelectionDragState.currentRow || cell.column !== groundSelectionDragState.currentColumn
+  if (changed) {
+    groundSelectionDragState.currentRow = cell.row
+    groundSelectionDragState.currentColumn = cell.column
+  }
+  if (changed || options.forceApply) {
+    const selection = createGroundSelectionFromCells(
+      definition,
+      { row: groundSelectionDragState.startRow, column: groundSelectionDragState.startColumn },
+      { row: groundSelectionDragState.currentRow, column: groundSelectionDragState.currentColumn },
+    )
+    applyGroundSelectionVisuals(selection, definition)
+  }
+  return true
+}
+
 function cancelWallSelection(): boolean {
   if (!wallBuildSession) {
     return false
@@ -3361,11 +3402,10 @@ async function handlePointerDown(event: PointerEvent) {
   const button = event.button
   const isSelectionButton = button === 0 || button === 2
 
-  if (activeBuildTool.value === 'ground' && button === 2) {
+  if (activeBuildTool.value === 'ground' && button === 0) {
+    pointerTrackingState = null
     const definition = getGroundDynamicMeshDefinition()
     if (!definition || !raycastGroundPoint(event, groundPointerHelper)) {
-      groundSelectionDragState = null
-      isGroundToolbarVisible.value = false
       event.preventDefault()
       event.stopPropagation()
       event.stopImmediatePropagation()
@@ -3373,22 +3413,38 @@ async function handlePointerDown(event: PointerEvent) {
     }
     clampPointToGround(definition, groundPointerHelper)
     const cell = getGroundCellFromPoint(definition, groundPointerHelper)
-    groundSelectionDragState = {
-      pointerId: event.pointerId,
-      startRow: cell.row,
-      startColumn: cell.column,
-      currentRow: cell.row,
-      currentColumn: cell.column,
+
+    if (!groundSelectionDragState) {
+      groundSelectionDragState = {
+        pointerId: event.pointerId,
+        startRow: cell.row,
+        startColumn: cell.column,
+        currentRow: cell.row,
+        currentColumn: cell.column,
+        phase: 'pending',
+      }
+      disableOrbitForGroundSelection()
+      isGroundToolbarVisible.value = false
+      const selection = createGroundSelectionFromCells(definition, cell, cell)
+      applyGroundSelectionVisuals(selection, definition)
+    } else if (groundSelectionDragState.phase === 'sizing') {
+      groundSelectionDragState.pointerId = event.pointerId
+      groundSelectionDragState.currentRow = cell.row
+      groundSelectionDragState.currentColumn = cell.column
+      groundSelectionDragState.phase = 'finalizing'
+      updateGroundSelectionFromPointer(event, definition, { forceApply: true })
+      disableOrbitForGroundSelection()
+    } else {
+      groundSelectionDragState.pointerId = event.pointerId
+      groundSelectionDragState.currentRow = cell.row
+      groundSelectionDragState.currentColumn = cell.column
     }
-    applyGroundSelectionVisuals(createGroundSelectionFromCells(definition, cell, cell), definition)
-    disableOrbitForGroundSelection()
-    isGroundToolbarVisible.value = false
+
     try {
-      canvasRef.value.setPointerCapture(event.pointerId)
+      canvasRef.value?.setPointerCapture(event.pointerId)
     } catch (error) {
       /* noop */
     }
-    pointerTrackingState = null
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
@@ -3533,24 +3589,7 @@ function handlePointerMove(event: PointerEvent) {
       event.stopImmediatePropagation()
       return
     }
-    if (!raycastGroundPoint(event, groundPointerHelper)) {
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
-      return
-    }
-    clampPointToGround(definition, groundPointerHelper)
-    const cell = getGroundCellFromPoint(definition, groundPointerHelper)
-    if (cell.row !== groundSelectionDragState.currentRow || cell.column !== groundSelectionDragState.currentColumn) {
-      groundSelectionDragState.currentRow = cell.row
-      groundSelectionDragState.currentColumn = cell.column
-      const selection = createGroundSelectionFromCells(
-        definition,
-        { row: groundSelectionDragState.startRow, column: groundSelectionDragState.startColumn },
-        cell,
-      )
-      applyGroundSelectionVisuals(selection, definition)
-    }
+    updateGroundSelectionFromPointer(event, definition)
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
@@ -3631,28 +3670,42 @@ function handlePointerUp(event: PointerEvent) {
       canvasRef.value.releasePointerCapture(event.pointerId)
     }
     const definition = getGroundDynamicMeshDefinition()
-    if (definition) {
-      const finalCell = {
-        row: groundSelectionDragState.currentRow,
-        column: groundSelectionDragState.currentColumn,
-      }
-      const selection = createGroundSelectionFromCells(
-        definition,
-        { row: groundSelectionDragState.startRow, column: groundSelectionDragState.startColumn },
-        finalCell,
-      )
-      applyGroundSelectionVisuals(selection, definition)
-    } else {
+    if (!definition) {
       clearGroundSelection()
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
     }
-    groundSelectionDragState = null
-    restoreOrbitAfterGroundSelection()
-    if (groundSelection.value) {
-      isGroundToolbarVisible.value = true
-      updateGroundSelectionToolbarPosition()
-    } else {
+
+    if (groundSelectionDragState.phase === 'pending') {
+      updateGroundSelectionFromPointer(event, definition, { forceApply: true })
+      groundSelectionDragState.phase = 'sizing'
+      restoreOrbitAfterGroundSelection()
       isGroundToolbarVisible.value = false
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
     }
+
+    if (groundSelectionDragState.phase === 'finalizing') {
+      updateGroundSelectionFromPointer(event, definition, { forceApply: true })
+      groundSelectionDragState = null
+      restoreOrbitAfterGroundSelection()
+      if (groundSelection.value) {
+        isGroundToolbarVisible.value = true
+        updateGroundSelectionToolbarPosition()
+      } else {
+        isGroundToolbarVisible.value = false
+      }
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+
+    updateGroundSelectionFromPointer(event, definition, { forceApply: true })
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()

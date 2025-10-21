@@ -59,24 +59,6 @@ function handleCancel() {
         @click="handleCancel"
       />
       <v-btn
-        icon="mdi-arrow-up-bold"
-        density="comfortable"
-        title="抬升地面"
-        @click="handleRaise"
-      />
-      <v-btn
-        icon="mdi-arrow-down-bold"
-        density="comfortable"
-        title="下压地面"
-        @click="handleLower"
-      />
-      <v-btn
-        icon="mdi-restore"
-        density="comfortable"
-        title="重置高度"
-        @click="handleReset"
-      />
-      <v-btn
         icon="mdi-texture-box"
         density="comfortable"
         title="设置纹理"
