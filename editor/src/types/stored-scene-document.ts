@@ -5,6 +5,7 @@ import type { AssetIndexEntry } from './asset-index-entry'
 import type { SceneViewportSettings } from './scene-viewport-settings'
 import type { PanelVisibilityState } from './panel-visibility-state'
 import type { PanelPlacementState } from './panel-placement-state'
+import type { GroundSettings } from './ground-settings'
 
 export interface StoredSceneDocument {
   id: string
@@ -15,6 +16,7 @@ export interface StoredSceneDocument {
   selectedNodeIds?: string[]
   camera: SceneCameraState
   viewportSettings: SceneViewportSettings
+  groundSettings: GroundSettings
   panelVisibility?: PanelVisibilityState
   panelPlacement?: PanelPlacementState
   resourceProviderId: string

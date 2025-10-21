@@ -35,7 +35,7 @@ import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-vie
 import type { PlaceholderOverlayState } from '@/types/scene-viewport-placeholder-overlay-state'
 import type { GroundDynamicMesh, WallDynamicMesh } from '@/types/dynamic-mesh'
 import type { BuildTool } from '@/types/build-tool'
-import { createGroundMesh, updateGroundMesh } from '@/plugins/groundMesh'
+import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache } from '@/plugins/groundMesh'
 import { createWallGroup, updateWallGroup } from '@/plugins/wallMesh'
 
 
@@ -1408,6 +1408,9 @@ function disposeObjectResources(object: THREE.Object3D) {
   object.traverse((child) => {
     const meshChild = child as THREE.Mesh
     if (meshChild?.isMesh) {
+      if (meshChild.userData?.dynamicMeshType === 'ground') {
+        return
+      }
       if (meshChild.geometry) {
         meshChild.geometry.dispose()
       }
@@ -2746,6 +2749,7 @@ function disposeScene() {
   dragPreviewGroup.removeFromParent()
 
   clearSelectionHighlights()
+  releaseGroundMeshCache()
   scene = null
   camera = null
   perspectiveCamera = null
@@ -4694,6 +4698,12 @@ function disposeSceneNodes() {
     }
 
     const meshLike = child as THREE.Mesh
+    if (!meshLike?.isMesh) {
+      continue
+    }
+    if (meshLike.userData?.dynamicMeshType === 'ground') {
+      continue
+    }
     if (meshLike.geometry) {
       meshLike.geometry.dispose()
     }
@@ -4968,6 +4978,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
 
     if (node.dynamicMesh?.type === 'ground') {
       const groundMesh = createGroundMesh(node.dynamicMesh)
+      groundMesh.removeFromParent()
       groundMesh.userData.nodeId = node.id
       container.add(groundMesh)
       container.userData.groundMesh = groundMesh

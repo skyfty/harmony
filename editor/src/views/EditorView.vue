@@ -38,6 +38,7 @@ const {
   currentSceneId,
   cameraFocusNodeId,
   cameraFocusRequestId,
+  groundSettings,
 } = storeToRefs(sceneStore)
 
 type PanelPlacementHolder = { panelPlacement?: PanelPlacementState | null }
@@ -514,8 +515,13 @@ async function handleAction(action: string) {
       console.warn(`Unknown menu action: ${action}`)
   }
 }
-function handleCreateScene(name: string) {
-  sceneStore.createScene(name)
+function handleCreateScene(payload: { name: string; groundWidth: number; groundDepth: number }) {
+  sceneStore.createScene(payload.name, {
+    groundSettings: {
+      width: payload.groundWidth,
+      depth: payload.groundDepth,
+    },
+  })
   isNewSceneDialogOpen.value = false
 }
 
@@ -989,6 +995,8 @@ onBeforeUnmount(() => {
     />
     <NewSceneDialog
       v-model="isNewSceneDialogOpen"
+      :initial-ground-width="groundSettings.width"
+      :initial-ground-depth="groundSettings.depth"
       @confirm="handleCreateScene"
     />
     <SceneExportDialog

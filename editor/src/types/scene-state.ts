@@ -10,6 +10,7 @@ import type { SceneHistoryEntry } from './scene-history-entry'
 import type { StoredSceneDocument } from './stored-scene-document'
 import type { AssetIndexEntry } from './asset-index-entry'
 import type { SceneViewportSettings } from './scene-viewport-settings'
+import type { GroundSettings } from './ground-settings'
 
 export interface SceneState {
   scenes: StoredSceneDocument[]
@@ -28,6 +29,7 @@ export interface SceneState {
   selectedAssetId: string | null
   camera: SceneCameraState
   viewportSettings: SceneViewportSettings
+  groundSettings: GroundSettings
   panelVisibility: PanelVisibilityState
   projectPanelTreeSize: number
   resourceProviderId: string

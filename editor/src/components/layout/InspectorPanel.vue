@@ -5,6 +5,7 @@ import InspectorMaterialPanel from '@/components/inspector/MaterialPanel.vue'
 import InspectorLightPanel from '@/components/inspector/LightPanel.vue'
 import InspectorTransformPanel from '@/components/inspector/TransformPanel.vue'
 import InspectorWallPanel from '@/components/inspector/WallPanel.vue'
+import GroundPanel from '@/components/inspector/GroundPanel.vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 
@@ -26,7 +27,8 @@ const placementTitle = computed(() => (floating.value ? '停靠到右侧' : '浮
 
 const isLightNode = computed(() => selectedNode.value?.nodeType === 'light')
 const isWallNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'wall')
-const showMaterialPanel = computed(() => !isLightNode.value && !!selectedNode.value?.material)
+const isGroundNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'ground')
+const showMaterialPanel = computed(() => !isLightNode.value && !isGroundNode.value && !!selectedNode.value?.material)
 const inspectorIcon = computed(() =>
   getNodeIcon({
     nodeType: selectedNode.value?.nodeType ?? null,
@@ -40,7 +42,9 @@ watch(
   (node) => {
     if (!node) return
     nodeName.value = node.name
-    if (isLightNode.value) {
+    if (isGroundNode.value) {
+      expandedPanels.value = ['transform', 'ground']
+    } else if (isLightNode.value) {
       expandedPanels.value = ['transform', 'light']
     } else if (isWallNode.value) {
       expandedPanels.value = ['transform', 'wall', 'material']
@@ -104,9 +108,9 @@ function handleNameUpdate(value: string) {
         variant="accordion"
         class="inspector-panels"
       >
-        <InspectorTransformPanel  />
-
-  <InspectorWallPanel v-if="isWallNode" />
+    <InspectorTransformPanel />
+    <GroundPanel v-if="isGroundNode" />
+    <InspectorWallPanel v-if="isWallNode" />
         <InspectorLightPanel v-if="isLightNode"/>
         <InspectorMaterialPanel v-else-if="showMaterialPanel" />
       </v-expansion-panels>

@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { GroundDynamicMesh } from '@/types/dynamic-mesh'
 
 const textureLoader = new THREE.TextureLoader()
+let cachedMesh: THREE.Mesh | null = null
 
 function groundVertexKey(row: number, column: number): string {
   return `${row}:${column}`
@@ -151,19 +152,28 @@ function applyGroundTexture(mesh: THREE.Mesh, definition: GroundDynamicMesh) {
 }
 
 export function createGroundMesh(definition: GroundDynamicMesh): THREE.Mesh {
-  const geometry = buildGroundGeometry(definition)
-  const material = new THREE.MeshStandardMaterial({
-    color: '#707070',
-    roughness: 0.85,
-    metalness: 0.05,
-  })
-  const mesh = new THREE.Mesh(geometry, material)
-  mesh.name = 'Ground'
-  mesh.receiveShadow = true
-  mesh.castShadow = false
-  applyGroundTexture(mesh, definition)
-  mesh.userData.dynamicMeshType = 'ground'
-  return mesh
+  if (!cachedMesh) {
+    const geometry = buildGroundGeometry(definition)
+    const material = new THREE.MeshStandardMaterial({
+      color: '#707070',
+      roughness: 0.85,
+      metalness: 0.05,
+    })
+    cachedMesh = new THREE.Mesh(geometry, material)
+    cachedMesh.name = 'Ground'
+    cachedMesh.receiveShadow = true
+    cachedMesh.castShadow = false
+    cachedMesh.userData.dynamicMeshType = 'ground'
+    applyGroundTexture(cachedMesh, definition)
+    return cachedMesh
+  }
+
+  updateGroundMesh(cachedMesh, definition)
+  cachedMesh.name = 'Ground'
+  cachedMesh.receiveShadow = true
+  cachedMesh.castShadow = false
+  cachedMesh.userData.dynamicMeshType = 'ground'
+  return cachedMesh
 }
 
 export function updateGroundMesh(mesh: THREE.Mesh, definition: GroundDynamicMesh) {
@@ -177,4 +187,29 @@ export function updateGroundMesh(mesh: THREE.Mesh, definition: GroundDynamicMesh
     mesh.geometry = buildGroundGeometry(definition)
   }
   applyGroundTexture(mesh, definition)
+}
+
+export function releaseGroundMeshCache(disposeResources = true) {
+  if (!cachedMesh) {
+    return
+  }
+
+  cachedMesh.removeFromParent()
+
+  if (disposeResources) {
+    const geometry = cachedMesh.geometry
+    if (geometry) {
+      geometry.dispose()
+    }
+    const material = cachedMesh.material
+    if (Array.isArray(material)) {
+      material.forEach((entry) => entry.dispose())
+    } else if (material) {
+      material.dispose()
+    }
+    disposeGroundTexture(cachedMesh.userData.groundTexture as THREE.Texture | undefined)
+    delete cachedMesh.userData.groundTexture
+  }
+
+  cachedMesh = null
 }

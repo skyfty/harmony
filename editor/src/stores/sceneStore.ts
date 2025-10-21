@@ -21,6 +21,7 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { CameraProjectionMode, CameraControlMode, SceneSkyboxSettings, SceneViewportSettings } from '@/types/scene-viewport-settings'
 import type { DynamicMeshVector3, GroundDynamicMesh, SceneDynamicMesh, WallDynamicMesh } from '@/types/dynamic-mesh'
+import type { GroundSettings } from '@/types/ground-settings'
 
 import {
   CUSTOM_SKYBOX_PRESET_ID,
@@ -92,7 +93,9 @@ const MAX_SPAWN_ATTEMPTS = 64
 const COLLISION_MARGIN = 0.35
 const DEFAULT_SPAWN_RADIUS = GRID_CELL_SIZE * 0.75
 const GROUND_NODE_ID = 'harmony:ground'
-const DEFAULT_GROUND_EXTENT = 1000
+const DEFAULT_GROUND_EXTENT = 100
+const MIN_GROUND_EXTENT = 1
+const MAX_GROUND_EXTENT = 20000
 const DEFAULT_GROUND_CELL_SIZE = GRID_CELL_SIZE
 const SEMI_TRANSPARENT_OPACITY = 0.35
 const HEIGHT_EPSILON = 1e-5
@@ -139,6 +142,35 @@ function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMes
     textureDataUrl: definition.textureDataUrl ?? null,
     textureName: definition.textureName ?? null,
   }
+}
+
+function normalizeGroundDimension(value: unknown, fallback: number): number {
+  const numeric = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number.parseFloat(value)
+      : Number.NaN
+  if (!Number.isFinite(numeric)) {
+    return fallback
+  }
+  if (numeric >= MAX_GROUND_EXTENT) {
+    return MAX_GROUND_EXTENT
+  }
+  if (numeric <= MIN_GROUND_EXTENT) {
+    return MIN_GROUND_EXTENT
+  }
+  return numeric
+}
+
+function normalizeGroundSettings(settings?: Partial<GroundSettings> | null): GroundSettings {
+  return {
+    width: normalizeGroundDimension(settings?.width, DEFAULT_GROUND_EXTENT),
+    depth: normalizeGroundDimension(settings?.depth, DEFAULT_GROUND_EXTENT),
+  }
+}
+
+function cloneGroundSettings(settings: Partial<GroundSettings> | null | undefined): GroundSettings {
+  return normalizeGroundSettings(settings ?? null)
 }
 
 type WallWorldSegment = {
@@ -262,16 +294,22 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
   }
 }
 
-function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynamicMesh> = {}): GroundDynamicMesh {
+function createGroundDynamicMeshDefinition(
+  overrides: Partial<GroundDynamicMesh> = {},
+  settings?: GroundSettings,
+): GroundDynamicMesh {
+  const baseSettings = normalizeGroundSettings(settings ?? null)
   const cellSize = overrides.cellSize ?? DEFAULT_GROUND_CELL_SIZE
-  const derivedColumns = overrides.columns ?? (overrides.width
-    ? Math.max(1, Math.round(overrides.width / cellSize))
-    : Math.max(1, Math.round(DEFAULT_GROUND_EXTENT / cellSize)))
-  const derivedRows = overrides.rows ?? (overrides.depth
-    ? Math.max(1, Math.round(overrides.depth / cellSize))
-    : Math.max(1, Math.round(DEFAULT_GROUND_EXTENT / cellSize)))
-  const width = overrides.width ?? derivedColumns * cellSize
-  const depth = overrides.depth ?? derivedRows * cellSize
+  const normalizedWidth = overrides.width !== undefined
+    ? normalizeGroundDimension(overrides.width, baseSettings.width)
+    : baseSettings.width
+  const normalizedDepth = overrides.depth !== undefined
+    ? normalizeGroundDimension(overrides.depth, baseSettings.depth)
+    : baseSettings.depth
+  const derivedColumns = overrides.columns ?? Math.max(1, Math.round(normalizedWidth / Math.max(cellSize, 1e-6)))
+  const derivedRows = overrides.rows ?? Math.max(1, Math.round(normalizedDepth / Math.max(cellSize, 1e-6)))
+  const width = overrides.width !== undefined ? normalizedWidth : derivedColumns * cellSize
+  const depth = overrides.depth !== undefined ? normalizedDepth : derivedRows * cellSize
   return {
     type: 'ground',
     width,
@@ -285,8 +323,11 @@ function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynamicMesh>
   }
 }
 
-function createGroundSceneNode(overrides: { dynamicMesh?: Partial<GroundDynamicMesh> } = {}): SceneNode {
-  const dynamicMesh = createGroundDynamicMeshDefinition(overrides.dynamicMesh)
+function createGroundSceneNode(
+  overrides: { dynamicMesh?: Partial<GroundDynamicMesh> } = {},
+  settings?: GroundSettings,
+): SceneNode {
+  const dynamicMesh = createGroundDynamicMeshDefinition(overrides.dynamicMesh, settings)
   return {
     id: GROUND_NODE_ID,
     name: 'Ground',
@@ -309,9 +350,9 @@ function isGroundNode(node: SceneNode): boolean {
   return node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'ground' || node.sourceAssetId === LEGACY_GROUND_ASSET_ID
 }
 
-function normalizeGroundSceneNode(node: SceneNode | null | undefined): SceneNode {
+function normalizeGroundSceneNode(node: SceneNode | null | undefined, settings?: GroundSettings): SceneNode {
   if (!node) {
-    return createGroundSceneNode()
+    return createGroundSceneNode({}, settings)
   }
   if (node.dynamicMesh?.type === 'ground') {
     return {
@@ -329,28 +370,28 @@ function normalizeGroundSceneNode(node: SceneNode | null | undefined): SceneNode
       scale: createVector(1, 1, 1),
       visible: node.visible ?? true,
       locked: true,
-      dynamicMesh: createGroundDynamicMeshDefinition(node.dynamicMesh),
+      dynamicMesh: createGroundDynamicMeshDefinition(node.dynamicMesh, settings),
       sourceAssetId: undefined,
     }
   }
   if (node.sourceAssetId === LEGACY_GROUND_ASSET_ID) {
-    return createGroundSceneNode()
+    return createGroundSceneNode({}, settings)
   }
-  return createGroundSceneNode()
+  return createGroundSceneNode({}, settings)
 }
 
-function ensureGroundNode(nodes: SceneNode[]): SceneNode[] {
+function ensureGroundNode(nodes: SceneNode[], settings?: GroundSettings): SceneNode[] {
   let groundNode: SceneNode | null = null
   const others: SceneNode[] = []
   nodes.forEach((node) => {
     if (!groundNode && isGroundNode(node)) {
-      groundNode = normalizeGroundSceneNode(node)
+      groundNode = normalizeGroundSceneNode(node, settings)
     } else {
       others.push(node)
     }
   })
   if (!groundNode) {
-    groundNode = createGroundSceneNode()
+    groundNode = createGroundSceneNode({}, settings)
   }
   return [groundNode, ...others]
 }
@@ -1089,8 +1130,12 @@ function cloneNode(node: SceneNode): SceneNode {
   }
 }
 
-function createDefaultSceneNodes(): SceneNode[] {
-  return initialNodes.map((node) => cloneNode(node))
+function createDefaultSceneNodes(settings?: GroundSettings): SceneNode[] {
+  const nodes = initialNodes.map((node) => cloneNode(node))
+  if (!settings) {
+    return nodes
+  }
+  return ensureGroundNode(nodes, settings)
 }
 
 function cloneSceneNodes(nodes: SceneNode[]): SceneNode[] {
@@ -1114,6 +1159,7 @@ function cloneSceneDocumentForExport(scene: StoredSceneDocument): StoredSceneDoc
     viewportSettings: scene.viewportSettings,
     panelVisibility: scene.panelVisibility,
     panelPlacement: scene.panelPlacement,
+    groundSettings: scene.groundSettings,
   })
 }
 
@@ -1296,6 +1342,7 @@ function createHistorySnapshot(store: SceneState): SceneHistoryEntry {
     selectedNodeIds: cloneSelection(store.selectedNodeIds),
     selectedNodeId: store.selectedNodeId,
     viewportSettings: cloneViewportSettings(store.viewportSettings),
+    groundSettings: cloneGroundSettings(store.groundSettings),
     resourceProviderId: store.resourceProviderId,
     runtimeSnapshots: collectSceneRuntimeSnapshots(store.nodes),
   }
@@ -1471,6 +1518,13 @@ function ensureSceneCollection(state: ScenePersistedState): ScenePersistedState 
   const rawCatalog = (state.assetCatalog as Record<string, ProjectAsset[]> | undefined) ?? null
   const rawIndex = (state.assetIndex as Record<string, AssetIndexEntry> | undefined) ?? null
   const rawPackageMap = (state.packageAssetMap as Record<string, string> | undefined) ?? null
+  const rawGround = findGroundNode(rawNodes)
+  const fallbackGroundSettings = cloneGroundSettings(
+    (state as { groundSettings?: Partial<GroundSettings> | null }).groundSettings ??
+      (rawGround?.dynamicMesh?.type === 'ground'
+        ? { width: rawGround.dynamicMesh.width, depth: rawGround.dynamicMesh.depth }
+        : undefined),
+  )
 
   const cameraPosition = cloneVector(cameraState?.position ?? defaultCameraState.position)
   const cameraTarget = cloneVector(cameraState?.target ?? defaultCameraState.target)
@@ -1494,6 +1548,7 @@ function ensureSceneCollection(state: ScenePersistedState): ScenePersistedState 
     viewportSettings,
     panelVisibility: state.panelVisibility as Partial<PanelVisibilityState> | undefined,
     panelPlacement: (state as { panelPlacement?: Partial<PanelPlacementState> }).panelPlacement,
+    groundSettings: fallbackGroundSettings,
   })
 
   return {
@@ -1507,6 +1562,7 @@ function ensureSceneCollection(state: ScenePersistedState): ScenePersistedState 
     viewportSettings: cloneViewportSettings(recoveredScene.viewportSettings),
     panelVisibility: normalizePanelVisibilityState(recoveredScene.panelVisibility),
     panelPlacement: normalizePanelPlacementStateInput(recoveredScene.panelPlacement),
+    groundSettings: cloneGroundSettings(recoveredScene.groundSettings),
     assetCatalog: cloneAssetCatalog(recoveredScene.assetCatalog),
     assetIndex: cloneAssetIndex(recoveredScene.assetIndex),
     packageAssetMap: clonePackageAssetMap(recoveredScene.packageAssetMap),
@@ -1655,7 +1711,14 @@ function normalizeGroundState(state: ScenePersistedState): ScenePersistedState {
         }
         const typedScene = scene as StoredSceneDocument
         const nodesSource = Array.isArray(typedScene.nodes) ? (typedScene.nodes as SceneNode[]) : []
-        const normalizedNodes = ensureGroundNode(cloneSceneNodes(nodesSource))
+        const existingGround = findGroundNode(nodesSource)
+        const sceneGroundSettings = cloneGroundSettings(
+          (typedScene as { groundSettings?: Partial<GroundSettings> | null }).groundSettings ??
+            (existingGround?.dynamicMesh?.type === 'ground'
+              ? { width: existingGround.dynamicMesh.width, depth: existingGround.dynamicMesh.depth }
+              : undefined),
+        )
+        const normalizedNodes = ensureGroundNode(cloneSceneNodes(nodesSource), sceneGroundSettings)
         const selectedIdsSource = Array.isArray(typedScene.selectedNodeIds)
           ? typedScene.selectedNodeIds.filter((id) => normalizedNodes.some((node) => node.id === id && !isGroundNode(node)))
           : []
@@ -1667,6 +1730,7 @@ function normalizeGroundState(state: ScenePersistedState): ScenePersistedState {
           nodes: normalizedNodes,
           selectedNodeId,
           selectedNodeIds: selectedIdsSource,
+          groundSettings: sceneGroundSettings,
           assetCatalog: stripLegacyGroundAssetFromCatalog(typedScene.assetCatalog) ?? typedScene.assetCatalog,
           assetIndex: stripLegacyGroundAssetFromIndex(typedScene.assetIndex) ?? typedScene.assetIndex,
           packageAssetMap: stripLegacyGroundAssetFromPackageMap(typedScene.packageAssetMap) ?? typedScene.packageAssetMap,
@@ -1674,12 +1738,24 @@ function normalizeGroundState(state: ScenePersistedState): ScenePersistedState {
       })
     : state.scenes
 
+  const rootNodesSource = Array.isArray(state.nodes) ? (state.nodes as SceneNode[]) : []
+  const rootGround = findGroundNode(rootNodesSource)
+  const rootGroundSettings = cloneGroundSettings(
+    (state as { groundSettings?: Partial<GroundSettings> | null }).groundSettings ??
+      (rootGround?.dynamicMesh?.type === 'ground'
+        ? { width: rootGround.dynamicMesh.width, depth: rootGround.dynamicMesh.depth }
+        : undefined),
+  )
+  const normalizedRootNodes = ensureGroundNode(cloneSceneNodes(rootNodesSource), rootGroundSettings)
+
   return {
     ...state,
+    nodes: normalizedRootNodes,
     assetCatalog: stripLegacyGroundAssetFromCatalog(state.assetCatalog) ?? state.assetCatalog,
     assetIndex: stripLegacyGroundAssetFromIndex(state.assetIndex) ?? state.assetIndex,
     packageAssetMap: stripLegacyGroundAssetFromPackageMap(state.packageAssetMap) ?? state.packageAssetMap,
     scenes: processedScenes,
+    groundSettings: rootGroundSettings,
   }
 }
 
@@ -1732,10 +1808,19 @@ function createSceneDocument(
     viewportSettings?: Partial<SceneViewportSettings>
     panelVisibility?: Partial<PanelVisibilityState>
     panelPlacement?: Partial<PanelPlacementState>
+    groundSettings?: Partial<GroundSettings>
   } = {},
 ): StoredSceneDocument {
   const id = options.id ?? generateUuid()
-  const nodes = ensureGroundNode(options.nodes ? cloneSceneNodes(options.nodes) : [])
+  const clonedNodes = options.nodes ? cloneSceneNodes(options.nodes) : []
+  const existingGround = findGroundNode(clonedNodes)
+  const groundSettings = cloneGroundSettings(
+    options.groundSettings ??
+      (existingGround?.dynamicMesh?.type === 'ground'
+        ? { width: existingGround.dynamicMesh.width, depth: existingGround.dynamicMesh.depth }
+        : undefined),
+  )
+  const nodes = ensureGroundNode(clonedNodes, groundSettings)
   const camera = options.camera ? cloneCameraState(options.camera) : cloneCameraState(defaultCameraState)
   let selectedNodeId = options.selectedNodeId ?? (nodes.find((node) => !isGroundNode(node))?.id ?? null)
   if (selectedNodeId && !nodes.some((node) => node.id === selectedNodeId)) {
@@ -1761,6 +1846,7 @@ function createSceneDocument(
     selectedNodeIds,
     camera,
     viewportSettings,
+    groundSettings,
   panelVisibility,
   panelPlacement,
     resourceProviderId: options.resourceProviderId ?? 'builtin',
@@ -1792,6 +1878,7 @@ function commitSceneSnapshot(
     selectedNodeIds: cloneSelection(store.selectedNodeIds),
     camera: updateCamera ? cloneCameraState(store.camera) : current.camera,
     viewportSettings: cloneViewportSettings(store.viewportSettings),
+  groundSettings: cloneGroundSettings(store.groundSettings),
     panelVisibility: normalizePanelVisibilityState(store.panelVisibility),
     panelPlacement: normalizePanelPlacementStateInput(store.panelPlacement),
     resourceProviderId: store.resourceProviderId,
@@ -2008,6 +2095,7 @@ export const useSceneStore = defineStore('scene', {
       selectedAssetId: null,
       camera: cloneCameraState(initialSceneDocument.camera),
       viewportSettings,
+      groundSettings: cloneGroundSettings(initialSceneDocument.groundSettings),
       panelVisibility: { ...defaultPanelVisibility },
     panelPlacement: { ...defaultPanelPlacement },
   projectPanelTreeSize: DEFAULT_PROJECT_PANEL_TREE_SIZE,
@@ -2139,6 +2227,7 @@ export const useSceneStore = defineStore('scene', {
         this.selectedNodeIds = cloneSelection(snapshot.selectedNodeIds)
     this.selectedNodeId = snapshot.selectedNodeId
     this.viewportSettings = cloneViewportSettings(snapshot.viewportSettings)
+    this.groundSettings = cloneGroundSettings(snapshot.groundSettings)
         this.resourceProviderId = snapshot.resourceProviderId
 
         assetCache.recalculateUsage(this.nodes)
@@ -2212,7 +2301,7 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
       if (groundNode.dynamicMesh?.type !== 'ground') {
-        groundNode.dynamicMesh = createGroundDynamicMeshDefinition()
+        groundNode.dynamicMesh = createGroundDynamicMeshDefinition({}, this.groundSettings)
       }
       const currentDefinition = groundNode.dynamicMesh as GroundDynamicMesh
       const result = applyGroundRegionTransform(currentDefinition, bounds, transformer)
@@ -2236,13 +2325,51 @@ export const useSceneStore = defineStore('scene', {
     resetGroundRegion(bounds: GroundRegionBounds) {
       return this.modifyGroundRegion(bounds, () => 0)
     },
+    setGroundDimensions(payload: { width?: number; depth?: number }) {
+      const requested = {
+        width: payload.width ?? this.groundSettings.width,
+        depth: payload.depth ?? this.groundSettings.depth,
+      }
+      const normalized = cloneGroundSettings(requested)
+      if (
+        Math.abs(normalized.width - this.groundSettings.width) < 1e-6 &&
+        Math.abs(normalized.depth - this.groundSettings.depth) < 1e-6
+      ) {
+        return false
+      }
+
+      this.captureHistorySnapshot()
+      this.groundSettings = normalized
+
+      const clonedNodes = cloneSceneNodes(this.nodes)
+      const existingGround = findGroundNode(clonedNodes)
+      if (existingGround) {
+        existingGround.dynamicMesh = createGroundDynamicMeshDefinition(
+          existingGround.dynamicMesh?.type === 'ground'
+            ? {
+                ...existingGround.dynamicMesh,
+                width: normalized.width,
+                depth: normalized.depth,
+              }
+            : {
+                width: normalized.width,
+                depth: normalized.depth,
+              },
+          normalized,
+        )
+      }
+      const updatedNodes = ensureGroundNode(clonedNodes, normalized)
+      this.nodes = updatedNodes
+      commitSceneSnapshot(this)
+      return true
+    },
     setGroundTexture(payload: { dataUrl: string | null; name?: string | null }) {
       const groundNode = findGroundNode(this.nodes)
       if (!groundNode) {
         return false
       }
       if (groundNode.dynamicMesh?.type !== 'ground') {
-        groundNode.dynamicMesh = createGroundDynamicMeshDefinition()
+        groundNode.dynamicMesh = createGroundDynamicMeshDefinition({}, this.groundSettings)
       }
       const definition = groundNode.dynamicMesh as GroundDynamicMesh
       const nextDataUrl = payload.dataUrl ?? null
@@ -3948,17 +4075,30 @@ export const useSceneStore = defineStore('scene', {
     clearClipboard() {
       this.clipboard = null
     },
-    createScene(name = 'Untitled Scene', thumbnail?: string | null) {
+    createScene(
+      name = 'Untitled Scene',
+      thumbnailOrOptions?: string | null | { thumbnail?: string | null; groundSettings?: Partial<GroundSettings> },
+    ) {
       commitSceneSnapshot(this)
       const displayName = name.trim() || 'Untitled Scene'
-      const baseNodes = createDefaultSceneNodes()
+      let resolvedThumbnail: string | null | undefined
+      let resolvedGroundOptions: Partial<GroundSettings> | undefined
+      if (thumbnailOrOptions && typeof thumbnailOrOptions === 'object' && !Array.isArray(thumbnailOrOptions)) {
+        resolvedThumbnail = thumbnailOrOptions.thumbnail ?? null
+        resolvedGroundOptions = thumbnailOrOptions.groundSettings
+      } else {
+        resolvedThumbnail = (thumbnailOrOptions ?? null) as string | null
+      }
+      const groundSettings = cloneGroundSettings(resolvedGroundOptions ?? this.groundSettings)
+      const baseNodes = createDefaultSceneNodes(groundSettings)
       const baseAssetCatalog = cloneAssetCatalog(initialAssetCatalog)
       const baseAssetIndex = cloneAssetIndex(initialAssetIndex)
       const scene = createSceneDocument(displayName, {
-        thumbnail: thumbnail ?? null,
+  thumbnail: resolvedThumbnail ?? null,
         resourceProviderId: this.resourceProviderId,
         viewportSettings: this.viewportSettings,
         nodes: baseNodes,
+        groundSettings,
         assetCatalog: baseAssetCatalog,
         assetIndex: baseAssetIndex,
         packageAssetMap: {},
@@ -3969,6 +4109,7 @@ export const useSceneStore = defineStore('scene', {
       this.currentSceneId = scene.id
       applySceneAssetState(this, scene)
       this.nodes = cloneSceneNodes(scene.nodes)
+      this.groundSettings = cloneGroundSettings(scene.groundSettings)
       this.setSelection(scene.selectedNodeIds ?? (scene.selectedNodeId ? [scene.selectedNodeId] : []), {
         commit: false,
       })
@@ -4017,6 +4158,7 @@ export const useSceneStore = defineStore('scene', {
         this.viewportSettings = cloneViewportSettings(scene.viewportSettings)
         this.panelVisibility = normalizePanelVisibilityState(scene.panelVisibility)
         this.panelPlacement = normalizePanelPlacementStateInput(scene.panelPlacement)
+        this.groundSettings = cloneGroundSettings(scene.groundSettings)
         this.resourceProviderId = scene.resourceProviderId ?? 'builtin'
         useAssetCacheStore().recalculateUsage(this.nodes)
       } finally {
@@ -4037,7 +4179,10 @@ export const useSceneStore = defineStore('scene', {
       const remaining = this.scenes.filter((scene) => scene.id !== sceneId)
 
       if (remaining.length === 0) {
-        const fallback = createSceneDocument('Untitled Scene', { resourceProviderId: 'builtin' })
+        const fallback = createSceneDocument('Untitled Scene', {
+          resourceProviderId: 'builtin',
+          groundSettings: this.groundSettings,
+        })
         this.scenes = [fallback]
         this.currentSceneId = fallback.id
         applySceneAssetState(this, fallback)
@@ -4048,6 +4193,7 @@ export const useSceneStore = defineStore('scene', {
         this.camera = cloneCameraState(fallback.camera)
         this.panelVisibility = normalizePanelVisibilityState(fallback.panelVisibility)
         this.panelPlacement = normalizePanelPlacementStateInput(fallback.panelPlacement)
+        this.groundSettings = cloneGroundSettings(fallback.groundSettings)
         this.resourceProviderId = fallback.resourceProviderId
         useAssetCacheStore().recalculateUsage(this.nodes)
         this.isSceneReady = true
@@ -4074,6 +4220,7 @@ export const useSceneStore = defineStore('scene', {
           this.camera = cloneCameraState(next.camera)
           this.panelVisibility = normalizePanelVisibilityState(next.panelVisibility)
           this.panelPlacement = normalizePanelPlacementStateInput(next.panelPlacement)
+          this.groundSettings = cloneGroundSettings(next.groundSettings)
           this.resourceProviderId = next.resourceProviderId ?? 'builtin'
           useAssetCacheStore().recalculateUsage(this.nodes)
         } finally {
@@ -4199,6 +4346,7 @@ export const useSceneStore = defineStore('scene', {
           viewportSettings: normalizeViewportSettingsInput(entry.viewportSettings),
           panelVisibility: normalizePanelVisibilityInput(entry.panelVisibility),
           panelPlacement: normalizePanelPlacementInput(entry.panelPlacement),
+          groundSettings: (entry as { groundSettings?: Partial<GroundSettings> | null }).groundSettings ?? undefined,
         })
 
         imported.push(sceneDocument)
