@@ -5,6 +5,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
+import Stats from 'three/examples/jsm/libs/stats.module.js'
 import type { SceneNode, Vector3Like } from '@/types/scene'
 import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -65,6 +66,7 @@ const canDropSelection = computed(() => sceneStore.selectedNodeIds.some((id) => 
 const viewportEl = ref<HTMLDivElement | null>(null)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const surfaceRef = ref<HTMLDivElement | null>(null)
+const statsHostRef = ref<HTMLDivElement | null>(null)
 
 let renderer: THREE.WebGLRenderer | null = null
 let scene: THREE.Scene | null = null
@@ -83,6 +85,9 @@ let pmremGenerator: THREE.PMREMGenerator | null = null
 let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null
 let fallbackDirectionalLight: THREE.DirectionalLight | null = null
 const skySunPosition = new THREE.Vector3()
+let stats: Stats | null = null
+let statsPanelIndex = 0
+let statsPointerHandler: ((event: MouseEvent) => void) | null = null
 const DEFAULT_BACKGROUND_COLOR = 0x516175
 const GROUND_NODE_ID = 'harmony:ground'
 const SKY_ENVIRONMENT_INTENSITY = 0.35
@@ -2270,6 +2275,43 @@ function applyCameraControlMode(mode: CameraControlMode) {
   }
 }
 
+function ensureStatsPanel() {
+  const host = statsHostRef.value
+  if (!host) {
+    return
+  }
+
+  if (!stats) {
+    stats = new Stats()
+    statsPanelIndex = 0
+    stats.showPanel(statsPanelIndex)
+    stats.dom.classList.add('stats-panel')
+    stats.dom.style.position = 'relative'
+    stats.dom.style.top = '0'
+    stats.dom.style.left = '0'
+  }
+
+  if (stats.dom.parentElement !== host) {
+    host.appendChild(stats.dom)
+  }
+
+  if (!statsPointerHandler) {
+    statsPointerHandler = () => {
+      if (!stats) {
+        return
+      }
+      const panelCount = stats.dom.children.length || 1
+      statsPanelIndex = panelCount > 0 ? (statsPanelIndex + 1) % panelCount : 0
+      stats.showPanel(statsPanelIndex)
+    }
+  }
+
+  stats.dom.removeEventListener('click', statsPointerHandler)
+  stats.dom.addEventListener('click', statsPointerHandler)
+
+  stats.showPanel(statsPanelIndex)
+}
+
 function initScene() {
   if (!canvasRef.value || !viewportEl.value) {
     return
@@ -2277,6 +2319,8 @@ function initScene() {
 
   const width = viewportEl.value.clientWidth
   const height = viewportEl.value.clientHeight
+
+  ensureStatsPanel()
 
   renderer = new THREE.WebGLRenderer({
     canvas: canvasRef.value,
@@ -2517,6 +2561,7 @@ function animate() {
   }
 
   requestAnimationFrame(animate)
+  stats?.begin()
 
   let controlsUpdated = false
 
@@ -2583,9 +2628,20 @@ function animate() {
     sky.position.copy(camera.position)
   }
   renderer.render(scene, camera)
+  stats?.end()
 }
 
 function disposeScene() {
+  if (stats && statsPointerHandler) {
+    stats.dom.removeEventListener('click', statsPointerHandler)
+  }
+  if (stats) {
+    stats.dom.remove()
+    stats = null
+  }
+  statsPointerHandler = null
+  statsPanelIndex = 0
+
   resizeObserver?.disconnect()
   resizeObserver = null
 
@@ -5159,6 +5215,10 @@ watch(viewportToolbarHostRef, (host) => {
   scheduleToolbarUpdate()
 })
 
+watch(statsHostRef, () => {
+  ensureStatsPanel()
+})
+
 watch(
   () => props.selectedNodeId,
   (id) => {
@@ -5246,6 +5306,7 @@ defineExpose<SceneViewportHandle>({
         @change-build-tool="handleBuildToolChange"
       />
     </div>
+    <div ref="statsHostRef" class="stats-host"></div>
     <div
       ref="surfaceRef"
       class="viewport-surface"
@@ -5321,6 +5382,20 @@ defineExpose<SceneViewportHandle>({
   position: absolute;
   z-index: 5;
   pointer-events: none;
+}
+
+.stats-host {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 8;
+  pointer-events: auto;
+}
+
+.stats-host :deep(.stats-panel) {
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 .transform-toolbar-host > :deep(*) {
