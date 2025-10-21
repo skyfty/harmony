@@ -22,13 +22,21 @@ export interface GroundDynamicMesh {
   textureName?: string | null
 }
 
+export type WallSegment = {
+  start: DynamicMeshVector3
+  end: DynamicMeshVector3
+  height: number
+  width: number
+  thickness: number
+}
+
 export interface WallDynamicMesh {
   type: 'wall'
   /**
    * Placeholder control points describing wall segments in row-major order.
    * Each entry stores start and end positions in world space relative to the wall origin.
    */
-  segments: Array<{ start: DynamicMeshVector3; end: DynamicMeshVector3; height: number; thickness: number }>
+  segments: WallSegment[]
 }
 
 export interface PlatformDynamicMesh {

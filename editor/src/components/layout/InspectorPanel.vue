@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia'
 import InspectorMaterialPanel from '@/components/inspector/MaterialPanel.vue'
 import InspectorLightPanel from '@/components/inspector/LightPanel.vue'
 import InspectorTransformPanel from '@/components/inspector/TransformPanel.vue'
+import InspectorWallPanel from '@/components/inspector/WallPanel.vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 
@@ -24,6 +25,7 @@ const placementIcon = computed(() => (floating.value ? 'mdi-dock-right' : 'mdi-a
 const placementTitle = computed(() => (floating.value ? '停靠到右侧' : '浮动显示'))
 
 const isLightNode = computed(() => selectedNode.value?.nodeType === 'light')
+const isWallNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'wall')
 const showMaterialPanel = computed(() => !isLightNode.value && !!selectedNode.value?.material)
 const inspectorIcon = computed(() =>
   getNodeIcon({
@@ -38,7 +40,13 @@ watch(
   (node) => {
     if (!node) return
     nodeName.value = node.name
-    expandedPanels.value = isLightNode.value ? ['transform', 'light'] : ['transform', 'material']
+    if (isLightNode.value) {
+      expandedPanels.value = ['transform', 'light']
+    } else if (isWallNode.value) {
+      expandedPanels.value = ['transform', 'wall', 'material']
+    } else {
+      expandedPanels.value = ['transform', 'material']
+    }
   },
   { immediate: true }
 )
@@ -98,6 +106,7 @@ function handleNameUpdate(value: string) {
       >
         <InspectorTransformPanel  />
 
+  <InspectorWallPanel v-if="isWallNode" />
         <InspectorLightPanel v-if="isLightNode"/>
         <InspectorMaterialPanel v-else-if="showMaterialPanel" />
       </v-expansion-panels>

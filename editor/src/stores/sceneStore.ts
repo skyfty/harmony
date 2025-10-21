@@ -20,7 +20,8 @@ import type { SceneSummary } from '@/types/scene-summary'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { CameraProjectionMode, CameraControlMode, SceneSkyboxSettings, SceneViewportSettings } from '@/types/scene-viewport-settings'
-import type { DynamicMeshVector3, GroundDynamicMesh, SceneDynamicMesh } from '@/types/dynamic-mesh'
+import type { DynamicMeshVector3, GroundDynamicMesh, SceneDynamicMesh, WallDynamicMesh } from '@/types/dynamic-mesh'
+
 import {
   CUSTOM_SKYBOX_PRESET_ID,
   DEFAULT_SKYBOX_SETTINGS,
@@ -33,6 +34,7 @@ import { useUiStore } from './uiStore'
 import { loadObjectFromFile } from '@/plugins/assetImport'
 import { generateUuid } from '@/plugins/uuid'
 import { getCachedModelObject, getOrLoadModelObject } from './modelObjectCache'
+import { createWallGroup, updateWallGroup } from '@/plugins/wallMesh'
 
 import {
   cloneAssetList,
@@ -74,6 +76,10 @@ export interface SceneImportResult {
 }
 
 const HISTORY_LIMIT = 50
+
+const DEFAULT_WALL_HEIGHT = 3
+const DEFAULT_WALL_WIDTH = 0.2
+const DEFAULT_WALL_THICKNESS = 0.2
 
 const GRID_CELL_SIZE = 1
 const CAMERA_NEAR = 0.1
@@ -132,6 +138,96 @@ function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMes
   }
 }
 
+type WallWorldSegment = {
+  start: Vector3
+  end: Vector3
+}
+
+function normalizeWallDimensions(values: { height?: number; width?: number; thickness?: number }): {
+  height: number
+  width: number
+  thickness: number
+} {
+  const height = Number.isFinite(values.height) ? Math.max(1e-3, values.height!) : DEFAULT_WALL_HEIGHT
+  const width = Number.isFinite(values.width) ? Math.max(1e-3, values.width!) : DEFAULT_WALL_WIDTH
+  const thickness = Number.isFinite(values.thickness) ? Math.max(1e-3, values.thickness!) : DEFAULT_WALL_THICKNESS
+  return { height, width, thickness }
+}
+
+function buildWallWorldSegments(segments: Array<{ start: Vector3Like; end: Vector3Like }>): WallWorldSegment[] {
+  return segments
+    .map((segment) => {
+      if (!segment?.start || !segment?.end) {
+        return null
+      }
+      const start = new Vector3(segment.start.x, segment.start.y, segment.start.z)
+      const end = new Vector3(segment.end.x, segment.end.y, segment.end.z)
+      if (!Number.isFinite(start.x) || !Number.isFinite(start.y) || !Number.isFinite(start.z)) {
+        return null
+      }
+      if (!Number.isFinite(end.x) || !Number.isFinite(end.y) || !Number.isFinite(end.z)) {
+        return null
+      }
+      if (start.distanceToSquared(end) <= 1e-10) {
+        return null
+      }
+      return { start, end }
+    })
+    .filter((entry): entry is WallWorldSegment => !!entry)
+}
+
+function computeWallCenter(segments: WallWorldSegment[]): Vector3 {
+  const min = new Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY)
+  const max = new Vector3(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY)
+
+  segments.forEach(({ start, end }) => {
+    min.x = Math.min(min.x, start.x, end.x)
+    min.y = Math.min(min.y, start.y, end.y)
+    min.z = Math.min(min.z, start.z, end.z)
+    max.x = Math.max(max.x, start.x, end.x)
+    max.y = Math.max(max.y, start.y, end.y)
+    max.z = Math.max(max.z, start.z, end.z)
+  })
+
+  if (!Number.isFinite(min.x) || !Number.isFinite(max.x)) {
+    return new Vector3(0, 0, 0)
+  }
+
+  return new Vector3(
+    (min.x + max.x) * 0.5,
+    (min.y + max.y) * 0.5,
+    (min.z + max.z) * 0.5,
+  )
+}
+
+function buildWallDynamicMeshFromWorldSegments(
+  segments: Array<{ start: Vector3Like; end: Vector3Like }>,
+  dimensions: { height?: number; width?: number; thickness?: number } = {},
+): { center: Vector3; definition: WallDynamicMesh } | null {
+  const worldSegments = buildWallWorldSegments(segments)
+  if (!worldSegments.length) {
+    return null
+  }
+
+  const { height, width, thickness } = normalizeWallDimensions(dimensions)
+  const center = computeWallCenter(worldSegments)
+
+  const dynamicSegments = worldSegments.map(({ start, end }) => ({
+    start: createVector(start.x - center.x, start.y - center.y, start.z - center.z),
+    end: createVector(end.x - center.x, end.y - center.y, end.z - center.z),
+    height,
+    width,
+    thickness,
+  }))
+
+  const definition: WallDynamicMesh = {
+    type: 'wall',
+    segments: dynamicSegments,
+  }
+
+  return { center, definition }
+}
+
 function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh | undefined {
   if (!mesh) {
     return undefined
@@ -145,8 +241,11 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
         segments: mesh.segments.map((segment) => ({
           start: cloneDynamicMeshVector3(segment.start),
           end: cloneDynamicMeshVector3(segment.end),
-          height: segment.height,
-          thickness: segment.thickness,
+          height: Number.isFinite(segment.height) ? segment.height : DEFAULT_WALL_HEIGHT,
+          width: Number.isFinite((segment as { width?: number }).width)
+            ? (segment as { width?: number }).width!
+            : DEFAULT_WALL_WIDTH,
+          thickness: Number.isFinite(segment.thickness) ? segment.thickness : DEFAULT_WALL_THICKNESS,
         })),
       }
     case 'platform':
@@ -3502,13 +3601,14 @@ export const useSceneStore = defineStore('scene', {
     },
 
     addSceneNode(payload: {
-      nodeType: SceneNodeType,
+      nodeType: SceneNodeType
       object: Object3D
       name?: string
       position?: Vector3Like
       rotation?: Vector3Like
       scale?: Vector3Like
       sourceAssetId?: string
+      dynamicMesh?: SceneDynamicMesh
     }) {
       this.captureHistorySnapshot()
   const id = generateUuid()
@@ -3522,6 +3622,7 @@ export const useSceneStore = defineStore('scene', {
         scale: payload.scale ?? { x: 1, y: 1, z: 1 },
         visible: true,
         sourceAssetId: payload.sourceAssetId,
+        dynamicMesh: payload.dynamicMesh ? cloneDynamicMeshDefinition(payload.dynamicMesh) : undefined,
       }
 
       registerRuntimeObject(id, payload.object)
@@ -3531,6 +3632,134 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
 
       return node
+    },
+    generateWallNodeName() {
+      const prefix = 'Wall '
+      const pattern = /^Wall\s(\d{2})$/
+      const taken = new Set<string>()
+      const collectNames = (nodes: SceneNode[]) => {
+        nodes.forEach((node) => {
+          if (typeof node.name === 'string' && node.name.startsWith(prefix)) {
+            taken.add(node.name)
+          }
+          if (node.children?.length) {
+            collectNames(node.children)
+          }
+        })
+      }
+      collectNames(this.nodes)
+      for (let index = 1; index < 1000; index += 1) {
+        const candidate = `${prefix}${index.toString().padStart(2, '0')}`
+        if (!taken.has(candidate)) {
+          return candidate
+        }
+      }
+      const fallback = Array.from(taken)
+        .map((name) => {
+          const match = name.match(pattern)
+          return match ? Number(match[1]) : Number.NaN
+        })
+        .filter((value) => Number.isFinite(value))
+        .sort((a, b) => a - b)
+      const nextIndex = (fallback[fallback.length - 1] ?? 0) + 1
+      return `${prefix}${nextIndex.toString().padStart(2, '0')}`
+    },
+    createWallNode(payload: {
+      segments: Array<{ start: Vector3Like; end: Vector3Like }>
+      dimensions?: { height?: number; width?: number; thickness?: number }
+      name?: string
+    }): SceneNode | null {
+      const build = buildWallDynamicMeshFromWorldSegments(payload.segments, payload.dimensions)
+      if (!build) {
+        return null
+      }
+
+      const wallGroup = createWallGroup(build.definition)
+      const nodeName = payload.name ?? this.generateWallNodeName()
+      const node = this.addSceneNode({
+        nodeType: 'mesh',
+        object: wallGroup,
+        name: nodeName,
+        position: createVector(build.center.x, build.center.y, build.center.z),
+        rotation: createVector(0, 0, 0),
+        scale: createVector(1, 1, 1),
+        dynamicMesh: build.definition,
+      })
+      return node
+    },
+    updateWallNodeGeometry(nodeId: string, payload: {
+      segments: Array<{ start: Vector3Like; end: Vector3Like }>
+      dimensions?: { height?: number; width?: number; thickness?: number }
+    }): boolean {
+      const node = findNodeById(this.nodes, nodeId)
+      if (!node || node.dynamicMesh?.type !== 'wall') {
+        return false
+      }
+
+      const build = buildWallDynamicMeshFromWorldSegments(payload.segments, payload.dimensions)
+      if (!build) {
+        return false
+      }
+
+      this.captureHistorySnapshot()
+      node.position = createVector(build.center.x, build.center.y, build.center.z)
+      node.dynamicMesh = build.definition
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
+
+      const runtime = getRuntimeObject(nodeId)
+      if (runtime) {
+        updateWallGroup(runtime, build.definition)
+      }
+      return true
+    },
+    setWallNodeDimensions(nodeId: string, dimensions: { height?: number; width?: number; thickness?: number }): boolean {
+      const node = findNodeById(this.nodes, nodeId)
+      if (!node || node.dynamicMesh?.type !== 'wall') {
+        return false
+      }
+
+      const existing = node.dynamicMesh.segments[0]
+      const { height, width, thickness } = normalizeWallDimensions({
+        height: dimensions.height ?? existing?.height ?? DEFAULT_WALL_HEIGHT,
+        width: dimensions.width ?? existing?.width ?? DEFAULT_WALL_WIDTH,
+        thickness: dimensions.thickness ?? existing?.thickness ?? DEFAULT_WALL_THICKNESS,
+      })
+      let changed = false
+      const nextSegments = node.dynamicMesh.segments.map((segment) => {
+        const nextSegment = {
+          ...segment,
+          height,
+          width,
+          thickness,
+        }
+        if (
+          segment.height !== nextSegment.height ||
+          segment.width !== nextSegment.width ||
+          segment.thickness !== nextSegment.thickness
+        ) {
+          changed = true
+        }
+        return nextSegment
+      })
+
+      if (!changed) {
+        return false
+      }
+
+      this.captureHistorySnapshot()
+      node.dynamicMesh = {
+        type: 'wall',
+        segments: nextSegments,
+      }
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
+
+      const runtime = getRuntimeObject(nodeId)
+      if (runtime) {
+        updateWallGroup(runtime, node.dynamicMesh)
+      }
+      return true
     },
     hasRuntimeObject(id: string) {
       return runtimeObjectRegistry.has(id)
