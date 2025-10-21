@@ -285,36 +285,10 @@ const WALL_MIN_HEIGHT = 0.5
 const WALL_MIN_WIDTH = 0.1
 const WALL_MIN_THICKNESS = 0.05
 
-const WALL_DOUBLE_CLICK_MAX_DELAY_MS = 350
-const WALL_DOUBLE_CLICK_MAX_DISTANCE_SQ = 64
-
 let wallBuildSession: WallBuildSession | null = null
 let wallPreviewNeedsSync = false
 let wallPreviewSignature: string | null = null
-let lastWallPlacementClick: { time: number; x: number; y: number } | null = null
 let wallPlacementSuppressedPointerId: number | null = null
-
-function registerWallPlacementClick(event: PointerEvent): boolean {
-  const now = Date.now()
-  const previous = lastWallPlacementClick
-  let isDoubleClick = false
-  if (previous) {
-    const elapsed = now - previous.time
-    if (elapsed <= WALL_DOUBLE_CLICK_MAX_DELAY_MS) {
-      const dx = event.clientX - previous.x
-      const dy = event.clientY - previous.y
-      if (dx * dx + dy * dy <= WALL_DOUBLE_CLICK_MAX_DISTANCE_SQ) {
-        isDoubleClick = true
-      }
-    }
-  }
-  lastWallPlacementClick = { time: now, x: event.clientX, y: event.clientY }
-  return isDoubleClick
-}
-
-function resetWallPlacementClickTracker() {
-  lastWallPlacementClick = null
-}
 
 function pointerHitsSelectableObject(event: PointerEvent): boolean {
   const nodeHit = pickNodeAtPointer(event)
@@ -3505,12 +3479,22 @@ async function handlePointerDown(event: PointerEvent) {
     return
   }
 
+  if (activeBuildTool.value === 'ground' && button === 2) {
+    pointerTrackingState = null
+    if (groundSelection.value || groundSelectionDragState) {
+      cancelGroundSelection()
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+    }
+    return
+  }
+
   if (activeBuildTool.value === 'wall') {
     if (button === 0) {
       const hitsSelectable = pointerHitsSelectableObject(event)
       if (hitsSelectable) {
         wallPlacementSuppressedPointerId = event.pointerId
-        resetWallPlacementClickTracker()
       } else {
         wallPlacementSuppressedPointerId = null
         pointerTrackingState = null
@@ -3769,6 +3753,21 @@ function handlePointerUp(event: PointerEvent) {
         return
       }
       wallPlacementSuppressedPointerId = null
+    } else if (event.button === 2) {
+      wallPlacementSuppressedPointerId = null
+      if (wallBuildSession) {
+        finalizeWallBuildSession()
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+      } else if (groundSelection.value || groundSelectionDragState) {
+        // allow right-click through to cancel ground selection when switching tools
+        cancelGroundSelection()
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+      }
+      return
     } else {
       return
     }
@@ -4187,7 +4186,6 @@ function clearWallBuildSession(options: { disposePreview?: boolean } = {}) {
   }
   wallBuildSession = null
   wallPreviewSignature = null
-  resetWallPlacementClickTracker()
   wallPlacementSuppressedPointerId = null
 }
 
@@ -4385,13 +4383,9 @@ function handleWallPlacementClick(event: PointerEvent): boolean {
   }
   const snappedPoint = snapVectorToGrid(groundPointerHelper.clone())
   const session = ensureWallBuildSession()
-  const isDoubleClick = registerWallPlacementClick(event)
 
   if (!session.dragStart) {
     beginWallSegmentDrag(snappedPoint)
-    if (isDoubleClick) {
-      finalizeWallBuildSession()
-    }
     return true
   }
 
@@ -4407,10 +4401,6 @@ function handleWallPlacementClick(event: PointerEvent): boolean {
     session.dragStart = constrained.clone()
     session.dragEnd = constrained.clone()
     updateWallPreview()
-  }
-
-  if (isDoubleClick) {
-    finalizeWallBuildSession()
   }
   return true
 }
