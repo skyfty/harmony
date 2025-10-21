@@ -288,6 +288,8 @@ const WALL_MIN_WIDTH = 0.1
 const WALL_MIN_THICKNESS = 0.05
 
 let wallBuildSession: WallBuildSession | null = null
+let wallPreviewNeedsSync = false
+let wallPreviewSignature: string | null = null
 
 function normalizeWallDimensionsForViewport(values: { height?: number; width?: number; thickness?: number }): {
   height: number
@@ -2683,6 +2685,10 @@ function animate() {
   if (selectionBoxHelper && selectionTrackedObject) {
     selectionBoxHelper.box.setFromObject(selectionTrackedObject)
   }
+  if (wallPreviewNeedsSync) {
+    wallPreviewNeedsSync = false
+    syncWallPreview()
+  }
   updatePlaceholderOverlayPositions()
   if (sky) {
     sky.position.copy(camera.position)
@@ -2775,6 +2781,8 @@ function disposeScene() {
 
   clearPlaceholderOverlays()
   objectMap.clear()
+  wallPreviewNeedsSync = false
+  wallPreviewSignature = null
   pendingSceneGraphSync = false
 }
 
@@ -3979,6 +3987,40 @@ function applyWallPreviewStyling(group: THREE.Group) {
   })
 }
 
+const WALL_PREVIEW_SIGNATURE_PRECISION = 1000
+
+function encodeWallPreviewNumber(value: number): string {
+  return `${Math.round(value * WALL_PREVIEW_SIGNATURE_PRECISION)}`
+}
+
+function computeWallPreviewSignature(
+  segments: WallSessionSegment[],
+  dimensions: { height: number; width: number; thickness: number },
+): string {
+  if (!segments.length) {
+    return 'empty'
+  }
+
+  const dimensionSignature = [
+    encodeWallPreviewNumber(dimensions.height),
+    encodeWallPreviewNumber(dimensions.width),
+    encodeWallPreviewNumber(dimensions.thickness),
+  ].join('|')
+
+  const segmentSignature = segments
+    .map(({ start, end }) => [
+      encodeWallPreviewNumber(start.x),
+      encodeWallPreviewNumber(start.y),
+      encodeWallPreviewNumber(start.z),
+      encodeWallPreviewNumber(end.x),
+      encodeWallPreviewNumber(end.y),
+      encodeWallPreviewNumber(end.z),
+    ].join(','))
+    .join(';')
+
+  return `${dimensionSignature}|${segmentSignature}`
+}
+
 function buildWallPreviewDefinition(segments: WallSessionSegment[], dimensions: { height: number; width: number; thickness: number }): { center: THREE.Vector3; definition: WallDynamicMesh } | null {
   if (!segments.length) {
     return null
@@ -4054,10 +4096,24 @@ function clearWallPreview() {
     disposeWallPreviewGroup(preview)
     wallBuildSession.previewGroup = null
   }
+  wallPreviewSignature = null
 }
 
-function updateWallPreview() {
+function updateWallPreview(options?: { immediate?: boolean }) {
+  if (options?.immediate) {
+    wallPreviewNeedsSync = false
+    syncWallPreview()
+    return
+  }
+  wallPreviewNeedsSync = true
+}
+
+function syncWallPreview() {
   if (!scene || !wallBuildSession) {
+    if (wallPreviewSignature !== null) {
+      clearWallPreview()
+      wallPreviewSignature = null
+    }
     return
   }
 
@@ -4069,15 +4125,35 @@ function updateWallPreview() {
   const hasCommittedNode = !!wallBuildSession.nodeId
   const hasActiveDrag = !!wallBuildSession.dragStart && !!wallBuildSession.dragEnd
   if (hasCommittedNode && !hasActiveDrag) {
-    clearWallPreview()
+    if (wallBuildSession.previewGroup) {
+      clearWallPreview()
+    }
+    wallPreviewSignature = null
+    return
+  }
+
+  if (!segments.length) {
+    if (wallBuildSession.previewGroup) {
+      clearWallPreview()
+    }
+    wallPreviewSignature = null
     return
   }
 
   const build = buildWallPreviewDefinition(segments, wallBuildSession.dimensions)
   if (!build) {
-    clearWallPreview()
+    if (wallBuildSession.previewGroup) {
+      clearWallPreview()
+    }
+    wallPreviewSignature = null
     return
   }
+
+  const signature = computeWallPreviewSignature(segments, wallBuildSession.dimensions)
+  if (signature === wallPreviewSignature) {
+    return
+  }
+  wallPreviewSignature = signature
 
   if (!wallBuildSession.previewGroup) {
     const preview = createWallGroup(build.definition)
@@ -4103,6 +4179,7 @@ function clearWallBuildSession(options: { disposePreview?: boolean } = {}) {
     wallBuildSession.previewGroup.removeFromParent()
   }
   wallBuildSession = null
+  wallPreviewSignature = null
 }
 
 function ensureWallBuildSession(): WallBuildSession {
@@ -4198,6 +4275,10 @@ function updateWallSegmentDrag(event: PointerEvent) {
 
   const pointer = snapVectorToGrid(groundPointerHelper.clone())
   const constrained = constrainWallEndPoint(wallBuildSession.dragStart, pointer)
+  const previous = wallBuildSession.dragEnd
+  if (previous && previous.equals(constrained)) {
+    return
+  }
   wallBuildSession.dragEnd = constrained
   updateWallPreview()
 }
@@ -4297,8 +4378,11 @@ function handleWallPlacementClick(event: PointerEvent): boolean {
   }
 
   const constrained = constrainWallEndPoint(session.dragStart, snappedPoint)
-  session.dragEnd = constrained
-  updateWallPreview()
+  const previous = session.dragEnd
+  if (!previous || !previous.equals(constrained)) {
+    session.dragEnd = constrained
+    updateWallPreview()
+  }
 
   if (!commitWallSegmentDrag()) {
     session.dragStart = constrained.clone()
