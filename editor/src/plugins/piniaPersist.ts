@@ -39,6 +39,9 @@ export interface StorePersistOptions<S extends StateTree = StateTree> {
   serializer?: PersistSerializer<S>
   pick?: (keyof S | string)[]
   debug?: boolean
+  shouldPersist?: (state: Partial<S>, previousState: Partial<S> | null) => boolean
+  flushDebounce?: number
+  flushEvents?: string[]
 }
 
 export interface CreatePersistPluginOptions {
@@ -124,6 +127,18 @@ function deepMerge(target: any, source: any): any {
   return output
 }
 
+function cloneDeep<T>(value: T): T {
+  if (value === null || typeof value !== 'object') return value
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneDeep(item)) as unknown as T
+  }
+  const result: Record<string, unknown> = {}
+  for (const key of Object.keys(value as Record<string, unknown>)) {
+    result[key] = cloneDeep((value as Record<string, unknown>)[key])
+  }
+  return result as T
+}
+
 function runMigrations<S extends StateTree>(
   state: Partial<S>,
   fromVersion: number,
@@ -174,7 +189,7 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
   const { defaultStorage = 'local', keyPrefix = 'pinia', storages } = options
 
   return ({ store, options: storeOptions }: PiniaPluginContext) => {
-  const persistOptions = (storeOptions as { persist?: StorePersistOptions }).persist
+    const persistOptions = (storeOptions as { persist?: StorePersistOptions }).persist
 
     if (!persistOptions) return
 
@@ -185,11 +200,19 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
     const version = persistOptions.version ?? 1
     const serializer = persistOptions.serializer ?? defaultSerializer
     const debug = persistOptions.debug ?? false
+    const shouldPersist = persistOptions.shouldPersist ?? (() => true)
+    const flushDebounce = Math.max(0, persistOptions.flushDebounce ?? 250)
+    const flushEvents = persistOptions.flushEvents ?? ['visibilitychange', 'pagehide', 'beforeunload']
 
     let fromVersion = 0
+    let lastPersistedValue: string | null = null
+    let lastPersistedState: Partial<StateTree> | null = null
+    let pendingPayload: PersistPayload | null = null
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
     try {
       const raw = storage.getItem(key)
+      lastPersistedValue = raw
       if (raw) {
         const payload = serializer.deserialize(raw)
         if (payload) {
@@ -211,6 +234,7 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
             })
           }
           applyStatePatch(store, stateToHydrate)
+          lastPersistedState = cloneDeep(stateToHydrate)
         }
       }
     } catch (error) {
@@ -219,25 +243,114 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
       }
     }
 
-    store.$subscribe(
-      (_mutation, state) => {
-        try {
-          const partialState = pickFromState(state, persistOptions.pick)
-          const payload: PersistPayload = {
-            version,
-            state: partialState,
-          }
-          storage.setItem(key, serializer.serialize(payload))
+    const flushPendingPayload = (reason: string) => {
+      if (!pendingPayload) return
+      const payload = pendingPayload
+      pendingPayload = null
+
+      try {
+        if (!shouldPersist(payload.state, lastPersistedState)) {
           if (debug) {
-            console.info('[pinia-persist] Persisted store', { key, version, state: partialState })
+            console.info('[pinia-persist] Skipped persisting store', {
+              key,
+              reason,
+            })
           }
-        } catch (error) {
-          if (debug) {
-            console.warn(`[pinia-persist] Failed to persist store "${store.$id}"`, error)
-          }
+          return
         }
+
+        const serialized = serializer.serialize(payload)
+        if (serialized === lastPersistedValue) return
+        console.log('sdfsdfsdf')
+
+        storage.setItem(key, serialized)
+        lastPersistedValue = serialized
+        lastPersistedState = cloneDeep(payload.state)
+
+        if (debug) {
+          console.info('[pinia-persist] Persisted store', {
+            key,
+            version,
+            reason,
+            state: payload.state,
+          })
+        }
+      } catch (error) {
+        if (debug) {
+          console.warn(`[pinia-persist] Failed to persist store "${store.$id}"`, error)
+        }
+      }
+    }
+
+    const schedulePersist = (state: StateTree) => {
+      const partialState = pickFromState(state, persistOptions.pick)
+      pendingPayload = {
+        version,
+        state: partialState,
+      }
+
+      if (debounceTimer) {
+        clearTimeout(debounceTimer)
+        debounceTimer = null
+      }
+
+      if (flushDebounce === 0) {
+        flushPendingPayload('immediate')
+        return
+      }
+
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null
+        flushPendingPayload('debounce')
+      }, flushDebounce)
+    }
+
+    const handleFlushEvent = (event: Event) => {
+      if (debounceTimer) {
+        clearTimeout(debounceTimer)
+        debounceTimer = null
+      }
+
+      if (event.type === 'visibilitychange' && typeof document !== 'undefined' && document.visibilityState !== 'hidden') {
+        return
+      }
+
+      flushPendingPayload(`event:${event.type}`)
+    }
+
+    const removeFlushListeners = () => {
+      if (!isClient) return
+      for (const eventName of flushEvents) {
+        window.removeEventListener(eventName, handleFlushEvent)
+      }
+    }
+
+    if (isClient && flushEvents.length > 0) {
+      // Flush pending state when the tab is hidden or about to unload so the latest data survives.
+      for (const eventName of flushEvents) {
+        window.addEventListener(eventName, handleFlushEvent, { passive: true })
+      }
+    }
+
+    const stopSubscription = store.$subscribe(
+      (_mutation, state) => {
+        schedulePersist(state)
       },
       { detached: true },
     )
+
+    const originalDispose = store.$dispose.bind(store)
+    store.$dispose = () => {
+      if (debounceTimer) {
+        clearTimeout(debounceTimer)
+        debounceTimer = null
+      }
+
+      // Ensure batched data is written out and listeners are cleaned up with the store lifecycle.
+      flushPendingPayload('dispose')
+      removeFlushListeners()
+      stopSubscription()
+      originalDispose()
+    }
   }
 }
