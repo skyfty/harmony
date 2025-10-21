@@ -310,15 +310,6 @@ function normalizeWallDimensionsForViewport(values: { height?: number; width?: n
   return { height, width, thickness }
 }
 
-type WallTransformState = {
-  nodeId: string
-  initialScale: THREE.Vector3
-  initialSegments: WallSessionSegment[]
-  dimensions: { height: number; width: number; thickness: number }
-}
-
-let wallTransformState: WallTransformState | null = null
-
 type CameraTransitionState = {
   startPosition: THREE.Vector3
   startTarget: THREE.Vector3
@@ -1163,6 +1154,7 @@ const transformDeltaPosition = new THREE.Vector3()
 const transformWorldPositionBuffer = new THREE.Vector3()
 const transformLocalPositionHelper = new THREE.Vector3()
 const transformScaleFactor = new THREE.Vector3(1, 1, 1)
+const wallScaleResetHelper = new THREE.Vector3(1, 1, 1)
 const transformQuaternionDelta = new THREE.Quaternion()
 const transformQuaternionHelper = new THREE.Quaternion()
 const transformQuaternionInverseHelper = new THREE.Quaternion()
@@ -2451,8 +2443,6 @@ function initScene() {
   transformControls = new TransformControls(camera, canvasRef.value)
   transformControls.addEventListener('dragging-changed', draggingChangedHandler as any)
   transformControls.addEventListener('objectChange', handleTransformChange)
-  transformControls.addEventListener('mouseDown', handleTransformMouseDown as any)
-  transformControls.addEventListener('mouseUp', handleTransformMouseUp as any)
   scene.add(transformControls.getHelper())
   
 
@@ -4568,14 +4558,6 @@ function handleTransformChange() {
   }
 
   const mode = transformControls.getMode()
-  if (mode === 'scale') {
-    const node = findSceneNode(props.sceneNodes, target.userData.nodeId)
-    if (node?.dynamicMesh?.type === 'wall') {
-      if (applyWallScaleTransform(target, node)) {
-        return
-      }
-    }
-  }
 
   if (mode === 'translate') {
     snapVectorToGrid(target.position)
@@ -4679,158 +4661,6 @@ function handleTransformChange() {
   emit('updateNodeTransform', payload)
 
   scheduleThumbnailCapture()
-}
-
-function handleTransformMouseDown() {
-  if (!transformControls) {
-    wallTransformState = null
-    return
-  }
-  const mode = transformControls.getMode()
-  const object = transformControls.object as THREE.Object3D | null
-  if (!object || mode !== 'scale') {
-    wallTransformState = null
-    return
-  }
-  const nodeId = object.userData?.nodeId as string | undefined
-  if (!nodeId) {
-    wallTransformState = null
-    return
-  }
-  const node = findSceneNode(props.sceneNodes, nodeId)
-  if (!node || node.dynamicMesh?.type !== 'wall') {
-    wallTransformState = null
-    return
-  }
-  wallTransformState = {
-    nodeId,
-    initialScale: object.scale.clone(),
-    initialSegments: expandWallSegmentsToWorld(node),
-    dimensions: getWallNodeDimensions(node),
-  }
-}
-
-function handleTransformMouseUp() {
-  wallTransformState = null
-}
-
-function applyWallScaleTransform(target: THREE.Object3D, node: SceneNode): boolean {
-  const scale = target.scale
-  const EPS = 1e-3
-  const scaleChanged = Math.abs(scale.x - 1) > EPS || Math.abs(scale.y - 1) > EPS || Math.abs(scale.z - 1) > EPS
-  if (!scaleChanged) {
-    return false
-  }
-
-  const state = wallTransformState && wallTransformState.nodeId === node.id
-    ? wallTransformState
-    : {
-        nodeId: node.id,
-        initialScale: new THREE.Vector3(1, 1, 1),
-        initialSegments: expandWallSegmentsToWorld(node),
-        dimensions: getWallNodeDimensions(node),
-      }
-
-  if (!state.initialSegments.length) {
-    return false
-  }
-
-  const referenceSegment = state.initialSegments[0]
-  const directionBasis = referenceSegment
-    ? referenceSegment.end.clone().sub(referenceSegment.start)
-    : new THREE.Vector3(1, 0, 0)
-  directionBasis.y = 0
-  if (directionBasis.lengthSq() < 1e-6) {
-    directionBasis.set(1, 0, 0)
-  }
-  directionBasis.normalize()
-  const perpendicularBasis = new THREE.Vector3(-directionBasis.z, 0, directionBasis.x)
-  if (perpendicularBasis.lengthSq() < 1e-6) {
-    perpendicularBasis.set(0, 0, 1)
-  } else {
-    perpendicularBasis.normalize()
-  }
-  const scaleMatrix = new THREE.Matrix3().set(
-    Math.abs(scale.x), 0, 0,
-    0, Math.abs(scale.y), 0,
-    0, 0, Math.abs(scale.z),
-  )
-  const scaledPerpendicular = perpendicularBasis.clone().applyMatrix3(scaleMatrix)
-  const heightScaleFactor = Math.max(EPS, Math.abs(scale.y))
-  const widthScaleFactor = Math.max(EPS, scaledPerpendicular.length())
-
-  const center = new THREE.Vector3(node.position.x, node.position.y, node.position.z)
-  const scaleX = Math.abs(scale.x) <= EPS ? (scale.x >= 0 ? EPS : -EPS) : scale.x
-  const scaleZ = Math.abs(scale.z) <= EPS ? (scale.z >= 0 ? EPS : -EPS) : scale.z
-  const scaledSegments: WallSessionSegment[] = state.initialSegments.map(({ start, end }) => ({
-    start: new THREE.Vector3(
-      center.x + (start.x - center.x) * scaleX,
-      start.y,
-      center.z + (start.z - center.z) * scaleZ,
-    ),
-    end: new THREE.Vector3(
-      center.x + (end.x - center.x) * scaleX,
-      end.y,
-      center.z + (end.z - center.z) * scaleZ,
-    ),
-  }))
-
-  const candidateDimensions = normalizeWallDimensionsForViewport({
-    height: state.dimensions.height * (heightScaleFactor || 1),
-    width: state.dimensions.width * (widthScaleFactor || 1),
-    thickness: state.dimensions.thickness,
-  })
-
-  const definition = buildWallPreviewDefinition(scaledSegments, candidateDimensions)
-
-  if (!definition) {
-    return false
-  }
-
-  const segmentPayload = scaledSegments.map((segment) => ({
-    start: { x: segment.start.x, y: segment.start.y, z: segment.start.z },
-    end: { x: segment.end.x, y: segment.end.y, z: segment.end.z },
-  }))
-
-  const updated = sceneStore.updateWallNodeGeometry(node.id, {
-    segments: segmentPayload,
-    dimensions: candidateDimensions,
-  })
-
-  if (!updated) {
-    return false
-  }
-
-  const containerGroup = target as THREE.Group
-  const wallGroup = containerGroup.userData?.wallGroup as THREE.Group | undefined
-  if (wallGroup) {
-    updateWallGroup(wallGroup, definition.definition)
-    wallGroup.position.set(0, 0, 0)
-  }
-
-  containerGroup.position.copy(definition.center)
-  target.scale.set(1, 1, 1)
-
-  wallTransformState = {
-    nodeId: node.id,
-    initialScale: new THREE.Vector3(1, 1, 1),
-    initialSegments: scaledSegments,
-    dimensions: candidateDimensions,
-  }
-
-  updateSelectionBox(target)
-  updateGridHighlightFromObject(target)
-  updateSelectionHighlights()
-
-  emit('updateNodeTransform', {
-    id: node.id,
-    position: toVector3Like(containerGroup.position),
-    rotation: toEulerLike(containerGroup.rotation as THREE.Euler),
-    scale: { x: 1, y: 1, z: 1 },
-  })
-
-  scheduleThumbnailCapture()
-  return true
 }
 
 function updateLightObjectProperties(container: THREE.Object3D, node: SceneNode) {
