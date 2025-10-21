@@ -80,6 +80,9 @@ const HISTORY_LIMIT = 50
 const DEFAULT_WALL_HEIGHT = 3
 const DEFAULT_WALL_WIDTH = 0.2
 const DEFAULT_WALL_THICKNESS = 0.2
+const MIN_WALL_HEIGHT = 0.5
+const MIN_WALL_WIDTH = 0.1
+const MIN_WALL_THICKNESS = 0.05
 
 const GRID_CELL_SIZE = 1
 const CAMERA_NEAR = 0.1
@@ -148,9 +151,9 @@ function normalizeWallDimensions(values: { height?: number; width?: number; thic
   width: number
   thickness: number
 } {
-  const height = Number.isFinite(values.height) ? Math.max(1e-3, values.height!) : DEFAULT_WALL_HEIGHT
-  const width = Number.isFinite(values.width) ? Math.max(1e-3, values.width!) : DEFAULT_WALL_WIDTH
-  const thickness = Number.isFinite(values.thickness) ? Math.max(1e-3, values.thickness!) : DEFAULT_WALL_THICKNESS
+  const height = Number.isFinite(values.height) ? Math.max(MIN_WALL_HEIGHT, values.height!) : DEFAULT_WALL_HEIGHT
+  const width = Number.isFinite(values.width) ? Math.max(MIN_WALL_WIDTH, values.width!) : DEFAULT_WALL_WIDTH
+  const thickness = Number.isFinite(values.thickness) ? Math.max(MIN_WALL_THICKNESS, values.thickness!) : DEFAULT_WALL_THICKNESS
   return { height, width, thickness }
 }
 

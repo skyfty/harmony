@@ -69,7 +69,7 @@ function applyDimensions() {
           density="compact"
           variant="outlined"
           step="0.1"
-          min="0.1"
+          min="0.5"
           @blur="applyDimensions"
           @keydown.enter.prevent="applyDimensions"
         />
@@ -80,7 +80,7 @@ function applyDimensions() {
           density="compact"
           variant="outlined"
           step="0.05"
-          min="0.05"
+          min="0.1"
           @blur="applyDimensions"
           @keydown.enter.prevent="applyDimensions"
         />

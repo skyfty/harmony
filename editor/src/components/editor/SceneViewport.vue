@@ -244,13 +244,28 @@ type WallBuildSession = {
   previewGroup: THREE.Group | null
   nodeId: string | null
   dimensions: { height: number; width: number; thickness: number }
+  finalizePointer: { pointerId: number; startX: number; startY: number; moved: boolean } | null
 }
 
 const WALL_DEFAULT_HEIGHT = 3
 const WALL_DEFAULT_WIDTH = 0.2
 const WALL_DEFAULT_THICKNESS = 0.2
+const WALL_MIN_HEIGHT = 0.5
+const WALL_MIN_WIDTH = 0.1
+const WALL_MIN_THICKNESS = 0.05
 
 let wallBuildSession: WallBuildSession | null = null
+
+function normalizeWallDimensionsForViewport(values: { height?: number; width?: number; thickness?: number }): {
+  height: number
+  width: number
+  thickness: number
+} {
+  const height = Number.isFinite(values.height) ? Math.max(WALL_MIN_HEIGHT, values.height!) : WALL_DEFAULT_HEIGHT
+  const width = Number.isFinite(values.width) ? Math.max(WALL_MIN_WIDTH, values.width!) : WALL_DEFAULT_WIDTH
+  const thickness = Number.isFinite(values.thickness) ? Math.max(WALL_MIN_THICKNESS, values.thickness!) : WALL_DEFAULT_THICKNESS
+  return { height, width, thickness }
+}
 
 type WallTransformState = {
   nodeId: string
@@ -3289,19 +3304,26 @@ async function handlePointerDown(event: PointerEvent) {
     return
   }
 
-  if (activeBuildTool.value === 'wall' && button === 2) {
-    if (!raycastGroundPoint(event, groundPointerHelper)) {
+  if (activeBuildTool.value === 'wall') {
+    if (button === 0) {
+      pointerTrackingState = null
       event.preventDefault()
       event.stopPropagation()
       event.stopImmediatePropagation()
       return
     }
-    const startPoint = snapVectorToGrid(groundPointerHelper.clone())
-    beginWallSegmentDrag(event, startPoint)
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
-    return
+    if (button === 2) {
+      pointerTrackingState = null
+      if (wallBuildSession) {
+        wallBuildSession.finalizePointer = {
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+          moved: false,
+        }
+      }
+      return
+    }
   }
 
   if (!isSelectionButton) {
@@ -3444,12 +3466,24 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
 
-  if (wallBuildSession && wallBuildSession.pointerId === event.pointerId) {
-    updateWallSegmentDrag(event)
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
-    return
+  if (activeBuildTool.value === 'wall' && wallBuildSession) {
+    if (wallBuildSession.finalizePointer && wallBuildSession.finalizePointer.pointerId === event.pointerId) {
+      const dx = event.clientX - wallBuildSession.finalizePointer.startX
+      const dy = event.clientY - wallBuildSession.finalizePointer.startY
+      if (!wallBuildSession.finalizePointer.moved && Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
+        wallBuildSession.finalizePointer.moved = true
+      }
+    }
+    if (wallBuildSession.dragStart) {
+      const isRightButtonActive =
+        !!wallBuildSession.finalizePointer &&
+        wallBuildSession.finalizePointer.pointerId === event.pointerId &&
+        (event.buttons & 2) !== 0
+      if (!isRightButtonActive) {
+        updateWallSegmentDrag(event)
+        return
+      }
+    }
   }
 
   if (!pointerTrackingState || event.pointerId !== pointerTrackingState.pointerId) {
@@ -3545,6 +3579,32 @@ function handlePointerUp(event: PointerEvent) {
     return
   }
 
+  if (activeBuildTool.value === 'wall') {
+    if (event.button === 2) {
+      if (wallBuildSession) {
+        if (wallBuildSession.finalizePointer && wallBuildSession.finalizePointer.pointerId === event.pointerId) {
+          const shouldFinalize = !wallBuildSession.finalizePointer.moved
+          wallBuildSession.finalizePointer = null
+          if (shouldFinalize) {
+            finalizeWallBuildSession()
+          }
+        } else {
+          wallBuildSession.finalizePointer = null
+        }
+      }
+      return
+    }
+    if (event.button === 0) {
+      const handled = handleWallPlacementClick(event)
+      if (handled) {
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+      }
+      return
+    }
+  }
+
   if (!pointerTrackingState || event.pointerId !== pointerTrackingState.pointerId) {
     return
   }
@@ -3629,10 +3689,7 @@ function handlePointerCancel(event: PointerEvent) {
     return
   }
 
-  if (wallBuildSession && wallBuildSession.pointerId === event.pointerId) {
-    if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
-      canvasRef.value.releasePointerCapture(event.pointerId)
-    }
+  if (activeBuildTool.value === 'wall' && wallBuildSession) {
     cancelWallDrag()
     event.preventDefault()
     event.stopPropagation()
@@ -3788,14 +3845,16 @@ function buildWallPreviewDefinition(segments: WallSessionSegment[], dimensions: 
     (min.z + max.z) * 0.5,
   )
 
+  const normalized = normalizeWallDimensionsForViewport(dimensions)
+
   const definition: WallDynamicMesh = {
     type: 'wall',
     segments: segments.map(({ start, end }) => ({
       start: { x: start.x - center.x, y: start.y - center.y, z: start.z - center.z },
       end: { x: end.x - center.x, y: end.y - center.y, z: end.z - center.z },
-      height: dimensions.height,
-      width: dimensions.width,
-      thickness: dimensions.thickness,
+      height: normalized.height,
+      width: normalized.width,
+      thickness: normalized.thickness,
     })),
   }
 
@@ -3804,18 +3863,18 @@ function buildWallPreviewDefinition(segments: WallSessionSegment[], dimensions: 
 
 function getWallNodeDimensions(node: SceneNode): { height: number; width: number; thickness: number } {
   if (node.dynamicMesh?.type !== 'wall' || node.dynamicMesh.segments.length === 0) {
-    return {
+    return normalizeWallDimensionsForViewport({
       height: WALL_DEFAULT_HEIGHT,
       width: WALL_DEFAULT_WIDTH,
       thickness: WALL_DEFAULT_THICKNESS,
-    }
+    })
   }
   const sample = node.dynamicMesh.segments[0]!
-  return {
+  return normalizeWallDimensionsForViewport({
     height: sample.height ?? WALL_DEFAULT_HEIGHT,
     width: sample.width ?? WALL_DEFAULT_WIDTH,
     thickness: sample.thickness ?? WALL_DEFAULT_THICKNESS,
-  }
+  })
 }
 
 function expandWallSegmentsToWorld(node: SceneNode): WallSessionSegment[] {
@@ -3898,11 +3957,12 @@ function ensureWallBuildSession(): WallBuildSession {
     segments: [],
     previewGroup: null,
     nodeId: null,
-    dimensions: {
+    dimensions: normalizeWallDimensionsForViewport({
       height: WALL_DEFAULT_HEIGHT,
       width: WALL_DEFAULT_WIDTH,
       thickness: WALL_DEFAULT_THICKNESS,
-    },
+    }),
+    finalizePointer: null,
   }
   return wallBuildSession
 }
@@ -3936,9 +3996,7 @@ function constrainWallEndPoint(start: THREE.Vector3, target: THREE.Vector3): THR
   )
 }
 
-function beginWallSegmentDrag(event: PointerEvent, startPoint: THREE.Vector3) {
-  const session = ensureWallBuildSession()
-
+function hydrateWallBuildSessionFromSelection(session: WallBuildSession) {
   if (!session.nodeId) {
     const selectedId = sceneStore.selectedNodeId
     if (selectedId) {
@@ -3949,32 +4007,28 @@ function beginWallSegmentDrag(event: PointerEvent, startPoint: THREE.Vector3) {
         session.segments = expandWallSegmentsToWorld(selectedNode)
       }
     }
-  } else if (session.nodeId) {
+  } else {
     const node = findSceneNode(sceneStore.nodes, session.nodeId)
     if (node?.dynamicMesh?.type === 'wall') {
       session.dimensions = getWallNodeDimensions(node)
       session.segments = expandWallSegmentsToWorld(node)
     }
   }
+  session.dimensions = normalizeWallDimensionsForViewport(session.dimensions)
+}
 
-  session.pointerId = event.pointerId
+function beginWallSegmentDrag(startPoint: THREE.Vector3) {
+  const session = ensureWallBuildSession()
+  hydrateWallBuildSessionFromSelection(session)
+  session.pointerId = null
   session.dragStart = startPoint.clone()
   session.dragEnd = startPoint.clone()
-
-  disableOrbitForWallBuild()
+  session.finalizePointer = null
   updateWallPreview()
-
-  if (canvasRef.value) {
-    try {
-      canvasRef.value.setPointerCapture(event.pointerId)
-    } catch (error) {
-      /* noop */
-    }
-  }
 }
 
 function updateWallSegmentDrag(event: PointerEvent) {
-  if (!wallBuildSession || wallBuildSession.pointerId !== event.pointerId) {
+  if (!wallBuildSession || !wallBuildSession.dragStart) {
     return
   }
 
@@ -3983,7 +4037,7 @@ function updateWallSegmentDrag(event: PointerEvent) {
   }
 
   const pointer = snapVectorToGrid(groundPointerHelper.clone())
-  const constrained = constrainWallEndPoint(wallBuildSession.dragStart ?? pointer, pointer)
+  const constrained = constrainWallEndPoint(wallBuildSession.dragStart, pointer)
   wallBuildSession.dragEnd = constrained
   updateWallPreview()
 }
@@ -3993,8 +4047,6 @@ function resetWallDragState() {
     return
   }
   wallBuildSession.pointerId = null
-  wallBuildSession.dragStart = null
-  wallBuildSession.dragEnd = null
   restoreOrbitAfterWallBuild()
 }
 
@@ -4004,9 +4056,7 @@ function cancelWallDrag() {
   }
   wallBuildSession.dragStart = null
   wallBuildSession.dragEnd = null
-  if (wallBuildSession.pointerId !== null && canvasRef.value && canvasRef.value.hasPointerCapture(wallBuildSession.pointerId)) {
-    canvasRef.value.releasePointerCapture(wallBuildSession.pointerId)
-  }
+  wallBuildSession.finalizePointer = null
   resetWallDragState()
   updateWallPreview()
 }
@@ -4044,6 +4094,7 @@ function commitWallSegmentDrag(): boolean {
     nodeId = created.id
     wallBuildSession.nodeId = nodeId
     wallBuildSession.segments = pendingSegments
+    wallBuildSession.dimensions = getWallNodeDimensions(created)
   } else {
     const updated = sceneStore.updateWallNodeGeometry(nodeId, {
       segments: segmentPayload,
@@ -4054,14 +4105,56 @@ function commitWallSegmentDrag(): boolean {
       return false
     }
     wallBuildSession.segments = pendingSegments
+    const refreshed = findSceneNode(sceneStore.nodes, nodeId)
+    if (refreshed?.dynamicMesh?.type === 'wall') {
+      wallBuildSession.dimensions = getWallNodeDimensions(refreshed)
+    }
   }
 
-  wallBuildSession.dragStart = null
-  wallBuildSession.dragEnd = null
-  resetWallDragState()
+  wallBuildSession.dragStart = end.clone()
+  wallBuildSession.dragEnd = end.clone()
+  wallBuildSession.pointerId = null
+  wallBuildSession.finalizePointer = null
+  wallBuildSession.dimensions = normalizeWallDimensionsForViewport(wallBuildSession.dimensions)
   updateWallPreview()
   scheduleThumbnailCapture()
   return true
+}
+
+function handleWallPlacementClick(event: PointerEvent): boolean {
+  if (!activeBuildTool.value || activeBuildTool.value !== 'wall') {
+    return false
+  }
+  if (!raycastGroundPoint(event, groundPointerHelper)) {
+    return false
+  }
+  const snappedPoint = snapVectorToGrid(groundPointerHelper.clone())
+  const session = ensureWallBuildSession()
+
+  if (!session.dragStart) {
+    beginWallSegmentDrag(snappedPoint)
+    return true
+  }
+
+  const constrained = constrainWallEndPoint(session.dragStart, snappedPoint)
+  session.dragEnd = constrained
+  updateWallPreview()
+
+  if (!commitWallSegmentDrag()) {
+    session.dragStart = constrained.clone()
+    session.dragEnd = constrained.clone()
+    updateWallPreview()
+  }
+  return true
+}
+
+function finalizeWallBuildSession() {
+  if (!wallBuildSession) {
+    return
+  }
+  cancelWallDrag()
+  clearWallBuildSession()
+  restoreOrbitAfterWallBuild()
 }
 
 function cancelActiveBuildOperation(): boolean {
@@ -4069,25 +4162,31 @@ function cancelActiveBuildOperation(): boolean {
   if (!tool) {
     return false
   }
+  let handled = false
   switch (tool) {
     case 'ground':
-      if (cancelGroundSelection()) {
-        return true
-      }
+      cancelGroundSelection()
       activeBuildTool.value = null
-      return true
+      handled = true
+      break
     case 'wall':
-      if (cancelWallSelection()) {
-        return true
-      }
+      cancelWallSelection()
       activeBuildTool.value = null
-      return true
+      handled = true
+      break
     case 'platform':
       activeBuildTool.value = null
-      return true
+      handled = true
+      break
     default:
       return false
   }
+
+  if (handled && props.activeTool !== 'select') {
+    emit('changeTool', 'select')
+  }
+
+  return handled
 }
 
 function handleBuildToolChange(tool: BuildTool | null) {
@@ -4379,6 +4478,30 @@ function applyWallScaleTransform(target: THREE.Object3D, node: SceneNode): boole
     return false
   }
 
+  const referenceSegment = state.initialSegments[0]
+  const directionBasis = referenceSegment
+    ? referenceSegment.end.clone().sub(referenceSegment.start)
+    : new THREE.Vector3(1, 0, 0)
+  directionBasis.y = 0
+  if (directionBasis.lengthSq() < 1e-6) {
+    directionBasis.set(1, 0, 0)
+  }
+  directionBasis.normalize()
+  const perpendicularBasis = new THREE.Vector3(-directionBasis.z, 0, directionBasis.x)
+  if (perpendicularBasis.lengthSq() < 1e-6) {
+    perpendicularBasis.set(0, 0, 1)
+  } else {
+    perpendicularBasis.normalize()
+  }
+  const scaleMatrix = new THREE.Matrix3().set(
+    Math.abs(scale.x), 0, 0,
+    0, Math.abs(scale.y), 0,
+    0, 0, Math.abs(scale.z),
+  )
+  const scaledPerpendicular = perpendicularBasis.clone().applyMatrix3(scaleMatrix)
+  const heightScaleFactor = Math.max(EPS, Math.abs(scale.y))
+  const widthScaleFactor = Math.max(EPS, scaledPerpendicular.length())
+
   const center = new THREE.Vector3(node.position.x, node.position.y, node.position.z)
   const scaleX = Math.abs(scale.x) <= EPS ? (scale.x >= 0 ? EPS : -EPS) : scale.x
   const scaleZ = Math.abs(scale.z) <= EPS ? (scale.z >= 0 ? EPS : -EPS) : scale.z
@@ -4395,17 +4518,13 @@ function applyWallScaleTransform(target: THREE.Object3D, node: SceneNode): boole
     ),
   }))
 
-  const heightScale = Math.abs(scale.y)
-  const horizontalScale = Math.max(Math.abs(scaleX), Math.abs(scaleZ))
-  const nextHeight = Math.max(0.1, state.dimensions.height * (heightScale || 1))
-  const nextWidth = Math.max(0.05, state.dimensions.width * (horizontalScale || 1))
-  const nextThickness = state.dimensions.thickness
-
-  const definition = buildWallPreviewDefinition(scaledSegments, {
-    height: nextHeight,
-    width: nextWidth,
-    thickness: nextThickness,
+  const candidateDimensions = normalizeWallDimensionsForViewport({
+    height: state.dimensions.height * (heightScaleFactor || 1),
+    width: state.dimensions.width * (widthScaleFactor || 1),
+    thickness: state.dimensions.thickness,
   })
+
+  const definition = buildWallPreviewDefinition(scaledSegments, candidateDimensions)
 
   if (!definition) {
     return false
@@ -4418,11 +4537,7 @@ function applyWallScaleTransform(target: THREE.Object3D, node: SceneNode): boole
 
   const updated = sceneStore.updateWallNodeGeometry(node.id, {
     segments: segmentPayload,
-    dimensions: {
-      height: nextHeight,
-      width: nextWidth,
-      thickness: nextThickness,
-    },
+    dimensions: candidateDimensions,
   })
 
   if (!updated) {
@@ -4443,11 +4558,7 @@ function applyWallScaleTransform(target: THREE.Object3D, node: SceneNode): boole
     nodeId: node.id,
     initialScale: new THREE.Vector3(1, 1, 1),
     initialSegments: scaledSegments,
-    dimensions: {
-      height: nextHeight,
-      width: nextWidth,
-      thickness: nextThickness,
-    },
+    dimensions: candidateDimensions,
   }
 
   updateSelectionBox(target)
