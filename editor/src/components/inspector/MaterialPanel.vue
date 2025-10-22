@@ -700,6 +700,15 @@ function handleExportMaterial() {
 }
 </script>
 <template>
+
+<v-expansion-panel title="material">
+      <v-expansion-panel-title>Material</v-expansion-panel-title>
+      <v-expansion-panel-text>
+        
+      </v-expansion-panel-text>
+</v-expansion-panel>  
+
+
   <section class="material-panel">
     <header class="material-panel__header">
       <h3 class="material-panel__title">材质</h3>

@@ -139,6 +139,7 @@ const MIN_TARGET_HEIGHT = 0
 const GRID_MAJOR_SPACING = 1
 const GRID_MINOR_SPACING = 0.5
 const GRID_SNAP_SPACING = GRID_MINOR_SPACING
+const WALL_DIAGONAL_SNAP_THRESHOLD = THREE.MathUtils.degToRad(20)
 const GRID_MINOR_DASH_SIZE = GRID_MINOR_SPACING * 0.12
 const GRID_MINOR_GAP_SIZE = GRID_MINOR_SPACING * 0.2
 const GRID_BASE_HEIGHT = 0.03
@@ -4198,32 +4199,43 @@ function ensureWallBuildSession(): WallBuildSession {
   return wallBuildSession
 }
 
-function constrainWallEndPoint(start: THREE.Vector3, target: THREE.Vector3): THREE.Vector3 {
+function constrainWallEndPoint(start: THREE.Vector3, target: THREE.Vector3, rawTarget?: THREE.Vector3): THREE.Vector3 {
   const delta = target.clone().sub(start)
-  const stepX = Math.round(delta.x / GRID_SNAP_SPACING)
-  const stepZ = Math.round(delta.z / GRID_SNAP_SPACING)
+  let stepX = Math.round(delta.x / GRID_SNAP_SPACING)
+  let stepZ = Math.round(delta.z / GRID_SNAP_SPACING)
 
   if (stepX === 0 && stepZ === 0) {
     return start.clone()
   }
 
-  let finalStepX = stepX
-  let finalStepZ = stepZ
+  const rawDelta = rawTarget ? rawTarget.clone().sub(start) : delta.clone()
+  const absRawX = Math.abs(rawDelta.x)
+  const absRawZ = Math.abs(rawDelta.z)
 
-  if (finalStepX !== 0 && finalStepZ !== 0) {
-    if (Math.abs(finalStepX) === Math.abs(finalStepZ)) {
-      // already diagonal
-    } else if (Math.abs(finalStepX) > Math.abs(finalStepZ)) {
-      finalStepZ = 0
+  if (absRawX > 1e-4 || absRawZ > 1e-4) {
+    const angle = Math.atan2(absRawZ, absRawX)
+    const diagonalAngle = Math.PI * 0.25
+    if (!Number.isNaN(angle) && Math.abs(angle - diagonalAngle) <= WALL_DIAGONAL_SNAP_THRESHOLD) {
+      const diagSteps = Math.max(Math.abs(stepX), Math.abs(stepZ), 1)
+      const signX = rawDelta.x >= 0 ? 1 : -1
+      const signZ = rawDelta.z >= 0 ? 1 : -1
+      stepX = diagSteps * signX
+      stepZ = diagSteps * signZ
+    }
+  }
+
+  if (stepX !== 0 && stepZ !== 0 && Math.abs(stepX) !== Math.abs(stepZ)) {
+    if (Math.abs(stepX) > Math.abs(stepZ)) {
+      stepZ = 0
     } else {
-      finalStepX = 0
+      stepX = 0
     }
   }
 
   return new THREE.Vector3(
-    start.x + finalStepX * GRID_SNAP_SPACING,
+    start.x + stepX * GRID_SNAP_SPACING,
     start.y,
-    start.z + finalStepZ * GRID_SNAP_SPACING,
+    start.z + stepZ * GRID_SNAP_SPACING,
   )
 }
 
@@ -4278,8 +4290,9 @@ function updateWallSegmentDrag(event: PointerEvent) {
     return
   }
 
-  const pointer = snapVectorToGrid(groundPointerHelper.clone())
-  const constrained = constrainWallEndPoint(wallBuildSession.dragStart, pointer)
+  const rawPointer = groundPointerHelper.clone()
+  const pointer = snapVectorToGrid(rawPointer.clone())
+  const constrained = constrainWallEndPoint(wallBuildSession.dragStart, pointer, rawPointer)
   const previous = wallBuildSession.dragEnd
   if (previous && previous.equals(constrained)) {
     return
@@ -4371,7 +4384,8 @@ function handleWallPlacementClick(event: PointerEvent): boolean {
   if (!raycastGroundPoint(event, groundPointerHelper)) {
     return false
   }
-  const snappedPoint = snapVectorToGrid(groundPointerHelper.clone())
+  const rawPointer = groundPointerHelper.clone()
+  const snappedPoint = snapVectorToGrid(rawPointer.clone())
   const session = ensureWallBuildSession()
 
   if (!session.dragStart) {
@@ -4379,7 +4393,7 @@ function handleWallPlacementClick(event: PointerEvent): boolean {
     return true
   }
 
-  const constrained = constrainWallEndPoint(session.dragStart, snappedPoint)
+  const constrained = constrainWallEndPoint(session.dragStart, snappedPoint, rawPointer)
   const previous = session.dragEnd
   if (!previous || !previous.equals(constrained)) {
     session.dragEnd = constrained
