@@ -701,13 +701,8 @@ function handleExportMaterial() {
 </script>
 <template>
 
-<v-expansion-panel title="material">
-      <v-expansion-panel-title>Material</v-expansion-panel-title>
+<v-expansion-panel title="Material">
       <v-expansion-panel-text>
-        
-      </v-expansion-panel-text>
-</v-expansion-panel>  
-
 
   <section class="material-panel">
     <header class="material-panel__header">
@@ -1051,6 +1046,10 @@ function handleExportMaterial() {
       </section>
     </template>
   </section>
+      </v-expansion-panel-text>
+</v-expansion-panel>  
+
+
 </template>
 <style scoped>
 .material-panel {
