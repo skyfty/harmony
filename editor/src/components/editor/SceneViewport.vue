@@ -963,24 +963,25 @@ function rotateActiveSelection(nodeId: string) {
   scheduleThumbnailCapture()
 }
 
-function requestOrbitControlDisable() {
+function updateOrbitControlsEnabled() {
   if (!orbitControls) {
     return
   }
+  const shouldEnable = orbitDisableCount === 0 || isOrbitControlOverrideActive
+  orbitControls.enabled = shouldEnable
+}
+
+function requestOrbitControlDisable() {
   orbitDisableCount += 1
-  if (orbitDisableCount === 1) {
-    orbitControls.enabled = false
-  }
+  updateOrbitControlsEnabled()
 }
 
 function releaseOrbitControlDisable() {
-  if (!orbitControls || orbitDisableCount === 0) {
+  if (orbitDisableCount === 0) {
     return
   }
   orbitDisableCount = Math.max(0, orbitDisableCount - 1)
-  if (orbitDisableCount === 0) {
-    orbitControls.enabled = true
-  }
+  updateOrbitControlsEnabled()
 }
 
 function disableOrbitForSelectDrag() {
@@ -1023,6 +1024,76 @@ function restoreOrbitAfterWallBuild() {
     isWallBuildOrbitDisabled = false
     releaseOrbitControlDisable()
   }
+}
+
+function setOrbitControlOverride(active: boolean) {
+  if (isOrbitControlOverrideActive === active) {
+    return
+  }
+  isOrbitControlOverrideActive = active
+  updateOrbitControlsEnabled()
+}
+
+function activateAltOverride() {
+  if (isAltOverrideActive) {
+    return
+  }
+  isAltOverrideActive = true
+  toolOverrideSnapshot = {
+    transformTool: props.activeTool ?? null,
+    wallBuildActive: Boolean(wallBuildSession),
+    groundSelectionActive: Boolean(groundSelection.value || groundSelectionDragState),
+  }
+  if (props.activeTool !== 'select') {
+    emit('changeTool', 'select')
+  }
+  setOrbitControlOverride(true)
+}
+
+function deactivateAltOverride() {
+  if (!isAltOverrideActive) {
+    return
+  }
+  isAltOverrideActive = false
+  const snapshot = toolOverrideSnapshot
+  toolOverrideSnapshot = null
+  setOrbitControlOverride(false)
+  if (snapshot?.transformTool && props.activeTool !== snapshot.transformTool) {
+    emit('changeTool', snapshot.transformTool)
+  }
+  if (snapshot?.wallBuildActive && wallBuildSession) {
+    updateWallPreview({ immediate: true })
+  }
+  if (snapshot?.groundSelectionActive && groundSelection.value) {
+    updateGroundSelectionToolbarPosition()
+  }
+}
+
+function handleAltOverrideKeyDown(event: KeyboardEvent) {
+  if (event.defaultPrevented) {
+    return
+  }
+  if (event.repeat) {
+    return
+  }
+  if (event.key !== 'Alt') {
+    return
+  }
+  if (isEditableKeyboardTarget(event.target)) {
+    return
+  }
+  activateAltOverride()
+}
+
+function handleAltOverrideKeyUp(event: KeyboardEvent) {
+  if (event.key !== 'Alt') {
+    return
+  }
+  deactivateAltOverride()
+}
+
+function handleAltOverrideBlur() {
+  deactivateAltOverride()
 }
 
 function handleViewportContextMenu(event: MouseEvent) {
@@ -1399,6 +1470,14 @@ let isSelectDragOrbitDisabled = false
 let isGroundSelectionOrbitDisabled = false
 let isWallBuildOrbitDisabled = false
 let orbitDisableCount = 0
+let isOrbitControlOverrideActive = false
+let isAltOverrideActive = false
+type AltOverrideSnapshot = {
+  transformTool: EditorTool | null
+  wallBuildActive: boolean
+  groundSelectionActive: boolean
+}
+let toolOverrideSnapshot: AltOverrideSnapshot | null = null
 
 function findAssetMetadata(assetId: string): ProjectAsset | null {
   const search = (directories: ProjectDirectory[] | undefined): ProjectAsset | null => {
@@ -2303,6 +2382,7 @@ function applyCameraControlMode(mode: CameraControlMode) {
   orbitControls.enabled = previousEnabled
   orbitControls.addEventListener('change', handleControlsChange)
   bindControlsToCamera(camera)
+  updateOrbitControlsEnabled()
   orbitControls.update()
 
   clampCameraAboveGround()
@@ -3357,6 +3437,9 @@ function updateGroundSelectionFromPointer(
   if (!groundSelectionDragState) {
     return false
   }
+  if (isAltOverrideActive) {
+    return false
+  }
   if (!raycastGroundPoint(event, groundPointerHelper)) {
     if (options.forceApply) {
       const selection = createGroundSelectionFromCells(
@@ -3414,6 +3497,11 @@ async function handlePointerDown(event: PointerEvent) {
   }
 
   if (!event.isPrimary) {
+    pointerTrackingState = null
+    return
+  }
+
+  if (isAltOverrideActive) {
     pointerTrackingState = null
     return
   }
@@ -3607,6 +3695,10 @@ async function handlePointerDown(event: PointerEvent) {
 }
 
 function handlePointerMove(event: PointerEvent) {
+  if (isAltOverrideActive) {
+    return
+  }
+
   if (groundSelectionDragState && event.pointerId === groundSelectionDragState.pointerId) {
     const definition = getGroundDynamicMeshDefinition()
     if (!definition) {
@@ -3683,9 +3775,14 @@ function handlePointerMove(event: PointerEvent) {
 }
 
 function handlePointerUp(event: PointerEvent) {
+  const overrideActive = isAltOverrideActive
+
   if (groundSelectionDragState && event.pointerId === groundSelectionDragState.pointerId) {
     if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
       canvasRef.value.releasePointerCapture(event.pointerId)
+    }
+    if (overrideActive) {
+      return
     }
     const definition = getGroundDynamicMeshDefinition()
     if (!definition) {
@@ -3733,7 +3830,7 @@ function handlePointerUp(event: PointerEvent) {
   if (activeBuildTool.value === 'wall') {
     if (event.button === 0) {
       const suppressed = wallPlacementSuppressedPointerId === event.pointerId
-      if (!suppressed) {
+      if (!suppressed && !overrideActive) {
         const handled = handleWallPlacementClick(event)
         wallPlacementSuppressedPointerId = null
         if (handled) {
@@ -3746,6 +3843,9 @@ function handlePointerUp(event: PointerEvent) {
       wallPlacementSuppressedPointerId = null
     } else if (event.button === 2) {
       wallPlacementSuppressedPointerId = null
+      if (overrideActive) {
+        return
+      }
       if (wallBuildSession) {
         finalizeWallBuildSession()
         event.preventDefault()
@@ -4282,6 +4382,9 @@ function beginWallSegmentDrag(startPoint: THREE.Vector3) {
 }
 
 function updateWallSegmentDrag(event: PointerEvent) {
+  if (isAltOverrideActive) {
+    return
+  }
   if (!wallBuildSession || !wallBuildSession.dragStart) {
     return
   }
@@ -4379,6 +4482,9 @@ function commitWallSegmentDrag(): boolean {
 
 function handleWallPlacementClick(event: PointerEvent): boolean {
   if (!activeBuildTool.value || activeBuildTool.value !== 'wall') {
+    return false
+  }
+  if (isAltOverrideActive) {
     return false
   }
   if (!raycastGroundPoint(event, groundPointerHelper)) {
@@ -5686,6 +5792,9 @@ onMounted(() => {
   attachSelection(props.selectedNodeId)
   updateSelectionHighlights()
   window.addEventListener('keyup', handleViewportShortcut, { capture: true })
+  window.addEventListener('keydown', handleAltOverrideKeyDown, { capture: true })
+  window.addEventListener('keyup', handleAltOverrideKeyUp, { capture: true })
+  window.addEventListener('blur', handleAltOverrideBlur, { capture: true })
   if (typeof window !== 'undefined') {
     window.addEventListener('resize', handleViewportOverlayResize, { passive: true })
   }
@@ -5701,6 +5810,9 @@ onBeforeUnmount(() => {
   disposeScene()
   disposeCachedTextures()
   window.removeEventListener('keyup', handleViewportShortcut, { capture: true })
+  window.removeEventListener('keydown', handleAltOverrideKeyDown, { capture: true })
+  window.removeEventListener('keyup', handleAltOverrideKeyUp, { capture: true })
+  window.removeEventListener('blur', handleAltOverrideBlur, { capture: true })
   if (typeof window !== 'undefined') {
     window.removeEventListener('resize', handleViewportOverlayResize)
   }
