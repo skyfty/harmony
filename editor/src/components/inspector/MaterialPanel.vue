@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watchEffect } from 'vue'
+import { computed, reactive, ref, watch, watchEffect } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -8,6 +8,7 @@ import type {
   SceneMaterialSide,
   SceneMaterialTextureRef,
   SceneMaterialTextureSlot,
+  SceneNodeMaterial,
 } from '@/types/material'
 import type { ProjectAsset } from '@/types/project-asset'
 
@@ -20,7 +21,9 @@ interface MaterialFormState extends Omit<SceneMaterialProps, 'textures'> {
 }
 
 const SLIDER_FIELDS = ['opacity', 'metalness', 'roughness', 'emissiveIntensity', 'aoStrength', 'envMapIntensity'] as const
+
 type SliderField = (typeof SLIDER_FIELDS)[number]
+
 type SliderConfigEntry = {
   min: number
   max: number
@@ -81,7 +84,8 @@ const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
 const { selectedNode, selectedNodeId, materials } = storeToRefs(sceneStore)
 
-const assignmentMode = ref<'shared' | 'local'>('local')
+const nodeMaterials = computed(() => selectedNode.value?.materials ?? [])
+const activeNodeMaterialId = ref<string | null>(null)
 const activeMaterialId = ref<string | null>(null)
 const importInputRef = ref<HTMLInputElement | null>(null)
 const draggingSlot = ref<SceneMaterialTextureSlot | null>(null)
@@ -104,6 +108,32 @@ const materialForm = reactive<MaterialFormState>({
   textures: formTextures,
 })
 
+const activeNodeMaterial = computed(() => {
+  if (!nodeMaterials.value.length) {
+    return null
+  }
+  if (activeNodeMaterialId.value) {
+    const match = nodeMaterials.value.find((entry) => entry.id === activeNodeMaterialId.value)
+    if (match) {
+      return match
+    }
+  }
+  return nodeMaterials.value[0] ?? null
+})
+
+const selectedMaterialEntry = computed(() =>
+  activeMaterialId.value ? materials.value.find((material) => material.id === activeMaterialId.value) ?? null : null,
+)
+
+const isShared = computed(() => !!selectedMaterialEntry.value)
+
+const activeMaterialIndex = computed(() => {
+  if (!activeNodeMaterial.value) {
+    return -1
+  }
+  return nodeMaterials.value.findIndex((entry) => entry.id === activeNodeMaterial.value?.id)
+})
+
 const materialOptions = computed(() =>
   materials.value.map((material) => ({
     title: material.name,
@@ -112,25 +142,82 @@ const materialOptions = computed(() =>
   })),
 )
 
-const selectedMaterialEntry = computed(() =>
-  assignmentMode.value === 'shared' && activeMaterialId.value
-    ? materials.value.find((material) => material.id === activeMaterialId.value) ?? null
-    : null,
+const materialListEntries = computed(() =>
+  nodeMaterials.value.map((entry, index) => {
+    const shared = entry.materialId ? materials.value.find((material) => material.id === entry.materialId) ?? null : null
+    return {
+      id: entry.id,
+      displayName: shared?.name ?? entry.name ?? `材质 ${index + 1}`,
+      subtitle: shared ? '共享材质' : '本地材质',
+      shared: Boolean(shared),
+      index,
+    }
+  }),
 )
 
-const hasMaterialTarget = computed(() => !!selectedNode.value?.material)
-const panelDisabled = computed(() => props.disabled || !hasMaterialTarget.value)
-const isShared = computed(() => assignmentMode.value === 'shared')
+const currentMaterialTitle = computed(() => {
+  const activeId = activeNodeMaterial.value?.id ?? null
+  if (!activeId) {
+    return '材质'
+  }
+  const entry = materialListEntries.value.find((item) => item.id === activeId)
+  return entry?.displayName ?? `材质 ${activeMaterialIndex.value + 1}`
+})
+
+const canAddMaterialSlot = computed(() => !!selectedNodeId.value && !props.disabled)
+const panelDisabled = computed(() => props.disabled || !selectedNodeId.value || !activeNodeMaterial.value)
 const canDuplicateMaterial = computed(() => isShared.value && !!activeMaterialId.value && !panelDisabled.value)
 const canDeleteMaterial = computed(
   () => isShared.value && materials.value.length > 1 && !!activeMaterialId.value && !panelDisabled.value,
 )
 const canMakeLocal = computed(() => isShared.value && !panelDisabled.value)
-const assignmentHint = computed(() =>
-  isShared.value
+
+const assignmentHint = computed(() => {
+  if (!activeNodeMaterial.value) {
+    return '请选择材质槽以查看属性。'
+  }
+  return isShared.value
     ? '已链接共享材质，修改会影响所有使用该材质的网格。'
-    : '当前为本地覆盖，修改仅作用于此网格。',
+    : '当前为本地覆盖，修改仅作用于此网格。'
+})
+
+watch(
+  () => nodeMaterials.value.map((material) => material.id).join('::'),
+  (signature) => {
+    if (!signature.length) {
+      activeNodeMaterialId.value = null
+      activeMaterialId.value = null
+      resetForm()
+      return
+    }
+    const ids = signature.split('::').filter(Boolean)
+    if (!ids.length) {
+      activeNodeMaterialId.value = null
+      activeMaterialId.value = null
+      resetForm()
+      return
+    }
+    if (!activeNodeMaterialId.value || !ids.includes(activeNodeMaterialId.value)) {
+      activeNodeMaterialId.value = ids[0] ?? null
+    }
+  },
+  { immediate: true },
 )
+
+watchEffect(() => {
+  const entry = activeNodeMaterial.value
+  if (!entry) {
+    activeMaterialId.value = null
+    resetForm()
+    return
+  }
+  const shared = entry.materialId ? materials.value.find((material) => material.id === entry.materialId) ?? null : null
+  activeMaterialId.value = shared?.id ?? null
+  const metadata = shared
+    ? { name: shared.name, description: shared.description ?? '' }
+    : { name: entry.name ?? '', description: '' }
+  applyPropsToForm(shared ?? entry, metadata)
+})
 
 function clampNumber(value: number, min: number, max: number, fallback: number): number {
   if (!Number.isFinite(value)) {
@@ -210,95 +297,88 @@ function resetForm() {
   applyPropsToForm(DEFAULT_PROPS, { name: '', description: '' })
 }
 
-watchEffect(() => {
-  const nodeMaterial = selectedNode.value?.material ?? null
-  if (!nodeMaterial) {
-    assignmentMode.value = 'local'
-    activeMaterialId.value = null
-    resetForm()
-    return
-  }
-
-  const linked = nodeMaterial.materialId
-    ? materials.value.find((material) => material.id === nodeMaterial.materialId) ?? null
-    : null
-
-  const nextMode: 'shared' | 'local' = linked ? 'shared' : 'local'
-  if (assignmentMode.value !== nextMode) {
-    assignmentMode.value = nextMode
-  }
-
-  const nextActive = linked?.id ?? null
-  if (activeMaterialId.value !== nextActive) {
-    activeMaterialId.value = nextActive
-  }
-
-  const sourceProps = linked ?? nodeMaterial
-  applyPropsToForm(sourceProps, linked ? { name: linked.name, description: linked.description } : undefined)
-})
-
 function commitMaterialProps(update: Partial<SceneMaterialProps>) {
-  if (panelDisabled.value) {
+  if (panelDisabled.value || !activeNodeMaterial.value || !selectedNodeId.value) {
     return
   }
-  if (isShared.value) {
-    if (!activeMaterialId.value) {
-      return
-    }
-    sceneStore.updateMaterialDefinition(activeMaterialId.value, update)
+  if (isShared.value && selectedMaterialEntry.value) {
+    sceneStore.updateMaterialDefinition(selectedMaterialEntry.value.id, update)
     return
   }
-  if (!selectedNodeId.value) {
-    return
-  }
-  sceneStore.updateNodeMaterial(selectedNodeId.value, {
-    ...update,
-    materialId: null,
-  })
+  sceneStore.updateNodeMaterialProps(selectedNodeId.value, activeNodeMaterial.value.id, update)
 }
 
 function commitMaterialMetadata(update: { name?: string; description?: string }) {
-  if (panelDisabled.value || !isShared.value || !activeMaterialId.value) {
+  if (!activeNodeMaterial.value || !selectedNodeId.value) {
     return
   }
-  sceneStore.updateMaterialDefinition(activeMaterialId.value, update)
+  if (isShared.value && selectedMaterialEntry.value) {
+    sceneStore.updateMaterialDefinition(selectedMaterialEntry.value.id, update)
+    return
+  }
+  if (update.name !== undefined) {
+    sceneStore.updateNodeMaterialMetadata(selectedNodeId.value, activeNodeMaterial.value.id, {
+      name: update.name,
+    })
+  }
+}
+
+function setActiveNodeMaterial(id: string) {
+  if (activeNodeMaterialId.value === id) {
+    return
+  }
+  activeNodeMaterialId.value = id
+}
+
+function handleAddMaterialSlot() {
+  if (!canAddMaterialSlot.value || !selectedNodeId.value) {
+    return
+  }
+  const created = sceneStore.addNodeMaterial(selectedNodeId.value) as SceneNodeMaterial | null
+  if (created) {
+    activeNodeMaterialId.value = created.id
+  }
 }
 
 function handleMaterialSelection(value: string | null) {
-  if (!selectedNodeId.value || panelDisabled.value) {
+  if (!selectedNodeId.value || !activeNodeMaterial.value || panelDisabled.value) {
     return
   }
-  if (typeof value === 'string' && value.trim().length) {
-    sceneStore.updateNodeMaterial(selectedNodeId.value, { materialId: value })
-    return
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  const targetId = trimmed.length ? trimmed : null
+  const applied = sceneStore.assignNodeMaterial(selectedNodeId.value, activeNodeMaterial.value.id, targetId)
+  if (applied) {
+    activeMaterialId.value = targetId
   }
-  sceneStore.updateNodeMaterial(selectedNodeId.value, { materialId: null })
 }
 
 function handleClearMaterial() {
-  if (!selectedNodeId.value || panelDisabled.value) {
-    return
-  }
-  sceneStore.updateNodeMaterial(selectedNodeId.value, { materialId: null })
+  makeLocalCopy()
 }
 
 function handleCreateMaterial() {
-  if (panelDisabled.value) {
+  if (panelDisabled.value || !selectedNodeId.value || !activeNodeMaterial.value) {
     return
   }
   const created = sceneStore.createMaterial()
-  if (selectedNodeId.value && created) {
-    sceneStore.updateNodeMaterial(selectedNodeId.value, { materialId: created.id })
+  if (created) {
+    const linked = sceneStore.assignNodeMaterial(selectedNodeId.value, activeNodeMaterial.value.id, created.id)
+    if (linked) {
+      activeMaterialId.value = created.id
+    }
   }
 }
 
 function handleDuplicateMaterial() {
-  if (!canDuplicateMaterial.value || !activeMaterialId.value || !selectedNodeId.value) {
+  if (!canDuplicateMaterial.value || !activeMaterialId.value || !selectedNodeId.value || !activeNodeMaterial.value) {
     return
   }
   const duplicated = sceneStore.duplicateMaterial(activeMaterialId.value)
   if (duplicated) {
-    sceneStore.updateNodeMaterial(selectedNodeId.value, { materialId: duplicated.id })
+    const linked = sceneStore.assignNodeMaterial(selectedNodeId.value, activeNodeMaterial.value.id, duplicated.id)
+    if (linked) {
+      activeMaterialId.value = duplicated.id
+    }
   }
 }
 
@@ -313,22 +393,25 @@ function handleDeleteMaterial() {
 }
 
 function makeLocalCopy() {
-  if (!canMakeLocal.value || !selectedNodeId.value) {
+  if (!canMakeLocal.value || !selectedNodeId.value || !activeNodeMaterial.value) {
     return
   }
-  sceneStore.updateNodeMaterial(selectedNodeId.value, { materialId: null })
+  const converted = sceneStore.assignNodeMaterial(selectedNodeId.value, activeNodeMaterial.value.id, null)
+  if (converted) {
+    activeMaterialId.value = null
+  }
 }
 
-function handleHexColorChange(field: 'color' | 'emissive', event: Event) {
+function handleHexColorChange(field: 'color' | 'emissive', value: string) {
   if (panelDisabled.value) {
     return
   }
-  const value = normalizeHexColor((event.target as HTMLInputElement).value, materialForm[field])
-  materialForm[field] = value
+  const normalized = normalizeHexColor(value, materialForm[field])
+  materialForm[field] = normalized
   if (field === 'color') {
-    commitMaterialProps({ color: value })
+    commitMaterialProps({ color: normalized })
   } else {
-    commitMaterialProps({ emissive: value })
+    commitMaterialProps({ emissive: normalized })
   }
 }
 
@@ -361,13 +444,12 @@ function handleSliderChange(field: SliderField, value: number | number[]) {
   if (typeof numericCandidate !== 'number' || !Number.isFinite(numericCandidate)) {
     return
   }
-  const numeric = numericCandidate
   const config = SLIDER_CONFIG[field] as SliderConfigEntry
   const min: number = Number(config.min ?? 0)
   const max: number = Number(config.max ?? min)
   const rawValue = materialForm[field]
   const fallbackValue: number = typeof rawValue === 'number' ? rawValue : min
-  const clamped = clampNumber(numeric, min, max, fallbackValue)
+  const clamped = clampNumber(numericCandidate, min, max, fallbackValue)
   materialForm[field] = clamped as never
   commitMaterialProps({ [field]: clamped } as Partial<SceneMaterialProps>)
 }
@@ -493,12 +575,30 @@ function handleTextureRemove(slot: SceneMaterialTextureSlot) {
 }
 
 function handleNameChange(value: string) {
-  if (!isShared.value) {
+  if (!activeNodeMaterial.value) {
     return
   }
   const trimmed = value.trim()
   materialForm.name = trimmed
-  if (selectedMaterialEntry.value && trimmed && trimmed !== selectedMaterialEntry.value.name) {
+  if (isShared.value) {
+    const shared = selectedMaterialEntry.value
+    if (!shared) {
+      return
+    }
+    if (trimmed && trimmed !== shared.name) {
+      commitMaterialMetadata({ name: trimmed })
+    }
+    return
+  }
+  if (!selectedNodeId.value) {
+    return
+  }
+  const current = activeNodeMaterial.value.name ?? ''
+  if (!trimmed && current) {
+    commitMaterialMetadata({ name: undefined })
+    return
+  }
+  if (trimmed && trimmed !== current) {
     commitMaterialMetadata({ name: trimmed })
   }
 }
@@ -601,28 +701,28 @@ function applyImportedMaterialPayload(payload: {
     name: payload.name ?? materialForm.name,
     description: payload.description ?? materialForm.description,
   })
-  if (isShared.value) {
-    if (activeMaterialId.value) {
-      const update: Partial<SceneMaterialProps> & { name?: string; description?: string } = {
-        ...payload.props,
-      }
-      if (payload.name !== undefined) {
-        update.name = payload.name
-      }
-      if (payload.description !== undefined) {
-        update.description = payload.description
-      }
-      sceneStore.updateMaterialDefinition(activeMaterialId.value, update)
+  if (isShared.value && selectedMaterialEntry.value) {
+    const update: Partial<SceneMaterialProps> & { name?: string; description?: string } = {
+      ...payload.props,
     }
+    if (payload.name !== undefined) {
+      update.name = payload.name
+    }
+    if (payload.description !== undefined) {
+      update.description = payload.description
+    }
+    sceneStore.updateMaterialDefinition(selectedMaterialEntry.value.id, update)
     return
   }
-  if (!selectedNodeId.value) {
+  if (!selectedNodeId.value || !activeNodeMaterial.value) {
     return
   }
-  sceneStore.updateNodeMaterial(selectedNodeId.value, {
-    ...payload.props,
-    materialId: null,
-  })
+  sceneStore.updateNodeMaterialProps(selectedNodeId.value, activeNodeMaterial.value.id, payload.props)
+  if (payload.name !== undefined) {
+    sceneStore.updateNodeMaterialMetadata(selectedNodeId.value, activeNodeMaterial.value.id, {
+      name: payload.name,
+    })
+  }
 }
 
 async function handleImportFileChange(event: Event) {
@@ -653,10 +753,10 @@ function slugify(value: string): string {
 }
 
 function handleExportMaterial() {
-  if (!hasMaterialTarget.value || panelDisabled.value) {
+  if (!activeNodeMaterial.value || panelDisabled.value) {
     return
   }
-  const target = (isShared.value ? selectedMaterialEntry.value : selectedNode.value?.material) || null
+  const target = (isShared.value ? selectedMaterialEntry.value : activeNodeMaterial.value) || null
   if (!target) {
     return
   }
@@ -667,7 +767,7 @@ function handleExportMaterial() {
   })
   const baseName = isShared.value
     ? materialForm.name || selectedMaterialEntry.value?.name || 'Material'
-    : selectedNode.value?.name || 'Material'
+    : materialForm.name || activeNodeMaterial.value.name || `Material ${activeMaterialIndex.value + 1}`
   const payload = {
     version: 1,
     type: isShared.value ? 'shared' : 'local',
@@ -699,533 +799,491 @@ function handleExportMaterial() {
   URL.revokeObjectURL(link.href)
 }
 </script>
+
 <template>
-
-<v-expansion-panel title="Material">
-      <v-expansion-panel-text>
-
-  <section class="material-panel">
-    <header class="material-panel__header">
-      <h3 class="material-panel__title">材质</h3>
-      <div class="material-panel__actions">
-        <v-btn
-          density="comfortable"
-          variant="outlined"
-          color="primary"
-          :disabled="panelDisabled"
-          @click="handleCreateMaterial"
-        >
-          新建
-        </v-btn>
-        <v-btn
-          density="comfortable"
-          color="primary"
-          :disabled="!canDuplicateMaterial"
-          @click="handleDuplicateMaterial"
-        >
-          复制
-        </v-btn>
-        <v-btn
-          density="comfortable"
-          color="error"
-          variant="text"
-          :disabled="!canDeleteMaterial"
-          @click="handleDeleteMaterial"
-        >
-          删除
-        </v-btn>
-      </div>
-    </header>
-
-    <v-alert
-      v-if="panelDisabled"
-      type="info"
-      density="compact"
-      variant="outlined"
-      class="material-panel__alert"
-    >
-      请选择一个支持材质的节点。
-    </v-alert>
-
-    <template v-else>
-      <v-btn-toggle
-        v-model="assignmentMode"
-        mandatory
-        density="comfortable"
-        class="material-panel__toggle"
-        :disabled="panelDisabled"
-      >
-        <v-btn value="local">本地覆盖</v-btn>
-        <v-btn value="shared">共享材质</v-btn>
-      </v-btn-toggle>
-
-      <p class="material-panel__hint">{{ assignmentHint }}</p>
-
-      <template v-if="isShared">
-        <v-select
-          v-model="activeMaterialId"
-          :items="materialOptions"
-          item-title="title"
-          item-value="value"
-          label="选择共享材质"
-          density="comfortable"
-          variant="outlined"
-          hide-details="auto"
-          class="material-panel__field"
-          :disabled="panelDisabled"
-          @update:model-value="handleMaterialSelection"
-        />
-
-        <div class="material-panel__meta" v-if="selectedMaterialEntry">
-          <v-text-field
-            v-model="materialForm.name"
-            label="名称"
-            density="comfortable"
-            variant="outlined"
-            hide-details="auto"
-            class="material-panel__field"
-            :disabled="panelDisabled"
-            @change="handleNameChange(materialForm.name)"
-          />
-          <v-textarea
-            v-model="materialForm.description"
-            label="描述"
-            density="comfortable"
-            variant="outlined"
-            hide-details="auto"
-            rows="3"
-            class="material-panel__field"
-            :disabled="panelDisabled"
-            @change="handleDescriptionChange(materialForm.description)"
-          />
-        </div>
-
-        <v-btn
-          v-if="selectedMaterialEntry"
-          density="comfortable"
-          variant="text"
-          class="material-panel__make-local"
-          :disabled="!canMakeLocal"
-          @click="makeLocalCopy"
-        >
-          复制为本地材质
-        </v-btn>
-      </template>
-
-      <template v-else>
-        <v-alert type="info" density="compact" variant="tonal" class="material-panel__local-alert">
-          当前为本地材质覆盖，不会影响其他网格。
-        </v-alert>
-        <v-btn
-          density="comfortable"
-          variant="text"
-          class="material-panel__clear"
-          :disabled="panelDisabled"
-          @click="handleClearMaterial"
-        >
-          清除材质链接
-        </v-btn>
-      </template>
-
-      <section class="material-panel__section">
-        <h4 class="material-panel__section-title">基本属性</h4>
-        <div class="material-panel__color-row">
-          <div class="material-panel__color-field">
-            <label class="material-panel__color-label">Base Color</label>
-            <input
-              class="material-panel__color-input"
-              type="color"
-              :value="materialForm.color"
-              :disabled="panelDisabled"
-              @input="handleHexColorChange('color', $event)"
-            />
-            <input
-              class="material-panel__hex-input"
-              type="text"
-              :value="materialForm.color"
-              :disabled="panelDisabled"
-              @change="handleHexColorChange('color', $event)"
+  <v-expansion-panel title="Material">
+    <v-expansion-panel-text>
+      <div class="material-panel">
+        <div class="material-panel__list">
+          <div class="list-header">
+            <span>材质槽</span>
+            <v-btn
+              icon="mdi-plus"
+              size="small"
+              variant="text"
+              :disabled="!canAddMaterialSlot"
+              @click="handleAddMaterialSlot"
             />
           </div>
-          <v-switch
-            v-model="materialForm.transparent"
-            density="compact"
-            inset
-            label="透明"
-            color="primary"
-            hide-details
-            :disabled="panelDisabled"
-            @update:model-value="handleBooleanChange('transparent', $event)"
-          />
-          <v-switch
-            v-model="materialForm.wireframe"
-            density="compact"
-            inset
-            label="线框"
-            color="primary"
-            hide-details
-            :disabled="panelDisabled"
-            @update:model-value="handleBooleanChange('wireframe', $event)"
-          />
+          <v-list density="compact" nav class="material-list">
+            <v-list-item
+              v-for="entry in materialListEntries"
+              :key="entry.id"
+              :value="entry.id"
+              :active="entry.id === activeNodeMaterial?.id"
+              :class="{ 'is-active': entry.id === activeNodeMaterial?.id }"
+              @click="setActiveNodeMaterial(entry.id)"
+            >
+              <template #prepend>
+                <v-chip
+                  size="x-small"
+                  :color="entry.shared ? 'primary' : 'grey-darken-2'"
+                  :variant="entry.shared ? 'elevated' : 'flat'"
+                >
+                  {{ entry.shared ? '共享' : '本地' }}
+                </v-chip>
+              </template>
+              <v-list-item-title>{{ entry.displayName }}</v-list-item-title>
+              <v-list-item-subtitle>槽位 {{ entry.index + 1 }} · {{ entry.subtitle }}</v-list-item-subtitle>
+            </v-list-item>
+          </v-list>
         </div>
-        <div class="material-panel__slider">
-          <label>不透明度 {{ formatSliderValue('opacity') }}</label>
-          <v-slider
-            :model-value="materialForm.opacity"
-            :min="SLIDER_CONFIG.opacity.min"
-            :max="SLIDER_CONFIG.opacity.max"
-            :step="SLIDER_CONFIG.opacity.step"
-            thumb-label
-            :disabled="!materialForm.transparent || panelDisabled"
-            @update:model-value="handleSliderChange('opacity', $event)"
-          />
-        </div>
-        <v-select
-          class="material-panel__field"
-          label="渲染面"
-          :items="SIDE_OPTIONS"
-          item-title="label"
-          item-value="value"
-          density="comfortable"
-          variant="outlined"
-          hide-details="auto"
-          :model-value="materialForm.side"
-          :disabled="panelDisabled"
-          @update:model-value="handleSideChange"
-        />
-      </section>
 
-      <section class="material-panel__section">
-        <h4 class="material-panel__section-title">PBR 参数</h4>
-        <div class="material-panel__slider">
-          <label>金属度 {{ formatSliderValue('metalness') }}</label>
-          <v-slider
-            :model-value="materialForm.metalness"
-            :min="SLIDER_CONFIG.metalness.min"
-            :max="SLIDER_CONFIG.metalness.max"
-            :step="SLIDER_CONFIG.metalness.step"
-            thumb-label
-            :disabled="panelDisabled"
-            @update:model-value="handleSliderChange('metalness', $event)"
-          />
-        </div>
-        <div class="material-panel__slider">
-          <label>粗糙度 {{ formatSliderValue('roughness') }}</label>
-          <v-slider
-            :model-value="materialForm.roughness"
-            :min="SLIDER_CONFIG.roughness.min"
-            :max="SLIDER_CONFIG.roughness.max"
-            :step="SLIDER_CONFIG.roughness.step"
-            thumb-label
-            :disabled="panelDisabled"
-            @update:model-value="handleSliderChange('roughness', $event)"
-          />
-        </div>
-        <div class="material-panel__emissive">
-          <div class="material-panel__color-field">
-            <label class="material-panel__color-label">Emissive</label>
-            <input
-              class="material-panel__color-input"
-              type="color"
-              :value="materialForm.emissive"
+        <div class="material-panel__details" v-if="activeNodeMaterial">
+          <div class="material-section-header">
+            <div>
+              <div class="material-title">{{ currentMaterialTitle }}</div>
+              <div class="material-hint">{{ assignmentHint }}</div>
+            </div>
+            <div class="material-actions">
+              <v-btn
+                icon="mdi-file-plus"
+                size="small"
+                variant="text"
+                :disabled="panelDisabled"
+                @click="handleCreateMaterial"
+              />
+              <v-btn
+                icon="mdi-content-copy"
+                size="small"
+                variant="text"
+                :disabled="!canDuplicateMaterial"
+                @click="handleDuplicateMaterial"
+              />
+              <v-btn
+                icon="mdi-delete"
+                size="small"
+                variant="text"
+                :disabled="!canDeleteMaterial"
+                @click="handleDeleteMaterial"
+              />
+            </div>
+          </div>
+
+          <v-divider class="my-2" />
+
+          <div class="material-assignment">
+            <v-select
+              :model-value="activeMaterialId"
+              :items="materialOptions"
+              label="共享材质"
+              clearable
+              hide-details
+              density="compact"
+              variant="solo"
               :disabled="panelDisabled"
-              @input="handleHexColorChange('emissive', $event)"
+              @update:model-value="handleMaterialSelection"
+              @click:clear="handleClearMaterial"
             />
-            <input
-              class="material-panel__hex-input"
-              type="text"
-              :value="materialForm.emissive"
+            <v-btn
+              variant="tonal"
+              size="small"
+              :disabled="!canMakeLocal"
+              @click="makeLocalCopy"
+            >
+              断开链接
+            </v-btn>
+          </div>
+
+          <div class="material-metadata">
+            <v-text-field
+              label="名称"
+              density="compact"
+              variant="solo"
+              hide-details
               :disabled="panelDisabled"
-              @change="handleHexColorChange('emissive', $event)"
+              :model-value="materialForm.name"
+              @update:model-value="handleNameChange"
+            />
+            <v-text-field
+              v-if="isShared"
+              label="描述"
+              density="compact"
+              variant="solo"
+              hide-details
+              :disabled="panelDisabled"
+              :model-value="materialForm.description"
+              @update:model-value="handleDescriptionChange"
             />
           </div>
-          <div class="material-panel__slider">
-            <label>自发光强度 {{ formatSliderValue('emissiveIntensity') }}</label>
-            <v-slider
-              :model-value="materialForm.emissiveIntensity"
-              :min="SLIDER_CONFIG.emissiveIntensity.min"
-              :max="SLIDER_CONFIG.emissiveIntensity.max"
-              :step="SLIDER_CONFIG.emissiveIntensity.step"
-              thumb-label
+
+          <div class="material-properties">
+            <div class="material-color">
+              <label class="material-label">颜色</label>
+              <div class="color-input">
+                <v-text-field
+                  :model-value="materialForm.color"
+                  density="compact"
+                  variant="solo"
+                  hide-details
+                  :disabled="panelDisabled"
+                  @update:model-value="(value) => handleHexColorChange('color', value ?? materialForm.color)"
+                />
+                <span class="color-swatch" :style="{ backgroundColor: materialForm.color }" />
+              </div>
+            </div>
+            <div class="material-color">
+              <label class="material-label">自发光</label>
+              <div class="color-input">
+                <v-text-field
+                  :model-value="materialForm.emissive"
+                  density="compact"
+                  variant="solo"
+                  hide-details
+                  :disabled="panelDisabled"
+                  @update:model-value="(value) => handleHexColorChange('emissive', value ?? materialForm.emissive)"
+                />
+                <span class="color-swatch" :style="{ backgroundColor: materialForm.emissive }" />
+              </div>
+            </div>
+            <div class="material-boolean-row">
+              <v-switch
+                hide-details
+                density="compact"
+                label="透明"
+                color="primary"
+                :disabled="panelDisabled"
+                :model-value="materialForm.transparent"
+                @update:model-value="(value) => handleBooleanChange('transparent', value)"
+              />
+              <v-switch
+                hide-details
+                density="compact"
+                label="线框"
+                color="primary"
+                :disabled="panelDisabled"
+                :model-value="materialForm.wireframe"
+                @update:model-value="(value) => handleBooleanChange('wireframe', value)"
+              />
+            </div>
+            <v-select
+              class="side-select"
+              label="面向"
+              density="compact"
+              variant="solo"
+              hide-details
+              :items="SIDE_OPTIONS"
+              item-value="value"
+              item-title="label"
               :disabled="panelDisabled"
-              @update:model-value="handleSliderChange('emissiveIntensity', $event)"
+              :model-value="materialForm.side"
+              @update:model-value="handleSideChange"
             />
           </div>
-        </div>
-        <div class="material-panel__slider">
-          <label>AO 强度 {{ formatSliderValue('aoStrength') }}</label>
-          <v-slider
-            :model-value="materialForm.aoStrength"
-            :min="SLIDER_CONFIG.aoStrength.min"
-            :max="SLIDER_CONFIG.aoStrength.max"
-            :step="SLIDER_CONFIG.aoStrength.step"
-            thumb-label
-            :disabled="panelDisabled"
-            @update:model-value="handleSliderChange('aoStrength', $event)"
-          />
-        </div>
-        <div class="material-panel__slider">
-          <label>环境贴图强度 {{ formatSliderValue('envMapIntensity') }}</label>
-          <v-slider
-            :model-value="materialForm.envMapIntensity"
-            :min="SLIDER_CONFIG.envMapIntensity.min"
-            :max="SLIDER_CONFIG.envMapIntensity.max"
-            :step="SLIDER_CONFIG.envMapIntensity.step"
-            thumb-label
-            :disabled="panelDisabled"
-            @update:model-value="handleSliderChange('envMapIntensity', $event)"
-          />
-        </div>
-      </section>
 
-      <section class="material-panel__section">
-        <h4 class="material-panel__section-title">贴图</h4>
-        <div class="material-panel__texture-grid">
-          <article
-            v-for="slot in TEXTURE_SLOTS"
-            :key="slot"
-            class="texture-card"
-            :class="{ 'texture-card--dragging': draggingSlot === slot }"
-            @dragenter.prevent="handleTextureDragEnter(slot, $event)"
-            @dragover.prevent="handleTextureDragOver(slot, $event)"
-            @dragleave="handleTextureDragLeave(slot, $event)"
-            @drop.prevent="handleTextureDrop(slot, $event)"
-          >
-            <header class="texture-card__header">
-              <h5>{{ TEXTURE_LABELS[slot] }}</h5>
-              <div class="texture-card__buttons">
+          <div class="material-sliders">
+            <div
+              v-for="field in SLIDER_FIELDS"
+              :key="field"
+              class="slider-row"
+            >
+              <div class="slider-row__header">
+                <span class="slider-label">{{ field }}</span>
+                <span class="slider-value">{{ formatSliderValue(field) }}</span>
+              </div>
+              <v-slider
+                :model-value="materialForm[field] as number"
+                :min="SLIDER_CONFIG[field].min"
+                :max="SLIDER_CONFIG[field].max"
+                :step="SLIDER_CONFIG[field].step"
+                density="compact"
+                :disabled="panelDisabled"
+                @update:model-value="(value) => handleSliderChange(field, value)"
+              />
+            </div>
+          </div>
+
+          <div class="texture-section">
+            <div class="texture-header">
+              <span class="material-label">贴图</span>
+              <div class="texture-actions">
                 <v-btn
-                  icon
                   size="small"
                   variant="text"
                   :disabled="panelDisabled"
-                  @click.stop="handleTextureDrop(slot, $event as unknown as DragEvent)"
+                  @click="triggerImport"
                 >
-                  <v-icon icon="mdi-upload" size="16" />
+                  导入
                 </v-btn>
                 <v-btn
-                  icon
                   size="small"
                   variant="text"
-                  color="error"
-                  :disabled="!formTextures[slot] || panelDisabled"
-                  @click.stop="handleTextureRemove(slot)"
+                  :disabled="panelDisabled"
+                  @click="handleExportMaterial"
                 >
-                  <v-icon icon="mdi-delete-outline" size="16" />
+                  导出
                 </v-btn>
               </div>
-            </header>
-
-            <div class="texture-card__body">
-              <p class="texture-card__name">{{ resolveTextureName(slot) }}</p>
-              <p class="texture-card__hint">拖拽图片资源到此处</p>
             </div>
-          </article>
+            <div class="texture-grid">
+              <div
+                v-for="slot in TEXTURE_SLOTS"
+                :key="slot"
+                class="texture-tile"
+                :class="{ 'is-active-drop': draggingSlot === slot }"
+                @dragenter="(event) => handleTextureDragEnter(slot, event)"
+                @dragover="(event) => handleTextureDragOver(slot, event)"
+                @dragleave="(event) => handleTextureDragLeave(slot, event)"
+                @drop="(event) => handleTextureDrop(slot, event)"
+              >
+                <div class="texture-title">{{ TEXTURE_LABELS[slot] }}</div>
+                <div class="texture-name">{{ resolveTextureName(slot) }}</div>
+                <div class="texture-tile__footer">
+                  <v-chip size="x-small" variant="tonal">{{ formTextures[slot]?.assetId ?? '空' }}</v-chip>
+                  <v-btn
+                    icon="mdi-close"
+                    size="x-small"
+                    variant="text"
+                    :disabled="panelDisabled || !formTextures[slot]"
+                    @click.stop="handleTextureRemove(slot)"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <input
+            ref="importInputRef"
+            type="file"
+            accept="application/json"
+            style="display: none"
+            @change="handleImportFileChange"
+          />
         </div>
-      </section>
 
-      <section class="material-panel__section material-panel__section--inline">
-        <v-btn
-          density="comfortable"
-          variant="outlined"
-          color="primary"
-          :disabled="panelDisabled"
-          @click="triggerImport"
-        >
-          导入材质
-        </v-btn>
-        <v-btn
-          density="comfortable"
-          color="primary"
-          :disabled="panelDisabled"
-          @click="handleExportMaterial"
-        >
-          导出材质
-        </v-btn>
-        <input ref="importInputRef" type="file" accept="application/json" class="material-panel__file" @change="handleImportFileChange" />
-      </section>
-    </template>
-  </section>
-      </v-expansion-panel-text>
-</v-expansion-panel>  
-
-
+        <div v-else class="material-empty">
+          该对象没有可编辑的材质槽。
+        </div>
+      </div>
+    </v-expansion-panel-text>
+  </v-expansion-panel>
 </template>
+
 <style scoped>
 .material-panel {
   display: flex;
-  flex-direction: column;
-  gap: 16px;
+  gap: 12px;
+  min-height: 260px;
 }
 
-.material-panel__header {
+.material-panel__list {
+  width: 220px;
   display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.list-header {
+  display: flex;
+  align-items: center;
   justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-}
-
-.material-panel__title {
-  margin: 0;
-  font-size: 16px;
+  font-size: 0.78rem;
   font-weight: 600;
+  letter-spacing: 0.05em;
+  color: rgba(233, 236, 241, 0.76);
 }
 
-.material-panel__actions {
-  display: flex;
-  gap: 8px;
+.material-list {
+  background: rgba(16, 20, 26, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  overflow: hidden;
 }
 
-.material-panel__alert {
-  margin-top: 8px;
+.material-list :deep(.v-list-item.is-active) {
+  background: rgba(90, 148, 255, 0.14);
 }
 
-.material-panel__toggle {
-  width: 100%;
-}
-
-.material-panel__hint {
-  margin: 4px 0 12px;
-  color: rgba(0, 0, 0, 0.6);
-  font-size: 13px;
-}
-
-.material-panel__meta {
+.material-panel__details {
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
-.material-panel__field {
-  width: 100%;
-}
-
-.material-panel__make-local,
-.material-panel__clear {
-  align-self: flex-start;
-}
-
-.material-panel__section {
-  padding: 12px;
-  border-radius: 8px;
-  border: 1px solid rgba(0, 0, 0, 0.08);
+.material-section-header {
   display: flex;
-  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 12px;
 }
 
-.material-panel__section-title {
-  margin: 0;
-  font-size: 14px;
+.material-title {
+  font-size: 0.95rem;
   font-weight: 600;
+  letter-spacing: 0.05em;
+  color: rgba(233, 236, 241, 0.94);
 }
 
-.material-panel__color-row {
+.material-hint {
+  font-size: 0.75rem;
+  color: rgba(233, 236, 241, 0.6);
+}
+
+.material-actions {
   display: flex;
   align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
+  gap: 4px;
 }
 
-.material-panel__color-field {
+.material-assignment {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.material-panel__color-label {
-  font-size: 12px;
-  color: rgba(0, 0, 0, 0.6);
-}
-
-.material-panel__color-input {
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  border: none;
-  background: transparent;
-}
-
-.material-panel__hex-input {
-  width: 92px;
-  padding: 4px 8px;
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  border-radius: 4px;
-  font-family: monospace;
-  text-transform: uppercase;
-}
-
-.material-panel__slider {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.material-panel__emissive {
+.material-metadata {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 16px;
-  align-items: start;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
-.material-panel__texture-grid {
+.material-properties {
   display: grid;
   gap: 12px;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
 }
 
-.texture-card {
-  border: 1px dashed rgba(0, 0, 0, 0.15);
-  border-radius: 8px;
-  padding: 12px;
+.material-color {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  transition: border-color 0.2s ease, background-color 0.2s ease;
-  min-height: 120px;
-}
-
-.texture-card--dragging {
-  border-color: #1976d2;
-  background-color: rgba(25, 118, 210, 0.08);
-}
-
-.texture-card__header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.texture-card__buttons {
-  display: flex;
   gap: 4px;
 }
 
-.texture-card__name {
-  font-size: 13px;
-  font-weight: 500;
-  margin: 0;
+.material-label {
+  font-size: 0.75rem;
+  color: rgba(233, 236, 241, 0.65);
 }
 
-.texture-card__hint {
-  margin: 0;
-  color: rgba(0, 0, 0, 0.45);
-  font-size: 12px;
-}
-
-.material-panel__section--inline {
-  flex-direction: row;
+.color-input {
+  display: flex;
   align-items: center;
-  justify-content: flex-start;
-  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.color-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.material-boolean-row {
+  display: flex;
+  align-items: center;
   gap: 12px;
 }
 
-.material-panel__file {
-  display: none;
+.side-select {
+  max-width: 200px;
 }
 
-.material-panel__local-alert {
-  margin-top: 8px;
+.material-sliders {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.slider-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.slider-row__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.75rem;
+  color: rgba(233, 236, 241, 0.65);
+}
+
+.slider-label {
+  text-transform: uppercase;
+}
+
+.slider-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.texture-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.texture-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.texture-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.texture-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.texture-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  min-height: 110px;
+  border-radius: 8px;
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  background: rgba(12, 16, 22, 0.45);
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.texture-tile.is-active-drop {
+  border-color: rgba(107, 152, 255, 0.8);
+  background: rgba(56, 86, 160, 0.35);
+}
+
+.texture-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.texture-name {
+  flex: 1;
+  font-size: 0.74rem;
+  color: rgba(233, 236, 241, 0.72);
+  word-break: break-all;
+}
+
+.texture-tile__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.material-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.82rem;
+  color: rgba(233, 236, 241, 0.55);
+  min-height: 200px;
 }
 </style>

@@ -24,10 +24,11 @@ import type { DynamicMeshVector3, GroundDynamicMesh, SceneDynamicMesh, WallDynam
 import type { GroundSettings } from '@/types/ground-settings'
 import type {
   SceneMaterial,
-  SceneMaterialComputed,
   SceneMaterialProps,
   SceneMaterialTextureRef,
   SceneMaterialTextureSlot,
+  SceneMaterialType,
+  SceneNodeMaterial,
 } from '@/types/material'
 
 import {
@@ -133,6 +134,8 @@ const DEFAULT_MATERIAL_PROPS: SceneMaterialProps = {
   textures: Object.freeze(createEmptyTextureMap()) as MaterialTextureMap,
 }
 
+const DEFAULT_MATERIAL_TYPE: SceneMaterialType = 'mesh-standard'
+
 function createEmptyTextureMap(input?: MaterialTextureMap | null): MaterialTextureMap {
   const map: MaterialTextureMap = {}
   MATERIAL_TEXTURE_SLOTS.forEach((slot) => {
@@ -184,7 +187,7 @@ function cloneMaterialProps(props: SceneMaterialProps): SceneMaterialProps {
   })
 }
 
-function createSceneMaterial(name = 'New Material', props?: Partial<SceneMaterialProps>): SceneMaterial {
+function createSceneMaterial(name = 'New Material', props?: Partial<SceneMaterialProps>, options: { type?: SceneMaterialType } = {}): SceneMaterial {
   const now = new Date().toISOString()
   const resolvedName = name.trim() || 'New Material'
   const resolvedProps = createMaterialProps(props)
@@ -192,6 +195,7 @@ function createSceneMaterial(name = 'New Material', props?: Partial<SceneMateria
     id: generateUuid(),
     name: resolvedName,
     description: undefined,
+    type: options.type ?? DEFAULT_MATERIAL_TYPE,
     createdAt: now,
     updatedAt: now,
     ...resolvedProps,
@@ -205,6 +209,7 @@ function cloneSceneMaterial(material: SceneMaterial): SceneMaterial {
     id: material.id,
     name: material.name,
     description: material.description,
+    type: material.type ?? DEFAULT_MATERIAL_TYPE,
     createdAt: material.createdAt,
     updatedAt: material.updatedAt,
   }
@@ -214,14 +219,33 @@ function cloneSceneMaterials(materials: SceneMaterial[]): SceneMaterial[] {
   return materials.map((material) => cloneSceneMaterial(material))
 }
 
-function createComputedMaterial(materialId: string | null, props: SceneMaterialProps): SceneMaterialComputed {
+function createNodeMaterial(
+  materialId: string | null,
+  props: SceneMaterialProps,
+  options: { id?: string; name?: string; type?: SceneMaterialType } = {},
+): SceneNodeMaterial {
   return {
+    id: options.id ?? generateUuid(),
     materialId,
+    name: options.name,
+    type: options.type ?? DEFAULT_MATERIAL_TYPE,
     ...cloneMaterialProps(props),
   }
 }
 
-function extractMaterialProps(material: SceneNode['material'] | undefined | null): SceneMaterialProps {
+function cloneNodeMaterial(material: SceneNodeMaterial): SceneNodeMaterial {
+  return createNodeMaterial(material.materialId, material, {
+    id: material.id,
+    name: material.name,
+    type: material.type ?? DEFAULT_MATERIAL_TYPE,
+  })
+}
+
+function cloneNodeMaterials(materials?: SceneNodeMaterial[] | null): SceneNodeMaterial[] {
+  return (materials ?? []).map((material) => cloneNodeMaterial(material))
+}
+
+function extractMaterialProps(material: SceneNodeMaterial | undefined | null): SceneMaterialProps {
   if (!material) {
     return createMaterialProps()
   }
@@ -242,7 +266,7 @@ function extractMaterialProps(material: SceneNode['material'] | undefined | null
   return createMaterialProps(partial)
 }
 
-function materialUpdateToProps(update: Partial<SceneNode['material']> | Partial<SceneMaterialProps>): Partial<SceneMaterialProps> {
+function materialUpdateToProps(update: Partial<SceneNodeMaterial> | Partial<SceneMaterialProps>): Partial<SceneMaterialProps> {
   if (!update) {
     return {}
   }
@@ -268,6 +292,13 @@ function materialUpdateToProps(update: Partial<SceneNode['material']> | Partial<
     })
   }
   return result
+}
+
+function getPrimaryNodeMaterial(node: SceneNode | null | undefined): SceneNodeMaterial | null {
+  if (!node?.materials || !node.materials.length) {
+    return null
+  }
+  return node.materials[0] ?? null
 }
 
 function createVector(x: number, y: number, z: number): Vector3Like {
@@ -495,12 +526,14 @@ function createGroundSceneNode(
     id: GROUND_NODE_ID,
     name: 'Ground',
     nodeType: 'mesh',
-    material: createComputedMaterial(null, createMaterialProps({
-      color: '#707070',
-      wireframe: false,
-      opacity: 1,
-      transparent: false,
-    })),
+    materials: [
+      createNodeMaterial(null, createMaterialProps({
+        color: '#707070',
+        wireframe: false,
+        opacity: 1,
+        transparent: false,
+      }), { name: 'Ground Material' })
+    ],
     position: createVector(0, 0, 0),
     rotation: createVector(0, 0, 0),
     scale: createVector(1, 1, 1),
@@ -519,17 +552,20 @@ function normalizeGroundSceneNode(node: SceneNode | null | undefined, settings?:
     return createGroundSceneNode({}, settings)
   }
   if (node.dynamicMesh?.type === 'ground') {
+    const primaryMaterial = getPrimaryNodeMaterial(node)
     return {
       ...node,
       id: GROUND_NODE_ID,
       name: 'Ground',
       nodeType: 'mesh',
-      material: createComputedMaterial(null, createMaterialProps({
-        color: node.material?.color ?? '#707070',
-        wireframe: false,
-        opacity: 1,
-        transparent: false,
-      })),
+      materials: [
+        createNodeMaterial(null, createMaterialProps({
+          color: primaryMaterial?.color ?? '#707070',
+          wireframe: false,
+          opacity: 1,
+          transparent: false,
+        }), { id: primaryMaterial?.id, name: primaryMaterial?.name ?? 'Ground Material', type: primaryMaterial?.type })
+      ],
       position: createVector(0, 0, 0),
       rotation: createVector(0, 0, 0),
       scale: createVector(1, 1, 1),
@@ -1276,9 +1312,23 @@ function applyMaterialPropsToNodeTree(
 ): boolean {
   let changed = false
   nodes.forEach((node) => {
-    if (node.material?.materialId === materialId) {
-      node.material = createComputedMaterial(assignedId, props)
-      changed = true
+    if (node.materials?.length) {
+      let nodeChanged = false
+      const nextMaterials = node.materials.map((entry) => {
+        if (entry.materialId !== materialId) {
+          return entry
+        }
+        nodeChanged = true
+        return createNodeMaterial(assignedId, props, {
+          id: entry.id,
+          name: entry.name,
+          type: entry.type,
+        })
+      })
+      if (nodeChanged) {
+        node.materials = nextMaterials
+        changed = true
+      }
     }
     if (node.children?.length) {
       if (applyMaterialPropsToNodeTree(node.children, materialId, props, assignedId)) {
@@ -1293,9 +1343,23 @@ function reassignMaterialInNodeTree(nodes: SceneNode[], fromId: string, target: 
   let changed = false
   const targetId = target.id
   nodes.forEach((node) => {
-    if (node.material?.materialId === fromId) {
-      node.material = createComputedMaterial(targetId, target)
-      changed = true
+    if (node.materials?.length) {
+      let nodeChanged = false
+      const nextMaterials = node.materials.map((entry) => {
+        if (entry.materialId !== fromId) {
+          return entry
+        }
+        nodeChanged = true
+        return createNodeMaterial(targetId, target, {
+          id: entry.id,
+          name: entry.name,
+          type: target.type,
+        })
+      })
+      if (nodeChanged) {
+        node.materials = nextMaterials
+        changed = true
+      }
     }
     if (node.children?.length) {
       if (reassignMaterialInNodeTree(node.children, fromId, target)) {
@@ -1321,7 +1385,7 @@ function toHierarchyItem(node: SceneNode): HierarchyTreeItem {
 function cloneNode(node: SceneNode): SceneNode {
   return {
     ...node,
-    material: node.material ? createComputedMaterial(node.material.materialId ?? null, extractMaterialProps(node.material)) : undefined,
+    materials: cloneNodeMaterials(node.materials),
     light: node.light
       ? {
           ...node.light,
@@ -2812,37 +2876,152 @@ export const useSceneStore = defineStore('scene', {
       this.nodes = [...this.nodes]
       commitSceneSnapshot(this)
     },
-    updateNodeMaterial(id: string, material: Partial<NonNullable<SceneNode['material']>>) {
-      const target = findNodeById(this.nodes, id)
+    addNodeMaterial(
+      nodeId: string,
+      options: { materialId?: string | null; props?: Partial<SceneMaterialProps> | null; name?: string; type?: SceneMaterialType } = {},
+    ) {
+      const target = findNodeById(this.nodes, nodeId)
       if (!target || (target.nodeType ?? 'mesh') !== 'mesh') {
-        return
+        return null
       }
 
-      this.captureHistorySnapshot()
+      const requestedMaterialId = options.materialId ?? null
+      const shared = requestedMaterialId ? this.materials.find((entry) => entry.id === requestedMaterialId) ?? null : null
+      if (requestedMaterialId && !shared) {
+        return null
+      }
 
-      let updated = false
-      visitNode(this.nodes, id, (node) => {
+      const baseProps = shared
+        ? mergeMaterialProps(shared, options.props ?? null)
+        : createMaterialProps(options.props ?? null)
+
+      let created: SceneNodeMaterial | null = null
+      this.captureHistorySnapshot()
+      visitNode(this.nodes, nodeId, (node) => {
         if ((node.nodeType ?? 'mesh') !== 'mesh') {
           return
         }
+        const existingCount = node.materials?.length ?? 0
+        const fallbackName = options.name?.trim() || shared?.name || `Material ${existingCount + 1}`
+        const type = shared?.type ?? options.type ?? DEFAULT_MATERIAL_TYPE
+        const entry = createNodeMaterial(shared?.id ?? null, baseProps, {
+          name: shared ? shared.name : fallbackName,
+          type,
+        })
+        node.materials = [...(node.materials ?? []), entry]
+        created = entry
+      })
 
-        const requestedMaterialId = material.materialId !== undefined
-          ? material.materialId
-          : node.material?.materialId ?? null
+      if (!created) {
+        return null
+      }
 
-        const baseMaterial = requestedMaterialId
-          ? this.materials.find((entry) => entry.id === requestedMaterialId) ?? null
-          : null
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
+      return created
+    },
+    updateNodeMaterialProps(nodeId: string, nodeMaterialId: string, update: Partial<SceneMaterialProps>) {
+      const overrides = materialUpdateToProps(update)
+      if (!Object.keys(overrides).length) {
+        return
+      }
 
-        const baseProps = baseMaterial
-          ? cloneMaterialProps(baseMaterial)
-          : extractMaterialProps(node.material)
+      let updated = false
+      this.captureHistorySnapshot()
+      visitNode(this.nodes, nodeId, (node) => {
+        if ((node.nodeType ?? 'mesh') !== 'mesh' || !node.materials?.length) {
+          return
+        }
+        node.materials = node.materials.map((entry) => {
+          if (entry.id !== nodeMaterialId) {
+            return entry
+          }
+          if (entry.materialId) {
+            return entry
+          }
+          updated = true
+          const mergedProps = mergeMaterialProps(entry, overrides)
+          return createNodeMaterial(null, mergedProps, {
+            id: entry.id,
+            name: entry.name,
+            type: entry.type,
+          })
+        })
+      })
 
-        const overrides = materialUpdateToProps(material)
-        const mergedProps = mergeMaterialProps(baseProps, overrides)
+      if (!updated) {
+        return
+      }
 
-        node.material = createComputedMaterial(requestedMaterialId ?? null, mergedProps)
-        updated = true
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
+    },
+    assignNodeMaterial(nodeId: string, nodeMaterialId: string, materialId: string | null) {
+      const shared = materialId ? this.materials.find((entry) => entry.id === materialId) ?? null : null
+      if (materialId && !shared) {
+        return false
+      }
+
+      let updated = false
+      this.captureHistorySnapshot()
+      visitNode(this.nodes, nodeId, (node) => {
+        if ((node.nodeType ?? 'mesh') !== 'mesh' || !node.materials?.length) {
+          return
+        }
+        node.materials = node.materials.map((entry, index) => {
+          if (entry.id !== nodeMaterialId) {
+            return entry
+          }
+          updated = true
+          if (shared) {
+            return createNodeMaterial(shared.id, shared, {
+              id: entry.id,
+              name: shared.name,
+              type: shared.type,
+            })
+          }
+          const currentProps = extractMaterialProps(entry)
+          const fallbackName = entry.name ?? `Material ${index + 1}`
+          return createNodeMaterial(null, currentProps, {
+            id: entry.id,
+            name: fallbackName,
+            type: entry.type,
+          })
+        })
+      })
+
+      if (!updated) {
+        return false
+      }
+
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
+      return true
+    },
+    updateNodeMaterialMetadata(nodeId: string, nodeMaterialId: string, metadata: { name?: string | null }) {
+      const rawName = metadata.name
+      const trimmedName = typeof rawName === 'string' ? rawName.trim() : rawName
+
+      let updated = false
+      this.captureHistorySnapshot()
+      visitNode(this.nodes, nodeId, (node) => {
+        if ((node.nodeType ?? 'mesh') !== 'mesh' || !node.materials?.length) {
+          return
+        }
+        node.materials = node.materials.map((entry) => {
+          if (entry.id !== nodeMaterialId) {
+            return entry
+          }
+          if (entry.materialId) {
+            return entry
+          }
+          updated = true
+          return createNodeMaterial(null, entry, {
+            id: entry.id,
+            name: trimmedName && trimmedName.length ? trimmedName : undefined,
+            type: entry.type,
+          })
+        })
       })
 
       if (!updated) {
@@ -3138,15 +3317,16 @@ export const useSceneStore = defineStore('scene', {
       }
       const nodes = selection
         .map((id) => findNodeById(this.nodes, id))
-        .filter((node): node is SceneNode => Boolean(node && node.material))
+        .filter((node): node is SceneNode => Boolean(node && node.materials && node.materials.length))
       if (!nodes.length) {
         return false
       }
-      const resolveOpacity = (node: SceneNode) => {
-        const raw = node.material?.opacity
+      const resolveEntryOpacity = (entry: SceneNodeMaterial | null | undefined) => {
+        const raw = entry?.opacity
         return typeof raw === 'number' && Number.isFinite(raw) ? raw : 1
       }
-      const anyOpaque = nodes.some((node) => resolveOpacity(node) > 0.5)
+      const resolveOpacity = (node: SceneNode) => resolveEntryOpacity(getPrimaryNodeMaterial(node))
+      const anyOpaque = nodes.some((node) => (node.materials ?? []).some((entry) => resolveEntryOpacity(entry) > 0.5))
       const targetOpacity = anyOpaque ? SEMI_TRANSPARENT_OPACITY : 1
       const shouldUpdate = nodes.some((node) => Math.abs(resolveOpacity(node) - targetOpacity) > OPACITY_EPSILON)
       if (!shouldUpdate) {
@@ -3154,9 +3334,21 @@ export const useSceneStore = defineStore('scene', {
       }
       this.captureHistorySnapshot()
       nodes.forEach((node) => {
-        if (node.material) {
-          node.material.opacity = targetOpacity
+        if (!node.materials?.length) {
+          return
         }
+        node.materials = node.materials.map((entry) => {
+          const overrides: Partial<SceneMaterialProps> = {
+            opacity: targetOpacity,
+            transparent: targetOpacity < 0.999,
+          }
+          const merged = mergeMaterialProps(entry, overrides)
+          return createNodeMaterial(entry.materialId, merged, {
+            id: entry.id,
+            name: entry.name,
+            type: entry.type,
+          })
+        })
       })
       this.nodes = [...this.nodes]
       commitSceneSnapshot(this)
@@ -3820,11 +4012,13 @@ export const useSceneStore = defineStore('scene', {
         id,
         name: asset.name,
         nodeType: 'mesh',
-        material: createComputedMaterial(null, createMaterialProps({
-          color: '#90a4ae',
-          opacity: 0.6,
-          transparent: true,
-        })),
+        materials: [
+          createNodeMaterial(null, createMaterialProps({
+            color: '#90a4ae',
+            opacity: 0.6,
+            transparent: true,
+          }))
+        ],
         position: cloneVector(transform.position),
         rotation: cloneVector(transform.rotation),
         scale: cloneVector(transform.scale),
@@ -4086,14 +4280,16 @@ export const useSceneStore = defineStore('scene', {
       this.captureHistorySnapshot()
   const id = generateUuid()
       const baseMaterial = this.materials[0] ?? null
-      const computedMaterial = baseMaterial
-        ? createComputedMaterial(baseMaterial.id, baseMaterial)
-        : createComputedMaterial(null, createMaterialProps())
+      const initialProps: SceneMaterialProps = baseMaterial ? baseMaterial : createMaterialProps()
+      const initialMaterial = createNodeMaterial(baseMaterial?.id ?? null, initialProps, {
+        name: baseMaterial?.name,
+        type: baseMaterial?.type ?? DEFAULT_MATERIAL_TYPE,
+      })
       const node: SceneNode = {
         id,
         name: payload.name ?? payload.object.name ?? 'Imported Mesh',
         nodeType: payload.nodeType,
-        material: computedMaterial,
+        materials: [initialMaterial],
         position: payload.position ?? { x: 0, y: 0, z: 0 },
         rotation: payload.rotation ?? { x: 0, y: 0, z: 0 },
         scale: payload.scale ?? { x: 1, y: 1, z: 1 },

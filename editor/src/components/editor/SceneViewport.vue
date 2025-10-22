@@ -7,7 +7,7 @@ import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import type { SceneNode, Vector3Like } from '@/types/scene'
-import type { SceneMaterialTextureSlot, SceneMaterialTextureRef } from '@/types/material'
+import type { SceneMaterialTextureSlot, SceneMaterialTextureRef, SceneNodeMaterial } from '@/types/material'
 import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
@@ -1226,7 +1226,6 @@ const transformDeltaPosition = new THREE.Vector3()
 const transformWorldPositionBuffer = new THREE.Vector3()
 const transformLocalPositionHelper = new THREE.Vector3()
 const transformScaleFactor = new THREE.Vector3(1, 1, 1)
-const wallScaleResetHelper = new THREE.Vector3(1, 1, 1)
 const transformQuaternionDelta = new THREE.Quaternion()
 const transformQuaternionHelper = new THREE.Quaternion()
 const transformQuaternionInverseHelper = new THREE.Quaternion()
@@ -4879,8 +4878,8 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     }
   }
 
-  if (node.material) {
-    applyMaterialOverrides(object, node.material)
+  if (node.materials && node.materials.length) {
+    applyMaterialOverrides(object, node.materials)
   } else {
     resetMaterialOverrides(object)
   }
@@ -5384,17 +5383,180 @@ function assignTextureToMaterial(
   })
 }
 
-function applyMaterialOverrides(target: THREE.Object3D, materialConfig?: NonNullable<SceneNode['material']>) {
-  if (!materialConfig) {
+function applyMaterialConfigToMaterial(material: THREE.Material, config: SceneNodeMaterial) {
+  const typed = material as THREE.Material & { color?: THREE.Color; wireframe?: boolean }
+  const baseline = getMaterialBaseline(material)
+  let needsUpdate = false
+
+  const color = config.color ? new THREE.Color(config.color) : null
+  if (color && typed.color) {
+    typed.color.copy(color)
+    needsUpdate = true
+  }
+
+  if (typeof config.wireframe === 'boolean' && typeof typed.wireframe === 'boolean' && typed.wireframe !== config.wireframe) {
+    typed.wireframe = config.wireframe
+    needsUpdate = true
+  }
+
+  const standard = material as THREE.MeshStandardMaterial & { [key: string]: unknown }
+
+  const transparent = typeof config.transparent === 'boolean' ? config.transparent : undefined
+  const opacity = typeof config.opacity === 'number' ? THREE.MathUtils.clamp(config.opacity, 0, 1) : undefined
+
+  let desiredTransparent = baseline.transparent
+  let desiredDepthWrite = baseline.depthWrite
+
+  if (transparent !== undefined) {
+    desiredTransparent = transparent
+    desiredDepthWrite = transparent ? false : baseline.depthWrite
+  }
+
+  if (opacity !== undefined) {
+    typed.opacity = opacity
+    if (opacity < 0.999) {
+      desiredTransparent = true
+      desiredDepthWrite = false
+    }
+    needsUpdate = true
+  }
+
+  if (typed.transparent !== desiredTransparent) {
+    typed.transparent = desiredTransparent
+    needsUpdate = true
+  }
+  if (typed.depthWrite !== desiredDepthWrite) {
+    typed.depthWrite = desiredDepthWrite
+    needsUpdate = true
+  }
+
+  if (typeof config.side === 'string') {
+    let sideValue = baseline.side ?? material.side
+    if (config.side === 'front') {
+      sideValue = THREE.FrontSide
+    } else if (config.side === 'back') {
+      sideValue = THREE.BackSide
+    } else if (config.side === 'double') {
+      sideValue = THREE.DoubleSide
+    }
+    if (material.side !== sideValue) {
+      material.side = sideValue
+      needsUpdate = true
+    }
+  }
+
+  if ('metalness' in standard && typeof config.metalness === 'number' && standard.metalness !== config.metalness) {
+    standard.metalness = config.metalness
+    needsUpdate = true
+  }
+
+  if ('roughness' in standard && typeof config.roughness === 'number' && standard.roughness !== config.roughness) {
+    standard.roughness = config.roughness
+    needsUpdate = true
+  }
+
+  const emissiveColor = config.emissive ? new THREE.Color(config.emissive) : null
+  if (emissiveColor && 'emissive' in standard && standard.emissive) {
+    standard.emissive.copy(emissiveColor)
+    needsUpdate = true
+  }
+
+  if ('emissiveIntensity' in standard && typeof config.emissiveIntensity === 'number' && standard.emissiveIntensity !== config.emissiveIntensity) {
+    standard.emissiveIntensity = config.emissiveIntensity
+    needsUpdate = true
+  }
+
+  if ('aoMapIntensity' in standard && typeof config.aoStrength === 'number' && standard.aoMapIntensity !== config.aoStrength) {
+    standard.aoMapIntensity = config.aoStrength
+    needsUpdate = true
+  }
+
+  if ('envMapIntensity' in standard && typeof config.envMapIntensity === 'number' && standard.envMapIntensity !== config.envMapIntensity) {
+    standard.envMapIntensity = config.envMapIntensity
+    needsUpdate = true
+  }
+
+  ;(Object.keys(MATERIAL_TEXTURE_ASSIGNMENTS) as SceneMaterialTextureSlot[]).forEach((slot) => {
+    const ref = config.textures?.[slot] ?? null
+    assignTextureToMaterial(material, slot, ref)
+  })
+
+  if (needsUpdate) {
+    typed.needsUpdate = true
+  }
+}
+
+function restoreMaterialFromBaseline(material: THREE.Material) {
+  const typed = material as THREE.Material & { color?: THREE.Color; wireframe?: boolean }
+  const baseline = (typed.userData?.[MATERIAL_ORIGINAL_KEY] ?? null) as HarmonyMaterialState | null
+  if (!baseline) {
     return
   }
 
-  const color = materialConfig.color ? new THREE.Color(materialConfig.color) : null
-  const opacity = typeof materialConfig.opacity === 'number' ? THREE.MathUtils.clamp(materialConfig.opacity, 0, 1) : undefined
-  const wireframe = materialConfig.wireframe
-  const transparent = typeof materialConfig.transparent === 'boolean' ? materialConfig.transparent : undefined
-  const emissiveColor = materialConfig.emissive ? new THREE.Color(materialConfig.emissive) : null
-  const side = materialConfig.side
+  if (baseline.color && typed.color) {
+    typed.color.copy(baseline.color)
+  }
+  typed.opacity = baseline.opacity
+  typed.transparent = baseline.transparent
+  typed.depthWrite = baseline.depthWrite
+  if (typeof baseline.wireframe === 'boolean' && typeof typed.wireframe === 'boolean') {
+    typed.wireframe = baseline.wireframe
+  }
+  material.side = baseline.side ?? material.side
+
+  const standard = material as THREE.MeshStandardMaterial & { [key: string]: unknown }
+  if (baseline.metalness !== undefined && 'metalness' in standard) {
+    standard.metalness = baseline.metalness
+  }
+  if (baseline.roughness !== undefined && 'roughness' in standard) {
+    standard.roughness = baseline.roughness
+  }
+  if (baseline.emissive && 'emissive' in standard && standard.emissive) {
+    standard.emissive.copy(baseline.emissive)
+  }
+  if (baseline.emissiveIntensity !== undefined && 'emissiveIntensity' in standard) {
+    standard.emissiveIntensity = baseline.emissiveIntensity
+  }
+  if (baseline.aoMapIntensity !== undefined && 'aoMapIntensity' in standard) {
+    standard.aoMapIntensity = baseline.aoMapIntensity
+  }
+  if (baseline.envMapIntensity !== undefined && 'envMapIntensity' in standard) {
+    standard.envMapIntensity = baseline.envMapIntensity
+  }
+  if (baseline.map !== undefined && 'map' in standard) {
+    standard.map = baseline.map ?? null
+  }
+  if (baseline.normalMap !== undefined && 'normalMap' in standard) {
+    standard.normalMap = baseline.normalMap ?? null
+  }
+  if (baseline.metalnessMap !== undefined && 'metalnessMap' in standard) {
+    standard.metalnessMap = baseline.metalnessMap ?? null
+  }
+  if (baseline.roughnessMap !== undefined && 'roughnessMap' in standard) {
+    standard.roughnessMap = baseline.roughnessMap ?? null
+  }
+  if (baseline.aoMap !== undefined && 'aoMap' in standard) {
+    standard.aoMap = baseline.aoMap ?? null
+  }
+  if (baseline.emissiveMap !== undefined && 'emissiveMap' in standard) {
+    standard.emissiveMap = baseline.emissiveMap ?? null
+  }
+
+  const slotState = typed.userData?.[TEXTURE_SLOT_STATE_KEY] as Record<SceneMaterialTextureSlot, string | null> | undefined
+  if (slotState) {
+    (Object.keys(MATERIAL_TEXTURE_ASSIGNMENTS) as SceneMaterialTextureSlot[]).forEach((slot) => {
+      slotState[slot] = null
+    })
+  }
+  typed.needsUpdate = true
+}
+
+function applyMaterialOverrides(target: THREE.Object3D, materialConfigs?: SceneNodeMaterial[] | null) {
+  const configs = materialConfigs?.length ? materialConfigs : []
+  if (!configs.length) {
+    resetMaterialOverrides(target)
+    return
+  }
 
   target.traverse((child) => {
     const mesh = child as THREE.Mesh
@@ -5409,102 +5571,12 @@ function applyMaterialOverrides(target: THREE.Object3D, materialConfig?: NonNull
     }
 
     const materials = Array.isArray(currentMaterial) ? currentMaterial : [currentMaterial]
-
-    materials.forEach((material) => {
-      const typed = material as THREE.Material & { color?: THREE.Color; wireframe?: boolean }
-      const baseline = getMaterialBaseline(material)
-      let needsUpdate = false
-
-      if (color && typed.color) {
-        typed.color.copy(color)
-        needsUpdate = true
-      }
-
-      if (typeof wireframe === 'boolean' && typeof typed.wireframe === 'boolean') {
-        typed.wireframe = wireframe
-        needsUpdate = true
-      }
-
-      const standard = material as THREE.MeshStandardMaterial & { [key: string]: unknown }
-
-      let desiredTransparent = baseline.transparent
-      let desiredDepthWrite = baseline.depthWrite
-
-      if (transparent !== undefined) {
-        desiredTransparent = transparent
-        desiredDepthWrite = transparent ? false : baseline.depthWrite
-      }
-
-      if (opacity !== undefined) {
-        typed.opacity = opacity
-        if (opacity < 0.999) {
-          desiredTransparent = true
-          desiredDepthWrite = false
-        }
-        needsUpdate = true
-      }
-
-      if (typed.transparent !== desiredTransparent) {
-        typed.transparent = desiredTransparent
-        needsUpdate = true
-      }
-      if (typed.depthWrite !== desiredDepthWrite) {
-        typed.depthWrite = desiredDepthWrite
-        needsUpdate = true
-      }
-
-      if (typeof side === 'string') {
-        let sideValue = baseline.side ?? material.side
-        if (side === 'front') {
-          sideValue = THREE.FrontSide
-        } else if (side === 'back') {
-          sideValue = THREE.BackSide
-        } else if (side === 'double') {
-          sideValue = THREE.DoubleSide
-        }
-        if (material.side !== sideValue) {
-          material.side = sideValue
-          needsUpdate = true
-        }
-      }
-
-      if ('metalness' in standard && typeof materialConfig.metalness === 'number' && standard.metalness !== materialConfig.metalness) {
-        standard.metalness = materialConfig.metalness
-        needsUpdate = true
-      }
-
-      if ('roughness' in standard && typeof materialConfig.roughness === 'number' && standard.roughness !== materialConfig.roughness) {
-        standard.roughness = materialConfig.roughness
-        needsUpdate = true
-      }
-
-      if (standard.emissive && emissiveColor) {
-        standard.emissive.copy(emissiveColor)
-        needsUpdate = true
-      }
-
-      if ('emissiveIntensity' in standard && typeof materialConfig.emissiveIntensity === 'number' && standard.emissiveIntensity !== materialConfig.emissiveIntensity) {
-        standard.emissiveIntensity = materialConfig.emissiveIntensity
-        needsUpdate = true
-      }
-
-      if ('aoMapIntensity' in standard && typeof materialConfig.aoStrength === 'number' && standard.aoMapIntensity !== materialConfig.aoStrength) {
-        standard.aoMapIntensity = materialConfig.aoStrength
-        needsUpdate = true
-      }
-
-      if ('envMapIntensity' in standard && typeof materialConfig.envMapIntensity === 'number' && standard.envMapIntensity !== materialConfig.envMapIntensity) {
-        standard.envMapIntensity = materialConfig.envMapIntensity
-        needsUpdate = true
-      }
-
-      ;(Object.keys(MATERIAL_TEXTURE_ASSIGNMENTS) as SceneMaterialTextureSlot[]).forEach((slot) => {
-        const ref = materialConfig.textures?.[slot] ?? null
-        assignTextureToMaterial(material, slot, ref)
-      })
-
-      if (needsUpdate) {
-        typed.needsUpdate = true
+    materials.forEach((material, index) => {
+      const config = configs.length === 1 ? configs[0] : configs[index] ?? null
+      if (config) {
+        applyMaterialConfigToMaterial(material, config)
+      } else {
+        restoreMaterialFromBaseline(material)
       }
     })
   })
@@ -5524,68 +5596,7 @@ function resetMaterialOverrides(target: THREE.Object3D) {
 
     const materials = Array.isArray(currentMaterial) ? currentMaterial : [currentMaterial]
     materials.forEach((material) => {
-      const typed = material as THREE.Material & { color?: THREE.Color; wireframe?: boolean }
-      const baseline = (typed.userData?.[MATERIAL_ORIGINAL_KEY] ?? null) as HarmonyMaterialState | null
-      if (!baseline) {
-        return
-      }
-
-      if (baseline.color && typed.color) {
-        typed.color.copy(baseline.color)
-      }
-      typed.opacity = baseline.opacity
-      typed.transparent = baseline.transparent
-      typed.depthWrite = baseline.depthWrite
-      if (typeof baseline.wireframe === 'boolean' && typeof typed.wireframe === 'boolean') {
-        typed.wireframe = baseline.wireframe
-      }
-      material.side = baseline.side ?? material.side
-
-      const standard = material as THREE.MeshStandardMaterial & { [key: string]: unknown }
-      if (baseline.metalness !== undefined && 'metalness' in standard) {
-        standard.metalness = baseline.metalness
-      }
-      if (baseline.roughness !== undefined && 'roughness' in standard) {
-        standard.roughness = baseline.roughness
-      }
-      if (baseline.emissive && 'emissive' in standard && standard.emissive) {
-        standard.emissive.copy(baseline.emissive)
-      }
-      if (baseline.emissiveIntensity !== undefined && 'emissiveIntensity' in standard) {
-        standard.emissiveIntensity = baseline.emissiveIntensity
-      }
-      if (baseline.aoMapIntensity !== undefined && 'aoMapIntensity' in standard) {
-        standard.aoMapIntensity = baseline.aoMapIntensity
-      }
-      if (baseline.envMapIntensity !== undefined && 'envMapIntensity' in standard) {
-        standard.envMapIntensity = baseline.envMapIntensity
-      }
-      if (baseline.map !== undefined && 'map' in standard) {
-        standard.map = baseline.map ?? null
-      }
-      if (baseline.normalMap !== undefined && 'normalMap' in standard) {
-        standard.normalMap = baseline.normalMap ?? null
-      }
-      if (baseline.metalnessMap !== undefined && 'metalnessMap' in standard) {
-        standard.metalnessMap = baseline.metalnessMap ?? null
-      }
-      if (baseline.roughnessMap !== undefined && 'roughnessMap' in standard) {
-        standard.roughnessMap = baseline.roughnessMap ?? null
-      }
-      if (baseline.aoMap !== undefined && 'aoMap' in standard) {
-        standard.aoMap = baseline.aoMap ?? null
-      }
-      if (baseline.emissiveMap !== undefined && 'emissiveMap' in standard) {
-        standard.emissiveMap = baseline.emissiveMap ?? null
-      }
-
-      const slotState = typed.userData?.[TEXTURE_SLOT_STATE_KEY] as Record<SceneMaterialTextureSlot, string | null> | undefined
-      if (slotState) {
-        (Object.keys(MATERIAL_TEXTURE_ASSIGNMENTS) as SceneMaterialTextureSlot[]).forEach((slot) => {
-          slotState[slot] = null
-        })
-      }
-      typed.needsUpdate = true
+      restoreMaterialFromBaseline(material)
     })
   })
 }
@@ -5683,8 +5694,10 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
   const isVisible = node.visible ?? true
   object.visible = isVisible
 
-  if (node.material) {
-    applyMaterialOverrides(object, node.material)
+  if (node.materials && node.materials.length) {
+    applyMaterialOverrides(object, node.materials)
+  } else {
+    resetMaterialOverrides(object)
   }
 
   return object

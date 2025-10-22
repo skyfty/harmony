@@ -13,6 +13,8 @@ export interface SceneMaterialTextureRef {
   name?: string
 }
 
+export type SceneMaterialType = 'mesh-standard'
+
 export interface SceneMaterialProps {
   color: string
   transparent: boolean
@@ -32,10 +34,14 @@ export interface SceneMaterial extends SceneMaterialProps {
   id: string
   name: string
   description?: string
+  type: SceneMaterialType
   createdAt: string
   updatedAt: string
 }
 
-export interface SceneMaterialComputed extends SceneMaterialProps {
+export interface SceneNodeMaterial extends SceneMaterialProps {
+  id: string
   materialId: string | null
+  type: SceneMaterialType
+  name?: string
 }

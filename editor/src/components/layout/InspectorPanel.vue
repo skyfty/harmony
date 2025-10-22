@@ -28,7 +28,9 @@ const placementTitle = computed(() => (floating.value ? '停靠到右侧' : '浮
 const isLightNode = computed(() => selectedNode.value?.nodeType === 'light')
 const isWallNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'wall')
 const isGroundNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'ground')
-const showMaterialPanel = computed(() => !isLightNode.value && !isGroundNode.value && !!selectedNode.value?.material)
+const showMaterialPanel = computed(
+  () => !isLightNode.value && !isGroundNode.value && (selectedNode.value?.materials?.length ?? 0) > 0,
+)
 const inspectorIcon = computed(() =>
   getNodeIcon({
     nodeType: selectedNode.value?.nodeType ?? null,

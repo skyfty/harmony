@@ -1,6 +1,6 @@
 import type { GeometryType } from '@/plugins/geometry'
 import type { SceneDynamicMesh } from '@/types/dynamic-mesh'
-import type { SceneMaterialComputed } from '@/types/material'
+import type { SceneNodeMaterial } from '@/types/material'
 
 export type SceneNodeType = 'mesh' | 'light' | 'group' | GeometryType
 
@@ -28,7 +28,7 @@ export interface SceneNode {
   id: string
   name: string
   nodeType: SceneNodeType
-  material?: SceneMaterialComputed | null
+  materials?: SceneNodeMaterial[]
   light?: LightNodeProperties
   position: Vector3Like
   rotation: Vector3Like
