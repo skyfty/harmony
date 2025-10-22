@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch, watchEffect } from 'vue'
 import { storeToRefs } from 'pinia'
-import { onClickOutside } from '@vueuse/core'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type {
@@ -102,12 +101,6 @@ const activeNodeMaterial = computed(() => {
 })
 
 const panelRef = ref<HTMLElement | null>(null)
-onClickOutside(panelRef, () => {
-  if (!props.visible) {
-    return
-  }
-  emit('close')
-})
 
 const activeMaterialId = ref<string | null>(null)
 const importInputRef = ref<HTMLInputElement | null>(null)
@@ -1028,10 +1021,10 @@ function handleExportMaterial() {
   left: 0;
   transform: translateX(-100%);
   width: 380px;
-  max-height: calc(100% - 20px);
+  max-height: calc(100% - 400px);
   display: flex;
   flex-direction: column;
-  border-radius: 12px;
+  border-radius: 6px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background-color: rgba(18, 22, 28, 0.72);
   backdrop-filter: blur(14px);
@@ -1066,7 +1059,7 @@ function handleExportMaterial() {
 }
 
 .material-title {
-  font-size: 0.95rem;
+  font-size: 0.85rem;
   font-weight: 600;
   letter-spacing: 0.05em;
   color: rgba(233, 236, 241, 0.94);
