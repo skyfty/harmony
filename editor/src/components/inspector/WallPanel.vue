@@ -99,7 +99,6 @@ function applyDimensions() {
           @keydown.enter.prevent="applyDimensions"
         />
       </div>
-      <small class="hint-text">Adjust width to control the wall span, thickness to control the frame depth.</small>
     </v-expansion-panel-text>
   </v-expansion-panel>
 </template>

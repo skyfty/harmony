@@ -794,15 +794,7 @@ function handleExportMaterial() {
               :model-value="materialForm.name"
               @update:model-value="handleNameChange"
             />
-            <v-text-field
-              v-if="isShared"
-              label="描述"
-              density="compact"
-              variant="solo"
-              hide-details
-              :model-value="materialForm.description"
-              @update:model-value="handleDescriptionChange"
-            />
+ 
           </div>
 
           <div class="material-properties">
@@ -1122,10 +1114,6 @@ border-radius: 6px;
   display: flex;
   align-items: center;
   gap: 12px;
-}
-
-.side-select {
-  max-width: 200px;
 }
 
 .material-sliders {
