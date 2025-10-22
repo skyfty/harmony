@@ -59,11 +59,14 @@ function buildPanel(
     (segment.start.y + segment.end.y) * 0.5,
     (segment.start.z + segment.end.z) * 0.5,
   )
+  const wallBaseY = midpoint.y
   const offset = perpendicular.clone().multiplyScalar(offsetAlongPerp)
   if (offsetAlongDir !== 0) {
     offset.add(direction.clone().multiplyScalar(offsetAlongDir))
   }
   mesh.position.copy(midpoint).add(offset)
+  // Lift panel so its base aligns with the wall baseline instead of sinking below ground.
+  mesh.position.y = wallBaseY + height * 0.5
   mesh.quaternion.copy(directionToQuaternion(direction))
   return mesh
 }
@@ -143,14 +146,14 @@ function rebuildWallGroup(group: THREE.Group, definition: WallDynamicMesh) {
       )
     }
 
-    const baseHeight = Math.max(0.01, Math.min(thickness, 0.1))
+  const baseHeight = Math.max(0.01, Math.min(thickness, 0.1))
     const baseMaterial = material.clone()
     const baseGeometry = new THREE.BoxGeometry(length, baseHeight, width)
     const baseMesh = new THREE.Mesh(baseGeometry, baseMaterial)
     baseMesh.castShadow = false
     baseMesh.receiveShadow = true
     const bottomCenter = midpoint.clone()
-    bottomCenter.y = midpoint.y - height * 0.5 + baseHeight * 0.5
+  bottomCenter.y = midpoint.y - baseHeight * 0.5
     baseMesh.position.copy(bottomCenter)
     baseMesh.quaternion.copy(directionToQuaternion(direction))
     panels.push(baseMesh)
