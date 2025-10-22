@@ -3,6 +3,7 @@ import type { WallDynamicMesh, WallSegment } from '@/types/dynamic-mesh'
 
 const DEFAULT_COLOR = 0xcfd2d6
 const CAP_VISIBILITY_THRESHOLD = 0.5
+const SEGMENT_ENDPOINT_EPSILON = 1e-4
 
 function disposeObject3D(object: THREE.Object3D) {
   object.traverse((child) => {
@@ -79,9 +80,16 @@ function rebuildWallGroup(group: THREE.Group, definition: WallDynamicMesh) {
     return
   }
 
+  const segmentEndpoints = definition.segments.map((segment) => ({
+    start: new THREE.Vector3(segment.start.x, segment.start.y, segment.start.z),
+    end: new THREE.Vector3(segment.end.x, segment.end.y, segment.end.z),
+  }))
+
+  const pointsApproximatelyEqual = (a: THREE.Vector3, b: THREE.Vector3, epsilon = SEGMENT_ENDPOINT_EPSILON) =>
+    a.distanceToSquared(b) <= epsilon * epsilon
+
   definition.segments.forEach((segment, index) => {
-    const start = new THREE.Vector3(segment.start.x, segment.start.y, segment.start.z)
-    const end = new THREE.Vector3(segment.end.x, segment.end.y, segment.end.z)
+    const { start, end } = segmentEndpoints[index]!
     const direction = end.clone().sub(start)
     const length = direction.length()
     if (length <= 1e-6) {
@@ -105,6 +113,26 @@ function rebuildWallGroup(group: THREE.Group, definition: WallDynamicMesh) {
     const width = Math.max(thickness, segment.width)
     const height = Math.max(1e-3, segment.height)
 
+    const hasNeighborAtStart = segmentEndpoints.some((candidate, candidateIndex) => {
+      if (candidateIndex === index) {
+        return false
+      }
+      return pointsApproximatelyEqual(start, candidate.start) || pointsApproximatelyEqual(start, candidate.end)
+    })
+
+    const hasNeighborAtEnd = segmentEndpoints.some((candidate, candidateIndex) => {
+      if (candidateIndex === index) {
+        return false
+      }
+      return pointsApproximatelyEqual(end, candidate.start) || pointsApproximatelyEqual(end, candidate.end)
+    })
+
+    const neighborOverlap = thickness * 0.5
+    const expansionStart = hasNeighborAtStart ? neighborOverlap : 0
+    const expansionEnd = hasNeighborAtEnd ? neighborOverlap : 0
+    const effectiveLength = length + expansionStart + expansionEnd
+    const alongDirOffset = (expansionEnd - expansionStart) * 0.5
+
     const material = createSegmentMaterial()
 
     const panels: THREE.Mesh[] = []
@@ -112,7 +140,8 @@ function rebuildWallGroup(group: THREE.Group, definition: WallDynamicMesh) {
     panels.push(
       buildPanel(segment, direction, perpendicular, material.clone(), {
         offsetAlongPerp: perpOffset,
-        width: length,
+        offsetAlongDir: alongDirOffset,
+        width: effectiveLength,
         height,
         depth: thickness,
       }),
@@ -120,17 +149,19 @@ function rebuildWallGroup(group: THREE.Group, definition: WallDynamicMesh) {
     panels.push(
       buildPanel(segment, direction, perpendicular, material.clone(), {
         offsetAlongPerp: -perpOffset,
-        width: length,
+        offsetAlongDir: alongDirOffset,
+        width: effectiveLength,
         height,
         depth: thickness,
       }),
     )
 
     if (width > CAP_VISIBILITY_THRESHOLD) {
-      const dirOffset = length * 0.5 - thickness * 0.5
+      const dirOffsetStart = length * 0.5 + expansionStart - thickness * 0.5
+      const dirOffsetEnd = length * 0.5 + expansionEnd - thickness * 0.5
       panels.push(
         buildPanel(segment, perpendicular, direction.clone().negate(), material.clone(), {
-          offsetAlongPerp: dirOffset,
+          offsetAlongPerp: dirOffsetStart,
           width: width,
           height,
           depth: thickness,
@@ -138,7 +169,7 @@ function rebuildWallGroup(group: THREE.Group, definition: WallDynamicMesh) {
       )
       panels.push(
         buildPanel(segment, perpendicular.clone().negate(), direction, material.clone(), {
-          offsetAlongPerp: dirOffset,
+          offsetAlongPerp: dirOffsetEnd,
           width: width,
           height,
           depth: thickness,
@@ -148,12 +179,13 @@ function rebuildWallGroup(group: THREE.Group, definition: WallDynamicMesh) {
 
   const baseHeight = Math.max(0.01, Math.min(thickness, 0.1))
     const baseMaterial = material.clone()
-    const baseGeometry = new THREE.BoxGeometry(length, baseHeight, width)
+    const baseGeometry = new THREE.BoxGeometry(effectiveLength, baseHeight, width)
     const baseMesh = new THREE.Mesh(baseGeometry, baseMaterial)
     baseMesh.castShadow = false
     baseMesh.receiveShadow = true
     const bottomCenter = midpoint.clone()
-  bottomCenter.y = midpoint.y - baseHeight * 0.5
+    bottomCenter.add(direction.clone().multiplyScalar(alongDirOffset))
+    bottomCenter.y = midpoint.y - baseHeight * 0.5
     baseMesh.position.copy(bottomCenter)
     baseMesh.quaternion.copy(directionToQuaternion(direction))
     panels.push(baseMesh)
