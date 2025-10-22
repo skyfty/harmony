@@ -177,8 +177,8 @@ const panelStyle = computed(() => {
     return {}
   }
   return {
-    top: `${props.anchor.top + 10}px`,
-    left: `${props.anchor.left + 10}px`,
+    top: `${props.anchor.top + 70}px`,
+    left: `${props.anchor.left}px`,
     borderRadius: '12px',
     border: '1px solid rgba(255, 255, 255, 0.08)',
     backgroundColor: 'rgba(18, 22, 28, 0.92)',
