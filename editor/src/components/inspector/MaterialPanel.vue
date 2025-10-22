@@ -86,7 +86,6 @@ function handleAddMaterialSlot() {
       <div class="material-panel">
         <div class="material-panel__list">
           <div class="list-header">
-            <span>材质槽</span>
             <v-btn
               icon="mdi-plus"
               size="small"
@@ -104,26 +103,11 @@ function handleAddMaterialSlot() {
               :class="{ 'is-active': entry.id === internalActiveId }"
               @click="handleSelect(entry.id)"
             >
-              <template #prepend>
-                <v-chip
-                  size="x-small"
-                  :color="entry.shared ? 'primary' : 'grey-darken-2'"
-                  :variant="entry.shared ? 'elevated' : 'flat'"
-                >
-                  {{ entry.shared ? '共享' : '本地' }}
-                </v-chip>
-              </template>
               <v-list-item-title>{{ entry.title }}</v-list-item-title>
-              <v-list-item-subtitle>槽位 {{ entry.index + 1 }} · {{ entry.subtitle }}</v-list-item-subtitle>
             </v-list-item>
           </v-list>
         </div>
 
-        <div class="material-panel__placeholder">
-          <div class="placeholder-title">材质详情</div>
-          <p class="placeholder-text">点击左侧材质槽以在面板左侧查看并编辑详细属性。</p>
-          <p class="placeholder-hint">可使用新增按钮创建材质槽。</p>
-        </div>
       </div>
     </v-expansion-panel-text>
   </v-expansion-panel>
@@ -137,7 +121,7 @@ function handleAddMaterialSlot() {
 }
 
 .material-panel__list {
-  width: 220px;
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -164,20 +148,6 @@ function handleAddMaterialSlot() {
   background: rgba(90, 148, 255, 0.14);
 }
 
-.material-panel__placeholder {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 6px;
-  padding: 16px;
-  border: 1px dashed rgba(255, 255, 255, 0.12);
-  border-radius: 8px;
-  background: rgba(12, 16, 22, 0.35);
-  color: rgba(233, 236, 241, 0.72);
-  font-size: 0.82rem;
-}
-
 .placeholder-title {
   font-size: 0.9rem;
   font-weight: 600;
@@ -193,5 +163,13 @@ function handleAddMaterialSlot() {
   margin: 0;
   font-size: 0.74rem;
   color: rgba(233, 236, 241, 0.55);
+}
+
+.v-list-item--density-compact.v-list-item--one-line {
+  min-height: 0px;
+}
+
+.v-list-item {
+    padding: 4px 4px;
 }
 </style>

@@ -179,16 +179,11 @@ const panelStyle = computed(() => {
   return {
     top: `${props.anchor.top + 10}px`,
     left: `${props.anchor.left + 10}px`,
+    borderRadius: '12px',
+    border: '1px solid rgba(255, 255, 255, 0.08)',
+    backgroundColor: 'rgba(18, 22, 28, 0.92)',
+    boxShadow: '0 18px 44px rgba(0, 0, 0, 0.35)',
   }
-})
-
-const assignmentHint = computed(() => {
-  if (!activeNodeMaterial.value) {
-    return '请选择材质槽以查看属性。'
-  }
-  return isShared.value
-    ? '已链接共享材质，修改会影响所有使用该材质的网格。'
-    : '当前为本地覆盖，修改仅作用于此网格。'
 })
 
 watch(
@@ -789,229 +784,227 @@ function handleExportMaterial() {
         class="material-details-panel"
         :style="panelStyle"
       >
-      <div class="details-header">
-        <div class="header-text">
-          <div class="material-title">{{ currentMaterialTitle }}</div>
-          <div class="material-hint">{{ assignmentHint }}</div>
-        </div>
-        <div class="header-actions">
-          <v-btn icon="mdi-close" size="small" variant="text" @click="handleClose" />
-        </div>
-      </div>
+        <v-toolbar density="compact" class="panel-toolbar" height="40px">
+          <div class="toolbar-text">
+            <div class="material-title">{{ currentMaterialTitle }}</div>
+          </div>
+          <v-spacer />
+          <v-btn class="toolbar-close" icon="mdi-close" size="small" variant="text" @click="handleClose" />
+        </v-toolbar>
+        <v-divider />
+        <div class="panel-content">
+          <div class="material-actions">
+            <v-btn
+              icon="mdi-file-plus"
+              size="small"
+              variant="text"
+              :disabled="panelDisabled"
+              @click="handleCreateMaterial"
+            />
+            <v-btn
+              icon="mdi-content-copy"
+              size="small"
+              variant="text"
+              :disabled="!canDuplicateMaterial"
+              @click="handleDuplicateMaterial"
+            />
+            <v-btn
+              icon="mdi-delete"
+              size="small"
+              variant="text"
+              :disabled="!canDeleteMaterial"
+              @click="handleDeleteMaterial"
+            />
+          </div>
 
-      <v-divider class="my-2" />
+          <div class="material-assignment">
+            <v-select
+              :model-value="activeMaterialId"
+              :items="materialOptions"
+              label="共享材质"
+              clearable
+              hide-details
+              density="compact"
+              variant="solo"
+              :disabled="panelDisabled"
+              @update:model-value="handleMaterialSelection"
+              @click:clear="handleClearMaterial"
+            />
+            <v-btn
+              variant="tonal"
+              size="small"
+              :disabled="!canMakeLocal"
+              @click="makeLocalCopy"
+            >
+              断开链接
+            </v-btn>
+          </div>
 
-      <div class="material-actions">
-        <v-btn
-          icon="mdi-file-plus"
-          size="small"
-          variant="text"
-          :disabled="panelDisabled"
-          @click="handleCreateMaterial"
-        />
-        <v-btn
-          icon="mdi-content-copy"
-          size="small"
-          variant="text"
-          :disabled="!canDuplicateMaterial"
-          @click="handleDuplicateMaterial"
-        />
-        <v-btn
-          icon="mdi-delete"
-          size="small"
-          variant="text"
-          :disabled="!canDeleteMaterial"
-          @click="handleDeleteMaterial"
-        />
-      </div>
-
-      <div class="material-assignment">
-        <v-select
-          :model-value="activeMaterialId"
-          :items="materialOptions"
-          label="共享材质"
-          clearable
-          hide-details
-          density="compact"
-          variant="solo"
-          :disabled="panelDisabled"
-          @update:model-value="handleMaterialSelection"
-          @click:clear="handleClearMaterial"
-        />
-        <v-btn
-          variant="tonal"
-          size="small"
-          :disabled="!canMakeLocal"
-          @click="makeLocalCopy"
-        >
-          断开链接
-        </v-btn>
-      </div>
-
-      <div class="material-metadata">
-        <v-text-field
-          label="名称"
-          density="compact"
-          variant="solo"
-          hide-details
-          :disabled="panelDisabled"
-          :model-value="materialForm.name"
-          @update:model-value="handleNameChange"
-        />
-        <v-text-field
-          v-if="isShared"
-          label="描述"
-          density="compact"
-          variant="solo"
-          hide-details
-          :disabled="panelDisabled"
-          :model-value="materialForm.description"
-          @update:model-value="handleDescriptionChange"
-        />
-      </div>
-
-      <div class="material-properties">
-        <div class="material-color">
-          <label class="material-label">颜色</label>
-          <div class="color-input">
+          <div class="material-metadata">
             <v-text-field
-              :model-value="materialForm.color"
+              label="名称"
               density="compact"
               variant="solo"
               hide-details
               :disabled="panelDisabled"
-              @update:model-value="(value) => handleHexColorChange('color', value ?? materialForm.color)"
+              :model-value="materialForm.name"
+              @update:model-value="handleNameChange"
             />
-            <span class="color-swatch" :style="{ backgroundColor: materialForm.color }" />
-          </div>
-        </div>
-        <div class="material-color">
-          <label class="material-label">自发光</label>
-          <div class="color-input">
             <v-text-field
-              :model-value="materialForm.emissive"
+              v-if="isShared"
+              label="描述"
               density="compact"
               variant="solo"
               hide-details
               :disabled="panelDisabled"
-              @update:model-value="(value) => handleHexColorChange('emissive', value ?? materialForm.emissive)"
+              :model-value="materialForm.description"
+              @update:model-value="handleDescriptionChange"
             />
-            <span class="color-swatch" :style="{ backgroundColor: materialForm.emissive }" />
           </div>
-        </div>
-        <div class="material-boolean-row">
-          <v-switch
-            hide-details
-            density="compact"
-            label="透明"
-            color="primary"
-            :disabled="panelDisabled"
-            :model-value="materialForm.transparent"
-            @update:model-value="(value) => handleBooleanChange('transparent', value)"
-          />
-          <v-switch
-            hide-details
-            density="compact"
-            label="线框"
-            color="primary"
-            :disabled="panelDisabled"
-            :model-value="materialForm.wireframe"
-            @update:model-value="(value) => handleBooleanChange('wireframe', value)"
-          />
-        </div>
-        <v-select
-          class="side-select"
-          label="面向"
-          density="compact"
-          variant="solo"
-          hide-details
-          :items="SIDE_OPTIONS"
-          item-value="value"
-          item-title="label"
-          :disabled="panelDisabled"
-          :model-value="materialForm.side"
-          @update:model-value="handleSideChange"
-        />
-      </div>
 
-      <div class="material-sliders">
-        <div
-          v-for="field in SLIDER_FIELDS"
-          :key="field"
-          class="slider-row"
-        >
-          <div class="slider-row__header">
-            <span class="slider-label">{{ field }}</span>
-            <span class="slider-value">{{ formatSliderValue(field) }}</span>
+          <div class="material-properties">
+            <div class="material-color">
+              <label class="material-label">颜色</label>
+              <div class="color-input">
+                <v-text-field
+                  :model-value="materialForm.color"
+                  density="compact"
+                  variant="solo"
+                  hide-details
+                  :disabled="panelDisabled"
+                  @update:model-value="(value) => handleHexColorChange('color', value ?? materialForm.color)"
+                />
+                <span class="color-swatch" :style="{ backgroundColor: materialForm.color }" />
+              </div>
+            </div>
+            <div class="material-color">
+              <label class="material-label">自发光</label>
+              <div class="color-input">
+                <v-text-field
+                  :model-value="materialForm.emissive"
+                  density="compact"
+                  variant="solo"
+                  hide-details
+                  :disabled="panelDisabled"
+                  @update:model-value="(value) => handleHexColorChange('emissive', value ?? materialForm.emissive)"
+                />
+                <span class="color-swatch" :style="{ backgroundColor: materialForm.emissive }" />
+              </div>
+            </div>
+            <div class="material-boolean-row">
+              <v-switch
+                hide-details
+                density="compact"
+                label="透明"
+                color="primary"
+                :disabled="panelDisabled"
+                :model-value="materialForm.transparent"
+                @update:model-value="(value) => handleBooleanChange('transparent', value)"
+              />
+              <v-switch
+                hide-details
+                density="compact"
+                label="线框"
+                color="primary"
+                :disabled="panelDisabled"
+                :model-value="materialForm.wireframe"
+                @update:model-value="(value) => handleBooleanChange('wireframe', value)"
+              />
+            </div>
+            <v-select
+              class="side-select"
+              label="面向"
+              density="compact"
+              variant="solo"
+              hide-details
+              :items="SIDE_OPTIONS"
+              item-value="value"
+              item-title="label"
+              :disabled="panelDisabled"
+              :model-value="materialForm.side"
+              @update:model-value="handleSideChange"
+            />
           </div>
-          <v-slider
-            :model-value="materialForm[field] as number"
-            :min="SLIDER_CONFIG[field].min"
-            :max="SLIDER_CONFIG[field].max"
-            :step="SLIDER_CONFIG[field].step"
-            density="compact"
-            :disabled="panelDisabled"
-            @update:model-value="(value) => handleSliderChange(field, value)"
-          />
-        </div>
-      </div>
 
-      <div class="texture-section">
-        <div class="texture-header">
-          <span class="material-label">贴图</span>
-          <div class="texture-actions">
-            <v-btn
-              size="small"
-              variant="text"
-              :disabled="panelDisabled"
-              @click="triggerImport"
+          <div class="material-sliders">
+            <div
+              v-for="field in SLIDER_FIELDS"
+              :key="field"
+              class="slider-row"
             >
-              导入
-            </v-btn>
-            <v-btn
-              size="small"
-              variant="text"
-              :disabled="panelDisabled"
-              @click="handleExportMaterial"
-            >
-              导出
-            </v-btn>
-          </div>
-        </div>
-        <div class="texture-grid">
-          <div
-            v-for="slot in TEXTURE_SLOTS"
-            :key="slot"
-            class="texture-tile"
-            :class="{ 'is-active-drop': draggingSlot === slot }"
-            @dragenter="(event) => handleTextureDragEnter(slot, event)"
-            @dragover="(event) => handleTextureDragOver(slot, event)"
-            @dragleave="(event) => handleTextureDragLeave(slot, event)"
-            @drop="(event) => handleTextureDrop(slot, event)"
-          >
-            <div class="texture-title">{{ TEXTURE_LABELS[slot] }}</div>
-            <div class="texture-name">{{ resolveTextureName(slot) }}</div>
-            <div class="texture-tile__footer">
-              <v-chip size="x-small" variant="tonal">{{ formTextures[slot]?.assetId ?? '空' }}</v-chip>
-              <v-btn
-                icon="mdi-close"
-                size="x-small"
-                variant="text"
-                :disabled="panelDisabled || !formTextures[slot]"
-                @click.stop="handleTextureRemove(slot)"
+              <div class="slider-row__header">
+                <span class="slider-label">{{ field }}</span>
+                <span class="slider-value">{{ formatSliderValue(field) }}</span>
+              </div>
+              <v-slider
+                :model-value="materialForm[field] as number"
+                :min="SLIDER_CONFIG[field].min"
+                :max="SLIDER_CONFIG[field].max"
+                :step="SLIDER_CONFIG[field].step"
+                density="compact"
+                :disabled="panelDisabled"
+                @update:model-value="(value) => handleSliderChange(field, value)"
               />
             </div>
           </div>
-        </div>
-      </div>
 
-      <input
-        ref="importInputRef"
-        type="file"
-        accept="application/json"
-        style="display: none"
-        @change="handleImportFileChange"
-      />
+          <div class="texture-section">
+            <div class="texture-header">
+              <span class="material-label">贴图</span>
+              <div class="texture-actions">
+                <v-btn
+                  size="small"
+                  variant="text"
+                  :disabled="panelDisabled"
+                  @click="triggerImport"
+                >
+                  导入
+                </v-btn>
+                <v-btn
+                  size="small"
+                  variant="text"
+                  :disabled="panelDisabled"
+                  @click="handleExportMaterial"
+                >
+                  导出
+                </v-btn>
+              </div>
+            </div>
+            <div class="texture-grid">
+              <div
+                v-for="slot in TEXTURE_SLOTS"
+                :key="slot"
+                class="texture-tile"
+                :class="{ 'is-active-drop': draggingSlot === slot }"
+                @dragenter="(event) => handleTextureDragEnter(slot, event)"
+                @dragover="(event) => handleTextureDragOver(slot, event)"
+                @dragleave="(event) => handleTextureDragLeave(slot, event)"
+                @drop="(event) => handleTextureDrop(slot, event)"
+              >
+                <div class="texture-title">{{ TEXTURE_LABELS[slot] }}</div>
+                <div class="texture-name">{{ resolveTextureName(slot) }}</div>
+                <div class="texture-tile__footer">
+                  <v-chip size="x-small" variant="tonal">{{ formTextures[slot]?.assetId ?? '空' }}</v-chip>
+                  <v-btn
+                    icon="mdi-close"
+                    size="x-small"
+                    variant="text"
+                    :disabled="panelDisabled || !formTextures[slot]"
+                    @click.stop="handleTextureRemove(slot)"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <input
+            ref="importInputRef"
+            type="file"
+            accept="application/json"
+            style="display: none"
+            @change="handleImportFileChange"
+          />
+        </div>
       </div>
     </transition>
   </Teleport>
@@ -1036,29 +1029,40 @@ function handleExportMaterial() {
   transform: translateX(-100%);
   width: 380px;
   max-height: calc(100% - 20px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background-color: rgba(18, 22, 28, 0.72);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
+  z-index: 24;
+}
+
+.panel-toolbar {
+  background-color: transparent;
+  color: #e9ecf1;
+  min-height: 20px;
+  padding: 0 8px;
+}
+
+.toolbar-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.toolbar-close {
+  color: rgba(233, 236, 241, 0.72);
+}
+
+.panel-content {
+  flex: 1;
   padding: 16px;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(12, 16, 22, 0.92);
-  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
   overflow-y: auto;
-  z-index: 24;
-}
-
-.details-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.header-text {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
 }
 
 .material-title {
@@ -1071,12 +1075,6 @@ function handleExportMaterial() {
 .material-hint {
   font-size: 0.75rem;
   color: rgba(233, 236, 241, 0.6);
-}
-
-.header-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
 }
 
 .material-actions {
