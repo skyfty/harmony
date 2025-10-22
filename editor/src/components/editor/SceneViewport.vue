@@ -7,7 +7,7 @@ import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import type { SceneNode, Vector3Like } from '@/types/scene'
-import type { SceneMaterialTextureSlot, SceneMaterialTextureRef, SceneNodeMaterial } from '@/types/material'
+import type { SceneMaterialTextureSlot, SceneMaterialTextureRef, SceneNodeMaterial, SceneMaterialType } from '@/types/material'
 import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
@@ -104,6 +104,66 @@ const MATERIAL_TEXTURE_ASSIGNMENTS: Record<SceneMaterialTextureSlot, { key: Mesh
   roughness: { key: 'roughnessMap' },
   ao: { key: 'aoMap' },
   emissive: { key: 'emissiveMap', colorSpace: THREE.SRGBColorSpace },
+}
+
+const MATERIAL_CLONED_KEY = '__harmonyMaterialCloned'
+const MATERIAL_ORIGINAL_KEY = '__harmonyMaterialOriginal'
+
+const MATERIAL_CLASS_NAMES = [
+  'MeshBasicMaterial',
+  'MeshNormalMaterial',
+  'MeshLambertMaterial',
+  'MeshMatcapMaterial',
+  'MeshPhongMaterial',
+  'MeshToonMaterial',
+  'MeshStandardMaterial',
+  'MeshPhysicalMaterial',
+] as const
+
+const MATERIAL_CLASS_MAP: Record<string, new () => THREE.Material> = MATERIAL_CLASS_NAMES.reduce((map, className) => {
+  const candidate = (THREE as unknown as Record<string, unknown>)[className]
+  const ctor = typeof candidate === 'function' ? (candidate as new () => THREE.Material) : THREE.MeshStandardMaterial
+  map[className] = ctor
+  return map
+}, {} as Record<string, new () => THREE.Material>)
+
+function normalizeSceneMaterialType(type?: SceneMaterialType | null): string | null {
+  if (!type) {
+    return null
+  }
+  if (type === 'mesh-standard') {
+    return 'MeshStandardMaterial'
+  }
+  return type
+}
+
+function ensureMaterialType(
+  material: THREE.Material,
+  type?: SceneMaterialType | null,
+): { material: THREE.Material; replaced: boolean; dispose?: () => void } {
+  const desired = normalizeSceneMaterialType(type)
+  if (!desired) {
+    return { material, replaced: false }
+  }
+  const currentType = material.type ?? material.constructor?.name ?? ''
+  if (currentType === desired) {
+    return { material, replaced: false }
+  }
+  const ctor = MATERIAL_CLASS_MAP[desired]
+  if (!ctor) {
+    return { material, replaced: false }
+  }
+  const next = new ctor()
+  next.name = material.name
+  next.userData = { ...(material.userData ?? {}) }
+  if (next.userData[MATERIAL_ORIGINAL_KEY]) {
+    delete next.userData[MATERIAL_ORIGINAL_KEY]
+  }
+  return {
+    material: next,
+    replaced: true,
+    dispose: typeof material.dispose === 'function' ? () => material.dispose() : undefined,
+  }
 }
 
 function applyRendererShadowSetting() {
@@ -5186,9 +5246,6 @@ function ensureFallbackLighting() {
   }
 }
 
-const MATERIAL_CLONED_KEY = '__harmonyMaterialCloned'
-const MATERIAL_ORIGINAL_KEY = '__harmonyMaterialOriginal'
-
 type HarmonyMaterialState = {
   color?: THREE.Color
   opacity: number
@@ -5571,14 +5628,28 @@ function applyMaterialOverrides(target: THREE.Object3D, materialConfigs?: SceneN
     }
 
     const materials = Array.isArray(currentMaterial) ? currentMaterial : [currentMaterial]
+    const disposables: Array<(() => void) | undefined> = []
+    let replaced = false
     materials.forEach((material, index) => {
       const config = configs.length === 1 ? configs[0] : configs[index] ?? null
       if (config) {
-        applyMaterialConfigToMaterial(material, config)
+        const { material: ensured, replaced: didReplace, dispose } = ensureMaterialType(material, config.type)
+        if (didReplace) {
+          materials[index] = ensured
+          replaced = true
+          disposables.push(dispose)
+        }
+        applyMaterialConfigToMaterial(materials[index]!, config)
       } else {
-        restoreMaterialFromBaseline(material)
+        restoreMaterialFromBaseline(materials[index]!)
       }
     })
+    if (!Array.isArray(currentMaterial) && replaced) {
+      mesh.material = materials[0]!
+    } else if (Array.isArray(currentMaterial) && replaced) {
+      mesh.material = materials.slice()
+    }
+    disposables.forEach((dispose) => dispose?.())
   })
 }
 

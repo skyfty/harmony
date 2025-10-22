@@ -13,7 +13,16 @@ export interface SceneMaterialTextureRef {
   name?: string
 }
 
-export type SceneMaterialType = 'mesh-standard'
+export type SceneMaterialType =
+  | 'MeshBasicMaterial'
+  | 'MeshNormalMaterial'
+  | 'MeshLambertMaterial'
+  | 'MeshMatcapMaterial'
+  | 'MeshPhongMaterial'
+  | 'MeshToonMaterial'
+  | 'MeshStandardMaterial'
+  | 'MeshPhysicalMaterial'
+  | 'mesh-standard'
 
 export interface SceneMaterialProps {
   color: string

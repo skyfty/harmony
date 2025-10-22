@@ -134,7 +134,17 @@ const DEFAULT_MATERIAL_PROPS: SceneMaterialProps = {
   textures: Object.freeze(createEmptyTextureMap()) as MaterialTextureMap,
 }
 
-const DEFAULT_MATERIAL_TYPE: SceneMaterialType = 'mesh-standard'
+const DEFAULT_MATERIAL_TYPE: SceneMaterialType = 'MeshStandardMaterial'
+
+function normalizeSceneMaterialType(type?: SceneMaterialType | null): SceneMaterialType {
+  if (!type) {
+    return DEFAULT_MATERIAL_TYPE
+  }
+  if (type === 'mesh-standard') {
+    return 'MeshStandardMaterial'
+  }
+  return type
+}
 
 function nodeSupportsMaterials(node: SceneNode | null | undefined): boolean {
   if (!node) {
@@ -203,7 +213,7 @@ function createSceneMaterial(name = 'New Material', props?: Partial<SceneMateria
     id: generateUuid(),
     name: resolvedName,
     description: undefined,
-    type: options.type ?? DEFAULT_MATERIAL_TYPE,
+    type: normalizeSceneMaterialType(options.type),
     createdAt: now,
     updatedAt: now,
     ...resolvedProps,
@@ -217,7 +227,7 @@ function cloneSceneMaterial(material: SceneMaterial): SceneMaterial {
     id: material.id,
     name: material.name,
     description: material.description,
-    type: material.type ?? DEFAULT_MATERIAL_TYPE,
+    type: normalizeSceneMaterialType(material.type),
     createdAt: material.createdAt,
     updatedAt: material.updatedAt,
   }
@@ -236,7 +246,7 @@ function createNodeMaterial(
     id: options.id ?? generateUuid(),
     materialId,
     name: options.name,
-    type: options.type ?? DEFAULT_MATERIAL_TYPE,
+    type: normalizeSceneMaterialType(options.type),
     ...cloneMaterialProps(props),
   }
 }
@@ -245,7 +255,7 @@ function cloneNodeMaterial(material: SceneNodeMaterial): SceneNodeMaterial {
   return createNodeMaterial(material.materialId, material, {
     id: material.id,
     name: material.name,
-    type: material.type ?? DEFAULT_MATERIAL_TYPE,
+    type: normalizeSceneMaterialType(material.type),
   })
 }
 
@@ -1058,7 +1068,6 @@ function duplicateNodeTree(original: SceneNode, context: DuplicateContext): Scen
   } else {
     delete duplicated.children
   }
-
   if (duplicated.sourceAssetId) {
     context.assetCache.registerUsage(duplicated.sourceAssetId)
   }
@@ -1317,6 +1326,7 @@ function applyMaterialPropsToNodeTree(
   materialId: string,
   props: SceneMaterialProps,
   assignedId: string | null = materialId,
+  type: SceneMaterialType | undefined = undefined,
 ): boolean {
   let changed = false
   nodes.forEach((node) => {
@@ -1330,7 +1340,7 @@ function applyMaterialPropsToNodeTree(
         return createNodeMaterial(assignedId, props, {
           id: entry.id,
           name: entry.name,
-          type: entry.type,
+          type: type ?? entry.type,
         })
       })
       if (nodeChanged) {
@@ -1339,7 +1349,7 @@ function applyMaterialPropsToNodeTree(
       }
     }
     if (node.children?.length) {
-      if (applyMaterialPropsToNodeTree(node.children, materialId, props, assignedId)) {
+      if (applyMaterialPropsToNodeTree(node.children, materialId, props, assignedId, type)) {
         changed = true
       }
     }
@@ -2911,7 +2921,7 @@ export const useSceneStore = defineStore('scene', {
         }
         const existingCount = node.materials?.length ?? 0
         const fallbackName = options.name?.trim() || shared?.name || `Material ${existingCount + 1}`
-        const type = shared?.type ?? options.type ?? DEFAULT_MATERIAL_TYPE
+        const type = normalizeSceneMaterialType(shared?.type ?? options.type ?? DEFAULT_MATERIAL_TYPE)
         const entry = createNodeMaterial(shared?.id ?? null, baseProps, {
           name: shared ? shared.name : fallbackName,
           type,
@@ -2930,7 +2940,7 @@ export const useSceneStore = defineStore('scene', {
     },
     removeNodeMaterial(nodeId: string, nodeMaterialId: string) {
       const target = findNodeById(this.nodes, nodeId)
-      if (!nodeSupportsMaterials(target) || !target.materials?.length) {
+      if (!target || !nodeSupportsMaterials(target) || !target.materials?.length) {
         return false
       }
       if (!target.materials.some((entry) => entry.id === nodeMaterialId)) {
@@ -2993,6 +3003,34 @@ export const useSceneStore = defineStore('scene', {
 
       this.nodes = [...this.nodes]
       commitSceneSnapshot(this)
+    },
+    updateNodeMaterialType(nodeId: string, nodeMaterialId: string, type: SceneMaterialType) {
+      let updated = false
+      this.captureHistorySnapshot()
+      visitNode(this.nodes, nodeId, (node) => {
+        if (!nodeSupportsMaterials(node) || !node.materials?.length) {
+          return
+        }
+        node.materials = node.materials.map((entry) => {
+          if (entry.id !== nodeMaterialId) {
+            return entry
+          }
+          updated = true
+          // create a new node material preserving props but with new type
+          return createNodeMaterial(entry.materialId, entry, {
+            id: entry.id,
+            name: entry.name,
+            type: normalizeSceneMaterialType(type),
+          })
+        })
+      })
+
+      if (!updated) {
+        return false
+      }
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
+      return true
     },
     assignNodeMaterial(nodeId: string, nodeMaterialId: string, materialId: string | null) {
       const shared = materialId ? this.materials.find((entry) => entry.id === materialId) ?? null : null
@@ -3088,20 +3126,23 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this, { updateNodes: false })
       return duplicated
     },
-    updateMaterialDefinition(materialId: string, update: Partial<SceneMaterialProps> & { name?: string; description?: string }) {
+    updateMaterialDefinition(materialId: string, update: Partial<SceneMaterialProps> & { name?: string; description?: string; type?: SceneMaterialType }) {
       const existingIndex = this.materials.findIndex((entry) => entry.id === materialId)
       if (existingIndex === -1) {
         return false
       }
 
-  const current = this.materials[existingIndex]!
+      const current = this.materials[existingIndex]!
       const overrides = materialUpdateToProps(update)
       const hasPropChanges = Object.keys(overrides).length > 0
       const trimmedName = typeof update.name === 'string' ? update.name.trim() : undefined
       const nameChanged = trimmedName !== undefined && trimmedName.length > 0 && trimmedName !== current.name
       const descriptionChanged = update.description !== undefined && update.description !== current.description
+      const currentType = normalizeSceneMaterialType(current.type)
+      const nextType = normalizeSceneMaterialType(update.type ?? currentType)
+      const typeChanged = nextType !== currentType
 
-      if (!hasPropChanges && !nameChanged && !descriptionChanged) {
+      if (!hasPropChanges && !nameChanged && !descriptionChanged && !typeChanged) {
         return false
       }
 
@@ -3114,6 +3155,7 @@ export const useSceneStore = defineStore('scene', {
         description: update.description !== undefined ? update.description : current.description,
         updatedAt: new Date().toISOString(),
         createdAt: current.createdAt,
+        type: nextType,
       }
 
       this.captureHistorySnapshot()
@@ -3122,7 +3164,15 @@ export const useSceneStore = defineStore('scene', {
       this.materials = nextList
 
       let changedNodes = false
-      if (applyMaterialPropsToNodeTree(this.nodes, materialId, nextMaterial)) {
+      if (
+        applyMaterialPropsToNodeTree(
+          this.nodes,
+          materialId,
+          nextMaterial,
+          materialId,
+          nextType,
+        )
+      ) {
         changedNodes = true
       }
 
@@ -3143,7 +3193,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const fallbackId = options.fallbackMaterialId ?? this.materials.find((entry) => entry.id !== materialId)?.id ?? null
-  const fallbackMaterial = fallbackId ? this.materials.find((entry) => entry.id === fallbackId) ?? null : null
+      const fallbackMaterial = fallbackId ? this.materials.find((entry) => entry.id === fallbackId) ?? null : null
 
       this.captureHistorySnapshot()
 
@@ -3158,7 +3208,15 @@ export const useSceneStore = defineStore('scene', {
         }
       } else {
         const defaultProps = createMaterialProps()
-        if (applyMaterialPropsToNodeTree(this.nodes, materialId, defaultProps, null)) {
+        if (
+          applyMaterialPropsToNodeTree(
+            this.nodes,
+            materialId,
+            defaultProps,
+            null,
+            DEFAULT_MATERIAL_TYPE,
+          )
+        ) {
           changedNodes = true
         }
       }
@@ -4321,7 +4379,7 @@ export const useSceneStore = defineStore('scene', {
       const initialProps: SceneMaterialProps = baseMaterial ? baseMaterial : createMaterialProps()
       const initialMaterial = createNodeMaterial(baseMaterial?.id ?? null, initialProps, {
         name: baseMaterial?.name,
-        type: baseMaterial?.type ?? DEFAULT_MATERIAL_TYPE,
+        type: normalizeSceneMaterialType(baseMaterial?.type ?? DEFAULT_MATERIAL_TYPE),
       })
       const node: SceneNode = {
         id,

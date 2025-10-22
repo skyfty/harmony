@@ -8,8 +8,10 @@ import type {
   SceneMaterialSide,
   SceneMaterialTextureRef,
   SceneMaterialTextureSlot,
+  SceneMaterialType,
 } from '@/types/material'
 import type { ProjectAsset } from '@/types/project-asset'
+import * as THREE from 'three'
 
 type TextureMapState = Record<SceneMaterialTextureSlot, SceneMaterialTextureRef | null>
 
@@ -50,6 +52,26 @@ const TEXTURE_LABELS: Record<SceneMaterialTextureSlot, string> = {
   roughness: 'Roughness',
   ao: 'Ambient Occlusion',
   emissive: 'Emissive',
+}
+const materialClasses: Record<string, any> = {
+  MeshBasicMaterial: THREE.MeshBasicMaterial,
+  MeshNormalMaterial: THREE.MeshNormalMaterial,
+  MeshLambertMaterial: THREE.MeshLambertMaterial,
+  MeshMatcapMaterial: (THREE as any).MeshMatcapMaterial ?? THREE.MeshStandardMaterial,
+  MeshPhongMaterial: THREE.MeshPhongMaterial,
+  MeshToonMaterial: THREE.MeshToonMaterial,
+  MeshStandardMaterial: THREE.MeshStandardMaterial,
+  MeshPhysicalMaterial: THREE.MeshPhysicalMaterial,
+}
+
+const MATERIAL_CLASS_OPTIONS = Object.keys(materialClasses) as SceneMaterialType[]
+
+function resolveSceneMaterialTypeFromString(value: string | null | undefined): SceneMaterialType {
+  if (!value) return 'MeshStandardMaterial'
+  if (MATERIAL_CLASS_OPTIONS.includes(value as SceneMaterialType)) return value as SceneMaterialType
+  // legacy value
+  if (value === 'mesh-standard') return 'MeshStandardMaterial'
+  return 'MeshStandardMaterial'
 }
 const SIDE_OPTIONS: Array<{ value: SceneMaterialSide; label: string }> = [
   { value: 'front', label: 'Front' },
@@ -140,13 +162,7 @@ const activeMaterialIndex = computed(() => {
   return nodeMaterials.value.findIndex((item) => item.id === entry.id)
 })
 
-const materialOptions = computed(() =>
-  materials.value.map((material) => ({
-    title: material.name,
-    value: material.id,
-    subtitle: material.description ?? '',
-  })),
-)
+const selectedMaterialType = ref<SceneMaterialType | null>(null)
 
 const currentMaterialTitle = computed(() => {
   const entry = activeNodeMaterial.value
@@ -159,12 +175,6 @@ const currentMaterialTitle = computed(() => {
   }
   return entry.name ?? `材质 ${activeMaterialIndex.value + 1}`
 })
-
-const canDuplicateMaterial = computed(() => isShared.value && !!activeMaterialId.value )
-const canDeleteMaterial = computed(
-  () => isShared.value && materials.value.length > 1 && !!activeMaterialId.value,
-)
-const canMakeLocal = computed(() => isShared.value)
 
 const panelStyle = computed(() => {
   if (!props.anchor) {
@@ -201,6 +211,7 @@ watchEffect(() => {
     emissiveColorMenuOpen.value = false
     activeMaterialId.value = null
     applyPropsToForm(DEFAULT_PROPS, { name: '', description: '' })
+    selectedMaterialType.value = null
     return
   }
   const shared = entry.materialId ? materials.value.find((material) => material.id === entry.materialId) ?? null : null
@@ -209,6 +220,9 @@ watchEffect(() => {
     ? { name: shared.name, description: shared.description ?? '' }
     : { name: entry.name ?? '', description: '' }
   applyPropsToForm(shared ?? entry, metadata)
+  // set selectedMaterialType from shared or node entry
+  const type = shared?.type ?? entry.type ?? null
+  selectedMaterialType.value = resolveSceneMaterialTypeFromString(type)
 })
 
 function handleClose() {
@@ -315,68 +329,6 @@ function commitMaterialMetadata(update: { name?: string; description?: string })
   }
 }
 
-function handleMaterialSelection(value: string | null) {
-  if (!selectedNodeId.value || !activeNodeMaterial.value) {
-    return
-  }
-  const trimmed = typeof value === 'string' ? value.trim() : ''
-  const targetId = trimmed.length ? trimmed : null
-  const applied = sceneStore.assignNodeMaterial(selectedNodeId.value, activeNodeMaterial.value.id, targetId)
-  if (applied) {
-    activeMaterialId.value = targetId
-  }
-}
-
-function handleClearMaterial() {
-  makeLocalCopy()
-}
-
-function handleCreateMaterial() {
-  if (!selectedNodeId.value || !activeNodeMaterial.value) {
-    return
-  }
-  const created = sceneStore.createMaterial()
-  if (created) {
-    const linked = sceneStore.assignNodeMaterial(selectedNodeId.value, activeNodeMaterial.value.id, created.id)
-    if (linked) {
-      activeMaterialId.value = created.id
-    }
-  }
-}
-
-function handleDuplicateMaterial() {
-  if (!canDuplicateMaterial.value || !activeMaterialId.value || !selectedNodeId.value || !activeNodeMaterial.value) {
-    return
-  }
-  const duplicated = sceneStore.duplicateMaterial(activeMaterialId.value)
-  if (duplicated) {
-    const linked = sceneStore.assignNodeMaterial(selectedNodeId.value, activeNodeMaterial.value.id, duplicated.id)
-    if (linked) {
-      activeMaterialId.value = duplicated.id
-    }
-  }
-}
-
-function handleDeleteMaterial() {
-  if (!canDeleteMaterial.value || !activeMaterialId.value) {
-    return
-  }
-  if (!window.confirm('删除该材质？此操作会影响所有引用它的网格。')) {
-    return
-  }
-  sceneStore.deleteMaterial(activeMaterialId.value)
-}
-
-function makeLocalCopy() {
-  if (!canMakeLocal.value || !selectedNodeId.value || !activeNodeMaterial.value) {
-    return
-  }
-  const converted = sceneStore.assignNodeMaterial(selectedNodeId.value, activeNodeMaterial.value.id, null)
-  if (converted) {
-    activeMaterialId.value = null
-  }
-}
-
 function handleHexColorChange(field: 'color' | 'emissive', value: string) {
   const normalized = normalizeHexColor(value, materialForm[field])
   materialForm[field] = normalized
@@ -392,16 +344,6 @@ function handleColorPickerInput(field: 'color' | 'emissive', value: string | nul
     return
   }
   handleHexColorChange(field, value)
-}
-
-function handleBooleanChange(field: 'transparent' | 'wireframe', value: unknown) {
-  const boolValue = Boolean(value)
-  materialForm[field] = boolValue
-  commitMaterialProps({ [field]: boolValue } as Partial<SceneMaterialProps>)
-  if (field === 'transparent' && !boolValue && materialForm.opacity < 1) {
-    materialForm.opacity = 1
-    commitMaterialProps({ opacity: 1 })
-  }
 }
 
 function handleSideChange(value: SceneMaterialSide) {
@@ -540,6 +482,25 @@ function handleTextureRemove(slot: SceneMaterialTextureSlot) {
   assignTexture(slot, null)
 }
 
+function handleMaterialClassChange(value: string | null) {
+  if (!activeNodeMaterial.value) {
+    return
+  }
+  const newType = resolveSceneMaterialTypeFromString(value ?? undefined)
+  selectedMaterialType.value = newType
+
+  if (isShared.value && selectedMaterialEntry.value) {
+    sceneStore.updateMaterialDefinition(selectedMaterialEntry.value.id, { type: newType })
+    return
+  }
+
+  if (!selectedNodeId.value) {
+    return
+  }
+
+  sceneStore.updateNodeMaterialType(selectedNodeId.value, activeNodeMaterial.value.id, newType)
+}
+
 function handleNameChange(value: string) {
   const entry = activeNodeMaterial.value
   if (!entry) {
@@ -568,18 +529,6 @@ function handleNameChange(value: string) {
   if (trimmed && trimmed !== current) {
     commitMaterialMetadata({ name: trimmed })
   }
-}
-
-function handleDescriptionChange(value: string) {
-  if (!isShared.value) {
-    return
-  }
-  materialForm.description = value
-  commitMaterialMetadata({ description: value })
-}
-
-function triggerImport() {
-  importInputRef.value?.click()
 }
 
 function sanitizeImportedMaterial(
@@ -709,59 +658,6 @@ async function handleImportFileChange(event: Event) {
   }
 }
 
-function slugify(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
-
-function handleExportMaterial() {
-  if (!activeNodeMaterial.value ) {
-    return
-  }
-  const target = (isShared.value ? selectedMaterialEntry.value : activeNodeMaterial.value) || null
-  if (!target) {
-    return
-  }
-  const textures: Partial<Record<SceneMaterialTextureSlot, SceneMaterialTextureRef | null>> = {}
-  TEXTURE_SLOTS.forEach((slot) => {
-    const ref = target.textures?.[slot] ?? null
-    textures[slot] = ref ? { assetId: ref.assetId, name: ref.name } : null
-  })
-  const baseName = isShared.value
-    ? materialForm.name || selectedMaterialEntry.value?.name || 'Material'
-    : materialForm.name || activeNodeMaterial.value.name || `Material ${activeMaterialIndex.value + 1}`
-  const payload = {
-    version: 1,
-    type: isShared.value ? 'shared' : 'local',
-    name: baseName,
-    description: isShared.value ? materialForm.description : undefined,
-    props: {
-      color: target.color,
-      transparent: target.transparent,
-      opacity: target.opacity,
-      side: target.side,
-      wireframe: target.wireframe,
-      metalness: target.metalness,
-      roughness: target.roughness,
-      emissive: target.emissive,
-      emissiveIntensity: target.emissiveIntensity,
-      aoStrength: target.aoStrength,
-      envMapIntensity: target.envMapIntensity,
-      textures,
-    },
-  }
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
-  const filename = `${slugify(baseName || 'material') || 'material'}-material.json`
-  const link = document.createElement('a')
-  link.href = URL.createObjectURL(blob)
-  link.download = filename
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  URL.revokeObjectURL(link.href)
-}
 </script>
 
 <template>
@@ -795,6 +691,16 @@ function handleExportMaterial() {
               @update:model-value="handleNameChange"
             />
  
+            <v-select
+              label="材质类型"
+              density="compact"
+              variant="solo"
+              hide-details
+              :items="MATERIAL_CLASS_OPTIONS"
+              :model-value="selectedMaterialType"
+              @update:model-value="(value) => handleMaterialClassChange(value)"
+            />
+
           </div>
 
           <div class="material-properties">
