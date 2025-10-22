@@ -3560,12 +3560,15 @@ async function handlePointerDown(event: PointerEvent) {
 
   if (activeBuildTool.value === 'ground' && button === 2) {
     pointerTrackingState = null
-    if (groundSelection.value || groundSelectionDragState) {
+    const hasSelection = Boolean(groundSelection.value || groundSelectionDragState)
+    if (hasSelection) {
       cancelGroundSelection()
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
+    } else {
+      handleBuildToolChange(null)
     }
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
     return
   }
 
@@ -3846,18 +3849,19 @@ function handlePointerUp(event: PointerEvent) {
       if (overrideActive) {
         return
       }
-      if (wallBuildSession) {
+      const hadWallSession = Boolean(wallBuildSession)
+      if (hadWallSession) {
         finalizeWallBuildSession()
-        event.preventDefault()
-        event.stopPropagation()
-        event.stopImmediatePropagation()
-      } else if (groundSelection.value || groundSelectionDragState) {
-        // allow right-click through to cancel ground selection when switching tools
-        cancelGroundSelection()
-        event.preventDefault()
-        event.stopPropagation()
-        event.stopImmediatePropagation()
+      } else {
+        if (groundSelection.value || groundSelectionDragState) {
+          // allow right-click through to cancel ground selection when switching tools
+          cancelGroundSelection()
+        }
+        handleBuildToolChange(null)
       }
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
       return
     } else {
       return
@@ -4532,13 +4536,20 @@ function cancelActiveBuildOperation(): boolean {
   let handled = false
   switch (tool) {
     case 'ground':
-      cancelGroundSelection()
-      activeBuildTool.value = null
+      if (groundSelection.value || groundSelectionDragState) {
+        cancelGroundSelection()
+      } else {
+        activeBuildTool.value = null
+      }
       handled = true
       break
     case 'wall':
-      cancelWallSelection()
-      activeBuildTool.value = null
+      if (wallBuildSession) {
+        finalizeWallBuildSession()
+      } else {
+        cancelWallSelection()
+        activeBuildTool.value = null
+      }
       handled = true
       break
     case 'platform':
@@ -4549,7 +4560,7 @@ function cancelActiveBuildOperation(): boolean {
       return false
   }
 
-  if (handled && props.activeTool !== 'select') {
+  if (handled && activeBuildTool.value === null && props.activeTool !== 'select') {
     emit('changeTool', 'select')
   }
 
