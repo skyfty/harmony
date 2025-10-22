@@ -1229,7 +1229,7 @@ onBeforeUnmount(() => {
   right: var(--floating-edge-gap);
   bottom: calc(var(--project-floating-height) + (var(--floating-edge-gap) * 2));
   width: min(300px, 40vw);
-  max-height: var(--panel-floating-height);
+  max-height: clamp(360px, 52vh, 580px);
   min-height: 240px;
 }
 

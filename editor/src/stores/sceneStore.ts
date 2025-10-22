@@ -2920,6 +2920,36 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
       return created
     },
+    removeNodeMaterial(nodeId: string, nodeMaterialId: string) {
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target || (target.nodeType ?? 'mesh') !== 'mesh' || !target.materials?.length) {
+        return false
+      }
+      if (!target.materials.some((entry) => entry.id === nodeMaterialId)) {
+        return false
+      }
+
+      this.captureHistorySnapshot()
+      let removed = false
+      visitNode(this.nodes, nodeId, (node) => {
+        if ((node.nodeType ?? 'mesh') !== 'mesh' || !node.materials?.length) {
+          return
+        }
+        const nextMaterials = node.materials.filter((entry) => entry.id !== nodeMaterialId)
+        if (nextMaterials.length !== node.materials.length) {
+          node.materials = nextMaterials
+          removed = true
+        }
+      })
+
+      if (!removed) {
+        return false
+      }
+
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
+      return true
+    },
     updateNodeMaterialProps(nodeId: string, nodeMaterialId: string, update: Partial<SceneMaterialProps>) {
       const overrides = materialUpdateToProps(update)
       if (!Object.keys(overrides).length) {
