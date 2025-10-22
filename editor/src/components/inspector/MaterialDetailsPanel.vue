@@ -101,6 +101,8 @@ const activeNodeMaterial = computed(() => {
 })
 
 const panelRef = ref<HTMLElement | null>(null)
+const baseColorMenuOpen = ref(false)
+const emissiveColorMenuOpen = ref(false)
 
 const activeMaterialId = ref<string | null>(null)
 const importInputRef = ref<HTMLInputElement | null>(null)
@@ -158,12 +160,11 @@ const currentMaterialTitle = computed(() => {
   return entry.name ?? `材质 ${activeMaterialIndex.value + 1}`
 })
 
-const panelDisabled = computed(() => props.disabled || !selectedNodeId.value || !activeNodeMaterial.value)
-const canDuplicateMaterial = computed(() => isShared.value && !!activeMaterialId.value && !panelDisabled.value)
+const canDuplicateMaterial = computed(() => isShared.value && !!activeMaterialId.value )
 const canDeleteMaterial = computed(
-  () => isShared.value && materials.value.length > 1 && !!activeMaterialId.value && !panelDisabled.value,
+  () => isShared.value && materials.value.length > 1 && !!activeMaterialId.value,
 )
-const canMakeLocal = computed(() => isShared.value && !panelDisabled.value)
+const canMakeLocal = computed(() => isShared.value)
 
 const panelStyle = computed(() => {
   if (!props.anchor) {
@@ -172,9 +173,9 @@ const panelStyle = computed(() => {
   return {
     top: `${props.anchor.top + 70}px`,
     left: `${props.anchor.left}px`,
-    borderRadius: '12px',
+    borderRadius: '7px',
     border: '1px solid rgba(255, 255, 255, 0.08)',
-    backgroundColor: 'rgba(18, 22, 28, 0.92)',
+    backgroundColor: 'rgba(18, 22, 28, 0.72)',
     boxShadow: '0 18px 44px rgba(0, 0, 0, 0.35)',
   }
 })
@@ -184,6 +185,11 @@ watch(
   (visible) => {
     if (visible && !activeNodeMaterial.value) {
       emit('close')
+      return
+    }
+    if (!visible) {
+      baseColorMenuOpen.value = false
+      emissiveColorMenuOpen.value = false
     }
   },
 )
@@ -191,6 +197,8 @@ watch(
 watchEffect(() => {
   const entry = activeNodeMaterial.value
   if (!entry) {
+    baseColorMenuOpen.value = false
+    emissiveColorMenuOpen.value = false
     activeMaterialId.value = null
     applyPropsToForm(DEFAULT_PROPS, { name: '', description: '' })
     return
@@ -282,7 +290,7 @@ function applyPropsToForm(
 }
 
 function commitMaterialProps(update: Partial<SceneMaterialProps>) {
-  if (panelDisabled.value || !activeNodeMaterial.value || !selectedNodeId.value) {
+  if (!activeNodeMaterial.value || !selectedNodeId.value) {
     return
   }
   if (isShared.value && selectedMaterialEntry.value) {
@@ -308,7 +316,7 @@ function commitMaterialMetadata(update: { name?: string; description?: string })
 }
 
 function handleMaterialSelection(value: string | null) {
-  if (!selectedNodeId.value || !activeNodeMaterial.value || panelDisabled.value) {
+  if (!selectedNodeId.value || !activeNodeMaterial.value) {
     return
   }
   const trimmed = typeof value === 'string' ? value.trim() : ''
@@ -324,7 +332,7 @@ function handleClearMaterial() {
 }
 
 function handleCreateMaterial() {
-  if (panelDisabled.value || !selectedNodeId.value || !activeNodeMaterial.value) {
+  if (!selectedNodeId.value || !activeNodeMaterial.value) {
     return
   }
   const created = sceneStore.createMaterial()
@@ -370,9 +378,6 @@ function makeLocalCopy() {
 }
 
 function handleHexColorChange(field: 'color' | 'emissive', value: string) {
-  if (panelDisabled.value) {
-    return
-  }
   const normalized = normalizeHexColor(value, materialForm[field])
   materialForm[field] = normalized
   if (field === 'color') {
@@ -382,10 +387,14 @@ function handleHexColorChange(field: 'color' | 'emissive', value: string) {
   }
 }
 
-function handleBooleanChange(field: 'transparent' | 'wireframe', value: unknown) {
-  if (panelDisabled.value) {
+function handleColorPickerInput(field: 'color' | 'emissive', value: string | null) {
+  if (typeof value !== 'string') {
     return
   }
+  handleHexColorChange(field, value)
+}
+
+function handleBooleanChange(field: 'transparent' | 'wireframe', value: unknown) {
   const boolValue = Boolean(value)
   materialForm[field] = boolValue
   commitMaterialProps({ [field]: boolValue } as Partial<SceneMaterialProps>)
@@ -396,19 +405,12 @@ function handleBooleanChange(field: 'transparent' | 'wireframe', value: unknown)
 }
 
 function handleSideChange(value: SceneMaterialSide) {
-  if (panelDisabled.value) {
-    return
-  }
   materialForm.side = value
   commitMaterialProps({ side: value })
 }
 
-function handleSliderChange(field: SliderField, value: number | number[]) {
-  if (panelDisabled.value) {
-    return
-  }
-  const numericCandidate = Array.isArray(value) ? value[0] : value
-  if (typeof numericCandidate !== 'number' || !Number.isFinite(numericCandidate)) {
+function handleSliderChange(field: SliderField, value: number | null) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
     return
   }
   const config = SLIDER_CONFIG[field] as SliderConfigEntry
@@ -416,7 +418,7 @@ function handleSliderChange(field: SliderField, value: number | number[]) {
   const max: number = Number(config.max ?? min)
   const rawValue = materialForm[field]
   const fallbackValue: number = typeof rawValue === 'number' ? rawValue : min
-  const clamped = clampNumber(numericCandidate, min, max, fallbackValue)
+  const clamped = clampNumber(value, min, max, fallbackValue)
   materialForm[field] = clamped as never
   commitMaterialProps({ [field]: clamped } as Partial<SceneMaterialProps>)
 }
@@ -475,7 +477,7 @@ function isTextureDrag(event: DragEvent): boolean {
 }
 
 function handleTextureDragEnter(slot: SceneMaterialTextureSlot, event: DragEvent) {
-  if (!isTextureDrag(event) || panelDisabled.value) {
+  if (!isTextureDrag(event)) {
     return
   }
   event.preventDefault()
@@ -483,7 +485,7 @@ function handleTextureDragEnter(slot: SceneMaterialTextureSlot, event: DragEvent
 }
 
 function handleTextureDragOver(slot: SceneMaterialTextureSlot, event: DragEvent) {
-  if (!isTextureDrag(event) || panelDisabled.value) {
+  if (!isTextureDrag(event)) {
     return
   }
   event.preventDefault()
@@ -494,7 +496,7 @@ function handleTextureDragOver(slot: SceneMaterialTextureSlot, event: DragEvent)
 }
 
 function handleTextureDragLeave(slot: SceneMaterialTextureSlot, event: DragEvent) {
-  if (!isTextureDrag(event) || panelDisabled.value) {
+  if (!isTextureDrag(event)) {
     return
   }
   const target = event.currentTarget as HTMLElement | null
@@ -513,7 +515,7 @@ function assignTexture(slot: SceneMaterialTextureSlot, ref: SceneMaterialTexture
 }
 
 function handleTextureDrop(slot: SceneMaterialTextureSlot, event: DragEvent) {
-  if (!isTextureDrag(event) || panelDisabled.value) {
+  if (!isTextureDrag(event)) {
     return
   }
   const payload = parseDragPayload(event)
@@ -535,9 +537,6 @@ function handleTextureDrop(slot: SceneMaterialTextureSlot, event: DragEvent) {
 }
 
 function handleTextureRemove(slot: SceneMaterialTextureSlot) {
-  if (panelDisabled.value) {
-    return
-  }
   assignTexture(slot, null)
 }
 
@@ -580,9 +579,6 @@ function handleDescriptionChange(value: string) {
 }
 
 function triggerImport() {
-  if (panelDisabled.value) {
-    return
-  }
   importInputRef.value?.click()
 }
 
@@ -697,7 +693,7 @@ async function handleImportFileChange(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
-  if (!file || panelDisabled.value) {
+  if (!file) {
     return
   }
   try {
@@ -721,7 +717,7 @@ function slugify(value: string): string {
 }
 
 function handleExportMaterial() {
-  if (!activeNodeMaterial.value || panelDisabled.value) {
+  if (!activeNodeMaterial.value ) {
     return
   }
   const target = (isShared.value ? selectedMaterialEntry.value : activeNodeMaterial.value) || null
@@ -786,60 +782,15 @@ function handleExportMaterial() {
         </v-toolbar>
         <v-divider />
         <div class="panel-content">
-          <div class="material-actions">
-            <v-btn
-              icon="mdi-file-plus"
-              size="small"
-              variant="text"
-              :disabled="panelDisabled"
-              @click="handleCreateMaterial"
-            />
-            <v-btn
-              icon="mdi-content-copy"
-              size="small"
-              variant="text"
-              :disabled="!canDuplicateMaterial"
-              @click="handleDuplicateMaterial"
-            />
-            <v-btn
-              icon="mdi-delete"
-              size="small"
-              variant="text"
-              :disabled="!canDeleteMaterial"
-              @click="handleDeleteMaterial"
-            />
-          </div>
+          <div class="panel-content-inner">
 
-          <div class="material-assignment">
-            <v-select
-              :model-value="activeMaterialId"
-              :items="materialOptions"
-              label="共享材质"
-              clearable
-              hide-details
-              density="compact"
-              variant="solo"
-              :disabled="panelDisabled"
-              @update:model-value="handleMaterialSelection"
-              @click:clear="handleClearMaterial"
-            />
-            <v-btn
-              variant="tonal"
-              size="small"
-              :disabled="!canMakeLocal"
-              @click="makeLocalCopy"
-            >
-              断开链接
-            </v-btn>
-          </div>
 
           <div class="material-metadata">
             <v-text-field
-              label="名称"
+              label=""
               density="compact"
               variant="solo"
               hide-details
-              :disabled="panelDisabled"
               :model-value="materialForm.name"
               @update:model-value="handleNameChange"
             />
@@ -849,7 +800,6 @@ function handleExportMaterial() {
               density="compact"
               variant="solo"
               hide-details
-              :disabled="panelDisabled"
               :model-value="materialForm.description"
               @update:model-value="handleDescriptionChange"
             />
@@ -864,10 +814,34 @@ function handleExportMaterial() {
                   density="compact"
                   variant="solo"
                   hide-details
-                  :disabled="panelDisabled"
                   @update:model-value="(value) => handleHexColorChange('color', value ?? materialForm.color)"
                 />
-                <span class="color-swatch" :style="{ backgroundColor: materialForm.color }" />
+                <v-menu
+                  v-model="baseColorMenuOpen"
+                  :close-on-content-click="false"
+                  transition="scale-transition"
+                  location="bottom start"
+                >
+                  <template #activator="{ props: menuProps }">
+                    <button
+                      class="color-swatch"
+                      type="button"
+                      v-bind="menuProps"
+                      :style="{ backgroundColor: materialForm.color }"
+                    >
+                      <span class="sr-only">选择颜色</span>
+                    </button>
+                  </template>
+                  <div class="color-picker">
+                    <v-color-picker
+                      :model-value="materialForm.color"
+                      mode="hex"
+                      :modes="['hex']"
+                      hide-inputs
+                      @update:model-value="(value) => handleColorPickerInput('color', value)"
+                    />
+                  </div>
+                </v-menu>
               </div>
             </div>
             <div class="material-color">
@@ -878,31 +852,35 @@ function handleExportMaterial() {
                   density="compact"
                   variant="solo"
                   hide-details
-                  :disabled="panelDisabled"
                   @update:model-value="(value) => handleHexColorChange('emissive', value ?? materialForm.emissive)"
                 />
-                <span class="color-swatch" :style="{ backgroundColor: materialForm.emissive }" />
+                <v-menu
+                  v-model="emissiveColorMenuOpen"
+                  :close-on-content-click="false"
+                  transition="scale-transition"
+                  location="bottom start"
+                >
+                  <template #activator="{ props: menuProps }">
+                    <button
+                      class="color-swatch"
+                      type="button"
+                      v-bind="menuProps"
+                      :style="{ backgroundColor: materialForm.emissive }"
+                    >
+                      <span class="sr-only">选择自发光颜色</span>
+                    </button>
+                  </template>
+                  <div class="color-picker">
+                    <v-color-picker
+                      :model-value="materialForm.emissive"
+                      mode="hex"
+                      :modes="['hex']"
+                      hide-inputs
+                      @update:model-value="(value) => handleColorPickerInput('emissive', value)"
+                    />
+                  </div>
+                </v-menu>
               </div>
-            </div>
-            <div class="material-boolean-row">
-              <v-switch
-                hide-details
-                density="compact"
-                label="透明"
-                color="primary"
-                :disabled="panelDisabled"
-                :model-value="materialForm.transparent"
-                @update:model-value="(value) => handleBooleanChange('transparent', value)"
-              />
-              <v-switch
-                hide-details
-                density="compact"
-                label="线框"
-                color="primary"
-                :disabled="panelDisabled"
-                :model-value="materialForm.wireframe"
-                @update:model-value="(value) => handleBooleanChange('wireframe', value)"
-              />
             </div>
             <v-select
               class="side-select"
@@ -913,7 +891,6 @@ function handleExportMaterial() {
               :items="SIDE_OPTIONS"
               item-value="value"
               item-title="label"
-              :disabled="panelDisabled"
               :model-value="materialForm.side"
               @update:model-value="handleSideChange"
             />
@@ -929,13 +906,16 @@ function handleExportMaterial() {
                 <span class="slider-label">{{ field }}</span>
                 <span class="slider-value">{{ formatSliderValue(field) }}</span>
               </div>
-              <v-slider
+              <v-number-input
                 :model-value="materialForm[field] as number"
                 :min="SLIDER_CONFIG[field].min"
                 :max="SLIDER_CONFIG[field].max"
                 :step="SLIDER_CONFIG[field].step"
                 density="compact"
-                :disabled="panelDisabled"
+                hide-details
+                 control-variant="split"
+                variant="solo"
+                size="small"
                 @update:model-value="(value) => handleSliderChange(field, value)"
               />
             </div>
@@ -944,24 +924,7 @@ function handleExportMaterial() {
           <div class="texture-section">
             <div class="texture-header">
               <span class="material-label">贴图</span>
-              <div class="texture-actions">
-                <v-btn
-                  size="small"
-                  variant="text"
-                  :disabled="panelDisabled"
-                  @click="triggerImport"
-                >
-                  导入
-                </v-btn>
-                <v-btn
-                  size="small"
-                  variant="text"
-                  :disabled="panelDisabled"
-                  @click="handleExportMaterial"
-                >
-                  导出
-                </v-btn>
-              </div>
+    
             </div>
             <div class="texture-grid">
               <div
@@ -982,7 +945,7 @@ function handleExportMaterial() {
                     icon="mdi-close"
                     size="x-small"
                     variant="text"
-                    :disabled="panelDisabled || !formTextures[slot]"
+                    :disabled="!formTextures[slot]"
                     @click.stop="handleTextureRemove(slot)"
                   />
                 </div>
@@ -997,6 +960,7 @@ function handleExportMaterial() {
             style="display: none"
             @change="handleImportFileChange"
           />
+          </div>
         </div>
       </div>
     </transition>
@@ -1020,12 +984,12 @@ function handleExportMaterial() {
   top: 0;
   left: 0;
   transform: translateX(-100%);
-  width: 380px;
+  width: 300px;
   max-height: calc(100% - 400px);
   display: flex;
   flex-direction: column;
-  border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
   background-color: rgba(18, 22, 28, 0.72);
   backdrop-filter: blur(14px);
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
@@ -1051,11 +1015,23 @@ function handleExportMaterial() {
 
 .panel-content {
   flex: 1;
-  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
   overflow-y: auto;
+  
+}
+
+
+
+.panel-content-inner {
+  display: flex;
+    padding: 16px;
+border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    background-color: rgb(var(--v-theme-surface));
+  margin: 4px;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .material-title {
@@ -1116,6 +1092,30 @@ function handleExportMaterial() {
   height: 28px;
   border-radius: 6px;
   border: 1px solid rgba(255, 255, 255, 0.3);
+  cursor: pointer;
+  padding: 0;
+  display: inline-block;
+  background: transparent;
+}
+
+.color-swatch:focus-visible {
+  outline: 2px solid rgba(107, 152, 255, 0.8);
+  outline-offset: 2px;
+}
+
+.color-picker {
+  padding: 12px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
 }
 
 .material-boolean-row {

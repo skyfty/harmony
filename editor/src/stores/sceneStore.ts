@@ -136,6 +136,14 @@ const DEFAULT_MATERIAL_PROPS: SceneMaterialProps = {
 
 const DEFAULT_MATERIAL_TYPE: SceneMaterialType = 'mesh-standard'
 
+function nodeSupportsMaterials(node: SceneNode | null | undefined): boolean {
+  if (!node) {
+    return false
+  }
+  const type = node.nodeType ?? 'mesh'
+  return type !== 'light' && type !== 'group'
+}
+
 function createEmptyTextureMap(input?: MaterialTextureMap | null): MaterialTextureMap {
   const map: MaterialTextureMap = {}
   MATERIAL_TEXTURE_SLOTS.forEach((slot) => {
@@ -2881,7 +2889,7 @@ export const useSceneStore = defineStore('scene', {
       options: { materialId?: string | null; props?: Partial<SceneMaterialProps> | null; name?: string; type?: SceneMaterialType } = {},
     ) {
       const target = findNodeById(this.nodes, nodeId)
-      if (!target || (target.nodeType ?? 'mesh') !== 'mesh') {
+      if (!nodeSupportsMaterials(target)) {
         return null
       }
 
@@ -2898,7 +2906,7 @@ export const useSceneStore = defineStore('scene', {
       let created: SceneNodeMaterial | null = null
       this.captureHistorySnapshot()
       visitNode(this.nodes, nodeId, (node) => {
-        if ((node.nodeType ?? 'mesh') !== 'mesh') {
+        if (!nodeSupportsMaterials(node)) {
           return
         }
         const existingCount = node.materials?.length ?? 0
@@ -2922,7 +2930,7 @@ export const useSceneStore = defineStore('scene', {
     },
     removeNodeMaterial(nodeId: string, nodeMaterialId: string) {
       const target = findNodeById(this.nodes, nodeId)
-      if (!target || (target.nodeType ?? 'mesh') !== 'mesh' || !target.materials?.length) {
+      if (!nodeSupportsMaterials(target) || !target.materials?.length) {
         return false
       }
       if (!target.materials.some((entry) => entry.id === nodeMaterialId)) {
@@ -2932,7 +2940,7 @@ export const useSceneStore = defineStore('scene', {
       this.captureHistorySnapshot()
       let removed = false
       visitNode(this.nodes, nodeId, (node) => {
-        if ((node.nodeType ?? 'mesh') !== 'mesh' || !node.materials?.length) {
+        if (!nodeSupportsMaterials(node) || !node.materials?.length) {
           return
         }
         const nextMaterials = node.materials.filter((entry) => entry.id !== nodeMaterialId)
@@ -2959,7 +2967,7 @@ export const useSceneStore = defineStore('scene', {
       let updated = false
       this.captureHistorySnapshot()
       visitNode(this.nodes, nodeId, (node) => {
-        if ((node.nodeType ?? 'mesh') !== 'mesh' || !node.materials?.length) {
+        if (!nodeSupportsMaterials(node) || !node.materials?.length) {
           return
         }
         node.materials = node.materials.map((entry) => {
@@ -2995,7 +3003,7 @@ export const useSceneStore = defineStore('scene', {
       let updated = false
       this.captureHistorySnapshot()
       visitNode(this.nodes, nodeId, (node) => {
-        if ((node.nodeType ?? 'mesh') !== 'mesh' || !node.materials?.length) {
+        if (!nodeSupportsMaterials(node) || !node.materials?.length) {
           return
         }
         node.materials = node.materials.map((entry, index) => {
@@ -3035,7 +3043,7 @@ export const useSceneStore = defineStore('scene', {
       let updated = false
       this.captureHistorySnapshot()
       visitNode(this.nodes, nodeId, (node) => {
-        if ((node.nodeType ?? 'mesh') !== 'mesh' || !node.materials?.length) {
+        if (!nodeSupportsMaterials(node) || !node.materials?.length) {
           return
         }
         node.materials = node.materials.map((entry) => {
