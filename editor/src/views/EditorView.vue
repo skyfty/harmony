@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onMounted, onBeforeUnmount, reactive, ref, watch, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import HierarchyPanel from '@/components/layout/HierarchyPanel.vue'
 import InspectorPanel from '@/components/layout/InspectorPanel.vue'
+import MaterialDetailsPanel from '@/components/inspector/MaterialDetailsPanel.vue'
 import ProjectPanel from '@/components/layout/ProjectPanel.vue'
 import SceneViewport, { type SceneViewportHandle } from '@/components/editor/SceneViewport.vue'
 import PreviewOverlay from '@/components/layout/PreviewOverlay.vue'
@@ -89,6 +90,28 @@ const previewSession = ref<PreviewSessionState | null>(null)
 const sceneImportInputRef = ref<HTMLInputElement | null>(null)
 const isImportingScenes = ref(false)
 const isSceneBundleExporting = ref(false)
+
+type InspectorPanelPublicInstance = InstanceType<typeof InspectorPanel> & {
+  getPanelRect: () => DOMRect | null
+  closeMaterialDetails: (options?: { silent?: boolean }) => void
+}
+
+type MaterialDetailsSource = 'docked' | 'floating'
+
+type MaterialDetailsAnchor = {
+  top: number
+  left: number
+}
+
+const dockedInspectorRef = ref<InspectorPanelPublicInstance | null>(null)
+const floatingInspectorRef = ref<InspectorPanelPublicInstance | null>(null)
+
+const materialDetailsState = reactive({
+  visible: false,
+  targetId: null as string | null,
+  anchor: null as MaterialDetailsAnchor | null,
+  source: null as MaterialDetailsSource | null,
+})
 
 
 const hierarchyOpen = computed({
@@ -201,6 +224,100 @@ function togglePanelPlacement(panel: EditorPanel) {
     }
   })
 }
+
+function getInspectorRef(source: MaterialDetailsSource) {
+  return source === 'docked' ? dockedInspectorRef.value : floatingInspectorRef.value
+}
+
+function updateMaterialDetailsAnchor() {
+  if (!materialDetailsState.visible || !materialDetailsState.source) {
+    materialDetailsState.anchor = null
+    return
+  }
+  const inspector = getInspectorRef(materialDetailsState.source)
+  const rect = inspector?.getPanelRect?.() ?? null
+  if (!rect) {
+    materialDetailsState.anchor = null
+    return
+  }
+  materialDetailsState.anchor = { top: rect.top, left: rect.left }
+}
+
+function handleInspectorMaterialDetailsOpen(source: MaterialDetailsSource, payload: { id: string }) {
+  materialDetailsState.source = source
+  materialDetailsState.targetId = payload.id
+  materialDetailsState.visible = true
+  nextTick(() => {
+    updateMaterialDetailsAnchor()
+  })
+}
+
+function handleInspectorMaterialDetailsClose(source: MaterialDetailsSource) {
+  if (materialDetailsState.source !== source) {
+    return
+  }
+  materialDetailsState.visible = false
+  materialDetailsState.targetId = null
+  materialDetailsState.anchor = null
+  materialDetailsState.source = null
+}
+
+function handleMaterialDetailsOverlayClose() {
+  const source = materialDetailsState.source
+  materialDetailsState.visible = false
+  materialDetailsState.targetId = null
+  materialDetailsState.anchor = null
+  materialDetailsState.source = null
+  if (source) {
+    const inspector = getInspectorRef(source)
+    inspector?.closeMaterialDetails?.({ silent: true })
+  }
+}
+
+const handleMaterialDetailsRelayout = () => {
+  updateMaterialDetailsAnchor()
+}
+
+watch(
+  () => materialDetailsState.visible,
+  (visible) => {
+    if (visible) {
+      updateMaterialDetailsAnchor()
+      window.addEventListener('resize', handleMaterialDetailsRelayout)
+      window.addEventListener('scroll', handleMaterialDetailsRelayout, true)
+    } else {
+      window.removeEventListener('resize', handleMaterialDetailsRelayout)
+      window.removeEventListener('scroll', handleMaterialDetailsRelayout, true)
+    }
+  },
+  { immediate: false },
+)
+
+watch(showInspectorDocked, (visible) => {
+  if (materialDetailsState.source !== 'docked') {
+    return
+  }
+  if (!visible) {
+    handleInspectorMaterialDetailsClose('docked')
+    return
+  }
+  nextTick(() => {
+    updateMaterialDetailsAnchor()
+  })
+})
+
+watch(showInspectorFloating, (visible) => {
+  if (materialDetailsState.source !== 'floating') {
+    return
+  }
+  if (!visible) {
+    handleInspectorMaterialDetailsClose('floating')
+    return
+  }
+  nextTick(() => {
+    updateMaterialDetailsAnchor()
+  })
+})
 
 function openNewSceneDialog(source: 'menu' | 'scene-manager') {
   if (source === 'scene-manager') {
@@ -850,6 +967,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   releasePreviewSession()
   window.removeEventListener('keyup', handleEditorViewShortcut, { capture: true })
+  window.removeEventListener('resize', handleMaterialDetailsRelayout)
+  window.removeEventListener('scroll', handleMaterialDetailsRelayout, true)
 })
 
 
@@ -894,9 +1013,12 @@ onBeforeUnmount(() => {
       <transition name="slide-right">
         <section v-if="showInspectorDocked" class="panel inspector-panel">
           <InspectorPanel
+            ref="dockedInspectorRef"
             :floating="false"
             @collapse="inspectorOpen = false"
             @toggle-placement="togglePanelPlacement('inspector')"
+            @open-material-details="(payload) => handleInspectorMaterialDetailsOpen('docked', payload)"
+            @close-material-details="() => handleInspectorMaterialDetailsClose('docked')"
           />
         </section>
       </transition>
@@ -924,9 +1046,12 @@ onBeforeUnmount(() => {
         <transition name="fade-down">
           <div v-if="showInspectorFloating" class="floating-panel inspector-floating">
             <InspectorPanel
+              ref="floatingInspectorRef"
               :floating="true"
               @collapse="inspectorOpen = false"
               @toggle-placement="togglePanelPlacement('inspector')"
+              @open-material-details="(payload) => handleInspectorMaterialDetailsOpen('floating', payload)"
+              @close-material-details="() => handleInspectorMaterialDetailsClose('floating')"
             />
           </div>
         </transition>
@@ -974,6 +1099,14 @@ onBeforeUnmount(() => {
         <v-icon start>mdi-folder</v-icon>
         Project
       </v-btn>
+
+      <MaterialDetailsPanel
+        v-if="materialDetailsState.visible && materialDetailsState.targetId && materialDetailsState.anchor"
+        :node-material-id="materialDetailsState.targetId"
+        :visible="materialDetailsState.visible"
+        :anchor="materialDetailsState.anchor"
+        @close="handleMaterialDetailsOverlayClose"
+      />
     </div>
     <SceneManagerDialog
       v-model="isSceneManagerOpen"

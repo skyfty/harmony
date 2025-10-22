@@ -14,6 +14,8 @@ const props = defineProps<{ floating?: boolean }>()
 const emit = defineEmits<{
   (event: 'collapse'): void
   (event: 'toggle-placement'): void
+  (event: 'open-material-details', payload: { id: string }): void
+  (event: 'close-material-details'): void
 }>()
 
 const sceneStore = useSceneStore()
@@ -21,6 +23,8 @@ const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
 const nodeName = ref('')
 const expandedPanels = ref<string[]>(['transform', 'material'])
+const materialDetailsTargetId = ref<string | null>(null)
+const panelCardRef = ref<HTMLElement | { $el: HTMLElement } | null>(null)
 const floating = computed(() => props.floating ?? false)
 const placementIcon = computed(() => (floating.value ? 'mdi-dock-right' : 'mdi-arrow-expand'))
 const placementTitle = computed(() => (floating.value ? '停靠到右侧' : '浮动显示'))
@@ -72,10 +76,50 @@ function handleNameUpdate(value: string) {
   sceneStore.renameNode(selectedNodeId.value, trimmed)
 }
 
+function handleOpenMaterialDetails(id: string) {
+  materialDetailsTargetId.value = id
+  emit('open-material-details', { id })
+}
+
+function closeMaterialDetails(options: { silent?: boolean } = {}) {
+  if (!materialDetailsTargetId.value) {
+    return
+  }
+  materialDetailsTargetId.value = null
+  if (!options.silent) {
+    emit('close-material-details')
+  }
+}
+
+function getPanelRect(): DOMRect | null {
+  const target = panelCardRef.value
+  if (!target) {
+    return null
+  }
+  const element = '$el' in target ? (target.$el as HTMLElement | null) : (target as HTMLElement | null)
+  return element?.getBoundingClientRect() ?? null
+}
+
+watch(showMaterialPanel, (visible) => {
+  if (!visible) {
+    closeMaterialDetails()
+  }
+})
+
+watch(selectedNodeId, () => {
+  closeMaterialDetails()
+})
+
+defineExpose({
+  getPanelRect,
+  closeMaterialDetails,
+})
+
 </script>
 
 <template>
   <v-card
+    ref="panelCardRef"
     :class="['panel-card', { 'is-floating': floating } ]"
     :elevation="floating ? 12 : 4"
   >
@@ -114,7 +158,11 @@ function handleNameUpdate(value: string) {
     <GroundPanel v-if="isGroundNode" />
     <InspectorWallPanel v-if="isWallNode" />
         <InspectorLightPanel v-if="isLightNode"/>
-        <InspectorMaterialPanel v-else-if="showMaterialPanel" />
+        <InspectorMaterialPanel
+          v-else-if="showMaterialPanel"
+          v-model:active-node-material-id="materialDetailsTargetId"
+          @open-details="handleOpenMaterialDetails"
+        />
       </v-expansion-panels>
     </div>
     <div v-else class="placeholder-text">
@@ -132,6 +180,7 @@ function handleNameUpdate(value: string) {
   border: 1px solid rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(14px);
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+  position: relative;
 }
 
 .panel-card.is-floating {
