@@ -71,12 +71,6 @@ function handleToggleStats() {
                       <span class="shortcut-label">Ctrl+O</span>
                     </template>
                   </v-list-item>
-                  <v-list-item @click="handleMenuAction('Import')" class="menu-list-item">
-                    Import
-                    <template #append>
-                      <span class="shortcut-label">Ctrl+I</span>
-                    </template>
-                  </v-list-item>
                   <v-list-item @click="handleMenuAction('Save')" class="menu-list-item">
                     Save
                     <template   #append>
@@ -84,6 +78,9 @@ function handleToggleStats() {
                     </template>
                   </v-list-item>
                   <v-divider />
+                  <v-list-item @click="handleMenuAction('Import')" class="menu-list-item">
+                    Import
+                  </v-list-item>
                   <v-list-item @click="handleMenuAction('Export')" class="menu-list-item">
                     Export
                   </v-list-item>
