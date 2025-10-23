@@ -65,7 +65,7 @@ const materialClasses: Record<SceneMaterialType, any> = MATERIAL_CLASS_NAMES.red
   return map
 }, {} as Record<SceneMaterialType, any>)
 
-const MATERIAL_CLASS_OPTIONS = Object.keys(materialClasses) as SceneMaterialType[]
+const materialClassOptions = computed(() => Object.keys(materialClasses) as SceneMaterialType[])
 const SIDE_OPTIONS: Array<{ value: SceneMaterialSide; label: string }> = [
   { value: 'front', label: 'Front' },
   { value: 'back', label: 'Back' },
@@ -156,6 +156,12 @@ const activeMaterialIndex = computed(() => {
 })
 
 const selectedMaterialType = ref<SceneMaterialType | null>(null)
+const canSaveMaterial = computed(() =>
+  !!selectedNodeId.value &&
+  !!activeNodeMaterial.value &&
+  !isShared.value &&
+  !props.disabled,
+)
 
 const currentMaterialTitle = computed(() => {
   const entry = activeNodeMaterial.value
@@ -337,6 +343,21 @@ function handleColorPickerInput(field: 'color' | 'emissive', value: string | nul
     return
   }
   handleHexColorChange(field, value)
+}
+
+function handleSaveMaterial() {
+  if (!canSaveMaterial.value || !selectedNodeId.value || !activeNodeMaterial.value) {
+    return
+  }
+  const normalizedName = materialForm.name.trim()
+  const normalizedDescription = materialForm.description.trim()
+  const result = sceneStore.saveNodeMaterialAsShared(selectedNodeId.value, activeNodeMaterial.value.id, {
+    name: normalizedName.length ? normalizedName : undefined,
+    description: normalizedDescription.length ? normalizedDescription : undefined,
+  })
+  if (result) {
+    activeMaterialId.value = result.id
+  }
 }
 
 function handleSideChange(value: SceneMaterialSide) {
@@ -667,6 +688,17 @@ async function handleImportFileChange(event: Event) {
             <div class="material-title">{{ currentMaterialTitle }}</div>
           </div>
           <v-spacer />
+          <v-btn
+            class="toolbar-save"
+            variant="text"
+            size="small"
+            prepend-icon="mdi-content-save"
+            :disabled="!canSaveMaterial"
+            title="保存材质为共享资源"
+            @click="handleSaveMaterial"
+          >
+            保存
+          </v-btn>
           <v-btn class="toolbar-close" icon="mdi-close" size="small" variant="text" @click="handleClose" />
         </v-toolbar>
         <v-divider />
@@ -683,15 +715,15 @@ async function handleImportFileChange(event: Event) {
               :model-value="materialForm.name"
               @update:model-value="handleNameChange"
             />
- 
+
             <v-select
               label="材质类型"
               density="compact"
               variant="solo"
               hide-details
-              :items="MATERIAL_CLASS_OPTIONS"
+              :items="materialClassOptions"
               :model-value="selectedMaterialType"
-              @update:model-value="(value) => handleMaterialClassChange(value)"
+              @update:model-value="handleMaterialClassChange"
             />
 
           </div>
@@ -902,6 +934,16 @@ async function handleImportFileChange(event: Event) {
 
 .toolbar-close {
   color: rgba(233, 236, 241, 0.72);
+}
+
+.toolbar-save {
+  color: rgba(233, 236, 241, 0.82);
+  font-weight: 500;
+  text-transform: none;
+}
+
+.toolbar-save:disabled {
+  color: rgba(233, 236, 241, 0.32) !important;
 }
 
 .panel-content {

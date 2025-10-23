@@ -383,6 +383,9 @@ function isAssetDownloading(asset: ProjectAsset) {
 }
 
 function canDeleteAsset(asset: ProjectAsset) {
+  if (asset.type === 'material') {
+    return asset.gleaned !== false
+  }
   if (!asset.gleaned) {
     return false
   }
@@ -742,8 +745,18 @@ const deletionSummary = computed(() => {
   const prefix = isBatchDeletion.value
     ? `Are you sure you want to delete the selected assets ${names}?`
     : `Are you sure you want to delete asset ${names}?`
-  const warning =
-    ' This will remove the asset, its placeholders, and all objects referencing it in the scene. This action cannot be undone.'
+  const hasMaterial = pendingDeleteAssets.value.some((asset) => asset.type === 'material')
+  const hasNonMaterial = pendingDeleteAssets.value.some((asset) => asset.type !== 'material')
+  const warningParts: string[] = []
+  if (hasMaterial) {
+    warningParts.push('reassign any objects using the material back to the default material')
+  }
+  if (hasNonMaterial) {
+    warningParts.push('remove the asset, its placeholders, and all objects referencing it in the scene')
+  }
+  const warning = warningParts.length
+    ? ` This will ${warningParts.join(' and ')}. This action cannot be undone.`
+    : ' This action cannot be undone.'
   return `${prefix}${warning}`
 })
 

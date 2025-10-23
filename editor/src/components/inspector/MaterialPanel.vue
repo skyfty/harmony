@@ -3,6 +3,9 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { SceneNodeMaterial } from '@/types/material'
+import type { ProjectAsset } from '@/types/project-asset'
+
+type MaterialAsset = ProjectAsset & { type: 'material' }
 
 const props = defineProps<{
   disabled?: boolean
@@ -20,6 +23,10 @@ const { selectedNode, selectedNodeId, materials } = storeToRefs(sceneStore)
 const nodeMaterials = computed(() => selectedNode.value?.materials ?? [])
 const internalActiveId = ref<string | null>(props.activeNodeMaterialId ?? null)
 const deleteDialogVisible = ref(false)
+const dragOverSlotId = ref<string | null>(null)
+const isListDragActive = ref(false)
+
+const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 
 watch(
   () => props.activeNodeMaterialId,
@@ -90,6 +97,139 @@ function handleRequestDeleteSlot() {
   deleteDialogVisible.value = true
 }
 
+function parseAssetDragPayload(event: DragEvent): { assetId: string } | null {
+  if (event.dataTransfer) {
+    const raw = event.dataTransfer.getData(ASSET_DRAG_MIME)
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw)
+        if (parsed?.assetId && typeof parsed.assetId === 'string') {
+          return { assetId: parsed.assetId }
+        }
+      } catch (error) {
+        console.warn('Failed to parse asset drag payload', error)
+      }
+    }
+  }
+  const draggingId = sceneStore.draggingAssetId
+  if (draggingId) {
+    return { assetId: draggingId }
+  }
+  return null
+}
+
+function resolveMaterialAssetFromEvent(event: DragEvent): MaterialAsset | null {
+  const payload = parseAssetDragPayload(event)
+  if (!payload) {
+    return null
+  }
+  const asset = sceneStore.getAsset(payload.assetId)
+  if (!asset || asset.type !== 'material') {
+    return null
+  }
+  return asset as MaterialAsset
+}
+
+function handleSlotDragOver(slotId: string, event: DragEvent) {
+  if (props.disabled || !selectedNodeId.value) {
+    return
+  }
+  const asset = resolveMaterialAssetFromEvent(event)
+  if (!asset) {
+    return
+  }
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy'
+  }
+  dragOverSlotId.value = slotId
+  isListDragActive.value = false
+}
+
+function handleSlotDragLeave(slotId: string, event: DragEvent) {
+  if (dragOverSlotId.value !== slotId) {
+    return
+  }
+  const target = event.currentTarget as HTMLElement | null
+  const related = event.relatedTarget as Node | null
+  if (target && related && target.contains(related)) {
+    return
+  }
+  dragOverSlotId.value = null
+}
+
+function handleSlotDrop(slotId: string, event: DragEvent) {
+  if (props.disabled || !selectedNodeId.value) {
+    return
+  }
+  const asset = resolveMaterialAssetFromEvent(event)
+  if (!asset) {
+    return
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  dragOverSlotId.value = null
+  isListDragActive.value = false
+  const assigned = sceneStore.assignNodeMaterial(selectedNodeId.value, slotId, asset.id)
+  if (assigned) {
+    internalActiveId.value = slotId
+    emit('update:active-node-material-id', slotId)
+    emit('open-details', slotId)
+  }
+}
+
+function handleListDragOver(event: DragEvent) {
+  if (props.disabled || !selectedNodeId.value) {
+    return
+  }
+  const asset = resolveMaterialAssetFromEvent(event)
+  if (!asset) {
+    return
+  }
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy'
+  }
+  dragOverSlotId.value = null
+  isListDragActive.value = true
+}
+
+function handleListDragLeave(event: DragEvent) {
+  if (!isListDragActive.value) {
+    return
+  }
+  const target = event.currentTarget as HTMLElement | null
+  const related = event.relatedTarget as Node | null
+  if (target && related && target.contains(related)) {
+    return
+  }
+  isListDragActive.value = false
+}
+
+function handleListDrop(event: DragEvent) {
+  if (props.disabled || !selectedNodeId.value) {
+    return
+  }
+  const asset = resolveMaterialAssetFromEvent(event)
+  if (!asset) {
+    return
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  dragOverSlotId.value = null
+  isListDragActive.value = false
+  const newSlot = sceneStore.addNodeMaterial(selectedNodeId.value) as SceneNodeMaterial | null
+  if (!newSlot) {
+    return
+  }
+  const assigned = sceneStore.assignNodeMaterial(selectedNodeId.value, newSlot.id, asset.id)
+  if (assigned) {
+    internalActiveId.value = newSlot.id
+    emit('update:active-node-material-id', newSlot.id)
+    emit('open-details', newSlot.id)
+  }
+}
+
 function handleCancelDeleteSlot() {
   deleteDialogVisible.value = false
 }
@@ -141,15 +281,29 @@ async function handleConfirmDeleteSlot() {
     </v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="material-panel">
-        <div class="material-panel__list">
+        <div
+          class="material-panel__list"
+          :class="{ 'is-drag-over': isListDragActive && !dragOverSlotId }"
+          @dragenter="handleListDragOver"
+          @dragover="handleListDragOver"
+          @dragleave="handleListDragLeave"
+          @drop="handleListDrop"
+        >
           <v-list density="compact" nav class="material-list">
             <v-list-item
               v-for="entry in materialListEntries"
               :key="entry.id"
               :value="entry.id"
               :active="entry.id === internalActiveId"
-              :class="{ 'is-active': entry.id === internalActiveId }"
+              :class="{
+                'is-active': entry.id === internalActiveId,
+                'is-drag-target': dragOverSlotId === entry.id,
+              }"
               @click="handleSelect(entry.id)"
+              @dragenter="handleSlotDragOver(entry.id, $event)"
+              @dragover="handleSlotDragOver(entry.id, $event)"
+              @dragleave="handleSlotDragLeave(entry.id, $event)"
+              @drop="handleSlotDrop(entry.id, $event)"
             >
               <v-list-item-title>{{ entry.title }}</v-list-item-title>
             </v-list-item>
@@ -185,6 +339,11 @@ async function handleConfirmDeleteSlot() {
   gap: 8px;
 }
 
+.material-panel__list.is-drag-over .material-list {
+  border-color: rgba(90, 148, 255, 0.55);
+  box-shadow: 0 0 0 2px rgba(90, 148, 255, 0.18);
+}
+
 .material-panel-title {
   display: flex;
   align-items: center;
@@ -215,6 +374,11 @@ async function handleConfirmDeleteSlot() {
 
 .material-list :deep(.v-list-item.is-active) {
   background: rgba(90, 148, 255, 0.14);
+}
+
+.material-list :deep(.v-list-item.is-drag-target) {
+  border: 1px dashed rgba(90, 148, 255, 0.6);
+  background: rgba(90, 148, 255, 0.18);
 }
 
 .placeholder-title {

@@ -3065,6 +3065,88 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
       return true
     },
+    saveNodeMaterialAsShared(
+      nodeId: string,
+      nodeMaterialId: string,
+      options: { name?: string; description?: string } = {},
+    ): SceneMaterial | null {
+      const targetNode = findNodeById(this.nodes, nodeId)
+      if (!nodeSupportsMaterials(targetNode) || !targetNode?.materials?.length) {
+        return null
+      }
+
+      const existing = targetNode.materials.find((entry) => entry.id === nodeMaterialId) ?? null
+      if (!existing) {
+        return null
+      }
+      if (existing.materialId) {
+        return this.materials.find((entry) => entry.id === existing.materialId) ?? null
+      }
+
+      const props = extractMaterialProps(existing)
+      const type = normalizeSceneMaterialType(existing.type ?? DEFAULT_MATERIAL_TYPE)
+      const nameCandidates = [
+        typeof options.name === 'string' ? options.name.trim() : '',
+        typeof existing.name === 'string' ? existing.name.trim() : '',
+      ]
+      const fallbackName = `Material ${this.materials.length + 1}`
+      const resolvedName = nameCandidates.find((value) => value && value.length) ?? fallbackName
+      const normalizedDescription =
+        typeof options.description === 'string' ? options.description.trim() : undefined
+
+      const material = createSceneMaterial(resolvedName, props, { type })
+      if (normalizedDescription && normalizedDescription.length) {
+        material.description = normalizedDescription
+      }
+
+      this.captureHistorySnapshot()
+
+      let nodeUpdated = false
+      visitNode(this.nodes, nodeId, (node) => {
+        if (!nodeSupportsMaterials(node) || !node.materials?.length) {
+          return
+        }
+        const nextMaterials = node.materials.map((entry) => {
+          if (entry.id !== nodeMaterialId) {
+            return entry
+          }
+          nodeUpdated = true
+          return createNodeMaterial(material.id, material, {
+            id: entry.id,
+            name: material.name,
+            type: material.type,
+          })
+        })
+        node.materials = nextMaterials
+      })
+
+      if (!nodeUpdated) {
+        return null
+      }
+
+      this.materials = [...this.materials, material]
+      this.nodes = [...this.nodes]
+
+      const previewColor = typeof props.color === 'string' && props.color.trim().length ? props.color : '#607d8b'
+      const asset: ProjectAsset = {
+        id: material.id,
+        name: material.name,
+        type: 'material',
+        description: material.description,
+        downloadUrl: `material://${material.id}.material`,
+        previewColor,
+        thumbnail: null,
+        gleaned: true,
+      }
+
+      this.registerAsset(asset, {
+        categoryId: determineAssetCategoryId(asset),
+        source: { type: 'local' },
+        commitOptions: { updateNodes: true, updateCamera: false },
+      })
+
+      return material
+    },
     updateNodeMaterialMetadata(nodeId: string, nodeMaterialId: string, metadata: { name?: string | null }) {
       const rawName = metadata.name
       const trimmedName = typeof rawName === 'string' ? rawName.trim() : rawName
@@ -3692,7 +3774,10 @@ export const useSceneStore = defineStore('scene', {
       }
       return findAssetInTree(this.projectTree, assetId)
     },
-    registerAsset(asset: ProjectAsset, options: { categoryId?: string; source?: AssetSourceMetadata } = {}) {
+    registerAsset(
+      asset: ProjectAsset,
+      options: { categoryId?: string; source?: AssetSourceMetadata; commitOptions?: { updateNodes?: boolean; updateCamera?: boolean } } = {},
+    ) {
       const categoryId = options.categoryId ?? determineAssetCategoryId(asset)
       const existingEntry = this.assetIndex[asset.id]
       const nextCatalog: Record<string, ProjectAsset[]> = { ...this.assetCatalog }
@@ -3718,7 +3803,8 @@ export const useSceneStore = defineStore('scene', {
       }
 
       this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
-      commitSceneSnapshot(this, { updateNodes: false, updateCamera: false })
+      const commitOptions = options.commitOptions ?? { updateNodes: false, updateCamera: false }
+      commitSceneSnapshot(this, commitOptions)
       return registeredAsset
     },
     copyPackageAssetToAssets(providerId: string, asset: ProjectAsset): ProjectAsset {
@@ -3776,21 +3862,38 @@ export const useSceneStore = defineStore('scene', {
         return []
       }
 
+      const materialAssetIds: string[] = []
+      const nonMaterialAssetIds: string[] = []
+      deletableIds.forEach((assetId) => {
+        const asset = catalogAssets.get(assetId)
+        if (asset?.type === 'material') {
+          materialAssetIds.push(assetId)
+        } else {
+          nonMaterialAssetIds.push(assetId)
+        }
+      })
+
       const assetIdSet = new Set(deletableIds)
       const assetCache = useAssetCacheStore()
 
-      const assetNodeMap = collectNodesByAssetId(this.nodes)
-      const nodeIdsToRemove: string[] = []
-      deletableIds.forEach((assetId) => {
-        const nodes = assetNodeMap.get(assetId)
-        if (nodes?.length) {
-          nodes.forEach((node) => {
-            nodeIdsToRemove.push(node.id)
-          })
-        }
+      materialAssetIds.forEach((materialId) => {
+        this.deleteMaterial(materialId)
       })
-      if (nodeIdsToRemove.length) {
-        this.removeSceneNodes(nodeIdsToRemove)
+
+      if (nonMaterialAssetIds.length) {
+        const assetNodeMap = collectNodesByAssetId(this.nodes)
+        const nodeIdsToRemove: string[] = []
+        nonMaterialAssetIds.forEach((assetId) => {
+          const nodes = assetNodeMap.get(assetId)
+          if (nodes?.length) {
+            nodes.forEach((node) => {
+              nodeIdsToRemove.push(node.id)
+            })
+          }
+        })
+        if (nodeIdsToRemove.length) {
+          this.removeSceneNodes(nodeIdsToRemove)
+        }
       }
 
       const now = new Date().toISOString()
@@ -3870,7 +3973,7 @@ export const useSceneStore = defineStore('scene', {
       })
       this.packageAssetMap = nextPackageMap
 
-      deletableIds.forEach((assetId) => {
+      nonMaterialAssetIds.forEach((assetId) => {
         assetCache.removeCache(assetId)
       })
 
@@ -4367,8 +4470,10 @@ export const useSceneStore = defineStore('scene', {
       this.captureHistorySnapshot()
   const id = generateUuid()
       const baseMaterial = this.materials[0] ?? null
-      const initialProps: SceneMaterialProps = baseMaterial ? baseMaterial : createMaterialProps()
-      const initialMaterial = createNodeMaterial(baseMaterial?.id ?? null, initialProps, {
+      const initialProps: SceneMaterialProps = baseMaterial
+        ? createMaterialProps(baseMaterial)
+        : createMaterialProps()
+      const initialMaterial = createNodeMaterial(null, initialProps, {
         name: baseMaterial?.name,
         type: normalizeSceneMaterialType(baseMaterial?.type ?? DEFAULT_MATERIAL_TYPE),
       })
