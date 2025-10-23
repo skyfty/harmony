@@ -3155,7 +3155,8 @@ export const useSceneStore = defineStore('scene', {
             return entry
           }
           updated = true
-          return createNodeMaterial(null, entry, {
+          const currentProps = extractMaterialProps(entry)
+          return createNodeMaterial(null, currentProps, {
             id: entry.id,
             name: trimmedName && trimmedName.length ? trimmedName : undefined,
             type: entry.type,

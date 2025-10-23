@@ -574,7 +574,7 @@ function formatSliderValue(field: SliderField): string {
 function resolveTextureName(slot: SceneMaterialTextureSlot): string {
   const ref = formTextures[slot]
   if (!ref) {
-    return '未指定'
+    return 'Not specified'
   }
   const asset = sceneStore.getAsset(ref.assetId)
   return asset?.name ?? ref.name ?? ref.assetId
