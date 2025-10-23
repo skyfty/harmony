@@ -26,6 +26,8 @@ export const MATERIAL_CLASS_NAMES = [
 
 export type SceneMaterialType = (typeof MATERIAL_CLASS_NAMES)[number]
 
+export const DEFAULT_SCENE_MATERIAL_ID = '__scene_default_material__'
+
 export const DEFAULT_SCENE_MATERIAL_TYPE: SceneMaterialType = 'MeshStandardMaterial'
 
 function isSceneMaterialType(value: unknown): value is SceneMaterialType {

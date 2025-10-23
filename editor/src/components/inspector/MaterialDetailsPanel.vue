@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import {
+  DEFAULT_SCENE_MATERIAL_ID,
   normalizeSceneMaterialType,
   type SceneMaterialProps,
   type SceneMaterialSide,
@@ -123,6 +124,11 @@ const draggingSlot = ref<SceneMaterialTextureSlot | null>(null)
 const hasPendingChanges = ref(false)
 const originalSharedMaterialId = ref<string | null>(null)
 const saveSharedDialogVisible = ref(false)
+const defaultMaterialId = computed(() => (
+  materials.value.some((material) => material.id === DEFAULT_SCENE_MATERIAL_ID)
+    ? DEFAULT_SCENE_MATERIAL_ID
+    : null
+))
 const lastSyncedMaterialId = ref<string | null>(null)
 
 const formTextures = reactive<TextureMapState>(createEmptyTextureMap())
@@ -248,6 +254,16 @@ function markMaterialDirty() {
 
 function ensureEditableMaterial(): boolean {
   if (!activeNodeMaterial.value || !selectedNodeId.value) {
+    return false
+  }
+  const defaultId = defaultMaterialId.value
+  if (defaultId && activeNodeMaterial.value.materialId === defaultId) {
+    const detached = sceneStore.assignNodeMaterial(selectedNodeId.value, activeNodeMaterial.value.id, null)
+    if (detached) {
+      originalSharedMaterialId.value = null
+      activeMaterialId.value = null
+      return true
+    }
     return false
   }
   if (!activeNodeMaterial.value.materialId) {

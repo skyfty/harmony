@@ -30,7 +30,7 @@ import type {
   SceneMaterialType,
   SceneNodeMaterial,
 } from '@/types/material'
-import { DEFAULT_SCENE_MATERIAL_TYPE, normalizeSceneMaterialType } from '@/types/material'
+import { DEFAULT_SCENE_MATERIAL_ID, DEFAULT_SCENE_MATERIAL_TYPE, normalizeSceneMaterialType } from '@/types/material'
 
 import {
   CUSTOM_SKYBOX_PRESET_ID,
@@ -196,12 +196,16 @@ function cloneMaterialProps(props: SceneMaterialProps): SceneMaterialProps {
   })
 }
 
-function createSceneMaterial(name = 'New Material', props?: Partial<SceneMaterialProps>, options: { type?: SceneMaterialType } = {}): SceneMaterial {
+function createSceneMaterial(
+  name = 'New Material',
+  props?: Partial<SceneMaterialProps>,
+  options: { type?: SceneMaterialType; id?: string } = {},
+): SceneMaterial {
   const now = new Date().toISOString()
   const resolvedName = name.trim() || 'New Material'
   const resolvedProps = createMaterialProps(props)
   return {
-    id: generateUuid(),
+    id: options.id ?? generateUuid(),
     name: resolvedName,
     description: undefined,
     type: normalizeSceneMaterialType(options.type),
@@ -226,6 +230,10 @@ function cloneSceneMaterial(material: SceneMaterial): SceneMaterial {
 
 function cloneSceneMaterials(materials: SceneMaterial[]): SceneMaterial[] {
   return materials.map((material) => cloneSceneMaterial(material))
+}
+
+function findDefaultSceneMaterial(materials: SceneMaterial[]): SceneMaterial | null {
+  return materials.find((material) => material.id === DEFAULT_SCENE_MATERIAL_ID) ?? null
 }
 
 function createNodeMaterial(
@@ -755,7 +763,7 @@ const initialMaterials: SceneMaterial[] = [
     color: '#ffffff',
     metalness: 0,
     roughness: 0.8,
-  }),
+  }, { id: DEFAULT_SCENE_MATERIAL_ID }),
 ]
 
 const initialNodes: SceneNode[] = [createGroundSceneNode()]
@@ -2895,9 +2903,9 @@ export const useSceneStore = defineStore('scene', {
         const nextMaterials = node.materials.filter((entry) => entry.id !== nodeMaterialId)
         if (nextMaterials.length !== node.materials.length) {
           if (!nextMaterials.length) {
-            const baseMaterial = this.materials[0] ?? null
+            const baseMaterial = findDefaultSceneMaterial(this.materials)
             const defaultProps = baseMaterial ? createMaterialProps(baseMaterial) : createMaterialProps()
-            const defaultMaterial = createNodeMaterial(baseMaterial?.id ?? null, defaultProps, {
+            const defaultMaterial = createNodeMaterial(baseMaterial ? baseMaterial.id : null, defaultProps, {
               name: baseMaterial?.name,
               type: normalizeSceneMaterialType(baseMaterial?.type ?? DEFAULT_MATERIAL_TYPE),
             })
@@ -3029,7 +3037,8 @@ export const useSceneStore = defineStore('scene', {
       }
 
       this.captureHistorySnapshot()
-      const defaultProps = createMaterialProps()
+      const fallbackMaterial = findDefaultSceneMaterial(this.materials)
+      const defaultProps = fallbackMaterial ? createMaterialProps(fallbackMaterial) : createMaterialProps()
       const changed = applyMaterialPropsToNodeTree(
         this.nodes,
         materialId,
@@ -4450,8 +4459,8 @@ export const useSceneStore = defineStore('scene', {
     }) {
       this.captureHistorySnapshot()
       const id = generateUuid()
-      const baseMaterial = this.materials[0] ?? null
-      const initialProps: SceneMaterialProps = createMaterialProps()
+      const baseMaterial = findDefaultSceneMaterial(this.materials)
+      const initialProps: SceneMaterialProps = baseMaterial ? createMaterialProps(baseMaterial) : createMaterialProps()
       const initialMaterial = createNodeMaterial(null, initialProps, {
         name: baseMaterial?.name,
         type: normalizeSceneMaterialType(baseMaterial?.type ?? DEFAULT_MATERIAL_TYPE),
