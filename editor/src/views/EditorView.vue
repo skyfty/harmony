@@ -1185,7 +1185,7 @@ onBeforeUnmount(() => {
   --floating-edge-gap: 18px;
   --floating-menu-offset: 68px;
   --hierarchy-floating-height: clamp(360px, 52vh, 580px);
-  --inspector-floating-height: clamp(360px, 52vh, 580px);
+  --inspector-floating-height: clamp(460px, 52vh, 680px);
   --project-floating-height: clamp(170px, 38vh, 220px);
 }
 
@@ -1249,7 +1249,7 @@ onBeforeUnmount(() => {
     --floating-menu-offset: 60px;
     --floating-edge-gap: 14px;
     --hierarchy-floating-height: clamp(240px, 48vh, 580px);
-    --inspector-floating-height: clamp(240px, 48vh, 580px);
+    --inspector-floating-height: clamp(340px, 48vh, 680px);
     --project-floating-height: clamp(220px, 42vh, 380px);
   }
 
