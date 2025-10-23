@@ -13,6 +13,11 @@ export interface CameraNodeProperties {
   zoom?: number
 }
 
+export interface SceneNodeImportMetadata {
+  assetId: string
+  objectPath: number[]
+}
+
 export type LightNodeType = 'directional' | 'point' | 'spot' | 'ambient'
 
 export interface LightNodeProperties {
@@ -52,4 +57,5 @@ export interface SceneNode {
   downloadStatus?: 'idle' | 'downloading' | 'ready' | 'error'
   downloadError?: string | null
   dynamicMesh?: SceneDynamicMesh
+  importMetadata?: SceneNodeImportMetadata
 }

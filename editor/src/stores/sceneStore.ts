@@ -780,6 +780,7 @@ type ExternalSceneImportContext = {
   converted: Set<Object3D>
   textureRefs: Map<Texture, SceneMaterialTextureRef>
   textureSequence: number
+  modelAssetId: string | null
 }
 
 const IMPORT_TEXTURE_SLOT_MAP: Array<{ slot: SceneMaterialTextureSlot; key: string }> = [
@@ -1057,13 +1058,18 @@ async function createNodeMaterialFromThree(material: Material | null | undefined
 async function convertObjectToSceneNode(
   object: Object3D,
   context: ExternalSceneImportContext,
-  options: { fallbackName?: string } = {},
+  options: { fallbackName?: string; path?: number[] } = {},
 ): Promise<SceneNode | null> {
   const fallbackName = options.fallbackName && options.fallbackName.trim().length ? options.fallbackName.trim() : 'Imported Node'
+  const currentPath = options.path ? [...options.path] : []
 
   const childrenNodes: SceneNode[] = []
-  for (const child of object.children) {
-    const convertedChild = await convertObjectToSceneNode(child, context, { fallbackName })
+  for (let index = 0; index < object.children.length; index += 1) {
+    const child = object.children[index]!
+    const convertedChild = await convertObjectToSceneNode(child, context, {
+      fallbackName,
+      path: [...currentPath, index],
+    })
     if (convertedChild) {
       childrenNodes.push(convertedChild)
     }
@@ -1192,6 +1198,15 @@ async function convertObjectToSceneNode(
       rotation,
       scale,
       visible,
+    }
+
+    if (context.modelAssetId) {
+      const pathCopy = currentPath.slice()
+      node.sourceAssetId = context.modelAssetId
+      node.importMetadata = {
+        assetId: context.modelAssetId,
+        objectPath: pathCopy,
+      }
     }
 
     if (!failedMaterial && nodeMaterials.length) {
@@ -1916,6 +1931,12 @@ function cloneNode(node: SceneNode): SceneNode {
     scale: cloneVector(node.scale),
     children: node.children ? node.children.map(cloneNode) : undefined,
     dynamicMesh: cloneDynamicMeshDefinition(node.dynamicMesh),
+    importMetadata: node.importMetadata
+      ? {
+          assetId: node.importMetadata.assetId,
+          objectPath: [...node.importMetadata.objectPath],
+        }
+      : undefined,
   }
 }
 
@@ -4996,7 +5017,7 @@ export const useSceneStore = defineStore('scene', {
       return node
     },
 
-    async importExternalSceneObject(object: Object3D, options: { sourceName?: string } = {}): Promise<string[]> {
+    async importExternalSceneObject(object: Object3D, options: { sourceName?: string; sourceFile?: File } = {}): Promise<string[]> {
       if (!object) {
         return []
       }
@@ -5004,6 +5025,41 @@ export const useSceneStore = defineStore('scene', {
       object.updateMatrixWorld(true)
 
       const assetCache = useAssetCacheStore()
+      const fallbackName = options.sourceName && options.sourceName.trim().length
+        ? options.sourceName.trim()
+        : object.name?.trim() ?? 'Imported Scene'
+
+      let modelAssetId: string | null = null
+
+      if (options.sourceFile) {
+        const file = options.sourceFile
+        const assetId = generateUuid()
+        await assetCache.storeAssetBlob(assetId, {
+          blob: file,
+          mimeType: file.type ?? 'application/octet-stream',
+          filename: file.name ?? `${fallbackName}.glb`,
+        })
+
+        const asset: ProjectAsset = {
+          id: assetId,
+          name: fallbackName,
+          type: 'model',
+          downloadUrl: '',
+          previewColor: '#ffffff',
+          thumbnail: null,
+          gleaned: true,
+        }
+
+        const registered = this.registerAsset(asset, {
+          categoryId: determineAssetCategoryId(asset),
+          commitOptions: { updateNodes: false, updateCamera: false },
+        })
+
+        modelAssetId = registered.id
+        assetCache.registerUsage(modelAssetId)
+        assetCache.touch(modelAssetId)
+      }
+
       const context: ExternalSceneImportContext = {
         assetCache,
         registerAsset: (asset, registerOptions) => this.registerAsset(asset, {
@@ -5013,20 +5069,18 @@ export const useSceneStore = defineStore('scene', {
         converted: new Set<Object3D>(),
         textureRefs: new Map<Texture, SceneMaterialTextureRef>(),
         textureSequence: 0,
+        modelAssetId,
       }
 
-      const fallbackName = options.sourceName && options.sourceName.trim().length
-        ? options.sourceName.trim()
-        : object.name?.trim() ?? 'Imported Scene'
-
-      const rootNode = await convertObjectToSceneNode(object, context, { fallbackName })
+      const rootNode = await convertObjectToSceneNode(object, context, { fallbackName, path: [] })
       const nodes: SceneNode[] = []
 
       if (rootNode) {
         nodes.push(rootNode)
       } else {
-        for (const child of object.children) {
-          const convertedChild = await convertObjectToSceneNode(child, context, { fallbackName })
+        for (let index = 0; index < object.children.length; index += 1) {
+          const child = object.children[index]!
+          const convertedChild = await convertObjectToSceneNode(child, context, { fallbackName, path: [index] })
           if (convertedChild) {
             nodes.push(convertedChild)
           }
@@ -5040,7 +5094,7 @@ export const useSceneStore = defineStore('scene', {
       this.captureHistorySnapshot()
       this.nodes = [...this.nodes, ...nodes]
 
-  const importedIds = collectNodeIdList(nodes)
+      const importedIds = collectNodeIdList(nodes)
       if (importedIds.length) {
         this.setSelection(importedIds, { commit: false, primaryId: importedIds[0] ?? null })
       }

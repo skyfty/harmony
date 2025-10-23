@@ -580,6 +580,21 @@ export const useAssetCacheStore = defineStore('assetCache', {
         if (node.sourceAssetId) {
           counts.set(node.sourceAssetId, (counts.get(node.sourceAssetId) ?? 0) + 1)
         }
+        if (node.materials?.length) {
+          node.materials.forEach((material) => {
+            const textures = material.textures ?? null
+            if (!textures) {
+              return
+            }
+            Object.values(textures).forEach((ref) => {
+              const assetId = ref?.assetId
+              if (!assetId) {
+                return
+              }
+              counts.set(assetId, (counts.get(assetId) ?? 0) + 1)
+            })
+          })
+        }
         node.children?.forEach(visit)
       }
       nodes.forEach(visit)
