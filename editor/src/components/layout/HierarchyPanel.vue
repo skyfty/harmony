@@ -3,6 +3,8 @@ import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore, type HierarchyDropPosition } from '@/stores/sceneStore'
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
+import type { ProjectAsset } from '@/types/project-asset'
+import type { SceneNode } from '@/types/scene'
 import { getNodeIcon } from '@/types/node-icons'
 import AddNodeMenu from '../common/AddNodeMenu.vue'
 
@@ -14,7 +16,9 @@ const emit = defineEmits<{
 }>()
 
 const sceneStore = useSceneStore()
-const { hierarchyItems, selectedNodeId, selectedNodeIds } = storeToRefs(sceneStore)
+const { hierarchyItems, selectedNodeId, selectedNodeIds, draggingAssetId } = storeToRefs(sceneStore)
+
+const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 
 const opened = ref<string[]>([])
 const selectionAnchorId = ref<string | null>(null)
@@ -27,6 +31,7 @@ const dragState = ref<{ sourceId: string | null; targetId: string | null; positi
   },
 )
 const panelRef = ref<HTMLDivElement | null>(null)
+const materialDropTargetId = ref<string | null>(null)
 
 const floating = computed(() => props.floating ?? false)
 const placementIcon = computed(() => (floating.value ? 'mdi-dock-left' : 'mdi-arrow-expand'))
@@ -50,6 +55,12 @@ watch(
   },
   { immediate: true },
 )
+
+watch(draggingAssetId, (value) => {
+  if (!value) {
+    materialDropTargetId.value = null
+  }
+})
 
 const flattenedHierarchyItems = computed(() => flattenHierarchyItems(hierarchyItems.value))
 const allNodeIds = computed(() => flattenedHierarchyItems.value.map((item) => item.id))
@@ -124,6 +135,99 @@ function flattenHierarchyItems(items: HierarchyTreeItem[]): HierarchyTreeItem[] 
     }
   }
   return result
+}
+
+type MaterialAsset = ProjectAsset & { type: 'material' }
+
+function findSceneNodeById(nodes: SceneNode[] | undefined, id: string): SceneNode | null {
+  if (!Array.isArray(nodes) || !id) {
+    return null
+  }
+  for (const node of nodes) {
+    if (!node) {
+      continue
+    }
+    if (node.id === id) {
+      return node
+    }
+    const child = findSceneNodeById(node.children, id)
+    if (child) {
+      return child
+    }
+  }
+  return null
+}
+
+function nodeSupportsMaterials(node: SceneNode | null | undefined): boolean {
+  if (!node) {
+    return false
+  }
+  const type = node.nodeType ?? 'mesh'
+  return type !== 'light' && type !== 'group'
+}
+
+function supportsMaterialDrop(targetId: string): boolean {
+  if (!targetId) {
+    return false
+  }
+  const item = flattenedHierarchyItems.value.find((entry) => entry.id === targetId) ?? null
+  if (item?.nodeType) {
+    return item.nodeType !== 'light' && item.nodeType !== 'group'
+  }
+  const node = findSceneNodeById(sceneStore.nodes, targetId)
+  return nodeSupportsMaterials(node)
+}
+
+function parseAssetDragPayload(event: DragEvent): { assetId: string } | null {
+  if (event.dataTransfer) {
+    const raw = event.dataTransfer.getData(ASSET_DRAG_MIME)
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw)
+        if (parsed && typeof parsed.assetId === 'string' && parsed.assetId.length) {
+          return { assetId: parsed.assetId }
+        }
+      } catch (error) {
+        console.warn('Failed to parse asset drag payload', error)
+      }
+    }
+  }
+  const draggingId = draggingAssetId.value
+  if (draggingId) {
+    return { assetId: draggingId }
+  }
+  return null
+}
+
+function resolveMaterialAssetFromEvent(event: DragEvent): MaterialAsset | null {
+  const payload = parseAssetDragPayload(event)
+  if (!payload) {
+    return null
+  }
+  const asset = sceneStore.getAsset(payload.assetId)
+  if (!asset || asset.type !== 'material') {
+    return null
+  }
+  return asset as MaterialAsset
+}
+
+function applyMaterialAssetToNode(nodeId: string, asset: MaterialAsset): boolean {
+  if (!supportsMaterialDrop(nodeId)) {
+    return false
+  }
+  const node = findSceneNodeById(sceneStore.nodes, nodeId)
+  if (!node || !nodeSupportsMaterials(node)) {
+    return false
+  }
+  const materials = Array.isArray(node.materials) ? node.materials : []
+  if (materials.length > 0) {
+    const primary = materials[0]
+    if (!primary) {
+      return false
+    }
+    return sceneStore.assignNodeMaterial(nodeId, primary.id, asset.id)
+  }
+  return Boolean(sceneStore.addNodeMaterial(nodeId, { materialId: asset.id }))
 }
 
 function isItemSelected(id: string) {
@@ -234,6 +338,7 @@ function handleNodeClick(event: MouseEvent, nodeId: string) {
 
 function resetDragState() {
   dragState.value = { sourceId: null, targetId: null, position: null }
+  materialDropTargetId.value = null
 }
 
 function resolveDropPosition(event: DragEvent): HierarchyDropPosition {
@@ -249,11 +354,17 @@ function resolveDropPosition(event: DragEvent): HierarchyDropPosition {
 }
 
 function getNodeDropClasses(id: string) {
-  if (dragState.value.targetId !== id) return {}
+  const classes: Record<string, boolean> = {
+    'material-drop-target': materialDropTargetId.value === id,
+  }
+  if (dragState.value.targetId !== id) {
+    return classes
+  }
   if (!dragState.value.position) {
-    return { 'drop-disabled': true }
+    return { ...classes, 'drop-disabled': true }
   }
   return {
+    ...classes,
     'drop-before': dragState.value.position === 'before',
     'drop-after': dragState.value.position === 'after',
     'drop-inside': dragState.value.position === 'inside',
@@ -261,6 +372,7 @@ function getNodeDropClasses(id: string) {
 }
 
 function handleDragStart(event: DragEvent, nodeId: string) {
+  materialDropTargetId.value = null
   dragState.value = { sourceId: nodeId, targetId: null, position: null }
   event.dataTransfer?.setData('text/plain', nodeId)
   if (event.dataTransfer) {
@@ -273,6 +385,24 @@ function handleDragEnd() {
 }
 
 function handleDragOver(event: DragEvent, targetId: string) {
+  const materialAsset = resolveMaterialAssetFromEvent(event)
+  if (materialAsset) {
+    if (!supportsMaterialDrop(targetId)) {
+      materialDropTargetId.value = null
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = 'none'
+      }
+      return
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy'
+    }
+    materialDropTargetId.value = targetId
+    return
+  }
+  materialDropTargetId.value = null
   const sourceId = dragState.value.sourceId
   if (!sourceId || targetId === sourceId) return
 
@@ -297,16 +427,38 @@ function handleDragOver(event: DragEvent, targetId: string) {
 }
 
 function handleDragLeave(event: DragEvent, targetId: string) {
-  if (!dragState.value.sourceId) return
   const related = event.relatedTarget as Node | null
   const current = event.currentTarget as HTMLElement | null
   if (current && related && current.contains(related)) return
+  if (materialDropTargetId.value === targetId) {
+    materialDropTargetId.value = null
+  }
+  if (!dragState.value.sourceId) return
   if (dragState.value.targetId === targetId) {
     dragState.value = { ...dragState.value, targetId: null, position: null }
   }
 }
 
 function handleDrop(event: DragEvent, targetId: string) {
+  const materialAsset = resolveMaterialAssetFromEvent(event)
+  if (materialAsset) {
+    materialDropTargetId.value = null
+    if (!supportsMaterialDrop(targetId)) {
+      event.preventDefault()
+      event.stopPropagation()
+      resetDragState()
+      return
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    const applied = applyMaterialAssetToNode(targetId, materialAsset)
+    if (!applied) {
+      console.warn('Failed to apply material asset to node', materialAsset.id, targetId)
+    }
+    resetDragState()
+    return
+  }
+  materialDropTargetId.value = null
   const { sourceId, position } = dragState.value
   if (!sourceId || !position) {
     resetDragState()
@@ -327,6 +479,13 @@ function handleNodeDoubleClick(nodeId: string) {
 }
 
 function handleTreeDragOver(event: DragEvent) {
+  if (resolveMaterialAssetFromEvent(event)) {
+    materialDropTargetId.value = null
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'none'
+    }
+    return
+  }
   const { sourceId } = dragState.value
   if (!sourceId) return
   const container = event.currentTarget as HTMLElement | null
@@ -342,6 +501,13 @@ function handleTreeDragOver(event: DragEvent) {
 }
 
 function handleTreeDrop(event: DragEvent) {
+  if (resolveMaterialAssetFromEvent(event)) {
+    materialDropTargetId.value = null
+    event.preventDefault()
+    event.stopPropagation()
+    resetDragState()
+    return
+  }
   const { sourceId, position } = dragState.value
   if (!sourceId || !position) {
     event.preventDefault()
@@ -357,6 +523,9 @@ function handleTreeDrop(event: DragEvent) {
 }
 
 function handleTreeDragLeave(event: DragEvent) {
+  if (materialDropTargetId.value) {
+    materialDropTargetId.value = null
+  }
   const { sourceId } = dragState.value
   if (!sourceId) return
   const container = event.currentTarget as HTMLElement | null
@@ -690,6 +859,11 @@ function handleTreeDragLeave(event: DragEvent) {
 
 .node-label.drop-inside {
   background: rgba(77, 208, 225, 0.12);
+}
+
+.node-label.material-drop-target {
+  background: rgba(90, 148, 255, 0.18);
+  color: #fafafa;
 }
 
 .node-label.drop-before::before,

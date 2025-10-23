@@ -70,10 +70,12 @@ function applyDimensions() {
           label="Height (m)"
           type="number"
           density="compact"
-          variant="outlined"
+          variant="underlined"
+          class="slider-input"
           step="0.1"
           min="0.5"
           @blur="applyDimensions"
+                inputmode="decimal"
           @keydown.enter.prevent="applyDimensions"
         />
         <v-text-field
@@ -81,18 +83,22 @@ function applyDimensions() {
           label="Width (m)"
           type="number"
           density="compact"
-          variant="outlined"
+          variant="underlined"
           step="0.05"
           min="0.1"
+          class="slider-input"
           @blur="applyDimensions"
+                inputmode="decimal"
           @keydown.enter.prevent="applyDimensions"
         />
         <v-text-field
           v-model.number="localThickness"
           label="Thickness (m)"
           type="number"
+          class="slider-input"
           density="compact"
-          variant="outlined"
+                inputmode="decimal"
+          variant="underlined"
           step="0.05"
           min="0.05"
           @blur="applyDimensions"
@@ -106,13 +112,21 @@ function applyDimensions() {
 <style scoped>
 .wall-field-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 0.5rem;
+  gap: 0.2rem;
+  margin: 0px 5px;
 }
 
 .hint-text {
   display: block;
   margin-top: 0.25rem;
   color: rgba(220, 225, 232, 0.65);
+}
+
+.v-field-label {
+  font-size: 0.82rem;
+}
+.slider-input :deep(.v-field-label) {
+  font-size: 0.82rem;
+  font-weight: 600;
 }
 </style>

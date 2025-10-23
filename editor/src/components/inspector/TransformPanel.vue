@@ -69,6 +69,7 @@ function createScaleVector(): VectorDisplay {
   <v-expansion-panel value="transform">
     <v-expansion-panel-title>Transform</v-expansion-panel-title>
     <v-expansion-panel-text>
+      <div class="transform-field-grid">
       <div class="section-block">
         <InspectorVectorControls
           label="Position"
@@ -94,11 +95,17 @@ function createScaleVector(): VectorDisplay {
           :readonly="true"
         />
       </div>
+      </div>
     </v-expansion-panel-text>
   </v-expansion-panel>
 </template>
 
 <style scoped>
+.transform-field-grid {
+  display: grid;
+  margin: 0px 5px;
+}
+
 .section-block {
   margin-bottom: 0.4rem;
 }

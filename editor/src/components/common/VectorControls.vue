@@ -58,7 +58,7 @@ function formatValue(value: VectorValue): string {
   grid-template-columns: 1fr repeat(3, 1fr);
   align-items: center;
   gap: 3px;
-  padding: 0.5rem 1rem;
+  padding: 0.5rem 0rem;
 }
 
 .vector-label {
