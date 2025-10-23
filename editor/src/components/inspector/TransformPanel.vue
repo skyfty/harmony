@@ -66,7 +66,7 @@ function createScaleVector(): VectorDisplay {
 </script>
 
 <template>
-  <v-expansion-panel value="transform">
+  <v-expansion-panel value="transform" >
     <v-expansion-panel-title>Transform</v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="transform-field-grid">

@@ -4697,6 +4697,20 @@ function resolveMaterialDropTarget(event: DragEvent): { nodeId: string; object: 
   return null
 }
 
+function ensureEditablePrimaryMaterial(nodeId: string, material: SceneNodeMaterial | null): string | null {
+  if (!material) {
+    return null
+  }
+  if (!material.materialId) {
+    return material.id
+  }
+  const detached = sceneStore.assignNodeMaterial(nodeId, material.id, null)
+  if (!detached) {
+    return null
+  }
+  return material.id
+}
+
 function applyMaterialAssetToNode(nodeId: string, materialAssetId: string): boolean {
   const sceneNode = findSceneNode(sceneStore.nodes, nodeId)
   if (!nodeSupportsMaterials(sceneNode)) {
@@ -4704,13 +4718,71 @@ function applyMaterialAssetToNode(nodeId: string, materialAssetId: string): bool
   }
   const materials = Array.isArray(sceneNode?.materials) ? sceneNode.materials : []
   if (materials.length > 0) {
-    const primary = materials[0]
-    if (!primary) {
+  const primary = materials[0] ?? null
+    const editableId = ensureEditablePrimaryMaterial(nodeId, primary)
+    if (!editableId) {
       return false
     }
-    return sceneStore.assignNodeMaterial(nodeId, primary.id, materialAssetId)
+    return sceneStore.assignNodeMaterial(nodeId, editableId, materialAssetId)
   }
   return Boolean(sceneStore.addNodeMaterial(nodeId, { materialId: materialAssetId }))
+}
+
+function ensurePrimaryMaterialId(nodeId: string): string | null {
+  const sceneNode = findSceneNode(sceneStore.nodes, nodeId)
+  if (!nodeSupportsMaterials(sceneNode)) {
+    return null
+  }
+  const materials = Array.isArray(sceneNode?.materials) ? sceneNode.materials : []
+  let primary = materials.length > 0 ? materials[0] : null
+  if (!primary) {
+    const created = sceneStore.addNodeMaterial(nodeId)
+    if (!created) {
+      return null
+    }
+    primary = created
+  }
+  if (!primary) {
+    return null
+  }
+  return ensureEditablePrimaryMaterial(nodeId, primary)
+}
+
+function applyTextureAssetToNode(
+  nodeId: string,
+  assetId: string,
+  assetName?: string | null,
+  slot: SceneMaterialTextureSlot = 'albedo',
+): boolean {
+  const materialId = ensurePrimaryMaterialId(nodeId)
+  if (!materialId) {
+    return false
+  }
+
+  const ref: SceneMaterialTextureRef = assetName?.length
+    ? { assetId, name: assetName }
+    : { assetId }
+
+  const texturesUpdate: Partial<Record<SceneMaterialTextureSlot, SceneMaterialTextureRef | null>> = {
+    [slot]: ref,
+  }
+
+  sceneStore.updateNodeMaterialProps(nodeId, materialId, { textures: texturesUpdate })
+
+  const updatedNode = findSceneNode(sceneStore.nodes, nodeId)
+  const targetMaterial = updatedNode?.materials?.find((entry) => entry.id === materialId) ?? null
+  if (!targetMaterial) {
+    return false
+  }
+  if (targetMaterial.textures?.[slot]?.assetId !== assetId) {
+    return false
+  }
+
+  const targetObject = objectMap.get(nodeId)
+  if (targetObject && updatedNode?.materials) {
+    applyMaterialOverrides(targetObject, updatedNode.materials)
+  }
+  return true
 }
 
 type DragAssetInfo = { assetId: string; asset: ProjectAsset | null }
@@ -4726,6 +4798,13 @@ function resolveDragAsset(event: DragEvent): DragAssetInfo | null {
   }
 }
 
+function isTextureAsset(asset: ProjectAsset | null | undefined): boolean {
+  if (!asset) {
+    return false
+  }
+  return asset.type === 'texture' || asset.type === 'image'
+}
+
 function handleViewportDragEnter(event: DragEvent) {
   if (!isAssetDrag(event)) return
   event.preventDefault()
@@ -4736,7 +4815,7 @@ function handleViewportDragOver(event: DragEvent) {
   if (!isAssetDrag(event)) return
   const info = resolveDragAsset(event)
   const asset = info?.asset ?? null
-  if (asset?.type === 'material') {
+  if (asset && (asset.type === 'material' || isTextureAsset(asset))) {
     event.preventDefault()
     isDragHovering.value = true
     const target = resolveMaterialDropTarget(event)
@@ -4794,7 +4873,10 @@ async function handleViewportDrop(event: DragEvent) {
     return
   }
 
-  if (info.asset?.type === 'material') {
+  const assetType = info.asset?.type ?? sceneStore.getAsset(info.assetId)?.type ?? null
+  const isTexture = assetType === 'texture' || assetType === 'image'
+
+  if (assetType === 'material') {
     const target = resolveMaterialDropTarget(event)
     if (!target) {
       console.warn('No compatible mesh found for material drop', info.assetId)
@@ -4806,6 +4888,27 @@ async function handleViewportDrop(event: DragEvent) {
     const applied = applyMaterialAssetToNode(target.nodeId, info.assetId)
     if (!applied) {
       console.warn('Failed to apply material asset to node', info.assetId, target.nodeId)
+    } else {
+      scheduleThumbnailCapture()
+    }
+    sceneStore.setDraggingAssetObject(null)
+    updateGridHighlight(null)
+    restoreGridHighlightForSelection()
+    return
+  }
+
+  if (isTexture) {
+    const target = resolveMaterialDropTarget(event)
+    if (!target) {
+      console.warn('No compatible mesh found for texture drop', info.assetId)
+      sceneStore.setDraggingAssetObject(null)
+      updateGridHighlight(null)
+      restoreGridHighlightForSelection()
+      return
+    }
+    const applied = applyTextureAssetToNode(target.nodeId, info.assetId, info.asset?.name)
+    if (!applied) {
+      console.warn('Failed to apply texture asset to node', info.assetId, target.nodeId)
     } else {
       scheduleThumbnailCapture()
     }

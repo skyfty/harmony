@@ -77,6 +77,7 @@
         location="bottom"
         origin="top right"
         offset="8"
+        transition="null"
         :close-on-content-click="false"
       >
         <template #activator="{ props: menuActivatorProps }">
@@ -100,16 +101,18 @@
                 :model-value="skyboxSettings.presetId"
                 density="compact"
                 hide-details
-                variant="outlined"
+                transition="null"
+                variant="underlined"
                 class="skybox-select"
                 @update:modelValue="handlePresetSelect"
               />
-              <v-switch
+              <v-checkbox
                 class="skybox-switch"
                 inset
                 density="compact"
                 hide-details
                 color="primary"
+                size="small"
                 :model-value="shadowsEnabled"
                 label="Enable Shadows"
                 @update:modelValue="handleShadowToggle"
