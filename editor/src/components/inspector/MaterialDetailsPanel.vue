@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch, watchEffect } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -120,6 +120,10 @@ const emissiveColorMenuOpen = ref(false)
 const activeMaterialId = ref<string | null>(null)
 const importInputRef = ref<HTMLInputElement | null>(null)
 const draggingSlot = ref<SceneMaterialTextureSlot | null>(null)
+const hasPendingChanges = ref(false)
+const originalSharedMaterialId = ref<string | null>(null)
+const saveSharedDialogVisible = ref(false)
+const lastSyncedMaterialId = ref<string | null>(null)
 
 const formTextures = reactive<TextureMapState>(createEmptyTextureMap())
 const materialForm = reactive<MaterialFormState>({
@@ -139,12 +143,6 @@ const materialForm = reactive<MaterialFormState>({
   textures: formTextures,
 })
 
-const selectedMaterialEntry = computed(() =>
-  activeMaterialId.value ? materials.value.find((item) => item.id === activeMaterialId.value) ?? null : null,
-)
-
-const isShared = computed(() => !!selectedMaterialEntry.value)
-
 const activeMaterialIndex = computed(() => {
   const entry = activeNodeMaterial.value
   if (!entry) {
@@ -157,8 +155,8 @@ const selectedMaterialType = ref<SceneMaterialType | null>(null)
 const canSaveMaterial = computed(() =>
   !!selectedNodeId.value &&
   !!activeNodeMaterial.value &&
-  !isShared.value &&
-  !props.disabled,
+  !props.disabled &&
+  hasPendingChanges.value,
 )
 
 const currentMaterialTitle = computed(() => {
@@ -197,33 +195,95 @@ watch(
     if (!visible) {
       baseColorMenuOpen.value = false
       emissiveColorMenuOpen.value = false
+      saveSharedDialogVisible.value = false
     }
   },
 )
 
-watchEffect(() => {
-  const entry = activeNodeMaterial.value
-  if (!entry) {
-    baseColorMenuOpen.value = false
-    emissiveColorMenuOpen.value = false
-    activeMaterialId.value = null
-    applyPropsToForm(DEFAULT_PROPS, { name: '', description: '' })
-    selectedMaterialType.value = null
-    return
-  }
-  const shared = entry.materialId ? materials.value.find((material) => material.id === entry.materialId) ?? null : null
-  activeMaterialId.value = shared?.id ?? null
-  const metadata = shared
-    ? { name: shared.name, description: shared.description ?? '' }
-    : { name: entry.name ?? '', description: '' }
-  applyPropsToForm(shared ?? entry, metadata)
-  // set selectedMaterialType from shared or node entry
-  const type = shared?.type ?? entry.type ?? null
-  selectedMaterialType.value = normalizeSceneMaterialType(type)
-})
+watch(
+  () => activeNodeMaterial.value,
+  (entry) => {
+    if (!entry) {
+      baseColorMenuOpen.value = false
+      emissiveColorMenuOpen.value = false
+      activeMaterialId.value = null
+      originalSharedMaterialId.value = null
+      lastSyncedMaterialId.value = null
+      selectedMaterialType.value = null
+      resetDirtyState()
+      saveSharedDialogVisible.value = false
+      applyPropsToForm(DEFAULT_PROPS, { name: '', description: '' })
+      return
+    }
+    const isNewSelection = entry.id !== lastSyncedMaterialId.value
+    const shared = entry.materialId ? materials.value.find((material) => material.id === entry.materialId) ?? null : null
+    activeMaterialId.value = shared?.id ?? null
+    const metadata = shared
+      ? { name: shared.name, description: shared.description ?? '' }
+      : { name: entry.name ?? '', description: '' }
+    applyPropsToForm(shared ?? entry, metadata)
+    const type = shared?.type ?? entry.type ?? null
+    selectedMaterialType.value = normalizeSceneMaterialType(type)
+    if (isNewSelection) {
+      originalSharedMaterialId.value = shared?.id ?? null
+      resetDirtyState()
+      saveSharedDialogVisible.value = false
+    }
+    lastSyncedMaterialId.value = entry.id
+  },
+  { immediate: true },
+)
 
 function handleClose() {
   emit('close')
+}
+
+function resetDirtyState() {
+  hasPendingChanges.value = false
+}
+
+function markMaterialDirty() {
+  hasPendingChanges.value = true
+}
+
+function ensureEditableMaterial(): boolean {
+  if (!activeNodeMaterial.value || !selectedNodeId.value) {
+    return false
+  }
+  if (!activeNodeMaterial.value.materialId) {
+    return true
+  }
+  if (!originalSharedMaterialId.value) {
+    originalSharedMaterialId.value = activeNodeMaterial.value.materialId
+  }
+  const detached = sceneStore.assignNodeMaterial(selectedNodeId.value, activeNodeMaterial.value.id, null)
+  return detached
+}
+
+function buildMaterialPropsFromForm(): SceneMaterialProps {
+  const textures = createEmptyTextureMap()
+  TEXTURE_SLOTS.forEach((slot) => {
+    const ref = formTextures[slot]
+    textures[slot] = ref ? { assetId: ref.assetId, name: ref.name } : null
+  })
+  const toNumber = (value: unknown, fallback: number): number => {
+    const numeric = typeof value === 'number' ? value : Number(value)
+    return Number.isFinite(numeric) ? numeric : fallback
+  }
+  return {
+    color: materialForm.color,
+    transparent: materialForm.transparent,
+    opacity: toNumber(materialForm.opacity, DEFAULT_PROPS.opacity),
+    side: materialForm.side,
+    wireframe: materialForm.wireframe,
+    metalness: toNumber(materialForm.metalness, DEFAULT_PROPS.metalness),
+    roughness: toNumber(materialForm.roughness, DEFAULT_PROPS.roughness),
+    emissive: materialForm.emissive,
+    emissiveIntensity: toNumber(materialForm.emissiveIntensity, DEFAULT_PROPS.emissiveIntensity),
+    aoStrength: toNumber(materialForm.aoStrength, DEFAULT_PROPS.aoStrength),
+    envMapIntensity: toNumber(materialForm.envMapIntensity, DEFAULT_PROPS.envMapIntensity),
+    textures,
+  }
 }
 
 function clampNumber(value: number, min: number, max: number, fallback: number): number {
@@ -304,25 +364,33 @@ function commitMaterialProps(update: Partial<SceneMaterialProps>) {
   if (!activeNodeMaterial.value || !selectedNodeId.value) {
     return
   }
-  if (isShared.value && selectedMaterialEntry.value) {
-    sceneStore.updateMaterialDefinition(selectedMaterialEntry.value.id, update)
+  if (!ensureEditableMaterial()) {
     return
   }
-  sceneStore.updateNodeMaterialProps(selectedNodeId.value, activeNodeMaterial.value.id, update)
+  const nodeEntry = activeNodeMaterial.value
+  if (!nodeEntry) {
+    return
+  }
+  sceneStore.updateNodeMaterialProps(selectedNodeId.value, nodeEntry.id, update)
+  markMaterialDirty()
 }
 
-function commitMaterialMetadata(update: { name?: string; description?: string }) {
+function commitMaterialMetadata(update: { name?: string }) {
   if (!activeNodeMaterial.value || !selectedNodeId.value) {
     return
   }
-  if (isShared.value && selectedMaterialEntry.value) {
-    sceneStore.updateMaterialDefinition(selectedMaterialEntry.value.id, update)
+  if (!ensureEditableMaterial()) {
+    return
+  }
+  const nodeEntry = activeNodeMaterial.value
+  if (!nodeEntry) {
     return
   }
   if (update.name !== undefined) {
-    sceneStore.updateNodeMaterialMetadata(selectedNodeId.value, activeNodeMaterial.value.id, {
+    sceneStore.updateNodeMaterialMetadata(selectedNodeId.value, nodeEntry.id, {
       name: update.name,
     })
+    markMaterialDirty()
   }
 }
 
@@ -347,6 +415,17 @@ function handleSaveMaterial() {
   if (!canSaveMaterial.value || !selectedNodeId.value || !activeNodeMaterial.value) {
     return
   }
+  if (originalSharedMaterialId.value) {
+    saveSharedDialogVisible.value = true
+    return
+  }
+  saveCurrentMaterialAsShared()
+}
+
+function saveCurrentMaterialAsShared() {
+  if (!selectedNodeId.value || !activeNodeMaterial.value) {
+    return
+  }
   const normalizedName = materialForm.name.trim()
   const normalizedDescription = materialForm.description.trim()
   const result = sceneStore.saveNodeMaterialAsShared(selectedNodeId.value, activeNodeMaterial.value.id, {
@@ -355,7 +434,46 @@ function handleSaveMaterial() {
   })
   if (result) {
     activeMaterialId.value = result.id
+    originalSharedMaterialId.value = result.id
+    resetDirtyState()
   }
+}
+
+function handleConfirmSaveShared() {
+  if (!originalSharedMaterialId.value) {
+    saveSharedDialogVisible.value = false
+    return
+  }
+  const props = buildMaterialPropsFromForm()
+  const normalizedName = materialForm.name.trim()
+  const normalizedDescription = materialForm.description.trim()
+  const updated = sceneStore.updateMaterialDefinition(originalSharedMaterialId.value, {
+    ...props,
+    name: normalizedName.length ? normalizedName : undefined,
+    description: normalizedDescription.length ? normalizedDescription : undefined,
+    type: selectedMaterialType.value ?? undefined,
+  })
+  if (!updated) {
+    saveSharedDialogVisible.value = false
+    return
+  }
+  if (selectedNodeId.value && activeNodeMaterial.value) {
+    sceneStore.assignNodeMaterial(selectedNodeId.value, activeNodeMaterial.value.id, originalSharedMaterialId.value)
+    activeMaterialId.value = originalSharedMaterialId.value
+  }
+  saveSharedDialogVisible.value = false
+  resetDirtyState()
+}
+
+function handleDetachSharedMaterial() {
+  saveSharedDialogVisible.value = false
+  originalSharedMaterialId.value = null
+  activeMaterialId.value = null
+  resetDirtyState()
+}
+
+function handleCancelSharedDialog() {
+  saveSharedDialogVisible.value = false
 }
 
 function handleSideChange(value: SceneMaterialSide) {
@@ -549,22 +667,9 @@ function handleNameChange(value: string) {
   }
   const trimmed = value.trim()
   materialForm.name = trimmed
-  if (isShared.value) {
-    const shared = selectedMaterialEntry.value
-    if (!shared) {
-      return
-    }
-    if (trimmed && trimmed !== shared.name) {
-      commitMaterialMetadata({ name: trimmed })
-    }
-    return
-  }
-  if (!selectedNodeId.value) {
-    return
-  }
   const current = entry.name ?? ''
   if (!trimmed && current) {
-    commitMaterialMetadata({ name: undefined })
+    commitMaterialMetadata({ name: '' })
     return
   }
   if (trimmed && trimmed !== current) {
@@ -655,28 +760,23 @@ function applyImportedMaterialPayload(payload: {
     name: payload.name ?? materialForm.name,
     description: payload.description ?? materialForm.description,
   })
-  if (isShared.value && selectedMaterialEntry.value) {
-    const update: Partial<SceneMaterialProps> & { name?: string; description?: string } = {
-      ...payload.props,
-    }
-    if (payload.name !== undefined) {
-      update.name = payload.name
-    }
-    if (payload.description !== undefined) {
-      update.description = payload.description
-    }
-    sceneStore.updateMaterialDefinition(selectedMaterialEntry.value.id, update)
-    return
-  }
   if (!selectedNodeId.value || !activeNodeMaterial.value) {
     return
   }
-  sceneStore.updateNodeMaterialProps(selectedNodeId.value, activeNodeMaterial.value.id, payload.props)
+  if (!ensureEditableMaterial()) {
+    return
+  }
+  const nodeEntry = activeNodeMaterial.value
+  if (!nodeEntry) {
+    return
+  }
+  sceneStore.updateNodeMaterialProps(selectedNodeId.value, nodeEntry.id, payload.props)
   if (payload.name !== undefined) {
-    sceneStore.updateNodeMaterialMetadata(selectedNodeId.value, activeNodeMaterial.value.id, {
+    sceneStore.updateNodeMaterialMetadata(selectedNodeId.value, nodeEntry.id, {
       name: payload.name,
     })
   }
+  markMaterialDirty()
 }
 
 async function handleImportFileChange(event: Event) {
@@ -913,6 +1013,20 @@ async function handleImportFileChange(event: Event) {
             style="display: none"
             @change="handleImportFileChange"
           />
+          <v-dialog v-model="saveSharedDialogVisible" max-width="420">
+            <v-card>
+              <v-card-title class="text-h6">更新共享材质</v-card-title>
+              <v-card-text>
+                选择 "更新共享" 将覆盖共享材质并同步所有引用对象；选择 "分离" 则仅保留当前对象的独立材质。
+              </v-card-text>
+              <v-card-actions>
+                <v-btn variant="text" @click="handleCancelSharedDialog">取消</v-btn>
+                <v-spacer />
+                <v-btn variant="text" @click="handleDetachSharedMaterial">分离</v-btn>
+                <v-btn color="primary" variant="tonal" @click="handleConfirmSaveShared">更新共享</v-btn>
+              </v-card-actions>
+            </v-card>
+          </v-dialog>
           </div>
         </div>
       </div>
