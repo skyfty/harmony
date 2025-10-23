@@ -75,11 +75,13 @@ const deleteDialogMessage = computed(() => {
 const materialListEntries = computed(() =>
   nodeMaterials.value.map((entry, index) => {
     const shared = entry.materialId ? materials.value.find((item) => item.id === entry.materialId) ?? null : null
+    const color = shared ? shared.color : entry.color
     return {
       id: entry.id,
       title: shared?.name ?? entry.name ?? `材质 ${index + 1}`,
       subtitle: shared ? '共享材质' : '本地材质',
       shared: Boolean(shared),
+      color: color ?? '#ffffff',
       index,
     }
   }),
@@ -324,6 +326,9 @@ async function handleConfirmDeleteSlot() {
               @dragleave="handleSlotDragLeave(entry.id, $event)"
               @drop="handleSlotDrop(entry.id, $event)"
             >
+              <template #prepend>
+                <div class="material-sphere" :style="{ backgroundColor: entry.color }"></div>
+              </template>
               <v-list-item-title>{{ entry.title }}</v-list-item-title>
             </v-list-item>
           </v-list>
@@ -397,7 +402,7 @@ async function handleConfirmDeleteSlot() {
 
 .material-list :deep(.v-list-item.is-drag-target) {
   border: 1px dashed rgba(90, 148, 255, 0.6);
-  background: rgba(90, 148, 255, 0.18);
+  background: rgba(252, 10, 131, 0.18);
 }
 
 .placeholder-title {
@@ -428,5 +433,27 @@ async function handleConfirmDeleteSlot() {
 .dialog-actions {
   display: flex;
   justify-content: flex-end;
+}
+
+.material-sphere {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  margin-right: 8px;
+  box-shadow: 
+    inset -3px -3px 6px rgba(0, 0, 0, 0.3),
+    inset 3px 3px 6px rgba(255, 255, 255, 0.3);
+  position: relative;
+}
+
+.material-sphere::before {
+  content: '';
+  position: absolute;
+  top: 15%;
+  left: 25%;
+  width: 35%;
+  height: 35%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.5), transparent);
 }
 </style>
