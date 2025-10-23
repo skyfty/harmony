@@ -3,12 +3,14 @@ import { computed, reactive, ref, watch, watchEffect } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import type {
-  SceneMaterialProps,
-  SceneMaterialSide,
-  SceneMaterialTextureRef,
-  SceneMaterialTextureSlot,
-  SceneMaterialType,
+import {
+  MATERIAL_CLASS_NAMES,
+  normalizeSceneMaterialType,
+  type SceneMaterialProps,
+  type SceneMaterialSide,
+  type SceneMaterialTextureRef,
+  type SceneMaterialTextureSlot,
+  type SceneMaterialType,
 } from '@/types/material'
 import type { ProjectAsset } from '@/types/project-asset'
 import * as THREE from 'three'
@@ -53,26 +55,17 @@ const TEXTURE_LABELS: Record<SceneMaterialTextureSlot, string> = {
   ao: 'Ambient Occlusion',
   emissive: 'Emissive',
 }
-const materialClasses: Record<string, any> = {
-  MeshBasicMaterial: THREE.MeshBasicMaterial,
-  MeshNormalMaterial: THREE.MeshNormalMaterial,
-  MeshLambertMaterial: THREE.MeshLambertMaterial,
-  MeshMatcapMaterial: (THREE as any).MeshMatcapMaterial ?? THREE.MeshStandardMaterial,
-  MeshPhongMaterial: THREE.MeshPhongMaterial,
-  MeshToonMaterial: THREE.MeshToonMaterial,
-  MeshStandardMaterial: THREE.MeshStandardMaterial,
-  MeshPhysicalMaterial: THREE.MeshPhysicalMaterial,
-}
+const materialClasses: Record<SceneMaterialType, any> = MATERIAL_CLASS_NAMES.reduce((map, className) => {
+  if (className === 'MeshMatcapMaterial') {
+    map[className] = (THREE as Record<string, any>).MeshMatcapMaterial ?? THREE.MeshStandardMaterial
+    return map
+  }
+  const candidate = (THREE as Record<string, any>)[className]
+  map[className] = typeof candidate === 'function' ? candidate : THREE.MeshStandardMaterial
+  return map
+}, {} as Record<SceneMaterialType, any>)
 
 const MATERIAL_CLASS_OPTIONS = Object.keys(materialClasses) as SceneMaterialType[]
-
-function resolveSceneMaterialTypeFromString(value: string | null | undefined): SceneMaterialType {
-  if (!value) return 'MeshStandardMaterial'
-  if (MATERIAL_CLASS_OPTIONS.includes(value as SceneMaterialType)) return value as SceneMaterialType
-  // legacy value
-  if (value === 'mesh-standard') return 'MeshStandardMaterial'
-  return 'MeshStandardMaterial'
-}
 const SIDE_OPTIONS: Array<{ value: SceneMaterialSide; label: string }> = [
   { value: 'front', label: 'Front' },
   { value: 'back', label: 'Back' },
@@ -222,7 +215,7 @@ watchEffect(() => {
   applyPropsToForm(shared ?? entry, metadata)
   // set selectedMaterialType from shared or node entry
   const type = shared?.type ?? entry.type ?? null
-  selectedMaterialType.value = resolveSceneMaterialTypeFromString(type)
+  selectedMaterialType.value = normalizeSceneMaterialType(type)
 })
 
 function handleClose() {
@@ -486,7 +479,7 @@ function handleMaterialClassChange(value: string | null) {
   if (!activeNodeMaterial.value) {
     return
   }
-  const newType = resolveSceneMaterialTypeFromString(value ?? undefined)
+  const newType = normalizeSceneMaterialType(value ?? undefined)
   selectedMaterialType.value = newType
 
   if (isShared.value && selectedMaterialEntry.value) {

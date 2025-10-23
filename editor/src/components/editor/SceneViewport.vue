@@ -8,6 +8,7 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import type { SceneNode, Vector3Like } from '@/types/scene'
 import type { SceneMaterialTextureSlot, SceneMaterialTextureRef, SceneNodeMaterial, SceneMaterialType } from '@/types/material'
+import { MATERIAL_CLASS_NAMES, normalizeSceneMaterialType } from '@/types/material'
 import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
@@ -109,17 +110,6 @@ const MATERIAL_TEXTURE_ASSIGNMENTS: Record<SceneMaterialTextureSlot, { key: Mesh
 const MATERIAL_CLONED_KEY = '__harmonyMaterialCloned'
 const MATERIAL_ORIGINAL_KEY = '__harmonyMaterialOriginal'
 
-const MATERIAL_CLASS_NAMES = [
-  'MeshBasicMaterial',
-  'MeshNormalMaterial',
-  'MeshLambertMaterial',
-  'MeshMatcapMaterial',
-  'MeshPhongMaterial',
-  'MeshToonMaterial',
-  'MeshStandardMaterial',
-  'MeshPhysicalMaterial',
-] as const
-
 const MATERIAL_CLASS_MAP: Record<string, new () => THREE.Material> = MATERIAL_CLASS_NAMES.reduce((map, className) => {
   const candidate = (THREE as unknown as Record<string, unknown>)[className]
   const ctor = typeof candidate === 'function' ? (candidate as new () => THREE.Material) : THREE.MeshStandardMaterial
@@ -127,21 +117,11 @@ const MATERIAL_CLASS_MAP: Record<string, new () => THREE.Material> = MATERIAL_CL
   return map
 }, {} as Record<string, new () => THREE.Material>)
 
-function normalizeSceneMaterialType(type?: SceneMaterialType | null): string | null {
-  if (!type) {
-    return null
-  }
-  if (type === 'mesh-standard') {
-    return 'MeshStandardMaterial'
-  }
-  return type
-}
-
 function ensureMaterialType(
   material: THREE.Material,
   type?: SceneMaterialType | null,
 ): { material: THREE.Material; replaced: boolean; dispose?: () => void } {
-  const desired = normalizeSceneMaterialType(type)
+  const desired = type ? normalizeSceneMaterialType(type) : null
   if (!desired) {
     return { material, replaced: false }
   }

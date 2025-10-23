@@ -30,6 +30,7 @@ import type {
   SceneMaterialType,
   SceneNodeMaterial,
 } from '@/types/material'
+import { DEFAULT_SCENE_MATERIAL_TYPE, normalizeSceneMaterialType } from '@/types/material'
 
 import {
   CUSTOM_SKYBOX_PRESET_ID,
@@ -134,17 +135,7 @@ const DEFAULT_MATERIAL_PROPS: SceneMaterialProps = {
   textures: Object.freeze(createEmptyTextureMap()) as MaterialTextureMap,
 }
 
-const DEFAULT_MATERIAL_TYPE: SceneMaterialType = 'MeshStandardMaterial'
-
-function normalizeSceneMaterialType(type?: SceneMaterialType | null): SceneMaterialType {
-  if (!type) {
-    return DEFAULT_MATERIAL_TYPE
-  }
-  if (type === 'mesh-standard') {
-    return 'MeshStandardMaterial'
-  }
-  return type
-}
+const DEFAULT_MATERIAL_TYPE: SceneMaterialType = DEFAULT_SCENE_MATERIAL_TYPE
 
 function nodeSupportsMaterials(node: SceneNode | null | undefined): boolean {
   if (!node) {
