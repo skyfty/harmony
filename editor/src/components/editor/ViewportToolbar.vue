@@ -29,6 +29,8 @@
         icon="mdi-group"
         density="compact"
         size="small"
+        color="undefined"
+        variant="text"
         class="toolbar-button"
         title="分组选中"
         :disabled="selectionCount < 2"

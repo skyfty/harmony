@@ -4264,7 +4264,7 @@ export const useSceneStore = defineStore('scene', {
         downloadError: null,
       }
 
-      this.nodes = [...this.nodes, node]
+  this.nodes = [node, ...this.nodes]
       this.setSelection([id], { commit: false })
       commitSceneSnapshot(this)
 
@@ -4398,7 +4398,7 @@ export const useSceneStore = defineStore('scene', {
       })
 
       this.captureHistorySnapshot()
-      this.nodes = [...this.nodes, node]
+      this.nodes = [node, ...this.nodes]
       this.setSelection([node.id], { commit: false })
       commitSceneSnapshot(this)
       return node
@@ -4511,7 +4511,7 @@ export const useSceneStore = defineStore('scene', {
       sourceAssetId?: string
       dynamicMesh?: SceneDynamicMesh
     }) {
-      this.captureHistorySnapshot()
+  this.captureHistorySnapshot()
       const id = generateUuid()
       const baseMaterial = findDefaultSceneMaterial(this.materials)
       const initialProps: SceneMaterialProps = baseMaterial ? createMaterialProps(baseMaterial) : createMaterialProps()
@@ -4534,7 +4534,7 @@ export const useSceneStore = defineStore('scene', {
 
       registerRuntimeObject(id, payload.object)
       tagObjectWithNodeId(payload.object, id)
-      this.nodes = [...this.nodes, node]
+      this.nodes = [node, ...this.nodes]
       this.setSelection([id], { commit: false })
       commitSceneSnapshot(this)
 
