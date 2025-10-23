@@ -922,6 +922,7 @@ async function handleExternalSceneFileChange(event: Event) {
 
     const importedIds = await sceneStore.importExternalSceneObject(object, {
       sourceName: computeImportDisplayName(file.name),
+      sourceFile: file,
     })
 
     const summary = importedIds.length

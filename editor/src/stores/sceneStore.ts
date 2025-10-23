@@ -971,6 +971,97 @@ function cloneRuntimeObject(object: Object3D, converted: Set<Object3D>): Object3
   return clone
 }
 
+function prepareRuntimeObjectForNode(object: Object3D) {
+  object.traverse((child) => {
+    const meshChild = child as Object3D & { isMesh?: boolean; isSkinnedMesh?: boolean; isPoints?: boolean; isLine?: boolean }
+    if (meshChild.isMesh || meshChild.isSkinnedMesh || meshChild.isPoints || meshChild.isLine) {
+      const mesh = meshChild as { castShadow?: boolean; receiveShadow?: boolean }
+      mesh.castShadow = true
+      mesh.receiveShadow = true
+    }
+  })
+}
+
+function findObjectByPath(root: Object3D, path: number[]): Object3D | null {
+  let current: Object3D | undefined = root
+  for (const segment of path) {
+    if (!current) {
+      return null
+    }
+    const index = Number.isInteger(segment) ? segment : Number.NaN
+    if (!Number.isFinite(index) || index < 0 || index >= current.children.length) {
+      return null
+    }
+    current = current.children[index]
+  }
+  return current ?? null
+}
+
+function isPathAncestor(base: number[], candidate: number[]): boolean {
+  if (candidate.length <= base.length) {
+    return false
+  }
+  for (let index = 0; index < base.length; index += 1) {
+    if (candidate[index] !== base[index]) {
+      return false
+    }
+  }
+  return true
+}
+
+function pruneCloneByRelativePaths(root: Object3D, relativePaths: number[][]) {
+  if (!relativePaths.length) {
+    return
+  }
+
+  const sorted = [...relativePaths].sort((a, b) => {
+    if (a.length !== b.length) {
+      return b.length - a.length
+    }
+    for (let index = 0; index < a.length; index += 1) {
+      const aValue = a[index] ?? -Infinity
+      const bValue = b[index] ?? -Infinity
+      if (aValue !== bValue) {
+        return bValue - aValue
+      }
+    }
+    return 0
+  })
+
+  sorted.forEach((path) => {
+    if (!path.length) {
+      return
+    }
+    let current: Object3D | undefined = root
+    for (let depth = 0; depth < path.length - 1; depth += 1) {
+      const segmentRaw = path[depth]
+      if (!current || !Number.isInteger(segmentRaw)) {
+        return
+      }
+      const segment = segmentRaw as number
+      if (segment < 0 || segment >= current.children.length) {
+        return
+      }
+      current = current.children[segment]
+    }
+    if (!current) {
+      return
+    }
+    const leafIndexRaw = path[path.length - 1]
+    if (!Number.isInteger(leafIndexRaw)) {
+      return
+    }
+    const leafIndex = leafIndexRaw as number
+    if (leafIndex < 0 || leafIndex >= current.children.length) {
+      return
+    }
+    const child = current.children[leafIndex]
+    if (child) {
+      child.removeFromParent()
+    }
+  })
+}
+
 async function createNodeMaterialFromThree(material: Material | null | undefined, context: ExternalSceneImportContext): Promise<SceneNodeMaterial | null> {
   if (!material) {
     return null
@@ -1218,14 +1309,7 @@ async function convertObjectToSceneNode(
 
     const runtimeObject = cloneRuntimeObject(object, context.converted)
     runtimeObject.name = name
-    runtimeObject.traverse((child) => {
-      const meshChild = child as Object3D & { isMesh?: boolean; isSkinnedMesh?: boolean; isPoints?: boolean; isLine?: boolean }
-      if (meshChild.isMesh || meshChild.isSkinnedMesh || meshChild.isPoints || meshChild.isLine) {
-        const mesh = meshChild as { castShadow?: boolean; receiveShadow?: boolean }
-        mesh.castShadow = true
-        mesh.receiveShadow = true
-      }
-    })
+    prepareRuntimeObjectForNode(runtimeObject)
 
     tagObjectWithNodeId(runtimeObject, node.id)
     registerRuntimeObject(node.id, runtimeObject)
@@ -4222,10 +4306,53 @@ export const useSceneStore = defineStore('scene', {
             ? await getOrLoadModelObject(assetId, () => loadObjectFromFile(file))
             : await loadObjectFromFile(file)
 
-          nodesForAsset.forEach((node, index) => {
-            const object = shouldCacheModelObject || index > 0 ? baseObject.clone(true) : baseObject
-            tagObjectWithNodeId(object, node.id)
-            registerRuntimeObject(node.id, object)
+          const metadataEntries = nodesForAsset
+            .map((node) => {
+              const metadata = node.importMetadata
+              return metadata && Array.isArray(metadata.objectPath)
+                ? { node, path: metadata.objectPath }
+                : null
+            })
+            .filter((entry): entry is { node: SceneNode; path: number[] } => Boolean(entry))
+
+          const descendantCache = new Map<string, number[][]>()
+          metadataEntries.forEach((entry) => {
+            const basePath = entry.path
+            const key = basePath.join('.')
+            const descendants: number[][] = []
+            metadataEntries.forEach((candidate) => {
+              if (candidate === entry) {
+                return
+              }
+              if (isPathAncestor(basePath, candidate.path)) {
+                descendants.push(candidate.path.slice(basePath.length))
+              }
+            })
+            descendantCache.set(key, descendants)
+          })
+
+          let baseObjectAssigned = false
+
+          nodesForAsset.forEach((node) => {
+            const metadata = node.importMetadata
+            let runtimeObject: Object3D
+
+            if (metadata && Array.isArray(metadata.objectPath)) {
+              const target = findObjectByPath(baseObject, metadata.objectPath) ?? baseObject
+              runtimeObject = target.clone(true)
+              const descendantKey = metadata.objectPath.join('.')
+              const descendantPaths = descendantCache.get(descendantKey) ?? []
+              pruneCloneByRelativePaths(runtimeObject, descendantPaths)
+            } else {
+              const reuseOriginal = !shouldCacheModelObject && !baseObjectAssigned
+              runtimeObject = reuseOriginal ? baseObject : baseObject.clone(true)
+              baseObjectAssigned = baseObjectAssigned || reuseOriginal
+            }
+
+            runtimeObject.name = node.name ?? runtimeObject.name
+            prepareRuntimeObjectForNode(runtimeObject)
+            tagObjectWithNodeId(runtimeObject, node.id)
+            registerRuntimeObject(node.id, runtimeObject)
           })
         } catch (error) {
           const message = (error as Error).message ?? 'Unknown error'
