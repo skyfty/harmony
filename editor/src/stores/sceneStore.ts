@@ -327,8 +327,6 @@ function computeForwardVector(position: Vector3Like, target: Vector3Like): Vecto
 
 type LightNodeExtras = Partial<Omit<LightNodeProperties, 'type' | 'color' | 'intensity' | 'target'>>
 
-const LEGACY_GROUND_ASSET_ID = 'preset:models/ground.glb'
-
 function cloneDynamicMeshVector3(vec: DynamicMeshVector3): DynamicMeshVector3 {
   return { x: vec.x, y: vec.y, z: vec.z }
 }
@@ -553,7 +551,7 @@ function createGroundSceneNode(
 }
 
 function isGroundNode(node: SceneNode): boolean {
-  return node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'ground' || node.sourceAssetId === LEGACY_GROUND_ASSET_ID
+  return node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'ground'
 }
 
 function normalizeGroundSceneNode(node: SceneNode | null | undefined, settings?: GroundSettings): SceneNode {
@@ -583,9 +581,6 @@ function normalizeGroundSceneNode(node: SceneNode | null | undefined, settings?:
       dynamicMesh: createGroundDynamicMeshDefinition(node.dynamicMesh, settings),
       sourceAssetId: undefined,
     }
-  }
-  if (node.sourceAssetId === LEGACY_GROUND_ASSET_ID) {
-    return createGroundSceneNode({}, settings)
   }
   return createGroundSceneNode({}, settings)
 }
@@ -619,59 +614,6 @@ function findGroundNode(nodes: SceneNode[]): SceneNode | null {
     }
   }
   return null
-}
-
-function stripLegacyGroundAssetFromCatalog(
-  catalog?: Record<string, ProjectAsset[]> | null,
-): Record<string, ProjectAsset[]> | null | undefined {
-  if (!catalog) {
-    return catalog
-  }
-  let mutated = false
-  const next: Record<string, ProjectAsset[]> = {}
-  Object.entries(catalog).forEach(([categoryId, assets]) => {
-    if (!Array.isArray(assets) || assets.length === 0) {
-      next[categoryId] = assets ?? []
-      return
-    }
-    const filtered = assets.filter((asset) => asset.id !== LEGACY_GROUND_ASSET_ID)
-    if (filtered.length !== assets.length) {
-      mutated = true
-    }
-    next[categoryId] = filtered
-  })
-  return mutated ? next : catalog
-}
-
-function stripLegacyGroundAssetFromIndex(
-  index?: Record<string, AssetIndexEntry> | null,
-): Record<string, AssetIndexEntry> | null | undefined {
-  if (!index) {
-    return index
-  }
-  if (!(LEGACY_GROUND_ASSET_ID in index)) {
-    return index
-  }
-  const { [LEGACY_GROUND_ASSET_ID]: _removed, ...rest } = index
-  return rest
-}
-
-function stripLegacyGroundAssetFromPackageMap(
-  packageMap?: Record<string, string> | null,
-): Record<string, string> | null | undefined {
-  if (!packageMap) {
-    return packageMap
-  }
-  if (!Object.values(packageMap).some((value) => value === LEGACY_GROUND_ASSET_ID)) {
-    return packageMap
-  }
-  const next: Record<string, string> = {}
-  Object.entries(packageMap).forEach(([key, value]) => {
-    if (value !== LEGACY_GROUND_ASSET_ID) {
-      next[key] = value
-    }
-  })
-  return next
 }
 
 type GroundRegionBounds = {
@@ -2025,9 +1967,6 @@ function normalizeGroundState(state: ScenePersistedState): ScenePersistedState {
           selectedNodeId,
           selectedNodeIds: selectedIdsSource,
           groundSettings: sceneGroundSettings,
-          assetCatalog: stripLegacyGroundAssetFromCatalog(typedScene.assetCatalog) ?? typedScene.assetCatalog,
-          assetIndex: stripLegacyGroundAssetFromIndex(typedScene.assetIndex) ?? typedScene.assetIndex,
-          packageAssetMap: stripLegacyGroundAssetFromPackageMap(typedScene.packageAssetMap) ?? typedScene.packageAssetMap,
         }
       })
     : state.scenes
@@ -2045,9 +1984,6 @@ function normalizeGroundState(state: ScenePersistedState): ScenePersistedState {
   return {
     ...state,
     nodes: normalizedRootNodes,
-    assetCatalog: stripLegacyGroundAssetFromCatalog(state.assetCatalog) ?? state.assetCatalog,
-    assetIndex: stripLegacyGroundAssetFromIndex(state.assetIndex) ?? state.assetIndex,
-    packageAssetMap: stripLegacyGroundAssetFromPackageMap(state.packageAssetMap) ?? state.packageAssetMap,
     scenes: processedScenes,
     groundSettings: rootGroundSettings,
   }
@@ -4513,11 +4449,9 @@ export const useSceneStore = defineStore('scene', {
       dynamicMesh?: SceneDynamicMesh
     }) {
       this.captureHistorySnapshot()
-  const id = generateUuid()
+      const id = generateUuid()
       const baseMaterial = this.materials[0] ?? null
-      const initialProps: SceneMaterialProps = baseMaterial
-        ? createMaterialProps(baseMaterial)
-        : createMaterialProps()
+      const initialProps: SceneMaterialProps = createMaterialProps()
       const initialMaterial = createNodeMaterial(null, initialProps, {
         name: baseMaterial?.name,
         type: normalizeSceneMaterialType(baseMaterial?.type ?? DEFAULT_MATERIAL_TYPE),
