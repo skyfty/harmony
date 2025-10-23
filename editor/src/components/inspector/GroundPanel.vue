@@ -54,7 +54,9 @@ function applyDimensions() {
           label="Width (m)"
           type="number"
           density="compact"
-          variant="outlined"
+          variant="underlined"
+          class="slider-input"
+      inputmode="decimal"
           step="1"
           min="1"
           suffix="m"
@@ -65,8 +67,10 @@ function applyDimensions() {
           v-model.number="localDepth"
           label="Depth (m)"
           type="number"
+          class="slider-input"
           density="compact"
-          variant="outlined"
+        inputmode="decimal"
+          variant="underlined"
           step="1"
           min="1"
           suffix="m"
@@ -86,6 +90,13 @@ function applyDimensions() {
   gap: 0.5rem;
 }
 
+.v-field-label {
+  font-size: 0.82rem;
+}
+.slider-input :deep(.v-field-label) {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
 .hint-text {
   display: block;
   margin-top: 0.25rem;

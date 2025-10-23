@@ -62,6 +62,15 @@
         @click="toggleGridVisibility"
       />
       <v-btn
+        icon="mdi-group"
+        density="compact"
+        size="small"
+        class="toolbar-button"
+        title="分组选中"
+        :disabled="selectionCount < 2"
+        @click="handleGroupSelection"
+      />
+      <v-btn
         :icon="showAxes ? 'mdi-axis-arrow-info' : 'mdi-axis-arrow'"
         :color="showAxes ? 'primary' : undefined"
         :variant="showAxes ? 'flat' : 'text'"
@@ -250,6 +259,18 @@ const {
   shadowsEnabled,
 } = toRefs(props)
 const sceneStore = useSceneStore()
+
+const selectionCount = computed(() => (sceneStore.selectedNodeIds ? sceneStore.selectedNodeIds.length : 0))
+
+function handleGroupSelection() {
+  if ((selectionCount.value ?? 0) < 2) return
+  // call the store action to group selected nodes
+  const result = sceneStore.groupSelection()
+  if (!result) {
+    // grouping failed or invalid selection
+    return
+  }
+}
 
 const skyboxMenuOpen = ref(false)
 const localSkyboxSettings = ref<SceneSkyboxSettings>(cloneSkyboxSettings(skyboxSettings.value))

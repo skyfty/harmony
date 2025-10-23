@@ -4487,6 +4487,41 @@ export const useSceneStore = defineStore('scene', {
 
       return node
     },
+
+    generateGroupNodeName() {
+      const used = new Set<number>()
+
+      const collect = (nodes: SceneNode[] | undefined) => {
+        if (!nodes?.length) {
+          return
+        }
+        nodes.forEach((node) => {
+          const name = node.name?.trim()
+          if (name) {
+            const match = /^Group(?:\s+(\d+))?$/i.exec(name)
+            if (match) {
+              const index = match[1] ? Number.parseInt(match[1], 10) : 1
+              if (Number.isFinite(index)) {
+                used.add(index)
+              }
+            }
+          }
+          if (node.children?.length) {
+            collect(node.children)
+          }
+        })
+      }
+
+      collect(this.nodes)
+
+      let candidate = 1
+      while (used.has(candidate)) {
+        candidate += 1
+      }
+
+      return `Group ${candidate}`
+    },
+    
     generateWallNodeName() {
       const prefix = 'Wall '
       const pattern = /^Wall\s(\d{2})$/
@@ -4644,6 +4679,233 @@ export const useSceneStore = defineStore('scene', {
       const assetCache = useAssetCacheStore()
       assetCache.recalculateUsage(this.nodes)
       commitSceneSnapshot(this)
+    },
+
+    groupSelection(): boolean {
+      const selection = Array.from(new Set(this.selectedNodeIds))
+      if (selection.length < 2) {
+        return false
+      }
+
+      const parentMap = buildParentMap(this.nodes)
+      const validIds = selection.filter((id) => {
+        if (!id || id === GROUND_NODE_ID) {
+          return false
+        }
+        if (this.isNodeSelectionLocked(id)) {
+          return false
+        }
+        return parentMap.has(id)
+      })
+
+      if (validIds.length < 2) {
+        return false
+      }
+
+      const topLevelIds = filterTopLevelNodeIds(validIds, parentMap)
+      if (topLevelIds.length < 2) {
+        return false
+      }
+
+      const orderMap = new Map<string, number>()
+      let orderCounter = 0
+      const assignOrder = (nodes: SceneNode[]) => {
+        nodes.forEach((node) => {
+          orderMap.set(node.id, orderCounter)
+          orderCounter += 1
+          if (node.children?.length) {
+            assignOrder(node.children)
+          }
+        })
+      }
+      assignOrder(this.nodes)
+      topLevelIds.sort((a, b) => {
+        const aOrder = orderMap.get(a) ?? 0
+        const bOrder = orderMap.get(b) ?? 0
+        return aOrder - bOrder
+      })
+
+      const collectAncestors = (id: string): Set<string | null> => {
+        const ancestors = new Set<string | null>()
+        let current: string | null = parentMap.get(id) ?? null
+        while (true) {
+          ancestors.add(current)
+          if (current === null) {
+            break
+          }
+          current = parentMap.get(current) ?? null
+        }
+        return ancestors
+      }
+
+      let commonAncestors: Set<string | null> | null = null
+      topLevelIds.forEach((id, index) => {
+        const ancestors = collectAncestors(id)
+        if (index === 0) {
+          commonAncestors = ancestors
+        } else if (commonAncestors) {
+          commonAncestors = new Set(Array.from(commonAncestors).filter((ancestor) => ancestors.has(ancestor)))
+        }
+      })
+
+      if (!commonAncestors?.size) {
+        return false
+      }
+
+      const depthCache = new Map<string | null, number>()
+      depthCache.set(null, -1)
+      const resolveDepth = (id: string | null): number => {
+        if (depthCache.has(id)) {
+          return depthCache.get(id) as number
+        }
+        if (!id) {
+          return depthCache.get(null) as number
+        }
+        const parentId = parentMap.get(id) ?? null
+        const depth = resolveDepth(parentId) + 1
+        depthCache.set(id, depth)
+        return depth
+      }
+
+      let targetParentId: string | null = null
+      let maxDepth = -Infinity
+      commonAncestors.forEach((ancestor) => {
+        const depth = resolveDepth(ancestor)
+        if (depth > maxDepth) {
+          maxDepth = depth
+          targetParentId = ancestor
+        }
+      })
+
+      const shareDirectParent = topLevelIds.every((id) => (parentMap.get(id) ?? null) === targetParentId)
+
+      const parentWorldMatrix = targetParentId
+        ? computeWorldMatrixForNode(this.nodes, targetParentId)
+        : new Matrix4()
+      if (!parentWorldMatrix) {
+        return false
+      }
+
+      const groupWorldMatrix = parentWorldMatrix.clone()
+      const groupInverseWorldMatrix = groupWorldMatrix.clone().invert()
+      const parentInverse = parentWorldMatrix.clone().invert()
+      const groupLocalMatrix = targetParentId ? new Matrix4().multiplyMatrices(parentInverse, groupWorldMatrix) : groupWorldMatrix.clone()
+      const groupLocalPositionVec = new Vector3()
+      const groupLocalQuaternion = new Quaternion()
+      const groupLocalScaleVec = new Vector3()
+      groupLocalMatrix.decompose(groupLocalPositionVec, groupLocalQuaternion, groupLocalScaleVec)
+      const groupLocalEuler = new Euler().setFromQuaternion(groupLocalQuaternion, 'XYZ')
+
+      const worldMatrices = new Map<string, Matrix4>()
+      for (const id of topLevelIds) {
+        const matrix = computeWorldMatrixForNode(this.nodes, id)
+        if (!matrix) {
+          return false
+        }
+        worldMatrices.set(id, matrix)
+      }
+
+      const topLevelSet = new Set(topLevelIds)
+      let insertionIndex: number
+      if (shareDirectParent) {
+        if (targetParentId) {
+          const parentNodeOriginal = findNodeById(this.nodes, targetParentId)
+          if (!parentNodeOriginal) {
+            return false
+          }
+          const siblings = parentNodeOriginal.children ?? []
+          insertionIndex = siblings.length
+          siblings.forEach((child, index) => {
+            if (topLevelSet.has(child.id)) {
+              insertionIndex = Math.min(insertionIndex, index)
+            }
+          })
+        } else {
+          insertionIndex = this.nodes.length
+          this.nodes.forEach((node, index) => {
+            if (topLevelSet.has(node.id)) {
+              insertionIndex = Math.min(insertionIndex, index)
+            }
+          })
+        }
+      } else {
+        if (targetParentId) {
+          const parentNodeOriginal = findNodeById(this.nodes, targetParentId)
+          insertionIndex = parentNodeOriginal?.children?.length ?? 0
+        } else {
+          insertionIndex = this.nodes.length
+        }
+      }
+
+      let tree = this.nodes as SceneNode[]
+      const removedNodes: SceneNode[] = []
+      topLevelIds.forEach((id) => {
+        const result = detachNodeImmutable(tree, id)
+        tree = result.tree
+        if (result.node) {
+          removedNodes.push(result.node)
+        }
+      })
+
+      if (removedNodes.length !== topLevelIds.length) {
+        return false
+      }
+
+      const groupId = generateUuid()
+      const groupName = this.generateGroupNodeName()
+
+      removedNodes.forEach((node) => {
+        const worldMatrix = worldMatrices.get(node.id)
+        if (!worldMatrix) {
+          return
+        }
+        const localMatrix = new Matrix4().multiplyMatrices(groupInverseWorldMatrix, worldMatrix)
+        const localPosition = new Vector3()
+        const localQuaternion = new Quaternion()
+        const localScale = new Vector3()
+        localMatrix.decompose(localPosition, localQuaternion, localScale)
+        const localEuler = new Euler().setFromQuaternion(localQuaternion, 'XYZ')
+        node.position = createVector(localPosition.x, localPosition.y, localPosition.z)
+        node.rotation = createVector(localEuler.x, localEuler.y, localEuler.z)
+        node.scale = createVector(localScale.x, localScale.y, localScale.z)
+      })
+
+      const groupNode: SceneNode = {
+        id: groupId,
+        name: groupName,
+        nodeType: 'group',
+        position: createVector(groupLocalPositionVec.x, groupLocalPositionVec.y, groupLocalPositionVec.z),
+        rotation: createVector(groupLocalEuler.x, groupLocalEuler.y, groupLocalEuler.z),
+        scale: createVector(groupLocalScaleVec.x, groupLocalScaleVec.y, groupLocalScaleVec.z),
+        visible: true,
+        locked: false,
+        children: removedNodes,
+      }
+
+      if (targetParentId) {
+        const parentNode = findNodeById(tree, targetParentId)
+        if (!parentNode) {
+          return false
+        }
+        const siblings = parentNode.children ? [...parentNode.children] : []
+        const safeIndex = Math.min(Math.max(insertionIndex, 0), siblings.length)
+        siblings.splice(safeIndex, 0, groupNode)
+        parentNode.children = siblings
+        tree = [...tree]
+      } else {
+        const nextTree = [...tree]
+        const safeIndex = Math.min(Math.max(insertionIndex, 0), nextTree.length)
+        nextTree.splice(safeIndex, 0, groupNode)
+        tree = nextTree
+      }
+
+      this.captureHistorySnapshot()
+
+      this.nodes = tree
+      this.setSelection([groupId], { commit: false, primaryId: groupId })
+      commitSceneSnapshot(this)
+
+      return true
     },
     duplicateNodes(nodeIds: string[], options: { select?: boolean } = {}): string[] {
       const selectDuplicates = options.select ?? true
