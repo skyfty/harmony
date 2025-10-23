@@ -24,6 +24,8 @@ interface MaterialFormState extends Omit<SceneMaterialProps, 'textures'> {
 
 const SLIDER_FIELDS = ['opacity', 'metalness', 'roughness', 'emissiveIntensity', 'aoStrength', 'envMapIntensity'] as const
 
+const COMMON_SLIDER_FIELDS: readonly SliderField[] = ['opacity', 'metalness', 'roughness']
+
 type SliderField = (typeof SLIDER_FIELDS)[number]
 
 type SliderConfigEntry = {
@@ -46,6 +48,13 @@ const emit = defineEmits<{
 
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 const TEXTURE_SLOTS: SceneMaterialTextureSlot[] = ['albedo', 'normal', 'metalness', 'roughness', 'ao', 'emissive']
+const COMMON_TEXTURE_SLOTS: SceneMaterialTextureSlot[] = ['albedo', 'normal', 'roughness']
+const MATERIAL_FLAG_OPTIONS = [
+  { value: 'transparent', label: '透明' },
+  { value: 'wireframe', label: '线框' },
+] as const
+
+type MaterialFlagOption = (typeof MATERIAL_FLAG_OPTIONS)[number]['value']
 const TEXTURE_LABELS: Record<SceneMaterialTextureSlot, string> = {
   albedo: 'Albedo',
   normal: 'Normal',
@@ -130,6 +139,7 @@ const defaultMaterialId = computed(() => (
     : null
 ))
 const lastSyncedMaterialId = ref<string | null>(null)
+const showAllProperties = ref(false)
 
 const formTextures = reactive<TextureMapState>(createEmptyTextureMap())
 const materialForm = reactive<MaterialFormState>({
@@ -164,6 +174,40 @@ const canSaveMaterial = computed(() =>
   !props.disabled &&
   hasPendingChanges.value,
 )
+
+const visibleSliderFields = computed<SliderField[]>(() =>
+  showAllProperties.value ? [...SLIDER_FIELDS] : [...COMMON_SLIDER_FIELDS],
+)
+
+const visibleTextureSlots = computed<SceneMaterialTextureSlot[]>(() =>
+  showAllProperties.value ? [...TEXTURE_SLOTS] : [...COMMON_TEXTURE_SLOTS],
+)
+
+const materialFlagSelection = computed<MaterialFlagOption[]>({
+  get() {
+    const selection: MaterialFlagOption[] = []
+    if (materialForm.transparent) {
+      selection.push('transparent')
+    }
+    if (materialForm.wireframe) {
+      selection.push('wireframe')
+    }
+    return selection
+  },
+  set(values) {
+    const next = new Set(values)
+    const nextTransparent = next.has('transparent')
+    const nextWireframe = next.has('wireframe')
+    if (materialForm.transparent !== nextTransparent) {
+      materialForm.transparent = nextTransparent
+      commitMaterialProps({ transparent: nextTransparent })
+    }
+    if (materialForm.wireframe !== nextWireframe) {
+      materialForm.wireframe = nextWireframe
+      commitMaterialProps({ wireframe: nextWireframe })
+    }
+  },
+})
 
 const currentMaterialTitle = computed(() => {
   const entry = activeNodeMaterial.value
@@ -202,6 +246,7 @@ watch(
       baseColorMenuOpen.value = false
       emissiveColorMenuOpen.value = false
       saveSharedDialogVisible.value = false
+      showAllProperties.value = false
     }
   },
 )
@@ -218,6 +263,7 @@ watch(
       selectedMaterialType.value = null
       resetDirtyState()
       saveSharedDialogVisible.value = false
+      showAllProperties.value = false
       applyPropsToForm(DEFAULT_PROPS, { name: '', description: '' })
       return
     }
@@ -234,6 +280,7 @@ watch(
       originalSharedMaterialId.value = shared?.id ?? null
       resetDirtyState()
       saveSharedDialogVisible.value = false
+      showAllProperties.value = false
     }
     lastSyncedMaterialId.value = entry.id
   },
@@ -495,6 +542,10 @@ function handleCancelSharedDialog() {
 function handleSideChange(value: SceneMaterialSide) {
   materialForm.side = value
   commitMaterialProps({ side: value })
+}
+
+function toggleShowAllProperties() {
+  showAllProperties.value = !showAllProperties.value
 }
 
 function handleSliderChange(field: SliderField, value: unknown) {
@@ -841,6 +892,14 @@ async function handleImportFileChange(event: Event) {
           >
             <v-icon size="16px">mdi-content-save</v-icon>
           </v-btn>
+          <v-btn
+            class="toolbar-more"
+            variant="text"
+            size="small"
+            :title="showAllProperties ? '隐藏不常用属性' : '显示更多属性'"
+            :icon="showAllProperties ? 'mdi-unfold-less-horizontal' : 'mdi-unfold-more-horizontal'"
+            @click="toggleShowAllProperties"
+          />
           <v-btn class="toolbar-close" icon="mdi-close" size="small" variant="text" @click="handleClose" />
         </v-toolbar>
         <v-divider />
@@ -964,8 +1023,22 @@ async function handleImportFileChange(event: Event) {
               @update:model-value="handleSideChange"
             />
 
+            <v-select
+              v-if="showAllProperties"
+              v-model="materialFlagSelection"
+              class="material-flag-select"
+              label="渲染选项"
+              density="compact"
+              variant="underlined"
+              hide-details
+              multiple
+              :items="MATERIAL_FLAG_OPTIONS"
+              item-title="label"
+              item-value="value"
+            />
+
             <div
-              v-for="field in SLIDER_FIELDS"
+              v-for="field in visibleSliderFields"
               :key="field"
               class="slider-row"
             >
@@ -989,7 +1062,7 @@ async function handleImportFileChange(event: Event) {
           <div class="texture-section">
             <div class="texture-grid">
               <div
-                v-for="slot in TEXTURE_SLOTS"
+                v-for="slot in visibleTextureSlots"
                 :key="slot"
                 class="texture-tile"
                 :class="{ 'is-active-drop': draggingSlot === slot }"
@@ -1106,6 +1179,13 @@ async function handleImportFileChange(event: Event) {
   color: rgba(233, 236, 241, 0.32) !important;
 }
 
+.toolbar-more {
+  color: rgba(233, 236, 241, 0.82);
+  font-weight: 500;
+  text-transform: none;
+  min-width: unset;
+}
+
 .panel-content {
   flex: 1;
   display: flex;
@@ -1161,6 +1241,10 @@ border-radius: 6px;
   display: grid;
   gap: 22px;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.material-flag-select {
+  max-width: 100%;
 }
 
 .material-color {
@@ -1342,7 +1426,9 @@ border-radius: 6px;
 .texture-remove:disabled {
   color: rgba(233, 236, 241, 0.25) !important;
 }
-
+.v-field-label {
+  font-size: 0.82rem;
+}
 .slider-input :deep(.v-field-label) {
   font-size: 0.82rem;
   font-weight: 600;
