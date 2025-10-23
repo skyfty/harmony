@@ -25,6 +25,15 @@
         title="Capture Screenshot"
         @click="emit('capture-screenshot')"
       />
+      <v-btn
+        icon="mdi-group"
+        density="compact"
+        size="small"
+        class="toolbar-button"
+        title="分组选中"
+        :disabled="selectionCount < 2"
+        @click="handleGroupSelection"
+      />
       <v-divider vertical />
       <v-btn
         icon="mdi-arrow-collapse-down"
@@ -60,15 +69,6 @@
         class="toolbar-button"
         title="Toggle Grid"
         @click="toggleGridVisibility"
-      />
-      <v-btn
-        icon="mdi-group"
-        density="compact"
-        size="small"
-        class="toolbar-button"
-        title="分组选中"
-        :disabled="selectionCount < 2"
-        @click="handleGroupSelection"
       />
       <v-btn
         :icon="showAxes ? 'mdi-axis-arrow-info' : 'mdi-axis-arrow'"

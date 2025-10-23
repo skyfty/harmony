@@ -1115,6 +1115,59 @@ function collectCollisionSpheres(nodes: SceneNode[]): CollisionSphere[] {
   return spheres
 }
 
+type NodeBoundingInfo = {
+  bounds: Box3
+}
+
+function collectNodeBoundingInfo(nodes: SceneNode[]): Map<string, NodeBoundingInfo> {
+  const info = new Map<string, NodeBoundingInfo>()
+
+  const traverse = (list: SceneNode[], parentMatrix: Matrix4) => {
+    list.forEach((node) => {
+      const nodeMatrix = composeNodeMatrix(node)
+      const worldMatrix = new Matrix4().multiplyMatrices(parentMatrix, nodeMatrix)
+
+      let nodeBounds: Box3 | null = null
+
+      if (!node.isPlaceholder && node.nodeType !== 'light') {
+        const runtimeObject = getRuntimeObject(node.id)
+        if (runtimeObject && node.dynamicMesh?.type !== 'ground') {
+          runtimeObject.updateMatrixWorld(true)
+          const localBounds = new Box3().setFromObject(runtimeObject)
+          if (!localBounds.isEmpty()) {
+            nodeBounds = localBounds.clone().applyMatrix4(worldMatrix)
+          }
+        }
+      }
+
+      if (!nodeBounds || nodeBounds.isEmpty()) {
+        const position = new Vector3()
+        const quaternion = new Quaternion()
+        const scale = new Vector3()
+        worldMatrix.decompose(position, quaternion, scale)
+        const extent = Math.max(Math.abs(scale.x), Math.abs(scale.y), Math.abs(scale.z), 1) * DEFAULT_SPAWN_RADIUS * 0.5
+        const size = new Vector3(extent, extent, extent)
+        nodeBounds = new Box3().setFromCenterAndSize(position, size)
+      }
+
+      if (node.children?.length) {
+        traverse(node.children, worldMatrix)
+        node.children.forEach((child) => {
+          const childInfo = info.get(child.id)
+          if (childInfo) {
+            nodeBounds!.union(childInfo.bounds)
+          }
+        })
+      }
+
+      info.set(node.id, { bounds: nodeBounds.clone() })
+    })
+  }
+
+  traverse(nodes, new Matrix4())
+  return info
+}
+
 function computeObjectMetrics(object: Object3D): ObjectMetrics {
   object.updateMatrixWorld(true)
   const bounds = new Box3().setFromObject(object)
@@ -4779,23 +4832,6 @@ export const useSceneStore = defineStore('scene', {
 
       const shareDirectParent = topLevelIds.every((id) => (parentMap.get(id) ?? null) === targetParentId)
 
-      const parentWorldMatrix = targetParentId
-        ? computeWorldMatrixForNode(this.nodes, targetParentId)
-        : new Matrix4()
-      if (!parentWorldMatrix) {
-        return false
-      }
-
-      const groupWorldMatrix = parentWorldMatrix.clone()
-      const groupInverseWorldMatrix = groupWorldMatrix.clone().invert()
-      const parentInverse = parentWorldMatrix.clone().invert()
-      const groupLocalMatrix = targetParentId ? new Matrix4().multiplyMatrices(parentInverse, groupWorldMatrix) : groupWorldMatrix.clone()
-      const groupLocalPositionVec = new Vector3()
-      const groupLocalQuaternion = new Quaternion()
-      const groupLocalScaleVec = new Vector3()
-      groupLocalMatrix.decompose(groupLocalPositionVec, groupLocalQuaternion, groupLocalScaleVec)
-      const groupLocalEuler = new Euler().setFromQuaternion(groupLocalQuaternion, 'XYZ')
-
       const worldMatrices = new Map<string, Matrix4>()
       for (const id of topLevelIds) {
         const matrix = computeWorldMatrixForNode(this.nodes, id)
@@ -4804,6 +4840,65 @@ export const useSceneStore = defineStore('scene', {
         }
         worldMatrices.set(id, matrix)
       }
+
+  const boundingInfo = collectNodeBoundingInfo(this.nodes)
+  // Use world-space bounds so the new group origin matches the combined selection bounds center
+      const selectionBounds = new Box3()
+      let boundsInitialized = false
+      topLevelIds.forEach((id) => {
+        const info = boundingInfo.get(id)
+        if (!info || info.bounds.isEmpty()) {
+          return
+        }
+        if (!boundsInitialized) {
+          selectionBounds.copy(info.bounds)
+          boundsInitialized = true
+        } else {
+          selectionBounds.union(info.bounds)
+        }
+      })
+
+      let centerWorld = new Vector3()
+      if (boundsInitialized && !selectionBounds.isEmpty()) {
+        centerWorld = selectionBounds.getCenter(new Vector3())
+      } else {
+        let count = 0
+        worldMatrices.forEach((matrix) => {
+          const position = new Vector3()
+          const quaternion = new Quaternion()
+          const scale = new Vector3()
+          matrix.decompose(position, quaternion, scale)
+          centerWorld.add(position)
+          count += 1
+        })
+        if (count > 0) {
+          centerWorld.multiplyScalar(1 / count)
+        }
+      }
+
+      const parentWorldMatrix = targetParentId
+        ? computeWorldMatrixForNode(this.nodes, targetParentId)
+        : new Matrix4()
+      if (!parentWorldMatrix) {
+        return false
+      }
+
+      const parentInverse = parentWorldMatrix.clone().invert()
+      const groupLocalPositionVec = centerWorld.clone().applyMatrix4(parentInverse)
+      if (!Number.isFinite(groupLocalPositionVec.x) || !Number.isFinite(groupLocalPositionVec.y) || !Number.isFinite(groupLocalPositionVec.z)) {
+        groupLocalPositionVec.set(0, 0, 0)
+      }
+      const groupLocalQuaternion = new Quaternion()
+      const groupLocalScaleVec = new Vector3(1, 1, 1)
+
+      const groupLocalMatrix = new Matrix4().compose(
+        groupLocalPositionVec.clone(),
+        groupLocalQuaternion,
+        groupLocalScaleVec.clone(),
+      )
+      const groupWorldMatrix = new Matrix4().multiplyMatrices(parentWorldMatrix, groupLocalMatrix)
+      const groupInverseWorldMatrix = groupWorldMatrix.clone().invert()
+      const groupLocalEuler = new Euler().setFromQuaternion(groupLocalQuaternion, 'XYZ')
 
       const topLevelSet = new Set(topLevelIds)
       let insertionIndex: number
