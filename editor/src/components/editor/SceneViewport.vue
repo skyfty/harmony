@@ -4656,6 +4656,76 @@ function computeDropPoint(event: DragEvent): THREE.Vector3 | null {
   return null
 }
 
+function nodeSupportsMaterials(node: SceneNode | null): boolean {
+  if (!node) {
+    return false
+  }
+  const type = node.nodeType ?? (node.light ? 'light' : 'mesh')
+  return type !== 'light' && type !== 'group'
+}
+
+function resolveMaterialDropTarget(event: DragEvent): { nodeId: string; object: THREE.Object3D } | null {
+  if (!camera || !canvasRef.value) {
+    return null
+  }
+  const rect = canvasRef.value.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) {
+    return null
+  }
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  raycaster.setFromCamera(pointer, camera)
+  const intersections = raycaster.intersectObjects(rootGroup.children, true)
+  for (const intersection of intersections) {
+    const nodeId = resolveNodeIdFromObject(intersection.object)
+    if (!nodeId) {
+      continue
+    }
+    if (sceneStore.isNodeSelectionLocked(nodeId)) {
+      continue
+    }
+    const sceneNode = findSceneNode(sceneStore.nodes, nodeId)
+    if (!nodeSupportsMaterials(sceneNode)) {
+      continue
+    }
+    const targetObject = objectMap.get(nodeId)
+    if (!targetObject) {
+      continue
+    }
+    return { nodeId, object: targetObject }
+  }
+  return null
+}
+
+function applyMaterialAssetToNode(nodeId: string, materialAssetId: string): boolean {
+  const sceneNode = findSceneNode(sceneStore.nodes, nodeId)
+  if (!nodeSupportsMaterials(sceneNode)) {
+    return false
+  }
+  const materials = Array.isArray(sceneNode?.materials) ? sceneNode.materials : []
+  if (materials.length > 0) {
+    const primary = materials[0]
+    if (!primary) {
+      return false
+    }
+    return sceneStore.assignNodeMaterial(nodeId, primary.id, materialAssetId)
+  }
+  return Boolean(sceneStore.addNodeMaterial(nodeId, { materialId: materialAssetId }))
+}
+
+type DragAssetInfo = { assetId: string; asset: ProjectAsset | null }
+
+function resolveDragAsset(event: DragEvent): DragAssetInfo | null {
+  const payload = extractAssetPayload(event)
+  if (!payload) {
+    return null
+  }
+  return {
+    assetId: payload.assetId,
+    asset: sceneStore.getAsset(payload.assetId),
+  }
+}
+
 function handleViewportDragEnter(event: DragEvent) {
   if (!isAssetDrag(event)) return
   event.preventDefault()
@@ -4664,6 +4734,24 @@ function handleViewportDragEnter(event: DragEvent) {
 
 function handleViewportDragOver(event: DragEvent) {
   if (!isAssetDrag(event)) return
+  const info = resolveDragAsset(event)
+  const asset = info?.asset ?? null
+  if (asset?.type === 'material') {
+    event.preventDefault()
+    isDragHovering.value = true
+    const target = resolveMaterialDropTarget(event)
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = target ? 'copy' : 'none'
+    }
+    if (target) {
+      updateGridHighlightFromObject(target.object)
+    } else {
+      updateGridHighlight(null)
+    }
+    disposeDragPreview()
+    return
+  }
+
   const point = computeDropPoint(event)
   event.preventDefault()
   if (event.dataTransfer) {
@@ -4672,9 +4760,8 @@ function handleViewportDragOver(event: DragEvent) {
   isDragHovering.value = true
   updateGridHighlight(point, DEFAULT_GRID_HIGHLIGHT_DIMENSIONS)
   setDragPreviewPosition(point)
-  const payload = extractAssetPayload(event)
-  if (payload) {
-    prepareDragPreview(payload.assetId)
+  if (info) {
+    prepareDragPreview(info.assetId)
   } else {
     disposeDragPreview()
   }
@@ -4695,24 +4782,47 @@ function handleViewportDragLeave(event: DragEvent) {
 
 async function handleViewportDrop(event: DragEvent) {
   if (!isAssetDrag(event)) return
-  const payload = extractAssetPayload(event)
-  const point = computeDropPoint(event)
+  const info = resolveDragAsset(event)
   event.preventDefault()
   event.stopPropagation()
   isDragHovering.value = false
   disposeDragPreview()
-  if (!payload) {
+  if (!info) {
     sceneStore.setDraggingAssetObject(null)
+    updateGridHighlight(null)
+    restoreGridHighlightForSelection()
     return
   }
 
+  if (info.asset?.type === 'material') {
+    const target = resolveMaterialDropTarget(event)
+    if (!target) {
+      console.warn('No compatible mesh found for material drop', info.assetId)
+      sceneStore.setDraggingAssetObject(null)
+      updateGridHighlight(null)
+      restoreGridHighlightForSelection()
+      return
+    }
+    const applied = applyMaterialAssetToNode(target.nodeId, info.assetId)
+    if (!applied) {
+      console.warn('Failed to apply material asset to node', info.assetId, target.nodeId)
+    } else {
+      scheduleThumbnailCapture()
+    }
+    sceneStore.setDraggingAssetObject(null)
+    updateGridHighlight(null)
+    restoreGridHighlightForSelection()
+    return
+  }
+
+  const point = computeDropPoint(event)
   const spawnPoint = point ? point.clone() : new THREE.Vector3(0, 0, 0)
   snapVectorToGrid(spawnPoint)
   try {
-    await sceneStore.spawnAssetAtPosition(payload.assetId, toVector3Like(spawnPoint))
+    await sceneStore.spawnAssetAtPosition(info.assetId, toVector3Like(spawnPoint))
     scheduleThumbnailCapture()
   } catch (error) {
-    console.warn('Failed to spawn asset for drag payload', payload.assetId, error)
+    console.warn('Failed to spawn asset for drag payload', info.assetId, error)
   } finally {
     sceneStore.setDraggingAssetObject(null)
   }

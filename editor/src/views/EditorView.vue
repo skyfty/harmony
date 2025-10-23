@@ -1184,7 +1184,8 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
   --floating-edge-gap: 18px;
   --floating-menu-offset: 68px;
-  --panel-floating-height: clamp(360px, 52vh, 580px);
+  --hierarchy-floating-height: clamp(360px, 52vh, 580px);
+  --inspector-floating-height: clamp(360px, 52vh, 580px);
   --project-floating-height: clamp(170px, 38vh, 220px);
 }
 
@@ -1220,7 +1221,7 @@ onBeforeUnmount(() => {
   left: var(--floating-edge-gap);
   bottom: calc(var(--project-floating-height) + (var(--floating-edge-gap) * 2));
   width: min(260px, 40vw);
-  max-height: var(--panel-floating-height);
+  max-height: var(--hierarchy-floating-height);
   min-height: 240px;
 }
 
@@ -1229,7 +1230,7 @@ onBeforeUnmount(() => {
   right: var(--floating-edge-gap);
   bottom: calc(var(--project-floating-height) + (var(--floating-edge-gap) * 2));
   width: min(300px, 40vw);
-  max-height: clamp(360px, 52vh, 620px);
+  max-height: var(--inspector-floating-height);
   min-height: 240px;
 }
 
@@ -1247,7 +1248,8 @@ onBeforeUnmount(() => {
     padding: 10px;
     --floating-menu-offset: 60px;
     --floating-edge-gap: 14px;
-    --panel-floating-height: clamp(240px, 48vh, 580px);
+    --hierarchy-floating-height: clamp(240px, 48vh, 580px);
+    --inspector-floating-height: clamp(240px, 48vh, 580px);
     --project-floating-height: clamp(220px, 42vh, 380px);
   }
 
