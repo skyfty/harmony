@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { reactive, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import InspectorVectorControls from '@/components/inspector/VectorControls.vue'
+import InspectorVectorControls from '@/components/common/VectorControls.vue'
 import { useSceneStore } from '@/stores/sceneStore'
 
 const { selectedNode } = storeToRefs(useSceneStore())

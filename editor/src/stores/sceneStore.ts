@@ -2946,7 +2946,17 @@ export const useSceneStore = defineStore('scene', {
         }
         const nextMaterials = node.materials.filter((entry) => entry.id !== nodeMaterialId)
         if (nextMaterials.length !== node.materials.length) {
-          node.materials = nextMaterials
+          if (!nextMaterials.length) {
+            const baseMaterial = this.materials[0] ?? null
+            const defaultProps = baseMaterial ? createMaterialProps(baseMaterial) : createMaterialProps()
+            const defaultMaterial = createNodeMaterial(baseMaterial?.id ?? null, defaultProps, {
+              name: baseMaterial?.name,
+              type: normalizeSceneMaterialType(baseMaterial?.type ?? DEFAULT_MATERIAL_TYPE),
+            })
+            node.materials = [defaultMaterial]
+          } else {
+            node.materials = nextMaterials
+          }
           removed = true
         }
       })
