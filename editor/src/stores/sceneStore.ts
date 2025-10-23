@@ -4791,17 +4791,24 @@ export const useSceneStore = defineStore('scene', {
         return ancestors
       }
 
-      let commonAncestors: Set<string | null> | null = null
-      topLevelIds.forEach((id, index) => {
-        const ancestors = collectAncestors(id)
-        if (index === 0) {
-          commonAncestors = ancestors
-        } else if (commonAncestors) {
-          commonAncestors = new Set(Array.from(commonAncestors).filter((ancestor) => ancestors.has(ancestor)))
+      const firstGroupId = topLevelIds[0]!
+      let commonAncestors = collectAncestors(firstGroupId)
+      for (let i = 1; i < topLevelIds.length; i += 1) {
+        const ancestorId = topLevelIds[i]!
+        const ancestors = collectAncestors(ancestorId)
+        const intersection = new Set<string | null>()
+        commonAncestors.forEach((ancestor) => {
+          if (ancestors.has(ancestor)) {
+            intersection.add(ancestor)
+          }
+        })
+        commonAncestors = intersection
+        if (commonAncestors.size === 0) {
+          break
         }
-      })
+      }
 
-      if (!commonAncestors?.size) {
+      if (commonAncestors.size === 0) {
         return false
       }
 
@@ -4841,8 +4848,8 @@ export const useSceneStore = defineStore('scene', {
         worldMatrices.set(id, matrix)
       }
 
-  const boundingInfo = collectNodeBoundingInfo(this.nodes)
-  // Use world-space bounds so the new group origin matches the combined selection bounds center
+      const boundingInfo = collectNodeBoundingInfo(this.nodes)
+      // Use world-space bounds so the new group origin matches the combined selection bounds center
       const selectionBounds = new Box3()
       let boundsInitialized = false
       topLevelIds.forEach((id) => {

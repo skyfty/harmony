@@ -81,78 +81,14 @@
         @click="toggleAxesVisibility"
       />
 
-      <v-menu
-        v-model="skyboxMenuOpen"
-        location="bottom"
-        origin="top right"
-        offset="8"
-        transition="null"
-        :close-on-content-click="false"
-      >
-        <template #activator="{ props: menuActivatorProps }">
-          <v-btn
-            v-bind="menuActivatorProps"
-            icon="mdi-weather-partly-cloudy"
-            density="compact"
-            size="small"
-            class="toolbar-button"
-            :color="skyboxMenuOpen ? 'primary' : undefined"
-            :variant="skyboxMenuOpen ? 'flat' : 'text'"
-            title="Skybox Settings"
-          />
-        </template>
-        <v-card class="skybox-card" elevation="8">
-          <v-card-text class="skybox-card-content">
-            <div class="skybox-section">
-              <div class="skybox-section-header">Skybox Presets</div>
-              <v-select
-                :items="presetOptions"
-                :model-value="skyboxSettings.presetId"
-                density="compact"
-                hide-details
-                transition="null"
-                variant="underlined"
-                class="skybox-select"
-                @update:modelValue="handlePresetSelect"
-              />
-              <v-checkbox
-                class="skybox-switch"
-                inset
-                density="compact"
-                hide-details
-                color="primary"
-                size="small"
-                :model-value="shadowsEnabled"
-                label="Enable Shadows"
-                @update:modelValue="handleShadowToggle"
-              />
-            </div>
-            <div class="skybox-section">
-              <div class="skybox-section-header">Parameter Adjustments</div>
-              <div
-                v-for="control in skyboxParameterDefinitions"
-                :key="control.key"
-                class="skybox-slider"
-              >
-                <div class="slider-label">
-                  <span>{{ control.label }}</span>
-                  <span class="slider-value">{{ formatSkyboxValue(control.key, localSkyboxSettings[control.key]) }}</span>
-                </div>
-                <v-slider
-                  :model-value="localSkyboxSettings[control.key]"
-                  :min="control.min"
-                  :max="control.max"
-                  :step="control.step"
-                  density="compact"
-                  hide-details
-                  color="primary"
-                  @update:modelValue="(value) => handleSliderInput(control.key, value as number)"
-                />
-              </div>
-            </div>
-          </v-card-text>
-        </v-card>
-      </v-menu>
+      <SkyboxPresetSelector
+        :skybox-settings="skyboxSettings"
+        :skybox-presets="skyboxPresets"
+        :shadows-enabled="shadowsEnabled"
+        @select-skybox-preset="emit('select-skybox-preset', $event)"
+        @change-skybox-parameter="emit('change-skybox-parameter', $event)"
+        @change-shadows-enabled="emit('change-shadows-enabled', $event)"
+      />
       <v-divider vertical />
 
       <v-btn
@@ -212,13 +148,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, toRefs, watch } from 'vue'
+import { computed, toRefs } from 'vue'
 import type { SceneSkyboxSettings } from '@/types/scene-viewport-settings'
 import type { SkyboxParameterKey, SkyboxPresetDefinition } from '@/types/skybox'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
-import { CUSTOM_SKYBOX_PRESET_ID, cloneSkyboxSettings } from '@/stores/skyboxPresets'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { BuildTool } from '@/types/build-tool'
+import SkyboxPresetSelector from '@/components/common/SkyboxPresetSelector.vue'
 
 const props = defineProps<{
   showGrid: boolean
@@ -272,24 +208,9 @@ function handleGroupSelection() {
   }
 }
 
-const skyboxMenuOpen = ref(false)
-const localSkyboxSettings = ref<SceneSkyboxSettings>(cloneSkyboxSettings(skyboxSettings.value))
-
 let orbitIntervalId: number | null = null
 const ORBIT_INTERVAL_MS = 50
 const ORBIT_INITIAL_DELAY_MS = 300
-
-watch(skyboxSettings, (next) => {
-  localSkyboxSettings.value = cloneSkyboxSettings(next)
-})
-
-const presetOptions = computed(() => [
-  ...skyboxPresets.value.map((preset) => ({
-    title: preset.name,
-    value: preset.id,
-  })),
-  { title: 'Custom', value: CUSTOM_SKYBOX_PRESET_ID },
-])
 
 const alignButtons = [
   { mode: 'axis-x', icon: 'mdi-axis-x-arrow', title: 'Align X Axis' },
@@ -301,15 +222,6 @@ const buildToolButtons = [
   { id: 'wall', icon: 'mdi-wall', label: 'Wall Tool' },
   { id: 'platform', icon: 'mdi-layers-triple', label: 'Platform Tool' },
 ] satisfies Array<{ id: BuildTool; icon: string; label: string }>
-const skyboxParameterDefinitions = [
-  { key: 'exposure', label: 'Exposure', min: 0.05, max: 2, step: 0.01 },
-  { key: 'turbidity', label: 'Turbidity', min: 1, max: 20, step: 0.1 },
-  { key: 'rayleigh', label: 'Rayleigh Scattering', min: 0, max: 5, step: 0.05 },
-  { key: 'mieCoefficient', label: 'Mie Coefficient', min: 0, max: 0.05, step: 0.0005 },
-  { key: 'mieDirectionalG', label: 'Mie Directionality', min: 0, max: 1, step: 0.01 },
-  { key: 'elevation', label: 'Sun Elevation', min: -10, max: 90, step: 1 },
-  { key: 'azimuth', label: 'Sun Azimuth', min: 0, max: 360, step: 1 },
-] satisfies Array<{ key: SkyboxParameterKey; label: string; min: number; max: number; step: number }>
 
 const cameraModeTitle = computed(() =>
   cameraControlMode.value === 'orbit'
@@ -321,33 +233,6 @@ const cameraControlModeIcon = computed(() =>
   cameraControlMode.value === 'orbit' ? 'mdi-orbit' : 'mdi-map',
 )
 
-function handlePresetSelect(value: string) {
-  if (!value || value === CUSTOM_SKYBOX_PRESET_ID) {
-    return
-  }
-  emit('select-skybox-preset', value)
-}
-
-function handleSliderInput(key: SkyboxParameterKey, value: number) {
-  if (Number.isNaN(value)) {
-    return
-  }
-  const config = skyboxParameterDefinitions.find((entry) => entry.key === key)
-  if (!config) {
-    return
-  }
-  const clamped = Math.min(config.max, Math.max(config.min, value))
-  localSkyboxSettings.value = {
-    ...localSkyboxSettings.value,
-    [key]: clamped,
-  }
-  emit('change-skybox-parameter', { key, value: clamped })
-}
-
-const handleShadowToggle = (value: boolean | null) => {
-  emit('change-shadows-enabled', Boolean(value))
-}
-
 function emitAlign(mode: AlignMode) {
   emit('align-selection', mode)
 }
@@ -355,19 +240,6 @@ function emitAlign(mode: AlignMode) {
 function handleBuildToolToggle(tool: BuildTool) {
   const next = activeBuildTool.value === tool ? null : tool
   emit('change-build-tool', next)
-}
-
-function formatSkyboxValue(key: SkyboxParameterKey, value: number): string {
-  if (key === 'azimuth' || key === 'elevation') {
-    return `${Math.round(value)}°`
-  }
-  if (key === 'mieCoefficient') {
-    return value.toFixed(4)
-  }
-  if (key === 'mieDirectionalG' || key === 'exposure') {
-    return value.toFixed(2)
-  }
-  return value.toFixed(2)
 }
 
 function toggleGridVisibility() {
@@ -448,58 +320,4 @@ function stopOrbitRotation() {
   height: 22px;
 }
 
-.skybox-card {
-  min-width: 280px;
-  background-color: rgba(18, 21, 26, 0.94);
-  border-radius: 12px;
-  border: 1px solid rgba(77, 208, 225, 0.25);
-}
-
-.skybox-card-content {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 14px;
-}
-
-.skybox-section {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.skybox-section-header {
-  font-size: 12px;
-  font-weight: 600;
-  color: #9fb5c7;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.skybox-select {
-  width: 100%;
-}
-
-.skybox-switch {
-  margin-top: -4px;
-}
-
-.skybox-slider {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.slider-label {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 12px;
-  color: #cfd8e3;
-}
-
-.slider-value {
-  color: #4dd0e1;
-  font-variant-numeric: tabular-nums;
-}
 </style>
