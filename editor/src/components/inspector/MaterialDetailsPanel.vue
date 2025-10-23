@@ -397,7 +397,7 @@ function ensureImageAsset(assetId: string): ProjectAsset | null {
   if (!asset) {
     return null
   }
-  if (asset.type !== 'image') {
+  if (asset.type !== 'image' && asset.type !== 'texture') {
     return null
   }
   return asset

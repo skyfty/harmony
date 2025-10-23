@@ -802,7 +802,7 @@ function assetPreviewUrl(asset: ProjectAsset): string | undefined {
   if (mime.startsWith('image/')) {
     return entry.blobUrl
   }
-  if (!mime && (asset.type === 'image')) {
+  if (!mime && (asset.type === 'image' || asset.type === 'texture')) {
     return entry.blobUrl
   }
   return undefined
@@ -928,12 +928,17 @@ function assetIcon(type: ProjectAsset['type']) {
 
 function iconForAssetType(type: ProjectAsset['type']) {
   switch (type) {
+    case 'model':
+      return 'mdi-cube'
     case 'image':
       return 'mdi-image-outline'
+    case 'texture':
+      return 'mdi-texture'
+    case 'material':
+      return 'mdi-palette'
     case 'file':
-      return 'mdi-file-outline'
     default:
-      return 'mdi-cube'
+      return 'mdi-file-outline'
   }
 }
 
