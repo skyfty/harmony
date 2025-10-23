@@ -4,6 +4,7 @@ export const NODE_TYPE_ICONS: Record<SceneNodeType, string> = {
   mesh: 'mdi-cube-outline',
   light: 'mdi-lightbulb-outline',
   group: 'mdi-folder-outline',
+  camera: 'mdi-video-outline',
   Capsule: 'mdi-shape-outline',
   Circle: 'mdi-circle-outline',
   Cylinder: 'mdi-cylinder',

@@ -26,6 +26,8 @@ import type { SceneCameraState } from '@/types/scene-camera-state'
 import { useUiStore } from '@/stores/uiStore'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
+import Loader, { type LoaderProgressPayload } from '@/plugins/loader'
+import type { Object3D } from 'three'
 
 const sceneStore = useSceneStore()
 const uiStore = useUiStore()
@@ -90,6 +92,8 @@ const previewSession = ref<PreviewSessionState | null>(null)
 const sceneImportInputRef = ref<HTMLInputElement | null>(null)
 const isImportingScenes = ref(false)
 const isSceneBundleExporting = ref(false)
+const externalSceneInputRef = ref<HTMLInputElement | null>(null)
+const isImportingExternalScene = ref(false)
 
 type InspectorPanelPublicInstance = InstanceType<typeof InspectorPanel> & {
   getPanelRect: () => DOMRect | null
@@ -580,6 +584,9 @@ async function handleAction(action: string) {
     case 'Open':
       handleOpenAction()
       break
+    case 'Import':
+      requestExternalSceneImport()
+      break
     case 'Save': {
       exportCurrentScene()
       break
@@ -806,6 +813,140 @@ async function handleSceneManagerExport(sceneIds: string[]) {
     uiStore.updateLoadingProgress(100, { autoClose: false })
   } finally {
     isSceneBundleExporting.value = false
+  }
+}
+
+function requestExternalSceneImport() {
+  if (isImportingExternalScene.value) {
+    return
+  }
+  const input = externalSceneInputRef.value
+  if (!input) {
+    console.warn('External scene import input element not available')
+    return
+  }
+  input.value = ''
+  input.click()
+}
+
+function computeImportDisplayName(name: string): string {
+  const trimmed = name.trim()
+  if (!trimmed.length) {
+    return 'Imported Scene'
+  }
+  const withoutExtension = trimmed.replace(/\.[^./\\]+$/, '')
+  return withoutExtension.length ? withoutExtension : trimmed
+}
+
+async function loadExternalSceneFile(
+  file: File,
+  onProgress: (payload: LoaderProgressPayload) => void,
+): Promise<Object3D> {
+  return new Promise<Object3D>((resolve, reject) => {
+    const loader = new Loader()
+
+    const handleProgress = (payload: LoaderProgressPayload) => {
+      onProgress(payload)
+    }
+
+    const handleLoaded = (payload: unknown) => {
+      cleanup()
+      const object = payload as Object3D | null
+      if (object && (object as { isObject3D?: boolean }).isObject3D) {
+        resolve(object)
+        return
+      }
+      reject(new Error('导入失败：未识别的场景数据'))
+    }
+
+    const cleanup = () => {
+      loader.$off('progress', handleProgress)
+      loader.$off('loaded', handleLoaded)
+    }
+
+    loader.$on('progress', handleProgress)
+    loader.$on('loaded', handleLoaded)
+
+    try {
+      loader.loadFile(file)
+    } catch (error) {
+      cleanup()
+      reject(error instanceof Error ? error : new Error('导入失败：无法读取文件'))
+    }
+  })
+}
+
+async function handleExternalSceneFileChange(event: Event) {
+  const input = (event.target as HTMLInputElement | null) ?? externalSceneInputRef.value
+  const file = input?.files?.[0] ?? null
+  if (!input || !file || isImportingExternalScene.value) {
+    if (input) {
+      input.value = ''
+    }
+    return
+  }
+
+  const extension = file.name.split('.').pop()?.toLowerCase() ?? ''
+  if (!['glb', 'gltf', 'fbx'].includes(extension)) {
+    console.warn('Unsupported import format:', extension)
+    input.value = ''
+    return
+  }
+
+  isImportingExternalScene.value = true
+  uiStore.showLoadingOverlay({
+    title: '导入外部场景',
+    message: '读取文件…',
+    mode: 'determinate',
+    progress: 5,
+    closable: false,
+    autoClose: false,
+  })
+  uiStore.updateLoadingProgress(5)
+
+  try {
+    const object = await loadExternalSceneFile(file, (payload) => {
+      if (!payload) {
+        return
+      }
+      const rawPercent = payload.total > 0 ? (payload.loaded / payload.total) * 65 : 15
+      const bounded = Math.max(8, Math.min(70, Math.round(rawPercent)))
+      uiStore.updateLoadingOverlay({
+        message: `加载 ${payload.filename} (${bounded}%)`,
+      })
+      uiStore.updateLoadingProgress(bounded)
+    })
+
+    uiStore.updateLoadingOverlay({ message: '解析场景节点…' })
+    uiStore.updateLoadingProgress(85)
+
+    const importedIds = await sceneStore.importExternalSceneObject(object, {
+      sourceName: computeImportDisplayName(file.name),
+    })
+
+    const summary = importedIds.length
+      ? `已导入 ${importedIds.length} 个节点`
+      : '文件未包含可导入的节点'
+
+    uiStore.updateLoadingOverlay({
+      message: summary,
+      autoClose: true,
+      autoCloseDelay: 800,
+    })
+    uiStore.updateLoadingProgress(100, { autoClose: true, autoCloseDelay: 800 })
+  } catch (error) {
+    const message = (error as Error)?.message ?? '导入失败'
+    uiStore.updateLoadingOverlay({
+      message: `导入失败：${message}`,
+      closable: true,
+      autoClose: false,
+    })
+    uiStore.updateLoadingProgress(100, { autoClose: false })
+  } finally {
+    isImportingExternalScene.value = false
+    if (input) {
+      input.value = ''
+    }
   }
 }
 
@@ -1125,6 +1266,13 @@ onBeforeUnmount(() => {
       accept="application/json"
       style="display: none"
       @change="handleSceneImportFileChange"
+    />
+    <input
+      ref="externalSceneInputRef"
+      type="file"
+      accept=".glb,.gltf,.fbx"
+      style="display: none"
+      @change="handleExternalSceneFileChange"
     />
     <NewSceneDialog
       v-model="isNewSceneDialogOpen"

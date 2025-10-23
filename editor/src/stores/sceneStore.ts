@@ -1,7 +1,23 @@
 import { watch, type WatchStopHandle } from 'vue'
 import { defineStore } from 'pinia'
-import { Matrix4, Quaternion, Vector3, Euler, Box3, MathUtils, type Object3D } from 'three'
-import type { LightNodeProperties, LightNodeType, SceneNode, SceneNodeType, Vector3Like } from '@/types/scene'
+import {
+  Matrix4,
+  Quaternion,
+  Vector3,
+  Euler,
+  Box3,
+  MathUtils,
+  Color,
+  PerspectiveCamera,
+  OrthographicCamera,
+  BackSide,
+  DoubleSide,
+  type Object3D,
+  type Texture,
+  type Material,
+  type Light,
+} from 'three'
+import type { CameraNodeProperties, LightNodeProperties, LightNodeType, SceneNode, SceneNodeType, Vector3Like } from '@/types/scene'
 import type { ClipboardEntry } from '@/types/clipboard-entry'
 import type { DetachResult } from '@/types/detach-result'
 import type { DuplicateContext } from '@/types/duplicate-context'
@@ -142,7 +158,7 @@ function nodeSupportsMaterials(node: SceneNode | null | undefined): boolean {
     return false
   }
   const type = node.nodeType ?? 'mesh'
-  return type !== 'light' && type !== 'group'
+  return type !== 'light' && type !== 'group' && type !== 'camera'
 }
 
 function createEmptyTextureMap(input?: MaterialTextureMap | null): MaterialTextureMap {
@@ -756,6 +772,482 @@ function getLightPreset(type: LightNodeType) {
         extras: {} as LightNodeExtras,
       }
   }
+}
+
+type ExternalSceneImportContext = {
+  assetCache: ReturnType<typeof useAssetCacheStore>
+  registerAsset: (asset: ProjectAsset, options: { categoryId?: string }) => ProjectAsset
+  converted: Set<Object3D>
+  textureRefs: Map<Texture, SceneMaterialTextureRef>
+  textureSequence: number
+}
+
+const IMPORT_TEXTURE_SLOT_MAP: Array<{ slot: SceneMaterialTextureSlot; key: string }> = [
+  { slot: 'albedo', key: 'map' },
+  { slot: 'normal', key: 'normalMap' },
+  { slot: 'metalness', key: 'metalnessMap' },
+  { slot: 'roughness', key: 'roughnessMap' },
+  { slot: 'ao', key: 'aoMap' },
+  { slot: 'emissive', key: 'emissiveMap' },
+]
+
+function toHexColor(color: Color | null | undefined, fallback = '#ffffff'): string {
+  if (!color) {
+    return fallback
+  }
+  return `#${color.getHexString()}`
+}
+
+function toVector(vec: Vector3 | Euler): Vector3Like {
+  return createVector(vec.x, vec.y, vec.z)
+}
+
+function isRenderableObject(object: Object3D): boolean {
+  const candidate = object as Object3D & { isMesh?: boolean; isSkinnedMesh?: boolean; isPoints?: boolean; isLine?: boolean }
+  return Boolean(candidate.isMesh || candidate.isSkinnedMesh || candidate.isPoints || candidate.isLine)
+}
+
+function isBoneObject(object: Object3D): boolean {
+  return object.type === 'Bone'
+}
+
+function resolveLightTypeFromObject(light: Light): LightNodeType {
+  const typed = light as Light & Record<string, unknown>
+  if (typed.isDirectionalLight) {
+    return 'directional'
+  }
+  if (typed.isSpotLight) {
+    return 'spot'
+  }
+  if (typed.isPointLight || typed.isRectAreaLight) {
+    return 'point'
+  }
+  return 'ambient'
+}
+
+async function textureToBlob(texture: Texture): Promise<{ blob: Blob; mimeType: string; extension: string } | null> {
+  if (typeof document === 'undefined') {
+    return null
+  }
+  const image = (texture as Texture & { image?: unknown }).image as any
+  if (!image) {
+    return null
+  }
+  const width = Number(image.width ?? image.videoWidth ?? 0)
+  const height = Number(image.height ?? image.videoHeight ?? 0)
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null
+  }
+
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d')
+  if (!ctx) {
+    return null
+  }
+
+  if (image.data && width && height) {
+    const dataSource = image.data as Uint8Array | Uint8ClampedArray
+    if (!(dataSource instanceof Uint8Array || dataSource instanceof Uint8ClampedArray)) {
+      return null
+    }
+    const array = dataSource instanceof Uint8ClampedArray ? dataSource : new Uint8ClampedArray(dataSource)
+    if (array.length !== width * height * 4) {
+      return null
+    }
+    const imageData = new ImageData(width, height)
+    imageData.data.set(array)
+    ctx.putImageData(imageData, 0, 0)
+  } else {
+    try {
+      ctx.drawImage(image as CanvasImageSource, 0, 0, width, height)
+    } catch (error) {
+      console.warn('无法绘制纹理到画布', error)
+      return null
+    }
+  }
+
+  const blob = await new Promise<Blob | null>((resolve) => {
+    if (typeof canvas.toBlob === 'function') {
+      canvas.toBlob((value) => resolve(value), 'image/png')
+      return
+    }
+    if (typeof window === 'undefined' || typeof canvas.toDataURL !== 'function') {
+      resolve(null)
+      return
+    }
+    try {
+      const dataUrl = canvas.toDataURL('image/png')
+      const segments = dataUrl.split(',')
+      if (segments.length < 2) {
+        resolve(null)
+        return
+      }
+      if (typeof window.atob !== 'function') {
+        resolve(null)
+        return
+      }
+      const binary = window.atob(segments[1] ?? '')
+      const bytes = new Uint8Array(binary.length)
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index)
+      }
+      resolve(new Blob([bytes], { type: 'image/png' }))
+    } catch (error) {
+      console.warn('无法序列化纹理数据', error)
+      resolve(null)
+    }
+  })
+
+  if (!blob) {
+    return null
+  }
+
+  return { blob, mimeType: 'image/png', extension: 'png' }
+}
+
+async function createTextureAssetFromTexture(texture: Texture, context: ExternalSceneImportContext): Promise<SceneMaterialTextureRef | null> {
+  if (context.textureRefs.has(texture)) {
+    return context.textureRefs.get(texture) ?? null
+  }
+
+  const payload = await textureToBlob(texture)
+  if (!payload) {
+    return null
+  }
+
+  context.textureSequence += 1
+  const baseName = texture.name && texture.name.trim().length ? texture.name.trim() : `Texture ${context.textureSequence}`
+  const filename = `${baseName.replace(/\s+/g, '_')}.${payload.extension}`
+  const assetId = generateUuid()
+
+  await context.assetCache.storeAssetBlob(assetId, {
+    blob: payload.blob,
+    mimeType: payload.mimeType,
+    filename,
+  })
+
+  const asset: ProjectAsset = {
+    id: assetId,
+    name: baseName,
+    type: 'texture',
+    downloadUrl: '',
+    previewColor: '#ffffff',
+    thumbnail: null,
+    gleaned: true,
+  }
+
+  context.registerAsset(asset, { categoryId: determineAssetCategoryId(asset) })
+  context.assetCache.registerUsage(assetId)
+
+  const ref: SceneMaterialTextureRef = {
+    assetId,
+    name: baseName,
+  }
+  context.textureRefs.set(texture, ref)
+  return ref
+}
+
+function pruneConvertedChildren(clone: Object3D, source: Object3D, converted: Set<Object3D>) {
+  for (let index = source.children.length - 1; index >= 0; index -= 1) {
+    const originalChild = source.children[index]
+    const clonedChild = clone.children[index]
+    if (!originalChild || !clonedChild) {
+      continue
+    }
+    if (converted.has(originalChild)) {
+      clonedChild.removeFromParent()
+    } else {
+      pruneConvertedChildren(clonedChild, originalChild, converted)
+    }
+  }
+}
+
+function cloneRuntimeObject(object: Object3D, converted: Set<Object3D>): Object3D {
+  const clone = object.clone(true)
+  pruneConvertedChildren(clone, object, converted)
+  return clone
+}
+
+async function createNodeMaterialFromThree(material: Material | null | undefined, context: ExternalSceneImportContext): Promise<SceneNodeMaterial | null> {
+  if (!material) {
+    return null
+  }
+
+  const overrides: Partial<SceneMaterialProps> = {}
+  const typed = material as Material & { color?: Color; wireframe?: boolean }
+  if (typed.color) {
+    overrides.color = toHexColor(typed.color)
+  }
+
+  const resolvedOpacity = typeof material.opacity === 'number' ? MathUtils.clamp(material.opacity, 0, 1) : 1
+  overrides.opacity = resolvedOpacity
+  overrides.transparent = Boolean(material.transparent ?? resolvedOpacity < 0.999)
+
+  if (typeof typed.wireframe === 'boolean') {
+    overrides.wireframe = typed.wireframe
+  }
+
+  if (material.side === BackSide) {
+    overrides.side = 'back'
+  } else if (material.side === DoubleSide) {
+    overrides.side = 'double'
+  } else {
+    overrides.side = 'front'
+  }
+
+  const standard = material as Material & {
+    metalness?: number
+    roughness?: number
+    emissive?: Color
+    emissiveIntensity?: number
+    aoMapIntensity?: number
+    envMapIntensity?: number
+  }
+
+  if (typeof standard.metalness === 'number') {
+    overrides.metalness = standard.metalness
+  }
+  if (typeof standard.roughness === 'number') {
+    overrides.roughness = standard.roughness
+  }
+  if (standard.emissive) {
+    overrides.emissive = toHexColor(standard.emissive, '#000000')
+  }
+  if (typeof standard.emissiveIntensity === 'number') {
+    overrides.emissiveIntensity = standard.emissiveIntensity
+  }
+  if (typeof standard.aoMapIntensity === 'number') {
+    overrides.aoStrength = standard.aoMapIntensity
+  }
+  if (typeof standard.envMapIntensity === 'number') {
+    overrides.envMapIntensity = standard.envMapIntensity
+  }
+
+  const textures: Partial<Record<SceneMaterialTextureSlot, SceneMaterialTextureRef>> = {}
+  const materialRecord = standard as unknown as Record<string, unknown>
+
+  for (const mapping of IMPORT_TEXTURE_SLOT_MAP) {
+    const source = materialRecord[mapping.key] as Texture | null | undefined
+    if (!source) {
+      continue
+    }
+    const ref = await createTextureAssetFromTexture(source, context)
+    if (!ref) {
+      return null
+    }
+    textures[mapping.slot] = ref
+  }
+
+  if (Object.keys(textures).length) {
+    overrides.textures = textures
+  }
+
+  const props = createMaterialProps(overrides)
+  const typeName = normalizeSceneMaterialType((material.type as SceneMaterialType) ?? DEFAULT_MATERIAL_TYPE)
+  const materialName = typeof material.name === 'string' && material.name.trim().length ? material.name.trim() : undefined
+
+  return createNodeMaterial(null, props, {
+    name: materialName,
+    type: typeName,
+  })
+}
+
+async function convertObjectToSceneNode(
+  object: Object3D,
+  context: ExternalSceneImportContext,
+  options: { fallbackName?: string } = {},
+): Promise<SceneNode | null> {
+  const fallbackName = options.fallbackName && options.fallbackName.trim().length ? options.fallbackName.trim() : 'Imported Node'
+
+  const childrenNodes: SceneNode[] = []
+  for (const child of object.children) {
+    const convertedChild = await convertObjectToSceneNode(child, context, { fallbackName })
+    if (convertedChild) {
+      childrenNodes.push(convertedChild)
+    }
+  }
+
+  if (isBoneObject(object)) {
+    return null
+  }
+
+  const name = object.name && object.name.trim().length ? object.name : fallbackName
+  const position = toVector(object.position)
+  const rotation = toVector(object.rotation)
+  const scale = toVector(object.scale)
+  const visible = object.visible ?? true
+
+  const lightCandidate = object as Light & Record<string, unknown>
+  if (lightCandidate.isLight) {
+    const lightType = resolveLightTypeFromObject(lightCandidate)
+    const lightConfig: LightNodeProperties = {
+      type: lightType,
+      color: toHexColor(lightCandidate.color as Color, '#ffffff'),
+      intensity: typeof lightCandidate.intensity === 'number' ? lightCandidate.intensity : 1,
+    }
+
+    if (typeof (lightCandidate as Record<string, unknown>).distance === 'number') {
+      lightConfig.distance = Number(lightCandidate.distance)
+    }
+    if (typeof (lightCandidate as Record<string, unknown>).decay === 'number') {
+      lightConfig.decay = Number(lightCandidate.decay)
+    }
+    if (typeof (lightCandidate as Record<string, unknown>).angle === 'number') {
+      lightConfig.angle = Number(lightCandidate.angle)
+    }
+    if (typeof (lightCandidate as Record<string, unknown>).penumbra === 'number') {
+      lightConfig.penumbra = Number(lightCandidate.penumbra)
+    }
+    if (typeof (lightCandidate as Record<string, unknown>).castShadow === 'boolean') {
+      lightConfig.castShadow = Boolean(lightCandidate.castShadow)
+    }
+
+    if (lightType === 'directional' || lightType === 'spot') {
+      const target = (lightCandidate as { target?: Object3D }).target
+      if (target) {
+        const world = new Vector3()
+        target.updateMatrixWorld?.(true)
+        target.getWorldPosition(world)
+        lightConfig.target = toVector(world)
+      }
+    }
+
+    const node: SceneNode = {
+      id: generateUuid(),
+      name,
+      nodeType: 'light',
+      light: lightConfig,
+      position,
+      rotation,
+      scale,
+      visible,
+    }
+    if (childrenNodes.length) {
+      node.children = childrenNodes
+    }
+    context.converted.add(object)
+    return node
+  }
+
+  const cameraCandidate = object as PerspectiveCamera | OrthographicCamera & Record<string, unknown>
+  if (cameraCandidate.isCamera) {
+    let cameraConfig: CameraNodeProperties
+    if (cameraCandidate instanceof PerspectiveCamera || (cameraCandidate as Record<string, unknown>).isPerspectiveCamera) {
+      const perspective = cameraCandidate as PerspectiveCamera
+      cameraConfig = {
+        kind: 'perspective',
+        fov: perspective.fov,
+        near: perspective.near,
+        far: perspective.far,
+        aspect: perspective.aspect,
+      }
+    } else {
+      const ortho = cameraCandidate as OrthographicCamera
+      cameraConfig = {
+        kind: 'orthographic',
+        near: ortho.near,
+        far: ortho.far,
+        zoom: ortho.zoom,
+      }
+    }
+
+    const node: SceneNode = {
+      id: generateUuid(),
+      name,
+      nodeType: 'camera',
+      camera: cameraConfig,
+      position,
+      rotation,
+      scale,
+      visible,
+    }
+    if (childrenNodes.length) {
+      node.children = childrenNodes
+    }
+    context.converted.add(object)
+    return node
+  }
+
+  if (isRenderableObject(object)) {
+    const rawMaterial = (object as { material?: Material | Material[] }).material
+    const materialList = Array.isArray(rawMaterial) ? rawMaterial : rawMaterial ? [rawMaterial] : []
+    const nodeMaterials: SceneNodeMaterial[] = []
+    let failedMaterial = false
+    for (const material of materialList) {
+      const convertedMaterial = await createNodeMaterialFromThree(material, context)
+      if (!convertedMaterial) {
+        failedMaterial = true
+        break
+      }
+      nodeMaterials.push(convertedMaterial)
+    }
+
+    const node: SceneNode = {
+      id: generateUuid(),
+      name,
+      nodeType: 'mesh',
+      position,
+      rotation,
+      scale,
+      visible,
+    }
+
+    if (!failedMaterial && nodeMaterials.length) {
+      node.materials = nodeMaterials
+    }
+    if (childrenNodes.length) {
+      node.children = childrenNodes
+    }
+
+    const runtimeObject = cloneRuntimeObject(object, context.converted)
+    runtimeObject.name = name
+    runtimeObject.traverse((child) => {
+      const meshChild = child as Object3D & { isMesh?: boolean; isSkinnedMesh?: boolean; isPoints?: boolean; isLine?: boolean }
+      if (meshChild.isMesh || meshChild.isSkinnedMesh || meshChild.isPoints || meshChild.isLine) {
+        const mesh = meshChild as { castShadow?: boolean; receiveShadow?: boolean }
+        mesh.castShadow = true
+        mesh.receiveShadow = true
+      }
+    })
+
+    tagObjectWithNodeId(runtimeObject, node.id)
+    registerRuntimeObject(node.id, runtimeObject)
+    context.converted.add(object)
+    return node
+  }
+
+  if (childrenNodes.length) {
+    const node: SceneNode = {
+      id: generateUuid(),
+      name,
+      nodeType: 'group',
+      position,
+      rotation,
+      scale,
+      visible,
+      children: childrenNodes,
+    }
+    context.converted.add(object)
+    return node
+  }
+
+  return null
+}
+
+function collectNodeIdList(nodes: SceneNode[]): string[] {
+  const ids: string[] = []
+  const visit = (list: SceneNode[]) => {
+    list.forEach((node) => {
+      ids.push(node.id)
+      if (node.children?.length) {
+        visit(node.children)
+      }
+    })
+  }
+  visit(nodes)
+  return ids
 }
 
 const initialMaterials: SceneMaterial[] = [
@@ -1415,6 +1907,9 @@ function cloneNode(node: SceneNode): SceneNode {
           ...node.light,
           target: node.light.target ? cloneVector(node.light.target) : undefined,
         }
+      : undefined,
+    camera: node.camera
+      ? { ...node.camera }
       : undefined,
     position: cloneVector(node.position),
     rotation: cloneVector(node.rotation),
@@ -4499,6 +4994,60 @@ export const useSceneStore = defineStore('scene', {
       }
 
       return node
+    },
+
+    async importExternalSceneObject(object: Object3D, options: { sourceName?: string } = {}): Promise<string[]> {
+      if (!object) {
+        return []
+      }
+
+      object.updateMatrixWorld(true)
+
+      const assetCache = useAssetCacheStore()
+      const context: ExternalSceneImportContext = {
+        assetCache,
+        registerAsset: (asset, registerOptions) => this.registerAsset(asset, {
+          ...registerOptions,
+          commitOptions: { updateNodes: false, updateCamera: false },
+        }),
+        converted: new Set<Object3D>(),
+        textureRefs: new Map<Texture, SceneMaterialTextureRef>(),
+        textureSequence: 0,
+      }
+
+      const fallbackName = options.sourceName && options.sourceName.trim().length
+        ? options.sourceName.trim()
+        : object.name?.trim() ?? 'Imported Scene'
+
+      const rootNode = await convertObjectToSceneNode(object, context, { fallbackName })
+      const nodes: SceneNode[] = []
+
+      if (rootNode) {
+        nodes.push(rootNode)
+      } else {
+        for (const child of object.children) {
+          const convertedChild = await convertObjectToSceneNode(child, context, { fallbackName })
+          if (convertedChild) {
+            nodes.push(convertedChild)
+          }
+        }
+      }
+
+      if (!nodes.length) {
+        return []
+      }
+
+      this.captureHistorySnapshot()
+      this.nodes = [...this.nodes, ...nodes]
+
+  const importedIds = collectNodeIdList(nodes)
+      if (importedIds.length) {
+        this.setSelection(importedIds, { commit: false, primaryId: importedIds[0] ?? null })
+      }
+
+      commitSceneSnapshot(this)
+      assetCache.recalculateUsage(this.nodes)
+      return importedIds
     },
 
     addSceneNode(payload: {

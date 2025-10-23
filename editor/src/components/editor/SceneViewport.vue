@@ -5922,6 +5922,35 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       containerData.dynamicMeshType = node.dynamicMesh?.type ?? null
     }
     object = container
+  } else if (nodeType === 'camera') {
+    if (node.camera?.kind === 'orthographic') {
+      const ortho = node.camera
+      const halfWidth = 1
+      const halfHeight = 1
+      const orthoCamera = new THREE.OrthographicCamera(
+        -halfWidth,
+        halfWidth,
+        halfHeight,
+        -halfHeight,
+        ortho?.near ?? 0.1,
+        ortho?.far ?? 2000,
+      )
+      orthoCamera.zoom = ortho?.zoom ?? 1
+      orthoCamera.name = node.name
+      orthoCamera.userData.nodeId = node.id
+      object = orthoCamera
+    } else {
+      const perspective = node.camera
+      const perspectiveCamera = new THREE.PerspectiveCamera(
+        perspective?.fov ?? 50,
+        perspective?.aspect ?? 1,
+        perspective?.near ?? 0.1,
+        perspective?.far ?? 2000,
+      )
+      perspectiveCamera.name = node.name
+      perspectiveCamera.userData.nodeId = node.id
+      object = perspectiveCamera
+    }
   } else if (nodeType === 'group') {
     object = new THREE.Group()
     object.name = node.name
