@@ -4,7 +4,6 @@ import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import {
-  MATERIAL_CLASS_NAMES,
   normalizeSceneMaterialType,
   type SceneMaterialProps,
   type SceneMaterialSide,
@@ -13,7 +12,6 @@ import {
   type SceneMaterialType,
 } from '@/types/material'
 import type { ProjectAsset } from '@/types/project-asset'
-import * as THREE from 'three'
 
 type TextureMapState = Record<SceneMaterialTextureSlot, SceneMaterialTextureRef | null>
 
@@ -55,17 +53,17 @@ const TEXTURE_LABELS: Record<SceneMaterialTextureSlot, string> = {
   ao: 'Ambient Occlusion',
   emissive: 'Emissive',
 }
-const materialClasses: Record<SceneMaterialType, any> = MATERIAL_CLASS_NAMES.reduce((map, className) => {
-  if (className === 'MeshMatcapMaterial') {
-    map[className] = (THREE as Record<string, any>).MeshMatcapMaterial ?? THREE.MeshStandardMaterial
-    return map
-  }
-  const candidate = (THREE as Record<string, any>)[className]
-  map[className] = typeof candidate === 'function' ? candidate : THREE.MeshStandardMaterial
-  return map
-}, {} as Record<SceneMaterialType, any>)
+// const materialClasses: Record<SceneMaterialType, any> = MATERIAL_CLASS_NAMES.reduce((map, className) => {
+//   if (className === 'MeshMatcapMaterial') {
+//     map[className] = (THREE as Record<string, any>).MeshMatcapMaterial ?? THREE.MeshStandardMaterial
+//     return map
+//   }
+//   const candidate = (THREE as Record<string, any>)[className]
+//   map[className] = typeof candidate === 'function' ? candidate : THREE.MeshStandardMaterial
+//   return map
+// }, {} as Record<SceneMaterialType, any>)
 
-const materialClassOptions = computed(() => Object.keys(materialClasses) as SceneMaterialType[])
+// const materialClassOptions = computed(() => Object.keys(materialClasses) as SceneMaterialType[])
 const SIDE_OPTIONS: Array<{ value: SceneMaterialSide; label: string }> = [
   { value: 'front', label: 'Front' },
   { value: 'back', label: 'Back' },
@@ -365,8 +363,12 @@ function handleSideChange(value: SceneMaterialSide) {
   commitMaterialProps({ side: value })
 }
 
-function handleSliderChange(field: SliderField, value: number | null) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
+function handleSliderChange(field: SliderField, value: unknown) {
+  if (value === '' || value === null || value === undefined) {
+    return
+  }
+  const numericValue = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numericValue)) {
     return
   }
   const config = SLIDER_CONFIG[field] as SliderConfigEntry
@@ -374,7 +376,7 @@ function handleSliderChange(field: SliderField, value: number | null) {
   const max: number = Number(config.max ?? min)
   const rawValue = materialForm[field]
   const fallbackValue: number = typeof rawValue === 'number' ? rawValue : min
-  const clamped = clampNumber(value, min, max, fallbackValue)
+  const clamped = clampNumber(numericValue, min, max, fallbackValue)
   materialForm[field] = clamped as never
   commitMaterialProps({ [field]: clamped } as Partial<SceneMaterialProps>)
 }
@@ -391,6 +393,31 @@ function resolveTextureName(slot: SceneMaterialTextureSlot): string {
   }
   const asset = sceneStore.getAsset(ref.assetId)
   return asset?.name ?? ref.name ?? ref.assetId
+}
+
+function resolveTexturePreviewStyle(slot: SceneMaterialTextureSlot): Record<string, string> {
+  const ref = formTextures[slot]
+  const fallbackColor = 'rgba(233, 236, 241, 0.08)'
+  if (!ref) {
+    return {
+      backgroundColor: fallbackColor,
+    }
+  }
+  const asset = sceneStore.getAsset(ref.assetId)
+  if (asset?.thumbnail && asset.thumbnail.trim().length) {
+    return {
+      backgroundImage: `url(${asset.thumbnail})`,
+      backgroundColor: asset.previewColor?.trim().length ? asset.previewColor : fallbackColor,
+    }
+  }
+  if (asset?.previewColor && asset.previewColor.trim().length) {
+    return {
+      backgroundColor: asset.previewColor,
+    }
+  }
+  return {
+    backgroundColor: fallbackColor,
+  }
 }
 
 function parseDragPayload(event: DragEvent): { assetId: string } | null {
@@ -496,24 +523,24 @@ function handleTextureRemove(slot: SceneMaterialTextureSlot) {
   assignTexture(slot, null)
 }
 
-function handleMaterialClassChange(value: string | null) {
-  if (!activeNodeMaterial.value) {
-    return
-  }
-  const newType = normalizeSceneMaterialType(value ?? undefined)
-  selectedMaterialType.value = newType
+// function handleMaterialClassChange(value: string | null) {
+//   if (!activeNodeMaterial.value) {
+//     return
+//   }
+//   const newType = normalizeSceneMaterialType(value ?? undefined)
+//   selectedMaterialType.value = newType
 
-  if (isShared.value && selectedMaterialEntry.value) {
-    sceneStore.updateMaterialDefinition(selectedMaterialEntry.value.id, { type: newType })
-    return
-  }
+//   if (isShared.value && selectedMaterialEntry.value) {
+//     sceneStore.updateMaterialDefinition(selectedMaterialEntry.value.id, { type: newType })
+//     return
+//   }
 
-  if (!selectedNodeId.value) {
-    return
-  }
+//   if (!selectedNodeId.value) {
+//     return
+//   }
 
-  sceneStore.updateNodeMaterialType(selectedNodeId.value, activeNodeMaterial.value.id, newType)
-}
+//   sceneStore.updateNodeMaterialType(selectedNodeId.value, activeNodeMaterial.value.id, newType)
+// }
 
 function handleNameChange(value: string) {
   const entry = activeNodeMaterial.value
@@ -692,12 +719,11 @@ async function handleImportFileChange(event: Event) {
             class="toolbar-save"
             variant="text"
             size="small"
-            prepend-icon="mdi-content-save"
             :disabled="!canSaveMaterial"
             title="保存材质为共享资源"
             @click="handleSaveMaterial"
           >
-            保存
+            <v-icon size="16px">mdi-content-save</v-icon>
           </v-btn>
           <v-btn class="toolbar-close" icon="mdi-close" size="small" variant="text" @click="handleClose" />
         </v-toolbar>
@@ -709,14 +735,15 @@ async function handleImportFileChange(event: Event) {
           <div class="material-metadata">
             <v-text-field
               label=""
-              density="compact"
               variant="solo"
+              density="compact"
+              
               hide-details
               :model-value="materialForm.name"
               @update:model-value="handleNameChange"
             />
 
-            <v-select
+            <!-- <v-select
               label="材质类型"
               density="compact"
               variant="solo"
@@ -724,18 +751,19 @@ async function handleImportFileChange(event: Event) {
               :items="materialClassOptions"
               :model-value="selectedMaterialType"
               @update:model-value="handleMaterialClassChange"
-            />
+            /> -->
 
           </div>
 
           <div class="material-properties">
             <div class="material-color">
-              <label class="material-label">颜色</label>
               <div class="color-input">
                 <v-text-field
+                label="Color"
+                class="slider-input"
                   :model-value="materialForm.color"
                   density="compact"
-                  variant="solo"
+              variant="underlined"
                   hide-details
                   @update:model-value="(value) => handleHexColorChange('color', value ?? materialForm.color)"
                 />
@@ -768,12 +796,13 @@ async function handleImportFileChange(event: Event) {
               </div>
             </div>
             <div class="material-color">
-              <label class="material-label">自发光</label>
               <div class="color-input">
                 <v-text-field
+                class="slider-input"
+                label="自发光"
                   :model-value="materialForm.emissive"
                   density="compact"
-                  variant="solo"
+                  variant="underlined"
                   hide-details
                   @update:model-value="(value) => handleHexColorChange('emissive', value ?? materialForm.emissive)"
                 />
@@ -809,46 +838,39 @@ async function handleImportFileChange(event: Event) {
               class="side-select"
               label="面向"
               density="compact"
-              variant="solo"
+              transition="null"
               hide-details
               :items="SIDE_OPTIONS"
               item-value="value"
               item-title="label"
+              variant="underlined"
               :model-value="materialForm.side"
               @update:model-value="handleSideChange"
             />
-          </div>
 
-          <div class="material-sliders">
             <div
               v-for="field in SLIDER_FIELDS"
               :key="field"
               class="slider-row"
             >
-              <div class="slider-row__header">
-                <span class="slider-label">{{ field }}</span>
-                <span class="slider-value">{{ formatSliderValue(field) }}</span>
-              </div>
-              <v-number-input
-                :model-value="materialForm[field] as number"
+              <v-text-field
+                class="slider-input"
+                :label="field"
+                :model-value="formatSliderValue(field)"
                 :min="SLIDER_CONFIG[field].min"
                 :max="SLIDER_CONFIG[field].max"
                 :step="SLIDER_CONFIG[field].step"
+                type="number"
                 density="compact"
                 hide-details
-                 control-variant="split"
-                variant="solo"
-                size="small"
+                variant="underlined"
+                inputmode="decimal"
                 @update:model-value="(value) => handleSliderChange(field, value)"
               />
             </div>
           </div>
 
           <div class="texture-section">
-            <div class="texture-header">
-              <span class="material-label">贴图</span>
-    
-            </div>
             <div class="texture-grid">
               <div
                 v-for="slot in TEXTURE_SLOTS"
@@ -860,18 +882,26 @@ async function handleImportFileChange(event: Event) {
                 @dragleave="(event) => handleTextureDragLeave(slot, event)"
                 @drop="(event) => handleTextureDrop(slot, event)"
               >
-                <div class="texture-title">{{ TEXTURE_LABELS[slot] }}</div>
-                <div class="texture-name">{{ resolveTextureName(slot) }}</div>
-                <div class="texture-tile__footer">
-                  <v-chip size="x-small" variant="tonal">{{ formTextures[slot]?.assetId ?? '空' }}</v-chip>
-                  <v-btn
-                    icon="mdi-close"
-                    size="x-small"
-                    variant="text"
-                    :disabled="!formTextures[slot]"
-                    @click.stop="handleTextureRemove(slot)"
-                  />
+                <div
+                  class="texture-thumb"
+                  :class="{ 'texture-thumb--empty': !formTextures[slot] }"
+                  :style="resolveTexturePreviewStyle(slot)"
+                >
+                  <v-icon v-if="!formTextures[slot]" size="20" color="rgba(233, 236, 241, 0.4)">mdi-image-off</v-icon>
                 </div>
+                <div class="texture-info">
+                  <div class="texture-name">{{ resolveTextureName(slot) }}</div>
+                  <div class="texture-slot-label">{{ TEXTURE_LABELS[slot] }}</div>
+                </div>
+                <v-btn
+                  class="texture-remove"
+                  icon="mdi-close"
+                  size="x-small"
+                  variant="text"
+                  :disabled="!formTextures[slot]"
+                  title="移除贴图"
+                  @click.stop="handleTextureRemove(slot)"
+                />
               </div>
             </div>
           </div>
@@ -999,7 +1029,7 @@ border-radius: 6px;
 
 .material-properties {
   display: grid;
-  gap: 12px;
+  gap: 22px;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
 }
 
@@ -1057,12 +1087,6 @@ border-radius: 6px;
   gap: 12px;
 }
 
-.material-sliders {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-}
-
 .slider-row {
   display: flex;
   flex-direction: column;
@@ -1105,17 +1129,21 @@ border-radius: 6px;
 
 .texture-grid {
   display: grid;
-  gap: 10px;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 5px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .texture-tile {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 12px;
-  min-height: 110px;
-  border-radius: 8px;
+  position: relative;
+  display: grid;
+  grid-template-columns: 30px 1fr auto;
+  grid-template-rows: repeat(2, auto);
+  column-gap: 10px;
+  row-gap: 1px;
+  align-items: center;
+  padding: 3px;
+  min-height: 32px;
+  border-radius: 4px;
   border: 1px dashed rgba(255, 255, 255, 0.18);
   background: rgba(12, 16, 22, 0.45);
   transition: border-color 0.12s ease, background 0.12s ease;
@@ -1126,23 +1154,90 @@ border-radius: 6px;
   background: rgba(56, 86, 160, 0.35);
 }
 
-.texture-title {
-  font-size: 0.78rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
+.texture-thumb {
+  grid-row: 1 / span 2;
+  grid-column: 1;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background-color: rgba(233, 236, 241, 0.08);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+.texture-thumb--empty {
+  border-style: dashed;
+}
+
+.texture-info {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: hidden;
 }
 
 .texture-name {
-  flex: 1;
-  font-size: 0.74rem;
-  color: rgba(233, 236, 241, 0.72);
-  word-break: break-all;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: rgba(233, 236, 241, 0.9);
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.texture-tile__footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+.texture-slot-label {
+  font-size: 0.72rem;
+  color: rgba(233, 236, 241, 0.6);
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.texture-remove {
+  grid-column: 3;
+  grid-row: 1;
+  align-self: start;
+  color: rgba(233, 236, 241, 0.7);
+}
+
+.texture-remove:disabled {
+  color: rgba(233, 236, 241, 0.25) !important;
+}
+
+.slider-input :deep(.v-field-label) {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.menu-dropdown {
+  background: rgba(18, 21, 26, 0.95);
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(12px);
+  padding: 6px;
+}
+
+.menu-submenu {
+  padding: 6px;
+}
+
+.menu-list-item {
+  color: rgba(244, 247, 255, 0.9);
+  font-size: 0.9rem;
+  padding: 0px 18px;
+  border-radius: 8px;
+  transition: background-color 0.18s ease;
+  min-width: 160px;
+  min-height: 28px;
+  
 }
 </style>
