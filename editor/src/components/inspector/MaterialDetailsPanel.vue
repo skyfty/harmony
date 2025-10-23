@@ -50,8 +50,8 @@ const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 const TEXTURE_SLOTS: SceneMaterialTextureSlot[] = ['albedo', 'normal', 'metalness', 'roughness', 'ao', 'emissive']
 const COMMON_TEXTURE_SLOTS: SceneMaterialTextureSlot[] = ['albedo', 'normal', 'roughness']
 const MATERIAL_FLAG_OPTIONS = [
-  { value: 'transparent', label: '透明' },
-  { value: 'wireframe', label: '线框' },
+  { value: 'transparent', label: 'Transparent' },
+  { value: 'wireframe', label: 'Wireframe' },
 ] as const
 
 type MaterialFlagOption = (typeof MATERIAL_FLAG_OPTIONS)[number]['value']
@@ -212,13 +212,13 @@ const materialFlagSelection = computed<MaterialFlagOption[]>({
 const currentMaterialTitle = computed(() => {
   const entry = activeNodeMaterial.value
   if (!entry) {
-    return '材质'
+    return 'Material'
   }
   if (entry.materialId) {
     const shared = materials.value.find((item) => item.id === entry.materialId)
-    return shared?.name ?? entry.name ?? '材质'
+    return shared?.name ?? entry.name ?? 'Material'
   }
-  return entry.name ?? `材质 ${activeMaterialIndex.value + 1}`
+  return entry.name ?? `Material ${activeMaterialIndex.value + 1}`
 })
 
 const panelStyle = computed(() => {
@@ -692,7 +692,7 @@ function handleTextureDrop(slot: SceneMaterialTextureSlot, event: DragEvent) {
   }
   const asset = ensureImageAsset(payload.assetId)
   if (!asset) {
-    console.warn('拖拽的资源不是图片，无法分配到材质贴图')
+  console.warn('Dragged asset is not an image and cannot be used as a material texture')
     return
   }
   event.preventDefault()
@@ -887,7 +887,7 @@ async function handleImportFileChange(event: Event) {
             variant="text"
             size="small"
             :disabled="!canSaveMaterial"
-            title="保存材质为共享资源"
+            title="Save material as shared"
             @click="handleSaveMaterial"
           >
             <v-icon size="16px">mdi-content-save</v-icon>
@@ -896,7 +896,7 @@ async function handleImportFileChange(event: Event) {
             class="toolbar-more"
             variant="text"
             size="small"
-            :title="showAllProperties ? '隐藏不常用属性' : '显示更多属性'"
+            :title="showAllProperties ? 'Hide less-used properties' : 'Show more properties'"
             :icon="showAllProperties ? 'mdi-unfold-less-horizontal' : 'mdi-unfold-more-horizontal'"
             @click="toggleShowAllProperties"
           />
@@ -955,7 +955,7 @@ async function handleImportFileChange(event: Event) {
                       v-bind="menuProps"
                       :style="{ backgroundColor: materialForm.color }"
                     >
-                      <span class="sr-only">选择颜色</span>
+                              <span class="sr-only">Choose color</span>
                     </button>
                   </template>
                   <div class="color-picker">
@@ -974,7 +974,7 @@ async function handleImportFileChange(event: Event) {
               <div class="color-input">
                 <v-text-field
                 class="slider-input"
-                label="自发光"
+                label="Emissive"
                   :model-value="materialForm.emissive"
                   density="compact"
                   variant="underlined"
@@ -994,7 +994,7 @@ async function handleImportFileChange(event: Event) {
                       v-bind="menuProps"
                       :style="{ backgroundColor: materialForm.emissive }"
                     >
-                      <span class="sr-only">选择自发光颜色</span>
+                      <span class="sr-only">Choose emissive color</span>
                     </button>
                   </template>
                   <div class="color-picker">
@@ -1011,7 +1011,7 @@ async function handleImportFileChange(event: Event) {
             </div>
             <v-select
               class="side-select"
-              label="面向"
+              label="Side"
               density="compact"
               transition="null"
               hide-details
@@ -1027,7 +1027,7 @@ async function handleImportFileChange(event: Event) {
               v-if="showAllProperties"
               v-model="materialFlagSelection"
               class="material-flag-select"
-              label="渲染选项"
+              label="Render Options"
               density="compact"
               variant="underlined"
               hide-details
@@ -1088,7 +1088,7 @@ async function handleImportFileChange(event: Event) {
                   size="x-small"
                   variant="text"
                   :disabled="!formTextures[slot]"
-                  title="移除贴图"
+                  title="Remove texture"
                   @click.stop="handleTextureRemove(slot)"
                 />
               </div>
@@ -1104,15 +1104,15 @@ async function handleImportFileChange(event: Event) {
           />
           <v-dialog v-model="saveSharedDialogVisible" max-width="420">
             <v-card>
-              <v-card-title class="text-h6">更新共享材质</v-card-title>
+              <v-card-title class="text-h6">Update Shared Material</v-card-title>
               <v-card-text>
-                选择 "更新共享" 将覆盖共享材质并同步所有引用对象；选择 "分离" 则仅保留当前对象的独立材质。
+                Choosing "Update Shared" will overwrite the shared material and synchronize it across all referencing objects; choosing "Detach" will keep only the current object's material as a separate instance.
               </v-card-text>
               <v-card-actions>
-                <v-btn variant="text" @click="handleCancelSharedDialog">取消</v-btn>
+                <v-btn variant="text" @click="handleCancelSharedDialog">Cancel</v-btn>
                 <v-spacer />
-                <v-btn variant="text" @click="handleDetachSharedMaterial">分离</v-btn>
-                <v-btn color="primary" variant="tonal" @click="handleConfirmSaveShared">更新共享</v-btn>
+                <v-btn variant="text" @click="handleDetachSharedMaterial">Detach</v-btn>
+                <v-btn color="primary" variant="tonal" @click="handleConfirmSaveShared">Update Shared</v-btn>
               </v-card-actions>
             </v-card>
           </v-dialog>
