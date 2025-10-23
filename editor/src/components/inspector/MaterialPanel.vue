@@ -58,6 +58,20 @@ const canDeleteMaterialSlot = computed(
   () => !!selectedNodeId.value && !!internalActiveId.value && !props.disabled,
 )
 
+const deleteDialogMessage = computed(() => {
+  if (!internalActiveId.value) {
+    return '确认删除当前选中的材质项？此操作无法撤销。'
+  }
+  const entry = nodeMaterials.value.find((item) => item.id === internalActiveId.value) ?? null
+  if (!entry) {
+    return '确认删除当前选中的材质项？此操作无法撤销。'
+  }
+  if (entry.materialId) {
+    return '该材质槽引用共享材质，删除后场景中使用此共享材质的对象将改为默认材质。确认继续删除？'
+  }
+  return '删除后该材质槽及其独立材质将被移除，操作不可撤销。确认继续删除？'
+})
+
 const materialListEntries = computed(() =>
   nodeMaterials.value.map((entry, index) => {
     const shared = entry.materialId ? materials.value.find((item) => item.id === entry.materialId) ?? null : null
@@ -240,6 +254,11 @@ async function handleConfirmDeleteSlot() {
     return
   }
   const targetId = internalActiveId.value
+  const targetEntry = nodeMaterials.value.find((item) => item.id === targetId) ?? null
+  const sharedMaterialId = targetEntry?.materialId ?? null
+  if (sharedMaterialId) {
+    sceneStore.resetSharedMaterialAssignments(sharedMaterialId)
+  }
   const removed = sceneStore.removeNodeMaterial(selectedNodeId.value, targetId)
   deleteDialogVisible.value = false
   if (!removed) {
@@ -314,7 +333,7 @@ async function handleConfirmDeleteSlot() {
       <v-dialog v-model="deleteDialogVisible" max-width="360">
         <v-card>
           <v-card-title class="text-h6">删除材质槽</v-card-title>
-          <v-card-text>确认删除当前选中的材质项？此操作无法撤销。</v-card-text>
+          <v-card-text>{{ deleteDialogMessage }}</v-card-text>
           <v-card-actions class="dialog-actions">
             <v-btn variant="text" @click="handleCancelDeleteSlot">取消</v-btn>
             <v-btn color="error" variant="tonal" @click="handleConfirmDeleteSlot">删除</v-btn>

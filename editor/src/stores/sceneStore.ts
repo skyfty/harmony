@@ -1348,6 +1348,18 @@ function applyMaterialPropsToNodeTree(
   return changed
 }
 
+function nodeTreeIncludesMaterial(nodes: SceneNode[], materialId: string): boolean {
+  for (const node of nodes) {
+    if (node.materials?.some((entry) => entry.materialId === materialId)) {
+      return true
+    }
+    if (node.children?.length && nodeTreeIncludesMaterial(node.children, materialId)) {
+      return true
+    }
+  }
+  return false
+}
+
 function reassignMaterialInNodeTree(nodes: SceneNode[], fromId: string, target: SceneMaterial): boolean {
   let changed = false
   const targetId = target.id
@@ -3068,6 +3080,29 @@ export const useSceneStore = defineStore('scene', {
       })
 
       if (!updated) {
+        return false
+      }
+
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
+      return true
+    },
+    resetSharedMaterialAssignments(materialId: string) {
+      if (!materialId || !nodeTreeIncludesMaterial(this.nodes, materialId)) {
+        return false
+      }
+
+      this.captureHistorySnapshot()
+      const defaultProps = createMaterialProps()
+      const changed = applyMaterialPropsToNodeTree(
+        this.nodes,
+        materialId,
+        defaultProps,
+        null,
+        DEFAULT_MATERIAL_TYPE,
+      )
+
+      if (!changed) {
         return false
       }
 
