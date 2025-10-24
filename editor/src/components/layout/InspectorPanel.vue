@@ -29,7 +29,7 @@ const floating = computed(() => props.floating ?? false)
 const placementIcon = computed(() => (floating.value ? 'mdi-dock-right' : 'mdi-arrow-expand'))
 const placementTitle = computed(() => (floating.value ? '停靠到右侧' : '浮动显示'))
 
-const isLightNode = computed(() => selectedNode.value?.nodeType === 'light')
+const isLightNode = computed(() => selectedNode.value?.nodeType === 'Light')
 const isWallNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'wall')
 const isGroundNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'ground')
 const showMaterialPanel = computed(

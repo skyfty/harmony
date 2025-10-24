@@ -4658,8 +4658,8 @@ function nodeSupportsMaterials(node: SceneNode | null): boolean {
   if (!node) {
     return false
   }
-  const type = node.nodeType ?? (node.light ? 'light' : 'mesh')
-  return type !== 'light' && type !== 'group'
+  const type = node.nodeType ?? (node.light ? 'Light' : 'Mesh')
+  return type !== 'Light' && type !== 'Group'
 }
 
 function resolveMaterialDropTarget(event: DragEvent): { nodeId: string; object: THREE.Object3D } | null {
@@ -5095,7 +5095,7 @@ function updateLightObjectProperties(container: THREE.Object3D, node: SceneNode)
 }
 
 function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
-  const nodeType = node.nodeType ?? (node.light ? 'light' : 'mesh')
+  const nodeType = node.nodeType ?? (node.light ? 'Light' : 'Mesh')
   const userData = object.userData ?? (object.userData = {})
 
   userData.nodeId = node.id
@@ -5103,7 +5103,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   userData.dynamicMeshType = node.dynamicMesh?.type ?? null
   userData.lightType = node.light?.type ?? null
   userData.sourceAssetId = node.sourceAssetId ?? null
-  userData.usesRuntimeObject = nodeType === 'mesh' ? sceneStore.hasRuntimeObject(node.id) : false
+  userData.usesRuntimeObject = nodeType === 'Mesh' ? sceneStore.hasRuntimeObject(node.id) : false
 
   object.name = node.name
   object.position.set(node.position.x, node.position.y, node.position.z)
@@ -5129,13 +5129,13 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     resetMaterialOverrides(object)
   }
 
-  if (nodeType === 'light') {
+  if (nodeType === 'Light') {
     updateLightObjectProperties(object, node)
   }
 }
 
 function shouldRecreateNode(object: THREE.Object3D, node: SceneNode): boolean {
-  const nodeType = node.nodeType ?? (node.light ? 'light' : 'mesh')
+  const nodeType = node.nodeType ?? (node.light ? 'Light' : 'Mesh')
   const userData = object.userData ?? {}
   if (userData.nodeType !== nodeType) {
     return true
@@ -5152,7 +5152,7 @@ function shouldRecreateNode(object: THREE.Object3D, node: SceneNode): boolean {
   if ((userData.sourceAssetId ?? null) !== nextSourceAssetId) {
     return true
   }
-  const expectsRuntime = nodeType === 'mesh' ? sceneStore.hasRuntimeObject(node.id) : false
+  const expectsRuntime = nodeType === 'Mesh' ? sceneStore.hasRuntimeObject(node.id) : false
   if (Boolean(userData.usesRuntimeObject) !== expectsRuntime) {
     return true
   }
@@ -5859,12 +5859,12 @@ function resetMaterialOverrides(target: THREE.Object3D) {
 function createObjectFromNode(node: SceneNode): THREE.Object3D {
   let object: THREE.Object3D
 
-  const nodeType = node.nodeType ?? (node.light ? 'light' : 'mesh')
+  const nodeType = node.nodeType ?? (node.light ? 'Light' : 'Mesh')
 
-  if (nodeType === 'light') {
+  if (nodeType === 'Light') {
     object = createLightObject(node)
     object.name = node.name
-  } else if (nodeType === 'mesh') {
+  } else if (nodeType === 'Mesh') {
     const container = new THREE.Group()
     container.name = node.name
     const containerData = container.userData ?? (container.userData = {})
@@ -5913,7 +5913,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       containerData.dynamicMeshType = node.dynamicMesh?.type ?? null
     }
     object = container
-  } else if (nodeType === 'camera') {
+  } else if (nodeType === 'Camera') {
     if (node.camera?.kind === 'orthographic') {
       const ortho = node.camera
       const halfWidth = 1
@@ -5942,7 +5942,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       perspectiveCamera.userData.nodeId = node.id
       object = perspectiveCamera
     }
-  } else if (nodeType === 'group') {
+  } else if (nodeType === 'Group') {
     object = new THREE.Group()
     object.name = node.name
     object.userData.nodeId = node.id
@@ -5969,7 +5969,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
   userData.dynamicMeshType = node.dynamicMesh?.type ?? userData.dynamicMeshType ?? null
   userData.lightType = node.light?.type ?? null
   userData.sourceAssetId = node.sourceAssetId ?? null
-  if (nodeType !== 'mesh') {
+  if (nodeType !== 'Mesh') {
     userData.usesRuntimeObject = false
   } else if (typeof userData.usesRuntimeObject !== 'boolean') {
     userData.usesRuntimeObject = sceneStore.hasRuntimeObject(node.id)

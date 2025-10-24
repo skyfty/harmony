@@ -162,8 +162,8 @@ function nodeSupportsMaterials(node: SceneNode | null | undefined): boolean {
   if (!node) {
     return false
   }
-  const type = node.nodeType ?? 'mesh'
-  return type !== 'light' && type !== 'group'
+  const type = node.nodeType ?? 'Mesh'
+  return type !== 'Light' && type !== 'Group'
 }
 
 function supportsMaterialDrop(targetId: string): boolean {
@@ -172,7 +172,7 @@ function supportsMaterialDrop(targetId: string): boolean {
   }
   const item = flattenedHierarchyItems.value.find((entry) => entry.id === targetId) ?? null
   if (item?.nodeType) {
-    return item.nodeType !== 'light' && item.nodeType !== 'group'
+    return item.nodeType !== 'Light' && item.nodeType !== 'Group'
   }
   const node = findSceneNodeById(sceneStore.nodes, targetId)
   return nodeSupportsMaterials(node)

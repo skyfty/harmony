@@ -160,8 +160,8 @@ function nodeSupportsMaterials(node: SceneNode | null | undefined): boolean {
   if (!node) {
     return false
   }
-  const type = node.nodeType ?? 'mesh'
-  return type !== 'light' && type !== 'group' && type !== 'camera'
+  const type = node.nodeType ?? 'Mesh'
+  return type !== 'Light' && type !== 'Group' && type !== 'Camera'
 }
 
 function createEmptyTextureMap(input?: MaterialTextureMap | null): MaterialTextureMap {
@@ -281,6 +281,27 @@ function cloneNodeMaterials(materials?: SceneNodeMaterial[] | null): SceneNodeMa
   return (materials ?? []).map((material) => cloneNodeMaterial(material))
 }
 
+const LEGACY_NODE_TYPE_MAP: Record<string, SceneNodeType> = {
+  mesh: 'Mesh',
+  light: 'Light',
+  group: 'Group',
+  camera: 'Camera',
+}
+
+function normalizeSceneNodeType(input: SceneNodeType | string | null | undefined): SceneNodeType {
+  if (!input) {
+    return 'Mesh'
+  }
+  if (typeof input === 'string') {
+    const legacy = LEGACY_NODE_TYPE_MAP[input]
+    if (legacy) {
+      return legacy
+    }
+    return input as SceneNodeType
+  }
+  return input
+}
+
 function extractMaterialProps(material: SceneNodeMaterial | undefined | null): SceneMaterialProps {
   if (!material) {
     return createMaterialProps()
@@ -300,6 +321,28 @@ function extractMaterialProps(material: SceneNodeMaterial | undefined | null): S
     textures: material.textures,
   }
   return createMaterialProps(partial)
+}
+
+function resolveSceneNodeTypeFromObject(object: Object3D | null | undefined, fallback: SceneNodeType = 'Mesh'): SceneNodeType {
+  if (!object) {
+    return fallback
+  }
+  const { type } = object
+  if (type === 'Group') {
+    return 'Group'
+  }
+  if (type === 'Mesh') {
+    return 'Mesh'
+  }
+  if (typeof type === 'string') {
+    if (type === 'Light' || type.endsWith('Light')) {
+      return 'Light'
+    }
+    if (type === 'Camera' || type.endsWith('Camera')) {
+      return 'Camera'
+    }
+  }
+  return fallback
 }
 
 function materialUpdateToProps(update: Partial<SceneNodeMaterial> | Partial<SceneMaterialProps>): Partial<SceneMaterialProps> {
@@ -559,7 +602,7 @@ function createGroundSceneNode(
   return {
     id: GROUND_NODE_ID,
     name: 'Ground',
-    nodeType: 'mesh',
+    nodeType: 'Mesh',
     materials: [
       createNodeMaterial(null, createMaterialProps({
         color: '#707070',
@@ -591,7 +634,7 @@ function normalizeGroundSceneNode(node: SceneNode | null | undefined, settings?:
       ...node,
       id: GROUND_NODE_ID,
       name: 'Ground',
-      nodeType: 'mesh',
+  nodeType: 'Mesh',
       materials: [
         createNodeMaterial(null, createMaterialProps({
           color: primaryMaterial?.color ?? '#707070',
@@ -726,7 +769,7 @@ function createLightNode(options: {
   return {
   id: generateUuid(),
     name: options.name,
-    nodeType: 'light',
+    nodeType: 'Light',
     light,
     position: createVector(options.position.x, options.position.y, options.position.z),
     rotation: options.rotation
@@ -1217,7 +1260,7 @@ async function convertObjectToSceneNode(
     const node: SceneNode = {
       id: generateUuid(),
       name,
-      nodeType: 'light',
+      nodeType: 'Light',
       light: lightConfig,
       position,
       rotation,
@@ -1256,7 +1299,7 @@ async function convertObjectToSceneNode(
     const node: SceneNode = {
       id: generateUuid(),
       name,
-      nodeType: 'camera',
+      nodeType: 'Camera',
       camera: cameraConfig,
       position,
       rotation,
@@ -1287,7 +1330,7 @@ async function convertObjectToSceneNode(
     const node: SceneNode = {
       id: generateUuid(),
       name,
-      nodeType: 'mesh',
+      nodeType: 'Mesh',
       position,
       rotation,
       scale,
@@ -1324,7 +1367,7 @@ async function convertObjectToSceneNode(
     const node: SceneNode = {
       id: generateUuid(),
       name,
-      nodeType: 'group',
+      nodeType: 'Group',
       position,
       rotation,
       scale,
@@ -1693,7 +1736,7 @@ function collectCollisionSpheres(nodes: SceneNode[]): CollisionSphere[] {
       const nodeMatrix = composeNodeMatrix(node)
       const worldMatrix = new Matrix4().multiplyMatrices(parentMatrix, nodeMatrix)
 
-      if (!node.isPlaceholder && node.nodeType !== 'light') {
+  if (!node.isPlaceholder && node.nodeType !== 'Light') {
         const runtimeObject = getRuntimeObject(node.id)
   if (runtimeObject && node.dynamicMesh?.type !== 'ground') {
           runtimeObject.updateMatrixWorld(true)
@@ -1739,7 +1782,7 @@ function collectNodeBoundingInfo(nodes: SceneNode[]): Map<string, NodeBoundingIn
 
       let nodeBounds: Box3 | null = null
 
-      if (!node.isPlaceholder && node.nodeType !== 'light') {
+  if (!node.isPlaceholder && node.nodeType !== 'Light') {
         const runtimeObject = getRuntimeObject(node.id)
         if (runtimeObject && node.dynamicMesh?.type !== 'ground') {
           runtimeObject.updateMatrixWorld(true)
@@ -2019,6 +2062,7 @@ function toHierarchyItem(node: SceneNode): HierarchyTreeItem {
 function cloneNode(node: SceneNode): SceneNode {
   return {
     ...node,
+    nodeType: normalizeSceneNodeType(node.nodeType),
     materials: cloneNodeMaterials(node.materials),
     light: node.light
       ? {
@@ -4845,7 +4889,7 @@ export const useSceneStore = defineStore('scene', {
       const node: SceneNode = {
         id,
         name: asset.name,
-        nodeType: 'mesh',
+        nodeType: 'Mesh',
         materials: [
           createNodeMaterial(null, createMaterialProps({
             color: '#90a4ae',
@@ -5019,7 +5063,6 @@ export const useSceneStore = defineStore('scene', {
         throw new Error('addModelNode requires either an object or an asset')
       }
 
-      const nodeType = payload.nodeType ?? 'mesh'
       const rotation: Vector3Like = payload.rotation ?? { x: 0, y: 0, z: 0 }
       const scale: Vector3Like = payload.scale ?? { x: 1, y: 1, z: 1 }
       let baseY = payload.baseY ?? 0
@@ -5082,6 +5125,8 @@ export const useSceneStore = defineStore('scene', {
           nodes: this.nodes,
         })
       }
+
+      const nodeType = payload.nodeType ?? resolveSceneNodeTypeFromObject(workingObject)
 
       const node = this.addSceneNode({
         nodeType,
@@ -5198,7 +5243,7 @@ export const useSceneStore = defineStore('scene', {
       const node: SceneNode = {
         id,
         name: payload.name ?? payload.object.name ?? 'Imported Mesh',
-        nodeType: payload.nodeType,
+        nodeType: normalizeSceneNodeType(payload.nodeType),
         materials: [initialMaterial],
         position: payload.position ?? { x: 0, y: 0, z: 0 },
         rotation: payload.rotation ?? { x: 0, y: 0, z: 0 },
@@ -5295,7 +5340,7 @@ export const useSceneStore = defineStore('scene', {
       const wallGroup = createWallGroup(build.definition)
       const nodeName = payload.name ?? this.generateWallNodeName()
       const node = this.addSceneNode({
-        nodeType: 'mesh',
+        nodeType: 'Mesh',
         object: wallGroup,
         name: nodeName,
         position: createVector(build.center.x, build.center.y, build.center.z),
@@ -5651,7 +5696,7 @@ export const useSceneStore = defineStore('scene', {
       const groupNode: SceneNode = {
         id: groupId,
         name: groupName,
-        nodeType: 'group',
+        nodeType: 'Group',
         position: createVector(groupLocalPositionVec.x, groupLocalPositionVec.y, groupLocalPositionVec.z),
         rotation: createVector(groupLocalEuler.x, groupLocalEuler.y, groupLocalEuler.z),
         scale: createVector(groupLocalScaleVec.x, groupLocalScaleVec.y, groupLocalScaleVec.z),

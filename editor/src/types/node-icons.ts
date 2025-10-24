@@ -1,10 +1,10 @@
 import type { LightNodeType, SceneNodeType } from './scene'
 
 export const NODE_TYPE_ICONS: Record<SceneNodeType, string> = {
-  mesh: 'mdi-cube-outline',
-  light: 'mdi-lightbulb-outline',
-  group: 'mdi-folder-outline',
-  camera: 'mdi-video-outline',
+  Mesh: 'mdi-cube-outline',
+  Light: 'mdi-lightbulb-outline',
+  Group: 'mdi-folder-outline',
+  Camera: 'mdi-video-outline',
   Capsule: 'mdi-shape-outline',
   Circle: 'mdi-circle-outline',
   Cylinder: 'mdi-cylinder',
@@ -34,11 +34,11 @@ type NodeIconParams = {
 }
 
 export function getNodeIcon({ nodeType, lightType, hasChildren }: NodeIconParams): string {
-  if (nodeType === 'light') {
+  if (nodeType === 'Light') {
     if (lightType && lightType in LIGHT_TYPE_ICONS) {
       return LIGHT_TYPE_ICONS[lightType]
     }
-    return NODE_TYPE_ICONS.light
+    return NODE_TYPE_ICONS.Light
   }
 
   if (nodeType && nodeType in NODE_TYPE_ICONS) {
@@ -46,8 +46,8 @@ export function getNodeIcon({ nodeType, lightType, hasChildren }: NodeIconParams
   }
 
   if (hasChildren) {
-    return NODE_TYPE_ICONS.group
+    return NODE_TYPE_ICONS.Group
   }
 
-  return NODE_TYPE_ICONS.mesh
+  return NODE_TYPE_ICONS.Mesh
 }

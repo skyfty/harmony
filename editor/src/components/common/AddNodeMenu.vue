@@ -459,7 +459,7 @@ function handleAddGroup() {
   const group = new THREE.Group()
   group.name = groupName
   sceneStore.addSceneNode({
-    nodeType: 'group',
+    nodeType: 'Group',
     object: group,
     name: groupName,
     position: { x: 0, y: 0, z: 0 },

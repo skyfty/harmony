@@ -2,7 +2,7 @@ import type { GeometryType } from '@/plugins/geometry'
 import type { SceneDynamicMesh } from '@/types/dynamic-mesh'
 import type { SceneNodeMaterial } from '@/types/material'
 
-export type SceneNodeType = 'mesh' | 'light' | 'group' | 'camera' | GeometryType
+export type SceneNodeType = 'Mesh' | 'Light' | 'Group' | 'Camera' | GeometryType
 
 export interface CameraNodeProperties {
   kind: 'perspective' | 'orthographic'
