@@ -17,8 +17,8 @@ const quickActions: QuickAction[] = [
 const props = defineProps<{ showStats: boolean }>()
 
 const sceneStore = useSceneStore()
-const { canUndo, canRedo, currentScene, panelVisibility } = storeToRefs(sceneStore)
-const sceneName = computed(() => currentScene.value?.name ?? 'Untitled Scene')
+const { canUndo, canRedo, currentSceneMeta, panelVisibility } = storeToRefs(sceneStore)
+const sceneName = computed(() => currentSceneMeta.value?.name ?? 'Untitled Scene')
 
 const emit = defineEmits<{
   (event: 'menu-action', action: string): void

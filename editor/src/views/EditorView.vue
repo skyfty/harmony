@@ -21,6 +21,7 @@ import {
   type SceneBundleImportScene,
   SCENE_BUNDLE_FORMAT_VERSION,
 } from '@/stores/sceneStore'
+import { useScenesStore } from '@/stores/scenesStore'
 import type { EditorTool } from '@/types/editor-tool'
 import type { SceneCameraState } from '@/types/scene-camera-state'
 import { useUiStore } from '@/stores/uiStore'
@@ -30,6 +31,7 @@ import Loader, { type LoaderProgressPayload } from '@/plugins/loader'
 import type { Object3D } from 'three'
 
 const sceneStore = useSceneStore()
+const scenesStore = useScenesStore()
 const uiStore = useUiStore()
 const {
   nodes: sceneNodes,
@@ -37,12 +39,13 @@ const {
   activeTool,
   camera,
   panelVisibility,
-  sceneSummaries,
   currentSceneId,
   cameraFocusNodeId,
   cameraFocusRequestId,
   groundSettings,
 } = storeToRefs(sceneStore)
+
+const { sortedMetadata: sceneSummaries } = storeToRefs(scenesStore)
 
 type PanelPlacementHolder = { panelPlacement?: PanelPlacementState | null }
 
@@ -171,6 +174,7 @@ const reopenButtons = computed(() => ({
 }))
 
 onMounted(async () => {
+  await scenesStore.initialize()
   await sceneStore.ensureCurrentSceneLoaded()
 })
 
@@ -338,7 +342,7 @@ function handleOpenAction() {
   isSceneManagerOpen.value = true
 }
 function openExportDialog() {
-  const rawName = sceneStore.currentScene?.name ?? 'scene'
+  const rawName = sceneStore.currentSceneMeta?.name ?? 'scene'
   const trimmed = rawName.trim()
   exportDialogFileName.value = trimmed || 'scene'
   exportProgress.value = 0
@@ -488,7 +492,7 @@ async function handlePreview() {
   }
 
   isPreviewing.value = true
-  const sceneName = sceneStore.currentScene?.name ?? 'scene'
+  const sceneName = sceneStore.currentSceneMeta?.name ?? 'scene'
   uiStore.showLoadingOverlay({
     title: 'Preview Scene',
     message: 'Preparing preview…',
@@ -551,29 +555,31 @@ async function handlePreview() {
   }
 }
 
-function exportCurrentScene() {
-        const currentSceneId = sceneStore.currentSceneId
-      if (!currentSceneId) {
-        console.warn('No current scene to save')
-        return
-      }
-      const bundle = sceneStore.exportSceneBundle([currentSceneId])
-      if (!bundle || !bundle.scenes.length) {
-        console.warn('Failed to export current scene')
-        return
-      }
-      const json = JSON.stringify(bundle.scenes[0], null, 2)
-      const blob = new Blob([json], { type: 'application/json' })
-      const url = URL.createObjectURL(blob)
-      const sceneName = sceneStore.currentScene?.name ?? 'scene'
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `${sceneName}-${timestamp}.json`
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      URL.revokeObjectURL(url)
+async function exportCurrentScene() {
+  const currentSceneId = sceneStore.currentSceneId
+  if (!currentSceneId) {
+    console.warn('No current scene to save')
+    return
+  }
+
+  const bundle = await sceneStore.exportSceneBundle([currentSceneId])
+  if (!bundle || !bundle.scenes.length) {
+    console.warn('Failed to export current scene')
+    return
+  }
+
+  const json = JSON.stringify(bundle.scenes[0], null, 2)
+  const blob = new Blob([json], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const sceneName = sceneStore.currentSceneMeta?.name ?? 'scene'
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `${sceneName}-${timestamp}.json`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
 }
 
 async function handleAction(action: string) {
@@ -588,7 +594,7 @@ async function handleAction(action: string) {
       requestExternalSceneImport()
       break
     case 'Save': {
-      exportCurrentScene()
+      await exportCurrentScene()
       break
     }
     case 'Preview':
@@ -639,8 +645,8 @@ async function handleAction(action: string) {
       console.warn(`Unknown menu action: ${action}`)
   }
 }
-function handleCreateScene(payload: { name: string; groundWidth: number; groundDepth: number }) {
-  sceneStore.createScene(payload.name, {
+async function handleCreateScene(payload: { name: string; groundWidth: number; groundDepth: number }) {
+  await sceneStore.createScene(payload.name, {
     groundSettings: {
       width: payload.groundWidth,
       depth: payload.groundDepth,
@@ -664,8 +670,8 @@ async function handleDeleteScene(sceneId: string) {
   await sceneStore.deleteScene(sceneId)
 }
 
-function handleRenameScene(payload: { id: string; name: string }) {
-  sceneStore.renameScene(payload.id, payload.name)
+async function handleRenameScene(payload: { id: string; name: string }) {
+  await sceneStore.renameScene(payload.id, payload.name)
 }
 
 function handleSceneManagerImportRequest() {
@@ -724,7 +730,7 @@ async function handleSceneImportFileChange(event: Event) {
     uiStore.updateLoadingOverlay({ message: '导入场景…' })
     uiStore.updateLoadingProgress(80)
 
-    const result = sceneStore.importSceneBundle(bundle)
+  const result = await sceneStore.importSceneBundle(bundle)
     const importedCount = result.importedSceneIds.length
     const renameCount = result.renamedScenes.length
     let message = `成功导入 ${importedCount} 个场景`
@@ -770,7 +776,7 @@ async function handleSceneManagerExport(sceneIds: string[]) {
   })
 
   try {
-    const bundle = sceneStore.exportSceneBundle(sceneIds)
+    const bundle = await sceneStore.exportSceneBundle(sceneIds)
     if (!bundle || !bundle.scenes.length) {
       throw new Error('没有可导出的场景')
     }

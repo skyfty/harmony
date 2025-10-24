@@ -664,7 +664,7 @@ async function performDeleteAssets() {
   }
   try {
     const assetIds = assets.map((asset) => asset.id)
-    const removedIds = sceneStore.deleteProjectAssets(assetIds)
+    const removedIds = await sceneStore.deleteProjectAssets(assetIds)
     if (removedIds.length) {
       sceneStore.selectAsset(null)
       searchResults.value = searchResults.value.filter((item) => !removedIds.includes(item.id))

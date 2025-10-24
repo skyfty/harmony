@@ -7,15 +7,19 @@ import type { SceneCameraState } from './scene-camera-state'
 import type { PanelVisibilityState } from './panel-visibility-state'
 import type { SceneClipboard } from './scene-clipboard'
 import type { SceneHistoryEntry } from './scene-history-entry'
-import type { StoredSceneDocument } from './stored-scene-document'
 import type { AssetIndexEntry } from './asset-index-entry'
 import type { SceneViewportSettings } from './scene-viewport-settings'
 import type { GroundSettings } from './ground-settings'
 import type { SceneMaterial } from '@/types/material'
 
 export interface SceneState {
-  scenes: StoredSceneDocument[]
   currentSceneId: string | null
+  currentSceneMeta: {
+    name: string
+    thumbnail: string | null
+    createdAt: string
+    updatedAt: string
+  } | null
   nodes: SceneNode[]
   materials: SceneMaterial[]
   selectedNodeId: string | null

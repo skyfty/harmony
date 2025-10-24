@@ -1,23 +1,109 @@
 import type { PiniaPluginContext, StateTree } from 'pinia'
 
+type MaybePromise<T> = T | Promise<T>
+
 type StorageAdapter = {
-  getItem(key: string): string | null
-  setItem(key: string, value: string): void
-  removeItem(key: string): void
+  getItem(key: string): MaybePromise<string | null>
+  setItem(key: string, value: string): MaybePromise<void>
+  removeItem(key: string): MaybePromise<void>
 }
 
 const isClient = typeof window !== 'undefined'
+const hasIndexedDb = isClient && typeof window.indexedDB !== 'undefined'
 
 const memoryStorage: StorageAdapter = (() => {
   const storage = new Map<string, string>()
   return {
     getItem: (key) => storage.get(key) ?? null,
-    setItem: (key, value) => storage.set(key, value),
-    removeItem: (key) => storage.delete(key),
+    setItem: (key, value) => {
+      storage.set(key, value)
+    },
+    removeItem: (key) => {
+      storage.delete(key)
+    },
   }
 })()
 
-type StorageResolver = 'local' | 'session' | 'memory' | StorageAdapter
+const PINIA_IDB_NAME = 'harmony-pinia-state'
+const PINIA_IDB_STORE = 'pinia'
+const PINIA_IDB_VERSION = 1
+
+let piniaDbPromise: Promise<IDBDatabase> | null = null
+
+function openPiniaDatabase(): Promise<IDBDatabase> {
+  if (!hasIndexedDb) {
+    return Promise.reject(new Error('IndexedDB is not available'))
+  }
+  if (!piniaDbPromise) {
+    piniaDbPromise = new Promise<IDBDatabase>((resolve, reject) => {
+      const request = window.indexedDB.open(PINIA_IDB_NAME, PINIA_IDB_VERSION)
+      request.onupgradeneeded = () => {
+        const db = request.result
+        if (!db.objectStoreNames.contains(PINIA_IDB_STORE)) {
+          db.createObjectStore(PINIA_IDB_STORE)
+        }
+      }
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error ?? new Error('Failed to open Pinia IndexedDB'))
+    })
+  }
+  return piniaDbPromise
+}
+
+function idbRequestToPromise<T>(request: IDBRequest<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error ?? new Error('IndexedDB request failed'))
+  })
+}
+
+const indexedDbStorage: StorageAdapter = {
+  async getItem(key: string) {
+    if (!hasIndexedDb) {
+      return memoryStorage.getItem(key)
+    }
+    const db = await openPiniaDatabase()
+    const tx = db.transaction(PINIA_IDB_STORE, 'readonly')
+    const store = tx.objectStore(PINIA_IDB_STORE)
+    const value = await idbRequestToPromise<unknown>(store.get(key))
+    if (value == null) {
+      return null
+    }
+    return typeof value === 'string' ? value : String(value)
+  },
+  async setItem(key: string, value: string) {
+    if (!hasIndexedDb) {
+      memoryStorage.setItem(key, value)
+      return
+    }
+    const db = await openPiniaDatabase()
+    const tx = db.transaction(PINIA_IDB_STORE, 'readwrite')
+    const store = tx.objectStore(PINIA_IDB_STORE)
+    store.put(value, key)
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(tx.error ?? new Error('Failed to persist Pinia state'))
+      tx.onabort = () => reject(tx.error ?? new Error('Pinia state transaction aborted'))
+    })
+  },
+  async removeItem(key: string) {
+    if (!hasIndexedDb) {
+      memoryStorage.removeItem(key)
+      return
+    }
+    const db = await openPiniaDatabase()
+    const tx = db.transaction(PINIA_IDB_STORE, 'readwrite')
+    const store = tx.objectStore(PINIA_IDB_STORE)
+    store.delete(key)
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(tx.error ?? new Error('Failed to delete Pinia state'))
+      tx.onabort = () => reject(tx.error ?? new Error('Pinia state delete aborted'))
+    })
+  },
+}
+
+type StorageResolver = 'local' | 'session' | 'memory' | 'indexeddb' | StorageAdapter
 
 type MigrationMap<S extends StateTree> = Record<number, (state: Partial<S>) => Partial<S>>
 
@@ -72,6 +158,13 @@ function resolveStorageResolver(resolver: StorageResolver | string | undefined, 
     if (target === 'local') return isClient ? window.localStorage : memoryStorage
     if (target === 'session') return isClient ? window.sessionStorage : memoryStorage
     if (target === 'memory') return memoryStorage
+    if (target === 'indexeddb') {
+      if (!hasIndexedDb) {
+        console.warn('[pinia-persist] IndexedDB is not available; falling back to memory storage.')
+        return memoryStorage
+      }
+      return indexedDbStorage
+    }
     console.warn(`[pinia-persist] Unknown storage key "${target}", falling back to memory storage.`)
     return memoryStorage
   }
@@ -207,48 +300,53 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
     let fromVersion = 0
     let lastPersistedValue: string | null = null
     let lastPersistedState: Partial<StateTree> | null = null
-    let pendingPayload: PersistPayload | null = null
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null
+  let pendingPayload: PersistPayload | null = null
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null
+  let flushListenersRegistered = false
+  let stopSubscription: (() => void) | null = null
+  let hydrationPromise: Promise<void> = Promise.resolve()
 
-    try {
-      const raw = storage.getItem(key)
-      lastPersistedValue = raw
-      if (raw) {
-        const payload = serializer.deserialize(raw)
-        if (payload) {
-          fromVersion = payload.version ?? 0
-          let stateToHydrate = payload.state ?? {}
-          stateToHydrate = runMigrations(
-            stateToHydrate,
-            fromVersion,
-            version,
-            persistOptions.migrations,
-            debug,
-          )
-          if (debug) {
-            console.info('[pinia-persist] Hydrating store', {
-              key,
-              fromVersion,
-              toVersion: version,
-              state: stateToHydrate,
-            })
-          }
-          applyStatePatch(store, stateToHydrate)
-          lastPersistedState = cloneDeep(stateToHydrate)
-        }
+    const handleFlushEvent = (event: Event) => {
+      if (debounceTimer) {
+        clearTimeout(debounceTimer)
+        debounceTimer = null
       }
-    } catch (error) {
-      if (debug) {
-        console.warn(`[pinia-persist] Failed to hydrate store "${store.$id}"`, error)
+
+      if (event.type === 'visibilitychange' && typeof document !== 'undefined' && document.visibilityState !== 'hidden') {
+        return
       }
+
+      void flushPendingPayload(`event:${event.type}`)
     }
 
-    const flushPendingPayload = (reason: string) => {
+    const registerFlushListeners = () => {
+      if (!isClient || flushEvents.length === 0 || flushListenersRegistered) {
+        return
+      }
+      flushEvents.forEach((eventName) => {
+        window.addEventListener(eventName, handleFlushEvent, { passive: true })
+      })
+      flushListenersRegistered = true
+    }
+
+    const removeFlushListeners = () => {
+      if (!isClient || !flushListenersRegistered) {
+        return
+      }
+      flushEvents.forEach((eventName) => {
+        window.removeEventListener(eventName, handleFlushEvent)
+      })
+      flushListenersRegistered = false
+    }
+
+    const flushPendingPayload = async (reason: string) => {
       if (!pendingPayload) return
       const payload = pendingPayload
       pendingPayload = null
 
       try {
+        await hydrationPromise.catch(() => undefined)
+
         if (!shouldPersist(payload.state, lastPersistedState)) {
           if (debug) {
             console.info('[pinia-persist] Skipped persisting store', {
@@ -260,10 +358,11 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
         }
 
         const serialized = serializer.serialize(payload)
-        if (serialized === lastPersistedValue) return
-        console.log('sdfsdfsdf')
+        if (serialized === lastPersistedValue) {
+          return
+        }
 
-        storage.setItem(key, serialized)
+        await storage.setItem(key, serialized)
         lastPersistedValue = serialized
         lastPersistedState = cloneDeep(payload.state)
 
@@ -295,49 +394,66 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
       }
 
       if (flushDebounce === 0) {
-        flushPendingPayload('immediate')
+        void flushPendingPayload('immediate')
         return
       }
 
       debounceTimer = setTimeout(() => {
         debounceTimer = null
-        flushPendingPayload('debounce')
+        void flushPendingPayload('debounce')
       }, flushDebounce)
     }
 
-    const handleFlushEvent = (event: Event) => {
-      if (debounceTimer) {
-        clearTimeout(debounceTimer)
-        debounceTimer = null
-      }
+    const hydrate = async () => {
+      try {
+        const raw = await storage.getItem(key)
+        lastPersistedValue = raw ?? null
+        if (!raw) {
+          return
+        }
 
-      if (event.type === 'visibilitychange' && typeof document !== 'undefined' && document.visibilityState !== 'hidden') {
-        return
-      }
+        const payload = serializer.deserialize(raw)
+        if (!payload) {
+          return
+        }
 
-      flushPendingPayload(`event:${event.type}`)
+        fromVersion = payload.version ?? 0
+        let stateToHydrate = payload.state ?? {}
+        stateToHydrate = runMigrations(
+          stateToHydrate,
+          fromVersion,
+          version,
+          persistOptions.migrations,
+          debug,
+        )
+
+        if (debug) {
+          console.info('[pinia-persist] Hydrating store', {
+            key,
+            fromVersion,
+            toVersion: version,
+            state: stateToHydrate,
+          })
+        }
+
+        applyStatePatch(store, stateToHydrate)
+        lastPersistedState = cloneDeep(stateToHydrate)
+      } catch (error) {
+        if (debug) {
+          console.warn(`[pinia-persist] Failed to hydrate store "${store.$id}"`, error)
+        }
+      }
     }
 
-    const removeFlushListeners = () => {
-      if (!isClient) return
-      for (const eventName of flushEvents) {
-        window.removeEventListener(eventName, handleFlushEvent)
-      }
-    }
-
-    if (isClient && flushEvents.length > 0) {
-      // Flush pending state when the tab is hidden or about to unload so the latest data survives.
-      for (const eventName of flushEvents) {
-        window.addEventListener(eventName, handleFlushEvent, { passive: true })
-      }
-    }
-
-    const stopSubscription = store.$subscribe(
-      (_mutation, state) => {
-        schedulePersist(state)
-      },
-      { detached: true },
-    )
+    hydrationPromise = hydrate().finally(() => {
+      registerFlushListeners()
+      stopSubscription = store.$subscribe(
+        (_mutation, state) => {
+          schedulePersist(state)
+        },
+        { detached: true },
+      )
+    })
 
     const originalDispose = store.$dispose.bind(store)
     store.$dispose = () => {
@@ -346,10 +462,9 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
         debounceTimer = null
       }
 
-      // Ensure batched data is written out and listeners are cleaned up with the store lifecycle.
-      flushPendingPayload('dispose')
+      void flushPendingPayload('dispose')
       removeFlushListeners()
-      stopSubscription()
+      stopSubscription?.()
       originalDispose()
     }
   }

@@ -32,7 +32,6 @@ import type { AssetIndexEntry, AssetSourceMetadata } from '@/types/asset-index-e
 import type { SceneCameraState } from '@/types/scene-camera-state'
 import type { SceneHistoryEntry } from '@/types/scene-history-entry'
 import type { SceneState } from '@/types/scene-state'
-import type { SceneSummary } from '@/types/scene-summary'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { CameraProjectionMode, CameraControlMode, SceneSkyboxSettings, SceneViewportSettings } from '@/types/scene-viewport-settings'
@@ -57,6 +56,7 @@ import {
 } from '@/stores/skyboxPresets'
 import { useAssetCacheStore } from './assetCacheStore'
 import { useUiStore } from './uiStore'
+import { useScenesStore } from './scenesStore'
 import { loadObjectFromFile } from '@/plugins/assetImport'
 import { generateUuid } from '@/plugins/uuid'
 import { getCachedModelObject, getOrLoadModelObject } from './modelObjectCache'
@@ -1418,6 +1418,22 @@ const PROJECT_PANEL_TREE_MIN_SIZE = 10
 const PROJECT_PANEL_TREE_MAX_SIZE = 90
 const DEFAULT_PROJECT_PANEL_TREE_SIZE = 20
 
+function normalizeProjectPanelTreeSize(value: unknown): number {
+  const numeric = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number.parseFloat(value)
+      : Number.NaN
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_PROJECT_PANEL_TREE_SIZE
+  }
+  const clamped = Math.min(
+    Math.max(Math.round(numeric * 100) / 100, PROJECT_PANEL_TREE_MIN_SIZE),
+    PROJECT_PANEL_TREE_MAX_SIZE,
+  )
+  return clamped
+}
+
 const defaultSkyboxSettings = cloneSkyboxSettings(DEFAULT_SKYBOX_SETTINGS)
 
 const defaultViewportSettings: SceneViewportSettings = {
@@ -2211,6 +2227,60 @@ function clonePackageAssetMap(map: Record<string, string>): Record<string, strin
   return { ...map }
 }
 
+function migrateScenePersistedState(
+  state: Partial<SceneState> | undefined,
+  _fromVersion: number,
+  _toVersion: number,
+): Partial<SceneState> {
+  if (!state || typeof state !== 'object') {
+    return state ?? {}
+  }
+
+  const next: Record<string, unknown> = { ...state }
+
+  delete next.scenes
+  delete next.sceneSummaries
+  delete next.currentScene
+  delete next.sceneName
+
+  if (typeof next.currentSceneId !== 'string') {
+    next.currentSceneId = null
+  }
+
+  const now = new Date().toISOString()
+  if (!next.currentSceneMeta || typeof next.currentSceneMeta !== 'object') {
+    const fallbackName = typeof (state as Record<string, unknown>).currentSceneName === 'string'
+      ? ((state as Record<string, unknown>).currentSceneName as string)
+      : 'Untitled Scene'
+    const name = fallbackName.trim() || 'Untitled Scene'
+    next.currentSceneMeta = {
+      name,
+      thumbnail: null,
+      createdAt: now,
+      updatedAt: now,
+    }
+  } else {
+    const meta = { ...(next.currentSceneMeta as Record<string, unknown>) }
+    const name = typeof meta.name === 'string' ? meta.name.trim() : ''
+    const createdAt = typeof meta.createdAt === 'string' ? meta.createdAt : now
+    const updatedAt = typeof meta.updatedAt === 'string' ? meta.updatedAt : createdAt
+    next.currentSceneMeta = {
+      name: name || 'Untitled Scene',
+      thumbnail: typeof meta.thumbnail === 'string' ? meta.thumbnail : null,
+      createdAt,
+      updatedAt,
+    }
+  }
+
+  if (!Array.isArray(next.selectedNodeIds)) {
+    next.selectedNodeIds = []
+  } else {
+    next.selectedNodeIds = (next.selectedNodeIds as unknown[]).filter((id): id is string => typeof id === 'string')
+  }
+
+  return next as Partial<SceneState>
+}
+
 function applySceneAssetState(store: SceneState, scene: StoredSceneDocument) {
   store.assetCatalog = cloneAssetCatalog(scene.assetCatalog)
   store.assetIndex = cloneAssetIndex(scene.assetIndex)
@@ -2291,396 +2361,6 @@ function areSelectionsEqual(a: string[], b: string[]): boolean {
   return true
 }
 
-type ScenePersistedState = Partial<SceneState>
-
-function ensureActiveTool(state: ScenePersistedState): ScenePersistedState {
-  return {
-    ...state,
-    activeTool: (state.activeTool as EditorTool | undefined) ?? 'select',
-  }
-}
-
-function ensureCameraAndPanelState(state: ScenePersistedState): ScenePersistedState {
-  const cameraState = state.camera as Partial<SceneCameraState> | undefined
-  const panelState = normalizePanelVisibilityState(state.panelVisibility as Partial<PanelVisibilityState> | undefined)
-
-  return {
-    ...state,
-    camera: (() => {
-      const position = cloneVector(cameraState?.position ?? defaultCameraState.position)
-      const target = cloneVector(cameraState?.target ?? defaultCameraState.target)
-      const forward = cameraState?.forward ? cloneVector(cameraState.forward) : computeForwardVector(position, target)
-      return {
-        position,
-        target,
-        fov: cameraState?.fov ?? defaultCameraState.fov,
-        forward,
-      }
-    })(),
-    panelVisibility: panelState,
-  }
-}
-
-function ensurePanelPlacement(state: ScenePersistedState): ScenePersistedState {
-  const placementState = normalizePanelPlacementStateInput(
-    (state as { panelPlacement?: Partial<PanelPlacementState> | undefined }).panelPlacement,
-  )
-
-  return {
-    ...state,
-    panelPlacement: placementState,
-  }
-}
-
-function ensureScenePanelState(state: ScenePersistedState): ScenePersistedState {
-  const scenes = state.scenes as Partial<StoredSceneDocument>[] | undefined
-  if (!Array.isArray(scenes)) {
-    return state
-  }
-
-  const normalizedScenes = scenes.map((scene) => ({
-    ...scene,
-    panelVisibility: normalizePanelVisibilityState(scene.panelVisibility as Partial<PanelVisibilityState> | undefined),
-    panelPlacement: normalizePanelPlacementStateInput(scene.panelPlacement as Partial<PanelPlacementState> | undefined),
-  }))
-
-  return {
-    ...state,
-    scenes: normalizedScenes as StoredSceneDocument[],
-  }
-}
-
-function ensureViewportSettings(state: ScenePersistedState): ScenePersistedState {
-  const normalizedSettings = cloneViewportSettings(state.viewportSettings as Partial<SceneViewportSettings> | undefined)
-  const scenes = state.scenes as Partial<StoredSceneDocument>[] | undefined
-  const normalizedScenes = Array.isArray(scenes)
-    ? scenes.map((scene) => ({
-        ...scene,
-        viewportSettings: cloneViewportSettings(scene.viewportSettings as Partial<SceneViewportSettings> | undefined),
-        panelVisibility: normalizePanelVisibilityState(scene.panelVisibility as Partial<PanelVisibilityState> | undefined),
-        panelPlacement: normalizePanelPlacementStateInput(scene.panelPlacement as Partial<PanelPlacementState> | undefined),
-      }) as StoredSceneDocument)
-    : scenes
-
-  return {
-    ...state,
-    viewportSettings: normalizedSettings,
-    scenes: normalizedScenes as StoredSceneDocument[] | undefined,
-  }
-}
-
-function normalizeProjectPanelTreeSize(value: unknown): number {
-  const numeric = typeof value === 'number'
-    ? value
-    : typeof value === 'string'
-      ? Number.parseFloat(value)
-      : Number.NaN
-  if (!Number.isFinite(numeric)) {
-    return DEFAULT_PROJECT_PANEL_TREE_SIZE
-  }
-  const clamped = Math.min(
-    Math.max(Math.round(numeric * 100) / 100, PROJECT_PANEL_TREE_MIN_SIZE),
-    PROJECT_PANEL_TREE_MAX_SIZE,
-  )
-  return clamped
-}
-
-function ensureProjectPanelTreeSize(state: ScenePersistedState): ScenePersistedState {
-  const value = (state as { projectPanelTreeSize?: unknown }).projectPanelTreeSize
-  return {
-    ...state,
-    projectPanelTreeSize: normalizeProjectPanelTreeSize(value),
-  }
-}
-
-function removeLegacyExternalNodes(state: ScenePersistedState): ScenePersistedState {
-  const rawNodes = state.nodes as SceneNode[] | undefined
-  return {
-    ...state,
-    nodes: Array.isArray(rawNodes)
-      ? rawNodes.filter((node) => (node as SceneNode).nodeType !== 'mesh')
-      : rawNodes,
-  }
-}
-
-function ensureSceneCollection(state: ScenePersistedState): ScenePersistedState {
-  const existingScenes = state.scenes as StoredSceneDocument[] | undefined
-  if (Array.isArray(existingScenes) && existingScenes.length > 0) {
-    return state
-  }
-
-  const rawNodes = (state.nodes as SceneNode[] | undefined) ?? []
-  const selectedNodeId = (state.selectedNodeId as string | null | undefined) ?? null
-  const cameraState = state.camera as Partial<SceneCameraState> | undefined
-  const rawCatalog = (state.assetCatalog as Record<string, ProjectAsset[]> | undefined) ?? null
-  const rawIndex = (state.assetIndex as Record<string, AssetIndexEntry> | undefined) ?? null
-  const rawPackageMap = (state.packageAssetMap as Record<string, string> | undefined) ?? null
-  const rawGround = findGroundNode(rawNodes)
-  const fallbackGroundSettings = cloneGroundSettings(
-    (state as { groundSettings?: Partial<GroundSettings> | null }).groundSettings ??
-      (rawGround?.dynamicMesh?.type === 'ground'
-        ? { width: rawGround.dynamicMesh.width, depth: rawGround.dynamicMesh.depth }
-        : undefined),
-  )
-
-  const cameraPosition = cloneVector(cameraState?.position ?? defaultCameraState.position)
-  const cameraTarget = cloneVector(cameraState?.target ?? defaultCameraState.target)
-  const cameraForward = cameraState?.forward ? cloneVector(cameraState.forward) : computeForwardVector(cameraPosition, cameraTarget)
-  const camera: SceneCameraState = {
-    position: cameraPosition,
-    target: cameraTarget,
-    fov: cameraState?.fov ?? defaultCameraState.fov,
-    forward: cameraForward,
-  }
-  const viewportSettings = cloneViewportSettings(state.viewportSettings as Partial<SceneViewportSettings> | undefined)
-
-  const recoveredScene = createSceneDocument('Recovered Scene', {
-    nodes: rawNodes,
-    selectedNodeId,
-    camera,
-    resourceProviderId: (state.resourceProviderId as string | undefined) ?? 'builtin',
-    assetCatalog: rawCatalog ?? undefined,
-    assetIndex: rawIndex ?? undefined,
-    packageAssetMap: rawPackageMap ?? undefined,
-    viewportSettings,
-    panelVisibility: state.panelVisibility as Partial<PanelVisibilityState> | undefined,
-    panelPlacement: (state as { panelPlacement?: Partial<PanelPlacementState> }).panelPlacement,
-    groundSettings: fallbackGroundSettings,
-  })
-
-  return {
-    ...state,
-    scenes: [recoveredScene],
-    currentSceneId: recoveredScene.id,
-    nodes: cloneSceneNodes(recoveredScene.nodes),
-    selectedNodeId: recoveredScene.selectedNodeId,
-    selectedNodeIds: cloneSelection(recoveredScene.selectedNodeIds),
-    camera: cloneCameraState(recoveredScene.camera),
-    viewportSettings: cloneViewportSettings(recoveredScene.viewportSettings),
-    panelVisibility: normalizePanelVisibilityState(recoveredScene.panelVisibility),
-    panelPlacement: normalizePanelPlacementStateInput(recoveredScene.panelPlacement),
-    groundSettings: cloneGroundSettings(recoveredScene.groundSettings),
-    assetCatalog: cloneAssetCatalog(recoveredScene.assetCatalog),
-    assetIndex: cloneAssetIndex(recoveredScene.assetIndex),
-    packageAssetMap: clonePackageAssetMap(recoveredScene.packageAssetMap),
-  }
-}
-
-function ensureResourceProvider(state: ScenePersistedState): ScenePersistedState {
-  const scenes = state.scenes as StoredSceneDocument[] | undefined
-  const updatedScenes = Array.isArray(scenes)
-    ? scenes.map((scene) => ({
-        ...scene,
-        resourceProviderId: scene.resourceProviderId ?? 'builtin',
-      }))
-    : scenes
-
-  return {
-    ...state,
-    scenes: updatedScenes,
-    resourceProviderId: (state.resourceProviderId as string | undefined) ?? 'builtin',
-  }
-}
-
-function ensureSceneTimestamps(state: ScenePersistedState): ScenePersistedState {
-  const scenes = state.scenes as Partial<StoredSceneDocument>[] | undefined
-  if (!Array.isArray(scenes)) {
-    return state
-  }
-
-  const now = new Date().toISOString()
-  const upgradedScenes = scenes.map((scene) => {
-    const createdAt = scene.createdAt ?? now
-    const updatedAt = scene.updatedAt ?? scene.createdAt ?? createdAt ?? now
-    return {
-      ...scene,
-      createdAt,
-      updatedAt,
-      panelVisibility: normalizePanelVisibilityState(scene.panelVisibility as Partial<PanelVisibilityState> | undefined),
-      panelPlacement: normalizePanelPlacementStateInput(scene.panelPlacement as Partial<PanelPlacementState> | undefined),
-    } as StoredSceneDocument
-  })
-
-  return {
-    ...state,
-    scenes: upgradedScenes,
-  }
-}
-
-function normalizeSceneSelections(state: ScenePersistedState): ScenePersistedState {
-  const scenes = state.scenes as Partial<StoredSceneDocument>[] | undefined
-  const updatedScenes = Array.isArray(scenes)
-    ? scenes.map((scene) => {
-        const nodes = Array.isArray(scene.nodes) ? (scene.nodes as SceneNode[]) : []
-        const existingSelection = Array.isArray(scene.selectedNodeIds) ? scene.selectedNodeIds : undefined
-        const fallbackId = scene.selectedNodeId ?? null
-        const normalizedSelection = normalizeSelectionIds(
-          nodes,
-          existingSelection ?? (fallbackId ? [fallbackId] : []),
-        )
-        return {
-          ...scene,
-          selectedNodeIds: normalizedSelection,
-          selectedNodeId: normalizedSelection[normalizedSelection.length - 1] ?? (fallbackId ?? null),
-          panelVisibility: normalizePanelVisibilityState(scene.panelVisibility as Partial<PanelVisibilityState> | undefined),
-          panelPlacement: normalizePanelPlacementStateInput(scene.panelPlacement as Partial<PanelPlacementState> | undefined),
-        } as StoredSceneDocument
-      })
-    : scenes
-
-  const nodes = Array.isArray(state.nodes) ? (state.nodes as SceneNode[]) : []
-  const stateSelection = normalizeSelectionIds(nodes, state.selectedNodeIds as string[] | undefined)
-  const fallbackId = (state.selectedNodeId as string | null | undefined) ?? null
-  const normalizedStateSelection = stateSelection.length
-    ? stateSelection
-    : fallbackId
-      ? [fallbackId]
-      : []
-
-  return {
-    ...state,
-    scenes: updatedScenes as StoredSceneDocument[] | undefined,
-    selectedNodeIds: normalizedStateSelection,
-    selectedNodeId: normalizedStateSelection[normalizedStateSelection.length - 1] ?? null,
-  }
-}
-
-function ensureAssetCatalogState(state: ScenePersistedState): ScenePersistedState {
-  const rawCatalog = (state as { assetCatalog?: unknown }).assetCatalog
-  const rawIndex = (state as { assetIndex?: unknown }).assetIndex
-  const rawPackageAssetMap = (state as { packageAssetMap?: unknown }).packageAssetMap
-
-  const normalizedCatalogBase = createEmptyAssetCatalog()
-  const normalizedCatalogEntries: Record<string, ProjectAsset[]> = { ...normalizedCatalogBase }
-  if (rawCatalog && typeof rawCatalog === 'object') {
-    const source = rawCatalog as Record<string, ProjectAsset[] | undefined>
-    Object.keys(normalizedCatalogEntries).forEach((categoryId) => {
-      const list = source[categoryId]
-      normalizedCatalogEntries[categoryId] = Array.isArray(list) ? cloneAssetList(list) : []
-    })
-    Object.keys(source).forEach((categoryId) => {
-      if (!(categoryId in normalizedCatalogEntries)) {
-        const list = source[categoryId]
-        if (Array.isArray(list)) {
-          normalizedCatalogEntries[categoryId] = cloneAssetList(list)
-        }
-      }
-    })
-  }
-
-  const normalizedIndex = rawIndex && typeof rawIndex === 'object'
-    ? { ...(rawIndex as Record<string, AssetIndexEntry>) }
-    : {}
-
-  const normalizedPackageAssetMap = rawPackageAssetMap && typeof rawPackageAssetMap === 'object'
-    ? { ...(rawPackageAssetMap as Record<string, string>) }
-    : {}
-
-  return {
-    ...state,
-    assetCatalog: normalizedCatalogEntries,
-    assetIndex: normalizedIndex,
-    packageAssetMap: normalizedPackageAssetMap,
-  }
-}
-
-function ensurePackageDirectoryState(state: ScenePersistedState): ScenePersistedState {
-  const rawCache = (state as { packageDirectoryCache?: unknown }).packageDirectoryCache
-  const rawLoaded = (state as { packageDirectoryLoaded?: unknown }).packageDirectoryLoaded
-  const normalizedCache: Record<string, ProjectDirectory[]> = rawCache && typeof rawCache === 'object'
-    ? { ...(rawCache as Record<string, ProjectDirectory[]>) }
-    : {}
-  const normalizedLoaded: Record<string, boolean> = rawLoaded && typeof rawLoaded === 'object'
-    ? { ...(rawLoaded as Record<string, boolean>) }
-    : {}
-  return {
-    ...state,
-    packageDirectoryCache: normalizedCache,
-    packageDirectoryLoaded: normalizedLoaded,
-  }
-}
-
-function normalizeGroundState(state: ScenePersistedState): ScenePersistedState {
-  const processedScenes = Array.isArray(state.scenes)
-    ? state.scenes.map((scene) => {
-        if (!scene || typeof scene !== 'object') {
-          return scene
-        }
-        const typedScene = scene as StoredSceneDocument
-        const nodesSource = Array.isArray(typedScene.nodes) ? (typedScene.nodes as SceneNode[]) : []
-        const existingGround = findGroundNode(nodesSource)
-        const sceneGroundSettings = cloneGroundSettings(
-          (typedScene as { groundSettings?: Partial<GroundSettings> | null }).groundSettings ??
-            (existingGround?.dynamicMesh?.type === 'ground'
-              ? { width: existingGround.dynamicMesh.width, depth: existingGround.dynamicMesh.depth }
-              : undefined),
-        )
-        const normalizedNodes = ensureGroundNode(cloneSceneNodes(nodesSource), sceneGroundSettings)
-        const selectedIdsSource = Array.isArray(typedScene.selectedNodeIds)
-          ? typedScene.selectedNodeIds.filter((id) => normalizedNodes.some((node) => node.id === id && !isGroundNode(node)))
-          : []
-        const selectedNodeId = selectedIdsSource.includes(typedScene.selectedNodeId ?? '')
-          ? typedScene.selectedNodeId
-          : selectedIdsSource[0] ?? null
-        return {
-          ...typedScene,
-          nodes: normalizedNodes,
-          selectedNodeId,
-          selectedNodeIds: selectedIdsSource,
-          groundSettings: sceneGroundSettings,
-        }
-      })
-    : state.scenes
-
-  const rootNodesSource = Array.isArray(state.nodes) ? (state.nodes as SceneNode[]) : []
-  const rootGround = findGroundNode(rootNodesSource)
-  const rootGroundSettings = cloneGroundSettings(
-    (state as { groundSettings?: Partial<GroundSettings> | null }).groundSettings ??
-      (rootGround?.dynamicMesh?.type === 'ground'
-        ? { width: rootGround.dynamicMesh.width, depth: rootGround.dynamicMesh.depth }
-        : undefined),
-  )
-  const normalizedRootNodes = ensureGroundNode(cloneSceneNodes(rootNodesSource), rootGroundSettings)
-
-  return {
-    ...state,
-    nodes: normalizedRootNodes,
-    scenes: processedScenes,
-    groundSettings: rootGroundSettings,
-  }
-}
-
-const sceneStoreMigrationSteps: Array<(state: ScenePersistedState) => ScenePersistedState> = [
-  ensureActiveTool,
-  ensureCameraAndPanelState,
-  ensurePanelPlacement,
-  ensureScenePanelState,
-  ensureViewportSettings,
-  ensureProjectPanelTreeSize,
-  removeLegacyExternalNodes,
-  ensureSceneCollection,
-  ensureResourceProvider,
-  ensureSceneTimestamps,
-  normalizeSceneSelections,
-  ensureAssetCatalogState,
-  ensurePackageDirectoryState,
-  normalizeGroundState,
-]
-
-function migrateScenePersistedState(
-  state: ScenePersistedState,
-  _fromVersion: number,
-  _toVersion: number,
-): ScenePersistedState {
-  if (!state || typeof state !== 'object') {
-    return state
-  }
-
-  return sceneStoreMigrationSteps.reduce<ScenePersistedState>((current, step) => step(current), {
-    ...state,
-  })
-}
-
 function createSceneDocument(
   name: string,
   options: {
@@ -2741,8 +2421,8 @@ function createSceneDocument(
     camera,
     viewportSettings,
     groundSettings,
-  panelVisibility,
-  panelPlacement,
+    panelVisibility,
+    panelPlacement,
     resourceProviderId: options.resourceProviderId ?? 'builtin',
     createdAt,
     updatedAt,
@@ -2754,40 +2434,56 @@ function createSceneDocument(
 
 function commitSceneSnapshot(
   store: SceneState,
-  options: { updateNodes?: boolean; updateCamera?: boolean } = {},
+  _options: { updateNodes?: boolean; updateCamera?: boolean } = {},
 ) {
-  if (!store.currentSceneId) return
-  const index = store.scenes.findIndex((scene) => scene.id === store.currentSceneId)
-  if (index === -1) return
+  if (!store.currentSceneId) {
+    return
+  }
 
-  const updateNodes = options.updateNodes ?? true
-  const updateCamera = options.updateCamera ?? true
-  const current = store.scenes[index]!
-  const updatedAt = new Date().toISOString()
+  const scenesStore = useScenesStore()
+  const now = new Date().toISOString()
+  const createdAt = store.currentSceneMeta?.createdAt ?? now
+  const name = store.currentSceneMeta?.name?.trim() ? store.currentSceneMeta.name : 'Untitled Scene'
+  const thumbnail = store.currentSceneMeta?.thumbnail ?? null
 
-  const updatedScene: StoredSceneDocument = {
-    ...current,
-    nodes: updateNodes ? cloneSceneNodes(store.nodes) : current.nodes,
+  const document: StoredSceneDocument = {
+    id: store.currentSceneId,
+    name,
+    thumbnail,
+    nodes: cloneSceneNodes(store.nodes),
     materials: cloneSceneMaterials(store.materials),
     selectedNodeId: store.selectedNodeId,
     selectedNodeIds: cloneSelection(store.selectedNodeIds),
-    camera: updateCamera ? cloneCameraState(store.camera) : current.camera,
+    camera: cloneCameraState(store.camera),
     viewportSettings: cloneViewportSettings(store.viewportSettings),
-  groundSettings: cloneGroundSettings(store.groundSettings),
+    groundSettings: cloneGroundSettings(store.groundSettings),
     panelVisibility: normalizePanelVisibilityState(store.panelVisibility),
     panelPlacement: normalizePanelPlacementStateInput(store.panelPlacement),
     resourceProviderId: store.resourceProviderId,
-    updatedAt,
+    createdAt,
+    updatedAt: now,
     assetCatalog: cloneAssetCatalog(store.assetCatalog),
     assetIndex: cloneAssetIndex(store.assetIndex),
     packageAssetMap: clonePackageAssetMap(store.packageAssetMap),
   }
 
-  store.scenes = [
-    ...store.scenes.slice(0, index),
-    updatedScene,
-    ...store.scenes.slice(index + 1),
-  ]
+  store.currentSceneMeta = {
+    name: document.name,
+    thumbnail: document.thumbnail ?? null,
+    createdAt,
+    updatedAt: document.updatedAt,
+  }
+
+  void scenesStore.saveSceneDocument(document)
+}
+
+function applyCurrentSceneMeta(store: SceneState, document: StoredSceneDocument) {
+  store.currentSceneMeta = {
+    name: document.name,
+    thumbnail: document.thumbnail ?? null,
+    createdAt: document.createdAt,
+    updatedAt: document.updatedAt,
+  }
 }
 
 function releaseRuntimeTree(node: SceneNode) {
@@ -2974,8 +2670,13 @@ export const useSceneStore = defineStore('scene', {
     const packageDirectoryCache: Record<string, ProjectDirectory[]> = {}
     const viewportSettings = cloneViewportSettings(initialSceneDocument.viewportSettings)
     return {
-      scenes: [initialSceneDocument],
       currentSceneId: initialSceneDocument.id,
+      currentSceneMeta: {
+        name: initialSceneDocument.name,
+        thumbnail: initialSceneDocument.thumbnail ?? null,
+        createdAt: initialSceneDocument.createdAt,
+        updatedAt: initialSceneDocument.updatedAt,
+      },
       nodes: cloneSceneNodes(initialSceneDocument.nodes),
       materials: cloneSceneMaterials(initialSceneDocument.materials),
       selectedNodeId: initialSceneDocument.selectedNodeId,
@@ -2993,13 +2694,13 @@ export const useSceneStore = defineStore('scene', {
       viewportSettings,
       groundSettings: cloneGroundSettings(initialSceneDocument.groundSettings),
       panelVisibility: { ...defaultPanelVisibility },
-    panelPlacement: { ...defaultPanelPlacement },
-  projectPanelTreeSize: DEFAULT_PROJECT_PANEL_TREE_SIZE,
+      panelPlacement: { ...defaultPanelPlacement },
+      projectPanelTreeSize: DEFAULT_PROJECT_PANEL_TREE_SIZE,
       resourceProviderId: initialSceneDocument.resourceProviderId,
       cameraFocusNodeId: null,
       cameraFocusRequestId: 0,
       clipboard: null,
-    draggingAssetId: null,
+      draggingAssetId: null,
       draggingAssetObject: null,
       undoStack: [],
       redoStack: [],
@@ -3011,18 +2712,6 @@ export const useSceneStore = defineStore('scene', {
     }
   },
   getters: {
-    currentScene(state): StoredSceneDocument | null {
-      if (!state.scenes.length) {
-        return null
-      }
-      if (state.currentSceneId) {
-        const current = state.scenes.find((scene) => scene.id === state.currentSceneId)
-        if (current) {
-          return current
-        }
-      }
-      return state.scenes[0] ?? null
-    },
     selectedNode(state): SceneNode | null {
       if (!state.selectedNodeId) return null
       let result: SceneNode | null = null
@@ -3033,17 +2722,6 @@ export const useSceneStore = defineStore('scene', {
     },
     hierarchyItems(state): HierarchyTreeItem[] {
       return state.nodes.map(toHierarchyItem)
-    },
-    sceneSummaries(state): SceneSummary[] {
-      return [...state.scenes]
-        .map((scene) => ({
-          id: scene.id,
-          name: scene.name,
-          thumbnail: scene.thumbnail ?? null,
-          createdAt: scene.createdAt,
-          updatedAt: scene.updatedAt,
-        }))
-        .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))
     },
     currentDirectory(state): ProjectDirectory | null {
       if (!state.activeDirectoryId) return state.projectTree[0] ?? null
@@ -3120,11 +2798,11 @@ export const useSceneStore = defineStore('scene', {
       try {
         this.nodes.forEach((node) => releaseRuntimeTree(node))
         this.nodes = cloneSceneNodes(snapshot.nodes)
-  this.materials = cloneSceneMaterials(snapshot.materials)
+        this.materials = cloneSceneMaterials(snapshot.materials)
         this.selectedNodeIds = cloneSelection(snapshot.selectedNodeIds)
-    this.selectedNodeId = snapshot.selectedNodeId
-    this.viewportSettings = cloneViewportSettings(snapshot.viewportSettings)
-    this.groundSettings = cloneGroundSettings(snapshot.groundSettings)
+        this.selectedNodeId = snapshot.selectedNodeId
+        this.viewportSettings = cloneViewportSettings(snapshot.viewportSettings)
+        this.groundSettings = cloneGroundSettings(snapshot.groundSettings)
         this.resourceProviderId = snapshot.resourceProviderId
 
         assetCache.recalculateUsage(this.nodes)
@@ -4527,7 +4205,7 @@ export const useSceneStore = defineStore('scene', {
 
       return registered
     },
-    deleteProjectAssets(assetIds: string[]): string[] {
+    async deleteProjectAssets(assetIds: string[]): Promise<string[]> {
       const uniqueIds = Array.from(
         new Set(
           assetIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0),
@@ -4583,53 +4261,63 @@ export const useSceneStore = defineStore('scene', {
         }
       }
 
+      const scenesStore = useScenesStore()
+      await scenesStore.initialize()
+
       const now = new Date().toISOString()
-      const updatedScenes = this.scenes.map((scene) => {
-        if (scene.id === this.currentSceneId) {
-          return scene
-        }
-        const sceneAssetNodeMap = collectNodesByAssetId(scene.nodes)
-        const sceneNodeIds: string[] = []
-        deletableIds.forEach((assetId) => {
-          const nodes = sceneAssetNodeMap.get(assetId)
-          if (nodes?.length) {
-            nodes.forEach((node) => sceneNodeIds.push(node.id))
+      const otherSceneIds = scenesStore.metadata
+        .map((entry) => entry.id)
+        .filter((id) => id !== this.currentSceneId)
+
+      if (otherSceneIds.length) {
+        await Promise.all(otherSceneIds.map(async (sceneId) => {
+          const document = await scenesStore.loadSceneDocument(sceneId)
+          if (!document) {
+            return
           }
-        })
-        if (!sceneNodeIds.length) {
-          return scene
-        }
-        const removedNodeIds: string[] = []
-        const prunedNodes = pruneNodes(scene.nodes, new Set(sceneNodeIds), removedNodeIds)
-        const removedSet = new Set(removedNodeIds)
+          const sceneAssetNodeMap = collectNodesByAssetId(document.nodes)
+          const sceneNodeIds: string[] = []
+          deletableIds.forEach((assetId) => {
+            const nodes = sceneAssetNodeMap.get(assetId)
+            if (nodes?.length) {
+              nodes.forEach((node) => sceneNodeIds.push(node.id))
+            }
+          })
+          if (!sceneNodeIds.length) {
+            return
+          }
+          const removedNodeIds: string[] = []
+          const prunedNodes = pruneNodes(document.nodes, new Set(sceneNodeIds), removedNodeIds)
+          const removedSet = new Set(removedNodeIds)
 
-        let selectedNodeIds = Array.isArray(scene.selectedNodeIds)
-          ? scene.selectedNodeIds.filter((id) => !removedSet.has(id))
-          : []
-        let selectedNodeId = scene.selectedNodeId
-        if (selectedNodeId && removedSet.has(selectedNodeId)) {
-          selectedNodeId = null
-        }
-        if (!selectedNodeId && prunedNodes.length > 0) {
-          selectedNodeId = prunedNodes[0]!.id
-        }
-        if (!selectedNodeIds.length && selectedNodeId) {
-          selectedNodeIds = [selectedNodeId]
-        }
-        selectedNodeIds = normalizeSelectionIds(prunedNodes, selectedNodeIds)
-        if (selectedNodeId && !selectedNodeIds.includes(selectedNodeId)) {
-          selectedNodeId = selectedNodeIds[selectedNodeIds.length - 1] ?? null
-        }
+          let selectedNodeIds = Array.isArray(document.selectedNodeIds)
+            ? document.selectedNodeIds.filter((id) => !removedSet.has(id))
+            : []
+          let selectedNodeId = document.selectedNodeId
+          if (selectedNodeId && removedSet.has(selectedNodeId)) {
+            selectedNodeId = null
+          }
+          if (!selectedNodeId && prunedNodes.length > 0) {
+            selectedNodeId = prunedNodes[0]!.id
+          }
+          if (!selectedNodeIds.length && selectedNodeId) {
+            selectedNodeIds = [selectedNodeId]
+          }
+          selectedNodeIds = normalizeSelectionIds(prunedNodes, selectedNodeIds)
+          if (selectedNodeId && !selectedNodeIds.includes(selectedNodeId)) {
+            selectedNodeId = selectedNodeIds[selectedNodeIds.length - 1] ?? null
+          }
 
-        return {
-          ...scene,
-          nodes: prunedNodes,
-          selectedNodeId,
-          selectedNodeIds,
-          updatedAt: now,
-        }
-      })
-      this.scenes = updatedScenes
+          const updatedDocument: StoredSceneDocument = {
+            ...document,
+            nodes: prunedNodes,
+            selectedNodeId,
+            selectedNodeIds,
+            updatedAt: now,
+          }
+          await scenesStore.saveSceneDocument(updatedDocument)
+        }))
+      }
 
       const nextCatalog: Record<string, ProjectAsset[]> = {}
       Object.entries(this.assetCatalog).forEach(([categoryId, list]) => {
@@ -5882,11 +5570,15 @@ export const useSceneStore = defineStore('scene', {
     clearClipboard() {
       this.clipboard = null
     },
-    createScene(
+    async createScene(
       name = 'Untitled Scene',
       thumbnailOrOptions?: string | null | { thumbnail?: string | null; groundSettings?: Partial<GroundSettings> },
     ) {
       commitSceneSnapshot(this)
+
+      const scenesStore = useScenesStore()
+      await scenesStore.initialize()
+
       const displayName = name.trim() || 'Untitled Scene'
       let resolvedThumbnail: string | null | undefined
       let resolvedGroundOptions: Partial<GroundSettings> | undefined
@@ -5896,11 +5588,13 @@ export const useSceneStore = defineStore('scene', {
       } else {
         resolvedThumbnail = (thumbnailOrOptions ?? null) as string | null
       }
+
       const groundSettings = cloneGroundSettings(resolvedGroundOptions ?? this.groundSettings)
       const baseNodes = createDefaultSceneNodes(groundSettings)
       const baseAssetCatalog = cloneAssetCatalog(initialAssetCatalog)
       const baseAssetIndex = cloneAssetIndex(initialAssetIndex)
-      const scene = createSceneDocument(displayName, {
+
+      const sceneDocument = createSceneDocument(displayName, {
         thumbnail: resolvedThumbnail ?? null,
         resourceProviderId: this.resourceProviderId,
         viewportSettings: this.viewportSettings,
@@ -5913,22 +5607,25 @@ export const useSceneStore = defineStore('scene', {
         panelVisibility: this.panelVisibility,
         panelPlacement: this.panelPlacement,
       })
-      this.scenes = [...this.scenes, scene]
-      this.currentSceneId = scene.id
-      applySceneAssetState(this, scene)
-      this.nodes = cloneSceneNodes(scene.nodes)
-      this.groundSettings = cloneGroundSettings(scene.groundSettings)
-      this.setSelection(scene.selectedNodeIds ?? (scene.selectedNodeId ? [scene.selectedNodeId] : []), {
+
+      await scenesStore.saveSceneDocument(sceneDocument)
+
+      this.currentSceneId = sceneDocument.id
+      applyCurrentSceneMeta(this, sceneDocument)
+      applySceneAssetState(this, sceneDocument)
+      this.nodes = cloneSceneNodes(sceneDocument.nodes)
+      this.groundSettings = cloneGroundSettings(sceneDocument.groundSettings)
+      this.setSelection(sceneDocument.selectedNodeIds ?? (sceneDocument.selectedNodeId ? [sceneDocument.selectedNodeId] : []), {
         commit: false,
       })
-      this.camera = cloneCameraState(scene.camera)
-      this.viewportSettings = cloneViewportSettings(scene.viewportSettings)
-  this.panelVisibility = normalizePanelVisibilityState(scene.panelVisibility)
-  this.panelPlacement = normalizePanelPlacementStateInput(scene.panelPlacement)
-      this.resourceProviderId = scene.resourceProviderId
+      this.camera = cloneCameraState(sceneDocument.camera)
+      this.viewportSettings = cloneViewportSettings(sceneDocument.viewportSettings)
+      this.panelVisibility = normalizePanelVisibilityState(sceneDocument.panelVisibility)
+      this.panelPlacement = normalizePanelPlacementStateInput(sceneDocument.panelPlacement)
+      this.resourceProviderId = sceneDocument.resourceProviderId
       useAssetCacheStore().recalculateUsage(this.nodes)
       this.isSceneReady = true
-      return scene.id
+      return sceneDocument.id
     },
     async selectScene(sceneId: string) {
       if (sceneId === this.currentSceneId) {
@@ -5941,7 +5638,9 @@ export const useSceneStore = defineStore('scene', {
         return true
       }
       commitSceneSnapshot(this)
-      const scene = this.scenes.find((item) => item.id === sceneId)
+      const scenesStore = useScenesStore()
+      await scenesStore.initialize()
+      const scene = await scenesStore.loadSceneDocument(sceneId)
       if (!scene) {
         return false
       }
@@ -5957,6 +5656,7 @@ export const useSceneStore = defineStore('scene', {
         })
 
         this.currentSceneId = sceneId
+        applyCurrentSceneMeta(this, scene)
         applySceneAssetState(this, scene)
         this.nodes = cloneSceneNodes(scene.nodes)
         this.setSelection(scene.selectedNodeIds ?? (scene.selectedNodeId ? [scene.selectedNodeId] : []), {
@@ -5976,23 +5676,28 @@ export const useSceneStore = defineStore('scene', {
     },
     async deleteScene(sceneId: string) {
       commitSceneSnapshot(this)
-      const index = this.scenes.findIndex((scene) => scene.id === sceneId)
-      if (index === -1) {
+
+      const scenesStore = useScenesStore()
+      await scenesStore.initialize()
+
+      const target = await scenesStore.loadSceneDocument(sceneId)
+      if (!target) {
         return false
       }
 
-      const target = this.scenes[index]!
       target.nodes.forEach((node) => releaseRuntimeTree(node))
 
-      const remaining = this.scenes.filter((scene) => scene.id !== sceneId)
+      await scenesStore.deleteScene(sceneId)
+      await scenesStore.refreshMetadata()
 
-      if (remaining.length === 0) {
+      if (!scenesStore.metadata.length) {
         const fallback = createSceneDocument('Untitled Scene', {
           resourceProviderId: 'builtin',
           groundSettings: this.groundSettings,
         })
-        this.scenes = [fallback]
+        await scenesStore.saveSceneDocument(fallback)
         this.currentSceneId = fallback.id
+        applyCurrentSceneMeta(this, fallback)
         applySceneAssetState(this, fallback)
         this.nodes = cloneSceneNodes(fallback.nodes)
         this.setSelection(fallback.selectedNodeIds ?? (fallback.selectedNodeId ? [fallback.selectedNodeId] : []), {
@@ -6008,29 +5713,11 @@ export const useSceneStore = defineStore('scene', {
         return true
       }
 
-      this.scenes = remaining
-
       if (this.currentSceneId === sceneId) {
-        const next = remaining[0]!
+        const nextId = scenesStore.metadata[0]!.id
         this.isSceneReady = false
         try {
-          await this.ensureSceneAssetsReady({
-            nodes: next.nodes,
-            showOverlay: true,
-            refreshViewport: false,
-          })
-          this.currentSceneId = next.id
-          applySceneAssetState(this, next)
-          this.nodes = cloneSceneNodes(next.nodes)
-          this.setSelection(next.selectedNodeIds ?? (next.selectedNodeId ? [next.selectedNodeId] : []), {
-            commit: false,
-          })
-          this.camera = cloneCameraState(next.camera)
-          this.panelVisibility = normalizePanelVisibilityState(next.panelVisibility)
-          this.panelPlacement = normalizePanelPlacementStateInput(next.panelPlacement)
-          this.groundSettings = cloneGroundSettings(next.groundSettings)
-          this.resourceProviderId = next.resourceProviderId ?? 'builtin'
-          useAssetCacheStore().recalculateUsage(this.nodes)
+          await this.selectScene(nextId)
         } finally {
           this.isSceneReady = true
         }
@@ -6038,63 +5725,70 @@ export const useSceneStore = defineStore('scene', {
 
       return true
     },
-    renameScene(sceneId: string, name: string) {
+    async renameScene(sceneId: string, name: string) {
       const trimmed = name.trim()
       if (!trimmed) {
         return false
       }
-      const index = this.scenes.findIndex((scene) => scene.id === sceneId)
-      if (index === -1) {
+      const scenesStore = useScenesStore()
+      await scenesStore.initialize()
+      const document = await scenesStore.loadSceneDocument(sceneId)
+      if (!document) {
         return false
       }
-      const scene = this.scenes[index]!
       const updated: StoredSceneDocument = {
-        ...scene,
+        ...document,
         name: trimmed,
         updatedAt: new Date().toISOString(),
       }
-      this.scenes = [
-        ...this.scenes.slice(0, index),
-        updated,
-        ...this.scenes.slice(index + 1),
-      ]
+      await scenesStore.saveSceneDocument(updated)
+      if (this.currentSceneId === sceneId) {
+        applyCurrentSceneMeta(this, updated)
+      }
       return true
     },
-    updateSceneThumbnail(sceneId: string, thumbnail: string | null) {
-      const index = this.scenes.findIndex((scene) => scene.id === sceneId)
-      if (index === -1) {
+    async updateSceneThumbnail(sceneId: string, thumbnail: string | null) {
+      const scenesStore = useScenesStore()
+      await scenesStore.initialize()
+      const document = await scenesStore.loadSceneDocument(sceneId)
+      if (!document) {
         return false
       }
-      const scene = this.scenes[index]!
       const updated: StoredSceneDocument = {
-        ...scene,
+        ...document,
         thumbnail,
         updatedAt: new Date().toISOString(),
       }
-      this.scenes = [
-        ...this.scenes.slice(0, index),
-        updated,
-        ...this.scenes.slice(index + 1),
-      ]
+      await scenesStore.saveSceneDocument(updated)
+      if (this.currentSceneId === sceneId) {
+        applyCurrentSceneMeta(this, updated)
+      }
       return true
     },
-    exportSceneBundle(sceneIds: string[]): SceneBundleExportPayload | null {
+    async exportSceneBundle(sceneIds: string[]): Promise<SceneBundleExportPayload | null> {
       if (!Array.isArray(sceneIds) || !sceneIds.length) {
         return null
       }
+      const scenesStore = useScenesStore()
+      await scenesStore.initialize()
       const uniqueIds = Array.from(new Set(sceneIds))
-      const idSet = new Set(uniqueIds)
-      const selected = this.scenes.filter((scene) => idSet.has(scene.id))
-      if (!selected.length) {
+      const collected: StoredSceneDocument[] = []
+      for (const id of uniqueIds) {
+        const document = await scenesStore.loadSceneDocument(id)
+        if (document) {
+          collected.push(document)
+        }
+      }
+      if (!collected.length) {
         return null
       }
       return {
         formatVersion: SCENE_BUNDLE_FORMAT_VERSION,
         exportedAt: new Date().toISOString(),
-        scenes: selected.map((scene) => cloneSceneDocumentForExport(scene)),
+        scenes: collected.map((scene) => cloneSceneDocumentForExport(scene)),
       }
     },
-    importSceneBundle(payload: SceneBundleImportPayload): SceneImportResult {
+    async importSceneBundle(payload: SceneBundleImportPayload): Promise<SceneImportResult> {
       const formatVersionRaw = (payload as { formatVersion?: unknown })?.formatVersion
       const formatVersion = typeof formatVersionRaw === 'number'
         ? formatVersionRaw
@@ -6111,7 +5805,9 @@ export const useSceneStore = defineStore('scene', {
         throw new Error('场景文件不包含任何场景数据')
       }
 
-      const existingNames = new Set(this.scenes.map((scene) => scene.name))
+      const scenesStore = useScenesStore()
+      await scenesStore.initialize()
+      const existingNames = new Set(scenesStore.metadata.map((scene) => scene.name))
       const imported: StoredSceneDocument[] = []
       const renamedScenes: Array<{ originalName: string; renamedName: string }> = []
 
@@ -6164,7 +5860,8 @@ export const useSceneStore = defineStore('scene', {
         throw new Error('场景文件不包含任何有效场景')
       }
 
-      this.scenes = [...this.scenes, ...imported]
+      await scenesStore.saveSceneDocuments(imported)
+      await scenesStore.refreshMetadata()
 
       return {
         importedSceneIds: imported.map((scene) => scene.id),
@@ -6173,57 +5870,72 @@ export const useSceneStore = defineStore('scene', {
     },
     async ensureCurrentSceneLoaded() {
       this.isSceneReady = false
-      if (!this.scenes.length) {
-        const fallback = createSceneDocument('Untitled Scene', { resourceProviderId: 'builtin' })
-        this.scenes = [fallback]
-        this.currentSceneId = fallback.id
-        applySceneAssetState(this, fallback)
-        this.nodes = cloneSceneNodes(fallback.nodes)
-        this.setSelection(fallback.selectedNodeIds ?? (fallback.selectedNodeId ? [fallback.selectedNodeId] : []), {
+      const scenesStore = useScenesStore()
+      await scenesStore.initialize()
+
+      try {
+        if (!scenesStore.metadata.length) {
+          const fallback = createSceneDocument('Untitled Scene', { resourceProviderId: 'builtin' })
+          await scenesStore.saveSceneDocument(fallback)
+          await scenesStore.refreshMetadata()
+          this.currentSceneId = fallback.id
+          applyCurrentSceneMeta(this, fallback)
+          applySceneAssetState(this, fallback)
+          this.nodes = cloneSceneNodes(fallback.nodes)
+          this.setSelection(fallback.selectedNodeIds ?? (fallback.selectedNodeId ? [fallback.selectedNodeId] : []), {
+            commit: false,
+          })
+          this.camera = cloneCameraState(fallback.camera)
+          this.viewportSettings = cloneViewportSettings(fallback.viewportSettings)
+          this.panelVisibility = normalizePanelVisibilityState(fallback.panelVisibility)
+          this.panelPlacement = normalizePanelPlacementStateInput(fallback.panelPlacement)
+          this.resourceProviderId = fallback.resourceProviderId
+          useAssetCacheStore().recalculateUsage(this.nodes)
+          this.isSceneReady = true
+          return
+        }
+
+        let targetId = this.currentSceneId
+        if (!targetId || !scenesStore.metadata.some((entry) => entry.id === targetId)) {
+          targetId = scenesStore.metadata[0]!.id
+          this.currentSceneId = targetId
+        }
+
+        const document = await scenesStore.loadSceneDocument(targetId)
+        if (!document) {
+          return
+        }
+
+        await this.ensureSceneAssetsReady({
+          nodes: document.nodes,
+          showOverlay: true,
+          refreshViewport: false,
+        })
+
+        applyCurrentSceneMeta(this, document)
+        applySceneAssetState(this, document)
+        this.nodes = cloneSceneNodes(document.nodes)
+        this.setSelection(document.selectedNodeIds ?? (document.selectedNodeId ? [document.selectedNodeId] : []), {
           commit: false,
         })
-        this.camera = cloneCameraState(fallback.camera)
-        this.viewportSettings = cloneViewportSettings(fallback.viewportSettings)
-        this.panelVisibility = normalizePanelVisibilityState(fallback.panelVisibility)
-        this.panelPlacement = normalizePanelPlacementStateInput(fallback.panelPlacement)
-        this.resourceProviderId = fallback.resourceProviderId
+        this.camera = cloneCameraState(document.camera)
+        this.viewportSettings = cloneViewportSettings(document.viewportSettings)
+        this.panelVisibility = normalizePanelVisibilityState(document.panelVisibility)
+        this.panelPlacement = normalizePanelPlacementStateInput(document.panelPlacement)
+        this.resourceProviderId = document.resourceProviderId ?? 'builtin'
+        useAssetCacheStore().recalculateUsage(this.nodes)
+      } finally {
         this.isSceneReady = true
-        return
       }
-
-      let target = this.scenes.find((scene) => scene.id === this.currentSceneId) ?? null
-      if (!target) {
-        target = this.scenes[0]!
-        this.currentSceneId = target.id
-      }
-
-      await this.ensureSceneAssetsReady({
-        nodes: target.nodes,
-        showOverlay: true,
-        refreshViewport: false,
-      })
-
-      this.nodes = cloneSceneNodes(target.nodes)
-      this.setSelection(target.selectedNodeIds ?? (target.selectedNodeId ? [target.selectedNodeId] : []), {
-        commit: false,
-      })
-      this.camera = cloneCameraState(target.camera)
-      this.viewportSettings = cloneViewportSettings(target.viewportSettings)
-      this.panelVisibility = normalizePanelVisibilityState(target.panelVisibility)
-      this.panelPlacement = normalizePanelPlacementStateInput(target.panelPlacement)
-      this.resourceProviderId = target.resourceProviderId ?? 'builtin'
-      applySceneAssetState(this, target)
-      useAssetCacheStore().recalculateUsage(this.nodes)
-      this.isSceneReady = true
     },
   },
   persist: {
     key: 'scene-store',
-    storage: 'local',
+    storage: 'indexeddb',
     version: 1,
     pick: [
-      'scenes',
       'currentSceneId',
+      'currentSceneMeta',
       'nodes',
       'selectedNodeId',
       'selectedNodeIds',

@@ -1965,7 +1965,7 @@ function handleAlignSelection(mode: AlignMode) {
 }
 
 function createScreenshotFileName(): string {
-  const sceneName = sceneStore.currentScene?.name ?? 'scene'
+  const sceneName = sceneStore.currentSceneMeta?.name ?? 'scene'
   const normalized = sceneName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
   const pad = (value: number) => value.toString().padStart(2, '0')
   const now = new Date()
@@ -2924,7 +2924,7 @@ function captureThumbnail() {
 
   try {
     const thumbnail = renderer.domElement.toDataURL('image/png')
-    sceneStore.updateSceneThumbnail(sceneStore.currentSceneId, thumbnail)
+    void sceneStore.updateSceneThumbnail(sceneStore.currentSceneId, thumbnail)
   } catch (error) {
     console.warn('Failed to capture scene thumbnail', error)
   }
