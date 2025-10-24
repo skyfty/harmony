@@ -74,12 +74,13 @@ const exportDialogFileName = ref('scene')
 const exportPreferences = ref<SceneExportDialogOptions>({
   includeTextures: true,
   includeAnimations: true,
-  includeSkybox: true,
-  includeLights: true,
-  includeHiddenNodes: false,
+  includeSkybox: false,
+  includeLights: false,
+  includeHiddenNodes: true,
   includeSkeletons: true,
-  includeCameras: true,
+  includeCameras: false,
   includeExtras: true,
+  rotateCoordinateSystem: true,
 })
 const viewportRef = ref<SceneViewportHandle | null>(null)
 const isNewSceneDialogOpen = ref(false)
@@ -389,7 +390,8 @@ async function handleExportDialogConfirm(payload: SceneExportDialogPayload) {
       includeSkeletons: payload.includeSkeletons,
       includeCameras: payload.includeCameras,
       includeExtras: payload.includeExtras,
-      onProgress: (progress, message) => {
+      rotateCoordinateSystem: payload.rotateCoordinateSystem,
+      onProgress: (progress: number, message?: string) => {
         exportProgress.value = progress
         exportProgressMessage.value = message ?? `Export progress ${Math.round(progress)}%`
       },

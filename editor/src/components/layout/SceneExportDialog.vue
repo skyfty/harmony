@@ -10,6 +10,7 @@ export type SceneExportDialogOptions = {
   includeSkeletons: boolean
   includeCameras: boolean
   includeExtras: boolean
+  rotateCoordinateSystem: boolean
 }
 
 export type SceneExportDialogPayload = SceneExportDialogOptions & {
@@ -47,6 +48,7 @@ function getInitialFormState(): SceneExportDialogPayload {
     includeSkeletons: props.initialOptions.includeSkeletons,
     includeCameras: props.initialOptions.includeCameras,
     includeExtras: props.initialOptions.includeExtras,
+    rotateCoordinateSystem: !!props.initialOptions.rotateCoordinateSystem,
   }
 }
 
@@ -101,11 +103,11 @@ function sanitizeInputName(input: string): string {
 function validate(): boolean {
   const trimmed = form.fileName.trim()
   if (!trimmed) {
-  fileNameError.value = 'Please enter a file name'
+    fileNameError.value = 'Please enter a file name'
     return false
   }
   if (!/^[\w\-\. ]+$/.test(trimmed)) {
-  fileNameError.value = 'File name may only contain letters, numbers, spaces, underscores, and hyphens'
+    fileNameError.value = 'File name may only contain letters, numbers, spaces, underscores, and hyphens'
     return false
   }
   fileNameError.value = null
@@ -215,6 +217,13 @@ function handleConfirm() {
             v-model="form.includeExtras"
             :disabled="exporting"
             label="Additional extensions"
+            density="compact"
+            hide-details
+          />
+          <v-checkbox
+            v-model="form.rotateCoordinateSystem"
+            :disabled="exporting"
+            label="Rotate coordinate system"
             density="compact"
             hide-details
           />
