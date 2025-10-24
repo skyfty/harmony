@@ -276,6 +276,19 @@ function handleToggleStats() {
       </div>
       <div class="menu-right">
         <v-btn
+          class="save-button"
+          variant="tonal"
+          color="primary"
+          density="comfortable"
+          size="small"
+          rounded
+          :disabled="!hasUnsavedChanges"
+          @click="handleMenuAction('Save')"
+        >
+          <v-icon start>mdi-content-save</v-icon>
+          Save
+        </v-btn>
+        <v-btn
           v-for="action in quickActions"
           :key="action.icon"
           class="action-button"

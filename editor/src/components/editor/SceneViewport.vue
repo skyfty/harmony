@@ -324,7 +324,7 @@ const WALL_DEFAULT_THICKNESS = 0.2
 const WALL_MIN_HEIGHT = 0.5
 const WALL_MIN_WIDTH = 0.1
 const WALL_MIN_THICKNESS = 0.05
-const THUMBNAIL_MAX_DIMENSION = 128
+const THUMBNAIL_MAX_DIMENSION = 256
 const THUMBNAIL_JPEG_QUALITY = 0.85
 const thumbnailResizer = typeof window !== 'undefined' ? Pica() : null
 

@@ -3446,8 +3446,6 @@ export const useSceneStore = defineStore('scene', {
         material.description = normalizedDescription
       }
 
-      this.captureHistorySnapshot()
-
       let nodeUpdated = false
       visitNode(this.nodes, nodeId, (node) => {
         if (!nodeSupportsMaterials(node) || !node.materials?.length) {
@@ -3530,7 +3528,6 @@ export const useSceneStore = defineStore('scene', {
     },
     createMaterial(payload: { name?: string; props?: Partial<SceneMaterialProps> | null } = {}) {
       const material = createSceneMaterial(payload.name ?? 'New Material', payload.props ?? undefined)
-      this.captureHistorySnapshot()
       this.materials = [...this.materials, material]
       commitSceneSnapshot(this, { updateNodes: false })
       return material
@@ -3542,7 +3539,6 @@ export const useSceneStore = defineStore('scene', {
       }
       const duplicated = createSceneMaterial(`${source.name} Copy`, source)
       duplicated.description = source.description
-      this.captureHistorySnapshot()
       this.materials = [...this.materials, duplicated]
       commitSceneSnapshot(this, { updateNodes: false })
       return duplicated
@@ -3615,8 +3611,6 @@ export const useSceneStore = defineStore('scene', {
 
       const fallbackId = options.fallbackMaterialId ?? this.materials.find((entry) => entry.id !== materialId)?.id ?? null
       const fallbackMaterial = fallbackId ? this.materials.find((entry) => entry.id === fallbackId) ?? null : null
-
-      this.captureHistorySnapshot()
 
       const nextMaterials = [...this.materials]
       nextMaterials.splice(index, 1)
@@ -4534,8 +4528,7 @@ export const useSceneStore = defineStore('scene', {
     },
 
     addPlaceholderNode(asset: ProjectAsset, transform: { position: Vector3Like; rotation: Vector3Like; scale: Vector3Like }) {
-      this.captureHistorySnapshot()
-  const id = generateUuid()
+      const id = generateUuid()
       const node: SceneNode = {
         id,
         name: asset.name,
@@ -4892,7 +4885,7 @@ export const useSceneStore = defineStore('scene', {
       sourceAssetId?: string
       dynamicMesh?: SceneDynamicMesh
     }) {
-  this.captureHistorySnapshot()
+      this.captureHistorySnapshot()
       const id = generateUuid()
       const baseMaterial = findDefaultSceneMaterial(this.materials)
       const initialProps: SceneMaterialProps = baseMaterial ? createMaterialProps(baseMaterial) : createMaterialProps()
@@ -5862,40 +5855,15 @@ export const useSceneStore = defineStore('scene', {
           this.panelVisibility = normalizePanelVisibilityState(fallback.panelVisibility)
           this.panelPlacement = normalizePanelPlacementStateInput(fallback.panelPlacement)
           this.resourceProviderId = fallback.resourceProviderId
-          useAssetCacheStore().recalculateUsage(this.nodes)
-          this.isSceneReady = true
           this.hasUnsavedChanges = false
-          return
+        } else {
+          await this.ensureSceneAssetsReady({
+            nodes: this.nodes,
+            showOverlay: true,
+            refreshViewport: false,
+          })
         }
-
-        let targetId = this.currentSceneId
-        if (!targetId || !scenesStore.metadata.some((entry) => entry.id === targetId)) {
-          targetId = scenesStore.metadata[0]!.id
-          this.currentSceneId = targetId
-        }
-
-        const document = await scenesStore.loadSceneDocument(targetId)
-        if (!document) {
-          return
-        }
-
-        await this.ensureSceneAssetsReady({
-          nodes: document.nodes,
-          showOverlay: true,
-          refreshViewport: false,
-        })
-
-        applyCurrentSceneMeta(this, document)
-        applySceneAssetState(this, document)
-        this.nodes = cloneSceneNodes(document.nodes)
-        this.setSelection(document.selectedNodeIds ?? (document.selectedNodeId ? [document.selectedNodeId] : []))
-        this.camera = cloneCameraState(document.camera)
-        this.viewportSettings = cloneViewportSettings(document.viewportSettings)
-        this.panelVisibility = normalizePanelVisibilityState(document.panelVisibility)
-        this.panelPlacement = normalizePanelPlacementStateInput(document.panelPlacement)
-        this.resourceProviderId = document.resourceProviderId ?? 'builtin'
         useAssetCacheStore().recalculateUsage(this.nodes)
-        this.hasUnsavedChanges = false
       } finally {
         this.isSceneReady = true
       }
