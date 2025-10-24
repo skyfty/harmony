@@ -5943,8 +5943,13 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       object = perspectiveCamera
     }
   } else if (nodeType === 'Group') {
-    object = new THREE.Group()
-    object.name = node.name
+    object = getRuntimeObject(node.id) ?? null
+    if (object) {
+      object.userData.usesRuntimeObject = true
+    } else {
+      object = new THREE.Group()
+      object.name = node.name
+    }
     object.userData.nodeId = node.id
   } else {
     object = createGeometry(nodeType)
@@ -5969,11 +5974,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
   userData.dynamicMeshType = node.dynamicMesh?.type ?? userData.dynamicMeshType ?? null
   userData.lightType = node.light?.type ?? null
   userData.sourceAssetId = node.sourceAssetId ?? null
-  if (nodeType !== 'Mesh') {
-    userData.usesRuntimeObject = false
-  } else if (typeof userData.usesRuntimeObject !== 'boolean') {
-    userData.usesRuntimeObject = sceneStore.hasRuntimeObject(node.id)
-  }
+  userData.usesRuntimeObject = sceneStore.hasRuntimeObject(node.id)
 
   const isVisible = node.visible ?? true
   object.visible = isVisible
@@ -6095,7 +6096,9 @@ function handleViewportShortcut(event: KeyboardEvent) {
 
 onMounted(() => {
   initScene()
-  syncSceneGraph()
+  sceneStore.ensureCurrentSceneLoaded().then(() => {
+    syncSceneGraph()
+  })
   updateToolMode(props.activeTool)
   attachSelection(props.selectedNodeId)
   updateSelectionHighlights()
@@ -6159,7 +6162,9 @@ watch(
       pendingSceneGraphSync = true
       return
     }
-    syncSceneGraph()
+    if (sceneStore.isSceneReady) {
+      syncSceneGraph()
+    }
     refreshPlaceholderOverlays()
   }
 )

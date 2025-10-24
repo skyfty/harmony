@@ -175,7 +175,6 @@ const reopenButtons = computed(() => ({
 
 onMounted(async () => {
   await scenesStore.initialize()
-  await sceneStore.ensureCurrentSceneLoaded()
 })
 
 function setTool(tool: EditorTool) {
