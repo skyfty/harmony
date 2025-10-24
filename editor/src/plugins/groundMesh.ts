@@ -163,7 +163,7 @@ export function createGroundMesh(definition: GroundDynamicMesh): THREE.Mesh {
     cachedMesh.name = 'Ground'
     cachedMesh.receiveShadow = true
     cachedMesh.castShadow = false
-    cachedMesh.userData.dynamicMeshType = 'ground'
+  cachedMesh.userData.dynamicMeshType = 'Ground'
     applyGroundTexture(cachedMesh, definition)
     return cachedMesh
   }
@@ -172,7 +172,7 @@ export function createGroundMesh(definition: GroundDynamicMesh): THREE.Mesh {
   cachedMesh.name = 'Ground'
   cachedMesh.receiveShadow = true
   cachedMesh.castShadow = false
-  cachedMesh.userData.dynamicMeshType = 'ground'
+  cachedMesh.userData.dynamicMeshType = 'Ground'
   return cachedMesh
 }
 

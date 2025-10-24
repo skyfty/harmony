@@ -90,7 +90,7 @@ function rebuildWallGroup(group: THREE.Group, definition: WallDynamicMesh) {
 export function createWallGroup(definition: WallDynamicMesh): THREE.Group {
   const group = new THREE.Group()
   group.name = 'WallGroup'
-  group.userData.dynamicMeshType = 'wall'
+  group.userData.dynamicMeshType = 'Wall'
   rebuildWallGroup(group, definition)
   return group
 }

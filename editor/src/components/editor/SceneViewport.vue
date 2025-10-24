@@ -408,7 +408,7 @@ function getInspectorPanelElement(): HTMLElement | null {
 
 function findGroundNodeInTree(nodes: SceneNode[]): SceneNode | null {
   for (const node of nodes) {
-    if (node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'ground') {
+    if (node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'Ground') {
       return node
     }
     if (node.children?.length) {
@@ -431,7 +431,7 @@ function getGroundNodeFromProps(): SceneNode | null {
 
 function getGroundDynamicMeshDefinition(): GroundDynamicMesh | null {
   const node = getGroundNodeFromScene() ?? getGroundNodeFromProps()
-  if (node?.dynamicMesh?.type === 'ground') {
+  if (node?.dynamicMesh?.type === 'Ground') {
     return node.dynamicMesh
   }
   return null
@@ -1541,7 +1541,7 @@ function disposeObjectResources(object: THREE.Object3D) {
   object.traverse((child) => {
     const meshChild = child as THREE.Mesh
     if (meshChild?.isMesh) {
-      if (meshChild.userData?.dynamicMeshType === 'ground') {
+      if (meshChild.userData?.dynamicMeshType === 'Ground') {
         return
       }
       if (meshChild.geometry) {
@@ -5111,12 +5111,12 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   object.scale.set(node.scale.x, node.scale.y, node.scale.z)
   object.visible = node.visible ?? true
 
-  if (node.dynamicMesh?.type === 'ground') {
+  if (node.dynamicMesh?.type === 'Ground') {
     const groundMesh = userData.groundMesh as THREE.Mesh | undefined
     if (groundMesh) {
       updateGroundMesh(groundMesh, node.dynamicMesh)
     }
-  } else if (node.dynamicMesh?.type === 'wall') {
+  } else if (node.dynamicMesh?.type === 'Wall') {
     const wallGroup = userData.wallGroup as THREE.Group | undefined
     if (wallGroup) {
       updateWallGroup(wallGroup, node.dynamicMesh)
@@ -5167,7 +5167,7 @@ function disposeNodeObjectRecursive(object: THREE.Object3D) {
       disposeNodeObjectRecursive(child)
     } else {
       child.removeFromParent()
-      if (child.userData?.dynamicMeshType === 'ground') {
+      if (child.userData?.dynamicMeshType === 'Ground') {
         continue
       }
       if (object.userData?.usesRuntimeObject) {
@@ -5185,7 +5185,7 @@ function disposeNodeObjectRecursive(object: THREE.Object3D) {
 
   object.removeFromParent()
 
-  const isGroundMesh = object.userData?.dynamicMeshType === 'ground'
+  const isGroundMesh = object.userData?.dynamicMeshType === 'Ground'
   const shouldDispose = !isGroundMesh && (!nodeId || !sceneStore.hasRuntimeObject(nodeId))
   if (shouldDispose) {
     disposeObjectResources(object)
@@ -5870,19 +5870,19 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     const containerData = container.userData ?? (container.userData = {})
     containerData.nodeId = node.id
 
-    if (node.dynamicMesh?.type === 'ground') {
+    if (node.dynamicMesh?.type === 'Ground') {
       const groundMesh = createGroundMesh(node.dynamicMesh)
       groundMesh.removeFromParent()
       groundMesh.userData.nodeId = node.id
       container.add(groundMesh)
       containerData.groundMesh = groundMesh
-      containerData.dynamicMeshType = 'ground'
-    } else if (node.dynamicMesh?.type === 'wall') {
+      containerData.dynamicMeshType = 'Ground'
+    } else if (node.dynamicMesh?.type === 'Wall') {
       const wallGroup = createWallGroup(node.dynamicMesh as WallDynamicMesh)
       wallGroup.userData.nodeId = node.id
       container.add(wallGroup)
       containerData.wallGroup = wallGroup
-      containerData.dynamicMeshType = 'wall'
+      containerData.dynamicMeshType = 'Wall'
     } else {
       const runtimeObject = getRuntimeObject(node.id)
       if (runtimeObject) {

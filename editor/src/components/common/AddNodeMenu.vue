@@ -10,7 +10,8 @@ import { useFileDialog } from '@vueuse/core'
 import { useUiStore } from '@/stores/uiStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import UrlInputDialog from './UrlInputDialog.vue'
-import type { LightNodeType, SceneNode } from '@/types/scene'
+import type { SceneNode } from '@/types/scene'
+import type { LightNodeType } from '@/types/light'
 import { generateUuid } from '@/plugins/uuid'
 
 const sceneStore = useSceneStore()
@@ -520,9 +521,9 @@ function handleAddLight(type: LightNodeType) {
           <v-list-item title="Light" append-icon="mdi-chevron-right" v-bind="lightMenuProps" />
         </template>
         <v-list class="add-submenu-list">
-          <v-list-item title="Directional Light" @click="handleAddLight('directional')" />
-          <v-list-item title="Point Light" @click="handleAddLight('point')" />
-          <v-list-item title="Spot Light" @click="handleAddLight('spot')" />
+          <v-list-item title="Directional Light" @click="handleAddLight('Directional')" />
+          <v-list-item title="Point Light" @click="handleAddLight('Point')" />
+          <v-list-item title="Spot Light" @click="handleAddLight('Spot')" />
         </v-list>
       </v-menu>
       <v-menu  transition="none" location="end" offset="8">

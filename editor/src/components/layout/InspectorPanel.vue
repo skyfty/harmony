@@ -30,8 +30,8 @@ const placementIcon = computed(() => (floating.value ? 'mdi-dock-right' : 'mdi-a
 const placementTitle = computed(() => (floating.value ? '停靠到右侧' : '浮动显示'))
 
 const isLightNode = computed(() => selectedNode.value?.nodeType === 'Light')
-const isWallNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'wall')
-const isGroundNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'ground')
+const isWallNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'Wall')
+const isGroundNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'Ground')
 const showMaterialPanel = computed(
   () => !isLightNode.value && !isGroundNode.value && (selectedNode.value?.materials?.length ?? 0) > 0,
 )

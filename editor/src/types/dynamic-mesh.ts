@@ -1,4 +1,24 @@
-export type DynamicMeshType = 'ground' | 'wall' | 'platform'
+export type DynamicMeshType = 'Ground' | 'Wall' | 'Platform'
+
+const LEGACY_DYNAMIC_MESH_TYPE_MAP: Record<string, DynamicMeshType> = {
+  ground: 'Ground',
+  wall: 'Wall',
+  platform: 'Platform',
+}
+
+export function normalizeDynamicMeshType(input: DynamicMeshType | string | null | undefined): DynamicMeshType {
+  if (!input) {
+    return 'Ground'
+  }
+  if (typeof input === 'string') {
+    const legacy = LEGACY_DYNAMIC_MESH_TYPE_MAP[input]
+    if (legacy) {
+      return legacy
+    }
+    return input as DynamicMeshType
+  }
+  return input
+}
 
 export interface DynamicMeshVector3 {
   x: number
@@ -11,7 +31,7 @@ export interface GroundHeightMap {
 }
 
 export interface GroundDynamicMesh {
-  type: 'ground'
+  type: 'Ground'
   width: number
   depth: number
   rows: number
@@ -31,7 +51,7 @@ export type WallSegment = {
 }
 
 export interface WallDynamicMesh {
-  type: 'wall'
+  type: 'Wall'
   /**
    * Placeholder control points describing wall segments in row-major order.
    * Each entry stores start and end positions in world space relative to the wall origin.
@@ -40,7 +60,7 @@ export interface WallDynamicMesh {
 }
 
 export interface PlatformDynamicMesh {
-  type: 'platform'
+  type: 'Platform'
   /**
    * Placeholder polygon footprint described in clockwise order.
    */

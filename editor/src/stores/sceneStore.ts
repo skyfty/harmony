@@ -17,13 +17,13 @@ import {
   type Material,
   type Light,
 } from 'three'
-import type { CameraNodeProperties, LightNodeProperties, LightNodeType, SceneNode, SceneNodeType, Vector3Like } from '@/types/scene'
+import type { CameraNodeProperties, SceneNode, SceneNodeType, Vector3Like } from '@/types/scene'
+import { normalizeLightNodeType, type LightNodeProperties, type LightNodeType } from '@/types/light'
 import type { ClipboardEntry } from '@/types/clipboard-entry'
 import type { DetachResult } from '@/types/detach-result'
 import type { DuplicateContext } from '@/types/duplicate-context'
 import type { EditorTool } from '@/types/editor-tool'
 import type { EnsureSceneAssetsOptions } from '@/types/ensure-scene-assets-options'
-import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { PanelVisibilityState } from '@/types/panel-visibility-state'
 import type { PanelPlacementState, PanelPlacement } from '@/types/panel-placement-state'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -32,10 +32,11 @@ import type { AssetIndexEntry, AssetSourceMetadata } from '@/types/asset-index-e
 import type { SceneCameraState } from '@/types/scene-camera-state'
 import type { SceneHistoryEntry } from '@/types/scene-history-entry'
 import type { SceneState } from '@/types/scene-state'
-import type { StoredSceneDocument } from '@/types/stored-scene-document'
+    case 'Ambient':
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { CameraProjectionMode, CameraControlMode, SceneSkyboxSettings, SceneViewportSettings } from '@/types/scene-viewport-settings'
-import type { DynamicMeshVector3, GroundDynamicMesh, SceneDynamicMesh, WallDynamicMesh } from '@/types/dynamic-mesh'
+import type { DynamicMeshVector3, GroundDynamicMesh, PlatformDynamicMesh, SceneDynamicMesh, WallDynamicMesh } from '@/types/dynamic-mesh'
+import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
 import type { GroundSettings } from '@/types/ground-settings'
 import type {
   SceneMaterial,
@@ -61,7 +62,7 @@ import { loadObjectFromFile } from '@/plugins/assetImport'
 import { generateUuid } from '@/plugins/uuid'
 import { getCachedModelObject, getOrLoadModelObject } from './modelObjectCache'
 import { createWallGroup, updateWallGroup } from '@/plugins/wallMesh'
-import { computeBlobHash, blobToDataUrl, dataUrlToBlob, inferBlobFilename, extractExtension, ensureExtension } from '@/utils/blob'
+import { computeBlobHash, blobToDataUrl, dataUrlToBlob, inferBlobFilename, extractExtension, ensureExtension } from '@/plugins/blob'
 
 import {
   cloneAssetList,
@@ -403,7 +404,7 @@ function cloneDynamicMeshVector3(vec: DynamicMeshVector3): DynamicMeshVector3 {
 
 function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMesh {
   return {
-    type: 'ground',
+    type: 'Ground',
     width: definition.width,
     depth: definition.depth,
     rows: definition.rows,
@@ -527,7 +528,7 @@ function buildWallDynamicMeshFromWorldSegments(
   }))
 
   const definition: WallDynamicMesh = {
-    type: 'wall',
+    type: 'Wall',
     segments: dynamicSegments,
   }
 
@@ -538,13 +539,15 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
   if (!mesh) {
     return undefined
   }
-  switch (mesh.type) {
-    case 'ground':
-      return cloneGroundDynamicMesh(mesh)
-    case 'wall':
+  const type = normalizeDynamicMeshType(mesh.type)
+  switch (type) {
+    case 'Ground':
+      return cloneGroundDynamicMesh({ ...(mesh as GroundDynamicMesh), type })
+    case 'Wall': {
+      const wallMesh = mesh as WallDynamicMesh
       return {
-        type: 'wall',
-        segments: mesh.segments.map((segment) => ({
+        type: 'Wall',
+        segments: wallMesh.segments.map((segment) => ({
           start: cloneDynamicMeshVector3(segment.start),
           end: cloneDynamicMeshVector3(segment.end),
           height: Number.isFinite(segment.height) ? segment.height : DEFAULT_WALL_HEIGHT,
@@ -554,12 +557,15 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
           thickness: Number.isFinite(segment.thickness) ? segment.thickness : DEFAULT_WALL_THICKNESS,
         })),
       }
-    case 'platform':
+    }
+    case 'Platform': {
+      const platformMesh = mesh as PlatformDynamicMesh
       return {
-        type: 'platform',
-        footprint: mesh.footprint.map(cloneDynamicMeshVector3),
-        height: mesh.height,
+        type: 'Platform',
+        footprint: platformMesh.footprint.map(cloneDynamicMeshVector3),
+        height: platformMesh.height,
       }
+    }
     default:
       return undefined
   }
@@ -582,7 +588,7 @@ function createGroundDynamicMeshDefinition(
   const width = overrides.width !== undefined ? normalizedWidth : derivedColumns * cellSize
   const depth = overrides.depth !== undefined ? normalizedDepth : derivedRows * cellSize
   return {
-    type: 'ground',
+    type: 'Ground',
     width,
     depth,
     rows: derivedRows,
@@ -621,14 +627,14 @@ function createGroundSceneNode(
 }
 
 function isGroundNode(node: SceneNode): boolean {
-  return node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'ground'
+  return node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'Ground'
 }
 
 function normalizeGroundSceneNode(node: SceneNode | null | undefined, settings?: GroundSettings): SceneNode {
   if (!node) {
     return createGroundSceneNode({}, settings)
   }
-  if (node.dynamicMesh?.type === 'ground') {
+  if (node.dynamicMesh?.type === 'Ground') {
     const primaryMaterial = getPrimaryNodeMaterial(node)
     return {
       ...node,
@@ -755,8 +761,9 @@ function createLightNode(options: {
   target?: Vector3Like
   extras?: LightNodeExtras
 }): SceneNode {
+  const normalizedType = normalizeLightNodeType(options.type)
   const light: LightNodeProperties = {
-    type: options.type,
+    type: normalizedType,
     color: options.color,
     intensity: options.intensity,
     ...(options.extras ?? {}),
@@ -767,7 +774,7 @@ function createLightNode(options: {
   }
 
   return {
-  id: generateUuid(),
+    id: generateUuid(),
     name: options.name,
     nodeType: 'Light',
     light,
@@ -781,8 +788,9 @@ function createLightNode(options: {
 }
 
 function getLightPreset(type: LightNodeType) {
-  switch (type) {
-    case 'directional':
+  const normalizedType = normalizeLightNodeType(type)
+  switch (normalizedType) {
+    case 'Directional':
       return {
         name: 'Directional Light',
         color: '#ffffff',
@@ -791,7 +799,7 @@ function getLightPreset(type: LightNodeType) {
         target: createVector(0, 0, 0),
         extras: { castShadow: true } as LightNodeExtras,
       }
-    case 'point':
+    case 'Point':
       return {
         name: 'Point Light',
         color: '#ffffff',
@@ -799,7 +807,7 @@ function getLightPreset(type: LightNodeType) {
         position: createVector(0, 8, 0),
         extras: { distance: 60, decay: 2, castShadow: false } as LightNodeExtras,
       }
-    case 'spot':
+    case 'Spot':
       return {
         name: 'Spot Light',
         color: '#ffffff',
@@ -808,7 +816,7 @@ function getLightPreset(type: LightNodeType) {
         target: createVector(0, 0, 0),
         extras: { angle: Math.PI / 5, penumbra: 0.35, distance: 80, decay: 2, castShadow: true } as LightNodeExtras,
       }
-    case 'ambient':
+    case 'Ambient':
     default:
       return {
         name: 'Ambient Light',
@@ -861,15 +869,15 @@ function isBoneObject(object: Object3D): boolean {
 function resolveLightTypeFromObject(light: Light): LightNodeType {
   const typed = light as Light & Record<string, unknown>
   if (typed.isDirectionalLight) {
-    return 'directional'
+    return 'Directional'
   }
   if (typed.isSpotLight) {
-    return 'spot'
+    return 'Spot'
   }
   if (typed.isPointLight || typed.isRectAreaLight) {
-    return 'point'
+    return 'Point'
   }
-  return 'ambient'
+  return 'Ambient'
 }
 
 async function textureToBlob(texture: Texture): Promise<{ blob: Blob; mimeType: string; extension: string } | null> {
@@ -1247,7 +1255,8 @@ async function convertObjectToSceneNode(
       lightConfig.castShadow = Boolean(lightCandidate.castShadow)
     }
 
-    if (lightType === 'directional' || lightType === 'spot') {
+    const normalizedLightType = normalizeLightNodeType(lightType)
+    if (normalizedLightType === 'Directional' || normalizedLightType === 'Spot') {
       const target = (lightCandidate as { target?: Object3D }).target
       if (target) {
         const world = new Vector3()
@@ -1738,7 +1747,7 @@ function collectCollisionSpheres(nodes: SceneNode[]): CollisionSphere[] {
 
   if (!node.isPlaceholder && node.nodeType !== 'Light') {
         const runtimeObject = getRuntimeObject(node.id)
-  if (runtimeObject && node.dynamicMesh?.type !== 'ground') {
+  if (runtimeObject && node.dynamicMesh?.type !== 'Ground') {
           runtimeObject.updateMatrixWorld(true)
           const bounds = new Box3().setFromObject(runtimeObject)
           if (!bounds.isEmpty()) {
@@ -1784,7 +1793,7 @@ function collectNodeBoundingInfo(nodes: SceneNode[]): Map<string, NodeBoundingIn
 
   if (!node.isPlaceholder && node.nodeType !== 'Light') {
         const runtimeObject = getRuntimeObject(node.id)
-        if (runtimeObject && node.dynamicMesh?.type !== 'ground') {
+  if (runtimeObject && node.dynamicMesh?.type !== 'Ground') {
           runtimeObject.updateMatrixWorld(true)
           const localBounds = new Box3().setFromObject(runtimeObject)
           if (!localBounds.isEmpty()) {
@@ -2687,11 +2696,12 @@ function createSceneDocument(
   const clonedNodes = options.nodes ? cloneSceneNodes(options.nodes) : []
   const materials = options.materials ? cloneSceneMaterials(options.materials) : cloneSceneMaterials(initialMaterials)
   const existingGround = findGroundNode(clonedNodes)
+  const existingGroundMesh = existingGround?.dynamicMesh?.type === 'Ground'
+    ? existingGround.dynamicMesh
+    : null
   const groundSettings = cloneGroundSettings(
-    options.groundSettings ??
-      (existingGround?.dynamicMesh?.type === 'ground'
-        ? { width: existingGround.dynamicMesh.width, depth: existingGround.dynamicMesh.depth }
-        : undefined),
+    options.groundSettings
+      ?? (existingGroundMesh ? { width: existingGroundMesh.width, depth: existingGroundMesh.depth } : undefined),
   )
   const nodes = ensureGroundNode(clonedNodes, groundSettings)
   const camera = options.camera ? cloneCameraState(options.camera) : cloneCameraState(defaultCameraState)
@@ -3201,7 +3211,7 @@ export const useSceneStore = defineStore('scene', {
       if (!groundNode) {
         return false
       }
-      if (groundNode.dynamicMesh?.type !== 'ground') {
+      if (groundNode.dynamicMesh?.type !== 'Ground') {
         groundNode.dynamicMesh = createGroundDynamicMeshDefinition({}, this.groundSettings)
       }
       const currentDefinition = groundNode.dynamicMesh as GroundDynamicMesh
@@ -3246,9 +3256,9 @@ export const useSceneStore = defineStore('scene', {
       const existingGround = findGroundNode(clonedNodes)
       if (existingGround) {
         existingGround.dynamicMesh = createGroundDynamicMeshDefinition(
-          existingGround.dynamicMesh?.type === 'ground'
+          existingGround.dynamicMesh?.type === 'Ground'
             ? {
-                ...existingGround.dynamicMesh,
+                ...(existingGround.dynamicMesh as GroundDynamicMesh),
                 width: normalized.width,
                 depth: normalized.depth,
               }
@@ -3269,7 +3279,7 @@ export const useSceneStore = defineStore('scene', {
       if (!groundNode) {
         return false
       }
-      if (groundNode.dynamicMesh?.type !== 'ground') {
+      if (groundNode.dynamicMesh?.type !== 'Ground') {
         groundNode.dynamicMesh = createGroundDynamicMeshDefinition({}, this.groundSettings)
       }
       const definition = groundNode.dynamicMesh as GroundDynamicMesh

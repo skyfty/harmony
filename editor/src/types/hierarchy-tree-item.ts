@@ -1,4 +1,5 @@
-import type { LightNodeType, SceneNodeType } from './scene'
+import type { SceneNodeType } from './scene'
+import type { LightNodeType } from './light'
 
 export interface HierarchyTreeItem {
   id: string

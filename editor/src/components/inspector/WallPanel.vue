@@ -10,14 +10,14 @@ const localHeight = ref(3)
 const localWidth = ref(0.2)
 const localThickness = ref(0.2)
 
-const hasWallNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'wall' && !!selectedNodeId.value)
+const hasWallNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'Wall' && !!selectedNodeId.value)
 
 function syncLocalInputs() {
   if (!hasWallNode.value) {
     return
   }
   const definition = selectedNode.value?.dynamicMesh
-  if (!definition || definition.type !== 'wall' || definition.segments.length === 0) {
+  if (!definition || definition.type !== 'Wall' || definition.segments.length === 0) {
     return
   }
   const segment = definition.segments[0]

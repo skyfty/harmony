@@ -2,7 +2,7 @@
 import { computed, reactive, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
-import type { LightNodeProperties, LightNodeType } from '@/types/scene'
+import type { LightNodeProperties, LightNodeType } from '@/types/light'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
@@ -20,9 +20,9 @@ const lightForm = reactive({
 })
 
 const lightType = computed<LightNodeType | null>(() => selectedNode.value?.light?.type ?? null)
-const supportsDistance = computed(() => lightType.value === 'point' || lightType.value === 'spot')
-const supportsAngle = computed(() => lightType.value === 'spot')
-const supportsShadow = computed(() => lightType.value !== 'ambient')
+const supportsDistance = computed(() => lightType.value === 'Point' || lightType.value === 'Spot')
+const supportsAngle = computed(() => lightType.value === 'Spot')
+const supportsShadow = computed(() => lightType.value !== 'Ambient')
 
 function toDegrees(radians: number) {
   return (radians * 180) / Math.PI
@@ -61,7 +61,7 @@ watch(
     lightForm.decay = light.decay ?? 1
     lightForm.castShadow = light.castShadow ?? false
 
-    if (light.type === 'spot') {
+  if (light.type === 'Spot') {
       lightForm.angle = toDegrees(light.angle ?? Math.PI / 6)
       lightForm.penumbra = light.penumbra ?? 0.3
     } else {

@@ -1,6 +1,7 @@
 import type { GeometryType } from '@/plugins/geometry'
 import type { SceneDynamicMesh } from '@/types/dynamic-mesh'
 import type { SceneNodeMaterial } from '@/types/material'
+import type { LightNodeProperties } from '@/types/light'
 
 export type SceneNodeType = 'Mesh' | 'Light' | 'Group' | 'Camera' | GeometryType
 
@@ -16,20 +17,6 @@ export interface CameraNodeProperties {
 export interface SceneNodeImportMetadata {
   assetId: string
   objectPath: number[]
-}
-
-export type LightNodeType = 'directional' | 'point' | 'spot' | 'ambient'
-
-export interface LightNodeProperties {
-  type: LightNodeType
-  color: string
-  intensity: number
-  distance?: number
-  angle?: number
-  decay?: number
-  penumbra?: number
-  target?: Vector3Like
-  castShadow?: boolean
 }
 
 export interface Vector3Like {

@@ -1,4 +1,5 @@
-import type { LightNodeType, SceneNodeType } from './scene'
+import type { SceneNodeType } from './scene'
+import type { LightNodeType } from './light'
 
 export const NODE_TYPE_ICONS: Record<SceneNodeType, string> = {
   Mesh: 'mdi-cube-outline',
@@ -21,10 +22,10 @@ export const NODE_TYPE_ICONS: Record<SceneNodeType, string> = {
 }
 
 export const LIGHT_TYPE_ICONS: Record<LightNodeType, string> = {
-  directional: 'mdi-white-balance-sunny',
-  point: 'mdi-lightbulb-on-outline',
-  spot: 'mdi-spotlight-beam',
-  ambient: 'mdi-weather-night',
+  Directional: 'mdi-white-balance-sunny',
+  Point: 'mdi-lightbulb-on-outline',
+  Spot: 'mdi-spotlight-beam',
+  Ambient: 'mdi-weather-night',
 }
 
 type NodeIconParams = {
