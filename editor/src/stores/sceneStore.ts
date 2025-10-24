@@ -61,6 +61,7 @@ import { loadObjectFromFile } from '@/plugins/assetImport'
 import { generateUuid } from '@/plugins/uuid'
 import { getCachedModelObject, getOrLoadModelObject } from './modelObjectCache'
 import { createWallGroup, updateWallGroup } from '@/plugins/wallMesh'
+import { computeBlobHash, blobToDataUrl, dataUrlToBlob, inferBlobFilename, extractExtension, ensureExtension } from '@/utils/blob'
 
 import {
   cloneAssetList,
@@ -102,6 +103,8 @@ export interface SceneImportResult {
 }
 
 const HISTORY_LIMIT = 50
+
+const LOCAL_EMBEDDED_ASSET_PREFIX = 'local::'
 
 const DEFAULT_WALL_HEIGHT = 3
 const DEFAULT_WALL_WIDTH = 0.2
@@ -2052,7 +2055,174 @@ function cloneSceneNodes(nodes: SceneNode[]): SceneNode[] {
   return nodes.map(cloneNode)
 }
 
-function cloneSceneDocumentForExport(scene: StoredSceneDocument): StoredSceneDocument {
+function getAssetFromCatalog(catalog: Record<string, ProjectAsset[]>, assetId: string): ProjectAsset | null {
+  for (const list of Object.values(catalog)) {
+    const match = list.find((asset) => asset.id === assetId)
+    if (match) {
+      return match
+    }
+  }
+  return null
+}
+
+function extractAssetFromCatalog(
+  catalog: Record<string, ProjectAsset[]>,
+  assetId: string,
+): { asset: ProjectAsset; categoryId: string } | null {
+  for (const [categoryId, list] of Object.entries(catalog)) {
+    const index = list.findIndex((asset) => asset.id === assetId)
+    if (index !== -1) {
+      const asset = list[index]!
+      const nextList = [...list.slice(0, index), ...list.slice(index + 1)]
+      catalog[categoryId] = nextList
+      return { asset: { ...asset }, categoryId }
+    }
+  }
+  return null
+}
+
+function insertAssetIntoCatalog(
+  catalog: Record<string, ProjectAsset[]>,
+  categoryId: string,
+  asset: ProjectAsset,
+) {
+  const list = catalog[categoryId] ?? []
+  const filtered = list.filter((entry) => entry.id !== asset.id)
+  catalog[categoryId] = [...filtered, asset]
+}
+
+function replaceMaterialTextureReferences(
+  textures: Partial<Record<SceneMaterialTextureSlot, SceneMaterialTextureRef | null>> | undefined,
+  previousId: string,
+  nextId: string,
+) {
+  if (!textures) {
+    return
+  }
+  MATERIAL_TEXTURE_SLOTS.forEach((slot) => {
+    const reference = textures[slot]
+    if (reference?.assetId === previousId) {
+      textures[slot] = { ...reference, assetId: nextId }
+    }
+  })
+}
+
+function replaceAssetIdInMaterials(materials: SceneMaterial[], previousId: string, nextId: string) {
+  materials.forEach((material) => {
+    replaceMaterialTextureReferences(material.textures, previousId, nextId)
+  })
+}
+
+function replaceAssetIdInNodes(nodes: SceneNode[], previousId: string, nextId: string) {
+  nodes.forEach((node) => {
+    if (node.sourceAssetId === previousId) {
+      node.sourceAssetId = nextId
+    }
+    if (node.importMetadata?.assetId === previousId) {
+      node.importMetadata.assetId = nextId
+    }
+    if (node.materials?.length) {
+      node.materials.forEach((material) => {
+        replaceMaterialTextureReferences(material.textures, previousId, nextId)
+      })
+    }
+    if (node.children?.length) {
+      replaceAssetIdInNodes(node.children, previousId, nextId)
+    }
+  })
+}
+
+function replaceAssetIdReferences(scene: StoredSceneDocument, previousId: string, nextId: string) {
+  if (previousId === nextId) {
+    return
+  }
+
+  const hasExistingTarget = !!getAssetFromCatalog(scene.assetCatalog, nextId)
+  const extracted = extractAssetFromCatalog(scene.assetCatalog, previousId)
+  if (!hasExistingTarget && extracted) {
+    const nextAsset: ProjectAsset = {
+      ...extracted.asset,
+      id: nextId,
+      downloadUrl: extracted.asset.downloadUrl === previousId ? nextId : extracted.asset.downloadUrl,
+    }
+    insertAssetIntoCatalog(scene.assetCatalog, extracted.categoryId, nextAsset)
+  }
+
+  const previousIndex = scene.assetIndex[previousId]
+  if (!scene.assetIndex[nextId]) {
+    if (previousIndex) {
+      scene.assetIndex[nextId] = {
+        categoryId: previousIndex.categoryId,
+        source: { type: 'local' },
+      }
+    } else if (extracted) {
+      scene.assetIndex[nextId] = {
+        categoryId: extracted.categoryId,
+        source: { type: 'local' },
+      }
+    }
+  }
+  if (scene.assetIndex[nextId]) {
+    scene.assetIndex[nextId] = {
+      ...scene.assetIndex[nextId],
+      source: { type: 'local' },
+    }
+  }
+  delete scene.assetIndex[previousId]
+
+  replaceAssetIdInMaterials(scene.materials, previousId, nextId)
+  replaceAssetIdInNodes(scene.nodes, previousId, nextId)
+}
+
+function resolveEmbeddedAssetFilename(scene: StoredSceneDocument, assetId: string, blob: Blob): string {
+  const asset = getAssetFromCatalog(scene.assetCatalog, assetId)
+  const extensionCandidates = [
+    extractExtension(asset?.description ?? undefined),
+    extractExtension(asset?.name ?? undefined),
+    extractExtension(asset?.downloadUrl ?? undefined),
+  ]
+  const mimeExtension = blob.type ? blob.type.split('/').pop() ?? null : null
+  if (mimeExtension) {
+    extensionCandidates.push(mimeExtension)
+  }
+  const extension = extensionCandidates.find((value) => value && value.length) ?? 'bin'
+  const fallback = `${assetId}.${extension}`
+  const filename = inferBlobFilename([asset?.description ?? null, asset?.name ?? null], fallback)
+  return ensureExtension(filename, extension)
+}
+
+async function buildPackageAssetMapForExport(scene: StoredSceneDocument): Promise<Record<string, string>> {
+  const assetCache = useAssetCacheStore()
+  const baseMap = clonePackageAssetMap(scene.packageAssetMap)
+  const localAssetIds = Object.entries(scene.assetIndex)
+    .filter(([, entry]) => entry.source?.type === 'local')
+    .map(([assetId]) => assetId)
+
+  for (const assetId of localAssetIds) {
+    const key = `${LOCAL_EMBEDDED_ASSET_PREFIX}${assetId}`
+    if (baseMap[key]) {
+      continue
+    }
+    let entry = assetCache.hasCache(assetId) ? assetCache.getEntry(assetId) : null
+    if (!entry || entry.status !== 'cached' || !entry.blob) {
+      entry = await assetCache.loadFromIndexedDb(assetId)
+    }
+    if (!entry || entry.status !== 'cached' || !entry.blob) {
+      console.warn('缺少本地资源数据，无法导出', assetId)
+      continue
+    }
+    try {
+      baseMap[key] = await blobToDataUrl(entry.blob)
+    } catch (error) {
+      console.warn('序列化本地资源失败', assetId, error)
+    }
+  }
+
+  return baseMap
+}
+
+async function cloneSceneDocumentForExport(scene: StoredSceneDocument): Promise<StoredSceneDocument> {
+  const packageAssetMap = await buildPackageAssetMapForExport(scene)
   return createSceneDocument(scene.name, {
     id: scene.id,
     nodes: scene.nodes,
@@ -2065,13 +2235,95 @@ function cloneSceneDocumentForExport(scene: StoredSceneDocument): StoredSceneDoc
     updatedAt: scene.updatedAt,
     assetCatalog: scene.assetCatalog,
     assetIndex: scene.assetIndex,
-    packageAssetMap: scene.packageAssetMap,
-  materials: scene.materials,
+    packageAssetMap,
+    materials: scene.materials,
     viewportSettings: scene.viewportSettings,
     panelVisibility: scene.panelVisibility,
     panelPlacement: scene.panelPlacement,
     groundSettings: scene.groundSettings,
   })
+}
+
+async function hydrateSceneDocumentWithEmbeddedAssets(scene: StoredSceneDocument): Promise<void> {
+  if (!scene.packageAssetMap || !Object.keys(scene.packageAssetMap).length) {
+    return
+  }
+  const entries = Object.entries(scene.packageAssetMap)
+  if (!entries.some(([key]) => key.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX))) {
+    return
+  }
+
+  const assetCache = useAssetCacheStore()
+  const nextPackageMap: Record<string, string> = {}
+
+  entries.forEach(([key, value]) => {
+    if (!key.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)) {
+      nextPackageMap[key] = value
+    }
+  })
+
+  for (const [key, dataUrl] of entries) {
+    if (!key.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)) {
+      continue
+    }
+    const originalId = key.slice(LOCAL_EMBEDDED_ASSET_PREFIX.length)
+    if (!originalId) {
+      nextPackageMap[key] = dataUrl
+      continue
+    }
+
+    let blob: Blob
+    try {
+      blob = dataUrlToBlob(dataUrl)
+    } catch (error) {
+      console.warn('无法解析本地资源数据', error)
+      nextPackageMap[key] = dataUrl
+      continue
+    }
+
+    let computedId = originalId
+    try {
+      computedId = await computeBlobHash(blob)
+    } catch (error) {
+      console.warn('计算资源哈希失败', error)
+    }
+
+    const filename = resolveEmbeddedAssetFilename(scene, originalId, blob)
+
+    let entry = assetCache.hasCache(computedId) ? assetCache.getEntry(computedId) : null
+    if (!entry || entry.status !== 'cached' || !entry.blob) {
+      entry = await assetCache.loadFromIndexedDb(computedId)
+    }
+    if (!entry || entry.status !== 'cached' || !entry.blob) {
+      try {
+        entry = await assetCache.storeAssetBlob(computedId, {
+          blob,
+          mimeType: blob.type || null,
+          filename,
+          downloadUrl: computedId,
+        })
+      } catch (error) {
+        console.warn('写入本地资源缓存失败', error)
+        nextPackageMap[key] = dataUrl
+        continue
+      }
+    }
+
+    assetCache.touch(computedId)
+
+    if (computedId !== originalId) {
+      replaceAssetIdReferences(scene, originalId, computedId)
+      Object.entries(nextPackageMap).forEach(([mapKey, mapValue]) => {
+        if (!mapKey.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX) && mapValue === originalId) {
+          nextPackageMap[mapKey] = computedId
+        }
+      })
+    }
+
+    nextPackageMap[`${LOCAL_EMBEDDED_ASSET_PREFIX}${computedId}`] = dataUrl
+  }
+
+  scene.packageAssetMap = nextPackageMap
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -4159,6 +4411,60 @@ export const useSceneStore = defineStore('scene', {
       }
       return findAssetInTree(this.projectTree, assetId)
     },
+    async ensureLocalAssetFromFile(
+      file: File,
+      metadata: {
+        type: ProjectAsset['type']
+        name: string
+        description?: string
+        previewColor?: string
+        gleaned?: boolean
+        commitOptions?: { updateNodes?: boolean; updateCamera?: boolean }
+      },
+    ): Promise<{ asset: ProjectAsset; isNew: boolean }> {
+      const assetCache = useAssetCacheStore()
+      const displayName = metadata.name && metadata.name.trim().length ? metadata.name.trim() : file.name ?? 'Local Asset'
+      const description = metadata.description ?? (file.name && file.name.trim().length ? file.name : undefined)
+      const assetId = await computeBlobHash(file)
+
+      let entry = assetCache.hasCache(assetId) ? assetCache.getEntry(assetId) : null
+      if (!entry || entry.status !== 'cached' || !entry.blob) {
+        entry = await assetCache.loadFromIndexedDb(assetId)
+      }
+      if (!entry || entry.status !== 'cached' || !entry.blob) {
+        entry = await assetCache.storeAssetBlob(assetId, {
+          blob: file,
+          mimeType: file.type || null,
+          filename: file.name ?? displayName,
+        })
+      }
+
+      assetCache.touch(assetId)
+
+      const existing = this.getAsset(assetId)
+      if (existing) {
+        return { asset: existing, isNew: false }
+      }
+
+      const projectAsset: ProjectAsset = {
+        id: assetId,
+        name: displayName,
+        type: metadata.type,
+        downloadUrl: assetId,
+        previewColor: metadata.previewColor ?? '#ffffff',
+        thumbnail: null,
+        description,
+        gleaned: metadata.gleaned ?? true,
+      }
+
+      const registered = this.registerAsset(projectAsset, {
+        categoryId: determineAssetCategoryId(projectAsset),
+        source: { type: 'local' },
+        commitOptions: metadata.commitOptions ?? { updateNodes: false, updateCamera: false },
+      })
+
+      return { asset: registered, isNew: true }
+    },
     registerAsset(
       asset: ProjectAsset,
       options: { categoryId?: string; source?: AssetSourceMetadata; commitOptions?: { updateNodes?: boolean; updateCamera?: boolean } } = {},
@@ -4304,9 +4610,16 @@ export const useSceneStore = defineStore('scene', {
 
       const nextPackageMap: Record<string, string> = {}
       Object.entries(this.packageAssetMap).forEach(([key, value]) => {
-        if (!assetIdSet.has(value)) {
-          nextPackageMap[key] = value
+        if (key.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)) {
+          const embeddedId = key.slice(LOCAL_EMBEDDED_ASSET_PREFIX.length)
+          if (embeddedId && assetIdSet.has(embeddedId)) {
+            return
+          }
         }
+        if (assetIdSet.has(value)) {
+          return
+        }
+        nextPackageMap[key] = value
       })
       this.packageAssetMap = nextPackageMap
 
@@ -4803,32 +5116,21 @@ export const useSceneStore = defineStore('scene', {
       let modelAssetId: string | null = null
 
       if (options.sourceFile) {
-        const file = options.sourceFile
-        const assetId = generateUuid()
-        await assetCache.storeAssetBlob(assetId, {
-          blob: file,
-          mimeType: file.type ?? 'application/octet-stream',
-          filename: file.name ?? `${fallbackName}.glb`,
-        })
-
-        const asset: ProjectAsset = {
-          id: assetId,
-          name: fallbackName,
-          type: 'model',
-          downloadUrl: '',
-          previewColor: '#ffffff',
-          thumbnail: null,
-          gleaned: true,
+        try {
+          const ensured = await this.ensureLocalAssetFromFile(options.sourceFile, {
+            type: 'model',
+            name: fallbackName,
+            description: options.sourceFile.name ?? undefined,
+            previewColor: '#ffffff',
+            gleaned: true,
+            commitOptions: { updateNodes: false, updateCamera: false },
+          })
+          modelAssetId = ensured.asset.id
+          assetCache.registerUsage(modelAssetId)
+          assetCache.touch(modelAssetId)
+        } catch (error) {
+          console.warn('缓存导入场景资源失败', error)
         }
-
-        const registered = this.registerAsset(asset, {
-          categoryId: determineAssetCategoryId(asset),
-          commitOptions: { updateNodes: false, updateCamera: false },
-        })
-
-        modelAssetId = registered.id
-        assetCache.registerUsage(modelAssetId)
-        assetCache.touch(modelAssetId)
       }
 
       const context: ExternalSceneImportContext = {
@@ -5616,6 +5918,8 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
+      await hydrateSceneDocumentWithEmbeddedAssets(scene)
+
       this.nodes.forEach((node) => releaseRuntimeTree(node))
 
       this.isSceneReady = false
@@ -5749,10 +6053,11 @@ export const useSceneStore = defineStore('scene', {
       if (!collected.length) {
         return null
       }
+      const scenes = await Promise.all(collected.map((scene) => cloneSceneDocumentForExport(scene)))
       return {
         formatVersion: SCENE_BUNDLE_FORMAT_VERSION,
         exportedAt: new Date().toISOString(),
-        scenes: collected.map((scene) => cloneSceneDocumentForExport(scene)),
+        scenes,
       }
     },
     async importSceneBundle(payload: SceneBundleImportPayload): Promise<SceneImportResult> {
@@ -5778,7 +6083,8 @@ export const useSceneStore = defineStore('scene', {
       const imported: StoredSceneDocument[] = []
       const renamedScenes: Array<{ originalName: string; renamedName: string }> = []
 
-      payload.scenes.forEach((entry, index) => {
+      for (let index = 0; index < payload.scenes.length; index += 1) {
+        const entry = payload.scenes[index]
         if (!isPlainObject(entry)) {
           throw new Error(`场景数据格式错误 (索引 ${index})`)
         }
@@ -5820,8 +6126,10 @@ export const useSceneStore = defineStore('scene', {
           groundSettings: (entry as { groundSettings?: Partial<GroundSettings> | null }).groundSettings ?? undefined,
         })
 
+        await hydrateSceneDocumentWithEmbeddedAssets(sceneDocument)
+
         imported.push(sceneDocument)
-      })
+      }
 
       if (!imported.length) {
         throw new Error('场景文件不包含任何有效场景')

@@ -591,6 +591,7 @@ async function exportCurrentScene() {
     return
   }
 
+  await saveCurrentScene()
   const bundle = await sceneStore.exportSceneBundle([currentSceneId])
   if (!bundle || !bundle.scenes.length) {
     console.warn('Failed to export current scene')

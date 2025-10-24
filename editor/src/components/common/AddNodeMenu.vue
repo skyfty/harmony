@@ -297,7 +297,6 @@ function handleMenuImportFromFile() {
     }
 
     const imported = object as THREE.Object3D
-    const assetId = generateUuid()
 
     let matchedFile: File | null = null
     if (imported.name && sourceFiles.has(imported.name)) {
@@ -328,15 +327,22 @@ function handleMenuImportFromFile() {
       }
     }
 
-    let cached = false
+    let assetId: string | null = null
+    let localAssetHandled = false
+    let registeredAsset: ProjectAsset | null = null
     if (matchedFile) {
       try {
-        await assetCacheStore.storeAssetBlob(assetId, {
-          blob: matchedFile,
-          mimeType: matchedFile.type || null,
-          filename: matchedFile.name,
+        const ensured = await sceneStore.ensureLocalAssetFromFile(matchedFile, {
+          type: 'model',
+          name: imported.name && imported.name.trim().length ? imported.name : matchedFile.name,
+          description: matchedFile.name,
+          previewColor: '#26C6DA',
+          gleaned: true,
+          commitOptions: { updateNodes: false, updateCamera: false },
         })
-        cached = true
+        registeredAsset = ensured.asset
+        assetId = ensured.asset.id
+        localAssetHandled = true
       } catch (error) {
         console.error('缓存导入资源失败', error)
       }
@@ -344,28 +350,33 @@ function handleMenuImportFromFile() {
       console.warn('未能匹配到导入文件，无法缓存资源', imported.name)
     }
 
-    await addImportedObjectToScene(imported, assetId)
+    if (!assetId) {
+      assetId = generateUuid()
+      const fallbackName = imported.name || matchedFile?.name || 'Imported Asset'
+      const importedAsset: ProjectAsset = {
+        id: assetId,
+        name: fallbackName,
+        type: 'model',
+        downloadUrl: assetId,
+        previewColor: '#26C6DA',
+        thumbnail: null,
+        description: matchedFile?.name ?? undefined,
+        gleaned: true,
+      }
+      registeredAsset = sceneStore.registerAsset(importedAsset, { source: { type: 'local' } })
+    }
 
-    if (cached) {
+    await addImportedObjectToScene(imported, assetId ?? undefined)
+
+    if (localAssetHandled && assetId) {
       assetCacheStore.registerUsage(assetId)
       assetCacheStore.touch(assetId)
     }
 
-    const displayName = imported.name || matchedFile?.name || 'Imported Asset'
-    const importedAsset: ProjectAsset = {
-      id: assetId,
-      name: displayName,
-      type: 'model',
-      downloadUrl: assetId,
-      previewColor: '#26C6DA',
-      thumbnail: null,
-      description: matchedFile?.name ?? undefined,
-      gleaned: true,
-    }
-    sceneStore.registerAsset(importedAsset, { source: { type: 'local' } })
+    const displayName = registeredAsset?.name ?? imported.name ?? matchedFile?.name ?? 'Imported Asset'
 
     uiStore.updateLoadingOverlay({
-      message: `${imported.name ?? '资源'}导入完成`,
+      message: `${displayName}导入完成`,
       progress: 100,
     })
     uiStore.updateLoadingProgress(100)
