@@ -162,8 +162,8 @@ function nodeSupportsMaterials(node: SceneNode | null | undefined): boolean {
   if (!node) {
     return false
   }
-  const type = node.nodeType ?? 'Mesh'
-  return type !== 'Light' && type !== 'Group' && type !== 'Camera'
+  const type = node.nodeType ?? (node.light ? 'Light' : 'Mesh')
+  return sceneNodeTypeSupportsMaterials(type)
 }
 
 function createEmptyTextureMap(input?: MaterialTextureMap | null): MaterialTextureMap {
@@ -302,6 +302,11 @@ function normalizeSceneNodeType(input: SceneNodeType | string | null | undefined
     return input as SceneNodeType
   }
   return input
+}
+
+function sceneNodeTypeSupportsMaterials(nodeType: SceneNodeType | string | null | undefined): boolean {
+  const normalized = normalizeSceneNodeType(nodeType)
+  return normalized !== 'Light' && normalized !== 'Group' && normalized !== 'Camera'
 }
 
 function extractMaterialProps(material: SceneNodeMaterial | undefined | null): SceneMaterialProps {
@@ -2070,10 +2075,12 @@ function toHierarchyItem(node: SceneNode): HierarchyTreeItem {
 }
 
 function cloneNode(node: SceneNode): SceneNode {
+  const nodeType = normalizeSceneNodeType(node.nodeType)
+  const materials = sceneNodeTypeSupportsMaterials(nodeType) ? cloneNodeMaterials(node.materials) : undefined
   return {
     ...node,
-    nodeType: normalizeSceneNodeType(node.nodeType),
-    materials: cloneNodeMaterials(node.materials),
+    nodeType,
+    materials,
     light: node.light
       ? {
           ...node.light,
@@ -5245,17 +5252,23 @@ export const useSceneStore = defineStore('scene', {
     }) {
       this.captureHistorySnapshot()
       const id = generateUuid()
-      const baseMaterial = findDefaultSceneMaterial(this.materials)
-      const initialProps: SceneMaterialProps = baseMaterial ? createMaterialProps(baseMaterial) : createMaterialProps()
-      const initialMaterial = createNodeMaterial(null, initialProps, {
-        name: baseMaterial?.name,
-        type: normalizeSceneMaterialType(baseMaterial?.type ?? DEFAULT_MATERIAL_TYPE),
-      })
+      const nodeType = normalizeSceneNodeType(payload.nodeType)
+      let nodeMaterials: SceneNodeMaterial[] | undefined
+
+      if (sceneNodeTypeSupportsMaterials(nodeType)) {
+        const baseMaterial = findDefaultSceneMaterial(this.materials)
+        const initialProps: SceneMaterialProps = baseMaterial ? createMaterialProps(baseMaterial) : createMaterialProps()
+        const initialMaterial = createNodeMaterial(null, initialProps, {
+          name: baseMaterial?.name,
+          type: normalizeSceneMaterialType(baseMaterial?.type ?? DEFAULT_MATERIAL_TYPE),
+        })
+        nodeMaterials = [initialMaterial]
+      }
       const node: SceneNode = {
         id,
         name: payload.name ?? payload.object.name ?? 'Imported Mesh',
-        nodeType: normalizeSceneNodeType(payload.nodeType),
-        materials: [initialMaterial],
+        nodeType,
+        materials: nodeMaterials,
         position: payload.position ?? { x: 0, y: 0, z: 0 },
         rotation: payload.rotation ?? { x: 0, y: 0, z: 0 },
         scale: payload.scale ?? { x: 1, y: 1, z: 1 },
