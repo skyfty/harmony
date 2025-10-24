@@ -24,8 +24,8 @@ const memoryStorage: StorageAdapter = (() => {
   }
 })()
 
-const PINIA_IDB_NAME = 'harmony-pinia-state'
-const PINIA_IDB_STORE = 'pinia'
+const PINIA_IDB_NAME = 'harmony-scene-state'
+const PINIA_IDB_STORE = 'scene'
 const PINIA_IDB_VERSION = 1
 
 let piniaDbPromise: Promise<IDBDatabase> | null = null
@@ -80,11 +80,6 @@ const indexedDbStorage: StorageAdapter = {
     const tx = db.transaction(PINIA_IDB_STORE, 'readwrite')
     const store = tx.objectStore(PINIA_IDB_STORE)
     store.put(value, key)
-    await new Promise<void>((resolve, reject) => {
-      tx.oncomplete = () => resolve()
-      tx.onerror = () => reject(tx.error ?? new Error('Failed to persist Pinia state'))
-      tx.onabort = () => reject(tx.error ?? new Error('Pinia state transaction aborted'))
-    })
   },
   async removeItem(key: string) {
     if (!hasIndexedDb) {
@@ -95,11 +90,6 @@ const indexedDbStorage: StorageAdapter = {
     const tx = db.transaction(PINIA_IDB_STORE, 'readwrite')
     const store = tx.objectStore(PINIA_IDB_STORE)
     store.delete(key)
-    await new Promise<void>((resolve, reject) => {
-      tx.oncomplete = () => resolve()
-      tx.onerror = () => reject(tx.error ?? new Error('Failed to delete Pinia state'))
-      tx.onabort = () => reject(tx.error ?? new Error('Pinia state delete aborted'))
-    })
   },
 }
 
@@ -348,12 +338,7 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
         await hydrationPromise.catch(() => undefined)
 
         if (!shouldPersist(payload.state, lastPersistedState)) {
-          if (debug) {
-            console.info('[pinia-persist] Skipped persisting store', {
-              key,
-              reason,
-            })
-          }
+
           return
         }
 
@@ -362,18 +347,10 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
           return
         }
 
-        await storage.setItem(key, serialized)
+        storage.setItem(key, serialized)
         lastPersistedValue = serialized
         lastPersistedState = cloneDeep(payload.state)
 
-        if (debug) {
-          console.info('[pinia-persist] Persisted store', {
-            key,
-            version,
-            reason,
-            state: payload.state,
-          })
-        }
       } catch (error) {
         if (debug) {
           console.warn(`[pinia-persist] Failed to persist store "${store.$id}"`, error)
@@ -427,14 +404,6 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
           debug,
         )
 
-        if (debug) {
-          console.info('[pinia-persist] Hydrating store', {
-            key,
-            fromVersion,
-            toVersion: version,
-            state: stateToHydrate,
-          })
-        }
 
         applyStatePatch(store, stateToHydrate)
         lastPersistedState = cloneDeep(stateToHydrate)

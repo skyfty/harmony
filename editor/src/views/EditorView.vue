@@ -555,6 +555,38 @@ async function handlePreview() {
   }
 }
 
+let pendingSceneSave: Promise<boolean> | null = null
+
+async function saveCurrentScene(): Promise<boolean> {
+  if (pendingSceneSave) {
+    return pendingSceneSave
+  }
+
+  const sceneId = sceneStore.currentSceneId
+  if (!sceneId) {
+    console.warn('No active scene to save')
+    return true
+  }
+
+  if (!sceneStore.hasUnsavedChanges) {
+    return true
+  }
+
+  pendingSceneSave = (async () => {
+    try {
+      await sceneStore.saveActiveScene()
+      return true
+    } catch (error) {
+      console.error('Failed to save current scene', error)
+      return false
+    } finally {
+      pendingSceneSave = null
+    }
+  })()
+
+  return pendingSceneSave
+}
+
 async function exportCurrentScene() {
   const currentSceneId = sceneStore.currentSceneId
   if (!currentSceneId) {
@@ -593,7 +625,10 @@ async function handleAction(action: string) {
     case 'Import':
       requestExternalSceneImport()
       break
-    case 'Save': {
+    case 'Save':
+      await saveCurrentScene()
+      break
+    case 'SaveAs': {
       await exportCurrentScene()
       break
     }
@@ -646,6 +681,10 @@ async function handleAction(action: string) {
   }
 }
 async function handleCreateScene(payload: { name: string; groundWidth: number; groundDepth: number }) {
+  const saved = await saveCurrentScene()
+  if (!saved) {
+    return
+  }
   await sceneStore.createScene(payload.name, {
     groundSettings: {
       width: payload.groundWidth,
@@ -660,6 +699,12 @@ function handleSceneManagerCreateRequest() {
 }
 
 async function handleSelectScene(sceneId: string) {
+  if (sceneId !== sceneStore.currentSceneId) {
+    const saved = await saveCurrentScene()
+    if (!saved) {
+      return
+    }
+  }
   const changed = await sceneStore.selectScene(sceneId)
   if (changed) {
     isSceneManagerOpen.value = false
@@ -1056,6 +1101,13 @@ async function handleEditorViewShortcut(event: KeyboardEvent) {
       case 'KeyY': {
         if (!event.shiftKey) {
           handled = await sceneStore.redo()
+        }
+        break
+      }
+      case 'KeyS': {
+        if (!event.shiftKey) {
+          await saveCurrentScene()
+          handled = true
         }
         break
       }

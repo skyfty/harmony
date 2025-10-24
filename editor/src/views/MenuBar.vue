@@ -17,8 +17,11 @@ const quickActions: QuickAction[] = [
 const props = defineProps<{ showStats: boolean }>()
 
 const sceneStore = useSceneStore()
-const { canUndo, canRedo, currentSceneMeta, panelVisibility } = storeToRefs(sceneStore)
-const sceneName = computed(() => currentSceneMeta.value?.name ?? 'Untitled Scene')
+const { canUndo, canRedo, currentSceneMeta, panelVisibility, hasUnsavedChanges } = storeToRefs(sceneStore)
+const sceneName = computed(() => {
+  const baseName = currentSceneMeta.value?.name ?? 'Untitled Scene'
+  return hasUnsavedChanges.value ? `${baseName} *` : baseName
+})
 
 const emit = defineEmits<{
   (event: 'menu-action', action: string): void
@@ -76,6 +79,9 @@ function handleToggleStats() {
                     <template   #append>
                       <span class="shortcut-label">Ctrl+S</span>
                     </template>
+                  </v-list-item>
+                  <v-list-item @click="handleMenuAction('SaveAs')" class="menu-list-item">
+                    Save as
                   </v-list-item>
                   <v-divider />
                   <v-list-item @click="handleMenuAction('Import')" class="menu-list-item">

@@ -2278,6 +2278,10 @@ function migrateScenePersistedState(
     next.selectedNodeIds = (next.selectedNodeIds as unknown[]).filter((id): id is string => typeof id === 'string')
   }
 
+  if (typeof next.hasUnsavedChanges !== 'boolean') {
+    next.hasUnsavedChanges = false
+  }
+
   return next as Partial<SceneState>
 }
 
@@ -2432,24 +2436,46 @@ function createSceneDocument(
   }
 }
 
-function commitSceneSnapshot(
-  store: SceneState,
-  _options: { updateNodes?: boolean; updateCamera?: boolean } = {},
-) {
-  if (!store.currentSceneId) {
+function normalizeCurrentSceneMeta(store: SceneState) {
+  const now = new Date().toISOString()
+  if (!store.currentSceneMeta) {
+    store.currentSceneMeta = {
+      name: 'Untitled Scene',
+      thumbnail: null,
+      createdAt: now,
+      updatedAt: now,
+    }
     return
   }
 
-  const scenesStore = useScenesStore()
-  const now = new Date().toISOString()
-  const createdAt = store.currentSceneMeta?.createdAt ?? now
-  const name = store.currentSceneMeta?.name?.trim() ? store.currentSceneMeta.name : 'Untitled Scene'
-  const thumbnail = store.currentSceneMeta?.thumbnail ?? null
+  const name = typeof store.currentSceneMeta.name === 'string' ? store.currentSceneMeta.name.trim() : ''
+  const thumbnail = typeof store.currentSceneMeta.thumbnail === 'string' ? store.currentSceneMeta.thumbnail : null
+  const createdAtRaw = store.currentSceneMeta.createdAt
+  const updatedAtRaw = store.currentSceneMeta.updatedAt
+  const createdAt = typeof createdAtRaw === 'string' && createdAtRaw ? createdAtRaw : now
+  const updatedAt = typeof updatedAtRaw === 'string' && updatedAtRaw ? updatedAtRaw : createdAt
 
-  const document: StoredSceneDocument = {
-    id: store.currentSceneId,
-    name,
+  store.currentSceneMeta = {
+    name: name || 'Untitled Scene',
     thumbnail,
+    createdAt,
+    updatedAt,
+  }
+}
+
+function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
+  if (!store.currentSceneId) {
+    throw new Error('Cannot create scene document without an active scene')
+  }
+
+  normalizeCurrentSceneMeta(store)
+  const now = new Date().toISOString()
+  const meta = store.currentSceneMeta!
+
+  return {
+    id: store.currentSceneId,
+    name: meta.name,
+    thumbnail: meta.thumbnail ?? null,
     nodes: cloneSceneNodes(store.nodes),
     materials: cloneSceneMaterials(store.materials),
     selectedNodeId: store.selectedNodeId,
@@ -2459,22 +2485,25 @@ function commitSceneSnapshot(
     groundSettings: cloneGroundSettings(store.groundSettings),
     panelVisibility: normalizePanelVisibilityState(store.panelVisibility),
     panelPlacement: normalizePanelPlacementStateInput(store.panelPlacement),
-    resourceProviderId: store.resourceProviderId,
-    createdAt,
+    resourceProviderId: store.resourceProviderId ?? 'builtin',
+    createdAt: meta.createdAt,
     updatedAt: now,
     assetCatalog: cloneAssetCatalog(store.assetCatalog),
     assetIndex: cloneAssetIndex(store.assetIndex),
     packageAssetMap: clonePackageAssetMap(store.packageAssetMap),
   }
+}
 
-  store.currentSceneMeta = {
-    name: document.name,
-    thumbnail: document.thumbnail ?? null,
-    createdAt,
-    updatedAt: document.updatedAt,
+function commitSceneSnapshot(
+  store: SceneState,
+  _options: { updateNodes?: boolean; updateCamera?: boolean } = {},
+) {
+  if (!store.currentSceneId) {
+    return
   }
 
-  void scenesStore.saveSceneDocument(document)
+  normalizeCurrentSceneMeta(store)
+  store.hasUnsavedChanges = true
 }
 
 function applyCurrentSceneMeta(store: SceneState, document: StoredSceneDocument) {
@@ -2709,6 +2738,7 @@ export const useSceneStore = defineStore('scene', {
       transformSnapshotCaptured: false,
       pendingTransformSnapshot: null,
       isSceneReady: false,
+      hasUnsavedChanges: false,
     }
   },
   getters: {
@@ -4261,64 +4291,6 @@ export const useSceneStore = defineStore('scene', {
         }
       }
 
-      const scenesStore = useScenesStore()
-      await scenesStore.initialize()
-
-      const now = new Date().toISOString()
-      const otherSceneIds = scenesStore.metadata
-        .map((entry) => entry.id)
-        .filter((id) => id !== this.currentSceneId)
-
-      if (otherSceneIds.length) {
-        await Promise.all(otherSceneIds.map(async (sceneId) => {
-          const document = await scenesStore.loadSceneDocument(sceneId)
-          if (!document) {
-            return
-          }
-          const sceneAssetNodeMap = collectNodesByAssetId(document.nodes)
-          const sceneNodeIds: string[] = []
-          deletableIds.forEach((assetId) => {
-            const nodes = sceneAssetNodeMap.get(assetId)
-            if (nodes?.length) {
-              nodes.forEach((node) => sceneNodeIds.push(node.id))
-            }
-          })
-          if (!sceneNodeIds.length) {
-            return
-          }
-          const removedNodeIds: string[] = []
-          const prunedNodes = pruneNodes(document.nodes, new Set(sceneNodeIds), removedNodeIds)
-          const removedSet = new Set(removedNodeIds)
-
-          let selectedNodeIds = Array.isArray(document.selectedNodeIds)
-            ? document.selectedNodeIds.filter((id) => !removedSet.has(id))
-            : []
-          let selectedNodeId = document.selectedNodeId
-          if (selectedNodeId && removedSet.has(selectedNodeId)) {
-            selectedNodeId = null
-          }
-          if (!selectedNodeId && prunedNodes.length > 0) {
-            selectedNodeId = prunedNodes[0]!.id
-          }
-          if (!selectedNodeIds.length && selectedNodeId) {
-            selectedNodeIds = [selectedNodeId]
-          }
-          selectedNodeIds = normalizeSelectionIds(prunedNodes, selectedNodeIds)
-          if (selectedNodeId && !selectedNodeIds.includes(selectedNodeId)) {
-            selectedNodeId = selectedNodeIds[selectedNodeIds.length - 1] ?? null
-          }
-
-          const updatedDocument: StoredSceneDocument = {
-            ...document,
-            nodes: prunedNodes,
-            selectedNodeId,
-            selectedNodeIds,
-            updatedAt: now,
-          }
-          await scenesStore.saveSceneDocument(updatedDocument)
-        }))
-      }
-
       const nextCatalog: Record<string, ProjectAsset[]> = {}
       Object.entries(this.assetCatalog).forEach(([categoryId, list]) => {
         nextCatalog[categoryId] = list
@@ -5570,12 +5542,29 @@ export const useSceneStore = defineStore('scene', {
     clearClipboard() {
       this.clipboard = null
     },
+    async saveActiveScene(options: { force?: boolean } = {}): Promise<StoredSceneDocument | null> {
+      if (!this.currentSceneId) {
+        console.warn('[SceneStore] Attempted to save without an active scene')
+        return null
+      }
+
+      if (!options.force && !this.hasUnsavedChanges) {
+        return null
+      }
+
+      const scenesStore = useScenesStore()
+      await scenesStore.initialize()
+
+      const document = buildSceneDocumentFromState(this)
+      await scenesStore.saveSceneDocument(document)
+      applyCurrentSceneMeta(this, document)
+      this.hasUnsavedChanges = false
+      return document
+    },
     async createScene(
       name = 'Untitled Scene',
       thumbnailOrOptions?: string | null | { thumbnail?: string | null; groundSettings?: Partial<GroundSettings> },
     ) {
-      commitSceneSnapshot(this)
-
       const scenesStore = useScenesStore()
       await scenesStore.initialize()
 
@@ -5625,6 +5614,7 @@ export const useSceneStore = defineStore('scene', {
       this.resourceProviderId = sceneDocument.resourceProviderId
       useAssetCacheStore().recalculateUsage(this.nodes)
       this.isSceneReady = true
+      this.hasUnsavedChanges = false
       return sceneDocument.id
     },
     async selectScene(sceneId: string) {
@@ -5637,7 +5627,6 @@ export const useSceneStore = defineStore('scene', {
         }
         return true
       }
-      commitSceneSnapshot(this)
       const scenesStore = useScenesStore()
       await scenesStore.initialize()
       const scene = await scenesStore.loadSceneDocument(sceneId)
@@ -5669,14 +5658,13 @@ export const useSceneStore = defineStore('scene', {
         this.groundSettings = cloneGroundSettings(scene.groundSettings)
         this.resourceProviderId = scene.resourceProviderId ?? 'builtin'
         useAssetCacheStore().recalculateUsage(this.nodes)
+        this.hasUnsavedChanges = false
       } finally {
         this.isSceneReady = true
       }
       return true
     },
     async deleteScene(sceneId: string) {
-      commitSceneSnapshot(this)
-
       const scenesStore = useScenesStore()
       await scenesStore.initialize()
 
@@ -5710,6 +5698,7 @@ export const useSceneStore = defineStore('scene', {
         this.resourceProviderId = fallback.resourceProviderId
         useAssetCacheStore().recalculateUsage(this.nodes)
         this.isSceneReady = true
+        this.hasUnsavedChanges = false
         return true
       }
 
@@ -5892,6 +5881,7 @@ export const useSceneStore = defineStore('scene', {
           this.resourceProviderId = fallback.resourceProviderId
           useAssetCacheStore().recalculateUsage(this.nodes)
           this.isSceneReady = true
+          this.hasUnsavedChanges = false
           return
         }
 
@@ -5924,6 +5914,7 @@ export const useSceneStore = defineStore('scene', {
         this.panelPlacement = normalizePanelPlacementStateInput(document.panelPlacement)
         this.resourceProviderId = document.resourceProviderId ?? 'builtin'
         useAssetCacheStore().recalculateUsage(this.nodes)
+        this.hasUnsavedChanges = false
       } finally {
         this.isSceneReady = true
       }
@@ -5951,6 +5942,7 @@ export const useSceneStore = defineStore('scene', {
       'assetCatalog',
       'assetIndex',
       'packageAssetMap',
+      'hasUnsavedChanges',
     ],
     migrations: migrateScenePersistedState,
   },

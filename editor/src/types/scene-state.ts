@@ -51,4 +51,5 @@ export interface SceneState {
   transformSnapshotCaptured: boolean
   pendingTransformSnapshot: SceneHistoryEntry | null
   isSceneReady: boolean
+  hasUnsavedChanges: boolean
 }
