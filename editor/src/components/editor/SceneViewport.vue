@@ -5943,14 +5943,15 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       object = perspectiveCamera
     }
   } else if (nodeType === 'Group') {
-    object = getRuntimeObject(node.id) ?? null
-    if (object) {
-      object.userData.usesRuntimeObject = true
+    let container = getRuntimeObject(node.id)
+    if (container !== null) {
+      container.userData.usesRuntimeObject = true
     } else {
-      object = new THREE.Group()
-      object.name = node.name
+      container = new THREE.Group()
+      container.name = node.name
     }
-    object.userData.nodeId = node.id
+    container.userData.nodeId = node.id
+    object = container
   } else {
     object = createGeometry(nodeType)
     object.name = node.name
