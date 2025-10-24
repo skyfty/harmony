@@ -26,13 +26,14 @@ import type { EditorTool } from '@/types/editor-tool'
 import type { EnsureSceneAssetsOptions } from '@/types/ensure-scene-assets-options'
 import type { PanelVisibilityState } from '@/types/panel-visibility-state'
 import type { PanelPlacementState, PanelPlacement } from '@/types/panel-placement-state'
+import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import type { AssetIndexEntry, AssetSourceMetadata } from '@/types/asset-index-entry'
 import type { SceneCameraState } from '@/types/scene-camera-state'
 import type { SceneHistoryEntry } from '@/types/scene-history-entry'
 import type { SceneState } from '@/types/scene-state'
-    case 'Ambient':
+import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { CameraProjectionMode, CameraControlMode, SceneSkyboxSettings, SceneViewportSettings } from '@/types/scene-viewport-settings'
 import type { DynamicMeshVector3, GroundDynamicMesh, PlatformDynamicMesh, SceneDynamicMesh, WallDynamicMesh } from '@/types/dynamic-mesh'
@@ -5364,8 +5365,8 @@ export const useSceneStore = defineStore('scene', {
       segments: Array<{ start: Vector3Like; end: Vector3Like }>
       dimensions?: { height?: number; width?: number; thickness?: number }
     }): boolean {
-      const node = findNodeById(this.nodes, nodeId)
-      if (!node || node.dynamicMesh?.type !== 'wall') {
+  const node = findNodeById(this.nodes, nodeId)
+  if (!node || node.dynamicMesh?.type !== 'Wall') {
         return false
       }
 
@@ -5387,12 +5388,12 @@ export const useSceneStore = defineStore('scene', {
       return true
     },
     setWallNodeDimensions(nodeId: string, dimensions: { height?: number; width?: number; thickness?: number }): boolean {
-      const node = findNodeById(this.nodes, nodeId)
-      if (!node || node.dynamicMesh?.type !== 'wall') {
+  const node = findNodeById(this.nodes, nodeId)
+  if (!node || node.dynamicMesh?.type !== 'Wall') {
         return false
       }
 
-      const existing = node.dynamicMesh.segments[0]
+  const existing = node.dynamicMesh.segments[0]
       const { height, width, thickness } = normalizeWallDimensions({
         height: dimensions.height ?? existing?.height ?? DEFAULT_WALL_HEIGHT,
         width: dimensions.width ?? existing?.width ?? DEFAULT_WALL_WIDTH,
@@ -5422,7 +5423,7 @@ export const useSceneStore = defineStore('scene', {
 
       this.captureHistorySnapshot()
       node.dynamicMesh = {
-        type: 'wall',
+        type: 'Wall',
         segments: nextSegments,
       }
       this.nodes = [...this.nodes]

@@ -4188,7 +4188,7 @@ function buildWallPreviewDefinition(segments: WallSessionSegment[], dimensions: 
   const normalized = normalizeWallDimensionsForViewport(dimensions)
 
   const definition: WallDynamicMesh = {
-    type: 'wall',
+    type: 'Wall',
     segments: segments.map(({ start, end }) => ({
       start: { x: start.x - center.x, y: start.y - center.y, z: start.z - center.z },
       end: { x: end.x - center.x, y: end.y - center.y, z: end.z - center.z },
@@ -4202,7 +4202,7 @@ function buildWallPreviewDefinition(segments: WallSessionSegment[], dimensions: 
 }
 
 function getWallNodeDimensions(node: SceneNode): { height: number; width: number; thickness: number } {
-  if (node.dynamicMesh?.type !== 'wall' || node.dynamicMesh.segments.length === 0) {
+  if (node.dynamicMesh?.type !== 'Wall' || node.dynamicMesh.segments.length === 0) {
     return normalizeWallDimensionsForViewport({
       height: WALL_DEFAULT_HEIGHT,
       width: WALL_DEFAULT_WIDTH,
@@ -4218,7 +4218,7 @@ function getWallNodeDimensions(node: SceneNode): { height: number; width: number
 }
 
 function expandWallSegmentsToWorld(node: SceneNode): WallSessionSegment[] {
-  if (node.dynamicMesh?.type !== 'wall') {
+  if (node.dynamicMesh?.type !== 'Wall') {
     return []
   }
   const origin = new THREE.Vector3(node.position.x, node.position.y, node.position.z)
@@ -4387,7 +4387,7 @@ function hydrateWallBuildSessionFromSelection(session: WallBuildSession) {
     const selectedId = sceneStore.selectedNodeId
     if (selectedId) {
       const selectedNode = findSceneNode(sceneStore.nodes, selectedId)
-      if (selectedNode?.dynamicMesh?.type === 'wall') {
+  if (selectedNode?.dynamicMesh?.type === 'Wall') {
         session.dimensions = getWallNodeDimensions(selectedNode)
       }
     }
@@ -4398,7 +4398,7 @@ function hydrateWallBuildSessionFromSelection(session: WallBuildSession) {
     const selectedId = sceneStore.selectedNodeId
     if (selectedId) {
       const selectedNode = findSceneNode(sceneStore.nodes, selectedId)
-      if (selectedNode?.dynamicMesh?.type === 'wall') {
+  if (selectedNode?.dynamicMesh?.type === 'Wall') {
         session.nodeId = selectedNode.id
         session.dimensions = getWallNodeDimensions(selectedNode)
         session.segments = expandWallSegmentsToWorld(selectedNode)
@@ -4406,7 +4406,7 @@ function hydrateWallBuildSessionFromSelection(session: WallBuildSession) {
     }
   } else {
     const node = findSceneNode(sceneStore.nodes, session.nodeId)
-    if (node?.dynamicMesh?.type === 'wall') {
+  if (node?.dynamicMesh?.type === 'Wall') {
       session.dimensions = getWallNodeDimensions(node)
       session.segments = expandWallSegmentsToWorld(node)
     }
@@ -4509,7 +4509,7 @@ function commitWallSegmentDrag(): boolean {
     }
     wallBuildSession.segments = pendingSegments
     const refreshed = findSceneNode(sceneStore.nodes, nodeId)
-    if (refreshed?.dynamicMesh?.type === 'wall') {
+  if (refreshed?.dynamicMesh?.type === 'Wall') {
       wallBuildSession.dimensions = getWallNodeDimensions(refreshed)
     }
   }
@@ -5325,7 +5325,7 @@ function createLightObject(node: SceneNode): THREE.Object3D {
   let requiresHelperUpdate = false
 
   switch (config.type) {
-    case 'directional': {
+    case 'Directional': {
       const directional = new THREE.DirectionalLight(config.color, config.intensity)
       directional.castShadow = config.castShadow ?? false
       light = directional
@@ -5342,14 +5342,14 @@ function createLightObject(node: SceneNode): THREE.Object3D {
       requiresHelperUpdate = true
       break
     }
-    case 'point': {
+  case 'Point': {
       const point = new THREE.PointLight(config.color, config.intensity, config.distance ?? 0, config.decay ?? 1)
       point.castShadow = config.castShadow ?? false
       light = point
       helper = new THREE.PointLightHelper(point, POINT_LIGHT_HELPER_SIZE, config.color)
       break
     }
-    case 'spot': {
+  case 'Spot': {
       const spot = new THREE.SpotLight(
         config.color,
         config.intensity,
@@ -5372,7 +5372,7 @@ function createLightObject(node: SceneNode): THREE.Object3D {
       requiresHelperUpdate = true
       break
     }
-    case 'ambient':
+  case 'Ambient':
     default: {
       light = new THREE.AmbientLight(config.color, config.intensity)
       break
