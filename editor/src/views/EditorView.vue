@@ -568,14 +568,10 @@ async function saveCurrentScene(): Promise<boolean> {
     return true
   }
 
-  if (!sceneStore.hasUnsavedChanges) {
-    return true
-  }
-
   pendingSceneSave = (async () => {
     try {
       viewportRef.value?.captureThumbnail()
-      await sceneStore.saveActiveScene()
+      await sceneStore.saveActiveScene({force: true})
       return true
     } catch (error) {
       console.error('Failed to save current scene', error)
