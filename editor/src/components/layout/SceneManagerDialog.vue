@@ -1,17 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-
-interface SceneSummaryItem {
-  id: string
-  name: string
-  thumbnail?: string | null
-  createdAt: string
-  updatedAt: string
-}
+import type { SceneSummary } from '@/types/scene-summary'
 
 const props = defineProps<{
   modelValue: boolean
-  scenes: SceneSummaryItem[]
+  scenes: SceneSummary[]
   currentSceneId: string | null
 }>()
 
@@ -119,7 +112,7 @@ function openCreateDialog() {
   emit('request-new')
 }
 
-function requestDelete(scene: SceneSummaryItem) {
+function requestDelete(scene: SceneSummary) {
   pendingDeleteId.value = scene.id
   pendingDeleteName.value = scene.name
   deleteDialogOpen.value = true
@@ -146,7 +139,7 @@ function confirmSelection() {
   emit('update:modelValue', false)
 }
 
-function startRename(scene: SceneSummaryItem) {
+function startRename(scene: SceneSummary) {
   editingSceneId.value = scene.id
   editingSceneName.value = scene.name
   nextTick(() => {
