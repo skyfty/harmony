@@ -43,7 +43,7 @@ export interface SceneExportOptions {
     includeSkeletons?: boolean
     includeCameras?: boolean
     includeExtras?: boolean
-    rotateCoordinateSystem?:boolean
+  rotateCoordinateSystem?: boolean
     onProgress?: (progress: number, message?: string) => void
 }
 
@@ -105,6 +105,10 @@ function shouldExcludeFromGLTF(object: THREE.Object3D) {
     }
 
     if (EDITOR_HELPER_TYPES.has(object.type)) {
+        return true
+    }
+
+    if ((object as any).isTransformControlsRoot) {
         return true
     }
 
@@ -180,19 +184,14 @@ async function exportGLB(scene: THREE.Scene, settings?: GLBExportSettings) {
         }
     }
     const exporter = new GLTFExporter()
-    const removedHelpers = removeEditorHelpers(scene)
-    try {
-        const result = await exporter.parseAsync( scene,{
-            binary: true,
-            animations: optimizedAnimations,
-            onlyVisible: settings?.onlyVisible ?? true,
-            includeCustomExtensions: settings?.includeCustomExtensions ?? true,
-        });
-        const blob = new Blob([result as ArrayBuffer], { type: 'model/gltf-binary' })
-        return blob;
-    } finally {
-        restoreRemovedObjects(removedHelpers)
-    }
+    const result = await exporter.parseAsync( scene,{
+        binary: true,
+        animations: optimizedAnimations,
+        onlyVisible: settings?.onlyVisible ?? true,
+        includeCustomExtensions: settings?.includeCustomExtensions ?? true,
+    });
+    const blob = new Blob([result as ArrayBuffer], { type: 'model/gltf-binary' })
+    return blob;
 }
 
 function normalizeBaseFileName(input?: string): string {
@@ -332,6 +331,20 @@ function stripSkeletonData(root: THREE.Object3D) {
   bones.forEach((bone) => bone.parent?.remove(bone))
 }
 
+function rotateSceneForCoordinateSystem(scene: THREE.Scene) {
+  // Flip handedness by rotating every root node 180° around the Y axis
+  if (!scene.children.length) {
+    return
+  }
+  const rotation = new THREE.Matrix4().makeRotationY(Math.PI)
+  for (const child of scene.children) {
+    child.applyMatrix4(rotation)
+    child.updateMatrixWorld(true)
+  }
+  scene.applyMatrix4(rotation)
+  scene.updateMatrixWorld(true)
+}
+
 export function triggerDownload(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
@@ -369,6 +382,7 @@ export async function prepareSceneExport(scene: THREE.Scene, options: SceneExpor
 
   onProgress(5, 'Cloning scene data...')
   const exportScene = clone(scene) as THREE.Scene
+  removeEditorHelpers(exportScene)
 
   onProgress(12, 'Preparing materials...')
   cloneMeshMaterials(exportScene)
@@ -396,6 +410,11 @@ export async function prepareSceneExport(scene: THREE.Scene, options: SceneExpor
   if (!includeTextures) {
     onProgress(50, 'Stripping textures...')
     stripMaterialTextures(exportScene)
+  }
+
+  if (options.rotateCoordinateSystem) {
+    onProgress(58, 'Adjusting coordinate system...')
+    rotateSceneForCoordinateSystem(exportScene)
   }
 
   onProgress(65, 'Generating GLB file...')
