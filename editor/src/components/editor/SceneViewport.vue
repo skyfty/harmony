@@ -6,6 +6,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
+import Pica from 'pica'
 import type { SceneNode, Vector3Like } from '@/types/scene'
 import type { SceneMaterialTextureSlot, SceneMaterialTextureRef, SceneNodeMaterial, SceneMaterialType } from '@/types/material'
 import { MATERIAL_CLASS_NAMES, normalizeSceneMaterialType } from '@/types/material'
@@ -323,6 +324,9 @@ const WALL_DEFAULT_THICKNESS = 0.2
 const WALL_MIN_HEIGHT = 0.5
 const WALL_MIN_WIDTH = 0.1
 const WALL_MIN_THICKNESS = 0.05
+const THUMBNAIL_MAX_DIMENSION = 128
+const THUMBNAIL_JPEG_QUALITY = 0.85
+const thumbnailResizer = typeof window !== 'undefined' ? Pica() : null
 
 let wallBuildSession: WallBuildSession | null = null
 let wallPreviewNeedsSync = false
@@ -2873,17 +2877,60 @@ function disposeScene() {
   pendingSceneGraphSync = false
 }
 
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '')
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read blob'))
+    reader.readAsDataURL(blob)
+  })
+}
+
+async function createThumbnailDataUrl(sourceCanvas: HTMLCanvasElement): Promise<string> {
+  if (!thumbnailResizer) {
+    return sourceCanvas.toDataURL('image/jpeg', THUMBNAIL_JPEG_QUALITY)
+  }
+
+  const maxSide = Math.max(sourceCanvas.width, sourceCanvas.height)
+  const scale = maxSide > 0 ? Math.min(1, THUMBNAIL_MAX_DIMENSION / maxSide) : 1
+  let workingCanvas: HTMLCanvasElement = sourceCanvas
+
+  if (scale < 1) {
+    const targetCanvas = document.createElement('canvas')
+    targetCanvas.width = Math.max(1, Math.round(sourceCanvas.width * scale))
+    targetCanvas.height = Math.max(1, Math.round(sourceCanvas.height * scale))
+    await thumbnailResizer.resize(sourceCanvas, targetCanvas, { alpha: false })
+    workingCanvas = targetCanvas
+  }
+
+  const blob = await thumbnailResizer.toBlob(workingCanvas, 'image/jpeg', THUMBNAIL_JPEG_QUALITY)
+  return blobToDataUrl(blob)
+}
+
 function captureThumbnail() {
   if (!renderer || !sceneStore.currentSceneId) {
     return
   }
 
-  try {
-    const thumbnail = renderer.domElement.toDataURL('image/png')
-    void sceneStore.updateSceneThumbnail(sceneStore.currentSceneId, thumbnail)
-  } catch (error) {
-    console.warn('Failed to capture scene thumbnail', error)
+  const sourceCanvas = renderer.domElement
+  const sceneId = sceneStore.currentSceneId
+
+  if (!sceneId) {
+    return
   }
+
+  void (async () => {
+    try {
+      const thumbnail = await createThumbnailDataUrl(sourceCanvas)
+      if (sceneStore.currentSceneId === sceneId) {
+        await sceneStore.updateSceneThumbnail(sceneId, thumbnail)
+      }
+    } catch (error) {
+      console.warn('Failed to capture scene thumbnail', error)
+      const fallbackThumbnail = sourceCanvas.toDataURL('image/jpeg', THUMBNAIL_JPEG_QUALITY)
+      void sceneStore.updateSceneThumbnail(sceneId, fallbackThumbnail)
+    }
+  })()
 }
 
 function createGridHighlight() {
