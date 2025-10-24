@@ -574,6 +574,7 @@ async function saveCurrentScene(): Promise<boolean> {
 
   pendingSceneSave = (async () => {
     try {
+      viewportRef.value?.captureThumbnail()
       await sceneStore.saveActiveScene()
       return true
     } catch (error) {
@@ -1202,7 +1203,7 @@ onBeforeUnmount(() => {
           :focus-node-id="cameraFocusNodeId"
           :focus-request-id="cameraFocusRequestId"
           :preview-active="!!previewSession"
-      :show-stats="showStatsPanel"
+          :show-stats="showStatsPanel"
           @change-tool="setTool"
           @select-node="handleViewportSelection"
           @update-node-transform="handleViewportTransform"

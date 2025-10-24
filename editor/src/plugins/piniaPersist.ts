@@ -306,7 +306,7 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
         return
       }
 
-      void flushPendingPayload(`event:${event.type}`)
+      void flushPendingPayload()
     }
 
     const registerFlushListeners = () => {
@@ -329,7 +329,7 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
       flushListenersRegistered = false
     }
 
-    const flushPendingPayload = async (reason: string) => {
+    const flushPendingPayload = async () => {
       if (!pendingPayload) return
       const payload = pendingPayload
       pendingPayload = null
@@ -371,13 +371,13 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
       }
 
       if (flushDebounce === 0) {
-        void flushPendingPayload('immediate')
+        void flushPendingPayload()
         return
       }
 
       debounceTimer = setTimeout(() => {
         debounceTimer = null
-        void flushPendingPayload('debounce')
+        void flushPendingPayload()
       }, flushDebounce)
     }
 
@@ -431,7 +431,7 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
         debounceTimer = null
       }
 
-      void flushPendingPayload('dispose')
+      void flushPendingPayload()
       removeFlushListeners()
       stopSubscription?.()
       originalDispose()

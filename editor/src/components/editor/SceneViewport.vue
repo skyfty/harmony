@@ -170,8 +170,6 @@ type LightHelperObject = THREE.Object3D & { dispose?: () => void; update?: () =>
 const lightHelpers: LightHelperObject[] = []
 const lightHelpersNeedingUpdate = new Set<LightHelperObject>()
 let isApplyingCameraState = false
-const THUMBNAIL_CAPTURE_DELAY_MS = 1500
-let thumbnailCaptureTimeout: ReturnType<typeof setTimeout> | null = null
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
 const MIN_CAMERA_HEIGHT = 0.25
@@ -807,7 +805,6 @@ function dropSelectionToGround() {
   updateGridHighlightFromObject(primaryObject)
   updatePlaceholderOverlayPositions()
   updateSelectionHighlights()
-  scheduleThumbnailCapture()
 }
 
 function snapValueToGrid(value: number): number {
@@ -895,7 +892,6 @@ function alignSelection(mode: AlignMode) {
   updateGridHighlightFromObject(primaryObject)
   updatePlaceholderOverlayPositions()
   updateSelectionHighlights()
-  scheduleThumbnailCapture()
 }
 
 function updateSelectDragPosition(drag: SelectionDragState, event: PointerEvent): boolean {
@@ -999,8 +995,6 @@ function rotateActiveSelection(nodeId: string) {
 
   const transformPayload = updates.length === 1 ? updates[0]! : updates
   emit('updateNodeTransform', transformPayload)
-
-  scheduleThumbnailCapture()
 }
 
 function updateOrbitControlsEnabled() {
@@ -1184,8 +1178,6 @@ function startCameraTransition(targetPosition: THREE.Vector3, targetLookAt: THRE
     if (snapshot) {
       emit('updateCamera', snapshot)
     }
-
-    scheduleThumbnailCapture()
     return
   }
 
@@ -1199,8 +1191,6 @@ function startCameraTransition(targetPosition: THREE.Vector3, targetLookAt: THRE
     startTime: performance.now(),
     duration: transitionDuration,
   }
-
-  scheduleThumbnailCapture()
 }
 
 function recenterCameraOnPointer(event: MouseEvent) {
@@ -2076,23 +2066,14 @@ function orbitCameraHorizontally(direction: number) {
   if (snapshot) {
     emit('updateCamera', snapshot)
   }
-  
-  scheduleThumbnailCapture()
-
 }
 
-watch(gridVisible, (visible, previous) => {
+watch(gridVisible, (visible) => {
   applyGridVisibility(visible)
-  if (previous !== undefined && visible !== previous && sceneStore.isSceneReady) {
-    scheduleThumbnailCapture()
-  }
 }, { immediate: true })
 
-watch(axesVisible, (visible, previous) => {
+watch(axesVisible, (visible) => {
   applyAxesVisibility(visible)
-  if (previous !== undefined && visible !== previous && sceneStore.isSceneReady) {
-    scheduleThumbnailCapture()
-  }
 }, { immediate: true })
 
 watch(cameraProjectionMode, (mode, previous) => {
@@ -2104,9 +2085,6 @@ watch(cameraProjectionMode, (mode, previous) => {
     return
   }
   applyProjectionMode(mode)
-  if (sceneStore.isSceneReady) {
-    scheduleThumbnailCapture()
-  }
 }, { immediate: true })
 
 watch(skyboxSettings, (settings) => {
@@ -2147,8 +2125,6 @@ function resetCameraView() {
   if (snapshot) {
     emit('updateCamera', snapshot)
   }
-
-  scheduleThumbnailCapture()
 }
 
 function snapVectorToGrid(vec: THREE.Vector3) {
@@ -2160,6 +2136,7 @@ function snapVectorToGrid(vec: THREE.Vector3) {
 export type SceneViewportHandle = {
   exportScene(options: SceneExportOptions): Promise<void>
   generateSceneBlob(options: SceneExportOptions): Promise<SceneExportResult>
+  captureThumbnail(): void
 }
 
 async function exportScene(options: SceneExportOptions): Promise<void> {
@@ -2653,9 +2630,6 @@ function applySkyboxSettingsToScene(settings: SceneSkyboxSettings | null) {
 
   renderer.toneMappingExposure = settings.exposure
   pendingSkyboxSettings = pmremGenerator ? null : cloneSkyboxSettings(settings)
-  if (sceneStore.isSceneReady) {
-    scheduleThumbnailCapture()
-  }
 }
 
 function updateSkyLighting(settings: SceneSkyboxSettings) {
@@ -2859,11 +2833,6 @@ function disposeScene() {
   isSelectDragOrbitDisabled = false
   isGroundSelectionOrbitDisabled = false
 
-  if (thumbnailCaptureTimeout) {
-    clearTimeout(thumbnailCaptureTimeout)
-    thumbnailCaptureTimeout = null
-  }
-
   renderer?.dispose()
   renderer = null
 
@@ -2902,19 +2871,6 @@ function disposeScene() {
   wallPreviewNeedsSync = false
   wallPreviewSignature = null
   pendingSceneGraphSync = false
-}
-
-function scheduleThumbnailCapture() {
-  if (!renderer) {
-    return
-  }
-  if (thumbnailCaptureTimeout) {
-    clearTimeout(thumbnailCaptureTimeout)
-  }
-  thumbnailCaptureTimeout = setTimeout(() => {
-    thumbnailCaptureTimeout = null
-    captureThumbnail()
-  }, THUMBNAIL_CAPTURE_DELAY_MS)
 }
 
 function captureThumbnail() {
@@ -3929,7 +3885,6 @@ function handlePointerUp(event: PointerEvent) {
     if (drag.hasDragged) {
       sceneStore.endTransformInteraction()
       updateSelectionHighlights()
-      scheduleThumbnailCapture()
       return
     }
   }
@@ -4019,7 +3974,6 @@ function handlePointerCancel(event: PointerEvent) {
 
   if (pointerTrackingState.selectionDrag && pointerTrackingState.selectionDrag.hasDragged) {
     sceneStore.endTransformInteraction()
-    scheduleThumbnailCapture()
   }
 
   updateSelectionHighlights()
@@ -4040,7 +3994,6 @@ function commitGroundModification(
     return
   }
   refreshGroundMesh(getGroundDynamicMeshDefinition())
-  scheduleThumbnailCapture()
   updateGroundSelectionToolbarPosition()
 }
 
@@ -4084,7 +4037,6 @@ function handleGroundTextureFileChange(event: Event) {
       return
     }
     refreshGroundMesh(getGroundDynamicMeshDefinition())
-    scheduleThumbnailCapture()
   }
   reader.readAsDataURL(file)
 }
@@ -4519,7 +4471,6 @@ function commitWallSegmentDrag(): boolean {
   wallBuildSession.dragEnd = end.clone()
   wallBuildSession.dimensions = normalizeWallDimensionsForViewport(wallBuildSession.dimensions)
   updateWallPreview()
-  scheduleThumbnailCapture()
   return true
 }
 
@@ -4888,8 +4839,6 @@ async function handleViewportDrop(event: DragEvent) {
     const applied = applyMaterialAssetToNode(target.nodeId, info.assetId)
     if (!applied) {
       console.warn('Failed to apply material asset to node', info.assetId, target.nodeId)
-    } else {
-      scheduleThumbnailCapture()
     }
     sceneStore.setDraggingAssetObject(null)
     updateGridHighlight(null)
@@ -4909,9 +4858,7 @@ async function handleViewportDrop(event: DragEvent) {
     const applied = applyTextureAssetToNode(target.nodeId, info.assetId, info.asset?.name)
     if (!applied) {
       console.warn('Failed to apply texture asset to node', info.assetId, target.nodeId)
-    } else {
-      scheduleThumbnailCapture()
-    }
+    } 
     sceneStore.setDraggingAssetObject(null)
     updateGridHighlight(null)
     restoreGridHighlightForSelection()
@@ -4923,7 +4870,6 @@ async function handleViewportDrop(event: DragEvent) {
   snapVectorToGrid(spawnPoint)
   try {
     await sceneStore.spawnAssetAtPosition(info.assetId, toVector3Like(spawnPoint))
-    scheduleThumbnailCapture()
   } catch (error) {
     console.warn('Failed to spawn asset for drag payload', info.assetId, error)
   } finally {
@@ -5043,7 +4989,6 @@ function handleTransformChange() {
   const payload = updates.length === 1 ? updates[0]! : updates
   emit('updateNodeTransform', payload)
 
-  scheduleThumbnailCapture()
 }
 
 function updateLightObjectProperties(container: THREE.Object3D, node: SceneNode) {
@@ -5268,7 +5213,6 @@ function syncSceneGraph() {
   // 重新附加选择并确保工具模式正确
   attachSelection(props.selectedNodeId, props.activeTool)
 
-  scheduleThumbnailCapture()
   refreshPlaceholderOverlays()
   ensureFallbackLighting()
   updateSelectionHighlights()
@@ -6286,6 +6230,7 @@ watch(
 
 defineExpose<SceneViewportHandle>({
   exportScene,
+  captureThumbnail,
   generateSceneBlob,
 })
 </script>
