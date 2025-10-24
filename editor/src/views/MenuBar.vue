@@ -1,3 +1,5 @@
+
+
 <script setup lang="ts">
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -18,10 +20,8 @@ const props = defineProps<{ showStats: boolean }>()
 
 const sceneStore = useSceneStore()
 const { canUndo, canRedo, currentSceneMeta, panelVisibility, hasUnsavedChanges } = storeToRefs(sceneStore)
-const sceneName = computed(() => {
-  const baseName = currentSceneMeta.value?.name ?? 'Untitled Scene'
-  return hasUnsavedChanges.value ? `${baseName} *` : baseName
-})
+const sceneName = computed(() => currentSceneMeta.value?.name?.trim() || 'Untitled Scene')
+const showUnsavedIndicator = computed(() => hasUnsavedChanges.value)
 
 const emit = defineEmits<{
   (event: 'menu-action', action: string): void
@@ -266,6 +266,13 @@ function handleToggleStats() {
       <div class="menu-center">
   <v-icon class="scene-icon" size="18">mdi-shape-outline</v-icon>
         <span class="scene-title">{{ sceneName }}</span>
+        <v-icon
+          v-if="showUnsavedIndicator"
+          class="scene-unsaved-indicator"
+          size="16"
+          title="有未保存的更改"
+          aria-label="有未保存的更改"
+        >mdi-content-save-alert-outline</v-icon>
       </div>
       <div class="menu-right">
         <v-btn
@@ -402,6 +409,10 @@ function handleToggleStats() {
 
 .scene-title {
   white-space: nowrap;
+}
+
+.scene-unsaved-indicator {
+  color: #ffb74d;
 }
 
 .action-button {

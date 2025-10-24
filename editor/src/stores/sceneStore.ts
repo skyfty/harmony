@@ -2992,8 +2992,7 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
       return true
     },
-    setSelection(ids: string[], options: { commit?: boolean; primaryId?: string | null } = {}) {
-      const commitChange = options.commit ?? true
+    setSelection(ids: string[], options: { primaryId?: string | null } = {}) {
       const normalized = normalizeSelectionIds(this.nodes, ids)
       const requestedPrimary = options.primaryId ?? null
       const previousPrimary = this.selectedNodeId ?? null
@@ -3012,20 +3011,17 @@ export const useSceneStore = defineStore('scene', {
       }
       this.selectedNodeIds = normalized
       this.selectedNodeId = nextPrimary
-      if (commitChange) {
-        commitSceneSnapshot(this, { updateNodes: false, updateCamera: false })
-      }
       return true
     },
     selectNode(id: string | null) {
-      this.setSelection(id ? [id] : [], { commit: true, primaryId: id })
+      this.setSelection(id ? [id] : [], {primaryId: id })
     },
     selectAllNodes() {
       const allIds = flattenNodeIds(this.nodes)
-      this.setSelection(allIds, { commit: true })
+      this.setSelection(allIds)
     },
     clearSelection() {
-      this.setSelection([], { commit: true })
+      this.setSelection([])
     },
     setDraggingAssetObject(assetObject: Object3D | null) {
       this.draggingAssetObject = assetObject
@@ -3760,7 +3756,7 @@ export const useSceneStore = defineStore('scene', {
       }
       if (locked && this.selectedNodeIds.includes(id)) {
         const nextSelection = this.selectedNodeIds.filter((selectedId) => selectedId !== id)
-        this.setSelection(nextSelection, { commit: false })
+        this.setSelection(nextSelection)
       }
       this.nodes = [...this.nodes]
       commitSceneSnapshot(this)
@@ -3788,7 +3784,7 @@ export const useSceneStore = defineStore('scene', {
         return
       }
       if (locked && this.selectedNodeIds.length) {
-        this.setSelection([], { commit: false })
+        this.setSelection([])
       }
       this.nodes = [...this.nodes]
       commitSceneSnapshot(this)
@@ -3825,7 +3821,7 @@ export const useSceneStore = defineStore('scene', {
       if (targetLock) {
         const remainingSelection = this.selectedNodeIds.filter((id) => !processed.has(id))
         const nextPrimary = remainingSelection[remainingSelection.length - 1] ?? null
-        this.setSelection(remainingSelection, { commit: false, primaryId: nextPrimary })
+        this.setSelection(remainingSelection, { primaryId: nextPrimary })
       }
       this.nodes = [...this.nodes]
       commitSceneSnapshot(this)
@@ -4149,9 +4145,9 @@ export const useSceneStore = defineStore('scene', {
       return !!this.packageDirectoryLoaded[providerId]
     },
     setPackageDirectories(providerId: string, directories: ProjectDirectory[]) {
-  this.packageDirectoryCache[providerId] = cloneProjectTree(directories)
+      this.packageDirectoryCache[providerId] = cloneProjectTree(directories)
       this.packageDirectoryLoaded[providerId] = true
-  const nextTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
+      const nextTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
       this.projectTree = nextTree
       if (!this.activeDirectoryId || !findDirectory(nextTree, this.activeDirectoryId)) {
         this.activeDirectoryId = defaultDirectoryId
@@ -4335,15 +4331,12 @@ export const useSceneStore = defineStore('scene', {
         return
       }
       this.resourceProviderId = providerId
-      commitSceneSnapshot(this, { updateNodes: false, updateCamera: false })
     },
     setCameraState(camera: SceneCameraState) {
       this.camera = cloneCameraState(camera)
-      commitSceneSnapshot(this, { updateNodes: false })
     },
     resetCameraState() {
       this.camera = cloneCameraState(defaultCameraState)
-      commitSceneSnapshot(this, { updateNodes: false })
     },
     setViewportSettings(partial: Partial<SceneViewportSettings>) {
       const next = cloneViewportSettings({ ...this.viewportSettings, ...partial })
@@ -4422,7 +4415,6 @@ export const useSceneStore = defineStore('scene', {
         ...this.panelVisibility,
         [panel]: visible,
       }
-      commitSceneSnapshot(this, { updateNodes: false, updateCamera: false })
     },
     setPanelPlacement(panel: EditorPanel, placement: PanelPlacement) {
       const safePlacement: PanelPlacement = placement === 'docked' ? 'docked' : 'floating'
@@ -4433,7 +4425,6 @@ export const useSceneStore = defineStore('scene', {
         ...this.panelPlacement,
         [panel]: safePlacement,
       }
-      commitSceneSnapshot(this, { updateNodes: false, updateCamera: false })
     },
     togglePanelPlacement(panel: EditorPanel) {
       const next = this.panelPlacement[panel] === 'floating' ? 'docked' : 'floating'
@@ -4567,8 +4558,8 @@ export const useSceneStore = defineStore('scene', {
         downloadError: null,
       }
 
-  this.nodes = [node, ...this.nodes]
-      this.setSelection([id], { commit: false })
+      this.nodes = [node, ...this.nodes]
+      this.setSelection([id])
       commitSceneSnapshot(this)
 
       return node
@@ -4702,7 +4693,7 @@ export const useSceneStore = defineStore('scene', {
 
       this.captureHistorySnapshot()
       this.nodes = [node, ...this.nodes]
-      this.setSelection([node.id], { commit: false })
+      this.setSelection([node.id])
       commitSceneSnapshot(this)
       return node
     },
@@ -4883,7 +4874,7 @@ export const useSceneStore = defineStore('scene', {
 
       const importedIds = collectNodeIdList(nodes)
       if (importedIds.length) {
-        this.setSelection(importedIds, { commit: false, primaryId: importedIds[0] ?? null })
+        this.setSelection(importedIds, { primaryId: importedIds[0] ?? null })
       }
 
       commitSceneSnapshot(this)
@@ -4925,7 +4916,7 @@ export const useSceneStore = defineStore('scene', {
       registerRuntimeObject(id, payload.object)
       tagObjectWithNodeId(payload.object, id)
       this.nodes = [node, ...this.nodes]
-      this.setSelection([id], { commit: false })
+      this.setSelection([id])
       commitSceneSnapshot(this)
 
       return node
@@ -5118,7 +5109,7 @@ export const useSceneStore = defineStore('scene', {
 
       const prevSelection = cloneSelection(this.selectedNodeIds)
       const nextSelection = prevSelection.filter((id) => !removed.includes(id))
-      this.setSelection(nextSelection, { commit: false })
+      this.setSelection(nextSelection)
       const assetCache = useAssetCacheStore()
       assetCache.recalculateUsage(this.nodes)
       commitSceneSnapshot(this)
@@ -5394,7 +5385,7 @@ export const useSceneStore = defineStore('scene', {
       this.captureHistorySnapshot()
 
       this.nodes = tree
-      this.setSelection([groupId], { commit: false, primaryId: groupId })
+      this.setSelection([groupId], {primaryId: groupId })
       commitSceneSnapshot(this)
 
       return true
@@ -5461,7 +5452,7 @@ export const useSceneStore = defineStore('scene', {
         const duplicateIds = duplicates.map((node) => node.id)
         const previousPrimary = this.selectedNodeId ?? null
         const nextPrimary = previousPrimary ? duplicateIdMap.get(previousPrimary) ?? duplicateIds[0] ?? null : duplicateIds[0] ?? null
-        this.setSelection(duplicateIds, { commit: false, primaryId: nextPrimary })
+        this.setSelection(duplicateIds, { primaryId: nextPrimary })
       }
 
       commitSceneSnapshot(this)
@@ -5528,7 +5519,7 @@ export const useSceneStore = defineStore('scene', {
       this.nodes = working
       const duplicateIds = duplicates.map((duplicate) => duplicate.id)
       if (duplicateIds.length) {
-        this.setSelection(duplicateIds, { commit: false })
+        this.setSelection(duplicateIds)
       }
       commitSceneSnapshot(this)
       assetCache.recalculateUsage(this.nodes)
@@ -5604,9 +5595,7 @@ export const useSceneStore = defineStore('scene', {
       applySceneAssetState(this, sceneDocument)
       this.nodes = cloneSceneNodes(sceneDocument.nodes)
       this.groundSettings = cloneGroundSettings(sceneDocument.groundSettings)
-      this.setSelection(sceneDocument.selectedNodeIds ?? (sceneDocument.selectedNodeId ? [sceneDocument.selectedNodeId] : []), {
-        commit: false,
-      })
+      this.setSelection(sceneDocument.selectedNodeIds ?? (sceneDocument.selectedNodeId ? [sceneDocument.selectedNodeId] : []))
       this.camera = cloneCameraState(sceneDocument.camera)
       this.viewportSettings = cloneViewportSettings(sceneDocument.viewportSettings)
       this.panelVisibility = normalizePanelVisibilityState(sceneDocument.panelVisibility)
@@ -5648,9 +5637,7 @@ export const useSceneStore = defineStore('scene', {
         applyCurrentSceneMeta(this, scene)
         applySceneAssetState(this, scene)
         this.nodes = cloneSceneNodes(scene.nodes)
-        this.setSelection(scene.selectedNodeIds ?? (scene.selectedNodeId ? [scene.selectedNodeId] : []), {
-          commit: false,
-        })
+        this.setSelection(scene.selectedNodeIds ?? (scene.selectedNodeId ? [scene.selectedNodeId] : []))
         this.camera = cloneCameraState(scene.camera)
         this.viewportSettings = cloneViewportSettings(scene.viewportSettings)
         this.panelVisibility = normalizePanelVisibilityState(scene.panelVisibility)
@@ -5688,9 +5675,7 @@ export const useSceneStore = defineStore('scene', {
         applyCurrentSceneMeta(this, fallback)
         applySceneAssetState(this, fallback)
         this.nodes = cloneSceneNodes(fallback.nodes)
-        this.setSelection(fallback.selectedNodeIds ?? (fallback.selectedNodeId ? [fallback.selectedNodeId] : []), {
-          commit: false,
-        })
+        this.setSelection(fallback.selectedNodeIds ?? (fallback.selectedNodeId ? [fallback.selectedNodeId] : []))
         this.camera = cloneCameraState(fallback.camera)
         this.panelVisibility = normalizePanelVisibilityState(fallback.panelVisibility)
         this.panelPlacement = normalizePanelPlacementStateInput(fallback.panelPlacement)
@@ -5871,9 +5856,7 @@ export const useSceneStore = defineStore('scene', {
           applyCurrentSceneMeta(this, fallback)
           applySceneAssetState(this, fallback)
           this.nodes = cloneSceneNodes(fallback.nodes)
-          this.setSelection(fallback.selectedNodeIds ?? (fallback.selectedNodeId ? [fallback.selectedNodeId] : []), {
-            commit: false,
-          })
+          this.setSelection(fallback.selectedNodeIds ?? (fallback.selectedNodeId ? [fallback.selectedNodeId] : []))
           this.camera = cloneCameraState(fallback.camera)
           this.viewportSettings = cloneViewportSettings(fallback.viewportSettings)
           this.panelVisibility = normalizePanelVisibilityState(fallback.panelVisibility)
@@ -5905,9 +5888,7 @@ export const useSceneStore = defineStore('scene', {
         applyCurrentSceneMeta(this, document)
         applySceneAssetState(this, document)
         this.nodes = cloneSceneNodes(document.nodes)
-        this.setSelection(document.selectedNodeIds ?? (document.selectedNodeId ? [document.selectedNodeId] : []), {
-          commit: false,
-        })
+        this.setSelection(document.selectedNodeIds ?? (document.selectedNodeId ? [document.selectedNodeId] : []))
         this.camera = cloneCameraState(document.camera)
         this.viewportSettings = cloneViewportSettings(document.viewportSettings)
         this.panelVisibility = normalizePanelVisibilityState(document.panelVisibility)
