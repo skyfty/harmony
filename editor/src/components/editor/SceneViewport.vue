@@ -2172,6 +2172,12 @@ function snapVectorToGrid(vec: THREE.Vector3) {
   return vec
 }
 
+function snapVectorToMajorGrid(vec: THREE.Vector3) {
+  vec.x = Math.round(vec.x / GRID_MAJOR_SPACING) * GRID_MAJOR_SPACING
+  vec.z = Math.round(vec.z / GRID_MAJOR_SPACING) * GRID_MAJOR_SPACING
+  return vec
+}
+
 export type SceneViewportHandle = {
   exportScene(options: SceneExportOptions): Promise<void>
   generateSceneBlob(options: SceneExportOptions): Promise<SceneExportResult>
@@ -4378,8 +4384,8 @@ function ensureWallBuildSession(): WallBuildSession {
 
 function constrainWallEndPoint(start: THREE.Vector3, target: THREE.Vector3, rawTarget?: THREE.Vector3): THREE.Vector3 {
   const delta = target.clone().sub(start)
-  let stepX = Math.round(delta.x / GRID_SNAP_SPACING)
-  let stepZ = Math.round(delta.z / GRID_SNAP_SPACING)
+  let stepX = Math.round(delta.x / GRID_MAJOR_SPACING)
+  let stepZ = Math.round(delta.z / GRID_MAJOR_SPACING)
 
   if (stepX === 0 && stepZ === 0) {
     return start.clone()
@@ -4410,9 +4416,9 @@ function constrainWallEndPoint(start: THREE.Vector3, target: THREE.Vector3, rawT
   }
 
   return new THREE.Vector3(
-    start.x + stepX * GRID_SNAP_SPACING,
+    start.x + stepX * GRID_MAJOR_SPACING,
     start.y,
-    start.z + stepZ * GRID_SNAP_SPACING,
+    start.z + stepZ * GRID_MAJOR_SPACING,
   )
 }
 
@@ -4471,7 +4477,7 @@ function updateWallSegmentDrag(event: PointerEvent) {
   }
 
   const rawPointer = groundPointerHelper.clone()
-  const pointer = snapVectorToGrid(rawPointer.clone())
+  const pointer = snapVectorToMajorGrid(rawPointer.clone())
   const constrained = constrainWallEndPoint(wallBuildSession.dragStart, pointer, rawPointer)
   const previous = wallBuildSession.dragEnd
   if (previous && previous.equals(constrained)) {
@@ -4567,7 +4573,7 @@ function handleWallPlacementClick(event: PointerEvent): boolean {
     return false
   }
   const rawPointer = groundPointerHelper.clone()
-  const snappedPoint = snapVectorToGrid(rawPointer.clone())
+  const snappedPoint = snapVectorToMajorGrid(rawPointer.clone())
   const session = ensureWallBuildSession()
 
   if (!session.dragStart) {
