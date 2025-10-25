@@ -16,6 +16,7 @@ import type { ProjectDirectory } from '@/types/project-directory'
 import type { SceneCameraState } from '@/types/scene-camera-state'
 import type { EditorTool } from '@/types/editor-tool'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { getCachedModelObject, getOrLoadModelObject } from '@/stores/modelObjectCache'
 import { loadObjectFromFile } from '@/plugins/assetImport'
 import { createGeometry } from '@/plugins/geometry'
 import type { CameraProjectionMode, CameraControlMode, SceneSkyboxSettings } from '@/types/scene-viewport-settings'
@@ -1694,13 +1695,24 @@ async function loadDragPreviewForAsset(asset: ProjectAsset): Promise<boolean> {
   pendingPreviewAssetId = asset.id
   clearDragPreviewObject()
   const token = ++dragPreviewLoadToken
-  const file = assetCacheStore.createFileFromCache(asset.id)
-  if (!file) {
-    pendingPreviewAssetId = null
-    return false
-  }
   try {
-    const object = await loadObjectFromFile(file)
+    let baseObject = getCachedModelObject(asset.id)
+
+    if (!baseObject) {
+      let file = assetCacheStore.createFileFromCache(asset.id)
+      if (!file) {
+        await assetCacheStore.loadFromIndexedDb(asset.id)
+        file = assetCacheStore.createFileFromCache(asset.id)
+      }
+      if (!file) {
+        pendingPreviewAssetId = null
+        return false
+      }
+      baseObject = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
+      assetCacheStore.releaseInMemoryBlob(asset.id)
+    }
+
+    const object = baseObject.clone(true)
     if (token !== dragPreviewLoadToken) {
       disposeObjectResources(object)
       return false

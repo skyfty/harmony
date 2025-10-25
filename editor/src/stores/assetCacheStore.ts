@@ -574,6 +574,25 @@ export const useAssetCacheStore = defineStore('assetCache', {
       entry.refCount = Math.max(0, entry.refCount - 1)
       entry.lastUsedAt = now()
     },
+    releaseInMemoryBlob(assetId: string) {
+      const entry = this.entries[assetId]
+      if (!entry || entry.status !== 'cached' || !entry.blob) {
+        return
+      }
+
+      if (entry.blobUrl) {
+        URL.revokeObjectURL(entry.blobUrl)
+      }
+
+      entry.blob = null
+      entry.blobUrl = null
+      entry.status = 'idle'
+      entry.progress = 0
+      entry.size = 0
+      entry.abortController = null
+      entry.error = null
+      entry.lastUsedAt = now()
+    },
     recalculateUsage(nodes: SceneNode[]) {
       const counts = new Map<string, number>()
       const visit = (node: SceneNode) => {

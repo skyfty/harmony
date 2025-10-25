@@ -4241,82 +4241,103 @@ export const useSceneStore = defineStore('scene', {
             })
           }
 
-          let entry = assetCache.getEntry(assetId)
-          if (!normalizeUrl(entry.downloadUrl) && fallbackDownloadUrl) {
-            entry.downloadUrl = fallbackDownloadUrl
+          const shouldCacheModelObject = asset?.type === 'model'
+          let baseObject: Object3D | null = null
+
+          if (shouldCacheModelObject) {
+            const cachedModelObject = getCachedModelObject(assetId)
+            if (cachedModelObject) {
+              baseObject = cachedModelObject
+              assetCache.touch(assetId)
+            }
           }
-          if (entry.status !== 'cached') {
-            await assetCache.loadFromIndexedDb(assetId)
-            entry = assetCache.getEntry(assetId)
+
+          let stopDownloadWatcher: WatchStopHandle | null = null
+          if (!baseObject) {
+            let entry = assetCache.getEntry(assetId)
             if (!normalizeUrl(entry.downloadUrl) && fallbackDownloadUrl) {
               entry.downloadUrl = fallbackDownloadUrl
             }
-          }
-          const downloadUrl = normalizeUrl(entry?.downloadUrl) ?? fallbackDownloadUrl
-
-          let stopDownloadWatcher: WatchStopHandle | null = null
-          const completedBeforeAsset = completed
-          const overlayTotal = total > 0 ? total : 1
-
-          try {
-            if (!assetCache.hasCache(assetId)) {
-              if (!downloadUrl) {
-                throw new Error('Missing asset download URL')
+            if (entry.status !== 'cached') {
+              await assetCache.loadFromIndexedDb(assetId)
+              entry = assetCache.getEntry(assetId)
+              if (!normalizeUrl(entry.downloadUrl) && fallbackDownloadUrl) {
+                entry.downloadUrl = fallbackDownloadUrl
               }
-
-              if (shouldShowOverlay) {
-                stopDownloadWatcher = watch(
-                  () => {
-                    const current = assetCache.getEntry(assetId)
-                    return [current.status, current.progress, current.filename] as const
-                  },
-                  ([status, progress, filename]) => {
-                    if (status !== 'downloading') {
-                      return
-                    }
-                    const normalizedProgress = Number.isFinite(progress)
-                      ? Math.max(0, Math.round(progress))
-                      : 0
-                    const displayName = filename?.trim() || assetLabel
-                    const aggregateProgress = Math.max(
-                      0,
-                      Math.min(100, Math.round(((completedBeforeAsset + normalizedProgress / 100) / overlayTotal) * 100)),
-                    )
-                    uiStore.updateLoadingOverlay({
-                      message: `Downloading asset: ${displayName} (${normalizedProgress}%)`,
-                      progress: aggregateProgress,
-                      mode: 'determinate',
-                    })
-                    uiStore.updateLoadingProgress(aggregateProgress, { autoClose: false })
-                  },
-                  { immediate: true },
-                )
-              }
-
-              await assetCache.downloadAsset(assetId, downloadUrl, assetLabel)
-              if (shouldShowOverlay) {
-                uiStore.updateLoadingOverlay({
-                  message: `Loading asset: ${assetLabel}`,
-                })
-              }
-            } else {
-              assetCache.touch(assetId)
             }
-          } finally {
-            stopDownloadWatcher?.()
+            const downloadUrl = normalizeUrl(entry?.downloadUrl) ?? fallbackDownloadUrl
+
+            const completedBeforeAsset = completed
+            const overlayTotal = total > 0 ? total : 1
+
+            try {
+              if (!assetCache.hasCache(assetId)) {
+                if (!downloadUrl) {
+                  throw new Error('Missing asset download URL')
+                }
+
+                if (shouldShowOverlay) {
+                  stopDownloadWatcher = watch(
+                    () => {
+                      const current = assetCache.getEntry(assetId)
+                      return [current.status, current.progress, current.filename] as const
+                    },
+                    ([status, progress, filename]) => {
+                      if (status !== 'downloading') {
+                        return
+                      }
+                      const normalizedProgress = Number.isFinite(progress)
+                        ? Math.max(0, Math.round(progress))
+                        : 0
+                      const displayName = filename?.trim() || assetLabel
+                      const aggregateProgress = Math.max(
+                        0,
+                        Math.min(100, Math.round(((completedBeforeAsset + normalizedProgress / 100) / overlayTotal) * 100)),
+                      )
+                      uiStore.updateLoadingOverlay({
+                        message: `Downloading asset: ${displayName} (${normalizedProgress}%)`,
+                        progress: aggregateProgress,
+                        mode: 'determinate',
+                      })
+                      uiStore.updateLoadingProgress(aggregateProgress, { autoClose: false })
+                    },
+                    { immediate: true },
+                  )
+                }
+
+                await assetCache.downloadAsset(assetId, downloadUrl, assetLabel)
+                if (shouldShowOverlay) {
+                  uiStore.updateLoadingOverlay({
+                    message: `Loading asset: ${assetLabel}`,
+                  })
+                }
+              } else {
+                assetCache.touch(assetId)
+              }
+            } finally {
+              stopDownloadWatcher?.()
+            }
+
+            entry = assetCache.getEntry(assetId)
+
+            const file = assetCache.createFileFromCache(assetId)
+            if (!file) {
+              throw new Error('Missing asset file in cache')
+            }
+
+            baseObject = shouldCacheModelObject
+              ? await getOrLoadModelObject(assetId, () => loadObjectFromFile(file))
+              : await loadObjectFromFile(file)
+
+            if (shouldCacheModelObject) {
+              assetCache.releaseInMemoryBlob(assetId)
+            }
           }
 
-          entry = assetCache.getEntry(assetId)
-
-          const file = assetCache.createFileFromCache(assetId)
-          if (!file) {
-            throw new Error('Missing asset file in cache')
+          if (!baseObject) {
+            throw new Error('Failed to resolve base object')
           }
-
-          const shouldCacheModelObject = asset?.type === 'model'
-          const baseObject = shouldCacheModelObject
-            ? await getOrLoadModelObject(assetId, () => loadObjectFromFile(file))
-            : await loadObjectFromFile(file)
+          const baseObjectResolved = baseObject
 
           const metadataEntries = nodesForAsset
             .map((node) => {
@@ -4350,14 +4371,14 @@ export const useSceneStore = defineStore('scene', {
             let runtimeObject: Object3D
 
             if (metadata && Array.isArray(metadata.objectPath)) {
-              const target = findObjectByPath(baseObject, metadata.objectPath) ?? baseObject
+              const target = findObjectByPath(baseObjectResolved, metadata.objectPath) ?? baseObjectResolved
               runtimeObject = target.clone(true)
               const descendantKey = metadata.objectPath.join('.')
               const descendantPaths = descendantCache.get(descendantKey) ?? []
               pruneCloneByRelativePaths(runtimeObject, descendantPaths)
             } else {
               const reuseOriginal = !shouldCacheModelObject && !baseObjectAssigned
-              runtimeObject = reuseOriginal ? baseObject : baseObject.clone(true)
+              runtimeObject = reuseOriginal ? baseObjectResolved : baseObjectResolved.clone(true)
               baseObjectAssigned = baseObjectAssigned || reuseOriginal
             }
 
@@ -5016,15 +5037,30 @@ export const useSceneStore = defineStore('scene', {
       }
 
       try {
-        const file = assetCache.createFileFromCache(asset.id)
-        if (!file) {
-          throw new Error('资源未缓存完成')
+        const shouldCacheModelObject = asset.type === 'model'
+        let baseObject: Object3D | null = null
+
+        if (shouldCacheModelObject) {
+          baseObject = getCachedModelObject(asset.id)
         }
 
-        const shouldCacheModelObject = asset.type === 'model'
-        const baseObject = shouldCacheModelObject
-          ? await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
-          : await loadObjectFromFile(file)
+        if (!baseObject) {
+          const file = assetCache.createFileFromCache(asset.id)
+          if (!file) {
+            throw new Error('资源未缓存完成')
+          }
+          baseObject = shouldCacheModelObject
+            ? await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
+            : await loadObjectFromFile(file)
+          if (shouldCacheModelObject) {
+            assetCache.releaseInMemoryBlob(asset.id)
+          }
+        }
+
+        if (!baseObject) {
+          throw new Error('资源加载失败')
+        }
+
         const object = shouldCacheModelObject ? baseObject.clone(true) : baseObject
         tagObjectWithNodeId(object, nodeId)
         registerRuntimeObject(nodeId, object)
@@ -5032,8 +5068,8 @@ export const useSceneStore = defineStore('scene', {
         assetCache.touch(asset.id)
 
         target.isPlaceholder = false
-  target.downloadStatus = undefined
-  target.downloadProgress = undefined
+        target.downloadStatus = undefined
+        target.downloadProgress = undefined
         target.downloadError = null
         target.name = asset.name
 
@@ -5111,6 +5147,7 @@ export const useSceneStore = defineStore('scene', {
             throw new Error('Missing asset data in cache')
           }
           const baseObject = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
+          assetCache.releaseInMemoryBlob(asset.id)
           workingObject = baseObject.clone(true)
         }
 
