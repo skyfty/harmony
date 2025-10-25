@@ -79,7 +79,10 @@ function handleRotationChange(value: string | number) {
   emitSettings()
 }
 
-function handleToggleChange(key: 'matrixAutoUpdate' | 'generateMipmaps' | 'premultiplyAlpha' | 'flipY', value: boolean) {
+function handleToggleChange(key: 'matrixAutoUpdate' | 'generateMipmaps' | 'premultiplyAlpha' | 'flipY', value: boolean | null) {
+  if (value === null) {
+    return
+  }
   localSettings[key] = value
   emitSettings()
 }
@@ -229,7 +232,7 @@ function handleToggleChange(key: 'matrixAutoUpdate' | 'generateMipmaps' | 'premu
           label="Matrix Auto Update"
           :model-value="localSettings.matrixAutoUpdate"
           :disabled="isDisabled"
-          @update:model-value="(value: boolean) => handleToggleChange('matrixAutoUpdate', value)"
+          @update:model-value="(value) => handleToggleChange('matrixAutoUpdate', value as boolean | null)"
         />
                   <v-checkbox
             size="small"
@@ -238,7 +241,7 @@ function handleToggleChange(key: 'matrixAutoUpdate' | 'generateMipmaps' | 'premu
             label="Generate Mipmaps"
             :model-value="localSettings.generateMipmaps"
             :disabled="isDisabled"
-            @update:model-value="(value: boolean) => handleToggleChange('generateMipmaps', value)"
+            @update:model-value="(value) => handleToggleChange('generateMipmaps', value as boolean | null)"
           />
           <v-checkbox
             size="small"
@@ -247,7 +250,7 @@ function handleToggleChange(key: 'matrixAutoUpdate' | 'generateMipmaps' | 'premu
             label="Premultiply Alpha"
             :model-value="localSettings.premultiplyAlpha"
             :disabled="isDisabled"
-            @update:model-value="(value: boolean) => handleToggleChange('premultiplyAlpha', value)"
+            @update:model-value="(value) => handleToggleChange('premultiplyAlpha', value as boolean | null)"
           />
           <v-checkbox
             size="small"
@@ -256,7 +259,7 @@ function handleToggleChange(key: 'matrixAutoUpdate' | 'generateMipmaps' | 'premu
             label="Flip Y"
             :model-value="localSettings.flipY"
             :disabled="isDisabled"
-            @update:model-value="(value: boolean) => handleToggleChange('flipY', value)"
+            @update:model-value="(value) => handleToggleChange('flipY', value as boolean | null)"
           />
       </div>
 
