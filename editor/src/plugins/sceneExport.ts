@@ -159,21 +159,6 @@ function removeEditorHelpers(scene: THREE.Scene) {
     return removed
 }
 
-function restoreRemovedObjects(removed: RemovedSceneObject[]) {
-    for (const { parent, object, index } of removed) {
-        parent.add(object)
-
-        if (index >= 0 && index < parent.children.length - 1) {
-            const currentIndex = parent.children.indexOf(object)
-            if (currentIndex > -1 && currentIndex !== index) {
-                parent.children.splice(currentIndex, 1)
-                const targetIndex = Math.min(index, parent.children.length)
-                parent.children.splice(targetIndex, 0, object)
-            }
-        }
-    }
-}
-
 async function exportGLB(scene: THREE.Scene, settings?: GLBExportSettings) {
     const includeAnimations = settings?.includeAnimations !== false
     const animations = includeAnimations ? getAnimations(scene) : []

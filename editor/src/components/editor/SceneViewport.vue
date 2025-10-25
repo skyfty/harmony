@@ -920,7 +920,7 @@ function updateSelectDragPosition(drag: SelectionDragState, event: PointerEvent)
   }
 
   const worldPosition = planePoint.sub(drag.pointerOffset)
-  snapVectorToGrid(worldPosition)
+  snapVectorToGridForNode(worldPosition, drag.nodeId)
 
   const newLocalPosition = worldPosition.clone()
   if (drag.parent) {
@@ -944,7 +944,8 @@ function updateSelectDragPosition(drag: SelectionDragState, event: PointerEvent)
   ]
 
   drag.companions.forEach((companion) => {
-    const companionWorldPosition = companion.initialWorldPosition.clone().add(selectDragDelta)
+  const companionWorldPosition = companion.initialWorldPosition.clone().add(selectDragDelta)
+  snapVectorToGridForNode(companionWorldPosition, companion.nodeId)
     const localPosition = companionWorldPosition.clone()
     if (companion.parent) {
       companion.parent.worldToLocal(localPosition)
@@ -2176,6 +2177,21 @@ function snapVectorToMajorGrid(vec: THREE.Vector3) {
   vec.x = Math.round(vec.x / GRID_MAJOR_SPACING) * GRID_MAJOR_SPACING
   vec.z = Math.round(vec.z / GRID_MAJOR_SPACING) * GRID_MAJOR_SPACING
   return vec
+}
+
+function resolveSceneNodeById(nodeId: string | null | undefined): SceneNode | null {
+  if (!nodeId) {
+    return null
+  }
+  return findSceneNode(sceneStore.nodes, nodeId) ?? findSceneNode(props.sceneNodes, nodeId)
+}
+
+function snapVectorToGridForNode(vec: THREE.Vector3, nodeId: string | null | undefined) {
+  const node = resolveSceneNodeById(nodeId)
+  if (node?.dynamicMesh?.type === 'Wall') {
+    return snapVectorToMajorGrid(vec)
+  }
+  return snapVectorToGrid(vec)
 }
 
 export type SceneViewportHandle = {
@@ -4975,14 +4991,14 @@ function handleTransformChange() {
   }
 
   const mode = transformControls.getMode()
+  const nodeId = target.userData.nodeId as string
 
   if (mode === 'translate') {
-    snapVectorToGrid(target.position)
+    snapVectorToGridForNode(target.position, nodeId)
   }
 
   target.updateMatrixWorld(true)
 
-  const nodeId = target.userData.nodeId as string
   const updates: TransformUpdatePayload[] = []
   const groupState = transformGroupState
   const primaryEntry = groupState?.entries.get(nodeId)
@@ -4997,6 +5013,7 @@ function handleTransformChange() {
             return
           }
           transformWorldPositionBuffer.copy(entry.initialWorldPosition).add(transformDeltaPosition)
+          snapVectorToGridForNode(transformWorldPositionBuffer, entry.nodeId)
           transformLocalPositionHelper.copy(transformWorldPositionBuffer)
           if (entry.parent) {
             entry.parent.worldToLocal(transformLocalPositionHelper)
