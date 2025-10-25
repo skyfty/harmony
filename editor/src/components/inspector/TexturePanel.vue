@@ -144,72 +144,78 @@ function handleToggleChange(key: 'matrixAutoUpdate' | 'generateMipmaps' | 'premu
         <div class="vector-grid">
           <div class="vector-group">
             <div class="vector-label">Offset</div>
-            <v-text-field
-              type="number"
-              density="compact"
-              variant="underlined"
-              hide-details
-              suffix="X"
-              :model-value="localSettings.offset.x"
-              :disabled="isDisabled"
-              @update:model-value="(value) => handleVectorChange('offset', 'x', value as string | number)"
-            />
-            <v-text-field
-              type="number"
-              density="compact"
-              variant="underlined"
-              hide-details
-              suffix="Y"
-              :model-value="localSettings.offset.y"
-              :disabled="isDisabled"
-              @update:model-value="(value) => handleVectorChange('offset', 'y', value as string | number)"
-            />
+            <div class="vector-inputs">
+              <v-text-field
+                type="number"
+                density="compact"
+                variant="underlined"
+                hide-details
+                suffix="X"
+                :model-value="localSettings.offset.x"
+                :disabled="isDisabled"
+                @update:model-value="(value) => handleVectorChange('offset', 'x', value as string | number)"
+              />
+              <v-text-field
+                type="number"
+                density="compact"
+                variant="underlined"
+                hide-details
+                suffix="Y"
+                :model-value="localSettings.offset.y"
+                :disabled="isDisabled"
+                @update:model-value="(value) => handleVectorChange('offset', 'y', value as string | number)"
+              />
+            </div>
           </div>
           <div class="vector-group">
             <div class="vector-label">Repeat</div>
-            <v-text-field
-              type="number"
-              density="compact"
-              variant="underlined"
-              hide-details
-              suffix="X"
-              :model-value="localSettings.repeat.x"
-              :disabled="isDisabled"
-              @update:model-value="(value) => handleVectorChange('repeat', 'x', value as string | number)"
-            />
-            <v-text-field
-              type="number"
-              density="compact"
-              variant="underlined"
-              hide-details
-              suffix="Y"
-              :model-value="localSettings.repeat.y"
-              :disabled="isDisabled"
-              @update:model-value="(value) => handleVectorChange('repeat', 'y', value as string | number)"
-            />
+            <div class="vector-inputs">
+              <v-text-field
+                type="number"
+                density="compact"
+                variant="underlined"
+                hide-details
+                suffix="X"
+                :model-value="localSettings.repeat.x"
+                :disabled="isDisabled"
+                @update:model-value="(value) => handleVectorChange('repeat', 'x', value as string | number)"
+              />
+              <v-text-field
+                type="number"
+                density="compact"
+                variant="underlined"
+                hide-details
+                suffix="Y"
+                :model-value="localSettings.repeat.y"
+                :disabled="isDisabled"
+                @update:model-value="(value) => handleVectorChange('repeat', 'y', value as string | number)"
+              />
+            </div>
           </div>
           <div class="vector-group">
             <div class="vector-label">Center</div>
-            <v-text-field
-              type="number"
-              density="compact"
-              variant="underlined"
-              hide-details
-              suffix="X"
-              :model-value="localSettings.center.x"
-              :disabled="isDisabled"
-              @update:model-value="(value) => handleVectorChange('center', 'x', value as string | number)"
-            />
-            <v-text-field
-              type="number"
-              density="compact"
-              variant="underlined"
-              hide-details
-              suffix="Y"
-              :model-value="localSettings.center.y"
-              :disabled="isDisabled"
-              @update:model-value="(value) => handleVectorChange('center', 'y', value as string | number)"
-            />
+            <div class="vector-inputs">
+              <v-text-field
+                type="number"
+                density="compact"
+                variant="underlined"
+                hide-details
+                suffix="X"
+                :model-value="localSettings.center.x"
+                :disabled="isDisabled"
+                @update:model-value="(value) => handleVectorChange('center', 'x', value as string | number)"
+              />
+              <v-text-field
+                type="number"
+                density="compact"
+                variant="underlined"
+                hide-details
+                suffix="Y"
+                :model-value="localSettings.center.y"
+                :disabled="isDisabled"
+                @update:model-value="(value) => handleVectorChange('center', 'y', value as string | number)"
+              />
+            </div>
           </div>
           <div class="vector-group">
             <div class="vector-label">Rotation (rad)</div>
@@ -307,6 +313,15 @@ function handleToggleChange(key: 'matrixAutoUpdate' | 'generateMipmaps' | 'premu
 .vector-group {
   display: grid;
   gap: 6px;
+}
+
+.vector-inputs {
+  display: flex;
+  gap: 6px;
+}
+
+.vector-inputs > * {
+  flex: 1;
 }
 
 .vector-label {
