@@ -5091,6 +5091,7 @@ export const useSceneStore = defineStore('scene', {
       let assetCache: ReturnType<typeof useAssetCacheStore> | null = null
       let registerAssetId: string | null = null
 
+      
       if (payload.asset) {
         const asset = payload.asset
         if (asset.type !== 'model') {
