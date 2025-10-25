@@ -72,7 +72,7 @@
         title="Toggle Grid"
         @click="toggleGridVisibility"
       />
-      <v-btn
+      <!-- <v-btn
         :icon="showAxes ? 'mdi-axis-arrow-info' : 'mdi-axis-arrow'"
         :color="showAxes ? 'primary' : undefined"
         :variant="showAxes ? 'flat' : 'text'"
@@ -81,7 +81,7 @@
         class="toolbar-button"
         title="Toggle Axes"
         @click="toggleAxesVisibility"
-      />
+      /> -->
 
       <SkyboxPresetSelector
         :skybox-settings="skyboxSettings"

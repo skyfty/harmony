@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
+// @ts-ignore - local plugin has no .d.ts declaration file
 import { TransformControls } from '@/plugins/transformControls.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import Pica from 'pica'
