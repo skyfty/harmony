@@ -3121,6 +3121,16 @@ export const useSceneStore = defineStore('scene', {
     },
   },
   actions: {
+    onPersistHydrated(_state?: Partial<SceneState>) {
+      const nextTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
+      this.projectTree = nextTree
+      if (this.activeDirectoryId && !findDirectory(nextTree, this.activeDirectoryId)) {
+        this.activeDirectoryId = defaultDirectoryId
+      }
+      if (this.selectedAssetId && !findAssetInTree(nextTree, this.selectedAssetId)) {
+        this.selectedAssetId = null
+      }
+    },
     appendUndoSnapshot(snapshot: SceneHistoryEntry, options: { resetRedo?: boolean } = {}) {
       const nextUndoStack = [...this.undoStack, snapshot]
       this.undoStack = nextUndoStack.length > HISTORY_LIMIT
