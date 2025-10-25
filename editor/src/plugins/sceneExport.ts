@@ -159,7 +159,7 @@ function removeEditorHelpers(scene: THREE.Scene) {
     return removed
 }
 
-export function restoreRemovedObjects(removed: RemovedSceneObject[]) {
+function restoreRemovedObjects(removed: RemovedSceneObject[]) {
     for (const { parent, object, index } of removed) {
         parent.add(object)
 
