@@ -4,13 +4,14 @@ import { storeToRefs } from 'pinia'
 import { Splitpanes, Pane } from 'splitpanes'
 import 'splitpanes/dist/splitpanes.css'
 import { useSceneStore, extractProviderIdFromPackageDirectoryId } from '@/stores/sceneStore'
-import { PACKAGES_ROOT_DIRECTORY_ID } from '@/stores/assetCatalog'
+import { ASSET_CATEGORY_CONFIG, PACKAGES_ROOT_DIRECTORY_ID } from '@/stores/assetCatalog'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { resourceProviders } from '@/resources/projectProviders'
 import { loadProviderCatalog, storeProviderCatalog } from '@/stores/providerCatalogCache'
 import { getCachedModelObject } from '@/stores/modelObjectCache'
+import { dataUrlToBlob, extractExtension } from '@/plugins/blob'
 
 const OPENED_DIRECTORIES_STORAGE_KEY = 'harmony:project-panel:opened-directories'
 
@@ -126,6 +127,22 @@ const deleteDialogOpen = ref(false)
 const pendingDeleteAssets = ref<ProjectAsset[]>([])
 const isBatchDeletion = ref(false)
 const selectedAssetIds = ref<string[]>([])
+const dropActive = ref(false)
+const dropProcessing = ref(false)
+const dropDragDepth = ref(0)
+const dropFeedback = ref<{ kind: 'success' | 'error'; message: string } | null>(null)
+let dropFeedbackTimer: number | null = null
+
+const imageCategory = ASSET_CATEGORY_CONFIG.find((category) => category.key === 'images')
+const IMAGES_DIRECTORY_ID = imageCategory?.id ?? ''
+const IMAGE_PREVIEW_COLOR = '#1e88e5'
+const IMAGE_EXTENSION_SET = new Set(
+  (imageCategory?.extensions ?? []).map((extension) => extension.replace(/^[.]/, '').toLowerCase()),
+)
+
+const allowImageDrop = computed(() => Boolean(IMAGES_DIRECTORY_ID) && activeDirectoryId.value === IMAGES_DIRECTORY_ID)
+const dropOverlayVisible = computed(() => allowImageDrop.value && (dropActive.value || dropProcessing.value))
+const dropOverlayMessage = computed(() => (dropProcessing.value ? '正在导入图片…' : '松开鼠标导入图片'))
 
 const providerLoading = ref<Record<string, boolean>>({})
 const providerErrors = ref<Record<string, string | null>>({})
@@ -202,6 +219,13 @@ watch(
   },
   { immediate: true }
 )
+
+watch(allowImageDrop, (canDrop) => {
+  if (!canDrop && !dropProcessing.value) {
+    dropActive.value = false
+    dropDragDepth.value = 0
+  }
+})
 
 watch(
   () => [...openedDirectories.value],
@@ -715,6 +739,365 @@ function enterDirectory(directory: ProjectDirectory) {
   ensureDirectoryOpened(directory.id)
   sceneStore.setActiveDirectory(directory.id)
 }
+
+function clearDropFeedbackTimer() {
+  if (typeof window === 'undefined') {
+    return
+  }
+  if (dropFeedbackTimer !== null) {
+    window.clearTimeout(dropFeedbackTimer)
+    dropFeedbackTimer = null
+  }
+}
+
+function showDropFeedback(kind: 'success' | 'error', message: string) {
+  dropFeedback.value = { kind, message }
+  if (typeof window === 'undefined') {
+    return
+  }
+  clearDropFeedbackTimer()
+  dropFeedbackTimer = window.setTimeout(() => {
+    dropFeedback.value = null
+    dropFeedbackTimer = null
+  }, 4000)
+}
+
+function isInternalAssetDrag(event: DragEvent): boolean {
+  const types = Array.from(event.dataTransfer?.types ?? [])
+  return types.includes(ASSET_DRAG_MIME)
+}
+
+function isImageDropPayload(dataTransfer: DataTransfer): boolean {
+  const types = Array.from(dataTransfer.types ?? [])
+  if (types.includes('Files')) {
+    return true
+  }
+  const stringTypes = ['text/uri-list', 'text/plain', 'text/html', 'text/x-moz-url']
+  return stringTypes.some((type) => types.includes(type))
+}
+
+function isSupportedImageExtension(extension: string | null | undefined): boolean {
+  if (!extension) {
+    return false
+  }
+  return IMAGE_EXTENSION_SET.has(extension.replace(/^[.]/, '').toLowerCase())
+}
+
+function isImageFileCandidate(file: File | null): file is File {
+  if (!file) {
+    return false
+  }
+  if (file.type && file.type.startsWith('image/')) {
+    return true
+  }
+  const extension = extractExtension(file.name ?? '')
+  return isSupportedImageExtension(extension)
+}
+
+function getDroppedImageFiles(dataTransfer: DataTransfer): File[] {
+  const files: File[] = []
+  if (dataTransfer.files?.length) {
+    Array.from(dataTransfer.files).forEach((file) => {
+      if (isImageFileCandidate(file)) {
+        files.push(file)
+      }
+    })
+  }
+  if (dataTransfer.items?.length) {
+    Array.from(dataTransfer.items).forEach((item) => {
+      if (item.kind === 'file') {
+        const file = item.getAsFile()
+        if (isImageFileCandidate(file)) {
+          files.push(file)
+        }
+      }
+    })
+  }
+  return files
+}
+
+function extensionFromMimeType(mime: string | null | undefined): string | null {
+  if (!mime) {
+    return null
+  }
+  const mapping: Record<string, string> = {
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/gif': 'gif',
+    'image/webp': 'webp',
+    'image/bmp': 'bmp',
+    'image/svg+xml': 'svg',
+    'image/tiff': 'tiff',
+    'image/x-icon': 'ico',
+  }
+  if (mapping[mime]) {
+    return mapping[mime]
+  }
+  const match = /^image\/([a-z0-9.+-]+)$/i.exec(mime)
+  return match ? match[1]!.toLowerCase() : null
+}
+
+function normalizeRemoteUrl(url: string): string {
+  return url.trim()
+}
+
+function deriveAssetNameFromUrl(url: string): string {
+  if (!url) {
+    return 'Remote Image'
+  }
+  const trimmed = url.trim()
+  if (trimmed.startsWith('data:image/')) {
+    return 'Pasted Image'
+  }
+  try {
+    const parsed = new URL(trimmed, typeof window !== 'undefined' ? window.location.href : undefined)
+    const segment = parsed.pathname.split('/').filter(Boolean).pop()
+    if (segment) {
+      try {
+        return decodeURIComponent(segment)
+      } catch (error) {
+        return segment
+      }
+    }
+  } catch (error) {
+    // Ignore URL parsing errors
+  }
+  const stripped = trimmed.replace(/^https?:\/\//i, '')
+  if (stripped.length) {
+    const beforeQuery = stripped.split(/[?#]/)[0] ?? stripped
+    return beforeQuery.length ? beforeQuery : 'Remote Image'
+  }
+  return 'Remote Image'
+}
+
+function isLikelyImageUrl(url: string): boolean {
+  if (!url) {
+    return false
+  }
+  const trimmed = url.trim()
+  if (trimmed.startsWith('data:image/')) {
+    return true
+  }
+  if (!/^https?:\/\//i.test(trimmed)) {
+    return false
+  }
+  const extension = extractExtension(trimmed.split(/[?#]/)[0] ?? '')
+  if (!extension) {
+    return true
+  }
+  return isSupportedImageExtension(extension)
+}
+
+function extractImageUrlsFromDataTransfer(dataTransfer: DataTransfer): string[] {
+  const urlSet = new Set<string>()
+  const uriList = dataTransfer.getData('text/uri-list')
+  if (uriList) {
+    uriList
+      .split(/[\r\n]+/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith('#'))
+      .forEach((line) => urlSet.add(line))
+  }
+  const mozUrl = dataTransfer.getData('text/x-moz-url')
+  if (mozUrl) {
+    const [mozUrlValue] = mozUrl.split(/[\r\n]+/)
+    if (mozUrlValue) {
+      urlSet.add(mozUrlValue.trim())
+    }
+  }
+  const html = dataTransfer.getData('text/html')
+  if (html && typeof DOMParser !== 'undefined') {
+    try {
+      const parser = new DOMParser()
+      const doc = parser.parseFromString(html, 'text/html')
+      doc.querySelectorAll('img').forEach((img) => {
+        if (img.src) {
+          urlSet.add(img.src)
+        }
+      })
+    } catch (error) {
+      console.warn('解析拖拽 HTML 失败', error)
+    }
+  }
+  const plain = dataTransfer.getData('text/plain')
+  if (plain) {
+    if (plain.startsWith('data:image/')) {
+      urlSet.add(plain.trim())
+    }
+    const matches = plain.match(/https?:\/\/[^\s]+/g)
+    if (matches) {
+      matches.forEach((match) => {
+        const sanitized = match.replace(/[\")'<>]+$/, '')
+        urlSet.add(sanitized)
+      })
+    }
+  }
+
+  return Array.from(urlSet)
+    .map((entry) => entry.trim())
+    .filter((entry) => isLikelyImageUrl(entry))
+}
+
+async function importLocalImageFile(file: File): Promise<ProjectAsset> {
+  const fallbackName = file.name && file.name.trim().length ? file.name : 'Dropped Image'
+  const { asset } = await sceneStore.ensureLocalAssetFromFile(file, {
+    type: 'image',
+    name: fallbackName,
+    description: fallbackName,
+    previewColor: IMAGE_PREVIEW_COLOR,
+    gleaned: true,
+  })
+  return asset
+}
+
+async function importDataUrlImage(dataUrl: string): Promise<ProjectAsset> {
+  const blob = dataUrlToBlob(dataUrl)
+  const extension = extensionFromMimeType(blob.type) ?? 'png'
+  const fileName = `pasted-image-${Date.now().toString(36)}.${extension}`
+  const file = new File([blob], fileName, { type: blob.type })
+  return importLocalImageFile(file)
+}
+
+function importRemoteImageFromUrl(url: string): ProjectAsset {
+  const normalizedUrl = normalizeRemoteUrl(url)
+  const name = deriveAssetNameFromUrl(normalizedUrl)
+  const asset: ProjectAsset = {
+    id: normalizedUrl,
+    name,
+    type: 'image',
+    downloadUrl: normalizedUrl,
+    previewColor: IMAGE_PREVIEW_COLOR,
+    thumbnail: normalizedUrl,
+    description: normalizedUrl,
+    gleaned: true,
+  }
+  return sceneStore.registerAsset(asset, {
+    categoryId: IMAGES_DIRECTORY_ID,
+    source: { type: 'url' },
+  })
+}
+
+async function processImageDrop(dataTransfer: DataTransfer): Promise<{ assets: ProjectAsset[]; errors: string[] }> {
+  const collected = new Map<string, ProjectAsset>()
+  const errors: string[] = []
+  const files = getDroppedImageFiles(dataTransfer)
+  if (files.length) {
+    for (const file of files) {
+      try {
+        const asset = await importLocalImageFile(file)
+        collected.set(asset.id, asset)
+      } catch (error) {
+        const message = (error as Error).message ?? `导入失败：${file.name}`
+        errors.push(message)
+      }
+    }
+    return { assets: Array.from(collected.values()), errors }
+  }
+
+  const urls = extractImageUrlsFromDataTransfer(dataTransfer)
+  if (!urls.length) {
+    return { assets: [], errors: ['未检测到可导入的图片资源'] }
+  }
+
+  for (const url of urls) {
+    try {
+      if (url.startsWith('data:image/')) {
+        const asset = await importDataUrlImage(url)
+        collected.set(asset.id, asset)
+      } else {
+        const asset = importRemoteImageFromUrl(url)
+        collected.set(asset.id, asset)
+      }
+    } catch (error) {
+      const message = (error as Error).message ?? `导入失败：${url}`
+      errors.push(message)
+    }
+  }
+
+  return { assets: Array.from(collected.values()), errors }
+}
+
+function handleGalleryDragEnter(event: DragEvent) {
+  if (!allowImageDrop.value || dropProcessing.value) {
+    return
+  }
+  if (!event.dataTransfer || isInternalAssetDrag(event) || !isImageDropPayload(event.dataTransfer)) {
+    return
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  dropDragDepth.value += 1
+  dropActive.value = true
+  event.dataTransfer.dropEffect = 'copy'
+}
+
+function handleGalleryDragOver(event: DragEvent) {
+  if (!allowImageDrop.value || dropProcessing.value) {
+    return
+  }
+  if (!event.dataTransfer || isInternalAssetDrag(event) || !isImageDropPayload(event.dataTransfer)) {
+    return
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  dropActive.value = true
+  event.dataTransfer.dropEffect = 'copy'
+}
+
+function handleGalleryDragLeave(event: DragEvent) {
+  if (!allowImageDrop.value || dropProcessing.value) {
+    return
+  }
+  if (!event.dataTransfer) {
+    return
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  dropDragDepth.value = Math.max(0, dropDragDepth.value - 1)
+  if (dropDragDepth.value === 0) {
+    dropActive.value = false
+  }
+}
+
+async function handleGalleryDrop(event: DragEvent) {
+  if (!allowImageDrop.value || dropProcessing.value) {
+    return
+  }
+  if (!event.dataTransfer || isInternalAssetDrag(event) || !isImageDropPayload(event.dataTransfer)) {
+    return
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  dropProcessing.value = true
+  dropActive.value = false
+  dropDragDepth.value = 0
+  clearDropFeedbackTimer()
+  dropFeedback.value = null
+  try {
+    const { assets, errors } = await processImageDrop(event.dataTransfer)
+    if (IMAGES_DIRECTORY_ID) {
+      ensureDirectoryOpened(IMAGES_DIRECTORY_ID)
+      sceneStore.setActiveDirectory(IMAGES_DIRECTORY_ID)
+    }
+    if (assets.length) {
+      const lastAsset = assets[assets.length - 1]!
+      sceneStore.selectAsset(lastAsset.id)
+      selectedAssetIds.value = [lastAsset.id]
+    }
+    if (assets.length && errors.length) {
+      showDropFeedback('error', `成功导入 ${assets.length} 个图片资源，但有 ${errors.length} 个失败`)
+    } else if (assets.length) {
+      showDropFeedback('success', `成功导入 ${assets.length} 个图片资源`)
+    } else if (errors.length) {
+      showDropFeedback('error', errors[0] ?? '导入图片资源失败')
+    }
+  } catch (error) {
+    console.error('导入图片资源失败', error)
+    showDropFeedback('error', (error as Error).message ?? '导入图片资源失败')
+  } finally {
+    dropProcessing.value = false
+  }
+}
 const selectedAssets = computed(() =>
   selectedAssetIds.value
     .map((id) => displayedAssets.value.find((asset) => asset.id === id))
@@ -808,15 +1191,22 @@ const indexedDbLoadQueue = new Set<string>()
 function assetPreviewUrl(asset: ProjectAsset): string | undefined {
   const cacheId = resolveAssetCacheId(asset)
   const entry = assetCacheStore.entries[cacheId]
-  if (!entry || entry.status !== 'cached' || !entry.blobUrl) {
-    return undefined
+  if (entry && entry.status === 'cached' && entry.blobUrl) {
+    const mime = entry.mimeType ?? ''
+    if (mime.startsWith('image/')) {
+      return entry.blobUrl
+    }
+    if (!mime && (asset.type === 'image' || asset.type === 'texture')) {
+      return entry.blobUrl
+    }
   }
-  const mime = entry.mimeType ?? ''
-  if (mime.startsWith('image/')) {
-    return entry.blobUrl
-  }
-  if (!mime && (asset.type === 'image' || asset.type === 'texture')) {
-    return entry.blobUrl
+  if (asset.type === 'image' || asset.type === 'texture') {
+    if (asset.thumbnail && isLikelyImageUrl(asset.thumbnail)) {
+      return asset.thumbnail
+    }
+    if (isLikelyImageUrl(asset.downloadUrl)) {
+      return asset.downloadUrl
+    }
   }
   return undefined
 }
@@ -1029,6 +1419,7 @@ onBeforeUnmount(() => {
     clearTimeout(searchDebounceHandle)
     searchDebounceHandle = null
   }
+  clearDropFeedbackTimer()
 })
 </script>
 
@@ -1088,7 +1479,14 @@ onBeforeUnmount(() => {
           </div>
         </Pane>
         <Pane :size="galleryPaneSize">
-          <div class="project-gallery">
+          <div
+            class="project-gallery"
+            :class="{ 'is-drop-target': dropOverlayVisible, 'has-drop-feedback': dropFeedback }"
+            @dragenter="handleGalleryDragEnter"
+            @dragover="handleGalleryDragOver"
+            @dragleave="handleGalleryDragLeave"
+            @drop="handleGalleryDrop"
+          >
             <v-toolbar density="compact" height="46">
                 <v-checkbox-btn
                   class="toolbar-select-checkbox"
@@ -1127,6 +1525,15 @@ onBeforeUnmount(() => {
               />
               <v-btn icon="mdi-refresh" density="compact" variant="text" @click="refreshGallery" />
             </v-toolbar>
+            <div
+              v-if="dropFeedback"
+              :class="[
+                'drop-feedback',
+                dropFeedback.kind === 'error' ? 'drop-feedback--error' : 'drop-feedback--success',
+              ]"
+            >
+              {{ dropFeedback.message }}
+            </div>
             <v-divider />
             <div class="project-gallery-scroll">
               <div v-if="galleryDirectories.length" class="gallery-grid gallery-grid--directories">
@@ -1246,6 +1653,10 @@ onBeforeUnmount(() => {
                 </template>
               </div>
             </div>
+            <div v-if="dropOverlayVisible" class="drop-overlay">
+              <v-icon size="42" color="white">mdi-cloud-upload</v-icon>
+              <span class="drop-overlay__message">{{ dropOverlayMessage }}</span>
+            </div>
           </div>
         </Pane>
       </Splitpanes>
@@ -1350,6 +1761,58 @@ onBeforeUnmount(() => {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  position: relative;
+}
+
+.project-gallery.is-drop-target {
+  outline: 1px dashed rgba(77, 208, 225, 0.45);
+  outline-offset: -4px;
+}
+
+.drop-overlay {
+  position: absolute;
+  inset: 48px 12px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  border-radius: 12px;
+  border: 1px dashed rgba(77, 208, 225, 0.6);
+  background: rgba(10, 14, 20, 0.76);
+  color: #e9ecf1;
+  pointer-events: none;
+  text-align: center;
+  padding: 16px;
+}
+
+.drop-overlay__message {
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.project-gallery.has-drop-feedback .drop-overlay {
+  inset: 82px 12px 12px 12px;
+}
+
+.drop-feedback {
+  margin: 8px 12px 4px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.drop-feedback--success {
+  background: rgba(56, 142, 60, 0.16);
+  border: 1px solid rgba(129, 199, 132, 0.5);
+  color: #c8e6c9;
+}
+
+.drop-feedback--error {
+  background: rgba(216, 67, 21, 0.16);
+  border: 1px solid rgba(255, 138, 101, 0.5);
+  color: #ffccbc;
 }
 
 .tree-view :deep(.v-treeview-node__root) {
