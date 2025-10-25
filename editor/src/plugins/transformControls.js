@@ -1244,7 +1244,7 @@ class TransformControlsGizmo extends Object3D {
 			Z: [
 				[ new Mesh( arrowGeometry, matBlue ), [ 0, 0, 0.5 ], [ Math.PI / 2, 0, 0 ]],
 				[ new Mesh( arrowGeometry, matBlue ), [ 0, 0, - 0.5 ], [ - Math.PI / 2, 0, 0 ]],
-				[ new Mesh( lineGeometry2, matBlue ), null, [ Math.PI / 2, 0, 0 ]]
+				[ new Mesh( lineGeometry2, matBlue ), null, [ -Math.PI / 2, 0, 0 ]]
 			],
 			XYZ: [
 				[ new Mesh( new OctahedronGeometry( 0.1, 0 ), matWhiteTransparent ), [ 0, 0, 0 ]]
@@ -1363,7 +1363,7 @@ class TransformControlsGizmo extends Object3D {
 			],
 			Z: [
 				[ new Mesh( scaleHandleGeometry, matBlue ), [ 0, 0, 0.5 ], [ Math.PI / 2, 0, 0 ]],
-				[ new Mesh( lineGeometry2, matBlue ), [ 0, 0, 0 ], [ Math.PI / 2, 0, 0 ]],
+				[ new Mesh( lineGeometry2, matBlue ), [ 0, 0, 0 ], [ -Math.PI / 2, 0, 0 ]],
 				[ new Mesh( scaleHandleGeometry, matBlue ), [ 0, 0, - 0.5 ], [ - Math.PI / 2, 0, 0 ]]
 			],
 			XY: [
