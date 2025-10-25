@@ -221,7 +221,8 @@ function handleToggleChange(key: 'matrixAutoUpdate' | 'generateMipmaps' | 'premu
             />
           </div>
         </div>
-        <v-switch
+        <v-checkbox
+            size="small"
           class="matrix-switch"
           density="compact"
           hide-details
@@ -230,12 +231,8 @@ function handleToggleChange(key: 'matrixAutoUpdate' | 'generateMipmaps' | 'premu
           :disabled="isDisabled"
           @update:model-value="(value: boolean) => handleToggleChange('matrixAutoUpdate', value)"
         />
-      </div>
-
-      <div class="panel-section">
-        <div class="section-title">Advanced &amp; Control</div>
-        <div class="toggle-grid">
-          <v-switch
+                  <v-checkbox
+            size="small"
             density="compact"
             hide-details
             label="Generate Mipmaps"
@@ -243,7 +240,8 @@ function handleToggleChange(key: 'matrixAutoUpdate' | 'generateMipmaps' | 'premu
             :disabled="isDisabled"
             @update:model-value="(value: boolean) => handleToggleChange('generateMipmaps', value)"
           />
-          <v-switch
+          <v-checkbox
+            size="small"
             density="compact"
             hide-details
             label="Premultiply Alpha"
@@ -251,7 +249,8 @@ function handleToggleChange(key: 'matrixAutoUpdate' | 'generateMipmaps' | 'premu
             :disabled="isDisabled"
             @update:model-value="(value: boolean) => handleToggleChange('premultiplyAlpha', value)"
           />
-          <v-switch
+          <v-checkbox
+            size="small"
             density="compact"
             hide-details
             label="Flip Y"
@@ -259,8 +258,8 @@ function handleToggleChange(key: 'matrixAutoUpdate' | 'generateMipmaps' | 'premu
             :disabled="isDisabled"
             @update:model-value="(value: boolean) => handleToggleChange('flipY', value)"
           />
-        </div>
       </div>
+
     </div>
   </div>
 </template>
