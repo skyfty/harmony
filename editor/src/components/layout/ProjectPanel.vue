@@ -4,7 +4,13 @@ import { storeToRefs } from 'pinia'
 import { Splitpanes, Pane } from 'splitpanes'
 import 'splitpanes/dist/splitpanes.css'
 import { useSceneStore, extractProviderIdFromPackageDirectoryId } from '@/stores/sceneStore'
-import { ASSET_CATEGORY_CONFIG, PACKAGES_ROOT_DIRECTORY_ID } from '@/stores/assetCatalog'
+import {
+  ASSET_CATEGORY_CONFIG,
+  ASSETS_ROOT_DIRECTORY_ID,
+  PACKAGES_ROOT_DIRECTORY_ID,
+  determineAssetCategoryId,
+} from '@/stores/assetCatalog'
+import type { AssetCategoryDefinition } from '@/stores/assetCatalog'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -133,16 +139,60 @@ const dropDragDepth = ref(0)
 const dropFeedback = ref<{ kind: 'success' | 'error'; message: string } | null>(null)
 let dropFeedbackTimer: number | null = null
 
-const imageCategory = ASSET_CATEGORY_CONFIG.find((category) => category.key === 'images')
-const IMAGES_DIRECTORY_ID = imageCategory?.id ?? ''
-const IMAGE_PREVIEW_COLOR = '#1e88e5'
-const IMAGE_EXTENSION_SET = new Set(
-  (imageCategory?.extensions ?? []).map((extension) => extension.replace(/^[.]/, '').toLowerCase()),
-)
+type AssetCategoryKey = AssetCategoryDefinition['key']
 
-const allowImageDrop = computed(() => Boolean(IMAGES_DIRECTORY_ID) && activeDirectoryId.value === IMAGES_DIRECTORY_ID)
-const dropOverlayVisible = computed(() => allowImageDrop.value && (dropActive.value || dropProcessing.value))
-const dropOverlayMessage = computed(() => (dropProcessing.value ? '正在导入图片…' : '松开鼠标导入图片'))
+const CATEGORY_KEY_TO_TYPE: Record<AssetCategoryKey, ProjectAsset['type']> = {
+  models: 'model',
+  images: 'image',
+  textures: 'texture',
+  materials: 'material',
+  others: 'file',
+}
+
+const DEFAULT_PREVIEW_COLORS: Record<ProjectAsset['type'], string> = {
+  model: '#26C6DA',
+  image: '#1E88E5',
+  texture: '#8E24AA',
+  material: '#FFB74D',
+  file: '#546E7A',
+}
+
+const EXTENSION_TYPE_MAP = new Map<string, ProjectAsset['type']>()
+ASSET_CATEGORY_CONFIG.forEach((category) => {
+  const categoryType = CATEGORY_KEY_TO_TYPE[category.key]
+  if (!categoryType) {
+    return
+  }
+  category.extensions.forEach((extension) => {
+    const normalized = extension.replace(/^[.]/, '').toLowerCase()
+    if (normalized.length) {
+      EXTENSION_TYPE_MAP.set(normalized, categoryType)
+    }
+  })
+})
+
+const assetDirectoryIds = new Set<string>([
+  ASSETS_ROOT_DIRECTORY_ID,
+  ...ASSET_CATEGORY_CONFIG.map((category) => category.id),
+])
+
+function isAssetsDirectory(directoryId: string | null | undefined): boolean {
+  if (!directoryId) {
+    return false
+  }
+  if (assetDirectoryIds.has(directoryId)) {
+    return true
+  }
+  const path = findDirectoryPath(projectTree.value, directoryId)
+  if (!path?.length) {
+    return false
+  }
+  return path.some((directory) => directory.id === ASSETS_ROOT_DIRECTORY_ID)
+}
+
+const allowAssetDrop = computed(() => isAssetsDirectory(activeDirectoryId.value))
+const dropOverlayVisible = computed(() => allowAssetDrop.value && (dropActive.value || dropProcessing.value))
+const dropOverlayMessage = computed(() => (dropProcessing.value ? '正在导入资源…' : '松开鼠标导入资源'))
 
 const providerLoading = ref<Record<string, boolean>>({})
 const providerErrors = ref<Record<string, string | null>>({})
@@ -220,7 +270,7 @@ watch(
   { immediate: true }
 )
 
-watch(allowImageDrop, (canDrop) => {
+watch(allowAssetDrop, (canDrop) => {
   if (!canDrop && !dropProcessing.value) {
     dropActive.value = false
     dropDragDepth.value = 0
@@ -767,7 +817,7 @@ function isInternalAssetDrag(event: DragEvent): boolean {
   return types.includes(ASSET_DRAG_MIME)
 }
 
-function isImageDropPayload(dataTransfer: DataTransfer): boolean {
+function isAssetDropPayload(dataTransfer: DataTransfer): boolean {
   const types = Array.from(dataTransfer.types ?? [])
   if (types.includes('Files')) {
     return true
@@ -776,29 +826,81 @@ function isImageDropPayload(dataTransfer: DataTransfer): boolean {
   return stringTypes.some((type) => types.includes(type))
 }
 
-function isSupportedImageExtension(extension: string | null | undefined): boolean {
-  if (!extension) {
-    return false
+function assetTypeFromMimeType(mime: string | null | undefined): ProjectAsset['type'] | null {
+  if (!mime) {
+    return null
   }
-  return IMAGE_EXTENSION_SET.has(extension.replace(/^[.]/, '').toLowerCase())
+  const normalized = mime.toLowerCase()
+  if (normalized.startsWith('image/')) {
+    return 'image'
+  }
+  if (normalized.startsWith('model/')) {
+    return 'model'
+  }
+  if (normalized.includes('gltf') || normalized.includes('fbx') || normalized.includes('obj') || normalized.includes('stl')) {
+    return 'model'
+  }
+  if (normalized.includes('ktx') || normalized.includes('texture') || normalized.includes('dds') || normalized.includes('tga')) {
+    return 'texture'
+  }
+  if (normalized.includes('material')) {
+    return 'material'
+  }
+  return null
 }
 
-function isImageFileCandidate(file: File | null): file is File {
-  if (!file) {
-    return false
+function inferAssetTypeFromExtension(extension: string | null | undefined): ProjectAsset['type'] | null {
+  if (!extension) {
+    return null
   }
-  if (file.type && file.type.startsWith('image/')) {
-    return true
+  const normalized = extension.replace(/^[.]/, '').toLowerCase()
+  return EXTENSION_TYPE_MAP.get(normalized) ?? null
+}
+
+function inferAssetTypeFromFile(file: File, options: { fallbackType?: ProjectAsset['type'] } = {}): ProjectAsset['type'] {
+  const mimeType = file.type ?? null
+  const mimeTypeResult = assetTypeFromMimeType(mimeType)
+  if (mimeTypeResult) {
+    return mimeTypeResult
   }
   const extension = extractExtension(file.name ?? '')
-  return isSupportedImageExtension(extension)
+  const extensionResult = inferAssetTypeFromExtension(extension)
+  if (extensionResult) {
+    return extensionResult
+  }
+  return options.fallbackType ?? 'file'
 }
 
-function getDroppedImageFiles(dataTransfer: DataTransfer): File[] {
+function inferAssetTypeFromUrl(url: string): ProjectAsset['type'] {
+  const trimmed = url.trim()
+  if (trimmed.startsWith('data:')) {
+    const mimeMatch = /^data:([^;,]+);/i.exec(trimmed)
+    if (mimeMatch) {
+      const mimeType = mimeMatch[1]?.toLowerCase() ?? null
+      const inferred = assetTypeFromMimeType(mimeType)
+      if (inferred) {
+        return inferred
+      }
+    }
+    return 'file'
+  }
+  const extension = extractExtension(trimmed.split(/[?#]/)[0] ?? '')
+  const extensionResult = inferAssetTypeFromExtension(extension)
+  if (extensionResult) {
+    return extensionResult
+  }
+  return 'file'
+}
+
+function resolvePreviewColor(type: ProjectAsset['type']): string {
+  return DEFAULT_PREVIEW_COLORS[type] ?? DEFAULT_PREVIEW_COLORS.file
+}
+
+function getDroppedFiles(dataTransfer: DataTransfer): File[] {
   const files: File[] = []
   if (dataTransfer.files?.length) {
     Array.from(dataTransfer.files).forEach((file) => {
-      if (isImageFileCandidate(file)) {
+      if (file) {
         files.push(file)
       }
     })
@@ -807,7 +909,7 @@ function getDroppedImageFiles(dataTransfer: DataTransfer): File[] {
     Array.from(dataTransfer.items).forEach((item) => {
       if (item.kind === 'file') {
         const file = item.getAsFile()
-        if (isImageFileCandidate(file)) {
+        if (file) {
           files.push(file)
         }
       }
@@ -829,12 +931,24 @@ function extensionFromMimeType(mime: string | null | undefined): string | null {
     'image/svg+xml': 'svg',
     'image/tiff': 'tiff',
     'image/x-icon': 'ico',
+    'model/gltf+json': 'gltf',
+    'model/gltf-binary': 'glb',
+    'model/obj': 'obj',
+    'model/stl': 'stl',
+    'application/octet-stream': 'bin',
   }
   if (mapping[mime]) {
     return mapping[mime]
   }
-  const match = /^image\/([a-z0-9.+-]+)$/i.exec(mime)
-  return match ? match[1]!.toLowerCase() : null
+  const imageMatch = /^image\/([a-z0-9.+-]+)$/i.exec(mime)
+  if (imageMatch) {
+    return imageMatch[1]!.toLowerCase()
+  }
+  const modelMatch = /^model\/([a-z0-9.+-]+)$/i.exec(mime)
+  if (modelMatch) {
+    return modelMatch[1]!.toLowerCase()
+  }
+  return null
 }
 
 function normalizeRemoteUrl(url: string): string {
@@ -843,11 +957,11 @@ function normalizeRemoteUrl(url: string): string {
 
 function deriveAssetNameFromUrl(url: string): string {
   if (!url) {
-    return 'Remote Image'
+    return 'Remote Asset'
   }
   const trimmed = url.trim()
-  if (trimmed.startsWith('data:image/')) {
-    return 'Pasted Image'
+  if (trimmed.startsWith('data:')) {
+    return 'Pasted Asset'
   }
   try {
     const parsed = new URL(trimmed, typeof window !== 'undefined' ? window.location.href : undefined)
@@ -865,9 +979,9 @@ function deriveAssetNameFromUrl(url: string): string {
   const stripped = trimmed.replace(/^https?:\/\//i, '')
   if (stripped.length) {
     const beforeQuery = stripped.split(/[?#]/)[0] ?? stripped
-    return beforeQuery.length ? beforeQuery : 'Remote Image'
+    return beforeQuery.length ? beforeQuery : 'Remote Asset'
   }
-  return 'Remote Image'
+  return 'Remote Asset'
 }
 
 function isLikelyImageUrl(url: string): boolean {
@@ -885,10 +999,10 @@ function isLikelyImageUrl(url: string): boolean {
   if (!extension) {
     return true
   }
-  return isSupportedImageExtension(extension)
+  return (inferAssetTypeFromExtension(extension) ?? null) === 'image'
 }
 
-function extractImageUrlsFromDataTransfer(dataTransfer: DataTransfer): string[] {
+function extractAssetUrlsFromDataTransfer(dataTransfer: DataTransfer): string[] {
   const urlSet = new Set<string>()
   const uriList = dataTransfer.getData('text/uri-list')
   if (uriList) {
@@ -910,9 +1024,11 @@ function extractImageUrlsFromDataTransfer(dataTransfer: DataTransfer): string[] 
     try {
       const parser = new DOMParser()
       const doc = parser.parseFromString(html, 'text/html')
-      doc.querySelectorAll('img').forEach((img) => {
-        if (img.src) {
-          urlSet.add(img.src)
+      doc.querySelectorAll('img, a').forEach((node) => {
+        if (node instanceof HTMLImageElement && node.src) {
+          urlSet.add(node.src)
+        } else if (node instanceof HTMLAnchorElement && node.href) {
+          urlSet.add(node.href)
         }
       })
     } catch (error) {
@@ -921,7 +1037,7 @@ function extractImageUrlsFromDataTransfer(dataTransfer: DataTransfer): string[] 
   }
   const plain = dataTransfer.getData('text/plain')
   if (plain) {
-    if (plain.startsWith('data:image/')) {
+    if (plain.startsWith('data:')) {
       urlSet.add(plain.trim())
     }
     const matches = plain.match(/https?:\/\/[^\s]+/g)
@@ -935,77 +1051,78 @@ function extractImageUrlsFromDataTransfer(dataTransfer: DataTransfer): string[] 
 
   return Array.from(urlSet)
     .map((entry) => entry.trim())
-    .filter((entry) => isLikelyImageUrl(entry))
+    .filter((entry) => entry.length > 0 && (/^https?:\/\//i.test(entry) || entry.startsWith('data:')))
 }
 
-async function importLocalImageFile(file: File): Promise<ProjectAsset> {
-  const fallbackName = file.name && file.name.trim().length ? file.name : 'Dropped Image'
+async function importLocalFile(
+  file: File,
+  options: { displayName?: string; type?: ProjectAsset['type'] } = {},
+): Promise<ProjectAsset> {
+  const type = options.type ?? inferAssetTypeFromFile(file)
+  const fallbackName = options.displayName ?? (file.name && file.name.trim().length ? file.name : 'Dropped Asset')
   const { asset } = await sceneStore.ensureLocalAssetFromFile(file, {
-    type: 'image',
+    type,
     name: fallbackName,
     description: fallbackName,
-    previewColor: IMAGE_PREVIEW_COLOR,
+    previewColor: resolvePreviewColor(type),
     gleaned: true,
   })
   return asset
 }
 
-async function importDataUrlImage(dataUrl: string): Promise<ProjectAsset> {
+async function importDataUrlAsset(dataUrl: string): Promise<ProjectAsset> {
   const blob = dataUrlToBlob(dataUrl)
-  const extension = extensionFromMimeType(blob.type) ?? 'png'
-  const fileName = `pasted-image-${Date.now().toString(36)}.${extension}`
-  const file = new File([blob], fileName, { type: blob.type })
-  return importLocalImageFile(file)
+  const mimeType = blob.type && blob.type.length ? blob.type : 'application/octet-stream'
+  const extension = extensionFromMimeType(mimeType) ?? 'bin'
+  const type = assetTypeFromMimeType(mimeType) ?? inferAssetTypeFromExtension(extension) ?? 'file'
+  const fileName = `pasted-asset-${Date.now().toString(36)}.${extension}`
+  const file = new File([blob], fileName, { type: mimeType })
+  return importLocalFile(file, { displayName: fileName, type })
 }
 
-function importRemoteImageFromUrl(url: string): ProjectAsset {
+function importRemoteAssetFromUrl(url: string): ProjectAsset {
   const normalizedUrl = normalizeRemoteUrl(url)
+  const assetType = inferAssetTypeFromUrl(normalizedUrl)
   const name = deriveAssetNameFromUrl(normalizedUrl)
   const asset: ProjectAsset = {
     id: normalizedUrl,
     name,
-    type: 'image',
+    type: assetType,
     downloadUrl: normalizedUrl,
-    previewColor: IMAGE_PREVIEW_COLOR,
-    thumbnail: normalizedUrl,
+    previewColor: resolvePreviewColor(assetType),
+    thumbnail: assetType === 'image' && isLikelyImageUrl(normalizedUrl) ? normalizedUrl : null,
     description: normalizedUrl,
     gleaned: true,
   }
+  const categoryId = determineAssetCategoryId(asset)
   return sceneStore.registerAsset(asset, {
-    categoryId: IMAGES_DIRECTORY_ID,
+    categoryId,
     source: { type: 'url' },
   })
 }
 
-async function processImageDrop(dataTransfer: DataTransfer): Promise<{ assets: ProjectAsset[]; errors: string[] }> {
+async function processAssetDrop(dataTransfer: DataTransfer): Promise<{ assets: ProjectAsset[]; errors: string[] }> {
   const collected = new Map<string, ProjectAsset>()
   const errors: string[] = []
-  const files = getDroppedImageFiles(dataTransfer)
-  if (files.length) {
-    for (const file of files) {
-      try {
-        const asset = await importLocalImageFile(file)
-        collected.set(asset.id, asset)
-      } catch (error) {
-        const message = (error as Error).message ?? `导入失败：${file.name}`
-        errors.push(message)
-      }
+  const files = getDroppedFiles(dataTransfer)
+  for (const file of files) {
+    try {
+      const asset = await importLocalFile(file)
+      collected.set(asset.id, asset)
+    } catch (error) {
+      const message = (error as Error).message ?? `导入失败：${file.name}`
+      errors.push(message)
     }
-    return { assets: Array.from(collected.values()), errors }
   }
 
-  const urls = extractImageUrlsFromDataTransfer(dataTransfer)
-  if (!urls.length) {
-    return { assets: [], errors: ['未检测到可导入的图片资源'] }
-  }
-
+  const urls = extractAssetUrlsFromDataTransfer(dataTransfer)
   for (const url of urls) {
     try {
-      if (url.startsWith('data:image/')) {
-        const asset = await importDataUrlImage(url)
+      if (url.startsWith('data:')) {
+        const asset = await importDataUrlAsset(url)
         collected.set(asset.id, asset)
       } else {
-        const asset = importRemoteImageFromUrl(url)
+        const asset = importRemoteAssetFromUrl(url)
         collected.set(asset.id, asset)
       }
     } catch (error) {
@@ -1018,10 +1135,10 @@ async function processImageDrop(dataTransfer: DataTransfer): Promise<{ assets: P
 }
 
 function handleGalleryDragEnter(event: DragEvent) {
-  if (!allowImageDrop.value || dropProcessing.value) {
+  if (!allowAssetDrop.value || dropProcessing.value) {
     return
   }
-  if (!event.dataTransfer || isInternalAssetDrag(event) || !isImageDropPayload(event.dataTransfer)) {
+  if (!event.dataTransfer || isInternalAssetDrag(event) || !isAssetDropPayload(event.dataTransfer)) {
     return
   }
   event.preventDefault()
@@ -1032,10 +1149,10 @@ function handleGalleryDragEnter(event: DragEvent) {
 }
 
 function handleGalleryDragOver(event: DragEvent) {
-  if (!allowImageDrop.value || dropProcessing.value) {
+  if (!allowAssetDrop.value || dropProcessing.value) {
     return
   }
-  if (!event.dataTransfer || isInternalAssetDrag(event) || !isImageDropPayload(event.dataTransfer)) {
+  if (!event.dataTransfer || isInternalAssetDrag(event) || !isAssetDropPayload(event.dataTransfer)) {
     return
   }
   event.preventDefault()
@@ -1045,7 +1162,7 @@ function handleGalleryDragOver(event: DragEvent) {
 }
 
 function handleGalleryDragLeave(event: DragEvent) {
-  if (!allowImageDrop.value || dropProcessing.value) {
+  if (!allowAssetDrop.value || dropProcessing.value) {
     return
   }
   if (!event.dataTransfer) {
@@ -1060,10 +1177,10 @@ function handleGalleryDragLeave(event: DragEvent) {
 }
 
 async function handleGalleryDrop(event: DragEvent) {
-  if (!allowImageDrop.value || dropProcessing.value) {
+  if (!allowAssetDrop.value || dropProcessing.value) {
     return
   }
-  if (!event.dataTransfer || isInternalAssetDrag(event) || !isImageDropPayload(event.dataTransfer)) {
+  if (!event.dataTransfer || isInternalAssetDrag(event) || !isAssetDropPayload(event.dataTransfer)) {
     return
   }
   event.preventDefault()
@@ -1074,26 +1191,37 @@ async function handleGalleryDrop(event: DragEvent) {
   clearDropFeedbackTimer()
   dropFeedback.value = null
   try {
-    const { assets, errors } = await processImageDrop(event.dataTransfer)
-    if (IMAGES_DIRECTORY_ID) {
-      ensureDirectoryOpened(IMAGES_DIRECTORY_ID)
-      sceneStore.setActiveDirectory(IMAGES_DIRECTORY_ID)
-    }
+    const { assets, errors } = await processAssetDrop(event.dataTransfer)
     if (assets.length) {
+      const categoryOrder = assets.map((asset) => determineAssetCategoryId(asset))
+      const uniqueCategories = Array.from(new Set(categoryOrder.filter(Boolean)))
+      uniqueCategories.forEach((categoryId) => {
+        if (categoryId) {
+          ensureDirectoryOpened(categoryId)
+        }
+      })
+      const targetCategory = uniqueCategories.length
+        ? uniqueCategories[uniqueCategories.length - 1]
+        : determineAssetCategoryId(assets[assets.length - 1]!)
+      if (targetCategory) {
+        sceneStore.setActiveDirectory(targetCategory)
+      }
       const lastAsset = assets[assets.length - 1]!
       sceneStore.selectAsset(lastAsset.id)
       selectedAssetIds.value = [lastAsset.id]
     }
     if (assets.length && errors.length) {
-      showDropFeedback('error', `成功导入 ${assets.length} 个图片资源，但有 ${errors.length} 个失败`)
+      showDropFeedback('error', `成功导入 ${assets.length} 个资源，但有 ${errors.length} 个失败`)
     } else if (assets.length) {
-      showDropFeedback('success', `成功导入 ${assets.length} 个图片资源`)
+      showDropFeedback('success', `成功导入 ${assets.length} 个资源`)
     } else if (errors.length) {
-      showDropFeedback('error', errors[0] ?? '导入图片资源失败')
+      showDropFeedback('error', errors[0] ?? '导入资源失败')
+    } else {
+      showDropFeedback('error', '未检测到可导入的资源')
     }
   } catch (error) {
-    console.error('导入图片资源失败', error)
-    showDropFeedback('error', (error as Error).message ?? '导入图片资源失败')
+    console.error('导入资源失败', error)
+    showDropFeedback('error', (error as Error).message ?? '导入资源失败')
   } finally {
     dropProcessing.value = false
   }
