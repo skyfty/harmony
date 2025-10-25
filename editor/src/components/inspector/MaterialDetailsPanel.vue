@@ -11,7 +11,11 @@ import {
   type SceneMaterialTextureRef,
   type SceneMaterialTextureSlot,
   type SceneMaterialType,
+  type SceneMaterialTextureSettings,
+  cloneTextureSettings,
+  createTextureSettings,
 } from '@/types/material'
+import TexturePanel from './TexturePanel.vue'
 import type { ProjectAsset } from '@/types/project-asset'
 
 type TextureMapState = Record<SceneMaterialTextureSlot, SceneMaterialTextureRef | null>
@@ -96,6 +100,17 @@ function createEmptyTextureMap(): TextureMapState {
   return map
 }
 
+function cloneTextureFormRef(ref: SceneMaterialTextureRef | null): SceneMaterialTextureRef | null {
+  if (!ref) {
+    return null
+  }
+  return {
+    assetId: ref.assetId,
+    name: ref.name,
+    settings: cloneTextureSettings(ref.settings),
+  }
+}
+
 const DEFAULT_PROPS: SceneMaterialProps = {
   color: '#ffffff',
   transparent: false,
@@ -159,6 +174,13 @@ const materialForm = reactive<MaterialFormState>({
   textures: formTextures,
 })
 
+const texturePanelExpanded = reactive<Record<SceneMaterialTextureSlot, boolean>>(
+  TEXTURE_SLOTS.reduce((acc, slot) => {
+    acc[slot] = false
+    return acc
+  }, {} as Record<SceneMaterialTextureSlot, boolean>),
+)
+
 const activeMaterialIndex = computed(() => {
   const entry = activeNodeMaterial.value
   if (!entry) {
@@ -168,10 +190,11 @@ const activeMaterialIndex = computed(() => {
 })
 
 const selectedMaterialType = ref<SceneMaterialType | null>(null)
+const isUiDisabled = computed(() => !!props.disabled)
 const canSaveMaterial = computed(() =>
   !!selectedNodeId.value &&
   !!activeNodeMaterial.value &&
-  !props.disabled &&
+  !isUiDisabled.value &&
   hasPendingChanges.value,
 )
 
@@ -247,6 +270,7 @@ watch(
       emissiveColorMenuOpen.value = false
       saveSharedDialogVisible.value = false
       showAllProperties.value = false
+      resetTexturePanelExpansion()
     }
   },
 )
@@ -264,6 +288,7 @@ watch(
       resetDirtyState()
       saveSharedDialogVisible.value = false
       showAllProperties.value = false
+      resetTexturePanelExpansion()
       applyPropsToForm(DEFAULT_PROPS, { name: '', description: '' })
       return
     }
@@ -281,6 +306,7 @@ watch(
       resetDirtyState()
       saveSharedDialogVisible.value = false
       showAllProperties.value = false
+      resetTexturePanelExpansion()
     }
     lastSyncedMaterialId.value = entry.id
   },
@@ -293,6 +319,12 @@ function handleClose() {
 
 function resetDirtyState() {
   hasPendingChanges.value = false
+}
+
+function resetTexturePanelExpansion() {
+  TEXTURE_SLOTS.forEach((slot) => {
+    texturePanelExpanded[slot] = false
+  })
 }
 
 function markMaterialDirty() {
@@ -327,7 +359,9 @@ function buildMaterialPropsFromForm(): SceneMaterialProps {
   const textures = createEmptyTextureMap()
   TEXTURE_SLOTS.forEach((slot) => {
     const ref = formTextures[slot]
-    textures[slot] = ref ? { assetId: ref.assetId, name: ref.name } : null
+    textures[slot] = ref
+      ? { assetId: ref.assetId, name: ref.name, settings: cloneTextureSettings(ref.settings) }
+      : null
   })
   const toNumber = (value: unknown, fallback: number): number => {
     const numeric = typeof value === 'number' ? value : Number(value)
@@ -412,7 +446,7 @@ function applyPropsToForm(
   )
   TEXTURE_SLOTS.forEach((slot) => {
     const ref = props.textures?.[slot] ?? null
-    formTextures[slot] = ref ? { assetId: ref.assetId, name: ref.name } : null
+    formTextures[slot] = cloneTextureFormRef(ref)
   })
   if (metadata) {
     materialForm.name = metadata.name?.trim() ?? ''
@@ -678,8 +712,22 @@ function handleTextureDragLeave(slot: SceneMaterialTextureSlot, event: DragEvent
 }
 
 function assignTexture(slot: SceneMaterialTextureSlot, ref: SceneMaterialTextureRef | null) {
-  formTextures[slot] = ref ? { assetId: ref.assetId, name: ref.name } : null
-  commitMaterialProps({ textures: { [slot]: ref } })
+  formTextures[slot] = cloneTextureFormRef(ref)
+  const payload = ref
+    ? { assetId: ref.assetId, name: ref.name, settings: cloneTextureSettings(ref.settings) }
+    : null
+  commitMaterialProps({ textures: { [slot]: payload } })
+}
+
+function toggleTexturePanel(slot: SceneMaterialTextureSlot) {
+  texturePanelExpanded[slot] = !texturePanelExpanded[slot]
+}
+
+function handleTexturePanelChange(slot: SceneMaterialTextureSlot, ref: SceneMaterialTextureRef | null) {
+  if (!ref) {
+    return
+  }
+  assignTexture(slot, ref)
 }
 
 function handleTextureDrop(slot: SceneMaterialTextureSlot, event: DragEvent) {
@@ -701,7 +749,7 @@ function handleTextureDrop(slot: SceneMaterialTextureSlot, event: DragEvent) {
   void assetCacheStore.downloaProjectAsset(asset).catch((error: unknown) => {
     console.warn('Failed to cache texture asset', error)
   })
-  assignTexture(slot, { assetId: asset.id, name: asset.name })
+  assignTexture(slot, { assetId: asset.id, name: asset.name, settings: createTextureSettings() })
 }
 
 function handleTextureRemove(slot: SceneMaterialTextureSlot) {
@@ -769,9 +817,13 @@ function sanitizeImportedMaterial(
     }
     const ref = entry as Record<string, unknown>
     if (typeof ref.assetId === 'string' && ref.assetId.trim().length) {
+      const settings = typeof ref.settings === 'object' && ref.settings
+        ? createTextureSettings(ref.settings as Partial<SceneMaterialTextureSettings>)
+        : undefined
       textures[slot] = {
         assetId: ref.assetId,
         name: typeof ref.name === 'string' ? ref.name : undefined,
+        settings,
       }
     } else {
       textures[slot] = null
@@ -1064,32 +1116,53 @@ async function handleImportFileChange(event: Event) {
               <div
                 v-for="slot in visibleTextureSlots"
                 :key="slot"
-                class="texture-tile"
-                :class="{ 'is-active-drop': draggingSlot === slot }"
-                @dragenter="(event) => handleTextureDragEnter(slot, event)"
-                @dragover="(event) => handleTextureDragOver(slot, event)"
-                @dragleave="(event) => handleTextureDragLeave(slot, event)"
-                @drop="(event) => handleTextureDrop(slot, event)"
+                class="texture-item"
               >
                 <div
-                  class="texture-thumb"
-                  :class="{ 'texture-thumb--empty': !formTextures[slot] }"
-                  :style="resolveTexturePreviewStyle(slot)"
+                  class="texture-tile"
+                  :class="{ 'is-active-drop': draggingSlot === slot }"
+                  @dragenter="(event) => handleTextureDragEnter(slot, event)"
+                  @dragover="(event) => handleTextureDragOver(slot, event)"
+                  @dragleave="(event) => handleTextureDragLeave(slot, event)"
+                  @drop="(event) => handleTextureDrop(slot, event)"
                 >
-                  <v-icon v-if="!formTextures[slot]" size="20" color="rgba(233, 236, 241, 0.4)">mdi-image-off</v-icon>
+                  <div
+                    class="texture-thumb"
+                    :class="{ 'texture-thumb--empty': !formTextures[slot] }"
+                    :style="resolveTexturePreviewStyle(slot)"
+                  >
+                    <v-icon v-if="!formTextures[slot]" size="20" color="rgba(233, 236, 241, 0.4)">mdi-image-off</v-icon>
+                  </div>
+                  <div class="texture-info">
+                    <div class="texture-name">{{ resolveTextureName(slot) }}</div>
+                    <div class="texture-slot-label">{{ TEXTURE_LABELS[slot] }}</div>
+                  </div>
+                  <div class="texture-actions">
+                    <v-btn
+                      class="texture-remove"
+                      icon="mdi-close"
+                      size="x-small"
+                      variant="text"
+                      :disabled="!formTextures[slot]"
+                      title="Remove texture"
+                      @click.stop="handleTextureRemove(slot)"
+                    />
+                    <v-btn
+                      class="texture-toggle"
+                      size="x-small"
+                      variant="text"
+                      :icon="texturePanelExpanded[slot] ? 'mdi-chevron-up' : 'mdi-chevron-down'"
+                      :title="texturePanelExpanded[slot] ? 'Hide texture settings' : 'Show texture settings'"
+                      @click.stop="toggleTexturePanel(slot)"
+                    />
+                  </div>
                 </div>
-                <div class="texture-info">
-                  <div class="texture-name">{{ resolveTextureName(slot) }}</div>
-                  <div class="texture-slot-label">{{ TEXTURE_LABELS[slot] }}</div>
-                </div>
-                <v-btn
-                  class="texture-remove"
-                  icon="mdi-close"
-                  size="x-small"
-                  variant="text"
-                  :disabled="!formTextures[slot]"
-                  title="Remove texture"
-                  @click.stop="handleTextureRemove(slot)"
+                <TexturePanel
+                  v-if="texturePanelExpanded[slot]"
+                  class="texture-panel-wrapper"
+                  :model-value="formTextures[slot]"
+                  :disabled="isUiDisabled || !formTextures[slot]"
+                  @update:model-value="(value) => handleTexturePanelChange(slot, value)"
                 />
               </div>
             </div>
@@ -1347,6 +1420,12 @@ border-radius: 6px;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
+.texture-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .texture-tile {
   position: relative;
   display: grid;
@@ -1361,6 +1440,13 @@ border-radius: 6px;
   border: 1px dashed rgba(255, 255, 255, 0.18);
   background: rgba(12, 16, 22, 0.45);
   transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.texture-panel-wrapper {
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(12, 16, 22, 0.55);
+  padding: 8px;
 }
 
 .texture-tile.is-active-drop {

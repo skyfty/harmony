@@ -8,8 +8,15 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import Pica from 'pica'
 import type { SceneNode, Vector3Like } from '@/types/scene'
-import type { SceneMaterialTextureSlot, SceneMaterialTextureRef, SceneNodeMaterial, SceneMaterialType } from '@/types/material'
-import { MATERIAL_CLASS_NAMES, normalizeSceneMaterialType } from '@/types/material'
+import type {
+  SceneMaterialTextureSlot,
+  SceneMaterialTextureRef,
+  SceneNodeMaterial,
+  SceneMaterialType,
+  SceneTextureWrapMode,
+  SceneMaterialTextureSettings,
+} from '@/types/material'
+import { MATERIAL_CLASS_NAMES, normalizeSceneMaterialType, createTextureSettings, textureSettingsSignature } from '@/types/material'
 import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
@@ -98,6 +105,13 @@ const textureLoader = new THREE.TextureLoader()
 const textureCache = new Map<string, THREE.Texture>()
 const pendingTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
 const TEXTURE_SLOT_STATE_KEY = '__harmonyTextureSlots'
+const TEXTURE_SLOT_OVERRIDES_KEY = '__harmonyTextureOverrides'
+const DEFAULT_TEXTURE_SETTINGS_SIGNATURE = textureSettingsSignature()
+const WRAP_MODE_MAP: Record<SceneTextureWrapMode, THREE.Wrapping> = {
+  ClampToEdgeWrapping: THREE.ClampToEdgeWrapping,
+  RepeatWrapping: THREE.RepeatWrapping,
+  MirroredRepeatWrapping: THREE.MirroredRepeatWrapping,
+}
 type MeshStandardTextureKey = 'map' | 'normalMap' | 'metalnessMap' | 'roughnessMap' | 'aoMap' | 'emissiveMap'
 const MATERIAL_TEXTURE_ASSIGNMENTS: Record<SceneMaterialTextureSlot, { key: MeshStandardTextureKey; colorSpace?: THREE.ColorSpace }> = {
   albedo: { key: 'map', colorSpace: THREE.SRGBColorSpace },
@@ -1549,7 +1563,16 @@ function disposeObjectResources(object: THREE.Object3D) {
       }
       const materials = Array.isArray(meshChild.material) ? meshChild.material : [meshChild.material]
       for (const material of materials) {
-        material?.dispose()
+        if (!material) {
+          continue
+        }
+        const overrides = material.userData?.[TEXTURE_SLOT_OVERRIDES_KEY] as Record<SceneMaterialTextureSlot, THREE.Texture | null> | undefined
+        if (overrides) {
+          (Object.keys(MATERIAL_TEXTURE_ASSIGNMENTS) as SceneMaterialTextureSlot[]).forEach((slot) => {
+            disposeOverrideTexture(overrides, slot)
+          })
+        }
+        material.dispose()
       }
     }
   })
@@ -5521,6 +5544,38 @@ function disposeCachedTextures() {
   pendingTextureRequests.clear()
 }
 
+function applyTextureSettingsToInstance(texture: THREE.Texture, settings?: SceneMaterialTextureSettings | null) {
+  const resolved = createTextureSettings(settings ?? null)
+  texture.wrapS = WRAP_MODE_MAP[resolved.wrapS]
+  texture.wrapT = WRAP_MODE_MAP[resolved.wrapT]
+  if ('wrapR' in texture) {
+    (texture as THREE.Texture & { wrapR: THREE.Wrapping }).wrapR = WRAP_MODE_MAP[resolved.wrapR]
+  }
+  texture.offset.set(resolved.offset.x, resolved.offset.y)
+  texture.repeat.set(resolved.repeat.x, resolved.repeat.y)
+  texture.center.set(resolved.center.x, resolved.center.y)
+  texture.rotation = resolved.rotation
+  texture.matrixAutoUpdate = resolved.matrixAutoUpdate
+  if (!texture.matrixAutoUpdate) {
+    texture.updateMatrix()
+  }
+  texture.generateMipmaps = resolved.generateMipmaps
+  texture.premultiplyAlpha = resolved.premultiplyAlpha
+  texture.flipY = resolved.flipY
+  texture.needsUpdate = true
+}
+
+function disposeOverrideTexture(
+  overrides: Record<SceneMaterialTextureSlot, THREE.Texture | null>,
+  slot: SceneMaterialTextureSlot,
+) {
+  const texture = overrides[slot]
+  if (texture) {
+    texture.dispose?.()
+    overrides[slot] = null
+  }
+}
+
 async function ensureMaterialTexture(ref: SceneMaterialTextureRef): Promise<THREE.Texture | null> {
   const cacheKey = ref.assetId
   if (!cacheKey) {
@@ -5605,8 +5660,11 @@ function assignTextureToMaterial(
   const typed = material as THREE.MeshStandardMaterial & Record<MeshStandardTextureKey, THREE.Texture | null>
   const userData = material.userData ?? (material.userData = {})
   const slotState = (userData[TEXTURE_SLOT_STATE_KEY] ??= {} as Record<SceneMaterialTextureSlot, string | null>)
+  const overrideState = (userData[TEXTURE_SLOT_OVERRIDES_KEY] ??=
+    {} as Record<SceneMaterialTextureSlot, THREE.Texture | null>)
 
   if (!ref) {
+    disposeOverrideTexture(overrideState, slot)
     slotState[slot] = null
     if (assignment.key in typed && typed[assignment.key] !== null) {
       typed[assignment.key] = null
@@ -5615,22 +5673,47 @@ function assignTextureToMaterial(
     return
   }
 
-  slotState[slot] = ref.assetId
+  const settingsSignature = textureSettingsSignature(ref.settings)
+  const stateKey = `${ref.assetId}|${settingsSignature}`
+  const needsClone = settingsSignature !== DEFAULT_TEXTURE_SETTINGS_SIGNATURE
+
+  if (slotState[slot] === stateKey) {
+    const current = typed[assignment.key] ?? null
+    if (needsClone) {
+      if (current && overrideState[slot] && current === overrideState[slot]) {
+        return
+      }
+    } else if (current && !overrideState[slot]) {
+      return
+    }
+  }
+
+  slotState[slot] = stateKey
+
   void ensureMaterialTexture(ref).then((texture) => {
     if (!texture) {
       return
     }
-    if (slotState[slot] !== ref.assetId) {
+    if (slotState[slot] !== stateKey) {
       return
     }
     if (!(assignment.key in typed)) {
       return
     }
-    if (assignment.colorSpace) {
-      texture.colorSpace = assignment.colorSpace
-      texture.needsUpdate = true
+    disposeOverrideTexture(overrideState, slot)
+    let instance = texture
+    if (needsClone) {
+      instance = texture.clone()
+      applyTextureSettingsToInstance(instance, ref.settings)
+      overrideState[slot] = instance
+    } else {
+      overrideState[slot] = null
     }
-    typed[assignment.key] = texture
+    if (assignment.colorSpace) {
+      instance.colorSpace = assignment.colorSpace
+      instance.needsUpdate = true
+    }
+    typed[assignment.key] = instance
     material.needsUpdate = true
   })
 }
@@ -5795,9 +5878,15 @@ function restoreMaterialFromBaseline(material: THREE.Material) {
   }
 
   const slotState = typed.userData?.[TEXTURE_SLOT_STATE_KEY] as Record<SceneMaterialTextureSlot, string | null> | undefined
+  const overrideState = typed.userData?.[TEXTURE_SLOT_OVERRIDES_KEY] as Record<SceneMaterialTextureSlot, THREE.Texture | null> | undefined
   if (slotState) {
     (Object.keys(MATERIAL_TEXTURE_ASSIGNMENTS) as SceneMaterialTextureSlot[]).forEach((slot) => {
       slotState[slot] = null
+    })
+  }
+  if (overrideState) {
+    (Object.keys(MATERIAL_TEXTURE_ASSIGNMENTS) as SceneMaterialTextureSlot[]).forEach((slot) => {
+      disposeOverrideTexture(overrideState, slot)
     })
   }
   typed.needsUpdate = true

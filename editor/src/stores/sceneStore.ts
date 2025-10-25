@@ -47,6 +47,7 @@ import type {
   SceneMaterialType,
   SceneNodeMaterial,
 } from '@/types/material'
+import { cloneTextureSettings } from '@/types/material'
 import { DEFAULT_SCENE_MATERIAL_ID, DEFAULT_SCENE_MATERIAL_TYPE, normalizeSceneMaterialType } from '@/types/material'
 
 import {
@@ -158,6 +159,17 @@ const DEFAULT_MATERIAL_PROPS: SceneMaterialProps = {
 
 const DEFAULT_MATERIAL_TYPE: SceneMaterialType = DEFAULT_SCENE_MATERIAL_TYPE
 
+function cloneTextureRef(ref?: SceneMaterialTextureRef | null): SceneMaterialTextureRef | null {
+  if (!ref) {
+    return null
+  }
+  return {
+    assetId: ref.assetId,
+    name: ref.name,
+    settings: ref.settings ? cloneTextureSettings(ref.settings) : undefined,
+  }
+}
+
 function nodeSupportsMaterials(node: SceneNode | null | undefined): boolean {
   if (!node) {
     return false
@@ -170,7 +182,7 @@ function createEmptyTextureMap(input?: MaterialTextureMap | null): MaterialTextu
   const map: MaterialTextureMap = {}
   MATERIAL_TEXTURE_SLOTS.forEach((slot) => {
     const value = input?.[slot] ?? null
-    map[slot] = value ? { assetId: value.assetId, name: value.name } : null
+    map[slot] = cloneTextureRef(value)
   })
   return map
 }
@@ -195,7 +207,7 @@ function mergeMaterialProps(base: SceneMaterialProps, overrides?: Partial<SceneM
     MATERIAL_TEXTURE_SLOTS.forEach((slot) => {
       if (slot in overrides.textures!) {
         const value = overrides.textures?.[slot] ?? null
-        next.textures![slot] = value ? { assetId: value.assetId, name: value.name } : null
+        next.textures![slot] = cloneTextureRef(value)
       }
     })
   }
@@ -373,7 +385,7 @@ function materialUpdateToProps(update: Partial<SceneNodeMaterial> | Partial<Scen
     MATERIAL_TEXTURE_SLOTS.forEach((slot) => {
       if (slot in update.textures!) {
         const value = update.textures?.[slot] ?? null
-        result.textures![slot] = value ? { assetId: value.assetId, name: value.name } : null
+        result.textures![slot] = cloneTextureRef(value)
       }
     })
   }
