@@ -1,0 +1,30 @@
+<view class="container">
+  <view class="controls">
+    <button class="control-button" type="primary" bindtap="handleChooseFile">导入本地文件</button>
+    <view class="url-loader">
+      <input class="url-input" placeholder="输入场景 JSON URL" confirm-type="done" bindinput="handleUrlInput" value="{{loadUrl}}" />
+      <button size="mini" bindtap="handleLoadFromUrl">加载</button>
+    </view>
+    <button class="control-button" size="mini" bindtap="handleResetCamera">重置视角</button>
+  </view>
+  <view class="body">
+    <scroll-view class="scene-list" scroll-y="true">
+      <block wx:if="{{!sceneList.length}}">
+        <view class="empty-hint">尚未加载任何场景</view>
+      </block>
+      <block wx:for="{{sceneList}}" wx:key="id">
+        <view class="scene-item {{item.id === activeSceneId ? 'active' : ''}}" bindtap="handleSelectScene" data-id="{{item.id}}">
+          <view class="scene-name">{{item.name}}</view>
+          <view class="scene-meta">更新: {{item.updatedAt || '--'}}</view>
+        </view>
+      </block>
+    </scroll-view>
+    <view class="preview-area">
+      <canvas type="webgl" id="scene-canvas" disable-scroll="true"></canvas>
+      <view wx:if="{{loadingState.visible}}" class="loading-overlay">
+        <text class="loading-message">{{loadingState.message}}</text>
+        <progress percent="{{loadingState.percent}}" stroke-width="6" active active-mode="forwards" show-info="true"/>
+      </view>
+    </view>
+  </view>
+</view>

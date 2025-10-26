@@ -1,0 +1,11 @@
+{
+  "name": "miniprogram-npm",
+  "version": "0.0.0",
+  "private": true,
+  "bin": {
+    "miniprogram-npm": "./bin.js"
+  },
+  "dependencies": {
+    "miniprogram-compiler": "^0.2.3"
+  }
+}

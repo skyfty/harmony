@@ -1,0 +1,14 @@
+{
+  "pages": [
+    "pages/index/index"
+  ],
+  "window": {
+    "backgroundTextStyle": "light",
+    "navigationBarBackgroundColor": "#1f2933",
+    "navigationBarTitleText": "Harmony 场景预览",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#0f172a"
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}
