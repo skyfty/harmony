@@ -181,11 +181,7 @@ function handleAddComponent(type: string) {
       <GroundPanel v-if="isGroundNode" />
 
       <div v-if="nodeComponents.length" class="component-list">
-        <div
-          v-for="component in nodeComponents"
-          :key="component.id"
-          class="component-entry"
-        >
+        <div v-for="component in nodeComponents" :key="component.id" class="component-entry" >
           <WallPanel v-if="component.type === WALL_COMPONENT_TYPE" />
         </div>
       </div>
@@ -301,9 +297,6 @@ function handleAddComponent(type: string) {
 .component-list {
   
   width: 100%;
-}
-
-.component-entry {
 }
 
 .component-header {
