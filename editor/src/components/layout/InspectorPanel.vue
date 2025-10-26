@@ -48,28 +48,56 @@ const availableComponents = computed(() => {
     .listDefinitions()
     .filter((definition) => definition.canAttach(node) && !existingTypes.has(definition.type))
 })
-const expandedPanels = computed(() => {
-  let panels = ['transform', 'components', 'material']
+function computeDefaultExpandedPanels() {
   const node = selectedNode.value
-  if (node) {
-    if (node.dynamicMesh?.type === 'Ground') {
-      panels.push('ground')
-    } else if (node.nodeType === 'Light') {
-      panels.push('light')
-    }
-    for (const component of node.components ?? []) {
+  const panels: string[] = ['transform']
+
+  if (node?.dynamicMesh?.type === 'Ground') {
+    panels.push('ground')
+  } else if (node?.nodeType === 'Light') {
+    panels.push('light')
+  }
+
+  const hasComponents = (node?.components?.length ?? 0) > 0
+  if (hasComponents || !node) {
+    panels.push('components')
+  }
+
+  const shouldShowMaterial = !node?.nodeType || (node?.nodeType !== 'Light' && (node?.materials?.length ?? 0) > 0)
+  if (shouldShowMaterial) {
+    panels.push('material')
+  }
+
+  node?.components?.forEach((component) => {
+    if (component?.type) {
       panels.push(component.type)
     }
-  }
-  return panels;
+  })
 
-})
+  return Array.from(new Set(panels))
+}
+
+const expandedPanels = ref<string[]>(computeDefaultExpandedPanels())
 const inspectorIcon = computed(() =>
   getNodeIcon({
     nodeType: selectedNode.value?.nodeType ?? null,
     lightType: selectedNode.value?.light?.type ?? null,
     hasChildren: Boolean(selectedNode.value?.children?.length),
   }),
+)
+
+watch(
+  selectedNode,
+  (node) => {
+    if (!node) {
+      nodeName.value = ''
+      return
+    }
+    if (nodeName.value !== node.name) {
+      nodeName.value = node.name
+    }
+  },
+  { immediate: true },
 )
 
 function handleNameUpdate(value: string) {
@@ -124,6 +152,76 @@ defineExpose({
   getPanelRect,
   closeMaterialDetails,
 })
+
+watch(selectedNodeId, () => {
+  expandedPanels.value = computeDefaultExpandedPanels()
+}, { immediate: true })
+
+watch(
+  nodeComponents,
+  (components, previous) => {
+    const currentSet = new Set(expandedPanels.value)
+    let changed = false
+    const componentTypes = components.map((component) => component.type)
+    const previousTypes = (previous ?? []).map((component) => component.type)
+
+    componentTypes.forEach((type) => {
+      if (type && !currentSet.has(type)) {
+        currentSet.add(type)
+        changed = true
+      }
+    })
+
+    previousTypes.forEach((type) => {
+      if (!type) {
+        return
+      }
+      if (!componentTypes.includes(type) && currentSet.has(type)) {
+        currentSet.delete(type)
+        changed = true
+      }
+    })
+
+    const defaults = new Set(['transform'])
+    if ((components.length > 0) || !selectedNode.value) {
+      defaults.add('components')
+    }
+    if (selectedNode.value?.dynamicMesh?.type === 'Ground') {
+      defaults.add('ground')
+    } else if (selectedNode.value?.nodeType === 'Light') {
+      defaults.add('light')
+    }
+    const materialVisible = !isLightNode.value && (selectedNode.value?.materials?.length ?? 0) > 0
+    if (materialVisible) {
+      defaults.add('material')
+    }
+
+    defaults.forEach((key) => currentSet.add(key))
+
+    if (changed) {
+      expandedPanels.value = Array.from(currentSet)
+    }
+  },
+  { deep: true }
+)
+
+watch(showMaterialPanel, (visible) => {
+  const next = new Set(expandedPanels.value)
+  let changed = false
+  if (visible) {
+    if (!next.has('material')) {
+      next.add('material')
+      changed = true
+    }
+  } else if (next.has('material')) {
+    next.delete('material')
+    changed = true
+  }
+  if (changed) {
+    expandedPanels.value = Array.from(next)
+  }
+})
+
 
 function handleAddComponent(type: string) {
   if (!selectedNode.value) {

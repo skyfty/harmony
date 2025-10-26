@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { SceneNodeComponentState } from '@/types/node-component'
@@ -43,18 +43,24 @@ watch(
   { immediate: true, deep: true },
 )
 
-function handleToggleComponent(component: SceneNodeComponentState) {
-  if (!selectedNode.value) {
+function handleToggleComponent() {
+  const component = wallComponent.value
+  const nodeId = selectedNodeId.value
+
+  if (!component || !nodeId) {
     return
   }
-  sceneStore.toggleNodeComponentEnabled(selectedNode.value.id, component.id)
+
+  sceneStore.toggleNodeComponentEnabled(nodeId, component.id)
 }
 
-function handleRemoveComponent(component: SceneNodeComponentState) {
-  if (!selectedNode.value) {
+function handleRemoveComponent() {
+  const component = wallComponent.value
+  const nodeId = selectedNodeId.value
+    if (!component || !nodeId) {
     return
   }
-  sceneStore.removeNodeComponent(selectedNode.value.id, component.id)
+  sceneStore.removeNodeComponent(nodeId, component.id)
 }
 
 function clampDimension(value: number, fallback: number, min: number): number {
@@ -91,11 +97,44 @@ function applyDimensions() {
 <template>
   <v-expansion-panel value="wall">
     <v-expansion-panel-title>
-
-       <v-icon size="18" class="component-icon"  >
-            mdi-wall
-    </v-icon>
-      Wall Properties
+      <div class="wall-panel-header">
+        <span class="wall-panel-title">Wall Component</span>
+        <v-spacer />
+        <v-menu
+          v-if="wallComponent"
+          location="bottom end"
+          origin="auto"
+          transition="fade-transition"
+        >
+          <template #activator="{ props }">
+            <v-btn
+              v-bind="props"
+              icon
+              variant="text"
+              size="small"
+              class="component-menu-btn"
+              @click.stop
+            >
+              <v-icon size="18">mdi-dots-vertical</v-icon>
+            </v-btn>
+          </template>
+          <v-list density="compact">
+            <v-list-item
+              @click.stop="handleToggleComponent()"
+            >
+              <v-list-item-title>
+                {{ wallComponent.enabled ? 'Disable' : 'Enable' }}
+              </v-list-item-title>
+            </v-list-item>
+            <v-divider class="component-menu-divider" inset />
+            <v-list-item
+              @click.stop="handleRemoveComponent()"
+            >
+              <v-list-item-title>Remove</v-list-item-title>
+            </v-list-item>
+          </v-list>
+        </v-menu>
+      </div>
     </v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="wall-field-grid">
@@ -167,5 +206,25 @@ function applyDimensions() {
 .wall-panel-placeholder {
   color: rgba(233, 236, 241, 0.65);
   font-size: 0.85rem;
+}
+
+.wall-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+}
+
+.wall-panel-title {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.component-menu-btn {
+  color: rgba(233, 236, 241, 0.82);
+}
+
+.component-menu-divider {
+  margin-inline: 0.6rem;
 }
 </style>
