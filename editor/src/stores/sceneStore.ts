@@ -106,6 +106,10 @@ export interface SceneBundleExportPayload {
   scenes: StoredSceneDocument[]
 }
 
+export interface SceneBundleExportOptions {
+  embedResources: boolean
+}
+
 export interface SceneBundleImportScene {
   [key: string]: unknown
 }
@@ -2379,38 +2383,92 @@ function resolveEmbeddedAssetFilename(scene: StoredSceneDocument, assetId: strin
   return ensureExtension(filename, extension)
 }
 
-async function buildPackageAssetMapForExport(scene: StoredSceneDocument): Promise<Record<string, string>> {
-  const assetCache = useAssetCacheStore()
-  const baseMap = clonePackageAssetMap(scene.packageAssetMap)
-  const localAssetIds = Object.entries(scene.assetIndex)
-    .filter(([, entry]) => entry.source?.type === 'local')
-    .map(([assetId]) => assetId)
+async function buildPackageAssetMapForExport(
+  scene: StoredSceneDocument,
+  options: SceneBundleExportOptions,
+): Promise<Record<string, string>> {
+  const embedResources = options.embedResources ?? false
+  const baseMap = stripEmbeddedAssetEntries(clonePackageAssetMap(scene.packageAssetMap))
 
-  for (const assetId of localAssetIds) {
-    const key = `${LOCAL_EMBEDDED_ASSET_PREFIX}${assetId}`
-    if (baseMap[key]) {
-      continue
+  if (!embedResources) {
+    return baseMap
+  }
+
+  const assetCache = useAssetCacheStore()
+  const assetIdsToEmbed = new Set<string>()
+
+  Object.entries(scene.assetIndex).forEach(([assetId, entry]) => {
+    const sourceType = entry?.source?.type
+    if (!sourceType || sourceType === 'local') {
+      assetIdsToEmbed.add(assetId)
+      return
     }
-    let entry = assetCache.hasCache(assetId) ? assetCache.getEntry(assetId) : null
-    if (!entry || entry.status !== 'cached' || !entry.blob) {
-      entry = await assetCache.loadFromIndexedDb(assetId)
+    if (sourceType === 'package' && entry?.source?.providerId === 'preset') {
+      assetIdsToEmbed.add(assetId)
     }
-    if (!entry || entry.status !== 'cached' || !entry.blob) {
-      console.warn('缺少本地资源数据，无法导出', assetId)
-      continue
+  })
+
+  const normalizeUrl = (value: string | null | undefined): string | null => {
+    if (!value) {
+      return null
     }
-    try {
-      baseMap[key] = await blobToDataUrl(entry.blob)
-    } catch (error) {
-      console.warn('序列化本地资源失败', assetId, error)
-    }
+    const trimmed = value.trim()
+    return trimmed.length > 0 ? trimmed : null
+  }
+
+  const embedTasks: Promise<void>[] = []
+
+  assetIdsToEmbed.forEach((assetId) => {
+    embedTasks.push((async () => {
+      const asset = getAssetFromCatalog(scene.assetCatalog, assetId)
+      if (!asset) {
+        return
+      }
+
+      let cacheEntry = assetCache.hasCache(assetId) ? assetCache.getEntry(assetId) : null
+      if (!cacheEntry || cacheEntry.status !== 'cached' || !cacheEntry.blob) {
+        cacheEntry = await assetCache.loadFromIndexedDb(assetId)
+      }
+
+      if (!cacheEntry || cacheEntry.status !== 'cached' || !cacheEntry.blob) {
+        const downloadUrl = normalizeUrl(asset.downloadUrl) ?? normalizeUrl(asset.description)
+        if (!downloadUrl) {
+          console.warn('缺少资源数据，无法嵌入导出场景', assetId)
+          return
+        }
+        try {
+          cacheEntry = await assetCache.downloadAsset(assetId, downloadUrl, asset.name)
+        } catch (error) {
+          console.warn('下载资源数据失败，无法嵌入导出场景', assetId, error)
+          return
+        }
+      }
+
+      if (!cacheEntry || cacheEntry.status !== 'cached' || !cacheEntry.blob) {
+        console.warn('资源未缓存，无法嵌入导出场景', assetId)
+        return
+      }
+
+      try {
+        baseMap[`${LOCAL_EMBEDDED_ASSET_PREFIX}${assetId}`] = await blobToDataUrl(cacheEntry.blob)
+      } catch (error) {
+        console.warn('序列化资源失败，无法嵌入导出场景', assetId, error)
+      }
+    })())
+  })
+
+  if (embedTasks.length) {
+    await Promise.all(embedTasks)
   }
 
   return baseMap
 }
 
-async function cloneSceneDocumentForExport(scene: StoredSceneDocument): Promise<StoredSceneDocument> {
-  const packageAssetMap = await buildPackageAssetMapForExport(scene)
+async function cloneSceneDocumentForExport(
+  scene: StoredSceneDocument,
+  options: SceneBundleExportOptions,
+): Promise<StoredSceneDocument> {
+  const packageAssetMap = await buildPackageAssetMapForExport(scene, options)
   return createSceneDocument(scene.name, {
     id: scene.id,
     nodes: scene.nodes,
@@ -2665,6 +2723,16 @@ function cloneAssetIndex(index: Record<string, AssetIndexEntry>): Record<string,
 
 function clonePackageAssetMap(map: Record<string, string>): Record<string, string> {
   return { ...map }
+}
+
+function stripEmbeddedAssetEntries(map: Record<string, string>): Record<string, string> {
+  const result: Record<string, string> = {}
+  Object.entries(map).forEach(([key, value]) => {
+    if (!key.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)) {
+      result[key] = value
+    }
+  })
+  return result
 }
 
 function migrateScenePersistedState(
@@ -6513,7 +6581,10 @@ export const useSceneStore = defineStore('scene', {
       }
       return true
     },
-    async exportSceneBundle(sceneIds: string[]): Promise<SceneBundleExportPayload | null> {
+    async exportSceneBundle(
+      sceneIds: string[],
+      exportOptions: SceneBundleExportOptions = { embedResources: false },
+    ): Promise<SceneBundleExportPayload | null> {
       if (!Array.isArray(sceneIds) || !sceneIds.length) {
         return null
       }
@@ -6530,7 +6601,8 @@ export const useSceneStore = defineStore('scene', {
       if (!collected.length) {
         return null
       }
-      const scenes = await Promise.all(collected.map((scene) => cloneSceneDocumentForExport(scene)))
+      const options = exportOptions ?? { embedResources: false }
+      const scenes = await Promise.all(collected.map((scene) => cloneSceneDocumentForExport(scene, options)))
       return {
         formatVersion: SCENE_BUNDLE_FORMAT_VERSION,
         exportedAt: new Date().toISOString(),
