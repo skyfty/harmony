@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { SceneNodeComponentState } from '@/types/node-component'
+
 import {
   WALL_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
@@ -29,8 +30,6 @@ const wallComponent = computed(() => {
   return node.components.find((entry) => entry.type === WALL_COMPONENT_TYPE) as SceneNodeComponentState<WallComponentProps> | undefined
 })
 
-const hasWallComponent = computed(() => Boolean(selectedNodeId.value && wallComponent.value))
-
 watch(
   () => wallComponent.value?.props,
   (props) => {
@@ -43,6 +42,20 @@ watch(
   },
   { immediate: true, deep: true },
 )
+
+function handleToggleComponent(component: SceneNodeComponentState) {
+  if (!selectedNode.value) {
+    return
+  }
+  sceneStore.toggleNodeComponentEnabled(selectedNode.value.id, component.id)
+}
+
+function handleRemoveComponent(component: SceneNodeComponentState) {
+  if (!selectedNode.value) {
+    return
+  }
+  sceneStore.removeNodeComponent(selectedNode.value.id, component.id)
+}
 
 function clampDimension(value: number, fallback: number, min: number): number {
   if (!Number.isFinite(value) || value <= 0) {
@@ -78,10 +91,14 @@ function applyDimensions() {
 <template>
   <v-expansion-panel value="wall">
     <v-expansion-panel-title>
+
+       <v-icon size="18" class="component-icon"  >
+            mdi-wall
+    </v-icon>
       Wall Properties
     </v-expansion-panel-title>
     <v-expansion-panel-text>
-      <div v-if="hasWallComponent" class="wall-field-grid">
+      <div class="wall-field-grid">
         <v-text-field
           v-model.number="localHeight"
           label="Height (m)"
@@ -92,7 +109,7 @@ function applyDimensions() {
           step="0.1"
           min="0.5"
           @blur="applyDimensions"
-                inputmode="decimal"
+          inputmode="decimal"
           @keydown.enter.prevent="applyDimensions"
         />
         <v-text-field
@@ -101,11 +118,11 @@ function applyDimensions() {
           type="number"
           density="compact"
           variant="underlined"
+          class="slider-input"
           step="0.05"
           min="0.1"
-          class="slider-input"
           @blur="applyDimensions"
-                inputmode="decimal"
+          inputmode="decimal"
           @keydown.enter.prevent="applyDimensions"
         />
         <v-text-field
@@ -121,9 +138,6 @@ function applyDimensions() {
           @blur="applyDimensions"
           @keydown.enter.prevent="applyDimensions"
         />
-      </div>
-      <div v-else class="wall-panel-placeholder">
-        Wall component is not attached to this node.
       </div>
     </v-expansion-panel-text>
   </v-expansion-panel>

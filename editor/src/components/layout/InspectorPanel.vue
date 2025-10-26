@@ -1,15 +1,18 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import InspectorMaterialPanel from '@/components/inspector/MaterialPanel.vue'
-import InspectorLightPanel from '@/components/inspector/LightPanel.vue'
-import InspectorTransformPanel from '@/components/inspector/TransformPanel.vue'
-import InspectorWallPanel from '@/components/inspector/WallPanel.vue'
+import MaterialPanel from '@/components/inspector/MaterialPanel.vue'
+import LightPanel from '@/components/inspector/LightPanel.vue'
+import TransformPanel from '@/components/inspector/TransformPanel.vue'
+import WallPanel from '@/components/inspector/WallPanel.vue'
 import GroundPanel from '@/components/inspector/GroundPanel.vue'
-import ComponentPanel from '@/components/inspector/ComponentPanel.vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 
+import {
+  WALL_COMPONENT_TYPE,
+  componentManager
+} from '@/runtime/components'
 const props = defineProps<{ floating?: boolean }>()
 
 const emit = defineEmits<{
@@ -23,7 +26,6 @@ const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
 const nodeName = ref('')
-const expandedPanels = ref<string[]>(['transform', 'components', 'material'])
 const materialDetailsTargetId = ref<string | null>(null)
 const panelCardRef = ref<HTMLElement | { $el: HTMLElement } | null>(null)
 const floating = computed(() => props.floating ?? false)
@@ -31,12 +33,37 @@ const placementIcon = computed(() => (floating.value ? 'mdi-dock-right' : 'mdi-a
 const placementTitle = computed(() => (floating.value ? '停靠到右侧' : '浮动显示'))
 
 const isLightNode = computed(() => selectedNode.value?.nodeType === 'Light')
-const isWallNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'Wall')
 const isGroundNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'Ground')
 const showMaterialPanel = computed(
   () => !isLightNode.value && (selectedNode.value?.materials?.length ?? 0) > 0,
 )
-const hasComponents = computed(() => (selectedNode.value?.components?.length ?? 0) > 0)
+const nodeComponents = computed(() => selectedNode.value?.components ?? [])
+const availableComponents = computed(() => {
+  const node = selectedNode.value
+  if (!node) {
+    return []
+  }
+  const existingTypes = new Set((node.components ?? []).map((entry) => entry.type))
+  return componentManager
+    .listDefinitions()
+    .filter((definition) => definition.canAttach(node) && !existingTypes.has(definition.type))
+})
+const expandedPanels = computed(() => {
+  let panels = ['transform', 'components', 'material']
+  const node = selectedNode.value
+  if (node) {
+    if (node.dynamicMesh?.type === 'Ground') {
+      panels.push('ground')
+    } else if (node.nodeType === 'Light') {
+      panels.push('light')
+    }
+    for (const component of node.components ?? []) {
+      panels.push(component.type)
+    }
+  }
+  return panels;
+
+})
 const inspectorIcon = computed(() =>
   getNodeIcon({
     nodeType: selectedNode.value?.nodeType ?? null,
@@ -44,27 +71,6 @@ const inspectorIcon = computed(() =>
     hasChildren: Boolean(selectedNode.value?.children?.length),
   }),
 )
-
-watch(
-  selectedNode,
-  (node) => {
-    if (!node) return
-    nodeName.value = node.name
-    if (isGroundNode.value) {
-      expandedPanels.value = ['transform', 'ground']
-    } else if (isLightNode.value) {
-      expandedPanels.value = ['transform', 'light']
-    } else if (isWallNode.value) {
-      expandedPanels.value = ['transform', 'components', 'wall', 'material']
-    } else if (hasComponents.value) {
-      expandedPanels.value = ['transform', 'components', 'material']
-    } else {
-      expandedPanels.value = ['transform', 'material']
-    }
-  },
-  { immediate: true }
-)
-
 
 function handleNameUpdate(value: string) {
   if (!selectedNodeId.value) return
@@ -119,6 +125,13 @@ defineExpose({
   closeMaterialDetails,
 })
 
+function handleAddComponent(type: string) {
+  if (!selectedNode.value) {
+    return
+  }
+  sceneStore.addNodeComponent(selectedNode.value.id, type)
+}
+
 </script>
 
 <template>
@@ -158,16 +171,51 @@ defineExpose({
         variant="accordion"
         class="inspector-panels"
       >
-    <InspectorTransformPanel />
-    <GroundPanel v-if="isGroundNode" />
-  <ComponentPanel v-if="!isLightNode" />
-  <InspectorWallPanel v-if="isWallNode" />
-        <InspectorLightPanel v-if="isLightNode"/>
-        <InspectorMaterialPanel
-          v-else-if="showMaterialPanel"
-          v-model:active-node-material-id="materialDetailsTargetId"
-          @open-details="handleOpenMaterialDetails"
-        />
+      <TransformPanel />
+      <LightPanel v-if="isLightNode"/>
+      <MaterialPanel
+        v-else-if="showMaterialPanel"
+        v-model:active-node-material-id="materialDetailsTargetId"
+        @open-details="handleOpenMaterialDetails"
+      />
+      <GroundPanel v-if="isGroundNode" />
+
+      <div v-if="nodeComponents.length" class="component-list">
+        <div
+          v-for="component in nodeComponents"
+          :key="component.id"
+          class="component-entry"
+        >
+          <WallPanel v-if="component.type === WALL_COMPONENT_TYPE" />
+        </div>
+      </div>
+
+      <div class="component-actions">
+        <v-menu location="top" origin="auto" transition="null">
+          <template #activator="{ props }">
+            <v-btn v-bind="props"
+                  size="small" prepend-icon="mdi-plus">
+              Add Component
+            </v-btn>
+          </template>
+          <v-list density="compact">
+            <v-list-item
+              v-for="definition in availableComponents"
+              :key="definition.type"
+              :value="definition.type"
+              @click="handleAddComponent(definition.type)"
+            >
+              <template #prepend>
+                <v-icon size="18">{{ definition.icon ?? 'mdi-puzzle' }}</v-icon>
+              </template>
+              <v-list-item-title>{{ definition.label }}</v-list-item-title>
+              <v-list-item-subtitle v-if="definition.description">
+                {{ definition.description }}
+              </v-list-item-subtitle>
+            </v-list-item>
+          </v-list>
+        </v-menu>
+      </div>
       </v-expansion-panels>
     </div>
     <div v-else class="placeholder-text">
@@ -248,6 +296,60 @@ defineExpose({
   flex-direction: column;
   gap: 0.2rem;
   padding: 8px 10px 16px;
+}
+
+.component-list {
+  
+  width: 100%;
+}
+
+.component-entry {
+}
+
+.component-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.component-icon {
+  color: #8ab4f8;
+}
+
+.component-name {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.component-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.component-fields {
+  display: grid;
+  gap: 0.4rem;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.component-actions {
+  margin-top: 1rem;
+  margin-bottom: 1rem;
+  display: flex;
+  justify-content: flex-start;
+}
+
+.component-empty {
+  color: rgba(233, 236, 241, 0.7);
+  font-size: 0.85rem;
+  padding: 0.4rem 0;
+}
+
+.component-placeholder {
+  color: rgba(233, 236, 241, 0.6);
+  font-style: italic;
+  font-size: 0.85rem;
 }
 
 
