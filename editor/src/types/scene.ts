@@ -2,6 +2,7 @@ import type { GeometryType } from '@/plugins/geometry'
 import type { SceneDynamicMesh } from '@/types/dynamic-mesh'
 import type { SceneNodeMaterial } from '@/types/material'
 import type { LightNodeProperties } from '@/types/light'
+import type { SceneNodeComponentState } from '@/types/node-component'
 
 export type SceneNodeType = 'Mesh' | 'Light' | 'Group' | 'Camera' | GeometryType
 
@@ -30,6 +31,7 @@ export interface SceneNode {
   name: string
   nodeType: SceneNodeType
   materials?: SceneNodeMaterial[]
+  components?: SceneNodeComponentState<any>[]
   light?: LightNodeProperties
   camera?: CameraNodeProperties
   position: Vector3Like

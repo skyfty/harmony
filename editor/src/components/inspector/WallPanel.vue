@@ -1,56 +1,73 @@
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
+import type { SceneNodeComponentState } from '@/types/node-component'
+import {
+  WALL_COMPONENT_TYPE,
+  WALL_DEFAULT_HEIGHT,
+  WALL_DEFAULT_THICKNESS,
+  WALL_DEFAULT_WIDTH,
+  WALL_MIN_HEIGHT,
+  WALL_MIN_THICKNESS,
+  WALL_MIN_WIDTH,
+  type WallComponentProps,
+} from '@/runtime/components'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
-const localHeight = ref(3)
-const localWidth = ref(0.2)
-const localThickness = ref(0.2)
+const localHeight = ref<number>(WALL_DEFAULT_HEIGHT)
+const localWidth = ref<number>(WALL_DEFAULT_WIDTH)
+const localThickness = ref<number>(WALL_DEFAULT_THICKNESS)
 
-const hasWallNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'Wall' && !!selectedNodeId.value)
-
-function syncLocalInputs() {
-  if (!hasWallNode.value) {
-    return
+const wallComponent = computed(() => {
+  const node = selectedNode.value
+  if (!node?.components?.length) {
+    return undefined
   }
-  const definition = selectedNode.value?.dynamicMesh
-  if (!definition || definition.type !== 'Wall' || definition.segments.length === 0) {
-    return
-  }
-  const segment = definition.segments[0]
-  localHeight.value = segment?.height ?? localHeight.value
-  localWidth.value = segment?.width ?? localWidth.value
-  localThickness.value = segment?.thickness ?? localThickness.value
-}
+  return node.components.find((entry) => entry.type === WALL_COMPONENT_TYPE) as SceneNodeComponentState<WallComponentProps> | undefined
+})
 
-watch(selectedNode, () => {
-  syncLocalInputs()
-}, { immediate: true })
+const hasWallComponent = computed(() => Boolean(selectedNodeId.value && wallComponent.value))
 
-function clampDimension(value: number, fallback: number): number {
+watch(
+  () => wallComponent.value?.props,
+  (props) => {
+    if (!props) {
+      return
+    }
+    localHeight.value = props.height
+    localWidth.value = props.width
+    localThickness.value = props.thickness
+  },
+  { immediate: true, deep: true },
+)
+
+function clampDimension(value: number, fallback: number, min: number): number {
   if (!Number.isFinite(value) || value <= 0) {
     return fallback
   }
-  return Math.max(0.05, value)
+  return Math.max(min, value)
 }
 
 function applyDimensions() {
-  if (!hasWallNode.value || !selectedNodeId.value) {
+  const component = wallComponent.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId) {
     return
   }
 
-  const nextHeight = clampDimension(Number(localHeight.value), 3)
-  const nextWidth = clampDimension(Number(localWidth.value), 0.2)
-  const nextThickness = clampDimension(Number(localThickness.value), 0.2)
+  const props = component.props as WallComponentProps
+  const nextHeight = clampDimension(Number(localHeight.value), props.height ?? WALL_DEFAULT_HEIGHT, WALL_MIN_HEIGHT)
+  const nextWidth = clampDimension(Number(localWidth.value), props.width ?? WALL_DEFAULT_WIDTH, WALL_MIN_WIDTH)
+  const nextThickness = clampDimension(Number(localThickness.value), props.thickness ?? WALL_DEFAULT_THICKNESS, WALL_MIN_THICKNESS)
 
   localHeight.value = nextHeight
   localWidth.value = nextWidth
   localThickness.value = nextThickness
 
-  sceneStore.setWallNodeDimensions(selectedNodeId.value, {
+  sceneStore.updateNodeComponentProps(nodeId, component.id, {
     height: nextHeight,
     width: nextWidth,
     thickness: nextThickness,
@@ -64,7 +81,7 @@ function applyDimensions() {
       Wall Properties
     </v-expansion-panel-title>
     <v-expansion-panel-text>
-      <div class="wall-field-grid">
+      <div v-if="hasWallComponent" class="wall-field-grid">
         <v-text-field
           v-model.number="localHeight"
           label="Height (m)"
@@ -105,6 +122,9 @@ function applyDimensions() {
           @keydown.enter.prevent="applyDimensions"
         />
       </div>
+      <div v-else class="wall-panel-placeholder">
+        Wall component is not attached to this node.
+      </div>
     </v-expansion-panel-text>
   </v-expansion-panel>
 </template>
@@ -128,5 +148,10 @@ function applyDimensions() {
 .slider-input :deep(.v-field-label) {
   font-size: 0.82rem;
   font-weight: 600;
+}
+
+.wall-panel-placeholder {
+  color: rgba(233, 236, 241, 0.65);
+  font-size: 0.85rem;
 }
 </style>

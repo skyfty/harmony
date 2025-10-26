@@ -6,6 +6,7 @@ import InspectorLightPanel from '@/components/inspector/LightPanel.vue'
 import InspectorTransformPanel from '@/components/inspector/TransformPanel.vue'
 import InspectorWallPanel from '@/components/inspector/WallPanel.vue'
 import GroundPanel from '@/components/inspector/GroundPanel.vue'
+import ComponentPanel from '@/components/inspector/ComponentPanel.vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 
@@ -22,7 +23,7 @@ const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
 const nodeName = ref('')
-const expandedPanels = ref<string[]>(['transform', 'material'])
+const expandedPanels = ref<string[]>(['transform', 'components', 'material'])
 const materialDetailsTargetId = ref<string | null>(null)
 const panelCardRef = ref<HTMLElement | { $el: HTMLElement } | null>(null)
 const floating = computed(() => props.floating ?? false)
@@ -35,6 +36,7 @@ const isGroundNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'G
 const showMaterialPanel = computed(
   () => !isLightNode.value && (selectedNode.value?.materials?.length ?? 0) > 0,
 )
+const hasComponents = computed(() => (selectedNode.value?.components?.length ?? 0) > 0)
 const inspectorIcon = computed(() =>
   getNodeIcon({
     nodeType: selectedNode.value?.nodeType ?? null,
@@ -53,7 +55,9 @@ watch(
     } else if (isLightNode.value) {
       expandedPanels.value = ['transform', 'light']
     } else if (isWallNode.value) {
-      expandedPanels.value = ['transform', 'wall', 'material']
+      expandedPanels.value = ['transform', 'components', 'wall', 'material']
+    } else if (hasComponents.value) {
+      expandedPanels.value = ['transform', 'components', 'material']
     } else {
       expandedPanels.value = ['transform', 'material']
     }
@@ -156,7 +160,8 @@ defineExpose({
       >
     <InspectorTransformPanel />
     <GroundPanel v-if="isGroundNode" />
-    <InspectorWallPanel v-if="isWallNode" />
+  <ComponentPanel v-if="!isLightNode" />
+  <InspectorWallPanel v-if="isWallNode" />
         <InspectorLightPanel v-if="isLightNode"/>
         <InspectorMaterialPanel
           v-else-if="showMaterialPanel"

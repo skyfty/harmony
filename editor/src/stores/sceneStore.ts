@@ -76,6 +76,21 @@ import {
   ASSETS_ROOT_DIRECTORY_ID,
   PACKAGES_ROOT_DIRECTORY_ID,
 } from './assetCatalog'
+import type { NodeComponentType, SceneNodeComponentState } from '@/types/node-component'
+import type { WallComponentProps } from '@/runtime/components'
+import {
+  WALL_COMPONENT_TYPE,
+  WALL_DEFAULT_HEIGHT,
+  WALL_DEFAULT_THICKNESS,
+  WALL_DEFAULT_WIDTH,
+  WALL_MIN_HEIGHT,
+  WALL_MIN_THICKNESS,
+  WALL_MIN_WIDTH,
+  clampWallProps,
+  cloneWallComponentProps,
+  componentManager,
+  resolveWallComponentPropsFromMesh,
+} from '@/runtime/components'
 
 export { ASSETS_ROOT_DIRECTORY_ID, buildPackageDirectoryId, extractProviderIdFromPackageDirectoryId } from './assetCatalog'
 
@@ -109,12 +124,12 @@ const HISTORY_LIMIT = 50
 
 const LOCAL_EMBEDDED_ASSET_PREFIX = 'local::'
 
-const DEFAULT_WALL_HEIGHT = 3
-const DEFAULT_WALL_WIDTH = 0.2
-const DEFAULT_WALL_THICKNESS = 0.2
-const MIN_WALL_HEIGHT = 0.5
-const MIN_WALL_WIDTH = 0.1
-const MIN_WALL_THICKNESS = 0.05
+const DEFAULT_WALL_HEIGHT = WALL_DEFAULT_HEIGHT
+const DEFAULT_WALL_WIDTH = WALL_DEFAULT_WIDTH
+const DEFAULT_WALL_THICKNESS = WALL_DEFAULT_THICKNESS
+const MIN_WALL_HEIGHT = WALL_MIN_HEIGHT
+const MIN_WALL_WIDTH = WALL_MIN_WIDTH
+const MIN_WALL_THICKNESS = WALL_MIN_THICKNESS
 
 const GRID_CELL_SIZE = 1
 const CAMERA_NEAR = 0.1
@@ -130,6 +145,7 @@ const MAX_GROUND_EXTENT = 20000
 const DEFAULT_GROUND_CELL_SIZE = GRID_CELL_SIZE
 const SEMI_TRANSPARENT_OPACITY = 0.35
 const HEIGHT_EPSILON = 1e-5
+const WALL_DIMENSION_EPSILON = 1e-4
 
 declare module '@/types/scene-state' {
   interface SceneState {
@@ -189,6 +205,56 @@ function createEmptyTextureMap(input?: MaterialTextureMap | null): MaterialTextu
 
 function cloneTextureMap(input?: MaterialTextureMap | null): MaterialTextureMap {
   return createEmptyTextureMap(input)
+}
+
+function cloneComponentProps<T>(props: T): T {
+  if (props === null || props === undefined) {
+    return props
+  }
+  try {
+    return structuredClone(props)
+  } catch (_error) {
+    return JSON.parse(JSON.stringify(props)) as T
+  }
+}
+
+function cloneComponentState(state: SceneNodeComponentState<any>): SceneNodeComponentState<any> {
+  return {
+    id: `${state.id ?? ''}`,
+    type: state.type,
+    enabled: state.enabled ?? true,
+    props: cloneComponentProps(state.props),
+    metadata: state.metadata ? { ...state.metadata } : undefined,
+  }
+}
+
+function normalizeNodeComponentStates(node: SceneNode, states?: SceneNodeComponentState<any>[]): SceneNodeComponentState<any>[] | undefined {
+  const cloned: SceneNodeComponentState<any>[] = Array.isArray(states) ? states.map((state) => cloneComponentState(state)) : []
+
+  if (node.dynamicMesh?.type === 'Wall') {
+    const existing = cloned.find((entry) => entry.type === WALL_COMPONENT_TYPE)
+    const baseProps = resolveWallComponentPropsFromMesh(node.dynamicMesh as WallDynamicMesh)
+    if (existing) {
+      existing.id = existing.id || generateUuid()
+      existing.enabled = existing.enabled ?? true
+      existing.props = cloneWallComponentProps(
+        clampWallProps({
+          height: (existing.props as { height?: number })?.height ?? baseProps.height,
+          width: (existing.props as { width?: number })?.width ?? baseProps.width,
+          thickness: (existing.props as { thickness?: number })?.thickness ?? baseProps.thickness,
+        }),
+      )
+    } else {
+      cloned.push({
+        id: generateUuid(),
+        type: WALL_COMPONENT_TYPE,
+        enabled: true,
+        props: cloneWallComponentProps(baseProps),
+      })
+    }
+  }
+
+  return cloned.length ? cloned : undefined
 }
 
 function mergeMaterialProps(base: SceneMaterialProps, overrides?: Partial<SceneMaterialProps> | null): SceneMaterialProps {
@@ -551,6 +617,47 @@ function buildWallDynamicMeshFromWorldSegments(
   }
 
   return { center, definition }
+}
+
+function applyWallComponentPropsToNode(node: SceneNode, props: WallComponentProps): boolean {
+  if (node.dynamicMesh?.type !== 'Wall' || !node.dynamicMesh.segments.length) {
+    return false
+  }
+
+  const normalized = clampWallProps(props)
+  let changed = false
+  const nextSegments = node.dynamicMesh.segments.map((segment) => {
+    const next = {
+      ...segment,
+      height: normalized.height,
+      width: normalized.width,
+      thickness: normalized.thickness,
+    }
+    if (
+      segment.height !== next.height ||
+      segment.width !== next.width ||
+      segment.thickness !== next.thickness
+    ) {
+      changed = true
+    }
+    return next
+  })
+
+  if (!changed) {
+    return false
+  }
+
+  node.dynamicMesh = {
+    type: 'Wall',
+    segments: nextSegments,
+  }
+
+  const runtime = getRuntimeObject(node.id)
+  if (runtime) {
+    updateWallGroup(runtime, node.dynamicMesh)
+  }
+
+  return true
 }
 
 function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh | undefined {
@@ -1386,6 +1493,9 @@ async function convertObjectToSceneNode(
 
     tagObjectWithNodeId(runtimeObject, node.id)
     registerRuntimeObject(node.id, runtimeObject)
+    node.components = normalizeNodeComponentStates(node, node.components)
+    componentManager.attachRuntime(node, runtimeObject)
+    componentManager.syncNode(node)
     context.converted.add(object)
     return node
   }
@@ -1585,6 +1695,7 @@ function registerRuntimeObject(id: string, object: Object3D) {
 
 function unregisterRuntimeObject(id: string) {
   runtimeObjectRegistry.delete(id)
+  componentManager.detachRuntime(id)
 }
 
 export function getRuntimeObject(id: string): Object3D | null {
@@ -1698,7 +1809,10 @@ function duplicateNodeTree(original: SceneNode, context: DuplicateContext): Scen
     const clonedObject = runtimeObject.clone(true)
     tagObjectWithNodeId(clonedObject, duplicated.id)
     registerRuntimeObject(duplicated.id, clonedObject)
+    componentManager.attachRuntime(duplicated, clonedObject)
   }
+
+  componentManager.syncNode(duplicated)
 
   return duplicated
 }
@@ -2093,6 +2207,7 @@ function cloneNode(node: SceneNode): SceneNode {
     ...node,
     nodeType,
     materials,
+    components: normalizeNodeComponentStates(node, node.components),
     light: node.light
       ? {
           ...node.light,
@@ -2842,6 +2957,7 @@ function applyCurrentSceneMeta(store: SceneState, document: StoredSceneDocument)
 }
 
 function releaseRuntimeTree(node: SceneNode) {
+  componentManager.removeNode(node.id)
   unregisterRuntimeObject(node.id)
   node.children?.forEach(releaseRuntimeTree)
 }
@@ -3024,6 +3140,9 @@ export const useSceneStore = defineStore('scene', {
     const assetIndex = cloneAssetIndex(initialSceneDocument.assetIndex)
     const packageDirectoryCache: Record<string, ProjectDirectory[]> = {}
     const viewportSettings = cloneViewportSettings(initialSceneDocument.viewportSettings)
+    const clonedNodes = cloneSceneNodes(initialSceneDocument.nodes)
+    componentManager.reset()
+    componentManager.syncScene(clonedNodes)
     return {
       currentSceneId: initialSceneDocument.id,
       currentSceneMeta: {
@@ -3032,7 +3151,7 @@ export const useSceneStore = defineStore('scene', {
         createdAt: initialSceneDocument.createdAt,
         updatedAt: initialSceneDocument.updatedAt,
       },
-      nodes: cloneSceneNodes(initialSceneDocument.nodes),
+      nodes: clonedNodes,
       materials: cloneSceneMaterials(initialSceneDocument.materials),
       selectedNodeId: initialSceneDocument.selectedNodeId,
       selectedNodeIds: cloneSelection(initialSceneDocument.selectedNodeIds),
@@ -3171,12 +3290,19 @@ export const useSceneStore = defineStore('scene', {
         this.groundSettings = cloneGroundSettings(snapshot.groundSettings)
         this.resourceProviderId = snapshot.resourceProviderId
 
+  componentManager.reset()
+  componentManager.syncScene(this.nodes)
+
         assetCache.recalculateUsage(this.nodes)
 
         snapshot.runtimeSnapshots.forEach((object, nodeId) => {
           const clonedObject = object.clone(true)
           tagObjectWithNodeId(clonedObject, nodeId)
           registerRuntimeObject(nodeId, clonedObject)
+          const node = findNodeById(this.nodes, nodeId)
+          if (node) {
+            componentManager.attachRuntime(node, clonedObject)
+          }
         })
 
         const nodeIds = flattenNodeIds(this.nodes)
@@ -4408,6 +4534,8 @@ export const useSceneStore = defineStore('scene', {
             prepareRuntimeObjectForNode(runtimeObject)
             tagObjectWithNodeId(runtimeObject, node.id)
             registerRuntimeObject(node.id, runtimeObject)
+            componentManager.attachRuntime(node, runtimeObject)
+            componentManager.syncNode(node)
           })
         } catch (error) {
           const message = (error as Error).message ?? 'Unknown error'
@@ -5086,6 +5214,8 @@ export const useSceneStore = defineStore('scene', {
         const object = shouldCacheModelObject ? baseObject.clone(true) : baseObject
         tagObjectWithNodeId(object, nodeId)
         registerRuntimeObject(nodeId, object)
+  componentManager.attachRuntime(target, object)
+  componentManager.syncNode(target)
         assetCache.registerUsage(asset.id)
         assetCache.touch(asset.id)
 
@@ -5289,6 +5419,7 @@ export const useSceneStore = defineStore('scene', {
 
       this.captureHistorySnapshot()
       this.nodes = [...this.nodes, ...nodes]
+  nodes.forEach((node) => componentManager.syncNode(node))
 
       const importedIds = collectNodeIdList(nodes)
       if (importedIds.length) {
@@ -5309,6 +5440,7 @@ export const useSceneStore = defineStore('scene', {
       scale?: Vector3Like
       sourceAssetId?: string
       dynamicMesh?: SceneDynamicMesh
+      components?: SceneNodeComponentState[]
     }) {
       this.captureHistorySnapshot()
       const id = generateUuid()
@@ -5337,8 +5469,12 @@ export const useSceneStore = defineStore('scene', {
         dynamicMesh: payload.dynamicMesh ? cloneDynamicMeshDefinition(payload.dynamicMesh) : undefined,
       }
 
+      node.components = normalizeNodeComponentStates(node, payload.components)
+
       registerRuntimeObject(id, payload.object)
       tagObjectWithNodeId(payload.object, id)
+      componentManager.attachRuntime(node, payload.object)
+      componentManager.syncNode(node)
       this.nodes = [node, ...this.nodes]
       this.setSelection([id])
       commitSceneSnapshot(this)
@@ -5461,51 +5597,263 @@ export const useSceneStore = defineStore('scene', {
       return true
     },
     setWallNodeDimensions(nodeId: string, dimensions: { height?: number; width?: number; thickness?: number }): boolean {
-  const node = findNodeById(this.nodes, nodeId)
-  if (!node || node.dynamicMesh?.type !== 'Wall') {
+      const node = findNodeById(this.nodes, nodeId)
+      if (!node || node.dynamicMesh?.type !== 'Wall') {
         return false
       }
 
-  const existing = node.dynamicMesh.segments[0]
-      const { height, width, thickness } = normalizeWallDimensions({
-        height: dimensions.height ?? existing?.height ?? DEFAULT_WALL_HEIGHT,
-        width: dimensions.width ?? existing?.width ?? DEFAULT_WALL_WIDTH,
-        thickness: dimensions.thickness ?? existing?.thickness ?? DEFAULT_WALL_THICKNESS,
-      })
-      let changed = false
-      const nextSegments = node.dynamicMesh.segments.map((segment) => {
-        const nextSegment = {
-          ...segment,
-          height,
-          width,
-          thickness,
-        }
-        if (
-          segment.height !== nextSegment.height ||
-          segment.width !== nextSegment.width ||
-          segment.thickness !== nextSegment.thickness
-        ) {
-          changed = true
-        }
-        return nextSegment
+      const current = resolveWallComponentPropsFromMesh(node.dynamicMesh)
+      const targetProps = clampWallProps({
+        height: dimensions.height ?? current.height,
+        width: dimensions.width ?? current.width,
+        thickness: dimensions.thickness ?? current.thickness,
       })
 
-      if (!changed) {
+      const wallComponent = node.components?.find((component) => component.type === WALL_COMPONENT_TYPE)
+      const componentProps = wallComponent ? (wallComponent.props as WallComponentProps) : current
+
+      const hasGeometryChange =
+        Math.abs(current.height - targetProps.height) > WALL_DIMENSION_EPSILON ||
+        Math.abs(current.width - targetProps.width) > WALL_DIMENSION_EPSILON ||
+        Math.abs(current.thickness - targetProps.thickness) > WALL_DIMENSION_EPSILON
+
+      const hasComponentChange =
+        Math.abs(componentProps.height - targetProps.height) > WALL_DIMENSION_EPSILON ||
+        Math.abs(componentProps.width - targetProps.width) > WALL_DIMENSION_EPSILON ||
+        Math.abs(componentProps.thickness - targetProps.thickness) > WALL_DIMENSION_EPSILON
+
+      if (!hasGeometryChange && !hasComponentChange) {
         return false
       }
 
       this.captureHistorySnapshot()
-      node.dynamicMesh = {
-        type: 'Wall',
-        segments: nextSegments,
-      }
-      this.nodes = [...this.nodes]
-      commitSceneSnapshot(this)
 
-      const runtime = getRuntimeObject(nodeId)
-      if (runtime) {
-        updateWallGroup(runtime, node.dynamicMesh)
+      visitNode(this.nodes, nodeId, (target) => {
+        applyWallComponentPropsToNode(target, targetProps)
+        let componentUpdated = false
+        const components = target.components ?? []
+        const wallIndex = components.findIndex((entry) => entry.type === WALL_COMPONENT_TYPE)
+        let nextComponents = components
+        if (wallIndex !== -1) {
+          const previousProps = components[wallIndex]!.props as WallComponentProps
+          if (
+            Math.abs(previousProps.height - targetProps.height) > WALL_DIMENSION_EPSILON ||
+            Math.abs(previousProps.width - targetProps.width) > WALL_DIMENSION_EPSILON ||
+            Math.abs(previousProps.thickness - targetProps.thickness) > WALL_DIMENSION_EPSILON
+          ) {
+            nextComponents = components.slice()
+            nextComponents[wallIndex] = {
+              ...nextComponents[wallIndex]!,
+              id: nextComponents[wallIndex]!.id || generateUuid(),
+              enabled: nextComponents[wallIndex]!.enabled ?? true,
+              props: cloneWallComponentProps(targetProps),
+            }
+            componentUpdated = true
+          }
+        } else {
+          nextComponents = [
+            ...components,
+            {
+              id: generateUuid(),
+              type: WALL_COMPONENT_TYPE,
+              enabled: true,
+              props: cloneWallComponentProps(targetProps),
+            },
+          ]
+          componentUpdated = true
+        }
+
+        if (componentUpdated) {
+          target.components = nextComponents
+        }
+      })
+
+      this.nodes = [...this.nodes]
+      const normalizedNode = findNodeById(this.nodes, nodeId)
+      if (normalizedNode) {
+        componentManager.syncNode(normalizedNode)
       }
+      commitSceneSnapshot(this)
+      return true
+    },
+    addNodeComponent(nodeId: string, type: NodeComponentType): SceneNodeComponentState | null {
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target) {
+        return null
+      }
+      const definition = componentManager.getDefinition(type)
+      if (!definition || !definition.canAttach(target)) {
+        return null
+      }
+      if (target.components?.some((entry) => entry.type === type)) {
+        return null
+      }
+
+      const props = definition.createDefaultProps(target)
+      const state: SceneNodeComponentState<any> = {
+        id: generateUuid(),
+        type,
+        enabled: true,
+        props,
+      }
+
+      this.captureHistorySnapshot()
+
+      visitNode(this.nodes, nodeId, (node) => {
+        const existing = node.components ?? []
+        node.components = [...existing, state]
+        if (type === WALL_COMPONENT_TYPE) {
+          applyWallComponentPropsToNode(node, props as unknown as WallComponentProps)
+        }
+      })
+
+      this.nodes = [...this.nodes]
+      const updatedNode = findNodeById(this.nodes, nodeId)
+      if (updatedNode) {
+        componentManager.syncNode(updatedNode)
+      }
+      commitSceneSnapshot(this)
+      return state
+    },
+    removeNodeComponent(nodeId: string, componentId: string): boolean {
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target?.components?.length) {
+        return false
+      }
+      if (!target.components.some((entry) => entry.id === componentId)) {
+        return false
+      }
+
+      this.captureHistorySnapshot()
+      visitNode(this.nodes, nodeId, (node) => {
+        if (!node.components?.length) {
+          return
+        }
+        const next = node.components.filter((entry) => entry.id !== componentId)
+        node.components = next.length ? next : undefined
+      })
+
+      this.nodes = [...this.nodes]
+      const updatedNode = findNodeById(this.nodes, nodeId)
+      if (updatedNode) {
+        componentManager.syncNode(updatedNode)
+      }
+      commitSceneSnapshot(this)
+      return true
+    },
+    setNodeComponentEnabled(nodeId: string, componentId: string, enabled: boolean): boolean {
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target?.components?.length) {
+        return false
+      }
+      const component = target.components.find((entry) => entry.id === componentId)
+      if (!component || (component.enabled ?? true) === enabled) {
+        return false
+      }
+
+      this.captureHistorySnapshot()
+      visitNode(this.nodes, nodeId, (node) => {
+        if (!node.components?.length) {
+          return
+        }
+        node.components = node.components.map((entry) => {
+          if (entry.id !== componentId) {
+            return entry
+          }
+          return {
+            ...entry,
+            enabled,
+          }
+        })
+      })
+
+      this.nodes = [...this.nodes]
+      const updatedNode = findNodeById(this.nodes, nodeId)
+      if (updatedNode) {
+        componentManager.syncNode(updatedNode)
+      }
+      commitSceneSnapshot(this)
+      return true
+    },
+    toggleNodeComponentEnabled(nodeId: string, componentId: string): boolean {
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target?.components?.length) {
+        return false
+      }
+      const component = target.components.find((entry) => entry.id === componentId)
+      if (!component) {
+        return false
+      }
+      return this.setNodeComponentEnabled(nodeId, componentId, !(component.enabled ?? true))
+    },
+  updateNodeComponentProps(nodeId: string, componentId: string, patch: Partial<Record<string, unknown>>): boolean {
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target?.components?.length) {
+        return false
+      }
+      const component = target.components.find((entry) => entry.id === componentId)
+      if (!component) {
+        return false
+      }
+
+      const definition = componentManager.getDefinition(component.type)
+      if (!definition) {
+        return false
+      }
+
+      let nextProps: Record<string, unknown> | WallComponentProps
+      if (component.type === WALL_COMPONENT_TYPE) {
+        const currentProps = component.props as WallComponentProps
+        const merged = clampWallProps({
+          height: (patch.height as number | undefined) ?? currentProps.height,
+          width: (patch.width as number | undefined) ?? currentProps.width,
+          thickness: (patch.thickness as number | undefined) ?? currentProps.thickness,
+        })
+        if (
+          Math.abs(currentProps.height - merged.height) <= WALL_DIMENSION_EPSILON &&
+          Math.abs(currentProps.width - merged.width) <= WALL_DIMENSION_EPSILON &&
+          Math.abs(currentProps.thickness - merged.thickness) <= WALL_DIMENSION_EPSILON
+        ) {
+          return false
+        }
+        nextProps = cloneWallComponentProps(merged)
+      } else {
+        const currentProps = component.props as Record<string, unknown>
+        const merged = { ...currentProps, ...patch }
+        const unchanged = JSON.stringify(currentProps) === JSON.stringify(merged)
+        if (unchanged) {
+          return false
+        }
+        nextProps = merged
+      }
+
+      this.captureHistorySnapshot()
+
+      visitNode(this.nodes, nodeId, (node) => {
+        if (!node.components?.length) {
+          return
+        }
+        node.components = node.components.map((entry) => {
+          if (entry.id !== componentId) {
+            return entry
+          }
+          return {
+            ...entry,
+            props: nextProps,
+          }
+        })
+
+        if (component.type === WALL_COMPONENT_TYPE) {
+          applyWallComponentPropsToNode(node, nextProps as WallComponentProps)
+        }
+      })
+
+      this.nodes = [...this.nodes]
+      const updatedNode = findNodeById(this.nodes, nodeId)
+      if (updatedNode) {
+        componentManager.syncNode(updatedNode)
+      }
+      commitSceneSnapshot(this)
       return true
     },
     hasRuntimeObject(id: string) {
@@ -6301,6 +6649,8 @@ export const useSceneStore = defineStore('scene', {
           })
         }
         useAssetCacheStore().recalculateUsage(this.nodes)
+        componentManager.reset()
+        componentManager.syncScene(this.nodes)
       } finally {
         this.isSceneReady = true
       }
