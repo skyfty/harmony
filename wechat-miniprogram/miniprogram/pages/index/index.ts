@@ -144,6 +144,8 @@ Page<PageData, Record<string, never>>({
   },
 
   handleChooseLocal() {
+    console.log("eeeeeeeeeeeeee")
+
     wx.chooseMessageFile({
       count: 1,
       type: 'file',
@@ -216,7 +218,7 @@ Page<PageData, Record<string, never>>({
     const firstKey = registerBundle(parsed, importedKey, 'imported')
     const options = buildOptionList()
     const entry = firstKey ? findEntryByKey(firstKey) : null
-
+    console.log("lskjdflsjdf")
     this.setData({
       sceneOptions: options,
       selectedSceneKey: entry?.key ?? this.data.selectedSceneKey,
