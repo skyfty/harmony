@@ -1390,6 +1390,7 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
   --floating-edge-gap: 18px;
   --floating-menu-offset: 68px;
+  --viewport-gizmo-clearance: 50px;
   --hierarchy-floating-height: clamp(360px, 52vh, 580px);
   --inspector-floating-height: clamp(460px, 52vh, 680px);
   --project-floating-height: clamp(170px, 38vh, 220px);
@@ -1423,7 +1424,7 @@ onBeforeUnmount(() => {
 }
 
 .hierarchy-floating {
-  top: calc(var(--floating-menu-offset) + var(--floating-edge-gap));
+  top: calc(var(--floating-menu-offset) + var(--floating-edge-gap) + var(--viewport-gizmo-clearance));
   left: var(--floating-edge-gap);
   bottom: calc(var(--project-floating-height) + (var(--floating-edge-gap) * 2));
   width: min(260px, 40vw);
@@ -1432,7 +1433,7 @@ onBeforeUnmount(() => {
 }
 
 .inspector-floating {
-  top: calc(var(--floating-menu-offset) + var(--floating-edge-gap));
+  top: calc(var(--floating-menu-offset) + var(--floating-edge-gap) + var(--viewport-gizmo-clearance));
   right: var(--floating-edge-gap);
   bottom: calc(var(--project-floating-height) + (var(--floating-edge-gap) * 2));
   width: min(300px, 40vw);
@@ -1461,7 +1462,7 @@ onBeforeUnmount(() => {
 
   .hierarchy-floating,
   .inspector-floating {
-    top: calc(var(--floating-menu-offset) + var(--floating-edge-gap));
+    top: calc(var(--floating-menu-offset) + var(--floating-edge-gap) + var(--viewport-gizmo-clearance));
     width: min(220px, 88vw);
   }
 

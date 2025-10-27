@@ -48,7 +48,7 @@ import type { GroundDynamicMesh, WallDynamicMesh } from '@/types/dynamic-mesh'
 import type { BuildTool } from '@/types/build-tool'
 import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache } from '@/plugins/groundMesh'
 import { createWallGroup, updateWallGroup } from '@/plugins/wallMesh'
-import { ViewportGizmo } from "three-viewport-gizmo";
+import { ViewportGizmo } from 'three-viewport-gizmo'
 
 
 const props = withDefaults(defineProps<{
@@ -81,6 +81,7 @@ const viewportEl = ref<HTMLDivElement | null>(null)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const surfaceRef = ref<HTMLDivElement | null>(null)
 const statsHostRef = ref<HTMLDivElement | null>(null)
+const gizmoContainerRef = ref<HTMLDivElement | null>(null)
 
 let renderer: THREE.WebGLRenderer | null = null
 let scene: THREE.Scene | null = null
@@ -220,6 +221,7 @@ const ALIGN_DELTA_EPSILON = 1e-6
 const CAMERA_RECENTER_DURATION_MS = 320
 const RIGHT_CLICK_ROTATION_STEP = THREE.MathUtils.degToRad(15)
 const GROUND_HEIGHT_STEP = 0.5
+const GIZMO_TOOLBAR_CLEARANCE = 50
 
 const cameraControlMode = computed<CameraControlMode>({
   get: () => sceneStore.viewportSettings.cameraControlMode,
@@ -524,8 +526,11 @@ function updateViewportToolbarPosition() {
   const toolbarHeight = toolbarEl?.offsetHeight ?? 0
 
   if (!panelEl) {
-    const defaultLeft = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.width - toolbarWidth - TOOLBAR_MIN_MARGIN)
-    viewportToolbarStyle.left = `${defaultLeft}px`
+    const maxLeftFallback = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.width - toolbarWidth - TOOLBAR_MIN_MARGIN)
+    const baseLeft = viewportRect.width - toolbarWidth - TOOLBAR_MIN_MARGIN
+    const candidateLeft = baseLeft - GIZMO_TOOLBAR_CLEARANCE
+    const computedLeft = clampToRange(candidateLeft, TOOLBAR_MIN_MARGIN, maxLeftFallback)
+    viewportToolbarStyle.left = `${computedLeft}px`
     const maxTopFallback = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.height - toolbarHeight - TOOLBAR_MIN_MARGIN)
     const fallbackTop = clampToRange(TOOLBAR_MIN_MARGIN, TOOLBAR_MIN_MARGIN, maxTopFallback)
     viewportToolbarStyle.top = `${fallbackTop}px`
@@ -584,12 +589,14 @@ function scheduleToolbarUpdate() {
         updateViewportToolbarPosition()
         refreshPanelObservers()
         updateGroundSelectionToolbarPosition()
+        gizmoControls?.update()
       })
     } else {
       updateTransformToolbarPosition()
       updateViewportToolbarPosition()
       refreshPanelObservers()
       updateGroundSelectionToolbarPosition()
+      gizmoControls?.update()
     }
   })
 }
@@ -597,7 +604,7 @@ function scheduleToolbarUpdate() {
 function handleViewportOverlayResize() {
   scheduleToolbarUpdate()
   updateGroundSelectionToolbarPosition()
-  gizmoControls.update();
+  gizmoControls?.update()
 }
 
 function resolveNodeIdFromObject(object: THREE.Object3D | null): string | null {
@@ -1909,6 +1916,10 @@ function activateCamera(newCamera: THREE.PerspectiveCamera | THREE.OrthographicC
   camera = newCamera
   activeCameraMode = mode
   bindControlsToCamera(newCamera)
+  if (gizmoControls) {
+    gizmoControls.camera = newCamera
+    gizmoControls.update()
+  }
 }
 
 function getViewportSize() {
@@ -1949,6 +1960,7 @@ function applyProjectionMode(mode: CameraProjectionMode) {
   clampCameraZoom()
   clampCameraAboveGround()
   updatePlaceholderOverlayPositions()
+  gizmoControls?.update()
 }
 
 function applyGridVisibility(visible: boolean) {
@@ -2310,6 +2322,7 @@ function applyCameraState(state: SceneCameraState | null | undefined) {
   orbitControls.update()
   clampCameraZoom()
   clampCameraAboveGround()
+  gizmoControls?.cameraUpdate()
   isApplyingCameraState = false
 }
 
@@ -2419,6 +2432,7 @@ function handleControlsChange() {
   if (!isSceneReady.value || isApplyingCameraState) return
   clampCameraZoom()
   clampCameraAboveGround()
+  gizmoControls?.cameraUpdate()
   const snapshot = buildCameraState()
   if (snapshot) {
     emit('updateCamera', snapshot)
@@ -2462,8 +2476,13 @@ function applyCameraControlMode(mode: CameraControlMode) {
   orbitControls.enabled = previousEnabled
   orbitControls.addEventListener('change', handleControlsChange)
   bindControlsToCamera(camera)
+  if (gizmoControls && orbitControls) {
+    gizmoControls.attachControls(orbitControls as OrbitControls)
+    gizmoControls.update()
+  }
   updateOrbitControlsEnabled()
   orbitControls.update()
+  gizmoControls?.cameraUpdate()
 
   clampCameraAboveGround()
 
@@ -2612,10 +2631,17 @@ function initScene() {
     applyProjectionMode(cameraProjectionMode.value)
   }
 
-  gizmoControls = new ViewportGizmo(camera, renderer, { placement: 'bottom-right' });
+  const gizmoContainer = gizmoContainerRef.value ?? viewportEl.value ?? undefined
+  gizmoControls = new ViewportGizmo(camera, renderer, {
+    placement: 'top-right',
+    container: gizmoContainer,
+    offset: { top: 0, right: 0, bottom: 0, left: 0 },
+    size: 112,
+  })
   if (orbitControls) {
-    gizmoControls.attachControls(orbitControls as OrbitControls);
+    gizmoControls.attachControls(orbitControls as OrbitControls)
   }
+  gizmoControls.update()
 
   canvasRef.value.addEventListener('pointerdown', handlePointerDown, { capture: true })
   canvasRef.value.addEventListener('contextmenu', handleViewportContextMenu)
@@ -2637,6 +2663,7 @@ function initScene() {
     if (orthographicCamera) {
       updateOrthographicFrustum(orthographicCamera, w, h)
     }
+    gizmoControls?.update()
   })
   resizeObserver.observe(viewportEl.value)
 
@@ -2854,8 +2881,9 @@ function animate() {
   if (sky) {
     sky.position.copy(camera.position)
   }
+  gizmoControls?.cameraUpdate()
   renderer.render(scene, camera)
-  gizmoControls.render();
+  gizmoControls?.render()
   stats?.end()
 }
 
@@ -2891,6 +2919,11 @@ function disposeScene() {
   }
   fallbackLightGroup = null
   fallbackDirectionalLight = null
+
+  if (gizmoControls) {
+    gizmoControls.dispose()
+    gizmoControls = null
+  }
 
   groundSelectionGroup.removeFromParent()
 
@@ -6454,7 +6487,8 @@ defineExpose<SceneViewportHandle>({
         @change-shadows-enabled="handleShadowsEnabledChange"
       />
     </div>
-  <div ref="statsHostRef" class="stats-host" v-show="props.showStats"></div>
+    <div ref="gizmoContainerRef" class="viewport-gizmo-container"></div>
+    <div ref="statsHostRef" class="stats-host" v-show="props.showStats"></div>
     <div
       ref="surfaceRef"
       class="viewport-surface"
@@ -6530,6 +6564,15 @@ defineExpose<SceneViewportHandle>({
   position: absolute;
   z-index: 5;
   pointer-events: none;
+}
+
+.viewport-gizmo-container {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 128px;
+  height: 128px;
+  z-index: 7;
 }
 
 .stats-host {
