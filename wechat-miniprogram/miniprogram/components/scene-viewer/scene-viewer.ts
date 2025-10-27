@@ -1,4 +1,4 @@
-import { createScopedThreejs } from 'threejs-miniprogram'
+import {createScopedThreejs} from 'threejs-miniprogram'
 import { buildSceneFromBundle, type SceneBuildResult } from '../../utils/scene-loader'
 import type { SceneBundle } from '../../utils/scene-types'
 

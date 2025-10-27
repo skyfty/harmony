@@ -5,10 +5,12 @@
   "description": "WeChat mini program for loading Harmony scene bundles exported from the editor.",
   "scripts": {
     "typecheck": "tsc --noEmit --project tsconfig.json",
-    "typecheck:watch": "tsc --noEmit --project tsconfig.json --watch"
+    "typecheck:watch": "tsc --noEmit --project tsconfig.json --watch",
+    "sync:npm": "node ./scripts/sync-threejs-npm.js",
+    "postinstall": "npm run sync:npm"
   },
   "dependencies": {
-    "threejs-miniprogram": "^1.0.4"
+    "threejs-miniprogram": "^0.0.8"
   },
   "devDependencies": {
     "@types/three": "^0.165.0",

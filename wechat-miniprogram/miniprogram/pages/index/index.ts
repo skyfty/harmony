@@ -1,5 +1,4 @@
-import demoRoomBundle from '../../assets/scenes/demo-room.json'
-import demoPlazaBundle from '../../assets/scenes/demo-plaza.json'
+
 import { parseSceneBundle } from '../../utils/scene-loader'
 import type { SceneBundle, StoredSceneDocument } from '../../utils/scene-types'
 
@@ -49,8 +48,7 @@ const pageState: {
 }
 
 const builtinSources: Array<{ sourceKey: string; bundle: SceneBundle }> = [
-  { sourceKey: 'builtin:demo-room', bundle: demoRoomBundle as SceneBundle },
-  { sourceKey: 'builtin:demo-plaza', bundle: demoPlazaBundle as SceneBundle },
+ 
 ]
 
 function composeSceneSummary(scene: StoredSceneDocument): string {

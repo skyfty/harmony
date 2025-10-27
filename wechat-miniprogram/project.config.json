@@ -15,13 +15,33 @@
     "uglifyFileName": false,
     "uglifyJS": false,
     "compileHotReLoad": true,
-    "useCompilerPlugins": ["typescript"],
-    "showShadowRootInWxmlPanel": true
+    "useCompilerPlugins": [
+      "typescript"
+    ],
+    "showShadowRootInWxmlPanel": true,
+    "compileWorklet": false,
+    "uploadWithSourceMap": true,
+    "packNpmManually": false,
+    "packNpmRelationList": [],
+    "minifyWXSS": true,
+    "minifyWXML": true,
+    "localPlugins": false,
+    "disableUseStrict": false,
+    "condition": false,
+    "swc": false,
+    "disableSWC": true,
+    "babelSetting": {
+      "ignore": [],
+      "disablePlugins": [],
+      "outputPath": ""
+    }
   },
   "compileType": "miniprogram",
   "libVersion": "latest",
-  "appid": "",
+  "appid": "wx86eb8fe2f126deb2",
   "projectname": "harmony-scene-viewer",
   "miniprogramRoot": "miniprogram/",
-  "condition": {}
+  "condition": {},
+  "simulatorPluginLibVersion": {},
+  "editorSetting": {}
 }

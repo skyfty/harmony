@@ -1,3 +1,7 @@
+declare module 'miniprogram_npm/threejs-miniprogram/index' {
+  export * from 'threejs-miniprogram'
+}
+
 declare module 'threejs-miniprogram' {
   export function createScopedThreejs(canvas: any): any
 }
