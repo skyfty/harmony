@@ -1,0 +1,18 @@
+{
+  "name": "harmony-wechat-miniprogram",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WeChat mini program for loading Harmony scene bundles exported from the editor.",
+  "scripts": {
+    "typecheck": "tsc --noEmit --project tsconfig.json",
+    "typecheck:watch": "tsc --noEmit --project tsconfig.json --watch"
+  },
+  "dependencies": {
+    "threejs-miniprogram": "^1.0.4"
+  },
+  "devDependencies": {
+    "@types/three": "^0.165.0",
+    "miniprogram-api-typings": "^4.0.3",
+    "typescript": "^5.4.5"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "description": "Harmony scene viewer built on threejs-miniprogram.",
+  "packOptions": {
+    "ignore": [],
+    "include": []
+  },
+  "setting": {
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": false,
+    "newFeature": true,
+    "coverView": true,
+    "autoAudits": false,
+    "uglifyFileName": false,
+    "uglifyJS": false,
+    "compileHotReLoad": true,
+    "useCompilerPlugins": ["typescript"],
+    "showShadowRootInWxmlPanel": true
+  },
+  "compileType": "miniprogram",
+  "libVersion": "latest",
+  "appid": "",
+  "projectname": "harmony-scene-viewer",
+  "miniprogramRoot": "miniprogram/",
+  "condition": {}
+}

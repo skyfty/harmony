@@ -1,0 +1,312 @@
+{
+  "formatVersion": 1,
+  "exportedAt": "2025-10-27T00:00:00.000Z",
+  "scenes": [
+    {
+      "id": "demo-room",
+      "name": "室内展示",
+      "thumbnail": null,
+      "nodes": [
+        {
+          "id": "harmony:ground",
+          "name": "Ground",
+          "nodeType": "Mesh",
+          "materials": [
+            {
+              "id": "ground-node-material",
+              "materialId": "mat-ground",
+              "type": "MeshStandardMaterial",
+              "name": "Ground Material",
+              "color": "#4a4a4a",
+              "transparent": false,
+              "opacity": 1,
+              "side": "double",
+              "wireframe": false,
+              "metalness": 0,
+              "roughness": 0.9,
+              "emissive": "#000000",
+              "emissiveIntensity": 0,
+              "aoStrength": 1,
+              "envMapIntensity": 1,
+              "textures": {}
+            }
+          ],
+          "components": [],
+          "position": { "x": 0, "y": 0, "z": 0 },
+          "rotation": { "x": 0, "y": 0, "z": 0 },
+          "scale": { "x": 1, "y": 1, "z": 1 },
+          "visible": true,
+          "locked": true,
+          "dynamicMesh": {
+            "type": "Ground",
+            "width": 30,
+            "depth": 30,
+            "rows": 15,
+            "columns": 15,
+            "cellSize": 2,
+            "heightMap": {}
+          }
+        },
+        {
+          "id": "room-layout",
+          "name": "展示布局",
+          "nodeType": "Group",
+          "materials": [],
+          "components": [],
+          "position": { "x": 0, "y": 0, "z": 0 },
+          "rotation": { "x": 0, "y": 0, "z": 0 },
+          "scale": { "x": 1, "y": 1, "z": 1 },
+          "visible": true,
+          "children": [
+            {
+              "id": "center-pillar",
+              "name": "中央立柱",
+              "nodeType": "Box",
+              "materials": [
+                {
+                  "id": "pillar-material",
+                  "materialId": "mat-steel",
+                  "type": "MeshStandardMaterial",
+                  "name": "Steel",
+                  "color": "#7f8c8d",
+                  "transparent": false,
+                  "opacity": 1,
+                  "side": "front",
+                  "wireframe": false,
+                  "metalness": 0.65,
+                  "roughness": 0.4,
+                  "emissive": "#000000",
+                  "emissiveIntensity": 0,
+                  "aoStrength": 1,
+                  "envMapIntensity": 1,
+                  "textures": {}
+                }
+              ],
+              "components": [],
+              "position": { "x": 0, "y": 2.5, "z": 0 },
+              "rotation": { "x": 0, "y": 0, "z": 0 },
+              "scale": { "x": 1.5, "y": 5, "z": 1.5 },
+              "visible": true
+            },
+            {
+              "id": "display-table",
+              "name": "展示桌",
+              "nodeType": "Box",
+              "materials": [
+                {
+                  "id": "table-material",
+                  "materialId": "mat-wood",
+                  "type": "MeshStandardMaterial",
+                  "name": "Wood",
+                  "color": "#a67c52",
+                  "transparent": false,
+                  "opacity": 1,
+                  "side": "front",
+                  "wireframe": false,
+                  "metalness": 0.1,
+                  "roughness": 0.7,
+                  "emissive": "#000000",
+                  "emissiveIntensity": 0,
+                  "aoStrength": 1,
+                  "envMapIntensity": 1,
+                  "textures": {}
+                }
+              ],
+              "components": [],
+              "position": { "x": -4, "y": 1, "z": -4 },
+              "rotation": { "x": 0, "y": 0.4, "z": 0 },
+              "scale": { "x": 4, "y": 1, "z": 2.5 },
+              "visible": true
+            },
+            {
+              "id": "wall-panel",
+              "name": "背景墙",
+              "nodeType": "Plane",
+              "materials": [
+                {
+                  "id": "panel-material",
+                  "materialId": "mat-panel",
+                  "type": "MeshStandardMaterial",
+                  "name": "Panel",
+                  "color": "#22313f",
+                  "transparent": false,
+                  "opacity": 1,
+                  "side": "double",
+                  "wireframe": false,
+                  "metalness": 0.2,
+                  "roughness": 0.6,
+                  "emissive": "#1c2a35",
+                  "emissiveIntensity": 0.15,
+                  "aoStrength": 1,
+                  "envMapIntensity": 1,
+                  "textures": {}
+                }
+              ],
+              "components": [],
+              "position": { "x": 0, "y": 3, "z": -10 },
+              "rotation": { "x": 0, "y": 0, "z": 0 },
+              "scale": { "x": 16, "y": 6, "z": 1 },
+              "visible": true
+            }
+          ]
+        },
+        {
+          "id": "main-light",
+          "name": "主灯光",
+          "nodeType": "Light",
+          "light": {
+            "type": "Directional",
+            "color": "#ffffff",
+            "intensity": 1.2,
+            "target": { "x": 0, "y": 0, "z": 0 },
+            "castShadow": true
+          },
+          "position": { "x": 12, "y": 18, "z": 12 },
+          "rotation": { "x": 0, "y": 0, "z": 0 },
+          "scale": { "x": 1, "y": 1, "z": 1 },
+          "visible": true
+        },
+        {
+          "id": "fill-light",
+          "name": "环境光",
+          "nodeType": "Light",
+          "light": {
+            "type": "Ambient",
+            "color": "#ffffff",
+            "intensity": 0.35
+          },
+          "position": { "x": 0, "y": 0, "z": 0 },
+          "rotation": { "x": 0, "y": 0, "z": 0 },
+          "scale": { "x": 1, "y": 1, "z": 1 },
+          "visible": true
+        }
+      ],
+      "materials": [
+        {
+          "id": "mat-ground",
+          "name": "Default Ground",
+          "description": "Grey ground material",
+          "type": "MeshStandardMaterial",
+          "createdAt": "2025-10-26T00:00:00.000Z",
+          "updatedAt": "2025-10-26T00:00:00.000Z",
+          "color": "#4a4a4a",
+          "transparent": false,
+          "opacity": 1,
+          "side": "double",
+          "wireframe": false,
+          "metalness": 0,
+          "roughness": 0.9,
+          "emissive": "#000000",
+          "emissiveIntensity": 0,
+          "aoStrength": 1,
+          "envMapIntensity": 1,
+          "textures": {}
+        },
+        {
+          "id": "mat-steel",
+          "name": "Steel",
+          "description": "Brushed steel",
+          "type": "MeshStandardMaterial",
+          "createdAt": "2025-10-26T00:00:00.000Z",
+          "updatedAt": "2025-10-26T00:00:00.000Z",
+          "color": "#95a5a6",
+          "transparent": false,
+          "opacity": 1,
+          "side": "front",
+          "wireframe": false,
+          "metalness": 0.75,
+          "roughness": 0.45,
+          "emissive": "#000000",
+          "emissiveIntensity": 0,
+          "aoStrength": 1,
+          "envMapIntensity": 1,
+          "textures": {}
+        },
+        {
+          "id": "mat-wood",
+          "name": "Wood",
+          "description": "Warm wood",
+          "type": "MeshStandardMaterial",
+          "createdAt": "2025-10-26T00:00:00.000Z",
+          "updatedAt": "2025-10-26T00:00:00.000Z",
+          "color": "#c49a6c",
+          "transparent": false,
+          "opacity": 1,
+          "side": "front",
+          "wireframe": false,
+          "metalness": 0.1,
+          "roughness": 0.7,
+          "emissive": "#000000",
+          "emissiveIntensity": 0,
+          "aoStrength": 1,
+          "envMapIntensity": 1,
+          "textures": {}
+        },
+        {
+          "id": "mat-panel",
+          "name": "Panel",
+          "description": "Accent wall panel",
+          "type": "MeshStandardMaterial",
+          "createdAt": "2025-10-26T00:00:00.000Z",
+          "updatedAt": "2025-10-26T00:00:00.000Z",
+          "color": "#2c3e50",
+          "transparent": false,
+          "opacity": 1,
+          "side": "double",
+          "wireframe": false,
+          "metalness": 0.25,
+          "roughness": 0.65,
+          "emissive": "#1c2733",
+          "emissiveIntensity": 0.2,
+          "aoStrength": 1,
+          "envMapIntensity": 1,
+          "textures": {}
+        }
+      ],
+      "selectedNodeId": "center-pillar",
+      "selectedNodeIds": ["center-pillar"],
+      "camera": {
+        "position": { "x": 16, "y": 12, "z": 22 },
+        "target": { "x": 0, "y": 2, "z": 0 },
+        "fov": 45
+      },
+      "viewportSettings": {
+        "showGrid": false,
+        "showAxes": false,
+        "cameraProjection": "perspective",
+        "cameraControlMode": "orbit",
+        "shadowsEnabled": true,
+        "skybox": {
+          "presetId": "studio",
+          "exposure": 1,
+          "turbidity": 2,
+          "rayleigh": 1.5,
+          "mieCoefficient": 0.005,
+          "mieDirectionalG": 0.8,
+          "elevation": 35,
+          "azimuth": 180
+        }
+      },
+      "groundSettings": {
+        "width": 30,
+        "depth": 30
+      },
+      "panelVisibility": {
+        "hierarchy": true,
+        "inspector": true,
+        "project": true
+      },
+      "panelPlacement": {
+        "hierarchy": "floating",
+        "inspector": "floating",
+        "project": "docked"
+      },
+      "resourceProviderId": "builtin",
+      "createdAt": "2025-10-26T00:00:00.000Z",
+      "updatedAt": "2025-10-27T00:00:00.000Z",
+      "assetCatalog": {},
+      "assetIndex": {},
+      "packageAssetMap": {}
+    }
+  ]
+}

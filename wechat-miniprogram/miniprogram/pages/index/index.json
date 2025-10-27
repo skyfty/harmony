@@ -1,0 +1,6 @@
+{
+  "navigationBarTitleText": "Harmony 场景浏览器",
+  "usingComponents": {
+    "scene-viewer": "/components/scene-viewer/scene-viewer"
+  }
+}

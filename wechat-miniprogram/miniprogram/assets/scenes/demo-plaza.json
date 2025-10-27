@@ -1,0 +1,292 @@
+{
+  "formatVersion": 1,
+  "exportedAt": "2025-10-27T00:00:00.000Z",
+  "scenes": [
+    {
+      "id": "demo-plaza",
+      "name": "室外广场",
+      "thumbnail": null,
+      "nodes": [
+        {
+          "id": "harmony:ground",
+          "name": "Ground",
+          "nodeType": "Mesh",
+          "materials": [
+            {
+              "id": "plaza-ground-material",
+              "materialId": "mat-stone",
+              "type": "MeshStandardMaterial",
+              "name": "Stone",
+              "color": "#5f6a6a",
+              "transparent": false,
+              "opacity": 1,
+              "side": "double",
+              "wireframe": false,
+              "metalness": 0.05,
+              "roughness": 0.85,
+              "emissive": "#000000",
+              "emissiveIntensity": 0,
+              "aoStrength": 1,
+              "envMapIntensity": 1,
+              "textures": {}
+            }
+          ],
+          "components": [],
+          "position": { "x": 0, "y": 0, "z": 0 },
+          "rotation": { "x": 0, "y": 0, "z": 0 },
+          "scale": { "x": 1, "y": 1, "z": 1 },
+          "visible": true,
+          "locked": true,
+          "dynamicMesh": {
+            "type": "Ground",
+            "width": 60,
+            "depth": 45,
+            "rows": 15,
+            "columns": 20,
+            "cellSize": 3,
+            "heightMap": {}
+          }
+        },
+        {
+          "id": "sculpture",
+          "name": "雕塑",
+          "nodeType": "Sphere",
+          "materials": [
+            {
+              "id": "sculpture-material",
+              "materialId": "mat-bronze",
+              "type": "MeshStandardMaterial",
+              "name": "Bronze",
+              "color": "#b87333",
+              "transparent": false,
+              "opacity": 1,
+              "side": "front",
+              "wireframe": false,
+              "metalness": 0.9,
+              "roughness": 0.35,
+              "emissive": "#000000",
+              "emissiveIntensity": 0,
+              "aoStrength": 1,
+              "envMapIntensity": 1,
+              "textures": {}
+            }
+          ],
+          "components": [],
+          "position": { "x": 0, "y": 4, "z": 0 },
+          "rotation": { "x": 0, "y": 0, "z": 0 },
+          "scale": { "x": 3, "y": 3, "z": 3 },
+          "visible": true
+        },
+        {
+          "id": "benches",
+          "name": "座椅阵列",
+          "nodeType": "Group",
+          "materials": [],
+          "components": [],
+          "position": { "x": 0, "y": 0, "z": 0 },
+          "rotation": { "x": 0, "y": 0, "z": 0 },
+          "scale": { "x": 1, "y": 1, "z": 1 },
+          "visible": true,
+          "children": [
+            {
+              "id": "bench-west",
+              "name": "西侧座椅",
+              "nodeType": "Box",
+              "materials": [
+                {
+                  "id": "bench-material",
+                  "materialId": "mat-wood",
+                  "type": "MeshStandardMaterial",
+                  "name": "Wood",
+                  "color": "#d7b377",
+                  "transparent": false,
+                  "opacity": 1,
+                  "side": "front",
+                  "wireframe": false,
+                  "metalness": 0.2,
+                  "roughness": 0.65,
+                  "emissive": "#000000",
+                  "emissiveIntensity": 0,
+                  "aoStrength": 1,
+                  "envMapIntensity": 1,
+                  "textures": {}
+                }
+              ],
+              "components": [],
+              "position": { "x": -15, "y": 0.6, "z": -10 },
+              "rotation": { "x": 0, "y": 0.4, "z": 0 },
+              "scale": { "x": 8, "y": 1.2, "z": 2 },
+              "visible": true
+            },
+            {
+              "id": "bench-east",
+              "name": "东侧座椅",
+              "nodeType": "Box",
+              "materials": [
+                {
+                  "id": "bench-east-material",
+                  "materialId": "mat-wood",
+                  "type": "MeshStandardMaterial",
+                  "name": "Wood",
+                  "color": "#d7b377",
+                  "transparent": false,
+                  "opacity": 1,
+                  "side": "front",
+                  "wireframe": false,
+                  "metalness": 0.2,
+                  "roughness": 0.65,
+                  "emissive": "#000000",
+                  "emissiveIntensity": 0,
+                  "aoStrength": 1,
+                  "envMapIntensity": 1,
+                  "textures": {}
+                }
+              ],
+              "components": [],
+              "position": { "x": 15, "y": 0.6, "z": 10 },
+              "rotation": { "x": 0, "y": -0.5, "z": 0 },
+              "scale": { "x": 8, "y": 1.2, "z": 2 },
+              "visible": true
+            }
+          ]
+        },
+        {
+          "id": "sun-light",
+          "name": "日光",
+          "nodeType": "Light",
+          "light": {
+            "type": "Directional",
+            "color": "#ffffff",
+            "intensity": 1.1,
+            "target": { "x": 0, "y": 0, "z": 0 },
+            "castShadow": true
+          },
+          "position": { "x": -25, "y": 32, "z": -12 },
+          "rotation": { "x": 0, "y": 0, "z": 0 },
+          "scale": { "x": 1, "y": 1, "z": 1 },
+          "visible": true
+        },
+        {
+          "id": "sky-fill",
+          "name": "天光",
+          "nodeType": "Light",
+          "light": {
+            "type": "Ambient",
+            "color": "#cfd8dc",
+            "intensity": 0.5
+          },
+          "position": { "x": 0, "y": 0, "z": 0 },
+          "rotation": { "x": 0, "y": 0, "z": 0 },
+          "scale": { "x": 1, "y": 1, "z": 1 },
+          "visible": true
+        }
+      ],
+      "materials": [
+        {
+          "id": "mat-stone",
+          "name": "Stone",
+          "description": "Stone plaza",
+          "type": "MeshStandardMaterial",
+          "createdAt": "2025-10-26T00:00:00.000Z",
+          "updatedAt": "2025-10-27T00:00:00.000Z",
+          "color": "#808b96",
+          "transparent": false,
+          "opacity": 1,
+          "side": "double",
+          "wireframe": false,
+          "metalness": 0.05,
+          "roughness": 0.85,
+          "emissive": "#000000",
+          "emissiveIntensity": 0,
+          "aoStrength": 1,
+          "envMapIntensity": 1,
+          "textures": {}
+        },
+        {
+          "id": "mat-bronze",
+          "name": "Bronze",
+          "description": "Bronze alloy",
+          "type": "MeshStandardMaterial",
+          "createdAt": "2025-10-26T00:00:00.000Z",
+          "updatedAt": "2025-10-27T00:00:00.000Z",
+          "color": "#cd7f32",
+          "transparent": false,
+          "opacity": 1,
+          "side": "front",
+          "wireframe": false,
+          "metalness": 0.9,
+          "roughness": 0.35,
+          "emissive": "#000000",
+          "emissiveIntensity": 0,
+          "aoStrength": 1,
+          "envMapIntensity": 1,
+          "textures": {}
+        },
+        {
+          "id": "mat-wood",
+          "name": "Wood",
+          "description": "Outdoor bench wood",
+          "type": "MeshStandardMaterial",
+          "createdAt": "2025-10-26T00:00:00.000Z",
+          "updatedAt": "2025-10-27T00:00:00.000Z",
+          "color": "#deb887",
+          "transparent": false,
+          "opacity": 1,
+          "side": "front",
+          "wireframe": false,
+          "metalness": 0.15,
+          "roughness": 0.65,
+          "emissive": "#000000",
+          "emissiveIntensity": 0,
+          "aoStrength": 1,
+          "envMapIntensity": 1,
+          "textures": {}
+        }
+      ],
+      "selectedNodeId": "sculpture",
+      "selectedNodeIds": ["sculpture"],
+      "camera": {
+        "position": { "x": -28, "y": 18, "z": 34 },
+        "target": { "x": 0, "y": 4, "z": 0 },
+        "fov": 55
+      },
+      "viewportSettings": {
+        "showGrid": false,
+        "showAxes": false,
+        "cameraProjection": "perspective",
+        "cameraControlMode": "orbit",
+        "shadowsEnabled": true,
+        "skybox": {
+          "presetId": "sunny",
+          "exposure": 1.1,
+          "turbidity": 1.2,
+          "rayleigh": 2,
+          "mieCoefficient": 0.004,
+          "mieDirectionalG": 0.8,
+          "elevation": 45,
+          "azimuth": 130
+        }
+      },
+      "groundSettings": {
+        "width": 60,
+        "depth": 45
+      },
+      "panelVisibility": {
+        "hierarchy": true,
+        "inspector": true,
+        "project": false
+      },
+      "panelPlacement": {
+        "hierarchy": "floating",
+        "inspector": "floating",
+        "project": "docked"
+      },
+      "resourceProviderId": "builtin",
+      "createdAt": "2025-10-26T00:00:00.000Z",
+      "updatedAt": "2025-10-27T00:00:00.000Z",
+      "assetCatalog": {},
+      "assetIndex": {},
+      "packageAssetMap": {}
+    }
+  ]
+}

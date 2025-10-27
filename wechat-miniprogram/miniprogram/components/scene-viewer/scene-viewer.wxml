@@ -1,0 +1,14 @@
+<view class="scene-viewer">
+  <canvas
+    type="webgl"
+    id="three-canvas"
+    disable-scroll="true"
+    class="scene-canvas"
+  />
+  <view wx:if="{{loading}}" class="overlay">
+    <text>场景加载中...</text>
+  </view>
+  <view wx:if="{{errorMessage}}" class="overlay overlay-error">
+    <text>{{errorMessage}}</text>
+  </view>
+</view>
