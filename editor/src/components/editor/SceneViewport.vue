@@ -48,6 +48,7 @@ import type { GroundDynamicMesh, WallDynamicMesh } from '@/types/dynamic-mesh'
 import type { BuildTool } from '@/types/build-tool'
 import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache } from '@/plugins/groundMesh'
 import { createWallGroup, updateWallGroup } from '@/plugins/wallMesh'
+import { ViewportGizmo } from "three-viewport-gizmo";
 
 
 const props = withDefaults(defineProps<{
@@ -87,6 +88,7 @@ let perspectiveCamera: THREE.PerspectiveCamera | null = null
 let orthographicCamera: THREE.OrthographicCamera | null = null
 let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera | null = null
 let orbitControls: OrbitControls | MapControls | null = null
+let gizmoControls: ViewportGizmo | null = null
 let transformControls: TransformControls | null = null
 let resizeObserver: ResizeObserver | null = null
 let selectionBoxHelper: THREE.Box3Helper | null = null
@@ -595,6 +597,7 @@ function scheduleToolbarUpdate() {
 function handleViewportOverlayResize() {
   scheduleToolbarUpdate()
   updateGroundSelectionToolbarPosition()
+  gizmoControls.update();
 }
 
 function resolveNodeIdFromObject(object: THREE.Object3D | null): string | null {
@@ -2609,6 +2612,11 @@ function initScene() {
     applyProjectionMode(cameraProjectionMode.value)
   }
 
+  gizmoControls = new ViewportGizmo(camera, renderer, { placement: 'bottom-right' });
+  if (orbitControls) {
+    gizmoControls.attachControls(orbitControls as OrbitControls);
+  }
+
   canvasRef.value.addEventListener('pointerdown', handlePointerDown, { capture: true })
   canvasRef.value.addEventListener('contextmenu', handleViewportContextMenu)
   if (typeof window !== 'undefined') {
@@ -2847,6 +2855,7 @@ function animate() {
     sky.position.copy(camera.position)
   }
   renderer.render(scene, camera)
+  gizmoControls.render();
   stats?.end()
 }
 
