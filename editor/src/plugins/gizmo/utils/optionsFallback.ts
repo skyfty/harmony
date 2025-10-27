@@ -176,11 +176,11 @@ export const optionsFallback = (
         ? { label: "Y", color: 0x8adb00, line: true }
         : { label: faceLabels.y }),
     },
+    // Swap positive Z and negative Z styles: give positive Z the negative-axis style,
+    // and give negative Z the previous positive-axis style (yellow line + label).
     z: {
-      ...deepClone(axesFallback),
-      ...(isSphere
-        ? { label: "Z", color: 0x2c8fff, line: true }
-        : { label: faceLabels.z }),
+      ...deepClone(negativeAxesFallback),
+      ...(isSphere ? { label: "" } : { label: faceLabels.z }),
     },
     nx: {
       ...deepClone(negativeAxesFallback),
@@ -191,8 +191,10 @@ export const optionsFallback = (
       label: isSphere ? "" : faceLabels.ny,
     },
     nz: {
-      ...deepClone(negativeAxesFallback),
-      label: isSphere ? "" : faceLabels.nz,
+      ...deepClone(axesFallback),
+      ...(isSphere
+        ? { label: "Z", color: 0x2c8fff, line: true }
+        : { label: faceLabels.nz }),
     },
   };
 
