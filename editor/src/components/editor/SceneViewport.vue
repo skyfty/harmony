@@ -270,7 +270,8 @@ const panelPlacement = computed<PanelPlacementState>(() => {
 })
 
 const TOOLBAR_OFFSET = 12
-const TOOLBAR_MIN_MARGIN = 16
+const TOOLBAR_MIN_MARGIN = 45
+const TOOLBAR_MIN_OFFSET = 50
 
 const transformToolbarStyle = reactive<{ top: string; left: string }>({
   top: `${TOOLBAR_MIN_MARGIN}px`,
@@ -538,8 +539,8 @@ function updateViewportToolbarPosition() {
   }
 
   const panelRect = panelEl.getBoundingClientRect()
-  const maxLeft = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.width - toolbarWidth - TOOLBAR_MIN_MARGIN)
-  const maxTop = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.height - toolbarHeight - TOOLBAR_MIN_MARGIN)
+  const maxLeft = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.width - toolbarWidth - TOOLBAR_MIN_MARGIN - TOOLBAR_MIN_OFFSET)
+  const maxTop = Math.max(TOOLBAR_MIN_MARGIN,toolbarHeight - TOOLBAR_MIN_MARGIN)
   const candidateLeft = panelRect.left - viewportRect.left - toolbarWidth - TOOLBAR_OFFSET
   const candidateTop = panelRect.top - viewportRect.top + TOOLBAR_OFFSET
   const computedLeft = clampToRange(candidateLeft, TOOLBAR_MIN_MARGIN, maxLeft)
@@ -2636,7 +2637,7 @@ function initScene() {
     placement: 'top-right',
     container: gizmoContainer,
     offset: { top: 0, right: 0, bottom: 0, left: 0 },
-    size: 112,
+    size: 70,
   })
   if (orbitControls) {
     gizmoControls.attachControls(orbitControls as OrbitControls)
@@ -6570,8 +6571,8 @@ defineExpose<SceneViewportHandle>({
   position: absolute;
   top: 12px;
   right: 12px;
-  width: 128px;
-  height: 128px;
+  width: 70px;
+  height: 70px;
   z-index: 7;
 }
 
