@@ -6,7 +6,8 @@
         <view
           class="scene-item {{item.id === selectedSceneId ? 'active' : ''}}"
           bindtap="handleSelectScene"
-          data-id="{{item.id}}"
+          data-id="{{item.key}}"
+          data-key="{{item.key}}"
         >
           <text class="scene-name">{{item.name}}</text>
           <text class="scene-meta">{{item.summary}}</text>

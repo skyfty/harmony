@@ -1,6 +1,6 @@
 import {createScopedThreejs} from 'threejs-miniprogram'
 import { buildSceneFromBundle, type SceneBuildResult } from '../../utils/scene-loader'
-import type { SceneBundle } from '../../utils/scene-types'
+import type { StoredSceneDocument } from '../../utils/scene-types'
 
 declare const Component: <TProps, TData, TMethods>(options: any) => void
 declare const wx: any
@@ -77,6 +77,7 @@ Component({
         .select('#three-canvas')
         .node()
         .exec(async (res: any[]) => {
+          
           const entry = res?.[0]
           if (!entry) {
             this.emitLoadState('error', '无法初始化渲染画布')
@@ -89,14 +90,11 @@ Component({
           const deviceRatio = systemInfo?.pixelRatio ?? 1
           const pixelRatio = Math.min(maxPixelRatio, deviceRatio)
 
-          canvas.width = rect.width * pixelRatio
-          canvas.height = rect.height * pixelRatio
-
           this.canvas = canvas
-          this.canvasWidth = rect.width
-          this.canvasHeight = rect.height
+          this.canvasWidth = canvas.width
+          this.canvasHeight =  canvas.height
           this.pixelRatio = pixelRatio
-
+    
           this.three = createScopedThreejs(canvas)
           this.registerExtensions(this.three)
           this.setupRenderer()
@@ -135,10 +133,11 @@ Component({
       renderer.outputEncoding = THREE.sRGBEncoding
       renderer.toneMapping = THREE.ACESFilmicToneMapping
       renderer.toneMappingExposure = 1.0
+      renderer.gammaOutput = true;
+      renderer.gammaFactor = 2.2;
       renderer.physicallyCorrectLights = true
       renderer.setPixelRatio(this.pixelRatio ?? 1)
       renderer.setSize(this.canvasWidth ?? 1, this.canvasHeight ?? 1, false)
-
       this.renderer = renderer
       this.clock = new THREE.Clock()
       this.mixers = []
@@ -194,12 +193,13 @@ Component({
       if (!this.three || !this.canvas) {
         return
       }
-      const bundle = this.data.sceneBundle as SceneBundle | null
-      if (!bundle || !bundle.scenes?.length) {
+
+      const bundle = this.data.sceneBundle as StoredSceneDocument | null
+      if (!bundle) {
         this.disposeScene()
         return
       }
-      const sceneId = this.data.sceneId || bundle.scenes[0]?.id
+      const sceneId = this.data.sceneId || bundle.id
       if (!sceneId) {
         this.emitLoadState('error', '场景信息缺失')
         return
@@ -207,14 +207,15 @@ Component({
 
       this.emitLoadState('loading', '场景加载中...')
       this.setData({ loading: true, errorMessage: '' })
-
       this.disposeScene()
 
       try {
+        
         const result: SceneBuildResult = await buildSceneFromBundle(this.three, this.canvas, bundle, {
           sceneId,
           enableShadows: this.data.enableShadows,
         })
+        
         this.applySceneResult(result)
         this.emitLoadState('ready', `场景「${result.sceneName}」加载完成`)
         this.setData({ loading: false, errorMessage: '' })
@@ -226,30 +227,57 @@ Component({
     },
 
     applySceneResult(this: any, result: SceneBuildResult) {
+      const THREE = this.three
       if (!this.three || !this.renderer) {
         return
       }
-      this.scene = result.scene
-      this.camera = result.camera
-      this.mixers = result.mixers ?? []
+      // this.scene = result.scene
 
-      const THREE = this.three
-      this.scene.background = this.scene.background ?? new THREE.Color('#101720')
+      this.camera = new THREE.PerspectiveCamera(45, this.canvasWidth / this.canvasHeight, 0.25, 100);
+      this.camera.position.set(- 5, 3, 10);
+      this.camera.lookAt(new THREE.Vector3(0, 2, 0));
+      
+      this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(0xe0e0e0);
+    this.scene.fog = new THREE.Fog(0xe0e0e0, 20, 100);
+      this.scene.fog = new THREE.Fog(0xe0e0e0, 20, 100);
+      
+      var light = new THREE.HemisphereLight(0xffffff, 0x444444);
+      light.position.set(0, 20, 0);
+      this.scene.add(light);
+      light = new THREE.DirectionalLight(0xffffff);
+      light.position.set(0, 20, 10);
+      this.scene.add(light);
 
-      const OrbitControlsCtor = THREE.OrbitControls as unknown as new (camera: any, domElement: any) => OrbitControls
-      if (OrbitControlsCtor) {
-        this.controls = new OrbitControlsCtor(this.camera, this.canvas)
-        this.controls.enableDamping = true
-        this.controls.dampingFactor = 0.08
-        this.controls.enablePan = true
-        this.controls.minDistance = 1
-        this.controls.maxDistance = 800
-        this.controls.maxPolarAngle = Math.PI * 0.495
-        if (result.cameraTarget) {
-          this.controls.target.copy(result.cameraTarget)
-        }
-        this.controls.update()
-      }
+       // ground
+    var mesh = new THREE.Mesh(new THREE.PlaneBufferGeometry(2000, 2000), new THREE.MeshPhongMaterial({ color: 0x999999, depthWrite: false }));
+    mesh.rotation.x = - Math.PI / 2;
+    this.scene.add(mesh);
+    var grid = new THREE.GridHelper(200, 40, 0x000000, 0x000000);
+    grid.material.opacity = 0.2;
+    grid.material.transparent = true;
+    this.scene.add(grid);
+
+      // this.camera = result.camera
+      // this.mixers = result.mixers ?? []
+
+      // this.scene.background = this.scene.background ?? new THREE.Color('#101720')
+
+      // const OrbitControlsCtor = THREE.OrbitControls as unknown as new (camera: any, domElement: any) => OrbitControls
+    
+      // if (OrbitControlsCtor) {
+      //   this.controls = new OrbitControlsCtor(this.camera, this.canvas)
+      //   this.controls.enableDamping = true
+      //   this.controls.dampingFactor = 0.08
+      //   this.controls.enablePan = true
+      //   this.controls.minDistance = 1
+      //   this.controls.maxDistance = 800
+      //   this.controls.maxPolarAngle = Math.PI * 0.495
+      //   if (result.cameraTarget) {
+      //     this.controls.target.copy(result.cameraTarget)
+      //   }
+      //   this.controls.update()
+      // }
     },
 
     startRenderLoop(this: any) {
@@ -269,6 +297,7 @@ Component({
           this.mixers.forEach((mixer: any) => mixer?.update?.(delta))
         }
         this.controls?.update?.()
+
         this.renderer.render(this.scene, this.camera)
       }
       this.frameId = this.canvas.requestAnimationFrame(step)

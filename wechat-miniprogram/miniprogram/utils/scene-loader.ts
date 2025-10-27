@@ -1,7 +1,6 @@
 import type * as THREE_NS from 'three'
 import type { GLTF } from 'three/examples/jsm/loaders/GLTFLoader'
 import {
-  type SceneBundle,
   type StoredSceneDocument,
   type SceneNode,
   type SceneNodeMaterial,
@@ -53,7 +52,6 @@ export interface AssetSource {
 interface SceneBuilderContext {
   THREE: typeof THREE_NS
   canvas: any
-  bundle: SceneBundle
   document: StoredSceneDocument
   options: SceneBuildOptions
 }
@@ -61,7 +59,6 @@ interface SceneBuilderContext {
 class SceneBuilder {
   private readonly THREE: typeof THREE_NS
   private readonly canvas: any
-  private readonly bundle: SceneBundle
   private readonly document: StoredSceneDocument
   private readonly options: SceneBuildOptions
   private readonly enableShadows: boolean
@@ -87,7 +84,6 @@ class SceneBuilder {
   constructor(context: SceneBuilderContext) {
     this.THREE = context.THREE
     this.canvas = context.canvas
-    this.bundle = context.bundle
     this.document = context.document
     this.options = context.options
   this.enableShadows = context.options.enableShadows !== false
@@ -107,7 +103,7 @@ class SceneBuilder {
     this.scene.updateMatrixWorld(true)
     this.computeStatistics()
 
-    const camera = this.camera ?? this.createFallbackCamera()
+    const camera = this.createFallbackCamera()
 
     return {
       scene: this.scene,
@@ -845,29 +841,19 @@ class SceneBuilder {
   }
 }
 
-export function parseSceneBundle(source: string | object): SceneBundle {
+export function parseSceneBundle(source: string | object): StoredSceneDocument {
   if (typeof source === 'string') {
-    return JSON.parse(source) as SceneBundle
+    return JSON.parse(source) as StoredSceneDocument
   }
-  return source as SceneBundle
+  return source as StoredSceneDocument
 }
 
 export async function buildSceneFromBundle(
   THREE: typeof THREE_NS,
   canvas: any,
-  bundle: SceneBundle,
+  bundle: StoredSceneDocument,
   options: SceneBuildOptions = {},
 ): Promise<SceneBuildResult> {
-  if (!bundle?.scenes?.length) {
-    throw new Error('场景文件缺少有效的 scenes 列表')
-  }
-  const targetScene = options.sceneId
-    ? bundle.scenes.find((scene) => scene.id === options.sceneId)
-    : bundle.scenes[0]
-  if (!targetScene) {
-    throw new Error('找不到指定的场景数据')
-  }
-
-  const builder = new SceneBuilder({ THREE, canvas, bundle, document: targetScene, options })
+  const builder = new SceneBuilder({ THREE, canvas, document: bundle, options })
   return builder.build()
 }

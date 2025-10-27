@@ -19,8 +19,8 @@ function registerBundle(bundle, sourceKey, source) {
     }
     let firstKey = null;
     bundle.scenes.forEach((scene, index) => {
-        const sceneId = scene.id || `scene-${index}`;
-        const key = `${sourceKey}:${sceneId}`;
+        const sceneId = scene.id || `generated:${sourceKey}:${index}`;
+        const key = sceneId;
         const entry = {
             key,
             sceneId,
@@ -29,10 +29,14 @@ function registerBundle(bundle, sourceKey, source) {
             summary: composeSceneSummary(scene),
             source,
         };
-        if (!pageState.registry.has(key)) {
-            pageState.order.push(key);
+        if (pageState.registry.has(key)) {
+            // update existing entry
+            pageState.registry.set(key, entry);
         }
-        pageState.registry.set(key, entry);
+        else {
+            pageState.order.push(key);
+            pageState.registry.set(key, entry);
+        }
         if (!firstKey) {
             firstKey = key;
         }
@@ -43,7 +47,7 @@ function buildOptionList() {
     return pageState.order
         .map((key) => pageState.registry.get(key))
         .filter((entry) => Boolean(entry))
-        .map((entry) => ({ key: entry.key, name: entry.name, summary: entry.summary, source: entry.source }));
+    .map((entry) => ({ key: entry.sceneId, id: entry.sceneId, name: entry.name, summary: entry.summary, source: entry.source }));
 }
 function findEntryByKey(key) {
     var _a;
@@ -94,6 +98,7 @@ Page({
         });
     },
     handleChooseLocal() {
+      console.log("fffffffffffffffffffff")
         wx.chooseMessageFile({
             count: 1,
             type: 'file',

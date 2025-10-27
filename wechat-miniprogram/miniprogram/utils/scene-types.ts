@@ -252,9 +252,3 @@ export interface StoredSceneDocument {
   assetIndex: Record<string, AssetIndexEntry>
   packageAssetMap: Record<string, string>
 }
-
-export interface SceneBundle {
-  formatVersion: number
-  exportedAt: string
-  scenes: StoredSceneDocument[]
-}
