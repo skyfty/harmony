@@ -115,12 +115,15 @@ Component({
       this.clock = new THREE.Clock()
       this.mixers = []
 
-      this.camera = new THREE.PerspectiveCamera(70, this.canvasWidth / this.canvasHeight, 0.1, 200);
-      this.camera.position.set(0, 1.6, 6);
-      this.rotationVelocity = { x: 0, y: 0 }
-      this.maxRotationSpeed = Math.PI
-      this.cameraYaw = 0
-      this.cameraPitch = 0
+  this.cameraHeight = 1.6
+  this.camera = new THREE.PerspectiveCamera(70, this.canvasWidth / this.canvasHeight, 0.1, 200);
+  this.camera.position.set(0, this.cameraHeight, 6);
+  // Cap yaw/translation speeds so the joystick remains comfortable to use
+  this.maxYawSpeed = Math.PI * 0.75
+  this.maxMoveSpeed = 2.5
+  this.joystickState = { yawSpeed: 0, moveSpeed: 0 }
+  this.cameraYaw = 0
+  this.cameraPitch = 0
       this.syncCameraOrientation()
     },
 
@@ -234,7 +237,7 @@ Component({
       // }
 
       if (scope.camera) {
-        scope.camera.position.set(0, 1.6, 6)
+        scope.camera.position.set(0, scope.cameraHeight ?? 1.6, 6)
       }
       scope.cameraYaw = 0
       scope.cameraPitch = 0
@@ -259,7 +262,7 @@ Component({
         if (scope.mixers?.length) {
           scope.mixers.forEach((mixer) => mixer?.update?.(delta))
         }
-        if (scope.rotationVelocity) {
+        if (scope.joystickState?.yawSpeed || scope.joystickState?.moveSpeed) {
           scope.updateCameraFromJoystick(delta)
         }
         scope.syncCameraOrientation()
@@ -269,20 +272,29 @@ Component({
     },
 
     updateCameraFromJoystick: function (delta) {
-      if (!this.camera) {
+      if (!this.camera || !this.three) {
         return
       }
-      const velocity = this.rotationVelocity || { x: 0, y: 0 }
-      const yaw = (this.cameraYaw ?? 0) + (velocity.x || 0) * delta
-      const maxPitch = (Math.PI / 2) - 0.1
-      let pitch = (this.cameraPitch ?? 0) + (velocity.y || 0) * delta
-      if (pitch > maxPitch) {
-        pitch = maxPitch
-      } else if (pitch < -maxPitch) {
-        pitch = -maxPitch
+      const state = this.joystickState || { yawSpeed: 0, moveSpeed: 0 }
+      const yawSpeed = state.yawSpeed || 0
+      const moveSpeed = state.moveSpeed || 0
+
+      if (!yawSpeed && !moveSpeed) {
+        return
       }
+
+      const yaw = (this.cameraYaw ?? 0) + yawSpeed * delta
       this.cameraYaw = yaw
-      this.cameraPitch = pitch
+
+      if (moveSpeed) {
+        const THREE = this.three
+        const forward = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw))
+        const displacement = forward.multiplyScalar(moveSpeed * delta)
+        this.camera.position.add(displacement)
+      }
+
+      const height = this.cameraHeight ?? 1.6
+      this.camera.position.y = height
     },
 
     syncCameraOrientation: function () {
@@ -361,10 +373,11 @@ Component({
       }
       const normalizedX = radius ? dx / radius : 0
       const normalizedY = radius ? dy / radius : 0
-      const maxSpeed = this.maxRotationSpeed || Math.PI
-      this.rotationVelocity = {
-        x: normalizedX * maxSpeed,
-        y: -normalizedY * maxSpeed,
+      const maxYawSpeed = this.maxYawSpeed || (Math.PI * 0.75)
+      const maxMoveSpeed = this.maxMoveSpeed || 2.5
+      this.joystickState = {
+        yawSpeed: normalizedX * maxYawSpeed,
+        moveSpeed: -normalizedY * maxMoveSpeed,
       }
       this.setData({
         joystickActive: true,
@@ -375,7 +388,7 @@ Component({
 
     resetJoystick: function () {
       this.joystickTouchId = null
-      this.rotationVelocity = { x: 0, y: 0 }
+      this.joystickState = { yawSpeed: 0, moveSpeed: 0 }
       this.setData({
         joystickActive: false,
         joystickStickX: 0,
@@ -439,8 +452,9 @@ Component({
       this.mixers = []
       this.cameraYaw = 0
       this.cameraPitch = 0
+      this.joystickState = { yawSpeed: 0, moveSpeed: 0 }
       if (this.camera) {
-        this.camera.position.set(0, 1.6, 6)
+        this.camera.position.set(0, this.cameraHeight ?? 1.6, 6)
         this.syncCameraOrientation()
       }
     },
