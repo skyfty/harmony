@@ -115,17 +115,17 @@ Component({
       this.clock = new THREE.Clock()
       this.mixers = []
 
-  this.cameraHeight = 1.6
-  this.camera = new THREE.PerspectiveCamera(70, this.canvasWidth / this.canvasHeight, 0.1, 200);
-  this.camera.position.set(0, this.cameraHeight, 6);
-  // Cap yaw/translation speeds so the joystick remains comfortable to use
-  this.maxYawSpeed = Math.PI * 0.75
-  this.maxMoveSpeed = 2.5
-  this.turnSmoothing = 6
-  this.joystickState = { yawSpeed: 0, moveSpeed: 0 }
-  this.cameraVelocity = { yawSpeed: 0, moveSpeed: 0 }
-  this.cameraYaw = 0
-  this.cameraPitch = 0
+      this.cameraHeight = 1.6
+      this.camera = new THREE.PerspectiveCamera(70, this.canvasWidth / this.canvasHeight, 0.1, 200);
+      this.camera.position.set(0, this.cameraHeight, 6);
+      // Cap yaw/translation speeds so the joystick remains comfortable to use
+      this.maxYawSpeed = Math.PI * 0.75
+      this.maxMoveSpeed = 2.5
+      this.turnSmoothing = 6
+      this.joystickState = { yawSpeed: 0, moveSpeed: 0 }
+      this.cameraVelocity = { yawSpeed: 0, moveSpeed: 0 }
+      this.cameraYaw = 0
+      this.cameraPitch = 0
       this.syncCameraOrientation()
     },
 
@@ -214,25 +214,28 @@ Component({
     applySceneResult: function (result) {
       const THREE = this.three
       const scope = this;
-      // scope.scene = result.scene
-      scope.scene = new THREE.Scene();
-      scope.scene.background = new THREE.Color(0xe0e0e0);
-      scope.scene.fog = new THREE.Fog(0xe0e0e0, 20, 100);
-      var light = new THREE.HemisphereLight(0xffffff, 0x444444);
-      light.position.set(0, 20, 0);
-      scope.scene.add(light);
-      light = new THREE.DirectionalLight(0xffffff);
-      light.position.set(0, 20, 10);
-      scope.scene.add(light);
+      scope.scene = result.scene
+      // scope.scene = new THREE.Scene();
+      // scope.scene.background = new THREE.Color(0xe0e0e0);
+      // scope.scene.fog = new THREE.Fog(0xe0e0e0, 20, 100);
+      // var light = new THREE.HemisphereLight(0xffffff, 0x444444);
+      // light.position.set(0, 20, 0);
+      // scope.scene.add(light);
+      // light = new THREE.DirectionalLight(0xffffff);
+      // light.position.set(0, 20, 10);
+      // scope.scene.add(light);
 
        // ground
-      var mesh = new THREE.Mesh(new THREE.PlaneBufferGeometry(2000, 2000), new THREE.MeshPhongMaterial({ color: 0x999999, depthWrite: false }));
-      mesh.rotation.x = - Math.PI / 2;
-      scope.scene.add(mesh);
-      var grid = new THREE.GridHelper(200, 40, 0x000000, 0x000000);
-      grid.material.opacity = 0.2;
-      grid.material.transparent = true;
-      scope.scene.add(grid);
+      // var mesh = new THREE.Mesh(new THREE.PlaneBufferGeometry(2000, 2000), new THREE.MeshPhongMaterial({ color: 0x999999, depthWrite: false }));
+      // mesh.rotation.x = - Math.PI / 2;
+      // scope.scene.add(mesh);
+      // var grid = new THREE.GridHelper(200, 40, 0x000000, 0x000000);
+      // grid.material.opacity = 0.2;
+      // grid.material.transparent = true;
+      // scope.scene.add(grid);
+
+        //  var mesh1 = new THREE.Mesh(new THREE.BoxBufferGeometry(1, 1, 1), new THREE.MeshPhongMaterial({ color: 0x999999, depthWrite: false }));
+        // scope.scene.add(mesh1);
 
       // if (result && result.scene) {
       //   scope.scene.add(result.scene)
