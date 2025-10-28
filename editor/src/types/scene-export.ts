@@ -8,7 +8,7 @@ export type SceneExportResult = {
   blob: Blob
 }
 
-export type SceneExportFormat =  'GLB' | 'JSON'
+export type SceneExportFormat =  'glb' | 'json'
 
 export interface SceneExportOptions {
     format: SceneExportFormat
@@ -22,7 +22,6 @@ export interface SceneExportOptions {
     includeCameras: boolean
     includeExtras: boolean
     rotateCoordinateSystem: boolean
-    onProgress: (progress: number, message?: string) => void
 }
 
 export interface GLBExportSettings {

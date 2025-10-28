@@ -10,10 +10,9 @@ import PreviewOverlay from '@/components/layout/PreviewOverlay.vue'
 import MenuBar from './MenuBar.vue'
 import SceneManagerDialog from '@/components/layout/SceneManagerDialog.vue'
 import NewSceneDialog from '@/components/layout/NewSceneDialog.vue'
-import SceneExportDialog, {
-  type SceneExportDialogOptions,
-  type SceneExportDialogPayload,
-} from '@/components/layout/SceneExportDialog.vue'
+import SceneExportDialog from '@/components/layout/SceneExportDialog.vue'
+import type { SceneExportFormat, SceneExportOptions } from '@/types/scene-export'
+
 import {
   useSceneStore,
   type EditorPanel,
@@ -375,7 +374,7 @@ function sanitizeExportFileName(input: string): string {
   return withoutExtension || 'scene'
 }
 
-async function handleExportDialogConfirm(payload: SceneExportDialogPayload) {
+async function handleExportDialogConfirm(options: SceneExportOptions) {
   if (isExporting.value) {
     return
   }
@@ -392,28 +391,15 @@ async function handleExportDialogConfirm(payload: SceneExportDialogPayload) {
   exportProgress.value = 5
   exportProgressMessage.value = 'Preparing export...'
 
-  const { fileName, ...preferenceSnapshot } = payload
+  const { fileName, ...preferenceSnapshot } = options
   exportPreferences.value = { ...preferenceSnapshot }
 
   let exportSucceeded = false
 
   try {
-    const blob = await viewport.exportScene({
-      format: payload.format,
-      fileName: sanitizeExportFileName(fileName),
-      includeTextures: payload.includeTextures,
-      includeAnimations: payload.includeAnimations,
-      includeSkybox: payload.includeSkybox,
-      includeLights: payload.includeLights,
-      includeHiddenNodes: payload.includeHiddenNodes,
-      includeSkeletons: payload.includeSkeletons,
-      includeCameras: payload.includeCameras,
-      includeExtras: payload.includeExtras,
-      rotateCoordinateSystem: payload.rotateCoordinateSystem,
-      onProgress: (progress: number, message?: string) => {
-        exportProgress.value = progress
-        exportProgressMessage.value = message ?? `Export progress ${Math.round(progress)}%`
-      },
+    const blob = await viewport.exportScene(options, (progress, message) => {
+      exportProgress.value = progress
+      exportProgressMessage.value = message ?? `Export progress ${Math.round(progress)}%`
     })
     triggerDownload(blob, fileName)
 
@@ -527,7 +513,7 @@ async function handlePreview() {
 
   try {
     const blob = await viewport.exportScene({
-      format: 'GLB',
+      format: 'glb',
       fileName: `${sceneName}-preview`,
       includeTextures: true,
       includeAnimations: true,
@@ -537,9 +523,8 @@ async function handlePreview() {
       includeSkeletons: true,
       includeCameras: false,
       includeExtras: true,
-      rotateCoordinateSystem: true,
-      onProgress: updatePreviewProgress,
-    })
+      rotateCoordinateSystem: true
+    }, updatePreviewProgress)
 
     previewBlobUrl = URL.createObjectURL(blob)
 

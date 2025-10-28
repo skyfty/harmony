@@ -296,9 +296,8 @@ function rotateSceneForCoordinateSystem(scene: THREE.Scene) {
   scene.updateMatrixWorld(true)
 }
 
-export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, options: SceneExportOptions): Promise<Blob> {
+export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, options: SceneExportOptions, onProgress: (progress: number, message?: string) => void): Promise<Blob> {
 
-  const onProgress = options.onProgress ?? (() => {})
   onProgress(10, 'Capturing scene data...')
 
   onProgress(35, 'Applying export preferences...')
@@ -321,12 +320,10 @@ export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, opti
 
   return new Blob([serialized], { type: 'application/json' })
 }
-export async function prepareGLBSceneExport(scene: THREE.Scene, options: SceneExportOptions): Promise<Blob> {
+export async function prepareGLBSceneExport(scene: THREE.Scene, options: SceneExportOptions, onProgress: (progress: number, message?: string) => void): Promise<Blob> {
   if (!scene) {
     throw new Error('Scene not initialized')
   }
-
-  const onProgress = options.onProgress ?? (() => {})
   const includeTextures = options.includeTextures ?? true
   const includeAnimations = options.includeAnimations ?? true
   const includeSkybox = options.includeSkybox ?? true

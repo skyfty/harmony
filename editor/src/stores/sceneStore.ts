@@ -2383,7 +2383,7 @@ function resolveEmbeddedAssetFilename(scene: StoredSceneDocument, assetId: strin
   return ensureExtension(filename, extension)
 }
 
-async function buildPackageAssetMapForExport(
+export async function buildPackageAssetMapForExport(
   scene: StoredSceneDocument,
   options: SceneBundleExportOptions,
 ): Promise<Record<string, string>> {
@@ -2464,7 +2464,7 @@ async function buildPackageAssetMapForExport(
   return baseMap
 }
 
-async function cloneSceneDocumentForExport(
+export async function cloneSceneDocumentForExport(
   scene: StoredSceneDocument,
   options: SceneBundleExportOptions,
 ): Promise<StoredSceneDocument> {
@@ -3319,7 +3319,8 @@ export const useSceneStore = defineStore('scene', {
       }
     },
     createSceneDocumentSnapshot(): StoredSceneDocument {
-      return buildSceneDocumentFromState(this)
+      const snapshot = buildSceneDocumentFromState(this)
+      return snapshot
     },
     appendUndoSnapshot(snapshot: SceneHistoryEntry, options: { resetRedo?: boolean } = {}) {
       const nextUndoStack = [...this.undoStack, snapshot]

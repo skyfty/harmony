@@ -1,28 +1,12 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import type { SceneExportFormat} from '@/types/scene-export'
+import type { SceneExportFormat, SceneExportOptions } from '@/types/scene-export'
 
-export type SceneExportDialogOptions = {
-  includeTextures: boolean
-  includeAnimations: boolean
-  includeSkybox: boolean
-  includeLights: boolean
-  includeHiddenNodes: boolean
-  includeSkeletons: boolean
-  includeCameras: boolean
-  includeExtras: boolean
-  rotateCoordinateSystem: boolean
-  format: SceneExportFormat
-}
-
-export type SceneExportDialogPayload = SceneExportDialogOptions & {
-  fileName: string
-}
 
 const props = defineProps<{
   modelValue: boolean
   defaultFileName: string
-  initialOptions: SceneExportDialogOptions
+  initialOptions: SceneExportOptions
   exporting: boolean
   progress: number
   progressMessage: string
@@ -31,19 +15,19 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'update:modelValue', value: boolean): void
-  (event: 'confirm', payload: SceneExportDialogPayload): void
+  (event: 'confirm', payload: SceneExportOptions): void
   (event: 'cancel'): void
 }>()
 
-const form = reactive<SceneExportDialogPayload>(getInitialFormState())
+const form = reactive<SceneExportOptions>(getInitialFormState())
 const fileNameError = ref<string | null>(null)
 
 const formatOptions = [
-  { label: '.json', value: 'json' as const },
-  { label: '.glb', value: 'glb' as const },
+  { label: '.json', value: 'json' as SceneExportFormat },
+  { label: '.glb', value: 'glb' as SceneExportFormat },
 ]
 
-function getInitialFormState(): SceneExportDialogPayload {
+function getInitialFormState(): SceneExportOptions {
   const sanitizedName = sanitizeInputName(props.defaultFileName || 'scene')
   return {
     fileName: sanitizedName || 'scene',
@@ -130,6 +114,21 @@ function handleCancel() {
   emit('update:modelValue', false)
 }
 
+function normalFileizeInputName(input: string): string {
+  const trimmed = input.trim()
+  if (props.initialOptions.format === 'glb') {
+    if (/\.(glb)$/i.test(trimmed)) {
+      return trimmed
+    }
+    return `${trimmed}.glb`
+  } else {
+    if (/\.(json)$/i.test(trimmed)) {
+      return trimmed
+    }
+    return `${trimmed}.json`
+  }
+}
+
 function handleConfirm() {
   if (props.exporting) {
     return
@@ -137,9 +136,9 @@ function handleConfirm() {
   if (!validate()) {
     return
   }
-  const payload: SceneExportDialogPayload = {
+  const payload: SceneExportOptions = {
     ...form,
-    fileName: form.fileName.trim(),
+    fileName:  normalFileizeInputName(form.fileName),
   }
   emit('confirm', payload)
 }

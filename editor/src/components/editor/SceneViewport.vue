@@ -18,7 +18,7 @@ import type {
   SceneMaterialTextureSettings,
 } from '@/types/material'
 import { MATERIAL_CLASS_NAMES, normalizeSceneMaterialType, createTextureSettings, textureSettingsSignature } from '@/types/material'
-import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
+import { useSceneStore, getRuntimeObject, buildPackageAssetMapForExport } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import type { SceneCameraState } from '@/types/scene-camera-state'
@@ -35,8 +35,7 @@ import type { SkyboxParameterKey } from '@/types/skybox'
 import { SKYBOX_PRESETS, CUSTOM_SKYBOX_PRESET_ID, cloneSkyboxSettings } from '@/stores/skyboxPresets'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
 import type { SceneExportOptions, SceneExportResult } from '@/types/scene-export'
-
-import { prepareSceneExport, prepareJsonSceneExport } from '@/plugins/sceneExport'
+import { prepareGLBSceneExport, prepareJsonSceneExport } from '@/plugins/sceneExport'
 import ViewportToolbar from './ViewportToolbar.vue'
 import TransformToolbar from './TransformToolbar.vue'
 import GroundToolbar from './GroundToolbar.vue'
@@ -2215,20 +2214,22 @@ function snapVectorToGridForNode(vec: THREE.Vector3, nodeId: string | null | und
 }
 
 export type SceneViewportHandle = {
-  exportScene(options: SceneExportOptions): Promise<Blob>
+  exportScene(options: SceneExportOptions, onProgress: (progress: number, message?: string) => void): Promise<Blob>
   captureThumbnail(): void
 }
 
 
-async function exportScene(options: SceneExportOptions): Promise<Blob> {
+async function exportScene(options: SceneExportOptions, onProgress: (progress: number, message?: string) => void): Promise<Blob> {
   if (!scene) {
     throw new Error('Scene not initialized')
   }
-  if (options.format === 'GLB') {
-    return prepareGLBSceneExport(scene, options)
-  } else if (options.format === 'JSON') {
-    const snapshot = sceneStore.createSceneDocumentSnapshot() as StoredSceneDocument
-    return prepareJsonSceneExport(snapshot, options)
+  if (options.format === 'glb') {
+    return prepareGLBSceneExport(scene, options, onProgress)
+  } else if (options.format === 'json') {
+    let snapshot = sceneStore.createSceneDocumentSnapshot() as StoredSceneDocument
+    const packageAssetMap = await buildPackageAssetMapForExport(snapshot,{embedResources:true})
+    snapshot.packageAssetMap = packageAssetMap
+    return prepareJsonSceneExport(snapshot, options, onProgress)
   } else {
     throw new Error(`Unsupported export format: ${options.format}`)
   }
