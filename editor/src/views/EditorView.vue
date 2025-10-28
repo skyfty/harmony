@@ -74,13 +74,14 @@ const exportDialogFileName = ref('scene')
 const exportPreferences = ref<SceneExportDialogOptions>({
   includeTextures: true,
   includeAnimations: true,
-  includeSkybox: false,
-  includeLights: false,
+  includeSkybox: true,
+  includeLights: true,
   includeHiddenNodes: true,
   includeSkeletons: true,
   includeCameras: false,
   includeExtras: true,
   rotateCoordinateSystem: true,
+  format: 'json',
 })
 const viewportRef = ref<SceneViewportHandle | null>(null)
 const isNewSceneDialogOpen = ref(false)
@@ -344,7 +345,7 @@ function handleOpenAction() {
 function openExportDialog() {
   const rawName = sceneStore.currentSceneMeta?.name ?? 'scene'
   const trimmed = rawName.trim()
-  exportDialogFileName.value = trimmed || 'scene'
+  exportDialogFileName.value = sanitizeExportFileName(trimmed || 'scene')
   exportProgress.value = 0
   exportProgressMessage.value = ''
   exportErrorMessage.value = null
@@ -353,7 +354,11 @@ function openExportDialog() {
 
 function sanitizeExportFileName(input: string): string {
   const trimmed = input.trim()
-  return trimmed || 'scene'
+  if (!trimmed) {
+    return 'scene'
+  }
+  const withoutExtension = trimmed.replace(/\.(glb|json)$/i, '')
+  return withoutExtension || 'scene'
 }
 
 async function handleExportDialogConfirm(payload: SceneExportDialogPayload) {
@@ -380,7 +385,7 @@ async function handleExportDialogConfirm(payload: SceneExportDialogPayload) {
 
   try {
     await viewport.exportScene({
-      format: 'GLB',
+      format: payload.format === 'json' ? 'JSON' : 'GLB',
       fileName: sanitizeExportFileName(fileName),
       includeTextures: payload.includeTextures,
       includeAnimations: payload.includeAnimations,

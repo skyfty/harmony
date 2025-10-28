@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 
+export type SceneExportDialogFormat = 'json' | 'glb'
+
 export type SceneExportDialogOptions = {
   includeTextures: boolean
   includeAnimations: boolean
@@ -11,6 +13,7 @@ export type SceneExportDialogOptions = {
   includeCameras: boolean
   includeExtras: boolean
   rotateCoordinateSystem: boolean
+  format: SceneExportDialogFormat
 }
 
 export type SceneExportDialogPayload = SceneExportDialogOptions & {
@@ -36,6 +39,11 @@ const emit = defineEmits<{
 const form = reactive<SceneExportDialogPayload>(getInitialFormState())
 const fileNameError = ref<string | null>(null)
 
+const formatOptions = [
+  { label: '.json', value: 'json' as const },
+  { label: '.glb', value: 'glb' as const },
+]
+
 function getInitialFormState(): SceneExportDialogPayload {
   const sanitizedName = sanitizeInputName(props.defaultFileName || 'scene')
   return {
@@ -49,6 +57,7 @@ function getInitialFormState(): SceneExportDialogPayload {
     includeCameras: props.initialOptions.includeCameras,
     includeExtras: props.initialOptions.includeExtras,
     rotateCoordinateSystem: !!props.initialOptions.rotateCoordinateSystem,
+    format: props.initialOptions.format ?? 'json',
   }
 }
 
@@ -97,7 +106,7 @@ function sanitizeInputName(input: string): string {
   if (!trimmed) {
     return ''
   }
-  return trimmed.replace(/\.glb$/i, '')
+  return trimmed.replace(/\.(glb|json)$/i, '')
 }
 
 function validate(): boolean {
@@ -148,20 +157,30 @@ function handleConfirm() {
     <v-card>
       <v-card-title class="dialog-title">Scene Export</v-card-title>
       <v-card-text>
-        <v-text-field
-          v-model="form.fileName"
-          label="File name"
-          :disabled="exporting"
-          :error="!!fileNameError"
-          :error-messages="fileNameError ? [fileNameError] : []"
-          density="comfortable"
-          variant="outlined"
-          @keydown.enter.prevent="handleConfirm"
-        >
-          <template #append-inner>
-            <span class="field-suffix">.glb</span>
-          </template>
-        </v-text-field>
+        <div class="file-input-row">
+          <v-text-field
+            v-model="form.fileName"
+            label="File name"
+            :disabled="exporting"
+            :error="!!fileNameError"
+            :error-messages="fileNameError ? [fileNameError] : []"
+            density="comfortable"
+            variant="outlined"
+            @keydown.enter.prevent="handleConfirm"
+          />
+          <v-select
+            v-model="form.format"
+            class="format-select"
+            :disabled="exporting"
+            :items="formatOptions"
+            item-title="label"
+            item-value="value"
+            label="Format"
+            density="comfortable"
+            variant="outlined"
+            hide-details
+          />
+        </div>
 
         <div class="options-grid">
           <v-checkbox
@@ -290,9 +309,15 @@ function handleConfirm() {
   color: rgba(0, 0, 0, 0.64);
 }
 
-.field-suffix {
-  font-size: 0.85rem;
-  color: rgba(0, 0, 0, 0.54);
+.file-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+
+.format-select {
+  min-width: 108px;
 }
 
 .options-grid {

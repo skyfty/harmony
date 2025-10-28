@@ -22,6 +22,8 @@ import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import type { SceneCameraState } from '@/types/scene-camera-state'
+import type { StoredSceneDocument } from '@/types/stored-scene-document'
+
 import type { EditorTool } from '@/types/editor-tool'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { getCachedModelObject, getOrLoadModelObject } from '@/stores/modelObjectCache'
@@ -32,7 +34,7 @@ import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SkyboxParameterKey } from '@/types/skybox'
 import { SKYBOX_PRESETS, CUSTOM_SKYBOX_PRESET_ID, cloneSkyboxSettings } from '@/stores/skyboxPresets'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
-import { prepareSceneExport, triggerDownload, type SceneExportResult, type SceneExportOptions } from '@/plugins/sceneExport'
+import { prepareSceneExport, prepareJsonSceneExport, triggerDownload, type SceneExportResult, type SceneExportOptions } from '@/plugins/sceneExport'
 import ViewportToolbar from './ViewportToolbar.vue'
 import TransformToolbar from './TransformToolbar.vue'
 import GroundToolbar from './GroundToolbar.vue'
@@ -2216,12 +2218,21 @@ export type SceneViewportHandle = {
   captureThumbnail(): void
 }
 
+
 async function exportScene(options: SceneExportOptions): Promise<void> {
   if (!scene) {
     throw new Error('Scene not initialized')
   }
-  const { blob, fileName } = await prepareSceneExport(scene, options)
-  triggerDownload(blob, fileName)
+  if (options.format === 'GLB') {
+    const { blob, fileName } = await prepareSceneExport(scene, options)
+    triggerDownload(blob, fileName)
+  } else if (options.format === 'JSON') {
+    const snapshot = sceneStore.createSceneDocumentSnapshot() as StoredSceneDocument
+    const { blob, fileName } = await prepareJsonSceneExport(snapshot, options)
+    triggerDownload(blob, fileName)
+  } else {
+    throw new Error(`Unsupported export format: ${options.format}`)
+  }
 }
 
 async function generateSceneBlob(options: SceneExportOptions): Promise<SceneExportResult> {

@@ -1,6 +1,12 @@
 import * as THREE from 'three'
 import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
+import type { StoredSceneDocument } from '@/types/stored-scene-document'
+import type { SceneNode } from '@/types/scene'
+import type { SceneMaterial, SceneMaterialTextureSlot, SceneNodeMaterial } from '@/types/material'
+import type { SceneNodeComponentState } from '@/types/node-component'
+import type { GroundSettings } from '@/types/ground-settings'
+import type { AssetIndexEntry } from '@/types/asset-index-entry'
 
 export type SceneExportResult = {
   blob: Blob
@@ -30,27 +36,38 @@ const MATERIAL_TEXTURE_KEYS = [
   'gradientMap',
 ] as const
 
-export type ExportFormat = 'OBJ' | 'PLY' | 'STL' | 'GLTF' | 'GLB'
+export type ExportFormat =  'GLB' | 'JSON'
 
 export interface SceneExportOptions {
     format: ExportFormat
-    fileName?: string
-    includeTextures?: boolean
-    includeAnimations?: boolean
-    includeSkybox?: boolean
-    includeLights?: boolean
-    includeHiddenNodes?: boolean
-    includeSkeletons?: boolean
-    includeCameras?: boolean
-    includeExtras?: boolean
-  rotateCoordinateSystem?: boolean
-    onProgress?: (progress: number, message?: string) => void
+    fileName: string
+    includeTextures: boolean
+    includeAnimations: boolean
+    includeSkybox: boolean
+    includeLights: boolean
+    includeHiddenNodes: boolean
+    includeSkeletons: boolean
+    includeCameras: boolean
+    includeExtras: boolean
+    rotateCoordinateSystem: boolean
+    onProgress: (progress: number, message?: string) => void
 }
 
 export interface GLBExportSettings {
     includeAnimations?: boolean
     onlyVisible?: boolean
     includeCustomExtensions?: boolean
+}
+
+
+export interface SceneJsonExportDocument {
+  id: string
+  name: string
+  nodes: SceneNode[]
+  materials: SceneMaterial[]
+  groundSettings: GroundSettings
+  assetIndex: Record<string, AssetIndexEntry>
+  packageAssetMap: Record<string, string>
 }
 
 type RemovedSceneObject = {
@@ -185,7 +202,7 @@ function normalizeBaseFileName(input?: string): string {
     return fallback
   }
   const trimmed = input.trim()
-  const withoutExtension = trimmed.replace(/\.glb$/i, '')
+  const withoutExtension = trimmed.replace(/\.(glb|json)$/i, '')
   const sanitized = withoutExtension.replace(/[^a-zA-Z0-9-_. ]+/g, '_').trim()
   return sanitized || fallback
 }
@@ -342,16 +359,44 @@ export function triggerDownload(blob: Blob, fileName: string) {
   requestAnimationFrame(() => URL.revokeObjectURL(url))
 }
 
+export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, options: SceneExportOptions): Promise<SceneExportResult> {
+
+  const onProgress = options.onProgress ?? (() => {})
+  const baseName = normalizeBaseFileName(options.fileName)
+  onProgress(10, 'Capturing scene data...')
+
+  onProgress(35, 'Applying export preferences...')
+  const exportDocument: SceneJsonExportDocument = {
+    id: snapshot.id,
+    name: snapshot.name,
+    nodes: snapshot.nodes,
+    materials: snapshot.materials,
+    groundSettings: snapshot.groundSettings,
+    assetIndex: snapshot.assetIndex,
+    packageAssetMap: snapshot.packageAssetMap,
+  };
+  const sanitizedDocument = sanitizeSceneDocumentForJsonExport(exportDocument, options)
+
+  onProgress(65, 'Generating JSON file...')
+  const serialized = JSON.stringify(sanitizedDocument, null, 2)
+
+  const safeBaseName = baseName || 'scene-export'
+  const fileName = `${safeBaseName}.json`
+
+  onProgress(95, 'Preparing download...')
+  onProgress(100, 'Export complete')
+
+  return {
+    blob: new Blob([serialized], { type: 'application/json' }),
+    fileName,
+  }
+}
 export async function prepareSceneExport(scene: THREE.Scene, options: SceneExportOptions): Promise<SceneExportResult> {
   if (!scene) {
     throw new Error('Scene not initialized')
   }
 
   const format = options.format ?? 'GLB'
-  if (format !== 'GLB') {
-    throw new Error(`Unsupported export format: ${format}`)
-  }
-
   const onProgress = options.onProgress ?? (() => {})
   const includeTextures = options.includeTextures ?? true
   const includeAnimations = options.includeAnimations ?? true
@@ -361,8 +406,12 @@ export async function prepareSceneExport(scene: THREE.Scene, options: SceneExpor
   const includeSkeletons = options.includeSkeletons ?? true
   const includeCameras = options.includeCameras ?? true
   const includeExtras = options.includeExtras ?? true
-
   const baseName = normalizeBaseFileName(options.fileName)
+
+  if (format !== 'GLB') {
+    throw new Error(`Unsupported export format: ${format}`)
+  }
+
   const fileName = `${baseName}.glb`
 
   onProgress(5, 'Cloning scene data...')
@@ -416,4 +465,164 @@ export async function prepareSceneExport(scene: THREE.Scene, options: SceneExpor
     blob,
     fileName,
   }
+}
+
+export function sanitizeSceneDocumentForJsonExport(
+  document: SceneJsonExportDocument,
+  options: SceneExportOptions,
+): SceneJsonExportDocument {
+  const removedNodeIds = new Set<string>()
+  const sanitizedMaterials = document.materials.map((material) => sanitizeSceneMaterial(material, options.includeTextures))
+  const sanitizedNodes = sanitizeNodesForJsonExport(document.nodes, options, removedNodeIds)
+
+  return {
+    ...document,
+    materials: sanitizedMaterials,
+    nodes: sanitizedNodes
+  }
+}
+
+function sanitizeNodesForJsonExport(
+  nodes: SceneNode[],
+  options: SceneExportOptions,
+  removedNodeIds: Set<string>,
+): SceneNode[] {
+  const result: SceneNode[] = []
+  for (const node of nodes) {
+    if (shouldExcludeNodeForJsonExport(node, options)) {
+      collectNodeTreeIds(node, removedNodeIds)
+      continue
+    }
+    const sanitized = sanitizeNodeForJsonExport(node, options, removedNodeIds)
+    result.push(sanitized)
+  }
+  return result
+}
+
+function shouldExcludeNodeForJsonExport(node: SceneNode, options: SceneExportOptions): boolean {
+  if (!options.includeHiddenNodes && node.visible === false) {
+    return true
+  }
+  if (!options.includeLights && (node.nodeType === 'Light' || Boolean(node.light))) {
+    return true
+  }
+  if (!options.includeCameras && (node.nodeType === 'Camera' || Boolean(node.camera))) {
+    return true
+  }
+  if (!options.includeSkybox && node.name === 'HarmonySky') {
+    return true
+  }
+  return false
+}
+
+function sanitizeNodeForJsonExport(
+  node: SceneNode,
+  options: SceneExportOptions,
+  removedNodeIds: Set<string>,
+): SceneNode {
+  const sanitized: SceneNode = { ...node }
+
+  if (node.children?.length) {
+    const children = sanitizeNodesForJsonExport(node.children, options, removedNodeIds)
+    if (children.length) {
+      sanitized.children = children
+    } else {
+      delete sanitized.children
+    }
+  } else if ('children' in sanitized) {
+    delete sanitized.children
+  }
+
+  if (node.materials?.length) {
+    sanitized.materials = node.materials.map((material) => sanitizeSceneNodeMaterial(material, options.includeTextures))
+  } else if ('materials' in sanitized) {
+    delete sanitized.materials
+  }
+
+  if (!options.includeExtras) {
+    if ('components' in sanitized) {
+      delete sanitized.components
+    }
+    if ('importMetadata' in sanitized) {
+      delete sanitized.importMetadata
+    }
+    if ('sourceAssetId' in sanitized) {
+      delete sanitized.sourceAssetId
+    }
+  } else if (sanitized.components?.length) {
+    const clonedComponents = sanitized.components.map(cloneNodeComponentState)
+    const filteredComponents = sanitizeNodeComponentsForJsonExport(clonedComponents, options)
+    if (filteredComponents.length) {
+      sanitized.components = filteredComponents
+    } else {
+      delete sanitized.components
+    }
+  }
+
+  if (!options.includeTextures && sanitized.dynamicMesh?.type === 'Ground') {
+    sanitized.dynamicMesh = {
+      ...sanitized.dynamicMesh,
+      textureDataUrl: null,
+      textureName: null,
+    }
+  }
+
+  return sanitized
+}
+
+function cloneNodeComponentState(component: SceneNodeComponentState): SceneNodeComponentState {
+  return {
+    ...component,
+    props: { ...(component.props ?? {}) },
+    metadata: component.metadata ? { ...component.metadata } : undefined,
+  }
+}
+
+function sanitizeNodeComponentsForJsonExport(
+  components: SceneNodeComponentState[],
+  options: SceneExportOptions,
+): SceneNodeComponentState[] {
+  let filtered = components
+  if (!options.includeAnimations) {
+    filtered = filtered.filter((entry) => !/animation/i.test(entry.type))
+  }
+  if (!options.includeSkeletons) {
+    filtered = filtered.filter((entry) => !/skeleton/i.test(entry.type))
+  }
+  return filtered
+}
+
+function collectNodeTreeIds(node: SceneNode, bucket: Set<string>) {
+  bucket.add(node.id)
+  if (node.children?.length) {
+    for (const child of node.children) {
+      collectNodeTreeIds(child, bucket)
+    }
+  }
+}
+
+function sanitizeSceneMaterial(material: SceneMaterial, includeTextures: boolean): SceneMaterial {
+  const existingTextures = material.textures ?? {}
+  return {
+    ...material,
+    textures: includeTextures ? { ...existingTextures } : reduceTexturesToNull(existingTextures),
+  }
+}
+
+function sanitizeSceneNodeMaterial(material: SceneNodeMaterial, includeTextures: boolean): SceneNodeMaterial {
+  const existingTextures = material.textures ?? {}
+  return {
+    ...material,
+    textures: includeTextures ? { ...existingTextures } : reduceTexturesToNull(existingTextures),
+  }
+}
+
+function reduceTexturesToNull(
+  textures: Partial<Record<SceneMaterialTextureSlot, unknown>>,
+): Partial<Record<SceneMaterialTextureSlot, null>> {
+  const stripped: Partial<Record<SceneMaterialTextureSlot, null>> = {}
+  for (const key of Object.keys(textures) as SceneMaterialTextureSlot[]) {
+    stripped[key] = null
+  }
+  return stripped
 }

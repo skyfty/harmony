@@ -3318,6 +3318,9 @@ export const useSceneStore = defineStore('scene', {
         this.selectedAssetId = null
       }
     },
+    createSceneDocumentSnapshot(): StoredSceneDocument {
+      return buildSceneDocumentFromState(this)
+    },
     appendUndoSnapshot(snapshot: SceneHistoryEntry, options: { resetRedo?: boolean } = {}) {
       const nextUndoStack = [...this.undoStack, snapshot]
       this.undoStack = nextUndoStack.length > HISTORY_LIMIT
