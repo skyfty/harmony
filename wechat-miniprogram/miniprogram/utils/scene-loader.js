@@ -1,3 +1,5 @@
+const { decode } = require('base64')
+
 const LOCAL_ASSET_PREFIX = 'local::';
 const DEFAULT_SCENE_BACKGROUND = '#101720';
 const DEFAULT_SCENE_FOG_COLOR = '#0d1520';
@@ -37,14 +39,20 @@ class SceneBuilder {
         this.prepareMaterialTemplates();
         await this.buildNodes(this.document.nodes, this.scene);
         this.ensureLighting();
-        this.setupCamera(this.document.camera);
+        
+                console.log('111111111111');
+        // this.setupCamera(this.document.camera);
+                console.log('333333333333');
         this.scene.updateMatrixWorld(true);
+                console.log('44444444444');
         this.computeStatistics();
-        const camera = (_a = this.camera) !== null && _a !== void 0 ? _a : this.createFallbackCamera();
+                console.log('555555555555555');
+        // const camera = (_a = this.camera) !== null && _a !== void 0 ? _a : this.createFallbackCamera();
+                console.log('6666666666666');
         return {
             scene: this.scene,
-            camera,
-            cameraTarget: this.cameraTarget.clone(),
+            // camera,
+            // cameraTarget: this.cameraTarget.clone(),
             mixers: this.mixers,
             statistics: { ...this.stats },
             sceneName: (_b = this.document.name) !== null && _b !== void 0 ? _b : 'Scene',
@@ -496,10 +504,12 @@ class SceneBuilder {
             default:
                 arrayBuffer = null;
         }
+
         if (!arrayBuffer) {
             console.warn('资源数据为空', assetId);
             return null;
         }
+
         const gltfRoot = await this.parseGltf(arrayBuffer);
         if (!gltfRoot) {
             console.warn('GLTF 解析失败', assetId);
@@ -541,32 +551,26 @@ class SceneBuilder {
             });
         });
     }
+
     decodeDataUrl(dataUrl) {
+        if (typeof dataUrl !== 'string') {
+            throw new TypeError('dataUrl must be a string');
+        }
         const [, base64] = dataUrl.split(',');
-        const clean = base64 !== null && base64 !== void 0 ? base64 : '';
+        const clean = (base64 !== null && base64 !== void 0 ? base64 : '').replace(/\s/g, '');
+        if (!clean) {
+            return new ArrayBuffer(0);
+        }
         if (WX === null || WX === void 0 ? void 0 : WX.base64ToArrayBuffer) {
             return WX.base64ToArrayBuffer(clean);
         }
-        const globalObj = globalThis;
-        const bufferFactory = globalObj.Buffer;
-        if (bufferFactory === null || bufferFactory === void 0 ? void 0 : bufferFactory.from) {
-            const buffer = bufferFactory.from(clean, 'base64');
-            return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+        try {
+            return decode(clean);
         }
-        const atobCandidate = globalObj.atob;
-        const globalAtob = typeof atobCandidate === 'function'
-            ? atobCandidate
-            : null;
-        if (!globalAtob) {
-            throw new Error('当前环境无法解析数据 URL');
+        catch (error) {
+            console.error('Base64 解码失败', error);
+            throw (error instanceof Error ? error : new Error(String(error)));
         }
-        const binary = globalAtob(clean);
-        const length = binary.length;
-        const bytes = new Uint8Array(length);
-        for (let i = 0; i < length; i += 1) {
-            bytes[i] = binary.charCodeAt(i);
-        }
-        return bytes.buffer;
     }
     downloadArrayBuffer(url) {
         return new Promise((resolve, reject) => {
