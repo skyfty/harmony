@@ -9,7 +9,6 @@ const WX = typeof globalThis !== 'undefined' && globalThis.wx
 class SceneBuilder {
     constructor(context) {
         var _a;
-        this.camera = null;
         this.mixers = [];
         this.materialTemplates = new Map();
         this.textureCache = new Map();
@@ -32,27 +31,15 @@ class SceneBuilder {
         this.scene.background = new this.THREE.Color(DEFAULT_SCENE_BACKGROUND);
         const fog = new this.THREE.Fog(DEFAULT_SCENE_FOG_COLOR, 45, 320);
         this.scene.fog = fog;
-        this.cameraTarget = new this.THREE.Vector3();
     }
     async build() {
         var _a, _b;
         this.prepareMaterialTemplates();
         await this.buildNodes(this.document.nodes, this.scene);
         this.ensureLighting();
-        
-                console.log('111111111111');
-        // this.setupCamera(this.document.camera);
-                console.log('333333333333');
         this.scene.updateMatrixWorld(true);
-                console.log('44444444444');
-        this.computeStatistics();
-                console.log('555555555555555');
-        // const camera = (_a = this.camera) !== null && _a !== void 0 ? _a : this.createFallbackCamera();
-                console.log('6666666666666');
         return {
             scene: this.scene,
-            // camera,
-            // cameraTarget: this.cameraTarget.clone(),
             mixers: this.mixers,
             statistics: { ...this.stats },
             sceneName: (_b = this.document.name) !== null && _b !== void 0 ? _b : 'Scene',
@@ -79,8 +66,6 @@ class SceneBuilder {
                 return this.buildGroupNode(node);
             case 'Light':
                 return this.buildLightNode(node);
-            case 'Camera':
-                return this.buildCameraPlaceholder(node);
             case 'Mesh':
                 return this.buildMeshNode(node);
             default:
@@ -159,13 +144,6 @@ class SceneBuilder {
             this.lightTargets.push(target);
         }
         return light;
-    }
-    buildCameraPlaceholder(node) {
-        const helper = new this.THREE.Object3D();
-        helper.name = node.name || 'Camera';
-        this.applyTransform(helper, node);
-        this.applyVisibility(helper, node);
-        return helper;
     }
     async buildMeshNode(node) {
         var _a, _b;
@@ -687,37 +665,6 @@ class SceneBuilder {
         }
         const ambient = new this.THREE.AmbientLight('#404040', 0.4);
         this.scene.add(ambient);
-    }
-    setupCamera(cameraState) {
-        var _a;
-        const fov = (_a = cameraState === null || cameraState === void 0 ? void 0 : cameraState.fov) !== null && _a !== void 0 ? _a : 50;
-        const aspect = 1;
-        const near = 0.1;
-        const far = 500;
-        this.camera = new this.THREE.PerspectiveCamera(fov, aspect, near, far);
-        this.camera.position.set(cameraState.position.x, cameraState.position.y, cameraState.position.z);
-        this.cameraTarget.set(cameraState.target.x, cameraState.target.y, cameraState.target.z);
-        this.camera.lookAt(this.cameraTarget);
-        this.scene.add(this.camera);
-    }
-    createFallbackCamera() {
-        const camera = new this.THREE.PerspectiveCamera(50, 1, 0.1, 500);
-        camera.position.set(12, 12, 12);
-        camera.lookAt(new this.THREE.Vector3(0, 0, 0));
-        this.scene.add(camera);
-        return camera;
-    }
-    computeStatistics() {
-        const box = new this.THREE.Box3().setFromObject(this.scene);
-        if (!box.isEmpty()) {
-            const size = new this.THREE.Vector3();
-            box.getSize(size);
-            if (this.camera && size.length() > 0) {
-                const distance = size.length() * 1.2;
-                this.camera.far = Math.max(this.camera.far, distance * 2);
-                this.camera.updateProjectionMatrix();
-            }
-        }
     }
 }
 export function parseSceneBundle(source) {

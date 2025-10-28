@@ -216,16 +216,15 @@ Component({
       const scope = this;
       scope.scene = result.scene
       // scope.scene = new THREE.Scene();
-      // scope.scene.background = new THREE.Color(0xe0e0e0);
-      // scope.scene.fog = new THREE.Fog(0xe0e0e0, 20, 100);
-      // var light = new THREE.HemisphereLight(0xffffff, 0x444444);
-      // light.position.set(0, 20, 0);
-      // scope.scene.add(light);
-      // light = new THREE.DirectionalLight(0xffffff);
-      // light.position.set(0, 20, 10);
-      // scope.scene.add(light);
+      scope.scene.background = new THREE.Color(0xe0e0e0);
+      scope.scene.fog = new THREE.Fog(0xe0e0e0, 20, 100);
+      var light = new THREE.HemisphereLight(0xffffff, 0x444444);
+      light.position.set(0, 20, 0);
+      scope.scene.add(light);
+      light = new THREE.DirectionalLight(0xffffff);
+      light.position.set(0, 20, 10);
+      scope.scene.add(light);
 
-       // ground
       // var mesh = new THREE.Mesh(new THREE.PlaneBufferGeometry(2000, 2000), new THREE.MeshPhongMaterial({ color: 0x999999, depthWrite: false }));
       // mesh.rotation.x = - Math.PI / 2;
       // scope.scene.add(mesh);
@@ -234,8 +233,8 @@ Component({
       // grid.material.transparent = true;
       // scope.scene.add(grid);
 
-        //  var mesh1 = new THREE.Mesh(new THREE.BoxBufferGeometry(1, 1, 1), new THREE.MeshPhongMaterial({ color: 0x999999, depthWrite: false }));
-        // scope.scene.add(mesh1);
+      //    var mesh1 = new THREE.Mesh(new THREE.BoxBufferGeometry(1, 1, 1), new THREE.MeshPhongMaterial({ color: 0x999999, depthWrite: false }));
+      //   scope.scene.add(mesh1);
 
       // if (result && result.scene) {
       //   scope.scene.add(result.scene)

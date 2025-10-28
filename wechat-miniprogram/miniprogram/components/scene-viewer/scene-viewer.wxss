@@ -9,7 +9,7 @@
 
 .scene-canvas {
   width: 100%;
-  height: 30%;
+  height: 80%;
   display: block;
   position: absolute;
   z-index:1;
