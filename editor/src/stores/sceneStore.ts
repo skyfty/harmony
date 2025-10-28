@@ -3361,8 +3361,8 @@ export const useSceneStore = defineStore('scene', {
         this.groundSettings = cloneGroundSettings(snapshot.groundSettings)
         this.resourceProviderId = snapshot.resourceProviderId
 
-  componentManager.reset()
-  componentManager.syncScene(this.nodes)
+        componentManager.reset()
+        componentManager.syncScene(this.nodes)
 
         assetCache.recalculateUsage(this.nodes)
 

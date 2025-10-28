@@ -342,6 +342,20 @@ function handleNewAction() {
 function handleOpenAction() {
   isSceneManagerOpen.value = true
 }
+
+function triggerDownload(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.style.display = 'none'
+  anchor.href = url
+  anchor.download = fileName
+  document.body.appendChild(anchor)
+  anchor.click()
+  document.body.removeChild(anchor)
+  requestAnimationFrame(() => URL.revokeObjectURL(url))
+}
+
+
 function openExportDialog() {
   const rawName = sceneStore.currentSceneMeta?.name ?? 'scene'
   const trimmed = rawName.trim()
@@ -384,8 +398,8 @@ async function handleExportDialogConfirm(payload: SceneExportDialogPayload) {
   let exportSucceeded = false
 
   try {
-    await viewport.exportScene({
-      format: payload.format === 'json' ? 'JSON' : 'GLB',
+    const blob = await viewport.exportScene({
+      format: payload.format,
       fileName: sanitizeExportFileName(fileName),
       includeTextures: payload.includeTextures,
       includeAnimations: payload.includeAnimations,
@@ -401,6 +415,7 @@ async function handleExportDialogConfirm(payload: SceneExportDialogPayload) {
         exportProgressMessage.value = message ?? `Export progress ${Math.round(progress)}%`
       },
     })
+    triggerDownload(blob, fileName)
 
     exportSucceeded = true
     exportProgress.value = 100
@@ -511,9 +526,18 @@ async function handlePreview() {
   let previewBlobUrl: string | null = null
 
   try {
-    const { blob } = await viewport.generateSceneBlob({
+    const blob = await viewport.exportScene({
       format: 'GLB',
       fileName: `${sceneName}-preview`,
+      includeTextures: true,
+      includeAnimations: true,
+      includeSkybox: true,
+      includeLights: true,
+      includeHiddenNodes: false,
+      includeSkeletons: true,
+      includeCameras: false,
+      includeExtras: true,
+      rotateCoordinateSystem: true,
       onProgress: updatePreviewProgress,
     })
 

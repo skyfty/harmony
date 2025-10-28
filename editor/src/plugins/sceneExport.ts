@@ -5,12 +5,12 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { SceneNode } from '@/types/scene'
 import type { SceneMaterial, SceneMaterialTextureSlot, SceneNodeMaterial } from '@/types/material'
 import type { SceneNodeComponentState } from '@/types/node-component'
-import type { GroundSettings } from '@/types/ground-settings'
-import type { AssetIndexEntry } from '@/types/asset-index-entry'
+import type { SceneExportOptions, GLBExportSettings,SceneJsonExportDocument } from '@/types/scene-export'
 
-export type SceneExportResult = {
-  blob: Blob
-  fileName: string
+type RemovedSceneObject = {
+    parent: THREE.Object3D
+    object: THREE.Object3D
+    index: number
 }
 
 const MATERIAL_TEXTURE_KEYS = [
@@ -35,46 +35,6 @@ const MATERIAL_TEXTURE_KEYS = [
   'bumpMap',
   'gradientMap',
 ] as const
-
-export type ExportFormat =  'GLB' | 'JSON'
-
-export interface SceneExportOptions {
-    format: ExportFormat
-    fileName: string
-    includeTextures: boolean
-    includeAnimations: boolean
-    includeSkybox: boolean
-    includeLights: boolean
-    includeHiddenNodes: boolean
-    includeSkeletons: boolean
-    includeCameras: boolean
-    includeExtras: boolean
-    rotateCoordinateSystem: boolean
-    onProgress: (progress: number, message?: string) => void
-}
-
-export interface GLBExportSettings {
-    includeAnimations?: boolean
-    onlyVisible?: boolean
-    includeCustomExtensions?: boolean
-}
-
-
-export interface SceneJsonExportDocument {
-  id: string
-  name: string
-  nodes: SceneNode[]
-  materials: SceneMaterial[]
-  groundSettings: GroundSettings
-  assetIndex: Record<string, AssetIndexEntry>
-  packageAssetMap: Record<string, string>
-}
-
-type RemovedSceneObject = {
-    parent: THREE.Object3D
-    object: THREE.Object3D
-    index: number
-}
 
 const EDITOR_HELPER_TYPES = new Set<string>([
     'GridHelper',
@@ -194,17 +154,6 @@ async function exportGLB(scene: THREE.Scene, settings?: GLBExportSettings) {
     });
     const blob = new Blob([result as ArrayBuffer], { type: 'model/gltf-binary' })
     return blob;
-}
-
-function normalizeBaseFileName(input?: string): string {
-  const fallback = 'scene-export'
-  if (!input) {
-    return fallback
-  }
-  const trimmed = input.trim()
-  const withoutExtension = trimmed.replace(/\.(glb|json)$/i, '')
-  const sanitized = withoutExtension.replace(/[^a-zA-Z0-9-_. ]+/g, '_').trim()
-  return sanitized || fallback
 }
 
 function cloneMeshMaterials(root: THREE.Object3D) {
@@ -347,22 +296,9 @@ function rotateSceneForCoordinateSystem(scene: THREE.Scene) {
   scene.updateMatrixWorld(true)
 }
 
-export function triggerDownload(blob: Blob, fileName: string) {
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.style.display = 'none'
-  anchor.href = url
-  anchor.download = fileName
-  document.body.appendChild(anchor)
-  anchor.click()
-  document.body.removeChild(anchor)
-  requestAnimationFrame(() => URL.revokeObjectURL(url))
-}
-
-export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, options: SceneExportOptions): Promise<SceneExportResult> {
+export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, options: SceneExportOptions): Promise<Blob> {
 
   const onProgress = options.onProgress ?? (() => {})
-  const baseName = normalizeBaseFileName(options.fileName)
   onProgress(10, 'Capturing scene data...')
 
   onProgress(35, 'Applying export preferences...')
@@ -380,23 +316,16 @@ export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, opti
   onProgress(65, 'Generating JSON file...')
   const serialized = JSON.stringify(sanitizedDocument, null, 2)
 
-  const safeBaseName = baseName || 'scene-export'
-  const fileName = `${safeBaseName}.json`
-
   onProgress(95, 'Preparing download...')
   onProgress(100, 'Export complete')
 
-  return {
-    blob: new Blob([serialized], { type: 'application/json' }),
-    fileName,
-  }
+  return new Blob([serialized], { type: 'application/json' })
 }
-export async function prepareSceneExport(scene: THREE.Scene, options: SceneExportOptions): Promise<SceneExportResult> {
+export async function prepareGLBSceneExport(scene: THREE.Scene, options: SceneExportOptions): Promise<Blob> {
   if (!scene) {
     throw new Error('Scene not initialized')
   }
 
-  const format = options.format ?? 'GLB'
   const onProgress = options.onProgress ?? (() => {})
   const includeTextures = options.includeTextures ?? true
   const includeAnimations = options.includeAnimations ?? true
@@ -406,13 +335,7 @@ export async function prepareSceneExport(scene: THREE.Scene, options: SceneExpor
   const includeSkeletons = options.includeSkeletons ?? true
   const includeCameras = options.includeCameras ?? true
   const includeExtras = options.includeExtras ?? true
-  const baseName = normalizeBaseFileName(options.fileName)
 
-  if (format !== 'GLB') {
-    throw new Error(`Unsupported export format: ${format}`)
-  }
-
-  const fileName = `${baseName}.glb`
 
   onProgress(5, 'Cloning scene data...')
   const exportScene = clone(scene) as THREE.Scene
@@ -461,10 +384,7 @@ export async function prepareSceneExport(scene: THREE.Scene, options: SceneExpor
   onProgress(95, 'Preparing download...')
   onProgress(100, 'Export complete')
 
-  return {
-    blob,
-    fileName,
-  }
+  return blob
 }
 
 export function sanitizeSceneDocumentForJsonExport(

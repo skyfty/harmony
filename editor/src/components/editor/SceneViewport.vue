@@ -34,7 +34,9 @@ import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SkyboxParameterKey } from '@/types/skybox'
 import { SKYBOX_PRESETS, CUSTOM_SKYBOX_PRESET_ID, cloneSkyboxSettings } from '@/stores/skyboxPresets'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
-import { prepareSceneExport, prepareJsonSceneExport, triggerDownload, type SceneExportResult, type SceneExportOptions } from '@/plugins/sceneExport'
+import type { SceneExportOptions, SceneExportResult } from '@/types/scene-export'
+
+import { prepareSceneExport, prepareJsonSceneExport } from '@/plugins/sceneExport'
 import ViewportToolbar from './ViewportToolbar.vue'
 import TransformToolbar from './TransformToolbar.vue'
 import GroundToolbar from './GroundToolbar.vue'
@@ -2213,33 +2215,23 @@ function snapVectorToGridForNode(vec: THREE.Vector3, nodeId: string | null | und
 }
 
 export type SceneViewportHandle = {
-  exportScene(options: SceneExportOptions): Promise<void>
-  generateSceneBlob(options: SceneExportOptions): Promise<SceneExportResult>
+  exportScene(options: SceneExportOptions): Promise<Blob>
   captureThumbnail(): void
 }
 
 
-async function exportScene(options: SceneExportOptions): Promise<void> {
+async function exportScene(options: SceneExportOptions): Promise<Blob> {
   if (!scene) {
     throw new Error('Scene not initialized')
   }
   if (options.format === 'GLB') {
-    const { blob, fileName } = await prepareSceneExport(scene, options)
-    triggerDownload(blob, fileName)
+    return prepareGLBSceneExport(scene, options)
   } else if (options.format === 'JSON') {
     const snapshot = sceneStore.createSceneDocumentSnapshot() as StoredSceneDocument
-    const { blob, fileName } = await prepareJsonSceneExport(snapshot, options)
-    triggerDownload(blob, fileName)
+    return prepareJsonSceneExport(snapshot, options)
   } else {
     throw new Error(`Unsupported export format: ${options.format}`)
   }
-}
-
-async function generateSceneBlob(options: SceneExportOptions): Promise<SceneExportResult> {
-  if (!scene) {
-    throw new Error('Scene not initialized')
-  }
-  return prepareSceneExport(scene, options)
 }
 
 function clearSelectionBox() {
@@ -6461,8 +6453,7 @@ watch(
 
 defineExpose<SceneViewportHandle>({
   exportScene,
-  captureThumbnail,
-  generateSceneBlob,
+  captureThumbnail
 })
 </script>
 

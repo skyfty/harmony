@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-
-export type SceneExportDialogFormat = 'json' | 'glb'
+import type { SceneExportFormat} from '@/types/scene-export'
 
 export type SceneExportDialogOptions = {
   includeTextures: boolean
@@ -13,7 +12,7 @@ export type SceneExportDialogOptions = {
   includeCameras: boolean
   includeExtras: boolean
   rotateCoordinateSystem: boolean
-  format: SceneExportDialogFormat
+  format: SceneExportFormat
 }
 
 export type SceneExportDialogPayload = SceneExportDialogOptions & {
