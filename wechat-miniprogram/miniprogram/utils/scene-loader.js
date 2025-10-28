@@ -723,17 +723,7 @@ export function parseSceneBundle(source) {
     return source;
 }
 export async function buildSceneFromBundle(THREE, canvas, bundle, options = {}) {
-    var _a;
 
-    if (!((_a = bundle === null || bundle === void 0 ? void 0 : bundle.scenes) === null || _a === void 0 ? void 0 : _a.length)) {
-        throw new Error('场景文件缺少有效的 scenes 列表');
-    }
-    const targetScene = options.sceneId
-        ? bundle.scenes.find((scene) => scene.id === options.sceneId)
-        : bundle.scenes[0];
-    if (!targetScene) {
-        throw new Error('找不到指定的场景数据');
-    }
-    const builder = new SceneBuilder({ THREE, canvas, bundle, document: targetScene, options });
+    const builder = new SceneBuilder({ THREE, canvas, bundle, document: bundle, options });
     return builder.build();
 }

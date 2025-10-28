@@ -17,7 +17,7 @@
     "miniprogram-api-typings": "^4.0.3",
     "typescript": "^5.4.5"
   },
-  "main": "index.js",
+  "main": "app.js",
   "keywords": [],
   "author": "",
   "license": "ISC"
