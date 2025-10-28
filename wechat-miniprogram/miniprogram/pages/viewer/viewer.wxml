@@ -1,0 +1,10 @@
+<view class="viewer-page">
+  <view class="viewer-container">
+    <scene-viewer
+      id="sceneViewer"
+      scene-bundle="{{currentBundle}}"
+      scene-id="{{sceneId}}"
+      bindloadstate="handleViewerState"
+    />
+  </view>
+</view>

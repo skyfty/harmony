@@ -1,0 +1,6 @@
+{
+  "navigationBarTitleText": "场景展示",
+  "usingComponents": {
+    "scene-viewer": "/components/scene-viewer/scene-viewer"
+  }
+}

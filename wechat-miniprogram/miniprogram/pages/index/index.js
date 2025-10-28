@@ -62,20 +62,25 @@ Page({
   },
 
   handleSelectScene(event) {
-    const key = event.currentTarget?.dataset?.id
-    if (!key) {
-      return
-    }
-    const entry = findEntryByKey(key)
+    const id = event.currentTarget?.dataset?.id;
+    if (!id) return;
+    const entry = findEntryByKey(id);
     if (!entry) {
-      this.setData({ statusMessage: '未找到选中的场景条目' })
-      return
+      this.setData({ statusMessage: '未找到选中的场景条目' });
+      return;
     }
-    this.setData({
-      selectedSceneId: entry.id,
-      currentBundle: entry.bundle,
-      statusMessage: `场景「${entry.name}」加载中...`,
-    })
+    // store bundle in globalData and navigate to dedicated viewer page
+    try {
+      const app = getApp();
+      if (!app.globalData) app.globalData = {};
+      app.globalData.currentBundle = entry.bundle;
+      app.globalData.currentSceneId = entry.id;
+    } catch (e) {
+      // ignore
+    }
+    wx.navigateTo({
+      url: '/pages/viewer/viewer?sceneId=' + encodeURIComponent(entry.id),
+    });
   },
 
   handleChooseLocal() {

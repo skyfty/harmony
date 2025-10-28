@@ -1,21 +1,22 @@
 <view class="page">
-  <view class="sidebar">
-    <view class="section-title">内置场景</view>
-    <scroll-view scroll-y="true" class="scene-list">
-      <block wx:for="{{sceneOptions}}" wx:key="id">
-        <view
-          class="scene-item {{item.id === selectedSceneId ? 'active' : ''}}"
-          bindtap="handleSelectScene"
-          data-id="{{item.key}}"
-          data-key="{{item.key}}"
-        >
-          <text class="scene-name">{{item.name}}</text>
-          <text class="scene-meta">{{item.summary}}</text>
-        </view>
-      </block>
-    </scroll-view>
+  <view class="header">
+    <view class="title">场景列表</view>
+  </view>
 
-    <view class="section-title">导入场景</view>
+  <scroll-view scroll-y="true" class="scene-list">
+    <block wx:for="{{sceneOptions}}" wx:key="id">
+      <view
+        class="scene-item"
+        bindtap="handleSelectScene"
+        data-id="{{item.id}}"
+      >
+        <text class="scene-name">{{item.name}}</text>
+        <text class="scene-meta">{{item.summary}}</text>
+      </view>
+    </block>
+  </scroll-view>
+
+  <view class="import-row">
     <button bindtap="handleChooseLocal" size="mini" type="default">本地 JSON</button>
     <view class="url-form">
       <input
@@ -29,15 +30,7 @@
       />
       <button bindtap="handleLoadFromUrl" type="primary" size="mini">加载</button>
     </view>
-
-    <view class="status" wx:if="{{statusMessage}}">{{statusMessage}}</view>
   </view>
 
-  <view class="viewer">
-    <scene-viewer
-      scene-bundle="{{currentBundle}}"
-      scene-id="{{selectedSceneId}}"
-      bindloadstate="handleViewerState"
-    />
-  </view>
+  <view class="status" wx:if="{{statusMessage}}">{{statusMessage}}</view>
 </view>
