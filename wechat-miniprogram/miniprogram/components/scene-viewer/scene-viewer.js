@@ -1,11 +1,17 @@
 const { createScopedThreejs } = require('threejs-miniprogram')
 const { buildSceneFromBundle } = require('../../utils/scene-loader')
 import { registerGLTFLoader } from '../../utils/gltf-loader'
-import registerOrbit from "../../utils/orbit"
 
 // Converted to plain JavaScript: removed TypeScript type declarations and ESM imports
 
 Component({
+  options: {
+    // Relax style isolation so cover-view inside the component renders/stacks correctly over canvas
+    styleIsolation: 'apply-shared',
+    addGlobalClass: true,
+    // Use virtualHost to avoid extra wrapper affecting native layering in some WeChat versions
+    virtualHost: true,
+  },
   properties: {
     sceneBundle: {
       type: Object,
@@ -28,6 +34,9 @@ Component({
   data: {
     loading: false,
     errorMessage: '',
+    joystickActive: false,
+    joystickStickX: 0,
+    joystickStickY: 0,
   },
 
   lifetimes: {
@@ -77,6 +86,7 @@ Component({
           this.three = createScopedThreejs(canvas)
           registerGLTFLoader(this.three)
           this.setupRenderer();
+          this.registerResizeListener();
           this.scheduleSceneLoad()
         })
     },
@@ -105,10 +115,13 @@ Component({
       this.clock = new THREE.Clock()
       this.mixers = []
 
-      this.camera = new THREE.PerspectiveCamera(45, this.canvasWidth / this.canvasHeight, 0.25, 100);
-      this.camera.position.set(-5, 3, 10);
-      const { OrbitControls } = registerOrbit(THREE)
-      this.controls = new OrbitControls( this.camera, renderer.domElement);
+      this.camera = new THREE.PerspectiveCamera(70, this.canvasWidth / this.canvasHeight, 0.1, 200);
+      this.camera.position.set(0, 1.6, 6);
+      this.rotationVelocity = { x: 0, y: 0 }
+      this.maxRotationSpeed = Math.PI
+      this.cameraYaw = 0
+      this.cameraPitch = 0
+      this.syncCameraOrientation()
     },
 
     registerResizeListener: function () {
@@ -196,7 +209,7 @@ Component({
     applySceneResult: function (result) {
       const THREE = this.three
       const scope = this;
-      // this.scene = result.scene
+      // scope.scene = result.scene
       scope.scene = new THREE.Scene();
       scope.scene.background = new THREE.Color(0xe0e0e0);
       scope.scene.fog = new THREE.Fog(0xe0e0e0, 20, 100);
@@ -216,39 +229,16 @@ Component({
       grid.material.transparent = true;
       scope.scene.add(grid);
 
-      var mesh1 = new THREE.Mesh( new THREE.BoxBufferGeometry(1, 1, 1), new THREE.MeshPhongMaterial({ color: 0xff0000, depthWrite: false }));
-      scope.scene.add(mesh1);
-
-      // var loader = new THREE.GLTFLoader();
-      // loader.load('https://threejs.org/examples/models/gltf/RobotExpressive/RobotExpressive.glb', function (gltf) {
-      //   model = gltf.scene;
-      //   console.log("dddddddddddddddddddddddddddddd lksjdfl")
-
-      //   scope.scene.add(model);
-      // }, undefined, function (e) {
-      //   console.error(e);
-      // });
-
-      // this.camera = result.camera
-      // this.mixers = result.mixers ?? []
-
-      // this.scene.background = this.scene.background ?? new THREE.Color('#101720')
-
-      // const OrbitControlsCtor = THREE.OrbitControls as unknown as new (camera: any, domElement: any) => OrbitControls
-    
-      // if (OrbitControlsCtor) {
-      //   this.controls = new OrbitControlsCtor(this.camera, this.canvas)
-      //   this.controls.enableDamping = true
-      //   this.controls.dampingFactor = 0.08
-      //   this.controls.enablePan = true
-      //   this.controls.minDistance = 1
-      //   this.controls.maxDistance = 800
-      //   this.controls.maxPolarAngle = Math.PI * 0.495
-      //   if (result.cameraTarget) {
-      //     this.controls.target.copy(result.cameraTarget)
-      //   }
-      //   this.controls.update()
+      // if (result && result.scene) {
+      //   scope.scene.add(result.scene)
       // }
+
+      if (scope.camera) {
+        scope.camera.position.set(0, 1.6, 6)
+      }
+      scope.cameraYaw = 0
+      scope.cameraPitch = 0
+      scope.syncCameraOrientation()
     },
 
     startRenderLoop: function () {
@@ -269,10 +259,159 @@ Component({
         if (scope.mixers?.length) {
           scope.mixers.forEach((mixer) => mixer?.update?.(delta))
         }
-        scope.controls?.update?.()
+        if (scope.rotationVelocity) {
+          scope.updateCameraFromJoystick(delta)
+        }
+        scope.syncCameraOrientation()
         scope.renderer.render(scope.scene, scope.camera)
       }
       scope.frameId = scope.canvas.requestAnimationFrame(step)
+    },
+
+    updateCameraFromJoystick: function (delta) {
+      if (!this.camera) {
+        return
+      }
+      const velocity = this.rotationVelocity || { x: 0, y: 0 }
+      const yaw = (this.cameraYaw ?? 0) + (velocity.x || 0) * delta
+      const maxPitch = (Math.PI / 2) - 0.1
+      let pitch = (this.cameraPitch ?? 0) + (velocity.y || 0) * delta
+      if (pitch > maxPitch) {
+        pitch = maxPitch
+      } else if (pitch < -maxPitch) {
+        pitch = -maxPitch
+      }
+      this.cameraYaw = yaw
+      this.cameraPitch = pitch
+    },
+
+    syncCameraOrientation: function () {
+      if (!this.camera || !this.three) {
+        return
+      }
+      const THREE = this.three
+      const yaw = this.cameraYaw ?? 0
+      const pitch = this.cameraPitch ?? 0
+      const cosPitch = Math.cos(pitch)
+      const direction = new THREE.Vector3(
+        Math.sin(yaw) * cosPitch,
+        Math.sin(pitch),
+        Math.cos(yaw) * cosPitch
+      )
+      const target = new THREE.Vector3().copy(this.camera.position).add(direction)
+      this.camera.up.set(0, 1, 0)
+      this.camera.lookAt(target)
+    },
+
+    ensureJoystickMetrics: function (callback) {
+      if (this.joystickRect && this.joystickRadius) {
+        callback?.()
+        return
+      }
+      const query = this.createSelectorQuery()
+      query
+        .select('#joystick-base')
+        .boundingClientRect((rect) => {
+          if (rect) {
+            this.joystickRect = rect
+            this.joystickRadius = Math.min(rect.width, rect.height) / 2
+          } else {
+            this.joystickRect = null
+            this.joystickRadius = 0
+          }
+          callback?.()
+        })
+        .exec()
+    },
+
+    findJoystickTouch: function (touches) {
+      if (!touches || !touches.length) {
+        return null
+      }
+      const id = this.joystickTouchId
+      for (let i = 0; i < touches.length; i += 1) {
+        const touch = touches[i]
+        if (id === undefined || id === null || touch.identifier === id) {
+          return touch
+        }
+      }
+      return null
+    },
+
+    applyJoystickDelta: function (touch) {
+      if (!touch || !this.joystickRect) {
+        return
+      }
+      const radius = this.joystickRadius || 0
+      const centerX = this.joystickRect.left + (this.joystickRect.width / 2)
+      const centerY = this.joystickRect.top + (this.joystickRect.height / 2)
+      const pageX = touch.pageX ?? touch.x ?? 0
+      const pageY = touch.pageY ?? touch.y ?? 0
+      let dx = pageX - centerX
+      let dy = pageY - centerY
+      const distance = Math.sqrt((dx * dx) + (dy * dy))
+      const limitDistance = radius ? Math.min(distance, radius) : 0
+      if (distance > 0 && limitDistance > 0) {
+        const scale = limitDistance / distance
+        dx *= scale
+        dy *= scale
+      } else {
+        dx = 0
+        dy = 0
+      }
+      const normalizedX = radius ? dx / radius : 0
+      const normalizedY = radius ? dy / radius : 0
+      const maxSpeed = this.maxRotationSpeed || Math.PI
+      this.rotationVelocity = {
+        x: normalizedX * maxSpeed,
+        y: -normalizedY * maxSpeed,
+      }
+      this.setData({
+        joystickActive: true,
+        joystickStickX: dx,
+        joystickStickY: dy,
+      })
+    },
+
+    resetJoystick: function () {
+      this.joystickTouchId = null
+      this.rotationVelocity = { x: 0, y: 0 }
+      this.setData({
+        joystickActive: false,
+        joystickStickX: 0,
+        joystickStickY: 0,
+      })
+    },
+
+    onJoystickTouchStart: function (e) {
+      const touch = e?.changedTouches?.[0]
+      if (!touch) {
+        return
+      }
+      this.ensureJoystickMetrics(() => {
+        this.joystickTouchId = touch.identifier
+        this.applyJoystickDelta(touch)
+      })
+    },
+
+    onJoystickTouchMove: function (e) {
+      const touch = this.findJoystickTouch(e?.changedTouches)
+      if (!touch) {
+        return
+      }
+      if (!this.joystickRect || !this.joystickRadius) {
+        this.ensureJoystickMetrics(() => this.applyJoystickDelta(touch))
+        return
+      }
+      this.applyJoystickDelta(touch)
+    },
+
+    onJoystickTouchEnd: function (e) {
+      const touch = this.findJoystickTouch(e?.changedTouches)
+      if (!touch) {
+        return
+      }
+      this.resetJoystick()
     },
 
     emitLoadState: function (state, message) {
@@ -296,11 +435,14 @@ Component({
           }
         }
       })
-      this.controls?.dispose?.()
-      this.controls = null
       this.scene = null
-      this.camera = null
       this.mixers = []
+      this.cameraYaw = 0
+      this.cameraPitch = 0
+      if (this.camera) {
+        this.camera.position.set(0, 1.6, 6)
+        this.syncCameraOrientation()
+      }
     },
 
     dispose: function () {
@@ -322,6 +464,9 @@ Component({
       }
       this.canvas = null
       this.three = null
+      this.resetJoystick?.()
+      this.cameraYaw = 0
+      this.cameraPitch = 0
     },
   },
 })
