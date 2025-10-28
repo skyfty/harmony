@@ -53,20 +53,7 @@
             });
         },
         registerExtensions(THREE) {
-            try {
-                const registerOrbitControls = require('threejs-miniprogram/plugins/OrbitControls');
-                registerOrbitControls(THREE);
-            }
-            catch (error) {
-                console.warn('OrbitControls 模块加载失败', error);
-            }
-            try {
-                const registerGLTFLoader = require('threejs-miniprogram/loaders/GLTFLoader');
-                registerGLTFLoader(this.three);
-            }
-            catch (error) {
-                console.warn('GLTFLoader 模块加载失败', error);
-            }
+           
         },
         setupRenderer() {
             var _a, _b, _c, _d;

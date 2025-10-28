@@ -1,22 +1,8 @@
 import {createScopedThreejs} from 'threejs-miniprogram'
 import { buildSceneFromBundle, type SceneBuildResult } from '../../utils/scene-loader'
 import type { StoredSceneDocument } from '../../utils/scene-types'
+import { registerGLTFLoader } from '@/utils/gltfloader.js';
 
-declare const Component: <TProps, TData, TMethods>(options: any) => void
-declare const wx: any
-declare function require(path: string): any
-
-type OrbitControls = {
-  target: any
-  enableDamping: boolean
-  dampingFactor: number
-  enablePan: boolean
-  minDistance: number
-  maxDistance: number
-  maxPolarAngle: number
-  update: () => void
-  dispose?: () => void
-}
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
 
@@ -97,25 +83,12 @@ Component({
     
           this.three = createScopedThreejs(canvas)
           this.registerExtensions(this.three)
-          this.setupRenderer()
-          this.startRenderLoop()
-          this.registerResizeListener()
+
         })
     },
 
     registerExtensions(this: any, THREE: ScopedThree) {
-      try {
-        const registerOrbitControls = require('threejs-miniprogram/plugins/OrbitControls')
-        registerOrbitControls(THREE)
-      } catch (error) {
-        console.warn('OrbitControls 模块加载失败', error)
-      }
-      try {
-        const registerGLTFLoader = require('threejs-miniprogram/loaders/GLTFLoader')
-        registerGLTFLoader(this.three)
-      } catch (error) {
-        console.warn('GLTFLoader 模块加载失败', error)
-      }
+      registerGLTFLoader()
     },
 
     setupRenderer(this: any) {
