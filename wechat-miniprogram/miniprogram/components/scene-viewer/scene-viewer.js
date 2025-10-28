@@ -121,7 +121,9 @@ Component({
   // Cap yaw/translation speeds so the joystick remains comfortable to use
   this.maxYawSpeed = Math.PI * 0.75
   this.maxMoveSpeed = 2.5
+  this.turnSmoothing = 6
   this.joystickState = { yawSpeed: 0, moveSpeed: 0 }
+  this.cameraVelocity = { yawSpeed: 0, moveSpeed: 0 }
   this.cameraYaw = 0
   this.cameraPitch = 0
       this.syncCameraOrientation()
@@ -262,7 +264,7 @@ Component({
         if (scope.mixers?.length) {
           scope.mixers.forEach((mixer) => mixer?.update?.(delta))
         }
-        if (scope.joystickState?.yawSpeed || scope.joystickState?.moveSpeed) {
+        if (scope.joystickState || scope.cameraVelocity) {
           scope.updateCameraFromJoystick(delta)
         }
         scope.syncCameraOrientation()
@@ -275,26 +277,35 @@ Component({
       if (!this.camera || !this.three) {
         return
       }
-      const state = this.joystickState || { yawSpeed: 0, moveSpeed: 0 }
-      const yawSpeed = state.yawSpeed || 0
-      const moveSpeed = state.moveSpeed || 0
+      const THREE = this.three
+      const targetState = this.joystickState || { yawSpeed: 0, moveSpeed: 0 }
+      const currentState = this.cameraVelocity || { yawSpeed: 0, moveSpeed: 0 }
+      const smoothing = this.turnSmoothing ?? 6
+      const lerpFactor = Math.min(1, delta * smoothing)
 
-      if (!yawSpeed && !moveSpeed) {
-        return
+      currentState.yawSpeed += (targetState.yawSpeed - currentState.yawSpeed) * lerpFactor
+      currentState.moveSpeed += (targetState.moveSpeed - currentState.moveSpeed) * lerpFactor
+
+      // Snap very small residual speeds to zero to avoid slow drifting
+      if (Math.abs(currentState.yawSpeed) < 1e-4) {
+        currentState.yawSpeed = 0
+      }
+      if (Math.abs(currentState.moveSpeed) < 1e-4) {
+        currentState.moveSpeed = 0
       }
 
-      const yaw = (this.cameraYaw ?? 0) + yawSpeed * delta
+      const yaw = (this.cameraYaw ?? 0) + currentState.yawSpeed * delta
       this.cameraYaw = yaw
 
-      if (moveSpeed) {
-        const THREE = this.three
+      if (currentState.moveSpeed) {
         const forward = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw))
-        const displacement = forward.multiplyScalar(moveSpeed * delta)
+        const displacement = forward.multiplyScalar(currentState.moveSpeed * delta)
         this.camera.position.add(displacement)
       }
 
       const height = this.cameraHeight ?? 1.6
       this.camera.position.y = height
+      this.cameraVelocity = currentState
     },
 
     syncCameraOrientation: function () {
@@ -375,8 +386,9 @@ Component({
       const normalizedY = radius ? dy / radius : 0
       const maxYawSpeed = this.maxYawSpeed || (Math.PI * 0.75)
       const maxMoveSpeed = this.maxMoveSpeed || 2.5
+      // Invert yaw so dragging left rotates the view to the right as specified
       this.joystickState = {
-        yawSpeed: normalizedX * maxYawSpeed,
+        yawSpeed: -normalizedX * maxYawSpeed,
         moveSpeed: -normalizedY * maxMoveSpeed,
       }
       this.setData({
@@ -389,6 +401,7 @@ Component({
     resetJoystick: function () {
       this.joystickTouchId = null
       this.joystickState = { yawSpeed: 0, moveSpeed: 0 }
+      this.cameraVelocity = { yawSpeed: 0, moveSpeed: 0 }
       this.setData({
         joystickActive: false,
         joystickStickX: 0,
@@ -453,6 +466,7 @@ Component({
       this.cameraYaw = 0
       this.cameraPitch = 0
       this.joystickState = { yawSpeed: 0, moveSpeed: 0 }
+      this.cameraVelocity = { yawSpeed: 0, moveSpeed: 0 }
       if (this.camera) {
         this.camera.position.set(0, this.cameraHeight ?? 1.6, 6)
         this.syncCameraOrientation()
