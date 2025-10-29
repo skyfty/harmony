@@ -1969,8 +1969,44 @@ export function registerGLTFLoader(THREE) {
       var json = this.json;
       var options = this.options;
       var textureLoader = this.textureLoader;
+      var URL = (typeof window !== 'undefined' && (window.URL || window.webkitURL)) ||
+        (typeof globalThis !== 'undefined' && (globalThis.URL || globalThis.webkitURL)) ||
+        undefined;
 
-      var URL = window.URL || window.webkitURL;
+      var bufferToDataURI = function (buffer, mimeType) {
+
+        var mime = mimeType || 'application/octet-stream';
+
+        if (typeof wx !== 'undefined' && typeof wx.arrayBufferToBase64 === 'function') {
+
+          return 'data:' + mime + ';base64,' + wx.arrayBufferToBase64(buffer);
+
+        }
+
+        if (typeof Buffer !== 'undefined' && typeof Buffer.from === 'function') {
+
+          return 'data:' + mime + ';base64,' + Buffer.from(buffer).toString('base64');
+
+        }
+
+        if (typeof btoa === 'function') {
+
+          var binary = '';
+          var bytes = new Uint8Array(buffer);
+
+          for (var i = 0, l = bytes.length; i < l; i++) {
+
+            binary += String.fromCharCode(bytes[i]);
+
+          }
+
+          return 'data:' + mime + ';base64,' + btoa(binary);
+
+        }
+
+        throw new Error('THREE.GLTFLoader: Unable to create Data URI for embedded texture.');
+
+      };
 
       var textureDef = json.textures[textureIndex];
 
@@ -1997,9 +2033,17 @@ export function registerGLTFLoader(THREE) {
 
         sourceURI = parser.getDependency('bufferView', source.bufferView).then(function (bufferView) {
 
-          isObjectURL = true;
-          var blob = new Blob([bufferView], { type: source.mimeType });
-          sourceURI = URL.createObjectURL(blob);
+          if (URL && typeof URL.createObjectURL === 'function' && typeof Blob !== 'undefined') {
+
+            isObjectURL = true;
+            var blob = new Blob([bufferView], { type: source.mimeType });
+            sourceURI = URL.createObjectURL(blob);
+
+          } else {
+
+            sourceURI = bufferToDataURI(bufferView, source.mimeType);
+
+          }
           return sourceURI;
 
         });
@@ -2030,7 +2074,7 @@ export function registerGLTFLoader(THREE) {
 
         // Clean up resources and configure Texture.
 
-        if (isObjectURL === true) {
+        if (isObjectURL === true && URL && typeof URL.revokeObjectURL === 'function') {
 
           URL.revokeObjectURL(sourceURI);
 
