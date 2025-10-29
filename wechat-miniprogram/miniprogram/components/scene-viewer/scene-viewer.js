@@ -180,6 +180,7 @@ Component({
         return
       }
 
+
       const bundle = this.data.sceneBundle || null
       if (!bundle) {
         this.disposeScene()
@@ -195,11 +196,12 @@ Component({
       this.disposeScene()
 
       try {
+
         const result = await buildSceneFromBundle(this.three, this.canvas, bundle, {
           sceneId,
           enableShadows: this.data.enableShadows,
         })
-        
+
         this.applySceneResult(result)
         this.startRenderLoop()
         this.emitLoadState('ready', `场景「${result.sceneName}」加载完成`)
@@ -214,16 +216,15 @@ Component({
     applySceneResult: function (result) {
       const THREE = this.three
       const scope = this;
-      scope.scene = result.scene
-      // scope.scene = new THREE.Scene();
+      scope.scene = new THREE.Scene();
       scope.scene.background = new THREE.Color(0xe0e0e0);
       scope.scene.fog = new THREE.Fog(0xe0e0e0, 20, 100);
-      var light = new THREE.HemisphereLight(0xffffff, 0x444444);
-      light.position.set(0, 20, 0);
-      scope.scene.add(light);
-      light = new THREE.DirectionalLight(0xffffff);
-      light.position.set(0, 20, 10);
-      scope.scene.add(light);
+      // var light = new THREE.HemisphereLight(0xffffff, 0x444444);
+      // light.position.set(0, 20, 0);
+      // scope.scene.add(light);
+      // light = new THREE.DirectionalLight(0xffffff);
+      // light.position.set(0, 20, 10);
+      // scope.scene.add(light);
 
       // var mesh = new THREE.Mesh(new THREE.PlaneBufferGeometry(2000, 2000), new THREE.MeshPhongMaterial({ color: 0x999999, depthWrite: false }));
       // mesh.rotation.x = - Math.PI / 2;
@@ -233,12 +234,20 @@ Component({
       // grid.material.transparent = true;
       // scope.scene.add(grid);
 
+      // var loader = new THREE.GLTFLoader();
+      //   loader.load('https://threejs.org/examples/models/gltf/RobotExpressive/RobotExpressive.glb', function (gltf) {
+      //     scope.scene.add(gltf.scene);
+
+      //   }, undefined, function (e) {
+      //     console.error(e);
+      //   });
+
       //    var mesh1 = new THREE.Mesh(new THREE.BoxBufferGeometry(1, 1, 1), new THREE.MeshPhongMaterial({ color: 0x999999, depthWrite: false }));
       //   scope.scene.add(mesh1);
 
-      // if (result && result.scene) {
-      //   scope.scene.add(result.scene)
-      // }
+      if (result && result.scene) {
+        scope.scene.add(result.scene)
+      }
 
       if (scope.camera) {
         scope.camera.position.set(0, scope.cameraHeight ?? 1.6, 6)

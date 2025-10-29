@@ -83,7 +83,6 @@ class SceneBuilder {
         this.materialTemplates = new Map();
         this.textureCache = new Map();
         this.pendingTexturePromises = new Map();
-        this.gltfCache = new Map();
         this.lightTargets = [];
         this.stats = {
             meshCount: 0,
@@ -110,6 +109,7 @@ class SceneBuilder {
     await this.prepareMaterialTemplates();
     const nodes = Array.isArray(this.document.nodes) ? this.document.nodes : [];
     await this.buildNodes(nodes, this.scene);
+    
         this.ensureLighting();
         this.scene.updateMatrixWorld(true);
         return {
@@ -159,6 +159,7 @@ class SceneBuilder {
     }
     async buildGroupNode(node) {
         var _a;
+
         const group = new this.THREE.Group();
         group.name = node.name;
         this.applyTransform(group, node);
@@ -166,9 +167,12 @@ class SceneBuilder {
         if (node.sourceAssetId && this.hasAssetIndexEntry(node.sourceAssetId)) {
             await this.attachSourceAssetToGroup(group, node);
         }
+        
         if ((_a = node.children) === null || _a === void 0 ? void 0 : _a.length) {
             await this.buildNodes(node.children, group);
+
         }
+
         return group;
     }
     hasAssetIndexEntry(assetId) {
@@ -294,6 +298,7 @@ class SceneBuilder {
         if (!mesh) {
             return null;
         }
+
         mesh.name = node.name;
         this.applyTransform(mesh, node);
         this.applyVisibility(mesh, node);
@@ -304,6 +309,7 @@ class SceneBuilder {
         if ((_a = node.children) === null || _a === void 0 ? void 0 : _a.length) {
             await this.buildNodes(node.children, mesh);
         }
+        
         return mesh;
     }
     async resolveNodeMaterials(node) {
@@ -779,7 +785,9 @@ class SceneBuilder {
         }
     }
     createPrimitiveMesh(type, materials) {
+
         const geometry = this.createGeometry(type);
+
         if (!geometry) {
             return null;
         }
@@ -787,6 +795,7 @@ class SceneBuilder {
         return new this.THREE.Mesh(geometry, material);
     }
     createGeometry(type) {
+
         const THREE = this.THREE;
         switch (type) {
             case 'Box':
@@ -794,7 +803,7 @@ class SceneBuilder {
             case 'Sphere':
                 return new THREE.SphereGeometry(0.5, 32, 16);
             case 'Capsule':
-                return new THREE.CapsuleGeometry(0.3, 0.8, 8, 16);
+                return new THREE.BoxGeometry(1, 1, 1);
             case 'Circle':
                 return new THREE.CircleGeometry(0.5, 32);
             case 'Cylinder':
@@ -869,10 +878,7 @@ class SceneBuilder {
     }
     async loadAssetMesh(node) {
         const assetId = node.sourceAssetId;
-        const cached = this.gltfCache.get(assetId);
-        if (cached) {
-            return cached.clone(true);
-        }
+
         const source = await this.resolveAssetSource(assetId);
         if (!source) {
             console.warn('未找到资源数据', assetId);
@@ -903,10 +909,9 @@ class SceneBuilder {
             console.warn('GLTF 解析失败', assetId);
             return null;
         }
-        console.log('GLTF 解析成功', gltfRoot);
+
         this.prepareImportedObject(gltfRoot);
-        this.gltfCache.set(assetId, gltfRoot);
-        return gltfRoot.clone(true);
+        return gltfRoot;
     }
     prepareImportedObject(object) {
         object.traverse((child) => {
