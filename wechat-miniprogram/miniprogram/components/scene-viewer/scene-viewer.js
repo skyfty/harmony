@@ -219,9 +219,9 @@ Component({
       scope.scene = new THREE.Scene();
       scope.scene.background = new THREE.Color(0xe0e0e0);
       scope.scene.fog = new THREE.Fog(0xe0e0e0, 20, 100);
-      // var light = new THREE.HemisphereLight(0xffffff, 0x444444);
-      // light.position.set(0, 20, 0);
-      // scope.scene.add(light);
+      var light = new THREE.HemisphereLight(0xffffff, 0x444444);
+      light.position.set(0, 20, 0);
+      scope.scene.add(light);
       // light = new THREE.DirectionalLight(0xffffff);
       // light.position.set(0, 20, 10);
       // scope.scene.add(light);
@@ -242,14 +242,16 @@ Component({
       //     console.error(e);
       //   });
 
-      //    var mesh1 = new THREE.Mesh(new THREE.BoxBufferGeometry(1, 1, 1), new THREE.MeshPhongMaterial({ color: 0x999999, depthWrite: false }));
-      //   scope.scene.add(mesh1);
+    //       var texture = new THREE.TextureLoader().load('http://v.touchmagic.cn/R.jpeg');
+    // var material = new THREE.MeshBasicMaterial({ map: texture });
+
+
+    //      var mesh1 = new THREE.Mesh(new THREE.BoxBufferGeometry(1, 1, 1), material);
+    //     scope.scene.add(mesh1);
 
       if (result && result.scene) {
         scope.scene.add(result.scene)
       }
-
-      console.log('Scene loaded:', scope.scene)
 
       if (scope.camera) {
         scope.camera.position.set(0, scope.cameraHeight ?? 1.6, 6)

@@ -34,6 +34,8 @@ export interface GLBExportSettings {
 export interface SceneJsonExportDocument {
   id: string
   name: string
+  createdAt: string
+  updatedAt: string
   nodes: SceneNode[]
   materials: SceneMaterial[]
   groundSettings: GroundSettings

@@ -24,7 +24,7 @@ function formatBytes(bytes) {
 
 function composeSceneSummary(scene) {
   const nodeCount = scene.nodes?.length ?? 0
-  const updated = scene.updatedAt ? scene.updatedAt.slice(0, 10) : '未知'
+  const updated = scene.updatedAt ? scene.updatedAt : '未知'
   return `节点 ${nodeCount} · 更新 ${updated}`
 }
 

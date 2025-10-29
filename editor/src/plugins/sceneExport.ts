@@ -304,6 +304,8 @@ export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, opti
   const exportDocument: SceneJsonExportDocument = {
     id: snapshot.id,
     name: snapshot.name,
+    createdAt: snapshot.createdAt,
+    updatedAt: snapshot.updatedAt,
     nodes: snapshot.nodes,
     materials: snapshot.materials,
     groundSettings: snapshot.groundSettings,

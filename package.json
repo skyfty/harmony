@@ -5,15 +5,18 @@
   "workspaces": [
     "admin",
     "editor",
-    "server"
+    "server",
+    "miniprogram"
   ],
   "scripts": {
     "dev:admin": "npm --workspace admin run dev",
     "dev:editor": "npm --workspace editor run dev",
     "dev:server": "npm --workspace server run dev",
+    "dev:miniprogram": "npm --workspace miniprogram run dev",
     "build:admin": "npm --workspace admin run build",
     "build:editor": "npm --workspace editor run build",
     "build:server": "npm --workspace server run build",
+    "build:miniprogram": "npm --workspace miniprogram run build",
     "preview:editor": "npm --workspace editor run preview",
     "seed:server": "npm --workspace server run seed"
   },

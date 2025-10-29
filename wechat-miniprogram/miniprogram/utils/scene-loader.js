@@ -344,7 +344,8 @@ class SceneBuilder {
             if (template) {
                 const clone = template.clone();
                 this.applyMaterialProps(clone, material);
-                await this.applyMaterialTextures(clone, material.textures);
+                const textureAssignments = await this.resolveMaterialTextures(material.textures);
+                this.assignResolvedTextures(clone, textureAssignments);
                 return clone;
             }
         }
@@ -354,7 +355,8 @@ class SceneBuilder {
     async instantiateMaterial(material) {
         var _a, _b;
         const type = (_a = material.type) !== null && _a !== void 0 ? _a : 'MeshStandardMaterial';
-        const props = this.extractMaterialProps(material);
+    const props = this.extractMaterialProps(material);
+    const textureAssignments = await this.resolveMaterialTextures(props.textures);
         const side = this.resolveMaterialSide(props.side);
         const color = new this.THREE.Color(props.color);
         const emissiveColor = new this.THREE.Color((_b = props.emissive) !== null && _b !== void 0 ? _b : '#000000');
@@ -457,7 +459,7 @@ class SceneBuilder {
             }
         }
         this.applyMaterialProps(instance, material);
-        await this.applyMaterialTextures(instance, props.textures);
+        this.assignResolvedTextures(instance, textureAssignments);
         return instance;
     }
     extractMaterialProps(material) {
@@ -516,12 +518,22 @@ class SceneBuilder {
         material.needsUpdate = true;
     }
     async applyMaterialTextures(material, textures) {
-        if (!material || !textures || typeof textures !== 'object') {
+        if (!material) {
             return;
         }
-
-        const tasks = [];
-        Object.keys(textures).forEach((slot) => {
+        const assignments = await this.resolveMaterialTextures(textures);
+        this.assignResolvedTextures(material, assignments);
+    }
+    async resolveMaterialTextures(textures) {
+        if (!textures || typeof textures !== 'object') {
+            return {};
+        }
+        const resolved = {};
+        const slots = Object.keys(textures);
+        if (!slots.length) {
+            return resolved;
+        }
+        await Promise.all(slots.map(async (slot) => {
             if (!Object.prototype.hasOwnProperty.call(MATERIAL_TEXTURE_ASSIGNMENTS, slot)) {
                 return;
             }
@@ -529,58 +541,60 @@ class SceneBuilder {
             if (ref === undefined) {
                 return;
             }
-
-            tasks.push(this.assignMaterialTexture(material, slot, ref));
-        });
-        if (tasks.length) {
-            await Promise.all(tasks);
-        }
-    }
-    async assignMaterialTexture(material, slot, ref) {
-        const assignment = MATERIAL_TEXTURE_ASSIGNMENTS[slot];
-        if (!assignment || !material) {
-            return;
-        }
-
-        const key = assignment.key;
-        const typed = material;
-        if (!(key in typed)) {
-            return;
-        }
-        if (!ref || !ref.assetId) {
-            if (typed[key]) {
-                typed[key] = null;
-                material.needsUpdate = true;
+            const assignment = MATERIAL_TEXTURE_ASSIGNMENTS[slot];
+            if (!ref || !ref.assetId) {
+                resolved[assignment.key] = null;
+                return;
             }
-            return;
-        }
-
+            resolved[assignment.key] = await this.createTextureInstanceForAssignment(ref, assignment);
+        }));
+        return resolved;
+    }
+    async createTextureInstanceForAssignment(ref, assignment) {
         try {
             const baseTexture = await this.ensureTexture(ref);
             if (!baseTexture) {
-                if (typed[key]) {
-                    typed[key] = null;
-                    material.needsUpdate = true;
-                }
-                return;
+                return null;
             }
-
             const signature = textureSettingsSignature(ref.settings);
-            const needsClone = signature !== DEFAULT_TEXTURE_SETTINGS_SIGNATURE || Boolean(assignment.colorSpace);
-            let instance = needsClone ? baseTexture.clone() : baseTexture;
+            const needsClone = signature !== DEFAULT_TEXTURE_SETTINGS_SIGNATURE || Boolean(assignment === null || assignment === void 0 ? void 0 : assignment.colorSpace);
+            const textureInstance = needsClone && typeof baseTexture.clone === 'function'
+                ? baseTexture.clone()
+                : baseTexture;
             if (signature !== DEFAULT_TEXTURE_SETTINGS_SIGNATURE) {
-                this.applyTextureSettings(instance, ref.settings);
+                this.applyTextureSettings(textureInstance, ref.settings);
             }
-            if (assignment.colorSpace && assignment.colorSpace in this.THREE && 'colorSpace' in instance) {
-                instance.colorSpace = this.THREE[assignment.colorSpace];
-                instance.needsUpdate = true;
+            if ((assignment === null || assignment === void 0 ? void 0 : assignment.colorSpace) && assignment.colorSpace in this.THREE && 'colorSpace' in textureInstance) {
+                textureInstance.colorSpace = this.THREE[assignment.colorSpace];
+                textureInstance.needsUpdate = true;
             }
-            typed[key] = instance;
-            material.needsUpdate = true;
+            textureInstance.needsUpdate = true;
+            return textureInstance;
         }
         catch (error) {
             console.warn('纹理加载失败', ref === null || ref === void 0 ? void 0 : ref.assetId, error);
-            typed[key] = null;
+            return null;
+        }
+    }
+    assignResolvedTextures(material, assignments) {
+        if (!material || !assignments || typeof assignments !== 'object') {
+            return;
+        }
+        let needsUpdate = false;
+        Object.keys(assignments).forEach((key) => {
+            if (!(key in material)) {
+                return;
+            }
+            const nextTexture = assignments[key];
+            if (nextTexture === undefined) {
+                return;
+            }
+            if (material[key] !== nextTexture) {
+                material[key] = nextTexture;
+                needsUpdate = true;
+            }
+        });
+        if (needsUpdate) {
             material.needsUpdate = true;
         }
     }
@@ -785,12 +799,11 @@ class SceneBuilder {
         }
     }
     createPrimitiveMesh(type, materials) {
-
         const geometry = this.createGeometry(type);
-
         if (!geometry) {
             return null;
         }
+
         const material = materials.length === 1 ? materials[0] : materials;
         return new this.THREE.Mesh(geometry, material);
     }
