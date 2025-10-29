@@ -110,7 +110,7 @@ class SceneBuilder {
     const nodes = Array.isArray(this.document.nodes) ? this.document.nodes : [];
     await this.buildNodes(nodes, this.scene);
     
-        this.ensureLighting();
+        // this.ensureLighting();
         this.scene.updateMatrixWorld(true);
         return {
             scene: this.scene,

@@ -249,6 +249,8 @@ Component({
         scope.scene.add(result.scene)
       }
 
+      console.log('Scene loaded:', scope.scene)
+
       if (scope.camera) {
         scope.camera.position.set(0, scope.cameraHeight ?? 1.6, 6)
       }
