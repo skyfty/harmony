@@ -1,6 +1,7 @@
 {
   "pages": [
     "pages/index/index",
+    "pages/resource-loader/resource-loader",
     "pages/viewer/viewer"
   ],
   "window": {

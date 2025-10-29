@@ -1,3 +1,5 @@
+const resourceCache = require('../../utils/resource-cache')
+
 Page({
   data: {
     currentBundle: null,
@@ -10,6 +12,12 @@ Page({
     const bundle = app?.globalData?.currentBundle ?? null;
     const sceneId = options?.sceneId ?? app?.globalData?.currentSceneId ?? '';
     this.setData({ currentBundle: bundle, sceneId });
+  },
+
+  onUnload() {
+    if (this.data.sceneId) {
+      resourceCache.releaseSceneResources(this.data.sceneId);
+    }
   },
 
   handleViewerState(event) {

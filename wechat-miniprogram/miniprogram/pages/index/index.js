@@ -1,9 +1,25 @@
 
 const { parseSceneBundle } = require('../../utils/scene-loader')
+const resourceCache = require('../../utils/resource-cache')
 
 const pageState = {
   registry: new Map(),
   order: [],
+}
+
+function formatBytes(bytes) {
+  if (!bytes || bytes <= 0) {
+    return '0 B'
+  }
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = bytes
+  let index = 0
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024
+    index += 1
+  }
+  const display = value >= 100 ? Math.round(value) : Math.round(value * 10) / 10
+  return `${display} ${units[index]}`
 }
 
 function composeSceneSummary(scene) {
@@ -49,6 +65,7 @@ Page({
     currentBundle: null,
     sceneUrl: '',
     statusMessage: '',
+    cacheStatus: '',
   },
 
   onLoad() {
@@ -59,6 +76,11 @@ Page({
     this.setData({
       sceneOptions: options,
     })
+    this.updateCacheStatus()
+  },
+
+  onShow() {
+    this.updateCacheStatus()
   },
 
   handleSelectScene(event) {
@@ -75,11 +97,12 @@ Page({
       if (!app.globalData) app.globalData = {};
       app.globalData.currentBundle = entry.bundle;
       app.globalData.currentSceneId = entry.id;
+      app.globalData.currentSceneName = entry.name;
     } catch (e) {
       // ignore
     }
     wx.navigateTo({
-      url: '/pages/viewer/viewer?sceneId=' + encodeURIComponent(entry.id),
+      url: '/pages/resource-loader/resource-loader?sceneId=' + encodeURIComponent(entry.id),
     });
   },
 
@@ -180,6 +203,28 @@ Page({
         break
       default:
         break
+    }
+  },
+
+  async handleClearCache() {
+    this.setData({ statusMessage: '正在清理缓存...' })
+    try {
+      await resourceCache.clearCache()
+      this.setData({ statusMessage: '缓存已清理' })
+    } catch (error) {
+      const message = error?.message || error?.errMsg || '清理缓存失败'
+      this.setData({ statusMessage: message })
+    }
+    this.updateCacheStatus()
+  },
+
+  updateCacheStatus() {
+    try {
+      const stats = resourceCache.getCacheStatistics()
+      const text = `缓存资源 ${stats.entryCount} 个 · ${formatBytes(stats.totalSize)}`
+      this.setData({ cacheStatus: text })
+    } catch (error) {
+      this.setData({ cacheStatus: '' })
     }
   },
 })

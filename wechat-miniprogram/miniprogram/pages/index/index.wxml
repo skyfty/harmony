@@ -32,5 +32,10 @@
     </view>
   </view>
 
+  <view class="cache-row">
+    <view class="cache-info">{{cacheStatus}}</view>
+    <button bindtap="handleClearCache" size="mini" type="warn">清理缓存</button>
+  </view>
+
   <view class="status" wx:if="{{statusMessage}}">{{statusMessage}}</view>
 </view>

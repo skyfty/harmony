@@ -1,8 +1,78 @@
-const { decode } = require('base64')
+const { decode, encode } = require('base64')
+const resourceCache = require('./resource-cache')
 
-const LOCAL_ASSET_PREFIX = 'local::';
 const DEFAULT_SCENE_BACKGROUND = '#101720';
 const DEFAULT_SCENE_FOG_COLOR = '#0d1520';
+const MATERIAL_TEXTURE_ASSIGNMENTS = {
+    albedo: { key: 'map', colorSpace: 'SRGBColorSpace' },
+    normal: { key: 'normalMap' },
+    metalness: { key: 'metalnessMap' },
+    roughness: { key: 'roughnessMap' },
+    ao: { key: 'aoMap' },
+    emissive: { key: 'emissiveMap', colorSpace: 'SRGBColorSpace' },
+};
+const DEFAULT_TEXTURE_SETTINGS = {
+    wrapS: 'ClampToEdgeWrapping',
+    wrapT: 'ClampToEdgeWrapping',
+    wrapR: 'ClampToEdgeWrapping',
+    offset: { x: 0, y: 0 },
+    repeat: { x: 1, y: 1 },
+    rotation: 0,
+    center: { x: 0, y: 0 },
+    matrixAutoUpdate: true,
+    generateMipmaps: true,
+    premultiplyAlpha: false,
+    flipY: true,
+};
+
+function createTextureSettings(overrides) {
+    const base = DEFAULT_TEXTURE_SETTINGS;
+    const candidate = overrides !== null && overrides !== void 0 ? overrides : null;
+    return {
+        wrapS: (candidate === null || candidate === void 0 ? void 0 : candidate.wrapS) !== undefined ? candidate.wrapS : base.wrapS,
+        wrapT: (candidate === null || candidate === void 0 ? void 0 : candidate.wrapT) !== undefined ? candidate.wrapT : base.wrapT,
+        wrapR: (candidate === null || candidate === void 0 ? void 0 : candidate.wrapR) !== undefined ? candidate.wrapR : base.wrapR,
+        offset: {
+            x: (candidate === null || candidate === void 0 ? void 0 : candidate.offset) && typeof candidate.offset.x === 'number' ? candidate.offset.x : base.offset.x,
+            y: (candidate === null || candidate === void 0 ? void 0 : candidate.offset) && typeof candidate.offset.y === 'number' ? candidate.offset.y : base.offset.y,
+        },
+        repeat: {
+            x: (candidate === null || candidate === void 0 ? void 0 : candidate.repeat) && typeof candidate.repeat.x === 'number' ? candidate.repeat.x : base.repeat.x,
+            y: (candidate === null || candidate === void 0 ? void 0 : candidate.repeat) && typeof candidate.repeat.y === 'number' ? candidate.repeat.y : base.repeat.y,
+        },
+        rotation: (candidate === null || candidate === void 0 ? void 0 : candidate.rotation) !== undefined && typeof candidate.rotation === 'number' ? candidate.rotation : base.rotation,
+        center: {
+            x: (candidate === null || candidate === void 0 ? void 0 : candidate.center) && typeof candidate.center.x === 'number' ? candidate.center.x : base.center.x,
+            y: (candidate === null || candidate === void 0 ? void 0 : candidate.center) && typeof candidate.center.y === 'number' ? candidate.center.y : base.center.y,
+        },
+        matrixAutoUpdate: (candidate === null || candidate === void 0 ? void 0 : candidate.matrixAutoUpdate) !== undefined && typeof candidate.matrixAutoUpdate === 'boolean' ? candidate.matrixAutoUpdate : base.matrixAutoUpdate,
+        generateMipmaps: (candidate === null || candidate === void 0 ? void 0 : candidate.generateMipmaps) !== undefined && typeof candidate.generateMipmaps === 'boolean' ? candidate.generateMipmaps : base.generateMipmaps,
+        premultiplyAlpha: (candidate === null || candidate === void 0 ? void 0 : candidate.premultiplyAlpha) !== undefined && typeof candidate.premultiplyAlpha === 'boolean' ? candidate.premultiplyAlpha : base.premultiplyAlpha,
+        flipY: (candidate === null || candidate === void 0 ? void 0 : candidate.flipY) !== undefined && typeof candidate.flipY === 'boolean' ? candidate.flipY : base.flipY,
+    };
+}
+
+function textureSettingsSignature(settings) {
+    const resolved = createTextureSettings(settings !== null && settings !== void 0 ? settings : null);
+    return [
+        resolved.wrapS,
+        resolved.wrapT,
+        resolved.wrapR,
+        resolved.offset.x,
+        resolved.offset.y,
+        resolved.repeat.x,
+        resolved.repeat.y,
+        resolved.rotation,
+        resolved.center.x,
+        resolved.center.y,
+        resolved.matrixAutoUpdate ? 1 : 0,
+        resolved.generateMipmaps ? 1 : 0,
+        resolved.premultiplyAlpha ? 1 : 0,
+        resolved.flipY ? 1 : 0,
+    ].join('|');
+}
+
+const DEFAULT_TEXTURE_SETTINGS_SIGNATURE = textureSettingsSignature();
 const WX = typeof globalThis !== 'undefined' && globalThis.wx
     ? globalThis.wx
     : undefined;
@@ -12,6 +82,7 @@ class SceneBuilder {
         this.mixers = [];
         this.materialTemplates = new Map();
         this.textureCache = new Map();
+        this.pendingTexturePromises = new Map();
         this.gltfCache = new Map();
         this.lightTargets = [];
         this.stats = {
@@ -21,21 +92,24 @@ class SceneBuilder {
         };
         this.hasDirectionalLight = false;
         this.THREE = context.THREE;
-        this.canvas = context.canvas;
-        this.bundle = context.bundle;
-        this.document = context.document;
+    this.canvas = context.canvas;
+    this.bundle = context.bundle;
+    this.document = context.document;
         this.options = context.options;
+    this.sceneId = context.options.sceneId || context.document.id || 'scene';
         this.enableShadows = context.options.enableShadows !== false;
         this.scene = new this.THREE.Scene();
         this.scene.name = (_a = context.document.name) !== null && _a !== void 0 ? _a : 'Scene';
         this.scene.background = new this.THREE.Color(DEFAULT_SCENE_BACKGROUND);
         const fog = new this.THREE.Fog(DEFAULT_SCENE_FOG_COLOR, 45, 320);
         this.scene.fog = fog;
+        this.textureLoader = new this.THREE.TextureLoader();
     }
     async build() {
         var _a, _b;
-        this.prepareMaterialTemplates();
-        await this.buildNodes(this.document.nodes, this.scene);
+    await this.prepareMaterialTemplates();
+    const nodes = Array.isArray(this.document.nodes) ? this.document.nodes : [];
+    await this.buildNodes(nodes, this.scene);
         this.ensureLighting();
         this.scene.updateMatrixWorld(true);
         return {
@@ -45,13 +119,24 @@ class SceneBuilder {
             sceneName: (_b = this.document.name) !== null && _b !== void 0 ? _b : 'Scene',
         };
     }
-    prepareMaterialTemplates() {
-        this.document.materials.forEach((material) => {
-            const instance = this.instantiateMaterial(material);
-            this.materialTemplates.set(material.id, instance);
-        });
+    async prepareMaterialTemplates() {
+        this.materialTemplates.clear();
+        const list = Array.isArray(this.document.materials) ? this.document.materials : [];
+        for (const material of list) {
+            if (!material || typeof material !== 'object') {
+                continue;
+            }
+            const instance = await this.instantiateMaterial(material);
+            if (material.id) {
+                this.materialTemplates.set(material.id, instance);
+            }
+        }
     }
     async buildNodes(nodes, parent) {
+        if (!Array.isArray(nodes)) {
+            return;
+        }
+
         for (const node of nodes) {
             const built = await this.buildSingleNode(node);
             if (!built) {
@@ -78,10 +163,46 @@ class SceneBuilder {
         group.name = node.name;
         this.applyTransform(group, node);
         this.applyVisibility(group, node);
+        if (node.sourceAssetId && this.hasAssetIndexEntry(node.sourceAssetId)) {
+            await this.attachSourceAssetToGroup(group, node);
+        }
         if ((_a = node.children) === null || _a === void 0 ? void 0 : _a.length) {
             await this.buildNodes(node.children, group);
         }
         return group;
+    }
+    hasAssetIndexEntry(assetId) {
+        if (!assetId) {
+            return false;
+        }
+        const index = this.document && typeof this.document.assetIndex === 'object'
+            ? this.document.assetIndex
+            : null;
+        return Boolean(index && Object.prototype.hasOwnProperty.call(index, assetId));
+    }
+    async attachSourceAssetToGroup(group, node) {
+        const assetId = node.sourceAssetId;
+        if (!assetId) {
+            return;
+        }
+        try {
+            const imported = await this.loadAssetMesh({ sourceAssetId: assetId });
+            if (!imported) {
+                return;
+            }
+            imported.userData = imported.userData || {};
+            imported.userData.sourceAssetId = assetId;
+            if (!imported.name) {
+                imported.name = assetId;
+            }
+            group.add(imported);
+            group.userData = group.userData || {};
+            group.userData.sourceAssetId = assetId;
+            this.recordMeshStatistics(imported);
+        }
+        catch (error) {
+            console.warn('加载组节点模型失败', assetId, error);
+        }
     }
     applyVisibility(object, node) {
         if (typeof node.visible === 'boolean') {
@@ -166,8 +287,9 @@ class SceneBuilder {
         return this.buildPrimitiveNode({ ...node, nodeType: 'Box' });
     }
     async buildPrimitiveNode(node) {
+
         var _a;
-        const materials = this.resolveNodeMaterials(node);
+        const materials = await this.resolveNodeMaterials(node);
         const mesh = this.createPrimitiveMesh(node.nodeType, materials);
         if (!mesh) {
             return null;
@@ -184,11 +306,22 @@ class SceneBuilder {
         }
         return mesh;
     }
-    resolveNodeMaterials(node) {
+    async resolveNodeMaterials(node) {
         if (!node.materials || !node.materials.length) {
             return [this.createDefaultMaterial('#ffffff')];
         }
-        return node.materials.map((entry) => this.createMaterialForNode(entry));
+        const result = [];
+        for (const entry of node.materials) {
+            if (!entry || typeof entry !== 'object') {
+                continue;
+            }
+            const material = await this.createMaterialForNode(entry);
+
+            if (material) {
+                result.push(material);
+            }
+        }
+        return result.length ? result : [this.createDefaultMaterial('#ffffff')];
     }
     createDefaultMaterial(colorHex) {
         const material = new this.THREE.MeshStandardMaterial({
@@ -199,38 +332,40 @@ class SceneBuilder {
         material.side = this.THREE.DoubleSide;
         return material;
     }
-    createMaterialForNode(material) {
+    async createMaterialForNode(material) {
         if (material.materialId) {
             const template = this.materialTemplates.get(material.materialId);
             if (template) {
                 const clone = template.clone();
                 this.applyMaterialProps(clone, material);
+                await this.applyMaterialTextures(clone, material.textures);
                 return clone;
             }
         }
-        const instance = this.instantiateMaterial(material);
+        const instance = await this.instantiateMaterial(material);
         return instance;
     }
-    instantiateMaterial(material) {
+    async instantiateMaterial(material) {
         var _a, _b;
         const type = (_a = material.type) !== null && _a !== void 0 ? _a : 'MeshStandardMaterial';
         const props = this.extractMaterialProps(material);
         const side = this.resolveMaterialSide(props.side);
         const color = new this.THREE.Color(props.color);
         const emissiveColor = new this.THREE.Color((_b = props.emissive) !== null && _b !== void 0 ? _b : '#000000');
+        let instance = null;
         switch (type) {
             case 'MeshBasicMaterial': {
-                const parameters = {
+                instance = new this.THREE.MeshBasicMaterial({
                     color,
                     transparent: props.transparent,
                     opacity: props.opacity,
                     wireframe: props.wireframe,
                     side,
-                };
-                return new this.THREE.MeshBasicMaterial(parameters);
+                });
+                break;
             }
             case 'MeshLambertMaterial': {
-                const parameters = {
+                instance = new this.THREE.MeshLambertMaterial({
                     color,
                     emissive: emissiveColor,
                     emissiveIntensity: props.emissiveIntensity,
@@ -238,11 +373,11 @@ class SceneBuilder {
                     opacity: props.opacity,
                     wireframe: props.wireframe,
                     side,
-                };
-                return new this.THREE.MeshLambertMaterial(parameters);
+                });
+                break;
             }
             case 'MeshPhongMaterial': {
-                const parameters = {
+                instance = new this.THREE.MeshPhongMaterial({
                     color,
                     emissive: emissiveColor,
                     emissiveIntensity: props.emissiveIntensity,
@@ -250,11 +385,11 @@ class SceneBuilder {
                     opacity: props.opacity,
                     wireframe: props.wireframe,
                     side,
-                };
-                return new this.THREE.MeshPhongMaterial(parameters);
+                });
+                break;
             }
             case 'MeshToonMaterial': {
-                const parameters = {
+                instance = new this.THREE.MeshToonMaterial({
                     color,
                     emissive: emissiveColor,
                     emissiveIntensity: props.emissiveIntensity,
@@ -262,20 +397,20 @@ class SceneBuilder {
                     opacity: props.opacity,
                     wireframe: props.wireframe,
                     side,
-                };
-                return new this.THREE.MeshToonMaterial(parameters);
+                });
+                break;
             }
             case 'MeshNormalMaterial': {
-                const parameters = {
+                instance = new this.THREE.MeshNormalMaterial({
                     transparent: props.transparent,
                     opacity: props.opacity,
                     wireframe: props.wireframe,
                     side,
-                };
-                return new this.THREE.MeshNormalMaterial(parameters);
+                });
+                break;
             }
             case 'MeshPhysicalMaterial': {
-                const parameters = {
+                instance = new this.THREE.MeshPhysicalMaterial({
                     color,
                     metalness: props.metalness,
                     roughness: props.roughness,
@@ -286,21 +421,21 @@ class SceneBuilder {
                     opacity: props.opacity,
                     wireframe: props.wireframe,
                     side,
-                };
-                return new this.THREE.MeshPhysicalMaterial(parameters);
+                });
+                break;
             }
             case 'MeshMatcapMaterial': {
-                const parameters = {
+                instance = new this.THREE.MeshMatcapMaterial({
                     color,
                     transparent: props.transparent,
                     opacity: props.opacity,
                     side,
-                };
-                return new this.THREE.MeshMatcapMaterial(parameters);
+                });
+                break;
             }
             case 'MeshStandardMaterial':
             default: {
-                const parameters = {
+                instance = new this.THREE.MeshStandardMaterial({
                     color,
                     metalness: props.metalness,
                     roughness: props.roughness,
@@ -311,10 +446,13 @@ class SceneBuilder {
                     opacity: props.opacity,
                     wireframe: props.wireframe,
                     side,
-                };
-                return new this.THREE.MeshStandardMaterial(parameters);
+                });
+                break;
             }
         }
+        this.applyMaterialProps(instance, material);
+        await this.applyMaterialTextures(instance, props.textures);
+        return instance;
     }
     extractMaterialProps(material) {
         const { color, transparent, opacity, side, wireframe, metalness, roughness, emissive, emissiveIntensity, aoStrength, envMapIntensity, textures } = material;
@@ -365,8 +503,280 @@ class SceneBuilder {
             material.metalness = (_f = props.metalness) !== null && _f !== void 0 ? _f : material.metalness;
             material.roughness = (_g = props.roughness) !== null && _g !== void 0 ? _g : material.roughness;
             material.envMapIntensity = (_h = props.envMapIntensity) !== null && _h !== void 0 ? _h : material.envMapIntensity;
+            if (typeof props.aoStrength === 'number' && 'aoMapIntensity' in material) {
+                material.aoMapIntensity = props.aoStrength;
+            }
         }
         material.needsUpdate = true;
+    }
+    async applyMaterialTextures(material, textures) {
+        if (!material || !textures || typeof textures !== 'object') {
+            return;
+        }
+
+        const tasks = [];
+        Object.keys(textures).forEach((slot) => {
+            if (!Object.prototype.hasOwnProperty.call(MATERIAL_TEXTURE_ASSIGNMENTS, slot)) {
+                return;
+            }
+            const ref = textures[slot];
+            if (ref === undefined) {
+                return;
+            }
+
+            tasks.push(this.assignMaterialTexture(material, slot, ref));
+        });
+        if (tasks.length) {
+            await Promise.all(tasks);
+        }
+    }
+    async assignMaterialTexture(material, slot, ref) {
+        const assignment = MATERIAL_TEXTURE_ASSIGNMENTS[slot];
+        if (!assignment || !material) {
+            return;
+        }
+
+        const key = assignment.key;
+        const typed = material;
+        if (!(key in typed)) {
+            return;
+        }
+        if (!ref || !ref.assetId) {
+            if (typed[key]) {
+                typed[key] = null;
+                material.needsUpdate = true;
+            }
+            return;
+        }
+
+        try {
+            const baseTexture = await this.ensureTexture(ref);
+            if (!baseTexture) {
+                if (typed[key]) {
+                    typed[key] = null;
+                    material.needsUpdate = true;
+                }
+                return;
+            }
+
+            const signature = textureSettingsSignature(ref.settings);
+            const needsClone = signature !== DEFAULT_TEXTURE_SETTINGS_SIGNATURE || Boolean(assignment.colorSpace);
+            let instance = needsClone ? baseTexture.clone() : baseTexture;
+            if (signature !== DEFAULT_TEXTURE_SETTINGS_SIGNATURE) {
+                this.applyTextureSettings(instance, ref.settings);
+            }
+            if (assignment.colorSpace && assignment.colorSpace in this.THREE && 'colorSpace' in instance) {
+                instance.colorSpace = this.THREE[assignment.colorSpace];
+                instance.needsUpdate = true;
+            }
+            typed[key] = instance;
+            material.needsUpdate = true;
+        }
+        catch (error) {
+            console.warn('纹理加载失败', ref === null || ref === void 0 ? void 0 : ref.assetId, error);
+            typed[key] = null;
+            material.needsUpdate = true;
+        }
+    }
+    async ensureTexture(ref) {
+        const assetId = ref && typeof ref.assetId === 'string' ? ref.assetId : '';
+        if (!assetId) {
+            return null;
+        }
+        if (this.textureCache.has(assetId)) {
+            return this.textureCache.get(assetId);
+        }
+        if (this.pendingTexturePromises.has(assetId)) {
+            return this.pendingTexturePromises.get(assetId);
+        }
+        const pending = this.loadTextureAsset(ref).catch((error) => {
+            console.warn('加载纹理资源失败', assetId, error);
+            return null;
+        });
+        this.pendingTexturePromises.set(assetId, pending);
+        const texture = await pending;
+        this.pendingTexturePromises.delete(assetId);
+        if (texture) {
+            this.textureCache.set(assetId, texture);
+        }
+        return texture;
+    }
+    async loadTextureAsset(ref) {
+        const assetId = ref && typeof ref.assetId === 'string' ? ref.assetId : '';
+        if (!assetId) {
+            return null;
+        }
+        const source = await this.resolveAssetSource(assetId);
+        if (!source) {
+            console.warn('未找到纹理资源', assetId);
+            return null;
+        }
+        const url = await this.createTextureUrlFromSource(assetId, source);
+        if (!url) {
+            console.warn('纹理资源无法解析', assetId);
+            return null;
+        }
+
+        const texture = await this.loadTextureFromUrl(url).catch((error) => {
+            console.warn('纹理加载出错', assetId, error);
+            return null;
+        });
+        if (!texture) {
+            return null;
+        }
+
+        texture.name = typeof (ref === null || ref === void 0 ? void 0 : ref.name) === 'string' ? ref.name : assetId;
+        texture.needsUpdate = true;
+        return texture;
+    }
+    async loadTextureFromUrl(url) {
+        return await new Promise((resolve, reject) => {
+            this.textureLoader.load(url, (texture) => resolve(texture), undefined, (error) => {
+                reject(error instanceof Error ? error : new Error(String(error)));
+            });
+        });
+    }
+    async createTextureUrlFromSource(assetId, source) {
+        switch (source.kind) {
+            case 'data-url':
+                return this.normalizeDataUrlMime(source.data, assetId);
+            case 'remote-url':
+                return source.data;
+            case 'arraybuffer': {
+                const mime = source.contentType || this.inferMimeTypeFromAssetId(assetId);
+                const base64 = this.arrayBufferToBase64(source.data);
+                return `data:${mime};base64,${base64}`;
+            }
+            default:
+                return null;
+        }
+    }
+    arrayBufferToBase64(buffer) {
+        if (buffer == null) {
+            return '';
+        }
+        let data = buffer;
+        if (ArrayBuffer.isView(buffer)) {
+            const view = buffer;
+            const { buffer: raw, byteOffset, byteLength } = view;
+            data = raw.slice(byteOffset, byteOffset + byteLength);
+        }
+        if (WX === null || WX === void 0 ? void 0 : WX.arrayBufferToBase64) {
+            return WX.arrayBufferToBase64(data);
+        }
+        if (typeof Buffer !== 'undefined' && typeof Buffer.from === 'function') {
+            return Buffer.from(data).toString('base64');
+        }
+        try {
+            return encode(data);
+        }
+        catch (error) {
+            const arrayBuffer = data instanceof ArrayBuffer ? data : new Uint8Array(data).buffer;
+            const bytes = new Uint8Array(arrayBuffer);
+            let binary = '';
+            for (let i = 0; i < bytes.length; i += 1) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            if (typeof btoa === 'function') {
+                return btoa(binary);
+            }
+            throw error instanceof Error ? error : new Error(String(error));
+        }
+    }
+    inferMimeTypeFromAssetId(assetId) {
+        if (typeof assetId !== 'string') {
+            return 'application/octet-stream';
+        }
+        const lower = assetId.toLowerCase();
+        if (lower.endsWith('.png')) {
+            return 'image/png';
+        }
+        if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
+            return 'image/jpeg';
+        }
+        if (lower.endsWith('.webp')) {
+            return 'image/webp';
+        }
+        if (lower.endsWith('.ktx2')) {
+            return 'image/ktx2';
+        }
+        if (lower.endsWith('.ktx')) {
+            return 'image/ktx';
+        }
+        if (lower.endsWith('.hdr')) {
+            return 'image/vnd.radiance';
+        }
+        if (lower.endsWith('.dds')) {
+            return 'image/vnd-ms.dds';
+        }
+        if (lower.endsWith('.gif')) {
+            return 'image/gif';
+        }
+        if (lower.endsWith('.bmp')) {
+            return 'image/bmp';
+        }
+        if (lower.endsWith('.tga')) {
+            return 'image/x-tga';
+        }
+        return 'application/octet-stream';
+    }
+    normalizeDataUrlMime(dataUrl, assetId) {
+        if (typeof dataUrl !== 'string') {
+            return null;
+        }
+        if (!dataUrl.startsWith('data:')) {
+            return dataUrl;
+        }
+        const commaIndex = dataUrl.indexOf(',');
+        if (commaIndex === -1) {
+            return dataUrl;
+        }
+        const header = dataUrl.slice(0, commaIndex);
+        const mime = this.inferMimeTypeFromAssetId(assetId);
+        if (!mime) {
+            return dataUrl;
+        }
+        if (header.startsWith(`data:${mime}`)) {
+            return dataUrl;
+        }
+        const octetPrefix = 'data:application/octet-stream';
+        if (header.startsWith(octetPrefix)) {
+            const suffix = header.slice(octetPrefix.length);
+            return `data:${mime}${suffix}${dataUrl.slice(commaIndex)}`;
+        }
+        return dataUrl;
+    }
+    applyTextureSettings(texture, settings) {
+        const resolved = createTextureSettings(settings !== null && settings !== void 0 ? settings : null);
+        texture.wrapS = this.resolveWrapMode(resolved.wrapS);
+        texture.wrapT = this.resolveWrapMode(resolved.wrapT);
+        if ('wrapR' in texture) {
+            texture.wrapR = this.resolveWrapMode(resolved.wrapR);
+        }
+        texture.offset.set(resolved.offset.x, resolved.offset.y);
+        texture.repeat.set(resolved.repeat.x, resolved.repeat.y);
+        texture.center.set(resolved.center.x, resolved.center.y);
+        texture.rotation = resolved.rotation;
+        texture.matrixAutoUpdate = resolved.matrixAutoUpdate;
+        if (!texture.matrixAutoUpdate && typeof texture.updateMatrix === 'function') {
+            texture.updateMatrix();
+        }
+        texture.generateMipmaps = resolved.generateMipmaps;
+        texture.premultiplyAlpha = resolved.premultiplyAlpha;
+        texture.flipY = resolved.flipY;
+        texture.needsUpdate = true;
+    }
+    resolveWrapMode(mode) {
+        const THREE = this.THREE;
+        switch (mode) {
+            case 'RepeatWrapping':
+                return THREE.RepeatWrapping;
+            case 'MirroredRepeatWrapping':
+                return THREE.MirroredRepeatWrapping;
+            case 'ClampToEdgeWrapping':
+            default:
+                return THREE.ClampToEdgeWrapping;
+        }
     }
     createPrimitiveMesh(type, materials) {
         const geometry = this.createGeometry(type);
@@ -493,6 +903,7 @@ class SceneBuilder {
             console.warn('GLTF 解析失败', assetId);
             return null;
         }
+        console.log('GLTF 解析成功', gltfRoot);
         this.prepareImportedObject(gltfRoot);
         this.gltfCache.set(assetId, gltfRoot);
         return gltfRoot.clone(true);
@@ -575,41 +986,32 @@ class SceneBuilder {
         });
     }
     async resolveAssetSource(assetId) {
-        var _a;
-        const packageMap = (_a = this.document.packageAssetMap) !== null && _a !== void 0 ? _a : {};
-        const embeddedKey = `${LOCAL_ASSET_PREFIX}${assetId}`;
-        if (packageMap[embeddedKey]) {
-            return { kind: 'data-url', data: packageMap[embeddedKey] };
+        if (!assetId) {
+            return null;
         }
-        const directKey = packageMap[assetId];
-        if (directKey && packageMap[`${LOCAL_ASSET_PREFIX}${directKey}`]) {
-            return { kind: 'data-url', data: packageMap[`${LOCAL_ASSET_PREFIX}${directKey}`] };
-        }
-        const asset = this.findAssetInCatalog(assetId);
-        if (asset === null || asset === void 0 ? void 0 : asset.downloadUrl) {
-            return { kind: 'remote-url', data: asset.downloadUrl, name: asset.name, contentType: null };
-        }
-        return null;
-    }
-    findAssetInCatalog(assetId) {
-        var _a;
-        const catalog = (_a = this.document.assetCatalog) !== null && _a !== void 0 ? _a : {};
-        for (const list of Object.values(catalog)) {
-            if (!Array.isArray(list)) {
-                continue;
+        const cacheLimit = this.options && typeof this.options.cacheLimitBytes === 'number'
+            ? this.options.cacheLimitBytes
+            : undefined;
+        try {
+            const source = await resourceCache.acquireAssetSource({
+                bundle: this.document,
+                assetId,
+                sceneId: this.sceneId,
+                storageLimit: cacheLimit,
+            });
+            if (source) {
+                return source;
             }
-            const assetList = list;
-            const found = assetList.find((entry) => entry.id === assetId);
-            if (found) {
-                return found;
-            }
+        }
+        catch (error) {
+            console.warn('资源缓存访问失败', assetId, error);
         }
         return null;
     }
     async buildGroundMesh(mesh, node) {
         const geometry = new this.THREE.PlaneGeometry(mesh.width, mesh.depth, mesh.columns, mesh.rows);
         geometry.rotateX(-Math.PI / 2);
-        const materials = this.resolveNodeMaterials(node);
+        const materials = await this.resolveNodeMaterials(node);
         const ground = new this.THREE.Mesh(geometry, materials.length > 1 ? materials : materials[0]);
         ground.receiveShadow = this.enableShadows;
         ground.castShadow = false;
@@ -624,12 +1026,12 @@ class SceneBuilder {
     async buildNodesForWall(mesh, node) {
         const container = new this.THREE.Group();
         container.name = node.name || 'Wall';
+        const materials = await this.resolveNodeMaterials(node);
         mesh.segments.forEach((segment, index) => {
             const length = Math.sqrt((segment.end.x - segment.start.x) ** 2 +
                 (segment.end.y - segment.start.y) ** 2 +
                 (segment.end.z - segment.start.z) ** 2);
             const geometry = new this.THREE.BoxGeometry(length, segment.height, segment.thickness);
-            const materials = this.resolveNodeMaterials(node);
             const wallSegment = new this.THREE.Mesh(geometry, materials.length > 1 ? materials : materials[0]);
             wallSegment.castShadow = this.enableShadows;
             wallSegment.receiveShadow = true;
