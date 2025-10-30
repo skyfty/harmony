@@ -2,10 +2,9 @@ import * as THREE from 'three'
 import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
-import type { SceneNode } from '@/types/scene'
 import type { SceneMaterial, SceneMaterialTextureSlot, SceneNodeMaterial } from '@/types/material'
-import type { SceneNodeComponentState } from '@/types/node-component'
-import type { SceneExportOptions, GLBExportSettings,SceneJsonExportDocument } from '@/types/scene-export'
+import type {SceneNode, SceneNodeComponentState,SceneJsonExportDocument } from '@harmony/scene-schema'
+import type { SceneExportOptions, GLBExportSettings } from '@/types/scene-export'
 
 type RemovedSceneObject = {
     parent: THREE.Object3D

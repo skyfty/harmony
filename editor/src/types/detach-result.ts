@@ -1,4 +1,4 @@
-import type { SceneNode } from '@/types/scene'
+import type { SceneNode } from  '@harmony/scene-schema'
 
 export interface DetachResult {
   tree: SceneNode[]

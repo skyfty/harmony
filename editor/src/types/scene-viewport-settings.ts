@@ -1,16 +1,8 @@
+
+import type {SceneSkyboxSettings } from '@harmony/scene-schema'
 export type CameraProjectionMode = 'perspective' | 'orthographic'
 export type CameraControlMode = 'orbit' | 'map'
-
-export interface SceneSkyboxSettings {
-  presetId: string
-  exposure: number
-  turbidity: number
-  rayleigh: number
-  mieCoefficient: number
-  mieDirectionalG: number
-  elevation: number
-  azimuth: number
-}
+export type { SceneSkyboxSettings }
 
 export interface SceneViewportSettings {
   showGrid: boolean

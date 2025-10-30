@@ -1,7 +1,15 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import type { SceneJsonExportDocument, SceneMaterial, SceneNode, SceneNodeMaterial, SceneMaterialTextureSlotMap, Vector3Like } from '@harmony/scene-schema';
+import type { 
+  SceneMaterialTextureSettings,
+  SceneMaterialProps,
+  SceneJsonExportDocument, 
+  SceneMaterial, SceneNode, 
+  SceneNodeMaterial, 
+  SceneMaterialTextureSlotMap,
+  Vector3Like } from '@harmony/scene-schema';
+import {DEFAULT_TEXTURE_SETTINGS, IMPORT_TEXTURE_SLOT_MAP} from '@harmony/scene-schema';
 
 type SceneNodeWithExtras = SceneNode & {
   light?: {
@@ -36,43 +44,6 @@ interface AssetSourceRemoteUrl {
 
 type AssetSource = AssetSourceArrayBuffer | AssetSourceDataUrl | AssetSourceRemoteUrl;
 
-interface TextureVector2 {
-  x: number;
-  y: number;
-}
-
-interface TextureSettings {
-  wrapS: string;
-  wrapT: string;
-  wrapR: string;
-  offset: TextureVector2;
-  repeat: TextureVector2;
-  rotation: number;
-  center: TextureVector2;
-  matrixAutoUpdate: boolean;
-  generateMipmaps: boolean;
-  premultiplyAlpha: boolean;
-  flipY: boolean;
-}
-
-interface NormalizedMaterialProps {
-  id: string;
-  name: string;
-  type: string;
-  color: string;
-  transparent: boolean;
-  opacity: number;
-  side: string;
-  wireframe: boolean;
-  metalness: number;
-  roughness: number;
-  emissive: string;
-  emissiveIntensity: number;
-  aoStrength: number;
-  envMapIntensity: number;
-  textures: SceneMaterialTextureSlotMap;
-}
-
 const MATERIAL_TEXTURE_ASSIGNMENTS: Record<keyof SceneMaterialTextureSlotMap, { key: string; colorSpace?: 'srgb' | 'linear' }> = {
   albedo: { key: 'map', colorSpace: 'srgb' },
   normal: { key: 'normalMap' },
@@ -82,39 +53,9 @@ const MATERIAL_TEXTURE_ASSIGNMENTS: Record<keyof SceneMaterialTextureSlotMap, { 
   emissive: { key: 'emissiveMap', colorSpace: 'srgb' },
 };
 
-const DEFAULT_TEXTURE_SETTINGS: TextureSettings = {
-  wrapS: 'ClampToEdgeWrapping',
-  wrapT: 'ClampToEdgeWrapping',
-  wrapR: 'ClampToEdgeWrapping',
-  offset: { x: 0, y: 0 },
-  repeat: { x: 1, y: 1 },
-  rotation: 0,
-  center: { x: 0, y: 0 },
-  matrixAutoUpdate: true,
-  generateMipmaps: true,
-  premultiplyAlpha: false,
-  flipY: true,
-};
-
-// const presetAssetModules = import.meta.glob<string>(
-//   '@/preset/**/*',
-//   {
-//     eager: true,
-//     import: 'default',
-//     query: '?url',
-//   },
-// ) as Record<string, string>;
-
 function buildPresetAssetLookup(): Map<string, string> {
   const lookup = new Map<string, string>();
-  // Object.entries(presetAssetModules).forEach(([path, url]) => {
-  //   const normalized = path.replace(/^[.\/]+/, '').replace(/\\/g, '/');
-  //   const presetIndex = normalized.indexOf('preset/');
-  //   const relative = presetIndex >= 0 ? normalized.slice(presetIndex + 'preset/'.length) : normalized;
-  //   const assetId = `preset:${relative}`;
-  //   lookup.set(assetId, url);
-  //   lookup.set(assetId.toLowerCase(), url);
-  // });
+
   return lookup;
 }
 
@@ -747,7 +688,7 @@ class SceneGraphBuilder {
     return instance;
   }
 
-  private extractMaterialProps(material: SceneMaterial | SceneNodeMaterial): NormalizedMaterialProps {
+  private extractMaterialProps(material: SceneMaterial | SceneNodeMaterial): SceneMaterialProps {
     return {
       id: material.id ?? 'material',
       name: material.name ?? 'Material',
@@ -869,7 +810,7 @@ class SceneGraphBuilder {
 
   private async ensureTexture(
     assetId: string,
-    settings: Partial<TextureSettings> | null,
+    settings: Partial<SceneMaterialTextureSettings> | null,
   ): Promise<THREE.Texture | null> {
     const signature = `${assetId}::${this.textureSettingsSignature(settings)}`;
     if (this.textureCache.has(signature)) {
@@ -886,7 +827,7 @@ class SceneGraphBuilder {
 
   private async createTextureInstance(
     assetId: string,
-    settings: Partial<TextureSettings> | null,
+    settings: Partial<SceneMaterialTextureSettings> | null,
   ): Promise<THREE.Texture | null> {
     const source = await this.resourceCache.acquireAssetSource(assetId);
     if (!source) {
@@ -938,7 +879,7 @@ class SceneGraphBuilder {
     });
   }
 
-  private applyTextureSettings(texture: THREE.Texture, overrides: Partial<TextureSettings> | null): void {
+  private applyTextureSettings(texture: THREE.Texture, overrides: Partial<SceneMaterialTextureSettings> | null): void {
     const settings = this.createTextureSettings(overrides);
     texture.wrapS = this.resolveWrapMode(settings.wrapS);
     texture.wrapT = this.resolveWrapMode(settings.wrapT);
@@ -969,7 +910,7 @@ class SceneGraphBuilder {
     }
   }
 
-  private createTextureSettings(overrides: Partial<TextureSettings> | null | undefined): TextureSettings {
+  private createTextureSettings(overrides: Partial<SceneMaterialTextureSettings> | null | undefined): SceneMaterialTextureSettings {
     const base = DEFAULT_TEXTURE_SETTINGS;
     const candidate = overrides ?? {};
     return {
@@ -996,7 +937,7 @@ class SceneGraphBuilder {
     };
   }
 
-  private textureSettingsSignature(settings: Partial<TextureSettings> | null | undefined): string {
+  private textureSettingsSignature(settings: Partial<SceneMaterialTextureSettings> | null | undefined): string {
     const resolved = this.createTextureSettings(settings);
     return [
       resolved.wrapS,

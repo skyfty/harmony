@@ -8,15 +8,20 @@ import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { TransformControls } from '@/plugins/transformControls.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import Pica from 'pica'
-import type { SceneNode, Vector3Like } from '@/types/scene'
+
 import type {
+  SceneNode,
+  Vector3Like,
   SceneMaterialTextureSlot,
   SceneMaterialTextureRef,
   SceneNodeMaterial,
   SceneMaterialType,
   SceneTextureWrapMode,
   SceneMaterialTextureSettings,
-} from '@/types/material'
+  SceneSkyboxSettings,
+  GroundDynamicMesh, 
+  WallDynamicMesh 
+} from '@harmony/scene-schema'
 import { MATERIAL_CLASS_NAMES, normalizeSceneMaterialType, createTextureSettings, textureSettingsSignature } from '@/types/material'
 import { useSceneStore, getRuntimeObject, buildPackageAssetMapForExport } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -29,7 +34,7 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { getCachedModelObject, getOrLoadModelObject } from '@/stores/modelObjectCache'
 import { loadObjectFromFile } from '@/plugins/assetImport'
 import { createGeometry } from '@/plugins/geometry'
-import type { CameraProjectionMode, CameraControlMode, SceneSkyboxSettings } from '@/types/scene-viewport-settings'
+import type { CameraProjectionMode, CameraControlMode } from '@/types/scene-viewport-settings'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SkyboxParameterKey } from '@/types/skybox'
 import { SKYBOX_PRESETS, CUSTOM_SKYBOX_PRESET_ID, cloneSkyboxSettings } from '@/stores/skyboxPresets'
@@ -47,7 +52,6 @@ import type { SelectionDragCompanion, SelectionDragState } from '@/types/scene-v
 import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracking-state'
 import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-viewport-transform-group'
 import type { PlaceholderOverlayState } from '@/types/scene-viewport-placeholder-overlay-state'
-import type { GroundDynamicMesh, WallDynamicMesh } from '@/types/dynamic-mesh'
 import type { BuildTool } from '@/types/build-tool'
 import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache } from '@/plugins/groundMesh'
 import { createWallGroup, updateWallGroup } from '@/plugins/wallMesh'
@@ -141,7 +145,7 @@ const MATERIAL_CLASS_MAP: Record<string, new () => THREE.Material> = MATERIAL_CL
 
 function ensureMaterialType(
   material: THREE.Material,
-  type?: SceneMaterialType | null,
+  type: SceneMaterialType,
 ): { material: THREE.Material; replaced: boolean; dispose?: () => void } {
   const desired = type ? normalizeSceneMaterialType(type) : null
   if (!desired) {

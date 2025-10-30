@@ -1,11 +1,9 @@
-import type { SceneNode } from '@/types/scene'
+import type { GroundSettings,SceneNode,AssetIndexEntry } from '@harmony/scene-schema'
 import type { SceneCameraState } from './scene-camera-state'
 import type { ProjectAsset } from './project-asset'
-import type { AssetIndexEntry } from './asset-index-entry'
 import type { SceneViewportSettings } from './scene-viewport-settings'
 import type { PanelVisibilityState } from './panel-visibility-state'
 import type { PanelPlacementState } from './panel-placement-state'
-import type { GroundSettings } from '@harmony/scene-schema'
 import type { SceneMaterial } from '@/types/material'
 
 export interface StoredSceneDocument {

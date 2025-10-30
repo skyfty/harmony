@@ -4,7 +4,8 @@ import type {
   ComponentInspectorSection,
   NodeComponentType,
   SceneNodeComponentState,
-} from '@/types/node-component'
+} from '@harmony/scene-schema'
+
 import { Component, type ComponentRuntimeContext } from './Component'
 
 export interface ComponentDefinition<TProps = Record<string, unknown>> {

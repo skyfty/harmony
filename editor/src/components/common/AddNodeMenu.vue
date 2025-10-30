@@ -11,9 +11,8 @@ import { useFileDialog } from '@vueuse/core'
 import { useUiStore } from '@/stores/uiStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import UrlInputDialog from './UrlInputDialog.vue'
-import type { SceneNode } from '@/types/scene'
-import type { LightNodeType } from '@/types/light'
 import { generateUuid } from '@/plugins/uuid'
+import  {type LightNodeType,type SceneNode } from '@harmony/scene-schema'
 
 const sceneStore = useSceneStore()
 const uiStore = useUiStore()

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import type { ProjectAsset } from '@/types/project-asset'
-import type { SceneNode } from '@/types/scene'
+import type { SceneNode } from '@harmony/scene-schema'
 import { invalidateModelObject } from './modelObjectCache'
 
 export type AssetCacheStatus = 'idle' | 'downloading' | 'cached' | 'error'

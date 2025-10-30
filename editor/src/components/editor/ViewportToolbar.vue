@@ -151,7 +151,7 @@
 
 <script setup lang="ts">
 import { computed, toRefs } from 'vue'
-import type { SceneSkyboxSettings } from '@/types/scene-viewport-settings'
+import type { SceneSkyboxSettings } from '@harmony/scene-schema'
 import type { SkyboxParameterKey, SkyboxPresetDefinition } from '@/types/skybox'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
 import { useSceneStore } from '@/stores/sceneStore'

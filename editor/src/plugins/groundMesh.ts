@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { GroundDynamicMesh } from '@/types/dynamic-mesh'
+import  {type GroundDynamicMesh } from '@harmony/scene-schema'
 
 const textureLoader = new THREE.TextureLoader()
 let cachedMesh: THREE.Mesh | null = null

@@ -1,9 +1,11 @@
-import type {
-  SceneMaterialTextureSettings,
-  SceneMaterialType,
+import  {
+  type SceneMaterialTextureSettings,
+  type SceneMaterialType,
+  DEFAULT_TEXTURE_SETTINGS,
 } from '@harmony/scene-schema'
 
 export type {
+  SceneMaterialType,
   SceneMaterial,
   SceneMaterialProps,
   SceneMaterialSide,
@@ -15,19 +17,6 @@ export type {
   SceneTextureWrapMode,
 } from '@harmony/scene-schema'
 
-export const DEFAULT_TEXTURE_SETTINGS: SceneMaterialTextureSettings = {
-  wrapS: 'ClampToEdgeWrapping',
-  wrapT: 'ClampToEdgeWrapping',
-  wrapR: 'ClampToEdgeWrapping',
-  offset: { x: 0, y: 0 },
-  repeat: { x: 1, y: 1 },
-  rotation: 0,
-  center: { x: 0, y: 0 },
-  matrixAutoUpdate: true,
-  generateMipmaps: true,
-  premultiplyAlpha: false,
-  flipY: true,
-}
 
 export function createTextureSettings(overrides?: Partial<SceneMaterialTextureSettings> | null): SceneMaterialTextureSettings {
   const base = DEFAULT_TEXTURE_SETTINGS
@@ -89,19 +78,19 @@ export const MATERIAL_CLASS_NAMES = [
   'MeshToonMaterial',
   'MeshStandardMaterial',
   'MeshPhysicalMaterial',
-] as const
+] as string[]
 
-export type SceneMaterialType = (typeof MATERIAL_CLASS_NAMES)[number]
+export type SceneMaterialTypeName = (typeof MATERIAL_CLASS_NAMES)[number]
 
 export const DEFAULT_SCENE_MATERIAL_ID = '__scene_default_material__'
 
-export const DEFAULT_SCENE_MATERIAL_TYPE: SceneMaterialType = 'MeshStandardMaterial'
+export const DEFAULT_SCENE_MATERIAL_TYPE: string = 'MeshStandardMaterial'
 
-function isSceneMaterialType(value: unknown): value is SceneMaterialType {
-  return typeof value === 'string' && MATERIAL_CLASS_NAMES.includes(value as SceneMaterialType)
+function isSceneMaterialType(value: string): value is SceneMaterialTypeName {
+  return MATERIAL_CLASS_NAMES.includes(value)
 }
 
-export function normalizeSceneMaterialType(type?: SceneMaterialType | string | null): SceneMaterialType {
+export function normalizeSceneMaterialType(type?: SceneMaterialType | string | null): string {
   if (!type) {
     return DEFAULT_SCENE_MATERIAL_TYPE
   }

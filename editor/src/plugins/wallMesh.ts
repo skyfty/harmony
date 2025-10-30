@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { WallDynamicMesh } from '@/types/dynamic-mesh'
+import  {type WallDynamicMesh } from '@harmony/scene-schema'
 
 const DEFAULT_COLOR = 0xcfd2d6
 
