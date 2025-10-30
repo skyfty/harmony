@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@harmony/scene-schema": "file:../packages/scene-schema",
     "@mdi/font": "^7.4.47",
     "@types/three": "^0.171.0",
     "@vueuse/core": "^13.9.0",

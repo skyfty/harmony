@@ -1,8 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import type { SceneJsonExportDocument, SceneMaterial, SceneNode, SceneNodeMaterial, SceneMaterialTextureSlotMap, Vector3Like } from '@/types/scene';
-import { decode } from '@/utils/base64';
+import type { SceneJsonExportDocument, SceneMaterial, SceneNode, SceneNodeMaterial, SceneMaterialTextureSlotMap, Vector3Like } from '@harmony/scene-schema';
 
 type SceneNodeWithExtras = SceneNode & {
   light?: {

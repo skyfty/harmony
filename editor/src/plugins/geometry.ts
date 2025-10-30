@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-export type GeometryType = "Box" | "Sphere" | "Capsule" | "Circle" | "Cylinder" | "Dodecahedron" | "Icosahedron" | "Lathe" | "Octahedron" | "Plane" | "Ring" | "Sphere" | "Torus" | "TorusKnot"
+import type { GeometryType } from '@harmony/scene-schema'
 
 export function createGeometry(type: GeometryType):THREE.Mesh {
  let mesh: THREE.Mesh

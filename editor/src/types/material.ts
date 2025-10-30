@@ -1,33 +1,19 @@
-export type SceneMaterialSide = 'front' | 'back' | 'double'
+import type {
+  SceneMaterialTextureSettings,
+  SceneMaterialType,
+} from '@harmony/scene-schema'
 
-export type SceneMaterialTextureSlot =
-  | 'albedo'
-  | 'normal'
-  | 'metalness'
-  | 'roughness'
-  | 'ao'
-  | 'emissive'
-
-export type SceneTextureWrapMode = 'ClampToEdgeWrapping' | 'RepeatWrapping' | 'MirroredRepeatWrapping'
-
-export interface SceneTextureVector2 {
-  x: number
-  y: number
-}
-
-export interface SceneMaterialTextureSettings {
-  wrapS: SceneTextureWrapMode
-  wrapT: SceneTextureWrapMode
-  wrapR: SceneTextureWrapMode
-  offset: SceneTextureVector2
-  repeat: SceneTextureVector2
-  rotation: number
-  center: SceneTextureVector2
-  matrixAutoUpdate: boolean
-  generateMipmaps: boolean
-  premultiplyAlpha: boolean
-  flipY: boolean
-}
+export type {
+  SceneMaterial,
+  SceneMaterialProps,
+  SceneMaterialSide,
+  SceneMaterialTextureRef,
+  SceneMaterialTextureSettings,
+  SceneMaterialTextureSlot,
+  SceneNodeMaterial,
+  SceneTextureVector2,
+  SceneTextureWrapMode,
+} from '@harmony/scene-schema'
 
 export const DEFAULT_TEXTURE_SETTINGS: SceneMaterialTextureSettings = {
   wrapS: 'ClampToEdgeWrapping',
@@ -94,12 +80,6 @@ export function textureSettingsSignature(settings?: SceneMaterialTextureSettings
   ].join('|')
 }
 
-export interface SceneMaterialTextureRef {
-  assetId: string
-  name?: string
-  settings?: SceneMaterialTextureSettings
-}
-
 export const MATERIAL_CLASS_NAMES = [
   'MeshBasicMaterial',
   'MeshNormalMaterial',
@@ -131,33 +111,3 @@ export function normalizeSceneMaterialType(type?: SceneMaterialType | string | n
   return DEFAULT_SCENE_MATERIAL_TYPE
 }
 
-export interface SceneMaterialProps {
-  color: string
-  transparent: boolean
-  opacity: number
-  side: SceneMaterialSide
-  wireframe: boolean
-  metalness: number
-  roughness: number
-  emissive: string
-  emissiveIntensity: number
-  aoStrength: number
-  envMapIntensity: number
-  textures: Partial<Record<SceneMaterialTextureSlot, SceneMaterialTextureRef | null>>
-}
-
-export interface SceneMaterial extends SceneMaterialProps {
-  id: string
-  name: string
-  description?: string
-  type: SceneMaterialType
-  createdAt: string
-  updatedAt: string
-}
-
-export interface SceneNodeMaterial extends SceneMaterialProps {
-  id: string
-  materialId: string | null
-  type: SceneMaterialType
-  name?: string
-}

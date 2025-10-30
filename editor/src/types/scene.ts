@@ -1,10 +1,10 @@
-import type { GeometryType } from '@/plugins/geometry'
+import type { SceneNodeBase } from '@harmony/scene-schema'
 import type { SceneDynamicMesh } from '@/types/dynamic-mesh'
 import type { SceneNodeMaterial } from '@/types/material'
 import type { LightNodeProperties } from '@/types/light'
 import type { SceneNodeComponentState } from '@/types/node-component'
 
-export type SceneNodeType = 'Mesh' | 'Light' | 'Group' | 'Camera' | GeometryType
+export type { SceneNodeType, Vector3Like } from '@harmony/scene-schema'
 
 export interface CameraNodeProperties {
   kind: 'perspective' | 'orthographic'
@@ -20,31 +20,13 @@ export interface SceneNodeImportMetadata {
   objectPath: number[]
 }
 
-export interface Vector3Like {
-  x: number
-  y: number
-  z: number
-}
-
-export interface SceneNode {
-  id: string
-  name: string
-  nodeType: SceneNodeType
-  materials?: SceneNodeMaterial[]
-  components?: SceneNodeComponentState<any>[]
-  light?: LightNodeProperties
-  camera?: CameraNodeProperties
-  position: Vector3Like
-  rotation: Vector3Like
-  scale: Vector3Like
+export interface SceneNode extends SceneNodeBase<
+  SceneNodeMaterial,
+  SceneNodeComponentState<any>,
+  LightNodeProperties,
+  CameraNodeProperties,
+  SceneDynamicMesh,
+  SceneNodeImportMetadata
+> {
   children?: SceneNode[]
-  sourceAssetId?: string
-  visible?: boolean
-  locked?: boolean
-  isPlaceholder?: boolean
-  downloadProgress?: number
-  downloadStatus?: 'idle' | 'downloading' | 'ready' | 'error'
-  downloadError?: string | null
-  dynamicMesh?: SceneDynamicMesh
-  importMetadata?: SceneNodeImportMetadata
 }

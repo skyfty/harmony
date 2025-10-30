@@ -63,7 +63,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { storeToRefs } from 'pinia';
-import type { SceneJsonExportDocument } from '@/types/scene';
+import type { SceneJsonExportDocument } from '@harmony/scene-schema';
 import { parseSceneDocument, useSceneStore } from '@/stores/sceneStore';
 
 const sceneStore = useSceneStore();

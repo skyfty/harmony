@@ -9,7 +9,7 @@ import type { SceneClipboard } from './scene-clipboard'
 import type { SceneHistoryEntry } from './scene-history-entry'
 import type { AssetIndexEntry } from './asset-index-entry'
 import type { SceneViewportSettings } from './scene-viewport-settings'
-import type { GroundSettings } from './ground-settings'
+import type { GroundSettings } from '@harmony/scene-schema'
 import type { SceneMaterial } from '@/types/material'
 
 export interface SceneState {

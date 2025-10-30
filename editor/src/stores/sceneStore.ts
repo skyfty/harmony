@@ -38,7 +38,7 @@ import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { CameraProjectionMode, CameraControlMode, SceneSkyboxSettings, SceneViewportSettings } from '@/types/scene-viewport-settings'
 import type { DynamicMeshVector3, GroundDynamicMesh, PlatformDynamicMesh, SceneDynamicMesh, WallDynamicMesh } from '@/types/dynamic-mesh'
 import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
-import type { GroundSettings } from '@/types/ground-settings'
+import type { GroundSettings } from '@harmony/scene-schema'
 import type {
   SceneMaterial,
   SceneMaterialProps,

@@ -5,7 +5,7 @@ import type { AssetIndexEntry } from './asset-index-entry'
 import type { SceneViewportSettings } from './scene-viewport-settings'
 import type { PanelVisibilityState } from './panel-visibility-state'
 import type { PanelPlacementState } from './panel-placement-state'
-import type { GroundSettings } from './ground-settings'
+import type { GroundSettings } from '@harmony/scene-schema'
 import type { SceneMaterial } from '@/types/material'
 
 export interface StoredSceneDocument {

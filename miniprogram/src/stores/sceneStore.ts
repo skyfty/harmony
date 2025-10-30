@@ -1,7 +1,6 @@
 import { computed, ref } from 'vue';
 import { defineStore } from 'pinia';
-import type { SceneJsonExportDocument } from '@/types/scene';
-import { generateId } from '@/utils/id';
+import type { SceneJsonExportDocument } from '@harmony/scene-schema';
 
 export interface StoredSceneEntry {
     id: string;
@@ -11,6 +10,15 @@ export interface StoredSceneEntry {
 }
 
 const STORAGE_KEY = 'SCENE_LIBRARY_V1';
+
+ function generateId(prefix = 'scene'): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  const random = Math.random().toString(36).slice(2, 10);
+  const time = Date.now().toString(36);
+  return `${prefix}-${time}-${random}`;
+}
 
 function isValidSceneDocument(document: unknown): document is SceneJsonExportDocument {
     if (!document || typeof document !== 'object') {

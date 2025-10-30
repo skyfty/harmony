@@ -1,8 +1,7 @@
-
-import type { GroundSettings } from '@/types/ground-settings'
 import type { AssetIndexEntry } from '@/types/asset-index-entry'
 import type { SceneNode } from '@/types/scene'
 import type { SceneMaterial } from '@/types/material'
+import type { SceneJsonExportDocument as BaseSceneJsonExportDocument } from '@harmony/scene-schema'
 
 export type SceneExportResult = {
   blob: Blob
@@ -31,14 +30,9 @@ export interface GLBExportSettings {
 }
 
 
-export interface SceneJsonExportDocument {
-  id: string
-  name: string
-  createdAt: string
-  updatedAt: string
-  nodes: SceneNode[]
-  materials: SceneMaterial[]
-  groundSettings: GroundSettings
-  assetIndex: Record<string, AssetIndexEntry>
-  packageAssetMap: Record<string, string>
-}
+export type SceneJsonExportDocument = BaseSceneJsonExportDocument<
+  SceneNode,
+  SceneMaterial,
+  Record<string, AssetIndexEntry>,
+  Record<string, string>
+>

@@ -1,7 +1,7 @@
 import type { Object3D } from 'three'
 import type { SceneNode } from '@/types/scene'
 import type { SceneViewportSettings } from './scene-viewport-settings'
-import type { GroundSettings } from './ground-settings'
+import type { GroundSettings } from '@harmony/scene-schema'
 import type { SceneMaterial } from '@/types/material'
 
 export interface SceneHistoryEntry {

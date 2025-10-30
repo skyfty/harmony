@@ -36,6 +36,7 @@
     "type-check": "vue-tsc --noEmit"
   },
   "dependencies": {
+    "@harmony/scene-schema": "file:../packages/scene-schema",
     "@dcloudio/uni-app": "3.0.0-alpha-4050320250224001",
     "@dcloudio/uni-app-harmony": "3.0.0-alpha-4050320250224001",
     "@dcloudio/uni-app-plus": "3.0.0-alpha-4050320250224001",

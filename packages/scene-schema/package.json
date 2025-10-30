@@ -1,0 +1,14 @@
+{
+  "name": "@harmony/scene-schema",
+  "version": "0.1.0",
+  "description": "Shared scene schema definitions for Harmony clients",
+  "type": "module",
+  "private": true,
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  }
+}
