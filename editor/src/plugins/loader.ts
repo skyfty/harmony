@@ -390,7 +390,7 @@ export default class Loader {
 
             const loader = new LDrawLoader();
             loader.setPath('../../examples/models/ldraw/officialLibrary/');
-            loader.parse(event.target?.result as string, (group) => {
+            loader.parse(event.target?.result as string, '', (group: THREE.Group) => {
               group.name = filename;
               group.rotation.x = Math.PI;
               scope.emit('loaded', group);

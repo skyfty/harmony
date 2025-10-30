@@ -14,7 +14,7 @@
     "@vueuse/core": "^13.9.0",
     "pica": "^9.0.1",
     "pinia": "^2.2.6",
-    "sass": "^1.85.1",
+    "sass": "^1.93.2",
     "splitpanes": "^4.0.4",
     "three": "^0.172.0",
     "three-viewport-gizmo": "^2.2.0",
@@ -26,10 +26,10 @@
   "devDependencies": {
     "@types/node": "^24.6.0",
     "@vitejs/plugin-vue": "^6.0.1",
-    "@vue/tsconfig": "^0.7.0",
-    "typescript": "^5.8.2",
-    "vite": "^5.4.14",
+    "@vue/tsconfig": "^0.8.1",
+    "typescript": "~5.9.3",
+    "vite": "^7.1.7",
     "vite-plugin-vuetify": "^2.1.2",
-    "vue-tsc": "^1.8.27"
+    "vue-tsc": "^3.1.0"
   }
 }

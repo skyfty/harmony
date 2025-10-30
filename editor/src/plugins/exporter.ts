@@ -20,7 +20,10 @@ export  function exportPLY(scene: THREE.Scene) {
 
 export function exportSTL(scene: THREE.Scene) {
     const exporter = new STLExporter()
-    const result = exporter.parse(scene, { binary: true });
-    const blob = new Blob([result], { type: 'model/stl' })
+    const result = exporter.parse(scene, { binary: true }) as DataView
+    // Ensure we pass a true ArrayBuffer to Blob to satisfy TS DOM typings
+    const outBuffer = new ArrayBuffer(result.byteLength)
+    new Uint8Array(outBuffer).set(new Uint8Array(result.buffer, result.byteOffset, result.byteLength))
+    const blob = new Blob([outBuffer], { type: 'model/stl' })
     return blob;
 }

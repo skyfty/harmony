@@ -11,7 +11,7 @@ import MenuBar from './MenuBar.vue'
 import SceneManagerDialog from '@/components/layout/SceneManagerDialog.vue'
 import NewSceneDialog from '@/components/layout/NewSceneDialog.vue'
 import SceneExportDialog from '@/components/layout/SceneExportDialog.vue'
-import type { SceneExportFormat, SceneExportOptions } from '@/types/scene-export'
+import type { SceneExportOptions } from '@/types/scene-export'
 
 import {
   useSceneStore,
@@ -70,7 +70,8 @@ const exportProgress = ref(0)
 const exportProgressMessage = ref('')
 const exportErrorMessage = ref<string | null>(null)
 const exportDialogFileName = ref('scene')
-const exportPreferences = ref<SceneExportDialogOptions>({
+const exportPreferences = ref<SceneExportOptions>({
+  fileName: 'scene',
   includeTextures: true,
   includeAnimations: true,
   includeSkybox: true,
@@ -392,7 +393,7 @@ async function handleExportDialogConfirm(options: SceneExportOptions) {
   exportProgressMessage.value = 'Preparing export...'
 
   const { fileName, ...preferenceSnapshot } = options
-  exportPreferences.value = { ...preferenceSnapshot }
+  exportPreferences.value = { fileName, ...preferenceSnapshot }
 
   let exportSucceeded = false
 
