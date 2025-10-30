@@ -444,7 +444,7 @@ export const useAssetCacheStore = defineStore('assetCache', {
         return entry
       }
 
-      if (scope.pending[assetId]) {
+      if (assetId in scope.pending) {
         return scope.pending[assetId]!
       }
 

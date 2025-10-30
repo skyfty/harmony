@@ -5,7 +5,7 @@ export function createGeometry(type: GeometryType):THREE.Mesh {
  let mesh: THREE.Mesh
   switch(type) {
     case 'Capsule': {
-      const geometry = new THREE.CapsuleGeometry( 1, 1, 4, 8, 1 );
+      const geometry = new THREE.CapsuleGeometry( 1, 1, 4, 8 );
       const material = new THREE.MeshStandardMaterial();
       mesh = new THREE.Mesh( geometry, material );
       mesh.name = 'Capsule';

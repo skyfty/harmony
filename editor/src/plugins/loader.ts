@@ -390,7 +390,7 @@ export default class Loader {
 
             const loader = new LDrawLoader();
             loader.setPath('../../examples/models/ldraw/officialLibrary/');
-            loader.parse(event.target?.result as string, (group) => {
+            loader.parse(event.target?.result as string, '', (group: THREE.Group) => {
               group.name = filename;
               group.rotation.x = Math.PI;
               scope.emit('loaded', group);
@@ -542,37 +542,6 @@ export default class Loader {
             scope.emit('loaded', group);
           });
           reader.readAsText(file);
-          break;
-        }
-
-        case 'usda': {
-          reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-            const contents = event.target?.result as string;
-            if (!contents) return;
-
-            const { USDLoader } = await import('three/addons/loaders/USDLoader.js');
-
-            const group = new USDLoader().parse(contents);
-            group.name = filename;
-            scope.emit('loaded', group);
-          });
-          reader.readAsText(file);
-          break;
-        }
-
-        case 'usdc':
-        case 'usdz': {
-          reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-            const contents = event.target?.result as ArrayBuffer;
-            if (!contents) return;
-
-            const { USDLoader } = await import('three/addons/loaders/USDLoader.js');
-
-            const group = new USDLoader().parse(contents);
-            group.name = filename;
-            scope.emit('loaded', group);
-          });
-          reader.readAsArrayBuffer(file);
           break;
         }
 

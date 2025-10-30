@@ -2383,7 +2383,7 @@ function resolveEmbeddedAssetFilename(scene: StoredSceneDocument, assetId: strin
   return ensureExtension(filename, extension)
 }
 
-async function buildPackageAssetMapForExport(
+export async function buildPackageAssetMapForExport(
   scene: StoredSceneDocument,
   options: SceneBundleExportOptions,
 ): Promise<Record<string, string>> {
@@ -2464,7 +2464,7 @@ async function buildPackageAssetMapForExport(
   return baseMap
 }
 
-async function cloneSceneDocumentForExport(
+export async function cloneSceneDocumentForExport(
   scene: StoredSceneDocument,
   options: SceneBundleExportOptions,
 ): Promise<StoredSceneDocument> {
@@ -3318,6 +3318,10 @@ export const useSceneStore = defineStore('scene', {
         this.selectedAssetId = null
       }
     },
+    createSceneDocumentSnapshot(): StoredSceneDocument {
+      const snapshot = buildSceneDocumentFromState(this)
+      return snapshot
+    },
     appendUndoSnapshot(snapshot: SceneHistoryEntry, options: { resetRedo?: boolean } = {}) {
       const nextUndoStack = [...this.undoStack, snapshot]
       this.undoStack = nextUndoStack.length > HISTORY_LIMIT
@@ -3358,8 +3362,8 @@ export const useSceneStore = defineStore('scene', {
         this.groundSettings = cloneGroundSettings(snapshot.groundSettings)
         this.resourceProviderId = snapshot.resourceProviderId
 
-  componentManager.reset()
-  componentManager.syncScene(this.nodes)
+        componentManager.reset()
+        componentManager.syncScene(this.nodes)
 
         assetCache.recalculateUsage(this.nodes)
 

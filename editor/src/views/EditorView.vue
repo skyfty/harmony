@@ -10,10 +10,9 @@ import PreviewOverlay from '@/components/layout/PreviewOverlay.vue'
 import MenuBar from './MenuBar.vue'
 import SceneManagerDialog from '@/components/layout/SceneManagerDialog.vue'
 import NewSceneDialog from '@/components/layout/NewSceneDialog.vue'
-import SceneExportDialog, {
-  type SceneExportDialogOptions,
-  type SceneExportDialogPayload,
-} from '@/components/layout/SceneExportDialog.vue'
+import SceneExportDialog from '@/components/layout/SceneExportDialog.vue'
+import type { SceneExportOptions } from '@/types/scene-export'
+
 import {
   useSceneStore,
   type EditorPanel,
@@ -71,16 +70,18 @@ const exportProgress = ref(0)
 const exportProgressMessage = ref('')
 const exportErrorMessage = ref<string | null>(null)
 const exportDialogFileName = ref('scene')
-const exportPreferences = ref<SceneExportDialogOptions>({
+const exportPreferences = ref<SceneExportOptions>({
+  fileName: 'scene',
   includeTextures: true,
   includeAnimations: true,
-  includeSkybox: false,
-  includeLights: false,
+  includeSkybox: true,
+  includeLights: true,
   includeHiddenNodes: true,
   includeSkeletons: true,
   includeCameras: false,
   includeExtras: true,
   rotateCoordinateSystem: true,
+  format: 'json',
 })
 const viewportRef = ref<SceneViewportHandle | null>(null)
 const isNewSceneDialogOpen = ref(false)
@@ -341,10 +342,24 @@ function handleNewAction() {
 function handleOpenAction() {
   isSceneManagerOpen.value = true
 }
+
+function triggerDownload(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.style.display = 'none'
+  anchor.href = url
+  anchor.download = fileName
+  document.body.appendChild(anchor)
+  anchor.click()
+  document.body.removeChild(anchor)
+  requestAnimationFrame(() => URL.revokeObjectURL(url))
+}
+
+
 function openExportDialog() {
   const rawName = sceneStore.currentSceneMeta?.name ?? 'scene'
   const trimmed = rawName.trim()
-  exportDialogFileName.value = trimmed || 'scene'
+  exportDialogFileName.value = sanitizeExportFileName(trimmed || 'scene')
   exportProgress.value = 0
   exportProgressMessage.value = ''
   exportErrorMessage.value = null
@@ -353,10 +368,14 @@ function openExportDialog() {
 
 function sanitizeExportFileName(input: string): string {
   const trimmed = input.trim()
-  return trimmed || 'scene'
+  if (!trimmed) {
+    return 'scene'
+  }
+  const withoutExtension = trimmed.replace(/\.(glb|json)$/i, '')
+  return withoutExtension || 'scene'
 }
 
-async function handleExportDialogConfirm(payload: SceneExportDialogPayload) {
+async function handleExportDialogConfirm(options: SceneExportOptions) {
   if (isExporting.value) {
     return
   }
@@ -373,29 +392,17 @@ async function handleExportDialogConfirm(payload: SceneExportDialogPayload) {
   exportProgress.value = 5
   exportProgressMessage.value = 'Preparing export...'
 
-  const { fileName, ...preferenceSnapshot } = payload
-  exportPreferences.value = { ...preferenceSnapshot }
+  const { fileName, ...preferenceSnapshot } = options
+  exportPreferences.value = { fileName, ...preferenceSnapshot }
 
   let exportSucceeded = false
 
   try {
-    await viewport.exportScene({
-      format: 'GLB',
-      fileName: sanitizeExportFileName(fileName),
-      includeTextures: payload.includeTextures,
-      includeAnimations: payload.includeAnimations,
-      includeSkybox: payload.includeSkybox,
-      includeLights: payload.includeLights,
-      includeHiddenNodes: payload.includeHiddenNodes,
-      includeSkeletons: payload.includeSkeletons,
-      includeCameras: payload.includeCameras,
-      includeExtras: payload.includeExtras,
-      rotateCoordinateSystem: payload.rotateCoordinateSystem,
-      onProgress: (progress: number, message?: string) => {
-        exportProgress.value = progress
-        exportProgressMessage.value = message ?? `Export progress ${Math.round(progress)}%`
-      },
+    const blob = await viewport.exportScene(options, (progress, message) => {
+      exportProgress.value = progress
+      exportProgressMessage.value = message ?? `Export progress ${Math.round(progress)}%`
     })
+    triggerDownload(blob, fileName)
 
     exportSucceeded = true
     exportProgress.value = 100
@@ -506,11 +513,19 @@ async function handlePreview() {
   let previewBlobUrl: string | null = null
 
   try {
-    const { blob } = await viewport.generateSceneBlob({
-      format: 'GLB',
+    const blob = await viewport.exportScene({
+      format: 'glb',
       fileName: `${sceneName}-preview`,
-      onProgress: updatePreviewProgress,
-    })
+      includeTextures: true,
+      includeAnimations: true,
+      includeSkybox: true,
+      includeLights: true,
+      includeHiddenNodes: false,
+      includeSkeletons: true,
+      includeCameras: false,
+      includeExtras: true,
+      rotateCoordinateSystem: true
+    }, updatePreviewProgress)
 
     previewBlobUrl = URL.createObjectURL(blob)
 

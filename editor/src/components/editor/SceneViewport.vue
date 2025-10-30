@@ -18,10 +18,12 @@ import type {
   SceneMaterialTextureSettings,
 } from '@/types/material'
 import { MATERIAL_CLASS_NAMES, normalizeSceneMaterialType, createTextureSettings, textureSettingsSignature } from '@/types/material'
-import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
+import { useSceneStore, getRuntimeObject, buildPackageAssetMapForExport } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import type { SceneCameraState } from '@/types/scene-camera-state'
+import type { StoredSceneDocument } from '@/types/stored-scene-document'
+
 import type { EditorTool } from '@/types/editor-tool'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { getCachedModelObject, getOrLoadModelObject } from '@/stores/modelObjectCache'
@@ -32,7 +34,8 @@ import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SkyboxParameterKey } from '@/types/skybox'
 import { SKYBOX_PRESETS, CUSTOM_SKYBOX_PRESET_ID, cloneSkyboxSettings } from '@/stores/skyboxPresets'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
-import { prepareSceneExport, triggerDownload, type SceneExportResult, type SceneExportOptions } from '@/plugins/sceneExport'
+import type { SceneExportOptions } from '@/types/scene-export'
+import { prepareGLBSceneExport, prepareJsonSceneExport } from '@/plugins/sceneExport'
 import ViewportToolbar from './ViewportToolbar.vue'
 import TransformToolbar from './TransformToolbar.vue'
 import GroundToolbar from './GroundToolbar.vue'
@@ -2211,24 +2214,25 @@ function snapVectorToGridForNode(vec: THREE.Vector3, nodeId: string | null | und
 }
 
 export type SceneViewportHandle = {
-  exportScene(options: SceneExportOptions): Promise<void>
-  generateSceneBlob(options: SceneExportOptions): Promise<SceneExportResult>
+  exportScene(options: SceneExportOptions, onProgress: (progress: number, message?: string) => void): Promise<Blob>
   captureThumbnail(): void
 }
 
-async function exportScene(options: SceneExportOptions): Promise<void> {
-  if (!scene) {
-    throw new Error('Scene not initialized')
-  }
-  const { blob, fileName } = await prepareSceneExport(scene, options)
-  triggerDownload(blob, fileName)
-}
 
-async function generateSceneBlob(options: SceneExportOptions): Promise<SceneExportResult> {
+async function exportScene(options: SceneExportOptions, onProgress: (progress: number, message?: string) => void): Promise<Blob> {
   if (!scene) {
     throw new Error('Scene not initialized')
   }
-  return prepareSceneExport(scene, options)
+  if (options.format === 'glb') {
+    return prepareGLBSceneExport(scene, options, onProgress)
+  } else if (options.format === 'json') {
+    let snapshot = sceneStore.createSceneDocumentSnapshot() as StoredSceneDocument
+    const packageAssetMap = await buildPackageAssetMapForExport(snapshot,{embedResources:true})
+    snapshot.packageAssetMap = packageAssetMap
+    return prepareJsonSceneExport(snapshot, options, onProgress)
+  } else {
+    throw new Error(`Unsupported export format: ${options.format}`)
+  }
 }
 
 function clearSelectionBox() {
@@ -6449,8 +6453,7 @@ watch(
 
 defineExpose<SceneViewportHandle>({
   exportScene,
-  captureThumbnail,
-  generateSceneBlob,
+  captureThumbnail
 })
 </script>
 
