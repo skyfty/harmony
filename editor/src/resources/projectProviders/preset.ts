@@ -39,7 +39,7 @@ interface DirectoryNode {
   assets: ProjectAsset[]
 }
 
-const presetModules = import.meta.glob<string>('@/preset/**/*', {
+const presetModules = import.meta.glob<string>('../../preset/**/*', {
   eager: true,
   import: 'default',
   query: '?url',

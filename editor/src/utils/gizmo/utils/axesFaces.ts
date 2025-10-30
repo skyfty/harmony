@@ -33,11 +33,12 @@ export const axesFaces = (
     setMapColumnOffset(map, i);
 
   const { enabled, scale, opacity, hover } = (options as any)[axis];
+  const faceOpacity = opacity ?? 1;
 
     const materialConfig: MeshBasicMaterialParameters = {
       map,
-      opacity,
-      transparent: true,
+    opacity: faceOpacity,
+    transparent: faceOpacity < 1,
     };
 
     const face = isSphere
@@ -69,7 +70,7 @@ export const axesFaces = (
     face.visible = enabled;
     face.userData = {
       scale,
-      opacity,
+      opacity: faceOpacity,
       hover,
     };
 

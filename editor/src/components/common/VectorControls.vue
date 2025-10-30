@@ -21,10 +21,9 @@
 </template>
 
 <script setup lang="ts">
-import * as THREE from 'three'
-
+type VectorAxis = 'x' | 'y' | 'z'
 type VectorValue = number | string
-type VectorDisplay = Record<keyof THREE.Vector3, VectorValue>
+type VectorDisplay = Record<VectorAxis, VectorValue>
 
 const props = defineProps<{
   label: string
@@ -35,12 +34,12 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (event: 'update:axis', axis: keyof THREE.Vector3, value: string): void
+  (event: 'update:axis', axis: VectorAxis, value: string): void
 }>()
 
-const axes: Array<keyof THREE.Vector3> = ['x', 'y', 'z']
+const axes: VectorAxis[] = ['x', 'y', 'z']
 
-function onChange(axis: keyof THREE.Vector3, event: Event) {
+function onChange(axis: VectorAxis, event: Event) {
   if (props.disabled || props.readonly) {
     return
   }

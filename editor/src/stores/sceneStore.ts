@@ -18,7 +18,7 @@ import {
   type Material,
   type Light,
 } from 'three'
-import type { CameraNodeProperties, SceneNode, SceneNodeType } from  '@harmony/schema'
+import type { CameraNodeProperties, SceneNode, SceneNodeType, Vector3Like } from  '@harmony/schema'
 import type { LightNodeProperties,LightNodeType } from '@harmony/schema'
 import { normalizeLightNodeType } from '@/types/light'
 import type { ClipboardEntry } from '@/types/clipboard-entry'
@@ -1821,14 +1821,17 @@ function duplicateNodeTree(original: SceneNode, context: DuplicateContext): Scen
   return duplicated
 }
 
-function cloneVector(vector: THREE.Vector3): THREE.Vector3 {
-  return { x: vector.x, y: vector.y, z: vector.z }
+function cloneVector(vector: Vector3Like): Vector3Like {
+  if (vector instanceof THREE.Vector3) {
+    return vector.clone()
+  }
+  return { x: vector.x, y: vector.y, z: vector.z } as Vector3Like
 }
 
-function computeAssetSpawnTransform(asset: ProjectAsset, position?: THREE.Vector3) {
+function computeAssetSpawnTransform(asset: ProjectAsset, position?: Vector3Like) {
   const spawnPosition = position ? cloneVector(position) : { x: 0, y: 0, z: 0 }
-  const rotation: THREE.Vector3 = { x: 0, y: 0, z: 0 }
-  const scale: THREE.Vector3 = { x: 1, y: 1, z: 1 }
+  const rotation: Vector3Like = { x: 0, y: 0, z: 0 }
+  const scale: Vector3Like = { x: 1, y: 1, z: 1 }
 
   if (!position && asset.type !== 'model') {
     spawnPosition.y = 1
@@ -1870,8 +1873,8 @@ function snapAxisToGrid(value: number): number {
   return Math.round(value / GRID_CELL_SIZE) * GRID_CELL_SIZE
 }
 
-function toPlainVector(vector: Vector3): THREE.Vector3 {
-  return { x: vector.x, y: vector.y, z: vector.z }
+function toPlainVector(vector: Vector3): Vector3Like {
+  return { x: vector.x, y: vector.y, z: vector.z } as Vector3Like
 }
 
 function collectCollisionSpheres(nodes: SceneNode[]): CollisionSphere[] {
@@ -5338,8 +5341,8 @@ export const useSceneStore = defineStore('scene', {
         throw new Error('addModelNode requires either an object or an asset')
       }
 
-      const rotation: THREE.Vector3 = payload.rotation ?? { x: 0, y: 0, z: 0 }
-      const scale: THREE.Vector3 = payload.scale ?? { x: 1, y: 1, z: 1 }
+  const rotation: Vector3Like = payload.rotation ?? { x: 0, y: 0, z: 0 }
+  const scale: Vector3Like = payload.scale ?? { x: 1, y: 1, z: 1 }
       let baseY = payload.baseY ?? 0
 
       let workingObject: Object3D

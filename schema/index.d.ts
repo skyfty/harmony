@@ -1,6 +1,8 @@
 
 import * as THREE from 'three'
 
+export type Vector3Like = THREE.Vector3 | { x: number; y: number; z: number }
+
 export type SceneNodeDownloadStatus = 'idle' | 'downloading' | 'ready' | 'error';
 export type GeometryType =
   | 'Box'
@@ -181,16 +183,16 @@ export interface LightNodeProperties {
   angle?: number
   decay?: number
   penumbra?: number
-  target?: THREE.Vector3
+  target?: Vector3Like
   castShadow?: boolean
 }
 export interface SceneNode { 
   id: string;
   name: string;
   nodeType: SceneNodeType;
-  position: THREE.Vector3;
-  rotation: THREE.Vector3;
-  scale: THREE.Vector3;
+  position: Vector3Like;
+  rotation: Vector3Like;
+  scale: Vector3Like;
   sourceAssetId?: string;
   visible?: boolean;
   locked?: boolean;
@@ -253,8 +255,8 @@ export interface GroundDynamicMesh {
 }
 
 export type WallSegment = {
-  start: THREE.Vector3
-  end: THREE.Vector3
+  start: Vector3Like
+  end: Vector3Like
   height: number
   width: number
   thickness: number
@@ -274,7 +276,7 @@ export interface PlatformDynamicMesh {
   /**
    * Placeholder polygon footprint described in clockwise order.
    */
-  footprint: THREE.Vector3[]
+  footprint: Vector3Like[]
   height: number
 }
 

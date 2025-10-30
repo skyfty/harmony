@@ -2594,6 +2594,11 @@ function initScene() {
   scene.background = backgroundColor
   scene.fog = new THREE.Fog(backgroundColor.getHex(), 1, 5000)
   scene.fog.color.copy(backgroundColor)
+  
+  const ambientLight = new THREE.AmbientLight('#ffffff', 0.6);
+
+  scene.add(ambientLight);
+
   ensureSkyExists()
   scene.add(rootGroup)
   scene.add(gridGroup)
@@ -4586,8 +4591,8 @@ function commitWallSegmentDrag(): boolean {
   const pendingSegments = [...wallBuildSession.segments, segment]
 
   const segmentPayload = pendingSegments.map((entry) => ({
-    start: { x: entry.start.x, y: entry.start.y, z: entry.start.z },
-    end: { x: entry.end.x, y: entry.end.y, z: entry.end.z },
+    start: entry.start.clone(),
+    end: entry.end.clone(),
   }))
 
   let nodeId = wallBuildSession.nodeId
