@@ -77,7 +77,7 @@
 import { computed, ref, toRefs, watch } from 'vue'
 import type { SkyboxParameterKey, SkyboxPresetDefinition } from '@/types/skybox'
 import { CUSTOM_SKYBOX_PRESET_ID, cloneSkyboxSettings } from '@/stores/skyboxPresets'
-import  {type SceneSkyboxSettings } from '@harmony/scene-schema'
+import  {type SceneSkyboxSettings } from '@harmony/schema'
 
 const parameterDefinitions = [
   { key: 'exposure', label: 'Exposure', min: 0.05, max: 2, step: 0.01 },

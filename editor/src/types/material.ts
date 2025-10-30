@@ -1,8 +1,7 @@
 import  {
   type SceneMaterialTextureSettings,
-  type SceneMaterialType,
   DEFAULT_TEXTURE_SETTINGS,
-} from '@harmony/scene-schema'
+} from '@harmony/schema'
 
 export type {
   SceneMaterialType,
@@ -15,7 +14,7 @@ export type {
   SceneNodeMaterial,
   SceneTextureVector2,
   SceneTextureWrapMode,
-} from '@harmony/scene-schema'
+} from '@harmony/schema'
 
 
 export function createTextureSettings(overrides?: Partial<SceneMaterialTextureSettings> | null): SceneMaterialTextureSettings {
@@ -69,34 +68,6 @@ export function textureSettingsSignature(settings?: SceneMaterialTextureSettings
   ].join('|')
 }
 
-export const MATERIAL_CLASS_NAMES = [
-  'MeshBasicMaterial',
-  'MeshNormalMaterial',
-  'MeshLambertMaterial',
-  'MeshMatcapMaterial',
-  'MeshPhongMaterial',
-  'MeshToonMaterial',
-  'MeshStandardMaterial',
-  'MeshPhysicalMaterial',
-] as string[]
-
-export type SceneMaterialTypeName = (typeof MATERIAL_CLASS_NAMES)[number]
-
 export const DEFAULT_SCENE_MATERIAL_ID = '__scene_default_material__'
 
-export const DEFAULT_SCENE_MATERIAL_TYPE: string = 'MeshStandardMaterial'
-
-function isSceneMaterialType(value: string): value is SceneMaterialTypeName {
-  return MATERIAL_CLASS_NAMES.includes(value)
-}
-
-export function normalizeSceneMaterialType(type?: SceneMaterialType | string | null): string {
-  if (!type) {
-    return DEFAULT_SCENE_MATERIAL_TYPE
-  }
-  if (isSceneMaterialType(type)) {
-    return type
-  }
-  return DEFAULT_SCENE_MATERIAL_TYPE
-}
-
+export const DEFAULT_SCENE_MATERIAL_TYPE = 'MeshStandardMaterial'

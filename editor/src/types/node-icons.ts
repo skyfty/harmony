@@ -1,4 +1,4 @@
-import type { LightNodeType,SceneNodeType } from '@harmony/scene-schema'
+import type { LightNodeType,SceneNodeType } from '@harmony/schema'
 
 export const NODE_TYPE_ICONS: Record<SceneNodeType, string> = {
   Mesh: 'mdi-cube-outline',

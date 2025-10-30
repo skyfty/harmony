@@ -17,8 +17,8 @@ import {
   type Material,
   type Light,
 } from 'three'
-import type { CameraNodeProperties, SceneNode, SceneNodeType, Vector3Like } from  '@harmony/scene-schema'
-import type { LightNodeProperties,LightNodeType } from '@harmony/scene-schema'
+import type { CameraNodeProperties, SceneNode, SceneNodeType, Vector3Like } from  '@harmony/schema'
+import type { LightNodeProperties,LightNodeType } from '@harmony/schema'
 import { normalizeLightNodeType } from '@/types/light'
 import type { ClipboardEntry } from '@/types/clipboard-entry'
 import type { DetachResult } from '@/types/detach-result'
@@ -30,16 +30,16 @@ import type { PanelPlacementState, PanelPlacement } from '@/types/panel-placemen
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
-import type { AssetIndexEntry, AssetSourceMetadata } from '@harmony/scene-schema'
+import type { AssetIndexEntry, AssetSourceMetadata } from '@harmony/schema'
 import type { SceneCameraState } from '@/types/scene-camera-state'
 import type { SceneHistoryEntry } from '@/types/scene-history-entry'
 import type { SceneState } from '@/types/scene-state'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { CameraProjectionMode, CameraControlMode, SceneSkyboxSettings, SceneViewportSettings } from '@/types/scene-viewport-settings'
-import type { DynamicMeshVector3, GroundDynamicMesh, PlatformDynamicMesh, SceneDynamicMesh, WallDynamicMesh } from '@harmony/scene-schema'
+import type { DynamicMeshVector3, GroundDynamicMesh, PlatformDynamicMesh, SceneDynamicMesh, WallDynamicMesh } from '@harmony/schema'
 import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
-import type { GroundSettings } from '@harmony/scene-schema'
+import type { GroundSettings } from '@harmony/schema'
 import type {
   SceneMaterial,
   SceneMaterialProps,
@@ -50,7 +50,7 @@ import type {
 } from '@/types/material'
 
 import { cloneTextureSettings } from '@/types/material'
-import { DEFAULT_SCENE_MATERIAL_ID, DEFAULT_SCENE_MATERIAL_TYPE,normalizeSceneMaterialType } from '@/types/material'
+import { DEFAULT_SCENE_MATERIAL_ID, DEFAULT_SCENE_MATERIAL_TYPE } from '@/types/material'
 
 import {
   CUSTOM_SKYBOX_PRESET_ID,
@@ -78,7 +78,7 @@ import {
   ASSETS_ROOT_DIRECTORY_ID,
   PACKAGES_ROOT_DIRECTORY_ID,
 } from './assetCatalog'
-import type { NodeComponentType, SceneNodeComponentState } from '@harmony/scene-schema'
+import type { NodeComponentType, SceneNodeComponentState } from '@harmony/schema'
 import type { WallComponentProps } from '@/runtime/components'
 import {
   WALL_COMPONENT_TYPE,
@@ -187,8 +187,6 @@ const DEFAULT_MATERIAL_PROPS: SceneMaterialProps = {
   envMapIntensity: 1,
   textures: Object.freeze(createEmptyTextureMap()) as MaterialTextureMap,
 }
-
-const DEFAULT_MATERIAL_TYPE: string = DEFAULT_SCENE_MATERIAL_TYPE
 
 function cloneTextureRef(ref?: SceneMaterialTextureRef | null): SceneMaterialTextureRef | null {
   if (!ref) {
@@ -1322,12 +1320,11 @@ async function createNodeMaterialFromThree(material: Material | null | undefined
   }
 
   const props = createMaterialProps(overrides)
-  const typeName = normalizeSceneMaterialType((material.type as SceneMaterialType) ?? DEFAULT_MATERIAL_TYPE)
   const materialName = typeof material.name === 'string' && material.name.trim().length ? material.name.trim() : undefined
 
   return createNodeMaterial(null, props, {
     name: materialName,
-    type: typeName,
+    type: material.type as SceneMaterialType,
   })
 }
 
@@ -3761,10 +3758,9 @@ export const useSceneStore = defineStore('scene', {
         }
         const existingCount = node.materials?.length ?? 0
         const fallbackName = options.name?.trim() || shared?.name || `Material ${existingCount + 1}`
-        const type = normalizeSceneMaterialType(shared?.type ?? options.type ?? DEFAULT_MATERIAL_TYPE)
         const entry = createNodeMaterial(shared?.id ?? null, baseProps, {
           name: shared ? shared.name : fallbackName,
-          type,
+          type: shared?.type ?? options.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
         })
         node.materials = [...(node.materials ?? []), entry]
         created = entry
@@ -3800,7 +3796,7 @@ export const useSceneStore = defineStore('scene', {
             const defaultProps = baseMaterial ? createMaterialProps(baseMaterial) : createMaterialProps()
             const defaultMaterial = createNodeMaterial(baseMaterial ? baseMaterial.id : null, defaultProps, {
               name: baseMaterial?.name,
-              type: normalizeSceneMaterialType(baseMaterial?.type ?? DEFAULT_MATERIAL_TYPE),
+              type: baseMaterial?.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
             })
             node.materials = [defaultMaterial]
           } else {
@@ -3870,7 +3866,7 @@ export const useSceneStore = defineStore('scene', {
           return createNodeMaterial(entry.materialId, entry, {
             id: entry.id,
             name: entry.name,
-            type: normalizeSceneMaterialType(type),
+            type: type,
           })
         })
       })
@@ -3937,7 +3933,7 @@ export const useSceneStore = defineStore('scene', {
         materialId,
         defaultProps,
         null,
-        DEFAULT_MATERIAL_TYPE,
+        DEFAULT_SCENE_MATERIAL_TYPE,
       )
 
       if (!changed) {
@@ -3967,7 +3963,6 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const props = extractMaterialProps(existing)
-      const type = normalizeSceneMaterialType(existing.type ?? DEFAULT_MATERIAL_TYPE)
       const nameCandidates = [
         typeof options.name === 'string' ? options.name.trim() : '',
         typeof existing.name === 'string' ? existing.name.trim() : '',
@@ -3977,7 +3972,7 @@ export const useSceneStore = defineStore('scene', {
       const normalizedDescription =
         typeof options.description === 'string' ? options.description.trim() : undefined
 
-      const material = createSceneMaterial(resolvedName, props, { type })
+      const material = createSceneMaterial(resolvedName, props, { type:existing.type ?? DEFAULT_SCENE_MATERIAL_TYPE })
       if (normalizedDescription && normalizedDescription.length) {
         material.description = normalizedDescription
       }
@@ -4091,9 +4086,8 @@ export const useSceneStore = defineStore('scene', {
       const trimmedName = typeof update.name === 'string' ? update.name.trim() : undefined
       const nameChanged = trimmedName !== undefined && trimmedName.length > 0 && trimmedName !== current.name
       const descriptionChanged = update.description !== undefined && update.description !== current.description
-      const currentType = normalizeSceneMaterialType(current.type)
-      const nextType = normalizeSceneMaterialType(update.type ?? currentType)
-      const typeChanged = nextType !== currentType
+      const nextType = update.type ?? current.type
+      const typeChanged = nextType !== current.type
 
       if (!hasPropChanges && !nameChanged && !descriptionChanged && !typeChanged) {
         return false
@@ -4165,7 +4159,7 @@ export const useSceneStore = defineStore('scene', {
             materialId,
             defaultProps,
             null,
-            DEFAULT_MATERIAL_TYPE,
+            DEFAULT_SCENE_MATERIAL_TYPE,
           )
         ) {
           changedNodes = true
@@ -5526,7 +5520,7 @@ export const useSceneStore = defineStore('scene', {
         const initialProps: SceneMaterialProps = baseMaterial ? createMaterialProps(baseMaterial) : createMaterialProps()
         const initialMaterial = createNodeMaterial(null, initialProps, {
           name: baseMaterial?.name,
-          type: normalizeSceneMaterialType(baseMaterial?.type ?? DEFAULT_MATERIAL_TYPE),
+          type: baseMaterial?.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
         })
         nodeMaterials = [initialMaterial]
       }

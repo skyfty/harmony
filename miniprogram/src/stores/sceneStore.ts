@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue';
 import { defineStore } from 'pinia';
-import type { SceneJsonExportDocument } from '@harmony/scene-schema';
+import type { SceneJsonExportDocument } from '@harmony/schema';
 
 export interface StoredSceneEntry {
     id: string;

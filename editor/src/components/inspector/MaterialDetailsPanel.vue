@@ -5,7 +5,6 @@ import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import {
   DEFAULT_SCENE_MATERIAL_ID,
-  normalizeSceneMaterialType,
   type SceneMaterialProps,
   type SceneMaterialSide,
   type SceneMaterialTextureRef,
@@ -16,7 +15,7 @@ import {
 } from '@/types/material'
 import TexturePanel from './TexturePanel.vue'
 import type { ProjectAsset } from '@/types/project-asset'
-import {type SceneMaterialType} from '@harmony/scene-schema'
+import {type SceneMaterialType} from '@harmony/schema'
 
 type TextureMapState = Record<SceneMaterialTextureSlot, SceneMaterialTextureRef | null>
 
@@ -67,17 +66,6 @@ const TEXTURE_LABELS: Record<SceneMaterialTextureSlot, string> = {
   ao: 'Ambient Occlusion',
   emissive: 'Emissive',
 }
-// const materialClasses: Record<SceneMaterialType, any> = MATERIAL_CLASS_NAMES.reduce((map, className) => {
-//   if (className === 'MeshMatcapMaterial') {
-//     map[className] = (THREE as Record<string, any>).MeshMatcapMaterial ?? THREE.MeshStandardMaterial
-//     return map
-//   }
-//   const candidate = (THREE as Record<string, any>)[className]
-//   map[className] = typeof candidate === 'function' ? candidate : THREE.MeshStandardMaterial
-//   return map
-// }, {} as Record<SceneMaterialType, any>)
-
-// const materialClassOptions = computed(() => Object.keys(materialClasses) as SceneMaterialType[])
 const SIDE_OPTIONS: Array<{ value: SceneMaterialSide; label: string }> = [
   { value: 'front', label: 'Front' },
   { value: 'back', label: 'Back' },
@@ -300,7 +288,7 @@ watch(
       : { name: entry.name ?? '', description: '' }
     applyPropsToForm(shared ?? entry, metadata)
     const type = shared?.type ?? entry.type ?? null
-    selectedMaterialType.value = normalizeSceneMaterialType(type)
+    selectedMaterialType.value = type
     if (isNewSelection) {
       originalSharedMaterialId.value = shared?.id ?? null
       resetDirtyState()
@@ -755,25 +743,6 @@ function handleTextureDrop(slot: SceneMaterialTextureSlot, event: DragEvent) {
 function handleTextureRemove(slot: SceneMaterialTextureSlot) {
   assignTexture(slot, null)
 }
-
-// function handleMaterialClassChange(value: string | null) {
-//   if (!activeNodeMaterial.value) {
-//     return
-//   }
-//   const newType = normalizeSceneMaterialType(value ?? undefined)
-//   selectedMaterialType.value = newType
-
-//   if (isShared.value && selectedMaterialEntry.value) {
-//     sceneStore.updateMaterialDefinition(selectedMaterialEntry.value.id, { type: newType })
-//     return
-//   }
-
-//   if (!selectedNodeId.value) {
-//     return
-//   }
-
-//   sceneStore.updateNodeMaterialType(selectedNodeId.value, activeNodeMaterial.value.id, newType)
-// }
 
 function handleNameChange(value: string) {
   const entry = activeNodeMaterial.value

@@ -1,5 +1,5 @@
 import type { Object3D } from 'three'
-import type {SceneNode, AssetIndexEntry,GroundSettings } from '@harmony/scene-schema'
+import type {SceneNode, AssetIndexEntry,GroundSettings } from '@harmony/schema'
 import type { EditorTool } from './editor-tool'
 import type { ProjectAsset } from './project-asset'
 import type { ProjectDirectory } from './project-directory'

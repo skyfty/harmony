@@ -8,8 +8,8 @@ import type {
   SceneMaterial, SceneNode, 
   SceneNodeMaterial, 
   SceneMaterialTextureSlotMap,
-  Vector3Like } from '@harmony/scene-schema';
-import {DEFAULT_TEXTURE_SETTINGS, IMPORT_TEXTURE_SLOT_MAP} from '@harmony/scene-schema';
+  Vector3Like } from '@harmony/schema';
+import {DEFAULT_TEXTURE_SETTINGS, IMPORT_TEXTURE_SLOT_MAP} from '@harmony/schema';
 
 type SceneNodeWithExtras = SceneNode & {
   light?: {

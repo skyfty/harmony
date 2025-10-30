@@ -1,4 +1,4 @@
-import  {type LightNodeType, LEGACY_LIGHT_TYPE_MAP } from '@harmony/scene-schema'
+import  {type LightNodeType, LEGACY_LIGHT_TYPE_MAP } from '@harmony/schema'
 
 export function normalizeLightNodeType(input: LightNodeType | string | null | undefined): LightNodeType {
   if (!input) {

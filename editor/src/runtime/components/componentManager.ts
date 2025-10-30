@@ -1,10 +1,10 @@
 import type { Object3D } from 'three'
-import type { SceneNode } from '@/types/scene'
 import type {
+  SceneNode,
   ComponentInspectorSection,
   NodeComponentType,
   SceneNodeComponentState,
-} from '@harmony/scene-schema'
+} from '@harmony/schema'
 
 import { Component, type ComponentRuntimeContext } from './Component'
 

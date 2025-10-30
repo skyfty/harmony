@@ -1,5 +1,5 @@
 
-import type {SceneSkyboxSettings } from '@harmony/scene-schema'
+import type {SceneSkyboxSettings } from '@harmony/schema'
 export type CameraProjectionMode = 'perspective' | 'orthographic'
 export type CameraControlMode = 'orbit' | 'map'
 export type { SceneSkyboxSettings }

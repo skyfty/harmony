@@ -1,4 +1,4 @@
-import type {SceneSkyboxSettings } from '@harmony/scene-schema'
+import type {SceneSkyboxSettings } from '@harmony/schema'
 
 export type SkyboxParameterKey = Exclude<keyof SceneSkyboxSettings, 'presetId'>
 

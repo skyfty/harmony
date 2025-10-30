@@ -21,7 +21,7 @@
 </template>
 
 <script setup lang="ts">
-import  {type Vector3Like } from '@harmony/scene-schema'
+import  {type Vector3Like } from '@harmony/schema'
 
 type VectorValue = number | string
 type VectorDisplay = Record<keyof Vector3Like, VectorValue>

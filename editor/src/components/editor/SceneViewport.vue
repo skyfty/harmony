@@ -21,8 +21,8 @@ import type {
   SceneSkyboxSettings,
   GroundDynamicMesh, 
   WallDynamicMesh 
-} from '@harmony/scene-schema'
-import { MATERIAL_CLASS_NAMES, normalizeSceneMaterialType, createTextureSettings, textureSettingsSignature } from '@/types/material'
+} from '@harmony/schema'
+import { createTextureSettings, textureSettingsSignature } from '@/types/material'
 import { useSceneStore, getRuntimeObject, buildPackageAssetMapForExport } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
@@ -136,26 +136,34 @@ const MATERIAL_TEXTURE_ASSIGNMENTS: Record<SceneMaterialTextureSlot, { key: Mesh
 const MATERIAL_CLONED_KEY = '__harmonyMaterialCloned'
 const MATERIAL_ORIGINAL_KEY = '__harmonyMaterialOriginal'
 
-const MATERIAL_CLASS_MAP: Record<string, new () => THREE.Material> = MATERIAL_CLASS_NAMES.reduce((map, className) => {
-  const candidate = (THREE as unknown as Record<string, unknown>)[className]
+
+const MATERIAL_CLASS_NAMES = [
+  'MeshBasicMaterial',
+  'MeshNormalMaterial',
+  'MeshLambertMaterial',
+  'MeshMatcapMaterial',
+  'MeshPhongMaterial',
+  'MeshToonMaterial',
+  'MeshStandardMaterial',
+  'MeshPhysicalMaterial',
+] as SceneMaterialType[]
+
+const MATERIAL_CLASS_MAP: Record<SceneMaterialType, new () => THREE.Material> = MATERIAL_CLASS_NAMES.reduce((map, className) => {
+  const candidate = (THREE as unknown as Record<SceneMaterialType, unknown>)[className]
   const ctor = typeof candidate === 'function' ? (candidate as new () => THREE.Material) : THREE.MeshStandardMaterial
   map[className] = ctor
   return map
-}, {} as Record<string, new () => THREE.Material>)
+}, {} as Record<SceneMaterialType, new () => THREE.Material>)
 
 function ensureMaterialType(
   material: THREE.Material,
   type: SceneMaterialType,
 ): { material: THREE.Material; replaced: boolean; dispose?: () => void } {
-  const desired = type ? normalizeSceneMaterialType(type) : null
-  if (!desired) {
-    return { material, replaced: false }
-  }
   const currentType = material.type ?? material.constructor?.name ?? ''
-  if (currentType === desired) {
+  if (currentType === type) {
     return { material, replaced: false }
   }
-  const ctor = MATERIAL_CLASS_MAP[desired]
+  const ctor = MATERIAL_CLASS_MAP[type]
   if (!ctor) {
     return { material, replaced: false }
   }

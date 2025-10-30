@@ -1,4 +1,4 @@
-import  {type DynamicMeshType } from '@harmony/scene-schema'
+import  {type DynamicMeshType } from '@harmony/schema'
 
 
 const LEGACY_DYNAMIC_MESH_TYPE_MAP: Record<string, DynamicMeshType> = {

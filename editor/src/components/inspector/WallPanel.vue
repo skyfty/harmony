@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
-import {type SceneNodeComponentState} from '@harmony/scene-schema'
+import {type SceneNodeComponentState} from '@harmony/schema'
 
 import {
   WALL_COMPONENT_TYPE,

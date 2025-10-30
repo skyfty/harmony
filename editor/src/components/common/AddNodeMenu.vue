@@ -3,7 +3,7 @@ import { ref, watch, type WatchStopHandle } from 'vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import * as THREE from 'three'
-import type { GeometryType } from '@harmony/scene-schema'
+import type { GeometryType } from '@harmony/schema'
 
 import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from '@/plugins/loader'
 import { createGeometry } from '@/plugins/geometry'
@@ -12,7 +12,7 @@ import { useUiStore } from '@/stores/uiStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import UrlInputDialog from './UrlInputDialog.vue'
 import { generateUuid } from '@/plugins/uuid'
-import  {type LightNodeType,type SceneNode } from '@harmony/scene-schema'
+import  {type LightNodeType,type SceneNode } from '@harmony/schema'
 
 const sceneStore = useSceneStore()
 const uiStore = useUiStore()

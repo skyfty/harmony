@@ -1,8 +1,7 @@
 import type { Object3D } from 'three'
-import type { SceneNode } from '@/types/scene'
 import { Component, type ComponentRuntimeContext } from '../Component'
 import { componentManager, type ComponentDefinition } from '../componentManager'
-import {type WallDynamicMesh, type SceneNodeComponentState} from '@harmony/scene-schema'
+import {type WallDynamicMesh, type SceneNodeComponentState, type SceneNode} from '@harmony/schema'
 
 export const WALL_COMPONENT_TYPE = 'wall'
 export const WALL_DEFAULT_HEIGHT = 3

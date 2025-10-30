@@ -1,4 +1,4 @@
-import type { GroundSettings,SceneNode,AssetIndexEntry } from '@harmony/scene-schema'
+import type { GroundSettings,SceneNode,AssetIndexEntry } from '@harmony/schema'
 import type { SceneCameraState } from './scene-camera-state'
 import type { ProjectAsset } from './project-asset'
 import type { SceneViewportSettings } from './scene-viewport-settings'

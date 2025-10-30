@@ -3,7 +3,7 @@ import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { SceneMaterial, SceneMaterialTextureSlot, SceneNodeMaterial } from '@/types/material'
-import type {SceneNode, SceneNodeComponentState,SceneJsonExportDocument } from '@harmony/scene-schema'
+import type {SceneNode, SceneNodeComponentState,SceneJsonExportDocument } from '@harmony/schema'
 import type { SceneExportOptions, GLBExportSettings } from '@/types/scene-export'
 
 type RemovedSceneObject = {

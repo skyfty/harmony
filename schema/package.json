@@ -1,5 +1,5 @@
 {
-  "name": "@harmony/scene-schema",
+  "name": "@harmony/schema",
   "version": "0.1.0",
   "description": "Shared scene schema definitions for Harmony clients",
   "type": "module",
