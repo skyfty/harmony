@@ -202,7 +202,6 @@ async function handleLocalImport() {
     if (importing.value) {
         return;
     }
-    console.log('选择本地文件导入场景');
     importing.value = true;
     try {
         await new Promise<void>((resolve, reject) => {

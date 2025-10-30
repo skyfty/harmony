@@ -9,6 +9,11 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['@minisheep/three-platform-adapter']
   },
+  
+  server: {
+    port: 8092,
+    open: true //启动后是否自动打开浏览器
+  },
   plugins: [
     // esm-only 的包
     glsl(),

@@ -1263,7 +1263,6 @@ export async function buildSceneGraph(
   const builder = new SceneGraphBuilder(document, options);
   try {
     const root = await builder.build();
-    console.log(root);
     return { root, warnings: builder.getWarnings() };
   } finally {
     builder.dispose();
