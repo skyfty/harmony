@@ -181,26 +181,6 @@ export interface ComponentInspectorSection<TProps = Record<string, unknown>> {
 }
 export type LightNodeType = 'Directional' | 'Point' | 'Spot' | 'Ambient'
 
-export const LEGACY_LIGHT_TYPE_MAP: Record<string, LightNodeType> = {
-  directional: 'Directional',
-  point: 'Point',
-  spot: 'Spot',
-  ambient: 'Ambient',
-}
-
-export const DEFAULT_TEXTURE_SETTINGS: SceneMaterialTextureSettings = {
-  wrapS: 'ClampToEdgeWrapping',
-  wrapT: 'ClampToEdgeWrapping',
-  wrapR: 'ClampToEdgeWrapping',
-  offset: { x: 0, y: 0 },
-  repeat: { x: 1, y: 1 },
-  rotation: 0,
-  center: { x: 0, y: 0 },
-  matrixAutoUpdate: true,
-  generateMipmaps: true,
-  premultiplyAlpha: false,
-  flipY: true,
-}
 export interface LightNodeProperties {
   type: LightNodeType
   color: string

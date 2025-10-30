@@ -9,8 +9,20 @@ import type {
   SceneNodeMaterial, 
   SceneMaterialTextureSlotMap,
   Vector3Like } from '@harmony/schema';
-import {DEFAULT_TEXTURE_SETTINGS, IMPORT_TEXTURE_SLOT_MAP} from '@harmony/schema';
 
+const DEFAULT_TEXTURE_SETTINGS: SceneMaterialTextureSettings = {
+  wrapS: 'ClampToEdgeWrapping',
+  wrapT: 'ClampToEdgeWrapping',
+  wrapR: 'ClampToEdgeWrapping',
+  offset: { x: 0, y: 0 },
+  repeat: { x: 1, y: 1 },
+  rotation: 0,
+  center: { x: 0, y: 0 },
+  matrixAutoUpdate: true,
+  generateMipmaps: true,
+  premultiplyAlpha: false,
+  flipY: true,
+};
 type SceneNodeWithExtras = SceneNode & {
   light?: {
     type?: string;
@@ -595,7 +607,7 @@ class SceneGraphBuilder {
 
   private async instantiateMaterial(material: SceneMaterial | SceneNodeMaterial): Promise<THREE.Material | null> {
     const props = this.extractMaterialProps(material);
-    const type = props.type ?? 'MeshStandardMaterial';
+    const type = material.type ;
     const side = this.resolveMaterialSide(props.side);
     const color = new THREE.Color(props.color);
     const emissiveColor = new THREE.Color(props.emissive ?? '#000000');
@@ -690,9 +702,6 @@ class SceneGraphBuilder {
 
   private extractMaterialProps(material: SceneMaterial | SceneNodeMaterial): SceneMaterialProps {
     return {
-      id: material.id ?? 'material',
-      name: material.name ?? 'Material',
-      type: material.type ?? 'MeshStandardMaterial',
       color: material.color ?? '#ffffff',
       transparent: material.transparent ?? false,
       opacity: material.opacity ?? 1,

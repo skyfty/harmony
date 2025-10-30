@@ -1,6 +1,5 @@
 import  {
   type SceneMaterialTextureSettings,
-  DEFAULT_TEXTURE_SETTINGS,
 } from '@harmony/schema'
 
 export type {
@@ -16,6 +15,19 @@ export type {
   SceneTextureWrapMode,
 } from '@harmony/schema'
 
+const DEFAULT_TEXTURE_SETTINGS: SceneMaterialTextureSettings = {
+  wrapS: 'ClampToEdgeWrapping',
+  wrapT: 'ClampToEdgeWrapping',
+  wrapR: 'ClampToEdgeWrapping',
+  offset: { x: 0, y: 0 },
+  repeat: { x: 1, y: 1 },
+  rotation: 0,
+  center: { x: 0, y: 0 },
+  matrixAutoUpdate: true,
+  generateMipmaps: true,
+  premultiplyAlpha: false,
+  flipY: true,
+}
 
 export function createTextureSettings(overrides?: Partial<SceneMaterialTextureSettings> | null): SceneMaterialTextureSettings {
   const base = DEFAULT_TEXTURE_SETTINGS
@@ -71,3 +83,4 @@ export function textureSettingsSignature(settings?: SceneMaterialTextureSettings
 export const DEFAULT_SCENE_MATERIAL_ID = '__scene_default_material__'
 
 export const DEFAULT_SCENE_MATERIAL_TYPE = 'MeshStandardMaterial'
+
