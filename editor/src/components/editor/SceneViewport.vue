@@ -48,7 +48,7 @@ import type { GroundDynamicMesh, WallDynamicMesh } from '@/types/dynamic-mesh'
 import type { BuildTool } from '@/types/build-tool'
 import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache } from '@/plugins/groundMesh'
 import { createWallGroup, updateWallGroup } from '@/plugins/wallMesh'
-import { ViewportGizmo } from 'three-viewport-gizmo'
+import { ViewportGizmo } from '@/plugins/gizmo/ViewportGizmo'
 
 
 const props = withDefaults(defineProps<{
@@ -2634,7 +2634,6 @@ function initScene() {
 
   const gizmoContainer = gizmoContainerRef.value ?? viewportEl.value ?? undefined
   gizmoControls = new ViewportGizmo(camera, renderer, {
-    placement: 'top-right',
     container: gizmoContainer,
     offset: { top: 0, right: 0, bottom: 0, left: 0 },
     size: 70,
