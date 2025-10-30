@@ -70,6 +70,7 @@
     "@vue/runtime-core": "^3.5.13",
     "@vue/tsconfig": "^0.7.0",
     "miniprogram-api-typings": "^4.0.5",
+    "postcss-safe-parser": "^7.0.1",
     "rollup-plugin-visualizer": "^5.14.0",
     "sass": "^1.85.1",
     "typescript": "^5.8.2",
