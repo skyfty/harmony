@@ -1,8 +1,7 @@
-import type { Vector3Like } from  '@harmony/schema'
-
+import * as THREE from 'three'
 export interface SceneCameraState {
-  position: Vector3Like
-  target: Vector3Like
+  position: THREE.Vector3
+  target: THREE.Vector3
   fov: number
-  forward?: Vector3Like
+  forward?: THREE.Vector3
 }

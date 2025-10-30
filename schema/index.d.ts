@@ -1,3 +1,7 @@
+
+import * as THREE from 'three'
+
+export type SceneNodeDownloadStatus = 'idle' | 'downloading' | 'ready' | 'error';
 export type GeometryType =
   | 'Box'
   | 'Sphere'
@@ -15,12 +19,6 @@ export type GeometryType =
 
 export type SceneNodeType = 'Mesh' | 'Light' | 'Group' | 'Camera' | GeometryType;
 
-export interface Vector3Like {
-  x: number;
-  y: number;
-  z: number;
-}
-
 export type SceneMaterialSide = 'front' | 'back' | 'double';
 
 export type SceneMaterialTextureSlot =
@@ -33,19 +31,14 @@ export type SceneMaterialTextureSlot =
 
 export type SceneTextureWrapMode = 'ClampToEdgeWrapping' | 'RepeatWrapping' | 'MirroredRepeatWrapping';
 
-export interface SceneTextureVector2 {
-  x: number;
-  y: number;
-}
-
 export interface SceneMaterialTextureSettings {
   wrapS: SceneTextureWrapMode;
   wrapT: SceneTextureWrapMode;
   wrapR: SceneTextureWrapMode;
-  offset: SceneTextureVector2;
-  repeat: SceneTextureVector2;
+  offset: THREE.Vector2;
+  repeat: THREE.Vector2;
   rotation: number;
-  center: SceneTextureVector2;
+  center: THREE.Vector2;
   matrixAutoUpdate: boolean;
   generateMipmaps: boolean;
   premultiplyAlpha: boolean;
@@ -118,7 +111,6 @@ export interface AssetIndexEntry {
   source?: AssetSourceMetadata
 }
 
-export type SceneNodeDownloadStatus = 'idle' | 'downloading' | 'ready' | 'error';
 
 export interface CameraNodeProperties {
   kind: 'perspective' | 'orthographic'
@@ -189,16 +181,16 @@ export interface LightNodeProperties {
   angle?: number
   decay?: number
   penumbra?: number
-  target?: Vector3Like
+  target?: THREE.Vector3
   castShadow?: boolean
 }
 export interface SceneNode { 
   id: string;
   name: string;
   nodeType: SceneNodeType;
-  position: Vector3Like;
-  rotation: Vector3Like;
-  scale: Vector3Like;
+  position: THREE.Vector3;
+  rotation: THREE.Vector3;
+  scale: THREE.Vector3;
   sourceAssetId?: string;
   visible?: boolean;
   locked?: boolean;
@@ -244,12 +236,6 @@ export interface SceneSkyboxSettings {
 }
 export type DynamicMeshType = 'Ground' | 'Wall' | 'Platform'
 
-export interface DynamicMeshVector3 {
-  x: number
-  y: number
-  z: number
-}
-
 export interface GroundHeightMap {
   [key: string]: number
 }
@@ -267,8 +253,8 @@ export interface GroundDynamicMesh {
 }
 
 export type WallSegment = {
-  start: DynamicMeshVector3
-  end: DynamicMeshVector3
+  start: THREE.Vector3
+  end: THREE.Vector3
   height: number
   width: number
   thickness: number
@@ -288,7 +274,7 @@ export interface PlatformDynamicMesh {
   /**
    * Placeholder polygon footprint described in clockwise order.
    */
-  footprint: DynamicMeshVector3[]
+  footprint: THREE.Vector3[]
   height: number
 }
 

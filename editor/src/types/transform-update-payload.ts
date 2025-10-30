@@ -1,8 +1,7 @@
-import type { Vector3Like } from  '@harmony/schema'
-
+import * as THREE from 'three'
 export interface TransformUpdatePayload {
   id: string
-  position?: Vector3Like
-  rotation?: Vector3Like
-  scale?: Vector3Like
+  position?: THREE.Vector3
+  rotation?: THREE.Vector3
+  scale?: THREE.Vector3
 }

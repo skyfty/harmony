@@ -7,8 +7,7 @@ import type {
   SceneJsonExportDocument, 
   SceneMaterial, SceneNode, 
   SceneNodeMaterial, 
-  SceneMaterialTextureSlotMap,
-  Vector3Like } from '@harmony/schema';
+  SceneMaterialTextureSlotMap } from '@harmony/schema';
 
 const DEFAULT_TEXTURE_SETTINGS: SceneMaterialTextureSettings = {
   wrapS: 'ClampToEdgeWrapping',
@@ -33,7 +32,7 @@ type SceneNodeWithExtras = SceneNode & {
     angle?: number;
     penumbra?: number;
     castShadow?: boolean;
-    target?: Vector3Like;
+    target?: THREE.Vector3;
   };
   dynamicMesh?: any;
   components?: any[];

@@ -11,7 +11,6 @@ import Pica from 'pica'
 
 import type {
   SceneNode,
-  Vector3Like,
   SceneMaterialTextureSlot,
   SceneMaterialTextureRef,
   SceneNodeMaterial,
@@ -826,11 +825,7 @@ function dropSelectionToGround() {
 
     updates.push({
       id: nodeId,
-      position: {
-        x: dropLocalPositionHelper.x,
-        y: dropLocalPositionHelper.y,
-        z: dropLocalPositionHelper.z,
-      },
+      position: dropLocalPositionHelper,
     })
   }
 
@@ -914,11 +909,7 @@ function alignSelection(mode: AlignMode) {
 
     updates.push({
       id: nodeId,
-      position: {
-        x: alignLocalPositionHelper.x,
-        y: alignLocalPositionHelper.y,
-        z: alignLocalPositionHelper.z,
-      },
+      position: alignLocalPositionHelper,
     })
   }
 
@@ -963,9 +954,9 @@ function updateSelectDragPosition(drag: SelectionDragState, event: PointerEvent)
   const updates: TransformUpdatePayload[] = [
     {
       id: drag.nodeId,
-      position: toVector3Like(drag.object.position),
+      position: drag.object.position,
       rotation: toEulerLike(drag.object.rotation),
-      scale: toVector3Like(drag.object.scale),
+      scale: drag.object.scale,
     },
   ]
 
@@ -981,7 +972,7 @@ function updateSelectDragPosition(drag: SelectionDragState, event: PointerEvent)
     companion.object.updateMatrixWorld(true)
     updates.push({
       id: companion.nodeId,
-      position: toVector3Like(companion.object.position),
+      position: companion.object.position,
     })
   })
 
@@ -1024,9 +1015,9 @@ function rotateActiveSelection(nodeId: string) {
 
     updates.push({
       id,
-      position: toVector3Like(object.position),
+      position: object.position,
       rotation: toEulerLike(object.rotation),
-      scale: toVector3Like(object.scale),
+      scale: object.scale,
     })
   })
 
@@ -2300,10 +2291,10 @@ function buildCameraState(): SceneCameraState | null {
   camera.getWorldDirection(forward)
   forward.normalize()
   return {
-    position: toVector3Like(camera.position),
-    target: toVector3Like(orbitControls.target),
+    position: camera.position,
+    target: orbitControls.target,
     fov,
-    forward: toVector3Like(forward),
+    forward: forward,
   }
 }
 
@@ -5031,7 +5022,7 @@ async function handleViewportDrop(event: DragEvent) {
   const spawnPoint = point ? point.clone() : new THREE.Vector3(0, 0, 0)
   snapVectorToGrid(spawnPoint)
   try {
-    await sceneStore.spawnAssetAtPosition(info.assetId, toVector3Like(spawnPoint))
+    await sceneStore.spawnAssetAtPosition(info.assetId, spawnPoint)
   } catch (error) {
     console.warn('Failed to spawn asset for drag payload', info.assetId, error)
   } finally {
@@ -5127,17 +5118,17 @@ function handleTransformChange() {
     groupState.entries.forEach((entry) => {
       updates.push({
         id: entry.nodeId,
-        position: toVector3Like(entry.object.position),
+        position: entry.object.position,
         rotation: toEulerLike(entry.object.rotation),
-        scale: toVector3Like(entry.object.scale),
+        scale: entry.object.scale,
       })
     })
   } else {
     updates.push({
       id: nodeId,
-      position: toVector3Like(target.position),
+      position: target.position,
       rotation: toEulerLike(target.rotation),
-      scale: toVector3Like(target.scale),
+      scale: target.scale,
     })
   }
 
@@ -6222,12 +6213,8 @@ function updateToolMode(tool: EditorTool) {
   }
 }
 
-function toVector3Like(vec: THREE.Vector3): Vector3Like {
-  return { x: vec.x, y: vec.y, z: vec.z }
-}
-
-function toEulerLike(euler: THREE.Euler): Vector3Like {
-  return { x: euler.x, y: euler.y, z: euler.z }
+function toEulerLike(euler: THREE.Euler): THREE.Vector3 {
+  return new THREE.Vector3(euler.x, euler.y, euler.z)
 }
 
 function isEditableKeyboardTarget(target: EventTarget | null): boolean {

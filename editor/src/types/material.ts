@@ -11,7 +11,6 @@ export type {
   SceneMaterialTextureSettings,
   SceneMaterialTextureSlot,
   SceneNodeMaterial,
-  SceneTextureVector2,
   SceneTextureWrapMode,
 } from '@harmony/schema'
 

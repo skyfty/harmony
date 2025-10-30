@@ -1,4 +1,5 @@
 import { watch, type WatchStopHandle } from 'vue'
+import * as THREE from 'three'
 import { defineStore } from 'pinia'
 import {
   Matrix4,
@@ -17,7 +18,7 @@ import {
   type Material,
   type Light,
 } from 'three'
-import type { CameraNodeProperties, SceneNode, SceneNodeType, Vector3Like } from  '@harmony/schema'
+import type { CameraNodeProperties, SceneNode, SceneNodeType } from  '@harmony/schema'
 import type { LightNodeProperties,LightNodeType } from '@harmony/schema'
 import { normalizeLightNodeType } from '@/types/light'
 import type { ClipboardEntry } from '@/types/clipboard-entry'
@@ -37,7 +38,7 @@ import type { SceneState } from '@/types/scene-state'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { CameraProjectionMode, CameraControlMode, SceneSkyboxSettings, SceneViewportSettings } from '@/types/scene-viewport-settings'
-import type { DynamicMeshVector3, GroundDynamicMesh, PlatformDynamicMesh, SceneDynamicMesh, WallDynamicMesh } from '@harmony/schema'
+import type { GroundDynamicMesh, PlatformDynamicMesh, SceneDynamicMesh, WallDynamicMesh } from '@harmony/schema'
 import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
 import type { GroundSettings } from '@harmony/schema'
 import type {
@@ -478,11 +479,11 @@ function getPrimaryNodeMaterial(node: SceneNode | null | undefined): SceneNodeMa
   return node.materials[0] ?? null
 }
 
-function createVector(x: number, y: number, z: number): Vector3Like {
-  return { x, y, z }
+function createVector(x: number, y: number, z: number): THREE.Vector3 {
+  return new THREE.Vector3(x, y, z)
 }
 
-function computeForwardVector(position: Vector3Like, target: Vector3Like): Vector3Like {
+function computeForwardVector(position: THREE.Vector3, target: THREE.Vector3): THREE.Vector3 {
   const dx = target.x - position.x
   const dy = target.y - position.y
   const dz = target.z - position.z
@@ -495,8 +496,8 @@ function computeForwardVector(position: Vector3Like, target: Vector3Like): Vecto
 
 type LightNodeExtras = Partial<Omit<LightNodeProperties, 'type' | 'color' | 'intensity' | 'target'>>
 
-function cloneDynamicMeshVector3(vec: DynamicMeshVector3): DynamicMeshVector3 {
-  return { x: vec.x, y: vec.y, z: vec.z }
+function cloneDynamicMeshVector3(vec: THREE.Vector3): THREE.Vector3 {
+  return new THREE.Vector3(vec.x, vec.y, vec.z)
 }
 
 function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMesh {
@@ -558,7 +559,7 @@ function normalizeWallDimensions(values: { height?: number; width?: number; thic
   return { height, width, thickness }
 }
 
-function buildWallWorldSegments(segments: Array<{ start: Vector3Like; end: Vector3Like }>): WallWorldSegment[] {
+function buildWallWorldSegments(segments: Array<{ start: THREE.Vector3; end: THREE.Vector3 }>): WallWorldSegment[] {
   return segments
     .map((segment) => {
       if (!segment?.start || !segment?.end) {
@@ -605,7 +606,7 @@ function computeWallCenter(segments: WallWorldSegment[]): Vector3 {
 }
 
 function buildWallDynamicMeshFromWorldSegments(
-  segments: Array<{ start: Vector3Like; end: Vector3Like }>,
+  segments: Array<{ start: THREE.Vector3; end: THREE.Vector3 }>,
   dimensions: { height?: number; width?: number; thickness?: number } = {},
 ): { center: Vector3; definition: WallDynamicMesh } | null {
   const worldSegments = buildWallWorldSegments(segments)
@@ -894,9 +895,9 @@ function createLightNode(options: {
   type: LightNodeType
   color: string
   intensity: number
-  position: Vector3Like
-  rotation?: Vector3Like
-  target?: Vector3Like
+  position: THREE.Vector3
+  rotation?: THREE.Vector3
+  target?: THREE.Vector3
   extras?: LightNodeExtras
 }): SceneNode {
   const normalizedType = normalizeLightNodeType(options.type)
@@ -982,7 +983,7 @@ function toHexColor(color: Color | null | undefined, fallback = '#ffffff'): stri
   return `#${color.getHexString()}`
 }
 
-function toVector(vec: Vector3 | Euler): Vector3Like {
+function toVector(vec: Vector3 | Euler): THREE.Vector3 {
   return createVector(vec.x, vec.y, vec.z)
 }
 
@@ -1820,14 +1821,14 @@ function duplicateNodeTree(original: SceneNode, context: DuplicateContext): Scen
   return duplicated
 }
 
-function cloneVector(vector: Vector3Like): Vector3Like {
+function cloneVector(vector: THREE.Vector3): THREE.Vector3 {
   return { x: vector.x, y: vector.y, z: vector.z }
 }
 
-function computeAssetSpawnTransform(asset: ProjectAsset, position?: Vector3Like) {
+function computeAssetSpawnTransform(asset: ProjectAsset, position?: THREE.Vector3) {
   const spawnPosition = position ? cloneVector(position) : { x: 0, y: 0, z: 0 }
-  const rotation: Vector3Like = { x: 0, y: 0, z: 0 }
-  const scale: Vector3Like = { x: 1, y: 1, z: 1 }
+  const rotation: THREE.Vector3 = { x: 0, y: 0, z: 0 }
+  const scale: THREE.Vector3 = { x: 1, y: 1, z: 1 }
 
   if (!position && asset.type !== 'model') {
     spawnPosition.y = 1
@@ -1869,7 +1870,7 @@ function snapAxisToGrid(value: number): number {
   return Math.round(value / GRID_CELL_SIZE) * GRID_CELL_SIZE
 }
 
-function toPlainVector(vector: Vector3): Vector3Like {
+function toPlainVector(vector: Vector3): THREE.Vector3 {
   return { x: vector.x, y: vector.y, z: vector.z }
 }
 
@@ -2575,7 +2576,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function parseVector3Like(value: unknown): Vector3Like | null {
+function parseVector3Like(value: unknown): THREE.Vector3 | null {
   if (!isPlainObject(value)) {
     return null
   }
@@ -2697,7 +2698,7 @@ function resolveUniqueSceneName(baseName: string, existing: Set<string>): string
   return candidate
 }
 
-function vectorsEqual(a: Vector3Like, b: Vector3Like): boolean {
+function vectorsEqual(a: THREE.Vector3, b: THREE.Vector3): boolean {
   return a.x === b.x && a.y === b.y && a.z === b.z
 }
 
@@ -3571,7 +3572,7 @@ export const useSceneStore = defineStore('scene', {
       this.projectPanelTreeSize = normalized
     },
 
-    updateNodeTransform(payload: { id: string; position: Vector3Like; rotation: Vector3Like; scale: Vector3Like }) {
+    updateNodeTransform(payload: { id: string; position: THREE.Vector3; rotation: THREE.Vector3; scale: THREE.Vector3 }) {
       const target = findNodeById(this.nodes, payload.id)
       if (!target) {
         return
@@ -4647,7 +4648,7 @@ export const useSceneStore = defineStore('scene', {
         this.nodes = [...this.nodes]
       }
     },
-    async spawnAssetAtPosition(assetId: string, position: Vector3Like): Promise<{ asset: ProjectAsset; node: SceneNode }> {
+    async spawnAssetAtPosition(assetId: string, position: THREE.Vector3): Promise<{ asset: ProjectAsset; node: SceneNode }> {
       const asset = findAssetInTree(this.projectTree, assetId)
       if (!asset) {
         throw new Error('Unable to find the requested asset')
@@ -5090,7 +5091,7 @@ export const useSceneStore = defineStore('scene', {
         newParentId = parentMap.get(targetId) ?? null
       }
 
-      let updatedLocal: { position: Vector3Like; rotation: Vector3Like; scale: Vector3Like } | null = null
+      let updatedLocal: { position: THREE.Vector3; rotation: THREE.Vector3; scale: THREE.Vector3 } | null = null
 
       if (newParentId !== oldParentId) {
         const nodeWorldMatrix = computeWorldMatrixForNode(this.nodes, nodeId)
@@ -5141,7 +5142,7 @@ export const useSceneStore = defineStore('scene', {
       return true
     },
 
-    addPlaceholderNode(asset: ProjectAsset, transform: { position: Vector3Like; rotation: Vector3Like; scale: Vector3Like }) {
+    addPlaceholderNode(asset: ProjectAsset, transform: { position: THREE.Vector3; rotation: THREE.Vector3; scale: THREE.Vector3 }) {
       const id = generateUuid()
       const node: SceneNode = {
         id,
@@ -5303,7 +5304,7 @@ export const useSceneStore = defineStore('scene', {
       }
     },
 
-    addLightNode(type: LightNodeType, options: { position?: Vector3Like; name?: string } = {}) {
+    addLightNode(type: LightNodeType, options: { position?: THREE.Vector3; name?: string } = {}) {
       const preset = getLightPreset(type)
       const node = createLightNode({
         name: options.name ?? preset.name,
@@ -5326,19 +5327,19 @@ export const useSceneStore = defineStore('scene', {
       object?: Object3D
       asset?: ProjectAsset
       nodeType?: SceneNodeType
-      position?: Vector3Like
+      position?: THREE.Vector3
       baseY?: number
       name?: string
       sourceAssetId?: string
-      rotation?: Vector3Like
-      scale?: Vector3Like
+      rotation?: THREE.Vector3
+      scale?: THREE.Vector3
     }): Promise<SceneNode | null> {
       if (!payload.object && !payload.asset) {
         throw new Error('addModelNode requires either an object or an asset')
       }
 
-      const rotation: Vector3Like = payload.rotation ?? { x: 0, y: 0, z: 0 }
-      const scale: Vector3Like = payload.scale ?? { x: 1, y: 1, z: 1 }
+      const rotation: THREE.Vector3 = payload.rotation ?? { x: 0, y: 0, z: 0 }
+      const scale: THREE.Vector3 = payload.scale ?? { x: 1, y: 1, z: 1 }
       let baseY = payload.baseY ?? 0
 
       let workingObject: Object3D
@@ -5503,9 +5504,9 @@ export const useSceneStore = defineStore('scene', {
       nodeType: SceneNodeType
       object: Object3D
       name?: string
-      position?: Vector3Like
-      rotation?: Vector3Like
-      scale?: Vector3Like
+      position?: THREE.Vector3
+      rotation?: THREE.Vector3
+      scale?: THREE.Vector3
       sourceAssetId?: string
       dynamicMesh?: SceneDynamicMesh
       components?: SceneNodeComponentState[]
@@ -5616,7 +5617,7 @@ export const useSceneStore = defineStore('scene', {
       return `${prefix}${nextIndex.toString().padStart(2, '0')}`
     },
     createWallNode(payload: {
-      segments: Array<{ start: Vector3Like; end: Vector3Like }>
+      segments: Array<{ start: THREE.Vector3; end: THREE.Vector3 }>
       dimensions?: { height?: number; width?: number; thickness?: number }
       name?: string
     }): SceneNode | null {
@@ -5639,7 +5640,7 @@ export const useSceneStore = defineStore('scene', {
       return node
     },
     updateWallNodeGeometry(nodeId: string, payload: {
-      segments: Array<{ start: Vector3Like; end: Vector3Like }>
+      segments: Array<{ start: THREE.Vector3; end: THREE.Vector3 }>
       dimensions?: { height?: number; width?: number; thickness?: number }
     }): boolean {
   const node = findNodeById(this.nodes, nodeId)
