@@ -545,37 +545,6 @@ export default class Loader {
           break;
         }
 
-        case 'usda': {
-          reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-            const contents = event.target?.result as string;
-            if (!contents) return;
-
-            const { USDLoader } = await import('three/addons/loaders/USDLoader.js');
-
-            const group = new USDLoader().parse(contents);
-            group.name = filename;
-            scope.emit('loaded', group);
-          });
-          reader.readAsText(file);
-          break;
-        }
-
-        case 'usdc':
-        case 'usdz': {
-          reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-            const contents = event.target?.result as ArrayBuffer;
-            if (!contents) return;
-
-            const { USDLoader } = await import('three/addons/loaders/USDLoader.js');
-
-            const group = new USDLoader().parse(contents);
-            group.name = filename;
-            scope.emit('loaded', group);
-          });
-          reader.readAsArrayBuffer(file);
-          break;
-        }
-
         case 'vox': {
           reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
             const contents = event.target?.result as ArrayBuffer;
