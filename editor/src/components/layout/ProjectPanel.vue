@@ -17,7 +17,7 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { resourceProviders } from '@/resources/projectProviders'
 import { loadProviderCatalog, storeProviderCatalog } from '@/stores/providerCatalogCache'
 import { getCachedModelObject } from '@/stores/modelObjectCache'
-import { dataUrlToBlob, extractExtension } from '@/plugins/blob'
+import { dataUrlToBlob, extractExtension } from '@/utils/blob'
 
 const OPENED_DIRECTORIES_STORAGE_KEY = 'harmony:project-panel:opened-directories'
 

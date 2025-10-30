@@ -26,7 +26,7 @@ import type { SceneCameraState } from '@/types/scene-camera-state'
 import { useUiStore } from '@/stores/uiStore'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
-import Loader, { type LoaderProgressPayload } from '@/plugins/loader'
+import Loader, { type LoaderProgressPayload } from '@/utils/loader'
 import type { Object3D } from 'three'
 
 const sceneStore = useSceneStore()

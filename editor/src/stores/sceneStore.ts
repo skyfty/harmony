@@ -62,11 +62,11 @@ import {
 import { useAssetCacheStore } from './assetCacheStore'
 import { useUiStore } from './uiStore'
 import { useScenesStore } from './scenesStore'
-import { loadObjectFromFile } from '@/plugins/assetImport'
-import { generateUuid } from '@/plugins/uuid'
+import { loadObjectFromFile } from '@/utils/assetImport'
+import { generateUuid } from '@/utils/uuid'
 import { getCachedModelObject, getOrLoadModelObject } from './modelObjectCache'
-import { createWallGroup, updateWallGroup } from '@/plugins/wallMesh'
-import { computeBlobHash, blobToDataUrl, dataUrlToBlob, inferBlobFilename, extractExtension, ensureExtension } from '@/plugins/blob'
+import { createWallGroup, updateWallGroup } from '@/utils/wallMesh'
+import { computeBlobHash, blobToDataUrl, dataUrlToBlob, inferBlobFilename, extractExtension, ensureExtension } from '@/utils/blob'
 
 import {
   cloneAssetList,

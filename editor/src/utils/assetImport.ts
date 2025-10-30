@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from '@/plugins/loader'
+import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from '@/utils/loader'
 
 export interface LoadObjectOptions {
   onProgress?: (payload: LoaderProgressPayload) => void

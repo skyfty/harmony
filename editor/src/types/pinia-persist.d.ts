@@ -1,5 +1,5 @@
 import type { StateTree } from 'pinia'
-import type { StorePersistOptions } from '@/plugins/piniaPersist'
+import type { StorePersistOptions } from '@/utils/piniaPersist'
 
 declare module 'pinia' {
   interface DefineStoreOptionsBase<S extends StateTree, Store> {
