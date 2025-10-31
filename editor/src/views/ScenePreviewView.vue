@@ -19,10 +19,13 @@ const volumePercent = ref(100)
 const isFullscreen = ref(false)
 const lastUpdateTime = ref<string | null>(null)
 const warningMessages = ref<string[]>([])
+const isFirstPersonMouseControlEnabled = ref(true)
+const isVolumeMenuOpen = ref(false)
 
 const CAMERA_HEIGHT = 1.6
-const FIRST_PERSON_ROTATION_SPEED = 90
-const Y_AXIS = new THREE.Vector3(0, 1, 0)
+const FIRST_PERSON_ROTATION_SPEED = 75
+const FIRST_PERSON_MOVE_SPEED = 2
+const FIRST_PERSON_LOOK_SPEED = 0.06
 
 let renderer: THREE.WebGLRenderer | null = null
 let scene: THREE.Scene | null = null
@@ -76,6 +79,91 @@ watch(controlMode, (mode) => {
 	applyControlMode(mode)
 })
 
+watch(isFirstPersonMouseControlEnabled, (enabled) => {
+	if (controlMode.value === 'first-person' && firstPersonControls) {
+		firstPersonControls.activeLook = enabled
+		resetFirstPersonPointerDelta()
+	}
+	updateCanvasCursor()
+})
+
+function isInputLikeElement(target: EventTarget | null): boolean {
+	const element = target as HTMLElement | null
+	if (!element) {
+		return false
+	}
+	const tag = element.tagName
+	if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+		return true
+	}
+	return element.isContentEditable
+}
+
+function updateCanvasCursor() {
+	const canvas = renderer?.domElement
+	if (!canvas) {
+		return
+	}
+	if (controlMode.value !== 'first-person') {
+		canvas.style.cursor = mapControls?.enabled ? 'grab' : 'default'
+		return
+	}
+	canvas.style.cursor = isFirstPersonMouseControlEnabled.value ? 'crosshair' : 'default'
+}
+
+function setFirstPersonMouseControl(enabled: boolean) {
+	if (isFirstPersonMouseControlEnabled.value === enabled) {
+		return
+	}
+	isFirstPersonMouseControlEnabled.value = enabled
+	if (controlMode.value === 'first-person' && firstPersonControls) {
+		firstPersonControls.activeLook = enabled
+		resetFirstPersonPointerDelta()
+		if (enabled) {
+			syncFirstPersonOrientation()
+		}
+	}
+	updateCanvasCursor()
+}
+
+function toggleFirstPersonMouseControl() {
+	setFirstPersonMouseControl(!isFirstPersonMouseControlEnabled.value)
+}
+
+function handlePreviewPointerDown(event: PointerEvent) {
+	if (controlMode.value !== 'first-person' || isFirstPersonMouseControlEnabled.value) {
+		return
+	}
+	if (event.button !== 0) {
+		return
+	}
+	if (event.target !== renderer?.domElement) {
+		return
+	}
+	setFirstPersonMouseControl(true)
+}
+
+function resetFirstPersonPointerDelta() {
+	if (!firstPersonControls) {
+		return
+	}
+	const internalControls = firstPersonControls as FirstPersonControls & { _pointerX?: number; _pointerY?: number }
+	if (typeof internalControls._pointerX === 'number') {
+		internalControls._pointerX = 0
+	}
+	if (typeof internalControls._pointerY === 'number') {
+		internalControls._pointerY = 0
+	}
+}
+
+function syncFirstPersonOrientation() {
+	if (!firstPersonControls) {
+		return
+	}
+	const internalControls = firstPersonControls as FirstPersonControls & { _setOrientation?: () => void }
+	internalControls._setOrientation?.()
+}
+
 watch(isPlaying, (playing) => {
 	animationMixers.forEach((mixer) => {
 		mixer.timeScale = playing ? 1 : 0
@@ -90,10 +178,15 @@ function applyControlMode(mode: ControlMode) {
 	if (mode === 'first-person') {
 		mapControls && (mapControls.enabled = false)
 		firstPersonControls && (firstPersonControls.enabled = true)
+		if (firstPersonControls) {
+			firstPersonControls.activeLook = isFirstPersonMouseControlEnabled.value
+		}
 		activeCamera.position.copy(lastFirstPersonState.position)
 		activeCamera.position.y = CAMERA_HEIGHT
 		const target = new THREE.Vector3().copy(lastFirstPersonState.position).add(lastFirstPersonState.direction)
 		activeCamera.lookAt(target)
+		syncFirstPersonOrientation()
+		resetFirstPersonPointerDelta()
 	} else {
 		firstPersonControls && (firstPersonControls.enabled = false)
 		mapControls && (mapControls.enabled = true)
@@ -101,6 +194,7 @@ function applyControlMode(mode: ControlMode) {
 		mapControls?.target.copy(lastOrbitState.target)
 		mapControls?.update()
 	}
+	updateCanvasCursor()
 }
 
 function initRenderer() {
@@ -138,6 +232,8 @@ function initRenderer() {
 	scene.add(grid)
 
 	initControls()
+	updateCanvasCursor()
+	renderer.domElement.addEventListener('pointerdown', handlePreviewPointerDown)
 	handleResize()
 
 	window.addEventListener('resize', handleResize)
@@ -153,10 +249,10 @@ function initControls() {
 		return
 	}
 	firstPersonControls = new FirstPersonControls(camera, renderer.domElement)
-	firstPersonControls.lookSpeed = 0.12
-	firstPersonControls.movementSpeed = 3.5
+	firstPersonControls.lookSpeed = FIRST_PERSON_LOOK_SPEED
+	firstPersonControls.movementSpeed = FIRST_PERSON_MOVE_SPEED
 	firstPersonControls.lookVertical = true
-	firstPersonControls.activeLook = true
+	firstPersonControls.activeLook = isFirstPersonMouseControlEnabled.value
 	firstPersonControls.enabled = controlMode.value === 'first-person'
 
 	mapControls = new MapControls(camera, renderer.domElement)
@@ -167,7 +263,7 @@ function initControls() {
 	mapControls.maxDistance = 200
 	mapControls.enabled = controlMode.value === 'third-person'
 	mapControls.target.copy(lastOrbitState.target)
-		applyControlMode(controlMode.value)
+	applyControlMode(controlMode.value)
 }
 
 function handleResize() {
@@ -187,14 +283,46 @@ function handleFullscreenChange() {
 }
 
 function handleKeyDown(event: KeyboardEvent) {
+	if (isInputLikeElement(event.target)) {
+		return
+	}
 	if (event.code === 'KeyQ') {
 		rotationState.q = true
-	} else if (event.code === 'KeyE') {
+		return
+	}
+	if (event.code === 'KeyE') {
 		rotationState.e = true
+		return
+	}
+	if (event.repeat) {
+		return
+	}
+	switch (event.code) {
+		case 'Digit1':
+			controlMode.value = 'first-person'
+			break
+		case 'Digit3':
+			controlMode.value = 'third-person'
+			break
+		case 'KeyP':
+			event.preventDefault()
+			captureScreenshot()
+			break
+		case 'KeyC':
+			if (controlMode.value === 'first-person') {
+				event.preventDefault()
+				toggleFirstPersonMouseControl()
+			}
+			break
+		default:
+			break
 	}
 }
 
 function handleKeyUp(event: KeyboardEvent) {
+	if (isInputLikeElement(event.target)) {
+		return
+	}
 	if (event.code === 'KeyQ') {
 		rotationState.q = false
 	} else if (event.code === 'KeyE') {
@@ -216,8 +344,11 @@ function startAnimationLoop() {
 		if (controlMode.value === 'first-person' && firstPersonControls) {
 			const rotationDirection = Number(rotationState.q) - Number(rotationState.e)
 			if (rotationDirection !== 0) {
-				const yaw = rotationDirection * FIRST_PERSON_ROTATION_SPEED * delta * THREE.MathUtils.DEG2RAD
-				firstPersonControls.object.rotateOnWorldAxis(Y_AXIS, yaw)
+				const yawDegrees = rotationDirection * FIRST_PERSON_ROTATION_SPEED * delta
+				const controlsInternal = firstPersonControls as FirstPersonControls & { _lon: number }
+				const currentLon = controlsInternal._lon ?? 0
+				const nextLon = THREE.MathUtils.euclideanModulo(currentLon + yawDegrees, 360)
+				controlsInternal._lon = nextLon
 			}
 			firstPersonControls.update(delta)
 			activeCamera.position.y = CAMERA_HEIGHT
@@ -531,6 +662,7 @@ function applyInitialCameraState(state: SceneCameraState) {
 	camera.position.set(state.position.x, state.position.y, state.position.z)
 	const target = new THREE.Vector3(state.target.x, state.target.y, state.target.z)
 	camera.lookAt(target)
+	syncFirstPersonOrientation()
 	if (state.fov && camera instanceof THREE.PerspectiveCamera) {
 		camera.fov = state.fov
 		camera.updateProjectionMatrix()
@@ -604,6 +736,7 @@ onBeforeUnmount(() => {
 		mapControls = null
 	}
 	if (renderer) {
+		renderer.domElement.removeEventListener('pointerdown', handlePreviewPointerDown)
 		renderer.dispose()
 		renderer.domElement.remove()
 		renderer = null
@@ -617,80 +750,151 @@ onBeforeUnmount(() => {
 <template>
 	<div class="scene-preview">
 		<div ref="containerRef" class="scene-preview__canvas"></div>
-		<v-sheet class="scene-preview__overlay" elevation="8">
-			<div class="scene-preview__toolbar">
+		<div
+			v-if="statusMessage || formattedLastUpdate"
+			class="scene-preview__update-banner"
+		>
+			<v-chip
+				v-if="statusMessage"
+				class="scene-preview__update-chip"
+				color="secondary"
+				variant="elevated"
+				size="small"
+				prepend-icon="mdi-information"
+			>
+				{{ statusMessage }}
+			</v-chip>
+			<v-chip
+				v-else
+				class="scene-preview__update-chip"
+				color="primary"
+				variant="flat"
+				size="small"
+				prepend-icon="mdi-update"
+			>
+				最近更新：{{ formattedLastUpdate }}
+			</v-chip>
+		</div>
+		<div
+			v-if="controlMode === 'first-person' && !isFirstPersonMouseControlEnabled"
+			class="scene-preview__mouse-hint"
+		>
+			<v-chip
+				color="amber-darken-2"
+				variant="elevated"
+				size="small"
+				prepend-icon="mdi-mouse-off"
+			>
+				鼠标视角已暂停（按 C 恢复）
+			</v-chip>
+		</div>
+		<v-alert
+			v-if="warningMessages.length"
+			class="scene-preview__alert"
+			density="compact"
+			type="warning"
+			variant="tonal"
+		>
+			<div v-for="(message, index) in warningMessages" :key="`${message}-${index}`">
+				{{ message }}
+			</div>
+		</v-alert>
+		<v-sheet class="scene-preview__control-bar" elevation="10">
+			<div class="scene-preview__controls">
 				<v-btn
-					class="scene-preview__toolbar-item"
-					color="primary"
+					class="scene-preview__control-button"
+					:icon="isPlaying ? 'mdi-pause' : 'mdi-play'"
 					variant="tonal"
+					color="primary"
+					size="small"
+					:aria-label="isPlaying ? '暂停动画' : '播放动画'"
+					:title="isPlaying ? '暂停动画' : '播放动画'"
 					@click="togglePlayback"
-				>
-					<v-icon start>{{ isPlaying ? 'mdi-pause' : 'mdi-play' }}</v-icon>
-					{{ isPlaying ? '暂停动画' : '播放动画' }}
-				</v-btn>
+				/>
 				<v-btn-toggle
-					class="scene-preview__toolbar-item"
+					class="scene-preview__control-mode"
 					v-model="controlMode"
 					mandatory
+					density="compact"
 					rounded
-					density="comfortable"
 				>
-					<v-btn value="first-person">
-						<v-icon start>mdi-human-greeting</v-icon>
-						第一人称
-					</v-btn>
-					<v-btn value="third-person">
-						<v-icon start>mdi-map</v-icon>
-						第三人称
-					</v-btn>
+					<v-btn
+						value="first-person"
+						icon="mdi-human-greeting"
+						size="small"
+						:aria-label="'第一人称视角'"
+						:title="'第一人称视角 (快捷键 1)'"
+					/>
+					<v-btn
+						value="third-person"
+						icon="mdi-compass"
+						size="small"
+						:aria-label="'第三人称视角'"
+						:title="'第三人称视角 (快捷键 3)'"
+					/>
 				</v-btn-toggle>
-				<v-slider
-					class="scene-preview__toolbar-item scene-preview__volume"
-					v-model="volumePercent"
-					:max="100"
-					:min="0"
-					:step="5"
-					hide-details
-					prepend-icon="mdi-volume-medium"
+				<v-btn
+					v-if="controlMode === 'first-person'"
+					class="scene-preview__control-button"
+					:icon="isFirstPersonMouseControlEnabled ? 'mdi-mouse' : 'mdi-mouse-off'"
+					variant="tonal"
+						size="small"
+					:color="isFirstPersonMouseControlEnabled ? 'info' : 'warning'"
+					:aria-label="isFirstPersonMouseControlEnabled ? '禁用鼠标镜头' : '启用鼠标镜头'"
+					:title="isFirstPersonMouseControlEnabled ? '禁用鼠标镜头 (快捷键 C)' : '启用鼠标镜头 (快捷键 C)'"
+					@click="toggleFirstPersonMouseControl"
+				/>
+				<v-menu
+					v-model="isVolumeMenuOpen"
+					location="top"
+					offset="12"
+					:close-on-content-click="false"
+				>
+					<template #activator="{ props: menuProps }">
+						<v-btn
+							class="scene-preview__control-button"
+							v-bind="menuProps"
+							icon="mdi-volume-medium"
+							variant="tonal"
+							color="secondary"
+							size="small"
+							:aria-label="`调整音量 (${volumePercent}%)`"
+							:title="`调整音量 (${volumePercent}%)`"
+						/>
+					</template>
+					<v-card class="scene-preview__volume-menu" elevation="8">
+						<v-slider
+							v-model="volumePercent"
+							class="scene-preview__volume-slider"
+							:max="100"
+							:min="0"
+							:step="5"
+							direction="vertical"
+							hide-details
+						/>
+					</v-card>
+				</v-menu>
+				<v-btn
+					class="scene-preview__control-button"
+					icon="mdi-camera"
+					variant="tonal"
+					color="secondary"
+					size="small"
+					:aria-label="'截图 (快捷键 P)'"
+					:title="'截图 (快捷键 P)'"
+					@click="captureScreenshot"
 				/>
 				<v-btn
-					class="scene-preview__toolbar-item"
+					class="scene-preview__control-button"
+					:icon="isFullscreen ? 'mdi-fullscreen-exit' : 'mdi-fullscreen'"
 					variant="tonal"
 					color="secondary"
-					@click="captureScreenshot"
-				>
-					<v-icon start>mdi-camera</v-icon>
-					截图
-				</v-btn>
-				<v-btn
-					class="scene-preview__toolbar-item"
-					variant="tonal"
-					color="secondary"
+					size="small"
+					:aria-label="isFullscreen ? '退出全屏' : '全屏'"
+					:title="isFullscreen ? '退出全屏' : '全屏'"
 					@click="toggleFullscreen"
-				>
-					<v-icon start>{{ isFullscreen ? 'mdi-fullscreen-exit' : 'mdi-fullscreen' }}</v-icon>
-					{{ isFullscreen ? '退出全屏' : '全屏' }}
-				</v-btn>
+				/>
 			</div>
-			<div class="scene-preview__status">
-				<template v-if="statusMessage">
-					<span>{{ statusMessage }}</span>
-				</template>
-				<template v-else-if="formattedLastUpdate">
-					<span>最近更新：{{ formattedLastUpdate }}</span>
-				</template>
-			</div>
-			<v-alert
-				v-if="warningMessages.length"
-				class="scene-preview__alert"
-				density="compact"
-				type="warning"
-				variant="tonal"
-			>
-				<div v-for="(message, index) in warningMessages" :key="`${message}-${index}`">
-					{{ message }}
-				</div>
-			</v-alert>
 		</v-sheet>
 	</div>
 </template>
@@ -712,56 +916,98 @@ onBeforeUnmount(() => {
 	display: block;
 }
 
-.scene-preview__overlay {
+.scene-preview__update-banner {
 	position: absolute;
-	left: 16px;
-	right: 16px;
-	bottom: 16px;
-	display: flex;
-	flex-direction: column;
-	gap: 12px;
-	padding: 12px 16px;
-	border-radius: 16px;
-	background: rgba(18, 18, 32, 0.8);
+	top: 16px;
+	left: 50%;
+	transform: translateX(-50%);
+	pointer-events: none;
+}
+
+.scene-preview__update-chip {
+	pointer-events: auto;
+	background: rgba(18, 18, 32, 0.9);
 	color: #f5f7ff;
-	backdrop-filter: blur(12px);
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.scene-preview__mouse-hint {
+	position: absolute;
+	top: 64px;
+	left: 50%;
+	transform: translateX(-50%);
+	pointer-events: none;
+}
+
+.scene-preview__mouse-hint :deep(.v-chip) {
 	pointer-events: auto;
 }
 
-.scene-preview__toolbar {
+.scene-preview__alert {
+	position: absolute;
+	top: 16px;
+	right: 16px;
+	max-width: 320px;
+	background: rgba(255, 183, 77, 0.1);
+	backdrop-filter: blur(10px);
+}
+
+.scene-preview__control-bar {
+	position: absolute;
+	bottom: 24px;
+	right: 24px;
+	padding: 12px;
+	border-radius: 16px;
+	background: rgba(18, 18, 32, 0.82);
+	color: #f5f7ff;
+	backdrop-filter: blur(14px);
+	pointer-events: auto;
+}
+
+.scene-preview__controls {
 	display: flex;
 	align-items: center;
-	gap: 12px;
-	flex-wrap: wrap;
+	gap: 10px;
 }
 
-.scene-preview__toolbar-item {
-	flex-shrink: 0;
+.scene-preview__control-button {
+	flex: 0 0 auto;
 }
 
-.scene-preview__volume {
-	min-width: 160px;
-	max-width: 260px;
+.scene-preview__control-mode {
+	flex: 0 0 auto;
 }
 
-.scene-preview__status {
-	font-size: 0.9rem;
-	color: rgba(245, 247, 255, 0.7);
+.scene-preview__volume-menu {
+	padding: 12px 18px;
+	border-radius: 12px;
+	background: rgba(18, 18, 32, 0.92);
+	color: #f5f7ff;
 }
 
-.scene-preview__alert {
-	margin: 0;
+.scene-preview__volume-slider {
+	height: 160px;
 }
 
 @media (max-width: 768px) {
-	.scene-preview__overlay {
+	.scene-preview__alert {
 		left: 12px;
 		right: 12px;
-		bottom: 12px;
+		max-width: none;
 	}
 
-	.scene-preview__volume {
-		min-width: 140px;
+	.scene-preview__control-bar {
+		bottom: 16px;
+		right: 16px;
+		padding: 10px;
+	}
+
+	.scene-preview__controls {
+		gap: 8px;
+	}
+
+	.scene-preview__volume-slider {
+		height: 140px;
 	}
 }
 </style>
