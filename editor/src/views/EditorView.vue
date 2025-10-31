@@ -11,7 +11,10 @@ import SceneManagerDialog from '@/components/layout/SceneManagerDialog.vue'
 import NewSceneDialog from '@/components/layout/NewSceneDialog.vue'
 import SceneExportDialog from '@/components/layout/SceneExportDialog.vue'
 import type { SceneExportOptions } from '@/types/scene-export'
+import type { StoredSceneDocument } from '@/types/stored-scene-document'
 
+import { prepareJsonSceneExport } from '@/utils/sceneExport'
+import { broadcastScenePreviewUpdate } from '@/utils/previewChannel'
 import {
   useSceneStore,
   type EditorPanel,
@@ -450,6 +453,40 @@ async function handlePreview() {
 
 let pendingSceneSave: Promise<boolean> | null = null
 
+const SCENE_PREVIEW_EXPORT_OPTIONS: SceneExportOptions = {
+  format: 'json',
+  fileName: 'preview',
+  includeTextures: true,
+  includeAnimations: true,
+  includeSkybox: true,
+  includeLights: true,
+  includeHiddenNodes: true,
+  includeSkeletons: true,
+  includeCameras: true,
+  includeExtras: true,
+  rotateCoordinateSystem: false,
+}
+
+let lastPreviewBroadcastRevision = 0
+
+async function broadcastScenePreview(document:StoredSceneDocument) {
+  try {
+    const exportDocument = await prepareJsonSceneExport(document, SCENE_PREVIEW_EXPORT_OPTIONS)
+    let revision = Date.now()
+    if (revision <= lastPreviewBroadcastRevision) {
+      revision = lastPreviewBroadcastRevision + 1
+    }
+    lastPreviewBroadcastRevision = revision
+    broadcastScenePreviewUpdate({
+      revision,
+      document: exportDocument,
+      timestamp: new Date().toISOString(),
+    })
+  } catch (error) {
+    console.warn('[SceneStore] Failed to broadcast preview update', error)
+  }
+}
+
 async function saveCurrentScene(): Promise<boolean> {
   if (pendingSceneSave) {
     return pendingSceneSave
@@ -464,7 +501,10 @@ async function saveCurrentScene(): Promise<boolean> {
   pendingSceneSave = (async () => {
     try {
       viewportRef.value?.captureThumbnail()
-      await sceneStore.saveActiveScene({force: true})
+      const document = await sceneStore.saveActiveScene({force: true})
+      if (document) {
+        broadcastScenePreview(document)
+      }
       return true
     } catch (error) {
       console.error('Failed to save current scene', error)

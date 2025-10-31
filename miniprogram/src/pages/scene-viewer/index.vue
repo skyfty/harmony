@@ -35,11 +35,13 @@ import { effectScope, watchEffect, ref, computed, onUnmounted, watch } from 'vue
 import { onLoad, onUnload, onReady } from '@dcloudio/uni-app';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { Sky } from 'three/addons/objects/Sky.js';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from '@/components/PlatformCanvas.vue';
 import type { StoredSceneEntry } from '@/stores/sceneStore';
 import { useSceneStore } from '@/stores/sceneStore';
 import { buildSceneGraph } from '@schema/sceneGraph';
+import type { SceneSkyboxSettings } from '@harmony/schema';
 
 
 interface RenderContext {
@@ -62,6 +64,23 @@ const sceneEntry = computed<StoredSceneEntry | null>(() => {
 const loading = ref(true);
 const error = ref<string | null>(null);
 const warnings = ref<string[]>([]);
+const SKY_ENVIRONMENT_INTENSITY = 0.35;
+const SKY_SCALE = 2500;
+const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
+  presetId: 'clear-day',
+  exposure: 0.6,
+  turbidity: 4,
+  rayleigh: 1.25,
+  mieCoefficient: 0.0025,
+  mieDirectionalG: 0.75,
+  elevation: 22,
+  azimuth: 145,
+};
+const skySunPosition = new THREE.Vector3();
+let sky: Sky | null = null;
+let pmremGenerator: THREE.PMREMGenerator | null = null;
+let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null;
+let pendingSkyboxSettings: SceneSkyboxSettings | null = null;
 let renderContext: RenderContext | null = null;
 type WindowResizeCallback = Parameters<typeof uni.onWindowResize>[0];
 let resizeListener: WindowResizeCallback | null = null;
@@ -69,17 +88,162 @@ let canvasResult: UseCanvasResult | null = null;
 let initializing = false;
 const scope = effectScope();
 const bootstrapFinished = ref(false);
+
+function cloneSkyboxSettings(settings: SceneSkyboxSettings): SceneSkyboxSettings {
+  return { ...settings };
+}
+
+function sanitizeSkyboxSettings(input: SceneSkyboxSettings): SceneSkyboxSettings {
+  const ensureNumber = (candidate: unknown, fallback: number) => {
+    return typeof candidate === 'number' && Number.isFinite(candidate) ? candidate : fallback;
+  };
+  return {
+    		presetId: input.presetId ?? DEFAULT_SKYBOX_SETTINGS.presetId,
+    exposure: ensureNumber(input.exposure, DEFAULT_SKYBOX_SETTINGS.exposure),
+    turbidity: ensureNumber(input.turbidity, DEFAULT_SKYBOX_SETTINGS.turbidity),
+    rayleigh: ensureNumber(input.rayleigh, DEFAULT_SKYBOX_SETTINGS.rayleigh),
+    mieCoefficient: ensureNumber(input.mieCoefficient, DEFAULT_SKYBOX_SETTINGS.mieCoefficient),
+    mieDirectionalG: ensureNumber(input.mieDirectionalG, DEFAULT_SKYBOX_SETTINGS.mieDirectionalG),
+    elevation: ensureNumber(input.elevation, DEFAULT_SKYBOX_SETTINGS.elevation),
+    azimuth: ensureNumber(input.azimuth, DEFAULT_SKYBOX_SETTINGS.azimuth),
+  };
+}
+
+function resolveSceneSkybox(document: StoredSceneEntry['scene'] | null | undefined): SceneSkyboxSettings | null {
+  if (!document) {
+    return null;
+  }
+  return sanitizeSkyboxSettings(document.skybox);
+}
+
+function disposeSkyEnvironment() {
+  if (skyEnvironmentTarget) {
+    skyEnvironmentTarget.dispose();
+    skyEnvironmentTarget = null;
+  }
+}
+
+function disposeSkyResources() {
+  disposeSkyEnvironment();
+  if (!sky) {
+    return;
+  }
+  sky.parent?.remove(sky);
+  const material = sky.material;
+  if (Array.isArray(material)) {
+    material.forEach((entry) => entry?.dispose?.());
+  } else {
+    material?.dispose?.();
+  }
+  sky.geometry?.dispose?.();
+  sky = null;
+}
+
+function ensureSkyExists() {
+  if (!renderContext?.scene) {
+    return;
+  }
+  if (sky) {
+    if (sky.parent !== renderContext.scene) {
+      renderContext.scene.add(sky);
+    }
+    return;
+  }
+  sky = new Sky();
+  sky.name = 'HarmonySky';
+  sky.scale.setScalar(SKY_SCALE);
+  sky.frustumCulled = false;
+  renderContext.scene.add(sky);
+}
+
+function updateSkyLighting(settings: SceneSkyboxSettings) {
+  if (!sky) {
+    return;
+  }
+  const skyMaterial = sky.material as THREE.ShaderMaterial;
+  const uniforms = skyMaterial.uniforms;
+  const phi = THREE.MathUtils.degToRad(90 - settings.elevation);
+  const theta = THREE.MathUtils.degToRad(settings.azimuth);
+  skySunPosition.setFromSphericalCoords(1, phi, theta);
+  const sunUniform = uniforms?.sunPosition;
+  if (sunUniform?.value instanceof THREE.Vector3) {
+    sunUniform.value.copy(skySunPosition);
+  } else if (sunUniform) {
+    sunUniform.value = skySunPosition.clone();
+  }
+}
+
+function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
+  const context = renderContext;
+  if (!context) {
+    pendingSkyboxSettings = settings ? cloneSkyboxSettings(settings) : null;
+    return;
+  }
+  const { renderer, scene } = context;
+  if (!renderer || !scene) {
+    pendingSkyboxSettings = settings ? cloneSkyboxSettings(settings) : null;
+    return;
+  }
+  if (!settings) {
+    disposeSkyEnvironment();
+    scene.environment = null;
+    renderer.toneMappingExposure = DEFAULT_SKYBOX_SETTINGS.exposure;
+    pendingSkyboxSettings = null;
+    return;
+  }
+  ensureSkyExists();
+  if (!sky) {
+    pendingSkyboxSettings = cloneSkyboxSettings(settings);
+    return;
+  }
+  const skyMaterial = sky.material as THREE.ShaderMaterial;
+  const uniforms = skyMaterial.uniforms;
+  const assignUniform = (key: string, value: number) => {
+    const uniform = uniforms?.[key];
+    if (!uniform) {
+      return;
+    }
+    if (typeof uniform.value === 'number') {
+      uniform.value = value;
+      return;
+    }
+    if (uniform.value && typeof uniform.value === 'object' && 'setScalar' in uniform.value) {
+      uniform.value.setScalar?.(value);
+      return;
+    }
+    uniform.value = value;
+  };
+  assignUniform('turbidity', settings.turbidity);
+  assignUniform('rayleigh', settings.rayleigh);
+  assignUniform('mieCoefficient', settings.mieCoefficient);
+  assignUniform('mieDirectionalG', settings.mieDirectionalG);
+  updateSkyLighting(settings);
+  renderer.toneMappingExposure = settings.exposure;
+  if (!pmremGenerator && renderer) {
+    pmremGenerator = new THREE.PMREMGenerator(renderer);
+  }
+  disposeSkyEnvironment();
+  if (pmremGenerator && sky) {
+    skyEnvironmentTarget = pmremGenerator.fromScene(sky as unknown as THREE.Scene);
+    scene.environment = skyEnvironmentTarget.texture;
+    scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY;
+  }
+  pendingSkyboxSettings = null;
+}
 function handleSceneEntry(entry: StoredSceneEntry | null) {
   const sceneId = currentSceneId.value;
   if (!sceneId) {
     return;
   }
   if (!entry) {
+    applySkyboxSettings(null);
     error.value = '未找到对应的场景数据';
     loading.value = false;
     return;
   }
   error.value = null;
+  const skyboxSettings = resolveSceneSkybox(entry.scene);
+  applySkyboxSettings(skyboxSettings);
   uni.setNavigationBarTitle({ title: entry.scene.name || '场景预览' });
   startRenderIfReady();
 }
@@ -142,6 +306,10 @@ function teardownRenderer() {
   }
   const { renderer, scene, controls } = renderContext;
   controls.dispose();
+  disposeSkyResources();
+  pmremGenerator?.dispose();
+  pmremGenerator = null;
+  pendingSkyboxSettings = null;
   disposeObject(scene);
   renderer.dispose();
   renderContext = null;
@@ -168,9 +336,14 @@ async function ensureRendererContext(canvasResult: UseCanvasResult) {
     antialias: true,
     alpha: true,
   });
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = DEFAULT_SKYBOX_SETTINGS.exposure;
   renderer.setPixelRatio(pixelRatio);
   renderer.setSize(width, height, false);
   renderer.shadowMap.enabled = true;
+  pmremGenerator?.dispose();
+  pmremGenerator = new THREE.PMREMGenerator(renderer);
 
   const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 2000);
   camera.position.set(5, 5, 5);
@@ -182,6 +355,7 @@ async function ensureRendererContext(canvasResult: UseCanvasResult) {
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#f9f9f9');
+  scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY;
 
   renderContext = {
     renderer,
@@ -231,6 +405,8 @@ async function initializeRenderer(sceneEntry: StoredSceneEntry, canvasResult: Us
   const hemisphericLight = new THREE.HemisphereLight('#d4d8ff', '#f5f2ef', 0.3);
   scene.add(hemisphericLight);
 
+  ensureSkyExists();
+
   const graph = await buildSceneGraph(sceneEntry.scene, { enableGround: true });
   if (graph.warnings.length) {
     warnings.value = graph.warnings;
@@ -238,6 +414,12 @@ async function initializeRenderer(sceneEntry: StoredSceneEntry, canvasResult: Us
   scene.add(graph.root);
 
   focusCameraOnScene(graph.root);
+
+  const skyboxSettings = resolveSceneSkybox(sceneEntry.scene);
+  applySkyboxSettings(skyboxSettings);
+  if (pendingSkyboxSettings) {
+    applySkyboxSettings(pendingSkyboxSettings);
+  }
 
   const { canvas } = canvasResult;
   const width = canvas.width || canvas.clientWidth || 1;

@@ -215,6 +215,16 @@ export interface GroundSettings {
   depth: number;
 }
 
+export interface SceneViewportSettings {
+  showGrid: boolean;
+  showAxes: boolean;
+  cameraProjection: 'perspective' | 'orthographic';
+  cameraControlMode: 'orbit' | 'map';
+  shadowsEnabled: boolean;
+  skybox: SceneSkyboxSettings;
+  [key: string]: unknown;
+}
+
 export interface SceneJsonExportDocument {
   id: string;
   name: string;

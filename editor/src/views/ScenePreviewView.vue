@@ -3,8 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { FirstPersonControls } from 'three/examples/jsm/controls/FirstPersonControls.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
-import type { SceneJsonExportDocument, SceneNode } from '@harmony/schema'
-import type { SceneCameraState } from '@/types/scene-camera-state'
+import { Sky } from 'three/addons/objects/Sky.js'
+import type { SceneJsonExportDocument, SceneNode, SceneSkyboxSettings } from '@harmony/schema'
 import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
 import { subscribeToScenePreview } from '@/utils/previewChannel'
 import { buildSceneGraph } from '@schema/sceneGraph';
@@ -29,6 +29,20 @@ const FIRST_PERSON_LOOK_SPEED = 0.06
 const FIRST_PERSON_PITCH_LIMIT = THREE.MathUtils.degToRad(75)
 const tempDirection = new THREE.Vector3()
 const tempTarget = new THREE.Vector3()
+const skySunPosition = new THREE.Vector3()
+const SKY_ENVIRONMENT_INTENSITY = 0.35
+const SKY_SCALE = 2500
+const DEFAULT_BACKGROUND_COLOR = 0x0d0d12
+const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
+	presetId: 'clear-day',
+	exposure: 0.6,
+	turbidity: 4,
+	rayleigh: 1.25,
+	mieCoefficient: 0.0025,
+	mieDirectionalG: 0.75,
+	elevation: 22,
+	azimuth: 145,
+}
 
 let renderer: THREE.WebGLRenderer | null = null
 let scene: THREE.Scene | null = null
@@ -36,6 +50,10 @@ let camera: THREE.PerspectiveCamera | null = null
 let listener: THREE.AudioListener | null = null
 let rootGroup: THREE.Group | null = null
 let fallbackLight: THREE.HemisphereLight | null = null
+let sky: Sky | null = null
+let pmremGenerator: THREE.PMREMGenerator | null = null
+let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null
+let pendingSkyboxSettings: SceneSkyboxSettings | null = null
 let firstPersonControls: FirstPersonControls | null = null
 let mapControls: MapControls | null = null
 let animationFrameHandle = 0
@@ -57,7 +75,33 @@ const lastOrbitState = {
 	target: new THREE.Vector3(0, 0, 0),
 }
 let animationMixers: THREE.AnimationMixer[] = []
-let hasAppliedInitialCameraState = false
+
+function cloneSkyboxSettings(settings: SceneSkyboxSettings): SceneSkyboxSettings {
+	return { ...settings }
+}
+
+function sanitizeSkyboxSettings(input: SceneSkyboxSettings): SceneSkyboxSettings {
+	const ensureNumber = (candidate: unknown, fallback: number) => {
+		return typeof candidate === 'number' && Number.isFinite(candidate) ? candidate : fallback
+	}
+	return {
+		presetId: input.presetId ?? DEFAULT_SKYBOX_SETTINGS.presetId,
+		exposure: ensureNumber(input.exposure, DEFAULT_SKYBOX_SETTINGS.exposure),
+		turbidity: ensureNumber(input.turbidity, DEFAULT_SKYBOX_SETTINGS.turbidity),
+		rayleigh: ensureNumber(input.rayleigh, DEFAULT_SKYBOX_SETTINGS.rayleigh),
+		mieCoefficient: ensureNumber(input.mieCoefficient, DEFAULT_SKYBOX_SETTINGS.mieCoefficient),
+		mieDirectionalG: ensureNumber(input.mieDirectionalG, DEFAULT_SKYBOX_SETTINGS.mieDirectionalG),
+		elevation: ensureNumber(input.elevation, DEFAULT_SKYBOX_SETTINGS.elevation),
+		azimuth: ensureNumber(input.azimuth, DEFAULT_SKYBOX_SETTINGS.azimuth),
+	}
+}
+
+function resolveDocumentSkybox(document: SceneJsonExportDocument | null | undefined): SceneSkyboxSettings | null {
+	if (!document) {
+		return null
+	}
+	return sanitizeSkyboxSettings(document.skybox)
+}
 
 const formattedLastUpdate = computed(() => {
 	if (!lastUpdateTime.value) {
@@ -247,13 +291,17 @@ function initRenderer() {
 	renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true })
 	renderer.outputColorSpace = THREE.SRGBColorSpace
 	renderer.toneMapping = THREE.ACESFilmicToneMapping
+	renderer.toneMappingExposure = DEFAULT_SKYBOX_SETTINGS.exposure
 	renderer.shadowMap.enabled = true
 	renderer.shadowMap.type = THREE.PCFSoftShadowMap
 	renderer.setPixelRatio(Math.min(window.devicePixelRatio ?? 1, 2))
+	pmremGenerator?.dispose()
+	pmremGenerator = new THREE.PMREMGenerator(renderer)
 	host.appendChild(renderer.domElement)
 
 	scene = new THREE.Scene()
-	scene.background = new THREE.Color(0x0d0d12)
+	scene.background = new THREE.Color(DEFAULT_BACKGROUND_COLOR)
+	scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY
 
 	camera = new THREE.PerspectiveCamera(60, 1, 0.1, 2000)
 		camera.position.set(0, CAMERA_HEIGHT, 0)
@@ -272,6 +320,10 @@ function initRenderer() {
 	const grid = new THREE.GridHelper(40, 40, 0x404050, 0x2a2a3a)
 	grid.position.y = 0
 	scene.add(grid)
+	ensureSkyExists()
+	if (pendingSkyboxSettings) {
+		applySkyboxSettings(pendingSkyboxSettings)
+	}
 
 	initControls()
 	updateCanvasCursor()
@@ -429,6 +481,116 @@ function disposeScene() {
 	})
 	disposables.forEach((object) => disposeObjectResources(object))
 	rootGroup.clear()
+}
+
+function disposeSkyEnvironment() {
+	if (skyEnvironmentTarget) {
+		skyEnvironmentTarget.dispose()
+		skyEnvironmentTarget = null
+	}
+}
+
+function disposeSkyResources() {
+	disposeSkyEnvironment()
+	if (!sky) {
+		return
+	}
+	sky.parent?.remove(sky)
+	const material = sky.material
+	if (Array.isArray(material)) {
+		material.forEach((entry) => entry?.dispose?.())
+	} else {
+		material?.dispose?.()
+	}
+	sky.geometry?.dispose?.()
+	sky = null
+}
+
+function ensureSkyExists() {
+	if (!scene) {
+		return
+	}
+	if (sky) {
+		if (sky.parent !== scene) {
+			scene.add(sky)
+		}
+		return
+	}
+	sky = new Sky()
+	sky.name = 'HarmonySky'
+	sky.scale.setScalar(SKY_SCALE)
+	sky.frustumCulled = false
+	scene.add(sky)
+}
+
+function updateSkyLighting(settings: SceneSkyboxSettings) {
+	if (!sky) {
+		return
+	}
+	const skyMaterial = sky.material as THREE.ShaderMaterial
+	const uniforms = skyMaterial.uniforms
+	const phi = THREE.MathUtils.degToRad(90 - settings.elevation)
+	const theta = THREE.MathUtils.degToRad(settings.azimuth)
+	skySunPosition.setFromSphericalCoords(1, phi, theta)
+	const sunUniform = uniforms?.sunPosition
+	if (sunUniform?.value instanceof THREE.Vector3) {
+		sunUniform.value.copy(skySunPosition)
+	} else if (sunUniform) {
+		sunUniform.value = skySunPosition.clone()
+	}
+	if (fallbackLight) {
+		fallbackLight.position.copy(skySunPosition.clone().multiplyScalar(50))
+	}
+}
+
+function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
+	if (!renderer || !scene) {
+		pendingSkyboxSettings = settings ? cloneSkyboxSettings(settings) : null
+		return
+	}
+	if (!settings) {
+		disposeSkyEnvironment()
+		scene.environment = null
+		renderer.toneMappingExposure = DEFAULT_SKYBOX_SETTINGS.exposure
+		pendingSkyboxSettings = null
+		return
+	}
+	ensureSkyExists()
+	if (!sky) {
+		pendingSkyboxSettings = cloneSkyboxSettings(settings)
+		return
+	}
+	const skyMaterial = sky.material as THREE.ShaderMaterial
+	const uniforms = skyMaterial.uniforms
+	const assignUniform = (key: string, value: number) => {
+		const uniform = uniforms?.[key]
+		if (!uniform) {
+			return
+		}
+		if (typeof uniform.value === 'number') {
+			uniform.value = value
+			return
+		}
+		if (uniform.value && typeof uniform.value === 'object' && 'setScalar' in uniform.value) {
+			uniform.value.setScalar?.(value)
+			return
+		}
+		uniform.value = value
+	}
+	assignUniform('turbidity', settings.turbidity)
+	assignUniform('rayleigh', settings.rayleigh)
+	assignUniform('mieCoefficient', settings.mieCoefficient)
+	assignUniform('mieDirectionalG', settings.mieDirectionalG)
+	updateSkyLighting(settings)
+	renderer.toneMappingExposure = settings.exposure
+	if (!pmremGenerator) {
+		pmremGenerator = new THREE.PMREMGenerator(renderer)
+	}
+	disposeSkyEnvironment()
+	skyEnvironmentTarget = pmremGenerator.fromScene(sky as unknown as THREE.Scene)
+	scene.environment = skyEnvironmentTarget.texture
+	scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY
+	pendingSkyboxSettings = null
 }
 
 function disposeObjectResources(object: THREE.Object3D) {
@@ -618,10 +780,12 @@ function refreshAnimations() {
 }
 
 async function updateScene(document: SceneJsonExportDocument) {
-			if (!scene || !rootGroup) {
+	const skyboxSettings = resolveDocumentSkybox(document)
+	applySkyboxSettings(skyboxSettings)
+	if (!scene || !rootGroup) {
 		return
 	}
-			const previewRoot = rootGroup
+	const previewRoot = rootGroup
 	const { root, warnings } = await buildSceneGraph(document)
 	warningMessages.value = warnings
 
@@ -678,10 +842,6 @@ function applySnapshot(snapshot: ScenePreviewSnapshot) {
 		.then(() => {
 			lastUpdateTime.value = snapshot.timestamp
 			statusMessage.value = ''
-			if (!hasAppliedInitialCameraState && snapshot.camera) {
-				applyInitialCameraState(snapshot.camera)
-				hasAppliedInitialCameraState = true
-			}
 		})
 		.catch((error) => {
 			console.error('[ScenePreview] Failed to apply snapshot', error)
@@ -695,27 +855,6 @@ function applySnapshot(snapshot: ScenePreviewSnapshot) {
 				applySnapshot(pending)
 			}
 		})
-}
-
-function applyInitialCameraState(state: SceneCameraState) {
-	if (!camera) {
-		return
-	}
-	camera.position.set(state.position.x, state.position.y, state.position.z)
-	tempTarget.set(state.target.x, state.target.y, state.target.z)
-	camera.lookAt(tempTarget)
-	clampFirstPersonPitch(true)
-	syncFirstPersonOrientation()
-	if (state.fov && camera instanceof THREE.PerspectiveCamera) {
-		camera.fov = state.fov
-		camera.updateProjectionMatrix()
-	}
-	syncLastFirstPersonStateFromCamera()
-	lastOrbitState.position.copy(camera.position)
-	camera.getWorldDirection(tempDirection)
-	tempTarget.copy(camera.position).add(tempDirection)
-	lastOrbitState.target.copy(tempTarget)
-	applyControlMode(controlMode.value)
 }
 
 function togglePlayback() {
@@ -769,6 +908,10 @@ onBeforeUnmount(() => {
 	window.removeEventListener('keydown', handleKeyDown)
 	window.removeEventListener('keyup', handleKeyUp)
 	disposeScene()
+	disposeSkyResources()
+	pmremGenerator?.dispose()
+	pmremGenerator = null
+	pendingSkyboxSettings = null
 	animationMixers.forEach((mixer) => mixer.stopAllAction())
 	animationMixers = []
 	if (firstPersonControls) {

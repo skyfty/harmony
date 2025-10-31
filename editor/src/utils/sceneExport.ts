@@ -295,11 +295,8 @@ function rotateSceneForCoordinateSystem(scene: THREE.Scene) {
   scene.updateMatrixWorld(true)
 }
 
-export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, options: SceneExportOptions, onProgress: (progress: number, message?: string) => void): Promise<Blob> {
+export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, options: SceneExportOptions): Promise<SceneJsonExportDocument> {
 
-  onProgress(10, 'Capturing scene data...')
-
-  onProgress(35, 'Applying export preferences...')
   const exportDocument: SceneJsonExportDocument = {
     id: snapshot.id,
     name: snapshot.name,
@@ -312,17 +309,10 @@ export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, opti
     assetIndex: snapshot.assetIndex,
     packageAssetMap: snapshot.packageAssetMap,
   };
-  const sanitizedDocument = sanitizeSceneDocumentForJsonExport(exportDocument, options)
+  return sanitizeSceneDocumentForJsonExport(exportDocument, options)
 
-  onProgress(65, 'Generating JSON file...')
-  const serialized = JSON.stringify(sanitizedDocument, null, 2)
-
-  onProgress(95, 'Preparing download...')
-  onProgress(100, 'Export complete')
-
-  return new Blob([serialized], { type: 'application/json' })
 }
-export async function prepareGLBSceneExport(scene: THREE.Scene, options: SceneExportOptions, onProgress: (progress: number, message?: string) => void): Promise<Blob> {
+export async function prepareGLBSceneExport(scene: THREE.Scene, options: SceneExportOptions): Promise<Blob> {
   if (!scene) {
     throw new Error('Scene not initialized')
   }
@@ -336,52 +326,40 @@ export async function prepareGLBSceneExport(scene: THREE.Scene, options: SceneEx
   const includeExtras = options.includeExtras ?? true
 
 
-  onProgress(5, 'Cloning scene data...')
   const exportScene = clone(scene) as THREE.Scene
   removeEditorHelpers(exportScene)
 
-  onProgress(12, 'Preparing materials...')
   cloneMeshMaterials(exportScene)
 
   if (!includeSkybox) {
-    onProgress(20, 'Removing skybox...')
     removeSkybox(exportScene)
   }
 
   if (!includeLights) {
-    onProgress(28, 'Removing lights...')
     removeLights(exportScene)
   }
 
   if (!includeCameras) {
-    onProgress(34, 'Removing cameras...')
     removeCameras(exportScene)
   }
 
   if (!includeSkeletons) {
-    onProgress(42, 'Stripping skeleton data...')
     stripSkeletonData(exportScene)
   }
 
   if (!includeTextures) {
-    onProgress(50, 'Stripping textures...')
     stripMaterialTextures(exportScene)
   }
 
   if (options.rotateCoordinateSystem) {
-    onProgress(58, 'Adjusting coordinate system...')
     rotateSceneForCoordinateSystem(exportScene)
   }
 
-  onProgress(65, 'Generating GLB file...')
   const blob = await exportGLB(exportScene, {
     includeAnimations,
     onlyVisible: includeHiddenNodes ? false : true,
     includeCustomExtensions: includeExtras,
   })
-
-  onProgress(95, 'Preparing download...')
-  onProgress(100, 'Export complete')
 
   return blob
 }

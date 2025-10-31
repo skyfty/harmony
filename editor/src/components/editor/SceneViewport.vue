@@ -2226,13 +2226,16 @@ async function exportScene(options: SceneExportOptions, onProgress: (progress: n
   if (!scene) {
     throw new Error('Scene not initialized')
   }
+  onProgress(10, 'Capturing scene data...')
   if (options.format === 'glb') {
-    return prepareGLBSceneExport(scene, options, onProgress)
+    return prepareGLBSceneExport(scene, options)
   } else if (options.format === 'json') {
     let snapshot = sceneStore.createSceneDocumentSnapshot() as StoredSceneDocument
     const packageAssetMap = await buildPackageAssetMapForExport(snapshot,{embedResources:true})
     snapshot.packageAssetMap = packageAssetMap
-    return prepareJsonSceneExport(snapshot, options, onProgress)
+    onProgress(35, 'Applying export preferences...')
+    const jsonDocument = await prepareJsonSceneExport(snapshot, options)
+    return new Blob([JSON.stringify(jsonDocument, null, 2)], { type: 'application/json' })
   } else {
     throw new Error(`Unsupported export format: ${options.format}`)
   }

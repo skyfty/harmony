@@ -1,13 +1,9 @@
 import type { SceneJsonExportDocument } from '@harmony/schema'
-import type { SceneCameraState } from '@/types/scene-camera-state'
 
 export interface ScenePreviewSnapshot {
   revision: number
-  sceneId: string
-  sceneName: string
   document: SceneJsonExportDocument
   timestamp: string
-  camera: SceneCameraState | null
 }
 
 type PreviewListener = (snapshot: ScenePreviewSnapshot) => void
@@ -77,7 +73,7 @@ function safeParseSnapshot(payload: string): ScenePreviewSnapshot | null {
     if (!parsed || typeof parsed !== 'object') {
       return null
     }
-    if (!parsed.sceneId || !parsed.document) {
+    if (!parsed.document) {
       return null
     }
     return parsed

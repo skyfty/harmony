@@ -69,9 +69,6 @@ import { generateUuid } from '@/utils/uuid'
 import { getCachedModelObject, getOrLoadModelObject } from './modelObjectCache'
 import { createWallGroup, updateWallGroup } from '@/utils/wallMesh'
 import { computeBlobHash, blobToDataUrl, dataUrlToBlob, inferBlobFilename, extractExtension, ensureExtension } from '@/utils/blob'
-import type { SceneExportOptions } from '@/types/scene-export'
-import { sanitizeSceneDocumentForJsonExport } from '@/utils/sceneExport'
-import { broadcastScenePreviewUpdate } from '@/utils/previewChannel'
 
 import {
   cloneAssetList,
@@ -144,21 +141,6 @@ const HISTORY_LIMIT = 50
 
 const LOCAL_EMBEDDED_ASSET_PREFIX = 'local::'
 
-const SCENE_PREVIEW_EXPORT_OPTIONS: SceneExportOptions = {
-  format: 'json',
-  fileName: 'preview',
-  includeTextures: true,
-  includeAnimations: true,
-  includeSkybox: true,
-  includeLights: true,
-  includeHiddenNodes: true,
-  includeSkeletons: true,
-  includeCameras: true,
-  includeExtras: true,
-  rotateCoordinateSystem: false,
-}
-
-let lastPreviewBroadcastRevision = 0
 
 const DEFAULT_WALL_HEIGHT = WALL_DEFAULT_HEIGHT
 const DEFAULT_WALL_WIDTH = WALL_DEFAULT_WIDTH
@@ -6414,42 +6396,6 @@ export const useSceneStore = defineStore('scene', {
       await scenesStore.saveSceneDocument(document)
       applyCurrentSceneMeta(this, document)
       this.hasUnsavedChanges = false
-
-      void (async () => {
-        try {
-          const packageAssetMap = await buildPackageAssetMapForExport(document, { embedResources: true })
-          const exportDocument: SceneJsonExportDocument = {
-            id: document.id,
-            name: document.name,
-            createdAt: document.createdAt,
-            updatedAt: document.updatedAt,
-            nodes: document.nodes,
-            materials: document.materials,
-            groundSettings: document.groundSettings,
-            assetIndex: document.assetIndex,
-            packageAssetMap: {
-              ...(document.packageAssetMap ?? {}),
-              ...packageAssetMap,
-            },
-          }
-          const sanitized = sanitizeSceneDocumentForJsonExport(exportDocument, SCENE_PREVIEW_EXPORT_OPTIONS)
-          let revision = Date.now()
-          if (revision <= lastPreviewBroadcastRevision) {
-            revision = lastPreviewBroadcastRevision + 1
-          }
-          lastPreviewBroadcastRevision = revision
-          broadcastScenePreviewUpdate({
-            revision,
-            sceneId: sanitized.id ?? document.id,
-            sceneName: sanitized.name ?? document.name,
-            document: sanitized,
-            camera: this.camera ? cloneCameraState(this.camera) : null,
-            timestamp: new Date().toISOString(),
-          })
-        } catch (error) {
-          console.warn('[SceneStore] Failed to broadcast preview update', error)
-        }
-      })()
       return document
     },
     async createScene(
