@@ -1361,6 +1361,50 @@ onBeforeUnmount(() => {
 	height: 160px;
 }
 
+/* Behavior overlay floats above the preview canvas */
+.scene-preview__behavior-overlay {
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(0, 0, 0, 0.35);
+	z-index: 2000; /* above control bar, alerts, etc. */
+	pointer-events: auto;
+}
+
+.scene-preview__behavior-dialog {
+	min-width: 260px;
+	max-width: 80vw;
+	padding: 16px 18px;
+	border-radius: 12px;
+	box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+	background: rgba(18, 18, 32, 0.96);
+	backdrop-filter: blur(10px);
+	color: #f5f7ff;
+	text-align: center;
+	z-index: 2100;
+}
+
+.scene-preview__behavior-title {
+	margin: 0 0 8px;
+	font-size: 16px;
+	font-weight: 600;
+}
+
+.scene-preview__behavior-message {
+	margin: 0 0 12px;
+	font-size: 14px;
+	opacity: 0.9;
+}
+
+.scene-preview__behavior-button {
+	margin-top: 4px;
+}
+
 @media (max-width: 768px) {
 	.scene-preview__alert {
 		left: 12px;
