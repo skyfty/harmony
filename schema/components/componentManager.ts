@@ -4,6 +4,7 @@ import type {
   ComponentInspectorSection,
   NodeComponentType,
   SceneNodeComponentState,
+  SceneNodeComponentMap,
 } from '../index'
 
 import { Component, type ComponentRuntimeContext } from './Component'
@@ -169,8 +170,9 @@ export class ComponentManager {
       })
     }
 
-    const states = Array.isArray(node.components)
-      ? (node.components.filter((state): state is AnySceneNodeComponentState => Boolean(state)) ?? [])
+    const statesSource: SceneNodeComponentMap | undefined = node.components ?? undefined
+    const states = statesSource
+      ? (Object.values(statesSource).filter((state): state is AnySceneNodeComponentState => Boolean(state)) ?? [])
       : []
 
     const activeStateIds = new Set<string>()

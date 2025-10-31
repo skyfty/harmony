@@ -25,15 +25,11 @@ import BehaviorDetailsPanel from '@/components/inspector/BehaviorDetailsPanel.vu
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
-const behaviorComponent = computed(() => {
-  const node = selectedNode.value
-  if (!node?.components?.length) {
-    return undefined
-  }
-  return node.components.find((entry) => entry.type === BEHAVIOR_COMPONENT_TYPE) as
+const behaviorComponent = computed(() =>
+  selectedNode.value?.components?.[BEHAVIOR_COMPONENT_TYPE] as
     | SceneNodeComponentState<BehaviorComponentProps>
-    | undefined
-})
+    | undefined,
+)
 
 const behaviors = computed<SceneBehavior[]>(() => {
   const component = behaviorComponent.value

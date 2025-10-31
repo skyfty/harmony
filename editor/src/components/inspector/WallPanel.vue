@@ -22,13 +22,9 @@ const localHeight = ref<number>(WALL_DEFAULT_HEIGHT)
 const localWidth = ref<number>(WALL_DEFAULT_WIDTH)
 const localThickness = ref<number>(WALL_DEFAULT_THICKNESS)
 
-const wallComponent = computed(() => {
-  const node = selectedNode.value
-  if (!node?.components?.length) {
-    return undefined
-  }
-  return node.components.find((entry) => entry.type === WALL_COMPONENT_TYPE) as SceneNodeComponentState<WallComponentProps> | undefined
-})
+const wallComponent = computed(
+  () => selectedNode.value?.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined,
+)
 
 watch(
   () => wallComponent.value?.props,

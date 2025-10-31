@@ -23,7 +23,7 @@ type ControlMode = 'first-person' | 'third-person'
 const containerRef = ref<HTMLDivElement | null>(null)
 const statusMessage = ref('等待场景数据...')
 const isPlaying = ref(true)
-const controlMode = ref<ControlMode>('first-person')
+const controlMode = ref<ControlMode>('third-person')
 const volumePercent = ref(100)
 const isFullscreen = ref(false)
 const lastUpdateTime = ref<string | null>(null)
@@ -880,9 +880,9 @@ function reconcileNodeLists(
 		if (!object) {
 			return
 		}
-				if (!shouldReplace) {
-					updateNodeProperties(object, node)
-				}
+		if (!shouldReplace) {
+			updateNodeProperties(object, node)
+		}
 		ensureChildOrder(parentObject, object, index)
 		const nextChildren = Array.isArray(node.children) ? node.children : []
 		const previousChildren = previous?.children ?? []
@@ -958,7 +958,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 			if (!child) {
 				continue
 			}
-				previewRoot.add(child)
+			previewRoot.add(child)
 			registerSubtree(child, pendingObjects)
 		}
 		currentDocument = document
@@ -969,12 +969,12 @@ async function updateScene(document: SceneJsonExportDocument) {
 
 	reconcileNodeLists(null, document.nodes ?? [], currentDocument.nodes ?? [], pendingObjects)
 
-			for (const [nodeId, object] of Array.from(pendingObjects.entries())) {
+	for (const [nodeId, object] of Array.from(pendingObjects.entries())) {
 		if (!nodeObjectMap.has(nodeId)) {
-				previewRoot.add(object)
+			previewRoot.add(object)
 			registerSubtree(object, pendingObjects)
 		}
-			}
+	}
 
 	currentDocument = document
 	refreshAnimations()

@@ -3,7 +3,13 @@ import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { SceneMaterial, SceneMaterialTextureSlot, SceneNodeMaterial } from '@/types/material'
-import type {SceneNode, SceneNodeComponentState,SceneJsonExportDocument } from '@harmony/schema'
+import type {
+  SceneNode,
+  SceneNodeComponentState,
+  SceneNodeComponentMap,
+  SceneJsonExportDocument,
+  NodeComponentType,
+} from '@harmony/schema'
 import type { SceneExportOptions, GLBExportSettings } from '@/types/scene-export'
 
 type RemovedSceneObject = {
@@ -446,10 +452,10 @@ function sanitizeNodeForJsonExport(
     if ('sourceAssetId' in sanitized) {
       delete sanitized.sourceAssetId
     }
-  } else if (sanitized.components?.length) {
-    const clonedComponents = sanitized.components.map(cloneNodeComponentState)
+  } else if (componentMapHasEntries(sanitized.components)) {
+    const clonedComponents = cloneNodeComponentMap(sanitized.components!)
     const filteredComponents = sanitizeNodeComponentsForJsonExport(clonedComponents, options)
-    if (filteredComponents.length) {
+    if (componentMapHasEntries(filteredComponents)) {
       sanitized.components = filteredComponents
     } else {
       delete sanitized.components
@@ -467,6 +473,10 @@ function sanitizeNodeForJsonExport(
   return sanitized
 }
 
+function componentMapHasEntries(components?: SceneNodeComponentMap | null): boolean {
+  return Boolean(components && Object.keys(components).length)
+}
+
 function cloneNodeComponentState(component: SceneNodeComponentState): SceneNodeComponentState {
   return {
     ...component,
@@ -475,17 +485,34 @@ function cloneNodeComponentState(component: SceneNodeComponentState): SceneNodeC
   }
 }
 
+function cloneNodeComponentMap(components: SceneNodeComponentMap): SceneNodeComponentMap {
+  const cloned: SceneNodeComponentMap = {}
+  Object.entries(components).forEach(([type, component]) => {
+    if (!component) {
+      return
+    }
+    cloned[type as NodeComponentType] = cloneNodeComponentState(component)
+  })
+  return cloned
+}
+
 function sanitizeNodeComponentsForJsonExport(
-  components: SceneNodeComponentState[],
+  components: SceneNodeComponentMap,
   options: SceneExportOptions,
-): SceneNodeComponentState[] {
-  let filtered = components
-  if (!options.includeAnimations) {
-    filtered = filtered.filter((entry) => !/animation/i.test(entry.type))
-  }
-  if (!options.includeSkeletons) {
-    filtered = filtered.filter((entry) => !/skeleton/i.test(entry.type))
-  }
+): SceneNodeComponentMap {
+  const filtered: SceneNodeComponentMap = {}
+  Object.entries(components).forEach(([type, component]) => {
+    if (!component) {
+      return
+    }
+    if (!options.includeAnimations && /animation/i.test(component.type)) {
+      return
+    }
+    if (!options.includeSkeletons && /skeleton/i.test(component.type)) {
+      return
+    }
+    filtered[type as NodeComponentType] = component
+  })
   return filtered
 }
 

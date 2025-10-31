@@ -79,7 +79,7 @@ import {
   ASSETS_ROOT_DIRECTORY_ID,
   PACKAGES_ROOT_DIRECTORY_ID,
 } from './assetCatalog'
-import type { NodeComponentType, SceneNodeComponentState } from '@harmony/schema'
+import type { NodeComponentType, SceneNodeComponentState, SceneNodeComponentMap } from '@harmony/schema'
 import type { WallComponentProps } from '@schema/components'
 import {
   WALL_COMPONENT_TYPE,
@@ -233,43 +233,82 @@ function cloneComponentProps<T>(props: T): T {
   }
 }
 
-function cloneComponentState(state: SceneNodeComponentState<any>): SceneNodeComponentState<any> {
+function cloneComponentState(state: SceneNodeComponentState<any>, typeOverride?: NodeComponentType): SceneNodeComponentState<any> {
+  const resolvedType = (typeOverride ?? state.type) as NodeComponentType
+  const resolvedId = typeof state.id === 'string' && state.id.trim().length ? state.id : generateUuid()
   return {
-    id: `${state.id ?? ''}`,
-    type: state.type,
+    id: resolvedId,
+    type: resolvedType,
     enabled: state.enabled ?? true,
     props: cloneComponentProps(state.props),
     metadata: state.metadata ? { ...state.metadata } : undefined,
   }
 }
 
-function normalizeNodeComponentStates(node: SceneNode, states?: SceneNodeComponentState<any>[]): SceneNodeComponentState<any>[] | undefined {
-  const cloned: SceneNodeComponentState<any>[] = Array.isArray(states) ? states.map((state) => cloneComponentState(state)) : []
+function normalizeNodeComponents(node: SceneNode, components?: SceneNodeComponentMap): SceneNodeComponentMap | undefined {
+  const normalized: SceneNodeComponentMap = {}
+
+  if (components) {
+    Object.entries(components).forEach(([rawType, state]) => {
+      if (!state) {
+        return
+      }
+      const type = (state.type ?? rawType) as NodeComponentType
+      normalized[type] = cloneComponentState(state, type)
+    })
+  }
 
   if (node.dynamicMesh?.type === 'Wall') {
-    const existing = cloned.find((entry) => entry.type === WALL_COMPONENT_TYPE)
     const baseProps = resolveWallComponentPropsFromMesh(node.dynamicMesh as WallDynamicMesh)
-    if (existing) {
-      existing.id = existing.id || generateUuid()
-      existing.enabled = existing.enabled ?? true
-      existing.props = cloneWallComponentProps(
-        clampWallProps({
-          height: (existing.props as { height?: number })?.height ?? baseProps.height,
-          width: (existing.props as { width?: number })?.width ?? baseProps.width,
-          thickness: (existing.props as { thickness?: number })?.thickness ?? baseProps.thickness,
-        }),
-      )
-    } else {
-      cloned.push({
-        id: generateUuid(),
-        type: WALL_COMPONENT_TYPE,
-        enabled: true,
-        props: cloneWallComponentProps(baseProps),
-      })
+    const existing = normalized[WALL_COMPONENT_TYPE]
+    const nextProps = cloneWallComponentProps(
+      clampWallProps({
+        height: (existing?.props as { height?: number })?.height ?? baseProps.height,
+        width: (existing?.props as { width?: number })?.width ?? baseProps.width,
+        thickness: (existing?.props as { thickness?: number })?.thickness ?? baseProps.thickness,
+      }),
+    )
+
+    normalized[WALL_COMPONENT_TYPE] = {
+      id: existing?.id && existing.id.trim().length ? existing.id : generateUuid(),
+      type: WALL_COMPONENT_TYPE,
+      enabled: existing?.enabled ?? true,
+      props: nextProps,
+      metadata: existing?.metadata ? { ...existing.metadata } : undefined,
     }
   }
 
-  return cloned.length ? cloned : undefined
+  return Object.keys(normalized).length ? normalized : undefined
+}
+
+function listComponentEntries(
+  components?: SceneNodeComponentMap,
+): Array<[NodeComponentType, SceneNodeComponentState<any>]> {
+  if (!components) {
+    return []
+  }
+  return Object.entries(components)
+    .filter((entry): entry is [string, SceneNodeComponentState<any>] => Boolean(entry[1]))
+    .map(([type, state]) => [type as NodeComponentType, state])
+}
+
+function componentCount(components?: SceneNodeComponentMap): number {
+  return components ? Object.keys(components).length : 0
+}
+
+function findComponentEntryById(
+  components: SceneNodeComponentMap | undefined,
+  componentId: string,
+): [NodeComponentType, SceneNodeComponentState<any>] | null {
+  if (!components || !componentId) {
+    return null
+  }
+  for (const [type, state] of listComponentEntries(components)) {
+    if (state.id === componentId) {
+      return [type, state]
+    }
+  }
+  return null
 }
 
 function mergeMaterialProps(base: SceneMaterialProps, overrides?: Partial<SceneMaterialProps> | null): SceneMaterialProps {
@@ -1498,7 +1537,7 @@ async function convertObjectToSceneNode(
 
     tagObjectWithNodeId(runtimeObject, node.id)
     registerRuntimeObject(node.id, runtimeObject)
-    node.components = normalizeNodeComponentStates(node, node.components)
+  node.components = normalizeNodeComponents(node, node.components)
     componentManager.attachRuntime(node, runtimeObject)
     componentManager.syncNode(node)
     context.converted.add(object)
@@ -2215,7 +2254,7 @@ function cloneNode(node: SceneNode): SceneNode {
     ...node,
     nodeType,
     materials,
-    components: normalizeNodeComponentStates(node, node.components),
+  components: normalizeNodeComponents(node, node.components),
     light: node.light
       ? {
           ...node.light,
@@ -5513,7 +5552,7 @@ export const useSceneStore = defineStore('scene', {
       scale?: Vector3Like
       sourceAssetId?: string
       dynamicMesh?: SceneDynamicMesh
-      components?: SceneNodeComponentState[]
+      components?: SceneNodeComponentMap
     }) {
       this.captureHistorySnapshot()
       const id = generateUuid()
@@ -5542,7 +5581,7 @@ export const useSceneStore = defineStore('scene', {
         dynamicMesh: payload.dynamicMesh ? cloneDynamicMeshDefinition(payload.dynamicMesh) : undefined,
       }
 
-      node.components = normalizeNodeComponentStates(node, payload.components)
+  node.components = normalizeNodeComponents(node, payload.components)
 
       registerRuntimeObject(id, payload.object)
       tagObjectWithNodeId(payload.object, id)
@@ -5682,8 +5721,8 @@ export const useSceneStore = defineStore('scene', {
         thickness: dimensions.thickness ?? current.thickness,
       })
 
-      const wallComponent = node.components?.find((component) => component.type === WALL_COMPONENT_TYPE)
-      const componentProps = wallComponent ? (wallComponent.props as WallComponentProps) : current
+  const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined
+  const componentProps = wallComponent ? (wallComponent.props as WallComponentProps) : current
 
       const hasGeometryChange =
         Math.abs(current.height - targetProps.height) > WALL_DIMENSION_EPSILON ||
@@ -5703,42 +5742,29 @@ export const useSceneStore = defineStore('scene', {
 
       visitNode(this.nodes, nodeId, (target) => {
         applyWallComponentPropsToNode(target, targetProps)
-        let componentUpdated = false
-        const components = target.components ?? []
-        const wallIndex = components.findIndex((entry) => entry.type === WALL_COMPONENT_TYPE)
-        let nextComponents = components
-        if (wallIndex !== -1) {
-          const previousProps = components[wallIndex]!.props as WallComponentProps
-          if (
-            Math.abs(previousProps.height - targetProps.height) > WALL_DIMENSION_EPSILON ||
-            Math.abs(previousProps.width - targetProps.width) > WALL_DIMENSION_EPSILON ||
-            Math.abs(previousProps.thickness - targetProps.thickness) > WALL_DIMENSION_EPSILON
-          ) {
-            nextComponents = components.slice()
-            nextComponents[wallIndex] = {
-              ...nextComponents[wallIndex]!,
-              id: nextComponents[wallIndex]!.id || generateUuid(),
-              enabled: nextComponents[wallIndex]!.enabled ?? true,
-              props: cloneWallComponentProps(targetProps),
-            }
-            componentUpdated = true
-          }
-        } else {
-          nextComponents = [
-            ...components,
-            {
-              id: generateUuid(),
-              type: WALL_COMPONENT_TYPE,
-              enabled: true,
-              props: cloneWallComponentProps(targetProps),
-            },
-          ]
-          componentUpdated = true
+        const previous = target.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined
+        const previousProps = previous?.props as WallComponentProps | undefined
+
+        const propsChanged =
+          !previousProps ||
+          Math.abs(previousProps.height - targetProps.height) > WALL_DIMENSION_EPSILON ||
+          Math.abs(previousProps.width - targetProps.width) > WALL_DIMENSION_EPSILON ||
+          Math.abs(previousProps.thickness - targetProps.thickness) > WALL_DIMENSION_EPSILON
+
+        if (!propsChanged && previous) {
+          return
         }
 
-        if (componentUpdated) {
-          target.components = nextComponents
+        const nextComponents: SceneNodeComponentMap = { ...(target.components ?? {}) }
+        nextComponents[WALL_COMPONENT_TYPE] = {
+          id:
+            previous?.id && previous.id.trim().length ? previous.id : generateUuid(),
+          type: WALL_COMPONENT_TYPE,
+          enabled: previous?.enabled ?? true,
+          props: cloneWallComponentProps(targetProps),
+          metadata: previous?.metadata ? { ...previous.metadata } : undefined,
         }
+        target.components = nextComponents
       })
 
       this.nodes = [...this.nodes]
@@ -5758,7 +5784,7 @@ export const useSceneStore = defineStore('scene', {
       if (!definition || !definition.canAttach(target)) {
         return null
       }
-      if (target.components?.some((entry) => entry.type === type)) {
+      if (target.components?.[type]) {
         return null
       }
 
@@ -5773,8 +5799,11 @@ export const useSceneStore = defineStore('scene', {
       this.captureHistorySnapshot()
 
       visitNode(this.nodes, nodeId, (node) => {
-        const existing = node.components ?? []
-        node.components = [...existing, state]
+        const nextComponents: SceneNodeComponentMap = { ...(node.components ?? {}) }
+        nextComponents[type] = {
+          ...state,
+        }
+        node.components = nextComponents
         if (type === WALL_COMPONENT_TYPE) {
           applyWallComponentPropsToNode(node, props as unknown as WallComponentProps)
         }
@@ -5790,20 +5819,21 @@ export const useSceneStore = defineStore('scene', {
     },
     removeNodeComponent(nodeId: string, componentId: string): boolean {
       const target = findNodeById(this.nodes, nodeId)
-      if (!target?.components?.length) {
-        return false
-      }
-      if (!target.components.some((entry) => entry.id === componentId)) {
+      const entry = findComponentEntryById(target?.components, componentId)
+      if (!entry) {
         return false
       }
 
       this.captureHistorySnapshot()
       visitNode(this.nodes, nodeId, (node) => {
-        if (!node.components?.length) {
+        const match = findComponentEntryById(node.components, componentId)
+        if (!match) {
           return
         }
-        const next = node.components.filter((entry) => entry.id !== componentId)
-        node.components = next.length ? next : undefined
+        const [type] = match
+        const nextComponents: SceneNodeComponentMap = { ...(node.components ?? {}) }
+        delete nextComponents[type]
+        node.components = componentCount(nextComponents) ? nextComponents : undefined
       })
 
       this.nodes = [...this.nodes]
@@ -5816,28 +5846,29 @@ export const useSceneStore = defineStore('scene', {
     },
     setNodeComponentEnabled(nodeId: string, componentId: string, enabled: boolean): boolean {
       const target = findNodeById(this.nodes, nodeId)
-      if (!target?.components?.length) {
+      const match = findComponentEntryById(target?.components, componentId)
+      if (!match) {
         return false
       }
-      const component = target.components.find((entry) => entry.id === componentId)
-      if (!component || (component.enabled ?? true) === enabled) {
+  const [, component] = match
+  if ((component.enabled ?? true) === enabled) {
         return false
       }
 
       this.captureHistorySnapshot()
       visitNode(this.nodes, nodeId, (node) => {
-        if (!node.components?.length) {
+        const current = findComponentEntryById(node.components, componentId)
+        if (!current) {
           return
         }
-        node.components = node.components.map((entry) => {
-          if (entry.id !== componentId) {
-            return entry
-          }
-          return {
-            ...entry,
-            enabled,
-          }
-        })
+        const [currentType, state] = current
+        const nextComponents: SceneNodeComponentMap = { ...(node.components ?? {}) }
+        nextComponents[currentType] = {
+          ...state,
+          type: currentType,
+          enabled,
+        }
+        node.components = nextComponents
       })
 
       this.nodes = [...this.nodes]
@@ -5849,33 +5880,28 @@ export const useSceneStore = defineStore('scene', {
       return true
     },
     toggleNodeComponentEnabled(nodeId: string, componentId: string): boolean {
-      const target = findNodeById(this.nodes, nodeId)
-      if (!target?.components?.length) {
+      const match = findComponentEntryById(findNodeById(this.nodes, nodeId)?.components, componentId)
+      if (!match) {
         return false
       }
-      const component = target.components.find((entry) => entry.id === componentId)
-      if (!component) {
-        return false
-      }
+      const [, component] = match
       return this.setNodeComponentEnabled(nodeId, componentId, !(component.enabled ?? true))
     },
   updateNodeComponentProps(nodeId: string, componentId: string, patch: Partial<Record<string, unknown>>): boolean {
       const target = findNodeById(this.nodes, nodeId)
-      if (!target?.components?.length) {
+      const match = findComponentEntryById(target?.components, componentId)
+      if (!match) {
         return false
       }
-      const component = target.components.find((entry) => entry.id === componentId)
-      if (!component) {
-        return false
-      }
+      const [type, component] = match
 
-      const definition = componentManager.getDefinition(component.type)
+      const definition = componentManager.getDefinition(type)
       if (!definition) {
         return false
       }
 
       let nextProps: Record<string, unknown> | WallComponentProps
-      if (component.type === WALL_COMPONENT_TYPE) {
+      if (type === WALL_COMPONENT_TYPE) {
         const currentProps = component.props as WallComponentProps
         const merged = clampWallProps({
           height: (patch.height as number | undefined) ?? currentProps.height,
@@ -5903,20 +5929,21 @@ export const useSceneStore = defineStore('scene', {
       this.captureHistorySnapshot()
 
       visitNode(this.nodes, nodeId, (node) => {
-        if (!node.components?.length) {
+        const current = findComponentEntryById(node.components, componentId)
+        if (!current) {
           return
         }
-        node.components = node.components.map((entry) => {
-          if (entry.id !== componentId) {
-            return entry
-          }
-          return {
-            ...entry,
-            props: nextProps,
-          }
-        })
+        const [currentType, state] = current
+        const nextComponents: SceneNodeComponentMap = { ...(node.components ?? {}) }
+        nextComponents[currentType] = {
+          ...state,
+          type: currentType,
+          props: nextProps,
+        }
 
-        if (component.type === WALL_COMPONENT_TYPE) {
+        node.components = nextComponents
+
+        if (currentType === WALL_COMPONENT_TYPE) {
           applyWallComponentPropsToNode(node, nextProps as WallComponentProps)
         }
       })

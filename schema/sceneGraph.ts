@@ -9,7 +9,9 @@ import type {
   SceneJsonExportDocument, 
   SceneMaterial, SceneNode, 
   SceneNodeMaterial, 
-  SceneMaterialTextureSlotMap } from '@harmony/schema';
+  SceneMaterialTextureSlotMap,
+  SceneNodeComponentMap,
+ } from '@harmony/schema';
 
 const DEFAULT_TEXTURE_SETTINGS: SceneMaterialTextureSettings = {
   wrapS: 'ClampToEdgeWrapping',
@@ -48,7 +50,7 @@ type SceneNodeWithExtras = SceneNode & {
     target?: THREE.Vector3;
   };
   dynamicMesh?: any;
-  components?: any[];
+  components?: SceneNodeComponentMap;
 };
 
 interface AssetSourceArrayBuffer {

@@ -9,6 +9,7 @@ import GroundPanel from '@/components/inspector/GroundPanel.vue'
 import BehaviorPanel from '@/components/inspector/BehaviorPanel.vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
+import type { SceneNodeComponentState } from '@harmony/schema'
 
 import {
   BEHAVIOR_COMPONENT_TYPE,
@@ -39,13 +40,17 @@ const isGroundNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'G
 const showMaterialPanel = computed(
   () => !isLightNode.value && (selectedNode.value?.materials?.length ?? 0) > 0,
 )
-const nodeComponents = computed(() => selectedNode.value?.components ?? [])
+const nodeComponents = computed<SceneNodeComponentState[]>(() =>
+  Object.values(selectedNode.value?.components ?? {}).filter(
+    (entry): entry is SceneNodeComponentState => Boolean(entry),
+  ),
+)
 const availableComponents = computed(() => {
   const node = selectedNode.value
   if (!node) {
     return []
   }
-  const existingTypes = new Set((node.components ?? []).map((entry) => entry.type))
+  const existingTypes = new Set(Object.keys(node.components ?? {}))
   return componentManager
     .listDefinitions()
     .filter((definition) => definition.canAttach(node) && !existingTypes.has(definition.type))
@@ -60,7 +65,7 @@ function computeDefaultExpandedPanels() {
     panels.push('light')
   }
 
-  const hasComponents = (node?.components?.length ?? 0) > 0
+  const hasComponents = Object.keys(node?.components ?? {}).length > 0
   if (hasComponents || !node) {
     panels.push('components')
   }
@@ -70,7 +75,7 @@ function computeDefaultExpandedPanels() {
     panels.push('material')
   }
 
-  node?.components?.forEach((component) => {
+  Object.values(node?.components ?? {}).forEach((component) => {
     if (component?.type) {
       panels.push(component.type)
     }
@@ -288,7 +293,7 @@ function handleAddComponent(type: string) {
       </div>
 
       <div class="component-actions">
-        <v-menu location="top" origin="auto" transition="null">
+        <v-menu location="top" origin="auto" transition="null" v-if="availableComponents.length">
           <template #activator="{ props }">
             <v-btn v-bind="props"
                   size="small" prepend-icon="mdi-plus">
@@ -312,6 +317,14 @@ function handleAddComponent(type: string) {
             </v-list-item>
           </v-list>
         </v-menu>
+        <v-btn
+          v-else
+          size="small"
+          prepend-icon="mdi-check"
+          disabled
+        >
+          All Components Added
+        </v-btn>
       </div>
       </v-expansion-panels>
     </div>

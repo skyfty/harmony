@@ -138,6 +138,8 @@ export interface SceneNodeComponentState<TProps = Record<string, unknown>> {
   metadata?: Record<string, unknown>
 }
 
+export type SceneNodeComponentMap = Partial<Record<NodeComponentType, SceneNodeComponentState<any>>>
+
 export type BehaviorActionType = 'click' | 'hover' | 'drag'
 
 export type BehaviorScriptType = 'showAlert'
@@ -226,7 +228,7 @@ export interface SceneNode {
   isPlaceholder?: boolean;
   materials?: SceneNodeMaterial[];
   children?: SceneNode[];
-  components?: SceneNodeComponentState<any>[];
+  components?: SceneNodeComponentMap;
   light?: LightNodeProperties;
   camera?: CameraNodeProperties;
   dynamicMesh?: SceneDynamicMesh;
