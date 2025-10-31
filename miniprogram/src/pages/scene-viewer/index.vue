@@ -14,6 +14,17 @@
         class="viewer-canvas"
         @useCanvas="handleUseCanvas"
       />
+      <view
+        v-if="behaviorAlertVisible"
+        class="viewer-behavior-overlay"
+        @tap.self="dismissBehaviorAlert"
+      >
+        <view class="viewer-behavior-dialog">
+          <text class="viewer-behavior-title">{{ behaviorAlertTitle }}</text>
+          <text v-if="behaviorAlertMessage" class="viewer-behavior-message">{{ behaviorAlertMessage }}</text>
+          <button class="viewer-behavior-button" @tap="dismissBehaviorAlert">确定</button>
+        </view>
+      </view>
       <view v-if="loading" class="viewer-overlay">
         <text>正在加载场景…</text>
       </view>
@@ -108,6 +119,22 @@ const behaviorRaycaster = new THREE.Raycaster();
 const behaviorPointer = new THREE.Vector2();
 let behaviorTapListener: ((event: TouchEvent) => void) | null = null;
 
+// Behavior alert overlay state
+const behaviorAlertVisible = ref(false);
+const behaviorAlertTitle = ref('');
+const behaviorAlertMessage = ref('');
+
+function presentBehaviorAlert(title: string, message: string) {
+  const normalizedTitle = (title || '').trim();
+  behaviorAlertTitle.value = normalizedTitle || '提示';
+  behaviorAlertMessage.value = message || '';
+  behaviorAlertVisible.value = true;
+}
+
+function dismissBehaviorAlert() {
+  behaviorAlertVisible.value = false;
+}
+
 function cloneSkyboxSettings(settings: SceneSkyboxSettings): SceneSkyboxSettings {
   return { ...settings };
 }
@@ -179,11 +206,7 @@ function indexSceneObjects(root: THREE.Object3D) {
 function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
   switch (event.type) {
     case 'show-alert':
-      uni.showModal({
-        title: event.params.title?.trim() || '提示',
-        content: event.params.message || '',
-        showCancel: false,
-      });
+      presentBehaviorAlert(event.params.title ?? '', event.params.message ?? '');
       break;
     default:
       break;
@@ -445,6 +468,7 @@ function teardownRenderer() {
   }
   previewComponentManager.reset();
   resetBehaviorRuntime();
+  behaviorAlertVisible.value = false;
   previewNodeMap.clear();
   nodeObjectMap.clear();
   controls.dispose();
@@ -751,5 +775,50 @@ onUnmounted(() => {
   font-size: 12px;
   color: #cc8b00;
   line-height: 1.4;
+}
+
+/* Behavior alert overlay (floats above canvas) */
+.viewer-behavior-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(0, 0, 0, 0.35);
+  z-index: 2000; /* above loading/error overlays */
+}
+
+.viewer-behavior-dialog {
+  min-width: 240px;
+  max-width: 80vw;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background-color: rgba(18, 18, 32, 0.96);
+  color: #f5f7ff;
+  text-align: center;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+}
+
+.viewer-behavior-title {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.viewer-behavior-message {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 14px;
+  opacity: 0.9;
+}
+
+.viewer-behavior-button {
+  padding: 8px 14px;
+  border: none;
+  border-radius: 18px;
+  background-image: linear-gradient(135deg, #1f7aec, #5d9bff);
+  color: #ffffff;
+  font-size: 14px;
 }
 </style>
