@@ -2406,7 +2406,7 @@ export async function buildPackageAssetMapForExport(
       assetIdsToEmbed.add(assetId)
       return
     }
-    if (sourceType === 'package' && entry?.source?.providerId === 'preset') {
+    if (sourceType === 'package') {
       assetIdsToEmbed.add(assetId)
     }
   })

@@ -6,7 +6,6 @@ import InspectorPanel from '@/components/layout/InspectorPanel.vue'
 import MaterialDetailsPanel from '@/components/inspector/MaterialDetailsPanel.vue'
 import ProjectPanel from '@/components/layout/ProjectPanel.vue'
 import SceneViewport, { type SceneViewportHandle } from '@/components/editor/SceneViewport.vue'
-import PreviewOverlay from '@/components/layout/PreviewOverlay.vue'
 import MenuBar from './MenuBar.vue'
 import SceneManagerDialog from '@/components/layout/SceneManagerDialog.vue'
 import NewSceneDialog from '@/components/layout/NewSceneDialog.vue'
@@ -1364,16 +1363,6 @@ onBeforeUnmount(() => {
       @confirm="handleExportDialogConfirm"
       @cancel="handleExportDialogCancel"
     />
-    <div v-if="previewSession" class="preview-overlay-container">
-      <PreviewOverlay
-        :src="previewSession.url"
-        :scene-name="previewSession.sceneName"
-        :camera-seed="previewSession.cameraSeed ?? undefined"
-        @ready="handlePreviewReady"
-        @error="handlePreviewError"
-        @close="handlePreviewClose"
-      />
-    </div>
   </div>
 </template>
 
