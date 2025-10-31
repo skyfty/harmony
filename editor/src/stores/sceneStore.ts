@@ -503,7 +503,7 @@ function createVector(x: number, y: number, z: number): THREE.Vector3 {
   return new THREE.Vector3(x, y, z)
 }
 
-function computeForwardVector(position: THREE.Vector3, target: THREE.Vector3): THREE.Vector3 {
+function computeForwardVector(position: Vector3Like, target: Vector3Like): THREE.Vector3 {
   const dx = target.x - position.x
   const dy = target.y - position.y
   const dz = target.z - position.z
@@ -516,7 +516,7 @@ function computeForwardVector(position: THREE.Vector3, target: THREE.Vector3): T
 
 type LightNodeExtras = Partial<Omit<LightNodeProperties, 'type' | 'color' | 'intensity' | 'target'>>
 
-function cloneDynamicMeshVector3(vec: THREE.Vector3): THREE.Vector3 {
+function cloneDynamicMeshVector3(vec: Vector3Like): THREE.Vector3 {
   return new THREE.Vector3(vec.x, vec.y, vec.z)
 }
 
@@ -2721,7 +2721,7 @@ function resolveUniqueSceneName(baseName: string, existing: Set<string>): string
   return candidate
 }
 
-function vectorsEqual(a: THREE.Vector3, b: THREE.Vector3): boolean {
+function vectorsEqual(a: Vector3Like, b: Vector3Like): boolean {
   return a.x === b.x && a.y === b.y && a.z === b.z
 }
 
@@ -3595,7 +3595,7 @@ export const useSceneStore = defineStore('scene', {
       this.projectPanelTreeSize = normalized
     },
 
-    updateNodeTransform(payload: { id: string; position: THREE.Vector3; rotation: THREE.Vector3; scale: THREE.Vector3 }) {
+  updateNodeTransform(payload: { id: string; position: Vector3Like; rotation: Vector3Like; scale: Vector3Like }) {
       const target = findNodeById(this.nodes, payload.id)
       if (!target) {
         return
@@ -5165,7 +5165,7 @@ export const useSceneStore = defineStore('scene', {
       return true
     },
 
-    addPlaceholderNode(asset: ProjectAsset, transform: { position: THREE.Vector3; rotation: THREE.Vector3; scale: THREE.Vector3 }) {
+  addPlaceholderNode(asset: ProjectAsset, transform: { position: Vector3Like; rotation: Vector3Like; scale: Vector3Like }) {
       const id = generateUuid()
       const node: SceneNode = {
         id,
@@ -5527,9 +5527,9 @@ export const useSceneStore = defineStore('scene', {
       nodeType: SceneNodeType
       object: Object3D
       name?: string
-      position?: THREE.Vector3
-      rotation?: THREE.Vector3
-      scale?: THREE.Vector3
+      position?: Vector3Like
+      rotation?: Vector3Like
+      scale?: Vector3Like
       sourceAssetId?: string
       dynamicMesh?: SceneDynamicMesh
       components?: SceneNodeComponentState[]

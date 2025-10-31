@@ -6,7 +6,12 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
-      "@schema/*": ["../schema/*"]
+      "@schema/*": ["../schema/*"],
+      "three": ["node_modules/@types/three"],
+      "three/*": [
+        "node_modules/@types/three/*",
+        "node_modules/three/*"
+      ]
     },
 
     /* Linting */

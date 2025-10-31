@@ -162,27 +162,6 @@ export default class Loader {
       });
 
       switch (extension) {
-        case '3dm': {
-          reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-            const contents = event.target?.result;
-            if (!contents) return;
-
-            const { Rhino3dmLoader } = await import('three/addons/loaders/3DMLoader.js');
-
-            const loader = new Rhino3dmLoader();
-            loader.setLibraryPath('three/addons/libs/rhino3dm/');
-            loader.parse(contents as ArrayBuffer, (object) => {
-              object.name = filename;
-              scope.emit('loaded', object);
-            }, (error) => {
-              console.error(error);
-              scope.emit('loaded', null);
-            });
-          });
-          reader.readAsArrayBuffer(file);
-          break;
-        }
-
         case '3ds': {
           reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
             const { TDSLoader } = await import('three/addons/loaders/TDSLoader.js');
@@ -327,43 +306,6 @@ export default class Loader {
 
               scope.emit('loaded', scene);
             });
-          });
-          reader.readAsText(file);
-          break;
-        }
-
-        case 'js':
-        case 'json': {
-          reader.addEventListener('load', (event: ProgressEvent<FileReader>) => {
-            const contents = event.target?.result as string;
-            if (!contents) return;
-
-            if (contents.indexOf('postMessage') !== -1) {
-              const blob = new Blob([contents], { type: 'text/javascript' });
-              const url = URL.createObjectURL(blob);
-
-              const worker = new Worker(url);
-
-              worker.onmessage = ({ data }) => {
-                const payload = data;
-                payload.metadata = { version: 2 };
-                scope.handleJSON(payload);
-              };
-
-              worker.postMessage(Date.now());
-              return;
-            }
-
-            let data: unknown;
-
-            try {
-              data = JSON.parse(contents);
-            } catch (error) {
-              alert(error);
-              return;
-            }
-
-            scope.handleJSON(data);
           });
           reader.readAsText(file);
           break;
@@ -658,52 +600,6 @@ export default class Loader {
       listener(payload);
     });
   }
-
-  private handleJSON = (data: any): void => {
-    if (data.metadata === undefined) {
-      data.metadata = { type: 'Geometry' };
-    }
-
-    if (data.metadata.type === undefined) {
-      data.metadata.type = 'Geometry';
-    }
-
-    if (data.metadata.formatVersion !== undefined) {
-      data.metadata.version = data.metadata.formatVersion;
-    }
-
-    switch (data.metadata.type.toLowerCase()) {
-      case 'buffergeometry': {
-        const loader = new THREE.BufferGeometryLoader();
-        const result = loader.parse(data);
-
-        const mesh = new THREE.Mesh(result);
-        this.emit('loaded', mesh);
-        break;
-      }
-
-      case 'geometry':
-        console.error('Loader: "Geometry" is no longer supported.');
-        break;
-
-      case 'object': {
-        const loader = new THREE.ObjectLoader();
-        loader.setResourcePath(this.texturePath);
-
-        loader.parse(data, (result) => {
-          this.emit('loaded', result);
-        });
-        break;
-      }
-
-      case 'app':
-        break;
-
-      default:
-        console.warn(`Loader: Unhandled metadata type ${data.metadata.type}.`);
-        break;
-    }
-  };
 
   private handleZIP = async (contents: ArrayBuffer): Promise<void> => {
   const zip = unzipSync(new Uint8Array(contents)) as Record<string, Uint8Array>;

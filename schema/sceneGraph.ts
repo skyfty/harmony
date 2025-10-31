@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import type { GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import type { 
@@ -104,12 +105,19 @@ export interface SceneGraphBuildOptions {
 class ResourceCache {
   private packageEntries: Map<string, { provider: string; value: string } | null> = new Map();
   private assetSourceCache: Map<string, Promise<AssetSource | null>> = new Map();
+  private readonly document: SceneJsonExportDocument;
+  private readonly options: SceneGraphBuildOptions;
+  private readonly warn: (message: string) => void;
 
   constructor(
-    private readonly document: SceneJsonExportDocument,
-    private readonly options: SceneGraphBuildOptions,
-    private readonly warn: (message: string) => void,
-  ) {}
+    document: SceneJsonExportDocument,
+    options: SceneGraphBuildOptions,
+    warn: (message: string) => void,
+  ) {
+    this.document = document;
+    this.options = options;
+    this.warn = warn;
+  }
 
   async acquireAssetSource(assetId: string): Promise<AssetSource | null> {
     if (!assetId) {
@@ -340,11 +348,13 @@ class SceneGraphBuilder {
   private readonly gltfLoader: GLTFLoader;
   private readonly dracoLoader: DRACOLoader;
   private readonly disposableUrls: string[] = [];
+  private readonly document: SceneJsonExportDocument;
 
   constructor(
-    private readonly document: SceneJsonExportDocument,
-    private readonly options: SceneGraphBuildOptions,
+    document: SceneJsonExportDocument,
+    options: SceneGraphBuildOptions,
   ) {
+    this.document = document;
     this.root = new THREE.Group();
     this.root.name = document.name ?? 'Scene';
     this.textureLoader = new THREE.TextureLoader(this.loadingManager);
@@ -892,11 +902,11 @@ class SceneGraphBuilder {
     return new Promise((resolve) => {
       this.textureLoader.load(
         url,
-        (texture) => {
+        (texture: THREE.Texture) => {
           resolve(texture);
         },
         undefined,
-        (error) => {
+        (error: unknown) => {
           console.warn('纹理加载错误', error);
           resolve(null);
         },
@@ -1026,13 +1036,13 @@ class SceneGraphBuilder {
   }
 
   private prepareImportedObject(object: THREE.Object3D): void {
-    object.traverse((child) => {
+    object.traverse((child: THREE.Object3D) => {
       const mesh = child as unknown as THREE.Mesh;
       if (mesh && (mesh as any).isMesh) {
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         if (Array.isArray(mesh.material)) {
-          mesh.material.forEach((mat) => {
+          mesh.material.forEach((mat: THREE.Material | null | undefined) => {
             if (mat) {
               mat.side = THREE.DoubleSide;
               mat.needsUpdate = true;
@@ -1052,10 +1062,10 @@ class SceneGraphBuilder {
       this.gltfLoader.parse(
         buffer,
         '',
-        (gltf) => {
+        (gltf: GLTF) => {
           resolve({ root: gltf.scene ?? null, animations: Array.isArray(gltf.animations) ? gltf.animations : [] });
         },
-        (error) => {
+        (error: unknown) => {
           reject(error);
         },
       );

@@ -155,4 +155,3 @@ export function readStoredScenePreviewSnapshot(): ScenePreviewSnapshot | null {
     return null
   }
 }
-*** End of File

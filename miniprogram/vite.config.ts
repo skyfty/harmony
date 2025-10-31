@@ -13,6 +13,10 @@ export default defineConfig({
   resolve: {
     alias: {
       '@schema': fileURLToPath(new URL('../schema', import.meta.url)),
+      // Ensure modules imported from files outside project root (e.g. ../schema)
+      // resolve "three" to this package's installed dependency
+      'three': fileURLToPath(new URL('./node_modules/three', import.meta.url)),
+      'three/examples': fileURLToPath(new URL('./node_modules/three/examples', import.meta.url)),
     },
   },
   

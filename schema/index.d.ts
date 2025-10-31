@@ -1,6 +1,7 @@
 
 import * as THREE from 'three'
 
+export type Vector2Like = THREE.Vector2 | { x: number; y: number }
 export type Vector3Like = THREE.Vector3 | { x: number; y: number; z: number }
 
 export type SceneNodeDownloadStatus = 'idle' | 'downloading' | 'ready' | 'error';
@@ -37,10 +38,10 @@ export interface SceneMaterialTextureSettings {
   wrapS: SceneTextureWrapMode;
   wrapT: SceneTextureWrapMode;
   wrapR: SceneTextureWrapMode;
-  offset: THREE.Vector2;
-  repeat: THREE.Vector2;
+  offset: Vector2Like;
+  repeat: Vector2Like;
   rotation: number;
-  center: THREE.Vector2;
+  center: Vector2Like;
   matrixAutoUpdate: boolean;
   generateMipmaps: boolean;
   premultiplyAlpha: boolean;
