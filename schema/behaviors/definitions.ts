@@ -3,6 +3,7 @@ import type {
   BehaviorComponentProps,
   BehaviorScriptType,
   SceneBehavior,
+  SceneBehaviorMap,
   SceneBehaviorScriptBinding,
   ShowAlertBehaviorParams,
 } from '../index'
@@ -70,9 +71,11 @@ export function findBehaviorScript<TParams = unknown>(
   return (scriptDefinitions.find((entry) => entry.id === id) as BehaviorScriptDefinition<TParams> | undefined) ?? null
 }
 
+export type BehaviorMap = SceneBehaviorMap
+
 export function createEmptyBehaviorComponentProps(): BehaviorComponentProps {
   return {
-    behaviors: [],
+    behaviors: {},
   }
 }
 
@@ -100,11 +103,54 @@ export function cloneBehavior(input: SceneBehavior): SceneBehavior {
   }
 }
 
-export function cloneBehaviorList(list: SceneBehavior[] | null | undefined): SceneBehavior[] {
-  if (!Array.isArray(list) || !list.length) {
+export function cloneBehaviorMap(map: BehaviorMap | null | undefined): BehaviorMap {
+  if (!map) {
+    return {}
+  }
+  if (Array.isArray(map)) {
+    return behaviorListToMap(map)
+  }
+  const next: BehaviorMap = {}
+  ;(Object.keys(map) as BehaviorActionType[]).forEach((action) => {
+    const behavior = map[action]
+    if (!behavior) {
+      return
+    }
+    next[action] = cloneBehavior(behavior)
+  })
+  return next
+}
+
+export function behaviorMapToList(map: BehaviorMap | null | undefined): SceneBehavior[] {
+  if (!map) {
     return []
   }
-  return list.map((entry) => cloneBehavior(entry))
+  if (Array.isArray(map)) {
+    return map.map((entry) => cloneBehavior(entry))
+  }
+  const list: SceneBehavior[] = []
+  ;(Object.keys(map) as BehaviorActionType[]).forEach((action) => {
+    const behavior = map[action]
+    if (!behavior) {
+      return
+    }
+    list.push(cloneBehavior(behavior))
+  })
+  return list
+}
+
+export function behaviorListToMap(list: SceneBehavior[] | null | undefined): BehaviorMap {
+  if (!Array.isArray(list) || !list.length) {
+    return {}
+  }
+  const map: BehaviorMap = {}
+  list.forEach((entry) => {
+    if (!entry) {
+      return
+    }
+    map[entry.action] = cloneBehavior(entry)
+  })
+  return map
 }
 
 export function createBehaviorTemplate(

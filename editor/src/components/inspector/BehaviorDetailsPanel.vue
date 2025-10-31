@@ -70,6 +70,22 @@ watch(
   { deep: true },
 )
 
+watch(
+  () => props.actions,
+  (actions) => {
+    if (!actions?.length) {
+      return
+    }
+    if (!actions.find((entry) => entry.id === localBehavior.action)) {
+      const first = actions[0]
+      if (first) {
+        localBehavior.action = first.id
+      }
+    }
+  },
+  { immediate: true, deep: true },
+)
+
 const selectedAction = computed<BehaviorActionType>({
   get() {
     return localBehavior.action

@@ -12,10 +12,13 @@ import { useSceneStore } from '@/stores/sceneStore'
 import { BEHAVIOR_COMPONENT_TYPE } from '@schema/components'
 import {
   cloneBehavior,
-  cloneBehaviorList,
+  cloneBehaviorMap,
+  behaviorMapToList,
   createBehaviorTemplate,
   findBehaviorAction,
   findBehaviorScript,
+  type BehaviorActionDefinition,
+  type BehaviorMap,
   listBehaviorActions,
   listBehaviorScripts,
 } from '@schema/behaviors/definitions'
@@ -31,14 +34,16 @@ const behaviorComponent = computed(() =>
     | undefined,
 )
 
-const behaviors = computed<SceneBehavior[]>(() => {
+const behaviorMap = computed<BehaviorMap>(() => {
   const component = behaviorComponent.value
   if (!component) {
-    return []
+    return {}
   }
   const props = component.props as BehaviorComponentProps | undefined
-  return props?.behaviors ?? []
+  return props?.behaviors ?? {}
 })
+
+const behaviors = computed<SceneBehavior[]>(() => behaviorMapToList(behaviorMap.value))
 
 const actionOptions = listBehaviorActions()
 const scriptOptions = listBehaviorScripts()
@@ -47,6 +52,26 @@ const detailsVisible = ref(false)
 const detailsMode = ref<'create' | 'edit'>('create')
 const editingBehavior = ref<SceneBehavior | null>(null)
 const editingBehaviorId = ref<string | null>(null)
+const editingOriginalAction = ref<BehaviorActionType | null>(null)
+const detailsActions = ref<BehaviorActionDefinition[]>(actionOptions)
+
+function resetDetailsState(): void {
+  detailsVisible.value = false
+  editingBehavior.value = null
+  editingBehaviorId.value = null
+  editingOriginalAction.value = null
+  detailsActions.value = actionOptions
+}
+
+function listUnusedActions(excludedAction: BehaviorActionType | null = null): BehaviorActionDefinition[] {
+  const used = new Set(Object.keys(behaviorMap.value ?? {}) as BehaviorActionType[])
+  if (excludedAction) {
+    used.delete(excludedAction)
+  }
+  return actionOptions.filter((option) => !used.has(option.id))
+}
+
+const canAddBehavior = computed(() => listUnusedActions().length > 0)
 
 function resolveActionLabel(action: BehaviorActionType): string {
   return findBehaviorAction(action)?.label ?? 'Unknown Action'
@@ -56,10 +81,16 @@ function resolveScriptLabel(script: BehaviorScriptType): string {
   return findBehaviorScript(script)?.label ?? 'Unknown Script'
 }
 
-function openDetails(mode: 'create' | 'edit', behavior: SceneBehavior) {
+function openDetails(
+  mode: 'create' | 'edit',
+  behavior: SceneBehavior,
+  allowedActions: BehaviorActionDefinition[],
+) {
   detailsMode.value = mode
   editingBehavior.value = cloneBehavior(behavior)
   editingBehaviorId.value = behavior.id || null
+  editingOriginalAction.value = behavior.action
+  detailsActions.value = allowedActions.length ? allowedActions : actionOptions
   detailsVisible.value = true
 }
 
@@ -67,22 +98,29 @@ function handleAddBehavior() {
   if (!behaviorComponent.value) {
     return
   }
-  const template = createBehaviorTemplate('click', 'showAlert')
-  openDetails('create', template)
+  const availableActions = listUnusedActions()
+  if (!availableActions.length) {
+    console.warn('All behavior actions are already in use for this node.')
+    return
+  }
+  const templateAction = availableActions[0]?.id ?? 'click'
+  const template = createBehaviorTemplate(templateAction, 'showAlert')
+  openDetails('create', template, availableActions)
 }
 
 function handleEditBehavior(behavior: SceneBehavior) {
-  openDetails('edit', behavior)
+  const availableActions = listUnusedActions(behavior.action)
+  openDetails('edit', behavior, availableActions)
 }
 
-function commitBehaviors(nextList: SceneBehavior[]): void {
+function commitBehaviors(nextMap: BehaviorMap): void {
   const component = behaviorComponent.value
   const nodeId = selectedNodeId.value
   if (!component || !nodeId) {
     return
   }
   sceneStore.updateNodeComponentProps(nodeId, component.id, {
-    behaviors: cloneBehaviorList(nextList),
+    behaviors: cloneBehaviorMap(nextMap),
   })
 }
 
@@ -91,32 +129,39 @@ function handleSaveBehavior(behavior: SceneBehavior) {
   if (!component) {
     return
   }
-  const current = cloneBehaviorList(behaviors.value)
-  if (detailsMode.value === 'create') {
-    const id = generateUuid()
-    current.push({
-      ...cloneBehavior(behavior),
-      id,
-    })
-  } else if (editingBehaviorId.value) {
-    const index = current.findIndex((entry) => entry.id === editingBehaviorId.value)
-    if (index !== -1) {
-      current[index] = {
-        ...cloneBehavior(behavior),
-        id: editingBehaviorId.value,
-      }
-    }
+  const current = cloneBehaviorMap(behaviorMap.value)
+  const action = behavior.action
+  const originalAction = editingOriginalAction.value
+  const isCreate = detailsMode.value === 'create'
+
+  if (!isCreate && originalAction && originalAction !== action) {
+    delete current[originalAction]
   }
+
+  const existing = current[action]
+  const isSameAction = !isCreate && originalAction === action
+  if (existing && !isSameAction) {
+    console.warn(`Behavior action "${action}" already exists on this node.`)
+    return
+  }
+
+  const id = isCreate ? generateUuid() : editingBehaviorId.value ?? existing?.id ?? generateUuid()
+  current[action] = {
+    ...cloneBehavior(behavior),
+    id,
+    action,
+  }
+
   commitBehaviors(current)
-  detailsVisible.value = false
-  editingBehavior.value = null
-  editingBehaviorId.value = null
+  resetDetailsState()
 }
 
-function handleDeleteBehavior(id: string) {
-  const current = cloneBehaviorList(behaviors.value)
-  const next = current.filter((entry) => entry.id !== id)
-  commitBehaviors(next)
+function handleDeleteBehavior(action: BehaviorActionType) {
+  const current = cloneBehaviorMap(behaviorMap.value)
+  if (current[action]) {
+    delete current[action]
+    commitBehaviors(current)
+  }
 }
 
 function handleToggleComponent() {
@@ -148,6 +193,7 @@ function handleRemoveComponent() {
             icon="mdi-plus"
             size="small"
             variant="text"
+            :disabled="!canAddBehavior"
             @click.stop="handleAddBehavior()"
           >
           </v-btn>
@@ -179,7 +225,7 @@ function handleRemoveComponent() {
         <div v-if="behaviors.length" class="behavior-list">
           <div
             v-for="behavior in behaviors"
-            :key="behavior.id"
+            :key="behavior.action"
             class="behavior-item"
           >
             <div class="behavior-item__info">
@@ -209,7 +255,7 @@ function handleRemoveComponent() {
                 size="small"
                 variant="text"
                 color="error"
-                @click.stop="handleDeleteBehavior(behavior.id)"
+                @click.stop="handleDeleteBehavior(behavior.action)"
               >
                 <v-icon size="18">mdi-delete-outline</v-icon>
               </v-btn>
@@ -225,9 +271,9 @@ function handleRemoveComponent() {
     :visible="detailsVisible"
     :mode="detailsMode"
     :behavior="editingBehavior"
-    :actions="actionOptions"
+    :actions="detailsActions"
     :scripts="scriptOptions"
-    @close="detailsVisible = false"
+  @close="resetDetailsState()"
     @save="handleSaveBehavior"
   />
 </template>

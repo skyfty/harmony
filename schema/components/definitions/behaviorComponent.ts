@@ -2,7 +2,7 @@ import type { Object3D } from 'three'
 import type { BehaviorComponentProps, SceneNode, SceneNodeComponentState } from '../../index'
 import { Component, type ComponentRuntimeContext } from '../Component'
 import { componentManager, type ComponentDefinition } from '../componentManager'
-import { createEmptyBehaviorComponentProps } from '../../behaviors/definitions'
+import { cloneBehaviorMap, createEmptyBehaviorComponentProps } from '../../behaviors/definitions'
 import {
   registerBehaviorComponent,
   unregisterBehaviorComponent,
@@ -20,7 +20,7 @@ class BehaviorComponent extends Component<BehaviorComponentProps> {
   onInit(): void {
     registerBehaviorComponent(
       this.context.nodeId,
-      this.context.getProps().behaviors ?? [],
+      this.context.getProps().behaviors ?? {},
       this.context.getRuntimeObject(),
     )
   }
@@ -30,7 +30,7 @@ class BehaviorComponent extends Component<BehaviorComponentProps> {
   }
 
   onPropsUpdated(next: Readonly<BehaviorComponentProps>): void {
-    updateBehaviorComponent(this.context.nodeId, next.behaviors ?? [])
+    updateBehaviorComponent(this.context.nodeId, next.behaviors ?? {})
   }
 
   onDestroy(): void {
@@ -64,7 +64,7 @@ export function createBehaviorComponentState(
 ): SceneNodeComponentState<BehaviorComponentProps> {
   const defaults = behaviorComponentDefinition.createDefaultProps(node)
   const props: BehaviorComponentProps = {
-    behaviors: overrides?.behaviors ?? defaults.behaviors,
+    behaviors: cloneBehaviorMap(overrides?.behaviors ?? defaults.behaviors),
   }
   return {
     id: options.id ?? '',

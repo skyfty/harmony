@@ -2,10 +2,11 @@ import type { Object3D } from 'three'
 import type {
   BehaviorActionType,
   SceneBehavior,
+  SceneBehaviorMap,
   SceneBehaviorScriptBinding,
   ShowAlertBehaviorParams,
 } from '../index'
-import { cloneBehaviorList, ensureBehaviorParams } from './definitions'
+import { behaviorMapToList, ensureBehaviorParams } from './definitions'
 
 export type BehaviorTriggerContext = {
   pointerEvent?: PointerEvent | MouseEvent | TouchEvent
@@ -30,6 +31,8 @@ type RegistryEntry = {
   object: Object3D | null
 }
 
+type BehaviorMap = SceneBehaviorMap
+
 const registry = new Map<string, RegistryEntry>()
 
 function sanitizeBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorScriptBinding {
@@ -51,23 +54,23 @@ export function resetBehaviorRuntime(): void {
 
 export function registerBehaviorComponent(
   nodeId: string,
-  behaviors: SceneBehavior[] = [],
+  behaviors: BehaviorMap = {},
   object: Object3D | null,
 ): void {
   registry.set(nodeId, {
     nodeId,
-    behaviors: sanitizeBehaviorList(cloneBehaviorList(behaviors)),
+    behaviors: sanitizeBehaviorList(behaviorMapToList(behaviors)),
     object,
   })
 }
 
-export function updateBehaviorComponent(nodeId: string, behaviors: SceneBehavior[]): void {
+export function updateBehaviorComponent(nodeId: string, behaviors: BehaviorMap): void {
   const entry = registry.get(nodeId)
   if (!entry) {
     registerBehaviorComponent(nodeId, behaviors, null)
     return
   }
-  entry.behaviors = sanitizeBehaviorList(cloneBehaviorList(behaviors))
+  entry.behaviors = sanitizeBehaviorList(behaviorMapToList(behaviors))
 }
 
 export function updateBehaviorObject(nodeId: string, object: Object3D | null): void {

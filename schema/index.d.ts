@@ -162,8 +162,10 @@ export interface SceneBehavior {
   script: SceneBehaviorScriptBinding
 }
 
+export type SceneBehaviorMap = Partial<Record<BehaviorActionType, SceneBehavior>>
+
 export interface BehaviorComponentProps {
-  behaviors: SceneBehavior[]
+  behaviors: SceneBehaviorMap
 }
 
 export type ComponentInspectorField<TProps = Record<string, unknown>> =
