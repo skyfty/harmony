@@ -425,6 +425,7 @@ class SceneGraphBuilder {
       if (!built) {
         continue;
       }
+      this.applyNodeMetadata(built, node);
       parent.add(built);
     }
   }
@@ -581,6 +582,19 @@ class SceneGraphBuilder {
 
     this.recordMeshStatistics(mesh);
     return mesh;
+  }
+
+  private applyNodeMetadata(object: THREE.Object3D, node: SceneNodeWithExtras): void {
+    if (!object || !node || !node.id) {
+      return;
+    }
+    const metadata = object.userData ?? (object.userData = {});
+    metadata.nodeId = node.id;
+    const resolvedType = node.nodeType ?? (node.light ? 'Light' : node.dynamicMesh ? 'Mesh' : 'Group');
+    metadata.nodeType = resolvedType;
+    metadata.dynamicMeshType = node.dynamicMesh?.type ?? null;
+    metadata.lightType = node.light?.type ?? null;
+    metadata.sourceAssetId = node.sourceAssetId ?? null;
   }
 
   private async resolveNodeMaterials(node: SceneNodeWithExtras): Promise<THREE.Material[]> {

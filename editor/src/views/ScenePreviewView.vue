@@ -1,736 +1,767 @@
-<template>
-  <div class="preview-view">
-    <div ref="containerRef" class="canvas-host" />
-
-    <div class="control-bar">
-      <div class="scene-name">{{ uiState.sceneName }}</div>
-      <v-btn
-        icon
-        variant="tonal"
-        color="primary"
-        density="comfortable"
-        @click="togglePlayback"
-      >
-        <v-icon>{{ uiState.isPlaying ? 'mdi-pause' : 'mdi-play' }}</v-icon>
-      </v-btn>
-      <v-btn
-        variant="tonal"
-        color="primary"
-        density="comfortable"
-        @click="toggleViewMode"
-      >
-        <v-icon start>{{ uiState.viewMode === 'map' ? 'mdi-walk' : 'mdi-orbit-variant' }}</v-icon>
-        {{ uiState.viewMode === 'map' ? '第一人称' : '自由浏览' }}
-      </v-btn>
-      <v-btn
-        icon
-        variant="tonal"
-        color="primary"
-        density="comfortable"
-        @click="toggleAudio"
-      >
-        <v-icon>{{ uiState.audioMuted ? 'mdi-volume-off' : 'mdi-volume-high' }}</v-icon>
-      </v-btn>
-      <div class="volume-slider">
-        <v-slider
-          v-model="uiState.masterVolume"
-          min="0"
-          max="1"
-          step="0.05"
-          density="compact"
-          hide-details
-        />
-      </div>
-      <v-btn
-        icon
-        variant="tonal"
-        color="primary"
-        density="comfortable"
-        @click="captureScreenshot"
-      >
-        <v-icon>mdi-camera</v-icon>
-      </v-btn>
-      <v-btn
-        icon
-        variant="tonal"
-        color="primary"
-        density="comfortable"
-        @click="toggleFullscreen"
-      >
-        <v-icon>{{ uiState.isFullscreen ? 'mdi-fullscreen-exit' : 'mdi-fullscreen' }}</v-icon>
-      </v-btn>
-    </div>
-
-    <transition name="fade">
-      <div v-if="uiState.viewMode === 'first-person'" class="hud">
-        <div>WASD / QE 移动 · 鼠标拖拽视角</div>
-        <div>位置 X {{ hudState.x.toFixed(2) }} · Y {{ hudState.y.toFixed(2) }} · Z {{ hudState.z.toFixed(2) }}</div>
-        <div>朝向 {{ hudHeadingLabel }}</div>
-      </div>
-    </transition>
-
-    <transition name="fade">
-      <div v-if="uiState.loading || uiState.error" class="overlay">
-        <div class="overlay-card" :class="{ error: !!uiState.error }">
-          <v-progress-circular
-            v-if="uiState.loading && !uiState.error"
-            indeterminate
-            color="primary"
-            size="46"
-          />
-          <v-icon v-else size="44" color="error">mdi-alert-circle-outline</v-icon>
-          <div class="overlay-title">
-            {{ uiState.error ? '无法加载场景' : '加载场景' }}
-          </div>
-          <div class="overlay-message">
-            {{ uiState.error || uiState.message }}
-          </div>
-        </div>
-      </div>
-    </transition>
-  </div>
-</template>
-
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as THREE from 'three'
-import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { FirstPersonControls } from 'three/examples/jsm/controls/FirstPersonControls.js'
-import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
-import { subscribeToScenePreview, readStoredScenePreviewSnapshot } from '@/utils/previewChannel'
+import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
+import type { SceneJsonExportDocument, SceneNode } from '@harmony/schema'
 import type { SceneCameraState } from '@/types/scene-camera-state'
+import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
+import { subscribeToScenePreview } from '@/utils/previewChannel'
 import { buildSceneGraph } from '@schema/sceneGraph';
 
-const FIRST_PERSON_EYE_HEIGHT = 1.6
-const FIRST_PERSON_VERTICAL_SPEED = 4
+type ControlMode = 'first-person' | 'third-person'
 
 const containerRef = ref<HTMLDivElement | null>(null)
+const statusMessage = ref('等待场景数据...')
+const isPlaying = ref(true)
+const controlMode = ref<ControlMode>('first-person')
+const volumePercent = ref(100)
+const isFullscreen = ref(false)
+const lastUpdateTime = ref<string | null>(null)
+const warningMessages = ref<string[]>([])
 
-const uiState = reactive({
-  sceneName: 'Scene Preview',
-  loading: true,
-  message: '等待保存当前场景…',
-  error: '',
-  viewMode: 'map' as 'map' | 'first-person',
-  isPlaying: true,
-  audioMuted: false,
-  masterVolume: 1,
-  isFullscreen: false,
-})
-
-const hudState = reactive({
-  x: 0,
-  y: 0,
-  z: 0,
-  heading: 0,
-})
-
-const hudHeadingLabel = computed(() => `${THREE.MathUtils.euclideanModulo(hudState.heading, 360).toFixed(0)}°`)
+const CAMERA_HEIGHT = 1.6
+const FIRST_PERSON_ROTATION_SPEED = 90
+const Y_AXIS = new THREE.Vector3(0, 1, 0)
 
 let renderer: THREE.WebGLRenderer | null = null
 let scene: THREE.Scene | null = null
 let camera: THREE.PerspectiveCamera | null = null
-let mapControls: MapControls | null = null
+let listener: THREE.AudioListener | null = null
+let rootGroup: THREE.Group | null = null
+let fallbackLight: THREE.HemisphereLight | null = null
 let firstPersonControls: FirstPersonControls | null = null
-let audioListener: THREE.AudioListener | null = null
-let currentRoot: THREE.Object3D | null = null
-let animationMixers: THREE.AnimationMixer[] = []
-let animationActions: THREE.AnimationAction[] = []
-let resizeObserver: ResizeObserver | null = null
-let animationFrameId = 0
-let buildRequestId = 0
+let mapControls: MapControls | null = null
+let animationFrameHandle = 0
+let currentDocument: SceneJsonExportDocument | null = null
 let unsubscribe: (() => void) | null = null
-let hasCameraAnchor = false
-let lastSceneId: string | null = null
-let lastRevision = 0
+let isApplyingSnapshot = false
+let queuedSnapshot: ScenePreviewSnapshot | null = null
+let lastSnapshotRevision = 0
+
 const clock = new THREE.Clock()
-const firstPersonVertical = { direction: 0 }
-const tempDirection = new THREE.Vector3()
-const fitBox = new THREE.Box3()
-const fitCenter = new THREE.Vector3()
-const fitSize = new THREE.Vector3()
+const nodeObjectMap = new Map<string, THREE.Object3D>()
+const rotationState = { q: false, e: false }
+const lastFirstPersonState = {
+	position: new THREE.Vector3(0, CAMERA_HEIGHT, 0),
+	direction: new THREE.Vector3(0, 0, -1),
+}
+const lastOrbitState = {
+	position: new THREE.Vector3(8, 6, 8),
+	target: new THREE.Vector3(0, 0, 0),
+}
+let animationMixers: THREE.AnimationMixer[] = []
+let hasAppliedInitialCameraState = false
 
-function initRenderer() {
-  const host = containerRef.value
-  if (!host) {
-    return
-  }
+const formattedLastUpdate = computed(() => {
+	if (!lastUpdateTime.value) {
+		return ''
+	}
+	try {
+		const date = new Date(lastUpdateTime.value)
+		return date.toLocaleString()
+	} catch (_error) {
+		return lastUpdateTime.value
+	}
+})
 
-  renderer = new THREE.WebGLRenderer({ antialias: true })
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
-  renderer.setSize(host.clientWidth, host.clientHeight)
-  renderer.shadowMap.enabled = true
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap
-  renderer.outputColorSpace = THREE.SRGBColorSpace
-  host.appendChild(renderer.domElement)
+watch(volumePercent, (value) => {
+	if (!listener) {
+		return
+	}
+	listener.setMasterVolume(Math.max(0, Math.min(1, value / 100)))
+})
 
-  scene = new THREE.Scene()
-  scene.background = new THREE.Color(0x06090f)
+watch(controlMode, (mode) => {
+	applyControlMode(mode)
+})
 
-  camera = new THREE.PerspectiveCamera(60, host.clientWidth / host.clientHeight, 0.1, 2000)
-  camera.position.set(8, 4.5, 8)
-  camera.lookAt(0, 1.2, 0)
-  camera.up.set(0, 1, 0)
+watch(isPlaying, (playing) => {
+	animationMixers.forEach((mixer) => {
+		mixer.timeScale = playing ? 1 : 0
+	})
+})
 
-  audioListener = new THREE.AudioListener()
-  camera.add(audioListener)
-  applyMasterVolume()
-
-  mapControls = new MapControls(camera, renderer.domElement)
-  mapControls.enableDamping = true
-  mapControls.dampingFactor = 0.12
-  mapControls.enablePan = true
-  mapControls.enableRotate = true
-  mapControls.maxDistance = 500
-  mapControls.update()
-
-  firstPersonControls = new FirstPersonControls(camera, renderer.domElement)
-  firstPersonControls.lookSpeed = 0.08
-  firstPersonControls.movementSpeed = 6
-  firstPersonControls.enabled = false
-  firstPersonControls.heightSpeed = false
-  firstPersonControls.verticalMin = THREE.MathUtils.degToRad(2)
-  firstPersonControls.verticalMax = THREE.MathUtils.degToRad(178)
-
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.35)
-  scene.add(ambientLight)
-  const sun = new THREE.DirectionalLight(0xffffff, 0.7)
-  sun.position.set(20, 35, 18)
-  sun.castShadow = true
-  scene.add(sun)
-
-  renderer.domElement.addEventListener('dblclick', toggleFullscreen)
-
-  resizeObserver = new ResizeObserver(() => handleResize())
-  resizeObserver.observe(host)
+function applyControlMode(mode: ControlMode) {
+	const activeCamera = camera
+	if (!activeCamera || !renderer) {
+		return
+	}
+	if (mode === 'first-person') {
+		mapControls && (mapControls.enabled = false)
+		firstPersonControls && (firstPersonControls.enabled = true)
+		activeCamera.position.copy(lastFirstPersonState.position)
+		activeCamera.position.y = CAMERA_HEIGHT
+		const target = new THREE.Vector3().copy(lastFirstPersonState.position).add(lastFirstPersonState.direction)
+		activeCamera.lookAt(target)
+	} else {
+		firstPersonControls && (firstPersonControls.enabled = false)
+		mapControls && (mapControls.enabled = true)
+		activeCamera.position.copy(lastOrbitState.position)
+		mapControls?.target.copy(lastOrbitState.target)
+		mapControls?.update()
+	}
 }
 
-function disposeRenderer() {
-  resizeObserver?.disconnect()
-  resizeObserver = null
+function initRenderer() {
+	const host = containerRef.value
+	if (!host) {
+		return
+	}
+	renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true })
+	renderer.outputColorSpace = THREE.SRGBColorSpace
+	renderer.toneMapping = THREE.ACESFilmicToneMapping
+	renderer.shadowMap.enabled = true
+	renderer.shadowMap.type = THREE.PCFSoftShadowMap
+	renderer.setPixelRatio(Math.min(window.devicePixelRatio ?? 1, 2))
+	host.appendChild(renderer.domElement)
 
-  if (renderer) {
-    renderer.domElement.removeEventListener('dblclick', toggleFullscreen)
-    renderer.dispose()
-    renderer.forceContextLoss?.()
-    renderer.domElement.remove()
-    renderer = null
-  }
+	scene = new THREE.Scene()
+	scene.background = new THREE.Color(0x0d0d12)
 
-  animationActions = []
-  animationMixers = []
-  disposeCurrentSceneRoot()
-  scene = null
-  camera = null
-  mapControls = null
-  if (firstPersonControls) {
-    firstPersonControls.dispose()
-    firstPersonControls = null
-  }
-  audioListener = null
+	camera = new THREE.PerspectiveCamera(60, 1, 0.1, 2000)
+		camera.position.set(0, CAMERA_HEIGHT, 0)
+	listener = new THREE.AudioListener()
+	camera.add(listener)
+		listener.setMasterVolume(volumePercent.value / 100)
+	scene.add(camera)
+
+	rootGroup = new THREE.Group()
+	rootGroup.name = 'ScenePreviewRoot'
+	scene.add(rootGroup)
+
+	fallbackLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.35)
+	scene.add(fallbackLight)
+
+	const grid = new THREE.GridHelper(40, 40, 0x404050, 0x2a2a3a)
+	grid.position.y = 0
+	scene.add(grid)
+
+	initControls()
+	handleResize()
+
+	window.addEventListener('resize', handleResize)
+	document.addEventListener('fullscreenchange', handleFullscreenChange)
+	window.addEventListener('keydown', handleKeyDown)
+	window.addEventListener('keyup', handleKeyUp)
+
+	startAnimationLoop()
+}
+
+function initControls() {
+	if (!camera || !renderer) {
+		return
+	}
+	firstPersonControls = new FirstPersonControls(camera, renderer.domElement)
+	firstPersonControls.lookSpeed = 0.12
+	firstPersonControls.movementSpeed = 3.5
+	firstPersonControls.lookVertical = true
+	firstPersonControls.activeLook = true
+	firstPersonControls.enabled = controlMode.value === 'first-person'
+
+	mapControls = new MapControls(camera, renderer.domElement)
+	mapControls.enableDamping = true
+	mapControls.dampingFactor = 0.08
+	mapControls.maxPolarAngle = Math.PI / 2 - 0.05
+	mapControls.minDistance = 1
+	mapControls.maxDistance = 200
+	mapControls.enabled = controlMode.value === 'third-person'
+	mapControls.target.copy(lastOrbitState.target)
+		applyControlMode(controlMode.value)
 }
 
 function handleResize() {
-  const host = containerRef.value
-  if (!renderer || !camera || !host) {
-    return
-  }
-  const width = host.clientWidth
-  const height = host.clientHeight
-  renderer.setSize(width, height)
-  camera.aspect = width / Math.max(height, 1)
-  camera.updateProjectionMatrix()
-  mapControls?.update()
-  firstPersonControls?.handleResize()
-}
-
-function startLoop() {
-  clock.start()
-  animationFrameId = requestAnimationFrame(loop)
-}
-
-function stopLoop() {
-  cancelAnimationFrame(animationFrameId)
-}
-
-function loop() {
-  animationFrameId = requestAnimationFrame(loop)
-  if (!renderer || !scene || !camera) {
-    return
-  }
-
-  const delta = Math.min(clock.getDelta(), 0.1)
-
-  if (uiState.viewMode === 'map') {
-    mapControls?.update()
-  } else if (uiState.viewMode === 'first-person') {
-    updateFirstPerson(delta)
-  }
-
-  if (uiState.isPlaying) {
-    animationMixers.forEach((mixer) => mixer.update(delta))
-  }
-
-  renderer.render(scene, camera)
-}
-
-function updateFirstPerson(delta: number) {
-  if (!firstPersonControls || !camera) {
-    return
-  }
-  firstPersonControls.update(delta)
-  if (firstPersonVertical.direction !== 0) {
-    camera.position.y += firstPersonVertical.direction * FIRST_PERSON_VERTICAL_SPEED * delta
-  }
-  if (camera.position.y < FIRST_PERSON_EYE_HEIGHT) {
-    camera.position.y = FIRST_PERSON_EYE_HEIGHT
-  }
-  camera.rotation.z = 0
-  updateHud()
-}
-
-function updateHud() {
-  if (!camera) {
-    return
-  }
-  hudState.x = camera.position.x
-  hudState.y = camera.position.y
-  hudState.z = camera.position.z
-  camera.getWorldDirection(tempDirection)
-  hudState.heading = THREE.MathUtils.radToDeg(Math.atan2(tempDirection.x, tempDirection.z))
-}
-
-function togglePlayback() {
-  uiState.isPlaying = !uiState.isPlaying
-  animationActions.forEach((action) => {
-    action.paused = !uiState.isPlaying
-  })
-}
-
-function toggleViewMode() {
-  if (uiState.viewMode === 'map') {
-    enterFirstPerson()
-  } else {
-    exitFirstPerson()
-  }
-}
-
-function enterFirstPerson() {
-  if (!camera || !firstPersonControls) {
-    return
-  }
-  uiState.viewMode = 'first-person'
-  mapControls?.saveState()
-  if (mapControls) {
-    mapControls.enabled = false
-  }
-  firstPersonControls.enabled = true
-  camera.position.y = Math.max(camera.position.y, FIRST_PERSON_EYE_HEIGHT)
-  updateHud()
-}
-
-function exitFirstPerson() {
-  uiState.viewMode = 'map'
-  firstPersonVertical.direction = 0
-  if (firstPersonControls) {
-    firstPersonControls.enabled = false
-  }
-  if (mapControls) {
-    mapControls.enabled = true
-    mapControls.update()
-  }
-}
-
-function toggleAudio() {
-  uiState.audioMuted = !uiState.audioMuted
-  applyMasterVolume()
-}
-
-function applyMasterVolume() {
-  if (!audioListener) {
-    return
-  }
-  const volume = uiState.audioMuted ? 0 : uiState.masterVolume
-  audioListener.setMasterVolume(volume)
-}
-
-watch(() => uiState.masterVolume, applyMasterVolume)
-watch(() => uiState.audioMuted, applyMasterVolume)
-
-function toggleFullscreen() {
-  const host = containerRef.value
-  if (!host) {
-    return
-  }
-  if (!document.fullscreenElement) {
-    void host.requestFullscreen().catch(() => undefined)
-  } else {
-    void document.exitFullscreen().catch(() => undefined)
-  }
+	if (!renderer || !camera || !containerRef.value) {
+		return
+	}
+	const bounds = containerRef.value.getBoundingClientRect()
+	const width = Math.max(1, bounds.width)
+	const height = Math.max(1, bounds.height)
+	renderer.setSize(width, height, false)
+	camera.aspect = width / height
+	camera.updateProjectionMatrix()
 }
 
 function handleFullscreenChange() {
-  uiState.isFullscreen = Boolean(document.fullscreenElement)
-  nextTick(() => handleResize())
-}
-
-function captureScreenshot() {
-  if (!renderer || !scene || !camera) {
-    return
-  }
-  renderer.render(scene, camera)
-  const canvas = renderer.domElement
-  const fileName = `${sanitizeFileName(uiState.sceneName)}-${new Date().toISOString().replace(/[:.]/g, '-')}.png`
-  if (canvas.toBlob) {
-    canvas.toBlob((blob) => {
-      if (!blob) {
-        return
-      }
-      downloadBlob(blob, fileName)
-    }, 'image/png')
-    return
-  }
-  const dataUrl = canvas.toDataURL('image/png')
-  const link = document.createElement('a')
-  link.href = dataUrl
-  link.download = fileName
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-}
-
-function downloadBlob(blob: Blob, fileName: string) {
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = fileName
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  requestAnimationFrame(() => URL.revokeObjectURL(url))
-}
-
-function sanitizeFileName(name: string): string {
-  const trimmed = name.trim() || 'scene'
-  return trimmed.replace(/[^a-zA-Z0-9-_]+/g, '_')
-}
-
-function disposeCurrentSceneRoot() {
-  if (!scene || !currentRoot) {
-    return
-  }
-  scene.remove(currentRoot)
-  currentRoot.traverse((child) => {
-    const mesh = child as unknown as THREE.Mesh
-    if (mesh.isMesh) {
-      mesh.geometry?.dispose?.()
-      if (Array.isArray(mesh.material)) {
-        mesh.material.forEach((material) => material?.dispose?.())
-      } else {
-        mesh.material?.dispose?.()
-      }
-    }
-    if ((child as unknown as { dispose?: () => void }).dispose) {
-      try {
-        ;(child as unknown as { dispose: () => void }).dispose()
-      } catch (_error) {
-        /* noop */
-      }
-    }
-  })
-  currentRoot = null
-  animationMixers = []
-  animationActions = []
-}
-
-async function applySnapshot(snapshot: ScenePreviewSnapshot) {
-  if (snapshot.revision <= lastRevision) {
-    return
-  }
-  lastRevision = snapshot.revision
-  if (snapshot.sceneId !== lastSceneId) {
-    hasCameraAnchor = false
-    lastSceneId = snapshot.sceneId
-  }
-  const requestId = ++buildRequestId
-  uiState.loading = true
-  uiState.error = ''
-  uiState.message = `加载 ${snapshot.sceneName}…`
-  uiState.sceneName = snapshot.sceneName
-  try {
-    const { root, warnings } = await buildSceneGraph(snapshot.document, { enableGround: true })
-    if (requestId !== buildRequestId) {
-      root.traverse((node: THREE.Object3D) => {
-        const mesh = node as unknown as THREE.Mesh
-        if (mesh.isMesh) {
-          mesh.geometry?.dispose?.()
-          if (Array.isArray(mesh.material)) {
-            mesh.material.forEach((material) => material?.dispose?.())
-          } else {
-            mesh.material?.dispose?.()
-          }
-        }
-      })
-      return
-    }
-    installSceneRoot(root, snapshot)
-    if (warnings.length) {
-      console.warn('[ScenePreview] Build warnings', warnings)
-    }
-    uiState.loading = false
-    uiState.message = ''
-  } catch (error) {
-    if (requestId !== buildRequestId) {
-      return
-    }
-    console.error('Failed to build preview scene', error)
-    uiState.error = (error as Error)?.message ?? '未知错误'
-    uiState.loading = false
-  }
-}
-
-function installSceneRoot(root: THREE.Object3D, snapshot: ScenePreviewSnapshot) {
-  if (!scene) {
-    return
-  }
-  disposeCurrentSceneRoot()
-  currentRoot = root
-  scene.add(root)
-  prepareAnimations(root)
-  refreshCameraAnchor(snapshot)
-}
-
-function prepareAnimations(root: THREE.Object3D) {
-  animationMixers = []
-  animationActions = []
-  root.traverse((object) => {
-    const clips = (object as unknown as { animations?: THREE.AnimationClip[] }).animations
-    if (clips && clips.length) {
-      const mixer = new THREE.AnimationMixer(object)
-      clips.forEach((clip) => {
-        const action = mixer.clipAction(clip)
-        action.play()
-        animationActions.push(action)
-      })
-      animationMixers.push(mixer)
-    }
-  })
-}
-
-function refreshCameraAnchor(snapshot: ScenePreviewSnapshot) {
-  if (!camera || !mapControls) {
-    return
-  }
-  if (!hasCameraAnchor && snapshot.camera) {
-    applyCameraState(snapshot.camera)
-    hasCameraAnchor = true
-    return
-  }
-  if (!hasCameraAnchor && currentRoot) {
-    fitBox.setFromObject(currentRoot)
-    if (!fitBox.isEmpty()) {
-      fitBox.getCenter(fitCenter)
-      fitBox.getSize(fitSize)
-      const radius = fitSize.length() || 6
-      camera.position.copy(fitCenter.clone().add(new THREE.Vector3(radius * 0.8, radius * 0.6, radius * 0.8)))
-      camera.lookAt(fitCenter)
-      mapControls.target.copy(fitCenter)
-      mapControls.update()
-      hasCameraAnchor = true
-    }
-  }
-}
-
-function applyCameraState(state: SceneCameraState) {
-  if (!camera || !mapControls) {
-    return
-  }
-  camera.position.set(state.position.x, state.position.y, state.position.z)
-  camera.lookAt(state.target.x, state.target.y, state.target.z)
-  if (state.fov && camera instanceof THREE.PerspectiveCamera) {
-    camera.fov = state.fov
-    camera.updateProjectionMatrix()
-  }
-  mapControls.target.set(state.target.x, state.target.y, state.target.z)
-  mapControls.update()
-}
-
-function queueSnapshot(snapshot: ScenePreviewSnapshot) {
-  void applySnapshot(snapshot)
+	isFullscreen.value = Boolean(document.fullscreenElement)
 }
 
 function handleKeyDown(event: KeyboardEvent) {
-  if (uiState.viewMode !== 'first-person') {
-    return
-  }
-  if (event.code === 'KeyQ') {
-    firstPersonVertical.direction = 1
-    event.preventDefault()
-  } else if (event.code === 'KeyE') {
-    firstPersonVertical.direction = -1
-    event.preventDefault()
-  }
+	if (event.code === 'KeyQ') {
+		rotationState.q = true
+	} else if (event.code === 'KeyE') {
+		rotationState.e = true
+	}
 }
 
 function handleKeyUp(event: KeyboardEvent) {
-  if (event.code === 'KeyQ' || event.code === 'KeyE') {
-    firstPersonVertical.direction = 0
-  }
+	if (event.code === 'KeyQ') {
+		rotationState.q = false
+	} else if (event.code === 'KeyE') {
+		rotationState.e = false
+	}
+}
+
+function startAnimationLoop() {
+	const currentRenderer = renderer
+	const currentScene = scene
+	const activeCamera = camera
+	if (!currentRenderer || !currentScene || !activeCamera) {
+		return
+	}
+	clock.start()
+	const renderLoop = () => {
+		animationFrameHandle = requestAnimationFrame(renderLoop)
+		const delta = clock.getDelta()
+		if (controlMode.value === 'first-person' && firstPersonControls) {
+			const rotationDirection = Number(rotationState.q) - Number(rotationState.e)
+			if (rotationDirection !== 0) {
+				const yaw = rotationDirection * FIRST_PERSON_ROTATION_SPEED * delta * THREE.MathUtils.DEG2RAD
+				firstPersonControls.object.rotateOnWorldAxis(Y_AXIS, yaw)
+			}
+			firstPersonControls.update(delta)
+			activeCamera.position.y = CAMERA_HEIGHT
+			lastFirstPersonState.position.copy(activeCamera.position)
+			activeCamera.getWorldDirection(lastFirstPersonState.direction)
+		} else if (mapControls) {
+			mapControls.update()
+			lastOrbitState.position.copy(activeCamera.position)
+			lastOrbitState.target.copy(mapControls.target)
+		}
+
+		if (isPlaying.value) {
+			animationMixers.forEach((mixer) => mixer.update(delta))
+		}
+
+		currentRenderer.render(currentScene, activeCamera)
+	}
+	renderLoop()
+}
+
+function stopAnimationLoop() {
+	if (animationFrameHandle) {
+		cancelAnimationFrame(animationFrameHandle)
+		animationFrameHandle = 0
+	}
+}
+
+function disposeScene() {
+	nodeObjectMap.clear()
+	if (!rootGroup) {
+		return
+	}
+	const disposables: THREE.Object3D[] = []
+	rootGroup.traverse((object) => {
+		disposables.push(object)
+	})
+	disposables.forEach((object) => disposeObjectResources(object))
+	rootGroup.clear()
+}
+
+function disposeObjectResources(object: THREE.Object3D) {
+	const mesh = object as THREE.Mesh
+	if ((mesh as any).isMesh) {
+		mesh.geometry?.dispose?.()
+		const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+		materials.forEach((material) => material?.dispose?.())
+	}
+}
+
+function removeNodeSubtree(nodeId: string) {
+	const target = nodeObjectMap.get(nodeId)
+	if (!target) {
+		return
+	}
+	const ancestors: THREE.Object3D[] = []
+	target.traverse((child) => {
+		const id = child.userData?.nodeId as string | undefined
+		if (id) {
+			nodeObjectMap.delete(id)
+		}
+		ancestors.push(child)
+	})
+	target.parent?.remove(target)
+	ancestors.forEach((object) => disposeObjectResources(object))
+}
+
+function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Object3D>) {
+	object.traverse((child) => {
+		const nodeId = child.userData?.nodeId as string | undefined
+		if (nodeId) {
+			nodeObjectMap.set(nodeId, child)
+			pending?.delete(nodeId)
+		}
+	})
+}
+
+function adoptNodeFromPending(nodeId: string, parent: THREE.Object3D, pending: Map<string, THREE.Object3D>): THREE.Object3D | null {
+	const candidate = pending.get(nodeId)
+	if (!candidate) {
+		return null
+	}
+	candidate.parent?.remove(candidate)
+	parent.add(candidate)
+	registerSubtree(candidate, pending)
+	return candidate
+}
+
+function ensureChildOrder(parent: THREE.Object3D, child: THREE.Object3D, orderIndex: number) {
+	if (child.parent !== parent) {
+		parent.add(child)
+	}
+	const managedChildren = parent.children.filter((entry) => !!entry.userData?.nodeId)
+	const desiredSibling = managedChildren[orderIndex]
+	const currentIndex = parent.children.indexOf(child)
+	if (!desiredSibling) {
+		const firstHelper = parent.children.findIndex((entry) => !entry.userData?.nodeId)
+		parent.children.splice(currentIndex, 1)
+		if (firstHelper === -1) {
+			parent.children.push(child)
+		} else {
+			parent.children.splice(firstHelper, 0, child)
+		}
+		return
+	}
+	if (desiredSibling === child) {
+		return
+	}
+	const desiredIndex = parent.children.indexOf(desiredSibling)
+	if (desiredIndex === -1) {
+		return
+	}
+	parent.children.splice(currentIndex, 1)
+	parent.children.splice(Math.min(desiredIndex, parent.children.length), 0, child)
+}
+
+function updateNodeProperties(object: THREE.Object3D, node: SceneNode) {
+	if (node.name) {
+		object.name = node.name
+	}
+	if (node.position) {
+		object.position.set(node.position.x, node.position.y, node.position.z)
+	}
+	if (node.rotation) {
+		object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z)
+	}
+	if (node.scale) {
+		object.scale.set(node.scale.x, node.scale.y, node.scale.z)
+	}
+	if (typeof node.visible === 'boolean') {
+		object.visible = node.visible
+	} else {
+		object.visible = true
+	}
+}
+
+function structuralSignature(node: SceneNode | null | undefined): string {
+	if (!node) {
+		return ''
+	}
+	const type = node.nodeType ?? (node.light ? 'Light' : node.dynamicMesh ? 'Mesh' : 'Group')
+	const dynamicSignature = node.dynamicMesh ? JSON.stringify(node.dynamicMesh) : ''
+	const source = node.sourceAssetId ?? ''
+	const lightType = node.light?.type ?? ''
+	const materialSignature = node.materials ? JSON.stringify(node.materials) : ''
+	return [type, dynamicSignature, source, lightType, materialSignature].join('|')
+}
+
+function reconcileNodeLists(
+	parentId: string | null,
+	nextNodes: SceneNode[] = [],
+	previousNodes: SceneNode[] = [],
+	pending: Map<string, THREE.Object3D>,
+) {
+	const parentObject = parentId ? nodeObjectMap.get(parentId) : rootGroup
+	if (!parentObject) {
+		return
+	}
+
+	const nextIdSet = new Set(nextNodes.map((node) => node.id))
+	previousNodes.forEach((node) => {
+		if (!nextIdSet.has(node.id)) {
+			removeNodeSubtree(node.id)
+		}
+	})
+
+	const previousMap = new Map(previousNodes.map((node) => [node.id, node]))
+
+	nextNodes.forEach((node, index) => {
+		const existing = nodeObjectMap.get(node.id) ?? null
+		const previous = previousMap.get(node.id) ?? null
+			const shouldReplace = !existing || !previous || structuralSignature(node) !== structuralSignature(previous)
+			let object = existing
+			if (shouldReplace) {
+			if (existing) {
+				removeNodeSubtree(node.id)
+			}
+			object = adoptNodeFromPending(node.id, parentObject, pending)
+		}
+		if (!object) {
+			return
+		}
+				if (!shouldReplace) {
+					updateNodeProperties(object, node)
+				}
+		ensureChildOrder(parentObject, object, index)
+		const nextChildren = Array.isArray(node.children) ? node.children : []
+		const previousChildren = previous?.children ?? []
+		reconcileNodeLists(node.id, nextChildren, previousChildren, pending)
+	})
+}
+
+function refreshFallbackLighting() {
+	if (!fallbackLight) {
+		return
+	}
+	let hasLight = false
+	nodeObjectMap.forEach((object) => {
+		if ((object as any).isLight) {
+			hasLight = true
+		}
+	})
+	fallbackLight.visible = !hasLight
+}
+
+function refreshAnimations() {
+	animationMixers.forEach((mixer) => {
+		mixer.stopAllAction()
+		mixer.uncacheRoot(mixer.getRoot())
+	})
+	animationMixers = []
+
+	nodeObjectMap.forEach((object) => {
+		const clips = (object as unknown as { animations?: THREE.AnimationClip[] }).animations
+		if (!Array.isArray(clips) || !clips.length) {
+			return
+		}
+		const mixer = new THREE.AnimationMixer(object)
+		clips.forEach((clip) => {
+			const action = mixer.clipAction(clip)
+			action.play()
+		})
+		mixer.timeScale = isPlaying.value ? 1 : 0
+		animationMixers.push(mixer)
+	})
+}
+
+async function updateScene(document: SceneJsonExportDocument) {
+			if (!scene || !rootGroup) {
+		return
+	}
+			const previewRoot = rootGroup
+	const { root, warnings } = await buildSceneGraph(document)
+	warningMessages.value = warnings
+
+	const pendingObjects = new Map<string, THREE.Object3D>()
+	root.traverse((object) => {
+		const nodeId = object.userData?.nodeId as string | undefined
+		if (nodeId) {
+			pendingObjects.set(nodeId, object)
+		}
+	})
+
+	if (!currentDocument) {
+		disposeScene()
+		while (root.children.length) {
+			const child = root.children.shift()
+			if (!child) {
+				continue
+			}
+				previewRoot.add(child)
+			registerSubtree(child, pendingObjects)
+		}
+		currentDocument = document
+		refreshAnimations()
+		refreshFallbackLighting()
+		return
+	}
+
+	reconcileNodeLists(null, document.nodes ?? [], currentDocument.nodes ?? [], pendingObjects)
+
+			for (const [nodeId, object] of Array.from(pendingObjects.entries())) {
+		if (!nodeObjectMap.has(nodeId)) {
+				previewRoot.add(object)
+			registerSubtree(object, pendingObjects)
+		}
+			}
+
+	currentDocument = document
+	refreshAnimations()
+	refreshFallbackLighting()
+}
+
+function applySnapshot(snapshot: ScenePreviewSnapshot) {
+	if (snapshot.revision <= lastSnapshotRevision) {
+		return
+	}
+	lastSnapshotRevision = snapshot.revision
+	if (isApplyingSnapshot) {
+		queuedSnapshot = snapshot
+		return
+	}
+	isApplyingSnapshot = true
+	statusMessage.value = '同步场景数据...'
+	void updateScene(snapshot.document)
+		.then(() => {
+			lastUpdateTime.value = snapshot.timestamp
+			statusMessage.value = ''
+			if (!hasAppliedInitialCameraState && snapshot.camera) {
+				applyInitialCameraState(snapshot.camera)
+				hasAppliedInitialCameraState = true
+			}
+		})
+		.catch((error) => {
+			console.error('[ScenePreview] Failed to apply snapshot', error)
+			statusMessage.value = '加载场景失败，请稍后再试'
+		})
+		.finally(() => {
+			isApplyingSnapshot = false
+			if (queuedSnapshot) {
+				const pending = queuedSnapshot
+				queuedSnapshot = null
+				applySnapshot(pending)
+			}
+		})
+}
+
+function applyInitialCameraState(state: SceneCameraState) {
+	if (!camera) {
+		return
+	}
+	camera.position.set(state.position.x, state.position.y, state.position.z)
+	const target = new THREE.Vector3(state.target.x, state.target.y, state.target.z)
+	camera.lookAt(target)
+	if (state.fov && camera instanceof THREE.PerspectiveCamera) {
+		camera.fov = state.fov
+		camera.updateProjectionMatrix()
+	}
+	lastFirstPersonState.position.copy(camera.position)
+	camera.getWorldDirection(lastFirstPersonState.direction)
+	lastOrbitState.position.copy(camera.position)
+	lastOrbitState.target.copy(target)
+	applyControlMode(controlMode.value)
+}
+
+function togglePlayback() {
+	isPlaying.value = !isPlaying.value
+}
+
+function toggleFullscreen() {
+	if (!containerRef.value) {
+		return
+	}
+	if (document.fullscreenElement) {
+		void document.exitFullscreen()
+	} else {
+		void containerRef.value.requestFullscreen()
+	}
+}
+
+function captureScreenshot() {
+	const currentRenderer = renderer
+	const currentScene = scene
+	const activeCamera = camera
+	if (!currentRenderer || !currentScene || !activeCamera) {
+		return
+	}
+	currentRenderer.render(currentScene, activeCamera)
+	const dataUrl = currentRenderer.domElement.toDataURL('image/png')
+	if (!dataUrl) {
+		return
+	}
+	const link = document.createElement('a')
+	link.href = dataUrl
+	link.download = `harmony-scene-${Date.now()}.png`
+	document.body.appendChild(link)
+	link.click()
+	document.body.removeChild(link)
 }
 
 onMounted(() => {
-  initRenderer()
-  startLoop()
-  document.addEventListener('fullscreenchange', handleFullscreenChange)
-  window.addEventListener('keydown', handleKeyDown, { passive: false })
-  window.addEventListener('keyup', handleKeyUp)
-
-  const stored = readStoredScenePreviewSnapshot()
-  if (stored) {
-    queueSnapshot(stored)
-  }
-
-  unsubscribe = subscribeToScenePreview((snapshot) => {
-    queueSnapshot(snapshot)
-  })
+	initRenderer()
+	unsubscribe = subscribeToScenePreview((snapshot) => {
+		applySnapshot(snapshot)
+	})
 })
 
 onBeforeUnmount(() => {
-  unsubscribe?.()
-  unsubscribe = null
-  document.removeEventListener('fullscreenchange', handleFullscreenChange)
-  window.removeEventListener('keydown', handleKeyDown)
-  window.removeEventListener('keyup', handleKeyUp)
-  stopLoop()
-  disposeRenderer()
+	unsubscribe?.()
+	unsubscribe = null
+	stopAnimationLoop()
+	window.removeEventListener('resize', handleResize)
+	document.removeEventListener('fullscreenchange', handleFullscreenChange)
+	window.removeEventListener('keydown', handleKeyDown)
+	window.removeEventListener('keyup', handleKeyUp)
+	disposeScene()
+	animationMixers.forEach((mixer) => mixer.stopAllAction())
+	animationMixers = []
+	if (firstPersonControls) {
+		firstPersonControls.dispose()
+		firstPersonControls = null
+	}
+	if (mapControls) {
+		mapControls.dispose()
+		mapControls = null
+	}
+	if (renderer) {
+		renderer.dispose()
+		renderer.domElement.remove()
+		renderer = null
+	}
+	listener = null
+	scene = null
+	camera = null
 })
 </script>
 
+<template>
+	<div class="scene-preview">
+		<div ref="containerRef" class="scene-preview__canvas"></div>
+		<v-sheet class="scene-preview__overlay" elevation="8">
+			<div class="scene-preview__toolbar">
+				<v-btn
+					class="scene-preview__toolbar-item"
+					color="primary"
+					variant="tonal"
+					@click="togglePlayback"
+				>
+					<v-icon start>{{ isPlaying ? 'mdi-pause' : 'mdi-play' }}</v-icon>
+					{{ isPlaying ? '暂停动画' : '播放动画' }}
+				</v-btn>
+				<v-btn-toggle
+					class="scene-preview__toolbar-item"
+					v-model="controlMode"
+					mandatory
+					rounded
+					density="comfortable"
+				>
+					<v-btn value="first-person">
+						<v-icon start>mdi-human-greeting</v-icon>
+						第一人称
+					</v-btn>
+					<v-btn value="third-person">
+						<v-icon start>mdi-map</v-icon>
+						第三人称
+					</v-btn>
+				</v-btn-toggle>
+				<v-slider
+					class="scene-preview__toolbar-item scene-preview__volume"
+					v-model="volumePercent"
+					:max="100"
+					:min="0"
+					:step="5"
+					hide-details
+					prepend-icon="mdi-volume-medium"
+				/>
+				<v-btn
+					class="scene-preview__toolbar-item"
+					variant="tonal"
+					color="secondary"
+					@click="captureScreenshot"
+				>
+					<v-icon start>mdi-camera</v-icon>
+					截图
+				</v-btn>
+				<v-btn
+					class="scene-preview__toolbar-item"
+					variant="tonal"
+					color="secondary"
+					@click="toggleFullscreen"
+				>
+					<v-icon start>{{ isFullscreen ? 'mdi-fullscreen-exit' : 'mdi-fullscreen' }}</v-icon>
+					{{ isFullscreen ? '退出全屏' : '全屏' }}
+				</v-btn>
+			</div>
+			<div class="scene-preview__status">
+				<template v-if="statusMessage">
+					<span>{{ statusMessage }}</span>
+				</template>
+				<template v-else-if="formattedLastUpdate">
+					<span>最近更新：{{ formattedLastUpdate }}</span>
+				</template>
+			</div>
+			<v-alert
+				v-if="warningMessages.length"
+				class="scene-preview__alert"
+				density="compact"
+				type="warning"
+				variant="tonal"
+			>
+				<div v-for="(message, index) in warningMessages" :key="`${message}-${index}`">
+					{{ message }}
+				</div>
+			</v-alert>
+		</v-sheet>
+	</div>
+</template>
+
 <style scoped>
-.preview-view {
-  position: relative;
-  width: 100%;
-  height: 100vh;
-  background: #04070b;
-  overflow: hidden;
+.scene-preview {
+	position: relative;
+	width: 100%;
+	height: 100%;
+	min-height: 100vh;
+	overflow: hidden;
+	background: linear-gradient(135deg, #0a0a10, #121220);
 }
 
-.canvas-host {
-  width: 100%;
-  height: 100%;
+.scene-preview__canvas,
+.scene-preview__canvas :deep(canvas) {
+	width: 100%;
+	height: 100%;
+	display: block;
 }
 
-.control-bar {
-  position: absolute;
-  left: 50%;
-  bottom: 28px;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 20px;
-  border-radius: 999px;
-  background: rgba(10, 14, 22, 0.74);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(18px);
-  color: #f0f3ff;
-  z-index: 5;
+.scene-preview__overlay {
+	position: absolute;
+	left: 16px;
+	right: 16px;
+	bottom: 16px;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	padding: 12px 16px;
+	border-radius: 16px;
+	background: rgba(18, 18, 32, 0.8);
+	color: #f5f7ff;
+	backdrop-filter: blur(12px);
+	pointer-events: auto;
 }
 
-.scene-name {
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-size: 0.78rem;
-  opacity: 0.85;
+.scene-preview__toolbar {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	flex-wrap: wrap;
 }
 
-.volume-slider {
-  width: 120px;
-  padding-inline: 6px;
+.scene-preview__toolbar-item {
+	flex-shrink: 0;
 }
 
-.hud {
-  position: absolute;
-  top: 24px;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 12px 18px;
-  border-radius: 16px;
-  background: rgba(10, 14, 22, 0.74);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: #f0f3ff;
-  font-size: 0.82rem;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  z-index: 5;
-  text-align: center;
+.scene-preview__volume {
+	min-width: 160px;
+	max-width: 260px;
 }
 
-.overlay {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(5, 7, 12, 0.78);
-  backdrop-filter: blur(16px);
-  z-index: 6;
+.scene-preview__status {
+	font-size: 0.9rem;
+	color: rgba(245, 247, 255, 0.7);
 }
 
-.overlay-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 14px;
-  padding: 26px 38px;
-  border-radius: 18px;
-  background: rgba(12, 16, 24, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  color: #f5f6fb;
-  text-align: center;
-}
-
-.overlay-card.error {
-  border-color: rgba(244, 67, 54, 0.4);
-}
-
-.overlay-title {
-  font-weight: 600;
-  letter-spacing: 0.06em;
-}
-
-.overlay-message {
-  max-width: 320px;
-  opacity: 0.78;
-  line-height: 1.4;
-}
-
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 160ms ease;
-}
-
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
+.scene-preview__alert {
+	margin: 0;
 }
 
 @media (max-width: 768px) {
-  .control-bar {
-    flex-wrap: wrap;
-    gap: 10px;
-    padding: 12px 16px;
-  }
+	.scene-preview__overlay {
+		left: 12px;
+		right: 12px;
+		bottom: 12px;
+	}
 
-  .volume-slider {
-    width: 100px;
-  }
-
-  .hud {
-    top: 16px;
-    font-size: 0.75rem;
-  }
+	.scene-preview__volume {
+		min-width: 140px;
+	}
 }
 </style>
