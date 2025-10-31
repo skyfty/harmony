@@ -609,9 +609,11 @@ function stopAnimationLoop() {
 	}
 }
 
-function disposeScene() {
+function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	nodeObjectMap.clear()
-	previewNodeMap.clear()
+	if (!options.preservePreviewNodeMap) {
+		previewNodeMap.clear()
+	}
 	previewComponentManager.reset()
 	resetBehaviorRuntime()
 	dismissBehaviorAlert()
@@ -952,7 +954,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	})
 
 	if (!currentDocument) {
-		disposeScene()
+			disposeScene({ preservePreviewNodeMap: true })
 		while (root.children.length) {
 			const child = root.children.shift()
 			if (!child) {
