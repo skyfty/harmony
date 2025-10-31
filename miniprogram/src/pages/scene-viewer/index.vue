@@ -35,7 +35,7 @@ import { effectScope, watchEffect, ref, computed, onUnmounted, watch } from 'vue
 import { onLoad, onUnload, onReady } from '@dcloudio/uni-app';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Sky } from 'three/addons/objects/Sky.js';
+import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from '@/components/PlatformCanvas.vue';
 import type { StoredSceneEntry } from '@/stores/sceneStore';
