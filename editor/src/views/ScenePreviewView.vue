@@ -256,7 +256,7 @@ function initControls() {
 	firstPersonControls.enabled = controlMode.value === 'first-person'
 
 	mapControls = new MapControls(camera, renderer.domElement)
-	mapControls.enableDamping = true
+	mapControls.enableDamping = false
 	mapControls.dampingFactor = 0.08
 	mapControls.maxPolarAngle = Math.PI / 2 - 0.05
 	mapControls.minDistance = 1
