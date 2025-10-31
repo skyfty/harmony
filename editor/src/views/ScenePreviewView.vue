@@ -304,10 +304,10 @@ function initRenderer() {
 	scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY
 
 	camera = new THREE.PerspectiveCamera(60, 1, 0.1, 2000)
-		camera.position.set(0, CAMERA_HEIGHT, 0)
+  camera.position.set(0, CAMERA_HEIGHT, 0)
 	listener = new THREE.AudioListener()
 	camera.add(listener)
-		listener.setMasterVolume(volumePercent.value / 100)
+  listener.setMasterVolume(volumePercent.value / 100)
 	scene.add(camera)
 
 	rootGroup = new THREE.Group()
@@ -317,9 +317,6 @@ function initRenderer() {
 	fallbackLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.35)
 	scene.add(fallbackLight)
 
-	const grid = new THREE.GridHelper(40, 40, 0x404050, 0x2a2a3a)
-	grid.position.y = 0
-	scene.add(grid)
 	ensureSkyExists()
 	if (pendingSkyboxSettings) {
 		applySkyboxSettings(pendingSkyboxSettings)
