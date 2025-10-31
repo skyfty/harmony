@@ -281,9 +281,10 @@ async function handleConfirmDeleteSlot() {
 
 <template>
   <v-expansion-panel value="material">
-    <v-expansion-panel-title class="material-panel-title">
+    <v-expansion-panel-title>
       <span class="material-panel-title__label">Material</span>
-      <div class="material-panel-title__actions">
+      <v-spacer />
+
         <v-btn
           icon="mdi-plus"
           size="small"
@@ -298,7 +299,6 @@ async function handleConfirmDeleteSlot() {
           :disabled="!canDeleteMaterialSlot"
           @click.stop="handleRequestDeleteSlot"
         />
-      </div>
     </v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="material-panel">

@@ -295,7 +295,7 @@ function handleAddComponent(type: string) {
               Add Component
             </v-btn>
           </template>
-          <v-list density="compact">
+          <v-list density="compact"  class="menu-list">
             <v-list-item
               v-for="definition in availableComponents"
               :key="definition.type"
@@ -447,4 +447,21 @@ function handleAddComponent(type: string) {
 }
 
 
+.menu-list {
+  padding: 6px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.menu-list :deep(.v-list-item) {
+  min-height: 26px;
+  border-radius: 8px;
+  padding-inline: 12px;
+  transition: background-color 160ms ease;
+}
+
+.menu-list :deep(.v-list-item:hover) {
+  background-color: rgba(255, 255, 255, 0.08);
+}
 </style>

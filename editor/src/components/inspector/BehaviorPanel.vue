@@ -144,10 +144,18 @@ function handleRemoveComponent() {
 
 <template>
   <v-expansion-panel value="behavior">
-    <v-expansion-panel-title>
-      <div class="behavior-panel__header">
-        <span class="behavior-panel__title">Behavior Component</span>
+
+    <v-expansion-panel-title >
+      <span class="behavior-panel__header">Behavior</span>
         <v-spacer />
+            <v-btn
+            icon="mdi-plus"
+            size="small"
+            variant="text"
+            @click.stop="handleAddBehavior()"
+          >
+          </v-btn>
+
         <v-btn
           v-if="behaviorComponent"
           icon
@@ -168,8 +176,8 @@ function handleRemoveComponent() {
           </v-menu>
           <v-icon size="18">mdi-dots-vertical</v-icon>
         </v-btn>
-      </div>
     </v-expansion-panel-title>
+
     <v-expansion-panel-text>
       <div class="behavior-panel__body">
         <div v-if="behaviors.length" class="behavior-list">
@@ -213,16 +221,7 @@ function handleRemoveComponent() {
           </div>
         </div>
         <div v-else class="behavior-panel__empty">No behaviors configured for this node.</div>
-        <div class="behavior-panel__actions">
-          <v-btn
-            prepend-icon="mdi-plus"
-            size="small"
-            variant="tonal"
-            @click.stop="handleAddBehavior()"
-          >
-            Add Behavior
-          </v-btn>
-        </div>
+  
       </div>
     </v-expansion-panel-text>
   </v-expansion-panel>
@@ -238,6 +237,7 @@ function handleRemoveComponent() {
 </template>
 
 <style scoped>
+
 .behavior-panel__header {
   display: flex;
   align-items: center;
