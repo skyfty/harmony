@@ -77,8 +77,44 @@ const MATERIAL_TEXTURE_ASSIGNMENTS: Record<keyof SceneMaterialTextureSlotMap, { 
   emissive: { key: 'emissiveMap', colorSpace: 'srgb' },
 };
 
+function extractPresetRelativePath(candidate: string): string | null {
+  if (!candidate) {
+    return null;
+  }
+  const withoutQuery = candidate.replace(/\?.*$/, '');
+  const parts = withoutQuery.split(/[\\/]+/).filter(Boolean);
+  const presetIndex = parts.lastIndexOf('preset');
+  if (presetIndex === -1) {
+    return null;
+  }
+  const relativeSegments = parts.slice(presetIndex + 1);
+  if (!relativeSegments.length) {
+    return null;
+  }
+  return relativeSegments.join('/');
+}
+
 function buildPresetAssetLookup(): Map<string, string> {
   const lookup = new Map<string, string>();
+
+  const glob = (import.meta as unknown as { glob?: (pattern: string, options?: Record<string, unknown>) => Record<string, unknown> }).glob;
+  if (typeof glob === 'function') {
+    const modules = glob('../src/preset/**/*', {
+      eager: true,
+      import: 'default',
+      query: '?url',
+    }) as Record<string, string>;
+    Object.entries(modules).forEach(([key, url]) => {
+      const relative = extractPresetRelativePath(key);
+      if (!relative) {
+        return;
+      }
+      const normalized = relative.replace(/^[\\/]+/, '').replace(/\\/g, '/');
+      const lower = normalized.toLowerCase();
+      lookup.set(`preset:${normalized}`, url);
+      lookup.set(`preset:${lower}`, url);
+    });
+  }
 
   return lookup;
 }
@@ -332,6 +368,10 @@ class ResourceCache {
       const base = this.options.presetAssetBaseUrl.replace(/\/+$/, '');
       const suffix = normalizedId.replace(/^preset:/, '');
       return `${base}/${suffix}`;
+    }
+    const relative = normalizedId.replace(/^preset:/, '').replace(/^[\\/]+/, '').replace(/\\/g, '/');
+    if (relative) {
+      return `src/preset/${relative}`;
     }
     return null;
   }
