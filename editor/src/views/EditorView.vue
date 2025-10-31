@@ -84,15 +84,7 @@ const exportPreferences = ref<SceneExportOptions>({
 })
 const viewportRef = ref<SceneViewportHandle | null>(null)
 const isNewSceneDialogOpen = ref(false)
-const isPreviewing = ref(false)
 const showStatsPanel = ref(true)
-type PreviewCameraSeed = Pick<SceneCameraState, 'position' | 'target'>
-type PreviewSessionState = {
-  url: string
-  sceneName: string
-  cameraSeed: PreviewCameraSeed | null
-}
-const previewSession = ref<PreviewSessionState | null>(null)
 const sceneImportInputRef = ref<HTMLInputElement | null>(null)
 const isImportingScenes = ref(false)
 const isSceneBundleExporting = ref(false)
@@ -437,137 +429,23 @@ watch(isExportDialogOpen, (open) => {
   }
 })
 
-function updatePreviewProgress(progress: number, message?: string) {
-  const displayMessage = message ?? `Preparing preview ${Math.round(progress)}%`
-  uiStore.updateLoadingOverlay({
-    title: 'Preview Scene',
-    message: displayMessage,
-  })
-  uiStore.updateLoadingProgress(progress, { autoClose: false })
-}
-
-function releasePreviewSession() {
-  if (previewSession.value) {
-    URL.revokeObjectURL(previewSession.value.url)
-    previewSession.value = null
-  }
-}
-
-function handlePreviewReady() {
-  uiStore.updateLoadingOverlay({
-    title: 'Preview Scene',
-    message: 'Preview ready',
-    mode: 'determinate',
-    progress: 100,
-    closable: true,
-    autoClose: true,
-    autoCloseDelay: 600,
-  })
-  uiStore.updateLoadingProgress(100, { autoClose: true, autoCloseDelay: 600 })
-}
-
-function handlePreviewError(message: string) {
-  uiStore.updateLoadingOverlay({
-    title: 'Preview Scene',
-    message,
-    mode: 'determinate',
-    progress: 100,
-    closable: true,
-    autoClose: false,
-  })
-  uiStore.updateLoadingProgress(100, { autoClose: false })
-}
-
-function handlePreviewClose() {
-  releasePreviewSession()
-  uiStore.hideLoadingOverlay(true)
-}
-
 function toggleStatsPanelVisibility() {
   showStatsPanel.value = !showStatsPanel.value
 }
 
 async function handlePreview() {
-  if (isPreviewing.value || previewSession.value) {
+  const saved = await saveCurrentScene()
+  if (!saved) {
     return
   }
 
-  const viewport = viewportRef.value
-  if (!viewport) {
-    console.warn('Scene viewport unavailable for preview')
+  if (typeof window === 'undefined') {
     return
   }
 
-  isPreviewing.value = true
-  const sceneName = sceneStore.currentSceneMeta?.name ?? 'scene'
-  uiStore.showLoadingOverlay({
-    title: 'Preview Scene',
-    message: 'Preparing preview…',
-    mode: 'determinate',
-    progress: 0,
-    closable: false,
-    autoClose: false,
-  })
-
-  let previewBlobUrl: string | null = null
-
-  try {
-    const blob = await viewport.exportScene({
-      format: 'glb',
-      fileName: `${sceneName}-preview`,
-      includeTextures: true,
-      includeAnimations: true,
-      includeSkybox: true,
-      includeLights: true,
-      includeHiddenNodes: false,
-      includeSkeletons: true,
-      includeCameras: false,
-      includeExtras: true,
-      rotateCoordinateSystem: true
-    }, updatePreviewProgress)
-
-    previewBlobUrl = URL.createObjectURL(blob)
-
-    const cameraSeed: PreviewCameraSeed | null = sceneStore.camera
-      ? {
-          position: { ...sceneStore.camera.position },
-          target: { ...sceneStore.camera.target },
-        }
-      : null
-
-    previewSession.value = {
-      url: previewBlobUrl,
-      sceneName,
-      cameraSeed,
-    }
-    previewBlobUrl = null
-
-    uiStore.updateLoadingOverlay({
-      title: 'Preview Scene',
-      message: 'Loading preview scene…',
-      mode: 'indeterminate',
-      closable: false,
-      autoClose: false,
-    })
-  } catch (error) {
-    const message = (error as Error)?.message ?? 'Unknown error'
-    if (previewBlobUrl) {
-      URL.revokeObjectURL(previewBlobUrl)
-      previewBlobUrl = null
-    }
-    uiStore.updateLoadingOverlay({
-      title: 'Preview Scene',
-      message,
-      closable: true,
-      autoClose: false,
-    })
-    uiStore.updateLoadingProgress(100, { autoClose: false })
-  } finally {
-    isPreviewing.value = false
-    if (previewBlobUrl) {
-      URL.revokeObjectURL(previewBlobUrl)
-    }
-  }
+  const currentUrl = new URL(window.location.href)
+  currentUrl.hash = '#/preview'
+  window.open(currentUrl.toString(), '_blank', 'noopener')
 }
 
 let pendingSceneSave: Promise<boolean> | null = null
@@ -1086,7 +964,6 @@ function isEditableKeyboardTarget(target: EventTarget | null): boolean {
 function shouldHandleViewportShortcut(event: KeyboardEvent): boolean {
   if (event.defaultPrevented) return false
   if (isEditableKeyboardTarget(event.target)) return false
-  if (previewSession.value) return false
   return true
 }
 
@@ -1178,7 +1055,6 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  releasePreviewSession()
   window.removeEventListener('keyup', handleEditorViewShortcut, { capture: true })
   window.removeEventListener('resize', handleMaterialDetailsRelayout)
   window.removeEventListener('scroll', handleMaterialDetailsRelayout, true)
@@ -1214,7 +1090,6 @@ onBeforeUnmount(() => {
           :camera-state="camera"
           :focus-node-id="cameraFocusNodeId"
           :focus-request-id="cameraFocusRequestId"
-          :preview-active="!!previewSession"
           :show-stats="showStatsPanel"
           @change-tool="setTool"
           @select-node="handleViewportSelection"

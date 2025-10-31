@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import type { 
   SceneMaterialTextureSettings,
@@ -22,6 +23,17 @@ const DEFAULT_TEXTURE_SETTINGS: SceneMaterialTextureSettings = {
   premultiplyAlpha: false,
   flipY: true,
 };
+declare const uni: {
+  base64ToArrayBuffer?: (input: string) => ArrayBuffer;
+  request?: (options: {
+    url: string;
+    method?: string;
+    responseType?: 'arraybuffer' | 'text';
+    success: (payload: { statusCode?: number; data?: unknown }) => void;
+    fail: (error: unknown) => void;
+  }) => void;
+} | undefined;
+
 type SceneNodeWithExtras = SceneNode & {
   light?: {
     type?: string;
@@ -326,6 +338,7 @@ class SceneGraphBuilder {
   private readonly loadingManager = new THREE.LoadingManager();
   private readonly textureLoader: THREE.TextureLoader;
   private readonly gltfLoader: GLTFLoader;
+  private readonly dracoLoader: DRACOLoader;
   private readonly disposableUrls: string[] = [];
 
   constructor(
@@ -336,6 +349,9 @@ class SceneGraphBuilder {
     this.root.name = document.name ?? 'Scene';
     this.textureLoader = new THREE.TextureLoader(this.loadingManager);
     this.gltfLoader = new GLTFLoader(this.loadingManager);
+    this.dracoLoader = new DRACOLoader(this.loadingManager);
+    this.dracoLoader.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
+    this.gltfLoader.setDRACOLoader(this.dracoLoader);
     this.resourceCache = new ResourceCache(document, options, (message) => this.warn(message));
   }
 
@@ -359,6 +375,7 @@ class SceneGraphBuilder {
       }
     });
     this.disposableUrls.length = 0;
+    this.dracoLoader.dispose();
   }
 
   private warn(message: string): void {
@@ -988,12 +1005,17 @@ class SceneGraphBuilder {
     }
 
     try {
-      const root = await this.parseGltf(arrayBuffer);
-      if (!root) {
+      const parsed = await this.parseGltf(arrayBuffer);
+      if (!parsed.root) {
         this.warn(`GLTF 解析失败 ${assetId}`);
         return null;
       }
-      const prepared = cloneSkinned(root);
+      const prepared = cloneSkinned(parsed.root);
+      if (parsed.animations?.length) {
+        (prepared as unknown as { animations?: THREE.AnimationClip[] }).animations = parsed.animations.map((clip) => clip.clone());
+        prepared.userData = prepared.userData ?? {};
+        prepared.userData.__animations = parsed.animations.map((clip) => clip.name);
+      }
       this.prepareImportedObject(prepared);
       return prepared;
     } catch (error) {
@@ -1025,13 +1047,13 @@ class SceneGraphBuilder {
     });
   }
 
-  private async parseGltf(buffer: ArrayBuffer): Promise<THREE.Object3D | null> {
+  private async parseGltf(buffer: ArrayBuffer): Promise<{ root: THREE.Object3D | null; animations: THREE.AnimationClip[] }> {
     return new Promise((resolve, reject) => {
       this.gltfLoader.parse(
         buffer,
         '',
         (gltf) => {
-          resolve(gltf.scene ?? null);
+          resolve({ root: gltf.scene ?? null, animations: Array.isArray(gltf.animations) ? gltf.animations : [] });
         },
         (error) => {
           reject(error);
@@ -1043,14 +1065,42 @@ class SceneGraphBuilder {
 
   private decodeDataUrl(dataUrl: string): ArrayBuffer | null {
     if (typeof dataUrl !== 'string') {
-          throw new TypeError('dataUrl must be a string');
+      throw new TypeError('dataUrl must be a string');
     }
     const [, base64] = dataUrl.split(',');
-    const clean = (base64 !== null && base64 !== void 0 ? base64 : '').replace(/\s/g, '');
+    const clean = (base64 ?? '').replace(/\s/g, '');
     if (!clean) {
-        return new ArrayBuffer(0);
+      return new ArrayBuffer(0);
     }
-    return uni.base64ToArrayBuffer(clean);
+    if (typeof uni !== 'undefined' && typeof uni?.base64ToArrayBuffer === 'function') {
+      try {
+        return uni.base64ToArrayBuffer(clean);
+      } catch (error) {
+        console.warn('base64 转换失败', error);
+      }
+    }
+    if (typeof atob === 'function') {
+      try {
+        const binary = atob(clean);
+        const length = binary.length;
+        const buffer = new Uint8Array(length);
+        for (let index = 0; index < length; index += 1) {
+          buffer[index] = binary.charCodeAt(index);
+        }
+        return buffer.buffer;
+      } catch (error) {
+        console.warn('base64 decode failed', error);
+      }
+    }
+    if (NodeBuffer) {
+      try {
+        const buf = NodeBuffer.from(clean, 'base64');
+        return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+      } catch (error) {
+        console.warn('buffer decode failed', error);
+      }
+    }
+    return null;
   }
   
 
@@ -1067,9 +1117,10 @@ class SceneGraphBuilder {
       return response.arrayBuffer();
     }
 
-    if (typeof uni !== 'undefined' && typeof uni.request === 'function') {
+    if (typeof uni !== 'undefined' && uni && typeof uni.request === 'function') {
+      const request = uni.request.bind(uni) as typeof uni.request
       return await new Promise((resolve, reject) => {
-        uni.request({
+        request({
           url,
           method: 'GET',
           responseType: 'arraybuffer',
@@ -1087,7 +1138,20 @@ class SceneGraphBuilder {
       });
     }
 
-    throw new Error('缺少可用的下载方式');
+    return await new Promise((resolve, reject) => {
+      const request = new XMLHttpRequest();
+      request.open('GET', url, true);
+      request.responseType = 'arraybuffer';
+      request.onload = () => {
+        if (request.status >= 200 && request.status < 300) {
+          resolve(request.response);
+        } else {
+          reject(new Error(`下载失败 ${request.status}`));
+        }
+      };
+      request.onerror = () => reject(new Error('网络错误'));
+      request.send();
+    });
   }
 
   private normalizeDataUrlMime(dataUrl: string, assetId: string): string {

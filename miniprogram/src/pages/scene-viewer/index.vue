@@ -39,7 +39,7 @@ import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from '@/components/PlatformCanvas.vue';
 import type { StoredSceneEntry } from '@/stores/sceneStore';
 import { useSceneStore } from '@/stores/sceneStore';
-import { buildSceneGraph } from '@/utils/sceneGraph';
+import { buildSceneGraph } from '@schema/sceneGraph';
 
 
 interface RenderContext {
@@ -57,7 +57,7 @@ const sceneEntry = computed<StoredSceneEntry | null>(() => {
   if (!sceneId) {
     return null;
   }
-  return sceneStore.getScene(sceneId);
+  return sceneStore.getScene(sceneId) ?? null;
 });
 const loading = ref(true);
 const error = ref<string | null>(null);

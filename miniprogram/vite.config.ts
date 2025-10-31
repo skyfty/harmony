@@ -1,4 +1,5 @@
 import { defineConfig, Rollup } from "vite";
+import { fileURLToPath, URL } from 'node:url';
 import uni from '@dcloudio/vite-plugin-uni';
 import threePlatformAdapter from '@minisheep/three-platform-adapter/plugin';
 import glsl from 'vite-plugin-glsl';
@@ -8,6 +9,11 @@ import { createMpChunkSplitterPlugin } from "@minisheep/vite-plugin-mp-chunk-spl
 export default defineConfig({
   optimizeDeps: {
     exclude: ['@minisheep/three-platform-adapter']
+  },
+  resolve: {
+    alias: {
+      '@schema': fileURLToPath(new URL('../schema', import.meta.url)),
+    },
   },
   
   server: {
