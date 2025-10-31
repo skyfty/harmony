@@ -353,7 +353,6 @@ async function handleConfirmDeleteSlot() {
 .material-panel {
   display: flex;
   gap: 12px;
-  min-height: 100px;
 }
 
 .material-panel__list {
