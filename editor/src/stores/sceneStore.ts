@@ -20,7 +20,6 @@ import {
 } from 'three'
 import type { CameraNodeProperties, SceneNode, SceneNodeType, Vector3Like } from '@harmony/schema'
 import type { LightNodeProperties, LightNodeType } from '@harmony/schema'
-import type { SceneJsonExportDocument } from '@harmony/schema'
 import { normalizeLightNodeType } from '@/types/light'
 import type { ClipboardEntry } from '@/types/clipboard-entry'
 import type { DetachResult } from '@/types/detach-result'
@@ -81,7 +80,7 @@ import {
   PACKAGES_ROOT_DIRECTORY_ID,
 } from './assetCatalog'
 import type { NodeComponentType, SceneNodeComponentState } from '@harmony/schema'
-import type { WallComponentProps } from '@/runtime/components'
+import type { WallComponentProps } from '@schema/components'
 import {
   WALL_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
@@ -94,7 +93,7 @@ import {
   cloneWallComponentProps,
   componentManager,
   resolveWallComponentPropsFromMesh,
-} from '@/runtime/components'
+} from '@schema/components'
 
 export { ASSETS_ROOT_DIRECTORY_ID, buildPackageDirectoryId, extractProviderIdFromPackageDirectoryId } from './assetCatalog'
 

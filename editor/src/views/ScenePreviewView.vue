@@ -8,6 +8,15 @@ import type { SceneJsonExportDocument, SceneNode, SceneSkyboxSettings } from '@h
 import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
 import { subscribeToScenePreview } from '@/utils/previewChannel'
 import { buildSceneGraph } from '@schema/sceneGraph';
+import { ComponentManager } from '@schema/components/componentManager'
+import { behaviorComponentDefinition, wallComponentDefinition } from '@schema/components'
+import {
+	hasRegisteredBehaviors,
+	listInteractableObjects,
+	resetBehaviorRuntime,
+	triggerBehaviorAction,
+	type BehaviorRuntimeEvent,
+} from '@schema/behaviors/runtime'
 
 type ControlMode = 'first-person' | 'third-person'
 
@@ -21,6 +30,19 @@ const lastUpdateTime = ref<string | null>(null)
 const warningMessages = ref<string[]>([])
 const isFirstPersonMouseControlEnabled = ref(true)
 const isVolumeMenuOpen = ref(false)
+
+const previewComponentManager = new ComponentManager()
+previewComponentManager.registerDefinition(wallComponentDefinition)
+previewComponentManager.registerDefinition(behaviorComponentDefinition)
+
+const previewNodeMap = new Map<string, SceneNode>()
+
+const behaviorRaycaster = new THREE.Raycaster()
+const behaviorPointer = new THREE.Vector2()
+
+const behaviorAlertVisible = ref(false)
+const behaviorAlertTitle = ref('')
+const behaviorAlertMessage = ref('')
 
 const CAMERA_HEIGHT = 1.6
 const FIRST_PERSON_ROTATION_SPEED = 75
@@ -75,6 +97,48 @@ const lastOrbitState = {
 	target: new THREE.Vector3(0, 0, 0),
 }
 let animationMixers: THREE.AnimationMixer[] = []
+
+function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null): void {
+	previewNodeMap.clear()
+	if (!Array.isArray(nodes)) {
+		return
+	}
+	const stack: SceneNode[] = [...nodes]
+	while (stack.length) {
+		const node = stack.pop()
+		if (!node) {
+			continue
+		}
+		previewNodeMap.set(node.id, node)
+		if (Array.isArray(node.children) && node.children.length) {
+			stack.push(...node.children)
+		}
+	}
+}
+
+function resolveNodeById(nodeId: string): SceneNode | null {
+	return previewNodeMap.get(nodeId) ?? null
+}
+
+function resolveNodeIdFromObject(object: THREE.Object3D | null | undefined): string | null {
+	let candidate: THREE.Object3D | null | undefined = object ?? null
+	while (candidate) {
+		const nodeId = candidate.userData?.nodeId as string | undefined
+		if (nodeId) {
+			return nodeId
+		}
+		candidate = candidate.parent
+	}
+	return null
+}
+
+function attachRuntimeForNode(nodeId: string, object: THREE.Object3D): void {
+	const nodeState = resolveNodeById(nodeId)
+	if (!nodeState) {
+		return
+	}
+	previewComponentManager.attachRuntime(nodeState, object)
+}
 
 function cloneSkyboxSettings(settings: SceneSkyboxSettings): SceneSkyboxSettings {
 	return { ...settings }
@@ -190,6 +254,83 @@ function handlePreviewPointerDown(event: PointerEvent) {
 		return
 	}
 	setFirstPersonMouseControl(true)
+}
+
+function presentBehaviorAlert(title: string, message: string) {
+	const normalizedTitle = title?.trim() ?? ''
+	behaviorAlertTitle.value = normalizedTitle || 'Notice'
+	behaviorAlertMessage.value = message ?? ''
+	behaviorAlertVisible.value = true
+}
+
+function dismissBehaviorAlert() {
+	behaviorAlertVisible.value = false
+}
+
+function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
+	switch (event.type) {
+		case 'show-alert':
+			presentBehaviorAlert(event.params.title ?? '', event.params.message ?? '')
+			break
+		default:
+			break
+	}
+}
+
+function handleBehaviorClick(event: MouseEvent) {
+	const currentRenderer = renderer
+	const activeCamera = camera
+	if (!currentRenderer || !activeCamera || !scene) {
+		return
+	}
+	if (event.button !== 0) {
+		return
+	}
+	if (event.target !== currentRenderer.domElement) {
+		return
+	}
+	if (!hasRegisteredBehaviors()) {
+		return
+	}
+	const bounds = currentRenderer.domElement.getBoundingClientRect()
+	const width = bounds.width
+	const height = bounds.height
+	if (width <= 0 || height <= 0) {
+		return
+	}
+	behaviorPointer.x = ((event.clientX - bounds.left) / width) * 2 - 1
+	behaviorPointer.y = -((event.clientY - bounds.top) / height) * 2 + 1
+	behaviorRaycaster.setFromCamera(behaviorPointer, activeCamera)
+	const candidates = listInteractableObjects()
+	if (!candidates.length) {
+		return
+	}
+	const intersections = behaviorRaycaster.intersectObjects(candidates, true)
+	if (!intersections.length) {
+		return
+	}
+	let nodeId: string | null = null
+	let hitObject: THREE.Object3D | null = null
+	let hitPoint: THREE.Vector3 | null = null
+	for (const intersection of intersections) {
+		nodeId = resolveNodeIdFromObject(intersection.object)
+		if (nodeId) {
+			hitObject = intersection.object
+			hitPoint = intersection.point.clone()
+			break
+		}
+	}
+	if (!nodeId || !hitObject || !hitPoint) {
+		return
+	}
+	const results = triggerBehaviorAction(nodeId, 'click', {
+		pointerEvent: event,
+		intersection: {
+			object: hitObject,
+			point: { x: hitPoint.x, y: hitPoint.y, z: hitPoint.z },
+		},
+	})
+	results.forEach((output) => handleBehaviorRuntimeEvent(output))
 }
 
 function resetFirstPersonPointerDelta() {
@@ -325,6 +466,7 @@ function initRenderer() {
 	initControls()
 	updateCanvasCursor()
 	renderer.domElement.addEventListener('pointerdown', handlePreviewPointerDown)
+	renderer.domElement.addEventListener('click', handleBehaviorClick)
 	handleResize()
 
 	window.addEventListener('resize', handleResize)
@@ -469,6 +611,10 @@ function stopAnimationLoop() {
 
 function disposeScene() {
 	nodeObjectMap.clear()
+	previewNodeMap.clear()
+	previewComponentManager.reset()
+	resetBehaviorRuntime()
+	dismissBehaviorAlert()
 	if (!rootGroup) {
 		return
 	}
@@ -609,6 +755,8 @@ function removeNodeSubtree(nodeId: string) {
 		const id = child.userData?.nodeId as string | undefined
 		if (id) {
 			nodeObjectMap.delete(id)
+			previewComponentManager.removeNode(id)
+			previewNodeMap.delete(id)
 		}
 		ancestors.push(child)
 	})
@@ -622,6 +770,7 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 		if (nodeId) {
 			nodeObjectMap.set(nodeId, child)
 			pending?.delete(nodeId)
+			attachRuntimeForNode(nodeId, child)
 		}
 	})
 }
@@ -785,6 +934,14 @@ async function updateScene(document: SceneJsonExportDocument) {
 	const previewRoot = rootGroup
 	const { root, warnings } = await buildSceneGraph(document)
 	warningMessages.value = warnings
+	dismissBehaviorAlert()
+	resetBehaviorRuntime()
+	previewComponentManager.reset()
+	rebuildPreviewNodeMap(document.nodes)
+	previewComponentManager.syncScene(document.nodes ?? [])
+	nodeObjectMap.forEach((object, nodeId) => {
+		attachRuntimeForNode(nodeId, object)
+	})
 
 	const pendingObjects = new Map<string, THREE.Object3D>()
 	root.traverse((object) => {
@@ -921,6 +1078,7 @@ onBeforeUnmount(() => {
 	}
 	if (renderer) {
 		renderer.domElement.removeEventListener('pointerdown', handlePreviewPointerDown)
+		renderer.domElement.removeEventListener('click', handleBehaviorClick)
 		renderer.dispose()
 		renderer.domElement.remove()
 		renderer = null
@@ -1000,6 +1158,7 @@ onBeforeUnmount(() => {
 					v-model="controlMode"
 					mandatory
 					density="compact"
+
 					rounded
 				>
 					<v-btn
@@ -1013,6 +1172,7 @@ onBeforeUnmount(() => {
 						value="third-person"
 						icon="mdi-compass"
 						size="small"
+
 						:aria-label="'第三人称视角'"
 						:title="'第三人称视角 (快捷键 3)'"
 					/>
@@ -1025,18 +1185,21 @@ onBeforeUnmount(() => {
 						size="small"
 					:color="isFirstPersonMouseControlEnabled ? 'info' : 'warning'"
 					:aria-label="isFirstPersonMouseControlEnabled ? '禁用鼠标镜头' : '启用鼠标镜头'"
+
 					:title="isFirstPersonMouseControlEnabled ? '禁用鼠标镜头 (快捷键 C)' : '启用鼠标镜头 (快捷键 C)'"
 					@click="toggleFirstPersonMouseControl"
 				/>
 				<v-menu
 					v-model="isVolumeMenuOpen"
 					location="top"
+
 					offset="12"
 					:close-on-content-click="false"
 				>
 					<template #activator="{ props: menuProps }">
 						<v-btn
 							class="scene-preview__control-button"
+
 							v-bind="menuProps"
 							icon="mdi-volume-medium"
 							variant="tonal"
@@ -1080,6 +1243,29 @@ onBeforeUnmount(() => {
 				/>
 			</div>
 		</v-sheet>
+		<div
+			v-if="behaviorAlertVisible"
+			class="scene-preview__behavior-overlay"
+		>
+			<div class="scene-preview__behavior-dialog">
+				<h3 class="scene-preview__behavior-title">{{ behaviorAlertTitle }}</h3>
+				<p
+					v-if="behaviorAlertMessage"
+					class="scene-preview__behavior-message"
+				>
+					{{ behaviorAlertMessage }}
+				</p>
+				<v-btn
+					class="scene-preview__behavior-button"
+					variant="flat"
+					color="primary"
+					size="small"
+					@click="dismissBehaviorAlert"
+				>
+					OK
+				</v-btn>
+			</div>
+		</div>
 	</div>
 </template>
 

@@ -41,7 +41,15 @@ import PlatformCanvas from '@/components/PlatformCanvas.vue';
 import type { StoredSceneEntry } from '@/stores/sceneStore';
 import { useSceneStore } from '@/stores/sceneStore';
 import { buildSceneGraph } from '@schema/sceneGraph';
-import type { SceneSkyboxSettings } from '@harmony/schema';
+import type { SceneNode, SceneSkyboxSettings } from '@harmony/schema';
+import { ComponentManager } from '@schema/components/componentManager';
+import { behaviorComponentDefinition, wallComponentDefinition } from '@schema/components';
+import {
+  listInteractableObjects,
+  resetBehaviorRuntime,
+  triggerBehaviorAction,
+  type BehaviorRuntimeEvent,
+} from '@schema/behaviors/runtime';
 
 
 interface RenderContext {
@@ -89,6 +97,17 @@ let initializing = false;
 const scope = effectScope();
 const bootstrapFinished = ref(false);
 
+const previewComponentManager = new ComponentManager();
+previewComponentManager.registerDefinition(wallComponentDefinition);
+previewComponentManager.registerDefinition(behaviorComponentDefinition);
+
+const previewNodeMap = new Map<string, SceneNode>();
+const nodeObjectMap = new Map<string, THREE.Object3D>();
+
+const behaviorRaycaster = new THREE.Raycaster();
+const behaviorPointer = new THREE.Vector2();
+let behaviorTapListener: ((event: TouchEvent) => void) | null = null;
+
 function cloneSkyboxSettings(settings: SceneSkyboxSettings): SceneSkyboxSettings {
   return { ...settings };
 }
@@ -114,6 +133,121 @@ function resolveSceneSkybox(document: StoredSceneEntry['scene'] | null | undefin
     return null;
   }
   return sanitizeSkyboxSettings(document.skybox);
+}
+
+function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null) {
+  previewNodeMap.clear();
+  if (!Array.isArray(nodes)) {
+    return;
+  }
+  const stack: SceneNode[] = [...nodes];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    previewNodeMap.set(node.id, node);
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+}
+
+function resolveNodeById(nodeId: string): SceneNode | null {
+  return previewNodeMap.get(nodeId) ?? null;
+}
+
+function attachRuntimeForNode(nodeId: string, object: THREE.Object3D) {
+  const nodeState = resolveNodeById(nodeId);
+  if (!nodeState) {
+    return;
+  }
+  previewComponentManager.attachRuntime(nodeState, object);
+}
+
+function indexSceneObjects(root: THREE.Object3D) {
+  nodeObjectMap.clear();
+  root.traverse((object) => {
+    const nodeId = object.userData?.nodeId as string | undefined;
+    if (nodeId) {
+      nodeObjectMap.set(nodeId, object);
+      attachRuntimeForNode(nodeId, object);
+    }
+  });
+}
+
+function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
+  switch (event.type) {
+    case 'show-alert':
+      uni.showModal({
+        title: event.params.title?.trim() || '提示',
+        content: event.params.message || '',
+        showCancel: false,
+      });
+      break;
+    default:
+      break;
+  }
+}
+
+function ensureBehaviorTapHandler(canvas: HTMLCanvasElement, camera: THREE.PerspectiveCamera) {
+  if (behaviorTapListener) {
+    canvas.removeEventListener('touchend', behaviorTapListener);
+    behaviorTapListener = null;
+  }
+  behaviorTapListener = (event: TouchEvent) => {
+    if (!renderContext?.scene) {
+      return;
+    }
+    const touches = event.changedTouches ?? event.touches;
+    const firstTouch = touches && touches[0];
+    if (!firstTouch) {
+      return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) {
+      return;
+    }
+    behaviorPointer.x = ((firstTouch.clientX - rect.left) / rect.width) * 2 - 1;
+    behaviorPointer.y = -((firstTouch.clientY - rect.top) / rect.height) * 2 + 1;
+    behaviorRaycaster.setFromCamera(behaviorPointer, camera);
+    const candidates = listInteractableObjects();
+    if (!candidates.length) {
+      return;
+    }
+    const intersections = behaviorRaycaster.intersectObjects(candidates, true);
+    if (!intersections.length) {
+      return;
+    }
+    for (const intersection of intersections) {
+      let current: THREE.Object3D | null = intersection.object;
+      let nodeId: string | null = null;
+      while (current) {
+        const id = current.userData?.nodeId as string | undefined;
+        if (id) {
+          nodeId = id;
+          break;
+        }
+        current = current.parent;
+      }
+      if (!nodeId) {
+        continue;
+      }
+      const results = triggerBehaviorAction(nodeId, 'click', {
+        intersection: {
+          object: intersection.object,
+          point: {
+            x: intersection.point.x,
+            y: intersection.point.y,
+            z: intersection.point.z,
+          },
+        },
+      });
+      results.forEach((output: BehaviorRuntimeEvent) => handleBehaviorRuntimeEvent(output));
+      break;
+    }
+  };
+  canvas.addEventListener('touchend', behaviorTapListener);
 }
 
 function disposeSkyEnvironment() {
@@ -305,6 +439,14 @@ function teardownRenderer() {
     return;
   }
   const { renderer, scene, controls } = renderContext;
+  if (canvasResult?.canvas && behaviorTapListener) {
+    canvasResult.canvas.removeEventListener('touchend', behaviorTapListener);
+    behaviorTapListener = null;
+  }
+  previewComponentManager.reset();
+  resetBehaviorRuntime();
+  previewNodeMap.clear();
+  nodeObjectMap.clear();
   controls.dispose();
   disposeSkyResources();
   pmremGenerator?.dispose();
@@ -391,6 +533,7 @@ async function initializeRenderer(sceneEntry: StoredSceneEntry, canvasResult: Us
     throw new Error('Render context missing');
   }
   const { scene, renderer, camera, controls } = renderContext;
+  const { canvas } = canvasResult;
   scene.children.forEach((child) => disposeObject(child));
   scene.clear();
   warnings.value = [];
@@ -413,6 +556,13 @@ async function initializeRenderer(sceneEntry: StoredSceneEntry, canvasResult: Us
   }
   scene.add(graph.root);
 
+  resetBehaviorRuntime();
+  previewComponentManager.reset();
+  rebuildPreviewNodeMap(sceneEntry.scene.nodes);
+  previewComponentManager.syncScene(sceneEntry.scene.nodes ?? []);
+  indexSceneObjects(graph.root);
+  ensureBehaviorTapHandler(canvas as HTMLCanvasElement, camera);
+
   focusCameraOnScene(graph.root);
 
   const skyboxSettings = resolveSceneSkybox(sceneEntry.scene);
@@ -421,7 +571,6 @@ async function initializeRenderer(sceneEntry: StoredSceneEntry, canvasResult: Us
     applySkyboxSettings(pendingSkyboxSettings);
   }
 
-  const { canvas } = canvasResult;
   const width = canvas.width || canvas.clientWidth || 1;
   const height = canvas.height || canvas.clientHeight || 1;
   camera.aspect = width / height;

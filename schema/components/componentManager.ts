@@ -4,7 +4,7 @@ import type {
   ComponentInspectorSection,
   NodeComponentType,
   SceneNodeComponentState,
-} from '@harmony/schema'
+} from '../index'
 
 import { Component, type ComponentRuntimeContext } from './Component'
 
@@ -107,7 +107,7 @@ class ComponentContextImpl<TProps> implements ComponentRuntimeContext<TProps> {
   }
 }
 
-class ComponentManager {
+export class ComponentManager {
   private readonly definitions = new Map<NodeComponentType, AnyComponentDefinition>()
   private readonly nodeBundles = new Map<string, NodeComponentBundle>()
 

@@ -138,6 +138,32 @@ export interface SceneNodeComponentState<TProps = Record<string, unknown>> {
   metadata?: Record<string, unknown>
 }
 
+export type BehaviorActionType = 'click' | 'hover' | 'drag'
+
+export type BehaviorScriptType = 'showAlert'
+
+export interface ShowAlertBehaviorParams {
+  title?: string
+  message: string
+}
+
+export type SceneBehaviorScriptBinding =
+  | {
+      type: 'showAlert'
+      params: ShowAlertBehaviorParams
+    }
+
+export interface SceneBehavior {
+  id: string
+  name: string
+  action: BehaviorActionType
+  script: SceneBehaviorScriptBinding
+}
+
+export interface BehaviorComponentProps {
+  behaviors: SceneBehavior[]
+}
+
 export type ComponentInspectorField<TProps = Record<string, unknown>> =
   | {
       kind: 'number'

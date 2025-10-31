@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
-import {type SceneNodeComponentState} from '@harmony/schema'
+import type { SceneNodeComponentState } from '@harmony/schema'
 
 import {
   WALL_COMPONENT_TYPE,
@@ -13,7 +13,7 @@ import {
   WALL_MIN_THICKNESS,
   WALL_MIN_WIDTH,
   type WallComponentProps,
-} from '@/runtime/components'
+} from '@schema/components'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
