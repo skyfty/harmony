@@ -45,8 +45,8 @@ const behaviorAlertTitle = ref('')
 const behaviorAlertMessage = ref('')
 
 const CAMERA_HEIGHT = 1.6
-const FIRST_PERSON_ROTATION_SPEED = 75
-const FIRST_PERSON_MOVE_SPEED = 2
+const FIRST_PERSON_ROTATION_SPEED = 25
+const FIRST_PERSON_MOVE_SPEED = 5
 const FIRST_PERSON_LOOK_SPEED = 0.06
 const FIRST_PERSON_PITCH_LIMIT = THREE.MathUtils.degToRad(75)
 const tempDirection = new THREE.Vector3()
@@ -243,19 +243,6 @@ function toggleFirstPersonMouseControl() {
 	setFirstPersonMouseControl(!isFirstPersonMouseControlEnabled.value)
 }
 
-function handlePreviewPointerDown(event: PointerEvent) {
-	if (controlMode.value !== 'first-person' || isFirstPersonMouseControlEnabled.value) {
-		return
-	}
-	if (event.button !== 0) {
-		return
-	}
-	if (event.target !== renderer?.domElement) {
-		return
-	}
-	setFirstPersonMouseControl(true)
-}
-
 function presentBehaviorAlert(title: string, message: string) {
 	const normalizedTitle = title?.trim() ?? ''
 	behaviorAlertTitle.value = normalizedTitle || 'Notice'
@@ -389,6 +376,55 @@ function clampFirstPersonPitch(force = false) {
 	syncLastFirstPersonStateFromCamera()
 }
 
+// Reset the active camera to a level (horizontal) view without changing yaw
+function resetCameraToLevelView() {
+	if (!camera) {
+		return
+	}
+	if (controlMode.value === 'first-person') {
+		// Keep current yaw, set pitch to 0, enforce eye height
+		camera.position.y = CAMERA_HEIGHT
+		tempDirection.set(0, 0, -1)
+		camera.getWorldDirection(tempDirection)
+		const yaw = Math.atan2(tempDirection.x, -tempDirection.z)
+		// build a horizontal forward vector from yaw
+		tempDirection.set(Math.sin(yaw), 0, -Math.cos(yaw))
+		tempTarget.copy(camera.position).add(tempDirection)
+		camera.lookAt(tempTarget)
+		syncFirstPersonOrientation()
+		syncLastFirstPersonStateFromCamera()
+	} else if (mapControls) {
+		// Orbit/MapControls: set polar angle to (almost) horizontal while preserving azimuth
+		const controls = mapControls as unknown as {
+			getAzimuthalAngle?: () => number
+			getPolarAngle?: () => number
+			rotateTo?: (azimuth: number, polar: number, enableTransition?: boolean) => void
+			maxPolarAngle?: number
+			target: THREE.Vector3
+			update: () => void
+		}
+		const azimuth = controls.getAzimuthalAngle ? controls.getAzimuthalAngle() : (() => {
+			const offset = new THREE.Vector3().copy(camera.position).sub(mapControls.target)
+			const spherical = new THREE.Spherical().setFromVector3(offset)
+			return spherical.theta
+		})()
+		const desiredPolar = Math.min(controls.maxPolarAngle ?? Math.PI / 2, Math.PI / 2)
+		if (typeof controls.rotateTo === 'function') {
+			controls.rotateTo(azimuth, desiredPolar, false)
+		} else {
+			const target = mapControls.target.clone()
+			const offset = new THREE.Vector3().copy(camera.position).sub(target)
+			const spherical = new THREE.Spherical().setFromVector3(offset)
+			spherical.theta = azimuth
+			spherical.phi = desiredPolar
+			offset.setFromSpherical(spherical)
+			camera.position.copy(target).add(offset)
+			camera.lookAt(target)
+		}
+		mapControls.update()
+	}
+}
+
 watch(isPlaying, (playing) => {
 	animationMixers.forEach((mixer) => {
 		mixer.timeScale = playing ? 1 : 0
@@ -465,7 +501,6 @@ function initRenderer() {
 
 	initControls()
 	updateCanvasCursor()
-	renderer.domElement.addEventListener('pointerdown', handlePreviewPointerDown)
 	renderer.domElement.addEventListener('click', handleBehaviorClick)
 	handleResize()
 
@@ -545,6 +580,8 @@ function handleKeyDown(event: KeyboardEvent) {
 			if (controlMode.value === 'first-person') {
 				event.preventDefault()
 				toggleFirstPersonMouseControl()
+				// When toggling with C, reset to a level view for a consistent starting orientation
+				resetCameraToLevelView()
 			}
 			break
 		default:
@@ -1079,7 +1116,6 @@ onBeforeUnmount(() => {
 		mapControls = null
 	}
 	if (renderer) {
-		renderer.domElement.removeEventListener('pointerdown', handlePreviewPointerDown)
 		renderer.domElement.removeEventListener('click', handleBehaviorClick)
 		renderer.dispose()
 		renderer.domElement.remove()

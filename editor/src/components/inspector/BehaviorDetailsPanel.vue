@@ -115,9 +115,23 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior' : '
 <template>
   <v-dialog :model-value="visible" max-width="520" @update:modelValue="closePanel">
     <v-card class="behavior-details">
-      <v-card-title class="behavior-details__title">
-        {{ dialogTitle }}
-      </v-card-title>
+      <v-toolbar density="compact" class="panel-toolbar" height="40px">
+        <div class="toolbar-text">
+          <div class="material-title">{{ dialogTitle }}</div>
+        </div>
+        <v-spacer />
+        <v-btn
+          class="toolbar-save"
+          variant="text"
+          size="small"
+          title="Save"
+          @click="handleSave"
+        >
+          <v-icon size="16px">mdi-content-save</v-icon>
+        </v-btn>
+        <v-btn class="toolbar-close" icon="mdi-close" size="small" variant="text" @click="closePanel" />
+      </v-toolbar>
+      <v-divider />
       <v-card-text class="behavior-details__body">
         <div class="behavior-details__field">
           <v-text-field
@@ -160,25 +174,35 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior' : '
           />
         </div>
       </v-card-text>
-      <v-divider />
-      <v-card-actions class="behavior-details__actions">
-        <v-spacer />
-        <v-btn variant="text" @click="closePanel">Cancel</v-btn>
-        <v-btn color="primary" variant="flat" @click="handleSave">Save</v-btn>
-      </v-card-actions>
     </v-card>
   </v-dialog>
 </template>
 
 <style scoped>
+.behavior-details {
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background-color: rgba(18, 22, 28, 0.72);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
+}
+
 .behavior-details__title {
   font-weight: 600;
+  font-size: 0.85rem;
+  letter-spacing: 0.05em;
+  color: rgba(233, 236, 241, 0.94);
 }
 
 .behavior-details__body {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  background-color: rgb(var(--v-theme-surface));
+  margin: 4px;
 }
 
 .behavior-details__field {
@@ -188,13 +212,54 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior' : '
 
 .behavior-details__params {
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 6px;
-  padding: 0.75rem;
-  background-color: rgba(33, 38, 45, 0.45);
+  border-radius: 4px;
+  padding: 8px;
+  background: rgba(12, 16, 22, 0.55);
 }
 
 .behavior-details__actions {
   padding-inline: 1rem;
   padding-block: 0.5rem;
+}
+
+/* Unify input label styles with material panel */
+.behavior-details :deep(.v-field-label) {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+/* Toolbar styles aligned with MaterialDetailsPanel */
+.panel-toolbar {
+  background-color: transparent;
+  color: #e9ecf1;
+  min-height: 20px;
+  padding: 0 8px;
+}
+
+.toolbar-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.toolbar-close {
+  color: rgba(233, 236, 241, 0.72);
+}
+
+.toolbar-save {
+  color: rgba(233, 236, 241, 0.82);
+  font-weight: 500;
+  text-transform: none;
+}
+
+.toolbar-save:disabled {
+  color: rgba(233, 236, 241, 0.32) !important;
+}
+
+.material-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: rgba(233, 236, 241, 0.94);
 }
 </style>
