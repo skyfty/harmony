@@ -26,6 +26,9 @@ const CAMERA_HEIGHT = 1.6
 const FIRST_PERSON_ROTATION_SPEED = 75
 const FIRST_PERSON_MOVE_SPEED = 2
 const FIRST_PERSON_LOOK_SPEED = 0.06
+const FIRST_PERSON_PITCH_LIMIT = THREE.MathUtils.degToRad(75)
+const tempDirection = new THREE.Vector3()
+const tempTarget = new THREE.Vector3()
 
 let renderer: THREE.WebGLRenderer | null = null
 let scene: THREE.Scene | null = null
@@ -120,7 +123,9 @@ function setFirstPersonMouseControl(enabled: boolean) {
 		firstPersonControls.activeLook = enabled
 		resetFirstPersonPointerDelta()
 		if (enabled) {
+			clampFirstPersonPitch(true)
 			syncFirstPersonOrientation()
+			syncLastFirstPersonStateFromCamera()
 		}
 	}
 	updateCanvasCursor()
@@ -164,6 +169,41 @@ function syncFirstPersonOrientation() {
 	internalControls._setOrientation?.()
 }
 
+function syncLastFirstPersonStateFromCamera() {
+	if (!camera) {
+		return
+	}
+	lastFirstPersonState.position.copy(camera.position)
+	camera.getWorldDirection(lastFirstPersonState.direction)
+}
+
+function clampFirstPersonPitch(force = false) {
+	if (!camera) {
+		return
+	}
+	if (!force && controlMode.value !== 'first-person') {
+		return
+	}
+	tempDirection.set(0, 0, 0)
+	camera.getWorldDirection(tempDirection)
+	const currentPitch = Math.asin(THREE.MathUtils.clamp(tempDirection.y, -1, 1))
+	const clampedPitch = THREE.MathUtils.clamp(currentPitch, -FIRST_PERSON_PITCH_LIMIT, FIRST_PERSON_PITCH_LIMIT)
+	if (Math.abs(clampedPitch - currentPitch) < 1e-4) {
+		return
+	}
+	const yaw = Math.atan2(tempDirection.x, -tempDirection.z)
+	const cosPitch = Math.cos(clampedPitch)
+	tempDirection.set(
+		Math.sin(yaw) * cosPitch,
+		Math.sin(clampedPitch),
+		-Math.cos(yaw) * cosPitch,
+	)
+	tempTarget.copy(camera.position).add(tempDirection)
+	camera.lookAt(tempTarget)
+	syncFirstPersonOrientation()
+	syncLastFirstPersonStateFromCamera()
+}
+
 watch(isPlaying, (playing) => {
 	animationMixers.forEach((mixer) => {
 		mixer.timeScale = playing ? 1 : 0
@@ -185,8 +225,10 @@ function applyControlMode(mode: ControlMode) {
 		activeCamera.position.y = CAMERA_HEIGHT
 		const target = new THREE.Vector3().copy(lastFirstPersonState.position).add(lastFirstPersonState.direction)
 		activeCamera.lookAt(target)
+		clampFirstPersonPitch(true)
 		syncFirstPersonOrientation()
 		resetFirstPersonPointerDelta()
+		syncLastFirstPersonStateFromCamera()
 	} else {
 		firstPersonControls && (firstPersonControls.enabled = false)
 		mapControls && (mapControls.enabled = true)
@@ -351,9 +393,9 @@ function startAnimationLoop() {
 				controlsInternal._lon = nextLon
 			}
 			firstPersonControls.update(delta)
+			clampFirstPersonPitch()
 			activeCamera.position.y = CAMERA_HEIGHT
-			lastFirstPersonState.position.copy(activeCamera.position)
-			activeCamera.getWorldDirection(lastFirstPersonState.direction)
+			syncLastFirstPersonStateFromCamera()
 		} else if (mapControls) {
 			mapControls.update()
 			lastOrbitState.position.copy(activeCamera.position)
@@ -660,17 +702,19 @@ function applyInitialCameraState(state: SceneCameraState) {
 		return
 	}
 	camera.position.set(state.position.x, state.position.y, state.position.z)
-	const target = new THREE.Vector3(state.target.x, state.target.y, state.target.z)
-	camera.lookAt(target)
+	tempTarget.set(state.target.x, state.target.y, state.target.z)
+	camera.lookAt(tempTarget)
+	clampFirstPersonPitch(true)
 	syncFirstPersonOrientation()
 	if (state.fov && camera instanceof THREE.PerspectiveCamera) {
 		camera.fov = state.fov
 		camera.updateProjectionMatrix()
 	}
-	lastFirstPersonState.position.copy(camera.position)
-	camera.getWorldDirection(lastFirstPersonState.direction)
+	syncLastFirstPersonStateFromCamera()
 	lastOrbitState.position.copy(camera.position)
-	lastOrbitState.target.copy(target)
+	camera.getWorldDirection(tempDirection)
+	tempTarget.copy(camera.position).add(tempDirection)
+	lastOrbitState.target.copy(tempTarget)
 	applyControlMode(controlMode.value)
 }
 

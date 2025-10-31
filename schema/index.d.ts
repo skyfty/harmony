@@ -220,6 +220,7 @@ export interface SceneJsonExportDocument {
   name: string;
   createdAt: string;
   updatedAt: string;
+  skybox: SceneSkyboxSettings;
   nodes: SceneNode[];
   materials: SceneMaterial[];
   groundSettings?: GroundSettings;

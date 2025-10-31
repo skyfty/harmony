@@ -305,6 +305,7 @@ export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, opti
     name: snapshot.name,
     createdAt: snapshot.createdAt,
     updatedAt: snapshot.updatedAt,
+    skybox: snapshot.viewportSettings.skybox,
     nodes: snapshot.nodes,
     materials: snapshot.materials,
     groundSettings: snapshot.groundSettings,
