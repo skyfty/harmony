@@ -9,13 +9,22 @@ import GroundPanel from '@/components/inspector/GroundPanel.vue'
 import BehaviorPanel from '@/components/inspector/BehaviorPanel.vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
-import type { SceneNodeComponentState } from '@harmony/schema'
+import type { BehaviorEventType, SceneBehavior, SceneNodeComponentState } from '@harmony/schema'
+import type { BehaviorActionDefinition } from '@schema/behaviors/definitions'
 
 import {
   BEHAVIOR_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
   componentManager,
 } from '@schema/components'
+
+type BehaviorDetailsPayload = {
+  mode: 'create' | 'edit'
+  action: BehaviorEventType
+  sequence: SceneBehavior[]
+  actions: BehaviorActionDefinition[]
+  sequenceId: string
+}
 const props = defineProps<{ floating?: boolean }>()
 
 const emit = defineEmits<{
@@ -23,6 +32,8 @@ const emit = defineEmits<{
   (event: 'toggle-placement'): void
   (event: 'open-material-details', payload: { id: string }): void
   (event: 'close-material-details'): void
+  (event: 'open-behavior-details', payload: BehaviorDetailsPayload): void
+  (event: 'close-behavior-details'): void
 }>()
 
 const sceneStore = useSceneStore()
@@ -30,6 +41,7 @@ const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
 const nodeName = ref('')
 const materialDetailsTargetId = ref<string | null>(null)
+const behaviorDetailsActive = ref(false)
 const panelCardRef = ref<HTMLElement | { $el: HTMLElement } | null>(null)
 const floating = computed(() => props.floating ?? false)
 const placementIcon = computed(() => (floating.value ? 'mdi-dock-right' : 'mdi-arrow-expand'))
@@ -44,6 +56,9 @@ const nodeComponents = computed<SceneNodeComponentState[]>(() =>
   Object.values(selectedNode.value?.components ?? {}).filter(
     (entry): entry is SceneNodeComponentState => Boolean(entry),
   ),
+)
+const hasBehaviorComponent = computed(() =>
+  nodeComponents.value.some((component) => component.type === BEHAVIOR_COMPONENT_TYPE),
 )
 const availableComponents = computed(() => {
   const node = selectedNode.value
@@ -136,6 +151,21 @@ function closeMaterialDetails(options: { silent?: boolean } = {}) {
   }
 }
 
+function handleOpenBehaviorDetails(payload: BehaviorDetailsPayload) {
+  behaviorDetailsActive.value = true
+  emit('open-behavior-details', payload)
+}
+
+function closeBehaviorDetails(options: { silent?: boolean } = {}) {
+  if (!behaviorDetailsActive.value) {
+    return
+  }
+  behaviorDetailsActive.value = false
+  if (!options.silent) {
+    emit('close-behavior-details')
+  }
+}
+
 function getPanelRect(): DOMRect | null {
   const target = panelCardRef.value
   if (!target) {
@@ -151,13 +181,21 @@ watch(showMaterialPanel, (visible) => {
   }
 })
 
+watch(hasBehaviorComponent, (present) => {
+  if (!present) {
+    closeBehaviorDetails()
+  }
+})
+
 watch(selectedNodeId, () => {
   closeMaterialDetails()
+  closeBehaviorDetails()
 })
 
 defineExpose({
   getPanelRect,
   closeMaterialDetails,
+  closeBehaviorDetails,
 })
 
 watch(selectedNodeId, () => {
@@ -288,7 +326,10 @@ function handleAddComponent(type: string) {
       <div v-if="nodeComponents.length" class="component-list">
         <div v-for="component in nodeComponents" :key="component.id" class="component-entry" >
           <WallPanel v-if="component.type === WALL_COMPONENT_TYPE" />
-          <BehaviorPanel v-else-if="component.type === BEHAVIOR_COMPONENT_TYPE" />
+          <BehaviorPanel
+            v-else-if="component.type === BEHAVIOR_COMPONENT_TYPE"
+            @open-details="handleOpenBehaviorDetails"
+          />
         </div>
       </div>
 

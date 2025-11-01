@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia'
 import HierarchyPanel from '@/components/layout/HierarchyPanel.vue'
 import InspectorPanel from '@/components/layout/InspectorPanel.vue'
 import MaterialDetailsPanel from '@/components/inspector/MaterialDetailsPanel.vue'
+import BehaviorDetailsPanel from '@/components/inspector/BehaviorDetailsPanel.vue'
 import ProjectPanel from '@/components/layout/ProjectPanel.vue'
 import SceneViewport, { type SceneViewportHandle } from '@/components/editor/SceneViewport.vue'
 import MenuBar from './MenuBar.vue'
@@ -15,6 +16,7 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 
 import { prepareJsonSceneExport } from '@/utils/sceneExport'
 import { broadcastScenePreviewUpdate } from '@/utils/previewChannel'
+import { generateUuid } from '@/utils/uuid'
 import {
   useSceneStore,
   type EditorPanel,
@@ -30,12 +32,30 @@ import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
 import Loader, { type LoaderProgressPayload } from '@/utils/loader'
 import type { Object3D } from 'three'
+import {
+  behaviorMapToList,
+  cloneBehavior,
+  cloneBehaviorList,
+  ensureBehaviorParams,
+  findBehaviorAction,
+  createBehaviorSequenceId,
+  listBehaviorScripts,
+  type BehaviorActionDefinition,
+} from '@schema/behaviors/definitions'
+import { BEHAVIOR_COMPONENT_TYPE } from '@schema/components'
+import type {
+  BehaviorComponentProps,
+  BehaviorEventType,
+  SceneBehavior,
+  SceneNodeComponentState,
+} from '@harmony/schema'
 
 const sceneStore = useSceneStore()
 const scenesStore = useScenesStore()
 const uiStore = useUiStore()
 const {
   nodes: sceneNodes,
+  selectedNode,
   selectedNodeId,
   activeTool,
   camera,
@@ -97,9 +117,13 @@ const isImportingExternalScene = ref(false)
 type InspectorPanelPublicInstance = InstanceType<typeof InspectorPanel> & {
   getPanelRect: () => DOMRect | null
   closeMaterialDetails: (options?: { silent?: boolean }) => void
+  closeBehaviorDetails: (options?: { silent?: boolean }) => void
 }
 
-type MaterialDetailsSource = 'docked' | 'floating'
+type InspectorPanelSource = 'docked' | 'floating'
+
+type MaterialDetailsSource = InspectorPanelSource
+type BehaviorDetailsSource = InspectorPanelSource
 
 type MaterialDetailsAnchor = {
   top: number
@@ -115,6 +139,28 @@ const materialDetailsState = reactive({
   anchor: null as MaterialDetailsAnchor | null,
   source: null as MaterialDetailsSource | null,
 })
+
+type BehaviorDetailsAnchor = {
+  top: number
+  left: number
+}
+
+type BehaviorDetailsContext = {
+  mode: 'create' | 'edit'
+  action: BehaviorEventType
+  sequence: SceneBehavior[]
+  actions: BehaviorActionDefinition[]
+  sequenceId: string
+}
+
+const behaviorDetailsState = reactive({
+  visible: false,
+  anchor: null as BehaviorDetailsAnchor | null,
+  source: null as BehaviorDetailsSource | null,
+  context: null as BehaviorDetailsContext | null,
+})
+
+const behaviorScriptOptions = listBehaviorScripts()
 
 
 const hierarchyOpen = computed({
@@ -228,7 +274,7 @@ function togglePanelPlacement(panel: EditorPanel) {
   })
 }
 
-function getInspectorRef(source: MaterialDetailsSource) {
+function getInspectorRef(source: InspectorPanelSource) {
   return source === 'docked' ? dockedInspectorRef.value : floatingInspectorRef.value
 }
 
@@ -247,6 +293,9 @@ function updateMaterialDetailsAnchor() {
 }
 
 function handleInspectorMaterialDetailsOpen(source: MaterialDetailsSource, payload: { id: string }) {
+  if (behaviorDetailsState.visible) {
+    handleBehaviorDetailsOverlayClose()
+  }
   materialDetailsState.source = source
   materialDetailsState.targetId = payload.id
   materialDetailsState.visible = true
@@ -277,8 +326,122 @@ function handleMaterialDetailsOverlayClose() {
   }
 }
 
+function getBehaviorComponent(): SceneNodeComponentState<BehaviorComponentProps> | null {
+  const node = selectedNode.value
+  if (!node) {
+    return null
+  }
+  const component = node.components?.[BEHAVIOR_COMPONENT_TYPE]
+  return (component as SceneNodeComponentState<BehaviorComponentProps> | undefined) ?? null
+}
+
+function updateBehaviorDetailsAnchor() {
+  if (!behaviorDetailsState.visible || !behaviorDetailsState.source) {
+    behaviorDetailsState.anchor = null
+    return
+  }
+  const inspector = getInspectorRef(behaviorDetailsState.source)
+  const rect = inspector?.getPanelRect?.() ?? null
+  behaviorDetailsState.anchor = rect ? { top: rect.top, left: rect.left } : null
+}
+
+function handleInspectorBehaviorDetailsOpen(source: BehaviorDetailsSource, payload: BehaviorDetailsContext) {
+  if (materialDetailsState.visible) {
+    handleMaterialDetailsOverlayClose()
+  }
+  behaviorDetailsState.source = source
+  behaviorDetailsState.context = {
+    ...payload,
+    actions: payload.actions.slice(),
+    sequence: cloneBehaviorList(payload.sequence),
+  }
+  behaviorDetailsState.visible = true
+  nextTick(() => {
+    updateBehaviorDetailsAnchor()
+  })
+}
+
+function handleInspectorBehaviorDetailsClose(source: BehaviorDetailsSource) {
+  if (behaviorDetailsState.source !== source) {
+    return
+  }
+  behaviorDetailsState.visible = false
+  behaviorDetailsState.anchor = null
+  behaviorDetailsState.source = null
+  behaviorDetailsState.context = null
+}
+
+function handleBehaviorDetailsOverlayClose() {
+  const source = behaviorDetailsState.source
+  behaviorDetailsState.visible = false
+  behaviorDetailsState.anchor = null
+  behaviorDetailsState.source = null
+  behaviorDetailsState.context = null
+  if (source) {
+    const inspector = getInspectorRef(source)
+    inspector?.closeBehaviorDetails?.({ silent: true })
+  }
+}
+
+function handleBehaviorDetailsSave(payload: { action: BehaviorEventType; sequence: SceneBehavior[] }) {
+  const component = getBehaviorComponent()
+  const nodeId = selectedNodeId.value
+  const context = behaviorDetailsState.context
+  if (!component || !nodeId || !context) {
+    return
+  }
+  const props = component.props as BehaviorComponentProps | undefined
+  const source = props?.behaviors
+  const currentList = cloneBehaviorList(Array.isArray(source) ? source : behaviorMapToList(source))
+  const existingSequenceId = context.sequenceId
+  const requestedSequenceId = payload.sequence[0]?.sequenceId
+  const sequenceId = requestedSequenceId && requestedSequenceId.trim().length
+    ? requestedSequenceId
+    : existingSequenceId || createBehaviorSequenceId()
+
+  const others = existingSequenceId
+    ? currentList.filter((step) => step.sequenceId !== existingSequenceId)
+    : currentList.slice()
+
+  if (payload.action !== 'perform') {
+    const conflict = others.some((step) => step.action === payload.action && step.sequenceId !== sequenceId)
+    if (conflict) {
+      const definition = findBehaviorAction(payload.action)
+      const label = definition?.label ?? payload.action
+      console.warn(`Behavior action "${label}" already exists on this node.`)
+      return
+    }
+  }
+
+  const insertionIndex = existingSequenceId
+    ? currentList.findIndex((step) => step.sequenceId === existingSequenceId)
+    : others.length
+  const safeIndex = insertionIndex === -1 ? others.length : insertionIndex
+
+  const normalized = payload.sequence.map((step) => ({
+    ...cloneBehavior(step),
+    id: step.id && step.id.trim().length ? step.id : generateUuid(),
+    action: payload.action,
+    sequenceId,
+    script: ensureBehaviorParams(step.script),
+  }))
+
+  const nextList = others.slice()
+  nextList.splice(safeIndex, 0, ...normalized)
+
+  sceneStore.updateNodeComponentProps(nodeId, component.id, {
+    behaviors: cloneBehaviorList(nextList),
+  })
+
+  handleBehaviorDetailsOverlayClose()
+}
+
 const handleMaterialDetailsRelayout = () => {
   updateMaterialDetailsAnchor()
+}
+
+const handleBehaviorDetailsRelayout = () => {
+  updateBehaviorDetailsAnchor()
 }
 
 watch(
@@ -294,6 +457,20 @@ watch(
     }
   },
   { immediate: false },
+)
+
+watch(
+  () => behaviorDetailsState.visible,
+  (visible) => {
+    if (visible) {
+      updateBehaviorDetailsAnchor()
+      window.addEventListener('resize', handleBehaviorDetailsRelayout)
+      window.addEventListener('scroll', handleBehaviorDetailsRelayout, true)
+    } else {
+      window.removeEventListener('resize', handleBehaviorDetailsRelayout)
+      window.removeEventListener('scroll', handleBehaviorDetailsRelayout, true)
+    }
+  },
 )
 
 watch(showInspectorDocked, (visible) => {
@@ -319,6 +496,32 @@ watch(showInspectorFloating, (visible) => {
   }
   nextTick(() => {
     updateMaterialDetailsAnchor()
+  })
+})
+
+watch(showInspectorDocked, (visible) => {
+  if (behaviorDetailsState.source !== 'docked') {
+    return
+  }
+  if (!visible) {
+    handleInspectorBehaviorDetailsClose('docked')
+    return
+  }
+  nextTick(() => {
+    updateBehaviorDetailsAnchor()
+  })
+})
+
+watch(showInspectorFloating, (visible) => {
+  if (behaviorDetailsState.source !== 'floating') {
+    return
+  }
+  if (!visible) {
+    handleInspectorBehaviorDetailsClose('floating')
+    return
+  }
+  nextTick(() => {
+    updateBehaviorDetailsAnchor()
   })
 })
 
@@ -1098,6 +1301,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('keyup', handleEditorViewShortcut, { capture: true })
   window.removeEventListener('resize', handleMaterialDetailsRelayout)
   window.removeEventListener('scroll', handleMaterialDetailsRelayout, true)
+  window.removeEventListener('resize', handleBehaviorDetailsRelayout)
+  window.removeEventListener('scroll', handleBehaviorDetailsRelayout, true)
 })
 
 
@@ -1147,6 +1352,8 @@ onBeforeUnmount(() => {
             @toggle-placement="togglePanelPlacement('inspector')"
             @open-material-details="(payload) => handleInspectorMaterialDetailsOpen('docked', payload)"
             @close-material-details="() => handleInspectorMaterialDetailsClose('docked')"
+            @open-behavior-details="(payload) => handleInspectorBehaviorDetailsOpen('docked', payload)"
+            @close-behavior-details="() => handleInspectorBehaviorDetailsClose('docked')"
           />
         </section>
       </transition>
@@ -1180,6 +1387,8 @@ onBeforeUnmount(() => {
               @toggle-placement="togglePanelPlacement('inspector')"
               @open-material-details="(payload) => handleInspectorMaterialDetailsOpen('floating', payload)"
               @close-material-details="() => handleInspectorMaterialDetailsClose('floating')"
+              @open-behavior-details="(payload) => handleInspectorBehaviorDetailsOpen('floating', payload)"
+              @close-behavior-details="() => handleInspectorBehaviorDetailsClose('floating')"
             />
           </div>
         </transition>
@@ -1227,6 +1436,19 @@ onBeforeUnmount(() => {
         <v-icon start>mdi-folder</v-icon>
         Project
       </v-btn>
+
+      <BehaviorDetailsPanel
+        v-if="behaviorDetailsState.visible && behaviorDetailsState.context && behaviorDetailsState.anchor"
+        :visible="behaviorDetailsState.visible"
+        :mode="behaviorDetailsState.context.mode"
+        :action="behaviorDetailsState.context.action"
+        :sequence="behaviorDetailsState.context.sequence"
+        :actions="behaviorDetailsState.context.actions"
+        :scripts="behaviorScriptOptions"
+        :anchor="behaviorDetailsState.anchor"
+        @close="handleBehaviorDetailsOverlayClose"
+        @save="handleBehaviorDetailsSave"
+      />
 
       <MaterialDetailsPanel
         v-if="materialDetailsState.visible && materialDetailsState.targetId && materialDetailsState.anchor"

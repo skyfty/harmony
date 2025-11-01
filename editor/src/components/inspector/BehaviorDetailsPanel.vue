@@ -32,6 +32,7 @@ const props = defineProps<{
   sequence: SceneBehavior[] | null
   actions: BehaviorActionDefinition[]
   scripts: BehaviorScriptDefinition[]
+  anchor: { top: number; left: number } | null
 }>()
 
 const emit = defineEmits<{
@@ -45,6 +46,16 @@ const localSequenceId = ref<string>(createBehaviorSequenceId())
 const selectedStepId = ref<string | null>(null)
 const isPickingTarget = ref(false)
 const parameterComponentRef = ref<{ cancelPicking?: () => void } | null>(null)
+
+const panelStyle = computed(() => {
+  if (!props.anchor) {
+    return {}
+  }
+  return {
+    top: `${props.anchor.top + 70}px`,
+    left: `${props.anchor.left}px`,
+  }
+})
 
 const dragState = reactive({
   source: null as DragSource,
@@ -341,135 +352,167 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequ
 </script>
 
 <template>
-  <v-dialog :model-value="visible" max-width="720" @update:modelValue="closePanel">
-    <v-card class="behavior-details">
-      <v-toolbar density="compact" class="panel-toolbar" height="40px">
-        <div class="toolbar-text">
-          <div class="material-title">{{ dialogTitle }}</div>
-        </div>
-        <v-spacer />
-        <v-btn
-          class="toolbar-save"
-          variant="text"
-          size="small"
-          title="Save"
-          :disabled="isPickingTarget"
-          @click="handleSave"
-        >
-          <v-icon size="16px">mdi-content-save</v-icon>
-        </v-btn>
-        <v-btn class="toolbar-close" icon="mdi-close" size="small" variant="text" @click="closePanel" />
-      </v-toolbar>
-      <v-divider />
-      <v-card-text class="behavior-details__body" :class="{ 'is-picking': isPickingTarget }">
-        <div class="behavior-details__field">
-          <v-select
-            v-model="selectedAction"
-            :items="actions"
-            item-title="label"
-            item-value="id"
-            label="Action"
-            density="compact"
-            variant="underlined"
-            hide-details
-          />
-        </div>
-        <div
-          class="behavior-details__palette"
-          @dragover.prevent
-          @drop.prevent="handlePaletteDrop"
-        >
-          <div
-            v-for="script in scripts"
-            :key="script.id"
-            class="behavior-palette__item"
-            draggable="true"
-            @dragstart="handlePaletteDragStart(script, $event)"
-            @dragend="handleDragEnd"
-            @click="handlePaletteItemClick(script)"
-          >
-            <v-icon size="20">{{ script.icon }}</v-icon>
-            <span>{{ script.label }}</span>
-          </div>
-        </div>
-        <div class="behavior-details__sequence">
-          <div class="behavior-sequence">
-            <template v-if="localSequence.length">
-              <template v-for="(step, index) in localSequence" :key="step.id">
+  <Teleport to="body">
+    <transition name="behavior-details-panel">
+      <div
+        v-if="visible && anchor"
+        class="behavior-details-panel"
+        :style="panelStyle"
+      >
+        <v-card class="behavior-details">
+          <v-toolbar density="compact" class="panel-toolbar" height="40px">
+            <div class="toolbar-text">
+              <div class="material-title">{{ dialogTitle }}</div>
+            </div>
+            <v-spacer />
+            <v-btn
+              class="toolbar-save"
+              variant="text"
+              size="small"
+              title="Save"
+              :disabled="isPickingTarget"
+              @click="handleSave"
+            >
+              <v-icon size="16px">mdi-content-save</v-icon>
+            </v-btn>
+            <v-btn class="toolbar-close" icon="mdi-close" size="small" variant="text" @click="closePanel" />
+          </v-toolbar>
+          <v-divider />
+          <v-card-text class="behavior-details__body" :class="{ 'is-picking': isPickingTarget }">
+            <div class="behavior-details__field">
+              <v-select
+                v-model="selectedAction"
+                :items="actions"
+                item-title="label"
+                item-value="id"
+                label="Action"
+                density="compact"
+                variant="underlined"
+                hide-details
+              />
+            </div>
+            <div
+              class="behavior-details__palette"
+              @dragover.prevent
+              @drop.prevent="handlePaletteDrop"
+            >
+              <div
+                v-for="script in scripts"
+                :key="script.id"
+                class="behavior-palette__item"
+                draggable="true"
+                @dragstart="handlePaletteDragStart(script, $event)"
+                @dragend="handleDragEnd"
+                @click="handlePaletteItemClick(script)"
+              >
+                <v-icon size="20">{{ script.icon }}</v-icon>
+                <span>{{ script.label }}</span>
+              </div>
+            </div>
+            <div class="behavior-details__sequence">
+              <div class="behavior-sequence">
+                <template v-if="localSequence.length">
+                  <template v-for="(step, index) in localSequence" :key="step.id">
+                    <div
+                      class="behavior-sequence__drop-zone"
+                      :class="{ 'is-active': dragState.dropIndex === index }"
+                      @dragover.prevent="handleSequenceDragOver(index, $event)"
+                      @drop.prevent="handleSequenceDrop(index, $event)"
+                    />
+                    <div class="behavior-sequence__item-group">
+                      <div
+                        class="behavior-sequence__item"
+                        :class="{ 'is-selected': selectedStepId === step.id }"
+                        draggable="true"
+                        @dragstart="handleSequenceDragStart(step, index, $event)"
+                        @dragend="handleDragEnd"
+                        @click="selectStep(step.id)"
+                      >
+                        <v-icon size="18">{{ resolveScriptIcon(step.script.type) }}</v-icon>
+                        <span>{{ resolveScriptLabel(step.script.type) }}</span>
+                      </div>
+                      <v-icon
+                        v-if="index < localSequence.length - 1"
+                        size="16"
+                        class="behavior-sequence__arrow"
+                      >
+                        mdi-arrow-right
+                      </v-icon>
+                    </div>
+                    <div
+                      v-if="index === localSequence.length - 1"
+                      class="behavior-sequence__drop-zone end"
+                      :class="{ 'is-active': dragState.dropIndex === localSequence.length }"
+                      @dragover.prevent="handleSequenceDragOver(localSequence.length, $event)"
+                      @drop.prevent="handleSequenceDrop(localSequence.length, $event)"
+                    />
+                  </template>
+                </template>
                 <div
-                  class="behavior-sequence__drop-zone"
-                  :class="{ 'is-active': dragState.dropIndex === index }"
-                  @dragover.prevent="handleSequenceDragOver(index, $event)"
-                  @drop.prevent="handleSequenceDrop(index, $event)"
-                />
-                <div class="behavior-sequence__item-group">
-                  <div
-                    class="behavior-sequence__item"
-                    :class="{ 'is-selected': selectedStepId === step.id }"
-                    draggable="true"
-                    @dragstart="handleSequenceDragStart(step, index, $event)"
-                    @dragend="handleDragEnd"
-                    @click="selectStep(step.id)"
-                  >
-                    <v-icon size="18">{{ resolveScriptIcon(step.script.type) }}</v-icon>
-                    <span>{{ resolveScriptLabel(step.script.type) }}</span>
-                  </div>
-                  <v-icon
-                    v-if="index < localSequence.length - 1"
-                    size="16"
-                    class="behavior-sequence__arrow"
-                  >
-                    mdi-arrow-right
-                  </v-icon>
+                  v-else
+                  class="behavior-sequence__empty"
+                  @dragover.prevent="handleSequenceDragOver(0, $event)"
+                  @drop.prevent="handleSequenceDrop(0, $event)"
+                >
+                  Drag scripts here to build the sequence
                 </div>
-                <div
-                  v-if="index === localSequence.length - 1"
-                  class="behavior-sequence__drop-zone end"
-                  :class="{ 'is-active': dragState.dropIndex === localSequence.length }"
-                  @dragover.prevent="handleSequenceDragOver(localSequence.length, $event)"
-                  @drop.prevent="handleSequenceDrop(localSequence.length, $event)"
+              </div>
+            </div>
+            <div class="behavior-details__params">
+              <template v-if="selectedStep && parameterComponent">
+                <component
+                  :is="parameterComponent"
+                  :model-value="selectedStep.script.params"
+                  ref="parameterComponentRef"
+                  @pick-state-change="handlePickStateChange"
+                  @update:modelValue="handleParamsUpdate"
                 />
               </template>
-            </template>
-            <div
-              v-else
-              class="behavior-sequence__empty"
-              @dragover.prevent="handleSequenceDragOver(0, $event)"
-              @drop.prevent="handleSequenceDrop(0, $event)"
-            >
-              Drag scripts here to build the sequence
+              <template v-else-if="selectedStep">
+                <div class="behavior-details__no-params">This script has no configurable parameters.</div>
+              </template>
+              <template v-else>
+                <div class="behavior-details__no-selection">Select a script to configure its parameters.</div>
+              </template>
+            </div>
+          </v-card-text>
+          <div v-if="isPickingTarget" class="behavior-details__pick-overlay">
+            <div class="behavior-details__pick-content">
+              <v-icon size="36" color="primary">mdi-crosshairs-gps</v-icon>
+              <span>Click a node in the scene or press Esc to cancel.</span>
             </div>
           </div>
-        </div>
-        <div class="behavior-details__params">
-          <template v-if="selectedStep && parameterComponent">
-            <component
-              :is="parameterComponent"
-              :model-value="selectedStep.script.params"
-              ref="parameterComponentRef"
-              @pick-state-change="handlePickStateChange"
-              @update:modelValue="handleParamsUpdate"
-            />
-          </template>
-          <template v-else-if="selectedStep">
-            <div class="behavior-details__no-params">This script has no configurable parameters.</div>
-          </template>
-          <template v-else>
-            <div class="behavior-details__no-selection">Select a script to configure its parameters.</div>
-          </template>
-        </div>
-      </v-card-text>
-      <div v-if="isPickingTarget" class="behavior-details__pick-overlay">
-        <div class="behavior-details__pick-content">
-          <v-icon size="36" color="primary">mdi-crosshairs-gps</v-icon>
-          <span>Click a node in the scene or press Esc to cancel.</span>
-        </div>
+        </v-card>
       </div>
-    </v-card>
-  </v-dialog>
+    </transition>
+  </Teleport>
 </template>
 
 <style scoped>
+.behavior-details-panel-enter-active,
+.behavior-details-panel-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.behavior-details-panel-enter-from,
+.behavior-details-panel-leave-to {
+  opacity: 0;
+  transform: translate(-105%, 10px);
+}
+
+.behavior-details-panel {
+  position: fixed;
+  top: 0;
+  left: 0;
+  transform: translateX(-100%);
+  width: 720px;
+  max-width: calc(100% - 48px);
+  max-height: calc(100% - 200px);
+  display: flex;
+  flex-direction: column;
+  z-index: 24;
+}
+
 .behavior-details {
   border-radius: 5px;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -477,6 +520,7 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequ
   backdrop-filter: blur(14px);
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
   position: relative;
+  width: 100%;
 }
 
 .behavior-details__body {

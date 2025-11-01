@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import type {
   BehaviorEventType,
@@ -12,11 +12,9 @@ import { useSceneStore } from '@/stores/sceneStore'
 import { BEHAVIOR_COMPONENT_TYPE } from '@schema/components'
 import {
   behaviorMapToList,
-  cloneBehavior,
   cloneBehaviorList,
   createBehaviorSequenceId,
   createBehaviorTemplate,
-  ensureBehaviorParams,
   findBehaviorAction,
   findBehaviorScript,
   type BehaviorActionDefinition,
@@ -24,7 +22,6 @@ import {
   listBehaviorScripts,
 } from '@schema/behaviors/definitions'
 import { generateUuid } from '@/utils/uuid'
-import BehaviorDetailsPanel from '@/components/inspector/BehaviorDetailsPanel.vue'
 
 interface BehaviorSequenceEntry {
   action: BehaviorEventType
@@ -32,8 +29,20 @@ interface BehaviorSequenceEntry {
   sequence: SceneBehavior[]
 }
 
+type BehaviorDetailsContext = {
+  mode: 'create' | 'edit'
+  action: BehaviorEventType
+  sequence: SceneBehavior[]
+  actions: BehaviorActionDefinition[]
+  sequenceId: string
+}
+
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
+
+const emit = defineEmits<{
+  (event: 'open-details', payload: BehaviorDetailsContext): void
+}>()
 
 const behaviorComponent = computed(() =>
   selectedNode.value?.components?.[BEHAVIOR_COMPONENT_TYPE] as
@@ -78,21 +87,6 @@ const behaviorEntries = computed<BehaviorSequenceEntry[]>(() => {
 const actionOptions = listBehaviorActions()
 const scriptOptions = listBehaviorScripts()
 
-const detailsVisible = ref(false)
-const detailsMode = ref<'create' | 'edit'>('create')
-const editingAction = ref<BehaviorEventType | null>(null)
-const editingSequence = ref<SceneBehavior[] | null>(null)
-const editingSequenceId = ref<string | null>(null)
-const detailsActions = ref<BehaviorActionDefinition[]>(actionOptions)
-
-function resetDetailsState(): void {
-  detailsVisible.value = false
-  editingAction.value = null
-  editingSequence.value = null
-  editingSequenceId.value = null
-  detailsActions.value = actionOptions
-}
-
 function listUnusedActions(excluded?: { action: BehaviorEventType | null; sequenceId: string | null }): BehaviorActionDefinition[] {
   const usedCounts = new Map<BehaviorEventType, number>()
   behaviorEntries.value.forEach((entry) => {
@@ -129,10 +123,6 @@ function openDetails(
   allowedActions: BehaviorActionDefinition[],
   sequenceId: string,
 ) {
-  detailsMode.value = mode
-  editingAction.value = action
-  editingSequence.value = sequence ? cloneBehaviorList(sequence) : null
-  editingSequenceId.value = sequenceId
   const uniqueActions = new Map<BehaviorEventType, BehaviorActionDefinition>()
   allowedActions.forEach((definition) => {
     uniqueActions.set(definition.id, definition)
@@ -141,8 +131,15 @@ function openDetails(
   if (currentDefinition) {
     uniqueActions.set(currentDefinition.id, currentDefinition)
   }
-  detailsActions.value = uniqueActions.size ? Array.from(uniqueActions.values()) : actionOptions
-  detailsVisible.value = true
+  const actionsList = uniqueActions.size ? Array.from(uniqueActions.values()) : actionOptions
+  const sequenceCopy = sequence ? cloneBehaviorList(sequence) : null
+  emit('open-details', {
+    mode,
+    action,
+    sequence: sequenceCopy ?? [],
+    actions: actionsList,
+    sequenceId,
+  })
 }
 
 function handleAddBehavior() {
@@ -176,62 +173,6 @@ function commitBehaviors(nextList: SceneBehavior[]): void {
   sceneStore.updateNodeComponentProps(nodeId, component.id, {
     behaviors: cloneBehaviorList(nextList),
   })
-}
-
-type BehaviorSequencePayload = {
-  action: BehaviorEventType
-  sequence: SceneBehavior[]
-}
-
-function handleSaveBehavior(payload: BehaviorSequencePayload) {
-  const component = behaviorComponent.value
-  if (!component) {
-    return
-  }
-  const props = component.props as BehaviorComponentProps | undefined
-  const source = props?.behaviors
-  const currentList = cloneBehaviorList(Array.isArray(source) ? source : behaviorMapToList(source))
-  const existingSequenceId = editingSequenceId.value
-  const requestedSequenceId = payload.sequence[0]?.sequenceId
-  const sequenceId = requestedSequenceId && requestedSequenceId.trim().length
-    ? requestedSequenceId
-    : existingSequenceId ?? createBehaviorSequenceId()
-
-  if (payload.action !== 'perform') {
-    const hasConflict = behaviorEntries.value.some(
-      (entry) =>
-        entry.action === payload.action &&
-        entry.sequenceId !== sequenceId &&
-        entry.sequenceId !== existingSequenceId,
-    )
-    if (hasConflict) {
-      console.warn(`Behavior action "${payload.action}" already exists on this node.`)
-      return
-    }
-  }
-
-  const normalized = payload.sequence.map((step) => ({
-    ...cloneBehavior(step),
-    id: step.id && step.id.trim().length ? step.id : generateUuid(),
-    action: payload.action,
-    sequenceId,
-    script: ensureBehaviorParams(step.script),
-  }))
-
-  const filtered = existingSequenceId
-    ? currentList.filter((step) => step.sequenceId !== existingSequenceId)
-    : currentList
-
-  const insertionIndex = existingSequenceId
-    ? currentList.findIndex((step) => step.sequenceId === existingSequenceId)
-    : filtered.length
-  const safeIndex = insertionIndex === -1 ? filtered.length : insertionIndex
-
-  const nextList = filtered.slice()
-  nextList.splice(safeIndex, 0, ...normalized)
-
-  commitBehaviors(nextList)
-  resetDetailsState()
 }
 
 function handleDeleteBehavior(entry: BehaviorSequenceEntry) {
@@ -360,16 +301,6 @@ function handleRemoveComponent() {
       </div>
     </v-expansion-panel-text>
   </v-expansion-panel>
-  <BehaviorDetailsPanel
-    :visible="detailsVisible"
-    :mode="detailsMode"
-    :action="editingAction"
-    :sequence="editingSequence"
-    :actions="detailsActions"
-    :scripts="scriptOptions"
-  @close="resetDetailsState()"
-    @save="handleSaveBehavior"
-  />
 </template>
 
 <style scoped>

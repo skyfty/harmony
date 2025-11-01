@@ -51,6 +51,16 @@ const actionDefinitions: BehaviorActionDefinition[] = [
     description: 'Triggered when the node starts dragging.',
   },
   {
+    id: 'approach',
+    label: 'On Approach',
+    description: 'Triggered when the camera moves within range of the node.',
+  },
+  {
+    id: 'depart',
+    label: 'On Depart',
+    description: 'Triggered when the camera exits the node\'s proximity.',
+  },
+  {
     id: 'perform',
     label: 'Perform',
     description: 'Triggered manually to run a scripted sequence.',

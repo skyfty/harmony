@@ -4,12 +4,19 @@ import * as THREE from 'three'
 import { FirstPersonControls } from 'three/examples/jsm/controls/FirstPersonControls.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { Sky } from 'three/addons/objects/Sky.js'
-import type { LanternSlideDefinition, SceneJsonExportDocument, SceneNode, SceneSkyboxSettings } from '@harmony/schema'
+import type {
+	BehaviorComponentProps,
+	LanternSlideDefinition,
+	SceneJsonExportDocument,
+	SceneNode,
+	SceneNodeComponentState,
+	SceneSkyboxSettings,
+} from '@harmony/schema'
 import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
 import { subscribeToScenePreview } from '@/utils/previewChannel'
 import { buildSceneGraph } from '@schema/sceneGraph';
 import { ComponentManager } from '@schema/components/componentManager'
-import { behaviorComponentDefinition, wallComponentDefinition } from '@schema/components'
+import { behaviorComponentDefinition, wallComponentDefinition, BEHAVIOR_COMPONENT_TYPE } from '@schema/components'
 import {
 	hasRegisteredBehaviors,
 	listInteractableObjects,
@@ -58,6 +65,13 @@ const lanternEventToken = ref<string | null>(null)
 
 const activeBehaviorDelayTimers = new Map<string, number>()
 const activeBehaviorAnimations = new Map<string, () => void>()
+type BehaviorProximityCandidate = { hasApproach: boolean; hasDepart: boolean }
+type BehaviorProximityStateEntry = { inside: boolean; lastDistance: number | null }
+type BehaviorProximityThreshold = { enter: number; exit: number; objectId: string }
+
+const behaviorProximityCandidates = new Map<string, BehaviorProximityCandidate>()
+const behaviorProximityState = new Map<string, BehaviorProximityStateEntry>()
+const behaviorProximityThresholdCache = new Map<string, BehaviorProximityThreshold>()
 
 const CAMERA_HEIGHT = 1.6
 const FIRST_PERSON_ROTATION_SPEED = 25
@@ -68,6 +82,8 @@ const tempDirection = new THREE.Vector3()
 const tempTarget = new THREE.Vector3()
 const tempQuaternion = new THREE.Quaternion()
 const tempBox = new THREE.Box3()
+const tempSphere = new THREE.Sphere()
+const tempPosition = new THREE.Vector3()
 const skySunPosition = new THREE.Vector3()
 const SKY_ENVIRONMENT_INTENSITY = 0.35
 const SKY_SCALE = 2500
@@ -82,6 +98,10 @@ const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
 	elevation: 22,
 	azimuth: 145,
 }
+const PROXIMITY_MIN_DISTANCE = 3
+const PROXIMITY_RADIUS_SCALE = 1.25
+const PROXIMITY_EXIT_PADDING = 0.75
+const DEFAULT_OBJECT_RADIUS = 1.2
 
 let renderer: THREE.WebGLRenderer | null = null
 let scene: THREE.Scene | null = null
@@ -509,6 +529,127 @@ function resolveNodeFocusPoint(nodeId: string | null, fallback: THREE.Vector3): 
 	}
 	tempBox.getCenter(fallback)
 	return fallback
+}
+
+function resetBehaviorProximity(): void {
+	behaviorProximityCandidates.clear()
+	behaviorProximityState.clear()
+	behaviorProximityThresholdCache.clear()
+}
+
+function refreshBehaviorProximityCandidates(): void {
+	const nextCandidates = new Map<string, BehaviorProximityCandidate>()
+	previewNodeMap.forEach((node, nodeId) => {
+		const components = Object.values(node.components ?? {}) as Array<SceneNodeComponentState<BehaviorComponentProps> | undefined>
+		let hasApproach = false
+		let hasDepart = false
+		components.forEach((component) => {
+			if (!component || component.type !== BEHAVIOR_COMPONENT_TYPE || component.enabled === false) {
+				return
+			}
+			const props = component.props as BehaviorComponentProps | undefined
+			const behaviors = Array.isArray(props?.behaviors) ? props.behaviors : []
+			behaviors.forEach((behavior) => {
+				if (!behavior) {
+					return
+				}
+				if (behavior.action === 'approach') {
+					hasApproach = true
+				} else if (behavior.action === 'depart') {
+					hasDepart = true
+				}
+			})
+		})
+		if (hasApproach || hasDepart) {
+			nextCandidates.set(nodeId, { hasApproach, hasDepart })
+		}
+	})
+	resetBehaviorProximity()
+	nextCandidates.forEach((candidate, nodeId) => {
+		behaviorProximityCandidates.set(nodeId, candidate)
+		behaviorProximityState.set(nodeId, { inside: false, lastDistance: null })
+	})
+}
+
+function computeObjectBoundingRadius(object: THREE.Object3D): number {
+	tempBox.setFromObject(object)
+	const hasFiniteBounds = [
+		tempBox.min.x,
+		tempBox.min.y,
+		tempBox.min.z,
+		tempBox.max.x,
+		tempBox.max.y,
+		tempBox.max.z,
+	].every((value) => Number.isFinite(value))
+	if (!hasFiniteBounds) {
+		return DEFAULT_OBJECT_RADIUS
+	}
+	tempBox.getBoundingSphere(tempSphere)
+	return Number.isFinite(tempSphere.radius) && tempSphere.radius > 0 ? tempSphere.radius : DEFAULT_OBJECT_RADIUS
+}
+
+function resolveProximityThresholds(nodeId: string, object: THREE.Object3D): BehaviorProximityThreshold {
+	const cached = behaviorProximityThresholdCache.get(nodeId)
+	if (cached && cached.objectId === object.uuid) {
+		return cached
+	}
+	const radius = computeObjectBoundingRadius(object)
+	const enter = Math.max(PROXIMITY_MIN_DISTANCE, radius * PROXIMITY_RADIUS_SCALE)
+	const exit = enter + PROXIMITY_EXIT_PADDING
+	const nextThreshold: BehaviorProximityThreshold = {
+		enter,
+		exit,
+		objectId: object.uuid,
+	}
+	behaviorProximityThresholdCache.set(nodeId, nextThreshold)
+	return nextThreshold
+}
+
+function updateBehaviorProximity(): void {
+	if (!camera || !behaviorProximityCandidates.size) {
+		return
+	}
+	const cameraPosition = camera.position
+	behaviorProximityCandidates.forEach((candidate, nodeId) => {
+		const object = nodeObjectMap.get(nodeId)
+		if (!object) {
+			return
+		}
+		const thresholds = resolveProximityThresholds(nodeId, object)
+		const state = behaviorProximityState.get(nodeId)
+		if (!state) {
+			return
+		}
+		const focusPoint = resolveNodeFocusPoint(nodeId, tempPosition) ?? object.getWorldPosition(tempPosition)
+		const distance = focusPoint.distanceTo(cameraPosition)
+		if (!Number.isFinite(distance)) {
+			return
+		}
+		if (!state.inside && distance <= thresholds.enter) {
+			state.inside = true
+			if (candidate.hasApproach) {
+				const followUps = triggerBehaviorAction(nodeId, 'approach', {
+					payload: {
+						distance,
+						threshold: thresholds.enter,
+					},
+				})
+				processBehaviorEvents(followUps)
+			}
+		} else if (state.inside && distance >= thresholds.exit) {
+			state.inside = false
+			if (candidate.hasDepart) {
+				const followUps = triggerBehaviorAction(nodeId, 'depart', {
+					payload: {
+						distance,
+						threshold: thresholds.exit,
+					},
+				})
+				processBehaviorEvents(followUps)
+			}
+		}
+		state.lastDistance = distance
+	})
 }
 
 function handleDelayEvent(event: Extract<BehaviorRuntimeEvent, { type: 'delay' }>) {
@@ -1058,6 +1199,8 @@ function startAnimationLoop() {
 			animationMixers.forEach((mixer) => mixer.update(delta))
 		}
 
+		updateBehaviorProximity()
+
 		currentRenderer.render(currentScene, activeCamera)
 	}
 	renderLoop()
@@ -1077,6 +1220,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	}
 	previewComponentManager.reset()
 	resetBehaviorRuntime()
+	resetBehaviorProximity()
 	dismissBehaviorAlert()
 	resetLanternOverlay()
 	if (!rootGroup) {
@@ -1403,6 +1547,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	previewComponentManager.reset()
 	rebuildPreviewNodeMap(document.nodes)
 	previewComponentManager.syncScene(document.nodes ?? [])
+	refreshBehaviorProximityCandidates()
 	nodeObjectMap.forEach((object, nodeId) => {
 		attachRuntimeForNode(nodeId, object)
 	})
