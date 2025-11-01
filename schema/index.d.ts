@@ -142,7 +142,17 @@ export type SceneNodeComponentMap = Partial<Record<NodeComponentType, SceneNodeC
 
 export type BehaviorEventType = 'click' | 'hover' | 'drag' | 'perform'
 
-export type BehaviorScriptType = 'success' | 'failure' | 'delay' | 'moveTo' | 'showAlert' | 'watch' | 'look'
+export type BehaviorScriptType =
+  | 'success'
+  | 'failure'
+  | 'delay'
+  | 'moveTo'
+  | 'showAlert'
+  | 'watch'
+  | 'show'
+  | 'hide'
+  | 'lantern'
+  | 'look'
 
 export type MoveToFacingDirection = 'front' | 'back' | 'left' | 'right'
 
@@ -186,6 +196,30 @@ export interface WatchBehaviorParams {
   targetNodeId: string | null
 }
 
+export interface ShowBehaviorParams {
+  /** Target scene node id that should be forced visible. */
+  targetNodeId: string | null
+}
+
+export interface HideBehaviorParams {
+  /** Target scene node id that should be hidden. */
+  targetNodeId: string | null
+}
+
+export type LanternSlideLayout = 'imageTop' | 'imageLeft' | 'imageRight'
+
+export interface LanternSlideDefinition {
+  id: string
+  title: string
+  description: string
+  imageAssetId: string | null
+  layout: LanternSlideLayout
+}
+
+export interface LanternBehaviorParams {
+  slides: LanternSlideDefinition[]
+}
+
 export interface LookBehaviorParams {
   // no configuration required
 }
@@ -216,6 +250,18 @@ export type SceneBehaviorScriptBinding =
       params: WatchBehaviorParams
     }
   | {
+      type: 'show'
+      params: ShowBehaviorParams
+    }
+  | {
+      type: 'hide'
+      params: HideBehaviorParams
+    }
+  | {
+      type: 'lantern'
+      params: LanternBehaviorParams
+    }
+  | {
       type: 'look'
       params: LookBehaviorParams
     }
@@ -228,7 +274,7 @@ export interface SceneBehavior {
   script: SceneBehaviorScriptBinding
 }
 
-export type SceneBehaviorMap = Partial<Record<BehaviorActionType, SceneBehavior[]>>
+export type SceneBehaviorMap = Partial<Record<BehaviorEventType, SceneBehavior[]>>
 
 export interface BehaviorComponentProps {
   behaviors: SceneBehavior[]

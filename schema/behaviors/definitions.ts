@@ -11,7 +11,12 @@ import type {
   SceneBehaviorMap,
   SceneBehaviorScriptBinding,
   ShowAlertBehaviorParams,
+  ShowBehaviorParams,
+  LanternBehaviorParams,
+  LanternSlideDefinition,
+  LanternSlideLayout,
   SuccessBehaviorParams,
+  HideBehaviorParams,
   WatchBehaviorParams,
 } from '../index'
 
@@ -54,6 +59,55 @@ const actionDefinitions: BehaviorActionDefinition[] = [
 
 const DEFAULT_CONFIRM_TEXT = 'Confirm'
 const DEFAULT_CANCEL_TEXT = 'Cancel'
+
+let lanternSlideCounter = 0
+
+function generateLanternSlideId(): string {
+  lanternSlideCounter += 1
+  return `lantern_slide_${Date.now()}_${lanternSlideCounter.toString(16)}`
+}
+
+function normalizeLanternLayout(layout: string | null | undefined): LanternSlideLayout {
+  switch (layout) {
+    case 'imageTop':
+    case 'imageLeft':
+    case 'imageRight':
+      return layout
+    default:
+      return 'imageTop'
+  }
+}
+
+function normalizeLanternSlides(slides: LanternSlideDefinition[] | null | undefined): LanternSlideDefinition[] {
+  if (!Array.isArray(slides)) {
+    return [
+      {
+        id: generateLanternSlideId(),
+        title: '',
+        description: '',
+        imageAssetId: null,
+        layout: 'imageTop',
+      },
+    ]
+  }
+  if (!slides.length) {
+    return []
+  }
+  return slides.map((slide) => {
+    const id = typeof slide?.id === 'string' && slide.id.trim().length ? slide.id.trim() : generateLanternSlideId()
+    const title = typeof slide?.title === 'string' ? slide.title.trim() : ''
+    const description = typeof slide?.description === 'string' ? slide.description.trim() : ''
+    const imageAssetId = typeof slide?.imageAssetId === 'string' && slide.imageAssetId.trim().length ? slide.imageAssetId.trim() : null
+    const layout = normalizeLanternLayout(slide?.layout)
+    return {
+      id,
+      title,
+      description,
+      imageAssetId,
+      layout,
+    }
+  })
+}
 
 const scriptDefinitions: BehaviorScriptDefinition[] = [
   {
@@ -121,6 +175,47 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
     createDefaultParams(): WatchBehaviorParams {
       return {
         targetNodeId: null,
+      }
+    },
+  },
+  {
+    id: 'show',
+    label: 'Show Node',
+    description: 'Make the target node visible before continuing.',
+    icon: 'mdi-eye-plus-outline',
+    createDefaultParams(): ShowBehaviorParams {
+      return {
+        targetNodeId: null,
+      }
+    },
+  },
+  {
+    id: 'hide',
+    label: 'Hide Node',
+    description: 'Hide the target node before continuing.',
+    icon: 'mdi-eye-off-outline',
+    createDefaultParams(): HideBehaviorParams {
+      return {
+        targetNodeId: null,
+      }
+    },
+  },
+  {
+    id: 'lantern',
+    label: 'Lantern Slides',
+    description: 'Display a carousel of slides and wait for confirmation.',
+    icon: 'mdi-view-carousel-outline',
+    createDefaultParams(): LanternBehaviorParams {
+      return {
+        slides: normalizeLanternSlides([
+          {
+            id: generateLanternSlideId(),
+            title: '',
+            description: '',
+            imageAssetId: null,
+            layout: 'imageTop',
+          },
+        ]),
       }
     },
   },
@@ -230,6 +325,33 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
         type: 'watch',
         params: {
           targetNodeId: params?.targetNodeId ?? null,
+        },
+      }
+    }
+    case 'show': {
+      const params = binding.params as ShowBehaviorParams | undefined
+      return {
+        type: 'show',
+        params: {
+          targetNodeId: params?.targetNodeId ?? null,
+        },
+      }
+    }
+    case 'hide': {
+      const params = binding.params as HideBehaviorParams | undefined
+      return {
+        type: 'hide',
+        params: {
+          targetNodeId: params?.targetNodeId ?? null,
+        },
+      }
+    }
+    case 'lantern': {
+      const params = binding.params as LanternBehaviorParams | undefined
+      return {
+        type: 'lantern',
+        params: {
+          slides: normalizeLanternSlides(params?.slides),
         },
       }
     }
@@ -403,6 +525,33 @@ export function ensureBehaviorParams(
           type: 'watch',
           params: {
             targetNodeId: params?.targetNodeId ?? null,
+          },
+        }
+      }
+      case 'show': {
+        const params = script.params as Partial<ShowBehaviorParams> | undefined
+        return {
+          type: 'show',
+          params: {
+            targetNodeId: params?.targetNodeId ?? null,
+          },
+        }
+      }
+      case 'hide': {
+        const params = script.params as Partial<HideBehaviorParams> | undefined
+        return {
+          type: 'hide',
+          params: {
+            targetNodeId: params?.targetNodeId ?? null,
+          },
+        }
+      }
+      case 'lantern': {
+        const params = script.params as Partial<LanternBehaviorParams> | undefined
+        return {
+          type: 'lantern',
+          params: {
+            slides: normalizeLanternSlides(params?.slides as LanternSlideDefinition[] | null | undefined),
           },
         }
       }

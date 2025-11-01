@@ -2,11 +2,14 @@ import type { Object3D } from 'three'
 import type {
   BehaviorEventType,
   DelayBehaviorParams,
+  HideBehaviorParams,
+  LanternBehaviorParams,
   MoveToBehaviorParams,
   MoveToFacingDirection,
   SceneBehavior,
   SceneBehaviorMap,
   ShowAlertBehaviorParams,
+  ShowBehaviorParams,
   WatchBehaviorParams,
 } from '../index'
 import { behaviorMapToList, cloneBehaviorList, ensureBehaviorParams } from './definitions'
@@ -64,6 +67,26 @@ export type BehaviorRuntimeEvent =
       behaviorId: string
       targetNodeId: string | null
       token: string
+    }
+  | {
+      type: 'lantern'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+      params: LanternBehaviorParams
+      token: string
+    }
+  | {
+      type: 'set-visibility'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+      targetNodeId: string
+      visible: boolean
     }
   | {
       type: 'look-level'
@@ -323,6 +346,27 @@ function createShowAlertEvent(state: BehaviorSequenceState, behavior: SceneBehav
   }
 }
 
+function createLanternEvent(state: BehaviorSequenceState, behavior: SceneBehavior): BehaviorRuntimeEvent {
+  const token = createToken(state.id, state.index)
+  pendingTokens.set(token, {
+    token,
+    sequenceId: state.id,
+    stepIndex: state.index,
+  })
+  state.status = 'waiting'
+  const params = behavior.script.params as LanternBehaviorParams
+  return {
+    type: 'lantern',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+    params,
+    token,
+  }
+}
+
 function createWatchEvent(state: BehaviorSequenceState, behavior: SceneBehavior): BehaviorRuntimeEvent {
   const token = createToken(state.id, state.index)
   pendingTokens.set(token, {
@@ -339,7 +383,7 @@ function createWatchEvent(state: BehaviorSequenceState, behavior: SceneBehavior)
     sequenceId: state.id,
     behaviorSequenceId: state.behaviorSequenceId,
     behaviorId: behavior.id,
-    targetNodeId: params.targetNodeId ?? null,
+    targetNodeId: params.targetNodeId ?? state.nodeId,
     token,
   }
 }
@@ -363,21 +407,24 @@ function createLookEvent(state: BehaviorSequenceState, behavior: SceneBehavior):
   }
 }
 
-function appendErrorEvent(
-  events: BehaviorRuntimeEvent[],
+function createVisibilityEvent(
   state: BehaviorSequenceState,
   behavior: SceneBehavior,
-  message: string,
-): void {
-  events.push({
-    type: 'sequence-error',
+  params: ShowBehaviorParams | HideBehaviorParams,
+  visible: boolean,
+): BehaviorRuntimeEvent {
+  const fallbackTarget = state.nodeId
+  const targetNodeId = params?.targetNodeId && params.targetNodeId.trim() ? params.targetNodeId : fallbackTarget
+  return {
+    type: 'set-visibility',
     nodeId: state.nodeId,
     action: state.action,
     sequenceId: state.id,
     behaviorSequenceId: state.behaviorSequenceId,
     behaviorId: behavior.id,
-    message,
-  })
+    targetNodeId,
+    visible,
+  }
 }
 
 function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
@@ -414,15 +461,23 @@ function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
       case 'showAlert':
         events.push(createShowAlertEvent(state, behavior))
         return events
-      case 'watch': {
-        const params = script.params as { targetNodeId: string | null }
-        if (!params.targetNodeId) {
-          appendErrorEvent(events, state, behavior, 'Watch behavior requires a target node.')
-          events.push(finalizeSequence(state, 'failure', behavior.id || null, 'Missing target node'))
-          return events
-        }
+      case 'lantern':
+        events.push(createLanternEvent(state, behavior))
+        return events
+      case 'watch':
         events.push(createWatchEvent(state, behavior))
         return events
+      case 'show': {
+        const params = script.params as ShowBehaviorParams
+        events.push(createVisibilityEvent(state, behavior, params, true))
+        state.index += 1
+        continue
+      }
+      case 'hide': {
+        const params = script.params as HideBehaviorParams
+        events.push(createVisibilityEvent(state, behavior, params, false))
+        state.index += 1
+        continue
       }
       case 'look':
         events.push(createLookEvent(state, behavior))
