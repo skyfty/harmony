@@ -140,7 +140,7 @@ export interface SceneNodeComponentState<TProps = Record<string, unknown>> {
 
 export type SceneNodeComponentMap = Partial<Record<NodeComponentType, SceneNodeComponentState<any>>>
 
-export type BehaviorActionType = 'click' | 'hover' | 'drag' | 'perform'
+export type BehaviorEventType = 'click' | 'hover' | 'drag' | 'perform'
 
 export type BehaviorScriptType = 'success' | 'failure' | 'delay' | 'moveTo' | 'showAlert' | 'watch' | 'look'
 
@@ -223,7 +223,7 @@ export type SceneBehaviorScriptBinding =
 export interface SceneBehavior {
   id: string
   name: string
-  action: BehaviorActionType
+  action: BehaviorEventType
   sequenceId: string
   script: SceneBehaviorScriptBinding
 }

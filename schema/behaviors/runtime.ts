@@ -1,6 +1,6 @@
 import type { Object3D } from 'three'
 import type {
-  BehaviorActionType,
+  BehaviorEventType,
   DelayBehaviorParams,
   MoveToBehaviorParams,
   MoveToFacingDirection,
@@ -26,7 +26,7 @@ export type BehaviorRuntimeEvent =
   | {
       type: 'delay'
       nodeId: string
-      action: BehaviorActionType
+      action: BehaviorEventType
       sequenceId: string
       behaviorSequenceId: string
       behaviorId: string
@@ -36,7 +36,7 @@ export type BehaviorRuntimeEvent =
   | {
       type: 'move-camera'
       nodeId: string
-      action: BehaviorActionType
+      action: BehaviorEventType
       sequenceId: string
       behaviorSequenceId: string
       behaviorId: string
@@ -48,7 +48,7 @@ export type BehaviorRuntimeEvent =
   | {
       type: 'show-alert'
       nodeId: string
-      action: BehaviorActionType
+      action: BehaviorEventType
       sequenceId: string
       behaviorSequenceId: string
       behaviorId: string
@@ -58,7 +58,7 @@ export type BehaviorRuntimeEvent =
   | {
       type: 'watch-node'
       nodeId: string
-      action: BehaviorActionType
+      action: BehaviorEventType
       sequenceId: string
       behaviorSequenceId: string
       behaviorId: string
@@ -68,7 +68,7 @@ export type BehaviorRuntimeEvent =
   | {
       type: 'look-level'
       nodeId: string
-      action: BehaviorActionType
+      action: BehaviorEventType
       sequenceId: string
       behaviorSequenceId: string
       behaviorId: string
@@ -77,7 +77,7 @@ export type BehaviorRuntimeEvent =
   | {
       type: 'sequence-complete'
       nodeId: string
-      action: BehaviorActionType
+      action: BehaviorEventType
       sequenceId: string
       behaviorSequenceId: string
       behaviorId: string | null
@@ -87,7 +87,7 @@ export type BehaviorRuntimeEvent =
   | {
       type: 'sequence-error'
       nodeId: string
-      action: BehaviorActionType
+      action: BehaviorEventType
       sequenceId: string
       behaviorSequenceId: string
       behaviorId: string | null
@@ -104,7 +104,7 @@ type BehaviorSequenceGroup = {
   steps: SceneBehavior[]
 }
 
-type BehaviorRegistry = Partial<Record<BehaviorActionType, BehaviorSequenceGroup[]>>
+type BehaviorRegistry = Partial<Record<BehaviorEventType, BehaviorSequenceGroup[]>>
 
 type RegistryEntry = {
   nodeId: string
@@ -115,7 +115,7 @@ type RegistryEntry = {
 type BehaviorSequenceState = {
   id: string
   nodeId: string
-  action: BehaviorActionType
+  action: BehaviorEventType
   behaviorSequenceId: string
   steps: SceneBehavior[]
   index: number
@@ -182,7 +182,7 @@ function buildBehaviorRegistry(list: SceneBehavior[] | null | undefined): Behavi
       script: ensureBehaviorParams(behavior.script),
     })
   })
-  ;(Object.keys(registry) as BehaviorActionType[]).forEach((action) => {
+  ;(Object.keys(registry) as BehaviorEventType[]).forEach((action) => {
     const groups = registry[action]
     if (!groups) {
       delete registry[action]
@@ -241,7 +241,7 @@ function finalizeSequence(
 
 function registerBehaviorSequence(
   nodeId: string,
-  action: BehaviorActionType,
+  action: BehaviorEventType,
   behaviorSequenceId: string,
   steps: SceneBehavior[],
 ): BehaviorSequenceState {
@@ -501,7 +501,7 @@ export function listInteractableObjects(): Object3D[] {
 
 export function triggerBehaviorAction(
   nodeId: string,
-  action: BehaviorActionType,
+  action: BehaviorEventType,
   _context: BehaviorTriggerContext,
   options: { sequenceId?: string } = {},
 ): BehaviorRuntimeEvent[] {

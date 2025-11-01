@@ -1,5 +1,5 @@
 import type {
-  BehaviorActionType,
+  BehaviorEventType,
   BehaviorComponentProps,
   BehaviorScriptType,
   DelayBehaviorParams,
@@ -16,7 +16,7 @@ import type {
 } from '../index'
 
 export interface BehaviorActionDefinition {
-  id: BehaviorActionType
+  id: BehaviorEventType
   label: string
   description?: string
 }
@@ -164,7 +164,7 @@ export function listBehaviorScripts(): BehaviorScriptDefinition[] {
   return scriptDefinitions
 }
 
-export function findBehaviorAction(id: BehaviorActionType): BehaviorActionDefinition | null {
+export function findBehaviorAction(id: BehaviorEventType): BehaviorActionDefinition | null {
   return actionDefinitions.find((entry) => entry.id === id) ?? null
 }
 
@@ -260,7 +260,7 @@ export function cloneBehaviorList(list: SceneBehavior[] | null | undefined): Sce
 }
 
 export function cloneBehaviorMap(
-  map: BehaviorMap | Record<BehaviorActionType, SceneBehavior> | null | undefined,
+  map: BehaviorMap | Record<BehaviorEventType, SceneBehavior> | null | undefined,
 ): BehaviorMap {
   if (!map) {
     return {}
@@ -269,7 +269,7 @@ export function cloneBehaviorMap(
     return behaviorListToMap(map)
   }
   const next: BehaviorMap = {}
-  ;(Object.keys(map) as BehaviorActionType[]).forEach((action) => {
+  ;(Object.keys(map) as BehaviorEventType[]).forEach((action) => {
     const behaviors = (map as Record<string, SceneBehavior | SceneBehavior[] | undefined>)[action]
     if (!behaviors) {
       return
@@ -285,7 +285,7 @@ export function behaviorMapToList(map: BehaviorMap | null | undefined): SceneBeh
     return []
   }
   const list: SceneBehavior[] = []
-  ;(Object.keys(map) as BehaviorActionType[]).forEach((action) => {
+  ;(Object.keys(map) as BehaviorEventType[]).forEach((action) => {
     const behaviors = map[action]
     if (!behaviors || !behaviors.length) {
       return
@@ -321,7 +321,7 @@ export function behaviorListToMap(list: SceneBehavior[] | null | undefined): Beh
 }
 
 export function createBehaviorTemplate(
-  action: BehaviorActionType = 'click',
+  action: BehaviorEventType = 'click',
   scriptType: BehaviorScriptType = 'showAlert',
   sequenceId?: string,
 ): SceneBehavior {

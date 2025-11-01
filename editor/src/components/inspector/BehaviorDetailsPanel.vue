@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import type {
-  BehaviorActionType,
+  BehaviorEventType,
   BehaviorScriptType,
   SceneBehavior,
 } from '@harmony/schema'
@@ -25,7 +25,7 @@ type DragSource = 'palette' | 'sequence' | null
 const props = defineProps<{
   visible: boolean
   mode: PanelMode
-  action: BehaviorActionType | null
+  action: BehaviorEventType | null
   sequence: SceneBehavior[] | null
   actions: BehaviorActionDefinition[]
   scripts: BehaviorScriptDefinition[]
@@ -33,10 +33,10 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'close'): void
-  (event: 'save', payload: { action: BehaviorActionType; sequence: SceneBehavior[] }): void
+  (event: 'save', payload: { action: BehaviorEventType; sequence: SceneBehavior[] }): void
 }>()
 
-const localAction = ref<BehaviorActionType>('click')
+const localAction = ref<BehaviorEventType>('click')
 const localSequence = ref<SceneBehavior[]>([])
 const localSequenceId = ref<string>(createBehaviorSequenceId())
 const selectedStepId = ref<string | null>(null)
@@ -83,7 +83,7 @@ function cancelActivePicking() {
   isPickingTarget.value = false
 }
 
-function ensureStep(step: SceneBehavior, action: BehaviorActionType, sequenceId: string): SceneBehavior {
+function ensureStep(step: SceneBehavior, action: BehaviorEventType, sequenceId: string): SceneBehavior {
   const normalized = cloneBehavior(step)
   normalized.id = normalized.id && normalized.id.trim().length ? normalized.id : generateUuid()
   normalized.action = action
@@ -94,7 +94,7 @@ function ensureStep(step: SceneBehavior, action: BehaviorActionType, sequenceId:
 
 function rebuildSequence(
   sequence: SceneBehavior[] | null | undefined,
-  action: BehaviorActionType,
+  action: BehaviorEventType,
   sequenceId: string,
 ): SceneBehavior[] {
   const list = Array.isArray(sequence) && sequence.length ? sequence : []
@@ -174,7 +174,7 @@ watch(
   },
 )
 
-const selectedAction = computed<BehaviorActionType>({
+const selectedAction = computed<BehaviorEventType>({
   get() {
     return localAction.value
   },

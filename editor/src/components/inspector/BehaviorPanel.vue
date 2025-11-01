@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import type {
-  BehaviorActionType,
+  BehaviorEventType,
   BehaviorComponentProps,
   BehaviorScriptType,
   SceneBehavior,
@@ -27,7 +27,7 @@ import { generateUuid } from '@/utils/uuid'
 import BehaviorDetailsPanel from '@/components/inspector/BehaviorDetailsPanel.vue'
 
 interface BehaviorSequenceEntry {
-  action: BehaviorActionType
+  action: BehaviorEventType
   sequenceId: string
   sequence: SceneBehavior[]
 }
@@ -80,7 +80,7 @@ const scriptOptions = listBehaviorScripts()
 
 const detailsVisible = ref(false)
 const detailsMode = ref<'create' | 'edit'>('create')
-const editingAction = ref<BehaviorActionType | null>(null)
+const editingAction = ref<BehaviorEventType | null>(null)
 const editingSequence = ref<SceneBehavior[] | null>(null)
 const editingSequenceId = ref<string | null>(null)
 const detailsActions = ref<BehaviorActionDefinition[]>(actionOptions)
@@ -93,8 +93,8 @@ function resetDetailsState(): void {
   detailsActions.value = actionOptions
 }
 
-function listUnusedActions(excluded?: { action: BehaviorActionType | null; sequenceId: string | null }): BehaviorActionDefinition[] {
-  const usedCounts = new Map<BehaviorActionType, number>()
+function listUnusedActions(excluded?: { action: BehaviorEventType | null; sequenceId: string | null }): BehaviorActionDefinition[] {
+  const usedCounts = new Map<BehaviorEventType, number>()
   behaviorEntries.value.forEach((entry) => {
     if (excluded && entry.sequenceId === excluded.sequenceId) {
       return
@@ -106,7 +106,7 @@ function listUnusedActions(excluded?: { action: BehaviorActionType | null; seque
 
 const canAddBehavior = computed(() => listUnusedActions().length > 0)
 
-function resolveActionLabel(action: BehaviorActionType): string {
+function resolveActionLabel(action: BehaviorEventType): string {
   return findBehaviorAction(action)?.label ?? 'Unknown Action'
 }
 
@@ -124,7 +124,7 @@ function resolveScriptIcon(script: BehaviorScriptType): string {
 
 function openDetails(
   mode: 'create' | 'edit',
-  action: BehaviorActionType,
+  action: BehaviorEventType,
   sequence: SceneBehavior[] | null,
   allowedActions: BehaviorActionDefinition[],
   sequenceId: string,
@@ -133,7 +133,7 @@ function openDetails(
   editingAction.value = action
   editingSequence.value = sequence ? cloneBehaviorList(sequence) : null
   editingSequenceId.value = sequenceId
-  const uniqueActions = new Map<BehaviorActionType, BehaviorActionDefinition>()
+  const uniqueActions = new Map<BehaviorEventType, BehaviorActionDefinition>()
   allowedActions.forEach((definition) => {
     uniqueActions.set(definition.id, definition)
   })
@@ -179,7 +179,7 @@ function commitBehaviors(nextList: SceneBehavior[]): void {
 }
 
 type BehaviorSequencePayload = {
-  action: BehaviorActionType
+  action: BehaviorEventType
   sequence: SceneBehavior[]
 }
 
