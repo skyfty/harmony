@@ -54,6 +54,15 @@ function handleKeydown(event: KeyboardEvent) {
   }
 }
 
+function handlePointerDown(event: PointerEvent) {
+  if (event.button === 2) {
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    cancelPicking()
+  }
+}
+
 function startPicking() {
   if (isPicking.value) {
     return
@@ -76,6 +85,7 @@ function startPicking() {
     },
   })
   window.addEventListener('keydown', handleKeydown, true)
+  window.addEventListener('pointerdown', handlePointerDown, true)
 }
 
 function cancelPicking() {
@@ -96,6 +106,7 @@ function stopPicking() {
   isPicking.value = false
   emit('pick-state-change', false)
   window.removeEventListener('keydown', handleKeydown, true)
+  window.removeEventListener('pointerdown', handlePointerDown, true)
 }
 
 defineExpose({ cancelPicking })
@@ -105,6 +116,7 @@ onBeforeUnmount(() => {
     cancelPicking()
   }
   window.removeEventListener('keydown', handleKeydown, true)
+  window.removeEventListener('pointerdown', handlePointerDown, true)
 })
 
 function clearTarget() {
@@ -142,7 +154,7 @@ function clearTarget() {
       </v-btn>
     </div>
     <div v-if="isPicking" class="watch-params__hint">
-      Click a node in the scene or press Esc to cancel.
+      Click a node in the scene or right-click / press Esc to cancel.
     </div>
   </div>
 </template>

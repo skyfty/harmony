@@ -149,7 +149,7 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
   },
   {
     id: 'watch',
-    label: 'Watch Node',
+    label: 'Watch',
     description: 'Aim the camera at a chosen target node.',
     icon: 'mdi-eye-outline',
     createDefaultParams(): WatchBehaviorParams {
@@ -160,7 +160,7 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
   },
   {
     id: 'show',
-    label: 'Show Node',
+    label: 'Show',
     description: 'Make the target node visible before continuing.',
     icon: 'mdi-eye-plus-outline',
     createDefaultParams(): ShowBehaviorParams {
@@ -171,7 +171,7 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
   },
   {
     id: 'hide',
-    label: 'Hide Node',
+    label: 'Hide',
     description: 'Hide the target node before continuing.',
     icon: 'mdi-eye-off-outline',
     createDefaultParams(): HideBehaviorParams {

@@ -40,7 +40,7 @@ class BehaviorComponent extends Component<BehaviorComponentProps> {
 
 const behaviorComponentDefinition: ComponentDefinition<BehaviorComponentProps> = {
   type: BEHAVIOR_COMPONENT_TYPE,
-  label: 'Behavior Component',
+  label: 'Behavior',
   icon: 'mdi-script-text-outline',
   order: 120,
   inspector: [],

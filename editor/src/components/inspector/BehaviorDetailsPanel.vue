@@ -388,10 +388,10 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequ
     <transition name="behavior-details-panel">
       <div
         v-if="visible && anchor"
-        class="behavior-details-panel"
+        :class="['behavior-details-panel', { 'behavior-details-panel--picking': isPickingTarget }]"
         :style="panelStyle"
       >
-        <v-card class="behavior-details">
+        <v-card v-show="!isPickingTarget" class="behavior-details">
           <v-toolbar density="compact" class="panel-toolbar" height="40px">
             <div class="toolbar-text">
               <div class="material-title">{{ dialogTitle }}</div>
@@ -410,10 +410,7 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequ
             <v-btn class="toolbar-close" icon="mdi-close" size="small" variant="text" @click="closePanel" />
           </v-toolbar>
           <v-divider />
-          <v-card-text
-            v-if="!isPickingTarget"
-            class="behavior-details__body"
-          >
+          <v-card-text class="behavior-details__body">
             <div class="behavior-details__field">
               <v-select
                 v-model="selectedAction"
@@ -511,14 +508,14 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequ
               </template>
             </div>
           </v-card-text>
-          <div v-else class="behavior-details__pick-overlay">
-            <v-icon size="38" class="behavior-details__pick-icon">mdi-crosshairs-gps</v-icon>
-            <div class="behavior-details__pick-text">
-              Click a node in the scene to set this script's target.
-              <span class="behavior-details__pick-hint">Press Esc to cancel.</span>
-            </div>
-          </div>
         </v-card>
+        <div v-if="isPickingTarget" class="behavior-details__pick-overlay">
+          <v-icon size="38" class="behavior-details__pick-icon">mdi-crosshairs-gps</v-icon>
+          <div class="behavior-details__pick-text">
+            Click a node in the scene to set this script's target.
+            <span class="behavior-details__pick-hint">Right-click or press Esc to cancel.</span>
+          </div>
+        </div>
       </div>
     </transition>
   </Teleport>
@@ -547,6 +544,10 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequ
   display: flex;
   flex-direction: column;
   z-index: 24;
+}
+
+.behavior-details-panel--picking {
+  pointer-events: none;
 }
 
 .behavior-details {

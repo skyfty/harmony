@@ -104,6 +104,7 @@ let selectionBoxHelper: THREE.Box3Helper | null = null
 let selectionTrackedObject: THREE.Object3D | null = null
 let gridHighlight: THREE.Group | null = null
 const selectionHighlights = new Map<string, THREE.Group>()
+let nodePickerHighlight: THREE.Group | null = null
 let sky: Sky | null = null
 let pmremGenerator: THREE.PMREMGenerator | null = null
 let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null
@@ -2980,6 +2981,7 @@ function disposeScene() {
   dragPreviewGroup.removeFromParent()
 
   clearSelectionHighlights()
+  disposeNodePickerHighlight()
   releaseGroundMeshCache()
   scene = null
   camera = null
@@ -3256,6 +3258,45 @@ function clearSelectionHighlights() {
     disposeSelectionIndicator(group)
   })
   selectionHighlights.clear()
+}
+
+function ensureNodePickerIndicator(): THREE.Group | null {
+  if (!scene) {
+    return null
+  }
+  if (!nodePickerHighlight) {
+    nodePickerHighlight = createSelectionIndicator()
+  }
+  if (nodePickerHighlight.parent !== scene) {
+    scene.add(nodePickerHighlight)
+  }
+  return nodePickerHighlight
+}
+
+function hideNodePickerHighlight() {
+  if (nodePickerHighlight) {
+    nodePickerHighlight.visible = false
+  }
+}
+
+function disposeNodePickerHighlight() {
+  if (nodePickerHighlight) {
+    disposeSelectionIndicator(nodePickerHighlight)
+    nodePickerHighlight = null
+  }
+}
+
+function updateNodePickerHighlight(hit: NodeHitResult | null) {
+  if (!hit) {
+    hideNodePickerHighlight()
+    return
+  }
+  const indicator = ensureNodePickerIndicator()
+  if (!indicator) {
+    return
+  }
+  updateSelectionIndicatorFromObject(indicator, hit.object)
+  indicator.visible = true
 }
 
 type GridHighlightDimensions = { width: number; depth: number }
@@ -3675,6 +3716,7 @@ async function handlePointerDown(event: PointerEvent) {
         nodePickerStore.completePick(hit.nodeId)
       }
     }
+    hideNodePickerHighlight()
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
@@ -3870,6 +3912,15 @@ async function handlePointerDown(event: PointerEvent) {
 }
 
 function handlePointerMove(event: PointerEvent) {
+  if (nodePickerStore.isActive) {
+    const hit = pickNodeAtPointer(event)
+    updateNodePickerHighlight(hit)
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
   if (isAltOverrideActive) {
     return
   }
@@ -4109,6 +4160,10 @@ function handlePointerUp(event: PointerEvent) {
 }
 
 function handlePointerCancel(event: PointerEvent) {
+  if (nodePickerStore.isActive) {
+    hideNodePickerHighlight()
+  }
+
   if (groundSelectionDragState && event.pointerId === groundSelectionDragState.pointerId) {
     if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
       canvasRef.value.releasePointerCapture(event.pointerId)
@@ -6399,6 +6454,15 @@ watch(transformToolbarHostRef, (host) => {
   }
   scheduleToolbarUpdate()
 })
+
+watch(
+  () => nodePickerStore.isActive,
+  (active) => {
+    if (!active) {
+      hideNodePickerHighlight()
+    }
+  },
+)
 
 watch(viewportToolbarHostRef, (host) => {
   if (viewportToolbarResizeObserver) {
