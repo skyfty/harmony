@@ -682,7 +682,7 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequ
   border-radius: 4px;
   padding: 12px;
   background: rgba(12, 16, 22, 0.55);
-  min-height: 120px;
+  min-height: 60px;
 }
 
 .behavior-details__no-selection,

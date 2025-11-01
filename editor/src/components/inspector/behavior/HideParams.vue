@@ -126,35 +126,33 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="visibility-params">
-    <div class="visibility-params__status">
-      <span class="visibility-params__label">Node To Hide</span>
-      <span v-if="params.targetNodeId" class="visibility-params__value">
-        {{ targetNodeName ?? params.targetNodeId }}
-      </span>
-      <span v-else class="visibility-params__placeholder">Defaults to this behavior's node</span>
-    </div>
-    <div class="visibility-params__actions">
+    <div class="visibility-params__row">
+      <div class="visibility-params__target">
       <v-btn
+        class="visibility-params__icon-button"
         size="small"
-        variant="tonal"
-        prepend-icon="mdi-crosshairs-gps"
+        variant="text"
+        icon="mdi-crosshairs-gps"
         :loading="isPicking"
         @click="startPicking"
-      >
-        Pick From Scene
-      </v-btn>
-      <v-btn
-        size="small"
-        color="secondary"
-        variant="text"
-        :disabled="!params.targetNodeId"
-        @click="clearTarget"
-      >
-        Clear
-      </v-btn>
+      />
+        <span v-if="params.targetNodeId" class="visibility-params__value">
+          {{ targetNodeName ?? params.targetNodeId }}
+        </span>
+        <span v-else class="visibility-params__placeholder">未选择节点</span>
+    <v-btn
+      class="visibility-params__icon-button"
+      size="small"
+      variant="text"
+      icon="mdi-close"
+      :disabled="!params.targetNodeId"
+      @click="clearTarget"
+      style="margin-left: auto;"
+      />
+      </div>
     </div>
     <div v-if="isPicking" class="visibility-params__hint">
-      Click a node in the scene or right-click / press Esc to cancel.
+      点击场景中的节点进行选择，显示在左侧，右侧显示清除按钮。
     </div>
   </div>
 </template>
@@ -166,17 +164,10 @@ onBeforeUnmount(() => {
   gap: 0.6rem;
 }
 
-.visibility-params__status {
+.visibility-params__row {
   display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-}
-
-.visibility-params__label {
-  font-size: 0.78rem;
-  color: rgba(233, 236, 241, 0.65);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .visibility-params__value {
@@ -190,9 +181,18 @@ onBeforeUnmount(() => {
   color: rgba(233, 236, 241, 0.5);
 }
 
-.visibility-params__actions {
+.visibility-params__target {
+  flex: 1;
+  min-height: 32px;
   display: flex;
-  gap: 0.5rem;
+  align-items: center;
+  padding: 0 0.4rem;
+  border-radius: 6px;
+  background: rgba(233, 236, 241, 0.06);
+}
+
+.visibility-params__icon-button {
+  color: rgba(233, 236, 241, 0.82);
 }
 
 .visibility-params__hint {

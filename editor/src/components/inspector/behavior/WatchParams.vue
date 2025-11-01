@@ -126,35 +126,34 @@ function clearTarget() {
 
 <template>
   <div class="watch-params">
-    <div class="watch-params__status">
-      <span class="watch-params__label">Target Node</span>
-      <span v-if="params.targetNodeId" class="watch-params__value">
-        {{ targetNodeName ?? params.targetNodeId }}
-      </span>
-      <span v-else class="watch-params__placeholder">No node selected</span>
-    </div>
-    <div class="watch-params__actions">
+    <div class="watch-params__row">
+      <div class="watch-params__target">
       <v-btn
+        class="watch-params__icon-button"
         size="small"
-        variant="tonal"
-        prepend-icon="mdi-crosshairs-gps"
+        variant="text"
+        icon="mdi-crosshairs-gps"
         :loading="isPicking"
         @click="startPicking"
-      >
-        Pick From Scene
-      </v-btn>
+      />
+        <span v-if="params.targetNodeId" class="watch-params__value">
+          {{ targetNodeName ?? params.targetNodeId }}
+        </span>
+        <span v-else class="watch-params__placeholder">未选择节点</span>
       <v-btn
+        class="watch-params__icon-button"
         size="small"
-        color="secondary"
         variant="text"
+        icon="mdi-close"
         :disabled="!params.targetNodeId"
         @click="clearTarget"
-      >
-        Clear
-      </v-btn>
+        style="margin-left: auto"
+      />
+    
+      </div>
     </div>
     <div v-if="isPicking" class="watch-params__hint">
-      Click a node in the scene or right-click / press Esc to cancel.
+      点击场景中的节点进行选择，显示在左侧，右侧显示清除按钮。
     </div>
   </div>
 </template>
@@ -166,17 +165,10 @@ function clearTarget() {
   gap: 0.6rem;
 }
 
-.watch-params__status {
+.watch-params__row {
   display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-}
-
-.watch-params__label {
-  font-size: 0.78rem;
-  color: rgba(233, 236, 241, 0.65);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .watch-params__value {
@@ -190,9 +182,18 @@ function clearTarget() {
   color: rgba(233, 236, 241, 0.5);
 }
 
-.watch-params__actions {
+.watch-params__target {
+  flex: 1;
+  min-height: 32px;
   display: flex;
-  gap: 0.5rem;
+  align-items: center;
+  padding: 0 0.4rem;
+  border-radius: 6px;
+  background: rgba(233, 236, 241, 0.06);
+}
+
+.watch-params__icon-button {
+  color: rgba(233, 236, 241, 0.82);
 }
 
 .watch-params__hint {
