@@ -308,7 +308,7 @@ function resolveSlideImageLabel(slide: LanternSlideDefinition): string {
             density="compact"
             variant="underlined"
             hide-details
-            @update:model-value="updateSlideLayout(index, $event)"
+            @update:model-value="updateSlideLayout(index, $event as LanternSlideLayout)"
           />
           </span>
           <div class="lantern-slide__actions">
@@ -375,7 +375,8 @@ function resolveSlideImageLabel(slide: LanternSlideDefinition): string {
               hide-details
               :auto-grow="false"
               rows="4"
-              @update:model-value="updateSlideDescription(index, $event)"
+              style="height: 100%"
+              @update:model-value="updateSlideDescription(index, $event as string)"
             />
           </div>
         </div>
@@ -603,21 +604,42 @@ function resolveSlideImageLabel(slide: LanternSlideDefinition): string {
   height: 100%;
 }
 
+.lantern-slide__textarea :deep(.v-input) {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.lantern-slide__textarea :deep(.v-input__control) {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
 .lantern-slide__textarea :deep(.v-field) {
   flex: 1;
   display: flex;
   flex-direction: column;
+  height: 100%;
+  min-height: 0;
 }
 
 .lantern-slide__textarea :deep(.v-field__input) {
   flex: 1;
   display: flex;
   flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
 }
 
 .lantern-slide__textarea :deep(textarea) {
   flex: 1;
   resize: none;
+  height: 100%;
+  min-height: 0;
 }
 
 @media (max-width: 960px) {
