@@ -4,7 +4,7 @@ import * as THREE from 'three'
 import { FirstPersonControls } from 'three/examples/jsm/controls/FirstPersonControls.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { Sky } from 'three/addons/objects/Sky.js'
-import type { SceneJsonExportDocument, SceneNode, SceneSkyboxSettings } from '@harmony/schema'
+import type { LanternSlideDefinition, SceneJsonExportDocument, SceneNode, SceneSkyboxSettings } from '@harmony/schema'
 import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
 import { subscribeToScenePreview } from '@/utils/previewChannel'
 import { buildSceneGraph } from '@schema/sceneGraph';
@@ -50,6 +50,11 @@ const behaviorAlertShowConfirm = ref(true)
 const behaviorAlertShowCancel = ref(false)
 const behaviorAlertConfirmText = ref('Confirm')
 const behaviorAlertCancelText = ref('Cancel')
+
+const lanternOverlayVisible = ref(false)
+const lanternSlides = ref<LanternSlideDefinition[]>([])
+const lanternActiveSlideIndex = ref(0)
+const lanternEventToken = ref<string | null>(null)
 
 const activeBehaviorDelayTimers = new Map<string, number>()
 const activeBehaviorAnimations = new Map<string, () => void>()
@@ -191,6 +196,17 @@ const formattedLastUpdate = computed(() => {
 	}
 })
 
+const lanternTotalSlides = computed(() => lanternSlides.value.length)
+const lanternCurrentSlide = computed(() => {
+	const index = lanternActiveSlideIndex.value
+	if (index < 0 || index >= lanternSlides.value.length) {
+		return null
+	}
+	return lanternSlides.value[index] ?? null
+})
+const lanternHasMultipleSlides = computed(() => lanternTotalSlides.value > 1)
+const lanternCurrentSlideImage = computed(() => resolveLanternImageSource(lanternCurrentSlide.value?.imageAssetId ?? null))
+
 watch(volumePercent, (value) => {
 	if (!listener) {
 		return
@@ -264,6 +280,104 @@ function clearBehaviorAlert() {
 	behaviorAlertShowCancel.value = false
 	behaviorAlertConfirmText.value = 'Confirm'
 	behaviorAlertCancelText.value = 'Cancel'
+}
+
+function normalizeLanternLayout(layout: string | null | undefined): 'imageTop' | 'imageLeft' | 'imageRight' {
+	switch (layout) {
+		case 'imageLeft':
+		case 'imageRight':
+		case 'imageTop':
+			return layout
+		default:
+			return 'imageTop'
+	}
+}
+
+function normalizeLanternSlide(slide: Partial<LanternSlideDefinition> | null | undefined): LanternSlideDefinition {
+	const id = typeof slide?.id === 'string' && slide.id.trim().length ? slide.id.trim() : `lantern_preview_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`
+	const title = typeof slide?.title === 'string' ? slide.title.trim() : ''
+	const description = typeof slide?.description === 'string' ? slide.description.trim() : ''
+	const imageAssetId = typeof slide?.imageAssetId === 'string' && slide.imageAssetId.trim().length ? slide.imageAssetId.trim() : null
+	return {
+		id,
+		title,
+		description,
+		imageAssetId,
+		layout: normalizeLanternLayout(slide?.layout),
+	}
+}
+
+function normalizeLanternSlides(slides: LanternSlideDefinition[] | null | undefined): LanternSlideDefinition[] {
+	if (!Array.isArray(slides) || !slides.length) {
+		return []
+	}
+	return slides.map((slide) => normalizeLanternSlide(slide))
+}
+
+function resetLanternOverlay(): void {
+	lanternOverlayVisible.value = false
+	lanternSlides.value = []
+	lanternActiveSlideIndex.value = 0
+	lanternEventToken.value = null
+}
+
+function resolveLanternImageSource(assetId: string | null): string | null {
+	if (!assetId) {
+		return null
+	}
+	const trimmed = assetId.trim()
+	if (!trimmed.length) {
+		return null
+	}
+	if (/^(https?:)?\/\//i.test(trimmed) || trimmed.startsWith('data:')) {
+		return trimmed
+	}
+	const documentMap = currentDocument?.packageAssetMap
+	const mapped = documentMap && typeof documentMap[trimmed] === 'string' ? documentMap[trimmed] : null
+	return mapped && mapped.trim().length ? mapped : null
+}
+
+function closeLanternOverlay(resolution?: BehaviorEventResolution): void {
+	const token = lanternEventToken.value
+	resetLanternOverlay()
+	if (token && resolution) {
+		resolveBehaviorToken(token, resolution)
+	}
+}
+
+function presentLanternSlides(event: Extract<BehaviorRuntimeEvent, { type: 'lantern' }>): void {
+	const slides = normalizeLanternSlides(event.params?.slides)
+	if (!slides.length) {
+		resolveBehaviorToken(event.token, { type: 'continue' })
+		return
+	}
+	if (lanternEventToken.value && lanternEventToken.value !== event.token) {
+		closeLanternOverlay({ type: 'abort', message: 'Lantern event replaced' })
+	}
+	lanternSlides.value = slides
+	lanternActiveSlideIndex.value = 0
+	lanternEventToken.value = event.token
+	lanternOverlayVisible.value = true
+}
+
+function showPreviousLanternSlide(): void {
+	if (lanternActiveSlideIndex.value > 0) {
+		lanternActiveSlideIndex.value -= 1
+	}
+}
+
+function showNextLanternSlide(): void {
+	if (lanternActiveSlideIndex.value < lanternSlides.value.length - 1) {
+		lanternActiveSlideIndex.value += 1
+	}
+}
+
+function confirmLanternOverlay(): void {
+	closeLanternOverlay({ type: 'continue' })
+}
+
+function cancelLanternOverlay(): void {
+	closeLanternOverlay({ type: 'abort', message: 'User dismissed lantern slides' })
 }
 
 function presentBehaviorAlert(event: Extract<BehaviorRuntimeEvent, { type: 'show-alert' }>) {
@@ -479,6 +593,17 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
 	startTimedAnimation(event.token, durationSeconds, updateFrame, finalize)
 }
 
+function handleSetVisibilityEvent(event: Extract<BehaviorRuntimeEvent, { type: 'set-visibility' }>) {
+	const object = nodeObjectMap.get(event.targetNodeId)
+	if (object) {
+		object.visible = event.visible
+	}
+	const node = resolveNodeById(event.targetNodeId)
+	if (node) {
+		node.visible = event.visible
+	}
+}
+
 function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watch-node' }>) {
 	const activeCamera = camera
 	if (!activeCamera) {
@@ -532,14 +657,21 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 		case 'show-alert':
 			presentBehaviorAlert(event)
 			break
+		case 'lantern':
+			presentLanternSlides(event)
+			break
 		case 'watch-node':
 			handleWatchNodeEvent(event)
+			break
+		case 'set-visibility':
+			handleSetVisibilityEvent(event)
 			break
 		case 'look-level':
 			handleLookLevelEvent(event)
 			break
 		case 'sequence-complete':
 			clearBehaviorAlert()
+			resetLanternOverlay()
 			if (event.status === 'failure' || event.status === 'aborted') {
 				console.warn('[ScenePreview] Behavior sequence ended', event)
 			} else {
@@ -548,6 +680,7 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 			break
 		case 'sequence-error':
 			clearBehaviorAlert()
+			resetLanternOverlay()
 			console.error('[ScenePreview] Behavior sequence error', event.message)
 			break
 		default:
@@ -945,6 +1078,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	previewComponentManager.reset()
 	resetBehaviorRuntime()
 	dismissBehaviorAlert()
+	resetLanternOverlay()
 	if (!rootGroup) {
 		return
 	}
@@ -1623,6 +1757,91 @@ onBeforeUnmount(() => {
 				</div>
 			</div>
 		</div>
+		<div
+			v-if="lanternOverlayVisible && lanternCurrentSlide"
+			class="scene-preview__lantern-overlay"
+		>
+			<div class="scene-preview__lantern-dialog">
+				<div class="scene-preview__lantern-header">
+					<span class="scene-preview__lantern-progress">
+						Slide {{ lanternActiveSlideIndex + 1 }} / {{ lanternTotalSlides }}
+					</span>
+					<v-btn
+						icon="mdi-close"
+						size="small"
+						variant="text"
+						class="scene-preview__lantern-close"
+						@click="cancelLanternOverlay"
+					/>
+				</div>
+				<div
+					class="scene-preview__lantern-body"
+					:class="[`layout-${lanternCurrentSlide.layout}`]"
+				>
+					<div
+						v-if="lanternCurrentSlideImage"
+						class="scene-preview__lantern-image"
+					>
+						<img :src="lanternCurrentSlideImage" :alt="lanternCurrentSlide.title || 'Lantern slide image'" />
+					</div>
+					<div class="scene-preview__lantern-text">
+						<h3 v-if="lanternCurrentSlide.title" class="scene-preview__lantern-title">
+							{{ lanternCurrentSlide.title }}
+						</h3>
+						<p v-if="lanternCurrentSlide.description" class="scene-preview__lantern-description">
+							{{ lanternCurrentSlide.description }}
+						</p>
+						<div
+							v-if="!lanternCurrentSlideImage && lanternCurrentSlide.imageAssetId"
+							class="scene-preview__lantern-image-hint"
+						>
+							Image asset: {{ lanternCurrentSlide.imageAssetId }}
+						</div>
+					</div>
+				</div>
+				<div
+					v-if="lanternHasMultipleSlides"
+					class="scene-preview__lantern-navigation"
+				>
+					<v-btn
+						variant="tonal"
+						size="small"
+						prepend-icon="mdi-chevron-left"
+						:disabled="lanternActiveSlideIndex === 0"
+						@click="showPreviousLanternSlide"
+					>
+						Previous
+					</v-btn>
+					<v-btn
+						variant="tonal"
+						size="small"
+						append-icon="mdi-chevron-right"
+						:disabled="lanternActiveSlideIndex >= lanternTotalSlides - 1"
+						@click="showNextLanternSlide"
+					>
+						Next
+					</v-btn>
+				</div>
+				<div class="scene-preview__lantern-actions">
+					<v-btn
+						variant="text"
+						size="small"
+						color="secondary"
+						@click="cancelLanternOverlay"
+					>
+						Cancel
+					</v-btn>
+					<v-btn
+						variant="flat"
+						size="small"
+						color="primary"
+						@click="confirmLanternOverlay"
+					>
+						Continue
+					</v-btn>
+				</div>
+			</div>
+		</div>
 	</div>
 </template>
 
@@ -1765,6 +1984,135 @@ onBeforeUnmount(() => {
 
 .scene-preview__behavior-button {
 	flex: 0 0 auto;
+}
+
+.scene-preview__lantern-overlay {
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(0, 0, 0, 0.45);
+	z-index: 2200;
+	pointer-events: auto;
+}
+
+.scene-preview__lantern-dialog {
+	max-width: min(720px, 90vw);
+	width: 100%;
+	padding: 20px;
+	border-radius: 16px;
+	background: rgba(14, 18, 28, 0.95);
+	box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+	color: #f5f7ff;
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	backdrop-filter: blur(12px);
+}
+
+.scene-preview__lantern-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+}
+
+.scene-preview__lantern-progress {
+	font-size: 0.78rem;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: rgba(233, 236, 241, 0.7);
+}
+
+.scene-preview__lantern-close {
+	color: rgba(233, 236, 241, 0.7);
+}
+
+.scene-preview__lantern-body {
+	display: grid;
+	gap: 18px;
+}
+
+.scene-preview__lantern-body.layout-imageLeft,
+.scene-preview__lantern-body.layout-imageRight {
+	align-items: start;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+}
+
+.scene-preview__lantern-body.layout-imageRight {
+	direction: rtl;
+}
+
+.scene-preview__lantern-body.layout-imageRight .scene-preview__lantern-text {
+	direction: ltr;
+}
+
+.scene-preview__lantern-image {
+	border-radius: 12px;
+	overflow: hidden;
+	background: rgba(255, 255, 255, 0.08);
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.scene-preview__lantern-image img {
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+.scene-preview__lantern-text {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.scene-preview__lantern-title {
+	margin: 0;
+	font-size: 1.2rem;
+	font-weight: 600;
+}
+
+.scene-preview__lantern-description {
+	margin: 0;
+	font-size: 0.95rem;
+	line-height: 1.5;
+	color: rgba(233, 236, 241, 0.85);
+}
+
+.scene-preview__lantern-image-hint {
+	font-size: 0.78rem;
+	color: rgba(233, 236, 241, 0.6);
+	background: rgba(255, 255, 255, 0.06);
+	padding: 6px 10px;
+	border-radius: 8px;
+}
+
+.scene-preview__lantern-navigation {
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.scene-preview__lantern-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 12px;
+}
+
+@media (max-width: 720px) {
+	.scene-preview__lantern-body,
+	.scene-preview__lantern-body.layout-imageLeft,
+	.scene-preview__lantern-body.layout-imageRight {
+		grid-template-columns: 1fr;
+	}
+
+	.scene-preview__lantern-dialog {
+		padding: 16px;
+	}
 }
 
 @media (max-width: 768px) {
