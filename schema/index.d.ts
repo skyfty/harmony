@@ -140,32 +140,98 @@ export interface SceneNodeComponentState<TProps = Record<string, unknown>> {
 
 export type SceneNodeComponentMap = Partial<Record<NodeComponentType, SceneNodeComponentState<any>>>
 
-export type BehaviorActionType = 'click' | 'hover' | 'drag'
+export type BehaviorActionType = 'click' | 'hover' | 'drag' | 'perform'
 
-export type BehaviorScriptType = 'showAlert'
+export type BehaviorScriptType = 'success' | 'failure' | 'delay' | 'moveTo' | 'showAlert' | 'watch' | 'look'
+
+export type MoveToFacingDirection = 'front' | 'back' | 'left' | 'right'
+
+export interface SuccessBehaviorParams {
+  // no configuration required
+}
+
+export interface FailureBehaviorParams {
+  // no configuration required
+}
+
+export interface DelayBehaviorParams {
+  /** Duration to wait before continuing, measured in seconds. */
+  seconds: number
+}
+
+export interface MoveToBehaviorParams {
+  /** Camera travel speed in meters per second. */
+  speed: number
+  /** Camera orientation once positioned around the node. */
+  facing: MoveToFacingDirection
+  /** Distance from the node's center point in meters. */
+  offset: number
+}
 
 export interface ShowAlertBehaviorParams {
-  title?: string
-  message: string
+  /** Primary content text displayed inside the alert dialog. */
+  content: string
+  /** Display a confirmation button. */
+  showConfirm: boolean
+  /** Custom label for the confirmation button. */
+  confirmText: string
+  /** Display a cancel button. */
+  showCancel: boolean
+  /** Custom label for the cancel button. */
+  cancelText: string
+}
+
+export interface WatchBehaviorParams {
+  /** Target scene node id to focus the camera on. */
+  targetNodeId: string | null
+}
+
+export interface LookBehaviorParams {
+  // no configuration required
 }
 
 export type SceneBehaviorScriptBinding =
   | {
+      type: 'success'
+      params: SuccessBehaviorParams
+    }
+  | {
+      type: 'failure'
+      params: FailureBehaviorParams
+    }
+  | {
+      type: 'delay'
+      params: DelayBehaviorParams
+    }
+  | {
+      type: 'moveTo'
+      params: MoveToBehaviorParams
+    }
+  | {
       type: 'showAlert'
       params: ShowAlertBehaviorParams
+    }
+  | {
+      type: 'watch'
+      params: WatchBehaviorParams
+    }
+  | {
+      type: 'look'
+      params: LookBehaviorParams
     }
 
 export interface SceneBehavior {
   id: string
   name: string
   action: BehaviorActionType
+  sequenceId: string
   script: SceneBehaviorScriptBinding
 }
 
-export type SceneBehaviorMap = Partial<Record<BehaviorActionType, SceneBehavior>>
+export type SceneBehaviorMap = Partial<Record<BehaviorActionType, SceneBehavior[]>>
 
 export interface BehaviorComponentProps {
-  behaviors: SceneBehaviorMap
+  behaviors: SceneBehavior[]
 }
 
 export type ComponentInspectorField<TProps = Record<string, unknown>> =

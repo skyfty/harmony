@@ -11,19 +11,26 @@ import type {
 import { useSceneStore } from '@/stores/sceneStore'
 import { BEHAVIOR_COMPONENT_TYPE } from '@schema/components'
 import {
-  cloneBehavior,
-  cloneBehaviorMap,
   behaviorMapToList,
+  cloneBehavior,
+  cloneBehaviorList,
+  createBehaviorSequenceId,
   createBehaviorTemplate,
+  ensureBehaviorParams,
   findBehaviorAction,
   findBehaviorScript,
   type BehaviorActionDefinition,
-  type BehaviorMap,
   listBehaviorActions,
   listBehaviorScripts,
 } from '@schema/behaviors/definitions'
 import { generateUuid } from '@/utils/uuid'
 import BehaviorDetailsPanel from '@/components/inspector/BehaviorDetailsPanel.vue'
+
+interface BehaviorSequenceEntry {
+  action: BehaviorActionType
+  sequenceId: string
+  sequence: SceneBehavior[]
+}
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
@@ -34,41 +41,67 @@ const behaviorComponent = computed(() =>
     | undefined,
 )
 
-const behaviorMap = computed<BehaviorMap>(() => {
+const behaviorList = computed<SceneBehavior[]>(() => {
   const component = behaviorComponent.value
   if (!component) {
-    return {}
+    return []
   }
   const props = component.props as BehaviorComponentProps | undefined
-  return props?.behaviors ?? {}
+  const behaviors = props?.behaviors
+  if (Array.isArray(behaviors)) {
+    return cloneBehaviorList(behaviors)
+  }
+  return cloneBehaviorList(behaviorMapToList(behaviors))
 })
 
-const behaviors = computed<SceneBehavior[]>(() => behaviorMapToList(behaviorMap.value))
+const behaviorEntries = computed<BehaviorSequenceEntry[]>(() => {
+  const groups = new Map<string, BehaviorSequenceEntry>()
+  behaviorList.value.forEach((step) => {
+    if (!step) {
+      return
+    }
+    const key = step.sequenceId
+    let entry = groups.get(key)
+    if (!entry) {
+      entry = {
+        action: step.action,
+        sequenceId: key,
+        sequence: [],
+      }
+      groups.set(key, entry)
+    }
+    entry.sequence.push(step)
+  })
+  return Array.from(groups.values())
+})
 
 const actionOptions = listBehaviorActions()
 const scriptOptions = listBehaviorScripts()
 
 const detailsVisible = ref(false)
 const detailsMode = ref<'create' | 'edit'>('create')
-const editingBehavior = ref<SceneBehavior | null>(null)
-const editingBehaviorId = ref<string | null>(null)
-const editingOriginalAction = ref<BehaviorActionType | null>(null)
+const editingAction = ref<BehaviorActionType | null>(null)
+const editingSequence = ref<SceneBehavior[] | null>(null)
+const editingSequenceId = ref<string | null>(null)
 const detailsActions = ref<BehaviorActionDefinition[]>(actionOptions)
 
 function resetDetailsState(): void {
   detailsVisible.value = false
-  editingBehavior.value = null
-  editingBehaviorId.value = null
-  editingOriginalAction.value = null
+  editingAction.value = null
+  editingSequence.value = null
+  editingSequenceId.value = null
   detailsActions.value = actionOptions
 }
 
-function listUnusedActions(excludedAction: BehaviorActionType | null = null): BehaviorActionDefinition[] {
-  const used = new Set(Object.keys(behaviorMap.value ?? {}) as BehaviorActionType[])
-  if (excludedAction) {
-    used.delete(excludedAction)
-  }
-  return actionOptions.filter((option) => !used.has(option.id))
+function listUnusedActions(excluded?: { action: BehaviorActionType | null; sequenceId: string | null }): BehaviorActionDefinition[] {
+  const usedCounts = new Map<BehaviorActionType, number>()
+  behaviorEntries.value.forEach((entry) => {
+    if (excluded && entry.sequenceId === excluded.sequenceId) {
+      return
+    }
+    usedCounts.set(entry.action, (usedCounts.get(entry.action) ?? 0) + 1)
+  })
+  return actionOptions.filter((option) => option.id === 'perform' || (usedCounts.get(option.id) ?? 0) === 0)
 }
 
 const canAddBehavior = computed(() => listUnusedActions().length > 0)
@@ -77,20 +110,38 @@ function resolveActionLabel(action: BehaviorActionType): string {
   return findBehaviorAction(action)?.label ?? 'Unknown Action'
 }
 
+function resolveScriptDefinition(script: BehaviorScriptType) {
+  return findBehaviorScript(script)
+}
+
 function resolveScriptLabel(script: BehaviorScriptType): string {
-  return findBehaviorScript(script)?.label ?? 'Unknown Script'
+  return resolveScriptDefinition(script)?.label ?? 'Unknown Script'
+}
+
+function resolveScriptIcon(script: BehaviorScriptType): string {
+  return resolveScriptDefinition(script)?.icon ?? 'mdi-script-text-outline'
 }
 
 function openDetails(
   mode: 'create' | 'edit',
-  behavior: SceneBehavior,
+  action: BehaviorActionType,
+  sequence: SceneBehavior[] | null,
   allowedActions: BehaviorActionDefinition[],
+  sequenceId: string,
 ) {
   detailsMode.value = mode
-  editingBehavior.value = cloneBehavior(behavior)
-  editingBehaviorId.value = behavior.id || null
-  editingOriginalAction.value = behavior.action
-  detailsActions.value = allowedActions.length ? allowedActions : actionOptions
+  editingAction.value = action
+  editingSequence.value = sequence ? cloneBehaviorList(sequence) : null
+  editingSequenceId.value = sequenceId
+  const uniqueActions = new Map<BehaviorActionType, BehaviorActionDefinition>()
+  allowedActions.forEach((definition) => {
+    uniqueActions.set(definition.id, definition)
+  })
+  const currentDefinition = findBehaviorAction(action)
+  if (currentDefinition) {
+    uniqueActions.set(currentDefinition.id, currentDefinition)
+  }
+  detailsActions.value = uniqueActions.size ? Array.from(uniqueActions.values()) : actionOptions
   detailsVisible.value = true
 }
 
@@ -104,64 +155,95 @@ function handleAddBehavior() {
     return
   }
   const templateAction = availableActions[0]?.id ?? 'click'
-  const template = createBehaviorTemplate(templateAction, 'showAlert')
-  openDetails('create', template, availableActions)
+  const defaultScript = scriptOptions[0]?.id ?? 'showAlert'
+  const sequenceId = createBehaviorSequenceId()
+  const template = createBehaviorTemplate(templateAction, defaultScript, sequenceId)
+  template.id = generateUuid()
+  openDetails('create', templateAction, [template], availableActions, sequenceId)
 }
 
-function handleEditBehavior(behavior: SceneBehavior) {
-  const availableActions = listUnusedActions(behavior.action)
-  openDetails('edit', behavior, availableActions)
+function handleEditBehavior(entry: BehaviorSequenceEntry) {
+  const availableActions = listUnusedActions({ action: entry.action, sequenceId: entry.sequenceId })
+  openDetails('edit', entry.action, cloneBehaviorList(entry.sequence), availableActions, entry.sequenceId)
 }
 
-function commitBehaviors(nextMap: BehaviorMap): void {
+function commitBehaviors(nextList: SceneBehavior[]): void {
   const component = behaviorComponent.value
   const nodeId = selectedNodeId.value
   if (!component || !nodeId) {
     return
   }
   sceneStore.updateNodeComponentProps(nodeId, component.id, {
-    behaviors: cloneBehaviorMap(nextMap),
+    behaviors: cloneBehaviorList(nextList),
   })
 }
 
-function handleSaveBehavior(behavior: SceneBehavior) {
+type BehaviorSequencePayload = {
+  action: BehaviorActionType
+  sequence: SceneBehavior[]
+}
+
+function handleSaveBehavior(payload: BehaviorSequencePayload) {
   const component = behaviorComponent.value
   if (!component) {
     return
   }
-  const current = cloneBehaviorMap(behaviorMap.value)
-  const action = behavior.action
-  const originalAction = editingOriginalAction.value
-  const isCreate = detailsMode.value === 'create'
+  const props = component.props as BehaviorComponentProps | undefined
+  const source = props?.behaviors
+  const currentList = cloneBehaviorList(Array.isArray(source) ? source : behaviorMapToList(source))
+  const existingSequenceId = editingSequenceId.value
+  const requestedSequenceId = payload.sequence[0]?.sequenceId
+  const sequenceId = requestedSequenceId && requestedSequenceId.trim().length
+    ? requestedSequenceId
+    : existingSequenceId ?? createBehaviorSequenceId()
 
-  if (!isCreate && originalAction && originalAction !== action) {
-    delete current[originalAction]
+  if (payload.action !== 'perform') {
+    const hasConflict = behaviorEntries.value.some(
+      (entry) =>
+        entry.action === payload.action &&
+        entry.sequenceId !== sequenceId &&
+        entry.sequenceId !== existingSequenceId,
+    )
+    if (hasConflict) {
+      console.warn(`Behavior action "${payload.action}" already exists on this node.`)
+      return
+    }
   }
 
-  const existing = current[action]
-  const isSameAction = !isCreate && originalAction === action
-  if (existing && !isSameAction) {
-    console.warn(`Behavior action "${action}" already exists on this node.`)
-    return
-  }
+  const normalized = payload.sequence.map((step) => ({
+    ...cloneBehavior(step),
+    id: step.id && step.id.trim().length ? step.id : generateUuid(),
+    action: payload.action,
+    sequenceId,
+    script: ensureBehaviorParams(step.script),
+  }))
 
-  const id = isCreate ? generateUuid() : editingBehaviorId.value ?? existing?.id ?? generateUuid()
-  current[action] = {
-    ...cloneBehavior(behavior),
-    id,
-    action,
-  }
+  const filtered = existingSequenceId
+    ? currentList.filter((step) => step.sequenceId !== existingSequenceId)
+    : currentList
 
-  commitBehaviors(current)
+  const insertionIndex = existingSequenceId
+    ? currentList.findIndex((step) => step.sequenceId === existingSequenceId)
+    : filtered.length
+  const safeIndex = insertionIndex === -1 ? filtered.length : insertionIndex
+
+  const nextList = filtered.slice()
+  nextList.splice(safeIndex, 0, ...normalized)
+
+  commitBehaviors(nextList)
   resetDetailsState()
 }
 
-function handleDeleteBehavior(action: BehaviorActionType) {
-  const current = cloneBehaviorMap(behaviorMap.value)
-  if (current[action]) {
-    delete current[action]
-    commitBehaviors(current)
+function handleDeleteBehavior(entry: BehaviorSequenceEntry) {
+  const component = behaviorComponent.value
+  if (!component) {
+    return
   }
+  const props = component.props as BehaviorComponentProps | undefined
+  const source = props?.behaviors
+  const currentList = cloneBehaviorList(Array.isArray(source) ? source : behaviorMapToList(source))
+  const nextList = currentList.filter((step) => step.sequenceId !== entry.sequenceId)
+  commitBehaviors(nextList)
 }
 
 function handleToggleComponent() {
@@ -222,23 +304,35 @@ function handleRemoveComponent() {
 
     <v-expansion-panel-text>
       <div class="behavior-panel__body">
-        <div v-if="behaviors.length" class="behavior-list">
+        <div v-if="behaviorEntries.length" class="behavior-list">
           <div
-            v-for="behavior in behaviors"
-            :key="behavior.action"
+            v-for="entry in behaviorEntries"
+            :key="entry.sequenceId"
             class="behavior-item"
           >
             <div class="behavior-item__info">
-              <div class="behavior-item__name">
-                {{ behavior.name?.trim() || 'Untitled Behavior' }}
-              </div>
               <div class="behavior-item__meta">
                 <v-chip size="x-small" variant="tonal" color="primary" class="behavior-item__chip">
-                  {{ resolveActionLabel(behavior.action) }}
+                  {{ resolveActionLabel(entry.action) }}
                 </v-chip>
-                <v-chip size="x-small" variant="outlined" class="behavior-item__chip">
-                  {{ resolveScriptLabel(behavior.script.type) }}
-                </v-chip>
+              </div>
+              <div class="behavior-item__sequence">
+                <template v-if="entry.sequence.length">
+                  <template v-for="(step, index) in entry.sequence" :key="step.id ?? `${entry.action}-${index}`">
+                    <div class="behavior-item__step">
+                      <v-icon size="18">{{ resolveScriptIcon(step.script.type) }}</v-icon>
+                      <span>{{ resolveScriptLabel(step.script.type) }}</span>
+                    </div>
+                    <v-icon
+                      v-if="index < entry.sequence.length - 1"
+                      size="16"
+                      class="behavior-item__arrow"
+                    >
+                      mdi-arrow-right
+                    </v-icon>
+                  </template>
+                </template>
+                <span v-else class="behavior-item__sequence-empty">No scripts configured</span>
               </div>
             </div>
             <div class="behavior-item__actions">
@@ -246,7 +340,7 @@ function handleRemoveComponent() {
                 icon
                 size="small"
                 variant="text"
-                @click.stop="handleEditBehavior(behavior)"
+                @click.stop="handleEditBehavior(entry)"
               >
                 <v-icon size="18">mdi-pencil</v-icon>
               </v-btn>
@@ -255,7 +349,7 @@ function handleRemoveComponent() {
                 size="small"
                 variant="text"
                 color="error"
-                @click.stop="handleDeleteBehavior(behavior.action)"
+                @click.stop="handleDeleteBehavior(entry)"
               >
                 <v-icon size="18">mdi-delete-outline</v-icon>
               </v-btn>
@@ -263,14 +357,14 @@ function handleRemoveComponent() {
           </div>
         </div>
         <div v-else class="behavior-panel__empty">No behaviors configured for this node.</div>
-  
       </div>
     </v-expansion-panel-text>
   </v-expansion-panel>
   <BehaviorDetailsPanel
     :visible="detailsVisible"
     :mode="detailsMode"
-    :behavior="editingBehavior"
+    :action="editingAction"
+    :sequence="editingSequence"
     :actions="detailsActions"
     :scripts="scriptOptions"
   @close="resetDetailsState()"
@@ -323,22 +417,37 @@ function handleRemoveComponent() {
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.behavior-item__info {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-}
-
-.behavior-item__name {
-  font-weight: 600;
-  font-size: 0.95rem;
-}
-
 .behavior-item__meta {
   display: flex;
   gap: 0.4rem;
   align-items: center;
   flex-wrap: wrap;
+}
+
+.behavior-item__sequence {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.behavior-item__step {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.45rem;
+  border-radius: 999px;
+  background-color: rgba(255, 255, 255, 0.05);
+  font-size: 0.8rem;
+}
+
+.behavior-item__arrow {
+  color: rgba(233, 236, 241, 0.55);
+}
+
+.behavior-item__sequence-empty {
+  color: rgba(233, 236, 241, 0.6);
+  font-size: 0.8rem;
 }
 
 .behavior-item__chip {

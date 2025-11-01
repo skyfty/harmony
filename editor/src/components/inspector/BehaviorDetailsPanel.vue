@@ -1,70 +1,148 @@
 <script setup lang="ts">
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import type {
   BehaviorActionType,
   BehaviorScriptType,
   SceneBehavior,
-  SceneBehaviorScriptBinding,
-  ShowAlertBehaviorParams,
 } from '@harmony/schema'
 import type { BehaviorActionDefinition, BehaviorScriptDefinition } from '@schema/behaviors/definitions'
 import {
   cloneBehavior,
+  createBehaviorSequenceId,
   createBehaviorTemplate,
+  ensureBehaviorParams,
   findBehaviorScript,
 } from '@schema/behaviors/definitions'
+import { generateUuid } from '@/utils/uuid'
+import DelayParams from '@/components/inspector/behavior/DelayParams.vue'
+import MoveToParams from '@/components/inspector/behavior/MoveToParams.vue'
 import ShowAlertParams from '@/components/inspector/behavior/ShowAlertParams.vue'
+import WatchParams from '@/components/inspector/behavior/WatchParams.vue'
 
 type PanelMode = 'create' | 'edit'
+type DragSource = 'palette' | 'sequence' | null
 
 const props = defineProps<{
   visible: boolean
   mode: PanelMode
-  behavior: SceneBehavior | null
+  action: BehaviorActionType | null
+  sequence: SceneBehavior[] | null
   actions: BehaviorActionDefinition[]
   scripts: BehaviorScriptDefinition[]
 }>()
 
 const emit = defineEmits<{
   (event: 'close'): void
-  (event: 'save', behavior: SceneBehavior): void
+  (event: 'save', payload: { action: BehaviorActionType; sequence: SceneBehavior[] }): void
 }>()
 
-const localBehavior = reactive<SceneBehavior>(createBehaviorTemplate('click', 'showAlert'))
+const localAction = ref<BehaviorActionType>('click')
+const localSequence = ref<SceneBehavior[]>([])
+const localSequenceId = ref<string>(createBehaviorSequenceId())
+const selectedStepId = ref<string | null>(null)
+const isPickingTarget = ref(false)
+const parameterComponentRef = ref<{ cancelPicking?: () => void } | null>(null)
+
+const dragState = reactive({
+  source: null as DragSource,
+  scriptType: null as BehaviorScriptType | null,
+  stepId: null as string | null,
+  sourceIndex: -1,
+  dropIndex: -1,
+})
 
 const PARAMETER_COMPONENTS: Partial<Record<BehaviorScriptType, unknown>> = {
+  delay: DelayParams,
+  moveTo: MoveToParams,
   showAlert: ShowAlertParams,
+  watch: WatchParams,
 }
 
-function resetToTemplate(): void {
-  const template = props.behavior ? cloneBehavior(props.behavior) : createBehaviorTemplate('click', 'showAlert')
-  localBehavior.id = template.id
-  localBehavior.name = template.name
-  localBehavior.action = template.action
-  localBehavior.script.type = template.script.type
-  localBehavior.script.params = structuredClone(template.script.params) as SceneBehaviorScriptBinding['params']
+function resolveScriptDefinition(type: BehaviorScriptType) {
+  return findBehaviorScript(type)
+}
+
+function resolveScriptLabel(type: BehaviorScriptType): string {
+  return resolveScriptDefinition(type)?.label ?? 'Unknown Script'
+}
+
+function resolveScriptIcon(type: BehaviorScriptType): string {
+  return resolveScriptDefinition(type)?.icon ?? 'mdi-script-text-outline'
+}
+
+function resetDragState() {
+  dragState.source = null
+  dragState.scriptType = null
+  dragState.stepId = null
+  dragState.sourceIndex = -1
+  dragState.dropIndex = -1
+}
+
+function cancelActivePicking() {
+  parameterComponentRef.value?.cancelPicking?.()
+  isPickingTarget.value = false
+}
+
+function ensureStep(step: SceneBehavior, action: BehaviorActionType, sequenceId: string): SceneBehavior {
+  const normalized = cloneBehavior(step)
+  normalized.id = normalized.id && normalized.id.trim().length ? normalized.id : generateUuid()
+  normalized.action = action
+  normalized.sequenceId = sequenceId
+  normalized.script = ensureBehaviorParams(normalized.script)
+  return normalized
+}
+
+function rebuildSequence(
+  sequence: SceneBehavior[] | null | undefined,
+  action: BehaviorActionType,
+  sequenceId: string,
+): SceneBehavior[] {
+  const list = Array.isArray(sequence) && sequence.length ? sequence : []
+  if (!list.length) {
+    const defaultScript = props.scripts[0]?.id ?? 'showAlert'
+    const template = createBehaviorTemplate(action, defaultScript, sequenceId)
+    template.id = generateUuid()
+    return [ensureStep(template, action, sequenceId)]
+  }
+  return list.map((step) => ensureStep(step, action, sequenceId))
+}
+
+function initializeState() {
+  const fallbackAction = props.actions[0]?.id ?? localAction.value ?? 'click'
+  const action = props.action ?? fallbackAction
+  const sequenceId = props.sequence?.[0]?.sequenceId ?? createBehaviorSequenceId()
+  localSequenceId.value = sequenceId
+  localAction.value = action
+  localSequence.value = rebuildSequence(props.sequence, action, sequenceId)
+  selectedStepId.value = localSequence.value[0]?.id ?? null
+  cancelActivePicking()
 }
 
 watch(
   () => props.visible,
   (visible) => {
     if (visible) {
-      resetToTemplate()
+      initializeState()
+    } else {
+      resetDragState()
+      cancelActivePicking()
     }
   },
   { immediate: true },
 )
 
 watch(
-  () => props.behavior,
-  (behavior) => {
-    if (props.visible) {
-      const template = behavior ? cloneBehavior(behavior) : createBehaviorTemplate('click', 'showAlert')
-      localBehavior.id = template.id
-      localBehavior.name = template.name
-      localBehavior.action = template.action
-      localBehavior.script.type = template.script.type
-      localBehavior.script.params = structuredClone(template.script.params) as SceneBehaviorScriptBinding['params']
+  () => props.sequence,
+  (sequence) => {
+    if (!props.visible) {
+      return
+    }
+    cancelActivePicking()
+    const sequenceId = sequence?.[0]?.sequenceId ?? localSequenceId.value ?? createBehaviorSequenceId()
+    localSequenceId.value = sequenceId
+    localSequence.value = rebuildSequence(sequence, localAction.value, sequenceId)
+    if (!localSequence.value.find((step) => step.id === selectedStepId.value)) {
+      selectedStepId.value = localSequence.value[0]?.id ?? null
     }
   },
   { deep: true },
@@ -76,60 +154,188 @@ watch(
     if (!actions?.length) {
       return
     }
-    if (!actions.find((entry) => entry.id === localBehavior.action)) {
-      const first = actions[0]
-      if (first) {
-        localBehavior.action = first.id
+    const hasCurrent = actions.some((entry) => entry.id === localAction.value)
+    if (!hasCurrent) {
+      const [firstAction] = actions
+      if (firstAction) {
+        localAction.value = firstAction.id
+        localSequence.value = rebuildSequence(localSequence.value, localAction.value, localSequenceId.value)
       }
     }
   },
   { immediate: true, deep: true },
 )
 
+watch(
+  () => localAction.value,
+  (action) => {
+    cancelActivePicking()
+    localSequence.value = localSequence.value.map((step) => ensureStep(step, action, localSequenceId.value))
+  },
+)
+
 const selectedAction = computed<BehaviorActionType>({
   get() {
-    return localBehavior.action
+    return localAction.value
   },
   set(value) {
-    localBehavior.action = value
+    localAction.value = value
   },
 })
 
-const selectedScript = computed<BehaviorScriptType>({
-  get() {
-    return localBehavior.script.type
-  },
-  set(value) {
-    if (localBehavior.script.type === value) {
-      return
-    }
-    const definition = findBehaviorScript<ShowAlertBehaviorParams>(value)
-    localBehavior.script.type = value
-    localBehavior.script.params = definition
-      ? definition.createDefaultParams()
-      : { title: '', message: '' }
-  },
+const selectedStep = computed<SceneBehavior | null>(() => {
+  const id = selectedStepId.value
+  if (!id) {
+    return null
+  }
+  return localSequence.value.find((step) => step.id === id) ?? null
 })
 
-const parameterComponent = computed(() => PARAMETER_COMPONENTS[selectedScript.value] ?? null)
+const parameterComponent = computed(() => {
+  const step = selectedStep.value
+  if (!step) {
+    return null
+  }
+  return PARAMETER_COMPONENTS[step.script.type] ?? null
+})
 
-function handleParamsUpdate(value: ShowAlertBehaviorParams) {
-  localBehavior.script.params = value
+function handleParamsUpdate(value: unknown) {
+  const step = selectedStep.value
+  if (!step) {
+    return
+  }
+  step.script.params = value as SceneBehavior['script']['params']
+  step.script = ensureBehaviorParams(step.script)
+}
+
+function handlePickStateChange(active: boolean) {
+  isPickingTarget.value = active
+}
+
+function selectStep(stepId: string) {
+  selectedStepId.value = stepId
+}
+
+function createStep(scriptType: BehaviorScriptType): SceneBehavior {
+  const template = createBehaviorTemplate(localAction.value, scriptType, localSequenceId.value)
+  template.id = generateUuid()
+  template.script = ensureBehaviorParams(template.script)
+  return template
+}
+
+function insertStep(scriptType: BehaviorScriptType, index: number) {
+  const step = createStep(scriptType)
+  const normalizedIndex = Math.min(Math.max(index, 0), localSequence.value.length)
+  localSequence.value.splice(normalizedIndex, 0, step)
+  selectedStepId.value = step.id
+}
+
+function moveStep(stepId: string, targetIndex: number) {
+  const currentIndex = localSequence.value.findIndex((step) => step.id === stepId)
+  if (currentIndex === -1) {
+    return
+  }
+  const clampedTarget = Math.min(Math.max(targetIndex, 0), localSequence.value.length)
+  const [step] = localSequence.value.splice(currentIndex, 1)
+  if (!step) {
+    return
+  }
+  const adjustedIndex = currentIndex < clampedTarget ? clampedTarget - 1 : clampedTarget
+  localSequence.value.splice(adjustedIndex, 0, step)
+}
+
+function removeStep(stepId: string) {
+  const index = localSequence.value.findIndex((step) => step.id === stepId)
+  if (index === -1) {
+    return
+  }
+  const wasSelected = selectedStepId.value === stepId
+  localSequence.value.splice(index, 1)
+  if (!localSequence.value.length) {
+    selectedStepId.value = null
+    return
+  }
+  if (wasSelected) {
+    const fallback = localSequence.value[index] ?? localSequence.value[index - 1]
+    selectedStepId.value = fallback?.id ?? null
+  }
+}
+
+function handlePaletteDragStart(script: BehaviorScriptDefinition, event: DragEvent) {
+  resetDragState()
+  dragState.source = 'palette'
+  dragState.scriptType = script.id
+  event.dataTransfer?.setData('text/plain', script.id)
+  event.dataTransfer?.setDragImage?.((event.target as HTMLElement) ?? document.body, 12, 12)
+  event.dataTransfer && (event.dataTransfer.effectAllowed = 'copyMove')
+}
+
+function handleSequenceDragStart(step: SceneBehavior, index: number, event: DragEvent) {
+  resetDragState()
+  dragState.source = 'sequence'
+  dragState.stepId = step.id
+  dragState.sourceIndex = index
+  event.dataTransfer?.setData('text/plain', step.id)
+  event.dataTransfer && (event.dataTransfer.effectAllowed = 'move')
+}
+
+function handleDragEnd() {
+  resetDragState()
+}
+
+function handleSequenceDragOver(targetIndex: number, event: DragEvent) {
+  event.preventDefault()
+  dragState.dropIndex = targetIndex
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = dragState.source === 'palette' ? 'copy' : 'move'
+  }
+}
+
+function handleSequenceDrop(targetIndex: number, event: DragEvent) {
+  event.preventDefault()
+  if (dragState.source === 'palette' && dragState.scriptType) {
+    insertStep(dragState.scriptType, targetIndex)
+  } else if (dragState.source === 'sequence' && dragState.stepId) {
+    moveStep(dragState.stepId, targetIndex)
+  }
+  resetDragState()
+}
+
+function handlePaletteDrop(event: DragEvent) {
+  event.preventDefault()
+  if (dragState.source === 'sequence' && dragState.stepId) {
+    removeStep(dragState.stepId)
+  }
+  resetDragState()
+}
+
+function handlePaletteItemClick(script: BehaviorScriptDefinition) {
+  insertStep(script.id, localSequence.value.length)
 }
 
 function closePanel() {
+  cancelActivePicking()
   emit('close')
 }
 
 function handleSave() {
-  emit('save', cloneBehavior(localBehavior))
+  const action = localAction.value
+  if (!action) {
+    return
+  }
+  const normalized = localSequence.value.map((step) => ensureStep(step, action, localSequenceId.value))
+  emit('save', {
+    action,
+    sequence: normalized,
+  })
+  cancelActivePicking()
 }
 
-const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior' : 'Edit Behavior'))
+const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequence' : 'Edit Behavior Sequence'))
 </script>
 
 <template>
-  <v-dialog :model-value="visible" max-width="520" @update:modelValue="closePanel">
+  <v-dialog :model-value="visible" max-width="720" @update:modelValue="closePanel">
     <v-card class="behavior-details">
       <v-toolbar density="compact" class="panel-toolbar" height="40px">
         <div class="toolbar-text">
@@ -141,6 +347,7 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior' : '
           variant="text"
           size="small"
           title="Save"
+          :disabled="isPickingTarget"
           @click="handleSave"
         >
           <v-icon size="16px">mdi-content-save</v-icon>
@@ -148,16 +355,7 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior' : '
         <v-btn class="toolbar-close" icon="mdi-close" size="small" variant="text" @click="closePanel" />
       </v-toolbar>
       <v-divider />
-      <v-card-text class="behavior-details__body">
-        <div class="behavior-details__field">
-          <v-text-field
-            v-model="localBehavior.name"
-            label="Behavior Name"
-            density="compact"
-            variant="underlined"
-            hide-details
-          />
-        </div>
+      <v-card-text class="behavior-details__body" :class="{ 'is-picking': isPickingTarget }">
         <div class="behavior-details__field">
           <v-select
             v-model="selectedAction"
@@ -170,26 +368,97 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior' : '
             hide-details
           />
         </div>
-        <div class="behavior-details__field">
-          <v-select
-            v-model="selectedScript"
-            :items="scripts"
-            item-title="label"
-            item-value="id"
-            label="Script"
-            density="compact"
-            variant="underlined"
-            hide-details
-          />
+        <div
+          class="behavior-details__palette"
+          @dragover.prevent
+          @drop.prevent="handlePaletteDrop"
+        >
+          <div
+            v-for="script in scripts"
+            :key="script.id"
+            class="behavior-palette__item"
+            draggable="true"
+            @dragstart="handlePaletteDragStart(script, $event)"
+            @dragend="handleDragEnd"
+            @click="handlePaletteItemClick(script)"
+          >
+            <v-icon size="20">{{ script.icon }}</v-icon>
+            <span>{{ script.label }}</span>
+          </div>
         </div>
-        <div class="behavior-details__params" v-if="parameterComponent">
-          <component
-            :is="parameterComponent"
-            :model-value="localBehavior.script.params"
-            @update:modelValue="handleParamsUpdate"
-          />
+        <div class="behavior-details__sequence">
+          <div class="behavior-sequence">
+            <template v-if="localSequence.length">
+              <template v-for="(step, index) in localSequence" :key="step.id">
+                <div
+                  class="behavior-sequence__drop-zone"
+                  :class="{ 'is-active': dragState.dropIndex === index }"
+                  @dragover.prevent="handleSequenceDragOver(index, $event)"
+                  @drop.prevent="handleSequenceDrop(index, $event)"
+                />
+                <div class="behavior-sequence__item-group">
+                  <div
+                    class="behavior-sequence__item"
+                    :class="{ 'is-selected': selectedStepId === step.id }"
+                    draggable="true"
+                    @dragstart="handleSequenceDragStart(step, index, $event)"
+                    @dragend="handleDragEnd"
+                    @click="selectStep(step.id)"
+                  >
+                    <v-icon size="18">{{ resolveScriptIcon(step.script.type) }}</v-icon>
+                    <span>{{ resolveScriptLabel(step.script.type) }}</span>
+                  </div>
+                  <v-icon
+                    v-if="index < localSequence.length - 1"
+                    size="16"
+                    class="behavior-sequence__arrow"
+                  >
+                    mdi-arrow-right
+                  </v-icon>
+                </div>
+                <div
+                  v-if="index === localSequence.length - 1"
+                  class="behavior-sequence__drop-zone end"
+                  :class="{ 'is-active': dragState.dropIndex === localSequence.length }"
+                  @dragover.prevent="handleSequenceDragOver(localSequence.length, $event)"
+                  @drop.prevent="handleSequenceDrop(localSequence.length, $event)"
+                />
+              </template>
+            </template>
+            <div
+              v-else
+              class="behavior-sequence__empty"
+              @dragover.prevent="handleSequenceDragOver(0, $event)"
+              @drop.prevent="handleSequenceDrop(0, $event)"
+            >
+              Drag scripts here to build the sequence
+            </div>
+          </div>
+        </div>
+        <div class="behavior-details__params">
+          <template v-if="selectedStep && parameterComponent">
+            <component
+              :is="parameterComponent"
+              :model-value="selectedStep.script.params"
+              ref="parameterComponentRef"
+              @pick-state-change="handlePickStateChange"
+              @update:modelValue="handleParamsUpdate"
+            />
+          </template>
+          <template v-else-if="selectedStep">
+            <div class="behavior-details__no-params">This script has no configurable parameters.</div>
+          </template>
+          <template v-else>
+            <div class="behavior-details__no-selection">Select a script to configure its parameters.</div>
+          </template>
         </div>
       </v-card-text>
+      <div v-if="isPickingTarget" class="behavior-details__pick-overlay">
+        <div class="behavior-details__pick-content">
+          <v-icon size="36" color="primary">mdi-crosshairs-gps</v-icon>
+          <span>Click a node in the scene or press Esc to cancel.</span>
+        </div>
+      </div>
     </v-card>
   </v-dialog>
 </template>
@@ -201,19 +470,13 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior' : '
   background-color: rgba(18, 22, 28, 0.72);
   backdrop-filter: blur(14px);
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
-}
-
-.behavior-details__title {
-  font-weight: 600;
-  font-size: 0.85rem;
-  letter-spacing: 0.05em;
-  color: rgba(233, 236, 241, 0.94);
+  position: relative;
 }
 
 .behavior-details__body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
   padding: 16px;
   border-radius: 6px;
   border: 1px solid rgba(255, 255, 255, 0.04);
@@ -221,30 +484,132 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior' : '
   margin: 4px;
 }
 
+.behavior-details__body.is-picking {
+  opacity: 0.3;
+  pointer-events: none;
+  filter: blur(1px);
+}
+
 .behavior-details__field {
   display: flex;
   flex-direction: column;
+  gap: 4px;
+}
+
+.behavior-details__palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.6rem;
+  border-radius: 6px;
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  background: rgba(10, 14, 20, 0.5);
+}
+
+.behavior-palette__item {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  cursor: grab;
+  background: rgba(255, 255, 255, 0.08);
+  user-select: none;
+  transition: background 120ms ease;
+}
+
+.behavior-palette__item:active {
+  cursor: grabbing;
+}
+
+.behavior-palette__item:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.behavior-details__sequence {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.behavior-sequence {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  min-height: 60px;
+  padding: 0.6rem;
+  border-radius: 6px;
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  background: rgba(8, 12, 18, 0.55);
+}
+
+.behavior-sequence__item-group {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.behavior-sequence__item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.4rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  cursor: grab;
+  user-select: none;
+  transition: background 120ms ease, transform 120ms ease;
+}
+
+.behavior-sequence__item.is-selected {
+  background: rgba(132, 202, 255, 0.28);
+}
+
+.behavior-sequence__item:active {
+  cursor: grabbing;
+  transform: scale(0.98);
+}
+
+.behavior-sequence__arrow {
+  color: rgba(233, 236, 241, 0.6);
+}
+
+.behavior-sequence__drop-zone {
+  width: 4px;
+  height: 32px;
+  border-radius: 3px;
+  background: transparent;
+  transition: background 120ms ease;
+}
+
+.behavior-sequence__drop-zone.is-active {
+  background: rgba(132, 202, 255, 0.75);
+}
+
+.behavior-sequence__drop-zone.end {
+  align-self: stretch;
+}
+
+.behavior-sequence__empty {
+  color: rgba(233, 236, 241, 0.6);
+  font-size: 0.85rem;
 }
 
 .behavior-details__params {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 4px;
-  padding: 8px;
+  padding: 12px;
   background: rgba(12, 16, 22, 0.55);
+  min-height: 120px;
 }
 
-.behavior-details__actions {
-  padding-inline: 1rem;
-  padding-block: 0.5rem;
+.behavior-details__no-selection,
+.behavior-details__no-params {
+  color: rgba(233, 236, 241, 0.68);
+  font-size: 0.85rem;
 }
 
-/* Unify input label styles with material panel */
-.behavior-details :deep(.v-field-label) {
-  font-size: 0.82rem;
-  font-weight: 600;
-}
-
-/* Toolbar styles aligned with MaterialDetailsPanel */
 .panel-toolbar {
   background-color: transparent;
   color: #e9ecf1;
@@ -277,5 +642,33 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior' : '
   font-weight: 600;
   letter-spacing: 0.05em;
   color: rgba(233, 236, 241, 0.94);
+}
+
+.behavior-details :deep(.v-field-label) {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.behavior-details__pick-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.behavior-details__pick-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  align-items: center;
+  padding: 1rem 1.5rem;
+  border-radius: 8px;
+  background: rgba(14, 18, 24, 0.85);
+  border: 1px solid rgba(132, 202, 255, 0.35);
+  color: rgba(233, 236, 241, 0.92);
+  text-align: center;
+  font-size: 0.86rem;
 }
 </style>

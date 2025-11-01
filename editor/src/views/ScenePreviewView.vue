@@ -15,7 +15,9 @@ import {
 	listInteractableObjects,
 	resetBehaviorRuntime,
 	triggerBehaviorAction,
+	resolveBehaviorEvent,
 	type BehaviorRuntimeEvent,
+	type BehaviorEventResolution,
 } from '@schema/behaviors/runtime'
 
 type ControlMode = 'first-person' | 'third-person'
@@ -43,6 +45,14 @@ const behaviorPointer = new THREE.Vector2()
 const behaviorAlertVisible = ref(false)
 const behaviorAlertTitle = ref('')
 const behaviorAlertMessage = ref('')
+const behaviorAlertToken = ref<string | null>(null)
+const behaviorAlertShowConfirm = ref(true)
+const behaviorAlertShowCancel = ref(false)
+const behaviorAlertConfirmText = ref('Confirm')
+const behaviorAlertCancelText = ref('Cancel')
+
+const activeBehaviorDelayTimers = new Map<string, number>()
+const activeBehaviorAnimations = new Map<string, () => void>()
 
 const CAMERA_HEIGHT = 1.6
 const FIRST_PERSON_ROTATION_SPEED = 25
@@ -51,6 +61,8 @@ const FIRST_PERSON_LOOK_SPEED = 0.06
 const FIRST_PERSON_PITCH_LIMIT = THREE.MathUtils.degToRad(75)
 const tempDirection = new THREE.Vector3()
 const tempTarget = new THREE.Vector3()
+const tempQuaternion = new THREE.Quaternion()
+const tempBox = new THREE.Box3()
 const skySunPosition = new THREE.Vector3()
 const SKY_ENVIRONMENT_INTENSITY = 0.35
 const SKY_SCALE = 2500
@@ -243,21 +255,300 @@ function toggleFirstPersonMouseControl() {
 	setFirstPersonMouseControl(!isFirstPersonMouseControlEnabled.value)
 }
 
-function presentBehaviorAlert(title: string, message: string) {
-	const normalizedTitle = title?.trim() ?? ''
+function clearBehaviorAlert() {
+	behaviorAlertVisible.value = false
+	behaviorAlertTitle.value = ''
+	behaviorAlertMessage.value = ''
+	behaviorAlertToken.value = null
+	behaviorAlertShowConfirm.value = true
+	behaviorAlertShowCancel.value = false
+	behaviorAlertConfirmText.value = 'Confirm'
+	behaviorAlertCancelText.value = 'Cancel'
+}
+
+function presentBehaviorAlert(event: Extract<BehaviorRuntimeEvent, { type: 'show-alert' }>) {
+	clearBehaviorAlert()
+	behaviorAlertToken.value = event.token
+	const legacyParams = event.params as typeof event.params & { title?: string; message?: string }
+	const rawLegacyTitle = typeof legacyParams.title === 'string' ? legacyParams.title : ''
+	const normalizedTitle = rawLegacyTitle ? rawLegacyTitle.trim() : ''
 	behaviorAlertTitle.value = normalizedTitle || 'Notice'
-	behaviorAlertMessage.value = message ?? ''
+	const legacyMessage = typeof legacyParams.message === 'string' ? legacyParams.message : ''
+	behaviorAlertMessage.value = event.params.content ?? legacyMessage ?? ''
+	behaviorAlertShowConfirm.value = event.params.showConfirm ?? true
+	behaviorAlertShowCancel.value = event.params.showCancel ?? false
+	behaviorAlertConfirmText.value = (event.params.confirmText ?? 'Confirm') || 'Confirm'
+	behaviorAlertCancelText.value = (event.params.cancelText ?? 'Cancel') || 'Cancel'
+	if (!behaviorAlertShowConfirm.value && !behaviorAlertShowCancel.value) {
+		resolveBehaviorToken(event.token, { type: 'continue' })
+		return
+	}
 	behaviorAlertVisible.value = true
 }
 
+function confirmBehaviorAlert() {
+	const token = behaviorAlertToken.value
+	clearBehaviorAlert()
+	if (!token) {
+		return
+	}
+	const followUps = resolveBehaviorEvent(token, { type: 'continue' })
+	processBehaviorEvents(followUps)
+}
+
+function cancelBehaviorAlert() {
+	const token = behaviorAlertToken.value
+	clearBehaviorAlert()
+	if (!token) {
+		return
+	}
+	const followUps = resolveBehaviorEvent(token, { type: 'abort', message: 'User cancelled alert' })
+	processBehaviorEvents(followUps)
+}
+
 function dismissBehaviorAlert() {
-	behaviorAlertVisible.value = false
+	clearBehaviorAlert()
+}
+
+function processBehaviorEvents(events: BehaviorRuntimeEvent[] | BehaviorRuntimeEvent | null | undefined) {
+	if (!events) {
+		return
+	}
+	const list = Array.isArray(events) ? events : [events]
+	list.forEach((entry) => handleBehaviorRuntimeEvent(entry))
+}
+
+function resolveBehaviorToken(token: string, resolution: BehaviorEventResolution) {
+	const followUps = resolveBehaviorEvent(token, resolution)
+	processBehaviorEvents(followUps)
+}
+
+function clearDelayTimer(token: string) {
+	const handle = activeBehaviorDelayTimers.get(token)
+	if (handle != null) {
+		window.clearTimeout(handle)
+		activeBehaviorDelayTimers.delete(token)
+	}
+}
+
+function stopBehaviorAnimation(token: string) {
+	const cancel = activeBehaviorAnimations.get(token)
+	if (!cancel) {
+		return
+	}
+	try {
+		cancel()
+	} finally {
+		activeBehaviorAnimations.delete(token)
+	}
+}
+
+function startTimedAnimation(
+	token: string,
+	durationSeconds: number,
+	onUpdate: (alpha: number) => void,
+	onComplete: () => void,
+): void {
+	stopBehaviorAnimation(token)
+	const durationMs = Math.max(0, durationSeconds) * 1000
+	if (durationMs <= 0) {
+		onUpdate(1)
+		onComplete()
+		return
+	}
+	const startTime = performance.now()
+	let frameHandle = 0
+	const cancel = () => {
+		if (frameHandle) {
+			cancelAnimationFrame(frameHandle)
+			frameHandle = 0
+		}
+		activeBehaviorAnimations.delete(token)
+	}
+	const step = (now: number) => {
+		const elapsed = Math.max(0, now - startTime)
+		const alpha = Math.min(1, elapsed / durationMs)
+		onUpdate(alpha)
+		if (alpha >= 1) {
+			cancel()
+			onComplete()
+			return
+		}
+		frameHandle = requestAnimationFrame(step)
+	}
+	frameHandle = requestAnimationFrame(step)
+	activeBehaviorAnimations.set(token, cancel)
+}
+
+function resolveNodeFocusPoint(nodeId: string | null, fallback: THREE.Vector3): THREE.Vector3 | null {
+	if (!nodeId) {
+		return null
+	}
+	const object = nodeObjectMap.get(nodeId)
+	if (!object) {
+		return null
+	}
+	tempBox.setFromObject(object)
+	if (!Number.isFinite(tempBox.min.x) || !Number.isFinite(tempBox.max.x)) {
+		object.getWorldPosition(fallback)
+		return fallback
+	}
+	tempBox.getCenter(fallback)
+	return fallback
+}
+
+function handleDelayEvent(event: Extract<BehaviorRuntimeEvent, { type: 'delay' }>) {
+	clearDelayTimer(event.token)
+	const durationMs = Math.max(0, event.seconds) * 1000
+	const handle = window.setTimeout(() => {
+		activeBehaviorDelayTimers.delete(event.token)
+		resolveBehaviorToken(event.token, { type: 'continue' })
+	}, durationMs)
+	activeBehaviorDelayTimers.set(event.token, handle)
+}
+
+function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'move-camera' }>) {
+	const activeCamera = camera
+	if (!activeCamera) {
+		resolveBehaviorToken(event.token, { type: 'fail', message: 'Camera unavailable' })
+		return
+	}
+	const focus = resolveNodeFocusPoint(event.nodeId, tempTarget)
+	if (!focus) {
+		resolveBehaviorToken(event.token, {
+			type: 'fail',
+			message: 'Behavior target object not found.',
+		})
+		return
+	}
+	const focusPoint = focus.clone()
+	const ownerObject = nodeObjectMap.get(event.nodeId) ?? null
+	if (ownerObject) {
+		ownerObject.getWorldQuaternion(tempQuaternion)
+	} else {
+		tempQuaternion.identity()
+	}
+	const baseOffset = Math.max(event.offset, 0.5)
+	switch (event.facing) {
+		case 'back':
+			tempDirection.set(0, 0, -baseOffset)
+			break
+		case 'left':
+			tempDirection.set(-baseOffset, 0, 0)
+			break
+		case 'right':
+			tempDirection.set(baseOffset, 0, 0)
+			break
+		case 'front':
+		default:
+			tempDirection.set(0, 0, baseOffset)
+			break
+	}
+	tempDirection.applyQuaternion(tempQuaternion)
+	if (Math.abs(tempDirection.y) < CAMERA_HEIGHT * 0.25) {
+		tempDirection.y = Math.sign(tempDirection.y || 1) * CAMERA_HEIGHT * 0.4
+	}
+	const destination = focusPoint.clone().add(tempDirection)
+	if (destination.y < focusPoint.y + CAMERA_HEIGHT * 0.4) {
+		destination.y = focusPoint.y + CAMERA_HEIGHT * 0.4
+	}
+	const startPosition = activeCamera.position.clone()
+	const orbitControls = mapControls ?? null
+	const startTarget = orbitControls ? orbitControls.target.clone() : null
+	const distance = startPosition.distanceTo(destination)
+	const durationSeconds = event.speed > 0 ? Math.min(5, Math.max(0.2, distance / Math.max(event.speed, 0.01))) : 0
+	const updateFrame = (alpha: number) => {
+		activeCamera.position.lerpVectors(startPosition, destination, alpha)
+		if (orbitControls && startTarget) {
+			orbitControls.target.copy(startTarget)
+			orbitControls.target.lerp(focusPoint, alpha)
+			orbitControls.update()
+		}
+		activeCamera.lookAt(focusPoint)
+	}
+	const finalize = () => {
+		activeCamera.position.copy(destination)
+		if (orbitControls) {
+			orbitControls.target.copy(focusPoint)
+			orbitControls.update()
+		}
+		activeCamera.lookAt(focusPoint)
+		syncLastFirstPersonStateFromCamera()
+		resolveBehaviorToken(event.token, { type: 'continue' })
+	}
+	startTimedAnimation(event.token, durationSeconds, updateFrame, finalize)
+}
+
+function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watch-node' }>) {
+	const activeCamera = camera
+	if (!activeCamera) {
+		resolveBehaviorToken(event.token, { type: 'fail', message: 'Camera unavailable' })
+		return
+	}
+	const focus = resolveNodeFocusPoint(event.targetNodeId, tempTarget)
+	if (!focus) {
+		resolveBehaviorToken(event.token, { type: 'fail', message: 'Target node not found' })
+		return
+	}
+	const focusPoint = focus.clone()
+	const orbitControls = mapControls ?? null
+	if (orbitControls) {
+		orbitControls.target.copy(focusPoint)
+		orbitControls.update()
+	}
+	activeCamera.lookAt(focusPoint)
+	syncLastFirstPersonStateFromCamera()
+	resolveBehaviorToken(event.token, { type: 'continue' })
+}
+
+function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look-level' }>) {
+	const activeCamera = camera
+	if (!activeCamera) {
+		resolveBehaviorToken(event.token, { type: 'fail', message: 'Camera unavailable' })
+		return
+	}
+	const orbitControls = mapControls ?? null
+	const lookTarget = orbitControls
+		? orbitControls.target.clone()
+		: activeCamera.getWorldDirection(tempDirection).add(activeCamera.position)
+	lookTarget.y = activeCamera.position.y
+	if (orbitControls) {
+		orbitControls.target.copy(lookTarget)
+		orbitControls.update()
+	}
+	activeCamera.lookAt(lookTarget)
+	syncLastFirstPersonStateFromCamera()
+	resolveBehaviorToken(event.token, { type: 'continue' })
 }
 
 function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 	switch (event.type) {
+		case 'delay':
+			handleDelayEvent(event)
+			break
+		case 'move-camera':
+			handleMoveCameraEvent(event)
+			break
 		case 'show-alert':
-			presentBehaviorAlert(event.params.title ?? '', event.params.message ?? '')
+			presentBehaviorAlert(event)
+			break
+		case 'watch-node':
+			handleWatchNodeEvent(event)
+			break
+		case 'look-level':
+			handleLookLevelEvent(event)
+			break
+		case 'sequence-complete':
+			clearBehaviorAlert()
+			if (event.status === 'failure' || event.status === 'aborted') {
+				console.warn('[ScenePreview] Behavior sequence ended', event)
+			} else {
+				console.info('[ScenePreview] Behavior sequence completed', event)
+			}
+			break
+		case 'sequence-error':
+			clearBehaviorAlert()
+			console.error('[ScenePreview] Behavior sequence error', event.message)
 			break
 		default:
 			break
@@ -317,7 +608,7 @@ function handleBehaviorClick(event: MouseEvent) {
 			point: { x: hitPoint.x, y: hitPoint.y, z: hitPoint.z },
 		},
 	})
-	results.forEach((output) => handleBehaviorRuntimeEvent(output))
+	processBehaviorEvents(results)
 }
 
 function resetFirstPersonPointerDelta() {
@@ -1093,6 +1384,16 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+	activeBehaviorDelayTimers.forEach((handle) => window.clearTimeout(handle))
+	activeBehaviorDelayTimers.clear()
+	activeBehaviorAnimations.forEach((cancel) => {
+		try {
+			cancel()
+		} catch (error) {
+			console.warn('[ScenePreview] Failed to cancel behavior animation', error)
+		}
+	})
+	activeBehaviorAnimations.clear()
 	unsubscribe?.()
 	unsubscribe = null
 	stopAnimationLoop()
@@ -1286,22 +1587,40 @@ onBeforeUnmount(() => {
 			class="scene-preview__behavior-overlay"
 		>
 			<div class="scene-preview__behavior-dialog">
-				<h3 class="scene-preview__behavior-title">{{ behaviorAlertTitle }}</h3>
+				<h3
+					v-if="behaviorAlertTitle"
+					class="scene-preview__behavior-title"
+				>
+					{{ behaviorAlertTitle }}
+				</h3>
 				<p
 					v-if="behaviorAlertMessage"
 					class="scene-preview__behavior-message"
 				>
 					{{ behaviorAlertMessage }}
 				</p>
-				<v-btn
-					class="scene-preview__behavior-button"
-					variant="flat"
-					color="primary"
-					size="small"
-					@click="dismissBehaviorAlert"
-				>
-					OK
-				</v-btn>
+				<div class="scene-preview__behavior-actions">
+					<v-btn
+						v-if="behaviorAlertShowCancel"
+						class="scene-preview__behavior-button"
+						variant="tonal"
+						color="secondary"
+						size="small"
+						@click="cancelBehaviorAlert"
+					>
+						{{ behaviorAlertCancelText }}
+					</v-btn>
+					<v-btn
+						v-if="behaviorAlertShowConfirm"
+						class="scene-preview__behavior-button"
+						variant="flat"
+						color="primary"
+						size="small"
+						@click="confirmBehaviorAlert"
+					>
+						{{ behaviorAlertConfirmText }}
+					</v-btn>
+				</div>
 			</div>
 		</div>
 	</div>
@@ -1437,8 +1756,15 @@ onBeforeUnmount(() => {
 	opacity: 0.9;
 }
 
+.scene-preview__behavior-actions {
+	display: flex;
+	justify-content: center;
+	gap: 10px;
+	margin-top: 12px;
+}
+
 .scene-preview__behavior-button {
-	margin-top: 4px;
+	flex: 0 0 auto;
 }
 
 @media (max-width: 768px) {
