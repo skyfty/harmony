@@ -739,6 +739,8 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequ
   justify-content: center;
   gap: 12px;
   padding: 28px;
+  min-height: 150px;
+  max-width: calc(100% - 126px);
   background: linear-gradient(135deg, rgba(12, 16, 22, 0.85), rgba(20, 24, 32, 0.85));
   border-radius: 6px;
   border: 1px solid rgba(132, 202, 255, 0.4);
