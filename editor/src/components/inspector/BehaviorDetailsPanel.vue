@@ -43,6 +43,7 @@ const emit = defineEmits<{
 
 const localAction = ref<BehaviorEventType>('click')
 const localSequence = ref<SceneBehavior[]>([])
+const sequenceName = ref('')
 const localSequenceId = ref<string>(createBehaviorSequenceId())
 const selectedStepId = ref<string | null>(null)
 const isPickingTarget = ref(false)
@@ -75,6 +76,30 @@ const PARAMETER_COMPONENTS: Partial<Record<BehaviorScriptType, unknown>> = {
   show: ShowParams,
   hide: HideParams,
   lantern: LanternParams,
+}
+
+function normalizeBehaviorName(name: string | null | undefined): string {
+  if (typeof name !== 'string') {
+    return ''
+  }
+  return name.trim()
+}
+
+function extractSequenceName(sequence: SceneBehavior[]): string {
+  for (const step of sequence) {
+    const candidate = normalizeBehaviorName(step?.name)
+    if (candidate) {
+      return candidate
+    }
+  }
+  return ''
+}
+
+function applySequenceName(sequence: SceneBehavior[], name: string): void {
+  const normalized = normalizeBehaviorName(name)
+  sequence.forEach((step) => {
+    step.name = normalized
+  })
 }
 
 function resolveScriptDefinition(type: BehaviorScriptType) {
@@ -160,6 +185,7 @@ function initializeState() {
   defaultTargetApplied.clear()
   localSequence.value = rebuildSequence(props.sequence, action, sequenceId)
   applyDefaultTargets(localSequence.value)
+  sequenceName.value = extractSequenceName(localSequence.value)
   selectedStepId.value = localSequence.value[0]?.id ?? null
   cancelActivePicking()
 }
@@ -189,6 +215,7 @@ watch(
     defaultTargetApplied.clear()
     localSequence.value = rebuildSequence(sequence, localAction.value, sequenceId)
     applyDefaultTargets(localSequence.value)
+    sequenceName.value = extractSequenceName(localSequence.value)
     if (!localSequence.value.find((step) => step.id === selectedStepId.value)) {
       selectedStepId.value = localSequence.value[0]?.id ?? null
     }
@@ -219,6 +246,18 @@ watch(
   (action) => {
     cancelActivePicking()
     localSequence.value = localSequence.value.map((step) => ensureStep(step, action, localSequenceId.value))
+  },
+)
+
+watch(
+  sequenceName,
+  (name) => {
+    const normalized = normalizeBehaviorName(name)
+    if (name !== normalized) {
+      sequenceName.value = normalized
+      return
+    }
+    applySequenceName(localSequence.value, normalized)
   },
 )
 
@@ -267,6 +306,7 @@ function selectStep(stepId: string) {
 function createStep(scriptType: BehaviorScriptType): SceneBehavior {
   const template = createBehaviorTemplate(localAction.value, scriptType, localSequenceId.value)
   template.id = generateUuid()
+  template.name = normalizeBehaviorName(sequenceName.value)
   template.script = ensureBehaviorParams(template.script)
   applyDefaultTarget(template)
   return template
@@ -302,6 +342,7 @@ function removeStep(stepId: string) {
   localSequence.value.splice(index, 1)
   if (!localSequence.value.length) {
     selectedStepId.value = null
+    sequenceName.value = ''
     return
   }
   if (wasSelected) {
@@ -421,6 +462,16 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequ
                 density="compact"
                 variant="underlined"
                 hide-details
+              />
+            </div>
+            <div class="behavior-details__field">
+              <v-text-field
+                v-model="sequenceName"
+                label="Behavior Name"
+                density="compact"
+                variant="underlined"
+                hide-details
+                placeholder="Enter a name to identify this behavior"
               />
             </div>
             <div

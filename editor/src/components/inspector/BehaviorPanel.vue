@@ -4,7 +4,6 @@ import { storeToRefs } from 'pinia'
 import type {
   BehaviorEventType,
   BehaviorComponentProps,
-  BehaviorScriptType,
   SceneBehavior,
   SceneNodeComponentState,
 } from '@harmony/schema'
@@ -16,7 +15,6 @@ import {
   createBehaviorSequenceId,
   createBehaviorTemplate,
   findBehaviorAction,
-  findBehaviorScript,
   type BehaviorActionDefinition,
   listBehaviorActions,
   listBehaviorScripts,
@@ -105,16 +103,17 @@ function resolveActionLabel(action: BehaviorEventType): string {
   return findBehaviorAction(action)?.label ?? 'Unknown Action'
 }
 
-function resolveScriptDefinition(script: BehaviorScriptType) {
-  return findBehaviorScript(script)
-}
-
-function resolveScriptLabel(script: BehaviorScriptType): string {
-  return resolveScriptDefinition(script)?.label ?? 'Unknown Script'
-}
-
-function resolveScriptIcon(script: BehaviorScriptType): string {
-  return resolveScriptDefinition(script)?.icon ?? 'mdi-script-text-outline'
+function resolveBehaviorName(entry: BehaviorSequenceEntry): string {
+  if (!entry.sequence.length) {
+    return 'No scripts configured'
+  }
+  for (const step of entry.sequence) {
+    const candidate = typeof step?.name === 'string' ? step.name.trim() : ''
+    if (candidate) {
+      return candidate
+    }
+  }
+  return 'Untitled Behavior'
 }
 
 function openDetails(
@@ -259,23 +258,8 @@ function handleRemoveComponent() {
                   {{ resolveActionLabel(entry.action) }}
                 </v-chip>
               </div>
-              <div class="behavior-item__sequence">
-                <template v-if="entry.sequence.length">
-                  <template v-for="(step, index) in entry.sequence" :key="step.id ?? `${entry.action}-${index}`">
-                    <div class="behavior-item__step">
-                      <v-icon size="18">{{ resolveScriptIcon(step.script.type) }}</v-icon>
-                      <span>{{ resolveScriptLabel(step.script.type) }}</span>
-                    </div>
-                    <v-icon
-                      v-if="index < entry.sequence.length - 1"
-                      size="16"
-                      class="behavior-item__arrow"
-                    >
-                      mdi-arrow-right
-                    </v-icon>
-                  </template>
-                </template>
-                <span v-else class="behavior-item__sequence-empty">No scripts configured</span>
+              <div class="behavior-item__name">
+                {{ resolveBehaviorName(entry) }}
               </div>
             </div>
             <div class="behavior-item__actions">
@@ -357,30 +341,16 @@ function handleRemoveComponent() {
   flex-wrap: wrap;
 }
 
-.behavior-item__sequence {
+.behavior-item__info {
   display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 0.3rem;
 }
 
-.behavior-item__step {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.2rem 0.45rem;
-  border-radius: 999px;
-  background-color: rgba(255, 255, 255, 0.05);
-  font-size: 0.8rem;
-}
-
-.behavior-item__arrow {
-  color: rgba(233, 236, 241, 0.55);
-}
-
-.behavior-item__sequence-empty {
-  color: rgba(233, 236, 241, 0.6);
-  font-size: 0.8rem;
+.behavior-item__name {
+  color: rgba(233, 236, 241, 0.85);
+  font-size: 0.85rem;
+  font-weight: 500;
 }
 
 .behavior-item__chip {
