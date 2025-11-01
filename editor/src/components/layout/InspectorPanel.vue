@@ -349,13 +349,7 @@ function handleAddComponent(type: string) {
               :value="definition.type"
               @click="handleAddComponent(definition.type)"
             >
-              <template #prepend>
-                <v-icon size="18">{{ definition.icon ?? 'mdi-puzzle' }}</v-icon>
-              </template>
               <v-list-item-title>{{ definition.label }}</v-list-item-title>
-              <v-list-item-subtitle v-if="definition.description">
-                {{ definition.description }}
-              </v-list-item-subtitle>
             </v-list-item>
           </v-list>
         </v-menu>

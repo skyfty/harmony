@@ -1616,7 +1616,7 @@ const defaultPanelVisibility: PanelVisibilityState = {
 const defaultPanelPlacement: PanelPlacementState = {
   hierarchy: 'floating',
   inspector: 'floating',
-  project: 'floating',
+  project: 'docked',
 }
 
 function normalizePanelVisibilityState(input?: Partial<PanelVisibilityState> | null): PanelVisibilityState {
