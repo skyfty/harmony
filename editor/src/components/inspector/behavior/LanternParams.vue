@@ -600,6 +600,7 @@ function resolveSlideImageLabel(slide: LanternSlideDefinition): string {
   flex: 1;
   display: flex;
   flex-direction: column;
+  height: 100%;
 }
 
 .lantern-slide__textarea :deep(.v-field) {

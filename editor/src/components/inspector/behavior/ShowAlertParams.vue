@@ -29,6 +29,7 @@ function updateField<Key extends keyof ShowAlertBehaviorParams>(key: Key, value:
 <template>
   <div class="show-alert-params">
     <v-textarea
+      class="alert-message"
       :model-value="params.content"
       label="Alert Message"
       rows="3"
@@ -38,38 +39,42 @@ function updateField<Key extends keyof ShowAlertBehaviorParams>(key: Key, value:
   @update:model-value="updateField('content', $event ?? '')"
     />
     <div class="show-alert-params__toggles">
-      <v-checkbox
-        :model-value="params.showConfirm"
-        label="Show Confirm Button"
-        density="compact"
-        hide-details
-  @update:model-value="updateField('showConfirm', Boolean($event))"
-      />
-      <v-text-field
-        v-if="params.showConfirm"
-        :model-value="params.confirmText"
-        label="Confirm Button Text"
-        density="compact"
-        variant="underlined"
-        hide-details
-  @update:model-value="updateField('confirmText', $event ?? '')"
-      />
-      <v-checkbox
-        :model-value="params.showCancel"
-        label="Show Cancel Button"
-        density="compact"
-        hide-details
-  @update:model-value="updateField('showCancel', Boolean($event))"
-      />
-      <v-text-field
-        v-if="params.showCancel"
-        :model-value="params.cancelText"
-        label="Cancel Button Text"
-        density="compact"
-        variant="underlined"
-        hide-details
-  @update:model-value="updateField('cancelText', $event ?? '')"
-      />
+      <div class="show-alert-params__row">
+        <v-checkbox
+          :model-value="params.showConfirm"
+          label="Show Confirm Button"
+          density="compact"
+          hide-details
+    @update:model-value="updateField('showConfirm', Boolean($event))"
+        />
+        <v-text-field
+          v-if="params.showConfirm"
+          :model-value="params.confirmText"
+          label="Confirm Button Text"
+          density="compact"
+          variant="underlined"
+          hide-details
+    @update:model-value="updateField('confirmText', $event ?? '')"
+        />
+      </div>
+      <div class="show-alert-params__row">
+        <v-checkbox
+          :model-value="params.showCancel"
+          label="Show Cancel Button"
+          density="compact"
+          hide-details
+    @update:model-value="updateField('showCancel', Boolean($event))"
+        />
+        <v-text-field
+          v-if="params.showCancel"
+          :model-value="params.cancelText"
+          label="Cancel Button Text"
+          density="compact"
+          variant="underlined"
+          hide-details
+    @update:model-value="updateField('cancelText', $event ?? '')"
+        />
+      </div>
     </div>
   </div>
 </template>
@@ -79,6 +84,14 @@ function updateField<Key extends keyof ShowAlertBehaviorParams>(key: Key, value:
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  /* Fixed width for the checkbox/label column to keep rows aligned */
+  --label-col-width: 220px;
+}
+
+.alert-message {
+  margin-top: 20px;
+  --v-textarea-padding-top: 0;
+  --v-textarea-padding-bottom: 0;
 }
 
 .show-alert-params__toggles {
@@ -87,8 +100,23 @@ function updateField<Key extends keyof ShowAlertBehaviorParams>(key: Key, value:
   gap: 0.4rem;
 }
 
+.show-alert-params__row {
+  display: grid;
+  grid-template-columns: var(--label-col-width) 1fr;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .show-alert-params :deep(.v-input--density-compact) {
   --v-input-padding-top: 0;
   --v-input-padding-bottom: 0;
+}
+
+/* Prevent long checkbox labels from shifting layout; truncate with ellipsis */
+.show-alert-params__row :deep(.v-selection-control__label) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
 }
 </style>
