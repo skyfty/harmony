@@ -202,6 +202,7 @@ export interface LanternSlideDefinition {
   id: string
   title: string
   description: string
+  descriptionAssetId: string | null
   imageAssetId: string | null
   layout: LanternSlideLayout
 }

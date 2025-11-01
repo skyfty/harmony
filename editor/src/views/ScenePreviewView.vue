@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { FirstPersonControls } from 'three/examples/jsm/controls/FirstPersonControls.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
@@ -62,6 +62,11 @@ const lanternOverlayVisible = ref(false)
 const lanternSlides = ref<LanternSlideDefinition[]>([])
 const lanternActiveSlideIndex = ref(0)
 const lanternEventToken = ref<string | null>(null)
+
+type LanternTextState = { text: string; loading: boolean; error: string | null }
+
+const lanternTextState = reactive<Record<string, LanternTextState>>({})
+const lanternTextPromises = new Map<string, Promise<void>>()
 
 const activeBehaviorDelayTimers = new Map<string, number>()
 const activeBehaviorAnimations = new Map<string, () => void>()
@@ -226,6 +231,68 @@ const lanternCurrentSlide = computed(() => {
 })
 const lanternHasMultipleSlides = computed(() => lanternTotalSlides.value > 1)
 const lanternCurrentSlideImage = computed(() => resolveLanternImageSource(lanternCurrentSlide.value?.imageAssetId ?? null))
+const lanternCurrentSlideTextState = computed(() => {
+	const slide = lanternCurrentSlide.value
+	if (!slide || !slide.descriptionAssetId) {
+		return null
+	}
+	const assetId = slide.descriptionAssetId.trim()
+	if (!assetId.length) {
+		return null
+	}
+	return getLanternTextState(assetId)
+})
+const lanternCurrentSlideDescription = computed(() => {
+	const slide = lanternCurrentSlide.value
+	if (!slide) {
+		return ''
+	}
+	if (slide.descriptionAssetId) {
+		const state = lanternCurrentSlideTextState.value
+		if (state && !state.loading && !state.error) {
+			return state.text
+		}
+		return ''
+	}
+	return slide.description ?? ''
+})
+
+watch(
+	lanternSlides,
+	(slidesList) => {
+		const list = Array.isArray(slidesList) ? slidesList : []
+		const activeIds = new Set<string>()
+		for (const slide of list) {
+			const candidate = slide?.descriptionAssetId?.trim()
+			if (candidate) {
+				activeIds.add(candidate)
+				void ensureLanternText(candidate)
+			}
+		}
+		Object.keys(lanternTextState).forEach((existing) => {
+			if (!activeIds.has(existing)) {
+				delete lanternTextState[existing]
+			}
+		})
+		Array.from(lanternTextPromises.keys()).forEach((existing) => {
+			if (!activeIds.has(existing)) {
+				lanternTextPromises.delete(existing)
+			}
+		})
+	},
+	{ deep: true },
+)
+
+watch(
+	lanternCurrentSlide,
+	(slide) => {
+		const assetId = typeof slide?.descriptionAssetId === 'string' ? slide.descriptionAssetId.trim() : ''
+		if (assetId) {
+			void ensureLanternText(assetId)
+		}
+	},
+	{ immediate: true },
+)
 
 watch(volumePercent, (value) => {
 	if (!listener) {
@@ -317,11 +384,16 @@ function normalizeLanternSlide(slide: Partial<LanternSlideDefinition> | null | u
 	const id = typeof slide?.id === 'string' && slide.id.trim().length ? slide.id.trim() : `lantern_preview_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`
 	const title = typeof slide?.title === 'string' ? slide.title.trim() : ''
 	const description = typeof slide?.description === 'string' ? slide.description.trim() : ''
+	const descriptionAssetId = typeof (slide as { descriptionAssetId?: unknown })?.descriptionAssetId === 'string'
+		&& (slide as { descriptionAssetId: string }).descriptionAssetId.trim().length
+		? (slide as { descriptionAssetId: string }).descriptionAssetId.trim()
+		: null
 	const imageAssetId = typeof slide?.imageAssetId === 'string' && slide.imageAssetId.trim().length ? slide.imageAssetId.trim() : null
 	return {
 		id,
 		title,
 		description,
+		descriptionAssetId,
 		imageAssetId,
 		layout: normalizeLanternLayout(slide?.layout),
 	}
@@ -355,6 +427,156 @@ function resolveLanternImageSource(assetId: string | null): string | null {
 	const documentMap = currentDocument?.packageAssetMap
 	const mapped = documentMap && typeof documentMap[trimmed] === 'string' ? documentMap[trimmed] : null
 	return mapped && mapped.trim().length ? mapped : null
+}
+
+function getLanternTextState(assetId: string): LanternTextState {
+	if (!lanternTextState[assetId]) {
+		lanternTextState[assetId] = {
+			text: '',
+			loading: false,
+			error: null,
+		}
+	}
+	return lanternTextState[assetId]!
+}
+
+function decodeDataUrlText(dataUrl: string): string | null {
+	try {
+		const commaIndex = dataUrl.indexOf(',')
+		if (commaIndex === -1) {
+			return null
+		}
+		const meta = dataUrl.slice(0, commaIndex)
+		const payload = dataUrl.slice(commaIndex + 1)
+		const isBase64 = /;base64/i.test(meta)
+		if (isBase64 && typeof atob === 'function') {
+			const binary = atob(payload)
+			const length = binary.length
+			const bytes = new Uint8Array(length)
+			for (let index = 0; index < length; index += 1) {
+				bytes[index] = binary.charCodeAt(index)
+			}
+			return new TextDecoder().decode(bytes)
+		}
+		return decodeURIComponent(payload.replace(/\+/g, ' '))
+	} catch (error) {
+		console.warn('Failed to decode text data URL', error)
+		return null
+	}
+}
+
+async function fetchTextFromUrl(source: string): Promise<string> {
+	const response = await fetch(source)
+	if (!response.ok) {
+		throw new Error(`Failed to fetch text asset (${response.status})`)
+	}
+	return await response.text()
+}
+
+function resolveLanternTextSource(assetId: string): string | null {
+	if (!currentDocument) {
+		return null
+	}
+	const trimmed = assetId.trim()
+	if (!trimmed.length) {
+		return null
+	}
+	const packageMap = currentDocument.packageAssetMap ?? {}
+	const directKeys = [`local::${trimmed}`, trimmed]
+	for (const key of directKeys) {
+		const value = packageMap[key]
+		if (typeof value === 'string' && value.trim().length) {
+			return value
+		}
+	}
+	for (const [key, value] of Object.entries(packageMap)) {
+		if (typeof value !== 'string' || !value.trim().length) {
+			continue
+		}
+		const parts = key.split('::')
+		if (parts.length === 2 && parts[1] === trimmed) {
+			return value
+		}
+	}
+	const assetIndex = currentDocument.assetIndex as Record<string, unknown> | undefined
+	const entry = assetIndex && typeof assetIndex === 'object' ? assetIndex[trimmed] : undefined
+	if (entry && typeof entry === 'object') {
+		const entryRecord = entry as Record<string, unknown>
+		const inline = entryRecord.inline
+		if (typeof inline === 'string' && inline.trim().length) {
+			return inline
+		}
+		const url = entryRecord.url
+		if (typeof url === 'string' && url.trim().length) {
+			return url
+		}
+		const downloadUrl = entryRecord.downloadUrl
+		if (typeof downloadUrl === 'string' && downloadUrl.trim().length) {
+			return downloadUrl
+		}
+		const source = entryRecord.source
+		if (source && typeof source === 'object') {
+			const sourceRecord = source as Record<string, unknown>
+			const sourceCandidates = [sourceRecord.inline, sourceRecord.url, sourceRecord.downloadUrl]
+			for (const candidate of sourceCandidates) {
+				if (typeof candidate === 'string' && candidate.trim().length) {
+					return candidate
+				}
+			}
+			const providerId = typeof sourceRecord.providerId === 'string' ? sourceRecord.providerId : null
+			const originalAssetId = typeof sourceRecord.originalAssetId === 'string' ? sourceRecord.originalAssetId : trimmed
+			if (providerId) {
+				const providerKey = `${providerId}::${originalAssetId}`
+				const providerValue = packageMap[providerKey]
+				if (typeof providerValue === 'string' && providerValue.trim().length) {
+					return providerValue
+				}
+			}
+		}
+	}
+	return null
+}
+
+async function ensureLanternText(assetId: string): Promise<void> {
+	const trimmed = assetId.trim()
+	if (!trimmed.length) {
+		return
+	}
+	if (lanternTextPromises.has(trimmed)) {
+		await lanternTextPromises.get(trimmed)
+		return
+	}
+	const promise = (async () => {
+		const state = getLanternTextState(trimmed)
+		state.loading = true
+		state.error = null
+		try {
+			const source = resolveLanternTextSource(trimmed)
+			if (!source) {
+				throw new Error('Missing text asset data')
+			}
+			let text: string | null = null
+			if (source.startsWith('data:')) {
+				text = decodeDataUrlText(source)
+			} else if (/^(https?:)?\/\//i.test(source)) {
+				text = await fetchTextFromUrl(source)
+			} else {
+				text = source
+			}
+			if (text == null) {
+				throw new Error('Unable to load text asset content')
+			}
+			state.text = text
+		} catch (error) {
+			state.error = (error as Error).message ?? 'Failed to load text asset'
+			state.text = ''
+		} finally {
+			state.loading = false
+			lanternTextPromises.delete(trimmed)
+		}
+	})()
+	lanternTextPromises.set(trimmed, promise)
+	await promise
 }
 
 function closeLanternOverlay(resolution?: BehaviorEventResolution): void {
@@ -1933,8 +2155,23 @@ onBeforeUnmount(() => {
 						<h3 v-if="lanternCurrentSlide.title" class="scene-preview__lantern-title">
 							{{ lanternCurrentSlide.title }}
 						</h3>
-						<p v-if="lanternCurrentSlide.description" class="scene-preview__lantern-description">
-							{{ lanternCurrentSlide.description }}
+						<p
+							v-if="lanternCurrentSlideTextState && lanternCurrentSlideTextState.error"
+							class="scene-preview__lantern-description scene-preview__lantern-description--error"
+						>
+							{{ lanternCurrentSlideTextState.error }}
+						</p>
+						<p
+							v-else-if="lanternCurrentSlideTextState && lanternCurrentSlideTextState.loading"
+							class="scene-preview__lantern-description scene-preview__lantern-description--loading"
+						>
+							Loading description...
+						</p>
+						<p
+							v-else-if="lanternCurrentSlideDescription"
+							class="scene-preview__lantern-description"
+						>
+							{{ lanternCurrentSlideDescription }}
 						</p>
 						<div
 							v-if="!lanternCurrentSlideImage && lanternCurrentSlide.imageAssetId"
@@ -2226,6 +2463,15 @@ onBeforeUnmount(() => {
 	font-size: 0.95rem;
 	line-height: 1.5;
 	color: rgba(233, 236, 241, 0.85);
+}
+
+.scene-preview__lantern-description--loading {
+	color: rgba(233, 236, 241, 0.7);
+	font-style: italic;
+}
+
+.scene-preview__lantern-description--error {
+	color: #ff9e9e;
 }
 
 .scene-preview__lantern-image-hint {

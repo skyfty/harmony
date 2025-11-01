@@ -83,6 +83,7 @@ function normalizeLanternSlides(slides: LanternSlideDefinition[] | null | undefi
         id: generateLanternSlideId(),
         title: '',
         description: '',
+        descriptionAssetId: null,
         imageAssetId: null,
         layout: 'imageTop',
       },
@@ -95,12 +96,15 @@ function normalizeLanternSlides(slides: LanternSlideDefinition[] | null | undefi
     const id = typeof slide?.id === 'string' && slide.id.trim().length ? slide.id.trim() : generateLanternSlideId()
     const title = typeof slide?.title === 'string' ? slide.title.trim() : ''
     const description = typeof slide?.description === 'string' ? slide.description.trim() : ''
+    const descriptionAssetRaw = (slide as Partial<LanternSlideDefinition> & { descriptionAssetId?: unknown })?.descriptionAssetId
+    const descriptionAssetId = typeof descriptionAssetRaw === 'string' && descriptionAssetRaw.trim().length ? descriptionAssetRaw.trim() : null
     const imageAssetId = typeof slide?.imageAssetId === 'string' && slide.imageAssetId.trim().length ? slide.imageAssetId.trim() : null
     const layout = normalizeLanternLayout(slide?.layout)
     return {
       id,
       title,
       description,
+      descriptionAssetId,
       imageAssetId,
       layout,
     }
@@ -192,6 +196,7 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
             id: generateLanternSlideId(),
             title: '',
             description: '',
+            descriptionAssetId: null,
             imageAssetId: null,
             layout: 'imageTop',
           },
