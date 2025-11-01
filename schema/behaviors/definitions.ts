@@ -3,7 +3,6 @@ import type {
   BehaviorComponentProps,
   BehaviorScriptType,
   DelayBehaviorParams,
-  FailureBehaviorParams,
   LookBehaviorParams,
   MoveToBehaviorParams,
   MoveToFacingDirection,
@@ -15,7 +14,6 @@ import type {
   LanternBehaviorParams,
   LanternSlideDefinition,
   LanternSlideLayout,
-  SuccessBehaviorParams,
   HideBehaviorParams,
   WatchBehaviorParams,
 } from '../index'
@@ -39,16 +37,6 @@ const actionDefinitions: BehaviorActionDefinition[] = [
     id: 'click',
     label: 'On Click',
     description: 'Triggered when the node is clicked or tapped.',
-  },
-  {
-    id: 'hover',
-    label: 'On Hover',
-    description: 'Triggered while the pointer hovers over the node.',
-  },
-  {
-    id: 'drag',
-    label: 'On Drag',
-    description: 'Triggered when the node starts dragging.',
   },
   {
     id: 'approach',
@@ -120,24 +108,6 @@ function normalizeLanternSlides(slides: LanternSlideDefinition[] | null | undefi
 }
 
 const scriptDefinitions: BehaviorScriptDefinition[] = [
-  {
-    id: 'success',
-    label: 'Success',
-    description: 'Stop the sequence immediately and mark it as successful.',
-    icon: 'mdi-check-circle-outline',
-    createDefaultParams(): SuccessBehaviorParams {
-      return {}
-    },
-  },
-  {
-    id: 'failure',
-    label: 'Failure',
-    description: 'Stop the sequence immediately and mark it as failed.',
-    icon: 'mdi-close-circle-outline',
-    createDefaultParams(): FailureBehaviorParams {
-      return {}
-    },
-  },
   {
     id: 'delay',
     label: 'Delay',
@@ -289,16 +259,6 @@ export function createEmptyBehaviorComponentProps(): BehaviorComponentProps {
 
 function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorScriptBinding {
   switch (binding.type) {
-    case 'success':
-      return {
-        type: 'success',
-        params: {},
-      }
-    case 'failure':
-      return {
-        type: 'failure',
-        params: {},
-      }
     case 'delay':
       return {
         type: 'delay',
@@ -491,10 +451,6 @@ export function ensureBehaviorParams(
   const definition = findBehaviorScript(script.type)
   if (definition) {
     switch (script.type) {
-      case 'success':
-        return { type: 'success', params: {} }
-      case 'failure':
-        return { type: 'failure', params: {} }
       case 'delay': {
         const params = script.params as Partial<DelayBehaviorParams> | undefined
         return {

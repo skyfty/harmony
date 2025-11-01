@@ -23,6 +23,7 @@ import type {
 } from '@harmony/schema'
 import { createTextureSettings, textureSettingsSignature } from '@/types/material'
 import { useSceneStore, getRuntimeObject, buildPackageAssetMapForExport } from '@/stores/sceneStore'
+import { useNodePickerStore } from '@/stores/nodePickerStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import type { SceneCameraState } from '@/types/scene-camera-state'
@@ -80,6 +81,7 @@ const emit = defineEmits<{
 
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
+const nodePickerStore = useNodePickerStore()
 const isSceneReady = computed(() => sceneStore.isSceneReady)
 const canDropSelection = computed(() => sceneStore.selectedNodeIds.some((id) => !sceneStore.isNodeSelectionLocked(id)))
 
@@ -3665,6 +3667,20 @@ async function handlePointerDown(event: PointerEvent) {
   const button = event.button
   const isSelectionButton = button === 0 || button === 2
 
+  if (nodePickerStore.isActive) {
+    pointerTrackingState = null
+    if (button === 0) {
+      const hit = pickNodeAtPointer(event)
+      if (hit) {
+        nodePickerStore.completePick(hit.nodeId)
+      }
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
   if (activeBuildTool.value === 'ground' && button === 0) {
     pointerTrackingState = null
     const definition = getGroundDynamicMeshDefinition()
@@ -6295,6 +6311,9 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  if (nodePickerStore.isActive) {
+    nodePickerStore.cancelActivePick('user')
+  }
   disposeSceneNodes()
   disposeScene()
   disposeCachedTextures()

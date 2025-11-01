@@ -446,12 +446,6 @@ function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
     }
     const { script } = behavior
     switch (script.type) {
-      case 'success':
-        events.push(finalizeSequence(state, 'success', behavior.id || null))
-        return events
-      case 'failure':
-        events.push(finalizeSequence(state, 'failure', behavior.id || null))
-        return events
       case 'delay':
         events.push(createDelayEvent(state, behavior))
         return events

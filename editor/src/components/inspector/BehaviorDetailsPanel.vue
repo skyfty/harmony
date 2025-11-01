@@ -148,12 +148,6 @@ function rebuildSequence(
   sequenceId: string,
 ): SceneBehavior[] {
   const list = Array.isArray(sequence) && sequence.length ? sequence : []
-  if (!list.length) {
-    const defaultScript = props.scripts[0]?.id ?? 'showAlert'
-    const template = createBehaviorTemplate(action, defaultScript, sequenceId)
-    template.id = generateUuid()
-    return [ensureStep(template, action, sequenceId)]
-  }
   return list.map((step) => ensureStep(step, action, sequenceId))
 }
 

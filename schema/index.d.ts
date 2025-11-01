@@ -140,11 +140,9 @@ export interface SceneNodeComponentState<TProps = Record<string, unknown>> {
 
 export type SceneNodeComponentMap = Partial<Record<NodeComponentType, SceneNodeComponentState<any>>>
 
-export type BehaviorEventType = 'click' | 'hover' | 'drag' | 'approach' | 'depart' | 'perform'
+export type BehaviorEventType = 'click' | 'approach' | 'depart' | 'perform'
 
 export type BehaviorScriptType =
-  | 'success'
-  | 'failure'
   | 'delay'
   | 'moveTo'
   | 'showAlert'
@@ -155,14 +153,6 @@ export type BehaviorScriptType =
   | 'look'
 
 export type MoveToFacingDirection = 'front' | 'back' | 'left' | 'right'
-
-export interface SuccessBehaviorParams {
-  // no configuration required
-}
-
-export interface FailureBehaviorParams {
-  // no configuration required
-}
 
 export interface DelayBehaviorParams {
   /** Duration to wait before continuing, measured in seconds. */
@@ -225,14 +215,6 @@ export interface LookBehaviorParams {
 }
 
 export type SceneBehaviorScriptBinding =
-  | {
-      type: 'success'
-      params: SuccessBehaviorParams
-    }
-  | {
-      type: 'failure'
-      params: FailureBehaviorParams
-    }
   | {
       type: 'delay'
       params: DelayBehaviorParams
