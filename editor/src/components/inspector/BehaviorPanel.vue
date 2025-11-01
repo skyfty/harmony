@@ -35,6 +35,7 @@ type BehaviorDetailsContext = {
   sequence: SceneBehavior[]
   actions: BehaviorActionDefinition[]
   sequenceId: string
+  nodeId: string | null
 }
 
 const sceneStore = useSceneStore()
@@ -139,6 +140,7 @@ function openDetails(
     sequence: sequenceCopy ?? [],
     actions: actionsList,
     sequenceId,
+    nodeId: selectedNodeId.value ?? null,
   })
 }
 

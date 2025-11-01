@@ -151,6 +151,7 @@ type BehaviorDetailsContext = {
   sequence: SceneBehavior[]
   actions: BehaviorActionDefinition[]
   sequenceId: string
+  nodeId: string | null
 }
 
 const behaviorDetailsState = reactive({
@@ -354,6 +355,7 @@ function handleInspectorBehaviorDetailsOpen(source: BehaviorDetailsSource, paylo
     ...payload,
     actions: payload.actions.slice(),
     sequence: cloneBehaviorList(payload.sequence),
+    nodeId: payload.nodeId,
   }
   behaviorDetailsState.visible = true
   nextTick(() => {
@@ -1446,6 +1448,7 @@ onBeforeUnmount(() => {
         :actions="behaviorDetailsState.context.actions"
         :scripts="behaviorScriptOptions"
         :anchor="behaviorDetailsState.anchor"
+        :node-id="behaviorDetailsState.context.nodeId"
         @close="handleBehaviorDetailsOverlayClose"
         @save="handleBehaviorDetailsSave"
       />

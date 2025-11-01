@@ -24,6 +24,7 @@ type BehaviorDetailsPayload = {
   sequence: SceneBehavior[]
   actions: BehaviorActionDefinition[]
   sequenceId: string
+  nodeId: string | null
 }
 const props = defineProps<{ floating?: boolean }>()
 

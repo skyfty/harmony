@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { SceneNode, ShowBehaviorParams } from '@harmony/schema'
 import { useSceneStore } from '@/stores/sceneStore'
+import { useNodePickerStore } from '@/stores/nodePickerStore'
 
 const props = defineProps<{
   modelValue: ShowBehaviorParams | undefined
@@ -14,14 +15,15 @@ const emit = defineEmits<{
 }>()
 
 const sceneStore = useSceneStore()
-const { selectedNodeId } = storeToRefs(sceneStore)
+const { nodes } = storeToRefs(sceneStore)
+const nodePickerStore = useNodePickerStore()
 
 const params = computed<ShowBehaviorParams>(() => ({
   targetNodeId: props.modelValue?.targetNodeId ?? null,
 }))
 
 const isPicking = ref(false)
-let stopSelectionWatch: (() => void) | null = null
+let activeRequestId: number | null = null
 
 function findNodeName(nodes: SceneNode[] | undefined, id: string | null): string | null {
   if (!nodes || !id) {
@@ -39,7 +41,7 @@ function findNodeName(nodes: SceneNode[] | undefined, id: string | null): string
   return null
 }
 
-const targetNodeName = computed(() => findNodeName(sceneStore.nodes, params.value.targetNodeId))
+const targetNodeName = computed(() => findNodeName(nodes.value, params.value.targetNodeId))
 
 function updateParams(next: ShowBehaviorParams) {
   emit('update:modelValue', next)
@@ -58,26 +60,33 @@ function startPicking() {
   }
   isPicking.value = true
   emit('pick-state-change', true)
-  stopSelectionWatch = watch(
-    () => selectedNodeId.value,
-    (value) => {
-      if (!isPicking.value || !value) {
-        return
-      }
-      completePicking(value)
+  activeRequestId = nodePickerStore.beginPick({
+    owner: 'behavior-target',
+    hint: 'Select a node to show',
+    handlers: {
+      onPick(nodeId: string) {
+        activeRequestId = null
+        stopPicking()
+        updateParams({ targetNodeId: nodeId })
+      },
+      onCancel() {
+        activeRequestId = null
+        stopPicking()
+      },
     },
-    { immediate: false },
-  )
+  })
   window.addEventListener('keydown', handleKeydown, true)
 }
 
-function completePicking(nodeId: string) {
-  stopPicking()
-  updateParams({ targetNodeId: nodeId })
-}
-
 function cancelPicking() {
-  stopPicking()
+  if (!isPicking.value) {
+    return
+  }
+  if (activeRequestId && nodePickerStore.activeRequestId === activeRequestId) {
+    nodePickerStore.cancelActivePick('user')
+  } else {
+    stopPicking()
+  }
 }
 
 function stopPicking() {
@@ -86,10 +95,6 @@ function stopPicking() {
   }
   isPicking.value = false
   emit('pick-state-change', false)
-  if (stopSelectionWatch) {
-    stopSelectionWatch()
-    stopSelectionWatch = null
-  }
   window.removeEventListener('keydown', handleKeydown, true)
 }
 
@@ -100,7 +105,10 @@ function clearTarget() {
 defineExpose({ cancelPicking })
 
 onBeforeUnmount(() => {
-  stopPicking()
+  if (isPicking.value) {
+    cancelPicking()
+  }
+  window.removeEventListener('keydown', handleKeydown, true)
 })
 </script>
 

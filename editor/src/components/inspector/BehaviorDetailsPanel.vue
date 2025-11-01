@@ -33,6 +33,7 @@ const props = defineProps<{
   actions: BehaviorActionDefinition[]
   scripts: BehaviorScriptDefinition[]
   anchor: { top: number; left: number } | null
+  nodeId: string | null
 }>()
 
 const emit = defineEmits<{
@@ -46,6 +47,7 @@ const localSequenceId = ref<string>(createBehaviorSequenceId())
 const selectedStepId = ref<string | null>(null)
 const isPickingTarget = ref(false)
 const parameterComponentRef = ref<{ cancelPicking?: () => void } | null>(null)
+const defaultTargetApplied = new Set<string>()
 
 const panelStyle = computed(() => {
   if (!props.anchor) {
@@ -100,12 +102,43 @@ function cancelActivePicking() {
   isPickingTarget.value = false
 }
 
+function applyDefaultTarget(step: SceneBehavior): void {
+  if (!props.nodeId) {
+    return
+  }
+  const scriptType = step.script.type
+  if (scriptType !== 'show' && scriptType !== 'hide' && scriptType !== 'watch') {
+    return
+  }
+  const identifier = step.id
+  if (!identifier) {
+    return
+  }
+  if (defaultTargetApplied.has(identifier)) {
+    return
+  }
+  const params = step.script.params as { targetNodeId?: string | null } | undefined
+  if (!params) {
+    defaultTargetApplied.add(identifier)
+    return
+  }
+  if (params.targetNodeId === null) {
+    params.targetNodeId = props.nodeId
+  }
+  defaultTargetApplied.add(identifier)
+}
+
+function applyDefaultTargets(sequence: SceneBehavior[]): void {
+  sequence.forEach((step) => applyDefaultTarget(step))
+}
+
 function ensureStep(step: SceneBehavior, action: BehaviorEventType, sequenceId: string): SceneBehavior {
   const normalized = cloneBehavior(step)
   normalized.id = normalized.id && normalized.id.trim().length ? normalized.id : generateUuid()
   normalized.action = action
   normalized.sequenceId = sequenceId
   normalized.script = ensureBehaviorParams(normalized.script)
+  applyDefaultTarget(normalized)
   return normalized
 }
 
@@ -130,7 +163,9 @@ function initializeState() {
   const sequenceId = props.sequence?.[0]?.sequenceId ?? createBehaviorSequenceId()
   localSequenceId.value = sequenceId
   localAction.value = action
+  defaultTargetApplied.clear()
   localSequence.value = rebuildSequence(props.sequence, action, sequenceId)
+  applyDefaultTargets(localSequence.value)
   selectedStepId.value = localSequence.value[0]?.id ?? null
   cancelActivePicking()
 }
@@ -157,7 +192,9 @@ watch(
     cancelActivePicking()
     const sequenceId = sequence?.[0]?.sequenceId ?? localSequenceId.value ?? createBehaviorSequenceId()
     localSequenceId.value = sequenceId
+    defaultTargetApplied.clear()
     localSequence.value = rebuildSequence(sequence, localAction.value, sequenceId)
+    applyDefaultTargets(localSequence.value)
     if (!localSequence.value.find((step) => step.id === selectedStepId.value)) {
       selectedStepId.value = localSequence.value[0]?.id ?? null
     }
@@ -237,6 +274,7 @@ function createStep(scriptType: BehaviorScriptType): SceneBehavior {
   const template = createBehaviorTemplate(localAction.value, scriptType, localSequenceId.value)
   template.id = generateUuid()
   template.script = ensureBehaviorParams(template.script)
+  applyDefaultTarget(template)
   return template
 }
 
@@ -378,7 +416,10 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequ
             <v-btn class="toolbar-close" icon="mdi-close" size="small" variant="text" @click="closePanel" />
           </v-toolbar>
           <v-divider />
-          <v-card-text class="behavior-details__body" :class="{ 'is-picking': isPickingTarget }">
+          <v-card-text
+            v-if="!isPickingTarget"
+            class="behavior-details__body"
+          >
             <div class="behavior-details__field">
               <v-select
                 v-model="selectedAction"
@@ -476,10 +517,11 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequ
               </template>
             </div>
           </v-card-text>
-          <div v-if="isPickingTarget" class="behavior-details__pick-overlay">
-            <div class="behavior-details__pick-content">
-              <v-icon size="36" color="primary">mdi-crosshairs-gps</v-icon>
-              <span>Click a node in the scene or press Esc to cancel.</span>
+          <div v-else class="behavior-details__pick-overlay">
+            <v-icon size="38" class="behavior-details__pick-icon">mdi-crosshairs-gps</v-icon>
+            <div class="behavior-details__pick-text">
+              Click a node in the scene to set this script's target.
+              <span class="behavior-details__pick-hint">Press Esc to cancel.</span>
             </div>
           </div>
         </v-card>
@@ -532,12 +574,6 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequ
   border: 1px solid rgba(255, 255, 255, 0.04);
   background-color: rgb(var(--v-theme-surface));
   margin: 4px;
-}
-
-.behavior-details__body.is-picking {
-  opacity: 0.3;
-  pointer-events: none;
-  filter: blur(1px);
 }
 
 .behavior-details__field {
@@ -703,22 +739,32 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequ
   position: absolute;
   inset: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 12px;
+  padding: 28px;
+  background: linear-gradient(135deg, rgba(12, 16, 22, 0.85), rgba(20, 24, 32, 0.85));
+  border-radius: 6px;
+  border: 1px solid rgba(132, 202, 255, 0.4);
+  color: rgba(233, 236, 241, 0.92);
+  text-align: center;
   pointer-events: none;
 }
 
-.behavior-details__pick-content {
+.behavior-details__pick-icon {
+  color: rgba(132, 202, 255, 0.85);
+}
+
+.behavior-details__pick-text {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
-  align-items: center;
-  padding: 1rem 1.5rem;
-  border-radius: 8px;
-  background: rgba(14, 18, 24, 0.85);
-  border: 1px solid rgba(132, 202, 255, 0.35);
-  color: rgba(233, 236, 241, 0.92);
-  text-align: center;
-  font-size: 0.86rem;
+  gap: 6px;
+  font-size: 0.9rem;
+}
+
+.behavior-details__pick-hint {
+  font-size: 0.8rem;
+  color: rgba(233, 236, 241, 0.65);
 }
 </style>

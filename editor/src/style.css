@@ -26,6 +26,10 @@ body {
   font-size: 0.95rem;
 }
 
+body.is-node-picking {
+  cursor: crosshair !important;
+}
+
 #app {
   min-height: 100vh;
 }
