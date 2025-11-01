@@ -299,20 +299,17 @@ function resolveSlideImageLabel(slide: LanternSlideDefinition): string {
 
         <div class="lantern-slide__toolbar">
           <span class="lantern-slide__badge">
-        <div class="lantern-slide__layout">
-          <v-select
+                      <v-select
             :model-value="slide.layout"
             :items="layoutOptions"
             item-title="label"
             item-value="value"
             label=""
-            size="small"
             density="compact"
             variant="underlined"
             hide-details
             @update:model-value="updateSlideLayout(index, $event)"
           />
-        </div>
           </span>
           <div class="lantern-slide__actions">
             <v-btn
@@ -350,7 +347,6 @@ function resolveSlideImageLabel(slide: LanternSlideDefinition): string {
             @dragleave="handleImageDragLeave(index, $event)"
             @drop="handleImageDrop(index, $event)"
           >
-            <span class="lantern-slide__field-label">Image</span>
             <div class="lantern-slide__image-dropzone" :style="resolveSlideImageStyle(slide)">
               <div v-if="!slide.imageAssetId" class="lantern-slide__image-placeholder">
                 <v-icon size="26" color="rgba(233, 236, 241, 0.7)">mdi-image-plus</v-icon>
@@ -371,15 +367,14 @@ function resolveSlideImageLabel(slide: LanternSlideDefinition): string {
             </div>
           </div>
           <div class="lantern-slide__description">
-            <span class="lantern-slide__field-label">Description</span>
             <v-textarea
               class="lantern-slide__textarea"
               :model-value="slide.description"
-              density="comfortable"
+              density="compact"
               variant="outlined"
               hide-details
               :auto-grow="false"
-              rows="6"
+              rows="4"
               @update:model-value="updateSlideDescription(index, $event)"
             />
           </div>
@@ -417,6 +412,10 @@ function resolveSlideImageLabel(slide: LanternSlideDefinition): string {
   display: flex;
   flex-direction: column;
   gap: 0.8rem;
+  max-height: clamp(230px, 52vh, 420px);
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-gutter: stable both-edges;
 }
 
 .lantern-params__empty {
@@ -436,6 +435,14 @@ function resolveSlideImageLabel(slide: LanternSlideDefinition): string {
 
 .lantern-slide__layout {
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.lantern-slide__layout :deep(.v-field) {
+  width: 100%;
+  min-width: 0;
 }
 
 .lantern-slide__toolbar {
@@ -457,13 +464,13 @@ function resolveSlideImageLabel(slide: LanternSlideDefinition): string {
 
 .lantern-slide__content {
   display: grid;
-  gap: 12px;
-  padding: 12px;
+  gap: 10px;
+  padding: 10px;
   border-radius: 10px;
   border: 1px dashed rgba(233, 236, 241, 0.16);
   background: rgba(12, 16, 22, 0.55);
-  height: clamp(260px, 38vh, 360px);
-  min-height: 240px;
+  height: clamp(220px, 32vh, 300px);
+  min-height: 200px;
 }
 
 .lantern-slide__content.layout-imageTop {
@@ -491,13 +498,13 @@ function resolveSlideImageLabel(slide: LanternSlideDefinition): string {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
   border-radius: 8px;
   background: rgba(8, 12, 18, 0.5);
   border: 1px solid rgba(233, 236, 241, 0.08);
   overflow: hidden;
   transition: border-color 120ms ease, box-shadow 120ms ease;
-  padding: 10px;
+  padding: 8px;
   min-height: 0;
 }
 
@@ -516,7 +523,7 @@ function resolveSlideImageLabel(slide: LanternSlideDefinition): string {
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
-  padding: 1rem;
+  padding: 0.75rem;
   width: 100%;
 }
 
@@ -539,7 +546,7 @@ function resolveSlideImageLabel(slide: LanternSlideDefinition): string {
   gap: 0.5rem;
   text-align: center;
   color: rgba(233, 236, 241, 0.7);
-  font-size: 0.85rem;
+  font-size: 0.8rem;
 }
 
 .lantern-slide__image-footer {
@@ -562,11 +569,11 @@ function resolveSlideImageLabel(slide: LanternSlideDefinition): string {
   grid-area: description;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   border-radius: 8px;
   background: rgba(8, 12, 18, 0.5);
   border: 1px solid rgba(233, 236, 241, 0.08);
-  padding: 10px;
+  padding: 8px;
   min-height: 0;
 }
 
@@ -583,6 +590,10 @@ function resolveSlideImageLabel(slide: LanternSlideDefinition): string {
 .lantern-slide__image .lantern-slide__field-label,
 .lantern-slide__description .lantern-slide__field-label {
   margin-bottom: 4px;
+}
+
+.lantern-slide__layout .lantern-slide__field-label {
+  margin-bottom: 2px;
 }
 
 .lantern-slide__textarea {
