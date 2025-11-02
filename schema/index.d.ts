@@ -153,6 +153,7 @@ export type BehaviorScriptType =
   | 'lantern'
   | 'look'
   | 'trigger'
+  | 'animation'
 
 export type MoveToFacingDirection = 'front' | 'back' | 'left' | 'right'
 
@@ -198,6 +199,17 @@ export interface ShowBehaviorParams {
 export interface HideBehaviorParams {
   /** Target scene node id that should be hidden. */
   targetNodeId: string | null
+}
+
+export interface AnimationBehaviorParams {
+  /** Target node that owns the animation clip to play. */
+  targetNodeId: string | null
+  /** Identifier or name of the animation clip to play. */
+  clipName: string | null
+  /** Play the animation in a continuous loop. */
+  loop: boolean
+  /** Wait for the animation to finish before continuing. Ignored when loop is enabled. */
+  waitForCompletion: boolean
 }
 
 export interface TriggerBehaviorParams {
@@ -262,6 +274,10 @@ export type SceneBehaviorScriptBinding =
   | {
       type: 'trigger'
       params: TriggerBehaviorParams
+    }
+  | {
+      type: 'animation'
+      params: AnimationBehaviorParams
     }
 
 export interface SceneBehavior {

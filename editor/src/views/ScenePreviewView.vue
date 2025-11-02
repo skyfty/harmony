@@ -74,6 +74,7 @@ const lanternTextPromises = new Map<string, Promise<void>>()
 
 const activeBehaviorDelayTimers = new Map<string, number>()
 const activeBehaviorAnimations = new Map<string, () => void>()
+const nodeAnimationControllers = new Map<string, { mixer: THREE.AnimationMixer; clips: THREE.AnimationClip[] }>()
 type BehaviorProximityCandidate = { hasApproach: boolean; hasDepart: boolean }
 type BehaviorProximityStateEntry = { inside: boolean; lastDistance: number | null }
 type BehaviorProximityThreshold = { enter: number; exit: number; objectId: string }
@@ -1019,6 +1020,31 @@ function stopBehaviorAnimation(token: string) {
 	}
 }
 
+function resetAnimationControllers(): void {
+	Array.from(activeBehaviorAnimations.entries()).forEach(([token, cancel]) => {
+		try {
+			cancel()
+		} catch (error) {
+			console.warn('[ScenePreview] Failed to cancel behavior animation', error)
+		} finally {
+			activeBehaviorAnimations.delete(token)
+		}
+	})
+	animationMixers.forEach((mixer) => {
+		try {
+			mixer.stopAllAction()
+			const root = mixer.getRoot()
+			if (root) {
+				mixer.uncacheRoot(root)
+			}
+		} catch (error) {
+			console.warn('[ScenePreview] Failed to reset animation mixer', error)
+		}
+	})
+	animationMixers = []
+	nodeAnimationControllers.clear()
+}
+
 function startTimedAnimation(
 	token: string,
 	durationSeconds: number,
@@ -1295,6 +1321,89 @@ function handleSetVisibilityEvent(event: Extract<BehaviorRuntimeEvent, { type: '
 	}
 }
 
+function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: 'play-animation' }>) {
+	const targetNodeId = event.targetNodeId || event.nodeId
+	if (!targetNodeId) {
+		if (event.token) {
+			resolveBehaviorToken(event.token, { type: 'fail', message: 'Animation target missing' })
+		}
+		console.warn('[ScenePreview] Play animation skipped: no target node')
+		return
+	}
+	const controller = nodeAnimationControllers.get(targetNodeId)
+	if (!controller) {
+		if (event.token) {
+			resolveBehaviorToken(event.token, { type: 'fail', message: 'Animation target not available' })
+		}
+		console.warn('[ScenePreview] Play animation skipped: target node does not expose animations', {
+			nodeId: targetNodeId,
+		})
+		return
+	}
+	const clips = controller.clips
+	const requestedName = event.clipName && event.clipName.trim().length ? event.clipName.trim() : null
+	let clip = requestedName
+		? clips.find((entry) => entry.name === requestedName)
+		: clips[0] ?? null
+	if (!clip) {
+		if (event.token) {
+			resolveBehaviorToken(event.token, {
+				type: 'fail',
+				message: requestedName ? `Animation clip "${requestedName}" not found` : 'No animation clips available',
+			})
+		}
+		console.warn('[ScenePreview] Play animation skipped: clip not found', {
+			targetNodeId,
+			requestedName,
+		})
+		return
+	}
+	const mixer = controller.mixer
+	const action = mixer.clipAction(clip)
+	mixer.stopAllAction()
+	action.reset()
+	action.enabled = true
+	if (event.loop) {
+		action.setLoop(THREE.LoopRepeat, Number.POSITIVE_INFINITY)
+		action.clampWhenFinished = false
+	} else {
+		action.setLoop(THREE.LoopOnce, 0)
+		action.clampWhenFinished = true
+	}
+	action.play()
+	const token = event.token
+	if (!token) {
+		return
+	}
+	stopBehaviorAnimation(token)
+	if (event.loop) {
+		resolveBehaviorToken(token, { type: 'continue' })
+		return
+	}
+	if (!Number.isFinite(clip.duration) || clip.duration <= 0) {
+		resolveBehaviorToken(token, { type: 'continue' })
+		return
+	}
+	const onFinished = (payload: THREE.Event & { action?: THREE.AnimationAction }) => {
+		if (payload.action !== action) {
+			return
+		}
+		mixer.removeEventListener('finished', onFinished)
+		activeBehaviorAnimations.delete(token)
+		resolveBehaviorToken(token, { type: 'continue' })
+	}
+	const cancel = () => {
+		mixer.removeEventListener('finished', onFinished)
+		try {
+			action.stop()
+		} catch (cancelError) {
+			console.warn('[ScenePreview] Failed to stop animation action', cancelError)
+		}
+	}
+	activeBehaviorAnimations.set(token, cancel)
+	mixer.addEventListener('finished', onFinished)
+}
+
 function handleTriggerBehaviorEvent(event: Extract<BehaviorRuntimeEvent, { type: 'trigger-behavior' }>) {
 	const targetNodeId = event.targetNodeId || event.nodeId
 	if (!targetNodeId) {
@@ -1381,6 +1490,9 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 			break
 		case 'lantern':
 			presentLanternSlides(event)
+			break
+		case 'play-animation':
+			handlePlayAnimationEvent(event)
 			break
 		case 'trigger-behavior':
 			handleTriggerBehaviorEvent(event)
@@ -1805,6 +1917,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	previewComponentManager.reset()
 	resetBehaviorRuntime()
 	resetBehaviorProximity()
+	resetAnimationControllers()
 	dismissBehaviorAlert()
 	resetLanternOverlay()
 	resetAssetResolutionCaches()
@@ -1950,6 +2063,15 @@ function removeNodeSubtree(nodeId: string) {
 			nodeObjectMap.delete(id)
 			previewComponentManager.removeNode(id)
 			previewNodeMap.delete(id)
+			const controller = nodeAnimationControllers.get(id)
+			if (controller) {
+				try {
+					controller.mixer.stopAllAction()
+				} catch (error) {
+					console.warn('[ScenePreview] Failed to stop animation mixer for removed node', error)
+				}
+				nodeAnimationControllers.delete(id)
+			}
 		}
 		ancestors.push(child)
 	})
@@ -2097,24 +2219,21 @@ function refreshFallbackLighting() {
 }
 
 function refreshAnimations() {
-	animationMixers.forEach((mixer) => {
-		mixer.stopAllAction()
-		mixer.uncacheRoot(mixer.getRoot())
-	})
-	animationMixers = []
+	resetAnimationControllers()
 
-	nodeObjectMap.forEach((object) => {
+	nodeObjectMap.forEach((object, nodeId) => {
 		const clips = (object as unknown as { animations?: THREE.AnimationClip[] }).animations
 		if (!Array.isArray(clips) || !clips.length) {
 			return
 		}
+		const validClips = clips.filter((clip): clip is THREE.AnimationClip => Boolean(clip))
+		if (!validClips.length) {
+			return
+		}
 		const mixer = new THREE.AnimationMixer(object)
-		clips.forEach((clip) => {
-			const action = mixer.clipAction(clip)
-			action.play()
-		})
 		mixer.timeScale = isPlaying.value ? 1 : 0
 		animationMixers.push(mixer)
+		nodeAnimationControllers.set(nodeId, { mixer, clips: validClips })
 	})
 }
 

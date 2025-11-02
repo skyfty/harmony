@@ -22,6 +22,7 @@ import ShowParams from '@/components/inspector/behavior/ShowParams.vue'
 import HideParams from '@/components/inspector/behavior/HideParams.vue'
 import LanternParams from '@/components/inspector/behavior/LanternParams.vue'
 import TriggerParams from '@/components/inspector/behavior/TriggerParams.vue'
+import AnimationParams from '@/components/inspector/behavior/AnimationParams.vue'
 
 type PanelMode = 'create' | 'edit'
 type DragSource = 'palette' | 'sequence' | null
@@ -78,6 +79,7 @@ const PARAMETER_COMPONENTS: Partial<Record<BehaviorScriptType, unknown>> = {
   hide: HideParams,
   lantern: LanternParams,
   trigger: TriggerParams,
+  animation: AnimationParams,
 }
 
 function normalizeBehaviorName(name: string | null | undefined): string {
@@ -138,7 +140,7 @@ function applyDefaultTarget(step: SceneBehavior): void {
     return
   }
   const scriptType = step.script.type
-  if (scriptType !== 'show' && scriptType !== 'hide' && scriptType !== 'watch') {
+  if (scriptType !== 'show' && scriptType !== 'hide' && scriptType !== 'watch' && scriptType !== 'animation') {
     return
   }
   const identifier = step.id

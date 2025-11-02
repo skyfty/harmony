@@ -17,6 +17,7 @@ import type {
   HideBehaviorParams,
   WatchBehaviorParams,
   TriggerBehaviorParams,
+  AnimationBehaviorParams,
 } from '../index'
 
 export interface BehaviorActionDefinition {
@@ -227,6 +228,20 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
       }
     },
   },
+  {
+    id: 'animation',
+    label: 'Play Animation',
+    description: 'Play an animation clip on the selected node.',
+    icon: 'mdi-animation-outline',
+    createDefaultParams(): AnimationBehaviorParams {
+      return {
+        targetNodeId: null,
+        clipName: null,
+        loop: false,
+        waitForCompletion: false,
+      }
+    },
+  },
 ]
 
 let sequenceIdCounter = 0
@@ -357,6 +372,20 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
         params: {
           targetNodeId: params?.targetNodeId ?? null,
           sequenceId: params?.sequenceId ?? null,
+        },
+      }
+    }
+    case 'animation': {
+      const params = binding.params as AnimationBehaviorParams | undefined
+      const loop = Boolean(params?.loop)
+      const clipName = params?.clipName && params.clipName.trim().length ? params.clipName.trim() : null
+      return {
+        type: 'animation',
+        params: {
+          targetNodeId: params?.targetNodeId ?? null,
+          clipName,
+          loop,
+          waitForCompletion: loop ? false : Boolean(params?.waitForCompletion),
         },
       }
     }
@@ -564,6 +593,20 @@ export function ensureBehaviorParams(
           params: {
             targetNodeId: params?.targetNodeId ?? null,
             sequenceId: params?.sequenceId ?? null,
+          },
+        }
+      }
+      case 'animation': {
+        const params = script.params as Partial<AnimationBehaviorParams> | undefined
+        const loop = Boolean(params?.loop)
+        const clipName = params?.clipName && params.clipName.trim().length ? params.clipName.trim() : null
+        return {
+          type: 'animation',
+          params: {
+            targetNodeId: params?.targetNodeId ?? null,
+            clipName,
+            loop,
+            waitForCompletion: loop ? false : Boolean(params?.waitForCompletion),
           },
         }
       }

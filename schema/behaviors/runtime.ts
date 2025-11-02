@@ -12,6 +12,7 @@ import type {
   ShowBehaviorParams,
   WatchBehaviorParams,
   TriggerBehaviorParams,
+  AnimationBehaviorParams,
 } from '../index'
 import { behaviorMapToList, cloneBehaviorList, ensureBehaviorParams } from './definitions'
 
@@ -112,6 +113,19 @@ export type BehaviorRuntimeEvent =
       behaviorId: string
       targetNodeId: string
       targetSequenceId: string | null
+    }
+  | {
+      type: 'play-animation'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+      targetNodeId: string
+      clipName: string | null
+      loop: boolean
+      waitForCompletion: boolean
+      token?: string
     }
   | {
       type: 'sequence-complete'
@@ -484,6 +498,42 @@ function createTriggerEvent(state: BehaviorSequenceState, behavior: SceneBehavio
   }
 }
 
+function createAnimationEvent(
+  state: BehaviorSequenceState,
+  behavior: SceneBehavior,
+): Extract<BehaviorRuntimeEvent, { type: 'play-animation' }> {
+  const params = behavior.script.params as AnimationBehaviorParams | undefined
+  const fallbackTarget = state.nodeId
+  const rawTargetNodeId = params?.targetNodeId && params.targetNodeId.trim().length ? params.targetNodeId : null
+  const targetNodeId = rawTargetNodeId ?? fallbackTarget
+  const clipName = params?.clipName && params.clipName.trim().length ? params.clipName.trim() : null
+  const loop = Boolean(params?.loop)
+  const waitForCompletion = loop ? false : Boolean(params?.waitForCompletion)
+  let token: string | undefined
+  if (waitForCompletion) {
+    token = createToken(state.id, state.index)
+    pendingTokens.set(token, {
+      token,
+      sequenceId: state.id,
+      stepIndex: state.index,
+    })
+    state.status = 'waiting'
+  }
+  return {
+    type: 'play-animation',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+    targetNodeId,
+    clipName,
+    loop,
+    waitForCompletion,
+    token,
+  }
+}
+
 function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
   const events: BehaviorRuntimeEvent[] = []
   while (state.status === 'running' && state.index < state.steps.length) {
@@ -537,6 +587,15 @@ function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
         events.push(createTriggerEvent(state, behavior))
         state.index += 1
         continue
+      case 'animation': {
+        const event = createAnimationEvent(state, behavior)
+        events.push(event)
+        if (event.waitForCompletion) {
+          return events
+        }
+        state.index += 1
+        continue
+      }
       default:
         break
     }
