@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { SceneNodeMaterial } from '@/types/material'
@@ -15,6 +15,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (event: 'update:active-node-material-id', id: string | null): void
   (event: 'open-details', id: string): void
+  (event: 'close-details'): void
 }>()
 
 const sceneStore = useSceneStore()
@@ -42,12 +43,14 @@ watch(
       if (internalActiveId.value !== null) {
         internalActiveId.value = null
         emit('update:active-node-material-id', null)
+        emit('close-details')
       }
       return
     }
     if (internalActiveId.value && !list.some((entry) => entry.id === internalActiveId.value)) {
       internalActiveId.value = null
       emit('update:active-node-material-id', null)
+      emit('close-details')
     }
   },
   { immediate: true },
@@ -250,7 +253,7 @@ function handleCancelDeleteSlot() {
   deleteDialogVisible.value = false
 }
 
-async function handleConfirmDeleteSlot() {
+function handleConfirmDeleteSlot() {
   if (!selectedNodeId.value || !internalActiveId.value) {
     deleteDialogVisible.value = false
     return
@@ -266,16 +269,9 @@ async function handleConfirmDeleteSlot() {
   if (!removed) {
     return
   }
-  await nextTick()
-  if (nodeMaterials.value.length) {
-    const nextEntry = nodeMaterials.value[0]
-    if (nextEntry) {
-      handleSelect(nextEntry.id)
-    }
-  } else {
-    internalActiveId.value = null
-    emit('update:active-node-material-id', null)
-  }
+  internalActiveId.value = null
+  emit('update:active-node-material-id', null)
+  emit('close-details')
 }
 </script>
 

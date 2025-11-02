@@ -142,14 +142,16 @@ function handleOpenMaterialDetails(id: string) {
   emit('open-material-details', { id })
 }
 
-function closeMaterialDetails(options: { silent?: boolean } = {}) {
-  if (!materialDetailsTargetId.value) {
-    return
-  }
+function closeMaterialDetails(options: { silent?: boolean; force?: boolean } = {}) {
+  const hadTarget = materialDetailsTargetId.value !== null
   materialDetailsTargetId.value = null
-  if (!options.silent) {
+  if ((hadTarget || options.force) && !options.silent) {
     emit('close-material-details')
   }
+}
+
+function handleMaterialPanelRequestCloseDetails() {
+  closeMaterialDetails({ force: true })
 }
 
 function handleOpenBehaviorDetails(payload: BehaviorDetailsPayload) {
@@ -321,6 +323,7 @@ function handleAddComponent(type: string) {
         v-else-if="showMaterialPanel"
         v-model:active-node-material-id="materialDetailsTargetId"
         @open-details="handleOpenMaterialDetails"
+        @close-details="handleMaterialPanelRequestCloseDetails"
       />
       <GroundPanel v-if="isGroundNode" />
 
