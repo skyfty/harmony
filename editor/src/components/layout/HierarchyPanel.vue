@@ -375,6 +375,7 @@ function handleDragStart(event: DragEvent, nodeId: string) {
   materialDropTargetId.value = null
   dragState.value = { sourceId: nodeId, targetId: null, position: null }
   event.dataTransfer?.setData('text/plain', nodeId)
+  event.dataTransfer?.setData('application/x-harmony-node', nodeId)
   if (event.dataTransfer) {
     event.dataTransfer.effectAllowed = 'move'
   }

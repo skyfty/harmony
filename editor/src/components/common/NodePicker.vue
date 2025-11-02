@@ -69,16 +69,33 @@ const isDisabled = computed(() => props.disabled)
 
 const displayValue = computed(() => selectedNodeName.value ?? props.modelValue ?? null)
 
-function resolveDraggedNodeId(event: DragEvent): string | null {
+function extractDraggedNodeId(event: DragEvent): string | null {
   const transfer = event.dataTransfer
   if (!transfer) {
     return null
   }
-  const plain = transfer.getData('text/plain')
-  if (plain && findNodeName(nodes.value, plain)) {
-    return plain
+  const candidateTypes: string[] = ['application/x-harmony-node', 'text/plain']
+  for (const type of candidateTypes) {
+    const value = transfer.getData(type)
+    if (typeof value === 'string' && value.trim().length) {
+      return value.trim()
+    }
   }
   return null
+}
+
+function canAcceptNodeDrag(event: DragEvent): boolean {
+  if (!event.dataTransfer) {
+    return false
+  }
+  const types = Array.from(event.dataTransfer.types ?? [])
+  if (types.includes('application/x-harmony-node')) {
+    return true
+  }
+  if (types.includes('text/plain')) {
+    return true
+  }
+  return false
 }
 
 function updateValue(next: string | null) {
@@ -164,14 +181,14 @@ function handleDragEnter(event: DragEvent) {
   if (isDisabled.value) {
     return
   }
-  const nodeId = resolveDraggedNodeId(event)
-  if (!nodeId) {
+  if (!canAcceptNodeDrag(event)) {
     isDragHovering.value = false
     return
   }
   event.preventDefault()
   if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'link'
+    // Match the effect allowed by hierarchy drags so the drop is accepted by the browser
+    event.dataTransfer.dropEffect = 'move'
   }
   isDragHovering.value = true
 }
@@ -180,14 +197,14 @@ function handleDragOver(event: DragEvent) {
   if (isDisabled.value) {
     return
   }
-  const nodeId = resolveDraggedNodeId(event)
-  if (!nodeId) {
+  if (!canAcceptNodeDrag(event)) {
     isDragHovering.value = false
     return
   }
   event.preventDefault()
   if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'link'
+    // Align with the allowed effect to ensure the drop event fires
+    event.dataTransfer.dropEffect = 'move'
   }
   isDragHovering.value = true
 }
@@ -205,12 +222,16 @@ function handleDrop(event: DragEvent) {
   if (isDisabled.value) {
     return
   }
-  const nodeId = resolveDraggedNodeId(event)
+  event.preventDefault()
+  const nodeId = extractDraggedNodeId(event)
   isDragHovering.value = false
   if (!nodeId) {
     return
   }
-  event.preventDefault()
+  const nodeExists = Boolean(findNodeName(nodes.value, nodeId))
+  if (!nodeExists) {
+    return
+  }
   if (isPicking.value) {
     cancelPicking()
   }
