@@ -5,27 +5,31 @@ import { FirstPersonControls } from 'three/examples/jsm/controls/FirstPersonCont
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { Sky } from 'three/addons/objects/Sky.js'
 import type {
-	BehaviorComponentProps,
 	LanternSlideDefinition,
 	SceneJsonExportDocument,
 	SceneNode,
-	SceneNodeComponentState,
 	SceneSkyboxSettings,
 } from '@harmony/schema'
 import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
 import { subscribeToScenePreview } from '@/utils/previewChannel'
 import { buildSceneGraph } from '@schema/sceneGraph';
 import { ComponentManager } from '@schema/components/componentManager'
-import { behaviorComponentDefinition, wallComponentDefinition, BEHAVIOR_COMPONENT_TYPE } from '@schema/components'
+import { behaviorComponentDefinition, wallComponentDefinition } from '@schema/components'
 import {
+	addBehaviorRuntimeListener,
 	hasRegisteredBehaviors,
+	listRegisteredBehaviorActions,
 	listInteractableObjects,
 	resetBehaviorRuntime,
+	removeBehaviorRuntimeListener,
 	triggerBehaviorAction,
 	resolveBehaviorEvent,
 	type BehaviorRuntimeEvent,
 	type BehaviorEventResolution,
+	type BehaviorRuntimeListener,
 } from '@schema/behaviors/runtime'
+
+import {PROXIMITY_EXIT_PADDING, DEFAULT_OBJECT_RADIUS, PROXIMITY_MIN_DISTANCE, PROXIMITY_RADIUS_SCALE} from '@schema/behaviors/runtime'
 
 type ControlMode = 'first-person' | 'third-person'
 
@@ -103,11 +107,6 @@ const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
 	elevation: 22,
 	azimuth: 145,
 }
-const PROXIMITY_MIN_DISTANCE = 3
-const PROXIMITY_RADIUS_SCALE = 1.25
-const PROXIMITY_EXIT_PADDING = 0.75
-const DEFAULT_OBJECT_RADIUS = 1.2
-
 const assetObjectUrlCache = new Map<string, string>()
 const packageEntryCache = new Map<string, { provider: string; value: string } | null>()
 
@@ -1080,38 +1079,46 @@ function resetBehaviorProximity(): void {
 	behaviorProximityThresholdCache.clear()
 }
 
-function refreshBehaviorProximityCandidates(): void {
-	const nextCandidates = new Map<string, BehaviorProximityCandidate>()
-	previewNodeMap.forEach((node, nodeId) => {
-		const components = Object.values(node.components ?? {}) as Array<SceneNodeComponentState<BehaviorComponentProps> | undefined>
-		let hasApproach = false
-		let hasDepart = false
-		components.forEach((component) => {
-			if (!component || component.type !== BEHAVIOR_COMPONENT_TYPE || component.enabled === false) {
-				return
-			}
-			const props = component.props as BehaviorComponentProps | undefined
-			const behaviors = Array.isArray(props?.behaviors) ? props.behaviors : []
-			behaviors.forEach((behavior) => {
-				if (!behavior) {
-					return
-				}
-				if (behavior.action === 'approach') {
-					hasApproach = true
-				} else if (behavior.action === 'depart') {
-					hasDepart = true
-				}
-			})
-		})
-		if (hasApproach || hasDepart) {
-			nextCandidates.set(nodeId, { hasApproach, hasDepart })
-		}
-	})
-	resetBehaviorProximity()
-	nextCandidates.forEach((candidate, nodeId) => {
-		behaviorProximityCandidates.set(nodeId, candidate)
+function removeBehaviorProximityCandidate(nodeId: string): void {
+	behaviorProximityCandidates.delete(nodeId)
+	behaviorProximityState.delete(nodeId)
+	behaviorProximityThresholdCache.delete(nodeId)
+}
+
+function ensureBehaviorProximityState(nodeId: string): void {
+	if (!behaviorProximityState.has(nodeId)) {
 		behaviorProximityState.set(nodeId, { inside: false, lastDistance: null })
+	}
+}
+
+// Keep the proximity candidate list aligned with the behavior runtime registry.
+function syncBehaviorProximityCandidate(nodeId: string): void {
+	if (!previewNodeMap.has(nodeId)) {
+		removeBehaviorProximityCandidate(nodeId)
+		return
+	}
+	const actions = listRegisteredBehaviorActions(nodeId)
+	const hasApproach = actions.includes('approach')
+	const hasDepart = actions.includes('depart')
+	if (!hasApproach && !hasDepart) {
+		removeBehaviorProximityCandidate(nodeId)
+		return
+	}
+	behaviorProximityCandidates.set(nodeId, { hasApproach, hasDepart })
+	ensureBehaviorProximityState(nodeId)
+}
+
+function refreshBehaviorProximityCandidates(): void {
+	resetBehaviorProximity()
+	previewNodeMap.forEach((_node, nodeId) => {
+		syncBehaviorProximityCandidate(nodeId)
 	})
+}
+
+const behaviorRuntimeListener: BehaviorRuntimeListener = {
+	onRegistryChanged(nodeId) {
+		syncBehaviorProximityCandidate(nodeId)
+	},
 }
 
 function computeObjectBoundingRadius(object: THREE.Object3D): number {
@@ -1305,7 +1312,18 @@ function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watc
 		orbitControls.target.copy(focusPoint)
 		orbitControls.update()
 	}
-	activeCamera.lookAt(focusPoint)
+	const isFirstPerson = controlMode.value === 'first-person'
+	if (isFirstPerson && firstPersonControls) {
+		tempDirection.copy(focusPoint).sub(activeCamera.position)
+		if (tempDirection.lengthSq() > 1e-6) {
+			firstPersonControls.lookAt(focusPoint)
+			clampFirstPersonPitch(true)
+			syncFirstPersonOrientation()
+			resetFirstPersonPointerDelta()
+		}
+	} else {
+		activeCamera.lookAt(focusPoint)
+	}
 	syncLastFirstPersonStateFromCamera()
 	resolveBehaviorToken(event.token, { type: 'continue' })
 }
@@ -2200,7 +2218,9 @@ function captureScreenshot() {
 	document.body.removeChild(link)
 }
 
+
 onMounted(() => {
+	addBehaviorRuntimeListener(behaviorRuntimeListener)
 	initRenderer()
 	unsubscribe = subscribeToScenePreview((snapshot) => {
 		applySnapshot(snapshot)
@@ -2208,6 +2228,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+	removeBehaviorRuntimeListener(behaviorRuntimeListener)
 	activeBehaviorDelayTimers.forEach((handle) => window.clearTimeout(handle))
 	activeBehaviorDelayTimers.clear()
 	activeBehaviorAnimations.forEach((cancel) => {

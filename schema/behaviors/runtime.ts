@@ -25,6 +25,11 @@ export type BehaviorTriggerContext = {
 
 export type BehaviorSequenceStatus = 'success' | 'failure' | 'aborted'
 
+export const PROXIMITY_MIN_DISTANCE = 3
+export const PROXIMITY_RADIUS_SCALE = 1.25
+export const PROXIMITY_EXIT_PADDING = 0.75
+export const DEFAULT_OBJECT_RADIUS = 1.2
+
 export type BehaviorRuntimeEvent =
   | {
       type: 'delay'
@@ -157,6 +162,30 @@ const pendingTokens = new Map<string, PendingTokenState>()
 
 let sequenceCounter = 0
 let tokenCounter = 0
+
+export type BehaviorRuntimeListener = {
+  onRegistryChanged?: (nodeId: string) => void
+}
+
+const runtimeListeners = new Set<BehaviorRuntimeListener>()
+
+function notifyRegistryChanged(nodeId: string): void {
+  runtimeListeners.forEach((listener) => {
+    try {
+      listener.onRegistryChanged?.(nodeId)
+    } catch {
+      /* ignore listener errors */
+    }
+  })
+}
+
+export function addBehaviorRuntimeListener(listener: BehaviorRuntimeListener): void {
+  runtimeListeners.add(listener)
+}
+
+export function removeBehaviorRuntimeListener(listener: BehaviorRuntimeListener): void {
+  runtimeListeners.delete(listener)
+}
 
 type BehaviorCollection = SceneBehavior[] | SceneBehaviorMap | null | undefined
 
@@ -513,6 +542,7 @@ export function registerBehaviorComponent(
     behaviors: buildBehaviorRegistry(toBehaviorList(behaviors)),
     object,
   })
+  notifyRegistryChanged(nodeId)
 }
 
 export function updateBehaviorComponent(nodeId: string, behaviors: BehaviorCollection): void {
@@ -523,6 +553,7 @@ export function updateBehaviorComponent(nodeId: string, behaviors: BehaviorColle
   }
   cancelSequencesForNode(nodeId)
   entry.behaviors = buildBehaviorRegistry(toBehaviorList(behaviors))
+  notifyRegistryChanged(nodeId)
 }
 
 export function updateBehaviorObject(nodeId: string, object: Object3D | null): void {
@@ -536,6 +567,7 @@ export function updateBehaviorObject(nodeId: string, object: Object3D | null): v
 export function unregisterBehaviorComponent(nodeId: string): void {
   cancelSequencesForNode(nodeId)
   registry.delete(nodeId)
+  notifyRegistryChanged(nodeId)
 }
 
 export function listInteractableObjects(): Object3D[] {
@@ -546,6 +578,21 @@ export function listInteractableObjects(): Object3D[] {
     }
   })
   return objects
+}
+
+export function listRegisteredBehaviorActions(nodeId: string): BehaviorEventType[] {
+  const entry = registry.get(nodeId)
+  if (!entry) {
+    return []
+  }
+  const actions: BehaviorEventType[] = []
+  ;(Object.keys(entry.behaviors) as BehaviorEventType[]).forEach((action) => {
+    const groups = entry.behaviors[action]
+    if (groups?.some((group) => group.steps.length > 0)) {
+      actions.push(action)
+    }
+  })
+  return actions
 }
 
 export function triggerBehaviorAction(

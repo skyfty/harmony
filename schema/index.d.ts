@@ -34,6 +34,7 @@ export type SceneMaterialTextureSlot =
 
 export type SceneTextureWrapMode = 'ClampToEdgeWrapping' | 'RepeatWrapping' | 'MirroredRepeatWrapping';
 
+
 export interface SceneMaterialTextureSettings {
   wrapS: SceneTextureWrapMode;
   wrapT: SceneTextureWrapMode;
