@@ -108,6 +108,17 @@ const PROXIMITY_RADIUS_SCALE = 1.25
 const PROXIMITY_EXIT_PADDING = 0.75
 const DEFAULT_OBJECT_RADIUS = 1.2
 
+const assetObjectUrlCache = new Map<string, string>()
+const packageEntryCache = new Map<string, { provider: string; value: string } | null>()
+
+type AssetSourceResolution =
+	| { kind: 'data-url'; dataUrl: string }
+	| { kind: 'remote-url'; url: string }
+	| { kind: 'inline-text'; text: string }
+	| { kind: 'raw'; data: ArrayBuffer }
+
+const presetAssetLookup = buildPresetAssetLookup()
+
 let renderer: THREE.WebGLRenderer | null = null
 let scene: THREE.Scene | null = null
 let camera: THREE.PerspectiveCamera | null = null
@@ -207,6 +218,328 @@ function resolveDocumentSkybox(document: SceneJsonExportDocument | null | undefi
 		return null
 	}
 	return sanitizeSkyboxSettings(document.skybox)
+}
+
+function resetAssetResolutionCaches(): void {
+	clearAssetObjectUrlCache()
+	packageEntryCache.clear()
+}
+
+function clearAssetObjectUrlCache(): void {
+	assetObjectUrlCache.forEach((url) => {
+		if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+			try {
+				URL.revokeObjectURL(url)
+			} catch (error) {
+				console.warn('[ScenePreview] Failed to revoke object URL', error)
+			}
+		}
+	})
+	assetObjectUrlCache.clear()
+}
+
+function resolveAssetSource(assetId: string): AssetSourceResolution | null {
+	const trimmed = assetId.trim()
+	if (!trimmed.length) {
+		return null
+	}
+	if (/^(https?:)?\/\//i.test(trimmed)) {
+		return { kind: 'remote-url', url: trimmed }
+	}
+	if (trimmed.startsWith('data:')) {
+		return { kind: 'data-url', dataUrl: trimmed }
+	}
+	if (!currentDocument) {
+		return null
+	}
+	const packageMap = currentDocument.packageAssetMap ?? {}
+	const embeddedKey = `local::${trimmed}`
+	const embeddedValue = packageMap[embeddedKey]
+	if (typeof embeddedValue === 'string' && embeddedValue.startsWith('data:')) {
+		return { kind: 'data-url', dataUrl: embeddedValue }
+	}
+	const directValue = packageMap[trimmed]
+	if (typeof directValue === 'string' && directValue.trim().length) {
+		const resolved = resolvePackageEntryLike(trimmed, 'local', directValue.trim())
+		if (resolved) {
+			return resolved
+		}
+	}
+	const packageEntry = getPackageEntry(trimmed, packageMap)
+	if (packageEntry) {
+		const resolved = resolvePackageEntryLike(trimmed, packageEntry.provider, packageEntry.value)
+		if (resolved) {
+			return resolved
+		}
+	}
+	const indexResolved = resolveAssetSourceFromIndex(trimmed, packageMap)
+	if (indexResolved) {
+		return indexResolved
+	}
+	const fallback = resolvePackageEntryLike(trimmed, 'preset', trimmed)
+	if (fallback) {
+		return fallback
+	}
+	return null
+}
+
+function resolveAssetSourceFromIndex(assetId: string, packageMap: Record<string, string>): AssetSourceResolution | null {
+	if (!currentDocument?.assetIndex) {
+		return null
+	}
+	const entry = (currentDocument.assetIndex as Record<string, unknown>)[assetId]
+	if (!entry || typeof entry !== 'object') {
+		return null
+	}
+	const record = entry as Record<string, unknown>
+	const inline = typeof record.inline === 'string' ? record.inline.trim() : ''
+	if (inline.length) {
+		if (inline.startsWith('data:')) {
+			return { kind: 'data-url', dataUrl: inline }
+		}
+		if (/^(https?:)?\/\//i.test(inline)) {
+			return { kind: 'remote-url', url: inline }
+		}
+		return { kind: 'inline-text', text: inline }
+	}
+	const directUrlCandidates = [record.url, record.downloadUrl]
+	for (const candidate of directUrlCandidates) {
+		if (typeof candidate === 'string') {
+			const normalized = candidate.trim()
+			if (normalized.length) {
+				return { kind: 'remote-url', url: normalized }
+			}
+		}
+	}
+	const source = record.source
+	if (source && typeof source === 'object') {
+		const sourceRecord = source as Record<string, unknown>
+		const sourceInline = typeof sourceRecord.inline === 'string' ? sourceRecord.inline.trim() : ''
+		if (sourceInline.length) {
+			if (sourceInline.startsWith('data:')) {
+				return { kind: 'data-url', dataUrl: sourceInline }
+			}
+			if (/^(https?:)?\/\//i.test(sourceInline)) {
+				return { kind: 'remote-url', url: sourceInline }
+			}
+			return { kind: 'inline-text', text: sourceInline }
+		}
+		const sourceUrlCandidates = [sourceRecord.url, sourceRecord.downloadUrl]
+		for (const candidate of sourceUrlCandidates) {
+			if (typeof candidate === 'string') {
+				const normalized = candidate.trim()
+				if (normalized.length) {
+					return { kind: 'remote-url', url: normalized }
+				}
+			}
+		}
+		const providerId = typeof sourceRecord.providerId === 'string' ? sourceRecord.providerId.trim() : ''
+		const originalAssetId = typeof sourceRecord.originalAssetId === 'string'
+			? sourceRecord.originalAssetId.trim()
+			: assetId
+		let providerValue = ''
+		if (typeof sourceRecord.value === 'string' && sourceRecord.value.trim().length) {
+			providerValue = sourceRecord.value.trim()
+		}
+		if (providerId) {
+			const mapKey = `${providerId}::${originalAssetId}`
+			const mapped = packageMap[mapKey]
+			const resolved = resolvePackageEntryLike(
+				originalAssetId,
+				providerId,
+				typeof mapped === 'string' && mapped.trim().length ? mapped.trim() : providerValue || originalAssetId,
+			)
+			if (resolved) {
+				return resolved
+			}
+		}
+	}
+	return null
+}
+
+function resolvePackageEntryLike(assetId: string, provider: string, rawValue: string): AssetSourceResolution | null {
+	const value = typeof rawValue === 'string' ? rawValue.trim() : ''
+	if (value.startsWith('data:')) {
+		return { kind: 'data-url', dataUrl: value }
+	}
+	if (provider === 'preset') {
+		const presetUrl = resolvePresetAssetUrl(value || assetId)
+		if (presetUrl) {
+			return { kind: 'remote-url', url: presetUrl }
+		}
+	}
+	if (value && /^(https?:)?\/\//i.test(value)) {
+		return { kind: 'remote-url', url: value }
+	}
+	if (provider && provider !== 'local' && value) {
+		const providerUrl = buildProviderUrl(provider, value)
+		if (providerUrl) {
+			return { kind: 'remote-url', url: providerUrl }
+		}
+	}
+	if (value) {
+		const presetCandidate = resolvePresetAssetUrl(value)
+		if (presetCandidate) {
+			return { kind: 'remote-url', url: presetCandidate }
+		}
+	}
+	const fallback = resolvePresetAssetUrl(assetId)
+	if (fallback) {
+		return { kind: 'remote-url', url: fallback }
+	}
+	if (value) {
+		const buffer = base64ToArrayBuffer(value)
+		if (buffer) {
+			return { kind: 'raw', data: buffer }
+		}
+	}
+	return null
+}
+
+function getPackageEntry(assetId: string, packageMap: Record<string, string>): { provider: string; value: string } | null {
+	if (packageEntryCache.has(assetId)) {
+		return packageEntryCache.get(assetId) ?? null
+	}
+	let found: { provider: string; value: string } | null = null
+	for (const [key, value] of Object.entries(packageMap)) {
+		if (typeof value !== 'string' || !value.trim().length) {
+			continue
+		}
+		const separator = key.indexOf('::')
+		if (separator === -1) {
+			continue
+		}
+		const provider = key.slice(0, separator)
+		const id = key.slice(separator + 2)
+		if (id === assetId) {
+			found = { provider, value: value.trim() }
+			break
+		}
+	}
+	packageEntryCache.set(assetId, found)
+	return found
+}
+
+function buildProviderUrl(provider: string, value: string): string | null {
+	if (!value) {
+		return null
+	}
+	if (/^(https?:)?\/\//i.test(value)) {
+		return value
+	}
+	if (provider === 'preset') {
+		return resolvePresetAssetUrl(value)
+	}
+	return null
+}
+
+function resolvePresetAssetUrl(assetId: string): string | null {
+	if (!assetId) {
+		return null
+	}
+	const normalizedId = assetId.startsWith('preset:') ? assetId : `preset:${assetId}`
+	const direct = presetAssetLookup.get(normalizedId) ?? presetAssetLookup.get(normalizedId.toLowerCase())
+	if (direct) {
+		return direct
+	}
+	const relative = normalizedId.replace(/^preset:/, '').replace(/^[\\/]+/, '').replace(/\\/g, '/')
+	if (relative) {
+		return `src/preset/${relative}`
+	}
+	return null
+}
+
+function buildPresetAssetLookup(): Map<string, string> {
+	const lookup = new Map<string, string>()
+	const modules = import.meta.glob('../preset/**/*', {
+		eager: true,
+		import: 'default',
+		query: '?url',
+	}) as Record<string, string>
+	Object.entries(modules).forEach(([key, url]) => {
+		const relative = extractPresetRelativePath(key)
+		if (!relative) {
+			return
+		}
+		const normalized = relative.replace(/^[\\/]+/, '').replace(/\\/g, '/')
+		const lower = normalized.toLowerCase()
+		lookup.set(`preset:${normalized}`, url)
+		lookup.set(`preset:${lower}`, url)
+	})
+	return lookup
+}
+
+function extractPresetRelativePath(candidate: string): string | null {
+	if (!candidate) {
+		return null
+	}
+	const withoutQuery = candidate.replace(/\?.*$/, '')
+	const parts = withoutQuery.split(/[\\/]+/).filter(Boolean)
+	const presetIndex = parts.lastIndexOf('preset')
+	if (presetIndex === -1) {
+		return null
+	}
+	const relativeSegments = parts.slice(presetIndex + 1)
+	if (!relativeSegments.length) {
+		return null
+	}
+	return relativeSegments.join('/')
+}
+
+function base64ToArrayBuffer(value: string): ArrayBuffer | null {
+	try {
+		const clean = value.replace(/^data:[^,]+,/, '').replace(/\s/g, '')
+		if (typeof atob === 'function') {
+			const binary = atob(clean)
+			const length = binary.length
+			const buffer = new Uint8Array(length)
+			for (let index = 0; index < length; index += 1) {
+				buffer[index] = binary.charCodeAt(index)
+			}
+			return buffer.buffer
+		}
+	} catch (error) {
+		console.warn('[ScenePreview] Failed to decode base64 asset', error)
+	}
+	return null
+}
+
+function inferMimeTypeFromAssetId(assetId: string): string | null {
+	const lower = assetId.toLowerCase()
+	if (lower.endsWith('.png')) {
+		return 'image/png'
+	}
+	if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
+		return 'image/jpeg'
+	}
+	if (lower.endsWith('.gif')) {
+		return 'image/gif'
+	}
+	if (lower.endsWith('.webp')) {
+		return 'image/webp'
+	}
+	if (lower.endsWith('.svg')) {
+		return 'image/svg+xml'
+	}
+	if (lower.endsWith('.json')) {
+		return 'application/json'
+	}
+	if (lower.endsWith('.txt')) {
+		return 'text/plain'
+	}
+	return null
+}
+
+function getOrCreateObjectUrl(assetId: string, data: ArrayBuffer, mimeHint?: string): string {
+	const cached = assetObjectUrlCache.get(assetId)
+	if (cached) {
+		return cached
+	}
+	const mimeType = mimeHint ?? inferMimeTypeFromAssetId(assetId) ?? 'application/octet-stream'
+	const blob = new Blob([data], { type: mimeType })
+	const url = URL.createObjectURL(blob)
+	assetObjectUrlCache.set(assetId, url)
+	return url
 }
 
 const formattedLastUpdate = computed(() => {
@@ -421,12 +754,26 @@ function resolveLanternImageSource(assetId: string | null): string | null {
 	if (!trimmed.length) {
 		return null
 	}
-	if (/^(https?:)?\/\//i.test(trimmed) || trimmed.startsWith('data:')) {
-		return trimmed
+	const resolved = resolveAssetSource(trimmed)
+	if (!resolved) {
+		return /^(https?:)?\/\//i.test(trimmed) || trimmed.startsWith('data:') ? trimmed : null
 	}
-	const documentMap = currentDocument?.packageAssetMap
-	const mapped = documentMap && typeof documentMap[trimmed] === 'string' ? documentMap[trimmed] : null
-	return mapped && mapped.trim().length ? mapped : null
+	switch (resolved.kind) {
+		case 'data-url':
+			return resolved.dataUrl
+		case 'remote-url':
+			return resolved.url
+		case 'raw':
+			return getOrCreateObjectUrl(trimmed, resolved.data)
+		case 'inline-text':
+			const inline = resolved.text.trim()
+			if (/^(https?:)?\/\//i.test(inline) || inline.startsWith('data:')) {
+				return inline
+			}
+			return null
+		default:
+			return null
+	}
 }
 
 function getLanternTextState(assetId: string): LanternTextState {
@@ -473,68 +820,32 @@ async function fetchTextFromUrl(source: string): Promise<string> {
 	return await response.text()
 }
 
-function resolveLanternTextSource(assetId: string): string | null {
-	if (!currentDocument) {
-		return null
-	}
+async function loadTextAssetContent(assetId: string): Promise<string | null> {
 	const trimmed = assetId.trim()
 	if (!trimmed.length) {
 		return null
 	}
-	const packageMap = currentDocument.packageAssetMap ?? {}
-	const directKeys = [`local::${trimmed}`, trimmed]
-	for (const key of directKeys) {
-		const value = packageMap[key]
-		if (typeof value === 'string' && value.trim().length) {
-			return value
-		}
+	const source = resolveAssetSource(trimmed)
+	if (!source) {
+		return null
 	}
-	for (const [key, value] of Object.entries(packageMap)) {
-		if (typeof value !== 'string' || !value.trim().length) {
-			continue
-		}
-		const parts = key.split('::')
-		if (parts.length === 2 && parts[1] === trimmed) {
-			return value
-		}
-	}
-	const assetIndex = currentDocument.assetIndex as Record<string, unknown> | undefined
-	const entry = assetIndex && typeof assetIndex === 'object' ? assetIndex[trimmed] : undefined
-	if (entry && typeof entry === 'object') {
-		const entryRecord = entry as Record<string, unknown>
-		const inline = entryRecord.inline
-		if (typeof inline === 'string' && inline.trim().length) {
-			return inline
-		}
-		const url = entryRecord.url
-		if (typeof url === 'string' && url.trim().length) {
-			return url
-		}
-		const downloadUrl = entryRecord.downloadUrl
-		if (typeof downloadUrl === 'string' && downloadUrl.trim().length) {
-			return downloadUrl
-		}
-		const source = entryRecord.source
-		if (source && typeof source === 'object') {
-			const sourceRecord = source as Record<string, unknown>
-			const sourceCandidates = [sourceRecord.inline, sourceRecord.url, sourceRecord.downloadUrl]
-			for (const candidate of sourceCandidates) {
-				if (typeof candidate === 'string' && candidate.trim().length) {
-					return candidate
-				}
+	switch (source.kind) {
+		case 'inline-text':
+			return source.text
+		case 'data-url':
+			return decodeDataUrlText(source.dataUrl)
+		case 'remote-url':
+			return await fetchTextFromUrl(source.url)
+		case 'raw':
+			try {
+				return new TextDecoder().decode(source.data)
+			} catch (error) {
+				console.warn('[ScenePreview] Failed to decode text asset buffer', error)
+				return null
 			}
-			const providerId = typeof sourceRecord.providerId === 'string' ? sourceRecord.providerId : null
-			const originalAssetId = typeof sourceRecord.originalAssetId === 'string' ? sourceRecord.originalAssetId : trimmed
-			if (providerId) {
-				const providerKey = `${providerId}::${originalAssetId}`
-				const providerValue = packageMap[providerKey]
-				if (typeof providerValue === 'string' && providerValue.trim().length) {
-					return providerValue
-				}
-			}
-		}
+		default:
+			return null
 	}
-	return null
 }
 
 async function ensureLanternText(assetId: string): Promise<void> {
@@ -551,18 +862,7 @@ async function ensureLanternText(assetId: string): Promise<void> {
 		state.loading = true
 		state.error = null
 		try {
-			const source = resolveLanternTextSource(trimmed)
-			if (!source) {
-				throw new Error('Missing text asset data')
-			}
-			let text: string | null = null
-			if (source.startsWith('data:')) {
-				text = decodeDataUrlText(source)
-			} else if (/^(https?:)?\/\//i.test(source)) {
-				text = await fetchTextFromUrl(source)
-			} else {
-				text = source
-			}
+			const text = await loadTextAssetContent(trimmed)
 			if (text == null) {
 				throw new Error('Unable to load text asset content')
 			}
@@ -630,7 +930,13 @@ function presentBehaviorAlert(event: Extract<BehaviorRuntimeEvent, { type: 'show
 	const normalizedTitle = rawLegacyTitle ? rawLegacyTitle.trim() : ''
 	behaviorAlertTitle.value = normalizedTitle || 'Notice'
 	const legacyMessage = typeof legacyParams.message === 'string' ? legacyParams.message : ''
-	behaviorAlertMessage.value = event.params.content ?? legacyMessage ?? ''
+	const messageFallback = event.params.content ?? legacyMessage ?? ''
+	behaviorAlertMessage.value = messageFallback
+	const paramsWithAsset = event.params as typeof event.params & { contentAssetId?: string | null }
+	const contentAssetId = typeof paramsWithAsset.contentAssetId === 'string' ? paramsWithAsset.contentAssetId.trim() : ''
+	if (contentAssetId) {
+		void loadBehaviorAlertContent(contentAssetId, event.token, messageFallback)
+	}
 	behaviorAlertShowConfirm.value = event.params.showConfirm ?? true
 	behaviorAlertShowCancel.value = event.params.showCancel ?? false
 	behaviorAlertConfirmText.value = (event.params.confirmText ?? 'Confirm') || 'Confirm'
@@ -640,6 +946,21 @@ function presentBehaviorAlert(event: Extract<BehaviorRuntimeEvent, { type: 'show
 		return
 	}
 	behaviorAlertVisible.value = true
+}
+
+async function loadBehaviorAlertContent(assetId: string, token: string, fallback: string): Promise<void> {
+	try {
+		const text = await loadTextAssetContent(assetId)
+		if (behaviorAlertToken.value !== token) {
+			return
+		}
+		behaviorAlertMessage.value = text ?? fallback
+	} catch (error) {
+		console.warn('[ScenePreview] Failed to load alert text asset', error)
+		if (behaviorAlertToken.value === token) {
+			behaviorAlertMessage.value = fallback
+		}
+	}
 }
 
 function confirmBehaviorAlert() {
@@ -1445,6 +1766,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	resetBehaviorProximity()
 	dismissBehaviorAlert()
 	resetLanternOverlay()
+	resetAssetResolutionCaches()
 	if (!rootGroup) {
 		return
 	}
@@ -1756,6 +2078,7 @@ function refreshAnimations() {
 }
 
 async function updateScene(document: SceneJsonExportDocument) {
+	resetAssetResolutionCaches()
 	const skyboxSettings = resolveDocumentSkybox(document)
 	applySkyboxSettings(skyboxSettings)
 	if (!scene || !rootGroup) {

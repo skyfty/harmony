@@ -125,7 +125,7 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
   },
   {
     id: 'moveTo',
-    label: 'Move To Node',
+    label: 'Move To',
     description: 'Slide the camera to the node and orient it relative to the node.',
     icon: 'mdi-camera-control',
     createDefaultParams(): MoveToBehaviorParams {
