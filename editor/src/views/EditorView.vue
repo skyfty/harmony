@@ -435,7 +435,12 @@ function handleBehaviorDetailsSave(payload: { action: BehaviorEventType; sequenc
     behaviors: cloneBehaviorList(nextList),
   })
 
-  handleBehaviorDetailsOverlayClose()
+  if (context) {
+    context.mode = 'edit'
+    context.action = payload.action
+    context.sequenceId = sequenceId
+    context.sequence = cloneBehaviorList(normalized)
+  }
 }
 
 const handleMaterialDetailsRelayout = () => {

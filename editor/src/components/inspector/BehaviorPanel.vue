@@ -291,6 +291,10 @@ function handleRemoveComponent() {
 
 <style scoped>
 
+.v-expansion-panel {
+      border-radius: 0px;
+}
+
 .behavior-panel__header {
   display: flex;
   align-items: center;
