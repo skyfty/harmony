@@ -849,6 +849,7 @@ function createGroundSceneNode(
     position: createVector(0, 0, 0),
     rotation: createVector(0, 0, 0),
     scale: createVector(1, 1, 1),
+    offset: createVector(0, 0, 0),
     visible: true,
     locked: true,
     dynamicMesh,
@@ -881,6 +882,7 @@ function normalizeGroundSceneNode(node: SceneNode | null | undefined, settings?:
       position: createVector(0, 0, 0),
       rotation: createVector(0, 0, 0),
       scale: createVector(1, 1, 1),
+      offset: createVector(0, 0, 0),
       visible: node.visible ?? true,
       locked: true,
       dynamicMesh: createGroundDynamicMeshDefinition(node.dynamicMesh, settings),
@@ -1493,6 +1495,7 @@ async function convertObjectToSceneNode(
       position,
       rotation,
       scale,
+      offset: createVector(0, 0, 0),
       visible,
     }
     if (childrenNodes.length) {
@@ -1532,6 +1535,7 @@ async function convertObjectToSceneNode(
       position,
       rotation,
       scale,
+      offset: createVector(0, 0, 0),
       visible,
     }
     if (childrenNodes.length) {
@@ -1562,6 +1566,7 @@ async function convertObjectToSceneNode(
       position,
       rotation,
       scale,
+      offset: createVector(0, 0, 0),
       visible,
     }
 
@@ -1602,6 +1607,7 @@ async function convertObjectToSceneNode(
       position,
       rotation,
       scale,
+      offset: createVector(0, 0, 0),
       visible,
       children: childrenNodes,
     }
@@ -2304,7 +2310,7 @@ function cloneNode(node: SceneNode): SceneNode {
     ...node,
     nodeType,
     materials,
-  components: normalizeNodeComponents(node, node.components),
+    components: normalizeNodeComponents(node, node.components),
     light: node.light
       ? {
           ...node.light,
@@ -2317,6 +2323,7 @@ function cloneNode(node: SceneNode): SceneNode {
     position: cloneVector(node.position),
     rotation: cloneVector(node.rotation),
     scale: cloneVector(node.scale),
+    offset: cloneVector(node.offset ?? { x: 0, y: 0, z: 0 }),
     children: node.children ? node.children.map(cloneNode) : undefined,
     dynamicMesh: cloneDynamicMeshDefinition(node.dynamicMesh),
     importMetadata: node.importMetadata
@@ -3813,6 +3820,12 @@ export const useSceneStore = defineStore('scene', {
       if (payload.scale && !vectorsEqual(target.scale, payload.scale)) {
         changed = true
       }
+      if (payload.offset) {
+        const currentOffset = target.offset ?? { x: 0, y: 0, z: 0 }
+        if (!vectorsEqual(currentOffset, payload.offset)) {
+          changed = true
+        }
+      }
       if (!changed) {
         return
       }
@@ -3833,10 +3846,14 @@ export const useSceneStore = defineStore('scene', {
         if (payload.position) node.position = cloneVector(payload.position)
         if (payload.rotation) node.rotation = cloneVector(payload.rotation)
         if (payload.scale) node.scale = cloneVector(payload.scale)
+        if (payload.offset) node.offset = cloneVector(payload.offset)
       })
       // trigger reactivity for listeners relying on reference changes
       this.nodes = [...this.nodes]
       commitSceneSnapshot(this)
+    },
+    setNodeOffset(payload: { id: string; offset: Vector3Like }) {
+      this.updateNodeProperties({ id: payload.id, offset: payload.offset })
     },
     updateNodePropertiesBatch(payloads: TransformUpdatePayload[]) {
       if (!Array.isArray(payloads) || payloads.length === 0) {
@@ -3866,6 +3883,13 @@ export const useSceneStore = defineStore('scene', {
         if (payload.scale && !vectorsEqual(target.scale, payload.scale)) {
           next.scale = cloneVector(payload.scale)
           changed = true
+        }
+        if (payload.offset) {
+          const currentOffset = target.offset ?? { x: 0, y: 0, z: 0 }
+          if (!vectorsEqual(currentOffset, payload.offset)) {
+            next.offset = cloneVector(payload.offset)
+            changed = true
+          }
         }
         if (changed) {
           prepared.push(next)
@@ -3903,6 +3927,9 @@ export const useSceneStore = defineStore('scene', {
           }
           if (update.scale) {
             node.scale = cloneVector(update.scale!)
+          }
+          if (update.offset) {
+            node.offset = cloneVector(update.offset)
           }
         })
       })
@@ -5594,6 +5621,7 @@ export const useSceneStore = defineStore('scene', {
         position: cloneVector(transform.position),
         rotation: cloneVector(transform.rotation),
         scale: cloneVector(transform.scale),
+        offset: createVector(0, 0, 0),
         visible: true,
         sourceAssetId: asset.id,
         isPlaceholder: true,
@@ -5969,12 +5997,15 @@ export const useSceneStore = defineStore('scene', {
         position: payload.position ?? { x: 0, y: 0, z: 0 },
         rotation: payload.rotation ?? { x: 0, y: 0, z: 0 },
         scale: payload.scale ?? { x: 1, y: 1, z: 1 },
+        offset: payload.object.userData?.offset
+          ? cloneVector(payload.object.userData.offset as Vector3Like)
+          : { x: 0, y: 0, z: 0 },
         visible: true,
         sourceAssetId: payload.sourceAssetId,
         dynamicMesh: payload.dynamicMesh ? cloneDynamicMeshDefinition(payload.dynamicMesh) : undefined,
       }
 
-  node.components = normalizeNodeComponents(node, payload.components)
+      node.components = normalizeNodeComponents(node, payload.components)
 
       registerRuntimeObject(id, payload.object)
       tagObjectWithNodeId(payload.object, id)
@@ -6625,6 +6656,7 @@ export const useSceneStore = defineStore('scene', {
         position: createVector(groupLocalPositionVec.x, groupLocalPositionVec.y, groupLocalPositionVec.z),
         rotation: createVector(groupLocalEuler.x, groupLocalEuler.y, groupLocalEuler.z),
         scale: createVector(groupLocalScaleVec.x, groupLocalScaleVec.y, groupLocalScaleVec.z),
+        offset: createVector(0, 0, 0),
         visible: true,
         locked: false,
         children: removedNodes,
