@@ -277,7 +277,7 @@ onBeforeUnmount(() => {
 .trigger-params {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 1.4rem;
 }
 
 .trigger-params__row {

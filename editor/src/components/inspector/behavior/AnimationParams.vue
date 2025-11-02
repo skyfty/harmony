@@ -135,7 +135,7 @@ async function loadClipsForNode(nodeId: string | null) {
         }
         const rawName = typeof clip.name === 'string' ? clip.name : ''
         const trimmed = rawName.trim()
-        const label = trimmed.length ? trimmed : `剪辑 ${index + 1}`
+        const label = trimmed.length ? trimmed : `Clip ${index + 1}`
         clipEntries.push({ label, value: trimmed })
       })
     }
@@ -158,7 +158,7 @@ async function loadClipsForNode(nodeId: string | null) {
   } catch (error) {
     console.warn('[AnimationParams] Failed to load animation clips', error)
     if (requestId === clipLoadRequestId) {
-      clipLoadError.value = '无法加载动画剪辑，请稍后重试。'
+      clipLoadError.value = 'Unable to load animation clips. Please try again later.'
     }
   } finally {
     if (requestId === clipLoadRequestId) {
@@ -225,7 +225,7 @@ function startPicking() {
   emit('pick-state-change', true)
   activeRequestId = nodePickerStore.beginPick({
   owner: 'behavior-target',
-    hint: '选择要播放动画的节点',
+    hint: 'Select the node to play the animation',
     handlers: {
       onPick(nodeId: string) {
         activeRequestId = null
@@ -305,12 +305,12 @@ const waitSelection = computed({
 
 const clipSelectPlaceholder = computed(() => {
   if (!params.value.targetNodeId) {
-    return '请先选择一个目标节点'
+    return 'Please select a target node first'
   }
   if (isLoadingClips.value) {
-    return '正在加载可用的动画剪辑…'
+    return 'Loading available animation clips…'
   }
-  return '选择要播放的动画剪辑'
+  return 'Select an animation clip to play'
 })
 
 defineExpose({ cancelPicking })
@@ -339,7 +339,7 @@ onBeforeUnmount(() => {
         <span v-if="params.targetNodeId" class="animation-params__value">
           {{ targetNodeName ?? params.targetNodeId }}
         </span>
-        <span v-else class="animation-params__placeholder">未选择节点</span>
+  <span v-else class="animation-params__placeholder">No node selected</span>
         <v-btn
           class="animation-params__icon-button animation-params__icon-button--clear"
           size="small"
@@ -351,13 +351,13 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <div v-if="isPicking" class="animation-params__hint">
-      点击场景中的节点进行选择，显示在左侧，右侧显示清除按钮。
+      Click a node in the scene to select it. The selection appears on the left; a clear button appears on the right.
     </div>
     <v-select
       v-model="clipSelection"
       class="animation-params__select"
       :items="clipItems"
-      label="动画剪辑"
+  label="Animation clip"
       density="compact"
       variant="underlined"
       hide-details
@@ -376,19 +376,19 @@ onBeforeUnmount(() => {
       v-else-if="!isLoadingClips && params.targetNodeId && !clipItems.length"
       class="animation-params__message"
     >
-      未在该节点上找到可播放的动画剪辑。
+  No playable animation clips found on this node.
     </div>
     <div class="animation-params__switches">
       <v-switch
         v-model="loopSelection"
-        label="循环播放"
+  label="Loop"
         density="compact"
         hide-details
         inset
       />
       <v-switch
         v-model="waitSelection"
-        label="等待播放完成"
+        label="Wait for completion"
         density="compact"
         hide-details
         inset
@@ -402,7 +402,7 @@ onBeforeUnmount(() => {
 .animation-params {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 1.0rem;
 }
 
 .animation-params__row {
