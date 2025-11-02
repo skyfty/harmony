@@ -171,6 +171,8 @@ export interface MoveToBehaviorParams {
 export interface ShowAlertBehaviorParams {
   /** Primary content text displayed inside the alert dialog. */
   content: string
+  /** Optional asset identifier that overrides the inline content. */
+  contentAssetId: string | null
   /** Display a confirmation button. */
   showConfirm: boolean
   /** Custom label for the confirmation button. */

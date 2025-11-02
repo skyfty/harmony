@@ -144,6 +144,7 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
     createDefaultParams(): ShowAlertBehaviorParams {
       return {
         content: 'This behavior has been triggered.',
+        contentAssetId: null,
         showConfirm: true,
         confirmText: DEFAULT_CONFIRM_TEXT,
         showCancel: false,
@@ -288,6 +289,7 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
         type: 'showAlert',
         params: {
           content: binding.params?.content ?? '',
+          contentAssetId: binding.params?.contentAssetId ?? null,
           showConfirm: binding.params?.showConfirm ?? true,
           confirmText: binding.params?.confirmText ?? DEFAULT_CONFIRM_TEXT,
           showCancel: binding.params?.showCancel ?? false,
@@ -483,6 +485,7 @@ export function ensureBehaviorParams(
           type: 'showAlert',
           params: {
             content: params?.content ?? '',
+            contentAssetId: params?.contentAssetId ?? null,
             showConfirm: params?.showConfirm ?? true,
             confirmText: params?.confirmText ?? DEFAULT_CONFIRM_TEXT,
             showCancel: params?.showCancel ?? false,
