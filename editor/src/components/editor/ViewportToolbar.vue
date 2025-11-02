@@ -1,3 +1,4 @@
+
 <template>
   <div class="viewport-toolbar">
     <v-card class="toolbar-card" elevation="6">
@@ -35,6 +36,17 @@
         title="分组选中"
         :disabled="selectionCount < 2"
         @click="handleGroupSelection"
+      />
+      <v-btn
+        icon="mdi-content-save-cog-outline"
+        density="compact"
+        size="small"
+        color="undefined"
+        variant="text"
+        class="toolbar-button"
+        title="Save as Prefab"
+        :disabled="!canSavePrefab || isSavingPrefab"
+        @click="handleSavePrefab"
       />
       <v-divider vertical />
       <v-btn
@@ -150,13 +162,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, toRefs } from 'vue'
+import { computed, ref, toRefs } from 'vue'
 import type { SceneSkyboxSettings } from '@harmony/schema'
 import type { SkyboxParameterKey, SkyboxPresetDefinition } from '@/types/skybox'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { BuildTool } from '@/types/build-tool'
 import SkyboxPresetSelector from '@/components/common/SkyboxPresetSelector.vue'
+
+const GROUND_NODE_ID = 'harmony:ground'
 
 const props = defineProps<{
   showGrid: boolean
@@ -199,6 +213,19 @@ const {
 const sceneStore = useSceneStore()
 
 const selectionCount = computed(() => (sceneStore.selectedNodeIds ? sceneStore.selectedNodeIds.length : 0))
+const activeNode = computed(() => sceneStore.selectedNode)
+const isSavingPrefab = ref(false)
+
+const canSavePrefab = computed(() => {
+  const node = activeNode.value
+  if (!node) {
+    return false
+  }
+  if (node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'Ground') {
+    return false
+  }
+  return true
+})
 
 function handleGroupSelection() {
   if ((selectionCount.value ?? 0) < 2) return
@@ -207,6 +234,24 @@ function handleGroupSelection() {
   if (!result) {
     // grouping failed or invalid selection
     return
+  }
+}
+
+async function handleSavePrefab() {
+  if (isSavingPrefab.value) {
+    return
+  }
+  const nodeId = sceneStore.selectedNodeId
+  if (!nodeId || nodeId === GROUND_NODE_ID) {
+    return
+  }
+  isSavingPrefab.value = true
+  try {
+    await sceneStore.saveNodePrefab(nodeId)
+  } catch (error) {
+    console.warn('Failed to save prefab asset', error)
+  } finally {
+    isSavingPrefab.value = false
   }
 }
 

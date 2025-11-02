@@ -78,6 +78,7 @@ import {
   resolveSkyboxPreset,
 } from '@/stores/skyboxPresets'
 import { useAssetCacheStore } from './assetCacheStore'
+import type { AssetCacheEntry } from './assetCacheStore'
 import { useUiStore } from './uiStore'
 import { useScenesStore } from './scenesStore'
 import { loadObjectFromFile } from '@/utils/assetImport'
@@ -165,6 +166,8 @@ const HISTORY_LIMIT = 50
 
 const LOCAL_EMBEDDED_ASSET_PREFIX = 'local::'
 const BEHAVIOR_PREFAB_PREVIEW_COLOR = '#4DB6AC'
+const NODE_PREFAB_FORMAT_VERSION = 1
+const NODE_PREFAB_PREVIEW_COLOR = '#7986CB'
 
 
 const DEFAULT_WALL_HEIGHT = WALL_DEFAULT_HEIGHT
@@ -198,6 +201,12 @@ declare module '@/types/scene-state' {
 const OPACITY_EPSILON = 1e-3
 
 const MATERIAL_TEXTURE_SLOTS: SceneMaterialTextureSlot[] = ['albedo', 'normal', 'metalness', 'roughness', 'ao', 'emissive']
+
+interface NodePrefabData {
+  formatVersion: number
+  name: string
+  root: SceneNode
+}
 
 type MaterialTextureMap = Partial<Record<SceneMaterialTextureSlot, SceneMaterialTextureRef | null>>
 
@@ -2328,6 +2337,107 @@ function createDefaultSceneNodes(settings?: GroundSettings): SceneNode[] {
 
 function cloneSceneNodes(nodes: SceneNode[]): SceneNode[] {
   return nodes.map(cloneNode)
+}
+
+function normalizePrefabName(value: string | null | undefined): string {
+  if (typeof value !== 'string') {
+    return ''
+  }
+  return value.trim()
+}
+
+function buildNodePrefabFilename(name: string): string {
+  const normalized = normalizePrefabName(name) || 'Unnamed Prefab'
+  const sanitized = normalized
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+  const base = sanitized.length ? sanitized : 'UnnamedPrefab'
+  return `${base}.prefab`
+}
+
+function stripPrefabTransientFields(node: SceneNode): SceneNode {
+  const sanitized: SceneNode = { ...node }
+  delete (sanitized as { parentId?: string | null }).parentId
+  delete (sanitized as { downloadProgress?: number }).downloadProgress
+  delete (sanitized as { downloadStatus?: SceneNode['downloadStatus'] }).downloadStatus
+  delete (sanitized as { downloadError?: string | null }).downloadError
+  delete (sanitized as { isPlaceholder?: boolean }).isPlaceholder
+  sanitized.visible = sanitized.visible ?? true
+  sanitized.locked = sanitized.locked ?? false
+  if (sanitized.children?.length) {
+    sanitized.children = sanitized.children.map(stripPrefabTransientFields)
+  } else if (sanitized.children) {
+    delete sanitized.children
+  }
+  return sanitized
+}
+
+function remapPrefabNodeIds(node: SceneNode, regenerate: boolean): SceneNode {
+  const resolvedId = regenerate || typeof node.id !== 'string' || !node.id.trim().length
+    ? generateUuid()
+    : node.id
+  const children = node.children?.map((child) => remapPrefabNodeIds(child, regenerate))
+  const sanitized: SceneNode = {
+    ...node,
+    id: resolvedId,
+  }
+  if (children && children.length) {
+    sanitized.children = children
+  } else if (children) {
+    delete sanitized.children
+  }
+  return sanitized
+}
+
+function prepareNodePrefabRoot(source: SceneNode, options: { regenerateIds?: boolean } = {}): SceneNode {
+  const cloned = cloneNode(source)
+  const stripped = stripPrefabTransientFields(cloned)
+  return remapPrefabNodeIds(stripped, options.regenerateIds ?? false)
+}
+
+function createNodePrefabData(node: SceneNode, name: string): NodePrefabData {
+  const normalizedName = normalizePrefabName(name) || 'Unnamed Prefab'
+  const root = prepareNodePrefabRoot(node, { regenerateIds: true })
+  return {
+    formatVersion: NODE_PREFAB_FORMAT_VERSION,
+    name: normalizedName,
+    root,
+  }
+}
+
+function serializeNodePrefab(payload: NodePrefabData): string {
+  return JSON.stringify(payload, null, 2)
+}
+
+function deserializeNodePrefab(raw: string): NodePrefabData {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch (error) {
+    throw new Error(`节点预制件数据无效: ${(error as Error).message}`)
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('节点预制件数据格式错误')
+  }
+  const candidate = parsed as Partial<NodePrefabData> & { root?: SceneNode | null }
+  const formatVersion = Number.isFinite(candidate.formatVersion)
+    ? Number(candidate.formatVersion)
+    : NODE_PREFAB_FORMAT_VERSION
+  if (formatVersion !== NODE_PREFAB_FORMAT_VERSION) {
+    throw new Error(`不支持的节点预制件版本: ${candidate.formatVersion}`)
+  }
+  if (!candidate.root || typeof candidate.root !== 'object') {
+    throw new Error('节点预制件缺少有效的节点数据')
+  }
+  const normalizedName = normalizePrefabName(typeof candidate.name === 'string' ? candidate.name : '') || 'Unnamed Prefab'
+  const root = prepareNodePrefabRoot(candidate.root as SceneNode, { regenerateIds: false })
+  return {
+    formatVersion: NODE_PREFAB_FORMAT_VERSION,
+    name: normalizedName,
+    root,
+  }
 }
 
 function getAssetFromCatalog(catalog: Record<string, ProjectAsset[]>, assetId: string): ProjectAsset | null {
@@ -4737,6 +4847,11 @@ export const useSceneStore = defineStore('scene', {
         throw new Error('Unable to find the requested asset')
       }
 
+      if (asset.type === 'prefab') {
+        const node = await this.instantiateNodePrefabAsset(asset.id, position)
+        return { asset, node }
+      }
+
       const node = await this.addModelNode({ asset, position })
       if (node) {
         return { asset, node }
@@ -4883,6 +4998,100 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this, commitOptions)
       return registeredAsset
     },
+    async saveNodePrefab(nodeId: string): Promise<ProjectAsset> {
+      const node = findNodeById(this.nodes, nodeId)
+      if (!node) {
+        throw new Error('节点不存在或已被移除')
+      }
+      if (isGroundNode(node)) {
+        throw new Error('地面节点无法保存为预制件')
+      }
+
+      const prefabData = createNodePrefabData(node, node.name ?? '')
+      const serialized = serializeNodePrefab(prefabData)
+      const assetId = generateUuid()
+      const fileName = buildNodePrefabFilename(prefabData.name)
+      const blob = new Blob([serialized], { type: 'application/json' })
+      const assetCache = useAssetCacheStore()
+      await assetCache.storeAssetBlob(assetId, {
+        blob,
+        mimeType: 'application/json',
+        filename: fileName,
+      })
+
+      const projectAsset: ProjectAsset = {
+        id: assetId,
+        name: prefabData.name,
+        type: 'prefab',
+        downloadUrl: assetId,
+        previewColor: NODE_PREFAB_PREVIEW_COLOR,
+        thumbnail: null,
+        description: fileName,
+        gleaned: true,
+      }
+
+      const categoryId = determineAssetCategoryId(projectAsset)
+      const registered = this.registerAsset(projectAsset, {
+        categoryId,
+        source: { type: 'local' },
+        commitOptions: { updateNodes: false, updateCamera: false },
+      })
+
+      this.setActiveDirectory(categoryId)
+      this.selectAsset(registered.id)
+
+      return registered
+    },
+    async loadNodePrefab(assetId: string): Promise<NodePrefabData> {
+      const asset = this.getAsset(assetId)
+      if (!asset) {
+        throw new Error('节点预制件资源不存在')
+      }
+      if (asset.type !== 'prefab') {
+        throw new Error('指定资源并非节点预制件')
+      }
+
+      const assetCache = useAssetCacheStore()
+      let entry: AssetCacheEntry | null = assetCache.getEntry(assetId)
+      if (!entry || entry.status !== 'cached' || !entry.blob) {
+        entry = await assetCache.loadFromIndexedDb(assetId)
+      }
+      if ((!entry || !entry.blob) && asset.downloadUrl && /^https?:\/\//i.test(asset.downloadUrl)) {
+        await assetCache.downloaProjectAsset(asset)
+        entry = assetCache.getEntry(assetId)
+      }
+      if (!entry || !entry.blob) {
+        throw new Error('无法加载节点预制件数据')
+      }
+
+      assetCache.touch(assetId)
+      const text = await entry.blob.text()
+      return deserializeNodePrefab(text)
+    },
+    async instantiateNodePrefabAsset(assetId: string, position: THREE.Vector3): Promise<SceneNode> {
+      const asset = this.getAsset(assetId)
+      if (!asset) {
+        throw new Error('节点预制件资源不存在')
+      }
+      if (asset.type !== 'prefab') {
+        throw new Error('指定资源并非节点预制件')
+      }
+
+      const prefab = await this.loadNodePrefab(assetId)
+      const assetCache = useAssetCacheStore()
+      const duplicate = duplicateNodeTree(prefab.root, { assetCache, runtimeSnapshots: new Map() })
+      duplicate.position = cloneVector(position)
+      componentManager.syncNode(duplicate)
+
+      this.captureHistorySnapshot()
+      const nextNodes = [...this.nodes, duplicate]
+      this.nodes = nextNodes
+      await this.ensureSceneAssetsReady({ nodes: [duplicate], showOverlay: false })
+      assetCache.recalculateUsage(this.nodes)
+      this.setSelection([duplicate.id], { primaryId: duplicate.id })
+      commitSceneSnapshot(this)
+      return duplicate
+    },
     async saveBehaviorPrefab(payload: {
       name: string
       action: BehaviorEventType
@@ -4927,8 +5136,8 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const assetCache = useAssetCacheStore()
-      let entry = assetCache.getEntry(assetId)
-      if (entry.status !== 'cached' || !entry.blob) {
+      let entry: AssetCacheEntry | null = assetCache.getEntry(assetId)
+      if (!entry || entry.status !== 'cached' || !entry.blob) {
         entry = await assetCache.loadFromIndexedDb(assetId)
       }
       if ((!entry || !entry.blob) && asset.downloadUrl && /^https?:\/\//i.test(asset.downloadUrl)) {

@@ -3,7 +3,7 @@ import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 
 export interface AssetCategoryDefinition {
-  key: 'models' | 'images' | 'textures' | 'materials' | 'behaviors' | 'others'
+  key: 'models' | 'images' | 'textures' | 'materials' | 'behaviors' | 'prefabs' | 'others'
   id: string
   label: string
   extensions: string[]
@@ -43,6 +43,12 @@ export const ASSET_CATEGORY_CONFIG: AssetCategoryDefinition[] = [
     id: `${ASSETS_ROOT_DIRECTORY_ID}-behaviors`,
     label: 'Behaviors',
     extensions: ['.behavior'],
+  },
+  {
+    key: 'prefabs',
+    id: `${ASSETS_ROOT_DIRECTORY_ID}-prefabs`,
+    label: 'Prefabs',
+    extensions: ['.prefab'],
   },
   {
     key: 'others',
@@ -126,6 +132,8 @@ export function determineAssetCategoryId(asset: ProjectAsset): string {
       return ASSET_CATEGORY_ID_BY_KEY.materials
     case 'behavior':
       return ASSET_CATEGORY_ID_BY_KEY.behaviors
+    case 'prefab':
+      return ASSET_CATEGORY_ID_BY_KEY.prefabs
     default:
       break
   }

@@ -147,6 +147,7 @@ const CATEGORY_KEY_TO_TYPE: Record<AssetCategoryKey, ProjectAsset['type']> = {
   textures: 'texture',
   materials: 'material',
   behaviors: 'behavior',
+  prefabs: 'prefab',
   others: 'file',
 }
 
@@ -156,6 +157,7 @@ const DEFAULT_PREVIEW_COLORS: Record<ProjectAsset['type'], string> = {
   texture: '#8E24AA',
   material: '#FFB74D',
   behavior: '#4DB6AC',
+  prefab: '#7986CB',
   file: '#546E7A',
 }
 
@@ -1471,6 +1473,8 @@ function iconForAssetType(type: ProjectAsset['type']) {
       return 'mdi-palette'
     case 'behavior':
       return 'mdi-script-text-outline'
+    case 'prefab':
+      return 'mdi-cube-outline'
     case 'file':
     default:
       return 'mdi-file-outline'
