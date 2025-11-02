@@ -3,7 +3,7 @@ import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 
 export interface AssetCategoryDefinition {
-  key: 'models' | 'images' | 'textures' | 'materials' | 'others'
+  key: 'models' | 'images' | 'textures' | 'materials' | 'behaviors' | 'others'
   id: string
   label: string
   extensions: string[]
@@ -37,6 +37,12 @@ export const ASSET_CATEGORY_CONFIG: AssetCategoryDefinition[] = [
     id: `${ASSETS_ROOT_DIRECTORY_ID}-materials`,
     label: 'Materials',
     extensions: ['.material', '.material.json', '.mat', '.mat.json'],
+  },
+  {
+    key: 'behaviors',
+    id: `${ASSETS_ROOT_DIRECTORY_ID}-behaviors`,
+    label: 'Behaviors',
+    extensions: ['.behavior'],
   },
   {
     key: 'others',
@@ -118,6 +124,8 @@ export function determineAssetCategoryId(asset: ProjectAsset): string {
       return ASSET_CATEGORY_ID_BY_KEY.textures
     case 'material':
       return ASSET_CATEGORY_ID_BY_KEY.materials
+    case 'behavior':
+      return ASSET_CATEGORY_ID_BY_KEY.behaviors
     default:
       break
   }

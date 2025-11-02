@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import type {
   BehaviorEventType,
@@ -38,6 +38,9 @@ type BehaviorDetailsContext = {
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
+const ASSET_DRAG_MIME = 'application/x-harmony-asset'
+const isPrefabDragActive = ref(false)
+const isApplyingPrefab = ref(false)
 
 const emit = defineEmits<{
   (event: 'open-details', payload: BehaviorDetailsContext): void
@@ -205,6 +208,118 @@ function handleRemoveComponent() {
   }
   sceneStore.removeNodeComponent(nodeId, component.id)
 }
+
+function parseAssetDragPayload(event: DragEvent): { assetId: string } | null {
+  if (event.dataTransfer) {
+    const raw = event.dataTransfer.getData(ASSET_DRAG_MIME)
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw)
+        if (parsed?.assetId && typeof parsed.assetId === 'string') {
+          return { assetId: parsed.assetId }
+        }
+      } catch (error) {
+        console.warn('Failed to parse behavior prefab drag payload', error)
+      }
+    }
+  }
+  if (sceneStore.draggingAssetId) {
+    return { assetId: sceneStore.draggingAssetId }
+  }
+  return null
+}
+
+function resolveBehaviorAssetId(event: DragEvent): string | null {
+  const payload = parseAssetDragPayload(event)
+  if (!payload) {
+    return null
+  }
+  const asset = sceneStore.getAsset(payload.assetId)
+  if (!asset || asset.type !== 'behavior') {
+    return null
+  }
+  return asset.id
+}
+
+async function applyBehaviorPrefabAsset(assetId: string): Promise<void> {
+  if (!selectedNodeId.value || isApplyingPrefab.value) {
+    return
+  }
+  isApplyingPrefab.value = true
+  try {
+    const result = await sceneStore.applyBehaviorPrefabToNode(selectedNodeId.value, assetId)
+    if (result) {
+      await nextTick()
+      const entry = behaviorEntries.value.find((item) => item.sequenceId === result.sequenceId)
+      if (entry) {
+        handleEditBehavior(entry)
+      }
+    }
+  } catch (error) {
+    console.warn('Failed to apply behavior prefab to node', error)
+  } finally {
+    isApplyingPrefab.value = false
+  }
+}
+
+function handlePrefabDragEnter(event: DragEvent) {
+  if (!selectedNodeId.value) {
+    return
+  }
+  const assetId = resolveBehaviorAssetId(event)
+  if (!assetId) {
+    return
+  }
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy'
+  }
+  isPrefabDragActive.value = true
+}
+
+function handlePrefabDragOver(event: DragEvent) {
+  if (!selectedNodeId.value) {
+    return
+  }
+  const assetId = resolveBehaviorAssetId(event)
+  if (!assetId) {
+    if (isPrefabDragActive.value) {
+      isPrefabDragActive.value = false
+    }
+    return
+  }
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy'
+  }
+  isPrefabDragActive.value = true
+}
+
+function handlePrefabDragLeave(event: DragEvent) {
+  if (!isPrefabDragActive.value) {
+    return
+  }
+  const target = event.currentTarget as HTMLElement | null
+  const related = event.relatedTarget as Node | null
+  if (target && related && target.contains(related)) {
+    return
+  }
+  isPrefabDragActive.value = false
+}
+
+async function handlePrefabDrop(event: DragEvent) {
+  if (!selectedNodeId.value) {
+    return
+  }
+  const assetId = resolveBehaviorAssetId(event)
+  isPrefabDragActive.value = false
+  if (!assetId) {
+    return
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  await applyBehaviorPrefabAsset(assetId)
+}
 </script>
 
 <template>
@@ -245,7 +360,14 @@ function handleRemoveComponent() {
     </v-expansion-panel-title>
 
     <v-expansion-panel-text>
-      <div class="behavior-panel__body">
+      <div
+        class="behavior-panel__body"
+        :class="{ 'behavior-panel__body--prefab-drop': isPrefabDragActive }"
+        @dragenter="handlePrefabDragEnter"
+        @dragover="handlePrefabDragOver"
+        @dragleave="handlePrefabDragLeave"
+        @drop="handlePrefabDrop"
+      >
         <div v-if="behaviorEntries.length" class="behavior-list">
           <div
             v-for="entry in behaviorEntries"
@@ -320,6 +442,11 @@ function handleRemoveComponent() {
   flex-direction: column;
   gap: 0.6rem;
   padding-inline: 0.25rem;
+}
+
+.behavior-panel__body--prefab-drop {
+  box-shadow: inset 0 0 0 2px rgba(77, 182, 172, 0.35);
+  border-radius: 8px;
 }
 
 .behavior-list {

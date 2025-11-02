@@ -18,8 +18,27 @@ import {
   type Material,
   type Light,
 } from 'three'
-import type { CameraNodeProperties, SceneNode, SceneNodeType, Vector3Like } from '@harmony/schema'
-import type { LightNodeProperties, LightNodeType } from '@harmony/schema'
+import type {
+  AssetIndexEntry,
+  AssetSourceMetadata,
+  BehaviorComponentProps,
+  BehaviorEventType,
+  CameraNodeProperties,
+  GroundDynamicMesh,
+  GroundSettings,
+  LightNodeProperties,
+  LightNodeType,
+  NodeComponentType,
+  PlatformDynamicMesh,
+  SceneBehavior,
+  SceneDynamicMesh,
+  SceneNode,
+  SceneNodeComponentMap,
+  SceneNodeComponentState,
+  SceneNodeType,
+  Vector3Like,
+  WallDynamicMesh,
+} from '@harmony/schema'
 import { normalizeLightNodeType } from '@/types/light'
 import type { ClipboardEntry } from '@/types/clipboard-entry'
 import type { DetachResult } from '@/types/detach-result'
@@ -31,16 +50,13 @@ import type { PanelPlacementState, PanelPlacement } from '@/types/panel-placemen
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
-import type { AssetIndexEntry, AssetSourceMetadata } from '@harmony/schema'
 import type { SceneCameraState } from '@/types/scene-camera-state'
 import type { SceneHistoryEntry } from '@/types/scene-history-entry'
 import type { SceneState } from '@/types/scene-state'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { CameraProjectionMode, CameraControlMode, SceneSkyboxSettings, SceneViewportSettings } from '@/types/scene-viewport-settings'
-import type { GroundDynamicMesh, PlatformDynamicMesh, SceneDynamicMesh, WallDynamicMesh } from '@harmony/schema'
 import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
-import type { GroundSettings } from '@harmony/schema'
 import type {
   SceneMaterial,
   SceneMaterialProps,
@@ -52,6 +68,7 @@ import type {
 
 import { cloneTextureSettings } from '@/types/material'
 import { DEFAULT_SCENE_MATERIAL_ID, DEFAULT_SCENE_MATERIAL_TYPE } from '@/types/material'
+import { behaviorMapToList, cloneBehaviorList } from '@schema/behaviors/definitions'
 
 import {
   CUSTOM_SKYBOX_PRESET_ID,
@@ -68,6 +85,14 @@ import { generateUuid } from '@/utils/uuid'
 import { getCachedModelObject, getOrLoadModelObject } from './modelObjectCache'
 import { createWallGroup, updateWallGroup } from '@/utils/wallMesh'
 import { computeBlobHash, blobToDataUrl, dataUrlToBlob, inferBlobFilename, extractExtension, ensureExtension } from '@/utils/blob'
+import {
+  buildBehaviorPrefabFilename,
+  createBehaviorPrefabData,
+  deserializeBehaviorPrefab,
+  instantiateBehaviorPrefab,
+  serializeBehaviorPrefab,
+  type BehaviorPrefabData,
+} from '@/utils/behaviorPrefab'
 
 import {
   cloneAssetList,
@@ -79,10 +104,10 @@ import {
   ASSETS_ROOT_DIRECTORY_ID,
   PACKAGES_ROOT_DIRECTORY_ID,
 } from './assetCatalog'
-import type { NodeComponentType, SceneNodeComponentState, SceneNodeComponentMap } from '@harmony/schema'
 import type { WallComponentProps } from '@schema/components'
 import {
   WALL_COMPONENT_TYPE,
+  BEHAVIOR_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_THICKNESS,
   WALL_DEFAULT_WIDTH,
@@ -139,6 +164,7 @@ export const IMPORT_TEXTURE_SLOT_MAP: Array<{ slot: SceneMaterialTextureSlot; ke
 const HISTORY_LIMIT = 50
 
 const LOCAL_EMBEDDED_ASSET_PREFIX = 'local::'
+const BEHAVIOR_PREFAB_PREVIEW_COLOR = '#4DB6AC'
 
 
 const DEFAULT_WALL_HEIGHT = WALL_DEFAULT_HEIGHT
@@ -383,6 +409,20 @@ function cloneSceneMaterial(material: SceneMaterial): SceneMaterial {
 
 function cloneSceneMaterials(materials: SceneMaterial[]): SceneMaterial[] {
   return materials.map((material) => cloneSceneMaterial(material))
+}
+
+function extractBehaviorList(
+  component: SceneNodeComponentState<BehaviorComponentProps> | undefined,
+): SceneBehavior[] {
+  if (!component) {
+    return []
+  }
+  const props = component.props as BehaviorComponentProps | undefined
+  const behaviors = props?.behaviors
+  if (Array.isArray(behaviors)) {
+    return cloneBehaviorList(behaviors)
+  }
+  return cloneBehaviorList(behaviorMapToList(behaviors))
 }
 
 function findDefaultSceneMaterial(materials: SceneMaterial[]): SceneMaterial | null {
@@ -4842,6 +4882,130 @@ export const useSceneStore = defineStore('scene', {
       const commitOptions = options.commitOptions ?? { updateNodes: false, updateCamera: false }
       commitSceneSnapshot(this, commitOptions)
       return registeredAsset
+    },
+    async saveBehaviorPrefab(payload: {
+      name: string
+      action: BehaviorEventType
+      sequence: SceneBehavior[]
+    }): Promise<ProjectAsset> {
+      const sanitized = createBehaviorPrefabData(payload)
+      const serialized = serializeBehaviorPrefab(sanitized)
+      const assetId = generateUuid()
+      const fileName = buildBehaviorPrefabFilename(sanitized.name)
+      const blob = new Blob([serialized], { type: 'application/json' })
+      const assetCache = useAssetCacheStore()
+      await assetCache.storeAssetBlob(assetId, {
+        blob,
+        mimeType: 'application/json',
+        filename: fileName,
+      })
+
+      const projectAsset: ProjectAsset = {
+        id: assetId,
+        name: sanitized.name,
+        type: 'behavior',
+        downloadUrl: assetId,
+        previewColor: BEHAVIOR_PREFAB_PREVIEW_COLOR,
+        thumbnail: null,
+        description: fileName,
+        gleaned: true,
+      }
+
+      return this.registerAsset(projectAsset, {
+        categoryId: determineAssetCategoryId(projectAsset),
+        source: { type: 'local' },
+        commitOptions: { updateNodes: false, updateCamera: false },
+      })
+    },
+    async loadBehaviorPrefab(assetId: string): Promise<BehaviorPrefabData> {
+      const asset = this.getAsset(assetId)
+      if (!asset) {
+        throw new Error('行为预制件资源不存在')
+      }
+      if (asset.type !== 'behavior') {
+        throw new Error('指定资源并非行为预制件')
+      }
+
+      const assetCache = useAssetCacheStore()
+      let entry = assetCache.getEntry(assetId)
+      if (entry.status !== 'cached' || !entry.blob) {
+        entry = await assetCache.loadFromIndexedDb(assetId)
+      }
+      if ((!entry || !entry.blob) && asset.downloadUrl && /^https?:\/\//i.test(asset.downloadUrl)) {
+        await assetCache.downloaProjectAsset(asset)
+        entry = assetCache.getEntry(assetId)
+      }
+      if (!entry || !entry.blob) {
+        throw new Error('无法加载行为预制件数据')
+      }
+
+      assetCache.touch(assetId)
+      const text = await entry.blob.text()
+      return deserializeBehaviorPrefab(text)
+    },
+    async applyBehaviorPrefabToNode(
+      nodeId: string,
+      assetId: string,
+    ): Promise<{ sequenceId: string; sequence: SceneBehavior[]; action: BehaviorEventType; name: string } | null> {
+      const node = findNodeById(this.nodes, nodeId)
+      if (!node) {
+        return null
+      }
+
+      const asset = this.getAsset(assetId)
+      if (!asset) {
+        throw new Error('行为预制件资源不存在')
+      }
+      if (asset.type !== 'behavior') {
+        throw new Error('指定资源并非行为预制件')
+      }
+
+      const prefab = await this.loadBehaviorPrefab(assetId)
+      const instantiated = instantiateBehaviorPrefab(prefab, { nodeId })
+
+      if (!node.components?.[BEHAVIOR_COMPONENT_TYPE]) {
+        const created = this.addNodeComponent(nodeId, BEHAVIOR_COMPONENT_TYPE)
+        if (!created) {
+          throw new Error('无法为节点添加行为组件')
+        }
+      }
+
+      const refreshedNode = findNodeById(this.nodes, nodeId)
+      const behaviorComponent = refreshedNode?.components?.[BEHAVIOR_COMPONENT_TYPE] as
+        | SceneNodeComponentState<BehaviorComponentProps>
+        | undefined
+      if (!behaviorComponent) {
+        throw new Error('行为组件不可用')
+      }
+
+      const currentList = extractBehaviorList(behaviorComponent)
+      const newSequence = cloneBehaviorList(instantiated.sequence)
+      const nextList: SceneBehavior[] = []
+      let inserted = false
+
+      currentList.forEach((step) => {
+        if (!inserted && step.action === instantiated.action) {
+          nextList.push(...newSequence)
+          inserted = true
+        }
+        if (step.action !== instantiated.action) {
+          nextList.push(step)
+        }
+      })
+
+      if (!inserted) {
+        nextList.push(...newSequence)
+      }
+
+      const updated = this.updateNodeComponentProps(nodeId, behaviorComponent.id, {
+        behaviors: cloneBehaviorList(nextList),
+      })
+
+      if (!updated) {
+        return null
+      }
+
+      return instantiated
     },
     copyPackageAssetToAssets(providerId: string, asset: ProjectAsset): ProjectAsset {
       const mapKey = `${providerId}::${asset.id}`

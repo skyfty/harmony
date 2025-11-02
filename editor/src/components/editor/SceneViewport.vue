@@ -4880,6 +4880,35 @@ function resolveMaterialDropTarget(event: DragEvent): { nodeId: string; object: 
   return null
 }
 
+function resolveBehaviorDropTarget(event: DragEvent): { nodeId: string; object: THREE.Object3D } | null {
+  if (!camera || !canvasRef.value) {
+    return null
+  }
+  const rect = canvasRef.value.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) {
+    return null
+  }
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  raycaster.setFromCamera(pointer, camera)
+  const intersections = raycaster.intersectObjects(rootGroup.children, true)
+  for (const intersection of intersections) {
+    const nodeId = resolveNodeIdFromObject(intersection.object)
+    if (!nodeId) {
+      continue
+    }
+    if (sceneStore.isNodeSelectionLocked(nodeId)) {
+      continue
+    }
+    const targetObject = objectMap.get(nodeId)
+    if (!targetObject) {
+      continue
+    }
+    return { nodeId, object: targetObject }
+  }
+  return null
+}
+
 function ensureEditablePrimaryMaterial(nodeId: string, material: SceneNodeMaterial | null): string | null {
   if (!material) {
     return null
@@ -5014,6 +5043,22 @@ function handleViewportDragOver(event: DragEvent) {
     return
   }
 
+  if (asset && asset.type === 'behavior') {
+    const target = resolveBehaviorDropTarget(event)
+    if (target) {
+      event.preventDefault()
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = 'copy'
+      }
+      isDragHovering.value = true
+      updateGridHighlightFromObject(target.object)
+    } else {
+      updateGridHighlight(null)
+    }
+    disposeDragPreview()
+    return
+  }
+
   const point = computeDropPoint(event)
   event.preventDefault()
   if (event.dataTransfer) {
@@ -5071,6 +5116,23 @@ async function handleViewportDrop(event: DragEvent) {
     const applied = applyMaterialAssetToNode(target.nodeId, info.assetId)
     if (!applied) {
       console.warn('Failed to apply material asset to node', info.assetId, target.nodeId)
+    }
+    sceneStore.setDraggingAssetObject(null)
+    updateGridHighlight(null)
+    restoreGridHighlightForSelection()
+    return
+  }
+
+  if (assetType === 'behavior') {
+    const target = resolveBehaviorDropTarget(event)
+    if (!target) {
+      console.warn('No scene node found for behavior prefab drop', info.assetId)
+    } else {
+      try {
+        await sceneStore.applyBehaviorPrefabToNode(target.nodeId, info.assetId)
+      } catch (error) {
+        console.warn('Failed to apply behavior prefab to node', info.assetId, error)
+      }
     }
     sceneStore.setDraggingAssetObject(null)
     updateGridHighlight(null)

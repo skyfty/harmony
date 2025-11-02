@@ -146,6 +146,7 @@ const CATEGORY_KEY_TO_TYPE: Record<AssetCategoryKey, ProjectAsset['type']> = {
   images: 'image',
   textures: 'texture',
   materials: 'material',
+  behaviors: 'behavior',
   others: 'file',
 }
 
@@ -154,6 +155,7 @@ const DEFAULT_PREVIEW_COLORS: Record<ProjectAsset['type'], string> = {
   image: '#1E88E5',
   texture: '#8E24AA',
   material: '#FFB74D',
+  behavior: '#4DB6AC',
   file: '#546E7A',
 }
 
@@ -1467,6 +1469,8 @@ function iconForAssetType(type: ProjectAsset['type']) {
       return 'mdi-texture'
     case 'material':
       return 'mdi-palette'
+    case 'behavior':
+      return 'mdi-script-text-outline'
     case 'file':
     default:
       return 'mdi-file-outline'

@@ -14,6 +14,8 @@ import {
   findBehaviorScript,
 } from '@schema/behaviors/definitions'
 import { generateUuid } from '@/utils/uuid'
+import { useSceneStore } from '@/stores/sceneStore'
+import { instantiateBehaviorPrefab } from '@/utils/behaviorPrefab'
 import DelayParams from '@/components/inspector/behavior/DelayParams.vue'
 import MoveToParams from '@/components/inspector/behavior/MoveToParams.vue'
 import ShowAlertParams from '@/components/inspector/behavior/ShowAlertParams.vue'
@@ -43,12 +45,17 @@ const emit = defineEmits<{
   (event: 'save', payload: { action: BehaviorEventType; sequence: SceneBehavior[] }): void
 }>()
 
+const sceneStore = useSceneStore()
+const ASSET_DRAG_MIME = 'application/x-harmony-asset'
+
 const localAction = ref<BehaviorEventType>('click')
 const localSequence = ref<SceneBehavior[]>([])
 const sequenceName = ref('')
 const localSequenceId = ref<string>(createBehaviorSequenceId())
 const selectedStepId = ref<string | null>(null)
 const isPickingTarget = ref(false)
+const isSavingPrefab = ref(false)
+const isPrefabDragActive = ref(false)
 const parameterComponentRef = ref<{ cancelPicking?: () => void } | null>(null)
 const defaultTargetApplied = new Set<string>()
 
@@ -80,6 +87,48 @@ const PARAMETER_COMPONENTS: Partial<Record<BehaviorScriptType, unknown>> = {
   lantern: LanternParams,
   trigger: TriggerParams,
   animation: AnimationParams,
+}
+
+function isBehaviorAssetDrag(event: DragEvent): boolean {
+  if (!event.dataTransfer) {
+    return false
+  }
+  return Array.from(event.dataTransfer.types ?? []).includes(ASSET_DRAG_MIME)
+}
+
+function parseAssetDragPayload(event: DragEvent): { assetId: string } | null {
+  if (event.dataTransfer) {
+    const raw = event.dataTransfer.getData(ASSET_DRAG_MIME)
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw)
+        if (parsed?.assetId && typeof parsed.assetId === 'string') {
+          return { assetId: parsed.assetId }
+        }
+      } catch (error) {
+        console.warn('Failed to parse behavior prefab payload', error)
+      }
+    }
+  }
+  if (sceneStore.draggingAssetId) {
+    return { assetId: sceneStore.draggingAssetId }
+  }
+  return null
+}
+
+function resolveBehaviorAssetId(event: DragEvent): string | null {
+  if (!isBehaviorAssetDrag(event)) {
+    return null
+  }
+  const payload = parseAssetDragPayload(event)
+  if (!payload) {
+    return null
+  }
+  const asset = sceneStore.getAsset(payload.assetId)
+  if (!asset || asset.type !== 'behavior') {
+    return null
+  }
+  return asset.id
 }
 
 function normalizeBehaviorName(name: string | null | undefined): string {
@@ -169,6 +218,74 @@ function applyDefaultTarget(step: SceneBehavior): void {
 
 function applyDefaultTargets(sequence: SceneBehavior[]): void {
   sequence.forEach((step) => applyDefaultTarget(step))
+}
+
+async function applyBehaviorPrefabFromAsset(assetId: string): Promise<void> {
+  try {
+    const prefab = await sceneStore.loadBehaviorPrefab(assetId)
+    const instantiated = instantiateBehaviorPrefab(prefab, { nodeId: props.nodeId ?? null })
+    defaultTargetApplied.clear()
+    cancelActivePicking()
+    localAction.value = instantiated.action
+    localSequenceId.value = instantiated.sequenceId
+    localSequence.value = instantiated.sequence
+    applyDefaultTargets(localSequence.value)
+    sequenceName.value = instantiated.name
+    applySequenceName(localSequence.value, sequenceName.value)
+    selectedStepId.value = localSequence.value[0]?.id ?? null
+  } catch (error) {
+    console.warn('Failed to apply behavior prefab', error)
+  }
+}
+
+function handlePrefabDragEnter(event: DragEvent) {
+  const assetId = resolveBehaviorAssetId(event)
+  if (!assetId) {
+    return
+  }
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy'
+  }
+  isPrefabDragActive.value = true
+}
+
+function handlePrefabDragOver(event: DragEvent) {
+  const assetId = resolveBehaviorAssetId(event)
+  if (!assetId) {
+    if (isPrefabDragActive.value) {
+      isPrefabDragActive.value = false
+    }
+    return
+  }
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy'
+  }
+  isPrefabDragActive.value = true
+}
+
+function handlePrefabDragLeave(event: DragEvent) {
+  if (!isPrefabDragActive.value) {
+    return
+  }
+  const target = event.currentTarget as HTMLElement | null
+  const related = event.relatedTarget as Node | null
+  if (target && related && target.contains(related)) {
+    return
+  }
+  isPrefabDragActive.value = false
+}
+
+async function handlePrefabDrop(event: DragEvent) {
+  const assetId = resolveBehaviorAssetId(event)
+  isPrefabDragActive.value = false
+  if (!assetId) {
+    return
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  await applyBehaviorPrefabFromAsset(assetId)
 }
 
 function ensureStep(step: SceneBehavior, action: BehaviorEventType, sequenceId: string): SceneBehavior {
@@ -435,6 +552,29 @@ function handleSave() {
   cancelActivePicking()
 }
 
+async function handleSaveAsPrefab() {
+  if (isSavingPrefab.value) {
+    return
+  }
+  const action = localAction.value
+  if (!action) {
+    return
+  }
+  const normalized = localSequence.value.map((step) => ensureStep(step, action, localSequenceId.value))
+  isSavingPrefab.value = true
+  try {
+    await sceneStore.saveBehaviorPrefab({
+      name: sequenceName.value,
+      action,
+      sequence: normalized,
+    })
+  } catch (error) {
+    console.warn('Failed to save behavior prefab', error)
+  } finally {
+    isSavingPrefab.value = false
+  }
+}
+
 const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequence' : 'Edit Behavior Sequence'))
 </script>
 
@@ -446,12 +586,31 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequ
         :class="['behavior-details-panel', { 'behavior-details-panel--picking': isPickingTarget }]"
         :style="panelStyle"
       >
-        <v-card v-show="!isPickingTarget" class="behavior-details">
+        <v-card
+          v-show="!isPickingTarget"
+          class="behavior-details"
+          :class="{ 'behavior-details--prefab-drop-active': isPrefabDragActive }"
+          @dragenter="handlePrefabDragEnter"
+          @dragover="handlePrefabDragOver"
+          @dragleave="handlePrefabDragLeave"
+          @drop="handlePrefabDrop"
+        >
           <v-toolbar density="compact" class="panel-toolbar" height="40px">
             <div class="toolbar-text">
               <div class="material-title">{{ dialogTitle }}</div>
             </div>
             <v-spacer />
+            <v-btn
+              class="toolbar-save-prefab"
+              variant="text"
+              size="small"
+              title="Save as Prefab"
+              :disabled="isPickingTarget || isSavingPrefab"
+              :loading="isSavingPrefab"
+              @click="handleSaveAsPrefab"
+            >
+              <v-icon size="16px">mdi-content-save-cog-outline</v-icon>
+            </v-btn>
             <v-btn
               class="toolbar-save"
               variant="text"
@@ -638,6 +797,11 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequ
   width: 100%;
 }
 
+.behavior-details--prefab-drop-active {
+  border-color: rgba(77, 182, 172, 0.65);
+  box-shadow: 0 0 0 2px rgba(77, 182, 172, 0.28);
+}
+
 .behavior-details__body {
   display: flex;
   flex-direction: column;
@@ -774,6 +938,10 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequ
   color: #e9ecf1;
   min-height: 20px;
   padding: 0 8px;
+}
+
+.toolbar-save-prefab {
+  margin-right: 4px;
 }
 
 .toolbar-text {
