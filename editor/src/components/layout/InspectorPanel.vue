@@ -73,7 +73,7 @@ const availableComponents = computed(() => {
 })
 function computeDefaultExpandedPanels() {
   const node = selectedNode.value
-  const panels: string[] = ['transform']
+  const panels: string[] = []
 
   if (node?.dynamicMesh?.type === 'Ground') {
     panels.push('ground')
