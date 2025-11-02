@@ -39,6 +39,7 @@ const nodePickerStore = useNodePickerStore()
 
 const isPicking = ref(false)
 const activeRequestId = ref<number | null>(null)
+const isDragHovering = ref(false)
 
 function findNodeName(tree: SceneNode[] | undefined, id: string | null | undefined): string | null {
   if (!tree || !id) {
@@ -67,6 +68,18 @@ const placeholderText = computed(() => props.placeholder)
 const isDisabled = computed(() => props.disabled)
 
 const displayValue = computed(() => selectedNodeName.value ?? props.modelValue ?? null)
+
+function resolveDraggedNodeId(event: DragEvent): string | null {
+  const transfer = event.dataTransfer
+  if (!transfer) {
+    return null
+  }
+  const plain = transfer.getData('text/plain')
+  if (plain && findNodeName(nodes.value, plain)) {
+    return plain
+  }
+  return null
+}
 
 function updateValue(next: string | null) {
   emit('update:modelValue', next)
@@ -147,6 +160,63 @@ function clearSelection() {
   updateValue(null)
 }
 
+function handleDragEnter(event: DragEvent) {
+  if (isDisabled.value) {
+    return
+  }
+  const nodeId = resolveDraggedNodeId(event)
+  if (!nodeId) {
+    isDragHovering.value = false
+    return
+  }
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'link'
+  }
+  isDragHovering.value = true
+}
+
+function handleDragOver(event: DragEvent) {
+  if (isDisabled.value) {
+    return
+  }
+  const nodeId = resolveDraggedNodeId(event)
+  if (!nodeId) {
+    isDragHovering.value = false
+    return
+  }
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'link'
+  }
+  isDragHovering.value = true
+}
+
+function handleDragLeave(event: DragEvent) {
+  const target = event.currentTarget as HTMLElement | null
+  const related = event.relatedTarget as Node | null
+  if (target && related && target.contains(related)) {
+    return
+  }
+  isDragHovering.value = false
+}
+
+function handleDrop(event: DragEvent) {
+  if (isDisabled.value) {
+    return
+  }
+  const nodeId = resolveDraggedNodeId(event)
+  isDragHovering.value = false
+  if (!nodeId) {
+    return
+  }
+  event.preventDefault()
+  if (isPicking.value) {
+    cancelPicking()
+  }
+  updateValue(nodeId)
+}
+
 const exposed: ExposedMethods = {
   cancelPicking,
 }
@@ -163,7 +233,14 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="node-picker">
-    <div class="node-picker__target">
+    <div
+      class="node-picker__target"
+      :class="{ 'node-picker__target--hover': isDragHovering }"
+      @dragenter="handleDragEnter"
+      @dragover="handleDragOver"
+      @dragleave="handleDragLeave"
+      @drop="handleDrop"
+    >
       <v-btn
         class="node-picker__icon-button"
         size="small"
@@ -208,6 +285,11 @@ onBeforeUnmount(() => {
   padding: 0 0.4rem;
   border-radius: 6px;
   background: rgba(233, 236, 241, 0.06);
+}
+
+.node-picker__target--hover {
+  border: 1px dashed rgba(77, 208, 225, 0.8);
+  background: rgba(77, 208, 225, 0.12);
 }
 
 .node-picker__icon-button {

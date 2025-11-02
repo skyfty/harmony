@@ -168,6 +168,7 @@ const LOCAL_EMBEDDED_ASSET_PREFIX = 'local::'
 const BEHAVIOR_PREFAB_PREVIEW_COLOR = '#4DB6AC'
 const NODE_PREFAB_FORMAT_VERSION = 1
 const NODE_PREFAB_PREVIEW_COLOR = '#7986CB'
+const PREFAB_PLACEMENT_EPSILON = 1e-3
 
 
 const DEFAULT_WALL_HEIGHT = WALL_DEFAULT_HEIGHT
@@ -5080,13 +5081,32 @@ export const useSceneStore = defineStore('scene', {
       const prefab = await this.loadNodePrefab(assetId)
       const assetCache = useAssetCacheStore()
       const duplicate = duplicateNodeTree(prefab.root, { assetCache, runtimeSnapshots: new Map() })
-      duplicate.position = cloneVector(position)
+      const spawnPosition = position.clone()
+      duplicate.position = toPlainVector(spawnPosition)
       componentManager.syncNode(duplicate)
 
       this.captureHistorySnapshot()
       const nextNodes = [...this.nodes, duplicate]
       this.nodes = nextNodes
       await this.ensureSceneAssetsReady({ nodes: [duplicate], showOverlay: false })
+
+      const boundingInfo = collectNodeBoundingInfo([duplicate])
+      const duplicateBounds = boundingInfo.get(duplicate.id)?.bounds ?? null
+      if (duplicateBounds) {
+        const currentMinY = duplicateBounds.min.y
+        const desiredMinY = spawnPosition.y
+        const offsetY = desiredMinY - currentMinY
+        if (Math.abs(offsetY) > PREFAB_PLACEMENT_EPSILON) {
+          const currentPosition = duplicate.position ?? { x: 0, y: 0, z: 0 }
+          duplicate.position = {
+            x: currentPosition.x,
+            y: currentPosition.y + offsetY,
+            z: currentPosition.z,
+          }
+          componentManager.syncNode(duplicate)
+          this.nodes = [...this.nodes]
+        }
+      }
       assetCache.recalculateUsage(this.nodes)
       this.setSelection([duplicate.id], { primaryId: duplicate.id })
       commitSceneSnapshot(this)
