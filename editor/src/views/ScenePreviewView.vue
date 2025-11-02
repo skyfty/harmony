@@ -1295,6 +1295,26 @@ function handleSetVisibilityEvent(event: Extract<BehaviorRuntimeEvent, { type: '
 	}
 }
 
+function handleTriggerBehaviorEvent(event: Extract<BehaviorRuntimeEvent, { type: 'trigger-behavior' }>) {
+	const targetNodeId = event.targetNodeId || event.nodeId
+	if (!targetNodeId) {
+		console.warn('[ScenePreview] Trigger behavior skipped: no target node')
+		return
+	}
+	const sequenceId = event.targetSequenceId && event.targetSequenceId.trim().length ? event.targetSequenceId : null
+	const followUps = triggerBehaviorAction(
+		targetNodeId,
+		'perform',
+		{
+			payload: {
+				sourceNodeId: event.nodeId,
+			},
+		},
+		sequenceId ? { sequenceId } : {},
+	)
+	processBehaviorEvents(followUps)
+}
+
 function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watch-node' }>) {
 	const activeCamera = camera
 	if (!activeCamera) {
@@ -1361,6 +1381,9 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 			break
 		case 'lantern':
 			presentLanternSlides(event)
+			break
+		case 'trigger-behavior':
+			handleTriggerBehaviorEvent(event)
 			break
 		case 'watch-node':
 			handleWatchNodeEvent(event)

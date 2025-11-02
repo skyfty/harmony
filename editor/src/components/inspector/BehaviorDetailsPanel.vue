@@ -21,6 +21,7 @@ import WatchParams from '@/components/inspector/behavior/WatchParams.vue'
 import ShowParams from '@/components/inspector/behavior/ShowParams.vue'
 import HideParams from '@/components/inspector/behavior/HideParams.vue'
 import LanternParams from '@/components/inspector/behavior/LanternParams.vue'
+import TriggerParams from '@/components/inspector/behavior/TriggerParams.vue'
 
 type PanelMode = 'create' | 'edit'
 type DragSource = 'palette' | 'sequence' | null
@@ -76,6 +77,7 @@ const PARAMETER_COMPONENTS: Partial<Record<BehaviorScriptType, unknown>> = {
   show: ShowParams,
   hide: HideParams,
   lantern: LanternParams,
+  trigger: TriggerParams,
 }
 
 function normalizeBehaviorName(name: string | null | undefined): string {

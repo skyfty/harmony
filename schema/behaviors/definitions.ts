@@ -16,6 +16,7 @@ import type {
   LanternSlideLayout,
   HideBehaviorParams,
   WatchBehaviorParams,
+  TriggerBehaviorParams,
 } from '../index'
 
 export interface BehaviorActionDefinition {
@@ -214,6 +215,18 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
       return {}
     },
   },
+  {
+    id: 'trigger',
+    label: 'Trigger Behavior',
+    description: 'Invoke a perform behavior sequence on another node.',
+    icon: 'mdi-play-circle-outline',
+    createDefaultParams(): TriggerBehaviorParams {
+      return {
+        targetNodeId: null,
+        sequenceId: null,
+      }
+    },
+  },
 ]
 
 let sequenceIdCounter = 0
@@ -337,6 +350,16 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
         type: 'look',
         params: {},
       }
+    case 'trigger': {
+      const params = binding.params as TriggerBehaviorParams | undefined
+      return {
+        type: 'trigger',
+        params: {
+          targetNodeId: params?.targetNodeId ?? null,
+          sequenceId: params?.sequenceId ?? null,
+        },
+      }
+    }
   }
   return binding
 }
@@ -534,6 +557,16 @@ export function ensureBehaviorParams(
           type: 'look',
           params: {},
         }
+      case 'trigger': {
+        const params = script.params as Partial<TriggerBehaviorParams> | undefined
+        return {
+          type: 'trigger',
+          params: {
+            targetNodeId: params?.targetNodeId ?? null,
+            sequenceId: params?.sequenceId ?? null,
+          },
+        }
+      }
     }
   }
   return script

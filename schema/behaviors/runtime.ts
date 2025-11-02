@@ -11,6 +11,7 @@ import type {
   ShowAlertBehaviorParams,
   ShowBehaviorParams,
   WatchBehaviorParams,
+  TriggerBehaviorParams,
 } from '../index'
 import { behaviorMapToList, cloneBehaviorList, ensureBehaviorParams } from './definitions'
 
@@ -101,6 +102,16 @@ export type BehaviorRuntimeEvent =
       behaviorSequenceId: string
       behaviorId: string
       token: string
+    }
+  | {
+      type: 'trigger-behavior'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+      targetNodeId: string
+      targetSequenceId: string | null
     }
   | {
       type: 'sequence-complete'
@@ -456,6 +467,23 @@ function createVisibilityEvent(
   }
 }
 
+function createTriggerEvent(state: BehaviorSequenceState, behavior: SceneBehavior): BehaviorRuntimeEvent {
+  const params = behavior.script.params as TriggerBehaviorParams | undefined
+  const fallbackTarget = state.nodeId
+  const targetNodeId = params?.targetNodeId && params.targetNodeId.trim().length ? params.targetNodeId : fallbackTarget
+  const sequenceId = params?.sequenceId && params.sequenceId.trim().length ? params.sequenceId : null
+  return {
+    type: 'trigger-behavior',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+    targetNodeId,
+    targetSequenceId: sequenceId,
+  }
+}
+
 function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
   const events: BehaviorRuntimeEvent[] = []
   while (state.status === 'running' && state.index < state.steps.length) {
@@ -505,6 +533,10 @@ function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
       case 'look':
         events.push(createLookEvent(state, behavior))
         return events
+      case 'trigger':
+        events.push(createTriggerEvent(state, behavior))
+        state.index += 1
+        continue
       default:
         break
     }

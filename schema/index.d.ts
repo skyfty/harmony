@@ -152,6 +152,7 @@ export type BehaviorScriptType =
   | 'hide'
   | 'lantern'
   | 'look'
+  | 'trigger'
 
 export type MoveToFacingDirection = 'front' | 'back' | 'left' | 'right'
 
@@ -197,6 +198,13 @@ export interface ShowBehaviorParams {
 export interface HideBehaviorParams {
   /** Target scene node id that should be hidden. */
   targetNodeId: string | null
+}
+
+export interface TriggerBehaviorParams {
+  /** Node whose perform behaviors should be executed. */
+  targetNodeId: string | null
+  /** Optional sequence id identifying which perform behavior sequence to trigger. */
+  sequenceId: string | null
 }
 
 export type LanternSlideLayout = 'imageTop' | 'imageLeft' | 'imageRight'
@@ -250,6 +258,10 @@ export type SceneBehaviorScriptBinding =
   | {
       type: 'look'
       params: LookBehaviorParams
+    }
+  | {
+      type: 'trigger'
+      params: TriggerBehaviorParams
     }
 
 export interface SceneBehavior {
