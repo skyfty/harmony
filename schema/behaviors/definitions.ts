@@ -132,9 +132,10 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
     icon: 'mdi-camera-control',
     createDefaultParams(): MoveToBehaviorParams {
       return {
-        speed: 2,
+        targetNodeId: null,
+        speed: 10,
         facing: 'front',
-        offset: 2,
+        offset: 1,
       }
     },
   },
@@ -306,9 +307,10 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
       return {
         type: 'moveTo',
         params: {
-          speed: Math.max(0, params?.speed ?? 0),
+          targetNodeId: params?.targetNodeId ?? null,
+          speed: Math.max(0, params?.speed ?? 10),
           facing,
-          offset: Math.max(0, params?.offset ?? 0),
+          offset: Math.max(0, params?.offset ?? 1),
         },
       }
     }
@@ -525,9 +527,10 @@ export function ensureBehaviorParams(
         return {
           type: 'moveTo',
           params: {
-            speed: Math.max(0, params?.speed ?? 0),
+            targetNodeId: params?.targetNodeId ?? null,
+            speed: Math.max(0, params?.speed ?? 10),
             facing,
-            offset: Math.max(0, params?.offset ?? 0),
+            offset: Math.max(0, params?.offset ?? 1),
           },
         }
       }

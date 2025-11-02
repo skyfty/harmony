@@ -163,6 +163,8 @@ export interface DelayBehaviorParams {
 }
 
 export interface MoveToBehaviorParams {
+  /** Target scene node id the camera should move to. */
+  targetNodeId: string | null
   /** Camera travel speed in meters per second. */
   speed: number
   /** Camera orientation once positioned around the node. */

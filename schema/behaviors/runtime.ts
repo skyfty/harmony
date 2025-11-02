@@ -50,6 +50,7 @@ export type BehaviorRuntimeEvent =
       sequenceId: string
       behaviorSequenceId: string
       behaviorId: string
+      targetNodeId: string
       speed: number
       facing: MoveToFacingDirection
       offset: number
@@ -365,6 +366,9 @@ function createMoveCameraEvent(state: BehaviorSequenceState, behavior: SceneBeha
   })
   state.status = 'waiting'
   const params = behavior.script.params as MoveToBehaviorParams
+  const fallbackTarget = state.nodeId
+  const candidate = typeof params?.targetNodeId === 'string' ? params.targetNodeId.trim() : ''
+  const targetNodeId = candidate.length ? candidate : fallbackTarget
   return {
     type: 'move-camera',
     nodeId: state.nodeId,
@@ -372,9 +376,10 @@ function createMoveCameraEvent(state: BehaviorSequenceState, behavior: SceneBeha
     sequenceId: state.id,
     behaviorSequenceId: state.behaviorSequenceId,
     behaviorId: behavior.id,
-    speed: Math.max(0, params.speed ?? 0),
+    targetNodeId,
+    speed: Math.max(0, params.speed ?? 10),
     facing: params.facing ?? 'front',
-    offset: Math.max(0, params.offset ?? 0),
+    offset: Math.max(0, params.offset ?? 1),
     token,
   }
 }

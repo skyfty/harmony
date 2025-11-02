@@ -1244,7 +1244,7 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
 		resolveBehaviorToken(event.token, { type: 'fail', message: 'Camera unavailable' })
 		return
 	}
-	const focus = resolveNodeFocusPoint(event.nodeId, tempTarget)
+	const focus = resolveNodeFocusPoint(event.targetNodeId ?? event.nodeId, tempTarget)
 	if (!focus) {
 		resolveBehaviorToken(event.token, {
 			type: 'fail',
@@ -1253,7 +1253,7 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
 		return
 	}
 	const focusPoint = focus.clone()
-	const ownerObject = nodeObjectMap.get(event.nodeId) ?? null
+	const ownerObject = nodeObjectMap.get(event.targetNodeId ?? event.nodeId) ?? null
 	if (ownerObject) {
 		ownerObject.getWorldQuaternion(tempQuaternion)
 	} else {

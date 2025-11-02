@@ -140,7 +140,13 @@ function applyDefaultTarget(step: SceneBehavior): void {
     return
   }
   const scriptType = step.script.type
-  if (scriptType !== 'show' && scriptType !== 'hide' && scriptType !== 'watch' && scriptType !== 'animation') {
+  if (
+    scriptType !== 'show' &&
+    scriptType !== 'hide' &&
+    scriptType !== 'watch' &&
+    scriptType !== 'animation' &&
+    scriptType !== 'moveTo'
+  ) {
     return
   }
   const identifier = step.id
