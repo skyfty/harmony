@@ -5,8 +5,8 @@ import type { ProjectAsset } from '@/types/project-asset'
 import * as THREE from 'three'
 import type { GeometryType } from '@harmony/schema'
 
-import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from '@/utils/loader'
-import { createGeometry } from '@/utils/geometry'
+import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from '@schema/loader'
+import { createPrimitiveMesh } from '@schema/geometry'
 import { useFileDialog } from '@vueuse/core'
 import { useUiStore } from '@/stores/uiStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -467,11 +467,7 @@ function handleAddGroup() {
 }
 
 async function handleAddNode(geometry: GeometryType) {
-  const mesh = createGeometry(geometry)
-  mesh.name = geometry
-
-  mesh.castShadow = true
-  mesh.receiveShadow = true
+  const mesh = createPrimitiveMesh(geometry)
 
   let spawnY = 0
   const bufferGeometry = mesh.geometry as THREE.BufferGeometry

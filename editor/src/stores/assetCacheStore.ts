@@ -1,25 +1,12 @@
 import { defineStore } from 'pinia'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneNode } from '@harmony/schema'
+import type { AssetCacheEntry as SharedAssetCacheEntry, AssetCacheStatus as SharedAssetCacheStatus } from '@schema/assetCache'
 import { invalidateModelObject } from './modelObjectCache'
 
-export type AssetCacheStatus = 'idle' | 'downloading' | 'cached' | 'error'
+export type AssetCacheStatus = SharedAssetCacheStatus
 
-export interface AssetCacheEntry {
-  assetId: string
-  status: AssetCacheStatus
-  progress: number
-  error: string | null
-  blob: Blob | null
-  blobUrl: string | null
-  size: number
-  refCount: number
-  lastUsedAt: number
-  abortController: AbortController | null
-  mimeType: string | null
-  filename: string | null
-  downloadUrl: string | null
-}
+export type AssetCacheEntry = SharedAssetCacheEntry
 
 export interface AssetDownloadOptions {
   force?: boolean
@@ -290,6 +277,7 @@ function createDefaultEntry(assetId: string): AssetCacheEntry {
     error: null,
     blob: null,
     blobUrl: null,
+    arrayBuffer: null,
     size: 0,
     refCount: 0,
     lastUsedAt: 0,
@@ -305,6 +293,7 @@ function applyBlobToEntry(entry: AssetCacheEntry, payload: {
   mimeType: string | null
   filename: string | null
   downloadUrl: string | null
+  arrayBuffer?: ArrayBuffer | null
 }) {
   if (entry.blobUrl) {
     URL.revokeObjectURL(entry.blobUrl)
@@ -320,6 +309,7 @@ function applyBlobToEntry(entry: AssetCacheEntry, payload: {
   entry.mimeType = payload.mimeType
   entry.filename = payload.filename ?? `${entry.assetId}`
   entry.downloadUrl = payload.downloadUrl
+  entry.arrayBuffer = payload.arrayBuffer ?? null
 }
 
 export const useAssetCacheStore = defineStore('assetCache', {
@@ -384,11 +374,13 @@ export const useAssetCacheStore = defineStore('assetCache', {
         return null
       }
       const entry = this.ensureEntry(assetId)
+      const arrayBuffer = await stored.blob.arrayBuffer()
       applyBlobToEntry(entry, {
         blob: stored.blob,
         mimeType: stored.mimeType ?? stored.blob.type ?? null,
         filename: stored.filename,
         downloadUrl: stored.downloadUrl ?? null,
+        arrayBuffer,
       })
       entry.lastUsedAt = now()
       this.evictIfNeeded(assetId)
@@ -407,12 +399,14 @@ export const useAssetCacheStore = defineStore('assetCache', {
       const entry = this.ensureEntry(assetId)
       invalidateModelObject(assetId)
       const filename = payload.filename ?? (payload.blob instanceof File ? payload.blob.name : null)
+      const arrayBuffer = typeof payload.blob.arrayBuffer === 'function' ? await payload.blob.arrayBuffer() : null
 
       applyBlobToEntry(entry, {
         blob: payload.blob,
         mimeType: payload.mimeType ?? payload.blob.type ?? entry.mimeType ?? null,
         filename,
         downloadUrl: payload.downloadUrl ?? entry.downloadUrl ?? null,
+        arrayBuffer,
       })
 
       entry.size = payload.blob.size
@@ -552,6 +546,7 @@ export const useAssetCacheStore = defineStore('assetCache', {
         status: 'idle',
         blob: null,
         blobUrl: null,
+        arrayBuffer: null,
         progress: 0,
         size: 0,
         abortController: null,
@@ -586,6 +581,7 @@ export const useAssetCacheStore = defineStore('assetCache', {
 
       entry.blob = null
       entry.blobUrl = null
+      entry.arrayBuffer = null
       entry.status = 'idle'
       entry.progress = 0
       entry.size = 0

@@ -1,31 +1,17 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import type { GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
+import Loader, { type LoaderLoadedPayload } from '@schema/loader';
+import { AssetCache, AssetLoader, type AssetCacheEntry, type AssetSource } from './assetCache';
+import { SceneMaterialFactory, type MaterialAssetProvider, type MaterialAssetSource, textureSettingsSignature } from './material';
+import { createPrimitiveGeometry } from './geometry';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import type { 
-  SceneMaterialTextureSettings,
-  SceneMaterialProps,
-  SceneJsonExportDocument, 
-  SceneMaterial, SceneNode, 
-  SceneNodeMaterial, 
-  SceneMaterialTextureSlotMap,
+import type {
+  SceneJsonExportDocument,
+  SceneMaterial,
+  SceneNode,
   SceneNodeComponentMap,
- } from '@harmony/schema';
-
-const DEFAULT_TEXTURE_SETTINGS: SceneMaterialTextureSettings = {
-  wrapS: 'ClampToEdgeWrapping',
-  wrapT: 'ClampToEdgeWrapping',
-  wrapR: 'ClampToEdgeWrapping',
-  offset: { x: 0, y: 0 },
-  repeat: { x: 1, y: 1 },
-  rotation: 0,
-  center: { x: 0, y: 0 },
-  matrixAutoUpdate: true,
-  generateMipmaps: true,
-  premultiplyAlpha: false,
-  flipY: true,
-};
+  SceneNodeMaterial,
+  SceneMaterialTextureSettings,
+} from '@harmony/schema';
 declare const uni: {
   base64ToArrayBuffer?: (input: string) => ArrayBuffer;
   request?: (options: {
@@ -53,31 +39,6 @@ type SceneNodeWithExtras = SceneNode & {
   components?: SceneNodeComponentMap;
 };
 
-interface AssetSourceArrayBuffer {
-  kind: 'arraybuffer';
-  data: ArrayBuffer;
-}
-
-interface AssetSourceDataUrl {
-  kind: 'data-url';
-  dataUrl: string;
-}
-
-interface AssetSourceRemoteUrl {
-  kind: 'remote-url';
-  url: string;
-}
-
-type AssetSource = AssetSourceArrayBuffer | AssetSourceDataUrl | AssetSourceRemoteUrl;
-
-const MATERIAL_TEXTURE_ASSIGNMENTS: Record<keyof SceneMaterialTextureSlotMap, { key: string; colorSpace?: 'srgb' | 'linear' }> = {
-  albedo: { key: 'map', colorSpace: 'srgb' },
-  normal: { key: 'normalMap' },
-  metalness: { key: 'metalnessMap' },
-  roughness: { key: 'roughnessMap' },
-  ao: { key: 'aoMap' },
-  emissive: { key: 'emissiveMap', colorSpace: 'srgb' },
-};
 
 function extractPresetRelativePath(candidate: string): string | null {
   if (!candidate) {
@@ -133,47 +94,106 @@ export interface SceneGraphBuildResult {
   warnings: string[];
 }
 
+export type SceneGraphResourceKind = 'asset' | 'texture' | 'mesh';
+
+export interface SceneGraphResourceProgress {
+  total: number;
+  loaded: number;
+  kind: SceneGraphResourceKind;
+  assetId: string | null;
+  message?: string;
+}
+
 export interface SceneGraphBuildOptions {
   enableGround?: boolean;
   presetAssetBaseUrl?: string;
   resolveAssetUrl?: (assetId: string) => string | Promise<string | null> | null | undefined;
   assetOverrides?: Record<string, string | ArrayBuffer>;
+  onProgress?: (progress: SceneGraphResourceProgress) => void;
 }
 
-class ResourceCache {
+class ResourceCache implements MaterialAssetProvider {
   private packageEntries: Map<string, { provider: string; value: string } | null> = new Map();
-  private assetSourceCache: Map<string, Promise<AssetSource | null>> = new Map();
+  private readonly assetEntryCache = new Map<string, Promise<AssetCacheEntry | null>>();
   private readonly document: SceneJsonExportDocument;
   private readonly options: SceneGraphBuildOptions;
   private readonly warn: (message: string) => void;
+  private readonly assetLoader: AssetLoader;
 
   constructor(
     document: SceneJsonExportDocument,
     options: SceneGraphBuildOptions,
     warn: (message: string) => void,
+    assetLoader: AssetLoader,
   ) {
     this.document = document;
     this.options = options;
     this.warn = warn;
+    this.assetLoader = assetLoader;
   }
 
-  async acquireAssetSource(assetId: string): Promise<AssetSource | null> {
+  async acquireAssetSource(assetId: string): Promise<MaterialAssetSource | null> {
+    const entry = await this.acquireAssetEntry(assetId);
+    if (!entry) {
+      return null;
+    }
+    if (entry.arrayBuffer && entry.arrayBuffer.byteLength) {
+      return { kind: 'arraybuffer', data: entry.arrayBuffer };
+    }
+    if (entry.blobUrl) {
+      return { kind: 'remote-url', url: entry.blobUrl };
+    }
+    if (entry.downloadUrl) {
+      return { kind: 'remote-url', url: entry.downloadUrl };
+    }
+    return null;
+  }
+
+  async acquireAssetEntry(assetId: string): Promise<AssetCacheEntry | null> {
     if (!assetId) {
       return null;
     }
-    if (this.assetSourceCache.has(assetId)) {
-      return this.assetSourceCache.get(assetId)!;
+    const cached = this.assetLoader.getCache().getEntry(assetId);
+    if (cached?.status === 'cached') {
+      this.assetLoader.getCache().touch(assetId);
     }
-    const pending = this.computeAssetSource(assetId).catch((error) => {
-      console.warn('获取资源失败', assetId, error);
-      this.warn(`无法加载资源 ${assetId}`);
-      return null;
-    });
-    this.assetSourceCache.set(assetId, pending);
+    if (this.assetEntryCache.has(assetId)) {
+      return this.assetEntryCache.get(assetId)!;
+    }
+
+    const pending = this.resolveAssetSource(assetId)
+      .then(async (source) => {
+        if (!source) {
+          return null;
+        }
+        try {
+          const entry = await this.assetLoader.load(assetId, source);
+          this.assetLoader.getCache().registerUsage(assetId);
+          return entry;
+        } catch (error) {
+          console.warn('资源加载失败', assetId, error);
+          this.warn(`无法加载资源 ${assetId}`);
+          return null;
+        }
+      })
+      .then((entry) => {
+        if (!entry) {
+          this.assetEntryCache.delete(assetId);
+        }
+        return entry;
+      })
+      .catch((error) => {
+        console.warn('获取资源来源失败', assetId, error);
+        this.warn(`无法解析资源 ${assetId}`);
+        this.assetEntryCache.delete(assetId);
+        return null;
+      });
+
+    this.assetEntryCache.set(assetId, pending);
     return pending;
   }
 
-  private async computeAssetSource(assetId: string): Promise<AssetSource | null> {
+  private async resolveAssetSource(assetId: string): Promise<AssetSource | null> {
     const override = this.resolveOverride(assetId);
     if (override) {
       return override;
@@ -232,10 +252,10 @@ class ResourceCache {
       if (entry.startsWith('http://') || entry.startsWith('https://')) {
         return { kind: 'remote-url', url: entry };
       }
-    }
-    if (typeof entry === 'string') {
       const buffer = this.base64ToArrayBuffer(entry);
-      return buffer ? { kind: 'arraybuffer', data: buffer } : null;
+      if (buffer) {
+        return { kind: 'arraybuffer', data: buffer };
+      }
     }
     if (entry instanceof ArrayBuffer) {
       return { kind: 'arraybuffer', data: entry };
@@ -301,7 +321,11 @@ class ResourceCache {
     return null;
   }
 
-  private async resolvePackageEntry(assetId: string, provider: string, value: string): Promise<AssetSource | null> {
+  private async resolvePackageEntry(
+    assetId: string,
+    provider: string,
+    value: string,
+  ): Promise<AssetSource | null> {
     if (typeof value === 'string' && value.startsWith('data:')) {
       return { kind: 'data-url', dataUrl: value };
     }
@@ -379,18 +403,25 @@ class ResourceCache {
   }
 }
 
+type MeshTemplate = {
+  scene: THREE.Object3D;
+  animations: THREE.AnimationClip[];
+};
+
 class SceneGraphBuilder {
   private readonly root: THREE.Group;
   private readonly warnings: string[] = [];
-  private readonly materialTemplates = new Map<string, THREE.Material>();
-  private readonly textureCache = new Map<string, Promise<THREE.Texture | null>>();
   private readonly resourceCache: ResourceCache;
   private readonly loadingManager = new THREE.LoadingManager();
-  private readonly textureLoader: THREE.TextureLoader;
-  private readonly gltfLoader: GLTFLoader;
-  private readonly dracoLoader: DRACOLoader;
-  private readonly disposableUrls: string[] = [];
+  private readonly materialFactory: SceneMaterialFactory;
+  private readonly binaryCache = new AssetCache();
+  private readonly assetLoader = new AssetLoader(this.binaryCache);
+  private readonly meshTemplateCache = new Map<string, MeshTemplate>();
+  private readonly pendingMeshLoads = new Map<string, Promise<MeshTemplate | null>>();
   private readonly document: SceneJsonExportDocument;
+  private readonly onProgress?: (progress: SceneGraphResourceProgress) => void;
+  private progressTotal = 0;
+  private progressLoaded = 0;
 
   constructor(
     document: SceneJsonExportDocument,
@@ -399,18 +430,21 @@ class SceneGraphBuilder {
     this.document = document;
     this.root = new THREE.Group();
     this.root.name = document.name ?? 'Scene';
-    this.textureLoader = new THREE.TextureLoader(this.loadingManager);
-    this.gltfLoader = new GLTFLoader(this.loadingManager);
-    this.dracoLoader = new DRACOLoader(this.loadingManager);
-    this.dracoLoader.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
-    this.gltfLoader.setDRACOLoader(this.dracoLoader);
-    this.resourceCache = new ResourceCache(document, options, (message) => this.warn(message));
+    this.resourceCache = new ResourceCache(document, options, (message) => this.warn(message), this.assetLoader);
+    this.materialFactory = new SceneMaterialFactory({
+      provider: this.resourceCache,
+      loadingManager: this.loadingManager,
+      warn: (message) => this.warn(message),
+    });
+    this.onProgress = options.onProgress;
   }
 
   async build(): Promise<THREE.Group> {
-    await this.prepareMaterialTemplates();
-    const nodes = Array.isArray(this.document.nodes) ? this.document.nodes : [];
-    await this.buildNodes(nodes as SceneNodeWithExtras[], this.root);
+    const materials = Array.isArray(this.document.materials) ? (this.document.materials as SceneMaterial[]) : [];
+    const nodes = Array.isArray(this.document.nodes) ? (this.document.nodes as SceneNodeWithExtras[]) : [];
+    await this.preloadAssets(materials, nodes);
+    await this.materialFactory.prepareTemplates(materials);
+    await this.buildNodes(nodes, this.root);
     return this.root;
   }
 
@@ -419,15 +453,9 @@ class SceneGraphBuilder {
   }
 
   dispose(): void {
-    this.disposableUrls.forEach((url) => {
-      try {
-        URL.revokeObjectURL(url);
-      } catch (_error) {
-        /* noop */
-      }
-    });
-    this.disposableUrls.length = 0;
-    this.dracoLoader.dispose();
+    this.materialFactory.dispose();
+    this.meshTemplateCache.clear();
+    this.pendingMeshLoads.clear();
   }
 
   private warn(message: string): void {
@@ -437,21 +465,211 @@ class SceneGraphBuilder {
     this.warnings.push(message);
   }
 
-  private async prepareMaterialTemplates(): Promise<void> {
-    const list = Array.isArray(this.document.materials) ? this.document.materials : [];
-    for (const material of list) {
-      if (!material || typeof material !== 'object') {
+  private beginProgress(total: number): void {
+    this.progressTotal = total;
+    this.progressLoaded = 0;
+    if (!this.onProgress) {
+      return;
+    }
+    const message = total > 0 ? '开始加载资源' : '无需加载额外资源';
+    this.onProgress({
+      total,
+      loaded: 0,
+      kind: 'asset',
+      assetId: null,
+      message,
+    });
+  }
+
+  private incrementProgress(kind: SceneGraphResourceKind, assetId: string | null, message?: string): void {
+    if (!this.onProgress) {
+      return;
+    }
+    if (this.progressTotal > 0) {
+      this.progressLoaded = Math.min(this.progressLoaded + 1, this.progressTotal);
+    }
+    this.onProgress({
+      total: this.progressTotal,
+      loaded: this.progressLoaded,
+      kind,
+      assetId,
+      message,
+    });
+  }
+
+  private finalizeProgress(message = '资源加载完成'): void {
+    if (!this.onProgress) {
+      return;
+    }
+    if (this.progressTotal > 0 && this.progressLoaded < this.progressTotal) {
+      this.progressLoaded = this.progressTotal;
+    }
+    this.onProgress({
+      total: this.progressTotal,
+      loaded: this.progressLoaded,
+      kind: 'asset',
+      assetId: null,
+      message,
+    });
+  }
+
+  private async preloadAssets(
+    materials: SceneMaterial[],
+    nodes: SceneNodeWithExtras[],
+  ): Promise<void> {
+    const textureRequests = this.collectTexturePreloadRequests(materials, nodes);
+    const meshAssetIds = this.collectMeshAssetIds(nodes);
+    const total = textureRequests.length + meshAssetIds.length;
+    this.beginProgress(total);
+    if (total === 0) {
+      this.finalizeProgress();
+      return;
+    }
+
+    const tasks: Promise<void>[] = [];
+
+    textureRequests.forEach((request) => {
+      tasks.push(
+        this.preloadTextureAsset(request.assetId, request.settings).finally(() => {
+          this.incrementProgress('texture', request.assetId, `纹理 ${request.assetId}`);
+        }),
+      );
+    });
+
+    meshAssetIds.forEach((assetId) => {
+      tasks.push(
+        this.preloadMeshAsset(assetId).finally(() => {
+          this.incrementProgress('mesh', assetId, `模型 ${assetId}`);
+        }),
+      );
+    });
+
+    await Promise.all(tasks);
+    this.finalizeProgress();
+  }
+
+  private collectTexturePreloadRequests(
+    materials: SceneMaterial[],
+    nodes: SceneNodeWithExtras[],
+  ): Array<{ assetId: string; settings: SceneMaterialTextureSettings | null }> {
+    const requests = new Map<string, { assetId: string; settings: SceneMaterialTextureSettings | null }>();
+
+    const enqueue = (
+      candidate: { assetId?: string; settings?: SceneMaterialTextureSettings | null } | null | undefined,
+    ): void => {
+      if (!candidate || typeof candidate.assetId !== 'string' || !candidate.assetId) {
+        return;
+      }
+      const signature = `${candidate.assetId}::${textureSettingsSignature(candidate.settings ?? null)}`;
+      if (!requests.has(signature)) {
+        requests.set(signature, {
+          assetId: candidate.assetId,
+          settings: candidate.settings ?? null,
+        });
+      }
+    };
+
+    materials.forEach((material) => {
+      if (!material) {
+        return;
+      }
+      const textures = material.textures ?? {};
+      Object.values(textures).forEach((ref) => {
+        enqueue(ref as { assetId?: string; settings?: SceneMaterialTextureSettings | null } | null);
+      });
+    });
+
+    const stack: SceneNodeWithExtras[] = [...nodes];
+    while (stack.length) {
+      const node = stack.pop();
+      if (!node) {
         continue;
       }
-      try {
-        const instance = await this.instantiateMaterial(material);
-        if (instance && material.id) {
-          this.materialTemplates.set(material.id, instance);
-        }
-      } catch (error) {
-        console.warn('创建材质失败', material.id, error);
-        this.warn(`材质 ${material.name || material.id} 初始化失败`);
+      if (Array.isArray(node.materials)) {
+        node.materials.forEach((entry) => {
+          if (!entry) {
+            return;
+          }
+          const textures = entry.textures ?? {};
+          Object.values(textures).forEach((ref) => {
+            enqueue(ref as { assetId?: string; settings?: SceneMaterialTextureSettings | null } | null);
+          });
+        });
       }
+      if (Array.isArray(node.children) && node.children.length) {
+        stack.push(...(node.children as SceneNodeWithExtras[]));
+      }
+    }
+
+    return Array.from(requests.values());
+  }
+
+  private collectMeshAssetIds(nodes: SceneNodeWithExtras[]): string[] {
+    const ids = new Set<string>();
+    const stack: SceneNodeWithExtras[] = [...nodes];
+    while (stack.length) {
+      const node = stack.pop();
+      if (!node) {
+        continue;
+      }
+      if (typeof node.sourceAssetId === 'string' && node.sourceAssetId) {
+        ids.add(node.sourceAssetId);
+      }
+      if (Array.isArray(node.children) && node.children.length) {
+        stack.push(...(node.children as SceneNodeWithExtras[]));
+      }
+    }
+    return Array.from(ids);
+  }
+
+  private async preloadTextureAsset(
+    assetId: string,
+    settings: SceneMaterialTextureSettings | null,
+  ): Promise<void> {
+    if (!assetId) {
+      return;
+    }
+    try {
+      await this.materialFactory.preloadTexture(assetId, settings ?? null);
+    } catch (error) {
+      console.warn('纹理预加载失败', assetId, error);
+      this.warn(`纹理 ${assetId} 预加载失败`);
+    }
+  }
+
+  private async preloadMeshAsset(assetId: string): Promise<void> {
+    if (!assetId) {
+      return;
+    }
+    try {
+      await this.warmMeshAsset(assetId);
+    } catch (error) {
+      console.warn('模型预加载失败', assetId, error);
+      this.warn(`模型 ${assetId} 预加载失败`);
+    }
+  }
+
+  private async warmMeshAsset(assetId: string): Promise<void> {
+    if (!assetId || this.meshTemplateCache.has(assetId)) {
+      return;
+    }
+
+    const existing = this.pendingMeshLoads.get(assetId);
+    if (existing) {
+      await existing;
+      return;
+    }
+
+    const pending = this.fetchAndParseMesh(assetId);
+    this.pendingMeshLoads.set(assetId, pending);
+
+    try {
+      const base = await pending;
+      if (base) {
+        this.meshTemplateCache.set(assetId, base);
+      }
+    } finally {
+      this.pendingMeshLoads.delete(assetId);
     }
   }
 
@@ -605,7 +823,7 @@ class SceneGraphBuilder {
 
   private async buildPrimitiveNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
     const materials = await this.resolveNodeMaterials(node);
-    const geometry = this.createGeometry(node.nodeType);
+    const geometry = createPrimitiveGeometry(node.nodeType);
     if (!geometry) {
       this.warn(`不支持的几何类型 ${node.nodeType}`);
       return null;
@@ -640,450 +858,119 @@ class SceneGraphBuilder {
   }
 
   private async resolveNodeMaterials(node: SceneNodeWithExtras): Promise<THREE.Material[]> {
-    if (!Array.isArray(node.materials) || !node.materials.length) {
-      return [this.createDefaultMaterial('#ffffff')];
-    }
-
-    const resolved: THREE.Material[] = [];
-    for (const entry of node.materials as SceneNodeMaterial[]) {
-      if (!entry) {
-        continue;
-      }
-      try {
-        const material = await this.createMaterialForNode(entry);
-        if (material) {
-          resolved.push(material);
-        }
-      } catch (error) {
-        console.warn('节点材质创建失败', entry, error);
-        this.warn(`节点 ${node.name ?? node.id} 初始化材质失败`);
-      }
-    }
-
-    return resolved.length ? resolved : [this.createDefaultMaterial('#ffffff')];
-  }
-
-  private createDefaultMaterial(colorHex: string): THREE.Material {
-    const material = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(colorHex),
-      metalness: 0.2,
-      roughness: 0.7,
+    return this.materialFactory.resolveNodeMaterials(node.materials as SceneNodeMaterial[] | null | undefined, {
+      nodeId: node.id,
+      nodeName: node.name,
     });
-    material.side = THREE.DoubleSide;
-    material.name = 'Default Material';
-    return material;
-  }
-
-  private async createMaterialForNode(entry: SceneNodeMaterial): Promise<THREE.Material | null> {
-    if (entry.materialId) {
-      const template = this.materialTemplates.get(entry.materialId);
-      if (template) {
-        const clone = template.clone();
-        this.applyMaterialProps(clone, entry);
-        await this.applyMaterialTextures(clone, entry.textures);
-        return clone;
-      }
-    }
-  return this.instantiateMaterial(entry);
-  }
-
-  private async instantiateMaterial(material: SceneMaterial | SceneNodeMaterial): Promise<THREE.Material | null> {
-    const props = this.extractMaterialProps(material);
-    const type = material.type ;
-    const side = this.resolveMaterialSide(props.side);
-    const color = new THREE.Color(props.color);
-    const emissiveColor = new THREE.Color(props.emissive ?? '#000000');
-    let instance: THREE.Material | null = null;
-
-    switch (type) {
-      case 'MeshBasicMaterial':
-        instance = new THREE.MeshBasicMaterial({
-          color,
-          transparent: props.transparent,
-          opacity: props.opacity,
-          wireframe: props.wireframe,
-          side,
-        });
-        break;
-      case 'MeshLambertMaterial':
-        instance = new THREE.MeshLambertMaterial({
-          color,
-          emissive: emissiveColor,
-          emissiveIntensity: props.emissiveIntensity,
-          transparent: props.transparent,
-          opacity: props.opacity,
-          wireframe: props.wireframe,
-          side,
-        });
-        break;
-      case 'MeshPhongMaterial':
-        instance = new THREE.MeshPhongMaterial({
-          color,
-          emissive: emissiveColor,
-          emissiveIntensity: props.emissiveIntensity,
-          transparent: props.transparent,
-          opacity: props.opacity,
-          wireframe: props.wireframe,
-          side,
-        });
-        break;
-      case 'MeshToonMaterial':
-        instance = new THREE.MeshToonMaterial({
-          color,
-          transparent: props.transparent,
-          opacity: props.opacity,
-          wireframe: props.wireframe,
-          side,
-        });
-        break;
-      case 'MeshNormalMaterial':
-        instance = new THREE.MeshNormalMaterial({
-          flatShading: false,
-          transparent: props.transparent,
-          opacity: props.opacity,
-          side,
-        });
-        break;
-      case 'MeshPhysicalMaterial':
-        instance = new THREE.MeshPhysicalMaterial({
-          color,
-          metalness: props.metalness,
-          roughness: props.roughness,
-          emissive: emissiveColor,
-          emissiveIntensity: props.emissiveIntensity,
-          transparent: props.transparent,
-          opacity: props.opacity,
-          wireframe: props.wireframe,
-          side,
-        });
-        break;
-      case 'MeshStandardMaterial':
-      default:
-        instance = new THREE.MeshStandardMaterial({
-          color,
-          metalness: props.metalness,
-          roughness: props.roughness,
-          emissive: emissiveColor,
-          emissiveIntensity: props.emissiveIntensity,
-          transparent: props.transparent,
-          opacity: props.opacity,
-          wireframe: props.wireframe,
-          side,
-        });
-        break;
-    }
-
-    if (!instance) {
-      return null;
-    }
-
-    this.applyMaterialProps(instance, material);
-    await this.applyMaterialTextures(instance, props.textures);
-    return instance;
-  }
-
-  private extractMaterialProps(material: SceneMaterial | SceneNodeMaterial): SceneMaterialProps {
-    return {
-      color: material.color ?? '#ffffff',
-      transparent: material.transparent ?? false,
-      opacity: material.opacity ?? 1,
-      side: material.side ?? 'front',
-      wireframe: material.wireframe ?? false,
-      metalness: material.metalness ?? 0.5,
-      roughness: material.roughness ?? 0.5,
-      emissive: material.emissive ?? '#000000',
-      emissiveIntensity: material.emissiveIntensity ?? 0,
-      aoStrength: material.aoStrength ?? 1,
-      envMapIntensity: material.envMapIntensity ?? 1,
-      textures: (material.textures ?? {}) as SceneMaterialTextureSlotMap,
-    };
-  }
-
-  private resolveMaterialSide(side?: string): THREE.Side {
-    switch (side) {
-      case 'back':
-        return THREE.BackSide;
-      case 'double':
-        return THREE.DoubleSide;
-      case 'front':
-      default:
-        return THREE.FrontSide;
-    }
-  }
-
-  private applyMaterialProps(material: THREE.Material, props: SceneMaterial | SceneNodeMaterial): void {
-    const materialAny = material as Record<string, any>;
-    if (typeof props.transparent === 'boolean') {
-      materialAny.transparent = props.transparent;
-    }
-    if (typeof props.opacity === 'number') {
-      materialAny.opacity = props.opacity;
-    }
-    materialAny.side = this.resolveMaterialSide(props.side);
-
-    if (props.color && materialAny.color?.set) {
-      materialAny.color.set(props.color);
-    }
-    if (props.emissive && materialAny.emissive?.set) {
-      materialAny.emissive.set(props.emissive);
-    }
-    if (typeof props.emissiveIntensity === 'number' && 'emissiveIntensity' in materialAny) {
-      materialAny.emissiveIntensity = props.emissiveIntensity;
-    }
-    if (typeof props.wireframe === 'boolean') {
-      materialAny.wireframe = props.wireframe;
-    }
-    if (typeof props.metalness === 'number' && 'metalness' in materialAny) {
-      materialAny.metalness = props.metalness;
-    }
-    if (typeof props.roughness === 'number' && 'roughness' in materialAny) {
-      materialAny.roughness = props.roughness;
-    }
-    if (typeof props.envMapIntensity === 'number' && 'envMapIntensity' in materialAny) {
-      materialAny.envMapIntensity = props.envMapIntensity;
-    }
-    if (typeof props.aoStrength === 'number' && 'aoMapIntensity' in materialAny) {
-      materialAny.aoMapIntensity = props.aoStrength;
-    }
-
-    material.needsUpdate = true;
-  }
-
-  private async applyMaterialTextures(
-    material: THREE.Material,
-    textures?: SceneMaterialTextureSlotMap | null,
-  ): Promise<void> {
-    if (!textures) {
-      return;
-    }
-    const assignments = await this.resolveMaterialTextures(textures);
-    this.assignResolvedTextures(material, assignments);
-  }
-
-  private async resolveMaterialTextures(
-    textures: SceneMaterialTextureSlotMap,
-  ): Promise<Record<string, THREE.Texture>> {
-
-    const resolved: Record<string, THREE.Texture> = {};
-    const entries = Object.entries(textures) as Array<[keyof SceneMaterialTextureSlotMap, any]>;
-    await Promise.all(entries.map(async ([slot, ref]) => {
-      if (!ref || typeof ref !== 'object' || typeof ref.assetId !== 'string') {
-        return;
-      }
-
-      try {
-        const texture = await this.ensureTexture(ref.assetId, ref.settings ?? null);
-        if (texture) {
-          const assignment = MATERIAL_TEXTURE_ASSIGNMENTS[slot];
-          resolved[assignment.key] = texture;
-        }
-      } catch (error) {
-        console.warn('材质纹理加载失败', ref, error);
-        this.warn(`纹理 ${ref.assetId} 加载失败`);
-      }
-    }));
-    return resolved;
-  }
-
-  private assignResolvedTextures(material: THREE.Material, assignments: Record<string, THREE.Texture>): void {
-    if (!assignments || !material) {
-      return;
-    }
-    Object.entries(assignments).forEach(([key, texture]) => {
-      if (!texture) {
-        return;
-      }
-      const typed = material as unknown as Record<string, any>;
-      typed[key] = texture;
-    });
-    material.needsUpdate = true;
-  }
-
-  private async ensureTexture(
-    assetId: string,
-    settings: Partial<SceneMaterialTextureSettings> | null,
-  ): Promise<THREE.Texture | null> {
-    const signature = `${assetId}::${this.textureSettingsSignature(settings)}`;
-    if (this.textureCache.has(signature)) {
-      return this.textureCache.get(signature)!;
-    }
-    const pending = this.createTextureInstance(assetId, settings).catch((error) => {
-      console.warn('纹理加载失败', assetId, error);
-      this.warn(`纹理 ${assetId} 加载失败`);
-      return null;
-    });
-    this.textureCache.set(signature, pending);
-    return pending;
-  }
-
-  private async createTextureInstance(
-    assetId: string,
-    settings: Partial<SceneMaterialTextureSettings> | null,
-  ): Promise<THREE.Texture | null> {
-    const source = await this.resourceCache.acquireAssetSource(assetId);
-    if (!source) {
-      return null;
-    }
-    const url = await this.createTextureUrlFromSource(assetId, source);
-    if (!url) {
-      return null;
-    }
-    const texture = await this.loadTextureFromUrl(url);
-    if (!texture) {
-      return null;
-    }
-    this.applyTextureSettings(texture, settings);
-    return texture;
-  }
-
-  private async createTextureUrlFromSource(assetId: string, source: AssetSource): Promise<string | null> {
-    switch (source.kind) {
-      case 'remote-url':
-        return source.url;
-      case 'data-url':
-        return this.normalizeDataUrlMime(source.dataUrl, assetId);
-      case 'arraybuffer': {
-        const mime = this.inferMimeType(assetId) ?? 'application/octet-stream';
-        const blob = new Blob([source.data], { type: mime });
-        const url = URL.createObjectURL(blob);
-        this.disposableUrls.push(url);
-        return url;
-      }
-      default:
-        return null;
-    }
-  }
-
-  private async loadTextureFromUrl(url: string): Promise<THREE.Texture | null> {
-    return new Promise((resolve) => {
-      this.textureLoader.load(
-        url,
-        (texture: THREE.Texture) => {
-          resolve(texture);
-        },
-        undefined,
-        (error: unknown) => {
-          console.warn('纹理加载错误', error);
-          resolve(null);
-        },
-      );
-    });
-  }
-
-  private applyTextureSettings(texture: THREE.Texture, overrides: Partial<SceneMaterialTextureSettings> | null): void {
-    const settings = this.createTextureSettings(overrides);
-    texture.wrapS = this.resolveWrapMode(settings.wrapS);
-    texture.wrapT = this.resolveWrapMode(settings.wrapT);
-    if ('wrapR' in texture) {
-      (texture as any).wrapR = this.resolveWrapMode(settings.wrapR);
-    }
-
-    texture.offset.set(settings.offset.x, settings.offset.y);
-    texture.repeat.set(settings.repeat.x, settings.repeat.y);
-    texture.center.set(settings.center.x, settings.center.y);
-    texture.rotation = settings.rotation;
-    texture.matrixAutoUpdate = settings.matrixAutoUpdate;
-    texture.generateMipmaps = settings.generateMipmaps;
-    texture.premultiplyAlpha = settings.premultiplyAlpha;
-    texture.flipY = settings.flipY;
-    texture.needsUpdate = true;
-  }
-
-  private resolveWrapMode(mode: string): THREE.Wrapping {
-    switch (mode) {
-      case 'RepeatWrapping':
-        return THREE.RepeatWrapping;
-      case 'MirroredRepeatWrapping':
-        return THREE.MirroredRepeatWrapping;
-      case 'ClampToEdgeWrapping':
-      default:
-        return THREE.ClampToEdgeWrapping;
-    }
-  }
-
-  private createTextureSettings(overrides: Partial<SceneMaterialTextureSettings> | null | undefined): SceneMaterialTextureSettings {
-    const base = DEFAULT_TEXTURE_SETTINGS;
-    const candidate = overrides ?? {};
-    return {
-      wrapS: candidate.wrapS ?? base.wrapS,
-      wrapT: candidate.wrapT ?? base.wrapT,
-      wrapR: candidate.wrapR ?? base.wrapR,
-      offset: {
-        x: candidate.offset?.x ?? base.offset.x,
-        y: candidate.offset?.y ?? base.offset.y,
-      },
-      repeat: {
-        x: candidate.repeat?.x ?? base.repeat.x,
-        y: candidate.repeat?.y ?? base.repeat.y,
-      },
-      rotation: candidate.rotation ?? base.rotation,
-      center: {
-        x: candidate.center?.x ?? base.center.x,
-        y: candidate.center?.y ?? base.center.y,
-      },
-      matrixAutoUpdate: candidate.matrixAutoUpdate ?? base.matrixAutoUpdate,
-      generateMipmaps: candidate.generateMipmaps ?? base.generateMipmaps,
-      premultiplyAlpha: candidate.premultiplyAlpha ?? base.premultiplyAlpha,
-      flipY: candidate.flipY ?? base.flipY,
-    };
-  }
-
-  private textureSettingsSignature(settings: Partial<SceneMaterialTextureSettings> | null | undefined): string {
-    const resolved = this.createTextureSettings(settings);
-    return [
-      resolved.wrapS,
-      resolved.wrapT,
-      resolved.wrapR,
-      resolved.offset.x,
-      resolved.offset.y,
-      resolved.repeat.x,
-      resolved.repeat.y,
-      resolved.rotation,
-      resolved.center.x,
-      resolved.center.y,
-      resolved.matrixAutoUpdate ? 1 : 0,
-      resolved.generateMipmaps ? 1 : 0,
-      resolved.premultiplyAlpha ? 1 : 0,
-      resolved.flipY ? 1 : 0,
-    ].join('|');
   }
 
   private async loadAssetMesh(assetId: string): Promise<THREE.Object3D | null> {
-    const source = await this.resourceCache.acquireAssetSource(assetId);
-    if (!source) {
+    if (!assetId) {
+      return null;
+    }
+    if (this.meshTemplateCache.has(assetId)) {
+      return this.instantiateCachedMesh(this.meshTemplateCache.get(assetId)!);
+    }
+
+    await this.warmMeshAsset(assetId);
+
+    const base = this.meshTemplateCache.get(assetId);
+    return base ? this.instantiateCachedMesh(base) : null;
+  }
+
+  private instantiateCachedMesh(base: MeshTemplate): THREE.Object3D {
+    const prepared = cloneSkinned(base.scene);
+    if (base.animations?.length) {
+      const animations = base.animations.map((clip) => clip.clone());
+      (prepared as unknown as { animations?: THREE.AnimationClip[] }).animations = animations;
+      prepared.userData = prepared.userData ?? {};
+      prepared.userData.__animations = animations.map((clip) => clip.name);
+    }
+    this.prepareImportedObject(prepared);
+    return prepared;
+  }
+
+  private loadObjectFromFile(file: File): Promise<THREE.Object3D> {
+    return new Promise<THREE.Object3D>((resolve, reject) => {
+      const loader = new Loader()
+
+      const handleLoaded = (payload: LoaderLoadedPayload) => {
+        cleanup()
+        if (!payload) {
+          reject(new Error('解析资源失败'))
+          return
+        }
+        resolve(payload as THREE.Object3D)
+      }
+
+      const cleanup = () => {
+        loader.$off('loaded', handleLoaded)
+      }
+      loader.$on('loaded', handleLoaded)
+
+      try {
+        loader.loadFile(file)
+      } catch (error) {
+        cleanup()
+        reject(error)
+      }
+    })
+  }
+
+  private createFileFromEntry(assetId: string, entry: AssetCacheEntry): File | null {
+    const filename = entry.filename && entry.filename.trim().length ? entry.filename : `${assetId}.glb`;
+    const mimeType = entry.mimeType ?? 'application/octet-stream';
+
+    if (entry.blob instanceof File) {
+      return entry.blob;
+    }
+
+    if (entry.blob) {
+      try {
+        return new File([entry.blob], filename, { type: mimeType });
+      } catch (_error) {
+        /* noop */
+      }
+    }
+
+    if (entry.arrayBuffer) {
+      try {
+        return new File([entry.arrayBuffer], filename, { type: mimeType });
+      } catch (_error) {
+        if (typeof Blob !== 'undefined') {
+          try {
+            const blob = new Blob([entry.arrayBuffer], { type: mimeType });
+            return new File([blob], filename, { type: mimeType });
+          } catch (_innerError) {
+            /* noop */
+          }
+        }
+      }
+    }
+
+    if (entry.blob) {
       return null;
     }
 
-    let arrayBuffer: ArrayBuffer | null = null;
+    return null;
+  }
 
-    if (source.kind === 'arraybuffer') {
-      arrayBuffer = source.data;
-    } else if (source.kind === 'data-url') {
-      arrayBuffer = this.decodeDataUrl(source.dataUrl);
-
-    } else if (source.kind === 'remote-url') {
-      arrayBuffer = await this.downloadArrayBuffer(source.url);
+  private async fetchAndParseMesh(assetId: string): Promise<MeshTemplate | null> {
+    const entry = await this.resourceCache.acquireAssetEntry(assetId);
+    if (!entry) {
+      return null;
     }
 
-    if (!arrayBuffer) {
-      this.warn(`资源数据为空 ${assetId}`);
+    const file = this.createFileFromEntry(assetId, entry);
+    if (!file) {
+      this.warn(`无法创建文件对象 ${assetId}`);
       return null;
     }
 
     try {
-      const parsed = await this.parseGltf(arrayBuffer);
-      if (!parsed.root) {
-        this.warn(`GLTF 解析失败 ${assetId}`);
-        return null;
-      }
-      const prepared = cloneSkinned(parsed.root);
-      if (parsed.animations?.length) {
-        (prepared as unknown as { animations?: THREE.AnimationClip[] }).animations = parsed.animations.map((clip) => clip.clone());
-        prepared.userData = prepared.userData ?? {};
-        prepared.userData.__animations = parsed.animations.map((clip) => clip.name);
-      }
-      this.prepareImportedObject(prepared);
-      return prepared;
+      const parsed = await this.loadObjectFromFile(file);
+      const animations = (parsed as unknown as { animations?: THREE.AnimationClip[] }).animations ?? [];
+      return { scene: parsed, animations };
     } catch (error) {
       console.warn('GLTF 解析异常', assetId, error);
       this.warn(`模型 ${assetId} 解析失败`);
@@ -1111,208 +998,6 @@ class SceneGraphBuilder {
         }
       }
     });
-  }
-
-  private async parseGltf(buffer: ArrayBuffer): Promise<{ root: THREE.Object3D | null; animations: THREE.AnimationClip[] }> {
-    return new Promise((resolve, reject) => {
-      this.gltfLoader.parse(
-        buffer,
-        '',
-        (gltf: GLTF) => {
-          resolve({ root: gltf.scene ?? null, animations: Array.isArray(gltf.animations) ? gltf.animations : [] });
-        },
-        (error: unknown) => {
-          reject(error);
-        },
-      );
-    });
-  }
-
-
-  private decodeDataUrl(dataUrl: string): ArrayBuffer | null {
-    if (typeof dataUrl !== 'string') {
-      throw new TypeError('dataUrl must be a string');
-    }
-    const [, base64] = dataUrl.split(',');
-    const clean = (base64 ?? '').replace(/\s/g, '');
-    if (!clean) {
-      return new ArrayBuffer(0);
-    }
-    if (typeof uni !== 'undefined' && typeof uni?.base64ToArrayBuffer === 'function') {
-      try {
-        return uni.base64ToArrayBuffer(clean);
-      } catch (error) {
-        console.warn('base64 转换失败', error);
-      }
-    }
-    if (typeof atob === 'function') {
-      try {
-        const binary = atob(clean);
-        const length = binary.length;
-        const buffer = new Uint8Array(length);
-        for (let index = 0; index < length; index += 1) {
-          buffer[index] = binary.charCodeAt(index);
-        }
-        return buffer.buffer;
-      } catch (error) {
-        console.warn('base64 decode failed', error);
-      }
-    }
-    if (NodeBuffer) {
-      try {
-        const buf = NodeBuffer.from(clean, 'base64');
-        return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-      } catch (error) {
-        console.warn('buffer decode failed', error);
-      }
-    }
-    return null;
-  }
-  
-
-  private async downloadArrayBuffer(url: string): Promise<ArrayBuffer | null> {
-    if (!url) {
-      return null;
-    }
-
-    if (typeof fetch === 'function') {
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`下载失败 ${response.status}`);
-      }
-      return response.arrayBuffer();
-    }
-
-    if (typeof uni !== 'undefined' && uni && typeof uni.request === 'function') {
-      const request = uni.request.bind(uni) as typeof uni.request
-      return await new Promise((resolve, reject) => {
-        request({
-          url,
-          method: 'GET',
-          responseType: 'arraybuffer',
-          success: (res) => {
-            if ((res.statusCode === 200 || res.statusCode === undefined) && res.data) {
-              resolve(res.data as ArrayBuffer);
-              return;
-            }
-            reject(new Error(`下载失败: ${res.statusCode}`));
-          },
-          fail: (error: unknown) => {
-            reject(error instanceof Error ? error : new Error(String(error)));
-          },
-        });
-      });
-    }
-
-    return await new Promise((resolve, reject) => {
-      const request = new XMLHttpRequest();
-      request.open('GET', url, true);
-      request.responseType = 'arraybuffer';
-      request.onload = () => {
-        if (request.status >= 200 && request.status < 300) {
-          resolve(request.response);
-        } else {
-          reject(new Error(`下载失败 ${request.status}`));
-        }
-      };
-      request.onerror = () => reject(new Error('网络错误'));
-      request.send();
-    });
-  }
-
-  private normalizeDataUrlMime(dataUrl: string, assetId: string): string {
-    if (!dataUrl.startsWith('data:')) {
-      return dataUrl;
-    }
-    const commaIndex = dataUrl.indexOf(',');
-    if (commaIndex === -1) {
-      return dataUrl;
-    }
-    const header = dataUrl.slice(0, commaIndex);
-    if (header.includes(';base64')) {
-      return dataUrl;
-    }
-    const mime = this.inferMimeType(assetId) ?? 'application/octet-stream';
-    return `data:${mime};base64,${dataUrl.slice(commaIndex + 1)}`;
-  }
-
-  private inferMimeType(assetId: string): string | null {
-    const lower = assetId.toLowerCase();
-    if (lower.endsWith('.png')) {
-      return 'image/png';
-    }
-    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
-      return 'image/jpeg';
-    }
-    if (lower.endsWith('.webp')) {
-      return 'image/webp';
-    }
-    if (lower.endsWith('.ktx2')) {
-      return 'image/ktx2';
-    }
-    if (lower.endsWith('.ktx')) {
-      return 'image/ktx';
-    }
-    if (lower.endsWith('.hdr')) {
-      return 'image/vnd.radiance';
-    }
-    if (lower.endsWith('.dds')) {
-      return 'image/vnd-ms.dds';
-    }
-    if (lower.endsWith('.gif')) {
-      return 'image/gif';
-    }
-    if (lower.endsWith('.bmp')) {
-      return 'image/bmp';
-    }
-    if (lower.endsWith('.tga')) {
-      return 'image/x-tga';
-    }
-    if (lower.endsWith('.glb')) {
-      return 'model/gltf-binary';
-    }
-    if (lower.endsWith('.gltf')) {
-      return 'model/gltf+json';
-    }
-    return null;
-  }
-
-  private createGeometry(type: SceneNode['nodeType']): THREE.BufferGeometry | null {
-    switch (type) {
-      case 'Box':
-        return new THREE.BoxGeometry(1, 1, 1);
-      case 'Sphere':
-        return new THREE.SphereGeometry(0.5, 32, 16);
-      case 'Capsule':
-        return new THREE.CapsuleGeometry(0.5, 1, 16, 32);
-      case 'Circle':
-        return new THREE.CircleGeometry(0.5, 32);
-      case 'Cylinder':
-        return new THREE.CylinderGeometry(0.5, 0.5, 1.2, 32);
-      case 'Dodecahedron':
-        return new THREE.DodecahedronGeometry(0.6, 0);
-      case 'Icosahedron':
-        return new THREE.IcosahedronGeometry(0.6, 0);
-      case 'Lathe': {
-        const points: THREE.Vector2[] = [];
-        for (let i = 0; i < 10; i += 1) {
-          points.push(new THREE.Vector2(Math.sin(i * 0.2) * 0.5 + 0.5, (i - 5) * 0.2));
-        }
-        return new THREE.LatheGeometry(points, 24);
-      }
-      case 'Octahedron':
-        return new THREE.OctahedronGeometry(0.6, 0);
-      case 'Plane':
-        return new THREE.PlaneGeometry(1, 1, 1, 1);
-      case 'Ring':
-        return new THREE.RingGeometry(0.3, 0.6, 32);
-      case 'Torus':
-        return new THREE.TorusGeometry(0.5, 0.2, 16, 64);
-      case 'TorusKnot':
-        return new THREE.TorusKnotGeometry(0.4, 0.15, 120, 12);
-      default:
-        return new THREE.BoxGeometry(1, 1, 1);
-    }
   }
 
   private applyTransform(object: THREE.Object3D, node: SceneNode): void {

@@ -44,6 +44,20 @@ const warningMessages = ref<string[]>([])
 const isFirstPersonMouseControlEnabled = ref(true)
 const isVolumeMenuOpen = ref(false)
 
+const resourceProgress = reactive({
+	active: false,
+	loaded: 0,
+	total: 0,
+	label: '',
+})
+
+const resourceProgressPercent = computed(() => {
+	if (!resourceProgress.total) {
+		return resourceProgress.active ? 0 : 100
+	}
+	return Math.min(100, Math.round((resourceProgress.loaded / resourceProgress.total) * 100))
+})
+
 const previewComponentManager = new ComponentManager()
 previewComponentManager.registerDefinition(wallComponentDefinition)
 previewComponentManager.registerDefinition(behaviorComponentDefinition)
@@ -117,7 +131,10 @@ type AssetSourceResolution =
 	| { kind: 'inline-text'; text: string }
 	| { kind: 'raw'; data: ArrayBuffer }
 
-const presetAssetLookup = buildPresetAssetLookup()
+const {
+	assetUrlById: presetAssetLookup,
+	relativeByCanonical: presetAssetRelativeLookup,
+} = buildPresetAssetLookup()
 
 let renderer: THREE.WebGLRenderer | null = null
 let scene: THREE.Scene | null = null
@@ -433,40 +450,107 @@ function buildProviderUrl(provider: string, value: string): string | null {
 	return null
 }
 
+function canonicalizePresetRelativeKey(candidate: string): string | null {
+	const trimmed = candidate.trim()
+	if (!trimmed.length) {
+		return null
+	}
+	let relative = extractPresetRelativePath(trimmed)
+	if (!relative && trimmed.startsWith('preset:')) {
+		relative = trimmed.slice('preset:'.length)
+	}
+	const normalized = (relative ?? trimmed)
+		.replace(/^preset:/, '')
+		.replace(/^[\\/]+/, '')
+		.replace(/\\/g, '/')
+		.trim()
+	if (!normalized.length) {
+		return null
+	}
+	return normalized.toLowerCase()
+}
+
 function resolvePresetAssetUrl(assetId: string): string | null {
 	if (!assetId) {
 		return null
 	}
-	const normalizedId = assetId.startsWith('preset:') ? assetId : `preset:${assetId}`
-	const direct = presetAssetLookup.get(normalizedId) ?? presetAssetLookup.get(normalizedId.toLowerCase())
+	const trimmed = assetId.trim()
+	if (!trimmed.length) {
+		return null
+	}
+	const normalizedId = trimmed.startsWith('preset:') ? trimmed : `preset:${trimmed}`
+	const normalizedKey = normalizedId.replace(/\\/g, '/')
+	let direct = presetAssetLookup.get(normalizedKey)
+	if (!direct) {
+		direct = presetAssetLookup.get(normalizedKey.toLowerCase())
+	}
+	if (!direct) {
+		const canonical = canonicalizePresetRelativeKey(normalizedKey)
+		if (canonical) {
+			const relativeVariant = presetAssetRelativeLookup.get(canonical)
+			if (relativeVariant) {
+				const variantKey = `preset:${relativeVariant}`
+				const variantDirect =
+					presetAssetLookup.get(variantKey) ?? presetAssetLookup.get(variantKey.toLowerCase())
+				if (variantDirect) {
+					return variantDirect
+				}
+				return new URL(`../preset/${relativeVariant}`, import.meta.url).href
+			}
+		}
+	}
 	if (direct) {
 		return direct
 	}
-	const relative = normalizedId.replace(/^preset:/, '').replace(/^[\\/]+/, '').replace(/\\/g, '/')
-	if (relative) {
-		return `src/preset/${relative}`
+	const canonicalFallback = canonicalizePresetRelativeKey(normalizedKey)
+	if (canonicalFallback) {
+		const relativeVariant = presetAssetRelativeLookup.get(canonicalFallback)
+		if (relativeVariant) {
+			return new URL(`../preset/${relativeVariant}`, import.meta.url).href
+		}
+		return new URL(`../preset/${canonicalFallback}`, import.meta.url).href
 	}
-	return null
+	const relative = normalizedKey.replace(/^preset:/, '').replace(/^[\\/]+/, '').replace(/\\/g, '/')
+	if (!relative.length) {
+		return null
+	}
+	return new URL(`../preset/${relative}`, import.meta.url).href
 }
 
-function buildPresetAssetLookup(): Map<string, string> {
-	const lookup = new Map<string, string>()
+function buildPresetAssetLookup(): {
+	assetUrlById: Map<string, string>
+	relativeByCanonical: Map<string, string>
+} {
+	const urlLookup = new Map<string, string>()
+	const relativeLookup = new Map<string, string>()
 	const modules = import.meta.glob('../preset/**/*', {
 		eager: true,
 		import: 'default',
 		query: '?url',
 	}) as Record<string, string>
 	Object.entries(modules).forEach(([key, url]) => {
+		if (typeof url !== 'string' || !url.trim().length) {
+			return
+		}
 		const relative = extractPresetRelativePath(key)
 		if (!relative) {
 			return
 		}
 		const normalized = relative.replace(/^[\\/]+/, '').replace(/\\/g, '/')
+		if (!normalized.length) {
+			return
+		}
 		const lower = normalized.toLowerCase()
-		lookup.set(`preset:${normalized}`, url)
-		lookup.set(`preset:${lower}`, url)
+		urlLookup.set(`preset:${normalized}`, url)
+		urlLookup.set(`preset:${lower}`, url)
+		if (!relativeLookup.has(lower)) {
+			relativeLookup.set(lower, normalized)
+		}
 	})
-	return lookup
+	return {
+		assetUrlById: urlLookup,
+		relativeByCanonical: relativeLookup,
+	}
 }
 
 function extractPresetRelativePath(candidate: string): string | null {
@@ -2245,7 +2329,29 @@ async function updateScene(document: SceneJsonExportDocument) {
 		return
 	}
 	const previewRoot = rootGroup
-	const { root, warnings } = await buildSceneGraph(document)
+	resourceProgress.active = true
+	resourceProgress.loaded = 0
+	resourceProgress.total = 0
+	resourceProgress.label = '准备加载资源...'
+
+	let graphResult: Awaited<ReturnType<typeof buildSceneGraph>> | null = null
+	try {
+		graphResult = await buildSceneGraph(document, {
+			onProgress: (info) => {
+				resourceProgress.total = info.total
+				resourceProgress.loaded = info.loaded
+				resourceProgress.label = info.message || (info.assetId ? `加载 ${info.assetId}` : '')
+				resourceProgress.active = info.total > 0 && info.loaded < info.total
+			},
+		})
+	} finally {
+		resourceProgress.active = false
+		resourceProgress.label = ''
+	}
+	if (!graphResult) {
+		return
+	}
+	const { root, warnings } = graphResult
 	warningMessages.value = warnings
 	dismissBehaviorAlert()
 	resetBehaviorRuntime()
@@ -2418,6 +2524,18 @@ onBeforeUnmount(() => {
 <template>
 	<div class="scene-preview">
 		<div ref="containerRef" class="scene-preview__canvas"></div>
+		<div
+			v-if="resourceProgress.active"
+			class="scene-preview__preload-overlay"
+		>
+			<v-card class="scene-preview__preload-card" elevation="12">
+				<div class="scene-preview__preload-title">资源加载中</div>
+				<v-progress-linear :model-value="resourceProgressPercent" color="primary" height="6" rounded />
+				<div class="scene-preview__preload-label">
+					{{ resourceProgress.label || `已加载 ${resourceProgress.loaded} / ${resourceProgress.total}` }}
+				</div>
+			</v-card>
+		</div>
 		<div
 			v-if="statusMessage || formattedLastUpdate"
 			class="scene-preview__update-banner"
@@ -2728,6 +2846,40 @@ onBeforeUnmount(() => {
 	width: 100%;
 	height: 100%;
 	display: block;
+}
+
+.scene-preview__preload-overlay {
+	position: absolute;
+	top: 80px;
+	left: 50%;
+	transform: translateX(-50%);
+	z-index: 30;
+	pointer-events: none;
+}
+
+.scene-preview__preload-card {
+	min-width: 240px;
+	padding: 12px 16px;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	background: rgba(18, 18, 32, 0.92);
+	box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+	border-radius: 12px;
+	pointer-events: auto;
+}
+
+.scene-preview__preload-title {
+	font-size: 0.95rem;
+	font-weight: 600;
+	text-align: center;
+	color: #f5f7ff;
+}
+
+.scene-preview__preload-label {
+	font-size: 0.8rem;
+	text-align: center;
+	color: rgba(245, 247, 255, 0.75);
 }
 
 .scene-preview__update-banner {

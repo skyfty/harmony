@@ -33,7 +33,7 @@ import type { EditorTool } from '@/types/editor-tool'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { getCachedModelObject, getOrLoadModelObject } from '@/stores/modelObjectCache'
 import { loadObjectFromFile } from '@/utils/assetImport'
-import { createGeometry } from '@/utils/geometry'
+import { createPrimitiveMesh } from '@schema/geometry'
 import type { CameraProjectionMode, CameraControlMode } from '@/types/scene-viewport-settings'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SkyboxParameterKey } from '@/types/skybox'
@@ -6267,7 +6267,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     container.userData.nodeId = node.id
     object = container
   } else {
-    object = createGeometry(nodeType)
+  object = createPrimitiveMesh(nodeType)
     object.name = node.name
     object.userData.nodeId = node.id
   }

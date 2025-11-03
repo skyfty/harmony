@@ -1,6 +1,9 @@
 
 import * as THREE from 'three'
 
+export { AssetCache, AssetLoader } from './assetCache'
+export type { AssetCacheEntry, AssetCacheStatus, AssetSource, AssetLoadOptions } from './assetCache'
+
 export type Vector2Like = THREE.Vector2 | { x: number; y: number }
 export type Vector3Like = THREE.Vector3 | { x: number; y: number; z: number }
 
@@ -21,6 +24,35 @@ export type GeometryType =
   | 'TorusKnot';
 
 export type SceneNodeType = 'Mesh' | 'Light' | 'Group' | 'Camera' | GeometryType;
+
+export type PrimitiveNodeLike = GeometryType | SceneNodeType | string | null | undefined
+
+export interface PrimitiveGeometryOptions {
+  latheSegments?: number
+}
+
+export interface PrimitiveMeshOptions extends PrimitiveGeometryOptions {
+  material?: THREE.Material | THREE.Material[]
+  color?: THREE.ColorRepresentation
+  doubleSided?: boolean
+  castShadow?: boolean
+  receiveShadow?: boolean
+  name?: string | null
+}
+
+export function isGeometryType(candidate: PrimitiveNodeLike): candidate is GeometryType
+
+export function normalizeGeometryType(candidate: PrimitiveNodeLike): GeometryType
+
+export function createPrimitiveGeometry(
+  type: PrimitiveNodeLike,
+  options?: PrimitiveGeometryOptions,
+): THREE.BufferGeometry
+
+export function createPrimitiveMesh(
+  type: PrimitiveNodeLike,
+  options?: PrimitiveMeshOptions,
+): THREE.Mesh
 
 export type SceneMaterialSide = 'front' | 'back' | 'double';
 

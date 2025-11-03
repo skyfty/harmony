@@ -25,8 +25,28 @@
           <button class="viewer-behavior-button" @tap="dismissBehaviorAlert">确定</button>
         </view>
       </view>
-      <view v-if="loading" class="viewer-overlay">
-        <text>正在加载场景…</text>
+      <view
+        v-if="loading || resourcePreload.active"
+        class="viewer-overlay"
+      >
+        <view class="viewer-overlay__content">
+          <text class="viewer-overlay__message">
+            {{ resourcePreload.active ? '资源加载中…' : '正在加载场景…' }}
+          </text>
+          <progress
+            v-if="resourcePreload.active"
+            :percent="resourcePreloadPercent"
+            show-info
+            stroke-width="6"
+            class="viewer-overlay__progress"
+          />
+          <text
+            v-if="resourcePreload.active && resourcePreload.total"
+            class="viewer-overlay__caption"
+          >
+            {{ resourcePreload.label || `已加载 ${resourcePreload.loaded} / ${resourcePreload.total}` }}
+          </text>
+        </view>
       </view>
       <view v-if="error" class="viewer-overlay error">
         <text>{{ error }}</text>
@@ -42,7 +62,7 @@
 </template>
 
 <script setup lang="ts">
-import { effectScope, watchEffect, ref, computed, onUnmounted, watch } from 'vue';
+import { effectScope, watchEffect, ref, computed, onUnmounted, watch, reactive } from 'vue';
 import { onLoad, onUnload, onReady } from '@dcloudio/uni-app';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -83,6 +103,20 @@ const sceneEntry = computed<StoredSceneEntry | null>(() => {
 const loading = ref(true);
 const error = ref<string | null>(null);
 const warnings = ref<string[]>([]);
+
+const resourcePreload = reactive({
+  active: false,
+  loaded: 0,
+  total: 0,
+  label: '',
+});
+
+const resourcePreloadPercent = computed(() => {
+  if (!resourcePreload.total) {
+    return resourcePreload.active ? 0 : 100;
+  }
+  return Math.min(100, Math.round((resourcePreload.loaded / resourcePreload.total) * 100));
+});
 const SKY_ENVIRONMENT_INTENSITY = 0.35;
 const SKY_SCALE = 2500;
 const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
@@ -206,7 +240,10 @@ function indexSceneObjects(root: THREE.Object3D) {
 function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
   switch (event.type) {
     case 'show-alert':
-      presentBehaviorAlert(event.params.title ?? '', event.params.message ?? '');
+      const params = event.params;
+      const alertTitle = (params as { title?: string }).title ?? '提示';
+      const alertMessage = params.content ?? '';
+      presentBehaviorAlert(alertTitle, alertMessage);
       break;
     default:
       break;
@@ -574,7 +611,32 @@ async function initializeRenderer(sceneEntry: StoredSceneEntry, canvasResult: Us
 
   ensureSkyExists();
 
-  const graph = await buildSceneGraph(sceneEntry.scene, { enableGround: true });
+  resourcePreload.active = true;
+  resourcePreload.loaded = 0;
+  resourcePreload.total = 0;
+  resourcePreload.label = '准备加载资源...';
+
+  let graph: Awaited<ReturnType<typeof buildSceneGraph>> | null = null;
+  try {
+    graph = await buildSceneGraph(sceneEntry.scene, {
+      enableGround: true,
+      onProgress: (info) => {
+        resourcePreload.total = info.total;
+        resourcePreload.loaded = info.loaded;
+        resourcePreload.label = info.message || (info.assetId ? `加载 ${info.assetId}` : '');
+        resourcePreload.active = info.total > 0 && info.loaded < info.total;
+      },
+    });
+  } finally {
+    if (!resourcePreload.active || resourcePreload.loaded >= resourcePreload.total) {
+      resourcePreload.active = false;
+      resourcePreload.label = '';
+    }
+  }
+  if (!graph) {
+    return;
+  }
+
   if (graph.warnings.length) {
     warnings.value = graph.warnings;
   }
@@ -746,6 +808,29 @@ onUnmounted(() => {
   font-size: 14px;
   text-align: center;
   padding: 12px;
+}
+
+.viewer-overlay__content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 80%;
+  max-width: 320px;
+}
+
+.viewer-overlay__message {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.viewer-overlay__progress {
+  width: 100%;
+}
+
+.viewer-overlay__caption {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.75);
 }
 
 .viewer-overlay.error {

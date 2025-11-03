@@ -30,7 +30,7 @@ import type { SceneCameraState } from '@/types/scene-camera-state'
 import { useUiStore } from '@/stores/uiStore'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
-import Loader, { type LoaderProgressPayload } from '@/utils/loader'
+import Loader, { type LoaderProgressPayload } from '@schema/loader'
 import type { Object3D } from 'three'
 import {
   behaviorMapToList,
