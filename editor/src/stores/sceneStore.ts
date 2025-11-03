@@ -5632,7 +5632,6 @@ export const useSceneStore = defineStore('scene', {
 
       this.nodes = [node, ...this.nodes]
       this.setSelection([id])
-      commitSceneSnapshot(this)
 
       return node
     },
@@ -5747,8 +5746,8 @@ export const useSceneStore = defineStore('scene', {
         const object = shouldCacheModelObject ? baseObject.clone(true) : baseObject
         tagObjectWithNodeId(object, nodeId)
         registerRuntimeObject(nodeId, object)
-  componentManager.attachRuntime(target, object)
-  componentManager.syncNode(target)
+        componentManager.attachRuntime(target, object)
+        componentManager.syncNode(target)
         assetCache.registerUsage(asset.id)
         assetCache.touch(asset.id)
 
