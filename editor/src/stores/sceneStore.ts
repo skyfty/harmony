@@ -5713,8 +5713,8 @@ export const useSceneStore = defineStore('scene', {
 
     async finalizePlaceholderNode(nodeId: string, asset: ProjectAsset) {
       const assetCache = useAssetCacheStore()
-      const target = findNodeById(this.nodes, nodeId)
-      if (!target) {
+      const placeholder = findNodeById(this.nodes, nodeId)
+      if (!placeholder) {
         return
       }
 
@@ -5743,26 +5743,121 @@ export const useSceneStore = defineStore('scene', {
           throw new Error('资源加载失败')
         }
 
-        const object = shouldCacheModelObject ? baseObject.clone(true) : baseObject
-        tagObjectWithNodeId(object, nodeId)
-        registerRuntimeObject(nodeId, object)
-        componentManager.attachRuntime(target, object)
-        componentManager.syncNode(target)
+        const workingObject = baseObject.clone(true)
+        const parentMap = buildParentMap(this.nodes)
+        const parentId = parentMap.get(nodeId) ?? null
+        const siblingSource = parentId
+          ? (findNodeById(this.nodes, parentId)?.children ?? [])
+          : this.nodes
+        const placeholderIndex = siblingSource.findIndex((item) => item.id === nodeId)
+
+        const worldMatrix = computeWorldMatrixForNode(this.nodes, nodeId) ?? composeNodeMatrix(placeholder)
+        const parentWorldMatrix = parentId ? computeWorldMatrixForNode(this.nodes, parentId) : null
+
+        const worldPosition = new Vector3()
+        const worldQuaternion = new Quaternion()
+        const worldScale = new Vector3()
+        worldMatrix.decompose(worldPosition, worldQuaternion, worldScale)
+
+        const metrics = computeObjectMetrics(workingObject)
+        let baseY = 0
+        const minY = metrics.bounds.min.y
+        if (Number.isFinite(minY) && minY < 0) {
+          const BASE_OFFSET_EPSILON = 1e-3
+          baseY = Math.max(baseY, -minY + BASE_OFFSET_EPSILON)
+        }
+
+        const halfHeight = Math.abs(worldScale.y) * 0.5
+        const anchorWorldY = worldPosition.y - halfHeight
+        const finalWorldPosition = worldPosition.clone()
+        finalWorldPosition.y = anchorWorldY + baseY
+
+        const finalWorldMatrix = new Matrix4().compose(finalWorldPosition, worldQuaternion, worldScale)
+        const parentInverse = new Matrix4()
+        if (parentWorldMatrix) {
+          parentInverse.copy(parentWorldMatrix).invert()
+        } else {
+          parentInverse.identity()
+        }
+
+        const localMatrix = new Matrix4().multiplyMatrices(parentInverse, finalWorldMatrix)
+        const localPosition = new Vector3()
+        const localQuaternion = new Quaternion()
+        const localScale = new Vector3()
+        localMatrix.decompose(localPosition, localQuaternion, localScale)
+        const localEuler = new Euler().setFromQuaternion(localQuaternion, 'XYZ')
+
+        const newNodeId = generateUuid()
+        const nodeType = resolveSceneNodeTypeFromObject(workingObject)
+        const positionVector = toPlainVector(localPosition)
+        const scaleVector = toPlainVector(localScale)
+        const rotationVector: Vector3Like = { x: localEuler.x, y: localEuler.y, z: localEuler.z }
+
+        const { tree, node: removedPlaceholder } = detachNodeImmutable(this.nodes, nodeId)
+        if (!removedPlaceholder) {
+          throw new Error('占位节点不存在')
+        }
+
+        const rawOffset = (workingObject.userData?.offset as Vector3Like | undefined) ?? null
+        const offsetVector: Vector3Like = rawOffset
+          ? { x: rawOffset.x, y: rawOffset.y, z: rawOffset.z }
+          : { x: 0, y: 0, z: 0 }
+
+        const newNode: SceneNode = {
+          id: newNodeId,
+          name: asset.name,
+          nodeType,
+          materials: [],
+          position: positionVector,
+          rotation: rotationVector,
+          scale: scaleVector,
+          offset: offsetVector,
+          visible: placeholder.visible ?? true,
+          locked: placeholder.locked,
+          sourceAssetId: asset.id,
+        }
+
+        if (removedPlaceholder.children?.length) {
+          newNode.children = removedPlaceholder.children
+        }
+
+        const componentMap = normalizeNodeComponents(newNode, placeholder.components)
+        if (componentMap) {
+          newNode.components = componentMap
+        }
+
+        registerRuntimeObject(newNodeId, workingObject)
+        tagObjectWithNodeId(workingObject, newNodeId)
+        componentManager.attachRuntime(newNode, workingObject)
+        componentManager.syncNode(newNode)
+
+        if (parentId) {
+          const parent = findNodeById(tree, parentId)
+          if (parent) {
+            const children = parent.children ? [...parent.children] : []
+            const actualIndex = placeholderIndex >= 0 ? placeholderIndex : children.length
+            children.splice(actualIndex, 0, newNode)
+            parent.children = children
+          } else {
+            const actualIndex = placeholderIndex >= 0 ? placeholderIndex : tree.length
+            tree.splice(actualIndex, 0, newNode)
+          }
+        } else {
+          const actualIndex = placeholderIndex >= 0 ? placeholderIndex : tree.length
+          tree.splice(actualIndex, 0, newNode)
+        }
+
+        this.nodes = tree
+        this.setSelection([newNodeId])
+
         assetCache.registerUsage(asset.id)
         assetCache.touch(asset.id)
 
-        target.isPlaceholder = false
-        target.downloadStatus = undefined
-        target.downloadProgress = undefined
-        target.downloadError = null
-        target.name = asset.name
-
-        this.nodes = [...this.nodes]
         commitSceneSnapshot(this)
       } catch (error) {
-        target.isPlaceholder = true
-        target.downloadStatus = 'error'
-        target.downloadError = (error as Error).message ?? '资源加载失败'
+        placeholder.isPlaceholder = true
+        placeholder.downloadStatus = 'error'
+        placeholder.downloadError = (error as Error).message ?? '资源加载失败'
         this.nodes = [...this.nodes]
       }
     },
