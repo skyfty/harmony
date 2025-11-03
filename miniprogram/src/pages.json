@@ -2,11 +2,27 @@
   "pages": [
     {
       "path": "pages/index/index"
-    },
-    {
-      "path": "pages/scene-viewer/index"
     }
   ],
+  "subPackages": [
+    {
+      "root": "package-scene",
+      "pages": [
+        {
+          "path": "pages/scene-viewer/index"
+        }
+      ],
+      "independent": false
+    }
+  ],
+  "preloadRule": {
+    "pages/index/index": {
+      "network": "all",
+      "packages": [
+        "package-scene"
+      ]
+    }
+  },
   "globalStyle": {
     "navigationStyle": "custom",
     "navigationBarTextStyle": "white",

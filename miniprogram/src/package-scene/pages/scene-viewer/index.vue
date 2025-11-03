@@ -104,6 +104,8 @@ interface RenderContext {
   controls: OrbitControls;
 }
 
+const PRESET_ASSET_BASE_URL = '/package-scene/static/preset';
+
 const sceneStore = useSceneStore();
 const canvasId = `scene-viewer-${Date.now()}`;
 const currentSceneId = ref<string | null>(null);
@@ -806,6 +808,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   try {
     const buildOptions: SceneGraphBuildOptions = {
       enableGround: payload.enableGround ?? true,
+      presetAssetBaseUrl: payload.presetAssetBaseUrl || PRESET_ASSET_BASE_URL,
       onProgress: (info) => {
         resourcePreload.total = info.total;
         resourcePreload.loaded = info.loaded;
@@ -818,9 +821,6 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
     }
     if (payload.resolveAssetUrl) {
       buildOptions.resolveAssetUrl = payload.resolveAssetUrl;
-    }
-    if (payload.presetAssetBaseUrl) {
-      buildOptions.presetAssetBaseUrl = payload.presetAssetBaseUrl;
     }
     graph = await buildSceneGraph(payload.document, buildOptions);
   } finally {
