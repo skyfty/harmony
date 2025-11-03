@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneNode } from '@harmony/schema'
+import { fetchAssetBlob } from '@schema/assetCache'
 import type { AssetCacheEntry as SharedAssetCacheEntry, AssetCacheStatus as SharedAssetCacheStatus } from '@schema/assetCache'
 import { invalidateModelObject } from './modelObjectCache'
 
@@ -20,6 +21,34 @@ interface FetchedAssetData {
   blob: Blob
   contentType: string | null
   filename: string | null
+}
+
+function inferFetchedFilename(candidate: string | null, fallbackName: string | null, sourceUrl: string): string | null {
+  if (candidate && candidate.trim()) {
+    return candidate.trim()
+  }
+  if (fallbackName && fallbackName.trim()) {
+    return fallbackName.trim()
+  }
+  if (sourceUrl) {
+    try {
+      const parsed = new URL(sourceUrl)
+      const last = parsed.pathname.split('/').filter(Boolean).pop()
+      if (last) {
+        return decodeURIComponent(last)
+      }
+    } catch (_error) {
+      const sanitized = sourceUrl.split('?')[0]?.split('/').filter(Boolean).pop()
+      if (sanitized) {
+        try {
+          return decodeURIComponent(sanitized)
+        } catch (_decodeError) {
+          return sanitized
+        }
+      }
+    }
+  }
+  return null
 }
 
 const INDEXED_DB_NAME = 'harmony-asset-cache'
@@ -181,88 +210,6 @@ async function deleteOldestAssetsFromIndexedDb(count: number) {
       resolve()
     }
   })
-}
-
-function extractFilenameFromHeaders(headers: Headers, url: string, fallbackName: string): string {
-  const contentDisposition = headers.get('content-disposition')
-  if (contentDisposition) {
-    const filenameMatch = /filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i.exec(contentDisposition)
-    if (filenameMatch) {
-      const encoded = filenameMatch[1] ?? filenameMatch[2]
-      if (encoded) {
-        try {
-          return decodeURIComponent(encoded)
-        } catch (error) {
-          console.warn('无法解析响应头中的文件名', error)
-          return encoded
-        }
-      }
-    }
-  }
-
-  try {
-    const parsed = new URL(url, window.location.href)
-    const segment = parsed.pathname.split('/').filter(Boolean).pop()
-    if (segment) {
-      return decodeURIComponent(segment)
-    }
-  } catch (error) {
-    console.warn('无法从 URL 中解析文件名', error)
-  }
-
-  return fallbackName
-}
-
-async function fetchAssetData(
-  url: string,
-  controller: AbortController,
-  onProgress: (progress: number) => void,
-  fallbackName: string,
-): Promise<FetchedAssetData> {
-  const response = await fetch(url, { signal: controller.signal })
-  if (!response.ok) {
-    throw new Error(`资源下载失败（${response.status}）`)
-  }
-
-  const finalize = (blob: Blob): FetchedAssetData => {
-    onProgress(100)
-    return {
-      blob,
-      contentType: response.headers.get('content-type'),
-      filename: extractFilenameFromHeaders(response.headers, url, fallbackName),
-    }
-  }
-
-  if (!response.body) {
-    const blob = await response.blob()
-    return finalize(blob)
-  }
-
-  const contentLengthHeader = response.headers.get('content-length')
-  const total = contentLengthHeader ? Number.parseInt(contentLengthHeader, 10) : 0
-  const reader = response.body.getReader()
-  const chunks: BlobPart[] = []
-  let received = 0
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) {
-      break
-    }
-    if (value) {
-      chunks.push(value)
-      received += value.length
-      if (total > 0) {
-        onProgress(Math.min(99, Math.round((received / total) * 100)))
-      } else {
-        const estimated = Math.min(95, received % 100)
-        onProgress(estimated)
-      }
-    }
-  }
-
-  const blob = new Blob(chunks)
-  return finalize(blob)
 }
 
 function now() {
@@ -466,15 +413,19 @@ export const useAssetCacheStore = defineStore('assetCache', {
         current.lastUsedAt = now()
 
         try {
-          const data = await fetchAssetData(
+          const raw = await fetchAssetBlob(
             downloadUrl,
             controller,
             (progress: number) => {
               const updating = scope.ensureEntry(assetId)
               updating.progress = progress
             },
-            name,
           )
+          const data: FetchedAssetData = {
+            blob: raw.blob,
+            contentType: raw.mimeType ?? raw.blob.type ?? null,
+            filename: inferFetchedFilename(raw.filename, name, downloadUrl),
+          }
           return await scope.storeAssetBlob(assetId, {
             blob: data.blob,
             mimeType: data.contentType,

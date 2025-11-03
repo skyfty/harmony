@@ -397,7 +397,7 @@ class ResourceCache implements MaterialAssetProvider {
     }
     const relative = normalizedId.replace(/^preset:/, '').replace(/^[\\/]+/, '').replace(/\\/g, '/');
     if (relative) {
-      return `src/preset/${relative}`;
+      return `/src/preset/${relative}`;
     }
     return null;
   }

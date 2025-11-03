@@ -495,7 +495,7 @@ function decodeDataUrl(dataUrl: string): ArrayBuffer | null {
   return null
 }
 
-async function fetchAssetBlob(
+export async function fetchAssetBlob(
   url: string,
   controller: AbortController,
   onProgress: (value: number) => void,

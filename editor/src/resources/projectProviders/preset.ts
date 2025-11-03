@@ -46,7 +46,7 @@ const presetModules = import.meta.glob<string>('../../preset/**/*', {
 }) as Record<string, string>
 
 function slugify(value: string): string {
-  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  const normalized = value.trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
   return normalized.length ? normalized : 'item'
 }
 
@@ -54,7 +54,6 @@ function formatDisplayName(value: string): string {
   const withoutExtension = value.replace(/\.[^.]+$/, '')
   return withoutExtension
     .replace(/[-_]+/g, ' ')
-    .replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
 function createDirectoryNode(id: string, name: string): DirectoryNode {
@@ -127,7 +126,7 @@ function buildPresetAsset(
 ): ProjectAsset {
   const fileName = relativeSegments[relativeSegments.length - 1] ?? 'asset'
   const name = formatDisplayName(fileName)
-  const idPath = relativeSegments.join('/').toLowerCase()
+  const idPath = relativeSegments.join('/')
   return {
     id: `preset:${definition.key}/${idPath}`,
     name,
