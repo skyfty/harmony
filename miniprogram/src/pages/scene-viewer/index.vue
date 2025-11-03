@@ -3,7 +3,8 @@
     <view class="viewer-header">
       <button class="back-button" @tap="handleBack">返回</button>
       <view class="header-info">
-        <text class="scene-name">{{ sceneEntry?.scene.name || '场景预览' }}</text>
+        <text class="scene-name">{{ previewTitle }}</text>
+        <text v-if="headerCaption" class="scene-meta">{{ headerCaption }}</text>
       </view>
     </view>
     <view class="viewer-canvas-wrapper">
@@ -70,9 +71,9 @@ import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from '@/components/PlatformCanvas.vue';
 import type { StoredSceneEntry } from '@/stores/sceneStore';
-import { useSceneStore } from '@/stores/sceneStore';
-import { buildSceneGraph } from '@schema/sceneGraph';
-import type { SceneNode, SceneSkyboxSettings } from '@harmony/schema';
+import { parseSceneDocument, useSceneStore } from '@/stores/sceneStore';
+import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph';
+import type { SceneNode, SceneSkyboxSettings, SceneJsonExportDocument } from '@harmony/schema';
 import { ComponentManager } from '@schema/components/componentManager';
 import { behaviorComponentDefinition, wallComponentDefinition } from '@schema/components';
 import {
@@ -82,6 +83,19 @@ import {
   type BehaviorRuntimeEvent,
 } from '@schema/behaviors/runtime';
 
+interface ScenePreviewPayload {
+  document: SceneJsonExportDocument;
+  title: string;
+  origin?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  assetOverrides?: Record<string, string | ArrayBuffer>;
+  resolveAssetUrl?: (assetId: string) => string | Promise<string | null> | null;
+  presetAssetBaseUrl?: string;
+  enableGround?: boolean;
+}
+
+type RequestedMode = 'store' | 'document' | 'model' | null;
 
 interface RenderContext {
   renderer: THREE.WebGLRenderer;
@@ -93,6 +107,8 @@ interface RenderContext {
 const sceneStore = useSceneStore();
 const canvasId = `scene-viewer-${Date.now()}`;
 const currentSceneId = ref<string | null>(null);
+const requestedMode = ref<RequestedMode>(null);
+
 const sceneEntry = computed<StoredSceneEntry | null>(() => {
   const sceneId = currentSceneId.value;
   if (!sceneId) {
@@ -100,6 +116,8 @@ const sceneEntry = computed<StoredSceneEntry | null>(() => {
   }
   return sceneStore.getScene(sceneId) ?? null;
 });
+
+const previewPayload = ref<ScenePreviewPayload | null>(null);
 const loading = ref(true);
 const error = ref<string | null>(null);
 const warnings = ref<string[]>([]);
@@ -117,6 +135,7 @@ const resourcePreloadPercent = computed(() => {
   }
   return Math.min(100, Math.round((resourcePreload.loaded / resourcePreload.total) * 100));
 });
+
 const SKY_ENVIRONMENT_INTENSITY = 0.35;
 const SKY_SCALE = 2500;
 const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
@@ -130,6 +149,7 @@ const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
   azimuth: 145,
 };
 const skySunPosition = new THREE.Vector3();
+
 let sky: Sky | null = null;
 let pmremGenerator: THREE.PMREMGenerator | null = null;
 let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null;
@@ -153,10 +173,48 @@ const behaviorRaycaster = new THREE.Raycaster();
 const behaviorPointer = new THREE.Vector2();
 let behaviorTapListener: ((event: TouchEvent) => void) | null = null;
 
-// Behavior alert overlay state
 const behaviorAlertVisible = ref(false);
 const behaviorAlertTitle = ref('');
 const behaviorAlertMessage = ref('');
+
+const previewTitle = computed(() => previewPayload.value?.title ?? '场景预览');
+const headerCaption = computed(() => {
+  const payload = previewPayload.value;
+  if (!payload) {
+    return '';
+  }
+  const parts: string[] = [];
+  if (payload.origin) {
+    parts.push(`来源：${payload.origin}`);
+  }
+  if (payload.updatedAt) {
+    const formatted = formatTimestamp(payload.updatedAt);
+    if (formatted) {
+      parts.push(`更新：${formatted}`);
+    }
+  } else if (payload.createdAt) {
+    const formatted = formatTimestamp(payload.createdAt);
+    if (formatted) {
+      parts.push(`创建：${formatted}`);
+    }
+  }
+  return parts.join(' · ');
+});
+
+function formatTimestamp(value?: string | null): string {
+  if (!value) {
+    return '';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  const hour = `${date.getHours()}`.padStart(2, '0');
+  const minute = `${date.getMinutes()}`.padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day} ${hour}:${minute}`;
+}
 
 function presentBehaviorAlert(title: string, message: string) {
   const normalizedTitle = (title || '').trim();
@@ -178,7 +236,7 @@ function sanitizeSkyboxSettings(input: SceneSkyboxSettings): SceneSkyboxSettings
     return typeof candidate === 'number' && Number.isFinite(candidate) ? candidate : fallback;
   };
   return {
-    		presetId: input.presetId ?? DEFAULT_SKYBOX_SETTINGS.presetId,
+    presetId: input.presetId ?? DEFAULT_SKYBOX_SETTINGS.presetId,
     exposure: ensureNumber(input.exposure, DEFAULT_SKYBOX_SETTINGS.exposure),
     turbidity: ensureNumber(input.turbidity, DEFAULT_SKYBOX_SETTINGS.turbidity),
     rayleigh: ensureNumber(input.rayleigh, DEFAULT_SKYBOX_SETTINGS.rayleigh),
@@ -189,7 +247,7 @@ function sanitizeSkyboxSettings(input: SceneSkyboxSettings): SceneSkyboxSettings
   };
 }
 
-function resolveSceneSkybox(document: StoredSceneEntry['scene'] | null | undefined): SceneSkyboxSettings | null {
+function resolveSceneSkybox(document: SceneJsonExportDocument | null | undefined): SceneSkyboxSettings | null {
   if (!document) {
     return null;
   }
@@ -239,12 +297,13 @@ function indexSceneObjects(root: THREE.Object3D) {
 
 function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
   switch (event.type) {
-    case 'show-alert':
+    case 'show-alert': {
       const params = event.params;
       const alertTitle = (params as { title?: string }).title ?? '提示';
       const alertMessage = params.content ?? '';
       presentBehaviorAlert(alertTitle, alertMessage);
       break;
+    }
     default:
       break;
   }
@@ -424,38 +483,164 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
   }
   pendingSkyboxSettings = null;
 }
-function handleSceneEntry(entry: StoredSceneEntry | null) {
-  const sceneId = currentSceneId.value;
-  if (!sceneId) {
+
+function decodeBase64(value: string): string | null {
+  const normalized = value.replace(/^data:[^,]+,/, '');
+  try {
+    if (typeof atob === 'function') {
+      return atob(normalized);
+    }
+    const globalBuffer = typeof globalThis !== 'undefined' ? (globalThis as any).Buffer : undefined;
+    if (globalBuffer && typeof globalBuffer.from === 'function') {
+      return globalBuffer.from(normalized, 'base64').toString('utf-8');
+    }
+  } catch (_error) {
+    return null;
+  }
+  return null;
+}
+
+function parseInlineSceneDocument(raw: string): SceneJsonExportDocument {
+  const candidates = new Set<string>();
+  const pushCandidate = (candidate: string | null | undefined) => {
+    if (!candidate) {
+      return;
+    }
+    const trimmed = candidate.trim();
+    if (!trimmed.length) {
+      return;
+    }
+    candidates.add(trimmed);
+  };
+  pushCandidate(raw);
+  try {
+    pushCandidate(decodeURIComponent(raw));
+  } catch (_error) {
+    // ignore
+  }
+  const base64 = decodeBase64(raw);
+  pushCandidate(base64);
+  if (base64) {
+    try {
+      pushCandidate(decodeURIComponent(base64));
+    } catch (_error) {
+      // ignore
+    }
+  }
+  for (const candidate of candidates) {
+    try {
+      return parseSceneDocument(candidate);
+    } catch (_error) {
+      continue;
+    }
+  }
+  throw new Error('无法解析场景数据');
+}
+
+function createModelPreviewPayload(args: { url: string; name?: string; assetId?: string }): ScenePreviewPayload {
+  const assetUrl = args.url?.trim();
+  if (!assetUrl) {
+    throw new Error('模型地址不能为空');
+  }
+  const normalizedAssetId = args.assetId && args.assetId.trim().length ? args.assetId.trim() : assetUrl;
+  const now = new Date().toISOString();
+  const title = args.name && args.name.trim().length ? args.name.trim() : '模型预览';
+  const nodeId = `model-${Math.random().toString(36).slice(2, 10)}`;
+  const document: SceneJsonExportDocument = {
+    id: `model-preview-${Date.now().toString(36)}`,
+    name: title,
+    createdAt: now,
+    updatedAt: now,
+    skybox: sanitizeSkyboxSettings(DEFAULT_SKYBOX_SETTINGS),
+    nodes: [
+      {
+        id: nodeId,
+        name: title,
+        nodeType: 'Mesh',
+        position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        sourceAssetId: normalizedAssetId,
+        visible: true,
+        children: [],
+      },
+    ],
+    materials: [],
+    packageAssetMap: {},
+  };
+  return {
+    document,
+    title,
+    assetOverrides: { [normalizedAssetId]: assetUrl },
+    enableGround: false,
+  };
+}
+
+function createPayloadFromEntry(entry: StoredSceneEntry): ScenePreviewPayload {
+  const document = entry.scene;
+  return {
+    document,
+    title: document.name || '场景预览',
+    origin: entry.origin,
+    createdAt: document.createdAt,
+    updatedAt: document.updatedAt,
+  };
+}
+
+watch(sceneEntry, (entry) => {
+  if (requestedMode.value !== 'store') {
     return;
   }
   if (!entry) {
+    previewPayload.value = null;
+    if (bootstrapFinished.value) {
+      error.value = '未找到对应的场景数据';
+      loading.value = false;
+    }
+    return;
+  }
+  loading.value = true;
+  previewPayload.value = createPayloadFromEntry(entry);
+});
+
+watch(
+  previewPayload,
+  (payload) => {
+    if (!bootstrapFinished.value) {
+      return;
+    }
+    if (!payload) {
+      teardownRenderer();
+      applySkyboxSettings(null);
+      warnings.value = [];
+      return;
+    }
+    handlePreviewPayload(payload);
+  },
+  { flush: 'post' },
+);
+
+function handlePreviewPayload(payload: ScenePreviewPayload | null) {
+  if (!payload) {
+    teardownRenderer();
     applySkyboxSettings(null);
-    error.value = '未找到对应的场景数据';
-    loading.value = false;
+    warnings.value = [];
     return;
   }
   error.value = null;
-  const skyboxSettings = resolveSceneSkybox(entry.scene);
+  warnings.value = [];
+  const skyboxSettings = resolveSceneSkybox(payload.document);
   applySkyboxSettings(skyboxSettings);
-  uni.setNavigationBarTitle({ title: entry.scene.name || '场景预览' });
-  startRenderIfReady();
-}
-watch(sceneEntry, (entry) => {
-  if (!bootstrapFinished.value) {
-    return;
+  try {
+    uni.setNavigationBarTitle({ title: payload.title || '场景预览' });
+  } catch (_error) {
+    // ignore
   }
-  handleSceneEntry(entry);
-});
-
-
-
-function handleBack() {
-  uni.navigateBack({ delta: 1 });
+  startRenderIfReady();
 }
 
 async function startRenderIfReady() {
-  if (!sceneEntry.value || !canvasResult || initializing) {
+  if (!previewPayload.value || !canvasResult || initializing) {
     return;
   }
   initializing = true;
@@ -464,7 +649,7 @@ async function startRenderIfReady() {
   warnings.value = [];
   try {
     await ensureRendererContext(canvasResult);
-    await initializeRenderer(sceneEntry.value, canvasResult);
+    await initializeRenderer(previewPayload.value, canvasResult);
   } catch (initializationError) {
     console.error(initializationError);
     error.value = '初始化渲染器失败';
@@ -524,13 +709,14 @@ function handleUseCanvas(result: UseCanvasResult) {
   startRenderIfReady();
 }
 
-async function ensureRendererContext(canvasResult: UseCanvasResult) {
+async function ensureRendererContext(result: UseCanvasResult) {
   if (renderContext) {
     teardownRenderer();
   }
-  await canvasResult.recomputeSize?.();
-  const { canvas } = canvasResult;
-  const pixelRatio = canvasResult.canvas?.ownerDocument?.defaultView?.devicePixelRatio || uni.getSystemInfoSync().pixelRatio || 1;
+  await result.recomputeSize?.();
+  const { canvas } = result;
+  const pixelRatio =
+    result.canvas?.ownerDocument?.defaultView?.devicePixelRatio || uni.getSystemInfoSync().pixelRatio || 1;
   const width = canvas.width || canvas.clientWidth || 1;
   const height = canvas.height || canvas.clientHeight || 1;
 
@@ -589,12 +775,12 @@ function focusCameraOnScene(root: THREE.Object3D) {
   }
 }
 
-async function initializeRenderer(sceneEntry: StoredSceneEntry, canvasResult: UseCanvasResult) {
+async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanvasResult) {
   if (!renderContext) {
     throw new Error('Render context missing');
   }
   const { scene, renderer, camera, controls } = renderContext;
-  const { canvas } = canvasResult;
+  const { canvas } = result;
   scene.children.forEach((child) => disposeObject(child));
   scene.clear();
   warnings.value = [];
@@ -618,15 +804,25 @@ async function initializeRenderer(sceneEntry: StoredSceneEntry, canvasResult: Us
 
   let graph: Awaited<ReturnType<typeof buildSceneGraph>> | null = null;
   try {
-    graph = await buildSceneGraph(sceneEntry.scene, {
-      enableGround: true,
+    const buildOptions: SceneGraphBuildOptions = {
+      enableGround: payload.enableGround ?? true,
       onProgress: (info) => {
         resourcePreload.total = info.total;
         resourcePreload.loaded = info.loaded;
         resourcePreload.label = info.message || (info.assetId ? `加载 ${info.assetId}` : '');
         resourcePreload.active = info.total > 0 && info.loaded < info.total;
       },
-    });
+    };
+    if (payload.assetOverrides) {
+      buildOptions.assetOverrides = payload.assetOverrides;
+    }
+    if (payload.resolveAssetUrl) {
+      buildOptions.resolveAssetUrl = payload.resolveAssetUrl;
+    }
+    if (payload.presetAssetBaseUrl) {
+      buildOptions.presetAssetBaseUrl = payload.presetAssetBaseUrl;
+    }
+    graph = await buildSceneGraph(payload.document, buildOptions);
   } finally {
     if (!resourcePreload.active || resourcePreload.loaded >= resourcePreload.total) {
       resourcePreload.active = false;
@@ -644,14 +840,14 @@ async function initializeRenderer(sceneEntry: StoredSceneEntry, canvasResult: Us
 
   resetBehaviorRuntime();
   previewComponentManager.reset();
-  rebuildPreviewNodeMap(sceneEntry.scene.nodes);
-  previewComponentManager.syncScene(sceneEntry.scene.nodes ?? []);
+  rebuildPreviewNodeMap(payload.document.nodes);
+  previewComponentManager.syncScene(payload.document.nodes ?? []);
   indexSceneObjects(graph.root);
   ensureBehaviorTapHandler(canvas as HTMLCanvasElement, camera);
 
   focusCameraOnScene(graph.root);
 
-  const skyboxSettings = resolveSceneSkybox(sceneEntry.scene);
+  const skyboxSettings = resolveSceneSkybox(payload.document);
   applySkyboxSettings(skyboxSettings);
   if (pendingSkyboxSettings) {
     applySkyboxSettings(pendingSkyboxSettings);
@@ -664,16 +860,15 @@ async function initializeRenderer(sceneEntry: StoredSceneEntry, canvasResult: Us
 
   scope.run(() => {
     watchEffect((onCleanup) => {
-       const { cancel } = canvasResult.useFrame((delta) => {
-          controls.update();
-          renderer.render(scene, camera);
-        });
-        onCleanup(() => {
-          cancel();
-        });
+      const { cancel } = result.useFrame((delta) => {
+        controls.update();
+        renderer.render(scene, camera);
+      });
+      onCleanup(() => {
+        cancel();
+      });
     });
   });
-
 }
 
 const handleResize: WindowResizeCallback = (_result) => {
@@ -694,17 +889,75 @@ const handleResize: WindowResizeCallback = (_result) => {
   });
 };
 
+function handleBack() {
+  uni.navigateBack({ delta: 1 });
+}
+
 onLoad((query) => {
-  const sceneId = typeof query?.id === 'string' ? query.id : '';
-  currentSceneId.value = sceneId;
-  if (!sceneId) {
-    error.value = '缺少场景标识';
+  const sceneIdParam = typeof query?.id === 'string' ? query.id : '';
+  const documentParam = typeof query?.document === 'string' ? query.document : '';
+  const modelParam =
+    typeof query?.asset === 'string'
+      ? query.asset
+      : typeof query?.model === 'string'
+        ? query.model
+        : '';
+
+  error.value = null;
+
+  if (sceneIdParam) {
+    requestedMode.value = 'store';
+    currentSceneId.value = sceneIdParam;
+    sceneStore.bootstrap();
+    loading.value = true;
+  } else if (documentParam) {
+    requestedMode.value = 'document';
+    try {
+      const document = parseInlineSceneDocument(documentParam);
+      const titleParam = typeof query?.title === 'string' ? query.title : '';
+      const originParam = typeof query?.origin === 'string' ? query.origin : '';
+      previewPayload.value = {
+        document,
+        title: titleParam && titleParam.trim().length ? titleParam.trim() : document.name || '场景预览',
+        origin: originParam && originParam.trim().length ? originParam.trim() : undefined,
+        createdAt: document.createdAt,
+        updatedAt: document.updatedAt,
+      };
+      loading.value = true;
+    } catch (parseError) {
+      console.error(parseError);
+      error.value = parseError instanceof Error ? parseError.message : '场景数据解析失败';
+      loading.value = false;
+    }
+  } else if (modelParam) {
+    requestedMode.value = 'model';
+    try {
+      const nameParam = typeof query?.name === 'string' ? query.name : '';
+      const assetIdParam = typeof query?.assetId === 'string' ? query.assetId : '';
+      previewPayload.value = createModelPreviewPayload({
+        url: modelParam,
+        name: nameParam,
+        assetId: assetIdParam,
+      });
+      loading.value = true;
+    } catch (modelError) {
+      console.error(modelError);
+      error.value = modelError instanceof Error ? modelError.message : '模型数据解析失败';
+      loading.value = false;
+    }
+  } else {
+    requestedMode.value = null;
+    error.value = '缺少场景数据';
     loading.value = false;
-    return;
   }
-  
+
   bootstrapFinished.value = true;
-  handleSceneEntry(sceneEntry.value);
+  if (previewPayload.value) {
+    handlePreviewPayload(previewPayload.value);
+  } else if (requestedMode.value !== 'store') {
+    teardownRenderer();
+    applySkyboxSettings(null);
+  }
 });
 
 onReady(() => {

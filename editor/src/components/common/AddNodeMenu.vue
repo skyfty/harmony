@@ -6,7 +6,7 @@ import * as THREE from 'three'
 import type { GeometryType } from '@harmony/schema'
 
 import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from '@schema/loader'
-import { createPrimitiveMesh as createGeometry } from '@schema/geometry'
+import { createPrimitiveMesh } from '@schema/geometry'
 import { useFileDialog } from '@vueuse/core'
 import { useUiStore } from '@/stores/uiStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
