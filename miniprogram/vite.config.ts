@@ -17,6 +17,7 @@ export default defineConfig({
       // resolve "three" to this package's installed dependency
       'three': fileURLToPath(new URL('./node_modules/three', import.meta.url)),
       'three/examples': fileURLToPath(new URL('./node_modules/three/examples', import.meta.url)),
+      '@three-examples': fileURLToPath(new URL('./node_modules/three/examples/jsm', import.meta.url)),
     },
   },
   

@@ -3,6 +3,9 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import vuetify from 'vite-plugin-vuetify'
 
+const resolveDir = (relativePath: string) => fileURLToPath(new URL(relativePath, import.meta.url))
+const withTrailingSlash = (value: string) => (value.endsWith('/') || value.endsWith('\\') ? value : `${value}/`)
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [vue(), vuetify({ autoImport: true })],
@@ -10,23 +13,27 @@ export default defineConfig({
     alias: [
       {
         find: '@',
-        replacement: fileURLToPath(new URL('./src', import.meta.url)),
+        replacement: resolveDir('./src'),
       },
       {
         find: '@schema',
-        replacement: fileURLToPath(new URL('../schema', import.meta.url)),
+        replacement: resolveDir('../schema'),
       },
       {
-        find: 'three/examples/jsm/',
-        replacement: `${fileURLToPath(new URL('./node_modules/three/examples/jsm/', import.meta.url))}`,
+        find: '@three-examples',
+        replacement: withTrailingSlash(resolveDir('./node_modules/three/examples/jsm/')),
       },
       {
-        find: 'three/addons/',
-        replacement: `${fileURLToPath(new URL('./node_modules/three/examples/jsm/', import.meta.url))}`,
+        find: /^three\/examples\/jsm\//,
+        replacement: withTrailingSlash(resolveDir('./node_modules/three/examples/jsm/')),
+      },
+      {
+        find: /^three\/addons\//,
+        replacement: withTrailingSlash(resolveDir('./node_modules/three/examples/jsm/')),
       },
       {
         find: /^three$/,
-        replacement: fileURLToPath(new URL('./node_modules/three', import.meta.url)),
+        replacement: resolveDir('./node_modules/three'),
       },
     ],
   },

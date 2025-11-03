@@ -1,6 +1,5 @@
 import * as THREE from 'three';
-import { TGALoader } from 'three/examples/jsm/loaders/TGALoader.js';
-import { unzipSync, strFromU8 } from 'three/examples/jsm/libs/fflate.module.js';
+// import { TGALoader } from 'three/examples/jsm/loaders/TGALoader.js';
 
 export type LoaderProgressPayload = {
   loaded: number;
@@ -136,7 +135,7 @@ export default class Loader {
         return url;
       });
 
-      manager.addHandler(/\.tga$/i, new TGALoader());
+      // manager.addHandler(/\.tga$/i, new TGALoader());
 
       for (const file of files) {
         scope.loadFile(file, manager);
@@ -164,7 +163,7 @@ export default class Loader {
       switch (extension) {
         case '3ds': {
           reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-            const { TDSLoader } = await import('three/examples/jsm/loaders/TDSLoader.js');
+            const { TDSLoader } = await import('@three-examples/loaders/TDSLoader.js');
 
             const loader = new TDSLoader();
             const object = loader.parse(event.target?.result as ArrayBuffer, '');
@@ -177,7 +176,7 @@ export default class Loader {
 
         case '3mf': {
           reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-            const { ThreeMFLoader } = await import('three/examples/jsm/loaders/3MFLoader.js');
+            const { ThreeMFLoader } = await import('@three-examples/loaders/3MFLoader.js');
 
             const loader = new ThreeMFLoader() as any;
             const object = loader.parse(event.target?.result as ArrayBuffer, '');
@@ -191,7 +190,7 @@ export default class Loader {
 
         case 'amf': {
           reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-            const { AMFLoader } = await import('three/examples/jsm/loaders/AMFLoader.js');
+            const { AMFLoader } = await import('@three-examples/loaders/AMFLoader.js');
 
             const loader = new AMFLoader();
             const amfobject = loader.parse(event.target?.result as ArrayBuffer);
@@ -206,7 +205,7 @@ export default class Loader {
             const contents = event.target?.result as string;
             if (!contents) return;
 
-            const { ColladaLoader } = await import('three/examples/jsm/loaders/ColladaLoader.js');
+            const { ColladaLoader } = await import('@three-examples/loaders/ColladaLoader.js');
 
             const loader = new ColladaLoader(manager);
             const collada = loader.parse(contents, '');
@@ -223,7 +222,7 @@ export default class Loader {
             const contents = event.target?.result as ArrayBuffer;
             if (!contents) return;
 
-            const { DRACOLoader } = await import('three/examples/jsm/loaders/DRACOLoader.js');
+            const { DRACOLoader } = await import('@three-examples/loaders/DRACOLoader.js');
 
             const loader = new DRACOLoader();
             loader.setDecoderPath('three/examples/jsm/libs/draco/');
@@ -254,7 +253,7 @@ export default class Loader {
             const contents = event.target?.result as ArrayBuffer;
             if (!contents) return;
 
-            const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js');
+            const { FBXLoader } = await import('@three-examples/loaders/FBXLoader.js');
 
             const loader = new FBXLoader(manager);
             const object = loader.parse(contents, '');
@@ -313,7 +312,7 @@ export default class Loader {
 
         case 'kmz': {
           reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-            const { KMZLoader } = await import('three/examples/jsm/loaders/KMZLoader.js');
+            const { KMZLoader } = await import('@three-examples/loaders/KMZLoader.js');
 
             const loader = new KMZLoader() as any;
             const collada = loader.parse(event.target?.result as ArrayBuffer, '');
@@ -328,7 +327,7 @@ export default class Loader {
         case 'ldr':
         case 'mpd': {
           reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-            const { LDrawLoader } = await import('three/examples/jsm/loaders/LDrawLoader.js');
+            const { LDrawLoader } = await import('@three-examples/loaders/LDrawLoader.js');
 
             const loader = new LDrawLoader();
             loader.setPath('../../examples/models/ldraw/officialLibrary/');
@@ -347,7 +346,7 @@ export default class Loader {
             const contents = event.target?.result as ArrayBuffer;
             if (!contents) return;
 
-            const { MD2Loader } = await import('three/examples/jsm/loaders/MD2Loader.js');
+            const { MD2Loader } = await import('@three-examples/loaders/MD2Loader.js');
 
             const geometry = new MD2Loader().parse(contents) as any;
             const material = new THREE.MeshStandardMaterial();
@@ -368,7 +367,7 @@ export default class Loader {
             const contents = event.target?.result as string;
             if (!contents) return;
 
-            const { OBJLoader } = await import('three/examples/jsm/loaders/OBJLoader.js');
+            const { OBJLoader } = await import('@three-examples/loaders/OBJLoader.js');
 
             const object = new OBJLoader().parse(contents);
             object.name = filename;
@@ -383,7 +382,7 @@ export default class Loader {
             const contents = event.target?.result as ArrayBuffer;
             if (!contents) return;
 
-            const { PCDLoader } = await import('three/examples/jsm/loaders/PCDLoader.js');
+            const { PCDLoader } = await import('@three-examples/loaders/PCDLoader.js');
 
             const points = new PCDLoader().parse(contents);
             points.name = filename;
@@ -398,7 +397,7 @@ export default class Loader {
             const contents = event.target?.result as ArrayBuffer;
             if (!contents) return;
 
-            const { PLYLoader } = await import('three/examples/jsm/loaders/PLYLoader.js');
+            const { PLYLoader } = await import('@three-examples/loaders/PLYLoader.js');
 
             const geometry = new PLYLoader().parse(contents);
             let object: LoaderLoadedPayload;
@@ -426,7 +425,7 @@ export default class Loader {
             const contents = event.target?.result as ArrayBuffer;
             if (!contents) return;
 
-            const { STLLoader } = await import('three/examples/jsm/loaders/STLLoader.js');
+            const { STLLoader } = await import('@three-examples/loaders/STLLoader.js');
 
             const geometry = new STLLoader().parse(contents);
             const material = new THREE.MeshStandardMaterial();
@@ -450,7 +449,7 @@ export default class Loader {
             const contents = event.target?.result as string;
             if (!contents) return;
 
-            const { SVGLoader } = await import('three/examples/jsm/loaders/SVGLoader.js');
+            const { SVGLoader } = await import('@three-examples/loaders/SVGLoader.js');
 
             const loader = new SVGLoader();
             const paths = loader.parse(contents).paths;
@@ -492,7 +491,7 @@ export default class Loader {
             const contents = event.target?.result as ArrayBuffer;
             if (!contents) return;
 
-            const { VOXLoader, VOXMesh } = await import('three/examples/jsm/loaders/VOXLoader.js');
+            const { VOXLoader, VOXMesh } = await import('@three-examples/loaders/VOXLoader.js');
 
             const chunks = new VOXLoader().parse(contents);
 
@@ -519,7 +518,7 @@ export default class Loader {
             const contents = event.target?.result as ArrayBuffer;
             if (!contents) return;
 
-            const { VTKLoader } = await import('three/examples/jsm/loaders/VTKLoader.js');
+            const { VTKLoader } = await import('@three-examples/loaders/VTKLoader.js');
 
             const geometry = (new VTKLoader() as any).parse(contents, '');
             const material = new THREE.MeshStandardMaterial();
@@ -537,7 +536,7 @@ export default class Loader {
             const contents = event.target?.result as string;
             if (!contents) return;
 
-            const { VRMLLoader } = await import('three/examples/jsm/loaders/VRMLLoader.js');
+            const { VRMLLoader } = await import('@three-examples/loaders/VRMLLoader.js');
 
             const result = (new VRMLLoader() as any).parse(contents, '');
             scope.emit('loaded', result);
@@ -551,7 +550,7 @@ export default class Loader {
             const contents = event.target?.result as string;
             if (!contents) return;
 
-            const { XYZLoader } = await import('three/examples/jsm/loaders/XYZLoader.js');
+            const { XYZLoader } = await import('@three-examples/loaders/XYZLoader.js');
 
             const geometry = (new XYZLoader() as any).parse(contents) as THREE.BufferGeometry;
 
@@ -612,10 +611,10 @@ const DEFAULT_KTX2_TRANSCODER_PATH = '../examples/jsm/libs/basis/';
 
 export async function createGltfLoader(options: GltfParseOptions = {}): Promise<any> {
   const [{ GLTFLoader }, { DRACOLoader }, { KTX2Loader }, { MeshoptDecoder }] = await Promise.all([
-    import('three/examples/jsm/loaders/GLTFLoader.js'),
-    import('three/examples/jsm/loaders/DRACOLoader.js'),
-    import('three/examples/jsm/loaders/KTX2Loader.js'),
-    import('three/examples/jsm/libs/meshopt_decoder.module.js'),
+    import('@three-examples/loaders/GLTFLoader.js'),
+    import('@three-examples/loaders/DRACOLoader.js'),
+    import('@three-examples/loaders/KTX2Loader.js'),
+    import('@three-examples/libs/meshopt_decoder.module.js'),
   ]);
 
   const loader = new GLTFLoader(options.manager);

@@ -7,6 +7,10 @@
     "paths": {
       "@/*": ["src/*"],
       "@schema/*": ["../schema/*"],
+      "@three-examples/*": [
+        "node_modules/@types/three/examples/jsm/*",
+        "node_modules/three/examples/jsm/*"
+      ],
       "three": ["node_modules/@types/three"],
       "three/*": [
         "node_modules/@types/three/*",
