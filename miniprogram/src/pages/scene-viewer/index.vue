@@ -1296,49 +1296,44 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
     resolveBehaviorToken(event.token, { type: 'fail', message: '未找到目标节点' });
     return;
   }
-  
-  // 目标位置：水平位置为目标点的XZ坐标
-  const destination = new THREE.Vector3(
-    focus.x,
-    camera.position.y, // 保持当前相机高度
-    focus.z
-  );
-  
-  // 确保Y轴高度始终保持在人眼高度以上
-  const minHeight = HUMAN_EYE_HEIGHT;
-  if (destination.y < minHeight) {
-    destination.y = minHeight;
+
+  const focusPoint = focus.clone();
+  const ownerObject = nodeObjectMap.get(event.targetNodeId ?? event.nodeId ?? '');
+  if (ownerObject) {
+    ownerObject.getWorldQuaternion(tempQuaternion);
+  } else {
+    tempQuaternion.identity();
   }
-  
+  const horizontalOffset = Math.max(event.offset ?? 0, 0);
+  const offsetDirection = new THREE.Vector3(0, 0, 1);
+  offsetDirection.applyQuaternion(tempQuaternion);
+  offsetDirection.y = 0;
+  if (offsetDirection.lengthSq() < 1e-6) {
+    offsetDirection.set(0, 0, 1);
+  }
+  if (horizontalOffset > 0) {
+    offsetDirection.normalize().multiplyScalar(horizontalOffset);
+  } else {
+    offsetDirection.set(0, 0, 0);
+  }
+
+  const destination = focusPoint.clone().add(offsetDirection);
+  destination.y = HUMAN_EYE_HEIGHT;
+  const lookTarget = new THREE.Vector3(focusPoint.x, HUMAN_EYE_HEIGHT, focusPoint.z);
+
   const startPosition = camera.position.clone();
   const startTarget = controls.target.clone();
-  
-  // 计算移动方向（从起点到终点的水平方向）
-  const moveDirection = new THREE.Vector3(
-    destination.x - startPosition.x,
-    0, // 保持水平，Y方向为0
-    destination.z - startPosition.z
-  ).normalize();
-  
-  // 在移动过程中面向目标方向（水平方向），不是面向目标中心点
-  // 将controls.target设置为目标位置前方的水平位置
-  const targetDistance = 5; // 视角前方5米处
-  const endTarget = destination.clone().add(
-    moveDirection.multiplyScalar(targetDistance)
-  );
-  endTarget.y = destination.y; // 保持水平视角，平视
-  
   const distance = startPosition.distanceTo(destination);
   const durationSeconds = event.speed > 0 ? Math.min(5, Math.max(0.2, distance / Math.max(event.speed, 0.01))) : 0;
   
   const updateFrame = (alpha: number) => {
     camera.position.lerpVectors(startPosition, destination, alpha);
-    controls.target.lerpVectors(startTarget, endTarget, alpha);
+    controls.target.lerpVectors(startTarget, lookTarget, alpha);
     controls.update();
   };
   const finalize = () => {
     camera.position.copy(destination);
-    controls.target.copy(endTarget);
+    controls.target.copy(lookTarget);
     controls.update();
     resolveBehaviorToken(event.token, { type: 'continue' });
   };

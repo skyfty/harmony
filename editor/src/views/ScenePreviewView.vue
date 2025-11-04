@@ -1343,16 +1343,22 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
 	} else {
 		tempQuaternion.identity()
 	}
-	const baseOffset = Math.max(event.offset, 0.5)
-	tempDirection.set(0, 0, baseOffset)
+	const horizontalOffset = Math.max(event.offset ?? 0, 0)
+	tempDirection.set(0, 0, 1)
 	tempDirection.applyQuaternion(tempQuaternion)
-	if (Math.abs(tempDirection.y) < CAMERA_HEIGHT * 0.25) {
-		tempDirection.y = Math.sign(tempDirection.y || 1) * CAMERA_HEIGHT * 0.4
+	tempDirection.y = 0
+	if (tempDirection.lengthSq() < 1e-6) {
+		tempDirection.set(0, 0, 1)
+	}
+	if (horizontalOffset > 0) {
+		tempDirection.normalize().multiplyScalar(horizontalOffset)
+	} else {
+		tempDirection.set(0, 0, 0)
 	}
 	const destination = focusPoint.clone().add(tempDirection)
-	if (destination.y < focusPoint.y + CAMERA_HEIGHT * 0.4) {
-		destination.y = focusPoint.y + CAMERA_HEIGHT * 0.4
-	}
+	destination.y = CAMERA_HEIGHT
+	const lookPoint = focusPoint.clone()
+	lookPoint.y = CAMERA_HEIGHT
 	const startPosition = activeCamera.position.clone()
 	const orbitControls = mapControls ?? null
 	const startTarget = orbitControls ? orbitControls.target.clone() : null
@@ -1362,18 +1368,18 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
 		activeCamera.position.lerpVectors(startPosition, destination, alpha)
 		if (orbitControls && startTarget) {
 			orbitControls.target.copy(startTarget)
-			orbitControls.target.lerp(focusPoint, alpha)
+			orbitControls.target.lerp(lookPoint, alpha)
 			orbitControls.update()
 		}
-		activeCamera.lookAt(focusPoint)
+		activeCamera.lookAt(lookPoint)
 	}
 	const finalize = () => {
 		activeCamera.position.copy(destination)
 		if (orbitControls) {
-			orbitControls.target.copy(focusPoint)
+			orbitControls.target.copy(lookPoint)
 			orbitControls.update()
 		}
-		activeCamera.lookAt(focusPoint)
+		activeCamera.lookAt(lookPoint)
 		syncLastFirstPersonStateFromCamera()
 		resolveBehaviorToken(event.token, { type: 'continue' })
 	}
