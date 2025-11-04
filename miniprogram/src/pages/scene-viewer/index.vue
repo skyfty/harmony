@@ -1305,19 +1305,21 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
     tempQuaternion.identity();
   }
   const horizontalOffset = Math.max(event.offset ?? 0, 0);
-  const offsetDirection = new THREE.Vector3(0, 0, 1);
-  offsetDirection.applyQuaternion(tempQuaternion);
-  offsetDirection.y = 0;
-  if (offsetDirection.lengthSq() < 1e-6) {
-    offsetDirection.set(0, 0, 1);
-  }
+  const destination = focusPoint.clone();
   if (horizontalOffset > 0) {
-    offsetDirection.normalize().multiplyScalar(horizontalOffset);
-  } else {
-    offsetDirection.set(0, 0, 0);
+    tempVector.copy(camera.position).sub(focusPoint);
+    tempVector.y = 0;
+    if (tempVector.lengthSq() < 1e-6) {
+      tempVector.set(0, 0, 1);
+      tempVector.applyQuaternion(tempQuaternion);
+      tempVector.y = 0;
+    }
+    if (tempVector.lengthSq() < 1e-6) {
+      tempVector.set(0, 0, 1);
+    }
+    tempVector.normalize().multiplyScalar(horizontalOffset);
+    destination.add(tempVector);
   }
-
-  const destination = focusPoint.clone().add(offsetDirection);
   destination.y = HUMAN_EYE_HEIGHT;
   const lookTarget = new THREE.Vector3(focusPoint.x, HUMAN_EYE_HEIGHT, focusPoint.z);
 

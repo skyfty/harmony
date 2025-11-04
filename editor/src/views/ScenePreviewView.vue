@@ -1344,18 +1344,21 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
 		tempQuaternion.identity()
 	}
 	const horizontalOffset = Math.max(event.offset ?? 0, 0)
-	tempDirection.set(0, 0, 1)
-	tempDirection.applyQuaternion(tempQuaternion)
-	tempDirection.y = 0
-	if (tempDirection.lengthSq() < 1e-6) {
-		tempDirection.set(0, 0, 1)
-	}
+	const destination = focusPoint.clone()
 	if (horizontalOffset > 0) {
+		tempDirection.copy(activeCamera.position).sub(focusPoint)
+		tempDirection.y = 0
+		if (tempDirection.lengthSq() < 1e-6) {
+			tempDirection.set(0, 0, 1)
+			tempDirection.applyQuaternion(tempQuaternion)
+			tempDirection.y = 0
+		}
+		if (tempDirection.lengthSq() < 1e-6) {
+			tempDirection.set(0, 0, 1)
+		}
 		tempDirection.normalize().multiplyScalar(horizontalOffset)
-	} else {
-		tempDirection.set(0, 0, 0)
+		destination.add(tempDirection)
 	}
-	const destination = focusPoint.clone().add(tempDirection)
 	destination.y = CAMERA_HEIGHT
 	const lookPoint = focusPoint.clone()
 	lookPoint.y = CAMERA_HEIGHT
