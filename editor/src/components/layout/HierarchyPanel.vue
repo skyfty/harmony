@@ -336,6 +336,24 @@ function handleNodeClick(event: MouseEvent, nodeId: string) {
   selectionAnchorId.value = nextSelection[nextSelection.length - 1] ?? null
 }
 
+function handleTreeBackgroundMouseDown(event: MouseEvent) {
+  if (event.button !== 0) {
+    return
+  }
+  const target = event.target as HTMLElement | null
+  if (!target) {
+    return
+  }
+  if (target.closest('.node-label') || target.closest('.tree-node-trailing') || target.closest('.v-btn')) {
+    return
+  }
+  if (!selectedNodeIds.value.length) {
+    return
+  }
+  sceneStore.clearSelection()
+  selectionAnchorId.value = null
+}
+
 function resetDragState() {
   dragState.value = { sourceId: null, targetId: null, position: null }
   materialDropTargetId.value = null
@@ -613,6 +631,7 @@ function handleTreeDragLeave(event: DragEvent) {
         @dragover="handleTreeDragOver"
         @drop="handleTreeDrop"
         @dragleave="handleTreeDragLeave"
+        @mousedown="handleTreeBackgroundMouseDown"
       >
         <v-treeview
           v-model:opened="opened"
