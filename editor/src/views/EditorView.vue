@@ -1052,12 +1052,12 @@ async function loadExternalSceneFile(
     }
 
     const cleanup = () => {
-      loader.$off('progress', handleProgress)
-      loader.$off('loaded', handleLoaded)
+      loader.removeEventListener('progress', handleProgress)
+      loader.removeEventListener('loaded', handleLoaded)
     }
 
-    loader.$on('progress', handleProgress)
-    loader.$on('loaded', handleLoaded)
+    loader.addEventListener('progress', handleProgress)
+    loader.addEventListener('loaded', handleLoaded)
 
     try {
       loader.loadFile(file)

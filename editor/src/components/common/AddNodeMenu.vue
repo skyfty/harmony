@@ -266,12 +266,12 @@ function loadObjectFromRemoteFile(file: File): Promise<THREE.Object3D> {
     }
 
     const cleanup = () => {
-      loader.$off('loaded', handleLoaded)
-      loader.$off('progress', handleProgress)
+      loader.removeEventListener('loaded', handleLoaded)
+      loader.removeEventListener('progress', handleProgress)
     }
 
-    loader.$on('loaded', handleLoaded)
-    loader.$on('progress', handleProgress)
+    loader.addEventListener('loaded', handleLoaded)
+    loader.addEventListener('progress', handleProgress)
 
     try {
       loader.loadFile(file)
@@ -286,7 +286,7 @@ function handleMenuImportFromFile() {
   const loader = new Loader()
   const sourceFiles = new Map<string, File[]>()
 
-  loader.$on('loaded', async (object: LoaderLoadedPayload) => {
+  loader.addEventListener('loaded', async (object: LoaderLoadedPayload) => {
     if (!object) {
       console.error('Failed to load object.')
       uiStore.updateLoadingOverlay({
@@ -383,7 +383,7 @@ function handleMenuImportFromFile() {
     uiStore.updateLoadingProgress(100)
   })
 
-  loader.$on('progress', (payload: LoaderProgressPayload) => {
+  loader.addEventListener('progress', (payload: LoaderProgressPayload) => {
     const percent = (payload.loaded / payload.total) * 100
     uiStore.updateLoadingOverlay({
       mode: 'determinate',

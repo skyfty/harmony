@@ -35,9 +35,9 @@ export async function loadObjectFromFile(file: File, options: LoadObjectOptions 
     const loader = new Loader()
 
     const cleanup = () => {
-      loader.$off('loaded', handleLoaded)
+      loader.removeEventListener('loaded', handleLoaded)
       if (options.onProgress) {
-        loader.$off('progress', options.onProgress)
+        loader.removeEventListener('progress', options.onProgress)
       }
     }
 
@@ -52,10 +52,10 @@ export async function loadObjectFromFile(file: File, options: LoadObjectOptions 
       resolve(object)
     }
 
-    loader.$on('loaded', handleLoaded)
+    loader.addEventListener('loaded', handleLoaded)
 
     if (options.onProgress) {
-      loader.$on('progress', options.onProgress)
+      loader.addEventListener('progress', options.onProgress)
     }
 
     try {
