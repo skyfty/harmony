@@ -14,7 +14,7 @@ const emit = defineEmits<{
 
 const params = computed<MoveToBehaviorParams>(() => ({
   targetNodeId: props.modelValue?.targetNodeId ?? null,
-  speed: Math.max(0, props.modelValue?.speed ?? 10),
+  speed: Math.max(0, props.modelValue?.speed ?? 20),
   offset: Math.max(0, props.modelValue?.offset ?? 1),
 }))
 
