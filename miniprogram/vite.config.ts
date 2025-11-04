@@ -9,7 +9,7 @@ import { createMpChunkSplitterPlugin } from "@minisheep/vite-plugin-mp-chunk-spl
 export default defineConfig({
   optimizeDeps: {
     exclude: ['@minisheep/three-platform-adapter']
-  },
+  },  
   resolve: {
     alias: {
       '@schema': fileURLToPath(new URL('../schema', import.meta.url)),
@@ -36,6 +36,7 @@ export default defineConfig({
     threePlatformAdapter(),
     createMpChunkSplitterPlugin({
       singleChunkMode: true,
+      subpackages: ['package-scene'],
       packageSizeLimit: 1.8 * 1024 * 1024
     }),
 

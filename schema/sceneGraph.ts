@@ -908,12 +908,12 @@ class SceneGraphBuilder {
       }
       loader.$on('loaded', handleLoaded)
 
-      try {
-        loader.loadFile(file)
-      } catch (error) {
-        cleanup()
-        reject(error)
-      }
+      // try {
+      //   loader.loadFile(file)
+      // } catch (error) {
+      //   cleanup()
+      //   reject(error)
+      // }
     })
   }
 
@@ -1075,7 +1075,7 @@ export async function buildSceneGraph(
   document: SceneJsonExportDocument,
   options: SceneGraphBuildOptions = {},
 ): Promise<SceneGraphBuildResult> {
-  const builder = new SceneGraphBuilder(document, options);
+  const builder = new SceneGraphBuilder(document, options);    
   try {
     const root = await builder.build();
     return { root, warnings: builder.getWarnings() };
