@@ -1,12 +1,5 @@
 <template>
   <view class="viewer-page">
-    <view class="viewer-header">
-      <button class="back-button" @tap="handleBack">返回</button>
-      <view class="header-info">
-        <text class="scene-name">{{ previewTitle }}</text>
-        <text v-if="headerCaption" class="scene-meta">{{ headerCaption }}</text>
-      </view>
-    </view>
     <view class="viewer-canvas-wrapper">
       <PlatformCanvas
         v-if="!error"

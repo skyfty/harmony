@@ -316,15 +316,20 @@ function confirmDelete(sceneId: string) {
     display: flex;
     flex-direction: column;
     height: 100vh;
-    padding: 16px;
+    padding: 16px 16px 96px;
     box-sizing: border-box;
     background-color: #f5f7fb;
     gap: 12px;
 }
 
 .toolbar {
+    position: fixed;
+    left: 16px;
+    right: 16px;
+    bottom: 16px;
     display: flex;
     gap: 12px;
+    z-index: 10;
 }
 
 .action {
@@ -368,6 +373,8 @@ function confirmDelete(sceneId: string) {
 .scene-list {
     flex: 1;
     background-color: transparent;
+    padding-bottom: 80px;
+    box-sizing: border-box;
 }
 
 .scene-card {
