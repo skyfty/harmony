@@ -5891,13 +5891,25 @@ export const useSceneStore = defineStore('scene', {
       sourceAssetId?: string
       rotation?: THREE.Vector3
       scale?: THREE.Vector3
+      parentId?: string | null
     }): Promise<SceneNode | null> {
       if (!payload.object && !payload.asset) {
         throw new Error('addModelNode requires either an object or an asset')
       }
 
-  const rotation: Vector3Like = payload.rotation ?? { x: 0, y: 0, z: 0 }
-  const scale: Vector3Like = payload.scale ?? { x: 1, y: 1, z: 1 }
+      const baseRotation = {
+        x: payload.rotation?.x ?? 0,
+        y: payload.rotation?.y ?? 0,
+        z: payload.rotation?.z ?? 0,
+      }
+      const baseScale = {
+        x: payload.scale?.x ?? 1,
+        y: payload.scale?.y ?? 1,
+        z: payload.scale?.z ?? 1,
+      }
+      let rotation: Vector3Like = { ...baseRotation }
+      let scale: Vector3Like = { ...baseScale }
+      let targetParentId = payload.parentId ?? null
       let baseY = payload.baseY ?? 0
 
       let workingObject: Object3D
@@ -5961,16 +5973,42 @@ export const useSceneStore = defineStore('scene', {
         })
       }
 
+      let parentMatrix: Matrix4 | null = null
+      if (targetParentId) {
+        parentMatrix = computeWorldMatrixForNode(this.nodes, targetParentId)
+        if (!parentMatrix) {
+          targetParentId = null
+        }
+      }
+
+      let localPosition = spawnVector.clone()
+      if (parentMatrix) {
+        const worldQuaternion = new Quaternion().setFromEuler(new Euler(baseRotation.x, baseRotation.y, baseRotation.z, 'XYZ'))
+        const worldScale = new Vector3(baseScale.x, baseScale.y, baseScale.z)
+        const worldMatrix = new Matrix4().compose(spawnVector.clone(), worldQuaternion, worldScale)
+        const parentInverse = parentMatrix.clone().invert()
+        const localMatrix = new Matrix4().multiplyMatrices(parentInverse, worldMatrix)
+        const positionVec = new Vector3()
+        const rotationQuat = new Quaternion()
+        const scaleVec = new Vector3()
+        localMatrix.decompose(positionVec, rotationQuat, scaleVec)
+        const euler = new Euler().setFromQuaternion(rotationQuat, 'XYZ')
+        localPosition = positionVec
+        rotation = { x: euler.x, y: euler.y, z: euler.z }
+        scale = { x: scaleVec.x, y: scaleVec.y, z: scaleVec.z }
+      }
+
       const nodeType = payload.nodeType ?? resolveSceneNodeTypeFromObject(workingObject)
 
       const node = this.addSceneNode({
         nodeType,
         object: workingObject,
         name: name ?? workingObject.name ?? 'Imported Mesh',
-        position: toPlainVector(spawnVector),
+        position: toPlainVector(localPosition),
         rotation,
         scale,
         sourceAssetId: sourceAssetId ?? undefined,
+        parentId: targetParentId ?? undefined,
       })
 
       if (registerAssetId && assetCache) {
@@ -6068,6 +6106,7 @@ export const useSceneStore = defineStore('scene', {
       sourceAssetId?: string
       dynamicMesh?: SceneDynamicMesh
       components?: SceneNodeComponentMap
+      parentId?: string | null
     }) {
       this.captureHistorySnapshot()
       const id = generateUuid()
@@ -6105,8 +6144,17 @@ export const useSceneStore = defineStore('scene', {
       tagObjectWithNodeId(payload.object, id)
       componentManager.attachRuntime(node, payload.object)
       componentManager.syncNode(node)
-      this.nodes = [node, ...this.nodes]
-      this.setSelection([id])
+      let nextTree: SceneNode[]
+      const parentId = payload.parentId ?? null
+      if (parentId) {
+        const workingTree = [...this.nodes]
+        const inserted = insertNodeMutable(workingTree, parentId, node, 'inside')
+        nextTree = inserted ? workingTree : [node, ...workingTree]
+      } else {
+        nextTree = [node, ...this.nodes]
+      }
+      this.nodes = nextTree
+      this.setSelection([id], { primaryId: id })
       commitSceneSnapshot(this)
 
       return node

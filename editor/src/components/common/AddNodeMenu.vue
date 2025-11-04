@@ -12,7 +12,7 @@ import { useUiStore } from '@/stores/uiStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import UrlInputDialog from './UrlInputDialog.vue'
 import { generateUuid } from '@/utils/uuid'
-import  {type LightNodeType,type SceneNode } from '@harmony/schema'
+import { type LightNodeType, type SceneNode } from '@harmony/schema'
 
 const sceneStore = useSceneStore()
 const uiStore = useUiStore()
@@ -466,8 +466,21 @@ function handleAddGroup() {
   })
 }
 
+function resolveActiveModelParentId(): string | null {
+  const active = sceneStore.selectedNode
+  if (!active) {
+    return null
+  }
+  if (active.isPlaceholder) {
+    return null
+  }
+  const disallowed = ['Group', 'Light', 'Camera']
+  return disallowed.includes(active.nodeType) ? null : active.id
+}
+
 async function handleAddNode(geometry: GeometryType) {
   const mesh = createPrimitiveMesh(geometry)
+  const parentId = resolveActiveModelParentId()
 
   let spawnY = 0
   const bufferGeometry = mesh.geometry as THREE.BufferGeometry
@@ -491,6 +504,7 @@ async function handleAddNode(geometry: GeometryType) {
     nodeType: geometry,
     name: mesh.name,
     baseY: spawnY,
+    parentId,
   })
 }
 
