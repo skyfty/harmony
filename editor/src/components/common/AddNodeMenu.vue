@@ -466,6 +466,47 @@ function handleAddGroup() {
   })
 }
 
+function collectNodeNames(nodes: SceneNode[] | undefined, bucket: Set<string>) {
+  if (!nodes?.length) {
+    return
+  }
+  nodes.forEach((node) => {
+    if (node.name) {
+      bucket.add(node.name)
+    }
+    if (node.children?.length) {
+      collectNodeNames(node.children, bucket)
+    }
+  })
+}
+
+function getNextEmptyName(): string {
+  const names = new Set<string>()
+  collectNodeNames(sceneStore.nodes, names)
+  if (!names.has('Empty')) {
+    return 'Empty'
+  }
+  let index = 1
+  while (names.has(`Empty ${index}`)) {
+    index += 1
+  }
+  return `Empty ${index}`
+}
+
+function handleCreateEmptyNode() {
+  const emptyObject = new THREE.Object3D()
+  const name = getNextEmptyName()
+  emptyObject.name = name
+  const parentCandidate = sceneStore.selectedNode
+  const parentId = parentCandidate && !parentCandidate.isPlaceholder ? parentCandidate.id : null
+  sceneStore.addSceneNode({
+    nodeType: 'Mesh',
+    object: emptyObject,
+    name,
+    parentId,
+  })
+}
+
 function resolveActiveModelParentId(): string | null {
   const active = sceneStore.selectedNode
   if (!active) {
@@ -523,6 +564,7 @@ function handleAddLight(type: LightNodeType) {
     </template>
     <v-list class="add-menu-list">
       <v-list-item title="Group" @click="handleAddGroup()" />
+      <v-list-item title="Create Empty" @click="handleCreateEmptyNode()" />
       <v-menu  transition="none" location="end" offset="8">
         <template #activator="{ props: lightMenuProps }">
           <v-list-item title="Light" append-icon="mdi-chevron-right" v-bind="lightMenuProps" />
