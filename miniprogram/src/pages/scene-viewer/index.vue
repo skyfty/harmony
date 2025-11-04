@@ -140,6 +140,10 @@ const resourcePreloadPercent = computed(() => {
 
 const SKY_ENVIRONMENT_INTENSITY = 0.35;
 const SKY_SCALE = 2500;
+const HUMAN_EYE_HEIGHT = 1.7;
+const CAMERA_FORWARD_OFFSET = 1.5;
+const CAMERA_MAX_LOOK_UP = THREE.MathUtils.degToRad(50);
+const CAMERA_MAX_LOOK_DOWN = THREE.MathUtils.degToRad(30);
 const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
   presetId: 'clear-day',
   exposure: 0.6,
@@ -174,6 +178,7 @@ const nodeObjectMap = new Map<string, THREE.Object3D>();
 const behaviorRaycaster = new THREE.Raycaster();
 const behaviorPointer = new THREE.Vector2();
 let behaviorTapListener: ((event: TouchEvent) => void) | null = null;
+let lockCameraChangeHandler: (() => void) | null = null;
 
 const behaviorAlertVisible = ref(false);
 const behaviorAlertTitle = ref('');
@@ -695,6 +700,10 @@ function teardownRenderer() {
   behaviorAlertVisible.value = false;
   previewNodeMap.clear();
   nodeObjectMap.clear();
+  if (lockCameraChangeHandler) {
+    controls.removeEventListener('change', lockCameraChangeHandler);
+    lockCameraChangeHandler = null;
+  }
   controls.dispose();
   disposeSkyResources();
   pmremGenerator?.dispose();
@@ -737,12 +746,32 @@ async function ensureRendererContext(result: UseCanvasResult) {
   pmremGenerator = new THREE.PMREMGenerator(renderer);
 
   const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 2000);
-  camera.position.set(5, 5, 5);
+  camera.position.set(0, HUMAN_EYE_HEIGHT, 0);
+  camera.lookAt(0, HUMAN_EYE_HEIGHT, -CAMERA_FORWARD_OFFSET);
 
   const controls = new OrbitControls(camera, canvas as unknown as HTMLElement);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
-  controls.target.set(0, 0, 0);
+  controls.target.set(0, HUMAN_EYE_HEIGHT, -CAMERA_FORWARD_OFFSET);
+  controls.enableZoom = false;
+  controls.enablePan = false;
+  controls.screenSpacePanning = false;
+  controls.minAzimuthAngle = -Infinity;
+  controls.maxAzimuthAngle = Infinity;
+  const horizon = Math.PI / 2;
+  controls.minPolarAngle = Math.max(0, horizon - CAMERA_MAX_LOOK_UP);
+  controls.maxPolarAngle = Math.min(Math.PI, horizon + CAMERA_MAX_LOOK_DOWN);
+  controls.minDistance = CAMERA_FORWARD_OFFSET;
+  controls.maxDistance = CAMERA_FORWARD_OFFSET;
+
+  const forwardScratch = new THREE.Vector3();
+  lockCameraChangeHandler = () => {
+    forwardScratch.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    camera.position.set(0, HUMAN_EYE_HEIGHT, 0);
+    controls.target.copy(camera.position).addScaledVector(forwardScratch, CAMERA_FORWARD_OFFSET);
+  };
+  controls.addEventListener('change', lockCameraChangeHandler);
+  controls.update();
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#f9f9f9');
@@ -754,27 +783,6 @@ async function ensureRendererContext(result: UseCanvasResult) {
     camera,
     controls,
   };
-}
-
-function focusCameraOnScene(root: THREE.Object3D) {
-  if (!renderContext) {
-    return;
-  }
-  const { camera, controls } = renderContext;
-  const box = new THREE.Box3().setFromObject(root);
-  if (!box.isEmpty()) {
-    const size = box.getSize(new THREE.Vector3());
-    const center = box.getCenter(new THREE.Vector3());
-    const maxSize = Math.max(size.x, size.y, size.z);
-    const distance = maxSize / Math.tan((camera.fov * Math.PI) / 360);
-    const offset = new THREE.Vector3(distance, distance, distance);
-    camera.position.copy(center.clone().add(offset));
-    camera.near = Math.max(0.1, distance / 100);
-    camera.far = distance * 100;
-    camera.updateProjectionMatrix();
-    controls.target.copy(center);
-    controls.update();
-  }
 }
 
 async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanvasResult) {
@@ -845,7 +853,6 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   indexSceneObjects(graph.root);
   ensureBehaviorTapHandler(canvas as HTMLCanvasElement, camera);
 
-  focusCameraOnScene(graph.root);
 
   const skyboxSettings = resolveSceneSkybox(payload.document);
   applySkyboxSettings(skyboxSettings);
