@@ -5,7 +5,6 @@ import type {
   HideBehaviorParams,
   LanternBehaviorParams,
   MoveToBehaviorParams,
-  MoveToFacingDirection,
   SceneBehavior,
   SceneBehaviorMap,
   ShowAlertBehaviorParams,
@@ -52,7 +51,6 @@ export type BehaviorRuntimeEvent =
       behaviorId: string
       targetNodeId: string
       speed: number
-      facing: MoveToFacingDirection
       offset: number
       token: string
     }
@@ -378,7 +376,6 @@ function createMoveCameraEvent(state: BehaviorSequenceState, behavior: SceneBeha
     behaviorId: behavior.id,
     targetNodeId,
     speed: Math.max(0, params.speed ?? 10),
-    facing: params.facing ?? 'front',
     offset: Math.max(0, params.offset ?? 1),
     token,
   }

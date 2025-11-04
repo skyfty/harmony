@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
-import type { MoveToBehaviorParams, MoveToFacingDirection } from '@harmony/schema'
+import type { MoveToBehaviorParams } from '@harmony/schema'
 import NodePicker from '@/components/common/NodePicker.vue'
 
 const props = defineProps<{
@@ -12,17 +12,9 @@ const emit = defineEmits<{
   (event: 'pick-state-change', value: boolean): void
 }>()
 
-const FACING_OPTIONS: Array<{ label: string; value: MoveToFacingDirection }> = [
-  { label: 'Front', value: 'front' },
-  { label: 'Back', value: 'back' },
-  { label: 'Left', value: 'left' },
-  { label: 'Right', value: 'right' },
-]
-
 const params = computed<MoveToBehaviorParams>(() => ({
   targetNodeId: props.modelValue?.targetNodeId ?? null,
   speed: Math.max(0, props.modelValue?.speed ?? 10),
-  facing: props.modelValue?.facing ?? 'front',
   offset: Math.max(0, props.modelValue?.offset ?? 1),
 }))
 
@@ -45,10 +37,6 @@ function updateOffset(value: string | number) {
   const numeric = typeof value === 'number' ? value : parseFloat(value)
   const normalized = Number.isFinite(numeric) ? Math.max(0, numeric) : 0
   emitUpdate({ offset: normalized })
-}
-
-function updateFacing(value: MoveToFacingDirection) {
-  emitUpdate({ facing: value })
 }
 
 function updateTarget(nodeId: string | null) {
@@ -91,17 +79,6 @@ onBeforeUnmount(() => {
       min="0"
       step="0.1"
       @update:model-value="updateSpeed($event)"
-    />
-    <v-select
-      :model-value="params.facing"
-      :items="FACING_OPTIONS"
-      item-title="label"
-      item-value="value"
-      label="Facing direction"
-      density="compact"
-      variant="underlined"
-      hide-details
-      @update:model-value="updateFacing($event as MoveToFacingDirection)"
     />
     <v-text-field
       :model-value="params.offset"

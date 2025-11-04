@@ -1344,21 +1344,7 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
 		tempQuaternion.identity()
 	}
 	const baseOffset = Math.max(event.offset, 0.5)
-	switch (event.facing) {
-		case 'back':
-			tempDirection.set(0, 0, -baseOffset)
-			break
-		case 'left':
-			tempDirection.set(-baseOffset, 0, 0)
-			break
-		case 'right':
-			tempDirection.set(baseOffset, 0, 0)
-			break
-		case 'front':
-		default:
-			tempDirection.set(0, 0, baseOffset)
-			break
-	}
+	tempDirection.set(0, 0, baseOffset)
 	tempDirection.applyQuaternion(tempQuaternion)
 	if (Math.abs(tempDirection.y) < CAMERA_HEIGHT * 0.25) {
 		tempDirection.y = Math.sign(tempDirection.y || 1) * CAMERA_HEIGHT * 0.4

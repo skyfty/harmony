@@ -5,7 +5,6 @@ import type {
   DelayBehaviorParams,
   LookBehaviorParams,
   MoveToBehaviorParams,
-  MoveToFacingDirection,
   SceneBehavior,
   SceneBehaviorMap,
   SceneBehaviorScriptBinding,
@@ -134,7 +133,6 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
       return {
         targetNodeId: null,
         speed: 10,
-        facing: 'front',
         offset: 1,
       }
     },
@@ -303,13 +301,11 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
       }
     case 'moveTo': {
       const params = binding.params as MoveToBehaviorParams | undefined
-      const facing: MoveToFacingDirection = params?.facing ?? 'front'
       return {
         type: 'moveTo',
         params: {
           targetNodeId: params?.targetNodeId ?? null,
           speed: Math.max(0, params?.speed ?? 10),
-          facing,
           offset: Math.max(0, params?.offset ?? 1),
         },
       }
@@ -523,13 +519,11 @@ export function ensureBehaviorParams(
       }
       case 'moveTo': {
         const params = script.params as Partial<MoveToBehaviorParams> | undefined
-        const facing: MoveToFacingDirection = params?.facing ?? 'front'
         return {
           type: 'moveTo',
           params: {
             targetNodeId: params?.targetNodeId ?? null,
             speed: Math.max(0, params?.speed ?? 10),
-            facing,
             offset: Math.max(0, params?.offset ?? 1),
           },
         }

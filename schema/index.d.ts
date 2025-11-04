@@ -187,8 +187,6 @@ export type BehaviorScriptType =
   | 'trigger'
   | 'animation'
 
-export type MoveToFacingDirection = 'front' | 'back' | 'left' | 'right'
-
 export interface DelayBehaviorParams {
   /** Duration to wait before continuing, measured in seconds. */
   seconds: number
@@ -199,8 +197,6 @@ export interface MoveToBehaviorParams {
   targetNodeId: string | null
   /** Camera travel speed in meters per second. */
   speed: number
-  /** Camera orientation once positioned around the node. */
-  facing: MoveToFacingDirection
   /** Distance from the node's center point in meters. */
   offset: number
 }
