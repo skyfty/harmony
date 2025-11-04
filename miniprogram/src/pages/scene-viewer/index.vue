@@ -1,6 +1,5 @@
 <template>
   <view class="viewer-page">
-    xxxxxxxxxxxxxxxxxxxx
     <view class="viewer-header">
       <button class="back-button" @tap="handleBack">返回</button>
       <view class="header-info">
