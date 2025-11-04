@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import Loader, { type LoaderLoadedPayload } from '@schema/loader';
 import { AssetCache, AssetLoader, type AssetCacheEntry, type AssetSource } from './assetCache';
 import { SceneMaterialFactory, type MaterialAssetProvider, type MaterialAssetSource, textureSettingsSignature } from './material';
 import { createPrimitiveGeometry } from './geometry';
@@ -37,30 +38,6 @@ type SceneNodeWithExtras = SceneNode & {
   dynamicMesh?: any;
   components?: SceneNodeComponentMap;
 };
-
-type LoaderLoadedPayload = THREE.Object3D | THREE.Group | THREE.Mesh | THREE.Points | null;
-
-interface GltfParseOptions {
-  manager?: THREE.LoadingManager;
-  dracoDecoderPath?: string;
-  ktx2TranscoderPath?: string;
-}
-
-const DEFAULT_KTX2_TRANSCODER_PATH = '../examples/jsm/libs/basis/';
-// import { MeshoptDecoder } from '@three-examples/libs/meshopt_decoder.module.js';
-
-async function createGltfLoader(options: GltfParseOptions = {}): Promise<any> {
-  const { GLTFLoader } = await import('@three-examples/loaders/GLTFLoader.js');
-  const { KTX2Loader } = await import('@three-examples/loaders/KTX2Loader.js');
-
-  const loader = new GLTFLoader(options.manager);
-
-  const ktx2Loader = new KTX2Loader(options.manager);
-  ktx2Loader.setTranscoderPath(options.ktx2TranscoderPath ?? DEFAULT_KTX2_TRANSCODER_PATH);
-  loader.setKTX2Loader(ktx2Loader);
-  // loader.setMeshoptDecoder(MeshoptDecoder);
-  return loader;
-}
 
 
 function extractPresetRelativePath(candidate: string): string | null {
@@ -913,142 +890,29 @@ class SceneGraphBuilder {
     return prepared;
   }
 
-
   private loadObjectFromFile(file: File): Promise<THREE.Object3D> {
     return new Promise<THREE.Object3D>((resolve, reject) => {
-      const filename = file.name;
-      const extension = filename.split('.').pop()?.toLowerCase();
+      const loader = new Loader()
 
-      if (!extension) {
-        reject(new Error('Unable to determine file extension.'))
-        return;
+      const handleLoaded = (payload: LoaderLoadedPayload) => {
+        cleanup()
+        if (!payload) {
+          reject(new Error('解析资源失败'))
+          return
+        }
+        resolve(payload as THREE.Object3D)
       }
-      const reader = new FileReader();
 
-      switch (extension) {
-        case 'dae': {
-          reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-            const contents = event.target?.result as string;
-            if (!contents) return;
+      const cleanup = () => {
+        loader.removeEventListener('loaded', handleLoaded)
+      }
+      loader.addEventListener('loaded', handleLoaded)
 
-            const { ColladaLoader } = await import('@three-examples/loaders/ColladaLoader.js');
-
-            const loader = new ColladaLoader(undefined);
-            const collada = loader.parse(contents, '');
-
-            collada.scene.name = filename;
-            resolve(collada.scene as THREE.Object3D)
-          });
-          reader.readAsText(file);
-          break;
-        }
-
-        case 'fbx': {
-          reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-            const contents = event.target?.result as ArrayBuffer;
-            if (!contents) return;
-
-            const { FBXLoader } = await import('@three-examples/loaders/FBXLoader.js');
-
-            const loader = new FBXLoader(undefined);
-            const object = loader.parse(contents, '');
-            object.name = filename;
-            resolve(object);
-          });
-          reader.readAsArrayBuffer(file);
-          break;
-        }
-
-        case 'glb': {
-          reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-            const contents = event.target?.result as ArrayBuffer;
-            if (!contents) return;
-            const loader = await createGltfLoader({  });
-            loader.parse(contents, '', (result: any) => {
-              const scene = result.scene;
-              scene.name = filename;
-
-              scene.animations.push(...result.animations);
-
-              if (loader.dracoLoader) loader.dracoLoader.dispose();
-              if (loader.ktx2Loader) loader.ktx2Loader.dispose();
-
-              resolve(scene);
-            });
-          });
-          reader.readAsArrayBuffer(file);
-          break;
-        }
-
-        case 'obj': {
-          reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-            const contents = event.target?.result as string;
-            if (!contents) return;
-
-            const { OBJLoader } = await import('@three-examples/loaders/OBJLoader.js');
-
-            const object = new OBJLoader().parse(contents);
-            object.name = filename;
-            resolve(object);
-          });
-          reader.readAsText(file);
-          break;
-        }
-
-        case 'ply': {
-          reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-            const contents = event.target?.result as ArrayBuffer;
-            if (!contents) return;
-
-            const { PLYLoader } = await import('@three-examples/loaders/PLYLoader.js');
-
-            const geometry = new PLYLoader().parse(contents);
-            let object: LoaderLoadedPayload;
-
-            if (geometry.index !== null) {
-              const material = new THREE.MeshStandardMaterial();
-
-              object = new THREE.Mesh(geometry, material);
-            } else {
-              const material = new THREE.PointsMaterial({ size: 0.01 });
-              material.vertexColors = geometry.hasAttribute('color');
-
-              object = new THREE.Points(geometry, material);
-            }
-
-            object.name = filename;
-            resolve(object);
-          });
-          reader.readAsArrayBuffer(file);
-          break;
-        }
-
-        case 'stl': {
-          reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-            const contents = event.target?.result as ArrayBuffer;
-            if (!contents) return;
-
-            const { STLLoader } = await import('@three-examples/loaders/STLLoader.js');
-
-            const geometry = new STLLoader().parse(contents);
-            const material = new THREE.MeshStandardMaterial();
-
-            const mesh = new THREE.Mesh(geometry, material);
-            mesh.name = filename;
-            resolve(mesh);
-          });
-
-          if (reader.readAsBinaryString !== undefined) {
-            reader.readAsBinaryString(file);
-          } else {
-            reader.readAsArrayBuffer(file);
-          }
-          break;
-        }
-
-        default:
-          console.error(`Unsupported file format (${extension}).`);
-          break;
+      try {
+        loader.loadFile(file)
+      } catch (error) {
+        cleanup()
+        reject(error)
       }
     })
   }
