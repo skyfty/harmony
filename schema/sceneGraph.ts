@@ -47,7 +47,7 @@ interface GltfParseOptions {
 }
 
 const DEFAULT_KTX2_TRANSCODER_PATH = '../examples/jsm/libs/basis/';
-import { MeshoptDecoder } from '@three-examples/libs/meshopt_decoder.module.js';
+// import { MeshoptDecoder } from '@three-examples/libs/meshopt_decoder.module.js';
 
 async function createGltfLoader(options: GltfParseOptions = {}): Promise<any> {
   const { GLTFLoader } = await import('@three-examples/loaders/GLTFLoader.js');
@@ -58,7 +58,7 @@ async function createGltfLoader(options: GltfParseOptions = {}): Promise<any> {
   const ktx2Loader = new KTX2Loader(options.manager);
   ktx2Loader.setTranscoderPath(options.ktx2TranscoderPath ?? DEFAULT_KTX2_TRANSCODER_PATH);
   loader.setKTX2Loader(ktx2Loader);
-  loader.setMeshoptDecoder(MeshoptDecoder);
+  // loader.setMeshoptDecoder(MeshoptDecoder);
   return loader;
 }
 

@@ -92,7 +92,7 @@ const formatDate = (value?: string) => {
 };
 
 function openScene(sceneId: string) {
-    uni.navigateTo({ url: `/package-scene/pages/scene-viewer/index?id=${sceneId}` });
+    uni.navigateTo({ url: `/pages/scene-viewer/index?id=${sceneId}` });
 }
 
 function openUrlDialog() {

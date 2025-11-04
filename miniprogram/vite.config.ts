@@ -36,7 +36,6 @@ export default defineConfig({
     threePlatformAdapter(),
     createMpChunkSplitterPlugin({
       singleChunkMode: true,
-      subpackages: ['package-scene'],
       packageSizeLimit: 1.8 * 1024 * 1024
     }),
 

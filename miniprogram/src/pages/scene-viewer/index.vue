@@ -1,6 +1,8 @@
 <template>
   <view class="viewer-page">
-        <view class="viewer-header">
+    xxxxxxxxxxxxxxxxxxxx
+    <view class="viewer-header">
+      <button class="back-button" @tap="handleBack">返回</button>
       <view class="header-info">
         <text class="scene-name">{{ previewTitle }}</text>
         <text v-if="headerCaption" class="scene-meta">{{ headerCaption }}</text>
@@ -57,8 +59,8 @@
       <view class="footer-warnings">
         <text v-for="item in warnings" :key="item" class="warning-item">{{ item }}</text>
       </view>
-        </view>
     </view>
+  </view>
 </template>
 
 <script setup lang="ts">
