@@ -100,6 +100,32 @@
       <view v-if="error" class="viewer-overlay error">
         <text>{{ error }}</text>
       </view>
+      <view
+        id="viewerMoveJoystick"
+        :class="['viewer-joystick', 'viewer-joystick--move', { 'is-active': moveJoystickState.active }]"
+        @touchstart.stop.prevent="onJoystickTouchStart('move', $event)"
+        @touchmove.stop.prevent="onJoystickTouchMove('move', $event)"
+        @touchend.stop="onJoystickTouchEnd('move', $event)"
+        @touchcancel.stop="onJoystickTouchEnd('move', $event)"
+        @mousedown.stop.prevent="onJoystickMouseDown('move', $event)"
+      >
+        <view class="viewer-joystick__base" />
+        <view class="viewer-joystick__thumb" :style="moveThumbStyle" />
+        <view class="viewer-joystick__label">移动</view>
+      </view>
+      <view
+        id="viewerLookJoystick"
+        :class="['viewer-joystick', 'viewer-joystick--look', { 'is-active': lookJoystickState.active }]"
+        @touchstart.stop.prevent="onJoystickTouchStart('look', $event)"
+        @touchmove.stop.prevent="onJoystickTouchMove('look', $event)"
+        @touchend.stop="onJoystickTouchEnd('look', $event)"
+        @touchcancel.stop="onJoystickTouchEnd('look', $event)"
+        @mousedown.stop.prevent="onJoystickMouseDown('look', $event)"
+      >
+        <view class="viewer-joystick__base" />
+        <view class="viewer-joystick__thumb" :style="lookThumbStyle" />
+        <view class="viewer-joystick__label">视角</view>
+      </view>
     </view>
     <view class="viewer-footer" v-if="warnings.length">
       <text class="footer-title">警告</text>
@@ -111,7 +137,7 @@
 </template>
 
 <script setup lang="ts">
-import { effectScope, watchEffect, ref, computed, onUnmounted, watch, reactive } from 'vue';
+import { effectScope, watchEffect, ref, computed, onUnmounted, watch, reactive, getCurrentInstance, nextTick } from 'vue';
 import { onLoad, onUnload, onReady } from '@dcloudio/uni-app';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -239,6 +265,71 @@ const behaviorRaycaster = new THREE.Raycaster();
 const behaviorPointer = new THREE.Vector2();
 let behaviorTapListener: ((event: TouchEvent) => void) | null = null;
 
+const instance = getCurrentInstance();
+
+type JoystickType = 'move' | 'look';
+
+interface JoystickLayout {
+  centerX: number;
+  centerY: number;
+  radius: number;
+}
+
+interface JoystickState {
+  active: boolean;
+  pointerId: number | null;
+  pointerType: 'touch' | 'mouse' | null;
+  offsetX: number;
+  offsetY: number;
+  valueX: number;
+  valueY: number;
+}
+
+const joystickLayouts = reactive<Record<JoystickType, JoystickLayout | null>>({
+  move: null,
+  look: null,
+});
+
+const moveJoystickState = reactive<JoystickState>({
+  active: false,
+  pointerId: null,
+  pointerType: null,
+  offsetX: 0,
+  offsetY: 0,
+  valueX: 0,
+  valueY: 0,
+} as JoystickState);
+
+const lookJoystickState = reactive<JoystickState>({
+  active: false,
+  pointerId: null,
+  pointerType: null,
+  offsetX: 0,
+  offsetY: 0,
+  valueX: 0,
+  valueY: 0,
+} as JoystickState);
+
+const joystickStates: Record<JoystickType, JoystickState> = {
+  move: moveJoystickState,
+  look: lookJoystickState,
+};
+
+const activeMouseJoysticks = new Set<JoystickType>();
+let mouseMoveListener: ((event: MouseEvent) => void) | null = null;
+let mouseUpListener: ((event: MouseEvent) => void) | null = null;
+
+const JOYSTICK_DEADZONE = 0.1;
+const CAMERA_MOVE_SPEED = 4;
+const CAMERA_ROTATION_SPEED = Math.PI;
+const WHEEL_MOVE_STEP = 1.2;
+const worldUp = new THREE.Vector3(0, 1, 0);
+const tempForwardVec = new THREE.Vector3();
+const tempRightVec = new THREE.Vector3();
+const tempMovementVec = new THREE.Vector3();
+
+let wheelListenerCleanup: (() => void) | null = null;
+
 const behaviorAlertVisible = ref(false);
 const behaviorAlertTitle = ref('');
 const behaviorAlertMessage = ref('');
@@ -364,6 +455,14 @@ const lanternCurrentSlideDescription = computed(() => {
   return slide.description ?? '';
 });
 
+const moveThumbStyle = computed(() => ({
+  transform: `translate(-50%, -50%) translate(${moveJoystickState.offsetX}px, ${moveJoystickState.offsetY}px)`,
+}));
+
+const lookThumbStyle = computed(() => ({
+  transform: `translate(-50%, -50%) translate(${lookJoystickState.offsetX}px, ${lookJoystickState.offsetY}px)`,
+}));
+
 watch(
   lanternSlides,
   (slidesList) => {
@@ -403,6 +502,277 @@ watch(
   },
   { immediate: true },
 );
+
+function refreshJoystickLayouts(): void {
+  if (typeof uni === 'undefined' || typeof uni.createSelectorQuery !== 'function') {
+    return;
+  }
+  const query = uni.createSelectorQuery();
+  if (instance?.proxy) {
+    query.in(instance.proxy);
+  }
+  query
+    .select('#viewerMoveJoystick')
+    .boundingClientRect((rect) => {
+      const info = Array.isArray(rect) ? (rect[0] as UniApp.NodeInfo | undefined) : (rect as UniApp.NodeInfo | undefined);
+      if (!info) {
+        joystickLayouts.move = null;
+        return;
+      }
+      const left = Number(info.left ?? 0);
+      const top = Number(info.top ?? 0);
+      const width = Number(info.width ?? 0);
+      const height = Number(info.height ?? 0);
+      joystickLayouts.move = {
+        centerX: left + width / 2,
+        centerY: top + height / 2,
+        radius: Math.min(width, height) / 2,
+      };
+    });
+  query
+    .select('#viewerLookJoystick')
+    .boundingClientRect((rect) => {
+      const info = Array.isArray(rect) ? (rect[0] as UniApp.NodeInfo | undefined) : (rect as UniApp.NodeInfo | undefined);
+      if (!info) {
+        joystickLayouts.look = null;
+        return;
+      }
+      const left = Number(info.left ?? 0);
+      const top = Number(info.top ?? 0);
+      const width = Number(info.width ?? 0);
+      const height = Number(info.height ?? 0);
+      joystickLayouts.look = {
+        centerX: left + width / 2,
+        centerY: top + height / 2,
+        radius: Math.min(width, height) / 2,
+      };
+    });
+  query.exec();
+}
+
+function activateJoystick(
+  type: JoystickType,
+  x: number,
+  y: number,
+  pointerId: number | null,
+  pointerType: 'touch' | 'mouse',
+): void {
+  if (!joystickLayouts[type]) {
+    refreshJoystickLayouts();
+  }
+  const state = joystickStates[type];
+  state.active = true;
+  state.pointerId = pointerId;
+  state.pointerType = pointerType;
+  applyJoystickPoint(type, x, y);
+}
+
+function applyJoystickPoint(type: JoystickType, x: number, y: number): void {
+  const state = joystickStates[type];
+  const layout = joystickLayouts[type];
+  if (!layout) {
+    state.offsetX = 0;
+    state.offsetY = 0;
+    state.valueX = 0;
+    state.valueY = 0;
+    return;
+  }
+  const dx = x - layout.centerX;
+  const dy = y - layout.centerY;
+  if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
+    return;
+  }
+  let limitedX = dx;
+  let limitedY = dy;
+  const distance = Math.sqrt(dx * dx + dy * dy);
+  if (layout.radius > 0 && distance > layout.radius) {
+    const ratio = layout.radius / distance;
+    limitedX = dx * ratio;
+    limitedY = dy * ratio;
+  }
+  state.offsetX = limitedX;
+  state.offsetY = limitedY;
+  const scale = layout.radius > 0 ? 1 / layout.radius : 0;
+  state.valueX = limitedX * scale;
+  state.valueY = limitedY * scale;
+}
+
+function resetJoystick(type: JoystickType): void {
+  const state = joystickStates[type];
+  state.active = false;
+  state.pointerId = null;
+  state.pointerType = null;
+  state.offsetX = 0;
+  state.offsetY = 0;
+  state.valueX = 0;
+  state.valueY = 0;
+  activeMouseJoysticks.delete(type);
+}
+
+function getPointerCoordinates(source: any): { x: number; y: number } {
+  const x = Number(
+    typeof source?.clientX === 'number'
+      ? source.clientX
+      : typeof source?.pageX === 'number'
+        ? source.pageX
+        : typeof source?.x === 'number'
+          ? source.x
+          : 0,
+  );
+  const y = Number(
+    typeof source?.clientY === 'number'
+      ? source.clientY
+      : typeof source?.pageY === 'number'
+        ? source.pageY
+        : typeof source?.y === 'number'
+          ? source.y
+          : 0,
+  );
+  return { x, y };
+}
+
+function findTouchById(event: any, pointerId: number | null): any | null {
+  if (pointerId == null) {
+    const list: any[] = event?.touches ? Array.from(event.touches) : [];
+    if (list.length) {
+      return list[0];
+    }
+    const changed: any[] = event?.changedTouches ? Array.from(event.changedTouches) : [];
+    return changed[0] ?? null;
+  }
+  const touches: any[] = event?.touches ? Array.from(event.touches) : [];
+  for (const touch of touches) {
+    if (touch.identifier === pointerId) {
+      return touch;
+    }
+  }
+  const changedTouches: any[] = event?.changedTouches ? Array.from(event.changedTouches) : [];
+  for (const touch of changedTouches) {
+    if (touch.identifier === pointerId) {
+      return touch;
+    }
+  }
+  return null;
+}
+
+function isTouchStillActive(event: any, pointerId: number): boolean {
+  if (!event?.touches) {
+    return false;
+  }
+  const touches: any[] = Array.from(event.touches);
+  for (const touch of touches) {
+    if (touch.identifier === pointerId) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function onJoystickTouchStart(type: JoystickType, event: any): void {
+  if (!event) {
+    return;
+  }
+  event.stopPropagation?.();
+  event.preventDefault?.();
+  const touch = (event.changedTouches && event.changedTouches[0]) || (event.touches && event.touches[0]);
+  if (!touch) {
+    return;
+  }
+  const { x, y } = getPointerCoordinates(touch);
+  const pointerId = typeof touch.identifier === 'number' ? touch.identifier : null;
+  activateJoystick(type, x, y, pointerId, 'touch');
+}
+
+function onJoystickTouchMove(type: JoystickType, event: any): void {
+  const state = joystickStates[type];
+  if (!state.active || state.pointerType !== 'touch') {
+    return;
+  }
+  event.stopPropagation?.();
+  event.preventDefault?.();
+  const touch = findTouchById(event, state.pointerId);
+  if (!touch) {
+    return;
+  }
+  const { x, y } = getPointerCoordinates(touch);
+  applyJoystickPoint(type, x, y);
+}
+
+function onJoystickTouchEnd(type: JoystickType, event: any): void {
+  const state = joystickStates[type];
+  if (!state.active || state.pointerType !== 'touch') {
+    return;
+  }
+  event.stopPropagation?.();
+  event.preventDefault?.();
+  if (state.pointerId != null && isTouchStillActive(event, state.pointerId)) {
+    const touch = findTouchById(event, state.pointerId);
+    if (touch) {
+      const { x, y } = getPointerCoordinates(touch);
+      applyJoystickPoint(type, x, y);
+    }
+    return;
+  }
+  resetJoystick(type);
+}
+
+function onJoystickMouseDown(type: JoystickType, event: MouseEvent): void {
+  if (!event) {
+    return;
+  }
+  event.preventDefault?.();
+  event.stopPropagation?.();
+  activateJoystick(type, event.clientX, event.clientY, null, 'mouse');
+  activeMouseJoysticks.add(type);
+  attachMouseListeners();
+}
+
+function handleGlobalMouseMove(event: MouseEvent): void {
+  activeMouseJoysticks.forEach((type) => {
+    const state = joystickStates[type];
+    if (!state.active || state.pointerType !== 'mouse') {
+      return;
+    }
+    applyJoystickPoint(type, event.clientX, event.clientY);
+  });
+}
+
+function handleGlobalMouseUp(): void {
+  const active = Array.from(activeMouseJoysticks);
+  active.forEach((type) => resetJoystick(type));
+  activeMouseJoysticks.clear();
+  detachMouseListeners();
+}
+
+function attachMouseListeners(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  if (!mouseMoveListener) {
+    mouseMoveListener = (event: MouseEvent) => handleGlobalMouseMove(event);
+    window.addEventListener('mousemove', mouseMoveListener);
+  }
+  if (!mouseUpListener) {
+    mouseUpListener = () => handleGlobalMouseUp();
+    window.addEventListener('mouseup', mouseUpListener);
+    window.addEventListener('mouseleave', mouseUpListener);
+  }
+}
+
+function detachMouseListeners(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  if (mouseMoveListener) {
+    window.removeEventListener('mousemove', mouseMoveListener);
+    mouseMoveListener = null;
+  }
+  if (mouseUpListener) {
+    window.removeEventListener('mouseup', mouseUpListener);
+    window.removeEventListener('mouseleave', mouseUpListener);
+    mouseUpListener = null;
+  }
+}
 
 async function ensureLanternText(assetId: string): Promise<void> {
   const trimmed = assetId.trim();
@@ -1889,7 +2259,103 @@ function disposeObject(object: THREE.Object3D) {
   });
 }
 
+function applyDeadzone(value: number): number {
+  return Math.abs(value) < JOYSTICK_DEADZONE ? 0 : value;
+}
+
+function translateCamera(forwardDelta: number, rightDelta: number): void {
+  if (!renderContext) {
+    return;
+  }
+  const { camera, controls } = renderContext;
+  tempForwardVec.copy(controls.target).sub(camera.position);
+  tempForwardVec.y = 0;
+  if (tempForwardVec.lengthSq() < 1e-6) {
+    tempForwardVec.set(0, 0, -1);
+  } else {
+    tempForwardVec.normalize();
+  }
+  tempRightVec.copy(tempForwardVec).cross(worldUp);
+  if (tempRightVec.lengthSq() < 1e-6) {
+    tempRightVec.set(1, 0, 0);
+  } else {
+    tempRightVec.normalize();
+  }
+  tempMovementVec.set(0, 0, 0);
+  if (forwardDelta) {
+    tempMovementVec.addScaledVector(tempForwardVec, forwardDelta);
+  }
+  if (rightDelta) {
+    tempMovementVec.addScaledVector(tempRightVec, rightDelta);
+  }
+  if (tempMovementVec.lengthSq() === 0) {
+    return;
+  }
+  camera.position.add(tempMovementVec);
+  controls.target.add(tempMovementVec);
+}
+
+function applyJoystickControls(delta: number): void {
+  if (!renderContext) {
+    return;
+  }
+  const { controls } = renderContext;
+  const orbitControls = controls as any;
+  const moveX = applyDeadzone(moveJoystickState.valueX);
+  const moveY = applyDeadzone(moveJoystickState.valueY);
+  if (moveX !== 0 || moveY !== 0) {
+    translateCamera(-moveY * CAMERA_MOVE_SPEED * delta, moveX * CAMERA_MOVE_SPEED * delta);
+  }
+  const rotateX = applyDeadzone(lookJoystickState.valueX);
+  const rotateY = applyDeadzone(lookJoystickState.valueY);
+  if (rotateX !== 0) {
+    orbitControls.rotateLeft?.(-rotateX * CAMERA_ROTATION_SPEED * delta);
+  }
+  if (rotateY !== 0) {
+    orbitControls.rotateUp?.(-rotateY * CAMERA_ROTATION_SPEED * delta);
+  }
+}
+
+function setupWheelControls(canvas: any): void {
+  teardownWheelControls();
+  if (!canvas || typeof canvas.addEventListener !== 'function') {
+    return;
+  }
+  const listener = (event: WheelEvent) => handleWheelEvent(event);
+  canvas.addEventListener('wheel', listener, { passive: false });
+  wheelListenerCleanup = () => {
+    canvas.removeEventListener('wheel', listener);
+    wheelListenerCleanup = null;
+  };
+}
+
+function teardownWheelControls(): void {
+  if (wheelListenerCleanup) {
+    wheelListenerCleanup();
+    wheelListenerCleanup = null;
+  }
+}
+
+function handleWheelEvent(event: WheelEvent): void {
+  if (!renderContext) {
+    return;
+  }
+  event.preventDefault?.();
+  const deltaY = event.deltaY || 0;
+  if (!deltaY) {
+    return;
+  }
+  const direction = deltaY < 0 ? 1 : -1;
+  const magnitude = Math.min(Math.abs(deltaY) / 120, 3) || 1;
+  translateCamera(direction * WHEEL_MOVE_STEP * magnitude, 0);
+  renderContext.controls.update();
+}
+
 function teardownRenderer() {
+  detachMouseListeners();
+  resetJoystick('move');
+  resetJoystick('look');
+  teardownWheelControls();
   if (!renderContext) {
     return;
   }
@@ -1983,6 +2449,7 @@ async function ensureRendererContext(result: UseCanvasResult) {
   controls.maxDistance = CAMERA_FORWARD_OFFSET;
 
   controls.update();
+  setupWheelControls(canvas);
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#f9f9f9');
@@ -2095,6 +2562,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   scope.run(() => {
     watchEffect((onCleanup) => {
       const { cancel } = result.useFrame((delta) => {
+        applyJoystickControls(delta);
         controls.update();
         animationMixers.forEach((mixer) => mixer.update(delta));
         updateBehaviorProximity();
@@ -2122,6 +2590,7 @@ const handleResize: WindowResizeCallback = (_result) => {
     renderContext!.renderer.setSize(width, height, false);
     renderContext!.camera.aspect = width / height;
     renderContext!.camera.updateProjectionMatrix();
+    nextTick(() => refreshJoystickLayouts());
   });
 };
 
@@ -2202,6 +2671,7 @@ onReady(() => {
     resizeListener = handleResize;
     uni.onWindowResize(handleResize);
   }
+  nextTick(() => refreshJoystickLayouts());
 });
 
 onUnload(() => {
@@ -2284,6 +2754,65 @@ onUnmounted(() => {
 .viewer-canvas {
   width: 100%;
   height: 100%;
+}
+
+.viewer-joystick {
+  position: absolute;
+  bottom: 24px;
+  width: 132px;
+  height: 132px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  user-select: none;
+  touch-action: none;
+  z-index: 20;
+}
+
+.viewer-joystick--move {
+  left: 24px;
+}
+
+.viewer-joystick--look {
+  right: 24px;
+}
+
+.viewer-joystick__base {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: rgba(22, 26, 38, 0.42);
+  border: 2px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(8px);
+}
+
+.viewer-joystick.is-active .viewer-joystick__base {
+  background: rgba(22, 26, 38, 0.58);
+}
+
+.viewer-joystick__thumb {
+  position: absolute;
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgba(64, 132, 255, 0.9), rgba(104, 169, 255, 0.92));
+  box-shadow: 0 8px 18px rgba(16, 26, 45, 0.32);
+  transform: translate(-50%, -50%);
+  transition: transform 0.08s ease-out;
+}
+
+.viewer-joystick.is-active .viewer-joystick__thumb {
+  transition: none;
+}
+
+.viewer-joystick__label {
+  position: absolute;
+  bottom: -22px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.78);
+  letter-spacing: 1px;
 }
 
 .viewer-overlay {
