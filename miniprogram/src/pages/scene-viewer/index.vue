@@ -18,12 +18,67 @@
       <view
         v-if="behaviorAlertVisible"
         class="viewer-behavior-overlay"
-        @tap.self="dismissBehaviorAlert"
+  @tap.self="cancelBehaviorAlert"
       >
         <view class="viewer-behavior-dialog">
           <text class="viewer-behavior-title">{{ behaviorAlertTitle }}</text>
-          <text v-if="behaviorAlertMessage" class="viewer-behavior-message">{{ behaviorAlertMessage }}</text>
-          <button class="viewer-behavior-button" @tap="dismissBehaviorAlert">确定</button>
+          <scroll-view v-if="behaviorAlertMessage" scroll-y class="viewer-behavior-message">
+            <text>{{ behaviorAlertMessage }}</text>
+          </scroll-view>
+          <view class="viewer-behavior-actions">
+            <button
+              v-if="behaviorAlertShowCancel"
+              class="viewer-behavior-button cancel"
+              @tap="cancelBehaviorAlert"
+            >
+              {{ behaviorAlertCancelText }}
+            </button>
+            <button
+              v-if="behaviorAlertShowConfirm"
+              class="viewer-behavior-button"
+              @tap="confirmBehaviorAlert"
+            >
+              {{ behaviorAlertConfirmText }}
+            </button>
+          </view>
+        </view>
+      </view>
+      <view v-if="lanternOverlayVisible" class="viewer-lantern-overlay">
+        <view class="viewer-lantern-dialog">
+          <view v-if="lanternCurrentSlideImage" class="viewer-lantern-image-wrapper">
+            <image :src="lanternCurrentSlideImage" mode="aspectFit" class="viewer-lantern-image" />
+          </view>
+          <view class="viewer-lantern-body">
+            <text class="viewer-lantern-title">{{ lanternCurrentTitle }}</text>
+            <scroll-view
+              v-if="lanternCurrentSlideDescription"
+              scroll-y
+              class="viewer-lantern-text"
+            >
+              <text>{{ lanternCurrentSlideDescription }}</text>
+            </scroll-view>
+          </view>
+          <view v-if="lanternHasMultipleSlides" class="viewer-lantern-pagination">
+            <button
+              class="viewer-lantern-nav"
+              :disabled="lanternActiveSlideIndex === 0"
+              @tap="showPreviousLanternSlide"
+            >
+              上一页
+            </button>
+            <text class="viewer-lantern-counter">{{ lanternActiveSlideIndex + 1 }} / {{ lanternTotalSlides }}</text>
+            <button
+              class="viewer-lantern-nav"
+              :disabled="lanternActiveSlideIndex >= lanternTotalSlides - 1"
+              @tap="showNextLanternSlide"
+            >
+              下一页
+            </button>
+          </view>
+          <view class="viewer-lantern-actions">
+            <button class="viewer-lantern-button cancel" @tap="cancelLanternOverlay">取消</button>
+            <button class="viewer-lantern-button" @tap="confirmLanternOverlay">继续</button>
+          </view>
         </view>
       </view>
       <view
@@ -73,14 +128,25 @@ import PlatformCanvas from '@/components/PlatformCanvas.vue';
 import type { StoredSceneEntry } from '@/stores/sceneStore';
 import { parseSceneDocument, useSceneStore } from '@/stores/sceneStore';
 import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph';
-import type { SceneNode, SceneSkyboxSettings, SceneJsonExportDocument } from '@harmony/schema';
+import type { SceneNode, SceneSkyboxSettings, SceneJsonExportDocument, LanternSlideDefinition } from '@harmony/schema';
 import { ComponentManager } from '@schema/components/componentManager';
 import { behaviorComponentDefinition, wallComponentDefinition } from '@schema/components';
 import {
+  addBehaviorRuntimeListener,
+  hasRegisteredBehaviors,
   listInteractableObjects,
+  listRegisteredBehaviorActions,
+  removeBehaviorRuntimeListener,
   resetBehaviorRuntime,
+  resolveBehaviorEvent,
   triggerBehaviorAction,
   type BehaviorRuntimeEvent,
+  type BehaviorEventResolution,
+  type BehaviorRuntimeListener,
+  PROXIMITY_EXIT_PADDING,
+  DEFAULT_OBJECT_RADIUS,
+  PROXIMITY_MIN_DISTANCE,
+  PROXIMITY_RADIUS_SCALE,
 } from '@schema/behaviors/runtime';
 
 interface ScenePreviewPayload {
@@ -161,6 +227,7 @@ let pmremGenerator: THREE.PMREMGenerator | null = null;
 let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null;
 let pendingSkyboxSettings: SceneSkyboxSettings | null = null;
 let renderContext: RenderContext | null = null;
+let currentDocument: SceneJsonExportDocument | null = null;
 type WindowResizeCallback = Parameters<typeof uni.onWindowResize>[0];
 let resizeListener: WindowResizeCallback | null = null;
 let canvasResult: UseCanvasResult | null = null;
@@ -178,11 +245,52 @@ const nodeObjectMap = new Map<string, THREE.Object3D>();
 const behaviorRaycaster = new THREE.Raycaster();
 const behaviorPointer = new THREE.Vector2();
 let behaviorTapListener: ((event: TouchEvent) => void) | null = null;
-let lockCameraChangeHandler: (() => void) | null = null;
 
 const behaviorAlertVisible = ref(false);
 const behaviorAlertTitle = ref('');
 const behaviorAlertMessage = ref('');
+const behaviorAlertToken = ref<string | null>(null);
+const behaviorAlertShowConfirm = ref(true);
+const behaviorAlertShowCancel = ref(false);
+const behaviorAlertConfirmText = ref('确定');
+const behaviorAlertCancelText = ref('取消');
+
+const lanternOverlayVisible = ref(false);
+const lanternSlides = ref<LanternSlideDefinition[]>([]);
+const lanternActiveSlideIndex = ref(0);
+const lanternEventToken = ref<string | null>(null);
+
+type LanternTextState = { text: string; loading: boolean; error: string | null };
+
+const lanternTextState = reactive<Record<string, LanternTextState>>({});
+const lanternTextPromises = new Map<string, Promise<void>>();
+
+const activeBehaviorDelayTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const activeBehaviorAnimations = new Map<string, () => void>();
+const nodeAnimationControllers = new Map<string, { mixer: THREE.AnimationMixer; clips: THREE.AnimationClip[] }>();
+let animationMixers: THREE.AnimationMixer[] = [];
+
+type BehaviorProximityCandidate = { hasApproach: boolean; hasDepart: boolean };
+type BehaviorProximityState = { inside: boolean; lastDistance: number | null };
+type BehaviorProximityThreshold = { enter: number; exit: number; objectId: string };
+
+type AssetSourceResolution =
+  | { kind: 'data-url'; dataUrl: string }
+  | { kind: 'remote-url'; url: string }
+  | { kind: 'inline-text'; text: string }
+  | { kind: 'raw'; data: ArrayBuffer };
+
+const behaviorProximityCandidates = new Map<string, BehaviorProximityCandidate>();
+const behaviorProximityState = new Map<string, BehaviorProximityState>();
+const behaviorProximityThresholdCache = new Map<string, BehaviorProximityThreshold>();
+
+const tempBox = new THREE.Box3();
+const tempSphere = new THREE.Sphere();
+const tempVector = new THREE.Vector3();
+const tempQuaternion = new THREE.Quaternion();
+
+const assetObjectUrlCache = new Map<string, string>();
+const packageEntryCache = new Map<string, { provider: string; value: string } | null>();
 
 const previewTitle = computed(() => previewPayload.value?.title ?? '场景预览');
 const headerCaption = computed(() => {
@@ -208,6 +316,524 @@ const headerCaption = computed(() => {
   return parts.join(' · ');
 });
 
+const lanternTotalSlides = computed(() => lanternSlides.value.length);
+const lanternCurrentSlide = computed(() => {
+  const index = lanternActiveSlideIndex.value;
+  if (index < 0 || index >= lanternSlides.value.length) {
+    return null;
+  }
+  return lanternSlides.value[index] ?? null;
+});
+const lanternHasMultipleSlides = computed(() => lanternTotalSlides.value > 1);
+const lanternCurrentTitle = computed(() => {
+  const slide = lanternCurrentSlide.value;
+  const title = slide?.title?.trim();
+  return title?.length ? title : '幻灯片';
+});
+
+function getLanternTextState(assetId: string): LanternTextState {
+  if (!lanternTextState[assetId]) {
+    lanternTextState[assetId] = reactive({
+      text: '',
+      loading: false,
+      error: null,
+    }) as LanternTextState;
+  }
+  return lanternTextState[assetId];
+}
+
+const lanternCurrentSlideTextState = computed(() => {
+  const slide = lanternCurrentSlide.value;
+  if (!slide || !slide.descriptionAssetId) {
+    return null;
+  }
+  return getLanternTextState(slide.descriptionAssetId.trim());
+});
+
+const lanternCurrentSlideImage = computed(() => {
+  const slide = lanternCurrentSlide.value;
+  const assetId = slide?.imageAssetId ?? null;
+  return resolveLanternImageSource(assetId);
+});
+
+const lanternCurrentSlideDescription = computed(() => {
+  const slide = lanternCurrentSlide.value;
+  if (!slide) {
+    return '';
+  }
+  if (slide.descriptionAssetId) {
+    const state = lanternCurrentSlideTextState.value;
+    if (state && !state.loading && !state.error) {
+      return state.text;
+    }
+    return '';
+  }
+  return slide.description ?? '';
+});
+
+watch(
+  lanternSlides,
+  (slidesList) => {
+    const list = Array.isArray(slidesList) ? slidesList : [];
+    const activeAssets = new Set<string>();
+    list.forEach((slide) => {
+      const assetId = slide?.descriptionAssetId?.trim();
+      if (assetId) {
+        activeAssets.add(assetId);
+        void ensureLanternText(assetId);
+      }
+    });
+    if (lanternActiveSlideIndex.value >= list.length) {
+      lanternActiveSlideIndex.value = list.length ? list.length - 1 : 0;
+    }
+    Object.keys(lanternTextState).forEach((key) => {
+      if (!activeAssets.has(key)) {
+        delete lanternTextState[key];
+      }
+    });
+    Array.from(lanternTextPromises.keys()).forEach((key) => {
+      if (!activeAssets.has(key)) {
+        lanternTextPromises.delete(key);
+      }
+    });
+  },
+  { deep: true },
+);
+
+watch(
+  lanternCurrentSlide,
+  (slide) => {
+    const assetId = slide?.descriptionAssetId?.trim();
+    if (assetId) {
+      void ensureLanternText(assetId);
+    }
+  },
+  { immediate: true },
+);
+
+async function ensureLanternText(assetId: string): Promise<void> {
+  const trimmed = assetId.trim();
+  if (!trimmed.length) {
+    return;
+  }
+  if (lanternTextPromises.has(trimmed)) {
+    await lanternTextPromises.get(trimmed);
+    return;
+  }
+  const promise = (async () => {
+    const state = getLanternTextState(trimmed);
+    state.loading = true;
+    state.error = null;
+    try {
+      const text = await loadTextAssetContent(trimmed);
+      state.text = text ?? '';
+      if (text == null) {
+        state.error = '内容加载失败';
+      }
+    } catch (error) {
+      console.warn('加载幻灯片文本失败', error);
+      state.error = error instanceof Error ? error.message : '内容加载失败';
+      state.text = '';
+    } finally {
+      state.loading = false;
+      lanternTextPromises.delete(trimmed);
+    }
+  })();
+  lanternTextPromises.set(trimmed, promise);
+  await promise;
+}
+
+function base64ToArrayBuffer(value: string): ArrayBuffer | null {
+  try {
+    const clean = value.replace(/^data:[^,]+,/, '').replace(/\s/g, '');
+    if (typeof atob === 'function') {
+      const binary = atob(clean);
+      const length = binary.length;
+      const buffer = new Uint8Array(length);
+      for (let index = 0; index < length; index += 1) {
+        buffer[index] = binary.charCodeAt(index);
+      }
+      return buffer.buffer;
+    }
+    const nodeBuffer = (globalThis as any)?.Buffer;
+    if (nodeBuffer && typeof nodeBuffer.from === 'function') {
+      return nodeBuffer.from(clean, 'base64').buffer;
+    }
+  } catch (error) {
+    console.warn('base64 解析失败', error);
+  }
+  return null;
+}
+
+function decodeDataUrlText(dataUrl: string): string | null {
+  try {
+    const commaIndex = dataUrl.indexOf(',');
+    if (commaIndex === -1) {
+      return null;
+    }
+    const payload = dataUrl.slice(commaIndex + 1);
+    if (typeof atob === 'function') {
+      const binary = atob(payload);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+      return new TextDecoder().decode(bytes);
+    }
+    const nodeBuffer = (globalThis as any)?.Buffer;
+    if (nodeBuffer && typeof nodeBuffer.from === 'function') {
+      return nodeBuffer.from(payload, 'base64').toString('utf-8');
+    }
+  } catch (error) {
+    console.warn('解码 dataUrl 失败', error);
+  }
+  return null;
+}
+
+async function fetchTextFromUrl(url: string): Promise<string> {
+  if (typeof fetch === 'function') {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`请求失败 (${response.status})`);
+    }
+    return await response.text();
+  }
+  return await new Promise<string>((resolve, reject) => {
+    uni.request({
+      url,
+      method: 'GET',
+      success: (res) => {
+        if (typeof res.data === 'string') {
+          resolve(res.data);
+        } else if (res.data != null) {
+          resolve(JSON.stringify(res.data));
+        } else {
+          resolve('');
+        }
+      },
+      fail: (err) => {
+        reject(new Error(err?.errMsg || '网络请求失败'));
+      },
+    });
+  });
+}
+
+function getPackageEntry(assetId: string, packageMap: Record<string, string>): { provider: string; value: string } | null {
+  if (packageEntryCache.has(assetId)) {
+    return packageEntryCache.get(assetId) ?? null;
+  }
+  let found: { provider: string; value: string } | null = null;
+  for (const [key, rawValue] of Object.entries(packageMap)) {
+    if (typeof rawValue !== 'string') {
+      continue;
+    }
+    const separator = key.indexOf('::');
+    if (separator === -1) {
+      continue;
+    }
+    const provider = key.slice(0, separator);
+    const id = key.slice(separator + 2);
+    if (id === assetId) {
+      found = { provider, value: rawValue };
+      break;
+    }
+  }
+  packageEntryCache.set(assetId, found);
+  return found;
+}
+
+function resolvePackageEntryLike(assetId: string, provider: string, rawValue: string): AssetSourceResolution | null {
+  const value = (rawValue ?? '').trim();
+  if (!value.length) {
+    return null;
+  }
+  if (value.startsWith('data:')) {
+    return { kind: 'data-url', dataUrl: value };
+  }
+  if (/^(https?:)?\/\//i.test(value)) {
+    return { kind: 'remote-url', url: value };
+  }
+  if (provider === 'preset') {
+    const base = (previewPayload.value?.presetAssetBaseUrl || PRESET_ASSET_BASE_URL).replace(/\/$/, '');
+    const normalized = value.replace(/^preset:/, '').replace(/^\/+/, '');
+    return { kind: 'remote-url', url: `${base}/${normalized}` };
+  }
+  if (provider === 'local') {
+    const buffer = base64ToArrayBuffer(value);
+    if (buffer) {
+      return { kind: 'raw', data: buffer };
+    }
+  }
+  return { kind: 'inline-text', text: value };
+}
+
+function resolveAssetSourceFromIndex(assetId: string, packageMap: Record<string, string>): AssetSourceResolution | null {
+  if (!currentDocument?.assetIndex) {
+    return null;
+  }
+  const entry = (currentDocument.assetIndex as Record<string, any>)[assetId];
+  if (!entry || typeof entry !== 'object') {
+    return null;
+  }
+  const inline = typeof entry.inline === 'string' ? entry.inline.trim() : '';
+  if (inline) {
+    if (inline.startsWith('data:')) {
+      return { kind: 'data-url', dataUrl: inline };
+    }
+    if (/^(https?:)?\/\//i.test(inline)) {
+      return { kind: 'remote-url', url: inline };
+    }
+    return { kind: 'inline-text', text: inline };
+  }
+  const url = typeof entry.url === 'string' ? entry.url.trim() : '';
+  if (url) {
+    return { kind: 'remote-url', url };
+  }
+  const source = entry.source;
+  if (source && typeof source === 'object') {
+    const sourceInline = typeof source.inline === 'string' ? source.inline.trim() : '';
+    if (sourceInline) {
+      if (sourceInline.startsWith('data:')) {
+        return { kind: 'data-url', dataUrl: sourceInline };
+      }
+      if (/^(https?:)?\/\//i.test(sourceInline)) {
+        return { kind: 'remote-url', url: sourceInline };
+      }
+      return { kind: 'inline-text', text: sourceInline };
+    }
+    const sourceUrl = typeof source.url === 'string' ? source.url.trim() : '';
+    if (sourceUrl) {
+      return { kind: 'remote-url', url: sourceUrl };
+    }
+    const providerId = typeof source.providerId === 'string' ? source.providerId.trim() : '';
+    const originalAssetId = typeof source.originalAssetId === 'string' ? source.originalAssetId.trim() : assetId;
+    const mapped = providerId ? packageMap[`${providerId}::${originalAssetId}`] : undefined;
+    if (mapped && typeof mapped === 'string') {
+      const resolved = resolvePackageEntryLike(originalAssetId, providerId, mapped);
+      if (resolved) {
+        return resolved;
+      }
+    }
+  }
+  return null;
+}
+
+function resolveAssetSource(assetId: string): AssetSourceResolution | null {
+  const trimmed = assetId.trim();
+  if (!trimmed.length) {
+    return null;
+  }
+  if (/^(https?:)?\/\//i.test(trimmed)) {
+    return { kind: 'remote-url', url: trimmed };
+  }
+  if (trimmed.startsWith('data:')) {
+    return { kind: 'data-url', dataUrl: trimmed };
+  }
+  const overrides = previewPayload.value?.assetOverrides;
+  const overrideValue = overrides?.[trimmed];
+  if (overrideValue != null) {
+    if (typeof overrideValue === 'string') {
+      if (overrideValue.startsWith('data:')) {
+        return { kind: 'data-url', dataUrl: overrideValue };
+      }
+      if (/^(https?:)?\/\//i.test(overrideValue)) {
+        return { kind: 'remote-url', url: overrideValue };
+      }
+      const buffer = base64ToArrayBuffer(overrideValue);
+      if (buffer) {
+        return { kind: 'raw', data: buffer };
+      }
+      return { kind: 'inline-text', text: overrideValue };
+    }
+    if (overrideValue instanceof ArrayBuffer) {
+      return { kind: 'raw', data: overrideValue };
+    }
+  }
+  if (!currentDocument) {
+    return null;
+  }
+  const packageMap = currentDocument.packageAssetMap ?? {};
+  const direct = packageMap[trimmed];
+  if (typeof direct === 'string' && direct.trim().length) {
+    const resolved = resolvePackageEntryLike(trimmed, 'local', direct);
+    if (resolved) {
+      return resolved;
+    }
+  }
+  const embedded = packageMap[`local::${trimmed}`];
+  if (typeof embedded === 'string' && embedded.trim().length) {
+    const resolved = resolvePackageEntryLike(trimmed, 'local', embedded);
+    if (resolved) {
+      return resolved;
+    }
+  }
+  const packageEntry = getPackageEntry(trimmed, packageMap);
+  if (packageEntry) {
+    const resolved = resolvePackageEntryLike(trimmed, packageEntry.provider, packageEntry.value);
+    if (resolved) {
+      return resolved;
+    }
+  }
+  const indexResolved = resolveAssetSourceFromIndex(trimmed, packageMap);
+  if (indexResolved) {
+    return indexResolved;
+  }
+  const resolveAssetUrl = previewPayload.value?.resolveAssetUrl;
+  if (typeof resolveAssetUrl === 'function') {
+    try {
+      const maybe = resolveAssetUrl(trimmed);
+      if (typeof maybe === 'string' && maybe.trim().length) {
+        const normalized = maybe.trim();
+        if (normalized.startsWith('data:')) {
+          return { kind: 'data-url', dataUrl: normalized };
+        }
+        return { kind: 'remote-url', url: normalized };
+      }
+    } catch (error) {
+      console.warn('resolveAssetUrl 调用失败', error);
+    }
+  }
+  return null;
+}
+
+function inferMimeTypeFromAssetId(assetId: string): string | null {
+  const lower = assetId.toLowerCase();
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  if (lower.endsWith('.svg')) return 'image/svg+xml';
+  if (lower.endsWith('.txt')) return 'text/plain';
+  if (lower.endsWith('.json')) return 'application/json';
+  return null;
+}
+
+function getOrCreateObjectUrl(assetId: string, data: ArrayBuffer, mimeHint?: string): string {
+  const cached = assetObjectUrlCache.get(assetId);
+  if (cached) {
+    return cached;
+  }
+  const mimeType = mimeHint ?? inferMimeTypeFromAssetId(assetId) ?? 'application/octet-stream';
+  const blob = new Blob([data], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  assetObjectUrlCache.set(assetId, url);
+  return url;
+}
+
+function clearAssetObjectUrlCache(): void {
+  assetObjectUrlCache.forEach((url) => {
+    try {
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.warn('释放资源 URL 失败', error);
+    }
+  });
+  assetObjectUrlCache.clear();
+}
+
+function resetAssetResolutionCaches(): void {
+  clearAssetObjectUrlCache();
+  packageEntryCache.clear();
+}
+
+async function loadTextAssetContent(assetId: string): Promise<string | null> {
+  const trimmed = assetId.trim();
+  if (!trimmed.length) {
+    return null;
+  }
+  const source = resolveAssetSource(trimmed);
+  if (!source) {
+    return null;
+  }
+  switch (source.kind) {
+    case 'inline-text':
+      return source.text;
+    case 'data-url':
+      return decodeDataUrlText(source.dataUrl);
+    case 'remote-url':
+      return await fetchTextFromUrl(source.url);
+    case 'raw':
+      try {
+        return new TextDecoder().decode(source.data);
+      } catch (error) {
+        console.warn('解码文本 ArrayBuffer 失败', error);
+        return null;
+      }
+    default:
+      return null;
+  }
+}
+
+function resolveLanternImageSource(assetId: string | null | undefined): string | null {
+  if (!assetId) {
+    return null;
+  }
+  const source = resolveAssetSource(assetId);
+  if (!source) {
+    return null;
+  }
+  switch (source.kind) {
+    case 'data-url':
+      return source.dataUrl;
+    case 'remote-url':
+      return source.url;
+    case 'raw':
+      return getOrCreateObjectUrl(assetId, source.data, inferMimeTypeFromAssetId(assetId) ?? undefined);
+    default:
+      return null;
+  }
+}
+
+function resetLanternOverlay(): void {
+  lanternOverlayVisible.value = false;
+  lanternSlides.value = [];
+  lanternActiveSlideIndex.value = 0;
+  lanternEventToken.value = null;
+}
+
+function closeLanternOverlay(resolution?: BehaviorEventResolution): void {
+  const token = lanternEventToken.value;
+  resetLanternOverlay();
+  if (token && resolution) {
+    resolveBehaviorToken(token, resolution);
+  }
+}
+
+function presentLanternSlides(event: Extract<BehaviorRuntimeEvent, { type: 'lantern' }>): void {
+  const slides = Array.isArray(event.params?.slides) ? event.params.slides : [];
+  if (!slides.length) {
+    resolveBehaviorToken(event.token, { type: 'continue' });
+    return;
+  }
+  if (lanternEventToken.value && lanternEventToken.value !== event.token) {
+    closeLanternOverlay({ type: 'abort', message: '新的幻灯片事件覆盖了当前事件' });
+  }
+  lanternSlides.value = slides;
+  lanternActiveSlideIndex.value = 0;
+  lanternEventToken.value = event.token;
+  lanternOverlayVisible.value = true;
+}
+
+function showPreviousLanternSlide(): void {
+  if (lanternActiveSlideIndex.value > 0) {
+    lanternActiveSlideIndex.value -= 1;
+  }
+}
+
+function showNextLanternSlide(): void {
+  if (lanternActiveSlideIndex.value < lanternSlides.value.length - 1) {
+    lanternActiveSlideIndex.value += 1;
+  }
+}
+
+function confirmLanternOverlay(): void {
+  closeLanternOverlay({ type: 'continue' });
+}
+
+function cancelLanternOverlay(): void {
+  closeLanternOverlay({ type: 'abort', message: '用户退出了幻灯片' });
+}
+
 function formatTimestamp(value?: string | null): string {
   if (!value) {
     return '';
@@ -223,15 +849,75 @@ function formatTimestamp(value?: string | null): string {
   return `${date.getFullYear()}-${month}-${day} ${hour}:${minute}`;
 }
 
-function presentBehaviorAlert(title: string, message: string) {
-  const normalizedTitle = (title || '').trim();
-  behaviorAlertTitle.value = normalizedTitle || '提示';
-  behaviorAlertMessage.value = message || '';
+function clearBehaviorAlert() {
+  behaviorAlertVisible.value = false;
+  behaviorAlertTitle.value = '';
+  behaviorAlertMessage.value = '';
+  behaviorAlertToken.value = null;
+  behaviorAlertShowConfirm.value = true;
+  behaviorAlertShowCancel.value = false;
+  behaviorAlertConfirmText.value = '确定';
+  behaviorAlertCancelText.value = '取消';
+}
+
+async function loadBehaviorAlertContent(assetId: string, token: string, fallback: string): Promise<void> {
+  try {
+    const content = await loadTextAssetContent(assetId);
+    if (behaviorAlertToken.value !== token) {
+      return;
+    }
+    behaviorAlertMessage.value = content ?? fallback;
+  } catch (error) {
+    console.warn('加载行为弹窗文本失败', error);
+    if (behaviorAlertToken.value === token) {
+      behaviorAlertMessage.value = fallback;
+    }
+  }
+}
+
+function presentBehaviorAlert(event: Extract<BehaviorRuntimeEvent, { type: 'show-alert' }>) {
+  clearBehaviorAlert();
+  behaviorAlertToken.value = event.token;
+  const legacyParams = event.params as typeof event.params & { title?: string; message?: string };
+  const anyParams = event.params as unknown as Record<string, unknown>;
+  const rawTitle = typeof anyParams.title === 'string' ? anyParams.title : legacyParams.title;
+  const title = typeof rawTitle === 'string' && rawTitle.trim().length ? rawTitle.trim() : '提示';
+  const legacyMessage = typeof legacyParams.message === 'string' ? legacyParams.message : '';
+  const contentParam = typeof anyParams.content === 'string' ? (anyParams.content as string) : undefined;
+  const messageFallback = typeof contentParam === 'string' ? contentParam : legacyMessage;
+  behaviorAlertTitle.value = title;
+  behaviorAlertMessage.value = messageFallback;
+  behaviorAlertShowConfirm.value = event.params.showConfirm ?? true;
+  behaviorAlertShowCancel.value = event.params.showCancel ?? false;
+  behaviorAlertConfirmText.value = (event.params.confirmText ?? '确定') || '确定';
+  behaviorAlertCancelText.value = (event.params.cancelText ?? '取消') || '取消';
+  const contentAssetId = (event.params as { contentAssetId?: string | null }).contentAssetId;
+  if (typeof contentAssetId === 'string' && contentAssetId.trim().length) {
+    void loadBehaviorAlertContent(contentAssetId.trim(), event.token, messageFallback);
+  }
+  if (!behaviorAlertShowConfirm.value && !behaviorAlertShowCancel.value) {
+    resolveBehaviorToken(event.token, { type: 'continue' });
+    return;
+  }
   behaviorAlertVisible.value = true;
 }
 
-function dismissBehaviorAlert() {
-  behaviorAlertVisible.value = false;
+function confirmBehaviorAlert() {
+  const token = behaviorAlertToken.value;
+  clearBehaviorAlert();
+  if (!token) {
+    return;
+  }
+  resolveBehaviorToken(token, { type: 'continue' });
+}
+
+function cancelBehaviorAlert() {
+  const token = behaviorAlertToken.value;
+  clearBehaviorAlert();
+  if (!token) {
+    return;
+  }
+  resolveBehaviorToken(token, { type: 'abort', message: '用户取消了提示框' });
 }
 
 function cloneSkyboxSettings(settings: SceneSkyboxSettings): SceneSkyboxSettings {
@@ -302,15 +988,544 @@ function indexSceneObjects(root: THREE.Object3D) {
   });
 }
 
+function resolveNodeIdFromObject(object: THREE.Object3D | null | undefined): string | null {
+  let current: THREE.Object3D | null | undefined = object ?? null;
+  while (current) {
+    const nodeId = current.userData?.nodeId as string | undefined;
+    if (nodeId) {
+      return nodeId;
+    }
+    current = current.parent;
+  }
+  return null;
+}
+
+function processBehaviorEvents(events: BehaviorRuntimeEvent[] | BehaviorRuntimeEvent | null | undefined): void {
+  if (!events) {
+    return;
+  }
+  const list = Array.isArray(events) ? events : [events];
+  list.forEach((entry) => handleBehaviorRuntimeEvent(entry));
+}
+
+function resolveBehaviorToken(token: string, resolution: BehaviorEventResolution): void {
+  clearDelayTimer(token);
+  stopBehaviorAnimation(token);
+  const followUps = resolveBehaviorEvent(token, resolution);
+  processBehaviorEvents(followUps);
+}
+
+function clearDelayTimer(token: string): void {
+  const handle = activeBehaviorDelayTimers.get(token);
+  if (handle != null) {
+    clearTimeout(handle);
+    activeBehaviorDelayTimers.delete(token);
+  }
+}
+
+function stopBehaviorAnimation(token: string): void {
+  const cancel = activeBehaviorAnimations.get(token);
+  if (!cancel) {
+    return;
+  }
+  try {
+    cancel();
+  } finally {
+    activeBehaviorAnimations.delete(token);
+  }
+}
+
+function startTimedAnimation(
+  token: string,
+  durationSeconds: number,
+  onUpdate: (alpha: number) => void,
+  onComplete: () => void,
+): void {
+  stopBehaviorAnimation(token);
+  const durationMs = Math.max(0, durationSeconds) * 1000;
+  if (durationMs <= 0) {
+    onUpdate(1);
+    onComplete();
+    return;
+  }
+  const startTime = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+  const raf = typeof requestAnimationFrame === 'function'
+    ? requestAnimationFrame
+    : ((callback: FrameRequestCallback) => {
+        return setTimeout(() => callback(Date.now()), 16) as unknown as number;
+      });
+  const cancelRaf = typeof cancelAnimationFrame === 'function'
+    ? cancelAnimationFrame
+    : ((handle: number) => clearTimeout(handle));
+  let frameHandle: number | null = null;
+  const cancel = () => {
+    if (frameHandle != null) {
+      cancelRaf(frameHandle);
+      frameHandle = null;
+    }
+    activeBehaviorAnimations.delete(token);
+  };
+  const step = (timestamp: number) => {
+    const now = Number.isFinite(timestamp) ? timestamp : (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
+    const elapsed = Math.max(0, now - startTime);
+    const alpha = Math.min(1, elapsed / durationMs);
+    onUpdate(alpha);
+    if (alpha >= 1) {
+      cancel();
+      onComplete();
+      return;
+    }
+    frameHandle = raf(step);
+  };
+  frameHandle = raf(step);
+  activeBehaviorAnimations.set(token, cancel);
+}
+
+function resolveNodeFocusPoint(nodeId: string | null | undefined): THREE.Vector3 | null {
+  if (!nodeId) {
+    return null;
+  }
+  const object = nodeObjectMap.get(nodeId);
+  if (!object) {
+    return null;
+  }
+  tempBox.setFromObject(object);
+  const hasFiniteBounds = [tempBox.min.x, tempBox.min.y, tempBox.min.z, tempBox.max.x, tempBox.max.y, tempBox.max.z].every((value) => Number.isFinite(value));
+  if (!hasFiniteBounds) {
+    object.getWorldPosition(tempVector);
+    return tempVector.clone();
+  }
+  tempBox.getBoundingSphere(tempSphere);
+  if (!Number.isFinite(tempSphere.center.x) || !Number.isFinite(tempSphere.center.y) || !Number.isFinite(tempSphere.center.z)) {
+    object.getWorldPosition(tempVector);
+    return tempVector.clone();
+  }
+  return tempSphere.center.clone();
+}
+
+function resetBehaviorProximity(): void {
+  behaviorProximityCandidates.clear();
+  behaviorProximityState.clear();
+  behaviorProximityThresholdCache.clear();
+}
+
+function removeBehaviorProximityCandidate(nodeId: string): void {
+  behaviorProximityCandidates.delete(nodeId);
+  behaviorProximityState.delete(nodeId);
+  behaviorProximityThresholdCache.delete(nodeId);
+}
+
+function ensureBehaviorProximityState(nodeId: string): void {
+  if (!behaviorProximityState.has(nodeId)) {
+    behaviorProximityState.set(nodeId, { inside: false, lastDistance: null });
+  }
+}
+
+function syncBehaviorProximityCandidate(nodeId: string): void {
+  if (!previewNodeMap.has(nodeId)) {
+    removeBehaviorProximityCandidate(nodeId);
+    return;
+  }
+  const actions = listRegisteredBehaviorActions(nodeId);
+  const hasApproach = actions.includes('approach');
+  const hasDepart = actions.includes('depart');
+  if (!hasApproach && !hasDepart) {
+    removeBehaviorProximityCandidate(nodeId);
+    return;
+  }
+  behaviorProximityCandidates.set(nodeId, { hasApproach, hasDepart });
+  ensureBehaviorProximityState(nodeId);
+}
+
+function refreshBehaviorProximityCandidates(): void {
+  resetBehaviorProximity();
+  previewNodeMap.forEach((_node, nodeId) => {
+    syncBehaviorProximityCandidate(nodeId);
+  });
+}
+
+const behaviorRuntimeListener: BehaviorRuntimeListener = {
+  onRegistryChanged(nodeId) {
+    syncBehaviorProximityCandidate(nodeId);
+  },
+};
+
+function computeObjectBoundingRadius(object: THREE.Object3D): number {
+  tempBox.setFromObject(object);
+  const hasFiniteBounds = [tempBox.min.x, tempBox.min.y, tempBox.min.z, tempBox.max.x, tempBox.max.y, tempBox.max.z].every((value) => Number.isFinite(value));
+  if (!hasFiniteBounds) {
+    return DEFAULT_OBJECT_RADIUS;
+  }
+  tempBox.getBoundingSphere(tempSphere);
+  return Number.isFinite(tempSphere.radius) && tempSphere.radius > 0 ? tempSphere.radius : DEFAULT_OBJECT_RADIUS;
+}
+
+function resolveProximityThresholds(nodeId: string, object: THREE.Object3D): BehaviorProximityThreshold {
+  const cached = behaviorProximityThresholdCache.get(nodeId);
+  if (cached && cached.objectId === object.uuid) {
+    return cached;
+  }
+  const radius = computeObjectBoundingRadius(object);
+  const enter = Math.max(PROXIMITY_MIN_DISTANCE, radius * PROXIMITY_RADIUS_SCALE);
+  const exit = enter + PROXIMITY_EXIT_PADDING;
+  const nextThreshold: BehaviorProximityThreshold = {
+    enter,
+    exit,
+    objectId: object.uuid,
+  };
+  behaviorProximityThresholdCache.set(nodeId, nextThreshold);
+  return nextThreshold;
+}
+
+function updateBehaviorProximity(): void {
+  const camera = renderContext?.camera;
+  if (!camera || !behaviorProximityCandidates.size) {
+    return;
+  }
+  const cameraPosition = camera.position;
+  behaviorProximityCandidates.forEach((candidate, nodeId) => {
+    const object = nodeObjectMap.get(nodeId);
+    if (!object) {
+      return;
+    }
+    const thresholds = resolveProximityThresholds(nodeId, object);
+    const state = behaviorProximityState.get(nodeId);
+    if (!state) {
+      return;
+    }
+    const focusPoint = resolveNodeFocusPoint(nodeId) ?? object.getWorldPosition(tempVector);
+    const distance = focusPoint.distanceTo(cameraPosition);
+    if (!Number.isFinite(distance)) {
+      return;
+    }
+    if (!state.inside && distance <= thresholds.enter) {
+      state.inside = true;
+      if (candidate.hasApproach) {
+        const followUps = triggerBehaviorAction(nodeId, 'approach', {
+          payload: {
+            distance,
+            threshold: thresholds.enter,
+          },
+        });
+        processBehaviorEvents(followUps);
+      }
+    } else if (state.inside && distance >= thresholds.exit) {
+      state.inside = false;
+      if (candidate.hasDepart) {
+        const followUps = triggerBehaviorAction(nodeId, 'depart', {
+          payload: {
+            distance,
+            threshold: thresholds.exit,
+          },
+        });
+        processBehaviorEvents(followUps);
+      }
+    }
+    state.lastDistance = distance;
+  });
+}
+
+function resetAnimationControllers(): void {
+  activeBehaviorAnimations.forEach((cancel) => {
+    try {
+      cancel();
+    } catch (error) {
+      console.warn('取消行为动画失败', error);
+    }
+  });
+  activeBehaviorAnimations.clear();
+  animationMixers.forEach((mixer) => {
+    try {
+      mixer.stopAllAction();
+      const root = mixer.getRoot();
+      if (root) {
+        mixer.uncacheRoot(root);
+      }
+    } catch (error) {
+      console.warn('重置动画控制器失败', error);
+    }
+  });
+  animationMixers = [];
+  nodeAnimationControllers.clear();
+}
+
+function refreshAnimationControllers(root: THREE.Object3D): void {
+  resetAnimationControllers();
+  const mixers: THREE.AnimationMixer[] = [];
+  root.traverse((object) => {
+    const nodeId = object.userData?.nodeId as string | undefined;
+    if (!nodeId) {
+      return;
+    }
+    const clips = (object as unknown as { animations?: THREE.AnimationClip[] }).animations;
+    if (!Array.isArray(clips) || !clips.length) {
+      return;
+    }
+    const validClips = clips.filter((clip): clip is THREE.AnimationClip => Boolean(clip));
+    if (!validClips.length) {
+      return;
+    }
+    const mixer = new THREE.AnimationMixer(object);
+    mixer.timeScale = 1;
+    mixers.push(mixer);
+    nodeAnimationControllers.set(nodeId, { mixer, clips: validClips });
+  });
+  animationMixers = mixers;
+}
+
+function handleDelayEvent(event: Extract<BehaviorRuntimeEvent, { type: 'delay' }>) {
+  clearDelayTimer(event.token);
+  const durationMs = Math.max(0, event.seconds) * 1000;
+  const handle = setTimeout(() => {
+    activeBehaviorDelayTimers.delete(event.token);
+    resolveBehaviorToken(event.token, { type: 'continue' });
+  }, durationMs);
+  activeBehaviorDelayTimers.set(event.token, handle);
+}
+
+function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'move-camera' }>) {
+  const context = renderContext;
+  if (!context) {
+    resolveBehaviorToken(event.token, { type: 'fail', message: '相机不可用' });
+    return;
+  }
+  const { camera, controls } = context;
+  const focus = resolveNodeFocusPoint(event.targetNodeId ?? event.nodeId);
+  if (!focus) {
+    resolveBehaviorToken(event.token, { type: 'fail', message: '未找到目标节点' });
+    return;
+  }
+  const ownerObject = nodeObjectMap.get(event.targetNodeId ?? event.nodeId ?? '');
+  if (ownerObject) {
+    ownerObject.getWorldQuaternion(tempQuaternion);
+  } else {
+    tempQuaternion.identity();
+  }
+  const baseOffset = Math.max(event.offset, 0.5);
+  switch (event.facing) {
+    case 'back':
+      tempVector.set(0, 0, -baseOffset);
+      break;
+    case 'left':
+      tempVector.set(-baseOffset, 0, 0);
+      break;
+    case 'right':
+      tempVector.set(baseOffset, 0, 0);
+      break;
+    case 'front':
+    default:
+      tempVector.set(0, 0, baseOffset);
+      break;
+  }
+  tempVector.applyQuaternion(tempQuaternion);
+  if (Math.abs(tempVector.y) < HUMAN_EYE_HEIGHT * 0.25) {
+    tempVector.y = Math.sign(tempVector.y || 1) * HUMAN_EYE_HEIGHT * 0.4;
+  }
+  const destination = focus.clone().add(tempVector);
+  if (destination.y < focus.y + HUMAN_EYE_HEIGHT * 0.4) {
+    destination.y = focus.y + HUMAN_EYE_HEIGHT * 0.4;
+  }
+  const startPosition = camera.position.clone();
+  const startTarget = controls.target.clone();
+  const distance = startPosition.distanceTo(destination);
+  const durationSeconds = event.speed > 0 ? Math.min(5, Math.max(0.2, distance / Math.max(event.speed, 0.01))) : 0;
+  const updateFrame = (alpha: number) => {
+    camera.position.lerpVectors(startPosition, destination, alpha);
+    controls.target.copy(startTarget).lerp(focus, alpha);
+    camera.lookAt(controls.target);
+    controls.update();
+  };
+  const finalize = () => {
+    camera.position.copy(destination);
+    controls.target.copy(focus);
+    camera.lookAt(controls.target);
+    controls.update();
+    resolveBehaviorToken(event.token, { type: 'continue' });
+  };
+  startTimedAnimation(event.token, durationSeconds, updateFrame, finalize);
+}
+
+function handleSetVisibilityEvent(event: Extract<BehaviorRuntimeEvent, { type: 'set-visibility' }>) {
+  const object = nodeObjectMap.get(event.targetNodeId);
+  if (object) {
+    object.visible = event.visible;
+  }
+  const node = resolveNodeById(event.targetNodeId);
+  if (node) {
+    node.visible = event.visible;
+  }
+}
+
+function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: 'play-animation' }>) {
+  const targetNodeId = event.targetNodeId || event.nodeId;
+  if (!targetNodeId) {
+    if (event.token) {
+      resolveBehaviorToken(event.token, { type: 'fail', message: '缺少动画目标' });
+    }
+    console.warn('播放动画失败：未提供节点 ID');
+    return;
+  }
+  const controller = nodeAnimationControllers.get(targetNodeId);
+  if (!controller) {
+    if (event.token) {
+      resolveBehaviorToken(event.token, { type: 'fail', message: '目标节点没有动画' });
+    }
+    console.warn('播放动画失败：目标节点未暴露动画', { targetNodeId });
+    return;
+  }
+  const clips = controller.clips;
+  const requestedName = event.clipName && event.clipName.trim().length ? event.clipName.trim() : null;
+  const clip = requestedName ? clips.find((entry) => entry.name === requestedName) : clips[0] ?? null;
+  if (!clip) {
+    if (event.token) {
+      resolveBehaviorToken(event.token, {
+        type: 'fail',
+        message: requestedName ? `未找到动画片段 ${requestedName}` : '没有可用的动画片段',
+      });
+    }
+    console.warn('播放动画失败：未找到片段', { targetNodeId, requestedName });
+    return;
+  }
+  const mixer = controller.mixer;
+  const action = mixer.clipAction(clip);
+  mixer.stopAllAction();
+  action.reset();
+  action.enabled = true;
+  if (event.loop) {
+    action.setLoop(THREE.LoopRepeat, Number.POSITIVE_INFINITY);
+    action.clampWhenFinished = false;
+  } else {
+    action.setLoop(THREE.LoopOnce, 0);
+    action.clampWhenFinished = true;
+  }
+  action.play();
+  const token = event.token;
+  if (!token) {
+    return;
+  }
+  stopBehaviorAnimation(token);
+  if (event.loop) {
+    resolveBehaviorToken(token, { type: 'continue' });
+    return;
+  }
+  if (!Number.isFinite(clip.duration) || clip.duration <= 0) {
+    resolveBehaviorToken(token, { type: 'continue' });
+    return;
+  }
+  const onFinished = (payload: THREE.Event & { action?: THREE.AnimationAction }) => {
+    if (payload.action !== action) {
+      return;
+    }
+    mixer.removeEventListener('finished', onFinished);
+    activeBehaviorAnimations.delete(token);
+    resolveBehaviorToken(token, { type: 'continue' });
+  };
+  const cancel = () => {
+    mixer.removeEventListener('finished', onFinished);
+    try {
+      action.stop();
+    } catch (error) {
+      console.warn('停止动画失败', error);
+    }
+  };
+  activeBehaviorAnimations.set(token, cancel);
+  mixer.addEventListener('finished', onFinished);
+}
+
+function handleTriggerBehaviorEvent(event: Extract<BehaviorRuntimeEvent, { type: 'trigger-behavior' }>) {
+  const targetNodeId = event.targetNodeId || event.nodeId;
+  if (!targetNodeId) {
+    console.warn('触发行为失败：未提供目标节点');
+    return;
+  }
+  const sequenceId = event.targetSequenceId && event.targetSequenceId.trim().length ? event.targetSequenceId : undefined;
+  const followUps = triggerBehaviorAction(
+    targetNodeId,
+    'perform',
+    {
+      payload: {
+        sourceNodeId: event.nodeId,
+      },
+    },
+    sequenceId ? { sequenceId } : {},
+  );
+  processBehaviorEvents(followUps);
+}
+
+function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watch-node' }>) {
+  const context = renderContext;
+  if (!context) {
+    resolveBehaviorToken(event.token, { type: 'fail', message: '相机不可用' });
+    return;
+  }
+  const { camera, controls } = context;
+  const focus = resolveNodeFocusPoint(event.targetNodeId);
+  if (!focus) {
+    resolveBehaviorToken(event.token, { type: 'fail', message: '未找到目标节点' });
+    return;
+  }
+  controls.target.copy(focus);
+  camera.lookAt(focus);
+  controls.update();
+  resolveBehaviorToken(event.token, { type: 'continue' });
+}
+
+function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look-level' }>) {
+  const context = renderContext;
+  if (!context) {
+    resolveBehaviorToken(event.token, { type: 'fail', message: '相机不可用' });
+    return;
+  }
+  const { camera, controls } = context;
+  const lookTarget = controls.target.clone();
+  lookTarget.y = camera.position.y;
+  controls.target.copy(lookTarget);
+  camera.lookAt(lookTarget);
+  controls.update();
+  resolveBehaviorToken(event.token, { type: 'continue' });
+}
+
 function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
   switch (event.type) {
-    case 'show-alert': {
-      const params = event.params;
-      const alertTitle = (params as { title?: string }).title ?? '提示';
-      const alertMessage = params.content ?? '';
-      presentBehaviorAlert(alertTitle, alertMessage);
+    case 'delay':
+      handleDelayEvent(event);
       break;
-    }
+    case 'move-camera':
+      handleMoveCameraEvent(event);
+      break;
+    case 'show-alert':
+      presentBehaviorAlert(event);
+      break;
+    case 'lantern':
+      presentLanternSlides(event);
+      break;
+    case 'play-animation':
+      handlePlayAnimationEvent(event);
+      break;
+    case 'trigger-behavior':
+      handleTriggerBehaviorEvent(event);
+      break;
+    case 'watch-node':
+      handleWatchNodeEvent(event);
+      break;
+    case 'set-visibility':
+      handleSetVisibilityEvent(event);
+      break;
+    case 'look-level':
+      handleLookLevelEvent(event);
+      break;
+    case 'sequence-complete':
+      clearBehaviorAlert();
+      resetLanternOverlay();
+      if (event.status === 'failure' || event.status === 'aborted') {
+        console.warn('行为序列结束', event);
+      }
+      break;
+    case 'sequence-error':
+      clearBehaviorAlert();
+      resetLanternOverlay();
+      console.error('行为序列执行出错', event.message);
+      break;
     default:
       break;
   }
@@ -323,6 +1538,9 @@ function ensureBehaviorTapHandler(canvas: HTMLCanvasElement, camera: THREE.Persp
   }
   behaviorTapListener = (event: TouchEvent) => {
     if (!renderContext?.scene) {
+      return;
+    }
+    if (!hasRegisteredBehaviors()) {
       return;
     }
     const touches = event.changedTouches ?? event.touches;
@@ -346,16 +1564,7 @@ function ensureBehaviorTapHandler(canvas: HTMLCanvasElement, camera: THREE.Persp
       return;
     }
     for (const intersection of intersections) {
-      let current: THREE.Object3D | null = intersection.object;
-      let nodeId: string | null = null;
-      while (current) {
-        const id = current.userData?.nodeId as string | undefined;
-        if (id) {
-          nodeId = id;
-          break;
-        }
-        current = current.parent;
-      }
+      const nodeId = resolveNodeIdFromObject(intersection.object);
       if (!nodeId) {
         continue;
       }
@@ -368,8 +1577,9 @@ function ensureBehaviorTapHandler(canvas: HTMLCanvasElement, camera: THREE.Persp
             z: intersection.point.z,
           },
         },
+        pointerEvent: event,
       });
-      results.forEach((output: BehaviorRuntimeEvent) => handleBehaviorRuntimeEvent(output));
+      processBehaviorEvents(results);
       break;
     }
   };
@@ -695,24 +1905,39 @@ function teardownRenderer() {
     canvasResult.canvas.removeEventListener('touchend', behaviorTapListener);
     behaviorTapListener = null;
   }
+  if (behaviorAlertToken.value) {
+    resolveBehaviorToken(behaviorAlertToken.value, {
+      type: 'abort',
+      message: '视图卸载',
+    });
+  }
+  clearBehaviorAlert();
+  if (lanternEventToken.value) {
+    closeLanternOverlay({ type: 'abort', message: '视图卸载' });
+  } else {
+    resetLanternOverlay();
+  }
   previewComponentManager.reset();
   resetBehaviorRuntime();
-  behaviorAlertVisible.value = false;
+  resetBehaviorProximity();
+  activeBehaviorDelayTimers.forEach((handle) => clearTimeout(handle));
+  activeBehaviorDelayTimers.clear();
+  resetAnimationControllers();
   previewNodeMap.clear();
   nodeObjectMap.clear();
-  if (lockCameraChangeHandler) {
-    controls.removeEventListener('change', lockCameraChangeHandler);
-    lockCameraChangeHandler = null;
-  }
   controls.dispose();
   disposeSkyResources();
   pmremGenerator?.dispose();
   pmremGenerator = null;
   pendingSkyboxSettings = null;
+  lanternTextPromises.clear();
+  Object.keys(lanternTextState).forEach((key) => delete lanternTextState[key]);
+  resetAssetResolutionCaches();
   disposeObject(scene);
   renderer.dispose();
   renderContext = null;
   canvasResult = null;
+  currentDocument = null;
 }
 
 function handleUseCanvas(result: UseCanvasResult) {
@@ -764,13 +1989,6 @@ async function ensureRendererContext(result: UseCanvasResult) {
   controls.minDistance = CAMERA_FORWARD_OFFSET;
   controls.maxDistance = CAMERA_FORWARD_OFFSET;
 
-  const forwardScratch = new THREE.Vector3();
-  lockCameraChangeHandler = () => {
-    forwardScratch.set(0, 0, -1).applyQuaternion(camera.quaternion);
-    camera.position.set(0, HUMAN_EYE_HEIGHT, 0);
-    controls.target.copy(camera.position).addScaledVector(forwardScratch, CAMERA_FORWARD_OFFSET);
-  };
-  controls.addEventListener('change', lockCameraChangeHandler);
   controls.update();
 
   const scene = new THREE.Scene();
@@ -791,6 +2009,20 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   }
   const { scene, renderer, camera, controls } = renderContext;
   const { canvas } = result;
+  currentDocument = payload.document;
+  resetAssetResolutionCaches();
+  if (behaviorAlertToken.value) {
+    resolveBehaviorToken(behaviorAlertToken.value, {
+      type: 'abort',
+      message: '场景重新初始化',
+    });
+  }
+  clearBehaviorAlert();
+  if (lanternEventToken.value) {
+    closeLanternOverlay({ type: 'abort', message: '场景重新初始化' });
+  } else {
+    resetLanternOverlay();
+  }
   scene.children.forEach((child) => disposeObject(child));
   scene.clear();
   warnings.value = [];
@@ -851,6 +2083,8 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   rebuildPreviewNodeMap(payload.document.nodes);
   previewComponentManager.syncScene(payload.document.nodes ?? []);
   indexSceneObjects(graph.root);
+  refreshBehaviorProximityCandidates();
+  refreshAnimationControllers(graph.root);
   ensureBehaviorTapHandler(canvas as HTMLCanvasElement, camera);
 
 
@@ -869,6 +2103,8 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
     watchEffect((onCleanup) => {
       const { cancel } = result.useFrame((delta) => {
         controls.update();
+        animationMixers.forEach((mixer) => mixer.update(delta));
+        updateBehaviorProximity();
         renderer.render(scene, camera);
       });
       onCleanup(() => {
@@ -901,6 +2137,7 @@ function handleBack() {
 }
 
 onLoad((query) => {
+  addBehaviorRuntimeListener(behaviorRuntimeListener);
   const sceneIdParam = typeof query?.id === 'string' ? query.id : '';
   const documentParam = typeof query?.document === 'string' ? query.document : '';
   const modelParam =
@@ -975,6 +2212,7 @@ onReady(() => {
 });
 
 onUnload(() => {
+  removeBehaviorRuntimeListener(behaviorRuntimeListener);
   teardownRenderer();
   if (resizeListener) {
     uni.offWindowResize(handleResize);
@@ -983,6 +2221,7 @@ onUnload(() => {
 });
 
 onUnmounted(() => {
+  removeBehaviorRuntimeListener(behaviorRuntimeListener);
   teardownRenderer();
   if (resizeListener) {
     uni.offWindowResize(handleResize);
@@ -1142,6 +2381,9 @@ onUnmounted(() => {
   color: #f5f7ff;
   text-align: center;
   box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .viewer-behavior-title {
@@ -1152,10 +2394,21 @@ onUnmounted(() => {
 }
 
 .viewer-behavior-message {
-  display: block;
-  margin-bottom: 10px;
+  max-height: 180px;
   font-size: 14px;
   opacity: 0.9;
+  text-align: left;
+}
+
+.viewer-behavior-message text {
+  display: block;
+  line-height: 1.5;
+}
+
+.viewer-behavior-actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
 }
 
 .viewer-behavior-button {
@@ -1165,5 +2418,120 @@ onUnmounted(() => {
   background-image: linear-gradient(135deg, #1f7aec, #5d9bff);
   color: #ffffff;
   font-size: 14px;
+  min-width: 96px;
+}
+
+.viewer-behavior-button.cancel {
+  background-image: none;
+  background-color: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.viewer-lantern-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(6, 8, 12, 0.62);
+  z-index: 2100;
+  padding: 16px;
+}
+
+.viewer-lantern-dialog {
+  width: 92%;
+  max-width: 420px;
+  max-height: 90vh;
+  border-radius: 16px;
+  background: rgba(12, 16, 28, 0.96);
+  color: #f5f7ff;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+}
+
+.viewer-lantern-image-wrapper {
+  width: 100%;
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.viewer-lantern-image {
+  width: 100%;
+  max-height: 220px;
+  display: block;
+}
+
+.viewer-lantern-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.viewer-lantern-title {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.viewer-lantern-text {
+  max-height: 220px;
+  padding-right: 4px;
+}
+
+.viewer-lantern-text text {
+  display: block;
+  font-size: 14px;
+  line-height: 1.5;
+  opacity: 0.92;
+}
+
+.viewer-lantern-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.viewer-lantern-nav {
+  padding: 6px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background-color: rgba(255, 255, 255, 0.08);
+  color: #f5f7ff;
+  font-size: 12px;
+}
+
+.viewer-lantern-nav[disabled] {
+  opacity: 0.5;
+}
+
+.viewer-lantern-counter {
+  font-size: 12px;
+  opacity: 0.72;
+}
+
+.viewer-lantern-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.viewer-lantern-button {
+  padding: 8px 16px;
+  border-radius: 18px;
+  border: none;
+  font-size: 14px;
+  background-image: linear-gradient(135deg, #1f7aec, #5d9bff);
+  color: #ffffff;
+}
+
+.viewer-lantern-button.cancel {
+  background-image: none;
+  background-color: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
 }
 </style>
