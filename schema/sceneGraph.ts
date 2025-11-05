@@ -9,6 +9,7 @@ import type {
   SceneMaterial,
   SceneNode,
   SceneNodeComponentMap,
+  SceneNodeEditorFlags,
   SceneNodeMaterial,
   SceneMaterialTextureSettings,
 } from '@harmony/schema';
@@ -37,6 +38,7 @@ type SceneNodeWithExtras = SceneNode & {
   };
   dynamicMesh?: any;
   components?: SceneNodeComponentMap;
+  editorFlags?: SceneNodeEditorFlags;
 };
 
 
@@ -691,6 +693,9 @@ class SceneGraphBuilder {
   }
 
   private async buildSingleNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    if (node.editorFlags?.editorOnly) {
+      return this.buildEditorOnlyNode(node);
+    }
     switch (node.nodeType) {
       case 'Group':
         return this.buildGroupNode(node);
@@ -704,6 +709,23 @@ class SceneGraphBuilder {
       default:
         return this.buildPrimitiveNode(node);
     }
+  }
+
+  private async buildEditorOnlyNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const placeholder = new THREE.Group();
+    placeholder.name = node.name ?? 'Editor Marker';
+    this.applyTransform(placeholder, node);
+    placeholder.visible = false;
+    placeholder.userData = {
+      ...(placeholder.userData ?? {}),
+      editorOnly: true,
+    };
+
+    if (Array.isArray(node.children) && node.children.length) {
+      await this.buildNodes(node.children as SceneNodeWithExtras[], placeholder);
+    }
+
+    return placeholder;
   }
 
   private async buildGroupNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, type WatchStopHandle } from 'vue'
-import { useSceneStore } from '@/stores/sceneStore'
+import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import * as THREE from 'three'
 import type { GeometryType } from '@harmony/schema'
@@ -17,6 +17,17 @@ import { type LightNodeType, type SceneNode } from '@harmony/schema'
 const sceneStore = useSceneStore()
 const uiStore = useUiStore()
 const assetCacheStore = useAssetCacheStore()
+
+const VIEW_POINT_RADIUS = 0.24
+const VIEW_POINT_SEGMENTS = 24
+const VIEW_POINT_DEFAULT_OFFSET = 1.5
+const VIEW_POINT_MIN_DISTANCE = 0.6
+const VIEW_POINT_COLOR = 0xff8a65
+
+const tempViewPointBox = new THREE.Box3()
+const tempViewPointVecA = new THREE.Vector3()
+const tempViewPointVecB = new THREE.Vector3()
+const tempViewPointQuat = new THREE.Quaternion()
 
 const urlDialogOpen = ref(false)
 const urlDialogInitialValue = ref('')
@@ -480,6 +491,39 @@ function collectNodeNames(nodes: SceneNode[] | undefined, bucket: Set<string>) {
   })
 }
 
+function composeNodeMatrix(node: SceneNode): THREE.Matrix4 {
+  const position = new THREE.Vector3(node.position.x, node.position.y, node.position.z)
+  const rotation = new THREE.Euler(node.rotation.x, node.rotation.y, node.rotation.z, 'XYZ')
+  const quaternion = new THREE.Quaternion().setFromEuler(rotation)
+  const scale = new THREE.Vector3(node.scale.x, node.scale.y, node.scale.z)
+  return new THREE.Matrix4().compose(position, quaternion, scale)
+}
+
+function computeWorldMatrixForNode(nodes: SceneNode[] | undefined, targetId: string): THREE.Matrix4 | null {
+  if (!nodes?.length) {
+    return null
+  }
+
+  const traverse = (list: SceneNode[], parentMatrix: THREE.Matrix4): THREE.Matrix4 | null => {
+    for (const node of list) {
+      const localMatrix = composeNodeMatrix(node)
+      const worldMatrix = new THREE.Matrix4().multiplyMatrices(parentMatrix, localMatrix)
+      if (node.id === targetId) {
+        return worldMatrix
+      }
+      if (node.children?.length) {
+        const nested = traverse(node.children, worldMatrix)
+        if (nested) {
+          return nested
+        }
+      }
+    }
+    return null
+  }
+
+  return traverse(nodes, new THREE.Matrix4())
+}
+
 function getNextEmptyName(): string {
   const names = new Set<string>()
   collectNodeNames(sceneStore.nodes, names)
@@ -493,6 +537,77 @@ function getNextEmptyName(): string {
   return `Empty ${index}`
 }
 
+function getNextViewPointName(): string {
+  const names = new Set<string>()
+  collectNodeNames(sceneStore.nodes, names)
+  const base = 'View Point'
+  if (!names.has(base)) {
+    return base
+  }
+  let index = 1
+  while (names.has(`${base} ${index}`)) {
+    index += 1
+  }
+  return `${base} ${index}`
+}
+
+function resolveViewPointParent(): SceneNode | null {
+  const candidate = sceneStore.selectedNode
+  if (!candidate || candidate.isPlaceholder) {
+    return null
+  }
+  return candidate
+}
+
+function computeViewPointWorldPosition(parent: SceneNode, radius: number): THREE.Vector3 | null {
+  const runtime = getRuntimeObject(parent.id)
+  if (runtime) {
+    runtime.updateMatrixWorld(true)
+    tempViewPointBox.makeEmpty()
+    tempViewPointBox.setFromObject(runtime)
+
+    const center = tempViewPointBox.isEmpty()
+      ? runtime.getWorldPosition(tempViewPointVecA)
+      : tempViewPointBox.getCenter(tempViewPointVecA)
+
+    const quaternion = runtime.getWorldQuaternion(tempViewPointQuat)
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(quaternion)
+    if (forward.lengthSq() < 1e-6) {
+      forward.set(0, 0, -1)
+    }
+    forward.normalize()
+
+    let distance = VIEW_POINT_DEFAULT_OFFSET
+    if (!tempViewPointBox.isEmpty()) {
+      const size = tempViewPointBox.getSize(tempViewPointVecB)
+      const dominant = Math.max(size.x, size.y, size.z)
+      distance = Math.max(dominant * 0.5 + radius * 2, VIEW_POINT_MIN_DISTANCE)
+    } else {
+      distance = Math.max(distance, VIEW_POINT_MIN_DISTANCE)
+    }
+
+    const spawn = center.clone().add(forward.multiplyScalar(distance))
+    spawn.y = center.y
+    return spawn
+  }
+
+  const matrix = computeWorldMatrixForNode(sceneStore.nodes, parent.id)
+  if (!matrix) {
+    return null
+  }
+
+  const position = new THREE.Vector3().setFromMatrixPosition(matrix)
+  const quaternion = new THREE.Quaternion().setFromRotationMatrix(matrix)
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(quaternion)
+  if (forward.lengthSq() < 1e-6) {
+    forward.set(0, 0, -1)
+  }
+  forward.normalize()
+
+  const spawn = position.clone().add(forward.multiplyScalar(VIEW_POINT_DEFAULT_OFFSET))
+  return spawn
+}
+
 function handleCreateEmptyNode() {
   const emptyObject = new THREE.Object3D()
   const name = getNextEmptyName()
@@ -504,6 +619,48 @@ function handleCreateEmptyNode() {
     object: emptyObject,
     name,
     parentId,
+  })
+}
+
+async function handleCreateViewPointNode() {
+  const name = getNextViewPointName()
+  const geometry = new THREE.SphereGeometry(VIEW_POINT_RADIUS, VIEW_POINT_SEGMENTS, VIEW_POINT_SEGMENTS)
+  const material = new THREE.MeshBasicMaterial({
+    color: VIEW_POINT_COLOR,
+    wireframe: true,
+    opacity: 0.7,
+    transparent: true,
+    depthWrite: false,
+    depthTest: false,
+  })
+  const mesh = new THREE.Mesh(geometry, material)
+  mesh.name = name
+  mesh.castShadow = false
+  mesh.receiveShadow = false
+  mesh.renderOrder = 1000
+  mesh.userData = {
+    ...(mesh.userData ?? {}),
+    editorOnly: true,
+    ignoreGridSnapping: true,
+    viewPoint: true,
+  }
+
+  const parent = resolveViewPointParent()
+  const parentId = parent ? parent.id : null
+  const worldPosition = parent ? computeViewPointWorldPosition(parent, VIEW_POINT_RADIUS) : null
+
+  await sceneStore.addModelNode({
+    object: mesh,
+    nodeType: 'Sphere',
+    name,
+    baseY: 0,
+    parentId,
+    position: worldPosition ?? undefined,
+    snapToGrid: false,
+    editorFlags: {
+      editorOnly: true,
+      ignoreGridSnapping: true,
+    },
   })
 }
 
@@ -565,6 +722,7 @@ function handleAddLight(type: LightNodeType) {
     <v-list class="add-menu-list">
       <v-list-item title="Group" @click="handleAddGroup()" />
       <v-list-item title="Create Empty" @click="handleCreateEmptyNode()" />
+      <v-list-item title="View Point" @click="handleCreateViewPointNode()" />
       <v-menu  transition="none" location="end" offset="8">
         <template #activator="{ props: lightMenuProps }">
           <v-list-item title="Light" append-icon="mdi-chevron-right" v-bind="lightMenuProps" />

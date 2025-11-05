@@ -35,6 +35,7 @@ import type {
   SceneNode,
   SceneNodeComponentMap,
   SceneNodeComponentState,
+  SceneNodeEditorFlags,
   SceneNodeType,
   Vector3Like,
   WallDynamicMesh,
@@ -1980,7 +1981,8 @@ function collectCollisionSpheres(nodes: SceneNode[]): CollisionSphere[] {
       const nodeMatrix = composeNodeMatrix(node)
       const worldMatrix = new Matrix4().multiplyMatrices(parentMatrix, nodeMatrix)
 
-  if (!node.isPlaceholder && node.nodeType !== 'Light') {
+      const skipCollision = node.editorFlags?.ignoreGridSnapping || node.editorFlags?.editorOnly
+  if (!skipCollision && !node.isPlaceholder && node.nodeType !== 'Light') {
         const runtimeObject = getRuntimeObject(node.id)
   if (runtimeObject && node.dynamicMesh?.type !== 'Ground') {
           runtimeObject.updateMatrixWorld(true)
@@ -2087,10 +2089,17 @@ function resolveSpawnPosition(params: {
   localCenter?: Vector3
   camera: SceneCameraState | null | undefined
   nodes: SceneNode[]
+  snapToGrid?: boolean
 }): Vector3 {
   const { baseY, radius, localCenter, camera } = params
+  const shouldSnap = params.snapToGrid !== false
   if (!camera) {
-    return new Vector3(snapAxisToGrid(0), baseY, snapAxisToGrid(0))
+    const fallback = new Vector3(0, baseY, 0)
+    if (shouldSnap) {
+      fallback.x = snapAxisToGrid(fallback.x)
+      fallback.z = snapAxisToGrid(fallback.z)
+    }
+    return fallback
   }
 
   const cameraPosition = new Vector3(camera.position.x, camera.position.y, camera.position.z)
@@ -2141,8 +2150,10 @@ function resolveSpawnPosition(params: {
     }
 
     candidate.copy(cameraPosition).addScaledVector(direction, distance)
-    candidate.x = snapAxisToGrid(candidate.x)
-    candidate.z = snapAxisToGrid(candidate.z)
+    if (shouldSnap) {
+      candidate.x = snapAxisToGrid(candidate.x)
+      candidate.z = snapAxisToGrid(candidate.z)
+    }
     candidate.y = baseY
 
     worldCenter.copy(localCenterVec).add(candidate)
@@ -2158,8 +2169,10 @@ function resolveSpawnPosition(params: {
   }
 
   candidate.copy(cameraPosition).addScaledVector(direction, Math.min(baseDistance, maxDistance))
-  candidate.x = snapAxisToGrid(candidate.x)
-  candidate.z = snapAxisToGrid(candidate.z)
+  if (shouldSnap) {
+    candidate.x = snapAxisToGrid(candidate.x)
+    candidate.z = snapAxisToGrid(candidate.z)
+  }
   candidate.y = baseY
   return candidate
 }
@@ -2303,6 +2316,20 @@ function toHierarchyItem(node: SceneNode): HierarchyTreeItem {
   }
 }
 
+function cloneEditorFlags(flags?: SceneNodeEditorFlags | null): SceneNodeEditorFlags | undefined {
+  if (!flags) {
+    return undefined
+  }
+  const next: SceneNodeEditorFlags = {}
+  if (flags.editorOnly !== undefined) {
+    next.editorOnly = flags.editorOnly
+  }
+  if (flags.ignoreGridSnapping !== undefined) {
+    next.ignoreGridSnapping = flags.ignoreGridSnapping
+  }
+  return Object.keys(next).length ? next : undefined
+}
+
 function cloneNode(node: SceneNode): SceneNode {
   const nodeType = normalizeSceneNodeType(node.nodeType)
   const materials = sceneNodeTypeSupportsMaterials(nodeType) ? cloneNodeMaterials(node.materials) : undefined
@@ -2332,6 +2359,7 @@ function cloneNode(node: SceneNode): SceneNode {
           objectPath: [...node.importMetadata.objectPath],
         }
       : undefined,
+    editorFlags: cloneEditorFlags(node.editorFlags),
   }
 }
 
@@ -5892,6 +5920,8 @@ export const useSceneStore = defineStore('scene', {
       rotation?: THREE.Vector3
       scale?: THREE.Vector3
       parentId?: string | null
+      snapToGrid?: boolean
+      editorFlags?: SceneNodeEditorFlags
     }): Promise<SceneNode | null> {
       if (!payload.object && !payload.asset) {
         throw new Error('addModelNode requires either an object or an asset')
@@ -5910,6 +5940,8 @@ export const useSceneStore = defineStore('scene', {
       let rotation: Vector3Like = { ...baseRotation }
       let scale: Vector3Like = { ...baseScale }
       let targetParentId = payload.parentId ?? null
+      const shouldSnapToGrid =
+        payload.snapToGrid !== undefined ? payload.snapToGrid : !(payload.editorFlags?.ignoreGridSnapping)
       let baseY = payload.baseY ?? 0
 
       let workingObject: Object3D
@@ -5970,6 +6002,7 @@ export const useSceneStore = defineStore('scene', {
           localCenter: metrics.center,
           camera: this.camera,
           nodes: this.nodes,
+          snapToGrid: shouldSnapToGrid,
         })
       }
 
@@ -6009,6 +6042,7 @@ export const useSceneStore = defineStore('scene', {
         scale,
         sourceAssetId: sourceAssetId ?? undefined,
         parentId: targetParentId ?? undefined,
+        editorFlags: payload.editorFlags,
       })
 
       if (registerAssetId && assetCache) {
@@ -6107,6 +6141,7 @@ export const useSceneStore = defineStore('scene', {
       dynamicMesh?: SceneDynamicMesh
       components?: SceneNodeComponentMap
       parentId?: string | null
+      editorFlags?: SceneNodeEditorFlags
     }) {
       this.captureHistorySnapshot()
       const id = generateUuid()
@@ -6136,6 +6171,7 @@ export const useSceneStore = defineStore('scene', {
         visible: true,
         sourceAssetId: payload.sourceAssetId,
         dynamicMesh: payload.dynamicMesh ? cloneDynamicMeshDefinition(payload.dynamicMesh) : undefined,
+        editorFlags: cloneEditorFlags(payload.editorFlags),
       }
 
       node.components = normalizeNodeComponents(node, payload.components)

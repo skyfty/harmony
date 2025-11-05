@@ -173,6 +173,11 @@ export interface SceneNodeComponentState<TProps = Record<string, unknown>> {
 
 export type SceneNodeComponentMap = Partial<Record<NodeComponentType, SceneNodeComponentState<any>>>
 
+export interface SceneNodeEditorFlags {
+  editorOnly?: boolean
+  ignoreGridSnapping?: boolean
+}
+
 export type BehaviorEventType = 'click' | 'approach' | 'depart' | 'perform'
 
 export type BehaviorScriptType =
@@ -392,6 +397,7 @@ export interface SceneNode {
   camera?: CameraNodeProperties;
   dynamicMesh?: SceneDynamicMesh;
   importMetadata?: SceneNodeImportMetadata;
+  editorFlags?: SceneNodeEditorFlags;
   downloadProgress?: number;
   downloadStatus?: SceneNodeDownloadStatus;
   downloadError?: string | null;

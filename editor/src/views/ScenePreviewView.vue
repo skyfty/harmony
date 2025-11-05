@@ -2221,7 +2221,9 @@ function updateNodeProperties(object: THREE.Object3D, node: SceneNode) {
 	if (node.scale) {
 		object.scale.set(node.scale.x, node.scale.y, node.scale.z)
 	}
-	if (typeof node.visible === 'boolean') {
+	if (node.editorFlags?.editorOnly) {
+		object.visible = false
+	} else if (typeof node.visible === 'boolean') {
 		object.visible = node.visible
 	} else {
 		object.visible = true
