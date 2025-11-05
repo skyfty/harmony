@@ -6480,9 +6480,6 @@ function handleViewportShortcut(event: KeyboardEvent) {
 
 onMounted(() => {
   initScene()
-  sceneStore.ensureCurrentSceneLoaded().then(() => {
-    syncSceneGraph()
-  })
   updateToolMode(props.activeTool)
   attachSelection(props.selectedNodeId)
   updateSelectionHighlights()
@@ -6498,6 +6495,9 @@ onMounted(() => {
     viewportResizeObserver = new ResizeObserver(() => scheduleToolbarUpdate())
     viewportResizeObserver.observe(viewportEl.value)
   }
+  sceneStore.ensureCurrentSceneLoaded().then(() => {
+    syncSceneGraph()
+  })
 })
 
 onBeforeUnmount(() => {
@@ -6564,6 +6564,14 @@ watch(
   { deep: true }
 )
 
+watch(
+  () => sceneStore.currentSceneId,
+  () => {
+    sceneStore.ensureCurrentSceneLoaded().then(() => {
+      syncSceneGraph()
+    })
+  }
+)
 watch(
   () => [panelVisibility.value.hierarchy, panelPlacement.value.hierarchy],
   () => {
