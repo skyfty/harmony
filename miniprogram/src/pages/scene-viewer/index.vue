@@ -141,6 +141,7 @@ import {
   hasRegisteredBehaviors,
   listInteractableObjects,
   listRegisteredBehaviorActions,
+  updateBehaviorVisibility,
   removeBehaviorRuntimeListener,
   resetBehaviorRuntime,
   resolveBehaviorEvent,
@@ -1430,6 +1431,7 @@ function handleSetVisibilityEvent(event: Extract<BehaviorRuntimeEvent, { type: '
   if (node) {
     node.visible = event.visible;
   }
+  updateBehaviorVisibility(event.targetNodeId, event.visible);
 }
 
 function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: 'play-animation' }>) {

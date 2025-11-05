@@ -162,6 +162,7 @@ type RegistryEntry = {
   nodeId: string
   behaviors: BehaviorRegistry
   object: Object3D | null
+  visible: boolean
 }
 
 type BehaviorSequenceState = {
@@ -628,12 +629,14 @@ export function registerBehaviorComponent(
   nodeId: string,
   behaviors: BehaviorCollection = [],
   object: Object3D | null,
+  options: { visible?: boolean } = {},
 ): void {
   cancelSequencesForNode(nodeId)
   registry.set(nodeId, {
     nodeId,
     behaviors: buildBehaviorRegistry(toBehaviorList(behaviors)),
     object,
+    visible: options.visible ?? true,
   })
   notifyRegistryChanged(nodeId)
 }
@@ -655,6 +658,17 @@ export function updateBehaviorObject(nodeId: string, object: Object3D | null): v
     return
   }
   entry.object = object
+  if (object) {
+    entry.visible = object.visible
+  }
+}
+
+export function updateBehaviorVisibility(nodeId: string, visible: boolean): void {
+  const entry = registry.get(nodeId)
+  if (!entry) {
+    return
+  }
+  entry.visible = visible
 }
 
 export function unregisterBehaviorComponent(nodeId: string): void {
@@ -666,7 +680,7 @@ export function unregisterBehaviorComponent(nodeId: string): void {
 export function listInteractableObjects(): Object3D[] {
   const objects: Object3D[] = []
   registry.forEach((entry) => {
-    if (entry.object) {
+    if (entry.object && entry.visible !== false) {
       objects.push(entry.object)
     }
   })

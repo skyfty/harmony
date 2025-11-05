@@ -20,6 +20,7 @@ import {
 	hasRegisteredBehaviors,
 	listRegisteredBehaviorActions,
 	listInteractableObjects,
+	updateBehaviorVisibility,
 	resetBehaviorRuntime,
 	removeBehaviorRuntimeListener,
 	triggerBehaviorAction,
@@ -1408,6 +1409,7 @@ function handleSetVisibilityEvent(event: Extract<BehaviorRuntimeEvent, { type: '
 	if (node) {
 		node.visible = event.visible
 	}
+	updateBehaviorVisibility(event.targetNodeId, event.visible)
 }
 
 function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: 'play-animation' }>) {
@@ -2312,6 +2314,7 @@ function updateNodeProperties(object: THREE.Object3D, node: SceneNode) {
 	} else {
 		object.visible = true
 	}
+	updateBehaviorVisibility(node.id, object.visible)
 }
 
 function structuralSignature(node: SceneNode | null | undefined): string {
