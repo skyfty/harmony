@@ -185,6 +185,8 @@ export type BehaviorScriptType =
   | 'moveTo'
   | 'showAlert'
   | 'watch'
+  | 'showPurpose'
+  | 'hidePurpose'
   | 'show'
   | 'hide'
   | 'lantern'
@@ -224,6 +226,15 @@ export interface ShowAlertBehaviorParams {
 export interface WatchBehaviorParams {
   /** Target scene node id to focus the camera on. */
   targetNodeId: string | null
+}
+
+export interface ShowPurposeBehaviorParams {
+  /** Target scene node id to focus when the observe button is pressed. */
+  targetNodeId: string | null
+}
+
+export interface HidePurposeBehaviorParams {
+  // no configuration required
 }
 
 export interface ShowBehaviorParams {
@@ -289,6 +300,14 @@ export type SceneBehaviorScriptBinding =
   | {
       type: 'watch'
       params: WatchBehaviorParams
+    }
+  | {
+      type: 'showPurpose'
+      params: ShowPurposeBehaviorParams
+    }
+  | {
+      type: 'hidePurpose'
+      params: HidePurposeBehaviorParams
     }
   | {
       type: 'show'

@@ -242,6 +242,8 @@ const CAMERA_FORWARD_OFFSET = 1.5;
 const CAMERA_MAX_LOOK_UP = THREE.MathUtils.degToRad(50);
 const CAMERA_MAX_LOOK_DOWN = THREE.MathUtils.degToRad(30);
 const CAMERA_WATCH_DURATION = 0.45;
+const DEFAULT_CAMERA_POSITION = new THREE.Vector3(0, HUMAN_EYE_HEIGHT, 0);
+const DEFAULT_CAMERA_TARGET = new THREE.Vector3(0, HUMAN_EYE_HEIGHT, -CAMERA_FORWARD_OFFSET);
 const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
   presetId: 'clear-day',
   exposure: 0.6,
@@ -299,6 +301,10 @@ const lanternOverlayVisible = ref(false);
 const lanternSlides = ref<LanternSlideDefinition[]>([]);
 const lanternActiveSlideIndex = ref(0);
 const lanternEventToken = ref<string | null>(null);
+
+const purposeControlsVisible = ref(false);
+const purposeTargetNodeId = ref<string | null>(null);
+const purposeSourceNodeId = ref<string | null>(null);
 
 type LanternTextState = { text: string; loading: boolean; error: string | null };
 
@@ -1530,17 +1536,18 @@ function handleTriggerBehaviorEvent(event: Extract<BehaviorRuntimeEvent, { type:
   processBehaviorEvents(followUps);
 }
 
-function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watch-node' }>) {
+function performWatchFocus(targetNodeId: string | null): { success: boolean; message?: string } {
   const context = renderContext;
   if (!context) {
-    resolveBehaviorToken(event.token, { type: 'fail', message: '相机不可用' });
-    return;
+    return { success: false, message: '相机不可用' };
+  }
+  if (!targetNodeId) {
+    return { success: false, message: '缺少观察目标' };
   }
   const { camera, controls } = context;
-  const focus = resolveNodeFocusPoint(event.targetNodeId);
+  const focus = resolveNodeFocusPoint(targetNodeId);
   if (!focus) {
-    resolveBehaviorToken(event.token, { type: 'fail', message: '未找到目标节点' });
-    return;
+    return { success: false, message: '未找到目标节点' };
   }
   activeCameraWatchTween = null;
   const startPosition = camera.position.clone();
@@ -1551,8 +1558,12 @@ function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watc
 
   tempMovementVec.copy(focus).sub(startPosition);
   if (tempMovementVec.lengthSq() < 1e-8) {
-    resolveBehaviorToken(event.token, { type: 'continue' });
-    return;
+    controls.target.copy(focus);
+    controls.update();
+    camera.position.copy(startPosition);
+    camera.position.y = HUMAN_EYE_HEIGHT;
+    controls.update();
+    return { success: true };
   }
 
   tempMovementVec.normalize();
@@ -1565,16 +1576,63 @@ function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watc
     camera.position.copy(startPosition);
     camera.position.y = HUMAN_EYE_HEIGHT;
     controls.update();
-  } else {
-    activeCameraWatchTween = {
-      from: startTarget,
-      to: tempForwardVec.clone(),
-      startPosition,
-      duration: CAMERA_WATCH_DURATION,
-      elapsed: 0,
-    };
+    return { success: true };
+  }
+
+  activeCameraWatchTween = {
+    from: startTarget,
+    to: tempForwardVec.clone(),
+    startPosition,
+    duration: CAMERA_WATCH_DURATION,
+    elapsed: 0,
+  };
+
+  return { success: true };
+}
+
+function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watch-node' }>) {
+  const result = performWatchFocus(event.targetNodeId ?? event.nodeId ?? null);
+  if (!result.success) {
+    resolveBehaviorToken(event.token, { type: 'fail', message: result.message });
+    return;
   }
   resolveBehaviorToken(event.token, { type: 'continue' });
+}
+
+function showPurposeControls(targetNodeId: string | null, sourceNodeId: string | null): void {
+  purposeSourceNodeId.value = sourceNodeId ?? null;
+  purposeTargetNodeId.value = targetNodeId ?? sourceNodeId ?? null;
+  purposeControlsVisible.value = true;
+}
+
+function hidePurposeControls(): void {
+  purposeControlsVisible.value = false;
+}
+
+function handleShowPurposeControlsEvent(
+  event: Extract<BehaviorRuntimeEvent, { type: 'show-purpose-controls' }>,
+): void {
+  showPurposeControls(event.targetNodeId ?? null, event.nodeId ?? null);
+}
+
+function handleHidePurposeControlsEvent(): void {
+  hidePurposeControls();
+}
+
+function handlePurposeWatchTap(): void {
+  const targetNodeId = purposeTargetNodeId.value ?? purposeSourceNodeId.value;
+  if (!targetNodeId) {
+    uni.showToast({ title: '缺少观察目标', icon: 'none' });
+    return;
+  }
+  const result = performWatchFocus(targetNodeId);
+  if (!result.success) {
+    uni.showToast({ title: result.message || '无法定位观察目标', icon: 'none' });
+  }
+}
+
+function handlePurposeResetTap(): void {
+  resetCameraToDefaultView();
 }
 
 function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look-level' }>) {
@@ -1590,6 +1648,19 @@ function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look
   camera.lookAt(lookTarget);
   controls.update();
   resolveBehaviorToken(event.token, { type: 'continue' });
+}
+
+function resetCameraToDefaultView(): void {
+  const context = renderContext;
+  if (!context) {
+    return;
+  }
+  const { camera, controls } = context;
+  activeCameraWatchTween = null;
+  camera.position.copy(DEFAULT_CAMERA_POSITION);
+  controls.target.copy(DEFAULT_CAMERA_TARGET);
+  camera.lookAt(DEFAULT_CAMERA_TARGET);
+  controls.update();
 }
 
 function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
@@ -1614,6 +1685,12 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
       break;
     case 'watch-node':
       handleWatchNodeEvent(event);
+      break;
+    case 'show-purpose-controls':
+      handleShowPurposeControlsEvent(event);
+      break;
+    case 'hide-purpose-controls':
+      handleHidePurposeControlsEvent();
       break;
     case 'set-visibility':
       handleSetVisibilityEvent(event);
@@ -2093,6 +2170,7 @@ function teardownRenderer() {
   } else {
     resetLanternOverlay();
   }
+  hidePurposeControls();
   previewComponentManager.reset();
   resetBehaviorRuntime();
   resetBehaviorProximity();
@@ -2207,6 +2285,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   } else {
     resetLanternOverlay();
   }
+  hidePurposeControls();
   scene.children.forEach((child) => disposeObject(child));
   scene.clear();
   warnings.value = [];

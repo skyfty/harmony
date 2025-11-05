@@ -15,6 +15,8 @@ import type {
   LanternSlideLayout,
   HideBehaviorParams,
   WatchBehaviorParams,
+  ShowPurposeBehaviorParams,
+  HidePurposeBehaviorParams,
   TriggerBehaviorParams,
   AnimationBehaviorParams,
 } from '../index'
@@ -162,6 +164,26 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
       return {
         targetNodeId: null,
       }
+    },
+  },
+  {
+    id: 'showPurpose',
+    label: 'Show Purpose Controls',
+    description: 'Display observe and level view buttons in the viewer.',
+    icon: 'mdi-crosshairs-eye',
+    createDefaultParams(): ShowPurposeBehaviorParams {
+      return {
+        targetNodeId: null,
+      }
+    },
+  },
+  {
+    id: 'hidePurpose',
+    label: 'Hide Purpose Controls',
+    description: 'Hide the observe and level view buttons.',
+    icon: 'mdi-crosshairs-off',
+    createDefaultParams(): HidePurposeBehaviorParams {
+      return {}
     },
   },
   {
@@ -331,6 +353,20 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
         },
       }
     }
+    case 'showPurpose': {
+      const params = binding.params as ShowPurposeBehaviorParams | undefined
+      return {
+        type: 'showPurpose',
+        params: {
+          targetNodeId: params?.targetNodeId ?? null,
+        },
+      }
+    }
+    case 'hidePurpose':
+      return {
+        type: 'hidePurpose',
+        params: {},
+      }
     case 'show': {
       const params = binding.params as ShowBehaviorParams | undefined
       return {
@@ -551,6 +587,20 @@ export function ensureBehaviorParams(
           },
         }
       }
+      case 'showPurpose': {
+        const params = script.params as Partial<ShowPurposeBehaviorParams> | undefined
+        return {
+          type: 'showPurpose',
+          params: {
+            targetNodeId: params?.targetNodeId ?? null,
+          },
+        }
+      }
+      case 'hidePurpose':
+        return {
+          type: 'hidePurpose',
+          params: {},
+        }
       case 'show': {
         const params = script.params as Partial<ShowBehaviorParams> | undefined
         return {
