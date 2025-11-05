@@ -104,6 +104,7 @@ export interface SceneGraphResourceProgress {
   kind: SceneGraphResourceKind;
   assetId: string | null;
   message?: string;
+  progress?: number;
 }
 
 export interface SceneGraphBuildOptions {
@@ -114,6 +115,8 @@ export interface SceneGraphBuildOptions {
   onProgress?: (progress: SceneGraphResourceProgress) => void;
 }
 
+type AssetDownloadReporter = (payload: { assetId: string; progress: number }) => void;
+
 class ResourceCache implements MaterialAssetProvider {
   private packageEntries: Map<string, { provider: string; value: string } | null> = new Map();
   private readonly assetEntryCache = new Map<string, Promise<AssetCacheEntry | null>>();
@@ -121,17 +124,20 @@ class ResourceCache implements MaterialAssetProvider {
   private readonly options: SceneGraphBuildOptions;
   private readonly warn: (message: string) => void;
   private readonly assetLoader: AssetLoader;
+  private readonly reportDownloadProgress?: AssetDownloadReporter;
 
   constructor(
     document: SceneJsonExportDocument,
     options: SceneGraphBuildOptions,
     warn: (message: string) => void,
     assetLoader: AssetLoader,
+    reportDownloadProgress?: AssetDownloadReporter,
   ) {
     this.document = document;
     this.options = options;
     this.warn = warn;
     this.assetLoader = assetLoader;
+    this.reportDownloadProgress = reportDownloadProgress;
   }
 
   async acquireAssetSource(assetId: string): Promise<MaterialAssetSource | null> {
@@ -169,7 +175,17 @@ class ResourceCache implements MaterialAssetProvider {
           return null;
         }
         try {
-          const entry = await this.assetLoader.load(assetId, source);
+          const entry = await this.assetLoader.load(assetId, source, {
+            onProgress: (value) => {
+              if (!Number.isFinite(value)) {
+                return;
+              }
+              this.reportDownloadProgress?.({
+                assetId,
+                progress: value,
+              });
+            },
+          });
           this.assetLoader.getCache().registerUsage(assetId);
           return entry;
         } catch (error) {
@@ -432,7 +448,13 @@ class SceneGraphBuilder {
     this.document = document;
     this.root = new THREE.Group();
     this.root.name = document.name ?? 'Scene';
-    this.resourceCache = new ResourceCache(document, options, (message) => this.warn(message), this.assetLoader);
+    this.resourceCache = new ResourceCache(
+      document,
+      options,
+      (message) => this.warn(message),
+      this.assetLoader,
+      (payload) => this.reportAssetDownloadProgress(payload.assetId, payload.progress),
+    );
     this.materialFactory = new SceneMaterialFactory({
       provider: this.resourceCache,
       loadingManager: this.loadingManager,
@@ -512,6 +534,25 @@ class SceneGraphBuilder {
       kind: 'asset',
       assetId: null,
       message,
+    });
+  }
+
+  private reportAssetDownloadProgress(assetId: string, progress: number): void {
+    if (!this.onProgress) {
+      return;
+    }
+    const clamped = Math.max(0, Math.min(100, Math.round(progress)));
+    const label = assetId && assetId.trim().length ? assetId : '资源';
+    const message = clamped >= 100
+      ? `资源 ${label} 下载完成`
+      : `资源 ${label} 下载中 (${clamped}%)`;
+    this.onProgress({
+      total: this.progressTotal,
+      loaded: this.progressLoaded,
+      kind: 'asset',
+      assetId,
+      message,
+      progress: clamped,
     });
   }
 

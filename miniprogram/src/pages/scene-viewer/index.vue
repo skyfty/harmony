@@ -90,10 +90,22 @@
             class="viewer-overlay__progress"
           />
           <text
+            v-if="resourcePreload.label"
+            class="viewer-overlay__caption"
+          >
+            {{ resourcePreload.label }}
+          </text>
+          <text
+            v-if="resourcePreloadAssetCaption"
+            class="viewer-overlay__asset"
+          >
+            {{ resourcePreloadAssetCaption }}
+          </text>
+          <text
             v-if="resourcePreload.active && resourcePreload.total"
             class="viewer-overlay__caption"
           >
-            {{ resourcePreload.label || `已加载 ${resourcePreload.loaded} / ${resourcePreload.total}` }}
+            已加载 {{ resourcePreload.loaded }} / {{ resourcePreload.total }}
           </text>
         </view>
       </view>
@@ -120,7 +132,7 @@ import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from '@/components/PlatformCanvas.vue';
 import type { StoredSceneEntry } from '@/stores/sceneStore';
 import { parseSceneDocument, useSceneStore } from '@/stores/sceneStore';
-import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph';
+import { buildSceneGraph, type SceneGraphBuildOptions, type SceneGraphResourceProgress } from '@schema/sceneGraph';
 import type { SceneNode, SceneSkyboxSettings, SceneJsonExportDocument, LanternSlideDefinition } from '@harmony/schema';
 import { ComponentManager } from '@schema/components/componentManager';
 import { behaviorComponentDefinition, wallComponentDefinition } from '@schema/components';
@@ -188,13 +200,38 @@ const resourcePreload = reactive({
   loaded: 0,
   total: 0,
   label: '',
+  currentAssetId: '' as string,
+  currentProgress: null as number | null,
+  currentKind: '' as SceneGraphResourceProgress['kind'] | '',
 });
 
 const resourcePreloadPercent = computed(() => {
-  if (!resourcePreload.total) {
-    return resourcePreload.active ? 0 : 100;
+  const total = resourcePreload.total;
+  const loaded = resourcePreload.loaded;
+  const partial = resourcePreload.currentProgress;
+  if (total > 0) {
+    const baseRatio = Math.min(1, Math.max(0, loaded / total));
+    const pendingRatio = partial != null && loaded < total
+      ? Math.max(0, Math.min(1, partial / 100)) / total
+      : 0;
+    const ratio = Math.min(1, baseRatio + pendingRatio);
+    return Math.round(ratio * 100);
   }
-  return Math.min(100, Math.round((resourcePreload.loaded / resourcePreload.total) * 100));
+  if (partial != null) {
+    return Math.round(Math.max(0, Math.min(100, partial)));
+  }
+  return resourcePreload.active ? 0 : 100;
+});
+
+const resourcePreloadAssetCaption = computed(() => {
+  const assetId = resourcePreload.currentAssetId;
+  if (!assetId) {
+    return '';
+  }
+  if (resourcePreload.currentProgress != null) {
+    return `当前资源：${assetId} (${resourcePreload.currentProgress}%)`;
+  }
+  return `当前资源：${assetId}`;
 });
 
 const SKY_ENVIRONMENT_INTENSITY = 0.35;
@@ -2188,6 +2225,9 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   resourcePreload.loaded = 0;
   resourcePreload.total = 0;
   resourcePreload.label = '准备加载资源...';
+  resourcePreload.currentAssetId = '';
+  resourcePreload.currentProgress = null;
+  resourcePreload.currentKind = '';
 
   let graph: Awaited<ReturnType<typeof buildSceneGraph>> | null = null;
   try {
@@ -2195,10 +2235,31 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
       enableGround: payload.enableGround ?? true,
       presetAssetBaseUrl: payload.presetAssetBaseUrl || PRESET_ASSET_BASE_URL,
       onProgress: (info) => {
+        const hasProgress = typeof info.progress === 'number' && Number.isFinite(info.progress);
         resourcePreload.total = info.total;
         resourcePreload.loaded = info.loaded;
-        resourcePreload.label = info.message || (info.assetId ? `加载 ${info.assetId}` : '');
-        resourcePreload.active = info.total > 0 && info.loaded < info.total;
+        resourcePreload.currentKind = info.kind;
+        if (info.assetId) {
+          resourcePreload.currentAssetId = info.assetId;
+        } else if (!hasProgress && info.loaded >= info.total) {
+          resourcePreload.currentAssetId = '';
+        }
+        if (hasProgress) {
+          const clamped = Math.max(0, Math.min(100, Math.round(info.progress ?? 0)));
+          resourcePreload.currentProgress = clamped;
+        } else if (!info.assetId || info.loaded >= info.total) {
+          resourcePreload.currentProgress = null;
+        }
+        const fallbackLabel = info.assetId ? `加载 ${info.assetId}` : '正在加载资源';
+        resourcePreload.label = info.message || fallbackLabel;
+        const stillLoadingByCount = info.total > 0 && info.loaded < info.total;
+        const stillLoadingByProgress = hasProgress && (resourcePreload.currentProgress ?? 0) < 100;
+        resourcePreload.active = stillLoadingByCount || stillLoadingByProgress;
+        if (!resourcePreload.active && info.loaded >= info.total) {
+          resourcePreload.currentAssetId = '';
+          resourcePreload.currentProgress = null;
+          resourcePreload.currentKind = '';
+        }
       },
     };
     if (payload.assetOverrides) {
@@ -2212,6 +2273,9 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
     if (!resourcePreload.active || resourcePreload.loaded >= resourcePreload.total) {
       resourcePreload.active = false;
       resourcePreload.label = '';
+      resourcePreload.currentAssetId = '';
+      resourcePreload.currentProgress = null;
+      resourcePreload.currentKind = '';
     }
   }
   if (!graph) {
@@ -2479,6 +2543,11 @@ onUnmounted(() => {
 .viewer-overlay__caption {
   font-size: 12px;
   color: rgba(255, 255, 255, 0.75);
+}
+
+.viewer-overlay__asset {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.88);
 }
 
 .viewer-overlay.error {
