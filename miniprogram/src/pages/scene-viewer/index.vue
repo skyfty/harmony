@@ -1632,21 +1632,32 @@ function handlePurposeWatchTap(): void {
 }
 
 function handlePurposeResetTap(): void {
-  resetCameraToDefaultView();
+  const result = resetCameraToLevelView();
+  if (!result.success) {
+    uni.showToast({ title: result.message || '相机不可用', icon: 'none' });
+  }
+}
+
+function resetCameraToLevelView(): { success: boolean; message?: string } {
+  const context = renderContext;
+  if (!context) {
+    return { success: false, message: '相机不可用' };
+  }
+  const { camera, controls } = context;
+  const levelTarget = controls.target.clone();
+  levelTarget.y = camera.position.y;
+  controls.target.copy(levelTarget);
+  camera.lookAt(levelTarget);
+  controls.update();
+  return { success: true };
 }
 
 function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look-level' }>) {
-  const context = renderContext;
-  if (!context) {
-    resolveBehaviorToken(event.token, { type: 'fail', message: '相机不可用' });
+  const result = resetCameraToLevelView();
+  if (!result.success) {
+    resolveBehaviorToken(event.token, { type: 'fail', message: result.message });
     return;
   }
-  const { camera, controls } = context;
-  const lookTarget = controls.target.clone();
-  lookTarget.y = camera.position.y;
-  controls.target.copy(lookTarget);
-  camera.lookAt(lookTarget);
-  controls.update();
   resolveBehaviorToken(event.token, { type: 'continue' });
 }
 

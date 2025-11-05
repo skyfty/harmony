@@ -1629,7 +1629,7 @@ function handlePurposeWatchClick(): void {
 }
 
 function handlePurposeResetClick(): void {
-	resetCameraToDefaultView()
+	resetCameraToLevelView()
 }
 
 function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look-level' }>) {
