@@ -43,6 +43,13 @@ export interface AssetLoadOptions {
   onProgress?: (value: number) => void
 }
 
+export interface AssetBlobPayload {
+  blob: Blob
+  mimeType: string | null
+  filename: string | null
+  url: string
+}
+
 export class AssetCache {
   private readonly entries = new Map<string, AssetCacheEntry>()
   private maxEntries: number
@@ -389,7 +396,7 @@ export class AssetLoader {
     entry.error = null
     entry.lastUsedAt = now()
 
-    const { blob, mimeType, filename } = await fetchAssetBlob(source.url, controller, (progress) => {
+    const { blob, mimeType, filename, url: resolvedUrl } = await fetchAssetBlob(source.url, controller, (progress) => {
       entry.progress = progress
       options.onProgress?.(progress)
     })
@@ -397,7 +404,7 @@ export class AssetLoader {
     return this.cache.storeBlob(assetId, blob, {
       mimeType: source.mimeType ?? mimeType ?? null,
       filename: source.filename ?? filename ?? null,
-      downloadUrl: source.url,
+      downloadUrl: resolvedUrl ?? source.url,
     })
   }
 }
@@ -499,34 +506,59 @@ export async function fetchAssetBlob(
   url: string,
   controller: AbortController,
   onProgress: (value: number) => void,
-): Promise<{ blob: Blob; mimeType: string | null; filename: string | null }> {
-  if (typeof fetch === 'function') {
-    const response = await fetch(url, { signal: controller.signal })
-    if (!response.ok) {
-      throw new Error(`资源下载失败（${response.status}）`)
-    }
-    return await readBlobWithProgress(response, onProgress)
+): Promise<AssetBlobPayload> {
+  const candidates = createDownloadUrlCandidates(url)
+  if (!candidates.length) {
+    throw new Error('资源下载失败（无效的下载地址）')
   }
 
+  if (typeof fetch === 'function') {
+    let lastNetworkError: unknown = null
+    for (const candidate of candidates) {
+      try {
+        const response = await fetch(candidate, { signal: controller.signal })
+        if (!response.ok) {
+          throw new Error(`资源下载失败（${response.status}）`)
+        }
+        return await readBlobWithProgress(response, onProgress, candidate)
+      } catch (error) {
+        if (error instanceof TypeError && candidate !== url) {
+          lastNetworkError = error
+          continue
+        }
+        if (error instanceof TypeError && candidate === url && shouldUpgradeHttpUrlInSecureContext(url)) {
+          throw new Error('资源下载失败：浏览器已阻止在 HTTPS 页面上访问 HTTP 链接，请尝试改用 HTTPS 地址。')
+        }
+        throw error instanceof Error ? error : new Error(String(error))
+      }
+    }
+    if (lastNetworkError) {
+      throw lastNetworkError instanceof Error ? lastNetworkError : new Error(String(lastNetworkError))
+    }
+  }
+
+  const fallbackUrl = candidates[0] ?? url
   const uniGlobal = typeof uni !== 'undefined' ? uni : undefined
   if (uniGlobal && typeof uniGlobal.request === 'function') {
-    return await fetchViaUni(url, controller, onProgress)
+    return await fetchViaUni(fallbackUrl, controller, onProgress)
   }
 
-  return await fetchViaXmlHttp(url, controller, onProgress)
+  return await fetchViaXmlHttp(fallbackUrl, controller, onProgress)
 }
 
 async function readBlobWithProgress(
   response: Response,
   onProgress: (value: number) => void,
-): Promise<{ blob: Blob; mimeType: string | null; filename: string | null }> {
+  requestUrl: string,
+): Promise<AssetBlobPayload> {
   if (!response.body) {
     const blob = await response.blob()
     onProgress(100)
     return {
       blob,
       mimeType: response.headers.get('content-type'),
-      filename: extractFilenameFromHeaders(response.headers, response.url),
+      filename: extractFilenameFromHeaders(response.headers, response.url || requestUrl),
+      url: response.url || requestUrl,
     }
   }
 
@@ -558,7 +590,8 @@ async function readBlobWithProgress(
   return {
     blob,
     mimeType: response.headers.get('content-type'),
-    filename: extractFilenameFromHeaders(response.headers, response.url),
+    filename: extractFilenameFromHeaders(response.headers, response.url || requestUrl),
+    url: response.url || requestUrl,
   }
 }
 
@@ -566,7 +599,7 @@ async function fetchViaUni(
   url: string,
   controller: AbortController,
   onProgress: (value: number) => void,
-): Promise<{ blob: Blob; mimeType: string | null; filename: string | null }> {
+): Promise<AssetBlobPayload> {
   const uniGlobal = uni
   if (!uniGlobal || typeof uniGlobal.request !== 'function') {
     throw new Error('uni.request 不可用')
@@ -582,7 +615,7 @@ async function fetchViaUni(
           const arrayBuffer = res.data as ArrayBuffer
           onProgress(100)
           const blob = new Blob([arrayBuffer])
-          resolve({ blob, mimeType: null, filename: null })
+          resolve({ blob, mimeType: null, filename: null, url })
           return
         }
         reject(new Error(`资源下载失败（${res.statusCode ?? 'unknown'}）`))
@@ -602,7 +635,7 @@ async function fetchViaXmlHttp(
   url: string,
   controller: AbortController,
   onProgress: (value: number) => void,
-): Promise<{ blob: Blob; mimeType: string | null; filename: string | null }> {
+): Promise<AssetBlobPayload> {
   return await new Promise((resolve, reject) => {
     const request = new XMLHttpRequest()
     request.open('GET', url, true)
@@ -619,7 +652,12 @@ async function fetchViaXmlHttp(
         onProgress(100)
         const arrayBuffer = request.response as ArrayBuffer
         const blob = new Blob([arrayBuffer])
-        resolve({ blob, mimeType: request.getResponseHeader('content-type'), filename: extractFilenameFromUrl(url) })
+        resolve({
+          blob,
+          mimeType: request.getResponseHeader('content-type'),
+          filename: extractFilenameFromUrl(request.responseURL || url),
+          url: request.responseURL || url,
+        })
         return
       }
       reject(new Error(`资源下载失败（${request.status}）`))
@@ -671,6 +709,40 @@ function createAbortError(): Error {
   const error = new Error('Aborted')
   ;(error as { name?: string }).name = 'AbortError'
   return error
+}
+
+function createDownloadUrlCandidates(url: string): string[] {
+  const normalized = typeof url === 'string' ? url.trim() : ''
+  if (!normalized) {
+    return []
+  }
+  const candidates = [normalized]
+  const upgraded = upgradeHttpUrl(normalized)
+  if (upgraded && upgraded !== normalized) {
+    candidates.unshift(upgraded)
+  }
+  return Array.from(new Set(candidates))
+}
+
+function upgradeHttpUrl(url: string): string | null {
+  if (!/^http:\/\//i.test(url)) {
+    return null
+  }
+  if (!shouldUpgradeHttpUrlInSecureContext(url)) {
+    return null
+  }
+  return url.replace(/^http:/i, 'https:')
+}
+
+function shouldUpgradeHttpUrlInSecureContext(url: string): boolean {
+  if (!/^http:\/\//i.test(url)) {
+    return false
+  }
+  if (typeof globalThis === 'undefined') {
+    return false
+  }
+  const locationLike = (globalThis as { location?: { protocol?: string } }).location
+  return locationLike?.protocol === 'https:'
 }
 
 declare const uni: {

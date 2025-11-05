@@ -430,7 +430,7 @@ export const useAssetCacheStore = defineStore('assetCache', {
             blob: data.blob,
             mimeType: data.contentType,
             filename: data.filename,
-            downloadUrl,
+            downloadUrl: raw.url ?? downloadUrl,
           })
 
         } catch (error) {
