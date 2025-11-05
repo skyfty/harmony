@@ -256,8 +256,7 @@ const SKY_ENVIRONMENT_INTENSITY = 0.35;
 const SKY_SCALE = 2500;
 const HUMAN_EYE_HEIGHT = 1.7;
 const CAMERA_FORWARD_OFFSET = 1.5;
-const CAMERA_MAX_LOOK_UP = THREE.MathUtils.degToRad(50);
-const CAMERA_MAX_LOOK_DOWN = THREE.MathUtils.degToRad(30);
+const CAMERA_HORIZONTAL_POLAR_ANGLE = Math.PI / 2;
 const CAMERA_WATCH_DURATION = 0.45;
 const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
   presetId: 'clear-day',
@@ -2177,9 +2176,8 @@ async function ensureRendererContext(result: UseCanvasResult) {
   controls.screenSpacePanning = false;
   controls.minAzimuthAngle = -Infinity;
   controls.maxAzimuthAngle = Infinity;
-  const horizon = Math.PI / 2;
-  controls.minPolarAngle = Math.max(0, horizon - CAMERA_MAX_LOOK_UP);
-  controls.maxPolarAngle = Math.min(Math.PI, horizon + CAMERA_MAX_LOOK_DOWN);
+  controls.minPolarAngle = CAMERA_HORIZONTAL_POLAR_ANGLE;
+  controls.maxPolarAngle = CAMERA_HORIZONTAL_POLAR_ANGLE;
   controls.minDistance = CAMERA_FORWARD_OFFSET;
   controls.maxDistance = CAMERA_FORWARD_OFFSET;
 
