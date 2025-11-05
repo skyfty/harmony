@@ -13,6 +13,8 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import UrlInputDialog from './UrlInputDialog.vue'
 import { generateUuid } from '@/utils/uuid'
 import { type LightNodeType, type SceneNode } from '@harmony/schema'
+import { determineAssetCategoryId } from '@/stores/assetCatalog'
+import { blobToDataUrl } from '@/utils/blob'
 
 const sceneStore = useSceneStore()
 const uiStore = useUiStore()
@@ -230,7 +232,27 @@ async function importAssetFromUrl(normalizedUrl: string) {
       description: normalizedUrl,
       gleaned: true,
     }
-    sceneStore.registerAsset(importedAsset, { source: { type: 'url' } })
+    const categoryId = determineAssetCategoryId(importedAsset)
+    const registeredAsset = sceneStore.registerAsset(importedAsset, {
+      categoryId,
+      source: { type: 'url' },
+      commitOptions: { updateNodes: false, updateCamera: false },
+    })
+
+    const packageKey = `url::${registeredAsset.id}`
+    sceneStore.$patch((state) => {
+      state.packageAssetMap = {
+        ...state.packageAssetMap,
+        [packageKey]: normalizedUrl,
+      }
+      state.assetIndex = {
+        ...state.assetIndex,
+        [registeredAsset.id]: {
+          categoryId,
+          source: { type: 'url' },
+        },
+      }
+    })
 
     uiStore.updateLoadingOverlay({
       mode: 'determinate',
@@ -385,6 +407,47 @@ function handleMenuImportFromFile() {
     if (localAssetHandled && assetId) {
       assetCacheStore.registerUsage(assetId)
       assetCacheStore.touch(assetId)
+    }
+
+    if (registeredAsset) {
+      const categoryId = determineAssetCategoryId(registeredAsset)
+      let packageValue: string | null = null
+
+      if (matchedFile) {
+        try {
+          packageValue = await blobToDataUrl(matchedFile)
+        } catch (error) {
+          console.warn('无法序列化导入文件为数据 URL', error)
+        }
+      }
+
+      if (!packageValue && assetId) {
+        const cacheEntry = assetCacheStore.getEntry(assetId)
+        if (cacheEntry?.blob) {
+          try {
+            packageValue = await blobToDataUrl(cacheEntry.blob)
+          } catch (error) {
+            console.warn('无法序列化缓存资源为数据 URL', error)
+          }
+        }
+      }
+
+      const packageKey = `local::${registeredAsset.id}`
+      const resolvedValue = packageValue ?? registeredAsset.downloadUrl ?? registeredAsset.id
+
+      sceneStore.$patch((state) => {
+        state.packageAssetMap = {
+          ...state.packageAssetMap,
+          [packageKey]: resolvedValue,
+        }
+        state.assetIndex = {
+          ...state.assetIndex,
+          [registeredAsset.id]: {
+            categoryId,
+            source: { type: 'local' },
+          },
+        }
+      })
     }
 
     const displayName = registeredAsset?.name ?? imported.name ?? matchedFile?.name ?? 'Imported Asset'

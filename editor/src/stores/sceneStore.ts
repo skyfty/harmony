@@ -2627,12 +2627,7 @@ export async function buildPackageAssetMapForExport(
   const assetIdsToEmbed = new Set<string>()
 
   Object.entries(scene.assetIndex).forEach(([assetId, entry]) => {
-    const sourceType = entry?.source?.type
-    if (!sourceType || sourceType === 'local') {
-      assetIdsToEmbed.add(assetId)
-      return
-    }
-    if (sourceType === 'package') {
+    if (entry?.source?.type === 'local') {
       assetIdsToEmbed.add(assetId)
     }
   })
