@@ -753,14 +753,21 @@ class SceneGraphBuilder {
   }
 
   private async buildEditorOnlyNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
-    const placeholder = new THREE.Group();
+    const placeholder = new THREE.Object3D();
     placeholder.name = node.name ?? 'Editor Marker';
     this.applyTransform(placeholder, node);
     placeholder.visible = false;
-    placeholder.userData = {
+    const helperData: Record<string, unknown> = {
       ...(placeholder.userData ?? {}),
       editorOnly: true,
     };
+    if (node.editorFlags?.ignoreGridSnapping) {
+      helperData.ignoreGridSnapping = true;
+    }
+    if (node.nodeType === 'Sphere' && node.editorFlags?.ignoreGridSnapping) {
+      helperData.viewPoint = true;
+    }
+    placeholder.userData = helperData;
 
     if (Array.isArray(node.children) && node.children.length) {
       await this.buildNodes(node.children as SceneNodeWithExtras[], placeholder);

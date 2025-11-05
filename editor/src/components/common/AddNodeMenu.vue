@@ -705,18 +705,29 @@ async function handleCreateViewPointNode() {
     depthWrite: false,
     depthTest: false,
   })
-  const mesh = new THREE.Mesh(geometry, material)
-  mesh.name = name
-  mesh.castShadow = false
-  mesh.receiveShadow = false
-  mesh.renderOrder = 1000
-  mesh.scale.set(0.01, 0.01, 0.01)
-  mesh.userData = {
-    ...(mesh.userData ?? {}),
+  const markerMesh = new THREE.Mesh(geometry, material)
+  markerMesh.name = `${name} Helper`
+  markerMesh.castShadow = false
+  markerMesh.receiveShadow = false
+  markerMesh.renderOrder = 1000
+  markerMesh.userData = {
+    ...(markerMesh.userData ?? {}),
     editorOnly: true,
     ignoreGridSnapping: true,
     viewPoint: true,
-    viewPointBaseScale: { x: mesh.scale.x, y: mesh.scale.y, z: mesh.scale.z },
+    viewPointBaseScale: { x: markerMesh.scale.x, y: markerMesh.scale.y, z: markerMesh.scale.z },
+    viewPointRadius: VIEW_POINT_RADIUS,
+  }
+
+  const markerRoot = new THREE.Object3D()
+  markerRoot.name = name
+  markerRoot.add(markerMesh)
+  markerRoot.userData = {
+    ...(markerRoot.userData ?? {}),
+    editorOnly: true,
+    ignoreGridSnapping: true,
+    viewPoint: true,
+    viewPointBaseScale: { x: markerRoot.scale.x, y: markerRoot.scale.y, z: markerRoot.scale.z },
     viewPointRadius: VIEW_POINT_RADIUS,
   }
 
@@ -725,7 +736,7 @@ async function handleCreateViewPointNode() {
   const worldPosition = parent ? computeViewPointWorldPosition(parent, VIEW_POINT_RADIUS) : null
 
   await sceneStore.addModelNode({
-    object: mesh,
+    object: markerRoot,
     nodeType: 'Sphere',
     name,
     baseY: 0,

@@ -80,6 +80,7 @@ const emit = defineEmits<{
 }>()
 
 const sceneStore = useSceneStore()
+
 const assetCacheStore = useAssetCacheStore()
 const nodePickerStore = useNodePickerStore()
 const isSceneReady = computed(() => sceneStore.isSceneReady)
@@ -6550,7 +6551,8 @@ watch(
       return
     }
     if (sceneStore.isSceneReady) {
-      syncSceneGraph()
+ 
+          syncSceneGraph()
     }
     refreshPlaceholderOverlays()
   }
@@ -6564,14 +6566,14 @@ watch(
   { deep: true }
 )
 
-watch(
-  () => sceneStore.currentSceneId,
-  () => {
-    sceneStore.ensureCurrentSceneLoaded().then(() => {
-      syncSceneGraph()
-    })
-  }
-)
+// watch(
+//   () => sceneStore.currentSceneId,
+//   () => {
+//     sceneStore.ensureCurrentSceneLoaded().then(() => {
+//       syncSceneGraph()
+//     })
+//   }
+// )
 watch(
   () => [panelVisibility.value.hierarchy, panelPlacement.value.hierarchy],
   () => {
