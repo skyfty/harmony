@@ -18,15 +18,17 @@ const sceneStore = useSceneStore()
 const uiStore = useUiStore()
 const assetCacheStore = useAssetCacheStore()
 
-const VIEW_POINT_RADIUS = 0.24
+const VIEW_POINT_RADIUS = 0.12
 const VIEW_POINT_SEGMENTS = 24
-const VIEW_POINT_DEFAULT_OFFSET = 1.5
-const VIEW_POINT_MIN_DISTANCE = 0.6
+const VIEW_POINT_DEFAULT_OFFSET = 0.8
+const VIEW_POINT_MIN_DISTANCE = 0.3
+const VIEW_POINT_EDGE_MARGIN = 0.05
 const VIEW_POINT_COLOR = 0xff8a65
 
 const tempViewPointBox = new THREE.Box3()
 const tempViewPointVecA = new THREE.Vector3()
 const tempViewPointVecB = new THREE.Vector3()
+const tempViewPointVecC = new THREE.Vector3()
 const tempViewPointQuat = new THREE.Quaternion()
 
 const urlDialogOpen = ref(false)
@@ -571,22 +573,28 @@ function computeViewPointWorldPosition(parent: SceneNode, radius: number): THREE
       : tempViewPointBox.getCenter(tempViewPointVecA)
 
     const quaternion = runtime.getWorldQuaternion(tempViewPointQuat)
-    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(quaternion)
-    if (forward.lengthSq() < 1e-6) {
-      forward.set(0, 0, -1)
+    const direction = tempViewPointVecB.set(1, 0, 0).applyQuaternion(quaternion)
+    if (direction.lengthSq() < 1e-6) {
+      direction.set(1, 0, 0)
     }
-    forward.normalize()
+    direction.normalize()
 
     let distance = VIEW_POINT_DEFAULT_OFFSET
     if (!tempViewPointBox.isEmpty()) {
-      const size = tempViewPointBox.getSize(tempViewPointVecB)
-      const dominant = Math.max(size.x, size.y, size.z)
-      distance = Math.max(dominant * 0.5 + radius * 2, VIEW_POINT_MIN_DISTANCE)
+      const farthestPoint = tempViewPointVecC.set(
+        direction.x >= 0 ? tempViewPointBox.max.x : tempViewPointBox.min.x,
+        direction.y >= 0 ? tempViewPointBox.max.y : tempViewPointBox.min.y,
+        direction.z >= 0 ? tempViewPointBox.max.z : tempViewPointBox.min.z,
+      )
+      const projectedCenter = center.dot(direction)
+      const projectedSurface = farthestPoint.dot(direction)
+      const distanceToSurface = Math.max(projectedSurface - projectedCenter, 0)
+      distance = Math.max(distanceToSurface + radius + VIEW_POINT_EDGE_MARGIN, VIEW_POINT_MIN_DISTANCE)
     } else {
       distance = Math.max(distance, VIEW_POINT_MIN_DISTANCE)
     }
 
-    const spawn = center.clone().add(forward.multiplyScalar(distance))
+    const spawn = center.clone().add(tempViewPointVecC.copy(direction).multiplyScalar(distance))
     spawn.y = center.y
     return spawn
   }
@@ -598,13 +606,14 @@ function computeViewPointWorldPosition(parent: SceneNode, radius: number): THREE
 
   const position = new THREE.Vector3().setFromMatrixPosition(matrix)
   const quaternion = new THREE.Quaternion().setFromRotationMatrix(matrix)
-  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(quaternion)
-  if (forward.lengthSq() < 1e-6) {
-    forward.set(0, 0, -1)
+  const direction = tempViewPointVecB.set(1, 0, 0).applyQuaternion(quaternion)
+  if (direction.lengthSq() < 1e-6) {
+    direction.set(1, 0, 0)
   }
-  forward.normalize()
+  direction.normalize()
 
-  const spawn = position.clone().add(forward.multiplyScalar(VIEW_POINT_DEFAULT_OFFSET))
+  const spawn = position.clone().add(tempViewPointVecC.copy(direction).multiplyScalar(VIEW_POINT_DEFAULT_OFFSET))
+  spawn.y = position.y
   return spawn
 }
 
@@ -638,11 +647,14 @@ async function handleCreateViewPointNode() {
   mesh.castShadow = false
   mesh.receiveShadow = false
   mesh.renderOrder = 1000
+  mesh.scale.set(0.01, 0.01, 0.01)
   mesh.userData = {
     ...(mesh.userData ?? {}),
     editorOnly: true,
     ignoreGridSnapping: true,
     viewPoint: true,
+    viewPointBaseScale: { x: mesh.scale.x, y: mesh.scale.y, z: mesh.scale.z },
+    viewPointRadius: VIEW_POINT_RADIUS,
   }
 
   const parent = resolveViewPointParent()

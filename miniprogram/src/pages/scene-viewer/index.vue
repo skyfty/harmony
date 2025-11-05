@@ -2059,7 +2059,7 @@ async function ensureRendererContext(result: UseCanvasResult) {
 
   const controls = new OrbitControls(camera, canvas as unknown as HTMLElement);
   controls.enableDamping = true;
-  controls.dampingFactor = 0.08;
+  controls.dampingFactor = 0.1;
   controls.target.set(0, HUMAN_EYE_HEIGHT, -CAMERA_FORWARD_OFFSET);
   controls.enableZoom = false;
   controls.enablePan = false;

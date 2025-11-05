@@ -1318,6 +1318,9 @@ const alignReferenceWorldPositionHelper = new THREE.Vector3()
 const alignDeltaHelper = new THREE.Vector3()
 const alignWorldPositionHelper = new THREE.Vector3()
 const alignLocalPositionHelper = new THREE.Vector3()
+const viewPointScaleHelper = new THREE.Vector3()
+const viewPointParentScaleHelper = new THREE.Vector3()
+const viewPointNodeScaleHelper = new THREE.Vector3()
 const cameraFocusTargetHelper = new THREE.Vector3()
 const cameraFocusDirectionHelper = new THREE.Vector3()
 const cameraFocusPositionHelper = new THREE.Vector3()
@@ -2213,6 +2216,9 @@ function resolveSceneNodeById(nodeId: string | null | undefined): SceneNode | nu
 
 function snapVectorToGridForNode(vec: THREE.Vector3, nodeId: string | null | undefined) {
   const node = resolveSceneNodeById(nodeId)
+  if (node?.editorFlags?.ignoreGridSnapping) {
+    return vec
+  }
   if (node?.dynamicMesh?.type === 'Wall') {
     return snapVectorToMajorGrid(vec)
   }
@@ -5358,6 +5364,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z)
   object.scale.set(node.scale.x, node.scale.y, node.scale.z)
   object.visible = node.visible ?? true
+  applyViewPointScaleConstraint(object, node)
 
   if (node.dynamicMesh?.type === 'Ground') {
     const groundMesh = userData.groundMesh as THREE.Mesh | undefined
@@ -5380,6 +5387,70 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   if (nodeType === 'Light') {
     updateLightObjectProperties(object, node)
   }
+}
+
+// Ensures editor-only view point markers keep a consistent world-space scale.
+function applyViewPointScaleConstraint(object: THREE.Object3D, node: SceneNode) {
+  const flags = node.editorFlags ?? null
+  const isViewPointCandidate = Boolean(object.userData?.viewPoint)
+    || (flags?.editorOnly && flags?.ignoreGridSnapping && node.nodeType === 'Sphere')
+
+  if (!isViewPointCandidate) {
+    return
+  }
+
+  const maybeTargets: THREE.Object3D[] = []
+  if (object.userData?.viewPoint) {
+    maybeTargets.push(object)
+  }
+  object.traverse((child) => {
+    if (child.userData?.viewPoint && !maybeTargets.includes(child)) {
+      maybeTargets.push(child)
+    }
+  })
+
+  if (!maybeTargets.length) {
+    maybeTargets.push(object)
+  }
+
+  const nodeScale = node.scale ?? { x: 1, y: 1, z: 1 }
+  viewPointNodeScaleHelper.set(nodeScale.x ?? 1, nodeScale.y ?? 1, nodeScale.z ?? 1)
+
+  maybeTargets.forEach((target) => {
+    const baseScaleData = target.userData?.viewPointBaseScale as { x?: number; y?: number; z?: number } | undefined
+    const baseX = typeof baseScaleData?.x === 'number' && Number.isFinite(baseScaleData.x) ? baseScaleData.x : 1
+    const baseY = typeof baseScaleData?.y === 'number' && Number.isFinite(baseScaleData.y) ? baseScaleData.y : 1
+    const baseZ = typeof baseScaleData?.z === 'number' && Number.isFinite(baseScaleData.z) ? baseScaleData.z : 1
+
+    viewPointScaleHelper.set(baseX, baseY, baseZ)
+
+    viewPointScaleHelper.multiply(viewPointNodeScaleHelper)
+
+    const parent = target.parent
+    if (parent) {
+      parent.updateMatrixWorld(true)
+      parent.getWorldScale(viewPointParentScaleHelper)
+    } else {
+      viewPointParentScaleHelper.set(1, 1, 1)
+    }
+
+    const clampAxis = (value: number) => {
+      const magnitude = Math.max(Math.abs(value), 1e-6)
+      return magnitude * Math.sign(value || 1)
+    }
+
+    const parentScaleX = clampAxis(viewPointParentScaleHelper.x)
+    const parentScaleY = clampAxis(viewPointParentScaleHelper.y)
+    const parentScaleZ = clampAxis(viewPointParentScaleHelper.z)
+
+    viewPointScaleHelper.set(
+      viewPointScaleHelper.x / parentScaleX,
+      viewPointScaleHelper.y / parentScaleY,
+      viewPointScaleHelper.z / parentScaleZ,
+    )
+
+    target.scale.copy(viewPointScaleHelper)
+  })
 }
 
 function shouldRecreateNode(object: THREE.Object3D, node: SceneNode): boolean {
@@ -6276,6 +6347,8 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
   object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z)
   object.scale.set(node.scale.x, node.scale.y, node.scale.z)
   objectMap.set(node.id, object)
+
+  applyViewPointScaleConstraint(object, node)
 
   if (node.children) {
     for (const child of node.children) {
