@@ -203,6 +203,7 @@ const HUMAN_EYE_HEIGHT = 1.7;
 const CAMERA_FORWARD_OFFSET = 1.5;
 const CAMERA_MAX_LOOK_UP = THREE.MathUtils.degToRad(50);
 const CAMERA_MAX_LOOK_DOWN = THREE.MathUtils.degToRad(30);
+const CAMERA_WATCH_DURATION = 0.45;
 const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
   presetId: 'clear-day',
   exposure: 0.6,
@@ -289,6 +290,16 @@ const tempBox = new THREE.Box3();
 const tempSphere = new THREE.Sphere();
 const tempVector = new THREE.Vector3();
 const tempQuaternion = new THREE.Quaternion();
+
+type CameraWatchTween = {
+  from: THREE.Vector3;
+  to: THREE.Vector3;
+  startPosition: THREE.Vector3;
+  duration: number;
+  elapsed: number;
+};
+
+let activeCameraWatchTween: CameraWatchTween | null = null;
 
 const assetObjectUrlCache = new Map<string, string>();
 const packageEntryCache = new Map<string, { provider: string; value: string } | null>();
@@ -1104,6 +1115,37 @@ function resolveNodeFocusPoint(nodeId: string | null | undefined): THREE.Vector3
   return tempSphere.center.clone();
 }
 
+function easeInOutCubic(t: number): number {
+  if (t <= 0) {
+    return 0;
+  }
+  if (t >= 1) {
+    return 1;
+  }
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function applyCameraWatchTween(delta: number): void {
+  if (!activeCameraWatchTween || !renderContext) {
+    return;
+  }
+  const tween = activeCameraWatchTween;
+  const { controls, camera } = renderContext;
+  const duration = tween.duration > 0 ? tween.duration : 0.0001;
+  tween.elapsed = Math.min(tween.elapsed + delta, tween.duration);
+  const eased = easeInOutCubic(Math.min(1, tween.elapsed / duration));
+  tempMovementVec.copy(tween.from).lerp(tween.to, eased);
+  controls.target.copy(tempMovementVec);
+  controls.update();
+  camera.position.copy(tween.startPosition);
+  camera.position.y = HUMAN_EYE_HEIGHT;
+  controls.update();
+  if (tween.elapsed >= tween.duration) {
+    controls.target.copy(tween.to);
+    activeCameraWatchTween = null;
+  }
+}
+
 function resetBehaviorProximity(): void {
   behaviorProximityCandidates.clear();
   behaviorProximityState.clear();
@@ -1461,6 +1503,7 @@ function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watc
     resolveBehaviorToken(event.token, { type: 'fail', message: '未找到目标节点' });
     return;
   }
+  activeCameraWatchTween = null;
   const startPosition = camera.position.clone();
   if (Math.abs(startPosition.y - HUMAN_EYE_HEIGHT) > 1e-6) {
     startPosition.y = HUMAN_EYE_HEIGHT;
@@ -1475,13 +1518,23 @@ function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watc
 
   tempMovementVec.normalize();
   tempForwardVec.copy(tempMovementVec).multiplyScalar(CAMERA_FORWARD_OFFSET).add(startPosition);
-
-  camera.lookAt(tempForwardVec);
-  controls.target.copy(tempForwardVec);
-  controls.update();
-  camera.position.copy(startPosition);
-  camera.position.y = HUMAN_EYE_HEIGHT;
-  controls.update();
+  const startTarget = controls.target.clone();
+  if (startTarget.distanceToSquared(tempForwardVec) < 1e-6) {
+    camera.lookAt(tempForwardVec);
+    controls.target.copy(tempForwardVec);
+    controls.update();
+    camera.position.copy(startPosition);
+    camera.position.y = HUMAN_EYE_HEIGHT;
+    controls.update();
+  } else {
+    activeCameraWatchTween = {
+      from: startTarget,
+      to: tempForwardVec.clone(),
+      startPosition,
+      duration: CAMERA_WATCH_DURATION,
+      elapsed: 0,
+    };
+  }
   resolveBehaviorToken(event.token, { type: 'continue' });
 }
 
@@ -1916,6 +1969,7 @@ function translateCamera(forwardDelta: number, rightDelta: number): void {
     return;
   }
   const { camera, controls } = renderContext;
+  activeCameraWatchTween = null;
   tempForwardVec.copy(controls.target).sub(camera.position);
   tempForwardVec.y = 0;
   if (tempForwardVec.lengthSq() < 1e-6) {
@@ -2008,6 +2062,7 @@ function teardownRenderer() {
   resetAnimationControllers();
   previewNodeMap.clear();
   nodeObjectMap.clear();
+  activeCameraWatchTween = null;
   controls.dispose();
   disposeSkyResources();
   pmremGenerator?.dispose();
@@ -2033,6 +2088,7 @@ async function ensureRendererContext(result: UseCanvasResult) {
     teardownRenderer();
   }
   await result.recomputeSize?.();
+  activeCameraWatchTween = null;
   const { canvas } = result;
   const pixelRatio =
     result.canvas?.ownerDocument?.defaultView?.devicePixelRatio || uni.getSystemInfoSync().pixelRatio || 1;
@@ -2072,6 +2128,10 @@ async function ensureRendererContext(result: UseCanvasResult) {
   controls.minDistance = CAMERA_FORWARD_OFFSET;
   controls.maxDistance = CAMERA_FORWARD_OFFSET;
 
+  controls.addEventListener('start', () => {
+    activeCameraWatchTween = null;
+  });
+
   controls.update();
   setupWheelControls(canvas);
 
@@ -2092,6 +2152,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
     throw new Error('Render context missing');
   }
   const { scene, renderer, camera, controls } = renderContext;
+  activeCameraWatchTween = null;
   const { canvas } = result;
   currentDocument = payload.document;
   resetAssetResolutionCaches();
@@ -2186,7 +2247,11 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   scope.run(() => {
     watchEffect((onCleanup) => {
       const { cancel } = result.useFrame((delta) => {
-        controls.update();
+        if (activeCameraWatchTween) {
+          applyCameraWatchTween(delta);
+        } else {
+          controls.update();
+        }
         animationMixers.forEach((mixer) => mixer.update(delta));
         updateBehaviorProximity();
         renderer.render(scene, camera);

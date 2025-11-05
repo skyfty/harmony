@@ -122,6 +122,16 @@ const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
 	elevation: 22,
 	azimuth: 145,
 }
+const CAMERA_WATCH_TWEEN_DURATION = 0.45
+type CameraLookTweenMode = 'first-person' | 'orbit'
+type CameraLookTween = {
+	mode: CameraLookTweenMode
+	from: THREE.Vector3
+	to: THREE.Vector3
+	duration: number
+	elapsed: number
+}
+let activeCameraLookTween: CameraLookTween | null = null
 const assetObjectUrlCache = new Map<string, string>()
 const packageEntryCache = new Map<string, { provider: string; value: string } | null>()
 
@@ -1509,6 +1519,7 @@ function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watc
 		resolveBehaviorToken(event.token, { type: 'fail', message: 'Camera unavailable' })
 		return
 	}
+	activeCameraLookTween = null
 	const focus = resolveNodeFocusPoint(event.targetNodeId, tempTarget)
 	if (!focus) {
 		resolveBehaviorToken(event.token, { type: 'fail', message: 'Target node not found' })
@@ -1516,23 +1527,44 @@ function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watc
 	}
 	const focusPoint = focus.clone()
 	const orbitControls = mapControls ?? null
-	if (orbitControls) {
-		orbitControls.target.copy(focusPoint)
-		orbitControls.update()
-	}
-	const isFirstPerson = controlMode.value === 'first-person'
+	const isFirstPerson = controlMode.value === 'first-person' && Boolean(firstPersonControls)
 	if (isFirstPerson && firstPersonControls) {
-		tempDirection.copy(focusPoint).sub(activeCamera.position)
-		if (tempDirection.lengthSq() > 1e-6) {
-			firstPersonControls.lookAt(focusPoint)
+		activeCamera.getWorldDirection(tempDirection)
+		const startTarget = activeCamera.position.clone().add(tempDirection)
+		if (startTarget.distanceToSquared(focusPoint) < 1e-6) {
+			firstPersonControls.lookAt(focusPoint.x, focusPoint.y, focusPoint.z)
 			clampFirstPersonPitch(true)
 			syncFirstPersonOrientation()
 			resetFirstPersonPointerDelta()
+			syncLastFirstPersonStateFromCamera()
+		} else {
+			activeCameraLookTween = {
+				mode: 'first-person',
+				from: startTarget,
+				to: focusPoint.clone(),
+				duration: CAMERA_WATCH_TWEEN_DURATION,
+				elapsed: 0,
+			}
+			resetFirstPersonPointerDelta()
+		}
+	} else if (orbitControls) {
+		const startTarget = orbitControls.target.clone()
+		if (startTarget.distanceToSquared(focusPoint) < 1e-6) {
+			orbitControls.target.copy(focusPoint)
+			orbitControls.update()
+		} else {
+			activeCameraLookTween = {
+				mode: 'orbit',
+				from: startTarget,
+				to: focusPoint.clone(),
+				duration: CAMERA_WATCH_TWEEN_DURATION,
+				elapsed: 0,
+			}
 		}
 	} else {
 		activeCamera.lookAt(focusPoint)
+		syncLastFirstPersonStateFromCamera()
 	}
-	syncLastFirstPersonStateFromCamera()
 	resolveBehaviorToken(event.token, { type: 'continue' })
 }
 
@@ -1765,6 +1797,48 @@ function resetCameraToLevelView() {
 	}
 }
 
+function easeInOutCubic(t: number): number {
+	if (t <= 0) {
+		return 0
+	}
+	if (t >= 1) {
+		return 1
+	}
+	return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
+}
+
+function updateOrbitCameraLookTween(delta: number): void {
+	if (!activeCameraLookTween || activeCameraLookTween.mode !== 'orbit' || !mapControls) {
+		return
+	}
+	const tween = activeCameraLookTween
+	const duration = tween.duration > 0 ? tween.duration : 0.0001
+	tween.elapsed = Math.min(tween.elapsed + delta, tween.duration)
+	const progress = easeInOutCubic(Math.min(1, tween.elapsed / duration))
+	tempTarget.copy(tween.from).lerp(tween.to, progress)
+	mapControls.target.copy(tempTarget)
+	if (tween.elapsed >= tween.duration) {
+		mapControls.target.copy(tween.to)
+		activeCameraLookTween = null
+	}
+}
+
+function updateFirstPersonCameraLookTween(delta: number): void {
+	if (!activeCameraLookTween || activeCameraLookTween.mode !== 'first-person' || !firstPersonControls || !camera) {
+		return
+	}
+	const tween = activeCameraLookTween
+	const duration = tween.duration > 0 ? tween.duration : 0.0001
+	tween.elapsed = Math.min(tween.elapsed + delta, tween.duration)
+	const progress = easeInOutCubic(Math.min(1, tween.elapsed / duration))
+	tempTarget.copy(tween.from).lerp(tween.to, progress)
+	firstPersonControls.lookAt(tempTarget.x, tempTarget.y, tempTarget.z)
+	if (tween.elapsed >= tween.duration) {
+		firstPersonControls.lookAt(tween.to.x, tween.to.y, tween.to.z)
+		activeCameraLookTween = null
+	}
+}
+
 watch(isPlaying, (playing) => {
 	animationMixers.forEach((mixer) => {
 		mixer.timeScale = playing ? 1 : 0
@@ -1776,6 +1850,7 @@ function applyControlMode(mode: ControlMode) {
 	if (!activeCamera || !renderer) {
 		return
 	}
+	activeCameraLookTween = null
 	if (mode === 'first-person') {
 		mapControls && (mapControls.enabled = false)
 		firstPersonControls && (firstPersonControls.enabled = true)
@@ -1871,6 +1946,9 @@ function initControls() {
 	mapControls.maxDistance = 200
 	mapControls.enabled = controlMode.value === 'third-person'
 	mapControls.target.copy(lastOrbitState.target)
+	mapControls.addEventListener('start', () => {
+		activeCameraLookTween = null
+	})
 	applyControlMode(controlMode.value)
 }
 
@@ -1953,6 +2031,9 @@ function startAnimationLoop() {
 		const delta = clock.getDelta()
 		if (controlMode.value === 'first-person' && firstPersonControls) {
 			const rotationDirection = Number(rotationState.q) - Number(rotationState.e)
+			if (rotationDirection !== 0 && activeCameraLookTween?.mode === 'first-person') {
+				activeCameraLookTween = null
+			}
 			if (rotationDirection !== 0) {
 				const yawDegrees = rotationDirection * FIRST_PERSON_ROTATION_SPEED * delta
 				const controlsInternal = firstPersonControls as FirstPersonControls & { _lon: number }
@@ -1961,10 +2042,12 @@ function startAnimationLoop() {
 				controlsInternal._lon = nextLon
 			}
 			firstPersonControls.update(delta)
+			updateFirstPersonCameraLookTween(delta)
 			clampFirstPersonPitch()
 			activeCamera.position.y = CAMERA_HEIGHT
 			syncLastFirstPersonStateFromCamera()
 		} else if (mapControls) {
+			updateOrbitCameraLookTween(delta)
 			mapControls.update()
 			lastOrbitState.position.copy(activeCamera.position)
 			lastOrbitState.target.copy(mapControls.target)
@@ -1997,6 +2080,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	resetBehaviorRuntime()
 	resetBehaviorProximity()
 	resetAnimationControllers()
+	activeCameraLookTween = null
 	dismissBehaviorAlert()
 	resetLanternOverlay()
 	resetAssetResolutionCaches()
