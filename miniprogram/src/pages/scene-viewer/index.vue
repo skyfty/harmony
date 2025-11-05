@@ -1461,8 +1461,26 @@ function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watc
     resolveBehaviorToken(event.token, { type: 'fail', message: '未找到目标节点' });
     return;
   }
-  controls.target.copy(focus);
-  camera.lookAt(focus);
+  const startPosition = camera.position.clone();
+  if (Math.abs(startPosition.y - HUMAN_EYE_HEIGHT) > 1e-6) {
+    startPosition.y = HUMAN_EYE_HEIGHT;
+  }
+  camera.position.y = HUMAN_EYE_HEIGHT;
+
+  tempMovementVec.copy(focus).sub(startPosition);
+  if (tempMovementVec.lengthSq() < 1e-8) {
+    resolveBehaviorToken(event.token, { type: 'continue' });
+    return;
+  }
+
+  tempMovementVec.normalize();
+  tempForwardVec.copy(tempMovementVec).multiplyScalar(CAMERA_FORWARD_OFFSET).add(startPosition);
+
+  camera.lookAt(tempForwardVec);
+  controls.target.copy(tempForwardVec);
+  controls.update();
+  camera.position.copy(startPosition);
+  camera.position.y = HUMAN_EYE_HEIGHT;
   controls.update();
   resolveBehaviorToken(event.token, { type: 'continue' });
 }
