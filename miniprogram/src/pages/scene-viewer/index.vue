@@ -279,7 +279,7 @@ const nodeObjectMap = new Map<string, THREE.Object3D>();
 
 const behaviorRaycaster = new THREE.Raycaster();
 const behaviorPointer = new THREE.Vector2();
-let behaviorTapListener: ((event: TouchEvent) => void) | null = null;
+let handleBehaviorClick: ((event: MouseEvent) => void) | null = null;
 
 const WHEEL_MOVE_STEP = 1.2;
 const worldUp = new THREE.Vector3(0, 1, 0);
@@ -1743,28 +1743,26 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 }
 
 function ensureBehaviorTapHandler(canvas: HTMLCanvasElement, camera: THREE.PerspectiveCamera) {
-  if (behaviorTapListener) {
-    canvas.removeEventListener('touchend', behaviorTapListener);
-    behaviorTapListener = null;
+  if (handleBehaviorClick) {
+    canvas.removeEventListener('click', handleBehaviorClick);
+        handleBehaviorClick = null;
   }
-  behaviorTapListener = (event: TouchEvent) => {
+  handleBehaviorClick = (event: MouseEvent) => {
     if (!renderContext?.scene) {
       return;
     }
     if (!hasRegisteredBehaviors()) {
       return;
     }
-    const touches = event.changedTouches ?? event.touches;
-    const firstTouch = touches && touches[0];
-    if (!firstTouch) {
+    const bounds = canvas.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) {
       return;
     }
-    const rect = canvas.getBoundingClientRect();
-    if (!rect.width || !rect.height) {
-      return;
-    }
-    behaviorPointer.x = ((firstTouch.clientX - rect.left) / rect.width) * 2 - 1;
-    behaviorPointer.y = -((firstTouch.clientY - rect.top) / rect.height) * 2 + 1;
+    const width = bounds.width
+    const height = bounds.height
+    behaviorPointer.x = ((event.clientX - bounds.left) / width) * 2 - 1
+    behaviorPointer.y = -((event.clientY - bounds.top) / height) * 2 + 1
+
     behaviorRaycaster.setFromCamera(behaviorPointer, camera);
     const candidates = listInteractableObjects();
     if (!candidates.length) {
@@ -1794,7 +1792,7 @@ function ensureBehaviorTapHandler(canvas: HTMLCanvasElement, camera: THREE.Persp
       break;
     }
   };
-  canvas.addEventListener('touchend', behaviorTapListener);
+  canvas.addEventListener('click', handleBehaviorClick);
 }
 
 function disposeSkyEnvironment() {
@@ -2181,9 +2179,9 @@ function teardownRenderer() {
     return;
   }
   const { renderer, scene, controls } = renderContext;
-  if (canvasResult?.canvas && behaviorTapListener) {
-    canvasResult.canvas.removeEventListener('touchend', behaviorTapListener);
-    behaviorTapListener = null;
+  if (canvasResult?.canvas && handleBehaviorClick) {
+    canvasResult.canvas.removeEventListener('touchend', handleBehaviorClick);
+        handleBehaviorClick = null;
   }
   if (behaviorAlertToken.value) {
     resolveBehaviorToken(behaviorAlertToken.value, {
@@ -2525,7 +2523,7 @@ onLoad((query) => {
   }
 });
 
-onReady(() => {
+onReady(() => {  
   if (!resizeListener) {
     resizeListener = handleResize;
     uni.onWindowResize(handleResize);
