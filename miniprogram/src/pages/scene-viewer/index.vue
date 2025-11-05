@@ -133,6 +133,8 @@ import PlatformCanvas from '@/components/PlatformCanvas.vue';
 import type { StoredSceneEntry } from '@/stores/sceneStore';
 import { parseSceneDocument, useSceneStore } from '@/stores/sceneStore';
 import { buildSceneGraph, type SceneGraphBuildOptions, type SceneGraphResourceProgress } from '@schema/sceneGraph';
+import ResourceCache from '@schema/ResourceCache';
+import { AssetCache, AssetLoader } from '@schema/assetCache';
 import type { SceneNode, SceneSkyboxSettings, SceneJsonExportDocument, LanternSlideDefinition } from '@harmony/schema';
 import { ComponentManager } from '@schema/components/componentManager';
 import { behaviorComponentDefinition, wallComponentDefinition } from '@schema/components';
@@ -222,6 +224,22 @@ const resourcePreloadPercent = computed(() => {
   }
   return resourcePreload.active ? 0 : 100;
 });
+
+const sceneAssetCache = new AssetCache();
+const sceneAssetLoader = new AssetLoader(sceneAssetCache);
+let sharedResourceCache: ResourceCache | null = null;
+
+function ensureResourceCache(
+  document: SceneJsonExportDocument,
+  options: SceneGraphBuildOptions,
+): ResourceCache {
+  if (!sharedResourceCache) {
+    sharedResourceCache = new ResourceCache(document, options, sceneAssetLoader);
+  } else {
+    sharedResourceCache.setContext(document, options);
+  }
+  return sharedResourceCache;
+}
 
 const resourcePreloadAssetCaption = computed(() => {
   const assetId = resourcePreload.currentAssetId;
@@ -2268,7 +2286,8 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
     if (payload.resolveAssetUrl) {
       buildOptions.resolveAssetUrl = payload.resolveAssetUrl;
     }
-    graph = await buildSceneGraph(payload.document, buildOptions);
+  const resourceCache = ensureResourceCache(payload.document, buildOptions);
+  graph = await buildSceneGraph(payload.document, resourceCache, buildOptions);
   } finally {
     if (!resourcePreload.active || resourcePreload.loaded >= resourcePreload.total) {
       resourcePreload.active = false;
@@ -2431,6 +2450,7 @@ onUnload(() => {
     uni.offWindowResize(handleResize);
     resizeListener = null;
   }
+  sharedResourceCache = null;
 });
 
 onUnmounted(() => {
@@ -2440,6 +2460,7 @@ onUnmounted(() => {
     uni.offWindowResize(handleResize);
     resizeListener = null;
   }
+  sharedResourceCache = null;
 });
 
 </script>

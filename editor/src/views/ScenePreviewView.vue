@@ -12,7 +12,9 @@ import type {
 } from '@harmony/schema'
 import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
 import { subscribeToScenePreview } from '@/utils/previewChannel'
-import { buildSceneGraph } from '@schema/sceneGraph';
+import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
+import ResourceCache from '@schema/ResourceCache'
+import { AssetCache, AssetLoader } from '@schema/assetCache'
 import { ComponentManager } from '@schema/components/componentManager'
 import { behaviorComponentDefinition, wallComponentDefinition } from '@schema/components'
 import {
@@ -78,6 +80,22 @@ const behaviorAlertCancelText = ref('Cancel')
 
 const lanternOverlayVisible = ref(false)
 const lanternSlides = ref<LanternSlideDefinition[]>([])
+
+const editorAssetCache = new AssetCache()
+const editorAssetLoader = new AssetLoader(editorAssetCache)
+let editorResourceCache: ResourceCache | null = null
+
+function ensureEditorResourceCache(
+	document: SceneJsonExportDocument,
+	options: SceneGraphBuildOptions,
+): ResourceCache {
+	if (!editorResourceCache) {
+		editorResourceCache = new ResourceCache(document, options, editorAssetLoader)
+	} else {
+		editorResourceCache.setContext(document, options)
+	}
+	return editorResourceCache
+}
 const lanternActiveSlideIndex = ref(0)
 const lanternEventToken = ref<string | null>(null)
 
@@ -2417,14 +2435,16 @@ async function updateScene(document: SceneJsonExportDocument) {
 
 	let graphResult: Awaited<ReturnType<typeof buildSceneGraph>> | null = null
 	try {
-		graphResult = await buildSceneGraph(document, {
+		const buildOptions: SceneGraphBuildOptions = {
 			onProgress: (info) => {
 				resourceProgress.total = info.total
 				resourceProgress.loaded = info.loaded
 				resourceProgress.label = info.message || (info.assetId ? `加载 ${info.assetId}` : '')
 				resourceProgress.active = info.total > 0 && info.loaded < info.total
 			},
-		})
+		}
+		const resourceCache = ensureEditorResourceCache(document, buildOptions)
+		graphResult = await buildSceneGraph(document, resourceCache, buildOptions)
 	} finally {
 		resourceProgress.active = false
 		resourceProgress.label = ''
@@ -2596,6 +2616,7 @@ onBeforeUnmount(() => {
 		renderer.domElement.remove()
 		renderer = null
 	}
+	editorResourceCache = null
 	listener = null
 	scene = null
 	camera = null
