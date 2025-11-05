@@ -22,6 +22,7 @@ import {
 	hasRegisteredBehaviors,
 	listRegisteredBehaviorActions,
 	listInteractableObjects,
+	updateBehaviorVisibility,
 	resetBehaviorRuntime,
 	removeBehaviorRuntimeListener,
 	triggerBehaviorAction,
@@ -99,6 +100,10 @@ function ensureEditorResourceCache(
 const lanternActiveSlideIndex = ref(0)
 const lanternEventToken = ref<string | null>(null)
 
+const purposeControlsVisible = ref(false)
+const purposeTargetNodeId = ref<string | null>(null)
+const purposeSourceNodeId = ref<string | null>(null)
+
 type LanternTextState = { text: string; loading: boolean; error: string | null }
 
 const lanternTextState = reactive<Record<string, LanternTextState>>({})
@@ -141,6 +146,7 @@ const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
 	azimuth: 145,
 }
 const CAMERA_WATCH_TWEEN_DURATION = 0.45
+const CAMERA_LEVEL_TWEEN_DURATION = 0.35
 type CameraLookTweenMode = 'first-person' | 'orbit'
 type CameraLookTween = {
 	mode: CameraLookTweenMode
@@ -186,13 +192,21 @@ let lastSnapshotRevision = 0
 const clock = new THREE.Clock()
 const nodeObjectMap = new Map<string, THREE.Object3D>()
 const rotationState = { q: false, e: false }
-const lastFirstPersonState = {
+const defaultFirstPersonState = {
 	position: new THREE.Vector3(0, CAMERA_HEIGHT, 0),
 	direction: new THREE.Vector3(0, 0, -1),
 }
-const lastOrbitState = {
+const defaultOrbitState = {
 	position: new THREE.Vector3(8, 6, 8),
 	target: new THREE.Vector3(0, 0, 0),
+}
+const lastFirstPersonState = {
+	position: defaultFirstPersonState.position.clone(),
+	direction: defaultFirstPersonState.direction.clone(),
+}
+const lastOrbitState = {
+	position: defaultOrbitState.position.clone(),
+	target: defaultOrbitState.target.clone(),
 }
 let animationMixers: THREE.AnimationMixer[] = []
 
@@ -1426,6 +1440,7 @@ function handleSetVisibilityEvent(event: Extract<BehaviorRuntimeEvent, { type: '
 	if (node) {
 		node.visible = event.visible
 	}
+	updateBehaviorVisibility(event.targetNodeId, event.visible)
 }
 
 function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: 'play-animation' }>) {
@@ -1531,17 +1546,19 @@ function handleTriggerBehaviorEvent(event: Extract<BehaviorRuntimeEvent, { type:
 	processBehaviorEvents(followUps)
 }
 
-function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watch-node' }>) {
+function performWatchFocus(targetNodeId: string | null): { success: boolean; message?: string } {
 	const activeCamera = camera
 	if (!activeCamera) {
-		resolveBehaviorToken(event.token, { type: 'fail', message: 'Camera unavailable' })
-		return
+		return { success: false, message: 'Camera unavailable' }
+	}
+	const resolvedTarget = targetNodeId ?? null
+	if (!resolvedTarget) {
+		return { success: false, message: 'Target node not provided' }
 	}
 	activeCameraLookTween = null
-	const focus = resolveNodeFocusPoint(event.targetNodeId, tempTarget)
+	const focus = resolveNodeFocusPoint(resolvedTarget, tempTarget)
 	if (!focus) {
-		resolveBehaviorToken(event.token, { type: 'fail', message: 'Target node not found' })
-		return
+		return { success: false, message: 'Target node not found' }
 	}
 	const focusPoint = focus.clone()
 	const orbitControls = mapControls ?? null
@@ -1583,7 +1600,55 @@ function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watc
 		activeCamera.lookAt(focusPoint)
 		syncLastFirstPersonStateFromCamera()
 	}
+	return { success: true }
+}
+
+function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watch-node' }>) {
+	const targetId = event.targetNodeId ?? event.nodeId ?? null
+	const result = performWatchFocus(targetId)
+	if (!result.success) {
+		resolveBehaviorToken(event.token, { type: 'fail', message: result.message })
+		return
+	}
 	resolveBehaviorToken(event.token, { type: 'continue' })
+}
+
+function showPurposeControls(targetNodeId: string | null, sourceNodeId: string | null): void {
+	purposeSourceNodeId.value = sourceNodeId ?? null
+	purposeTargetNodeId.value = targetNodeId ?? sourceNodeId ?? null
+	purposeControlsVisible.value = true
+}
+
+function hidePurposeControls(): void {
+	purposeControlsVisible.value = false
+	purposeTargetNodeId.value = null
+	purposeSourceNodeId.value = null
+}
+
+function handleShowPurposeControlsEvent(
+	event: Extract<BehaviorRuntimeEvent, { type: 'show-purpose-controls' }>,
+): void {
+	showPurposeControls(event.targetNodeId ?? null, event.nodeId ?? null)
+}
+
+function handleHidePurposeControlsEvent(): void {
+	hidePurposeControls()
+}
+
+function handlePurposeWatchClick(): void {
+	const targetId = purposeTargetNodeId.value ?? purposeSourceNodeId.value
+	if (!targetId) {
+		console.warn('[ScenePreview] Watch button ignored: no target node available')
+		return
+	}
+	const result = performWatchFocus(targetId)
+	if (!result.success) {
+		console.warn('[ScenePreview] Failed to move camera to watch target', result.message)
+	}
+}
+
+function handlePurposeResetClick(): void {
+	resetCameraToLevelView()
 }
 
 function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look-level' }>) {
@@ -1628,6 +1693,12 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 			break
 		case 'watch-node':
 			handleWatchNodeEvent(event)
+			break
+		case 'show-purpose-controls':
+			handleShowPurposeControlsEvent(event)
+			break
+		case 'hide-purpose-controls':
+			handleHidePurposeControlsEvent()
 			break
 		case 'set-visibility':
 			handleSetVisibilityEvent(event)
@@ -1771,47 +1842,85 @@ function resetCameraToLevelView() {
 	if (!camera) {
 		return
 	}
-	if (controlMode.value === 'first-person') {
-		// Keep current yaw, set pitch to 0, enforce eye height
+	activeCameraLookTween = null
+	if (controlMode.value === 'first-person' && firstPersonControls) {
 		camera.position.y = CAMERA_HEIGHT
-		tempDirection.set(0, 0, -1)
+		tempDirection.set(0, 0, 0)
+		camera.getWorldDirection(tempDirection)
+		const startTarget = camera.position.clone().add(tempDirection)
+		const yaw = Math.atan2(tempDirection.x, -tempDirection.z)
+		tempDirection.set(Math.sin(yaw), 0, -Math.cos(yaw))
+		const levelTarget = camera.position.clone().add(tempDirection)
+		if (startTarget.distanceToSquared(levelTarget) < 1e-6) {
+			firstPersonControls.lookAt(levelTarget.x, levelTarget.y, levelTarget.z)
+			clampFirstPersonPitch(true)
+			syncFirstPersonOrientation()
+			resetFirstPersonPointerDelta()
+			syncLastFirstPersonStateFromCamera()
+		} else {
+			activeCameraLookTween = {
+				mode: 'first-person',
+				from: startTarget,
+				to: levelTarget,
+				duration: CAMERA_LEVEL_TWEEN_DURATION,
+				elapsed: 0,
+			}
+			resetFirstPersonPointerDelta()
+		}
+	} else if (mapControls && camera) {
+		const startTarget = mapControls.target.clone()
+		const levelTarget = startTarget.clone()
+		levelTarget.y = camera.position.y
+		if (startTarget.distanceToSquared(levelTarget) < 1e-6) {
+			mapControls.target.copy(levelTarget)
+			mapControls.update()
+			camera.lookAt(levelTarget)
+			lastOrbitState.target.copy(levelTarget)
+			lastOrbitState.position.copy(camera.position)
+		} else {
+			activeCameraLookTween = {
+				mode: 'orbit',
+				from: startTarget,
+				to: levelTarget,
+				duration: CAMERA_LEVEL_TWEEN_DURATION,
+				elapsed: 0,
+			}
+		}
+	} else {
+		tempDirection.set(0, 0, 0)
 		camera.getWorldDirection(tempDirection)
 		const yaw = Math.atan2(tempDirection.x, -tempDirection.z)
-		// build a horizontal forward vector from yaw
 		tempDirection.set(Math.sin(yaw), 0, -Math.cos(yaw))
 		tempTarget.copy(camera.position).add(tempDirection)
 		camera.lookAt(tempTarget)
+	}
+}
+
+function resetCameraToDefaultView() {
+	if (!camera) {
+		return
+	}
+	activeCameraLookTween = null
+	if (controlMode.value === 'first-person' && firstPersonControls) {
+		const basePosition = defaultFirstPersonState.position
+		const lookDirection = defaultFirstPersonState.direction.clone()
+		camera.position.copy(basePosition)
+		camera.position.y = CAMERA_HEIGHT
+		const lookTarget = basePosition.clone().add(lookDirection)
+		firstPersonControls.lookAt(lookTarget.x, lookTarget.y, lookTarget.z)
+		clampFirstPersonPitch(true)
 		syncFirstPersonOrientation()
+		resetFirstPersonPointerDelta()
 		syncLastFirstPersonStateFromCamera()
-	} else if (mapControls) {
-		// Orbit/MapControls: set polar angle to (almost) horizontal while preserving azimuth
-		const controls = mapControls as unknown as {
-			getAzimuthalAngle?: () => number
-			getPolarAngle?: () => number
-			rotateTo?: (azimuth: number, polar: number, enableTransition?: boolean) => void
-			maxPolarAngle?: number
-			target: THREE.Vector3
-			update: () => void
-		}
-		const azimuth = controls.getAzimuthalAngle ? controls.getAzimuthalAngle() : (() => {
-			const offset = new THREE.Vector3().copy(camera.position).sub(mapControls.target)
-			const spherical = new THREE.Spherical().setFromVector3(offset)
-			return spherical.theta
-		})()
-		const desiredPolar = Math.min(controls.maxPolarAngle ?? Math.PI / 2, Math.PI / 2)
-		if (typeof controls.rotateTo === 'function') {
-			controls.rotateTo(azimuth, desiredPolar, false)
-		} else {
-			const target = mapControls.target.clone()
-			const offset = new THREE.Vector3().copy(camera.position).sub(target)
-			const spherical = new THREE.Spherical().setFromVector3(offset)
-			spherical.theta = azimuth
-			spherical.phi = desiredPolar
-			offset.setFromSpherical(spherical)
-			camera.position.copy(target).add(offset)
-			camera.lookAt(target)
-		}
+	} else if (mapControls && camera) {
+		camera.position.copy(defaultOrbitState.position)
+		mapControls.target.copy(defaultOrbitState.target)
 		mapControls.update()
+		lastOrbitState.position.copy(defaultOrbitState.position)
+		lastOrbitState.target.copy(defaultOrbitState.target)
+	} else {
+		camera.position.copy(defaultOrbitState.position)
+		camera.lookAt(defaultOrbitState.target)
 	}
 }
 
@@ -1853,6 +1962,9 @@ function updateFirstPersonCameraLookTween(delta: number): void {
 	firstPersonControls.lookAt(tempTarget.x, tempTarget.y, tempTarget.z)
 	if (tween.elapsed >= tween.duration) {
 		firstPersonControls.lookAt(tween.to.x, tween.to.y, tween.to.z)
+		clampFirstPersonPitch(true)
+		syncFirstPersonOrientation()
+		syncLastFirstPersonStateFromCamera()
 		activeCameraLookTween = null
 	}
 }
@@ -1898,6 +2010,7 @@ function initRenderer() {
 	if (!host) {
 		return
 	}
+	hidePurposeControls()
 	renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true })
 	renderer.outputColorSpace = THREE.SRGBColorSpace
 	renderer.toneMapping = THREE.ACESFilmicToneMapping
@@ -2098,6 +2211,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	resetBehaviorRuntime()
 	resetBehaviorProximity()
 	resetAnimationControllers()
+	hidePurposeControls()
 	activeCameraLookTween = null
 	dismissBehaviorAlert()
 	resetLanternOverlay()
@@ -2330,6 +2444,7 @@ function updateNodeProperties(object: THREE.Object3D, node: SceneNode) {
 	} else {
 		object.visible = true
 	}
+	updateBehaviorVisibility(node.id, object.visible)
 }
 
 function structuralSignature(node: SceneNode | null | undefined): string {
@@ -2687,6 +2802,29 @@ onBeforeUnmount(() => {
 				{{ message }}
 			</div>
 		</v-alert>
+		<div
+			v-if="purposeControlsVisible"
+			class="scene-preview__purpose-controls"
+		>
+			<v-btn
+				class="scene-preview__purpose-button"
+				color="primary"
+				variant="elevated"
+				size="small"
+				@click="handlePurposeWatchClick"
+			>
+				观察
+			</v-btn>
+			<v-btn
+				class="scene-preview__purpose-button"
+				color="secondary"
+				variant="tonal"
+				size="small"
+				@click="handlePurposeResetClick"
+			>
+				平视
+			</v-btn>
+		</div>
 		<v-sheet class="scene-preview__control-bar" elevation="10">
 			<div class="scene-preview__controls">
 				<v-btn
@@ -3018,6 +3156,20 @@ onBeforeUnmount(() => {
 	max-width: 320px;
 	background: rgba(255, 183, 77, 0.1);
 	backdrop-filter: blur(10px);
+}
+
+.scene-preview__purpose-controls {
+	position: absolute;
+	left: 24px;
+	bottom: 24px;
+	display: flex;
+	gap: 12px;
+	z-index: 1900;
+	pointer-events: auto;
+}
+
+.scene-preview__purpose-button {
+	min-width: 0;
 }
 
 .scene-preview__control-bar {

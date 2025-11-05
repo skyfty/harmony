@@ -10,6 +10,7 @@ import type {
   ShowAlertBehaviorParams,
   ShowBehaviorParams,
   WatchBehaviorParams,
+  ShowPurposeBehaviorParams,
   TriggerBehaviorParams,
   AnimationBehaviorParams,
 } from '../index'
@@ -73,6 +74,23 @@ export type BehaviorRuntimeEvent =
       behaviorId: string
       targetNodeId: string | null
       token: string
+    }
+  | {
+      type: 'show-purpose-controls'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+      targetNodeId: string | null
+    }
+  | {
+      type: 'hide-purpose-controls'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
     }
   | {
       type: 'lantern'
@@ -162,6 +180,7 @@ type RegistryEntry = {
   nodeId: string
   behaviors: BehaviorRegistry
   object: Object3D | null
+  visible: boolean
 }
 
 type BehaviorSequenceState = {
@@ -444,6 +463,32 @@ function createWatchEvent(state: BehaviorSequenceState, behavior: SceneBehavior)
   }
 }
 
+function createShowPurposeEvent(state: BehaviorSequenceState, behavior: SceneBehavior): BehaviorRuntimeEvent {
+  const params = behavior.script.params as ShowPurposeBehaviorParams | undefined
+  const fallbackTarget = state.nodeId
+  const targetNodeId = params?.targetNodeId && params.targetNodeId.trim().length ? params.targetNodeId : fallbackTarget
+  return {
+    type: 'show-purpose-controls',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+    targetNodeId,
+  }
+}
+
+function createHidePurposeEvent(state: BehaviorSequenceState, behavior: SceneBehavior): BehaviorRuntimeEvent {
+  return {
+    type: 'hide-purpose-controls',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+  }
+}
+
 function createLookEvent(state: BehaviorSequenceState, behavior: SceneBehavior): BehaviorRuntimeEvent {
   const token = createToken(state.id, state.index)
   pendingTokens.set(token, {
@@ -570,6 +615,14 @@ function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
       case 'watch':
         events.push(createWatchEvent(state, behavior))
         return events
+      case 'showPurpose':
+        events.push(createShowPurposeEvent(state, behavior))
+        state.index += 1
+        continue
+      case 'hidePurpose':
+        events.push(createHidePurposeEvent(state, behavior))
+        state.index += 1
+        continue
       case 'show': {
         const params = script.params as ShowBehaviorParams
         events.push(createVisibilityEvent(state, behavior, params, true))
@@ -628,12 +681,14 @@ export function registerBehaviorComponent(
   nodeId: string,
   behaviors: BehaviorCollection = [],
   object: Object3D | null,
+  options: { visible?: boolean } = {},
 ): void {
   cancelSequencesForNode(nodeId)
   registry.set(nodeId, {
     nodeId,
     behaviors: buildBehaviorRegistry(toBehaviorList(behaviors)),
     object,
+    visible: options.visible ?? true,
   })
   notifyRegistryChanged(nodeId)
 }
@@ -655,6 +710,17 @@ export function updateBehaviorObject(nodeId: string, object: Object3D | null): v
     return
   }
   entry.object = object
+  if (object) {
+    entry.visible = object.visible
+  }
+}
+
+export function updateBehaviorVisibility(nodeId: string, visible: boolean): void {
+  const entry = registry.get(nodeId)
+  if (!entry) {
+    return
+  }
+  entry.visible = visible
 }
 
 export function unregisterBehaviorComponent(nodeId: string): void {
@@ -666,7 +732,7 @@ export function unregisterBehaviorComponent(nodeId: string): void {
 export function listInteractableObjects(): Object3D[] {
   const objects: Object3D[] = []
   registry.forEach((entry) => {
-    if (entry.object) {
+    if (entry.object && entry.visible !== false) {
       objects.push(entry.object)
     }
   })

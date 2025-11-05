@@ -97,6 +97,7 @@ function applyDefaultTarget(step: SceneBehavior, nodeId: string | null): void {
     case 'show':
     case 'hide':
     case 'watch':
+    case 'showPurpose':
     case 'animation':
     case 'moveTo':
       if (params && Object.prototype.hasOwnProperty.call(params, 'targetNodeId') && params.targetNodeId === null) {

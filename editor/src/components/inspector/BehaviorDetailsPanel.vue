@@ -82,6 +82,7 @@ const PARAMETER_COMPONENTS: Partial<Record<BehaviorScriptType, unknown>> = {
   moveTo: MoveToParams,
   showAlert: ShowAlertParams,
   watch: WatchParams,
+  showPurpose: WatchParams,
   show: ShowParams,
   hide: HideParams,
   lantern: LanternParams,

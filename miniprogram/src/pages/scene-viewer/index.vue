@@ -143,6 +143,7 @@ import {
   hasRegisteredBehaviors,
   listInteractableObjects,
   listRegisteredBehaviorActions,
+  updateBehaviorVisibility,
   removeBehaviorRuntimeListener,
   resetBehaviorRuntime,
   resolveBehaviorEvent,
@@ -258,6 +259,9 @@ const HUMAN_EYE_HEIGHT = 1.7;
 const CAMERA_FORWARD_OFFSET = 1.5;
 const CAMERA_HORIZONTAL_POLAR_ANGLE = Math.PI / 2;
 const CAMERA_WATCH_DURATION = 0.45;
+const CAMERA_LEVEL_DURATION = 0.35;
+const DEFAULT_CAMERA_POSITION = new THREE.Vector3(0, HUMAN_EYE_HEIGHT, 0);
+const DEFAULT_CAMERA_TARGET = new THREE.Vector3(0, HUMAN_EYE_HEIGHT, -CAMERA_FORWARD_OFFSET);
 const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
   presetId: 'clear-day',
   exposure: 0.6,
@@ -292,7 +296,7 @@ const nodeObjectMap = new Map<string, THREE.Object3D>();
 
 const behaviorRaycaster = new THREE.Raycaster();
 const behaviorPointer = new THREE.Vector2();
-let behaviorTapListener: ((event: TouchEvent) => void) | null = null;
+let handleBehaviorClick: ((event: MouseEvent) => void) | null = null;
 
 const WHEEL_MOVE_STEP = 1.2;
 const worldUp = new THREE.Vector3(0, 1, 0);
@@ -315,6 +319,10 @@ const lanternOverlayVisible = ref(false);
 const lanternSlides = ref<LanternSlideDefinition[]>([]);
 const lanternActiveSlideIndex = ref(0);
 const lanternEventToken = ref<string | null>(null);
+
+const purposeControlsVisible = ref(false);
+const purposeTargetNodeId = ref<string | null>(null);
+const purposeSourceNodeId = ref<string | null>(null);
 
 type LanternTextState = { text: string; loading: boolean; error: string | null };
 
@@ -1447,6 +1455,7 @@ function handleSetVisibilityEvent(event: Extract<BehaviorRuntimeEvent, { type: '
   if (node) {
     node.visible = event.visible;
   }
+  updateBehaviorVisibility(event.targetNodeId, event.visible);
 }
 
 function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: 'play-animation' }>) {
@@ -1545,17 +1554,18 @@ function handleTriggerBehaviorEvent(event: Extract<BehaviorRuntimeEvent, { type:
   processBehaviorEvents(followUps);
 }
 
-function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watch-node' }>) {
+function performWatchFocus(targetNodeId: string | null): { success: boolean; message?: string } {
   const context = renderContext;
   if (!context) {
-    resolveBehaviorToken(event.token, { type: 'fail', message: '相机不可用' });
-    return;
+    return { success: false, message: '相机不可用' };
+  }
+  if (!targetNodeId) {
+    return { success: false, message: '缺少观察目标' };
   }
   const { camera, controls } = context;
-  const focus = resolveNodeFocusPoint(event.targetNodeId);
+  const focus = resolveNodeFocusPoint(targetNodeId);
   if (!focus) {
-    resolveBehaviorToken(event.token, { type: 'fail', message: '未找到目标节点' });
-    return;
+    return { success: false, message: '未找到目标节点' };
   }
   activeCameraWatchTween = null;
   const startPosition = camera.position.clone();
@@ -1566,8 +1576,12 @@ function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watc
 
   tempMovementVec.copy(focus).sub(startPosition);
   if (tempMovementVec.lengthSq() < 1e-8) {
-    resolveBehaviorToken(event.token, { type: 'continue' });
-    return;
+    controls.target.copy(focus);
+    controls.update();
+    camera.position.copy(startPosition);
+    camera.position.y = HUMAN_EYE_HEIGHT;
+    controls.update();
+    return { success: true };
   }
 
   tempMovementVec.normalize();
@@ -1580,31 +1594,117 @@ function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watc
     camera.position.copy(startPosition);
     camera.position.y = HUMAN_EYE_HEIGHT;
     controls.update();
-  } else {
-    activeCameraWatchTween = {
-      from: startTarget,
-      to: tempForwardVec.clone(),
-      startPosition,
-      duration: CAMERA_WATCH_DURATION,
-      elapsed: 0,
-    };
+    return { success: true };
+  }
+
+  activeCameraWatchTween = {
+    from: startTarget,
+    to: tempForwardVec.clone(),
+    startPosition,
+    duration: CAMERA_WATCH_DURATION,
+    elapsed: 0,
+  };
+
+  return { success: true };
+}
+
+function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watch-node' }>) {
+  const result = performWatchFocus(event.targetNodeId ?? event.nodeId ?? null);
+  if (!result.success) {
+    resolveBehaviorToken(event.token, { type: 'fail', message: result.message });
+    return;
   }
   resolveBehaviorToken(event.token, { type: 'continue' });
 }
 
-function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look-level' }>) {
+function showPurposeControls(targetNodeId: string | null, sourceNodeId: string | null): void {
+  purposeSourceNodeId.value = sourceNodeId ?? null;
+  purposeTargetNodeId.value = targetNodeId ?? sourceNodeId ?? null;
+  purposeControlsVisible.value = true;
+}
+
+function hidePurposeControls(): void {
+  purposeControlsVisible.value = false;
+}
+
+function handleShowPurposeControlsEvent(
+  event: Extract<BehaviorRuntimeEvent, { type: 'show-purpose-controls' }>,
+): void {
+  showPurposeControls(event.targetNodeId ?? null, event.nodeId ?? null);
+}
+
+function handleHidePurposeControlsEvent(): void {
+  hidePurposeControls();
+}
+
+function handlePurposeWatchTap(): void {
+  const targetNodeId = purposeTargetNodeId.value ?? purposeSourceNodeId.value;
+  if (!targetNodeId) {
+    uni.showToast({ title: '缺少观察目标', icon: 'none' });
+    return;
+  }
+  const result = performWatchFocus(targetNodeId);
+  if (!result.success) {
+    uni.showToast({ title: result.message || '无法定位观察目标', icon: 'none' });
+  }
+}
+
+function handlePurposeResetTap(): void {
+  const result = resetCameraToLevelView();
+  if (!result.success) {
+    uni.showToast({ title: result.message || '相机不可用', icon: 'none' });
+  }
+}
+
+function resetCameraToLevelView(): { success: boolean; message?: string } {
   const context = renderContext;
   if (!context) {
-    resolveBehaviorToken(event.token, { type: 'fail', message: '相机不可用' });
+    return { success: false, message: '相机不可用' };
+  }
+  const { camera, controls } = context;
+  activeCameraWatchTween = null;
+  camera.position.y = HUMAN_EYE_HEIGHT;
+  const startTarget = controls.target.clone();
+  const levelTarget = startTarget.clone();
+  levelTarget.y = camera.position.y;
+  if (startTarget.distanceToSquared(levelTarget) < 1e-6) {
+    controls.target.copy(levelTarget);
+    camera.lookAt(levelTarget);
+    controls.update();
+    return { success: true };
+  }
+  const startPosition = camera.position.clone();
+  startPosition.y = HUMAN_EYE_HEIGHT;
+  activeCameraWatchTween = {
+    from: startTarget,
+    to: levelTarget.clone(),
+    startPosition,
+    duration: CAMERA_LEVEL_DURATION,
+    elapsed: 0,
+  };
+  return { success: true };
+}
+
+function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look-level' }>) {
+  const result = resetCameraToLevelView();
+  if (!result.success) {
+    resolveBehaviorToken(event.token, { type: 'fail', message: result.message });
+    return;
+  }
+  resolveBehaviorToken(event.token, { type: 'continue' });
+}
+
+function resetCameraToDefaultView(): void {
+  const context = renderContext;
+  if (!context) {
     return;
   }
   const { camera, controls } = context;
-  const lookTarget = controls.target.clone();
-  lookTarget.y = camera.position.y;
-  controls.target.copy(lookTarget);
-  camera.lookAt(lookTarget);
+  activeCameraWatchTween = null;
+  camera.position.copy(DEFAULT_CAMERA_POSITION);
+  controls.target.copy(DEFAULT_CAMERA_TARGET);
+  camera.lookAt(DEFAULT_CAMERA_TARGET);
   controls.update();
-  resolveBehaviorToken(event.token, { type: 'continue' });
 }
 
 function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
@@ -1630,6 +1730,12 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
     case 'watch-node':
       handleWatchNodeEvent(event);
       break;
+    case 'show-purpose-controls':
+      handleShowPurposeControlsEvent(event);
+      break;
+    case 'hide-purpose-controls':
+      handleHidePurposeControlsEvent();
+      break;
     case 'set-visibility':
       handleSetVisibilityEvent(event);
       break;
@@ -1654,28 +1760,26 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 }
 
 function ensureBehaviorTapHandler(canvas: HTMLCanvasElement, camera: THREE.PerspectiveCamera) {
-  if (behaviorTapListener) {
-    canvas.removeEventListener('touchend', behaviorTapListener);
-    behaviorTapListener = null;
+  if (handleBehaviorClick) {
+    canvas.removeEventListener('click', handleBehaviorClick);
+        handleBehaviorClick = null;
   }
-  behaviorTapListener = (event: TouchEvent) => {
+  handleBehaviorClick = (event: MouseEvent) => {
     if (!renderContext?.scene) {
       return;
     }
     if (!hasRegisteredBehaviors()) {
       return;
     }
-    const touches = event.changedTouches ?? event.touches;
-    const firstTouch = touches && touches[0];
-    if (!firstTouch) {
+    const bounds = canvas.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) {
       return;
     }
-    const rect = canvas.getBoundingClientRect();
-    if (!rect.width || !rect.height) {
-      return;
-    }
-    behaviorPointer.x = ((firstTouch.clientX - rect.left) / rect.width) * 2 - 1;
-    behaviorPointer.y = -((firstTouch.clientY - rect.top) / rect.height) * 2 + 1;
+    const width = bounds.width
+    const height = bounds.height
+    behaviorPointer.x = ((event.clientX - bounds.left) / width) * 2 - 1
+    behaviorPointer.y = -((event.clientY - bounds.top) / height) * 2 + 1
+
     behaviorRaycaster.setFromCamera(behaviorPointer, camera);
     const candidates = listInteractableObjects();
     if (!candidates.length) {
@@ -1705,7 +1809,7 @@ function ensureBehaviorTapHandler(canvas: HTMLCanvasElement, camera: THREE.Persp
       break;
     }
   };
-  canvas.addEventListener('touchend', behaviorTapListener);
+  canvas.addEventListener('click', handleBehaviorClick);
 }
 
 function disposeSkyEnvironment() {
@@ -2092,9 +2196,9 @@ function teardownRenderer() {
     return;
   }
   const { renderer, scene, controls } = renderContext;
-  if (canvasResult?.canvas && behaviorTapListener) {
-    canvasResult.canvas.removeEventListener('touchend', behaviorTapListener);
-    behaviorTapListener = null;
+  if (canvasResult?.canvas && handleBehaviorClick) {
+    canvasResult.canvas.removeEventListener('touchend', handleBehaviorClick);
+        handleBehaviorClick = null;
   }
   if (behaviorAlertToken.value) {
     resolveBehaviorToken(behaviorAlertToken.value, {
@@ -2108,6 +2212,7 @@ function teardownRenderer() {
   } else {
     resetLanternOverlay();
   }
+  hidePurposeControls();
   previewComponentManager.reset();
   resetBehaviorRuntime();
   resetBehaviorProximity();
@@ -2221,6 +2326,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   } else {
     resetLanternOverlay();
   }
+  hidePurposeControls();
   scene.children.forEach((child) => disposeObject(child));
   scene.clear();
   warnings.value = [];
@@ -2434,7 +2540,7 @@ onLoad((query) => {
   }
 });
 
-onReady(() => {
+onReady(() => {  
   if (!resizeListener) {
     resizeListener = handleResize;
     uni.onWindowResize(handleResize);
