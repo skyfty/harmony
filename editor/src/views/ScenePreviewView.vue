@@ -128,6 +128,7 @@ const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
 	azimuth: 145,
 }
 const CAMERA_WATCH_TWEEN_DURATION = 0.45
+const CAMERA_LEVEL_TWEEN_DURATION = 0.35
 type CameraLookTweenMode = 'first-person' | 'orbit'
 type CameraLookTween = {
 	mode: CameraLookTweenMode
@@ -1823,47 +1824,57 @@ function resetCameraToLevelView() {
 	if (!camera) {
 		return
 	}
-	if (controlMode.value === 'first-person') {
-		// Keep current yaw, set pitch to 0, enforce eye height
+	activeCameraLookTween = null
+	if (controlMode.value === 'first-person' && firstPersonControls) {
 		camera.position.y = CAMERA_HEIGHT
-		tempDirection.set(0, 0, -1)
+		tempDirection.set(0, 0, 0)
+		camera.getWorldDirection(tempDirection)
+		const startTarget = camera.position.clone().add(tempDirection)
+		const yaw = Math.atan2(tempDirection.x, -tempDirection.z)
+		tempDirection.set(Math.sin(yaw), 0, -Math.cos(yaw))
+		const levelTarget = camera.position.clone().add(tempDirection)
+		if (startTarget.distanceToSquared(levelTarget) < 1e-6) {
+			firstPersonControls.lookAt(levelTarget.x, levelTarget.y, levelTarget.z)
+			clampFirstPersonPitch(true)
+			syncFirstPersonOrientation()
+			resetFirstPersonPointerDelta()
+			syncLastFirstPersonStateFromCamera()
+		} else {
+			activeCameraLookTween = {
+				mode: 'first-person',
+				from: startTarget,
+				to: levelTarget,
+				duration: CAMERA_LEVEL_TWEEN_DURATION,
+				elapsed: 0,
+			}
+			resetFirstPersonPointerDelta()
+		}
+	} else if (mapControls && camera) {
+		const startTarget = mapControls.target.clone()
+		const levelTarget = startTarget.clone()
+		levelTarget.y = camera.position.y
+		if (startTarget.distanceToSquared(levelTarget) < 1e-6) {
+			mapControls.target.copy(levelTarget)
+			mapControls.update()
+			camera.lookAt(levelTarget)
+			lastOrbitState.target.copy(levelTarget)
+			lastOrbitState.position.copy(camera.position)
+		} else {
+			activeCameraLookTween = {
+				mode: 'orbit',
+				from: startTarget,
+				to: levelTarget,
+				duration: CAMERA_LEVEL_TWEEN_DURATION,
+				elapsed: 0,
+			}
+		}
+	} else {
+		tempDirection.set(0, 0, 0)
 		camera.getWorldDirection(tempDirection)
 		const yaw = Math.atan2(tempDirection.x, -tempDirection.z)
-		// build a horizontal forward vector from yaw
 		tempDirection.set(Math.sin(yaw), 0, -Math.cos(yaw))
 		tempTarget.copy(camera.position).add(tempDirection)
 		camera.lookAt(tempTarget)
-		syncFirstPersonOrientation()
-		syncLastFirstPersonStateFromCamera()
-	} else if (mapControls) {
-		// Orbit/MapControls: set polar angle to (almost) horizontal while preserving azimuth
-		const controls = mapControls as unknown as {
-			getAzimuthalAngle?: () => number
-			getPolarAngle?: () => number
-			rotateTo?: (azimuth: number, polar: number, enableTransition?: boolean) => void
-			maxPolarAngle?: number
-			target: THREE.Vector3
-			update: () => void
-		}
-		const azimuth = controls.getAzimuthalAngle ? controls.getAzimuthalAngle() : (() => {
-			const offset = new THREE.Vector3().copy(camera.position).sub(mapControls.target)
-			const spherical = new THREE.Spherical().setFromVector3(offset)
-			return spherical.theta
-		})()
-		const desiredPolar = Math.min(controls.maxPolarAngle ?? Math.PI / 2, Math.PI / 2)
-		if (typeof controls.rotateTo === 'function') {
-			controls.rotateTo(azimuth, desiredPolar, false)
-		} else {
-			const target = mapControls.target.clone()
-			const offset = new THREE.Vector3().copy(camera.position).sub(target)
-			const spherical = new THREE.Spherical().setFromVector3(offset)
-			spherical.theta = azimuth
-			spherical.phi = desiredPolar
-			offset.setFromSpherical(spherical)
-			camera.position.copy(target).add(offset)
-			camera.lookAt(target)
-		}
-		mapControls.update()
 	}
 }
 
@@ -1933,6 +1944,9 @@ function updateFirstPersonCameraLookTween(delta: number): void {
 	firstPersonControls.lookAt(tempTarget.x, tempTarget.y, tempTarget.z)
 	if (tween.elapsed >= tween.duration) {
 		firstPersonControls.lookAt(tween.to.x, tween.to.y, tween.to.z)
+		clampFirstPersonPitch(true)
+		syncFirstPersonOrientation()
+		syncLastFirstPersonStateFromCamera()
 		activeCameraLookTween = null
 	}
 }

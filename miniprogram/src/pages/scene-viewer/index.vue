@@ -242,6 +242,7 @@ const CAMERA_FORWARD_OFFSET = 1.5;
 const CAMERA_MAX_LOOK_UP = THREE.MathUtils.degToRad(50);
 const CAMERA_MAX_LOOK_DOWN = THREE.MathUtils.degToRad(30);
 const CAMERA_WATCH_DURATION = 0.45;
+const CAMERA_LEVEL_DURATION = 0.35;
 const DEFAULT_CAMERA_POSITION = new THREE.Vector3(0, HUMAN_EYE_HEIGHT, 0);
 const DEFAULT_CAMERA_TARGET = new THREE.Vector3(0, HUMAN_EYE_HEIGHT, -CAMERA_FORWARD_OFFSET);
 const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
@@ -1644,11 +1645,26 @@ function resetCameraToLevelView(): { success: boolean; message?: string } {
     return { success: false, message: '相机不可用' };
   }
   const { camera, controls } = context;
-  const levelTarget = controls.target.clone();
+  activeCameraWatchTween = null;
+  camera.position.y = HUMAN_EYE_HEIGHT;
+  const startTarget = controls.target.clone();
+  const levelTarget = startTarget.clone();
   levelTarget.y = camera.position.y;
-  controls.target.copy(levelTarget);
-  camera.lookAt(levelTarget);
-  controls.update();
+  if (startTarget.distanceToSquared(levelTarget) < 1e-6) {
+    controls.target.copy(levelTarget);
+    camera.lookAt(levelTarget);
+    controls.update();
+    return { success: true };
+  }
+  const startPosition = camera.position.clone();
+  startPosition.y = HUMAN_EYE_HEIGHT;
+  activeCameraWatchTween = {
+    from: startTarget,
+    to: levelTarget.clone(),
+    startPosition,
+    duration: CAMERA_LEVEL_DURATION,
+    elapsed: 0,
+  };
   return { success: true };
 }
 
