@@ -8,6 +8,7 @@ import type {
 	LanternSlideDefinition,
 	SceneJsonExportDocument,
 	SceneNode,
+	SceneNodeComponentState,
 	SceneSkyboxSettings,
 } from '@harmony/schema'
 import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
@@ -16,7 +17,13 @@ import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph
 import ResourceCache from '@schema/ResourceCache'
 import { AssetCache, AssetLoader } from '@schema/assetCache'
 import { ComponentManager } from '@schema/components/componentManager'
-import { behaviorComponentDefinition, wallComponentDefinition } from '@schema/components'
+import {
+	behaviorComponentDefinition,
+	guideboardComponentDefinition,
+	wallComponentDefinition,
+	GUIDEBOARD_COMPONENT_TYPE,
+} from '@schema/components'
+import type { GuideboardComponentProps } from '@schema/components'
 import {
 	addBehaviorRuntimeListener,
 	hasRegisteredBehaviors,
@@ -63,6 +70,7 @@ const resourceProgressPercent = computed(() => {
 
 const previewComponentManager = new ComponentManager()
 previewComponentManager.registerDefinition(wallComponentDefinition)
+previewComponentManager.registerDefinition(guideboardComponentDefinition)
 previewComponentManager.registerDefinition(behaviorComponentDefinition)
 
 const previewNodeMap = new Map<string, SceneNode>()
@@ -230,6 +238,26 @@ function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null): void {
 
 function resolveNodeById(nodeId: string): SceneNode | null {
 	return previewNodeMap.get(nodeId) ?? null
+}
+
+function resolveGuideboardComponent(
+	node: SceneNode | null | undefined,
+): SceneNodeComponentState<GuideboardComponentProps> | null {
+	const component = node?.components?.[GUIDEBOARD_COMPONENT_TYPE] as
+		SceneNodeComponentState<GuideboardComponentProps> | undefined
+	if (!component || !component.enabled) {
+		return null
+	}
+	return component
+}
+
+function resolveGuideboardInitialVisibility(node: SceneNode | null | undefined): boolean | null {
+	const component = resolveGuideboardComponent(node)
+	if (!component) {
+		return null
+	}
+	const props = component.props as GuideboardComponentProps | undefined
+	return props?.initiallyVisible === true
 }
 
 function resolveNodeIdFromObject(object: THREE.Object3D | null | undefined): string | null {
@@ -1896,34 +1924,7 @@ function resetCameraToLevelView() {
 	}
 }
 
-function resetCameraToDefaultView() {
-	if (!camera) {
-		return
-	}
-	activeCameraLookTween = null
-	if (controlMode.value === 'first-person' && firstPersonControls) {
-		const basePosition = defaultFirstPersonState.position
-		const lookDirection = defaultFirstPersonState.direction.clone()
-		camera.position.copy(basePosition)
-		camera.position.y = CAMERA_HEIGHT
-		const lookTarget = basePosition.clone().add(lookDirection)
-		firstPersonControls.lookAt(lookTarget.x, lookTarget.y, lookTarget.z)
-		clampFirstPersonPitch(true)
-		syncFirstPersonOrientation()
-		resetFirstPersonPointerDelta()
-		syncLastFirstPersonStateFromCamera()
-	} else if (mapControls && camera) {
-		camera.position.copy(defaultOrbitState.position)
-		mapControls.target.copy(defaultOrbitState.target)
-		mapControls.update()
-		lastOrbitState.position.copy(defaultOrbitState.position)
-		lastOrbitState.target.copy(defaultOrbitState.target)
-	} else {
-		camera.position.copy(defaultOrbitState.position)
-		camera.lookAt(defaultOrbitState.target)
-	}
-}
-
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function easeInOutCubic(t: number): number {
 	if (t <= 0) {
 		return 0
@@ -2381,6 +2382,12 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 			nodeObjectMap.set(nodeId, child)
 			pending?.delete(nodeId)
 			attachRuntimeForNode(nodeId, child)
+			const nodeState = resolveNodeById(nodeId)
+			const initialVisibility = resolveGuideboardInitialVisibility(nodeState)
+			if (initialVisibility !== null) {
+				child.visible = initialVisibility
+				updateBehaviorVisibility(nodeId, child.visible)
+			}
 		}
 	})
 }
@@ -2437,7 +2444,10 @@ function updateNodeProperties(object: THREE.Object3D, node: SceneNode) {
 	if (node.scale) {
 		object.scale.set(node.scale.x, node.scale.y, node.scale.z)
 	}
-	if (node.editorFlags?.editorOnly) {
+	const guideboardVisibility = resolveGuideboardInitialVisibility(node)
+	if (guideboardVisibility !== null) {
+		object.visible = guideboardVisibility
+	} else if (node.editorFlags?.editorOnly) {
 		object.visible = false
 	} else if (typeof node.visible === 'boolean') {
 		object.visible = node.visible
@@ -2493,9 +2503,7 @@ function reconcileNodeLists(
 		if (!object) {
 			return
 		}
-		if (!shouldReplace) {
-			updateNodeProperties(object, node)
-		}
+		updateNodeProperties(object, node)
 		ensureChildOrder(parentObject, object, index)
 		const nextChildren = Array.isArray(node.children) ? node.children : []
 		const previousChildren = previous?.children ?? []

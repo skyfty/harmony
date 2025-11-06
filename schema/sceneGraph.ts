@@ -10,10 +10,13 @@ import type {
   SceneMaterial,
   SceneNode,
   SceneNodeComponentMap,
+  SceneNodeComponentState,
   SceneNodeEditorFlags,
   SceneNodeMaterial,
   SceneMaterialTextureSettings,
 } from '@harmony/schema';
+import type { GuideboardComponentProps } from './components/definitions/guideboardComponent';
+import { GUIDEBOARD_COMPONENT_TYPE } from './components/definitions/guideboardComponent';
 
 type SceneNodeWithExtras = SceneNode & {
   light?: {
@@ -558,6 +561,14 @@ class SceneGraphBuilder {
     metadata.dynamicMeshType = node.dynamicMesh?.type ?? null;
     metadata.lightType = node.light?.type ?? null;
     metadata.sourceAssetId = node.sourceAssetId ?? null;
+    const guideboardState = node.components?.[GUIDEBOARD_COMPONENT_TYPE] as
+      | SceneNodeComponentState<GuideboardComponentProps>
+      | undefined;
+    if (guideboardState?.enabled) {
+      metadata.isGuideboard = true;
+      const props = guideboardState.props as GuideboardComponentProps | undefined;
+      metadata.guideboardInitiallyVisible = props?.initiallyVisible === true;
+    }
   }
 
   private async resolveNodeMaterials(node: SceneNodeWithExtras): Promise<THREE.Material[]> {

@@ -135,9 +135,21 @@ import { parseSceneDocument, useSceneStore } from '@/stores/sceneStore';
 import { buildSceneGraph, type SceneGraphBuildOptions, type SceneGraphResourceProgress } from '@schema/sceneGraph';
 import ResourceCache from '@schema/ResourceCache';
 import { AssetCache, AssetLoader } from '@schema/assetCache';
-import type { SceneNode, SceneSkyboxSettings, SceneJsonExportDocument, LanternSlideDefinition } from '@harmony/schema';
+import type {
+  SceneNode,
+  SceneNodeComponentState,
+  SceneSkyboxSettings,
+  SceneJsonExportDocument,
+  LanternSlideDefinition,
+} from '@harmony/schema';
 import { ComponentManager } from '@schema/components/componentManager';
-import { behaviorComponentDefinition, wallComponentDefinition } from '@schema/components';
+import {
+  behaviorComponentDefinition,
+  guideboardComponentDefinition,
+  wallComponentDefinition,
+  GUIDEBOARD_COMPONENT_TYPE,
+} from '@schema/components';
+import type { GuideboardComponentProps } from '@schema/components';
 import {
   addBehaviorRuntimeListener,
   hasRegisteredBehaviors,
@@ -289,6 +301,7 @@ const bootstrapFinished = ref(false);
 
 const previewComponentManager = new ComponentManager();
 previewComponentManager.registerDefinition(wallComponentDefinition);
+previewComponentManager.registerDefinition(guideboardComponentDefinition);
 previewComponentManager.registerDefinition(behaviorComponentDefinition);
 
 const previewNodeMap = new Map<string, SceneNode>();
@@ -296,7 +309,7 @@ const nodeObjectMap = new Map<string, THREE.Object3D>();
 
 const behaviorRaycaster = new THREE.Raycaster();
 const behaviorPointer = new THREE.Vector2();
-let handleBehaviorClick: ((event: MouseEvent) => void) | null = null;
+let handleBehaviorClick: ((event: MouseEvent | TouchEvent) => void) | null = null;
 
 const WHEEL_MOVE_STEP = 1.2;
 const worldUp = new THREE.Vector3(0, 1, 0);
@@ -1043,6 +1056,31 @@ function resolveNodeById(nodeId: string): SceneNode | null {
   return previewNodeMap.get(nodeId) ?? null;
 }
 
+function resolveGuideboardComponent(
+  node: SceneNode | null | undefined,
+): SceneNodeComponentState<GuideboardComponentProps> | null {
+  const component = node?.components?.[GUIDEBOARD_COMPONENT_TYPE] as
+    | SceneNodeComponentState<GuideboardComponentProps>
+    | undefined;
+  if (!component || !component.enabled) {
+    return null;
+  }
+  return component;
+}
+
+function isGuideboardSceneNode(node: SceneNode | null | undefined): boolean {
+  return resolveGuideboardComponent(node) !== null;
+}
+
+function resolveGuideboardInitialVisibility(node: SceneNode | null | undefined): boolean | null {
+  const component = resolveGuideboardComponent(node);
+  if (!component) {
+    return null;
+  }
+  const props = component.props as GuideboardComponentProps | undefined;
+  return props?.initiallyVisible === true;
+}
+
 function attachRuntimeForNode(nodeId: string, object: THREE.Object3D) {
   const nodeState = resolveNodeById(nodeId);
   if (!nodeState) {
@@ -1058,6 +1096,12 @@ function indexSceneObjects(root: THREE.Object3D) {
     if (nodeId) {
       nodeObjectMap.set(nodeId, object);
       attachRuntimeForNode(nodeId, object);
+      const nodeState = resolveNodeById(nodeId);
+      const guideboardVisibility = resolveGuideboardInitialVisibility(nodeState);
+      if (guideboardVisibility !== null) {
+        object.visible = guideboardVisibility;
+        updateBehaviorVisibility(nodeId, object.visible);
+      }
     }
   });
 }
@@ -1764,7 +1808,7 @@ function ensureBehaviorTapHandler(canvas: HTMLCanvasElement, camera: THREE.Persp
     canvas.removeEventListener('click', handleBehaviorClick);
         handleBehaviorClick = null;
   }
-  handleBehaviorClick = (event: MouseEvent) => {
+  handleBehaviorClick = (event: MouseEvent | TouchEvent) => {
     if (!renderContext?.scene) {
       return;
     }
@@ -1775,10 +1819,23 @@ function ensureBehaviorTapHandler(canvas: HTMLCanvasElement, camera: THREE.Persp
     if (!bounds.width || !bounds.height) {
       return;
     }
-    const width = bounds.width
-    const height = bounds.height
-    behaviorPointer.x = ((event.clientX - bounds.left) / width) * 2 - 1
-    behaviorPointer.y = -((event.clientY - bounds.top) / height) * 2 + 1
+    const width = bounds.width;
+    const height = bounds.height;
+    let clientX: number;
+    let clientY: number;
+    if ('touches' in event && event.touches.length) {
+      clientX = event.touches[0]!.clientX;
+      clientY = event.touches[0]!.clientY;
+    } else if ('changedTouches' in event && event.changedTouches.length) {
+      clientX = event.changedTouches[0]!.clientX;
+      clientY = event.changedTouches[0]!.clientY;
+    } else {
+      const pointer = event as MouseEvent;
+      clientX = pointer.clientX;
+      clientY = pointer.clientY;
+    }
+    behaviorPointer.x = ((clientX - bounds.left) / width) * 2 - 1;
+    behaviorPointer.y = -((clientY - bounds.top) / height) * 2 + 1;
 
     behaviorRaycaster.setFromCamera(behaviorPointer, camera);
     const candidates = listInteractableObjects();

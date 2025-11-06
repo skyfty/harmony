@@ -106,9 +106,10 @@ import {
   ASSETS_ROOT_DIRECTORY_ID,
   PACKAGES_ROOT_DIRECTORY_ID,
 } from './assetCatalog'
-import type { WallComponentProps } from '@schema/components'
+import type { GuideboardComponentProps, WallComponentProps } from '@schema/components'
 import {
   WALL_COMPONENT_TYPE,
+  GUIDEBOARD_COMPONENT_TYPE,
   BEHAVIOR_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_THICKNESS,
@@ -118,6 +119,9 @@ import {
   WALL_MIN_WIDTH,
   clampWallProps,
   cloneWallComponentProps,
+  clampGuideboardComponentProps,
+  cloneGuideboardComponentProps,
+  createGuideboardComponentState,
   componentManager,
   resolveWallComponentPropsFromMesh,
 } from '@schema/components'
@@ -301,7 +305,11 @@ function cloneComponentState(state: SceneNodeComponentState<any>, typeOverride?:
   }
 }
 
-function normalizeNodeComponents(node: SceneNode, components?: SceneNodeComponentMap): SceneNodeComponentMap | undefined {
+function normalizeNodeComponents(
+  node: SceneNode,
+  components?: SceneNodeComponentMap,
+  options: { attachGuideboard?: boolean } = {},
+): SceneNodeComponentMap | undefined {
   const normalized: SceneNodeComponentMap = {}
 
   if (components) {
@@ -346,6 +354,41 @@ function normalizeNodeComponents(node: SceneNode, components?: SceneNodeComponen
       enabled: existing?.enabled ?? true,
       props: nextProps,
       metadata: clonedMetadata,
+    }
+  }
+
+  const existingGuideboard = normalized[GUIDEBOARD_COMPONENT_TYPE] as
+    | SceneNodeComponentState<GuideboardComponentProps>
+    | undefined
+  if (existingGuideboard) {
+    const nextProps = cloneGuideboardComponentProps(
+      clampGuideboardComponentProps(existingGuideboard.props as Partial<GuideboardComponentProps>),
+    )
+
+    let clonedMetadata: Record<string, unknown> | undefined
+    if (existingGuideboard.metadata) {
+      try {
+        clonedMetadata = structuredClone(existingGuideboard.metadata)
+      } catch (_error) {
+        try {
+          clonedMetadata = JSON.parse(JSON.stringify(existingGuideboard.metadata)) as Record<string, unknown>
+        } catch (_jsonError) {
+          console.warn('Failed to deeply clone guideboard component metadata, using shallow copy', _jsonError)
+          clonedMetadata = { ...existingGuideboard.metadata }
+        }
+      }
+    }
+
+    normalized[GUIDEBOARD_COMPONENT_TYPE] = {
+      id: existingGuideboard.id && existingGuideboard.id.trim().length ? existingGuideboard.id : generateUuid(),
+      type: GUIDEBOARD_COMPONENT_TYPE,
+      enabled: existingGuideboard.enabled ?? true,
+      props: nextProps,
+      metadata: clonedMetadata,
+    }
+  } else if (options.attachGuideboard) {
+    normalized[GUIDEBOARD_COMPONENT_TYPE] = {
+      ...createGuideboardComponentState(node, undefined, { id: generateUuid(), enabled: true }),
     }
   }
 
@@ -1820,6 +1863,91 @@ function viewportSettingsEqual(a: SceneViewportSettings, b: SceneViewportSetting
   )
 }
 
+const GUIDEBOARD_NAME_PATTERN = /^Guideboard(?:\b|$)/i
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
+function clonePlainRecord(source?: Record<string, unknown> | null): Record<string, unknown> | undefined {
+  if (!source) {
+    return undefined
+  }
+  const clone: Record<string, unknown> = {}
+  let hasEntries = false
+
+  for (const [key, rawValue] of Object.entries(source)) {
+    if (rawValue === undefined) {
+      continue
+    }
+    if (Array.isArray(rawValue)) {
+      const clonedArray = rawValue.map((entry) => {
+        if (isPlainRecord(entry)) {
+          return clonePlainRecord(entry) ?? {}
+        }
+        return entry
+      })
+      clone[key] = clonedArray
+      hasEntries = true
+      continue
+    }
+    if (isPlainRecord(rawValue)) {
+      const nested = clonePlainRecord(rawValue)
+      if (nested) {
+        clone[key] = nested
+        hasEntries = true
+      }
+      continue
+    }
+    if (typeof rawValue === 'object') {
+      continue
+    }
+    clone[key] = rawValue
+    hasEntries = true
+  }
+
+  return hasEntries ? clone : undefined
+}
+
+function evaluateGuideboardAttributes(
+  userData: Record<string, unknown> | undefined,
+  nodeName: string | undefined,
+): { sanitizedUserData?: Record<string, unknown>; shouldAttachGuideboard: boolean } {
+  let shouldAttachGuideboard = false
+  let sanitizedUserData: Record<string, unknown> | undefined
+
+  if (userData) {
+    const next: Record<string, unknown> = {}
+    let mutated = false
+
+    for (const [key, value] of Object.entries(userData)) {
+      if (key === 'isGuideboard') {
+        mutated = true
+        if (value === true) {
+          shouldAttachGuideboard = true
+        }
+        continue
+      }
+      next[key] = value
+    }
+
+    sanitizedUserData = mutated ? (Object.keys(next).length ? next : undefined) : userData
+  }
+
+  if (!shouldAttachGuideboard) {
+    const trimmedName = typeof nodeName === 'string' ? nodeName.trim() : ''
+    if (trimmedName.length && GUIDEBOARD_NAME_PATTERN.test(trimmedName)) {
+      shouldAttachGuideboard = true
+    }
+  }
+
+  return { sanitizedUserData, shouldAttachGuideboard }
+}
+
 const initialSceneDocument = createSceneDocument('Sample Scene', {
   nodes: initialNodes,
   materials: initialMaterials,
@@ -2374,11 +2502,18 @@ function cloneEditorFlags(flags?: SceneNodeEditorFlags | null): SceneNodeEditorF
 function cloneNode(node: SceneNode): SceneNode {
   const nodeType = normalizeSceneNodeType(node.nodeType)
   const materials = sceneNodeTypeSupportsMaterials(nodeType) ? cloneNodeMaterials(node.materials) : undefined
+  const clonedUserData = clonePlainRecord(node.userData ?? undefined)
+  const { sanitizedUserData, shouldAttachGuideboard } = evaluateGuideboardAttributes(clonedUserData, node.name)
+  const normalizedComponents = normalizeNodeComponents(
+    { ...node, userData: sanitizedUserData } as SceneNode,
+    node.components,
+    { attachGuideboard: shouldAttachGuideboard },
+  )
   return {
     ...node,
     nodeType,
     materials,
-    components: normalizeNodeComponents(node, node.components),
+    components: normalizedComponents,
     light: node.light
       ? {
           ...node.light,
@@ -2401,6 +2536,7 @@ function cloneNode(node: SceneNode): SceneNode {
         }
       : undefined,
     editorFlags: cloneEditorFlags(node.editorFlags),
+    userData: sanitizedUserData,
   }
 }
 
@@ -5883,7 +6019,10 @@ export const useSceneStore = defineStore('scene', {
           newNode.children = removedPlaceholder.children
         }
 
-        const componentMap = normalizeNodeComponents(newNode, placeholder.components)
+        const { shouldAttachGuideboard: attachGuideboard } = evaluateGuideboardAttributes(undefined, newNode.name)
+        const componentMap = normalizeNodeComponents(newNode, placeholder.components, {
+          attachGuideboard,
+        })
         if (componentMap) {
           newNode.components = componentMap
         }
@@ -6077,6 +6216,7 @@ export const useSceneStore = defineStore('scene', {
         sourceAssetId: sourceAssetId ?? undefined,
         parentId: targetParentId ?? undefined,
         editorFlags: payload.editorFlags,
+        userData: clonePlainRecord(workingObject.userData as Record<string, unknown> | undefined),
       })
 
       if (registerAssetId && assetCache) {
@@ -6176,6 +6316,7 @@ export const useSceneStore = defineStore('scene', {
       components?: SceneNodeComponentMap
       parentId?: string | null
       editorFlags?: SceneNodeEditorFlags
+      userData?: Record<string, unknown>
     }) {
       this.captureHistorySnapshot()
       const id = generateUuid()
@@ -6191,9 +6332,16 @@ export const useSceneStore = defineStore('scene', {
         })
         nodeMaterials = [initialMaterial]
       }
+      const nodeName = payload.name ?? payload.object.name ?? 'Imported Mesh'
+      const initialUserData = clonePlainRecord(
+        (payload.userData ?? payload.object.userData) as Record<string, unknown> | undefined,
+      )
+      const { sanitizedUserData: normalizedUserData, shouldAttachGuideboard } =
+        evaluateGuideboardAttributes(initialUserData, nodeName)
+
       const node: SceneNode = {
         id,
-        name: payload.name ?? payload.object.name ?? 'Imported Mesh',
+        name: nodeName,
         nodeType,
         materials: nodeMaterials,
         position: payload.position ?? { x: 0, y: 0, z: 0 },
@@ -6206,9 +6354,12 @@ export const useSceneStore = defineStore('scene', {
         sourceAssetId: payload.sourceAssetId,
         dynamicMesh: payload.dynamicMesh ? cloneDynamicMeshDefinition(payload.dynamicMesh) : undefined,
         editorFlags: cloneEditorFlags(payload.editorFlags),
+        userData: normalizedUserData,
       }
 
-      node.components = normalizeNodeComponents(node, payload.components)
+      node.components = normalizeNodeComponents(node, payload.components, {
+        attachGuideboard: shouldAttachGuideboard,
+      })
 
       registerRuntimeObject(id, payload.object)
       tagObjectWithNodeId(payload.object, id)

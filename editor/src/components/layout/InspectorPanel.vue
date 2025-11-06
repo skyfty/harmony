@@ -5,6 +5,7 @@ import MaterialPanel from '@/components/inspector/MaterialPanel.vue'
 import LightPanel from '@/components/inspector/LightPanel.vue'
 import TransformPanel from '@/components/inspector/TransformPanel.vue'
 import WallPanel from '@/components/inspector/WallPanel.vue'
+import GuideboardPanel from '@/components/inspector/GuideboardPanel.vue'
 import GroundPanel from '@/components/inspector/GroundPanel.vue'
 import BehaviorPanel from '@/components/inspector/BehaviorPanel.vue'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -14,6 +15,7 @@ import type { BehaviorActionDefinition } from '@schema/behaviors/definitions'
 
 import {
   BEHAVIOR_COMPONENT_TYPE,
+  GUIDEBOARD_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
   componentManager,
 } from '@schema/components'
@@ -329,7 +331,8 @@ function handleAddComponent(type: string) {
 
       <div v-if="nodeComponents.length" class="component-list">
         <div v-for="component in nodeComponents" :key="component.id" class="component-entry" >
-          <WallPanel v-if="component.type === WALL_COMPONENT_TYPE" />
+          <GuideboardPanel v-if="component.type === GUIDEBOARD_COMPONENT_TYPE" />
+          <WallPanel v-else-if="component.type === WALL_COMPONENT_TYPE" />
           <BehaviorPanel
             v-else-if="component.type === BEHAVIOR_COMPONENT_TYPE"
             @open-details="handleOpenBehaviorDetails"

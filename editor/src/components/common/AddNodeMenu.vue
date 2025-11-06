@@ -21,11 +21,12 @@ import { generateUuid } from '@/utils/uuid'
 import { type LightNodeType, type SceneNode } from '@harmony/schema'
 import { determineAssetCategoryId } from '@/stores/assetCatalog'
 import { blobToDataUrl } from '@/utils/blob'
-import { BEHAVIOR_COMPONENT_TYPE } from '@schema/components'
+import { BEHAVIOR_COMPONENT_TYPE, GUIDEBOARD_COMPONENT_TYPE } from '@schema/components'
+import type { GuideboardComponentProps } from '@schema/components'
 import {
   NAMED_BEHAVIOR_SEQUENCES_KEY,
   cloneBehaviorList,
-  createWarpGateBehaviorSequence,
+  createBehaviorSequenceId,
   ensureBehaviorParams,
   getNamedBehaviorSequence,
   normalizeNamedBehaviorSequenceMap,
@@ -782,11 +783,10 @@ function isGuideboardNodeCandidate(node: SceneNode | null | undefined): boolean 
   if (!node) {
     return false
   }
-  const name = node.name?.trim()
-  if (!name) {
-    return false
-  }
-  return /^Guideboard(?:\b|$)/i.test(name)
+  const component = node.components?.[GUIDEBOARD_COMPONENT_TYPE] as
+    | SceneNodeComponentState<GuideboardComponentProps>
+    | undefined
+  return Boolean(component?.enabled)
 }
 
 function findFirstGuideboardUnderParent(parent: SceneNode | null): SceneNode | null {
@@ -1090,20 +1090,95 @@ function initializeWarpGateBehavior(nodeId: string): void {
     return
   }
 
-  const targetNode = viewPointNode ?? parent ?? null
-  const showViewPointSequenceId = resolvePerformSequenceId(targetNode, VIEW_POINT_SHOW_BEHAVIOR_NAME)
-  const hideViewPointSequenceId = resolvePerformSequenceId(targetNode, VIEW_POINT_HIDE_BEHAVIOR_NAME)
+  const sharedTargetNode = viewPointNode ?? parent ?? null
+  const sharedTargetNodeId = sharedTargetNode?.id ?? null
+  const showViewPointSequenceId = resolvePerformSequenceId(sharedTargetNode, VIEW_POINT_SHOW_BEHAVIOR_NAME)
+  const hideViewPointSequenceId = resolvePerformSequenceId(sharedTargetNode, VIEW_POINT_HIDE_BEHAVIOR_NAME)
+  const parentName = parent?.name?.trim() || activeNode.name?.trim() || 'Warp Gate'
 
-  const behaviors = createWarpGateBehaviorSequence({
-    warpGateNodeId: nodeId,
-    viewPointNodeId: viewPointNode?.id ?? null,
-    fallbackNodeId: parent?.id ?? null,
-    showViewPointSequenceId,
-    hideViewPointSequenceId,
-    name: activeNode.name ?? 'Warp Gate',
-  })
+  const clickBehaviorName = `Click ${parentName}`
+  const approachBehaviorName = `Approach ${parentName}`
+  const departBehaviorName = `Depart ${parentName}`
 
-  sceneStore.updateNodeComponentProps(nodeId, behaviorComponent.id, { behaviors })
+  const nextBehaviors: SceneBehavior[] = existing.slice()
+
+  const appendSequence = (
+    action: 'click' | 'approach' | 'depart',
+    name: string,
+    scripts: SceneBehaviorScriptBinding[],
+  ) => {
+    const sequenceId = createBehaviorSequenceId()
+    scripts.forEach((script) => {
+      nextBehaviors.push({
+        id: generateUuid(),
+        name,
+        action,
+        sequenceId,
+        script: ensureBehaviorParams(script),
+      })
+    })
+  }
+
+  appendSequence('click', clickBehaviorName, [
+    {
+      type: 'moveTo',
+      params: {
+        targetNodeId: nodeId,
+        speed: 10,
+        offset: 1,
+      },
+    },
+    {
+      type: 'watch',
+      params: {
+        targetNodeId: sharedTargetNodeId ?? null,
+      },
+    },
+  ])
+
+  appendSequence('approach', approachBehaviorName, [
+    {
+      type: 'hide',
+      params: {
+        targetNodeId: nodeId,
+      },
+    },
+    {
+      type: 'showPurpose',
+      params: {
+        targetNodeId: sharedTargetNodeId ?? null,
+      },
+    },
+    {
+      type: 'trigger',
+      params: {
+        targetNodeId: sharedTargetNodeId ?? null,
+        sequenceId: showViewPointSequenceId ?? null,
+      },
+    },
+  ])
+
+  appendSequence('depart', departBehaviorName, [
+    {
+      type: 'show',
+      params: {
+        targetNodeId: nodeId,
+      },
+    },
+    {
+      type: 'hidePurpose',
+      params: {},
+    },
+    {
+      type: 'trigger',
+      params: {
+        targetNodeId: sharedTargetNodeId ?? null,
+        sequenceId: hideViewPointSequenceId ?? null,
+      },
+    },
+  ])
+
+  sceneStore.updateNodeComponentProps(nodeId, behaviorComponent.id, { behaviors: nextBehaviors })
 }
 
 function handleCreateEmptyNode() {
@@ -1200,7 +1275,6 @@ async function handleCreateGuideboardNode(): Promise<SceneNode | null> {
   guideboardMesh.userData = {
     ...(guideboardMesh.userData ?? {}),
     ignoreGridSnapping: true,
-    guideboard: true,
   }
 
   const guideboardRoot = new THREE.Object3D()
@@ -1209,7 +1283,6 @@ async function handleCreateGuideboardNode(): Promise<SceneNode | null> {
   guideboardRoot.userData = {
     ...(guideboardRoot.userData ?? {}),
     ignoreGridSnapping: true,
-    guideboard: true,
   }
 
   const parent = resolveViewPointParent()
@@ -1241,6 +1314,19 @@ async function handleCreateGuideboardNode(): Promise<SceneNode | null> {
   })
 
   if (created) {
+    let guideboardComponent = created.components?.[GUIDEBOARD_COMPONENT_TYPE] as
+      | SceneNodeComponentState<GuideboardComponentProps>
+      | undefined
+    if (!guideboardComponent) {
+      const added = sceneStore.addNodeComponent(created.id, GUIDEBOARD_COMPONENT_TYPE)
+      if (added) {
+        guideboardComponent = added as unknown as SceneNodeComponentState<GuideboardComponentProps>
+      }
+    }
+    if (guideboardComponent && (guideboardComponent.props as GuideboardComponentProps | undefined)?.initiallyVisible !== false) {
+      sceneStore.updateNodeComponentProps(created.id, guideboardComponent.id, { initiallyVisible: false })
+    }
+
     if (siblingViewPoint) {
       initializeViewPointBehavior(siblingViewPoint.id)
     }
@@ -1321,8 +1407,8 @@ async function handleCreateShowcaseVisit(): Promise<void> {
 
   try {
     applySelectionById(originalSelectionId)
-    const warpGate = await handleCreateWarpGateNode()
-    if (!warpGate) {
+    const guideboard = await handleCreateGuideboardNode()
+    if (!guideboard) {
       return
     }
     applySelectionById(originalSelectionId)
@@ -1331,7 +1417,10 @@ async function handleCreateShowcaseVisit(): Promise<void> {
       return
     }
     applySelectionById(originalSelectionId)
-    await handleCreateGuideboardNode()
+    const warpGate = await handleCreateWarpGateNode()
+    if (!warpGate) {
+      return
+    }
   } finally {
     applySelectionById(originalSelectionId)
   }

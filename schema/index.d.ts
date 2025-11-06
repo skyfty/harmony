@@ -420,6 +420,7 @@ export interface SceneNode {
   downloadProgress?: number;
   downloadStatus?: SceneNodeDownloadStatus;
   downloadError?: string | null;
+  userData?: Record<string, unknown> | null;
 }
 
 export interface GroundSettings {
