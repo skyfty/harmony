@@ -1,0 +1,170 @@
+<template>
+  <view class="bottom-nav">
+    <view class="nav-item" :class="{ active: active === 'home' }" @tap="go('home')">
+      <view class="icon home"></view>
+      <text class="label">首页</text>
+    </view>
+    <view class="nav-item" :class="{ active: active === 'upload' }" @tap="go('upload')">
+      <view class="icon upload"></view>
+      <text class="label">上传</text>
+    </view>
+    <view class="nav-item" :class="{ active: active === 'exhibition' }" @tap="go('exhibition')">
+      <view class="icon exhibition"></view>
+      <text class="label">展览</text>
+    </view>
+    <view class="nav-item" :class="{ active: active === 'profile' }" @tap="go('profile')">
+      <view class="icon profile"></view>
+      <text class="label">我的</text>
+    </view>
+    <view class="nav-item" :class="{ active: active === 'settings' }" @tap="go('settings')">
+      <view class="icon settings"></view>
+      <text class="label">设置</text>
+    </view>
+  </view>
+</template>
+<script setup lang="ts">
+const props = defineProps<{ active: 'home' | 'upload' | 'exhibition' | 'profile' | 'settings' }>();
+const emit = defineEmits<{ (event: 'navigate', value: typeof props.active): void }>();
+
+function go(value: typeof props.active) {
+  if (value === props.active) {
+    return;
+  }
+  emit('navigate', value);
+}
+</script>
+<style scoped lang="scss">
+.bottom-nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  justify-content: space-around;
+  padding: 10px 12px 12px;
+  background: #ffffff;
+  box-shadow: 0 -4px 16px rgba(31, 122, 236, 0.08);
+  z-index: 100;
+}
+
+.nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 20%;
+  color: #8a94a6;
+  font-size: 12px;
+  padding: 6px 0;
+  border-radius: 12px;
+  transition: all 0.2s ease;
+
+  .icon {
+    width: 28px;
+    height: 28px;
+    margin-bottom: 4px;
+    border-radius: 14px;
+    background: linear-gradient(145deg, rgba(63, 151, 255, 0.35), rgba(126, 198, 255, 0.2));
+    position: relative;
+  }
+
+  .icon::before,
+  .icon::after {
+    content: '';
+    position: absolute;
+    background: #ffffff;
+  }
+
+  .icon.home::before {
+    width: 12px;
+    height: 10px;
+    left: 8px;
+    bottom: 6px;
+    border-radius: 2px;
+  }
+
+  .icon.home::after {
+    width: 0;
+    height: 0;
+    left: 7px;
+    top: 6px;
+    border-left: 7px solid transparent;
+    border-right: 7px solid transparent;
+    border-bottom: 6px solid #ffffff;
+  }
+
+  .icon.upload::before {
+    width: 4px;
+    height: 12px;
+    left: 12px;
+    top: 6px;
+    border-radius: 2px;
+  }
+
+  .icon.upload::after {
+    width: 0;
+    height: 0;
+    left: 9px;
+    top: 4px;
+    border-left: 7px solid transparent;
+    border-right: 7px solid transparent;
+    border-bottom: 6px solid #ffffff;
+  }
+
+  .icon.exhibition::before {
+    width: 14px;
+    height: 10px;
+    left: 7px;
+    top: 9px;
+    border-radius: 3px;
+  }
+
+  .icon.exhibition::after {
+    width: 18px;
+    height: 2px;
+    left: 5px;
+    top: 7px;
+    border-radius: 2px;
+  }
+
+  .icon.profile::before {
+    width: 10px;
+    height: 10px;
+    left: 9px;
+    top: 6px;
+    border-radius: 50%;
+  }
+
+  .icon.profile::after {
+    width: 16px;
+    height: 6px;
+    left: 6px;
+    bottom: 6px;
+    border-radius: 3px 3px 6px 6px;
+  }
+
+  .icon.settings::before {
+    width: 12px;
+    height: 12px;
+    left: 8px;
+    top: 8px;
+    border-radius: 50%;
+    border: 2px solid #ffffff;
+    background: transparent;
+  }
+
+  .icon.settings::after {
+    width: 4px;
+    height: 4px;
+    left: 12px;
+    top: 12px;
+    border-radius: 50%;
+  }
+}
+
+.nav-item.active {
+  color: #1f7aec;
+  background: linear-gradient(145deg, rgba(63, 151, 255, 0.16), rgba(126, 198, 255, 0.08));
+  box-shadow: 0 4px 12px rgba(31, 122, 236, 0.12);
+}
+</style>

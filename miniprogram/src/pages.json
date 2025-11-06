@@ -1,6 +1,21 @@
 {
   "pages": [
     {
+      "path": "pages/home/index"
+    },
+    {
+      "path": "pages/upload/index"
+    },
+    {
+      "path": "pages/exhibition/index"
+    },
+    {
+      "path": "pages/profile/index"
+    },
+    {
+      "path": "pages/settings/index"
+    },
+    {
       "path": "pages/index/index"
     },
     {
