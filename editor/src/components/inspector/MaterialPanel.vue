@@ -2,10 +2,12 @@
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
-import type { SceneNodeMaterial } from '@/types/material'
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { cloneTextureSettings, createTextureSettings, type SceneNodeMaterial } from '@/types/material'
 import type { ProjectAsset } from '@/types/project-asset'
 
 type MaterialAsset = ProjectAsset & { type: 'material' }
+type TextureAsset = ProjectAsset & { type: 'image' | 'texture' }
 
 const props = defineProps<{
   disabled?: boolean
@@ -19,6 +21,7 @@ const emit = defineEmits<{
 }>()
 
 const sceneStore = useSceneStore()
+const assetCacheStore = useAssetCacheStore()
 const { selectedNode, selectedNodeId, materials } = storeToRefs(sceneStore)
 
 const nodeMaterials = computed(() => selectedNode.value?.materials ?? [])
@@ -137,23 +140,92 @@ function parseAssetDragPayload(event: DragEvent): { assetId: string } | null {
   return null
 }
 
-function resolveMaterialAssetFromEvent(event: DragEvent): MaterialAsset | null {
+function resolveProjectAssetFromEvent(event: DragEvent): ProjectAsset | null {
   const payload = parseAssetDragPayload(event)
   if (!payload) {
     return null
   }
   const asset = sceneStore.getAsset(payload.assetId)
-  if (!asset || asset.type !== 'material') {
+  if (!asset) {
     return null
   }
-  return asset as MaterialAsset
+  return asset
+}
+
+function isMaterialAsset(asset: ProjectAsset): asset is MaterialAsset {
+  return asset.type === 'material'
+}
+
+function isTextureAsset(asset: ProjectAsset): asset is TextureAsset {
+  return asset.type === 'image' || asset.type === 'texture'
+}
+
+function resolveMaterialAssetFromEvent(event: DragEvent): MaterialAsset | null {
+  const asset = resolveProjectAssetFromEvent(event)
+  return asset && isMaterialAsset(asset) ? asset : null
+}
+
+function resolveSlotAssetFromEvent(event: DragEvent): MaterialAsset | TextureAsset | null {
+  const asset = resolveProjectAssetFromEvent(event)
+  if (!asset) {
+    return null
+  }
+  if (isMaterialAsset(asset)) {
+    return asset
+  }
+  if (isTextureAsset(asset)) {
+    return asset
+  }
+  return null
+}
+
+function ensureEditableNodeMaterial(slotId: string): SceneNodeMaterial | null {
+  if (!selectedNodeId.value) {
+    return null
+  }
+  let entry = nodeMaterials.value.find((item) => item.id === slotId) ?? null
+  if (!entry) {
+    return null
+  }
+  if (!entry.materialId) {
+    return entry
+  }
+  const detached = sceneStore.assignNodeMaterial(selectedNodeId.value, slotId, null)
+  if (!detached) {
+    return null
+  }
+  entry = nodeMaterials.value.find((item) => item.id === slotId) ?? null
+  return entry ?? null
+}
+
+function applyAlbedoTexture(slotId: string, asset: TextureAsset): boolean {
+  const editable = ensureEditableNodeMaterial(slotId)
+  if (!editable || !selectedNodeId.value) {
+    return false
+  }
+  const settings = editable.textures?.albedo?.settings
+    ? cloneTextureSettings(editable.textures.albedo.settings)
+    : createTextureSettings()
+  sceneStore.updateNodeMaterialProps(selectedNodeId.value, slotId, {
+    textures: {
+      albedo: {
+        assetId: asset.id,
+        name: asset.name,
+        settings,
+      },
+    },
+  })
+  void assetCacheStore.downloaProjectAsset(asset).catch((error: unknown) => {
+    console.warn('Failed to cache texture asset', error)
+  })
+  return true
 }
 
 function handleSlotDragOver(slotId: string, event: DragEvent) {
   if (props.disabled || !selectedNodeId.value) {
     return
   }
-  const asset = resolveMaterialAssetFromEvent(event)
+  const asset = resolveSlotAssetFromEvent(event)
   if (!asset) {
     return
   }
@@ -181,19 +253,35 @@ function handleSlotDrop(slotId: string, event: DragEvent) {
   if (props.disabled || !selectedNodeId.value) {
     return
   }
-  const asset = resolveMaterialAssetFromEvent(event)
+  const asset = resolveProjectAssetFromEvent(event)
   if (!asset) {
+    return
+  }
+  const materialAsset = isMaterialAsset(asset) ? asset : null
+  const textureAsset = isTextureAsset(asset) ? (asset as TextureAsset) : null
+  if (!materialAsset && !textureAsset) {
     return
   }
   event.preventDefault()
   event.stopPropagation()
   dragOverSlotId.value = null
   isListDragActive.value = false
-  const assigned = sceneStore.assignNodeMaterial(selectedNodeId.value, slotId, asset.id)
-  if (assigned) {
-    internalActiveId.value = slotId
-    emit('update:active-node-material-id', slotId)
-    emit('open-details', slotId)
+  if (materialAsset) {
+    const assigned = sceneStore.assignNodeMaterial(selectedNodeId.value, slotId, materialAsset.id)
+    if (assigned) {
+      internalActiveId.value = slotId
+      emit('update:active-node-material-id', slotId)
+      emit('open-details', slotId)
+    }
+    return
+  }
+  if (textureAsset) {
+    const applied = applyAlbedoTexture(slotId, textureAsset)
+    if (applied) {
+      internalActiveId.value = slotId
+      emit('update:active-node-material-id', slotId)
+      emit('open-details', slotId)
+    }
   }
 }
 

@@ -1269,6 +1269,11 @@ async function handleCreateViewPointNode(): Promise<SceneNode | null> {
   })
 
   if (created) {
+    // Ensure the default material is double-sided for better visibility
+    const primaryMaterial = created.materials?.[0] ?? null
+    if (primaryMaterial) {
+      sceneStore.updateNodeMaterialProps(created.id, primaryMaterial.id, { side: 'double' })
+    }
     let viewPointComponent = created.components?.[VIEW_POINT_COMPONENT_TYPE] as
       | SceneNodeComponentState<ViewPointComponentProps>
       | undefined
@@ -1338,6 +1343,11 @@ async function handleCreateGuideboardNode(): Promise<SceneNode | null> {
   })
 
   if (created) {
+    // Ensure the default material is double-sided for better visibility
+    const primaryMaterial = created.materials?.[0] ?? null
+    if (primaryMaterial) {
+      sceneStore.updateNodeMaterialProps(created.id, primaryMaterial.id, { side: 'double' })
+    }
     let guideboardComponent = created.components?.[GUIDEBOARD_COMPONENT_TYPE] as
       | SceneNodeComponentState<GuideboardComponentProps>
       | undefined
@@ -1409,6 +1419,11 @@ async function handleCreateWarpGateNode(): Promise<SceneNode | null> {
   })
 
   if (created) {
+    // Ensure the default material is double-sided for better visibility
+    const primaryMaterial = created.materials?.[0] ?? null
+    if (primaryMaterial) {
+      sceneStore.updateNodeMaterialProps(created.id, primaryMaterial.id, { side: 'double' })
+    }
     let warpGateComponent = created.components?.[WARP_GATE_COMPONENT_TYPE] as
       | SceneNodeComponentState<WarpGateComponentProps>
       | undefined
