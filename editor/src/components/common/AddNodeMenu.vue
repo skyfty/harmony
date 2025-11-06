@@ -1403,7 +1403,7 @@ async function handleCreateWarpGateNode(): Promise<SceneNode | null> {
   const parentId = parent.id
   const referencePosition = computeViewPointWorldPosition(parent, WARP_GATE_RADIUS)
   const spawnPosition = referencePosition ? referencePosition.clone() : new THREE.Vector3(0, 0, 0)
-  spawnPosition.y += WARP_GATE_ELEVATION
+  spawnPosition.y = WARP_GATE_ELEVATION
 
   const created = await sceneStore.addModelNode({
     object: warpGateRoot,
