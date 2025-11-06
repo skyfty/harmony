@@ -30,30 +30,39 @@
         <text class="section-title">最新展览</text>
         <text class="section-more">查看全部</text>
       </view>
-      <scroll-view scroll-x class="exhibition-scroll">
-        <view
-          class="exhibition-card"
-          v-for="card in exhibitionCards"
-          :key="card.id"
-        >
-          <view class="card-cover" :style="{ background: card.gradient }"></view>
-          <view class="card-info">
-            <text class="card-name">{{ card.name }}</text>
-            <text class="card-meta">{{ card.meta }}</text>
+      <view class="works-grid">
+        <view class="work-card" v-for="card in exhibitionCards" :key="card.id">
+          <view class="work-thumb" :style="{ background: card.gradient }"></view>
+          <view class="work-info">
+            <text class="work-name">{{ card.name }}</text>
+            <text class="work-meta">{{ card.meta }}</text>
           </view>
         </view>
-      </scroll-view>
+      </view>
     </view>
 
     <view class="section">
       <view class="section-header">
         <text class="section-title">热门作品</text>
-        <text class="section-more">更多</text>
+        <text class="section-more" @tap="goWorksList">更多</text>
       </view>
       <view class="works-grid">
-        <view class="work-item" v-for="work in works" :key="work.id">
+        <view class="work-card" v-for="work in works" :key="work.id">
           <view class="work-thumb" :style="{ background: work.gradient }"></view>
-          <text class="work-name">{{ work.name }}</text>
+          <view class="work-info">
+            <text class="work-name">{{ work.name }}</text>
+            <text class="work-meta">{{ work.meta }}</text>
+            <view class="work-stats">
+              <view class="stat-item">
+                <text class="stat-icon">★</text>
+                <text class="stat-value">{{ work.rating }}</text>
+              </view>
+              <view class="stat-item">
+                <text class="stat-icon">❤</text>
+                <text class="stat-value">{{ work.likes }}</text>
+              </view>
+            </view>
+          </view>
         </view>
       </view>
     </view>
@@ -83,10 +92,10 @@ const exhibitionCards = computed(() => [
 ]);
 
 const works = computed(() => [
-  { id: 'w1', name: '抽象雕塑', gradient: 'linear-gradient(135deg, #ffe1ec, #ffd6f6)' },
-  { id: 'w2', name: '空间构成', gradient: 'linear-gradient(135deg, #d9f7ff, #c0f1ff)' },
-  { id: 'w3', name: '光影叙事', gradient: 'linear-gradient(135deg, #e3f4ff, #e8e3ff)' },
-  { id: 'w4', name: '数字地景', gradient: 'linear-gradient(135deg, #fff2d9, #ffe5c2)' },
+  { id: 'w1', name: '抽象雕塑', meta: '展览热度 2.4K', rating: '4.8', likes: 236, gradient: 'linear-gradient(135deg, #ffe1ec, #ffd6f6)' },
+  { id: 'w2', name: '空间构成', meta: '展览热度 2.0K', rating: '4.6', likes: 198, gradient: 'linear-gradient(135deg, #d9f7ff, #c0f1ff)' },
+  { id: 'w3', name: '光影叙事', meta: '展览热度 1.7K', rating: '4.9', likes: 321, gradient: 'linear-gradient(135deg, #e3f4ff, #e8e3ff)' },
+  { id: 'w4', name: '数字地景', meta: '展览热度 1.5K', rating: '4.7', likes: 178, gradient: 'linear-gradient(135deg, #fff2d9, #ffe5c2)' },
 ]);
 
 const routes: Record<NavKey, string> = {
@@ -103,6 +112,10 @@ function handleNavigate(target: NavKey) {
     return;
   }
   uni.redirectTo({ url: route });
+}
+
+function goWorksList() {
+  uni.navigateTo({ url: '/pages/works/index' });
 }
 </script>
 <style scoped lang="scss">
@@ -209,6 +222,36 @@ function handleNavigate(target: NavKey) {
   box-shadow: 0 6px 16px rgba(31, 122, 236, 0.08);
 }
 
+
+.work-stats {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.stat-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(31, 122, 236, 0.08);
+  padding: 4px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  color: #1f1f1f;
+}
+
+.stat-item:last-child .stat-icon {
+  color: #ff6f91;
+}
+
+.stat-icon {
+  color: #ffaf42;
+  font-size: 11px;
+}
+
+.stat-value {
+  font-size: 12px;
+}
 .panel-title {
   font-size: 16px;
   font-weight: 600;
@@ -256,68 +299,39 @@ function handleNavigate(target: NavKey) {
   color: #1f7aec;
 }
 
-.exhibition-scroll {
-  display: flex;
-  flex-direction: row;
+.works-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
 }
 
-.exhibition-card {
-  width: 160px;
-  padding: 12px;
-  border-radius: 16px;
-  background: #f2f6ff;
-  margin-right: 16px;
+.work-card {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
-.card-cover {
+.work-thumb {
   width: 100%;
-  height: 90px;
-  border-radius: 14px;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+  height: 110px;
+  border-radius: 18px;
+  box-shadow: 0 12px 24px rgba(31, 122, 236, 0.12);
 }
 
-.card-info {
+.work-info {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.card-name {
-  font-size: 15px;
-  font-weight: 600;
-  color: #263248;
-}
-
-.card-meta {
-  font-size: 12px;
-  color: #75819b;
-}
-
-.works-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
-}
-
-.work-item {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.work-thumb {
-  width: 100%;
-  height: 96px;
-  border-radius: 14px;
-  box-shadow: 0 10px 24px rgba(31, 122, 236, 0.12);
-}
-
 .work-name {
   font-size: 14px;
-  color: #263248;
+  font-weight: 600;
+  color: #1f1f1f;
+}
+
+.work-meta {
+  font-size: 12px;
+  color: #8a94a6;
 }
 </style>

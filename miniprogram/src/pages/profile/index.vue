@@ -29,7 +29,7 @@
     <view class="section">
       <view class="section-header">
         <text class="section-title">我的作品</text>
-        <text class="section-action">查看全部</text>
+        <text class="section-action" @tap="goWorksList">更多</text>
       </view>
       <view class="works-grid">
         <view class="work-card" v-for="work in works" :key="work.id">
@@ -37,6 +37,16 @@
           <view class="work-info">
             <text class="work-name">{{ work.name }}</text>
             <text class="work-meta">{{ work.meta }}</text>
+            <view class="work-stats">
+              <view class="stat-item">
+                <text class="stat-icon">★</text>
+                <text class="stat-value">{{ work.rating }}</text>
+              </view>
+              <view class="stat-item">
+                <text class="stat-icon">❤</text>
+                <text class="stat-value">{{ work.likes }}</text>
+              </view>
+            </view>
           </view>
         </view>
       </view>
@@ -74,10 +84,10 @@ const stats = [
 ];
 
 const works = [
-  { id: 'w1', name: '沉浸式雕塑', meta: '曝光 2.1K', gradient: 'linear-gradient(135deg, #ffe0f2, #ffd0ec)' },
-  { id: 'w2', name: '未来展厅', meta: '曝光 1.8K', gradient: 'linear-gradient(135deg, #dff5ff, #c6ebff)' },
-  { id: 'w3', name: '光影序曲', meta: '曝光 1.6K', gradient: 'linear-gradient(135deg, #fff0ce, #ffe2a8)' },
-  { id: 'w4', name: '环境剧场', meta: '曝光 1.1K', gradient: 'linear-gradient(135deg, #e7e4ff, #f1eeff)' },
+  { id: 'w1', name: '沉浸式雕塑', meta: '曝光 2.1K', rating: '4.8', likes: 236, gradient: 'linear-gradient(135deg, #ffe0f2, #ffd0ec)' },
+  { id: 'w2', name: '未来展厅', meta: '曝光 1.8K', rating: '4.6', likes: 198, gradient: 'linear-gradient(135deg, #dff5ff, #c6ebff)' },
+  { id: 'w3', name: '光影序曲', meta: '曝光 1.6K', rating: '4.9', likes: 321, gradient: 'linear-gradient(135deg, #fff0ce, #ffe2a8)' },
+  { id: 'w4', name: '环境剧场', meta: '曝光 1.1K', rating: '4.7', likes: 178, gradient: 'linear-gradient(135deg, #e7e4ff, #f1eeff)' },
 ];
 
 const todos = [
@@ -99,6 +109,10 @@ function handleNavigate(target: NavKey) {
     return;
   }
   uni.redirectTo({ url: route });
+}
+
+function goWorksList() {
+  uni.navigateTo({ url: '/pages/works/index' });
 }
 </script>
 <style scoped lang="scss">
@@ -321,6 +335,36 @@ function handleNavigate(target: NavKey) {
 .work-meta {
   font-size: 12px;
   color: #8a94a6;
+}
+
+.work-stats {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.stat-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(31, 122, 236, 0.08);
+  padding: 4px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  color: #1f1f1f;
+}
+
+.stat-item:last-child .stat-icon {
+  color: #ff6f91;
+}
+
+.stat-icon {
+  color: #ffaf42;
+  font-size: 11px;
+}
+
+.stat-value {
+  font-size: 12px;
 }
 
 .todo-list {
