@@ -11,6 +11,7 @@ import Pica from 'pica'
 
 import type {
   SceneNode,
+  SceneNodeComponentState,
   SceneMaterialTextureSlot,
   SceneMaterialTextureRef,
   SceneNodeMaterial,
@@ -56,6 +57,8 @@ import type { BuildTool } from '@/types/build-tool'
 import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache } from '@/utils/groundMesh'
 import { createWallGroup, updateWallGroup } from '@/utils/wallMesh'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
+import { VIEW_POINT_COMPONENT_TYPE } from '@schema/components'
+import type { ViewPointComponentProps } from '@schema/components'
 
 
 const props = withDefaults(defineProps<{
@@ -5393,15 +5396,24 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
 // Ensures editor-only view point markers keep a consistent world-space scale.
 function applyViewPointScaleConstraint(object: THREE.Object3D, node: SceneNode) {
   const flags = node.editorFlags ?? null
-  const isViewPointCandidate = Boolean(object.userData?.viewPoint)
-    || (flags?.editorOnly && flags?.ignoreGridSnapping && node.nodeType === 'Sphere')
+  const viewPointComponent = node.components?.[VIEW_POINT_COMPONENT_TYPE] as
+    | SceneNodeComponentState<ViewPointComponentProps>
+    | undefined
+  const hasEnabledComponent = viewPointComponent?.enabled === true
+  const isViewPointCandidate =
+    hasEnabledComponent ||
+    Boolean(object.userData?.viewPoint) ||
+    (flags?.editorOnly && flags?.ignoreGridSnapping && node.nodeType === 'Sphere')
 
   if (!isViewPointCandidate) {
     return
   }
 
   const maybeTargets: THREE.Object3D[] = []
-  if (object.userData?.viewPoint) {
+  if (hasEnabledComponent && !maybeTargets.includes(object)) {
+    maybeTargets.push(object)
+  }
+  if (object.userData?.viewPoint && !maybeTargets.includes(object)) {
     maybeTargets.push(object)
   }
   object.traverse((child) => {

@@ -106,10 +106,17 @@ import {
   ASSETS_ROOT_DIRECTORY_ID,
   PACKAGES_ROOT_DIRECTORY_ID,
 } from './assetCatalog'
-import type { GuideboardComponentProps, WallComponentProps } from '@schema/components'
+import type {
+  GuideboardComponentProps,
+  ViewPointComponentProps,
+  WallComponentProps,
+  WarpGateComponentProps,
+} from '@schema/components'
 import {
   WALL_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
+  VIEW_POINT_COMPONENT_TYPE,
+  WARP_GATE_COMPONENT_TYPE,
   BEHAVIOR_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_THICKNESS,
@@ -122,6 +129,12 @@ import {
   clampGuideboardComponentProps,
   cloneGuideboardComponentProps,
   createGuideboardComponentState,
+  clampViewPointComponentProps,
+  cloneViewPointComponentProps,
+  createViewPointComponentState,
+  clampWarpGateComponentProps,
+  cloneWarpGateComponentProps,
+  createWarpGateComponentState,
   componentManager,
   resolveWallComponentPropsFromMesh,
 } from '@schema/components'
@@ -308,7 +321,12 @@ function cloneComponentState(state: SceneNodeComponentState<any>, typeOverride?:
 function normalizeNodeComponents(
   node: SceneNode,
   components?: SceneNodeComponentMap,
-  options: { attachGuideboard?: boolean } = {},
+  options: {
+    attachGuideboard?: boolean
+    attachViewPoint?: boolean
+    attachWarpGate?: boolean
+    viewPointOverrides?: Partial<ViewPointComponentProps>
+  } = {},
 ): SceneNodeComponentMap | undefined {
   const normalized: SceneNodeComponentMap = {}
 
@@ -389,6 +407,76 @@ function normalizeNodeComponents(
   } else if (options.attachGuideboard) {
     normalized[GUIDEBOARD_COMPONENT_TYPE] = {
       ...createGuideboardComponentState(node, undefined, { id: generateUuid(), enabled: true }),
+    }
+  }
+
+  const existingViewPoint = normalized[VIEW_POINT_COMPONENT_TYPE] as
+    | SceneNodeComponentState<ViewPointComponentProps>
+    | undefined
+  if (existingViewPoint) {
+    const nextProps = cloneViewPointComponentProps(
+      clampViewPointComponentProps(existingViewPoint.props as Partial<ViewPointComponentProps>),
+    )
+
+    let clonedMetadata: Record<string, unknown> | undefined
+    if (existingViewPoint.metadata) {
+      try {
+        clonedMetadata = structuredClone(existingViewPoint.metadata)
+      } catch (_error) {
+        try {
+          clonedMetadata = JSON.parse(JSON.stringify(existingViewPoint.metadata)) as Record<string, unknown>
+        } catch (_jsonError) {
+          console.warn('Failed to deeply clone view point component metadata, using shallow copy', _jsonError)
+          clonedMetadata = { ...existingViewPoint.metadata }
+        }
+      }
+    }
+
+    normalized[VIEW_POINT_COMPONENT_TYPE] = {
+      id: existingViewPoint.id && existingViewPoint.id.trim().length ? existingViewPoint.id : generateUuid(),
+      type: VIEW_POINT_COMPONENT_TYPE,
+      enabled: existingViewPoint.enabled ?? true,
+      props: nextProps,
+      metadata: clonedMetadata,
+    }
+  } else if (options.attachViewPoint) {
+    normalized[VIEW_POINT_COMPONENT_TYPE] = {
+      ...createViewPointComponentState(node, options.viewPointOverrides, { id: generateUuid(), enabled: true }),
+    }
+  }
+
+  const existingWarpGate = normalized[WARP_GATE_COMPONENT_TYPE] as
+    | SceneNodeComponentState<WarpGateComponentProps>
+    | undefined
+  if (existingWarpGate) {
+    const nextProps = cloneWarpGateComponentProps(
+      clampWarpGateComponentProps(existingWarpGate.props as Partial<WarpGateComponentProps>),
+    )
+
+    let clonedMetadata: Record<string, unknown> | undefined
+    if (existingWarpGate.metadata) {
+      try {
+        clonedMetadata = structuredClone(existingWarpGate.metadata)
+      } catch (_error) {
+        try {
+          clonedMetadata = JSON.parse(JSON.stringify(existingWarpGate.metadata)) as Record<string, unknown>
+        } catch (_jsonError) {
+          console.warn('Failed to deeply clone warp gate component metadata, using shallow copy', _jsonError)
+          clonedMetadata = { ...existingWarpGate.metadata }
+        }
+      }
+    }
+
+    normalized[WARP_GATE_COMPONENT_TYPE] = {
+      id: existingWarpGate.id && existingWarpGate.id.trim().length ? existingWarpGate.id : generateUuid(),
+      type: WARP_GATE_COMPONENT_TYPE,
+      enabled: existingWarpGate.enabled ?? true,
+      props: nextProps,
+      metadata: clonedMetadata,
+    }
+  } else if (options.attachWarpGate) {
+    normalized[WARP_GATE_COMPONENT_TYPE] = {
+      ...createWarpGateComponentState(node, undefined, { id: generateUuid(), enabled: true }),
     }
   }
 
@@ -1913,6 +2001,58 @@ function clonePlainRecord(source?: Record<string, unknown> | null): Record<strin
   return hasEntries ? clone : undefined
 }
 
+function evaluateViewPointAttributes(
+  userData: Record<string, unknown> | undefined,
+): {
+  sanitizedUserData?: Record<string, unknown>
+  shouldAttachViewPoint: boolean
+  componentOverrides?: Partial<ViewPointComponentProps>
+} {
+  let shouldAttachViewPoint = false
+  let sanitizedUserData: Record<string, unknown> | undefined = userData
+  let componentOverrides: Partial<ViewPointComponentProps> | undefined
+
+  if (!userData) {
+    return { sanitizedUserData, shouldAttachViewPoint, componentOverrides }
+  }
+
+  const next: Record<string, unknown> = {}
+  let mutated = false
+  let overrideVisibility: boolean | undefined
+
+  for (const [key, value] of Object.entries(userData)) {
+    if (key === 'viewPoint') {
+      mutated = true
+      if (value === true) {
+        shouldAttachViewPoint = true
+      }
+      continue
+    }
+    if (key === 'viewPointInitiallyVisible') {
+      mutated = true
+      if (value === true) {
+        overrideVisibility = true
+      } else if (value === false) {
+        overrideVisibility = false
+      }
+      continue
+    }
+    if (key === 'viewPointRadius' || key === 'viewPointBaseScale') {
+      mutated = true
+      continue
+    }
+    next[key] = value
+  }
+
+  if (overrideVisibility !== undefined) {
+    componentOverrides = { ...(componentOverrides ?? {}), initiallyVisible: overrideVisibility }
+  }
+
+  sanitizedUserData = mutated ? (Object.keys(next).length ? next : undefined) : userData
+
+  return { sanitizedUserData, shouldAttachViewPoint, componentOverrides }
+}
+
 function evaluateGuideboardAttributes(
   userData: Record<string, unknown> | undefined,
   nodeName: string | undefined,
@@ -1946,6 +2086,32 @@ function evaluateGuideboardAttributes(
   }
 
   return { sanitizedUserData, shouldAttachGuideboard }
+}
+
+function evaluateWarpGateAttributes(
+  userData: Record<string, unknown> | undefined,
+): { sanitizedUserData?: Record<string, unknown>; shouldAttachWarpGate: boolean } {
+  if (!userData) {
+    return { sanitizedUserData: undefined, shouldAttachWarpGate: false }
+  }
+
+  const next: Record<string, unknown> = {}
+  let mutated = false
+  let shouldAttachWarpGate = false
+
+  for (const [key, value] of Object.entries(userData)) {
+    if (key === 'warpGate') {
+      mutated = true
+      if (value === true) {
+        shouldAttachWarpGate = true
+      }
+      continue
+    }
+    next[key] = value
+  }
+
+  const sanitizedUserData = mutated ? (Object.keys(next).length ? next : undefined) : userData
+  return { sanitizedUserData, shouldAttachWarpGate }
 }
 
 const initialSceneDocument = createSceneDocument('Sample Scene', {
@@ -2503,11 +2669,18 @@ function cloneNode(node: SceneNode): SceneNode {
   const nodeType = normalizeSceneNodeType(node.nodeType)
   const materials = sceneNodeTypeSupportsMaterials(nodeType) ? cloneNodeMaterials(node.materials) : undefined
   const clonedUserData = clonePlainRecord(node.userData ?? undefined)
-  const { sanitizedUserData, shouldAttachGuideboard } = evaluateGuideboardAttributes(clonedUserData, node.name)
+  const viewPointResult = evaluateViewPointAttributes(clonedUserData)
+  const guideboardResult = evaluateGuideboardAttributes(viewPointResult.sanitizedUserData, node.name)
+  const warpGateResult = evaluateWarpGateAttributes(guideboardResult.sanitizedUserData)
   const normalizedComponents = normalizeNodeComponents(
-    { ...node, userData: sanitizedUserData } as SceneNode,
+    { ...node, userData: warpGateResult.sanitizedUserData } as SceneNode,
     node.components,
-    { attachGuideboard: shouldAttachGuideboard },
+    {
+      attachGuideboard: guideboardResult.shouldAttachGuideboard,
+      attachViewPoint: viewPointResult.shouldAttachViewPoint,
+      attachWarpGate: warpGateResult.shouldAttachWarpGate,
+      viewPointOverrides: viewPointResult.componentOverrides,
+    },
   )
   return {
     ...node,
@@ -2536,7 +2709,7 @@ function cloneNode(node: SceneNode): SceneNode {
         }
       : undefined,
     editorFlags: cloneEditorFlags(node.editorFlags),
-    userData: sanitizedUserData,
+    userData: warpGateResult.sanitizedUserData,
   }
 }
 
@@ -6019,9 +6192,15 @@ export const useSceneStore = defineStore('scene', {
           newNode.children = removedPlaceholder.children
         }
 
-        const { shouldAttachGuideboard: attachGuideboard } = evaluateGuideboardAttributes(undefined, newNode.name)
+        const viewPointEvaluation = evaluateViewPointAttributes(undefined)
+        const guideboardEvaluation = evaluateGuideboardAttributes(viewPointEvaluation.sanitizedUserData, newNode.name)
+        const warpGateEvaluation = evaluateWarpGateAttributes(guideboardEvaluation.sanitizedUserData)
+        newNode.userData = warpGateEvaluation.sanitizedUserData
         const componentMap = normalizeNodeComponents(newNode, placeholder.components, {
-          attachGuideboard,
+          attachGuideboard: guideboardEvaluation.shouldAttachGuideboard,
+          attachViewPoint: viewPointEvaluation.shouldAttachViewPoint,
+          attachWarpGate: warpGateEvaluation.shouldAttachWarpGate,
+          viewPointOverrides: viewPointEvaluation.componentOverrides,
         })
         if (componentMap) {
           newNode.components = componentMap
@@ -6336,8 +6515,9 @@ export const useSceneStore = defineStore('scene', {
       const initialUserData = clonePlainRecord(
         (payload.userData ?? payload.object.userData) as Record<string, unknown> | undefined,
       )
-      const { sanitizedUserData: normalizedUserData, shouldAttachGuideboard } =
-        evaluateGuideboardAttributes(initialUserData, nodeName)
+      const viewPointEvaluation = evaluateViewPointAttributes(initialUserData)
+      const guideboardEvaluation = evaluateGuideboardAttributes(viewPointEvaluation.sanitizedUserData, nodeName)
+      const warpGateEvaluation = evaluateWarpGateAttributes(guideboardEvaluation.sanitizedUserData)
 
       const node: SceneNode = {
         id,
@@ -6354,11 +6534,14 @@ export const useSceneStore = defineStore('scene', {
         sourceAssetId: payload.sourceAssetId,
         dynamicMesh: payload.dynamicMesh ? cloneDynamicMeshDefinition(payload.dynamicMesh) : undefined,
         editorFlags: cloneEditorFlags(payload.editorFlags),
-        userData: normalizedUserData,
+        userData: warpGateEvaluation.sanitizedUserData,
       }
 
       node.components = normalizeNodeComponents(node, payload.components, {
-        attachGuideboard: shouldAttachGuideboard,
+        attachGuideboard: guideboardEvaluation.shouldAttachGuideboard,
+        attachViewPoint: viewPointEvaluation.shouldAttachViewPoint,
+        attachWarpGate: warpGateEvaluation.shouldAttachWarpGate,
+        viewPointOverrides: viewPointEvaluation.componentOverrides,
       })
 
       registerRuntimeObject(id, payload.object)

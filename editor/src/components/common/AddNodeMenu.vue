@@ -21,8 +21,17 @@ import { generateUuid } from '@/utils/uuid'
 import { type LightNodeType, type SceneNode } from '@harmony/schema'
 import { determineAssetCategoryId } from '@/stores/assetCatalog'
 import { blobToDataUrl } from '@/utils/blob'
-import { BEHAVIOR_COMPONENT_TYPE, GUIDEBOARD_COMPONENT_TYPE } from '@schema/components'
-import type { GuideboardComponentProps } from '@schema/components'
+import {
+  BEHAVIOR_COMPONENT_TYPE,
+  GUIDEBOARD_COMPONENT_TYPE,
+  VIEW_POINT_COMPONENT_TYPE,
+  WARP_GATE_COMPONENT_TYPE,
+} from '@schema/components'
+import type {
+  GuideboardComponentProps,
+  ViewPointComponentProps,
+  WarpGateComponentProps,
+} from '@schema/components'
 import {
   NAMED_BEHAVIOR_SEQUENCES_KEY,
   cloneBehaviorList,
@@ -767,6 +776,12 @@ function isViewPointNodeCandidate(node: SceneNode | null | undefined): boolean {
   if (!node) {
     return false
   }
+  const component = node.components?.[VIEW_POINT_COMPONENT_TYPE] as
+    | SceneNodeComponentState<ViewPointComponentProps>
+    | undefined
+  if (component?.enabled) {
+    return true
+  }
   const flags = node.editorFlags ?? {}
   return node.nodeType === 'Sphere' && Boolean(flags.editorOnly) && Boolean(flags.ignoreGridSnapping)
 }
@@ -1254,6 +1269,15 @@ async function handleCreateViewPointNode(): Promise<SceneNode | null> {
   })
 
   if (created) {
+    let viewPointComponent = created.components?.[VIEW_POINT_COMPONENT_TYPE] as
+      | SceneNodeComponentState<ViewPointComponentProps>
+      | undefined
+    if (!viewPointComponent) {
+      const added = sceneStore.addNodeComponent(created.id, VIEW_POINT_COMPONENT_TYPE)
+      if (added) {
+        viewPointComponent = added as unknown as SceneNodeComponentState<ViewPointComponentProps>
+      }
+    }
     initializeViewPointBehavior(created.id)
   }
 
@@ -1385,6 +1409,15 @@ async function handleCreateWarpGateNode(): Promise<SceneNode | null> {
   })
 
   if (created) {
+    let warpGateComponent = created.components?.[WARP_GATE_COMPONENT_TYPE] as
+      | SceneNodeComponentState<WarpGateComponentProps>
+      | undefined
+    if (!warpGateComponent) {
+      const added = sceneStore.addNodeComponent(created.id, WARP_GATE_COMPONENT_TYPE)
+      if (added) {
+        warpGateComponent = added as unknown as SceneNodeComponentState<WarpGateComponentProps>
+      }
+    }
     initializeWarpGateBehavior(created.id)
   }
 

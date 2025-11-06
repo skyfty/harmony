@@ -17,6 +17,10 @@ import type {
 } from '@harmony/schema';
 import type { GuideboardComponentProps } from './components/definitions/guideboardComponent';
 import { GUIDEBOARD_COMPONENT_TYPE } from './components/definitions/guideboardComponent';
+import type { ViewPointComponentProps } from './components/definitions/viewPointComponent';
+import { VIEW_POINT_COMPONENT_TYPE } from './components/definitions/viewPointComponent';
+import type { WarpGateComponentProps } from './components/definitions/warpGateComponent';
+import { WARP_GATE_COMPONENT_TYPE } from './components/definitions/warpGateComponent';
 
 type SceneNodeWithExtras = SceneNode & {
   light?: {
@@ -400,8 +404,21 @@ class SceneGraphBuilder {
     if (node.editorFlags?.ignoreGridSnapping) {
       helperData.ignoreGridSnapping = true;
     }
-    if (node.nodeType === 'Sphere' && node.editorFlags?.ignoreGridSnapping) {
+    const viewPointState = node.components?.[VIEW_POINT_COMPONENT_TYPE] as
+      | SceneNodeComponentState<ViewPointComponentProps>
+      | undefined;
+    if (viewPointState?.enabled) {
       helperData.viewPoint = true;
+      const props = viewPointState.props as ViewPointComponentProps | undefined;
+      helperData.viewPointInitiallyVisible = props?.initiallyVisible === true;
+    } else if (node.nodeType === 'Sphere' && node.editorFlags?.ignoreGridSnapping) {
+      helperData.viewPoint = true;
+    }
+    const warpGateState = node.components?.[WARP_GATE_COMPONENT_TYPE] as
+      | SceneNodeComponentState<WarpGateComponentProps>
+      | undefined;
+    if (warpGateState?.enabled) {
+      helperData.warpGate = true;
     }
     placeholder.userData = helperData;
 
@@ -568,6 +585,20 @@ class SceneGraphBuilder {
       metadata.isGuideboard = true;
       const props = guideboardState.props as GuideboardComponentProps | undefined;
       metadata.guideboardInitiallyVisible = props?.initiallyVisible === true;
+    }
+    const viewPointState = node.components?.[VIEW_POINT_COMPONENT_TYPE] as
+      | SceneNodeComponentState<ViewPointComponentProps>
+      | undefined;
+    if (viewPointState?.enabled) {
+      metadata.viewPoint = true;
+      const viewPointProps = viewPointState.props as ViewPointComponentProps | undefined;
+      metadata.viewPointInitiallyVisible = viewPointProps?.initiallyVisible === true;
+    }
+    const warpGateState = node.components?.[WARP_GATE_COMPONENT_TYPE] as
+      | SceneNodeComponentState<WarpGateComponentProps>
+      | undefined;
+    if (warpGateState?.enabled) {
+      metadata.warpGate = true;
     }
   }
 

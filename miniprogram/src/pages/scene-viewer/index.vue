@@ -147,6 +147,8 @@ import {
   behaviorComponentDefinition,
   guideboardComponentDefinition,
   wallComponentDefinition,
+  viewPointComponentDefinition,
+  warpGateComponentDefinition,
   GUIDEBOARD_COMPONENT_TYPE,
 } from '@schema/components';
 import type { GuideboardComponentProps } from '@schema/components';
@@ -302,6 +304,8 @@ const bootstrapFinished = ref(false);
 const previewComponentManager = new ComponentManager();
 previewComponentManager.registerDefinition(wallComponentDefinition);
 previewComponentManager.registerDefinition(guideboardComponentDefinition);
+previewComponentManager.registerDefinition(viewPointComponentDefinition);
+previewComponentManager.registerDefinition(warpGateComponentDefinition);
 previewComponentManager.registerDefinition(behaviorComponentDefinition);
 
 const previewNodeMap = new Map<string, SceneNode>();

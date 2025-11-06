@@ -6,6 +6,8 @@ import LightPanel from '@/components/inspector/LightPanel.vue'
 import TransformPanel from '@/components/inspector/TransformPanel.vue'
 import WallPanel from '@/components/inspector/WallPanel.vue'
 import GuideboardPanel from '@/components/inspector/GuideboardPanel.vue'
+import ViewPointPanel from '@/components/inspector/ViewPointPanel.vue'
+import WarpGatePanel from '@/components/inspector/WarpGatePanel.vue'
 import GroundPanel from '@/components/inspector/GroundPanel.vue'
 import BehaviorPanel from '@/components/inspector/BehaviorPanel.vue'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -16,6 +18,8 @@ import type { BehaviorActionDefinition } from '@schema/behaviors/definitions'
 import {
   BEHAVIOR_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
+  VIEW_POINT_COMPONENT_TYPE,
+  WARP_GATE_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
   componentManager,
 } from '@schema/components'
@@ -332,6 +336,8 @@ function handleAddComponent(type: string) {
       <div v-if="nodeComponents.length" class="component-list">
         <div v-for="component in nodeComponents" :key="component.id" class="component-entry" >
           <GuideboardPanel v-if="component.type === GUIDEBOARD_COMPONENT_TYPE" />
+          <ViewPointPanel v-else-if="component.type === VIEW_POINT_COMPONENT_TYPE" />
+          <WarpGatePanel v-else-if="component.type === WARP_GATE_COMPONENT_TYPE" />
           <WallPanel v-else-if="component.type === WALL_COMPONENT_TYPE" />
           <BehaviorPanel
             v-else-if="component.type === BEHAVIOR_COMPONENT_TYPE"
