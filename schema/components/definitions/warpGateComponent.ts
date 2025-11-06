@@ -49,7 +49,7 @@ class WarpGateComponent extends Component<WarpGateComponentProps> {
 
 const warpGateComponentDefinition: ComponentDefinition<WarpGateComponentProps> = {
   type: WARP_GATE_COMPONENT_TYPE,
-  label: 'Warp Gate Component',
+  label: 'Warp Gate',
   icon: 'mdi-vector-circle',
   order: 50,
   inspector: [],

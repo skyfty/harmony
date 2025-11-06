@@ -1693,17 +1693,7 @@ function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look
 		resolveBehaviorToken(event.token, { type: 'fail', message: 'Camera unavailable' })
 		return
 	}
-	const orbitControls = mapControls ?? null
-	const lookTarget = orbitControls
-		? orbitControls.target.clone()
-		: activeCamera.getWorldDirection(tempDirection).add(activeCamera.position)
-	lookTarget.y = activeCamera.position.y
-	if (orbitControls) {
-		orbitControls.target.copy(lookTarget)
-		orbitControls.update()
-	}
-	activeCamera.lookAt(lookTarget)
-	syncLastFirstPersonStateFromCamera()
+	resetCameraToLevelView()
 	resolveBehaviorToken(event.token, { type: 'continue' })
 }
 

@@ -60,7 +60,7 @@ class GuideboardComponent extends Component<GuideboardComponentProps> {
 
 const guideboardComponentDefinition: ComponentDefinition<GuideboardComponentProps> = {
   type: GUIDEBOARD_COMPONENT_TYPE,
-  label: 'Guideboard Component',
+  label: 'Guideboard',
   icon: 'mdi-sign-direction',
   order: 40,
   inspector: [

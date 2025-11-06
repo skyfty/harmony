@@ -71,7 +71,7 @@ class ViewPointComponent extends Component<ViewPointComponentProps> {
 
 const viewPointComponentDefinition: ComponentDefinition<ViewPointComponentProps> = {
   type: VIEW_POINT_COMPONENT_TYPE,
-  label: 'View Point Component',
+  label: 'View Point',
   icon: 'mdi-eye',
   order: 45,
   inspector: [
