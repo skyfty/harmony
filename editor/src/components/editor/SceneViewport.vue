@@ -114,6 +114,9 @@ let pmremGenerator: THREE.PMREMGenerator | null = null
 let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null
 let fallbackDirectionalLight: THREE.DirectionalLight | null = null
 const skySunPosition = new THREE.Vector3()
+const DEFAULT_SUN_DIRECTION = new THREE.Vector3(0.35, 1, -0.3).normalize()
+const tempSunDirection = new THREE.Vector3()
+let sunDirectionalLight: THREE.DirectionalLight | null = null
 let stats: Stats | null = null
 let statsPanelIndex = 0
 let statsPointerHandler: ((event: MouseEvent) => void) | null = null
@@ -190,7 +193,11 @@ function applyRendererShadowSetting() {
   if (!renderer) {
     return
   }
-  renderer.shadowMap.enabled = Boolean(shadowsEnabled.value)
+  const castShadows = Boolean(shadowsEnabled.value)
+  renderer.shadowMap.enabled = castShadows
+  if (sunDirectionalLight) {
+    sunDirectionalLight.castShadow = castShadows
+  }
 }
 const DEFAULT_BACKGROUND_COLOR = 0x516175
 const GROUND_NODE_ID = 'harmony:ground'
@@ -200,6 +207,8 @@ const FALLBACK_DIRECTIONAL_INTENSITY = 0.65
 const FALLBACK_DIRECTIONAL_SHADOW_MAP_SIZE = 2048
 const SKY_SCALE = 2500
 const SKY_FALLBACK_LIGHT_DISTANCE = 75
+const SKY_SUN_LIGHT_DISTANCE = 150
+const SKY_SUN_LIGHT_MIN_HEIGHT = 12
 
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
@@ -2615,6 +2624,8 @@ function initScene() {
 
   scene.add(ambientLight);
 
+  applySunDirectionToSunLight()
+
   ensureSkyExists()
   scene.add(rootGroup)
   scene.add(gridGroup)
@@ -2793,7 +2804,63 @@ function updateSkyLighting(settings: SceneSkyboxSettings) {
   }
 }
 
+function ensureSunLight(): THREE.DirectionalLight | null {
+  if (!scene) {
+    return null
+  }
+
+  if (!sunDirectionalLight) {
+    const light = new THREE.DirectionalLight(0xffffff, 1.05)
+    light.name = 'SkySunLight'
+    light.castShadow = Boolean(shadowsEnabled.value)
+    light.shadow.mapSize.set(2048, 2048)
+    light.shadow.bias = -0.0001
+    light.shadow.normalBias = 0.02
+    light.shadow.camera.near = 1
+    light.shadow.camera.far = 400
+    light.shadow.camera.left = -200
+    light.shadow.camera.right = 200
+    light.shadow.camera.top = 200
+    light.shadow.camera.bottom = -200
+    sunDirectionalLight = light
+    scene.add(light)
+    scene.add(light.target)
+  } else {
+    if (sunDirectionalLight.parent !== scene) {
+      scene.add(sunDirectionalLight)
+    }
+    if (sunDirectionalLight.target.parent !== scene) {
+      scene.add(sunDirectionalLight.target)
+    }
+  }
+
+  sunDirectionalLight.castShadow = Boolean(shadowsEnabled.value)
+  return sunDirectionalLight
+}
+
+function applySunDirectionToSunLight() {
+  const light = ensureSunLight()
+  if (!light) {
+    return
+  }
+
+  if (skySunPosition.lengthSq() > 1e-6) {
+    tempSunDirection.copy(skySunPosition)
+  } else {
+    tempSunDirection.copy(DEFAULT_SUN_DIRECTION)
+  }
+
+  light.position.copy(tempSunDirection).multiplyScalar(SKY_SUN_LIGHT_DISTANCE)
+  if (light.position.y < SKY_SUN_LIGHT_MIN_HEIGHT) {
+    light.position.y = SKY_SUN_LIGHT_MIN_HEIGHT
+  }
+
+  light.target.position.set(0, 0, 0)
+  light.target.updateMatrixWorld()
+}
+
 function applySunDirectionToFallbackLight() {
+  applySunDirectionToSunLight()
   if (!fallbackDirectionalLight) {
     return
   }
@@ -2940,6 +3007,13 @@ function disposeScene() {
 
   clearLightHelpers()
   disposeSkyResources()
+
+  if (sunDirectionalLight) {
+    sunDirectionalLight.parent?.remove(sunDirectionalLight)
+    sunDirectionalLight.target.parent?.remove(sunDirectionalLight.target)
+    sunDirectionalLight.dispose()
+    sunDirectionalLight = null
+  }
 
   if (scene && fallbackLightGroup) {
     scene.remove(fallbackLightGroup)
@@ -5748,16 +5822,18 @@ function ensureFallbackLighting() {
 
   if (!hasLight) {
     const ambient = new THREE.AmbientLight(0xffffff, FALLBACK_AMBIENT_INTENSITY)
-    const directional = new THREE.DirectionalLight(0xffffff, FALLBACK_DIRECTIONAL_INTENSITY)
-    directional.castShadow = true
-    directional.shadow.mapSize.set(FALLBACK_DIRECTIONAL_SHADOW_MAP_SIZE, FALLBACK_DIRECTIONAL_SHADOW_MAP_SIZE)
-    directional.shadow.normalBias = 0.02
-    directional.shadow.bias = -0.0001
-    directional.target.position.set(0, 0, 0)
     fallbackLightGroup.add(ambient)
-    fallbackLightGroup.add(directional)
-    fallbackLightGroup.add(directional.target)
-    fallbackDirectionalLight = directional
+    if (!sunDirectionalLight) {
+      const directional = new THREE.DirectionalLight(0xffffff, FALLBACK_DIRECTIONAL_INTENSITY)
+      directional.castShadow = true
+      directional.shadow.mapSize.set(FALLBACK_DIRECTIONAL_SHADOW_MAP_SIZE, FALLBACK_DIRECTIONAL_SHADOW_MAP_SIZE)
+      directional.shadow.normalBias = 0.02
+      directional.shadow.bias = -0.0001
+      directional.target.position.set(0, 0, 0)
+      fallbackLightGroup.add(directional)
+      fallbackLightGroup.add(directional.target)
+      fallbackDirectionalLight = directional
+    }
     applySunDirectionToFallbackLight()
   }
 }

@@ -287,8 +287,13 @@ const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
   azimuth: 145,
 };
 const skySunPosition = new THREE.Vector3();
+const DEFAULT_SUN_DIRECTION = new THREE.Vector3(0.35, 1, -0.25).normalize();
+const tempSunDirection = new THREE.Vector3();
+const SKY_SUN_LIGHT_DISTANCE = 150;
+const SKY_SUN_LIGHT_MIN_HEIGHT = 12;
 
 let sky: Sky | null = null;
+let sunDirectionalLight: THREE.DirectionalLight | null = null;
 let pmremGenerator: THREE.PMREMGenerator | null = null;
 let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null;
 let pendingSkyboxSettings: SceneSkyboxSettings | null = null;
@@ -1928,6 +1933,61 @@ function updateSkyLighting(settings: SceneSkyboxSettings) {
   } else if (sunUniform) {
     sunUniform.value = skySunPosition.clone();
   }
+  applySunDirectionToSunLight();
+}
+
+function ensureSunDirectionalLight(): THREE.DirectionalLight | null {
+  const scene = renderContext?.scene ?? null;
+  if (!scene) {
+    return null;
+  }
+
+  if (!sunDirectionalLight) {
+    const light = new THREE.DirectionalLight('#ffffff', 1);
+    light.name = 'SkySunLight';
+    light.castShadow = true;
+    light.shadow.mapSize.set(2048, 2048);
+    light.shadow.bias = -0.0001;
+    light.shadow.normalBias = 0.02;
+    light.shadow.camera.near = 1;
+    light.shadow.camera.far = 400;
+    light.shadow.camera.left = -200;
+    light.shadow.camera.right = 200;
+    light.shadow.camera.top = 200;
+    light.shadow.camera.bottom = -200;
+    sunDirectionalLight = light;
+    scene.add(light);
+    scene.add(light.target);
+  } else {
+    if (sunDirectionalLight.parent !== scene) {
+      scene.add(sunDirectionalLight);
+    }
+    if (sunDirectionalLight.target.parent !== scene) {
+      scene.add(sunDirectionalLight.target);
+    }
+  }
+
+  return sunDirectionalLight;
+}
+
+function applySunDirectionToSunLight(): void {
+  const light = ensureSunDirectionalLight();
+  if (!light) {
+    return;
+  }
+
+  if (skySunPosition.lengthSq() > 1e-6) {
+    tempSunDirection.copy(skySunPosition);
+  } else {
+    tempSunDirection.copy(DEFAULT_SUN_DIRECTION);
+  }
+
+  light.position.copy(tempSunDirection).multiplyScalar(SKY_SUN_LIGHT_DISTANCE);
+  if (light.position.y < SKY_SUN_LIGHT_MIN_HEIGHT) {
+    light.position.y = SKY_SUN_LIGHT_MIN_HEIGHT;
+  }
+  light.target.position.set(0, 0, 0);
+  light.target.updateMatrixWorld();
 }
 
 function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
@@ -2293,6 +2353,7 @@ function teardownRenderer() {
   resetAssetResolutionCaches();
   disposeObject(scene);
   renderer.dispose();
+  sunDirectionalLight = null;
   renderContext = null;
   canvasResult = null;
   currentDocument = null;
@@ -2390,14 +2451,13 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   hidePurposeControls();
   scene.children.forEach((child) => disposeObject(child));
   scene.clear();
+  sunDirectionalLight = null;
   warnings.value = [];
 
   const ambientLight = new THREE.AmbientLight('#ffffff', 0.6);
-  const directionalLight = new THREE.DirectionalLight('#ffffff', 0.6);
-  directionalLight.position.set(8, 12, 6);
-  directionalLight.castShadow = true;
   scene.add(ambientLight);
-  scene.add(directionalLight);
+
+  applySunDirectionToSunLight();
 
   const hemisphericLight = new THREE.HemisphereLight('#d4d8ff', '#f5f2ef', 0.3);
   scene.add(hemisphericLight);

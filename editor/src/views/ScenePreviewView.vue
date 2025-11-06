@@ -144,6 +144,10 @@ const tempBox = new THREE.Box3()
 const tempSphere = new THREE.Sphere()
 const tempPosition = new THREE.Vector3()
 const skySunPosition = new THREE.Vector3()
+const DEFAULT_SUN_DIRECTION = new THREE.Vector3(0.35, 1, -0.25).normalize()
+const tempSunDirection = new THREE.Vector3()
+const SKY_SUN_LIGHT_DISTANCE = 150
+const SKY_SUN_LIGHT_MIN_HEIGHT = 10
 const SKY_ENVIRONMENT_INTENSITY = 0.35
 const SKY_SCALE = 2500
 const DEFAULT_BACKGROUND_COLOR = 0x0d0d12
@@ -188,6 +192,7 @@ let camera: THREE.PerspectiveCamera | null = null
 let listener: THREE.AudioListener | null = null
 let rootGroup: THREE.Group | null = null
 let fallbackLight: THREE.HemisphereLight | null = null
+let sunDirectionalLight: THREE.DirectionalLight | null = null
 let sky: Sky | null = null
 let pmremGenerator: THREE.PMREMGenerator | null = null
 let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null
@@ -2045,6 +2050,8 @@ function initRenderer() {
 	fallbackLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.35)
 	scene.add(fallbackLight)
 
+	applySunDirectionToSunLight()
+
 	ensureSkyExists()
 	if (pendingSkyboxSettings) {
 		applySkyboxSettings(pendingSkyboxSettings)
@@ -2287,9 +2294,63 @@ function updateSkyLighting(settings: SceneSkyboxSettings) {
 	} else if (sunUniform) {
 		sunUniform.value = skySunPosition.clone()
 	}
+	applySunDirectionToSunLight()
 	if (fallbackLight) {
 		fallbackLight.position.copy(skySunPosition.clone().multiplyScalar(50))
 	}
+}
+
+function ensureSunDirectionalLight(): THREE.DirectionalLight | null {
+	if (!scene) {
+		return null
+	}
+
+	if (!sunDirectionalLight) {
+		const light = new THREE.DirectionalLight(0xffffff, 1.05)
+		light.name = 'SkySunLight'
+		light.castShadow = true
+		light.shadow.mapSize.set(2048, 2048)
+		light.shadow.bias = -0.0001
+		light.shadow.normalBias = 0.02
+		light.shadow.camera.near = 1
+		light.shadow.camera.far = 400
+		light.shadow.camera.left = -200
+		light.shadow.camera.right = 200
+		light.shadow.camera.top = 200
+		light.shadow.camera.bottom = -200
+		sunDirectionalLight = light
+		scene.add(light)
+		scene.add(light.target)
+	} else {
+		if (sunDirectionalLight.parent !== scene) {
+			scene.add(sunDirectionalLight)
+		}
+		if (sunDirectionalLight.target.parent !== scene) {
+			scene.add(sunDirectionalLight.target)
+		}
+	}
+
+	return sunDirectionalLight
+}
+
+function applySunDirectionToSunLight() {
+	const light = ensureSunDirectionalLight()
+	if (!light) {
+		return
+	}
+
+	if (skySunPosition.lengthSq() > 1e-6) {
+		tempSunDirection.copy(skySunPosition)
+	} else {
+		tempSunDirection.copy(DEFAULT_SUN_DIRECTION)
+	}
+
+	light.position.copy(tempSunDirection).multiplyScalar(SKY_SUN_LIGHT_DISTANCE)
+	if (light.position.y < SKY_SUN_LIGHT_MIN_HEIGHT) {
+		light.position.y = SKY_SUN_LIGHT_MIN_HEIGHT
+	}
+	light.target.position.set(0, 0, 0)
+	light.target.updateMatrixWorld()
 }
 
 function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
@@ -2742,6 +2803,12 @@ onBeforeUnmount(() => {
 		renderer.dispose()
 		renderer.domElement.remove()
 		renderer = null
+	}
+	if (sunDirectionalLight) {
+		sunDirectionalLight.parent?.remove(sunDirectionalLight)
+		sunDirectionalLight.target.parent?.remove(sunDirectionalLight.target)
+		sunDirectionalLight.dispose()
+		sunDirectionalLight = null
 	}
 	editorResourceCache = null
 	listener = null
