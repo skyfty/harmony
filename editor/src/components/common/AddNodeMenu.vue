@@ -778,6 +778,25 @@ function findFirstViewPointUnderParent(parent: SceneNode | null, excludeNodeId?:
   return container.find((child) => child && child.id !== excludeNodeId && isViewPointNodeCandidate(child)) ?? null
 }
 
+function isGuideboardNodeCandidate(node: SceneNode | null | undefined): boolean {
+  if (!node) {
+    return false
+  }
+  const name = node.name?.trim()
+  if (!name) {
+    return false
+  }
+  return /^Guideboard(?:\b|$)/i.test(name)
+}
+
+function findFirstGuideboardUnderParent(parent: SceneNode | null): SceneNode | null {
+  const container = parent?.children ?? sceneStore.nodes
+  if (!container?.length) {
+    return null
+  }
+  return container.find((child) => child && isGuideboardNodeCandidate(child)) ?? null
+}
+
 function resolvePerformSequenceId(target: SceneNode | null | undefined, behaviorName: string): string | null {
   if (!target?.components) {
     return null
@@ -902,54 +921,119 @@ function initializeViewPointBehavior(nodeId: string): void {
     return
   }
 
-  const props = behaviorComponent.props as BehaviorComponentProps | undefined
-  const behaviorList = Array.isArray(props?.behaviors) ? props.behaviors : []
+  const parent = located.parent
+  const guideboardNode = findFirstGuideboardUnderParent(parent)
 
-  const findSequenceIdByName = (targetName: string): string | null => {
-    const normalized = targetName.trim().toLowerCase()
-    for (const candidate of behaviorList) {
-      if (!candidate || candidate.action !== 'perform') {
-        continue
-      }
-      const candidateName = candidate.name?.trim().toLowerCase() ?? ''
-      if (candidateName === normalized && candidate.sequenceId?.trim().length) {
-        return candidate.sequenceId.trim()
-      }
+  const props = behaviorComponent.props as BehaviorComponentProps | undefined
+  const behaviorListRaw = Array.isArray(props?.behaviors) ? props.behaviors : []
+  const behaviorList = behaviorListRaw.filter((entry): entry is SceneBehavior => Boolean(entry))
+  const normalizedShowName = VIEW_POINT_SHOW_BEHAVIOR_NAME.trim().toLowerCase()
+  const normalizedHideName = VIEW_POINT_HIDE_BEHAVIOR_NAME.trim().toLowerCase()
+  const existingShow = behaviorList.find(
+    (entry) =>
+      entry.action === 'perform' &&
+      (entry.name?.trim().toLowerCase() ?? '') === normalizedShowName,
+  )
+  const existingHide = behaviorList.find(
+    (entry) =>
+      entry.action === 'perform' &&
+      (entry.name?.trim().toLowerCase() ?? '') === normalizedHideName,
+  )
+
+  const nextList = cloneBehaviorList(behaviorList).filter((entry) => {
+    const normalized = entry.name?.trim().toLowerCase() ?? ''
+    if (entry.action === 'perform' && (normalized === normalizedShowName || normalized === normalizedHideName)) {
+      return false
     }
-    return null
-  }
+    return true
+  })
 
   const currentMetadata = (behaviorComponent.metadata as Record<string, unknown> | undefined) ?? {}
   const initialMap = normalizeNamedBehaviorSequenceMap(currentMetadata[NAMED_BEHAVIOR_SEQUENCES_KEY])
   let workingMap = initialMap
-  let changed = false
+  let metadataChanged = false
 
   const showResult = upsertNamedBehaviorSequence(workingMap, VIEW_POINT_SHOW_BEHAVIOR_NAME, 'perform', {
-    sequenceId: findSequenceIdByName(VIEW_POINT_SHOW_BEHAVIOR_NAME) ?? undefined,
+    sequenceId: existingShow?.sequenceId,
   })
   if (showResult.map !== workingMap) {
     workingMap = showResult.map
-    changed = true
+    metadataChanged = true
+  }
+  let showSequenceId = showResult.entry.sequenceId
+  if (existingShow?.sequenceId && existingShow.sequenceId !== showSequenceId) {
+    showSequenceId = existingShow.sequenceId
+    const key = showResult.entry.name.trim().toLowerCase()
+    workingMap = {
+      ...workingMap,
+      [key]: {
+        action: 'perform',
+        name: VIEW_POINT_SHOW_BEHAVIOR_NAME,
+        sequenceId: showSequenceId,
+      },
+    }
+    metadataChanged = true
   }
 
   const hideResult = upsertNamedBehaviorSequence(workingMap, VIEW_POINT_HIDE_BEHAVIOR_NAME, 'perform', {
-    sequenceId: findSequenceIdByName(VIEW_POINT_HIDE_BEHAVIOR_NAME) ?? undefined,
+    sequenceId: existingHide?.sequenceId,
   })
   if (hideResult.map !== workingMap) {
     workingMap = hideResult.map
-    changed = true
+    metadataChanged = true
+  }
+  let hideSequenceId = hideResult.entry.sequenceId
+  if (existingHide?.sequenceId && existingHide.sequenceId !== hideSequenceId) {
+    hideSequenceId = existingHide.sequenceId
+    const key = hideResult.entry.name.trim().toLowerCase()
+    workingMap = {
+      ...workingMap,
+      [key]: {
+        action: 'perform',
+        name: VIEW_POINT_HIDE_BEHAVIOR_NAME,
+        sequenceId: hideSequenceId,
+      },
+    }
+    metadataChanged = true
   }
 
-  if (!changed) {
-    return
+  // Ensure the view point exposes perform behaviors to toggle the sibling guideboard.
+  const showBehavior: SceneBehavior = {
+    id: existingShow?.id ?? generateUuid(),
+    name: VIEW_POINT_SHOW_BEHAVIOR_NAME,
+    action: 'perform',
+    sequenceId: showSequenceId,
+    script: ensureBehaviorParams({
+      type: 'show',
+      params: {
+        targetNodeId: guideboardNode?.id ?? null,
+      },
+    } as SceneBehaviorScriptBinding),
   }
 
-  const nextMetadata: Record<string, unknown> = {
-    ...currentMetadata,
-    [NAMED_BEHAVIOR_SEQUENCES_KEY]: workingMap,
+  const hideBehavior: SceneBehavior = {
+    id: existingHide?.id ?? generateUuid(),
+    name: VIEW_POINT_HIDE_BEHAVIOR_NAME,
+    action: 'perform',
+    sequenceId: hideSequenceId,
+    script: ensureBehaviorParams({
+      type: 'hide',
+      params: {
+        targetNodeId: guideboardNode?.id ?? null,
+      },
+    } as SceneBehaviorScriptBinding),
   }
 
-  sceneStore.updateNodeComponentMetadata(nodeId, behaviorComponent.id, nextMetadata)
+  nextList.push(showBehavior, hideBehavior)
+  sceneStore.updateNodeComponentProps(nodeId, behaviorComponent.id, { behaviors: nextList })
+
+  if (metadataChanged) {
+    const nextMetadata: Record<string, unknown> = {
+      ...currentMetadata,
+      [NAMED_BEHAVIOR_SEQUENCES_KEY]: workingMap,
+    }
+    sceneStore.updateNodeComponentMetadata(nodeId, behaviorComponent.id, nextMetadata)
+  }
 }
 
 function initializeWarpGateBehavior(nodeId: string): void {
