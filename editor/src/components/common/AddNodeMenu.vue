@@ -1311,12 +1311,11 @@ function handleAddLight(type: LightNodeType) {
     <v-list class="add-menu-list">
       <v-list-item title="Group" @click="handleAddGroup()" />
       <v-list-item title="Create Empty" @click="handleCreateEmptyNode()" />
-      <v-menu  transition="none" location="end" offset="8" :disabled="!canCreateShowcaseNodes">
+      <v-menu  transition="none" location="end" offset="8">
         <template #activator="{ props: showcaseMenuProps }">
           <v-list-item
             title="Showcase"
             append-icon="mdi-chevron-right"
-            :disabled="!canCreateShowcaseNodes"
             v-bind="showcaseMenuProps"
           />
         </template>
