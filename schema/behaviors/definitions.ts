@@ -134,7 +134,7 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
     createDefaultParams(): MoveToBehaviorParams {
       return {
         targetNodeId: null,
-        duration: 0.5,
+        duration: 0.8,
         offset: 1,
       }
     },

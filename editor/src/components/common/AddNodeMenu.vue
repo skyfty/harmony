@@ -69,11 +69,8 @@ const tempViewPointVecA = new THREE.Vector3()
 const tempViewPointVecB = new THREE.Vector3()
 const tempViewPointVecC = new THREE.Vector3()
 const tempViewPointQuat = new THREE.Quaternion()
-const tempShowcaseBox = new THREE.Box3()
-const tempShowcaseWorld = new THREE.Vector3()
-const tempShowcaseLocal = new THREE.Vector3()
 
-interface ShowcaseNodeOptions {
+interface NodeCreationOptions {
   parentId?: string | null
   autoBehaviors?: boolean
 }
@@ -729,43 +726,6 @@ function ensureBehaviorComponent(nodeId: string): SceneNodeComponentState<Behavi
   return behaviorComponent ?? null
 }
 
-function resolveShowcaseLocalCenter(parent: SceneNode): THREE.Vector3 {
-  const runtime = getRuntimeObject(parent.id)
-  if (runtime) {
-    runtime.updateMatrixWorld(true)
-    tempShowcaseBox.makeEmpty()
-    tempShowcaseBox.setFromObject(runtime)
-    const worldCenter = tempShowcaseBox.isEmpty()
-      ? runtime.getWorldPosition(tempShowcaseWorld)
-      : tempShowcaseBox.getCenter(tempShowcaseWorld)
-    if (
-      !Number.isFinite(worldCenter.x) ||
-      !Number.isFinite(worldCenter.y) ||
-      !Number.isFinite(worldCenter.z)
-    ) {
-      runtime.getWorldPosition(worldCenter.set(0, 0, 0))
-    }
-    tempShowcaseLocal.copy(worldCenter)
-    runtime.worldToLocal(tempShowcaseLocal)
-    return tempShowcaseLocal.clone()
-  }
-  return new THREE.Vector3(parent.position.x, parent.position.y, parent.position.z)
-}
-
-function createShowcaseContainer(parent: SceneNode): SceneNode {
-  const localCenter = resolveShowcaseLocalCenter(parent)
-  const showcaseRoot = new THREE.Group()
-  showcaseRoot.name = 'Showcase'
-  showcaseRoot.position.copy(localCenter)
-  return sceneStore.addSceneNode({
-    nodeType: 'Group',
-    object: showcaseRoot,
-    name: 'Showcase',
-    parentId: parent.id,
-    position: { x: localCenter.x, y: localCenter.y, z: localCenter.z },
-  })
-}
-
 function computeViewPointWorldPosition(parent: SceneNode, radius: number): THREE.Vector3 | null {
   const runtime = getRuntimeObject(parent.id)
   if (runtime) {
@@ -1285,7 +1245,7 @@ function handleCreateEmptyNode() {
   })
 }
 
-async function handleCreateViewPointNode(options: ShowcaseNodeOptions = {}): Promise<SceneNode | null> {
+async function handleCreateViewPointNode(options: NodeCreationOptions = {}): Promise<SceneNode | null> {
   const { parentId, autoBehaviors = false } = options
   const name = getNextViewPointName()
   const geometry = new THREE.SphereGeometry(VIEW_POINT_RADIUS, VIEW_POINT_SEGMENTS, VIEW_POINT_SEGMENTS)
@@ -1365,7 +1325,7 @@ async function handleCreateViewPointNode(options: ShowcaseNodeOptions = {}): Pro
   return created
 }
 
-async function handleCreateGuideboardNode(options: ShowcaseNodeOptions = {}): Promise<SceneNode | null> {
+async function handleCreateGuideboardNode(options: NodeCreationOptions = {}): Promise<SceneNode | null> {
   const { parentId, autoBehaviors = false } = options
   const name = getNextGuideboardName()
   const geometry = new THREE.SphereGeometry(GUIDEBOARD_RADIUS, GUIDEBOARD_SEGMENTS, GUIDEBOARD_SEGMENTS)
@@ -1449,7 +1409,7 @@ async function handleCreateGuideboardNode(options: ShowcaseNodeOptions = {}): Pr
   return created
 }
 
-async function handleCreateWarpGateNode(options: ShowcaseNodeOptions = {}): Promise<SceneNode | null> {
+async function handleCreateWarpGateNode(options: NodeCreationOptions = {}): Promise<SceneNode | null> {
   const { parentId, autoBehaviors = false } = options
   const name = getNextWarpGateName()
   const geometry = new THREE.CircleGeometry(WARP_GATE_RADIUS, WARP_GATE_SEGMENTS)
@@ -1536,24 +1496,20 @@ async function handleCreateShowcaseVisit(): Promise<void> {
     return
   }
   const originalSelectionId = sceneStore.selectedNode?.id ?? null
-  const showcaseContainer = createShowcaseContainer(parentNode)
-  const showcaseId = showcaseContainer.id
 
   try {
-    applySelectionById(showcaseId)
-    const guideboard = await handleCreateGuideboardNode({ parentId: showcaseId, autoBehaviors: true })
+    const parentId = parentNode.id
+    const guideboard = await handleCreateGuideboardNode({ parentId, autoBehaviors: true })
     if (!guideboard) {
       return
     }
 
-    applySelectionById(showcaseId)
-    const viewPoint = await handleCreateViewPointNode({ parentId: showcaseId, autoBehaviors: true })
+    const viewPoint = await handleCreateViewPointNode({ parentId, autoBehaviors: true })
     if (!viewPoint) {
       return
     }
 
-    applySelectionById(showcaseId)
-    const warpGate = await handleCreateWarpGateNode({ parentId: showcaseId, autoBehaviors: true })
+    const warpGate = await handleCreateWarpGateNode({ parentId, autoBehaviors: true })
     if (!warpGate) {
       return
     }
