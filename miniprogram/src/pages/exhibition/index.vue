@@ -19,6 +19,7 @@
           v-for="exhibition in exhibitions"
           :key="exhibition.id"
           :style="{ background: exhibition.cover }"
+          @tap="openDetail(exhibition.id)"
         >
           <view class="card-overlay"></view>
           <view class="card-content">
@@ -116,6 +117,11 @@ function handleNavigate(target: NavKey) {
     return;
   }
   uni.redirectTo({ url: route });
+}
+
+function openDetail(id: string) {
+  if (!id) return;
+  uni.navigateTo({ url: `/pages/exhibition/detail/index?id=${id}` });
 }
 </script>
 <style scoped lang="scss">

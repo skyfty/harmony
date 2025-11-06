@@ -7,6 +7,9 @@
       "path": "pages/upload/index"
     },
     {
+      "path": "pages/upload/records/index"
+    },
+    {
       "path": "pages/exhibition/index"
     },
     {

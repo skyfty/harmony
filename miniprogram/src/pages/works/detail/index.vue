@@ -1,12 +1,10 @@
 <template>
   <view class="page work-detail">
     <view class="header">
-      <button class="back-btn" @tap="goBack">返回</button>
       <view class="header-info">
         <text class="title">{{ work?.name || '作品详情' }}</text>
         <text class="subtitle">大小 {{ work?.size }} · {{ work?.time }}</text>
       </view>
-      <button class="add-collection-btn" v-if="work" @tap="openCollectionPicker">添加到作品集</button>
     </view>
 
     <view v-if="work" class="preview" :style="{ background: work.gradient }">
@@ -98,10 +96,6 @@ onLoad((query) => {
   workId.value = id;
 });
 
-function goBack() {
-  uni.navigateBack();
-}
-
 function openCollectionPicker() {
   if (!work.value) {
     return;
@@ -146,17 +140,8 @@ function openCollectionDetail(id: string) {
 
 .header {
   display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.back-btn {
-  padding: 8px 14px;
-  border: none;
-  border-radius: 12px;
-  background: rgba(31, 122, 236, 0.12);
-  color: #1f7aec;
-  font-size: 13px;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .header-info {
@@ -257,15 +242,6 @@ function openCollectionDetail(id: string) {
   line-height: 1.6;
 }
 
-.add-collection-btn {
-  margin-left: auto;
-  padding: 8px 14px;
-  border: none;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #1f7aec, #62a6ff);
-  color: #ffffff;
-  font-size: 13px;
-}
 
 .collections-card {
   background: #ffffff;

@@ -19,7 +19,6 @@
     <view class="section">
       <view class="section-header">
         <text class="section-title">我参观过的</text>
-        <text class="section-more" @tap="goAllVisited">查看全部</text>
       </view>
       <view class="works-grid">
         <view class="work-card" v-for="e in visitedExhibitions" :key="e.id" @tap="openExhibition(e.id)">
@@ -35,10 +34,9 @@
     <view class="section">
       <view class="section-header">
         <text class="section-title">最新展览</text>
-        <text class="section-more">查看全部</text>
       </view>
       <view class="works-grid">
-        <view class="work-card" v-for="card in exhibitionCards" :key="card.id">
+        <view class="work-card" v-for="card in exhibitionCards" :key="card.id" @tap="openExhibition(card.id)">
           <view class="work-thumb" :style="{ background: card.gradient }"></view>
           <view class="work-info">
             <text class="work-name">{{ card.name }}</text>
@@ -54,7 +52,7 @@
         <text class="section-more" @tap="goWorksList">更多</text>
       </view>
       <view class="works-grid">
-        <view class="work-card" v-for="work in works" :key="work.id">
+        <view class="work-card" v-for="work in works" :key="work.id" @tap="openWorkDetail(work.id)">
           <view class="work-thumb" :style="{ background: work.gradient }"></view>
           <view class="work-info">
             <text class="work-name">{{ work.name }}</text>
@@ -130,6 +128,13 @@ function openExhibition(id: string) {
 function goAllVisited() {
   // 先跳转到展览页，后续可实现“我参观过的”筛选
   uni.navigateTo({ url: '/pages/exhibition/index' });
+}
+
+function openWorkDetail(id: string) {
+  if (!id) {
+    return;
+  }
+  uni.navigateTo({ url: `/pages/works/detail/index?id=${id}` });
 }
 </script>
 <style scoped lang="scss">

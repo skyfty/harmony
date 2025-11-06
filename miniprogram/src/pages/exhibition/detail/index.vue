@@ -17,6 +17,10 @@
       <text class="info-line">作品数量：{{ exhibit?.worksCount ?? 12 }}</text>
       <text class="info-line">简介：{{ exhibit?.desc || '该展览为示例数据，后续可从服务端拉取详情。' }}</text>
     </view>
+
+    <view class="enter-bar">
+      <button class="enter-btn"  @tap="enterExhibition">进入</button>
+    </view>
   </view>
 </template>
 <script setup lang="ts">
@@ -48,6 +52,14 @@ onLoad((options) => {
   const raw = typeof options?.id === 'string' ? options.id : '';
   exhibitId.value = decodeURIComponent(raw);
 });
+
+function enterExhibition() {
+  if (!exhibitId.value) {
+    return;
+  }
+  // Navigate into the exhibition. Currently we show a toast as a placeholder.
+  uni.showToast({ title: `进入展览 ${exhibitId.value}`, icon: 'none' });
+}
 </script>
 <style scoped lang="scss">
 .page {
@@ -119,5 +131,29 @@ onLoad((options) => {
   margin-top: 6px;
   font-size: 13px;
   color: #5f6b83;
+}
+
+.enter-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 18px;
+  display: flex;
+  justify-content: center;
+  z-index: 40;
+}
+
+.enter-btn {
+  width: calc(100% - 40px);
+  max-width: 560px;
+  padding: 12px 18px;
+  border: none;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #1f7aec, #62a6ff);
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 600;
+  box-shadow: 0 12px 28px rgba(31, 122, 236, 0.18);
+  text-align: center;
 }
 </style>

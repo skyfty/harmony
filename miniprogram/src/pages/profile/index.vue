@@ -32,7 +32,7 @@
         <text class="section-action" @tap="goWorksList">更多</text>
       </view>
       <view class="works-grid">
-        <view class="work-card" v-for="work in works" :key="work.id">
+        <view class="work-card" v-for="work in works" :key="work.id" @tap="openWorkDetail(work.id)">
           <view class="work-thumb" :style="{ background: work.gradient }"></view>
           <view class="work-info">
             <text class="work-name">{{ work.name }}</text>
@@ -142,6 +142,13 @@ function goSupport(type: SupportLink) {
     return;
   }
   uni.showToast({ title: message, icon: 'none' });
+}
+
+function openWorkDetail(id: string) {
+  if (!id) {
+    return;
+  }
+  uni.navigateTo({ url: `/pages/works/detail/index?id=${id}` });
 }
 </script>
 <style scoped lang="scss">

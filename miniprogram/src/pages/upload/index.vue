@@ -20,7 +20,7 @@
     <view class="history-card">
       <view class="history-header">
         <text class="history-title">上传记录</text>
-        <text class="history-action">管理</text>
+        <text class="history-action" @tap="goManage">管理</text>
       </view>
       <view class="history-list">
         <view class="history-item" v-for="item in uploadHistory" :key="item.id">
@@ -53,6 +53,7 @@ type HistoryItem = {
   time: string;
   status: string;
   gradient: string;
+  createdAt: number;
 };
 
 type UploadCandidate = {
@@ -62,8 +63,27 @@ type UploadCandidate = {
 
 const worksStore = useWorksStore();
 
+const STORAGE_KEY = 'uploadHistory';
 const loading = ref(false);
-const uploadHistory = ref<HistoryItem[]>([
+
+function loadHistory(): HistoryItem[] {
+  try {
+    const raw = uni.getStorageSync(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(list: HistoryItem[]) {
+  try {
+    uni.setStorageSync(STORAGE_KEY, list);
+  } catch {}
+}
+
+const sampleHistory: HistoryItem[] = [
   {
     id: 'a',
     name: '未来雕塑.obj',
@@ -71,6 +91,7 @@ const uploadHistory = ref<HistoryItem[]>([
     time: '2 分钟前',
     status: '转换完成',
     gradient: 'linear-gradient(135deg, #c1d8ff, #a0c5ff)',
+    createdAt: Date.now() - 2 * 60 * 1000,
   },
   {
     id: 'b',
@@ -79,8 +100,15 @@ const uploadHistory = ref<HistoryItem[]>([
     time: '15 分钟前',
     status: '待发布',
     gradient: 'linear-gradient(135deg, #b7f5ec, #90e0d9)',
+    createdAt: Date.now() - 15 * 60 * 1000,
   },
-]);
+];
+
+const initialHistory: HistoryItem[] = (() => {
+  const fromStore = loadHistory();
+  return fromStore.length ? fromStore : sampleHistory;
+})();
+const uploadHistory = ref<HistoryItem[]>(initialHistory);
 
 const typeLabels: Record<WorkType, string> = {
   image: '图片',
@@ -188,7 +216,9 @@ function finalizeUpload(type: WorkType, files: UploadCandidate[]) {
     time: '刚刚',
     status: '待整理',
     gradient: representative?.gradient || 'linear-gradient(135deg, #dff5ff, #c6ebff)',
+    createdAt: Date.now(),
   });
+  saveHistory(uploadHistory.value);
   loading.value = false;
   uni.showToast({ title: `${typeLabels[type]}上传成功`, icon: 'success' });
   navigateToCollectionEditor(newIds);
@@ -305,6 +335,10 @@ function handleModelUpload() {
   }
 
   failUpload('当前环境暂不支持选择模型文件');
+}
+
+function goManage() {
+  uni.navigateTo({ url: '/pages/upload/records/index' });
 }
 </script>
 <style scoped lang="scss">

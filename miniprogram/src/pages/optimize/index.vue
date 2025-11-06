@@ -5,17 +5,17 @@
       <text class="subtitle">精选材质与特效，快速升级展厅表现力</text>
     </view>
 
-    <scroll-view scroll-x class="category-tabs">
+    <view class="category-tabs">
       <view
         v-for="category in categoryTabs"
         :key="category"
-        class="category-tab"
+        class="category-tag"
         :class="{ active: category === selectedCategory }"
         @tap="selectCategory(category)"
       >
         {{ category === 'all' ? '全部' : category }}
       </view>
-    </scroll-view>
+    </view>
 
     <view class="waterfall" v-if="filteredProducts.length">
       <view class="product-card" v-for="product in filteredProducts" :key="product.id" @tap="openDetail(product)">
@@ -211,23 +211,24 @@ function openDetail(product: OptimizeProduct) {
 
 .category-tabs {
   display: flex;
-  gap: 12px;
-  padding: 4px 0 6px;
-  white-space: nowrap;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  padding: 4px 0 2px;
 }
 
-.category-tab {
-  padding: 8px 16px;
-  border-radius: 16px;
-  font-size: 13px;
+.category-tag {
+  padding: 6px 14px;
+  border-radius: 14px;
+  font-size: 12px;
   color: #4f9eff;
   background: rgba(79, 158, 255, 0.12);
+  flex-shrink: 0;
 }
 
-.category-tab.active {
+.category-tag.active {
   background: linear-gradient(135deg, #4f9eff, #1f7aec);
   color: #ffffff;
-  box-shadow: 0 8px 20px rgba(31, 122, 236, 0.18);
+  box-shadow: 0 6px 18px rgba(31, 122, 236, 0.18);
 }
 
 .waterfall {

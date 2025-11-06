@@ -5,20 +5,20 @@
       <text class="subtitle">了解素材订购与服务进度</text>
     </view>
 
-    <scroll-view scroll-x class="status-tabs">
+    <view class="status-tags">
       <view
         v-for="tab in statusTabs"
         :key="tab.value"
-        class="status-tab"
+        class="status-tag"
         :class="{ active: tab.value === currentStatus }"
         @tap="switchStatus(tab.value)"
       >
         {{ tab.label }}
       </view>
-    </scroll-view>
+    </view>
 
     <view class="orders-list">
-      <view class="order-card" v-for="order in filteredOrders" :key="order.id" @tap="goDetail(order.id)">
+      <view class="order-card" v-for="order in filteredOrders" :key="order.id">
         <view class="order-header">
           <text class="order-code">订单号 {{ order.id }}</text>
           <text class="order-status" :class="order.status">{{ statusLabels[order.status] }}</text>
@@ -33,6 +33,9 @@
               <text>金额 ¥{{ order.amount }}</text>
             </view>
           </view>
+        </view>
+        <view class="actions">
+          <button class="detail-btn" @tap="goDetail(order.id)">查看详情</button>
         </view>
       </view>
     </view>
@@ -139,25 +142,26 @@ function goDetail(orderId: string) {
   color: #8a94a6;
 }
 
-.status-tabs {
+.status-tags {
   display: flex;
-  gap: 12px;
-  padding: 6px 0;
-  white-space: nowrap;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  padding: 6px 0 2px;
 }
 
-.status-tab {
-  padding: 10px 16px;
-  border-radius: 16px;
-  font-size: 13px;
+.status-tag {
+  padding: 6px 14px;
+  border-radius: 14px;
+  font-size: 12px;
   background: rgba(79, 158, 255, 0.12);
   color: #4f9eff;
+  flex-shrink: 0;
 }
 
-.status-tab.active {
+.status-tag.active {
   background: linear-gradient(135deg, #4f9eff, #1f7aec);
   color: #ffffff;
-  box-shadow: 0 8px 18px rgba(31, 122, 236, 0.2);
+  box-shadow: 0 6px 18px rgba(31, 122, 236, 0.2);
 }
 
 .orders-list {
@@ -240,6 +244,23 @@ function goDetail(orderId: string) {
   justify-content: space-between;
   font-size: 12px;
   color: #8a94a6;
+}
+
+.actions {
+  display: flex;
+  justify-content: stretch;
+}
+
+.detail-btn {
+  flex: 1;
+  padding: 10px 0;
+  border-radius: 14px;
+  border: none;
+  background: linear-gradient(135deg, #4f9eff, #1f7aec);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 10px 22px rgba(31, 122, 236, 0.18);
 }
 
 .empty {

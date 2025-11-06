@@ -29,7 +29,7 @@
       </view>
 
       <view class="footer">
-        <button class="outline" @tap="goOrders">查看订单</button>
+        <button class="secondary" @tap="goOrders">查看订单</button>
         <button
           class="primary"
           :class="{ disabled: product.purchased }"
@@ -290,7 +290,7 @@ function goBack() {
 }
 
 .primary,
-.outline {
+.secondary {
   flex: 1;
   padding: 14px 0;
   border-radius: 18px;
@@ -310,10 +310,10 @@ function goBack() {
   box-shadow: none;
 }
 
-.outline {
-  border: 1px solid rgba(79, 158, 255, 0.4);
-  background: transparent;
-  color: #1f7aec;
+.secondary {
+  background: linear-gradient(135deg, rgba(79, 158, 255, 0.18), rgba(79, 207, 255, 0.28));
+  color: #1f3c7a;
+  box-shadow: 0 10px 22px rgba(79, 158, 255, 0.18);
 }
 
 .empty {
