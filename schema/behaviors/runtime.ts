@@ -51,7 +51,8 @@ export type BehaviorRuntimeEvent =
       behaviorSequenceId: string
       behaviorId: string
       targetNodeId: string
-      speed: number
+      /** Movement duration in seconds. */
+      duration: number
       offset: number
       token: string
     }
@@ -386,6 +387,7 @@ function createMoveCameraEvent(state: BehaviorSequenceState, behavior: SceneBeha
   const fallbackTarget = state.nodeId
   const candidate = typeof params?.targetNodeId === 'string' ? params.targetNodeId.trim() : ''
   const targetNodeId = candidate.length ? candidate : fallbackTarget
+  const durationSeconds = Math.max(0, params.duration ?? 0.2)
   return {
     type: 'move-camera',
     nodeId: state.nodeId,
@@ -394,7 +396,7 @@ function createMoveCameraEvent(state: BehaviorSequenceState, behavior: SceneBeha
     behaviorSequenceId: state.behaviorSequenceId,
     behaviorId: behavior.id,
     targetNodeId,
-    speed: Math.max(0, params.speed ?? 10),
+    duration: durationSeconds,
     offset: Math.max(0, params.offset ?? 1),
     token,
   }

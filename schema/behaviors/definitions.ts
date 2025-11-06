@@ -134,7 +134,7 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
     createDefaultParams(): MoveToBehaviorParams {
       return {
         targetNodeId: null,
-        speed: 10,
+        duration: 0.5,
         offset: 1,
       }
     },
@@ -508,7 +508,7 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
         type: 'moveTo',
         params: {
           targetNodeId: params?.targetNodeId ?? null,
-          speed: Math.max(0, params?.speed ?? 10),
+          duration: Math.max(0, params?.duration ?? 0.2),
           offset: Math.max(0, params?.offset ?? 1),
         },
       }
@@ -740,7 +740,7 @@ export function ensureBehaviorParams(
           type: 'moveTo',
           params: {
             targetNodeId: params?.targetNodeId ?? null,
-            speed: Math.max(0, params?.speed ?? 10),
+            duration: Math.max(0, params?.duration ?? 0.2),
             offset: Math.max(0, params?.offset ?? 1),
           },
         }

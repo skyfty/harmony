@@ -736,7 +736,7 @@ function pickActiveSelectionBoundingBoxHit(event: PointerEvent): NodeHitResult |
 function createSelectionDragState(nodeId: string, object: THREE.Object3D, hitPoint: THREE.Vector3, event: PointerEvent): SelectionDragState {
   const worldPosition = new THREE.Vector3()
   object.getWorldPosition(worldPosition)
-  // Lock the drag plane to the grab point height so pointer distance does not change drag speed.
+  // Lock the drag plane to the grab point height so pointer distance does not change drag duration.
   const planeAnchor = worldPosition.clone()
   planeAnchor.y = hitPoint.y
   const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 1, 0), planeAnchor)

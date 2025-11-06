@@ -1139,7 +1139,7 @@ function initializeWarpGateBehavior(nodeId: string): void {
       type: 'moveTo',
       params: {
         targetNodeId: nodeId,
-        speed: 10,
+        duration: 0.2,
         offset: 1,
       },
     },

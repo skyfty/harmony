@@ -202,8 +202,8 @@ export interface DelayBehaviorParams {
 export interface MoveToBehaviorParams {
   /** Target scene node id the camera should move to. */
   targetNodeId: string | null
-  /** Camera travel speed in meters per second. */
-  speed: number
+  /** Camera travel duration in seconds. */
+  duration: number
   /** Horizontal distance from the node's center point in meters when the camera stops. */
   offset: number
 }

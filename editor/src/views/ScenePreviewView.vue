@@ -1444,8 +1444,7 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
 	const startPosition = activeCamera.position.clone()
 	const orbitControls = mapControls ?? null
 	const startTarget = orbitControls ? orbitControls.target.clone() : null
-	const distance = startPosition.distanceTo(destination)
-	const durationSeconds = event.speed > 0 ? Math.min(5, Math.max(0.2, distance / Math.max(event.speed, 0.01))) : 0
+	const durationSeconds = Math.max(0, event.duration ?? 0)
 	const updateFrame = (alpha: number) => {
 		activeCamera.position.lerpVectors(startPosition, destination, alpha)
 		if (orbitControls && startTarget) {

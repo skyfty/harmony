@@ -14,7 +14,7 @@ const emit = defineEmits<{
 
 const params = computed<MoveToBehaviorParams>(() => ({
   targetNodeId: props.modelValue?.targetNodeId ?? null,
-  speed: Math.max(0, props.modelValue?.speed ?? 20),
+  duration: Math.max(0, props.modelValue?.duration ?? 0.2),
   offset: Math.max(0, props.modelValue?.offset ?? 1),
 }))
 
@@ -27,10 +27,10 @@ function emitUpdate(patch: Partial<MoveToBehaviorParams>) {
   })
 }
 
-function updateSpeed(value: string | number) {
+function updateDuration(value: string | number) {
   const numeric = typeof value === 'number' ? value : parseFloat(value)
   const normalized = Number.isFinite(numeric) ? Math.max(0, numeric) : 0
-  emitUpdate({ speed: normalized })
+  emitUpdate({ duration: normalized })
 }
 
 function updateOffset(value: string | number) {
@@ -70,15 +70,15 @@ onBeforeUnmount(() => {
       @pick-state-change="handlePickStateChange"
     />
     <v-text-field
-      :model-value="params.speed"
+      :model-value="params.duration"
       type="number"
-      label="Movement speed (m/s)"
+      label="Movement duration (s)"
       density="compact"
       variant="underlined"
       hide-details
       min="0"
       step="0.1"
-      @update:model-value="updateSpeed($event)"
+      @update:model-value="updateDuration($event)"
     />
     <v-text-field
       :model-value="params.offset"
