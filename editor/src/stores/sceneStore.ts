@@ -186,6 +186,7 @@ const CAMERA_DISTANCE_EPSILON = 1e-6
 const MAX_SPAWN_ATTEMPTS = 64
 const COLLISION_MARGIN = 0.35
 const DEFAULT_SPAWN_RADIUS = GRID_CELL_SIZE * 0.75
+const GROUND_CONTACT_EPSILON = 1e-4
 const GROUND_NODE_ID = 'harmony:ground'
 const DEFAULT_GROUND_EXTENT = 100
 const MIN_GROUND_EXTENT = 1
@@ -1589,11 +1590,18 @@ async function convertObjectToSceneNode(
 
     const runtimeObject = cloneRuntimeObject(object, context.converted)
     runtimeObject.name = name
+    runtimeObject.position.set(0, 0, 0)
+    runtimeObject.rotation.set(0, 0, 0)
+    runtimeObject.quaternion.identity()
+    runtimeObject.scale.set(1, 1, 1)
+    runtimeObject.matrix.identity()
+    runtimeObject.matrixAutoUpdate = true
+    runtimeObject.updateMatrixWorld(true)
     prepareRuntimeObjectForNode(runtimeObject)
 
     tagObjectWithNodeId(runtimeObject, node.id)
     registerRuntimeObject(node.id, runtimeObject)
-  node.components = normalizeNodeComponents(node, node.components)
+    node.components = normalizeNodeComponents(node, node.components)
     componentManager.attachRuntime(node, runtimeObject)
     componentManager.syncNode(node)
     context.converted.add(object)
@@ -5783,17 +5791,15 @@ export const useSceneStore = defineStore('scene', {
         worldMatrix.decompose(worldPosition, worldQuaternion, worldScale)
 
         const metrics = computeObjectMetrics(workingObject)
-        let baseY = 0
         const minY = metrics.bounds.min.y
-        if (Number.isFinite(minY) && minY < 0) {
-          const BASE_OFFSET_EPSILON = 1e-3
-          baseY = Math.max(baseY, -minY + BASE_OFFSET_EPSILON)
-        }
-
         const halfHeight = Math.abs(worldScale.y) * 0.5
         const anchorWorldY = worldPosition.y - halfHeight
         const finalWorldPosition = worldPosition.clone()
-        finalWorldPosition.y = anchorWorldY + baseY
+        if (Number.isFinite(minY)) {
+          finalWorldPosition.y = anchorWorldY - minY + GROUND_CONTACT_EPSILON
+        } else {
+          finalWorldPosition.y = anchorWorldY
+        }
 
         const finalWorldMatrix = new Matrix4().compose(finalWorldPosition, worldQuaternion, worldScale)
         const parentInverse = new Matrix4()
@@ -5937,8 +5943,6 @@ export const useSceneStore = defineStore('scene', {
       let targetParentId = payload.parentId ?? null
       const shouldSnapToGrid =
         payload.snapToGrid !== undefined ? payload.snapToGrid : !(payload.editorFlags?.ignoreGridSnapping)
-      let baseY = payload.baseY ?? 0
-
       let workingObject: Object3D
       let name = payload.name
       let sourceAssetId = payload.sourceAssetId
@@ -5978,27 +5982,29 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const metrics = computeObjectMetrics(workingObject)
-
-      if (payload.baseY === undefined) {
-        const minY = metrics.bounds.min.y
-        if (Number.isFinite(minY) && minY < 0) {
-          const EPSILON = 1e-3
-          baseY = Math.max(baseY, -minY + EPSILON)
-        }
-      }
-
+      const minY = metrics.bounds.min.y
+      const hasExplicitPosition = Boolean(payload.position)
       let spawnVector: Vector3
       if (payload.position) {
-        spawnVector = new Vector3(payload.position.x, payload.position.y + baseY, payload.position.z)
+        spawnVector = payload.position.clone()
       } else {
         spawnVector = resolveSpawnPosition({
-          baseY,
+          baseY: payload.baseY ?? 0,
           radius: metrics.radius,
           localCenter: metrics.center,
           camera: this.camera,
           nodes: this.nodes,
           snapToGrid: shouldSnapToGrid,
         })
+      }
+
+      if (Number.isFinite(minY)) {
+        spawnVector.y -= minY
+        spawnVector.y += GROUND_CONTACT_EPSILON
+      }
+
+      if (hasExplicitPosition && payload.baseY !== undefined && Number.isFinite(payload.baseY)) {
+        spawnVector.y += payload.baseY
       }
 
       let parentMatrix: Matrix4 | null = null
