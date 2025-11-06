@@ -274,12 +274,30 @@ function cloneComponentProps<T>(props: T): T {
 function cloneComponentState(state: SceneNodeComponentState<any>, typeOverride?: NodeComponentType): SceneNodeComponentState<any> {
   const resolvedType = (typeOverride ?? state.type) as NodeComponentType
   const resolvedId = typeof state.id === 'string' && state.id.trim().length ? state.id : generateUuid()
+  
+  // 深度克隆 metadata 以确保可以被 IndexedDB 序列化
+  let clonedMetadata: Record<string, unknown> | undefined
+  if (state.metadata) {
+    try {
+      clonedMetadata = structuredClone(state.metadata)
+    } catch (_error) {
+      // 如果 structuredClone 失败，尝试使用 JSON 序列化
+      try {
+        clonedMetadata = JSON.parse(JSON.stringify(state.metadata)) as Record<string, unknown>
+      } catch (_jsonError) {
+        // 如果都失败了，使用浅拷贝作为最后手段
+        console.warn('Failed to deeply clone component metadata, using shallow copy', _jsonError)
+        clonedMetadata = { ...state.metadata }
+      }
+    }
+  }
+  
   return {
     id: resolvedId,
     type: resolvedType,
     enabled: state.enabled ?? true,
     props: cloneComponentProps(state.props),
-    metadata: state.metadata ? { ...state.metadata } : undefined,
+    metadata: clonedMetadata,
   }
 }
 
@@ -307,12 +325,27 @@ function normalizeNodeComponents(node: SceneNode, components?: SceneNodeComponen
       }),
     )
 
+    // 深度克隆 metadata 以确保可以被 IndexedDB 序列化
+    let clonedMetadata: Record<string, unknown> | undefined
+    if (existing?.metadata) {
+      try {
+        clonedMetadata = structuredClone(existing.metadata)
+      } catch (_error) {
+        try {
+          clonedMetadata = JSON.parse(JSON.stringify(existing.metadata)) as Record<string, unknown>
+        } catch (_jsonError) {
+          console.warn('Failed to deeply clone wall component metadata, using shallow copy', _jsonError)
+          clonedMetadata = { ...existing.metadata }
+        }
+      }
+    }
+
     normalized[WALL_COMPONENT_TYPE] = {
       id: existing?.id && existing.id.trim().length ? existing.id : generateUuid(),
       type: WALL_COMPONENT_TYPE,
       enabled: existing?.enabled ?? true,
       props: nextProps,
-      metadata: existing?.metadata ? { ...existing.metadata } : undefined,
+      metadata: clonedMetadata,
     }
   }
 
@@ -1928,7 +1961,7 @@ function duplicateNodeTree(original: SceneNode, context: DuplicateContext): Scen
 
 function cloneVector(vector: Vector3Like): Vector3Like {
   if (vector instanceof THREE.Vector3) {
-    return vector.clone()
+    return { x: vector.x, y: vector.y, z: vector.z } as Vector3Like
   }
   return { x: vector.x, y: vector.y, z: vector.z } as Vector3Like
 }
@@ -6358,6 +6391,21 @@ export const useSceneStore = defineStore('scene', {
           return
         }
 
+        // 深度克隆 metadata 以确保可以被 IndexedDB 序列化
+        let clonedMetadata: Record<string, unknown> | undefined
+        if (previous?.metadata) {
+          try {
+            clonedMetadata = structuredClone(previous.metadata)
+          } catch (_error) {
+            try {
+              clonedMetadata = JSON.parse(JSON.stringify(previous.metadata)) as Record<string, unknown>
+            } catch (_jsonError) {
+              console.warn('Failed to deeply clone wall component metadata, using shallow copy', _jsonError)
+              clonedMetadata = { ...previous.metadata }
+            }
+          }
+        }
+
         const nextComponents: SceneNodeComponentMap = { ...(target.components ?? {}) }
         nextComponents[WALL_COMPONENT_TYPE] = {
           id:
@@ -6365,7 +6413,7 @@ export const useSceneStore = defineStore('scene', {
           type: WALL_COMPONENT_TYPE,
           enabled: previous?.enabled ?? true,
           props: cloneWallComponentProps(targetProps),
-          metadata: previous?.metadata ? { ...previous.metadata } : undefined,
+          metadata: clonedMetadata,
         }
         target.components = nextComponents
       })
@@ -6567,6 +6615,23 @@ export const useSceneStore = defineStore('scene', {
       }
 
       this.captureHistorySnapshot()
+      
+      // 深度克隆 metadata 以确保可以被 IndexedDB 序列化
+      let clonedMetadata: Record<string, unknown> | undefined
+      if (metadata) {
+        try {
+          clonedMetadata = structuredClone(metadata)
+        } catch (_error) {
+          // 如果 structuredClone 失败，尝试使用 JSON 序列化
+          try {
+            clonedMetadata = JSON.parse(JSON.stringify(metadata)) as Record<string, unknown>
+          } catch (_jsonError) {
+            // 如果都失败了，使用浅拷贝作为最后手段
+            console.warn('Failed to deeply clone component metadata, using shallow copy', _jsonError)
+            clonedMetadata = { ...metadata }
+          }
+        }
+      }
 
       visitNode(this.nodes, nodeId, (node) => {
         const current = findComponentEntryById(node.components, componentId)
@@ -6578,7 +6643,7 @@ export const useSceneStore = defineStore('scene', {
         nextComponents[currentType] = {
           ...state,
           type: currentType,
-          metadata: metadata ? { ...metadata } : undefined,
+          metadata: clonedMetadata,
         }
         node.components = componentCount(nextComponents) ? nextComponents : undefined
       })

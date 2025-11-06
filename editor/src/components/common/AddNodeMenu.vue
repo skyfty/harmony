@@ -1149,7 +1149,7 @@ async function handleCreateGuideboardNode(): Promise<SceneNode | null> {
     name,
     baseY: 0,
     parentId,
-    position: computedPosition ?? undefined,
+  position: computedPosition ?? undefined,
     snapToGrid: false,
     editorFlags: {
       ignoreGridSnapping: true,
@@ -1207,7 +1207,7 @@ async function handleCreateWarpGateNode(): Promise<SceneNode | null> {
     name,
     baseY: 0,
     parentId,
-    position: spawnPosition,
+  position: spawnPosition,
     snapToGrid: false,
     editorFlags: {
       ignoreGridSnapping: true,

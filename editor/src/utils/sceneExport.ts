@@ -478,10 +478,27 @@ function componentMapHasEntries(components?: SceneNodeComponentMap | null): bool
 }
 
 function cloneNodeComponentState(component: SceneNodeComponentState): SceneNodeComponentState {
+  // 深度克隆 metadata 以确保完整复制
+  let clonedMetadata: Record<string, unknown> | undefined
+  if (component.metadata) {
+    try {
+      clonedMetadata = structuredClone(component.metadata)
+    } catch (_error) {
+      // 如果 structuredClone 失败，尝试使用 JSON 序列化
+      try {
+        clonedMetadata = JSON.parse(JSON.stringify(component.metadata)) as Record<string, unknown>
+      } catch (_jsonError) {
+        // 如果都失败了，使用浅拷贝作为最后手段
+        console.warn('Failed to deeply clone component metadata for export, using shallow copy', _jsonError)
+        clonedMetadata = { ...component.metadata }
+      }
+    }
+  }
+  
   return {
     ...component,
     props: { ...(component.props ?? {}) },
-    metadata: component.metadata ? { ...component.metadata } : undefined,
+    metadata: clonedMetadata,
   }
 }
 
