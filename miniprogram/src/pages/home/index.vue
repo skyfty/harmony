@@ -5,15 +5,7 @@
         <text class="header-title">最新展览</text>
         <text class="header-sub">雕塑展、绘画展、数字艺术</text>
       </view>
-      <view class="search-icon"></view>
-    </view>
-
-    <view class="hero-card">
-      <view class="hero-info">
-        <text class="hero-title">雕塑展</text>
-        <text class="hero-desc">探索前沿 3D 艺术作品</text>
-      </view>
-      <button class="hero-link">查看全部</button>
+  <view class="search-icon" @tap="goSearch"></view>
     </view>
 
     <view class="section">
@@ -123,6 +115,10 @@ function goWorksList() {
 
 function openExhibition(id: string) {
   uni.navigateTo({ url: `/pages/exhibition/detail/index?id=${id}` });
+}
+
+function goSearch() {
+  uni.navigateTo({ url: '/pages/search/index' });
 }
 
 function goAllVisited() {

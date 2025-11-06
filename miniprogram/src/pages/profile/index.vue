@@ -3,8 +3,6 @@
     <view class="header">
       <text class="title">设计师主页</text>
       <view class="header-actions">
-        <view class="icon-button search"></view>
-        <view class="icon-button more"></view>
       </view>
     </view>
 
