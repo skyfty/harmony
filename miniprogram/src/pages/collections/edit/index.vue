@@ -1,35 +1,30 @@
 <template>
   <view class="page collection-edit">
     <view class="header">
-      <button class="back-btn" @tap="goBack">返回</button>
-      <view class="header-info">
-        <text class="title">作品集编辑</text>
-        <text class="subtitle" v-if="selectedWorks.length">已选 {{ selectedWorks.length }} 个作品</text>
-        <text class="subtitle" v-else>请选择作品后再编辑</text>
-      </view>
+      <text class="title">作品集编辑</text>
+      <text class="subtitle" v-if="selectedWorks.length">已选 {{ selectedWorks.length }} 个作品</text>
+      <text class="subtitle" v-else>请选择作品后再编辑</text>
     </view>
 
     <view v-if="selectedWorks.length" class="selected-card">
       <text class="section-title">刚上传的作品</text>
-      <scroll-view scroll-x class="works-scroll" show-scrollbar="false">
+      <view class="works-grid">
         <view
           class="work-thumb"
           v-for="work in selectedWorks"
           :key="work.id"
           :style="{ background: work.gradient }"
         >
-          <text class="work-name">{{ work.name }}</text>
+          <button class="delete-icon" @tap.stop="confirmRemove(work.id)">×</button>
         </view>
-      </scroll-view>
+      </view>
     </view>
 
     <view v-if="selectedWorks.length" class="form-card">
       <text class="section-title">新建作品集</text>
       <input class="input" v-model="title" placeholder="输入作品集标题" />
       <textarea class="textarea" v-model="description" placeholder="补充作品集描述"></textarea>
-      <button class="primary" :disabled="!canCreate" @tap="createNewCollection">
-        {{ submitting ? '创建中…' : '创建并保存' }}
-      </button>
+      <button class="primary" :disabled="!canCreate" @tap="createNewCollection">{{ submitting ? '创建中…' : '创建并保存' }}</button>
     </view>
 
     <view class="existing-card">
@@ -94,10 +89,6 @@ watchEffect(() => {
   }
 });
 
-function goBack() {
-  uni.navigateBack({ delta: 1 });
-}
-
 function goUpload() {
   uni.redirectTo({ url: '/pages/upload/index' });
 }
@@ -130,6 +121,25 @@ function appendToCollection(collectionId: string) {
     uni.redirectTo({ url: `/pages/collections/detail/index?id=${collectionId}` });
   }, 400);
 }
+
+function confirmRemove(id: string) {
+  const target = selectedWorks.value.find((item) => item.id === id);
+  if (!target) {
+    return;
+  }
+  uni.showModal({
+    title: '移除作品',
+    content: `确定从本次上传列表中移除“${target.name}”吗？`,
+    confirmColor: '#d93025',
+    success: (res) => {
+      if (!res.confirm) {
+        return;
+      }
+      workIds.value = workIds.value.filter((workId) => workId !== id);
+      uni.showToast({ title: '已移除', icon: 'none' });
+    },
+  });
+}
 </script>
 <style scoped lang="scss">
 .page {
@@ -144,23 +154,8 @@ function appendToCollection(collectionId: string) {
 
 .header {
   display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.back-btn {
-  padding: 8px 14px;
-  border: none;
-  border-radius: 12px;
-  background: rgba(31, 122, 236, 0.12);
-  color: #1f7aec;
-  font-size: 13px;
-}
-
-.header-info {
-  display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .title {
@@ -191,32 +186,27 @@ function appendToCollection(collectionId: string) {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  width: 100%;
+  max-width: 560px;
+  align-self: center;
 }
 
-.works-scroll {
-  display: flex;
-  flex-direction: row;
-  gap: 14px;
-  padding-bottom: 6px;
+.selected-card {
+  align-items: stretch;
 }
 
 .work-thumb {
-  width: 140px;
-  height: 120px;
-  border-radius: 16px;
-  display: flex;
-  align-items: flex-end;
-  padding: 12px;
-  color: #ffffff;
-  font-size: 13px;
-  font-weight: 600;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+  width: 88px;
+  height: 74px;
+  border-radius: 12px;
+  position: relative;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
 }
 
-.work-name {
-  background: rgba(0, 0, 0, 0.25);
-  padding: 4px 10px;
-  border-radius: 10px;
+.works-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
 .input,
@@ -248,6 +238,7 @@ function appendToCollection(collectionId: string) {
   color: #ffffff;
   font-size: 15px;
   box-shadow: 0 10px 24px rgba(31, 122, 236, 0.2);
+  width: 100%;
 }
 
 .primary[disabled] {
@@ -340,5 +331,21 @@ function appendToCollection(collectionId: string) {
   background: transparent;
   color: #1f7aec;
   font-size: 14px;
+}
+
+.delete-icon {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 18px;
+  height: 18px;
+  line-height: 18px;
+  text-align: center;
+  border: none;
+  border-radius: 50%;
+  background: rgba(217, 48, 37, 0.9);
+  color: #ffffff;
+  font-size: 12px;
+  box-shadow: 0 4px 10px rgba(217, 48, 37, 0.25);
 }
 </style>

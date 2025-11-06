@@ -2,12 +2,11 @@
   <view class="page collection-detail">
     <view class="header">
       <button class="back-btn" @tap="goBack">返回</button>
-      <view class="header-info">
-        <text class="title">{{ collection?.title || '作品集详情' }}</text>
-        <text class="subtitle" v-if="collection">更新于 {{ collection.updatedAt }}</text>
-        <text class="subtitle" v-else>正在获取作品集信息</text>
-      </view>
+      <text class="title">{{ collection?.title || '作品集详情' }}</text>
     </view>
+
+    <text class="subtitle" v-if="collection">更新于 {{ collection.updatedAt }}</text>
+    <text class="subtitle" v-else>正在获取作品集信息</text>
 
     <view v-if="collection" class="info-card">
       <text class="section-title">作品集信息</text>
@@ -143,12 +142,6 @@ function removeWork(id: string) {
   background: rgba(31, 122, 236, 0.12);
   color: #1f7aec;
   font-size: 13px;
-}
-
-.header-info {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
 }
 
 .title {

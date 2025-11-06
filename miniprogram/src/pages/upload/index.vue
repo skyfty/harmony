@@ -15,30 +15,6 @@
       <view class="format-hint">
         <text>支持：JPG、PNG、MP4、MOV、OBJ、GLTF、FBX 等</text>
       </view>
-      <view class="upload-types">
-        <view class="type-item" v-for="option in uploadTypes" :key="option.label">
-          <view class="type-icon" :class="option.type"></view>
-          <view class="type-info">
-            <text class="type-label">{{ option.label }}</text>
-            <text class="type-desc">{{ option.desc }}</text>
-          </view>
-        </view>
-      </view>
-      <view v-if="lastUpload" class="last-upload">
-        <text class="last-upload-title">最近上传：</text>
-        <text class="last-upload-name">{{ lastUpload.name }}</text>
-        <text class="last-upload-type">{{ lastUpload.type }}</text>
-      </view>
-    </view>
-
-    <view class="tools-card">
-      <text class="tools-title">编辑工具</text>
-      <view class="tools-grid">
-        <view class="tool-item" v-for="tool in tools" :key="tool.label">
-          <view class="tool-icon" :class="tool.type"></view>
-          <text class="tool-label">{{ tool.label }}</text>
-        </view>
-      </view>
     </view>
 
     <view class="history-card">
@@ -70,11 +46,6 @@ declare const wx: any | undefined;
 
 type NavKey = 'home' | 'upload' | 'exhibition' | 'profile' | 'settings';
 
-type LastUpload = {
-  name: string;
-  type: string;
-};
-
 type HistoryItem = {
   id: string;
   name: string;
@@ -92,7 +63,6 @@ type UploadCandidate = {
 const worksStore = useWorksStore();
 
 const loading = ref(false);
-const lastUpload = ref<LastUpload | null>(null);
 const uploadHistory = ref<HistoryItem[]>([
   {
     id: 'a',
@@ -111,19 +81,6 @@ const uploadHistory = ref<HistoryItem[]>([
     gradient: 'linear-gradient(135deg, #b7f5ec, #90e0d9)',
   },
 ]);
-
-const uploadTypes = [
-  { label: '图片素材', desc: 'JPG · PNG · HEIC', type: 'image' },
-  { label: '视频素材', desc: 'MP4 · MOV · AVI', type: 'video' },
-  { label: '3D 模型', desc: 'OBJ · GLTF · FBX', type: 'model' },
-];
-
-const tools = [
-  { label: '变形', type: 'deform' },
-  { label: '编辑', type: 'edit' },
-  { label: '抠图', type: 'cutout' },
-  { label: '渲染', type: 'render' },
-];
 
 const typeLabels: Record<WorkType, string> = {
   image: '图片',
@@ -223,7 +180,6 @@ function finalizeUpload(type: WorkType, files: UploadCandidate[]) {
   );
   const first = normalized[0];
   const displayName = normalized.length > 1 ? `${first.name} 等 ${normalized.length} 个` : first.name;
-  lastUpload.value = { type: typeLabels[type], name: displayName };
   const representative = worksStore.workMap[newIds[0]];
   uploadHistory.value.unshift({
     id: newIds[0],
