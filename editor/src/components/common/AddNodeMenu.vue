@@ -1,9 +1,15 @@
 <script setup lang="ts">
-import { ref, watch, type WatchStopHandle } from 'vue'
+import { computed, ref, watch, type WatchStopHandle } from 'vue'
 import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import * as THREE from 'three'
-import type { GeometryType } from '@harmony/schema'
+import type {
+  GeometryType,
+  BehaviorComponentProps,
+  SceneBehavior,
+  SceneBehaviorScriptBinding,
+  SceneNodeComponentState,
+} from '@harmony/schema'
 
 import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from '@schema/loader'
 import { createPrimitiveMesh } from '@schema/geometry'
@@ -15,6 +21,16 @@ import { generateUuid } from '@/utils/uuid'
 import { type LightNodeType, type SceneNode } from '@harmony/schema'
 import { determineAssetCategoryId } from '@/stores/assetCatalog'
 import { blobToDataUrl } from '@/utils/blob'
+import { BEHAVIOR_COMPONENT_TYPE } from '@schema/components'
+import {
+  NAMED_BEHAVIOR_SEQUENCES_KEY,
+  cloneBehaviorList,
+  createWarpGateBehaviorSequence,
+  ensureBehaviorParams,
+  getNamedBehaviorSequence,
+  normalizeNamedBehaviorSequenceMap,
+  upsertNamedBehaviorSequence,
+} from '@schema/behaviors/definitions'
 
 const sceneStore = useSceneStore()
 const uiStore = useUiStore()
@@ -26,6 +42,17 @@ const VIEW_POINT_DEFAULT_OFFSET = 0.8
 const VIEW_POINT_MIN_DISTANCE = 0.3
 const VIEW_POINT_EDGE_MARGIN = 0.05
 const VIEW_POINT_COLOR = 0xff8a65
+const VIEW_POINT_SHOW_BEHAVIOR_NAME = 'Show View Point'
+const VIEW_POINT_HIDE_BEHAVIOR_NAME = 'Hide View Point'
+
+const WARP_GATE_RADIUS = 1
+const WARP_GATE_SEGMENTS = 64
+const WARP_GATE_COLOR = 0x9c27b0
+const WARP_GATE_ELEVATION = 0.5
+
+const GUIDEBOARD_RADIUS = 1
+const GUIDEBOARD_SEGMENTS = 32
+const GUIDEBOARD_COLOR = 0x9c27b0
 
 const tempViewPointBox = new THREE.Box3()
 const tempViewPointVecA = new THREE.Vector3()
@@ -616,6 +643,34 @@ function getNextViewPointName(): string {
   return `${base} ${index}`
 }
 
+function getNextGuideboardName(): string {
+  const names = new Set<string>()
+  collectNodeNames(sceneStore.nodes, names)
+  const base = 'Guideboard'
+  if (!names.has(base)) {
+    return base
+  }
+  let index = 1
+  while (names.has(`${base} ${index}`)) {
+    index += 1
+  }
+  return `${base} ${index}`
+}
+
+function getNextWarpGateName(): string {
+  const names = new Set<string>()
+  collectNodeNames(sceneStore.nodes, names)
+  const base = 'Warp Gate'
+  if (!names.has(base)) {
+    return base
+  }
+  let index = 1
+  while (names.has(`${base} ${index}`)) {
+    index += 1
+  }
+  return `${base} ${index}`
+}
+
 function resolveViewPointParent(): SceneNode | null {
   const candidate = sceneStore.selectedNode
   if (!candidate || candidate.isPlaceholder) {
@@ -623,6 +678,8 @@ function resolveViewPointParent(): SceneNode | null {
   }
   return candidate
 }
+
+const canCreateShowcaseNodes = computed(() => Boolean(resolveViewPointParent()))
 
 function computeViewPointWorldPosition(parent: SceneNode, radius: number): THREE.Vector3 | null {
   const runtime = getRuntimeObject(parent.id)
@@ -680,6 +737,291 @@ function computeViewPointWorldPosition(parent: SceneNode, radius: number): THREE
   return spawn
 }
 
+function findNodeWithParent(
+  nodes: SceneNode[] | undefined,
+  nodeId: string,
+  parent: SceneNode | null = null,
+): { node: SceneNode; parent: SceneNode | null } | null {
+  if (!nodes?.length) {
+    return null
+  }
+  for (const candidate of nodes) {
+    if (!candidate) {
+      continue
+    }
+    if (candidate.id === nodeId) {
+      return { node: candidate, parent }
+    }
+    if (candidate.children?.length) {
+      const nested = findNodeWithParent(candidate.children, nodeId, candidate)
+      if (nested) {
+        return nested
+      }
+    }
+  }
+  return null
+}
+
+function isViewPointNodeCandidate(node: SceneNode | null | undefined): boolean {
+  if (!node) {
+    return false
+  }
+  const flags = node.editorFlags ?? {}
+  return node.nodeType === 'Sphere' && Boolean(flags.editorOnly) && Boolean(flags.ignoreGridSnapping)
+}
+
+function findFirstViewPointUnderParent(parent: SceneNode | null, excludeNodeId?: string): SceneNode | null {
+  const container = parent?.children ?? sceneStore.nodes
+  if (!container?.length) {
+    return null
+  }
+  return container.find((child) => child && child.id !== excludeNodeId && isViewPointNodeCandidate(child)) ?? null
+}
+
+function resolvePerformSequenceId(target: SceneNode | null | undefined, behaviorName: string): string | null {
+  if (!target?.components) {
+    return null
+  }
+  const component = target.components[BEHAVIOR_COMPONENT_TYPE] as
+    | SceneNodeComponentState<BehaviorComponentProps>
+    | undefined
+  if (!component) {
+    return null
+  }
+  const props = component.props as BehaviorComponentProps | undefined
+  const behaviors = Array.isArray(props?.behaviors) ? props?.behaviors ?? [] : []
+  const normalizedName = behaviorName.trim().toLowerCase()
+  const match = behaviors.find((entry) => {
+    if (!entry) {
+      return false
+    }
+    if (entry.action !== 'perform') {
+      return false
+    }
+    const name = entry.name?.trim().toLowerCase() ?? ''
+    return name === normalizedName
+  })
+  if (match?.sequenceId) {
+    return match.sequenceId
+  }
+  const metadata = component.metadata as Record<string, unknown> | undefined
+  const map = normalizeNamedBehaviorSequenceMap(metadata?.[NAMED_BEHAVIOR_SEQUENCES_KEY])
+  const named = getNamedBehaviorSequence(map, behaviorName)
+  if (named && named.action === 'perform') {
+    return named.sequenceId
+  }
+  return null
+}
+
+function initializeGuideboardBehavior(nodeId: string, nodeName: string): void {
+  const located = findNodeWithParent(sceneStore.nodes, nodeId)
+  if (!located) {
+    return
+  }
+
+  let behaviorComponent = located.node.components?.[BEHAVIOR_COMPONENT_TYPE] as
+    | SceneNodeComponentState<BehaviorComponentProps>
+    | undefined
+
+  if (!behaviorComponent) {
+    const created = sceneStore.addNodeComponent(nodeId, BEHAVIOR_COMPONENT_TYPE) as
+      | SceneNodeComponentState<BehaviorComponentProps>
+      | null
+    if (!created) {
+      return
+    }
+    const refreshed = findNodeWithParent(sceneStore.nodes, nodeId)
+    behaviorComponent = refreshed?.node.components?.[BEHAVIOR_COMPONENT_TYPE] as
+      | SceneNodeComponentState<BehaviorComponentProps>
+      | undefined
+  }
+
+  if (!behaviorComponent) {
+    return
+  }
+
+  const props = behaviorComponent.props as BehaviorComponentProps | undefined
+  const existingSource = Array.isArray(props?.behaviors) ? props.behaviors : []
+  const currentList = cloneBehaviorList(existingSource)
+  const nextList = currentList.filter((entry): entry is SceneBehavior => Boolean(entry) && entry.action !== 'click')
+
+  const currentMetadata = (behaviorComponent.metadata as Record<string, unknown> | undefined) ?? {}
+  const initialMap = normalizeNamedBehaviorSequenceMap(currentMetadata[NAMED_BEHAVIOR_SEQUENCES_KEY])
+  const namedResult = upsertNamedBehaviorSequence(initialMap, nodeName, 'click')
+  const sequenceId = namedResult.entry.sequenceId
+
+  const script = ensureBehaviorParams({
+    type: 'lantern',
+    params: {},
+  } as SceneBehaviorScriptBinding)
+
+  const behavior: SceneBehavior = {
+    id: generateUuid(),
+    name: nodeName,
+    action: 'click',
+    sequenceId,
+    script,
+  }
+
+  nextList.push(behavior)
+  sceneStore.updateNodeComponentProps(nodeId, behaviorComponent.id, { behaviors: nextList })
+
+  if (namedResult.map !== initialMap) {
+    const nextMetadata: Record<string, unknown> = {
+      ...currentMetadata,
+      [NAMED_BEHAVIOR_SEQUENCES_KEY]: namedResult.map,
+    }
+    sceneStore.updateNodeComponentMetadata(nodeId, behaviorComponent.id, nextMetadata)
+  }
+}
+
+function initializeViewPointBehavior(nodeId: string): void {
+  const located = findNodeWithParent(sceneStore.nodes, nodeId)
+  if (!located) {
+    return
+  }
+
+  let behaviorComponent = located.node.components?.[BEHAVIOR_COMPONENT_TYPE] as
+    | SceneNodeComponentState<BehaviorComponentProps>
+    | undefined
+
+  if (!behaviorComponent) {
+    const created = sceneStore.addNodeComponent(nodeId, BEHAVIOR_COMPONENT_TYPE) as
+      | SceneNodeComponentState<BehaviorComponentProps>
+      | null
+    if (!created) {
+      return
+    }
+    const refreshed = findNodeWithParent(sceneStore.nodes, nodeId)
+    behaviorComponent = refreshed?.node.components?.[BEHAVIOR_COMPONENT_TYPE] as
+      | SceneNodeComponentState<BehaviorComponentProps>
+      | undefined
+  }
+
+  if (!behaviorComponent) {
+    return
+  }
+
+  const props = behaviorComponent.props as BehaviorComponentProps | undefined
+  const behaviorList = Array.isArray(props?.behaviors) ? props.behaviors : []
+
+  const findSequenceIdByName = (targetName: string): string | null => {
+    const normalized = targetName.trim().toLowerCase()
+    for (const candidate of behaviorList) {
+      if (!candidate || candidate.action !== 'perform') {
+        continue
+      }
+      const candidateName = candidate.name?.trim().toLowerCase() ?? ''
+      if (candidateName === normalized && candidate.sequenceId?.trim().length) {
+        return candidate.sequenceId.trim()
+      }
+    }
+    return null
+  }
+
+  const currentMetadata = (behaviorComponent.metadata as Record<string, unknown> | undefined) ?? {}
+  const initialMap = normalizeNamedBehaviorSequenceMap(currentMetadata[NAMED_BEHAVIOR_SEQUENCES_KEY])
+  let workingMap = initialMap
+  let changed = false
+
+  const showResult = upsertNamedBehaviorSequence(workingMap, VIEW_POINT_SHOW_BEHAVIOR_NAME, 'perform', {
+    sequenceId: findSequenceIdByName(VIEW_POINT_SHOW_BEHAVIOR_NAME) ?? undefined,
+  })
+  if (showResult.map !== workingMap) {
+    workingMap = showResult.map
+    changed = true
+  }
+
+  const hideResult = upsertNamedBehaviorSequence(workingMap, VIEW_POINT_HIDE_BEHAVIOR_NAME, 'perform', {
+    sequenceId: findSequenceIdByName(VIEW_POINT_HIDE_BEHAVIOR_NAME) ?? undefined,
+  })
+  if (hideResult.map !== workingMap) {
+    workingMap = hideResult.map
+    changed = true
+  }
+
+  if (!changed) {
+    return
+  }
+
+  const nextMetadata: Record<string, unknown> = {
+    ...currentMetadata,
+    [NAMED_BEHAVIOR_SEQUENCES_KEY]: workingMap,
+  }
+
+  sceneStore.updateNodeComponentMetadata(nodeId, behaviorComponent.id, nextMetadata)
+}
+
+function initializeWarpGateBehavior(nodeId: string): void {
+  const located = findNodeWithParent(sceneStore.nodes, nodeId)
+  if (!located) {
+    return
+  }
+
+  let activeNode = located.node
+  let parent = located.parent
+
+  const resolveViewPoint = () => findFirstViewPointUnderParent(parent, nodeId)
+
+  let viewPointNode = resolveViewPoint()
+
+  if (viewPointNode) {
+    initializeViewPointBehavior(viewPointNode.id)
+    const refreshed = findNodeWithParent(sceneStore.nodes, viewPointNode.id)
+    if (refreshed) {
+      viewPointNode = refreshed.node
+    }
+  }
+
+  let behaviorComponent = activeNode.components?.[BEHAVIOR_COMPONENT_TYPE] as
+    | SceneNodeComponentState<BehaviorComponentProps>
+    | undefined
+
+  if (!behaviorComponent) {
+    const created = sceneStore.addNodeComponent(nodeId, BEHAVIOR_COMPONENT_TYPE) as
+      | SceneNodeComponentState<BehaviorComponentProps>
+      | null
+    if (!created) {
+      return
+    }
+    const refreshed = findNodeWithParent(sceneStore.nodes, nodeId)
+    if (!refreshed) {
+      return
+    }
+    activeNode = refreshed.node
+    parent = refreshed.parent
+    behaviorComponent = refreshed.node.components?.[BEHAVIOR_COMPONENT_TYPE] as
+      | SceneNodeComponentState<BehaviorComponentProps>
+      | undefined
+    viewPointNode = resolveViewPoint()
+  }
+
+  if (!behaviorComponent) {
+    return
+  }
+
+  const props = behaviorComponent.props as BehaviorComponentProps | undefined
+  const existing = Array.isArray(props?.behaviors) ? props.behaviors : []
+  if (existing.length) {
+    return
+  }
+
+  const targetNode = viewPointNode ?? parent ?? null
+  const showViewPointSequenceId = resolvePerformSequenceId(targetNode, VIEW_POINT_SHOW_BEHAVIOR_NAME)
+  const hideViewPointSequenceId = resolvePerformSequenceId(targetNode, VIEW_POINT_HIDE_BEHAVIOR_NAME)
+
+  const behaviors = createWarpGateBehaviorSequence({
+    warpGateNodeId: nodeId,
+    viewPointNodeId: viewPointNode?.id ?? null,
+    fallbackNodeId: parent?.id ?? null,
+    showViewPointSequenceId,
+    hideViewPointSequenceId,
+    name: activeNode.name ?? 'Warp Gate',
+  })
+
+  sceneStore.updateNodeComponentProps(nodeId, behaviorComponent.id, { behaviors })
+}
+
 function handleCreateEmptyNode() {
   const emptyObject = new THREE.Object3D()
   const name = getNextEmptyName()
@@ -694,7 +1036,7 @@ function handleCreateEmptyNode() {
   })
 }
 
-async function handleCreateViewPointNode() {
+async function handleCreateViewPointNode(): Promise<SceneNode | null> {
   const name = getNextViewPointName()
   const geometry = new THREE.SphereGeometry(VIEW_POINT_RADIUS, VIEW_POINT_SEGMENTS, VIEW_POINT_SEGMENTS)
   const material = new THREE.MeshBasicMaterial({
@@ -732,22 +1074,183 @@ async function handleCreateViewPointNode() {
   }
 
   const parent = resolveViewPointParent()
-  const parentId = parent ? parent.id : null
-  const worldPosition = parent ? computeViewPointWorldPosition(parent, VIEW_POINT_RADIUS) : null
+  if (!parent) {
+    return null
+  }
+  const parentId = parent.id
+  const worldPosition = computeViewPointWorldPosition(parent, VIEW_POINT_RADIUS)
 
-  await sceneStore.addModelNode({
+  const created = await sceneStore.addModelNode({
     object: markerRoot,
     nodeType: 'Sphere',
     name,
     baseY: 0,
     parentId,
-    position: worldPosition ?? undefined,
+  position: worldPosition ?? undefined,
     snapToGrid: false,
     editorFlags: {
       editorOnly: true,
       ignoreGridSnapping: true,
     },
   })
+
+  if (created) {
+    initializeViewPointBehavior(created.id)
+  }
+
+  return created
+}
+
+async function handleCreateGuideboardNode(): Promise<SceneNode | null> {
+  const name = getNextGuideboardName()
+  const geometry = new THREE.SphereGeometry(GUIDEBOARD_RADIUS, GUIDEBOARD_SEGMENTS, GUIDEBOARD_SEGMENTS)
+  const material = new THREE.MeshBasicMaterial({
+    color: GUIDEBOARD_COLOR,
+    side: THREE.DoubleSide,
+  })
+
+  const guideboardMesh = new THREE.Mesh(geometry, material)
+  guideboardMesh.name = `${name} Visual`
+  guideboardMesh.castShadow = false
+  guideboardMesh.receiveShadow = false
+  guideboardMesh.userData = {
+    ...(guideboardMesh.userData ?? {}),
+    ignoreGridSnapping: true,
+    guideboard: true,
+  }
+
+  const guideboardRoot = new THREE.Object3D()
+  guideboardRoot.name = name
+  guideboardRoot.add(guideboardMesh)
+  guideboardRoot.userData = {
+    ...(guideboardRoot.userData ?? {}),
+    ignoreGridSnapping: true,
+    guideboard: true,
+  }
+
+  const parent = resolveViewPointParent()
+  if (!parent) {
+    return null
+  }
+  const parentId = parent.id
+  const siblingViewPoint = findFirstViewPointUnderParent(parent)
+
+  const computedPosition = siblingViewPoint
+    ? new THREE.Vector3(
+        siblingViewPoint.position.x,
+        siblingViewPoint.position.y,
+        siblingViewPoint.position.z,
+      )
+    : computeViewPointWorldPosition(parent, GUIDEBOARD_RADIUS)
+
+  const created = await sceneStore.addModelNode({
+    object: guideboardRoot,
+    nodeType: 'Sphere',
+    name,
+    baseY: 0,
+    parentId,
+    position: computedPosition ?? undefined,
+    snapToGrid: false,
+    editorFlags: {
+      ignoreGridSnapping: true,
+    },
+  })
+
+  if (created) {
+    if (siblingViewPoint) {
+      initializeViewPointBehavior(siblingViewPoint.id)
+    }
+    initializeGuideboardBehavior(created.id, created.name)
+  }
+
+  return created
+}
+
+async function handleCreateWarpGateNode(): Promise<SceneNode | null> {
+  const name = getNextWarpGateName()
+  const geometry = new THREE.CircleGeometry(WARP_GATE_RADIUS, WARP_GATE_SEGMENTS)
+  const material = new THREE.MeshBasicMaterial({
+    color: WARP_GATE_COLOR,
+    side: THREE.DoubleSide,
+  })
+  const warpGateMesh = new THREE.Mesh(geometry, material)
+  warpGateMesh.name = `${name} Visual`
+  warpGateMesh.castShadow = false
+  warpGateMesh.receiveShadow = false
+  warpGateMesh.userData = {
+    ...(warpGateMesh.userData ?? {}),
+    ignoreGridSnapping: true,
+    warpGate: true,
+  }
+
+  const warpGateRoot = new THREE.Object3D()
+  warpGateRoot.name = name
+  warpGateRoot.add(warpGateMesh)
+  warpGateRoot.userData = {
+    ...(warpGateRoot.userData ?? {}),
+    ignoreGridSnapping: true,
+    warpGate: true,
+  }
+
+  const parent = resolveViewPointParent()
+  if (!parent) {
+    return null
+  }
+  const parentId = parent.id
+  const referencePosition = computeViewPointWorldPosition(parent, WARP_GATE_RADIUS)
+  const spawnPosition = referencePosition ? referencePosition.clone() : new THREE.Vector3(0, 0, 0)
+  spawnPosition.y += WARP_GATE_ELEVATION
+
+  const created = await sceneStore.addModelNode({
+    object: warpGateRoot,
+    nodeType: 'Circle',
+    name,
+    baseY: 0,
+    parentId,
+    position: spawnPosition,
+    snapToGrid: false,
+    editorFlags: {
+      ignoreGridSnapping: true,
+    },
+  })
+
+  if (created) {
+    initializeWarpGateBehavior(created.id)
+  }
+
+  return created
+}
+
+function applySelectionById(selectionId: string | null): void {
+  if (selectionId) {
+    sceneStore.selectNode(selectionId)
+  } else {
+    sceneStore.clearSelection()
+  }
+}
+
+async function handleCreateShowcaseVisit(): Promise<void> {
+  if (!canCreateShowcaseNodes.value) {
+    return
+  }
+  const originalSelectionId = sceneStore.selectedNode?.id ?? null
+
+  try {
+    applySelectionById(originalSelectionId)
+    const warpGate = await handleCreateWarpGateNode()
+    if (!warpGate) {
+      return
+    }
+    applySelectionById(originalSelectionId)
+    const viewPoint = await handleCreateViewPointNode()
+    if (!viewPoint) {
+      return
+    }
+    applySelectionById(originalSelectionId)
+    await handleCreateGuideboardNode()
+  } finally {
+    applySelectionById(originalSelectionId)
+  }
 }
 
 function resolveActiveModelParentId(): string | null {
@@ -808,7 +1311,23 @@ function handleAddLight(type: LightNodeType) {
     <v-list class="add-menu-list">
       <v-list-item title="Group" @click="handleAddGroup()" />
       <v-list-item title="Create Empty" @click="handleCreateEmptyNode()" />
-      <v-list-item title="View Point" @click="handleCreateViewPointNode()" />
+      <v-menu  transition="none" location="end" offset="8" :disabled="!canCreateShowcaseNodes">
+        <template #activator="{ props: showcaseMenuProps }">
+          <v-list-item
+            title="Showcase"
+            append-icon="mdi-chevron-right"
+            :disabled="!canCreateShowcaseNodes"
+            v-bind="showcaseMenuProps"
+          />
+        </template>
+        <v-list class="add-submenu-list">
+          <v-list-item title="Visit" :disabled="!canCreateShowcaseNodes" @click="handleCreateShowcaseVisit()" />
+          <v-divider />
+          <v-list-item title="Warp Gate" :disabled="!canCreateShowcaseNodes" @click="handleCreateWarpGateNode()" />
+          <v-list-item title="View Point" :disabled="!canCreateShowcaseNodes" @click="handleCreateViewPointNode()" />
+          <v-list-item title="Guideboard" :disabled="!canCreateShowcaseNodes" @click="handleCreateGuideboardNode()" />
+        </v-list>
+      </v-menu>
       <v-menu  transition="none" location="end" offset="8">
         <template #activator="{ props: lightMenuProps }">
           <v-list-item title="Light" append-icon="mdi-chevron-right" v-bind="lightMenuProps" />

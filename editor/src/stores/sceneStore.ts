@@ -6553,6 +6553,38 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
       return true
     },
+    updateNodeComponentMetadata(nodeId: string, componentId: string, metadata: Record<string, unknown> | undefined): boolean {
+      const target = findNodeById(this.nodes, nodeId)
+      const match = findComponentEntryById(target?.components, componentId)
+      if (!match) {
+        return false
+      }
+
+      this.captureHistorySnapshot()
+
+      visitNode(this.nodes, nodeId, (node) => {
+        const current = findComponentEntryById(node.components, componentId)
+        if (!current) {
+          return
+        }
+        const [currentType, state] = current
+        const nextComponents: SceneNodeComponentMap = { ...(node.components ?? {}) }
+        nextComponents[currentType] = {
+          ...state,
+          type: currentType,
+          metadata: metadata ? { ...metadata } : undefined,
+        }
+        node.components = componentCount(nextComponents) ? nextComponents : undefined
+      })
+
+      this.nodes = [...this.nodes]
+      const updatedNode = findNodeById(this.nodes, nodeId)
+      if (updatedNode) {
+        componentManager.syncNode(updatedNode)
+      }
+      commitSceneSnapshot(this)
+      return true
+    },
     hasRuntimeObject(id: string) {
       return runtimeObjectRegistry.has(id)
     },

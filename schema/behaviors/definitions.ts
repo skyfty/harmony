@@ -168,7 +168,7 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
   },
   {
     id: 'showPurpose',
-    label: 'Show Purpose Controls',
+    label: 'Show Purpose',
     description: 'Display observe and level view buttons in the viewer.',
     icon: 'mdi-crosshairs-eye',
     createDefaultParams(): ShowPurposeBehaviorParams {
@@ -179,7 +179,7 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
   },
   {
     id: 'hidePurpose',
-    label: 'Hide Purpose Controls',
+    label: 'Hide Purpose',
     description: 'Hide the observe and level view buttons.',
     icon: 'mdi-crosshairs-off',
     createDefaultParams(): HidePurposeBehaviorParams {
@@ -305,6 +305,187 @@ export function findBehaviorScript<TParams = unknown>(
 }
 
 export type BehaviorMap = SceneBehaviorMap
+
+let behaviorStepIdCounter = 0
+
+function createBehaviorStepId(prefix: string): string {
+  behaviorStepIdCounter += 1
+  return `${prefix}_${Date.now()}_${behaviorStepIdCounter.toString(16)}`
+}
+
+export interface WarpGateBehaviorOptions {
+  warpGateNodeId: string
+  viewPointNodeId?: string | null
+  fallbackNodeId?: string | null
+  showViewPointSequenceId?: string | null
+  hideViewPointSequenceId?: string | null
+  name?: string
+}
+
+export function createWarpGateBehaviorSequence(options: WarpGateBehaviorOptions): SceneBehavior[] {
+  const sharedTarget = options.viewPointNodeId ?? options.fallbackNodeId ?? null
+  const result: SceneBehavior[] = []
+
+  const createSequence = (action: BehaviorEventType, scripts: SceneBehaviorScriptBinding[]) => {
+    const sequenceId = createBehaviorSequenceId()
+    scripts.forEach((script, index) => {
+      result.push({
+        id: createBehaviorStepId(`warp_gate_${action}_${index}`),
+        name: options.name ?? '',
+        action,
+        sequenceId,
+        script: ensureBehaviorParams(script),
+      })
+    })
+  }
+
+  createSequence('click', [
+    {
+      type: 'moveTo',
+      params: {
+        targetNodeId: options.warpGateNodeId,
+      },
+    } as SceneBehaviorScriptBinding,
+    {
+      type: 'watch',
+      params: {
+        targetNodeId: sharedTarget,
+      },
+    } as SceneBehaviorScriptBinding,
+  ])
+
+  createSequence('approach', [
+    {
+      type: 'hide',
+      params: {
+        targetNodeId: options.warpGateNodeId,
+      },
+    } as SceneBehaviorScriptBinding,
+    {
+      type: 'showPurpose',
+      params: {
+        targetNodeId: sharedTarget,
+      },
+    } as SceneBehaviorScriptBinding,
+    {
+      type: 'trigger',
+      params: {
+        targetNodeId: sharedTarget,
+        sequenceId: options.showViewPointSequenceId ?? null,
+      },
+    } as SceneBehaviorScriptBinding,
+  ])
+
+  createSequence('depart', [
+    {
+      type: 'show',
+      params: {
+        targetNodeId: options.warpGateNodeId,
+      },
+    } as SceneBehaviorScriptBinding,
+    {
+      type: 'hidePurpose',
+      params: {},
+    } as SceneBehaviorScriptBinding,
+    {
+      type: 'trigger',
+      params: {
+        targetNodeId: sharedTarget,
+        sequenceId: options.hideViewPointSequenceId ?? null,
+      },
+    } as SceneBehaviorScriptBinding,
+  ])
+
+  return result
+}
+
+export const NAMED_BEHAVIOR_SEQUENCES_KEY = 'namedBehaviorSequences'
+
+export interface NamedBehaviorSequenceEntry {
+  action: BehaviorEventType
+  name: string
+  sequenceId: string
+}
+
+export type NamedBehaviorSequenceMap = Record<string, NamedBehaviorSequenceEntry>
+
+const VALID_BEHAVIOR_ACTIONS: BehaviorEventType[] = ['click', 'approach', 'depart', 'perform']
+
+function normalizeNamedSequenceKey(name: string): string {
+  return name.trim().toLowerCase()
+}
+
+export function normalizeNamedBehaviorSequenceMap(input: unknown): NamedBehaviorSequenceMap {
+  if (!input || typeof input !== 'object') {
+    return {}
+  }
+  const map: NamedBehaviorSequenceMap = {}
+  Object.entries(input as Record<string, unknown>).forEach(([key, value]) => {
+    if (!value || typeof value !== 'object') {
+      return
+    }
+    const candidate = value as Partial<NamedBehaviorSequenceEntry> & {
+      action?: unknown
+      sequenceId?: unknown
+      name?: unknown
+    }
+    const rawAction = candidate.action
+    if (typeof rawAction !== 'string' || !VALID_BEHAVIOR_ACTIONS.includes(rawAction as BehaviorEventType)) {
+      return
+    }
+    const sequenceId = typeof candidate.sequenceId === 'string' && candidate.sequenceId.trim().length
+      ? candidate.sequenceId.trim()
+      : ''
+    if (!sequenceId) {
+      return
+    }
+    const rawName = typeof candidate.name === 'string' && candidate.name.trim().length
+      ? candidate.name.trim()
+      : key
+    const normalizedKey = normalizeNamedSequenceKey(rawName)
+    map[normalizedKey] = {
+      action: rawAction as BehaviorEventType,
+      name: rawName,
+      sequenceId,
+    }
+  })
+  return map
+}
+
+export function getNamedBehaviorSequence(
+  map: NamedBehaviorSequenceMap,
+  name: string,
+): NamedBehaviorSequenceEntry | null {
+  return map[normalizeNamedSequenceKey(name)] ?? null
+}
+
+export function upsertNamedBehaviorSequence(
+  map: NamedBehaviorSequenceMap,
+  name: string,
+  action: BehaviorEventType,
+  options: { sequenceId?: string } = {},
+): { map: NamedBehaviorSequenceMap; entry: NamedBehaviorSequenceEntry } {
+  const normalizedKey = normalizeNamedSequenceKey(name)
+  const existing = map[normalizedKey]
+  if (existing) {
+    return { map, entry: existing }
+  }
+  const sequenceId = options.sequenceId && options.sequenceId.trim().length
+    ? options.sequenceId.trim()
+    : createBehaviorSequenceId()
+  const entry: NamedBehaviorSequenceEntry = {
+    action,
+    name,
+    sequenceId,
+  }
+  return {
+    map: {
+      ...map,
+      [normalizedKey]: entry,
+    },
+    entry,
+  }
+}
 
 export function createEmptyBehaviorComponentProps(): BehaviorComponentProps {
   return {
