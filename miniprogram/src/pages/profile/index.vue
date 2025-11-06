@@ -52,21 +52,31 @@
       </view>
     </view>
 
-    <view class="section">
-      <view class="section-header">
-        <text class="section-title">待办事项</text>
-        <text class="section-action">全部</text>
-      </view>
-      <view class="todo-list">
-        <view class="todo-item" v-for="todo in todos" :key="todo.id">
-          <view class="todo-bullet" :style="{ background: todo.color }"></view>
-          <view class="todo-info">
-            <text class="todo-title">{{ todo.title }}</text>
-            <text class="todo-desc">{{ todo.desc }}</text>
-          </view>
-          <text class="todo-status">{{ todo.status }}</text>
+    <view class="quick-actions">
+      <view class="action-card order" @tap="goOrders">
+        <view class="action-icon order"></view>
+        <view class="action-texts">
+          <text class="action-title">我的订单</text>
+          <text class="action-desc">查看订购记录与状态</text>
         </view>
+        <text class="action-arrow">›</text>
       </view>
+      <view class="action-card settings" @tap="goSettings">
+        <view class="action-icon settings"></view>
+        <view class="action-texts">
+          <text class="action-title">设置</text>
+          <text class="action-desc">账户信息与偏好</text>
+        </view>
+        <text class="action-arrow">›</text>
+      </view>
+    </view>
+
+    <view class="footer-links">
+      <text class="link" @tap="goSupport('help')">帮助中心</text>
+      <text class="divider">·</text>
+      <text class="link" @tap="goSupport('service')">客服支持</text>
+      <text class="divider">·</text>
+      <text class="link" @tap="goSupport('about')">关于平台</text>
     </view>
 
     <BottomNav active="profile" @navigate="handleNavigate" />
@@ -75,7 +85,7 @@
 <script setup lang="ts">
 import BottomNav from '@/components/BottomNav.vue';
 
-type NavKey = 'home' | 'upload' | 'exhibition' | 'profile' | 'settings';
+type NavKey = 'home' | 'upload' | 'exhibition' | 'profile' | 'optimize';
 
 const stats = [
   { label: '本月曝光', value: '12.3K' },
@@ -90,17 +100,20 @@ const works = [
   { id: 'w4', name: '环境剧场', meta: '曝光 1.1K', rating: '4.7', likes: 178, gradient: 'linear-gradient(135deg, #e7e4ff, #f1eeff)' },
 ];
 
-const todos = [
-  { id: 't1', title: '完善展览简介', desc: '为最新展览补充介绍文字与封面', status: '待完成', color: '#8bb8ff' },
-  { id: 't2', title: '优化模型材质', desc: '更新光影场景的材质参数', status: '进行中', color: '#9df3df' },
-];
-
 const routes: Record<NavKey, string> = {
   home: '/pages/home/index',
   upload: '/pages/upload/index',
   exhibition: '/pages/exhibition/index',
   profile: '/pages/profile/index',
-  settings: '/pages/settings/index',
+  optimize: '/pages/optimize/index',
+};
+
+type SupportLink = 'help' | 'service' | 'about';
+
+const supportMessages: Record<SupportLink, string> = {
+  help: '帮助中心即将上线，敬请期待',
+  service: '联系客服：service@harmony.com',
+  about: 'Harmony Lab 专注于数字展陈创新',
 };
 
 function handleNavigate(target: NavKey) {
@@ -113,6 +126,22 @@ function handleNavigate(target: NavKey) {
 
 function goWorksList() {
   uni.navigateTo({ url: '/pages/works/index' });
+}
+
+function goOrders() {
+  uni.navigateTo({ url: '/pages/orders/index' });
+}
+
+function goSettings() {
+  uni.navigateTo({ url: '/pages/settings/index' });
+}
+
+function goSupport(type: SupportLink) {
+  const message = supportMessages[type];
+  if (!message) {
+    return;
+  }
+  uni.showToast({ title: message, icon: 'none' });
 }
 </script>
 <style scoped lang="scss">
@@ -367,43 +396,98 @@ function goWorksList() {
   font-size: 12px;
 }
 
-.todo-list {
+.quick-actions {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
+  margin-top: 8px;
 }
 
-.todo-item {
+.action-card {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
+  background: #ffffff;
+  border-radius: 20px;
+  padding: 18px;
+  box-shadow: 0 10px 28px rgba(31, 122, 236, 0.08);
 }
 
-.todo-bullet {
-  width: 12px;
-  height: 12px;
-  border-radius: 6px;
+.action-card.order {
+  background: linear-gradient(135deg, rgba(79, 207, 255, 0.16), rgba(79, 158, 255, 0.06));
 }
 
-.todo-info {
+.action-card.settings {
+  background: linear-gradient(135deg, rgba(105, 255, 199, 0.16), rgba(105, 182, 255, 0.06));
+}
+
+.action-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  font-size: 20px;
+  font-weight: 600;
+  position: relative;
+}
+
+.action-card.order .action-icon {
+  background: linear-gradient(135deg, #4f9eff, #1f7aec);
+}
+
+.action-card.settings .action-icon {
+  background: linear-gradient(135deg, #31d1a1, #57a7ff);
+}
+
+.action-icon.order::before {
+  content: '🛒';
+}
+
+.action-icon.settings::before {
+  content: '⚙';
+}
+
+.action-texts {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
-.todo-title {
-  font-size: 14px;
+.action-title {
+  font-size: 16px;
+  font-weight: 600;
   color: #1f1f1f;
 }
 
-.todo-desc {
-  font-size: 12px;
-  color: #8a94a6;
+.action-desc {
+  font-size: 13px;
+  color: #6b778d;
 }
 
-.todo-status {
+.action-arrow {
+  font-size: 22px;
+  color: rgba(31, 31, 31, 0.4);
+}
+
+.footer-links {
+  margin: 18px 0 72px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  color: #8a94a6;
   font-size: 12px;
-  color: #1f7aec;
+}
+
+.link {
+  color: #4e81ff;
+}
+
+.divider {
+  color: #c0c6d4;
 }
 </style>

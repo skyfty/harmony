@@ -16,13 +16,20 @@
       <button class="hero-link">查看全部</button>
     </view>
 
-    <view class="category-panel">
-      <text class="panel-title">展览分类</text>
-      <scroll-view scroll-x class="category-scroll">
-        <view class="category-tag" v-for="tag in categories" :key="tag">
-          <text>{{ tag }}</text>
+    <view class="section">
+      <view class="section-header">
+        <text class="section-title">我参观过的</text>
+        <text class="section-more" @tap="goAllVisited">查看全部</text>
+      </view>
+      <view class="works-grid">
+        <view class="work-card" v-for="e in visitedExhibitions" :key="e.id" @tap="openExhibition(e.id)">
+          <view class="work-thumb" :style="{ background: e.gradient }"></view>
+          <view class="work-info">
+            <text class="work-name">{{ e.name }}</text>
+            <text class="work-meta">上次参观：{{ e.visitedAt }}</text>
+          </view>
         </view>
-      </scroll-view>
+      </view>
     </view>
 
     <view class="section">
@@ -74,21 +81,19 @@
 import { computed } from 'vue';
 import BottomNav from '@/components/BottomNav.vue';
 
-type NavKey = 'home' | 'upload' | 'exhibition' | 'profile' | 'settings';
-
-const categories = [
-  '雕塑展',
-  '绘画展',
-  '数字艺术',
-  '建模',
-  '虚拟展厅',
-  '互动媒体',
-];
+type NavKey = 'home' | 'upload' | 'exhibition' | 'profile' | 'optimize';
 
 const exhibitionCards = computed(() => [
   { id: 'a', name: '浮光影展', meta: '沉浸式光影体验', gradient: 'linear-gradient(135deg, #90b6ff 0%, #c8d6ff 100%)' },
   { id: 'b', name: '数字艺术馆', meta: '多维色彩体验', gradient: 'linear-gradient(135deg, #7fe9de 0%, #b5fff4 100%)' },
   { id: 'c', name: '未来装置展', meta: '机械与艺术融合', gradient: 'linear-gradient(135deg, #ffd59e 0%, #ffe8c9 100%)' },
+]);
+
+const visitedExhibitions = computed(() => [
+  { id: 'ex1', name: '沉浸式光影展', visitedAt: '昨天', gradient: 'linear-gradient(135deg, #c1d8ff, #a0c5ff)' },
+  { id: 'ex2', name: '未来装置馆', visitedAt: '3 天前', gradient: 'linear-gradient(135deg, #b7f5ec, #90e0d9)' },
+  { id: 'ex3', name: '数字画廊', visitedAt: '上周', gradient: 'linear-gradient(135deg, #ffd6ec, #ffeaf5)' },
+  { id: 'ex4', name: '交互媒体展', visitedAt: '上月', gradient: 'linear-gradient(135deg, #e7e4ff, #f1eeff)' },
 ]);
 
 const works = computed(() => [
@@ -103,7 +108,7 @@ const routes: Record<NavKey, string> = {
   upload: '/pages/upload/index',
   exhibition: '/pages/exhibition/index',
   profile: '/pages/profile/index',
-  settings: '/pages/settings/index',
+  optimize: '/pages/optimize/index',
 };
 
 function handleNavigate(target: NavKey) {
@@ -116,6 +121,15 @@ function handleNavigate(target: NavKey) {
 
 function goWorksList() {
   uni.navigateTo({ url: '/pages/works/index' });
+}
+
+function openExhibition(id: string) {
+  uni.navigateTo({ url: `/pages/exhibition/detail/index?id=${id}` });
+}
+
+function goAllVisited() {
+  // 先跳转到展览页，后续可实现“我参观过的”筛选
+  uni.navigateTo({ url: '/pages/exhibition/index' });
 }
 </script>
 <style scoped lang="scss">
@@ -214,14 +228,6 @@ function goWorksList() {
   color: #ffffff;
   font-size: 14px;
 }
-
-.category-panel {
-  background: #ffffff;
-  border-radius: 18px;
-  padding: 16px;
-  box-shadow: 0 6px 16px rgba(31, 122, 236, 0.08);
-}
-
 
 .work-stats {
   display: flex;

@@ -13,10 +13,25 @@
       "path": "pages/exhibition/create/index"
     },
     {
+      "path": "pages/exhibition/detail/index"
+    },
+    {
       "path": "pages/profile/index"
     },
     {
+      "path": "pages/optimize/index"
+    },
+    {
+      "path": "pages/optimize/detail/index"
+    },
+    {
       "path": "pages/settings/index"
+    },
+    {
+      "path": "pages/orders/index"
+    },
+    {
+      "path": "pages/orders/detail/index"
     },
     {
       "path": "pages/works/index"

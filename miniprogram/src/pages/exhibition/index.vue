@@ -43,7 +43,7 @@
 <script setup lang="ts">
 import BottomNav from '@/components/BottomNav.vue';
 
-type NavKey = 'home' | 'upload' | 'exhibition' | 'profile' | 'settings';
+type NavKey = 'home' | 'upload' | 'exhibition' | 'profile' | 'optimize';
 
 type Exhibition = {
   id: string;
@@ -82,7 +82,7 @@ const routes: Record<NavKey, string> = {
   upload: '/pages/upload/index',
   exhibition: '/pages/exhibition/index',
   profile: '/pages/profile/index',
-  settings: '/pages/settings/index',
+  optimize: '/pages/optimize/index',
 };
 
 function goCreate() {

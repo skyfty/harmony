@@ -143,7 +143,7 @@ function confirmRemove(id: string) {
 </script>
 <style scoped lang="scss">
 .page {
-  padding: 20px;
+  padding: 20px 16px 40px;
   min-height: 100vh;
   background: #f5f7fb;
   box-sizing: border-box;
@@ -156,6 +156,9 @@ function confirmRemove(id: string) {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  width: 100%;
+  max-width: 560px;
+  align-self: center;
 }
 
 .title {
@@ -212,6 +215,8 @@ function confirmRemove(id: string) {
 .input,
 .textarea {
   width: 100%;
+  max-width: 420px;
+  align-self: center;
   border: none;
   border-radius: 14px;
   background: rgba(31, 122, 236, 0.08);
@@ -337,15 +342,16 @@ function confirmRemove(id: string) {
   position: absolute;
   top: 4px;
   right: 4px;
-  width: 18px;
-  height: 18px;
-  line-height: 18px;
+  width: 22px;
+  height: 22px;
+  line-height: 22px;
   text-align: center;
   border: none;
   border-radius: 50%;
-  background: rgba(217, 48, 37, 0.9);
+  background: rgba(217, 48, 37, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.9);
   color: #ffffff;
-  font-size: 12px;
+  font-size: 14px;
   box-shadow: 0 4px 10px rgba(217, 48, 37, 0.25);
 }
 </style>

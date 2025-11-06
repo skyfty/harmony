@@ -1,7 +1,6 @@
 <template>
   <view class="page collection-detail">
     <view class="header">
-      <button class="back-btn" @tap="goBack">返回</button>
       <text class="title">{{ collection?.title || '作品集详情' }}</text>
     </view>
 
@@ -12,9 +11,7 @@
       <text class="section-title">作品集信息</text>
       <input class="input" v-model="editableTitle" placeholder="作品集标题" />
       <textarea class="textarea" v-model="editableDescription" placeholder="作品集描述"></textarea>
-      <button class="primary" :disabled="!canSave" @tap="saveCollection">
-        {{ saving ? '保存中…' : '保存信息' }}
-      </button>
+      <button class="primary" :disabled="!canSave" @tap="saveCollection">{{ saving ? '保存中…' : '保存信息' }}</button>
     </view>
 
     <view v-if="collection" class="works-card">
@@ -89,10 +86,6 @@ watch(
   { immediate: true },
 );
 
-function goBack() {
-  uni.navigateBack({ delta: 1 });
-}
-
 function saveCollection() {
   if (!collection.value || !canSave.value) {
     return;
@@ -120,7 +113,7 @@ function removeWork(id: string) {
 </script>
 <style scoped lang="scss">
 .page {
-  padding: 20px;
+  padding: 20px 16px 40px;
   min-height: 100vh;
   background: #f5f7fb;
   box-sizing: border-box;
@@ -133,15 +126,9 @@ function removeWork(id: string) {
   display: flex;
   align-items: center;
   gap: 12px;
-}
-
-.back-btn {
-  padding: 8px 14px;
-  border: none;
-  border-radius: 12px;
-  background: rgba(31, 122, 236, 0.12);
-  color: #1f7aec;
-  font-size: 13px;
+  width: 100%;
+  max-width: 560px;
+  align-self: center;
 }
 
 .title {
@@ -153,6 +140,9 @@ function removeWork(id: string) {
 .subtitle {
   font-size: 13px;
   color: #8a94a6;
+  width: 100%;
+  max-width: 560px;
+  align-self: center;
 }
 
 .section-title {
@@ -170,6 +160,9 @@ function removeWork(id: string) {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  width: 100%;
+  max-width: 560px;
+  align-self: center;
 }
 
 .input,
@@ -201,6 +194,7 @@ function removeWork(id: string) {
   color: #ffffff;
   font-size: 15px;
   box-shadow: 0 10px 24px rgba(31, 122, 236, 0.2);
+  width: 100%;
 }
 
 .primary[disabled] {
@@ -222,6 +216,7 @@ function removeWork(id: string) {
   flex-direction: column;
   justify-content: space-between;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  position: relative;
 }
 
 .work-name {
@@ -230,17 +225,20 @@ function removeWork(id: string) {
 }
 
 .work-actions {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
   display: flex;
-  gap: 10px;
+  gap: 8px;
 }
 
 .link-btn,
 .danger-btn {
-  flex: 1;
-  padding: 8px 0;
+  flex: 0 0 auto;
+  padding: 6px 10px;
   border: none;
-  border-radius: 12px;
-  font-size: 12px;
+  border-radius: 10px;
+  font-size: 11px;
 }
 
 .link-btn {

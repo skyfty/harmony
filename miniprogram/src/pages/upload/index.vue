@@ -44,7 +44,7 @@ import { useWorksStore, type WorkType } from '@/stores/worksStore';
 
 declare const wx: any | undefined;
 
-type NavKey = 'home' | 'upload' | 'exhibition' | 'profile' | 'settings';
+type NavKey = 'home' | 'upload' | 'exhibition' | 'profile' | 'optimize';
 
 type HistoryItem = {
   id: string;
@@ -93,7 +93,7 @@ const routes: Record<NavKey, string> = {
   upload: '/pages/upload/index',
   exhibition: '/pages/exhibition/index',
   profile: '/pages/profile/index',
-  settings: '/pages/settings/index',
+  optimize: '/pages/optimize/index',
 };
 
 watchEffect(() => {

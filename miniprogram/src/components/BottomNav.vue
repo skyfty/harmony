@@ -12,18 +12,18 @@
       <view class="icon exhibition"></view>
       <text class="label">展览</text>
     </view>
+    <view class="nav-item" :class="{ active: active === 'optimize' }" @tap="go('optimize')">
+      <view class="icon optimize"></view>
+      <text class="label">优化</text>
+    </view>
     <view class="nav-item" :class="{ active: active === 'profile' }" @tap="go('profile')">
       <view class="icon profile"></view>
       <text class="label">我的</text>
     </view>
-    <view class="nav-item" :class="{ active: active === 'settings' }" @tap="go('settings')">
-      <view class="icon settings"></view>
-      <text class="label">设置</text>
-    </view>
   </view>
 </template>
 <script setup lang="ts">
-const props = defineProps<{ active: 'home' | 'upload' | 'exhibition' | 'profile' | 'settings' }>();
+const props = defineProps<{ active: 'home' | 'upload' | 'exhibition' | 'profile' | 'optimize' }>();
 const emit = defineEmits<{ (event: 'navigate', value: typeof props.active): void }>();
 
 function go(value: typeof props.active) {
@@ -143,7 +143,7 @@ function go(value: typeof props.active) {
     border-radius: 3px 3px 6px 6px;
   }
 
-  .icon.settings::before {
+  .icon.optimize::before {
     width: 12px;
     height: 12px;
     left: 8px;
@@ -153,12 +153,12 @@ function go(value: typeof props.active) {
     background: transparent;
   }
 
-  .icon.settings::after {
-    width: 4px;
-    height: 4px;
-    left: 12px;
-    top: 12px;
-    border-radius: 50%;
+  .icon.optimize::after {
+    width: 12px;
+    height: 2px;
+    left: 8px;
+    bottom: 6px;
+    border-radius: 2px;
   }
 }
 

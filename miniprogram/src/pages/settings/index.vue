@@ -1,137 +1,162 @@
 <template>
   <view class="page settings">
     <view class="header">
-      <text class="title">体验优化设置</text>
-      <text class="subtitle">监控性能并调整渲染质量</text>
+      <text class="title">账户设置</text>
+      <text class="subtitle">管理个人资料、登录安全与通知偏好</text>
     </view>
 
-    <view class="card performance">
-      <view class="card-header">
-        <text class="card-title">性能监控</text>
-        <text class="card-tag normal">实时</text>
+    <view class="profile-card">
+      <view class="avatar">S</view>
+      <view class="profile-info">
+        <text class="name">设计师姓名</text>
+        <text class="email">designer@harmony.com</text>
       </view>
-      <view class="chart">
-        <svg viewBox="0 0 200 80" preserveAspectRatio="none">
-          <defs>
-            <linearGradient id="lineGradient" x1="0" x2="0" y1="0" y2="1">
-              <stop offset="0" stop-color="#62a6ff" stop-opacity="0.8" />
-              <stop offset="1" stop-color="#62a6ff" stop-opacity="0" />
-            </linearGradient>
-          </defs>
-          <polyline
-            points="0,60 20,40 40,45 60,25 80,35 100,18 120,30 140,22 160,28 180,20 200,26"
-            fill="none"
-            stroke="#1f7aec"
-            stroke-width="4"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-          <polygon
-            points="0,80 0,60 20,40 40,45 60,25 80,35 100,18 120,30 140,22 160,28 180,20 200,26 200,80"
-            fill="url(#lineGradient)"
-          />
-        </svg>
-      </view>
-      <view class="metrics">
-        <view class="metric" v-for="metric in metrics" :key="metric.label">
-          <text class="metric-label">{{ metric.label }}</text>
-          <text class="metric-value">{{ metric.value }}</text>
+      <button class="edit-btn" @tap="editProfile">编辑</button>
+    </view>
+
+    <view class="card">
+      <text class="card-title">安全与隐私</text>
+      <view class="setting-item">
+        <view class="info">
+          <text class="label">双重验证</text>
+          <text class="desc">使用手机验证码提升账号安全</text>
         </view>
+        <switch color="#1f7aec" :checked="twoFactor" @change="onToggle('twoFactor', $event)" />
       </view>
-    </view>
-
-    <view class="card quality">
-      <view class="card-header">
-        <text class="card-title">画质设置</text>
-        <text class="card-sub">根据设备性能自动调节</text>
-      </view>
-      <view class="quality-options">
-        <button
-          v-for="option in qualityOptions"
-          :key="option"
-          class="quality-btn"
-          :class="{ active: option === currentQuality }"
-          @tap="currentQuality = option"
-        >
-          {{ option }}
-        </button>
-      </view>
-    </view>
-
-    <view class="card network">
-      <view class="card-header">
-        <text class="card-title">网络加速</text>
-        <switch color="#1f7aec" :checked="networkBoost" @change="onNetworkToggle" />
-      </view>
-      <text class="card-desc">开启后优先使用 CDN 加速资源加载，提升远程素材访问速度。</text>
-    </view>
-
-    <view class="card tips">
-      <text class="card-title">优化建议</text>
-      <view class="tip-item" v-for="tip in tips" :key="tip.id">
-        <view class="tip-dot"></view>
-        <view class="tip-info">
-          <text class="tip-title">{{ tip.title }}</text>
-          <text class="tip-desc">{{ tip.desc }}</text>
+      <view class="setting-item" @tap="resetPassword">
+        <view class="info">
+          <text class="label">修改密码</text>
+          <text class="desc">建议每 90 天更新一次密码</text>
         </view>
+        <text class="arrow">›</text>
+      </view>
+      <view class="setting-item" @tap="viewDevices">
+        <view class="info">
+          <text class="label">登录设备</text>
+          <text class="desc">管理已授权的手机与电脑</text>
+        </view>
+        <text class="arrow">›</text>
       </view>
     </view>
 
-    <BottomNav active="settings" @navigate="handleNavigate" />
+    <view class="card">
+      <text class="card-title">通知偏好</text>
+      <view class="setting-item">
+        <view class="info">
+          <text class="label">邮件提醒</text>
+          <text class="desc">接收订单、展览动态等邮件通知</text>
+        </view>
+        <switch color="#1f7aec" :checked="notifyEmail" @change="onToggle('notifyEmail', $event)" />
+      </view>
+      <view class="setting-item">
+        <view class="info">
+          <text class="label">短信通知</text>
+          <text class="desc">关键消息通过短信同步到手机</text>
+        </view>
+        <switch color="#1f7aec" :checked="notifySms" @change="onToggle('notifySms', $event)" />
+      </view>
+      <view class="setting-item">
+        <view class="info">
+          <text class="label">作品自动同步</text>
+          <text class="desc">完成渲染后自动同步至云端</text>
+        </view>
+        <switch color="#1f7aec" :checked="autoSync" @change="onToggle('autoSync', $event)" />
+      </view>
+    </view>
+
+    <view class="card">
+      <text class="card-title">关于平台</text>
+      <view class="setting-item" @tap="openDocs">
+        <view class="info">
+          <text class="label">使用指南</text>
+          <text class="desc">快速了解作品上传与展览搭建流程</text>
+        </view>
+        <text class="arrow">›</text>
+      </view>
+      <view class="setting-item" @tap="openPolicy">
+        <view class="info">
+          <text class="label">隐私政策</text>
+          <text class="desc">了解我们如何存储与保护您的数据</text>
+        </view>
+        <text class="arrow">›</text>
+      </view>
+      <view class="setting-item" @tap="checkUpdates">
+        <view class="info">
+          <text class="label">版本更新</text>
+          <text class="desc">当前版本 1.3.2</text>
+        </view>
+        <text class="arrow">›</text>
+      </view>
+    </view>
+
+    <view class="footer">
+      <button class="logout" @tap="logout">退出登录</button>
+    </view>
   </view>
 </template>
 <script setup lang="ts">
 import { ref } from 'vue';
-import BottomNav from '@/components/BottomNav.vue';
 
-type NavKey = 'home' | 'upload' | 'exhibition' | 'profile' | 'settings';
+const twoFactor = ref(true);
+const notifyEmail = ref(true);
+const notifySms = ref(false);
+const autoSync = ref(true);
 
-const metrics = [
-  { label: 'FPS', value: '58' },
-  { label: '内存', value: '248M' },
-  { label: '延时', value: '16ms' },
-];
+type ToggleKey = 'twoFactor' | 'notifyEmail' | 'notifySms' | 'autoSync';
 
-const qualityOptions: Array<'流畅' | '标准' | '高'> = ['流畅', '标准', '高'];
-const currentQuality = ref<'流畅' | '标准' | '高'>('标准');
-const networkBoost = ref(true);
-
-const tips = [
-  { id: 't1', title: '定期清理缓存', desc: '每周清理素材缓存可节省 120MB 存储空间。' },
-  { id: 't2', title: '使用压缩纹理', desc: '将纹理转换为 KTX2 格式可提升加载速度 35%。' },
-];
-
-const routes: Record<NavKey, string> = {
-  home: '/pages/home/index',
-  upload: '/pages/upload/index',
-  exhibition: '/pages/exhibition/index',
-  profile: '/pages/profile/index',
-  settings: '/pages/settings/index',
-};
-
-function handleNavigate(target: NavKey) {
-  const route = routes[target];
-  if (!route || target === 'settings') {
-    return;
-  }
-  uni.redirectTo({ url: route });
+function editProfile() {
+  uni.showToast({ title: '编辑资料功能开发中', icon: 'none' });
 }
 
-function onNetworkToggle(event: any) {
-  networkBoost.value = Boolean(event.detail?.value);
-  const message = networkBoost.value ? '已开启网络加速' : '已关闭网络加速';
-  uni.showToast({ title: message, icon: 'none' });
+function resetPassword() {
+  uni.showToast({ title: '将跳转至密码修改页面', icon: 'none' });
+}
+
+function viewDevices() {
+  uni.showToast({ title: '设备管理功能即将上线', icon: 'none' });
+}
+
+function openDocs() {
+  uni.showToast({ title: '正在打开使用指南', icon: 'none' });
+}
+
+function openPolicy() {
+  uni.showToast({ title: '隐私政策已推送至邮箱', icon: 'none' });
+}
+
+function checkUpdates() {
+  uni.showToast({ title: '当前已是最新版本', icon: 'none' });
+}
+
+function logout() {
+  uni.showModal({
+    title: '退出登录',
+    content: '确认退出当前账户吗？',
+    success: ({ confirm }) => {
+      if (confirm) {
+        uni.showToast({ title: '已退出登录', icon: 'none' });
+      }
+    },
+  });
+}
+
+function onToggle(key: ToggleKey, event: any) {
+  const value = Boolean(event.detail?.value);
+  if (key === 'twoFactor') twoFactor.value = value;
+  if (key === 'notifyEmail') notifyEmail.value = value;
+  if (key === 'notifySms') notifySms.value = value;
+  if (key === 'autoSync') autoSync.value = value;
 }
 </script>
 <style scoped lang="scss">
 .page {
-  padding: 20px 20px 96px;
+  padding: 20px 20px 40px;
   min-height: 100vh;
   background: #f5f7fb;
-  box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 18px;
+  box-sizing: border-box;
 }
 
 .header {
@@ -147,24 +172,67 @@ function onNetworkToggle(event: any) {
 }
 
 .subtitle {
-  font-size: 14px;
+  font-size: 13px;
   color: #8a94a6;
+}
+
+.profile-card {
+  background: #ffffff;
+  border-radius: 20px;
+  padding: 18px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  box-shadow: 0 12px 28px rgba(31, 122, 236, 0.08);
+}
+
+.avatar {
+  width: 60px;
+  height: 60px;
+  border-radius: 20px;
+  background: linear-gradient(135deg, #8fbaff, #c7dfff);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  font-size: 26px;
+  font-weight: 600;
+}
+
+.profile-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.name {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f1f1f;
+}
+
+.email {
+  font-size: 13px;
+  color: #6b778d;
+}
+
+.edit-btn {
+  padding: 8px 16px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #1f7aec, #62a6ff);
+  color: #ffffff;
+  font-size: 13px;
 }
 
 .card {
   background: #ffffff;
   border-radius: 20px;
   padding: 20px;
-  box-shadow: 0 12px 32px rgba(31, 122, 236, 0.08);
   display: flex;
   flex-direction: column;
-  gap: 16px;
-}
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+  gap: 14px;
+  box-shadow: 0 12px 28px rgba(31, 122, 236, 0.08);
 }
 
 .card-title {
@@ -173,112 +241,53 @@ function onNetworkToggle(event: any) {
   color: #1f1f1f;
 }
 
-.card-sub {
-  font-size: 13px;
-  color: #8a94a6;
-}
-
-.card-tag {
-  font-size: 12px;
-  padding: 4px 10px;
-  border-radius: 12px;
-  color: #1f7aec;
-  background: rgba(31, 122, 236, 0.12);
-}
-
-.card-tag.normal {
-  color: #1f7aec;
-}
-
-.chart {
-  width: 100%;
-  height: 120px;
-}
-
-.chart svg {
-  width: 100%;
-  height: 100%;
-}
-
-.metrics {
+.setting-item {
   display: flex;
-  justify-content: space-between;
-}
-
-.metric {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
   align-items: center;
-}
-
-.metric-label {
-  font-size: 12px;
-  color: #8a94a6;
-}
-
-.metric-value {
-  font-size: 18px;
-  font-weight: 600;
-  color: #1f1f1f;
-}
-
-.quality-options {
-  display: flex;
   gap: 12px;
 }
 
-.quality-btn {
+.setting-item + .setting-item {
+  padding-top: 12px;
+  border-top: 1px solid rgba(31, 122, 236, 0.08);
+}
+
+.info {
   flex: 1;
-  padding: 12px 0;
-  border-radius: 16px;
-  border: none;
-  background: rgba(31, 122, 236, 0.1);
-  color: #1f7aec;
-  font-size: 14px;
-  box-shadow: 0 6px 12px rgba(31, 122, 236, 0.08);
-}
-
-.quality-btn.active {
-  background: linear-gradient(135deg, #1f7aec, #62a6ff);
-  color: #ffffff;
-  box-shadow: 0 10px 20px rgba(31, 122, 236, 0.25);
-}
-
-.card-desc {
-  font-size: 13px;
-  color: #8a94a6;
-  line-height: 1.5;
-}
-
-.tip-item {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-}
-
-.tip-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 5px;
-  background: #1f7aec;
-  margin-top: 6px;
-}
-
-.tip-info {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.tip-title {
+.label {
   font-size: 14px;
+  font-weight: 500;
   color: #1f1f1f;
 }
 
-.tip-desc {
+.desc {
   font-size: 12px;
   color: #8a94a6;
-  line-height: 1.5;
+  line-height: 18px;
+}
+
+.arrow {
+  font-size: 20px;
+  color: rgba(31, 31, 31, 0.35);
+}
+
+.footer {
+  margin-top: 12px;
+}
+
+.logout {
+  width: 100%;
+  padding: 14px 0;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #ff6f61, #ff9270);
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 600;
+  box-shadow: 0 12px 24px rgba(255, 140, 120, 0.28);
 }
 </style>

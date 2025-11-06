@@ -189,14 +189,17 @@ function submit() {
 }
 
 .upload-btn {
-  align-self: flex-start;
-  padding: 8px 14px;
-  border-radius: 12px;
+  align-self: stretch;
+  width: 100%;
+  padding: 12px 0;
+  border-radius: 18px;
   border: none;
   background: linear-gradient(135deg, #1f7aec, #62a6ff);
   color: #ffffff;
-  font-size: 13px;
-  margin-top: 6px;
+  font-size: 15px;
+  font-weight: 600;
+  margin-top: 10px;
+  box-shadow: 0 10px 24px rgba(31, 122, 236, 0.2);
 }
 
 .cover-name {
@@ -207,13 +210,14 @@ function submit() {
 
 .submit-btn {
   margin-top: auto;
-  padding: 14px 18px;
-  border-radius: 18px;
+  width: 100%;
+  padding: 14px 0;
+  border-radius: 20px;
   border: none;
   background: linear-gradient(135deg, #1f7aec, #62a6ff);
   color: #ffffff;
   font-size: 16px;
-  font-weight: 600;
-  box-shadow: 0 16px 32px rgba(31, 122, 236, 0.2);
+  font-weight: 700;
+  box-shadow: 0 16px 32px rgba(31, 122, 236, 0.22);
 }
 </style>
