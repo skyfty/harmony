@@ -57,7 +57,7 @@
 <script setup lang="ts">
 import BottomNav from '@/components/BottomNav.vue';
 
-type NavKey = 'home' | 'upload' | 'exhibition' | 'profile' | 'optimize';
+type NavKey = 'home' | 'work' | 'exhibition' | 'profile' | 'optimize';
 
 const stats = [
   { label: '本月曝光', value: '12.3K' },
@@ -67,7 +67,7 @@ const stats = [
 
 const routes: Record<NavKey, string> = {
   home: '/pages/home/index',
-  upload: '/pages/upload/index',
+  work: '/pages/work/index',
   exhibition: '/pages/exhibition/index',
   profile: '/pages/profile/index',
   optimize: '/pages/optimize/index',

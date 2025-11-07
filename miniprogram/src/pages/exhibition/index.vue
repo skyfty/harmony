@@ -44,7 +44,7 @@
 <script setup lang="ts">
 import BottomNav from '@/components/BottomNav.vue';
 
-type NavKey = 'home' | 'upload' | 'exhibition' | 'profile' | 'optimize';
+type NavKey = 'home' | 'work' | 'exhibition' | 'profile' | 'optimize';
 
 type Exhibition = {
   id: string;
@@ -80,7 +80,7 @@ const exhibitions: Exhibition[] = [
 
 const routes: Record<NavKey, string> = {
   home: '/pages/home/index',
-  upload: '/pages/upload/index',
+  work: '/pages/work/index',
   exhibition: '/pages/exhibition/index',
   profile: '/pages/profile/index',
   optimize: '/pages/optimize/index',

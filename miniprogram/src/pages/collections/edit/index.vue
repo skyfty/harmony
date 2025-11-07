@@ -21,7 +21,7 @@
 
     <view v-if="selectedWorks.length" class="gallery-card">
       <view class="card-header">
-        <text class="card-title">刚上传的作品</text>
+    <text class="card-title">刚创作的作品</text>
         <text class="card-meta">点击右上角可移除单个作品</text>
       </view>
       <view class="works-grid">
@@ -38,7 +38,7 @@
 
     <view v-if="selectedWorks.length" class="info-card">
       <text class="info-title">新建作品集</text>
-      <text class="info-desc">为本次上传创建独立作品集，并补充标题与描述信息。</text>
+  <text class="info-desc">为本次创作创建独立作品集，并补充标题与描述信息。</text>
       <input class="input" v-model="title" placeholder="输入作品集标题" />
       <textarea class="textarea" v-model="description" placeholder="补充作品集描述"></textarea>
       <button class="primary" :disabled="!canCreate" @tap="createNewCollection">{{ submitting ? '创建中…' : '创建并保存' }}</button>
@@ -66,8 +66,8 @@
 
     <view v-if="!selectedWorks.length" class="empty">
       <text class="empty-title">暂无待处理作品</text>
-      <text class="empty-desc">请返回上传页面选择素材后再试</text>
-      <button class="outline" @tap="goUpload">返回上传</button>
+  <text class="empty-desc">请返回创作页面选择素材后再试</text>
+  <button class="outline" @tap="goWork">返回创作</button>
     </view>
   </view>
 </template>
@@ -141,8 +141,8 @@ watchEffect(() => {
   }
 });
 
-function goUpload() {
-  uni.redirectTo({ url: '/pages/upload/index' });
+function goWork() {
+  uni.redirectTo({ url: '/pages/work/index' });
 }
 
 function createNewCollection() {
@@ -181,7 +181,7 @@ function confirmRemove(id: string) {
   }
   uni.showModal({
     title: '移除作品',
-    content: `确定从本次上传列表中移除“${target.name}”吗？`,
+  content: `确定从本次创作列表中移除“${target.name}”吗？`,
     confirmColor: '#d93025',
     success: (res) => {
       if (!res.confirm) {

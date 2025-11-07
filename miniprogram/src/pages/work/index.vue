@@ -1,8 +1,8 @@
 <template>
-  <view class="page upload">
+  <view class="page work">
     <view class="header">
-      <text class="title">上传作品素材</text>
-      <text class="subtitle">仅支持上传图片素材，可一次选择多张</text>
+  <text class="title">创作新作品</text>
+  <text class="subtitle">目前支持批量导入图片素材，可一次选择多张</text>
     </view>
 
     <view class="uploader">
@@ -19,17 +19,17 @@
 
     <view class="history-card">
       <view class="history-header">
-        <text class="history-title">上传记录</text>
+  <text class="history-title">创作记录</text>
         <text class="history-action" @tap="goManage">管理</text>
       </view>
       <view class="history-list">
-        <view class="history-item" v-for="item in uploadHistory" :key="item.id">
-          <view class="history-preview" :style="{ background: item.gradient }"></view>
-          <view class="history-info">
-            <text class="history-name">{{ item.name }}</text>
-            <text class="history-meta">{{ item.size }} · {{ item.time }}</text>
-          </view>
-          <text class="history-status">{{ item.status }}</text>
+          <view class="history-item" v-for="item in workHistory" :key="item.id">
+            <view class="history-preview" :style="{ background: item.gradient }"></view>
+            <view class="history-info">
+              <text class="history-name">{{ item.name }}</text>
+              <text class="history-meta">{{ item.size }} · {{ item.time }}</text>
+            </view>
+            <text class="history-status">{{ item.status }}</text>
         </view>
       </view>
     </view>
@@ -60,7 +60,7 @@
       </view>
     </view>
 
-    <BottomNav active="upload" @navigate="handleNavigate" />
+    <BottomNav active="work" @navigate="handleNavigate" />
   </view>
 </template>
 <script setup lang="ts">
@@ -70,7 +70,7 @@ import { useWorksStore, type WorkItem, type WorkType } from '@/stores/worksStore
 
 declare const wx: any | undefined;
 
-type NavKey = 'home' | 'upload' | 'exhibition' | 'profile' | 'optimize';
+type NavKey = 'home' | 'work' | 'exhibition' | 'profile' | 'optimize';
 
 type HistoryItem = {
   id: string;
@@ -82,20 +82,23 @@ type HistoryItem = {
   createdAt: number;
 };
 
-type UploadCandidate = {
+type WorkCandidate = {
   name: string;
   size?: number | string;
 };
 
 const worksStore = useWorksStore();
 
-const STORAGE_KEY = 'uploadHistory';
+const HISTORY_STORAGE_KEY = 'workHistory';
+const LEGACY_STORAGE_KEY = 'uploadHistory';
 const loading = ref(false);
 
-function loadHistory(): HistoryItem[] {
+function readHistory(key: string): HistoryItem[] {
   try {
-    const raw = uni.getStorageSync(STORAGE_KEY);
-    if (!raw) return [];
+    const raw = uni.getStorageSync(key);
+    if (!raw) {
+      return [];
+    }
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
     return Array.isArray(parsed) ? parsed : [];
   } catch {
@@ -103,10 +106,25 @@ function loadHistory(): HistoryItem[] {
   }
 }
 
+function loadHistory(): HistoryItem[] {
+  const current = readHistory(HISTORY_STORAGE_KEY);
+  if (current.length) {
+    return current;
+  }
+  const legacy = readHistory(LEGACY_STORAGE_KEY);
+  if (legacy.length) {
+    saveHistory(legacy);
+    return legacy;
+  }
+  return [];
+}
+
 function saveHistory(list: HistoryItem[]) {
   try {
-    uni.setStorageSync(STORAGE_KEY, list);
-  } catch {}
+    uni.setStorageSync(HISTORY_STORAGE_KEY, list);
+  } catch {
+    // ignore storage failures
+  }
 }
 
 const sampleHistory: HistoryItem[] = [
@@ -134,17 +152,18 @@ const initialHistory: HistoryItem[] = (() => {
   const fromStore = loadHistory();
   return fromStore.length ? fromStore : sampleHistory;
 })();
-const uploadHistory = ref<HistoryItem[]>(initialHistory);
+const workHistory = ref<HistoryItem[]>(initialHistory);
 
 const typeLabels: Record<WorkType, string> = {
   image: '图片',
   video: '视频',
   model: '3D 模型',
+  other: '其他',
 };
 
 const routes: Record<NavKey, string> = {
   home: '/pages/home/index',
-  upload: '/pages/upload/index',
+  work: '/pages/work/index',
   exhibition: '/pages/exhibition/index',
   profile: '/pages/profile/index',
   optimize: '/pages/optimize/index',
@@ -166,14 +185,14 @@ const featuredWorks = computed<FeaturedWork[]>(() =>
 );
 
 watchEffect(() => {
-  if (uploadHistory.value.length > 20) {
-    uploadHistory.value = uploadHistory.value.slice(0, 20);
+  if (workHistory.value.length > 20) {
+    workHistory.value = workHistory.value.slice(0, 20);
   }
 });
 
 function handleNavigate(target: NavKey) {
   const route = routes[target];
-  if (!route || target === 'upload') {
+  if (!route || target === 'work') {
     return;
   }
   uni.redirectTo({ url: route });
@@ -194,7 +213,7 @@ function selectImages() {
   if (loading.value) {
     return;
   }
-  handleImageUpload();
+  handleImageSelection();
 }
 
 function extractNameFromPath(path?: string | null): string {
@@ -225,9 +244,9 @@ function navigateToCollectionEditor(workIds: string[]) {
   uni.navigateTo({ url: `/pages/collections/edit/index?workIds=${query}` });
 }
 
-function finalizeUpload(type: WorkType, files: UploadCandidate[]) {
+async function finalizeWorkCreation(type: WorkType, files: WorkCandidate[]) {
   if (!files.length) {
-    failUpload('未选择文件');
+    failCreation('未选择文件');
     return;
   }
   const normalized = files
@@ -237,20 +256,20 @@ function finalizeUpload(type: WorkType, files: UploadCandidate[]) {
     }))
     .filter((file) => Boolean(file.name));
   if (!normalized.length) {
-    failUpload('未选择文件');
+    failCreation('未选择文件');
     return;
   }
-  const newIds = worksStore.addWorks(
+  const newIds = await worksStore.addWorks(
     normalized.map((file) => ({
       name: file.name,
       size: file.size,
       type,
-    })),
+    })) as any,
   );
   const first = normalized[0];
   const displayName = normalized.length > 1 ? `${first.name} 等 ${normalized.length} 个` : first.name;
   const representative = worksStore.workMap[newIds[0]];
-  uploadHistory.value.unshift({
+  workHistory.value.unshift({
     id: newIds[0],
     name: displayName,
     size: representative?.size || formatSize(first.size),
@@ -259,13 +278,13 @@ function finalizeUpload(type: WorkType, files: UploadCandidate[]) {
     gradient: representative?.gradient || 'linear-gradient(135deg, #dff5ff, #c6ebff)',
     createdAt: Date.now(),
   });
-  saveHistory(uploadHistory.value);
+  saveHistory(workHistory.value);
   loading.value = false;
-  uni.showToast({ title: `${typeLabels[type]}上传成功`, icon: 'success' });
+  uni.showToast({ title: `${typeLabels[type]}创建成功`, icon: 'success' });
   navigateToCollectionEditor(newIds);
 }
 
-function failUpload(message?: string, error?: { errMsg?: string }) {
+function failCreation(message?: string, error?: { errMsg?: string }) {
   loading.value = false;
   if (error?.errMsg && error.errMsg.includes('cancel')) {
     return;
@@ -275,12 +294,12 @@ function failUpload(message?: string, error?: { errMsg?: string }) {
   }
 }
 
-function handleImageUpload() {
+function handleImageSelection() {
   loading.value = true;
   uni.chooseImage({
     count: 9,
-    success: (res) => {
-      const files: UploadCandidate[] = [];
+    success: async (res) => {
+      const files: WorkCandidate[] = [];
       const tempFiles = Array.isArray(res.tempFiles) ? res.tempFiles : [];
       const fallbackPaths = Array.isArray(res.tempFilePaths)
         ? res.tempFilePaths
@@ -300,14 +319,14 @@ function handleImageUpload() {
           files.push({ name: extractNameFromPath(path) });
         }
       }
-      finalizeUpload('image', files);
+      await finalizeWorkCreation('image', files);
     },
-    fail: (err) => failUpload('选择图片失败', err),
+    fail: (err) => failCreation('选择图片失败', err),
   });
 }
 
 function goManage() {
-  uni.navigateTo({ url: '/pages/upload/records/index' });
+  uni.navigateTo({ url: '/pages/work/records/index' });
 }
 </script>
 <style scoped lang="scss">

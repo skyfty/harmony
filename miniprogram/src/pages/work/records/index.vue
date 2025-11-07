@@ -1,7 +1,7 @@
 <template>
-  <view class="page upload-records">
+  <view class="page work-records">
     <view class="header">
-      <text class="title">上传记录</text>
+      <text class="title">创作记录</text>
       <button class="clear-btn" v-if="records.length" @tap="clearAll">清除全部</button>
     </view>
 
@@ -20,15 +20,16 @@
     </view>
 
     <view class="empty" v-else>
-      <text class="empty-title">暂无上传记录</text>
-      <text class="empty-desc">上传作品后可在此管理与清理记录</text>
+      <text class="empty-title">暂无创作记录</text>
+      <text class="empty-desc">完成作品创作后可在此管理与清理记录</text>
     </view>
   </view>
 </template>
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 
-const STORAGE_KEY = 'uploadHistory';
+const STORAGE_KEY = 'workHistory';
+const LEGACY_STORAGE_KEY = 'uploadHistory';
 
 type HistoryItem = {
   id: string;
@@ -43,8 +44,14 @@ type HistoryItem = {
 function loadHistory(): HistoryItem[] {
   try {
     const raw = uni.getStorageSync(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    let parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!parsed || !Array.isArray(parsed)) {
+      const legacyRaw = uni.getStorageSync(LEGACY_STORAGE_KEY);
+      parsed = typeof legacyRaw === 'string' ? JSON.parse(legacyRaw) : legacyRaw;
+      if (Array.isArray(parsed)) {
+        saveHistory(parsed);
+      }
+    }
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
@@ -77,7 +84,7 @@ function formatTime(ts: number): string {
 function confirmDelete(id: string) {
   uni.showModal({
     title: '删除确认',
-    content: '确认删除该上传记录吗？',
+    content: '确认删除该创作记录吗？',
     confirmColor: '#d93025',
     success: (res) => {
       if (!res.confirm) return;
@@ -91,7 +98,7 @@ function confirmDelete(id: string) {
 function clearAll() {
   uni.showModal({
     title: '清除所有确认',
-    content: '确认清除所有上传记录吗？',
+    content: '确认清除所有创作记录吗？',
     confirmColor: '#d93025',
     success: (res) => {
       if (!res.confirm) return;

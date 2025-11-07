@@ -54,7 +54,7 @@ export interface CollectionSummary {
   updatedAt: string;
 }
 
-export interface UploadRecordSummary {
+export interface WorkRecordSummary {
   id: string;
   workId: string;
   fileName: string;
@@ -246,19 +246,19 @@ export function apiDeleteCollection(id: string): Promise<{ success: boolean }> {
   return del(`/collections/${id}`);
 }
 
-export function apiGetUploadRecords(): Promise<{
+export function apiGetWorkRecords(): Promise<{
   total: number;
-  records: UploadRecordSummary[];
+  records: WorkRecordSummary[];
 }> {
-  return get('/uploads/records');
+  return get('/works/records');
 }
 
-export function apiDeleteUploadRecord(id: string): Promise<{ success: boolean }> {
-  return del(`/uploads/records/${id}`);
+export function apiDeleteWorkRecord(id: string): Promise<{ success: boolean }> {
+  return del(`/works/records/${id}`);
 }
 
-export function apiClearUploadRecords(): Promise<{ success: boolean }> {
-  return del('/uploads/records');
+export function apiClearWorkRecords(): Promise<{ success: boolean }> {
+  return del('/works/records');
 }
 
 export function apiGetExhibitions(params?: { owner?: string; scope?: 'all' | 'mine' }): Promise<{

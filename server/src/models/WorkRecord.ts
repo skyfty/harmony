@@ -1,7 +1,7 @@
 import { Schema, model } from 'mongoose'
-import type { UploadRecordDocument } from '@/types/models'
+import type { WorkRecordDocument } from '@/types/models'
 
-const uploadRecordSchema = new Schema<UploadRecordDocument>(
+const workRecordSchema = new Schema<WorkRecordDocument>(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     workId: { type: Schema.Types.ObjectId, ref: 'Work', required: true, index: true },
@@ -16,6 +16,6 @@ const uploadRecordSchema = new Schema<UploadRecordDocument>(
   },
 )
 
-uploadRecordSchema.index({ createdAt: -1 })
+workRecordSchema.index({ createdAt: -1 })
 
-export const UploadRecordModel = model<UploadRecordDocument>('UploadRecord', uploadRecordSchema)
+export const WorkRecordModel = model<WorkRecordDocument>('WorkRecord', workRecordSchema)

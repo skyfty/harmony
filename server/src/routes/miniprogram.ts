@@ -17,10 +17,10 @@ import {
   deleteCollection,
 } from '@/controllers/miniprogram/collectionController'
 import {
-  listUploadRecords,
-  deleteUploadRecord,
-  clearUploadRecords,
-} from '@/controllers/miniprogram/uploadController'
+  listWorkRecords,
+  deleteWorkRecord,
+  clearWorkRecords,
+} from '@/controllers/miniprogram/workRecordController'
 import {
   createExhibition,
   listExhibitions,
@@ -70,10 +70,10 @@ miniRouter.get('/collections/:id', getCollection)
 miniRouter.patch('/collections/:id', updateCollection)
 miniRouter.delete('/collections/:id', deleteCollection)
 
-// upload records
-miniRouter.get('/uploads/records', listUploadRecords)
-miniRouter.delete('/uploads/records/:id', deleteUploadRecord)
-miniRouter.delete('/uploads/records', clearUploadRecords)
+// work records
+miniRouter.get('/works/records', listWorkRecords)
+miniRouter.delete('/works/records/:id', deleteWorkRecord)
+miniRouter.delete('/works/records', clearWorkRecords)
 
 // exhibitions
 miniRouter.get('/exhibitions', listExhibitions)

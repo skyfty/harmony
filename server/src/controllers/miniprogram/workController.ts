@@ -2,7 +2,7 @@ import type { Context } from 'koa'
 import { Types } from 'mongoose'
 import type { HydratedDocument } from 'mongoose'
 import { WorkModel } from '@/models/Work'
-import { UploadRecordModel } from '@/models/UploadRecord'
+import { WorkRecordModel } from '@/models/WorkRecord'
 import type { WorkDocument } from '@/types/models'
 import { WorkCollectionModel } from '@/models/WorkCollection'
 import { ensureUserId } from './utils'
@@ -59,7 +59,7 @@ export async function createWorks(ctx: Context): Promise<void> {
     updatedAt: now,
   }))
   const created: HydratedDocument<WorkDocument>[] = await WorkModel.insertMany(documents, { ordered: true })
-  const uploadRecords = created.map((doc: HydratedDocument<WorkDocument>, index: number) => ({
+  const workRecords = created.map((doc: HydratedDocument<WorkDocument>, index: number) => ({
     userId,
     workId: doc._id,
     fileName: validInputs[index]?.fileName ?? doc.title,
@@ -68,7 +68,7 @@ export async function createWorks(ctx: Context): Promise<void> {
     mediaType: doc.mediaType,
     createdAt: doc.createdAt,
   }))
-  await UploadRecordModel.insertMany(uploadRecords).catch(() => undefined)
+  await WorkRecordModel.insertMany(workRecords).catch(() => undefined)
   const collectionIds: Types.ObjectId[] = []
   created.forEach((doc: HydratedDocument<WorkDocument>) => {
     doc.collections?.forEach((collectionId: Types.ObjectId) => {
@@ -144,7 +144,7 @@ export async function removeWork(ctx: Context): Promise<void> {
       { $pull: { workIds: new Types.ObjectId(id) } },
     ).exec()
   }
-  await UploadRecordModel.deleteMany({ workId: id }).exec()
+  await WorkRecordModel.deleteMany({ workId: id }).exec()
   ctx.body = { success: true }
 }
 
