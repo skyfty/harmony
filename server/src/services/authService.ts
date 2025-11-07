@@ -2,6 +2,7 @@ import { Types } from 'mongoose'
 import { PermissionModel } from '@/models/Permission'
 import { RoleModel } from '@/models/Role'
 import { UserModel } from '@/models/User'
+import { appConfig } from '@/config/env'
 import { hashPassword, verifyPassword } from '@/utils/password'
 import { signAuthToken } from '@/utils/jwt'
 
@@ -183,4 +184,45 @@ export async function createInitialAdmin(): Promise<void> {
     roles: [adminRole._id],
     displayName: '系统管理员',
   })
+}
+
+export async function ensureTestUser(): Promise<void> {
+  const { username, password, displayName } = appConfig.testUser
+  if (!username || !password) {
+    return
+  }
+
+  const existing = await UserModel.findOne({ username }).exec()
+  if (!existing) {
+    const hashed = await hashPassword(password)
+    await UserModel.create({
+      username,
+      password: hashed,
+      status: 'active',
+      displayName: displayName || username,
+    })
+    return
+  }
+
+  let shouldSave = false
+
+  const passwordMatches = await verifyPassword(password, existing.password)
+  if (!passwordMatches) {
+    existing.password = await hashPassword(password)
+    shouldSave = true
+  }
+
+  if (existing.status !== 'active') {
+    existing.status = 'active'
+    shouldSave = true
+  }
+
+  if (displayName && existing.displayName !== displayName) {
+    existing.displayName = displayName
+    shouldSave = true
+  }
+
+  if (shouldSave) {
+    await existing.save()
+  }
 }
