@@ -41,7 +41,7 @@ function go(value: typeof props.active) {
   bottom: 0;
   display: flex;
   justify-content: space-around;
-  padding: 10px 12px 12px;
+  padding: 6px 10px 8px;
   background: #ffffff;
   box-shadow: 0 -4px 16px rgba(31, 122, 236, 0.08);
   z-index: 100;
@@ -54,16 +54,16 @@ function go(value: typeof props.active) {
   justify-content: center;
   width: 20%;
   color: #8a94a6;
-  font-size: 12px;
-  padding: 6px 0;
-  border-radius: 12px;
+  font-size: 11px;
+  padding: 4px 0;
+  border-radius: 10px;
   transition: all 0.2s ease;
 
   .icon {
-    width: 28px;
-    height: 28px;
-    margin-bottom: 4px;
-    border-radius: 14px;
+    width: 24px;
+    height: 24px;
+    margin-bottom: 3px;
+    border-radius: 12px;
     background: linear-gradient(145deg, rgba(63, 151, 255, 0.35), rgba(126, 198, 255, 0.2));
     position: relative;
   }
@@ -76,88 +76,88 @@ function go(value: typeof props.active) {
   }
 
   .icon.home::before {
-    width: 12px;
-    height: 10px;
-    left: 8px;
-    bottom: 6px;
+    width: 10px;
+    height: 8px;
+    left: 7px;
+    bottom: 5px;
     border-radius: 2px;
   }
 
   .icon.home::after {
     width: 0;
     height: 0;
-    left: 7px;
-    top: 6px;
-    border-left: 7px solid transparent;
-    border-right: 7px solid transparent;
-    border-bottom: 6px solid #ffffff;
+    left: 6px;
+    top: 5px;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-bottom: 5px solid #ffffff;
   }
 
   .icon.upload::before {
-    width: 4px;
-    height: 12px;
-    left: 12px;
-    top: 6px;
+    width: 3px;
+    height: 10px;
+    left: 10px;
+    top: 5px;
     border-radius: 2px;
   }
 
   .icon.upload::after {
     width: 0;
     height: 0;
-    left: 9px;
-    top: 4px;
-    border-left: 7px solid transparent;
-    border-right: 7px solid transparent;
-    border-bottom: 6px solid #ffffff;
+    left: 8px;
+    top: 3px;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-bottom: 5px solid #ffffff;
   }
 
   .icon.exhibition::before {
-    width: 14px;
-    height: 10px;
-    left: 7px;
-    top: 9px;
+    width: 12px;
+    height: 8px;
+    left: 6px;
+    top: 8px;
     border-radius: 3px;
   }
 
   .icon.exhibition::after {
-    width: 18px;
+    width: 16px;
     height: 2px;
-    left: 5px;
-    top: 7px;
+    left: 4px;
+    top: 6px;
     border-radius: 2px;
   }
 
   .icon.profile::before {
-    width: 10px;
-    height: 10px;
-    left: 9px;
-    top: 6px;
+    width: 8px;
+    height: 8px;
+    left: 8px;
+    top: 5px;
     border-radius: 50%;
   }
 
   .icon.profile::after {
-    width: 16px;
-    height: 6px;
-    left: 6px;
-    bottom: 6px;
+    width: 14px;
+    height: 5px;
+    left: 5px;
+    bottom: 5px;
     border-radius: 3px 3px 6px 6px;
   }
 
   .icon.optimize::before {
-    width: 12px;
-    height: 12px;
-    left: 8px;
-    top: 8px;
+    width: 10px;
+    height: 10px;
+    left: 7px;
+    top: 7px;
     border-radius: 50%;
     border: 2px solid #ffffff;
     background: transparent;
   }
 
   .icon.optimize::after {
-    width: 12px;
+    width: 10px;
     height: 2px;
-    left: 8px;
-    bottom: 6px;
+    left: 7px;
+    bottom: 5px;
     border-radius: 2px;
   }
 }

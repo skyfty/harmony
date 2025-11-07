@@ -1,13 +1,29 @@
 <template>
   <view class="page collection-edit">
     <view class="header">
-      <text class="title">作品集编辑</text>
-      <text class="subtitle" v-if="selectedWorks.length">已选 {{ selectedWorks.length }} 个作品</text>
-      <text class="subtitle" v-else>请选择作品后再编辑</text>
+      <view class="header-info">
+        <text class="title">作品集编辑</text>
+        <text class="subtitle">{{ headerSubtitle }}</text>
+      </view>
     </view>
 
-    <view v-if="selectedWorks.length" class="selected-card">
-      <text class="section-title">刚上传的作品</text>
+    <view v-if="selectedWorks.length" class="preview" :style="{ background: previewGradient }">
+      <text class="preview-label">已选作品</text>
+    </view>
+
+    <view v-if="selectedWorks.length" class="stats-card">
+      <view class="stat" v-for="item in statBlocks" :key="item.label">
+        <text class="stat-icon">{{ item.icon }}</text>
+        <text class="stat-value">{{ item.value }}</text>
+        <text class="stat-desc">{{ item.label }}</text>
+      </view>
+    </view>
+
+    <view v-if="selectedWorks.length" class="gallery-card">
+      <view class="card-header">
+        <text class="card-title">刚上传的作品</text>
+        <text class="card-meta">点击右上角可移除单个作品</text>
+      </view>
       <view class="works-grid">
         <view
           class="work-thumb"
@@ -20,15 +36,19 @@
       </view>
     </view>
 
-    <view v-if="selectedWorks.length" class="form-card">
-      <text class="section-title">新建作品集</text>
+    <view v-if="selectedWorks.length" class="info-card">
+      <text class="info-title">新建作品集</text>
+      <text class="info-desc">为本次上传创建独立作品集，并补充标题与描述信息。</text>
       <input class="input" v-model="title" placeholder="输入作品集标题" />
       <textarea class="textarea" v-model="description" placeholder="补充作品集描述"></textarea>
       <button class="primary" :disabled="!canCreate" @tap="createNewCollection">{{ submitting ? '创建中…' : '创建并保存' }}</button>
     </view>
 
-    <view class="existing-card">
-      <text class="section-title">添加到已有作品集</text>
+    <view class="collections-card">
+      <view class="collections-header">
+        <text class="collections-title">添加到已有作品集</text>
+        <text class="collections-subtitle" v-if="collections.length">共 {{ collections.length }} 个可选</text>
+      </view>
       <view v-if="collections.length" class="collection-list">
         <view class="collection-item" v-for="collection in collections" :key="collection.id">
           <view class="collection-cover" :style="{ background: collection.cover }"></view>
@@ -41,7 +61,7 @@
           </button>
         </view>
       </view>
-      <view v-else class="empty-hint">暂未创建作品集，先新建一个吧。</view>
+      <view v-else class="collection-empty">暂未创建作品集，先新建一个吧。</view>
     </view>
 
     <view v-if="!selectedWorks.length" class="empty">
@@ -64,6 +84,7 @@ const workIds = ref<string[]>([]);
 const title = ref('');
 const description = ref('');
 const submitting = ref(false);
+const defaultGradient = 'linear-gradient(135deg, #dff5ff, #c6ebff)';
 
 const selectedWorks = computed<WorkItem[]>(() =>
   workIds.value
@@ -74,6 +95,37 @@ const selectedWorks = computed<WorkItem[]>(() =>
 const canCreate = computed(
   () => selectedWorks.value.length > 0 && title.value.trim().length > 0 && !submitting.value,
 );
+
+const headerSubtitle = computed(() =>
+  selectedWorks.value.length
+    ? `已选 ${selectedWorks.value.length} 个作品`
+    : '请选择作品后再编辑',
+);
+
+const previewGradient = computed(() => selectedWorks.value[0]?.gradient || defaultGradient);
+
+const averageRating = computed(() => {
+  if (!selectedWorks.value.length) {
+    return '--';
+  }
+  const total = selectedWorks.value.reduce((sum, item) => sum + (item.rating ?? 0), 0);
+  const avg = total / selectedWorks.value.length;
+  return avg > 0 ? avg.toFixed(1) : '--';
+});
+
+const totalLikes = computed(() => {
+  if (!selectedWorks.value.length) {
+    return '0';
+  }
+  const sum = selectedWorks.value.reduce((acc, item) => acc + (item.likes ?? 0), 0);
+  return formatNumber(sum);
+});
+
+const statBlocks = computed(() => [
+  { icon: '🖼', value: selectedWorks.value.length.toString(), label: '已选作品' },
+  { icon: '★', value: averageRating.value, label: '平均评分' },
+  { icon: '❤', value: totalLikes.value, label: '收到喜欢' },
+]);
 
 onLoad((options) => {
   const raw = typeof options?.workIds === 'string' ? options.workIds : '';
@@ -140,10 +192,21 @@ function confirmRemove(id: string) {
     },
   });
 }
+
+function formatNumber(value: number): string {
+  if (value <= 0) {
+    return '0';
+  }
+  if (value >= 1000) {
+    const normalized = value / 1000;
+    return `${normalized.toFixed(normalized >= 10 ? 0 : 1)}K`;
+  }
+  return value.toString();
+}
 </script>
 <style scoped lang="scss">
 .page {
-  padding: 20px 16px 40px;
+  padding: 20px 20px 120px;
   min-height: 100vh;
   background: #f5f7fb;
   box-sizing: border-box;
@@ -152,13 +215,17 @@ function confirmRemove(id: string) {
   gap: 20px;
 }
 
+
 .header {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  width: 100%;
-  max-width: 560px;
-  align-self: center;
+}
+
+.header-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .title {
@@ -172,16 +239,71 @@ function confirmRemove(id: string) {
   color: #8a94a6;
 }
 
-.section-title {
-  font-size: 15px;
+.preview {
+  height: 220px;
+  border-radius: 20px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+  display: flex;
+  align-items: flex-end;
+  padding: 16px;
+  color: #ffffff;
   font-weight: 600;
-  color: #1f1f1f;
-  margin-bottom: 12px;
+  font-size: 16px;
 }
 
-.selected-card,
-.form-card,
-.existing-card {
+.preview-label {
+  background: rgba(0, 0, 0, 0.25);
+  padding: 6px 12px;
+  border-radius: 12px;
+}
+
+.stats-card {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.stat {
+  background: #ffffff;
+  border-radius: 18px;
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  box-shadow: 0 12px 24px rgba(31, 122, 236, 0.08);
+}
+
+.stat-icon {
+  font-size: 18px;
+}
+
+.stat:nth-child(1) .stat-icon {
+  color: #1f7aec;
+}
+
+.stat:nth-child(2) .stat-icon {
+  color: #ffaf42;
+}
+
+.stat:nth-child(3) .stat-icon {
+  color: #ff6f91;
+}
+
+.stat-value {
+  font-size: 20px;
+  font-weight: 600;
+  color: #1f1f1f;
+}
+
+.stat-desc {
+  font-size: 12px;
+  color: #8a94a6;
+}
+
+.gallery-card,
+.info-card,
+.collections-card {
   background: #ffffff;
   border-radius: 20px;
   padding: 20px;
@@ -189,13 +311,35 @@ function confirmRemove(id: string) {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  width: 100%;
-  max-width: 560px;
-  align-self: center;
 }
 
-.selected-card {
-  align-items: stretch;
+.info-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f1f1f;
+}
+
+.info-desc {
+  font-size: 13px;
+  color: #5f6b83;
+  line-height: 1.6;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f1f1f;
+}
+
+.card-meta {
+  font-size: 12px;
+  color: #8a94a6;
 }
 
 .work-thumb {
@@ -250,6 +394,24 @@ function confirmRemove(id: string) {
   opacity: 0.6;
 }
 
+
+.collections-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.collections-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f1f1f;
+}
+
+.collections-subtitle {
+  font-size: 12px;
+  color: #8a94a6;
+}
+
 .collection-list {
   display: flex;
   flex-direction: column;
@@ -300,13 +462,13 @@ function confirmRemove(id: string) {
   opacity: 0.5;
 }
 
-.empty-hint {
-  font-size: 13px;
+.collection-empty {
+  font-size: 12px;
   color: #8a94a6;
 }
 
 .empty {
-  margin-top: 40px;
+  margin-top: 80px;
   background: #ffffff;
   border-radius: 20px;
   padding: 30px 20px;

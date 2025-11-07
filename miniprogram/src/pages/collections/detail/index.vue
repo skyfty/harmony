@@ -1,31 +1,50 @@
 <template>
   <view class="page collection-detail">
     <view class="header">
-      <text class="title">{{ collection?.title || '作品集详情' }}</text>
+      <view class="header-info">
+        <text class="title">{{ collection?.title || '作品集详情' }}</text>
+        <text class="subtitle">{{ headerSubtitle }}</text>
+      </view>
     </view>
 
-    <text class="subtitle" v-if="collection">更新于 {{ collection.updatedAt }}</text>
-    <text class="subtitle" v-else>正在获取作品集信息</text>
+    <view v-if="collection" class="preview" :style="{ background: collection.cover || defaultGradient }">
+      <text class="preview-label">作品集封面</text>
+    </view>
+
+    <view v-if="collection" class="stats-card">
+      <view class="stat" v-for="stat in statBlocks" :key="stat.label">
+        <text class="stat-icon">{{ stat.icon }}</text>
+        <text class="stat-value">{{ stat.value }}</text>
+        <text class="stat-desc">{{ stat.label }}</text>
+      </view>
+    </view>
 
     <view v-if="collection" class="info-card">
-      <text class="section-title">作品集信息</text>
+      <text class="info-title">作品集信息</text>
+      <text class="info-desc">调整标题与描述信息可同步更新作品集展示。</text>
       <input class="input" v-model="editableTitle" placeholder="作品集标题" />
       <textarea class="textarea" v-model="editableDescription" placeholder="作品集描述"></textarea>
       <button class="primary" :disabled="!canSave" @tap="saveCollection">{{ saving ? '保存中…' : '保存信息' }}</button>
     </view>
 
     <view v-if="collection" class="works-card">
-      <text class="section-title">包含作品</text>
+      <view class="works-header">
+        <text class="works-title">包含作品</text>
+        <text class="works-meta">共 {{ worksInCollection.length }} 个</text>
+      </view>
       <view v-if="worksInCollection.length" class="works-grid">
         <view class="work-card" v-for="work in worksInCollection" :key="work.id" :style="{ background: work.gradient }">
-          <text class="work-name">{{ work.name }}</text>
+          <view class="work-info">
+            <text class="work-name">{{ work.name }}</text>
+            <text class="work-meta">评分 {{ work.rating.toFixed(1) }} · 喜欢 {{ work.likes }}</text>
+          </view>
           <view class="work-actions">
             <button class="link-btn" @tap="openWorkDetail(work.id)">查看</button>
             <button class="danger-btn" @tap="removeWork(work.id)">移出</button>
           </view>
         </view>
       </view>
-      <view v-else class="empty-hint">暂未包含作品，前往作品详情页添加。</view>
+      <view v-else class="collection-empty">暂未包含作品，前往作品详情页添加。</view>
     </view>
 
     <view v-else class="empty">
@@ -45,6 +64,7 @@ const collectionId = ref('');
 const saving = ref(false);
 const editableTitle = ref('');
 const editableDescription = ref('');
+const defaultGradient = 'linear-gradient(135deg, #dff5ff, #c6ebff)';
 
 const collection = computed<CollectionItem | undefined>(() =>
   collectionId.value ? worksStore.collectionMap[collectionId.value] : undefined,
@@ -67,6 +87,38 @@ const canSave = computed(() => {
   const desc = editableDescription.value.trim();
   return title !== collection.value.title || desc !== collection.value.description;
 });
+
+const headerSubtitle = computed(() => {
+  if (!collection.value) {
+    return '正在获取作品集信息';
+  }
+  const updated = collection.value.updatedAt ? `更新于 ${collection.value.updatedAt}` : '';
+  const total = `共 ${collection.value.works.length} 个作品`;
+  return [updated, total].filter(Boolean).join('  ');
+});
+
+const averageRating = computed(() => {
+  if (!worksInCollection.value.length) {
+    return '--';
+  }
+  const total = worksInCollection.value.reduce((sum, item) => sum + (item.rating ?? 0), 0);
+  const avg = total / worksInCollection.value.length;
+  return avg > 0 ? avg.toFixed(1) : '--';
+});
+
+const totalLikes = computed(() => {
+  if (!worksInCollection.value.length) {
+    return '0';
+  }
+  const sum = worksInCollection.value.reduce((acc, item) => acc + (item.likes ?? 0), 0);
+  return formatNumber(sum);
+});
+
+const statBlocks = computed(() => [
+  { icon: '🖼', value: worksInCollection.value.length.toString(), label: '作品数量' },
+  { icon: '★', value: averageRating.value, label: '平均评分' },
+  { icon: '❤', value: totalLikes.value, label: '累计喜欢' },
+]);
 
 onLoad((options) => {
   const raw = typeof options?.id === 'string' ? options.id : '';
@@ -110,10 +162,21 @@ function removeWork(id: string) {
   worksStore.removeWorkFromCollection(id, collection.value.id);
   uni.showToast({ title: '已移出', icon: 'none' });
 }
+
+function formatNumber(value: number): string {
+  if (value <= 0) {
+    return '0';
+  }
+  if (value >= 1000) {
+    const normalized = value / 1000;
+    return `${normalized.toFixed(normalized >= 10 ? 0 : 1)}K`;
+  }
+  return value.toString();
+}
 </script>
 <style scoped lang="scss">
 .page {
-  padding: 20px 16px 40px;
+  padding: 20px 20px 120px;
   min-height: 100vh;
   background: #f5f7fb;
   box-sizing: border-box;
@@ -124,12 +187,16 @@ function removeWork(id: string) {
 
 .header {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  max-width: 560px;
-  align-self: center;
+  flex-direction: column;
+  gap: 6px;
 }
+
+.header-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 
 .title {
   font-size: 20px;
@@ -140,15 +207,68 @@ function removeWork(id: string) {
 .subtitle {
   font-size: 13px;
   color: #8a94a6;
-  width: 100%;
-  max-width: 560px;
-  align-self: center;
 }
 
-.section-title {
-  font-size: 15px;
+.preview {
+  height: 220px;
+  border-radius: 20px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+  display: flex;
+  align-items: flex-end;
+  padding: 16px;
+  color: #ffffff;
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.preview-label {
+  background: rgba(0, 0, 0, 0.25);
+  padding: 6px 12px;
+  border-radius: 12px;
+}
+
+.stats-card {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.stat {
+  background: #ffffff;
+  border-radius: 18px;
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  box-shadow: 0 12px 24px rgba(31, 122, 236, 0.08);
+}
+
+.stat-icon {
+  font-size: 18px;
+}
+
+.stat:nth-child(1) .stat-icon {
+  color: #1f7aec;
+}
+
+.stat:nth-child(2) .stat-icon {
+  color: #ffaf42;
+}
+
+.stat:nth-child(3) .stat-icon {
+  color: #ff6f91;
+}
+
+.stat-value {
+  font-size: 20px;
   font-weight: 600;
   color: #1f1f1f;
+}
+
+.stat-desc {
+  font-size: 12px;
+  color: #8a94a6;
 }
 
 .info-card,
@@ -160,9 +280,18 @@ function removeWork(id: string) {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  width: 100%;
-  max-width: 560px;
-  align-self: center;
+}
+
+.info-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f1f1f;
+}
+
+.info-desc {
+  font-size: 13px;
+  color: #5f6b83;
+  line-height: 1.6;
 }
 
 .input,
@@ -201,6 +330,23 @@ function removeWork(id: string) {
   opacity: 0.6;
 }
 
+.works-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.works-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f1f1f;
+}
+
+.works-meta {
+  font-size: 12px;
+  color: #8a94a6;
+}
+
 .works-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
@@ -210,13 +356,20 @@ function removeWork(id: string) {
 .work-card {
   min-height: 160px;
   border-radius: 18px;
-  padding: 16px;
+  padding: 18px;
   color: #ffffff;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
   position: relative;
+  gap: 12px;
+}
+
+.work-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .work-name {
@@ -224,12 +377,14 @@ function removeWork(id: string) {
   font-weight: 600;
 }
 
+.work-meta {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.85);
+}
+
 .work-actions {
-  position: absolute;
-  right: 10px;
-  bottom: 10px;
   display: flex;
-  gap: 8px;
+  gap: 10px;
 }
 
 .link-btn,
@@ -251,8 +406,8 @@ function removeWork(id: string) {
   color: #ffffff;
 }
 
-.empty-hint {
-  font-size: 13px;
+.collection-empty {
+  font-size: 12px;
   color: #8a94a6;
 }
 
