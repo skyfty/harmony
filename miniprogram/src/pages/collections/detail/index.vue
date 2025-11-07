@@ -143,25 +143,6 @@ watch(
   { immediate: true },
 );
 
-watch(
-  () => ({ ready: Boolean(collection.value), workId: initialWorkId.value, count: worksInCollection.value.length }),
-  (state) => {
-    if (!state.ready || !state.workId) {
-      return;
-    }
-    const exists = worksInCollection.value.some((work) => work.id === state.workId);
-    if (!exists) {
-      return;
-    }
-    const targetId = state.workId;
-    initialWorkId.value = '';
-    setTimeout(() => {
-      openWorkDetail(targetId);
-    }, 300);
-  },
-  { immediate: true },
-);
-
 function saveCollection() {
   if (!collection.value || !canSave.value) {
     return;
