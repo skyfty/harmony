@@ -135,6 +135,7 @@ import { parseSceneDocument, useSceneStore } from '@/stores/sceneStore';
 import { buildSceneGraph, type SceneGraphBuildOptions, type SceneGraphResourceProgress } from '@schema/sceneGraph';
 import ResourceCache from '@schema/ResourceCache';
 import { AssetCache, AssetLoader } from '@schema/assetCache';
+import { loadNodeObject } from '@schema/utils/modelAssetLoader';
 import type {
   SceneNode,
   SceneNodeComponentState,
@@ -243,6 +244,7 @@ const resourcePreloadPercent = computed(() => {
 const sceneAssetCache = new AssetCache();
 const sceneAssetLoader = new AssetLoader(sceneAssetCache);
 let sharedResourceCache: ResourceCache | null = null;
+let viewerResourceCache: ResourceCache | null = null;
 
 function ensureResourceCache(
   document: SceneJsonExportDocument,
@@ -369,6 +371,27 @@ type AssetSourceResolution =
 const behaviorProximityCandidates = new Map<string, BehaviorProximityCandidate>();
 const behaviorProximityState = new Map<string, BehaviorProximityState>();
 const behaviorProximityThresholdCache = new Map<string, BehaviorProximityThreshold>();
+
+const MAX_CONCURRENT_LAZY_LOADS = 2;
+
+type LazyPlaceholderState = {
+  nodeId: string;
+  container: THREE.Object3D | null;
+  placeholder: THREE.Object3D;
+  assetId: string;
+  objectPath: number[] | null;
+  boundingSphere: THREE.Sphere | null;
+  loading: boolean;
+  loaded: boolean;
+  pending: Promise<void> | null;
+};
+
+const lazyPlaceholderStates = new Map<string, LazyPlaceholderState>();
+let activeLazyLoadCount = 0;
+const tempOutlineSphere = new THREE.Sphere();
+const tempOutlineScale = new THREE.Vector3();
+const tempCameraMatrix = new THREE.Matrix4();
+const cameraViewFrustum = new THREE.Frustum();
 
 const tempBox = new THREE.Box3();
 const tempSphere = new THREE.Sphere();
@@ -1113,6 +1136,297 @@ function indexSceneObjects(root: THREE.Object3D) {
       }
     }
   });
+}
+
+type LazyAssetMetadata = {
+  placeholder?: boolean;
+  assetId?: string | null;
+  objectPath?: number[] | null;
+  boundingSphere?: { center: { x: number; y: number; z: number }; radius: number } | null;
+  ownerNodeId?: string | null;
+} | undefined;
+
+function findLazyPlaceholderForNode(root: THREE.Object3D | null | undefined, nodeId: string): THREE.Object3D | null {
+  if (!root) {
+    return null;
+  }
+  const stack: THREE.Object3D[] = [root];
+  while (stack.length) {
+    const current = stack.pop();
+    if (!current) {
+      continue;
+    }
+    const lazyData = current.userData?.lazyAsset as LazyAssetMetadata;
+    if (lazyData?.placeholder) {
+      const ownerId = lazyData.ownerNodeId ?? (current.userData?.nodeId as string | undefined) ?? null;
+      if (ownerId ? ownerId === nodeId : current === root) {
+        return current;
+      }
+    }
+    if (current.children.length) {
+      stack.push(...current.children);
+    }
+  }
+  return null;
+}
+
+function initializeLazyPlaceholders(document: SceneJsonExportDocument | null | undefined): void {
+  lazyPlaceholderStates.clear();
+  activeLazyLoadCount = 0;
+  if (!document) {
+    return;
+  }
+  nodeObjectMap.forEach((object, nodeId) => {
+    const placeholderObject = findLazyPlaceholderForNode(object, nodeId);
+    if (!placeholderObject) {
+      return;
+    }
+    const lazyData = placeholderObject.userData?.lazyAsset as LazyAssetMetadata;
+    if (!lazyData || !lazyData.placeholder || !lazyData.assetId) {
+      return;
+    }
+    const sphere = lazyData.boundingSphere
+      ? new THREE.Sphere(
+          new THREE.Vector3(
+            lazyData.boundingSphere.center.x,
+            lazyData.boundingSphere.center.y,
+            lazyData.boundingSphere.center.z,
+          ),
+          lazyData.boundingSphere.radius,
+        )
+      : null;
+    lazyPlaceholderStates.set(nodeId, {
+      nodeId,
+      container: object,
+      placeholder: placeholderObject,
+      assetId: lazyData.assetId,
+      objectPath: Array.isArray(lazyData.objectPath) ? [...lazyData.objectPath] : null,
+      boundingSphere: sphere,
+      loading: false,
+      loaded: false,
+      pending: null,
+    });
+  });
+}
+
+function updateLazyPlaceholders(_delta: number): void {
+  const camera = renderContext?.camera;
+  if (!camera || lazyPlaceholderStates.size === 0) {
+    return;
+  }
+  camera.updateMatrixWorld(true);
+  tempCameraMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+  cameraViewFrustum.setFromProjectionMatrix(tempCameraMatrix);
+  lazyPlaceholderStates.forEach((state, nodeId) => {
+    const container = nodeObjectMap.get(nodeId) ?? null;
+    if (!container) {
+      lazyPlaceholderStates.delete(nodeId);
+      return;
+    }
+    state.container = container;
+    const placeholderObject = findLazyPlaceholderForNode(container, nodeId);
+    if (!placeholderObject) {
+      lazyPlaceholderStates.delete(nodeId);
+      return;
+    }
+    state.placeholder = placeholderObject;
+    const lazyData = placeholderObject.userData?.lazyAsset as LazyAssetMetadata;
+    if (!lazyData || !lazyData.placeholder || !lazyData.assetId) {
+      lazyPlaceholderStates.delete(nodeId);
+      return;
+    }
+    state.assetId = lazyData.assetId;
+    state.objectPath = Array.isArray(lazyData.objectPath) ? [...lazyData.objectPath] : null;
+    if (lazyData.boundingSphere) {
+      if (!state.boundingSphere) {
+        state.boundingSphere = new THREE.Sphere();
+      }
+      state.boundingSphere.center.set(
+        lazyData.boundingSphere.center.x,
+        lazyData.boundingSphere.center.y,
+        lazyData.boundingSphere.center.z,
+      );
+      state.boundingSphere.radius = lazyData.boundingSphere.radius;
+    } else {
+      state.boundingSphere = null;
+    }
+    if (state.loaded) {
+      lazyPlaceholderStates.delete(nodeId);
+      return;
+    }
+    if (state.loading || state.pending) {
+      return;
+    }
+    if (activeLazyLoadCount >= MAX_CONCURRENT_LAZY_LOADS) {
+      return;
+    }
+    if (!shouldLoadLazyPlaceholder(state, cameraViewFrustum)) {
+      return;
+    }
+    state.loading = true;
+    activeLazyLoadCount += 1;
+    const pending = loadActualAssetForPlaceholder(state)
+      .catch((error) => {
+        console.warn('[SceneViewer] 详细模型加载失败', error);
+      })
+      .finally(() => {
+        state.loading = false;
+        activeLazyLoadCount = Math.max(0, activeLazyLoadCount - 1);
+        state.pending = null;
+      });
+    state.pending = pending;
+  });
+}
+
+function shouldLoadLazyPlaceholder(state: LazyPlaceholderState, frustum: THREE.Frustum): boolean {
+  const camera = renderContext?.camera;
+  if (!camera) {
+    return false;
+  }
+  const object = state.placeholder;
+  if (!object.visible) {
+    return false;
+  }
+  const worldSphere = resolveWorldBoundingSphereForPlaceholder(state, object);
+  if (!worldSphere) {
+    return false;
+  }
+  return frustum.intersectsSphere(worldSphere);
+}
+
+function resolveWorldBoundingSphereForPlaceholder(state: LazyPlaceholderState, object: THREE.Object3D): THREE.Sphere | null {
+  object.updateWorldMatrix(true, false);
+  let baseSphere = state.boundingSphere ? state.boundingSphere.clone() : null;
+  const mesh = object as THREE.Mesh & { geometry?: THREE.BufferGeometry };
+  const geometry = mesh.geometry as THREE.BufferGeometry | undefined;
+  if (!baseSphere && geometry) {
+    if (!geometry.boundingSphere) {
+      geometry.computeBoundingSphere();
+    }
+    if (geometry.boundingSphere) {
+      baseSphere = geometry.boundingSphere.clone();
+    }
+  }
+  if (baseSphere) {
+    tempOutlineSphere.center.copy(baseSphere.center).applyMatrix4(object.matrixWorld);
+    object.getWorldScale(tempOutlineScale);
+    const maxScale = Math.max(tempOutlineScale.x, tempOutlineScale.y, tempOutlineScale.z);
+    tempOutlineSphere.radius = baseSphere.radius * maxScale;
+    return tempOutlineSphere;
+  }
+  const worldBox = tempBox.setFromObject(object);
+  if (worldBox.isEmpty()) {
+    return null;
+  }
+  return worldBox.getBoundingSphere(tempOutlineSphere);
+}
+
+async function loadActualAssetForPlaceholder(state: LazyPlaceholderState): Promise<void> {
+  const resourceCache = viewerResourceCache;
+  const context = renderContext;
+  if (!resourceCache || !context) {
+    return;
+  }
+  const node = resolveNodeById(state.nodeId);
+  if (!node) {
+    lazyPlaceholderStates.delete(state.nodeId);
+    return;
+  }
+  try {
+    const detailed = await loadNodeObject(resourceCache, state.assetId, node.importMetadata ?? null);
+    if (!detailed) {
+      lazyPlaceholderStates.delete(state.nodeId);
+      return;
+    }
+    prepareImportedObjectForPreview(detailed);
+    const placeholder = state.placeholder;
+    const container = state.container ?? nodeObjectMap.get(state.nodeId) ?? null;
+    const metadata = { ...(placeholder.userData ?? {}), nodeId: state.nodeId } as Record<string, unknown>;
+    const lazyMetadata = { ...((metadata.lazyAsset as Record<string, unknown> | undefined) ?? {}) };
+    detailed.userData = {
+      ...detailed.userData,
+      ...metadata,
+      lazyAsset: {
+        ...lazyMetadata,
+        placeholder: false,
+        loaded: true,
+      },
+    };
+    const parent = placeholder.parent
+      ?? (container && container !== placeholder ? container : null)
+      ?? context.scene;
+    const insertIndex = parent ? parent.children.indexOf(placeholder) : -1;
+    if (parent) {
+      parent.add(detailed);
+      if (insertIndex >= 0) {
+        parent.children.splice(parent.children.indexOf(detailed), 1);
+        parent.children.splice(insertIndex, 0, detailed);
+      }
+    }
+    if (!container || container === placeholder) {
+      updateNodeProperties(detailed, node);
+    } else {
+      updateNodeProperties(container, node);
+    }
+    detailed.updateMatrixWorld(true);
+    placeholder.parent?.remove(placeholder);
+    disposeObject(placeholder);
+    nodeObjectMap.set(state.nodeId, detailed);
+    attachRuntimeForNode(state.nodeId, detailed);
+    lazyPlaceholderStates.delete(state.nodeId);
+    refreshAnimationControllers(context.scene);
+  } catch (error) {
+    console.warn('[SceneViewer] 延迟资源加载失败', error);
+    lazyPlaceholderStates.delete(state.nodeId);
+  }
+}
+
+function prepareImportedObjectForPreview(object: THREE.Object3D): void {
+  object.traverse((child) => {
+    const mesh = child as THREE.Mesh & { material?: THREE.Material | THREE.Material[] };
+    if (!(mesh as any).isMesh && !(mesh as any).isSkinnedMesh) {
+      return;
+    }
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    materials.forEach((material) => {
+      if (!material) {
+        return;
+      }
+      const typed = material as THREE.Material & { side?: number };
+      if (typeof typed.side !== 'undefined') {
+        typed.side = THREE.DoubleSide;
+      }
+      typed.needsUpdate = true;
+    });
+  });
+}
+
+function updateNodeProperties(object: THREE.Object3D, node: SceneNode): void {
+  if (node.name) {
+    object.name = node.name;
+  }
+  if (node.position) {
+    object.position.set(node.position.x, node.position.y, node.position.z);
+  }
+  if (node.rotation) {
+    object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z);
+  }
+  if (node.scale) {
+    object.scale.set(node.scale.x, node.scale.y, node.scale.z);
+  }
+  const guideboardVisibility = resolveGuideboardInitialVisibility(node);
+  if (guideboardVisibility !== null) {
+    object.visible = guideboardVisibility;
+  } else if (node.editorFlags?.editorOnly) {
+    object.visible = false;
+  } else if (typeof node.visible === 'boolean') {
+    object.visible = node.visible;
+  } else {
+    object.visible = true;
+  }
+  updateBehaviorVisibility(node.id, object.visible);
 }
 
 function resolveNodeIdFromObject(object: THREE.Object3D | null | undefined): string | null {
@@ -2341,6 +2655,8 @@ function teardownRenderer() {
   resetAnimationControllers();
   previewNodeMap.clear();
   nodeObjectMap.clear();
+  lazyPlaceholderStates.clear();
+  activeLazyLoadCount = 0;
   activeCameraWatchTween = null;
   controls.dispose();
   disposeSkyResources();
@@ -2356,6 +2672,7 @@ function teardownRenderer() {
   renderContext = null;
   canvasResult = null;
   currentDocument = null;
+  viewerResourceCache = null;
 }
 
 function handleUseCanvas(result: UseCanvasResult) {
@@ -2512,6 +2829,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
       buildOptions.resolveAssetUrl = payload.resolveAssetUrl;
     }
   const resourceCache = ensureResourceCache(payload.document, buildOptions);
+  viewerResourceCache = resourceCache;
   graph = await buildSceneGraph(payload.document, resourceCache, buildOptions);
   } finally {
     if (!resourcePreload.active || resourcePreload.loaded >= resourcePreload.total) {
@@ -2539,6 +2857,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   refreshBehaviorProximityCandidates();
   refreshAnimationControllers(graph.root);
   ensureBehaviorTapHandler(canvas as HTMLCanvasElement, camera);
+  initializeLazyPlaceholders(payload.document);
 
 
   const skyboxSettings = resolveSceneSkybox(payload.document);
@@ -2562,6 +2881,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
         }
         animationMixers.forEach((mixer) => mixer.update(delta));
         updateBehaviorProximity();
+        updateLazyPlaceholders(delta);
         renderer.render(scene, camera);
       });
       onCleanup(() => {
