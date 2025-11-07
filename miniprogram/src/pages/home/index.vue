@@ -61,8 +61,10 @@
 </template>
 <script setup lang="ts">
 import { computed } from 'vue';
+import { onShow } from '@dcloudio/uni-app';
 import BottomNav from '@/components/BottomNav.vue';
 import { useWorksStore } from '@/stores/worksStore';
+import type { ExhibitionItem, WorkItem } from '@/stores/worksStore';
 
 type NavKey = 'home' | 'upload' | 'exhibition' | 'profile' | 'optimize';
 
@@ -82,38 +84,87 @@ type WorkCard = {
 
 const worksStore = useWorksStore();
 
-const latestExhibitionSeed: ExhibitionCard[] = [
-  { id: 'ex1', name: '沉浸式光影展', meta: '2025.09.18 - 2025.12.20', gradient: 'linear-gradient(135deg, #90b6ff 0%, #c8d6ff 100%)' },
-  { id: 'ex2', name: '数字艺术馆', meta: '2025.10.05 - 2026.01.08', gradient: 'linear-gradient(135deg, #7fe9de 0%, #b5fff4 100%)' },
-  { id: 'ex3', name: '未来装置展', meta: '机械与艺术融合', gradient: 'linear-gradient(135deg, #ffd59e 0%, #ffe8c9 100%)' },
-  { id: 'ex4', name: '交互媒体展', meta: '互动体验 · 2025.07.01 起', gradient: 'linear-gradient(135deg, #e7e4ff 0%, #f1eeff 100%)' },
-];
-
-const bestExhibitionSeed: ExhibitionCard[] = [
-  { id: 'ex5', name: '数字画廊', meta: '评分 4.8 · 9820 人参观', gradient: 'linear-gradient(135deg, #ffd6ec 0%, #ffeaf5 100%)' },
-  { id: 'ex6', name: '互动媒体馆', meta: '评分 4.7 · 12640 人参观', gradient: 'linear-gradient(135deg, #b7f5ec 0%, #90e0d9 100%)' },
-  { id: 'ex7', name: '光影沉浸场', meta: '评分 4.9 · 18650 人参观', gradient: 'linear-gradient(135deg, #ffe0f2 0%, #ffd0ec 100%)' },
-  { id: 'ex8', name: '机械未来廊', meta: '评分 4.6 · 15420 人参观', gradient: 'linear-gradient(135deg, #fff0ce 0%, #ffe2a8 100%)' },
-];
-
-const latestExhibitions = computed(() => latestExhibitionSeed.slice(0, 4));
-
-const bestExhibitions = computed(() => bestExhibitionSeed.slice(0, 4));
-
-const bestWorks = computed<WorkCard[]>(() => {
-  const sorted = [...worksStore.works].sort((a, b) => {
-    if (b.rating === a.rating) {
-      return b.likes - a.likes;
-    }
-    return b.rating - a.rating;
-  });
-  return sorted.slice(0, 4).map((item) => ({
-    id: item.id,
-    name: item.name,
-    meta: `评分 ${item.rating.toFixed(1)} · 喜欢 ${item.likes}`,
-    gradient: item.gradient,
-  }));
+onShow(async () => {
+  try {
+    await Promise.all([worksStore.ensureExhibitions(), worksStore.ensureWorks()]);
+  } catch (error) {
+    console.error('Failed to preload home page data', error);
+  }
 });
+
+function formatExhibitionMeta(item: ExhibitionItem): string {
+  const candidates = [item.dateRange, item.workCount ? `${item.workCount} 件作品` : '', formatRatingMeta(item.rating, item.ratingCount)];
+  const result = candidates.filter(Boolean).join(' · ');
+  return result || '查看详情';
+}
+
+function formatRatingMeta(rating: number, count: number): string {
+  if (!rating) {
+    return count ? `${count} 人评分` : '';
+  }
+  const label = rating >= 4.95 ? '满分' : rating.toFixed(1);
+  return count ? `评分 ${label}（${count}）` : `评分 ${label}`;
+}
+
+function sortByUpdated(a: ExhibitionItem, b: ExhibitionItem): number {
+  const parse = (value?: string) => {
+    if (!value) {
+      return 0;
+    }
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+  };
+  return parse(b.updatedAt || b.createdAt) - parse(a.updatedAt || a.createdAt);
+}
+
+const latestExhibitions = computed<ExhibitionCard[]>(() =>
+  worksStore.exhibitions
+    .slice()
+    .sort(sortByUpdated)
+    .slice(0, 4)
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      meta: formatExhibitionMeta(item),
+      gradient: item.cover,
+    })),
+);
+
+const bestExhibitions = computed<ExhibitionCard[]>(() =>
+  worksStore.exhibitions
+    .slice()
+    .sort((a, b) => {
+      if (b.rating === a.rating) {
+        return (b.likesCount ?? 0) - (a.likesCount ?? 0);
+      }
+      return b.rating - a.rating;
+    })
+    .slice(0, 4)
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      meta: formatExhibitionMeta(item),
+      gradient: item.cover,
+    })),
+);
+
+const bestWorks = computed<WorkCard[]>(() =>
+  worksStore.works
+    .slice()
+    .sort((a, b) => {
+      if (b.rating === a.rating) {
+        return b.likes - a.likes;
+      }
+      return b.rating - a.rating;
+    })
+    .slice(0, 4)
+    .map((item: WorkItem) => ({
+      id: item.id,
+      name: item.name,
+      meta: `评分 ${item.rating.toFixed(1)} · 喜欢 ${item.likes}`,
+      gradient: item.gradient,
+    })),
+);
 
 const routes: Record<NavKey, string> = {
   home: '/pages/home/index',
