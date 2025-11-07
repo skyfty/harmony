@@ -1,6 +1,57 @@
 {
   "pages": [
     {
+      "path": "pages/home/index"
+    },
+    {
+      "path": "pages/upload/index"
+    },
+    {
+      "path": "pages/upload/records/index"
+    },
+    {
+      "path": "pages/search/index"
+    },
+    {
+      "path": "pages/exhibition/index"
+    },
+    {
+      "path": "pages/exhibition/create/index"
+    },
+    {
+      "path": "pages/exhibition/detail/index"
+    },
+    {
+      "path": "pages/profile/index"
+    },
+    {
+      "path": "pages/optimize/index"
+    },
+    {
+      "path": "pages/optimize/detail/index"
+    },
+    {
+      "path": "pages/settings/index"
+    },
+    {
+      "path": "pages/orders/index"
+    },
+    {
+      "path": "pages/orders/detail/index"
+    },
+    {
+      "path": "pages/works/index"
+    },
+    {
+      "path": "pages/works/detail/index"
+    },
+    {
+      "path": "pages/collections/edit/index"
+    },
+    {
+      "path": "pages/collections/detail/index"
+    },
+    {
       "path": "pages/index/index"
     },
     {

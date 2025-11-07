@@ -18,4 +18,6 @@ onHide(() => {
     width: 100%;
     height: 100%;
 }
+
+/* page-level padding handled by individual views */
 </style>
