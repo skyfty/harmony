@@ -30,6 +30,16 @@ const PINIA_IDB_VERSION = 1
 
 let piniaDbPromise: Promise<IDBDatabase> | null = null
 
+const activeHydrations = new Set<Promise<void>>()
+
+export function waitForPiniaHydration(): Promise<void> {
+  if (activeHydrations.size === 0) {
+    return Promise.resolve()
+  }
+  const tasks = Array.from(activeHydrations)
+  return Promise.allSettled(tasks).then(() => undefined)
+}
+
 function openPiniaDatabase(): Promise<IDBDatabase> {
   if (!hasIndexedDb) {
     return Promise.reject(new Error('IndexedDB is not available'))
@@ -290,11 +300,11 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
     let fromVersion = 0
     let lastPersistedValue: string | null = null
     let lastPersistedState: Partial<StateTree> | null = null
-  let pendingPayload: PersistPayload | null = null
-  let debounceTimer: ReturnType<typeof setTimeout> | null = null
-  let flushListenersRegistered = false
-  let stopSubscription: (() => void) | null = null
-  let hydrationPromise: Promise<void> = Promise.resolve()
+    let pendingPayload: PersistPayload | null = null
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null
+    let flushListenersRegistered = false
+    let stopSubscription: (() => void) | null = null
+    let hydrationPromise: Promise<void> = Promise.resolve()
 
     const handleFlushEvent = (event: Event) => {
       if (debounceTimer) {
@@ -428,7 +438,12 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
       }
     }
 
-    hydrationPromise = hydrate().finally(() => {
+    const hydrationTask = hydrate()
+    const trackedHydration = hydrationTask.catch(() => undefined)
+    activeHydrations.add(trackedHydration)
+
+    hydrationPromise = trackedHydration.finally(() => {
+      activeHydrations.delete(trackedHydration)
       registerFlushListeners()
       stopSubscription = store.$subscribe(
         (_mutation, state) => {

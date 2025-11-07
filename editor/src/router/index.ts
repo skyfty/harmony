@@ -1,12 +1,12 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
-import EditorView from '@/views/EditorView.vue'
+import LoadView from '@/views/LoadView.vue'
 import ScenePreviewView from '@/views/ScenePreviewView.vue'
 
 const routes = [
   {
     path: '/',
-    name: 'editor',
-    component: EditorView,
+    name: 'loader',
+    component: LoadView,
   },
   {
     path: '/preview',
