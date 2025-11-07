@@ -37,7 +37,16 @@
         </view>
       </view>
       <view v-if="lanternOverlayVisible" class="viewer-lantern-overlay">
-        <view class="viewer-lantern-dialog">
+        <view
+          class="viewer-lantern-dialog"
+          @touchstart="handleLanternTouchStart"
+          @touchmove="handleLanternTouchMove"
+          @touchend="handleLanternTouchEnd"
+          @touchcancel="handleLanternTouchCancel"
+        >
+          <button class="viewer-lantern-close" aria-label="关闭幻灯片" @tap="cancelLanternOverlay">
+            <image :src="lanternCloseIcon" mode="aspectFit" class="viewer-lantern-close-icon" />
+          </button>
           <view v-if="lanternCurrentSlideImage" class="viewer-lantern-image-wrapper">
             <image :src="lanternCurrentSlideImage" mode="aspectFit" class="viewer-lantern-image" />
           </view>
@@ -51,26 +60,8 @@
               <text>{{ lanternCurrentSlideDescription }}</text>
             </scroll-view>
           </view>
-          <view v-if="lanternHasMultipleSlides" class="viewer-lantern-pagination">
-            <button
-              class="viewer-lantern-nav"
-              :disabled="lanternActiveSlideIndex === 0"
-              @tap="showPreviousLanternSlide"
-            >
-              上一页
-            </button>
+          <view v-if="lanternHasMultipleSlides" class="viewer-lantern-indicator">
             <text class="viewer-lantern-counter">{{ lanternActiveSlideIndex + 1 }} / {{ lanternTotalSlides }}</text>
-            <button
-              class="viewer-lantern-nav"
-              :disabled="lanternActiveSlideIndex >= lanternTotalSlides - 1"
-              @tap="showNextLanternSlide"
-            >
-              下一页
-            </button>
-          </view>
-          <view class="viewer-lantern-actions">
-            <button class="viewer-lantern-button cancel" @tap="cancelLanternOverlay">取消</button>
-            <button class="viewer-lantern-button" @tap="confirmLanternOverlay">继续</button>
           </view>
         </view>
       </view>
@@ -116,11 +107,19 @@
         v-if="purposeControlsVisible"
         class="viewer-purpose-controls"
       >
-        <button class="viewer-purpose-button primary" @tap="handlePurposeWatchTap">
-          观察
+        <button
+          class="viewer-purpose-icon-button viewer-purpose-icon-button--primary"
+          aria-label="观察"
+          @tap="handlePurposeWatchTap"
+        >
+          <image :src="purposeWatchIcon" mode="aspectFit" class="viewer-purpose-icon" />
         </button>
-        <button class="viewer-purpose-button secondary" @tap="handlePurposeResetTap">
-          平视
+        <button
+          class="viewer-purpose-icon-button viewer-purpose-icon-button--secondary"
+          aria-label="平视"
+          @tap="handlePurposeResetTap"
+        >
+          <image :src="purposeResetIcon" mode="aspectFit" class="viewer-purpose-icon" />
         </button>
       </view>
     </view>
@@ -303,6 +302,22 @@ const tempSunDirection = new THREE.Vector3();
 const SKY_SUN_LIGHT_DISTANCE = 150;
 const SKY_SUN_LIGHT_MIN_HEIGHT = 12;
 
+const purposeWatchIcon =
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12C3.5 7.2 7.5 4 12 4s8.5 3.2 11 8c-2.5 4.8-6.5 8-11 8S3.5 16.8 1 12z"/><circle cx="12" cy="12" r="3"/></svg>'
+  );
+const purposeResetIcon =
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16"/><path d="M9 7l3-3 3 3"/><path d="M9 17l3 3 3-3"/></svg>'
+  );
+const lanternCloseIcon =
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>'
+  );
+
 let sky: Sky | null = null;
 let sunDirectionalLight: THREE.DirectionalLight | null = null;
 let pmremGenerator: THREE.PMREMGenerator | null = null;
@@ -408,6 +423,11 @@ const tempVector = new THREE.Vector3();
 const tempQuaternion = new THREE.Quaternion();
 const tempPitchVector = new THREE.Vector3();
 const tempSpherical = new THREE.Spherical();
+const LANTERN_SWIPE_DETECTION_THRESHOLD = 18;
+const LANTERN_SWIPE_TRIGGER_THRESHOLD = 60;
+let lanternSwipeStartX: number | null = null;
+let lanternSwipeStartY: number | null = null;
+let lanternSwipeActive = false;
 
 type CameraWatchTween = {
   from: THREE.Vector3;
@@ -895,6 +915,7 @@ function resetLanternOverlay(): void {
   lanternSlides.value = [];
   lanternActiveSlideIndex.value = 0;
   lanternEventToken.value = null;
+  resetLanternSwipeTracking();
 }
 
 function closeLanternOverlay(resolution?: BehaviorEventResolution): void {
@@ -932,12 +953,78 @@ function showNextLanternSlide(): void {
   }
 }
 
-function confirmLanternOverlay(): void {
-  closeLanternOverlay({ type: 'continue' });
-}
-
 function cancelLanternOverlay(): void {
   closeLanternOverlay({ type: 'abort', message: '用户退出了幻灯片' });
+}
+
+function resetLanternSwipeTracking(): void {
+  lanternSwipeStartX = null;
+  lanternSwipeStartY = null;
+  lanternSwipeActive = false;
+}
+
+function handleLanternTouchStart(event: TouchEvent): void {
+  if (!lanternOverlayVisible.value || !lanternHasMultipleSlides.value) {
+    resetLanternSwipeTracking();
+    return;
+  }
+  const touch = event.touches?.[0];
+  if (!touch) {
+    resetLanternSwipeTracking();
+    return;
+  }
+  lanternSwipeStartX = touch.clientX;
+  lanternSwipeStartY = touch.clientY;
+  lanternSwipeActive = false;
+}
+
+function handleLanternTouchMove(event: TouchEvent): void {
+  if (lanternSwipeStartX == null || lanternSwipeStartY == null || !lanternHasMultipleSlides.value) {
+    return;
+  }
+  const touch = event.touches?.[0];
+  if (!touch) {
+    return;
+  }
+  const deltaX = touch.clientX - lanternSwipeStartX;
+  const deltaY = touch.clientY - lanternSwipeStartY;
+  if (!lanternSwipeActive) {
+    if (Math.abs(deltaX) > LANTERN_SWIPE_DETECTION_THRESHOLD && Math.abs(deltaX) > Math.abs(deltaY)) {
+      lanternSwipeActive = true;
+      event.preventDefault?.();
+      event.stopPropagation?.();
+    } else if (Math.abs(deltaY) > Math.abs(deltaX) && Math.abs(deltaY) > LANTERN_SWIPE_DETECTION_THRESHOLD) {
+      resetLanternSwipeTracking();
+    }
+  } else {
+    event.preventDefault?.();
+    event.stopPropagation?.();
+  }
+}
+
+function handleLanternTouchEnd(event: TouchEvent): void {
+  if (lanternSwipeStartX == null || lanternSwipeStartY == null || !lanternHasMultipleSlides.value) {
+    resetLanternSwipeTracking();
+    return;
+  }
+  const touch = event.changedTouches?.[0];
+  if (touch && lanternSwipeActive) {
+    const deltaX = touch.clientX - lanternSwipeStartX;
+    if (Math.abs(deltaX) >= LANTERN_SWIPE_TRIGGER_THRESHOLD) {
+      if (deltaX < 0) {
+        showNextLanternSlide();
+      } else {
+        showPreviousLanternSlide();
+      }
+    }
+    event.preventDefault?.();
+    event.stopPropagation?.();
+  }
+  resetLanternSwipeTracking();
+}
+
+function handleLanternTouchCancel(): void {
+  resetLanternSwipeTracking();
 }
 
 function formatTimestamp(value?: string | null): string {
@@ -3242,6 +3329,7 @@ onUnmounted(() => {
 }
 
 .viewer-lantern-dialog {
+  position: relative;
   width: 92%;
   max-width: 420px;
   max-height: 90vh;
@@ -3253,6 +3341,31 @@ onUnmounted(() => {
   gap: 12px;
   padding: 18px;
   box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+  touch-action: pan-y;
+}
+
+.viewer-lantern-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background-color: rgba(15, 18, 30, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.viewer-lantern-close:active {
+  opacity: 0.8;
+}
+
+.viewer-lantern-close-icon {
+  width: 18px;
+  height: 18px;
 }
 
 .viewer-lantern-image-wrapper {
@@ -3291,51 +3404,16 @@ onUnmounted(() => {
   opacity: 0.92;
 }
 
-.viewer-lantern-pagination {
+.viewer-lantern-indicator {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.viewer-lantern-nav {
-  padding: 6px 12px;
-  border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  background-color: rgba(255, 255, 255, 0.08);
-  color: #f5f7ff;
-  font-size: 12px;
-}
-
-.viewer-lantern-nav[disabled] {
-  opacity: 0.5;
+  justify-content: center;
+  padding-top: 2px;
 }
 
 .viewer-lantern-counter {
   font-size: 12px;
   opacity: 0.72;
-}
-
-.viewer-lantern-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  margin-top: 4px;
-}
-
-.viewer-lantern-button {
-  padding: 8px 16px;
-  border-radius: 18px;
-  border: none;
-  font-size: 14px;
-  background-image: linear-gradient(135deg, #1f7aec, #5d9bff);
-  color: #ffffff;
-}
-
-.viewer-lantern-button.cancel {
-  background-image: none;
-  background-color: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  letter-spacing: 0.5px;
 }
 
 .viewer-purpose-controls {
@@ -3347,28 +3425,34 @@ onUnmounted(() => {
   z-index: 1600;
 }
 
-.viewer-purpose-button {
-  padding: 8px 16px;
-  border-radius: 18px;
-  border: none;
-  font-size: 14px;
-  line-height: 1.2;
-  min-width: 88px;
+.viewer-purpose-icon-button {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background-color: rgba(12, 16, 28, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   transition: opacity 0.2s ease;
 }
 
-.viewer-purpose-button.primary {
+.viewer-purpose-icon-button--primary {
   background-image: linear-gradient(135deg, #1f7aec, #5d9bff);
-  color: #ffffff;
+  border: none;
 }
 
-.viewer-purpose-button.secondary {
-  background-color: rgba(6, 8, 12, 0.58);
-  color: #f5f7ff;
-  border: 1px solid rgba(255, 255, 255, 0.28);
+.viewer-purpose-icon-button--secondary {
+  background-color: rgba(12, 16, 28, 0.65);
 }
 
-.viewer-purpose-button:active {
+.viewer-purpose-icon-button:active {
   opacity: 0.8;
+}
+
+.viewer-purpose-icon {
+  width: 22px;
+  height: 22px;
 }
 </style>
