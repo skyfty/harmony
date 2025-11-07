@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
+import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { SceneMaterial, SceneMaterialTextureSlot, SceneNodeMaterial } from '@/types/material'
 import type {
@@ -9,8 +10,13 @@ import type {
   SceneNodeComponentMap,
   SceneJsonExportDocument,
   NodeComponentType,
+  SceneOutlineMesh,
+  SceneOutlineMeshMap,
 } from '@harmony/schema'
 import type { SceneExportOptions, GLBExportSettings } from '@/types/scene-export'
+import { AssetCache, AssetLoader } from '@schema/assetCache'
+import ResourceCache from '@schema/ResourceCache'
+import { findObjectByPath, loadAssetObject } from '@schema/utils/modelAssetLoader'
 
 type RemovedSceneObject = {
     parent: THREE.Object3D
@@ -61,6 +67,12 @@ const EDITOR_HELPER_NAMES = new Set<string>([
 ])
 
 const LIGHT_HELPER_NAME_SUFFIX = 'LightHelper'
+
+const DEFAULT_OUTLINE_COLOR = '#808080'
+const OUTLINE_MAX_POINTS = 4096
+const OUTLINE_MIN_POINTS = 32
+const OUTLINE_PER_MESH_SAMPLE = 512
+const OUTLINE_POINT_TARGET = 600
 
 function getAnimations(scene: THREE.Scene) {
 
@@ -315,7 +327,7 @@ export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, opti
     assetIndex: snapshot.assetIndex,
     packageAssetMap: snapshot.packageAssetMap,
   };
-  return sanitizeSceneDocumentForJsonExport(exportDocument, options)
+  return await sanitizeSceneDocumentForJsonExport(exportDocument, options)
 
 }
 export async function prepareGLBSceneExport(scene: THREE.Scene, options: SceneExportOptions): Promise<Blob> {
@@ -370,25 +382,49 @@ export async function prepareGLBSceneExport(scene: THREE.Scene, options: SceneEx
   return blob
 }
 
-export function sanitizeSceneDocumentForJsonExport(
+type OutlineCandidate = {
+  sourceNode: SceneNode
+  sanitizedNode: SceneNode
+}
+
+export async function sanitizeSceneDocumentForJsonExport(
   document: SceneJsonExportDocument,
   options: SceneExportOptions,
-): SceneJsonExportDocument {
+): Promise<SceneJsonExportDocument> {
   const removedNodeIds = new Set<string>()
+  const outlineCandidates: OutlineCandidate[] = []
   const sanitizedMaterials = document.materials.map((material) => sanitizeSceneMaterial(material, options.includeTextures))
-  const sanitizedNodes = sanitizeNodesForJsonExport(document.nodes, options, removedNodeIds)
+  const sanitizedNodes = sanitizeNodesForJsonExport(document.nodes, options, removedNodeIds, outlineCandidates)
 
-  return {
+  let outlineMeshMap: SceneOutlineMeshMap | undefined
+  if (options.includeOutlineMeshes !== false) {
+    outlineMeshMap = await generateOutlineMeshesForCandidates(outlineCandidates, document, options)
+  }
+
+  const sanitizedDocument: SceneJsonExportDocument = {
     ...document,
     materials: sanitizedMaterials,
-    nodes: sanitizedNodes
+    nodes: sanitizedNodes,
   }
+
+  if (options.includeOutlineMeshes === false) {
+    if ('outlineMeshMap' in sanitizedDocument) {
+      delete sanitizedDocument.outlineMeshMap
+    }
+  } else if (outlineMeshMap && Object.keys(outlineMeshMap).length > 0) {
+    sanitizedDocument.outlineMeshMap = outlineMeshMap
+  } else if ('outlineMeshMap' in sanitizedDocument) {
+    delete sanitizedDocument.outlineMeshMap
+  }
+
+  return sanitizedDocument
 }
 
 function sanitizeNodesForJsonExport(
   nodes: SceneNode[],
   options: SceneExportOptions,
   removedNodeIds: Set<string>,
+  outlineCandidates: OutlineCandidate[],
 ): SceneNode[] {
   const result: SceneNode[] = []
   for (const node of nodes) {
@@ -396,7 +432,7 @@ function sanitizeNodesForJsonExport(
       collectNodeTreeIds(node, removedNodeIds)
       continue
     }
-    const sanitized = sanitizeNodeForJsonExport(node, options, removedNodeIds)
+    const sanitized = sanitizeNodeForJsonExport(node, options, removedNodeIds, outlineCandidates)
     result.push(sanitized)
   }
   return result
@@ -418,15 +454,36 @@ function shouldExcludeNodeForJsonExport(node: SceneNode, options: SceneExportOpt
   return false
 }
 
+function shouldGenerateOutlineMeshForNode(node: SceneNode, options: SceneExportOptions): boolean {
+  if (options.includeOutlineMeshes === false) {
+    return false
+  }
+  if (!node.sourceAssetId || typeof node.sourceAssetId !== 'string') {
+    return false
+  }
+  if (node.dynamicMesh) {
+    return false
+  }
+  if (node.editorFlags?.editorOnly) {
+    return false
+  }
+  return true
+}
+
 function sanitizeNodeForJsonExport(
   node: SceneNode,
   options: SceneExportOptions,
   removedNodeIds: Set<string>,
+  outlineCandidates: OutlineCandidate[],
 ): SceneNode {
   const sanitized: SceneNode = { ...node }
 
+  if ('outlineMesh' in sanitized) {
+    delete sanitized.outlineMesh
+  }
+
   if (node.children?.length) {
-    const children = sanitizeNodesForJsonExport(node.children, options, removedNodeIds)
+    const children = sanitizeNodesForJsonExport(node.children, options, removedNodeIds, outlineCandidates)
     if (children.length) {
       sanitized.children = children
     } else {
@@ -446,11 +503,13 @@ function sanitizeNodeForJsonExport(
     if ('components' in sanitized) {
       delete sanitized.components
     }
-    if ('importMetadata' in sanitized) {
-      delete sanitized.importMetadata
-    }
-    if ('sourceAssetId' in sanitized) {
-      delete sanitized.sourceAssetId
+    if (options.includeOutlineMeshes === false) {
+      if ('importMetadata' in sanitized) {
+        delete sanitized.importMetadata
+      }
+      if ('sourceAssetId' in sanitized) {
+        delete sanitized.sourceAssetId
+      }
     }
   } else if (componentMapHasEntries(sanitized.components)) {
     const clonedComponents = cloneNodeComponentMap(sanitized.components!)
@@ -470,7 +529,231 @@ function sanitizeNodeForJsonExport(
     }
   }
 
+  if (shouldGenerateOutlineMeshForNode(node, options)) {
+    outlineCandidates.push({ sourceNode: node, sanitizedNode: sanitized })
+  }
+
   return sanitized
+}
+
+async function generateOutlineMeshesForCandidates(
+  candidates: OutlineCandidate[],
+  document: SceneJsonExportDocument,
+  options: SceneExportOptions,
+): Promise<SceneOutlineMeshMap> {
+  const outlineMeshMap: SceneOutlineMeshMap = {}
+  if (!candidates.length || options.includeOutlineMeshes === false) {
+    return outlineMeshMap
+  }
+
+  const assetCache = new AssetCache({ maxEntries: 4 })
+  const assetLoader = new AssetLoader(assetCache)
+  const resourceCache = new ResourceCache(document, {}, assetLoader)
+  const assetObjectCache = new Map<string, Promise<THREE.Object3D | null>>()
+
+  for (const entry of candidates) {
+    const assetId = entry.sourceNode.sourceAssetId
+    if (!assetId) {
+      continue
+    }
+
+    if (!outlineMeshMap[assetId]) {
+      if (!assetObjectCache.has(assetId)) {
+        assetObjectCache.set(assetId, loadAssetObject(resourceCache, assetId))
+      }
+      const baseObject = await assetObjectCache.get(assetId)!
+      if (!baseObject) {
+        continue
+      }
+
+      baseObject.updateMatrixWorld(true)
+      const targetSource = findObjectByPath(baseObject, entry.sourceNode.importMetadata?.objectPath ?? null) ?? baseObject
+      const targetClone = targetSource.clone(true)
+      targetClone.updateMatrixWorld(true)
+
+      const outline = buildOutlineMeshFromObject(targetClone)
+      if (!outline) {
+        continue
+      }
+
+      outlineMeshMap[assetId] = outline
+    }
+
+    if (!entry.sanitizedNode.sourceAssetId) {
+      entry.sanitizedNode.sourceAssetId = entry.sourceNode.sourceAssetId
+    }
+    if (!entry.sanitizedNode.importMetadata && entry.sourceNode.importMetadata) {
+      entry.sanitizedNode.importMetadata = { ...entry.sourceNode.importMetadata }
+    }
+  }
+
+  return outlineMeshMap
+}
+
+function buildOutlineMeshFromObject(object: THREE.Object3D): SceneOutlineMesh | null {
+  object.updateMatrixWorld(true)
+  const points = collectOutlinePoints(object, OUTLINE_MAX_POINTS)
+  ensureMinimumPointCoverage(points, object)
+  const reducedPoints = reduceOutlinePointDensity(points, OUTLINE_POINT_TARGET)
+  const workingPoints = reducedPoints.length >= OUTLINE_MIN_POINTS ? reducedPoints : points
+  if (workingPoints.length < 4) {
+    return null
+  }
+
+  let geometry: THREE.BufferGeometry | null = null
+  try {
+    geometry = new ConvexGeometry(workingPoints)
+  } catch (error) {
+    console.warn('Failed to build convex outline geometry', error)
+    return null
+  }
+
+  geometry.computeVertexNormals()
+  const positionAttr = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
+  if (!positionAttr) {
+    geometry.dispose()
+    return null
+  }
+
+  const positions = Array.from(positionAttr.array as ArrayLike<number>)
+  const indices = geometry.index ? Array.from(geometry.index.array as ArrayLike<number>) : []
+  geometry.computeBoundingSphere()
+  const boundingSphere = geometry.boundingSphere
+    ? {
+        center: { x: geometry.boundingSphere.center.x, y: geometry.boundingSphere.center.y, z: geometry.boundingSphere.center.z },
+        radius: geometry.boundingSphere.radius,
+      }
+    : null
+  const vertexCount = positionAttr.count
+  const triangleCount = indices.length >= 3 ? indices.length / 3 : Math.max(0, vertexCount - 2)
+  geometry.dispose()
+
+  return {
+    positions,
+    indices,
+    color: DEFAULT_OUTLINE_COLOR,
+    boundingSphere,
+    vertexCount,
+    triangleCount,
+  }
+}
+
+function collectOutlinePoints(root: THREE.Object3D, maxPoints: number): THREE.Vector3[] {
+  const points: THREE.Vector3[] = []
+  const scratch = new THREE.Vector3()
+  root.traverse((child) => {
+    if (points.length >= maxPoints) {
+      return
+    }
+    const mesh = child as THREE.Mesh & { geometry?: THREE.BufferGeometry }
+    const isMesh = (mesh as any).isMesh || (mesh as any).isSkinnedMesh
+    const isPoints = (mesh as any).isPoints
+    const isLine = (mesh as any).isLine
+    if (!isMesh && !isPoints && !isLine) {
+      return
+    }
+    const geometry = mesh.geometry as THREE.BufferGeometry | undefined
+    if (!geometry) {
+      return
+    }
+    const positionAttr = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
+    if (!positionAttr) {
+      return
+    }
+    const stride = Math.max(1, Math.floor(positionAttr.count / OUTLINE_PER_MESH_SAMPLE))
+    for (let index = 0; index < positionAttr.count && points.length < maxPoints; index += stride) {
+      scratch.fromBufferAttribute(positionAttr, index)
+      scratch.applyMatrix4(mesh.matrixWorld)
+      points.push(scratch.clone())
+    }
+  })
+  return points
+}
+
+function reduceOutlinePointDensity(points: THREE.Vector3[], maxPoints: number): THREE.Vector3[] {
+  if (!Number.isFinite(maxPoints) || maxPoints <= 0 || points.length <= maxPoints) {
+    return points.map((point) => point.clone())
+  }
+
+  const box = new THREE.Box3().setFromPoints(points)
+  if (box.isEmpty()) {
+    return points.slice(0, maxPoints).map((point) => point.clone())
+  }
+
+  const size = box.getSize(new THREE.Vector3())
+  const min = box.min
+  const resolution = Math.max(1, Math.ceil(Math.cbrt(maxPoints)))
+  const cellSize = new THREE.Vector3(
+    size.x > 1e-6 ? size.x / resolution : 1,
+    size.y > 1e-6 ? size.y / resolution : 1,
+    size.z > 1e-6 ? size.z / resolution : 1,
+  )
+
+  const selected: THREE.Vector3[] = []
+  const occupied = new Set<string>()
+  const fallback: THREE.Vector3[] = []
+
+  const quantize = (value: number, cellLength: number, minValue: number) => {
+    if (cellLength <= 0) {
+      return 0
+    }
+    const index = Math.floor((value - minValue) / cellLength)
+    return Number.isFinite(index) ? index : 0
+  }
+
+  for (const point of points) {
+    const qx = quantize(point.x, cellSize.x, min.x)
+    const qy = quantize(point.y, cellSize.y, min.y)
+    const qz = quantize(point.z, cellSize.z, min.z)
+    const key = `${qx}|${qy}|${qz}`
+    if (!occupied.has(key)) {
+      occupied.add(key)
+      selected.push(point.clone())
+      if (selected.length >= maxPoints) {
+        return selected
+      }
+    } else {
+      fallback.push(point)
+    }
+  }
+
+  for (const point of fallback) {
+    if (selected.length >= maxPoints) {
+      break
+    }
+    selected.push(point.clone())
+  }
+
+  return selected
+}
+
+function ensureMinimumPointCoverage(points: THREE.Vector3[], root: THREE.Object3D): void {
+  if (points.length >= OUTLINE_MIN_POINTS) {
+    return
+  }
+  const box = new THREE.Box3().setFromObject(root)
+  if (box.isEmpty()) {
+    return
+  }
+  buildBoundingBoxCorners(box).forEach((corner) => {
+    if (points.length < OUTLINE_MAX_POINTS) {
+      points.push(corner)
+    }
+  })
+}
+
+function buildBoundingBoxCorners(box: THREE.Box3): THREE.Vector3[] {
+  const { min, max } = box
+  return [
+    new THREE.Vector3(min.x, min.y, min.z),
+    new THREE.Vector3(max.x, min.y, min.z),
+    new THREE.Vector3(min.x, max.y, min.z),
+    new THREE.Vector3(min.x, min.y, max.z),
+    new THREE.Vector3(max.x, max.y, min.z),
+    new THREE.Vector3(min.x, max.y, max.z),
+    new THREE.Vector3(max.x, min.y, max.z),
+    new THREE.Vector3(max.x, max.y, max.z),
+  ]
 }
 
 function componentMapHasEntries(components?: SceneNodeComponentMap | null): boolean {

@@ -14,6 +14,8 @@ import type {
   SceneNodeEditorFlags,
   SceneNodeMaterial,
   SceneMaterialTextureSettings,
+  SceneOutlineMesh,
+  SceneOutlineMeshMap,
 } from '@harmony/schema';
 import type { GuideboardComponentProps } from './components/definitions/guideboardComponent';
 import { GUIDEBOARD_COMPONENT_TYPE } from './components/definitions/guideboardComponent';
@@ -61,6 +63,7 @@ export interface SceneGraphBuildOptions {
   resolveAssetUrl?: (assetId: string) => string | Promise<string | null> | null | undefined;
   assetOverrides?: Record<string, string | ArrayBuffer>;
   onProgress?: (progress: SceneGraphResourceProgress) => void;
+  lazyLoadMeshes?: boolean;
 }
 
 type MeshTemplate = {
@@ -77,7 +80,9 @@ class SceneGraphBuilder {
   private readonly meshTemplateCache = new Map<string, MeshTemplate>();
   private readonly pendingMeshLoads = new Map<string, Promise<MeshTemplate | null>>();
   private readonly document: SceneJsonExportDocument;
+  private readonly outlineMeshMap: SceneOutlineMeshMap;
   private readonly onProgress?: (progress: SceneGraphResourceProgress) => void;
+  private readonly buildOptions: SceneGraphBuildOptions;
   private progressTotal = 0;
   private progressLoaded = 0;
   constructor(
@@ -89,6 +94,8 @@ class SceneGraphBuilder {
     this.root = new THREE.Group();
     this.root.name = document.name ?? 'Scene';
     this.resourceCache = resourceCache;
+    this.buildOptions = options;
+    this.outlineMeshMap = { ...(document.outlineMeshMap ?? {}) };
     this.resourceCache.setContext(document, options);
     this.resourceCache.setHandlers({
       warn: (message) => this.warn(message),
@@ -201,7 +208,7 @@ class SceneGraphBuilder {
     nodes: SceneNodeWithExtras[],
   ): Promise<void> {
     const textureRequests = this.collectTexturePreloadRequests(materials, nodes);
-    const meshAssetIds = this.collectMeshAssetIds(nodes);
+    const meshAssetIds = this.buildOptions.lazyLoadMeshes ? [] : this.collectMeshAssetIds(nodes);
     const total = textureRequests.length + meshAssetIds.length;
     this.beginProgress(total);
     if (total === 0) {
@@ -435,7 +442,15 @@ class SceneGraphBuilder {
     this.applyTransform(group, node);
     this.applyVisibility(group, node);
 
-    if (node.sourceAssetId) {
+    const outlineMesh = this.resolveOutlineMeshForNode(node);
+
+    if (this.buildOptions.lazyLoadMeshes && outlineMesh && node.sourceAssetId) {
+      const placeholder = this.buildOutlinePlaceholder(node, outlineMesh);
+      if (placeholder) {
+        group.add(placeholder);
+        this.recordMeshStatistics(placeholder);
+      }
+    } else if (node.sourceAssetId) {
       const asset = await this.loadAssetMesh(node.sourceAssetId);
       if (asset) {
         asset.userData = asset.userData ?? {};
@@ -530,6 +545,18 @@ class SceneGraphBuilder {
       return this.buildWallMesh(meshInfo, node);
     }
 
+    const outlineMesh = this.resolveOutlineMeshForNode(node);
+
+    if (this.buildOptions.lazyLoadMeshes && outlineMesh && node.sourceAssetId) {
+      const placeholder = this.buildOutlinePlaceholder(node, outlineMesh);
+      if (placeholder) {
+        this.applyTransform(placeholder, node);
+        this.applyVisibility(placeholder, node);
+        this.recordMeshStatistics(placeholder);
+        return placeholder;
+      }
+    }
+
     if (node.sourceAssetId) {
       const asset = await this.loadAssetMesh(node.sourceAssetId);
       if (asset) {
@@ -542,6 +569,69 @@ class SceneGraphBuilder {
     }
 
     return this.buildPrimitiveNode({ ...node, nodeType: node.nodeType || 'Box' });
+  }
+
+  private resolveOutlineMeshForNode(node: SceneNodeWithExtras): SceneOutlineMesh | null {
+    const assetId = node.sourceAssetId;
+    if (assetId && this.outlineMeshMap[assetId]) {
+      return this.outlineMeshMap[assetId];
+    }
+    const legacyOutline = (node as unknown as { outlineMesh?: SceneOutlineMesh | null }).outlineMesh;
+    if (legacyOutline) {
+      return legacyOutline;
+    }
+    return null;
+  }
+
+  private buildOutlinePlaceholder(node: SceneNodeWithExtras, outline: SceneOutlineMesh): THREE.Object3D | null {
+    if (!outline) {
+      return null;
+    }
+    if (!Array.isArray(outline.positions) || outline.positions.length < 9) {
+      return null;
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    const positionArray = new Float32Array(outline.positions);
+    geometry.setAttribute('position', new THREE.BufferAttribute(positionArray, 3));
+
+    if (Array.isArray(outline.indices) && outline.indices.length > 0) {
+      const indexArray = outline.indices.length > 65535
+        ? new Uint32Array(outline.indices)
+        : new Uint16Array(outline.indices);
+      geometry.setIndex(new THREE.BufferAttribute(indexArray, 1));
+    }
+
+    geometry.computeVertexNormals();
+    if (outline.boundingSphere && outline.boundingSphere.center) {
+      const { center, radius } = outline.boundingSphere;
+      geometry.boundingSphere = new THREE.Sphere(
+        new THREE.Vector3(center.x, center.y, center.z),
+        radius,
+      );
+    } else {
+      geometry.computeBoundingSphere();
+    }
+
+    const color = outline.color && outline.color.trim().length ? outline.color : '#808080';
+    const material = new THREE.MeshBasicMaterial({ color });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.name = node.name ?? 'OutlinePlaceholder';
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.userData = {
+      ...mesh.userData,
+      lazyAsset: {
+        placeholder: true,
+        assetId: node.sourceAssetId ?? null,
+        objectPath: node.importMetadata?.objectPath ?? null,
+        boundingSphere: outline.boundingSphere ?? null,
+        vertexCount: outline.vertexCount ?? positionArray.length / 3,
+        triangleCount: outline.triangleCount ?? (outline.indices?.length ?? 0) / 3,
+        ownerNodeId: node.id ?? null,
+      },
+    };
+    return mesh;
   }
 
   private async buildPrimitiveNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {

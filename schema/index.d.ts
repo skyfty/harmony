@@ -178,6 +178,22 @@ export interface SceneNodeEditorFlags {
   ignoreGridSnapping?: boolean
 }
 
+export interface SceneOutlineMesh {
+  positions: number[]
+  indices: number[]
+  color?: string
+  boundingSphere?: {
+    center: Vector3Like
+    radius: number
+  } | null
+  vertexCount: number
+  triangleCount: number
+}
+
+export type SceneOutlineMeshMap = Record<string, SceneOutlineMesh>
+
+export type SceneNodeOutlineMesh = SceneOutlineMesh
+
 export type BehaviorEventType = 'click' | 'approach' | 'depart' | 'perform'
 
 export type BehaviorScriptType =
@@ -449,6 +465,7 @@ export interface SceneJsonExportDocument {
   groundSettings?: GroundSettings;
   assetIndex?: Record<string, AssetIndexEntry>;
   packageAssetMap?: Record<string, string>;
+  outlineMeshMap?: SceneOutlineMeshMap;
 }
 
 export interface SceneSkyboxSettings {

@@ -102,6 +102,7 @@ const exportPreferences = ref<SceneExportOptions>({
   includeSkeletons: true,
   includeCameras: false,
   includeExtras: true,
+  includeOutlineMeshes: true,
   rotateCoordinateSystem: true,
   format: 'json',
 })
@@ -674,6 +675,7 @@ const SCENE_PREVIEW_EXPORT_OPTIONS: SceneExportOptions = {
   includeSkeletons: true,
   includeCameras: true,
   includeExtras: true,
+  includeOutlineMeshes: true,
   rotateCoordinateSystem: false,
 }
 

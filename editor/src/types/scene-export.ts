@@ -16,6 +16,7 @@ export interface SceneExportOptions {
     includeSkeletons: boolean
     includeCameras: boolean
     includeExtras: boolean
+  includeOutlineMeshes: boolean
     rotateCoordinateSystem: boolean
 }
 

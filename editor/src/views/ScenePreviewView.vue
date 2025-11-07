@@ -16,6 +16,7 @@ import { subscribeToScenePreview } from '@/utils/previewChannel'
 import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
 import ResourceCache from '@schema/ResourceCache'
 import { AssetCache, AssetLoader } from '@schema/assetCache'
+import { loadNodeObject } from '@schema/utils/modelAssetLoader'
 import { ComponentManager } from '@schema/components/componentManager'
 import {
 	behaviorComponentDefinition,
@@ -131,6 +132,27 @@ type BehaviorProximityThreshold = { enter: number; exit: number; objectId: strin
 const behaviorProximityCandidates = new Map<string, BehaviorProximityCandidate>()
 const behaviorProximityState = new Map<string, BehaviorProximityStateEntry>()
 const behaviorProximityThresholdCache = new Map<string, BehaviorProximityThreshold>()
+
+const OUTLINE_LOAD_RADIUS_MULTIPLIER = 4
+const OUTLINE_LOAD_MIN_DISTANCE = 12
+const MAX_CONCURRENT_LAZY_LOADS = 2
+
+type LazyPlaceholderState = {
+	nodeId: string
+	container: THREE.Object3D | null
+	placeholder: THREE.Object3D
+	assetId: string
+	objectPath: number[] | null
+	boundingSphere: THREE.Sphere | null
+	loading: boolean
+	loaded: boolean
+	pending: Promise<void> | null
+}
+
+const lazyPlaceholderStates = new Map<string, LazyPlaceholderState>()
+let activeLazyLoadCount = 0
+const tempOutlineSphere = new THREE.Sphere()
+const tempOutlineScale = new THREE.Vector3()
 
 const CAMERA_HEIGHT = 1.6
 const FIRST_PERSON_ROTATION_SPEED = 25
@@ -2190,6 +2212,7 @@ function startAnimationLoop() {
 		}
 
 		updateBehaviorProximity()
+		updateLazyPlaceholders(delta)
 
 		currentRenderer.render(currentScene, activeCamera)
 	}
@@ -2217,6 +2240,8 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	dismissBehaviorAlert()
 	resetLanternOverlay()
 	resetAssetResolutionCaches()
+	lazyPlaceholderStates.clear()
+	activeLazyLoadCount = 0
 	if (!rootGroup) {
 		return
 	}
@@ -2433,6 +2458,12 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 	object.traverse((child) => {
 		const nodeId = child.userData?.nodeId as string | undefined
 		if (nodeId) {
+			const existing = nodeObjectMap.get(nodeId)
+			const isPlaceholder = child.userData?.lazyAsset?.placeholder === true
+			const existingIsPreferred = existing && existing !== child && isPlaceholder && existing.userData?.lazyAsset?.placeholder !== true
+			if (existingIsPreferred) {
+				return
+			}
 			nodeObjectMap.set(nodeId, child)
 			pending?.delete(nodeId)
 			attachRuntimeForNode(nodeId, child)
@@ -2509,6 +2540,271 @@ function updateNodeProperties(object: THREE.Object3D, node: SceneNode) {
 		object.visible = true
 	}
 	updateBehaviorVisibility(node.id, object.visible)
+}
+
+type LazyAssetMetadata = {
+	placeholder?: boolean
+	assetId?: string | null
+	objectPath?: number[] | null
+	boundingSphere?: { center: { x: number; y: number; z: number }; radius: number } | null
+	ownerNodeId?: string | null
+} | undefined
+
+function findLazyPlaceholderForNode(root: THREE.Object3D | null | undefined, nodeId: string): THREE.Object3D | null {
+	if (!root) {
+		return null
+	}
+	const stack: THREE.Object3D[] = [root]
+	while (stack.length) {
+		const current = stack.pop()
+		if (!current) {
+			continue
+		}
+		const lazyData = current.userData?.lazyAsset as LazyAssetMetadata
+		if (lazyData?.placeholder) {
+			const ownerId = lazyData.ownerNodeId ?? (current.userData?.nodeId as string | undefined) ?? null
+			if (ownerId ? ownerId === nodeId : current === root) {
+				return current
+			}
+		}
+		if (current.children.length) {
+			stack.push(...current.children)
+		}
+	}
+	return null
+}
+
+function initializeLazyPlaceholders(document: SceneJsonExportDocument | null | undefined): void {
+	lazyPlaceholderStates.clear()
+	activeLazyLoadCount = 0
+	if (!document) {
+		return
+	}
+	nodeObjectMap.forEach((object, nodeId) => {
+		const placeholderObject = findLazyPlaceholderForNode(object, nodeId)
+		if (!placeholderObject) {
+			return
+		}
+		const lazyData = placeholderObject.userData?.lazyAsset as LazyAssetMetadata
+		if (!lazyData || !lazyData.placeholder || !lazyData.assetId) {
+			return
+		}
+		const sphere = lazyData.boundingSphere
+			? new THREE.Sphere(
+				new THREE.Vector3(
+					lazyData.boundingSphere.center.x,
+					lazyData.boundingSphere.center.y,
+					lazyData.boundingSphere.center.z,
+				),
+				lazyData.boundingSphere.radius,
+			)
+			: null
+		lazyPlaceholderStates.set(nodeId, {
+			nodeId,
+			container: object,
+			placeholder: placeholderObject,
+			assetId: lazyData.assetId,
+			objectPath: Array.isArray(lazyData.objectPath) ? [...lazyData.objectPath] : null,
+			boundingSphere: sphere,
+			loading: false,
+			loaded: false,
+			pending: null,
+		})
+	})
+}
+
+function updateLazyPlaceholders(_delta: number): void {
+	if (!camera || lazyPlaceholderStates.size === 0) {
+		return
+	}
+	lazyPlaceholderStates.forEach((state, nodeId) => {
+		const container = nodeObjectMap.get(nodeId) ?? null
+		if (!container) {
+			lazyPlaceholderStates.delete(nodeId)
+			return
+		}
+		state.container = container
+		const placeholderObject = findLazyPlaceholderForNode(container, nodeId)
+		if (!placeholderObject) {
+			lazyPlaceholderStates.delete(nodeId)
+			return
+		}
+		state.placeholder = placeholderObject
+		const lazyData = placeholderObject.userData?.lazyAsset as LazyAssetMetadata
+		if (!lazyData || !lazyData.placeholder || !lazyData.assetId) {
+			lazyPlaceholderStates.delete(nodeId)
+			return
+		}
+		state.assetId = lazyData.assetId
+		state.objectPath = Array.isArray(lazyData.objectPath) ? [...lazyData.objectPath] : null
+		if (lazyData.boundingSphere) {
+			if (!state.boundingSphere) {
+				state.boundingSphere = new THREE.Sphere()
+			}
+			state.boundingSphere.center.set(
+				lazyData.boundingSphere.center.x,
+				lazyData.boundingSphere.center.y,
+				lazyData.boundingSphere.center.z,
+			)
+			state.boundingSphere.radius = lazyData.boundingSphere.radius
+		} else {
+			state.boundingSphere = null
+		}
+		if (state.loaded) {
+			lazyPlaceholderStates.delete(nodeId)
+			return
+		}
+		if (state.loading || state.pending) {
+			return
+		}
+		if (activeLazyLoadCount >= MAX_CONCURRENT_LAZY_LOADS) {
+			return
+		}
+		if (!shouldLoadLazyPlaceholder(state)) {
+			return
+		}
+		state.loading = true
+		activeLazyLoadCount += 1
+		const pending = loadActualAssetForPlaceholder(state)
+			.catch((error) => {
+				console.warn('[ScenePreview] Failed to load detailed mesh', error)
+			})
+			.finally(() => {
+				state.loading = false
+				activeLazyLoadCount = Math.max(0, activeLazyLoadCount - 1)
+				state.pending = null
+			})
+		state.pending = pending
+	})
+}
+
+function shouldLoadLazyPlaceholder(state: LazyPlaceholderState): boolean {
+	if (!camera) {
+		return false
+	}
+	const object = state.placeholder
+	if (!object.visible) {
+		return false
+	}
+	const worldSphere = resolveWorldBoundingSphereForPlaceholder(state, object)
+	if (!worldSphere) {
+		return false
+	}
+	const distance = worldSphere.center.distanceTo(camera.position)
+	const threshold = Math.max(OUTLINE_LOAD_MIN_DISTANCE, worldSphere.radius * OUTLINE_LOAD_RADIUS_MULTIPLIER)
+	return distance <= threshold
+}
+
+function resolveWorldBoundingSphereForPlaceholder(state: LazyPlaceholderState, object: THREE.Object3D): THREE.Sphere | null {
+	let baseSphere = state.boundingSphere ? state.boundingSphere.clone() : null
+	const mesh = object as THREE.Mesh & { geometry?: THREE.BufferGeometry }
+	const geometry = mesh.geometry as THREE.BufferGeometry | undefined
+	if (!baseSphere && geometry) {
+		if (!geometry.boundingSphere) {
+			geometry.computeBoundingSphere()
+		}
+		if (geometry.boundingSphere) {
+			baseSphere = geometry.boundingSphere.clone()
+		}
+	}
+	if (baseSphere) {
+		tempOutlineSphere.center.copy(baseSphere.center).applyMatrix4(object.matrixWorld)
+		object.getWorldScale(tempOutlineScale)
+		const maxScale = Math.max(tempOutlineScale.x, tempOutlineScale.y, tempOutlineScale.z)
+		tempOutlineSphere.radius = baseSphere.radius * maxScale
+		return tempOutlineSphere
+	}
+	const worldBox = tempBox.setFromObject(object)
+	if (worldBox.isEmpty()) {
+		return null
+	}
+	return worldBox.getBoundingSphere(tempOutlineSphere)
+}
+
+async function loadActualAssetForPlaceholder(state: LazyPlaceholderState): Promise<void> {
+	const resourceCache = editorResourceCache
+	const document = currentDocument
+	if (!resourceCache || !document) {
+		return
+	}
+	const node = resolveNodeById(state.nodeId)
+	if (!node) {
+		lazyPlaceholderStates.delete(state.nodeId)
+		return
+	}
+	try {
+		const detailed = await loadNodeObject(resourceCache, state.assetId, node.importMetadata ?? null)
+		if (!detailed) {
+			lazyPlaceholderStates.delete(state.nodeId)
+			return
+		}
+		prepareImportedObjectForPreview(detailed)
+		const placeholder = state.placeholder
+		const container = state.container ?? nodeObjectMap.get(state.nodeId) ?? null
+		const metadata = { ...(placeholder.userData ?? {}), nodeId: state.nodeId } as Record<string, unknown>
+		const lazyMetadata = { ...((metadata.lazyAsset as Record<string, unknown> | undefined) ?? {}) }
+		detailed.userData = {
+			...detailed.userData,
+			...metadata,
+			lazyAsset: {
+				...lazyMetadata,
+				placeholder: false,
+				loaded: true,
+			},
+		}
+		const parent = placeholder.parent
+			?? (container && container !== placeholder ? container : null)
+			?? rootGroup
+		const insertIndex = parent ? parent.children.indexOf(placeholder) : -1
+		if (parent) {
+			parent.add(detailed)
+			if (insertIndex >= 0) {
+				parent.children.splice(parent.children.indexOf(detailed), 1)
+				parent.children.splice(insertIndex, 0, detailed)
+			}
+		}
+		if (!container || container === placeholder) {
+			updateNodeProperties(detailed, node)
+		} else {
+			updateNodeProperties(container, node)
+		}
+		detailed.updateMatrixWorld(true)
+		const existingObject = nodeObjectMap.get(state.nodeId)
+		placeholder.parent?.remove(placeholder)
+		disposeObjectResources(placeholder)
+		if (!existingObject || existingObject === placeholder) {
+			nodeObjectMap.delete(state.nodeId)
+			registerSubtree(detailed)
+		}
+		state.loaded = true
+		lazyPlaceholderStates.delete(state.nodeId)
+		refreshAnimations()
+	} catch (error) {
+		console.warn('[ScenePreview] Deferred asset load failed', error)
+		lazyPlaceholderStates.delete(state.nodeId)
+	}
+}
+
+function prepareImportedObjectForPreview(object: THREE.Object3D): void {
+	object.traverse((child) => {
+		const mesh = child as THREE.Mesh & { material?: THREE.Material | THREE.Material[] }
+		if (!(mesh as any).isMesh && !(mesh as any).isSkinnedMesh) {
+			return
+		}
+		mesh.castShadow = true
+		mesh.receiveShadow = true
+		const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+		materials.forEach((material) => {
+			if (!material) {
+				return
+			}
+			const typed = material as THREE.Material & { side?: number }
+			if (typeof typed.side !== 'undefined') {
+				typed.side = THREE.DoubleSide
+			}
+			typed.needsUpdate = true
+		})
+	})
 }
 
 function structuralSignature(node: SceneNode | null | undefined): string {
@@ -2619,6 +2915,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 				resourceProgress.label = info.message || (info.assetId ? `加载 ${info.assetId}` : '')
 				resourceProgress.active = info.total > 0 && info.loaded < info.total
 			},
+			lazyLoadMeshes: true,
 		}
 		const resourceCache = ensureEditorResourceCache(document, buildOptions)
 		graphResult = await buildSceneGraph(document, resourceCache, buildOptions)
@@ -2650,7 +2947,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	})
 
 	if (!currentDocument) {
-			disposeScene({ preservePreviewNodeMap: true })
+		disposeScene({ preservePreviewNodeMap: true })
 		while (root.children.length) {
 			const child = root.children.shift()
 			if (!child) {
@@ -2662,6 +2959,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 		currentDocument = document
 		refreshAnimations()
 		refreshFallbackLighting()
+		initializeLazyPlaceholders(document)
 		return
 	}
 
@@ -2677,6 +2975,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	currentDocument = document
 	refreshAnimations()
 	refreshFallbackLighting()
+	initializeLazyPlaceholders(document)
 }
 
 function applySnapshot(snapshot: ScenePreviewSnapshot) {
