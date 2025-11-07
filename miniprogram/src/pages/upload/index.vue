@@ -34,13 +34,39 @@
       </view>
     </view>
 
+    <view class="my-works-card">
+      <view class="my-works-header">
+        <text class="my-works-title">我的作品</text>
+        <text class="my-works-action" @tap="goWorksList">更多</text>
+      </view>
+      <view class="my-works-grid">
+        <view class="my-work-card" v-for="work in featuredWorks" :key="work.id" @tap="openWorkDetail(work.id)">
+          <view class="my-work-thumb" :style="{ background: work.gradient }"></view>
+          <view class="my-work-info">
+            <text class="my-work-name">{{ work.name }}</text>
+            <text class="my-work-meta">{{ work.metaText }}</text>
+            <view class="my-work-stats">
+              <view class="my-work-stat">
+                <text class="my-work-stat-icon">★</text>
+                <text class="my-work-stat-value">{{ work.ratingText }}</text>
+              </view>
+              <view class="my-work-stat">
+                <text class="my-work-stat-icon likes">❤</text>
+                <text class="my-work-stat-value">{{ work.likesText }}</text>
+              </view>
+            </view>
+          </view>
+        </view>
+      </view>
+    </view>
+
     <BottomNav active="upload" @navigate="handleNavigate" />
   </view>
 </template>
 <script setup lang="ts">
-import { ref, watchEffect } from 'vue';
+import { computed, ref, watchEffect } from 'vue';
 import BottomNav from '@/components/BottomNav.vue';
-import { useWorksStore, type WorkType } from '@/stores/worksStore';
+import { useWorksStore, type WorkItem, type WorkType } from '@/stores/worksStore';
 
 declare const wx: any | undefined;
 
@@ -124,6 +150,21 @@ const routes: Record<NavKey, string> = {
   optimize: '/pages/optimize/index',
 };
 
+type FeaturedWork = WorkItem & {
+  ratingText: string;
+  likesText: string;
+  metaText: string;
+};
+
+const featuredWorks = computed<FeaturedWork[]>(() =>
+  worksStore.works.slice(0, 4).map((work) => ({
+    ...work,
+    ratingText: typeof work.rating === 'number' ? work.rating.toFixed(1) : `${work.rating}`,
+    likesText: typeof work.likes === 'number' ? work.likes.toString() : `${work.likes}`,
+    metaText: work.time || work.size || '刚刚',
+  })),
+);
+
 watchEffect(() => {
   if (uploadHistory.value.length > 20) {
     uploadHistory.value = uploadHistory.value.slice(0, 20);
@@ -136,6 +177,17 @@ function handleNavigate(target: NavKey) {
     return;
   }
   uni.redirectTo({ url: route });
+}
+
+function goWorksList() {
+  uni.navigateTo({ url: '/pages/works/index' });
+}
+
+function openWorkDetail(id: string) {
+  if (!id) {
+    return;
+  }
+  uni.navigateTo({ url: `/pages/works/detail/index?id=${id}` });
 }
 
 function selectFile() {
@@ -692,5 +744,98 @@ function goManage() {
 .history-status {
   font-size: 12px;
   color: #1f7aec;
+}
+
+.my-works-card {
+  background: #ffffff;
+  border-radius: 20px;
+  padding: 20px;
+  box-shadow: 0 12px 32px rgba(31, 122, 236, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.my-works-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.my-works-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f1f1f;
+}
+
+.my-works-action {
+  font-size: 14px;
+  color: #1f7aec;
+}
+
+.my-works-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.my-work-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.my-work-thumb {
+  width: 100%;
+  height: 110px;
+  border-radius: 18px;
+  box-shadow: 0 12px 24px rgba(31, 122, 236, 0.12);
+}
+
+.my-work-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.my-work-name {
+  font-size: 14px;
+  color: #1f1f1f;
+  font-weight: 600;
+}
+
+.my-work-meta {
+  font-size: 12px;
+  color: #8a94a6;
+}
+
+.my-work-stats {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.my-work-stat {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(31, 122, 236, 0.08);
+  padding: 4px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  color: #1f1f1f;
+}
+
+.my-work-stat-icon {
+  color: #ffaf42;
+  font-size: 11px;
+}
+
+.my-work-stat-icon.likes {
+  color: #ff6f91;
+}
+
+.my-work-stat-value {
+  font-size: 11px;
 }
 </style>

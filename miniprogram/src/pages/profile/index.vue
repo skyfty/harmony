@@ -24,32 +24,6 @@
       </view>
     </view>
 
-    <view class="section">
-      <view class="section-header">
-        <text class="section-title">我的作品</text>
-        <text class="section-action" @tap="goWorksList">更多</text>
-      </view>
-      <view class="works-grid">
-        <view class="work-card" v-for="work in works" :key="work.id" @tap="openWorkDetail(work.id)">
-          <view class="work-thumb" :style="{ background: work.gradient }"></view>
-          <view class="work-info">
-            <text class="work-name">{{ work.name }}</text>
-            <text class="work-meta">{{ work.meta }}</text>
-            <view class="work-stats">
-              <view class="stat-item">
-                <text class="stat-icon">★</text>
-                <text class="stat-value">{{ work.rating }}</text>
-              </view>
-              <view class="stat-item">
-                <text class="stat-icon">❤</text>
-                <text class="stat-value">{{ work.likes }}</text>
-              </view>
-            </view>
-          </view>
-        </view>
-      </view>
-    </view>
-
     <view class="quick-actions">
       <view class="action-card order" @tap="goOrders">
         <view class="action-icon order"></view>
@@ -91,13 +65,6 @@ const stats = [
   { label: '分享次数', value: '54' },
 ];
 
-const works = [
-  { id: 'w1', name: '沉浸式雕塑', meta: '曝光 2.1K', rating: '4.8', likes: 236, gradient: 'linear-gradient(135deg, #ffe0f2, #ffd0ec)' },
-  { id: 'w2', name: '未来展厅', meta: '曝光 1.8K', rating: '4.6', likes: 198, gradient: 'linear-gradient(135deg, #dff5ff, #c6ebff)' },
-  { id: 'w3', name: '光影序曲', meta: '曝光 1.6K', rating: '4.9', likes: 321, gradient: 'linear-gradient(135deg, #fff0ce, #ffe2a8)' },
-  { id: 'w4', name: '环境剧场', meta: '曝光 1.1K', rating: '4.7', likes: 178, gradient: 'linear-gradient(135deg, #e7e4ff, #f1eeff)' },
-];
-
 const routes: Record<NavKey, string> = {
   home: '/pages/home/index',
   upload: '/pages/upload/index',
@@ -122,10 +89,6 @@ function handleNavigate(target: NavKey) {
   uni.redirectTo({ url: route });
 }
 
-function goWorksList() {
-  uni.navigateTo({ url: '/pages/works/index' });
-}
-
 function goOrders() {
   uni.navigateTo({ url: '/pages/orders/index' });
 }
@@ -140,13 +103,6 @@ function goSupport(type: SupportLink) {
     return;
   }
   uni.showToast({ title: message, icon: 'none' });
-}
-
-function openWorkDetail(id: string) {
-  if (!id) {
-    return;
-  }
-  uni.navigateTo({ url: `/pages/works/detail/index?id=${id}` });
 }
 </script>
 <style scoped lang="scss">
@@ -308,97 +264,6 @@ function openWorkDetail(id: string) {
 .stat-label {
   font-size: 12px;
   color: #8a94a6;
-}
-
-.section {
-  background: #ffffff;
-  border-radius: 20px;
-  padding: 20px;
-  box-shadow: 0 12px 32px rgba(31, 122, 236, 0.08);
-}
-
-.section-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.section-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: #1f1f1f;
-}
-
-.section-action {
-  font-size: 14px;
-  color: #1f7aec;
-}
-
-.works-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.work-card {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.work-thumb {
-  width: 100%;
-  height: 110px;
-  border-radius: 18px;
-  box-shadow: 0 12px 24px rgba(31, 122, 236, 0.12);
-}
-
-.work-info {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.work-name {
-  font-size: 14px;
-  color: #1f1f1f;
-  font-weight: 600;
-}
-
-.work-meta {
-  font-size: 12px;
-  color: #8a94a6;
-}
-
-.work-stats {
-  display: flex;
-  gap: 8px;
-  margin-top: 6px;
-}
-
-.stat-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  background: rgba(31, 122, 236, 0.08);
-  padding: 4px 8px;
-  border-radius: 10px;
-  font-size: 11px;
-  color: #1f1f1f;
-}
-
-.stat-item:last-child .stat-icon {
-  color: #ff6f91;
-}
-
-.stat-icon {
-  color: #ffaf42;
-  font-size: 11px;
-}
-
-.stat-value {
-  font-size: 12px;
 }
 
 .quick-actions {
