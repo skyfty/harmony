@@ -6,7 +6,7 @@
     </view>
     <view class="nav-item" :class="{ active: active === 'upload' }" @tap="go('upload')">
       <view class="icon upload"></view>
-      <text class="label">上传</text>
+      <text class="label">作品</text>
     </view>
     <view class="nav-item" :class="{ active: active === 'exhibition' }" @tap="go('exhibition')">
       <view class="icon exhibition"></view>
