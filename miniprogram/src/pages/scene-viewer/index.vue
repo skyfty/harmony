@@ -276,8 +276,6 @@ const CAMERA_FORWARD_OFFSET = 1.5;
 const CAMERA_HORIZONTAL_POLAR_ANGLE = Math.PI / 2;
 const CAMERA_WATCH_DURATION = 0.45;
 const CAMERA_LEVEL_DURATION = 0.35;
-const DEFAULT_CAMERA_POSITION = new THREE.Vector3(0, HUMAN_EYE_HEIGHT, 0);
-const DEFAULT_CAMERA_TARGET = new THREE.Vector3(0, HUMAN_EYE_HEIGHT, -CAMERA_FORWARD_OFFSET);
 const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
   presetId: 'clear-day',
   exposure: 0.6,
@@ -397,6 +395,8 @@ const tempBox = new THREE.Box3();
 const tempSphere = new THREE.Sphere();
 const tempVector = new THREE.Vector3();
 const tempQuaternion = new THREE.Quaternion();
+const tempPitchVector = new THREE.Vector3();
+const tempSpherical = new THREE.Spherical();
 
 type CameraWatchTween = {
   from: THREE.Vector3;
@@ -1544,6 +1544,29 @@ function resolveNodeFocusPoint(nodeId: string | null | undefined): THREE.Vector3
   return tempSphere.center.clone();
 }
 
+function withControlsVerticalFreedom<T>(controls: OrbitControls, callback: () => T): T {
+  const { minPolarAngle, maxPolarAngle } = controls;
+  controls.minPolarAngle = 0;
+  controls.maxPolarAngle = Math.PI;
+  try {
+    return callback();
+  } finally {
+    controls.minPolarAngle = minPolarAngle;
+    controls.maxPolarAngle = maxPolarAngle;
+  }
+}
+
+function lockControlsPitchToCurrent(controls: OrbitControls, camera: THREE.PerspectiveCamera): void {
+  tempPitchVector.copy(controls.target).sub(camera.position);
+  if (tempPitchVector.lengthSq() < 1e-8) {
+    return;
+  }
+  tempSpherical.setFromVector3(tempPitchVector);
+  const phi = Math.min(Math.PI - 1e-4, Math.max(1e-4, tempSpherical.phi));
+  controls.minPolarAngle = phi;
+  controls.maxPolarAngle = phi;
+}
+
 function easeInOutCubic(t: number): number {
   if (t <= 0) {
     return 0;
@@ -1564,13 +1587,19 @@ function applyCameraWatchTween(delta: number): void {
   tween.elapsed = Math.min(tween.elapsed + delta, tween.duration);
   const eased = easeInOutCubic(Math.min(1, tween.elapsed / duration));
   tempMovementVec.copy(tween.from).lerp(tween.to, eased);
-  controls.target.copy(tempMovementVec);
-  controls.update();
-  camera.position.copy(tween.startPosition);
-  camera.position.y = HUMAN_EYE_HEIGHT;
-  controls.update();
+  withControlsVerticalFreedom(controls, () => {
+    controls.target.copy(tempMovementVec);
+    camera.position.copy(tween.startPosition);
+    camera.position.y = HUMAN_EYE_HEIGHT;
+    camera.lookAt(controls.target);
+    controls.update();
+  });
+  lockControlsPitchToCurrent(controls, camera);
   if (tween.elapsed >= tween.duration) {
     controls.target.copy(tween.to);
+    camera.lookAt(controls.target);
+    controls.update();
+    lockControlsPitchToCurrent(controls, camera);
     activeCameraWatchTween = null;
   }
 }
@@ -1799,14 +1828,22 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
   const durationSeconds = Math.max(0, event.duration ?? 0);
   
   const updateFrame = (alpha: number) => {
-    camera.position.lerpVectors(startPosition, destination, alpha);
-    controls.target.lerpVectors(startTarget, lookTarget, alpha);
-    controls.update();
+    withControlsVerticalFreedom(controls, () => {
+      camera.position.lerpVectors(startPosition, destination, alpha);
+      controls.target.lerpVectors(startTarget, lookTarget, alpha);
+      camera.lookAt(controls.target);
+      controls.update();
+    });
+    lockControlsPitchToCurrent(controls, camera);
   };
   const finalize = () => {
-    camera.position.copy(destination);
-    controls.target.copy(lookTarget);
-    controls.update();
+    withControlsVerticalFreedom(controls, () => {
+      camera.position.copy(destination);
+      controls.target.copy(lookTarget);
+      camera.lookAt(controls.target);
+      controls.update();
+    });
+    lockControlsPitchToCurrent(controls, camera);
     resolveBehaviorToken(event.token, { type: 'continue' });
   };
   startTimedAnimation(event.token, durationSeconds, updateFrame, finalize);
@@ -1942,11 +1979,13 @@ function performWatchFocus(targetNodeId: string | null): { success: boolean; mes
 
   tempMovementVec.copy(focus).sub(startPosition);
   if (tempMovementVec.lengthSq() < 1e-8) {
-    controls.target.copy(focus);
-    controls.update();
-    camera.position.copy(startPosition);
-    camera.position.y = HUMAN_EYE_HEIGHT;
-    controls.update();
+    withControlsVerticalFreedom(controls, () => {
+      controls.target.copy(focus);
+      camera.position.copy(startPosition);
+      camera.lookAt(focus);
+      controls.update();
+    });
+    lockControlsPitchToCurrent(controls, camera);
     return { success: true };
   }
 
@@ -1954,12 +1993,13 @@ function performWatchFocus(targetNodeId: string | null): { success: boolean; mes
   tempForwardVec.copy(tempMovementVec).multiplyScalar(CAMERA_FORWARD_OFFSET).add(startPosition);
   const startTarget = controls.target.clone();
   if (startTarget.distanceToSquared(tempForwardVec) < 1e-6) {
-    camera.lookAt(tempForwardVec);
-    controls.target.copy(tempForwardVec);
-    controls.update();
-    camera.position.copy(startPosition);
-    camera.position.y = HUMAN_EYE_HEIGHT;
-    controls.update();
+    withControlsVerticalFreedom(controls, () => {
+      camera.position.copy(startPosition);
+      controls.target.copy(tempForwardVec);
+      camera.lookAt(tempForwardVec);
+      controls.update();
+    });
+    lockControlsPitchToCurrent(controls, camera);
     return { success: true };
   }
 
@@ -2034,9 +2074,12 @@ function resetCameraToLevelView(): { success: boolean; message?: string } {
   const levelTarget = startTarget.clone();
   levelTarget.y = camera.position.y;
   if (startTarget.distanceToSquared(levelTarget) < 1e-6) {
-    controls.target.copy(levelTarget);
-    camera.lookAt(levelTarget);
-    controls.update();
+    withControlsVerticalFreedom(controls, () => {
+      controls.target.copy(levelTarget);
+      camera.lookAt(levelTarget);
+      controls.update();
+    });
+    lockControlsPitchToCurrent(controls, camera);
     return { success: true };
   }
   const startPosition = camera.position.clone();
@@ -2060,18 +2103,6 @@ function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look
   resolveBehaviorToken(event.token, { type: 'continue' });
 }
 
-function resetCameraToDefaultView(): void {
-  const context = renderContext;
-  if (!context) {
-    return;
-  }
-  const { camera, controls } = context;
-  activeCameraWatchTween = null;
-  camera.position.copy(DEFAULT_CAMERA_POSITION);
-  controls.target.copy(DEFAULT_CAMERA_TARGET);
-  camera.lookAt(DEFAULT_CAMERA_TARGET);
-  controls.update();
-}
 
 function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
   switch (event.type) {
@@ -2729,6 +2760,7 @@ async function ensureRendererContext(result: UseCanvasResult) {
   });
 
   controls.update();
+  lockControlsPitchToCurrent(controls, camera);
   setupWheelControls(canvas);
 
   const scene = new THREE.Scene();
