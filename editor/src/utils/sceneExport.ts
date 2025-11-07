@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js'
+import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { SceneMaterial, SceneMaterialTextureSlot, SceneNodeMaterial } from '@/types/material'
 import type {
@@ -69,10 +70,13 @@ const EDITOR_HELPER_NAMES = new Set<string>([
 const LIGHT_HELPER_NAME_SUFFIX = 'LightHelper'
 
 const DEFAULT_OUTLINE_COLOR = '#808080'
-const OUTLINE_MAX_POINTS = 4096
+const OUTLINE_MAX_POINTS = 2048
 const OUTLINE_MIN_POINTS = 32
-const OUTLINE_PER_MESH_SAMPLE = 512
-const OUTLINE_POINT_TARGET = 600
+const OUTLINE_PER_MESH_SAMPLE = 256
+const OUTLINE_POINT_TARGET = 220
+const OUTLINE_DECIMAL_PRECISION = 3
+const OUTLINE_QUANTIZE_FACTOR = 10 ** OUTLINE_DECIMAL_PRECISION
+const OUTLINE_VERTEX_MERGE_TOLERANCE = 1e-3
 
 function getAnimations(scene: THREE.Scene) {
 
@@ -595,16 +599,26 @@ function buildOutlineMeshFromObject(object: THREE.Object3D): SceneOutlineMesh | 
   const points = collectOutlinePoints(object, OUTLINE_MAX_POINTS)
   ensureMinimumPointCoverage(points, object)
   const reducedPoints = reduceOutlinePointDensity(points, OUTLINE_POINT_TARGET)
-  const workingPoints = reducedPoints.length >= OUTLINE_MIN_POINTS ? reducedPoints : points
+  const basePoints = reducedPoints.length >= OUTLINE_MIN_POINTS ? reducedPoints : points
+  const quantizedPoints = quantizeAndDeduplicatePoints(basePoints)
+  const workingPoints = quantizedPoints.length >= OUTLINE_MIN_POINTS
+    ? quantizedPoints
+    : basePoints.map((point) => point.clone())
   if (workingPoints.length < 4) {
     return null
   }
 
   let geometry: THREE.BufferGeometry | null = null
   try {
-    geometry = new ConvexGeometry(workingPoints)
+    const convexGeometry = new ConvexGeometry(workingPoints)
+    geometry = mergeVertices(convexGeometry, OUTLINE_VERTEX_MERGE_TOLERANCE)
+    convexGeometry.dispose()
   } catch (error) {
     console.warn('Failed to build convex outline geometry', error)
+    return null
+  }
+
+  if (!geometry) {
     return null
   }
 
@@ -615,17 +629,21 @@ function buildOutlineMeshFromObject(object: THREE.Object3D): SceneOutlineMesh | 
     return null
   }
 
-  const positions = Array.from(positionAttr.array as ArrayLike<number>)
+  const positions = Array.from(positionAttr.array as ArrayLike<number>, (value) => quantizeOutlineValue(value))
   const indices = geometry.index ? Array.from(geometry.index.array as ArrayLike<number>) : []
   geometry.computeBoundingSphere()
   const boundingSphere = geometry.boundingSphere
     ? {
-        center: { x: geometry.boundingSphere.center.x, y: geometry.boundingSphere.center.y, z: geometry.boundingSphere.center.z },
-        radius: geometry.boundingSphere.radius,
+        center: {
+          x: quantizeOutlineValue(geometry.boundingSphere.center.x),
+          y: quantizeOutlineValue(geometry.boundingSphere.center.y),
+          z: quantizeOutlineValue(geometry.boundingSphere.center.z),
+        },
+        radius: quantizeOutlineValue(geometry.boundingSphere.radius),
       }
     : null
   const vertexCount = positionAttr.count
-  const triangleCount = indices.length >= 3 ? indices.length / 3 : Math.max(0, vertexCount - 2)
+  const triangleCount = indices.length >= 3 ? Math.floor(indices.length / 3) : Math.max(0, vertexCount - 2)
   geometry.dispose()
 
   return {
@@ -754,6 +772,28 @@ function buildBoundingBoxCorners(box: THREE.Box3): THREE.Vector3[] {
     new THREE.Vector3(max.x, min.y, max.z),
     new THREE.Vector3(max.x, max.y, max.z),
   ]
+}
+
+function quantizeOutlineValue(value: number): number {
+  const scaled = Math.round(value * OUTLINE_QUANTIZE_FACTOR) / OUTLINE_QUANTIZE_FACTOR
+  return Object.is(scaled, -0) ? 0 : scaled
+}
+
+function quantizeAndDeduplicatePoints(points: THREE.Vector3[]): THREE.Vector3[] {
+  const unique = new Map<string, THREE.Vector3>()
+  for (const point of points) {
+    const quantized = point.clone()
+    quantized.set(
+      quantizeOutlineValue(quantized.x),
+      quantizeOutlineValue(quantized.y),
+      quantizeOutlineValue(quantized.z),
+    )
+    const key = `${quantized.x}|${quantized.y}|${quantized.z}`
+    if (!unique.has(key)) {
+      unique.set(key, quantized)
+    }
+  }
+  return Array.from(unique.values())
 }
 
 function componentMapHasEntries(components?: SceneNodeComponentMap | null): boolean {
