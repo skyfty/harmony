@@ -133,8 +133,6 @@ const behaviorProximityCandidates = new Map<string, BehaviorProximityCandidate>(
 const behaviorProximityState = new Map<string, BehaviorProximityStateEntry>()
 const behaviorProximityThresholdCache = new Map<string, BehaviorProximityThreshold>()
 
-const OUTLINE_LOAD_RADIUS_MULTIPLIER = 4
-const OUTLINE_LOAD_MIN_DISTANCE = 12
 const MAX_CONCURRENT_LAZY_LOADS = 2
 
 type LazyPlaceholderState = {
@@ -165,6 +163,8 @@ const tempQuaternion = new THREE.Quaternion()
 const tempBox = new THREE.Box3()
 const tempSphere = new THREE.Sphere()
 const tempPosition = new THREE.Vector3()
+const tempCameraMatrix = new THREE.Matrix4()
+const cameraViewFrustum = new THREE.Frustum()
 const skySunPosition = new THREE.Vector3()
 const DEFAULT_SUN_DIRECTION = new THREE.Vector3(0.35, 1, -0.25).normalize()
 const tempSunDirection = new THREE.Vector3()
@@ -2617,6 +2617,9 @@ function updateLazyPlaceholders(_delta: number): void {
 	if (!camera || lazyPlaceholderStates.size === 0) {
 		return
 	}
+	camera.updateMatrixWorld(true)
+	tempCameraMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+	cameraViewFrustum.setFromProjectionMatrix(tempCameraMatrix)
 	lazyPlaceholderStates.forEach((state, nodeId) => {
 		const container = nodeObjectMap.get(nodeId) ?? null
 		if (!container) {
@@ -2660,7 +2663,7 @@ function updateLazyPlaceholders(_delta: number): void {
 		if (activeLazyLoadCount >= MAX_CONCURRENT_LAZY_LOADS) {
 			return
 		}
-		if (!shouldLoadLazyPlaceholder(state)) {
+		if (!shouldLoadLazyPlaceholder(state, cameraViewFrustum)) {
 			return
 		}
 		state.loading = true
@@ -2678,7 +2681,7 @@ function updateLazyPlaceholders(_delta: number): void {
 	})
 }
 
-function shouldLoadLazyPlaceholder(state: LazyPlaceholderState): boolean {
+function shouldLoadLazyPlaceholder(state: LazyPlaceholderState, frustum: THREE.Frustum): boolean {
 	if (!camera) {
 		return false
 	}
@@ -2690,12 +2693,11 @@ function shouldLoadLazyPlaceholder(state: LazyPlaceholderState): boolean {
 	if (!worldSphere) {
 		return false
 	}
-	const distance = worldSphere.center.distanceTo(camera.position)
-	const threshold = Math.max(OUTLINE_LOAD_MIN_DISTANCE, worldSphere.radius * OUTLINE_LOAD_RADIUS_MULTIPLIER)
-	return distance <= threshold
+	return frustum.intersectsSphere(worldSphere)
 }
 
 function resolveWorldBoundingSphereForPlaceholder(state: LazyPlaceholderState, object: THREE.Object3D): THREE.Sphere | null {
+	object.updateWorldMatrix(true, false)
 	let baseSphere = state.boundingSphere ? state.boundingSphere.clone() : null
 	const mesh = object as THREE.Mesh & { geometry?: THREE.BufferGeometry }
 	const geometry = mesh.geometry as THREE.BufferGeometry | undefined
