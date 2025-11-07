@@ -306,12 +306,12 @@ function openDetail(product: OptimizeProduct) {
 
 .buy-btn {
   width: 100%;
-  padding: 12px 0;
-  border-radius: 16px;
+  padding: 8px 0;
+  border-radius: 14px;
   border: none;
   background: linear-gradient(135deg, #4f9eff, #1f7aec);
   color: #ffffff;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   box-shadow: 0 10px 24px rgba(31, 122, 236, 0.2);
 }

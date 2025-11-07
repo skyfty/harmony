@@ -2,18 +2,18 @@
   <view class="page upload">
     <view class="header">
       <text class="title">上传作品素材</text>
-      <text class="subtitle">支持图片、视频、3D 模型等多种格式</text>
+      <text class="subtitle">仅支持上传图片素材，可一次选择多张</text>
     </view>
 
     <view class="uploader">
       <view class="drop-zone">
         <view class="cloud-icon"></view>
         <text class="drop-title">拖放文件到此</text>
-    <text class="drop-desc">或点击选择素材类型</text>
-    <button class="primary" @tap="selectFile" :disabled="loading">{{ loading ? '处理中…' : '选择素材' }}</button>
+        <text class="drop-desc">或点击选择图片</text>
+        <button class="primary" @tap="selectImages" :disabled="loading">{{ loading ? '处理中…' : '选择图片' }}</button>
       </view>
       <view class="format-hint">
-        <text>支持：JPG、PNG、MP4、MOV、OBJ、GLTF、FBX 等</text>
+        <text>支持：JPG、PNG 等常见图片格式</text>
       </view>
     </view>
 
@@ -112,17 +112,17 @@ function saveHistory(list: HistoryItem[]) {
 const sampleHistory: HistoryItem[] = [
   {
     id: 'a',
-    name: '未来雕塑.obj',
-    size: '24.8MB',
+    name: '概念视觉海报.jpg',
+    size: '2.8MB',
     time: '2 分钟前',
-    status: '转换完成',
+    status: '待整理',
     gradient: 'linear-gradient(135deg, #c1d8ff, #a0c5ff)',
     createdAt: Date.now() - 2 * 60 * 1000,
   },
   {
     id: 'b',
-    name: '光影空间.gltf',
-    size: '18.3MB',
+    name: '空间渲染预览.png',
+    size: '4.3MB',
     time: '15 分钟前',
     status: '待发布',
     gradient: 'linear-gradient(135deg, #b7f5ec, #90e0d9)',
@@ -190,22 +190,11 @@ function openWorkDetail(id: string) {
   uni.navigateTo({ url: `/pages/works/detail/index?id=${id}` });
 }
 
-function selectFile() {
+function selectImages() {
   if (loading.value) {
     return;
   }
-  uni.showActionSheet({
-    itemList: ['上传图片', '上传视频', '上传 3D 模型'],
-    success: ({ tapIndex }) => {
-      if (tapIndex === 0) {
-        handleImageUpload();
-      } else if (tapIndex === 1) {
-        handleVideoUpload();
-      } else {
-        handleModelUpload();
-      }
-    },
-  });
+  handleImageUpload();
 }
 
 function extractNameFromPath(path?: string | null): string {
@@ -315,78 +304,6 @@ function handleImageUpload() {
     },
     fail: (err) => failUpload('选择图片失败', err),
   });
-}
-
-function handleVideoUpload() {
-  loading.value = true;
-  if (typeof uni.chooseMedia === 'function') {
-    uni.chooseMedia({
-      count: 5,
-      mediaType: ['video'],
-      success: (res) => {
-        const files: UploadCandidate[] = (res.tempFiles || []).map((file: any) => ({
-          name: file?.fileName || extractNameFromPath(file?.tempFilePath),
-          size: file?.size,
-        }));
-        finalizeUpload('video', files);
-      },
-      fail: (err) => failUpload('选择视频失败', err),
-    });
-    return;
-  }
-  uni.chooseVideo({
-    success: (res) => {
-      const name = (res as any).name || extractNameFromPath((res as any).tempFilePath);
-      const size = (res as any).size;
-      finalizeUpload('video', [{ name: name || '视频', size }]);
-    },
-    fail: (err) => failUpload('选择视频失败', err),
-  });
-}
-
-function handleModelUpload() {
-  loading.value = true;
-  if (typeof uni.chooseFile === 'function') {
-    uni.chooseFile({
-      count: 9,
-      extension: ['.obj', '.gltf', '.glb', '.fbx'],
-      success: (res) => {
-        const tempFiles = Array.isArray(res.tempFiles) ? res.tempFiles : res.tempFiles ? [res.tempFiles] : [];
-        const files: UploadCandidate[] = tempFiles
-          .filter(Boolean)
-          .map((file: any) => ({
-            name: file?.name || extractNameFromPath(file?.path),
-            size: file?.size,
-          }));
-        finalizeUpload('model', files);
-      },
-      fail: (err) => failUpload('选择模型失败', err),
-    });
-    return;
-  }
-
-  const wxChoose = typeof wx !== 'undefined' && typeof (wx as any).chooseMessageFile === 'function';
-  if (wxChoose) {
-    (wx as any).chooseMessageFile({
-      count: 9,
-      type: 'file',
-      extension: ['.obj', '.gltf', '.glb', '.fbx', 'obj', 'gltf', 'glb', 'fbx'],
-      success: (res: any) => {
-        const tempFiles = Array.isArray(res.tempFiles) ? res.tempFiles : res.tempFiles ? [res.tempFiles] : [];
-        const files: UploadCandidate[] = tempFiles
-          .filter(Boolean)
-          .map((file: any) => ({
-            name: file?.name || extractNameFromPath(file?.path),
-            size: file?.size,
-          }));
-        finalizeUpload('model', files);
-      },
-      fail: (err: any) => failUpload('选择模型失败', err),
-    });
-    return;
-  }
-
-  failUpload('当前环境暂不支持选择模型文件');
 }
 
 function goManage() {
