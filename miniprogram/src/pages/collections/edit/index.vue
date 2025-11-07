@@ -7,11 +7,11 @@
       </view>
     </view>
 
-    <view v-if="selectedWorks.length" class="preview" :style="{ background: previewGradient }">
+    <view v-if="displayItems.length" class="preview" :style="{ background: previewGradient }">
       <text class="preview-label">已选作品</text>
     </view>
 
-    <view v-if="selectedWorks.length" class="stats-card">
+    <view v-if="displayItems.length" class="stats-card">
       <view class="stat" v-for="item in statBlocks" :key="item.label">
         <text class="stat-icon">{{ item.icon }}</text>
         <text class="stat-value">{{ item.value }}</text>
@@ -19,7 +19,7 @@
       </view>
     </view>
 
-    <view v-if="selectedWorks.length" class="gallery-card">
+    <view v-if="displayItems.length" class="gallery-card">
       <view class="card-header">
     <text class="card-title">刚创作的作品</text>
         <text class="card-meta">点击右上角可移除单个作品</text>
@@ -27,16 +27,18 @@
       <view class="works-grid">
         <view
           class="work-thumb"
-          v-for="work in selectedWorks"
-          :key="work.id"
-          :style="{ background: work.gradient }"
+          v-for="item in displayItems"
+          :key="item.id"
+          :style="{ background: item.gradient }"
         >
-          <button class="delete-icon" @tap.stop="confirmRemove(work.id)">×</button>
+          <image v-if="item.preview" class="work-thumb__image" :src="item.preview" mode="aspectFill" />
+          <view v-if="item.kind === 'pending'" class="work-thumb__badge">待上传</view>
+          <button class="delete-icon" @tap.stop="confirmRemove(item.id)">×</button>
         </view>
       </view>
     </view>
 
-    <view v-if="selectedWorks.length" class="info-card">
+    <view v-if="displayItems.length" class="info-card">
       <text class="info-title">新建作品集</text>
   <text class="info-desc">为本次创作创建独立作品集，并补充标题与描述信息。</text>
       <input class="input" v-model="title" placeholder="输入作品集标题" />
@@ -56,7 +58,7 @@
             <text class="collection-title">{{ collection.title }}</text>
             <text class="collection-meta">共 {{ collection.works.length }} 个作品</text>
           </view>
-          <button class="link-btn" :disabled="!selectedWorks.length" @tap="appendToCollection(collection.id)">
+          <button class="link-btn" :disabled="!canAppendToExisting" @tap="appendToCollection(collection.id)">
             添加
           </button>
         </view>
@@ -64,7 +66,7 @@
       <view v-else class="collection-empty">暂未创建作品集，先新建一个吧。</view>
     </view>
 
-    <view v-if="!selectedWorks.length" class="empty">
+    <view v-if="!displayItems.length" class="empty">
       <text class="empty-title">暂无待处理作品</text>
   <text class="empty-desc">请返回创作页面选择素材后再试</text>
   <button class="outline" @tap="goWork">返回创作</button>
@@ -72,10 +74,12 @@
   </view>
 </template>
 <script setup lang="ts">
-import { computed, ref, watchEffect } from 'vue';
+import { computed, ref, watch, watchEffect } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 import { storeToRefs } from 'pinia';
-import { useWorksStore, type WorkItem } from '@/stores/worksStore';
+import { apiListResourceCategories, apiUploadAsset } from '@/api/miniprogram';
+import { useWorksStore, type WorkItem, type PendingWorkUpload, type NewWorkInput } from '@/stores/worksStore';
+import { formatWorkSize, prependWorkHistoryEntry } from '@/utils/workHistory';
 
 const worksStore = useWorksStore();
 const { collections } = storeToRefs(worksStore);
@@ -86,43 +90,105 @@ const description = ref('');
 const submitting = ref(false);
 const defaultGradient = 'linear-gradient(135deg, #dff5ff, #c6ebff)';
 
-const selectedWorks = computed<WorkItem[]>(() =>
+const selectedExistingWorks = computed<WorkItem[]>(() =>
   workIds.value
     .map((id) => worksStore.workMap[id])
     .filter((item): item is WorkItem => Boolean(item)),
 );
 
+const pendingUploads = computed<PendingWorkUpload[]>(() => worksStore.pendingUploads);
+
+type DisplayItem = {
+  id: string;
+  name: string;
+  gradient: string;
+  preview?: string;
+  rating: number;
+  likes: number;
+  sizeLabel: string;
+  kind: 'existing' | 'pending';
+  work?: WorkItem;
+  upload?: PendingWorkUpload;
+};
+
+const fallbackGradients = [
+  'linear-gradient(135deg, #ffe0f2, #ffd0ec)',
+  'linear-gradient(135deg, #dff5ff, #c6ebff)',
+  'linear-gradient(135deg, #fff0ce, #ffe2a8)',
+  'linear-gradient(135deg, #e7e4ff, #f1eeff)',
+  'linear-gradient(135deg, #ffd6ec, #ffeaf5)',
+  'linear-gradient(135deg, #c1d8ff, #a0c5ff)',
+  'linear-gradient(135deg, #b7f5ec, #90e0d9)',
+  'linear-gradient(135deg, #ffd59e, #ffe8c9)',
+];
+
+const displayItems = computed<DisplayItem[]>(() => {
+  const items: DisplayItem[] = [];
+  selectedExistingWorks.value.forEach((work) => {
+    items.push({
+      id: work.id,
+      name: work.name,
+      gradient: work.gradient,
+      preview: work.thumbnailUrl || (work.type === 'image' ? work.fileUrl : undefined),
+      rating: work.rating,
+      likes: work.likes,
+      sizeLabel: work.size,
+      kind: 'existing',
+      work,
+    });
+  });
+  pendingUploads.value.forEach((upload, index) => {
+    const gradientIndex = (selectedExistingWorks.value.length + index) % fallbackGradients.length;
+    items.push({
+      id: upload.id,
+      name: upload.name,
+      gradient: fallbackGradients[gradientIndex],
+      preview: upload.filePath,
+      rating: 0,
+      likes: 0,
+      sizeLabel: formatWorkSize(upload.size),
+      kind: 'pending',
+      upload,
+    });
+  });
+  return items;
+});
+
+const selectedCount = computed(() => displayItems.value.length);
+
 const canCreate = computed(
-  () => selectedWorks.value.length > 0 && title.value.trim().length > 0 && !submitting.value,
+  () => selectedCount.value > 0 && title.value.trim().length > 0 && !submitting.value,
+);
+
+const canAppendToExisting = computed(
+  () => selectedExistingWorks.value.length > 0 && !pendingUploads.value.length && !submitting.value,
 );
 
 const headerSubtitle = computed(() =>
-  selectedWorks.value.length
-    ? `已选 ${selectedWorks.value.length} 个作品`
-    : '请选择作品后再编辑',
+  selectedCount.value ? `已选 ${selectedCount.value} 个作品` : '请选择作品后再编辑',
 );
 
-const previewGradient = computed(() => selectedWorks.value[0]?.gradient || defaultGradient);
+const previewGradient = computed(() => displayItems.value[0]?.gradient || defaultGradient);
 
 const averageRating = computed(() => {
-  if (!selectedWorks.value.length) {
+  if (!selectedExistingWorks.value.length) {
     return '--';
   }
-  const total = selectedWorks.value.reduce((sum, item) => sum + (item.rating ?? 0), 0);
-  const avg = total / selectedWorks.value.length;
+  const total = selectedExistingWorks.value.reduce((sum, item) => sum + (item.rating ?? 0), 0);
+  const avg = total / selectedExistingWorks.value.length;
   return avg > 0 ? avg.toFixed(1) : '--';
 });
 
 const totalLikes = computed(() => {
-  if (!selectedWorks.value.length) {
+  if (!selectedExistingWorks.value.length) {
     return '0';
   }
-  const sum = selectedWorks.value.reduce((acc, item) => acc + (item.likes ?? 0), 0);
+  const sum = selectedExistingWorks.value.reduce((acc, item) => acc + (item.likes ?? 0), 0);
   return formatNumber(sum);
 });
 
 const statBlocks = computed(() => [
-  { icon: '🖼', value: selectedWorks.value.length.toString(), label: '已选作品' },
+  { icon: '🖼', value: selectedCount.value.toString(), label: '已选作品' },
   { icon: '★', value: averageRating.value, label: '平均评分' },
   { icon: '❤', value: totalLikes.value, label: '收到喜欢' },
 ]);
@@ -135,47 +201,167 @@ onLoad((options) => {
   }
 });
 
+// 仅在首次进入且用户未手动编辑时，帮助生成一个默认标题；
+// 一旦用户编辑过标题（包括清空），不再强制回填。
+const hasAutoTitled = ref(false);
 watchEffect(() => {
-  if (!title.value && selectedWorks.value.length) {
-    title.value = `${selectedWorks.value[0].name} 系列`;
+  if (!hasAutoTitled.value && !title.value && displayItems.value.length) {
+    title.value = `${displayItems.value[0].name} 系列`;
+    hasAutoTitled.value = true;
   }
 });
 
 function goWork() {
+  worksStore.clearPendingUploads();
   uni.redirectTo({ url: '/pages/work/index' });
 }
 
-function createNewCollection() {
+async function createNewCollection() {
   if (!canCreate.value) {
     return;
   }
   submitting.value = true;
-  const id = worksStore.createCollection({
-    title: title.value.trim(),
-    description: description.value.trim() || '尚未填写描述',
-    workIds: workIds.value,
-  });
-  submitting.value = false;
-  uni.showToast({ title: '已创建', icon: 'success' });
-  setTimeout(() => {
-    uni.redirectTo({ url: `/pages/collections/detail/index?id=${id}` });
-  }, 400);
+  uni.showLoading({ title: '处理中…', mask: true });
+  try {
+    const newWorkIds = await uploadPendingWorks();
+    const finalWorkIds = Array.from(new Set([...workIds.value, ...newWorkIds]));
+    if (!finalWorkIds.length) {
+      throw new Error('没有可保存的作品');
+    }
+    const collection = await worksStore.createCollection({
+      title: title.value.trim(),
+      description: description.value.trim() || '尚未填写描述',
+      workIds: finalWorkIds,
+    });
+    recordCreationHistory(newWorkIds);
+    worksStore.clearPendingUploads();
+    workIds.value = finalWorkIds;
+    uni.showToast({ title: '已创建', icon: 'success' });
+    setTimeout(() => {
+      const firstWorkId = finalWorkIds[0];
+      const encodedCollectionId = encodeURIComponent(collection.id);
+      const url = firstWorkId
+        ? `/pages/collections/detail/index?id=${encodedCollectionId}&workId=${encodeURIComponent(firstWorkId)}`
+        : `/pages/collections/detail/index?id=${encodedCollectionId}`;
+      uni.redirectTo({ url });
+    }, 400);
+  } catch (error) {
+    const rawMessage = error instanceof Error ? error.message : '';
+    const message = !rawMessage || rawMessage === 'No valid works provided' ? '创建失败，请稍后重试' : rawMessage;
+    uni.showToast({ title: message, icon: 'none' });
+  } finally {
+    uni.hideLoading();
+    submitting.value = false;
+  }
 }
 
-function appendToCollection(collectionId: string) {
-  if (!selectedWorks.value.length) {
+let cachedImageCategoryId: string | null = null;
+
+async function resolveImageCategoryId(): Promise<string> {
+  if (cachedImageCategoryId) {
+    return cachedImageCategoryId;
+  }
+  const categories = await apiListResourceCategories();
+  const imageCategory = categories.find((item) => item.type === 'image') ?? categories[0];
+  if (!imageCategory) {
+    throw new Error('未找到资源分类');
+  }
+  cachedImageCategoryId = imageCategory.id;
+  return cachedImageCategoryId;
+}
+
+async function uploadPendingWorks(): Promise<string[]> {
+  if (!pendingUploads.value.length) {
+    return [];
+  }
+  const categoryId = await resolveImageCategoryId();
+  const createdIds: string[] = [];
+  const inputs: NewWorkInput[] = [];
+  for (const upload of pendingUploads.value) {
+    const assetType: 'model' | 'image' | 'texture' | 'file' =
+      upload.type === 'image'
+        ? 'image'
+        : upload.type === 'model'
+        ? 'model'
+        : upload.type === 'video'
+        ? 'file'
+        : 'file';
+    let asset;
+    try {
+      asset = await apiUploadAsset({
+        filePath: upload.filePath,
+        categoryId,
+        fileName: upload.name,
+        type: assetType,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '上传失败';
+      throw new Error(`上传 ${upload.name} 失败：${message}`);
+    }
+    inputs.push({
+      name: upload.name,
+      fileUrl: asset.url,
+      thumbnailUrl: asset.previewUrl ?? asset.url,
+      description: '',
+      size: typeof upload.size === 'number' ? upload.size : asset.size,
+      type: upload.type,
+      fileName: upload.name,
+    });
+  }
+  if (inputs.length) {
+    const ids = await worksStore.addWorks(inputs);
+    createdIds.push(...ids);
+  }
+  return createdIds;
+}
+
+function recordCreationHistory(createdWorkIds: string[]) {
+  if (!createdWorkIds.length) {
+    return;
+  }
+  const created = createdWorkIds
+    .map((id) => worksStore.workMap[id])
+    .filter((item): item is WorkItem => Boolean(item));
+  if (!created.length) {
+    return;
+  }
+  const first = created[0];
+  const displayName = created.length > 1 ? `${first.name} 等 ${created.length} 个` : first.name;
+  prependWorkHistoryEntry({
+    id: first.id,
+    name: displayName,
+  size: first.size || '未记录',
+    time: '刚刚',
+    status: '待整理',
+    gradient: first.gradient || defaultGradient,
+    createdAt: Date.now(),
+  });
+}
+
+async function appendToCollection(collectionId: string) {
+  if (!selectedExistingWorks.value.length) {
     uni.showToast({ title: '暂无待添加的作品', icon: 'none' });
     return;
   }
-  worksStore.addWorksToCollection(workIds.value, collectionId);
-  uni.showToast({ title: '已加入作品集', icon: 'success' });
-  setTimeout(() => {
-    uni.redirectTo({ url: `/pages/collections/detail/index?id=${collectionId}` });
-  }, 400);
+  if (pendingUploads.value.length) {
+    uni.showToast({ title: '请先创建并保存新作品', icon: 'none' });
+    return;
+  }
+  try {
+    await worksStore.addWorksToCollection(workIds.value, collectionId);
+    uni.showToast({ title: '已加入作品集', icon: 'success' });
+    setTimeout(() => {
+      const encodedId = encodeURIComponent(collectionId);
+      uni.redirectTo({ url: `/pages/collections/detail/index?id=${encodedId}` });
+    }, 400);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '添加失败，请稍后重试';
+    uni.showToast({ title: message, icon: 'none' });
+  }
 }
 
 function confirmRemove(id: string) {
-  const target = selectedWorks.value.find((item) => item.id === id);
+  const target = displayItems.value.find((item) => item.id === id);
   if (!target) {
     return;
   }
@@ -187,7 +373,11 @@ function confirmRemove(id: string) {
       if (!res.confirm) {
         return;
       }
-      workIds.value = workIds.value.filter((workId) => workId !== id);
+      if (target.kind === 'existing') {
+        workIds.value = workIds.value.filter((workId) => workId !== id);
+      } else {
+        worksStore.removePendingUpload(id);
+      }
       uni.showToast({ title: '已移除', icon: 'none' });
     },
   });
@@ -348,6 +538,26 @@ function formatNumber(value: number): string {
   border-radius: 12px;
   position: relative;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+  overflow: hidden;
+}
+
+.work-thumb__image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 12px;
+}
+
+.work-thumb__badge {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  padding: 2px 6px;
+  border-radius: 8px;
+  background: rgba(31, 122, 236, 0.9);
+  color: #fff;
+  font-size: 10px;
 }
 
 .works-grid {

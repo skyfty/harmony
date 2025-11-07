@@ -65,94 +65,40 @@
 </template>
 <script setup lang="ts">
 import { computed, ref, watchEffect } from 'vue';
+import { onShow } from '@dcloudio/uni-app';
 import BottomNav from '@/components/BottomNav.vue';
 import { useWorksStore, type WorkItem, type WorkType } from '@/stores/worksStore';
+import { loadWorkHistory, type WorkHistoryEntry } from '@/utils/workHistory';
 
 declare const wx: any | undefined;
 
 type NavKey = 'home' | 'work' | 'exhibition' | 'profile' | 'optimize';
 
-type HistoryItem = {
-  id: string;
-  name: string;
-  size: string;
-  time: string;
-  status: string;
-  gradient: string;
-  createdAt: number;
-};
+type HistoryItem = WorkHistoryEntry;
 
 type WorkCandidate = {
   name: string;
-  size?: number | string;
+  size?: number;
+  path?: string;
+  mimeType?: string;
 };
 
 const worksStore = useWorksStore();
 
-const HISTORY_STORAGE_KEY = 'workHistory';
-const LEGACY_STORAGE_KEY = 'uploadHistory';
 const loading = ref(false);
 
-function readHistory(key: string): HistoryItem[] {
-  try {
-    const raw = uni.getStorageSync(key);
-    if (!raw) {
-      return [];
-    }
-    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+const workHistory = ref<HistoryItem[]>([]);
+
+function refreshHistory() {
+  const stored = loadWorkHistory();
+  workHistory.value = stored.length ? stored : [];
 }
 
-function loadHistory(): HistoryItem[] {
-  const current = readHistory(HISTORY_STORAGE_KEY);
-  if (current.length) {
-    return current;
-  }
-  const legacy = readHistory(LEGACY_STORAGE_KEY);
-  if (legacy.length) {
-    saveHistory(legacy);
-    return legacy;
-  }
-  return [];
-}
+refreshHistory();
 
-function saveHistory(list: HistoryItem[]) {
-  try {
-    uni.setStorageSync(HISTORY_STORAGE_KEY, list);
-  } catch {
-    // ignore storage failures
-  }
-}
-
-const sampleHistory: HistoryItem[] = [
-  {
-    id: 'a',
-    name: '概念视觉海报.jpg',
-    size: '2.8MB',
-    time: '2 分钟前',
-    status: '待整理',
-    gradient: 'linear-gradient(135deg, #c1d8ff, #a0c5ff)',
-    createdAt: Date.now() - 2 * 60 * 1000,
-  },
-  {
-    id: 'b',
-    name: '空间渲染预览.png',
-    size: '4.3MB',
-    time: '15 分钟前',
-    status: '待发布',
-    gradient: 'linear-gradient(135deg, #b7f5ec, #90e0d9)',
-    createdAt: Date.now() - 15 * 60 * 1000,
-  },
-];
-
-const initialHistory: HistoryItem[] = (() => {
-  const fromStore = loadHistory();
-  return fromStore.length ? fromStore : sampleHistory;
-})();
-const workHistory = ref<HistoryItem[]>(initialHistory);
+onShow(() => {
+  refreshHistory();
+});
 
 const typeLabels: Record<WorkType, string> = {
   image: '图片',
@@ -225,18 +171,12 @@ function extractNameFromPath(path?: string | null): string {
   return last || '未命名文件';
 }
 
-function formatSize(size?: number | string): string {
-  if (typeof size === 'string') {
-    return size;
+function navigateToCollectionEditor(options: { workIds?: string[]; pending?: boolean }) {
+  if (options.pending) {
+    uni.navigateTo({ url: '/pages/collections/edit/index?mode=pending' });
+    return;
   }
-  if (typeof size === 'number' && size > 0) {
-    const mb = size / (1024 * 1024);
-    return `${mb.toFixed(mb >= 100 ? 0 : 1)}MB`;
-  }
-  return '刚刚';
-}
-
-function navigateToCollectionEditor(workIds: string[]) {
+  const workIds = options.workIds ?? [];
   if (!workIds.length) {
     return;
   }
@@ -244,44 +184,40 @@ function navigateToCollectionEditor(workIds: string[]) {
   uni.navigateTo({ url: `/pages/collections/edit/index?workIds=${query}` });
 }
 
-async function finalizeWorkCreation(type: WorkType, files: WorkCandidate[]) {
+function createPendingId(index: number): string {
+  return `${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function prepareWorkCreation(type: WorkType, files: WorkCandidate[]) {
   if (!files.length) {
     failCreation('未选择文件');
     return;
   }
-  const normalized = files
+  const valid = files
     .map((file, index) => ({
+      id: createPendingId(index),
       name: file.name || `${typeLabels[type]} ${index + 1}`,
       size: file.size,
+      filePath: file.path,
+      mimeType: file.mimeType,
     }))
-    .filter((file) => Boolean(file.name));
-  if (!normalized.length) {
+    .filter((file) => typeof file.filePath === 'string' && file.filePath.length > 0);
+  if (!valid.length) {
     failCreation('未选择文件');
     return;
   }
-  const newIds = await worksStore.addWorks(
-    normalized.map((file) => ({
+  worksStore.setPendingUploads(
+    valid.map((file) => ({
+      id: file.id,
       name: file.name,
       size: file.size,
+      filePath: file.filePath!,
+      mimeType: file.mimeType,
       type,
-    })) as any,
+    })),
   );
-  const first = normalized[0];
-  const displayName = normalized.length > 1 ? `${first.name} 等 ${normalized.length} 个` : first.name;
-  const representative = worksStore.workMap[newIds[0]];
-  workHistory.value.unshift({
-    id: newIds[0],
-    name: displayName,
-    size: representative?.size || formatSize(first.size),
-    time: '刚刚',
-    status: '待整理',
-    gradient: representative?.gradient || 'linear-gradient(135deg, #dff5ff, #c6ebff)',
-    createdAt: Date.now(),
-  });
-  saveHistory(workHistory.value);
   loading.value = false;
-  uni.showToast({ title: `${typeLabels[type]}创建成功`, icon: 'success' });
-  navigateToCollectionEditor(newIds);
+  navigateToCollectionEditor({ pending: true });
 }
 
 function failCreation(message?: string, error?: { errMsg?: string }) {
@@ -308,18 +244,25 @@ function handleImageSelection() {
         : [];
       if (tempFiles.length) {
         tempFiles.forEach((file, index) => {
-          const record = file as UniApp.ChooseImageSuccessCallbackResultFile & { name?: string };
+          const record = file as UniApp.ChooseImageSuccessCallbackResultFile & {
+            name?: string;
+            type?: string;
+            fileType?: string;
+          };
+          const filePath = (record as { path?: string }).path ?? fallbackPaths[index];
           files.push({
-            name: record?.name || extractNameFromPath(record?.path || fallbackPaths[index]),
+            name: record?.name || extractNameFromPath(filePath),
             size: record?.size,
+            path: filePath,
+            mimeType: record?.type || record?.fileType,
           });
         });
       } else {
-        for (const path of fallbackPaths) {
-          files.push({ name: extractNameFromPath(path) });
-        }
+        fallbackPaths.forEach((path) => {
+          files.push({ name: extractNameFromPath(path), path });
+        });
       }
-      await finalizeWorkCreation('image', files);
+      prepareWorkCreation('image', files);
     },
     fail: (err) => failCreation('选择图片失败', err),
   });

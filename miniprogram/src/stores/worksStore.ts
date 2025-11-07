@@ -38,6 +38,15 @@ import type {
 
 export type WorkType = 'image' | 'video' | 'model' | 'other';
 
+export interface PendingWorkUpload {
+	id: string;
+	name: string;
+	filePath: string;
+	size?: number;
+	mimeType?: string;
+	type: WorkType;
+}
+
 export interface WorkItem {
 	id: string;
 	name: string;
@@ -136,6 +145,7 @@ export interface NewWorkInput {
 	tags?: string[];
 	size?: number | string;
 	type: WorkType;
+	fileName?: string;
 }
 
 export interface PurchasePayload {
@@ -358,6 +368,7 @@ export const useWorksStore = defineStore('worksStore', {
 		exhibitions: [] as ExhibitionItem[],
 		products: [] as ProductItem[],
 		orders: [] as OrderItem[],
+		pendingUploads: [] as PendingWorkUpload[],
 		loadingProfile: false,
 		profileLoaded: false,
 		loadingWorks: false,
@@ -407,6 +418,15 @@ export const useWorksStore = defineStore('worksStore', {
 		},
 	},
 	actions: {
+		setPendingUploads(uploads: PendingWorkUpload[]) {
+			this.pendingUploads = [...uploads];
+		},
+		clearPendingUploads() {
+			this.pendingUploads = [];
+		},
+		removePendingUpload(id: string) {
+			this.pendingUploads = this.pendingUploads.filter((item) => item.id !== id);
+		},
 		async ensureProfile(force = false) {
 			if (this.loadingProfile) {
 				return;
@@ -463,6 +483,7 @@ export const useWorksStore = defineStore('worksStore', {
 				thumbnailUrl: item.thumbnailUrl ?? item.fileUrl,
 				size: typeof item.size === 'number' ? item.size : undefined,
 				tags: item.tags ?? [],
+				fileName: item.fileName ?? item.name,
 			}));
 			try {
 				const response = await apiCreateWorks(payload);
@@ -543,7 +564,7 @@ export const useWorksStore = defineStore('worksStore', {
 			coverUrl?: string;
 			workIds?: string[];
 			isPublic?: boolean;
-		}) {
+		}): Promise<CollectionItem> {
 			try {
 				const created = await apiCreateCollection(payload);
 				const mapped = mapCollectionSummary(created, this.collections.length);
@@ -557,7 +578,7 @@ export const useWorksStore = defineStore('worksStore', {
 							: work,
 					);
 				}
-				return mapped.id;
+				return mapped;
 			} catch (error) {
 				console.error('Failed to create collection', error);
 				throw error;
