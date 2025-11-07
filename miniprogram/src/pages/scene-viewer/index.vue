@@ -112,6 +112,17 @@
       <view v-if="error" class="viewer-overlay error">
         <text>{{ error }}</text>
       </view>
+      <view
+        v-if="purposeControlsVisible"
+        class="viewer-purpose-controls"
+      >
+        <button class="viewer-purpose-button primary" @tap="handlePurposeWatchTap">
+          观察
+        </button>
+        <button class="viewer-purpose-button secondary" @tap="handlePurposeResetTap">
+          平视
+        </button>
+      </view>
     </view>
     <view class="viewer-footer" v-if="warnings.length">
       <text class="footer-title">警告</text>
@@ -410,30 +421,6 @@ let activeCameraWatchTween: CameraWatchTween | null = null;
 
 const assetObjectUrlCache = new Map<string, string>();
 const packageEntryCache = new Map<string, { provider: string; value: string } | null>();
-
-const previewTitle = computed(() => previewPayload.value?.title ?? '场景预览');
-const headerCaption = computed(() => {
-  const payload = previewPayload.value;
-  if (!payload) {
-    return '';
-  }
-  const parts: string[] = [];
-  if (payload.origin) {
-    parts.push(`来源：${payload.origin}`);
-  }
-  if (payload.updatedAt) {
-    const formatted = formatTimestamp(payload.updatedAt);
-    if (formatted) {
-      parts.push(`更新：${formatted}`);
-    }
-  } else if (payload.createdAt) {
-    const formatted = formatTimestamp(payload.createdAt);
-    if (formatted) {
-      parts.push(`创建：${formatted}`);
-    }
-  }
-  return parts.join(' · ');
-});
 
 const lanternTotalSlides = computed(() => lanternSlides.value.length);
 const lanternCurrentSlide = computed(() => {
@@ -3349,5 +3336,39 @@ onUnmounted(() => {
   background-image: none;
   background-color: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.viewer-purpose-controls {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  display: flex;
+  gap: 12px;
+  z-index: 1600;
+}
+
+.viewer-purpose-button {
+  padding: 8px 16px;
+  border-radius: 18px;
+  border: none;
+  font-size: 14px;
+  line-height: 1.2;
+  min-width: 88px;
+  transition: opacity 0.2s ease;
+}
+
+.viewer-purpose-button.primary {
+  background-image: linear-gradient(135deg, #1f7aec, #5d9bff);
+  color: #ffffff;
+}
+
+.viewer-purpose-button.secondary {
+  background-color: rgba(6, 8, 12, 0.58);
+  color: #f5f7ff;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+}
+
+.viewer-purpose-button:active {
+  opacity: 0.8;
 }
 </style>
