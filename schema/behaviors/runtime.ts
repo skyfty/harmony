@@ -387,7 +387,7 @@ function createMoveCameraEvent(state: BehaviorSequenceState, behavior: SceneBeha
   const fallbackTarget = state.nodeId
   const candidate = typeof params?.targetNodeId === 'string' ? params.targetNodeId.trim() : ''
   const targetNodeId = candidate.length ? candidate : fallbackTarget
-  const durationSeconds = Math.max(0, params.duration ?? 0.2)
+  const durationSeconds = Math.max(0, params.duration ?? 0.6)
   return {
     type: 'move-camera',
     nodeId: state.nodeId,

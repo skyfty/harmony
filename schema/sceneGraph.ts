@@ -614,7 +614,12 @@ class SceneGraphBuilder {
     }
 
     const color = outline.color && outline.color.trim().length ? outline.color : '#808080';
-    const material = new THREE.MeshBasicMaterial({ color });
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.35,
+      depthWrite: false,
+    });
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = node.name ?? 'OutlinePlaceholder';
     mesh.castShadow = false;

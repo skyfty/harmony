@@ -508,7 +508,7 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
         type: 'moveTo',
         params: {
           targetNodeId: params?.targetNodeId ?? null,
-          duration: Math.max(0, params?.duration ?? 0.2),
+          duration: Math.max(0, params?.duration ?? 0.6),
           offset: Math.max(0, params?.offset ?? 1),
         },
       }
@@ -740,7 +740,7 @@ export function ensureBehaviorParams(
           type: 'moveTo',
           params: {
             targetNodeId: params?.targetNodeId ?? null,
-            duration: Math.max(0, params?.duration ?? 0.2),
+            duration: Math.max(0, params?.duration ?? 0.6),
             offset: Math.max(0, params?.offset ?? 1),
           },
         }

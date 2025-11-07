@@ -1174,7 +1174,7 @@ function initializeWarpGateBehavior(nodeId: string): void {
       type: 'moveTo',
       params: {
         targetNodeId: nodeId,
-        duration: 0.2,
+        duration: 0.6,
         offset: 1,
       },
     },
@@ -1225,6 +1225,10 @@ function initializeWarpGateBehavior(nodeId: string): void {
         targetNodeId: sharedTargetNodeId ?? null,
         sequenceId: hideViewPointSequenceId ?? null,
       },
+    },
+    {
+      type: 'look',
+      params: {},
     },
   ])
 
