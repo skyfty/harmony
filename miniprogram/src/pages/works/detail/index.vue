@@ -9,9 +9,14 @@
       <button v-if="isOwner" class="edit-btn" @tap="goToEdit">编辑</button>
     </view>
 
-    <view v-if="work" class="preview" :style="{ background: previewBackground }">
-      <image v-if="previewImage" class="preview-image" :src="previewImage" mode="aspectFill" />
-      <text v-else class="preview-label">预览</text>
+    <view v-if="work" class="cover-card">
+      <view class="cover-card__preview" :style="{ background: previewBackground }">
+        <image v-if="previewImage" class="cover-card__image" :src="previewImage" mode="aspectFill" />
+        <view v-else class="cover-card__placeholder">
+          <text class="cover-card__placeholder-text">暂无预览</text>
+        </view>
+      </view>
+      <text class="cover-card__caption">作品预览</text>
     </view>
 
     <view v-if="work" class="stats-card">
@@ -28,6 +33,39 @@
         <text class="stat-icon">❤</text>
         <text class="stat-value">{{ workLikes }}</text>
         <text class="stat-desc">{{ workLikeSummary }}</text>
+      </view>
+      <view class="stat">
+        <text class="stat-icon">📁</text>
+        <text class="stat-value">{{ workSizeLabel }}</text>
+        <text class="stat-desc">文件大小</text>
+      </view>
+    </view>
+
+    <view v-if="work" class="info-card">
+      <text class="info-title">作品信息</text>
+      <view class="info-row">
+        <text class="info-label">标题</text>
+        <text class="info-value">{{ work.title || '未命名作品' }}</text>
+      </view>
+      <view class="info-row">
+        <text class="info-label">简介</text>
+        <text class="info-value info-value--multiline">{{ work.description || '尚未填写描述' }}</text>
+      </view>
+      <view class="info-row">
+        <text class="info-label">类型</text>
+        <text class="info-value">{{ workTypeLabel }}</text>
+      </view>
+      <view class="info-row">
+        <text class="info-label">文件大小</text>
+        <text class="info-value">{{ workSizeLabel }}</text>
+      </view>
+      <view class="info-row">
+        <text class="info-label">创建时间</text>
+        <text class="info-value">{{ workCreatedAt }}</text>
+      </view>
+      <view class="info-row">
+        <text class="info-label">更新时间</text>
+        <text class="info-value">{{ workUpdatedAt }}</text>
       </view>
     </view>
 
@@ -54,11 +92,6 @@
       <view v-else class="collection-empty">
         <text>暂未加入作品集{{ isOwner ? '，点击右上角添加' : '' }}。</text>
       </view>
-    </view>
-
-    <view v-if="work" class="info-card">
-      <text class="info-title">作品简介</text>
-      <text class="info-desc">{{ work.description || '尚未填写描述' }}</text>
     </view>
 
     <view v-else class="empty">
@@ -132,6 +165,13 @@ const gradientPalette = [
   'linear-gradient(135deg, #b7f5ec, #90e0d9)',
   'linear-gradient(135deg, #ffd59e, #ffe8c9)',
 ];
+
+const typeLabelMap: Record<WorkSummary['mediaType'], string> = {
+  image: '图片',
+  video: '视频',
+  model: '模型',
+  other: '其他',
+};
 
 function ensureBackground(index = 0): string {
   const paletteIndex = ((index % gradientPalette.length) + gradientPalette.length) % gradientPalette.length;
@@ -226,6 +266,21 @@ const workLikeSummary = computed(() => {
   }
   return workLiked.value ? '已喜欢 · 点按取消' : '点按喜欢';
 });
+
+const workTypeLabel = computed(() => {
+  const type = work.value?.mediaType ?? 'other';
+  return typeLabelMap[type as WorkSummary['mediaType']] ?? '其他';
+});
+
+const workSizeLabel = computed(() => {
+  if (!work.value || typeof work.value.size !== 'number') {
+    return formatSize(0);
+  }
+  return formatSize(work.value.size);
+});
+
+const workCreatedAt = computed(() => work.value?.createdAt || '--');
+const workUpdatedAt = computed(() => work.value?.updatedAt || '--');
 
 async function fetchWorkDetail(id?: string): Promise<void> {
   const targetId = id ?? workId.value;
@@ -570,33 +625,64 @@ watch(isOwner, (value) => {
   font-size: 14px;
 }
 
-.preview {
-  height: 220px;
+.cover-card {
+  background: #ffffff;
   border-radius: 20px;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+  padding: 20px;
+  box-shadow: 0 12px 32px rgba(31, 122, 236, 0.08);
   display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.preview-image {
+.cover-card__preview {
+  height: 220px;
+  border-radius: 16px;
+  overflow: hidden;
+  position: relative;
+}
+
+.cover-card__preview::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.18) 100%);
+  pointer-events: none;
+}
+
+.cover-card__image {
   width: 100%;
   height: 100%;
+  display: block;
   object-fit: cover;
 }
 
-.preview-label {
-  background: rgba(0, 0, 0, 0.25);
-  padding: 6px 12px;
+.cover-card__placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #d8e7ff, #bfd8ff);
+  color: rgba(255, 255, 255, 0.9);
+  z-index: 1;
+}
+
+.cover-card__placeholder-text {
+  padding: 8px 14px;
   border-radius: 12px;
-  color: #ffffff;
+  background: rgba(0, 0, 0, 0.35);
   font-size: 14px;
+}
+
+.cover-card__caption {
+  font-size: 13px;
+  color: #5f6b83;
 }
 
 .stats-card {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -616,10 +702,6 @@ watch(isOwner, (value) => {
   color: #1f7aec;
 }
 
-.stat:nth-child(2) .stat-icon {
-  color: #ff6f91;
-}
-
 .stat-value {
   font-size: 20px;
   font-weight: 600;
@@ -632,11 +714,6 @@ watch(isOwner, (value) => {
   color: #8a94a6;
   text-align: center;
   line-height: 1.6;
-}
-
-.stat-icon {
-  font-size: 26px;
-  color: #1f7aec;
 }
 
 .stat--rating .stat-icon {
@@ -662,6 +739,51 @@ watch(isOwner, (value) => {
 
 .stat--disabled {
   opacity: 0.6;
+}
+
+.info-card,
+.collections-card {
+  background: #ffffff;
+  border-radius: 20px;
+  padding: 20px;
+  box-shadow: 0 12px 32px rgba(31, 122, 236, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.info-title,
+.collections-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f1f1f;
+}
+
+.info-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.info-label {
+  font-size: 13px;
+  color: #8a94a6;
+}
+
+.info-value {
+  font-size: 14px;
+  color: #1f1f1f;
+}
+
+.info-value--multiline {
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.collections-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .collections-action {
@@ -699,18 +821,6 @@ watch(isOwner, (value) => {
 .collection-empty {
   font-size: 12px;
   color: #8a94a6;
-}
-
-.info-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: #1f1f1f;
-}
-
-.info-desc {
-  font-size: 13px;
-  color: #5f6b83;
-  line-height: 1.6;
 }
 
 .empty {

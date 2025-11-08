@@ -66,6 +66,7 @@ export interface WorkItem {
 	duration?: string;
 	fileUrl: string;
 	thumbnailUrl?: string;
+	userRatingScore?: number;
 }
 
 export interface CollectionItem {
@@ -106,6 +107,7 @@ export interface ExhibitionItem {
 	liked: boolean;
 	rating: number;
 	ratingCount: number;
+	userRatingScore?: number;
 	visitCount: number;
 	visited: boolean;
 	shareCount: number;
@@ -282,6 +284,7 @@ function mapWorkSummary(summary: WorkSummary, index: number): WorkItem {
 				: '--',
 		fileUrl: summary.fileUrl,
 		thumbnailUrl: summary.thumbnailUrl,
+		userRatingScore: summary.userRating?.score ?? 0,
 	};
 }
 
@@ -328,6 +331,7 @@ function mapExhibitionSummary(summary: ExhibitionSummary, index: number): Exhibi
 		liked: Boolean(summary.liked),
 		rating: Number(summary.averageRating ?? 0),
 		ratingCount: summary.ratingCount ?? 0,
+		userRatingScore: summary.userRating?.score ?? 0,
 		visitCount: summary.visitCount ?? 0,
 		visited: Boolean(summary.visited),
 		shareCount: summary.shareCount ?? 0,
