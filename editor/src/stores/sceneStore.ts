@@ -55,6 +55,7 @@ import type { SceneCameraState } from '@/types/scene-camera-state'
 import type { SceneHistoryEntry } from '@/types/scene-history-entry'
 import type { SceneState } from '@/types/scene-state'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
+import type { PresetSceneDocument } from '@/types/preset-scene'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { CameraProjectionMode, CameraControlMode, SceneSkyboxSettings, SceneViewportSettings } from '@/types/scene-viewport-settings'
 import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
@@ -7494,6 +7495,86 @@ export const useSceneStore = defineStore('scene', {
         panelVisibility: this.panelVisibility,
         panelPlacement: this.panelPlacement,
       })
+
+      await scenesStore.saveSceneDocument(sceneDocument)
+
+      this.currentSceneId = sceneDocument.id
+      applyCurrentSceneMeta(this, sceneDocument)
+      applySceneAssetState(this, sceneDocument)
+      this.nodes = cloneSceneNodes(sceneDocument.nodes)
+      this.groundSettings = cloneGroundSettings(sceneDocument.groundSettings)
+      this.setSelection(sceneDocument.selectedNodeIds ?? (sceneDocument.selectedNodeId ? [sceneDocument.selectedNodeId] : []))
+      this.camera = cloneCameraState(sceneDocument.camera)
+      this.viewportSettings = cloneViewportSettings(sceneDocument.viewportSettings)
+      this.panelVisibility = normalizePanelVisibilityState(sceneDocument.panelVisibility)
+      this.panelPlacement = normalizePanelPlacementStateInput(sceneDocument.panelPlacement)
+      this.resourceProviderId = sceneDocument.resourceProviderId
+      useAssetCacheStore().recalculateUsage(this.nodes)
+      this.isSceneReady = true
+      this.hasUnsavedChanges = false
+      return sceneDocument.id
+    },
+    async createSceneFromTemplate(
+      name: string,
+      template: PresetSceneDocument,
+      options: { groundWidth?: number; groundDepth?: number } = {},
+    ) {
+      const scenesStore = useScenesStore()
+      await scenesStore.initialize()
+
+      const displayName = name.trim() || template.name?.trim() || 'Untitled Scene'
+
+      const fallbackWidth = this.groundSettings.width
+      const fallbackDepth = this.groundSettings.depth
+      const widthCandidate = options.groundWidth ?? template.groundSettings?.width ?? fallbackWidth
+      const depthCandidate = options.groundDepth ?? template.groundSettings?.depth ?? fallbackDepth
+
+      const groundSettings = cloneGroundSettings({
+        width: widthCandidate,
+        depth: depthCandidate,
+      })
+
+      const nodes = Array.isArray(template.nodes) && template.nodes.length
+        ? (template.nodes as SceneNode[])
+        : createDefaultSceneNodes(groundSettings)
+      const materials = Array.isArray(template.materials) && template.materials.length
+        ? (template.materials as SceneMaterial[])
+        : undefined
+
+      const selectedNodeId = typeof template.selectedNodeId === 'string' ? template.selectedNodeId : null
+      const selectedNodeIds = Array.isArray(template.selectedNodeIds)
+        ? (template.selectedNodeIds as unknown[]).filter((id): id is string => typeof id === 'string')
+        : undefined
+      const cameraState = normalizeCameraStateInput(template.camera) ?? this.camera
+
+      const sceneDocument = createSceneDocument(displayName, {
+        nodes,
+        materials,
+        selectedNodeId,
+        selectedNodeIds,
+        camera: cameraState,
+        thumbnail: typeof template.thumbnail === 'string' ? template.thumbnail : null,
+        resourceProviderId: typeof template.resourceProviderId === 'string'
+          ? template.resourceProviderId
+          : this.resourceProviderId,
+        assetCatalog: isAssetCatalog(template.assetCatalog)
+          ? (template.assetCatalog as Record<string, ProjectAsset[]>)
+          : undefined,
+        assetIndex: isAssetIndex(template.assetIndex)
+          ? (template.assetIndex as Record<string, AssetIndexEntry>)
+          : undefined,
+        packageAssetMap: isPackageAssetMap(template.packageAssetMap)
+          ? (template.packageAssetMap as Record<string, string>)
+          : undefined,
+        viewportSettings: normalizeViewportSettingsInput(template.viewportSettings),
+        panelVisibility: normalizePanelVisibilityInput(template.panelVisibility),
+        panelPlacement: normalizePanelPlacementInput(template.panelPlacement),
+        groundSettings,
+      })
+
+      const timestamp = new Date().toISOString()
+      sceneDocument.createdAt = timestamp
+      sceneDocument.updatedAt = timestamp
 
       await scenesStore.saveSceneDocument(sceneDocument)
 

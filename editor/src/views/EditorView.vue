@@ -13,6 +13,7 @@ import NewSceneDialog from '@/components/layout/NewSceneDialog.vue'
 import SceneExportDialog from '@/components/layout/SceneExportDialog.vue'
 import type { SceneExportOptions } from '@/types/scene-export'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
+import type { PresetSceneDocument } from '@/types/preset-scene'
 
 import { prepareJsonSceneExport } from '@/utils/sceneExport'
 import { broadcastScenePreviewUpdate } from '@/utils/previewChannel'
@@ -822,17 +823,37 @@ async function handleAction(action: string) {
       console.warn(`Unknown menu action: ${action}`)
   }
 }
-async function handleCreateScene(payload: { name: string; groundWidth: number; groundDepth: number }) {
+async function handleCreateScene(payload: {
+  name: string
+  groundWidth: number
+  groundDepth: number
+  presetSceneId?: string | null
+  presetSceneDocument?: PresetSceneDocument | null
+}) {
   const saved = await saveCurrentScene()
   if (!saved) {
     return
   }
-  await sceneStore.createScene(payload.name, {
-    groundSettings: {
-      width: payload.groundWidth,
-      depth: payload.groundDepth,
-    },
-  })
+
+  try {
+    if (payload.presetSceneDocument) {
+      await sceneStore.createSceneFromTemplate(payload.name, payload.presetSceneDocument, {
+        groundWidth: payload.groundWidth,
+        groundDepth: payload.groundDepth,
+      })
+    } else {
+      await sceneStore.createScene(payload.name, {
+        groundSettings: {
+          width: payload.groundWidth,
+          depth: payload.groundDepth,
+        },
+      })
+    }
+  } catch (error) {
+    console.error('[EditorView] failed to create scene', error)
+    return
+  }
+
   isNewSceneDialogOpen.value = false
 }
 
