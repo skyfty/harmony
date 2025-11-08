@@ -4,10 +4,10 @@
       "path": "pages/home/index"
     },
     {
-      "path": "pages/upload/index"
+      "path": "pages/work/index"
     },
     {
-      "path": "pages/upload/records/index"
+      "path": "pages/work/records/index"
     },
     {
       "path": "pages/search/index"

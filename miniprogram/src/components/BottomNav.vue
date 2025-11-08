@@ -4,8 +4,8 @@
       <view class="icon home"></view>
       <text class="label">首页</text>
     </view>
-    <view class="nav-item" :class="{ active: active === 'upload' }" @tap="go('upload')">
-      <view class="icon upload"></view>
+    <view class="nav-item" :class="{ active: active === 'work' }" @tap="go('work')">
+      <view class="icon work"></view>
       <text class="label">作品</text>
     </view>
     <view class="nav-item" :class="{ active: active === 'exhibition' }" @tap="go('exhibition')">
@@ -23,7 +23,7 @@
   </view>
 </template>
 <script setup lang="ts">
-const props = defineProps<{ active: 'home' | 'upload' | 'exhibition' | 'profile' | 'optimize' }>();
+const props = defineProps<{ active: 'home' | 'work' | 'exhibition' | 'profile' | 'optimize' }>();
 const emit = defineEmits<{ (event: 'navigate', value: typeof props.active): void }>();
 
 function go(value: typeof props.active) {
@@ -93,7 +93,7 @@ function go(value: typeof props.active) {
     border-bottom: 5px solid #ffffff;
   }
 
-  .icon.upload::before {
+  .icon.work::before {
     width: 3px;
     height: 10px;
     left: 10px;
@@ -101,7 +101,7 @@ function go(value: typeof props.active) {
     border-radius: 2px;
   }
 
-  .icon.upload::after {
+  .icon.work::after {
     width: 0;
     height: 0;
     left: 8px;

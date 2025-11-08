@@ -12,14 +12,14 @@ import {
 	apiCreateCollection,
 	apiUpdateCollection,
 	apiDeleteCollection,
-	apiGetUploadRecords,
-	apiDeleteUploadRecord,
-	apiClearUploadRecords,
+	apiGetWorkRecords,
+	apiDeleteWorkRecord,
+	apiClearWorkRecords,
 	apiGetExhibitions,
 	apiWithdrawExhibition,
+	apiVisitExhibition,
 	apiToggleExhibitionLike,
 	apiRateExhibition,
-	apiVisitExhibition,
 	apiShareExhibition,
 	apiGetProducts,
 	apiPurchaseProduct,
@@ -30,13 +30,22 @@ import type {
 	AuthSession,
 	WorkSummary,
 	CollectionSummary,
-	UploadRecordSummary,
+	WorkRecordSummary,
 	ExhibitionSummary,
 	ProductSummary,
 	OrderSummary,
 } from '@/api/miniprogram';
 
 export type WorkType = 'image' | 'video' | 'model' | 'other';
+
+export interface PendingWorkUpload {
+	id: string;
+	name: string;
+	filePath: string;
+	size?: number;
+	mimeType?: string;
+	type: WorkType;
+}
 
 export interface WorkItem {
 	id: string;
@@ -67,7 +76,7 @@ export interface CollectionItem {
 	updatedAt: string;
 }
 
-export interface UploadRecordItem {
+export interface WorkRecordItem {
 	id: string;
 	workId: string;
 	name: string;
@@ -136,6 +145,7 @@ export interface NewWorkInput {
 	tags?: string[];
 	size?: number | string;
 	type: WorkType;
+	fileName?: string;
 }
 
 export interface PurchasePayload {
@@ -282,7 +292,7 @@ function mapCollectionSummary(summary: CollectionSummary, index: number): Collec
 	};
 }
 
-function mapUploadRecordSummary(summary: UploadRecordSummary, index: number): UploadRecordItem {
+function mapWorkRecordSummary(summary: WorkRecordSummary, index: number): WorkRecordItem {
 	return {
 		id: summary.id,
 		workId: summary.workId,
@@ -354,18 +364,19 @@ export const useWorksStore = defineStore('worksStore', {
 		profile: null as AuthSession | null,
 		works: [] as WorkItem[],
 		collections: [] as CollectionItem[],
-		uploadRecords: [] as UploadRecordItem[],
+		workRecords: [] as WorkRecordItem[],
 		exhibitions: [] as ExhibitionItem[],
 		products: [] as ProductItem[],
 		orders: [] as OrderItem[],
+		pendingUploads: [] as PendingWorkUpload[],
 		loadingProfile: false,
 		profileLoaded: false,
 		loadingWorks: false,
 		worksLoaded: false,
 		loadingCollections: false,
 		collectionsLoaded: false,
-		loadingUploadRecords: false,
-		uploadRecordsLoaded: false,
+		loadingWorkRecords: false,
+		workRecordsLoaded: false,
 		loadingExhibitions: false,
 		exhibitionsLoaded: false,
 		loadingProducts: false,
@@ -407,6 +418,15 @@ export const useWorksStore = defineStore('worksStore', {
 		},
 	},
 	actions: {
+		setPendingUploads(uploads: PendingWorkUpload[]) {
+			this.pendingUploads = [...uploads];
+		},
+		clearPendingUploads() {
+			this.pendingUploads = [];
+		},
+		removePendingUpload(id: string) {
+			this.pendingUploads = this.pendingUploads.filter((item) => item.id !== id);
+		},
 		async ensureProfile(force = false) {
 			if (this.loadingProfile) {
 				return;
@@ -463,13 +483,14 @@ export const useWorksStore = defineStore('worksStore', {
 				thumbnailUrl: item.thumbnailUrl ?? item.fileUrl,
 				size: typeof item.size === 'number' ? item.size : undefined,
 				tags: item.tags ?? [],
+				fileName: item.fileName ?? item.name,
 			}));
 			try {
 				const response = await apiCreateWorks(payload);
 				const mapped = response.works.map((item, index) => mapWorkSummary(item, index));
 				this.works = [...mapped, ...this.works];
 				this.worksLoaded = true;
-				await this.ensureUploadRecords(true);
+				await this.ensureWorkRecords(true);
 				return mapped.map((work) => work.id);
 			} catch (error) {
 				console.error('Failed to create works', error);
@@ -484,7 +505,7 @@ export const useWorksStore = defineStore('worksStore', {
 					...collection,
 					works: collection.works.filter((workId) => workId !== id),
 				}));
-				this.uploadRecords = this.uploadRecords.filter((record) => record.workId !== id);
+				this.workRecords = this.workRecords.filter((record) => record.workId !== id);
 			} catch (error) {
 				console.error('Failed to delete work', error);
 				throw error;
@@ -543,7 +564,7 @@ export const useWorksStore = defineStore('worksStore', {
 			coverUrl?: string;
 			workIds?: string[];
 			isPublic?: boolean;
-		}) {
+		}): Promise<CollectionItem> {
 			try {
 				const created = await apiCreateCollection(payload);
 				const mapped = mapCollectionSummary(created, this.collections.length);
@@ -557,7 +578,7 @@ export const useWorksStore = defineStore('worksStore', {
 							: work,
 					);
 				}
-				return mapped.id;
+				return mapped;
 			} catch (error) {
 				console.error('Failed to create collection', error);
 				throw error;
@@ -638,39 +659,39 @@ export const useWorksStore = defineStore('worksStore', {
 				throw error;
 			}
 		},
-		async ensureUploadRecords(force = false) {
-			if (this.loadingUploadRecords) {
+		async ensureWorkRecords(force = false) {
+			if (this.loadingWorkRecords) {
 				return;
 			}
-			if (this.uploadRecordsLoaded && !force) {
+			if (this.workRecordsLoaded && !force) {
 				return;
 			}
-			this.loadingUploadRecords = true;
+			this.loadingWorkRecords = true;
 			try {
-				const response = await apiGetUploadRecords();
-				this.uploadRecords = response.records.map((item, index) => mapUploadRecordSummary(item, index));
-				this.uploadRecordsLoaded = true;
+				const response = await apiGetWorkRecords();
+				this.workRecords = response.records.map((item, index) => mapWorkRecordSummary(item, index));
+				this.workRecordsLoaded = true;
 			} catch (error) {
-				console.error('Failed to load upload records', error);
+				console.error('Failed to load work records', error);
 			} finally {
-				this.loadingUploadRecords = false;
+				this.loadingWorkRecords = false;
 			}
 		},
-		async deleteUploadRecord(id: string) {
+		async deleteWorkRecord(id: string) {
 			try {
-				await apiDeleteUploadRecord(id);
-				this.uploadRecords = this.uploadRecords.filter((record) => record.id !== id);
+				await apiDeleteWorkRecord(id);
+				this.workRecords = this.workRecords.filter((record) => record.id !== id);
 			} catch (error) {
-				console.error('Failed to delete upload record', error);
+				console.error('Failed to delete work record', error);
 				throw error;
 			}
 		},
-		async clearUploadRecords() {
+		async clearWorkRecords() {
 			try {
-				await apiClearUploadRecords();
-				this.uploadRecords = [];
+				await apiClearWorkRecords();
+				this.workRecords = [];
 			} catch (error) {
-				console.error('Failed to clear upload records', error);
+				console.error('Failed to clear work records', error);
 				throw error;
 			}
 		},

@@ -57,7 +57,7 @@ import { onShow } from '@dcloudio/uni-app';
 import BottomNav from '@/components/BottomNav.vue';
 import { OPTIMIZE_PRODUCTS, type OptimizeProduct } from '@/data/optimizeProducts';
 
-type NavKey = 'home' | 'upload' | 'exhibition' | 'profile' | 'optimize';
+type NavKey = 'home' | 'work' | 'exhibition' | 'profile' | 'optimize';
 type CategoryKey = 'all' | string;
 
 const STORAGE_KEY = 'optimizePurchased';
@@ -80,7 +80,7 @@ const filteredProducts = computed(() => {
 
 const routes: Record<NavKey, string> = {
   home: '/pages/home/index',
-  upload: '/pages/upload/index',
+  work: '/pages/work/index',
   exhibition: '/pages/exhibition/index',
   profile: '/pages/profile/index',
   optimize: '/pages/optimize/index',

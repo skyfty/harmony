@@ -1,8 +1,8 @@
 <template>
-  <view class="page upload">
+  <view class="page work">
     <view class="header">
-      <text class="title">上传作品素材</text>
-      <text class="subtitle">仅支持上传图片素材，可一次选择多张</text>
+  <text class="title">创作新作品</text>
+  <text class="subtitle">目前支持批量导入图片素材，可一次选择多张</text>
     </view>
 
     <view class="uploader">
@@ -19,17 +19,17 @@
 
     <view class="history-card">
       <view class="history-header">
-        <text class="history-title">上传记录</text>
+  <text class="history-title">创作记录</text>
         <text class="history-action" @tap="goManage">管理</text>
       </view>
       <view class="history-list">
-        <view class="history-item" v-for="item in uploadHistory" :key="item.id">
-          <view class="history-preview" :style="{ background: item.gradient }"></view>
-          <view class="history-info">
-            <text class="history-name">{{ item.name }}</text>
-            <text class="history-meta">{{ item.size }} · {{ item.time }}</text>
-          </view>
-          <text class="history-status">{{ item.status }}</text>
+          <view class="history-item" v-for="item in workHistory" :key="item.id">
+            <view class="history-preview" :style="{ background: item.gradient }"></view>
+            <view class="history-info">
+              <text class="history-name">{{ item.name }}</text>
+              <text class="history-meta">{{ item.size }} · {{ item.time }}</text>
+            </view>
+            <text class="history-status">{{ item.status }}</text>
         </view>
       </view>
     </view>
@@ -60,91 +60,56 @@
       </view>
     </view>
 
-    <BottomNav active="upload" @navigate="handleNavigate" />
+    <BottomNav active="work" @navigate="handleNavigate" />
   </view>
 </template>
 <script setup lang="ts">
 import { computed, ref, watchEffect } from 'vue';
+import { onShow } from '@dcloudio/uni-app';
 import BottomNav from '@/components/BottomNav.vue';
 import { useWorksStore, type WorkItem, type WorkType } from '@/stores/worksStore';
+import { loadWorkHistory, type WorkHistoryEntry } from '@/utils/workHistory';
 
 declare const wx: any | undefined;
 
-type NavKey = 'home' | 'upload' | 'exhibition' | 'profile' | 'optimize';
+type NavKey = 'home' | 'work' | 'exhibition' | 'profile' | 'optimize';
 
-type HistoryItem = {
-  id: string;
-  name: string;
-  size: string;
-  time: string;
-  status: string;
-  gradient: string;
-  createdAt: number;
-};
+type HistoryItem = WorkHistoryEntry;
 
-type UploadCandidate = {
+type WorkCandidate = {
   name: string;
-  size?: number | string;
+  size?: number;
+  path?: string;
+  mimeType?: string;
 };
 
 const worksStore = useWorksStore();
 
-const STORAGE_KEY = 'uploadHistory';
 const loading = ref(false);
 
-function loadHistory(): HistoryItem[] {
-  try {
-    const raw = uni.getStorageSync(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+const workHistory = ref<HistoryItem[]>([]);
+
+function refreshHistory() {
+  const stored = loadWorkHistory();
+  workHistory.value = stored.length ? stored : [];
 }
 
-function saveHistory(list: HistoryItem[]) {
-  try {
-    uni.setStorageSync(STORAGE_KEY, list);
-  } catch {}
-}
+refreshHistory();
 
-const sampleHistory: HistoryItem[] = [
-  {
-    id: 'a',
-    name: '概念视觉海报.jpg',
-    size: '2.8MB',
-    time: '2 分钟前',
-    status: '待整理',
-    gradient: 'linear-gradient(135deg, #c1d8ff, #a0c5ff)',
-    createdAt: Date.now() - 2 * 60 * 1000,
-  },
-  {
-    id: 'b',
-    name: '空间渲染预览.png',
-    size: '4.3MB',
-    time: '15 分钟前',
-    status: '待发布',
-    gradient: 'linear-gradient(135deg, #b7f5ec, #90e0d9)',
-    createdAt: Date.now() - 15 * 60 * 1000,
-  },
-];
-
-const initialHistory: HistoryItem[] = (() => {
-  const fromStore = loadHistory();
-  return fromStore.length ? fromStore : sampleHistory;
-})();
-const uploadHistory = ref<HistoryItem[]>(initialHistory);
+onShow(() => {
+  refreshHistory();
+});
 
 const typeLabels: Record<WorkType, string> = {
   image: '图片',
   video: '视频',
   model: '3D 模型',
+  other: '其他',
 };
 
 const routes: Record<NavKey, string> = {
   home: '/pages/home/index',
-  upload: '/pages/upload/index',
+  work: '/pages/work/index',
   exhibition: '/pages/exhibition/index',
   profile: '/pages/profile/index',
   optimize: '/pages/optimize/index',
@@ -166,14 +131,14 @@ const featuredWorks = computed<FeaturedWork[]>(() =>
 );
 
 watchEffect(() => {
-  if (uploadHistory.value.length > 20) {
-    uploadHistory.value = uploadHistory.value.slice(0, 20);
+  if (workHistory.value.length > 20) {
+    workHistory.value = workHistory.value.slice(0, 20);
   }
 });
 
 function handleNavigate(target: NavKey) {
   const route = routes[target];
-  if (!route || target === 'upload') {
+  if (!route || target === 'work') {
     return;
   }
   uni.redirectTo({ url: route });
@@ -194,7 +159,7 @@ function selectImages() {
   if (loading.value) {
     return;
   }
-  handleImageUpload();
+  handleImageSelection();
 }
 
 function extractNameFromPath(path?: string | null): string {
@@ -206,18 +171,12 @@ function extractNameFromPath(path?: string | null): string {
   return last || '未命名文件';
 }
 
-function formatSize(size?: number | string): string {
-  if (typeof size === 'string') {
-    return size;
+function navigateToCollectionEditor(options: { workIds?: string[]; pending?: boolean }) {
+  if (options.pending) {
+    uni.navigateTo({ url: '/pages/collections/edit/index?mode=pending' });
+    return;
   }
-  if (typeof size === 'number' && size > 0) {
-    const mb = size / (1024 * 1024);
-    return `${mb.toFixed(mb >= 100 ? 0 : 1)}MB`;
-  }
-  return '刚刚';
-}
-
-function navigateToCollectionEditor(workIds: string[]) {
+  const workIds = options.workIds ?? [];
   if (!workIds.length) {
     return;
   }
@@ -225,47 +184,43 @@ function navigateToCollectionEditor(workIds: string[]) {
   uni.navigateTo({ url: `/pages/collections/edit/index?workIds=${query}` });
 }
 
-function finalizeUpload(type: WorkType, files: UploadCandidate[]) {
+function createPendingId(index: number): string {
+  return `${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function prepareWorkCreation(type: WorkType, files: WorkCandidate[]) {
   if (!files.length) {
-    failUpload('未选择文件');
+    failCreation('未选择文件');
     return;
   }
-  const normalized = files
+  const valid = files
     .map((file, index) => ({
+      id: createPendingId(index),
       name: file.name || `${typeLabels[type]} ${index + 1}`,
       size: file.size,
+      filePath: file.path,
+      mimeType: file.mimeType,
     }))
-    .filter((file) => Boolean(file.name));
-  if (!normalized.length) {
-    failUpload('未选择文件');
+    .filter((file) => typeof file.filePath === 'string' && file.filePath.length > 0);
+  if (!valid.length) {
+    failCreation('未选择文件');
     return;
   }
-  const newIds = worksStore.addWorks(
-    normalized.map((file) => ({
+  worksStore.setPendingUploads(
+    valid.map((file) => ({
+      id: file.id,
       name: file.name,
       size: file.size,
+      filePath: file.filePath!,
+      mimeType: file.mimeType,
       type,
     })),
   );
-  const first = normalized[0];
-  const displayName = normalized.length > 1 ? `${first.name} 等 ${normalized.length} 个` : first.name;
-  const representative = worksStore.workMap[newIds[0]];
-  uploadHistory.value.unshift({
-    id: newIds[0],
-    name: displayName,
-    size: representative?.size || formatSize(first.size),
-    time: '刚刚',
-    status: '待整理',
-    gradient: representative?.gradient || 'linear-gradient(135deg, #dff5ff, #c6ebff)',
-    createdAt: Date.now(),
-  });
-  saveHistory(uploadHistory.value);
   loading.value = false;
-  uni.showToast({ title: `${typeLabels[type]}上传成功`, icon: 'success' });
-  navigateToCollectionEditor(newIds);
+  navigateToCollectionEditor({ pending: true });
 }
 
-function failUpload(message?: string, error?: { errMsg?: string }) {
+function failCreation(message?: string, error?: { errMsg?: string }) {
   loading.value = false;
   if (error?.errMsg && error.errMsg.includes('cancel')) {
     return;
@@ -275,12 +230,12 @@ function failUpload(message?: string, error?: { errMsg?: string }) {
   }
 }
 
-function handleImageUpload() {
+function handleImageSelection() {
   loading.value = true;
   uni.chooseImage({
     count: 9,
-    success: (res) => {
-      const files: UploadCandidate[] = [];
+    success: async (res) => {
+      const files: WorkCandidate[] = [];
       const tempFiles = Array.isArray(res.tempFiles) ? res.tempFiles : [];
       const fallbackPaths = Array.isArray(res.tempFilePaths)
         ? res.tempFilePaths
@@ -289,25 +244,32 @@ function handleImageUpload() {
         : [];
       if (tempFiles.length) {
         tempFiles.forEach((file, index) => {
-          const record = file as UniApp.ChooseImageSuccessCallbackResultFile & { name?: string };
+          const record = file as UniApp.ChooseImageSuccessCallbackResultFile & {
+            name?: string;
+            type?: string;
+            fileType?: string;
+          };
+          const filePath = (record as { path?: string }).path ?? fallbackPaths[index];
           files.push({
-            name: record?.name || extractNameFromPath(record?.path || fallbackPaths[index]),
+            name: record?.name || extractNameFromPath(filePath),
             size: record?.size,
+            path: filePath,
+            mimeType: record?.type || record?.fileType,
           });
         });
       } else {
-        for (const path of fallbackPaths) {
-          files.push({ name: extractNameFromPath(path) });
-        }
+        fallbackPaths.forEach((path) => {
+          files.push({ name: extractNameFromPath(path), path });
+        });
       }
-      finalizeUpload('image', files);
+      prepareWorkCreation('image', files);
     },
-    fail: (err) => failUpload('选择图片失败', err),
+    fail: (err) => failCreation('选择图片失败', err),
   });
 }
 
 function goManage() {
-  uni.navigateTo({ url: '/pages/upload/records/index' });
+  uni.navigateTo({ url: '/pages/work/records/index' });
 }
 </script>
 <style scoped lang="scss">

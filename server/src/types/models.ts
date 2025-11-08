@@ -63,7 +63,7 @@ export interface WorkDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
-export interface UploadRecordDocument extends Document<Types.ObjectId> {
+export interface WorkRecordDocument extends Document<Types.ObjectId> {
   userId: Types.ObjectId
   workId: Types.ObjectId
   fileName: string

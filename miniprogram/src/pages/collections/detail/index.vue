@@ -61,6 +61,7 @@ import { useWorksStore, type WorkItem, type CollectionItem } from '@/stores/work
 const worksStore = useWorksStore();
 
 const collectionId = ref('');
+const initialWorkId = ref('');
 const saving = ref(false);
 const editableTitle = ref('');
 const editableDescription = ref('');
@@ -121,9 +122,13 @@ const statBlocks = computed(() => [
 ]);
 
 onLoad((options) => {
-  const raw = typeof options?.id === 'string' ? options.id : '';
-  if (raw) {
-    collectionId.value = decodeURIComponent(raw);
+  const rawId = typeof options?.id === 'string' ? options.id : '';
+  if (rawId) {
+    collectionId.value = decodeURIComponent(rawId);
+  }
+  const rawWorkId = typeof options?.workId === 'string' ? options.workId : '';
+  if (rawWorkId) {
+    initialWorkId.value = decodeURIComponent(rawWorkId);
   }
 });
 

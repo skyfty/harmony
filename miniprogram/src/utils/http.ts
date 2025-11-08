@@ -1,4 +1,19 @@
 const DEFAULT_BASE_URL = 'http://localhost:4000/mini';
+
+export function getBaseUrl(): string {
+  return import.meta.env?.VITE_MINI_API_BASE || DEFAULT_BASE_URL;
+}
+
+export function getApiOrigin(): string {
+  const baseUrl = getBaseUrl();
+  try {
+    const parsed = new URL(baseUrl);
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    const match = baseUrl.match(/^(https?:\/\/[^/]+)/);
+    return match ? match[1] : baseUrl;
+  }
+}
 const TOKEN_STORAGE_KEY = 'miniapp:authToken';
 
 export function getAuthToken(): string | undefined {
@@ -38,7 +53,7 @@ export async function request<TResponse = any, TData = any>(
   url: string,
   options: RequestOptions<TData> = {},
 ): Promise<TResponse> {
-  const baseUrl = import.meta.env?.VITE_MINI_API_BASE || DEFAULT_BASE_URL;
+  const baseUrl = getBaseUrl();
   const fullUrl = url.startsWith('http') ? url : `${baseUrl}${url}`;
   const method = options.method ?? 'GET';
   const headers: Record<string, string> = {

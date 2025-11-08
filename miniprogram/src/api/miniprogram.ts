@@ -1,4 +1,4 @@
-import { get, post, patch, del, setAuthToken } from '@/utils/http';
+import { get, post, patch, del, setAuthToken, getAuthToken, getApiOrigin } from '@/utils/http';
 
 export interface AuthSession {
   token?: string;
@@ -54,7 +54,7 @@ export interface CollectionSummary {
   updatedAt: string;
 }
 
-export interface UploadRecordSummary {
+export interface WorkRecordSummary {
   id: string;
   workId: string;
   fileName: string;
@@ -175,6 +175,7 @@ export interface CreateWorkPayload {
   thumbnailUrl?: string;
   size?: number;
   tags?: string[];
+  fileName?: string;
 }
 
 export function apiCreateWorks(payload: CreateWorkPayload[]): Promise<{ works: WorkSummary[] }> {
@@ -246,19 +247,19 @@ export function apiDeleteCollection(id: string): Promise<{ success: boolean }> {
   return del(`/collections/${id}`);
 }
 
-export function apiGetUploadRecords(): Promise<{
+export function apiGetWorkRecords(): Promise<{
   total: number;
-  records: UploadRecordSummary[];
+  records: WorkRecordSummary[];
 }> {
-  return get('/uploads/records');
+  return get('/works/records');
 }
 
-export function apiDeleteUploadRecord(id: string): Promise<{ success: boolean }> {
-  return del(`/uploads/records/${id}`);
+export function apiDeleteWorkRecord(id: string): Promise<{ success: boolean }> {
+  return del(`/works/records/${id}`);
 }
 
-export function apiClearUploadRecords(): Promise<{ success: boolean }> {
-  return del('/uploads/records');
+export function apiClearWorkRecords(): Promise<{ success: boolean }> {
+  return del('/works/records');
 }
 
 export function apiGetExhibitions(params?: { owner?: string; scope?: 'all' | 'mine' }): Promise<{
@@ -358,4 +359,90 @@ export function apiGetOrders(params?: { status?: string }): Promise<{
 
 export function apiGetOrder(id: string): Promise<OrderSummary> {
   return get(`/orders/${id}`);
+}
+
+export interface ResourceCategory {
+  id: string;
+  name: string;
+  type: 'model' | 'image' | 'texture' | 'file';
+  description?: string | null;
+}
+
+export interface ManagedAsset {
+  id: string;
+  name: string;
+  categoryId: string;
+  type: 'model' | 'image' | 'texture' | 'file';
+  size: number;
+  url: string;
+  previewUrl?: string | null;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UploadAssetResponse {
+  asset: ManagedAsset;
+}
+
+export interface UploadAssetOptions {
+  filePath: string;
+  categoryId: string;
+  fileName?: string;
+  type?: 'model' | 'image' | 'texture' | 'file';
+}
+
+export function apiListResourceCategories(): Promise<ResourceCategory[]> {
+  const origin = getApiOrigin();
+  return get<ResourceCategory[]>(`${origin}/api/resources/categories`);
+}
+
+export function apiUploadAsset(options: UploadAssetOptions): Promise<ManagedAsset> {
+  const { filePath, categoryId, fileName, type = 'file' } = options;
+  const origin = getApiOrigin();
+  const token = getAuthToken();
+  const formData: Record<string, string> = {
+    categoryId,
+    type,
+  };
+  if (fileName) {
+    formData.name = fileName;
+  }
+  return new Promise<ManagedAsset>((resolve, reject) => {
+    const header: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+    uni.uploadFile({
+      url: `${origin}/api/resources/assets`,
+      filePath,
+      name: 'file',
+      formData,
+      header,
+      success: (res) => {
+        const status = res.statusCode ?? 0;
+        if (status < 200 || status >= 300) {
+          try {
+            const payload = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+            const message = (payload as Record<string, any>)?.message ?? `上传失败(${status})`;
+            reject(new Error(message));
+          } catch {
+            reject(new Error(`上传失败(${status})`));
+          }
+          return;
+        }
+        try {
+          const payload = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+          const data = payload as UploadAssetResponse;
+          if (data?.asset) {
+            resolve(data.asset);
+          } else {
+            reject(new Error('上传响应解析失败'));
+          }
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error('上传响应解析失败'));
+        }
+      },
+      fail: (err) => {
+        reject(new Error(err.errMsg || '文件上传失败'));
+      },
+    });
+  });
 }
