@@ -24,30 +24,24 @@
     </view>
 
     <view v-if="collection" class="stats-card">
-      <view class="stat" v-for="stat in statBlocks" :key="stat.label">
-        <text class="stat-icon">{{ stat.icon }}</text>
-        <text class="stat-value">{{ stat.value }}</text>
-        <text class="stat-desc">{{ stat.label }}</text>
+      <view class="stat">
+        <text class="stat-icon">🖼</text>
+        <text class="stat-value">{{ worksInCollection.length }}</text>
+        <text class="stat-desc">作品数量</text>
       </view>
-    </view>
-
-    <view v-if="collection" class="engage-card">
-      <view class="engage-row">
-        <text class="engage-label">为作品集评分</text>
-        <button class="engage-btn" @tap="openCollectionRatingModal">
-          ★ {{ collectionRatingButtonLabel }}
-        </button>
+      <view class="stat stat--action stat--rating" @tap="openCollectionRatingModal">
+        <text class="stat-icon">★</text>
+        <text class="stat-value">{{ collectionAverageRating }}</text>
+        <text class="stat-desc">{{ collectionRatingSummary }}</text>
       </view>
-      <view class="engage-row">
-        <text class="engage-label">喜欢</text>
-        <button
-          class="engage-btn"
-          :class="{ liked: collectionLiked }"
-          :disabled="collectionLikeLoading"
-          @tap="toggleCollectionLike"
-        >
-          ❤ {{ collectionLikesDisplay }}
-        </button>
+      <view
+        class="stat stat--action stat--likes"
+        :class="{ 'stat--liked': collectionLiked, 'stat--disabled': collectionLikeLoading }"
+        @tap="toggleCollectionLike"
+      >
+        <text class="stat-icon">❤</text>
+        <text class="stat-value">{{ collectionLikesDisplay }}</text>
+        <text class="stat-desc">{{ collectionLikeSummary }}</text>
       </view>
     </view>
 
@@ -278,28 +272,20 @@ const collectionUserRating = computed(() => collection.value?.userRating?.score 
 
 const collectionRatingCount = computed(() => collection.value?.ratingCount ?? 0);
 
-const collectionRatingDesc = computed(() => {
+const collectionRatingSummary = computed(() => {
   const count = collectionRatingCount.value;
-  if (count <= 0) {
-    return '尚无评分';
-  }
-  return `共 ${count} 次评分`;
-});
-
-const collectionRatingButtonLabel = computed(() => {
-  const averageLabel = collectionAverageRating.value;
+  const base = count > 0 ? `共 ${count} 次评分` : '尚无评分';
   const myScore = collectionUserRating.value;
-  if (myScore > 0) {
-    return `平均 ${averageLabel} · 我的 ${myScore} 星`;
-  }
-  return `平均 ${averageLabel} · 点按评分`;
+  const action = myScore > 0 ? `我的 ${myScore} 星 · 点按修改` : '点按评分';
+  return `${base} · ${action}`;
 });
 
-const statBlocks = computed(() => [
-  { icon: '🖼', value: worksInCollection.value.length.toString(), label: '作品数量' },
-  { icon: '★', value: collectionAverageRating.value, label: collectionRatingDesc.value },
-  { icon: '❤', value: collectionLikesDisplay.value, label: '喜欢人数' },
-]);
+const collectionLikeSummary = computed(() => {
+  if (collectionLikeLoading.value) {
+    return '处理中…';
+  }
+  return collectionLiked.value ? '已喜欢 · 点按取消' : '点按喜欢';
+});
 
 async function fetchCollectionDetail(id: string): Promise<void> {
   if (!id || loading.value) {
@@ -593,18 +579,19 @@ function formatNumber(value: number): string {
 
 .stat-icon {
   font-size: 26px;
-}
-
-.stat:nth-child(1) .stat-icon {
   color: #1f7aec;
 }
 
-.stat:nth-child(2) .stat-icon {
-  color: #ffaf42;
+.stat--rating .stat-icon {
+  color: #ffb400;
 }
 
-.stat:nth-child(3) .stat-icon {
+.stat--likes .stat-icon {
   color: #ff6f91;
+}
+
+.stat--liked .stat-icon {
+  color: #ff3f6e;
 }
 
 .stat-value {
@@ -616,46 +603,20 @@ function formatNumber(value: number): string {
 .stat-desc {
   font-size: 12px;
   color: #8a94a6;
+  text-align: center;
+  line-height: 1.6;
 }
 
-.engage-card {
-  background: #ffffff;
-  border-radius: 20px;
-  padding: 18px 20px;
-  box-shadow: 0 12px 32px rgba(31, 122, 236, 0.08);
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+.stat--action {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
-.engage-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+.stat--action:active {
+  transform: scale(0.97);
+  box-shadow: 0 6px 16px rgba(31, 122, 236, 0.12);
 }
 
-.engage-label {
-  font-size: 14px;
-  font-weight: 600;
-  color: #1f1f1f;
-}
-
-.engage-btn {
-  padding: 10px 18px;
-  border: none;
-  border-radius: 18px;
-  background: rgba(31, 122, 236, 0.12);
-  color: #1f1f1f;
-  font-size: 16px;
-}
-
-.engage-btn.liked {
-  background: rgba(255, 111, 145, 0.15);
-  color: #ff3f6e;
-}
-
-.engage-btn[disabled] {
+.stat--disabled {
   opacity: 0.6;
 }
 

@@ -15,30 +15,19 @@
     </view>
 
     <view v-if="work" class="stats-card">
-      <view class="stat">
+      <view class="stat stat--rating stat--action" @tap="openWorkRatingModal">
         <text class="stat-icon">★</text>
         <text class="stat-value">{{ workRating }}</text>
-        <text class="stat-desc">{{ workRatingDesc }}</text>
+        <text class="stat-desc">{{ workRatingSummary }}</text>
       </view>
-      <view class="stat">
+      <view
+        class="stat stat--likes stat--action"
+        :class="{ 'stat--liked': workLiked, 'stat--disabled': likeLoading }"
+        @tap="toggleWorkLike"
+      >
         <text class="stat-icon">❤</text>
         <text class="stat-value">{{ workLikes }}</text>
-        <text class="stat-desc">喜欢人数</text>
-      </view>
-    </view>
-
-    <view v-if="work" class="engage-card">
-      <view class="engage-row">
-        <text class="engage-label">为作品评分</text>
-        <button class="engage-btn" @tap="openWorkRatingModal">
-          ★ {{ workRatingButtonLabel }}
-        </button>
-      </view>
-      <view class="engage-row">
-        <text class="engage-label">喜欢</text>
-        <button class="engage-btn" :class="{ liked: workLiked }" :disabled="likeLoading" @tap="toggleWorkLike">
-          ❤ {{ workLikes }}
-        </button>
+        <text class="stat-desc">{{ workLikeSummary }}</text>
       </view>
     </view>
 
@@ -216,25 +205,26 @@ const workLikes = computed(() => formatNumber(work.value?.likesCount ?? 0));
 
 const workRatingCount = computed(() => work.value?.ratingCount ?? 0);
 
-const workRatingDesc = computed(() => {
+const workUserRating = computed(() => work.value?.userRating?.score ?? 0);
+
+const workRatingAction = computed(() => {
+  const myScore = workUserRating.value;
+  return myScore > 0 ? `我的 ${myScore} 星 · 点按修改` : '点按评分';
+});
+
+const workRatingSummary = computed(() => {
   const count = workRatingCount.value;
-  if (count <= 0) {
-    return '尚无评分';
-  }
-  return `共 ${count} 次评分`;
+  const prefix = count > 0 ? `共 ${count} 次评分` : '尚无评分';
+  return `${prefix} · ${workRatingAction.value}`;
 });
 
 const workLiked = computed(() => Boolean(work.value?.liked));
 
-const workUserRating = computed(() => work.value?.userRating?.score ?? 0);
-
-const workRatingButtonLabel = computed(() => {
-  const averageLabel = workRating.value;
-  const myScore = workUserRating.value;
-  if (myScore > 0) {
-    return `平均 ${averageLabel} · 我的 ${myScore} 星`;
+const workLikeSummary = computed(() => {
+  if (likeLoading.value) {
+    return '处理中…';
   }
-  return `平均 ${averageLabel} · 点按评分`;
+  return workLiked.value ? '已喜欢 · 点按取消' : '点按喜欢';
 });
 
 async function fetchWorkDetail(id?: string): Promise<void> {
@@ -636,73 +626,42 @@ watch(isOwner, (value) => {
   color: #1f1f1f;
 }
 
+
 .stat-desc {
   font-size: 12px;
   color: #8a94a6;
+  text-align: center;
+  line-height: 1.6;
 }
 
-.engage-card {
-  background: #ffffff;
-  border-radius: 20px;
-  padding: 18px 20px;
-  box-shadow: 0 12px 32px rgba(31, 122, 236, 0.08);
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+.stat-icon {
+  font-size: 26px;
+  color: #1f7aec;
 }
 
-.engage-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+.stat--rating .stat-icon {
+  color: #ffb400;
 }
 
-.engage-label {
-  font-size: 14px;
-  font-weight: 600;
-  color: #1f1f1f;
+.stat--likes .stat-icon {
+  color: #ff6f91;
 }
 
-.engage-btn {
-  padding: 10px 18px;
-  border: none;
-  border-radius: 18px;
-  background: rgba(31, 122, 236, 0.12);
-  color: #1f1f1f;
-  font-size: 16px;
-}
-
-.engage-btn.liked {
-  background: rgba(255, 111, 145, 0.15);
+.stat--liked .stat-icon {
   color: #ff3f6e;
 }
 
-.engage-btn[disabled] {
+.stat--action {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.stat--action:active {
+  transform: scale(0.97);
+  box-shadow: 0 6px 16px rgba(31, 122, 236, 0.12);
+}
+
+.stat--disabled {
   opacity: 0.6;
-}
-
-.collections-card,
-.info-card {
-  background: #ffffff;
-  border-radius: 20px;
-  padding: 20px;
-  box-shadow: 0 12px 32px rgba(31, 122, 236, 0.08);
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.collections-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.collections-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: #1f1f1f;
 }
 
 .collections-action {

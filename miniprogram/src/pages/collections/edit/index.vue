@@ -176,6 +176,8 @@ import { formatWorkSize, prependWorkHistoryEntry } from '@/utils/workHistory';
 const worksStore = useWorksStore();
 const collectionsLoading = ref(false);
 const collectionsError = ref('');
+const editingCollectionId = ref('');
+const isEditingExistingCollection = computed(() => Boolean(editingCollectionId.value));
 
 type ExistingCollectionOption = {
   id: string;
@@ -422,11 +424,16 @@ const totalLikes = computed(() => {
   return formatNumber(sum);
 });
 
-const statBlocks = computed(() => [
-  { icon: '🖼', value: selectedCount.value.toString(), label: '已选作品' },
-  { icon: '★', value: averageRating.value, label: '平均评分' },
-  { icon: '❤', value: totalLikes.value, label: '收到喜欢' },
-]);
+const statBlocks = computed(() => {
+  const blocks = [{ icon: '🖼', value: selectedCount.value.toString(), label: '已选作品' }];
+  if (isEditingExistingCollection.value) {
+    blocks.push(
+      { icon: '★', value: averageRating.value, label: '平均评分' },
+      { icon: '❤', value: totalLikes.value, label: '收到喜欢' },
+    );
+  }
+  return blocks;
+});
 
 watch(
   displayItems,
@@ -456,9 +463,12 @@ watch(
 );
 
 onLoad((options) => {
-  const raw = typeof options?.workIds === 'string' ? options.workIds : '';
-  if (raw) {
-    const decoded = decodeURIComponent(raw);
+  const rawId = typeof options?.id === 'string' ? options.id : '';
+  editingCollectionId.value = rawId ? decodeURIComponent(rawId) : '';
+
+  const rawWorkIds = typeof options?.workIds === 'string' ? options.workIds : '';
+  if (rawWorkIds) {
+    const decoded = decodeURIComponent(rawWorkIds);
     workIds.value = Array.from(new Set(decoded.split(',').filter(Boolean)));
   }
   void initializeCollections();
