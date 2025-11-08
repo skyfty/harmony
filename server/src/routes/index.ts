@@ -5,6 +5,7 @@ import resourceRouter from './resources'
 import roleRouter from './roles'
 import userRouter from './users'
 import miniprogramRouter from './miniprogram'
+import presetSceneRouter from './presetScenes'
 
 export const routes: Router[] = [
   authRouter,
@@ -12,6 +13,7 @@ export const routes: Router[] = [
   roleRouter,
   permissionRouter,
   resourceRouter,
+  presetSceneRouter,
   miniprogramRouter,
 ]
 
