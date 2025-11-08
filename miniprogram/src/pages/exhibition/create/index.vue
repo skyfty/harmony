@@ -32,57 +32,52 @@
           />
         </view>
 
-        <view class="schedule">
-          <view class="schedule-item">
-            <text class="label">开始时间</text>
-            <input
-              class="field"
-              type="date"
-              :value="form.startDate"
-              @input="updateField('startDate', $event)"
-            />
-          </view>
-          <view class="schedule-item">
-            <text class="label">结束时间</text>
-            <input
-              class="field"
-              type="date"
-              :value="form.endDate"
-              @input="updateField('endDate', $event)"
-            />
-          </view>
-        </view>
       </view>
 
       <view class="form-card">
         <view class="section-header">
           <text class="section-title">关联作品集</text>
-          <text class="section-hint">可选</text>
+          <text class="section-hint">选择一个作品集作为展览来源</text>
         </view>
-        <view v-if="collectionOptions.length" class="collection-grid">
-          <view
-            v-for="collection in collectionOptions"
-            :key="collection.id"
-            class="collection-item"
-            :class="{ 'is-selected': isCollectionSelected(collection.id) }"
-            @tap="toggleCollection(collection.id)"
+        <view v-if="collectionOptions.length" class="collection-picker">
+          <picker
+            class="collection-picker__picker"
+            mode="selector"
+            :range="collectionOptions"
+            range-key="title"
+            :value="collectionPickerValue"
+            @change="handleCollectionChange"
           >
-            <view class="collection-header">
-              <text class="collection-title">{{ collection.title }}</text>
-              <text class="collection-count">{{ collection.workCount }} 件</text>
+            <view class="collection-picker__trigger">
+              <view class="collection-picker__info">
+                <text v-if="selectedCollection" class="collection-picker__title">
+                  {{ selectedCollection?.title || '未命名作品集' }}
+                </text>
+                <text v-else class="collection-picker__placeholder">请选择作品集</text>
+                <text v-if="selectedCollection" class="collection-picker__count">共 {{ selectedCollectionWorkCount }} 件作品</text>
+              </view>
+              <text class="collection-picker__arrow">⌵</text>
             </view>
-            <text class="collection-desc">{{ collection.description }}</text>
-          </view>
+          </picker>
+          <button
+            v-if="selectedCollection"
+            class="collection-picker__clear"
+            @tap="clearCollectionSelection"
+          >清除</button>
         </view>
         <view v-else class="empty-tip">暂无作品集，请先创建作品集后再尝试。</view>
+        <view v-if="selectedCollection" class="collection-preview">
+          <text class="collection-preview__desc">{{ selectedCollection?.description || '暂无描述' }}</text>
+        </view>
       </view>
 
       <view class="form-card">
         <view class="section-header">
           <text class="section-title">选择展品</text>
-          <text class="section-hint">点击卡片选择，支持多选</text>
+          <text class="section-hint">请先选择作品集，再从中挑选展品</text>
         </view>
-        <view v-if="workOptions.length" class="work-list">
+        <view v-if="!hasCollectionSelected" class="empty-tip">请选择作品集后显示可用展品。</view>
+        <view v-else-if="workOptions.length" class="work-list">
           <view
             v-for="work in workOptions"
             :key="work.id"
@@ -104,7 +99,7 @@
             </button>
           </view>
         </view>
-        <view v-else class="empty-tip">尚未上传作品，完成上传后可在此选择展品。</view>
+        <view v-else class="empty-tip">该作品集暂无作品，请先在作品集中添加作品。</view>
       </view>
 
       <view class="form-card">
@@ -158,7 +153,14 @@ import {
   type WorkSummary,
 } from '@/api/miniprogram';
 
-type FormKey = 'name' | 'description' | 'startDate' | 'endDate';
+type FormKey = 'name' | 'description';
+
+interface CollectionOption {
+  id: string;
+  title: string;
+  description: string;
+  workCount: number;
+}
 
 const loading = ref(false);
 const submitting = ref(false);
@@ -167,11 +169,9 @@ const editingId = ref('');
 const form = reactive<Record<FormKey, string>>({
   name: '',
   description: '',
-  startDate: '',
-  endDate: '',
 });
 
-const selectedCollectionIds = ref<string[]>([]);
+const selectedCollectionId = ref<string>('');
 const selectedWorkIds = ref<string[]>([]);
 const coverWorkIds = ref<string[]>([]);
 const manualCoverUrls = ref<string[]>([]);
@@ -182,7 +182,7 @@ const availableWorks = ref<WorkSummary[]>([]);
 
 const isEditing = computed(() => Boolean(editingId.value));
 
-const collectionOptions = computed(() =>
+const collectionOptions = computed<CollectionOption[]>(() =>
   availableCollections.value.map((collection) => ({
     id: collection.id,
     title: collection.title || '未命名作品集',
@@ -191,17 +191,54 @@ const collectionOptions = computed(() =>
   })),
 );
 
-const workOptions = computed(() =>
-  availableWorks.value.map((work) => ({
-    ...work,
-    title: work.title || '未命名作品',
-  })),
+const selectedCollection = computed(() =>
+  availableCollections.value.find((collection) => collection.id === selectedCollectionId.value) ?? null,
 );
+
+const selectedCollectionWorkCount = computed(() => {
+  if (!selectedCollection.value) {
+    return 0;
+  }
+  return selectedCollection.value.workCount ?? (selectedCollection.value.works?.length ?? 0);
+});
+
+const collectionPickerValue = computed(() => {
+  if (!collectionOptions.value.length) {
+    return 0;
+  }
+  const index = collectionOptions.value.findIndex((item) => item.id === selectedCollectionId.value);
+  return index >= 0 ? index : 0;
+});
+
+const hasCollectionSelected = computed(() => Boolean(selectedCollection.value));
 
 const worksMap = computed(() => {
   const map = new Map<string, WorkSummary>();
-  availableWorks.value.forEach((work) => map.set(work.id, work));
+  availableWorks.value.forEach((work) => {
+    map.set(work.id, work);
+  });
+  availableCollections.value.forEach((collection) => {
+    (collection.works ?? []).forEach((work) => {
+      if (!map.has(work.id)) {
+        map.set(work.id, work);
+      }
+    });
+  });
   return map;
+});
+
+const workOptions = computed(() => {
+  if (!selectedCollection.value) {
+    return [] as WorkSummary[];
+  }
+  const works = selectedCollection.value.works ?? [];
+  return works
+    .map((work) => worksMap.value.get(work.id) ?? work)
+    .filter((work): work is WorkSummary => Boolean(work))
+    .map((work) => ({
+      ...work,
+      title: work.title || '未命名作品',
+    }));
 });
 
 const coverPreview = computed(() => {
@@ -257,6 +294,7 @@ async function fetchOptions(): Promise<void> {
   ]);
   availableCollections.value = collectionResponse.collections ?? [];
   availableWorks.value = (worksResponse.works ?? []).slice(0, 100);
+  syncSelectedWorksForCollection(selectedCollectionId.value);
 }
 
 async function loadExhibition(id: string): Promise<void> {
@@ -267,11 +305,6 @@ async function loadExhibition(id: string): Promise<void> {
 function applyDetail(detail: ExhibitionSummary): void {
   form.name = detail.name;
   form.description = detail.description ?? '';
-  form.startDate = detail.startDate ? formatDateInput(detail.startDate) : '';
-  form.endDate = detail.endDate ? formatDateInput(detail.endDate) : '';
-
-  selectedCollectionIds.value = Array.isArray(detail.collectionIds) ? [...detail.collectionIds] : [];
-
   const workIds = Array.isArray(detail.works) ? detail.works.map((work) => work.id) : [];
   const uniqueWorkIds = new Set<string>(workIds);
   selectedWorkIds.value = Array.from(uniqueWorkIds);
@@ -302,20 +335,32 @@ function applyDetail(detail: ExhibitionSummary): void {
   coverWorkIds.value = Array.from(new Set(matchedCoverIds));
   manualCoverUrls.value = Array.from(new Set(unmatched));
   selectedWorkIds.value = Array.from(new Set([...selectedWorkIds.value, ...coverWorkIds.value]));
+
+  const primaryCollectionId = Array.isArray(detail.collectionIds) && detail.collectionIds.length ? detail.collectionIds[0] : '';
+  selectedCollectionId.value = primaryCollectionId;
+  syncSelectedWorksForCollection(primaryCollectionId);
 }
 
 function updateField(key: FormKey, event: any): void {
   form[key] = event?.detail?.value ?? '';
 }
 
-function toggleCollection(id: string): void {
-  const set = new Set(selectedCollectionIds.value);
-  if (set.has(id)) {
-    set.delete(id);
-  } else {
-    set.add(id);
+function handleCollectionChange(event: any): void {
+  const index = Number(event?.detail?.value ?? -1);
+  if (!Number.isInteger(index) || index < 0 || index >= collectionOptions.value.length) {
+    return;
   }
-  selectedCollectionIds.value = Array.from(set);
+  const target = collectionOptions.value[index];
+  selectedCollectionId.value = target?.id ?? '';
+  syncSelectedWorksForCollection(selectedCollectionId.value);
+}
+
+function clearCollectionSelection(): void {
+  if (!selectedCollectionId.value) {
+    return;
+  }
+  selectedCollectionId.value = '';
+  syncSelectedWorksForCollection('');
 }
 
 function toggleWorkSelection(id: string): void {
@@ -343,16 +388,29 @@ function toggleCoverWork(work: WorkSummary): void {
   coverWorkIds.value = Array.from(set);
 }
 
-function isCollectionSelected(id: string): boolean {
-  return selectedCollectionIds.value.includes(id);
-}
-
 function isWorkSelected(id: string): boolean {
   return selectedWorkIds.value.includes(id);
 }
 
 function isCoverSelected(id: string): boolean {
   return coverWorkIds.value.includes(id);
+}
+
+function syncSelectedWorksForCollection(collectionId: string): void {
+  if (!collectionId) {
+    selectedWorkIds.value = [];
+    coverWorkIds.value = [];
+    return;
+  }
+  const collection = availableCollections.value.find((item) => item.id === collectionId);
+  if (!collection) {
+    selectedWorkIds.value = [];
+    coverWorkIds.value = [];
+    return;
+  }
+  const allowedIds = new Set((collection.works ?? []).map((work) => work.id));
+  selectedWorkIds.value = selectedWorkIds.value.filter((id) => allowedIds.has(id));
+  coverWorkIds.value = coverWorkIds.value.filter((id) => allowedIds.has(id));
 }
 
 function formatWorkMeta(work: WorkSummary): string {
@@ -393,6 +451,11 @@ function validateForm(): boolean {
     uni.showToast({ title: '请输入展览标题', icon: 'none' });
     return false;
   }
+  const combinedWorkIds = getCombinedWorkIds();
+  if (combinedWorkIds.length === 0) {
+    uni.showToast({ title: '请至少选择一个展品', icon: 'none' });
+    return false;
+  }
   if (coverPreview.value.length === 0) {
     uni.showToast({ title: '请至少选择一张封面图片', icon: 'none' });
     return false;
@@ -409,13 +472,12 @@ async function submit(): Promise<void> {
   }
   submitting.value = true;
   const coverUrls = coverPreview.value.map((item) => item.url);
+  const workIds = getCombinedWorkIds();
   const payload = {
     name: form.name.trim(),
     description: form.description.trim() || undefined,
-    startDate: form.startDate || undefined,
-    endDate: form.endDate || undefined,
-    workIds: Array.from(new Set([...selectedWorkIds.value, ...coverWorkIds.value])),
-    collectionIds: selectedCollectionIds.value,
+    workIds,
+    collectionIds: selectedCollectionId.value ? [selectedCollectionId.value] : [],
     coverUrls,
   };
   try {
@@ -433,15 +495,8 @@ async function submit(): Promise<void> {
   }
 }
 
-function formatDateInput(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) {
-    return '';
-  }
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+function getCombinedWorkIds(): string[] {
+  return Array.from(new Set([...selectedWorkIds.value, ...coverWorkIds.value]));
 }
 
 function formatDateLabel(iso?: string): string {
@@ -546,18 +601,6 @@ function getErrorMessage(reason: unknown): string {
   color: #1f1f1f;
 }
 
-.schedule {
-  display: flex;
-  gap: 16px;
-}
-
-.schedule-item {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
 .section-header {
   display: flex;
   justify-content: space-between;
@@ -575,49 +618,76 @@ function getErrorMessage(reason: unknown): string {
   color: #8a94a6;
 }
 
-.collection-grid {
+.collection-picker {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.collection-item {
-  padding: 14px;
-  border-radius: 16px;
-  border: 1px dashed rgba(31, 122, 236, 0.3);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  background: rgba(31, 122, 236, 0.04);
-}
-
-.collection-item.is-selected {
-  border-style: solid;
-  border-color: #1f7aec;
-  background: rgba(31, 122, 236, 0.1);
-}
-
-.collection-header {
-  display: flex;
-  justify-content: space-between;
+  gap: 10px;
   align-items: center;
 }
 
-.collection-title {
+.collection-picker__picker {
+  flex: 1;
+}
+
+.collection-picker__trigger {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(31, 122, 236, 0.04);
+  border: 1px dashed rgba(31, 122, 236, 0.24);
+}
+
+.collection-picker__info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.collection-picker__title {
   font-size: 14px;
   font-weight: 600;
   color: #1f1f1f;
 }
 
-.collection-count {
+.collection-picker__placeholder {
+  font-size: 13px;
+  color: #8a94a6;
+}
+
+.collection-picker__count {
   font-size: 12px;
   color: #5f6b83;
 }
 
-.collection-desc {
-  font-size: 12px;
+.collection-picker__arrow {
+  font-size: 18px;
+  color: #8a94a6;
+  padding-left: 10px;
+}
+
+.collection-picker__clear {
+  padding: 10px 16px;
+  border-radius: 14px;
+  border: none;
+  background: rgba(31, 122, 236, 0.12);
+  color: #1f7aec;
+  font-size: 13px;
+}
+
+.collection-preview {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(31, 122, 236, 0.08);
   color: #5f6b83;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.collection-preview__desc {
+  display: block;
+  color: #5f6b83;
 }
 
 .empty-tip {
@@ -634,11 +704,6 @@ function getErrorMessage(reason: unknown): string {
 .work-item {
   display: flex;
   gap: 12px;
-  align-items: center;
-  padding: 12px;
-  border-radius: 16px;
-  background: rgba(31, 122, 236, 0.04);
-  border: 1px dashed rgba(31, 122, 236, 0.24);
 }
 
 .work-item.is-selected {
