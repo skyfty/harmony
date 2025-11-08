@@ -17,6 +17,38 @@
       </view>
     </view>
 
+    <view class="my-works-card">
+      <view class="my-works-header">
+        <text class="my-works-title">我的作品</text>
+        <text class="my-works-action" @tap="goWorksList">更多</text>
+      </view>
+      <view v-if="worksLoading" class="my-works-message">加载中…</view>
+      <view v-else-if="worksError" class="my-works-message">{{ worksError }}</view>
+      <view v-else-if="featuredWorks.length" class="my-works-grid">
+        <view class="my-work-card" v-for="work in featuredWorks" :key="work.id" @tap="openWorkDetail(work.id)">
+          <view class="my-work-thumb" :style="{ background: work.background }">
+            <image v-if="work.thumbnail" class="my-work-image" :src="work.thumbnail" mode="aspectFill" />
+            <text v-else class="my-work-thumb-title">{{ work.initial }}</text>
+          </view>
+          <view class="my-work-info">
+            <text class="my-work-name">{{ work.title }}</text>
+            <text class="my-work-meta">{{ work.metaText }}</text>
+            <view class="my-work-stats">
+              <view class="my-work-stat">
+                <text class="my-work-stat-icon">★</text>
+                <text class="my-work-stat-value">{{ work.ratingText }}</text>
+              </view>
+              <view class="my-work-stat">
+                <text class="my-work-stat-icon likes">❤</text>
+                <text class="my-work-stat-value">{{ work.likesText }}</text>
+              </view>
+            </view>
+          </view>
+        </view>
+      </view>
+      <view v-else class="my-works-message">暂未上传作品</view>
+    </view>
+
     <view class="collections-card">
       <view class="collections-header">
         <text class="collections-title">最近作品集</text>
@@ -49,38 +81,6 @@
         </view>
       </view>
       <view v-else class="collections-message">暂未创建作品集</view>
-    </view>
-
-    <view class="my-works-card">
-      <view class="my-works-header">
-        <text class="my-works-title">我的作品</text>
-        <text class="my-works-action" @tap="goWorksList">更多</text>
-      </view>
-      <view v-if="worksLoading" class="my-works-message">加载中…</view>
-      <view v-else-if="worksError" class="my-works-message">{{ worksError }}</view>
-      <view v-else-if="featuredWorks.length" class="my-works-grid">
-        <view class="my-work-card" v-for="work in featuredWorks" :key="work.id" @tap="openWorkDetail(work.id)">
-          <view class="my-work-thumb" :style="{ background: work.background }">
-            <image v-if="work.thumbnail" class="my-work-image" :src="work.thumbnail" mode="aspectFill" />
-            <text v-else class="my-work-thumb-title">{{ work.initial }}</text>
-          </view>
-          <view class="my-work-info">
-            <text class="my-work-name">{{ work.title }}</text>
-            <text class="my-work-meta">{{ work.metaText }}</text>
-            <view class="my-work-stats">
-              <view class="my-work-stat">
-                <text class="my-work-stat-icon">★</text>
-                <text class="my-work-stat-value">{{ work.ratingText }}</text>
-              </view>
-              <view class="my-work-stat">
-                <text class="my-work-stat-icon likes">❤</text>
-                <text class="my-work-stat-value">{{ work.likesText }}</text>
-              </view>
-            </view>
-          </view>
-        </view>
-      </view>
-      <view v-else class="my-works-message">暂未上传作品</view>
     </view>
 
     <BottomNav active="work" @navigate="handleNavigate" />

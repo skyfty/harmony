@@ -75,14 +75,16 @@
     <view class="collections-card">
       <view class="collections-header">
         <text class="collections-title">添加到已有作品集</text>
-        <text class="collections-subtitle" v-if="collections.length">共 {{ collections.length }} 个可选</text>
+        <text class="collections-subtitle" v-if="existingCollectionsSummary">{{ existingCollectionsSummary }}</text>
       </view>
-      <view v-if="collections.length" class="collection-list">
-        <view class="collection-item" v-for="collection in collections" :key="collection.id">
-          <view class="collection-cover" :style="{ background: collection.cover }"></view>
+      <view v-if="collectionsLoading" class="collection-empty">加载中…</view>
+      <view v-else-if="collectionsError" class="collection-empty">{{ collectionsError }}</view>
+      <view v-else-if="existingCollections.length" class="collection-list">
+        <view class="collection-item" v-for="collection in existingCollections" :key="collection.id">
+          <view class="collection-cover" :style="{ background: collection.background }"></view>
           <view class="collection-info">
             <text class="collection-title">{{ collection.title }}</text>
-            <text class="collection-meta">共 {{ collection.works.length }} 个作品</text>
+            <text class="collection-meta">共 {{ collection.workCount }} 个作品</text>
           </view>
           <button class="link-btn" :disabled="!canAppendToExisting" @tap="appendToCollection(collection.id)">
             添加
@@ -101,14 +103,34 @@
 </template>
 <script setup lang="ts">
 import { computed, ref, watch, watchEffect } from 'vue';
-import { onLoad } from '@dcloudio/uni-app';
-import { storeToRefs } from 'pinia';
-import { apiListResourceCategories, apiUploadAsset } from '@/api/miniprogram';
+import { onLoad, onShow } from '@dcloudio/uni-app';
+import {
+  apiListResourceCategories,
+  apiUploadAsset,
+  apiGetCollections,
+  type CollectionSummary,
+} from '@/api/miniprogram';
 import { useWorksStore, type WorkItem, type PendingWorkUpload, type NewWorkInput } from '@/stores/worksStore';
 import { formatWorkSize, prependWorkHistoryEntry } from '@/utils/workHistory';
 
 const worksStore = useWorksStore();
-const { collections } = storeToRefs(worksStore);
+const collectionsLoading = ref(false);
+const collectionsError = ref('');
+
+type ExistingCollectionOption = {
+  id: string;
+  title: string;
+  background: string;
+  workCount: number;
+  summary: CollectionSummary;
+};
+
+const existingCollections = ref<ExistingCollectionOption[]>([]);
+const existingCollectionsSummary = computed(() =>
+  existingCollections.value.length ? `共 ${existingCollections.value.length} 个可选` : '',
+);
+
+const currentUserId = computed(() => worksStore.profile?.user?.id ?? '');
 
 const workIds = ref<string[]>([]);
 const title = ref('');
@@ -196,7 +218,7 @@ const canCreate = computed(
 );
 
 const canAppendToExisting = computed(
-  () => selectedExistingWorks.value.length > 0 && !pendingUploads.value.length && !submitting.value,
+  () => (selectedExistingWorks.value.length > 0 || pendingUploads.value.length > 0) && !submitting.value,
 );
 
 const headerSubtitle = computed(() =>
@@ -260,7 +282,21 @@ onLoad((options) => {
     const decoded = decodeURIComponent(raw);
     workIds.value = Array.from(new Set(decoded.split(',').filter(Boolean)));
   }
+  void initializeCollections();
 });
+
+onShow(() => {
+  void loadExistingCollections();
+});
+
+watch(
+  () => currentUserId.value,
+  (id, previous) => {
+    if (previous && id && id !== previous) {
+      void loadExistingCollections({ force: true });
+    }
+  },
+);
 
 // 仅在首次进入且用户未手动编辑时，帮助生成一个默认标题；
 // 一旦用户编辑过标题（包括清空），不再强制回填。
@@ -271,6 +307,81 @@ watchEffect(() => {
     hasAutoTitled.value = true;
   }
 });
+
+async function initializeCollections() {
+  try {
+    await worksStore.ensureProfile();
+  } catch (error) {
+    console.warn('Failed to ensure profile before loading collections', error);
+  }
+  await loadExistingCollections({ force: true });
+}
+
+async function loadExistingCollections(options: { force?: boolean } = {}) {
+  if (collectionsLoading.value && !options.force) {
+    return;
+  }
+  collectionsLoading.value = true;
+  collectionsError.value = '';
+  try {
+    if (!currentUserId.value) {
+      await worksStore.ensureProfile().catch(() => undefined);
+    }
+    const response = await apiGetCollections();
+    const ownerId = currentUserId.value;
+    const source = Array.isArray(response.collections) ? response.collections : [];
+    const filtered = ownerId ? source.filter((item) => item.ownerId === ownerId) : source;
+    existingCollections.value = filtered.map((collection, index) => mapCollectionOption(collection, index));
+  } catch (error) {
+    collectionsError.value = getErrorMessage(error);
+    existingCollections.value = [];
+    uni.showToast({ title: collectionsError.value, icon: 'none' });
+  } finally {
+    collectionsLoading.value = false;
+  }
+}
+
+function mapCollectionOption(summary: CollectionSummary, index: number): ExistingCollectionOption {
+  const gradient = fallbackGradients[index % fallbackGradients.length];
+  const coverUrl = extractCollectionCover(summary);
+  const background = coverUrl ? `url(${coverUrl}) center/cover no-repeat` : gradient;
+  return {
+    id: summary.id,
+    title: summary.title || '未命名作品集',
+    background,
+    workCount: typeof summary.workCount === 'number' ? summary.workCount : summary.works?.length ?? 0,
+    summary,
+  };
+}
+
+function extractCollectionCover(summary: CollectionSummary): string {
+  const normalized = normalizeAssetUrl(summary.coverUrl);
+  if (normalized) {
+    return normalized;
+  }
+  const candidate = (summary.works ?? []).find((work) => work.thumbnailUrl || work.mediaType === 'image');
+  if (candidate) {
+    return normalizeAssetUrl(candidate.thumbnailUrl || (candidate.mediaType === 'image' ? candidate.fileUrl : ''));
+  }
+  return '';
+}
+
+function normalizeAssetUrl(value?: string | null): string {
+  if (!value) {
+    return '';
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return '';
+  }
+  if (trimmed.startsWith('url(')) {
+    const match = trimmed.match(/^url\((.*)\)$/i);
+    if (match && match[1]) {
+      return match[1].replace(/^['"]|['"]$/g, '');
+    }
+  }
+  return trimmed;
+}
 
 async function chooseCoverFromDevice() {
   try {
@@ -473,24 +584,43 @@ function recordCreationHistory(createdWorkIds: string[]) {
 }
 
 async function appendToCollection(collectionId: string) {
-  if (!selectedExistingWorks.value.length) {
+  const hasExisting = selectedExistingWorks.value.length > 0;
+  const hasPending = pendingUploads.value.length > 0;
+  if (!hasExisting && !hasPending) {
     uni.showToast({ title: '暂无待添加的作品', icon: 'none' });
     return;
   }
-  if (pendingUploads.value.length) {
-    uni.showToast({ title: '请先创建并保存新作品', icon: 'none' });
+  if (submitting.value) {
     return;
   }
+  submitting.value = true;
+  const loadingTitle = hasPending ? '正在上传…' : '处理中…';
+  uni.showLoading({ title: loadingTitle, mask: true });
   try {
-    await worksStore.addWorksToCollection(workIds.value, collectionId);
+    const newWorkIds = await uploadPendingWorks();
+    if (newWorkIds.length) {
+      recordCreationHistory(newWorkIds);
+      workIds.value = Array.from(new Set([...workIds.value, ...newWorkIds]));
+    }
+    const idsToAppend = Array.from(new Set([...workIds.value]));
+    if (!idsToAppend.length) {
+      throw new Error('没有可添加的作品');
+    }
+    await worksStore.addWorksToCollection(idsToAppend, collectionId);
+    worksStore.clearPendingUploads();
+    coverSelection.value = null;
+    uni.hideLoading();
     uni.showToast({ title: '已加入作品集', icon: 'success' });
     setTimeout(() => {
       const encodedId = encodeURIComponent(collectionId);
       uni.redirectTo({ url: `/pages/collections/detail/index?id=${encodedId}` });
     }, 400);
   } catch (error) {
-    const message = error instanceof Error ? error.message : '添加失败，请稍后重试';
+    uni.hideLoading();
+    const message = getErrorMessage(error);
     uni.showToast({ title: message, icon: 'none' });
+  } finally {
+    submitting.value = false;
   }
 }
 
@@ -526,6 +656,19 @@ function formatNumber(value: number): string {
     return `${normalized.toFixed(normalized >= 10 ? 0 : 1)}K`;
   }
   return value.toString();
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) {
+      return message.trim();
+    }
+  }
+  if (typeof error === 'string' && error.trim()) {
+    return error.trim();
+  }
+  return '加载失败，请稍后重试';
 }
 </script>
 <style scoped lang="scss">
