@@ -23,45 +23,15 @@
       <text class="state-desc">去创作一个新的作品集吧</text>
     </view>
 
-    <view v-else class="waterfall">
-      <view class="waterfall-column">
+    <view v-else class="waterfall" :class="{ 'waterfall--single': columnCount === 1 }">
+      <view
+        v-for="(column, columnIndex) in columns"
+        :key="columnIndex"
+        class="waterfall-column"
+        :style="{ width: columnWidth }"
+      >
         <view
-          v-for="card in leftColumn"
-          :key="card.id"
-          class="collection-card"
-          @tap="openCollection(card.id)"
-        >
-          <view class="card-cover" :style="{ background: card.background }">
-            <image
-              v-if="card.coverImage"
-              class="card-cover__image"
-              :src="card.coverImage"
-              mode="aspectFill"
-            />
-            <view v-else class="card-cover__placeholder">
-              <text>暂无封面</text>
-            </view>
-            <view class="card-cover__badge">{{ card.workCount }} 个作品</view>
-          </view>
-          <view class="card-body">
-            <text class="card-title">{{ card.title }}</text>
-            <text class="card-desc">{{ card.description }}</text>
-            <view class="card-stats">
-              <view class="stat-item">
-                <text class="stat-icon stat-icon--star" :class="{ 'is-active': card.rating > 0 || card.userRating > 0 }">★</text>
-                <text class="stat-value">{{ formatRatingValue(card.rating) }}</text>
-              </view>
-              <view class="stat-item">
-                <text class="stat-icon stat-icon--heart" :class="{ 'is-active': card.liked }">❤</text>
-                <text class="stat-value">{{ formatCount(card.likes) }}</text>
-              </view>
-            </view>
-          </view>
-        </view>
-      </view>
-      <view class="waterfall-column">
-        <view
-          v-for="card in rightColumn"
+          v-for="card in column"
           :key="card.id"
           class="collection-card"
           @tap="openCollection(card.id)"
@@ -101,7 +71,7 @@
 </template>
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { onLoad, onPullDownRefresh } from '@dcloudio/uni-app';
+import { onLoad, onPullDownRefresh, onUnload } from '@dcloudio/uni-app';
 import { apiGetCollections, type CollectionSummary } from '@/api/miniprogram';
 
 interface CollectionCard {
@@ -121,6 +91,7 @@ const loading = ref(false);
 const error = ref('');
 const total = ref(0);
 const collections = ref<CollectionSummary[]>([]);
+const columnCount = ref(1);
 
 const gradientPalette = [
   'linear-gradient(135deg, #ffe0f2, #ffd0ec)',
@@ -144,22 +115,60 @@ const cards = computed<CollectionCard[]>(() =>
     rating: Number(item.averageRating ?? 0),
     likes: Number(item.likesCount ?? 0),
     liked: Boolean(item.liked),
-    userRating: item.userRating?.score ?? 0
+    userRating: item.userRating?.score ?? 0,
   }))
 );
 
-const leftColumn = computed(() => cards.value.filter((_, index) => index % 2 === 0));
-const rightColumn = computed(() => cards.value.filter((_, index) => index % 2 === 1));
+const columns = computed(() => {
+  const count = Math.max(1, columnCount.value);
+  const bucket = Array.from({ length: count }, () => [] as CollectionCard[]);
+  cards.value.forEach((card, index) => {
+    bucket[index % count].push(card);
+  });
+  return bucket;
+});
 
 const totalDisplay = computed(() => (total.value > 0 ? total.value : cards.value.length));
 
+const COLUMN_GAP = 12;
+const MIN_CARD_WIDTH = 220;
+const MAX_COLUMNS = 4;
+const PAGE_HORIZONTAL_PADDING = 40;
+const columnWidth = computed(() => {
+  const count = Math.max(1, columnCount.value);
+  const gapTotal = (count - 1) * COLUMN_GAP;
+  return `calc((100% - ${gapTotal}px) / ${count})`;
+});
+
+type WindowResizeCallback = (result: { size: { windowWidth: number; windowHeight: number } }) => void;
+let resizeHandler: WindowResizeCallback | null = null;
+
 onLoad(() => {
+  uni.getSystemInfo({
+    success: ({ windowWidth }) => updateColumnCount(windowWidth),
+    fail: () => updateColumnCount(375),
+  });
+  resizeHandler = (result) => updateColumnCount(result.size.windowWidth);
+  uni.onWindowResize(resizeHandler);
   void fetchCollections();
+});
+
+onUnload(() => {
+  if (resizeHandler) {
+    uni.offWindowResize(resizeHandler);
+    resizeHandler = null;
+  }
 });
 
 onPullDownRefresh(() => {
   void fetchCollections({ silent: true });
 });
+
+function updateColumnCount(windowWidth: number): void {
+  const availableWidth = Math.max(windowWidth - PAGE_HORIZONTAL_PADDING, MIN_CARD_WIDTH);
+  const estimated = Math.max(1, Math.floor((availableWidth + COLUMN_GAP) / (MIN_CARD_WIDTH + COLUMN_GAP)));
+  columnCount.value = Math.min(MAX_COLUMNS, estimated);
+}
 
 function extractCssImage(value?: string): string {
   if (!value) {
@@ -341,11 +350,15 @@ function formatCount(value: number): string {
   align-items: flex-start;
 }
 
+.waterfall--single {
+  justify-content: center;
+}
+
 .waterfall-column {
-  flex: 1 1 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  flex: 0 0 auto;
 }
 
 .collection-card {
@@ -456,13 +469,13 @@ function formatCount(value: number): string {
   text-align: center;
 }
 
-@media screen and (max-width: 380px) {
+@media screen and (max-width: 420px) {
   .waterfall {
     flex-direction: column;
   }
 
   .waterfall-column {
-    width: 100%;
+    width: 100% !important;
   }
 }
 </style>
