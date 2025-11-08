@@ -109,7 +109,15 @@
 
     <view v-if="previewModal.visible" class="preview-modal">
       <view class="preview-modal__mask" @tap="closeWorkPreview"></view>
-      <view class="preview-modal__panel" @tap.stop>
+      <view
+        class="preview-modal__panel"
+        @tap.stop
+        @touchstart.stop="handlePreviewTouchStart"
+        @touchmove.stop.prevent="handlePreviewTouchMove"
+        @touchend.stop="handlePreviewTouchEnd"
+        @touchcancel.stop="handlePreviewTouchCancel"
+      >
+        <button class="preview-modal__close" @tap="closeWorkPreview">×</button>
         <view
           class="preview-modal__media"
           :style="{ background: previewModal.preview ? '#000' : previewModal.gradient }"
@@ -145,7 +153,7 @@
             placeholder="补充作品描述"
           />
           <view class="preview-modal__actions">
-            <button class="preview-modal__btn preview-modal__btn--cancel" @tap="closeWorkPreview">取消</button>
+            <button class="preview-modal__btn preview-modal__btn--delete" @tap="handlePreviewRemove">删除</button>
             <button class="preview-modal__btn preview-modal__btn--save" @tap="applyPreviewEdits">保存</button>
           </view>
         </view>
@@ -235,6 +243,7 @@ const editableEntries = reactive<Record<string, EditableEntry>>({});
 type PreviewModalState = {
   visible: boolean;
   itemId: string;
+  index: number;
   kind: DisplayItem['kind'];
   preview: string;
   gradient: string;
@@ -248,6 +257,7 @@ type PreviewModalState = {
 const previewModal = reactive<PreviewModalState>({
   visible: false,
   itemId: '',
+  index: -1,
   kind: 'existing',
   preview: '',
   gradient: defaultGradient,
@@ -256,6 +266,22 @@ const previewModal = reactive<PreviewModalState>({
   sizeLabel: '',
   likes: 0,
   rating: 0,
+});
+
+type PreviewSwipeState = {
+  active: boolean;
+  startX: number;
+  startY: number;
+  deltaX: number;
+  lockDirection: '' | 'horizontal' | 'vertical';
+};
+
+const previewSwipe = reactive<PreviewSwipeState>({
+  active: false,
+  startX: 0,
+  startY: 0,
+  deltaX: 0,
+  lockDirection: '',
 });
 
 const fallbackGradients = [
@@ -418,19 +444,13 @@ watch(
     if (!previewModal.visible) {
       return;
     }
-    const current = items.find((candidate) => candidate.id === previewModal.itemId);
-    if (!current) {
+    const index = items.findIndex((candidate) => candidate.id === previewModal.itemId);
+    if (index === -1) {
       closeWorkPreview();
       return;
     }
-    previewModal.preview = current.preview || '';
-    previewModal.gradient = current.gradient;
-    previewModal.sizeLabel = current.sizeLabel;
-    previewModal.likes = current.likes;
-    previewModal.rating = current.rating;
-    const entry = editableEntries[current.id];
-    previewModal.name = entry ? entry.name : current.name;
-    previewModal.description = entry ? entry.description : current.description;
+    const current = items[index];
+    updatePreviewModalFromItem(current, index);
   },
   { deep: true },
 );
@@ -524,34 +544,45 @@ function syncPendingEntries() {
   });
 }
 
-function openWorkPreview(item: DisplayItem) {
-  const entry = editableEntries[item.id];
-  previewModal.visible = true;
+function updatePreviewModalFromItem(item: DisplayItem, index: number) {
   previewModal.itemId = item.id;
+  previewModal.index = index;
   previewModal.kind = item.kind;
   previewModal.preview = item.preview || '';
   previewModal.gradient = item.gradient;
-  previewModal.name = entry ? entry.name : item.name;
-  previewModal.description = entry ? entry.description : item.description;
   previewModal.sizeLabel = item.sizeLabel;
   previewModal.likes = item.likes;
   previewModal.rating = item.rating;
+  const entry = editableEntries[item.id];
+  previewModal.name = entry ? entry.name : item.name;
+  previewModal.description = entry ? entry.description : item.description;
+}
+
+function openWorkPreview(item: DisplayItem) {
+  const items = displayItems.value;
+  const index = items.findIndex((candidate) => candidate.id === item.id);
+  updatePreviewModalFromItem(item, index >= 0 ? index : 0);
+  previewModal.visible = true;
 }
 
 function closeWorkPreview() {
   previewModal.visible = false;
   previewModal.itemId = '';
+  previewModal.index = -1;
 }
 
-function applyPreviewEdits() {
+function applyPreviewEdits(options: { closeAfterSave?: boolean; showToast?: boolean } = {}): boolean {
+  const { closeAfterSave = true, showToast = true } = options;
   if (!previewModal.itemId) {
-    closeWorkPreview();
-    return;
+    if (closeAfterSave) {
+      closeWorkPreview();
+    }
+    return false;
   }
   const item = rawDisplayItems.value.find((candidate) => candidate.id === previewModal.itemId);
   if (!item) {
     closeWorkPreview();
-    return;
+    return false;
   }
   let entry = editableEntries[item.id];
   const fallbackEntry: EditableEntry = entry ?? {
@@ -581,10 +612,100 @@ function applyPreviewEdits() {
     entry.originalName = name;
     entry.originalDescription = description;
   }
+  const trimmedOriginal = previewModal.name.trim();
   previewModal.name = name;
   previewModal.description = description;
-  uni.showToast({ title: '已保存', icon: 'none' });
-  closeWorkPreview();
+  if (showToast) {
+    const message = trimmedOriginal ? '已保存' : '作品名称不能为空，已恢复原名称';
+    uni.showToast({ title: message, icon: 'none' });
+  }
+  if (closeAfterSave) {
+    closeWorkPreview();
+  }
+  return true;
+}
+
+function navigatePreview(direction: 'next' | 'prev') {
+  if (!previewModal.visible) {
+    return;
+  }
+  const items = displayItems.value;
+  if (!items.length) {
+    return;
+  }
+  applyPreviewEdits({ closeAfterSave: false, showToast: false });
+  const currentIndex = previewModal.index >= 0 ? previewModal.index : items.findIndex((item) => item.id === previewModal.itemId);
+  if (currentIndex === -1) {
+    closeWorkPreview();
+    return;
+  }
+  const step = direction === 'next' ? 1 : -1;
+  const nextIndex = (currentIndex + step + items.length) % items.length;
+  const nextItem = items[nextIndex];
+  updatePreviewModalFromItem(nextItem, nextIndex);
+}
+
+function handlePreviewRemove() {
+  if (!previewModal.itemId) {
+    return;
+  }
+  confirmRemove(previewModal.itemId);
+}
+
+function handlePreviewTouchStart(event: TouchEvent) {
+  const touch = event.touches?.[0];
+  if (!touch) {
+    return;
+  }
+  previewSwipe.active = true;
+  previewSwipe.startX = touch.clientX;
+  previewSwipe.startY = touch.clientY;
+  previewSwipe.deltaX = 0;
+  previewSwipe.lockDirection = '';
+}
+
+function handlePreviewTouchMove(event: TouchEvent) {
+  if (!previewSwipe.active) {
+    return;
+  }
+  const touch = event.touches?.[0];
+  if (!touch) {
+    return;
+  }
+  const dx = touch.clientX - previewSwipe.startX;
+  const dy = touch.clientY - previewSwipe.startY;
+  if (!previewSwipe.lockDirection) {
+    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+      previewSwipe.lockDirection = Math.abs(dx) > Math.abs(dy) ? 'horizontal' : 'vertical';
+    }
+  }
+  if (previewSwipe.lockDirection === 'horizontal') {
+    event.preventDefault();
+  }
+  previewSwipe.deltaX = dx;
+}
+
+function handlePreviewTouchEnd() {
+  if (!previewSwipe.active) {
+    return;
+  }
+  if (previewSwipe.lockDirection === 'horizontal') {
+    const threshold = 50;
+    if (previewSwipe.deltaX > threshold) {
+      navigatePreview('prev');
+    } else if (previewSwipe.deltaX < -threshold) {
+      navigatePreview('next');
+    }
+  }
+  previewSwipe.active = false;
+  previewSwipe.deltaX = 0;
+  previewSwipe.lockDirection = '';
+}
+
+function handlePreviewTouchCancel() {
+  previewSwipe.active = false;
+  previewSwipe.deltaX = 0;
+  previewSwipe.lockDirection = '';
 }
 
 async function applyExistingWorkEdits(): Promise<void> {
@@ -637,6 +758,9 @@ async function applyExistingWorkEdits(): Promise<void> {
 }
 
 async function applyWorkEditsBeforeSubmit(): Promise<void> {
+  if (previewModal.visible) {
+    applyPreviewEdits({ closeAfterSave: false, showToast: false });
+  }
   await applyExistingWorkEdits();
   syncPendingEntries();
 }
@@ -670,6 +794,20 @@ async function loadExistingCollections(options: { force?: boolean } = {}) {
     existingCollections.value = [];
     uni.showToast({ title: collectionsError.value, icon: 'none' });
   } finally {
+  function updatePreviewModalFromItem(item: DisplayItem, index: number) {
+    previewModal.itemId = item.id;
+    previewModal.index = index;
+    previewModal.kind = item.kind;
+    previewModal.preview = item.preview || '';
+    previewModal.gradient = item.gradient;
+    previewModal.sizeLabel = item.sizeLabel;
+    previewModal.likes = item.likes;
+    previewModal.rating = item.rating;
+    const entry = editableEntries[item.id];
+    previewModal.name = entry ? entry.name : item.name;
+    previewModal.description = entry ? entry.description : item.description;
+  }
+
     collectionsLoading.value = false;
   }
 }
@@ -1479,6 +1617,22 @@ function getErrorMessage(error: unknown): string {
   z-index: 1;
 }
 
+.preview-modal__close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(15, 23, 42, 0.12);
+  color: #1f1f1f;
+  font-size: 20px;
+  line-height: 32px;
+  text-align: center;
+  z-index: 2;
+}
+
 .preview-modal__media {
   width: 100%;
   height: 220px;
@@ -1583,9 +1737,9 @@ function getErrorMessage(error: unknown): string {
   border: none;
 }
 
-.preview-modal__btn--cancel {
-  background: rgba(31, 122, 236, 0.1);
-  color: #1f7aec;
+.preview-modal__btn--delete {
+  background: rgba(217, 48, 37, 0.12);
+  color: #d93025;
 }
 
 .preview-modal__btn--save {
