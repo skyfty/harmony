@@ -23,7 +23,7 @@
         <text class="history-action" @tap="goManage">管理</text>
       </view>
       <view class="history-list">
-          <view class="history-item" v-for="item in workHistory" :key="item.id">
+          <view class="history-item" v-for="item in recentHistory" :key="item.id">
             <view class="history-preview" :style="{ background: item.gradient }"></view>
             <view class="history-info">
               <text class="history-name">{{ item.name }}</text>
@@ -88,6 +88,7 @@ const worksStore = useWorksStore();
 const loading = ref(false);
 
 const workHistory = ref<HistoryItem[]>([]);
+const recentHistory = computed(() => workHistory.value.slice(0, 3));
 
 function refreshHistory() {
   const stored = loadWorkHistory();

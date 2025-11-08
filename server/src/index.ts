@@ -3,6 +3,9 @@ import Koa from 'koa'
 import cors from '@koa/cors'
 import logger from 'koa-logger'
 import jsonError from 'koa-json-error'
+import { createReadStream } from 'node:fs'
+import { stat } from 'node:fs/promises'
+import path from 'node:path'
 import type { DefaultContext, DefaultState } from 'koa'
 import type Router from 'koa-router'
 import { appConfig } from '@/config/env'
@@ -55,6 +58,61 @@ async function bootstrap(): Promise<void> {
       text: false,
     }),
   )
+
+  const uploadsPrefix = (() => {
+    try {
+      const url = new URL(appConfig.assetPublicUrl)
+      return url.pathname.endsWith('/') ? url.pathname.slice(0, -1) : url.pathname
+    } catch {
+      return appConfig.assetPublicUrl.startsWith('/') ? appConfig.assetPublicUrl : '/uploads'
+    }
+  })()
+  const uploadsRoot = path.resolve(appConfig.assetStoragePath)
+
+  app.use(async (ctx, next) => {
+    if (!ctx.path.startsWith(uploadsPrefix)) {
+      return next()
+    }
+
+    const relativePath = ctx.path.slice(uploadsPrefix.length).replace(/^\/+/, '')
+    if (!relativePath) {
+      ctx.status = 404
+      return
+    }
+
+    let decodedPath = relativePath
+    try {
+      decodedPath = decodeURIComponent(relativePath)
+    } catch (error) {
+      console.warn('Failed to decode asset path, falling back to raw path:', error)
+    }
+
+    const filePath = path.resolve(uploadsRoot, decodedPath)
+    if (!filePath.startsWith(uploadsRoot)) {
+      ctx.status = 403
+      return
+    }
+
+    try {
+      const fileStat = await stat(filePath)
+      if (!fileStat.isFile()) {
+        ctx.status = 404
+        return
+      }
+
+      ctx.type = path.extname(filePath)
+      ctx.length = fileStat.size
+      ctx.set('Cache-Control', appConfig.isDevelopment ? 'no-store' : 'public, max-age=604800')
+      ctx.body = createReadStream(filePath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+        ctx.status = 404
+      } else {
+        console.error('Failed to serve uploaded asset:', error)
+        ctx.status = 500
+      }
+    }
+  })
 
   registerRoutes(app)
 

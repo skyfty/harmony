@@ -218,6 +218,10 @@ export function apiGetCollections(): Promise<{
   return get('/collections');
 }
 
+export function apiGetCollection(id: string): Promise<CollectionSummary> {
+  return get(`/collections/${id}`);
+}
+
 export function apiCreateCollection(payload: {
   title: string;
   description?: string;

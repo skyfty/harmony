@@ -7,8 +7,19 @@
       </view>
     </view>
 
-    <view v-if="collection" class="preview" :style="{ background: collection.cover || defaultGradient }">
-      <text class="preview-label">作品集封面</text>
+    <view v-if="collection" class="cover-card">
+      <view class="cover-card__preview">
+        <image
+          v-if="coverImage"
+          class="cover-card__image"
+          :src="coverImage"
+          mode="aspectFill"
+        />
+        <view v-else class="cover-card__placeholder" :style="{ background: coverBackground }">
+          <text class="cover-card__placeholder-text">暂无封面</text>
+        </view>
+      </view>
+      <text class="cover-card__caption">作品集封面</text>
     </view>
 
     <view v-if="collection" class="stats-card">
@@ -34,6 +45,17 @@
       </view>
       <view v-if="worksInCollection.length" class="works-grid">
         <view class="work-card" v-for="work in worksInCollection" :key="work.id" :style="{ background: work.gradient }">
+          <view class="work-card__preview" @tap="openWorkDetail(work.id)">
+            <image
+              v-if="workPreview(work)"
+              class="work-card__image"
+              :src="workPreview(work)"
+              mode="aspectFill"
+            />
+            <view v-else class="work-card__placeholder">
+              <text>暂无预览</text>
+            </view>
+          </view>
           <view class="work-info">
             <text class="work-name">{{ work.name }}</text>
             <text class="work-meta">评分 {{ work.rating.toFixed(1) }} · 喜欢 {{ work.likes }}</text>
@@ -48,37 +70,133 @@
     </view>
 
     <view v-else class="empty">
-      <text class="empty-title">未找到作品集</text>
-      <text class="empty-desc">请返回作品集列表或重新选择</text>
+      <text class="empty-title">{{ loadingError ? '加载失败' : '未找到作品集' }}</text>
+      <text class="empty-desc">{{ loadingError || '请返回作品集列表或重新选择' }}</text>
     </view>
   </view>
 </template>
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
-import { useWorksStore, type WorkItem, type CollectionItem } from '@/stores/worksStore';
+import {
+  apiGetCollection,
+  apiUpdateCollection,
+  type CollectionSummary,
+  type WorkSummary,
+} from '@/api/miniprogram';
 
-const worksStore = useWorksStore();
+type WorkMediaType = WorkSummary['mediaType'];
+
+interface WorkDisplay {
+  id: string;
+  name: string;
+  rating: number;
+  likes: number;
+  gradient: string;
+  type: WorkMediaType;
+  thumbnailUrl?: string;
+  fileUrl: string;
+}
 
 const collectionId = ref('');
 const initialWorkId = ref('');
+const collection = ref<CollectionSummary | null>(null);
+const loading = ref(false);
+const loadingError = ref('');
 const saving = ref(false);
 const editableTitle = ref('');
 const editableDescription = ref('');
 const defaultGradient = 'linear-gradient(135deg, #dff5ff, #c6ebff)';
 
-const collection = computed<CollectionItem | undefined>(() =>
-  collectionId.value ? worksStore.collectionMap[collectionId.value] : undefined,
-);
+const gradientPalette = [
+  'linear-gradient(135deg, #ffe0f2, #ffd0ec)',
+  'linear-gradient(135deg, #dff5ff, #c6ebff)',
+  'linear-gradient(135deg, #fff0ce, #ffe2a8)',
+  'linear-gradient(135deg, #e7e4ff, #f1eeff)',
+  'linear-gradient(135deg, #ffd6ec, #ffeaf5)',
+  'linear-gradient(135deg, #c1d8ff, #a0c5ff)',
+  'linear-gradient(135deg, #b7f5ec, #90e0d9)',
+  'linear-gradient(135deg, #ffd59e, #ffe8c9)',
+];
 
-const worksInCollection = computed<WorkItem[]>(() => {
+function ensureBackground(url: string | undefined, index: number): string {
+  if (url && url.startsWith('http')) {
+    return `url(${url})`;
+  }
+  const normalizedIndex = Number.isFinite(index) ? index : 0;
+  const paletteIndex = ((normalizedIndex % gradientPalette.length) + gradientPalette.length) % gradientPalette.length;
+  return gradientPalette[paletteIndex];
+}
+
+function extractCssImage(value?: string): string {
+  if (!value) {
+    return '';
+  }
+  const match = value.match(/^url\((.*)\)$/i);
+  if (match && match[1]) {
+    return match[1].replace(/^['"]|['"]$/g, '');
+  }
+  if (/^(https?:)?\/\//i.test(value) || value.startsWith('data:')) {
+    return value;
+  }
+  if (value.startsWith('linear-gradient')) {
+    return '';
+  }
+  return '';
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error && typeof error === 'object' && 'message' in error && typeof (error as { message: unknown }).message === 'string') {
+    return (error as { message: string }).message;
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+  return '加载失败，请稍后重试';
+}
+
+const worksInCollection = computed<WorkDisplay[]>(() => {
   if (!collection.value) {
     return [];
   }
-  return collection.value.works
-    .map((id) => worksStore.workMap[id])
-    .filter((item): item is WorkItem => Boolean(item));
+  return (collection.value.works ?? []).map((work, index) => ({
+    id: work.id,
+    name: work.title,
+    rating: Number(work.averageRating ?? 0),
+    likes: Number(work.likesCount ?? 0),
+    gradient: ensureBackground(work.thumbnailUrl, index),
+    type: (work.mediaType ?? 'image') as WorkMediaType,
+    thumbnailUrl: work.thumbnailUrl ?? undefined,
+    fileUrl: work.fileUrl,
+  }));
 });
+
+const coverImage = computed(() => {
+  const primary = extractCssImage(collection.value?.coverUrl);
+  if (primary) {
+    return primary;
+  }
+  const fallback = worksInCollection.value[0];
+  if (!fallback) {
+    return '';
+  }
+  return fallback.thumbnailUrl || (fallback.type === 'image' ? fallback.fileUrl : '');
+});
+
+const coverBackground = computed(() => {
+  const raw = collection.value?.coverUrl;
+  if (raw && raw.startsWith('linear-gradient')) {
+    return raw;
+  }
+  if (coverImage.value) {
+    return defaultGradient;
+  }
+  return defaultGradient;
+});
+
+function workPreview(work: WorkDisplay): string {
+  return work.thumbnailUrl || (work.type === 'image' ? work.fileUrl : '');
+}
 
 const canSave = computed(() => {
   if (!collection.value || saving.value) {
@@ -86,7 +204,7 @@ const canSave = computed(() => {
   }
   const title = editableTitle.value.trim();
   const desc = editableDescription.value.trim();
-  return title !== collection.value.title || desc !== collection.value.description;
+  return title !== (collection.value.title ?? '') || desc !== (collection.value.description ?? '');
 });
 
 const headerSubtitle = computed(() => {
@@ -94,7 +212,7 @@ const headerSubtitle = computed(() => {
     return '正在获取作品集信息';
   }
   const updated = collection.value.updatedAt ? `更新于 ${collection.value.updatedAt}` : '';
-  const total = `共 ${collection.value.works.length} 个作品`;
+  const total = `共 ${(collection.value.works ?? []).length} 个作品`;
   return [updated, total].filter(Boolean).join('  ');
 });
 
@@ -102,7 +220,7 @@ const averageRating = computed(() => {
   if (!worksInCollection.value.length) {
     return '--';
   }
-  const total = worksInCollection.value.reduce((sum, item) => sum + (item.rating ?? 0), 0);
+  const total = worksInCollection.value.reduce((sum, item) => sum + item.rating, 0);
   const avg = total / worksInCollection.value.length;
   return avg > 0 ? avg.toFixed(1) : '--';
 });
@@ -111,7 +229,7 @@ const totalLikes = computed(() => {
   if (!worksInCollection.value.length) {
     return '0';
   }
-  const sum = worksInCollection.value.reduce((acc, item) => acc + (item.likes ?? 0), 0);
+  const sum = worksInCollection.value.reduce((acc, item) => acc + item.likes, 0);
   return formatNumber(sum);
 });
 
@@ -121,52 +239,96 @@ const statBlocks = computed(() => [
   { icon: '❤', value: totalLikes.value, label: '累计喜欢' },
 ]);
 
+watch(
+  collection,
+  (value) => {
+    if (value) {
+      editableTitle.value = value.title ?? '';
+      editableDescription.value = value.description ?? '';
+      loadingError.value = '';
+    } else {
+      editableTitle.value = '';
+      editableDescription.value = '';
+    }
+  },
+  { immediate: true },
+);
+
+async function fetchCollectionDetail(id: string): Promise<void> {
+  if (!id || loading.value) {
+    return;
+  }
+  loading.value = true;
+  loadingError.value = '';
+  uni.showLoading({ title: '加载中', mask: true });
+  try {
+    const data = await apiGetCollection(id);
+    collection.value = data;
+  } catch (error) {
+    collection.value = null;
+    loadingError.value = getErrorMessage(error);
+    uni.showToast({ title: loadingError.value, icon: 'none' });
+  } finally {
+    loading.value = false;
+    uni.hideLoading();
+    uni.stopPullDownRefresh();
+  }
+}
+
+async function saveCollection(): Promise<void> {
+  if (!collection.value || !canSave.value) {
+    return;
+  }
+  saving.value = true;
+  try {
+    const response = await apiUpdateCollection(collection.value.id, {
+      title: editableTitle.value.trim(),
+      description: editableDescription.value.trim(),
+    });
+    collection.value = response;
+    uni.showToast({ title: '已保存', icon: 'success' });
+  } catch (error) {
+    uni.showToast({ title: getErrorMessage(error), icon: 'none' });
+  } finally {
+    saving.value = false;
+  }
+}
+
+function openWorkDetail(id: string): void {
+  uni.navigateTo({ url: `/pages/works/detail/index?id=${id}` });
+}
+
+async function removeWork(id: string): Promise<void> {
+  if (!collection.value) {
+    return;
+  }
+  uni.showLoading({ title: '处理中...', mask: true });
+  try {
+    const response = await apiUpdateCollection(collection.value.id, {
+      removeWorkIds: [id],
+    });
+    collection.value = response;
+    uni.showToast({ title: '已移出', icon: 'none' });
+  } catch (error) {
+    uni.showToast({ title: getErrorMessage(error), icon: 'none' });
+  } finally {
+    uni.hideLoading();
+  }
+}
+
 onLoad((options) => {
   const rawId = typeof options?.id === 'string' ? options.id : '';
   if (rawId) {
     collectionId.value = decodeURIComponent(rawId);
+    fetchCollectionDetail(collectionId.value);
+  } else {
+    loadingError.value = '未提供作品集 ID';
   }
   const rawWorkId = typeof options?.workId === 'string' ? options.workId : '';
   if (rawWorkId) {
     initialWorkId.value = decodeURIComponent(rawWorkId);
   }
 });
-
-watch(
-  collection,
-  (value) => {
-    if (value) {
-      editableTitle.value = value.title;
-      editableDescription.value = value.description;
-    }
-  },
-  { immediate: true },
-);
-
-function saveCollection() {
-  if (!collection.value || !canSave.value) {
-    return;
-  }
-  saving.value = true;
-  worksStore.updateCollection(collection.value.id, {
-    title: editableTitle.value.trim(),
-    description: editableDescription.value.trim(),
-  });
-  saving.value = false;
-  uni.showToast({ title: '已保存', icon: 'success' });
-}
-
-function openWorkDetail(id: string) {
-  uni.navigateTo({ url: `/pages/works/detail/index?id=${id}` });
-}
-
-function removeWork(id: string) {
-  if (!collection.value) {
-    return;
-  }
-  worksStore.removeWorkFromCollection(id, collection.value.id);
-  uni.showToast({ title: '已移出', icon: 'none' });
-}
 
 function formatNumber(value: number): string {
   if (value <= 0) {
@@ -214,22 +376,51 @@ function formatNumber(value: number): string {
   color: #8a94a6;
 }
 
-.preview {
-  height: 220px;
+.cover-card {
+  background: #ffffff;
   border-radius: 20px;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+  padding: 20px;
+  box-shadow: 0 12px 32px rgba(31, 122, 236, 0.08);
   display: flex;
-  align-items: flex-end;
-  padding: 16px;
-  color: #ffffff;
-  font-weight: 600;
-  font-size: 16px;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.preview-label {
-  background: rgba(0, 0, 0, 0.25);
-  padding: 6px 12px;
+.cover-card__preview {
+  height: 220px;
+  border-radius: 16px;
+  overflow: hidden;
+  position: relative;
+  background: #f0f4ff;
+}
+
+.cover-card__image {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.cover-card__placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.cover-card__placeholder-text {
+  padding: 8px 14px;
   border-radius: 12px;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.cover-card__caption {
+  font-size: 13px;
+  color: #5f6b83;
 }
 
 .stats-card {
@@ -371,10 +562,36 @@ function formatNumber(value: number): string {
   gap: 12px;
 }
 
+.work-card__preview {
+  height: 150px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.16);
+  position: relative;
+}
+
+.work-card__image {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.work-card__placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.9);
+}
+
 .work-info {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  margin-top: 4px;
 }
 
 .work-name {

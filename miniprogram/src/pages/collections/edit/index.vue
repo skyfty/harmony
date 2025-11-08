@@ -7,8 +7,34 @@
       </view>
     </view>
 
-    <view v-if="displayItems.length" class="preview" :style="{ background: previewGradient }">
-      <text class="preview-label">已选作品</text>
+    <view v-if="displayItems.length" class="cover-card">
+      <view class="cover-card__top">
+        <view class="cover-card__info">
+          <text class="cover-card__title">作品集封面</text>
+          <text class="cover-card__subtitle">{{ coverHint }}</text>
+        </view>
+        <view class="cover-card__actions">
+          <button class="cover-action" @tap="chooseCoverFromDevice">选择封面</button>
+          <button
+            v-if="hasCustomCover"
+            class="cover-action cover-action--muted"
+            @tap="resetCover"
+          >
+            使用默认封面
+          </button>
+        </view>
+      </view>
+      <view class="cover-card__preview" @tap="previewCoverImage">
+        <image
+          v-if="coverPreview"
+          class="cover-card__image"
+          :src="coverPreview"
+          mode="aspectFill"
+        />
+        <view v-else class="cover-card__placeholder" :style="{ background: previewGradient }">
+          <text class="cover-card__placeholder-text">暂无封面</text>
+        </view>
+      </view>
     </view>
 
     <view v-if="displayItems.length" class="stats-card">
@@ -90,6 +116,15 @@ const description = ref('');
 const submitting = ref(false);
 const defaultGradient = 'linear-gradient(135deg, #dff5ff, #c6ebff)';
 
+type LocalCoverSelection = {
+  source: 'local';
+  filePath: string;
+  name: string;
+  uploadedUrl?: string;
+};
+
+const coverSelection = ref<LocalCoverSelection | null>(null);
+
 const selectedExistingWorks = computed<WorkItem[]>(() =>
   workIds.value
     .map((id) => worksStore.workMap[id])
@@ -169,6 +204,22 @@ const headerSubtitle = computed(() =>
 );
 
 const previewGradient = computed(() => displayItems.value[0]?.gradient || defaultGradient);
+const coverPreview = computed(() => {
+  if (coverSelection.value) {
+    return coverSelection.value.filePath;
+  }
+  return displayItems.value[0]?.preview || '';
+});
+const hasCustomCover = computed(() => Boolean(coverSelection.value));
+const coverHint = computed(() => {
+  if (hasCustomCover.value) {
+    return '封面来源：本地图片';
+  }
+  if (displayItems.value[0]?.preview) {
+    return '自动使用第一个作品的缩略图';
+  }
+  return '使用默认背景呈现封面';
+});
 
 const averageRating = computed(() => {
   if (!selectedExistingWorks.value.length) {
@@ -193,6 +244,16 @@ const statBlocks = computed(() => [
   { icon: '❤', value: totalLikes.value, label: '收到喜欢' },
 ]);
 
+watch(
+  displayItems,
+  (items) => {
+    if (!items.length) {
+      coverSelection.value = null;
+    }
+  },
+  { immediate: false },
+);
+
 onLoad((options) => {
   const raw = typeof options?.workIds === 'string' ? options.workIds : '';
   if (raw) {
@@ -211,6 +272,44 @@ watchEffect(() => {
   }
 });
 
+async function chooseCoverFromDevice() {
+  try {
+    const result = await uni.chooseImage({
+      count: 1,
+      sizeType: ['compressed', 'original'],
+      sourceType: ['album', 'camera'],
+    });
+    const filePath = result.tempFilePaths?.[0];
+    if (!filePath) {
+      return;
+    }
+    const name = filePath.split('/').pop() || 'collection-cover.jpg';
+    coverSelection.value = {
+      source: 'local',
+      filePath,
+      name,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error ?? '');
+    if (message.includes('cancel')) {
+      return;
+    }
+    uni.showToast({ title: '封面选取失败，请重试', icon: 'none' });
+  }
+}
+
+function resetCover() {
+  coverSelection.value = null;
+}
+
+function previewCoverImage() {
+  const preview = coverPreview.value;
+  if (!preview) {
+    return;
+  }
+  uni.previewImage({ current: preview, urls: [preview] });
+}
+
 function goWork() {
   worksStore.clearPendingUploads();
   uni.redirectTo({ url: '/pages/work/index' });
@@ -228,14 +327,17 @@ async function createNewCollection() {
     if (!finalWorkIds.length) {
       throw new Error('没有可保存的作品');
     }
+    const coverUrl = await resolveCollectionCover(finalWorkIds);
     const collection = await worksStore.createCollection({
       title: title.value.trim(),
       description: description.value.trim() || '尚未填写描述',
       workIds: finalWorkIds,
+      ...(coverUrl ? { coverUrl } : {}),
     });
     recordCreationHistory(newWorkIds);
     worksStore.clearPendingUploads();
     workIds.value = finalWorkIds;
+    coverSelection.value = null;
     uni.showToast({ title: '已创建', icon: 'success' });
     setTimeout(() => {
       const firstWorkId = finalWorkIds[0];
@@ -313,6 +415,38 @@ async function uploadPendingWorks(): Promise<string[]> {
     createdIds.push(...ids);
   }
   return createdIds;
+}
+
+async function resolveCollectionCover(finalWorkIds: string[]): Promise<string | undefined> {
+  if (coverSelection.value?.source === 'local') {
+    if (coverSelection.value.uploadedUrl) {
+      return coverSelection.value.uploadedUrl;
+    }
+    const categoryId = await resolveImageCategoryId();
+    try {
+      const asset = await apiUploadAsset({
+        filePath: coverSelection.value.filePath,
+        categoryId,
+        fileName: coverSelection.value.name,
+        type: 'image',
+      });
+      const url = asset.previewUrl || asset.url;
+      coverSelection.value.uploadedUrl = url;
+      return url;
+    } catch (error) {
+      console.error('Failed to upload cover image', error);
+      uni.showToast({ title: '封面上传失败，已采用默认封面', icon: 'none' });
+    }
+  }
+  const firstWorkId = finalWorkIds[0];
+  if (!firstWorkId) {
+    return undefined;
+  }
+  const firstWork = worksStore.workMap[firstWorkId];
+  if (!firstWork) {
+    return undefined;
+  }
+  return firstWork.thumbnailUrl || firstWork.fileUrl;
 }
 
 function recordCreationHistory(createdWorkIds: string[]) {
@@ -429,22 +563,90 @@ function formatNumber(value: number): string {
   color: #8a94a6;
 }
 
-.preview {
-  height: 220px;
+.cover-card {
+  background: #ffffff;
   border-radius: 20px;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+  padding: 20px;
+  box-shadow: 0 12px 32px rgba(31, 122, 236, 0.08);
   display: flex;
-  align-items: flex-end;
-  padding: 16px;
-  color: #ffffff;
-  font-weight: 600;
-  font-size: 16px;
+  flex-direction: column;
+  gap: 16px;
 }
 
-.preview-label {
-  background: rgba(0, 0, 0, 0.25);
+.cover-card__top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.cover-card__info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cover-card__title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f1f1f;
+}
+
+.cover-card__subtitle {
+  font-size: 12px;
+  color: #8a94a6;
+}
+
+.cover-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cover-action {
   padding: 6px 12px;
   border-radius: 12px;
+  border: 1px solid rgba(31, 122, 236, 0.4);
+  background: transparent;
+  color: #1f7aec;
+  font-size: 13px;
+}
+
+.cover-action--muted {
+  border-color: rgba(140, 152, 172, 0.5);
+  color: #5f6b83;
+}
+
+.cover-card__preview {
+  height: 220px;
+  border-radius: 16px;
+  overflow: hidden;
+  position: relative;
+  background: #f0f4ff;
+}
+
+.cover-card__image {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.cover-card__placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.cover-card__placeholder-text {
+  padding: 8px 14px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.35);
 }
 
 .stats-card {
