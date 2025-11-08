@@ -100,10 +100,10 @@ function formatExhibitionMeta(item: ExhibitionItem): string {
 
 function formatRatingMeta(rating: number, count: number): string {
   if (!rating) {
-    return count ? `${count} 人评分` : '';
+    return count ? `★ --（${count}）` : '';
   }
   const label = rating >= 4.95 ? '满分' : rating.toFixed(1);
-  return count ? `评分 ${label}（${count}）` : `评分 ${label}`;
+  return count ? `★ ${label}（${count}）` : `★ ${label}`;
 }
 
 function sortByUpdated(a: ExhibitionItem, b: ExhibitionItem): number {
@@ -161,7 +161,7 @@ const bestWorks = computed<WorkCard[]>(() =>
     .map((item: WorkItem) => ({
       id: item.id,
       name: item.name,
-      meta: `评分 ${item.rating.toFixed(1)} · 喜欢 ${item.likes}`,
+      meta: `★ ${item.rating.toFixed(1)} · ❤ ${item.likes}`,
       gradient: item.gradient,
     })),
 );

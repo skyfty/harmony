@@ -16,6 +16,8 @@ import {
   getCollection,
   updateCollection,
   deleteCollection,
+  toggleCollectionLike,
+  rateCollection,
 } from '@/controllers/miniprogram/collectionController'
 import {
   listWorkRecords,
@@ -74,6 +76,8 @@ miniRouter.get('/collections', listCollections)
 miniRouter.post('/collections', createCollection)
 miniRouter.patch('/collections/:id', updateCollection)
 miniRouter.delete('/collections/:id', deleteCollection)
+miniRouter.post('/collections/:id/like', toggleCollectionLike)
+miniRouter.post('/collections/:id/rate', rateCollection)
 
 // work records
 miniRouter.get('/works/records', listWorkRecords)

@@ -80,6 +80,8 @@ export interface WorkCollectionDocument extends Document<Types.ObjectId> {
   coverUrl?: string
   workIds: Types.ObjectId[]
   isPublic: boolean
+  likes: Types.ObjectId[]
+  ratings: RatingEntry[]
   createdAt: Date
   updatedAt: Date
 }

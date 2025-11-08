@@ -26,9 +26,19 @@ interface CollectionLean {
   coverUrl?: string
   workIds: Types.ObjectId[]
   isPublic: boolean
+  likes: Types.ObjectId[]
+  ratings: Array<{
+    userId: Types.ObjectId
+    score: number
+    comment?: string
+    createdAt: Date
+    updatedAt: Date
+  }>
   createdAt: Date
   updatedAt: Date
 }
+
+type CollectionRatingLean = CollectionLean['ratings'][number]
 
 interface CollectionResponse {
   id: string
@@ -37,6 +47,14 @@ interface CollectionResponse {
   description?: string
   coverUrl?: string
   isPublic: boolean
+  likesCount: number
+  liked: boolean
+  ratingCount: number
+  averageRating: number
+  userRating?: {
+    score: number
+    comment?: string
+  }
   works: WorkResponse[]
   workCount: number
   createdAt: string
@@ -55,7 +73,20 @@ function normalizeObjectIds(ids?: string[]): Types.ObjectId[] {
 function buildCollectionResponse(
   collection: CollectionLean,
   works: WorkResponse[],
+  userId?: string,
 ): CollectionResponse {
+  const ratings = Array.isArray(collection.ratings)
+    ? (collection.ratings as CollectionRatingLean[])
+    : []
+  const likes = Array.isArray(collection.likes) ? collection.likes : []
+  const ratingCount = ratings.length
+  const averageRating = ratingCount
+    ? ratings.reduce((sum, rating) => sum + rating.score, 0) / ratingCount
+    : 0
+  const userRating = userId
+    ? ratings.find((rating) => rating.userId.toString() === userId)
+    : undefined
+  const liked = Boolean(userId && likes.some((id) => id.toString() === userId))
   return {
     id: collection._id.toString(),
     ownerId: collection.ownerId.toString(),
@@ -63,6 +94,16 @@ function buildCollectionResponse(
     description: collection.description ?? undefined,
     coverUrl: collection.coverUrl ?? undefined,
     isPublic: collection.isPublic,
+    likesCount: likes.length,
+    liked,
+    ratingCount,
+    averageRating: Number(averageRating.toFixed(2)),
+    userRating: userRating
+      ? {
+          score: userRating.score,
+          comment: userRating.comment ?? undefined,
+        }
+      : undefined,
     works,
     workCount: works.length,
     createdAt: collection.createdAt.toISOString(),
@@ -146,7 +187,7 @@ export async function createCollection(ctx: Context): Promise<void> {
   const workMap = await resolveWorksForCollections([collection], userId)
   const works = workMap.get(collection._id.toString()) ?? []
   ctx.status = 201
-  ctx.body = buildCollectionResponse(collection, works)
+  ctx.body = buildCollectionResponse(collection, works, userId)
 }
 
 export async function listCollections(ctx: Context): Promise<void> {
@@ -159,6 +200,7 @@ export async function listCollections(ctx: Context): Promise<void> {
   const data = collections.map((collection) => buildCollectionResponse(
     collection,
     workMap.get(collection._id.toString()) ?? [],
+    userId,
   ))
   ctx.body = {
     total: data.length,
@@ -181,7 +223,7 @@ export async function getCollection(ctx: Context): Promise<void> {
   }
   const workMap = await resolveWorksForCollections([collection], userId)
   const works = workMap.get(collection._id.toString()) ?? []
-  ctx.body = buildCollectionResponse(collection, works)
+  ctx.body = buildCollectionResponse(collection, works, userId)
 }
 
 export async function updateCollection(ctx: Context): Promise<void> {
@@ -244,7 +286,7 @@ export async function updateCollection(ctx: Context): Promise<void> {
   const leanCollection = collection.toObject() as CollectionLean
   const workMap = await resolveWorksForCollections([leanCollection], userId)
   const works = workMap.get(leanCollection._id.toString()) ?? []
-  ctx.body = buildCollectionResponse(leanCollection, works)
+  ctx.body = buildCollectionResponse(leanCollection, works, userId)
 }
 
 export async function deleteCollection(ctx: Context): Promise<void> {
@@ -265,4 +307,71 @@ export async function deleteCollection(ctx: Context): Promise<void> {
     ).exec()
   }
   ctx.body = { success: true }
+}
+
+export async function toggleCollectionLike(ctx: Context): Promise<void> {
+  const userId = ensureUserId(ctx)
+  const { id } = ctx.params as { id: string }
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid collection id')
+  }
+  const collection = await WorkCollectionModel.findById(id).exec()
+  if (!collection) {
+    ctx.throw(404, 'Collection not found')
+    return
+  }
+  if (!Array.isArray(collection.likes)) {
+    collection.likes = []
+  }
+  const alreadyLiked = collection.likes.some((like: Types.ObjectId) => like.toString() === userId)
+  if (alreadyLiked) {
+    collection.likes = collection.likes.filter((like: Types.ObjectId) => like.toString() !== userId)
+  } else {
+    collection.likes.push(new Types.ObjectId(userId))
+  }
+  await collection.save()
+  ctx.body = {
+    liked: !alreadyLiked,
+    likesCount: collection.likes.length,
+  }
+}
+
+export async function rateCollection(ctx: Context): Promise<void> {
+  const userId = ensureUserId(ctx)
+  const { id } = ctx.params as { id: string }
+  const { score, comment } = ctx.request.body as { score?: number; comment?: string }
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid collection id')
+  }
+  if (typeof score !== 'number' || Number.isNaN(score) || score < 1 || score > 5) {
+    ctx.throw(400, 'Score must be between 1 and 5')
+  }
+  const collection = await WorkCollectionModel.findById(id).exec()
+  if (!collection) {
+    ctx.throw(404, 'Collection not found')
+    return
+  }
+  if (!Array.isArray(collection.ratings)) {
+    collection.ratings = []
+  }
+  const now = new Date()
+  const existing = collection.ratings.find((rating: CollectionRatingLean) => rating.userId.toString() === userId)
+  if (existing) {
+    existing.score = score
+    existing.comment = comment ?? existing.comment
+    existing.updatedAt = now
+  } else {
+    collection.ratings.push({
+      userId: new Types.ObjectId(userId),
+      score,
+      comment,
+      createdAt: now,
+      updatedAt: now,
+    })
+  }
+  await collection.save()
+  const leanCollection = collection.toObject() as CollectionLean
+  const workMap = await resolveWorksForCollections([leanCollection], userId)
+  const works = workMap.get(leanCollection._id.toString()) ?? []
+  ctx.body = buildCollectionResponse(leanCollection, works, userId)
 }
