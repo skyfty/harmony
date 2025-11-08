@@ -6,6 +6,7 @@ import {
 	apiGetWorks,
 	apiCreateWorks,
 	apiDeleteWork,
+	apiUpdateWork,
 	apiToggleWorkLike,
 	apiRateWork,
 	apiGetCollections,
@@ -45,6 +46,7 @@ export interface PendingWorkUpload {
 	size?: number;
 	mimeType?: string;
 	type: WorkType;
+	description?: string;
 }
 
 export interface WorkItem {
@@ -433,6 +435,11 @@ export const useWorksStore = defineStore('worksStore', {
 		removePendingUpload(id: string) {
 			this.pendingUploads = this.pendingUploads.filter((item) => item.id !== id);
 		},
+		updatePendingUpload(id: string, patch: Partial<PendingWorkUpload>) {
+			this.pendingUploads = this.pendingUploads.map((item) =>
+				item.id === id ? { ...item, ...patch } : item,
+			);
+		},
 		async ensureProfile(force = false) {
 			if (this.loadingProfile) {
 				return;
@@ -514,6 +521,27 @@ export const useWorksStore = defineStore('worksStore', {
 				this.workRecords = this.workRecords.filter((record) => record.workId !== id);
 			} catch (error) {
 				console.error('Failed to delete work', error);
+				throw error;
+			}
+		},
+		async updateWorkMetadata(id: string, payload: { title?: string; description?: string }) {
+			if (!payload.title && payload.description === undefined) {
+				return;
+			}
+			try {
+				const updated = await apiUpdateWork(id, {
+					title: payload.title,
+					description: payload.description,
+				});
+				this.works = this.works.map((work, index) => {
+					if (work.id !== id) {
+						return work;
+					}
+					const mapped = mapWorkSummary(updated, index);
+					return { ...mapped, gradient: work.gradient };
+				});
+			} catch (error) {
+				console.error('Failed to update work metadata', error);
 				throw error;
 			}
 		},

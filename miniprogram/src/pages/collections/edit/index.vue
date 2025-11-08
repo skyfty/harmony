@@ -56,9 +56,16 @@
           v-for="item in displayItems"
           :key="item.id"
           :style="{ background: item.gradient }"
+          @tap="openWorkPreview(item)"
         >
           <image v-if="item.preview" class="work-thumb__image" :src="item.preview" mode="aspectFill" />
+          <view v-else class="work-thumb__placeholder">暂无预览</view>
           <view v-if="item.kind === 'pending'" class="work-thumb__badge">待上传</view>
+          <view class="work-thumb__footer">
+            <text class="work-thumb__name">
+              {{ (editableEntries[item.id] && editableEntries[item.id].name) || item.name }}
+            </text>
+          </view>
           <button class="delete-icon" @tap.stop="confirmRemove(item.id)">×</button>
         </view>
       </view>
@@ -99,10 +106,55 @@
   <text class="empty-desc">请返回创作页面选择素材后再试</text>
   <button class="outline" @tap="goWork">返回创作</button>
     </view>
+
+    <view v-if="previewModal.visible" class="preview-modal">
+      <view class="preview-modal__mask" @tap="closeWorkPreview"></view>
+      <view class="preview-modal__panel" @tap.stop>
+        <view
+          class="preview-modal__media"
+          :style="{ background: previewModal.preview ? '#000' : previewModal.gradient }"
+        >
+          <image
+            v-if="previewModal.preview"
+            class="preview-modal__image"
+            :src="previewModal.preview"
+            mode="aspectFill"
+          />
+          <view v-else class="preview-modal__placeholder">暂无预览</view>
+          <view v-if="previewModal.kind === 'pending'" class="preview-modal__badge">待上传</view>
+        </view>
+        <view class="preview-modal__content">
+          <text class="preview-modal__title">
+            {{ previewModal.kind === 'existing' ? '作品详情' : '待上传作品' }}
+          </text>
+          <view class="preview-modal__stats">
+            <text>大小：{{ previewModal.sizeLabel }}</text>
+            <text v-if="previewModal.kind === 'existing'">喜欢：{{ previewModal.likes }}</text>
+            <text v-if="previewModal.kind === 'existing'">评分：{{ previewModal.rating }}</text>
+          </view>
+          <text class="preview-modal__label">作品名称</text>
+          <input
+            class="preview-modal__input"
+            v-model="previewModal.name"
+            placeholder="输入作品名称"
+          />
+          <text class="preview-modal__label preview-modal__label--spaced">作品描述</text>
+          <textarea
+            class="preview-modal__textarea"
+            v-model="previewModal.description"
+            placeholder="补充作品描述"
+          />
+          <view class="preview-modal__actions">
+            <button class="preview-modal__btn preview-modal__btn--cancel" @tap="closeWorkPreview">取消</button>
+            <button class="preview-modal__btn preview-modal__btn--save" @tap="applyPreviewEdits">保存</button>
+          </view>
+        </view>
+      </view>
+    </view>
   </view>
 </template>
 <script setup lang="ts">
-import { computed, ref, watch, watchEffect } from 'vue';
+import { computed, reactive, ref, watch, watchEffect } from 'vue';
 import { onLoad, onShow } from '@dcloudio/uni-app';
 import {
   apiListResourceCategories,
@@ -158,6 +210,7 @@ const pendingUploads = computed<PendingWorkUpload[]>(() => worksStore.pendingUpl
 type DisplayItem = {
   id: string;
   name: string;
+  description: string;
   gradient: string;
   preview?: string;
   rating: number;
@@ -167,6 +220,43 @@ type DisplayItem = {
   work?: WorkItem;
   upload?: PendingWorkUpload;
 };
+
+type EditableEntry = {
+  id: string;
+  kind: 'existing' | 'pending';
+  name: string;
+  description: string;
+  originalName: string;
+  originalDescription: string;
+};
+
+const editableEntries = reactive<Record<string, EditableEntry>>({});
+
+type PreviewModalState = {
+  visible: boolean;
+  itemId: string;
+  kind: DisplayItem['kind'];
+  preview: string;
+  gradient: string;
+  name: string;
+  description: string;
+  sizeLabel: string;
+  likes: number;
+  rating: number;
+};
+
+const previewModal = reactive<PreviewModalState>({
+  visible: false,
+  itemId: '',
+  kind: 'existing',
+  preview: '',
+  gradient: defaultGradient,
+  name: '',
+  description: '',
+  sizeLabel: '',
+  likes: 0,
+  rating: 0,
+});
 
 const fallbackGradients = [
   'linear-gradient(135deg, #ffe0f2, #ffd0ec)',
@@ -179,12 +269,13 @@ const fallbackGradients = [
   'linear-gradient(135deg, #ffd59e, #ffe8c9)',
 ];
 
-const displayItems = computed<DisplayItem[]>(() => {
+const rawDisplayItems = computed<DisplayItem[]>(() => {
   const items: DisplayItem[] = [];
   selectedExistingWorks.value.forEach((work) => {
     items.push({
       id: work.id,
       name: work.name,
+      description: work.description ?? '',
       gradient: work.gradient,
       preview: work.thumbnailUrl || (work.type === 'image' ? work.fileUrl : undefined),
       rating: work.rating,
@@ -199,6 +290,7 @@ const displayItems = computed<DisplayItem[]>(() => {
     items.push({
       id: upload.id,
       name: upload.name,
+      description: upload.description ?? '',
       gradient: fallbackGradients[gradientIndex],
       preview: upload.filePath,
       rating: 0,
@@ -210,6 +302,50 @@ const displayItems = computed<DisplayItem[]>(() => {
   });
   return items;
 });
+
+const displayItems = computed<DisplayItem[]>(() =>
+  rawDisplayItems.value.map((item) => {
+    const editable = editableEntries[item.id];
+    if (!editable) {
+      return item;
+    }
+    return {
+      ...item,
+      name: editable.name,
+      description: editable.description,
+    };
+  }),
+);
+
+watch(
+  rawDisplayItems,
+  (items) => {
+    const nextIds = new Set(items.map((item) => item.id));
+    Object.keys(editableEntries).forEach((id) => {
+      if (!nextIds.has(id)) {
+        delete editableEntries[id];
+      }
+    });
+    items.forEach((item) => {
+      const current = editableEntries[item.id];
+      if (!current) {
+        editableEntries[item.id] = {
+          id: item.id,
+          kind: item.kind,
+          name: item.name,
+          description: item.description,
+          originalName: item.name,
+          originalDescription: item.description,
+        };
+        return;
+      }
+      current.kind = item.kind;
+      current.originalName = item.name;
+      current.originalDescription = item.description;
+    });
+  },
+  { immediate: true },
+);
 
 const selectedCount = computed(() => displayItems.value.length);
 
@@ -276,6 +412,29 @@ watch(
   { immediate: false },
 );
 
+watch(
+  displayItems,
+  (items) => {
+    if (!previewModal.visible) {
+      return;
+    }
+    const current = items.find((candidate) => candidate.id === previewModal.itemId);
+    if (!current) {
+      closeWorkPreview();
+      return;
+    }
+    previewModal.preview = current.preview || '';
+    previewModal.gradient = current.gradient;
+    previewModal.sizeLabel = current.sizeLabel;
+    previewModal.likes = current.likes;
+    previewModal.rating = current.rating;
+    const entry = editableEntries[current.id];
+    previewModal.name = entry ? entry.name : current.name;
+    previewModal.description = entry ? entry.description : current.description;
+  },
+  { deep: true },
+);
+
 onLoad((options) => {
   const raw = typeof options?.workIds === 'string' ? options.workIds : '';
   if (raw) {
@@ -307,6 +466,180 @@ watchEffect(() => {
     hasAutoTitled.value = true;
   }
 });
+
+function findRawItem(id: string): DisplayItem | undefined {
+  return rawDisplayItems.value.find((candidate) => candidate.id === id);
+}
+
+function resolveFallbackName(entry: EditableEntry, ...fallbacks: Array<string | undefined>): string {
+  if (entry.originalName && entry.originalName.trim()) {
+    return entry.originalName.trim();
+  }
+  for (const candidate of fallbacks) {
+    if (candidate && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return '未命名作品';
+}
+
+function sanitizeWorkName(value: string, fallback: string): string {
+  const trimmed = value.trim();
+  return trimmed || fallback;
+}
+
+function sanitizeWorkDescription(value: string): string {
+  return value.trim();
+}
+
+function syncPendingEntries() {
+  pendingUploads.value.forEach((upload) => {
+    let entry = editableEntries[upload.id];
+    const raw = findRawItem(upload.id);
+    const fallbackEntry: EditableEntry = entry ?? {
+      id: upload.id,
+      kind: 'pending',
+      name: upload.name,
+      description: upload.description ?? '',
+      originalName: upload.name,
+      originalDescription: upload.description ?? '',
+    };
+    const fallback = resolveFallbackName(fallbackEntry, raw?.name, upload.name);
+    const name = sanitizeWorkName(entry?.name ?? upload.name, fallback);
+    const description = sanitizeWorkDescription(entry?.description ?? upload.description ?? '');
+    if (!entry) {
+      entry = {
+        ...fallbackEntry,
+        name,
+        description,
+      };
+      editableEntries[upload.id] = entry;
+    } else {
+      entry.name = name;
+      entry.description = description;
+    }
+    worksStore.updatePendingUpload(upload.id, { name, description });
+    entry.originalName = name;
+    entry.originalDescription = description;
+  });
+}
+
+function openWorkPreview(item: DisplayItem) {
+  const entry = editableEntries[item.id];
+  previewModal.visible = true;
+  previewModal.itemId = item.id;
+  previewModal.kind = item.kind;
+  previewModal.preview = item.preview || '';
+  previewModal.gradient = item.gradient;
+  previewModal.name = entry ? entry.name : item.name;
+  previewModal.description = entry ? entry.description : item.description;
+  previewModal.sizeLabel = item.sizeLabel;
+  previewModal.likes = item.likes;
+  previewModal.rating = item.rating;
+}
+
+function closeWorkPreview() {
+  previewModal.visible = false;
+  previewModal.itemId = '';
+}
+
+function applyPreviewEdits() {
+  if (!previewModal.itemId) {
+    closeWorkPreview();
+    return;
+  }
+  const item = rawDisplayItems.value.find((candidate) => candidate.id === previewModal.itemId);
+  if (!item) {
+    closeWorkPreview();
+    return;
+  }
+  let entry = editableEntries[item.id];
+  const fallbackEntry: EditableEntry = entry ?? {
+    id: item.id,
+    kind: item.kind,
+    name: item.name,
+    description: item.description,
+    originalName: item.name,
+    originalDescription: item.description,
+  };
+  const fallback = resolveFallbackName(fallbackEntry, item.name, worksStore.workMap[item.id]?.name, previewModal.name);
+  const name = sanitizeWorkName(previewModal.name, fallback);
+  const description = sanitizeWorkDescription(previewModal.description);
+  if (!entry) {
+    entry = {
+      ...fallbackEntry,
+      name,
+      description,
+    };
+    editableEntries[item.id] = entry;
+  } else {
+    entry.name = name;
+    entry.description = description;
+  }
+  if (entry.kind === 'pending') {
+    worksStore.updatePendingUpload(item.id, { name, description });
+    entry.originalName = name;
+    entry.originalDescription = description;
+  }
+  previewModal.name = name;
+  previewModal.description = description;
+  uni.showToast({ title: '已保存', icon: 'none' });
+  closeWorkPreview();
+}
+
+async function applyExistingWorkEdits(): Promise<void> {
+  const candidates = Object.values(editableEntries).filter((entry) => entry.kind === 'existing');
+  for (const entry of candidates) {
+    const raw = findRawItem(entry.id);
+    const fallback = resolveFallbackName(entry, raw?.name, worksStore.workMap[entry.id]?.name);
+    const name = sanitizeWorkName(entry.name, fallback);
+    const description = sanitizeWorkDescription(entry.description);
+    const baselineName = entry.originalName.trim() || fallback;
+    const baselineDescription = entry.originalDescription.trim();
+    const payload: { title?: string; description?: string } = {};
+    let changed = false;
+    if (name !== baselineName) {
+      payload.title = name;
+      changed = true;
+    }
+    if (description !== baselineDescription) {
+      payload.description = description;
+      changed = true;
+    }
+    entry.name = name;
+    entry.description = description;
+    if (!changed) {
+      continue;
+    }
+    try {
+      await worksStore.updateWorkMetadata(entry.id, payload);
+    } catch (error) {
+      throw new Error(`更新“${name}”失败：${getErrorMessage(error)}`);
+    }
+    const refreshed = worksStore.workMap[entry.id];
+    if (refreshed) {
+      entry.name = refreshed.name;
+      entry.description = refreshed.description ?? '';
+      entry.originalName = refreshed.name;
+      entry.originalDescription = refreshed.description ?? '';
+    } else {
+      if (payload.title) {
+        entry.originalName = payload.title;
+        entry.name = payload.title;
+      }
+      if (payload.description !== undefined) {
+        const normalized = payload.description ?? '';
+        entry.originalDescription = normalized;
+        entry.description = normalized;
+      }
+    }
+  }
+}
+
+async function applyWorkEditsBeforeSubmit(): Promise<void> {
+  await applyExistingWorkEdits();
+  syncPendingEntries();
+}
 
 async function initializeCollections() {
   try {
@@ -433,6 +766,7 @@ async function createNewCollection() {
   submitting.value = true;
   uni.showLoading({ title: '处理中…', mask: true });
   try {
+    await applyWorkEditsBeforeSubmit();
     const newWorkIds = await uploadPendingWorks();
     const finalWorkIds = Array.from(new Set([...workIds.value, ...newWorkIds]));
     if (!finalWorkIds.length) {
@@ -487,10 +821,40 @@ async function uploadPendingWorks(): Promise<string[]> {
   if (!pendingUploads.value.length) {
     return [];
   }
+  syncPendingEntries();
   const categoryId = await resolveImageCategoryId();
   const createdIds: string[] = [];
   const inputs: NewWorkInput[] = [];
   for (const upload of pendingUploads.value) {
+    let entry = editableEntries[upload.id];
+    const raw = findRawItem(upload.id);
+    const fallbackEntry: EditableEntry = entry ?? {
+      id: upload.id,
+      kind: 'pending',
+      name: upload.name,
+      description: upload.description ?? '',
+      originalName: upload.name,
+      originalDescription: upload.description ?? '',
+    };
+    const fallback = resolveFallbackName(fallbackEntry, raw?.name, upload.name);
+    const name = sanitizeWorkName(entry?.name ?? upload.name, fallback);
+    const description = sanitizeWorkDescription(entry?.description ?? upload.description ?? '');
+    if (!entry) {
+      entry = {
+        ...fallbackEntry,
+        name,
+        description,
+        originalName: name,
+        originalDescription: description,
+      };
+      editableEntries[upload.id] = entry;
+    } else {
+      entry.name = name;
+      entry.description = description;
+      entry.originalName = name;
+      entry.originalDescription = description;
+    }
+    worksStore.updatePendingUpload(upload.id, { name, description });
     const assetType: 'model' | 'image' | 'texture' | 'file' =
       upload.type === 'image'
         ? 'image'
@@ -509,13 +873,13 @@ async function uploadPendingWorks(): Promise<string[]> {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : '上传失败';
-      throw new Error(`上传 ${upload.name} 失败：${message}`);
+      throw new Error(`上传 ${name} 失败：${message}`);
     }
     inputs.push({
-      name: upload.name,
+      name,
       fileUrl: asset.url,
       thumbnailUrl: asset.previewUrl ?? asset.url,
-      description: '',
+      description,
       size: typeof upload.size === 'number' ? upload.size : asset.size,
       type: upload.type,
       fileName: upload.name,
@@ -597,6 +961,7 @@ async function appendToCollection(collectionId: string) {
   const loadingTitle = hasPending ? '正在上传…' : '处理中…';
   uni.showLoading({ title: loadingTitle, mask: true });
   try {
+    await applyWorkEditsBeforeSubmit();
     const newWorkIds = await uploadPendingWorks();
     if (newWorkIds.length) {
       recordCreationHistory(newWorkIds);
@@ -641,6 +1006,9 @@ function confirmRemove(id: string) {
         workIds.value = workIds.value.filter((workId) => workId !== id);
       } else {
         worksStore.removePendingUpload(id);
+      }
+      if (editableEntries[id]) {
+        delete editableEntries[id];
       }
       uni.showToast({ title: '已移除', icon: 'none' });
     },
@@ -877,13 +1245,22 @@ function getErrorMessage(error: unknown): string {
   color: #8a94a6;
 }
 
+.works-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
 .work-thumb {
-  width: 88px;
-  height: 74px;
-  border-radius: 12px;
+  width: 102px;
+  height: 102px;
+  border-radius: 14px;
   position: relative;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
   overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .work-thumb__image {
@@ -891,24 +1268,41 @@ function getErrorMessage(error: unknown): string {
   inset: 0;
   width: 100%;
   height: 100%;
-  border-radius: 12px;
+  border-radius: 14px;
+}
+
+.work-thumb__placeholder {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.9);
 }
 
 .work-thumb__badge {
   position: absolute;
-  left: 6px;
-  bottom: 6px;
-  padding: 2px 6px;
-  border-radius: 8px;
+  left: 8px;
+  top: 8px;
+  padding: 2px 8px;
+  border-radius: 10px;
   background: rgba(31, 122, 236, 0.9);
   color: #fff;
   font-size: 10px;
 }
 
-.works-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
+.work-thumb__footer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 6px 8px;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(15, 18, 26, 0.78) 100%);
+}
+
+.work-thumb__name {
+  font-size: 11px;
+  color: #ffffff;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .input,
@@ -1053,6 +1447,151 @@ function getErrorMessage(error: unknown): string {
   background: transparent;
   color: #1f7aec;
   font-size: 14px;
+}
+
+.preview-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.preview-modal__mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.58);
+}
+
+.preview-modal__panel {
+  position: relative;
+  width: 88%;
+  max-width: 540px;
+  max-height: 90vh;
+  background: #ffffff;
+  border-radius: 24px;
+  padding: 20px;
+  box-shadow: 0 22px 60px rgba(31, 122, 236, 0.22);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  z-index: 1;
+}
+
+.preview-modal__media {
+  width: 100%;
+  height: 220px;
+  border-radius: 18px;
+  position: relative;
+  overflow: hidden;
+  background: rgba(15, 23, 42, 0.12);
+}
+
+.preview-modal__image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.preview-modal__placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: #556176;
+}
+
+.preview-modal__badge {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: rgba(31, 122, 236, 0.92);
+  color: #ffffff;
+  font-size: 11px;
+}
+
+.preview-modal__content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.preview-modal__title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f1f1f;
+}
+
+.preview-modal__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: #5f6b83;
+}
+
+.preview-modal__label {
+  font-size: 12px;
+  color: #5f6b83;
+}
+
+.preview-modal__label--spaced {
+  margin-top: 6px;
+}
+
+.preview-modal__input,
+.preview-modal__textarea {
+  width: 100%;
+  border: none;
+  border-radius: 14px;
+  background: rgba(31, 122, 236, 0.08);
+  padding: 12px 14px;
+  font-size: 14px;
+  color: #1f1f1f;
+}
+
+.preview-modal__input::placeholder,
+.preview-modal__textarea::placeholder {
+  color: #8a94a6;
+}
+
+.preview-modal__textarea {
+  min-height: 120px;
+  resize: none;
+  line-height: 1.6;
+}
+
+.preview-modal__actions {
+  margin-top: 8px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.preview-modal__btn {
+  min-width: 96px;
+  padding: 10px 0;
+  border-radius: 16px;
+  font-size: 14px;
+  border: none;
+}
+
+.preview-modal__btn--cancel {
+  background: rgba(31, 122, 236, 0.1);
+  color: #1f7aec;
+}
+
+.preview-modal__btn--save {
+  background: linear-gradient(135deg, #1f7aec, #62a6ff);
+  color: #ffffff;
+  box-shadow: 0 10px 24px rgba(31, 122, 236, 0.2);
 }
 
 .delete-icon {

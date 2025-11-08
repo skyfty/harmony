@@ -472,6 +472,7 @@ function prepareWorkCreation(type: WorkType, files: WorkCandidate[]) {
       filePath: file.filePath!,
       mimeType: file.mimeType,
       type,
+      description: '',
     })),
   );
   loading.value = false;
