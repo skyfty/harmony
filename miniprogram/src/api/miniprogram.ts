@@ -85,11 +85,20 @@ export interface ExhibitionSummary {
   name: string;
   description?: string;
   coverUrl?: string;
+  coverUrls: string[];
   status: 'draft' | 'published' | 'withdrawn';
   startDate?: string;
   endDate?: string;
   works: WorkSummary[];
   workCount: number;
+  collections: Array<{
+    id: string;
+    title: string;
+    description?: string;
+    coverUrl?: string;
+    workCount: number;
+  }>;
+  collectionIds: string[];
   likesCount: number;
   liked: boolean;
   ratingCount: number;
@@ -325,9 +334,11 @@ export function apiCreateExhibition(payload: {
   name: string;
   description?: string;
   coverUrl?: string;
+  coverUrls?: string[];
   startDate?: string;
   endDate?: string;
   workIds?: string[];
+  collectionIds?: string[];
   status?: 'draft' | 'published' | 'withdrawn';
 }): Promise<ExhibitionSummary> {
   return post('/exhibitions', payload);
@@ -339,9 +350,11 @@ export function apiUpdateExhibition(
     name: string;
     description: string;
     coverUrl: string;
+    coverUrls: string[];
     startDate: string;
     endDate: string;
     workIds: string[];
+    collectionIds: string[];
     status: 'draft' | 'published' | 'withdrawn';
   }>,
 ): Promise<ExhibitionSummary> {

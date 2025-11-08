@@ -91,9 +91,11 @@ export interface ExhibitionDocument extends Document<Types.ObjectId> {
   name: string
   description?: string
   coverUrl?: string
+  coverUrls: string[]
   startDate?: Date
   endDate?: Date
   workIds: Types.ObjectId[]
+  collectionIds: Types.ObjectId[]
   status: 'draft' | 'published' | 'withdrawn'
   likes: Types.ObjectId[]
   ratings: RatingEntry[]

@@ -5,6 +5,7 @@ import { WorkModel } from '@/models/Work'
 import { WorkRecordModel } from '@/models/WorkRecord'
 import type { WorkDocument } from '@/types/models'
 import { WorkCollectionModel } from '@/models/WorkCollection'
+import { ExhibitionModel } from '@/models/Exhibition'
 import { ensureUserId } from './utils'
 import {
   buildCollectionMap,
@@ -231,12 +232,17 @@ export async function removeWork(ctx: Context): Promise<void> {
   if (!work) {
     ctx.throw(404, 'Work not found')
   }
+  const workObjectId = new Types.ObjectId(id)
   if (Array.isArray(work.collections) && work.collections.length) {
     await WorkCollectionModel.updateMany(
       { _id: { $in: work.collections } },
-      { $pull: { workIds: new Types.ObjectId(id) } },
+      { $pull: { workIds: workObjectId } },
     ).exec()
   }
+  await ExhibitionModel.updateMany(
+    { workIds: workObjectId },
+    { $pull: { workIds: workObjectId } },
+  ).exec()
   await WorkRecordModel.deleteMany({ workId: id }).exec()
   ctx.body = { success: true }
 }
