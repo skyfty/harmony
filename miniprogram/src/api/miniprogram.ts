@@ -49,6 +49,15 @@ export interface CollectionSummary {
   description?: string;
   coverUrl?: string;
   isPublic: boolean;
+  // Optional engagement fields
+  likesCount?: number;
+  liked?: boolean;
+  ratingCount?: number;
+  averageRating?: number;
+  userRating?: {
+    score: number;
+    comment?: string;
+  };
   works: WorkSummary[];
   workCount: number;
   createdAt: string;
@@ -222,6 +231,17 @@ export function apiGetCollections(): Promise<{
 
 export function apiGetCollection(id: string): Promise<CollectionSummary> {
   return get(`/collections/${id}`);
+}
+
+export function apiToggleCollectionLike(id: string): Promise<{ liked: boolean; likesCount: number }> {
+  return post(`/collections/${id}/like`, {});
+}
+
+export function apiRateCollection(
+  id: string,
+  payload: { score: number; comment?: string },
+): Promise<CollectionSummary> {
+  return post(`/collections/${id}/rate`, payload);
 }
 
 export function apiGetExhibition(id: string): Promise<ExhibitionSummary> {

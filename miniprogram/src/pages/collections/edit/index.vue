@@ -7,6 +7,12 @@
       </view>
     </view>
 
+    <view v-if="!displayItems.length" class="empty">
+      <text class="empty-title">暂无待处理作品</text>
+      <text class="empty-desc">点击下方按钮添加作品</text>
+      <button class="primary" @tap="goWork">添加作品</button>
+    </view>
+
     <view v-if="displayItems.length" class="cover-card">
       <view class="cover-card__top">
         <view class="cover-card__info">
@@ -99,12 +105,6 @@
         </view>
       </view>
       <view v-else class="collection-empty">暂未创建作品集，先新建一个吧。</view>
-    </view>
-
-    <view v-if="!displayItems.length" class="empty">
-      <text class="empty-title">暂无待处理作品</text>
-  <text class="empty-desc">请返回创作页面选择素材后再试</text>
-  <button class="outline" @tap="goWork">返回创作</button>
     </view>
 
     <view v-if="previewModal.visible" class="preview-modal">
@@ -1132,25 +1132,15 @@ function confirmRemove(id: string) {
   if (!target) {
     return;
   }
-  uni.showModal({
-    title: '移除作品',
-  content: `确定从本次创作列表中移除“${target.name}”吗？`,
-    confirmColor: '#d93025',
-    success: (res) => {
-      if (!res.confirm) {
-        return;
-      }
-      if (target.kind === 'existing') {
-        workIds.value = workIds.value.filter((workId) => workId !== id);
-      } else {
-        worksStore.removePendingUpload(id);
-      }
-      if (editableEntries[id]) {
-        delete editableEntries[id];
-      }
-      uni.showToast({ title: '已移除', icon: 'none' });
-    },
-  });
+  if (target.kind === 'existing') {
+    workIds.value = workIds.value.filter((workId) => workId !== id);
+  } else {
+    worksStore.removePendingUpload(id);
+  }
+  if (editableEntries[id]) {
+    delete editableEntries[id];
+  }
+  uni.showToast({ title: '已移除', icon: 'none' });
 }
 
 function formatNumber(value: number): string {
@@ -1555,7 +1545,7 @@ function getErrorMessage(error: unknown): string {
 }
 
 .empty {
-  margin-top: 80px;
+  margin-top: 10px;
   background: #ffffff;
   border-radius: 20px;
   padding: 30px 20px;
@@ -1619,18 +1609,19 @@ function getErrorMessage(error: unknown): string {
 
 .preview-modal__close {
   position: absolute;
-  top: 12px;
-  right: 12px;
-  width: 32px;
-  height: 32px;
+  top: 10px;
+  right: 10px;
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
   border: none;
-  background: rgba(15, 23, 42, 0.12);
-  color: #1f1f1f;
-  font-size: 20px;
-  line-height: 32px;
+  background: linear-gradient(135deg, #1f7aec, #62a6ff);
+  color: #ffffff;
+  font-size: 24px;
+  line-height: 40px;
   text-align: center;
   z-index: 2;
+  box-shadow: 0 10px 24px rgba(31, 122, 236, 0.28);
 }
 
 .preview-modal__media {

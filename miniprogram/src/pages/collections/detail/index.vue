@@ -31,6 +31,21 @@
       </view>
     </view>
 
+        <view v-if="collection" class="engage-card">
+          <view class="engage-row">
+            <text class="engage-label">为作品集评分</text>
+            <button class="like-btn" @tap="openCollectionRatingModal">
+              ★ 平均 {{ collectionAverageRating }}（点按评分）
+            </button>
+          </view>
+          <view class="engage-row">
+            <text class="engage-label">喜欢</text>
+            <button class="like-btn" :class="{ liked: collectionLiked }" @tap="toggleCollectionLike">
+              ❤ {{ collectionLikesDisplay }}
+            </button>
+          </view>
+        </view>
+
     <view v-if="collection" class="info-card">
       <text class="info-title">作品集信息</text>
       <view class="info-row">
@@ -92,6 +107,8 @@ import { computed, ref } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 import {
   apiGetCollection,
+  apiToggleCollectionLike,
+  apiRateCollection,
   type CollectionSummary,
   type WorkSummary,
 } from '@/api/miniprogram';
@@ -218,6 +235,16 @@ const headerSubtitle = computed(() => {
   return [updated, total].filter(Boolean).join('  ');
 });
 
+const collectionAverageRating = computed(() => {
+  const v = collection.value?.averageRating ?? 0;
+  return v > 0 ? v.toFixed(1) : '--';
+});
+
+const collectionLiked = computed(() => !!collection.value?.liked);
+const collectionLikes = computed(() => Number(collection.value?.likesCount ?? 0));
+const collectionLikesDisplay = computed(() => formatNumber(collectionLikes.value));
+const collectionUserRating = computed(() => collection.value?.userRating?.score ?? 0);
+
 const averageRating = computed(() => {
   if (!worksInCollection.value.length) {
     return '--';
@@ -273,6 +300,29 @@ function goToEdit(): void {
   uni.navigateTo({ url: `/pages/collections/edit/index?id=${collection.value.id}` });
 }
 
+async function toggleCollectionLike(): Promise<void> {
+  if (!collection.value) return;
+  try {
+    const { liked, likesCount } = await apiToggleCollectionLike(collection.value.id);
+    collection.value.liked = liked;
+    collection.value.likesCount = likesCount;
+  } catch (error) {
+    uni.showToast({ title: getErrorMessage(error), icon: 'none' });
+  }
+}
+
+async function rateCollection(score: number): Promise<void> {
+  if (!collection.value) return;
+  try {
+    const updated = await apiRateCollection(collection.value.id, { score });
+    collection.value.averageRating = updated.averageRating;
+    collection.value.ratingCount = updated.ratingCount;
+    collection.value.userRating = updated.userRating;
+  } catch (error) {
+    uni.showToast({ title: getErrorMessage(error), icon: 'none' });
+  }
+}
+
 onLoad((options) => {
   const rawId = typeof options?.id === 'string' ? options.id : '';
   if (rawId) {
@@ -282,6 +332,15 @@ onLoad((options) => {
     loadingError.value = '未提供作品集 ID';
   }
 });
+
+const collectionRatingModalVisible = ref(false);
+function openCollectionRatingModal(): void {
+  if (!collection.value) return;
+  collectionRatingModalVisible.value = true;
+}
+function closeCollectionRatingModal(): void {
+  collectionRatingModalVisible.value = false;
+}
 
 function formatNumber(value: number): string {
   if (value <= 0) {
@@ -294,7 +353,84 @@ function formatNumber(value: number): string {
   return value.toString();
 }
 </script>
+<template v-if="collectionRatingModalVisible">
+  <view class="rating-modal-mask" @tap="closeCollectionRatingModal"></view>
+  <view class="rating-modal-panel" @tap.stop>
+    <button class="rating-modal__close" @tap="closeCollectionRatingModal">×</button>
+    <text class="rating-modal__title">为该作品集打分</text>
+    <view class="rating-modal__stars">
+      <text
+        v-for="n in 5"
+        :key="n"
+        class="rating-modal__star"
+        :class="{ active: n <= (collectionUserRating || 0) }"
+        @tap="rateCollection(n)"
+      >★</text>
+    </view>
+    <view class="rating-modal__actions">
+      <text v-if="false" class="pending-label">提交中…</text>
+    </view>
+  </view>
+</template>
 <style scoped lang="scss">
+.rating-modal-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.4);
+  z-index: 999;
+}
+.rating-modal-panel {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 84%;
+  max-width: 420px;
+  background: #ffffff;
+  border-radius: 24px;
+  padding: 26px 24px 30px;
+  box-shadow: 0 28px 48px rgba(31,122,236,0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  z-index: 1000;
+}
+.rating-modal__title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1f1f1f;
+}
+.rating-modal__stars {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+}
+.rating-modal__star {
+  font-size: 40px;
+  color: #cfd6e4;
+}
+.rating-modal__star.active {
+  color: #ffb400;
+}
+.rating-modal__actions {
+  display: flex;
+  justify-content: center;
+}
+.rating-modal__close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  width: 38px;
+  height: 38px;
+  border: none;
+  border-radius: 50%;
+  background: linear-gradient(135deg,#1f7aec,#62a6ff);
+  color: #fff;
+  font-size: 24px;
+  line-height: 38px;
+  text-align: center;
+  box-shadow: 0 10px 24px rgba(31,122,236,0.28);
+}
 .page {
   padding: 20px 20px 120px;
   min-height: 100vh;
@@ -429,6 +565,62 @@ function formatNumber(value: number): string {
 .stat-desc {
   font-size: 12px;
   color: #8a94a6;
+}
+
+.engage-card {
+  background: #ffffff;
+  border-radius: 20px;
+  padding: 18px 20px;
+  box-shadow: 0 12px 32px rgba(31, 122, 236, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.engage-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.engage-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f1f1f;
+}
+
+.stars {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.star {
+  font-size: 20px;
+  color: #cfd6e4;
+}
+.star.active {
+  color: #ffb400;
+}
+
+.avg-label {
+  font-size: 12px;
+  color: #5f6b83;
+  margin-left: 8px;
+}
+
+.like-btn {
+  padding: 8px 14px;
+  border: none;
+  border-radius: 18px;
+  background: rgba(31, 122, 236, 0.1);
+  color: #1f1f1f;
+  font-size: 14px;
+}
+.like-btn.liked {
+  background: rgba(255, 111, 145, 0.15);
+  color: #ff3f6e;
 }
 
 .info-card,
