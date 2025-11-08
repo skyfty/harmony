@@ -6,6 +6,7 @@ import {
 	apiGetWorks,
 	apiCreateWorks,
 	apiDeleteWork,
+	apiUpdateWork,
 	apiToggleWorkLike,
 	apiRateWork,
 	apiGetCollections,
@@ -45,10 +46,12 @@ export interface PendingWorkUpload {
 	size?: number;
 	mimeType?: string;
 	type: WorkType;
+	description?: string;
 }
 
 export interface WorkItem {
 	id: string;
+	ownerId: string;
 	name: string;
 	size: string;
 	time: string;
@@ -67,6 +70,7 @@ export interface WorkItem {
 
 export interface CollectionItem {
 	id: string;
+	ownerId: string;
 	title: string;
 	description: string;
 	cover: string;
@@ -91,6 +95,7 @@ export interface WorkRecordItem {
 
 export interface ExhibitionItem {
 	id: string;
+	ownerId: string;
 	name: string;
 	status: 'draft' | 'published' | 'withdrawn';
 	cover: string;
@@ -259,6 +264,7 @@ function mapWorkSummary(summary: WorkSummary, index: number): WorkItem {
 	const metadata = (summary as unknown as { metadata?: { duration?: unknown } }).metadata;
 	return {
 		id: summary.id,
+		ownerId: summary.ownerId,
 		name: summary.title,
 		size: formatSize(summary.size),
 		time: formatRelativeTime(summary.updatedAt || summary.createdAt),
@@ -282,6 +288,7 @@ function mapWorkSummary(summary: WorkSummary, index: number): WorkItem {
 function mapCollectionSummary(summary: CollectionSummary, index: number): CollectionItem {
 	return {
 		id: summary.id,
+		ownerId: summary.ownerId,
 		title: summary.title,
 		description: summary.description ?? '',
 		cover: ensureBackground(summary.coverUrl, index),
@@ -310,6 +317,7 @@ function mapWorkRecordSummary(summary: WorkRecordSummary, index: number): WorkRe
 function mapExhibitionSummary(summary: ExhibitionSummary, index: number): ExhibitionItem {
 	return {
 		id: summary.id,
+		ownerId: summary.ownerId,
 		name: summary.name,
 		status: summary.status,
 		cover: ensureBackground(summary.coverUrl, index),
@@ -427,6 +435,11 @@ export const useWorksStore = defineStore('worksStore', {
 		removePendingUpload(id: string) {
 			this.pendingUploads = this.pendingUploads.filter((item) => item.id !== id);
 		},
+		updatePendingUpload(id: string, patch: Partial<PendingWorkUpload>) {
+			this.pendingUploads = this.pendingUploads.map((item) =>
+				item.id === id ? { ...item, ...patch } : item,
+			);
+		},
 		async ensureProfile(force = false) {
 			if (this.loadingProfile) {
 				return;
@@ -508,6 +521,27 @@ export const useWorksStore = defineStore('worksStore', {
 				this.workRecords = this.workRecords.filter((record) => record.workId !== id);
 			} catch (error) {
 				console.error('Failed to delete work', error);
+				throw error;
+			}
+		},
+		async updateWorkMetadata(id: string, payload: { title?: string; description?: string }) {
+			if (!payload.title && payload.description === undefined) {
+				return;
+			}
+			try {
+				const updated = await apiUpdateWork(id, {
+					title: payload.title,
+					description: payload.description,
+				});
+				this.works = this.works.map((work, index) => {
+					if (work.id !== id) {
+						return work;
+					}
+					const mapped = mapWorkSummary(updated, index);
+					return { ...mapped, gradient: work.gradient };
+				});
+			} catch (error) {
+				console.error('Failed to update work metadata', error);
 				throw error;
 			}
 		},

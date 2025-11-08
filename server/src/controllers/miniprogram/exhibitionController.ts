@@ -1,7 +1,7 @@
 import type { Context } from 'koa'
 import { Types } from 'mongoose'
 import { ExhibitionModel } from '@/models/Exhibition'
-import { ensureUserId } from './utils'
+import { ensureUserId, getOptionalUserId } from './utils'
 import { fetchWorkResponsesByIds, type WorkResponse } from './workHelpers'
 
 interface ExhibitionInput {
@@ -179,7 +179,7 @@ export async function listExhibitions(ctx: Context): Promise<void> {
 }
 
 export async function getExhibition(ctx: Context): Promise<void> {
-  const userId = ensureUserId(ctx)
+  const userId = getOptionalUserId(ctx)
   const { id } = ctx.params as { id: string }
   if (!Types.ObjectId.isValid(id)) {
     ctx.throw(400, 'Invalid exhibition id')

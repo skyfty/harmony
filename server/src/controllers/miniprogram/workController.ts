@@ -24,6 +24,12 @@ interface WorkInput {
   fileName?: string
 }
 
+interface WorkUpdateInput extends WorkInput {
+  collectionIds?: string[]
+  appendCollectionIds?: string[]
+  removeCollectionIds?: string[]
+}
+
 function normalizeWorkInputs(input: unknown): WorkInput[] {
   if (!input) {
     return []
@@ -36,6 +42,15 @@ function normalizeWorkInputs(input: unknown): WorkInput[] {
     return typed.works
   }
   return [typed]
+}
+
+function normalizeObjectIds(ids?: string[]): Types.ObjectId[] {
+  if (!Array.isArray(ids)) {
+    return []
+  }
+  return ids
+    .filter((value) => Types.ObjectId.isValid(value))
+    .map((value) => new Types.ObjectId(value))
 }
 
 export async function createWorks(ctx: Context): Promise<void> {
@@ -126,6 +141,84 @@ export async function getWork(ctx: Context): Promise<void> {
   }
   const collectionMap = await buildCollectionMap(work.collections ?? [])
   ctx.body = buildWorkResponse(work, userId, collectionMap)
+}
+
+export async function updateWork(ctx: Context): Promise<void> {
+  const userId = ensureUserId(ctx)
+  const { id } = ctx.params as { id: string }
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid work id')
+  }
+  const body = ctx.request.body as WorkUpdateInput
+  const work = await WorkModel.findById(id).exec()
+  if (!work) {
+    ctx.throw(404, 'Work not found')
+    return
+  }
+  if (work.ownerId.toString() !== userId) {
+    ctx.throw(403, 'Forbidden')
+  }
+
+  if (typeof body.title === 'string') {
+    const nextTitle = body.title.trim()
+    if (nextTitle) {
+      work.title = nextTitle
+    }
+  }
+  if (typeof body.description === 'string') {
+    work.description = body.description
+  }
+  if (typeof body.thumbnailUrl === 'string') {
+    work.thumbnailUrl = body.thumbnailUrl
+  }
+  if (typeof body.fileUrl === 'string') {
+    work.fileUrl = body.fileUrl
+  }
+  if (Array.isArray(body.tags)) {
+    work.tags = body.tags
+  }
+
+  const currentCollectionIds = (work.collections ?? []).map((value: Types.ObjectId) => value.toString())
+  let nextCollectionIds = [...currentCollectionIds]
+
+  if (Array.isArray(body.collectionIds)) {
+    nextCollectionIds = normalizeObjectIds(body.collectionIds).map((value) => value.toString())
+  } else {
+    if (Array.isArray(body.appendCollectionIds)) {
+      body.appendCollectionIds.forEach((value) => {
+        if (Types.ObjectId.isValid(value) && !nextCollectionIds.includes(value)) {
+          nextCollectionIds.push(value)
+        }
+      })
+    }
+    if (Array.isArray(body.removeCollectionIds)) {
+      nextCollectionIds = nextCollectionIds.filter((value) => !body.removeCollectionIds?.includes(value))
+    }
+  }
+
+  const removedCollectionIds = currentCollectionIds.filter((value) => !nextCollectionIds.includes(value))
+  const addedCollectionIds = nextCollectionIds.filter((value) => !currentCollectionIds.includes(value))
+
+  work.collections = nextCollectionIds.map((value) => new Types.ObjectId(value))
+
+  await work.save()
+
+  if (removedCollectionIds.length) {
+    await WorkCollectionModel.updateMany(
+      { _id: { $in: removedCollectionIds.map((value) => new Types.ObjectId(value)) } },
+      { $pull: { workIds: new Types.ObjectId(id) } },
+    ).exec()
+  }
+
+  if (addedCollectionIds.length) {
+    await WorkCollectionModel.updateMany(
+      { _id: { $in: addedCollectionIds.map((value) => new Types.ObjectId(value)) } },
+      { $addToSet: { workIds: new Types.ObjectId(id) } },
+    ).exec()
+  }
+
+  const collectionMap = await buildCollectionMap(work.collections as unknown as Types.ObjectId[])
+  ctx.body = buildWorkResponse(work.toObject() as WorkLean, userId, collectionMap)
 }
 
 export async function removeWork(ctx: Context): Promise<void> {

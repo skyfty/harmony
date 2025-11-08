@@ -67,7 +67,7 @@ const stats = [
 
 const routes: Record<NavKey, string> = {
   home: '/pages/home/index',
-  work: '/pages/work/index',
+  work: '/pages/works/indite',
   exhibition: '/pages/exhibition/index',
   profile: '/pages/profile/index',
   optimize: '/pages/optimize/index',
