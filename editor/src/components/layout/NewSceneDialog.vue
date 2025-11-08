@@ -337,7 +337,7 @@ function cancel() {
       <v-card-text>
         <div class="preset-section">
           <div class="preset-header">
-            <span class="preset-title">预置场景</span>
+            <span class="preset-title"></span>
             <v-btn size="small" variant="text" :loading="presetScenesLoading" @click="reloadPresetScenes">
               刷新
             </v-btn>
@@ -484,11 +484,12 @@ function cancel() {
 
 .preset-grid {
   display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(220px, 1fr);
-  grid-template-rows: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
   gap: 12px;
-  overflow-x: auto;
+  max-height: 360px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 6px;
   padding-bottom: 6px;
 }
 
@@ -502,13 +503,12 @@ function cancel() {
   color: inherit;
   display: flex;
   flex-direction: column;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .preset-card:hover {
   border-color: rgba(99, 179, 237, 0.85);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
-  transform: translateY(-2px);
 }
 
 .preset-card.selected {
@@ -518,10 +518,15 @@ function cancel() {
 
 .preset-thumbnail {
   position: relative;
-  aspect-ratio: 16 / 9;
-  border-radius: 12px 12px 0 0;
+  aspect-ratio: 4 / 3;
+  border-radius: 10px 10px 0 0;
   overflow: hidden;
   background: #212733;
+}
+
+.preset-card:hover .preset-thumbnail,
+.preset-card.selected .preset-thumbnail {
+  border-radius: 10px 10px 0 0;
 }
 
 .preset-card-body {
@@ -570,8 +575,8 @@ function cancel() {
 
 @media (max-width: 600px) {
   .preset-grid {
-    grid-auto-columns: minmax(140px, 1fr);
-    grid-template-rows: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    max-height: 260px;
   }
 }
 </style>
