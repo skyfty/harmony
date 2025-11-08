@@ -40,6 +40,6 @@ const optimizeProductSchema = new Schema<OptimizeProductDocument>(
 )
 
 optimizeProductSchema.index({ category: 1 })
-optimizeProductSchema.index({ name: 'text', description: 'text', tags: 1 })
+optimizeProductSchema.index({ name: 'text', description: 'text', tags: 'text' })
 
 export const OptimizeProductModel = model<OptimizeProductDocument>('OptimizeProduct', optimizeProductSchema)

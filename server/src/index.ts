@@ -12,7 +12,7 @@ import { appConfig } from '@/config/env'
 import { connectDatabase, disconnectDatabase } from '@/config/database'
 import { errorHandler } from '@/middleware/errorHandler'
 import routes from '@/routes'
-import { createInitialAdmin, ensureTestUser } from '@/services/authService'
+import { createInitialAdmin } from '@/services/authService'
 import { koaBody } from '@/utils/bodyParser'
 
 type HarmonyKoa = Koa<DefaultState, DefaultContext>
@@ -27,7 +27,6 @@ function registerRoutes(app: HarmonyKoa): void {
 async function bootstrap(): Promise<void> {
   await connectDatabase()
   await createInitialAdmin()
-  await ensureTestUser()
 
   const app: HarmonyKoa = new Koa()
 

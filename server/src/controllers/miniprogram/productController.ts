@@ -3,9 +3,9 @@ import { Types } from 'mongoose'
 import { OptimizeProductModel } from '@/models/OptimizeProduct'
 import { OrderModel } from '@/models/Order'
 import { ensureUserId } from './utils'
-import { OPTIMIZE_PRODUCT_SEEDS } from '@/data/optimizeProducts'
 import { generateOrderNumber } from '@/utils/orderNumber'
 import type { OptimizeProductUsageConfig } from '@/types/models'
+import { ensureOptimizeProductsSeeded } from '@/services/optimizeProductService'
 
 interface ProductResponse {
   id: string
@@ -48,28 +48,6 @@ interface ProductLean {
   updatedAt: Date
 }
 
-async function ensureProductsSeeded(): Promise<void> {
-  await Promise.all(
-    OPTIMIZE_PRODUCT_SEEDS.map((seed) =>
-      OptimizeProductModel.updateOne(
-        { slug: seed.slug },
-        {
-          $set: {
-            name: seed.name,
-            category: seed.category,
-            price: seed.price,
-            imageUrl: seed.imageUrl,
-            description: seed.description,
-            tags: seed.tags ?? [],
-            usageConfig: seed.usageConfig ?? undefined,
-          },
-        },
-        { upsert: true },
-      ).catch(() => undefined),
-    ),
-  )
-}
-
 function buildProductResponse(product: ProductLean, userId?: string): ProductResponse {
   const purchasedEntry = Array.isArray(product.purchasedBy)
     ? product.purchasedBy.find((entry: ProductPurchaseEntry) => entry.userId.toString() === userId)
@@ -91,7 +69,6 @@ function buildProductResponse(product: ProductLean, userId?: string): ProductRes
 
 export async function listProducts(ctx: Context): Promise<void> {
   const userId = ensureUserId(ctx)
-  await ensureProductsSeeded()
   const { category } = ctx.query as { category?: string }
   const filter: Record<string, unknown> = {}
   if (category) {
@@ -107,7 +84,6 @@ export async function listProducts(ctx: Context): Promise<void> {
 export async function getProduct(ctx: Context): Promise<void> {
   const userId = ensureUserId(ctx)
   const { id } = ctx.params as { id: string }
-  await ensureProductsSeeded()
   const product = (await OptimizeProductModel.findById(id).lean().exec()) as ProductLean | null
   if (!product) {
     ctx.throw(404, 'Product not found')
