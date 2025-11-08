@@ -18,8 +18,27 @@ import { resourceProviders } from '@/resources/projectProviders'
 import { loadProviderCatalog, storeProviderCatalog } from '@/stores/providerCatalogCache'
 import { getCachedModelObject } from '@/stores/modelObjectCache'
 import { dataUrlToBlob, extractExtension } from '@/utils/blob'
+import AIChatPanel from '@/components/layout/AIChatPanel.vue'
 
 const OPENED_DIRECTORIES_STORAGE_KEY = 'harmony:project-panel:opened-directories'
+const ACTIVE_TAB_STORAGE_KEY = 'harmony:project-panel:active-tab'
+
+type ProjectPanelTab = 'project' | 'assistant'
+
+function restoreActiveTab(): ProjectPanelTab {
+  if (typeof window === 'undefined') {
+    return 'project'
+  }
+  const stored = window.localStorage.getItem(ACTIVE_TAB_STORAGE_KEY)
+  return stored === 'assistant' ? 'assistant' : 'project'
+}
+
+function persistActiveTab(tab: ProjectPanelTab): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+  window.localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, tab)
+}
 
 function restoreOpenedDirectories(): string[] {
   if (typeof window === 'undefined') {
@@ -100,7 +119,10 @@ function countDirectoryAssets(directory: ProjectDirectory | undefined): number {
   return directory.children.reduce((total, child) => total + countDirectoryAssets(child), directCount)
 }
 
-const props = defineProps<{ floating?: boolean }>()
+const props = defineProps<{
+  floating?: boolean
+  captureViewportScreenshot?: () => Promise<Blob | null>
+}>()
 
 const emit = defineEmits<{
   (event: 'collapse'): void
@@ -118,6 +140,7 @@ const {
   draggingAssetId 
 } = storeToRefs(sceneStore)
 
+const activeTab = ref<ProjectPanelTab>(restoreActiveTab())
 const openedDirectories = ref<string[]>(restoreOpenedDirectories())
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 let dragPreviewEl: HTMLDivElement | null = null
@@ -272,6 +295,14 @@ watch(
     }
   },
   { immediate: true }
+)
+
+watch(
+  activeTab,
+  (tab) => {
+    persistActiveTab(tab)
+  },
+  { immediate: true },
 )
 
 watch(allowAssetDrop, (canDrop) => {
@@ -1564,7 +1595,17 @@ onBeforeUnmount(() => {
     :class="['panel-card', { 'is-floating': floating } ]"
     :elevation="floating ? 12 : 8"
   >
-    <v-toolbar  class="panel-toolbar" height="40px"  title="Project">
+    <v-toolbar class="panel-toolbar" height="40px">
+      <v-tabs
+        v-model="activeTab"
+        class="panel-tabs"
+        density="compact"
+        direction="horizontal"
+        hide-slider
+      >
+        <v-tab value="project">Project</v-tab>
+        <v-tab value="assistant">AI Chat</v-tab>
+      </v-tabs>
       <v-spacer />
       <v-btn
         class="placement-toggle"
@@ -1577,9 +1618,11 @@ onBeforeUnmount(() => {
       <v-btn icon="mdi-window-minimize" size="small" variant="text" @click="emit('collapse')" />
     </v-toolbar>
     <v-divider />
-    <div class="project-content">
-      <Splitpanes class="project-split" @resized="handleProjectSplitResized">
-        <Pane :size="treePaneSize">
+  <v-window v-model="activeTab" class="panel-window" :transition="false" :reverse-transition="false">
+      <v-window-item value="project" eager>
+        <div class="project-content">
+          <Splitpanes class="project-split" @resized="handleProjectSplitResized">
+            <Pane :size="treePaneSize">
           <div class="project-tree">
             <v-toolbar density="compact"  height="46">
               <v-toolbar-title class="text-subtitle-2 project-tree-subtitle">Resource</v-toolbar-title>
@@ -1794,9 +1837,14 @@ onBeforeUnmount(() => {
               <span class="drop-overlay__message">{{ dropOverlayMessage }}</span>
             </div>
           </div>
-        </Pane>
-      </Splitpanes>
-    </div>
+            </Pane>
+          </Splitpanes>
+        </div>
+      </v-window-item>
+      <v-window-item value="assistant" eager>
+        <AIChatPanel :capture-viewport-screenshot="props.captureViewportScreenshot" />
+      </v-window-item>
+    </v-window>
 
       <v-dialog v-model="deleteDialogOpen" max-width="420">
         <v-card>
@@ -1835,8 +1883,63 @@ onBeforeUnmount(() => {
   padding: 0 8px;
 }
 
+.panel-tabs {
+  min-width: 0;
+}
+
+.panel-tabs :deep(.v-slide-group__content) {
+  gap: 6px;
+}
+
+.panel-tabs :deep(.v-tab) {
+  text-transform: none;
+  font-weight: 500;
+  color: rgba(233, 236, 241, 0.8);
+  border-radius: 10px;
+  transition: background-color 160ms ease, color 160ms ease;
+  padding-inline: 14px;
+  min-height: 32px;
+}
+
+.panel-tabs :deep(.v-tab:hover) {
+  background-color: rgba(0, 172, 193, 0.16);
+}
+
+.panel-tabs :deep(.v-tab--selected) {
+  background-color: rgba(0, 172, 193, 0.32);
+  color: #f1fbff;
+}
+
+.panel-tabs :deep(.v-tabs__slider) {
+  display: none;
+}
+
 .placement-toggle {
   color: rgba(233, 236, 241, 0.72);
+}
+
+.panel-window {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.panel-window :deep(.v-window) {
+  flex: 1;
+  display: flex;
+}
+
+.panel-window :deep(.v-window__container) {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.panel-window :deep(.v-window-item) {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .project-content {

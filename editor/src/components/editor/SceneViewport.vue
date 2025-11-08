@@ -2066,6 +2066,32 @@ function handleCaptureScreenshot() {
   }
 }
 
+async function captureScreenshot(mimeType: string = 'image/png'): Promise<Blob | null> {
+  if (!renderer || !scene || !camera) {
+    return null
+  }
+
+  try {
+    renderer.render(scene, camera)
+    const canvas = renderer.domElement
+    if (typeof canvas.toBlob === 'function') {
+      const blob = await new Promise<Blob | null>((resolve) => {
+        canvas.toBlob((value) => resolve(value), mimeType)
+      })
+      if (blob) {
+        return blob
+      }
+    }
+
+    const dataUrl = canvas.toDataURL(mimeType)
+    const response = await fetch(dataUrl)
+    return await response.blob()
+  } catch (error) {
+    console.warn('Failed to capture viewport screenshot blob', error)
+    return null
+  }
+}
+
 function handleToggleCameraControlMode() {
   cameraControlMode.value = cameraControlMode.value === 'orbit' ? 'map' : 'orbit'
 }
@@ -2241,6 +2267,7 @@ function snapVectorToGridForNode(vec: THREE.Vector3, nodeId: string | null | und
 export type SceneViewportHandle = {
   exportScene(options: SceneExportOptions, onProgress: (progress: number, message?: string) => void): Promise<Blob>
   captureThumbnail(): void
+  captureScreenshot(mimeType?: string): Promise<Blob | null>
 }
 
 
@@ -6776,7 +6803,8 @@ watch(
 
 defineExpose<SceneViewportHandle>({
   exportScene,
-  captureThumbnail
+  captureThumbnail,
+  captureScreenshot
 })
 </script>
 

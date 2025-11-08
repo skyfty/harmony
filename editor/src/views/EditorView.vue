@@ -561,6 +561,21 @@ function triggerDownload(blob: Blob, fileName: string) {
 }
 
 
+async function captureViewportScreenshot(): Promise<Blob | null> {
+  const viewport = viewportRef.value
+  if (!viewport) {
+    console.warn('Scene viewport unavailable for screenshot capture')
+    return null
+  }
+  try {
+    return await viewport.captureScreenshot()
+  } catch (error) {
+    console.warn('Failed to capture scene screenshot', error)
+    return null
+  }
+}
+
+
 function openExportDialog() {
   const rawName = sceneStore.currentSceneMeta?.name ?? 'scene'
   const trimmed = rawName.trim()
@@ -1391,6 +1406,7 @@ onBeforeUnmount(() => {
         <section v-if="showProjectDocked" class="panel project-panel">
           <ProjectPanel
             :floating="false"
+            :capture-viewport-screenshot="captureViewportScreenshot"
             @collapse="projectOpen = false"
             @toggle-placement="togglePanelPlacement('project')"
           />
@@ -1425,6 +1441,7 @@ onBeforeUnmount(() => {
           <div v-if="showProjectFloating" class="floating-panel project-floating">
             <ProjectPanel
               :floating="true"
+              :capture-viewport-screenshot="captureViewportScreenshot"
               @collapse="projectOpen = false"
               @toggle-placement="togglePanelPlacement('project')"
             />
