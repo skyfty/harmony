@@ -44,6 +44,7 @@ export interface WorkSummary {
 
 export interface CollectionSummary {
   id: string;
+  ownerId: string;
   title: string;
   description?: string;
   coverUrl?: string;
@@ -71,6 +72,7 @@ export interface WorkRecordSummary {
 
 export interface ExhibitionSummary {
   id: string;
+  ownerId: string;
   name: string;
   description?: string;
   coverUrl?: string;
@@ -222,6 +224,10 @@ export function apiGetCollection(id: string): Promise<CollectionSummary> {
   return get(`/collections/${id}`);
 }
 
+export function apiGetExhibition(id: string): Promise<ExhibitionSummary> {
+  return get(`/exhibitions/${id}`);
+}
+
 export function apiCreateCollection(payload: {
   title: string;
   description?: string;
@@ -249,6 +255,22 @@ export function apiUpdateCollection(
 
 export function apiDeleteCollection(id: string): Promise<{ success: boolean }> {
   return del(`/collections/${id}`);
+}
+
+export function apiUpdateWork(
+  id: string,
+  payload: Partial<{
+    title: string;
+    description: string;
+    thumbnailUrl: string;
+    fileUrl: string;
+    tags: string[];
+    collectionIds: string[];
+    appendCollectionIds: string[];
+    removeCollectionIds: string[];
+  }>,
+): Promise<WorkSummary> {
+  return patch(`/works/${id}`, payload);
 }
 
 export function apiGetWorkRecords(): Promise<{

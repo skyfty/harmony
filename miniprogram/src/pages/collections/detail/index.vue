@@ -5,6 +5,7 @@
         <text class="title">{{ collection?.title || '作品集详情' }}</text>
         <text class="subtitle">{{ headerSubtitle }}</text>
       </view>
+      <button v-if="canEdit" class="edit-btn" @tap="goToEdit">编辑</button>
     </view>
 
     <view v-if="collection" class="cover-card">
@@ -32,10 +33,22 @@
 
     <view v-if="collection" class="info-card">
       <text class="info-title">作品集信息</text>
-      <text class="info-desc">调整标题与描述信息可同步更新作品集展示。</text>
-      <input class="input" v-model="editableTitle" placeholder="作品集标题" />
-      <textarea class="textarea" v-model="editableDescription" placeholder="作品集描述"></textarea>
-      <button class="primary" :disabled="!canSave" @tap="saveCollection">{{ saving ? '保存中…' : '保存信息' }}</button>
+      <view class="info-row">
+        <text class="info-label">标题</text>
+        <text class="info-value">{{ collection.title || '未命名作品集' }}</text>
+      </view>
+      <view class="info-row">
+        <text class="info-label">简介</text>
+        <text class="info-value info-value--multiline">{{ collection.description || '尚未填写描述' }}</text>
+      </view>
+      <view class="info-row">
+        <text class="info-label">可见性</text>
+        <text class="info-value">{{ collection.isPublic ? '公开' : '仅自己可见' }}</text>
+      </view>
+      <view class="info-row">
+        <text class="info-label">更新时间</text>
+        <text class="info-value">{{ collection.updatedAt }}</text>
+      </view>
     </view>
 
     <view v-if="collection" class="works-card">
@@ -62,7 +75,6 @@
           </view>
           <view class="work-actions">
             <button class="link-btn" @tap="openWorkDetail(work.id)">查看</button>
-            <button class="danger-btn" @tap="removeWork(work.id)">移出</button>
           </view>
         </view>
       </view>
@@ -76,14 +88,14 @@
   </view>
 </template>
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, ref } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 import {
   apiGetCollection,
-  apiUpdateCollection,
   type CollectionSummary,
   type WorkSummary,
 } from '@/api/miniprogram';
+import { useWorksStore } from '@/stores/worksStore';
 
 type WorkMediaType = WorkSummary['mediaType'];
 
@@ -99,14 +111,13 @@ interface WorkDisplay {
 }
 
 const collectionId = ref('');
-const initialWorkId = ref('');
 const collection = ref<CollectionSummary | null>(null);
 const loading = ref(false);
 const loadingError = ref('');
-const saving = ref(false);
-const editableTitle = ref('');
-const editableDescription = ref('');
 const defaultGradient = 'linear-gradient(135deg, #dff5ff, #c6ebff)';
+const worksStore = useWorksStore();
+const currentUserId = computed(() => worksStore.profile?.user?.id ?? '');
+const canEdit = computed(() => Boolean(collection.value && currentUserId.value && collection.value.ownerId === currentUserId.value));
 
 const gradientPalette = [
   'linear-gradient(135deg, #ffe0f2, #ffd0ec)',
@@ -198,15 +209,6 @@ function workPreview(work: WorkDisplay): string {
   return work.thumbnailUrl || (work.type === 'image' ? work.fileUrl : '');
 }
 
-const canSave = computed(() => {
-  if (!collection.value || saving.value) {
-    return false;
-  }
-  const title = editableTitle.value.trim();
-  const desc = editableDescription.value.trim();
-  return title !== (collection.value.title ?? '') || desc !== (collection.value.description ?? '');
-});
-
 const headerSubtitle = computed(() => {
   if (!collection.value) {
     return '正在获取作品集信息';
@@ -239,21 +241,6 @@ const statBlocks = computed(() => [
   { icon: '❤', value: totalLikes.value, label: '累计喜欢' },
 ]);
 
-watch(
-  collection,
-  (value) => {
-    if (value) {
-      editableTitle.value = value.title ?? '';
-      editableDescription.value = value.description ?? '';
-      loadingError.value = '';
-    } else {
-      editableTitle.value = '';
-      editableDescription.value = '';
-    }
-  },
-  { immediate: true },
-);
-
 async function fetchCollectionDetail(id: string): Promise<void> {
   if (!id || loading.value) {
     return;
@@ -275,45 +262,15 @@ async function fetchCollectionDetail(id: string): Promise<void> {
   }
 }
 
-async function saveCollection(): Promise<void> {
-  if (!collection.value || !canSave.value) {
-    return;
-  }
-  saving.value = true;
-  try {
-    const response = await apiUpdateCollection(collection.value.id, {
-      title: editableTitle.value.trim(),
-      description: editableDescription.value.trim(),
-    });
-    collection.value = response;
-    uni.showToast({ title: '已保存', icon: 'success' });
-  } catch (error) {
-    uni.showToast({ title: getErrorMessage(error), icon: 'none' });
-  } finally {
-    saving.value = false;
-  }
-}
-
 function openWorkDetail(id: string): void {
   uni.navigateTo({ url: `/pages/works/detail/index?id=${id}` });
 }
 
-async function removeWork(id: string): Promise<void> {
+function goToEdit(): void {
   if (!collection.value) {
     return;
   }
-  uni.showLoading({ title: '处理中...', mask: true });
-  try {
-    const response = await apiUpdateCollection(collection.value.id, {
-      removeWorkIds: [id],
-    });
-    collection.value = response;
-    uni.showToast({ title: '已移出', icon: 'none' });
-  } catch (error) {
-    uni.showToast({ title: getErrorMessage(error), icon: 'none' });
-  } finally {
-    uni.hideLoading();
-  }
+  uni.navigateTo({ url: `/pages/collections/edit/index?id=${collection.value.id}` });
 }
 
 onLoad((options) => {
@@ -323,10 +280,6 @@ onLoad((options) => {
     fetchCollectionDetail(collectionId.value);
   } else {
     loadingError.value = '未提供作品集 ID';
-  }
-  const rawWorkId = typeof options?.workId === 'string' ? options.workId : '';
-  if (rawWorkId) {
-    initialWorkId.value = decodeURIComponent(rawWorkId);
   }
 });
 
@@ -354,14 +307,16 @@ function formatNumber(value: number): string {
 
 .header {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .header-info {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  flex: 1;
 }
 
 
@@ -374,6 +329,15 @@ function formatNumber(value: number): string {
 .subtitle {
   font-size: 13px;
   color: #8a94a6;
+}
+
+.edit-btn {
+  padding: 8px 14px;
+  border: none;
+  border-radius: 16px;
+  background: rgba(31, 122, 236, 0.12);
+  color: #1f7aec;
+  font-size: 14px;
 }
 
 .cover-card {
@@ -484,46 +448,25 @@ function formatNumber(value: number): string {
   color: #1f1f1f;
 }
 
-.info-desc {
-  font-size: 13px;
-  color: #5f6b83;
-  line-height: 1.6;
+.info-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.input,
-.textarea {
-  width: 100%;
-  border: none;
-  border-radius: 14px;
-  background: rgba(31, 122, 236, 0.08);
-  padding: 12px 14px;
+.info-label {
+  font-size: 13px;
+  color: #8a94a6;
+}
+
+.info-value {
   font-size: 14px;
   color: #1f1f1f;
 }
 
-.textarea {
-  min-height: 120px;
-  resize: none;
-}
-
-.input::placeholder,
-.textarea::placeholder {
-  color: #8a94a6;
-}
-
-.primary {
-  padding: 12px 0;
-  border: none;
-  border-radius: 18px;
-  background: linear-gradient(135deg, #1f7aec, #62a6ff);
-  color: #ffffff;
-  font-size: 15px;
-  box-shadow: 0 10px 24px rgba(31, 122, 236, 0.2);
-  width: 100%;
-}
-
-.primary[disabled] {
-  opacity: 0.6;
+.info-value--multiline {
+  line-height: 1.6;
+  white-space: pre-wrap;
 }
 
 .works-header {
@@ -609,22 +552,13 @@ function formatNumber(value: number): string {
   gap: 10px;
 }
 
-.link-btn,
-.danger-btn {
+.link-btn {
   flex: 0 0 auto;
   padding: 6px 10px;
   border: none;
   border-radius: 10px;
   font-size: 11px;
-}
-
-.link-btn {
   background: rgba(0, 0, 0, 0.25);
-  color: #ffffff;
-}
-
-.danger-btn {
-  background: rgba(217, 48, 37, 0.85);
   color: #ffffff;
 }
 

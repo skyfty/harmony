@@ -1,10 +1,11 @@
 import Router from 'koa-router'
-import { authMiddleware } from '@/middleware/auth'
+import { authMiddleware, optionalAuthMiddleware } from '@/middleware/auth'
 import { register, login, getProfile, updateProfile } from '@/controllers/miniprogram/userController'
 import {
   createWorks,
   listWorks,
   getWork,
+  updateWork,
   removeWork,
   toggleWorkLike,
   rateWork,
@@ -49,6 +50,11 @@ const miniRouter = new Router({ prefix: '/mini' })
 miniRouter.post('/users/register', register)
 miniRouter.post('/users/login', login)
 
+// public readable resources
+miniRouter.get('/works/:id', optionalAuthMiddleware, getWork)
+miniRouter.get('/collections/:id', optionalAuthMiddleware, getCollection)
+miniRouter.get('/exhibitions/:id', optionalAuthMiddleware, getExhibition)
+
 miniRouter.use(authMiddleware)
 
 // profile
@@ -58,7 +64,7 @@ miniRouter.patch('/users/me', updateProfile)
 // works
 miniRouter.get('/works', listWorks)
 miniRouter.post('/works', createWorks)
-miniRouter.get('/works/:id', getWork)
+miniRouter.patch('/works/:id', updateWork)
 miniRouter.delete('/works/:id', removeWork)
 miniRouter.post('/works/:id/like', toggleWorkLike)
 miniRouter.post('/works/:id/rate', rateWork)
@@ -66,7 +72,6 @@ miniRouter.post('/works/:id/rate', rateWork)
 // collections
 miniRouter.get('/collections', listCollections)
 miniRouter.post('/collections', createCollection)
-miniRouter.get('/collections/:id', getCollection)
 miniRouter.patch('/collections/:id', updateCollection)
 miniRouter.delete('/collections/:id', deleteCollection)
 
@@ -78,7 +83,6 @@ miniRouter.delete('/works/records', clearWorkRecords)
 // exhibitions
 miniRouter.get('/exhibitions', listExhibitions)
 miniRouter.post('/exhibitions', createExhibition)
-miniRouter.get('/exhibitions/:id', getExhibition)
 miniRouter.patch('/exhibitions/:id', updateExhibition)
 miniRouter.delete('/exhibitions/:id', deleteExhibition)
 miniRouter.post('/exhibitions/:id/withdraw', withdrawExhibition)

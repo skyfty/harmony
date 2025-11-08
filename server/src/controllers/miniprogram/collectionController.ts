@@ -2,7 +2,7 @@ import type { Context } from 'koa'
 import { Types } from 'mongoose'
 import { WorkCollectionModel } from '@/models/WorkCollection'
 import { WorkModel } from '@/models/Work'
-import { ensureUserId } from './utils'
+import { ensureUserId, getOptionalUserId } from './utils'
 import { buildWorkResponse, type WorkLean, type WorkResponse } from './workHelpers'
 
 interface CollectionInput {
@@ -32,6 +32,7 @@ interface CollectionLean {
 
 interface CollectionResponse {
   id: string
+  ownerId: string
   title: string
   description?: string
   coverUrl?: string
@@ -57,6 +58,7 @@ function buildCollectionResponse(
 ): CollectionResponse {
   return {
     id: collection._id.toString(),
+    ownerId: collection.ownerId.toString(),
     title: collection.title,
     description: collection.description ?? undefined,
     coverUrl: collection.coverUrl ?? undefined,
@@ -149,7 +151,7 @@ export async function createCollection(ctx: Context): Promise<void> {
 
 export async function listCollections(ctx: Context): Promise<void> {
   const userId = ensureUserId(ctx)
-  const collections = (await WorkCollectionModel.find({ ownerId: userId })
+  const collections = (await WorkCollectionModel.find({ ownerId: new Types.ObjectId(userId) })
     .sort({ createdAt: -1 })
     .lean()
     .exec()) as CollectionLean[]
@@ -165,12 +167,12 @@ export async function listCollections(ctx: Context): Promise<void> {
 }
 
 export async function getCollection(ctx: Context): Promise<void> {
-  const userId = ensureUserId(ctx)
+  const userId = getOptionalUserId(ctx)
   const { id } = ctx.params as { id: string }
   if (!Types.ObjectId.isValid(id)) {
     ctx.throw(400, 'Invalid collection id')
   }
-  const collection = (await WorkCollectionModel.findOne({ _id: id, ownerId: userId })
+  const collection = (await WorkCollectionModel.findById(id)
     .lean()
     .exec()) as CollectionLean | null
   if (!collection) {

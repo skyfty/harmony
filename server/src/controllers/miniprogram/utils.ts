@@ -7,3 +7,7 @@ export function ensureUserId(ctx: Context): string {
   }
   return userId
 }
+
+export function getOptionalUserId(ctx: Context): string | undefined {
+  return ctx.state.user?.id
+}

@@ -49,6 +49,7 @@ export interface PendingWorkUpload {
 
 export interface WorkItem {
 	id: string;
+	ownerId: string;
 	name: string;
 	size: string;
 	time: string;
@@ -67,6 +68,7 @@ export interface WorkItem {
 
 export interface CollectionItem {
 	id: string;
+	ownerId: string;
 	title: string;
 	description: string;
 	cover: string;
@@ -91,6 +93,7 @@ export interface WorkRecordItem {
 
 export interface ExhibitionItem {
 	id: string;
+	ownerId: string;
 	name: string;
 	status: 'draft' | 'published' | 'withdrawn';
 	cover: string;
@@ -259,6 +262,7 @@ function mapWorkSummary(summary: WorkSummary, index: number): WorkItem {
 	const metadata = (summary as unknown as { metadata?: { duration?: unknown } }).metadata;
 	return {
 		id: summary.id,
+		ownerId: summary.ownerId,
 		name: summary.title,
 		size: formatSize(summary.size),
 		time: formatRelativeTime(summary.updatedAt || summary.createdAt),
@@ -282,6 +286,7 @@ function mapWorkSummary(summary: WorkSummary, index: number): WorkItem {
 function mapCollectionSummary(summary: CollectionSummary, index: number): CollectionItem {
 	return {
 		id: summary.id,
+		ownerId: summary.ownerId,
 		title: summary.title,
 		description: summary.description ?? '',
 		cover: ensureBackground(summary.coverUrl, index),
@@ -310,6 +315,7 @@ function mapWorkRecordSummary(summary: WorkRecordSummary, index: number): WorkRe
 function mapExhibitionSummary(summary: ExhibitionSummary, index: number): ExhibitionItem {
 	return {
 		id: summary.id,
+		ownerId: summary.ownerId,
 		name: summary.name,
 		status: summary.status,
 		cover: ensureBackground(summary.coverUrl, index),
