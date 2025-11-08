@@ -49,11 +49,15 @@
       <text class="empty-desc">{{ errorMessage || '返回商城列表重试，或稍后刷新页面' }}</text>
       <button class="outline" @tap="goBack">返回上一页</button>
     </view>
+
+    <BottomNav active="optimize" @navigate="handleNavigate" />
   </view>
 </template>
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { onLoad, onPullDownRefresh } from '@dcloudio/uni-app';
+import BottomNav from '@/components/BottomNav.vue';
+import { redirectToNav, type NavKey } from '@/utils/navKey';
 import { apiGetProduct, apiPurchaseProduct, type ProductSummary, type ProductUsageConfig } from '@/api/miniprogram';
 
 const productId = ref('');
@@ -188,24 +192,9 @@ function purchase() {
         });
         product.value = { ...product.value, ...updated };
         uni.showToast({ title: '购买成功', icon: 'success', duration: 600 });
-        const itemsPayload = encodeURIComponent(
-          JSON.stringify([
-            {
-              name: updated.name,
-              price: updated.price,
-              category: updated.category,
-            },
-          ]),
-        );
-        const payment = encodeURIComponent(order.paymentMethod ?? '微信支付');
-        const address = encodeURIComponent(order.shippingAddress ?? '数字交付');
-        const createdAt = encodeURIComponent(order.createdAt);
-        const total = order.totalAmount.toFixed(2);
 
         setTimeout(() => {
-          uni.navigateTo({
-            url: `/pages/orders/detail/index?id=${order.orderNumber}&status=${order.status}&items=${itemsPayload}&total=${total}&payment=${payment}&address=${address}&createdAt=${createdAt}`,
-          });
+          uni.navigateTo({ url: `/pages/orders/detail/index?id=${order.id}` });
         }, 400);
       } catch (error) {
         const message = error instanceof Error ? error.message : '购买失败，请稍后重试';
@@ -223,6 +212,10 @@ function goOrders() {
 
 function goBack() {
   uni.navigateBack({ delta: 1 });
+}
+
+function handleNavigate(target: NavKey) {
+  redirectToNav(target, { current: 'optimize' });
 }
 
 onLoad((query) => {
@@ -243,7 +236,7 @@ onPullDownRefresh(() => {
 </script>
 <style scoped lang="scss">
 .page {
-  padding: 20px 20px 40px;
+  padding: 20px 20px 120px;
   min-height: 100vh;
   background: #f5f7fb;
   box-sizing: border-box;
@@ -366,7 +359,7 @@ onPullDownRefresh(() => {
   display: flex;
   gap: 12px;
   position: sticky;
-  bottom: 24px;
+  bottom: 96px;
 }
 
 .primary,

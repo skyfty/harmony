@@ -134,6 +134,29 @@ export interface OptimizeProductDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
+export interface OptimizeWarehouseSnapshot {
+  name: string
+  category: string
+  price: number
+  imageUrl?: string
+  description?: string
+  usageConfig?: OptimizeProductUsageConfig
+}
+
+export interface OptimizeWarehouseDocument extends Document<Types.ObjectId> {
+  userId: Types.ObjectId
+  productId: Types.ObjectId
+  quantity: number
+  totalPurchased: number
+  totalConsumed: number
+  productSnapshot: OptimizeWarehouseSnapshot
+  latestOrderId?: Types.ObjectId | null
+  lastPurchasedAt?: Date | null
+  metadata?: Record<string, unknown>
+  createdAt: Date
+  updatedAt: Date
+}
+
 export interface OrderItem {
   productId: Types.ObjectId
   name: string

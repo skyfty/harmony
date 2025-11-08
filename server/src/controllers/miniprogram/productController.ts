@@ -5,7 +5,8 @@ import { OrderModel } from '@/models/Order'
 import { ensureUserId } from './utils'
 import { generateOrderNumber } from '@/utils/orderNumber'
 import type { OptimizeProductUsageConfig } from '@/types/models'
-import { ensureOptimizeProductsSeeded } from '@/services/optimizeProductService'
+import { processProductPayment } from '@/services/paymentService'
+import { addProductToWarehouse } from '@/services/warehouseService'
 
 interface ProductResponse {
   id: string
@@ -108,13 +109,42 @@ export async function purchaseProduct(ctx: Context): Promise<void> {
   if (alreadyPurchased) {
     ctx.throw(400, 'Product already purchased')
   }
+  const paymentResult = await processProductPayment({
+    userId,
+    productId: product._id.toString(),
+    productName: product.name,
+    amount: product.price,
+    method: paymentMethod,
+    metadata,
+  })
+
+  if (paymentResult.status !== 'success') {
+    const message = paymentResult.message ?? '支付失败，请稍后重试'
+    ctx.throw(402, message)
+  }
+
+  const paymentInfo: Record<string, unknown> = {
+    provider: paymentResult.provider,
+    status: paymentResult.status,
+  }
+
+  if (paymentResult.transactionId) {
+    paymentInfo.transactionId = paymentResult.transactionId
+  }
+  if (paymentResult.raw) {
+    paymentInfo.raw = paymentResult.raw
+  }
+
+  const orderMetadata: Record<string, unknown> = metadata ? { ...metadata } : {}
+  orderMetadata.payment = paymentInfo
+
   const orderNumber = generateOrderNumber()
   const order = await OrderModel.create({
     userId,
     orderNumber,
     status: 'paid',
     totalAmount: product.price,
-    paymentMethod: paymentMethod ?? 'wechat',
+    paymentMethod: paymentMethod ?? paymentResult.provider,
     shippingAddress,
     items: [
       {
@@ -124,7 +154,7 @@ export async function purchaseProduct(ctx: Context): Promise<void> {
         quantity: 1,
       },
     ],
-    metadata,
+    metadata: orderMetadata,
   })
   product.purchasedBy.push({
     userId: new Types.ObjectId(userId),
@@ -132,6 +162,7 @@ export async function purchaseProduct(ctx: Context): Promise<void> {
     purchasedAt: new Date(),
   })
   await product.save()
+  await addProductToWarehouse({ userId, product, orderId: order._id })
   ctx.status = 201
   ctx.body = {
     order: {

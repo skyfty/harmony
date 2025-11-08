@@ -172,24 +172,9 @@ function purchase(product: UiProduct) {
         });
         updateProductInList(updated);
         uni.showToast({ title: '购买成功', icon: 'success', duration: 600 });
-        const itemsPayload = encodeURIComponent(
-          JSON.stringify([
-            {
-              name: updated.name,
-              price: updated.price,
-              category: updated.category,
-            },
-          ]),
-        );
-        const payment = encodeURIComponent(order.paymentMethod ?? '微信支付');
-        const address = encodeURIComponent(order.shippingAddress ?? '数字交付');
-        const createdAt = encodeURIComponent(order.createdAt);
-        const total = order.totalAmount.toFixed(2);
 
         setTimeout(() => {
-          uni.navigateTo({
-            url: `/pages/orders/detail/index?id=${order.orderNumber}&status=${order.status}&items=${itemsPayload}&total=${total}&payment=${payment}&address=${address}&createdAt=${createdAt}`,
-          });
+          uni.navigateTo({ url: `/pages/orders/detail/index?id=${order.id}` });
         }, 400);
       } catch (error) {
         const message = error instanceof Error ? error.message : '购买失败，请稍后重试';

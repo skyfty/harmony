@@ -17,10 +17,14 @@
       </view>
     </view>
 
-    <view class="orders-list">
+    <view v-if="loading" class="loading-state">
+      <text class="loading-text">正在加载订单...</text>
+    </view>
+
+    <view v-else-if="filteredOrders.length" class="orders-list">
       <view class="order-card" v-for="order in filteredOrders" :key="order.id">
         <view class="order-header">
-          <text class="order-code">订单号 {{ order.id }}</text>
+          <text class="order-code">订单号 {{ order.orderNumber }}</text>
           <text class="order-status" :class="order.status">{{ statusLabels[order.status] }}</text>
         </view>
         <view class="order-body">
@@ -30,7 +34,7 @@
             <text class="order-desc">{{ order.desc }}</text>
             <view class="meta">
               <text>下单 {{ order.date }}</text>
-              <text>金额 ¥{{ order.amount }}</text>
+              <text>金额 ¥{{ order.amount.toFixed(2) }}</text>
             </view>
           </view>
         </view>
@@ -40,79 +44,137 @@
       </view>
     </view>
 
-    <view v-if="!filteredOrders.length" class="empty">
+    <view v-else class="empty">
       <view class="empty-icon"></view>
       <text class="empty-title">暂无相关订单</text>
-      <text class="empty-desc">尝试切换筛选状态或返回商城查看更多素材</text>
+      <text class="empty-desc">{{ errorMessage || '尝试切换筛选状态或返回商城查看更多素材' }}</text>
     </view>
   </view>
 </template>
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { onPullDownRefresh, onShow } from '@dcloudio/uni-app';
+import { apiGetOrders, type OrderSummary } from '@/api/miniprogram';
 
-type OrderStatus = 'pending' | 'processing' | 'completed';
+type OrderStatus = OrderSummary['status'];
 
 const statusTabs = [
   { label: '全部', value: 'all' },
   { label: '待支付', value: 'pending' },
-  { label: '制作中', value: 'processing' },
+  { label: '已支付', value: 'paid' },
   { label: '已完成', value: 'completed' },
+  { label: '已取消', value: 'cancelled' },
 ] as const;
+
+type FilterValue = (typeof statusTabs)[number]['value'];
 
 const statusLabels: Record<OrderStatus, string> = {
   pending: '待支付',
-  processing: '制作中',
+  paid: '已支付',
   completed: '已完成',
+  cancelled: '已取消',
 };
 
-const currentStatus = ref<typeof statusTabs[number]['value']>('all');
+const fallbackGradients = [
+  'linear-gradient(135deg, #cfe5ff, #a7c8ff)',
+  'linear-gradient(135deg, #ffe0f2, #ffcadf)',
+  'linear-gradient(135deg, #fce4d9, #f9c7b3)',
+  'linear-gradient(135deg, #dfe6e9, #b2bec3)',
+  'linear-gradient(135deg, #e8f5e9, #c8e6c9)',
+];
 
-const orders = ref([
-  {
-    id: 'A20240318',
-    status: 'processing' as OrderStatus,
-    title: '沉浸式展厅模型定制',
-    desc: '包含空间布局与灯光预设，预计 5 个工作日交付',
-    date: '03-15',
-    amount: 1280,
-    gradient: 'linear-gradient(135deg, #cfe5ff, #a7c8ff)',
-  },
-  {
-    id: 'A20240309',
-    status: 'completed' as OrderStatus,
-    title: '高分辨率雕塑组素材包',
-    desc: '提供 3 款雕塑模型、高清贴图与展示场景',
-    date: '03-08',
-    amount: 560,
-    gradient: 'linear-gradient(135deg, #ffe0f2, #ffcadf)',
-  },
-  {
-    id: 'A20240302',
-    status: 'pending' as OrderStatus,
-    title: '互动导览多媒体包',
-    desc: '含导览动画、语音讲解及互动控件素材',
-    date: '03-01',
-    amount: 920,
-    gradient: 'linear-gradient(135deg, #fce4d9, #f9c7b3)',
-  },
-]);
+interface UiOrder {
+  id: string;
+  orderNumber: string;
+  status: OrderStatus;
+  title: string;
+  desc: string;
+  date: string;
+  amount: number;
+  gradient: string;
+}
 
-const filteredOrders = computed(() => {
-  if (currentStatus.value === 'all') {
-    return orders.value;
+const orders = ref<OrderSummary[]>([]);
+const loading = ref(false);
+const errorMessage = ref('');
+const currentStatus = ref<FilterValue>('all');
+
+function formatDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return iso;
   }
-  return orders.value.filter((order) => order.status === currentStatus.value);
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${month}-${day}`;
+}
+
+function resolveGradient(seed?: string, index = 0): string {
+  if (!seed) {
+    return fallbackGradients[index % fallbackGradients.length];
+  }
+  const value = Array.from(seed).reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  return fallbackGradients[value % fallbackGradients.length];
+}
+
+const filteredOrders = computed<UiOrder[]>(() => {
+  const list =
+    currentStatus.value === 'all'
+      ? orders.value
+      : orders.value.filter((order) => order.status === currentStatus.value);
+  return list.map<UiOrder>((order, index) => {
+    const primaryItem = order.items[0];
+    const descFromProduct = primaryItem?.product?.description?.trim();
+    const description =
+      descFromProduct && descFromProduct.length > 0
+        ? descFromProduct
+        : order.items.length > 1
+        ? `共 ${order.items.length} 件商品`
+        : '优化商城商品';
+    return {
+      id: order.id,
+      orderNumber: order.orderNumber,
+      status: order.status,
+      title: primaryItem?.name ?? '优化商城订单',
+      desc: description,
+      date: formatDate(order.createdAt),
+      amount: order.totalAmount,
+      gradient: resolveGradient(primaryItem?.productId ?? order.id, index),
+    };
+  });
 });
 
-function switchStatus(value: typeof statusTabs[number]['value']) {
+async function loadOrders(): Promise<void> {
+  loading.value = true;
+  errorMessage.value = '';
+  try {
+    const { orders: list } = await apiGetOrders();
+    orders.value = list;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '订单加载失败';
+    errorMessage.value = message;
+    uni.showToast({ title: message, icon: 'none' });
+  } finally {
+    loading.value = false;
+    uni.stopPullDownRefresh();
+  }
+}
+
+function switchStatus(value: FilterValue) {
   currentStatus.value = value;
 }
 
 function goDetail(orderId: string) {
-  const target = orders.value.find((order) => order.id === orderId);
-  const status = target?.status ?? 'processing';
-  uni.navigateTo({ url: `/pages/orders/detail/index?id=${orderId}&status=${status}` });
+  uni.navigateTo({ url: `/pages/orders/detail/index?id=${orderId}` });
 }
+
+onShow(() => {
+  loadOrders();
+});
+
+onPullDownRefresh(() => {
+  loadOrders();
+});
 </script>
 <style scoped lang="scss">
 .page {
@@ -164,6 +226,20 @@ function goDetail(orderId: string) {
   box-shadow: 0 6px 18px rgba(31, 122, 236, 0.2);
 }
 
+.loading-state {
+  margin-top: 80px;
+  display: flex;
+  justify-content: center;
+}
+
+.loading-text {
+  padding: 12px 22px;
+  border-radius: 22px;
+  background: rgba(79, 158, 255, 0.12);
+  font-size: 13px;
+  color: #6b778d;
+}
+
 .orders-list {
   display: flex;
   flex-direction: column;
@@ -199,12 +275,16 @@ function goDetail(orderId: string) {
   background: linear-gradient(135deg, #ff9e80, #ff6f61);
 }
 
-.order-status.processing {
+.order-status.paid {
   background: linear-gradient(135deg, #4f9eff, #1f7aec);
 }
 
 .order-status.completed {
   background: linear-gradient(135deg, #45c48a, #32a666);
+}
+
+.order-status.cancelled {
+  background: linear-gradient(135deg, #9aa4b5, #7f8899);
 }
 
 .order-body {
