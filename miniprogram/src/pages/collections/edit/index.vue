@@ -312,7 +312,7 @@ function previewCoverImage() {
 
 function goWork() {
   worksStore.clearPendingUploads();
-  uni.redirectTo({ url: '/pages/work/index' });
+  uni.redirectTo({ url: '/pages/works/indite' });
 }
 
 async function createNewCollection() {
