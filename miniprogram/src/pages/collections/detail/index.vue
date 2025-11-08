@@ -31,20 +31,25 @@
       </view>
     </view>
 
-        <view v-if="collection" class="engage-card">
-          <view class="engage-row">
-            <text class="engage-label">为作品集评分</text>
-            <button class="like-btn" @tap="openCollectionRatingModal">
-              ★ 平均 {{ collectionAverageRating }}（点按评分）
-            </button>
-          </view>
-          <view class="engage-row">
-            <text class="engage-label">喜欢</text>
-            <button class="like-btn" :class="{ liked: collectionLiked }" @tap="toggleCollectionLike">
-              ❤ {{ collectionLikesDisplay }}
-            </button>
-          </view>
-        </view>
+    <view v-if="collection" class="engage-card">
+      <view class="engage-row">
+        <text class="engage-label">为作品集评分</text>
+        <button class="engage-btn" @tap="openCollectionRatingModal">
+          ★ {{ collectionRatingButtonLabel }}
+        </button>
+      </view>
+      <view class="engage-row">
+        <text class="engage-label">喜欢</text>
+        <button
+          class="engage-btn"
+          :class="{ liked: collectionLiked }"
+          :disabled="collectionLikeLoading"
+          @tap="toggleCollectionLike"
+        >
+          ❤ {{ collectionLikesDisplay }}
+        </button>
+      </view>
+    </view>
 
     <view v-if="collection" class="info-card">
       <text class="info-title">作品集信息</text>
@@ -101,6 +106,28 @@
       <text class="empty-desc">{{ loadingError || '请返回作品集列表或重新选择' }}</text>
     </view>
   </view>
+
+  <view v-if="collectionRatingModalVisible" class="rating-modal-mask" @tap="closeCollectionRatingModal"></view>
+  <view v-if="collectionRatingModalVisible" class="rating-modal-panel" @tap.stop>
+    <button class="rating-modal__close" @tap="closeCollectionRatingModal">×</button>
+    <text class="rating-modal__title">为该作品集打分</text>
+    <view class="rating-modal__stars">
+      <text
+        v-for="n in 5"
+        :key="n"
+        class="rating-modal__star"
+        :class="{ active: n <= collectionRatingSelection }"
+        @tap="selectCollectionRating(n)"
+      >★</text>
+    </view>
+    <view class="rating-modal__actions">
+      <button
+        class="rating-modal__submit"
+        :disabled="collectionRatingSubmitting"
+        @tap="submitCollectionRating"
+      >{{ collectionRatingSubmitting ? '提交中…' : collectionRatingSelection ? `提交 ${collectionRatingSelection} 星` : '请选择星级' }}</button>
+    </view>
+  </view>
 </template>
 <script setup lang="ts">
 import { computed, ref } from 'vue';
@@ -131,6 +158,10 @@ const collectionId = ref('');
 const collection = ref<CollectionSummary | null>(null);
 const loading = ref(false);
 const loadingError = ref('');
+const collectionLikeLoading = ref(false);
+const collectionRatingModalVisible = ref(false);
+const collectionRatingSelection = ref(0);
+const collectionRatingSubmitting = ref(false);
 const defaultGradient = 'linear-gradient(135deg, #dff5ff, #c6ebff)';
 const worksStore = useWorksStore();
 const currentUserId = computed(() => worksStore.profile?.user?.id ?? '');
@@ -245,27 +276,29 @@ const collectionLikes = computed(() => Number(collection.value?.likesCount ?? 0)
 const collectionLikesDisplay = computed(() => formatNumber(collectionLikes.value));
 const collectionUserRating = computed(() => collection.value?.userRating?.score ?? 0);
 
-const averageRating = computed(() => {
-  if (!worksInCollection.value.length) {
-    return '--';
+const collectionRatingCount = computed(() => collection.value?.ratingCount ?? 0);
+
+const collectionRatingDesc = computed(() => {
+  const count = collectionRatingCount.value;
+  if (count <= 0) {
+    return '尚无评分';
   }
-  const total = worksInCollection.value.reduce((sum, item) => sum + item.rating, 0);
-  const avg = total / worksInCollection.value.length;
-  return avg > 0 ? avg.toFixed(1) : '--';
+  return `共 ${count} 次评分`;
 });
 
-const totalLikes = computed(() => {
-  if (!worksInCollection.value.length) {
-    return '0';
+const collectionRatingButtonLabel = computed(() => {
+  const averageLabel = collectionAverageRating.value;
+  const myScore = collectionUserRating.value;
+  if (myScore > 0) {
+    return `平均 ${averageLabel} · 我的 ${myScore} 星`;
   }
-  const sum = worksInCollection.value.reduce((acc, item) => acc + item.likes, 0);
-  return formatNumber(sum);
+  return `平均 ${averageLabel} · 点按评分`;
 });
 
 const statBlocks = computed(() => [
   { icon: '🖼', value: worksInCollection.value.length.toString(), label: '作品数量' },
-  { icon: '★', value: averageRating.value, label: '平均评分' },
-  { icon: '❤', value: totalLikes.value, label: '累计喜欢' },
+  { icon: '★', value: collectionAverageRating.value, label: collectionRatingDesc.value },
+  { icon: '❤', value: collectionLikesDisplay.value, label: '喜欢人数' },
 ]);
 
 async function fetchCollectionDetail(id: string): Promise<void> {
@@ -301,25 +334,45 @@ function goToEdit(): void {
 }
 
 async function toggleCollectionLike(): Promise<void> {
-  if (!collection.value) return;
+  if (!collection.value || collectionLikeLoading.value) {
+    return;
+  }
+  collectionLikeLoading.value = true;
   try {
     const { liked, likesCount } = await apiToggleCollectionLike(collection.value.id);
-    collection.value.liked = liked;
-    collection.value.likesCount = likesCount;
+    const snapshot = collection.value;
+    collection.value = { ...snapshot, liked, likesCount };
+    uni.showToast({ title: liked ? '已喜欢' : '已取消喜欢', icon: 'success' });
   } catch (error) {
     uni.showToast({ title: getErrorMessage(error), icon: 'none' });
+  } finally {
+    collectionLikeLoading.value = false;
   }
 }
 
-async function rateCollection(score: number): Promise<void> {
-  if (!collection.value) return;
+function selectCollectionRating(score: number): void {
+  collectionRatingSelection.value = score;
+}
+
+async function submitCollectionRating(): Promise<void> {
+  if (!collection.value || collectionRatingSubmitting.value) {
+    return;
+  }
+  if (collectionRatingSelection.value <= 0) {
+    uni.showToast({ title: '请先选择星级', icon: 'none' });
+    return;
+  }
+  collectionRatingSubmitting.value = true;
   try {
-    const updated = await apiRateCollection(collection.value.id, { score });
-    collection.value.averageRating = updated.averageRating;
-    collection.value.ratingCount = updated.ratingCount;
-    collection.value.userRating = updated.userRating;
+    const updated = await apiRateCollection(collection.value.id, { score: collectionRatingSelection.value });
+    collection.value = updated;
+    collectionRatingSelection.value = updated.userRating?.score ?? collectionRatingSelection.value;
+    uni.showToast({ title: '评分成功', icon: 'success' });
+    collectionRatingModalVisible.value = false;
   } catch (error) {
     uni.showToast({ title: getErrorMessage(error), icon: 'none' });
+  } finally {
+    collectionRatingSubmitting.value = false;
   }
 }
 
@@ -333,12 +386,18 @@ onLoad((options) => {
   }
 });
 
-const collectionRatingModalVisible = ref(false);
 function openCollectionRatingModal(): void {
-  if (!collection.value) return;
+  if (!collection.value) {
+    return;
+  }
+  collectionRatingSelection.value = collectionUserRating.value || 0;
   collectionRatingModalVisible.value = true;
 }
+
 function closeCollectionRatingModal(): void {
+  if (collectionRatingSubmitting.value) {
+    return;
+  }
   collectionRatingModalVisible.value = false;
 }
 
@@ -353,25 +412,6 @@ function formatNumber(value: number): string {
   return value.toString();
 }
 </script>
-<template v-if="collectionRatingModalVisible">
-  <view class="rating-modal-mask" @tap="closeCollectionRatingModal"></view>
-  <view class="rating-modal-panel" @tap.stop>
-    <button class="rating-modal__close" @tap="closeCollectionRatingModal">×</button>
-    <text class="rating-modal__title">为该作品集打分</text>
-    <view class="rating-modal__stars">
-      <text
-        v-for="n in 5"
-        :key="n"
-        class="rating-modal__star"
-        :class="{ active: n <= (collectionUserRating || 0) }"
-        @tap="rateCollection(n)"
-      >★</text>
-    </view>
-    <view class="rating-modal__actions">
-      <text v-if="false" class="pending-label">提交中…</text>
-    </view>
-  </view>
-</template>
 <style scoped lang="scss">
 .rating-modal-mask {
   position: fixed;
@@ -403,10 +443,10 @@ function formatNumber(value: number): string {
 .rating-modal__stars {
   display: flex;
   justify-content: center;
-  gap: 14px;
+  gap: 16px;
 }
 .rating-modal__star {
-  font-size: 40px;
+  font-size: 42px;
   color: #cfd6e4;
 }
 .rating-modal__star.active {
@@ -415,6 +455,17 @@ function formatNumber(value: number): string {
 .rating-modal__actions {
   display: flex;
   justify-content: center;
+}
+.rating-modal__submit {
+  padding: 10px 40px;
+  border: none;
+  border-radius: 24px;
+  background: linear-gradient(135deg, #1f7aec, #62a6ff);
+  color: #ffffff;
+  font-size: 15px;
+}
+.rating-modal__submit[disabled] {
+  opacity: 0.65;
 }
 .rating-modal__close {
   position: absolute;
@@ -541,7 +592,7 @@ function formatNumber(value: number): string {
 }
 
 .stat-icon {
-  font-size: 18px;
+  font-size: 26px;
 }
 
 .stat:nth-child(1) .stat-icon {
@@ -590,37 +641,22 @@ function formatNumber(value: number): string {
   color: #1f1f1f;
 }
 
-.stars {
-  display: inline-flex;
-  gap: 4px;
-  align-items: center;
-}
-
-.star {
-  font-size: 20px;
-  color: #cfd6e4;
-}
-.star.active {
-  color: #ffb400;
-}
-
-.avg-label {
-  font-size: 12px;
-  color: #5f6b83;
-  margin-left: 8px;
-}
-
-.like-btn {
-  padding: 8px 14px;
+.engage-btn {
+  padding: 10px 18px;
   border: none;
   border-radius: 18px;
-  background: rgba(31, 122, 236, 0.1);
+  background: rgba(31, 122, 236, 0.12);
   color: #1f1f1f;
-  font-size: 14px;
+  font-size: 16px;
 }
-.like-btn.liked {
+
+.engage-btn.liked {
   background: rgba(255, 111, 145, 0.15);
   color: #ff3f6e;
+}
+
+.engage-btn[disabled] {
+  opacity: 0.6;
 }
 
 .info-card,

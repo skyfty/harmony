@@ -1,3 +1,4 @@
+
 <template>
   <view class="page work-detail">
     <view class="header">
@@ -17,17 +18,27 @@
       <view class="stat">
         <text class="stat-icon">★</text>
         <text class="stat-value">{{ workRating }}</text>
-        <text class="stat-desc">评分</text>
+        <text class="stat-desc">{{ workRatingDesc }}</text>
       </view>
       <view class="stat">
         <text class="stat-icon">❤</text>
         <text class="stat-value">{{ workLikes }}</text>
-        <text class="stat-desc">喜欢</text>
+        <text class="stat-desc">喜欢人数</text>
       </view>
-      <view class="stat">
-        <text class="stat-icon">⏱</text>
-        <text class="stat-value">{{ workDuration }}</text>
-        <text class="stat-desc">推荐观看时长</text>
+    </view>
+
+    <view v-if="work" class="engage-card">
+      <view class="engage-row">
+        <text class="engage-label">为作品评分</text>
+        <button class="engage-btn" @tap="openWorkRatingModal">
+          ★ {{ workRatingButtonLabel }}
+        </button>
+      </view>
+      <view class="engage-row">
+        <text class="engage-label">喜欢</text>
+        <button class="engage-btn" :class="{ liked: workLiked }" :disabled="likeLoading" @tap="toggleWorkLike">
+          ❤ {{ workLikes }}
+        </button>
       </view>
     </view>
 
@@ -66,6 +77,28 @@
       <text class="empty-desc">{{ loadingError || '请返回作品列表重新选择' }}</text>
     </view>
   </view>
+
+  <view v-if="ratingModalVisible" class="rating-modal-mask" @tap="closeWorkRatingModal"></view>
+  <view v-if="ratingModalVisible" class="rating-modal-panel" @tap.stop>
+    <button class="rating-modal__close" @tap="closeWorkRatingModal">×</button>
+    <text class="rating-modal__title">为该作品打分</text>
+    <view class="rating-modal__stars">
+      <text
+        v-for="n in 5"
+        :key="n"
+        class="rating-modal__star"
+        :class="{ active: n <= ratingSelection }"
+        @tap="selectWorkRating(n)"
+      >★</text>
+    </view>
+    <view class="rating-modal__actions">
+      <button
+        class="rating-modal__submit"
+        :disabled="ratingSubmitting"
+        @tap="submitWorkRating"
+      >{{ ratingSubmitting ? '提交中…' : ratingSelection ? `提交 ${ratingSelection} 星` : '请选择星级' }}</button>
+    </view>
+  </view>
 </template>
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
@@ -74,6 +107,8 @@ import {
   apiGetWork,
   apiGetCollections,
   apiUpdateCollection,
+  apiToggleWorkLike,
+  apiRateWork,
   type WorkSummary,
   type CollectionSummary,
 } from '@/api/miniprogram';
@@ -87,6 +122,10 @@ const loadingError = ref('');
 const userCollections = ref<CollectionSummary[]>([]);
 const collectionsLoaded = ref(false);
 const collectionsLoading = ref(false);
+const likeLoading = ref(false);
+const ratingModalVisible = ref(false);
+const ratingSubmitting = ref(false);
+const ratingSelection = ref(0);
 
 const currentUserId = computed(() => worksStore.profile?.user?.id ?? '');
 const isOwner = computed(
@@ -175,7 +214,28 @@ const workRating = computed(() => {
 
 const workLikes = computed(() => formatNumber(work.value?.likesCount ?? 0));
 
-const workDuration = computed(() => deriveDuration(work.value));
+const workRatingCount = computed(() => work.value?.ratingCount ?? 0);
+
+const workRatingDesc = computed(() => {
+  const count = workRatingCount.value;
+  if (count <= 0) {
+    return '尚无评分';
+  }
+  return `共 ${count} 次评分`;
+});
+
+const workLiked = computed(() => Boolean(work.value?.liked));
+
+const workUserRating = computed(() => work.value?.userRating?.score ?? 0);
+
+const workRatingButtonLabel = computed(() => {
+  const averageLabel = workRating.value;
+  const myScore = workUserRating.value;
+  if (myScore > 0) {
+    return `平均 ${averageLabel} · 我的 ${myScore} 星`;
+  }
+  return `平均 ${averageLabel} · 点按评分`;
+});
 
 async function fetchWorkDetail(id?: string): Promise<void> {
   const targetId = id ?? workId.value;
@@ -275,21 +335,62 @@ function goToEdit(): void {
   uni.navigateTo({ url: `/pages/works/edit/index?id=${work.value.id}` });
 }
 
-function deriveDuration(target: WorkSummary | null): string {
-  if (!target) {
-    return '--';
+async function toggleWorkLike(): Promise<void> {
+  if (!work.value || likeLoading.value) {
+    return;
   }
-  const metadata = (target as unknown as { metadata?: Record<string, unknown> }).metadata;
-  if (metadata && typeof metadata === 'object' && 'duration' in metadata) {
-    const raw = (metadata as { duration?: unknown }).duration;
-    if (typeof raw === 'number' && Number.isFinite(raw)) {
-      return `${raw.toFixed(raw >= 10 ? 0 : 1)} 秒`;
-    }
-    if (typeof raw === 'string' && raw.trim()) {
-      return raw.trim();
-    }
+  likeLoading.value = true;
+  try {
+    const { liked, likesCount } = await apiToggleWorkLike(work.value.id);
+    const snapshot = work.value;
+    work.value = { ...snapshot, liked, likesCount };
+    uni.showToast({ title: liked ? '已喜欢' : '已取消喜欢', icon: 'success' });
+  } catch (error) {
+    uni.showToast({ title: getErrorMessage(error), icon: 'none' });
+  } finally {
+    likeLoading.value = false;
   }
-  return '--';
+}
+
+function openWorkRatingModal(): void {
+  if (!work.value) {
+    return;
+  }
+  ratingSelection.value = workUserRating.value || 0;
+  ratingModalVisible.value = true;
+}
+
+function closeWorkRatingModal(): void {
+  if (ratingSubmitting.value) {
+    return;
+  }
+  ratingModalVisible.value = false;
+}
+
+function selectWorkRating(score: number): void {
+  ratingSelection.value = score;
+}
+
+async function submitWorkRating(): Promise<void> {
+  if (!work.value || ratingSubmitting.value) {
+    return;
+  }
+  if (ratingSelection.value <= 0) {
+    uni.showToast({ title: '请先选择星级', icon: 'none' });
+    return;
+  }
+  ratingSubmitting.value = true;
+  try {
+    const updated = await apiRateWork(work.value.id, { score: ratingSelection.value });
+    work.value = updated;
+    ratingSelection.value = updated.userRating?.score ?? ratingSelection.value;
+    uni.showToast({ title: '评分成功', icon: 'success' });
+    ratingModalVisible.value = false;
+  } catch (error) {
+    uni.showToast({ title: getErrorMessage(error), icon: 'none' });
+  } finally {
+    ratingSubmitting.value = false;
+  }
 }
 
 function formatSize(value: number): string {
@@ -355,6 +456,86 @@ watch(isOwner, (value) => {
 });
 </script>
 <style scoped lang="scss">
+.rating-modal-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 999;
+}
+
+.rating-modal-panel {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 84%;
+  max-width: 420px;
+  background: #ffffff;
+  border-radius: 24px;
+  padding: 26px 24px 30px;
+  box-shadow: 0 28px 48px rgba(31, 122, 236, 0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  z-index: 1000;
+}
+
+.rating-modal__title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1f1f1f;
+  text-align: center;
+}
+
+.rating-modal__stars {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+}
+
+.rating-modal__star {
+  font-size: 42px;
+  color: #cfd6e4;
+}
+
+.rating-modal__star.active {
+  color: #ffb400;
+}
+
+.rating-modal__actions {
+  display: flex;
+  justify-content: center;
+}
+
+.rating-modal__submit {
+  padding: 10px 40px;
+  border: none;
+  border-radius: 24px;
+  background: linear-gradient(135deg, #1f7aec, #62a6ff);
+  color: #ffffff;
+  font-size: 15px;
+}
+
+.rating-modal__submit[disabled] {
+  opacity: 0.65;
+}
+
+.rating-modal__close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  width: 38px;
+  height: 38px;
+  border: none;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #1f7aec, #62a6ff);
+  color: #fff;
+  font-size: 24px;
+  line-height: 38px;
+  text-align: center;
+  box-shadow: 0 10px 24px rgba(31, 122, 236, 0.28);
+}
+
 .page {
   padding: 20px 20px 120px;
   min-height: 100vh;
@@ -425,7 +606,7 @@ watch(isOwner, (value) => {
 
 .stats-card {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -441,16 +622,12 @@ watch(isOwner, (value) => {
 }
 
 .stat-icon {
-  font-size: 18px;
+  font-size: 26px;
   color: #1f7aec;
 }
 
 .stat:nth-child(2) .stat-icon {
   color: #ff6f91;
-}
-
-.stat:nth-child(3) .stat-icon {
-  color: #8b6cff;
 }
 
 .stat-value {
@@ -462,6 +639,47 @@ watch(isOwner, (value) => {
 .stat-desc {
   font-size: 12px;
   color: #8a94a6;
+}
+
+.engage-card {
+  background: #ffffff;
+  border-radius: 20px;
+  padding: 18px 20px;
+  box-shadow: 0 12px 32px rgba(31, 122, 236, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.engage-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.engage-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f1f1f;
+}
+
+.engage-btn {
+  padding: 10px 18px;
+  border: none;
+  border-radius: 18px;
+  background: rgba(31, 122, 236, 0.12);
+  color: #1f1f1f;
+  font-size: 16px;
+}
+
+.engage-btn.liked {
+  background: rgba(255, 111, 145, 0.15);
+  color: #ff3f6e;
+}
+
+.engage-btn[disabled] {
+  opacity: 0.6;
 }
 
 .collections-card,
