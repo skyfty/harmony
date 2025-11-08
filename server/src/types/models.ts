@@ -112,6 +112,14 @@ export interface OptimizeProductPurchaseEntry {
   purchasedAt: Date
 }
 
+export interface OptimizeProductUsageConfig {
+  type: 'permanent' | 'consumable'
+  perExhibitionLimit?: number | null
+  exclusiveGroup?: string | null
+  stackable?: boolean
+  notes?: string
+}
+
 export interface OptimizeProductDocument extends Document<Types.ObjectId> {
   name: string
   slug: string
@@ -120,6 +128,7 @@ export interface OptimizeProductDocument extends Document<Types.ObjectId> {
   imageUrl?: string
   description?: string
   tags: string[]
+  usageConfig?: OptimizeProductUsageConfig
   purchasedBy: OptimizeProductPurchaseEntry[]
   createdAt: Date
   updatedAt: Date

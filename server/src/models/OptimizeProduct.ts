@@ -1,6 +1,17 @@
 import { Schema, model } from 'mongoose'
 import type { OptimizeProductDocument } from '@/types/models'
 
+const usageConfigSchema = new Schema(
+  {
+    type: { type: String, enum: ['permanent', 'consumable'], default: 'permanent' },
+    perExhibitionLimit: { type: Number, default: null },
+    exclusiveGroup: { type: String, default: null },
+    stackable: { type: Boolean, default: false },
+    notes: { type: String, default: '' },
+  },
+  { _id: false },
+)
+
 const purchaseEntrySchema = new Schema(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
@@ -19,6 +30,7 @@ const optimizeProductSchema = new Schema<OptimizeProductDocument>(
     imageUrl: { type: String },
     description: { type: String, default: '' },
     tags: { type: [String], default: [] },
+    usageConfig: { type: usageConfigSchema, default: undefined },
     purchasedBy: { type: [purchaseEntrySchema], default: [] },
   },
   {

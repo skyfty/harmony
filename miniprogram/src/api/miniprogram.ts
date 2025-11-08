@@ -122,8 +122,18 @@ export interface ProductSummary {
   price: number;
   imageUrl?: string;
   description?: string;
+  tags?: string[];
+  usageConfig?: ProductUsageConfig;
   purchased: boolean;
   purchasedAt?: string;
+}
+
+export interface ProductUsageConfig {
+  type: 'permanent' | 'consumable';
+  perExhibitionLimit?: number | null;
+  exclusiveGroup?: string | null;
+  stackable?: boolean;
+  notes?: string;
 }
 
 export interface OrderSummary {

@@ -1,7 +1,11 @@
 <template>
   <view class="page optimize-detail">
-    <view v-if="product" class="content">
-      <view class="hero" :style="{ background: product.image }">
+    <view v-if="loading" class="loading">
+      <text class="loading-text">正在加载商品...</text>
+    </view>
+
+    <view v-else-if="product" class="content">
+      <view class="hero" :style="heroStyle">
         <view class="purchase-flag" :class="{ owned: product.purchased }">
           {{ product.purchased ? '已购买' : '未购买' }}
         </view>
@@ -42,20 +46,27 @@
 
     <view v-else class="empty">
       <text class="empty-title">未找到商品</text>
-      <text class="empty-desc">返回商城列表重试，或稍后刷新页面</text>
+      <text class="empty-desc">{{ errorMessage || '返回商城列表重试，或稍后刷新页面' }}</text>
       <button class="outline" @tap="goBack">返回上一页</button>
     </view>
   </view>
 </template>
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { onLoad, onShow } from '@dcloudio/uni-app';
-import { OPTIMIZE_PRODUCTS, type OptimizeProduct } from '@/data/optimizeProducts';
-
-const STORAGE_KEY = 'optimizePurchased';
+import { onLoad, onPullDownRefresh } from '@dcloudio/uni-app';
+import { apiGetProduct, apiPurchaseProduct, type ProductSummary, type ProductUsageConfig } from '@/api/miniprogram';
 
 const productId = ref('');
-const product = ref<OptimizeProduct | null>(null);
+const product = ref<ProductSummary | null>(null);
+const loading = ref(true);
+const errorMessage = ref('');
+
+const fallbackGradients = [
+  'linear-gradient(135deg, #74b9ff, #a29bfe)',
+  'linear-gradient(135deg, #55efc4, #00cec9)',
+  'linear-gradient(135deg, #ffeaa7, #fab1a0)',
+  'linear-gradient(135deg, #dfe6e9, #b2bec3)',
+];
 
 const defaultTips = [
   '配合展厅灯光预设使用，可获得最佳视觉效果。',
@@ -63,65 +74,95 @@ const defaultTips = [
   '建议在体验区预览终端中验证加载表现。',
 ];
 
-const tips = computed(() => defaultTips);
-
-function loadPurchasedIds(): string[] {
-  try {
-    const raw = uni.getStorageSync(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (error) {
-    console.warn('无法读取优化效果购买记录', error);
-    return [];
+function computeFallbackIndex(key?: string): number {
+  if (!key) {
+    return 0;
   }
+  return Array.from(key).reduce((sum, char) => sum + char.charCodeAt(0), 0);
 }
 
-function persistPurchasedIds(ids: string[]) {
-  try {
-    uni.setStorageSync(STORAGE_KEY, ids);
-  } catch (error) {
-    console.warn('无法保存优化效果购买记录', error);
+function resolveHeroStyle(imageUrl?: string, key?: string): Record<string, string> {
+  const index = computeFallbackIndex(key);
+  const fallback = fallbackGradients[index % fallbackGradients.length];
+  if (!imageUrl) {
+    return { background: fallback };
   }
-}
-
-function syncProductState() {
-  if (!productId.value) {
-    product.value = null;
-    return;
+  if (imageUrl.startsWith('linear-gradient')) {
+    return { background: imageUrl };
   }
-  const base = OPTIMIZE_PRODUCTS.find((item) => item.id === productId.value);
-  if (!base) {
-    product.value = null;
-    return;
-  }
-  const purchasedIds = new Set(loadPurchasedIds());
-  product.value = {
-    ...base,
-    purchased: base.purchased || purchasedIds.has(base.id),
+  return {
+    backgroundImage: `url(${imageUrl})`,
+    backgroundSize: 'cover',
+    backgroundPosition: 'center',
+    backgroundRepeat: 'no-repeat',
   };
 }
 
-onLoad((query) => {
-  const rawId = typeof query?.id === 'string' ? query.id : '';
-  if (rawId) {
-    productId.value = rawId;
+const heroStyle = computed(() => resolveHeroStyle(product.value?.imageUrl, product.value?.id ?? productId.value));
+
+function buildUsageTips(usage?: ProductUsageConfig): string[] {
+  if (!usage) {
+    return [];
   }
-  syncProductState();
+  const result: string[] = [];
+  if (usage.type === 'consumable') {
+    result.push('启用后会消耗库存次数，请提前规划展览使用。');
+  } else {
+    result.push('购买后可在多个展览中重复使用，无需额外次数。');
+  }
+  if (usage.perExhibitionLimit && usage.perExhibitionLimit > 0) {
+    if (usage.perExhibitionLimit === 1) {
+      result.push('每场展览仅可启用一次。');
+    } else {
+      result.push(`每场展览最多可启用 ${usage.perExhibitionLimit} 次。`);
+    }
+  }
+  if (usage.exclusiveGroup) {
+    result.push('该商品与同类优化包互斥，同一展览仅能选择其中一种。');
+  }
+  if (usage.stackable) {
+    result.push('支持叠加购买，库存数量可累积。');
+  }
+  if (usage.notes) {
+    result.push(usage.notes);
+  }
+  return result;
+}
+
+const tips = computed(() => {
+  const merged = [...buildUsageTips(product.value?.usageConfig), ...defaultTips];
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  merged.forEach((tip) => {
+    if (!seen.has(tip)) {
+      seen.add(tip);
+      unique.push(tip);
+    }
+  });
+  return unique;
 });
 
-onShow(() => {
-  syncProductState();
-});
-
-function markAsPurchased() {
-  if (!product.value) {
+async function loadProduct(id: string): Promise<void> {
+  if (!id) {
+    loading.value = false;
+    product.value = null;
+    errorMessage.value = '缺少商品编号';
+    uni.stopPullDownRefresh();
     return;
   }
-  const ids = new Set(loadPurchasedIds());
-  ids.add(product.value.id);
-  persistPurchasedIds(Array.from(ids));
-  syncProductState();
+  loading.value = true;
+  errorMessage.value = '';
+  try {
+    product.value = await apiGetProduct(id);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '未能加载商品';
+    errorMessage.value = message;
+    product.value = null;
+    uni.showToast({ title: message, icon: 'none' });
+  } finally {
+    loading.value = false;
+    uni.stopPullDownRefresh();
+  }
 }
 
 function purchase() {
@@ -136,33 +177,42 @@ function purchase() {
     title: '确认购买',
     content: `确定购买「${product.value.name}」吗？`,
     confirmColor: '#1f7aec',
-    success: (res) => {
+    success: async (res) => {
       if (!res.confirm || !product.value) {
         return;
       }
-      markAsPurchased();
-      const orderId = `OP${Date.now()}`;
-      const itemsPayload = encodeURIComponent(
-        JSON.stringify([
-          {
-            name: product.value.name,
-            price: product.value.price,
-            category: product.value.category,
-          },
-        ]),
-      );
-      const payment = encodeURIComponent('微信支付');
-      const address = encodeURIComponent('上海市黄浦区外滩18号 数字艺廊中心');
-      const createdAt = encodeURIComponent(new Date().toISOString());
-      const total = product.value.price.toFixed(2);
-
-      uni.showToast({ title: '购买成功', icon: 'success', duration: 500 });
-
-      setTimeout(() => {
-        uni.navigateTo({
-          url: `/pages/orders/detail/index?id=${orderId}&status=processing&items=${itemsPayload}&total=${total}&payment=${payment}&address=${address}&createdAt=${createdAt}`,
+      uni.showLoading({ title: '下单中...', mask: true });
+      try {
+        const { order, product: updated } = await apiPurchaseProduct(product.value.id, {
+          paymentMethod: 'wechat',
         });
-      }, 400);
+        product.value = { ...product.value, ...updated };
+        uni.showToast({ title: '购买成功', icon: 'success', duration: 600 });
+        const itemsPayload = encodeURIComponent(
+          JSON.stringify([
+            {
+              name: updated.name,
+              price: updated.price,
+              category: updated.category,
+            },
+          ]),
+        );
+        const payment = encodeURIComponent(order.paymentMethod ?? '微信支付');
+        const address = encodeURIComponent(order.shippingAddress ?? '数字交付');
+        const createdAt = encodeURIComponent(order.createdAt);
+        const total = order.totalAmount.toFixed(2);
+
+        setTimeout(() => {
+          uni.navigateTo({
+            url: `/pages/orders/detail/index?id=${order.orderNumber}&status=${order.status}&items=${itemsPayload}&total=${total}&payment=${payment}&address=${address}&createdAt=${createdAt}`,
+          });
+        }, 400);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '购买失败，请稍后重试';
+        uni.showToast({ title: message, icon: 'none' });
+      } finally {
+        uni.hideLoading();
+      }
     },
   });
 }
@@ -174,6 +224,22 @@ function goOrders() {
 function goBack() {
   uni.navigateBack({ delta: 1 });
 }
+
+onLoad((query) => {
+  const rawId = typeof query?.id === 'string' ? query.id : '';
+  productId.value = rawId;
+  if (rawId) {
+    loadProduct(rawId);
+  } else {
+    loading.value = false;
+    product.value = null;
+    errorMessage.value = '缺少商品编号';
+  }
+});
+
+onPullDownRefresh(() => {
+  loadProduct(productId.value);
+});
 </script>
 <style scoped lang="scss">
 .page {
@@ -181,6 +247,20 @@ function goBack() {
   min-height: 100vh;
   background: #f5f7fb;
   box-sizing: border-box;
+}
+
+.loading {
+  margin-top: 80px;
+  display: flex;
+  justify-content: center;
+  color: #8a94a6;
+}
+
+.loading-text {
+  padding: 12px 22px;
+  border-radius: 22px;
+  background: rgba(79, 158, 255, 0.12);
+  font-size: 13px;
 }
 
 .content {

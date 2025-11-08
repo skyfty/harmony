@@ -5,6 +5,7 @@ import { OrderModel } from '@/models/Order'
 import { ensureUserId } from './utils'
 import { OPTIMIZE_PRODUCT_SEEDS } from '@/data/optimizeProducts'
 import { generateOrderNumber } from '@/utils/orderNumber'
+import type { OptimizeProductUsageConfig } from '@/types/models'
 
 interface ProductResponse {
   id: string
@@ -14,6 +15,8 @@ interface ProductResponse {
   price: number
   imageUrl?: string
   description?: string
+  tags?: string[]
+  usageConfig?: OptimizeProductUsageConfig
   purchased: boolean
   purchasedAt?: string
 }
@@ -38,25 +41,33 @@ interface ProductLean {
   price: number
   imageUrl?: string
   description?: string
+  tags?: string[]
+  usageConfig?: OptimizeProductUsageConfig | null
   purchasedBy: ProductPurchaseEntry[]
   createdAt: Date
   updatedAt: Date
 }
 
 async function ensureProductsSeeded(): Promise<void> {
-  const count = await OptimizeProductModel.estimatedDocumentCount().exec()
-  if (count > 0) {
-    return
-  }
-  const documents = OPTIMIZE_PRODUCT_SEEDS.map((seed) => ({
-    name: seed.name,
-    slug: seed.slug,
-    category: seed.category,
-    price: seed.price,
-    imageUrl: seed.imageUrl,
-    description: seed.description,
-  }))
-  await OptimizeProductModel.insertMany(documents).catch(() => undefined)
+  await Promise.all(
+    OPTIMIZE_PRODUCT_SEEDS.map((seed) =>
+      OptimizeProductModel.updateOne(
+        { slug: seed.slug },
+        {
+          $set: {
+            name: seed.name,
+            category: seed.category,
+            price: seed.price,
+            imageUrl: seed.imageUrl,
+            description: seed.description,
+            tags: seed.tags ?? [],
+            usageConfig: seed.usageConfig ?? undefined,
+          },
+        },
+        { upsert: true },
+      ).catch(() => undefined),
+    ),
+  )
 }
 
 function buildProductResponse(product: ProductLean, userId?: string): ProductResponse {
@@ -71,6 +82,8 @@ function buildProductResponse(product: ProductLean, userId?: string): ProductRes
     price: product.price,
     imageUrl: product.imageUrl ?? undefined,
     description: product.description ?? undefined,
+    tags: Array.isArray(product.tags) ? product.tags : [],
+    usageConfig: product.usageConfig ?? undefined,
     purchased: Boolean(purchasedEntry),
     purchasedAt: purchasedEntry ? purchasedEntry.purchasedAt.toISOString() : undefined,
   }
