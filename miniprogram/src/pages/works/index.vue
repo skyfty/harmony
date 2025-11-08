@@ -5,7 +5,6 @@
         <text class="title">作品库</text>
         <text class="subtitle">{{ subtitleText }}</text>
       </view>
-      <button class="refresh-btn" :disabled="loading" @tap="refresh">{{ loading ? '同步中…' : '刷新' }}</button>
     </view>
 
     <view class="collection-filter" v-if="collectionOptions.length > 1">
@@ -499,19 +498,6 @@ function formatCount(value: number): string {
 .subtitle {
   font-size: 13px;
   color: #8a94a6;
-}
-
-.refresh-btn {
-  padding: 8px 16px;
-  border: none;
-  border-radius: 16px;
-  background: rgba(31, 122, 236, 0.12);
-  color: #1f7aec;
-  font-size: 13px;
-}
-
-.refresh-btn[disabled] {
-  opacity: 0.6;
 }
 
 .collection-filter {

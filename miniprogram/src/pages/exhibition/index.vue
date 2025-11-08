@@ -6,8 +6,9 @@
         <text class="subtitle">共 {{ totalDisplay }} 个展览</text>
       </view>
       <view class="header-actions">
-        <button class="refresh-btn" :disabled="loading" @tap="refresh">{{ loading ? '加载中…' : '刷新' }}</button>
-        <button class="create-btn" @tap="goCreate">新增展览</button>
+        <button class="create-btn" @tap="goCreate">
+          <text class="create-icon">+</text>
+        </button>
       </view>
     </view>
 
@@ -534,28 +535,23 @@ function handleNavigate(target: NavKey) {
   gap: 10px;
 }
 
-.refresh-btn {
-  padding: 8px 16px;
-  border: none;
-  border-radius: 16px;
-  background: rgba(31, 122, 236, 0.12);
-  color: #1f7aec;
-  font-size: 13px;
-}
-
-.refresh-btn[disabled] {
-  opacity: 0.6;
-}
-
 .create-btn {
-  padding: 10px 20px;
-  border-radius: 18px;
+  width: 40px;
+  height: 40px;
   border: none;
+  border-radius: 20px;
   background: linear-gradient(135deg, #1f7aec, #62a6ff);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 12px 24px rgba(31, 122, 236, 0.22);
+}
+
+.create-icon {
   color: #ffffff;
-  font-size: 14px;
+  font-size: 24px;
   font-weight: 600;
-  box-shadow: 0 12px 28px rgba(31, 122, 236, 0.2);
+  line-height: 1;
 }
 
 .state {

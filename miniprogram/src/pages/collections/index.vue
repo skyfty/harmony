@@ -5,9 +5,6 @@
         <text class="title">我的作品集</text>
         <text class="subtitle">共 {{ totalDisplay }} 个作品集</text>
       </view>
-  <button class="create-btn" @tap="goCreateExhibition">
-        <text class="create-icon">+</text>
-      </button>
     </view>
 
     <view v-if="loading && cards.length === 0" class="state state--loading">
@@ -241,10 +238,6 @@ function refresh(): void {
   void fetchCollections();
 }
 
-function goCreateExhibition(): void {
-  uni.navigateTo({ url: '/pages/exhibition/create/index' });
-}
-
 function openCollection(id: string): void {
   if (!id) {
     return;
@@ -305,25 +298,6 @@ function formatCount(value: number): string {
 .subtitle {
   font-size: 13px;
   color: #8a94a6;
-}
-
-.create-btn {
-  width: 40px;
-  height: 40px;
-  border: none;
-  border-radius: 20px;
-  background: linear-gradient(135deg, #1f7aec, #62a6ff);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 10px 18px rgba(31, 122, 236, 0.25);
-}
-
-.create-icon {
-  color: #ffffff;
-  font-size: 24px;
-  font-weight: 600;
-  line-height: 1;
 }
 
 .state {
