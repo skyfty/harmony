@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { fetchPresetSceneDetail, fetchPresetSceneSummaries } from '@/api/presetScenes'
 import type { PresetSceneDetail, PresetSceneDocument, PresetSceneSummary } from '@/types/preset-scene'
+import { generateUuid } from '@/utils/uuid'
 
 const props = defineProps<{
   modelValue: boolean
@@ -30,20 +31,46 @@ const sceneName = ref('New Scene')
 const groundWidth = ref<number>(100)
 const groundDepth = ref<number>(100)
 
-const presetScenes = ref<PresetSceneSummary[]>([])
-const presetScenesLoaded = ref(false)
+type PresetSourceType = 'local' | 'remote'
+
+interface PresetListEntry {
+  id: string
+  name: string
+  thumbnailUrl: string | null
+  description?: string | null
+  source: PresetSourceType
+}
+
+const localPresetsLoaded = ref(false)
+const localPresetEntries = ref<PresetListEntry[]>([])
+const remotePresetSummaries = ref<PresetSceneSummary[]>([])
+const presetEntries = ref<PresetListEntry[]>([])
+const remotePresetsLoaded = ref(false)
 const presetScenesLoading = ref(false)
-const presetScenesError = ref<string | null>(null)
 const selectedPresetId = ref<string | null>(null)
 const loadingPresetDetailId = ref<string | null>(null)
 const presetSceneDetails = ref<Record<string, PresetSceneDetail>>({})
 const confirmError = ref<string | null>(null)
 const isConfirming = ref(false)
 
-const hasPresetScenes = computed(() => presetScenes.value.length > 0)
+const hasPresetScenes = computed(() => presetEntries.value.length > 0)
+
 const selectedPresetDetail = computed(() =>
   selectedPresetId.value ? presetSceneDetails.value[selectedPresetId.value] ?? null : null,
 )
+
+const isCreateDisabled = computed(() => {
+  if (!selectedPresetId.value) {
+    return true
+  }
+  if (loadingPresetDetailId.value !== null) {
+    return true
+  }
+  if (isConfirming.value) {
+    return true
+  }
+  return !presetSceneDetails.value[selectedPresetId.value]
+})
 
 function normalizeDimension(value: unknown, fallback: number): number {
   const numeric = typeof value === 'number'
@@ -57,21 +84,98 @@ function normalizeDimension(value: unknown, fallback: number): number {
   return Math.min(20000, Math.max(1, numeric))
 }
 
-async function loadPresetScenes(options: { force?: boolean } = {}) {
+function createSuggestedSceneName(baseName: string): string {
+  const normalized = baseName?.trim() ?? ''
+  const fallback = normalized.length ? normalized : '新场景'
+  return `${fallback} ${generateUuid().slice(0, 8)}`
+}
+
+function extractFileSlug(path: string): string {
+  const fileName = path.split('/').pop() ?? 'preset'
+  return fileName.replace(/\.json$/i, '')
+}
+
+function sanitizeLocalPresetDetail(path: string, moduleValue: unknown): PresetSceneDetail | null {
+  const raw = (moduleValue as { default?: unknown })?.default ?? moduleValue
+  if (!raw || typeof raw !== 'object') {
+    return null
+  }
+  const data = raw as Record<string, unknown>
+  const slug = extractFileSlug(path)
+  const idCandidates = [data.id, data.name, slug]
+  const resolvedId = idCandidates.find((item) => typeof item === 'string' && item.trim().length) as string | undefined
+  const resolvedName = typeof data.name === 'string' && data.name.trim().length ? data.name.trim() : slug
+  const thumbnail = typeof data.thumbnail === 'string' ? data.thumbnail : null
+  const description = typeof data.description === 'string' ? data.description : null
+  const documentData = structuredClone(data) as Record<string, unknown>
+  delete documentData.id
+  delete documentData.description
+  documentData.name = resolvedName
+  documentData.thumbnail = thumbnail
+  return {
+    id: resolvedId ?? `${slug}-${generateUuid().slice(0, 6)}`,
+    name: resolvedName,
+    thumbnailUrl: thumbnail,
+    description,
+    document: documentData as PresetSceneDocument,
+  }
+}
+
+function updatePresetEntriesList() {
+  const remoteEntries = remotePresetSummaries.value.map<PresetListEntry>((item) => ({
+    id: item.id,
+    name: item.name,
+    thumbnailUrl: item.thumbnailUrl ?? null,
+    description: item.description ?? null,
+    source: 'remote',
+  }))
+  presetEntries.value = [...localPresetEntries.value, ...remoteEntries]
+}
+
+async function loadLocalPresetsOnce(): Promise<void> {
+  if (localPresetsLoaded.value) {
+    return
+  }
+  const modules = import.meta.glob<{ default: unknown }>('@/resources/scenes/*.json', { eager: true })
+  const entries: PresetListEntry[] = []
+  const details: Record<string, PresetSceneDetail> = {}
+  Object.entries(modules).forEach(([path, mod]) => {
+    const detail = sanitizeLocalPresetDetail(path, mod)
+    if (!detail) {
+      return
+    }
+    entries.push({
+      id: detail.id,
+      name: detail.name,
+      thumbnailUrl: detail.thumbnailUrl ?? null,
+      description: detail.description ?? null,
+      source: 'local',
+    })
+    details[detail.id] = detail
+  })
+  localPresetEntries.value = entries
+  presetSceneDetails.value = { ...presetSceneDetails.value, ...details }
+  localPresetsLoaded.value = true
+  updatePresetEntriesList()
+  void ensureDefaultPresetSelection()
+}
+
+async function loadRemotePresetSummaries(options: { force?: boolean } = {}) {
   if (presetScenesLoading.value) {
     return
   }
-  if (presetScenesLoaded.value && !options.force) {
+  if (remotePresetsLoaded.value && !options.force) {
     return
   }
   presetScenesLoading.value = true
   try {
     const data = await fetchPresetSceneSummaries()
-    presetScenes.value = data
-    presetScenesLoaded.value = true
-    presetScenesError.value = null
+    remotePresetSummaries.value = data
+    remotePresetsLoaded.value = true
+    updatePresetEntriesList()
+    void ensureDefaultPresetSelection()
   } catch (error) {
-    presetScenesError.value = error instanceof Error ? error.message : '预置场景列表加载失败'
+    console.warn('[NewSceneDialog] Failed to load remote preset scenes', error)
   } finally {
     presetScenesLoading.value = false
   }
@@ -104,34 +208,48 @@ async function ensurePresetDetail(id: string): Promise<PresetSceneDetail | null>
   }
 }
 
-async function togglePresetSelection(id: string) {
+async function selectPreset(id: string, options: { userInitiated?: boolean } = {}) {
   confirmError.value = null
-  if (selectedPresetId.value === id) {
-    selectedPresetId.value = null
-    return
+  const isSameSelection = selectedPresetId.value === id
+  if (!isSameSelection) {
+    selectedPresetId.value = id
   }
-  selectedPresetId.value = id
   const detail = await ensurePresetDetail(id)
   if (!detail) {
-    selectedPresetId.value = null
+    if (options.userInitiated) {
+      confirmError.value = '无法加载预置场景详情，请稍后重试'
+    }
     return
   }
-  const recommendedName = detail.document.name?.trim() || detail.name
-  if (recommendedName) {
-    sceneName.value = recommendedName
+  if (!isSameSelection) {
+    sceneName.value = createSuggestedSceneName(detail.name)
+    const recommendedWidth = detail.document.groundSettings?.width
+    if (typeof recommendedWidth === 'number') {
+      groundWidth.value = normalizeDimension(recommendedWidth, groundWidth.value)
+    }
+    const recommendedDepth = detail.document.groundSettings?.depth
+    if (typeof recommendedDepth === 'number') {
+      groundDepth.value = normalizeDimension(recommendedDepth, groundDepth.value)
+    }
   }
-  const recommendedWidth = detail.document.groundSettings?.width
-  if (typeof recommendedWidth === 'number') {
-    groundWidth.value = normalizeDimension(recommendedWidth, groundWidth.value)
-  }
-  const recommendedDepth = detail.document.groundSettings?.depth
-  if (typeof recommendedDepth === 'number') {
-    groundDepth.value = normalizeDimension(recommendedDepth, groundDepth.value)
+}
+
+async function ensureDefaultPresetSelection() {
+  if (!selectedPresetId.value && presetEntries.value.length > 0) {
+    const firstId = presetEntries.value[0]!.id
+    await selectPreset(firstId, { userInitiated: false })
+  } else if (selectedPresetId.value && !presetEntries.value.some((entry) => entry.id === selectedPresetId.value)) {
+    selectedPresetId.value = null
+    await ensureDefaultPresetSelection()
   }
 }
 
 function reloadPresetScenes() {
-  void loadPresetScenes({ force: true })
+  void loadRemotePresetSummaries({ force: true }).then(() => ensureDefaultPresetSelection())
+}
+
+async function handlePresetSelection(id: string) {
+  await selectPreset(id, { userInitiated: true })
 }
 
 watch(
@@ -145,11 +263,13 @@ watch(
       groundDepth.value = normalizeDimension(props.initialGroundDepth, 100)
       confirmError.value = null
       selectedPresetId.value = null
+      await loadLocalPresetsOnce()
+      await ensureDefaultPresetSelection()
+      void loadRemotePresetSummaries()
       await nextTick()
       const input = document.getElementById('new-scene-name') as HTMLInputElement | null
       input?.focus()
       input?.select()
-      void loadPresetScenes()
     } else {
       sceneName.value = 'New Scene'
       groundWidth.value = 100
@@ -171,13 +291,14 @@ async function confirm() {
   try {
     let presetDocument: PresetSceneDocument | null = null
     const presetId = selectedPresetId.value ?? null
-    if (presetId) {
-      const detail = await ensurePresetDetail(presetId)
-      if (!detail) {
-        throw new Error('预置场景详情加载失败')
-      }
-      presetDocument = detail.document
+    if (!presetId) {
+      throw new Error('请先选择一个预置场景')
     }
+    const detail = await ensurePresetDetail(presetId)
+    if (!detail) {
+      throw new Error('预置场景详情加载失败')
+    }
+    presetDocument = detail.document
 
     const trimmed = sceneName.value.trim()
     const name = trimmed.length ? trimmed : 'New Scene'
@@ -210,7 +331,7 @@ function cancel() {
 </script>
 
 <template>
-  <v-dialog v-model="dialogOpen" max-width="640">
+  <v-dialog v-model="dialogOpen" max-width="880">
     <v-card>
       <v-card-title>新建场景</v-card-title>
       <v-card-text>
@@ -221,39 +342,27 @@ function cancel() {
               刷新
             </v-btn>
           </div>
-          <div v-if="presetScenesLoading && !presetScenesLoaded" class="preset-loading-row">
+          <div v-if="presetScenesLoading && !hasPresetScenes" class="preset-loading-row">
             <v-progress-linear color="primary" indeterminate rounded />
           </div>
           <v-alert
-            v-else-if="presetScenesError"
-            type="error"
-            density="comfortable"
-            border="start"
-            border-color="error"
-          >
-            <div class="preset-alert-content">
-              <span>{{ presetScenesError }}</span>
-              <v-btn size="small" variant="text" @click="reloadPresetScenes">重新尝试</v-btn>
-            </div>
-          </v-alert>
-          <v-alert
-            v-else-if="presetScenesLoaded && !hasPresetScenes"
+            v-else-if="!presetScenesLoading && !hasPresetScenes"
             type="info"
             density="comfortable"
             border="start"
             border-color="info"
           >
-            暂无可用预置场景，您可以直接创建空白场景。
+            暂无可用预置场景，请检查资源目录或网络连接后重试。
           </v-alert>
           <div v-else-if="hasPresetScenes" class="preset-grid" role="list">
             <button
-              v-for="scene in presetScenes"
+              v-for="scene in presetEntries"
               :key="scene.id"
               type="button"
               role="listitem"
               class="preset-card"
               :class="{ selected: scene.id === selectedPresetId }"
-              @click="togglePresetSelection(scene.id)"
+              @click="handlePresetSelection(scene.id)"
             >
               <div class="preset-thumbnail">
                 <v-img
@@ -341,7 +450,7 @@ function cancel() {
           color="primary"
           variant="flat"
           :loading="isConfirming"
-          :disabled="isConfirming || loadingPresetDetailId !== null"
+          :disabled="isCreateDisabled"
           @click="confirm"
         >
           创建
@@ -376,8 +485,8 @@ function cancel() {
 .preset-grid {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: minmax(180px, 1fr);
-  grid-template-rows: repeat(2, minmax(0, 1fr));
+  grid-auto-columns: minmax(220px, 1fr);
+  grid-template-rows: repeat(3, minmax(0, 1fr));
   gap: 12px;
   overflow-x: auto;
   padding-bottom: 6px;
@@ -457,13 +566,6 @@ function cancel() {
 
 .preset-meta-size {
   opacity: 0.85;
-}
-
-.preset-alert-content {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
 }
 
 @media (max-width: 600px) {
