@@ -56,22 +56,13 @@
 </template>
 <script setup lang="ts">
 import BottomNav from '@/components/BottomNav.vue';
-
-type NavKey = 'home' | 'work' | 'exhibition' | 'profile' | 'optimize';
+import { redirectToNav, type NavKey } from '@/utils/navKey';
 
 const stats = [
   { label: '本月曝光', value: '12.3K' },
   { label: '新增收藏', value: '286' },
   { label: '分享次数', value: '54' },
 ];
-
-const routes: Record<NavKey, string> = {
-  home: '/pages/home/index',
-  work: '/pages/works/indite',
-  exhibition: '/pages/exhibition/index',
-  profile: '/pages/profile/index',
-  optimize: '/pages/optimize/index',
-};
 
 type SupportLink = 'help' | 'service' | 'about';
 
@@ -82,11 +73,7 @@ const supportMessages: Record<SupportLink, string> = {
 };
 
 function handleNavigate(target: NavKey) {
-  const route = routes[target];
-  if (!route || target === 'profile') {
-    return;
-  }
-  uni.redirectTo({ url: route });
+  redirectToNav(target, { current: 'profile' });
 }
 
 function goOrders() {

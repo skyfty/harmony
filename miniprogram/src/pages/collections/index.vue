@@ -66,12 +66,16 @@
     </view>
 
     <view v-if="loading && cards.length > 0" class="loading-tip">正在加载最新数据…</view>
+
+    <BottomNav active="work" @navigate="handleNavigate" />
   </view>
 </template>
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { onLoad, onPullDownRefresh, onUnload } from '@dcloudio/uni-app';
+import BottomNav from '@/components/BottomNav.vue';
 import { apiGetCollections, type CollectionSummary } from '@/api/miniprogram';
+import { redirectToNav, type NavKey } from '@/utils/navKey';
 
 interface CollectionCard {
   id: string;
@@ -264,6 +268,10 @@ function formatCount(value: number): string {
     return `${normalized.toFixed(normalized >= 10 ? 0 : 1)}K`;
   }
   return value.toString();
+}
+
+function handleNavigate(target: NavKey): void {
+  redirectToNav(target, { current: 'work' });
 }
 </script>
 <style scoped lang="scss">

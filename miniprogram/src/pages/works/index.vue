@@ -55,6 +55,14 @@
               <text>{{ card.mediaTypeLabel }}</text>
             </view>
             <view class="card-cover__badge">{{ card.sizeLabel }}</view>
+            <button
+              class="delete-btn card-cover__delete"
+              :disabled="deletingId === card.id"
+              @tap.stop="confirmDelete(card.id, card.title)"
+            >
+              <text v-if="deletingId === card.id" class="delete-btn__label">…</text>
+              <text v-else class="delete-btn__icon">🗑</text>
+            </button>
           </view>
           <view class="card-body">
             <text class="card-title" @tap="openDetail(card.id)">{{ card.title }}</text>
@@ -72,13 +80,6 @@
                 <text class="stat-icon stat-icon--heart" :class="{ 'is-active': card.liked }">❤</text>
                 <text class="stat-value">{{ formatCount(card.likes) }}</text>
               </view>
-              <button
-                class="delete-btn"
-                :disabled="deletingId === card.id"
-                @tap.stop="confirmDelete(card.id, card.title)"
-              >
-                {{ deletingId === card.id ? '删除中…' : '删除' }}
-              </button>
             </view>
           </view>
         </view>
@@ -86,11 +87,14 @@
     </view>
 
     <view v-if="loading && cards.length > 0" class="loading-tip">正在同步最新作品…</view>
+
+    <BottomNav active="work" @navigate="handleNavigate" />
   </view>
 </template>
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { onLoad, onPullDownRefresh, onUnload } from '@dcloudio/uni-app';
+import BottomNav from '@/components/BottomNav.vue';
 import {
   apiDeleteWork,
   apiGetCollections,
@@ -98,6 +102,7 @@ import {
   type CollectionSummary,
   type WorkSummary,
 } from '@/api/miniprogram';
+import { redirectToNav, type NavKey } from '@/utils/navKey';
 
 interface WorkCard {
   id: string;
@@ -465,6 +470,10 @@ function formatCount(value: number): string {
   }
   return value.toString();
 }
+
+function handleNavigate(target: NavKey): void {
+  redirectToNav(target, { current: 'work' });
+}
 </script>
 <style scoped lang="scss">
 .page {
@@ -624,6 +633,21 @@ function formatCount(value: number): string {
   font-size: 11px;
 }
 
+.card-cover__delete {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 34px;
+  height: 34px;
+  border-radius: 18px;
+  box-shadow: 0 6px 18px rgba(17, 21, 33, 0.28);
+  z-index: 2;
+}
+
+.card-cover__delete[disabled] {
+  opacity: 0.6;
+}
+
 .card-body {
   padding: 16px 18px 20px;
   display: flex;
@@ -698,16 +722,31 @@ function formatCount(value: number): string {
 }
 
 .delete-btn {
-  padding: 4px 12px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
   border: none;
-  border-radius: 12px;
+  border-radius: 18px;
   background: rgba(217, 48, 37, 0.85);
   color: #ffffff;
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .delete-btn[disabled] {
   opacity: 0.7;
+}
+
+.delete-btn__icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.delete-btn__label {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
 }
 
 .loading-tip {

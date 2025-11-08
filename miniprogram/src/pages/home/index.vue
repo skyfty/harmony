@@ -95,8 +95,7 @@ import { onShow } from '@dcloudio/uni-app';
 import BottomNav from '@/components/BottomNav.vue';
 import { useWorksStore } from '@/stores/worksStore';
 import type { ExhibitionItem, WorkItem } from '@/stores/worksStore';
-
-type NavKey = 'home' | 'work' | 'exhibition' | 'profile' | 'optimize';
+import { redirectToNav, type NavKey } from '@/utils/navKey';
 
 type ExhibitionCard = {
   id: string;
@@ -244,20 +243,8 @@ const bestWorks = computed<WorkCard[]>(() =>
     })),
 );
 
-const routes: Record<NavKey, string> = {
-  home: '/pages/home/index',
-  work: '/pages/works/indite',
-  exhibition: '/pages/exhibition/index',
-  profile: '/pages/profile/index',
-  optimize: '/pages/optimize/index',
-};
-
 function handleNavigate(target: NavKey) {
-  const route = routes[target];
-  if (!route) {
-    return;
-  }
-  uni.redirectTo({ url: route });
+  redirectToNav(target, { current: 'home', allowSame: true });
 }
 
 function goWorksList() {

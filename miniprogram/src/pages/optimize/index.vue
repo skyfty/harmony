@@ -56,8 +56,7 @@ import { computed, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import BottomNav from '@/components/BottomNav.vue';
 import { OPTIMIZE_PRODUCTS, type OptimizeProduct } from '@/data/optimizeProducts';
-
-type NavKey = 'home' | 'work' | 'exhibition' | 'profile' | 'optimize';
+import { redirectToNav, type NavKey } from '@/utils/navKey';
 type CategoryKey = 'all' | string;
 
 const STORAGE_KEY = 'optimizePurchased';
@@ -78,24 +77,12 @@ const filteredProducts = computed(() => {
   return products.value.filter((item) => item.category === selectedCategory.value);
 });
 
-const routes: Record<NavKey, string> = {
-  home: '/pages/home/index',
-  work: '/pages/works/indite',
-  exhibition: '/pages/exhibition/index',
-  profile: '/pages/profile/index',
-  optimize: '/pages/optimize/index',
-};
-
 function selectCategory(category: CategoryKey) {
   selectedCategory.value = category;
 }
 
 function handleNavigate(target: NavKey) {
-  const route = routes[target];
-  if (!route || target === 'optimize') {
-    return;
-  }
-  uni.redirectTo({ url: route });
+  redirectToNav(target, { current: 'optimize' });
 }
 
 function loadPurchasedIds(): string[] {
