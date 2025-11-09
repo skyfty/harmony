@@ -2284,6 +2284,7 @@ async function exportScene(options: SceneExportOptions, onProgress: (progress: n
     snapshot.packageAssetMap = packageAssetMap
     onProgress(35, 'Applying export preferences...')
     const jsonDocument = await prepareJsonSceneExport(snapshot, options)
+
     return new Blob([JSON.stringify(jsonDocument, null, 2)], { type: 'application/json' })
   } else {
     throw new Error(`Unsupported export format: ${options.format}`)

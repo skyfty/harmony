@@ -1280,10 +1280,6 @@ async function handleCreateDisplayBoardNode(): Promise<void> {
     sceneStore.addNodeComponent(created.id, GUIDEBOARD_COMPONENT_TYPE)
   }
 
-  if (!created.components?.[VIEW_POINT_COMPONENT_TYPE]) {
-    sceneStore.addNodeComponent(created.id, VIEW_POINT_COMPONENT_TYPE)
-  }
-
   const refreshedNode = findNodeWithParent(sceneStore.nodes, created.id)?.node ?? created
   const guideboardState = refreshedNode.components?.[GUIDEBOARD_COMPONENT_TYPE] as
     | SceneNodeComponentState<GuideboardComponentProps>
@@ -1296,7 +1292,8 @@ async function handleCreateDisplayBoardNode(): Promise<void> {
 
   ensureBehaviorComponent(created.id)
   initializeGuideboardBehavior(created.id, created.name ?? name)
-  initializeViewPointBehavior(created.id)
+
+  await handleCreateViewPointNode({ parentId: created.id, autoBehaviors: true })
 
   const runtimeObject = getRuntimeObject(created.id)
   const boardWorldPosition = fallbackBoardPosition.clone()

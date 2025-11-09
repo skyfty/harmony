@@ -188,6 +188,20 @@ export const IMPORT_TEXTURE_SLOT_MAP: Array<{ slot: SceneMaterialTextureSlot; ke
 const HISTORY_LIMIT = 50
 
 const LOCAL_EMBEDDED_ASSET_PREFIX = 'local::'
+
+function normalizeRemoteCandidate(value: string | null | undefined): string | null {
+  if (!value) {
+    return null
+  }
+  const trimmed = value.trim()
+  if (!trimmed.length) {
+    return null
+  }
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:')) {
+    return trimmed
+  }
+  return null
+}
 const BEHAVIOR_PREFAB_PREVIEW_COLOR = '#4DB6AC'
 const NODE_PREFAB_FORMAT_VERSION = 1
 const NODE_PREFAB_PREVIEW_COLOR = '#7986CB'
@@ -5764,7 +5778,106 @@ export const useSceneStore = defineStore('scene', {
       this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
       const commitOptions = options.commitOptions ?? { updateNodes: false, updateCamera: false }
       commitSceneSnapshot(this, commitOptions)
+      void this.syncAssetPackageMapEntry(registeredAsset, options.source)
       return registeredAsset
+    },
+    async syncAssetPackageMapEntry(asset: ProjectAsset, source?: AssetSourceMetadata) {
+      if (!asset?.id) {
+        return
+      }
+
+      try {
+        const updates: Record<string, string> = {}
+        const removals: string[] = []
+
+        if (source?.type === 'package' && source.providerId) {
+          const mapKey = `${source.providerId}::${source.originalAssetId ?? asset.id}`
+          updates[mapKey] = asset.id
+        }
+
+        const remoteCandidate = normalizeRemoteCandidate(asset.downloadUrl)
+          ?? normalizeRemoteCandidate(asset.description)
+          ?? normalizeRemoteCandidate(asset.thumbnail)
+          ?? normalizeRemoteCandidate(asset.id)
+
+        if (remoteCandidate) {
+          const remoteKey = `url::${asset.id}`
+          updates[remoteKey] = remoteCandidate
+          removals.push(`${LOCAL_EMBEDDED_ASSET_PREFIX}${asset.id}`)
+        }
+
+        const shouldEmbedLocal = source?.type === 'local' && !remoteCandidate
+        if (shouldEmbedLocal) {
+          const dataUrl = await this.createLocalAssetDataUrl(asset)
+          if (dataUrl) {
+            const embeddedKey = `${LOCAL_EMBEDDED_ASSET_PREFIX}${asset.id}`
+            updates[embeddedKey] = dataUrl
+            removals.push(`url::${asset.id}`)
+          }
+        }
+
+        if (!Object.keys(updates).length && !removals.length) {
+          return
+        }
+
+        const nextMap: Record<string, string> = { ...this.packageAssetMap }
+        let changed = false
+
+        removals.forEach((key) => {
+          if (key in nextMap) {
+            delete nextMap[key]
+            changed = true
+          }
+        })
+
+        Object.entries(updates).forEach(([key, value]) => {
+          if (typeof value !== 'string' || !value.trim().length) {
+            return
+          }
+          if (nextMap[key] !== value) {
+            nextMap[key] = value
+            changed = true
+          }
+        })
+
+        if (!changed) {
+          return
+        }
+
+        this.packageAssetMap = nextMap
+        commitSceneSnapshot(this, { updateNodes: false, updateCamera: false })
+      } catch (error) {
+        console.warn('Failed to synchronize package asset map for asset', asset.id, error)
+      }
+    },
+    async createLocalAssetDataUrl(asset: ProjectAsset): Promise<string | null> {
+      const assetId = asset?.id?.trim()
+      if (!assetId) {
+        return null
+      }
+      const assetCache = useAssetCacheStore()
+      let entry = assetCache.hasCache(assetId) ? assetCache.getEntry(assetId) : null
+      if (!entry || entry.status !== 'cached' || !entry.blob) {
+        entry = await assetCache.loadFromIndexedDb(assetId)
+      }
+      const blob = entry?.blob ?? null
+      if (!blob) {
+        return null
+      }
+
+      const mimeType = entry?.mimeType ?? blob.type ?? ''
+      const assetType = asset.type
+      const isSupportedMedia = mimeType.startsWith('image/') || mimeType.startsWith('video/') || assetType === 'image' || assetType === 'texture'
+      if (!isSupportedMedia) {
+        return null
+      }
+
+      try {
+        return await blobToDataUrl(blob)
+      } catch (error) {
+        console.warn('Failed to serialize local asset to data URL', assetId, error)
+        return null
+      }
     },
     async saveNodePrefab(nodeId: string): Promise<ProjectAsset> {
       const node = findNodeById(this.nodes, nodeId)

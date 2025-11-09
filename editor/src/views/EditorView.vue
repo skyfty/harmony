@@ -20,6 +20,7 @@ import { broadcastScenePreviewUpdate } from '@/utils/previewChannel'
 import { generateUuid } from '@/utils/uuid'
 import {
   useSceneStore,
+  buildPackageAssetMapForExport,
   type EditorPanel,
   type SceneBundleImportPayload,
   type SceneBundleImportScene,
@@ -699,6 +700,7 @@ let lastPreviewBroadcastRevision = 0
 async function broadcastScenePreview(document:StoredSceneDocument) {
   try {
     const exportDocument = await prepareJsonSceneExport(document, SCENE_PREVIEW_EXPORT_OPTIONS)
+
     let revision = Date.now()
     if (revision <= lastPreviewBroadcastRevision) {
       revision = lastPreviewBroadcastRevision + 1
@@ -730,6 +732,7 @@ async function saveCurrentScene(): Promise<boolean> {
       viewportRef.value?.captureThumbnail()
       const document = await sceneStore.saveActiveScene({force: true})
       if (document) {
+        document.packageAssetMap = await buildPackageAssetMapForExport(document,{embedResources:true})
         broadcastScenePreview(document)
       }
       return true
