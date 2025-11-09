@@ -127,8 +127,6 @@ import {
   WALL_MIN_HEIGHT,
   WALL_MIN_THICKNESS,
   WALL_MIN_WIDTH,
-  DISPLAY_BOARD_DEFAULT_MAX_WIDTH,
-  DISPLAY_BOARD_DEFAULT_MAX_HEIGHT,
   clampWallProps,
   cloneWallComponentProps,
   clampGuideboardComponentProps,
@@ -136,7 +134,6 @@ import {
   createGuideboardComponentState,
   clampDisplayBoardComponentProps,
   cloneDisplayBoardComponentProps,
-  createDisplayBoardComponentState,
   clampViewPointComponentProps,
   cloneViewPointComponentProps,
   createViewPointComponentState,
@@ -1037,6 +1034,185 @@ function buildWallDynamicMeshFromWorldSegments(
   }
 
   return { center, definition }
+}
+
+function applyDisplayBoardComponentPropsToNode(
+  node: SceneNode,
+  props: DisplayBoardComponentProps,
+): boolean {
+  const runtime = getRuntimeObject(node.id)
+  if (!runtime) {
+    return false
+  }
+
+  const mesh = findDisplayBoardPlaneMesh(runtime)
+  if (!mesh) {
+    return false
+  }
+
+  const normalized = clampDisplayBoardComponentProps(props)
+  const mediaSize = resolveDisplayBoardMediaSize(normalized, mesh)
+  const targetSize = computeDisplayBoardPlaneSize(normalized, mediaSize)
+  if (!targetSize) {
+    return false
+  }
+
+  const currentSize = extractPlaneGeometrySize(mesh.geometry)
+  if (
+    currentSize &&
+    Math.abs(currentSize.width - targetSize.width) < DISPLAY_BOARD_GEOMETRY_EPSILON &&
+    Math.abs(currentSize.height - targetSize.height) < DISPLAY_BOARD_GEOMETRY_EPSILON
+  ) {
+    return false
+  }
+
+  const { widthSegments, heightSegments } = resolvePlaneGeometrySegments(mesh.geometry)
+  const nextGeometry = new THREE.PlaneGeometry(
+    targetSize.width,
+    targetSize.height,
+    widthSegments,
+    heightSegments,
+  )
+  const previous = mesh.geometry
+  mesh.geometry = nextGeometry
+  previous?.dispose?.()
+  return true
+}
+
+const DISPLAY_BOARD_GEOMETRY_EPSILON = 1e-4
+
+type DisplayBoardPlaneMesh = THREE.Mesh<THREE.BufferGeometry, THREE.Material | THREE.Material[]>
+
+function findDisplayBoardPlaneMesh(root: Object3D): DisplayBoardPlaneMesh | null {
+  const stack: Object3D[] = [root]
+  while (stack.length) {
+    const current = stack.pop()
+    if (!current) {
+      continue
+    }
+    if ((current as THREE.Mesh).isMesh) {
+      const mesh = current as DisplayBoardPlaneMesh
+      if (isPlaneGeometry(mesh.geometry)) {
+        return mesh
+      }
+    }
+    if (current.children?.length) {
+      stack.push(...current.children)
+    }
+  }
+  return null
+}
+
+function resolveDisplayBoardMediaSize(
+  props: DisplayBoardComponentProps,
+  mesh: DisplayBoardPlaneMesh,
+): { width: number; height: number } | null {
+  const width = typeof props.intrinsicWidth === 'number' && props.intrinsicWidth > 0 ? props.intrinsicWidth : null
+  const height = typeof props.intrinsicHeight === 'number' && props.intrinsicHeight > 0 ? props.intrinsicHeight : null
+  if (width && height) {
+    return { width, height }
+  }
+
+  const texture = extractPrimaryTexture(mesh.material)
+  if (!texture || !texture.image) {
+    return null
+  }
+
+  const image = texture.image as {
+    width?: number
+    height?: number
+    naturalWidth?: number
+    naturalHeight?: number
+    videoWidth?: number
+    videoHeight?: number
+  }
+  const inferredWidth = image?.naturalWidth ?? image?.videoWidth ?? image?.width ?? 0
+  const inferredHeight = image?.naturalHeight ?? image?.videoHeight ?? image?.height ?? 0
+  if (inferredWidth > 0 && inferredHeight > 0) {
+    return { width: inferredWidth, height: inferredHeight }
+  }
+
+  return null
+}
+
+function computeDisplayBoardPlaneSize(
+  props: DisplayBoardComponentProps,
+  mediaSize: { width: number; height: number } | null,
+): { width: number; height: number } | null {
+  const maxWidth = Math.max(1e-3, props.maxWidth)
+  const maxHeight = Math.max(1e-3, props.maxHeight)
+  const source = mediaSize && mediaSize.width > 0 && mediaSize.height > 0 ? mediaSize : null
+
+  if (!source) {
+    const fallback = Math.min(maxWidth, maxHeight)
+    return { width: fallback, height: fallback }
+  }
+
+  const aspect = source.width / Math.max(source.height, 1e-6)
+  let width = maxWidth
+  let height = width / Math.max(aspect, 1e-6)
+
+  if (height > maxHeight) {
+    height = maxHeight
+    width = height * aspect
+  }
+
+  width = Math.max(1e-3, width)
+  height = Math.max(1e-3, height)
+
+  return { width, height }
+}
+
+function extractPlaneGeometrySize(geometry: THREE.BufferGeometry): { width: number; height: number } | null {
+  const parameters = (geometry as unknown as { parameters?: { width?: number; height?: number } }).parameters
+  if (Number.isFinite(parameters?.width) && Number.isFinite(parameters?.height)) {
+    return { width: parameters!.width!, height: parameters!.height! }
+  }
+
+  if (!geometry.boundingBox) {
+    geometry.computeBoundingBox()
+  }
+  const box = geometry.boundingBox
+  if (!box) {
+    return null
+  }
+
+  const width = box.max.x - box.min.x
+  const height = box.max.y - box.min.y
+  if (!Number.isFinite(width) || !Number.isFinite(height)) {
+    return null
+  }
+
+  return { width: Math.abs(width), height: Math.abs(height) }
+}
+
+function resolvePlaneGeometrySegments(geometry: THREE.BufferGeometry): { widthSegments: number; heightSegments: number } {
+  const parameters = (geometry as unknown as { parameters?: { widthSegments?: number; heightSegments?: number } }).parameters
+  const widthSegments = Number.isFinite(parameters?.widthSegments)
+    ? Math.max(1, parameters!.widthSegments!)
+    : 1
+  const heightSegments = Number.isFinite(parameters?.heightSegments)
+    ? Math.max(1, parameters!.heightSegments!)
+    : 1
+  return { widthSegments, heightSegments }
+}
+
+function isPlaneGeometry(geometry: THREE.BufferGeometry): geometry is THREE.PlaneGeometry {
+  return geometry instanceof THREE.PlaneGeometry || geometry.type === 'PlaneGeometry'
+}
+
+function extractPrimaryTexture(material: THREE.Material | THREE.Material[]): THREE.Texture | null {
+  const materials = Array.isArray(material) ? material : [material]
+  for (const candidate of materials) {
+    if (!candidate) {
+      continue
+    }
+    const typed = candidate as THREE.Material & { map?: THREE.Texture | null }
+    if (typed.map) {
+      return typed.map
+    }
+  }
+  return null
 }
 
 function applyWallComponentPropsToNode(node: SceneNode, props: WallComponentProps): boolean {
@@ -6982,6 +7158,8 @@ export const useSceneStore = defineStore('scene', {
         node.components = nextComponents
         if (type === WALL_COMPONENT_TYPE) {
           applyWallComponentPropsToNode(node, props as unknown as WallComponentProps)
+        } else if (type === DISPLAY_BOARD_COMPONENT_TYPE) {
+          applyDisplayBoardComponentPropsToNode(node, props as unknown as DisplayBoardComponentProps)
         }
       })
 
@@ -7076,7 +7254,7 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
-      let nextProps: Record<string, unknown> | WallComponentProps
+      let nextProps: Record<string, unknown> | WallComponentProps | DisplayBoardComponentProps
       if (type === WALL_COMPONENT_TYPE) {
         const currentProps = component.props as WallComponentProps
         const merged = clampWallProps({
@@ -7147,6 +7325,8 @@ export const useSceneStore = defineStore('scene', {
 
         if (currentType === WALL_COMPONENT_TYPE) {
           applyWallComponentPropsToNode(node, nextProps as WallComponentProps)
+        } else if (currentType === DISPLAY_BOARD_COMPONENT_TYPE) {
+          applyDisplayBoardComponentPropsToNode(node, nextProps as DisplayBoardComponentProps)
         }
       })
 

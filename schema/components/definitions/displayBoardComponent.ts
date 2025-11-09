@@ -137,6 +137,11 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
       return
     }
 
+    if (intrinsic) {
+      // Apply stored intrinsic dimensions immediately so the plane updates before media finishes loading.
+      this.updateGeometry(mesh, props, intrinsic)
+    }
+
     if (this.pending) {
       this.pending.cancelled = true
     }
