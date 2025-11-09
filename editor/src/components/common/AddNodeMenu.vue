@@ -1335,6 +1335,16 @@ async function handleCreateDisplayBoardNode(): Promise<void> {
     sceneStore.addNodeComponent(created.id, VIEW_POINT_COMPONENT_TYPE)
   }
 
+  const refreshedNode = findNodeWithParent(sceneStore.nodes, created.id)?.node ?? created
+  const guideboardState = refreshedNode.components?.[GUIDEBOARD_COMPONENT_TYPE] as
+    | SceneNodeComponentState<GuideboardComponentProps>
+    | undefined
+  if (guideboardState && guideboardState.props.initiallyVisible !== true) {
+    sceneStore.updateNodeComponentProps(refreshedNode.id, guideboardState.id, {
+      initiallyVisible: true,
+    })
+  }
+
   ensureBehaviorComponent(created.id)
   initializeGuideboardBehavior(created.id, created.name ?? name)
   initializeViewPointBehavior(created.id)
@@ -1754,11 +1764,6 @@ function handleAddLight(type: LightNodeType) {
     <v-list class="add-menu-list">
       <v-list-item title="Group" @click="handleAddGroup()" />
       <v-list-item title="Create Empty" @click="handleCreateEmptyNode()" />
-      <v-list-item
-        title="Display Board"
-        prepend-icon="mdi-monitor"
-        @click="handleCreateDisplayBoardNode()"
-      />
       <v-menu  transition="none" location="end" offset="8">
         <template #activator="{ props: showcaseMenuProps }">
           <v-list-item
@@ -1768,6 +1773,10 @@ function handleAddLight(type: LightNodeType) {
           />
         </template>
         <v-list class="add-submenu-list">
+          <v-list-item
+            title="Display Board"
+            @click="handleCreateDisplayBoardNode()"
+          />
           <v-list-item title="Visit" @click="handleCreateShowcaseVisit()"  :disabled="!canCreateShowcaseNodes"/>
           <v-divider />
           <v-list-item title="Guideboard" @click="handleCreateGuideboardNode()" />

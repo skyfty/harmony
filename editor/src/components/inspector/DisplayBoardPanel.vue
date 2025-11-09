@@ -362,9 +362,6 @@ const mediaSourceLabel = computed(() => {
           @blur="handleUrlCommit"
           @keyup.enter="handleUrlCommit"
         />
-        <p class="display-board-hint">
-          Drop an image or video asset here, or provide a direct URL. Asset references are stored as <code>asset://ID</code>.
-        </p>
       </div>
     </v-expansion-panel-text>
   </v-expansion-panel>
