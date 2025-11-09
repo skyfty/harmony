@@ -10,6 +10,7 @@ import ViewPointPanel from '@/components/inspector/ViewPointPanel.vue'
 import WarpGatePanel from '@/components/inspector/WarpGatePanel.vue'
 import GroundPanel from '@/components/inspector/GroundPanel.vue'
 import BehaviorPanel from '@/components/inspector/BehaviorPanel.vue'
+import AIChatPanel from '@/components/layout/AIChatPanel.vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 import type { BehaviorEventType, SceneBehavior, SceneNodeComponentState } from '@harmony/schema'
@@ -32,7 +33,10 @@ type BehaviorDetailsPayload = {
   sequenceId: string
   nodeId: string | null
 }
-const props = defineProps<{ floating?: boolean }>()
+const props = defineProps<{
+  floating?: boolean
+  captureViewportScreenshot?: () => Promise<Blob | null>
+}>()
 
 const emit = defineEmits<{
   (event: 'collapse'): void
@@ -45,6 +49,38 @@ const emit = defineEmits<{
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
+
+type InspectorViewTab = 'inspector' | 'assistant'
+
+const TAB_STORAGE_KEY = 'harmony:inspector-panel:active-tab'
+
+function restoreActiveTab(): InspectorViewTab {
+  if (typeof window === 'undefined') {
+    return 'inspector'
+  }
+  const stored = window.localStorage.getItem(TAB_STORAGE_KEY)
+  return stored === 'assistant' ? 'assistant' : 'inspector'
+}
+
+function persistActiveTab(tab: InspectorViewTab): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+  window.localStorage.setItem(TAB_STORAGE_KEY, tab)
+}
+
+const activeTab = ref<InspectorViewTab>(restoreActiveTab())
+
+function selectTab(tab: InspectorViewTab): void {
+  if (activeTab.value === tab) {
+    return
+  }
+  activeTab.value = tab
+}
+
+watch(activeTab, (tab) => {
+  persistActiveTab(tab)
+})
 
 const nodeName = ref('')
 const materialDetailsTargetId = ref<string | null>(null)
@@ -305,79 +341,106 @@ function handleAddComponent(type: string) {
       <v-btn icon="mdi-window-minimize"  size="small" variant="text" @click="emit('collapse')" />
     </v-toolbar>
     <v-divider />
-    <div class="panel-body" v-if="selectedNode">
-      <div style="display: flex; align-items: center; gap: 0.2rem; padding: 0.2rem 0.7rem;">
-        <v-icon color="primary" size="40">{{ inspectorIcon }}</v-icon>
-        <v-text-field
-          :model-value="nodeName"
-          variant="solo"
-          density="compact"
-          hide-details
-          @update:modelValue="handleNameUpdate"
-        />
-      </div>
-
-      <v-expansion-panels
-        v-model="expandedPanels"
-        multiple
-        variant="accordion"
-        class="inspector-panels"
+    <div class="panel-tabs">
+      <v-btn
+        class="panel-tab"
+        :class="{ 'is-active': activeTab === 'inspector' }"
+        variant="text"
+        size="small"
+        @click="selectTab('inspector')"
       >
-      <TransformPanel />
-      <LightPanel v-if="isLightNode"/>
-      <MaterialPanel
-        v-else-if="showMaterialPanel"
-        v-model:active-node-material-id="materialDetailsTargetId"
-        @open-details="handleOpenMaterialDetails"
-        @close-details="handleMaterialPanelRequestCloseDetails"
-      />
-      <GroundPanel v-if="isGroundNode" />
-
-      <div v-if="nodeComponents.length" class="component-list">
-        <div v-for="component in nodeComponents" :key="component.id" class="component-entry" >
-          <GuideboardPanel v-if="component.type === GUIDEBOARD_COMPONENT_TYPE" />
-          <ViewPointPanel v-else-if="component.type === VIEW_POINT_COMPONENT_TYPE" />
-          <WarpGatePanel v-else-if="component.type === WARP_GATE_COMPONENT_TYPE" />
-          <WallPanel v-else-if="component.type === WALL_COMPONENT_TYPE" />
-          <BehaviorPanel
-            v-else-if="component.type === BEHAVIOR_COMPONENT_TYPE"
-            @open-details="handleOpenBehaviorDetails"
-          />
-        </div>
-      </div>
-
-      <div class="component-actions">
-        <v-menu location="top" origin="auto" transition="null" v-if="availableComponents.length">
-          <template #activator="{ props }">
-            <v-btn v-bind="props"
-                  size="small" prepend-icon="mdi-plus">
-              Add Component
-            </v-btn>
-          </template>
-          <v-list density="compact"  class="menu-list">
-            <v-list-item
-              v-for="definition in availableComponents"
-              :key="definition.type"
-              :value="definition.type"
-              @click="handleAddComponent(definition.type)"
-            >
-              <v-list-item-title>{{ definition.label }}</v-list-item-title>
-            </v-list-item>
-          </v-list>
-        </v-menu>
-        <v-btn
-          v-else
-          size="small"
-          prepend-icon="mdi-check"
-          disabled
-        >
-          All Components Added
-        </v-btn>
-      </div>
-      </v-expansion-panels>
+        Inspector
+      </v-btn>
+      <v-btn
+        class="panel-tab"
+        :class="{ 'is-active': activeTab === 'assistant' }"
+        variant="text"
+        size="small"
+        @click="selectTab('assistant')"
+      >
+        AI Chat
+      </v-btn>
     </div>
-    <div v-else class="placeholder-text">
-      Select an object to inspect its properties.
+    <div class="panel-content">
+      <template v-if="activeTab === 'inspector'">
+        <div class="panel-body" v-if="selectedNode">
+          <div style="display: flex; align-items: center; gap: 0.2rem; padding: 0.2rem 0.7rem;">
+            <v-icon color="primary" size="40">{{ inspectorIcon }}</v-icon>
+            <v-text-field
+              :model-value="nodeName"
+              variant="solo"
+              density="compact"
+              hide-details
+              @update:modelValue="handleNameUpdate"
+            />
+          </div>
+
+          <v-expansion-panels
+            v-model="expandedPanels"
+            multiple
+            variant="accordion"
+            class="inspector-panels"
+          >
+          <TransformPanel />
+          <LightPanel v-if="isLightNode"/>
+          <MaterialPanel
+            v-else-if="showMaterialPanel"
+            v-model:active-node-material-id="materialDetailsTargetId"
+            @open-details="handleOpenMaterialDetails"
+            @close-details="handleMaterialPanelRequestCloseDetails"
+          />
+          <GroundPanel v-if="isGroundNode" />
+
+          <div v-if="nodeComponents.length" class="component-list">
+            <div v-for="component in nodeComponents" :key="component.id" class="component-entry" >
+              <GuideboardPanel v-if="component.type === GUIDEBOARD_COMPONENT_TYPE" />
+              <ViewPointPanel v-else-if="component.type === VIEW_POINT_COMPONENT_TYPE" />
+              <WarpGatePanel v-else-if="component.type === WARP_GATE_COMPONENT_TYPE" />
+              <WallPanel v-else-if="component.type === WALL_COMPONENT_TYPE" />
+              <BehaviorPanel
+                v-else-if="component.type === BEHAVIOR_COMPONENT_TYPE"
+                @open-details="handleOpenBehaviorDetails"
+              />
+            </div>
+          </div>
+
+          <div class="component-actions">
+            <v-menu location="top" origin="auto" transition="null" v-if="availableComponents.length">
+              <template #activator="{ props }">
+                <v-btn v-bind="props"
+                      size="small" prepend-icon="mdi-plus">
+                  Add Component
+                </v-btn>
+              </template>
+              <v-list density="compact"  class="menu-list">
+                <v-list-item
+                  v-for="definition in availableComponents"
+                  :key="definition.type"
+                  :value="definition.type"
+                  @click="handleAddComponent(definition.type)"
+                >
+                  <v-list-item-title>{{ definition.label }}</v-list-item-title>
+                </v-list-item>
+              </v-list>
+            </v-menu>
+            <v-btn
+              v-else
+              size="small"
+              prepend-icon="mdi-check"
+              disabled
+            >
+              All Components Added
+            </v-btn>
+          </div>
+          </v-expansion-panels>
+        </div>
+        <div v-else class="placeholder-text">
+          Select an object to inspect its properties.
+        </div>
+      </template>
+      <div v-else class="assistant-panel">
+        <AIChatPanel :capture-viewport-screenshot="props.captureViewportScreenshot" />
+      </div>
     </div>
   </v-card>
 </template>
@@ -396,6 +459,48 @@ function handleAddComponent(type: string) {
 
 .panel-card.is-floating {
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.35);
+}
+
+.panel-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 2px;
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+.panel-tab {
+  flex: 1 1 0;
+  border-radius: 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: rgba(233, 236, 241, 0.7);
+  transition: background-color 0.18s ease, color 0.18s ease;
+}
+
+.panel-tab.is-active {
+  background-color: rgba(0, 169, 255, 0.18);
+  color: #f5fbff;
+  box-shadow: inset 0 0 0 1px rgba(0, 169, 255, 0.24);
+}
+
+.panel-tab :deep(.v-btn__content) {
+  justify-content: center;
+}
+
+.panel-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.assistant-panel {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  padding: 6px 8px 10px;
 }
 
 .panel-toolbar {
