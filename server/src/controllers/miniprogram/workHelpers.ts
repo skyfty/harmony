@@ -136,10 +136,20 @@ export async function fetchWorkResponsesByIds(workIds: Types.ObjectId[], userId?
     return []
   }
   const orderMap = new Map<string, number>()
+  const uniqueIds: Types.ObjectId[] = []
+  const seen = new Set<string>()
   workIds.forEach((id, index) => {
-    orderMap.set(id.toString(), index)
+    const key = id.toString()
+    if (!orderMap.has(key)) {
+      orderMap.set(key, index)
+    }
+    if (seen.has(key)) {
+      return
+    }
+    seen.add(key)
+    uniqueIds.push(new Types.ObjectId(key))
   })
-  const works = (await WorkModel.find({ _id: { $in: workIds } })
+  const works = (await WorkModel.find({ _id: { $in: uniqueIds } })
     .lean()
     .exec()) as WorkLean[]
   if (!works.length) {

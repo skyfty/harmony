@@ -23,10 +23,12 @@
   </view>
 </template>
 <script setup lang="ts">
-const props = defineProps<{ active: 'home' | 'work' | 'exhibition' | 'profile' | 'optimize' }>();
-const emit = defineEmits<{ (event: 'navigate', value: typeof props.active): void }>();
+import type { NavKey } from '@/utils/navKey';
 
-function go(value: typeof props.active) {
+const props = defineProps<{ active: NavKey }>();
+const emit = defineEmits<{ (event: 'navigate', value: NavKey): void }>();
+
+function go(value: NavKey) {
   if (value === props.active) {
     return;
   }

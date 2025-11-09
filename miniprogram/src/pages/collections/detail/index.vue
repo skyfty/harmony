@@ -99,6 +99,8 @@
       <text class="empty-title">{{ loadingError ? '加载失败' : '未找到作品集' }}</text>
       <text class="empty-desc">{{ loadingError || '请返回作品集列表或重新选择' }}</text>
     </view>
+
+    <BottomNav active="work" @navigate="handleNavigate" />
   </view>
 
   <view v-if="collectionRatingModalVisible" class="rating-modal-mask" @tap="closeCollectionRatingModal"></view>
@@ -126,6 +128,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
+import BottomNav from '@/components/BottomNav.vue';
 import {
   apiGetCollection,
   apiToggleCollectionLike,
@@ -134,6 +137,7 @@ import {
   type WorkSummary,
 } from '@/api/miniprogram';
 import { useWorksStore } from '@/stores/worksStore';
+import { redirectToNav, type NavKey } from '@/utils/navKey';
 
 type WorkMediaType = WorkSummary['mediaType'];
 
@@ -396,6 +400,10 @@ function formatNumber(value: number): string {
     return `${normalized.toFixed(normalized >= 10 ? 0 : 1)}K`;
   }
   return value.toString();
+}
+
+function handleNavigate(target: NavKey): void {
+  redirectToNav(target, { current: 'work' });
 }
 </script>
 <style scoped lang="scss">

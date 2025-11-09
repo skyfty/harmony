@@ -52,6 +52,9 @@
       "path": "pages/collections/detail/index"
     },
     {
+      "path": "pages/collections/index"
+    },
+    {
       "path": "pages/index/index"
     },
     {

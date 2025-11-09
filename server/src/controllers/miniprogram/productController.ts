@@ -3,8 +3,10 @@ import { Types } from 'mongoose'
 import { OptimizeProductModel } from '@/models/OptimizeProduct'
 import { OrderModel } from '@/models/Order'
 import { ensureUserId } from './utils'
-import { OPTIMIZE_PRODUCT_SEEDS } from '@/data/optimizeProducts'
 import { generateOrderNumber } from '@/utils/orderNumber'
+import type { OptimizeProductUsageConfig } from '@/types/models'
+import { processProductPayment } from '@/services/paymentService'
+import { addProductToWarehouse } from '@/services/warehouseService'
 
 interface ProductResponse {
   id: string
@@ -14,6 +16,8 @@ interface ProductResponse {
   price: number
   imageUrl?: string
   description?: string
+  tags?: string[]
+  usageConfig?: OptimizeProductUsageConfig
   purchased: boolean
   purchasedAt?: string
 }
@@ -38,25 +42,11 @@ interface ProductLean {
   price: number
   imageUrl?: string
   description?: string
+  tags?: string[]
+  usageConfig?: OptimizeProductUsageConfig | null
   purchasedBy: ProductPurchaseEntry[]
   createdAt: Date
   updatedAt: Date
-}
-
-async function ensureProductsSeeded(): Promise<void> {
-  const count = await OptimizeProductModel.estimatedDocumentCount().exec()
-  if (count > 0) {
-    return
-  }
-  const documents = OPTIMIZE_PRODUCT_SEEDS.map((seed) => ({
-    name: seed.name,
-    slug: seed.slug,
-    category: seed.category,
-    price: seed.price,
-    imageUrl: seed.imageUrl,
-    description: seed.description,
-  }))
-  await OptimizeProductModel.insertMany(documents).catch(() => undefined)
 }
 
 function buildProductResponse(product: ProductLean, userId?: string): ProductResponse {
@@ -71,6 +61,8 @@ function buildProductResponse(product: ProductLean, userId?: string): ProductRes
     price: product.price,
     imageUrl: product.imageUrl ?? undefined,
     description: product.description ?? undefined,
+    tags: Array.isArray(product.tags) ? product.tags : [],
+    usageConfig: product.usageConfig ?? undefined,
     purchased: Boolean(purchasedEntry),
     purchasedAt: purchasedEntry ? purchasedEntry.purchasedAt.toISOString() : undefined,
   }
@@ -78,7 +70,6 @@ function buildProductResponse(product: ProductLean, userId?: string): ProductRes
 
 export async function listProducts(ctx: Context): Promise<void> {
   const userId = ensureUserId(ctx)
-  await ensureProductsSeeded()
   const { category } = ctx.query as { category?: string }
   const filter: Record<string, unknown> = {}
   if (category) {
@@ -94,7 +85,6 @@ export async function listProducts(ctx: Context): Promise<void> {
 export async function getProduct(ctx: Context): Promise<void> {
   const userId = ensureUserId(ctx)
   const { id } = ctx.params as { id: string }
-  await ensureProductsSeeded()
   const product = (await OptimizeProductModel.findById(id).lean().exec()) as ProductLean | null
   if (!product) {
     ctx.throw(404, 'Product not found')
@@ -119,13 +109,42 @@ export async function purchaseProduct(ctx: Context): Promise<void> {
   if (alreadyPurchased) {
     ctx.throw(400, 'Product already purchased')
   }
+  const paymentResult = await processProductPayment({
+    userId,
+    productId: product._id.toString(),
+    productName: product.name,
+    amount: product.price,
+    method: paymentMethod,
+    metadata,
+  })
+
+  if (paymentResult.status !== 'success') {
+    const message = paymentResult.message ?? '支付失败，请稍后重试'
+    ctx.throw(402, message)
+  }
+
+  const paymentInfo: Record<string, unknown> = {
+    provider: paymentResult.provider,
+    status: paymentResult.status,
+  }
+
+  if (paymentResult.transactionId) {
+    paymentInfo.transactionId = paymentResult.transactionId
+  }
+  if (paymentResult.raw) {
+    paymentInfo.raw = paymentResult.raw
+  }
+
+  const orderMetadata: Record<string, unknown> = metadata ? { ...metadata } : {}
+  orderMetadata.payment = paymentInfo
+
   const orderNumber = generateOrderNumber()
   const order = await OrderModel.create({
     userId,
     orderNumber,
     status: 'paid',
     totalAmount: product.price,
-    paymentMethod: paymentMethod ?? 'wechat',
+    paymentMethod: paymentMethod ?? paymentResult.provider,
     shippingAddress,
     items: [
       {
@@ -135,7 +154,7 @@ export async function purchaseProduct(ctx: Context): Promise<void> {
         quantity: 1,
       },
     ],
-    metadata,
+    metadata: orderMetadata,
   })
   product.purchasedBy.push({
     userId: new Types.ObjectId(userId),
@@ -143,6 +162,7 @@ export async function purchaseProduct(ctx: Context): Promise<void> {
     purchasedAt: new Date(),
   })
   await product.save()
+  await addProductToWarehouse({ userId, product, orderId: order._id })
   ctx.status = 201
   ctx.body = {
     order: {

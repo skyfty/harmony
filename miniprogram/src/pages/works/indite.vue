@@ -97,8 +97,7 @@ import {
   type WorkSummary,
   type CollectionSummary,
 } from '@/api/miniprogram';
-
-type NavKey = 'home' | 'work' | 'exhibition' | 'profile' | 'optimize';
+import { redirectToNav, type NavKey } from '@/utils/navKey';
 
 type WorkCandidate = {
   name: string;
@@ -155,14 +154,6 @@ const typeLabels: Record<WorkType, string> = {
   video: '视频',
   model: '3D 模型',
   other: '其他',
-};
-
-const routes: Record<NavKey, string> = {
-  home: '/pages/home/index',
-  work: '/pages/works/indite',
-  exhibition: '/pages/exhibition/index',
-  profile: '/pages/profile/index',
-  optimize: '/pages/optimize/index',
 };
 
 const sortedWorks = computed(() => {
@@ -384,11 +375,7 @@ watch(
 );
 
 function handleNavigate(target: NavKey) {
-  const route = routes[target];
-  if (!route || target === 'work') {
-    return;
-  }
-  uni.redirectTo({ url: route });
+  redirectToNav(target, { current: 'work' });
 }
 
 function goWorksList() {

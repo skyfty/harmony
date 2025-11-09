@@ -66,6 +66,7 @@ export interface WorkItem {
 	duration?: string;
 	fileUrl: string;
 	thumbnailUrl?: string;
+	userRatingScore?: number;
 }
 
 export interface CollectionItem {
@@ -99,13 +100,24 @@ export interface ExhibitionItem {
 	name: string;
 	status: 'draft' | 'published' | 'withdrawn';
 	cover: string;
+	primaryCover?: string;
+	coverImages: string[];
 	dateRange: string;
 	workIds: string[];
 	workCount: number;
+	collections: Array<{
+		id: string;
+		title: string;
+		description?: string;
+		coverUrl?: string;
+		workCount: number;
+	}>;
+	collectionIds: string[];
 	likesCount: number;
 	liked: boolean;
 	rating: number;
 	ratingCount: number;
+	userRatingScore?: number;
 	visitCount: number;
 	visited: boolean;
 	shareCount: number;
@@ -282,6 +294,7 @@ function mapWorkSummary(summary: WorkSummary, index: number): WorkItem {
 				: '--',
 		fileUrl: summary.fileUrl,
 		thumbnailUrl: summary.thumbnailUrl,
+		userRatingScore: summary.userRating?.score ?? 0,
 	};
 }
 
@@ -315,19 +328,40 @@ function mapWorkRecordSummary(summary: WorkRecordSummary, index: number): WorkRe
 }
 
 function mapExhibitionSummary(summary: ExhibitionSummary, index: number): ExhibitionItem {
+	const coverImages = Array.isArray(summary.coverUrls) && summary.coverUrls.length
+		? summary.coverUrls.filter((url): url is string => typeof url === 'string' && url.length > 0)
+		: summary.coverUrl
+			? [summary.coverUrl]
+			: []
+	const primaryCover = coverImages[0]
+	const collections = Array.isArray(summary.collections)
+		? summary.collections.map((item) => ({
+				id: item.id,
+				title: item.title,
+				description: item.description ?? '',
+				coverUrl: item.coverUrl,
+				workCount: item.workCount ?? 0,
+			}))
+		: []
+	const collectionIds = Array.isArray(summary.collectionIds) ? summary.collectionIds : collections.map((item) => item.id)
 	return {
 		id: summary.id,
 		ownerId: summary.ownerId,
 		name: summary.name,
 		status: summary.status,
-		cover: ensureBackground(summary.coverUrl, index),
+		cover: ensureBackground(primaryCover, index),
+		primaryCover,
+		coverImages,
 		dateRange: formatDateRange(summary.startDate, summary.endDate),
 		workIds: Array.isArray(summary.works) ? summary.works.map((item) => item.id) : [],
 		workCount: Array.isArray(summary.works) ? summary.works.length : summary.workCount ?? 0,
+		collections,
+		collectionIds,
 		likesCount: summary.likesCount ?? 0,
 		liked: Boolean(summary.liked),
 		rating: Number(summary.averageRating ?? 0),
 		ratingCount: summary.ratingCount ?? 0,
+		userRatingScore: summary.userRating?.score ?? 0,
 		visitCount: summary.visitCount ?? 0,
 		visited: Boolean(summary.visited),
 		shareCount: summary.shareCount ?? 0,

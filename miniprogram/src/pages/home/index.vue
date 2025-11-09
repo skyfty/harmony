@@ -18,7 +18,17 @@
           <view class="work-thumb" :style="{ background: card.gradient }"></view>
           <view class="work-info">
             <text class="work-name">{{ card.name }}</text>
-            <text class="work-meta">{{ card.meta }}</text>
+            <text class="work-subtitle">{{ card.subtitle }}</text>
+            <view class="work-card__stats">
+              <view class="stat-item">
+                <text class="stat-icon stat-icon--star" :class="{ 'is-active': card.userRating > 0 }">★</text>
+                <text class="stat-value">{{ formatRatingValue(card.rating) }}</text>
+              </view>
+              <view class="stat-item">
+                <text class="stat-icon stat-icon--heart" :class="{ 'is-active': card.liked }">❤</text>
+                <text class="stat-value">{{ formatCount(card.likes) }}</text>
+              </view>
+            </view>
           </view>
         </view>
       </view>
@@ -34,7 +44,17 @@
           <view class="work-thumb" :style="{ background: card.gradient }"></view>
           <view class="work-info">
             <text class="work-name">{{ card.name }}</text>
-            <text class="work-meta">{{ card.meta }}</text>
+            <text class="work-subtitle">{{ card.subtitle }}</text>
+            <view class="work-card__stats">
+              <view class="stat-item">
+                <text class="stat-icon stat-icon--star" :class="{ 'is-active': card.userRating > 0 }">★</text>
+                <text class="stat-value">{{ formatRatingValue(card.rating) }}</text>
+              </view>
+              <view class="stat-item">
+                <text class="stat-icon stat-icon--heart" :class="{ 'is-active': card.liked }">❤</text>
+                <text class="stat-value">{{ formatCount(card.likes) }}</text>
+              </view>
+            </view>
           </view>
         </view>
       </view>
@@ -50,7 +70,17 @@
           <view class="work-thumb" :style="{ background: work.gradient }"></view>
           <view class="work-info">
             <text class="work-name">{{ work.name }}</text>
-            <text class="work-meta">{{ work.meta }}</text>
+            <text class="work-subtitle">{{ work.subtitle }}</text>
+            <view class="work-card__stats">
+              <view class="stat-item">
+                <text class="stat-icon stat-icon--star" :class="{ 'is-active': work.userRating > 0 }">★</text>
+                <text class="stat-value">{{ formatRatingValue(work.rating) }}</text>
+              </view>
+              <view class="stat-item">
+                <text class="stat-icon stat-icon--heart" :class="{ 'is-active': work.liked }">❤</text>
+                <text class="stat-value">{{ formatCount(work.likes) }}</text>
+              </view>
+            </view>
           </view>
         </view>
       </view>
@@ -65,21 +95,30 @@ import { onShow } from '@dcloudio/uni-app';
 import BottomNav from '@/components/BottomNav.vue';
 import { useWorksStore } from '@/stores/worksStore';
 import type { ExhibitionItem, WorkItem } from '@/stores/worksStore';
-
-type NavKey = 'home' | 'work' | 'exhibition' | 'profile' | 'optimize';
+import { redirectToNav, type NavKey } from '@/utils/navKey';
 
 type ExhibitionCard = {
   id: string;
   name: string;
-  meta: string;
+  subtitle: string;
   gradient: string;
+  rating: number;
+  ratingCount: number;
+  userRating: number;
+  likes: number;
+  liked: boolean;
 };
 
 type WorkCard = {
   id: string;
   name: string;
-  meta: string;
+  subtitle: string;
   gradient: string;
+  rating: number;
+  ratingCount: number;
+  userRating: number;
+  likes: number;
+  liked: boolean;
 };
 
 const worksStore = useWorksStore();
@@ -92,18 +131,41 @@ onShow(async () => {
   }
 });
 
-function formatExhibitionMeta(item: ExhibitionItem): string {
-  const candidates = [item.dateRange, item.workCount ? `${item.workCount} 件作品` : '', formatRatingMeta(item.rating, item.ratingCount)];
+const workTypeLabels: Record<WorkItem['type'], string> = {
+  image: '图片',
+  video: '视频',
+  model: '模型',
+  other: '其他',
+};
+
+function formatExhibitionSubtitle(item: ExhibitionItem): string {
+  const candidates = [item.dateRange, item.workCount ? `${item.workCount} 件作品` : ''];
   const result = candidates.filter(Boolean).join(' · ');
   return result || '查看详情';
 }
 
-function formatRatingMeta(rating: number, count: number): string {
-  if (!rating) {
-    return count ? `★ --（${count}）` : '';
+function formatWorkSubtitle(item: WorkItem): string {
+  const typeLabel = workTypeLabels[item.type] || '作品';
+  const pieces = [typeLabel, item.time].filter(Boolean);
+  return pieces.join(' · ') || '查看详情';
+}
+
+function formatRatingValue(value: number): string {
+  if (value <= 0) {
+    return '--';
   }
-  const label = rating >= 4.95 ? '满分' : rating.toFixed(1);
-  return count ? `★ ${label}（${count}）` : `★ ${label}`;
+  return value >= 4.95 ? '满分' : value.toFixed(value >= 10 ? 0 : 1);
+}
+
+function formatCount(value: number): string {
+  if (value <= 0) {
+    return '0';
+  }
+  if (value >= 1000) {
+    const normalized = value / 1000;
+    return `${normalized.toFixed(normalized >= 10 ? 0 : 1)}K`;
+  }
+  return value.toString();
 }
 
 function sortByUpdated(a: ExhibitionItem, b: ExhibitionItem): number {
@@ -125,8 +187,13 @@ const latestExhibitions = computed<ExhibitionCard[]>(() =>
     .map((item) => ({
       id: item.id,
       name: item.name,
-      meta: formatExhibitionMeta(item),
+      subtitle: formatExhibitionSubtitle(item),
       gradient: item.cover,
+      rating: item.rating,
+      ratingCount: item.ratingCount,
+      userRating: item.userRatingScore ?? 0,
+      likes: item.likesCount ?? 0,
+      liked: item.liked,
     })),
 );
 
@@ -143,8 +210,13 @@ const bestExhibitions = computed<ExhibitionCard[]>(() =>
     .map((item) => ({
       id: item.id,
       name: item.name,
-      meta: formatExhibitionMeta(item),
+      subtitle: formatExhibitionSubtitle(item),
       gradient: item.cover,
+      rating: item.rating,
+      ratingCount: item.ratingCount,
+      userRating: item.userRatingScore ?? 0,
+      likes: item.likesCount ?? 0,
+      liked: item.liked,
     })),
 );
 
@@ -161,25 +233,18 @@ const bestWorks = computed<WorkCard[]>(() =>
     .map((item: WorkItem) => ({
       id: item.id,
       name: item.name,
-      meta: `★ ${item.rating.toFixed(1)} · ❤ ${item.likes}`,
+      subtitle: formatWorkSubtitle(item),
       gradient: item.gradient,
+      rating: item.rating,
+      ratingCount: item.ratingCount,
+      userRating: item.userRatingScore ?? 0,
+      likes: item.likes,
+      liked: item.liked,
     })),
 );
 
-const routes: Record<NavKey, string> = {
-  home: '/pages/home/index',
-  work: '/pages/works/indite',
-  exhibition: '/pages/exhibition/index',
-  profile: '/pages/profile/index',
-  optimize: '/pages/optimize/index',
-};
-
 function handleNavigate(target: NavKey) {
-  const route = routes[target];
-  if (!route) {
-    return;
-  }
-  uni.redirectTo({ url: route });
+  redirectToNav(target, { current: 'home', allowSame: true });
 }
 
 function goWorksList() {
@@ -302,10 +367,10 @@ function openWorkDetail(id: string) {
   font-size: 14px;
 }
 
-.work-stats {
+.work-card__stats {
   display: flex;
   gap: 8px;
-  margin-top: 4px;
+  margin-top: 6px;
 }
 
 .stat-item {
@@ -315,21 +380,29 @@ function openWorkDetail(id: string) {
   background: rgba(31, 122, 236, 0.08);
   padding: 4px 8px;
   border-radius: 10px;
-  font-size: 11px;
-  color: #1f1f1f;
-}
-
-.stat-item:last-child .stat-icon {
-  color: #ff6f91;
 }
 
 .stat-icon {
-  color: #ffaf42;
-  font-size: 11px;
+  font-size: 12px;
+  color: #c1c7d4;
+  transition: color 0.2s ease;
+}
+
+.stat-icon--star.is-active {
+  color: #ffb400;
+}
+
+.stat-icon--heart {
+  color: #c1c7d4;
+}
+
+.stat-icon--heart.is-active {
+  color: #ff3f6e;
 }
 
 .stat-value {
   font-size: 12px;
+  color: #1f1f1f;
 }
 .panel-title {
   font-size: 16px;
@@ -409,7 +482,7 @@ function openWorkDetail(id: string) {
   color: #1f1f1f;
 }
 
-.work-meta {
+.work-subtitle {
   font-size: 12px;
   color: #8a94a6;
 }

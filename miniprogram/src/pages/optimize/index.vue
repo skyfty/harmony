@@ -17,9 +17,13 @@
       </view>
     </view>
 
-    <view class="waterfall" v-if="filteredProducts.length">
+    <view v-if="loading" class="loading">
+      <text class="loading-text">正在加载商品...</text>
+    </view>
+
+    <view class="waterfall" v-else-if="filteredProducts.length">
       <view class="product-card" v-for="product in filteredProducts" :key="product.id" @tap="openDetail(product)">
-        <view class="media" :style="{ background: product.image }">
+        <view class="media" :style="product.mediaStyle">
           <view class="purchase-flag" :class="{ owned: product.purchased }">
             {{ product.purchased ? '已购买' : '未购买' }}
           </view>
@@ -44,8 +48,10 @@
 
     <view v-else class="empty">
       <view class="empty-icon"></view>
-      <text class="empty-title">暂未找到该分类的商品</text>
-      <text class="empty-desc">试试切换其他分类或稍后再来看看新品</text>
+      <text class="empty-title">{{ errorMessage ? '加载失败' : '暂未找到该分类的商品' }}</text>
+      <text class="empty-desc">
+        {{ errorMessage || '试试切换其他分类或稍后再来看看新品' }}
+      </text>
     </view>
 
     <BottomNav active="optimize" @navigate="handleNavigate" />
@@ -53,17 +59,28 @@
 </template>
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { onShow } from '@dcloudio/uni-app';
+import { onPullDownRefresh, onShow } from '@dcloudio/uni-app';
 import BottomNav from '@/components/BottomNav.vue';
-import { OPTIMIZE_PRODUCTS, type OptimizeProduct } from '@/data/optimizeProducts';
+import { apiGetProducts, apiPurchaseProduct, type ProductSummary } from '@/api/miniprogram';
+import { redirectToNav, type NavKey } from '@/utils/navKey';
 
-type NavKey = 'home' | 'work' | 'exhibition' | 'profile' | 'optimize';
 type CategoryKey = 'all' | string;
 
-const STORAGE_KEY = 'optimizePurchased';
+interface UiProduct extends ProductSummary {
+  mediaStyle: Record<string, string>;
+}
 
-const products = ref<OptimizeProduct[]>(OPTIMIZE_PRODUCTS.map((item) => ({ ...item })));
+const fallbackGradients = [
+  'linear-gradient(135deg, #74b9ff, #a29bfe)',
+  'linear-gradient(135deg, #55efc4, #00cec9)',
+  'linear-gradient(135deg, #ffeaa7, #fab1a0)',
+  'linear-gradient(135deg, #dfe6e9, #b2bec3)',
+];
+
+const products = ref<UiProduct[]>([]);
 const selectedCategory = ref<CategoryKey>('all');
+const loading = ref(true);
+const errorMessage = ref('');
 
 const categoryTabs = computed(() => {
   const set = new Set<string>();
@@ -78,66 +95,64 @@ const filteredProducts = computed(() => {
   return products.value.filter((item) => item.category === selectedCategory.value);
 });
 
-const routes: Record<NavKey, string> = {
-  home: '/pages/home/index',
-  work: '/pages/works/indite',
-  exhibition: '/pages/exhibition/index',
-  profile: '/pages/profile/index',
-  optimize: '/pages/optimize/index',
-};
-
 function selectCategory(category: CategoryKey) {
   selectedCategory.value = category;
 }
 
 function handleNavigate(target: NavKey) {
-  const route = routes[target];
-  if (!route || target === 'optimize') {
-    return;
-  }
-  uni.redirectTo({ url: route });
+  redirectToNav(target, { current: 'optimize' });
 }
 
-function loadPurchasedIds(): string[] {
+function createMediaStyle(imageUrl: string | undefined, fallbackIndex: number): Record<string, string> {
+  const fallback = fallbackGradients[fallbackIndex % fallbackGradients.length];
+  if (!imageUrl) {
+    return { background: fallback };
+  }
+  if (imageUrl.startsWith('linear-gradient')) {
+    return { background: imageUrl };
+  }
+  return {
+    backgroundImage: `url(${imageUrl})`,
+    backgroundSize: 'cover',
+    backgroundPosition: 'center',
+    backgroundRepeat: 'no-repeat',
+  };
+}
+
+function normalizeProduct(product: ProductSummary, index: number): UiProduct {
+  return {
+    ...product,
+    mediaStyle: createMediaStyle(product.imageUrl, index),
+  };
+}
+
+async function fetchProducts(): Promise<void> {
+  loading.value = true;
+  errorMessage.value = '';
   try {
-    const raw = uni.getStorageSync(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    return Array.isArray(parsed) ? parsed : [];
+    const { products: list } = await apiGetProducts();
+    products.value = list.map((item, index) => normalizeProduct(item, index));
   } catch (error) {
-    console.warn('无法读取优化效果购买记录', error);
-    return [];
+    const message = error instanceof Error ? error.message : '商品加载失败';
+    errorMessage.value = message;
+    uni.showToast({ title: message, icon: 'none' });
+  } finally {
+    loading.value = false;
+    uni.stopPullDownRefresh();
   }
 }
 
-function persistPurchasedIds(ids: string[]) {
-  try {
-    uni.setStorageSync(STORAGE_KEY, ids);
-  } catch (error) {
-    console.warn('无法保存优化效果购买记录', error);
+function updateProductInList(updated: ProductSummary) {
+  const index = products.value.findIndex((item) => item.id === updated.id);
+  const normalized = normalizeProduct(updated, index >= 0 ? index : products.value.length);
+  if (index >= 0) {
+    products.value.splice(index, 1, normalized);
+  } else {
+    products.value.push(normalized);
   }
 }
 
-function syncPurchasedState() {
-  const purchasedIds = new Set(loadPurchasedIds());
-  products.value = OPTIMIZE_PRODUCTS.map((item) => ({
-    ...item,
-    purchased: item.purchased || purchasedIds.has(item.id),
-  }));
-}
-
-onShow(() => {
-  syncPurchasedState();
-});
-
-function markAsPurchased(productId: string) {
-  const ids = new Set(loadPurchasedIds());
-  ids.add(productId);
-  persistPurchasedIds(Array.from(ids));
-  syncPurchasedState();
-}
-
-function purchase(product: OptimizeProduct) {
+function purchase(product: UiProduct) {
   if (product.purchased) {
     uni.showToast({ title: '您已拥有该商品', icon: 'none' });
     return;
@@ -146,40 +161,42 @@ function purchase(product: OptimizeProduct) {
     title: '确认购买',
     content: `确定购买「${product.name}」吗？`,
     confirmColor: '#1f7aec',
-    success: (res) => {
+    success: async (res) => {
       if (!res.confirm) {
         return;
       }
-      markAsPurchased(product.id);
-      const orderId = `OP${Date.now()}`;
-      const itemsPayload = encodeURIComponent(
-        JSON.stringify([
-          {
-            name: product.name,
-            price: product.price,
-            category: product.category,
-          },
-        ]),
-      );
-      const payment = encodeURIComponent('微信支付');
-      const address = encodeURIComponent('上海市黄浦区外滩18号 数字艺廊中心');
-      const createdAt = encodeURIComponent(new Date().toISOString());
-      const total = product.price.toFixed(2);
-
-      uni.showToast({ title: '购买成功', icon: 'success', duration: 500 });
-
-      setTimeout(() => {
-        uni.navigateTo({
-          url: `/pages/orders/detail/index?id=${orderId}&status=processing&items=${itemsPayload}&total=${total}&payment=${payment}&address=${address}&createdAt=${createdAt}`,
+      uni.showLoading({ title: '下单中...', mask: true });
+      try {
+        const { order, product: updated } = await apiPurchaseProduct(product.id, {
+          paymentMethod: 'wechat',
         });
-      }, 400);
+        updateProductInList(updated);
+        uni.showToast({ title: '购买成功', icon: 'success', duration: 600 });
+
+        setTimeout(() => {
+          uni.navigateTo({ url: `/pages/orders/detail/index?id=${order.id}` });
+        }, 400);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '购买失败，请稍后重试';
+        uni.showToast({ title: message, icon: 'none' });
+      } finally {
+        uni.hideLoading();
+      }
     },
   });
 }
 
-function openDetail(product: OptimizeProduct) {
+function openDetail(product: UiProduct) {
   uni.navigateTo({ url: `/pages/optimize/detail/index?id=${product.id}` });
 }
+
+onShow(() => {
+  fetchProducts();
+});
+
+onPullDownRefresh(() => {
+  fetchProducts();
+});
 </script>
 <style scoped lang="scss">
 .page {
@@ -229,6 +246,20 @@ function openDetail(product: OptimizeProduct) {
   background: linear-gradient(135deg, #4f9eff, #1f7aec);
   color: #ffffff;
   box-shadow: 0 6px 18px rgba(31, 122, 236, 0.18);
+}
+
+.loading {
+  margin-top: 60px;
+  display: flex;
+  justify-content: center;
+  color: #8a94a6;
+}
+
+.loading-text {
+  padding: 10px 18px;
+  border-radius: 18px;
+  background: rgba(79, 158, 255, 0.12);
+  font-size: 13px;
 }
 
 .waterfall {
