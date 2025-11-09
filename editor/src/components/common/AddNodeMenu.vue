@@ -23,6 +23,7 @@ import { determineAssetCategoryId } from '@/stores/assetCatalog'
 import { blobToDataUrl } from '@/utils/blob'
 import {
   BEHAVIOR_COMPONENT_TYPE,
+  DISPLAY_BOARD_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
   WARP_GATE_COMPONENT_TYPE,
@@ -45,6 +46,11 @@ import {
 const sceneStore = useSceneStore()
 const uiStore = useUiStore()
 const assetCacheStore = useAssetCacheStore()
+
+const DISPLAY_BOARD_INITIAL_WIDTH = 0.5
+const DISPLAY_BOARD_INITIAL_HEIGHT = 0.5
+const DISPLAY_BOARD_WARP_GATE_OFFSET = 0.5
+const DISPLAY_BOARD_EPSILON = 1e-4
 
 const VIEW_POINT_RADIUS = 0.12
 const VIEW_POINT_SEGMENTS = 24
@@ -672,6 +678,20 @@ function getNextGuideboardName(): string {
   return `${base} ${index}`
 }
 
+function getNextDisplayBoardName(): string {
+  const names = new Set<string>()
+  collectNodeNames(sceneStore.nodes, names)
+  const base = 'Display Board'
+  if (!names.has(base)) {
+    return base
+  }
+  let index = 1
+  while (names.has(`${base} ${index}`)) {
+    index += 1
+  }
+  return `${base} ${index}`
+}
+
 function getNextWarpGateName(): string {
   const names = new Set<string>()
   collectNodeNames(sceneStore.nodes, names)
@@ -1249,6 +1269,160 @@ function handleCreateEmptyNode() {
   })
 }
 
+async function handleCreateDisplayBoardNode(): Promise<void> {
+  const parent = resolveTargetParentNode()
+  const resolvedParentId = parent?.id ?? null
+  const name = getNextDisplayBoardName()
+
+  const geometry = new THREE.PlaneGeometry(DISPLAY_BOARD_INITIAL_WIDTH, DISPLAY_BOARD_INITIAL_HEIGHT)
+  const material = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    side: THREE.DoubleSide,
+  })
+  const boardMesh = new THREE.Mesh(geometry, material)
+  boardMesh.name = `${name} Visual`
+  boardMesh.castShadow = false
+  boardMesh.receiveShadow = true
+  boardMesh.userData = {
+    ...(boardMesh.userData ?? {}),
+    displayBoard: true,
+  }
+  boardMesh.rotation.y = Math.PI
+
+  const boardRoot = new THREE.Object3D()
+  boardRoot.name = name
+  boardRoot.add(boardMesh)
+
+  const spawnPosition = new THREE.Vector3(0, -DISPLAY_BOARD_INITIAL_HEIGHT / 2 - DISPLAY_BOARD_EPSILON, 0)
+  if (parent) {
+    const matrix = computeWorldMatrixForNode(sceneStore.nodes, parent.id)
+    if (matrix) {
+      const worldPosition = new THREE.Vector3().setFromMatrixPosition(matrix)
+      spawnPosition.copy(worldPosition)
+      spawnPosition.y += -DISPLAY_BOARD_INITIAL_HEIGHT / 2 - DISPLAY_BOARD_EPSILON
+    }
+  }
+
+  const fallbackBoardPosition = spawnPosition.clone()
+
+  const created = await sceneStore.addModelNode({
+    object: boardRoot,
+    nodeType: 'Plane',
+    name,
+    parentId: resolvedParentId ?? undefined,
+    position: spawnPosition,
+    snapToGrid: false,
+  })
+
+  if (!created) {
+    return
+  }
+
+  const primaryMaterial = created.materials?.[0] ?? null
+  if (primaryMaterial) {
+    sceneStore.updateNodeMaterialProps(created.id, primaryMaterial.id, { side: 'double' })
+  }
+
+  if (!created.components?.[DISPLAY_BOARD_COMPONENT_TYPE]) {
+    sceneStore.addNodeComponent(created.id, DISPLAY_BOARD_COMPONENT_TYPE)
+  }
+
+  if (!created.components?.[GUIDEBOARD_COMPONENT_TYPE]) {
+    sceneStore.addNodeComponent(created.id, GUIDEBOARD_COMPONENT_TYPE)
+  }
+
+  if (!created.components?.[VIEW_POINT_COMPONENT_TYPE]) {
+    sceneStore.addNodeComponent(created.id, VIEW_POINT_COMPONENT_TYPE)
+  }
+
+  ensureBehaviorComponent(created.id)
+  initializeGuideboardBehavior(created.id, created.name ?? name)
+  initializeViewPointBehavior(created.id)
+
+  const runtimeObject = getRuntimeObject(created.id)
+  const boardWorldPosition = fallbackBoardPosition.clone()
+  const boardWorldQuaternion = new THREE.Quaternion()
+  if (runtimeObject) {
+    runtimeObject.updateMatrixWorld(true)
+    runtimeObject.getWorldPosition(boardWorldPosition)
+    runtimeObject.getWorldQuaternion(boardWorldQuaternion)
+  } else {
+    boardWorldQuaternion.identity()
+  }
+
+  let forward = new THREE.Vector3(0, 0, -1).applyQuaternion(boardWorldQuaternion)
+  if (forward.lengthSq() < 1e-6) {
+    forward = new THREE.Vector3(0, 0, -1)
+  } else {
+    forward.normalize()
+  }
+
+  const warpGateCenter = boardWorldPosition.clone().add(forward.clone().multiplyScalar(DISPLAY_BOARD_WARP_GATE_OFFSET))
+  const warpGateName = getNextWarpGateName()
+  const warpGateGeometry = new THREE.CircleGeometry(WARP_GATE_RADIUS, WARP_GATE_SEGMENTS)
+  const warpGateMaterial = new THREE.MeshBasicMaterial({
+    color: WARP_GATE_COLOR,
+    side: THREE.DoubleSide,
+  })
+  const warpGateMesh = new THREE.Mesh(warpGateGeometry, warpGateMaterial)
+  warpGateMesh.name = `${warpGateName} Visual`
+  warpGateMesh.castShadow = false
+  warpGateMesh.receiveShadow = false
+  warpGateMesh.userData = {
+    ...(warpGateMesh.userData ?? {}),
+    ignoreGridSnapping: true,
+    warpGate: true,
+  }
+
+  const warpGateRoot = new THREE.Object3D()
+  warpGateRoot.name = warpGateName
+  warpGateRoot.add(warpGateMesh)
+  warpGateRoot.userData = {
+    ...(warpGateRoot.userData ?? {}),
+    ignoreGridSnapping: true,
+    warpGate: true,
+  }
+
+  const warpGateSpawn = warpGateCenter.clone()
+  warpGateSpawn.y -= WARP_GATE_RADIUS + DISPLAY_BOARD_EPSILON
+
+  let warpGateFacing = forward.clone().negate()
+  if (warpGateFacing.lengthSq() < 1e-6) {
+    warpGateFacing = new THREE.Vector3(0, 0, 1)
+  } else {
+    warpGateFacing.normalize()
+  }
+  const warpGateQuaternion = new THREE.Quaternion().setFromUnitVectors(
+    new THREE.Vector3(0, 0, 1),
+    warpGateFacing,
+  )
+  const warpGateEuler = new THREE.Euler().setFromQuaternion(warpGateQuaternion, 'XYZ')
+  const warpGateRotation = new THREE.Vector3(warpGateEuler.x, warpGateEuler.y, warpGateEuler.z)
+
+  const warpGateNode = await sceneStore.addModelNode({
+    object: warpGateRoot,
+    nodeType: 'Circle',
+    name: warpGateName,
+    parentId: created.id,
+    position: warpGateSpawn,
+    rotation: warpGateRotation,
+    snapToGrid: false,
+    editorFlags: {
+      ignoreGridSnapping: true,
+    },
+  })
+
+  if (warpGateNode) {
+    if (!warpGateNode.components?.[WARP_GATE_COMPONENT_TYPE]) {
+      sceneStore.addNodeComponent(warpGateNode.id, WARP_GATE_COMPONENT_TYPE)
+    }
+    ensureBehaviorComponent(warpGateNode.id)
+    initializeWarpGateBehavior(warpGateNode.id)
+  }
+
+  sceneStore.selectNode(created.id)
+}
+
 async function handleCreateViewPointNode(options: NodeCreationOptions = {}): Promise<SceneNode | null> {
   const { parentId, autoBehaviors = false } = options
   const name = getNextViewPointName()
@@ -1580,6 +1754,11 @@ function handleAddLight(type: LightNodeType) {
     <v-list class="add-menu-list">
       <v-list-item title="Group" @click="handleAddGroup()" />
       <v-list-item title="Create Empty" @click="handleCreateEmptyNode()" />
+      <v-list-item
+        title="Display Board"
+        prepend-icon="mdi-monitor"
+        @click="handleCreateDisplayBoardNode()"
+      />
       <v-menu  transition="none" location="end" offset="8">
         <template #activator="{ props: showcaseMenuProps }">
           <v-list-item

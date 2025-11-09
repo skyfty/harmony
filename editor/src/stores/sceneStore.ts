@@ -108,6 +108,7 @@ import {
   PACKAGES_ROOT_DIRECTORY_ID,
 } from './assetCatalog'
 import type {
+  DisplayBoardComponentProps,
   GuideboardComponentProps,
   ViewPointComponentProps,
   WallComponentProps,
@@ -118,6 +119,7 @@ import {
   GUIDEBOARD_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
   WARP_GATE_COMPONENT_TYPE,
+  DISPLAY_BOARD_COMPONENT_TYPE,
   BEHAVIOR_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_THICKNESS,
@@ -125,11 +127,17 @@ import {
   WALL_MIN_HEIGHT,
   WALL_MIN_THICKNESS,
   WALL_MIN_WIDTH,
+  DISPLAY_BOARD_DEFAULT_MAX_WIDTH,
+  DISPLAY_BOARD_DEFAULT_MAX_HEIGHT,
+  DISPLAY_BOARD_DEFAULT_BACKGROUND_COLOR,
   clampWallProps,
   cloneWallComponentProps,
   clampGuideboardComponentProps,
   cloneGuideboardComponentProps,
   createGuideboardComponentState,
+  clampDisplayBoardComponentProps,
+  cloneDisplayBoardComponentProps,
+  createDisplayBoardComponentState,
   clampViewPointComponentProps,
   cloneViewPointComponentProps,
   createViewPointComponentState,
@@ -371,6 +379,37 @@ function normalizeNodeComponents(
       id: existing?.id && existing.id.trim().length ? existing.id : generateUuid(),
       type: WALL_COMPONENT_TYPE,
       enabled: existing?.enabled ?? true,
+      props: nextProps,
+      metadata: clonedMetadata,
+    }
+  }
+
+  const existingDisplayBoard = normalized[DISPLAY_BOARD_COMPONENT_TYPE] as
+    | SceneNodeComponentState<DisplayBoardComponentProps>
+    | undefined
+  if (existingDisplayBoard) {
+    const nextProps = cloneDisplayBoardComponentProps(
+      clampDisplayBoardComponentProps(existingDisplayBoard.props as Partial<DisplayBoardComponentProps>),
+    )
+
+    let clonedMetadata: Record<string, unknown> | undefined
+    if (existingDisplayBoard.metadata) {
+      try {
+        clonedMetadata = structuredClone(existingDisplayBoard.metadata)
+      } catch (_error) {
+        try {
+          clonedMetadata = JSON.parse(JSON.stringify(existingDisplayBoard.metadata)) as Record<string, unknown>
+        } catch (_jsonError) {
+          console.warn('Failed to deeply clone display board component metadata, using shallow copy', _jsonError)
+          clonedMetadata = { ...existingDisplayBoard.metadata }
+        }
+      }
+    }
+
+    normalized[DISPLAY_BOARD_COMPONENT_TYPE] = {
+      id: existingDisplayBoard.id && existingDisplayBoard.id.trim().length ? existingDisplayBoard.id : generateUuid(),
+      type: DISPLAY_BOARD_COMPONENT_TYPE,
+      enabled: existingDisplayBoard.enabled ?? true,
       props: nextProps,
       metadata: clonedMetadata,
     }

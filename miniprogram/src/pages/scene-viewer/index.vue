@@ -157,10 +157,12 @@ import { ComponentManager } from '@schema/components/componentManager';
 import {
   behaviorComponentDefinition,
   guideboardComponentDefinition,
+  displayBoardComponentDefinition,
   wallComponentDefinition,
   viewPointComponentDefinition,
   warpGateComponentDefinition,
   GUIDEBOARD_COMPONENT_TYPE,
+  DISPLAY_BOARD_COMPONENT_TYPE,
 } from '@schema/components';
 import type { GuideboardComponentProps } from '@schema/components';
 import {
@@ -335,6 +337,7 @@ const bootstrapFinished = ref(false);
 const previewComponentManager = new ComponentManager();
 previewComponentManager.registerDefinition(wallComponentDefinition);
 previewComponentManager.registerDefinition(guideboardComponentDefinition);
+previewComponentManager.registerDefinition(displayBoardComponentDefinition);
 previewComponentManager.registerDefinition(viewPointComponentDefinition);
 previewComponentManager.registerDefinition(warpGateComponentDefinition);
 previewComponentManager.registerDefinition(behaviorComponentDefinition);
@@ -441,6 +444,7 @@ let activeCameraWatchTween: CameraWatchTween | null = null;
 
 const assetObjectUrlCache = new Map<string, string>();
 const packageEntryCache = new Map<string, { provider: string; value: string } | null>();
+const DISPLAY_BOARD_RESOLVER_KEY = '__harmonyResolveDisplayBoardMedia';
 
 const lanternTotalSlides = computed(() => lanternSlides.value.length);
 const lanternCurrentSlide = computed(() => {
@@ -845,6 +849,63 @@ function getOrCreateObjectUrl(assetId: string, data: ArrayBuffer, mimeHint?: str
   assetObjectUrlCache.set(assetId, url);
   return url;
 }
+
+function inferMimeTypeFromUrl(url: string): string | null {
+  const cleaned = url.split('?')[0]?.split('#')[0] ?? url;
+  return inferMimeTypeFromAssetId(cleaned);
+}
+
+function resolveInlineTextUrl(text: string, assetId: string): { url: string; mimeType: string | null; dispose: () => void } {
+  const mimeType = inferMimeTypeFromAssetId(assetId) ?? 'text/plain';
+  const blob = new Blob([text], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  return {
+    url,
+    mimeType,
+    dispose: () => {
+      URL.revokeObjectURL(url);
+    },
+  };
+}
+
+async function resolveDisplayBoardMediaSource(candidate: string): Promise<{ url: string; mimeType?: string | null; dispose?: () => void } | null> {
+  const trimmed = candidate.trim();
+  if (!trimmed.length) {
+    return null;
+  }
+  if (!trimmed.startsWith('asset://')) {
+    return { url: trimmed, mimeType: inferMimeTypeFromUrl(trimmed) };
+  }
+  const assetId = trimmed.slice('asset://'.length);
+  if (!assetId) {
+    return null;
+  }
+  const source = resolveAssetSource(assetId);
+  if (!source) {
+    return null;
+  }
+  switch (source.kind) {
+    case 'remote-url':
+      return { url: source.url, mimeType: inferMimeTypeFromUrl(source.url) };
+    case 'data-url':
+      return { url: source.dataUrl, mimeType: inferMimeTypeFromUrl(source.dataUrl) };
+    case 'inline-text': {
+      const result = resolveInlineTextUrl(source.text, assetId);
+      return result;
+    }
+    case 'raw': {
+      const mimeType = inferMimeTypeFromAssetId(assetId);
+      const url = getOrCreateObjectUrl(assetId, source.data, mimeType ?? undefined);
+      return { url, mimeType };
+    }
+    default:
+      return null;
+  }
+}
+
+(globalThis as typeof globalThis & { [DISPLAY_BOARD_RESOLVER_KEY]?: typeof resolveDisplayBoardMediaSource })[
+  DISPLAY_BOARD_RESOLVER_KEY
+] = resolveDisplayBoardMediaSource;
 
 function clearAssetObjectUrlCache(): void {
   assetObjectUrlCache.forEach((url) => {
@@ -3020,6 +3081,9 @@ function handleBack() {
 }
 
 onLoad((query) => {
+  (globalThis as typeof globalThis & { [DISPLAY_BOARD_RESOLVER_KEY]?: typeof resolveDisplayBoardMediaSource })[
+    DISPLAY_BOARD_RESOLVER_KEY
+  ] = resolveDisplayBoardMediaSource;
   addBehaviorRuntimeListener(behaviorRuntimeListener);
   const sceneIdParam = typeof query?.id === 'string' ? query.id : '';
   const documentParam = typeof query?.document === 'string' ? query.document : '';
@@ -3102,6 +3166,9 @@ onUnload(() => {
     resizeListener = null;
   }
   sharedResourceCache = null;
+  (globalThis as typeof globalThis & { [DISPLAY_BOARD_RESOLVER_KEY]?: typeof resolveDisplayBoardMediaSource })[
+    DISPLAY_BOARD_RESOLVER_KEY
+  ] = undefined;
 });
 
 onUnmounted(() => {
@@ -3112,6 +3179,9 @@ onUnmounted(() => {
     resizeListener = null;
   }
   sharedResourceCache = null;
+  (globalThis as typeof globalThis & { [DISPLAY_BOARD_RESOLVER_KEY]?: typeof resolveDisplayBoardMediaSource })[
+    DISPLAY_BOARD_RESOLVER_KEY
+  ] = undefined;
 });
 
 </script>
