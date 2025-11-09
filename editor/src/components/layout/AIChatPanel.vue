@@ -422,7 +422,6 @@ function handleSuggestionClick(text: string): void {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 5px;
   padding: 2px 4px;
-  box-shadow: inset 0 0 0 1px rgba(12, 16, 24, 0.35);
 }
 
 .chat-composer.is-multiline {
@@ -445,14 +444,10 @@ function handleSuggestionClick(text: string): void {
   display: none;
 }
 
-.chat-textarea :deep(.v-field__input) {
-  padding: 0;
-}
-
 .chat-textarea :deep(textarea) {
-  padding: 6px 0 4px;
-  min-height: 38px !important;
-  line-height: 1.5;
+  padding: 10px 0 6px;
+  min-height: 46px !important;
+  line-height: 1.58;
   background: transparent;
   color: inherit;
 }
