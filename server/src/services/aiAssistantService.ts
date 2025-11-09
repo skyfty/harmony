@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import OpenAI from 'openai'
+type ChatCompletionMessageParam = OpenAI.Chat.Completions.ChatCompletionMessageParam
 import { appConfig } from '@/config/env'
 import type {
   AssistantMessagePayload,
@@ -8,11 +10,46 @@ import type {
   AssistantSceneChange,
   AssistantSceneSnapshot,
   AssistantToolDefinition,
+  JsonPatchOperation,
 } from '@/types/assistant'
 
 const ASSISTANT_UPLOAD_DIR = path.join(appConfig.assetStoragePath, 'assistant')
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 const AGENT_SYSTEM_PROMPT = '你是一名 3D 场景设计助手，负责理解用户的需求并提供可以直接调用的编辑指令。你可以参考提供的场景数据、历史对话与工具箱说明，生成清晰、有依据的建议。'
+const MODEL_RESPONSE_FORMAT_INSTRUCTIONS = `
+你必须严格以 JSON 响应，结构示例如下：
+{
+  "reply": {
+    "text": "针对用户问题的中文回答，逻辑清晰，可引用工具。"
+  },
+  "suggestions": ["最多三个可执行的后续建议"],
+  "change": null | {
+    "type": "tool-invocations" | "json-patch",
+    "title": "可选标题",
+    "description": "一句话总结变更内容",
+    "toolInvocations": [{ "tool": "工具名称", "args": { "键": "值" } }]?
+    "patch": [ { "op": "add", "path": "/nodes/0", "value": {} } ]?
+    "autoApply": boolean?
+  }
+}
+如无法给出具体变更，务必返回 "change": null。不要输出 Markdown，也不要添加额外文字。`
+
+let cachedOpenAiClient: OpenAI | null = null
+
+function getOpenAiClient(): OpenAI {
+  if (!appConfig.openAi.apiKey) {
+    throw new Error('OpenAI API key 未配置')
+  }
+  if (!cachedOpenAiClient) {
+    cachedOpenAiClient = new OpenAI({
+      apiKey: appConfig.openAi.apiKey,
+      baseURL: appConfig.openAi.baseUrl,
+      organization: appConfig.openAi.organization,
+      project: appConfig.openAi.project,
+    })
+  }
+  return cachedOpenAiClient
+}
 
 type SceneSnapshotSummary = {
   totalNodes: number
@@ -176,9 +213,12 @@ function formatSceneSnapshot(scene: AssistantSceneSnapshot | null): string {
   return `${json.slice(0, 11950)}\n... (truncated)`
 }
 
-function composeModelPrompt(payload: AssistantMessagePayload, summary: SceneSnapshotSummary): string {
+function composeModelPrompt(
+  payload: AssistantMessagePayload,
+  summary: SceneSnapshotSummary,
+  screenshotUrl: string | null,
+): string {
   const sections: string[] = []
-  sections.push(`System Persona:\n${AGENT_SYSTEM_PROMPT}`)
   sections.push(`Available Tools:\n${toolboxToPrompt(payload.toolbox)}`)
 
   if (payload.resources?.modelLibrary) {
@@ -191,6 +231,12 @@ function composeModelPrompt(payload: AssistantMessagePayload, summary: SceneSnap
 
   sections.push(`Scene Summary:\n节点总数: ${summary.totalNodes} (首个节点: ${summary.firstNodeId ?? '无'})`)
   sections.push(`Scene Snapshot:\n${formatSceneSnapshot(payload.scene ?? null)}`)
+
+  if (screenshotUrl) {
+    sections.push(`Latest Screenshot URL:\n${screenshotUrl}`)
+  } else if (payload.image) {
+    sections.push('Latest Screenshot URL:\n用户提供了截图，但服务器未生成可访问链接。')
+  }
 
   const historyEntries = payload.context?.map((entry) => `${entry.role}: ${entry.text ?? '(无文本)'}`) ?? []
   if (historyEntries.length) {
@@ -345,6 +391,197 @@ function determineSceneChange(
   return null
 }
 
+function stripCodeFences(raw: string): string {
+  const trimmed = raw.trim()
+  if (!trimmed.startsWith('```')) {
+    return trimmed
+  }
+  const firstLineBreak = trimmed.indexOf('\n')
+  if (firstLineBreak === -1) {
+    return trimmed
+  }
+  const closingIndex = trimmed.lastIndexOf('```')
+  if (closingIndex <= firstLineBreak) {
+    return trimmed
+  }
+  return trimmed.slice(firstLineBreak + 1, closingIndex).trim()
+}
+
+function parseModelJson(content: string): Record<string, unknown> | null {
+  const trimmed = stripCodeFences(content)
+  const start = trimmed.indexOf('{')
+  const end = trimmed.lastIndexOf('}')
+  if (start === -1 || end === -1 || end <= start) {
+    return null
+  }
+  const jsonSlice = trimmed.slice(start, end + 1)
+  try {
+    const parsed = JSON.parse(jsonSlice)
+    return isRecord(parsed) ? parsed : null
+  } catch (error) {
+    console.warn('[Assistant] 无法解析模型返回内容为 JSON', error)
+    return null
+  }
+}
+
+function normalizeSuggestions(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined
+  }
+  const entries = value
+    .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+    .filter((entry) => entry.length > 0)
+  return entries.length ? entries.slice(0, 5) : undefined
+}
+
+function normalizeJsonPatchOperation(candidate: unknown): JsonPatchOperation | null {
+  if (!isRecord(candidate)) {
+    return null
+  }
+  const op = typeof candidate.op === 'string' ? candidate.op : ''
+  const path = typeof candidate.path === 'string' ? candidate.path : ''
+  if (!op || !path) {
+    return null
+  }
+
+  if (op === 'add' || op === 'replace' || op === 'test') {
+    if (!('value' in candidate)) {
+      return null
+    }
+    return { op, path, value: (candidate as { value: unknown }).value }
+  }
+
+  if (op === 'remove') {
+    return { op, path }
+  }
+
+  if (op === 'move' || op === 'copy') {
+    const from = typeof candidate.from === 'string' ? candidate.from : ''
+    if (!from) {
+      return null
+    }
+    return { op, path, from }
+  }
+
+  return null
+}
+
+function normalizeSceneChangeFromModel(raw: unknown): AssistantSceneChange | null | undefined {
+  if (!isRecord(raw)) {
+    return undefined
+  }
+  const type = typeof raw.type === 'string' ? raw.type : ''
+  if (!type) {
+    return undefined
+  }
+  const id = typeof raw.id === 'string' && raw.id.trim().length ? raw.id.trim() : randomUUID()
+  const title = typeof raw.title === 'string' ? raw.title.trim() : undefined
+  const description = typeof raw.description === 'string' ? raw.description.trim() : undefined
+  const autoApply = typeof raw.autoApply === 'boolean' ? raw.autoApply : undefined
+
+  if (type === 'tool-invocations') {
+    const invocationSource = Array.isArray(raw.toolInvocations) ? raw.toolInvocations : []
+    const toolInvocations = invocationSource
+      .map((entry) => {
+        if (!isRecord(entry)) {
+          return null
+        }
+        const tool = typeof entry.tool === 'string' ? entry.tool.trim() : ''
+        if (!tool) {
+          return null
+        }
+        const args = isRecord(entry.args) ? (entry.args as Record<string, unknown>) : undefined
+        return args ? { tool, args } : { tool }
+      })
+      .filter((entry): entry is { tool: string; args?: Record<string, unknown> } => Boolean(entry))
+
+    if (!toolInvocations.length) {
+      return null
+    }
+
+    const change: AssistantSceneChange = {
+      id,
+      type: 'tool-invocations',
+      toolInvocations,
+    }
+    if (title) {
+      change.title = title
+    }
+    if (description) {
+      change.description = description
+    }
+    if (autoApply !== undefined) {
+      change.autoApply = autoApply
+    }
+    return change
+  }
+
+  if (type === 'json-patch') {
+    const patchSource = Array.isArray(raw.patch) ? raw.patch : []
+    const patch = patchSource
+      .map(normalizeJsonPatchOperation)
+      .filter((operation): operation is JsonPatchOperation => Boolean(operation))
+    if (!patch.length) {
+      return null
+    }
+    const change: AssistantSceneChange = {
+      id,
+      type: 'json-patch',
+      patch,
+    }
+    if (title) {
+      change.title = title
+    }
+    if (description) {
+      change.description = description
+    }
+    if (autoApply !== undefined) {
+      change.autoApply = autoApply
+    }
+    return change
+  }
+
+  return undefined
+}
+
+type NormalizedModelPayload = {
+  replyText?: string
+  replyImageUrl?: string | null
+  suggestions?: string[]
+  change?: AssistantSceneChange | null
+  hasChange: boolean
+}
+
+function normalizeModelResponse(parsed: Record<string, unknown> | null): NormalizedModelPayload {
+  if (!parsed) {
+    return { hasChange: false }
+  }
+
+  const reply = isRecord(parsed.reply) ? parsed.reply : undefined
+  const replyText = typeof reply?.text === 'string' ? reply.text.trim() : undefined
+  const replyImageUrl = typeof reply?.imageUrl === 'string' ? reply.imageUrl.trim() : undefined
+
+  const suggestions = normalizeSuggestions(parsed.suggestions)
+
+  let changeValue: AssistantSceneChange | null | undefined
+  let hasChange = false
+  if (Object.prototype.hasOwnProperty.call(parsed, 'change')) {
+    hasChange = true
+    changeValue = normalizeSceneChangeFromModel(parsed.change)
+    if (changeValue === undefined) {
+      changeValue = null
+    }
+  }
+
+  return {
+    replyText,
+    replyImageUrl: replyImageUrl ?? undefined,
+    suggestions,
+    change: changeValue ?? undefined,
+    hasChange,
+  }
+}
+
 function approximateTokenCount(prompt: string): number {
   if (!prompt.length) {
     return 0
@@ -354,41 +591,102 @@ function approximateTokenCount(prompt: string): number {
 
 export async function processAssistantMessage(payload: AssistantMessagePayload): Promise<AssistantResponse> {
   const replyId = randomUUID()
-  const start = Date.now()
+  const startedAt = Date.now()
 
-  let imageUrl: string | null = null
+  let screenshotUrl: string | null = null
   if (payload.image) {
-    imageUrl = await persistImage(payload.image)
+    screenshotUrl = await persistImage(payload.image)
   }
 
   const sceneSummary = summarizeSceneSnapshot(payload.scene ?? null)
-  const prompt = composeModelPrompt(payload, sceneSummary)
-  const change = determineSceneChange(payload, sceneSummary)
-  const reply = buildReplyText(payload, sceneSummary, change)
-  const suggestions = buildSuggestions(payload, sceneSummary, change)
+  const heuristicChange = determineSceneChange(payload, sceneSummary)
+  const fallbackReply = buildReplyText(payload, sceneSummary, heuristicChange)
+  const fallbackSuggestions = buildSuggestions(payload, sceneSummary, heuristicChange)
   const createdAt = new Date().toISOString()
-  const latencyMs = Date.now() - start
 
+  const prompt = composeModelPrompt(payload, sceneSummary, screenshotUrl)
   if (appConfig.isDevelopment) {
     console.debug('[Assistant] Prompt preview:\n', prompt)
   }
 
+  let finalReplyText = fallbackReply
+  let finalSuggestions = fallbackSuggestions
+  let finalChange: AssistantSceneChange | null = heuristicChange ?? null
+  let replyImageUrl: string | null = screenshotUrl
+  let metadataModel = 'harmony-fallback'
+  let promptTokenCount = approximateTokenCount(prompt)
+
+  try {
+    const client = getOpenAiClient()
+    const messages: ChatCompletionMessageParam[] = [
+      { role: 'system', content: `${AGENT_SYSTEM_PROMPT}\n\n${MODEL_RESPONSE_FORMAT_INSTRUCTIONS}` },
+    ]
+
+    const userContentParts: unknown[] = [{ type: 'text', text: prompt }]
+    if (screenshotUrl) {
+      userContentParts.push({ type: 'image_url', image_url: { url: screenshotUrl } })
+    }
+
+    messages.push({
+      role: 'user',
+      content: userContentParts as unknown as ChatCompletionMessageParam['content'],
+    })
+
+    const completion = await client.chat.completions.create({
+      model: appConfig.openAi.model,
+      temperature: 0.6,
+      messages,
+    })
+
+    metadataModel = completion.model ? `openai:${completion.model}` : `openai:${appConfig.openAi.model}`
+    if (completion.usage?.total_tokens) {
+      promptTokenCount = completion.usage.total_tokens
+    }
+
+    const content = completion.choices?.[0]?.message?.content ?? ''
+    const parsed = parseModelJson(content)
+    const normalized = normalizeModelResponse(parsed)
+
+    if (normalized.replyText) {
+      finalReplyText = normalized.replyText
+    }
+    if (normalized.replyImageUrl) {
+      replyImageUrl = normalized.replyImageUrl
+    }
+    if (normalized.suggestions) {
+      finalSuggestions = normalized.suggestions
+    }
+    if (normalized.hasChange) {
+      finalChange = normalized.change ?? null
+    } else {
+      finalChange = heuristicChange ?? null
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('未配置')) {
+      throw error
+    }
+    console.error('[Assistant] OpenAI 调用失败，采用降级逻辑', error)
+    metadataModel = 'harmony-fallback'
+  }
+
+  const latencyMs = Date.now() - startedAt
+
   return {
     id: replyId,
     reply: {
-      text: reply,
+      text: finalReplyText,
       createdAt,
-      imageUrl,
+      imageUrl: replyImageUrl,
     },
-    suggestions,
-    change: change ?? null,
+    suggestions: finalSuggestions,
+    change: finalChange,
     metadata: {
       systemPrompt: AGENT_SYSTEM_PROMPT,
       toolboxSize: payload.toolbox?.length ?? 0,
       sceneNodeCount: sceneSummary.totalNodes,
-      model: 'harmony-mock-agent',
+      model: metadataModel,
       latencyMs,
-      promptTokenCount: approximateTokenCount(prompt),
+      promptTokenCount,
     },
   }
 }

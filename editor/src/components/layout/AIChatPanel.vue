@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useAiAssistantStore } from '@/stores/aiAssistantStore'
 
-const props = defineProps<{
+defineProps<{
   captureViewportScreenshot?: () => Promise<Blob | null>
 }>()
 
@@ -10,12 +10,20 @@ const store = useAiAssistantStore()
 
 const messageInput = ref('')
 const localError = ref<string | null>(null)
-const screenshotLoading = ref(false)
 const scrollerRef = ref<HTMLDivElement | null>(null)
+const textareaRef = ref<{ textarea?: HTMLTextAreaElement | null; $el?: HTMLElement | null } | null>(null)
+const baseTextareaHeight = ref<number | null>(null)
+const isTextareaExpanded = ref(false)
 
 const messages = computed(() => store.messages)
-const isAwaitingResponse = computed(() => store.isAwaitingResponse || screenshotLoading.value)
+const isAwaitingResponse = computed(() => store.isAwaitingResponse)
 const errorMessage = computed(() => localError.value ?? store.lastError)
+
+const activeModelLabel = computed(() => {
+  const recent = [...messages.value].reverse()
+  const withMetadata = recent.find((entry) => entry.metadata?.model)
+  return withMetadata?.metadata?.model ?? 'GPT-4'
+})
 
 function clearLocalError(): void {
   localError.value = null
@@ -47,6 +55,33 @@ watch(
   { immediate: true },
 )
 
+async function updateTextareaState(): Promise<void> {
+  await nextTick()
+  const instance = textareaRef.value
+  const el = instance?.textarea ?? instance?.$el?.querySelector?.('textarea') ?? null
+  if (!el) {
+    return
+  }
+  const currentHeight = el.scrollHeight
+  if (baseTextareaHeight.value === null) {
+    baseTextareaHeight.value = currentHeight
+  }
+  const baseline = baseTextareaHeight.value ?? currentHeight
+  isTextareaExpanded.value = currentHeight > baseline + 2
+}
+
+watch(messageInput, () => {
+  void updateTextareaState()
+})
+
+watch(textareaRef, () => {
+  void updateTextareaState()
+})
+
+onMounted(() => {
+  void updateTextareaState()
+})
+
 async function handleSendText(): Promise<void> {
   const text = messageInput.value
   if (!text || !text.trim()) {
@@ -60,34 +95,6 @@ async function handleSendText(): Promise<void> {
   } catch (error) {
     const message = error instanceof Error ? error.message : '发送失败'
     localError.value = message
-  }
-}
-
-async function handleCaptureScreenshot(): Promise<void> {
-  if (!props.captureViewportScreenshot) {
-    localError.value = '无法获取场景截图，请稍后重试。'
-    return
-  }
-  if (screenshotLoading.value) {
-    return
-  }
-
-  screenshotLoading.value = true
-  try {
-    const blob = await props.captureViewportScreenshot()
-    if (!blob) {
-      localError.value = '截图失败，请确认视图可用。'
-      return
-    }
-    await store.sendMessage({ text: messageInput.value, imageBlob: blob })
-    messageInput.value = ''
-    clearLocalError()
-    await scrollToBottom()
-  } catch (error) {
-    const message = error instanceof Error ? error.message : '发送失败'
-    localError.value = message
-  } finally {
-    screenshotLoading.value = false
   }
 }
 
@@ -123,7 +130,7 @@ function handleSuggestionClick(text: string): void {
       <div v-if="!messages.length" class="chat-empty">
         <v-icon size="28" color="primary">mdi-robot-outline</v-icon>
         <p class="chat-empty-title">与 AI 助手对话</p>
-        <p class="chat-empty-subtitle">输入问题或发送当前场景截图，让助手来协助你。</p>
+        <p class="chat-empty-subtitle">输入你的需求或想法，让助手帮助你完成场景创作。</p>
       </div>
       <template v-else>
         <div v-for="message in messages" :key="message.id" class="chat-message" :class="[`role-${message.role}`, { 'has-error': message.status === 'error' }]">
@@ -202,48 +209,37 @@ function handleSuggestionClick(text: string): void {
     <v-divider class="chat-divider" />
 
     <div class="chat-input">
-      <div class="chat-composer">
-        <v-textarea
-          v-model="messageInput"
-          class="chat-textarea"
-          placeholder="向 AI 助手提问，或使用 Ctrl+Enter 发送"
-          rows="1"
-          row-height="18"
-          auto-grow
-          max-rows="6"
-          density="comfortable"
-          hide-details
-          @keydown="handleKeydown"
-        />
-        <div class="chat-actions">
-          <v-tooltip text="捕获当前场景截图">
-            <template #activator="{ props: tooltipProps }">
-              <v-btn
-                v-bind="tooltipProps"
-                class="chat-action"
-                color="primary"
-                variant="text"
-                density="comfortable"
-                size="small"
-                :loading="screenshotLoading"
-                :disabled="screenshotLoading"
-                icon="mdi-camera"
-                @click="handleCaptureScreenshot"
-              />
-            </template>
-          </v-tooltip>
+      <div class="chat-composer" :class="{ 'is-multiline': isTextareaExpanded }">
+        <div class="chat-textarea-wrapper">
+          <v-textarea
+            ref="textareaRef"
+            v-model="messageInput"
+            class="chat-textarea"
+            placeholder="向 AI 助手提问，使用 Ctrl+Enter 快速发送"
+            rows="1"
+            row-height="18"
+            auto-grow
+            max-rows="6"
+            density="comfortable"
+            hide-details
+            @keydown="handleKeydown"
+          />
+        </div>
+        <div class="chat-controls">
+          <div class="chat-model-info" title="当前使用的大模型">
+            <v-icon size="16" color="primary">mdi-robot-outline</v-icon>
+            <span class="chat-model-name">{{ activeModelLabel }}</span>
+          </div>
           <v-btn
             class="chat-action chat-action--send"
-            color="primary"
-            variant="elevated"
+            variant="text"
             density="comfortable"
             size="small"
+            icon="mdi-send"
+            aria-label="发送消息"
             :disabled="!messageInput.trim() || isAwaitingResponse"
             @click="handleSendText"
-          >
-            <v-icon start>mdi-send</v-icon>
-            发送
-          </v-btn>
+          />
         </div>
       </div>
     </div>
@@ -411,52 +407,96 @@ function handleSuggestionClick(text: string): void {
 }
 
 .chat-divider {
-  margin: 0 0 8px;
+  margin: 0 0 6px;
 }
 
 .chat-input {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 0 12px 10px;
+  padding: 0px;
 }
 
 .chat-composer {
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(22, 27, 37, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 5px;
+  padding: 2px 4px;
+  box-shadow: inset 0 0 0 1px rgba(12, 16, 24, 0.35);
+}
+
+.chat-composer.is-multiline {
+  padding-bottom: 14px;
+}
+
+.chat-textarea-wrapper {
+  position: relative;
 }
 
 .chat-textarea {
-  background: rgba(19, 23, 31, 0.85);
-  border-radius: 12px;
-  flex: 1 1 auto;
+  background: transparent;
+}
+
+.chat-textarea :deep(.v-field__overlay) {
+  opacity: 0;
+}
+
+.chat-textarea :deep(.v-field__outline) {
+  display: none;
+}
+
+.chat-textarea :deep(.v-field__input) {
+  padding: 0;
 }
 
 .chat-textarea :deep(textarea) {
-  padding: 8px 10px;
-  min-height: 36px !important;
+  padding: 6px 0 4px;
+  min-height: 38px !important;
+  line-height: 1.5;
+  background: transparent;
+  color: inherit;
 }
 
-.chat-actions {
+.chat-controls {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.chat-model-info {
+  display: inline-flex;
+  align-items: center;
   gap: 6px;
+  font-size: 12px;
+  color: rgba(233, 236, 241, 0.8);
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(12, 17, 26, 0.6);
+}
+
+.chat-model-name {
+  font-weight: 500;
+  letter-spacing: 0.02em;
 }
 
 .chat-action {
   min-width: auto;
-  height: 34px;
-  font-size: 13px;
+  height: 32px;
+  color: var(--v-theme-primary);
 }
 
 .chat-action--send {
-  min-width: 88px;
-  white-space: nowrap;
+  padding: 2px;
+  transition: transform 0.15s ease;
 }
 
-.chat-action :deep(.v-btn__content) {
-  gap: 4px;
+.chat-action--send:hover:not([disabled]) {
+  transform: translateY(-1px);
+}
+
+.chat-action--send :deep(.v-icon) {
+  color: inherit;
 }
 
 .chat-error {
