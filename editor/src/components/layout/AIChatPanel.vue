@@ -97,6 +97,24 @@ function handleKeydown(event: KeyboardEvent): void {
     void handleSendText()
   }
 }
+
+async function handleApplySceneChange(messageId: string): Promise<void> {
+  try {
+    await store.applySceneChange(messageId)
+    clearLocalError()
+    await scrollToBottom()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '应用场景变更失败'
+    localError.value = message
+  }
+}
+
+function handleSuggestionClick(text: string): void {
+  if (!text) {
+    return
+  }
+  messageInput.value = text
+}
 </script>
 
 <template>
@@ -123,6 +141,58 @@ function handleKeydown(event: KeyboardEvent): void {
             </div>
             <div v-if="message.status === 'error' && message.error" class="message-error">
               {{ message.error }}
+            </div>
+            <div v-if="message.suggestions?.length" class="message-suggestions">
+              <v-chip
+                v-for="suggestion in message.suggestions"
+                :key="suggestion"
+                class="message-suggestion-chip"
+                color="primary"
+                variant="tonal"
+                size="small"
+                @click="handleSuggestionClick(suggestion)"
+              >
+                {{ suggestion }}
+              </v-chip>
+            </div>
+            <div v-if="message.sceneChange?.description" class="message-change-description">
+              {{ message.sceneChange.description }}
+            </div>
+            <div
+              v-if="message.role === 'assistant' && message.sceneChange"
+              class="message-change-actions"
+            >
+              <v-btn
+                class="message-change-button"
+                color="secondary"
+                variant="tonal"
+                size="small"
+                :loading="message.sceneChangeApplying"
+                :disabled="message.sceneChangeApplied || message.sceneChangeApplying"
+                @click="handleApplySceneChange(message.id)"
+              >
+                <template v-if="message.sceneChangeApplied">
+                  <v-icon start>mdi-check</v-icon>
+                  已应用
+                </template>
+                <template v-else>
+                  <v-icon start>mdi-wrench</v-icon>
+                  应用到场景
+                </template>
+              </v-btn>
+              <v-chip
+                v-if="message.sceneChangeApplied && !message.sceneChangeApplying"
+                class="message-change-status"
+                color="success"
+                size="x-small"
+                label
+                variant="flat"
+              >
+                已同步
+              </v-chip>
+            </div>
+            <div v-if="message.sceneChangeError" class="message-change-error">
+              {{ message.sceneChangeError }}
             </div>
           </div>
         </div>
@@ -302,6 +372,42 @@ function handleKeydown(event: KeyboardEvent): void {
 .message-error {
   font-size: 12px;
   color: #ffb4a9;
+}
+
+.message-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.message-suggestion-chip {
+  cursor: pointer;
+}
+
+.message-change-description {
+  font-size: 13px;
+  line-height: 1.5;
+  opacity: 0.9;
+  white-space: pre-wrap;
+}
+
+.message-change-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.message-change-button {
+  min-width: 128px;
+}
+
+.message-change-status {
+  font-weight: 600;
+}
+
+.message-change-error {
+  font-size: 12px;
+  color: #ff8a80;
 }
 
 .chat-divider {
