@@ -7,15 +7,15 @@ import type { SceneNode, SceneNodeComponentState } from '../../index'
 export const DISPLAY_BOARD_COMPONENT_TYPE = 'displayBoard'
 export const DISPLAY_BOARD_DEFAULT_MAX_WIDTH = 0.5
 export const DISPLAY_BOARD_DEFAULT_MAX_HEIGHT = 0.5
-export const DISPLAY_BOARD_DEFAULT_BACKGROUND_COLOR = '#FFFFFF'
 
 const DISPLAY_BOARD_RESOLVER_KEY = '__harmonyResolveDisplayBoardMedia'
 
 export interface DisplayBoardComponentProps {
   maxWidth: number
   maxHeight: number
-  backgroundColor: string
-  url: string
+  assetId: string
+  intrinsicWidth?: number
+  intrinsicHeight?: number
 }
 
 type DisplayBoardMediaResolver = (source: string) => Promise<DisplayBoardResolvedMedia | null>
@@ -35,20 +35,44 @@ export function clampDisplayBoardComponentProps(
   const maxHeight = Number.isFinite(props?.maxHeight) && (props?.maxHeight ?? 0) > 0
     ? Math.min(100, props!.maxHeight!)
     : DISPLAY_BOARD_DEFAULT_MAX_HEIGHT
-  const backgroundColor = typeof props?.backgroundColor === 'string' && props.backgroundColor.trim().length
-    ? props.backgroundColor.trim()
-    : DISPLAY_BOARD_DEFAULT_BACKGROUND_COLOR
-  const url = typeof props?.url === 'string' ? props.url.trim() : ''
-  return { maxWidth, maxHeight, backgroundColor, url }
+  const legacyUrl = typeof (props as { url?: unknown })?.url === 'string'
+    ? ((props as { url?: string }).url ?? '').trim()
+    : ''
+  let assetId = typeof props?.assetId === 'string' && props.assetId.trim().length
+    ? props.assetId.trim()
+    : legacyUrl
+  if (assetId.startsWith('asset://')) {
+    assetId = assetId.slice('asset://'.length)
+  }
+  const intrinsicWidth = Number.isFinite(props?.intrinsicWidth) && (props?.intrinsicWidth ?? 0) > 0
+    ? props!.intrinsicWidth!
+    : undefined
+  const intrinsicHeight = Number.isFinite(props?.intrinsicHeight) && (props?.intrinsicHeight ?? 0) > 0
+    ? props!.intrinsicHeight!
+    : undefined
+  const result: DisplayBoardComponentProps = { maxWidth, maxHeight, assetId }
+  if (intrinsicWidth !== undefined) {
+    result.intrinsicWidth = intrinsicWidth
+  }
+  if (intrinsicHeight !== undefined) {
+    result.intrinsicHeight = intrinsicHeight
+  }
+  return result
 }
 
 export function cloneDisplayBoardComponentProps(props: DisplayBoardComponentProps): DisplayBoardComponentProps {
-  return {
+  const cloned: DisplayBoardComponentProps = {
     maxWidth: props.maxWidth,
     maxHeight: props.maxHeight,
-    backgroundColor: props.backgroundColor,
-    url: props.url,
+    assetId: props.assetId,
   }
+  if (typeof props.intrinsicWidth === 'number') {
+    cloned.intrinsicWidth = props.intrinsicWidth
+  }
+  if (typeof props.intrinsicHeight === 'number') {
+    cloned.intrinsicHeight = props.intrinsicHeight
+  }
+  return cloned
 }
 
 type PlaneMesh = THREE.Mesh<THREE.BufferGeometry, THREE.Material | THREE.Material[]>
@@ -60,7 +84,6 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
   private currentCleanup: (() => void) | null = null
   private pending: PendingToken | null = null
   private readonly textureLoader = new THREE.TextureLoader()
-  private readonly tempColor = new THREE.Color(DISPLAY_BOARD_DEFAULT_BACKGROUND_COLOR)
 
   constructor(context: ComponentRuntimeContext<DisplayBoardComponentProps>) {
     super(context)
@@ -104,13 +127,13 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
     }
 
     const props = clampDisplayBoardComponentProps(this.context.getProps())
-    this.applyBackgroundColor(mesh, props.backgroundColor)
+    const intrinsic = this.getIntrinsicSize(props)
 
-    const source = props.url.trim()
+    const assetId = props.assetId.trim()
 
-    if (!source) {
+    if (!assetId) {
       this.resetTexture(mesh)
-      this.updateGeometry(mesh, props, null)
+      this.updateGeometry(mesh, props, intrinsic)
       return
     }
 
@@ -119,10 +142,11 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
     }
 
     const resolver = this.getResolver()
-    const resolved = resolver ? await resolver(source) : { url: source }
-    if (!resolved) {
+    const resolved = resolver ? await resolver(assetId) : null
+    const media = resolved ?? (this.isLikelyDirectUrl(assetId) ? { url: assetId } : null)
+    if (!media) {
       this.resetTexture(mesh)
-      this.updateGeometry(mesh, props, null)
+      this.updateGeometry(mesh, props, intrinsic)
       return
     }
 
@@ -130,9 +154,9 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
     this.pending = token
 
     try {
-      const handle = resolved.mimeType && this.isVideoType(resolved.mimeType, resolved.url)
-        ? await this.loadVideo(resolved)
-        : await this.loadImage(resolved)
+      const handle = media.mimeType && this.isVideoType(media.mimeType, media.url)
+        ? await this.loadVideo(media)
+        : await this.loadImage(media)
 
       if (token.cancelled) {
         handle.dispose()
@@ -149,9 +173,9 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
       this.currentTexture = handle.texture
     } catch (error) {
       console.warn('[DisplayBoardComponent] Failed to load media', error)
-      resolved.dispose?.()
+      resolved?.dispose?.()
       this.resetTexture(mesh)
-      this.updateGeometry(mesh, props, null)
+      this.updateGeometry(mesh, props, intrinsic)
     } finally {
       if (this.pending === token) {
         this.pending = null
@@ -215,12 +239,16 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
   ): { width: number; height: number } | null {
     const maxWidth = Math.max(1e-3, props.maxWidth)
     const maxHeight = Math.max(1e-3, props.maxHeight)
-    if (!mediaSize || mediaSize.width <= 0 || mediaSize.height <= 0) {
+    const intrinsic = this.getIntrinsicSize(props)
+    const sourceSize = mediaSize && mediaSize.width > 0 && mediaSize.height > 0
+      ? mediaSize
+      : intrinsic
+    if (!sourceSize || sourceSize.width <= 0 || sourceSize.height <= 0) {
       const base = Math.min(maxWidth, maxHeight)
       return { width: base, height: base }
     }
 
-    const aspect = mediaSize.width / mediaSize.height
+    const aspect = sourceSize.width / sourceSize.height
     let width = maxWidth
     let height = width / Math.max(aspect, 1e-6)
     if (height > maxHeight) {
@@ -237,25 +265,6 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
     const widthSegments = Number.isFinite(parameters?.widthSegments) ? Math.max(1, parameters!.widthSegments!) : 1
     const heightSegments = Number.isFinite(parameters?.heightSegments) ? Math.max(1, parameters!.heightSegments!) : 1
     return { widthSegments, heightSegments }
-  }
-
-  private applyBackgroundColor(mesh: PlaneMesh, color: string): void {
-    try {
-      this.tempColor.set(color)
-    } catch (_error) {
-      this.tempColor.set(DISPLAY_BOARD_DEFAULT_BACKGROUND_COLOR)
-    }
-    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-    materials.forEach((material) => {
-      if (!material) {
-        return
-      }
-      const typed = material as THREE.Material & { color?: THREE.Color }
-      if (typed.color) {
-        typed.color.copy(this.tempColor)
-        typed.needsUpdate = true
-      }
-    })
   }
 
   private findPlaneMesh(object: Object3D): PlaneMesh | null {
@@ -366,6 +375,20 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
     const lower = url.toLowerCase()
     return ['.mp4', '.webm', '.ogv', '.mov', '.m4v'].some((ext) => lower.includes(ext))
   }
+
+  private isLikelyDirectUrl(value: string): boolean {
+    const lower = value.toLowerCase()
+    return lower.startsWith('http://') || lower.startsWith('https://') || lower.startsWith('data:')
+  }
+
+  private getIntrinsicSize(props: DisplayBoardComponentProps): { width: number; height: number } | null {
+    const width = typeof props.intrinsicWidth === 'number' && props.intrinsicWidth > 0 ? props.intrinsicWidth : null
+    const height = typeof props.intrinsicHeight === 'number' && props.intrinsicHeight > 0 ? props.intrinsicHeight : null
+    if (!width || !height) {
+      return null
+    }
+    return { width, height }
+  }
 }
 
 const displayBoardComponentDefinition: ComponentDefinition<DisplayBoardComponentProps> = {
@@ -382,14 +405,6 @@ const displayBoardComponentDefinition: ComponentDefinition<DisplayBoardComponent
         { kind: 'number', key: 'maxHeight', label: 'Max Height (m)', min: 0.01, step: 0.05 },
       ],
     },
-    {
-      id: 'appearance',
-      label: 'Appearance',
-      fields: [
-        { kind: 'text', key: 'backgroundColor', label: 'Background Color' },
-        { kind: 'text', key: 'url', label: 'Media URL' },
-      ],
-    },
   ],
   canAttach(node: SceneNode) {
     const type = (node.nodeType ?? '').toLowerCase()
@@ -399,8 +414,9 @@ const displayBoardComponentDefinition: ComponentDefinition<DisplayBoardComponent
     return {
       maxWidth: DISPLAY_BOARD_DEFAULT_MAX_WIDTH,
       maxHeight: DISPLAY_BOARD_DEFAULT_MAX_HEIGHT,
-      backgroundColor: DISPLAY_BOARD_DEFAULT_BACKGROUND_COLOR,
-      url: '',
+      assetId: '',
+      intrinsicWidth: undefined,
+      intrinsicHeight: undefined,
     }
   },
   createInstance(context) {
@@ -419,8 +435,7 @@ export function createDisplayBoardComponentState(
   const merged = clampDisplayBoardComponentProps({
     maxWidth: overrides?.maxWidth ?? defaults.maxWidth,
     maxHeight: overrides?.maxHeight ?? defaults.maxHeight,
-    backgroundColor: overrides?.backgroundColor ?? defaults.backgroundColor,
-    url: overrides?.url ?? defaults.url,
+    assetId: overrides?.assetId ?? defaults.assetId,
   })
   return {
     id: options.id ?? '',

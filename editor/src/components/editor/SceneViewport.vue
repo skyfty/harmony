@@ -57,8 +57,8 @@ import type { BuildTool } from '@/types/build-tool'
 import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache } from '@/utils/groundMesh'
 import { createWallGroup, updateWallGroup } from '@/utils/wallMesh'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
-import { VIEW_POINT_COMPONENT_TYPE } from '@schema/components'
-import type { ViewPointComponentProps } from '@schema/components'
+import { VIEW_POINT_COMPONENT_TYPE, DISPLAY_BOARD_COMPONENT_TYPE } from '@schema/components'
+import type { ViewPointComponentProps, DisplayBoardComponentProps } from '@schema/components'
 
 
 const props = withDefaults(defineProps<{
@@ -5020,6 +5020,74 @@ function resolveBehaviorDropTarget(event: DragEvent): { nodeId: string; object: 
   return null
 }
 
+const DISPLAY_BOARD_VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'ogv', 'ogg', 'mov', 'm4v'])
+
+function inferAssetExtension(asset: ProjectAsset | null): string | null {
+  if (!asset) {
+    return null
+  }
+  const source = asset.name || asset.downloadUrl || asset.id
+  if (!source) {
+    return null
+  }
+  const match = source.match(/\.([a-z0-9]+)(?:$|[?#])/i)
+  return match ? match[1]?.toLowerCase() ?? null : null
+}
+
+function isDisplayBoardCompatibleAsset(asset: ProjectAsset | null): asset is ProjectAsset {
+  if (!asset) {
+    return false
+  }
+  if (asset.type === 'image' || asset.type === 'texture') {
+    return true
+  }
+  if (asset.type === 'file') {
+    const extension = inferAssetExtension(asset)
+    return extension ? DISPLAY_BOARD_VIDEO_EXTENSIONS.has(extension) : false
+  }
+  return false
+}
+
+function resolveDisplayBoardDropTarget(event: DragEvent): {
+  nodeId: string
+  component: SceneNodeComponentState<DisplayBoardComponentProps>
+  object: THREE.Object3D
+} | null {
+  if (!camera || !canvasRef.value) {
+    return null
+  }
+  const rect = canvasRef.value.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) {
+    return null
+  }
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  raycaster.setFromCamera(pointer, camera)
+  const intersections = raycaster.intersectObjects(rootGroup.children, true)
+  for (const intersection of intersections) {
+    const nodeId = resolveNodeIdFromObject(intersection.object)
+    if (!nodeId) {
+      continue
+    }
+    if (sceneStore.isNodeSelectionLocked(nodeId)) {
+      continue
+    }
+    const node = findSceneNode(sceneStore.nodes, nodeId)
+    const component = node?.components?.[DISPLAY_BOARD_COMPONENT_TYPE] as
+      | SceneNodeComponentState<DisplayBoardComponentProps>
+      | undefined
+    if (!component) {
+      continue
+    }
+    const targetObject = objectMap.get(nodeId)
+    if (!targetObject) {
+      continue
+    }
+    return { nodeId, component, object: targetObject }
+  }
+  return null
+}
+
 function ensureEditablePrimaryMaterial(nodeId: string, material: SceneNodeMaterial | null): string | null {
   if (!material) {
     return null
@@ -5115,9 +5183,10 @@ function resolveDragAsset(event: DragEvent): DragAssetInfo | null {
   if (!payload) {
     return null
   }
+  const assetId = payload.assetId.startsWith('asset://') ? payload.assetId.slice('asset://'.length) : payload.assetId
   return {
-    assetId: payload.assetId,
-    asset: sceneStore.getAsset(payload.assetId),
+    assetId,
+    asset: sceneStore.getAsset(assetId),
   }
 }
 
@@ -5138,7 +5207,7 @@ function handleViewportDragOver(event: DragEvent) {
   if (!isAssetDrag(event)) return
   const info = resolveDragAsset(event)
   const asset = info?.asset ?? null
-  if (asset && (asset.type === 'material' || isTextureAsset(asset))) {
+  if (asset?.type === 'material') {
     event.preventDefault()
     isDragHovering.value = true
     const target = resolveMaterialDropTarget(event)
@@ -5162,6 +5231,36 @@ function handleViewportDragOver(event: DragEvent) {
         event.dataTransfer.dropEffect = 'copy'
       }
       isDragHovering.value = true
+      updateGridHighlightFromObject(target.object)
+    } else {
+      updateGridHighlight(null)
+    }
+    disposeDragPreview()
+    return
+  }
+
+  if (asset && isDisplayBoardCompatibleAsset(asset)) {
+    const target = resolveDisplayBoardDropTarget(event)
+    if (target) {
+      event.preventDefault()
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = 'copy'
+      }
+      isDragHovering.value = true
+      updateGridHighlightFromObject(target.object)
+      disposeDragPreview()
+      return
+    }
+  }
+
+  if (asset && isTextureAsset(asset)) {
+    event.preventDefault()
+    isDragHovering.value = true
+    const target = resolveMaterialDropTarget(event)
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = target ? 'copy' : 'none'
+    }
+    if (target) {
       updateGridHighlightFromObject(target.object)
     } else {
       updateGridHighlight(null)
@@ -5212,21 +5311,34 @@ async function handleViewportDrop(event: DragEvent) {
     return
   }
 
-  const assetType = info.asset?.type ?? sceneStore.getAsset(info.assetId)?.type ?? null
+  const assetId = info.assetId
+  const asset = info.asset ?? sceneStore.getAsset(assetId) ?? null
+  const assetType = asset?.type ?? null
   const isTexture = assetType === 'texture' || assetType === 'image'
 
-  if (assetType === 'material') {
-    const target = resolveMaterialDropTarget(event)
-    if (!target) {
-      console.warn('No compatible mesh found for material drop', info.assetId)
+  if (asset && isDisplayBoardCompatibleAsset(asset)) {
+    const target = resolveDisplayBoardDropTarget(event)
+    if (target) {
+      await sceneStore.applyDisplayBoardAsset(target.nodeId, target.component.id, assetId, { updateMaterial: true })
       sceneStore.setDraggingAssetObject(null)
       updateGridHighlight(null)
       restoreGridHighlightForSelection()
       return
     }
-    const applied = applyMaterialAssetToNode(target.nodeId, info.assetId)
+  }
+
+  if (assetType === 'material') {
+    const target = resolveMaterialDropTarget(event)
+    if (!target) {
+      console.warn('No compatible mesh found for material drop', assetId)
+      sceneStore.setDraggingAssetObject(null)
+      updateGridHighlight(null)
+      restoreGridHighlightForSelection()
+      return
+    }
+    const applied = applyMaterialAssetToNode(target.nodeId, assetId)
     if (!applied) {
-      console.warn('Failed to apply material asset to node', info.assetId, target.nodeId)
+      console.warn('Failed to apply material asset to node', assetId, target.nodeId)
     }
     sceneStore.setDraggingAssetObject(null)
     updateGridHighlight(null)
@@ -5237,12 +5349,12 @@ async function handleViewportDrop(event: DragEvent) {
   if (assetType === 'behavior') {
     const target = resolveBehaviorDropTarget(event)
     if (!target) {
-      console.warn('No scene node found for behavior prefab drop', info.assetId)
+      console.warn('No scene node found for behavior prefab drop', assetId)
     } else {
       try {
-        await sceneStore.applyBehaviorPrefabToNode(target.nodeId, info.assetId)
+        await sceneStore.applyBehaviorPrefabToNode(target.nodeId, assetId)
       } catch (error) {
-        console.warn('Failed to apply behavior prefab to node', info.assetId, error)
+        console.warn('Failed to apply behavior prefab to node', assetId, error)
       }
     }
     sceneStore.setDraggingAssetObject(null)
@@ -5254,15 +5366,15 @@ async function handleViewportDrop(event: DragEvent) {
   if (isTexture) {
     const target = resolveMaterialDropTarget(event)
     if (!target) {
-      console.warn('No compatible mesh found for texture drop', info.assetId)
+      console.warn('No compatible mesh found for texture drop', assetId)
       sceneStore.setDraggingAssetObject(null)
       updateGridHighlight(null)
       restoreGridHighlightForSelection()
       return
     }
-    const applied = applyTextureAssetToNode(target.nodeId, info.assetId, info.asset?.name)
+    const applied = applyTextureAssetToNode(target.nodeId, assetId, asset?.name)
     if (!applied) {
-      console.warn('Failed to apply texture asset to node', info.assetId, target.nodeId)
+      console.warn('Failed to apply texture asset to node', assetId, target.nodeId)
     } 
     sceneStore.setDraggingAssetObject(null)
     updateGridHighlight(null)
@@ -5274,9 +5386,9 @@ async function handleViewportDrop(event: DragEvent) {
   const spawnPoint = point ? point.clone() : new THREE.Vector3(0, 0, 0)
   snapVectorToGrid(spawnPoint)
   try {
-    await sceneStore.spawnAssetAtPosition(info.assetId, spawnPoint)
+    await sceneStore.spawnAssetAtPosition(assetId, spawnPoint)
   } catch (error) {
-    console.warn('Failed to spawn asset for drag payload', info.assetId, error)
+    console.warn('Failed to spawn asset for drag payload', assetId, error)
   } finally {
     sceneStore.setDraggingAssetObject(null)
   }

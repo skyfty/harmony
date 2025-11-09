@@ -867,41 +867,6 @@ function findFirstGuideboardUnderParent(parent: SceneNode | null): SceneNode | n
   return container.find((child) => child && isGuideboardNodeCandidate(child)) ?? null
 }
 
-function resolvePerformSequenceId(target: SceneNode | null | undefined, behaviorName: string): string | null {
-  if (!target?.components) {
-    return null
-  }
-  const component = target.components[BEHAVIOR_COMPONENT_TYPE] as
-    | SceneNodeComponentState<BehaviorComponentProps>
-    | undefined
-  if (!component) {
-    return null
-  }
-  const props = component.props as BehaviorComponentProps | undefined
-  const behaviors = Array.isArray(props?.behaviors) ? props?.behaviors ?? [] : []
-  const normalizedName = behaviorName.trim().toLowerCase()
-  const match = behaviors.find((entry) => {
-    if (!entry) {
-      return false
-    }
-    if (entry.action !== 'perform') {
-      return false
-    }
-    const name = entry.name?.trim().toLowerCase() ?? ''
-    return name === normalizedName
-  })
-  if (match?.sequenceId) {
-    return match.sequenceId
-  }
-  const metadata = component.metadata as Record<string, unknown> | undefined
-  const map = normalizeNamedBehaviorSequenceMap(metadata?.[NAMED_BEHAVIOR_SEQUENCES_KEY])
-  const named = getNamedBehaviorSequence(map, behaviorName)
-  if (named && named.action === 'perform') {
-    return named.sequenceId
-  }
-  return null
-}
-
 function initializeGuideboardBehavior(nodeId: string, nodeName: string): void {
   const located = findNodeWithParent(sceneStore.nodes, nodeId)
   if (!located) {
@@ -1162,8 +1127,6 @@ function initializeWarpGateBehavior(nodeId: string): void {
 
   const sharedTargetNode = viewPointNode ?? parent ?? null
   const sharedTargetNodeId = sharedTargetNode?.id ?? null
-  const showViewPointSequenceId = resolvePerformSequenceId(sharedTargetNode, VIEW_POINT_SHOW_BEHAVIOR_NAME)
-  const hideViewPointSequenceId = resolvePerformSequenceId(sharedTargetNode, VIEW_POINT_HIDE_BEHAVIOR_NAME)
   const parentName = parent?.name?.trim() || activeNode.name?.trim() || 'Warp Gate'
 
   const clickBehaviorName = `Click ${parentName}`
@@ -1219,13 +1182,6 @@ function initializeWarpGateBehavior(nodeId: string): void {
         targetNodeId: sharedTargetNodeId ?? null,
       },
     },
-    {
-      type: 'trigger',
-      params: {
-        targetNodeId: sharedTargetNodeId ?? null,
-        sequenceId: showViewPointSequenceId ?? null,
-      },
-    },
   ])
 
   appendSequence('depart', departBehaviorName, [
@@ -1238,13 +1194,6 @@ function initializeWarpGateBehavior(nodeId: string): void {
     {
       type: 'hidePurpose',
       params: {},
-    },
-    {
-      type: 'trigger',
-      params: {
-        targetNodeId: sharedTargetNodeId ?? null,
-        sequenceId: hideViewPointSequenceId ?? null,
-      },
     },
     {
       type: 'look',
@@ -1423,6 +1372,10 @@ async function handleCreateDisplayBoardNode(): Promise<void> {
   })
 
   if (warpGateNode) {
+    const warpGatePrimaryMaterial = warpGateNode.materials?.[0] ?? null
+    if (warpGatePrimaryMaterial) {
+      sceneStore.updateNodeMaterialProps(warpGateNode.id, warpGatePrimaryMaterial.id, { side: 'double' })
+    }
     if (!warpGateNode.components?.[WARP_GATE_COMPONENT_TYPE]) {
       sceneStore.addNodeComponent(warpGateNode.id, WARP_GATE_COMPONENT_TYPE)
     }

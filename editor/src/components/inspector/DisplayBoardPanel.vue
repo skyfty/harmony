@@ -6,7 +6,6 @@ import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import {
   DISPLAY_BOARD_COMPONENT_TYPE,
-  DISPLAY_BOARD_DEFAULT_BACKGROUND_COLOR,
   DISPLAY_BOARD_DEFAULT_MAX_HEIGHT,
   DISPLAY_BOARD_DEFAULT_MAX_WIDTH,
   type DisplayBoardComponentProps,
@@ -28,11 +27,18 @@ const componentEnabled = computed(() => displayBoardComponent.value?.enabled !==
 const localProps = reactive({
   maxWidth: DISPLAY_BOARD_DEFAULT_MAX_WIDTH,
   maxHeight: DISPLAY_BOARD_DEFAULT_MAX_HEIGHT,
-  backgroundColor: DISPLAY_BOARD_DEFAULT_BACKGROUND_COLOR,
-  url: '',
+  assetId: '',
 })
 
 const isDragActive = ref(false)
+
+function normalizeAssetId(value: string | null | undefined): string {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  if (!trimmed.length) {
+    return ''
+  }
+  return trimmed.startsWith('asset://') ? trimmed.slice('asset://'.length) : trimmed
+}
 
 watch(
   () => displayBoardComponent.value?.props,
@@ -40,10 +46,15 @@ watch(
     const next = props as Partial<DisplayBoardComponentProps> | undefined
     localProps.maxWidth = Number.isFinite(next?.maxWidth) ? (next!.maxWidth as number) : DISPLAY_BOARD_DEFAULT_MAX_WIDTH
     localProps.maxHeight = Number.isFinite(next?.maxHeight) ? (next!.maxHeight as number) : DISPLAY_BOARD_DEFAULT_MAX_HEIGHT
-    localProps.backgroundColor = typeof next?.backgroundColor === 'string' && next.backgroundColor.trim().length
-      ? next.backgroundColor.trim()
-      : DISPLAY_BOARD_DEFAULT_BACKGROUND_COLOR
-    localProps.url = typeof next?.url === 'string' ? next.url : ''
+    const explicitAssetId = normalizeAssetId(next?.assetId as string | undefined)
+    if (explicitAssetId.length) {
+      localProps.assetId = explicitAssetId
+    } else {
+      const legacyUrl = typeof (next as { url?: unknown })?.url === 'string'
+        ? normalizeAssetId((next as { url?: string }).url)
+        : ''
+      localProps.assetId = legacyUrl
+    }
   },
   { immediate: true, deep: true },
 )
@@ -54,7 +65,11 @@ function updateComponentProps(partial: Partial<DisplayBoardComponentProps>) {
   if (!component || !nodeId) {
     return
   }
-  sceneStore.updateNodeComponentProps(nodeId, component.id, partial)
+  let next: Partial<DisplayBoardComponentProps> = partial
+  if (typeof partial.assetId === 'string') {
+    next = { ...partial, assetId: normalizeAssetId(partial.assetId) }
+  }
+  sceneStore.updateNodeComponentProps(nodeId, component.id, next)
 }
 
 function handleToggleComponent() {
@@ -88,35 +103,17 @@ function handleNumericChange(key: 'maxWidth' | 'maxHeight', value: string | numb
   updateComponentProps({ [key]: clamped })
 }
 
-function handleBackgroundColorChange(value: string) {
+async function handleClearAsset() {
   if (!componentEnabled.value) {
     return
   }
-  const trimmed = value.trim()
-  localProps.backgroundColor = trimmed
-  updateComponentProps({ backgroundColor: trimmed })
-}
-
-function handleUrlInput(value: string) {
-  if (!componentEnabled.value) {
+  localProps.assetId = ''
+  const component = displayBoardComponent.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId) {
     return
   }
-  localProps.url = value
-}
-
-function handleUrlCommit() {
-  if (!componentEnabled.value) {
-    return
-  }
-  updateComponentProps({ url: localProps.url.trim() })
-}
-
-function handleClearUrl() {
-  if (!componentEnabled.value) {
-    return
-  }
-  localProps.url = ''
-  updateComponentProps({ url: '' })
+  await sceneStore.applyDisplayBoardAsset(nodeId, component.id, '', { updateMaterial: true })
 }
 
 function parseAssetDragPayload(event: DragEvent): { assetId: string } | null {
@@ -175,10 +172,6 @@ function isVideoExtension(extension: string | null): boolean {
   return ['mp4', 'webm', 'ogv', 'ogg', 'mov', 'm4v'].includes(extension.toLowerCase())
 }
 
-function buildAssetSource(asset: ProjectAsset): string {
-  return `asset://${asset.id}`
-}
-
 function handleDragEnter(event: DragEvent) {
   if (!componentEnabled.value) {
     return
@@ -224,7 +217,7 @@ function handleDragLeave(event: DragEvent) {
   isDragActive.value = false
 }
 
-function handleDrop(event: DragEvent) {
+async function handleDrop(event: DragEvent) {
   if (!componentEnabled.value) {
     return
   }
@@ -235,20 +228,52 @@ function handleDrop(event: DragEvent) {
   }
   event.preventDefault()
   event.stopPropagation()
-  const source = buildAssetSource(asset)
-  localProps.url = source
-  updateComponentProps({ url: source })
+  const normalizedId = normalizeAssetId(asset.id)
+  localProps.assetId = normalizedId
+  const component = displayBoardComponent.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId) {
+    return
+  }
+  await sceneStore.applyDisplayBoardAsset(nodeId, component.id, normalizedId, { updateMaterial: true })
 }
 
+const activeAsset = computed(() => {
+  const id = normalizeAssetId(localProps.assetId)
+  if (!id.length) {
+    return null
+  }
+  return sceneStore.getAsset(id) ?? null
+})
+
 const mediaSourceLabel = computed(() => {
-  const value = localProps.url.trim()
-  if (!value.length) {
-    return '未设置'
+  const asset = activeAsset.value
+  if (!asset) {
+    return ''
   }
-  if (value.startsWith('asset://')) {
-    return `资源 ${value.slice('asset://'.length)}`
+  return asset.name?.trim().length ? asset.name : asset.id
+})
+
+const mediaSourceSecondary = computed(() => {
+  const asset = activeAsset.value
+  if (!asset) {
+    return '拖拽图片或视频资源到此处'
   }
-  return value
+  return asset.id
+})
+
+const mediaPreviewStyle = computed(() => {
+  const asset = activeAsset.value
+  if (!asset) {
+    return null
+  }
+  if (asset.thumbnail && asset.thumbnail.trim().length) {
+    return { backgroundImage: `url(${asset.thumbnail})` }
+  }
+  if (asset.previewColor && asset.previewColor.trim().length) {
+    return { backgroundColor: asset.previewColor }
+  }
+  return null
 })
 </script>
 
@@ -316,17 +341,6 @@ const mediaSourceLabel = computed(() => {
             @update:modelValue="(value) => handleNumericChange('maxHeight', value)"
           />
         </div>
-        <div class="display-board-settings__row">
-          <v-text-field
-            :model-value="localProps.backgroundColor"
-            label="Background Color"
-            variant="solo"
-            density="comfortable"
-            hide-details
-            :disabled="!componentEnabled"
-            @update:modelValue="handleBackgroundColorChange"
-          />
-        </div>
 
         <div
           class="display-board-drop"
@@ -336,32 +350,30 @@ const mediaSourceLabel = computed(() => {
           @dragleave="handleDragLeave"
           @drop="handleDrop"
         >
+          <div class="display-board-drop__preview">
+            <div
+              v-if="mediaPreviewStyle"
+              class="display-board-drop__thumbnail"
+              :style="mediaPreviewStyle"
+            />
+            <div v-else class="display-board-drop__placeholder">
+              <v-icon size="28">mdi-image-multiple-outline</v-icon>
+            </div>
+          </div>
           <div class="display-board-drop__info">
-            <div class="display-board-drop__label">Media Source</div>
             <div class="display-board-drop__value">{{ mediaSourceLabel }}</div>
+            <div class="display-board-drop__hint">{{ mediaSourceSecondary }}</div>
           </div>
           <v-btn
             variant="text"
             size="small"
             class="display-board-drop__clear"
-            :disabled="!componentEnabled || !localProps.url"
-            @click.stop="handleClearUrl"
+            :disabled="!componentEnabled || !localProps.assetId"
+            @click.stop="handleClearAsset"
           >
             Clear
           </v-btn>
         </div>
-
-        <v-text-field
-          :model-value="localProps.url"
-          label="Media URL"
-          variant="solo"
-          density="comfortable"
-          hide-details
-          :disabled="!componentEnabled"
-          @update:modelValue="handleUrlInput"
-          @blur="handleUrlCommit"
-          @keyup.enter="handleUrlCommit"
-        />
       </div>
     </v-expansion-panel-text>
   </v-expansion-panel>
@@ -406,8 +418,8 @@ const mediaSourceLabel = computed(() => {
 .display-board-drop {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.6rem;
+  justify-content: flex-start;
+  gap: 0.75rem;
   padding: 0.6rem 0.8rem;
   border: 1px dashed rgba(233, 236, 241, 0.35);
   border-radius: 6px;
@@ -422,6 +434,74 @@ const mediaSourceLabel = computed(() => {
 .display-board-drop.is-disabled {
   opacity: 0.5;
   pointer-events: none;
+}
+
+.display-board-drop__preview {
+  width: 70px;
+  height: 70px;
+  border-radius: 6px;
+  border: 1px solid rgba(233, 236, 241, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+  background-color: rgba(20, 24, 32, 0.55);
+}
+
+.display-board-drop__thumbnail {
+  width: 100%;
+  height: 100%;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+}
+
+.display-board-drop__placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: rgba(233, 236, 241, 0.55);
+  background: linear-gradient(140deg, rgba(80, 90, 110, 0.25) 0%, rgba(55, 65, 82, 0.4) 100%);
+}
+
+.display-board-drop__info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.display-board-drop__label {
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: rgba(233, 236, 241, 0.55);
+}
+
+.display-board-drop__value {
+  font-weight: 600;
+  color: rgba(241, 244, 248, 0.96);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.display-board-drop__hint {
+  font-size: 0.75rem;
+  color: rgba(233, 236, 241, 0.6);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.display-board-drop__clear {
+  margin-left: 0.75rem;
+  align-self: flex-start;
+  color: rgba(233, 236, 241, 0.75);
 }
 
 .display-board-drop__info {

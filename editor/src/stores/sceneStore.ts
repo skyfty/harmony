@@ -129,7 +129,6 @@ import {
   WALL_MIN_WIDTH,
   DISPLAY_BOARD_DEFAULT_MAX_WIDTH,
   DISPLAY_BOARD_DEFAULT_MAX_HEIGHT,
-  DISPLAY_BOARD_DEFAULT_BACKGROUND_COLOR,
   clampWallProps,
   cloneWallComponentProps,
   clampGuideboardComponentProps,
@@ -262,6 +261,117 @@ function cloneTextureRef(ref?: SceneMaterialTextureRef | null): SceneMaterialTex
     assetId: ref.assetId,
     name: ref.name,
     settings: ref.settings ? cloneTextureSettings(ref.settings) : undefined,
+  }
+}
+
+function optionalNumberEquals(a?: number, b?: number, epsilon = 1e-6): boolean {
+  const aValid = typeof a === 'number' && Number.isFinite(a)
+  const bValid = typeof b === 'number' && Number.isFinite(b)
+  if (!aValid && !bValid) {
+    return true
+  }
+  if (aValid !== bValid) {
+    return false
+  }
+  return Math.abs((a as number) - (b as number)) <= epsilon
+}
+
+type MediaDimensions = { width: number; height: number }
+
+const IMAGE_EXTENSION_PATTERN = /\.(apng|avif|bmp|gif|jpe?g|png|tiff?|webp|heic|heif|ico|svg)$/i
+const CAN_MEASURE_MEDIA =
+  typeof window !== 'undefined' &&
+  typeof Image !== 'undefined' &&
+  typeof URL !== 'undefined' &&
+  typeof URL.createObjectURL === 'function'
+
+async function ensureAssetFileForMeasurement(assetId: string, asset: ProjectAsset | null): Promise<File | null> {
+  const assetCache = useAssetCacheStore()
+  let entry = assetCache.getEntry(assetId)
+  if (entry.status !== 'cached') {
+    await assetCache.loadFromIndexedDb(assetId)
+    entry = assetCache.getEntry(assetId)
+  }
+
+  if (entry.status !== 'cached') {
+    const downloadUrl = entry.downloadUrl ?? asset?.downloadUrl ?? asset?.description ?? null
+    if (!downloadUrl) {
+      return null
+    }
+    try {
+      await assetCache.downloadAsset(assetId, downloadUrl, asset?.name ?? assetId)
+    } catch (error) {
+      console.warn('Failed to download asset for measurement', assetId, error)
+      return null
+    }
+    entry = assetCache.getEntry(assetId)
+    if (entry.status !== 'cached') {
+      return null
+    }
+  }
+
+  return assetCache.createFileFromCache(assetId)
+}
+
+function isImageLikeAsset(asset: ProjectAsset | null, file: File | null): boolean {
+  if (file?.type?.startsWith('image/')) {
+    return true
+  }
+  if (asset?.type === 'image' || asset?.type === 'texture') {
+    return true
+  }
+  const name = file?.name ?? asset?.name ?? asset?.downloadUrl ?? asset?.description ?? ''
+  return IMAGE_EXTENSION_PATTERN.test(name)
+}
+
+async function measureImageDimensionsFromFile(file: File): Promise<MediaDimensions | null> {
+  if (!CAN_MEASURE_MEDIA) {
+    return null
+  }
+  return new Promise<MediaDimensions | null>((resolve) => {
+    let revoked = false
+    const objectUrl = URL.createObjectURL(file)
+    const cleanup = () => {
+      if (!revoked) {
+        URL.revokeObjectURL(objectUrl)
+        revoked = true
+      }
+    }
+    const image = new Image()
+    image.onload = () => {
+      cleanup()
+      const width = image.naturalWidth || image.width || 0
+      const height = image.naturalHeight || image.height || 0
+      if (width > 0 && height > 0) {
+        resolve({ width, height })
+      } else {
+        resolve(null)
+      }
+    }
+    image.onerror = () => {
+      cleanup()
+      resolve(null)
+    }
+    image.src = objectUrl
+  })
+}
+
+async function measureAssetImageDimensions(assetId: string, asset: ProjectAsset | null): Promise<MediaDimensions | null> {
+  if (!CAN_MEASURE_MEDIA) {
+    return null
+  }
+  const file = await ensureAssetFileForMeasurement(assetId, asset)
+  if (!file) {
+    return null
+  }
+  if (!isImageLikeAsset(asset, file)) {
+    return null
+  }
+  try {
+    return await measureImageDimensionsFromFile(file)
+  } catch (error) {
+    console.warn('Failed to measure image asset dimensions', assetId, error)
+    return null
   }
 }
 
@@ -4409,6 +4519,47 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
       return created
     },
+    setNodePrimaryTexture(
+      nodeId: string,
+      ref: SceneMaterialTextureRef | null,
+      slot: SceneMaterialTextureSlot = 'albedo',
+    ): boolean {
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target || !nodeSupportsMaterials(target)) {
+        return false
+      }
+
+      let primary = target.materials?.[0] ?? null
+      if (!primary) {
+        primary = this.addNodeMaterial(nodeId)
+      } else if (primary.materialId) {
+        const primaryId = primary.id
+        const detached = this.assignNodeMaterial(nodeId, primaryId, null)
+        if (!detached) {
+          return false
+        }
+        const refreshed = findNodeById(this.nodes, nodeId)
+        primary = refreshed?.materials?.find((entry) => entry.id === primaryId) ?? null
+      }
+
+      if (!primary) {
+        return false
+      }
+
+      const current = primary.textures?.[slot] ?? null
+      if (!ref && !current) {
+        return true
+      }
+      if (ref && current && current.assetId === ref.assetId && current.name === ref.name) {
+        return true
+      }
+
+      const texturesUpdate: Partial<Record<SceneMaterialTextureSlot, SceneMaterialTextureRef | null>> = {
+        [slot]: ref,
+      }
+      this.updateNodeMaterialProps(nodeId, primary.id, { textures: texturesUpdate })
+      return true
+    },
     removeNodeMaterial(nodeId: string, nodeMaterialId: string) {
       const target = findNodeById(this.nodes, nodeId)
       if (!target || !nodeSupportsMaterials(target) || !target.materials?.length) {
@@ -6941,6 +7092,32 @@ export const useSceneStore = defineStore('scene', {
           return false
         }
         nextProps = cloneWallComponentProps(merged)
+      } else if (type === DISPLAY_BOARD_COMPONENT_TYPE) {
+        const currentProps = component.props as DisplayBoardComponentProps
+        const typedPatch = patch as Partial<DisplayBoardComponentProps>
+        const hasIntrinsicWidth = Object.prototype.hasOwnProperty.call(typedPatch, 'intrinsicWidth')
+        const hasIntrinsicHeight = Object.prototype.hasOwnProperty.call(typedPatch, 'intrinsicHeight')
+        const merged = clampDisplayBoardComponentProps({
+          maxWidth: typeof typedPatch.maxWidth === 'number' && Number.isFinite(typedPatch.maxWidth)
+            ? typedPatch.maxWidth
+            : currentProps.maxWidth,
+          maxHeight: typeof typedPatch.maxHeight === 'number' && Number.isFinite(typedPatch.maxHeight)
+            ? typedPatch.maxHeight
+            : currentProps.maxHeight,
+          assetId: typeof typedPatch.assetId === 'string' ? typedPatch.assetId : currentProps.assetId,
+          intrinsicWidth: hasIntrinsicWidth ? typedPatch.intrinsicWidth ?? undefined : currentProps.intrinsicWidth,
+          intrinsicHeight: hasIntrinsicHeight ? typedPatch.intrinsicHeight ?? undefined : currentProps.intrinsicHeight,
+        })
+        const unchanged =
+          Math.abs((currentProps.maxWidth ?? 0) - merged.maxWidth) < 1e-6 &&
+          Math.abs((currentProps.maxHeight ?? 0) - merged.maxHeight) < 1e-6 &&
+          (currentProps.assetId ?? '') === merged.assetId &&
+          optionalNumberEquals(currentProps.intrinsicWidth, merged.intrinsicWidth) &&
+          optionalNumberEquals(currentProps.intrinsicHeight, merged.intrinsicHeight)
+        if (unchanged) {
+          return false
+        }
+        nextProps = cloneDisplayBoardComponentProps(merged)
       } else {
         const currentProps = component.props as Record<string, unknown>
         const merged = { ...currentProps, ...patch }
@@ -7029,6 +7206,62 @@ export const useSceneStore = defineStore('scene', {
       }
       commitSceneSnapshot(this)
       return true
+    },
+    async applyDisplayBoardAsset(
+      nodeId: string,
+      componentId: string,
+      assetId: string | null,
+      options: { updateMaterial?: boolean } = {},
+    ): Promise<boolean> {
+      const rawId = typeof assetId === 'string' ? assetId.trim() : ''
+      const normalizedId = rawId.startsWith('asset://') ? rawId.slice('asset://'.length) : rawId
+      const node = findNodeById(this.nodes, nodeId)
+      if (!node) {
+        return false
+      }
+      const componentEntry = findComponentEntryById(node.components, componentId)
+      if (!componentEntry || componentEntry[0] !== DISPLAY_BOARD_COMPONENT_TYPE) {
+        return false
+      }
+
+      const shouldUpdateMaterial = options.updateMaterial !== false
+
+      if (!normalizedId) {
+        const changed = this.updateNodeComponentProps(nodeId, componentId, {
+          assetId: '',
+          intrinsicWidth: undefined,
+          intrinsicHeight: undefined,
+        })
+        if (shouldUpdateMaterial) {
+          this.setNodePrimaryTexture(nodeId, null, 'albedo')
+        }
+        return changed
+      }
+
+      const asset = this.getAsset(normalizedId)
+      const dimensions = await measureAssetImageDimensions(normalizedId, asset)
+
+      const patch: Partial<DisplayBoardComponentProps> = {
+        assetId: normalizedId,
+      }
+      if (dimensions) {
+        patch.intrinsicWidth = dimensions.width
+        patch.intrinsicHeight = dimensions.height
+      } else {
+        patch.intrinsicWidth = undefined
+        patch.intrinsicHeight = undefined
+      }
+
+      const changed = this.updateNodeComponentProps(nodeId, componentId, patch)
+
+      if (shouldUpdateMaterial) {
+        const ref: SceneMaterialTextureRef | null = asset?.name?.trim().length
+          ? { assetId: normalizedId, name: asset?.name }
+          : { assetId: normalizedId }
+        this.setNodePrimaryTexture(nodeId, ref, 'albedo')
+      }
+
+      return changed
     },
     hasRuntimeObject(id: string) {
       return runtimeObjectRegistry.has(id)

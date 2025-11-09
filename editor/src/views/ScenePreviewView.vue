@@ -754,15 +754,15 @@ async function resolveDisplayBoardMediaSource(candidate: string): Promise<{ url:
 	if (!trimmed.length) {
 		return null
 	}
-	if (!trimmed.startsWith('asset://')) {
-		return { url: trimmed, mimeType: inferMimeTypeFromUrl(trimmed) }
-	}
-	const assetId = trimmed.slice('asset://'.length)
-	if (!assetId) {
+	const assetId = trimmed.startsWith('asset://') ? trimmed.slice('asset://'.length) : trimmed
+	if (!assetId.length) {
 		return null
 	}
 	const source = resolveAssetSource(assetId)
 	if (!source) {
+		if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:')) {
+			return { url: trimmed, mimeType: inferMimeTypeFromUrl(trimmed) }
+		}
 		return null
 	}
 	switch (source.kind) {
