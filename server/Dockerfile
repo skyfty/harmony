@@ -10,9 +10,9 @@ RUN npm ci
 COPY tsconfig.json ./
 COPY src ./src
 # Build to dist (tsconfig outputs there)
-# RUN npm run build
+RUN npm run build
 # Remove dev dependencies after build to shrink node_modules copied to runtime
-# RUN npm prune --omit=dev
+RUN npm prune --omit=dev
 
 # --- Runtime Stage ---
 FROM node:20-alpine AS runtime
