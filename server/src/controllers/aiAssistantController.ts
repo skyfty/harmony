@@ -1,6 +1,16 @@
 import type { Context } from 'koa'
-import type { AssistantContextMessage, AssistantMessagePayload } from '@/types/assistant'
+import type {
+  AssistantContextMessage,
+  AssistantMessagePayload,
+  AssistantResourceDescriptor,
+  AssistantSceneSnapshot,
+  AssistantToolDefinition,
+} from '@/types/assistant'
 import { processAssistantMessage } from '@/services/aiAssistantService'
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
 
 function normalizeContext(entries: unknown): AssistantContextMessage[] | undefined {
   if (!Array.isArray(entries)) {
@@ -26,6 +36,58 @@ function normalizeContext(entries: unknown): AssistantContextMessage[] | undefin
   return normalized.length ? normalized : undefined
 }
 
+function normalizeToolbox(entries: unknown): AssistantToolDefinition[] | undefined {
+  if (!Array.isArray(entries)) {
+    return undefined
+  }
+  const normalized: AssistantToolDefinition[] = []
+  entries.forEach((entry) => {
+    if (!isRecord(entry)) {
+      return
+    }
+    const name = typeof entry.name === 'string' ? entry.name.trim() : ''
+    if (!name) {
+      return
+    }
+    const description = typeof entry.description === 'string' ? entry.description.trim() : ''
+    const parameters = isRecord(entry.parameters) ? entry.parameters : undefined
+    const returns = typeof entry.returns === 'string' ? entry.returns : undefined
+    normalized.push({ name, description, parameters, returns })
+  })
+  return normalized.length ? normalized : undefined
+}
+
+function normalizeSceneSnapshot(value: unknown): AssistantSceneSnapshot | null | undefined {
+  if (value === null) {
+    return null
+  }
+  if (!isRecord(value)) {
+    return undefined
+  }
+  return value
+}
+
+function normalizeResources(value: unknown): AssistantResourceDescriptor | undefined {
+  if (!isRecord(value)) {
+    return undefined
+  }
+  const descriptor: AssistantResourceDescriptor = {}
+  const library = value.modelLibrary
+  if (isRecord(library)) {
+    const searchEndpoint = typeof library.searchEndpoint === 'string' ? library.searchEndpoint : undefined
+    const assetDetailEndpoint = typeof library.assetDetailEndpoint === 'string' ? library.assetDetailEndpoint : undefined
+    const description = typeof library.description === 'string' ? library.description : undefined
+    if (searchEndpoint) {
+      descriptor.modelLibrary = {
+        searchEndpoint,
+        assetDetailEndpoint,
+        description,
+      }
+    }
+  }
+  return Object.keys(descriptor).length ? descriptor : undefined
+}
+
 function normalizePayload(raw: unknown): AssistantMessagePayload {
   if (!raw || typeof raw !== 'object') {
     throw new Error('请求数据无效')
@@ -46,6 +108,9 @@ function normalizePayload(raw: unknown): AssistantMessagePayload {
   }
 
   const context = normalizeContext(candidate.context)
+  const toolbox = normalizeToolbox(candidate.toolbox)
+  const scene = normalizeSceneSnapshot(candidate.scene)
+  const resources = normalizeResources(candidate.resources)
 
   if ((!text || !text.trim()) && !image) {
     throw new Error('至少需要提供文本或截图信息')
@@ -55,6 +120,9 @@ function normalizePayload(raw: unknown): AssistantMessagePayload {
     text,
     image,
     context,
+    toolbox,
+    scene: scene ?? null,
+    resources,
   }
 }
 

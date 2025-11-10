@@ -19,5 +19,12 @@ export const appConfig = {
     password: process.env.TEST_USER_PASSWORD ?? 'test1234',
     displayName: process.env.TEST_USER_DISPLAY_NAME ?? 'Test Account',
   },
+  openAi: {
+    apiKey: process.env.OPENAI_API_KEY ?? '',
+    model: process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
+    baseUrl: process.env.OPENAI_BASE_URL,
+    organization: process.env.OPENAI_ORG,
+    project: process.env.OPENAI_PROJECT,
+  },
   rootDir,
 }
