@@ -13,7 +13,7 @@ RUN npm ci
 COPY editor/ ./
 COPY schema/ ../schema/
 # 仅使用 vite 构建，跳过类型检查以避免编译时因未使用变量而失败
-RUN npx vite build
+RUN npm run build
 
 # --- Runtime Stage ---
 FROM nginx:alpine AS runtime
