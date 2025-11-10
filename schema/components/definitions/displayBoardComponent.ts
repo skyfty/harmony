@@ -5,8 +5,8 @@ import { componentManager, type ComponentDefinition } from '../componentManager'
 import type { SceneNode, SceneNodeComponentState } from '../../index'
 
 export const DISPLAY_BOARD_COMPONENT_TYPE = 'displayBoard'
-export const DISPLAY_BOARD_DEFAULT_MAX_WIDTH = 0.5
-export const DISPLAY_BOARD_DEFAULT_MAX_HEIGHT = 0.5
+export const DISPLAY_BOARD_DEFAULT_MAX_WIDTH = 1.0
+export const DISPLAY_BOARD_DEFAULT_MAX_HEIGHT = 1.0
 
 const DISPLAY_BOARD_RESOLVER_KEY = '__harmonyResolveDisplayBoardMedia'
 

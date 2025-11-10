@@ -1226,7 +1226,6 @@ async function handleCreateDisplayBoardNode(): Promise<void> {
     ...(boardMesh.userData ?? {}),
     displayBoard: true,
   }
-  boardMesh.rotation.y = Math.PI
 
   const boardRoot = new THREE.Object3D()
   boardRoot.name = name
@@ -1373,7 +1372,7 @@ async function handleCreateViewPointNode(options: NodeCreationOptions = {}): Pro
   const { parentId, autoBehaviors = false } = options
   const name = getNextViewPointName()
 
-  const markerMesh = createPrimitiveMesh('Sphere',{color: VIEW_POINT_COLOR,doubleSided: true})
+  const markerMesh = createPrimitiveMesh('Plane',{color: VIEW_POINT_COLOR,doubleSided: true})
   markerMesh.name = `${name} Helper`
   markerMesh.castShadow = false
   markerMesh.receiveShadow = false
@@ -1383,8 +1382,6 @@ async function handleCreateViewPointNode(options: NodeCreationOptions = {}): Pro
     editorOnly: true,
     ignoreGridSnapping: true,
     viewPoint: true,
-    viewPointBaseScale: { x: markerMesh.scale.x, y: markerMesh.scale.y, z: markerMesh.scale.z },
-    viewPointRadius: VIEW_POINT_RADIUS,
   }
 
   const markerRoot = new THREE.Object3D()
@@ -1395,8 +1392,6 @@ async function handleCreateViewPointNode(options: NodeCreationOptions = {}): Pro
     editorOnly: true,
     ignoreGridSnapping: true,
     viewPoint: true,
-    viewPointBaseScale: { x: markerRoot.scale.x, y: markerRoot.scale.y, z: markerRoot.scale.z },
-    viewPointRadius: VIEW_POINT_RADIUS,
   }
 
   const parent = resolveTargetParentNode(parentId)
