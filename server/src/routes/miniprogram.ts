@@ -46,7 +46,8 @@ import {
   getOrder,
 } from '@/controllers/miniprogram/orderController'
 
-const miniRouter = new Router({ prefix: '/mini' })
+// Align with other API prefixes under /api/* so reverse proxy & clients use /api/mini
+const miniRouter = new Router({ prefix: '/api/mini' })
 
 // public auth endpoints
 miniRouter.post('/users/register', register)
