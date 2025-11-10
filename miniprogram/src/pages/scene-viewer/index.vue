@@ -36,8 +36,13 @@
           </view>
         </view>
       </view>
-      <view v-if="lanternOverlayVisible" class="viewer-lantern-overlay">
+      <view
+        v-if="lanternOverlayVisible"
+        class="viewer-lantern-overlay"
+        @tap="handleLanternOverlayTap"
+      >
         <view
+          ref="lanternDialogRef"
           class="viewer-lantern-dialog"
           @touchstart="handleLanternTouchStart"
           @touchmove="handleLanternTouchMove"
@@ -133,7 +138,7 @@
 </template>
 
 <script setup lang="ts">
-import { effectScope, watchEffect, ref, computed, onUnmounted, watch, reactive } from 'vue';
+import { effectScope, watchEffect, ref, computed, onUnmounted, watch, reactive, type ComponentPublicInstance } from 'vue';
 import { onLoad, onUnload, onReady } from '@dcloudio/uni-app';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -370,6 +375,7 @@ const lanternOverlayVisible = ref(false);
 const lanternSlides = ref<LanternSlideDefinition[]>([]);
 const lanternActiveSlideIndex = ref(0);
 const lanternEventToken = ref<string | null>(null);
+const lanternDialogRef = ref<HTMLElement | ComponentPublicInstance | null>(null);
 
 const purposeControlsVisible = ref(false);
 const purposeTargetNodeId = ref<string | null>(null);
@@ -1016,6 +1022,45 @@ function showNextLanternSlide(): void {
 
 function cancelLanternOverlay(): void {
   closeLanternOverlay({ type: 'abort', message: '用户退出了幻灯片' });
+}
+
+function isDomNode(value: unknown): value is Node {
+  return typeof Node !== 'undefined' && value instanceof Node;
+}
+
+function resolveLanternDialogNode(): Node | null {
+  const value = lanternDialogRef.value;
+  if (!value) {
+    return null;
+  }
+  if (isDomNode(value)) {
+    return value;
+  }
+  const maybeInstance = value as ComponentPublicInstance;
+  const root = maybeInstance?.$el;
+  return isDomNode(root) ? root : null;
+}
+
+function isTapInsideLanternDialog(event: Event): boolean {
+  const dialogNode = resolveLanternDialogNode();
+  if (!dialogNode) {
+    return false;
+  }
+  const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+  if (Array.isArray(path) && path.length) {
+    return path.some((item) => item === dialogNode || (isDomNode(item) && dialogNode.contains(item)));
+  }
+  const target = event.target;
+  if (!isDomNode(target)) {
+    return false;
+  }
+  return dialogNode === target || dialogNode.contains(target);
+}
+
+function handleLanternOverlayTap(event: Event): void {
+  if (!isTapInsideLanternDialog(event)) {
+    cancelLanternOverlay();
+  }
 }
 
 function resetLanternSwipeTracking(): void {
