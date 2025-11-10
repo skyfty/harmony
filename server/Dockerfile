@@ -5,12 +5,14 @@ WORKDIR /app
 ENV NODE_ENV=production
 # Install deps (use npm ci for reproducibility)
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+RUN npm ci
 # Copy source for build (TypeScript compile)
 COPY tsconfig.json ./
 COPY src ./src
 # Build to dist (tsconfig outputs there)
 RUN npm run build
+# Remove dev dependencies after build to shrink node_modules copied to runtime
+RUN npm prune --omit=dev
 
 # --- Runtime Stage ---
 FROM node:20-alpine AS runtime
