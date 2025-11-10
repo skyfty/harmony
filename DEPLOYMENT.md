@@ -1,6 +1,15 @@
-# Harmony Server 生产部署指南 (cdn.touchmagic.cn)
+# Harmony 全栈生产部署指南 (server / admin / editor)
 
-本文档说明如何将 `server` 子工程通过 Docker 部署到生产环境，并使用域名 `cdn.touchmagic.cn` 暴露静态上传资源与 API。假设服务器已安装其他服务，并且默认的 MongoDB 27017 端口被占用，我们将宿主机改用 27018 端口映射。
+本指南覆盖以下子工程的生产部署、升级与回滚流程：
+- `server`：Koa + Mongo，API 与资源上传（域名：`cdn.touchmagic.cn` 用于静态与 API 反代）。
+- `admin`：后台管理前端（域名：`admin.v.touchmagic.cn`）。
+- `editor`：场景/编辑器前端（域名：`editor.v.touchmagic.cn`）。
+
+特点：
+- 所有服务通过 Docker Compose 编排。
+- Mongo 与上传目录使用宿主机持久化绑定。
+- 前端运行时配置不写死后端地址，通过挂载 `config/app-config.json` 实现环境切换。
+- 升级采用原地重建镜像 + 无状态前端替换；数据与配置不丢失。
 
 ## 一、前置条件
 1. 已解析域名：在域名服务商控制台添加 `cdn.touchmagic.cn` A 记录指向服务器公网 IP。
@@ -69,14 +78,28 @@ nano .env.production
 - `MONGODB_URI=mongodb://mongo:27017/harmony`：容器内部使用服务名 `mongo` 与其内部端口 27017，不受宿主机映射影响。
 - `ASSET_PUBLIC_URL=https://cdn.touchmagic.cn/uploads`：用于上传资源外链访问；反向代理需对应配置路径 `/uploads`。
 
-## 五、docker-compose 文件结构
-根目录已经创建 `docker-compose.prod.yml`：
-- `mongo` 服务：容器端口 27017，宿主机映射到 27018；数据目录绑定到宿主机 `/www/web/v_touchmagic_cn/harmony/server/mongo-data:/data/db`。
-- `server` 服务：构建自 `server/Dockerfile`，上传目录绑定到宿主机 `/www/web/v_touchmagic_cn/harmony/server/uploads:/app/uploads`。
-- `admin` 服务：构建自 `admin/Dockerfile`，对外端口 8081；通过挂载 `/usr/share/nginx/html/config/app-config.json` 实现运行时配置。
-- `editor` 服务：构建自 `editor/Dockerfile`，对外端口 8082；同样支持运行时配置。
+## 五、目录与 docker-compose 结构
+`docker-compose.prod.yml` 关键点：
 
-## 六、构建与启动
+| 服务 | 作用 | 端口 (宿主→容器) | 挂载/持久化 | 备注 |
+|------|------|------------------|-------------|------|
+| mongo | 数据库 | 27018→27017 | `/www/web/v_touchmagic_cn/harmony/server/mongo-data:/data/db` | 避免与系统已有 Mongo 冲突 |
+| server | 后端 API & 上传 | 4000→4000 | `/www/web/v_touchmagic_cn/harmony/server/uploads:/app/uploads` | Koa 应用，反代暴露 |
+| admin | 管理前端 | 8081→80 | `/www/web/v_touchmagic_cn/harmony/config/admin-app-config.json:/usr/share/nginx/html/config/app-config.json:ro` | 运行时配置文件 |
+| editor | 编辑器前端 | 8082→80 | `/www/web/v_touchmagic_cn/harmony/config/editor-app-config.json:/usr/share/nginx/html/config/app-config.json:ro` | 运行时配置文件 |
+
+前端运行时配置文件示例（宿主机路径）：
+`/www/web/v_touchmagic_cn/harmony/config/admin-app-config.json`
+```json
+{
+  "serverApiBaseUrl": "https://cdn.touchmagic.cn",
+  "serverApiPrefix": "/api",
+  "assetPublicBaseUrl": "https://cdn.touchmagic.cn/uploads"
+}
+```
+`editor` 同理。
+
+## 六、首次构建与启动
 
 根据你选择的获取方式不同，执行其一：
 
@@ -99,16 +122,18 @@ docker compose -f docker-compose.prod.yml ps
 ```bash
 docker compose -f docker-compose.prod.yml logs -f server
 docker compose -f docker-compose.prod.yml logs -f mongo
+docker compose -f docker-compose.prod.yml logs -f admin
+docker compose -f docker-compose.prod.yml logs -f editor
 ```
 
-## 七、数据与备份
+## 七、数据与备份策略
 - Mongo 数据：卷 `mongo_data` 对应 `/var/lib/docker/volumes/.../` 路径，可使用 `mongodump` 进入容器备份：
 ```bash
 docker exec -it harmony-mongo sh -c 'apt-get update && apt-get install -y mongodb-database-tools && mongodump --out /data/db-dump'
 ```
 将备份目录打包复制至宿主机再上传对象存储。
 
-## 八、反向代理与 HTTPS
+## 八、反向代理与 HTTPS（Nginx / Caddy）
 可以使用 Nginx 或 Caddy，这里给出两种示例。
 
 ### 选项 A：Nginx
@@ -184,50 +209,7 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-### 选项 B：Caddy（更简单自动证书）
-1. 安装：
-```bash
-sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
-sudo apt update && sudo apt install caddy -y
-```
-2. 编辑 `/etc/caddy/Caddyfile`：
-```
-cdn.touchmagic.cn {
-  encode gzip
-  handle /uploads/* {
-    reverse_proxy 127.0.0.1:4000
-  }
-  handle /api/* {
-    reverse_proxy 127.0.0.1:4000
-  }
-  log {
-    output file /var/log/caddy/cdn.access.log
-  }
-}
-
-admin.v.touchmagic.cn {
-  encode gzip
-  reverse_proxy 127.0.0.1:8081
-  log {
-    output file /var/log/caddy/admin.access.log
-  }
-}
-
-editor.v.touchmagic.cn {
-  encode gzip
-  reverse_proxy 127.0.0.1:8082
-  log {
-    output file /var/log/caddy/editor.access.log
-  }
-}
-```
-3. 重载：`sudo systemctl reload caddy`
-
-> 注意：如果 API 路由前缀并非 `/api`，需要根据实际 `routes` 修改；静态上传目录前缀由 `ASSET_PUBLIC_URL` 中的路径决定（示例为 `/uploads`）。
-
-## 九、验证部署
+## 九、验证部署 (API / 静态 / 前端)
 ```bash
 curl -I https://cdn.touchmagic.cn/uploads/非存在文件
 # 期望 404
@@ -239,23 +221,59 @@ curl -I https://editor.v.touchmagic.cn/
 ```
 查看应用日志确认启动：`Server listening on http://localhost:4000`。
 
-## 十、升级与回滚
-升级：
+## 十、升级流程（全量或单服务）
+
+### 1. 拉取代码
 ```bash
 cd /opt/harmony
-git pull
+git pull --ff-only
+```
+
+### 2. 仅升级后端 server
+```bash
 docker compose -f docker-compose.prod.yml build server
 docker compose -f docker-compose.prod.yml up -d server
 ```
-回滚：使用 `git checkout <旧标签>` 后重新 build & up。
+
+### 3. 升级全部（server + admin + editor）
+```bash
+docker compose -f docker-compose.prod.yml build
+docker compose -f docker-compose.prod.yml up -d
+```
+
+### 4. 查看变更后的运行状态
+```bash
+docker compose -f docker-compose.prod.yml ps
+```
+
+### 5. 热修前端仅替换配置文件（无需重建）
+直接编辑宿主机：
+`/www/web/v_touchmagic_cn/harmony/config/admin-app-config.json`
+`/www/web/v_touchmagic_cn/harmony/config/editor-app-config.json`
+前端将按页面刷新后加载新的后端地址。
+
+### 6. 回滚
+```bash
+git checkout <TAG_OR_COMMIT>
+docker compose -f docker-compose.prod.yml build
+docker compose -f docker-compose.prod.yml up -d
+```
+
+可选：为每次生产部署打标签：
+```bash
+git tag -a prod-$(date +%Y%m%d-%H%M) -m "prod deploy"
+git push --tags
+```
 
 ## 十一、安全加固建议
-- 使用随机且足够长度的 `JWT_SECRET`。
- - 配置防火墙仅放通 80/443，内部端口 4000/8081/8082 仅供本机反向代理访问。
- - 不在前端镜像内直接写死后端地址，通过挂载 `config/app-config.json` 实现运行时切换环境。
-- 限制防火墙仅开放 80/443/22/27018（若需宿主访问 Mongo）。
-- 定期 `mongodump` 做异地备份。
-- 若上传目录有执行风险，保持仅存放二进制/图片/模型文件。
+1. 使用随机且足够长度的 `JWT_SECRET`，变更后需使旧 Token 失效（可改密钥 + 重启）。
+2. 防火墙放通端口：80/443/22（可选 27018），限制 4000/8081/8082 仅本地访问。
+3. 前端只通过挂载配置文件引用后端地址，不在打包时写死，降低误发生产风险。
+4. 定期：
+  - `mongodump` 结构与数据（或使用增量备份策略）
+  - 归档 `/www/web/v_touchmagic_cn/harmony/server/uploads`（可对大文件做对象存储迁移）
+5. 配置最小权限系统用户运行 Docker（避免 root 直接操作业务文件）。
+6. 监控：接入容器 metrics（可选 Prometheus + cAdvisor）与 Nginx/Caddy 访问日志轮转。
 
 ## 十二、常见问题
 | 问题 | 原因 | 解决 |
@@ -265,7 +283,7 @@ docker compose -f docker-compose.prod.yml up -d server
 | 端口冲突 | 宿主已有 Mongo 27017 | 使用 27018:27017 映射（已配置） |
 | 证书续期失败 | DNS 解析或防火墙限制 | 放通 80/443 并检查域名解析 |
 
-## 十三、快速一键脚本示例 (可选)
+## 十三、快速一键首次部署脚本示例 (可选)
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
