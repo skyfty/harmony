@@ -1,4 +1,4 @@
-const DEFAULT_BASE_URL = 'http://localhost:4000/mini';
+const DEFAULT_BASE_URL = 'https://cdn.touchmagic.cn:4000/mini';
 
 export function getBaseUrl(): string {
   return import.meta.env?.VITE_MINI_API_BASE || DEFAULT_BASE_URL;
