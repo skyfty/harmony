@@ -1,10 +1,10 @@
 {
   "pages": [
     {
-      "path": "pages/index/index"
+      "path": "pages/home/index"
     },
     {
-      "path": "pages/home/index"
+      "path": "pages/index/index"
     },
     {
       "path": "pages/works/indite"
