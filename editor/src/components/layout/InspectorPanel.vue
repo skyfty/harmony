@@ -351,61 +351,9 @@ function handleAddComponent(type: string) {
         size="small"
         @click="selectTab('inspector')"
       >
-      <TransformPanel />
-      <LightPanel v-if="isLightNode"/>
-      <MaterialPanel
-        v-else-if="showMaterialPanel"
-        v-model:active-node-material-id="materialDetailsTargetId"
-        @open-details="handleOpenMaterialDetails"
-        @close-details="handleMaterialPanelRequestCloseDetails"
-      />
-      <GroundPanel v-if="isGroundNode" />
-
-      <div v-if="nodeComponents.length" class="component-list">
-        <div v-for="component in nodeComponents" :key="component.id" class="component-entry" >
-          <GuideboardPanel v-if="component.type === GUIDEBOARD_COMPONENT_TYPE" />
-          <DisplayBoardPanel v-else-if="component.type === DISPLAY_BOARD_COMPONENT_TYPE" />
-          <ViewPointPanel v-else-if="component.type === VIEW_POINT_COMPONENT_TYPE" />
-          <WarpGatePanel v-else-if="component.type === WARP_GATE_COMPONENT_TYPE" />
-          <WallPanel v-else-if="component.type === WALL_COMPONENT_TYPE" />
-          <BehaviorPanel
-            v-else-if="component.type === BEHAVIOR_COMPONENT_TYPE"
-            @open-details="handleOpenBehaviorDetails"
-          />
-        </div>
-      </div>
-
-      <div class="component-actions">
-        <v-menu location="top" origin="auto" transition="null" v-if="availableComponents.length">
-          <template #activator="{ props }">
-            <v-btn v-bind="props"
-                  size="small" prepend-icon="mdi-plus">
-              Add Component
-            </v-btn>
-          </template>
-          <v-list density="compact"  class="menu-list">
-            <v-list-item
-              v-for="definition in availableComponents"
-              :key="definition.type"
-              :value="definition.type"
-              @click="handleAddComponent(definition.type)"
-            >
-              <v-list-item-title>{{ definition.label }}</v-list-item-title>
-            </v-list-item>
-          </v-list>
-        </v-menu>
-        <v-btn
-          v-else
-          size="small"
-          prepend-icon="mdi-check"
-          disabled
-        >
-          All Components Added
-        </v-btn>
-      </div>
-      </v-expansion-panels>
         Inspector
       </v-btn>
+
       <v-btn
         class="panel-tab"
         :class="{ 'is-active': activeTab === 'assistant' }"
