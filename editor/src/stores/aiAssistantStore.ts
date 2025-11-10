@@ -1,8 +1,11 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { executeToolInvocations, getAgentToolboxDefinitions } from '@/ai/agentToolbox'
 import { sendAssistantMessage } from '@/api/aiAssistant'
+import { useSceneStore } from '@/stores/sceneStore'
 import type {
   AiAssistantMessageRequest,
+  AiAssistantSceneChange,
   AiChatMessage,
   AiChatMessageStatus,
   AiAssistantHistoryItem,
@@ -36,6 +39,12 @@ export const useAiAssistantStore = defineStore('ai-assistant', () => {
   const messages = ref<AiChatMessage[]>([])
   const isAwaitingResponse = ref(false)
   const lastError = ref<string | null>(null)
+
+  const MODEL_LIBRARY_RESOURCE = {
+    searchEndpoint: '/api/library/models/search',
+    assetDetailEndpoint: '/api/library/models/{assetId}',
+    description: '提供网格、贴图、材质等资产的查询接口，便于根据关键字检索可用资源。',
+  } as const
 
   function buildContextHistory(): AiAssistantHistoryItem[] {
     const history = messages.value.filter((entry) => entry.status === 'sent')
@@ -83,6 +92,12 @@ export const useAiAssistantStore = defineStore('ai-assistant', () => {
       createdAt,
       status: 'sending',
       error: null,
+      suggestions: undefined,
+      metadata: null,
+      sceneChange: null,
+      sceneChangeApplied: false,
+      sceneChangeApplying: false,
+      sceneChangeError: null,
     }
 
     messages.value.push(userMessage)
@@ -95,11 +110,25 @@ export const useAiAssistantStore = defineStore('ai-assistant', () => {
       createdAt,
       status: 'pending',
       error: null,
+      suggestions: [],
+      metadata: null,
+      sceneChange: null,
+      sceneChangeApplied: false,
+      sceneChangeApplying: false,
+      sceneChangeError: null,
     }
 
     messages.value.push(assistantPlaceholder)
     isAwaitingResponse.value = true
     lastError.value = null
+
+    const sceneStore = useSceneStore()
+    let sceneSnapshot: ReturnType<typeof sceneStore.createSceneDocumentSnapshot> | null = null
+    try {
+      sceneSnapshot = sceneStore.createSceneDocumentSnapshot()
+    } catch (error) {
+      console.warn('[AiAssistantStore] Failed to capture scene snapshot', error)
+    }
 
     const payload: AiAssistantMessageRequest = {
       text,
@@ -111,6 +140,15 @@ export const useAiAssistantStore = defineStore('ai-assistant', () => {
           }
         : undefined,
       context: buildContextHistory(),
+      scene: sceneSnapshot,
+      toolbox: getAgentToolboxDefinitions(),
+      resources: {
+        modelLibrary: {
+          searchEndpoint: MODEL_LIBRARY_RESOURCE.searchEndpoint,
+          assetDetailEndpoint: MODEL_LIBRARY_RESOURCE.assetDetailEndpoint,
+          description: MODEL_LIBRARY_RESOURCE.description,
+        },
+      },
     }
 
     try {
@@ -120,14 +158,30 @@ export const useAiAssistantStore = defineStore('ai-assistant', () => {
         text: response.reply.text,
         createdAt: response.reply.createdAt ?? new Date().toISOString(),
         imageUrl: response.reply.imageUrl ?? null,
+        suggestions: response.suggestions ?? [],
+        metadata: response.metadata ?? null,
+        sceneChange: response.change ?? null,
+        sceneChangeApplied: false,
+        sceneChangeApplying: false,
+        sceneChangeError: null,
       })
       updateMessageStatus(assistantPlaceholder, 'sent')
       lastError.value = null
+      if (assistantPlaceholder.sceneChange?.autoApply) {
+        try {
+          await applySceneChangeInternal(assistantPlaceholder.sceneChange, assistantPlaceholder)
+        } catch (error) {
+          console.warn('[AiAssistantStore] Auto apply change failed', error)
+        }
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : '发送失败'
       updateMessageStatus(userMessage, 'error', message)
       if (assistantPlaceholder.status === 'pending') {
         assistantPlaceholder.text = 'AI 助手回复失败'
+        assistantPlaceholder.suggestions = []
+        assistantPlaceholder.sceneChange = null
+        assistantPlaceholder.metadata = null
       }
       updateMessageStatus(assistantPlaceholder, 'error', message)
       lastError.value = message
@@ -135,6 +189,45 @@ export const useAiAssistantStore = defineStore('ai-assistant', () => {
     } finally {
       isAwaitingResponse.value = false
     }
+  }
+
+  async function applySceneChangeInternal(change: AiAssistantSceneChange, message: AiChatMessage): Promise<void> {
+    const sceneStore = useSceneStore()
+    message.sceneChangeApplying = true
+    message.sceneChangeError = null
+    try {
+      if (change.type === 'tool-invocations') {
+        await executeToolInvocations(change.toolInvocations, sceneStore)
+      } else if (change.type === 'json-patch') {
+        throw new Error('暂不支持 JSON Patch 变更应用。')
+      } else {
+        throw new Error('未知的场景变更类型。')
+      }
+      message.sceneChangeApplied = true
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : '应用场景变更失败'
+      message.sceneChangeError = messageText
+      throw error instanceof Error ? error : new Error(messageText)
+    } finally {
+      message.sceneChangeApplying = false
+    }
+  }
+
+  async function applySceneChange(messageId: string): Promise<void> {
+    const message = messages.value.find((entry) => entry.id === messageId)
+    if (!message || message.role !== 'assistant') {
+      throw new Error('只能对 AI 回复执行场景变更。')
+    }
+    if (!message.sceneChange) {
+      throw new Error('该回复中没有可应用的场景变更。')
+    }
+    if (message.sceneChangeApplied) {
+      return
+    }
+    if (message.sceneChangeApplying) {
+      return
+    }
+    await applySceneChangeInternal(message.sceneChange, message)
   }
 
   function clearError(): void {
@@ -152,6 +245,7 @@ export const useAiAssistantStore = defineStore('ai-assistant', () => {
     isAwaitingResponse,
     lastError,
     sendMessage,
+    applySceneChange,
     clearError,
     clearConversation,
   }
