@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+  mongo:
+    image: mongo:7
+    container_name: harmony-mongo
+    command: ["--bind_ip_all"]
+    ports:
+      - "27018:27017" # 将宿主机的 27018 转发到容器内默认 27017，避免与现有服务冲突
+    environment:
+      - MONGO_INITDB_DATABASE=harmony
+    volumes:
+      - mongo_data:/data/db
+    restart: unless-stopped
+
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: harmony-server
+    env_file:
+      - ./server/.env.production
+    depends_on:
+      - mongo
+    ports:
+      - "4000:4000" # 可选：仅用于本机调试；线上建议通过 Nginx/反向代理暴露域名
+    volumes:
+      - server_uploads:/app/uploads
+    restart: unless-stopped
+
+volumes:
+  mongo_data:
+  server_uploads:

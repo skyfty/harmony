@@ -876,28 +876,40 @@ class SceneGraphBuilder {
     const materials = await this.resolveNodeMaterials(node);
     const material = materials.length > 1 ? materials : materials[0];
 
+    const tempStart = new THREE.Vector3();
+    const tempEnd = new THREE.Vector3();
+    const tempDirection = new THREE.Vector3();
+    const tempMidpoint = new THREE.Vector3();
+    const X_AXIS = new THREE.Vector3(1, 0, 0);
+
     const segments = Array.isArray(meshInfo.segments) ? meshInfo.segments : [];
     segments.forEach((segment: any, index: number) => {
       const start = segment.start ?? { x: 0, y: 0, z: 0 };
       const end = segment.end ?? { x: 0, y: 0, z: 0 };
       const height = Number(segment.height) || 2.5;
       const thickness = Number(segment.thickness) || 0.2;
-      const dx = end.x - start.x;
-      const dy = end.y - start.y;
-      const dz = end.z - start.z;
-      const length = Math.sqrt(dx * dx + dy * dy + dz * dz) || 0.001;
+
+      tempStart.set(start.x ?? 0, start.y ?? 0, start.z ?? 0);
+      tempEnd.set(end.x ?? 0, end.y ?? 0, end.z ?? 0);
+      tempDirection.subVectors(tempEnd, tempStart);
+      const length = tempDirection.length();
+      if (length <= 1e-6) {
+        return;
+      }
+
       const geometry = new THREE.BoxGeometry(length, height, thickness);
       const wallSegment = new THREE.Mesh(geometry, material);
       wallSegment.castShadow = true;
       wallSegment.receiveShadow = true;
       wallSegment.name = `${container.name}-${index}`;
-      const midpoint = {
-        x: (start.x + end.x) / 2,
-        y: height / 2,
-        z: (start.z + end.z) / 2,
-      };
-      wallSegment.position.set(midpoint.x, midpoint.y, midpoint.z);
-      wallSegment.lookAt(end.x, midpoint.y, end.z);
+
+      tempMidpoint.addVectors(tempStart, tempEnd).multiplyScalar(0.5);
+      const baseY = tempMidpoint.y;
+      wallSegment.position.set(tempMidpoint.x, baseY + height * 0.5, tempMidpoint.z);
+
+      tempDirection.normalize();
+      wallSegment.quaternion.setFromUnitVectors(X_AXIS, tempDirection);
+
       container.add(wallSegment);
     });
 
