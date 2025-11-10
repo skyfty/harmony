@@ -111,7 +111,7 @@ async function handleApplySceneChange(messageId: string): Promise<void> {
     clearLocalError()
     await scrollToBottom()
   } catch (error) {
-    const message = error instanceof Error ? error.message : '应用场景变更失败'
+    const message = error instanceof Error ? error.message : 'Failed to apply scene change'
     localError.value = message
   }
 }
@@ -129,14 +129,14 @@ function handleSuggestionClick(text: string): void {
     <div ref="scrollerRef" class="chat-scroll">
       <div v-if="!messages.length" class="chat-empty">
         <v-icon size="28" color="primary">mdi-robot-outline</v-icon>
-        <p class="chat-empty-title">与 AI 助手对话</p>
-        <p class="chat-empty-subtitle">输入你的需求或想法，让助手帮助你完成场景创作。</p>
+        <p class="chat-empty-title">Chat with the AI Assistant</p>
+        <p class="chat-empty-subtitle">Enter your request or ideas and let the assistant help you create scenes.</p>
       </div>
       <template v-else>
         <div v-for="message in messages" :key="message.id" class="chat-message" :class="[`role-${message.role}`, { 'has-error': message.status === 'error' }]">
           <div class="message-bubble">
             <div class="message-meta">
-              <span class="message-author">{{ message.role === 'user' ? '我' : 'AI 助手' }}</span>
+              <span class="message-author">{{ message.role === 'user' ? 'Me' : 'AI Assistant' }}</span>
               <span class="message-time">{{ formatTimestamp(message.createdAt) }}</span>
             </div>
             <div v-if="message.text" class="message-text">{{ message.text }}</div>
@@ -215,7 +215,7 @@ function handleSuggestionClick(text: string): void {
             ref="textareaRef"
             v-model="messageInput"
             class="chat-textarea"
-            placeholder="向 AI 助手提问，使用 Ctrl+Enter 快速发送"
+            placeholder="Ask the AI assistant — press Ctrl+Enter to send"
             rows="1"
             row-height="18"
             auto-grow
