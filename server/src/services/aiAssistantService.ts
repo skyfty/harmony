@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import OpenAI from 'openai'
+type ChatCompletionContentPart = OpenAI.Chat.Completions.ChatCompletionContentPart
 type ChatCompletionMessageParam = OpenAI.Chat.Completions.ChatCompletionMessageParam
+type ChatCompletionUserMessageParam = OpenAI.Chat.Completions.ChatCompletionUserMessageParam
 import { appConfig } from '@/config/env'
 import type {
   AssistantMessagePayload,
@@ -622,15 +624,17 @@ export async function processAssistantMessage(payload: AssistantMessagePayload):
       { role: 'system', content: `${AGENT_SYSTEM_PROMPT}\n\n${MODEL_RESPONSE_FORMAT_INSTRUCTIONS}` },
     ]
 
-    const userContentParts: unknown[] = [{ type: 'text', text: prompt }]
+    const userContentParts: ChatCompletionContentPart[] = [{ type: 'text', text: prompt }]
     if (screenshotUrl) {
       userContentParts.push({ type: 'image_url', image_url: { url: screenshotUrl } })
     }
 
-    messages.push({
+    const userMessage: ChatCompletionUserMessageParam = {
       role: 'user',
-      content: userContentParts as unknown as ChatCompletionMessageParam['content'],
-    })
+      content: userContentParts,
+    }
+
+    messages.push(userMessage)
 
     const completion = await client.chat.completions.create({
       model: appConfig.openAi.model,
