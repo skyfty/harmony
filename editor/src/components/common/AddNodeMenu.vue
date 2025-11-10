@@ -1223,12 +1223,7 @@ async function handleCreateDisplayBoardNode(): Promise<void> {
   const resolvedParentId = parent?.id ?? null
   const name = getNextDisplayBoardName()
 
-  const geometry = new THREE.PlaneGeometry(DISPLAY_BOARD_INITIAL_WIDTH, DISPLAY_BOARD_INITIAL_HEIGHT)
-  const material = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    side: THREE.DoubleSide,
-  })
-  const boardMesh = new THREE.Mesh(geometry, material)
+  const boardMesh = createPrimitiveMesh("Plane", {color: 0xffffff,doubleSided: true})
   boardMesh.name = `${name} Visual`
   boardMesh.castShadow = false
   boardMesh.receiveShadow = true
@@ -1315,12 +1310,8 @@ async function handleCreateDisplayBoardNode(): Promise<void> {
 
   const warpGateCenter = boardWorldPosition.clone().add(forward.clone().multiplyScalar(DISPLAY_BOARD_WARP_GATE_OFFSET))
   const warpGateName = getNextWarpGateName()
-  const warpGateGeometry = new THREE.CircleGeometry(WARP_GATE_RADIUS, WARP_GATE_SEGMENTS)
-  const warpGateMaterial = new THREE.MeshBasicMaterial({
-    color: WARP_GATE_COLOR,
-    side: THREE.DoubleSide,
-  })
-  const warpGateMesh = new THREE.Mesh(warpGateGeometry, warpGateMaterial)
+
+  const warpGateMesh =  createPrimitiveMesh("Circle",{color: WARP_GATE_COLOR,doubleSided: true})
   warpGateMesh.name = `${warpGateName} Visual`
   warpGateMesh.castShadow = false
   warpGateMesh.receiveShadow = false
@@ -1386,16 +1377,8 @@ async function handleCreateDisplayBoardNode(): Promise<void> {
 async function handleCreateViewPointNode(options: NodeCreationOptions = {}): Promise<SceneNode | null> {
   const { parentId, autoBehaviors = false } = options
   const name = getNextViewPointName()
-  const geometry = new THREE.SphereGeometry(VIEW_POINT_RADIUS, VIEW_POINT_SEGMENTS, VIEW_POINT_SEGMENTS)
-  const material = new THREE.MeshBasicMaterial({
-    color: VIEW_POINT_COLOR,
-    wireframe: true,
-    opacity: 0.7,
-    transparent: true,
-    depthWrite: false,
-    depthTest: false,
-  })
-  const markerMesh = new THREE.Mesh(geometry, material)
+
+  const markerMesh = createPrimitiveMesh('Sphere',{color: VIEW_POINT_COLOR,doubleSided: true})
   markerMesh.name = `${name} Helper`
   markerMesh.castShadow = false
   markerMesh.receiveShadow = false
@@ -1466,13 +1449,7 @@ async function handleCreateViewPointNode(options: NodeCreationOptions = {}): Pro
 async function handleCreateGuideboardNode(options: NodeCreationOptions = {}): Promise<SceneNode | null> {
   const { parentId, autoBehaviors = false } = options
   const name = getNextGuideboardName()
-  const geometry = new THREE.SphereGeometry(GUIDEBOARD_RADIUS, GUIDEBOARD_SEGMENTS, GUIDEBOARD_SEGMENTS)
-  const material = new THREE.MeshBasicMaterial({
-    color: GUIDEBOARD_COLOR,
-    side: THREE.DoubleSide,
-  })
-
-  const guideboardMesh = new THREE.Mesh(geometry, material)
+  const guideboardMesh = createPrimitiveMesh("Sphere", {color: GUIDEBOARD_COLOR,doubleSided: true})
   guideboardMesh.name = `${name} Visual`
   guideboardMesh.castShadow = false
   guideboardMesh.receiveShadow = false
@@ -1550,12 +1527,7 @@ async function handleCreateGuideboardNode(options: NodeCreationOptions = {}): Pr
 async function handleCreateWarpGateNode(options: NodeCreationOptions = {}): Promise<SceneNode | null> {
   const { parentId, autoBehaviors = false } = options
   const name = getNextWarpGateName()
-  const geometry = new THREE.CircleGeometry(WARP_GATE_RADIUS, WARP_GATE_SEGMENTS)
-  const material = new THREE.MeshBasicMaterial({
-    color: WARP_GATE_COLOR,
-    side: THREE.DoubleSide,
-  })
-  const warpGateMesh = new THREE.Mesh(geometry, material)
+  const warpGateMesh = createPrimitiveMesh("Circle", {color: WARP_GATE_COLOR,doubleSided: true})
   warpGateMesh.name = `${name} Visual`
   warpGateMesh.castShadow = false
   warpGateMesh.receiveShadow = false

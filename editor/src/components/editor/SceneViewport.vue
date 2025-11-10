@@ -6567,9 +6567,15 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     container.userData.nodeId = node.id
     object = container
   } else {
-  object = createPrimitiveMesh(nodeType)
-    object.name = node.name
-    object.userData.nodeId = node.id
+    let container = getRuntimeObject(node.id)
+    if (container !== null) {
+      container.userData.usesRuntimeObject = true
+    } else {
+      container = createPrimitiveMesh(nodeType)
+      container.name = node.name
+    }
+    container.userData.nodeId = node.id
+    object = container
   }
 
   object.position.set(node.position.x, node.position.y, node.position.z)
