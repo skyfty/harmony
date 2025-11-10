@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch --env-file=.env src/index.ts",
-    "build": "tsc -p tsconfig.json",
+  "build": "tsc -p tsconfig.json && tsc-alias -p tsconfig.json && node scripts/fix-esm-extensions.cjs",
     "start": "node dist/index.js",
     "seed": "tsx --env-file=.env src/scripts/seed.ts"
   },
@@ -35,6 +35,7 @@
     "@types/koa-static": "^4.0.4",
     "@types/fs-extra": "^11.0.4",
     "@types/node": "^20.16.5",
+    "tsc-alias": "^1.8.10",
     "tslib": "^2.7.0",
     "ts-node": "^10.9.2",
     "tsx": "^4.15.7",
