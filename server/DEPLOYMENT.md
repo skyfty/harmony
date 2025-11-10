@@ -71,8 +71,10 @@ nano .env.production
 
 ## 五、docker-compose 文件结构
 根目录已经创建 `docker-compose.prod.yml`：
-- `mongo` 服务：容器端口 27017，宿主机映射到 27018。数据持久化卷：`mongo_data`。
-- `server` 服务：构建自 `server/Dockerfile`，挂载卷 `server_uploads` 存储上传文件。
+- `mongo` 服务：容器端口 27017，宿主机映射到 27018；数据目录绑定到宿主机 `/www/web/v_touchmagic_cn/harmony/server/mongo-data:/data/db`。
+- `server` 服务：构建自 `server/Dockerfile`，上传目录绑定到宿主机 `/www/web/v_touchmagic_cn/harmony/server/uploads:/app/uploads`。
+- `admin` 服务：构建自 `admin/Dockerfile`，对外端口 8081；通过挂载 `/usr/share/nginx/html/config/app-config.json` 实现运行时配置。
+- `editor` 服务：构建自 `editor/Dockerfile`，对外端口 8082；同样支持运行时配置。
 
 ## 六、构建与启动
 
@@ -116,7 +118,7 @@ docker exec -it harmony-mongo sh -c 'apt-get update && apt-get install -y mongod
 sudo apt install -y certbot python3-certbot-nginx
 sudo certbot --nginx -d cdn.touchmagic.cn --redirect --hsts --staple-ocsp --email admin@example.com --agree-tos --no-eff-email
 ```
-3. 建立站点配置 `/etc/nginx/sites-available/harmony-cdn.conf`：
+3. 建立站点配置 `/etc/nginx/sites-available/harmony-sites.conf`：
 ```nginx
 server {
   listen 80;
@@ -142,10 +144,42 @@ server {
     proxy_set_header X-Forwarded-Proto $scheme;
   }
 }
+
+server {
+  listen 80;
+  listen 443 ssl http2;
+  server_name admin.v.touchmagic.cn;
+
+  client_max_body_size 20m;
+
+  location / {
+    proxy_pass http://127.0.0.1:8081/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+}
+
+server {
+  listen 80;
+  listen 443 ssl http2;
+  server_name editor.v.touchmagic.cn;
+
+  client_max_body_size 20m;
+
+  location / {
+    proxy_pass http://127.0.0.1:8082/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+}
 ```
 4. 启用配置：
 ```bash
-sudo ln -s /etc/nginx/sites-available/harmony-cdn.conf /etc/nginx/sites-enabled/
+sudo ln -s /etc/nginx/sites-available/harmony-sites.conf /etc/nginx/sites-enabled/
 sudo nginx -t
 sudo systemctl reload nginx
 ```
@@ -172,6 +206,22 @@ cdn.touchmagic.cn {
     output file /var/log/caddy/cdn.access.log
   }
 }
+
+admin.v.touchmagic.cn {
+  encode gzip
+  reverse_proxy 127.0.0.1:8081
+  log {
+    output file /var/log/caddy/admin.access.log
+  }
+}
+
+editor.v.touchmagic.cn {
+  encode gzip
+  reverse_proxy 127.0.0.1:8082
+  log {
+    output file /var/log/caddy/editor.access.log
+  }
+}
 ```
 3. 重载：`sudo systemctl reload caddy`
 
@@ -183,6 +233,9 @@ curl -I https://cdn.touchmagic.cn/uploads/非存在文件
 # 期望 404
 curl -I https://cdn.touchmagic.cn/uploads/实际文件名
 # 期望 200 并带缓存头
+
+curl -I https://admin.v.touchmagic.cn/
+curl -I https://editor.v.touchmagic.cn/
 ```
 查看应用日志确认启动：`Server listening on http://localhost:4000`。
 
@@ -198,6 +251,8 @@ docker compose -f docker-compose.prod.yml up -d server
 
 ## 十一、安全加固建议
 - 使用随机且足够长度的 `JWT_SECRET`。
+ - 配置防火墙仅放通 80/443，内部端口 4000/8081/8082 仅供本机反向代理访问。
+ - 不在前端镜像内直接写死后端地址，通过挂载 `config/app-config.json` 实现运行时切换环境。
 - 限制防火墙仅开放 80/443/22/27018（若需宿主访问 Mongo）。
 - 定期 `mongodump` 做异地备份。
 - 若上传目录有执行风险，保持仅存放二进制/图片/模型文件。

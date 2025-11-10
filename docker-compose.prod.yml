@@ -10,7 +10,7 @@ services:
     environment:
       - MONGO_INITDB_DATABASE=harmony
     volumes:
-      - mongo_data:/data/db
+      - /www/web/v_touchmagic_cn/harmony/server/mongo-data:/data/db
     restart: unless-stopped
 
   server:
@@ -25,9 +25,34 @@ services:
     ports:
       - "4000:4000" # 可选：仅用于本机调试；线上建议通过 Nginx/反向代理暴露域名
     volumes:
-      - server_uploads:/app/uploads
+      - /www/web/v_touchmagic_cn/harmony/server/uploads:/app/uploads
+    restart: unless-stopped
+
+  admin:
+    build:
+      context: ./admin
+      dockerfile: Dockerfile
+    container_name: harmony-admin
+    depends_on:
+      - server
+    ports:
+      - "8081:80" # 通过反向代理映射到 https://admin.v.touchmagic.cn
+    volumes:
+      - /www/web/v_touchmagic_cn/harmony/config/admin-app-config.json:/usr/share/nginx/html/config/app-config.json:ro
+    restart: unless-stopped
+
+  editor:
+    build:
+      context: ./editor
+      dockerfile: Dockerfile
+    container_name: harmony-editor
+    depends_on:
+      - server
+    ports:
+      - "8082:80" # 通过反向代理映射到 https://editor.v.touchmagic.cn
+    volumes:
+      - /www/web/v_touchmagic_cn/harmony/config/editor-app-config.json:/usr/share/nginx/html/config/app-config.json:ro
     restart: unless-stopped
 
 volumes:
   mongo_data:
-  server_uploads:

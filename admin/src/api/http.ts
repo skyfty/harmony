@@ -1,13 +1,27 @@
 import axios, { AxiosHeaders } from 'axios'
 import type { AxiosError, AxiosResponse, InternalAxiosRequestConfig } from 'axios'
 
+// Runtime config（由 public/config/app-config.json 提供，可被外部挂载覆盖）
+interface RuntimeConfig {
+  serverApiBaseUrl?: string
+  serverApiPrefix?: string
+}
+
+function readRuntimeConfig(): RuntimeConfig {
+  const el = (window as any).__HARMONY_RUNTIME_CONFIG__ as RuntimeConfig | undefined
+  if (el && typeof el === 'object') return el
+  // 允许通过预加载的全局变量（在 main.ts 中注入）
+  return {}
+}
+
 const TOKEN_STORAGE_KEY = 'harmony_admin_token'
 
 function getBaseUrl(): string {
+  const runtime = readRuntimeConfig()
+  const fromRuntime = runtime.serverApiBaseUrl?.trim()
+  if (fromRuntime) return fromRuntime.replace(/\/$/, '')
   const raw = import.meta.env.VITE_API_BASE_URL?.trim()
-  if (raw && raw.length) {
-    return raw
-  }
+  if (raw && raw.length) return raw.replace(/\/$/, '')
   return 'http://localhost:4000'
 }
 

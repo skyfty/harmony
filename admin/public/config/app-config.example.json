@@ -1,0 +1,5 @@
+{
+  "serverApiBaseUrl": "https://cdn.touchmagic.cn", 
+  "serverApiPrefix": "/api",
+  "assetPublicBaseUrl": "https://cdn.touchmagic.cn/uploads"
+}

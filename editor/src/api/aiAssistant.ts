@@ -1,6 +1,13 @@
 import type { AiAssistantMessageRequest, AiAssistantMessageResponse } from '@/types/ai-assistant'
 
-const RAW_BASE_URL = (import.meta.env?.VITE_SERVER_API_BASE_URL as string | undefined)?.trim() ?? ''
+function readRuntimeBaseUrl(): string {
+  const runtime = (window as any).__HARMONY_RUNTIME_CONFIG__ as { serverApiBaseUrl?: string } | undefined
+  const fromRuntime = runtime?.serverApiBaseUrl?.trim()
+  if (fromRuntime) return fromRuntime
+  return (import.meta.env?.VITE_SERVER_API_BASE_URL as string | undefined)?.trim() ?? ''
+}
+
+const RAW_BASE_URL = readRuntimeBaseUrl()
 const API_BASE_URL = RAW_BASE_URL.endsWith('/') ? RAW_BASE_URL.slice(0, -1) : RAW_BASE_URL
 const API_PREFIX = '/api/assistant/messages'
 

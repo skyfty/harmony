@@ -6,13 +6,28 @@ import vuetify from './utils/vuetify'
 import { createPersistedStatePlugin } from './utils/piniaPersist'
 import './style.css'
 
-const app = createApp(App)
+async function preloadRuntimeConfig() {
+	try {
+		const resp = await fetch('/config/app-config.json', { cache: 'no-cache' })
+		if (resp.ok) {
+			const cfg = await resp.json().catch(() => null)
+			if (cfg && typeof cfg === 'object') {
+				;(window as any).__HARMONY_RUNTIME_CONFIG__ = cfg
+			}
+		}
+	} catch (err) {
+		console.warn('[editor] runtime config not found, fallback to env', err)
+	}
+}
 
-const pinia = createPinia()
-pinia.use(createPersistedStatePlugin({ keyPrefix: 'harmony' }))
+preloadRuntimeConfig().finally(() => {
+	const app = createApp(App)
+	const pinia = createPinia()
+	pinia.use(createPersistedStatePlugin({ keyPrefix: 'harmony' }))
 
-app.use(pinia)
-app.use(router)
-app.use(vuetify)
+	app.use(pinia)
+	app.use(router)
+	app.use(vuetify)
 
-app.mount('#app')
+	app.mount('#app')
+})
