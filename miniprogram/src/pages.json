@@ -1,6 +1,9 @@
 {
   "pages": [
     {
+      "path": "pages/index/index"
+    },
+    {
       "path": "pages/home/index"
     },
     {
@@ -53,9 +56,6 @@
     },
     {
       "path": "pages/collections/index"
-    },
-    {
-      "path": "pages/index/index"
     },
     {
       "path": "pages/scene-viewer/index"

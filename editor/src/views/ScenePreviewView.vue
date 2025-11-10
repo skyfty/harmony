@@ -3408,6 +3408,7 @@ onBeforeUnmount(() => {
 		<div
 			v-if="lanternOverlayVisible && lanternCurrentSlide"
 			class="scene-preview__lantern-overlay"
+			@click.self="cancelLanternOverlay"
 		>
 			<div class="scene-preview__lantern-dialog">
 				<div class="scene-preview__lantern-header">
@@ -3709,6 +3710,7 @@ onBeforeUnmount(() => {
 	background: rgba(0, 0, 0, 0.45);
 	z-index: 2200;
 	pointer-events: auto;
+	padding: clamp(16px, 4vw, 32px);
 }
 
 .scene-preview__lantern-dialog {
@@ -3723,6 +3725,8 @@ onBeforeUnmount(() => {
 	flex-direction: column;
 	gap: 16px;
 	backdrop-filter: blur(12px);
+	max-height: calc(100vh - clamp(48px, 10vw, 96px));
+	overflow: auto;
 }
 
 .scene-preview__lantern-header {
@@ -3745,6 +3749,7 @@ onBeforeUnmount(() => {
 .scene-preview__lantern-body {
 	display: grid;
 	gap: 18px;
+	align-items: center;
 }
 
 .scene-preview__lantern-body.layout-imageLeft,
@@ -3766,13 +3771,22 @@ onBeforeUnmount(() => {
 	overflow: hidden;
 	background: rgba(255, 255, 255, 0.08);
 	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	max-height: min(65vh, 520px);
+	margin: 0 auto;
 }
 
 .scene-preview__lantern-image img {
 	display: block;
-	width: 100%;
-	height: 100%;
-	object-fit: cover;
+	width: auto;
+	height: auto;
+	max-width: 100%;
+	max-height: 100%;
+	object-fit: contain;
+	margin: 0 auto;
 }
 
 .scene-preview__lantern-text {
@@ -3832,6 +3846,10 @@ onBeforeUnmount(() => {
 
 	.scene-preview__lantern-dialog {
 		padding: 16px;
+	}
+
+	.scene-preview__lantern-image {
+		max-height: 50vh;
 	}
 }
 
