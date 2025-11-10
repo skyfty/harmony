@@ -282,6 +282,7 @@ git push --tags
 | 上传返回 403 | 路径穿越被阻止 | 确认请求路径未包含 `..` 或未 URL 编码异常 |
 | 端口冲突 | 宿主已有 Mongo 27017 | 使用 27018:27017 映射（已配置） |
 | 证书续期失败 | DNS 解析或防火墙限制 | 放通 80/443 并检查域名解析 |
+| 服务启动报 `ERR_MODULE_NOT_FOUND: Cannot find package '@/...'` | TypeScript 路径别名未在编译产物中重写 | 已在 `server/Dockerfile` 中增加 `npx tsc-alias -p tsconfig.json`，重新构建并启动：`docker compose -f docker-compose.prod.yml build server && docker compose -f docker-compose.prod.yml up -d server` |
 
 ## 十三、快速一键首次部署脚本示例 (可选)
 ```bash

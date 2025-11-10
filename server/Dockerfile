@@ -11,7 +11,9 @@ RUN npm ci
 COPY tsconfig.json ./
 COPY src ./src
 # Build to dist (tsconfig outputs there)
-RUN npm run build
+# Build to dist (tsconfig outputs there)
+RUN npm run build \
+	&& npx --yes tsc-alias -p tsconfig.json
 # Remove dev dependencies after build to shrink node_modules copied to runtime
 RUN npm prune --omit=dev
 
