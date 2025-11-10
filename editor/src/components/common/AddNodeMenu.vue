@@ -38,7 +38,6 @@ import {
   cloneBehaviorList,
   createBehaviorSequenceId,
   ensureBehaviorParams,
-  getNamedBehaviorSequence,
   normalizeNamedBehaviorSequenceMap,
   upsertNamedBehaviorSequence,
 } from '@schema/behaviors/definitions'
@@ -47,13 +46,11 @@ const sceneStore = useSceneStore()
 const uiStore = useUiStore()
 const assetCacheStore = useAssetCacheStore()
 
-const DISPLAY_BOARD_INITIAL_WIDTH = 0.5
 const DISPLAY_BOARD_INITIAL_HEIGHT = 0.5
 const DISPLAY_BOARD_WARP_GATE_OFFSET = 0.5
 const DISPLAY_BOARD_EPSILON = 1e-4
 
 const VIEW_POINT_RADIUS = 0.12
-const VIEW_POINT_SEGMENTS = 24
 const VIEW_POINT_DEFAULT_OFFSET = 0.8
 const VIEW_POINT_MIN_DISTANCE = 0.3
 const VIEW_POINT_EDGE_MARGIN = 0.05
@@ -62,12 +59,10 @@ const VIEW_POINT_SHOW_BEHAVIOR_NAME = 'Show View Point'
 const VIEW_POINT_HIDE_BEHAVIOR_NAME = 'Hide View Point'
 
 const WARP_GATE_RADIUS = 1
-const WARP_GATE_SEGMENTS = 64
 const WARP_GATE_COLOR = 0x9c27b0
 const WARP_GATE_ELEVATION = 0.5
 
 const GUIDEBOARD_RADIUS = 1
-const GUIDEBOARD_SEGMENTS = 32
 const GUIDEBOARD_COLOR = 0x9c27b0
 
 const tempViewPointBox = new THREE.Box3()
