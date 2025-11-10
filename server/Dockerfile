@@ -9,11 +9,10 @@ COPY package.json package-lock.json ./
 RUN npm ci
 # Copy source for build (TypeScript compile)
 COPY tsconfig.json ./
+COPY scripts ./scripts
 COPY src ./src
-# Build to dist (tsconfig outputs there)
-# Build to dist (tsconfig outputs there)
-RUN npm run build \
-	&& npx --yes tsc-alias -p tsconfig.json
+# Build to dist (package.json build already runs tsc, tsc-alias, and extension fixer)
+RUN npm run build
 # Remove dev dependencies after build to shrink node_modules copied to runtime
 RUN npm prune --omit=dev
 
