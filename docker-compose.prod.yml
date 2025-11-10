@@ -43,8 +43,8 @@ services:
 
   editor:
     build:
-      context: ./editor
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: editor/Dockerfile
     container_name: harmony-editor
     depends_on:
       - server
