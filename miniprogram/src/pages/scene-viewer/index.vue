@@ -52,8 +52,17 @@
           <button class="viewer-lantern-close" aria-label="关闭幻灯片" @tap="cancelLanternOverlay">
             <image :src="lanternCloseIcon" mode="aspectFit" class="viewer-lantern-close-icon" />
           </button>
-          <view v-if="lanternCurrentSlideImage" class="viewer-lantern-image-wrapper">
-            <image :src="lanternCurrentSlideImage" mode="aspectFit" class="viewer-lantern-image" />
+          <view
+            v-if="lanternCurrentSlideImage"
+            class="viewer-lantern-image-wrapper"
+            :style="lanternImageBoxStyle"
+          >
+            <image
+              :src="lanternCurrentSlideImage"
+              mode="aspectFit"
+              class="viewer-lantern-image"
+              @load="handleLanternImageLoad"
+            />
           </view>
           <view class="viewer-lantern-body">
             <text class="viewer-lantern-title">{{ lanternCurrentTitle }}</text>
@@ -376,6 +385,48 @@ const lanternSlides = ref<LanternSlideDefinition[]>([]);
 const lanternActiveSlideIndex = ref(0);
 const lanternEventToken = ref<string | null>(null);
 const lanternDialogRef = ref<HTMLElement | ComponentPublicInstance | null>(null);
+const initialSystemInfo = (() => {
+  try {
+    return uni.getSystemInfoSync();
+  } catch (_error) {
+    return null;
+  }
+})();
+const lanternViewportSize = reactive({
+  width: initialSystemInfo?.windowWidth || initialSystemInfo?.screenWidth || 375,
+  height: initialSystemInfo?.windowHeight || initialSystemInfo?.screenHeight || 667,
+});
+const lanternImageNaturalSize = reactive({ width: 0, height: 0 });
+const lanternImageBoxStyle = computed(() => {
+  const viewportWidth = lanternViewportSize.width || 375;
+  const viewportHeight = lanternViewportSize.height || 667;
+  const dialogMaxWidth = Math.max(Math.min(viewportWidth * 0.92, 620), 260);
+  const dialogHorizontalPadding = 36; // dialog padding (18 * 2)
+  const imageAvailableWidth = Math.max(dialogMaxWidth - dialogHorizontalPadding, 200);
+  const dialogMaxHeight = Math.max(Math.min(viewportHeight * 0.9, viewportHeight - 96), 240);
+  const reservedForText = Math.max(viewportHeight * 0.22, 140);
+  const imageAvailableHeight = Math.max(dialogMaxHeight - reservedForText, 180);
+  const style: Record<string, string> = {
+    maxWidth: `${Math.round(imageAvailableWidth)}px`,
+    maxHeight: `${Math.round(imageAvailableHeight)}px`,
+  };
+  const naturalWidth = lanternImageNaturalSize.width;
+  const naturalHeight = lanternImageNaturalSize.height;
+  if (naturalWidth > 0 && naturalHeight > 0) {
+    const widthScale = imageAvailableWidth / naturalWidth;
+    const heightScale = imageAvailableHeight / naturalHeight;
+    const scale = Math.min(widthScale, heightScale, 1);
+    const targetWidth = Math.max(Math.round(naturalWidth * scale), 1);
+    const targetHeight = Math.max(Math.round(naturalHeight * scale), 1);
+    style.width = `${targetWidth}px`;
+    style.height = `${targetHeight}px`;
+  } else {
+    style.width = '100%';
+    style.height = 'auto';
+    style.minHeight = `${Math.round(Math.min(imageAvailableHeight, 220))}px`;
+  }
+  return style;
+});
 
 const purposeControlsVisible = ref(false);
 const purposeTargetNodeId = ref<string | null>(null);
@@ -507,6 +558,61 @@ const lanternCurrentSlideDescription = computed(() => {
   return slide.description ?? '';
 });
 
+type UniImageLoadEvent = Event & {
+  detail?: {
+    width?: number;
+    height?: number;
+  };
+};
+
+function refreshLanternViewportSize(): void {
+  try {
+    const info = uni.getSystemInfoSync();
+    if (info?.windowWidth) {
+      lanternViewportSize.width = info.windowWidth;
+    } else if (info?.screenWidth) {
+      lanternViewportSize.width = info.screenWidth;
+    }
+    if (info?.windowHeight) {
+      lanternViewportSize.height = info.windowHeight;
+    } else if (info?.screenHeight) {
+      lanternViewportSize.height = info.screenHeight;
+    }
+  } catch (_error) {
+    // ignore errors when system info is unavailable
+  }
+}
+
+function resetLanternImageMetrics(): void {
+  lanternImageNaturalSize.width = 0;
+  lanternImageNaturalSize.height = 0;
+}
+
+function handleLanternImageLoad(event: UniImageLoadEvent): void {
+  const width = event?.detail?.width ?? 0;
+  const height = event?.detail?.height ?? 0;
+  if (width > 0 && height > 0) {
+    lanternImageNaturalSize.width = width;
+    lanternImageNaturalSize.height = height;
+    return;
+  }
+  const currentSrc = lanternCurrentSlideImage.value;
+  if (!currentSrc) {
+    return;
+  }
+  uni.getImageInfo?.({
+    src: currentSrc,
+    success: (info) => {
+      if (info?.width && info?.height) {
+        lanternImageNaturalSize.width = info.width;
+        lanternImageNaturalSize.height = info.height;
+      }
+    },
+  });
+}
+
+refreshLanternViewportSize();
+
 watch(
   lanternSlides,
   (slidesList) => {
@@ -543,9 +649,26 @@ watch(
     if (assetId) {
       void ensureLanternText(assetId);
     }
+    resetLanternImageMetrics();
   },
   { immediate: true },
 );
+
+watch(
+  lanternCurrentSlideImage,
+  () => {
+    resetLanternImageMetrics();
+  },
+  { immediate: true },
+);
+
+watch(lanternOverlayVisible, (visible) => {
+  if (visible) {
+    refreshLanternViewportSize();
+  } else {
+    resetLanternImageMetrics();
+  }
+});
 
 async function ensureLanternText(assetId: string): Promise<void> {
   const trimmed = assetId.trim();
@@ -3107,6 +3230,7 @@ const handleResize: WindowResizeCallback = (_result) => {
   if (!renderContext || !canvasResult) {
     return;
   }
+  refreshLanternViewportSize();
   const resizePromise = canvasResult.recomputeSize?.();
   Promise.resolve(resizePromise).finally(() => {
     if (!canvasResult) {
@@ -3445,8 +3569,8 @@ onUnmounted(() => {
 
 .viewer-lantern-dialog {
   position: relative;
-  width: 92%;
-  max-width: 420px;
+  width: auto;
+  max-width: min(620px, 92vw);
   max-height: 90vh;
   border-radius: 16px;
   background: rgba(12, 16, 28, 0.96);
@@ -3484,15 +3608,19 @@ onUnmounted(() => {
 }
 
 .viewer-lantern-image-wrapper {
-  width: 100%;
   border-radius: 12px;
   overflow: hidden;
   background: rgba(255, 255, 255, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+  flex-shrink: 0;
 }
 
 .viewer-lantern-image {
   width: 100%;
-  max-height: 220px;
+  height: 100%;
   display: block;
 }
 
@@ -3500,6 +3628,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex: 1 1 auto;
 }
 
 .viewer-lantern-title {
@@ -3508,8 +3637,9 @@ onUnmounted(() => {
 }
 
 .viewer-lantern-text {
-  max-height: 220px;
+  max-height: 32vh;
   padding-right: 4px;
+  flex: 1 1 auto;
 }
 
 .viewer-lantern-text text {
