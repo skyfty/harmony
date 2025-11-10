@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, defineComponent, h, nextTick, onMounted, ref, shallowRef } from 'vue'
 import EditorView from '@/views/EditorView.vue'
-import { useSceneStore } from '@/stores/sceneStore'
 import { useScenesStore } from '@/stores/scenesStore'
 import { waitForPiniaHydration } from '@/utils/piniaPersist'
 
@@ -69,7 +68,6 @@ const LoadingScreen = defineComponent({
   },
 })
 
-const sceneStore = useSceneStore()
 const scenesStore = useScenesStore()
 
 const currentComponent = shallowRef<typeof LoadingScreen | typeof EditorView>(LoadingScreen)

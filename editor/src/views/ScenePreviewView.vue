@@ -26,7 +26,6 @@ import {
 	viewPointComponentDefinition,
 	warpGateComponentDefinition,
 	GUIDEBOARD_COMPONENT_TYPE,
-	DISPLAY_BOARD_COMPONENT_TYPE,
 } from '@schema/components'
 import type { GuideboardComponentProps } from '@schema/components'
 import {

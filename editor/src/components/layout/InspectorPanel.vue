@@ -6,7 +6,6 @@ import LightPanel from '@/components/inspector/LightPanel.vue'
 import TransformPanel from '@/components/inspector/TransformPanel.vue'
 import WallPanel from '@/components/inspector/WallPanel.vue'
 import GuideboardPanel from '@/components/inspector/GuideboardPanel.vue'
-import DisplayBoardPanel from '@/components/inspector/DisplayBoardPanel.vue'
 import ViewPointPanel from '@/components/inspector/ViewPointPanel.vue'
 import WarpGatePanel from '@/components/inspector/WarpGatePanel.vue'
 import GroundPanel from '@/components/inspector/GroundPanel.vue'
@@ -20,7 +19,6 @@ import type { BehaviorActionDefinition } from '@schema/behaviors/definitions'
 import {
   BEHAVIOR_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
-  DISPLAY_BOARD_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
   WARP_GATE_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
