@@ -1112,11 +1112,12 @@ async function ensureUploadTagIds(): Promise<string[]> {
   const createdNameMap = new Map<string, string>()
 
   uploadSelectedTagIds.value.forEach((value) => {
-    const trimmed = value.trim()
+    const raw = typeof value === 'string' ? value : (value as TagOption | undefined)?.value ?? ''
+    const trimmed = raw.trim()
     if (!trimmed.length) {
       return
     }
-    const matchById = existingOptions.find((option) => option.value === value)
+    const matchById = existingOptions.find((option) => option.value === trimmed)
     if (matchById) {
       resolved.add(matchById.value)
       return
@@ -1158,11 +1159,12 @@ async function ensureUploadTagIds(): Promise<string[]> {
   const updatedOptions = uploadTagOptions.value
   uploadSelectedTagIds.value = uploadSelectedTagIds.value
     .map((value) => {
-      const trimmed = value.trim()
+      const raw = typeof value === 'string' ? value : (value as TagOption | undefined)?.value ?? ''
+      const trimmed = raw.trim()
       if (!trimmed.length) {
         return ''
       }
-      const matchById = updatedOptions.find((option) => option.value === value)
+      const matchById = updatedOptions.find((option) => option.value === trimmed)
       if (matchById) {
         return matchById.value
       }
