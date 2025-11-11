@@ -3,7 +3,7 @@ import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 
 export interface AssetCategoryDefinition {
-  key: 'models' | 'images' | 'textures' | 'materials' | 'behaviors' | 'prefabs' | 'others'
+  key: 'models' | 'meshes' | 'images' | 'textures' | 'materials' | 'behaviors' | 'prefabs' | 'videos' | 'others'
   id: string
   label: string
   extensions: string[]
@@ -19,6 +19,12 @@ export const ASSET_CATEGORY_CONFIG: AssetCategoryDefinition[] = [
     id: `${ASSETS_ROOT_DIRECTORY_ID}-models`,
     label: 'Models',
     extensions: ['.glb', '.gltf', '.fbx', '.obj', '.stl', '.dae', '.3ds', '.ply', '.usdz', '.blend', '.3mf'],
+  },
+  {
+    key: 'meshes',
+    id: `${ASSETS_ROOT_DIRECTORY_ID}-meshes`,
+    label: 'Meshes',
+    extensions: ['.mesh', '.geom'],
   },
   {
     key: 'images',
@@ -49,6 +55,12 @@ export const ASSET_CATEGORY_CONFIG: AssetCategoryDefinition[] = [
     id: `${ASSETS_ROOT_DIRECTORY_ID}-prefabs`,
     label: 'Prefabs',
     extensions: ['.prefab'],
+  },
+  {
+    key: 'videos',
+    id: `${ASSETS_ROOT_DIRECTORY_ID}-videos`,
+    label: 'Videos',
+    extensions: ['.mp4', '.mov', '.webm', '.mkv', '.avi'],
   },
   {
     key: 'others',
@@ -124,6 +136,8 @@ export function determineAssetCategoryId(asset: ProjectAsset): string {
   switch (asset.type) {
     case 'model':
       return ASSET_CATEGORY_ID_BY_KEY.models
+    case 'mesh':
+      return ASSET_CATEGORY_ID_BY_KEY.meshes
     case 'image':
       return ASSET_CATEGORY_ID_BY_KEY.images
     case 'texture':
@@ -134,6 +148,8 @@ export function determineAssetCategoryId(asset: ProjectAsset): string {
       return ASSET_CATEGORY_ID_BY_KEY.behaviors
     case 'prefab':
       return ASSET_CATEGORY_ID_BY_KEY.prefabs
+    case 'video':
+      return ASSET_CATEGORY_ID_BY_KEY.videos
     default:
       break
   }

@@ -177,9 +177,11 @@ export interface OrderDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
+export type AssetType = 'model' | 'image' | 'texture' | 'material' | 'file' | 'prefab' | 'video' | 'mesh'
+
 export interface AssetCategoryDocument extends Document<Types.ObjectId> {
   name: string
-  type: 'model' | 'image' | 'texture' | 'material' | 'file'
+  type: AssetType
   description?: string
   createdAt: Date
   updatedAt: Date
@@ -195,7 +197,7 @@ export interface AssetTagDocument extends Document<Types.ObjectId> {
 export interface AssetDocument extends Document<Types.ObjectId> {
   name: string
   categoryId: Types.ObjectId
-  type: 'model' | 'image' | 'texture' | 'material' | 'file'
+  type: AssetType
   tags: Types.ObjectId[]
   size: number
   url: string
@@ -203,7 +205,6 @@ export interface AssetDocument extends Document<Types.ObjectId> {
   previewUrl?: string | null
   thumbnailUrl?: string | null
   description?: string | null
-  originalFilename?: string | null
   mimeType?: string | null
   metadata?: Record<string, unknown>
   createdAt: Date

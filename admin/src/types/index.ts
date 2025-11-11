@@ -119,7 +119,7 @@ export interface ProjectDirectory {
   assets?: ProjectAssetSummary[]
 }
 
-export type AssetType = 'model' | 'image' | 'texture' | 'material' | 'file'
+export type AssetType = 'model' | 'image' | 'texture' | 'material' | 'file' | 'prefab' | 'video' | 'mesh'
 
 export interface AssetTagSummary {
   id: string

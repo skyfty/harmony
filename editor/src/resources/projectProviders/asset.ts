@@ -13,7 +13,7 @@ interface AssetManifestTag {
 interface AssetManifestEntry {
   id: string
   name: string
-  type: ProjectAsset['type'] | 'model' | 'image' | 'texture' | 'material' | 'file'
+  type: ProjectAsset['type'] | 'model' | 'image' | 'texture' | 'material' | 'file' | 'prefab' | 'video' | 'mesh' | 'behavior'
   tags?: AssetManifestTag[]
   tagIds?: string[]
   downloadUrl: string
@@ -35,6 +35,10 @@ const TYPE_LABELS: Record<string, string> = {
   image: 'Image',
   texture: 'Texture',
   material: 'Material',
+  mesh: 'Mesh',
+  prefab: 'Prefab',
+  video: 'Video',
+  behavior: 'Behavior',
   file: 'File',
 }
 

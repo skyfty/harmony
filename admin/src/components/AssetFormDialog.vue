@@ -21,6 +21,9 @@ const assetTypeOptions: Array<{ value: AssetType; label: string }> = [
   { value: 'image', label: '图片' },
   { value: 'texture', label: '纹理' },
   { value: 'material', label: '材质' },
+  { value: 'mesh', label: '网格' },
+  { value: 'prefab', label: '预制体' },
+  { value: 'video', label: '视频' },
   { value: 'file', label: '文件' },
 ]
 
@@ -259,7 +262,7 @@ defineExpose({
               persistent-hint
               @update:model-value="handleFileInput"
             />
-            <div v-if="!isCreateMode && selectedAsset && !fileField.value">
+            <div v-if="!isCreateMode && selectedAsset && !fileField">
               <v-alert type="info" density="comfortable" variant="tonal">
                 当前文件：{{ selectedAsset?.originalFilename ?? selectedAsset?.name }}
               </v-alert>
@@ -273,7 +276,7 @@ defineExpose({
               density="comfortable"
               @update:model-value="handleThumbnailInput"
             />
-            <div v-if="!isCreateMode && selectedAsset?.thumbnailUrl && !thumbnailField.value">
+            <div v-if="!isCreateMode && selectedAsset?.thumbnailUrl && !thumbnailField">
               <v-img :src="selectedAsset?.thumbnailUrl" height="140" cover class="rounded-lg" />
             </div>
           </div>

@@ -26,6 +26,8 @@ export const SERVER_ASSET_PREVIEW_COLORS: Record<ProjectAsset['type'], string> =
   material: '#FFB74D',
   behavior: '#4DB6AC',
   prefab: '#7986CB',
+  video: '#FF7043',
+  mesh: '#26C6DA',
   file: '#546E7A',
 }
 
@@ -38,9 +40,13 @@ export function normalizeServerAssetType(type: string | undefined): ProjectAsset
     case 'file':
     case 'behavior':
     case 'prefab':
-      return type
+    case 'video':
     case 'mesh':
-      return 'model'
+      return type
+    case 'meshes':
+      return 'mesh'
+    case 'videos':
+      return 'video'
     default:
       return 'file'
   }

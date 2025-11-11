@@ -42,8 +42,26 @@ const typeOptions: Array<{ label: string; value: AssetType }> = [
   { value: 'image', label: '图片' },
   { value: 'texture', label: '纹理' },
   { value: 'material', label: '材质' },
+  { value: 'mesh', label: '网格' },
+  { value: 'prefab', label: '预制体' },
+  { value: 'video', label: '视频' },
   { value: 'file', label: '文件' },
 ]
+
+const CATEGORY_ICON_MAP: Record<AssetType, string> = {
+  model: 'mdi-cube-outline',
+  image: 'mdi-image',
+  texture: 'mdi-texture-box',
+  material: 'mdi-palette',
+  mesh: 'mdi-vector-triangle',
+  prefab: 'mdi-cube-scan',
+  video: 'mdi-video',
+  file: 'mdi-file-outline',
+}
+
+function resolveCategoryIcon(type: AssetType): string {
+  return CATEGORY_ICON_MAP[type] ?? 'mdi-file-outline'
+}
 
 const canFilterByTags = computed(() => tags.value.length > 0)
 
@@ -152,12 +170,6 @@ function handlePageChange(page: number): void {
   void loadAssets()
 }
 
-function handlePageSizeChange(size: number): void {
-  filter.pageSize = size
-  filter.page = 1
-  void loadAssets()
-}
-
 function handleSearch(): void {
   filter.page = 1
   void loadAssets()
@@ -225,7 +237,7 @@ onMounted(() => {
               @click="filter.categoryId = category.id"
             >
               <template #prepend>
-                <v-icon :icon="category.type === 'image' ? 'mdi-image' : category.type === 'model' ? 'mdi-cube-outline' : category.type === 'material' ? 'mdi-texture-box' : 'mdi-file-outline'" />
+                <v-icon :icon="resolveCategoryIcon(category.type)" />
               </template>
             </v-list-item>
           </v-list>

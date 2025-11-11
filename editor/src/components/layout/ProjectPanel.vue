@@ -197,21 +197,25 @@ function findTagOptionByName(options: TagOption[], name: string): TagOption | un
 
 const CATEGORY_KEY_TO_TYPE: Record<AssetCategoryKey, ProjectAsset['type']> = {
   models: 'model',
+  meshes: 'mesh',
   images: 'image',
   textures: 'texture',
   materials: 'material',
   behaviors: 'behavior',
   prefabs: 'prefab',
+  videos: 'video',
   others: 'file',
 }
 
 const DEFAULT_PREVIEW_COLORS: Record<ProjectAsset['type'], string> = {
   model: '#26C6DA',
+  mesh: '#26C6DA',
   image: '#1E88E5',
   texture: '#8E24AA',
   material: '#FFB74D',
   behavior: '#4DB6AC',
   prefab: '#7986CB',
+  video: '#FF7043',
   file: '#546E7A',
 }
 

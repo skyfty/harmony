@@ -9,7 +9,7 @@ import { AssetModel } from '@/models/Asset'
 import { AssetTagModel } from '@/models/AssetTag'
 import { appConfig } from '@/config/env'
 
-const ASSET_TYPES: AssetDocument['type'][] = ['model', 'image', 'texture', 'material', 'file']
+const ASSET_TYPES: AssetDocument['type'][] = ['model', 'image', 'texture', 'material', 'file', 'prefab', 'video', 'mesh']
 const MANIFEST_FILENAME = 'asset-manifest.json'
 const THUMBNAIL_PREFIX = 'thumb-'
 
@@ -18,14 +18,20 @@ const ASSET_COLORS: Record<string, string> = {
   image: '#1e88e5',
   texture: '#8e24aa',
   material: '#ffb74d',
+  prefab: '#7986cb',
+  video: '#ff7043',
+  mesh: '#26c6da',
   file: '#6d4c41',
 }
 
 const DEFAULT_CATEGORIES: Array<{ name: string; type: AssetDocument['type'] }> = [
   { name: 'Models', type: 'model' },
+  { name: 'Meshes', type: 'mesh' },
   { name: 'Images', type: 'image' },
   { name: 'Textures', type: 'texture' },
   { name: 'Materials', type: 'material' },
+  { name: 'Prefabs', type: 'prefab' },
+  { name: 'Videos', type: 'video' },
   { name: 'Files', type: 'file' },
 ]
 
@@ -183,8 +189,14 @@ function normalizeAssetType(input: unknown, fallback: AssetDocument['type'] = 'f
     return fallback
   }
   const normalized = input.trim().toLowerCase()
-  if (normalized === 'mesh') {
-    return 'model'
+  const aliasMap: Partial<Record<string, AssetDocument['type']>> = {
+    meshes: 'mesh',
+    prefabs: 'prefab',
+    videos: 'video',
+  }
+  const aliased = aliasMap[normalized]
+  if (aliased) {
+    return aliased
   }
   if ((ASSET_TYPES as string[]).includes(normalized)) {
     return normalized as AssetDocument['type']
