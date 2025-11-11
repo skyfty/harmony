@@ -49,8 +49,8 @@ resourceRouter.delete('/assets/:id', deleteAsset)
 resourceRouter.get('/assets/:id/download', downloadAsset)
 resourceRouter.post('/assets/manifest/refresh', refreshAssetManifest)
 resourceRouter.get('/tags', listAssetTags)
-resourceRouter.post('/tags', koaBody(), createAssetTag)
-resourceRouter.put('/tags/:id', koaBody(), updateAssetTag)
+resourceRouter.post('/tags', createAssetTag)
+resourceRouter.put('/tags/:id', updateAssetTag)
 resourceRouter.delete('/tags/:id', deleteAssetTag)
 
 export default resourceRouter
