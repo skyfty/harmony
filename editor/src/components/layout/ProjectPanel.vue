@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch, watchEffect } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch, watchEffect } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Splitpanes, Pane } from 'splitpanes'
 import 'splitpanes/dist/splitpanes.css'
@@ -840,6 +840,34 @@ let searchDebounceHandle: ReturnType<typeof setTimeout> | null = null
 const normalizedSearchQuery = computed(() => searchQuery.value.trim())
 const isSearchActive = computed(() => searchLoaded.value && normalizedSearchQuery.value.length > 0)
 const tagFilterValues = ref<string[]>([])
+const tagFilterPanelOpen = ref(false)
+const tagFilterPopoverRef = ref<HTMLElement | null>(null)
+const hasActiveTagFilters = computed(() => tagFilterValues.value.length > 0)
+
+function isTagSelected(value: string): boolean {
+  return tagFilterValues.value.includes(value)
+}
+
+function toggleTagFilter(value: string): void {
+  if (!value) {
+    return
+  }
+  const current = [...tagFilterValues.value]
+  const index = current.indexOf(value)
+  if (index >= 0) {
+    current.splice(index, 1)
+  } else {
+    current.push(value)
+  }
+  tagFilterValues.value = current
+}
+
+function clearTagFilters(): void {
+  if (!tagFilterValues.value.length) {
+    return
+  }
+  tagFilterValues.value = []
+}
 
 const baseDisplayedAssets = computed(() => (isSearchActive.value ? searchResults.value : currentAssets.value))
 
@@ -932,6 +960,13 @@ const displayedAssets = computed(() => {
 })
 
 watch(tagOptions, (options) => {
+  if (!options.length) {
+    tagFilterPanelOpen.value = false
+    if (tagFilterValues.value.length) {
+      tagFilterValues.value = []
+    }
+    return
+  }
   if (!tagFilterValues.value.length) {
     return
   }
@@ -939,6 +974,14 @@ watch(tagOptions, (options) => {
   const filtered = tagFilterValues.value.filter((value) => available.has(value))
   if (filtered.length !== tagFilterValues.value.length) {
     tagFilterValues.value = filtered
+  }
+})
+
+watch(tagFilterPanelOpen, (open) => {
+  if (open) {
+    void nextTick(() => {
+      tagFilterPopoverRef.value?.focus()
+    })
   }
 })
 
@@ -2055,22 +2098,80 @@ onBeforeUnmount(() => {
                   @click="openUploadDialog"
                 />
                 <v-divider vertical class="mx-1" />
-              <v-text-field
-                v-model="searchQuery"
-                :loading="searchLoading"
-                append-inner-icon="mdi-magnify"
-                density="compact"
-                size="small"
-                label="Search..."
-                variant="solo"
-                hide-details
-                single-line
-                clearable
-                style="max-width: 350px;"
-                @keydown.enter.stop.prevent="searchAsset"
-                @click:append-inner="searchAsset"
-                @click:clear="handleSearchClear"
-              />
+              <div class="project-toolbar__search">
+                <v-text-field
+                  v-model="searchQuery"
+                  :loading="searchLoading"
+                  append-inner-icon="mdi-magnify"
+                  density="compact"
+                  size="small"
+                  label="Search..."
+                  variant="solo"
+                  hide-details
+                  single-line
+                  clearable
+                  style="max-width: 350px;"
+                  @keydown.enter.stop.prevent="searchAsset"
+                  @click:append-inner="searchAsset"
+                  @click:clear="handleSearchClear"
+                />
+                <v-overlay
+                  v-model="tagFilterPanelOpen"
+                  :scrim="false"
+                  :close-on-content-click="false"
+                  location-strategy="connected"
+                  location="bottom end"
+                  origin="top end"
+                  scroll-strategy="reposition"
+                  :offset="[0, 8]"
+                  transition="scale-transition"
+                >
+                  <template #activator="{ props }">
+                    <v-btn
+                      class="tag-filter-trigger"
+                      v-bind="props"
+                      variant="text"
+                      density="compact"
+                      :color="hasActiveTagFilters ? 'primary' : undefined"
+                      :icon="hasActiveTagFilters ? 'mdi-tag-multiple' : 'mdi-tag-outline'"
+                      :title="hasActiveTagFilters ? '已选择标签筛选' : '按标签筛选'"
+                    />
+                  </template>
+                  <v-sheet
+                    ref="tagFilterPopoverRef"
+                    class="tag-filter-popover"
+                    elevation="8"
+                    tabindex="-1"
+                    @keydown.esc.stop="tagFilterPanelOpen = false"
+                  >
+                    <div class="tag-filter-popover__header">
+                      <span class="tag-filter-popover__title">按标签筛选</span>
+                      <v-btn
+                        v-if="tagFilterValues.length"
+                        variant="text"
+                        size="small"
+                        density="comfortable"
+                        @click="clearTagFilters"
+                      >
+                        清除
+                      </v-btn>
+                    </div>
+                    <div v-if="tagOptions.length" class="tag-filter-popover__content">
+                      <button
+                        v-for="option in tagOptions"
+                        :key="option.value"
+                        type="button"
+                        class="tag-filter-popover__tag"
+                        :class="{ 'is-active': isTagSelected(option.value) }"
+                        @click="toggleTagFilter(option.value)"
+                      >
+                        {{ option.label }}
+                      </button>
+                    </div>
+                    <div v-else class="tag-filter-popover__empty">暂无可用标签</div>
+                  </v-sheet>
+                </v-overlay>
+              </div>
               <v-btn icon="mdi-refresh" density="compact" variant="text" @click="refreshGallery" />
             </v-toolbar>
             <div
@@ -2083,26 +2184,6 @@ onBeforeUnmount(() => {
               {{ dropFeedback.message }}
             </div>
             <v-divider />
-            <div v-if="tagOptions.length" class="project-tag-filter">
-              <v-autocomplete
-                v-model="tagFilterValues"
-                :items="tagOptions"
-                item-title="label"
-                item-value="value"
-                label="按标签筛选"
-                density="comfortable"
-                variant="outlined"
-                chips
-                closable-chips
-                multiple
-                clearable
-                hide-details
-              >
-                <template #prepend>
-                  <v-icon icon="mdi-tag" class="mr-2" />
-                </template>
-              </v-autocomplete>
-            </div>
             <div class="project-gallery-scroll">
               <div v-if="galleryDirectories.length" class="gallery-grid gallery-grid--directories">
                 <v-card
@@ -2232,93 +2313,90 @@ onBeforeUnmount(() => {
 
       <v-dialog v-model="uploadDialogOpen" max-width="720" persistent>
         <v-card>
-          <v-card-title>上传资源到服务器</v-card-title>
+          <v-card-title>Upload Assets to Server</v-card-title>
           <v-card-text>
-            <v-alert
-              v-if="uploadError"
-              type="error"
-              variant="tonal"
-              density="comfortable"
-              class="mb-4"
-            >
-              {{ uploadError }}
-            </v-alert>
-            <div class="upload-section">
-              <div
-                v-for="entry in uploadEntries"
-                :key="entry.assetId"
-                class="upload-entry"
-              >
-                <div class="upload-entry__header">
-                  <span class="upload-entry__name">{{ entry.asset.name }}</span>
-                  <v-chip size="small" color="primary" variant="tonal">{{ entry.asset.type }}</v-chip>
-                </div>
-                <v-text-field
-                  v-model="entry.name"
-                  label="资源名称"
-                  density="comfortable"
-                  variant="outlined"
-                  :disabled="uploadSubmitting || entry.status === 'success'"
-                />
-                <v-text-field
-                  v-model="entry.description"
-                  label="描述"
-                  density="comfortable"
-                  variant="outlined"
-                  :disabled="uploadSubmitting || entry.status === 'success'"
-                />
-                <div v-if="entry.status === 'error'" class="upload-entry__error">
-                  {{ entry.error }}
-                </div>
-                <div v-else-if="entry.status === 'success'" class="upload-entry__success">
-                  已上传
-                </div>
-              </div>
+        <v-alert
+          v-if="uploadError"
+          type="error"
+          variant="tonal"
+          density="comfortable"
+          class="mb-4"
+        >
+          {{ uploadError }}
+        </v-alert>
+        <div class="upload-section">
+          <div
+            v-for="entry in uploadEntries"
+            :key="entry.assetId"
+            class="upload-entry"
+          >
+            <div class="upload-entry__header">
+          <span class="upload-entry__name">{{ entry.asset.name }}</span>
+          <v-chip size="small" color="primary" variant="tonal">{{ entry.asset.type }}</v-chip>
             </div>
-            <v-divider class="my-4" />
-            <v-combobox
-              v-model="uploadSelectedTagIds"
-              :items="uploadTagOptions"
-              item-title="label"
-              item-value="value"
-              label="选择或新建标签"
-              density="comfortable"
-              variant="outlined"
-              multiple
-              chips
-              closable-chips
-              clearable
-              hide-selected
-              new-value-mode="add"
-              :loading="serverTagsLoading"
-              :disabled="uploadSubmitting"
-            >
-              <template #prepend>
-                <v-icon icon="mdi-tag" class="mr-2" />
-              </template>
-            </v-combobox>
-            <v-alert
-              v-if="serverTagsError"
-              type="warning"
-              variant="tonal"
-              density="comfortable"
-              class="mt-4"
-            >
-              {{ serverTagsError }}
-            </v-alert>
+            <v-text-field
+          v-model="entry.name"
+          label="Asset Name"
+          density="comfortable"
+          variant="outlined"
+          :disabled="uploadSubmitting || entry.status === 'success'"
+            />
+            <v-text-field
+          v-model="entry.description"
+          label="Description"
+          density="comfortable"
+          variant="outlined"
+          :disabled="uploadSubmitting || entry.status === 'success'"
+            />
+            <div v-if="entry.status === 'error'" class="upload-entry__error">
+          {{ entry.error }}
+            </div>
+            <div v-else-if="entry.status === 'success'" class="upload-entry__success">
+          Uploaded
+            </div>
+          </div>
+        </div>
+        <v-divider class="my-4" />
+        <v-combobox
+          v-model="uploadSelectedTagIds"
+          :items="uploadTagOptions"
+          item-title="label"
+          item-value="value"
+          label="Select or create tags"
+          density="comfortable"
+          variant="outlined"
+          multiple
+          chips
+          closable-chips
+          clearable
+          hide-selected
+          new-value-mode="add"
+          :loading="serverTagsLoading"
+          :disabled="uploadSubmitting"
+        >
+        </v-combobox>
+        <v-alert
+          v-if="serverTagsError"
+          type="warning"
+          variant="tonal"
+          density="comfortable"
+          class="mt-4"
+        >
+          {{ serverTagsError }}
+        </v-alert>
           </v-card-text>
           <v-card-actions>
-            <v-spacer />
-            <v-btn variant="text" :disabled="uploadSubmitting" @click="closeUploadDialog">取消</v-btn>
-            <v-btn
-              color="primary"
-              variant="flat"
-              :loading="uploadSubmitting"
-              :disabled="!canSubmitUpload"
-              @click="submitUpload"
-            >
-              上传
-            </v-btn>
+        <v-spacer />
+        <v-btn variant="text" :disabled="uploadSubmitting" @click="closeUploadDialog">Cancel</v-btn>
+        <v-btn
+          color="primary"
+          variant="flat"
+          :loading="uploadSubmitting"
+          :disabled="!canSubmitUpload"
+          @click="submitUpload"
+        >
+          Upload
+        </v-btn>
           </v-card-actions>
         </v-card>
       </v-dialog>
@@ -2419,10 +2497,84 @@ onBeforeUnmount(() => {
   overflow-y: auto;
 }
 
-.project-tag-filter {
-  padding: 12px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  background-color: rgba(8, 12, 18, 0.6);
+.project-toolbar__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tag-filter-trigger {
+  color: rgba(233, 236, 241, 0.7);
+  transition: color 120ms ease;
+}
+
+.tag-filter-popover {
+  width: 320px;
+  max-width: calc(100vw - 64px);
+  background: rgba(12, 18, 26, 0.96);
+  border-radius: 12px;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #e9ecf1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tag-filter-popover__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tag-filter-popover__title {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.tag-filter-popover__content {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.tag-filter-popover__tag {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  line-height: 1.2;
+  background: rgba(233, 236, 241, 0.08);
+  color: #e9ecf1;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+}
+
+.tag-filter-popover__tag:hover {
+  background: rgba(233, 236, 241, 0.14);
+}
+
+.tag-filter-popover__tag:focus-visible {
+  outline: 2px solid rgba(77, 208, 225, 0.8);
+  outline-offset: 2px;
+}
+
+.tag-filter-popover__tag.is-active {
+  background: rgba(77, 208, 225, 0.28);
+  border-color: rgba(77, 208, 225, 0.6);
+  color: #e0f7fa;
+  box-shadow: 0 0 0 1px rgba(77, 208, 225, 0.35);
+}
+
+.tag-filter-popover__empty {
+  font-size: 0.85rem;
+  color: rgba(233, 236, 241, 0.65);
+  text-align: center;
+  padding: 12px 0;
 }
 
 .tree-view {
