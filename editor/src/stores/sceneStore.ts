@@ -70,7 +70,7 @@ import type {
 
 import { cloneTextureSettings } from '@/types/material'
 import { DEFAULT_SCENE_MATERIAL_ID, DEFAULT_SCENE_MATERIAL_TYPE } from '@/types/material'
-import { behaviorMapToList, cloneBehaviorList } from '@schema/behaviors/definitions'
+import { behaviorMapToList, cloneBehaviorList, createBehaviorSequenceId } from '@schema/behaviors/definitions'
 
 import {
   CUSTOM_SKYBOX_PRESET_ID,
@@ -206,6 +206,8 @@ const BEHAVIOR_PREFAB_PREVIEW_COLOR = '#4DB6AC'
 const NODE_PREFAB_FORMAT_VERSION = 1
 const NODE_PREFAB_PREVIEW_COLOR = '#7986CB'
 const PREFAB_PLACEMENT_EPSILON = 1e-3
+
+export const PREFAB_SOURCE_METADATA_KEY = '__prefabAssetId'
 
 
 const DEFAULT_WALL_HEIGHT = WALL_DEFAULT_HEIGHT
@@ -2567,15 +2569,134 @@ function collectClipboardPayload(nodes: SceneNode[], ids: string[]): { entries: 
   return { entries, runtimeSnapshots }
 }
 
+function remapNodeReferenceValues(value: unknown, context: DuplicateContext): unknown {
+  if (typeof value === 'string') {
+    const { idMap, behaviorComponentIdMap, behaviorSequenceIdMap } = context
+    if (idMap?.has(value)) {
+      return idMap.get(value) as string
+    }
+    if (behaviorComponentIdMap?.has(value)) {
+      return behaviorComponentIdMap.get(value) as string
+    }
+    if (behaviorSequenceIdMap?.has(value)) {
+      return behaviorSequenceIdMap.get(value) as string
+    }
+    return value
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => {
+      const next = remapNodeReferenceValues(entry, context)
+      if (next !== entry) {
+        value[index] = next
+      }
+    })
+    return value
+  }
+  if (isPlainRecord(value)) {
+    const record = value as Record<string, unknown>
+    Object.entries(record).forEach(([key, entry]) => {
+      const next = remapNodeReferenceValues(entry, context)
+      if (next !== entry) {
+        record[key] = next
+      }
+    })
+    return record
+  }
+  return value
+}
+
+function remapNodeInternalReferences(node: SceneNode, context: DuplicateContext) {
+  const hasIdMapping = (context.idMap?.size ?? 0) > 0
+  const hasBehaviorMapping = (context.behaviorComponentIdMap?.size ?? 0) > 0 || (context.behaviorSequenceIdMap?.size ?? 0) > 0
+  if (!hasIdMapping && !hasBehaviorMapping) {
+    return
+  }
+  if (node.components) {
+    Object.values(node.components).forEach((component) => {
+      if (!component) {
+        return
+      }
+      if (component.props) {
+        component.props = remapNodeReferenceValues(component.props, context) as typeof component.props
+      }
+      if (component.metadata) {
+        component.metadata = remapNodeReferenceValues(component.metadata, context) as typeof component.metadata
+      }
+    })
+  }
+  if (node.userData && isPlainRecord(node.userData)) {
+    const remapped = remapNodeReferenceValues(node.userData, context)
+    if (isPlainRecord(remapped)) {
+      node.userData = remapped as Record<string, unknown>
+    }
+  }
+}
+
+function regenerateBehaviorComponentIdentifiers(
+  component: SceneNodeComponentState<BehaviorComponentProps>,
+  context: DuplicateContext,
+) {
+  const previousComponentId = component.id
+  component.id = generateUuid()
+  if (previousComponentId && previousComponentId !== component.id) {
+    if (!context.behaviorComponentIdMap) {
+      context.behaviorComponentIdMap = new Map<string, string>()
+    }
+    context.behaviorComponentIdMap.set(previousComponentId, component.id)
+  }
+  const props = component.props as BehaviorComponentProps | undefined
+  if (!props || !Array.isArray(props.behaviors)) {
+    return
+  }
+  if (!context.behaviorSequenceIdMap) {
+    context.behaviorSequenceIdMap = new Map<string, string>()
+  }
+  const sequenceIdMap = context.behaviorSequenceIdMap
+  const updatedBehaviors = props.behaviors.map((behavior) => {
+    const updated = { ...behavior }
+    const previousSequenceId = typeof updated.sequenceId === 'string' ? updated.sequenceId.trim() : ''
+    const nextSequenceId = createBehaviorSequenceId()
+    if (previousSequenceId.length) {
+      sequenceIdMap.set(previousSequenceId, nextSequenceId)
+    }
+    updated.sequenceId = nextSequenceId
+    updated.id = generateUuid()
+    return updated
+  })
+  const nextProps: BehaviorComponentProps = {
+    ...props,
+    behaviors: updatedBehaviors,
+  }
+  component.props = nextProps as typeof component.props
+}
+
+function regenerateNodeBehaviorIdentifiers(node: SceneNode, context: DuplicateContext) {
+  if (!node.components) {
+    return
+  }
+  const behaviorComponent = node.components[BEHAVIOR_COMPONENT_TYPE] as SceneNodeComponentState<BehaviorComponentProps> | undefined
+  if (!behaviorComponent) {
+    return
+  }
+  regenerateBehaviorComponentIdentifiers(behaviorComponent, context)
+}
+
 function duplicateNodeTree(original: SceneNode, context: DuplicateContext): SceneNode {
   const duplicated = cloneNode(original)
-  duplicated.id = generateUuid()
+  const newId = generateUuid()
+  duplicated.id = newId
+  context.idMap?.set(original.id, newId)
+
+  if (context.regenerateBehaviorIds) {
+    regenerateNodeBehaviorIdentifiers(duplicated, context)
+  }
 
   if (original.children?.length) {
     duplicated.children = original.children.map((child) => duplicateNodeTree(child, context))
   } else {
     delete duplicated.children
   }
+  remapNodeInternalReferences(duplicated, context)
   if (duplicated.sourceAssetId) {
     context.assetCache.registerUsage(duplicated.sourceAssetId)
   }
@@ -3083,6 +3204,20 @@ function buildNodePrefabFilename(name: string): string {
   return `${base}.prefab`
 }
 
+function sanitizePrefabUserData(userData?: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!userData || !isPlainRecord(userData)) {
+    return null
+  }
+  const cloned = clonePlainRecord(userData)
+  if (!cloned) {
+    return null
+  }
+  if (PREFAB_SOURCE_METADATA_KEY in cloned) {
+    delete cloned[PREFAB_SOURCE_METADATA_KEY]
+  }
+  return Object.keys(cloned).length ? cloned : null
+}
+
 function stripPrefabTransientFields(node: SceneNode): SceneNode {
   const sanitized: SceneNode = { ...node }
   delete (sanitized as { parentId?: string | null }).parentId
@@ -3092,12 +3227,28 @@ function stripPrefabTransientFields(node: SceneNode): SceneNode {
   delete (sanitized as { isPlaceholder?: boolean }).isPlaceholder
   sanitized.visible = sanitized.visible ?? true
   sanitized.locked = sanitized.locked ?? false
+  const cleanedUserData = sanitizePrefabUserData(sanitized.userData as Record<string, unknown> | null)
+  if (cleanedUserData) {
+    sanitized.userData = cleanedUserData
+  } else if ('userData' in sanitized) {
+    delete sanitized.userData
+  }
   if (sanitized.children?.length) {
     sanitized.children = sanitized.children.map(stripPrefabTransientFields)
   } else if (sanitized.children) {
     delete sanitized.children
   }
   return sanitized
+}
+
+function attachPrefabMetadata(node: SceneNode, assetId: string) {
+  if (!assetId) {
+    return
+  }
+  const current = clonePlainRecord(node.userData as Record<string, unknown> | null)
+  const next: Record<string, unknown> = current ? { ...current } : {}
+  next[PREFAB_SOURCE_METADATA_KEY] = assetId
+  node.userData = next
 }
 
 function remapPrefabNodeIds(node: SceneNode, regenerate: boolean): SceneNode {
@@ -3125,7 +3276,11 @@ function prepareNodePrefabRoot(source: SceneNode, options: { regenerateIds?: boo
 
 function createNodePrefabData(node: SceneNode, name: string): NodePrefabData {
   const normalizedName = normalizePrefabName(name) || 'Unnamed Prefab'
-  const root = prepareNodePrefabRoot(node, { regenerateIds: true })
+  const root = prepareNodePrefabRoot(node, { regenerateIds: false })
+  root.position = { x: 0, y: 0, z: 0 }
+  root.rotation = { x: 0, y: 0, z: 0 }
+  root.scale = { x: 1, y: 1, z: 1 }
+  root.offset = { x: 0, y: 0, z: 0 }
   return {
     formatVersion: NODE_PREFAB_FORMAT_VERSION,
     name: normalizedName,
@@ -5879,7 +6034,7 @@ export const useSceneStore = defineStore('scene', {
         return null
       }
     },
-    async saveNodePrefab(nodeId: string): Promise<ProjectAsset> {
+    async saveNodePrefab(nodeId: string, options: { assetId?: string; name?: string } = {}): Promise<ProjectAsset> {
       const node = findNodeById(this.nodes, nodeId)
       if (!node) {
         throw new Error('节点不存在或已被移除')
@@ -5888,38 +6043,65 @@ export const useSceneStore = defineStore('scene', {
         throw new Error('地面节点无法保存为预制件')
       }
 
-      const prefabData = createNodePrefabData(node, node.name ?? '')
+      const prefabData = createNodePrefabData(node, options.name ?? node.name ?? '')
       const serialized = serializeNodePrefab(prefabData)
-      const assetId = generateUuid()
+      const targetAssetId = options.assetId ?? generateUuid()
       const fileName = buildNodePrefabFilename(prefabData.name)
       const blob = new Blob([serialized], { type: 'application/json' })
       const assetCache = useAssetCacheStore()
-      await assetCache.storeAssetBlob(assetId, {
+      await assetCache.storeAssetBlob(targetAssetId, {
         blob,
         mimeType: 'application/json',
         filename: fileName,
       })
 
-      const projectAsset: ProjectAsset = {
-        id: assetId,
-        name: prefabData.name,
-        type: 'prefab',
-        downloadUrl: assetId,
-        previewColor: NODE_PREFAB_PREVIEW_COLOR,
-        thumbnail: null,
-        description: fileName,
-        gleaned: true,
+      let registered: ProjectAsset
+      if (options.assetId) {
+        const existing = this.getAsset(targetAssetId)
+        if (!existing) {
+          throw new Error('节点预制件资源不存在')
+        }
+        if (existing.type !== 'prefab') {
+          throw new Error('指定资源并非节点预制件')
+        }
+        const updated: ProjectAsset = {
+          ...existing,
+          name: prefabData.name,
+          description: fileName,
+          previewColor: NODE_PREFAB_PREVIEW_COLOR,
+        }
+        const categoryId = determineAssetCategoryId(updated)
+        const sourceMeta = this.assetIndex[targetAssetId]?.source
+        registered = this.registerAsset(updated, {
+          categoryId,
+          source: sourceMeta,
+          commitOptions: { updateNodes: false, updateCamera: false },
+        })
+      } else {
+        const projectAsset: ProjectAsset = {
+          id: targetAssetId,
+          name: prefabData.name,
+          type: 'prefab',
+          downloadUrl: targetAssetId,
+          previewColor: NODE_PREFAB_PREVIEW_COLOR,
+          thumbnail: null,
+          description: fileName,
+          gleaned: true,
+        }
+        const categoryId = determineAssetCategoryId(projectAsset)
+        registered = this.registerAsset(projectAsset, {
+          categoryId,
+          source: { type: 'local' },
+          commitOptions: { updateNodes: false, updateCamera: false },
+        })
+        this.setActiveDirectory(categoryId)
+        this.selectAsset(registered.id)
       }
 
-      const categoryId = determineAssetCategoryId(projectAsset)
-      const registered = this.registerAsset(projectAsset, {
-        categoryId,
-        source: { type: 'local' },
-        commitOptions: { updateNodes: false, updateCamera: false },
-      })
-
-      this.setActiveDirectory(categoryId)
-      this.selectAsset(registered.id)
+      this.captureHistorySnapshot()
+      attachPrefabMetadata(node, registered.id)
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
 
       return registered
     },
@@ -5949,7 +6131,7 @@ export const useSceneStore = defineStore('scene', {
       const text = await entry.blob.text()
       return deserializeNodePrefab(text)
     },
-    async instantiateNodePrefabAsset(assetId: string, position: THREE.Vector3): Promise<SceneNode> {
+    async instantiateNodePrefabAsset(assetId: string, position?: THREE.Vector3): Promise<SceneNode> {
       const asset = this.getAsset(assetId)
       if (!asset) {
         throw new Error('节点预制件资源不存在')
@@ -5960,9 +6142,29 @@ export const useSceneStore = defineStore('scene', {
 
       const prefab = await this.loadNodePrefab(assetId)
       const assetCache = useAssetCacheStore()
-      const duplicate = duplicateNodeTree(prefab.root, { assetCache, runtimeSnapshots: new Map() })
-      const spawnPosition = position.clone()
+      const idMap = new Map<string, string>()
+      const runtimeSnapshots = new Map<string, Object3D>()
+      const duplicate = duplicateNodeTree(prefab.root, {
+        assetCache,
+        runtimeSnapshots,
+        idMap,
+        regenerateBehaviorIds: true,
+      })
+      const spawnPosition = position
+        ? position.clone()
+        : resolveSpawnPosition({
+            baseY: 0,
+            radius: DEFAULT_SPAWN_RADIUS,
+            localCenter: new Vector3(0, 0, 0),
+            camera: this.camera,
+            nodes: this.nodes,
+            snapToGrid: true,
+          })
       duplicate.position = toPlainVector(spawnPosition)
+      duplicate.rotation = duplicate.rotation ?? { x: 0, y: 0, z: 0 }
+      duplicate.scale = duplicate.scale ?? { x: 1, y: 1, z: 1 }
+      duplicate.offset = duplicate.offset ?? { x: 0, y: 0, z: 0 }
+      attachPrefabMetadata(duplicate, assetId)
       componentManager.syncNode(duplicate)
 
       this.captureHistorySnapshot()
@@ -7905,7 +8107,12 @@ export const useSceneStore = defineStore('scene', {
         if (!source) {
           return
         }
-        const duplicate = duplicateNodeTree(source, { assetCache, runtimeSnapshots })
+        const duplicate = duplicateNodeTree(source, {
+          assetCache,
+          runtimeSnapshots,
+          idMap: duplicateIdMap,
+          regenerateBehaviorIds: true,
+        })
         const inserted = insertNodeMutable(working, id, duplicate, 'after')
         if (!inserted) {
           working.push(duplicate)
@@ -7962,9 +8169,12 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const assetCache = useAssetCacheStore()
+      const idMap = new Map<string, string>()
       const context: DuplicateContext = {
         assetCache,
         runtimeSnapshots: this.clipboard.runtimeSnapshots,
+        idMap,
+        regenerateBehaviorIds: true,
       }
       const duplicates = this.clipboard.entries.map((entry) => duplicateNodeTree(entry.node, context))
       if (!duplicates.length) {

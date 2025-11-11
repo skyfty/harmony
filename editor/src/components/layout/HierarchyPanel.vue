@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useSceneStore, type HierarchyDropPosition } from '@/stores/sceneStore'
+import { useSceneStore, type HierarchyDropPosition, PREFAB_SOURCE_METADATA_KEY } from '@/stores/sceneStore'
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneNode } from '@harmony/schema'
@@ -32,6 +32,8 @@ const dragState = ref<{ sourceId: string | null; targetId: string | null; positi
 )
 const panelRef = ref<HTMLDivElement | null>(null)
 const materialDropTargetId = ref<string | null>(null)
+const isSavingPrefab = ref(false)
+const isUpdatingPrefab = ref(false)
 
 const floating = computed(() => props.floating ?? false)
 const placementIcon = computed(() => (floating.value ? 'mdi-dock-left' : 'mdi-arrow-expand'))
@@ -76,6 +78,47 @@ const areAllNodesLocked = computed(
 )
 const lockToggleIcon = computed(() => (areAllNodesLocked.value ? 'mdi-lock-open-variant-outline' : 'mdi-lock-outline'))
 const lockToggleTitle = computed(() => (areAllNodesLocked.value ? '解除全部锁定' : '锁定全部节点'))
+
+const activeSceneNode = computed<SceneNode | null>(() => {
+  const id = selectedNodeId.value
+  if (!id) {
+    return null
+  }
+  return findSceneNodeById(sceneStore.nodes, id)
+})
+
+function resolvePrefabAssetId(node: SceneNode | null): string | null {
+  if (!node || !node.userData || typeof node.userData !== 'object') {
+    return null
+  }
+  const value = (node.userData as Record<string, unknown>)[PREFAB_SOURCE_METADATA_KEY]
+  return typeof value === 'string' && value.trim().length ? value : null
+}
+
+const canSavePrefab = computed(() => {
+  if (selectedNodeIds.value.length !== 1) {
+    return false
+  }
+  const node = activeSceneNode.value
+  if (!node) {
+    return false
+  }
+  if (node.id === 'harmony:ground') {
+    return false
+  }
+  return true
+})
+
+const canUpdatePrefab = computed(() => {
+  if (!canSavePrefab.value) {
+    return false
+  }
+  const node = activeSceneNode.value
+  if (!node) {
+    return false
+  }
+  return resolvePrefabAssetId(node) !== null
+})
 
 watch(allNodeIds, (ids) => {
   if (selectionAnchorId.value && !ids.includes(selectionAnchorId.value)) {
@@ -261,6 +304,46 @@ function handleDeleteSelected() {
   const idsToRemove = [...selectedNodeIds.value]
   sceneStore.removeSceneNodes(idsToRemove)
   selectionAnchorId.value = selectedNodeIds.value[selectedNodeIds.value.length - 1] ?? null
+}
+
+async function handleSavePrefab() {
+  if (!canSavePrefab.value || isSavingPrefab.value) {
+    return
+  }
+  const node = activeSceneNode.value
+  if (!node) {
+    return
+  }
+  isSavingPrefab.value = true
+  try {
+    await sceneStore.saveNodePrefab(node.id)
+  } catch (error) {
+    console.error('保存预制件失败', error)
+  } finally {
+    isSavingPrefab.value = false
+  }
+}
+
+async function handleUpdatePrefab() {
+  if (!canUpdatePrefab.value || isUpdatingPrefab.value) {
+    return
+  }
+  const node = activeSceneNode.value
+  if (!node) {
+    return
+  }
+  const assetId = resolvePrefabAssetId(node)
+  if (!assetId) {
+    return
+  }
+  isUpdatingPrefab.value = true
+  try {
+    await sceneStore.saveNodePrefab(node.id, { assetId })
+  } catch (error) {
+    console.error('更新预制件失败', error)
+  } finally {
+    isUpdatingPrefab.value = false
+  }
 }
 
 function handleToggleAllVisibility() {
@@ -590,6 +673,26 @@ function handleTreeDragLeave(event: DragEvent) {
             />
           </template>
         </AddNodeMenu>
+        <v-btn
+          icon="mdi-cube"
+          variant="text"
+          density="compact"
+          color="primary"
+          :title="'保存为预制件'"
+          :disabled="!canSavePrefab || isSavingPrefab"
+          :loading="isSavingPrefab"
+          @click="handleSavePrefab"
+        />
+        <v-btn
+          icon="mdi-content-save-edit"
+          variant="text"
+          density="compact"
+          color="primary"
+          :title="'更新预制件'"
+          :disabled="!canUpdatePrefab || isUpdatingPrefab"
+          :loading="isUpdatingPrefab"
+          @click="handleUpdatePrefab"
+        />
         <v-btn
           icon="mdi-delete-outline"
           variant="text"

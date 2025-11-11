@@ -180,7 +180,7 @@ function handleToggleStats() {
             >
               <AddNodeMenu>
                 <template #activator="{ props }">
-                  <span v-bind="props">Node</span>
+                  <span v-bind="props">Add</span>
                 </template>
               </AddNodeMenu>
               <v-icon size="18" class="ml-1">mdi-menu-down</v-icon>

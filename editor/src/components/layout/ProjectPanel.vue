@@ -514,6 +514,10 @@ async function handleAddAsset(asset: ProjectAsset) {
     preparedAsset = prepareAssetForOperations(asset)
     assetCacheStore.setError(preparedAsset.id, null)
     await ensureAssetCached(preparedAsset)
+    if (preparedAsset.type === 'prefab') {
+      await sceneStore.instantiateNodePrefabAsset(preparedAsset.id)
+      return
+    }
     const node = await sceneStore.addModelNode({ asset: preparedAsset })
     if (!node) {
       throw new Error('资源尚未准备就绪')
