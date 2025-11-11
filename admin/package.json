@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@harmony/schema": "file:../schema",
     "@mdi/font": "^7.4.47",
     "@vueuse/core": "^13.9.0",
     "axios": "^1.7.7",

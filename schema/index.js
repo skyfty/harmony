@@ -1,2 +1,1 @@
-// This module only provides TypeScript type declarations.
-export {};
+export { AssetTypes, DEFAULT_ASSET_TYPE, isAssetType, normalizeAssetType } from './asset-types.js'

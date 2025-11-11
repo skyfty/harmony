@@ -1,3 +1,4 @@
+import { AssetTypes } from '@harmony/schema/asset-types'
 import { Schema, model } from 'mongoose'
 import type { AssetDocument } from '@/types/models'
 
@@ -7,7 +8,7 @@ const assetSchema = new Schema<AssetDocument>(
     categoryId: { type: Schema.Types.ObjectId, ref: 'AssetCategory', required: true },
     type: {
       type: String,
-      enum: ['model', 'image', 'texture', 'material', 'file', 'prefab', 'video', 'mesh'],
+      enum: AssetTypes,
       required: true,
     },
     tags: {

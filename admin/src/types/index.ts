@@ -1,3 +1,5 @@
+import type { AssetType as SchemaAssetType } from '@harmony/schema/asset-types'
+
 export interface PermissionSummary {
   id: string
   name: string
@@ -119,7 +121,7 @@ export interface ProjectDirectory {
   assets?: ProjectAssetSummary[]
 }
 
-export type AssetType = 'model' | 'image' | 'texture' | 'material' | 'file' | 'prefab' | 'video' | 'mesh'
+export type AssetType = SchemaAssetType
 
 export interface AssetTagSummary {
   id: string

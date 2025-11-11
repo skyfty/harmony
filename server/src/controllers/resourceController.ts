@@ -1,3 +1,5 @@
+import { AssetTypes, DEFAULT_ASSET_TYPE, isAssetType } from '@harmony/schema/asset-types'
+import type { AssetType } from '@harmony/schema/asset-types'
 import type { Context } from 'koa'
 import path from 'node:path'
 import fs from 'fs-extra'
@@ -8,8 +10,6 @@ import { AssetCategoryModel } from '@/models/AssetCategory'
 import { AssetModel } from '@/models/Asset'
 import { AssetTagModel } from '@/models/AssetTag'
 import { appConfig } from '@/config/env'
-
-const ASSET_TYPES: AssetDocument['type'][] = ['model', 'image', 'texture', 'material', 'file', 'prefab', 'video', 'mesh']
 const MANIFEST_FILENAME = 'asset-manifest.json'
 const THUMBNAIL_PREFIX = 'thumb-'
 
@@ -184,21 +184,22 @@ function sanitizeString(value: unknown): string | null {
   return trimmed.length ? trimmed : null
 }
 
-function normalizeAssetType(input: unknown, fallback: AssetDocument['type'] = 'file'): AssetDocument['type'] {
+const ASSET_TYPE_ALIAS_MAP: Partial<Record<string, AssetType>> = {
+  meshes: 'mesh',
+  prefabs: 'prefab',
+  videos: 'video',
+}
+
+function normalizeAssetType(input: unknown, fallback: AssetDocument['type'] = DEFAULT_ASSET_TYPE): AssetDocument['type'] {
   if (typeof input !== 'string') {
     return fallback
   }
   const normalized = input.trim().toLowerCase()
-  const aliasMap: Partial<Record<string, AssetDocument['type']>> = {
-    meshes: 'mesh',
-    prefabs: 'prefab',
-    videos: 'video',
-  }
-  const aliased = aliasMap[normalized]
+  const aliased = ASSET_TYPE_ALIAS_MAP[normalized]
   if (aliased) {
     return aliased
   }
-  if ((ASSET_TYPES as string[]).includes(normalized)) {
+  if (isAssetType(normalized)) {
     return normalized as AssetDocument['type']
   }
   return fallback

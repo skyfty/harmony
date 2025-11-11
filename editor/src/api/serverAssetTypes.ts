@@ -1,4 +1,5 @@
-import type { ProjectAsset } from '@/types/project-asset'
+import { DEFAULT_ASSET_TYPE, isAssetType } from '@harmony/schema/asset-types'
+import type { ProjectAsset, ServerAssetType } from '@/types/project-asset'
 
 export interface ServerAssetTagDto {
   id: string
@@ -31,25 +32,27 @@ export const SERVER_ASSET_PREVIEW_COLORS: Record<ProjectAsset['type'], string> =
   file: '#546E7A',
 }
 
+const SERVER_ASSET_TYPE_ALIASES: Partial<Record<string, ServerAssetType>> = {
+  meshes: 'mesh',
+  videos: 'video',
+}
+
 export function normalizeServerAssetType(type: string | undefined): ProjectAsset['type'] {
-  switch (type) {
-    case 'model':
-    case 'image':
-    case 'texture':
-    case 'material':
-    case 'file':
-    case 'behavior':
-    case 'prefab':
-    case 'video':
-    case 'mesh':
-      return type
-    case 'meshes':
-      return 'mesh'
-    case 'videos':
-      return 'video'
-    default:
-      return 'file'
+  if (!type) {
+    return DEFAULT_ASSET_TYPE
   }
+  const normalized = type.trim().toLowerCase()
+  if (normalized === 'behavior') {
+    return 'behavior'
+  }
+  const aliased = SERVER_ASSET_TYPE_ALIASES[normalized]
+  if (aliased) {
+    return aliased
+  }
+  if (isAssetType(normalized)) {
+    return normalized
+  }
+  return DEFAULT_ASSET_TYPE
 }
 
 export function mapServerAssetToProjectAsset(asset: ServerAssetDto): ProjectAsset {

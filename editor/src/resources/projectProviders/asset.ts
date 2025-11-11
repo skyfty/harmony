@@ -13,7 +13,7 @@ interface AssetManifestTag {
 interface AssetManifestEntry {
   id: string
   name: string
-  type: ProjectAsset['type'] | 'model' | 'image' | 'texture' | 'material' | 'file' | 'prefab' | 'video' | 'mesh' | 'behavior'
+  type: ProjectAsset['type']
   tags?: AssetManifestTag[]
   tagIds?: string[]
   downloadUrl: string

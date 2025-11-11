@@ -9,6 +9,10 @@
     ".": {
       "types": "./index.d.ts",
       "default": "./index.js"
+    },
+    "./asset-types": {
+      "types": "./asset-types.d.ts",
+      "default": "./asset-types.js"
     }
   }
 }

@@ -1,3 +1,4 @@
+import type { AssetType as SchemaAssetType } from '@harmony/schema/asset-types'
 import type { Document, Types } from 'mongoose'
 
 export interface PermissionDocument extends Document<Types.ObjectId> {
@@ -177,7 +178,7 @@ export interface OrderDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
-export type AssetType = 'model' | 'image' | 'texture' | 'material' | 'file' | 'prefab' | 'video' | 'mesh'
+export type AssetType = SchemaAssetType
 
 export interface AssetCategoryDocument extends Document<Types.ObjectId> {
   name: string
@@ -205,6 +206,7 @@ export interface AssetDocument extends Document<Types.ObjectId> {
   previewUrl?: string | null
   thumbnailUrl?: string | null
   description?: string | null
+  originalFilename?: string | null
   mimeType?: string | null
   metadata?: Record<string, unknown>
   createdAt: Date

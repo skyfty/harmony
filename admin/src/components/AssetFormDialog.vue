@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
+import { AssetTypes } from '@harmony/schema/asset-types'
 import type { AssetTag, AssetType, ManagedAsset, ResourceCategory } from '@/types'
 
 const props = defineProps<{
@@ -16,16 +17,21 @@ const emit = defineEmits<{
   (event: 'request-manage-tags'): void
 }>()
 
-const assetTypeOptions: Array<{ value: AssetType; label: string }> = [
-  { value: 'model', label: '模型' },
-  { value: 'image', label: '图片' },
-  { value: 'texture', label: '纹理' },
-  { value: 'material', label: '材质' },
-  { value: 'mesh', label: '网格' },
-  { value: 'prefab', label: '预制体' },
-  { value: 'video', label: '视频' },
-  { value: 'file', label: '文件' },
-]
+const ASSET_TYPE_LABELS: Record<AssetType, string> = {
+  model: '模型',
+  image: '图片',
+  texture: '纹理',
+  material: '材质',
+  mesh: '网格',
+  prefab: '预制体',
+  video: '视频',
+  file: '文件',
+}
+
+const assetTypeOptions: Array<{ value: AssetType; label: string }> = AssetTypes.map((type) => ({
+  value: type,
+  label: ASSET_TYPE_LABELS[type] ?? type,
+}))
 
 const form = reactive({
   name: '',
