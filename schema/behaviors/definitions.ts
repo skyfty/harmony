@@ -135,7 +135,6 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
       return {
         targetNodeId: null,
         duration: 0.8,
-        offset: 1,
       }
     },
   },
@@ -509,7 +508,6 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
         params: {
           targetNodeId: params?.targetNodeId ?? null,
           duration: Math.max(0, params?.duration ?? 0.6),
-          offset: Math.max(0, params?.offset ?? 1),
         },
       }
     }
@@ -741,7 +739,6 @@ export function ensureBehaviorParams(
           params: {
             targetNodeId: params?.targetNodeId ?? null,
             duration: Math.max(0, params?.duration ?? 0.6),
-            offset: Math.max(0, params?.offset ?? 1),
           },
         }
       }

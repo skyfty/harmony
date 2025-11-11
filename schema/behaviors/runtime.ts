@@ -53,7 +53,6 @@ export type BehaviorRuntimeEvent =
       targetNodeId: string
       /** Movement duration in seconds. */
       duration: number
-      offset: number
       token: string
     }
   | {
@@ -397,7 +396,6 @@ function createMoveCameraEvent(state: BehaviorSequenceState, behavior: SceneBeha
     behaviorId: behavior.id,
     targetNodeId,
     duration: durationSeconds,
-    offset: Math.max(0, params.offset ?? 1),
     token,
   }
 }

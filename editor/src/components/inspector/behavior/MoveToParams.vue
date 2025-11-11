@@ -15,7 +15,6 @@ const emit = defineEmits<{
 const params = computed<MoveToBehaviorParams>(() => ({
   targetNodeId: props.modelValue?.targetNodeId ?? null,
   duration: Math.max(0, props.modelValue?.duration ?? 0.6),
-  offset: Math.max(0, props.modelValue?.offset ?? 1),
 }))
 
 const pickerRef = ref<{ cancelPicking: () => void } | null>(null)
@@ -31,12 +30,6 @@ function updateDuration(value: string | number) {
   const numeric = typeof value === 'number' ? value : parseFloat(value)
   const normalized = Number.isFinite(numeric) ? Math.max(0, numeric) : 0
   emitUpdate({ duration: normalized })
-}
-
-function updateOffset(value: string | number) {
-  const numeric = typeof value === 'number' ? value : parseFloat(value)
-  const normalized = Number.isFinite(numeric) ? Math.max(0, numeric) : 0
-  emitUpdate({ offset: normalized })
 }
 
 function updateTarget(nodeId: string | null) {
@@ -79,17 +72,6 @@ onBeforeUnmount(() => {
       min="0"
       step="0.1"
       @update:model-value="updateDuration($event)"
-    />
-    <v-text-field
-      :model-value="params.offset"
-      type="number"
-      label="Offset distance (m)"
-      density="compact"
-      variant="underlined"
-      hide-details
-      min="0"
-      step="0.1"
-      @update:model-value="updateOffset($event)"
     />
   </div>
 </template>
