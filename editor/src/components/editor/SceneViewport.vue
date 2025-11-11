@@ -6700,6 +6700,16 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
   return object
 }
 
+function applyTransformSpace(tool: EditorTool) {
+  if (!transformControls) return
+
+  if (tool === 'translate' || tool === 'scale') {
+    transformControls.setSpace('local')
+  } else {
+    transformControls.setSpace('world')
+  }
+}
+
 function attachSelection(nodeId: string | null, tool: EditorTool = props.activeTool) {
   const locked = nodeId ? sceneStore.isNodeSelectionLocked(nodeId) : false
   const target = !locked && nodeId ? objectMap.get(nodeId) ?? null : null
@@ -6728,6 +6738,7 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
   }
 
   // 确保在附加前设置正确的模式
+      transformControls.setSpace('local')
   transformControls.setMode(tool)
   transformControls.attach(target)
 }
@@ -6741,6 +6752,7 @@ function updateToolMode(tool: EditorTool) {
   if (tool === 'select') {
     transformControls.detach()
   } else {
+    applyTransformSpace(tool)
     transformControls.setMode(tool)
   }
 
