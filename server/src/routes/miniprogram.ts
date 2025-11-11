@@ -9,6 +9,7 @@ import {
   removeWork,
   toggleWorkLike,
   rateWork,
+  shareWork,
 } from '@/controllers/miniprogram/workController'
 import {
   createCollection,
@@ -71,6 +72,7 @@ miniRouter.patch('/works/:id', updateWork)
 miniRouter.delete('/works/:id', removeWork)
 miniRouter.post('/works/:id/like', toggleWorkLike)
 miniRouter.post('/works/:id/rate', rateWork)
+miniRouter.post('/works/:id/share', shareWork)
 
 // collections
 miniRouter.get('/collections', listCollections)

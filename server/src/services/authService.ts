@@ -30,6 +30,8 @@ type UserLean = {
   email?: string
   status: 'active' | 'disabled'
   roles: Types.ObjectId[]
+  workShareCount?: number
+  exhibitionShareCount?: number
   createdAt: Date
   updatedAt: Date
 }
@@ -40,6 +42,8 @@ interface SessionUser {
   displayName?: string
   email?: string
   status: 'active' | 'disabled'
+  workShareCount?: number
+  exhibitionShareCount?: number
   roles: Array<{
     id: string
     name: string
@@ -97,6 +101,8 @@ function buildSessionUser(user: UserLean): SessionUser {
     displayName: user.displayName ?? undefined,
     email: user.email ?? undefined,
     status: user.status,
+    workShareCount: user.workShareCount ?? 0,
+    exhibitionShareCount: user.exhibitionShareCount ?? 0,
     roles: [],
     createdAt: user.createdAt.toISOString(),
     updatedAt: user.updatedAt.toISOString(),

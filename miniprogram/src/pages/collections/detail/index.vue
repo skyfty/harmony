@@ -5,7 +5,9 @@
         <text class="title">{{ collection?.title || '作品集详情' }}</text>
         <text class="subtitle">{{ headerSubtitle }}</text>
       </view>
-      <button v-if="canEdit" class="edit-btn" @tap="goToEdit">编辑</button>
+      <button v-if="canEdit" class="edit-icon-btn" @tap="goToEdit">
+        <text class="icon">✏️</text>
+      </button>
     </view>
 
     <view v-if="collection" class="cover-card">
@@ -87,9 +89,7 @@
             <text class="work-name">{{ work.name }}</text>
             <text class="work-meta">评分 {{ work.rating.toFixed(1) }} · 喜欢 {{ work.likes }}</text>
           </view>
-          <view class="work-actions">
-            <button class="link-btn" @tap="openWorkDetail(work.id)">查看</button>
-          </view>
+          
         </view>
       </view>
       <view v-else class="collection-empty">暂未包含作品，前往作品详情页添加。</view>
@@ -100,12 +100,15 @@
       <text class="empty-desc">{{ loadingError || '请返回作品集列表或重新选择' }}</text>
     </view>
 
+    <view v-if="collection && canEdit" class="delete-section">
+      <button class="delete-btn" @tap="handleDelete">删除作品集</button>
+    </view>
+
     <BottomNav active="work" @navigate="handleNavigate" />
   </view>
 
   <view v-if="collectionRatingModalVisible" class="rating-modal-mask" @tap="closeCollectionRatingModal"></view>
   <view v-if="collectionRatingModalVisible" class="rating-modal-panel" @tap.stop>
-    <button class="rating-modal__close" @tap="closeCollectionRatingModal">×</button>
     <text class="rating-modal__title">为该作品集打分</text>
     <view class="rating-modal__stars">
       <text
@@ -133,6 +136,7 @@ import {
   apiGetCollection,
   apiToggleCollectionLike,
   apiRateCollection,
+  apiDeleteCollection,
   type CollectionSummary,
   type WorkSummary,
 } from '@/api/miniprogram';
@@ -405,6 +409,37 @@ function formatNumber(value: number): string {
 function handleNavigate(target: NavKey): void {
   redirectToNav(target, { current: 'work' });
 }
+
+async function handleDelete(): Promise<void> {
+  if (!collection.value) {
+    return;
+  }
+  
+  const result = await new Promise<{ confirm: boolean }>((resolve) => {
+    uni.showModal({
+      title: '删除作品集',
+      content: '确认删除该作品集吗？删除后将从所有展览中移除，且无法恢复。',
+      confirmColor: '#d93025',
+      success: (res) => resolve({ confirm: res.confirm }),
+      fail: () => resolve({ confirm: false }),
+    });
+  });
+
+  if (!result.confirm) {
+    return;
+  }
+
+  try {
+    await apiDeleteCollection(collection.value.id);
+    uni.showToast({ title: '已删除', icon: 'success' });
+    setTimeout(() => {
+      uni.navigateBack();
+    }, 500);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : '删除失败';
+    uni.showToast({ title: message, icon: 'none' });
+  }
+}
 </script>
 <style scoped lang="scss">
 .rating-modal-mask {
@@ -519,6 +554,21 @@ function handleNavigate(target: NavKey): void {
   background: rgba(31, 122, 236, 0.12);
   color: #1f7aec;
   font-size: 14px;
+}
+
+.edit-icon-btn {
+  padding: 6px;
+  border: none;
+  background: transparent;
+  color: #1f7aec;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.edit-icon-btn .icon {
+  font-size: 18px;
+  line-height: 1;
 }
 
 .cover-card {
@@ -762,6 +812,24 @@ function handleNavigate(target: NavKey): void {
 .collection-empty {
   font-size: 12px;
   color: #8a94a6;
+}
+
+.delete-section {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid #e3e9f2;
+  display: flex;
+  justify-content: center;
+}
+
+.delete-btn {
+  padding: 12px 32px;
+  border: none;
+  border-radius: 18px;
+  background: rgba(217, 48, 37, 0.12);
+  color: #d93025;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .empty {

@@ -53,17 +53,12 @@
                 <text v-if="selectedCollection" class="collection-picker__title">
                   {{ selectedCollection?.title || '未命名作品集' }}
                 </text>
-                <text v-else class="collection-picker__placeholder">请选择作品集</text>
+                <text v-else class="collection-picker__placeholder">请选择作品集（可选“无”清除）</text>
                 <text v-if="selectedCollection" class="collection-picker__count">共 {{ selectedCollectionWorkCount }} 件作品</text>
               </view>
               <text class="collection-picker__arrow">⌵</text>
             </view>
           </picker>
-          <button
-            v-if="selectedCollection"
-            class="collection-picker__clear"
-            @tap="clearCollectionSelection"
-          >清除</button>
         </view>
         <view v-else class="empty-tip">暂无作品集，请先创建作品集后再尝试。</view>
         <view v-if="selectedCollection" class="collection-preview">
@@ -91,11 +86,12 @@
               <text class="work-meta">{{ formatWorkMeta(work) }}</text>
             </view>
             <button
-              class="cover-toggle"
+              class="cover-toggle icon-btn"
               :class="{ 'is-cover': isCoverSelected(work.id) }"
               @tap.stop="toggleCoverWork(work)"
             >
-              {{ isCoverSelected(work.id) ? '封面' : '设为封面' }}
+              <text v-if="isCoverSelected(work.id)">📌</text>
+              <text v-else>⭐</text>
             </button>
           </view>
         </view>
@@ -129,7 +125,7 @@
             @input="onManualCoverInput"
             @confirm="addManualCover"
           />
-          <button class="manual-add" @tap="addManualCover">添加</button>
+          <button class="manual-add icon-btn" @tap="addManualCover"><text class="icon">＋</text></button>
         </view>
       </view>
 
@@ -182,14 +178,15 @@ const availableWorks = ref<WorkSummary[]>([]);
 
 const isEditing = computed(() => Boolean(editingId.value));
 
-const collectionOptions = computed<CollectionOption[]>(() =>
-  availableCollections.value.map((collection) => ({
+const collectionOptions = computed<CollectionOption[]>(() => {
+  const options = availableCollections.value.map((collection) => ({
     id: collection.id,
     title: collection.title || '未命名作品集',
     description: collection.description || '暂无描述',
     workCount: collection.workCount ?? (collection.works ? collection.works.length : 0),
-  })),
-);
+  }));
+  return [{ id: '', title: '无', description: '不选择作品集', workCount: 0 }, ...options];
+});
 
 const selectedCollection = computed(() =>
   availableCollections.value.find((collection) => collection.id === selectedCollectionId.value) ?? null,

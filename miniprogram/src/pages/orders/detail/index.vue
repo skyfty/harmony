@@ -100,12 +100,15 @@
       <text class="empty-desc">{{ errorMessage || '请返回订单列表重试' }}</text>
       <button class="outline" @tap="goOrders">返回订单列表</button>
     </view>
+    <BottomNav active="optimize" @navigate="handleNavigate" />
   </view>
 </template>
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { onLoad, onPullDownRefresh } from '@dcloudio/uni-app';
 import { apiGetOrder, type OrderSummary } from '@/api/miniprogram';
+import BottomNav from '@/components/BottomNav.vue';
+import { redirectToNav, type NavKey } from '@/utils/navKey';
 
 type OrderStatus = OrderSummary['status'];
 
@@ -204,6 +207,11 @@ onLoad((query) => {
 onPullDownRefresh(() => {
   loadOrder(orderId.value);
 });
+
+function handleNavigate(target: NavKey): void {
+  // 订单来源于优化商城，底部导航对应 optimize
+  redirectToNav(target, { current: 'optimize' });
+}
 </script>
 <style scoped lang="scss">
 .page {

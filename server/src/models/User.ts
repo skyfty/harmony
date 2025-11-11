@@ -12,6 +12,8 @@ const userSchema = new Schema<UserDocument>(
     bio: { type: String },
     status: { type: String, enum: ['active', 'disabled'], default: 'active' },
     roles: [{ type: Schema.Types.ObjectId, ref: 'Role' }],
+    workShareCount: { type: Number, default: 0 },
+    exhibitionShareCount: { type: Number, default: 0 },
   },
   {
     timestamps: true,

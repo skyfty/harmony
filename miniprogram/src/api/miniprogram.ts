@@ -10,6 +10,8 @@ export interface AuthSession {
     avatarUrl?: string;
     phone?: string;
     bio?: string;
+    workShareCount?: number;
+    exhibitionShareCount?: number;
   };
   permissions: string[];
 }
@@ -38,6 +40,7 @@ export interface WorkSummary {
     coverUrl?: string;
   }>;
   commentCount: number;
+  shareCount: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -393,6 +396,10 @@ export function apiVisitExhibition(id: string): Promise<{ visitedAt: string; vis
 
 export function apiShareExhibition(id: string): Promise<{ shareCount: number }> {
   return post(`/exhibitions/${id}/share`, {});
+}
+
+export function apiShareWork(id: string): Promise<{ shareCount: number }> {
+  return post(`/works/${id}/share`, {});
 }
 
 export function apiGetProducts(params?: { category?: string }): Promise<{

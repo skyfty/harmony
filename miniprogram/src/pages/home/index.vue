@@ -1,17 +1,10 @@
 <template>
   <view class="page home">
-    <view class="header">
-      <view>
-        <text class="header-title">最新展览</text>
-        <text class="header-sub">雕塑展、绘画展、数字艺术</text>
-      </view>
-  <view class="search-icon" @tap="goSearch"></view>
-    </view>
 
     <view class="section">
       <view class="section-header">
         <text class="section-title">最新展览</text>
-        <text class="section-more" @tap="goExhibitionList">更多</text>
+        <text class="section-more" @tap="goExhibitionListLatest">更多</text>
       </view>
       <view class="works-grid">
         <view class="work-card" v-for="card in latestExhibitions" :key="card.id" @tap="openExhibition(card.id)">
@@ -37,7 +30,7 @@
     <view class="section">
       <view class="section-header">
         <text class="section-title">最佳展览</text>
-        <text class="section-more" @tap="goExhibitionList">更多</text>
+        <text class="section-more" @tap="goExhibitionListBest">更多</text>
       </view>
       <view class="works-grid">
         <view class="work-card" v-for="card in bestExhibitions" :key="card.id" @tap="openExhibition(card.id)">
@@ -63,7 +56,7 @@
     <view class="section">
       <view class="section-header">
         <text class="section-title">最佳作品</text>
-        <text class="section-more" @tap="goWorksList">更多</text>
+        <text class="section-more" @tap="goWorksListBest">更多</text>
       </view>
       <view class="works-grid">
         <view class="work-card" v-for="work in bestWorks" :key="work.id" @tap="openWorkDetail(work.id)">
@@ -247,8 +240,8 @@ function handleNavigate(target: NavKey) {
   redirectToNav(target, { current: 'home', allowSame: true });
 }
 
-function goWorksList() {
-  uni.navigateTo({ url: '/pages/works/index' });
+function goWorksListBest() {
+  uni.navigateTo({ url: '/pages/works/list?sort=best' });
 }
 
 function openExhibition(id: string) {
@@ -259,8 +252,12 @@ function goSearch() {
   uni.navigateTo({ url: '/pages/search/index' });
 }
 
-function goExhibitionList() {
-  uni.navigateTo({ url: '/pages/exhibition/index' });
+function goExhibitionListLatest() {
+  uni.navigateTo({ url: '/pages/exhibition/list?sort=latest' });
+}
+
+function goExhibitionListBest() {
+  uni.navigateTo({ url: '/pages/exhibition/list?sort=best' });
 }
 
 function openWorkDetail(id: string) {
