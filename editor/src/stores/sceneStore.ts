@@ -2655,9 +2655,17 @@ function regenerateBehaviorComponentIdentifiers(
   const updatedBehaviors = props.behaviors.map((behavior) => {
     const updated = { ...behavior }
     const previousSequenceId = typeof updated.sequenceId === 'string' ? updated.sequenceId.trim() : ''
-    const nextSequenceId = createBehaviorSequenceId()
+    let nextSequenceId: string
     if (previousSequenceId.length) {
-      sequenceIdMap.set(previousSequenceId, nextSequenceId)
+      const existing = sequenceIdMap.get(previousSequenceId)
+      if (existing) {
+        nextSequenceId = existing
+      } else {
+        nextSequenceId = createBehaviorSequenceId()
+        sequenceIdMap.set(previousSequenceId, nextSequenceId)
+      }
+    } else {
+      nextSequenceId = createBehaviorSequenceId()
     }
     updated.sequenceId = nextSequenceId
     updated.id = generateUuid()
