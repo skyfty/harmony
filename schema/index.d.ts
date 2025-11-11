@@ -220,8 +220,6 @@ export interface MoveToBehaviorParams {
   targetNodeId: string | null
   /** Camera travel duration in seconds. */
   duration: number
-  /** Horizontal distance from the node's center point in meters when the camera stops. */
-  offset: number
 }
 
 export interface ShowAlertBehaviorParams {

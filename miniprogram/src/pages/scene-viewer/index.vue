@@ -2107,22 +2107,22 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
   } else {
     tempQuaternion.identity();
   }
-  const horizontalOffset = Math.max(event.offset ?? 0, 0);
+  const desiredDistance = ownerObject
+    ? Math.max(DEFAULT_OBJECT_RADIUS, computeObjectBoundingRadius(ownerObject))
+    : DEFAULT_OBJECT_RADIUS;
   const destination = focusPoint.clone();
-  if (horizontalOffset > 0) {
-    tempVector.copy(camera.position).sub(focusPoint);
+  tempVector.copy(camera.position).sub(focusPoint);
+  tempVector.y = 0;
+  if (tempVector.lengthSq() < 1e-6) {
+    tempVector.set(0, 0, 1);
+    tempVector.applyQuaternion(tempQuaternion);
     tempVector.y = 0;
-    if (tempVector.lengthSq() < 1e-6) {
-      tempVector.set(0, 0, 1);
-      tempVector.applyQuaternion(tempQuaternion);
-      tempVector.y = 0;
-    }
-    if (tempVector.lengthSq() < 1e-6) {
-      tempVector.set(0, 0, 1);
-    }
-    tempVector.normalize().multiplyScalar(horizontalOffset);
-    destination.add(tempVector);
   }
+  if (tempVector.lengthSq() < 1e-6) {
+    tempVector.set(0, 0, 1);
+  }
+  tempVector.normalize().multiplyScalar(desiredDistance);
+  destination.add(tempVector);
   destination.y = HUMAN_EYE_HEIGHT;
   const lookTarget = new THREE.Vector3(focusPoint.x, HUMAN_EYE_HEIGHT, focusPoint.z);
 

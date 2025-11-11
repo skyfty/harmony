@@ -7,58 +7,96 @@
       "path": "pages/index/index"
     },
     {
-      "path": "pages/works/indite"
-    },
-    {
-      "path": "pages/works/records/index"
-    },
-    {
       "path": "pages/search/index"
-    },
-    {
-      "path": "pages/exhibition/index"
-    },
-    {
-      "path": "pages/exhibition/create/index"
-    },
-    {
-      "path": "pages/exhibition/detail/index"
     },
     {
       "path": "pages/profile/index"
     },
     {
-      "path": "pages/optimize/index"
-    },
-    {
-      "path": "pages/optimize/detail/index"
-    },
-    {
       "path": "pages/settings/index"
+    }
+  ],
+  "subPackages": [
+    {
+      "root": "pages/works",
+      "name": "works",
+      "pages": [
+        {
+          "path": "index"
+        },
+        {
+          "path": "detail/index"
+        },
+        {
+          "path": "indite"
+        },
+        {
+          "path": "records/index"
+        }
+      ]
     },
     {
-      "path": "pages/orders/index"
+      "root": "pages/exhibition",
+      "name": "exhibition",
+      "pages": [
+        {
+          "path": "index"
+        },
+        {
+          "path": "create/index"
+        },
+        {
+          "path": "detail/index"
+        }
+      ]
     },
     {
-      "path": "pages/orders/detail/index"
+      "root": "pages/collections",
+      "name": "collections",
+      "pages": [
+        {
+          "path": "index"
+        },
+        {
+          "path": "detail/index"
+        },
+        {
+          "path": "edit/index"
+        }
+      ]
     },
     {
-      "path": "pages/works/index"
+      "root": "pages/orders",
+      "name": "orders",
+      "pages": [
+        {
+          "path": "index"
+        },
+        {
+          "path": "detail/index"
+        }
+      ]
     },
     {
-      "path": "pages/works/detail/index"
+      "root": "pages/optimize",
+      "name": "optimize",
+      "pages": [
+        {
+          "path": "index"
+        },
+        {
+          "path": "detail/index"
+        }
+      ]
     },
     {
-      "path": "pages/collections/edit/index"
-    },
-    {
-      "path": "pages/collections/detail/index"
-    },
-    {
-      "path": "pages/collections/index"
-    },
-    {
-      "path": "pages/scene-viewer/index"
+      "root": "pages/scene-viewer",
+      "name": "scene-viewer",
+      "pages": [
+        {
+          "path": "index"
+        }
+      ]
     }
   ],
   "globalStyle": {
