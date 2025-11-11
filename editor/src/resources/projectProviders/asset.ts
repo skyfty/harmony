@@ -2,6 +2,7 @@ import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { buildServerApiUrl } from '@/api/serverApiConfig'
 import { mapServerAssetToProjectAsset, normalizeServerAssetType } from '@/api/serverAssetTypes'
+import { useAuthStore } from '@/stores/authStore'
 import type { ResourceProvider } from './types'
 
 interface AssetManifestTag {
@@ -43,9 +44,15 @@ function buildManifestUrl(): string {
 
 async function fetchManifest(): Promise<AssetManifest> {
   const url = buildManifestUrl()
+  const authStore = useAuthStore()
+  const headers = new Headers({ Accept: 'application/json' })
+  const authorization = authStore.authorizationHeader
+  if (authorization) {
+    headers.set('Authorization', authorization)
+  }
   const response = await fetch(url, {
     method: 'GET',
-    headers: { Accept: 'application/json' },
+    headers,
     credentials: 'include',
     cache: 'no-cache',
   })

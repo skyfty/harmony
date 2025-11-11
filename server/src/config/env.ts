@@ -15,9 +15,9 @@ export const appConfig = {
   assetPublicUrl: process.env.ASSET_PUBLIC_URL ?? 'http://localhost:4000/uploads',
   editorPublicUrl: process.env.EDITOR_PUBLIC_URL ?? 'http://localhost:5173',
   testUser: {
-    username: process.env.TEST_USER_USERNAME ?? 'test',
-    password: process.env.TEST_USER_PASSWORD ?? 'test1234',
-    displayName: process.env.TEST_USER_DISPLAY_NAME ?? 'Test Account',
+    username: process.env.TEST_USER_USERNAME ?? 'editor',
+    password: process.env.TEST_USER_PASSWORD ?? 'editor123',
+    displayName: process.env.TEST_USER_DISPLAY_NAME ?? 'Editor 用户',
   },
   openAi: {
     apiKey: process.env.OPENAI_API_KEY ?? '',

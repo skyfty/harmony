@@ -4,6 +4,7 @@ import App from './App.vue'
 import router from './router'
 import vuetify from './utils/vuetify'
 import { createPersistedStatePlugin } from './utils/piniaPersist'
+import { useAuthStore } from '@/stores/authStore'
 import './style.css'
 
 async function preloadRuntimeConfig() {
@@ -20,7 +21,7 @@ async function preloadRuntimeConfig() {
 	}
 }
 
-preloadRuntimeConfig().finally(() => {
+preloadRuntimeConfig().finally(async () => {
 	const app = createApp(App)
 	const pinia = createPinia()
 	pinia.use(createPersistedStatePlugin({ keyPrefix: 'harmony' }))
@@ -28,6 +29,9 @@ preloadRuntimeConfig().finally(() => {
 	app.use(pinia)
 	app.use(router)
 	app.use(vuetify)
+
+	const authStore = useAuthStore(pinia)
+	await authStore.initialize()
 
 	app.mount('#app')
 })

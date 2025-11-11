@@ -1,5 +1,6 @@
 import { buildServerApiUrl } from '@/api/serverApiConfig'
 import type { AiAssistantMessageRequest, AiAssistantMessageResponse } from '@/types/ai-assistant'
+import { useAuthStore } from '@/stores/authStore'
 
 const ASSISTANT_ENDPOINT = '/assistant/messages'
 
@@ -9,13 +10,19 @@ function buildUrl(path: string): string {
 }
 
 async function request<T>(path: string, init: RequestInit): Promise<T> {
+  const authStore = useAuthStore()
+  const headers = new Headers({
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+    ...(init.headers ?? {}),
+  })
+  const authorization = authStore.authorizationHeader
+  if (authorization) {
+    headers.set('Authorization', authorization)
+  }
   const response = await fetch(buildUrl(path), {
     ...init,
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      ...(init.headers ?? {}),
-    },
+    headers,
     credentials: 'include',
   })
 

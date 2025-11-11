@@ -5,6 +5,7 @@ import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore, type EditorPanel } from '@/stores/sceneStore'
 import AddNodeMenu from '@/components/common/AddNodeMenu.vue'
+import UserAccountControls from '@/components/layout/UserAccountControls.vue'
 
 type QuickAction = {
   icon: string
@@ -302,6 +303,7 @@ function handleToggleStats() {
           <v-icon start>{{ action.icon }}</v-icon>
           {{ action.label }}
         </v-btn>
+        <UserAccountControls />
       </div>
     </section>
 

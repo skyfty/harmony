@@ -5,6 +5,7 @@ import {
   type ServerAssetDto,
   type ServerAssetTagDto,
 } from './serverAssetTypes'
+import { useAuthStore } from '@/stores/authStore'
 
 export interface AssetTagSummary {
   id: string
@@ -42,10 +43,16 @@ function buildError(message: string, response?: Response): Error {
 
 export async function fetchAssetTags(): Promise<AssetTagSummary[]> {
   const url = buildServerApiUrl('/resources/tags')
+  const authStore = useAuthStore()
+  const headers = new Headers({ Accept: 'application/json' })
+  const authorization = authStore.authorizationHeader
+  if (authorization) {
+    headers.set('Authorization', authorization)
+  }
   const response = await fetch(url, {
     method: 'GET',
     credentials: 'include',
-    headers: { Accept: 'application/json' },
+    headers,
     cache: 'no-cache',
   })
   if (!response.ok) {
@@ -62,13 +69,19 @@ export async function fetchAssetTags(): Promise<AssetTagSummary[]> {
 
 export async function createAssetTag(payload: { name: string; description?: string }): Promise<AssetTagSummary> {
   const url = buildServerApiUrl('/resources/tags')
+  const authStore = useAuthStore()
+  const headers = new Headers({
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  })
+  const authorization = authStore.authorizationHeader
+  if (authorization) {
+    headers.set('Authorization', authorization)
+  }
   const response = await fetch(url, {
     method: 'POST',
     credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
+    headers,
     body: JSON.stringify({
       name: payload.name,
       description: payload.description,
@@ -111,9 +124,17 @@ export async function uploadAssetToServer(options: UploadAssetOptions): Promise<
       })
   }
 
+  const authStore = useAuthStore()
+  const headers = new Headers()
+  const authorization = authStore.authorizationHeader
+  if (authorization) {
+    headers.set('Authorization', authorization)
+  }
+
   const response = await fetch(url, {
     method: 'POST',
     credentials: 'include',
+    headers,
     body: formData,
   })
   if (!response.ok) {

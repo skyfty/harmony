@@ -1,4 +1,5 @@
 import type { PresetSceneDetail, PresetSceneSummary } from '@/types/preset-scene'
+import { useAuthStore } from '@/stores/authStore'
 
 const RAW_BASE_URL = (import.meta.env?.VITE_SERVER_API_BASE_URL as string | undefined)?.trim() ?? ''
 const API_BASE_URL = RAW_BASE_URL.endsWith('/') ? RAW_BASE_URL.slice(0, -1) : RAW_BASE_URL
@@ -13,11 +14,17 @@ function buildUrl(path: string): string {
 }
 
 async function request<T>(path: string): Promise<T> {
+  const authStore = useAuthStore()
+  const headers = new Headers({
+    Accept: 'application/json',
+  })
+  const authorization = authStore.authorizationHeader
+  if (authorization) {
+    headers.set('Authorization', authorization)
+  }
   const response = await fetch(buildUrl(path), {
     method: 'GET',
-    headers: {
-      Accept: 'application/json',
-    },
+    headers,
     credentials: 'include',
   })
 
