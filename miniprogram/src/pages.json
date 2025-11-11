@@ -13,6 +13,9 @@
       "path": "pages/profile/index"
     },
     {
+      "path": "pages/profile/edit"
+    },
+    {
       "path": "pages/settings/index"
     },
     {

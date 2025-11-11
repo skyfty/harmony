@@ -10,6 +10,8 @@ export interface AuthSession {
     avatarUrl?: string;
     phone?: string;
     bio?: string;
+    gender?: 'male' | 'female' | 'other';
+    birthDate?: string;
     workShareCount?: number;
     exhibitionShareCount?: number;
   };
@@ -196,6 +198,8 @@ export function apiUpdateProfile(payload: {
   avatarUrl?: string;
   phone?: string;
   bio?: string;
+  gender?: 'male' | 'female' | 'other';
+  birthDate?: string;
 }): Promise<AuthSession> {
   return patch<AuthSession>('/users/me', payload);
 }

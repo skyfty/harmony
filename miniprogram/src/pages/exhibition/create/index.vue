@@ -265,16 +265,24 @@ const coverPreview = computed(() => {
 
 onLoad(async (options) => {
   editingId.value = typeof options?.id === 'string' ? options.id : '';
-  await initialize();
+  const preselectedCollectionId = typeof options?.collectionId === 'string' ? options.collectionId : '';
+  await initialize(preselectedCollectionId);
 });
 
-async function initialize(): Promise<void> {
+async function initialize(preselectedCollectionId?: string): Promise<void> {
   loading.value = true;
   uni.showLoading({ title: '加载中', mask: true });
   try {
     await fetchOptions();
     if (editingId.value) {
       await loadExhibition(editingId.value);
+    } else if (preselectedCollectionId) {
+      // Pre-select the collection passed from collections detail page
+      const collectionIndex = availableCollections.value.findIndex(c => c.id === preselectedCollectionId);
+      if (collectionIndex !== -1) {
+        selectedCollectionId.value = preselectedCollectionId;
+        syncSelectedWorksForCollection(preselectedCollectionId);
+      }
     }
   } catch (error) {
     uni.showToast({ title: getErrorMessage(error), icon: 'none' });

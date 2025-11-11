@@ -26,6 +26,8 @@ export interface UserDocument extends Document<Types.ObjectId> {
   avatarUrl?: string
   phone?: string
   bio?: string
+  gender?: 'male' | 'female' | 'other'
+  birthDate?: Date
   status: 'active' | 'disabled'
   roles: Types.ObjectId[]
   workShareCount?: number

@@ -6,7 +6,7 @@
       </view>
     </view>
 
-    <view class="profile-card">
+    <view class="profile-card" @tap="editProfile">
       <view class="avatar">
         <text class="avatar-initial">S</text>
       </view>
@@ -93,6 +93,10 @@ function goSupport(type: SupportLink) {
     const message = supportMessages[type];
     uni.showToast({ title: message, icon: 'none' });
   }
+}
+
+function editProfile() {
+  uni.navigateTo({ url: '/pages/profile/edit' });
 }
 
 async function loadProfile() {

@@ -5,9 +5,6 @@
         <text class="title">{{ collection?.title || '作品集详情' }}</text>
         <text class="subtitle">{{ headerSubtitle }}</text>
       </view>
-      <button v-if="canEdit" class="edit-icon-btn" @tap="goToEdit">
-        <text class="icon">✏️</text>
-      </button>
     </view>
 
     <view v-if="collection" class="cover-card">
@@ -100,8 +97,10 @@
       <text class="empty-desc">{{ loadingError || '请返回作品集列表或重新选择' }}</text>
     </view>
 
-    <view v-if="collection && canEdit" class="delete-section">
-      <button class="delete-btn" @tap="handleDelete">删除作品集</button>
+    <view v-if="collection" class="actions-section">
+      <button v-if="canEdit" class="action-btn action-btn-edit" @tap="goToEdit">编辑</button>
+      <button v-if="canEdit" class="action-btn action-btn-delete" @tap="handleDelete">删除</button>
+      <button class="action-btn action-btn-create" @tap="createExhibition">创建展览</button>
     </view>
 
     <BottomNav active="work" @navigate="handleNavigate" />
@@ -410,6 +409,16 @@ function handleNavigate(target: NavKey): void {
   redirectToNav(target, { current: 'work' });
 }
 
+function createExhibition(): void {
+  if (!collection.value) {
+    return;
+  }
+  // Navigate to exhibition create page with collection ID as parameter
+  uni.navigateTo({
+    url: `/pages/exhibition/create/index?collectionId=${collection.value.id}`,
+  });
+}
+
 async function handleDelete(): Promise<void> {
   if (!collection.value) {
     return;
@@ -535,7 +544,6 @@ async function handleDelete(): Promise<void> {
   flex: 1;
 }
 
-
 .title {
   font-size: 20px;
   font-weight: 600;
@@ -547,26 +555,22 @@ async function handleDelete(): Promise<void> {
   color: #8a94a6;
 }
 
-.edit-btn {
-  padding: 8px 14px;
-  border: none;
-  border-radius: 16px;
-  background: rgba(31, 122, 236, 0.12);
-  color: #1f7aec;
-  font-size: 14px;
+.edit-icon-btn .icon {
+  font-size: 18px;
+  line-height: 1;
 }
 
-.edit-icon-btn {
+.delete-icon-btn {
   padding: 6px;
   border: none;
   background: transparent;
-  color: #1f7aec;
+  color: #d93025;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-.edit-icon-btn .icon {
+.delete-icon-btn .icon {
   font-size: 18px;
   line-height: 1;
 }
@@ -814,22 +818,58 @@ async function handleDelete(): Promise<void> {
   color: #8a94a6;
 }
 
-.delete-section {
-  margin-top: 20px;
-  padding-top: 20px;
-  border-top: 1px solid #e3e9f2;
+.actions-section {
+  margin: 40px 20px 120px;
+  padding: 0 16px;
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
 }
 
-.delete-btn {
-  padding: 12px 32px;
+.action-btn {
+  width: 100%;
+  padding: 14px 20px;
   border: none;
-  border-radius: 18px;
-  background: rgba(217, 48, 37, 0.12);
-  color: #d93025;
-  font-size: 14px;
+  border-radius: 12px;
+  font-size: 15px;
   font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s;
+
+  &:active {
+    transform: scale(0.98);
+  }
+}
+
+.action-btn-edit {
+  background: rgba(31, 122, 236, 0.12);
+  color: #1f7aec;
+
+  &:active {
+    background: rgba(31, 122, 236, 0.18);
+  }
+}
+
+.action-btn-delete {
+  background: rgba(255, 87, 87, 0.12);
+  color: #ff5757;
+
+  &:active {
+    background: rgba(255, 87, 87, 0.18);
+  }
+}
+
+.action-btn-create {
+  background: linear-gradient(135deg, #3f97ff 0%, #7ec6ff 100%);
+  color: #ffffff;
+  box-shadow: 0 6px 20px rgba(63, 151, 255, 0.3);
+
+  &:active {
+    box-shadow: 0 3px 12px rgba(63, 151, 255, 0.2);
+  }
 }
 
 .empty {

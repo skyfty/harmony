@@ -6,7 +6,6 @@
         <text class="title">{{ work?.title || '作品详情' }}</text>
         <text class="subtitle">{{ headerSubtitle }}</text>
       </view>
-  <button v-if="isOwner" class="edit-icon-btn" @tap="goToEdit"><text class="icon">✏️</text></button>
     </view>
 
     <view v-if="work" class="cover-card">
@@ -90,8 +89,9 @@
       <text class="empty-desc">{{ loadingError || '请返回作品列表重新选择' }}</text>
     </view>
 
-    <view v-if="work && isOwner" class="delete-section">
-      <button class="delete-btn" @tap="handleDelete">删除作品</button>
+    <view v-if="work && isOwner" class="actions-section">
+      <button class="action-btn action-btn-edit" @tap="goToEdit">编辑</button>
+      <button class="action-btn action-btn-delete" @tap="handleDelete">删除</button>
     </view>
   </view>
 
@@ -650,29 +650,7 @@ watch(isOwner, (value) => {
   color: #8a94a6;
 }
 
-.edit-btn {
-  padding: 8px 14px;
-  border: none;
-  border-radius: 16px;
-  background: rgba(31, 122, 236, 0.12);
-  color: #1f7aec;
-  font-size: 14px;
-}
 
-.edit-icon-btn {
-  padding: 6px;
-  border: none;
-  background: transparent;
-  color: #1f7aec;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.edit-icon-btn .icon {
-  font-size: 18px;
-  line-height: 1;
-}
 
 .cover-card {
   background: #ffffff;
@@ -880,22 +858,48 @@ watch(isOwner, (value) => {
   color: #8a94a6;
 }
 
-.delete-section {
-  margin-top: 20px;
-  padding-top: 20px;
-  border-top: 1px solid #e3e9f2;
+.actions-section {
+  margin: 30px 20px 120px;
+  padding: 0 16px;
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
 }
 
-.delete-btn {
-  padding: 12px 32px;
+.action-btn {
+  width: 100%;
+  padding: 14px 20px;
   border: none;
-  border-radius: 18px;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s;
+
+  &:active {
+    transform: scale(0.98);
+  }
+}
+
+.action-btn-edit {
+  background: rgba(31, 122, 236, 0.12);
+  color: #1f7aec;
+
+  &:active {
+    background: rgba(31, 122, 236, 0.18);
+  }
+}
+
+.action-btn-delete {
   background: rgba(217, 48, 37, 0.12);
   color: #d93025;
-  font-size: 14px;
-  font-weight: 600;
+
+  &:active {
+    background: rgba(217, 48, 37, 0.18);
+  }
 }
 
 .empty {
