@@ -28,11 +28,11 @@ interface AssetManifest {
 }
 
 const TYPE_LABELS: Record<string, string> = {
-  model: '模型',
-  image: '图片',
-  texture: '纹理',
-  material: '材质',
-  file: '文件',
+  model: 'Model',
+  image: 'Image',
+  texture: 'Texture',
+  material: 'Material',
+  file: 'File',
 }
 
 const TYPE_COLORS: Record<ProjectAsset['type'], string> = {
@@ -57,7 +57,6 @@ async function fetchManifest(): Promise<AssetManifest> {
     credentials: 'include',
     cache: 'no-cache',
   })
-
   if (!response.ok) {
     throw new Error(`资产清单请求失败 (${response.status})`)
   }
@@ -124,7 +123,7 @@ function buildDirectories(entries: AssetManifestEntry[]): ProjectDirectory[] {
 
 export const assetProvider: ResourceProvider = {
   id: 'server-assets',
-  name: '服务器资产',
+  name: 'assets',
   url: null,
   includeInPackages: true,
   async load(): Promise<ProjectDirectory[]> {

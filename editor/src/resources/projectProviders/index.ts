@@ -1,5 +1,4 @@
 import { zlgccnProvider } from './zlgccn'
-import { presetProvider } from './preset'
 import { assetProvider } from './asset'
 import type { ResourceProvider } from './types'
 
@@ -12,4 +11,4 @@ const sceneProvider: ResourceProvider = {
   includeInPackages: false,
 }
 
-export const resourceProviders: ResourceProvider[] = [sceneProvider, assetProvider, presetProvider, zlgccnProvider]
+export const resourceProviders: ResourceProvider[] = [sceneProvider, assetProvider, zlgccnProvider]
