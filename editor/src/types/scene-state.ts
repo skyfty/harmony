@@ -39,6 +39,8 @@ export interface SceneState {
   resourceProviderId: string
   cameraFocusNodeId: string | null
   cameraFocusRequestId: number
+  nodeHighlightTargetId: string | null
+  nodeHighlightRequestId: number
   clipboard: SceneClipboard | null
   draggingAssetId: string | null
   draggingAssetObject: Object3D | null

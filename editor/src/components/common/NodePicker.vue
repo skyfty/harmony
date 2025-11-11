@@ -238,6 +238,21 @@ function handleDrop(event: DragEvent) {
   updateValue(nodeId)
 }
 
+function handleValueClick() {
+  if (isDisabled.value) {
+    return
+  }
+  const nodeId = props.modelValue
+  if (!nodeId) {
+    return
+  }
+  const exists = Boolean(findNodeName(nodes.value, nodeId))
+  if (!exists) {
+    return
+  }
+  sceneStore.requestNodeHighlight(nodeId)
+}
+
 const exposed: ExposedMethods = {
   cancelPicking,
 }
@@ -271,7 +286,12 @@ onBeforeUnmount(() => {
         :disabled="isDisabled"
         @click="startPicking"
       />
-      <span v-if="hasSelection" class="node-picker__value">
+      <span
+        v-if="hasSelection"
+        class="node-picker__value"
+        :class="{ 'node-picker__value--interactive': !isDisabled }"
+        @click="handleValueClick"
+      >
         {{ displayValue }}
       </span>
       <span v-else class="node-picker__placeholder">{{ placeholderText }}</span>
@@ -325,6 +345,14 @@ onBeforeUnmount(() => {
   font-size: 0.95rem;
   font-weight: 600;
   color: rgba(233, 236, 241, 0.92);
+}
+
+.node-picker__value--interactive {
+  cursor: pointer;
+}
+
+.node-picker__value--interactive:hover {
+  color: rgba(255, 255, 255, 0.95);
 }
 
 .node-picker__placeholder {

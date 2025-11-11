@@ -4318,6 +4318,8 @@ export const useSceneStore = defineStore('scene', {
       resourceProviderId: initialSceneDocument.resourceProviderId,
       cameraFocusNodeId: null,
       cameraFocusRequestId: 0,
+  nodeHighlightTargetId: null,
+  nodeHighlightRequestId: 0,
       clipboard: null,
       draggingAssetId: null,
       draggingAssetObject: null,
@@ -6582,6 +6584,24 @@ export const useSceneStore = defineStore('scene', {
         return
       }
       this.cameraFocusNodeId = null
+    },
+
+    requestNodeHighlight(nodeId: string | null) {
+      if (!nodeId) {
+        return
+      }
+      this.nodeHighlightTargetId = nodeId
+      this.nodeHighlightRequestId += 1
+    },
+
+    clearNodeHighlightRequest(nodeId?: string | null, token?: number) {
+      if (typeof token === 'number' && token !== this.nodeHighlightRequestId) {
+        return
+      }
+      if (nodeId && this.nodeHighlightTargetId && nodeId !== this.nodeHighlightTargetId) {
+        return
+      }
+      this.nodeHighlightTargetId = null
     },
 
     isDescendant(ancestorId: string, maybeChildId: string) {

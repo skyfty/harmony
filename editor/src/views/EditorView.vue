@@ -65,6 +65,8 @@ const {
   currentSceneId,
   cameraFocusNodeId,
   cameraFocusRequestId,
+  nodeHighlightTargetId,
+  nodeHighlightRequestId,
   groundSettings,
 } = storeToRefs(sceneStore)
 
@@ -1382,6 +1384,8 @@ onBeforeUnmount(() => {
           :camera-state="camera"
           :focus-node-id="cameraFocusNodeId"
           :focus-request-id="cameraFocusRequestId"
+          :highlight-node-id="nodeHighlightTargetId"
+          :highlight-request-id="nodeHighlightRequestId"
           :show-stats="showStatsPanel"
           @change-tool="setTool"
           @select-node="handleViewportSelection"

@@ -68,11 +68,15 @@ const props = withDefaults(defineProps<{
   cameraState: SceneCameraState
   focusNodeId: string | null
   focusRequestId: number
+  highlightNodeId?: string | null
+  highlightRequestId?: number
   previewActive?: boolean
   showStats?: boolean
 }>(), {
   previewActive: false,
   showStats: true,
+  highlightNodeId: null,
+  highlightRequestId: 0,
 })
 
 const emit = defineEmits<{
@@ -109,6 +113,10 @@ let selectionTrackedObject: THREE.Object3D | null = null
 let gridHighlight: THREE.Group | null = null
 const selectionHighlights = new Map<string, THREE.Group>()
 let nodePickerHighlight: THREE.Group | null = null
+let nodeFlashHighlight: THREE.Group | null = null
+let nodeFlashIntervalHandle: number | null = null
+let nodeFlashTimeoutHandle: number | null = null
+let nodeFlashActiveToken: number | null = null
 let sky: Sky | null = null
 let pmremGenerator: THREE.PMREMGenerator | null = null
 let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null
@@ -3094,6 +3102,10 @@ function disposeScene() {
 
   clearSelectionHighlights()
   disposeNodePickerHighlight()
+  disposeNodeFlashIndicator()
+  if (sceneStore.nodeHighlightTargetId) {
+    sceneStore.clearNodeHighlightRequest(sceneStore.nodeHighlightTargetId)
+  }
   releaseGroundMeshCache()
   scene = null
   camera = null
@@ -3411,7 +3423,84 @@ function updateNodePickerHighlight(hit: NodeHitResult | null) {
   indicator.visible = true
 }
 
+function clearNodeFlashTimers() {
+  if (nodeFlashIntervalHandle !== null) {
+    window.clearInterval(nodeFlashIntervalHandle)
+    nodeFlashIntervalHandle = null
+  }
+  if (nodeFlashTimeoutHandle !== null) {
+    window.clearTimeout(nodeFlashTimeoutHandle)
+    nodeFlashTimeoutHandle = null
+  }
+}
+
+function ensureNodeFlashIndicator(): THREE.Group | null {
+  if (!scene) {
+    return null
+  }
+  if (!nodeFlashHighlight) {
+    nodeFlashHighlight = createSelectionIndicator()
+  }
+  if (nodeFlashHighlight.parent !== scene) {
+    scene.add(nodeFlashHighlight)
+  }
+  return nodeFlashHighlight
+}
+
+function hideNodeFlashIndicator() {
+  if (nodeFlashHighlight) {
+    nodeFlashHighlight.visible = false
+  }
+}
+
+function disposeNodeFlashIndicator() {
+  clearNodeFlashTimers()
+  if (nodeFlashHighlight) {
+    disposeSelectionIndicator(nodeFlashHighlight)
+    nodeFlashHighlight = null
+  }
+  nodeFlashActiveToken = null
+}
+
+function triggerNodeFlash(nodeId: string, token: number) {
+  clearNodeFlashTimers()
+  nodeFlashActiveToken = token
+  const object = objectMap.get(nodeId) ?? null
+  if (!object) {
+    hideNodeFlashIndicator()
+    sceneStore.clearNodeHighlightRequest(nodeId, token)
+    return
+  }
+  const indicator = ensureNodeFlashIndicator()
+  if (!indicator) {
+    sceneStore.clearNodeHighlightRequest(nodeId, token)
+    return
+  }
+  updateSelectionIndicatorFromObject(indicator, object)
+  indicator.visible = true
+  let visible = true
+  nodeFlashIntervalHandle = window.setInterval(() => {
+    if (!nodeFlashHighlight || nodeFlashActiveToken !== token) {
+      return
+    }
+    visible = !visible
+    nodeFlashHighlight.visible = visible
+  }, NODE_FLASH_INTERVAL_MS)
+
+  nodeFlashTimeoutHandle = window.setTimeout(() => {
+    if (nodeFlashActiveToken !== token) {
+      return
+    }
+    clearNodeFlashTimers()
+    hideNodeFlashIndicator()
+    sceneStore.clearNodeHighlightRequest(nodeId, token)
+  }, NODE_FLASH_DURATION_MS)
+}
+
 type GridHighlightDimensions = { width: number; depth: number }
+
+const NODE_FLASH_DURATION_MS = 1600
+const NODE_FLASH_INTERVAL_MS = 180
 
 function updateGridHighlight(position: THREE.Vector3 | null, dimensions?: GridHighlightDimensions) {
   if (!gridHighlight) {
@@ -6916,6 +7005,33 @@ watch(
     }
     if (focusCameraOnNode(props.focusNodeId)) {
       sceneStore.clearCameraFocusRequest(props.focusNodeId)
+    }
+  }
+)
+
+watch(
+  () => props.highlightRequestId,
+  (token, previous) => {
+    if (!props.highlightNodeId) {
+      return
+    }
+    if (typeof token !== 'number' || token === 0) {
+      return
+    }
+    if (token === previous) {
+      return
+    }
+    triggerNodeFlash(props.highlightNodeId, token)
+  }
+)
+
+watch(
+  () => props.highlightNodeId,
+  (nodeId) => {
+    if (!nodeId) {
+      clearNodeFlashTimers()
+      hideNodeFlashIndicator()
+      nodeFlashActiveToken = null
     }
   }
 )
