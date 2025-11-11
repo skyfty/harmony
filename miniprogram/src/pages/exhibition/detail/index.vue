@@ -214,10 +214,11 @@ async function enterExhibition(): Promise<void> {
   try {
     const result = await apiVisitExhibition(exhibition.value.id);
     exhibition.value = { ...exhibition.value, visitCount: result.visitCount };
-    uni.showToast({ title: '已记录参观', icon: 'none' });
   } catch (err) {
-    uni.showToast({ title: getErrorMessage(err), icon: 'none' });
+    // 记录参观失败不会阻止进入场景，仅在控制台输出便于排查
+    console.warn('[enterExhibition] failed to record visit', err);
   }
+  uni.navigateTo({ url: '/pages/scene-viewer/index' });
 }
 
 async function shareExhibition(): Promise<void> {
