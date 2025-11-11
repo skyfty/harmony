@@ -65,7 +65,7 @@ async function submitForm(): Promise<void> {
     if (isEditing.value && formState.id) {
       await updateAssetTag(formState.id, { name, description: formState.description?.trim() ?? null })
     } else {
-      await createAssetTag({ name, description: formState.description?.trim() ?? null })
+      await createAssetTag({ names: [name], description: formState.description?.trim() ?? null })
     }
     resetForm()
     await loadTags()

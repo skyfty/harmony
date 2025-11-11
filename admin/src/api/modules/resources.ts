@@ -66,9 +66,31 @@ export async function listAssetTags(): Promise<AssetTag[]> {
   return data
 }
 
-export async function createAssetTag(payload: { name: string; description?: string | null }): Promise<AssetTag> {
-  const { data } = await apiClient.post<AssetTag>('/api/resources/tags', payload)
-  return data
+export async function createAssetTag(payload: { name?: string; names?: string[]; description?: string | null }): Promise<AssetTag[]> {
+  const names = new Set<string>()
+  if (Array.isArray(payload.names)) {
+    payload.names
+      .map((value) => (typeof value === 'string' ? value.trim() : ''))
+      .filter((value) => value.length > 0)
+      .forEach((value) => names.add(value))
+  }
+  if (typeof payload.name === 'string') {
+    const trimmed = payload.name.trim()
+    if (trimmed.length > 0) {
+      names.add(trimmed)
+    }
+  }
+  if (!names.size) {
+    throw new Error('标签名称不能为空')
+  }
+  const { data } = await apiClient.post<{ tags: AssetTag[] }>('/api/resources/tags', {
+    names: Array.from(names),
+    description: payload.description ?? null,
+  })
+  if (!data.tags?.length) {
+    throw new Error('服务器返回的标签数据无效')
+  }
+  return data.tags
 }
 
 export async function updateAssetTag(id: string, payload: { name: string; description?: string | null }): Promise<AssetTag> {

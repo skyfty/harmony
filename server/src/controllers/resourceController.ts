@@ -346,6 +346,28 @@ function mapAssetDocument(asset: AssetSource): AssetResponse {
   }
 }
 
+type AssetTagDocumentLike = Pick<AssetTagDocument, '_id' | 'name' | 'description' | 'createdAt' | 'updatedAt'>
+
+function mapAssetTagDocument(tag: AssetTagDocumentLike): {
+  id: string
+  name: string
+  description: string | null
+  createdAt: string
+  updatedAt: string
+} {
+  const id = (tag._id as unknown as Types.ObjectId).toString()
+  const description = sanitizeString(tag.description)
+  const createdAt = tag.createdAt instanceof Date ? tag.createdAt.toISOString() : new Date(tag.createdAt).toISOString()
+  const updatedAt = tag.updatedAt instanceof Date ? tag.updatedAt.toISOString() : new Date(tag.updatedAt).toISOString()
+  return {
+    id,
+    name: tag.name,
+    description,
+    createdAt,
+    updatedAt,
+  }
+}
+
 function mapManifestEntry(asset: AssetSource): AssetManifestEntry {
   const response = mapAssetDocument(asset)
   return {
@@ -657,7 +679,7 @@ export async function updateAsset(ctx: Context): Promise<void> {
     if (count !== tagIds.length) {
       ctx.throw(400, 'One or more tag ids do not exist')
     }
-    updates.tags = tagIds
+    updates.tags = tagIds.map((tagId) => new Types.ObjectId(tagId))
   }
   if (payload.type) {
     const normalizedType = normalizeAssetType(payload.type, asset.type)
@@ -752,33 +774,73 @@ export async function downloadAsset(ctx: Context): Promise<void> {
 
 export async function listAssetTags(ctx: Context): Promise<void> {
   const tags = (await AssetTagModel.find().sort({ name: 1 }).lean().exec()) as AssetTagDocument[]
-  ctx.body = tags.map((tag) => ({
-    id: (tag._id as Types.ObjectId).toString(),
-    name: tag.name,
-    description: sanitizeString(tag.description),
-    createdAt: tag.createdAt instanceof Date ? tag.createdAt.toISOString() : new Date(tag.createdAt).toISOString(),
-    updatedAt: tag.updatedAt instanceof Date ? tag.updatedAt.toISOString() : new Date(tag.updatedAt).toISOString(),
-  }))
+  ctx.body = tags.map((tag) => mapAssetTagDocument(tag))
 }
 
 export async function createAssetTag(ctx: Context): Promise<void> {
   const payload = ctx.request.body as Record<string, unknown> | undefined
-  const name = sanitizeString(payload?.name)
-  if (!name) {
+  const description = sanitizeString(payload?.description)
+  const namesInput: string[] = []
+  namesInput.push(...ensureArrayString(payload?.names))
+  const singleName = sanitizeString(payload?.name)
+  if (singleName) {
+    namesInput.push(singleName)
+  }
+  const normalizedNames: string[] = []
+  const seen = new Set<string>()
+  namesInput.forEach((value) => {
+    const trimmed = value.trim()
+    if (!trimmed.length) {
+      return
+    }
+    const normalized = trimmed.toLowerCase()
+    if (seen.has(normalized)) {
+      return
+    }
+    seen.add(normalized)
+    normalizedNames.push(trimmed)
+  })
+  if (!normalizedNames.length) {
     ctx.throw(400, 'Tag name is required')
   }
-  const description = sanitizeString(payload?.description)
-  const existing = await AssetTagModel.findOne({ name }).select('_id').lean().exec()
-  if (existing) {
-    ctx.throw(409, 'Tag name already exists')
+
+  const existing = (await AssetTagModel.find({ name: { $in: normalizedNames } }).lean().exec()) as AssetTagDocument[]
+  const existingNameMap = new Map<string, AssetTagDocument>()
+  existing.forEach((tag) => {
+    existingNameMap.set(tag.name.trim().toLowerCase(), tag)
+  })
+
+  const created: AssetTagDocument[] = []
+  for (const name of normalizedNames) {
+    const normalized = name.trim().toLowerCase()
+    if (existingNameMap.has(normalized)) {
+      continue
+    }
+    try {
+      const tag = await AssetTagModel.create({ name, description })
+      created.push(tag)
+      existingNameMap.set(normalized, tag)
+    } catch (error) {
+      if ((error as { code?: number }).code === 11000) {
+        const duplicated = await AssetTagModel.findOne({ name }).lean().exec()
+        if (duplicated) {
+          existingNameMap.set(normalized, duplicated as AssetTagDocument)
+        }
+        continue
+      }
+      throw error
+    }
   }
-  const tag = await AssetTagModel.create({ name, description })
+
+  const responseTags = normalizedNames
+    .map((name) => existingNameMap.get(name.trim().toLowerCase()))
+    .filter((tag): tag is AssetTagDocument => !!tag)
+    .map((tag) => mapAssetTagDocument(tag))
+
+  ctx.status = created.length > 0 ? 201 : 200
   ctx.body = {
-    id: (tag._id as Types.ObjectId).toString(),
-    name: tag.name,
-    description: sanitizeString(tag.description),
-    createdAt: tag.createdAt.toISOString(),
-    updatedAt: tag.updatedAt.toISOString(),
+    tags: responseTags,
+    createdTagIds: created.map((tag) => (tag._id as Types.ObjectId).toString()),
   }
 }
 

@@ -67,7 +67,16 @@ export async function fetchAssetTags(): Promise<AssetTagSummary[]> {
     .map((tag) => normalizeTagSummary(tag))
 }
 
-export async function createAssetTag(payload: { name: string; description?: string }): Promise<AssetTagSummary> {
+type CreateAssetTagResponse = {
+  tags?: ServerAssetTagDto[] | null
+  createdTagIds?: string[] | null
+}
+
+export async function createAssetTag(payload: {
+  name?: string
+  names?: string[]
+  description?: string
+}): Promise<AssetTagSummary[]> {
   const url = buildServerApiUrl('/resources/tags')
   const authStore = useAuthStore()
   const headers = new Headers({
@@ -78,12 +87,30 @@ export async function createAssetTag(payload: { name: string; description?: stri
   if (authorization) {
     headers.set('Authorization', authorization)
   }
+  const nameSet = new Set<string>()
+  if (Array.isArray(payload.names)) {
+    payload.names
+      .map((value) => (typeof value === 'string' ? value.trim() : ''))
+      .filter((value) => value.length > 0)
+      .forEach((value) => {
+        nameSet.add(value)
+      })
+  }
+  if (typeof payload.name === 'string') {
+    const trimmed = payload.name.trim()
+    if (trimmed.length > 0) {
+      nameSet.add(trimmed)
+    }
+  }
+  if (nameSet.size === 0) {
+    throw new Error('标签名称不能为空')
+  }
   const response = await fetch(url, {
     method: 'POST',
     credentials: 'include',
     headers,
     body: JSON.stringify({
-      name: payload.name,
+      names: Array.from(nameSet),
       description: payload.description,
     }),
   })
@@ -92,11 +119,14 @@ export async function createAssetTag(payload: { name: string; description?: stri
     const message = typeof errorBody === 'string' ? errorBody : errorBody?.message
     throw new Error(message || `创建标签失败（${response.status}）`)
   }
-  const tag = await parseJsonResponse<ServerAssetTagDto>(response)
-  if (!tag || typeof tag.id !== 'string' || typeof tag.name !== 'string') {
+  const payloadBody = await parseJsonResponse<CreateAssetTagResponse>(response)
+  const tags = Array.isArray(payloadBody?.tags)
+    ? payloadBody.tags.filter((tag): tag is ServerAssetTagDto => !!tag && typeof tag.id === 'string' && typeof tag.name === 'string')
+    : []
+  if (!tags.length) {
     throw new Error('服务器返回的标签数据无效')
   }
-  return normalizeTagSummary(tag)
+  return tags.map((tag) => normalizeTagSummary(tag))
 }
 
 export interface UploadAssetOptions {

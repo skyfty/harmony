@@ -1089,17 +1089,26 @@ async function ensureUploadTagIds(): Promise<string[]> {
     }
   })
 
-  for (const [normalized, original] of pendingNames.entries()) {
+  if (pendingNames.size > 0) {
+    const originalNames = Array.from(pendingNames.values())
     try {
-      const created = await createAssetTag({ name: original })
-      const option = createTagOption(created.id, created.name)
-      const map = new Map(serverTags.value.map((entry) => [entry.value, entry]))
-      map.set(option.value, option)
-      serverTags.value = Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
-      resolved.add(option.value)
-      createdNameMap.set(normalized, option.value)
+      const created = await createAssetTag({ names: originalNames })
+      const optionMap = new Map(serverTags.value.map((entry) => [entry.value, entry]))
+      created.forEach((tag) => {
+        const option = createTagOption(tag.id, tag.name)
+        optionMap.set(option.value, option)
+        createdNameMap.set(option.name.trim().toLowerCase(), option.value)
+      })
+      serverTags.value = Array.from(optionMap.values()).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
+      pendingNames.forEach((_original, normalized) => {
+        const createdId = createdNameMap.get(normalized)
+        if (createdId) {
+          resolved.add(createdId)
+        }
+      })
     } catch (error) {
-      throw new Error((error as Error).message ?? `创建标签“${original}”失败`)
+      const fallback = originalNames[0]
+      throw new Error((error as Error).message ?? (fallback ? `创建标签“${fallback}”失败` : '创建标签失败'))
     }
   }
 
