@@ -80,34 +80,53 @@
         </view>
       </view>
       <view
-        v-if="loading || resourcePreload.active"
+        v-if="loading || resourcePreload.active || sceneDownload.active"
         class="viewer-overlay"
       >
         <view class="viewer-overlay__content">
           <text class="viewer-overlay__message">
-            {{ resourcePreload.active ? '资源加载中…' : '正在加载场景…' }}
+            {{
+              resourcePreload.active
+                ? '资源加载中…'
+                : sceneDownload.active
+                  ? sceneDownload.label || '正在下载场景…'
+                  : '正在加载场景…'
+            }}
           </text>
           <progress
-            v-if="resourcePreload.active"
+            v-if="sceneDownload.active"
+            :percent="sceneDownloadPercent"
+            show-info
+            stroke-width="6"
+            class="viewer-overlay__progress"
+          />
+          <progress
+            v-else-if="resourcePreload.active"
             :percent="resourcePreloadPercent"
             show-info
             stroke-width="6"
             class="viewer-overlay__progress"
           />
           <text
-            v-if="resourcePreload.label"
+            v-if="sceneDownload.active && sceneDownload.total"
+            class="viewer-overlay__caption"
+          >
+            已下载 {{ formatByteSize(sceneDownload.loaded) }} / {{ formatByteSize(sceneDownload.total) }}
+          </text>
+          <text
+            v-if="resourcePreload.label && !sceneDownload.active"
             class="viewer-overlay__caption"
           >
             {{ resourcePreload.label }}
           </text>
           <text
-            v-if="resourcePreloadAssetCaption"
+            v-if="resourcePreloadAssetCaption && !sceneDownload.active"
             class="viewer-overlay__asset"
           >
             {{ resourcePreloadAssetCaption }}
           </text>
           <text
-            v-if="resourcePreload.active && resourcePreload.total"
+            v-if="resourcePreload.active && resourcePreload.total && !sceneDownload.active"
             class="viewer-overlay__caption"
           >
             已加载 {{ resourcePreload.loaded }} / {{ resourcePreload.total }}
@@ -212,6 +231,15 @@ interface ScenePreviewPayload {
 
 type RequestedMode = 'store' | 'document' | 'model' | null;
 
+interface SceneDownloadProgress extends UniApp.OnProgressUpdateResult {
+  totalBytesWritten?: number;
+  totalBytesExpectedToWrite?: number;
+}
+
+type SceneRequestTask = UniApp.RequestTask & {
+  onProgressUpdate?: (callback: (res: SceneDownloadProgress) => void) => void;
+};
+
 interface RenderContext {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
@@ -220,6 +248,8 @@ interface RenderContext {
 }
 
 const PRESET_ASSET_BASE_URL = '/package-scene/static/preset';
+const DEFAULT_SCENE_URL = 'https://cdn.touchmagic.cn/uploads/UntitledScene(4).json';
+const SCENE_DOWNLOAD_TIMEOUT = 120000;
 
 const sceneStore = useSceneStore();
 const canvasId = `scene-viewer-${Date.now()}`;
@@ -249,6 +279,14 @@ const resourcePreload = reactive({
   currentKind: '' as SceneGraphResourceProgress['kind'] | '',
 });
 
+const sceneDownload = reactive({
+  active: false,
+  loaded: 0,
+  total: 0,
+  percent: 0,
+  label: '正在下载场景数据…',
+});
+
 const resourcePreloadPercent = computed(() => {
   const total = resourcePreload.total;
   const loaded = resourcePreload.loaded;
@@ -267,10 +305,19 @@ const resourcePreloadPercent = computed(() => {
   return resourcePreload.active ? 0 : 100;
 });
 
+const sceneDownloadPercent = computed(() => {
+  if (!sceneDownload.active) {
+    return 0;
+  }
+  const normalized = Math.max(0, Math.min(100, Math.round(sceneDownload.percent)));
+  return Number.isFinite(normalized) ? normalized : 0;
+});
+
 const sceneAssetCache = new AssetCache();
 const sceneAssetLoader = new AssetLoader(sceneAssetCache);
 let sharedResourceCache: ResourceCache | null = null;
 let viewerResourceCache: ResourceCache | null = null;
+let sceneDownloadTask: SceneRequestTask | null = null;
 
 function ensureResourceCache(
   document: SceneJsonExportDocument,
@@ -2748,6 +2795,128 @@ function parseInlineSceneDocument(raw: string): SceneJsonExportDocument {
   throw new Error('无法解析场景数据');
 }
 
+function normalizeSceneUrl(raw: string): string {
+  if (!raw) {
+    return '';
+  }
+  const trimmed = raw.trim();
+  if (!trimmed.length) {
+    return '';
+  }
+  try {
+    return decodeURIComponent(trimmed);
+  } catch (_error) {
+    return trimmed;
+  }
+}
+
+async function loadSceneFromUrl(url: string): Promise<void> {
+  const normalizedUrl = url.trim();
+  if (!normalizedUrl) {
+    error.value = '场景地址不能为空';
+    loading.value = false;
+    return;
+  }
+  error.value = null;
+  resetSceneDownloadState();
+  sceneDownload.active = true;
+  sceneDownload.label = '正在下载场景数据…';
+  try {
+    const document = await requestSceneDocument(normalizedUrl);
+    previewPayload.value = {
+      document,
+      title: document.name || '场景预览',
+      origin: normalizedUrl,
+      createdAt: document.createdAt,
+      updatedAt: document.updatedAt,
+    };
+  } catch (downloadError) {
+    console.error(downloadError);
+    const message = downloadError instanceof Error ? downloadError.message : '场景下载失败';
+    error.value = message;
+    previewPayload.value = null;
+    loading.value = false;
+  } finally {
+    resetSceneDownloadState();
+  }
+}
+
+function requestSceneDocument(url: string): Promise<SceneJsonExportDocument> {
+  return new Promise((resolve, reject) => {
+    if (sceneDownloadTask) {
+      sceneDownloadTask.abort();
+      sceneDownloadTask = null;
+    }
+    const task = uni.request({
+      url,
+      method: 'GET',
+      responseType: 'text',
+      timeout: SCENE_DOWNLOAD_TIMEOUT,
+      success: (res) => {
+        const statusCode = typeof res.statusCode === 'number' ? res.statusCode : 200;
+        if (statusCode >= 400) {
+          reject(new Error(`场景下载失败（${statusCode}）`));
+          return;
+        }
+        try {
+          const payload = typeof res.data === 'string' ? res.data : JSON.stringify(res.data ?? {});
+          const document = parseSceneDocument(payload);
+          resolve(document);
+        } catch (parseError) {
+          const message = parseError instanceof Error ? parseError.message : '场景数据解析失败';
+          reject(new Error(message));
+        }
+      },
+      fail: (requestError) => {
+        const message =
+          requestError && typeof requestError === 'object' && 'errMsg' in requestError
+            ? String((requestError as { errMsg: unknown }).errMsg)
+            : '场景下载失败';
+        reject(new Error(message));
+      },
+      complete: () => {
+        sceneDownloadTask = null;
+      },
+    }) as SceneRequestTask;
+    sceneDownloadTask = task;
+    task?.onProgressUpdate?.((info: SceneDownloadProgress) => {
+      if (typeof info.progress === 'number' && Number.isFinite(info.progress)) {
+        sceneDownload.percent = info.progress;
+        sceneDownload.label = `正在下载场景数据… ${Math.max(0, Math.min(100, Math.round(info.progress)))}%`;
+      }
+      if (typeof info.totalBytesWritten === 'number') {
+        sceneDownload.loaded = info.totalBytesWritten;
+      }
+      if (typeof info.totalBytesExpectedToWrite === 'number') {
+        sceneDownload.total = info.totalBytesExpectedToWrite;
+      }
+    });
+  });
+}
+
+function resetSceneDownloadState(): void {
+  sceneDownload.active = false;
+  sceneDownload.loaded = 0;
+  sceneDownload.total = 0;
+  sceneDownload.percent = 0;
+  sceneDownload.label = '正在下载场景数据…';
+}
+
+function formatByteSize(value: number): string {
+  if (!value || value <= 0) {
+    return '0B';
+  }
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let size = value;
+  let index = 0;
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024;
+    index += 1;
+  }
+  const digits = index === 0 ? 0 : size >= 100 ? 0 : size >= 10 ? 1 : 2;
+  return `${size.toFixed(digits)}${units[index]}`;
+}
+
 function createModelPreviewPayload(args: { url: string; name?: string; assetId?: string }): ScenePreviewPayload {
   const assetUrl = args.url?.trim();
   if (!assetUrl) {
@@ -3262,6 +3431,8 @@ onLoad((query) => {
       : typeof query?.model === 'string'
         ? query.model
         : '';
+  const sceneUrlParamRaw = typeof query?.sceneUrl === 'string' ? query.sceneUrl : '';
+  const sceneUrlParam = normalizeSceneUrl(sceneUrlParamRaw);
 
   error.value = null;
 
@@ -3306,9 +3477,16 @@ onLoad((query) => {
       loading.value = false;
     }
   } else {
-    requestedMode.value = null;
-    error.value = '缺少场景数据';
-    loading.value = false;
+    const targetUrl = sceneUrlParam || DEFAULT_SCENE_URL;
+    if (targetUrl) {
+      requestedMode.value = 'document';
+      loading.value = true;
+      void loadSceneFromUrl(targetUrl);
+    } else {
+      requestedMode.value = null;
+      error.value = '缺少场景数据';
+      loading.value = false;
+    }
   }
 
   bootstrapFinished.value = true;
@@ -3334,6 +3512,11 @@ onUnload(() => {
     uni.offWindowResize(handleResize);
     resizeListener = null;
   }
+  if (sceneDownloadTask) {
+    sceneDownloadTask.abort();
+    sceneDownloadTask = null;
+  }
+  resetSceneDownloadState();
   sharedResourceCache = null;
   (globalThis as typeof globalThis & { [DISPLAY_BOARD_RESOLVER_KEY]?: typeof resolveDisplayBoardMediaSource })[
     DISPLAY_BOARD_RESOLVER_KEY
@@ -3347,6 +3530,11 @@ onUnmounted(() => {
     uni.offWindowResize(handleResize);
     resizeListener = null;
   }
+  if (sceneDownloadTask) {
+    sceneDownloadTask.abort();
+    sceneDownloadTask = null;
+  }
+  resetSceneDownloadState();
   sharedResourceCache = null;
   (globalThis as typeof globalThis & { [DISPLAY_BOARD_RESOLVER_KEY]?: typeof resolveDisplayBoardMediaSource })[
     DISPLAY_BOARD_RESOLVER_KEY
