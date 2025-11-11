@@ -5,10 +5,23 @@ const assetSchema = new Schema<AssetDocument>(
   {
     name: { type: String, required: true, trim: true },
     categoryId: { type: Schema.Types.ObjectId, ref: 'AssetCategory', required: true },
-    type: { type: String, enum: ['model', 'image', 'texture', 'file'], required: true },
+    type: {
+      type: String,
+      enum: ['model', 'image', 'texture', 'material', 'file'],
+      required: true,
+    },
+    tags: {
+      type: [{ type: Schema.Types.ObjectId, ref: 'AssetTag' }],
+      default: [],
+    },
     size: { type: Number, default: 0 },
     url: { type: String, required: true },
+    fileKey: { type: String, required: true },
     previewUrl: { type: String },
+    thumbnailUrl: { type: String },
+    description: { type: String },
+    originalFilename: { type: String },
+    mimeType: { type: String },
     metadata: { type: Schema.Types.Mixed },
   },
   {
@@ -18,5 +31,7 @@ const assetSchema = new Schema<AssetDocument>(
 )
 
 assetSchema.index({ categoryId: 1, createdAt: -1 })
+assetSchema.index({ type: 1, createdAt: -1 })
+assetSchema.index({ tags: 1 })
 
 export const AssetModel = model<AssetDocument>('Asset', assetSchema)

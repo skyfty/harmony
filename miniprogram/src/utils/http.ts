@@ -1,7 +1,8 @@
 const DEFAULT_BASE_URL = 'http://cdn.touchmagic.cn/api/mini';
 
 export function getBaseUrl(): string {
-  return import.meta.env?.VITE_MINI_API_BASE || DEFAULT_BASE_URL;
+  const raw = import.meta.env?.VITE_MINI_API_BASE || DEFAULT_BASE_URL;
+  return raw.endsWith('/') ? raw.slice(0, -1) : raw;
 }
 
 export function getApiOrigin(): string {

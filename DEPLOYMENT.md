@@ -74,6 +74,11 @@ nano .env.production
 # 若需要自定义编辑器域名，调整 EDITOR_PUBLIC_URL
 ```
 
+前端项目同样提供 `.env.development` 与 `.env.production`，默认分别指向本地与生产域名，可按需调整：
+- `admin/.env.development`、`admin/.env.production`
+- `editor/.env.development`、`editor/.env.production`
+开发阶段保持默认即可连接本地 `http://localhost:4000`，上线前将生产文件中的域名替换为实际服务器地址。
+
 关键变量说明：
 - `MONGODB_URI=mongodb://mongo:27017/harmony`：容器内部使用服务名 `mongo` 与其内部端口 27017，不受宿主机映射影响。
 - `ASSET_PUBLIC_URL=https://cdn.touchmagic.cn/uploads`：用于上传资源外链访问；反向代理需对应配置路径 `/uploads`。

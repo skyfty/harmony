@@ -6,5 +6,7 @@ export interface ProjectAsset {
   downloadUrl: string
   previewColor: string
   thumbnail?: string | null
+  tags?: string[]
+  tagIds?: string[]
   gleaned: boolean
 }

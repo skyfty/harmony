@@ -149,6 +149,13 @@ let dropFeedbackTimer: number | null = null
 
 type AssetCategoryKey = AssetCategoryDefinition['key']
 
+type TagOption = {
+  value: string
+  label: string
+  id?: string
+  name: string
+}
+
 const CATEGORY_KEY_TO_TYPE: Record<AssetCategoryKey, ProjectAsset['type']> = {
   models: 'model',
   images: 'image',
@@ -776,7 +783,85 @@ let searchDebounceHandle: ReturnType<typeof setTimeout> | null = null
 
 const normalizedSearchQuery = computed(() => searchQuery.value.trim())
 const isSearchActive = computed(() => searchLoaded.value && normalizedSearchQuery.value.length > 0)
-const displayedAssets = computed(() => (isSearchActive.value ? searchResults.value : currentAssets.value))
+const tagFilterValues = ref<string[]>([])
+
+const baseDisplayedAssets = computed(() => (isSearchActive.value ? searchResults.value : currentAssets.value))
+
+const tagOptions = computed<TagOption[]>(() => {
+  const map = new Map<string, TagOption>()
+  baseDisplayedAssets.value.forEach((asset) => {
+    const tagNames = Array.isArray(asset.tags) ? asset.tags : []
+    const tagIds = Array.isArray(asset.tagIds) ? asset.tagIds : []
+    if (tagIds.length && tagNames.length && tagIds.length === tagNames.length) {
+      tagIds.forEach((id, index) => {
+        const name = tagNames[index] ?? id
+        if (!map.has(id)) {
+          map.set(id, { value: id, label: name, id, name })
+        }
+      })
+      return
+    }
+    if (tagNames.length) {
+      tagNames.forEach((name) => {
+        if (!map.has(name)) {
+          map.set(name, { value: name, label: name, name })
+        }
+      })
+      return
+    }
+    if (tagIds.length) {
+      tagIds.forEach((id) => {
+        if (!map.has(id)) {
+          map.set(id, { value: id, label: id, id, name: id })
+        }
+      })
+    }
+  })
+  return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
+})
+
+const tagOptionMap = computed(() => {
+  const entries = tagOptions.value.map((option) => [option.value, option] as const)
+  return new Map<string, TagOption>(entries)
+})
+
+function assetMatchesSelectedTags(asset: ProjectAsset, selectedValues: string[]): boolean {
+  if (!selectedValues.length) {
+    return true
+  }
+  const assetIds = new Set((asset.tagIds ?? []).filter((id) => typeof id === 'string'))
+  const assetNames = new Set((asset.tags ?? []).map((name) => name.toLowerCase()))
+  return selectedValues.every((value) => {
+    const option = tagOptionMap.value.get(value)
+    if (option?.id && assetIds.has(option.id)) {
+      return true
+    }
+    const normalizedName = (option?.name ?? value).toLowerCase()
+    if (assetNames.has(normalizedName)) {
+      return true
+    }
+    return assetIds.has(value) || assetNames.has(value.toLowerCase())
+  })
+}
+
+const displayedAssets = computed(() => {
+  const base = baseDisplayedAssets.value
+  if (!tagFilterValues.value.length) {
+    return base
+  }
+  return base.filter((asset) => assetMatchesSelectedTags(asset, tagFilterValues.value))
+})
+
+watch(tagOptions, (options) => {
+  if (!tagFilterValues.value.length) {
+    return
+  }
+  const available = new Set(options.map((option) => option.value))
+  const filtered = tagFilterValues.value.filter((value) => available.has(value))
+  if (filtered.length !== tagFilterValues.value.length) {
+    tagFilterValues.value = filtered
+  }
+})
 
 const galleryDirectories = computed(() => {
   if (isSearchActive.value) {
@@ -1680,6 +1765,26 @@ onBeforeUnmount(() => {
               {{ dropFeedback.message }}
             </div>
             <v-divider />
+            <div v-if="tagOptions.length" class="project-tag-filter">
+              <v-autocomplete
+                v-model="tagFilterValues"
+                :items="tagOptions"
+                item-title="label"
+                item-value="value"
+                label="按标签筛选"
+                density="comfortable"
+                variant="outlined"
+                chips
+                closable-chips
+                multiple
+                clearable
+                hide-details
+              >
+                <template #prepend>
+                  <v-icon icon="mdi-tag" class="mr-2" />
+                </template>
+              </v-autocomplete>
+            </div>
             <div class="project-gallery-scroll">
               <div v-if="galleryDirectories.length" class="gallery-grid gallery-grid--directories">
                 <v-card
@@ -1901,6 +2006,12 @@ onBeforeUnmount(() => {
 .project-gallery-scroll {
   flex: 1;
   overflow-y: auto;
+}
+
+.project-tag-filter {
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background-color: rgba(8, 12, 18, 0.6);
 }
 
 .tree-view {

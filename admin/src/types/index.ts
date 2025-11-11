@@ -97,14 +97,14 @@ export interface PagedResponse<T> {
 export interface ResourceCategory {
   id: string
   name: string
-  type: 'model' | 'image' | 'texture' | 'file'
+  type: AssetType
   description?: string
 }
 
 export interface ProjectAssetSummary {
   id: string
   name: string
-  type: 'model' | 'image' | 'texture' | 'file'
+  type: AssetType
   downloadUrl: string
   previewColor?: string
   thumbnail?: string | null
@@ -119,14 +119,34 @@ export interface ProjectDirectory {
   assets?: ProjectAssetSummary[]
 }
 
+export type AssetType = 'model' | 'image' | 'texture' | 'material' | 'file'
+
+export interface AssetTagSummary {
+  id: string
+  name: string
+}
+
+export interface AssetTag extends AssetTagSummary {
+  description?: string | null
+  createdAt?: string
+  updatedAt?: string
+}
+
 export interface ManagedAsset {
   id: string
   name: string
   categoryId: string
-  type: 'model' | 'image' | 'texture' | 'file'
+  type: AssetType
+  tags: AssetTagSummary[]
+  tagIds: string[]
   size: number
   url: string
-  previewUrl?: string
+  downloadUrl: string
+  previewUrl?: string | null
+  thumbnailUrl?: string | null
+  description?: string | null
+  originalFilename?: string | null
+  mimeType?: string | null
   metadata?: Record<string, unknown>
   createdAt: string
   updatedAt: string
@@ -134,4 +154,12 @@ export interface ManagedAsset {
 
 export interface UploadAssetResponse {
   asset: ManagedAsset
+}
+
+export interface AssetMutationPayload {
+  name?: string
+  type?: AssetType
+  description?: string | null
+  tagIds?: string[]
+  categoryId?: string | null
 }
