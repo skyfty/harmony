@@ -1,5 +1,15 @@
 import { AssetTypes, DEFAULT_ASSET_TYPE, isAssetType } from '@harmony/schema/asset-types'
 import type { AssetType } from '@harmony/schema/asset-types'
+import type {
+  AssetCategory as AssetCategoryDto,
+  AssetDirectory,
+  AssetManifest as AssetManifestDto,
+  AssetManifestEntry as AssetManifestEntryDto,
+  AssetSummary,
+  AssetTag,
+  AssetTagSummary,
+  PagedResponse as PagedResponseDto,
+} from '@harmony/schema/asset-api'
 import type { Context } from 'koa'
 import path from 'node:path'
 import fs from 'fs-extra'
@@ -45,49 +55,6 @@ type UploadedFile = {
 
 type LeanAsset = AssetDocument & { tags?: AssetTagDocument[] }
 
-type AssetResponse = {
-  id: string
-  name: string
-  categoryId: string
-  type: AssetDocument['type']
-  tags: Array<{ id: string; name: string }>
-  tagIds: string[]
-  size: number
-  url: string
-  downloadUrl: string
-  previewUrl: string | null
-  thumbnailUrl: string | null
-  description: string | null
-  originalFilename: string | null
-  mimeType: string | null
-  createdAt: string
-  updatedAt: string
-}
-
-type AssetManifestTag = {
-  id: string
-  name: string
-}
-
-type AssetManifestEntry = {
-  id: string
-  name: string
-  type: AssetDocument['type']
-  tags: AssetManifestTag[]
-  tagIds: string[]
-  downloadUrl: string
-  thumbnailUrl: string | null
-  description: string | null
-  createdAt: string
-  updatedAt: string
-  size: number
-}
-
-type AssetManifest = {
-  generatedAt: string
-  assets: AssetManifestEntry[]
-}
-
 type AssetCategoryData = {
   _id: Types.ObjectId
   name: AssetCategoryDocument['name']
@@ -116,24 +83,6 @@ type AssetData = {
   updatedAt: Date
 }
 
-interface ProjectDirectoryAsset {
-  id: string
-  name: string
-  type: AssetDocument['type']
-  downloadUrl: string
-  previewColor: string
-  thumbnail: string | null
-  description: string | null
-  gleaned: boolean
-}
-
-interface ProjectDirectory {
-  id: string
-  name: string
-  type: AssetCategoryDocument['type']
-  assets: ProjectDirectoryAsset[]
-}
-
 type AssetSource = LeanAsset | AssetData
 
 type AssetListQuery = {
@@ -151,6 +100,21 @@ type AssetMutationPayload = {
   description?: string | null
   tagIds?: string[]
   categoryId?: string | null
+}
+
+type ProjectDirectoryAsset = {
+  id: string
+  name: string
+  type: AssetType
+  downloadUrl: string
+  previewColor: string
+  thumbnail: string | null
+  description: string | null
+  gleaned: boolean
+}
+
+type ProjectDirectory = AssetDirectory<ProjectDirectoryAsset> & {
+  type: AssetType
 }
 
 function ensureArrayString(input: unknown): string[] {
@@ -309,7 +273,7 @@ async function resolveCategoryId(type: AssetDocument['type'], categoryId?: strin
   return created._id as Types.ObjectId
 }
 
-function mapTagDocument(tag: AssetTagDocument | Types.ObjectId): { id: string; name: string } | null {
+function mapTagDocument(tag: AssetTagDocument | Types.ObjectId): AssetTagSummary | null {
   if (tag instanceof Types.ObjectId) {
     return { id: tag.toString(), name: tag.toString() }
   }
@@ -320,13 +284,13 @@ function mapTagDocument(tag: AssetTagDocument | Types.ObjectId): { id: string; n
   return { id, name: tag.name }
 }
 
-function mapAssetDocument(asset: AssetSource): AssetResponse {
+function mapAssetDocument(asset: AssetSource): AssetSummary {
   const assetId = (asset._id as Types.ObjectId).toString()
   const categoryObjectId = (asset.categoryId as Types.ObjectId).toString()
   const tagsRaw = Array.isArray(asset.tags) ? asset.tags : []
   const tags = tagsRaw
     .map((tag) => mapTagDocument(tag as AssetTagDocument | Types.ObjectId))
-    .filter((tag): tag is { id: string; name: string } => !!tag)
+    .filter((tag): tag is AssetTagSummary => !!tag)
 
   const previewUrl = asset.previewUrl ?? asset.thumbnailUrl ?? null
 
@@ -344,8 +308,8 @@ function mapAssetDocument(asset: AssetSource): AssetResponse {
     name: asset.name,
     categoryId: categoryObjectId,
     type: asset.type,
-    tags,
-    tagIds: tags.map((tag) => tag.id),
+  tags,
+  tagIds: tags.map((tag) => tag.id),
     size: asset.size ?? 0,
     url: asset.url,
     downloadUrl: asset.url,
@@ -361,13 +325,7 @@ function mapAssetDocument(asset: AssetSource): AssetResponse {
 
 type AssetTagDocumentLike = Pick<AssetTagDocument, '_id' | 'name' | 'description' | 'createdAt' | 'updatedAt'>
 
-function mapAssetTagDocument(tag: AssetTagDocumentLike): {
-  id: string
-  name: string
-  description: string | null
-  createdAt: string
-  updatedAt: string
-} {
+function mapAssetTagDocument(tag: AssetTagDocumentLike): AssetTag {
   const id = (tag._id as unknown as Types.ObjectId).toString()
   const description = sanitizeString(tag.description)
   const createdAt = tag.createdAt instanceof Date ? tag.createdAt.toISOString() : new Date(tag.createdAt).toISOString()
@@ -381,44 +339,44 @@ function mapAssetTagDocument(tag: AssetTagDocumentLike): {
   }
 }
 
-function mapManifestEntry(asset: AssetSource): AssetManifestEntry {
+function mapManifestEntry(asset: AssetSource): AssetManifestEntryDto {
   const response = mapAssetDocument(asset)
   return {
     id: response.id,
     name: response.name,
     type: response.type,
-    tags: response.tags,
+    tags: response.tags ?? [],
     tagIds: response.tagIds,
     downloadUrl: response.downloadUrl,
-    thumbnailUrl: response.thumbnailUrl,
-    description: response.description,
+    thumbnailUrl: response.thumbnailUrl ?? null,
+    description: response.description ?? null,
     createdAt: response.createdAt,
     updatedAt: response.updatedAt,
     size: response.size,
   }
 }
 
-async function readManifestFromDisk(): Promise<AssetManifest | null> {
+async function readManifestFromDisk(): Promise<AssetManifestDto | null> {
   const manifestPath = path.join(appConfig.assetStoragePath, MANIFEST_FILENAME)
   if (!(await fs.pathExists(manifestPath))) {
     return null
   }
   try {
     const content = await fs.readFile(manifestPath, 'utf-8')
-    return JSON.parse(content) as AssetManifest
+      return JSON.parse(content) as AssetManifestDto
   } catch (error) {
     console.warn('Failed to read asset manifest from disk', error)
     return null
   }
 }
 
-async function writeManifestToDisk(manifest: AssetManifest): Promise<void> {
+async function writeManifestToDisk(manifest: AssetManifestDto): Promise<void> {
   await ensureStorageDir()
   const manifestPath = path.join(appConfig.assetStoragePath, MANIFEST_FILENAME)
-  await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8')
+    await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8')
 }
 
-async function buildManifest(): Promise<AssetManifest> {
+async function buildManifest(): Promise<AssetManifestDto> {
   const assets = (await AssetModel.find()
     .sort({ updatedAt: -1 })
     .populate('tags')
@@ -485,7 +443,7 @@ function buildAssetFilter(query: AssetListQuery): Record<string, unknown> {
   return filter
 }
 
-async function refreshManifest(): Promise<AssetManifest> {
+async function refreshManifest(): Promise<AssetManifestDto> {
   const manifest = await buildManifest()
   await writeManifestToDisk(manifest)
   return manifest

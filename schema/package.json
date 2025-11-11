@@ -13,6 +13,10 @@
     "./asset-types": {
       "types": "./asset-types.d.ts",
       "default": "./asset-types.js"
+    },
+    "./asset-api": {
+      "types": "./asset-api.d.ts",
+      "default": "./asset-api.js"
     }
   }
 }

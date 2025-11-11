@@ -6,6 +6,18 @@ export type { AssetCacheEntry, AssetCacheStatus, AssetSource, AssetLoadOptions }
 
 export type { AssetType } from './asset-types'
 export { AssetTypes, DEFAULT_ASSET_TYPE, isAssetType, normalizeAssetType } from './asset-types'
+export type {
+  AssetCategory,
+  AssetDirectory,
+  AssetManifest,
+  AssetManifestEntry,
+  AssetSummary,
+  AssetTag,
+  AssetTagSummary,
+  AssetUploadResponse,
+  PagedRequest,
+  PagedResponse,
+} from './asset-api'
 
 export type Vector2Like = THREE.Vector2 | { x: number; y: number }
 export type Vector3Like = THREE.Vector3 | { x: number; y: number; z: number }
