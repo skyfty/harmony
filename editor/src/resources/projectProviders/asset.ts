@@ -1,6 +1,7 @@
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { buildServerApiUrl } from '@/api/serverApiConfig'
+import { mapServerAssetToProjectAsset, normalizeServerAssetType } from '@/api/serverAssetTypes'
 import type { ResourceProvider } from './types'
 
 interface AssetManifestTag {
@@ -15,6 +16,7 @@ interface AssetManifestEntry {
   tags?: AssetManifestTag[]
   tagIds?: string[]
   downloadUrl: string
+  previewUrl?: string | null
   thumbnailUrl?: string | null
   description?: string | null
   createdAt?: string
@@ -33,16 +35,6 @@ const TYPE_LABELS: Record<string, string> = {
   texture: 'Texture',
   material: 'Material',
   file: 'File',
-}
-
-const TYPE_COLORS: Record<ProjectAsset['type'], string> = {
-  model: '#26C6DA',
-  image: '#1E88E5',
-  texture: '#8E24AA',
-  material: '#FFB74D',
-  behavior: '#4DB6AC',
-  prefab: '#7986CB',
-  file: '#546E7A',
 }
 
 function buildManifestUrl(): string {
@@ -68,50 +60,30 @@ async function fetchManifest(): Promise<AssetManifest> {
   return payload
 }
 
-function normalizeAssetType(type: string | undefined): ProjectAsset['type'] {
-  switch (type) {
-    case 'model':
-    case 'image':
-    case 'texture':
-    case 'material':
-    case 'file':
-    case 'behavior':
-    case 'prefab':
-      return type
-    case 'mesh':
-      return 'model'
-    default:
-      return 'file'
-  }
-}
-
 function mapManifestEntry(entry: AssetManifestEntry): ProjectAsset {
-  const assetType = normalizeAssetType(entry.type as string)
-  const tags = Array.isArray(entry.tags) ? entry.tags.map((tag) => tag.name) : []
-  const tagIds = Array.isArray(entry.tagIds) ? entry.tagIds : Array.isArray(entry.tags) ? entry.tags.map((tag) => tag.id) : []
-
-  return {
+  return mapServerAssetToProjectAsset({
     id: entry.id,
     name: entry.name,
-    type: assetType,
-    description: entry.description ?? undefined,
+    type: entry.type,
     downloadUrl: entry.downloadUrl,
-    previewColor: TYPE_COLORS[assetType] ?? '#546E7A',
-    thumbnail: entry.thumbnailUrl ?? null,
-    tags,
-    tagIds,
-    gleaned: false,
-  }
+    url: entry.downloadUrl,
+    previewUrl: entry.previewUrl ?? entry.thumbnailUrl ?? null,
+    thumbnailUrl: entry.thumbnailUrl ?? null,
+    description: entry.description ?? undefined,
+    tags: entry.tags,
+    tagIds: entry.tagIds,
+  })
 }
 
 function buildDirectories(entries: AssetManifestEntry[]): ProjectDirectory[] {
   const grouped = new Map<string, ProjectAsset[]>()
   entries.forEach((entry) => {
-    const type = normalizeAssetType(entry.type as string)
+    const asset = mapManifestEntry(entry)
+    const type = normalizeServerAssetType(asset.type)
     if (!grouped.has(type)) {
       grouped.set(type, [])
     }
-    grouped.get(type)!.push(mapManifestEntry(entry))
+    grouped.get(type)!.push(asset)
   })
 
   return Array.from(grouped.entries()).map(([type, assets]) => ({
@@ -123,7 +95,7 @@ function buildDirectories(entries: AssetManifestEntry[]): ProjectDirectory[] {
 
 export const assetProvider: ResourceProvider = {
   id: 'server-assets',
-  name: 'assets',
+  name: 'Preset',
   url: null,
   includeInPackages: true,
   async load(): Promise<ProjectDirectory[]> {

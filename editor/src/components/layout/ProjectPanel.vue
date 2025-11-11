@@ -18,6 +18,7 @@ import { resourceProviders } from '@/resources/projectProviders'
 import { loadProviderCatalog, storeProviderCatalog } from '@/stores/providerCatalogCache'
 import { getCachedModelObject } from '@/stores/modelObjectCache'
 import { dataUrlToBlob, extractExtension } from '@/utils/blob'
+import { createAssetTag, fetchAssetTags, mapServerAssetToProjectAsset, uploadAssetToServer } from '@/api/resourceAssets'
 
 const OPENED_DIRECTORIES_STORAGE_KEY = 'harmony:project-panel:opened-directories'
 function restoreOpenedDirectories(): string[] {
@@ -123,6 +124,7 @@ const {
   currentDirectory,
   projectPanelTreeSize,
   draggingAssetId,
+  assetIndex,
 } = storeToRefs(sceneStore)
 
 const openedDirectories = ref<string[]>(restoreOpenedDirectories())
@@ -146,6 +148,15 @@ const dropProcessing = ref(false)
 const dropDragDepth = ref(0)
 const dropFeedback = ref<{ kind: 'success' | 'error'; message: string } | null>(null)
 let dropFeedbackTimer: number | null = null
+const uploadDialogOpen = ref(false)
+const uploadEntries = ref<UploadAssetEntry[]>([])
+const uploadSelectedTagIds = ref<string[]>([])
+const uploadSubmitting = ref(false)
+const uploadError = ref<string | null>(null)
+const serverTags = ref<TagOption[]>([])
+const serverTagsLoaded = ref(false)
+const serverTagsLoading = ref(false)
+const serverTagsError = ref<string | null>(null)
 
 type AssetCategoryKey = AssetCategoryDefinition['key']
 
@@ -154,6 +165,34 @@ type TagOption = {
   label: string
   id?: string
   name: string
+}
+
+type UploadAssetEntry = {
+  assetId: string
+  asset: ProjectAsset
+  name: string
+  description: string
+  status: 'pending' | 'uploading' | 'success' | 'error'
+  error: string | null
+  uploadedAssetId: string | null
+}
+
+function createTagOption(id: string, name: string): TagOption {
+  const label = name && name.trim().length ? name.trim() : id
+  return {
+    value: id,
+    label,
+    id,
+    name: label,
+  }
+}
+
+function findTagOptionByName(options: TagOption[], name: string): TagOption | undefined {
+  const normalized = name.trim().toLowerCase()
+  if (!normalized) {
+    return undefined
+  }
+  return options.find((option) => option.name.toLowerCase() === normalized || option.label.toLowerCase() === normalized)
 }
 
 const CATEGORY_KEY_TO_TYPE: Record<AssetCategoryKey, ProjectAsset['type']> = {
@@ -504,6 +543,19 @@ async function ensureAssetCached(asset: ProjectAsset) {
   }
 }
 
+async function createUploadFileFromCache(asset: ProjectAsset): Promise<File> {
+  let file = assetCacheStore.createFileFromCache(asset.id)
+  if (file) {
+    return file
+  }
+  await assetCacheStore.loadFromIndexedDb(asset.id)
+  file = assetCacheStore.createFileFromCache(asset.id)
+  if (file) {
+    return file
+  }
+  throw new Error('资源文件尚未缓存，无法上传')
+}
+
 async function handleAddAsset(asset: ProjectAsset) {
   if (addPendingAssetId.value === asset.id) {
     return
@@ -829,6 +881,29 @@ const tagOptionMap = computed(() => {
   return new Map<string, TagOption>(entries)
 })
 
+const uploadTagOptions = computed(() => {
+  const map = new Map<string, TagOption>()
+  serverTags.value.forEach((option) => {
+    if (!map.has(option.value)) {
+      map.set(option.value, option)
+    }
+  })
+  tagOptions.value.forEach((option) => {
+    if (!map.has(option.value)) {
+      map.set(option.value, option)
+    }
+  })
+  return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
+})
+
+const uploadableSelectedAssets = computed(() =>
+  selectedAssets.value.filter((asset) => assetIndex.value?.[asset.id]?.source?.type === 'local'),
+)
+
+const canUploadSelection = computed(() => uploadableSelectedAssets.value.length > 0)
+
+const canSubmitUpload = computed(() => uploadEntries.value.length > 0 && !uploadSubmitting.value)
+
 function assetMatchesSelectedTags(asset: ProjectAsset, selectedValues: string[]): boolean {
   if (!selectedValues.length) {
     return true
@@ -864,6 +939,14 @@ watch(tagOptions, (options) => {
   const filtered = tagFilterValues.value.filter((value) => available.has(value))
   if (filtered.length !== tagFilterValues.value.length) {
     tagFilterValues.value = filtered
+  }
+})
+
+watch(uploadDialogOpen, (open) => {
+  if (open) {
+    void loadServerTags()
+  } else if (!uploadSubmitting.value) {
+    resetUploadState()
   }
 })
 
@@ -911,6 +994,219 @@ function showDropFeedback(kind: 'success' | 'error', message: string) {
     dropFeedback.value = null
     dropFeedbackTimer = null
   }, 4000)
+}
+
+async function loadServerTags(options: { force?: boolean } = {}) {
+  const force = options.force ?? false
+  if (serverTagsLoading.value) {
+    return
+  }
+  if (serverTagsLoaded.value && !force) {
+    return
+  }
+  serverTagsLoading.value = true
+  serverTagsError.value = null
+  try {
+    const tags = await fetchAssetTags()
+    if (!Array.isArray(tags)) {
+      serverTags.value = []
+      serverTagsLoaded.value = true
+      return
+    }
+    const map = new Map<string, TagOption>()
+    tags.forEach((tag) => {
+      if (tag && typeof tag.id === 'string' && tag.id.trim().length) {
+        const option = createTagOption(tag.id, typeof tag.name === 'string' ? tag.name : tag.id)
+        map.set(option.value, option)
+      }
+    })
+    serverTags.value = Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
+    serverTagsLoaded.value = true
+  } catch (error) {
+    serverTagsError.value = (error as Error).message ?? '标签加载失败'
+  } finally {
+    serverTagsLoading.value = false
+  }
+}
+
+function resetUploadState() {
+  uploadEntries.value = []
+  uploadSelectedTagIds.value = []
+  uploadError.value = null
+}
+
+function openUploadDialog() {
+  if (!canUploadSelection.value || uploadSubmitting.value) {
+    return
+  }
+  uploadEntries.value = uploadableSelectedAssets.value.map((asset) => ({
+    assetId: asset.id,
+    asset,
+    name: asset.name,
+    description: asset.description ?? '',
+    status: 'pending',
+    error: null,
+    uploadedAssetId: null,
+  }))
+  uploadSelectedTagIds.value = []
+  uploadError.value = null
+  uploadDialogOpen.value = true
+  void loadServerTags()
+}
+
+function closeUploadDialog() {
+  if (uploadSubmitting.value) {
+    return
+  }
+  uploadDialogOpen.value = false
+  resetUploadState()
+}
+
+async function ensureUploadTagIds(): Promise<string[]> {
+  const existingOptions = uploadTagOptions.value
+  const resolved = new Set<string>()
+  const pendingNames = new Map<string, string>()
+  const createdNameMap = new Map<string, string>()
+
+  uploadSelectedTagIds.value.forEach((value) => {
+    const trimmed = value.trim()
+    if (!trimmed.length) {
+      return
+    }
+    const matchById = existingOptions.find((option) => option.value === value)
+    if (matchById) {
+      resolved.add(matchById.value)
+      return
+    }
+    const matchByName = findTagOptionByName(existingOptions, trimmed)
+    if (matchByName) {
+      resolved.add(matchByName.value)
+      return
+    }
+    const normalized = trimmed.toLowerCase()
+    if (!pendingNames.has(normalized)) {
+      pendingNames.set(normalized, trimmed)
+    }
+  })
+
+  for (const [normalized, original] of pendingNames.entries()) {
+    try {
+      const created = await createAssetTag({ name: original })
+      const option = createTagOption(created.id, created.name)
+      const map = new Map(serverTags.value.map((entry) => [entry.value, entry]))
+      map.set(option.value, option)
+      serverTags.value = Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
+      resolved.add(option.value)
+      createdNameMap.set(normalized, option.value)
+    } catch (error) {
+      throw new Error((error as Error).message ?? `创建标签“${original}”失败`)
+    }
+  }
+
+  const updatedOptions = uploadTagOptions.value
+  uploadSelectedTagIds.value = uploadSelectedTagIds.value
+    .map((value) => {
+      const trimmed = value.trim()
+      if (!trimmed.length) {
+        return ''
+      }
+      const matchById = updatedOptions.find((option) => option.value === value)
+      if (matchById) {
+        return matchById.value
+      }
+      const matchByName = findTagOptionByName(updatedOptions, trimmed)
+      if (matchByName) {
+        return matchByName.value
+      }
+      const createdId = createdNameMap.get(trimmed.toLowerCase())
+      return createdId ?? trimmed
+    })
+    .filter((value) => value.trim().length > 0)
+
+  uploadSelectedTagIds.value.forEach((id) => {
+    const match = updatedOptions.find((option) => option.value === id)
+    resolved.add(match ? match.value : id)
+  })
+
+  return Array.from(resolved)
+}
+
+async function submitUpload() {
+  if (uploadSubmitting.value || !uploadEntries.value.length) {
+    return
+  }
+  uploadSubmitting.value = true
+  uploadError.value = null
+  try {
+    const tagIds = await ensureUploadTagIds()
+    const replacementMap = new Map<string, string>()
+    for (const entry of uploadEntries.value) {
+      if (entry.status === 'success') {
+        continue
+      }
+      entry.status = 'uploading'
+      entry.error = null
+      try {
+        const asset = sceneStore.getAsset(entry.assetId) ?? entry.asset
+        if (!asset) {
+          throw new Error('未找到资源信息')
+        }
+        const file = await createUploadFileFromCache(asset)
+        const uploadName = entry.name.trim().length ? entry.name.trim() : asset.name
+        const uploadDescription = entry.description.trim()
+        const serverAsset = await uploadAssetToServer({
+          file,
+          name: uploadName,
+          type: asset.type,
+          description: uploadDescription.length ? uploadDescription : undefined,
+          tagIds,
+        })
+        const mapped = mapServerAssetToProjectAsset(serverAsset)
+        const replaced = sceneStore.replaceLocalAssetWithServerAsset(entry.assetId, mapped, { source: { type: 'url' } })
+        if (!replaced) {
+          throw new Error('更新资源引用失败')
+        }
+        await assetCacheStore.storeAssetBlob(replaced.id, {
+          blob: file,
+          mimeType: file.type || null,
+          filename: file.name,
+          downloadUrl: replaced.downloadUrl,
+        })
+        assetCacheStore.removeCache(entry.assetId)
+        entry.status = 'success'
+        entry.uploadedAssetId = replaced.id
+        replacementMap.set(entry.assetId, replaced.id)
+      } catch (error) {
+        entry.status = 'error'
+        entry.error = (error as Error).message ?? '上传失败'
+      }
+    }
+
+    const hasErrors = uploadEntries.value.some((entry) => entry.status === 'error')
+    if (hasErrors) {
+      uploadError.value = '部分资源上传失败，请检查错误信息后重试。'
+      return
+    }
+
+    if (replacementMap.size) {
+      selectedAssetIds.value = Array.from(
+        new Set(selectedAssetIds.value.map((id) => replacementMap.get(id) ?? id)),
+      )
+      const lastId = Array.from(replacementMap.values()).pop()
+      if (lastId) {
+        sceneStore.selectAsset(lastId)
+      }
+    }
+
+    uploadDialogOpen.value = false
+    const successCount = replacementMap.size || uploadEntries.value.length
+    resetUploadState()
+    showDropFeedback('success', `成功上传 ${successCount} 个资源`)
+  } catch (error) {
+    uploadError.value = (error as Error).message ?? '上传资源失败'
+  } finally {
+    uploadSubmitting.value = false
+  }
 }
 
 function isInternalAssetDrag(event: DragEvent): boolean {
@@ -1740,6 +2036,15 @@ onBeforeUnmount(() => {
                 :disabled="!isToolbarDeleteVisible"
                 @click="requestDeleteSelection"
                 />
+                <v-btn
+                  color="primary"
+                  variant="text"
+                  density="compact"
+                  icon="mdi-cloud-upload"
+                  :disabled="!canUploadSelection"
+                  :title="'上传到服务器'"
+                  @click="openUploadDialog"
+                />
                 <v-divider vertical class="mx-1" />
               <v-text-field
                 v-model="searchQuery"
@@ -1916,6 +2221,99 @@ onBeforeUnmount(() => {
       </Splitpanes>
     </div>
 
+      <v-dialog v-model="uploadDialogOpen" max-width="720" persistent>
+        <v-card>
+          <v-card-title>上传资源到服务器</v-card-title>
+          <v-card-text>
+            <v-alert
+              v-if="uploadError"
+              type="error"
+              variant="tonal"
+              density="comfortable"
+              class="mb-4"
+            >
+              {{ uploadError }}
+            </v-alert>
+            <div class="upload-section">
+              <div
+                v-for="entry in uploadEntries"
+                :key="entry.assetId"
+                class="upload-entry"
+              >
+                <div class="upload-entry__header">
+                  <span class="upload-entry__name">{{ entry.asset.name }}</span>
+                  <v-chip size="small" color="primary" variant="tonal">{{ entry.asset.type }}</v-chip>
+                </div>
+                <v-text-field
+                  v-model="entry.name"
+                  label="资源名称"
+                  density="comfortable"
+                  variant="outlined"
+                  :disabled="uploadSubmitting || entry.status === 'success'"
+                />
+                <v-text-field
+                  v-model="entry.description"
+                  label="描述"
+                  density="comfortable"
+                  variant="outlined"
+                  :disabled="uploadSubmitting || entry.status === 'success'"
+                />
+                <div v-if="entry.status === 'error'" class="upload-entry__error">
+                  {{ entry.error }}
+                </div>
+                <div v-else-if="entry.status === 'success'" class="upload-entry__success">
+                  已上传
+                </div>
+              </div>
+            </div>
+            <v-divider class="my-4" />
+            <v-combobox
+              v-model="uploadSelectedTagIds"
+              :items="uploadTagOptions"
+              item-title="label"
+              item-value="value"
+              label="选择或新建标签"
+              density="comfortable"
+              variant="outlined"
+              multiple
+              chips
+              closable-chips
+              clearable
+              hide-selected
+              new-value-mode="add"
+              :loading="serverTagsLoading"
+              :disabled="uploadSubmitting"
+            >
+              <template #prepend>
+                <v-icon icon="mdi-tag" class="mr-2" />
+              </template>
+            </v-combobox>
+            <v-alert
+              v-if="serverTagsError"
+              type="warning"
+              variant="tonal"
+              density="comfortable"
+              class="mt-4"
+            >
+              {{ serverTagsError }}
+            </v-alert>
+          </v-card-text>
+          <v-card-actions>
+            <v-spacer />
+            <v-btn variant="text" :disabled="uploadSubmitting" @click="closeUploadDialog">取消</v-btn>
+            <v-btn
+              color="primary"
+              variant="flat"
+              :loading="uploadSubmitting"
+              :disabled="!canSubmitUpload"
+              @click="submitUpload"
+            >
+              上传
+            </v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
+
       <v-dialog v-model="deleteDialogOpen" max-width="420">
         <v-card>
           <v-card-title class="text-error">{{ deletionDialogTitle }}</v-card-title>
@@ -2057,6 +2455,45 @@ onBeforeUnmount(() => {
 .drop-overlay__message {
   font-size: 15px;
   font-weight: 500;
+}
+
+.upload-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.upload-entry {
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.upload-entry:last-child {
+  border-bottom: none;
+}
+
+.upload-entry__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.upload-entry__name {
+  font-weight: 600;
+  color: #e9ecf1;
+}
+
+.upload-entry__error {
+  color: #ef5350;
+  font-size: 0.85rem;
+  margin-top: 6px;
+}
+
+.upload-entry__success {
+  color: #66bb6a;
+  font-size: 0.85rem;
+  margin-top: 6px;
 }
 
 .project-gallery.has-drop-feedback .drop-overlay {

@@ -6463,6 +6463,71 @@ export const useSceneStore = defineStore('scene', {
 
       return deletableIds
     },
+    replaceLocalAssetWithServerAsset(
+      localAssetId: string,
+      remoteAsset: ProjectAsset,
+      options: { source?: AssetSourceMetadata } = {},
+    ): ProjectAsset | null {
+      const meta = this.assetIndex[localAssetId]
+      if (!meta) {
+        return null
+      }
+
+      const storedAsset: ProjectAsset = {
+        ...remoteAsset,
+        gleaned: false,
+      }
+      const nextCategoryId = determineAssetCategoryId(storedAsset)
+
+      const nextCatalog = { ...this.assetCatalog }
+      const previousList = nextCatalog[meta.categoryId] ?? []
+      nextCatalog[meta.categoryId] = previousList.filter((asset) => asset.id !== localAssetId)
+
+      const targetList = nextCatalog[nextCategoryId] ?? []
+      nextCatalog[nextCategoryId] = [...targetList.filter((asset) => asset.id !== storedAsset.id), storedAsset]
+      this.assetCatalog = nextCatalog
+
+      const nextIndex = { ...this.assetIndex }
+      delete nextIndex[localAssetId]
+      nextIndex[storedAsset.id] = {
+        categoryId: nextCategoryId,
+        source: options.source ?? { type: 'url' },
+      }
+      this.assetIndex = nextIndex
+
+      const nextPackageMap: Record<string, string> = {}
+      Object.entries(this.packageAssetMap).forEach(([key, value]) => {
+        if (key === `${LOCAL_EMBEDDED_ASSET_PREFIX}${localAssetId}`) {
+          return
+        }
+        if (value === localAssetId) {
+          nextPackageMap[key] = storedAsset.id
+          return
+        }
+        nextPackageMap[key] = value
+      })
+      this.packageAssetMap = nextPackageMap
+
+      replaceAssetIdInMaterials(this.materials, localAssetId, storedAsset.id)
+      replaceAssetIdInNodes(this.nodes, localAssetId, storedAsset.id)
+      this.materials = [...this.materials]
+      this.nodes = [...this.nodes]
+
+      if (this.selectedAssetId === localAssetId) {
+        this.selectedAssetId = storedAsset.id
+      }
+      if (this.draggingAssetId === localAssetId) {
+        this.draggingAssetId = storedAsset.id
+      }
+
+      this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
+
+      const assetCache = useAssetCacheStore()
+      assetCache.recalculateUsage(this.nodes)
+
+      commitSceneSnapshot(this, { updateNodes: true, updateCamera: false })
+      return storedAsset
+    },
     setResourceProviderId(providerId: string) {
       if (this.resourceProviderId === providerId) {
         return
