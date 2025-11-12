@@ -231,8 +231,8 @@ async function ensureUserWithCredentials(credentials: {
   }
 }
 
-export async function ensureTestUser(): Promise<void> {
-  await ensureUserWithCredentials(appConfig.testUser)
+export async function ensureEditorUser(): Promise<void> {
+  await ensureUserWithCredentials(appConfig.editorUser)
 }
 
 export async function ensureUploaderUser(): Promise<void> {

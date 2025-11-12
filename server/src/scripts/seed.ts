@@ -1,6 +1,6 @@
 import '@/utils/cjsCompat'
 import { connectDatabase, disconnectDatabase } from '@/config/database'
-import { createInitialAdmin, ensureTestUser, ensureUploaderUser } from '@/services/authService'
+import { createInitialAdmin, ensureEditorUser, ensureUploaderUser } from '@/services/authService'
 import { ensureOptimizeProductsSeeded } from '@/services/optimizeProductService'
 
 async function main(): Promise<void> {
@@ -11,7 +11,7 @@ async function main(): Promise<void> {
     console.warn('[seed] 跳过创建初始管理员：', error)
   })
 
-  await ensureTestUser().catch((error) => {
+  await ensureEditorUser().catch((error) => {
     console.warn('[seed] 跳过创建测试账号：', error)
   })
 
