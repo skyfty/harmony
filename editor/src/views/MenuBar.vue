@@ -316,10 +316,10 @@ function handleToggleStats() {
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
-  padding: 0 12px;
+  padding: 2px 12px;
   background: rgba(16, 19, 24, 0.82);
   border: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: 12px;
+  border-radius: 14px;
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(12px);
   column-gap: 16px;
