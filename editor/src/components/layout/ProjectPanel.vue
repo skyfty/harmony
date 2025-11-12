@@ -198,11 +198,6 @@ function normalizeHexColor(value: string | null | undefined): string | null {
   return /^#([0-9a-fA-F]{6})$/.test(prefixed) ? `#${prefixed.slice(1).toLowerCase()}` : null
 }
 
-function normalizeEntryColor(entry: UploadAssetEntry): void {
-  const normalized = normalizeHexColor(entry.color)
-  entry.color = normalized ?? ''
-}
-
 function applyEntryColor(entry: UploadAssetEntry, value: string | null): void {
   const normalized = normalizeHexColor(value)
   if (normalized) {
@@ -2459,31 +2454,14 @@ onBeforeUnmount(() => {
           <span class="upload-entry__name">{{ entry.asset.name }}</span>
           <v-chip size="small" color="primary" variant="tonal">{{ entry.asset.type }}</v-chip>
             </div>
-            <v-text-field
-          v-model="entry.name"
-          label="Asset Name"
-          density="comfortable"
-          variant="outlined"
-          :disabled="uploadSubmitting || entry.status === 'success'"
-            />
-            <v-textarea
-          v-model="entry.description"
-          label="Description"
-          density="comfortable"
-          variant="outlined"
-          auto-grow
-          rows="2"
-          :disabled="uploadSubmitting || entry.status === 'success'"
-            />
-            <div class="upload-entry__color-row">
+            <div class="upload-entry__name-row">
           <v-text-field
-            v-model="entry.color"
-            label="主体颜色"
+            class="upload-entry__name-input"
+            v-model="entry.name"
+            label="Asset Name"
             density="comfortable"
             variant="outlined"
-            placeholder="#RRGGBB"
             :disabled="uploadSubmitting || entry.status === 'success'"
-            @blur="() => normalizeEntryColor(entry)"
           />
           <v-menu
             :close-on-content-click="false"
@@ -2495,6 +2473,7 @@ onBeforeUnmount(() => {
                 v-bind="menuProps"
                 class="upload-entry__color-button"
                 :style="{ backgroundColor: entryColorPreview(entry) }"
+                :title="entryColorPreview(entry).toUpperCase()"
                 :disabled="uploadSubmitting || entry.status === 'success'"
                 variant="tonal"
                 size="small"
@@ -2513,6 +2492,15 @@ onBeforeUnmount(() => {
             </div>
           </v-menu>
             </div>
+            <v-textarea
+          v-model="entry.description"
+          label="Description"
+          density="comfortable"
+          variant="outlined"
+          auto-grow
+          rows="2"
+          :disabled="uploadSubmitting || entry.status === 'success'"
+            />
             <div
           v-if="entry.asset.type === 'model'"
           class="upload-entry__dimensions"
@@ -2889,6 +2877,21 @@ onBeforeUnmount(() => {
   color: #e9ecf1;
 }
 
+.upload-entry__name-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: nowrap;
+}
+
+.upload-entry__name-input {
+  flex: 1;
+}
+
+.upload-entry__name-input :deep(.v-input) {
+  margin-bottom: 0;
+}
+
 .upload-entry__error {
   color: #ef5350;
   font-size: 0.85rem;
@@ -2901,19 +2904,15 @@ onBeforeUnmount(() => {
   margin-top: 6px;
 }
 
-.upload-entry__color-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 12px;
-  margin-top: 12px;
-  flex-wrap: wrap;
-}
-
 .upload-entry__color-button {
-  width: 44px;
-  min-width: 44px;
-  height: 44px;
-  border-radius: 8px;
+  width: 50px;
+  min-width: 50px;
+  height: 56px;
+  border-radius: 12px;
+  align-self: center;
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
 }
 
 .upload-entry__color-picker {
