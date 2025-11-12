@@ -134,8 +134,9 @@ export function useUploadManager(): UseUploadManager {
       activeTaskId.value = null
       return
     }
-  if (!activeTaskId.value || !tasks.value.some((task: UploadTask) => task.id === activeTaskId.value)) {
-      activeTaskId.value = tasks.value[0].id
+    if (!activeTaskId.value || !tasks.value.some((task: UploadTask) => task.id === activeTaskId.value)) {
+      const firstTask = tasks.value[0]
+      activeTaskId.value = firstTask ? firstTask.id : null
     }
   }
 

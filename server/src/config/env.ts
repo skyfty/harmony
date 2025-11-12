@@ -19,6 +19,11 @@ export const appConfig = {
     password: process.env.TEST_USER_PASSWORD ?? 'editor123',
     displayName: process.env.TEST_USER_DISPLAY_NAME ?? 'Editor 用户',
   },
+  uploaderUser: {
+    username: process.env.UPLOADER_USER_USERNAME ?? 'uploader',
+    password: process.env.UPLOADER_USER_PASSWORD ?? 'uploader123',
+    displayName: process.env.UPLOADER_USER_DISPLAY_NAME ?? '资源上传员',
+  },
   openAi: {
     apiKey: process.env.OPENAI_API_KEY ?? '',
     model: process.env.OPENAI_MODEL ?? 'gpt-4o-mini',

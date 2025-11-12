@@ -186,8 +186,12 @@ export async function createInitialAdmin(): Promise<void> {
   })
 }
 
-export async function ensureTestUser(): Promise<void> {
-  const { username, password, displayName } = appConfig.testUser
+async function ensureUserWithCredentials(credentials: {
+  username?: string | null
+  password?: string | null
+  displayName?: string | null
+}): Promise<void> {
+  const { username, password, displayName } = credentials
   if (!username || !password) {
     return
   }
@@ -225,4 +229,12 @@ export async function ensureTestUser(): Promise<void> {
   if (shouldSave) {
     await existing.save()
   }
+}
+
+export async function ensureTestUser(): Promise<void> {
+  await ensureUserWithCredentials(appConfig.testUser)
+}
+
+export async function ensureUploaderUser(): Promise<void> {
+  await ensureUserWithCredentials(appConfig.uploaderUser)
 }
