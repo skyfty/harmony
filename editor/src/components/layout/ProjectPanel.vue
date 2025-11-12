@@ -172,9 +172,104 @@ type UploadAssetEntry = {
   asset: ProjectAsset
   name: string
   description: string
+  color: string
+  dimensionLength: number | null
+  dimensionWidth: number | null
+  dimensionHeight: number | null
+  imageWidth: number | null
+  imageHeight: number | null
   status: 'pending' | 'uploading' | 'success' | 'error'
   error: string | null
   uploadedAssetId: string | null
+}
+
+type DimensionKey = 'dimensionLength' | 'dimensionWidth' | 'dimensionHeight'
+type ImageDimensionKey = 'imageWidth' | 'imageHeight'
+
+function normalizeHexColor(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  if (!trimmed.length) {
+    return null
+  }
+  const prefixed = trimmed.startsWith('#') ? trimmed : `#${trimmed}`
+  return /^#([0-9a-fA-F]{6})$/.test(prefixed) ? `#${prefixed.slice(1).toLowerCase()}` : null
+}
+
+function normalizeEntryColor(entry: UploadAssetEntry): void {
+  const normalized = normalizeHexColor(entry.color)
+  entry.color = normalized ?? ''
+}
+
+function applyEntryColor(entry: UploadAssetEntry, value: string | null): void {
+  const normalized = normalizeHexColor(value)
+  if (normalized) {
+    entry.color = normalized
+  }
+}
+
+function entryColorPreview(entry: UploadAssetEntry): string {
+  const explicit = normalizeHexColor(entry.color)
+  if (explicit) {
+    return explicit
+  }
+  const assetColor = normalizeHexColor(entry.asset.color ?? null)
+  if (assetColor) {
+    return assetColor
+  }
+  return resolvePreviewColor(entry.asset.type)
+}
+
+function formatDimension(value: number | null): string {
+  return typeof value === 'number' && Number.isFinite(value) ? String(value) : ''
+}
+
+function setEntryDimension(entry: UploadAssetEntry, key: DimensionKey, value: string | number | null): void {
+  const parsed = typeof value === 'number' ? value : Number.parseFloat((value ?? '').toString())
+  entry[key] = Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+}
+
+function formatInteger(value: number | null): string {
+  return typeof value === 'number' && Number.isFinite(value) ? String(Math.round(value)) : ''
+}
+
+function setEntryImageDimension(entry: UploadAssetEntry, key: ImageDimensionKey, value: string | number | null): void {
+  const parsed = typeof value === 'number' ? value : Number.parseFloat((value ?? '').toString())
+  entry[key] = Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : null
+}
+
+function computeSizeCategory(length: number | null, width: number | null, height: number | null): string | null {
+  const values = [length, width, height]
+    .filter((candidate): candidate is number => typeof candidate === 'number' && Number.isFinite(candidate) && candidate > 0)
+  if (!values.length) {
+    return null
+  }
+  const max = Math.max(...values)
+  if (max < 0.1) {
+    return '微型'
+  }
+  if (max < 0.5) {
+    return '小型'
+  }
+  if (max < 1) {
+    return '普通'
+  }
+  if (max < 3) {
+    return '中型'
+  }
+  if (max < 10) {
+    return '大型'
+  }
+  if (max < 30) {
+    return '巨型'
+  }
+  return '巨大型'
+}
+
+function entrySizeCategory(entry: UploadAssetEntry): string | null {
+  return computeSizeCategory(entry.dimensionLength, entry.dimensionWidth, entry.dimensionHeight)
 }
 
 function createTagOption(id: string, name: string): TagOption {
@@ -1091,6 +1186,12 @@ function openUploadDialog() {
     asset,
     name: asset.name,
     description: asset.description ?? '',
+    color: normalizeHexColor(asset.color ?? null) ?? '',
+    dimensionLength: typeof asset.dimensionLength === 'number' ? asset.dimensionLength : null,
+    dimensionWidth: typeof asset.dimensionWidth === 'number' ? asset.dimensionWidth : null,
+    dimensionHeight: typeof asset.dimensionHeight === 'number' ? asset.dimensionHeight : null,
+    imageWidth: typeof asset.imageWidth === 'number' ? asset.imageWidth : null,
+    imageHeight: typeof asset.imageHeight === 'number' ? asset.imageHeight : null,
     status: 'pending',
     error: null,
     uploadedAssetId: null,
@@ -1212,12 +1313,30 @@ async function submitUpload() {
         const file = await createUploadFileFromCache(asset)
         const uploadName = entry.name.trim().length ? entry.name.trim() : asset.name
         const uploadDescription = entry.description.trim()
+        const normalizedColor = normalizeHexColor(entry.color)
+        const dimensionLength = typeof entry.dimensionLength === 'number' && Number.isFinite(entry.dimensionLength)
+          ? entry.dimensionLength
+          : null
+        const dimensionWidth = typeof entry.dimensionWidth === 'number' && Number.isFinite(entry.dimensionWidth)
+          ? entry.dimensionWidth
+          : null
+        const dimensionHeight = typeof entry.dimensionHeight === 'number' && Number.isFinite(entry.dimensionHeight)
+          ? entry.dimensionHeight
+          : null
+        const imageWidth = typeof entry.imageWidth === 'number' && Number.isFinite(entry.imageWidth) ? Math.round(entry.imageWidth) : null
+        const imageHeight = typeof entry.imageHeight === 'number' && Number.isFinite(entry.imageHeight) ? Math.round(entry.imageHeight) : null
         const serverAsset = await uploadAssetToServer({
           file,
           name: uploadName,
           type: asset.type,
           description: uploadDescription.length ? uploadDescription : undefined,
           tagIds,
+          color: normalizedColor,
+          dimensionLength,
+          dimensionWidth,
+          dimensionHeight,
+          imageWidth,
+          imageHeight,
         })
         const mapped = mapServerAssetToProjectAsset(serverAsset)
         const replaced = sceneStore.replaceLocalAssetWithServerAsset(entry.assetId, mapped, { source: { type: 'url' } })
@@ -2347,13 +2466,132 @@ onBeforeUnmount(() => {
           variant="outlined"
           :disabled="uploadSubmitting || entry.status === 'success'"
             />
-            <v-text-field
+            <v-textarea
           v-model="entry.description"
           label="Description"
           density="comfortable"
           variant="outlined"
+          auto-grow
+          rows="2"
           :disabled="uploadSubmitting || entry.status === 'success'"
             />
+            <div class="upload-entry__color-row">
+          <v-text-field
+            v-model="entry.color"
+            label="主体颜色"
+            density="comfortable"
+            variant="outlined"
+            placeholder="#RRGGBB"
+            :disabled="uploadSubmitting || entry.status === 'success'"
+            @blur="() => normalizeEntryColor(entry)"
+          />
+          <v-menu
+            :close-on-content-click="false"
+            transition="scale-transition"
+            location="bottom start"
+          >
+            <template #activator="{ props: menuProps }">
+              <v-btn
+                v-bind="menuProps"
+                class="upload-entry__color-button"
+                :style="{ backgroundColor: entryColorPreview(entry) }"
+                :disabled="uploadSubmitting || entry.status === 'success'"
+                variant="tonal"
+                size="small"
+              >
+                <v-icon color="white">mdi-eyedropper-variant</v-icon>
+              </v-btn>
+            </template>
+            <div class="upload-entry__color-picker">
+              <v-color-picker
+                :model-value="entryColorPreview(entry)"
+                mode="hex"
+                :modes="['hex']"
+                hide-inputs
+                @update:model-value="(value) => applyEntryColor(entry, value)"
+              />
+            </div>
+          </v-menu>
+            </div>
+            <div
+          v-if="entry.asset.type === 'model'"
+          class="upload-entry__dimensions"
+            >
+          <v-text-field
+            :model-value="formatDimension(entry.dimensionLength)"
+            label="长度 (m)"
+            type="number"
+            density="comfortable"
+            variant="outlined"
+            step="0.01"
+            min="0"
+            suffix="m"
+            :disabled="uploadSubmitting || entry.status === 'success'"
+            @update:model-value="(value) => setEntryDimension(entry, 'dimensionLength', value)"
+          />
+          <v-text-field
+            :model-value="formatDimension(entry.dimensionWidth)"
+            label="宽度 (m)"
+            type="number"
+            density="comfortable"
+            variant="outlined"
+            step="0.01"
+            min="0"
+            suffix="m"
+            :disabled="uploadSubmitting || entry.status === 'success'"
+            @update:model-value="(value) => setEntryDimension(entry, 'dimensionWidth', value)"
+          />
+          <v-text-field
+            :model-value="formatDimension(entry.dimensionHeight)"
+            label="高度 (m)"
+            type="number"
+            density="comfortable"
+            variant="outlined"
+            step="0.01"
+            min="0"
+            suffix="m"
+            :disabled="uploadSubmitting || entry.status === 'success'"
+            @update:model-value="(value) => setEntryDimension(entry, 'dimensionHeight', value)"
+          />
+          <v-chip
+            v-if="entrySizeCategory(entry)"
+            class="upload-entry__size-chip"
+            size="small"
+            color="secondary"
+            variant="tonal"
+          >
+            尺寸分类：{{ entrySizeCategory(entry) }}
+          </v-chip>
+            </div>
+            <div
+          v-else-if="entry.asset.type === 'image'"
+          class="upload-entry__dimensions"
+            >
+          <v-text-field
+            :model-value="formatInteger(entry.imageWidth)"
+            label="图片宽度 (px)"
+            type="number"
+            density="comfortable"
+            variant="outlined"
+            step="1"
+            min="0"
+            suffix="px"
+            :disabled="uploadSubmitting || entry.status === 'success'"
+            @update:model-value="(value) => setEntryImageDimension(entry, 'imageWidth', value)"
+          />
+          <v-text-field
+            :model-value="formatInteger(entry.imageHeight)"
+            label="图片高度 (px)"
+            type="number"
+            density="comfortable"
+            variant="outlined"
+            step="1"
+            min="0"
+            suffix="px"
+            :disabled="uploadSubmitting || entry.status === 'success'"
+            @update:model-value="(value) => setEntryImageDimension(entry, 'imageHeight', value)"
+          />
+            </div>
             <div v-if="entry.status === 'error'" class="upload-entry__error">
           {{ entry.error }}
             </div>
@@ -2661,6 +2899,36 @@ onBeforeUnmount(() => {
   color: #66bb6a;
   font-size: 0.85rem;
   margin-top: 6px;
+}
+
+.upload-entry__color-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.upload-entry__color-button {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  border-radius: 8px;
+}
+
+.upload-entry__color-picker {
+  padding: 12px;
+}
+
+.upload-entry__dimensions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.upload-entry__size-chip {
+  align-self: center;
 }
 
 .project-gallery.has-drop-feedback .drop-overlay {

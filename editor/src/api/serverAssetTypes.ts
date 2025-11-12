@@ -18,6 +18,13 @@ export interface ServerAssetDto {
   description?: string | null
   tags?: ServerAssetTagDto[] | null
   tagIds?: string[] | null
+  color?: string | null
+  dimensionLength?: number | null
+  dimensionWidth?: number | null
+  dimensionHeight?: number | null
+  sizeCategory?: string | null
+  imageWidth?: number | null
+  imageHeight?: number | null
 }
 
 export const SERVER_ASSET_PREVIEW_COLORS: Record<ProjectAsset['type'], string> = {
@@ -72,6 +79,13 @@ export function mapServerAssetToProjectAsset(asset: ServerAssetDto): ProjectAsse
     thumbnail: asset.thumbnailUrl ?? asset.previewUrl ?? null,
     tags: tagNames.length ? tagNames : undefined,
     tagIds: tagIds.length ? tagIds : undefined,
+    color: typeof asset.color === 'string' ? asset.color : undefined,
+    dimensionLength: typeof asset.dimensionLength === 'number' ? asset.dimensionLength : undefined,
+    dimensionWidth: typeof asset.dimensionWidth === 'number' ? asset.dimensionWidth : undefined,
+    dimensionHeight: typeof asset.dimensionHeight === 'number' ? asset.dimensionHeight : undefined,
+    sizeCategory: typeof asset.sizeCategory === 'string' ? asset.sizeCategory : undefined,
+    imageWidth: typeof asset.imageWidth === 'number' ? asset.imageWidth : undefined,
+    imageHeight: typeof asset.imageHeight === 'number' ? asset.imageHeight : undefined,
     gleaned: false,
   }
 }

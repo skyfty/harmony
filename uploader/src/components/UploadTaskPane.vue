@@ -35,6 +35,104 @@
               />
             </v-col>
             <v-col cols="12">
+              <div class="task-color-row">
+                <v-text-field
+                  v-model="task.color"
+                  label="主体颜色"
+                  placeholder="#RRGGBB"
+                  @blur="normalizeTaskColor"
+                />
+                <v-menu
+                  :close-on-content-click="false"
+                  transition="scale-transition"
+                  location="bottom start"
+                >
+                  <template #activator="{ props: menuProps }">
+                    <v-btn
+                      v-bind="menuProps"
+                      class="task-color-button"
+                      :style="{ backgroundColor: colorPreview }"
+                      variant="tonal"
+                      size="small"
+                    >
+                      <v-icon color="white">mdi-eyedropper-variant</v-icon>
+                    </v-btn>
+                  </template>
+                  <div class="task-color-picker">
+                    <v-color-picker
+                      :model-value="colorPreview"
+                      mode="hex"
+                      :modes="['hex']"
+                      hide-inputs
+                      @update:model-value="applyTaskColor"
+                    />
+                  </div>
+                </v-menu>
+              </div>
+            </v-col>
+            <v-col v-if="task.type === 'model'" cols="12">
+              <div class="task-dimension-grid">
+                <v-text-field
+                  :model-value="formatDimension(task.dimensionLength)"
+                  label="长度 (m)"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  suffix="m"
+                  @update:model-value="onLengthInput"
+                />
+                <v-text-field
+                  :model-value="formatDimension(task.dimensionWidth)"
+                  label="宽度 (m)"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  suffix="m"
+                  @update:model-value="onWidthInput"
+                />
+                <v-text-field
+                  :model-value="formatDimension(task.dimensionHeight)"
+                  label="高度 (m)"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  suffix="m"
+                  @update:model-value="onHeightInput"
+                />
+                <v-chip
+                  v-if="sizeCategory"
+                  class="task-size-chip"
+                  size="small"
+                  color="secondary"
+                  variant="tonal"
+                >
+                  尺寸分类：{{ sizeCategory }}
+                </v-chip>
+              </div>
+            </v-col>
+            <v-col v-else-if="task.type === 'image'" cols="12">
+              <div class="task-dimension-grid">
+                <v-text-field
+                  :model-value="formatInteger(task.imageWidth)"
+                  label="图片宽度 (px)"
+                  type="number"
+                  step="1"
+                  min="0"
+                  suffix="px"
+                  @update:model-value="onImageWidthInput"
+                />
+                <v-text-field
+                  :model-value="formatInteger(task.imageHeight)"
+                  label="图片高度 (px)"
+                  type="number"
+                  step="1"
+                  min="0"
+                  suffix="px"
+                  @update:model-value="onImageHeightInput"
+                />
+              </div>
+            </v-col>
+            <v-col cols="12">
               <v-combobox
                 v-model="tagInput"
                 :items="tagItems"
@@ -148,6 +246,113 @@ const previewBadge = computed(() => {
 
 const tagItems = computed(() => props.availableTags)
 
+const TYPE_COLOR_FALLBACK: Record<AssetType, string> = {
+  model: '#26c6da',
+  mesh: '#26c6da',
+  image: '#1e88e5',
+  texture: '#8e24aa',
+  material: '#ffb74d',
+  prefab: '#7986cb',
+  video: '#ff7043',
+  file: '#546e7a',
+}
+
+type DimensionKey = 'dimensionLength' | 'dimensionWidth' | 'dimensionHeight'
+type ImageDimensionKey = 'imageWidth' | 'imageHeight'
+
+function normalizeHexColor(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  if (!trimmed.length) {
+    return null
+  }
+  const prefixed = trimmed.startsWith('#') ? trimmed : `#${trimmed}`
+  return /^#([0-9a-fA-F]{6})$/.test(prefixed) ? `#${prefixed.slice(1).toLowerCase()}` : null
+}
+
+function computeSizeCategory(length: number | null, width: number | null, height: number | null): string | null {
+  const values = [length, width, height]
+    .filter((candidate): candidate is number => typeof candidate === 'number' && Number.isFinite(candidate) && candidate > 0)
+  if (!values.length) {
+    return null
+  }
+  const max = Math.max(...values)
+  if (max < 0.1) {
+    return '微型'
+  }
+  if (max < 0.5) {
+    return '小型'
+  }
+  if (max < 1) {
+    return '普通'
+  }
+  if (max < 3) {
+    return '中型'
+  }
+  if (max < 10) {
+    return '大型'
+  }
+  if (max < 30) {
+    return '巨型'
+  }
+  return '巨大型'
+}
+
+const colorPreview = computed(() => normalizeHexColor(props.task.color) ?? normalizeHexColor(props.task.asset?.color) ?? TYPE_COLOR_FALLBACK[props.task.type] ?? '#607d8b')
+const sizeCategory = computed(() => computeSizeCategory(props.task.dimensionLength, props.task.dimensionWidth, props.task.dimensionHeight))
+
+function normalizeTaskColor(): void {
+  const normalized = normalizeHexColor(props.task.color)
+  props.task.color = normalized ?? ''
+}
+
+function applyTaskColor(value: string | null): void {
+  const normalized = normalizeHexColor(value)
+  if (normalized) {
+    props.task.color = normalized
+  }
+}
+
+function formatDimension(value: number | null): string {
+  return typeof value === 'number' && Number.isFinite(value) ? String(value) : ''
+}
+
+function setDimension(key: DimensionKey, value: string | number | null): void {
+  const parsed = typeof value === 'number' ? value : Number.parseFloat((value ?? '').toString())
+  props.task[key] = Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+}
+
+function formatInteger(value: number | null): string {
+  return typeof value === 'number' && Number.isFinite(value) ? String(Math.round(value)) : ''
+}
+
+function setImageDimension(key: ImageDimensionKey, value: string | number | null): void {
+  const parsed = typeof value === 'number' ? value : Number.parseFloat((value ?? '').toString())
+  props.task[key] = Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : null
+}
+
+function onLengthInput(value: string | number | null): void {
+  setDimension('dimensionLength', value)
+}
+
+function onWidthInput(value: string | number | null): void {
+  setDimension('dimensionWidth', value)
+}
+
+function onHeightInput(value: string | number | null): void {
+  setDimension('dimensionHeight', value)
+}
+
+function onImageWidthInput(value: string | number | null): void {
+  setImageDimension('imageWidth', value)
+}
+
+function onImageHeightInput(value: string | number | null): void {
+  setImageDimension('imageHeight', value)
+}
+
 watch(
   () => props.task.tags,
   (next: AssetTag[]) => {
@@ -186,6 +391,46 @@ function removeTask(): void {
 }
 
 function handleTypeChange(): void {
+  if (props.task.type !== 'model') {
+    props.task.dimensionLength = null
+    props.task.dimensionWidth = null
+    props.task.dimensionHeight = null
+  }
+  if (props.task.type !== 'image') {
+    props.task.imageWidth = null
+    props.task.imageHeight = null
+  }
   void uploadStore.refreshPreview(props.task.id).catch((error: unknown) => console.warn('刷新预览失败', error))
 }
 </script>
+
+<style scoped>
+.task-color-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.task-color-button {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  border-radius: 8px;
+}
+
+.task-color-picker {
+  padding: 12px;
+}
+
+.task-dimension-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.task-size-chip {
+  align-self: center;
+}
+</style>

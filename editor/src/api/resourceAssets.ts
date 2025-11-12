@@ -135,6 +135,12 @@ export interface UploadAssetOptions {
   type: ProjectAsset['type']
   description?: string
   tagIds?: string[]
+  color?: string | null
+  dimensionLength?: number | null
+  dimensionWidth?: number | null
+  dimensionHeight?: number | null
+  imageWidth?: number | null
+  imageHeight?: number | null
 }
 
 export async function uploadAssetToServer(options: UploadAssetOptions): Promise<ServerAssetDto> {
@@ -145,6 +151,24 @@ export async function uploadAssetToServer(options: UploadAssetOptions): Promise<
   formData.append('type', options.type)
   if (options.description) {
     formData.append('description', options.description)
+  }
+  if (typeof options.color === 'string' && options.color.trim().length) {
+    formData.append('color', options.color.trim())
+  }
+  if (typeof options.dimensionLength === 'number' && Number.isFinite(options.dimensionLength)) {
+    formData.append('dimensionLength', options.dimensionLength.toString())
+  }
+  if (typeof options.dimensionWidth === 'number' && Number.isFinite(options.dimensionWidth)) {
+    formData.append('dimensionWidth', options.dimensionWidth.toString())
+  }
+  if (typeof options.dimensionHeight === 'number' && Number.isFinite(options.dimensionHeight)) {
+    formData.append('dimensionHeight', options.dimensionHeight.toString())
+  }
+  if (typeof options.imageWidth === 'number' && Number.isFinite(options.imageWidth)) {
+    formData.append('imageWidth', Math.round(options.imageWidth).toString())
+  }
+  if (typeof options.imageHeight === 'number' && Number.isFinite(options.imageHeight)) {
+    formData.append('imageHeight', Math.round(options.imageHeight).toString())
   }
   if (Array.isArray(options.tagIds)) {
     options.tagIds

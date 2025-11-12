@@ -1,5 +1,5 @@
-import type { SceneSkyboxSettings } from '@/types/scene-viewport-settings'
 import type { SkyboxPresetDefinition } from '@/types/skybox'
+import type {SceneSkyboxSettings } from '@harmony/schema'
 
 export const SKYBOX_PRESETS: SkyboxPresetDefinition[] = [
   {

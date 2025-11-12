@@ -35,7 +35,8 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { getCachedModelObject, getOrLoadModelObject } from '@/stores/modelObjectCache'
 import { loadObjectFromFile } from '@/utils/assetImport'
 import { createPrimitiveMesh } from '@schema/geometry'
-import type { CameraProjectionMode, CameraControlMode } from '@/types/scene-viewport-settings'
+import type {CameraProjection,CameraControlMode } from '@harmony/schema'
+
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SkyboxParameterKey } from '@/types/skybox'
 import { SKYBOX_PRESETS, CUSTOM_SKYBOX_PRESET_ID, cloneSkyboxSettings } from '@/stores/skyboxPresets'
@@ -285,7 +286,7 @@ const canAlignSelection = computed(() => {
 })
 const skyboxPresetList = SKYBOX_PRESETS
 const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((tool) => [tool.key, tool.value]))
-let activeCameraMode: CameraProjectionMode = cameraProjectionMode.value
+let activeCameraMode: CameraProjection = cameraProjectionMode.value
 
 const activeBuildTool = ref<BuildTool | null>(null)
 
@@ -1946,7 +1947,7 @@ function bindControlsToCamera(newCamera: THREE.PerspectiveCamera | THREE.Orthogr
   }
 }
 
-function activateCamera(newCamera: THREE.PerspectiveCamera | THREE.OrthographicCamera, mode: CameraProjectionMode) {
+function activateCamera(newCamera: THREE.PerspectiveCamera | THREE.OrthographicCamera, mode: CameraProjection) {
   camera = newCamera
   activeCameraMode = mode
   bindControlsToCamera(newCamera)
@@ -1967,7 +1968,7 @@ function getViewportSize() {
   return { width, height }
 }
 
-function applyProjectionMode(mode: CameraProjectionMode) {
+function applyProjectionMode(mode: CameraProjection) {
   const { width, height } = getViewportSize()
   const previousCamera = camera
 

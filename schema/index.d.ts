@@ -164,7 +164,7 @@ export interface AssetIndexEntry {
 
 
 export interface CameraNodeProperties {
-  kind: 'perspective' | 'orthographic'
+  kind: CameraProjection
   fov?: number
   near: number
   far: number
@@ -414,6 +414,8 @@ export interface ComponentInspectorSection<TProps = Record<string, unknown>> {
   fields: Array<ComponentInspectorField<TProps>>
 }
 export type LightNodeType = 'Directional' | 'Point' | 'Spot' | 'Ambient'
+export type CameraControlMode = 'orbit' | 'map'
+export type CameraProjection = 'perspective' | 'orthographic'
 
 export interface LightNodeProperties {
   type: LightNodeType
@@ -460,8 +462,8 @@ export interface GroundSettings {
 export interface SceneViewportSettings {
   showGrid: boolean;
   showAxes: boolean;
-  cameraProjection: 'perspective' | 'orthographic';
-  cameraControlMode: 'orbit' | 'map';
+  cameraProjection: CameraProjection;
+  cameraControlMode: CameraControlMode;
   shadowsEnabled: boolean;
   skybox: SceneSkyboxSettings;
   [key: string]: unknown;

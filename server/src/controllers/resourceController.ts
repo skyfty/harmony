@@ -71,6 +71,13 @@ type AssetData = {
   type: AssetDocument['type']
   tags: Types.ObjectId[] | AssetTagDocument[]
   size: number
+  color?: string | null
+  dimensionLength?: number | null
+  dimensionWidth?: number | null
+  dimensionHeight?: number | null
+  sizeCategory?: string | null
+  imageWidth?: number | null
+  imageHeight?: number | null
   url: string
   fileKey: string
   previewUrl?: string | null
@@ -100,6 +107,12 @@ type AssetMutationPayload = {
   description?: string | null
   tagIds?: string[]
   categoryId?: string | null
+  color?: string | null
+  dimensionLength?: number | null
+  dimensionWidth?: number | null
+  dimensionHeight?: number | null
+  imageWidth?: number | null
+  imageHeight?: number | null
 }
 
 type ProjectDirectoryAsset = {
@@ -111,6 +124,13 @@ type ProjectDirectoryAsset = {
   thumbnail: string | null
   description: string | null
   gleaned: boolean
+  color?: string | null
+  dimensionLength?: number | null
+  dimensionWidth?: number | null
+  dimensionHeight?: number | null
+  sizeCategory?: string | null
+  imageWidth?: number | null
+  imageHeight?: number | null
 }
 
 type ProjectDirectory = AssetDirectory<ProjectDirectoryAsset> & {
@@ -146,6 +166,66 @@ function sanitizeString(value: unknown): string | null {
   }
   const trimmed = value.trim()
   return trimmed.length ? trimmed : null
+}
+
+function sanitizeHexColor(value: unknown): string | null {
+  const raw = typeof value === 'string' ? value.trim() : null
+  if (!raw) {
+    return null
+  }
+  const normalized = raw.startsWith('#') ? raw : `#${raw}`
+  if (/^#([0-9a-fA-F]{6})$/.test(normalized)) {
+    return `#${normalized.slice(1).toLowerCase()}`
+  }
+  return null
+}
+
+function sanitizeNonNegativeNumber(value: unknown): number | null {
+  const candidate = typeof value === 'number' ? value : typeof value === 'string' ? Number(value.trim()) : NaN
+  if (!Number.isFinite(candidate)) {
+    return null
+  }
+  return candidate >= 0 ? candidate : null
+}
+
+function sanitizeNonNegativeInteger(value: unknown): number | null {
+  const parsed = sanitizeNonNegativeNumber(value)
+  if (parsed === null) {
+    return null
+  }
+  const rounded = Math.round(parsed)
+  return rounded >= 0 ? rounded : null
+}
+
+function determineSizeCategory(
+  length: number | null | undefined,
+  width: number | null | undefined,
+  height: number | null | undefined,
+): string | null {
+  const values = [length, width, height].filter((value): value is number => typeof value === 'number' && value > 0)
+  if (!values.length) {
+    return null
+  }
+  const max = Math.max(...values)
+  if (max < 0.1) {
+    return '微型'
+  }
+  if (max < 0.5) {
+    return '小型'
+  }
+  if (max < 1) {
+    return '普通'
+  }
+  if (max < 3) {
+    return '中型'
+  }
+  if (max < 10) {
+    return '大型'
+  }
+  if (max < 30) {
+    return '巨型'
+  }
+  return '巨大型'
 }
 
 const ASSET_TYPE_ALIAS_MAP: Partial<Record<string, AssetType>> = {
@@ -294,6 +374,14 @@ function mapAssetDocument(asset: AssetSource): AssetSummary {
 
   const previewUrl = asset.previewUrl ?? asset.thumbnailUrl ?? null
 
+  const color = sanitizeHexColor(asset.color)
+  const dimensionLength = typeof asset.dimensionLength === 'number' ? asset.dimensionLength : null
+  const dimensionWidth = typeof asset.dimensionWidth === 'number' ? asset.dimensionWidth : null
+  const dimensionHeight = typeof asset.dimensionHeight === 'number' ? asset.dimensionHeight : null
+  const sizeCategory = sanitizeString(asset.sizeCategory)
+  const imageWidth = typeof asset.imageWidth === 'number' ? Math.round(asset.imageWidth) : null
+  const imageHeight = typeof asset.imageHeight === 'number' ? Math.round(asset.imageHeight) : null
+
   const description = sanitizeString(asset.description) ?? null
   const originalFilename = sanitizeString(asset.originalFilename)
   const mimeType = sanitizeString(asset.mimeType)
@@ -308,8 +396,15 @@ function mapAssetDocument(asset: AssetSource): AssetSummary {
     name: asset.name,
     categoryId: categoryObjectId,
     type: asset.type,
-  tags,
-  tagIds: tags.map((tag) => tag.id),
+    tags,
+    tagIds: tags.map((tag) => tag.id),
+    color,
+    dimensionLength,
+    dimensionWidth,
+    dimensionHeight,
+    sizeCategory: sizeCategory ?? null,
+    imageWidth,
+    imageHeight,
     size: asset.size ?? 0,
     url: asset.url,
     downloadUrl: asset.url,
@@ -347,6 +442,13 @@ function mapManifestEntry(asset: AssetSource): AssetManifestEntryDto {
     type: response.type,
     tags: response.tags ?? [],
     tagIds: response.tagIds,
+    color: response.color ?? null,
+    dimensionLength: response.dimensionLength ?? null,
+    dimensionWidth: response.dimensionWidth ?? null,
+    dimensionHeight: response.dimensionHeight ?? null,
+    sizeCategory: response.sizeCategory ?? null,
+    imageWidth: response.imageWidth ?? null,
+    imageHeight: response.imageHeight ?? null,
     downloadUrl: response.downloadUrl,
     thumbnailUrl: response.thumbnailUrl ?? null,
     description: response.description ?? null,
@@ -455,13 +557,48 @@ function extractMutationPayload(ctx: Context): AssetMutationPayload {
     return {}
   }
   const tagIds = ensureArrayString(rawBody.tagIds ?? rawBody.tags)
-  return {
+  const payload: AssetMutationPayload = {
     name: sanitizeString(rawBody.name) ?? undefined,
     type: sanitizeString(rawBody.type) ?? undefined,
     description: sanitizeString(rawBody.description),
     tagIds: tagIds.length ? tagIds : undefined,
     categoryId: sanitizeString(rawBody.categoryId),
   }
+
+  const hasOwn = Object.prototype.hasOwnProperty.bind(rawBody)
+
+  if (hasOwn('color')) {
+    payload.color = sanitizeHexColor(rawBody.color)
+  } else if (hasOwn('primaryColor')) {
+    payload.color = sanitizeHexColor(rawBody.primaryColor)
+  }
+
+  if (hasOwn('dimensionLength')) {
+    payload.dimensionLength = sanitizeNonNegativeNumber(rawBody.dimensionLength)
+  } else if (hasOwn('length')) {
+    payload.dimensionLength = sanitizeNonNegativeNumber(rawBody.length)
+  }
+
+  if (hasOwn('dimensionWidth')) {
+    payload.dimensionWidth = sanitizeNonNegativeNumber(rawBody.dimensionWidth)
+  } else if (hasOwn('width')) {
+    payload.dimensionWidth = sanitizeNonNegativeNumber(rawBody.width)
+  }
+
+  if (hasOwn('dimensionHeight')) {
+    payload.dimensionHeight = sanitizeNonNegativeNumber(rawBody.dimensionHeight)
+  } else if (hasOwn('height')) {
+    payload.dimensionHeight = sanitizeNonNegativeNumber(rawBody.height)
+  }
+
+  if (hasOwn('imageWidth')) {
+    payload.imageWidth = sanitizeNonNegativeInteger(rawBody.imageWidth)
+  }
+  if (hasOwn('imageHeight')) {
+    payload.imageHeight = sanitizeNonNegativeInteger(rawBody.imageHeight)
+  }
+
+  return payload
 }
 
 function parsePagination(query: Record<string, string | string[] | undefined>): AssetListQuery {
@@ -500,6 +637,13 @@ function mapDirectory(categories: AssetCategoryData[], assets: AssetData[]): Pro
           thumbnail,
           description,
           gleaned: false,
+          color: sanitizeHexColor(asset.color),
+          dimensionLength: typeof asset.dimensionLength === 'number' ? asset.dimensionLength : null,
+          dimensionWidth: typeof asset.dimensionWidth === 'number' ? asset.dimensionWidth : null,
+          dimensionHeight: typeof asset.dimensionHeight === 'number' ? asset.dimensionHeight : null,
+          sizeCategory: sanitizeString(asset.sizeCategory) ?? null,
+          imageWidth: typeof asset.imageWidth === 'number' ? Math.round(asset.imageWidth) : null,
+          imageHeight: typeof asset.imageHeight === 'number' ? Math.round(asset.imageHeight) : null,
         }
       })
 
@@ -596,12 +740,27 @@ export async function uploadAsset(ctx: Context): Promise<void> {
 
   const categoryId = await resolveCategoryId(type, payload.categoryId)
 
+  const dimensionLength = payload.dimensionLength ?? null
+  const dimensionWidth = payload.dimensionWidth ?? null
+  const dimensionHeight = payload.dimensionHeight ?? null
+  const sizeCategory = determineSizeCategory(dimensionLength, dimensionWidth, dimensionHeight)
+  const imageWidth = payload.imageWidth ?? null
+  const imageHeight = payload.imageHeight ?? null
+  const color = payload.color ?? null
+
   const asset = await AssetModel.create({
     name: payload.name ?? fileInfo.originalFilename ?? fileInfo.fileKey,
     categoryId,
     type,
     tags: tagObjectIds,
     size: fileInfo.size,
+    color,
+    dimensionLength,
+    dimensionWidth,
+    dimensionHeight,
+    sizeCategory,
+    imageWidth,
+    imageHeight,
     url: fileInfo.url,
     fileKey: fileInfo.fileKey,
     previewUrl: thumbnailInfo?.url ?? (type === 'image' ? fileInfo.url : null),
@@ -640,6 +799,9 @@ export async function updateAsset(ctx: Context): Promise<void> {
   }
   if (payload.description !== undefined) {
     updates.description = payload.description
+  }
+  if (payload.color !== undefined) {
+    updates.color = payload.color ?? null
   }
   if (payload.tagIds) {
     const tagIds = payload.tagIds.filter((tagId) => Types.ObjectId.isValid(tagId))
@@ -686,6 +848,42 @@ export async function updateAsset(ctx: Context): Promise<void> {
     updates.previewUrl = thumbnailInfo.url
     updates.thumbnailUrl = thumbnailInfo.url
     await deleteStoredFile(previousThumbnailKey)
+  }
+
+  let nextDimensionLength = asset.dimensionLength ?? null
+  if (payload.dimensionLength !== undefined) {
+    nextDimensionLength = payload.dimensionLength ?? null
+    updates.dimensionLength = nextDimensionLength
+  }
+
+  let nextDimensionWidth = asset.dimensionWidth ?? null
+  if (payload.dimensionWidth !== undefined) {
+    nextDimensionWidth = payload.dimensionWidth ?? null
+    updates.dimensionWidth = nextDimensionWidth
+  }
+
+  let nextDimensionHeight = asset.dimensionHeight ?? null
+  if (payload.dimensionHeight !== undefined) {
+    nextDimensionHeight = payload.dimensionHeight ?? null
+    updates.dimensionHeight = nextDimensionHeight
+  }
+
+  let nextImageWidth = asset.imageWidth ?? null
+  if (payload.imageWidth !== undefined) {
+    nextImageWidth = payload.imageWidth ?? null
+    updates.imageWidth = nextImageWidth
+  }
+
+  let nextImageHeight = asset.imageHeight ?? null
+  if (payload.imageHeight !== undefined) {
+    nextImageHeight = payload.imageHeight ?? null
+    updates.imageHeight = nextImageHeight
+  }
+
+  const currentSizeCategory = sanitizeString(asset.sizeCategory) ?? null
+  const computedSizeCategory = determineSizeCategory(nextDimensionLength, nextDimensionWidth, nextDimensionHeight)
+  if (computedSizeCategory !== currentSizeCategory) {
+    updates.sizeCategory = computedSizeCategory
   }
 
   if (Object.keys(updates).length === 0) {

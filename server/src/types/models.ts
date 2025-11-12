@@ -206,6 +206,13 @@ export interface AssetDocument extends Document<Types.ObjectId> {
   type: AssetType
   tags: Types.ObjectId[]
   size: number
+  color?: string | null
+  dimensionLength?: number | null
+  dimensionWidth?: number | null
+  dimensionHeight?: number | null
+  sizeCategory?: string | null
+  imageWidth?: number | null
+  imageHeight?: number | null
   url: string
   fileKey: string
   previewUrl?: string | null

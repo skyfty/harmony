@@ -1,13 +1,10 @@
 
-import type {SceneSkyboxSettings } from '@harmony/schema'
-export type CameraProjectionMode = 'perspective' | 'orthographic'
-export type CameraControlMode = 'orbit' | 'map'
-export type { SceneSkyboxSettings }
+import type {SceneSkyboxSettings,CameraControlMode,CameraProjection } from '@harmony/schema'
 
 export interface SceneViewportSettings {
   showGrid: boolean
   showAxes: boolean
-  cameraProjection: CameraProjectionMode
+  cameraProjection: CameraProjection
   cameraControlMode: CameraControlMode
   shadowsEnabled: boolean
   skybox: SceneSkyboxSettings

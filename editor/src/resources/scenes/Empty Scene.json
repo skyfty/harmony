@@ -121,7 +121,7 @@
     "showGrid": true,
     "showAxes": false,
     "cameraProjection": "perspective",
-    "cameraControlMode": "map",
+    "cameraControlMode": "orbit",
     "shadowsEnabled": true,
     "skybox": {
       "presetId": "clear-day",

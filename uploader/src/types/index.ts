@@ -54,6 +54,13 @@ export interface ManagedAsset {
   type: AssetType
   tags: AssetTagSummary[]
   tagIds: string[]
+  color?: string | null
+  dimensionLength?: number | null
+  dimensionWidth?: number | null
+  dimensionHeight?: number | null
+  sizeCategory?: string | null
+  imageWidth?: number | null
+  imageHeight?: number | null
   size: number
   url: string
   downloadUrl: string

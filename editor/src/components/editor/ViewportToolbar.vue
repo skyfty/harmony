@@ -163,7 +163,7 @@
 
 <script setup lang="ts">
 import { computed, ref, toRefs } from 'vue'
-import type { SceneSkyboxSettings } from '@harmony/schema'
+import type { SceneSkyboxSettings, CameraControlMode, CameraProjection } from '@harmony/schema'
 import type { SkyboxParameterKey, SkyboxPresetDefinition } from '@/types/skybox'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -175,11 +175,11 @@ const GROUND_NODE_ID = 'harmony:ground'
 const props = defineProps<{
   showGrid: boolean
   showAxes: boolean
-  cameraMode: 'perspective' | 'orthographic'
+  cameraMode: CameraProjection
   canDropSelection: boolean
   canAlignSelection: boolean
   skyboxSettings: SceneSkyboxSettings
-  cameraControlMode: 'orbit' | 'map'
+  cameraControlMode: CameraControlMode
   skyboxPresets: SkyboxPresetDefinition[]
   activeBuildTool: BuildTool | null
   shadowsEnabled: boolean

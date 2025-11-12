@@ -27,6 +27,13 @@ export interface AssetSummary {
   type: AssetType
   tags: AssetTagSummary[]
   tagIds: string[]
+  color?: string | null
+  dimensionLength?: number | null
+  dimensionWidth?: number | null
+  dimensionHeight?: number | null
+  sizeCategory?: string | null
+  imageWidth?: number | null
+  imageHeight?: number | null
   size: number
   url: string
   downloadUrl: string
@@ -46,6 +53,13 @@ export interface AssetManifestEntry {
   type: AssetType
   tags: AssetTagSummary[]
   tagIds: string[]
+  color?: string | null
+  dimensionLength?: number | null
+  dimensionWidth?: number | null
+  dimensionHeight?: number | null
+  sizeCategory?: string | null
+  imageWidth?: number | null
+  imageHeight?: number | null
   downloadUrl: string
   thumbnailUrl: string | null
   description: string | null

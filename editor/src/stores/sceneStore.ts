@@ -57,7 +57,9 @@ import type { SceneState } from '@/types/scene-state'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PresetSceneDocument } from '@/types/preset-scene'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
-import type { CameraProjectionMode, CameraControlMode, SceneSkyboxSettings, SceneViewportSettings } from '@/types/scene-viewport-settings'
+import type { SceneViewportSettings } from '@/types/scene-viewport-settings'
+import type { SceneSkyboxSettings, CameraControlMode, CameraProjection } from '@harmony/schema'
+
 import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
 import type {
   SceneMaterial,
@@ -2238,12 +2240,12 @@ const defaultViewportSettings: SceneViewportSettings = {
   showGrid: true,
   showAxes: false,
   cameraProjection: 'perspective',
-  cameraControlMode: 'map',
+  cameraControlMode: 'orbit',
   shadowsEnabled: true,
   skybox: cloneSkyboxSettings(defaultSkyboxSettings),
 }
 
-function isCameraProjectionMode(value: unknown): value is CameraProjectionMode {
+function isCameraProjectionMode(value: unknown): value is CameraProjection {
   return value === 'perspective' || value === 'orthographic'
 }
 
@@ -6566,14 +6568,14 @@ export const useSceneStore = defineStore('scene', {
     toggleViewportShadowsEnabled() {
       this.setViewportShadowsEnabled(!this.viewportSettings.shadowsEnabled)
     },
-    setViewportCameraProjection(mode: CameraProjectionMode) {
+    setViewportCameraProjection(mode: CameraProjection) {
       if (!isCameraProjectionMode(mode)) {
         return
       }
       this.setViewportSettings({ cameraProjection: mode })
     },
     toggleViewportCameraProjection() {
-      const next: CameraProjectionMode = this.viewportSettings.cameraProjection === 'perspective'
+      const next: CameraProjection = this.viewportSettings.cameraProjection === 'perspective'
         ? 'orthographic'
         : 'perspective'
       this.setViewportCameraProjection(next)

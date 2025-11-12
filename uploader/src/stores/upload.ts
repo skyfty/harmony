@@ -24,6 +24,12 @@ export interface UploadTask {
   status: UploadStatus
   progress: number
   tags: AssetTag[]
+  color: string
+  dimensionLength: number | null
+  dimensionWidth: number | null
+  dimensionHeight: number | null
+  imageWidth: number | null
+  imageHeight: number | null
   error?: string | null
   asset?: ManagedAsset | null
   preview: UploadTaskPreview
@@ -103,6 +109,22 @@ function inferAssetType(file: File): AssetType {
     return 'prefab'
   }
   return DEFAULT_ASSET_TYPE
+}
+
+function normalizeHexColor(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  if (!trimmed.length) {
+    return null
+  }
+  const prefixed = trimmed.startsWith('#') ? trimmed : `#${trimmed}`
+  return /^#([0-9a-fA-F]{6})$/.test(prefixed) ? `#${prefixed.slice(1).toLowerCase()}` : null
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
 }
 
 function releaseObjectUrl(taskId: string): void {
@@ -251,6 +273,12 @@ export const useUploadStore = defineStore('uploader-upload', () => {
         status: 'pending',
         progress: 0,
         tags: [],
+        color: '',
+        dimensionLength: null,
+        dimensionWidth: null,
+        dimensionHeight: null,
+        imageWidth: null,
+        imageHeight: null,
         error: null,
         asset: null,
         preview: {
@@ -315,6 +343,25 @@ export const useUploadStore = defineStore('uploader-upload', () => {
       formData.append('description', task.description)
     }
     task.tags.forEach((tag) => formData.append('tagIds', tag.id))
+    const normalizedColor = normalizeHexColor(task.color)
+    if (normalizedColor) {
+      formData.append('color', normalizedColor)
+    }
+    if (isFiniteNumber(task.dimensionLength)) {
+      formData.append('dimensionLength', task.dimensionLength.toString())
+    }
+    if (isFiniteNumber(task.dimensionWidth)) {
+      formData.append('dimensionWidth', task.dimensionWidth.toString())
+    }
+    if (isFiniteNumber(task.dimensionHeight)) {
+      formData.append('dimensionHeight', task.dimensionHeight.toString())
+    }
+    if (isFiniteNumber(task.imageWidth)) {
+      formData.append('imageWidth', Math.round(task.imageWidth).toString())
+    }
+    if (isFiniteNumber(task.imageHeight)) {
+      formData.append('imageHeight', Math.round(task.imageHeight).toString())
+    }
 
     try {
       const asset = await uploadAsset(formData, {
