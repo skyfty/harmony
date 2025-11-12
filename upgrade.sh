@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Harmony 一键升级脚本
 # 用法：
-#   ./upgrade.sh all         # 升级所有服务（server, admin, editor）
-#   ./upgrade.sh server      # 仅升级 server
-#   ./upgrade.sh admin editor # 升级指定多个服务
+#   ./upgrade.sh all           # 升级所有服务（server, admin, editor, uploader）
+#   ./upgrade.sh server        # 仅升级 server
+#   ./upgrade.sh admin editor  # 升级指定多个服务
+#   ./upgrade.sh uploader      # 仅升级 uploader
 
 set -euo pipefail
 
@@ -32,7 +33,7 @@ echo "[1/4] 拉取最新代码..."
 git pull --ff-only
 
 echo "[2/4] 选择升级的服务..."
-TARGET_SERVICES=("server" "admin" "editor")
+TARGET_SERVICES=("server" "admin" "editor" "uploader")
 if [ "$#" -gt 0 ]; then
   if [ "$1" != "all" ]; then
     TARGET_SERVICES=("$@")
