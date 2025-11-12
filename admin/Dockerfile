@@ -1,11 +1,18 @@
 # syntax=docker/dockerfile:1
 # --- Build Stage ---
 FROM node:20-alpine AS build
-WORKDIR /app
+# 使用仓库根为构建上下文（由 compose 指定），此处切到 admin 目录
+WORKDIR /app/admin
 ENV NODE_ENV=development
-COPY package.json package-lock.json ./
+# 先拷贝 package 清单，包含本地依赖所需的 schema 包描述
+COPY admin/package.json admin/package-lock.json ./
+COPY schema/package.json ../schema/package.json
+# 安装依赖（包含 devDependencies，确保 vite/vue-tsc 可用）
 RUN npm ci
-COPY . .
+# 拷贝源码（admin 与 schema）
+COPY admin/ ./
+COPY schema/ ../schema/
+# 构建产物
 RUN npm run build
 
 # --- Runtime Stage ---
@@ -14,7 +21,7 @@ WORKDIR /usr/share/nginx/html
 # 清空默认静态资源
 RUN rm -rf ./*
 # 拷贝构建产物
-COPY --from=build /app/dist ./
+COPY --from=build /app/admin/dist ./
 # 提供运行时配置目录，挂载 config 卷可覆盖
 RUN mkdir -p /usr/share/nginx/html/config
 # 拷贝自定义 nginx 配置（开启 gzip、缓存等）

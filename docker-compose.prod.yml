@@ -30,8 +30,8 @@ services:
 
   admin:
     build:
-      context: ./admin
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: admin/Dockerfile
     container_name: harmony-admin
     depends_on:
       - server
