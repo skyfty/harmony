@@ -319,7 +319,7 @@ const transformToolbarStyle = reactive<{ top: string; left: string }>({
 
 const viewportToolbarStyle = reactive<{ top: string; left: string }>({
   top: `${TOOLBAR_MIN_MARGIN}px`,
-  left: `${TOOLBAR_MIN_MARGIN}px`,
+  left: '0px',
 })
 
 let hierarchyPanelObserver: ResizeObserver | null = null
@@ -552,40 +552,28 @@ function updateTransformToolbarPosition() {
 
 function updateViewportToolbarPosition() {
   const viewport = viewportEl.value
-  if (!viewport) {
+  const toolbarEl = viewportToolbarHostRef.value
+  if (!viewport || !toolbarEl) {
     return
   }
+
   const viewportRect = viewport.getBoundingClientRect()
   if (viewportRect.width <= 0 || viewportRect.height <= 0) {
     return
   }
 
-  const panelEl = getInspectorPanelElement()
-  const toolbarEl = viewportToolbarHostRef.value
-  const toolbarWidth = toolbarEl?.offsetWidth ?? 0
-  const toolbarHeight = toolbarEl?.offsetHeight ?? 0
+  const toolbarWidth = toolbarEl.offsetWidth
+  const toolbarHeight = toolbarEl.offsetHeight
 
-  if (!panelEl) {
-    const maxLeftFallback = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.width - toolbarWidth - TOOLBAR_MIN_MARGIN)
-    const baseLeft = viewportRect.width - toolbarWidth - TOOLBAR_MIN_MARGIN
-    const candidateLeft = baseLeft - GIZMO_TOOLBAR_CLEARANCE
-    const computedLeft = clampToRange(candidateLeft, TOOLBAR_MIN_MARGIN, maxLeftFallback)
-    viewportToolbarStyle.left = `${computedLeft}px`
-    const maxTopFallback = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.height - toolbarHeight - TOOLBAR_MIN_MARGIN)
-    const fallbackTop = clampToRange(TOOLBAR_MIN_MARGIN, TOOLBAR_MIN_MARGIN, maxTopFallback)
-    viewportToolbarStyle.top = `${fallbackTop}px`
-    return
-  }
+  const centeredLeft = (viewportRect.width - toolbarWidth) / 2
+  const maxLeft = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.width - toolbarWidth - TOOLBAR_MIN_MARGIN)
+  const resolvedLeft = clampToRange(centeredLeft, TOOLBAR_MIN_MARGIN, maxLeft)
 
-  const panelRect = panelEl.getBoundingClientRect()
-  const maxLeft = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.width - toolbarWidth - TOOLBAR_MIN_MARGIN - TOOLBAR_MIN_OFFSET)
-  const maxTop = Math.max(TOOLBAR_MIN_MARGIN,toolbarHeight - TOOLBAR_MIN_MARGIN)
-  const candidateLeft = panelRect.left - viewportRect.left - toolbarWidth - TOOLBAR_OFFSET
-  const candidateTop = panelRect.top - viewportRect.top + TOOLBAR_OFFSET
-  const computedLeft = clampToRange(candidateLeft, TOOLBAR_MIN_MARGIN, maxLeft)
-  const computedTop = clampToRange(candidateTop, TOOLBAR_MIN_MARGIN, maxTop)
-  viewportToolbarStyle.left = `${computedLeft}px`
-  viewportToolbarStyle.top = `${computedTop}px`
+  const maxTop = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.height - toolbarHeight - TOOLBAR_MIN_MARGIN)
+  const resolvedTop = clampToRange(TOOLBAR_MIN_MARGIN, TOOLBAR_MIN_MARGIN, maxTop)
+
+  viewportToolbarStyle.left = `${resolvedLeft}px`
+  viewportToolbarStyle.top = `${resolvedTop}px`
 }
 
 function refreshPanelObservers() {
