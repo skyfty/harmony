@@ -1,6 +1,5 @@
 <template>
   <div>
-    {task.preview.kind}
     <ModelPreview
       v-if="task.preview.kind === 'model'"
       :file="task.file"

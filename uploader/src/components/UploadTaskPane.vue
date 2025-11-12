@@ -11,45 +11,54 @@
     <v-divider></v-divider>
     <v-card-text class="pt-6">
       <v-row dense>
-        <v-col cols="12" md="6">
-          <v-text-field v-model="task.name" label="资源名称" required />
+        <v-col cols="12" md="7">
+          <v-row dense>
+            <v-col cols="12" md="6">
+              <v-text-field v-model="task.name" label="资源名称" required />
+            </v-col>
+            <v-col cols="12" md="6">
+              <v-select
+                v-model="task.type"
+                :items="assetTypeOptions"
+                item-title="label"
+                item-value="value"
+                label="资源类型"
+                @update:model-value="handleTypeChange"
+              />
+            </v-col>
+            <v-col cols="12">
+              <v-textarea
+                v-model="task.description"
+                auto-grow
+                rows="2"
+                label="资源描述"
+              />
+            </v-col>
+            <v-col cols="12">
+              <v-combobox
+                v-model="tagInput"
+                :items="tagItems"
+                label="资源标签"
+                chips
+                closable-chips
+                multiple
+                clearable
+                return-object
+                item-title="name"
+                item-value="id"
+                hide-selected
+                @update:model-value="handleTagInput"
+              />
+            </v-col>
+          </v-row>
         </v-col>
-        <v-col cols="12" md="6">
-          <v-select
-            v-model="task.type"
-            :items="assetTypeOptions"
-            item-title="label"
-            item-value="value"
-            label="资源类型"
-            @update:model-value="handleTypeChange"
-          />
-        </v-col>
-        <v-col cols="12">
-          <v-textarea
-            v-model="task.description"
-            auto-grow
-            rows="2"
-            label="资源描述"
-          />
-        </v-col>
-        <v-col cols="12">
-          <v-combobox
-            v-model="tagInput"
-            :items="tagItems"
-            label="资源标签"
-            chips
-            closable-chips
-            multiple
-            clearable
-            return-object
-            item-title="name"
-            item-value="id"
-            hide-selected
-            @update:model-value="handleTagInput"
-          />
-        </v-col>
-        <v-col cols="12">
-          <div class="mb-2 font-weight-medium">预览</div>
+        <v-col cols="12" md="5">
+          <div class="d-flex align-center justify-space-between mb-3">
+            <div class="font-weight-medium">资源预览</div>
+            <v-chip v-if="previewBadge" size="small" variant="tonal" color="secondary">
+              {{ previewBadge }}
+            </v-chip>
+          </div>
           <PreviewRenderer :task="task" />
         </v-col>
       </v-row>
@@ -124,6 +133,18 @@ const props = defineProps<Props>()
 const uploadStore = useUploadStore()
 const tagInput = ref<Array<AssetTag | string>>([...props.task.tags])
 const isUploading = computed(() => props.task.status === 'uploading')
+const previewBadge = computed(() => {
+  switch (props.task.preview.kind) {
+    case 'image':
+      return '图片'
+    case 'text':
+      return '文本'
+    case 'model':
+      return '模型'
+    default:
+      return null
+  }
+})
 
 const tagItems = computed(() => props.availableTags)
 

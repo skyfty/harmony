@@ -1,7 +1,8 @@
 <template>
   <v-main class="bg-grey-lighten-4">
+
     <v-app-bar color="primary" prominent flat>
-      <v-app-bar-title>Harmony 资源上传中心</v-app-bar-title>
+      <v-app-bar-title>Harmony 资源上传中心ff</v-app-bar-title>
       <v-spacer></v-spacer>
       <v-btn icon="mdi-refresh" variant="text" @click="refreshTags" :loading="loadingTags"></v-btn>
       <v-menu v-if="authStore.user" location="bottom right">
@@ -21,7 +22,7 @@
         </v-list>
       </v-menu>
     </v-app-bar>
-    <v-container class="py-8" style="max-width: 1280px">
+  <v-container class="uploader-container" fluid>
       <div
         class="upload-surface pa-8"
         :class="{ 'is-dragover': isDragOver }"
@@ -203,3 +204,25 @@ async function handleLogout(): Promise<void> {
 
 uploadStore.ensureTagsLoaded().catch((error: unknown) => console.warn('加载标签失败', error))
 </script>
+
+<style scoped>
+.uploader-container {
+  width: 100%;
+  margin: 0;
+  padding: 48px clamp(24px, 6vw, 80px);
+  box-sizing: border-box;
+}
+
+@media (min-width: 1920px) {
+  .uploader-container {
+    padding-left: 96px;
+    padding-right: 96px;
+  }
+}
+
+@media (max-width: 960px) {
+  .uploader-container {
+    padding: 32px 20px;
+  }
+}
+</style>

@@ -1,4 +1,4 @@
-import { ref, computed } from 'vue'
+import { ref, computed, reactive } from 'vue'
 import { defineStore } from 'pinia'
 import { AssetTypes, DEFAULT_ASSET_TYPE, normalizeAssetType } from '@harmony/schema/asset-types'
 import type { AssetTag, AssetType, ManagedAsset } from '@/types'
@@ -137,6 +137,12 @@ async function buildPreview(task: UploadTask): Promise<UploadTaskPreview> {
   return { kind: 'none' }
 }
 
+function applyPreview(task: UploadTask, preview: UploadTaskPreview): void {
+  task.preview.kind = preview.kind
+  task.preview.url = preview.kind === 'image' ? preview.url : undefined
+  task.preview.text = preview.kind === 'text' ? preview.text : undefined
+}
+
 function mapTagByName(tags: AssetTag[]): Map<string, AssetTag> {
   const map = new Map<string, AssetTag>()
   tags.forEach((tag) => {
@@ -221,7 +227,8 @@ export const useUploadStore = defineStore('uploader-upload', () => {
 
   async function refreshPreview(id: string): Promise<void> {
     const task = findTask(id)
-    task.preview = await buildPreview(task)
+    const preview = await buildPreview(task)
+    applyPreview(task, preview)
     task.updatedAt = Date.now()
   }
 
@@ -234,7 +241,7 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     files.forEach((file) => {
       const id = generateId()
       const inferredType = inferAssetType(file)
-      const task: UploadTask = {
+      const task = reactive<UploadTask>({
         id,
         file,
         name: file.name.replace(/\.[^.]+$/, '') || file.name,
@@ -246,14 +253,16 @@ export const useUploadStore = defineStore('uploader-upload', () => {
         tags: [],
         error: null,
         asset: null,
-        preview: { kind: 'none' },
+        preview: {
+          kind: 'none',
+        },
         createdAt: Date.now(),
         updatedAt: Date.now(),
-      }
+      }) as UploadTask
       tasks.value.push(task)
       activeTaskId.value = id
-      buildPreview(task).then((preview) => {
-        task.preview = preview
+      void buildPreview(task).then((preview) => {
+        applyPreview(task, preview)
         task.updatedAt = Date.now()
       })
     })
