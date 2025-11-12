@@ -14,10 +14,10 @@ export const appConfig = {
   assetStoragePath: path.resolve(process.cwd(), process.env.ASSET_STORAGE_PATH ?? './uploads'),
   assetPublicUrl: process.env.ASSET_PUBLIC_URL ?? 'http://localhost:4000/uploads',
   editorPublicUrl: process.env.EDITOR_PUBLIC_URL ?? 'http://localhost:5173',
-  testUser: {
-    username: process.env.TEST_USER_USERNAME ?? 'editor',
-    password: process.env.TEST_USER_PASSWORD ?? 'editor123',
-    displayName: process.env.TEST_USER_DISPLAY_NAME ?? 'Editor 用户',
+  editorUser: {
+    username: process.env.EDITOR_USER_USERNAME ?? 'editor',
+    password: process.env.EDITOR_USER_PASSWORD ?? 'editor123',
+    displayName: process.env.EDITOR_USER_DISPLAY_NAME ?? 'Editor 用户',
   },
   uploaderUser: {
     username: process.env.UPLOADER_USER_USERNAME ?? 'uploader',

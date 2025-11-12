@@ -1,9 +1,10 @@
-# Harmony 全栈生产部署指南 (server / admin / editor)
+# Harmony 全栈生产部署指南 (server / admin / editor / uploader)
 
 本指南覆盖以下子工程的生产部署、升级与回滚流程：
 - `server`：Koa + Mongo，API 与资源上传（域名：`cdn.touchmagic.cn` 用于静态与 API 反代）。
 - `admin`：后台管理前端（域名：`admin.v.touchmagic.cn`）。
 - `editor`：场景/编辑器前端（域名：`editor.v.touchmagic.cn`）。
+- `uploader`：独立资源上传前端（域名建议如 `uploader.v.touchmagic.cn`）。
 
 特点：
 - 所有服务通过 Docker Compose 编排。
@@ -77,11 +78,32 @@ nano .env.production
 前端项目同样提供 `.env.development` 与 `.env.production`，默认分别指向本地与生产域名，可按需调整：
 - `admin/.env.development`、`admin/.env.production`
 - `editor/.env.development`、`editor/.env.production`
+- `uploader/.env.development`、`uploader/.env.production`
 开发阶段保持默认即可连接本地 `http://localhost:4000`，上线前将生产文件中的域名替换为实际服务器地址。
 
 关键变量说明：
 - `MONGODB_URI=mongodb://mongo:27017/harmony`：容器内部使用服务名 `mongo` 与其内部端口 27017，不受宿主机映射影响。
 - `ASSET_PUBLIC_URL=https://cdn.touchmagic.cn/uploads`：用于上传资源外链访问；反向代理需对应配置路径 `/uploads`。
+- `UPLOADER_USER_USERNAME` / `UPLOADER_USER_PASSWORD` / `UPLOADER_USER_DISPLAY_NAME`：用于自动生成 uploader 登录账号，可按需自定义强密码。
+
+### 初始化默认账号 / 基础数据
+
+`server` 项目提供 `npm run seed` 用于创建默认管理员、测试账号、uploader 账号及部分示例数据。建议在首次部署与更改默认账号配置后执行一次：
+
+```bash
+# 在仓库根目录（已安装依赖）
+cd server
+npm install # 首次部署若未安装
+npm run seed
+
+# 如果通过 Docker 部署，可在服务器上执行（compose 方式）：
+docker compose -f docker-compose.prod.yml run --rm server npm run seed
+```
+
+该脚本会调用：
+- `createInitialAdmin()`：生成超级管理员账号 `admin`（默认密码 `admin123`，请登录后修改）。
+- `ensureTestUser()`：生成测试账号（默认来自 `TEST_USER_*`）。
+- `ensureUploaderUser()`：生成 uploader 使用的专用账号（默认来自 `UPLOADER_USER_*`）。
 
 ## 五、目录与 docker-compose 结构
 `docker-compose.prod.yml` 关键点：
@@ -90,8 +112,9 @@ nano .env.production
 |------|------|------------------|-------------|------|
 | mongo | 数据库 | 27018→27017 | `/www/web/v_touchmagic_cn/harmony/server/mongo-data:/data/db` | 避免与系统已有 Mongo 冲突 |
 | server | 后端 API & 上传 | 4000→4000 | `/www/web/v_touchmagic_cn/harmony/server/uploads:/app/uploads` | Koa 应用，反代暴露 |
-| admin | 管理前端 | 8081→80 | `/www/web/v_touchmagic_cn/harmony/config/admin-app-config.json:/usr/share/nginx/html/config/app-config.json:ro` | 运行时配置文件 |
-| editor | 编辑器前端 | 8082→80 | `/www/web/v_touchmagic_cn/harmony/config/editor-app-config.json:/usr/share/nginx/html/config/app-config.json:ro` | 运行时配置文件 |
+| admin | 管理前端 | 8087→80 | `/www/web/v_touchmagic_cn/harmony/config/admin-app-config.json:/usr/share/nginx/html/config/app-config.json:ro` | 运行时配置文件 |
+| editor | 编辑器前端 | 8088→80 | `/www/web/v_touchmagic_cn/harmony/config/editor-app-config.json:/usr/share/nginx/html/config/app-config.json:ro` | 运行时配置文件 |
+| uploader | 上传前端 | 8090→80 | `/www/web/v_touchmagic_cn/harmony/config/uploader-app-config.json:/usr/share/nginx/html/config/app-config.json:ro` | 运行时配置文件 |
 
 前端运行时配置文件示例（宿主机路径）：
 `/www/web/v_touchmagic_cn/harmony/config/admin-app-config.json`
@@ -102,7 +125,15 @@ nano .env.production
   "assetPublicBaseUrl": "https://cdn.touchmagic.cn/uploads"
 }
 ```
-`editor` 同理。
+`editor`、`uploader` 同理，可视业务需要分别配置。例如 `uploader`：
+
+`/www/web/v_touchmagic_cn/harmony/config/uploader-app-config.json`
+```json
+{
+  "serverApiBaseUrl": "https://cdn.touchmagic.cn",
+  "serverApiPrefix": "/api"
+}
+```
 
 ## 六、首次构建与启动
 
@@ -129,6 +160,7 @@ docker compose -f docker-compose.prod.yml logs -f server
 docker compose -f docker-compose.prod.yml logs -f mongo
 docker compose -f docker-compose.prod.yml logs -f admin
 docker compose -f docker-compose.prod.yml logs -f editor
+docker compose -f docker-compose.prod.yml logs -f uploader
 ```
 
 ## 七、数据与备份策略
@@ -206,6 +238,22 @@ server {
     proxy_set_header X-Forwarded-Proto $scheme;
   }
 }
+
+server {
+  listen 80;
+  listen 443 ssl http2;
+  server_name uploader.v.touchmagic.cn;
+
+  client_max_body_size 100m;
+
+  location / {
+    proxy_pass http://127.0.0.1:8090/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+}
 ```
 4. 启用配置：
 ```bash
@@ -223,6 +271,7 @@ curl -I https://cdn.touchmagic.cn/uploads/实际文件名
 
 curl -I https://admin.v.touchmagic.cn/
 curl -I https://editor.v.touchmagic.cn/
+curl -I https://uploader.v.touchmagic.cn/
 ```
 查看应用日志确认启动：`Server listening on http://localhost:4000`。
 
