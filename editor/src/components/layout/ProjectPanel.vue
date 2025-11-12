@@ -4,13 +4,7 @@ import { storeToRefs } from 'pinia'
 import { Splitpanes, Pane } from 'splitpanes'
 import 'splitpanes/dist/splitpanes.css'
 import { useSceneStore, extractProviderIdFromPackageDirectoryId } from '@/stores/sceneStore'
-import {
-  ASSET_CATEGORY_CONFIG,
-  ASSETS_ROOT_DIRECTORY_ID,
-  PACKAGES_ROOT_DIRECTORY_ID,
-  determineAssetCategoryId,
-} from '@/stores/assetCatalog'
-import type { AssetCategoryDefinition } from '@/stores/assetCatalog'
+import { PACKAGES_ROOT_DIRECTORY_ID, determineAssetCategoryId } from '@/stores/assetCatalog'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -18,13 +12,9 @@ import { resourceProviders } from '@/resources/projectProviders'
 import { loadProviderCatalog, storeProviderCatalog } from '@/stores/providerCatalogCache'
 import { getCachedModelObject } from '@/stores/modelObjectCache'
 import { dataUrlToBlob, extractExtension } from '@/utils/blob'
-import {
-  createAssetTag,
-  fetchAssetTags,
-  generateAssetTagSuggestions,
-  mapServerAssetToProjectAsset,
-  uploadAssetToServer,
-} from '@/api/resourceAssets'
+// Upload to server is handled in UploadAssetsDialog component
+
+import UploadAssetsDialog from './UploadAssetsDialog.vue'
 
 const OPENED_DIRECTORIES_STORAGE_KEY = 'harmony:project-panel:opened-directories'
 function restoreOpenedDirectories(): string[] {
@@ -110,7 +100,7 @@ function countDirectoryAssets(directory: ProjectDirectory | undefined): number {
   return directory.children.reduce((total, child) => total + countDirectoryAssets(child), directCount)
 }
 
-const props = defineProps<{
+defineProps<{
   floating?: boolean
 }>()
 
@@ -134,6 +124,18 @@ const {
 } = storeToRefs(sceneStore)
 
 const openedDirectories = ref<string[]>(restoreOpenedDirectories())
+// Persist opened directories whenever they change, sanitized against current tree
+watch(openedDirectories, (ids) => {
+  const sanitized = sanitizeOpenedDirectories(ids, projectTree.value)
+  persistOpenedDirectories(sanitized)
+})
+// Re-sanitize when tree changes (e.g., providers load)
+watch(projectTree, () => {
+  const sanitized = sanitizeOpenedDirectories(openedDirectories.value, projectTree.value)
+  if (!arraysEqual(sanitized, openedDirectories.value)) {
+    openedDirectories.value = sanitized
+  }
+})
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 let dragPreviewEl: HTMLDivElement | null = null
 let dragImageOffset: { x: number; y: number } | null = null
@@ -155,404 +157,27 @@ const dropDragDepth = ref(0)
 const dropFeedback = ref<{ kind: 'success' | 'error'; message: string } | null>(null)
 let dropFeedbackTimer: number | null = null
 const uploadDialogOpen = ref(false)
-const uploadEntries = ref<UploadAssetEntry[]>([])
-const uploadPrimaryEntry = computed<UploadAssetEntry | null>(() => uploadEntries.value[0] ?? null)
-const uploadPrimaryDescription = computed<string>({
-  get() {
-    return uploadPrimaryEntry.value?.description ?? ''
-  },
-  set(value: string) {
-    if (uploadPrimaryEntry.value) {
-      uploadPrimaryEntry.value.description = value
-    }
-  },
-})
-const uploadSelectedTagIds = ref<string[]>([])
-const uploadSubmitting = ref(false)
-const uploadError = ref<string | null>(null)
-const aiTagLoading = ref(false)
-const aiTagError = ref<string | null>(null)
-const aiSuggestedTags = ref<string[]>([])
-const serverTags = ref<TagOption[]>([])
-const serverTagsLoaded = ref(false)
-const serverTagsLoading = ref(false)
-const serverTagsError = ref<string | null>(null)
 
-type AssetCategoryKey = AssetCategoryDefinition['key']
-
-type TagOption = {
-  value: string
-  label: string
-  id?: string
-  name: string
-}
-
-type UploadAssetEntry = {
-  assetId: string
-  asset: ProjectAsset
-  name: string
-  description: string
-  color: string
-  colorHexInput: string
-  dimensionLength: number | null
-  dimensionWidth: number | null
-  dimensionHeight: number | null
-  imageWidth: number | null
-  imageHeight: number | null
-  status: 'pending' | 'uploading' | 'success' | 'error'
-  error: string | null
-  uploadedAssetId: string | null
-  aiLastSignature: string | null
-}
-
-type DimensionKey = 'dimensionLength' | 'dimensionWidth' | 'dimensionHeight'
-type ImageDimensionKey = 'imageWidth' | 'imageHeight'
-
-function normalizeHexColor(value: string | null | undefined): string | null {
-  if (typeof value !== 'string') {
-    return null
-  }
-  const trimmed = value.trim()
-  if (!trimmed.length) {
-    return null
-  }
-  const prefixed = trimmed.startsWith('#') ? trimmed : `#${trimmed}`
-  return /^#([0-9a-fA-F]{6})$/.test(prefixed) ? `#${prefixed.slice(1).toLowerCase()}` : null
-}
-
-function formatHexInputDisplay(value: string | null | undefined): string {
-  const normalized = normalizeHexColor(value)
-  return normalized ? normalized.toUpperCase() : ''
-}
-
-function applyEntryColor(entry: UploadAssetEntry, value: string | null): void {
-  const normalized = normalizeHexColor(value)
-  if (normalized) {
-    entry.color = normalized
-    entry.colorHexInput = normalized.toUpperCase()
-  }
-}
-
-function handleEntryColorInput(entry: UploadAssetEntry, value: string | number | null): void {
-  const raw = typeof value === 'number' ? value.toString() : (value ?? '')
-  const hex = raw.replace(/[^0-9a-fA-F]/g, '').slice(0, 6)
-  entry.colorHexInput = hex.length ? `#${hex.toUpperCase()}` : ''
-  if (!hex.length) {
-    entry.color = ''
-    return
-  }
-  const normalized = normalizeHexColor(entry.colorHexInput)
-  if (normalized) {
-    entry.color = normalized
-  }
-}
-
-function entryColorPreview(entry: UploadAssetEntry): string {
-  const explicit = normalizeHexColor(entry.color)
-  if (explicit) {
-    return explicit
-  }
-  const assetColor = normalizeHexColor(entry.asset.color ?? null)
-  if (assetColor) {
-    return assetColor
-  }
-  return resolvePreviewColor(entry.asset.type)
-}
-
-function formatDimension(value: number | null): string {
-  return typeof value === 'number' && Number.isFinite(value) ? String(value) : ''
-}
-
-function setEntryDimension(entry: UploadAssetEntry, key: DimensionKey, value: string | number | null): void {
-  const parsed = typeof value === 'number' ? value : Number.parseFloat((value ?? '').toString())
-  entry[key] = Number.isFinite(parsed) && parsed >= 0 ? parsed : null
-}
-
-function formatInteger(value: number | null): string {
-  return typeof value === 'number' && Number.isFinite(value) ? String(Math.round(value)) : ''
-}
-
-function setEntryImageDimension(entry: UploadAssetEntry, key: ImageDimensionKey, value: string | number | null): void {
-  const parsed = typeof value === 'number' ? value : Number.parseFloat((value ?? '').toString())
-  entry[key] = Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : null
-}
-
-function computeSizeCategory(length: number | null, width: number | null, height: number | null): string | null {
-  const values = [length, width, height]
-    .filter((candidate): candidate is number => typeof candidate === 'number' && Number.isFinite(candidate) && candidate > 0)
-  if (!values.length) {
-    return null
-  }
-  const max = Math.max(...values)
-  if (max < 0.1) {
-    return '微型'
-  }
-  if (max < 0.5) {
-    return '小型'
-  }
-  if (max < 1) {
-    return '普通'
-  }
-  if (max < 3) {
-    return '中型'
-  }
-  if (max < 10) {
-    return '大型'
-  }
-  if (max < 30) {
-    return '巨型'
-  }
-  return '巨大型'
-}
-
-function entrySizeCategory(entry: UploadAssetEntry): string | null {
-  return computeSizeCategory(entry.dimensionLength, entry.dimensionWidth, entry.dimensionHeight)
-}
-
-function createTagOption(id: string, name: string): TagOption {
-  const label = name && name.trim().length ? name.trim() : id
-  return {
-    value: id,
-    label,
-    id,
-    name: label,
-  }
-}
-
-function findTagOptionByName(options: TagOption[], name: string): TagOption | undefined {
-  const normalized = name.trim().toLowerCase()
-  if (!normalized) {
-    return undefined
-  }
-  return options.find((option) => option.name.toLowerCase() === normalized || option.label.toLowerCase() === normalized)
-}
-
-const CATEGORY_KEY_TO_TYPE: Record<AssetCategoryKey, ProjectAsset['type']> = {
-  models: 'model',
-  meshes: 'mesh',
-  images: 'image',
-  textures: 'texture',
-  materials: 'material',
-  behaviors: 'behavior',
-  prefabs: 'prefab',
-  videos: 'video',
-  others: 'file',
-}
-
-const DEFAULT_PREVIEW_COLORS: Record<ProjectAsset['type'], string> = {
-  model: '#26C6DA',
-  mesh: '#26C6DA',
-  image: '#1E88E5',
-  texture: '#8E24AA',
-  material: '#FFB74D',
-  behavior: '#4DB6AC',
-  prefab: '#7986CB',
-  video: '#FF7043',
-  file: '#546E7A',
-}
-
-const EXTENSION_TYPE_MAP = new Map<string, ProjectAsset['type']>()
-ASSET_CATEGORY_CONFIG.forEach((category) => {
-  const categoryType = CATEGORY_KEY_TO_TYPE[category.key]
-  if (!categoryType) {
-    return
-  }
-  category.extensions.forEach((extension) => {
-    const normalized = extension.replace(/^[.]/, '').toLowerCase()
-    if (normalized.length) {
-      EXTENSION_TYPE_MAP.set(normalized, categoryType)
-    }
-  })
-})
-
-const assetDirectoryIds = new Set<string>([
-  ASSETS_ROOT_DIRECTORY_ID,
-  ...ASSET_CATEGORY_CONFIG.map((category) => category.id),
-])
-
-function isAssetsDirectory(directoryId: string | null | undefined): boolean {
-  if (!directoryId) {
-    return false
-  }
-  if (assetDirectoryIds.has(directoryId)) {
-    return true
-  }
-  const path = findDirectoryPath(projectTree.value, directoryId)
-  if (!path?.length) {
-    return false
-  }
-  return path.some((directory) => directory.id === ASSETS_ROOT_DIRECTORY_ID)
-}
-
-const allowAssetDrop = computed(() => isAssetsDirectory(activeDirectoryId.value))
-const dropOverlayVisible = computed(() => allowAssetDrop.value && (dropActive.value || dropProcessing.value))
-const dropOverlayMessage = computed(() => (dropProcessing.value ? '正在导入资源…' : '松开鼠标导入资源'))
-
-const providerLoading = ref<Record<string, boolean>>({})
-const providerErrors = ref<Record<string, string | null>>({})
-const floating = computed(() => props.floating ?? false)
-const placementIcon = computed(() => (floating.value ? 'mdi-dock-bottom' : 'mdi-arrow-expand'))
-const placementTitle = computed(() => (floating.value ? '停靠到底部' : '浮动显示'))
-
-function setProviderLoading(providerId: string, value: boolean) {
-  providerLoading.value = {
-    ...providerLoading.value,
-    [providerId]: value,
-  }
-}
+// Provider loading/error state tracking for external package providers
+const providerLoadingState = ref<Record<string, boolean>>({})
+const providerErrorState = ref<Record<string, string | null>>({})
 
 function isProviderLoading(providerId: string): boolean {
-  return providerLoading.value[providerId] ?? false
+  return !!providerLoadingState.value[providerId]
 }
-
-function isProviderDirectory(directoryId: string | null | undefined): boolean {
-  if (!directoryId) {
-    return false
-  }
-  return extractProviderIdFromPackageDirectoryId(directoryId) !== null
+function setProviderLoading(providerId: string, value: boolean): void {
+  providerLoadingState.value = { ...providerLoadingState.value, [providerId]: value }
 }
-
-function isDirectoryLoading(directoryId: string | null | undefined): boolean {
-  if (!directoryId) {
-    return false
-  }
-  const providerId = extractProviderIdFromPackageDirectoryId(directoryId)
-  if (!providerId) {
-    return false
-  }
-  return isProviderLoading(providerId)
-}
-
-function setProviderError(providerId: string, message: string | null) {
-  providerErrors.value = {
-    ...providerErrors.value,
-    [providerId]: message,
-  }
-}
-
 function getProviderError(providerId: string): string | null {
-  return providerErrors.value[providerId] ?? null
+  return providerErrorState.value[providerId] ?? null
 }
-
-const selectedDirectory = computed({
-  get: () => (activeDirectoryId.value ? [activeDirectoryId.value] : []),
-  set: (ids: string[]) => {
-    const target = ids[0]
-    if (target) {
-      sceneStore.setActiveDirectory(target)
-    }
-  },
-})
-const allSelectedAssetsCached = computed(() =>
-  selectedAssets.value.length > 0 && selectedAssets.value.every((asset) => assetCacheStore.hasCache(resolveAssetCacheId(asset))),
-)
-const isToolbarDeleteVisible = computed(() => allSelectedAssetsCached.value)
-watch(
-  projectTree,
-  (tree) => {
-    if (!tree) {
-      return
-    }
-    const sanitized = sanitizeOpenedDirectories(openedDirectories.value, tree)
-    const withPackages = sanitized.includes(PACKAGES_ROOT_DIRECTORY_ID)
-      ? sanitized
-      : [...sanitized, PACKAGES_ROOT_DIRECTORY_ID]
-    if (!arraysEqual(withPackages, openedDirectories.value)) {
-      openedDirectories.value = withPackages
-    }
-  },
-  { immediate: true }
-)
-
-watch(allowAssetDrop, (canDrop) => {
-  if (!canDrop && !dropProcessing.value) {
-    dropActive.value = false
-    dropDragDepth.value = 0
-  }
-})
-
-watch(
-  () => [...openedDirectories.value],
-  (next, prev = []) => {
-    const prevSet = new Set(prev)
-    next.forEach((id) => {
-      if (prevSet.has(id)) {
-        return
-      }
-      const providerId = extractProviderIdFromPackageDirectoryId(id)
-      if (providerId) {
-        void loadPackageDirectory(providerId)
-      }
-    })
-  },
-)
-
-watch(
-  () => [...openedDirectories.value],
-  (ids) => {
-    persistOpenedDirectories(ids)
-  },
-  { deep: false }
-)
-
-watch(
-  activeDirectoryId,
-  (directoryId) => {
-    const providerId = findProviderIdForDirectoryId(directoryId ?? null)
-    if (providerId) {
-      sceneStore.setResourceProviderId(providerId)
-      if (!sceneStore.isPackageLoaded(providerId) && !isProviderLoading(providerId)) {
-        void loadPackageDirectory(providerId)
-      }
-    } else {
-      sceneStore.setResourceProviderId('scene')
-    }
-  },
-  { immediate: true }
-)
-
-function findDirectoryPath(
-  tree: ProjectDirectory[] | undefined,
-  targetId: string,
-  trail: ProjectDirectory[] = [],
-): ProjectDirectory[] | null {
-  if (!tree?.length) {
-    return null
-  }
-  for (const directory of tree) {
-    const nextTrail = [...trail, directory]
-    if (directory.id === targetId) {
-      return nextTrail
-    }
-    if (directory.children?.length) {
-      const found = findDirectoryPath(directory.children, targetId, nextTrail)
-      if (found) {
-        return found
-      }
-    }
-  }
-  return null
+function setProviderError(providerId: string, message: string | null): void {
+  providerErrorState.value = { ...providerErrorState.value, [providerId]: message }
 }
 
 function findProviderIdForDirectoryId(directoryId: string | null): string | null {
-  if (!directoryId) {
-    return null
-  }
-  const direct = extractProviderIdFromPackageDirectoryId(directoryId)
-  if (direct) {
-    return direct
-  }
-  const path = findDirectoryPath(projectTree.value, directoryId)
-  if (!path) {
-    return null
-  }
-  for (let index = path.length - 1; index >= 0; index -= 1) {
-    const candidate = extractProviderIdFromPackageDirectoryId(path[index]!.id)
-    if (candidate) {
-      return candidate
-    }
-  }
-  return null
+  if (!directoryId) return null
+  return extractProviderIdFromPackageDirectoryId(directoryId)
 }
 
 async function loadPackageDirectory(providerId: string, options: { force?: boolean } = {}) {
@@ -679,18 +304,7 @@ async function ensureAssetCached(asset: ProjectAsset) {
   }
 }
 
-async function createUploadFileFromCache(asset: ProjectAsset): Promise<File> {
-  let file = assetCacheStore.createFileFromCache(asset.id)
-  if (file) {
-    return file
-  }
-  await assetCacheStore.loadFromIndexedDb(asset.id)
-  file = assetCacheStore.createFileFromCache(asset.id)
-  if (file) {
-    return file
-  }
-  throw new Error('资源文件尚未缓存，无法上传')
-}
+// Removed unused createUploadFileFromCache (upload moved to UploadAssetsDialog)
 
 async function handleAddAsset(asset: ProjectAsset) {
   if (addPendingAssetId.value === asset.id) {
@@ -1007,6 +621,13 @@ function clearTagFilters(): void {
 
 const baseDisplayedAssets = computed(() => (isSearchActive.value ? searchResults.value : currentAssets.value))
 
+type TagOption = {
+  value: string
+  label: string
+  id?: string
+  name: string
+}
+
 const tagOptions = computed<TagOption[]>(() => {
   const map = new Map<string, TagOption>()
   baseDisplayedAssets.value.forEach((asset) => {
@@ -1045,20 +666,7 @@ const tagOptionMap = computed(() => {
   return new Map<string, TagOption>(entries)
 })
 
-const uploadTagOptions = computed(() => {
-  const map = new Map<string, TagOption>()
-  serverTags.value.forEach((option) => {
-    if (!map.has(option.value)) {
-      map.set(option.value, option)
-    }
-  })
-  tagOptions.value.forEach((option) => {
-    if (!map.has(option.value)) {
-      map.set(option.value, option)
-    }
-  })
-  return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
-})
+// uploadTagOptions moved to UploadAssetsDialog component
 
 const uploadableSelectedAssets = computed(() =>
   selectedAssets.value.filter((asset) => assetIndex.value?.[asset.id]?.source?.type === 'local'),
@@ -1066,16 +674,7 @@ const uploadableSelectedAssets = computed(() =>
 
 const canUploadSelection = computed(() => uploadableSelectedAssets.value.length > 0)
 
-const canSubmitUpload = computed(() => uploadEntries.value.length > 0 && !uploadSubmitting.value)
-const canRequestAiTags = computed(() => {
-  const entry = uploadEntries.value[0]
-  if (!entry) {
-    return false
-  }
-  const name = entry.name?.trim().length ? entry.name.trim() : entry.asset.name?.trim()
-  const description = entry.description?.trim() ?? ''
-  return Boolean(name || description)
-})
+// upload submit states moved to UploadAssetsDialog component
 
 function assetMatchesSelectedTags(asset: ProjectAsset, selectedValues: string[]): boolean {
   if (!selectedValues.length) {
@@ -1130,13 +729,7 @@ watch(tagFilterPanelOpen, (open) => {
   }
 })
 
-watch(uploadDialogOpen, (open) => {
-  if (open) {
-    void loadServerTags()
-  } else if (!uploadSubmitting.value) {
-    resetUploadState()
-  }
-})
+// Upload dialog state is handled inside the UploadAssetsDialog component
 
 const galleryDirectories = computed(() => {
   if (isSearchActive.value) {
@@ -1184,404 +777,23 @@ function showDropFeedback(kind: 'success' | 'error', message: string) {
   }, 4000)
 }
 
-async function loadServerTags(options: { force?: boolean } = {}) {
-  const force = options.force ?? false
-  if (serverTagsLoading.value) {
-    return
-  }
-  if (serverTagsLoaded.value && !force) {
-    return
-  }
-  serverTagsLoading.value = true
-  serverTagsError.value = null
-  try {
-    const tags = await fetchAssetTags()
-    if (!Array.isArray(tags)) {
-      serverTags.value = []
-      serverTagsLoaded.value = true
-      return
-    }
-    const map = new Map<string, TagOption>()
-    tags.forEach((tag) => {
-      if (tag && typeof tag.id === 'string' && tag.id.trim().length) {
-        const option = createTagOption(tag.id, typeof tag.name === 'string' ? tag.name : tag.id)
-        map.set(option.value, option)
-      }
-    })
-    serverTags.value = Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
-    serverTagsLoaded.value = true
-  } catch (error) {
-    serverTagsError.value = (error as Error).message ?? '标签加载失败'
-  } finally {
-    serverTagsLoading.value = false
-  }
-}
-
-function resetUploadState() {
-  uploadEntries.value = []
-  uploadSelectedTagIds.value = []
-  uploadError.value = null
-  aiTagLoading.value = false
-  aiTagError.value = null
-  aiSuggestedTags.value = []
-}
-
-function buildAiSignature(entry: UploadAssetEntry): string {
-  const name = entry.name?.trim().toLowerCase() ?? ''
-  const description = entry.description?.trim().toLowerCase() ?? ''
-  return `${entry.assetId}::${entry.asset.type}::${name}::${description}`
-}
-
-function buildExtraHints(entry: UploadAssetEntry): string[] {
-  const hints: string[] = []
-  const color = normalizeHexColor(entry.color) ?? normalizeHexColor(entry.asset.color ?? null)
-  if (color) {
-    hints.push(`主要颜色 ${color}`)
-  }
-  if (entry.asset.type === 'model' || entry.asset.type === 'prefab') {
-    const parts: string[] = []
-    if (typeof entry.dimensionLength === 'number' && Number.isFinite(entry.dimensionLength) && entry.dimensionLength > 0) {
-      parts.push(`长度 ${entry.dimensionLength.toFixed(2)} 米`)
-    }
-    if (typeof entry.dimensionWidth === 'number' && Number.isFinite(entry.dimensionWidth) && entry.dimensionWidth > 0) {
-      parts.push(`宽度 ${entry.dimensionWidth.toFixed(2)} 米`)
-    }
-    if (typeof entry.dimensionHeight === 'number' && Number.isFinite(entry.dimensionHeight) && entry.dimensionHeight > 0) {
-      parts.push(`高度 ${entry.dimensionHeight.toFixed(2)} 米`)
-    }
-    if (parts.length) {
-      hints.push(`模型尺寸 ${parts.join('，')}`)
-    }
-    const sizeCategory = entrySizeCategory(entry)
-    if (sizeCategory) {
-      hints.push(`尺寸分类 ${sizeCategory}`)
-    }
-  }
-  if (entry.asset.type === 'image') {
-    const parts: string[] = []
-    if (typeof entry.imageWidth === 'number' && Number.isFinite(entry.imageWidth) && entry.imageWidth > 0) {
-      parts.push(`宽度 ${Math.round(entry.imageWidth)} 像素`)
-    }
-    if (typeof entry.imageHeight === 'number' && Number.isFinite(entry.imageHeight) && entry.imageHeight > 0) {
-      parts.push(`高度 ${Math.round(entry.imageHeight)} 像素`)
-    }
-    if (parts.length) {
-      hints.push(`图片尺寸 ${parts.join('，')}`)
-    }
-  }
-  return hints
-}
-
-function integrateSuggestedTags(tags: string[]): number {
-  if (!tags.length) {
-    return 0
-  }
-  const existing = new Set(
-    uploadSelectedTagIds.value
-      .map((value) => (typeof value === 'string' ? value.trim().toLowerCase() : ''))
-      .filter((value) => value.length > 0),
-  )
-  const optionMap = new Map<string, string>()
-  tagOptions.value.forEach((option) => {
-    optionMap.set(option.label.trim().toLowerCase(), option.value)
-  })
-
-  const appended: string[] = []
-  tags.forEach((tag) => {
-    const trimmed = typeof tag === 'string' ? tag.trim() : ''
-    if (!trimmed) {
-      return
-    }
-    const normalized = trimmed.toLowerCase()
-    if (existing.has(normalized)) {
-      return
-    }
-    const optionValue = optionMap.get(normalized)
-    appended.push(optionValue ?? trimmed)
-    existing.add(normalized)
-  })
-
-  if (!appended.length) {
-    return 0
-  }
-
-  uploadSelectedTagIds.value = [...uploadSelectedTagIds.value, ...appended]
-  return appended.length
-}
-
-async function requestAiTagsForEntry(entry: UploadAssetEntry, options: { auto?: boolean } = {}): Promise<void> {
-  if (aiTagLoading.value) {
-    return
-  }
-  const preferredName = entry.name?.trim().length ? entry.name.trim() : entry.asset.name
-  const description = entry.description?.trim() ?? ''
-  if (!preferredName && !description) {
-    if (!options.auto) {
-      aiTagError.value = '请先填写资源名称或描述'
-    }
-    return
-  }
-
-  const signature = buildAiSignature(entry)
-  if (options.auto && entry.aiLastSignature === signature) {
-    return
-  }
-
-  aiTagLoading.value = true
-  aiTagError.value = null
-
-  try {
-    const result = await generateAssetTagSuggestions({
-      name: preferredName,
-      description,
-      assetType: entry.asset.type,
-      extraHints: buildExtraHints(entry),
-    })
-    const added = integrateSuggestedTags(result.tags ?? [])
-    aiSuggestedTags.value = result.tags ?? []
-    entry.aiLastSignature = signature
-    if (!added && !options.auto) {
-      aiTagError.value = 'AI 生成的标签已存在，可继续编辑或上传'
-    }
-  } catch (error) {
-    if (options.auto) {
-      console.warn('自动生成标签失败', error)
-      return
-    }
-    aiTagError.value = (error as Error).message ?? '生成标签失败'
-  } finally {
-    aiTagLoading.value = false
-  }
-}
-
-function handleGenerateTagsClick(): void {
-  const entry = uploadEntries.value[0]
-  if (!entry) {
-    aiTagError.value = '暂无可用资源，请先选择要上传的资源'
-    return
-  }
-  void requestAiTagsForEntry(entry, { auto: false })
-}
-
-function handleEntryDescriptionBlur(entry: UploadAssetEntry): void {
-  if (!entry.description?.trim()) {
-    return
-  }
-  void requestAiTagsForEntry(entry, { auto: true })
-}
-
 function openUploadDialog() {
-  if (!canUploadSelection.value || uploadSubmitting.value) {
+  if (!canUploadSelection.value) {
     return
   }
-  uploadEntries.value = uploadableSelectedAssets.value.map((asset) => {
-    const normalizedColor = normalizeHexColor(asset.color ?? null)
-    return {
-      assetId: asset.id,
-      asset,
-      name: asset.name,
-      description: asset.description ?? '',
-      color: normalizedColor ?? '',
-      colorHexInput: formatHexInputDisplay(normalizedColor),
-      dimensionLength: typeof asset.dimensionLength === 'number' ? asset.dimensionLength : null,
-      dimensionWidth: typeof asset.dimensionWidth === 'number' ? asset.dimensionWidth : null,
-      dimensionHeight: typeof asset.dimensionHeight === 'number' ? asset.dimensionHeight : null,
-      imageWidth: typeof asset.imageWidth === 'number' ? asset.imageWidth : null,
-      imageHeight: typeof asset.imageHeight === 'number' ? asset.imageHeight : null,
-      status: 'pending',
-      error: null,
-      uploadedAssetId: null,
-      aiLastSignature: null,
-    }
-  })
-  uploadSelectedTagIds.value = []
-  uploadError.value = null
   uploadDialogOpen.value = true
-  void loadServerTags()
 }
 
-function closeUploadDialog() {
-  if (uploadSubmitting.value) {
-    return
-  }
-  uploadDialogOpen.value = false
-  resetUploadState()
-}
-
-async function ensureUploadTagIds(): Promise<string[]> {
-  const existingOptions = uploadTagOptions.value
-  const resolved = new Set<string>()
-  const pendingNames = new Map<string, string>()
-  const createdNameMap = new Map<string, string>()
-
-  uploadSelectedTagIds.value.forEach((value) => {
-    const raw = typeof value === 'string' ? value : (value as TagOption | undefined)?.value ?? ''
-    const trimmed = raw.trim()
-    if (!trimmed.length) {
-      return
-    }
-    const matchById = existingOptions.find((option) => option.value === trimmed)
-    if (matchById) {
-      resolved.add(matchById.value)
-      return
-    }
-    const matchByName = findTagOptionByName(existingOptions, trimmed)
-    if (matchByName) {
-      resolved.add(matchByName.value)
-      return
-    }
-    const normalized = trimmed.toLowerCase()
-    if (!pendingNames.has(normalized)) {
-      pendingNames.set(normalized, trimmed)
-    }
-  })
-
-  if (pendingNames.size > 0) {
-    const originalNames = Array.from(pendingNames.values())
-    try {
-      const created = await createAssetTag({ names: originalNames })
-      const optionMap = new Map(serverTags.value.map((entry) => [entry.value, entry]))
-      created.forEach((tag) => {
-        const option = createTagOption(tag.id, tag.name)
-        optionMap.set(option.value, option)
-        createdNameMap.set(option.name.trim().toLowerCase(), option.value)
-      })
-      serverTags.value = Array.from(optionMap.values()).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
-      pendingNames.forEach((_original, normalized) => {
-        const createdId = createdNameMap.get(normalized)
-        if (createdId) {
-          resolved.add(createdId)
-        }
-      })
-    } catch (error) {
-      const fallback = originalNames[0]
-      throw new Error((error as Error).message ?? (fallback ? `创建标签“${fallback}”失败` : '创建标签失败'))
+function handleUploadCompleted(payload: { successCount: number; replacementMap: Record<string, string> }) {
+  const replacement = new Map<string, string>(Object.entries(payload?.replacementMap ?? {}))
+  if (replacement.size) {
+    selectedAssetIds.value = Array.from(new Set(selectedAssetIds.value.map((id) => replacement.get(id) ?? id)))
+    const lastId = Array.from(replacement.values()).pop()
+    if (lastId) {
+      sceneStore.selectAsset(lastId)
     }
   }
-
-  const updatedOptions = uploadTagOptions.value
-  uploadSelectedTagIds.value = uploadSelectedTagIds.value
-    .map((value) => {
-      const raw = typeof value === 'string' ? value : (value as TagOption | undefined)?.value ?? ''
-      const trimmed = raw.trim()
-      if (!trimmed.length) {
-        return ''
-      }
-      const matchById = updatedOptions.find((option) => option.value === trimmed)
-      if (matchById) {
-        return matchById.value
-      }
-      const matchByName = findTagOptionByName(updatedOptions, trimmed)
-      if (matchByName) {
-        return matchByName.value
-      }
-      const createdId = createdNameMap.get(trimmed.toLowerCase())
-      return createdId ?? trimmed
-    })
-    .filter((value) => value.trim().length > 0)
-
-  uploadSelectedTagIds.value.forEach((id) => {
-    const match = updatedOptions.find((option) => option.value === id)
-    resolved.add(match ? match.value : id)
-  })
-
-  return Array.from(resolved)
-}
-
-async function submitUpload() {
-  if (uploadSubmitting.value || !uploadEntries.value.length) {
-    return
-  }
-  uploadSubmitting.value = true
-  uploadError.value = null
-  try {
-    const tagIds = await ensureUploadTagIds()
-    const replacementMap = new Map<string, string>()
-    for (const entry of uploadEntries.value) {
-      if (entry.status === 'success') {
-        continue
-      }
-      entry.status = 'uploading'
-      entry.error = null
-      try {
-        const asset = sceneStore.getAsset(entry.assetId) ?? entry.asset
-        if (!asset) {
-          throw new Error('未找到资源信息')
-        }
-        const file = await createUploadFileFromCache(asset)
-        const uploadName = entry.name.trim().length ? entry.name.trim() : asset.name
-        const uploadDescription = entry.description.trim()
-        const normalizedColor = normalizeHexColor(entry.color)
-        const dimensionLength = typeof entry.dimensionLength === 'number' && Number.isFinite(entry.dimensionLength)
-          ? entry.dimensionLength
-          : null
-        const dimensionWidth = typeof entry.dimensionWidth === 'number' && Number.isFinite(entry.dimensionWidth)
-          ? entry.dimensionWidth
-          : null
-        const dimensionHeight = typeof entry.dimensionHeight === 'number' && Number.isFinite(entry.dimensionHeight)
-          ? entry.dimensionHeight
-          : null
-        const imageWidth = typeof entry.imageWidth === 'number' && Number.isFinite(entry.imageWidth) ? Math.round(entry.imageWidth) : null
-        const imageHeight = typeof entry.imageHeight === 'number' && Number.isFinite(entry.imageHeight) ? Math.round(entry.imageHeight) : null
-        const serverAsset = await uploadAssetToServer({
-          file,
-          name: uploadName,
-          type: asset.type,
-          description: uploadDescription.length ? uploadDescription : undefined,
-          tagIds,
-          color: normalizedColor,
-          dimensionLength,
-          dimensionWidth,
-          dimensionHeight,
-          imageWidth,
-          imageHeight,
-        })
-        const mapped = mapServerAssetToProjectAsset(serverAsset)
-        const replaced = sceneStore.replaceLocalAssetWithServerAsset(entry.assetId, mapped, { source: { type: 'url' } })
-        if (!replaced) {
-          throw new Error('更新资源引用失败')
-        }
-        await assetCacheStore.storeAssetBlob(replaced.id, {
-          blob: file,
-          mimeType: file.type || null,
-          filename: file.name,
-          downloadUrl: replaced.downloadUrl,
-        })
-        assetCacheStore.removeCache(entry.assetId)
-        entry.status = 'success'
-        entry.uploadedAssetId = replaced.id
-        replacementMap.set(entry.assetId, replaced.id)
-      } catch (error) {
-        entry.status = 'error'
-        entry.error = (error as Error).message ?? '上传失败'
-      }
-    }
-
-    const hasErrors = uploadEntries.value.some((entry) => entry.status === 'error')
-    if (hasErrors) {
-      uploadError.value = '部分资源上传失败，请检查错误信息后重试。'
-      return
-    }
-
-    if (replacementMap.size) {
-      selectedAssetIds.value = Array.from(
-        new Set(selectedAssetIds.value.map((id) => replacementMap.get(id) ?? id)),
-      )
-      const lastId = Array.from(replacementMap.values()).pop()
-      if (lastId) {
-        sceneStore.selectAsset(lastId)
-      }
-    }
-
-    uploadDialogOpen.value = false
-    const successCount = replacementMap.size || uploadEntries.value.length
-    resetUploadState()
-    showDropFeedback('success', `成功上传 ${successCount} 个资源`)
-  } catch (error) {
-    uploadError.value = (error as Error).message ?? '上传资源失败'
-  } finally {
-    uploadSubmitting.value = false
-  }
+  showDropFeedback('success', `成功上传 ${payload.successCount} 个资源`)
 }
 
 function isInternalAssetDrag(event: DragEvent): boolean {
@@ -1620,6 +832,30 @@ function assetTypeFromMimeType(mime: string | null | undefined): ProjectAsset['t
   }
   return null
 }
+
+// Extension/type helpers
+const EXTENSION_TYPE_MAP: Map<string, ProjectAsset['type']> = new Map([
+  ['jpg', 'image'],
+  ['jpeg', 'image'],
+  ['png', 'image'],
+  ['gif', 'image'],
+  ['webp', 'image'],
+  ['bmp', 'image'],
+  ['svg', 'image'],
+  ['tiff', 'image'],
+  ['ico', 'image'],
+  ['ktx', 'texture'],
+  ['ktx2', 'texture'],
+  ['dds', 'texture'],
+  ['tga', 'texture'],
+  ['gltf', 'model'],
+  ['glb', 'model'],
+  ['fbx', 'model'],
+  ['obj', 'model'],
+  ['stl', 'model'],
+  ['prefab', 'prefab'],
+  ['mtl', 'material'],
+])
 
 function inferAssetTypeFromExtension(extension: string | null | undefined): ProjectAsset['type'] | null {
   if (!extension) {
@@ -1662,6 +898,18 @@ function inferAssetTypeFromUrl(url: string): ProjectAsset['type'] {
     return extensionResult
   }
   return 'file'
+}
+
+const DEFAULT_PREVIEW_COLORS: Record<ProjectAsset['type'], string> = {
+  model: '#455A64',
+  image: '#5E35B1',
+  texture: '#00897B',
+  material: '#6D4C41',
+  behavior: '#546E7A',
+  prefab: '#7B1FA2',
+  file: '#37474F',
+  video: '#1E88E5',
+  mesh: '#8D6E63',
 }
 
 function resolvePreviewColor(type: ProjectAsset['type']): string {
@@ -1906,6 +1154,11 @@ async function processAssetDrop(dataTransfer: DataTransfer): Promise<{ assets: P
   return { assets: Array.from(collected.values()), errors }
 }
 
+// Drop overlay controls
+const allowAssetDrop = computed(() => true)
+const dropOverlayVisible = computed(() => dropActive.value || dropProcessing.value)
+const dropOverlayMessage = computed(() => (dropProcessing.value ? '正在导入资源…' : '拖拽文件或链接到此处以导入资源'))
+
 function handleGalleryDragEnter(event: DragEvent) {
   if (!allowAssetDrop.value || dropProcessing.value) {
     return
@@ -2018,6 +1271,7 @@ const isSelectAllIndeterminate = computed(() => {
   const total = selectableAssetIds.value.length
   return total > 0 && selectedSelectableCount.value > 0 && selectedSelectableCount.value < total
 })
+const isToolbarDeleteVisible = computed(() => selectedSelectableCount.value > 0)
 const deletionDialogTitle = computed(() => (isBatchDeletion.value ? 'Delete Selected Assets' : 'Delete Asset'))
 const deletionConfirmLabel = computed(() => (isBatchDeletion.value ? 'Delete Assets' : 'Delete'))
 const deletionSummary = computed(() => {
@@ -2325,6 +1579,33 @@ onBeforeUnmount(() => {
   }
   clearDropFeedbackTimer()
 })
+
+// Tree selection binding to activeDirectoryId
+const selectedDirectory = computed<string[] | undefined>({
+  get() {
+    return activeDirectoryId.value ? [activeDirectoryId.value] : []
+  },
+  set(ids) {
+    const next = Array.isArray(ids) && ids.length ? String(ids[0]) : null
+    if (next) {
+      sceneStore.setActiveDirectory(next)
+    }
+  },
+})
+
+function isProviderDirectory(id: string | undefined | null): boolean {
+  if (!id) return false
+  return !!extractProviderIdFromPackageDirectoryId(id)
+}
+function isDirectoryLoading(id: string | undefined | null): boolean {
+  if (!id) return false
+  const providerId = extractProviderIdFromPackageDirectoryId(id)
+  return providerId ? isProviderLoading(providerId) : false
+}
+
+// Placement toggle button labels/icons
+const placementIcon = computed(() => 'mdi-dock-window')
+const placementTitle = computed(() => 'Toggle placement')
 </script>
 
 <template>
@@ -2634,246 +1915,12 @@ onBeforeUnmount(() => {
       </Splitpanes>
     </div>
 
-      <v-dialog v-model="uploadDialogOpen" max-width="720" persistent>
-        <v-card>
-          <v-card-title>Upload Assets to Server</v-card-title>
-          <v-card-text>
-        <v-alert
-          v-if="uploadError"
-          type="error"
-          variant="tonal"
-          density="comfortable"
-          class="mb-4"
-        >
-          {{ uploadError }}
-        </v-alert>
-        <div class="upload-section">
-          <div
-            v-for="entry in uploadEntries"
-            :key="entry.assetId"
-            class="upload-entry"
-          >
-            <div class="upload-entry__header">
-          <span class="upload-entry__name">{{ entry.asset.name }}</span>
-          <v-chip size="small" color="primary" variant="tonal">{{ entry.asset.type }}</v-chip>
-            </div>
-            <div class="upload-entry__name-row">
-          <v-text-field
-            class="upload-entry__name-input"
-            v-model="entry.name"
-            label="Asset Name"
-            density="compact"
-            variant="outlined"
-            :disabled="uploadSubmitting || entry.status === 'success'"
-          />
-            </div>
-            <div
-              class="upload-entry__color-row"
-            >
-          <v-text-field
-            class="upload-entry__color-input"
-            :model-value="entry.colorHexInput"
-            label="主体颜色"
-            density="compact"
-            variant="outlined"
-            placeholder="#RRGGBB"
-            hide-details
-            spellcheck="false"
-            autocorrect="off"
-            autocomplete="off"
-            :disabled="uploadSubmitting || entry.status === 'success'"
-            @update:model-value="(value) => handleEntryColorInput(entry, value)"
-          >
-            <template #append-inner>
-              <v-menu
-                :close-on-content-click="false"
-                transition="scale-transition"
-                location="bottom start"
-              >
-                <template #activator="{ props: menuProps }">
-                  <v-btn
-                    v-bind="menuProps"
-                    density="compact"
-                    class="upload-entry__color-button"
-                    :style="{ backgroundColor: entryColorPreview(entry) }"
-                    :title="entryColorPreview(entry).toUpperCase()"
-                    :disabled="uploadSubmitting || entry.status === 'success'"
-                    variant="tonal"
-                    size="small"
-                  >
-                    <v-icon color="white">mdi-eyedropper-variant</v-icon>
-                  </v-btn>
-                </template>
-                <div class="upload-entry__color-picker">
-                  <v-color-picker
-                    :model-value="entryColorPreview(entry)"
-                    mode="hex"
-                    :modes="['hex']"
-                    hide-inputs
-                    @update:model-value="(value) => applyEntryColor(entry, value)"
-                  />
-                </div>
-              </v-menu>
-            </template>
-          </v-text-field>
-            </div>
-            
-            <div
-          v-if="entry.asset.type === 'model' || entry.asset.type === 'prefab'"
-          class="upload-entry__dimensions"
-            >
-          <v-text-field
-            :model-value="formatDimension(entry.dimensionLength)"
-            label="长度 (m)"
-            type="number"
-            density="compact"
-            variant="outlined"
-            step="0.01"
-            min="0"
-            suffix="m"
-            :disabled="uploadSubmitting || entry.status === 'success'"
-            @update:model-value="(value) => setEntryDimension(entry, 'dimensionLength', value)"
-          />
-          <v-text-field
-            :model-value="formatDimension(entry.dimensionWidth)"
-            label="宽度 (m)"
-            type="number"
-            density="compact"
-            variant="outlined"
-            step="0.01"
-            min="0"
-            suffix="m"
-            :disabled="uploadSubmitting || entry.status === 'success'"
-            @update:model-value="(value) => setEntryDimension(entry, 'dimensionWidth', value)"
-          />
-          <v-text-field
-            :model-value="formatDimension(entry.dimensionHeight)"
-            label="高度 (m)"
-            type="number"
-            density="compact"
-            variant="outlined"
-            step="0.01"
-            min="0"
-            suffix="m"
-            :disabled="uploadSubmitting || entry.status === 'success'"
-            @update:model-value="(value) => setEntryDimension(entry, 'dimensionHeight', value)"
-          />
-          <v-chip
-            v-if="entrySizeCategory(entry)"
-            class="upload-entry__size-chip"
-            size="small"
-            color="secondary"
-            variant="tonal"
-          >
-            尺寸分类：{{ entrySizeCategory(entry) }}
-          </v-chip>
-            </div>
-            <div
-          v-else-if="entry.asset.type === 'image'"
-          class="upload-entry__dimensions"
-            >
-          <v-text-field
-            :model-value="formatInteger(entry.imageWidth)"
-            label="图片宽度 (px)"
-            type="number"
-            density="compact"
-            variant="outlined"
-            step="1"
-            min="0"
-            suffix="px"
-            :disabled="uploadSubmitting || entry.status === 'success'"
-            @update:model-value="(value) => setEntryImageDimension(entry, 'imageWidth', value)"
-          />
-          <v-text-field
-            :model-value="formatInteger(entry.imageHeight)"
-            label="图片高度 (px)"
-            type="number"
-            density="compact"
-            variant="outlined"
-            step="1"
-            min="0"
-            suffix="px"
-            :disabled="uploadSubmitting || entry.status === 'success'"
-            @update:model-value="(value) => setEntryImageDimension(entry, 'imageHeight', value)"
-          />
-            </div>
-            <div v-if="entry.status === 'error'" class="upload-entry__error">
-          {{ entry.error }}
-            </div>
-            <div v-else-if="entry.status === 'success'" class="upload-entry__success">
-          Uploaded
-            </div>
-          </div>
-        </div>
-        <v-textarea
-          v-model="uploadPrimaryDescription"
-          label="Description"
-          density="compact"
-          variant="outlined"
-          rows="4"
-          class="upload-description-textarea"
-          :disabled="uploadSubmitting || !!(uploadPrimaryEntry && uploadPrimaryEntry.status === 'success')"
-          @blur="() => uploadPrimaryEntry && handleEntryDescriptionBlur(uploadPrimaryEntry)"
-        />
-        <v-combobox
-          v-model="uploadSelectedTagIds"
-          :items="uploadTagOptions"
-          item-title="label"
-          item-value="value"
-          label="Select or create tags"
-          density="comfortable"
-          variant="outlined"
-          multiple
-          chips
-          closable-chips
-          clearable
-          hide-selected
-          new-value-mode="add"
-          :loading="serverTagsLoading"
-          :disabled="uploadSubmitting"
-        >
-        </v-combobox>
-        <div class="upload-ai-row">
-          <v-btn
-            color="secondary"
-            variant="tonal"
-            size="small"
-            :disabled="uploadSubmitting || !uploadEntries.length || aiTagLoading || !canRequestAiTags"
-            :loading="aiTagLoading"
-            @click="handleGenerateTagsClick"
-          >
-            使用 AI 生成标签
-          </v-btn>
-          <span v-if="aiTagError" class="upload-ai-row__error">{{ aiTagError }}</span>
-          <span v-else-if="aiSuggestedTags.length" class="upload-ai-row__hint">
-            推荐：{{ aiSuggestedTags.join('、') }}
-          </span>
-        </div>
-        <v-alert
-          v-if="serverTagsError"
-          type="warning"
-          variant="tonal"
-          density="comfortable"
-          class="mt-4"
-        >
-          {{ serverTagsError }}
-        </v-alert>
-          </v-card-text>
-          <v-card-actions>
-        <v-spacer />
-        <v-btn variant="text" :disabled="uploadSubmitting" @click="closeUploadDialog">Cancel</v-btn>
-        <v-btn
-          color="primary"
-          variant="flat"
-          :loading="uploadSubmitting"
-          :disabled="!canSubmitUpload"
-          @click="submitUpload"
-        >
-          Upload
-        </v-btn>
-          </v-card-actions>
-        </v-card>
-      </v-dialog>
+      <UploadAssetsDialog
+        v-model="uploadDialogOpen"
+        :assets="uploadableSelectedAssets"
+        :tag-options="tagOptions"
+        @uploaded="handleUploadCompleted"
+      />
 
       <v-dialog v-model="deleteDialogOpen" max-width="420">
         <v-card>
@@ -3092,123 +2139,7 @@ onBeforeUnmount(() => {
   font-weight: 500;
 }
 
-.upload-section {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.upload-entry {
-  padding: 12px 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.upload-entry:last-child {
-  border-bottom: none;
-}
-
-.upload-entry__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-
-.upload-entry__name {
-  font-weight: 600;
-  color: #e9ecf1;
-}
-
-.upload-entry__name-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: nowrap;
-}
-
-.upload-entry__name-input {
-  flex: 1;
-}
-
-.upload-entry__name-input :deep(.v-input) {
-  margin-bottom: 0;
-}
-
-.upload-entry__color-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 8px;
-  flex-wrap: nowrap;
-}
-
-.upload-entry__color-input {
-  min-width: 120px;
-}
-
-.upload-entry__color-input :deep(.v-input) {
-  margin-bottom: 0;
-}
-
-.upload-entry__error {
-  color: #ef5350;
-  font-size: 0.85rem;
-  margin-top: 6px;
-}
-
-.upload-entry__success {
-  color: #66bb6a;
-  font-size: 0.85rem;
-  margin-top: 6px;
-}
-
-.upload-ai-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 12px;
-  flex-wrap: wrap;
-}
-
-.v-textarea + .v-combobox {
-  margin-top: 12px;
-}
-
-.upload-ai-row__error {
-  color: #ef9a9a;
-  font-size: 0.85rem;
-}
-
-.upload-ai-row__hint {
-  color: #b2dfdb;
-  font-size: 0.85rem;
-}
-
-.upload-entry__color-button {
-  width: 27px;
-  min-width: 27px;
-  height: 27px;
-  border-radius: 4px;
-  align-self: center;
-  display: inline-flex;
-  justify-content: center;
-  align-items: center;
-}
-
-.upload-entry__color-picker {
-  padding: 12px;
-}
-
-.upload-entry__dimensions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 12px;
-}
-
-.upload-entry__size-chip {
-  align-self: center;
-}
+/* Upload dialog styles moved to UploadAssetsDialog component */
 
 .project-gallery.has-drop-feedback .drop-overlay {
   inset: 82px 12px 12px 12px;
@@ -3358,10 +2289,6 @@ onBeforeUnmount(() => {
   position: absolute;
   inset: 0;
   display: flex;
-  .upload-description-textarea :deep(textarea) {
-    overflow-y: auto;
-    resize: none;
-  }
   align-items: center;
   justify-content: center;
   background-color: rgba(0, 0, 0, 0.35);
