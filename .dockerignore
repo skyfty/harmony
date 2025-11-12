@@ -1,0 +1,32 @@
+# Global ignores for repo-root build contexts (server/editor)
+**/node_modules
+**/dist
+**/.next
+**/.nuxt
+**/.cache
+**/.vite
+
+# VCS and IDE
+.git
+.gitignore
+.vscode
+.idea
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Local env and logs
+*.log
+.env*
+
+# Large runtime data
+uploads/
+server/mongo-data/
+
+# Build outputs
+**/build
+**/coverage
+
+# Docker
+Dockerfile*

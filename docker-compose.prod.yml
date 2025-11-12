@@ -56,8 +56,8 @@ services:
 
   uploader:
     build:
-      context: .
-      dockerfile: uploader/Dockerfile
+      context: ./uploader
+      dockerfile: Dockerfile
     container_name: harmony-uploader
     depends_on:
       - server
