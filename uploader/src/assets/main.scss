@@ -1,0 +1,34 @@
+@use 'vuetify/settings' with (
+  $color-pack: true
+);
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: 'Roboto', 'Noto Sans SC', sans-serif;
+  background-color: #f5f5f7;
+}
+
+.upload-surface {
+  min-height: calc(100vh - 64px);
+  border: 2px dashed rgba(0, 0, 0, 0.12);
+  border-radius: 16px;
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+
+  &.is-dragover {
+    border-color: #1976d2;
+    background-color: rgba(25, 118, 210, 0.08);
+  }
+}
+
+.fab-trigger {
+  position: fixed;
+  right: 32px;
+  bottom: 32px;
+  z-index: 10;
+}

@@ -117,7 +117,7 @@ export default class Loader {
     const effectiveFilesMap = filesMap ?? this.createFilesMap(files);
 
     const manager = new THREE.LoadingManager();
-    manager.setURLModifier((url) => {
+  manager.setURLModifier((url: string) => {
       const sanitized = url.replace(/^(\.?\/)/, '');
       const file = effectiveFilesMap[sanitized];
 
@@ -220,7 +220,7 @@ export default class Loader {
 
           const loader = new DRACOLoader();
           loader.setDecoderPath('three/examples/jsm/libs/draco/');
-          loader.parse(contents, (geometry) => {
+          loader.parse(contents, (geometry: any) => {
             let object: LoaderLoadedPayload;
 
             if (geometry.index !== null) {

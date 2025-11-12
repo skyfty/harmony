@@ -1,13 +1,58 @@
-import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { login as loginRequest, fetchProfile, logout as logoutRequest } from '@/api/modules/auth'
+import { defineStore } from 'pinia'
+import { fetchProfile, login as loginRequest, logout as logoutRequest } from '@/api/modules/auth'
 import { persistToken, readPersistedToken } from '@/api/http'
 import type { AuthProfileResponse, LoginRequest, LoginResponse, UserSummary } from '@/types'
+
+const REMEMBER_STORAGE_KEY = (import.meta.env.VITE_REMEMBER_CREDENTIALS_KEY as string | undefined)?.trim() ||
+  'harmony_uploader_credentials'
+
+type RememberedCredentials = {
+  username: string
+  password: string
+}
+
+function readRememberedCredentials(): RememberedCredentials | null {
+  try {
+    const raw = window.localStorage.getItem(REMEMBER_STORAGE_KEY)
+    if (!raw) {
+      return null
+    }
+    const decoded = atob(raw)
+    const parsed = JSON.parse(decoded) as unknown
+    if (parsed && typeof parsed === 'object') {
+      const record = parsed as Record<string, unknown>
+      const username = typeof record.username === 'string' ? record.username : null
+      const password = typeof record.password === 'string' ? record.password : null
+      if (username && password) {
+        return { username, password }
+      }
+    }
+  } catch (error) {
+    console.warn('[uploader] failed to parse remembered credentials', error)
+  }
+  return null
+}
+
+function persistRememberedCredentials(payload: RememberedCredentials | null): void {
+  try {
+    if (!payload) {
+      window.localStorage.removeItem(REMEMBER_STORAGE_KEY)
+      return
+    }
+    const encoded = btoa(JSON.stringify(payload))
+    window.localStorage.setItem(REMEMBER_STORAGE_KEY, encoded)
+  } catch (error) {
+    console.warn('[uploader] failed to persist credentials', error)
+  }
+}
 
 export const useAuthStore = defineStore('uploader-auth', () => {
   const token = ref<string | null>(null)
   const user = ref<UserSummary | null>(null)
-  const loading = ref(false)
+  const permissions = ref<string[]>([])
+  const initializing = ref<boolean>(false)
+  const rememberCache = ref<RememberedCredentials | null>(readRememberedCredentials())
 
   const isAuthenticated = computed(() => Boolean(token.value && user.value))
 
@@ -17,40 +62,47 @@ export const useAuthStore = defineStore('uploader-auth', () => {
       persistToken(payload.token)
     }
     user.value = payload.user
+    permissions.value = payload.permissions ?? []
   }
 
   function clearSession(): void {
     token.value = null
     user.value = null
+    permissions.value = []
     persistToken(null)
   }
 
   async function bootstrapFromStorage(): Promise<void> {
+    if (initializing.value) {
+      return
+    }
     const storedToken = readPersistedToken()
     if (!storedToken) {
       clearSession()
       return
     }
+    initializing.value = true
     token.value = storedToken
     try {
-      loading.value = true
       const profile = await fetchProfile()
       setSession({ ...profile, token: storedToken })
     } catch (error) {
-      console.warn('[uploader] failed to restore session', error)
+      console.warn('[uploader] unable to restore session', error)
       clearSession()
     } finally {
-      loading.value = false
+      initializing.value = false
     }
   }
 
-  async function login(credentials: LoginRequest): Promise<void> {
-    try {
-      loading.value = true
-      const session = await loginRequest(credentials)
-      setSession(session)
-    } finally {
-      loading.value = false
+  async function login(credentials: LoginRequest & { remember?: boolean }): Promise<void> {
+    const session = await loginRequest(credentials)
+    setSession(session)
+    if (credentials.remember) {
+      rememberCache.value = { username: credentials.username, password: credentials.password }
+      persistRememberedCredentials(rememberCache.value)
+    } else {
+      rememberCache.value = null
+      persistRememberedCredentials(null)
     }
   }
 
@@ -64,15 +116,22 @@ export const useAuthStore = defineStore('uploader-auth', () => {
     }
   }
 
+  function restoreRemembered(): RememberedCredentials | null {
+    rememberCache.value = readRememberedCredentials()
+    return rememberCache.value
+  }
+
   return {
     token,
     user,
-    loading,
+    permissions,
+    initializing,
     isAuthenticated,
-    bootstrapFromStorage,
     login,
     logout,
+    bootstrapFromStorage,
     clearSession,
-    setSession,
+    restoreRemembered,
+    rememberCache,
   }
 })

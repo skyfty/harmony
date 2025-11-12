@@ -1,13 +1,21 @@
 import type { AssetType as SchemaAssetType } from '@harmony/schema/asset-types'
 
-export type AssetType = SchemaAssetType
+export interface RoleSummary {
+  id: string
+  name: string
+  code: string
+  description?: string
+}
 
 export interface UserSummary {
   id: string
   username: string
-  email?: string | null
-  displayName?: string | null
-  roles?: Array<{ id: string; name: string }>
+  displayName?: string
+  email?: string
+  status: 'active' | 'disabled'
+  roles: RoleSummary[]
+  createdAt?: string
+  updatedAt?: string
 }
 
 export interface LoginRequest {
@@ -18,54 +26,46 @@ export interface LoginRequest {
 export interface LoginResponse {
   token: string
   user: UserSummary
-  permissions?: string[]
+  permissions: string[]
 }
 
 export interface AuthProfileResponse {
   user: UserSummary
-  permissions?: string[]
+  permissions: string[]
 }
 
-export interface AssetTag {
-  id: string
-  name: string
-  description?: string | null
-  createdAt?: string
-  updatedAt?: string
-}
+export type AssetType = SchemaAssetType
 
 export interface AssetTagSummary {
   id: string
   name: string
 }
 
+export interface AssetTag extends AssetTagSummary {
+  description?: string | null
+  createdAt?: string
+  updatedAt?: string
+}
+
 export interface ManagedAsset {
   id: string
   name: string
+  categoryId: string
   type: AssetType
+  tags: AssetTagSummary[]
+  tagIds: string[]
+  size: number
   url: string
   downloadUrl: string
-  size: number
-  createdAt: string
-  updatedAt: string
-  description?: string | null
-  tagIds: string[]
-  tags: AssetTagSummary[]
-  thumbnailUrl?: string | null
   previewUrl?: string | null
+  thumbnailUrl?: string | null
+  description?: string | null
   originalFilename?: string | null
   mimeType?: string | null
+  createdAt: string
+  updatedAt: string
 }
 
 export interface UploadAssetResponse {
   asset: ManagedAsset
-}
-
-export interface UploadAssetPayload {
-  file: File
-  name?: string
-  type: AssetType
-  description?: string | null
-  tagIds: string[]
-  categoryId?: string | null
 }
