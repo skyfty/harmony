@@ -29,8 +29,10 @@ const internalActiveId = ref<string | null>(props.activeNodeMaterialId ?? null)
 const deleteDialogVisible = ref(false)
 const dragOverSlotId = ref<string | null>(null)
 const isListDragActive = ref(false)
+const activeColorPickerId = ref<string | null>(null)
 
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
+const DEFAULT_MATERIAL_COLOR = '#ffffff'
 
 watch(
   () => props.activeNodeMaterialId,
@@ -81,16 +83,31 @@ const deleteDialogMessage = computed(() => {
 const materialListEntries = computed(() =>
   nodeMaterials.value.map((entry, index) => {
     const shared = entry.materialId ? materials.value.find((item) => item.id === entry.materialId) ?? null : null
-    const color = shared ? shared.color : entry.color
+    const color = normalizeHexColor(shared ? shared.color : entry.color, DEFAULT_MATERIAL_COLOR)
     return {
       id: entry.id,
       title: shared?.name ?? entry.name ?? `材质 ${index + 1}`,
       subtitle: shared ? '共享材质' : '本地材质',
       shared: Boolean(shared),
-      color: color ?? '#ffffff',
+      color,
       index,
     }
   }),
+)
+
+watch(nodeMaterials, (list) => {
+  if (activeColorPickerId.value && !list.some((entry) => entry.id === activeColorPickerId.value)) {
+    activeColorPickerId.value = null
+  }
+})
+
+watch(
+  () => props.disabled,
+  (disabled) => {
+    if (disabled) {
+      activeColorPickerId.value = null
+    }
+  },
 )
 
 function handleSelect(id: string) {
@@ -219,6 +236,58 @@ function applyAlbedoTexture(slotId: string, asset: TextureAsset): boolean {
     console.warn('Failed to cache texture asset', error)
   })
   return true
+}
+
+function normalizeHexColor(value: unknown, fallback: string): string {
+  if (typeof value !== 'string') {
+    return fallback
+  }
+  const trimmed = value.trim()
+  const prefixed = trimmed.startsWith('#') ? trimmed : `#${trimmed}`
+  const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(prefixed)
+  if (!match) {
+    return fallback
+  }
+  const hexValue = match[1] ?? ''
+  if (hexValue.length === 3) {
+    const [r, g, b] = hexValue.split('')
+    return `#${r}${r}${g}${g}${b}${b}`.toLowerCase()
+  }
+  return `#${hexValue.toLowerCase()}`
+}
+
+function handleColorPickerVisibility(slotId: string, visible: boolean) {
+  if (visible) {
+    if (!props.disabled) {
+      activeColorPickerId.value = slotId
+    }
+    return
+  }
+  if (activeColorPickerId.value === slotId) {
+    activeColorPickerId.value = null
+  }
+}
+
+function toggleColorPicker(slotId: string) {
+  if (props.disabled) {
+    return
+  }
+  activeColorPickerId.value = activeColorPickerId.value === slotId ? null : slotId
+}
+
+function handleColorPickerInput(slotId: string, value: string | null) {
+  if (typeof value !== 'string' || !selectedNodeId.value) {
+    return
+  }
+  const editable = ensureEditableNodeMaterial(slotId)
+  if (!editable) {
+    return
+  }
+  const fallbackColor = normalizeHexColor(editable.color ?? null, DEFAULT_MATERIAL_COLOR)
+  const normalized = normalizeHexColor(value, fallbackColor)
+  sceneStore.updateNodeMaterialProps(selectedNodeId.value, slotId, {
+    color: normalized,
+  })
 }
 
 function handleSlotDragOver(slotId: string, event: DragEvent) {
@@ -404,16 +473,45 @@ function handleConfirmDeleteSlot() {
                 'is-active': entry.id === internalActiveId,
                 'is-drag-target': dragOverSlotId === entry.id,
               }"
-              @click="handleSelect(entry.id)"
               @dragenter="handleSlotDragOver(entry.id, $event)"
               @dragover="handleSlotDragOver(entry.id, $event)"
               @dragleave="handleSlotDragLeave(entry.id, $event)"
               @drop="handleSlotDrop(entry.id, $event)"
             >
               <template #prepend>
-                <div class="material-sphere" :style="{ backgroundColor: entry.color }"></div>
+                <div
+                  class="material-color-control"
+                  :class="{
+                    'is-open': activeColorPickerId === entry.id,
+                    'is-disabled': props.disabled,
+                  }"
+                  @click.stop="toggleColorPicker(entry.id)"
+                >
+                  <div class="material-sphere" :style="{ backgroundColor: entry.color }"></div>
+                  <v-menu
+                    activator="parent"
+                    :model-value="activeColorPickerId === entry.id"
+                    :close-on-content-click="false"
+                    :open-on-click="false"
+                    location="end"
+                    :offset="[0, 8]"
+                    @update:model-value="(value) => handleColorPickerVisibility(entry.id, Boolean(value))"
+                  >
+                    <div class="material-color-menu">
+                      <v-color-picker
+                        :model-value="entry.color"
+                        mode="hex"
+                        :modes="['hex']"
+                        hide-inputs
+                        elevation="0"
+                        width="200"
+                        @update:model-value="(value) => handleColorPickerInput(entry.id, value as string | null)"
+                      />
+                    </div>
+                  </v-menu>
+                </div>
               </template>
-              <v-list-item-title>{{ entry.title }}</v-list-item-title>
+              <v-list-item-title  @click="handleSelect(entry.id)">{{ entry.title }}</v-list-item-title>
             </v-list-item>
           </v-list>
         </div>
@@ -527,6 +625,7 @@ function handleConfirmDeleteSlot() {
     inset -3px -3px 6px rgba(0, 0, 0, 0.3),
     inset 3px 3px 6px rgba(255, 255, 255, 0.3);
   position: relative;
+  cursor: pointer;
 }
 
 .material-sphere::before {
@@ -539,4 +638,26 @@ function handleConfirmDeleteSlot() {
   border-radius: 50%;
   background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.5), transparent);
 }
+
+.material-color-control {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+}
+
+.material-color-control.is-disabled {
+  pointer-events: none;
+  opacity: 0.6;
+}
+
+.material-color-menu {
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(22, 29, 38, 0.9);
+}
+
 </style>

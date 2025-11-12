@@ -260,7 +260,6 @@ const ALIGN_DELTA_EPSILON = 1e-6
 const CAMERA_RECENTER_DURATION_MS = 320
 const RIGHT_CLICK_ROTATION_STEP = THREE.MathUtils.degToRad(15)
 const GROUND_HEIGHT_STEP = 0.5
-const GIZMO_TOOLBAR_CLEARANCE = 50
 
 const cameraControlMode = computed<CameraControlMode>({
   get: () => sceneStore.viewportSettings.cameraControlMode,
@@ -310,7 +309,6 @@ const panelPlacement = computed<PanelPlacementState>(() => {
 
 const TOOLBAR_OFFSET = 12
 const TOOLBAR_MIN_MARGIN = 45
-const TOOLBAR_MIN_OFFSET = 50
 const VIEWPORT_TOOLBAR_TOP_MARGIN = 16
 
 const transformToolbarStyle = reactive<{ top: string; left: string }>({
