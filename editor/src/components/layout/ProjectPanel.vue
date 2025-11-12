@@ -156,6 +156,17 @@ const dropFeedback = ref<{ kind: 'success' | 'error'; message: string } | null>(
 let dropFeedbackTimer: number | null = null
 const uploadDialogOpen = ref(false)
 const uploadEntries = ref<UploadAssetEntry[]>([])
+const uploadPrimaryEntry = computed<UploadAssetEntry | null>(() => uploadEntries.value[0] ?? null)
+const uploadPrimaryDescription = computed<string>({
+  get() {
+    return uploadPrimaryEntry.value?.description ?? ''
+  },
+  set(value: string) {
+    if (uploadPrimaryEntry.value) {
+      uploadPrimaryEntry.value.description = value
+    }
+  },
+})
 const uploadSelectedTagIds = ref<string[]>([])
 const uploadSubmitting = ref(false)
 const uploadError = ref<string | null>(null)
@@ -182,6 +193,7 @@ type UploadAssetEntry = {
   name: string
   description: string
   color: string
+  colorHexInput: string
   dimensionLength: number | null
   dimensionWidth: number | null
   dimensionHeight: number | null
@@ -208,8 +220,28 @@ function normalizeHexColor(value: string | null | undefined): string | null {
   return /^#([0-9a-fA-F]{6})$/.test(prefixed) ? `#${prefixed.slice(1).toLowerCase()}` : null
 }
 
+function formatHexInputDisplay(value: string | null | undefined): string {
+  const normalized = normalizeHexColor(value)
+  return normalized ? normalized.toUpperCase() : ''
+}
+
 function applyEntryColor(entry: UploadAssetEntry, value: string | null): void {
   const normalized = normalizeHexColor(value)
+  if (normalized) {
+    entry.color = normalized
+    entry.colorHexInput = normalized.toUpperCase()
+  }
+}
+
+function handleEntryColorInput(entry: UploadAssetEntry, value: string | number | null): void {
+  const raw = typeof value === 'number' ? value.toString() : (value ?? '')
+  const hex = raw.replace(/[^0-9a-fA-F]/g, '').slice(0, 6)
+  entry.colorHexInput = hex.length ? `#${hex.toUpperCase()}` : ''
+  if (!hex.length) {
+    entry.color = ''
+    return
+  }
+  const normalized = normalizeHexColor(entry.colorHexInput)
   if (normalized) {
     entry.color = normalized
   }
@@ -1342,22 +1374,26 @@ function openUploadDialog() {
   if (!canUploadSelection.value || uploadSubmitting.value) {
     return
   }
-  uploadEntries.value = uploadableSelectedAssets.value.map((asset) => ({
-    assetId: asset.id,
-    asset,
-    name: asset.name,
-    description: asset.description ?? '',
-    color: normalizeHexColor(asset.color ?? null) ?? '',
-    dimensionLength: typeof asset.dimensionLength === 'number' ? asset.dimensionLength : null,
-    dimensionWidth: typeof asset.dimensionWidth === 'number' ? asset.dimensionWidth : null,
-    dimensionHeight: typeof asset.dimensionHeight === 'number' ? asset.dimensionHeight : null,
-    imageWidth: typeof asset.imageWidth === 'number' ? asset.imageWidth : null,
-    imageHeight: typeof asset.imageHeight === 'number' ? asset.imageHeight : null,
-    status: 'pending',
-    error: null,
-    uploadedAssetId: null,
-    aiLastSignature: null,
-  }))
+  uploadEntries.value = uploadableSelectedAssets.value.map((asset) => {
+    const normalizedColor = normalizeHexColor(asset.color ?? null)
+    return {
+      assetId: asset.id,
+      asset,
+      name: asset.name,
+      description: asset.description ?? '',
+      color: normalizedColor ?? '',
+      colorHexInput: formatHexInputDisplay(normalizedColor),
+      dimensionLength: typeof asset.dimensionLength === 'number' ? asset.dimensionLength : null,
+      dimensionWidth: typeof asset.dimensionWidth === 'number' ? asset.dimensionWidth : null,
+      dimensionHeight: typeof asset.dimensionHeight === 'number' ? asset.dimensionHeight : null,
+      imageWidth: typeof asset.imageWidth === 'number' ? asset.imageWidth : null,
+      imageHeight: typeof asset.imageHeight === 'number' ? asset.imageHeight : null,
+      status: 'pending',
+      error: null,
+      uploadedAssetId: null,
+      aiLastSignature: null,
+    }
+  })
   uploadSelectedTagIds.value = []
   uploadError.value = null
   uploadDialogOpen.value = true
@@ -2630,46 +2666,58 @@ onBeforeUnmount(() => {
             variant="outlined"
             :disabled="uploadSubmitting || entry.status === 'success'"
           />
-          <v-menu
-            :close-on-content-click="false"
-            transition="scale-transition"
-            location="bottom start"
-          >
-            <template #activator="{ props: menuProps }">
-              <v-btn
-                v-bind="menuProps"
+            </div>
+            <div
+              class="upload-entry__color-row"
+            >
+          <v-text-field
+            class="upload-entry__color-input"
+            :model-value="entry.colorHexInput"
+            label="主体颜色"
             density="compact"
-                class="upload-entry__color-button"
-                :style="{ backgroundColor: entryColorPreview(entry) }"
-                :title="entryColorPreview(entry).toUpperCase()"
-                :disabled="uploadSubmitting || entry.status === 'success'"
-                variant="tonal"
-                size="small"
+            variant="outlined"
+            placeholder="#RRGGBB"
+            hide-details
+            spellcheck="false"
+            autocorrect="off"
+            autocomplete="off"
+            :disabled="uploadSubmitting || entry.status === 'success'"
+            @update:model-value="(value) => handleEntryColorInput(entry, value)"
+          >
+            <template #append-inner>
+              <v-menu
+                :close-on-content-click="false"
+                transition="scale-transition"
+                location="bottom start"
               >
-                <v-icon color="white">mdi-eyedropper-variant</v-icon>
-              </v-btn>
+                <template #activator="{ props: menuProps }">
+                  <v-btn
+                    v-bind="menuProps"
+                    density="compact"
+                    class="upload-entry__color-button"
+                    :style="{ backgroundColor: entryColorPreview(entry) }"
+                    :title="entryColorPreview(entry).toUpperCase()"
+                    :disabled="uploadSubmitting || entry.status === 'success'"
+                    variant="tonal"
+                    size="small"
+                  >
+                    <v-icon color="white">mdi-eyedropper-variant</v-icon>
+                  </v-btn>
+                </template>
+                <div class="upload-entry__color-picker">
+                  <v-color-picker
+                    :model-value="entryColorPreview(entry)"
+                    mode="hex"
+                    :modes="['hex']"
+                    hide-inputs
+                    @update:model-value="(value) => applyEntryColor(entry, value)"
+                  />
+                </div>
+              </v-menu>
             </template>
-            <div class="upload-entry__color-picker">
-              <v-color-picker
-                :model-value="entryColorPreview(entry)"
-                mode="hex"
-                :modes="['hex']"
-                hide-inputs
-                @update:model-value="(value) => applyEntryColor(entry, value)"
-              />
+          </v-text-field>
             </div>
-          </v-menu>
-            </div>
-            <v-textarea
-              v-model="entry.description"
-              label="Description"
-              density="compact"
-              variant="outlined"
-              auto-grow
-              rows="2"
-              :disabled="uploadSubmitting || entry.status === 'success'"
-              @blur="() => handleEntryDescriptionBlur(entry)"
-            />
+            
             <div
           v-if="entry.asset.type === 'model' || entry.asset.type === 'prefab'"
           class="upload-entry__dimensions"
@@ -2757,6 +2805,16 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </div>
+        <v-textarea
+          v-model="uploadPrimaryDescription"
+          label="Description"
+          density="compact"
+          variant="outlined"
+          rows="4"
+          class="upload-description-textarea"
+          :disabled="uploadSubmitting || !!(uploadPrimaryEntry && uploadPrimaryEntry.status === 'success')"
+          @blur="() => uploadPrimaryEntry && handleEntryDescriptionBlur(uploadPrimaryEntry)"
+        />
         <v-combobox
           v-model="uploadSelectedTagIds"
           :items="uploadTagOptions"
@@ -3076,6 +3134,22 @@ onBeforeUnmount(() => {
   margin-bottom: 0;
 }
 
+.upload-entry__color-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  flex-wrap: nowrap;
+}
+
+.upload-entry__color-input {
+  min-width: 120px;
+}
+
+.upload-entry__color-input :deep(.v-input) {
+  margin-bottom: 0;
+}
+
 .upload-entry__error {
   color: #ef5350;
   font-size: 0.85rem;
@@ -3096,6 +3170,10 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
 }
 
+.v-textarea + .v-combobox {
+  margin-top: 12px;
+}
+
 .upload-ai-row__error {
   color: #ef9a9a;
   font-size: 0.85rem;
@@ -3107,10 +3185,10 @@ onBeforeUnmount(() => {
 }
 
 .upload-entry__color-button {
-  width: 50px;
-  min-width: 50px;
-  height: 56px;
-  border-radius: 12px;
+  width: 27px;
+  min-width: 27px;
+  height: 27px;
+  border-radius: 4px;
   align-self: center;
   display: inline-flex;
   justify-content: center;
@@ -3280,6 +3358,10 @@ onBeforeUnmount(() => {
   position: absolute;
   inset: 0;
   display: flex;
+  .upload-description-textarea :deep(textarea) {
+    overflow-y: auto;
+    resize: none;
+  }
   align-items: center;
   justify-content: center;
   background-color: rgba(0, 0, 0, 0.35);

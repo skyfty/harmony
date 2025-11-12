@@ -536,6 +536,47 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     }
   }
 
+  function updateImageMetadata(id: string, meta: { width?: number; height?: number; color?: string | undefined }): void {
+    const task = findTask(id)
+    let changed = false
+    if (typeof meta.width === 'number' && Number.isFinite(meta.width) && meta.width > 0) {
+      task.imageWidth = Math.round(meta.width)
+      changed = true
+    }
+    if (typeof meta.height === 'number' && Number.isFinite(meta.height) && meta.height > 0) {
+      task.imageHeight = Math.round(meta.height)
+      changed = true
+    }
+    const normalized = normalizeHexColor(meta.color ?? null)
+    if (normalized && (!task.color || !normalizeHexColor(task.color))) {
+      task.color = normalized
+      changed = true
+    }
+    if (changed) {
+      task.updatedAt = Date.now()
+    }
+  }
+
+  function updateModelDimensions(id: string, dims: { length?: number; width?: number; height?: number }): void {
+    const task = findTask(id)
+    let changed = false
+    if (typeof dims.length === 'number' && Number.isFinite(dims.length) && dims.length >= 0) {
+      task.dimensionLength = Math.round(dims.length * 10) / 10
+      changed = true
+    }
+    if (typeof dims.width === 'number' && Number.isFinite(dims.width) && dims.width >= 0) {
+      task.dimensionWidth = Math.round(dims.width * 10) / 10
+      changed = true
+    }
+    if (typeof dims.height === 'number' && Number.isFinite(dims.height) && dims.height >= 0) {
+      task.dimensionHeight = Math.round(dims.height * 10) / 10
+      changed = true
+    }
+    if (changed) {
+      task.updatedAt = Date.now()
+    }
+  }
+
   function cancelUpload(id: string): void {
     const controller = controllerMap.get(id)
     if (controller) {
@@ -577,6 +618,8 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     updateTaskTags,
     refreshPreview,
     generateTagsWithAi,
+  updateImageMetadata,
+  updateModelDimensions,
     startUpload,
     cancelUpload,
     removeTask,

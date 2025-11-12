@@ -4,9 +4,36 @@
       <div class="text-truncate">
         {{ task.file.name }}
       </div>
-      <v-chip size="small" color="primary" variant="tonal">
-        {{ prettySize }}
-      </v-chip>
+      <div class="d-flex align-center gap-2">
+        <v-chip size="small" color="primary" variant="tonal">
+          {{ prettySize }}
+        </v-chip>
+        <v-divider vertical class="mx-2" inset></v-divider>
+        <v-btn
+          v-if="isUploading"
+          icon="mdi-stop-circle"
+          color="warning"
+          variant="text"
+          :title="'取消上传'"
+          @click="cancelUpload"
+        />
+        <v-btn
+          v-else
+          icon="mdi-cloud-upload"
+          color="primary"
+          variant="text"
+          :disabled="isUploading"
+          :title="task.status === 'success' ? '重新上传' : '开始上传'"
+          @click="startUpload"
+        />
+        <v-btn
+          icon="mdi-close"
+          color="default"
+          variant="text"
+          :title="'关闭标签'"
+          @click="removeTask"
+        />
+      </div>
     </v-card-title>
     <v-divider></v-divider>
     <v-card-text class="pt-6">
@@ -27,48 +54,42 @@
               />
             </v-col>
             <v-col cols="12">
-              <v-textarea
-                v-model="task.description"
-                auto-grow
-                rows="2"
-                label="资源描述"
-                @blur="handleDescriptionBlur"
-              />
-            </v-col>
-            <v-col cols="12">
               <div class="task-color-row">
                 <v-text-field
                   v-model="task.color"
                   label="主体颜色"
                   placeholder="#RRGGBB"
                   @blur="normalizeTaskColor"
-                />
-                <v-menu
-                  :close-on-content-click="false"
-                  transition="scale-transition"
-                  location="bottom start"
                 >
-                  <template #activator="{ props: menuProps }">
-                    <v-btn
-                      v-bind="menuProps"
-                      class="task-color-button"
-                      :style="{ backgroundColor: colorPreview }"
-                      variant="tonal"
-                      size="small"
+                  <template #append-inner>
+                    <v-menu
+                      :close-on-content-click="false"
+                      transition="scale-transition"
+                      location="bottom start"
                     >
-                      <v-icon color="white">mdi-eyedropper-variant</v-icon>
-                    </v-btn>
+                      <template #activator="{ props: menuProps }">
+                        <v-btn
+                          v-bind="menuProps"
+                          class="task-color-button"
+                          :style="{ backgroundColor: colorPreview }"
+                          variant="tonal"
+                          size="small"
+                        >
+                          <v-icon color="white">mdi-eyedropper-variant</v-icon>
+                        </v-btn>
+                      </template>
+                      <div class="task-color-picker">
+                        <v-color-picker
+                          :model-value="colorPreview"
+                          mode="hex"
+                          :modes="['hex']"
+                          hide-inputs
+                          @update:model-value="applyTaskColor"
+                        />
+                      </div>
+                    </v-menu>
                   </template>
-                  <div class="task-color-picker">
-                    <v-color-picker
-                      :model-value="colorPreview"
-                      mode="hex"
-                      :modes="['hex']"
-                      hide-inputs
-                      @update:model-value="applyTaskColor"
-                    />
-                  </div>
-                </v-menu>
+                </v-text-field>
               </div>
             </v-col>
             <v-col v-if="task.type === 'model'" cols="12">
@@ -100,15 +121,6 @@
                   suffix="m"
                   @update:model-value="onHeightInput"
                 />
-                <v-chip
-                  v-if="sizeCategory"
-                  class="task-size-chip"
-                  size="small"
-                  color="secondary"
-                  variant="tonal"
-                >
-                  尺寸分类：{{ sizeCategory }}
-                </v-chip>
               </div>
             </v-col>
             <v-col v-else-if="task.type === 'image'" cols="12">
@@ -134,6 +146,13 @@
               </div>
             </v-col>
             <v-col cols="12">
+              <v-textarea
+                v-model="task.description"
+                rows="4"
+                label="资源描述"
+                class="task-description"
+                @blur="handleDescriptionBlur"
+              />
               <v-combobox
                 v-model="tagInput"
                 :items="tagItems"
@@ -168,12 +187,7 @@
           </v-row>
         </v-col>
         <v-col cols="12" md="5">
-          <div class="d-flex align-center justify-space-between mb-3">
-            <div class="font-weight-medium">资源预览</div>
-            <v-chip v-if="previewBadge" size="small" variant="tonal" color="secondary">
-              {{ previewBadge }}
-            </v-chip>
-          </div>
+    
           <PreviewRenderer :task="task" />
         </v-col>
       </v-row>
@@ -188,30 +202,6 @@
         color="primary"
         :indeterminate="isUploading && task.progress === 0"
       ></v-progress-linear>
-      <v-spacer></v-spacer>
-      <v-btn
-        v-if="isUploading"
-        color="warning"
-        variant="tonal"
-        @click="cancelUpload"
-      >
-        取消上传
-      </v-btn>
-      <v-btn
-        v-else
-        color="primary"
-        :disabled="isUploading"
-        @click="startUpload"
-      >
-        {{ task.status === 'success' ? '重新上传' : '开始上传' }}
-      </v-btn>
-      <v-btn
-        color="error"
-        variant="text"
-        @click="removeTask"
-      >
-        关闭标签
-      </v-btn>
     </v-card-actions>
     <v-expand-transition>
       <div v-if="task.status === 'success'" class="pa-4">
@@ -260,6 +250,8 @@ const previewBadge = computed(() => {
       return null
   }
 })
+// Mark as used for TS when referenced in template
+void previewBadge
 
 const tagItems = computed(() => props.availableTags)
 
@@ -289,36 +281,8 @@ function normalizeHexColor(value: string | null | undefined): string | null {
   return /^#([0-9a-fA-F]{6})$/.test(prefixed) ? `#${prefixed.slice(1).toLowerCase()}` : null
 }
 
-function computeSizeCategory(length: number | null, width: number | null, height: number | null): string | null {
-  const values = [length, width, height]
-    .filter((candidate): candidate is number => typeof candidate === 'number' && Number.isFinite(candidate) && candidate > 0)
-  if (!values.length) {
-    return null
-  }
-  const max = Math.max(...values)
-  if (max < 0.1) {
-    return '微型'
-  }
-  if (max < 0.5) {
-    return '小型'
-  }
-  if (max < 1) {
-    return '普通'
-  }
-  if (max < 3) {
-    return '中型'
-  }
-  if (max < 10) {
-    return '大型'
-  }
-  if (max < 30) {
-    return '巨型'
-  }
-  return '巨大型'
-}
 
 const colorPreview = computed(() => normalizeHexColor(props.task.color) ?? normalizeHexColor(props.task.asset?.color) ?? TYPE_COLOR_FALLBACK[props.task.type] ?? '#607d8b')
-const sizeCategory = computed(() => computeSizeCategory(props.task.dimensionLength, props.task.dimensionWidth, props.task.dimensionHeight))
 
 function normalizeTaskColor(): void {
   const normalized = normalizeHexColor(props.task.color)
@@ -435,16 +399,22 @@ function handleDescriptionBlur(): void {
 <style scoped>
 .task-color-row {
   display: flex;
-  align-items: flex-end;
-  gap: 12px;
-  flex-wrap: wrap;
 }
 
 .task-color-button {
-  width: 44px;
-  min-width: 44px;
-  height: 44px;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
   border-radius: 8px;
+  box-shadow: none;
+}
+
+.task-color-row :deep(.v-field__append-inner) {
+  padding-inline-end: 4px;
+}
+
+.task-color-row :deep(.v-field) {
+  align-items: center;
 }
 
 .task-color-picker {
@@ -471,12 +441,24 @@ function handleDescriptionBlur(): void {
 
 .task-dimension-grid {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 12px;
   align-items: flex-end;
 }
 
+.task-dimension-grid :deep(.v-text-field) {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
 .task-size-chip {
   align-self: center;
+  margin-left: auto;
+}
+.task-description :deep(textarea) {
+  resize: vertical;
+}
+.task-description {
+  margin-bottom: 8px;
 }
 </style>

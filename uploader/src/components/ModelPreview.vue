@@ -1,5 +1,6 @@
 <template>
   <div ref="container" class="model-preview"></div>
+  
 </template>
 
 <script setup lang="ts">
@@ -14,6 +15,9 @@ interface Props {
 }
 
 const props = defineProps<Props>()
+const emit = defineEmits<{
+  (e: 'dimensions', payload: { length: number; width: number; height: number }): void
+}>()
 
 const container = ref<HTMLDivElement | null>(null)
 let renderer: THREE.WebGLRenderer | null = null
@@ -144,6 +148,17 @@ async function loadModel(): Promise<void> {
       currentObject = object
       scene?.add(object)
       fitCamera(object)
+      // Calculate and emit bounding box dimensions in meters (assuming unit = meters)
+      try {
+        const box = new THREE.Box3().setFromObject(object)
+        const size = box.getSize(new THREE.Vector3())
+        const length = Number.isFinite(size.x) ? size.x : 0
+        const width = Number.isFinite(size.z) ? size.z : 0
+        const height = Number.isFinite(size.y) ? size.y : 0
+        emit('dimensions', { length, width, height })
+      } catch (err) {
+        // noop
+      }
       loader.removeEventListener('loaded', handleLoaded)
       resolve()
     }
