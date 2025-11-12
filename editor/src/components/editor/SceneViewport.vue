@@ -311,6 +311,7 @@ const panelPlacement = computed<PanelPlacementState>(() => {
 const TOOLBAR_OFFSET = 12
 const TOOLBAR_MIN_MARGIN = 45
 const TOOLBAR_MIN_OFFSET = 50
+const VIEWPORT_TOOLBAR_TOP_MARGIN = 16
 
 const transformToolbarStyle = reactive<{ top: string; left: string }>({
   top: `${TOOLBAR_MIN_MARGIN}px`,
@@ -318,7 +319,7 @@ const transformToolbarStyle = reactive<{ top: string; left: string }>({
 })
 
 const viewportToolbarStyle = reactive<{ top: string; left: string }>({
-  top: `${TOOLBAR_MIN_MARGIN}px`,
+  top: `${VIEWPORT_TOOLBAR_TOP_MARGIN}px`,
   left: '0px',
 })
 
@@ -569,8 +570,8 @@ function updateViewportToolbarPosition() {
   const maxLeft = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.width - toolbarWidth - TOOLBAR_MIN_MARGIN)
   const resolvedLeft = clampToRange(centeredLeft, TOOLBAR_MIN_MARGIN, maxLeft)
 
-  const maxTop = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.height - toolbarHeight - TOOLBAR_MIN_MARGIN)
-  const resolvedTop = clampToRange(TOOLBAR_MIN_MARGIN, TOOLBAR_MIN_MARGIN, maxTop)
+  const maxTop = Math.max(VIEWPORT_TOOLBAR_TOP_MARGIN, viewportRect.height - toolbarHeight - VIEWPORT_TOOLBAR_TOP_MARGIN)
+  const resolvedTop = clampToRange(VIEWPORT_TOOLBAR_TOP_MARGIN, VIEWPORT_TOOLBAR_TOP_MARGIN, maxTop)
 
   viewportToolbarStyle.left = `${resolvedLeft}px`
   viewportToolbarStyle.top = `${resolvedTop}px`
