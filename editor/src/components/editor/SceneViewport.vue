@@ -7169,8 +7169,7 @@ defineExpose<SceneViewportHandle>({
 .stats-host {
   position: absolute;
   top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
+  right: 12px;
   z-index: 8;
   pointer-events: auto;
 }
