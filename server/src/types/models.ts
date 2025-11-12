@@ -27,8 +27,12 @@ export interface UserDocument extends Document<Types.ObjectId> {
   avatarUrl?: string
   phone?: string
   bio?: string
+  gender?: 'male' | 'female' | 'other'
+  birthDate?: Date
   status: 'active' | 'disabled'
   roles: Types.ObjectId[]
+  workShareCount?: number
+  exhibitionShareCount?: number
   createdAt: Date
   updatedAt: Date
 }
@@ -59,6 +63,7 @@ export interface WorkDocument extends Document<Types.ObjectId> {
   ratings: RatingEntry[]
   collections: Types.ObjectId[]
   commentCount: number
+  shareCount: number
   metadata?: Record<string, unknown>
   createdAt: Date
   updatedAt: Date

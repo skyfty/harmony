@@ -5,7 +5,6 @@
         <text class="title">{{ collection?.title || '作品集详情' }}</text>
         <text class="subtitle">{{ headerSubtitle }}</text>
       </view>
-      <button v-if="canEdit" class="edit-btn" @tap="goToEdit">编辑</button>
     </view>
 
     <view v-if="collection" class="cover-card">
@@ -87,9 +86,7 @@
             <text class="work-name">{{ work.name }}</text>
             <text class="work-meta">评分 {{ work.rating.toFixed(1) }} · 喜欢 {{ work.likes }}</text>
           </view>
-          <view class="work-actions">
-            <button class="link-btn" @tap="openWorkDetail(work.id)">查看</button>
-          </view>
+          
         </view>
       </view>
       <view v-else class="collection-empty">暂未包含作品，前往作品详情页添加。</view>
@@ -100,12 +97,17 @@
       <text class="empty-desc">{{ loadingError || '请返回作品集列表或重新选择' }}</text>
     </view>
 
+    <view v-if="collection" class="actions-section">
+      <button v-if="canEdit" class="action-btn action-btn-edit" @tap="goToEdit">编辑</button>
+      <button v-if="canEdit" class="action-btn action-btn-delete" @tap="handleDelete">删除</button>
+      <button class="action-btn action-btn-create" @tap="createExhibition">创建展览</button>
+    </view>
+
     <BottomNav active="work" @navigate="handleNavigate" />
   </view>
 
   <view v-if="collectionRatingModalVisible" class="rating-modal-mask" @tap="closeCollectionRatingModal"></view>
   <view v-if="collectionRatingModalVisible" class="rating-modal-panel" @tap.stop>
-    <button class="rating-modal__close" @tap="closeCollectionRatingModal">×</button>
     <text class="rating-modal__title">为该作品集打分</text>
     <view class="rating-modal__stars">
       <text
@@ -133,6 +135,7 @@ import {
   apiGetCollection,
   apiToggleCollectionLike,
   apiRateCollection,
+  apiDeleteCollection,
   type CollectionSummary,
   type WorkSummary,
 } from '@/api/miniprogram';
@@ -405,6 +408,47 @@ function formatNumber(value: number): string {
 function handleNavigate(target: NavKey): void {
   redirectToNav(target, { current: 'work' });
 }
+
+function createExhibition(): void {
+  if (!collection.value) {
+    return;
+  }
+  // Navigate to exhibition create page with collection ID as parameter
+  uni.navigateTo({
+    url: `/pages/exhibition/create/index?collectionId=${collection.value.id}`,
+  });
+}
+
+async function handleDelete(): Promise<void> {
+  if (!collection.value) {
+    return;
+  }
+  
+  const result = await new Promise<{ confirm: boolean }>((resolve) => {
+    uni.showModal({
+      title: '删除作品集',
+      content: '确认删除该作品集吗？删除后将从所有展览中移除，且无法恢复。',
+      confirmColor: '#d93025',
+      success: (res) => resolve({ confirm: res.confirm }),
+      fail: () => resolve({ confirm: false }),
+    });
+  });
+
+  if (!result.confirm) {
+    return;
+  }
+
+  try {
+    await apiDeleteCollection(collection.value.id);
+    uni.showToast({ title: '已删除', icon: 'success' });
+    setTimeout(() => {
+      uni.navigateBack();
+    }, 500);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : '删除失败';
+    uni.showToast({ title: message, icon: 'none' });
+  }
+}
 </script>
 <style scoped lang="scss">
 .rating-modal-mask {
@@ -500,7 +544,6 @@ function handleNavigate(target: NavKey): void {
   flex: 1;
 }
 
-
 .title {
   font-size: 20px;
   font-weight: 600;
@@ -512,13 +555,24 @@ function handleNavigate(target: NavKey): void {
   color: #8a94a6;
 }
 
-.edit-btn {
-  padding: 8px 14px;
+.edit-icon-btn .icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.delete-icon-btn {
+  padding: 6px;
   border: none;
-  border-radius: 16px;
-  background: rgba(31, 122, 236, 0.12);
-  color: #1f7aec;
-  font-size: 14px;
+  background: transparent;
+  color: #d93025;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.delete-icon-btn .icon {
+  font-size: 18px;
+  line-height: 1;
 }
 
 .cover-card {
@@ -762,6 +816,60 @@ function handleNavigate(target: NavKey): void {
 .collection-empty {
   font-size: 12px;
   color: #8a94a6;
+}
+
+.actions-section {
+  margin: 40px 20px 120px;
+  padding: 0 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+
+.action-btn {
+  width: 100%;
+  padding: 14px 20px;
+  border: none;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s;
+
+  &:active {
+    transform: scale(0.98);
+  }
+}
+
+.action-btn-edit {
+  background: rgba(31, 122, 236, 0.12);
+  color: #1f7aec;
+
+  &:active {
+    background: rgba(31, 122, 236, 0.18);
+  }
+}
+
+.action-btn-delete {
+  background: rgba(255, 87, 87, 0.12);
+  color: #ff5757;
+
+  &:active {
+    background: rgba(255, 87, 87, 0.18);
+  }
+}
+
+.action-btn-create {
+  background: linear-gradient(135deg, #3f97ff 0%, #7ec6ff 100%);
+  color: #ffffff;
+  box-shadow: 0 6px 20px rgba(63, 151, 255, 0.3);
+
+  &:active {
+    box-shadow: 0 3px 12px rgba(63, 151, 255, 0.2);
+  }
 }
 
 .empty {

@@ -13,7 +13,16 @@
       "path": "pages/profile/index"
     },
     {
+      "path": "pages/profile/edit"
+    },
+    {
       "path": "pages/settings/index"
+    },
+    {
+      "path": "pages/help/index"
+    },
+    {
+      "path": "pages/about/index"
     }
   ],
   "subPackages": [
@@ -23,6 +32,9 @@
       "pages": [
         {
           "path": "index"
+        },
+        {
+          "path": "list"
         },
         {
           "path": "detail/index"
@@ -41,6 +53,9 @@
       "pages": [
         {
           "path": "index"
+        },
+        {
+          "path": "list"
         },
         {
           "path": "create/index"

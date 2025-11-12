@@ -2,6 +2,7 @@ import type { Context } from 'koa'
 import { Types } from 'mongoose'
 import { ExhibitionModel } from '@/models/Exhibition'
 import { WorkCollectionModel } from '@/models/WorkCollection'
+import { UserModel } from '@/models/User'
 import { ensureUserId, getOptionalUserId } from './utils'
 import { fetchWorkResponsesByIds, type WorkResponse } from './workHelpers'
 
@@ -603,6 +604,10 @@ export async function shareExhibition(ctx: Context): Promise<void> {
     ctx.throw(404, 'Exhibition not found')
     return
   }
+  
+  // Increment user's exhibition share count
+  await UserModel.findByIdAndUpdate(userId, { $inc: { exhibitionShareCount: 1 } }).exec()
+  
   ctx.body = {
     shareCount: exhibition.shareCount,
   }

@@ -9,7 +9,6 @@
         <text class="subtitle">{{ dateRangeLabel }}</text>
         <text class="subtitle">更新时间 {{ updatedLabel }}</text>
       </view>
-      <button v-if="exhibition" class="share-btn" @tap="shareExhibition">分享</button>
     </view>
 
     <view v-if="loading" class="state state--loading">
@@ -36,8 +35,35 @@
         </view>
       </view>
 
+      <view class="action-buttons" :class="{ 'buttons-even': !isOwner }">
+        <view class="action-btn-icon" @tap="enterExhibition">
+          <text class="icon">▶️</text>
+          <text class="label">进入</text>
+        </view>
+        <view class="action-btn-icon" @tap="shareExhibition">
+          <text class="icon">🔗</text>
+          <text class="label">分享</text>
+        </view>
+        <view
+          v-if="isOwner && exhibition.status === 'published'"
+          class="action-btn-icon"
+          @tap="withdrawExhibition"
+        >
+          <text class="icon">📥</text>
+          <text class="label">撤展</text>
+        </view>
+        <view v-if="isOwner" class="action-btn-icon" @tap="editExhibition">
+          <text class="icon">✏️</text>
+          <text class="label">编辑</text>
+        </view>
+        <view v-if="isOwner" class="action-btn-icon danger" @tap="deleteExhibition">
+          <text class="icon">🗑️</text>
+          <text class="label">删除</text>
+        </view>
+      </view>
+
       <view class="stats-card">
-        <view class="stat">
+        <view class="stat stat--action" @tap="openExhibitionRatingModal">
           <text class="stat-icon">★</text>
           <text class="stat-value">{{ ratingLabel }}</text>
           <text class="stat-desc">评分 ({{ exhibition.ratingCount || 0 }})</text>
@@ -96,25 +122,27 @@
     <view v-else class="state state--empty">
       <text class="state-text">未找到展览信息</text>
     </view>
+    <BottomNav active="exhibition" @navigate="handleNavigate" />
+  </view>
 
-    <view v-if="exhibition" class="action-bar">
-      <button class="action-btn primary" @tap="enterExhibition">进入</button>
+  <view v-if="ratingModalVisible" class="rating-modal-mask" @tap="closeExhibitionRatingModal"></view>
+  <view v-if="ratingModalVisible" class="rating-modal-panel" @tap.stop>
+    <text class="rating-modal__title">为该展览打分</text>
+    <view class="rating-modal__stars">
+      <text
+        v-for="n in 5"
+        :key="n"
+        class="rating-modal__star"
+        :class="{ active: n <= ratingSelection }"
+        @tap="selectExhibitionRating(n)"
+      >★</text>
+    </view>
+    <view class="rating-modal__actions">
       <button
-        v-if="exhibition.status !== 'published'"
-        class="action-btn ghost"
-        @tap="publishExhibition"
-      >
-        发布
-      </button>
-      <button
-        v-if="exhibition.status === 'published'"
-        class="action-btn ghost"
-        @tap="withdrawExhibition"
-      >
-        撤展
-      </button>
-      <button class="action-btn ghost" @tap="editExhibition">编辑</button>
-      <button class="action-btn danger" @tap="deleteExhibition">删除</button>
+        class="rating-modal__submit"
+        :disabled="ratingSubmitting"
+        @tap="submitExhibitionRating"
+      >{{ ratingSubmitting ? '提交中…' : ratingSelection ? `提交 ${ratingSelection} 星` : '请选择星级' }}</button>
     </view>
   </view>
 </template>
@@ -124,6 +152,8 @@ import { onLoad } from '@dcloudio/uni-app';
 import {
   apiDeleteExhibition,
   apiGetExhibition,
+  apiGetProfile,
+  apiRateExhibition,
   apiShareExhibition,
   apiUpdateExhibition,
   apiVisitExhibition,
@@ -131,11 +161,17 @@ import {
   type ExhibitionSummary,
   type WorkSummary,
 } from '@/api/miniprogram';
+import BottomNav from '@/components/BottomNav.vue';
+import { redirectToNav, type NavKey } from '@/utils/navKey';
 
 const exhibitionId = ref('');
 const exhibition = ref<ExhibitionSummary | null>(null);
 const loading = ref(false);
 const error = ref('');
+const ratingModalVisible = ref(false);
+const ratingSubmitting = ref(false);
+const ratingSelection = ref(0);
+const currentUserId = ref<string>('');
 
 const gradientPalette = [
   'linear-gradient(135deg, #ffe0f2, #ffd0ec)',
@@ -169,6 +205,13 @@ const coverImages = computed(() => {
 
 const coverBackground = computed(() => ensureBackground(coverImages.value[0], 0));
 
+const isOwner = computed(() => {
+  if (!exhibition.value || !currentUserId.value) {
+    return false;
+  }
+  return exhibition.value.ownerId === currentUserId.value;
+});
+
 const statusLabel = computed(() => {
   if (!exhibition.value) {
     return '未知状态';
@@ -188,8 +231,17 @@ const ratingLabel = computed(() => formatRating(exhibition.value?.averageRating 
 
 onLoad(async (options) => {
   exhibitionId.value = typeof options?.id === 'string' ? decodeURIComponent(options.id) : '';
-  await fetchDetail();
+  await Promise.all([fetchDetail(), fetchCurrentUser()]);
 });
+
+async function fetchCurrentUser(): Promise<void> {
+  try {
+    const profile = await apiGetProfile();
+    currentUserId.value = profile.user.id;
+  } catch (err) {
+    console.warn('Failed to fetch current user', err);
+  }
+}
 
 async function fetchDetail(): Promise<void> {
   if (!exhibitionId.value) {
@@ -232,6 +284,40 @@ async function shareExhibition(): Promise<void> {
   } catch (err) {
     uni.showToast({ title: getErrorMessage(err), icon: 'none' });
   }
+}
+
+function openExhibitionRatingModal(): void {
+  ratingSelection.value = 0;
+  ratingModalVisible.value = true;
+}
+
+function closeExhibitionRatingModal(): void {
+  ratingModalVisible.value = false;
+  ratingSelection.value = 0;
+}
+
+function selectExhibitionRating(score: number): void {
+  ratingSelection.value = score;
+}
+
+async function submitExhibitionRating(): Promise<void> {
+  if (!exhibition.value || ratingSelection.value === 0) {
+    return;
+  }
+  ratingSubmitting.value = true;
+  try {
+    exhibition.value = await apiRateExhibition(exhibition.value.id, { score: ratingSelection.value });
+    uni.showToast({ title: '评分成功', icon: 'success' });
+    closeExhibitionRatingModal();
+  } catch (err) {
+    uni.showToast({ title: getErrorMessage(err), icon: 'none' });
+  } finally {
+    ratingSubmitting.value = false;
+  }
+}
+
+function handleNavigate(target: NavKey): void {
+  redirectToNav(target, { current: 'exhibition' });
 }
 
 async function publishExhibition(): Promise<void> {
@@ -402,7 +488,10 @@ function showModal(options: UniApp.ShowModalOptions): Promise<UniApp.ShowModalRe
 </script>
 <style scoped lang="scss">
 .page {
-  padding: 20px 20px 120px;
+  padding: 20px 20px 96px;
+  // iOS 安全区适配（新旧写法都加，取其一生效）
+  padding-bottom: calc(96px + env(safe-area-inset-bottom));
+  padding-bottom: calc(96px + constant(safe-area-inset-bottom));
   min-height: 100vh;
   background: #f5f7fb;
   box-sizing: border-box;
@@ -547,6 +636,52 @@ function showModal(options: UniApp.ShowModalOptions): Promise<UniApp.ShowModalRe
   font-weight: 600;
 }
 
+.action-buttons {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 20px;
+  padding: 10px 0;
+}
+
+.action-buttons.buttons-even {
+  justify-content: stretch;
+  gap: 12px;
+}
+
+.action-buttons.buttons-even .action-btn-icon {
+  flex: 1;
+}
+
+.action-btn-icon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: rgba(31, 122, 236, 0.08);
+  transition: all 0.2s;
+}
+
+.action-btn-icon.danger {
+  background: rgba(217, 48, 37, 0.08);
+}
+
+.action-btn-icon .icon {
+  font-size: 24px;
+}
+
+.action-btn-icon .label {
+  font-size: 12px;
+  color: #5f6b83;
+  font-weight: 500;
+}
+
+.action-btn-icon.danger .label {
+  color: #d93025;
+}
+
 .stats-card {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -578,6 +713,16 @@ function showModal(options: UniApp.ShowModalOptions): Promise<UniApp.ShowModalRe
 .stat-desc {
   font-size: 12px;
   color: #8a94a6;
+}
+
+.stat--action {
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.stat--action:active {
+  transform: scale(0.95);
+  opacity: 0.8;
 }
 
 .segment {
@@ -664,38 +809,75 @@ function showModal(options: UniApp.ShowModalOptions): Promise<UniApp.ShowModalRe
   color: #5f6b83;
 }
 
-.action-bar {
+.rating-modal-mask {
   position: fixed;
+  top: 0;
   left: 0;
   right: 0;
-  bottom: 20px;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+}
+
+.rating-modal-panel {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 280px;
+  background: #ffffff;
+  border-radius: 24px;
+  padding: 30px 24px 24px;
+  box-shadow: 0 24px 48px rgba(31, 122, 236, 0.2);
+  z-index: 1001;
   display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.rating-modal__title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1f1f1f;
+  text-align: center;
+}
+
+.rating-modal__stars {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+}
+
+.rating-modal__star {
+  font-size: 36px;
+  color: #e3e9f2;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.rating-modal__star.active {
+  color: #ffb400;
+  transform: scale(1.1);
+}
+
+.rating-modal__actions {
+  display: flex;
+  flex-direction: column;
   gap: 10px;
-  padding: 0 20px;
-  box-sizing: border-box;
 }
 
-.action-btn {
-  flex: 1;
+.rating-modal__submit {
+  width: 100%;
   padding: 12px;
-  border-radius: 18px;
+  border-radius: 16px;
   border: none;
-  font-size: 14px;
-}
-
-.action-btn.primary {
   background: linear-gradient(135deg, #1f7aec, #62a6ff);
   color: #ffffff;
+  font-size: 14px;
   font-weight: 600;
 }
 
-.action-btn.ghost {
-  background: rgba(31, 122, 236, 0.12);
-  color: #1f7aec;
-}
-
-.action-btn.danger {
-  background: rgba(217, 48, 37, 0.14);
-  color: #d93025;
+.rating-modal__submit:disabled {
+  opacity: 0.5;
 }
 </style>

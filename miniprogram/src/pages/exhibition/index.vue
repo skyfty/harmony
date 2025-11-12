@@ -85,24 +85,29 @@
               </view>
             </view>
             <view class="card-actions">
-              <button class="action-btn primary" @tap.stop="enterExhibition(card)">进入</button>
-              <button class="action-btn" @tap.stop="shareExhibition(card)">分享</button>
+              <button class="action-btn-icon primary" @tap.stop="enterExhibition(card)">
+                <text class="icon">▶️</text>
+              </button>
+              <button class="action-btn-icon" @tap.stop="shareExhibition(card)">
+                <text class="icon">🔗</text>
+              </button>
               <button
-                class="action-btn ghost"
+                class="action-btn-icon ghost"
                 v-if="card.status !== 'published'"
                 @tap.stop="publishExhibition(card)"
               >
-                发布
+                <text class="icon">📤</text>
               </button>
               <button
-                class="action-btn danger"
+                class="action-btn-icon danger"
                 :disabled="card.status !== 'published'"
                 @tap.stop="withdrawExhibition(card)"
               >
-                撤展
+                <text class="icon">📥</text>
               </button>
-              <button class="action-btn ghost" @tap.stop="editExhibition(card.id)">编辑</button>
-              <button class="action-btn ghost" @tap.stop="deleteExhibition(card.id)">删除</button>
+              <button class="action-btn-icon danger" @tap.stop="deleteExhibition(card.id)">
+                <text class="icon">🗑️</text>
+              </button>
             </view>
           </view>
         </view>
@@ -758,35 +763,43 @@ function handleNavigate(target: NavKey) {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  justify-content: center;
 }
 
-.action-btn {
-  flex: 1;
-  min-width: 92px;
-  padding: 8px 0;
-  border-radius: 16px;
+.action-btn-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
   border: none;
   background: rgba(31, 122, 236, 0.12);
-  color: #1f7aec;
-  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
 }
 
-.action-btn.primary {
+.action-btn-icon .icon {
+  font-size: 20px;
+  filter: grayscale(0.3);
+}
+
+.action-btn-icon.primary {
   background: linear-gradient(135deg, #1f7aec, #62a6ff);
-  color: #ffffff;
 }
 
-.action-btn.danger {
+.action-btn-icon.primary .icon {
+  filter: none;
+}
+
+.action-btn-icon.danger {
   background: rgba(217, 48, 37, 0.12);
-  color: #d93025;
 }
 
-.action-btn.ghost {
+.action-btn-icon.ghost {
   background: rgba(95, 107, 131, 0.08);
-  color: #5f6b83;
 }
 
-.action-btn[disabled] {
+.action-btn-icon[disabled] {
   opacity: 0.5;
 }
 

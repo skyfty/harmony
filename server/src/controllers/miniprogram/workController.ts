@@ -3,6 +3,7 @@ import { Types } from 'mongoose'
 import type { HydratedDocument } from 'mongoose'
 import { WorkModel } from '@/models/Work'
 import { WorkRecordModel } from '@/models/WorkRecord'
+import { UserModel } from '@/models/User'
 import type { WorkDocument } from '@/types/models'
 import { WorkCollectionModel } from '@/models/WorkCollection'
 import { ExhibitionModel } from '@/models/Exhibition'
@@ -302,4 +303,30 @@ export async function rateWork(ctx: Context): Promise<void> {
   await work.save()
   const collectionMap = await buildCollectionMap(work.collections ?? [])
   ctx.body = buildWorkResponse(work.toObject() as WorkLean, userId, collectionMap)
+}
+
+export async function shareWork(ctx: Context): Promise<void> {
+  const userId = ensureUserId(ctx)
+  const { id } = ctx.params as { id: string }
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid work id')
+  }
+  const work = await WorkModel.findOneAndUpdate(
+    { _id: id },
+    { $inc: { shareCount: 1 } },
+    { new: true },
+  )
+    .lean()
+    .exec() as WorkLean | null
+  if (!work) {
+    ctx.throw(404, 'Work not found')
+    return
+  }
+  
+  // Increment user's work share count
+  await UserModel.findByIdAndUpdate(userId, { $inc: { workShareCount: 1 } }).exec()
+  
+  ctx.body = {
+    shareCount: work.shareCount,
+  }
 }

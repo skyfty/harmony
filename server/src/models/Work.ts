@@ -26,6 +26,7 @@ const workSchema = new Schema<WorkDocument>(
     ratings: { type: [ratingSchema], default: [] },
     collections: { type: [Schema.Types.ObjectId], ref: 'WorkCollection', default: [] },
     commentCount: { type: Number, default: 0 },
+    shareCount: { type: Number, default: 0 },
     metadata: { type: Schema.Types.Mixed },
   },
   {

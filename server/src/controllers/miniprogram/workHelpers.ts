@@ -22,6 +22,7 @@ export interface WorkLean {
   }>
   collections: Types.ObjectId[]
   commentCount: number
+  shareCount: number
   metadata?: Record<string, unknown>
   createdAt: Date
   updatedAt: Date
@@ -59,6 +60,7 @@ export interface WorkResponse {
     coverUrl?: string
   }>
   commentCount: number
+  shareCount: number
   createdAt: string
   updatedAt: string
 }
@@ -126,6 +128,7 @@ export function buildWorkResponse(work: WorkLean, userId?: string, collectionMap
       : undefined,
     collections,
     commentCount: work.commentCount,
+    shareCount: work.shareCount ?? 0,
     createdAt: work.createdAt.toISOString(),
     updatedAt: work.updatedAt.toISOString(),
   }

@@ -1,18 +1,5 @@
 <template>
   <view class="page settings">
-    <view class="header">
-      <text class="title">账户设置</text>
-      <text class="subtitle">管理个人资料、登录安全与通知偏好</text>
-    </view>
-
-    <view class="profile-card">
-      <view class="avatar">S</view>
-      <view class="profile-info">
-        <text class="name">设计师姓名</text>
-        <text class="email">designer@harmony.com</text>
-      </view>
-      <button class="edit-btn" @tap="editProfile">编辑</button>
-    </view>
 
     <view class="card">
       <text class="card-title">安全与隐私</text>

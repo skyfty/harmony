@@ -28,8 +28,14 @@ type UserLean = {
   password: string
   displayName?: string
   email?: string
+  avatarUrl?: string
+  phone?: string
+  gender?: 'male' | 'female' | 'other'
+  birthDate?: Date
   status: 'active' | 'disabled'
   roles: Types.ObjectId[]
+  workShareCount?: number
+  exhibitionShareCount?: number
   createdAt: Date
   updatedAt: Date
 }
@@ -39,7 +45,13 @@ interface SessionUser {
   username: string
   displayName?: string
   email?: string
+  avatarUrl?: string
+  phone?: string
+  gender?: 'male' | 'female' | 'other'
+  birthDate?: string
   status: 'active' | 'disabled'
+  workShareCount?: number
+  exhibitionShareCount?: number
   roles: Array<{
     id: string
     name: string
@@ -96,7 +108,13 @@ function buildSessionUser(user: UserLean): SessionUser {
     username: user.username,
     displayName: user.displayName ?? undefined,
     email: user.email ?? undefined,
+    avatarUrl: user.avatarUrl ?? undefined,
+    phone: user.phone ?? undefined,
+    gender: user.gender ?? undefined,
+    birthDate: user.birthDate?.toISOString() ?? undefined,
     status: user.status,
+    workShareCount: user.workShareCount ?? 0,
+    exhibitionShareCount: user.exhibitionShareCount ?? 0,
     roles: [],
     createdAt: user.createdAt.toISOString(),
     updatedAt: user.updatedAt.toISOString(),

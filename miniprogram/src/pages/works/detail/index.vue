@@ -6,7 +6,6 @@
         <text class="title">{{ work?.title || '作品详情' }}</text>
         <text class="subtitle">{{ headerSubtitle }}</text>
       </view>
-      <button v-if="isOwner" class="edit-btn" @tap="goToEdit">编辑</button>
     </view>
 
     <view v-if="work" class="cover-card">
@@ -34,11 +33,6 @@
         <text class="stat-value">{{ workLikes }}</text>
         <text class="stat-desc">{{ workLikeSummary }}</text>
       </view>
-      <view class="stat">
-        <text class="stat-icon">📁</text>
-        <text class="stat-value">{{ workSizeLabel }}</text>
-        <text class="stat-desc">文件大小</text>
-      </view>
     </view>
 
     <view v-if="work" class="info-card">
@@ -54,10 +48,6 @@
       <view class="info-row">
         <text class="info-label">类型</text>
         <text class="info-value">{{ workTypeLabel }}</text>
-      </view>
-      <view class="info-row">
-        <text class="info-label">文件大小</text>
-        <text class="info-value">{{ workSizeLabel }}</text>
       </view>
       <view class="info-row">
         <text class="info-label">创建时间</text>
@@ -77,7 +67,7 @@
           class="collections-action"
           :disabled="collectionsLoading"
           @tap="openCollectionPicker"
-        >添加</button>
+        ><text class="icon">＋</text></button>
       </view>
       <view v-if="workCollections.length" class="collection-tags">
         <view
@@ -98,11 +88,17 @@
       <text class="empty-title">{{ loadingError ? '加载失败' : '未找到作品' }}</text>
       <text class="empty-desc">{{ loadingError || '请返回作品列表重新选择' }}</text>
     </view>
+
+    <view v-if="work && isOwner" class="actions-section">
+      <button class="action-btn action-btn-edit" @tap="goToEdit">编辑</button>
+      <button class="action-btn action-btn-delete" @tap="handleDelete">删除</button>
+    </view>
   </view>
+
+  <BottomNav active="work" @navigate="handleNavigate" />
 
   <view v-if="ratingModalVisible" class="rating-modal-mask" @tap="closeWorkRatingModal"></view>
   <view v-if="ratingModalVisible" class="rating-modal-panel" @tap.stop>
-    <button class="rating-modal__close" @tap="closeWorkRatingModal">×</button>
     <text class="rating-modal__title">为该作品打分</text>
     <view class="rating-modal__stars">
       <text
@@ -125,16 +121,19 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
+import BottomNav from '@/components/BottomNav.vue';
 import {
   apiGetWork,
   apiGetCollections,
   apiUpdateCollection,
   apiToggleWorkLike,
   apiRateWork,
+  apiDeleteWork,
   type WorkSummary,
   type CollectionSummary,
 } from '@/api/miniprogram';
 import { useWorksStore } from '@/stores/worksStore';
+import { redirectToNav, type NavKey } from '@/utils/navKey';
 
 const worksStore = useWorksStore();
 
@@ -186,6 +185,41 @@ function getErrorMessage(error: unknown): string {
     return error;
   }
   return '操作失败，请稍后重试';
+}
+
+function handleNavigate(target: NavKey): void {
+  redirectToNav(target, { current: 'work' });
+}
+
+async function handleDelete(): Promise<void> {
+  if (!work.value) {
+    return;
+  }
+  
+  const result = await new Promise<{ confirm: boolean }>((resolve) => {
+    uni.showModal({
+      title: '删除作品',
+      content: '确认删除该作品吗？删除后将从所有展览和作品集中移除，且无法恢复。',
+      confirmColor: '#d93025',
+      success: (res) => resolve({ confirm: res.confirm }),
+      fail: () => resolve({ confirm: false }),
+    });
+  });
+
+  if (!result.confirm) {
+    return;
+  }
+
+  try {
+    await apiDeleteWork(work.value.id);
+    uni.showToast({ title: '已删除', icon: 'success' });
+    setTimeout(() => {
+      uni.navigateBack();
+    }, 500);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : '删除失败';
+    uni.showToast({ title: message, icon: 'none' });
+  }
 }
 
 const previewImage = computed(() => {
@@ -616,14 +650,7 @@ watch(isOwner, (value) => {
   color: #8a94a6;
 }
 
-.edit-btn {
-  padding: 8px 14px;
-  border: none;
-  border-radius: 16px;
-  background: rgba(31, 122, 236, 0.12);
-  color: #1f7aec;
-  font-size: 14px;
-}
+
 
 .cover-card {
   background: #ffffff;
@@ -682,7 +709,7 @@ watch(isOwner, (value) => {
 
 .stats-card {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -787,12 +814,20 @@ watch(isOwner, (value) => {
 }
 
 .collections-action {
-  padding: 6px 12px;
+  padding: 6px;
   border: none;
   border-radius: 14px;
   background: rgba(31, 122, 236, 0.12);
   color: #1f7aec;
   font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.collections-action .icon {
+  font-size: 16px;
+  line-height: 1;
 }
 
 .collections-action[disabled] {
@@ -821,6 +856,50 @@ watch(isOwner, (value) => {
 .collection-empty {
   font-size: 12px;
   color: #8a94a6;
+}
+
+.actions-section {
+  margin: 30px 20px 120px;
+  padding: 0 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+
+.action-btn {
+  width: 100%;
+  padding: 14px 20px;
+  border: none;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s;
+
+  &:active {
+    transform: scale(0.98);
+  }
+}
+
+.action-btn-edit {
+  background: rgba(31, 122, 236, 0.12);
+  color: #1f7aec;
+
+  &:active {
+    background: rgba(31, 122, 236, 0.18);
+  }
+}
+
+.action-btn-delete {
+  background: rgba(217, 48, 37, 0.12);
+  color: #d93025;
+
+  &:active {
+    background: rgba(217, 48, 37, 0.18);
+  }
 }
 
 .empty {

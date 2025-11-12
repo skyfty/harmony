@@ -17,6 +17,8 @@ interface UpdateProfileBody {
   avatarUrl?: string
   phone?: string
   bio?: string
+  gender?: 'male' | 'female' | 'other'
+  birthDate?: string
 }
 
 export async function register(ctx: Context): Promise<void> {
@@ -77,8 +79,8 @@ export async function updateProfile(ctx: Context): Promise<void> {
   if (!userId) {
     ctx.throw(401, 'Unauthorized')
   }
-  const { displayName, email, avatarUrl, phone, bio } = ctx.request.body as UpdateProfileBody
-  const updatePayload: UpdateProfileBody = {}
+  const { displayName, email, avatarUrl, phone, bio, gender, birthDate } = ctx.request.body as UpdateProfileBody
+  const updatePayload: Record<string, unknown> = {}
   if (typeof displayName === 'string') {
     updatePayload.displayName = displayName
   }
@@ -93,6 +95,15 @@ export async function updateProfile(ctx: Context): Promise<void> {
   }
   if (typeof bio === 'string') {
     updatePayload.bio = bio
+  }
+  if (typeof gender === 'string' && ['male', 'female', 'other'].includes(gender)) {
+    updatePayload.gender = gender
+  }
+  if (typeof birthDate === 'string') {
+    const date = new Date(birthDate)
+    if (!isNaN(date.getTime())) {
+      updatePayload.birthDate = date
+    }
   }
   if (!Object.keys(updatePayload).length) {
     ctx.throw(400, 'No profile fields provided')

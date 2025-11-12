@@ -6,7 +6,7 @@
       </view>
     </view>
 
-    <view class="profile-card">
+    <view class="profile-card" @tap="editProfile">
       <view class="avatar">
         <text class="avatar-initial">S</text>
       </view>
@@ -14,7 +14,6 @@
         <text class="profile-name">设计师姓名</text>
         <text class="profile-meta">32 作品 · 8 展览 · 1.2K 收藏</text>
       </view>
-      <button class="manage-btn">管理</button>
     </view>
 
     <view class="stats-card">
@@ -55,14 +54,15 @@
   </view>
 </template>
 <script setup lang="ts">
+import { ref, onMounted } from 'vue';
 import BottomNav from '@/components/BottomNav.vue';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
+import { apiGetProfile } from '@/api/miniprogram';
 
-const stats = [
-  { label: '本月曝光', value: '12.3K' },
-  { label: '新增收藏', value: '286' },
-  { label: '分享次数', value: '54' },
-];
+const stats = ref([
+  { label: '新增收藏', value: '0' },
+  { label: '分享次数', value: '0' },
+]);
 
 type SupportLink = 'help' | 'service' | 'about';
 
@@ -85,12 +85,39 @@ function goSettings() {
 }
 
 function goSupport(type: SupportLink) {
-  const message = supportMessages[type];
-  if (!message) {
-    return;
+  if (type === 'help') {
+    uni.navigateTo({ url: '/pages/help/index' });
+  } else if (type === 'about') {
+    uni.navigateTo({ url: '/pages/about/index' });
+  } else {
+    const message = supportMessages[type];
+    uni.showToast({ title: message, icon: 'none' });
   }
-  uni.showToast({ title: message, icon: 'none' });
 }
+
+function editProfile() {
+  uni.navigateTo({ url: '/pages/profile/edit' });
+}
+
+async function loadProfile() {
+  try {
+    const profile = await apiGetProfile();
+    const workShareCount = profile.user.workShareCount ?? 0;
+    const exhibitionShareCount = profile.user.exhibitionShareCount ?? 0;
+    const totalShareCount = workShareCount + exhibitionShareCount;
+    
+    stats.value = [
+      { label: '新增收藏', value: '0' }, // TODO: Fetch actual favorite count from API
+      { label: '分享次数', value: String(totalShareCount) },
+    ];
+  } catch (error) {
+    console.error('Failed to load profile:', error);
+  }
+}
+
+onMounted(() => {
+  loadProfile();
+});
 </script>
 <style scoped lang="scss">
 .page {
@@ -216,22 +243,12 @@ function goSupport(type: SupportLink) {
   color: #8a94a6;
 }
 
-.manage-btn {
-  padding: 10px 18px;
-  border-radius: 16px;
-  border: none;
-  background: linear-gradient(135deg, #1f7aec, #62a6ff);
-  color: #ffffff;
-  font-size: 14px;
-  box-shadow: 0 8px 20px rgba(31, 122, 236, 0.3);
-}
-
 .stats-card {
   background: #ffffff;
   border-radius: 20px;
   padding: 18px;
   display: flex;
-  justify-content: space-between;
+  justify-content: space-around;
   box-shadow: 0 12px 32px rgba(31, 122, 236, 0.08);
 }
 
