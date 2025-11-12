@@ -7,6 +7,20 @@ import {
 } from './serverAssetTypes'
 import { useAuthStore } from '@/stores/authStore'
 
+export interface GenerateAssetTagPayload {
+  name?: string
+  description?: string
+  assetType?: ProjectAsset['type']
+  extraHints?: string[]
+}
+
+export interface GenerateAssetTagResult {
+  tags: string[]
+  transcript?: string | null
+  imagePrompt?: string | null
+  modelTraceId?: string
+}
+
 export interface AssetTagSummary {
   id: string
   name: string
@@ -39,6 +53,43 @@ function buildError(message: string, response?: Response): Error {
     return new Error(message)
   }
   return new Error(`${message}（${response.status}）`)
+}
+
+export async function generateAssetTagSuggestions(payload: GenerateAssetTagPayload): Promise<GenerateAssetTagResult> {
+  const url = buildServerApiUrl('/ai/tags/suggest')
+  const authStore = useAuthStore()
+  const headers = new Headers({
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  })
+  const authorization = authStore.authorizationHeader
+  if (authorization) {
+    headers.set('Authorization', authorization)
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify(payload ?? {}),
+  })
+
+  if (!response.ok) {
+    const errorBody = await parseJsonResponse<{ message?: string } | string | null>(response).catch(() => null)
+    const message = typeof errorBody === 'string' ? errorBody : errorBody?.message
+    throw buildError(message || '生成标签失败', response)
+  }
+
+  const body = await parseJsonResponse<{ data?: GenerateAssetTagResult }>(response)
+  if (!body?.data || !Array.isArray(body.data.tags)) {
+    throw new Error('AI 标签响应格式无效')
+  }
+  return {
+    tags: body.data.tags.filter((tag): tag is string => typeof tag === 'string'),
+    transcript: body.data.transcript ?? null,
+    imagePrompt: body.data.imagePrompt ?? null,
+    modelTraceId: body.data.modelTraceId,
+  }
 }
 
 export async function fetchAssetTags(): Promise<AssetTagSummary[]> {

@@ -1,6 +1,12 @@
 import type { AxiosRequestConfig } from 'axios'
 import { apiClient } from '@/api/http'
-import type { AssetTag, ManagedAsset, UploadAssetResponse } from '@/types'
+import type {
+  AssetTag,
+  ManagedAsset,
+  UploadAssetResponse,
+  GenerateAssetTagPayload,
+  GenerateAssetTagResult,
+} from '@/types'
 
 export async function listAssetTags(): Promise<AssetTag[]> {
   const { data } = await apiClient.get<AssetTag[]>('/resources/tags')
@@ -37,4 +43,14 @@ export async function uploadAsset(formData: FormData, options: UploadAssetOption
     onUploadProgress: options.onUploadProgress,
   })
   return data.asset
+}
+
+export async function generateAssetTagSuggestions(
+  payload: GenerateAssetTagPayload,
+): Promise<GenerateAssetTagResult> {
+  const { data } = await apiClient.post<{ data: GenerateAssetTagResult }>('/ai/tags/suggest', payload)
+  if (!data?.data || !Array.isArray(data.data.tags)) {
+    throw new Error('AI 标签响应格式无效')
+  }
+  return data.data
 }

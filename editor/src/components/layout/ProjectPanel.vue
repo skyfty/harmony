@@ -18,7 +18,13 @@ import { resourceProviders } from '@/resources/projectProviders'
 import { loadProviderCatalog, storeProviderCatalog } from '@/stores/providerCatalogCache'
 import { getCachedModelObject } from '@/stores/modelObjectCache'
 import { dataUrlToBlob, extractExtension } from '@/utils/blob'
-import { createAssetTag, fetchAssetTags, mapServerAssetToProjectAsset, uploadAssetToServer } from '@/api/resourceAssets'
+import {
+  createAssetTag,
+  fetchAssetTags,
+  generateAssetTagSuggestions,
+  mapServerAssetToProjectAsset,
+  uploadAssetToServer,
+} from '@/api/resourceAssets'
 
 const OPENED_DIRECTORIES_STORAGE_KEY = 'harmony:project-panel:opened-directories'
 function restoreOpenedDirectories(): string[] {
@@ -153,6 +159,9 @@ const uploadEntries = ref<UploadAssetEntry[]>([])
 const uploadSelectedTagIds = ref<string[]>([])
 const uploadSubmitting = ref(false)
 const uploadError = ref<string | null>(null)
+const aiTagLoading = ref(false)
+const aiTagError = ref<string | null>(null)
+const aiSuggestedTags = ref<string[]>([])
 const serverTags = ref<TagOption[]>([])
 const serverTagsLoaded = ref(false)
 const serverTagsLoading = ref(false)
@@ -181,6 +190,7 @@ type UploadAssetEntry = {
   status: 'pending' | 'uploading' | 'success' | 'error'
   error: string | null
   uploadedAssetId: string | null
+  aiLastSignature: string | null
 }
 
 type DimensionKey = 'dimensionLength' | 'dimensionWidth' | 'dimensionHeight'
@@ -1025,6 +1035,15 @@ const uploadableSelectedAssets = computed(() =>
 const canUploadSelection = computed(() => uploadableSelectedAssets.value.length > 0)
 
 const canSubmitUpload = computed(() => uploadEntries.value.length > 0 && !uploadSubmitting.value)
+const canRequestAiTags = computed(() => {
+  const entry = uploadEntries.value[0]
+  if (!entry) {
+    return false
+  }
+  const name = entry.name?.trim().length ? entry.name.trim() : entry.asset.name?.trim()
+  const description = entry.description?.trim() ?? ''
+  return Boolean(name || description)
+})
 
 function assetMatchesSelectedTags(asset: ProjectAsset, selectedValues: string[]): boolean {
   if (!selectedValues.length) {
@@ -1170,6 +1189,153 @@ function resetUploadState() {
   uploadEntries.value = []
   uploadSelectedTagIds.value = []
   uploadError.value = null
+  aiTagLoading.value = false
+  aiTagError.value = null
+  aiSuggestedTags.value = []
+}
+
+function buildAiSignature(entry: UploadAssetEntry): string {
+  const name = entry.name?.trim().toLowerCase() ?? ''
+  const description = entry.description?.trim().toLowerCase() ?? ''
+  return `${entry.assetId}::${entry.asset.type}::${name}::${description}`
+}
+
+function buildExtraHints(entry: UploadAssetEntry): string[] {
+  const hints: string[] = []
+  const color = normalizeHexColor(entry.color) ?? normalizeHexColor(entry.asset.color ?? null)
+  if (color) {
+    hints.push(`主要颜色 ${color}`)
+  }
+  if (entry.asset.type === 'model' || entry.asset.type === 'prefab') {
+    const parts: string[] = []
+    if (typeof entry.dimensionLength === 'number' && Number.isFinite(entry.dimensionLength) && entry.dimensionLength > 0) {
+      parts.push(`长度 ${entry.dimensionLength.toFixed(2)} 米`)
+    }
+    if (typeof entry.dimensionWidth === 'number' && Number.isFinite(entry.dimensionWidth) && entry.dimensionWidth > 0) {
+      parts.push(`宽度 ${entry.dimensionWidth.toFixed(2)} 米`)
+    }
+    if (typeof entry.dimensionHeight === 'number' && Number.isFinite(entry.dimensionHeight) && entry.dimensionHeight > 0) {
+      parts.push(`高度 ${entry.dimensionHeight.toFixed(2)} 米`)
+    }
+    if (parts.length) {
+      hints.push(`模型尺寸 ${parts.join('，')}`)
+    }
+    const sizeCategory = entrySizeCategory(entry)
+    if (sizeCategory) {
+      hints.push(`尺寸分类 ${sizeCategory}`)
+    }
+  }
+  if (entry.asset.type === 'image') {
+    const parts: string[] = []
+    if (typeof entry.imageWidth === 'number' && Number.isFinite(entry.imageWidth) && entry.imageWidth > 0) {
+      parts.push(`宽度 ${Math.round(entry.imageWidth)} 像素`)
+    }
+    if (typeof entry.imageHeight === 'number' && Number.isFinite(entry.imageHeight) && entry.imageHeight > 0) {
+      parts.push(`高度 ${Math.round(entry.imageHeight)} 像素`)
+    }
+    if (parts.length) {
+      hints.push(`图片尺寸 ${parts.join('，')}`)
+    }
+  }
+  return hints
+}
+
+function integrateSuggestedTags(tags: string[]): number {
+  if (!tags.length) {
+    return 0
+  }
+  const existing = new Set(
+    uploadSelectedTagIds.value
+      .map((value) => (typeof value === 'string' ? value.trim().toLowerCase() : ''))
+      .filter((value) => value.length > 0),
+  )
+  const optionMap = new Map<string, string>()
+  tagOptions.value.forEach((option) => {
+    optionMap.set(option.label.trim().toLowerCase(), option.value)
+  })
+
+  const appended: string[] = []
+  tags.forEach((tag) => {
+    const trimmed = typeof tag === 'string' ? tag.trim() : ''
+    if (!trimmed) {
+      return
+    }
+    const normalized = trimmed.toLowerCase()
+    if (existing.has(normalized)) {
+      return
+    }
+    const optionValue = optionMap.get(normalized)
+    appended.push(optionValue ?? trimmed)
+    existing.add(normalized)
+  })
+
+  if (!appended.length) {
+    return 0
+  }
+
+  uploadSelectedTagIds.value = [...uploadSelectedTagIds.value, ...appended]
+  return appended.length
+}
+
+async function requestAiTagsForEntry(entry: UploadAssetEntry, options: { auto?: boolean } = {}): Promise<void> {
+  if (aiTagLoading.value) {
+    return
+  }
+  const preferredName = entry.name?.trim().length ? entry.name.trim() : entry.asset.name
+  const description = entry.description?.trim() ?? ''
+  if (!preferredName && !description) {
+    if (!options.auto) {
+      aiTagError.value = '请先填写资源名称或描述'
+    }
+    return
+  }
+
+  const signature = buildAiSignature(entry)
+  if (options.auto && entry.aiLastSignature === signature) {
+    return
+  }
+
+  aiTagLoading.value = true
+  aiTagError.value = null
+
+  try {
+    const result = await generateAssetTagSuggestions({
+      name: preferredName,
+      description,
+      assetType: entry.asset.type,
+      extraHints: buildExtraHints(entry),
+    })
+    const added = integrateSuggestedTags(result.tags ?? [])
+    aiSuggestedTags.value = result.tags ?? []
+    entry.aiLastSignature = signature
+    if (!added && !options.auto) {
+      aiTagError.value = 'AI 生成的标签已存在，可继续编辑或上传'
+    }
+  } catch (error) {
+    if (options.auto) {
+      console.warn('自动生成标签失败', error)
+      return
+    }
+    aiTagError.value = (error as Error).message ?? '生成标签失败'
+  } finally {
+    aiTagLoading.value = false
+  }
+}
+
+function handleGenerateTagsClick(): void {
+  const entry = uploadEntries.value[0]
+  if (!entry) {
+    aiTagError.value = '暂无可用资源，请先选择要上传的资源'
+    return
+  }
+  void requestAiTagsForEntry(entry, { auto: false })
+}
+
+function handleEntryDescriptionBlur(entry: UploadAssetEntry): void {
+  if (!entry.description?.trim()) {
+    return
+  }
+  void requestAiTagsForEntry(entry, { auto: true })
 }
 
 function openUploadDialog() {
@@ -1190,6 +1356,7 @@ function openUploadDialog() {
     status: 'pending',
     error: null,
     uploadedAssetId: null,
+    aiLastSignature: null,
   }))
   uploadSelectedTagIds.value = []
   uploadError.value = null
@@ -2459,7 +2626,7 @@ onBeforeUnmount(() => {
             class="upload-entry__name-input"
             v-model="entry.name"
             label="Asset Name"
-            density="comfortable"
+            density="compact"
             variant="outlined"
             :disabled="uploadSubmitting || entry.status === 'success'"
           />
@@ -2471,6 +2638,7 @@ onBeforeUnmount(() => {
             <template #activator="{ props: menuProps }">
               <v-btn
                 v-bind="menuProps"
+            density="compact"
                 class="upload-entry__color-button"
                 :style="{ backgroundColor: entryColorPreview(entry) }"
                 :title="entryColorPreview(entry).toUpperCase()"
@@ -2493,23 +2661,24 @@ onBeforeUnmount(() => {
           </v-menu>
             </div>
             <v-textarea
-          v-model="entry.description"
-          label="Description"
-          density="comfortable"
-          variant="outlined"
-          auto-grow
-          rows="2"
-          :disabled="uploadSubmitting || entry.status === 'success'"
+              v-model="entry.description"
+              label="Description"
+              density="compact"
+              variant="outlined"
+              auto-grow
+              rows="2"
+              :disabled="uploadSubmitting || entry.status === 'success'"
+              @blur="() => handleEntryDescriptionBlur(entry)"
             />
             <div
-          v-if="entry.asset.type === 'model'"
+          v-if="entry.asset.type === 'model' || entry.asset.type === 'prefab'"
           class="upload-entry__dimensions"
             >
           <v-text-field
             :model-value="formatDimension(entry.dimensionLength)"
             label="长度 (m)"
             type="number"
-            density="comfortable"
+            density="compact"
             variant="outlined"
             step="0.01"
             min="0"
@@ -2521,7 +2690,7 @@ onBeforeUnmount(() => {
             :model-value="formatDimension(entry.dimensionWidth)"
             label="宽度 (m)"
             type="number"
-            density="comfortable"
+            density="compact"
             variant="outlined"
             step="0.01"
             min="0"
@@ -2533,7 +2702,7 @@ onBeforeUnmount(() => {
             :model-value="formatDimension(entry.dimensionHeight)"
             label="高度 (m)"
             type="number"
-            density="comfortable"
+            density="compact"
             variant="outlined"
             step="0.01"
             min="0"
@@ -2559,7 +2728,7 @@ onBeforeUnmount(() => {
             :model-value="formatInteger(entry.imageWidth)"
             label="图片宽度 (px)"
             type="number"
-            density="comfortable"
+            density="compact"
             variant="outlined"
             step="1"
             min="0"
@@ -2571,7 +2740,7 @@ onBeforeUnmount(() => {
             :model-value="formatInteger(entry.imageHeight)"
             label="图片高度 (px)"
             type="number"
-            density="comfortable"
+            density="compact"
             variant="outlined"
             step="1"
             min="0"
@@ -2588,7 +2757,6 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </div>
-        <v-divider class="my-4" />
         <v-combobox
           v-model="uploadSelectedTagIds"
           :items="uploadTagOptions"
@@ -2607,6 +2775,22 @@ onBeforeUnmount(() => {
           :disabled="uploadSubmitting"
         >
         </v-combobox>
+        <div class="upload-ai-row">
+          <v-btn
+            color="secondary"
+            variant="tonal"
+            size="small"
+            :disabled="uploadSubmitting || !uploadEntries.length || aiTagLoading || !canRequestAiTags"
+            :loading="aiTagLoading"
+            @click="handleGenerateTagsClick"
+          >
+            使用 AI 生成标签
+          </v-btn>
+          <span v-if="aiTagError" class="upload-ai-row__error">{{ aiTagError }}</span>
+          <span v-else-if="aiSuggestedTags.length" class="upload-ai-row__hint">
+            推荐：{{ aiSuggestedTags.join('、') }}
+          </span>
+        </div>
         <v-alert
           v-if="serverTagsError"
           type="warning"
@@ -2902,6 +3086,24 @@ onBeforeUnmount(() => {
   color: #66bb6a;
   font-size: 0.85rem;
   margin-top: 6px;
+}
+
+.upload-ai-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.upload-ai-row__error {
+  color: #ef9a9a;
+  font-size: 0.85rem;
+}
+
+.upload-ai-row__hint {
+  color: #b2dfdb;
+  font-size: 0.85rem;
 }
 
 .upload-entry__color-button {

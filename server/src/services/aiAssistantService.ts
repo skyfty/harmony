@@ -6,6 +6,7 @@ type ChatCompletionContentPart = OpenAI.Chat.Completions.ChatCompletionContentPa
 type ChatCompletionMessageParam = OpenAI.Chat.Completions.ChatCompletionMessageParam
 type ChatCompletionUserMessageParam = OpenAI.Chat.Completions.ChatCompletionUserMessageParam
 import { appConfig } from '@/config/env'
+import { getOpenAiClient } from '@/services/openAiClient'
 import type {
   AssistantMessagePayload,
   AssistantResponse,
@@ -35,23 +36,6 @@ const MODEL_RESPONSE_FORMAT_INSTRUCTIONS = `
   }
 }
 如无法给出具体变更，务必返回 "change": null。不要输出 Markdown，也不要添加额外文字。`
-
-let cachedOpenAiClient: OpenAI | null = null
-
-function getOpenAiClient(): OpenAI {
-  if (!appConfig.openAi.apiKey) {
-    throw new Error('OpenAI API key 未配置')
-  }
-  if (!cachedOpenAiClient) {
-    cachedOpenAiClient = new OpenAI({
-      apiKey: appConfig.openAi.apiKey,
-      baseURL: appConfig.openAi.baseUrl,
-      organization: appConfig.openAi.organization,
-      project: appConfig.openAi.project,
-    })
-  }
-  return cachedOpenAiClient
-}
 
 type SceneSnapshotSummary = {
   totalNodes: number

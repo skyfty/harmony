@@ -32,6 +32,7 @@
                 auto-grow
                 rows="2"
                 label="资源描述"
+                @blur="handleDescriptionBlur"
               />
             </v-col>
             <v-col cols="12">
@@ -147,6 +148,22 @@
                 hide-selected
                 @update:model-value="handleTagInput"
               />
+              <div class="task-ai-row">
+                <v-btn
+                  color="secondary"
+                  variant="tonal"
+                  size="small"
+                  :loading="task.aiTagLoading"
+                  :disabled="task.aiTagLoading || (!task.name && !task.description)"
+                  @click="handleGenerateAiTags"
+                >
+                  使用 AI 生成标签
+                </v-btn>
+                <span v-if="task.aiTagError" class="task-ai-row__error">{{ task.aiTagError }}</span>
+                <span v-else-if="task.aiSuggestedTags.length" class="task-ai-row__hint">
+                  推荐：{{ task.aiSuggestedTags.join('、') }}
+                </span>
+              </div>
             </v-col>
           </v-row>
         </v-col>
@@ -402,6 +419,17 @@ function handleTypeChange(): void {
   }
   void uploadStore.refreshPreview(props.task.id).catch((error: unknown) => console.warn('刷新预览失败', error))
 }
+
+function handleGenerateAiTags(): void {
+  void uploadStore.generateTagsWithAi(props.task.id)
+}
+
+function handleDescriptionBlur(): void {
+  if (!props.task.description?.trim()) {
+    return
+  }
+  void uploadStore.generateTagsWithAi(props.task.id, { auto: true })
+}
 </script>
 
 <style scoped>
@@ -421,6 +449,24 @@ function handleTypeChange(): void {
 
 .task-color-picker {
   padding: 12px;
+}
+
+.task-ai-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.task-ai-row__error {
+  color: #ef9a9a;
+  font-size: 0.85rem;
+}
+
+.task-ai-row__hint {
+  color: #80cbc4;
+  font-size: 0.85rem;
 }
 
 .task-dimension-grid {

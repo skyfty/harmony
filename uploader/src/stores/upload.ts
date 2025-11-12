@@ -2,7 +2,7 @@ import { ref, computed, reactive } from 'vue'
 import { defineStore } from 'pinia'
 import { AssetTypes, DEFAULT_ASSET_TYPE, normalizeAssetType } from '@harmony/schema/asset-types'
 import type { AssetTag, AssetType, ManagedAsset } from '@/types'
-import { createAssetTags, listAssetTags, uploadAsset } from '@/api/modules/resources'
+import { createAssetTags, generateAssetTagSuggestions, listAssetTags, uploadAsset } from '@/api/modules/resources'
 
 export type UploadStatus = 'pending' | 'uploading' | 'success' | 'error' | 'canceled'
 
@@ -35,6 +35,10 @@ export interface UploadTask {
   preview: UploadTaskPreview
   createdAt: number
   updatedAt: number
+  aiTagLoading: boolean
+  aiTagError: string | null
+  aiLastSignature: string | null
+  aiSuggestedTags: string[]
 }
 
 export interface CreateTaskOptions {
@@ -165,6 +169,68 @@ function applyPreview(task: UploadTask, preview: UploadTaskPreview): void {
   task.preview.text = preview.kind === 'text' ? preview.text : undefined
 }
 
+function computeSizeCategory(length: number | null, width: number | null, height: number | null): string | null {
+  const values = [length, width, height]
+    .filter((candidate): candidate is number => typeof candidate === 'number' && Number.isFinite(candidate) && candidate > 0)
+  if (!values.length) {
+    return null
+  }
+  const max = Math.max(...values)
+  if (max < 0.1) return '微型'
+  if (max < 0.5) return '小型'
+  if (max < 1) return '普通'
+  if (max < 3) return '中型'
+  if (max < 10) return '大型'
+  if (max < 30) return '巨型'
+  return '巨大型'
+}
+
+function buildAiSignature(task: UploadTask): string {
+  const name = task.name?.trim().toLowerCase() ?? ''
+  const description = task.description?.trim().toLowerCase() ?? ''
+  return `${task.id}::${task.type}::${name}::${description}`
+}
+
+function buildExtraHints(task: UploadTask): string[] {
+  const hints: string[] = []
+  const color = normalizeHexColor(task.color) ?? normalizeHexColor(task.asset?.color ?? null)
+  if (color) {
+    hints.push(`主要颜色 ${color}`)
+  }
+  if (task.type === 'model' || task.type === 'prefab') {
+    const sizeParts: string[] = []
+    if (isFiniteNumber(task.dimensionLength) && task.dimensionLength! > 0) {
+      sizeParts.push(`长度 ${task.dimensionLength!.toFixed(2)} 米`)
+    }
+    if (isFiniteNumber(task.dimensionWidth) && task.dimensionWidth! > 0) {
+      sizeParts.push(`宽度 ${task.dimensionWidth!.toFixed(2)} 米`)
+    }
+    if (isFiniteNumber(task.dimensionHeight) && task.dimensionHeight! > 0) {
+      sizeParts.push(`高度 ${task.dimensionHeight!.toFixed(2)} 米`)
+    }
+    if (sizeParts.length) {
+      hints.push(`模型尺寸 ${sizeParts.join('，')}`)
+    }
+    const category = computeSizeCategory(task.dimensionLength, task.dimensionWidth, task.dimensionHeight)
+    if (category) {
+      hints.push(`尺寸分类 ${category}`)
+    }
+  }
+  if (task.type === 'image') {
+    const parts: string[] = []
+    if (isFiniteNumber(task.imageWidth) && task.imageWidth! > 0) {
+      parts.push(`宽度 ${Math.round(task.imageWidth!)} 像素`)
+    }
+    if (isFiniteNumber(task.imageHeight) && task.imageHeight! > 0) {
+      parts.push(`高度 ${Math.round(task.imageHeight!)} 像素`)
+    }
+    if (parts.length) {
+      hints.push(`图片尺寸 ${parts.join('，')}`)
+    }
+  }
+  return hints
+}
+
 function mapTagByName(tags: AssetTag[]): Map<string, AssetTag> {
   const map = new Map<string, AssetTag>()
   tags.forEach((tag) => {
@@ -286,6 +352,10 @@ export const useUploadStore = defineStore('uploader-upload', () => {
         },
         createdAt: Date.now(),
         updatedAt: Date.now(),
+        aiTagLoading: false,
+        aiTagError: null,
+        aiLastSignature: null,
+        aiSuggestedTags: [],
       }) as UploadTask
       tasks.value.push(task)
       activeTaskId.value = id
@@ -321,6 +391,80 @@ export const useUploadStore = defineStore('uploader-upload', () => {
   async function syncTagValues(id: string, values: Array<AssetTag | string>): Promise<void> {
     const created = await createMissingTags(values)
     updateTaskTags(id, [...values.filter((value): value is AssetTag => typeof value !== 'string'), ...created])
+  }
+
+  async function appendSuggestedTags(task: UploadTask, tagNames: string[]): Promise<number> {
+    const normalized = tagNames
+      .map((name) => (typeof name === 'string' ? name.trim() : ''))
+      .filter((name) => name.length > 0)
+    if (!normalized.length) {
+      return 0
+    }
+
+    const resolved = await createMissingTags(normalized)
+    const existingIds = new Set(task.tags.map((tag) => tag.id))
+    const additions = resolved.filter((tag) => {
+      if (existingIds.has(tag.id)) {
+        return false
+      }
+      existingIds.add(tag.id)
+      return true
+    })
+
+    if (!additions.length) {
+      return 0
+    }
+
+    task.tags = [...task.tags, ...additions]
+    task.updatedAt = Date.now()
+    return additions.length
+  }
+
+  async function generateTagsWithAi(id: string, options: { auto?: boolean } = {}): Promise<void> {
+    const task = findTask(id)
+    const baseName = task.name?.trim().length ? task.name.trim() : task.file.name
+    const description = task.description?.trim() ?? ''
+    if (!baseName && !description) {
+      if (!options.auto) {
+        task.aiTagError = '请先填写资源名称或描述'
+      }
+      return
+    }
+
+    const signature = buildAiSignature(task)
+    if (options.auto && task.aiLastSignature === signature) {
+      return
+    }
+    if (task.aiTagLoading) {
+      return
+    }
+
+    task.aiTagLoading = true
+    task.aiTagError = null
+
+    try {
+      await ensureTagsLoaded()
+      const result = await generateAssetTagSuggestions({
+        name: baseName,
+        description,
+        assetType: task.type,
+        extraHints: buildExtraHints(task),
+      })
+      const added = await appendSuggestedTags(task, result.tags ?? [])
+      task.aiSuggestedTags = result.tags ?? []
+      task.aiLastSignature = signature
+      if (!added && !options.auto) {
+        task.aiTagError = 'AI 生成的标签已存在，可继续编辑或上传'
+      }
+    } catch (error) {
+      if (options.auto) {
+        console.warn('[uploader] 自动生成标签失败', error)
+      } else {
+        task.aiTagError = error instanceof Error ? error.message : '生成标签失败'
+      }
+    } finally {
+      task.aiTagLoading = false
+    }
   }
 
   async function startUpload(id: string): Promise<void> {
@@ -432,6 +576,7 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     syncTagValues,
     updateTaskTags,
     refreshPreview,
+    generateTagsWithAi,
     startUpload,
     cancelUpload,
     removeTask,

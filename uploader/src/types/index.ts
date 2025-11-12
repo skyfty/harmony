@@ -47,6 +47,20 @@ export interface AssetTag extends AssetTagSummary {
   updatedAt?: string
 }
 
+export interface GenerateAssetTagPayload {
+  name?: string
+  description?: string
+  assetType?: AssetType
+  extraHints?: string[]
+}
+
+export interface GenerateAssetTagResult {
+  tags: string[]
+  transcript?: string | null
+  imagePrompt?: string | null
+  modelTraceId?: string
+}
+
 export interface ManagedAsset {
   id: string
   name: string
