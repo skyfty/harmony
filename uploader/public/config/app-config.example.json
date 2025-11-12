@@ -1,0 +1,4 @@
+{
+  "serverApiBaseUrl": "https://api.touchmagic.cn",
+  "serverApiPrefix": "/api"
+}
