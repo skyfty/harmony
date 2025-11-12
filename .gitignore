@@ -24,3 +24,7 @@ dist-ssr
 *.sln
 *.sw?
 server/uploads/
+server/.env
+editor/.env
+admin/.env
+miniprogram/.env

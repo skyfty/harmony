@@ -31,31 +31,50 @@ sudo apt-get install -y docker-compose-plugin
 
 ## 三、获取代码（两种方式）
 
-### 方式 A：本地打包后在服务器部署（不使用 git clone）
-1. 在你的本地开发机（已能构建成功的环境）执行：
-  ```bash
-  # 在仓库根目录（包含 server/）
-  docker build -t harmony-server:prod ./server
-  docker save harmony-server:prod -o harmony-server-prod.tar
-  ```
-2. 将 `harmony-server-prod.tar` 通过安全方式上传到生产服务器，例如：
-  ```bash
-  scp harmony-server-prod.tar user@your-server:/opt/
-  ```
-3. 在生产服务器上导入镜像并准备目录结构：
-  ```bash
-  cd /opt
-  sudo docker load -i harmony-server-prod.tar
-  # 创建部署目录（包含 compose 与 env 文件）
-  sudo mkdir -p /opt/harmony/server
-  ```
-4. 将本地的 `docker-compose.image.yml` 与 `server/.env.production` 上传到服务器对应目录：
-  ```bash
-  # 假设你在本地仓库根目录
-  scp docker-compose.image.yml user@your-server:/opt/harmony/
-  scp server/.env.production user@your-server:/opt/harmony/server/
-  ```
-5. 在服务器启动（见“六、构建与启动”中使用 image 方案的命令）。
+### 方式 A：本地构建镜像后上传（服务器无需 git clone）
+1. 在本地开发机（已确认各子工程可以正常构建）执行：
+   ```bash
+   # 在仓库根目录
+   docker build -t harmony-server:prod ./server
+   docker build -t harmony-admin:prod ./admin
+   docker build -t harmony-editor:prod -f editor/Dockerfile .
+   docker build -t harmony-uploader:prod -f uploader/Dockerfile .
+   docker save -o harmony-prod-images.tar \
+     harmony-server:prod harmony-admin:prod harmony-editor:prod harmony-uploader:prod
+   ```
+2. 将 `harmony-prod-images.tar` 通过安全方式上传到生产服务器，例如：
+   ```bash
+   scp harmony-prod-images.tar user@your-server:/opt/
+   ```
+3. 在生产服务器导入镜像并准备目录结构：
+   ```bash
+   cd /opt
+  sudo docker load -i harmony-prod-images.tar
+  sudo mkdir -p /opt/harmony/server /opt/harmony/config
+   ```
+4. 将仓库中的 `docker-compose.prod.yml`、`server/.env.production` 及所需的前端运行时配置文件拷贝到服务器（若服务器无法直接访问仓库，可先在本地打包相关文件再上传）：
+   ```bash
+   scp docker-compose.prod.yml user@your-server:/opt/harmony/
+   scp server/.env.production user@your-server:/opt/harmony/server/
+   scp admin/public/config/app-config.example.json user@your-server:/opt/harmony/config/admin-app-config.json
+   scp editor/public/config/app-config.example.json user@your-server:/opt/harmony/config/editor-app-config.json
+   scp uploader/public/config/app-config.example.json user@your-server:/opt/harmony/config/uploader-app-config.json
+   ```
+5. 在服务器上将 `docker-compose.prod.yml` 中各服务的 `build` 字段替换为已上传镜像标签，例如：
+   ```yaml
+   services:
+     server:
+       image: harmony-server:prod
+       # ...其他字段保持不变
+     admin:
+       image: harmony-admin:prod
+     editor:
+       image: harmony-editor:prod
+     uploader:
+       image: harmony-uploader:prod
+   ```
+   > 可以直接编辑文件，或额外创建 `docker-compose.override.images.yml` 仅覆盖上述服务配置。
+6. 修改完 `.env.production` 及运行时配置后，即可参考“六、构建与启动”中的命令使用现有镜像启动。
 
 ### 方式 B：在服务器上克隆仓库（如允许 git）
 ```bash
@@ -66,43 +85,62 @@ cd harmony
 ```
 
 ## 四、配置环境变量
-复制示例文件并编辑：
-```bash
-cd server
-cp .env.production.example .env.production
-nano .env.production
-# 修改 JWT_SECRET 为强随机值
-# 若需要自定义编辑器域名，调整 EDITOR_PUBLIC_URL
-```
 
-前端项目同样提供 `.env.development` 与 `.env.production`，默认分别指向本地与生产域名，可按需调整：
-- `admin/.env.development`、`admin/.env.production`
-- `editor/.env.development`、`editor/.env.production`
-- `uploader/.env.development`、`uploader/.env.production`
-开发阶段保持默认即可连接本地 `http://localhost:4000`，上线前将生产文件中的域名替换为实际服务器地址。
+所有需要的环境文件已经随仓库提供，请按环境修改数值后再部署。
 
-关键变量说明：
+### server（`server/.env.development` / `server/.env.production`）
+- `NODE_ENV`：固定为 `development`/`production`，用于区分环境。
+- `PORT`：Koa 服务监听端口，默认 `4000`。
+- `MONGODB_URI`：Mongo 连接串。开发版指向本地，生产版指向 compose 内部 `mongo` 服务。
+- `JWT_SECRET`：JWT 密钥，**生产环境务必改为强随机值**。
+- `ASSET_STORAGE_PATH`：服务器内的上传目录位置。
+- `ASSET_PUBLIC_URL`：上传资源对外访问地址，需要与反向代理保持一致。
+- `EDITOR_PUBLIC_URL`：允许通过 CORS 访问的前端站点。
+- `TEST_USER_*`：用于 `npm run seed` 时生成的测试账号，可留空取消。
+- `UPLOADER_USER_*`：自动生成 uploader 登录账号的配置。
+- `OPENAI_*`：可选的 OpenAI 配置，如未使用可以留空。
+
+> 部署前：进入 `server/` 修改 `.env.production`，至少更新 `JWT_SECRET`、数据库地址以及 OpenAI 密钥（如需）。本地开发可根据需要调整 `.env.development`。
+
+### admin（`admin/.env.development` / `admin/.env.production`）
+- `VITE_API_BASE_URL`：后台前端访问后端的基础地址。开发版指向 `http://localhost:4000`，生产版改为生产域名（通常为 `https://cdn.touchmagic.cn`）。
+
+### editor（`editor/.env.development` / `editor/.env.production`）
+- `VITE_SERVER_API_BASE_URL`：编辑器访问 API 的域名。
+- `VITE_SERVER_API_PREFIX`：后端 API 前缀，默认为 `/api`。
+
+### uploader（`uploader/.env.development` / `uploader/.env.production`）
+- `VITE_API_BASE_URL`：上传前端访问后端的基础地址。
+- `VITE_API_PREFIX`：API 前缀，默认为 `/api`。
+
+### miniprogram（`miniprogram/.env.development` / `miniprogram/.env.production`）
+- `VITE_MINI_API_BASE`：小程序端（H5/模拟器）调用后端的完整基础路径，默认包含 `/api/mini`。
+
+> 开发阶段保持默认即可连接本地 `http://localhost:4000`，上线前请将生产配置中的域名更新为实际部署域名并确认 HTTPS。
+
+关键变量提醒：
 - `MONGODB_URI=mongodb://mongo:27017/harmony`：容器内部使用服务名 `mongo` 与其内部端口 27017，不受宿主机映射影响。
 - `ASSET_PUBLIC_URL=https://cdn.touchmagic.cn/uploads`：用于上传资源外链访问；反向代理需对应配置路径 `/uploads`。
-- `UPLOADER_USER_USERNAME` / `UPLOADER_USER_PASSWORD` / `UPLOADER_USER_DISPLAY_NAME`：用于自动生成 uploader 登录账号，可按需自定义强密码。
+- `UPLOADER_USER_USERNAME` / `UPLOADER_USER_PASSWORD` / `UPLOADER_USER_DISPLAY_NAME`：确保 uploader 服务拥有独立账号，生产环境请改为强密码。
 
 ### 初始化默认账号 / 基础数据
 
-`server` 项目提供 `npm run seed` 用于创建默认管理员、测试账号、uploader 账号及部分示例数据。建议在首次部署与更改默认账号配置后执行一次：
+`server` 项目提供 `npm run seed` 与 `npm run seed:prod` 用于创建默认管理员、测试账号、uploader 账号及部分示例数据。建议在首次部署与更改默认账号配置后执行一次：
 
 ```bash
 # 在仓库根目录（已安装依赖）
 cd server
 npm install # 首次部署若未安装
-npm run seed
+npm run seed        # 使用 .env.development（本地测试）
+npm run seed:prod   # 使用 .env.production（生产环境）
 
 # 如果通过 Docker 部署，可在服务器上执行（compose 方式）：
-docker compose -f docker-compose.prod.yml run --rm server npm run seed
+docker compose -f docker-compose.prod.yml run --rm server npm run seed:prod
 ```
 
 该脚本会调用：
 - `createInitialAdmin()`：生成超级管理员账号 `admin`（默认密码 `admin123`，请登录后修改）。
-- `ensureTestUser()`：生成测试账号（默认来自 `TEST_USER_*`）。
+- `ensureEditorUser()`：生成测试账号（默认来自 `EDITOR_USER_*`）。
 - `ensureUploaderUser()`：生成 uploader 使用的专用账号（默认来自 `UPLOADER_USER_*`）。
 
 ## 五、目录与 docker-compose 结构
@@ -141,9 +179,10 @@ docker compose -f docker-compose.prod.yml run --rm server npm run seed
 
 ### 若使用方式 A（预构建镜像部署）
 ```bash
-# 在服务器上，进入包含 docker-compose.image.yml 的目录（例如 /opt/harmony）
-docker compose -f docker-compose.image.yml up -d
-docker compose -f docker-compose.image.yml ps
+# 在服务器上，进入包含 docker-compose.prod.yml 的目录（例如 /opt/harmony）
+# 如有镜像覆盖文件，追加 -f docker-compose.override.images.yml
+docker compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml ps
 ```
 
 ### 若使用方式 B（服务器上可 git clone）
@@ -347,8 +386,8 @@ if [ ! -d "$REPO_DIR" ]; then
   git clone https://github.com/skyfty/harmony.git "$REPO_DIR"
 fi
 cd "$REPO_DIR"
-cp server/.env.production.example server/.env.production
-sed -i "s/JWT_SECRET=.*/JWT_SECRET=$(openssl rand -hex 32)/" server/.env.production
+SECRET=$(openssl rand -hex 32)
+sed -i "s|^JWT_SECRET=.*|JWT_SECRET=$SECRET|" server/.env.production
 docker compose -f docker-compose.prod.yml build
 docker compose -f docker-compose.prod.yml up -d
 ```
