@@ -257,6 +257,7 @@ import { useUploadStore, type UploadTask } from '@/stores/upload'
 import PreviewRenderer from './UploadTaskPreviewRenderer.vue'
 import CategoryPathSelector from '@/components/CategoryPathSelector.vue'
 import SeriesSelector from '@/components/SeriesSelector.vue'
+import { buildCategoryPathString } from '@/utils/categoryPath'
 
 interface Props {
   task: UploadTask
@@ -426,7 +427,7 @@ function resolveCategoryLabel(category: ResourceCategory | null): string {
   const names = Array.isArray(category.path) && category.path.length
     ? category.path.map((item) => item?.name ?? '').filter((name) => name.length > 0)
     : [category.name]
-  return names.join(' / ')
+  return buildCategoryPathString(names)
 }
 
 function findCategoryById(targetId: string | null, list: ResourceCategory[] = categories.value): ResourceCategory | null {

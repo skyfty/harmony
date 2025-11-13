@@ -13,6 +13,7 @@ import {
   searchResourceCategories,
   uploadAsset,
 } from '@/api/modules/resources'
+import { buildCategoryPathString } from '@/utils/categoryPath'
 
 export type UploadStatus = 'pending' | 'uploading' | 'success' | 'error' | 'canceled'
 
@@ -328,7 +329,7 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     const pathParts = Array.isArray(category.path) && category.path.length
       ? category.path.map((item) => item?.name ?? '').filter((name) => name.length > 0)
       : [category.name]
-    return pathParts.join(' / ')
+    return buildCategoryPathString(pathParts)
   }
 
   function findCategoryById(id: string | null, list: ResourceCategory[] = categories.value): ResourceCategory | null {
@@ -383,21 +384,6 @@ export const useUploadStore = defineStore('uploader-upload', () => {
       return null
     }
     return matched
-  }
-
-  function pickFirstCategory(list: ResourceCategory[] = categories.value): ResourceCategory | null {
-    for (const category of list) {
-      if (category && typeof category.id === 'string') {
-        return category
-      }
-      if (Array.isArray(category.children) && category.children.length) {
-        const child = pickFirstCategory(category.children)
-        if (child) {
-          return child
-        }
-      }
-    }
-    return null
   }
 
   async function ensureCategoriesLoaded(): Promise<void> {
@@ -548,7 +534,6 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     await ensureCategoriesLoaded().catch((error) => console.warn('[uploader] failed to preload categories', error))
     await ensureSeriesLoaded().catch((error) => console.warn('[uploader] failed to preload series', error))
 
-    const defaultCategory = pickFirstCategory()
     const defaultSeries = pickLastSeries()
 
     files.forEach((file) => {
@@ -563,10 +548,10 @@ export const useUploadStore = defineStore('uploader-upload', () => {
         size: file.size,
         status: 'pending',
         progress: 0,
-        tags: [],
-        color: '',
-    categoryId: defaultCategory?.id ?? null,
-    categoryPathLabel: buildCategoryPathLabel(defaultCategory),
+    tags: [],
+    color: '',
+    categoryId: null,
+    categoryPathLabel: '',
     seriesId: defaultSeries?.id ?? null,
     seriesName: defaultSeries?.name ?? '',
         dimensionLength: null,

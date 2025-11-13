@@ -37,39 +37,15 @@ resourceRouter.get('/assets/manifest', getAssetManifest)
 resourceRouter.use(authMiddleware)
 resourceRouter.get('/categories', listResourceCategories)
 resourceRouter.get('/categories/search', searchAssetCategories)
-resourceRouter.post(
-  '/categories',
-  koaBody({
-    json: true,
-    multipart: false,
-    urlencoded: true,
-  }),
-  createAssetCategory,
-)
+resourceRouter.post('/categories', createAssetCategory)
 resourceRouter.get('/categories/:id/children', getAssetCategoryChildren)
 resourceRouter.get('/categories/:id/path', getAssetCategoryPath)
 resourceRouter.get('/categories/:id/descendants', getAssetCategoryDescendants)
 resourceRouter.get('/categories/:id/assets', listCategoryAssets)
-resourceRouter.put(
-  '/categories/:id',
-  koaBody({
-    json: true,
-    multipart: false,
-    urlencoded: true,
-  }),
-  updateAssetCategory,
-)
+resourceRouter.put('/categories/:id', updateAssetCategory)
 resourceRouter.delete('/categories/:id', deleteAssetCategory)
 resourceRouter.get('/series', listAssetSeries)
-resourceRouter.post(
-  '/series',
-  koaBody({
-    json: true,
-    multipart: false,
-    urlencoded: true,
-  }),
-  createAssetSeries,
-)
+resourceRouter.post('/series', createAssetSeries)
 resourceRouter.get('/series/:id/assets', listSeriesAssets)
 resourceRouter.delete('/series/:id', deleteAssetSeries)
 resourceRouter.get('/directories', getProjectDirectories)
