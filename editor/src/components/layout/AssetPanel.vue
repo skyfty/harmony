@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch, watchEffect } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Splitpanes, Pane } from 'splitpanes'
 import 'splitpanes/dist/splitpanes.css'
 import { useSceneStore, extractProviderIdFromPackageDirectoryId } from '@/stores/sceneStore'
 import { PACKAGES_ROOT_DIRECTORY_ID, determineAssetCategoryId } from '@/stores/assetCatalog'
+import type { ResourceCategory } from '@/types/resource-category'
+import { fetchResourceCategories } from '@/api/resourceAssets'
+import { buildCategoryPathString, isAssetTypeName, isRootCategoryName } from '@/utils/categoryPath'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -562,6 +565,251 @@ function isAssetDragging(assetId: string) {
   return draggingAssetId.value === assetId
 }
 
+const categoryTree = ref<ResourceCategory[]>([])
+const categoryTreeLoaded = ref(false)
+const categoryTreeLoading = ref(false)
+const categoryTreeError = ref<string | null>(null)
+const categoryPath = ref<ResourceCategory[]>([])
+
+interface CategoryBreadcrumbItem {
+  id: string | null
+  name: string
+  category: ResourceCategory | null
+  depth: number
+  children: ResourceCategory[]
+}
+
+function collectDisplayChildren(nodes: ResourceCategory[] | undefined, bucket: ResourceCategory[]): void {
+  if (!Array.isArray(nodes)) {
+    return
+  }
+  nodes.forEach((node) => {
+    if (!node) {
+      return
+    }
+    if ((isAssetTypeName(node.name) || isRootCategoryName(node.name)) && Array.isArray(node.children) && node.children.length) {
+      collectDisplayChildren(node.children, bucket)
+    } else {
+      bucket.push(node)
+    }
+  })
+}
+
+function getDisplayChildren(category: ResourceCategory | null): ResourceCategory[] {
+  const bucket: ResourceCategory[] = []
+  const source = category ? category.children : categoryTree.value
+  collectDisplayChildren(source, bucket)
+  return bucket.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+}
+
+const categoryIndex = computed(() => {
+  const map = new Map<string, ResourceCategory>()
+  const traverse = (nodes: ResourceCategory[] | undefined) => {
+    if (!Array.isArray(nodes)) {
+      return
+    }
+    nodes.forEach((node) => {
+      if (!node || typeof node.id !== 'string') {
+        return
+      }
+      map.set(node.id, node)
+      if (Array.isArray(node.children) && node.children.length) {
+        traverse(node.children)
+      }
+    })
+  }
+  traverse(categoryTree.value)
+  return map
+})
+
+const categoryGraph = computed(() => {
+  const parentMap = new Map<string, ResourceCategory | null>()
+  const descendantMap = new Map<string, Set<string>>()
+
+  const traverse = (node: ResourceCategory, parent: ResourceCategory | null): Set<string> => {
+    parentMap.set(node.id, parent)
+    const descendants = new Set<string>([node.id])
+    const children = getDisplayChildren(node)
+    children.forEach((child) => {
+      const childSet = traverse(child, node)
+      childSet.forEach((id) => descendants.add(id))
+    })
+    descendantMap.set(node.id, descendants)
+    return descendants
+  }
+
+  const roots = getDisplayChildren(null)
+  roots.forEach((root) => traverse(root, null))
+
+  return { roots, parentMap, descendantMap }
+})
+
+const categoryBreadcrumbs = computed<CategoryBreadcrumbItem[]>(() => {
+  const items: CategoryBreadcrumbItem[] = []
+  const graph = categoryGraph.value
+  items.push({
+    id: null,
+    name: '全部资产',
+    category: null,
+    depth: 0,
+    children: graph.roots,
+  })
+  categoryPath.value.forEach((entry, index) => {
+    const resolved = categoryIndex.value.get(entry.id) ?? entry
+    items.push({
+      id: resolved.id,
+      name: resolved.name,
+      category: resolved,
+      depth: index + 1,
+      children: getDisplayChildren(resolved),
+    })
+  })
+  return items
+})
+
+function buildCategoryPathChain(category: ResourceCategory): ResourceCategory[] {
+  const graph = categoryGraph.value
+  const chain: ResourceCategory[] = []
+  const visited = new Set<string>()
+  let current: ResourceCategory | null = category
+  while (current && !visited.has(current.id)) {
+    chain.unshift(current)
+    visited.add(current.id)
+    current = graph.parentMap.get(current.id) ?? null
+  }
+  return chain.length ? chain : [category]
+}
+
+const activeCategoryId = computed(() => {
+  const last = categoryPath.value[categoryPath.value.length - 1]
+  return last?.id ?? null
+})
+
+const activeCategoryDescendants = computed(() => {
+  const id = activeCategoryId.value
+  if (!id) {
+    return null
+  }
+  const graph = categoryGraph.value
+  const set = graph.descendantMap.get(id)
+  if (set && set.size) {
+    return set
+  }
+  return new Set<string>([id])
+})
+
+function assetMatchesCategoryFilter(asset: ProjectAsset, allowed: Set<string>): boolean {
+  const pathIds = Array.isArray(asset.categoryPath)
+    ? asset.categoryPath
+        .map((item) => (item && typeof item.id === 'string' ? item.id : null))
+        .filter((id): id is string => !!id)
+    : []
+  if (pathIds.some((id) => allowed.has(id))) {
+    return true
+  }
+  if (asset.categoryId && allowed.has(asset.categoryId)) {
+    return true
+  }
+  return false
+}
+
+async function loadCategoryTree(options: { force?: boolean } = {}): Promise<void> {
+  if (categoryTreeLoading.value) {
+    return
+  }
+  if (categoryTreeLoaded.value && !options.force) {
+    return
+  }
+  categoryTreeLoading.value = true
+  categoryTreeError.value = null
+  try {
+    const categories = await fetchResourceCategories()
+    categoryTree.value = Array.isArray(categories) ? categories : []
+    categoryTreeLoaded.value = true
+  } catch (error) {
+    categoryTreeError.value = (error as Error).message ?? '分类加载失败'
+  } finally {
+    categoryTreeLoading.value = false
+  }
+}
+
+function handleBreadcrumbClick(index: number): void {
+  if (index <= 0) {
+    if (categoryPath.value.length) {
+      categoryPath.value = []
+    }
+    return
+  }
+  const next = categoryPath.value.slice(0, index)
+  categoryPath.value = next
+}
+
+function handleBreadcrumbChildSelect(_crumbIndex: number, category: ResourceCategory): void {
+  if (!category || typeof category.id !== 'string') {
+    return
+  }
+  categoryPath.value = buildCategoryPathChain(category)
+}
+
+function clearCategoryFilter(): void {
+  if (categoryPath.value.length) {
+    categoryPath.value = []
+  }
+}
+
+function reloadCategoryTree(): void {
+  void loadCategoryTree({ force: true })
+}
+
+function isBreadcrumbIndexActive(index: number): boolean {
+  if (index === 0) {
+    return categoryPath.value.length === 0
+  }
+  return index === categoryPath.value.length
+}
+
+function isCategoryActive(categoryId: string): boolean {
+  return categoryPath.value.some((entry) => entry.id === categoryId)
+}
+
+function buildCategoryLabel(category: ResourceCategory | null): string {
+  if (!category) {
+    return '全部资产'
+  }
+  return category.name
+}
+
+function categoryTooltip(crumb: CategoryBreadcrumbItem): string {
+  return buildCategoryLabel(crumb.category)
+}
+
+onMounted(() => {
+  void loadCategoryTree()
+})
+
+watch(categoryTree, () => {
+  if (!categoryPath.value.length) {
+    return
+  }
+  const last = categoryPath.value[categoryPath.value.length - 1]
+  if (!last || !last.id) {
+    categoryPath.value = []
+    return
+  }
+  const refreshed = categoryIndex.value.get(last.id)
+  if (!refreshed) {
+    categoryPath.value = []
+    return
+  }
+  const next = buildCategoryPathChain(refreshed)
+  const unchanged =
+    next.length === categoryPath.value.length &&
+    next.every((item, idx) => item.id === categoryPath.value[idx]?.id)
+  if (!unchanged) {
+    categoryPath.value = next
+  }
+})
+
 const searchQuery = ref('')
 const searchResults = ref<ProjectAsset[]>([])
 const searchLoaded = ref(false)
@@ -571,6 +819,17 @@ let searchDebounceHandle: ReturnType<typeof setTimeout> | null = null
 
 const normalizedSearchQuery = computed(() => searchQuery.value.trim())
 const isSearchActive = computed(() => searchLoaded.value && normalizedSearchQuery.value.length > 0)
+const baseDisplayedAssets = computed(() => (isSearchActive.value ? searchResults.value : currentAssets.value))
+
+const categoryFilteredAssets = computed(() => {
+  const base = baseDisplayedAssets.value
+  const allowed = activeCategoryDescendants.value
+  if (!allowed || !allowed.size) {
+    return base
+  }
+  return base.filter((asset) => assetMatchesCategoryFilter(asset, allowed))
+})
+
 const tagFilterValues = ref<string[]>([])
 const tagFilterPanelOpen = ref(false)
 const tagFilterPopoverRef = ref<HTMLElement | null>(null)
@@ -601,8 +860,6 @@ function clearTagFilters(): void {
   tagFilterValues.value = []
 }
 
-const baseDisplayedAssets = computed(() => (isSearchActive.value ? searchResults.value : currentAssets.value))
-
 type TagOption = {
   value: string
   label: string
@@ -612,7 +869,7 @@ type TagOption = {
 
 const tagOptions = computed<TagOption[]>(() => {
   const map = new Map<string, TagOption>()
-  baseDisplayedAssets.value.forEach((asset) => {
+  categoryFilteredAssets.value.forEach((asset) => {
     const tagNames = Array.isArray(asset.tags) ? asset.tags : []
     const tagIds = Array.isArray(asset.tagIds) ? asset.tagIds : []
     if (tagIds.length && tagNames.length && tagIds.length === tagNames.length) {
@@ -674,7 +931,7 @@ function assetMatchesSelectedTags(asset: ProjectAsset, selectedValues: string[])
 }
 
 const displayedAssets = computed(() => {
-  const base = baseDisplayedAssets.value
+  const base = categoryFilteredAssets.value
   if (!tagFilterValues.value.length) {
     return base
   }
@@ -1732,6 +1989,86 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
             </div>
             <v-btn icon="mdi-refresh" density="compact" variant="text" @click="refreshGallery" />
           </v-toolbar>
+          <div class="category-breadcrumbs">
+            <div class="category-breadcrumbs__path">
+              <template v-for="(crumb, index) in categoryBreadcrumbs" :key="crumb.id ?? ('root-' + index)">
+                <div class="category-crumb" :class="{ 'has-children': crumb.children.length }">
+                  <button
+                    type="button"
+                    class="category-crumb__label-button"
+                    :class="{ 'is-active': isBreadcrumbIndexActive(index), 'is-leaf': !crumb.children.length }"
+                    :title="categoryTooltip(crumb)"
+                    @click="handleBreadcrumbClick(index)"
+                  >
+                    <span class="category-crumb__label">{{ crumb.name }}</span>
+                  </button>
+                  <v-menu
+                    v-if="crumb.children.length"
+                    location="bottom start"
+                    transition="fade-transition"
+                    :offset="[0, 6]"
+                  >
+                    <template #activator="{ props: menuProps }">
+                      <button
+                        type="button"
+                        class="category-crumb__toggle"
+                        :class="{ 'is-active': isBreadcrumbIndexActive(index) }"
+                        v-bind="menuProps"
+                        :title="`${categoryTooltip(crumb)} · 展开子分类`"
+                        :aria-label="`${categoryTooltip(crumb)} · 展开子分类`"
+                      >
+                        <v-icon size="14">mdi-chevron-down</v-icon>
+                      </button>
+                    </template>
+                    <v-list class="category-menu-list" density="compact">
+                      <v-list-item
+                        v-for="child in crumb.children"
+                        :key="child.id"
+                        :value="child.id"
+                        :active="isCategoryActive(child.id)"
+                        :title="buildCategoryLabel(child)"
+                        @click="handleBreadcrumbChildSelect(index, child)"
+                      >
+                      </v-list-item>
+                    </v-list>
+                  </v-menu>
+                </div>
+                <span v-if="index < categoryBreadcrumbs.length - 1" class="category-breadcrumbs__separator"><v-icon icon="mdi-chevron-right"></v-icon></span>
+              </template>
+            </div>
+            <div class="category-breadcrumbs__actions">
+              <v-progress-circular
+                v-if="categoryTreeLoading"
+                class="category-breadcrumbs__loader"
+                indeterminate
+                size="16"
+                width="2"
+                color="primary"
+              />
+              <v-btn
+                v-else-if="categoryTreeError"
+                variant="text"
+                size="small"
+                density="comfortable"
+                color="error"
+                @click="reloadCategoryTree"
+              >
+                重试
+              </v-btn>
+              <v-btn
+                v-if="categoryPath.length"
+                variant="text"
+                size="small"
+                density="comfortable"
+                @click="clearCategoryFilter"
+              >
+                清除
+              </v-btn>
+            </div>
+          </div>
+          <div v-if="categoryTreeError" class="category-error-text">
+            {{ categoryTreeError }}
+          </div>
           <div
             v-if="dropFeedback"
             :class="[
@@ -2016,6 +2353,148 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   color: rgba(233, 236, 241, 0.65);
   text-align: center;
   padding: 12px 0;
+}
+
+.category-breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  row-gap: 6px;
+  padding: 6px 12px 4px;
+}
+
+.category-breadcrumbs__label {
+  font-size: 0.78rem;
+  color: rgba(233, 236, 241, 0.6);
+  letter-spacing: 0.04em;
+}
+
+.category-breadcrumbs__path {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.category-breadcrumbs__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.category-breadcrumbs__loader {
+  width: 16px;
+  height: 16px;
+}
+
+.category-breadcrumbs__separator {
+  color: rgba(233, 236, 241, 0.38);
+  font-size: 0.74rem;
+}
+
+.category-crumb {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 0;
+}
+
+.category-crumb__label-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid rgba(233, 236, 241, 0.14);
+  border-radius: 999px;
+  border-right: none;
+  padding: 4px 12px;
+  background: rgba(25, 28, 36, 0.6);
+  color: rgba(233, 236, 241, 0.86);
+  font-size: 0.78rem;
+  line-height: 1.1;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease;
+  white-space: nowrap;
+}
+
+.category-crumb__label-button:hover,
+.category-crumb__label-button:focus-visible {
+  border-right: none;
+  border-color: rgba(77, 208, 225, 0.6);
+  color: #e0f7fa;
+}
+
+.category-crumb__label-button.is-active {
+  border-right: none;
+  border-color: rgba(77, 208, 225, 0.85);
+  background: rgba(2, 119, 189, 0.25);
+  color: #e1f5fe;
+}
+
+.category-crumb__label-button.is-leaf {
+  cursor: pointer;
+}
+
+.category-crumb__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 8px;
+  padding: 0 2px;
+  border-radius: 999px;
+  border-left: none;
+  border: 1px solid rgba(233, 236, 241, 0.14);
+  background: rgba(25, 28, 36, 0.6);
+  color: rgba(233, 236, 241, 0.86);
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease;
+}
+
+.category-crumb__toggle:hover,
+.category-crumb__toggle:focus-visible {
+  border-left: none;
+  border-color: rgba(77, 208, 225, 0.6);
+  color: #e0f7fa;
+}
+
+.category-crumb__toggle.is-active {
+  border-left: none;
+  border-color: rgba(77, 208, 225, 0.7);
+  background: rgba(2, 119, 189, 0.22);
+  color: #e1f5fe;
+}
+
+.category-crumb.has-children .category-crumb__label-button {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.category-crumb.has-children .category-crumb__toggle {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  margin-left: -1px;
+}
+
+.category-crumb.has-children .category-crumb__toggle:hover,
+.category-crumb.has-children .category-crumb__toggle:focus-visible {
+  border-color: rgba(77, 208, 225, 0.6);
+}
+
+.category-error-text {
+  padding: 0 12px 6px;
+  font-size: 0.78rem;
+  color: rgba(255, 138, 101, 0.85);
+}
+
+.category-menu-list {
+  min-width: 200px;
+}
+
+.category-menu-list :deep(.v-list-item--active) {
+  background-color: rgba(77, 208, 225, 0.16);
 }
 
 .tree-view {
