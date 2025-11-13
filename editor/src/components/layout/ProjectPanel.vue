@@ -15,6 +15,7 @@ import { dataUrlToBlob, extractExtension } from '@/utils/blob'
 // Upload to server is handled in UploadAssetsDialog component
 
 import UploadAssetsDialog from './UploadAssetsDialog.vue'
+import AIChatPanel from '@/components/layout/AIChatPanel.vue'
 
 const OPENED_DIRECTORIES_STORAGE_KEY = 'harmony:project-panel:opened-directories'
 function restoreOpenedDirectories(): string[] {
@@ -102,12 +103,45 @@ function countDirectoryAssets(directory: ProjectDirectory | undefined): number {
 
 defineProps<{
   floating?: boolean
+  captureViewportScreenshot?: () => Promise<Blob | null>
 }>()
 
 const emit = defineEmits<{
   (event: 'collapse'): void
   (event: 'toggle-placement'): void
 }>()
+
+type ProjectPanelTab = 'project' | 'assistant'
+
+const PROJECT_TAB_STORAGE_KEY = 'harmony:project-panel:active-tab'
+
+function restoreActiveTab(): ProjectPanelTab {
+  if (typeof window === 'undefined') {
+    return 'project'
+  }
+  const stored = window.localStorage.getItem(PROJECT_TAB_STORAGE_KEY)
+  return stored === 'assistant' ? 'assistant' : 'project'
+}
+
+function persistActiveTab(tab: ProjectPanelTab): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+  window.localStorage.setItem(PROJECT_TAB_STORAGE_KEY, tab)
+}
+
+const activeTab = ref<ProjectPanelTab>(restoreActiveTab())
+
+function selectTab(tab: ProjectPanelTab): void {
+  if (activeTab.value === tab) {
+    return
+  }
+  activeTab.value = tab
+}
+
+watch(activeTab, (tab) => {
+  persistActiveTab(tab)
+})
 
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
@@ -1614,7 +1648,29 @@ const placementTitle = computed(() => 'Toggle placement')
     :elevation="floating ? 12 : 8"
   >
     <v-toolbar class="panel-toolbar" height="40px">
-      <v-toolbar-title class="panel-title">Project</v-toolbar-title>
+      <div class="panel-toolbar__left">
+        <v-toolbar-title class="panel-title">Project</v-toolbar-title>
+        <div class="panel-toolbar-tabs">
+          <v-btn
+            class="panel-toolbar-tab"
+            :class="{ 'is-active': activeTab === 'project' }"
+            variant="text"
+            size="small"
+            @click="selectTab('project')"
+          >
+            <span class="panel-toolbar-tab__label">Project</span>
+          </v-btn>
+          <v-btn
+            class="panel-toolbar-tab"
+            :class="{ 'is-active': activeTab === 'assistant' }"
+            variant="text"
+            size="small"
+            @click="selectTab('assistant')"
+          >
+            <span class="panel-toolbar-tab__label">AI Chat</span>
+          </v-btn>
+        </div>
+      </div>
       <v-spacer />
       <v-btn
         class="placement-toggle"
@@ -1627,8 +1683,9 @@ const placementTitle = computed(() => 'Toggle placement')
       <v-btn icon="mdi-window-minimize" size="small" variant="text" @click="emit('collapse')" />
     </v-toolbar>
     <v-divider />
-    <div class="project-content">
-      <Splitpanes class="project-split" @resized="handleProjectSplitResized">
+    <div class="panel-content">
+      <div v-if="activeTab === 'project'" class="project-content">
+        <Splitpanes class="project-split" @resized="handleProjectSplitResized">
         <Pane :size="treePaneSize">
           <div class="project-tree">
             <v-toolbar density="compact"  height="46">
@@ -1913,7 +1970,6 @@ const placementTitle = computed(() => 'Toggle placement')
           </div>
         </Pane>
       </Splitpanes>
-    </div>
 
       <UploadAssetsDialog
         v-model="uploadDialogOpen"
@@ -1935,6 +1991,11 @@ const placementTitle = computed(() => 'Toggle placement')
           </v-card-actions>
         </v-card>
       </v-dialog>
+    </div>
+    <div v-else class="assistant-panel">
+      <AIChatPanel :capture-viewport-screenshot="captureViewportScreenshot" />
+    </div>
+  </div>
   </v-card>
 </template>
 
@@ -1969,6 +2030,82 @@ const placementTitle = computed(() => 'Toggle placement')
 
 .placement-toggle {
   color: rgba(233, 236, 241, 0.72);
+}
+
+.panel-toolbar__left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.panel-toolbar-tabs {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.panel-toolbar-tab {
+  position: relative;
+  flex: 0 0 auto;
+  border-radius: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: rgba(233, 236, 241, 0.72);
+  padding: 0 14px;
+  min-width: max-content;
+  max-width: 160px;
+  transition: color 0.18s ease;
+}
+
+.panel-toolbar-tab::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: -6px;
+  height: 2px;
+  background-color: transparent;
+  transition: background-color 0.18s ease, transform 0.18s ease;
+  transform-origin: center;
+}
+
+.panel-toolbar-tab.is-active {
+  color: #f5fbff;
+}
+
+.panel-toolbar-tab.is-active::after {
+  background-color: rgba(0, 169, 255, 0.85);
+  transform: scaleX(1);
+}
+
+.panel-toolbar-tab :deep(.v-btn__content) {
+  justify-content: center;
+  max-width: 100%;
+  gap: 4px;
+}
+
+.panel-toolbar-tab__label {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.assistant-panel {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  padding: 6px 8px 10px;
 }
 
 .project-content {
