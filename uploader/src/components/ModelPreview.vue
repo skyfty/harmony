@@ -9,6 +9,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import Loader from '@schema/loader'
 import { useUploadStore } from '@/stores/upload'
+import pica from 'pica'
 
 interface Props {
   file: File
@@ -23,6 +24,8 @@ const emit = defineEmits<{
 
 const uploadStore = useUploadStore()
 const THUMBNAIL_SIZE = 512
+const ALPHA_THRESHOLD = 10
+const picaInstance = pica()
 
 const container = ref<HTMLDivElement | null>(null)
 let renderer: THREE.WebGLRenderer | null = null
@@ -217,15 +220,7 @@ async function generateThumbnail(jobToken: number): Promise<void> {
     thumbnailRenderer.render(scene, camera)
 
     const canvas = thumbnailRenderer.domElement
-    const blob = await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob((result) => {
-        if (result) {
-          resolve(result)
-        } else {
-          reject(new Error('缩略图生成失败'))
-        }
-      }, 'image/png')
-    })
+    const { canvas: outputCanvas, blob } = await buildThumbnail(canvas)
 
     if (jobToken !== thumbnailJobToken) {
       return
@@ -235,8 +230,8 @@ async function generateThumbnail(jobToken: number): Promise<void> {
     const file = new File([blob], `${baseName}-thumbnail.png`, { type: 'image/png', lastModified: Date.now() })
     uploadStore.applyModelThumbnailResult(props.taskId, {
       file,
-      width: THUMBNAIL_SIZE,
-      height: THUMBNAIL_SIZE,
+      width: outputCanvas.width,
+      height: outputCanvas.height,
     })
     hasCapturedThumbnail = true
   } catch (error) {
@@ -250,6 +245,147 @@ async function generateThumbnail(jobToken: number): Promise<void> {
   } finally {
     thumbnailRenderer?.dispose()
   }
+}
+
+function buildReadableCanvas(source: HTMLCanvasElement): HTMLCanvasElement {
+  if (!source.width || !source.height) {
+    return source
+  }
+  const ctx = source.getContext('2d')
+  if (ctx) {
+    return source
+  }
+  const clone = document.createElement('canvas')
+  clone.width = source.width
+  clone.height = source.height
+  const cloneCtx = clone.getContext('2d')
+  if (!cloneCtx) {
+    return source
+  }
+  cloneCtx.drawImage(source, 0, 0)
+  return clone
+}
+
+async function buildThumbnail(source: HTMLCanvasElement): Promise<{ canvas: HTMLCanvasElement; blob: Blob }> {
+  const readable = buildReadableCanvas(source)
+  const trimmed = cropTransparentBounds(readable)
+  try {
+    return await scaleCanvasWithPica(trimmed, THUMBNAIL_SIZE)
+  } catch (error) {
+    console.warn('[uploader] pica 缩放失败，将回退到原始 canvas', error)
+    return {
+      canvas: trimmed,
+      blob: await canvasToBlob(trimmed),
+    }
+  }
+}
+
+function cropTransparentBounds(source: HTMLCanvasElement): HTMLCanvasElement {
+  const width = source.width
+  const height = source.height
+  if (!width || !height) {
+    return source
+  }
+  const ctx = source.getContext('2d', { willReadFrequently: true })
+  if (!ctx) {
+    return source
+  }
+  const { data } = ctx.getImageData(0, 0, width, height)
+  let minX = width
+  let minY = height
+  let maxX = -1
+  let maxY = -1
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const offset = (y * width + x) * 4
+      const alpha = data[offset + 3] ?? 0
+      if (alpha > ALPHA_THRESHOLD) {
+        if (x < minX) minX = x
+        if (x > maxX) maxX = x
+        if (y < minY) minY = y
+        if (y > maxY) maxY = y
+      }
+    }
+  }
+
+  if (maxX < minX || maxY < minY) {
+    return source
+  }
+
+  const cropWidth = maxX - minX + 1
+  const cropHeight = maxY - minY + 1
+
+  if (cropWidth === width && cropHeight === height) {
+    return source
+  }
+
+  const target = document.createElement('canvas')
+  target.width = cropWidth
+  target.height = cropHeight
+  const targetCtx = target.getContext('2d')
+  if (!targetCtx) {
+    return source
+  }
+  targetCtx.drawImage(source, minX, minY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight)
+  return target
+}
+
+async function scaleCanvasWithPica(
+  source: HTMLCanvasElement,
+  maxSize: number,
+): Promise<{ canvas: HTMLCanvasElement; blob: Blob }> {
+  const maxDim = Math.max(source.width, source.height)
+  if (!maxDim) {
+    return {
+      canvas: source,
+      blob: await canvasToBlob(source),
+    }
+  }
+  if (maxDim <= maxSize) {
+    return {
+      canvas: source,
+      blob: await canvasToBlob(source),
+    }
+  }
+  const scale = maxSize / maxDim
+  const targetWidth = Math.max(1, Math.round(source.width * scale))
+  const targetHeight = Math.max(1, Math.round(source.height * scale))
+  const target = document.createElement('canvas')
+  target.width = targetWidth
+  target.height = targetHeight
+  try {
+    await picaInstance.resize(source, target, { quality: 3 })
+  } catch (error) {
+    console.warn('[uploader] pica resize 失败，改用 Canvas 缩放', error)
+    const ctx = target.getContext('2d')
+    ctx?.drawImage(source, 0, 0, source.width, source.height, 0, 0, targetWidth, targetHeight)
+  }
+  try {
+    const blob = await picaInstance.toBlob(target, 'image/png', 0.95)
+    return { canvas: target, blob }
+  } catch (error) {
+    console.warn('[uploader] pica toBlob 失败，改用 Canvas toBlob', error)
+    return {
+      canvas: target,
+      blob: await canvasToBlob(target),
+    }
+  }
+}
+
+async function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (result: Blob | null) => {
+        if (result) {
+          resolve(result)
+        } else {
+          reject(new Error('无法生成图像数据'))
+        }
+      },
+      'image/png',
+    )
+  })
 }
 
 onMounted(() => {

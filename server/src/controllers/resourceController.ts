@@ -48,28 +48,6 @@ const ASSET_COLORS: Record<string, string> = {
   file: '#6d4c41',
 }
 
-const DEFAULT_CATEGORY_PATHS: string[][] = [
-  ['Models'],
-  ['Meshes'],
-  ['Images'],
-  ['Textures'],
-  ['Materials'],
-  ['Prefabs'],
-  ['Videos'],
-  ['Files'],
-]
-
-const CATEGORY_FALLBACK_BY_TYPE: Record<AssetDocument['type'], string[]> = {
-  model: ['Models'],
-  mesh: ['Meshes'],
-  image: ['Images'],
-  texture: ['Textures'],
-  material: ['Materials'],
-  prefab: ['Prefabs'],
-  video: ['Videos'],
-  file: ['Files'],
-}
-
 type UploadedFile = {
   filepath: string
   originalFilename?: string | null
@@ -497,9 +475,6 @@ async function ensureDefaultCategories(): Promise<void> {
   if (!defaultCategoryInitialization) {
     defaultCategoryInitialization = (async () => {
       await ensureCategoryConsistency()
-      for (const pathSegments of DEFAULT_CATEGORY_PATHS) {
-        await ensureCategoryPath(pathSegments)
-      }
     })().catch((error) => {
       defaultCategoryInitialization = null
       throw error
@@ -533,9 +508,7 @@ async function resolveCategoryForPayload(
   if (normalizedSegments.length) {
     return ensureCategoryPath(normalizedSegments)
   }
-
-  const fallbackPath = CATEGORY_FALLBACK_BY_TYPE[type] ?? [type]
-  return ensureCategoryPath(fallbackPath)
+  return ensureCategoryPath([])
 }
 
 async function resolveSeriesObjectId(input: string | null | undefined): Promise<Types.ObjectId | null> {
