@@ -1,6 +1,7 @@
 ﻿<script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import AssetPanel from './AssetPanel.vue'
+import ConsolePanel from './ConsolePanel.vue'
 import AIChatPanel from '@/components/layout/AIChatPanel.vue'
 
 defineProps<{
@@ -13,7 +14,7 @@ const emit = defineEmits<{
   (event: 'toggle-placement'): void
 }>()
 
-type ProjectPanelTab = 'project' | 'assistant'
+type ProjectPanelTab = 'project' | 'assistant' | 'console'
 
 const PROJECT_TAB_STORAGE_KEY = 'harmony:project-panel:active-tab'
 
@@ -22,7 +23,10 @@ function restoreActiveTab(): ProjectPanelTab {
     return 'project'
   }
   const stored = window.localStorage.getItem(PROJECT_TAB_STORAGE_KEY)
-  return stored === 'assistant' ? 'assistant' : 'project'
+  if (stored === 'assistant' || stored === 'console') {
+    return stored
+  }
+  return 'project'
 }
 
 function persistActiveTab(tab: ProjectPanelTab): void {
@@ -75,6 +79,15 @@ const placementTitle = computed(() => 'Toggle placement')
           >
             <span class="panel-toolbar-tab__label">AI Chat</span>
           </v-btn>
+          <v-btn
+            class="panel-toolbar-tab"
+            :class="{ 'is-active': activeTab === 'console' }"
+            variant="text"
+            size="small"
+            @click="selectTab('console')"
+          >
+            <span class="panel-toolbar-tab__label">Console</span>
+          </v-btn>
         </div>
       </div>
       <v-spacer />
@@ -91,9 +104,10 @@ const placementTitle = computed(() => 'Toggle placement')
     <v-divider />
     <div class="panel-content">
       <AssetPanel v-if="activeTab === 'project'" />
-      <div v-else class="assistant-panel">
+      <div v-else-if="activeTab === 'assistant'" class="assistant-panel">
         <AIChatPanel :capture-viewport-screenshot="captureViewportScreenshot" />
       </div>
+  <ConsolePanel v-else class="console-panel-wrapper" />
     </div>
   </v-card>
 </template>
@@ -205,5 +219,11 @@ const placementTitle = computed(() => 'Toggle placement')
   display: flex;
   min-height: 0;
   padding: 6px 8px 10px;
+}
+
+.console-panel-wrapper {
+  flex: 1;
+  display: flex;
+  min-height: 0;
 }
 </style>
