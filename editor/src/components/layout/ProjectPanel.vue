@@ -56,7 +56,6 @@ const placementTitle = computed(() => 'Toggle placement')
   >
     <v-toolbar class="panel-toolbar" height="40px">
       <div class="panel-toolbar__left">
-        <v-toolbar-title class="panel-title">Project</v-toolbar-title>
         <div class="panel-toolbar-tabs">
           <v-btn
             class="panel-toolbar-tab"
