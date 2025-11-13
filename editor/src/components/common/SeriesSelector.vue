@@ -75,6 +75,7 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
+import type { FilterFunction } from 'vuetify/lib/composables/filter.mjs'
 import type { AssetSeries } from '@/types/asset-series'
 
 type CreateSeriesHandler = (payload: { name: string; description?: string | null }) => Promise<AssetSeries>
@@ -125,13 +126,15 @@ function handleUpdate(value: string | AssetSeries | null): void {
   emit('update:modelValue', normalized)
 }
 
-function filter(item: { raw: AssetSeries }, queryText: string, itemText?: string): boolean {
-  const query = queryText?.toLowerCase?.().trim() ?? ''
+const filter: FilterFunction = (value, queryText, item) => {
+  const query = (queryText ?? '').toString().toLowerCase().trim()
   if (!query.length) {
     return true
   }
-  const nameCandidate = (itemText ?? item.raw.name ?? '').toString().toLowerCase()
-  const descriptionCandidate = item.raw.description ? item.raw.description.toLowerCase() : ''
+  const nameCandidate = typeof value === 'string' ? value.toLowerCase() : String(value ?? '').toLowerCase()
+  const descriptionCandidate = typeof item?.raw?.description === 'string'
+    ? item.raw.description.toLowerCase()
+    : ''
   return nameCandidate.includes(query) || descriptionCandidate.includes(query)
 }
 

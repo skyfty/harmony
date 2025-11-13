@@ -18,7 +18,6 @@ const props = defineProps<{
   placeholder?: string
   disabled?: boolean
   hint?: string
-  dense?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -361,7 +360,7 @@ function handleClear(): void {
       location="bottom start"
       content-class="category-menu__overlay"
       max-width="420"
-      :offset="[0, 4]"
+      :offset="[-4, 4]"
       @update:model-value="handleMenuChange"
     >
       <template #activator="{ props: menuProps }">
@@ -371,8 +370,9 @@ function handleClear(): void {
           :label="label ?? '资源分类'"
           :placeholder="placeholder ?? '选择分类'"
           :hint="hint"
+                variant="outlined"
           :persistent-hint="Boolean(hint)"
-          :density="dense ? 'compact' : 'comfortable'"
+          density="compact"
           :disabled="disabled"
           :loading="loading"
           readonly

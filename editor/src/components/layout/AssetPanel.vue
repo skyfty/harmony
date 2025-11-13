@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Splitpanes, Pane } from 'splitpanes'
 import 'splitpanes/dist/splitpanes.css'
@@ -7,7 +7,7 @@ import { useSceneStore, extractProviderIdFromPackageDirectoryId } from '@/stores
 import { PACKAGES_ROOT_DIRECTORY_ID, determineAssetCategoryId } from '@/stores/assetCatalog'
 import type { ResourceCategory } from '@/types/resource-category'
 import { fetchResourceCategories } from '@/api/resourceAssets'
-import { buildCategoryPathString, isAssetTypeName, isRootCategoryName } from '@/utils/categoryPath'
+import { isAssetTypeName, isRootCategoryName } from '@/utils/categoryPath'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -17,90 +17,12 @@ import { getCachedModelObject } from '@/stores/modelObjectCache'
 import { dataUrlToBlob, extractExtension } from '@/utils/blob'
 
 import UploadAssetsDialog from './UploadAssetsDialog.vue'
-
-const OPENED_DIRECTORIES_STORAGE_KEY = 'harmony:project-panel:opened-directories'
-function restoreOpenedDirectories(): string[] {
-  if (typeof window === 'undefined') {
-    return [PACKAGES_ROOT_DIRECTORY_ID]
-  }
-  try {
-    const stored = window.localStorage.getItem(OPENED_DIRECTORIES_STORAGE_KEY)
-    if (!stored) {
-      return [PACKAGES_ROOT_DIRECTORY_ID]
-    }
-    const parsed = JSON.parse(stored) as unknown
-    if (!Array.isArray(parsed)) {
-      return [PACKAGES_ROOT_DIRECTORY_ID]
-    }
-    const filtered = parsed.filter((value): value is string => typeof value === 'string' && value.length > 0)
-    return filtered.length ? Array.from(new Set(filtered)) : [PACKAGES_ROOT_DIRECTORY_ID]
-  } catch (error) {
-    console.warn('恢复 ProjectPanel 打开目录状态失败', error)
-    return [PACKAGES_ROOT_DIRECTORY_ID]
-  }
-}
-
-function persistOpenedDirectories(ids: string[]): void {
-  if (typeof window === 'undefined') {
-    return
-  }
-  try {
-    const uniqueIds = Array.from(new Set(ids))
-    window.localStorage.setItem(OPENED_DIRECTORIES_STORAGE_KEY, JSON.stringify(uniqueIds))
-  } catch (error) {
-    console.warn('持久化 ProjectPanel 打开目录状态失败', error)
-  }
-}
-
-function collectDirectoryIds(directories: ProjectDirectory[] | undefined, bucket: Set<string>): void {
-  if (!directories?.length) {
-    return
-  }
-  directories.forEach((directory) => {
-    bucket.add(directory.id)
-    if (directory.children?.length) {
-      collectDirectoryIds(directory.children, bucket)
-    }
-  })
-}
-
-function sanitizeOpenedDirectories(
-  ids: string[],
-  tree: ProjectDirectory[] | undefined,
-): string[] {
-  if (!tree?.length) {
-    return [...new Set(ids)]
-  }
-  const available = new Set<string>()
-  collectDirectoryIds(tree, available)
-  return ids.filter((id, index) => available.has(id) && ids.indexOf(id) === index)
-}
-
-function arraysEqual(a: string[], b: string[]): boolean {
-  if (a === b) {
-    return true
-  }
-  if (a.length !== b.length) {
-    return false
-  }
-  for (let index = 0; index < a.length; index += 1) {
-    if (a[index] !== b[index]) {
-      return false
-    }
-  }
-  return true
-}
-
-function countDirectoryAssets(directory: ProjectDirectory | undefined): number {
-  if (!directory) {
-    return 0
-  }
-  const directCount = directory.assets?.length ?? 0
-  if (!directory.children?.length) {
-    return directCount
-  }
-  return directory.children.reduce((total, child) => total + countDirectoryAssets(child), directCount)
-}
+import AssetFilterControl from './AssetFilterControl.vue'
+import type {
+  SeriesFilterOption,
+  SizeCategoryFilterOption,
+  TagFilterOption,
+} from '@/types/asset-filter'
 
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
@@ -127,6 +49,7 @@ watch(projectTree, () => {
     openedDirectories.value = sanitized
   }
 })
+
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 let dragPreviewEl: HTMLDivElement | null = null
 let dragImageOffset: { x: number; y: number } | null = null
@@ -231,6 +154,90 @@ async function loadPackageDirectory(providerId: string, options: { force?: boole
   } finally {
     setProviderLoading(providerId, false)
   }
+}
+
+const OPENED_DIRECTORIES_STORAGE_KEY = 'harmony:project-panel:opened-directories'
+function restoreOpenedDirectories(): string[] {
+  if (typeof window === 'undefined') {
+    return [PACKAGES_ROOT_DIRECTORY_ID]
+  }
+  try {
+    const stored = window.localStorage.getItem(OPENED_DIRECTORIES_STORAGE_KEY)
+    if (!stored) {
+      return [PACKAGES_ROOT_DIRECTORY_ID]
+    }
+    const parsed = JSON.parse(stored) as unknown
+    if (!Array.isArray(parsed)) {
+      return [PACKAGES_ROOT_DIRECTORY_ID]
+    }
+    const filtered = parsed.filter((value): value is string => typeof value === 'string' && value.length > 0)
+    return filtered.length ? Array.from(new Set(filtered)) : [PACKAGES_ROOT_DIRECTORY_ID]
+  } catch (error) {
+    console.warn('恢复 ProjectPanel 打开目录状态失败', error)
+    return [PACKAGES_ROOT_DIRECTORY_ID]
+  }
+}
+
+function persistOpenedDirectories(ids: string[]): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+  try {
+    const uniqueIds = Array.from(new Set(ids))
+    window.localStorage.setItem(OPENED_DIRECTORIES_STORAGE_KEY, JSON.stringify(uniqueIds))
+  } catch (error) {
+    console.warn('持久化 ProjectPanel 打开目录状态失败', error)
+  }
+}
+
+function collectDirectoryIds(directories: ProjectDirectory[] | undefined, bucket: Set<string>): void {
+  if (!directories?.length) {
+    return
+  }
+  directories.forEach((directory) => {
+    bucket.add(directory.id)
+    if (directory.children?.length) {
+      collectDirectoryIds(directory.children, bucket)
+    }
+  })
+}
+
+function sanitizeOpenedDirectories(
+  ids: string[],
+  tree: ProjectDirectory[] | undefined,
+): string[] {
+  if (!tree?.length) {
+    return [...new Set(ids)]
+  }
+  const available = new Set<string>()
+  collectDirectoryIds(tree, available)
+  return ids.filter((id, index) => available.has(id) && ids.indexOf(id) === index)
+}
+
+function arraysEqual(a: string[], b: string[]): boolean {
+  if (a === b) {
+    return true
+  }
+  if (a.length !== b.length) {
+    return false
+  }
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) {
+      return false
+    }
+  }
+  return true
+}
+
+function countDirectoryAssets(directory: ProjectDirectory | undefined): number {
+  if (!directory) {
+    return 0
+  }
+  const directCount = directory.assets?.length ?? 0
+  if (!directory.children?.length) {
+    return directCount
+  }
+  return directory.children.reduce((total, child) => total + countDirectoryAssets(child), directCount)
 }
 
 const activeProviderId = computed(() => findProviderIdForDirectoryId(activeDirectoryId.value ?? null))
@@ -830,27 +837,189 @@ const categoryFilteredAssets = computed(() => {
   return base.filter((asset) => assetMatchesCategoryFilter(asset, allowed))
 })
 
+const SERIES_ID_PREFIX = 'series:id:'
+const SERIES_NAME_PREFIX = 'series:name:'
+const SERIES_UNASSIGNED_VALUE = '__series-unassigned__'
+const SIZE_UNASSIGNED_VALUE = '__size-category-unassigned__'
+
+const selectedSeriesValue = ref<string | null>(null)
+const selectedSizeCategories = ref<string[]>([])
 const tagFilterValues = ref<string[]>([])
 const tagFilterPanelOpen = ref(false)
-const tagFilterPopoverRef = ref<HTMLElement | null>(null)
-const hasActiveTagFilters = computed(() => tagFilterValues.value.length > 0)
+const tagFilterSearch = ref('')
 
-function isTagSelected(value: string): boolean {
-  return tagFilterValues.value.includes(value)
+const hasActiveTagFilters = computed(() => tagFilterValues.value.length > 0)
+const hasActiveSeriesFilter = computed(() => selectedSeriesValue.value !== null)
+const hasActiveSizeFilters = computed(() => selectedSizeCategories.value.length > 0)
+const hasActiveAssetFilters = computed(
+  () => hasActiveSeriesFilter.value || hasActiveSizeFilters.value || hasActiveTagFilters.value,
+)
+
+const seriesOptions = computed<SeriesFilterOption[]>(() => {
+  const map = new Map<string, SeriesFilterOption>()
+  categoryFilteredAssets.value.forEach((asset) => {
+    const seriesId = typeof asset.seriesId === 'string' ? asset.seriesId.trim() : ''
+    const seriesName = typeof asset.seriesName === 'string' ? asset.seriesName.trim() : ''
+    if (seriesId.length) {
+      const value = `${SERIES_ID_PREFIX}${seriesId}`
+      if (!map.has(value)) {
+        map.set(value, {
+          value,
+          label: seriesName.length ? seriesName : seriesId,
+          id: seriesId,
+          name: seriesName.length ? seriesName : null,
+        })
+      }
+      return
+    }
+    if (seriesName.length) {
+      const value = `${SERIES_NAME_PREFIX}${seriesName}`
+      if (!map.has(value)) {
+        map.set(value, {
+          value,
+          label: seriesName,
+          id: null,
+          name: seriesName,
+        })
+      }
+      return
+    }
+    const value = SERIES_UNASSIGNED_VALUE
+    if (!map.has(value)) {
+      map.set(value, {
+        value,
+        label: '未分配系列',
+        id: null,
+        name: null,
+        isUnassigned: true,
+      })
+    }
+  })
+  return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
+})
+
+function selectSeries(value: string | null): void {
+  if (selectedSeriesValue.value === value) {
+    selectedSeriesValue.value = null
+    return
+  }
+  selectedSeriesValue.value = value
 }
+
+function assetMatchesSelectedSeries(asset: ProjectAsset, selectedValue: string | null): boolean {
+  if (!selectedValue) {
+    return true
+  }
+  if (selectedValue === SERIES_UNASSIGNED_VALUE) {
+    const hasSeriesId = typeof asset.seriesId === 'string' && asset.seriesId.trim().length > 0
+    const hasSeriesName = typeof asset.seriesName === 'string' && asset.seriesName.trim().length > 0
+    return !hasSeriesId && !hasSeriesName
+  }
+  if (selectedValue.startsWith(SERIES_ID_PREFIX)) {
+    const id = selectedValue.slice(SERIES_ID_PREFIX.length)
+    return (asset.seriesId ?? '').trim() === id
+  }
+  if (selectedValue.startsWith(SERIES_NAME_PREFIX)) {
+    const name = selectedValue.slice(SERIES_NAME_PREFIX.length)
+    return (asset.seriesName ?? '').trim() === name
+  }
+  return false
+}
+
+const seriesFilteredAssets = computed(() =>
+  categoryFilteredAssets.value.filter((asset) => assetMatchesSelectedSeries(asset, selectedSeriesValue.value)),
+)
+
+watch(seriesOptions, (options) => {
+  if (!selectedSeriesValue.value) {
+    return
+  }
+  const available = new Set(options.map((option) => option.value))
+  if (!available.has(selectedSeriesValue.value)) {
+    selectedSeriesValue.value = null
+  }
+})
+
+const sizeCategoryOptions = computed<SizeCategoryFilterOption[]>(() => {
+  const map = new Map<string, SizeCategoryFilterOption>()
+  let hasUnassigned = false
+  seriesFilteredAssets.value.forEach((asset) => {
+    const size = typeof asset.sizeCategory === 'string' ? asset.sizeCategory.trim() : ''
+    if (size.length) {
+      if (!map.has(size)) {
+        map.set(size, { value: size, label: size })
+      }
+    } else {
+      hasUnassigned = true
+    }
+  })
+  const sorted = Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
+  if (hasUnassigned) {
+    sorted.unshift({
+      value: SIZE_UNASSIGNED_VALUE,
+      label: '未分类',
+      isUnassigned: true,
+    })
+  }
+  return sorted
+})
+
+function toggleSizeCategory(value: string): void {
+  if (!value) {
+    return
+  }
+  const next = new Set(selectedSizeCategories.value)
+  if (next.has(value)) {
+    next.delete(value)
+  } else {
+    next.add(value)
+  }
+  selectedSizeCategories.value = Array.from(next)
+}
+
+function clearSizeCategoryFilters(): void {
+  if (selectedSizeCategories.value.length) {
+    selectedSizeCategories.value = []
+  }
+}
+
+function assetMatchesSelectedSizeCategories(asset: ProjectAsset, selectedValues: string[]): boolean {
+  if (!selectedValues.length) {
+    return true
+  }
+  const size = typeof asset.sizeCategory === 'string' ? asset.sizeCategory.trim() : ''
+  if (!size.length) {
+    return selectedValues.includes(SIZE_UNASSIGNED_VALUE)
+  }
+  return selectedValues.includes(size)
+}
+
+const sizeCategoryFilteredAssets = computed(() =>
+  seriesFilteredAssets.value.filter((asset) => assetMatchesSelectedSizeCategories(asset, selectedSizeCategories.value)),
+)
+
+watch(sizeCategoryOptions, (options) => {
+  if (!selectedSizeCategories.value.length) {
+    return
+  }
+  const available = new Set(options.map((option) => option.value))
+  const filtered = selectedSizeCategories.value.filter((value) => available.has(value))
+  if (filtered.length !== selectedSizeCategories.value.length) {
+    selectedSizeCategories.value = filtered
+  }
+})
 
 function toggleTagFilter(value: string): void {
   if (!value) {
     return
   }
-  const current = [...tagFilterValues.value]
-  const index = current.indexOf(value)
-  if (index >= 0) {
-    current.splice(index, 1)
+  const current = new Set(tagFilterValues.value)
+  if (current.has(value)) {
+    current.delete(value)
   } else {
-    current.push(value)
+    current.add(value)
   }
-  tagFilterValues.value = current
+  tagFilterValues.value = Array.from(current)
 }
 
 function clearTagFilters(): void {
@@ -860,16 +1029,16 @@ function clearTagFilters(): void {
   tagFilterValues.value = []
 }
 
-type TagOption = {
-  value: string
-  label: string
-  id?: string
-  name: string
+function clearAllAssetFilters(): void {
+  selectSeries(null)
+  clearSizeCategoryFilters()
+  clearTagFilters()
+  tagFilterSearch.value = ''
 }
 
-const tagOptions = computed<TagOption[]>(() => {
-  const map = new Map<string, TagOption>()
-  categoryFilteredAssets.value.forEach((asset) => {
+function buildTagOptionsFromAssets(assets: ProjectAsset[]): TagFilterOption[] {
+  const map = new Map<string, TagFilterOption>()
+  assets.forEach((asset) => {
     const tagNames = Array.isArray(asset.tags) ? asset.tags : []
     const tagIds = Array.isArray(asset.tagIds) ? asset.tagIds : []
     if (tagIds.length && tagNames.length && tagIds.length === tagNames.length) {
@@ -898,11 +1067,45 @@ const tagOptions = computed<TagOption[]>(() => {
     }
   })
   return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
-})
+}
+
+const tagOptions = computed<TagFilterOption[]>(() => buildTagOptionsFromAssets(categoryFilteredAssets.value))
+const filterTagOptions = computed<TagFilterOption[]>(() => buildTagOptionsFromAssets(sizeCategoryFilteredAssets.value))
 
 const tagOptionMap = computed(() => {
   const entries = tagOptions.value.map((option) => [option.value, option] as const)
-  return new Map<string, TagOption>(entries)
+  return new Map<string, TagFilterOption>(entries)
+})
+
+const normalizedTagFilterSearch = computed(() => tagFilterSearch.value.trim().toLowerCase())
+
+const combinedTagOptions = computed(() => {
+  const map = new Map<string, TagFilterOption>()
+  filterTagOptions.value.forEach((option) => {
+    if (!map.has(option.value)) {
+      map.set(option.value, option)
+    }
+  })
+  tagFilterValues.value.forEach((value) => {
+    if (!map.has(value)) {
+      const fallback = tagOptionMap.value.get(value) ?? { value, label: value, name: value }
+      map.set(value, fallback)
+    }
+  })
+  return Array.from(map.values())
+})
+
+const filteredTagOptions = computed(() => {
+  const search = normalizedTagFilterSearch.value
+  if (!search.length) {
+    return combinedTagOptions.value
+  }
+  return combinedTagOptions.value.filter((option) => {
+    const label = option.label.toLowerCase()
+    const value = option.value.toLowerCase()
+    const name = option.name.toLowerCase()
+    return label.includes(search) || value.includes(search) || name.includes(search)
+  })
 })
 
 const uploadableSelectedAssets = computed(() =>
@@ -931,7 +1134,7 @@ function assetMatchesSelectedTags(asset: ProjectAsset, selectedValues: string[])
 }
 
 const displayedAssets = computed(() => {
-  const base = categoryFilteredAssets.value
+  const base = sizeCategoryFilteredAssets.value
   if (!tagFilterValues.value.length) {
     return base
   }
@@ -939,13 +1142,6 @@ const displayedAssets = computed(() => {
 })
 
 watch(tagOptions, (options) => {
-  if (!options.length) {
-    tagFilterPanelOpen.value = false
-    if (tagFilterValues.value.length) {
-      tagFilterValues.value = []
-    }
-    return
-  }
   if (!tagFilterValues.value.length) {
     return
   }
@@ -957,10 +1153,8 @@ watch(tagOptions, (options) => {
 })
 
 watch(tagFilterPanelOpen, (open) => {
-  if (open) {
-    void nextTick(() => {
-      tagFilterPopoverRef.value?.focus()
-    })
+  if (!open) {
+    tagFilterSearch.value = ''
   }
 })
 
@@ -1930,62 +2124,25 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                 @click:append-inner="searchAsset"
                 @click:clear="handleSearchClear"
               />
-              <v-overlay
+              <AssetFilterControl
                 v-model="tagFilterPanelOpen"
-                :scrim="false"
-                :close-on-content-click="false"
-                location-strategy="connected"
-                location="bottom end"
-                origin="top end"
-                scroll-strategy="reposition"
-                :offset="[0, 8]"
-                transition="scale-transition"
-              >
-                <template #activator="{ props }">
-                  <v-btn
-                    class="tag-filter-trigger"
-                    v-bind="props"
-                    variant="text"
-                    density="compact"
-                    :color="hasActiveTagFilters ? 'primary' : undefined"
-                    :icon="hasActiveTagFilters ? 'mdi-tag-multiple' : 'mdi-tag-outline'"
-                    :title="hasActiveTagFilters ? '已选择标签筛选' : '按标签筛选'"
-                  />
-                </template>
-                <v-sheet
-                  ref="tagFilterPopoverRef"
-                  class="tag-filter-popover"
-                  elevation="8"
-                  tabindex="-1"
-                  @keydown.esc.stop="tagFilterPanelOpen = false"
-                >
-                  <div class="tag-filter-popover__header">
-                    <span class="tag-filter-popover__title">按标签筛选</span>
-                    <v-btn
-                      v-if="tagFilterValues.length"
-                      variant="text"
-                      size="small"
-                      density="comfortable"
-                      @click="clearTagFilters"
-                    >
-                      清除
-                    </v-btn>
-                  </div>
-                  <div v-if="tagOptions.length" class="tag-filter-popover__content">
-                    <button
-                      v-for="option in tagOptions"
-                      :key="option.value"
-                      type="button"
-                      class="tag-filter-popover__tag"
-                      :class="{ 'is-active': isTagSelected(option.value) }"
-                      @click="toggleTagFilter(option.value)"
-                    >
-                      {{ option.label }}
-                    </button>
-                  </div>
-                  <div v-else class="tag-filter-popover__empty">暂无可用标签</div>
-                </v-sheet>
-              </v-overlay>
+                :has-active-filters="hasActiveAssetFilters"
+                :series-options="seriesOptions"
+                :selected-series="selectedSeriesValue"
+                :size-category-options="sizeCategoryOptions"
+                :selected-size-categories="selectedSizeCategories"
+                :tag-filter-values="tagFilterValues"
+                :combined-tag-options="combinedTagOptions"
+                :filtered-tag-options="filteredTagOptions"
+                :has-active-tag-filters="hasActiveTagFilters"
+                v-model:tag-filter-search="tagFilterSearch"
+                @select-series="selectSeries"
+                @toggle-size-category="toggleSizeCategory"
+                @clear-size-filters="clearSizeCategoryFilters"
+                @toggle-tag="toggleTagFilter"
+                @clear-tag-filters="clearTagFilters"
+                @clear-all="clearAllAssetFilters"
+              />
             </div>
             <v-btn icon="mdi-refresh" density="compact" variant="text" @click="refreshGallery" />
           </v-toolbar>
@@ -2005,7 +2162,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                   <v-menu
                     v-if="crumb.children.length"
                     location="bottom start"
-                    transition="fade-transition"
+                    transition="null"
                     :offset="[0, 6]"
                   >
                     <template #activator="{ props: menuProps }">
@@ -2286,9 +2443,10 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   transition: color 120ms ease;
 }
 
-.tag-filter-popover {
-  width: 320px;
-  max-width: calc(100vw - 64px);
+.asset-filter-popover {
+  width: 900px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 96px);
   background: rgba(12, 18, 26, 0.96);
   border-radius: 12px;
   padding: 16px;
@@ -2296,72 +2454,101 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   color: #e9ecf1;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
 }
 
-.tag-filter-popover__header {
+.asset-filter-popover__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
 
-.tag-filter-popover__title {
+.asset-filter-popover__title {
   font-weight: 600;
   font-size: 0.95rem;
 }
 
-.tag-filter-popover__content {
+.asset-filter-popover__body {
   display: flex;
-  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 20px;
+  flex: 1;
+}
+
+.asset-filter-popover__column {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  flex: 1 1 0;
+}
+
+.asset-filter-popover__column:first-child {
+  flex: 1.1 1 0;
+}
+
+.asset-filter-popover__column:nth-child(2) {
+  flex: 0.9 1 0;
+}
+
+.asset-filter-popover__column-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: rgba(233, 236, 241, 0.82);
+}
+
+.asset-filter-popover__search {
+  display: flex;
+}
+
+.asset-filter-popover__search :deep(.v-field) {
+  background: rgba(233, 236, 241, 0.08);
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.asset-filter-popover__search :deep(.v-field__input) {
+  color: #e9ecf1;
+}
+
+.asset-filter-popover__column-content {
+  display: flex;
+  flex-direction: column;
   gap: 8px;
-  max-height: 240px;
+  max-height: 100%;
   overflow-y: auto;
   padding-right: 4px;
 }
 
-.tag-filter-popover__tag {
+.asset-filter-option {
   appearance: none;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: 8px;
   padding: 6px 12px;
   font-size: 0.85rem;
-  line-height: 1.2;
+  line-height: 1.4;
   background: rgba(233, 236, 241, 0.08);
   color: #e9ecf1;
   cursor: pointer;
   transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+  text-align: left;
+  width: 100%;
 }
 
-.tag-filter-popover__tag:hover {
+.asset-filter-option:hover {
   background: rgba(233, 236, 241, 0.14);
 }
 
-.tag-filter-popover__tag:focus-visible {
+.asset-filter-option:focus-visible {
   outline: 2px solid rgba(77, 208, 225, 0.8);
   outline-offset: 2px;
 }
 
-.tag-filter-popover__tag.is-active {
+.asset-filter-option.is-active {
   background: rgba(77, 208, 225, 0.28);
   border-color: rgba(77, 208, 225, 0.6);
   color: #e0f7fa;
   box-shadow: 0 0 0 1px rgba(77, 208, 225, 0.35);
-}
-
-.tag-filter-popover__empty {
-  font-size: 0.85rem;
-  color: rgba(233, 236, 241, 0.65);
-  text-align: center;
-  padding: 12px 0;
-}
-
-.category-breadcrumbs {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  row-gap: 6px;
-  padding: 6px 12px 4px;
 }
 
 .category-breadcrumbs__label {
@@ -2490,11 +2677,15 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 }
 
 .category-menu-list {
-  min-width: 200px;
+  min-width: 130px;
 }
 
 .category-menu-list :deep(.v-list-item--active) {
   background-color: rgba(77, 208, 225, 0.16);
+}
+
+.category-menu-list :deep(.v-list-item:hover) {
+  background-color: rgba(77, 208, 225, 0.12);
 }
 
 .tree-view {
@@ -2843,4 +3034,6 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 .directory-card-hint {
   opacity: 0.6;
 }
+
+
 </style>

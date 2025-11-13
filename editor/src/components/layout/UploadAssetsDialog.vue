@@ -726,21 +726,10 @@ async function submitUpload() {
                 label="资产分类"
                 placeholder="选择或创建分类"
                 :disabled="uploadSubmitting || entry.status === 'success'"
-                dense
                 @update:model-value="(value) => handleEntryCategoryChange(entry, value)"
                 @category-selected="(payload) => handleEntryCategorySelected(entry, payload)"
                 @category-created="(category) => handleEntryCategoryCreated(entry, category)"
               />
-              <v-progress-circular
-                v-if="resourceCategoriesLoading"
-                indeterminate
-                size="20"
-                width="2"
-                color="primary"
-                class="ml-2"
-              />
-            </div>
-            <div class="upload-entry__series-row">
               <SeriesSelector
                 :model-value="entry.seriesId"
                 :series-options="assetSeries"
@@ -754,9 +743,6 @@ async function submitUpload() {
                 @update:model-value="(value) => handleEntrySeriesChange(entry, value)"
                 @series-created="(series) => handleEntrySeriesCreated(entry, series)"
               />
-            </div>
-            <div v-if="entry.categoryPathLabel" class="upload-entry__category-label">
-              当前分类：{{ entry.categoryPathLabel }}
             </div>
             <div class="upload-entry__color-row">
               <v-text-field
