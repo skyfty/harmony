@@ -1,18 +1,25 @@
 # syntax=docker/dockerfile:1
 # --- Build Stage ---
 FROM node:20-alpine AS build
-WORKDIR /app
+# 使用仓库根为构建上下文（在 compose 中设置），此处切到 uploader 目录
+WORKDIR /app/uploader
 ENV NODE_ENV=development
-COPY package*.json ./
+# 先拷贝 package 清单，包含本地依赖所需的 schema 包描述
+COPY uploader/package.json uploader/package-lock.json ./
+COPY schema/package.json ../schema/package.json
+# 安装依赖（包含 devDependencies，确保 vue-tsc/vite 可用）
 RUN npm install --legacy-peer-deps
-COPY . .
+# 拷贝源码（uploader 与 schema）
+COPY uploader/ ./
+COPY schema/ ../schema/
+# 构建产物
 RUN npm run build
 
 # --- Runtime Stage ---
 FROM nginx:alpine AS runtime
 WORKDIR /usr/share/nginx/html
 RUN rm -rf ./*
-COPY --from=build /app/dist ./
+COPY --from=build /app/uploader/dist ./
 RUN mkdir -p /usr/share/nginx/html/config
 COPY <<'EOF' /etc/nginx/conf.d/default.conf
 server {
