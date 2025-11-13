@@ -13,7 +13,6 @@ interface LogEntry {
 const MAX_LOG_ENTRIES = 500
 let nextEntryId = 0
 const activeLevels = ref<LogLevel[]>(['info', 'warn', 'error'])
-const searchTerm = ref('')
 const entries = ref<LogEntry[]>([])
 const logListRef = ref<HTMLElement | null>(null)
 const restoreConsoleFns: Array<() => void> = []
@@ -32,15 +31,11 @@ const timeFormatter = new Intl.DateTimeFormat(undefined, {
 
 const filteredEntries = computed(() => {
   const visibleLevels = new Set(activeLevels.value)
-  const query = searchTerm.value.trim().toLowerCase()
   return entries.value.filter((entry) => {
     if (!visibleLevels.has(entry.level)) {
       return false
     }
-    if (!query.length) {
-      return true
-    }
-    return entry.message.toLowerCase().includes(query)
+    return true
   })
 })
 
@@ -142,7 +137,7 @@ onBeforeUnmount(() => {
           class="console-toolbar__filter"
           :class="{ 'is-active': activeLevels.includes(definition.level) }"
           variant="text"
-          density="comfortable"
+          density="compact"
           size="small"
           @click="toggleLevel(definition.level)"
         >
@@ -151,16 +146,6 @@ onBeforeUnmount(() => {
         </v-btn>
       </div>
       <v-spacer />
-      <v-text-field
-        v-model="searchTerm"
-        class="console-toolbar__search"
-        density="compact"
-        variant="solo"
-        hide-details
-        clearable
-        placeholder="Search logs"
-        prepend-inner-icon="mdi-magnify"
-      />
       <v-btn
         class="console-toolbar__clear"
         variant="text"
@@ -209,7 +194,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 12px;
+  padding: 2px 11px;
 }
 
 .console-toolbar__filters {

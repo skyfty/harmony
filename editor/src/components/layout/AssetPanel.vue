@@ -2115,9 +2115,9 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 
 .gallery-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: 12px;
-  padding: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 8px;
+  padding: 10px;
 }
 
 .gallery-grid--directories {
@@ -2171,7 +2171,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 116px;
+  height: 96px;
   position: relative;
   overflow: hidden;
 }
@@ -2189,8 +2189,8 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 }
 
 .asset-select-control :deep(.v-selection-control__input) {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
 }
 
 .asset-preview-image {
@@ -2225,16 +2225,16 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   left: 0;
   right: 0;
   bottom: 0;
-  padding: 8px 10px 10px;
+  padding: 6px 8px 8px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
   background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.6) 100%);
   backdrop-filter: blur(1px);
 }
 
 .asset-title {
-  font-size: 0.82rem;
+  font-size: 0.76rem;
   font-weight: 600;
   color: #ffffff;
   text-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
@@ -2242,7 +2242,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 }
 
 .asset-subtitle {
-  font-size: 0.7rem;
+  font-size: 0.66rem;
   color: #ff8a80;
   text-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
   line-height: 1.1;
