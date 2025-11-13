@@ -7,6 +7,7 @@ import type {
   GenerateAssetTagPayload,
   GenerateAssetTagResult,
   ResourceCategory,
+  AssetSeries,
 } from '@/types'
 
 export async function listAssetTags(): Promise<AssetTag[]> {
@@ -103,4 +104,25 @@ export async function generateAssetTagSuggestions(
     throw new Error('AI 标签响应格式无效')
   }
   return data.data
+}
+
+export async function listAssetSeries(): Promise<AssetSeries[]> {
+  const { data } = await apiClient.get<AssetSeries[]>('/resources/series')
+  return data
+}
+
+export interface CreateSeriesPayload {
+  name: string
+  description?: string | null
+}
+
+export async function createAssetSeries(payload: CreateSeriesPayload): Promise<AssetSeries> {
+  const body: Record<string, unknown> = {
+    name: payload.name,
+  }
+  if (payload.description !== undefined) {
+    body.description = payload.description ?? null
+  }
+  const { data } = await apiClient.post<AssetSeries>('/resources/series', body)
+  return data
 }

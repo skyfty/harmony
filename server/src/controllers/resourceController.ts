@@ -5,20 +5,21 @@ import type {
   AssetDirectory,
   AssetManifest as AssetManifestDto,
   AssetManifestEntry as AssetManifestEntryDto,
+  AssetSeries,
   AssetSummary,
   AssetTag,
   AssetTagSummary,
-  PagedResponse as PagedResponseDto,
 } from '@harmony/schema/asset-api'
 import type { Context } from 'koa'
 import path from 'node:path'
 import fs from 'fs-extra'
 import { nanoid } from 'nanoid'
 import { Types } from 'mongoose'
-import type { AssetCategoryDocument, AssetDocument, AssetTagDocument } from '@/types/models'
+import type { AssetCategoryDocument, AssetDocument, AssetSeriesDocument, AssetTagDocument } from '@/types/models'
 import { AssetCategoryModel, normalizeCategoryName as normalizeCategoryLabel } from '@/models/AssetCategory'
 import { AssetModel } from '@/models/Asset'
 import { AssetTagModel } from '@/models/AssetTag'
+import { AssetSeriesModel } from '@/models/AssetSeries'
 import type { CategoryNodeDto, CategoryPathItemDto, CategoryTreeNode } from '@/services/assetCategoryService'
 import {
   deleteCategoryStrict,
@@ -77,7 +78,10 @@ type UploadedFile = {
   size?: number
 }
 
-type LeanAsset = AssetDocument & { tags?: AssetTagDocument[] }
+type LeanAsset = AssetDocument & {
+  tags?: AssetTagDocument[]
+  seriesId?: AssetSeriesDocument | Types.ObjectId | null
+}
 
 type AssetCategoryData = {
   _id: Types.ObjectId
@@ -125,6 +129,7 @@ type AssetListQuery = {
   keyword?: string
   types?: AssetDocument['type'][]
   tagIds?: string[]
+  seriesId?: string | null
   categoryId?: string
   categoryPath?: string[]
   includeDescendants?: boolean
@@ -136,6 +141,7 @@ type AssetMutationPayload = {
   description?: string | null
   tagIds?: string[]
   categoryId?: string | null
+  seriesId?: string | null
   categoryPathSegments?: string[]
   color?: string | null
   dimensionLength?: number | null
@@ -532,6 +538,23 @@ async function resolveCategoryForPayload(
   return ensureCategoryPath(fallbackPath)
 }
 
+async function resolveSeriesObjectId(input: string | null | undefined): Promise<Types.ObjectId | null> {
+  if (input === undefined) {
+    return null
+  }
+  if (input === null) {
+    return null
+  }
+  if (!Types.ObjectId.isValid(input)) {
+    throw Object.assign(new Error('Invalid series identifier'), { code: 'INVALID_SERIES_ID' })
+  }
+  const series = await AssetSeriesModel.findById(input).select('_id').lean().exec()
+  if (!series) {
+    throw Object.assign(new Error('Series not found'), { code: 'SERIES_NOT_FOUND' })
+  }
+  return series._id as Types.ObjectId
+}
+
 function mapTagDocument(tag: AssetTagDocument | Types.ObjectId): AssetTagSummary | null {
   if (tag instanceof Types.ObjectId) {
     return { id: tag.toString(), name: tag.toString() }
@@ -541,6 +564,29 @@ function mapTagDocument(tag: AssetTagDocument | Types.ObjectId): AssetTagSummary
   }
   const id = (tag._id as Types.ObjectId).toString()
   return { id, name: tag.name }
+}
+
+type SeriesDocumentLike = Pick<AssetSeriesDocument, '_id' | 'name' | 'description' | 'createdAt' | 'updatedAt'>
+
+function mapSeriesDocument(series: SeriesDocumentLike, assetCount?: number): AssetSeries {
+  const id = (series._id as Types.ObjectId).toString()
+  const description = sanitizeString(series.description)
+  const createdAt =
+    series.createdAt instanceof Date
+      ? series.createdAt.toISOString()
+      : new Date(series.createdAt).toISOString()
+  const updatedAt =
+    series.updatedAt instanceof Date
+      ? series.updatedAt.toISOString()
+      : new Date(series.updatedAt).toISOString()
+  return {
+    id,
+    name: series.name,
+    description,
+    assetCount,
+    createdAt,
+    updatedAt,
+  }
 }
 
 function mapAssetDocument(asset: AssetSource, categoryLookup?: Map<string, CategoryInfo>): AssetSummary {
@@ -555,6 +601,28 @@ function mapAssetDocument(asset: AssetSource, categoryLookup?: Map<string, Categ
     .filter((tag): tag is AssetTagSummary => !!tag)
 
   const previewUrl = asset.previewUrl ?? asset.thumbnailUrl ?? null
+
+  const rawSeries = (asset as AssetDocument & { seriesId?: unknown }).seriesId
+  let seriesId: string | null = null
+  let seriesName: string | null = null
+  let seriesPayload: AssetSeries | null = null
+
+  if (rawSeries instanceof Types.ObjectId) {
+    seriesId = rawSeries.toString()
+  } else if (typeof rawSeries === 'string') {
+    seriesId = rawSeries
+  } else if (rawSeries && typeof rawSeries === 'object' && '_id' in rawSeries) {
+    const seriesDoc = rawSeries as SeriesDocumentLike
+    seriesPayload = mapSeriesDocument(seriesDoc)
+    seriesId = seriesPayload.id
+    seriesName = seriesPayload.name
+  }
+  if (!seriesName && rawSeries && typeof rawSeries === 'object' && 'name' in rawSeries) {
+    const name = (rawSeries as { name?: string }).name
+    if (typeof name === 'string') {
+      seriesName = name
+    }
+  }
 
   const color = sanitizeHexColor(asset.color)
   const dimensionLength = typeof asset.dimensionLength === 'number' ? asset.dimensionLength : null
@@ -582,6 +650,9 @@ function mapAssetDocument(asset: AssetSource, categoryLookup?: Map<string, Categ
     type: asset.type,
     tags,
     tagIds: tags.map((tag) => tag.id),
+  seriesId,
+  seriesName,
+  series: seriesPayload,
     color,
     dimensionLength,
     dimensionWidth,
@@ -629,6 +700,9 @@ function mapManifestEntry(asset: AssetSource, categoryLookup?: Map<string, Categ
     categoryPathString: response.categoryPathString,
     tags: response.tags ?? [],
     tagIds: response.tagIds,
+    seriesId: response.seriesId ?? null,
+    seriesName: response.seriesName ?? null,
+    series: response.series ?? null,
     color: response.color ?? null,
     dimensionLength: response.dimensionLength ?? null,
     dimensionWidth: response.dimensionWidth ?? null,
@@ -669,6 +743,7 @@ async function buildManifest(): Promise<AssetManifestDto> {
   const assets = (await AssetModel.find()
     .sort({ updatedAt: -1 })
     .populate('tags')
+    .populate('seriesId')
     .lean()
     .exec()) as LeanAsset[]
   const categoryLookup = await loadCategoryInfoMap(assets.map((asset) => asset.categoryId as Types.ObjectId))
@@ -727,6 +802,22 @@ async function buildAssetFilter(query: AssetListQuery): Promise<Record<string, u
       filter.tags = { $all: validTagIds }
     }
   }
+  if (query.seriesId !== undefined) {
+    const rawSeriesId = query.seriesId
+    if (rawSeriesId === null || rawSeriesId === 'none') {
+      filter.seriesId = null
+    } else if (rawSeriesId) {
+      if (!Types.ObjectId.isValid(rawSeriesId)) {
+        throw Object.assign(new Error('Invalid series identifier'), { code: 'INVALID_SERIES_ID' })
+      }
+  const exists = await AssetSeriesModel.exists({ _id: rawSeriesId }).exec()
+      if (!exists) {
+        filter.seriesId = { $in: [] }
+      } else {
+        filter.seriesId = new Types.ObjectId(rawSeriesId)
+      }
+    }
+  }
   const includeDescendants = query.includeDescendants !== false
   const normalizedPath = normalizeCategoryPathSegments(query.categoryPath)
   if (normalizedPath.length) {
@@ -778,6 +869,29 @@ function extractMutationPayload(ctx: Context): AssetMutationPayload {
     description: sanitizeString(rawBody.description),
     tagIds: tagIds.length ? tagIds : undefined,
     categoryId: sanitizeString(rawBody.categoryId),
+  }
+
+  const rawSeriesInput = hasOwn('seriesId') ? rawBody.seriesId : hasOwn('series') ? rawBody.series : undefined
+  if (hasOwn('seriesId') || hasOwn('series')) {
+    if (rawSeriesInput === null) {
+      payload.seriesId = null
+    } else if (Array.isArray(rawSeriesInput)) {
+      const first = sanitizeString(rawSeriesInput[0])
+      if (!first || first.toLowerCase() === 'null' || first.toLowerCase() === 'none') {
+        payload.seriesId = null
+      } else {
+        payload.seriesId = first
+      }
+    } else if (typeof rawSeriesInput === 'string') {
+      const trimmed = sanitizeString(rawSeriesInput)
+      if (!trimmed || trimmed.toLowerCase() === 'null' || trimmed.toLowerCase() === 'none') {
+        payload.seriesId = null
+      } else {
+        payload.seriesId = trimmed
+      }
+    } else {
+      payload.seriesId = null
+    }
   }
 
   const rawCategorySegments = sanitizeCategorySegments(
@@ -833,6 +947,24 @@ function parsePagination(query: Record<string, string | string[] | undefined>): 
     .map((type) => normalizeAssetType(type))
     .filter((type, index, self) => self.indexOf(type) === index)
   const tagIds = ensureArrayString(query.tagIds ?? query.tagId)
+  const rawSeriesParam = Array.isArray(query.seriesId)
+    ? query.seriesId[0]
+    : query.seriesId !== undefined
+      ? query.seriesId
+      : Array.isArray(query.series)
+        ? query.series[0]
+        : query.series
+  let seriesId: string | null | undefined
+  if (rawSeriesParam !== undefined) {
+    const normalized = sanitizeString(rawSeriesParam)
+    if (!normalized || normalized.toLowerCase() === 'all') {
+      seriesId = undefined
+    } else if (normalized.toLowerCase() === 'none' || normalized.toLowerCase() === 'null' || normalized.toLowerCase() === 'unassigned') {
+      seriesId = 'none'
+    } else {
+      seriesId = normalized
+    }
+  }
   const categoryId = sanitizeString(Array.isArray(query.categoryId) ? query.categoryId[0] : query.categoryId)
   const rawCategoryPath = sanitizeCategorySegments(query.categoryPath ?? query.categoryPathSegments)
   const categoryPath = normalizeCategoryPathSegments(rawCategoryPath)
@@ -846,6 +978,7 @@ function parsePagination(query: Record<string, string | string[] | undefined>): 
     keyword,
     types: validTypes.length ? validTypes : undefined,
     tagIds: tagIds.length ? tagIds : undefined,
+  seriesId,
     categoryId: categoryId ?? undefined,
     categoryPath: categoryPath.length ? categoryPath : undefined,
     includeDescendants,
@@ -1024,6 +1157,7 @@ export async function listCategoryAssets(ctx: Context): Promise<void> {
   const [assets, total] = await Promise.all([
     AssetModel.find(filter)
       .populate('tags')
+      .populate('seriesId')
       .skip(skip)
       .limit(query.pageSize)
       .sort({ createdAt: -1 })
@@ -1141,7 +1275,7 @@ export async function getAsset(ctx: Context): Promise<void> {
   if (!Types.ObjectId.isValid(id)) {
     ctx.throw(400, 'Invalid asset id')
   }
-  const asset = (await AssetModel.findById(id).populate('tags').lean().exec()) as LeanAsset | null
+  const asset = (await AssetModel.findById(id).populate('tags').populate('seriesId').lean().exec()) as LeanAsset | null
   if (!asset) {
     ctx.throw(404, 'Asset not found')
   }
@@ -1197,6 +1331,20 @@ export async function uploadAsset(ctx: Context): Promise<void> {
 
   const categoryId = categoryDoc._id as Types.ObjectId
 
+  let seriesObjectId: Types.ObjectId | null = null
+  try {
+    seriesObjectId = await resolveSeriesObjectId(payload.seriesId)
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code
+    if (code === 'INVALID_SERIES_ID') {
+      ctx.throw(400, 'Invalid series identifier')
+    }
+    if (code === 'SERIES_NOT_FOUND') {
+      ctx.throw(404, 'Series not found')
+    }
+    throw error
+  }
+
   const dimensionLength = payload.dimensionLength ?? null
   const dimensionWidth = payload.dimensionWidth ?? null
   const dimensionHeight = payload.dimensionHeight ?? null
@@ -1210,6 +1358,7 @@ export async function uploadAsset(ctx: Context): Promise<void> {
     categoryId,
     type,
     tags: tagObjectIds,
+  seriesId: seriesObjectId,
     size: fileInfo.size,
     color,
     dimensionLength,
@@ -1227,7 +1376,10 @@ export async function uploadAsset(ctx: Context): Promise<void> {
     mimeType: fileInfo.mimeType,
   })
 
-  const populated = (await asset.populate('tags')) as AssetDocument & { tags: AssetTagDocument[] }
+  const populated = (await asset.populate([
+    { path: 'tags' },
+    { path: 'seriesId' },
+  ])) as AssetDocument & { tags: AssetTagDocument[]; seriesId?: AssetSeriesDocument | null }
   const categoryLookup = await loadCategoryInfoMap([categoryId])
   const response = mapAssetDocument(populated, categoryLookup)
   await refreshManifest()
@@ -1278,6 +1430,21 @@ export async function updateAsset(ctx: Context): Promise<void> {
     if (normalizedType !== asset.type) {
       updates.type = normalizedType
       nextType = normalizedType
+    }
+  }
+
+  if (payload.seriesId !== undefined) {
+    try {
+      updates.seriesId = await resolveSeriesObjectId(payload.seriesId)
+    } catch (error) {
+      const code = (error as { code?: string } | null)?.code
+      if (code === 'INVALID_SERIES_ID') {
+        ctx.throw(400, 'Invalid series identifier')
+      }
+      if (code === 'SERIES_NOT_FOUND') {
+        ctx.throw(404, 'Series not found')
+      }
+      throw error
     }
   }
 
@@ -1362,14 +1529,17 @@ export async function updateAsset(ctx: Context): Promise<void> {
   }
 
   if (Object.keys(updates).length === 0) {
-    const populated = (await asset.populate('tags')) as AssetDocument & { tags: AssetTagDocument[] }
+    const populated = (await asset.populate([
+      { path: 'tags' },
+      { path: 'seriesId' },
+    ])) as AssetDocument & { tags: AssetTagDocument[]; seriesId?: AssetSeriesDocument | null }
     const categoryLookup = await loadCategoryInfoMap([populated.categoryId as Types.ObjectId])
     ctx.body = mapAssetDocument(populated, categoryLookup)
     return
   }
 
   await AssetModel.updateOne({ _id: id }, { $set: updates })
-  const updated = (await AssetModel.findById(id).populate('tags').lean().exec()) as LeanAsset | null
+  const updated = (await AssetModel.findById(id).populate('tags').populate('seriesId').lean().exec()) as LeanAsset | null
   if (!updated) {
     ctx.throw(500, 'Failed to update asset')
   }
@@ -1422,6 +1592,121 @@ export async function downloadAsset(ctx: Context): Promise<void> {
 export async function listAssetTags(ctx: Context): Promise<void> {
   const tags = (await AssetTagModel.find().sort({ name: 1 }).lean().exec()) as AssetTagDocument[]
   ctx.body = tags.map((tag) => mapAssetTagDocument(tag))
+}
+
+export async function listAssetSeries(ctx: Context): Promise<void> {
+  const [seriesList, counts] = await Promise.all([
+    AssetSeriesModel.find().sort({ name: 1 }).lean().exec() as Promise<AssetSeriesDocument[]>,
+    AssetModel.aggregate([
+      {
+        $group: {
+          _id: '$seriesId',
+          count: { $sum: 1 },
+        },
+      },
+    ]).exec() as Promise<Array<{ _id: Types.ObjectId | null; count: number }>>,
+  ])
+
+  const countLookup = new Map<string, number>()
+  counts.forEach((entry) => {
+    const key = entry._id ? (entry._id as Types.ObjectId).toString() : 'none'
+    countLookup.set(key, entry.count ?? 0)
+  })
+
+  ctx.body = seriesList.map((series) => {
+    const id = (series._id as Types.ObjectId).toString()
+    return mapSeriesDocument(series, countLookup.get(id) ?? 0)
+  })
+}
+
+export async function createAssetSeries(ctx: Context): Promise<void> {
+  const body = ctx.request.body as Record<string, unknown> | undefined
+  const name = sanitizeString(body?.name)
+  if (!name) {
+    ctx.throw(400, 'Series name is required')
+  }
+  const description = sanitizeString(body?.description)
+  try {
+    const created = await AssetSeriesModel.create({
+      name,
+      description: description ?? null,
+    })
+    const mapped = mapSeriesDocument(created.toObject() as SeriesDocumentLike, 0)
+    ctx.status = 201
+    ctx.body = mapped
+  } catch (error) {
+    if ((error as { code?: number } | null)?.code === 11000) {
+      ctx.throw(409, 'Series name already exists')
+    }
+    throw error
+  }
+}
+
+export async function listSeriesAssets(ctx: Context): Promise<void> {
+  const { id } = ctx.params
+  const targetSeries = sanitizeString(id)
+  if (!targetSeries) {
+    ctx.throw(400, 'Series identifier is required')
+  }
+  if (targetSeries !== 'none' && !Types.ObjectId.isValid(targetSeries)) {
+    ctx.throw(400, 'Invalid series identifier')
+  }
+  if (targetSeries !== 'none') {
+    const exists = await AssetSeriesModel.exists({ _id: targetSeries }).exec()
+    if (!exists) {
+      ctx.throw(404, 'Series not found')
+    }
+  }
+
+  const query = parsePagination(ctx.query as Record<string, string | string[] | undefined>)
+  query.seriesId = targetSeries === 'none' ? 'none' : targetSeries
+  let filter: Record<string, unknown>
+  try {
+    filter = await buildAssetFilter(query)
+  } catch (error) {
+    if ((error as { code?: string } | null)?.code === 'INVALID_SERIES_ID') {
+      ctx.throw(400, 'Invalid series identifier')
+    }
+    throw error
+  }
+  const skip = (query.page - 1) * query.pageSize
+  const [assets, total] = await Promise.all([
+    AssetModel.find(filter)
+      .populate('tags')
+      .populate('seriesId')
+      .skip(skip)
+      .limit(query.pageSize)
+      .sort({ createdAt: -1 })
+      .lean()
+      .exec() as Promise<LeanAsset[]>,
+    AssetModel.countDocuments(filter),
+  ])
+
+  const categoryLookup = await loadCategoryInfoMap(assets.map((asset) => asset.categoryId as Types.ObjectId))
+
+  ctx.body = {
+    data: assets.map((asset) => mapAssetDocument(asset, categoryLookup)),
+    page: query.page,
+    pageSize: query.pageSize,
+    total,
+  }
+}
+
+export async function deleteAssetSeries(ctx: Context): Promise<void> {
+  const { id } = ctx.params
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid series identifier')
+  }
+  const series = await AssetSeriesModel.findById(id).select('_id').lean().exec()
+  if (!series) {
+    ctx.throw(404, 'Series not found')
+  }
+  const updateResult = await AssetModel.updateMany({ seriesId: id }, { $set: { seriesId: null } }).exec()
+  await AssetSeriesModel.findByIdAndDelete(id).exec()
+  if ((updateResult.modifiedCount ?? 0) > 0) {
+    await refreshManifest()
+  }
+  ctx.status = 204
 }
 
 export async function createAssetTag(ctx: Context): Promise<void> {

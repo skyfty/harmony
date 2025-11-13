@@ -53,6 +53,22 @@
                 @update:model-value="handleTypeChange"
               />
             </v-col>
+            <v-col cols="12" md="6">
+              <SeriesSelector
+                :model-value="task.seriesId"
+                :series-options="seriesOptions"
+                :loading="loadingSeries"
+                label="资源系列"
+                clearable
+                allow-create
+                :create-series="uploadStore.createSeries"
+                @update:model-value="handleSeriesChange"
+                @series-created="handleSeriesCreate"
+              />
+              <div v-if="task.seriesName" class="text-caption text-medium-emphasis mt-1">
+                当前系列：{{ task.seriesName }}
+              </div>
+            </v-col>
             <v-col cols="12">
               <CategoryPathSelector
                 v-model="task.categoryId"
@@ -236,10 +252,11 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import type { AssetTag, AssetType, ResourceCategory } from '@/types'
+import type { AssetSeries, AssetTag, AssetType, ResourceCategory } from '@/types'
 import { useUploadStore, type UploadTask } from '@/stores/upload'
 import PreviewRenderer from './UploadTaskPreviewRenderer.vue'
 import CategoryPathSelector from '@/components/CategoryPathSelector.vue'
+import SeriesSelector from '@/components/SeriesSelector.vue'
 
 interface Props {
   task: UploadTask
@@ -254,6 +271,8 @@ const tagInput = ref<Array<AssetTag | string>>([...props.task.tags])
 const isUploading = computed(() => props.task.status === 'uploading')
 const categories = computed(() => uploadStore.categories)
 const loadingCategories = computed(() => uploadStore.loadingCategories)
+const seriesOptions = computed(() => uploadStore.seriesOptions)
+const loadingSeries = computed(() => uploadStore.loadingSeries)
 const previewBadge = computed(() => {
   switch (props.task.preview.kind) {
     case 'image':
@@ -440,6 +459,14 @@ function handleCategoryCreated(category: ResourceCategory): void {
   props.task.updatedAt = Date.now()
 }
 
+function handleSeriesChange(value: string | null): void {
+  uploadStore.updateTaskSeries(props.task.id, value)
+}
+
+function handleSeriesCreate(series: AssetSeries): void {
+  uploadStore.updateTaskSeries(props.task.id, series.id)
+}
+
 watch(
   () => [props.task.categoryId, categories.value],
   () => {
@@ -454,6 +481,7 @@ watch(
 )
 
 uploadStore.ensureCategoriesLoaded().catch((error: unknown) => console.warn('加载分类失败', error))
+uploadStore.ensureSeriesLoaded().catch((error: unknown) => console.warn('加载系列失败', error))
 
 function handleGenerateAiTags(): void {
   void uploadStore.generateTagsWithAi(props.task.id)

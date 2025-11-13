@@ -1,11 +1,13 @@
 import { ref, computed, reactive } from 'vue'
 import { defineStore } from 'pinia'
 import { AssetTypes, DEFAULT_ASSET_TYPE, normalizeAssetType } from '@harmony/schema/asset-types'
-import type { AssetTag, AssetType, ManagedAsset, ResourceCategory } from '@/types'
+import type { AssetSeries, AssetTag, AssetType, ManagedAsset, ResourceCategory } from '@/types'
 import {
   createAssetTags,
+  createAssetSeries as createSeriesApi,
   createResourceCategory,
   generateAssetTagSuggestions,
+  listAssetSeries,
   listAssetTags,
   listResourceCategories,
   searchResourceCategories,
@@ -35,6 +37,8 @@ export interface UploadTask {
   color: string
   categoryId: string | null
   categoryPathLabel: string
+  seriesId: string | null
+  seriesName: string
   dimensionLength: number | null
   dimensionWidth: number | null
   dimensionHeight: number | null
@@ -54,6 +58,8 @@ export interface UploadTask {
 export interface CreateTaskOptions {
   rehydrate?: boolean
 }
+
+const LAST_SELECTED_SERIES_KEY = 'harmony:uploader:last-series-id'
 
 const PREVIEW_TEXT_LIMIT = 100
 const controllerMap = new Map<string, AbortController>()
@@ -90,6 +96,37 @@ const TEXT_MIME_PREFIX = 'text/'
 
 const TEXT_EXTENSIONS = new Set(['txt', 'md', 'json', 'glsl', 'frag', 'vert', 'shader', 'csv'])
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tga', 'tif', 'tiff', 'svg'])
+
+function loadLastSelectedSeriesId(): string | null {
+  if (typeof window === 'undefined') {
+    return null
+  }
+  try {
+    const stored = window.localStorage.getItem(LAST_SELECTED_SERIES_KEY)
+    if (!stored || stored === 'null' || stored === 'undefined') {
+      return null
+    }
+    return stored
+  } catch (error) {
+    console.warn('[uploader] failed to load last series selection', error)
+    return null
+  }
+}
+
+function persistLastSelectedSeriesId(value: string | null): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+  try {
+    if (value) {
+      window.localStorage.setItem(LAST_SELECTED_SERIES_KEY, value)
+    } else {
+      window.localStorage.removeItem(LAST_SELECTED_SERIES_KEY)
+    }
+  } catch (error) {
+    console.warn('[uploader] failed to persist last series selection', error)
+  }
+}
 
 function generateId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -256,6 +293,10 @@ export const useUploadStore = defineStore('uploader-upload', () => {
   const loadingTags = ref(false)
   const categories = ref<ResourceCategory[]>([])
   const loadingCategories = ref(false)
+  const series = ref<AssetSeries[]>([])
+  const loadingSeries = ref(false)
+  const seriesLoaded = ref(false)
+  const lastSelectedSeriesId = ref<string | null>(loadLastSelectedSeriesId())
 
   const assetTypeOptions = computed(() =>
     AssetTypes.map((type) => ({
@@ -272,6 +313,10 @@ export const useUploadStore = defineStore('uploader-upload', () => {
           file: '文件',
         }[type] ?? type,
     })),
+  )
+
+  const seriesOptions = computed(() =>
+    [...series.value].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN')),
   )
 
   const activeTask = computed(() => tasks.value.find((task) => task.id === activeTaskId.value) ?? null)
@@ -302,6 +347,42 @@ export const useUploadStore = defineStore('uploader-upload', () => {
       }
     }
     return null
+  }
+
+  function findSeriesById(id: string | null): AssetSeries | null {
+    if (!id) {
+      return null
+    }
+    return series.value.find((entry) => entry.id === id) ?? null
+  }
+
+  function reconcileTaskSeries(task: UploadTask): void {
+    const matched = findSeriesById(task.seriesId)
+    task.seriesName = matched?.name ?? ''
+  }
+
+  function rememberSeriesSelection(id: string | null): void {
+    if (id) {
+      lastSelectedSeriesId.value = id
+      persistLastSelectedSeriesId(id)
+    } else {
+      lastSelectedSeriesId.value = null
+      persistLastSelectedSeriesId(null)
+    }
+  }
+
+  function pickLastSeries(): AssetSeries | null {
+    const stored = lastSelectedSeriesId.value
+    if (!stored) {
+      return null
+    }
+    const matched = findSeriesById(stored)
+    if (!matched) {
+      lastSelectedSeriesId.value = null
+      persistLastSelectedSeriesId(null)
+      return null
+    }
+    return matched
   }
 
   function pickFirstCategory(list: ResourceCategory[] = categories.value): ResourceCategory | null {
@@ -343,10 +424,60 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     await ensureCategoriesLoaded()
   }
 
+  async function ensureSeriesLoaded(): Promise<void> {
+    if (loadingSeries.value) {
+      return
+    }
+    if (seriesLoaded.value) {
+      return
+    }
+    loadingSeries.value = true
+    try {
+      const result = await listAssetSeries()
+      series.value = Array.isArray(result)
+        ? [...result].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+        : []
+      seriesLoaded.value = true
+      tasks.value.forEach((task) => {
+        reconcileTaskSeries(task)
+      })
+    } catch (error) {
+      console.warn('[uploader] failed to load series', error)
+    } finally {
+      loadingSeries.value = false
+    }
+  }
+
+  async function refreshSeries(): Promise<void> {
+    seriesLoaded.value = false
+    await ensureSeriesLoaded()
+  }
+
   async function createCategoryFromPath(segments: string[]): Promise<ResourceCategory> {
     const category = await createResourceCategory({ path: segments })
     await refreshCategories().catch((error) => console.warn('[uploader] failed to refresh categories after creation', error))
     return category
+  }
+
+  async function createSeries(payload: { name: string; description?: string | null }): Promise<AssetSeries> {
+    const trimmedName = (payload.name ?? '').trim()
+    if (!trimmedName.length) {
+      throw new Error('系列名称不能为空')
+    }
+    const duplicate = series.value.find((entry) => entry.name.trim().toLowerCase() === trimmedName.toLowerCase())
+    if (duplicate) {
+      throw new Error('系列名称已存在')
+    }
+    const created = await createSeriesApi({ name: trimmedName, description: payload.description ?? null })
+    series.value = [...series.value, created].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+    seriesLoaded.value = true
+    rememberSeriesSelection(created.id)
+    tasks.value.forEach((task) => {
+      if (task.seriesId === created.id) {
+        task.seriesName = created.name
+      }
+    })
+    return created
   }
 
   async function searchCategoryOptions(keyword: string): Promise<ResourceCategory[]> {
@@ -415,8 +546,10 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     }
     await ensureTagsLoaded().catch((error) => console.warn('[uploader] failed to preload tags', error))
     await ensureCategoriesLoaded().catch((error) => console.warn('[uploader] failed to preload categories', error))
+    await ensureSeriesLoaded().catch((error) => console.warn('[uploader] failed to preload series', error))
 
     const defaultCategory = pickFirstCategory()
+    const defaultSeries = pickLastSeries()
 
     files.forEach((file) => {
       const id = generateId()
@@ -432,8 +565,10 @@ export const useUploadStore = defineStore('uploader-upload', () => {
         progress: 0,
         tags: [],
         color: '',
-        categoryId: defaultCategory?.id ?? null,
-        categoryPathLabel: buildCategoryPathLabel(defaultCategory),
+    categoryId: defaultCategory?.id ?? null,
+    categoryPathLabel: buildCategoryPathLabel(defaultCategory),
+    seriesId: defaultSeries?.id ?? null,
+    seriesName: defaultSeries?.name ?? '',
         dimensionLength: null,
         dimensionWidth: null,
         dimensionHeight: null,
@@ -480,6 +615,16 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     })
     task.tags = resolved
     task.updatedAt = Date.now()
+  }
+
+  function updateTaskSeries(id: string, seriesId: string | null): void {
+    const task = findTask(id)
+    const normalized = typeof seriesId === 'string' ? seriesId.trim() : ''
+    const matched = normalized.length ? findSeriesById(normalized) : null
+    task.seriesId = matched ? matched.id : normalized.length ? normalized : null
+    task.seriesName = matched ? matched.name : normalized
+    task.updatedAt = Date.now()
+    rememberSeriesSelection(task.seriesId)
   }
 
   async function syncTagValues(id: string, values: Array<AssetTag | string>): Promise<void> {
@@ -610,6 +755,11 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     if (task.categoryId) {
       formData.append('categoryId', task.categoryId)
     }
+    if (task.seriesId) {
+      formData.append('seriesId', task.seriesId)
+    } else if (task.seriesId === null) {
+      formData.append('seriesId', '')
+    }
 
     try {
       const asset = await uploadAsset(formData, {
@@ -632,6 +782,11 @@ export const useUploadStore = defineStore('uploader-upload', () => {
         task.categoryPathLabel = asset.categoryPath.map((item) => item.name).join(' / ')
       } else {
         task.categoryPathLabel = buildCategoryPathLabel(matchedCategory)
+      }
+      task.seriesId = asset.seriesId ?? null
+      task.seriesName = asset.series?.name ?? asset.seriesName ?? ''
+      if (task.seriesId) {
+        rememberSeriesSelection(task.seriesId)
       }
     } catch (error) {
       if (controller.signal.aborted) {
@@ -723,17 +878,23 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     availableTags,
     categories,
     assetTypeOptions,
+    seriesOptions,
     loadingTags,
     loadingCategories,
+    loadingSeries,
     addFiles,
     setActiveTask,
     ensureTagsLoaded,
     ensureCategoriesLoaded,
+    ensureSeriesLoaded,
+    refreshSeries,
     refreshCategories,
     searchCategoryOptions,
     createCategoryFromPath,
+    createSeries,
     syncTagValues,
     updateTaskTags,
+    updateTaskSeries,
     refreshPreview,
     generateTagsWithAi,
     updateImageMetadata,
@@ -741,5 +902,6 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     startUpload,
     cancelUpload,
     removeTask,
+    lastSelectedSeriesId,
   }
 })

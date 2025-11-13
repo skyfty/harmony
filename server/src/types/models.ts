@@ -205,11 +205,19 @@ export interface AssetTagDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
+export interface AssetSeriesDocument extends Document<Types.ObjectId> {
+  name: string
+  description?: string | null
+  createdAt: Date
+  updatedAt: Date
+}
+
 export interface AssetDocument extends Document<Types.ObjectId> {
   name: string
   categoryId: Types.ObjectId
   type: AssetType
   tags: Types.ObjectId[]
+  seriesId?: Types.ObjectId | null
   size: number
   color?: string | null
   dimensionLength?: number | null

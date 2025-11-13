@@ -5,6 +5,7 @@ import type {
   AssetSummary as SchemaAssetSummary,
   AssetUploadResponse as SchemaAssetUploadResponse,
   AssetTagSummary as SchemaAssetTagSummary,
+  AssetSeries as SchemaAssetSeries,
 } from '@harmony/schema/asset-api'
 
 export interface RoleSummary {
@@ -48,6 +49,8 @@ export type AssetCategoryPathItem = SchemaAssetCategoryPathItem
 export type ResourceCategory = SchemaAssetCategory
 
 export type AssetTagSummary = SchemaAssetTagSummary
+
+export type AssetSeries = SchemaAssetSeries
 
 export interface AssetTag extends AssetTagSummary {
   description?: string | null

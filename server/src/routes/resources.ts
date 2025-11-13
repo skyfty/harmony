@@ -1,6 +1,7 @@
 import Router from 'koa-router'
 import { authMiddleware } from '@/middleware/auth'
 import {
+  createAssetSeries,
   createAssetCategory,
   createAssetTag,
   deleteAsset,
@@ -9,6 +10,7 @@ import {
   downloadAsset,
   getAsset,
   getAssetCategoryChildren,
+  deleteAssetSeries,
   getAssetCategoryDescendants,
   getAssetCategoryPath,
   getAssetManifest,
@@ -16,6 +18,8 @@ import {
   listCategoryAssets,
   listAssetTags,
   listAssets,
+  listAssetSeries,
+  listSeriesAssets,
   listResourceCategories,
   searchAssetCategories,
   refreshAssetManifest,
@@ -56,6 +60,18 @@ resourceRouter.put(
   updateAssetCategory,
 )
 resourceRouter.delete('/categories/:id', deleteAssetCategory)
+resourceRouter.get('/series', listAssetSeries)
+resourceRouter.post(
+  '/series',
+  koaBody({
+    json: true,
+    multipart: false,
+    urlencoded: true,
+  }),
+  createAssetSeries,
+)
+resourceRouter.get('/series/:id/assets', listSeriesAssets)
+resourceRouter.delete('/series/:id', deleteAssetSeries)
 resourceRouter.get('/directories', getProjectDirectories)
 resourceRouter.get('/assets', listAssets)
 resourceRouter.get('/assets/:id', getAsset)

@@ -12,6 +12,7 @@ export type {
   AssetDirectory,
   AssetManifest,
   AssetManifestEntry,
+  AssetSeries,
   AssetSummary,
   AssetTag,
   AssetTagSummary,

@@ -15,6 +15,7 @@ const assetSchema = new Schema<AssetDocument>(
       type: [{ type: Schema.Types.ObjectId, ref: 'AssetTag' }],
       default: [],
     },
+    seriesId: { type: Schema.Types.ObjectId, ref: 'AssetSeries', default: null },
     size: { type: Number, default: 0 },
     color: { type: String, default: null },
     dimensionLength: { type: Number, default: null },
@@ -41,5 +42,6 @@ const assetSchema = new Schema<AssetDocument>(
 assetSchema.index({ categoryId: 1, createdAt: -1 })
 assetSchema.index({ type: 1, createdAt: -1 })
 assetSchema.index({ tags: 1 })
+assetSchema.index({ seriesId: 1 })
 
 export const AssetModel = model<AssetDocument>('Asset', assetSchema)
