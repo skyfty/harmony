@@ -209,9 +209,10 @@
             </v-col>
           </v-row>
         </v-col>
-        <v-col cols="12" md="5">
-    
-          <PreviewRenderer :task="task" />
+        <v-col cols="12" md="5" class="task-preview-col d-flex">
+          <div class="task-preview-wrapper">
+            <PreviewRenderer :task="task" />
+          </div>
         </v-col>
       </v-row>
     </v-card-text>
@@ -575,5 +576,25 @@ function handleDescriptionBlur(): void {
 }
 .task-description {
   margin-bottom: 8px;
+}
+
+.task-preview-col {
+  margin-top: 12px;
+}
+
+@media (min-width: 960px) {
+  .task-preview-col {
+    margin-top: 0;
+  }
+}
+
+.task-preview-wrapper {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 320px;
+}
+
+.task-preview-wrapper :deep(.preview-renderer) {
+  flex: 1 1 auto;
 }
 </style>

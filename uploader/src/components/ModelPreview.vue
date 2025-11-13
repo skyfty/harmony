@@ -201,6 +201,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .model-preview {
   width: 100%;
+  height: 100%;
   min-height: 320px;
   border-radius: 12px;
   overflow: hidden;
