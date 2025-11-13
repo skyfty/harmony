@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { Splitpanes, Pane } from 'splitpanes'
+import 'splitpanes/dist/splitpanes.css'
 import { useAiAssistantStore } from '@/stores/aiAssistantStore'
 
 defineProps<{
@@ -126,141 +128,146 @@ function handleSuggestionClick(text: string): void {
 
 <template>
   <div class="ai-chat-panel">
-    <div ref="scrollerRef" class="chat-scroll">
-      <div v-if="!messages.length" class="chat-empty">
-        <v-icon size="28" color="primary">mdi-robot-outline</v-icon>
-        <p class="chat-empty-title">Chat with the AI Assistant</p>
-        <p class="chat-empty-subtitle">Enter your request or ideas and let the assistant help you create scenes.</p>
-      </div>
-      <template v-else>
-        <div v-for="message in messages" :key="message.id" class="chat-message" :class="[`role-${message.role}`, { 'has-error': message.status === 'error' }]">
-          <div class="message-bubble">
-            <div class="message-meta">
-              <span class="message-author">{{ message.role === 'user' ? 'Me' : 'AI Assistant' }}</span>
-              <span class="message-time">{{ formatTimestamp(message.createdAt) }}</span>
-            </div>
-            <div v-if="message.text" class="message-text">{{ message.text }}</div>
-            <div v-if="message.imageDataUrl || message.imageUrl" class="message-image">
-              <img :src="message.imageDataUrl ?? message.imageUrl ?? ''" alt="聊天图片" />
-            </div>
-            <div v-if="message.status === 'pending' || message.status === 'sending'" class="message-spinner">
-              <v-progress-circular indeterminate size="18" color="primary" />
-            </div>
-            <div v-if="message.status === 'error' && message.error" class="message-error">
-              {{ message.error }}
-            </div>
-            <div v-if="message.suggestions?.length" class="message-suggestions">
-              <v-chip
-                v-for="suggestion in message.suggestions"
-                :key="suggestion"
-                class="message-suggestion-chip"
-                color="primary"
-                variant="tonal"
-                size="small"
-                @click="handleSuggestionClick(suggestion)"
-              >
-                {{ suggestion }}
-              </v-chip>
-            </div>
-            <div v-if="message.sceneChange?.description" class="message-change-description">
-              {{ message.sceneChange.description }}
-            </div>
-            <div
-              v-if="message.role === 'assistant' && message.sceneChange"
-              class="message-change-actions"
-            >
-              <v-btn
-                class="message-change-button"
-                color="secondary"
-                variant="tonal"
-                size="small"
-                :loading="message.sceneChangeApplying"
-                :disabled="message.sceneChangeApplied || message.sceneChangeApplying"
-                @click="handleApplySceneChange(message.id)"
-              >
-                <template v-if="message.sceneChangeApplied">
-                  <v-icon start>mdi-check</v-icon>
-                  已应用
-                </template>
-                <template v-else>
-                  <v-icon start>mdi-wrench</v-icon>
-                  应用到场景
-                </template>
-              </v-btn>
-              <v-chip
-                v-if="message.sceneChangeApplied && !message.sceneChangeApplying"
-                class="message-change-status"
-                color="success"
-                size="x-small"
-                label
-                variant="flat"
-              >
-                已同步
-              </v-chip>
-            </div>
-            <div v-if="message.sceneChangeError" class="message-change-error">
-              {{ message.sceneChangeError }}
+    <Splitpanes class="chat-split">
+      <Pane :size="18" :min-size="22">
+        <div class="chat-interaction">
+          <div class="chat-input">
+            <div class="chat-composer" :class="{ 'is-multiline': isTextareaExpanded }">
+              <div class="chat-textarea-wrapper">
+                <v-textarea
+                  ref="textareaRef"
+                  v-model="messageInput"
+                  class="chat-textarea"
+                  placeholder="Ask the AI assistant — press Ctrl+Enter to send"
+                  rows="1"
+                  row-height="18"
+                  auto-grow
+                  max-rows="6"
+                  density="comfortable"
+                  hide-details
+                  @keydown="handleKeydown"
+                />
+              </div>
+              <div class="chat-controls">
+                <div class="chat-model-info" title="当前使用的大模型">
+                  <v-icon size="16" color="primary">mdi-robot-outline</v-icon>
+                  <span class="chat-model-name">{{ activeModelLabel }}</span>
+                </div>
+                <v-btn
+                  class="chat-action chat-action--send"
+                  variant="text"
+                  density="comfortable"
+                  size="small"
+                  icon="mdi-send"
+                  aria-label="发送消息"
+                  :disabled="!messageInput.trim() || isAwaitingResponse"
+                  @click="handleSendText"
+                />
+              </div>
             </div>
           </div>
-        </div>
-      </template>
-    </div>
 
-    <v-divider class="chat-divider" />
-
-    <div class="chat-input">
-      <div class="chat-composer" :class="{ 'is-multiline': isTextareaExpanded }">
-        <div class="chat-textarea-wrapper">
-          <v-textarea
-            ref="textareaRef"
-            v-model="messageInput"
-            class="chat-textarea"
-            placeholder="Ask the AI assistant — press Ctrl+Enter to send"
-            rows="1"
-            row-height="18"
-            auto-grow
-            max-rows="6"
-            density="comfortable"
-            hide-details
-            @keydown="handleKeydown"
-          />
-        </div>
-        <div class="chat-controls">
-          <div class="chat-model-info" title="当前使用的大模型">
-            <v-icon size="16" color="primary">mdi-robot-outline</v-icon>
-            <span class="chat-model-name">{{ activeModelLabel }}</span>
+          <div v-if="errorMessage" class="chat-error" @click="clearLocalError">
+            <v-alert
+              type="error"
+              density="comfortable"
+              :text="errorMessage ?? ''"
+              closable
+              @click:close="clearLocalError"
+            />
           </div>
-          <v-btn
-            class="chat-action chat-action--send"
-            variant="text"
-            density="comfortable"
-            size="small"
-            icon="mdi-send"
-            aria-label="发送消息"
-            :disabled="!messageInput.trim() || isAwaitingResponse"
-            @click="handleSendText"
+
+          <v-progress-linear
+            v-if="store.isAwaitingResponse"
+            class="chat-progress"
+            color="primary"
+            height="3"
+            indeterminate
           />
         </div>
-      </div>
-    </div>
-
-    <div v-if="errorMessage" class="chat-error" @click="clearLocalError">
-      <v-alert
-        type="error"
-        density="comfortable"
-        :text="errorMessage ?? ''"
-        closable
-        @click:close="clearLocalError"
-      />
-    </div>
-
-    <v-progress-linear
-      v-if="store.isAwaitingResponse"
-      class="chat-progress"
-      color="primary"
-      height="3"
-      indeterminate
-    />
+      </Pane>
+      <Pane :size="62" :min-size="38">
+        <div class="chat-history">
+          <div ref="scrollerRef" class="chat-scroll">
+            <div v-if="!messages.length" class="chat-empty">
+              <v-icon size="28" color="primary">mdi-robot-outline</v-icon>
+              <p class="chat-empty-title">Chat with the AI Assistant</p>
+              <p class="chat-empty-subtitle">Enter your request or ideas and let the assistant help you create scenes.</p>
+            </div>
+            <template v-else>
+              <div
+                v-for="message in messages"
+                :key="message.id"
+                class="chat-message"
+                :class="[`role-${message.role}`, { 'has-error': message.status === 'error' }]"
+              >
+                <div class="message-bubble">
+                  <div v-if="message.text" class="message-text">{{ message.text }}</div>
+                  <div v-if="message.imageDataUrl || message.imageUrl" class="message-image">
+                    <img :src="message.imageDataUrl ?? message.imageUrl ?? ''" alt="聊天图片" />
+                  </div>
+                  <div v-if="message.status === 'error' && message.error" class="message-error">
+                    {{ message.error }}
+                  </div>
+                  <div v-if="message.suggestions?.length" class="message-suggestions">
+                    <v-chip
+                      v-for="suggestion in message.suggestions"
+                      :key="suggestion"
+                      class="message-suggestion-chip"
+                      color="primary"
+                      variant="tonal"
+                      size="small"
+                      @click="handleSuggestionClick(suggestion)"
+                    >
+                      {{ suggestion }}
+                    </v-chip>
+                  </div>
+                  <div v-if="message.sceneChange?.description" class="message-change-description">
+                    {{ message.sceneChange.description }}
+                  </div>
+                  <div
+                    v-if="message.role === 'assistant' && message.sceneChange"
+                    class="message-change-actions"
+                  >
+                    <v-btn
+                      class="message-change-button"
+                      color="secondary"
+                      variant="tonal"
+                      size="small"
+                      :loading="message.sceneChangeApplying"
+                      :disabled="message.sceneChangeApplied || message.sceneChangeApplying"
+                      @click="handleApplySceneChange(message.id)"
+                    >
+                      <template v-if="message.sceneChangeApplied">
+                        <v-icon start>mdi-check</v-icon>
+                        已应用
+                      </template>
+                      <template v-else>
+                        <v-icon start>mdi-wrench</v-icon>
+                        应用到场景
+                      </template>
+                    </v-btn>
+                    <v-chip
+                      v-if="message.sceneChangeApplied && !message.sceneChangeApplying"
+                      class="message-change-status"
+                      color="success"
+                      size="x-small"
+                      label
+                      variant="flat"
+                    >
+                      已同步
+                    </v-chip>
+                  </div>
+                  <div v-if="message.sceneChangeError" class="message-change-error">
+                    {{ message.sceneChangeError }}
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </Pane>
+    </Splitpanes>
   </div>
 </template>
 
@@ -273,13 +280,34 @@ function handleSuggestionClick(text: string): void {
   min-height: 0;
 }
 
+.chat-split {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.chat-split :deep(.splitpanes__pane) {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-history {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: rgba(13, 18, 26, 0.32);
+}
+
 .chat-scroll {
   flex: 1;
   overflow-y: auto;
-  padding: 10px 18px 6px;
+  padding: 0px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 1px;
 }
 
 .chat-empty {
@@ -317,10 +345,8 @@ function handleSuggestionClick(text: string): void {
 
 .message-bubble {
   max-width: 68%;
-  padding: 12px 14px;
-  border-radius: 14px;
-  background: rgba(25, 31, 40, 0.9);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 1px 4px;
+  border-radius: 5px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -344,7 +370,7 @@ function handleSuggestionClick(text: string): void {
 .message-text {
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.5;
 }
 
@@ -406,12 +432,24 @@ function handleSuggestionClick(text: string): void {
   color: #ff8a80;
 }
 
-.chat-divider {
-  margin: 0 0 6px;
+.chat-interaction {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: rgba(18, 22, 30, 0.4);
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
 }
 
 .chat-input {
-  padding: 0px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .chat-composer {
@@ -419,21 +457,33 @@ function handleSuggestionClick(text: string): void {
   flex-direction: column;
   gap: 6px;
   background: rgba(22, 27, 37, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 5px;
-  padding: 2px 4px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .chat-composer.is-multiline {
-  padding-bottom: 14px;
 }
 
 .chat-textarea-wrapper {
   position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
 }
 
 .chat-textarea {
   background: transparent;
+  flex: 1;
+}
+
+.chat-textarea :deep(.v-input__control) {
+  flex: 1;
+  height: 100%;
+}
+
+.chat-textarea :deep(.v-field) {
+  height: 100%;
 }
 
 .chat-textarea :deep(.v-field__overlay) {
@@ -450,6 +500,9 @@ function handleSuggestionClick(text: string): void {
   line-height: 1.58;
   background: transparent;
   color: inherit;
+  flex: 1;
+  height: 100% !important;
+  min-height: 0 !important;
 }
 
 .chat-controls {
@@ -457,6 +510,8 @@ function handleSuggestionClick(text: string): void {
   align-items: center;
   justify-content: space-between;
   gap: 4px;
+  padding: 4px 6px 2px;
+  margin-top: auto;
 }
 
 .chat-model-info {
@@ -495,14 +550,26 @@ function handleSuggestionClick(text: string): void {
 }
 
 .chat-error {
-  padding: 0 12px 8px;
+  padding: 0;
   cursor: pointer;
 }
 
 .chat-progress {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
+  align-self: stretch;
+  margin-top: auto;
+}
+
+.chat-split :deep(.splitpanes__splitter) {
+  width: 6px;
+  background-color: rgba(255, 255, 255, 0.04);
+  border-left: 1px solid rgba(255, 255, 255, 0.02);
+  border-right: 1px solid rgba(0, 0, 0, 0.38);
+  cursor: col-resize;
+  transition: background-color 120ms ease;
+}
+
+.chat-split :deep(.splitpanes__splitter:hover),
+.chat-split :deep(.splitpanes__splitter:focus-visible) {
+  background-color: rgba(0, 169, 255, 0.25);
 }
 </style>

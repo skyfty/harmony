@@ -11,7 +11,6 @@ import WarpGatePanel from '@/components/inspector/WarpGatePanel.vue'
 import GroundPanel from '@/components/inspector/GroundPanel.vue'
 import BehaviorPanel from '@/components/inspector/BehaviorPanel.vue'
 import DisplayBoardPanel from '@/components/inspector/DisplayBoardPanel.vue'
-import AIChatPanel from '@/components/layout/AIChatPanel.vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 import type { BehaviorEventType, SceneBehavior, SceneNodeComponentState } from '@harmony/schema'
@@ -51,38 +50,6 @@ const emit = defineEmits<{
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
-
-type InspectorViewTab = 'inspector' | 'assistant'
-
-const TAB_STORAGE_KEY = 'harmony:inspector-panel:active-tab'
-
-function restoreActiveTab(): InspectorViewTab {
-  if (typeof window === 'undefined') {
-    return 'inspector'
-  }
-  const stored = window.localStorage.getItem(TAB_STORAGE_KEY)
-  return stored === 'assistant' ? 'assistant' : 'inspector'
-}
-
-function persistActiveTab(tab: InspectorViewTab): void {
-  if (typeof window === 'undefined') {
-    return
-  }
-  window.localStorage.setItem(TAB_STORAGE_KEY, tab)
-}
-
-const activeTab = ref<InspectorViewTab>(restoreActiveTab())
-
-function selectTab(tab: InspectorViewTab): void {
-  if (activeTab.value === tab) {
-    return
-  }
-  activeTab.value = tab
-}
-
-watch(activeTab, (tab) => {
-  persistActiveTab(tab)
-})
 
 const nodeName = ref('')
 const materialDetailsTargetId = ref<string | null>(null)
@@ -343,30 +310,8 @@ function handleAddComponent(type: string) {
       <v-btn icon="mdi-window-minimize"  size="small" variant="text" @click="emit('collapse')" />
     </v-toolbar>
     <v-divider />
-    <div class="panel-tabs">
-      <v-btn
-        class="panel-tab"
-        :class="{ 'is-active': activeTab === 'inspector' }"
-        variant="text"
-        size="small"
-        @click="selectTab('inspector')"
-      >
-        Inspector
-      </v-btn>
-
-      <v-btn
-        class="panel-tab"
-        :class="{ 'is-active': activeTab === 'assistant' }"
-        variant="text"
-        size="small"
-        @click="selectTab('assistant')"
-      >
-        AI Chat
-      </v-btn>
-    </div>
     <div class="panel-content">
-      <template v-if="activeTab === 'inspector'">
-        <div class="panel-body" v-if="selectedNode">
+      <div class="panel-body" v-if="selectedNode">
           <div style="display: flex; align-items: center; gap: 0.2rem; padding: 0.2rem 0.7rem;">
             <v-icon color="primary" size="40">{{ inspectorIcon }}</v-icon>
             <v-text-field
@@ -441,10 +386,6 @@ function handleAddComponent(type: string) {
         <div v-else class="placeholder-text">
           Select an object to inspect its properties.
         </div>
-      </template>
-      <div v-else class="assistant-panel">
-        <AIChatPanel :capture-viewport-screenshot="props.captureViewportScreenshot" />
-      </div>
     </div>
   </v-card>
 </template>
@@ -465,46 +406,11 @@ function handleAddComponent(type: string) {
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.35);
 }
 
-.panel-tabs {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px 2px;
-  background-color: rgba(255, 255, 255, 0.02);
-}
-
-.panel-tab {
-  flex: 1 1 0;
-  border-radius: 10px;
-  font-size: 0.78rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  color: rgba(233, 236, 241, 0.7);
-  transition: background-color 0.18s ease, color 0.18s ease;
-}
-
-.panel-tab.is-active {
-  background-color: rgba(0, 169, 255, 0.18);
-  color: #f5fbff;
-  box-shadow: inset 0 0 0 1px rgba(0, 169, 255, 0.24);
-}
-
-.panel-tab :deep(.v-btn__content) {
-  justify-content: center;
-}
-
 .panel-content {
   flex: 1;
   display: flex;
   flex-direction: column;
   min-height: 0;
-}
-
-.assistant-panel {
-  flex: 1;
-  display: flex;
-  min-height: 0;
-  padding: 6px 8px 10px;
 }
 
 .panel-toolbar {
