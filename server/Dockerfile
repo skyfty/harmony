@@ -32,6 +32,8 @@ RUN addgroup -S harmony && adduser -S harmony -G harmony
 # Copy only needed production node_modules and dist
 COPY --from=build /app/server/node_modules ./node_modules
 COPY --from=build /app/server/dist ./dist
+# If npm installed @harmony/schema as a symlink to /app/schema, ensure the target exists at runtime
+COPY --from=build /app/schema /app/schema
 COPY server/package.json ./package.json
 # Copy any runtime assets (uploads will be a volume)
 VOLUME ["/app/uploads"]
