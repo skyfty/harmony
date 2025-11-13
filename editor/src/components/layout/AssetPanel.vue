@@ -1336,6 +1336,10 @@ function assetPreviewUrl(asset: ProjectAsset): string | undefined {
       return asset.downloadUrl
     }
   }
+
+  if (asset.type === 'model' && asset.thumbnail) {
+    return asset.thumbnail
+  }
   return undefined
 }
 
