@@ -272,7 +272,7 @@ function enterNode(category: ResourceCategory): void {
   navigationStack.value = [...navigationStack.value, category]
 }
 
-function selectCategoryById(id: string | null): void {
+function selectCategoryById(id: string | null, options?: { keepOpen?: boolean }): void {
   if (!id) {
     selectedId.value = null
     emit('update:modelValue', null)
@@ -286,16 +286,17 @@ function selectCategoryById(id: string | null): void {
   const label = getPathLabelById(id)
   emit('category-selected', { id, label })
   clearSearchState()
-  menuOpen.value = false
+  if (!options?.keepOpen) {
+    menuOpen.value = false
+  }
 }
 
 function handleTreeItemClick(category: ResourceCategory): void {
   const canExpand = Array.isArray(category.children) && category.children.length > 0
+  selectCategoryById(category.id, { keepOpen: canExpand })
   if (canExpand) {
     enterNode(category)
-    return
   }
-  selectCategoryById(category.id)
 }
 
 function handleSearchSelect(option: CategoryOption): void {
