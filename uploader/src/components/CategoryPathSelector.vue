@@ -229,7 +229,7 @@ onBeforeUnmount(() => {
     hide-details="auto"
     :density="dense ? 'compact' : 'comfortable'"
     class="category-selector"
-    @update:model-value="handleChange"
+    @update:modelValue="handleChange"
     @update:search="scheduleSearch"
   >
     <template #no-data>

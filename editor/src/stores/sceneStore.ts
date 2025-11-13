@@ -98,6 +98,13 @@ import {
   serializeBehaviorPrefab,
   type BehaviorPrefabData,
 } from '@/utils/behaviorPrefab'
+import {
+  AI_MODEL_MESH_USERDATA_KEY,
+  createBufferGeometryFromMetadata,
+  extractAiModelMeshMetadataFromUserData,
+  normalizeAiModelMeshInput,
+  type AiModelMeshMetadata,
+} from '@/utils/aiModelMesh'
 
 import {
   cloneAssetList,
@@ -2345,6 +2352,58 @@ function clonePlainRecord(source?: Record<string, unknown> | null): Record<strin
   return hasEntries ? clone : undefined
 }
 
+function cloneAiModelMeshMetadata(metadata: AiModelMeshMetadata): AiModelMeshMetadata {
+  return {
+    version: metadata.version,
+    name: metadata.name,
+    vertices: [...metadata.vertices],
+    indices: [...metadata.indices],
+  }
+}
+
+function createAiModelMeshMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({
+    color: '#d0d0d0',
+    roughness: 0.85,
+    metalness: 0.1,
+  })
+}
+
+function createRuntimeMeshFromMetadata(nodeName: string | undefined, metadata: AiModelMeshMetadata): THREE.Mesh {
+  const geometry = createBufferGeometryFromMetadata(metadata)
+  const material = createAiModelMeshMaterial()
+  const mesh = new THREE.Mesh(geometry, material)
+  const label = nodeName && nodeName.trim().length ? nodeName : metadata.name ?? 'AI Generated Mesh'
+  mesh.name = label
+  prepareRuntimeObjectForNode(mesh)
+  return mesh
+}
+
+function ensureAiModelMeshRuntime(node: SceneNode): boolean {
+  const metadata = extractAiModelMeshMetadataFromUserData(node.userData)
+  if (!metadata) {
+    return false
+  }
+  if (getRuntimeObject(node.id)) {
+    return false
+  }
+  try {
+    const runtime = createRuntimeMeshFromMetadata(node.name, metadata)
+    runtime.userData = {
+      ...(runtime.userData ?? {}),
+      [AI_MODEL_MESH_USERDATA_KEY]: cloneAiModelMeshMetadata(metadata),
+    }
+    tagObjectWithNodeId(runtime, node.id)
+    registerRuntimeObject(node.id, runtime)
+    componentManager.attachRuntime(node, runtime)
+    componentManager.syncNode(node)
+    return true
+  } catch (error) {
+    console.warn('Failed to rebuild AI generated mesh runtime', node.id, error)
+    return false
+  }
+}
+
 function evaluateViewPointAttributes(
   userData: Record<string, unknown> | undefined,
 ): {
@@ -4457,6 +4516,8 @@ export const useSceneStore = defineStore('scene', {
             componentManager.attachRuntime(node, clonedObject)
           }
         })
+
+        this.rebuildGeneratedMeshRuntimes()
 
         const nodeIds = flattenNodeIds(this.nodes)
         const missingRuntimeObjects = nodeIds.filter((id) => !runtimeObjectRegistry.has(id))
@@ -7341,6 +7402,61 @@ export const useSceneStore = defineStore('scene', {
       return node
     },
 
+    createAiGeneratedMeshNode(payload: { name?: string | null; vertices: number[]; indices: number[] } | AiModelMeshMetadata) {
+      const metadata: AiModelMeshMetadata = 'version' in payload
+        ? {
+            version: payload.version,
+            name: payload.name,
+            vertices: [...payload.vertices],
+            indices: [...payload.indices],
+          }
+        : normalizeAiModelMeshInput({
+            name: payload.name,
+            vertices: payload.vertices,
+            indices: payload.indices,
+          })
+      const fallbackName = typeof (payload as { name?: unknown }).name === 'string'
+        ? ((payload as { name?: string }).name as string)
+        : undefined
+      const resolvedName = metadata.name ?? fallbackName
+      const runtime = createRuntimeMeshFromMetadata(resolvedName, metadata)
+      const runtimeMetadata = cloneAiModelMeshMetadata(metadata)
+      runtime.userData = {
+        ...(runtime.userData ?? {}),
+        [AI_MODEL_MESH_USERDATA_KEY]: runtimeMetadata,
+      }
+      const nodeMetadata = cloneAiModelMeshMetadata(metadata)
+      const nodeName = resolvedName ?? 'AI Generated Mesh'
+      const node = this.addSceneNode({
+        nodeType: 'Mesh',
+        object: runtime,
+        name: nodeName,
+        userData: {
+          [AI_MODEL_MESH_USERDATA_KEY]: nodeMetadata,
+        },
+      })
+      return node
+    },
+
+    rebuildGeneratedMeshRuntimes() {
+      let created = 0
+      const visitNodes = (list: SceneNode[]) => {
+        list.forEach((node) => {
+          if (ensureAiModelMeshRuntime(node)) {
+            created += 1
+          }
+          if (node.children?.length) {
+            visitNodes(node.children)
+          }
+        })
+      }
+      visitNodes(this.nodes)
+      if (created > 0) {
+        this.nodes = [...this.nodes]
+      }
+      return created
+    },
+
     generateGroupNodeName() {
       const used = new Set<number>()
 
@@ -8372,6 +8488,7 @@ export const useSceneStore = defineStore('scene', {
       applyCurrentSceneMeta(this, sceneDocument)
       applySceneAssetState(this, sceneDocument)
       this.nodes = cloneSceneNodes(sceneDocument.nodes)
+  this.rebuildGeneratedMeshRuntimes()
       this.groundSettings = cloneGroundSettings(sceneDocument.groundSettings)
       this.setSelection(sceneDocument.selectedNodeIds ?? (sceneDocument.selectedNodeId ? [sceneDocument.selectedNodeId] : []))
       this.camera = cloneCameraState(sceneDocument.camera)
@@ -8497,6 +8614,7 @@ export const useSceneStore = defineStore('scene', {
         applyCurrentSceneMeta(this, scene)
         applySceneAssetState(this, scene)
         this.nodes = cloneSceneNodes(scene.nodes)
+  this.rebuildGeneratedMeshRuntimes()
         this.setSelection(scene.selectedNodeIds ?? (scene.selectedNodeId ? [scene.selectedNodeId] : []))
         this.camera = cloneCameraState(scene.camera)
         this.viewportSettings = cloneViewportSettings(scene.viewportSettings)
@@ -8535,6 +8653,7 @@ export const useSceneStore = defineStore('scene', {
         applyCurrentSceneMeta(this, fallback)
         applySceneAssetState(this, fallback)
         this.nodes = cloneSceneNodes(fallback.nodes)
+  this.rebuildGeneratedMeshRuntimes()
         this.setSelection(fallback.selectedNodeIds ?? (fallback.selectedNodeId ? [fallback.selectedNodeId] : []))
         this.camera = cloneCameraState(fallback.camera)
         this.panelVisibility = normalizePanelVisibilityState(fallback.panelVisibility)
@@ -8724,6 +8843,7 @@ export const useSceneStore = defineStore('scene', {
           applyCurrentSceneMeta(this, fallback)
           applySceneAssetState(this, fallback)
           this.nodes = cloneSceneNodes(fallback.nodes)
+          this.rebuildGeneratedMeshRuntimes()
           this.setSelection(fallback.selectedNodeIds ?? (fallback.selectedNodeId ? [fallback.selectedNodeId] : []))
           this.camera = cloneCameraState(fallback.camera)
           this.viewportSettings = cloneViewportSettings(fallback.viewportSettings)
@@ -8741,6 +8861,7 @@ export const useSceneStore = defineStore('scene', {
         useAssetCacheStore().recalculateUsage(this.nodes)
         componentManager.reset()
         componentManager.syncScene(this.nodes)
+        this.rebuildGeneratedMeshRuntimes()
       } finally {
         this.isSceneReady = true
       }

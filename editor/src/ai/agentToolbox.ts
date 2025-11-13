@@ -1,6 +1,7 @@
 import { useSceneStore } from '@/stores/sceneStore'
 import type { AiAssistantToolDefinition, AiAssistantToolInvocation } from '@/types/ai-assistant'
 import type { Vector3Like } from '@harmony/schema'
+import { normalizeAiModelMeshInput } from '@/utils/aiModelMesh'
 
 type SceneEditorStore = ReturnType<typeof useSceneStore>
 
@@ -84,6 +85,40 @@ function ensureArrayOfStrings(value: unknown): string[] | undefined {
 }
 
 const tools: SceneAgentTool[] = [
+  {
+    definition: {
+      name: 'createModelMesh',
+      description: '根据提供的顶点和索引数据创建一个可渲染的三维模型网格。',
+      parameters: {
+        type: 'object',
+        required: ['name', 'vertices', 'indices'],
+        properties: {
+          name: { type: 'string', description: '要创建的模型名称。' },
+          vertices: {
+            type: 'array',
+            description: '浮点数组，按照 x、y、z 顺序提供顶点坐标。',
+            items: { type: 'number' },
+          },
+          indices: {
+            type: 'array',
+            description: '整数数组，按照三个索引一组描述三角形。',
+            items: { type: 'integer' },
+          },
+        },
+      },
+    },
+    execute: (store, args) => {
+      if (!isRecord(args)) {
+        throw new Error('需要提供包含名称、顶点和索引的参数对象。')
+      }
+      const metadata = normalizeAiModelMeshInput({
+        name: args.name,
+        vertices: args.vertices,
+        indices: args.indices,
+      })
+      store.createAiGeneratedMeshNode(metadata)
+    },
+  },
   {
     definition: {
       name: 'update_node_properties',

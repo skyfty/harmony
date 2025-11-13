@@ -32,14 +32,6 @@ function clearLocalError(): void {
   store.clearError()
 }
 
-function formatTimestamp(isoString: string): string {
-  const date = new Date(isoString)
-  if (Number.isNaN(date.getTime())) {
-    return ''
-  }
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
-
 async function scrollToBottom(): Promise<void> {
   await nextTick()
   const container = scrollerRef.value
