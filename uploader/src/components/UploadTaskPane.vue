@@ -26,6 +26,20 @@
           :title="task.status === 'success' ? '重新上传' : '开始上传'"
           @click="startUpload"
         />
+
+        <v-tooltip text="使用 AI 生成标签" location="top">
+          <template #activator="{ props: tooltipProps }">
+            <v-btn
+              v-bind="tooltipProps"
+              icon="mdi-robot-outline"
+              variant="text"
+              color="primary"
+              :loading="task.aiTagLoading"
+              :disabled="task.aiTagLoading || (!task.name && !task.description)"
+              @click.stop="handleGenerateAiTags"
+            />
+          </template>
+        </v-tooltip>
         <v-btn
           icon="mdi-close"
           color="default"
@@ -191,30 +205,7 @@
                 class="tag-selector"
                 @update:model-value="handleTagInput"
               >
-                <template #append-inner>
-                  <v-tooltip text="使用 AI 生成标签" location="top">
-                    <template #activator="{ props: tooltipProps }">
-                      <v-btn
-                        v-bind="tooltipProps"
-                        class="tag-selector__ai-btn"
-                        icon="mdi-sparkles"
-                        variant="text"
-                        size="small"
-                        color="primary"
-                        :loading="task.aiTagLoading"
-                        :disabled="task.aiTagLoading || (!task.name && !task.description)"
-                        @click.stop="handleGenerateAiTags"
-                      />
-                    </template>
-                  </v-tooltip>
-                </template>
               </v-combobox>
-              <div v-if="task.aiTagError" class="tag-selector__message tag-selector__message--error">
-                {{ task.aiTagError }}
-              </div>
-              <div v-else-if="task.aiSuggestedTags.length" class="tag-selector__message tag-selector__message--hint">
-                推荐：{{ task.aiSuggestedTags.join('、') }}
-              </div>
             </v-col>
           </v-row>
         </v-col>
@@ -529,10 +520,25 @@ function handleDescriptionBlur(): void {
   display: flex;
   align-items: center;
   gap: 4px;
+  overflow: visible;
 }
 
 .tag-selector__ai-btn {
   margin-inline-start: 4px;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: var(--v-theme-primary);
+  background-color: color-mix(in srgb, var(--v-theme-primary) 14%, transparent);
+}
+
+.tag-selector__ai-btn :deep(.v-icon) {
+  color: currentColor;
+}
+
+.tag-selector__ai-btn.v-btn--disabled {
+  color: rgba(0, 0, 0, 0.38);
+  background-color: color-mix(in srgb, rgba(0, 0, 0, 0.38) 12%, transparent);
 }
 
 .tag-selector__message {

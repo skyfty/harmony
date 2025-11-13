@@ -13,9 +13,9 @@
       variant="outlined"
       density="comfortable"
       hide-details="auto"
-      return-object="false"
+  :return-object="false"
       v-model:search="search"
-      @update:model-value="handleUpdate"
+      @update:modelValue="handleUpdate"
     >
       <template #item="{ item, props }">
         <v-list-item v-bind="props">
@@ -123,8 +123,9 @@ watch(
 
 const searchLabel = computed(() => search.value.trim())
 
-function handleUpdate(value: string | null): void {
-  const normalized = typeof value === 'string' && value.trim().length ? value.trim() : null
+function handleUpdate(value: string | AssetSeries | null): void {
+  const raw = typeof value === 'object' && value !== null ? value.id : value
+  const normalized = typeof raw === 'string' && raw.trim().length ? raw.trim() : null
   internalValue.value = normalized
   emit('update:modelValue', normalized)
 }
