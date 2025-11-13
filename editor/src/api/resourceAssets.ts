@@ -1,5 +1,6 @@
 import { buildServerApiUrl } from './serverApiConfig'
 import type { ProjectAsset } from '@/types/project-asset'
+import type { ResourceCategory } from '@/types/resource-category'
 import {
   mapServerAssetToProjectAsset,
   type ServerAssetDto,
@@ -27,6 +28,8 @@ export interface AssetTagSummary {
   description?: string
 }
 
+export interface ResourceCategorySearchResult extends ResourceCategory {}
+
 function normalizeTagSummary(tag: ServerAssetTagDto): AssetTagSummary {
   return {
     id: tag.id,
@@ -53,6 +56,134 @@ function buildError(message: string, response?: Response): Error {
     return new Error(message)
   }
   return new Error(`${message}（${response.status}）`)
+}
+
+function collectCategoryMap(target: Map<string, ResourceCategory>, categories: ResourceCategory[]): void {
+  categories.forEach((category) => {
+    if (!category || typeof category.id !== 'string') {
+      return
+    }
+    target.set(category.id, category)
+    if (Array.isArray(category.children) && category.children.length > 0) {
+      collectCategoryMap(target, category.children)
+    }
+  })
+}
+
+export async function fetchResourceCategories(): Promise<ResourceCategory[]> {
+  const url = buildServerApiUrl('/resources/categories')
+  const authStore = useAuthStore()
+  const headers = new Headers({ Accept: 'application/json' })
+  const authorization = authStore.authorizationHeader
+  if (authorization) {
+    headers.set('Authorization', authorization)
+  }
+
+  const response = await fetch(url, {
+    method: 'GET',
+    credentials: 'include',
+    headers,
+    cache: 'no-cache',
+  })
+  if (!response.ok) {
+    throw buildError('获取资源分类失败', response)
+  }
+  const payload = await parseJsonResponse<ResourceCategory[]>(response)
+  if (!Array.isArray(payload)) {
+    throw new Error('资源分类数据格式无效')
+  }
+  return payload.filter((category): category is ResourceCategory => !!category && typeof category.id === 'string')
+}
+
+export async function searchResourceCategories(keyword: string, limit = 20): Promise<ResourceCategorySearchResult[]> {
+  const trimmed = keyword.trim()
+  if (!trimmed.length) {
+    return []
+  }
+  const url = buildServerApiUrl('/resources/categories/search')
+  const authStore = useAuthStore()
+  const headers = new Headers({ Accept: 'application/json' })
+  const authorization = authStore.authorizationHeader
+  if (authorization) {
+    headers.set('Authorization', authorization)
+  }
+
+  const response = await fetch(url + `?keyword=${encodeURIComponent(trimmed)}&limit=${limit}`, {
+    method: 'GET',
+    credentials: 'include',
+    headers,
+    cache: 'no-cache',
+  })
+  if (!response.ok) {
+    throw buildError('搜索资源分类失败', response)
+  }
+  const payload = await parseJsonResponse<ResourceCategory[]>(response)
+  if (!Array.isArray(payload)) {
+    return []
+  }
+  const unique = new Map<string, ResourceCategory>()
+  collectCategoryMap(unique, payload)
+  return Array.from(unique.values())
+}
+
+export interface CreateResourceCategoryPayload {
+  path?: string[]
+  segments?: string[]
+  names?: string[]
+  name?: string
+  parentId?: string | null
+  description?: string | null
+}
+
+export async function createResourceCategory(payload: CreateResourceCategoryPayload): Promise<ResourceCategory> {
+  const url = buildServerApiUrl('/resources/categories')
+  const authStore = useAuthStore()
+  const headers = new Headers({
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  })
+  const authorization = authStore.authorizationHeader
+  if (authorization) {
+    headers.set('Authorization', authorization)
+  }
+
+  const body: Record<string, unknown> = {}
+  if (Array.isArray(payload.path)) {
+    body.path = payload.path
+  } else if (Array.isArray(payload.segments)) {
+    body.path = payload.segments
+  } else if (Array.isArray(payload.names)) {
+    body.path = payload.names
+  }
+  if (typeof payload.name === 'string') {
+    body.name = payload.name
+  }
+  if (payload.parentId === null) {
+    body.parentId = null
+  } else if (typeof payload.parentId === 'string') {
+    body.parentId = payload.parentId
+  }
+  if (typeof payload.description === 'string') {
+    body.description = payload.description
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    const errorBody = await parseJsonResponse<{ message?: string } | string | null>(response).catch(() => null)
+    const message = typeof errorBody === 'string' ? errorBody : errorBody?.message
+    throw new Error(message || `创建分类失败（${response.status}）`)
+  }
+
+  const payloadBody = await parseJsonResponse<ResourceCategory>(response)
+  if (!payloadBody || typeof payloadBody.id !== 'string') {
+    throw new Error('服务器返回的分类数据无效')
+  }
+  return payloadBody
 }
 
 export async function generateAssetTagSuggestions(payload: GenerateAssetTagPayload): Promise<GenerateAssetTagResult> {
@@ -186,6 +317,8 @@ export interface UploadAssetOptions {
   type: ProjectAsset['type']
   description?: string
   tagIds?: string[]
+  categoryId?: string | null
+  categoryPathSegments?: string[]
   color?: string | null
   dimensionLength?: number | null
   dimensionWidth?: number | null
@@ -220,6 +353,15 @@ export async function uploadAssetToServer(options: UploadAssetOptions): Promise<
   }
   if (typeof options.imageHeight === 'number' && Number.isFinite(options.imageHeight)) {
     formData.append('imageHeight', Math.round(options.imageHeight).toString())
+  }
+  if (typeof options.categoryId === 'string' && options.categoryId.trim().length) {
+    formData.append('categoryId', options.categoryId.trim())
+  }
+  if (Array.isArray(options.categoryPathSegments)) {
+    options.categoryPathSegments
+      .map((segment) => (typeof segment === 'string' ? segment.trim() : ''))
+      .filter((segment) => segment.length > 0)
+      .forEach((segment) => formData.append('categoryPathSegments', segment))
   }
   if (Array.isArray(options.tagIds)) {
     options.tagIds

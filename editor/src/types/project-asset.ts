@@ -5,6 +5,9 @@ export type ServerAssetType = AssetType
 export interface ProjectAsset {
   id: string
   name: string
+  categoryId?: string
+  categoryPath?: { id: string; name: string }[]
+  categoryPathString?: string
   type: ServerAssetType | 'behavior'
   description?: string
   downloadUrl: string

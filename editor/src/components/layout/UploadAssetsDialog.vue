@@ -3,11 +3,14 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { ProjectAsset } from '@/types/project-asset'
+import type { ResourceCategory } from '@/types/resource-category'
+import CategoryPathSelector from '@/components/common/CategoryPathSelector.vue'
 import {
   createAssetTag,
   fetchAssetTags,
   generateAssetTagSuggestions,
   mapServerAssetToProjectAsset,
+  fetchResourceCategories,
   uploadAssetToServer,
 } from '@/api/resourceAssets'
 
@@ -44,6 +47,8 @@ type UploadAssetEntry = {
   asset: ProjectAsset
   name: string
   description: string
+  categoryId: string | null
+  categoryPathLabel: string
   color: string
   colorHexInput: string
   dimensionLength: number | null
@@ -83,6 +88,11 @@ const serverTags = ref<TagOption[]>([])
 const serverTagsLoaded = ref(false)
 const serverTagsLoading = ref(false)
 const serverTagsError = ref<string | null>(null)
+
+const resourceCategories = ref<ResourceCategory[]>([])
+const resourceCategoriesLoaded = ref(false)
+const resourceCategoriesLoading = ref(false)
+const resourceCategoriesError = ref<string | null>(null)
 
 const uploadTagOptions = computed<TagOption[]>(() => {
   const base: TagOption[] = Array.isArray(props.tagOptions) ? props.tagOptions : []
@@ -330,6 +340,72 @@ async function loadServerTags(options: { force?: boolean } = {}) {
   }
 }
 
+async function loadResourceCategories(options: { force?: boolean } = {}) {
+  const force = options.force ?? false
+  if (resourceCategoriesLoading.value) return
+  if (resourceCategoriesLoaded.value && !force) return
+  resourceCategoriesLoading.value = true
+  resourceCategoriesError.value = null
+  try {
+    const categories = await fetchResourceCategories()
+    resourceCategories.value = Array.isArray(categories) ? categories : []
+    resourceCategoriesLoaded.value = true
+  } catch (error) {
+    resourceCategoriesError.value = (error as Error).message ?? '分类加载失败'
+  } finally {
+    resourceCategoriesLoading.value = false
+  }
+}
+
+function findCategoryById(categories: ResourceCategory[], targetId: string | null): ResourceCategory | null {
+  if (!targetId) return null
+  for (const category of categories) {
+    if (!category || typeof category.id !== 'string') continue
+    if (category.id === targetId) {
+      return category
+    }
+    if (Array.isArray(category.children) && category.children.length) {
+      const match = findCategoryById(category.children, targetId)
+      if (match) return match
+    }
+  }
+  return null
+}
+
+function buildCategoryLabel(category: ResourceCategory | null): string {
+  if (!category) return ''
+  if (Array.isArray(category.path) && category.path.length) {
+    const segments = category.path
+      .map((item) => (item?.name ?? '').trim())
+      .filter((segment) => segment.length > 0)
+    if (segments.length) {
+      return segments.join(' / ')
+    }
+  }
+  return category.name ?? ''
+}
+
+function updateEntryCategoryLabel(entry: UploadAssetEntry): void {
+  if (!entry) return
+  const category = findCategoryById(resourceCategories.value, entry.categoryId)
+  entry.categoryPathLabel = buildCategoryLabel(category)
+}
+
+function handleEntryCategoryChange(entry: UploadAssetEntry, value: string | null): void {
+  const normalized = typeof value === 'string' ? value.trim() : ''
+  entry.categoryId = normalized.length ? normalized : null
+  updateEntryCategoryLabel(entry)
+}
+
+function handleEntryCategoryCreated(entry: UploadAssetEntry, category: ResourceCategory): void {
+  const label = buildCategoryLabel(category ?? null)
+  handleEntryCategoryChange(entry, category?.id ?? null)
+  if (label) {
+    entry.categoryPathLabel = label
+  }
+  void loadResourceCategories({ force: true })
+}
+
 // Initialize entries when dialog opens
 watch(
   () => internalOpen.value,
@@ -337,11 +413,21 @@ watch(
     if (open) {
       uploadEntries.value = props.assets.map((asset) => {
         const normalizedColor = normalizeHexColor(asset.color ?? null)
+        const initialCategoryId = typeof asset.categoryId === 'string' ? asset.categoryId : null
+        const initialCategoryLabel = asset.categoryPathString
+          ?? (Array.isArray(asset.categoryPath)
+            ? asset.categoryPath
+                .map((item) => (item?.name ?? '').trim())
+                .filter((segment) => segment.length > 0)
+                .join(' / ')
+            : '')
         return {
           assetId: asset.id,
           asset,
           name: asset.name,
           description: asset.description ?? '',
+          categoryId: initialCategoryId,
+          categoryPathLabel: initialCategoryLabel ?? '',
           color: normalizedColor ?? '',
           colorHexInput: formatHexInputDisplay(normalizedColor),
           dimensionLength: typeof asset.dimensionLength === 'number' ? asset.dimensionLength : null,
@@ -357,12 +443,23 @@ watch(
       })
       uploadSelectedTagIds.value = []
       uploadError.value = null
-      void nextTick(() => loadServerTags())
+      void nextTick(() => {
+        void loadServerTags()
+        void loadResourceCategories()
+      })
     } else if (!uploadSubmitting.value) {
       resetUploadState()
     }
   },
   { immediate: false }
+)
+
+watch(
+  () => resourceCategories.value,
+  () => {
+    uploadEntries.value.forEach((entry) => updateEntryCategoryLabel(entry))
+  },
+  { deep: true },
 )
 
 async function createUploadFileFromCache(asset: ProjectAsset): Promise<File> {
@@ -446,6 +543,11 @@ async function ensureUploadTagIds(): Promise<string[]> {
 
 async function submitUpload() {
   if (uploadSubmitting.value || !uploadEntries.value.length) return
+  const missingCategory = uploadEntries.value.find((entry) => !entry.categoryId || !entry.categoryId.trim().length)
+  if (missingCategory) {
+    uploadError.value = '请为所有资源选择分类'
+    return
+  }
   uploadSubmitting.value = true
   uploadError.value = null
   try {
@@ -474,6 +576,7 @@ async function submitUpload() {
           type: asset.type,
           description: uploadDescription.length ? uploadDescription : undefined,
           tagIds,
+          categoryId: entry.categoryId,
           color: normalizedColor,
           dimensionLength,
           dimensionWidth,
@@ -527,6 +630,15 @@ async function submitUpload() {
         <v-alert v-if="uploadError" type="error" variant="tonal" density="comfortable" class="mb-4">
           {{ uploadError }}
         </v-alert>
+        <v-alert
+          v-if="resourceCategoriesError"
+          type="warning"
+          variant="tonal"
+          density="comfortable"
+          class="mb-4"
+        >
+          {{ resourceCategoriesError }}
+        </v-alert>
         <div class="upload-section">
           <div v-for="entry in uploadEntries" :key="entry.assetId" class="upload-entry">
             <div class="upload-entry__header">
@@ -542,6 +654,29 @@ async function submitUpload() {
                 variant="outlined"
                 :disabled="uploadSubmitting || entry.status === 'success'"
               />
+            </div>
+            <div class="upload-entry__category-row">
+              <CategoryPathSelector
+                :model-value="entry.categoryId"
+                :categories="resourceCategories"
+                label="资产分类"
+                placeholder="选择或创建分类"
+                :disabled="uploadSubmitting || entry.status === 'success'"
+                dense
+                @update:model-value="(value) => handleEntryCategoryChange(entry, value)"
+                @category-created="(category) => handleEntryCategoryCreated(entry, category)"
+              />
+              <v-progress-circular
+                v-if="resourceCategoriesLoading"
+                indeterminate
+                size="20"
+                width="2"
+                color="primary"
+                class="ml-2"
+              />
+            </div>
+            <div v-if="entry.categoryPathLabel" class="upload-entry__category-label">
+              当前分类：{{ entry.categoryPathLabel }}
             </div>
             <div class="upload-entry__color-row">
               <v-text-field
@@ -670,6 +805,20 @@ async function submitUpload() {
 
 .upload-entry__name-input :deep(.v-input) {
   margin-bottom: 0;
+}
+
+.upload-entry__category-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  flex-wrap: nowrap;
+}
+
+.upload-entry__category-label {
+  margin-top: 4px;
+  font-size: 0.85rem;
+  color: #cfd8dc;
 }
 
 .upload-entry__color-row {

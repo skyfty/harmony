@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { AssetTypes } from '@harmony/schema/asset-types'
+import CategoryPathSelector from '@/components/CategoryPathSelector.vue'
 import type { AssetTag, AssetType, ManagedAsset, ResourceCategory } from '@/types'
 
 const props = defineProps<{
@@ -15,6 +16,7 @@ const emit = defineEmits<{
   (event: 'update:modelValue', value: boolean): void
   (event: 'submit', payload: { mode: 'create' | 'edit'; formData: FormData; assetId?: string }): void
   (event: 'request-manage-tags'): void
+  (event: 'category-created', category: ResourceCategory): void
 }>()
 
 const ASSET_TYPE_LABELS: Record<AssetType, string> = {
@@ -50,17 +52,22 @@ const dialogTitle = computed(() => (props.mode === 'edit' ? '编辑资产' : '�
 const isCreateMode = computed(() => props.mode === 'create')
 const selectedAsset = computed(() => props.asset ?? null)
 
-const categoryOptions = computed(() => props.categories.map((category) => ({
-  title: category.name,
-  value: category.id,
-  type: category.type,
-})))
+
+function pickFirstCategoryId(categories: ResourceCategory[]): string | null {
+  for (const category of categories) {
+    if (!category || typeof category.id !== 'string') {
+      continue
+    }
+    return category.id
+  }
+  return null
+}
 
 function initializeForm(): void {
   const asset = selectedAsset.value
   form.name = asset?.name ?? ''
   form.type = asset?.type ?? 'model'
-  form.categoryId = asset?.categoryId ?? props.categories[0]?.id ?? null
+  form.categoryId = asset?.categoryId ?? pickFirstCategoryId(props.categories) ?? null
   form.tagIds = asset?.tagIds ? [...asset.tagIds] : []
   form.description = asset?.description ?? null
   fileField.value = null
@@ -88,6 +95,16 @@ watch(
   },
 )
 
+watch(
+  () => props.categories,
+  (next) => {
+    if (!form.categoryId) {
+      form.categoryId = pickFirstCategoryId(next)
+    }
+  },
+  { deep: true },
+)
+
 function close(): void {
   emit('update:modelValue', false)
 }
@@ -110,6 +127,11 @@ function appendMetadata(formData: FormData): void {
       formData.append('tagIds', tagId)
     }
   })
+}
+
+function handleCategoryCreated(category: ResourceCategory): void {
+  emit('category-created', category)
+  form.categoryId = category.id
 }
 
 function handleFileInput(files?: File[] | File | null): void {
@@ -221,15 +243,12 @@ defineExpose({
               variant="outlined"
               class="flex-grow-1"
             />
-            <v-select
+            <CategoryPathSelector
               v-model="form.categoryId"
-              :items="categoryOptions"
-              item-title="title"
-              item-value="value"
+              :categories="props.categories"
               label="资产分类"
-              density="comfortable"
-              variant="outlined"
               class="flex-grow-1"
+              @category-created="handleCategoryCreated"
             />
           </div>
           <v-autocomplete

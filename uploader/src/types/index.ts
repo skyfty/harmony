@@ -1,4 +1,11 @@
 import type { AssetType as SchemaAssetType } from '@harmony/schema/asset-types'
+import type {
+  AssetCategory as SchemaAssetCategory,
+  AssetCategoryPathItem as SchemaAssetCategoryPathItem,
+  AssetSummary as SchemaAssetSummary,
+  AssetUploadResponse as SchemaAssetUploadResponse,
+  AssetTagSummary as SchemaAssetTagSummary,
+} from '@harmony/schema/asset-api'
 
 export interface RoleSummary {
   id: string
@@ -36,10 +43,11 @@ export interface AuthProfileResponse {
 
 export type AssetType = SchemaAssetType
 
-export interface AssetTagSummary {
-  id: string
-  name: string
-}
+export type AssetCategoryPathItem = SchemaAssetCategoryPathItem
+
+export type ResourceCategory = SchemaAssetCategory
+
+export type AssetTagSummary = SchemaAssetTagSummary
 
 export interface AssetTag extends AssetTagSummary {
   description?: string | null
@@ -61,32 +69,6 @@ export interface GenerateAssetTagResult {
   modelTraceId?: string
 }
 
-export interface ManagedAsset {
-  id: string
-  name: string
-  categoryId: string
-  type: AssetType
-  tags: AssetTagSummary[]
-  tagIds: string[]
-  color?: string | null
-  dimensionLength?: number | null
-  dimensionWidth?: number | null
-  dimensionHeight?: number | null
-  sizeCategory?: string | null
-  imageWidth?: number | null
-  imageHeight?: number | null
-  size: number
-  url: string
-  downloadUrl: string
-  previewUrl?: string | null
-  thumbnailUrl?: string | null
-  description?: string | null
-  originalFilename?: string | null
-  mimeType?: string | null
-  createdAt: string
-  updatedAt: string
-}
+export type ManagedAsset = SchemaAssetSummary
 
-export interface UploadAssetResponse {
-  asset: ManagedAsset
-}
+export type UploadAssetResponse = SchemaAssetUploadResponse

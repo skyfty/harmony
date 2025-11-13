@@ -1,4 +1,11 @@
 import type { AssetType as SchemaAssetType } from '@harmony/schema/asset-types'
+import type {
+  AssetCategory as SchemaAssetCategory,
+  AssetCategoryPathItem as SchemaAssetCategoryPathItem,
+  AssetSummary as SchemaAssetSummary,
+  AssetUploadResponse as SchemaAssetUploadResponse,
+  AssetTagSummary as SchemaAssetTagSummary,
+} from '@harmony/schema/asset-api'
 
 export interface PermissionSummary {
   id: string
@@ -96,12 +103,9 @@ export interface PagedResponse<T> {
   total: number
 }
 
-export interface ResourceCategory {
-  id: string
-  name: string
-  type: AssetType
-  description?: string
-}
+export type AssetCategoryPathItem = SchemaAssetCategoryPathItem
+
+export type ResourceCategory = SchemaAssetCategory
 
 export interface ProjectAssetSummary {
   id: string
@@ -123,10 +127,7 @@ export interface ProjectDirectory {
 
 export type AssetType = SchemaAssetType
 
-export interface AssetTagSummary {
-  id: string
-  name: string
-}
+export type AssetTagSummary = SchemaAssetTagSummary
 
 export interface AssetTag extends AssetTagSummary {
   description?: string | null
@@ -134,29 +135,9 @@ export interface AssetTag extends AssetTagSummary {
   updatedAt?: string
 }
 
-export interface ManagedAsset {
-  id: string
-  name: string
-  categoryId: string
-  type: AssetType
-  tags: AssetTagSummary[]
-  tagIds: string[]
-  size: number
-  url: string
-  downloadUrl: string
-  previewUrl?: string | null
-  thumbnailUrl?: string | null
-  description?: string | null
-  originalFilename?: string | null
-  mimeType?: string | null
-  metadata?: Record<string, unknown>
-  createdAt: string
-  updatedAt: string
-}
+export type ManagedAsset = SchemaAssetSummary
 
-export interface UploadAssetResponse {
-  asset: ManagedAsset
-}
+export type UploadAssetResponse = SchemaAssetUploadResponse
 
 export interface AssetMutationPayload {
   name?: string
@@ -164,4 +145,5 @@ export interface AssetMutationPayload {
   description?: string | null
   tagIds?: string[]
   categoryId?: string | null
+  categoryPathSegments?: string[]
 }

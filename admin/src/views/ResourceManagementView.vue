@@ -54,29 +54,88 @@ const typeOptions: Array<{ label: string; value: AssetType }> = AssetTypes.map((
   label: ASSET_TYPE_LABELS[type] ?? type,
 }))
 
-const CATEGORY_ICON_MAP: Record<AssetType, string> = {
-  model: 'mdi-cube-outline',
-  image: 'mdi-image',
-  texture: 'mdi-texture-box',
-  material: 'mdi-palette',
-  mesh: 'mdi-vector-triangle',
-  prefab: 'mdi-cube-scan',
-  video: 'mdi-video',
-  file: 'mdi-file-outline',
-}
-
-function resolveCategoryIcon(type: AssetType): string {
-  return CATEGORY_ICON_MAP[type] ?? 'mdi-file-outline'
-}
-
 const canFilterByTags = computed(() => tags.value.length > 0)
+
+type CategoryTreeItem = {
+  id: string
+  title: string
+  pathString: string
+  children?: CategoryTreeItem[]
+}
+
+const categoryTreeSelection = ref<string[]>([])
+
+function categoryToTreeItem(category: ResourceCategory): CategoryTreeItem {
+  const pathNames = Array.isArray(category.path) && category.path.length
+    ? category.path.map((item) => item?.name ?? '').filter((name) => name.length > 0)
+    : [category.name]
+  return {
+    id: category.id,
+    title: category.name,
+    pathString: pathNames.join(' / '),
+    children: Array.isArray(category.children) && category.children.length
+      ? category.children.map((child) => categoryToTreeItem(child))
+      : undefined,
+  }
+}
+
+const categoryTreeItems = computed<CategoryTreeItem[]>(() => categories.value.map((category) => categoryToTreeItem(category)))
+
+function pickFirstCategoryId(list: ResourceCategory[]): string | null {
+  for (const category of list) {
+    if (category && typeof category.id === 'string') {
+      return category.id
+    }
+    if (Array.isArray(category.children) && category.children.length) {
+      const childId = pickFirstCategoryId(category.children)
+      if (childId) {
+        return childId
+      }
+    }
+  }
+  return null
+}
+
+function categoryExists(categoryId: string | null, list: ResourceCategory[] = categories.value): boolean {
+  if (!categoryId) {
+    return false
+  }
+  for (const category of list) {
+    if (category.id === categoryId) {
+      return true
+    }
+    if (Array.isArray(category.children) && category.children.length) {
+      if (categoryExists(categoryId, category.children)) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+watch(
+  () => filter.categoryId,
+  (value) => {
+    categoryTreeSelection.value = value ? [value] : []
+  },
+  { immediate: true },
+)
+
+function handleTreeSelection(selection: string[]): void {
+  const next = selection[0] ?? null
+  if (next !== filter.categoryId) {
+    filter.categoryId = next
+  }
+}
 
 async function ensureCategories(): Promise<void> {
   try {
     const result = await listResourceCategories()
     categories.value = result
-    if (!filter.categoryId && result.length) {
-      filter.categoryId = result[0]!.id
+    if (filter.categoryId && !categoryExists(filter.categoryId, result)) {
+      filter.categoryId = pickFirstCategoryId(result)
+    } else if (!filter.categoryId && result.length) {
+      filter.categoryId = pickFirstCategoryId(result)
     }
   } catch (error) {
     console.error('Failed to load categories', error)
@@ -189,6 +248,11 @@ function handleRefresh(): void {
   })
 }
 
+function handleCategoryCreated(category: ResourceCategory): void {
+  filter.categoryId = category.id
+  void ensureCategories()
+}
+
 watch(
   () => filter.categoryId,
   () => {
@@ -231,22 +295,40 @@ onMounted(() => {
   <div>
     <v-row>
       <v-col cols="12" md="3">
-        <v-card elevation="3">
+        <v-card elevation="3" class="category-panel">
           <v-card-title class="text-h6 font-weight-medium">资源分类</v-card-title>
           <v-divider class="my-2" />
           <v-list density="compact" nav>
             <v-list-item
-              v-for="category in categories"
-              :key="category.id"
-              :title="category.name"
-              :active="category.id === filter.categoryId"
-              @click="filter.categoryId = category.id"
-            >
-              <template #prepend>
-                <v-icon :icon="resolveCategoryIcon(category.type)" />
-              </template>
-            </v-list-item>
+              :active="!filter.categoryId"
+              prepend-icon="mdi-view-grid"
+              title="全部资产"
+              @click="filter.categoryId = null"
+            />
           </v-list>
+          <v-divider class="my-2" />
+          <v-treeview
+            :items="categoryTreeItems"
+            :selected="categoryTreeSelection"
+            activatable
+            item-value="id"
+            item-title="title"
+            density="compact"
+            open-on-click
+            :return-object="false"
+            class="category-tree"
+            @update:selected="handleTreeSelection"
+          >
+            <template #prepend>
+              <v-icon icon="mdi-folder" size="small" class="mr-1" />
+            </template>
+            <template #label="{ item }">
+              <div class="d-flex flex-column">
+                <span>{{ item.title }}</span>
+                <span class="text-caption text-medium-emphasis">{{ item.pathString }}</span>
+              </div>
+            </template>
+          </v-treeview>
         </v-card>
       </v-col>
       <v-col cols="12" md="9">
@@ -395,7 +477,22 @@ onMounted(() => {
       :asset="selectedAsset"
       @submit="handleAssetSubmit"
       @request-manage-tags="tagManagerVisible = true"
+      @category-created="handleCategoryCreated"
     />
     <AssetTagManagerDialog v-model="tagManagerVisible" @updated="ensureTags" />
   </div>
 </template>
+
+<style scoped>
+.category-panel {
+  max-height: calc(100vh - 160px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.category-tree {
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+</style>

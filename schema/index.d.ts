@@ -8,6 +8,7 @@ export type { AssetType } from './asset-types'
 export { AssetTypes, DEFAULT_ASSET_TYPE, isAssetType, normalizeAssetType } from './asset-types'
 export type {
   AssetCategory,
+  AssetCategoryPathItem,
   AssetDirectory,
   AssetManifest,
   AssetManifestEntry,

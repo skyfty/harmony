@@ -11,19 +11,30 @@ export interface AssetTag extends AssetTagSummary {
   updatedAt?: string
 }
 
+export interface AssetCategoryPathItem {
+  id: string
+  name: string
+}
+
 export interface AssetCategory {
   id: string
   name: string
-  type: AssetType
   description?: string | null
+  parentId?: string | null
+  depth: number
+  path: AssetCategoryPathItem[]
+  hasChildren?: boolean
   createdAt?: string
   updatedAt?: string
+  children?: AssetCategory[]
 }
 
 export interface AssetSummary {
   id: string
   name: string
   categoryId: string
+  categoryPath: AssetCategoryPathItem[]
+  categoryPathString: string
   type: AssetType
   tags: AssetTagSummary[]
   tagIds: string[]
@@ -51,6 +62,9 @@ export interface AssetManifestEntry {
   id: string
   name: string
   type: AssetType
+  categoryId?: string
+  categoryPath?: AssetCategoryPathItem[]
+  categoryPathString?: string
   tags: AssetTagSummary[]
   tagIds: string[]
   color?: string | null

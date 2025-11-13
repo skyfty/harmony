@@ -16,9 +16,22 @@ import fs from 'fs-extra'
 import { nanoid } from 'nanoid'
 import { Types } from 'mongoose'
 import type { AssetCategoryDocument, AssetDocument, AssetTagDocument } from '@/types/models'
-import { AssetCategoryModel } from '@/models/AssetCategory'
+import { AssetCategoryModel, normalizeCategoryName as normalizeCategoryLabel } from '@/models/AssetCategory'
 import { AssetModel } from '@/models/Asset'
 import { AssetTagModel } from '@/models/AssetTag'
+import type { CategoryNodeDto, CategoryPathItemDto, CategoryTreeNode } from '@/services/assetCategoryService'
+import {
+  deleteCategoryStrict,
+  ensureCategoryConsistency,
+  ensureCategoryPath,
+  getCategoryPathItems,
+  getCategoryTree,
+  listCategoryChildren as listCategoryChildrenService,
+  listDescendantCategoryIds,
+  sanitizeCategorySegments,
+  searchCategories,
+  updateCategoryInfo,
+} from '@/services/assetCategoryService'
 import { appConfig } from '@/config/env'
 const MANIFEST_FILENAME = 'asset-manifest.json'
 const THUMBNAIL_PREFIX = 'thumb-'
@@ -34,16 +47,27 @@ const ASSET_COLORS: Record<string, string> = {
   file: '#6d4c41',
 }
 
-const DEFAULT_CATEGORIES: Array<{ name: string; type: AssetDocument['type'] }> = [
-  { name: 'Models', type: 'model' },
-  { name: 'Meshes', type: 'mesh' },
-  { name: 'Images', type: 'image' },
-  { name: 'Textures', type: 'texture' },
-  { name: 'Materials', type: 'material' },
-  { name: 'Prefabs', type: 'prefab' },
-  { name: 'Videos', type: 'video' },
-  { name: 'Files', type: 'file' },
+const DEFAULT_CATEGORY_PATHS: string[][] = [
+  ['Models'],
+  ['Meshes'],
+  ['Images'],
+  ['Textures'],
+  ['Materials'],
+  ['Prefabs'],
+  ['Videos'],
+  ['Files'],
 ]
+
+const CATEGORY_FALLBACK_BY_TYPE: Record<AssetDocument['type'], string[]> = {
+  model: ['Models'],
+  mesh: ['Meshes'],
+  image: ['Images'],
+  texture: ['Textures'],
+  material: ['Materials'],
+  prefab: ['Prefabs'],
+  video: ['Videos'],
+  file: ['Files'],
+}
 
 type UploadedFile = {
   filepath: string
@@ -58,8 +82,11 @@ type LeanAsset = AssetDocument & { tags?: AssetTagDocument[] }
 type AssetCategoryData = {
   _id: Types.ObjectId
   name: AssetCategoryDocument['name']
-  type: AssetCategoryDocument['type']
   description?: AssetCategoryDocument['description']
+  parentId?: Types.ObjectId | null
+  depth: number
+  pathIds: Types.ObjectId[]
+  pathNames: string[]
   createdAt: Date
   updatedAt: Date
 }
@@ -99,6 +126,8 @@ type AssetListQuery = {
   types?: AssetDocument['type'][]
   tagIds?: string[]
   categoryId?: string
+  categoryPath?: string[]
+  includeDescendants?: boolean
 }
 
 type AssetMutationPayload = {
@@ -107,6 +136,7 @@ type AssetMutationPayload = {
   description?: string | null
   tagIds?: string[]
   categoryId?: string | null
+  categoryPathSegments?: string[]
   color?: string | null
   dimensionLength?: number | null
   dimensionWidth?: number | null
@@ -158,6 +188,137 @@ function ensureArrayString(input: unknown): string[] {
     }
   }
   return []
+}
+
+function normalizeCategoryPathSegments(segments: string[] | undefined | null): string[] {
+  if (!segments || !segments.length) {
+    return []
+  }
+  const normalized = segments
+    .map((segment) => (typeof segment === 'string' ? segment.trim() : ''))
+    .filter((segment) => segment.length > 0)
+  if (!normalized.length) {
+    return []
+  }
+  const first = normalized[0]?.toLowerCase()
+  if (first && (first === '全部' || first === 'all' || first === 'root')) {
+    normalized.shift()
+  }
+  return normalized
+}
+
+async function findCategoryByPath(segments: string[]): Promise<AssetCategoryDocument | null> {
+  const normalized = normalizeCategoryPathSegments(segments)
+  if (!normalized.length) {
+    return null
+  }
+  const normalizedNames = normalized.map((segment) => normalizeCategoryLabel(segment))
+  const depth = normalized.length - 1
+  const candidates = await AssetCategoryModel.find({
+    normalizedName: normalizedNames[normalizedNames.length - 1]!,
+    depth,
+  }).exec()
+  for (const candidate of candidates) {
+    if (candidate.pathNames.length !== normalized.length) {
+      continue
+    }
+    const matches = candidate.pathNames.every((name, index) => normalizeCategoryLabel(name) === normalizedNames[index])
+    if (matches) {
+      return candidate
+    }
+  }
+  return null
+}
+
+type CategoryInfo = {
+  id: string
+  name: string
+  path: CategoryPathItemDto[]
+  pathString: string
+}
+
+async function loadCategoryInfoMap(categoryIds: Array<Types.ObjectId | string>): Promise<Map<string, CategoryInfo>> {
+  const uniqueIds = Array.from(
+    new Set(
+      categoryIds
+        .map((id) => {
+          if (id instanceof Types.ObjectId) {
+            return id.toString()
+          }
+          if (typeof id === 'string' && Types.ObjectId.isValid(id)) {
+            return id
+          }
+          return null
+        })
+        .filter((value): value is string => value !== null),
+    ),
+  )
+  if (!uniqueIds.length) {
+    return new Map()
+  }
+  const objectIds = uniqueIds.map((id) => new Types.ObjectId(id))
+  const categories = (await AssetCategoryModel.find({ _id: { $in: objectIds } }).lean().exec()) as AssetCategoryData[]
+  const map = new Map<string, CategoryInfo>()
+  categories.forEach((category) => {
+    const id = (category._id as Types.ObjectId).toString()
+    const path = category.pathIds.map((value, index) => ({
+      id: (value as Types.ObjectId).toString(),
+      name: category.pathNames[index] ?? '',
+    }))
+    map.set(id, {
+      id,
+      name: category.name,
+      path,
+      pathString: path.map((item) => item.name).join('/') || category.name,
+    })
+  })
+  return map
+}
+
+function categoryDocumentToTreeNode(category: AssetCategoryDocument, options: { hasChildren?: boolean } = {}): CategoryTreeNode {
+  const createdAt =
+    category.createdAt instanceof Date ? category.createdAt.toISOString() : new Date(category.createdAt).toISOString()
+  const updatedAt =
+    category.updatedAt instanceof Date ? category.updatedAt.toISOString() : new Date(category.updatedAt).toISOString()
+  return {
+    id: (category._id as Types.ObjectId).toString(),
+    name: category.name,
+    description: category.description ?? null,
+    parentId: category.parentId ? (category.parentId as Types.ObjectId).toString() : null,
+    depth: category.depth,
+    pathIds: category.pathIds.map((value) => (value as Types.ObjectId).toString()),
+    pathNames: [...category.pathNames],
+    hasChildren: Boolean(options.hasChildren ?? false),
+    createdAt,
+    updatedAt,
+    children: [],
+  }
+}
+
+function categoryNodeToTreeNode(node: CategoryNodeDto): CategoryTreeNode {
+  return {
+    ...node,
+    children: [],
+  }
+}
+
+function mapCategoryTreeNode(node: CategoryTreeNode): AssetCategoryDto {
+  const path = node.pathIds.map((id, index) => ({
+    id,
+    name: node.pathNames[index] ?? '',
+  }))
+  return {
+    id: node.id,
+    name: node.name,
+    description: sanitizeString(node.description) ?? null,
+    parentId: node.parentId ?? null,
+    depth: node.depth,
+    path,
+    hasChildren: node.hasChildren,
+    createdAt: node.createdAt,
+    updatedAt: node.updatedAt,
+    children: node.children.map(mapCategoryTreeNode),
+  }
 }
 
 function sanitizeString(value: unknown): string | null {
@@ -324,33 +485,51 @@ async function deleteStoredFile(fileKey: string | null | undefined): Promise<voi
   }
 }
 
+let defaultCategoryInitialization: Promise<void> | null = null
+
 async function ensureDefaultCategories(): Promise<void> {
-  const existing = await AssetCategoryModel.find({ name: { $in: DEFAULT_CATEGORIES.map((category) => category.name) } })
-    .select('name')
-    .lean()
-    .exec()
-  const existingNames = new Set(existing.map((category) => category.name))
-  const pending = DEFAULT_CATEGORIES.filter((category) => !existingNames.has(category.name))
-  if (pending.length > 0) {
-    await AssetCategoryModel.insertMany(pending).catch(() => undefined)
+  if (!defaultCategoryInitialization) {
+    defaultCategoryInitialization = (async () => {
+      await ensureCategoryConsistency()
+      for (const pathSegments of DEFAULT_CATEGORY_PATHS) {
+        await ensureCategoryPath(pathSegments)
+      }
+    })().catch((error) => {
+      defaultCategoryInitialization = null
+      throw error
+    })
   }
+  await defaultCategoryInitialization
 }
 
-async function resolveCategoryId(type: AssetDocument['type'], categoryId?: string | null): Promise<Types.ObjectId> {
+function isInvalidCategoryId(value: string | null | undefined): boolean {
+  return typeof value === 'string' && value.length > 0 && !Types.ObjectId.isValid(value)
+}
+
+async function resolveCategoryForPayload(
+  type: AssetDocument['type'],
+  payload: AssetMutationPayload,
+): Promise<AssetCategoryDocument> {
   await ensureDefaultCategories()
-  if (categoryId && Types.ObjectId.isValid(categoryId)) {
-    const existing = await AssetCategoryModel.findById(categoryId).select('_id').lean().exec()
-    if (existing?._id) {
-      return existing._id
+
+  if (payload.categoryId) {
+    if (isInvalidCategoryId(payload.categoryId)) {
+      throw Object.assign(new Error('Invalid category identifier'), { code: 'INVALID_CATEGORY_ID' })
     }
+    const category = await AssetCategoryModel.findById(payload.categoryId).exec()
+    if (!category) {
+      throw Object.assign(new Error('Category not found'), { code: 'CATEGORY_NOT_FOUND' })
+    }
+    return category
   }
-  const matched = await AssetCategoryModel.findOne({ type }).sort({ createdAt: 1 }).select('_id').lean().exec()
-  if (matched?._id) {
-    return matched._id
+
+  const normalizedSegments = normalizeCategoryPathSegments(payload.categoryPathSegments)
+  if (normalizedSegments.length) {
+    return ensureCategoryPath(normalizedSegments)
   }
-  const fallbackName = `${type.charAt(0).toUpperCase()}${type.slice(1)}s`
-  const created = await AssetCategoryModel.create({ name: fallbackName, type })
-  return created._id as Types.ObjectId
+
+  const fallbackPath = CATEGORY_FALLBACK_BY_TYPE[type] ?? [type]
+  return ensureCategoryPath(fallbackPath)
 }
 
 function mapTagDocument(tag: AssetTagDocument | Types.ObjectId): AssetTagSummary | null {
@@ -364,9 +543,12 @@ function mapTagDocument(tag: AssetTagDocument | Types.ObjectId): AssetTagSummary
   return { id, name: tag.name }
 }
 
-function mapAssetDocument(asset: AssetSource): AssetSummary {
+function mapAssetDocument(asset: AssetSource, categoryLookup?: Map<string, CategoryInfo>): AssetSummary {
   const assetId = (asset._id as Types.ObjectId).toString()
   const categoryObjectId = (asset.categoryId as Types.ObjectId).toString()
+  const categoryInfo = categoryLookup?.get(categoryObjectId) ?? null
+  const categoryPath = categoryInfo?.path ?? []
+  const categoryPathString = categoryInfo?.pathString ?? categoryPath.map((item) => item.name).join('/')
   const tagsRaw = Array.isArray(asset.tags) ? asset.tags : []
   const tags = tagsRaw
     .map((tag) => mapTagDocument(tag as AssetTagDocument | Types.ObjectId))
@@ -395,6 +577,8 @@ function mapAssetDocument(asset: AssetSource): AssetSummary {
     id: assetId,
     name: asset.name,
     categoryId: categoryObjectId,
+    categoryPath,
+    categoryPathString,
     type: asset.type,
     tags,
     tagIds: tags.map((tag) => tag.id),
@@ -434,12 +618,15 @@ function mapAssetTagDocument(tag: AssetTagDocumentLike): AssetTag {
   }
 }
 
-function mapManifestEntry(asset: AssetSource): AssetManifestEntryDto {
-  const response = mapAssetDocument(asset)
+function mapManifestEntry(asset: AssetSource, categoryLookup?: Map<string, CategoryInfo>): AssetManifestEntryDto {
+  const response = mapAssetDocument(asset, categoryLookup)
   return {
     id: response.id,
     name: response.name,
     type: response.type,
+    categoryId: response.categoryId,
+    categoryPath: response.categoryPath,
+    categoryPathString: response.categoryPathString,
     tags: response.tags ?? [],
     tagIds: response.tagIds,
     color: response.color ?? null,
@@ -484,7 +671,8 @@ async function buildManifest(): Promise<AssetManifestDto> {
     .populate('tags')
     .lean()
     .exec()) as LeanAsset[]
-  const entries = assets.map((asset) => mapManifestEntry(asset))
+  const categoryLookup = await loadCategoryInfoMap(assets.map((asset) => asset.categoryId as Types.ObjectId))
+  const entries = assets.map((asset) => mapManifestEntry(asset, categoryLookup))
   return {
     generatedAt: new Date().toISOString(),
     assets: entries,
@@ -525,7 +713,7 @@ function resolveThumbnailFileKey(asset: AssetDocument | AssetData): string | nul
   return resolveFileKeyFromUrl(asset.thumbnailUrl ?? asset.previewUrl ?? null)
 }
 
-function buildAssetFilter(query: AssetListQuery): Record<string, unknown> {
+async function buildAssetFilter(query: AssetListQuery): Promise<Record<string, unknown>> {
   const filter: Record<string, unknown> = {}
   if (query.keyword) {
     filter.name = new RegExp(query.keyword, 'i')
@@ -539,8 +727,35 @@ function buildAssetFilter(query: AssetListQuery): Record<string, unknown> {
       filter.tags = { $all: validTagIds }
     }
   }
-  if (query.categoryId && Types.ObjectId.isValid(query.categoryId)) {
-    filter.categoryId = new Types.ObjectId(query.categoryId)
+  const includeDescendants = query.includeDescendants !== false
+  const normalizedPath = normalizeCategoryPathSegments(query.categoryPath)
+  if (normalizedPath.length) {
+    const matched = await findCategoryByPath(normalizedPath)
+    if (!matched) {
+      filter.categoryId = { $in: [] }
+    } else {
+      const categoryIds = includeDescendants
+        ? await listDescendantCategoryIds((matched._id as Types.ObjectId).toString())
+        : [(matched._id as Types.ObjectId).toString()]
+      filter.categoryId = {
+        $in: categoryIds.map((id) => new Types.ObjectId(id)),
+      }
+    }
+  } else if (query.categoryId) {
+    if (isInvalidCategoryId(query.categoryId)) {
+      throw Object.assign(new Error('Invalid category identifier'), { code: 'INVALID_CATEGORY_ID' })
+    }
+    const categoryExists = await AssetCategoryModel.exists({ _id: query.categoryId }).exec()
+    if (!categoryExists) {
+      filter.categoryId = { $in: [] }
+    } else {
+      const categoryIds = includeDescendants
+        ? await listDescendantCategoryIds(query.categoryId)
+        : [query.categoryId]
+      filter.categoryId = {
+        $in: categoryIds.map((id) => new Types.ObjectId(id)),
+      }
+    }
   }
   return filter
 }
@@ -563,6 +778,14 @@ function extractMutationPayload(ctx: Context): AssetMutationPayload {
     description: sanitizeString(rawBody.description),
     tagIds: tagIds.length ? tagIds : undefined,
     categoryId: sanitizeString(rawBody.categoryId),
+  }
+
+  const rawCategorySegments = sanitizeCategorySegments(
+    rawBody.categoryPath ?? rawBody.categoryPathSegments ?? rawBody.categoryNames ?? rawBody.categoryPathString,
+  )
+  const normalizedSegments = normalizeCategoryPathSegments(rawCategorySegments)
+  if (normalizedSegments.length) {
+    payload.categoryPathSegments = normalizedSegments
   }
 
   const hasOwn = Object.prototype.hasOwnProperty.bind(rawBody)
@@ -611,6 +834,12 @@ function parsePagination(query: Record<string, string | string[] | undefined>): 
     .filter((type, index, self) => self.indexOf(type) === index)
   const tagIds = ensureArrayString(query.tagIds ?? query.tagId)
   const categoryId = sanitizeString(Array.isArray(query.categoryId) ? query.categoryId[0] : query.categoryId)
+  const rawCategoryPath = sanitizeCategorySegments(query.categoryPath ?? query.categoryPathSegments)
+  const categoryPath = normalizeCategoryPathSegments(rawCategoryPath)
+  const includeDescendantsRaw = Array.isArray(query.includeDescendants)
+    ? query.includeDescendants[0]
+    : query.includeDescendants
+  const includeDescendants = includeDescendantsRaw === undefined ? true : includeDescendantsRaw !== 'false'
   return {
     page: page > 0 ? page : 1,
     pageSize: pageSize > 0 ? pageSize : 20,
@@ -618,6 +847,8 @@ function parsePagination(query: Record<string, string | string[] | undefined>): 
     types: validTypes.length ? validTypes : undefined,
     tagIds: tagIds.length ? tagIds : undefined,
     categoryId: categoryId ?? undefined,
+    categoryPath: categoryPath.length ? categoryPath : undefined,
+    includeDescendants,
   }
 }
 
@@ -647,10 +878,12 @@ function mapDirectory(categories: AssetCategoryData[], assets: AssetData[]): Pro
         }
       })
 
+    const directoryType: AssetType = categoryAssets.length ? categoryAssets[0]!.type : DEFAULT_ASSET_TYPE
+
     return {
       id: category._id.toString(),
       name: category.name,
-      type: category.type,
+      type: directoryType,
       assets: categoryAssets,
     }
   })
@@ -658,21 +891,228 @@ function mapDirectory(categories: AssetCategoryData[], assets: AssetData[]): Pro
 
 export async function listResourceCategories(ctx: Context): Promise<void> {
   await ensureDefaultCategories()
-  const categories = (await AssetCategoryModel.find()
-    .sort({ createdAt: 1 })
-    .lean()
-    .exec()) as AssetCategoryData[]
-  ctx.body = categories.map((category) => ({
-    id: category._id.toString(),
-    name: category.name,
-    type: category.type,
-    description: sanitizeString(category.description),
-  }))
+  const tree = await getCategoryTree()
+  ctx.body = tree.map(mapCategoryTreeNode)
+}
+
+export async function createAssetCategory(ctx: Context): Promise<void> {
+  await ensureDefaultCategories()
+  const body = ctx.request.body as Record<string, unknown> | undefined
+  const rawParentId = sanitizeString(body?.parentId)
+  const parentId = rawParentId && rawParentId.toLowerCase() === 'root' ? null : rawParentId
+  if (parentId && isInvalidCategoryId(parentId)) {
+    ctx.throw(400, 'Invalid parent category id')
+  }
+
+  const description = sanitizeString(body?.description)
+  const rawSegments = sanitizeCategorySegments(body?.path ?? body?.segments ?? body?.names ?? null)
+  let segments = normalizeCategoryPathSegments(rawSegments)
+  const name = sanitizeString(body?.name)
+  if (name) {
+    const normalizedName = normalizeCategoryLabel(name)
+    if (!segments.length || normalizeCategoryLabel(segments[segments.length - 1]!) !== normalizedName) {
+      segments = [...segments, name]
+    }
+  }
+
+  if (!segments.length) {
+    ctx.throw(400, 'Category name is required')
+  }
+
+  try {
+    const category = await ensureCategoryPath(segments, { parentId, description })
+    const node = categoryDocumentToTreeNode(category)
+    ctx.status = 201
+    ctx.body = mapCategoryTreeNode(node)
+  } catch (error) {
+    if (error instanceof Error) {
+      const message = error.message
+      if (message.includes('Invalid parent category id')) {
+        ctx.throw(400, 'Invalid parent category id')
+      }
+      if (message.includes('Parent category not found')) {
+        ctx.throw(404, 'Parent category not found')
+      }
+      if (message.includes('cannot be empty')) {
+        ctx.throw(400, 'Category name is required')
+      }
+    }
+    throw error
+  }
+}
+
+export async function getAssetCategoryChildren(ctx: Context): Promise<void> {
+  await ensureDefaultCategories()
+  const { id } = ctx.params
+  let parentId: string | null = null
+  if (id && id !== 'root') {
+    if (isInvalidCategoryId(id)) {
+      ctx.throw(400, 'Invalid category id')
+    }
+    parentId = id
+  }
+  const children = await listCategoryChildrenService(parentId)
+  ctx.body = children.map((node) => mapCategoryTreeNode(categoryNodeToTreeNode(node)))
+}
+
+export async function getAssetCategoryPath(ctx: Context): Promise<void> {
+  const { id } = ctx.params
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid category id')
+  }
+  const pathItems = await getCategoryPathItems(id)
+  if (!pathItems.length) {
+    const exists = await AssetCategoryModel.exists({ _id: id })
+    if (!exists) {
+      ctx.throw(404, 'Category not found')
+    }
+  }
+  ctx.body = pathItems
+}
+
+export async function getAssetCategoryDescendants(ctx: Context): Promise<void> {
+  const { id } = ctx.params
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid category id')
+  }
+  const category = await AssetCategoryModel.findById(id).exec()
+  if (!category) {
+    ctx.throw(404, 'Category not found')
+  }
+  const descendants = await AssetCategoryModel.find({ pathIds: category._id })
+    .sort({ depth: 1, name: 1 })
+    .exec()
+  const nodes = descendants.map((doc) => categoryDocumentToTreeNode(doc))
+  const nodeMap = new Map<string, CategoryTreeNode>()
+  nodes.forEach((node) => nodeMap.set(node.id, node))
+  nodes.forEach((node) => {
+    if (node.parentId && nodeMap.has(node.parentId)) {
+      nodeMap.get(node.parentId)!.children.push(node)
+      nodeMap.get(node.parentId)!.hasChildren = true
+    }
+  })
+  const rootNode = nodeMap.get((category._id as Types.ObjectId).toString())
+  if (!rootNode) {
+    ctx.throw(500, 'Failed to build category tree')
+  }
+  ctx.body = mapCategoryTreeNode(rootNode)
+}
+
+export async function listCategoryAssets(ctx: Context): Promise<void> {
+  const { id } = ctx.params
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid category id')
+  }
+  const query = parsePagination(ctx.query as Record<string, string | string[] | undefined>)
+  query.categoryId = id
+  const includeDescendantsRaw = Array.isArray(ctx.query.includeDescendants)
+    ? ctx.query.includeDescendants[0]
+    : ctx.query.includeDescendants
+  query.includeDescendants = includeDescendantsRaw === undefined ? true : includeDescendantsRaw !== 'false'
+
+  let filter: Record<string, unknown>
+  try {
+    filter = await buildAssetFilter(query)
+  } catch (error) {
+    if ((error as { code?: string } | null)?.code === 'INVALID_CATEGORY_ID') {
+      ctx.throw(400, 'Invalid category identifier')
+    }
+    throw error
+  }
+
+  const skip = (query.page - 1) * query.pageSize
+  const [assets, total] = await Promise.all([
+    AssetModel.find(filter)
+      .populate('tags')
+      .skip(skip)
+      .limit(query.pageSize)
+      .sort({ createdAt: -1 })
+      .lean()
+      .exec() as Promise<LeanAsset[]>,
+    AssetModel.countDocuments(filter),
+  ])
+
+  const categoryLookup = await loadCategoryInfoMap(assets.map((asset) => asset.categoryId as Types.ObjectId))
+
+  ctx.body = {
+    data: assets.map((asset) => mapAssetDocument(asset, categoryLookup)),
+    page: query.page,
+    pageSize: query.pageSize,
+    total,
+  }
+}
+
+export async function updateAssetCategory(ctx: Context): Promise<void> {
+  const { id } = ctx.params
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid category id')
+  }
+  const body = ctx.request.body as Record<string, unknown> | undefined
+  const name = sanitizeString(body?.name)
+  const description = body?.description === undefined ? undefined : sanitizeString(body?.description)
+  if (name === undefined && description === undefined) {
+    ctx.throw(400, 'No category fields provided')
+  }
+  try {
+    const updated = await updateCategoryInfo(id, {
+      name: name ?? undefined,
+      description,
+    })
+    const node = categoryDocumentToTreeNode(updated)
+    ctx.body = mapCategoryTreeNode(node)
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('已存在相同名称')) {
+      ctx.throw(409, 'Category name already exists at this level')
+    }
+    throw error
+  }
+}
+
+export async function deleteAssetCategory(ctx: Context): Promise<void> {
+  const { id } = ctx.params
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid category id')
+  }
+  try {
+    await deleteCategoryStrict(id)
+  } catch (error) {
+    if (error instanceof Error) {
+      if (error.message.includes('子类别')) {
+        ctx.throw(409, 'Category has child categories and cannot be deleted')
+      }
+      if (error.message.includes('关联的资产')) {
+        ctx.throw(409, 'Category still contains assets and cannot be deleted')
+      }
+    }
+    throw error
+  }
+  ctx.status = 204
+}
+
+export async function searchAssetCategories(ctx: Context): Promise<void> {
+  await ensureDefaultCategories()
+  const keyword = sanitizeString(Array.isArray(ctx.query.keyword) ? ctx.query.keyword[0] : ctx.query.keyword) ?? ''
+  const limitRaw = Array.isArray(ctx.query.limit) ? ctx.query.limit[0] : ctx.query.limit
+  const limit = limitRaw ? Math.max(1, Math.min(Number(limitRaw) || 20, 100)) : 20
+  if (!keyword.length) {
+    ctx.body = []
+    return
+  }
+  const results = await searchCategories(keyword, limit)
+  ctx.body = results.map((node) => mapCategoryTreeNode(categoryNodeToTreeNode(node)))
 }
 
 export async function listAssets(ctx: Context): Promise<void> {
   const query = parsePagination(ctx.query as Record<string, string | string[] | undefined>)
-  const filter = buildAssetFilter(query)
+  let filter: Record<string, unknown>
+  try {
+    filter = await buildAssetFilter(query)
+  } catch (error) {
+    if ((error as { code?: string } | null)?.code === 'INVALID_CATEGORY_ID') {
+      ctx.throw(400, 'Invalid category identifier')
+    }
+    throw error
+  }
   const skip = (query.page - 1) * query.pageSize
 
   const [assets, total] = await Promise.all([
@@ -686,8 +1126,10 @@ export async function listAssets(ctx: Context): Promise<void> {
     AssetModel.countDocuments(filter),
   ])
 
+  const categoryLookup = await loadCategoryInfoMap(assets.map((asset) => asset.categoryId as Types.ObjectId))
+
   ctx.body = {
-    data: assets.map((asset) => mapAssetDocument(asset)),
+    data: assets.map((asset) => mapAssetDocument(asset, categoryLookup)),
     page: query.page,
     pageSize: query.pageSize,
     total,
@@ -703,7 +1145,8 @@ export async function getAsset(ctx: Context): Promise<void> {
   if (!asset) {
     ctx.throw(404, 'Asset not found')
   }
-  ctx.body = mapAssetDocument(asset)
+  const categoryLookup = await loadCategoryInfoMap([asset.categoryId as Types.ObjectId])
+  ctx.body = mapAssetDocument(asset, categoryLookup)
 }
 
 export async function uploadAsset(ctx: Context): Promise<void> {
@@ -738,7 +1181,21 @@ export async function uploadAsset(ctx: Context): Promise<void> {
     thumbnailInfo = await storeUploadedFile(thumbnailFile, { prefix: THUMBNAIL_PREFIX })
   }
 
-  const categoryId = await resolveCategoryId(type, payload.categoryId)
+  let categoryDoc: AssetCategoryDocument
+  try {
+    categoryDoc = await resolveCategoryForPayload(type, payload)
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code
+    if (code === 'INVALID_CATEGORY_ID') {
+      ctx.throw(400, 'Invalid category identifier')
+    }
+    if (code === 'CATEGORY_NOT_FOUND') {
+      ctx.throw(404, 'Category not found')
+    }
+    throw error
+  }
+
+  const categoryId = categoryDoc._id as Types.ObjectId
 
   const dimensionLength = payload.dimensionLength ?? null
   const dimensionWidth = payload.dimensionWidth ?? null
@@ -771,7 +1228,8 @@ export async function uploadAsset(ctx: Context): Promise<void> {
   })
 
   const populated = (await asset.populate('tags')) as AssetDocument & { tags: AssetTagDocument[] }
-  const response = mapAssetDocument(populated)
+  const categoryLookup = await loadCategoryInfoMap([categoryId])
+  const response = mapAssetDocument(populated, categoryLookup)
   await refreshManifest()
   ctx.body = { asset: response }
 }
@@ -793,6 +1251,7 @@ export async function updateAsset(ctx: Context): Promise<void> {
   const thumbnailFile = extractUploadedFile(files, 'thumbnail')
 
   const updates: Partial<AssetDocument> & Record<string, unknown> = {}
+  let nextType = asset.type
 
   if (payload.name) {
     updates.name = payload.name
@@ -818,13 +1277,29 @@ export async function updateAsset(ctx: Context): Promise<void> {
     const normalizedType = normalizeAssetType(payload.type, asset.type)
     if (normalizedType !== asset.type) {
       updates.type = normalizedType
-      const nextCategoryId = await resolveCategoryId(normalizedType, payload.categoryId)
-      updates.categoryId = nextCategoryId
-    } else if (payload.categoryId && Types.ObjectId.isValid(payload.categoryId)) {
-      updates.categoryId = new Types.ObjectId(payload.categoryId)
+      nextType = normalizedType
     }
-  } else if (payload.categoryId && Types.ObjectId.isValid(payload.categoryId)) {
-    updates.categoryId = new Types.ObjectId(payload.categoryId)
+  }
+
+  const shouldResolveCategory =
+    updates.type !== undefined ||
+    Boolean(payload.categoryId && payload.categoryId.length) ||
+    Boolean(payload.categoryPathSegments && payload.categoryPathSegments.length)
+
+  if (shouldResolveCategory) {
+    try {
+      const resolvedCategoryDoc = await resolveCategoryForPayload(nextType, payload)
+      updates.categoryId = resolvedCategoryDoc._id as Types.ObjectId
+    } catch (error) {
+      const code = (error as { code?: string } | null)?.code
+      if (code === 'INVALID_CATEGORY_ID') {
+        ctx.throw(400, 'Invalid category identifier')
+      }
+      if (code === 'CATEGORY_NOT_FOUND') {
+        ctx.throw(404, 'Category not found')
+      }
+      throw error
+    }
   }
 
   if (file) {
@@ -887,7 +1362,9 @@ export async function updateAsset(ctx: Context): Promise<void> {
   }
 
   if (Object.keys(updates).length === 0) {
-    ctx.body = mapAssetDocument(await asset.populate('tags'))
+    const populated = (await asset.populate('tags')) as AssetDocument & { tags: AssetTagDocument[] }
+    const categoryLookup = await loadCategoryInfoMap([populated.categoryId as Types.ObjectId])
+    ctx.body = mapAssetDocument(populated, categoryLookup)
     return
   }
 
@@ -897,7 +1374,8 @@ export async function updateAsset(ctx: Context): Promise<void> {
     ctx.throw(500, 'Failed to update asset')
   }
   await refreshManifest()
-  ctx.body = mapAssetDocument(updated)
+  const categoryLookup = await loadCategoryInfoMap([updated.categoryId as Types.ObjectId])
+  ctx.body = mapAssetDocument(updated, categoryLookup)
 }
 
 export async function deleteAsset(ctx: Context): Promise<void> {

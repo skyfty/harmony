@@ -10,6 +10,9 @@ export interface ServerAssetTagDto {
 export interface ServerAssetDto {
   id: string
   name: string
+  categoryId?: string | null
+  categoryPath?: { id: string; name: string }[] | null
+  categoryPathString?: string | null
   type: string
   downloadUrl?: string | null
   url?: string | null
@@ -72,6 +75,11 @@ export function mapServerAssetToProjectAsset(asset: ServerAssetDto): ProjectAsse
   return {
     id: asset.id,
     name: asset.name,
+    categoryId: typeof asset.categoryId === 'string' ? asset.categoryId : undefined,
+    categoryPath: Array.isArray(asset.categoryPath)
+      ? asset.categoryPath.filter((item): item is { id: string; name: string } => !!item && typeof item.id === 'string' && typeof item.name === 'string')
+      : undefined,
+    categoryPathString: typeof asset.categoryPathString === 'string' ? asset.categoryPathString : undefined,
     type,
     description: asset.description ?? undefined,
     downloadUrl,

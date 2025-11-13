@@ -1,8 +1,16 @@
 import { ref, computed, reactive } from 'vue'
 import { defineStore } from 'pinia'
 import { AssetTypes, DEFAULT_ASSET_TYPE, normalizeAssetType } from '@harmony/schema/asset-types'
-import type { AssetTag, AssetType, ManagedAsset } from '@/types'
-import { createAssetTags, generateAssetTagSuggestions, listAssetTags, uploadAsset } from '@/api/modules/resources'
+import type { AssetTag, AssetType, ManagedAsset, ResourceCategory } from '@/types'
+import {
+  createAssetTags,
+  createResourceCategory,
+  generateAssetTagSuggestions,
+  listAssetTags,
+  listResourceCategories,
+  searchResourceCategories,
+  uploadAsset,
+} from '@/api/modules/resources'
 
 export type UploadStatus = 'pending' | 'uploading' | 'success' | 'error' | 'canceled'
 
@@ -25,6 +33,8 @@ export interface UploadTask {
   progress: number
   tags: AssetTag[]
   color: string
+  categoryId: string | null
+  categoryPathLabel: string
   dimensionLength: number | null
   dimensionWidth: number | null
   dimensionHeight: number | null
@@ -244,6 +254,8 @@ export const useUploadStore = defineStore('uploader-upload', () => {
   const activeTaskId = ref<string | null>(null)
   const availableTags = ref<AssetTag[]>([])
   const loadingTags = ref(false)
+  const categories = ref<ResourceCategory[]>([])
+  const loadingCategories = ref(false)
 
   const assetTypeOptions = computed(() =>
     AssetTypes.map((type) => ({
@@ -263,6 +275,83 @@ export const useUploadStore = defineStore('uploader-upload', () => {
   )
 
   const activeTask = computed(() => tasks.value.find((task) => task.id === activeTaskId.value) ?? null)
+
+  function buildCategoryPathLabel(category: ResourceCategory | null): string {
+    if (!category) {
+      return ''
+    }
+    const pathParts = Array.isArray(category.path) && category.path.length
+      ? category.path.map((item) => item?.name ?? '').filter((name) => name.length > 0)
+      : [category.name]
+    return pathParts.join(' / ')
+  }
+
+  function findCategoryById(id: string | null, list: ResourceCategory[] = categories.value): ResourceCategory | null {
+    if (!id) {
+      return null
+    }
+    for (const category of list) {
+      if (category.id === id) {
+        return category
+      }
+      if (Array.isArray(category.children) && category.children.length) {
+        const found = findCategoryById(id, category.children)
+        if (found) {
+          return found
+        }
+      }
+    }
+    return null
+  }
+
+  function pickFirstCategory(list: ResourceCategory[] = categories.value): ResourceCategory | null {
+    for (const category of list) {
+      if (category && typeof category.id === 'string') {
+        return category
+      }
+      if (Array.isArray(category.children) && category.children.length) {
+        const child = pickFirstCategory(category.children)
+        if (child) {
+          return child
+        }
+      }
+    }
+    return null
+  }
+
+  async function ensureCategoriesLoaded(): Promise<void> {
+    if (loadingCategories.value) {
+      return
+    }
+    loadingCategories.value = true
+    try {
+      const result = await listResourceCategories()
+      categories.value = result
+      tasks.value.forEach((task) => {
+        const matched = findCategoryById(task.categoryId, result)
+        task.categoryPathLabel = buildCategoryPathLabel(matched)
+      })
+    } catch (error) {
+      console.warn('[uploader] failed to load categories', error)
+    } finally {
+      loadingCategories.value = false
+    }
+  }
+
+  async function refreshCategories(): Promise<void> {
+    loadingCategories.value = false
+    await ensureCategoriesLoaded()
+  }
+
+  async function createCategoryFromPath(segments: string[]): Promise<ResourceCategory> {
+    const category = await createResourceCategory({ path: segments })
+    await refreshCategories().catch((error) => console.warn('[uploader] failed to refresh categories after creation', error))
+    return category
+  }
+
+  async function searchCategoryOptions(keyword: string): Promise<ResourceCategory[]> {
+    return searchResourceCategories(keyword, 20)
+  }
 
   async function ensureTagsLoaded(): Promise<void> {
     if (loadingTags.value) {
@@ -325,6 +414,9 @@ export const useUploadStore = defineStore('uploader-upload', () => {
       return
     }
     await ensureTagsLoaded().catch((error) => console.warn('[uploader] failed to preload tags', error))
+    await ensureCategoriesLoaded().catch((error) => console.warn('[uploader] failed to preload categories', error))
+
+    const defaultCategory = pickFirstCategory()
 
     files.forEach((file) => {
       const id = generateId()
@@ -340,6 +432,8 @@ export const useUploadStore = defineStore('uploader-upload', () => {
         progress: 0,
         tags: [],
         color: '',
+        categoryId: defaultCategory?.id ?? null,
+        categoryPathLabel: buildCategoryPathLabel(defaultCategory),
         dimensionLength: null,
         dimensionWidth: null,
         dimensionHeight: null,
@@ -472,6 +566,13 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     if (task.status === 'uploading') {
       return
     }
+    if (!task.categoryId) {
+      task.status = 'error'
+      task.error = '请先选择分类后再上传'
+      task.progress = 0
+      task.updatedAt = Date.now()
+      return
+    }
     const controller = new AbortController()
     controllerMap.set(id, controller)
     task.status = 'uploading'
@@ -506,6 +607,9 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     if (isFiniteNumber(task.imageHeight)) {
       formData.append('imageHeight', Math.round(task.imageHeight).toString())
     }
+    if (task.categoryId) {
+      formData.append('categoryId', task.categoryId)
+    }
 
     try {
       const asset = await uploadAsset(formData, {
@@ -522,6 +626,13 @@ export const useUploadStore = defineStore('uploader-upload', () => {
       task.asset = asset
       task.status = 'success'
       task.progress = 100
+      task.categoryId = asset.categoryId ?? task.categoryId
+      const matchedCategory = findCategoryById(task.categoryId)
+      if (asset.categoryPath && asset.categoryPath.length) {
+        task.categoryPathLabel = asset.categoryPath.map((item) => item.name).join(' / ')
+      } else {
+        task.categoryPathLabel = buildCategoryPathLabel(matchedCategory)
+      }
     } catch (error) {
       if (controller.signal.aborted) {
         task.status = 'canceled'
@@ -610,19 +721,25 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     activeTaskId,
     activeTask,
     availableTags,
+    categories,
     assetTypeOptions,
+    loadingTags,
+    loadingCategories,
     addFiles,
     setActiveTask,
     ensureTagsLoaded,
+    ensureCategoriesLoaded,
+    refreshCategories,
+    searchCategoryOptions,
+    createCategoryFromPath,
     syncTagValues,
     updateTaskTags,
     refreshPreview,
     generateTagsWithAi,
-  updateImageMetadata,
-  updateModelDimensions,
+    updateImageMetadata,
+    updateModelDimensions,
     startUpload,
     cancelUpload,
     removeTask,
-    loadingTags,
   }
 })

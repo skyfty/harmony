@@ -12,12 +12,72 @@ import type {
 
 export interface AssetListParams extends PagedRequest {
   categoryId?: string
+  categoryPath?: string[]
+  includeDescendants?: boolean
   types?: AssetType[] | AssetType
   tagIds?: string[]
 }
 
 export async function listResourceCategories(): Promise<ResourceCategory[]> {
   const { data } = await apiClient.get<ResourceCategory[]>('/api/resources/categories')
+  return data
+}
+
+export async function searchResourceCategories(keyword: string, limit = 20): Promise<ResourceCategory[]> {
+  const trimmed = keyword.trim()
+  if (!trimmed.length) {
+    return []
+  }
+  const { data } = await apiClient.get<ResourceCategory[]>(
+    '/api/resources/categories/search',
+    {
+      params: { keyword: trimmed, limit },
+    },
+  )
+  return data
+}
+
+export interface CreateCategoryPayload {
+  path?: string[]
+  segments?: string[]
+  names?: string[]
+  name?: string
+  parentId?: string | null
+  description?: string | null
+}
+
+export async function createResourceCategory(payload: CreateCategoryPayload): Promise<ResourceCategory> {
+  const body: Record<string, unknown> = {}
+  if (Array.isArray(payload.path)) {
+    body.path = payload.path
+  } else if (Array.isArray(payload.segments)) {
+    body.path = payload.segments
+  } else if (Array.isArray(payload.names)) {
+    body.path = payload.names
+  }
+  if (typeof payload.name === 'string') {
+    body.name = payload.name
+  }
+  if (payload.parentId === null) {
+    body.parentId = null
+  } else if (typeof payload.parentId === 'string') {
+    body.parentId = payload.parentId
+  }
+  if (typeof payload.description === 'string') {
+    body.description = payload.description
+  }
+  const { data } = await apiClient.post<ResourceCategory>('/api/resources/categories', body)
+  return data
+}
+
+export async function getCategoryPath(categoryId: string): Promise<{ id: string; name: string }[]> {
+  const { data } = await apiClient.get<{ id: string; name: string }[]>(`/api/resources/categories/${categoryId}/path`)
+  return data
+}
+
+export async function listCategoryChildren(categoryId: string | null): Promise<ResourceCategory[]> {
+  const id = categoryId ?? 'root'
+  const { data } = await apiClient.get<ResourceCategory[]>(`/api/resources/categories/${id}/children`)
   return data
 }
 
@@ -31,6 +91,12 @@ export async function listAssets(params: AssetListParams = {}): Promise<PagedRes
   }
   if (params.tagIds) {
     normalizedParams.tagIds = params.tagIds
+  }
+  if (Array.isArray(params.categoryPath)) {
+    normalizedParams.categoryPath = params.categoryPath
+  }
+  if (typeof params.includeDescendants === 'boolean') {
+    normalizedParams.includeDescendants = params.includeDescendants
   }
   const { data } = await apiClient.get<PagedResponse<ManagedAsset>>('/api/resources/assets', {
     params: normalizedParams,

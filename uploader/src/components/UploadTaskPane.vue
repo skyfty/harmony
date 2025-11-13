@@ -54,6 +54,19 @@
               />
             </v-col>
             <v-col cols="12">
+              <CategoryPathSelector
+                v-model="task.categoryId"
+                :categories="categories"
+                :disabled="loadingCategories"
+                label="资源分类"
+                @category-selected="handleCategorySelected"
+                @category-created="handleCategoryCreated"
+              />
+              <div v-if="task.categoryPathLabel" class="text-caption text-medium-emphasis mt-1">
+                {{ task.categoryPathLabel }}
+              </div>
+            </v-col>
+            <v-col cols="12">
               <div class="task-color-row">
                 <v-text-field
                   v-model="task.color"
@@ -223,9 +236,10 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import type { AssetTag, AssetType } from '@/types'
+import type { AssetTag, AssetType, ResourceCategory } from '@/types'
 import { useUploadStore, type UploadTask } from '@/stores/upload'
 import PreviewRenderer from './UploadTaskPreviewRenderer.vue'
+import CategoryPathSelector from '@/components/CategoryPathSelector.vue'
 
 interface Props {
   task: UploadTask
@@ -238,6 +252,8 @@ const props = defineProps<Props>()
 const uploadStore = useUploadStore()
 const tagInput = ref<Array<AssetTag | string>>([...props.task.tags])
 const isUploading = computed(() => props.task.status === 'uploading')
+const categories = computed(() => uploadStore.categories)
+const loadingCategories = computed(() => uploadStore.loadingCategories)
 const previewBadge = computed(() => {
   switch (props.task.preview.kind) {
     case 'image':
@@ -383,6 +399,61 @@ function handleTypeChange(): void {
   }
   void uploadStore.refreshPreview(props.task.id).catch((error: unknown) => console.warn('刷新预览失败', error))
 }
+
+function resolveCategoryLabel(category: ResourceCategory | null): string {
+  if (!category) {
+    return ''
+  }
+  const names = Array.isArray(category.path) && category.path.length
+    ? category.path.map((item) => item?.name ?? '').filter((name) => name.length > 0)
+    : [category.name]
+  return names.join(' / ')
+}
+
+function findCategoryById(targetId: string | null, list: ResourceCategory[] = categories.value): ResourceCategory | null {
+  if (!targetId) {
+    return null
+  }
+  for (const category of list) {
+    if (category.id === targetId) {
+      return category
+    }
+    if (Array.isArray(category.children) && category.children.length) {
+      const found = findCategoryById(targetId, category.children)
+      if (found) {
+        return found
+      }
+    }
+  }
+  return null
+}
+
+function handleCategorySelected(payload: { id: string | null; label: string }): void {
+  props.task.categoryId = payload.id
+  props.task.categoryPathLabel = payload.label
+  props.task.updatedAt = Date.now()
+}
+
+function handleCategoryCreated(category: ResourceCategory): void {
+  props.task.categoryId = category.id
+  props.task.categoryPathLabel = resolveCategoryLabel(category)
+  props.task.updatedAt = Date.now()
+}
+
+watch(
+  () => [props.task.categoryId, categories.value],
+  () => {
+    const matched = findCategoryById(props.task.categoryId)
+    const nextLabel = resolveCategoryLabel(matched)
+    if (props.task.categoryPathLabel !== nextLabel) {
+      props.task.categoryPathLabel = nextLabel
+      props.task.updatedAt = Date.now()
+    }
+  },
+  { deep: true },
+)
+
+uploadStore.ensureCategoriesLoaded().catch((error: unknown) => console.warn('加载分类失败', error))
 
 function handleGenerateAiTags(): void {
   void uploadStore.generateTagsWithAi(props.task.id)

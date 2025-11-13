@@ -187,8 +187,13 @@ export type AssetType = SchemaAssetType
 
 export interface AssetCategoryDocument extends Document<Types.ObjectId> {
   name: string
-  type: AssetType
   description?: string
+  parentId?: Types.ObjectId | null
+  depth: number
+  pathIds: Types.ObjectId[]
+  pathNames: string[]
+  rootId: Types.ObjectId
+  normalizedName: string
   createdAt: Date
   updatedAt: Date
 }
