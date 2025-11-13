@@ -1,6 +1,7 @@
 import { buildServerApiUrl } from './serverApiConfig'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ResourceCategory } from '@/types/resource-category'
+import type { AssetSeries } from '@/types/asset-series'
 import {
   mapServerAssetToProjectAsset,
   type ServerAssetDto,
@@ -186,6 +187,73 @@ export async function createResourceCategory(payload: CreateResourceCategoryPayl
   return payloadBody
 }
 
+export async function fetchAssetSeries(): Promise<AssetSeries[]> {
+  const url = buildServerApiUrl('/resources/series')
+  const authStore = useAuthStore()
+  const headers = new Headers({ Accept: 'application/json' })
+  const authorization = authStore.authorizationHeader
+  if (authorization) {
+    headers.set('Authorization', authorization)
+  }
+
+  const response = await fetch(url, {
+    method: 'GET',
+    credentials: 'include',
+    headers,
+    cache: 'no-cache',
+  })
+  if (!response.ok) {
+    throw buildError('获取资源系列失败', response)
+  }
+  const payload = await parseJsonResponse<AssetSeries[]>(response)
+  if (!Array.isArray(payload)) {
+    throw new Error('资源系列数据格式无效')
+  }
+  return payload.filter((series): series is AssetSeries => !!series && typeof series.id === 'string')
+}
+
+export async function createAssetSeries(payload: { name: string; description?: string | null }): Promise<AssetSeries> {
+  const url = buildServerApiUrl('/resources/series')
+  const authStore = useAuthStore()
+  const headers = new Headers({
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  })
+  const authorization = authStore.authorizationHeader
+  if (authorization) {
+    headers.set('Authorization', authorization)
+  }
+
+  if (typeof payload.name !== 'string' || !payload.name.trim().length) {
+    throw new Error('系列名称不能为空')
+  }
+
+  const body: Record<string, unknown> = {
+    name: payload.name.trim(),
+  }
+  if (payload.description !== undefined) {
+    body.description = payload.description ? payload.description.trim() : null
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    const errorBody = await parseJsonResponse<{ message?: string } | string | null>(response).catch(() => null)
+    const message = typeof errorBody === 'string' ? errorBody : errorBody?.message
+    throw new Error(message || `创建系列失败（${response.status}）`)
+  }
+
+  const payloadBody = await parseJsonResponse<AssetSeries>(response)
+  if (!payloadBody || typeof payloadBody.id !== 'string') {
+    throw new Error('服务器返回的系列数据无效')
+  }
+  return payloadBody
+}
+
 export async function generateAssetTagSuggestions(payload: GenerateAssetTagPayload): Promise<GenerateAssetTagResult> {
   const url = buildServerApiUrl('/ai/tags/suggest')
   const authStore = useAuthStore()
@@ -325,6 +393,7 @@ export interface UploadAssetOptions {
   dimensionHeight?: number | null
   imageWidth?: number | null
   imageHeight?: number | null
+  seriesId?: string | null
 }
 
 export async function uploadAssetToServer(options: UploadAssetOptions): Promise<ServerAssetDto> {
@@ -356,6 +425,9 @@ export async function uploadAssetToServer(options: UploadAssetOptions): Promise<
   }
   if (typeof options.categoryId === 'string' && options.categoryId.trim().length) {
     formData.append('categoryId', options.categoryId.trim())
+  }
+  if (typeof options.seriesId === 'string' && options.seriesId.trim().length) {
+    formData.append('seriesId', options.seriesId.trim())
   }
   if (Array.isArray(options.categoryPathSegments)) {
     options.categoryPathSegments

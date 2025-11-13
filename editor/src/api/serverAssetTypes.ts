@@ -28,6 +28,8 @@ export interface ServerAssetDto {
   sizeCategory?: string | null
   imageWidth?: number | null
   imageHeight?: number | null
+  seriesId?: string | null
+  seriesName?: string | null
 }
 
 export const SERVER_ASSET_PREVIEW_COLORS: Record<ProjectAsset['type'], string> = {
@@ -94,6 +96,8 @@ export function mapServerAssetToProjectAsset(asset: ServerAssetDto): ProjectAsse
     sizeCategory: typeof asset.sizeCategory === 'string' ? asset.sizeCategory : undefined,
     imageWidth: typeof asset.imageWidth === 'number' ? asset.imageWidth : undefined,
     imageHeight: typeof asset.imageHeight === 'number' ? asset.imageHeight : undefined,
+    seriesId: 'seriesId' in asset ? (typeof asset.seriesId === 'string' ? asset.seriesId : null) : undefined,
+    seriesName: typeof asset.seriesName === 'string' ? asset.seriesName : undefined,
     gleaned: false,
   }
 }

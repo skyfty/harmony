@@ -22,5 +22,7 @@ export interface ProjectAsset {
   sizeCategory?: string | null
   imageWidth?: number | null
   imageHeight?: number | null
+  seriesId?: string | null
+  seriesName?: string | null
   gleaned: boolean
 }

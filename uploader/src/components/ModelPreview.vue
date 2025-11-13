@@ -8,9 +8,11 @@ import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import Loader from '@schema/loader'
+import { useUploadStore } from '@/stores/upload'
 
 interface Props {
   file: File
+  taskId: string
   background?: string
 }
 
@@ -18,6 +20,9 @@ const props = defineProps<Props>()
 const emit = defineEmits<{
   (e: 'dimensions', payload: { length: number; width: number; height: number }): void
 }>()
+
+const uploadStore = useUploadStore()
+const THUMBNAIL_SIZE = 512
 
 const container = ref<HTMLDivElement | null>(null)
 let renderer: THREE.WebGLRenderer | null = null
@@ -27,6 +32,8 @@ let controls: OrbitControls | null = null
 let animationHandle = 0
 const loader = new Loader()
 let currentObject: THREE.Object3D | null = null
+let hasCapturedThumbnail = false
+let thumbnailJobToken = 0
 
 function disposeObject(object: THREE.Object3D | null): void {
   if (!object) {
@@ -106,14 +113,15 @@ function setupScene(): void {
     return
   }
   scene = new THREE.Scene()
-  scene.background = new THREE.Color(props.background ?? '#1e1e1e')
+  scene.background = null
   camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000)
   camera.position.set(3, 3, 3)
 
-  renderer = new THREE.WebGLRenderer({ antialias: true })
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
   renderer.outputColorSpace = THREE.SRGBColorSpace
   renderer.shadowMap.enabled = true
   renderer.setSize(container.value.clientWidth, container.value.clientHeight)
+  renderer.setClearColor(0x000000, 0)
   container.value.appendChild(renderer.domElement)
 
   controls = new OrbitControls(camera, renderer.domElement)
@@ -139,37 +147,109 @@ async function loadModel(): Promise<void> {
   currentObject && disposeObject(currentObject)
   currentObject = null
 
-  await new Promise<void>((resolve, reject) => {
-    const handleLoaded = (object: THREE.Object3D | null) => {
-      if (!object) {
-        reject(new Error('模型加载失败'))
-        return
+  const shouldCaptureThumbnail = !hasCapturedThumbnail && Boolean(props.taskId)
+  if (shouldCaptureThumbnail) {
+    uploadStore.markModelThumbnailPending(props.taskId)
+  }
+
+  const jobToken = shouldCaptureThumbnail ? ++thumbnailJobToken : thumbnailJobToken
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const handleLoaded = (object: THREE.Object3D | null) => {
+        if (!object) {
+          reject(new Error('模型加载失败'))
+          return
+        }
+        currentObject = object
+        scene?.add(object)
+        fitCamera(object)
+        // Calculate and emit bounding box dimensions in meters (assuming unit = meters)
+        try {
+          const box = new THREE.Box3().setFromObject(object)
+          const size = box.getSize(new THREE.Vector3())
+          const length = Number.isFinite(size.x) ? size.x : 0
+          const width = Number.isFinite(size.z) ? size.z : 0
+          const height = Number.isFinite(size.y) ? size.y : 0
+          emit('dimensions', { length, width, height })
+        } catch (err) {
+          // noop
+        }
+        loader.removeEventListener('loaded', handleLoaded)
+        resolve()
       }
-      currentObject = object
-      scene?.add(object)
-      fitCamera(object)
-      // Calculate and emit bounding box dimensions in meters (assuming unit = meters)
+      loader.addEventListener('loaded', handleLoaded)
       try {
-        const box = new THREE.Box3().setFromObject(object)
-        const size = box.getSize(new THREE.Vector3())
-        const length = Number.isFinite(size.x) ? size.x : 0
-        const width = Number.isFinite(size.z) ? size.z : 0
-        const height = Number.isFinite(size.y) ? size.y : 0
-        emit('dimensions', { length, width, height })
-      } catch (err) {
-        // noop
+        loader.loadFiles([props.file])
+      } catch (error) {
+        loader.removeEventListener('loaded', handleLoaded)
+        reject(error)
       }
-      loader.removeEventListener('loaded', handleLoaded)
-      resolve()
+    })
+
+    if (shouldCaptureThumbnail) {
+      await generateThumbnail(jobToken).catch((error) => {
+        console.warn('[uploader] 模型缩略图生成失败', error)
+      })
     }
-    loader.addEventListener('loaded', handleLoaded)
-    try {
-      loader.loadFiles([props.file])
-    } catch (error) {
-      loader.removeEventListener('loaded', handleLoaded)
-      reject(error)
+  } catch (error) {
+    if (shouldCaptureThumbnail) {
+      uploadStore.applyModelThumbnailResult(props.taskId, {
+        file: null,
+        error: error instanceof Error ? error.message : '模型加载失败',
+      })
     }
-  })
+    throw error
+  }
+}
+
+async function generateThumbnail(jobToken: number): Promise<void> {
+  if (!scene || !camera || jobToken !== thumbnailJobToken) {
+    return
+  }
+  let thumbnailRenderer: THREE.WebGLRenderer | null = null
+  try {
+    thumbnailRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true })
+    thumbnailRenderer.outputColorSpace = THREE.SRGBColorSpace
+    thumbnailRenderer.shadowMap.enabled = renderer?.shadowMap.enabled ?? true
+    thumbnailRenderer.setClearColor(0x000000, 0)
+    thumbnailRenderer.setSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE, false)
+    thumbnailRenderer.render(scene, camera)
+
+    const canvas = thumbnailRenderer.domElement
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((result) => {
+        if (result) {
+          resolve(result)
+        } else {
+          reject(new Error('缩略图生成失败'))
+        }
+      }, 'image/png')
+    })
+
+    if (jobToken !== thumbnailJobToken) {
+      return
+    }
+
+    const baseName = props.file.name.replace(/\.[^.]+$/, '') || props.file.name
+    const file = new File([blob], `${baseName}-thumbnail.png`, { type: 'image/png', lastModified: Date.now() })
+    uploadStore.applyModelThumbnailResult(props.taskId, {
+      file,
+      width: THUMBNAIL_SIZE,
+      height: THUMBNAIL_SIZE,
+    })
+    hasCapturedThumbnail = true
+  } catch (error) {
+    if (jobToken === thumbnailJobToken) {
+      uploadStore.applyModelThumbnailResult(props.taskId, {
+        file: null,
+        error: error instanceof Error ? error.message : '缩略图生成失败',
+      })
+    }
+    throw error
+  } finally {
+    thumbnailRenderer?.dispose()
+  }
 }
 
 onMounted(() => {
@@ -180,6 +260,8 @@ onMounted(() => {
 watch(
   () => props.file,
   () => {
+    hasCapturedThumbnail = false
+    thumbnailJobToken += 1
     loadModel().catch((error) => console.warn('[uploader] 模型预览加载失败', error))
   },
 )

@@ -25,6 +25,8 @@ export interface UploadTaskPreview {
   text?: string
 }
 
+type ThumbnailStatus = 'idle' | 'pending' | 'ready' | 'error'
+
 export interface UploadTask {
   id: string
   file: File
@@ -48,6 +50,11 @@ export interface UploadTask {
   error?: string | null
   asset?: ManagedAsset | null
   preview: UploadTaskPreview
+  thumbnailFile: File | null
+  thumbnailStatus: ThumbnailStatus
+  thumbnailWidth: number | null
+  thumbnailHeight: number | null
+  thumbnailError: string | null
   createdAt: number
   updatedAt: number
   aiTagLoading: boolean
@@ -564,6 +571,11 @@ export const useUploadStore = defineStore('uploader-upload', () => {
         preview: {
           kind: 'none',
         },
+        thumbnailFile: null,
+        thumbnailStatus: 'idle',
+        thumbnailWidth: null,
+        thumbnailHeight: null,
+        thumbnailError: null,
         createdAt: Date.now(),
         updatedAt: Date.now(),
         aiTagLoading: false,
@@ -703,6 +715,16 @@ export const useUploadStore = defineStore('uploader-upload', () => {
       task.updatedAt = Date.now()
       return
     }
+    if (needsModelThumbnail(task)) {
+      const ready = await waitForModelThumbnail(task)
+      if (!ready || !task.thumbnailFile) {
+        task.status = 'error'
+        task.error = task.thumbnailError ?? '模型缩略图尚未生成，请稍候片刻后重试'
+        task.progress = 0
+        task.updatedAt = Date.now()
+        return
+      }
+    }
     const controller = new AbortController()
     controllerMap.set(id, controller)
     task.status = 'uploading'
@@ -744,6 +766,9 @@ export const useUploadStore = defineStore('uploader-upload', () => {
       formData.append('seriesId', task.seriesId)
     } else if (task.seriesId === null) {
       formData.append('seriesId', '')
+    }
+    if (task.thumbnailFile) {
+      formData.append('thumbnail', task.thumbnailFile, task.thumbnailFile.name)
     }
 
     try {
@@ -828,6 +853,75 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     }
   }
 
+  function markModelThumbnailPending(id: string): void {
+    const task = findTask(id)
+    task.thumbnailStatus = 'pending'
+    task.thumbnailFile = null
+    task.thumbnailError = null
+    task.thumbnailWidth = null
+    task.thumbnailHeight = null
+    task.updatedAt = Date.now()
+  }
+
+  function applyModelThumbnailResult(
+    id: string,
+    payload: { file: File | null; width?: number | null; height?: number | null; error?: string | null },
+  ): void {
+    const task = findTask(id)
+    if (payload.file) {
+      task.thumbnailStatus = 'ready'
+      task.thumbnailFile = payload.file
+      task.thumbnailError = null
+      task.thumbnailWidth = typeof payload.width === 'number' ? payload.width : task.thumbnailWidth
+      task.thumbnailHeight = typeof payload.height === 'number' ? payload.height : task.thumbnailHeight
+    } else {
+      task.thumbnailStatus = payload.error ? 'error' : 'idle'
+      task.thumbnailFile = null
+      task.thumbnailError = payload.error ?? null
+      task.thumbnailWidth = null
+      task.thumbnailHeight = null
+    }
+    task.updatedAt = Date.now()
+  }
+
+  function needsModelThumbnail(task: UploadTask): boolean {
+    return task.type === 'model' || task.type === 'mesh' || task.type === 'prefab'
+  }
+
+  async function waitForModelThumbnail(task: UploadTask, timeoutMs = 5000): Promise<boolean> {
+    if (!needsModelThumbnail(task)) {
+      return true
+    }
+    if (task.thumbnailStatus === 'ready' && task.thumbnailFile) {
+      return true
+    }
+    if (task.thumbnailStatus === 'error') {
+      return false
+    }
+    if (task.thumbnailStatus === 'idle') {
+      return Boolean(task.thumbnailFile)
+    }
+    const deadline = Date.now() + timeoutMs
+    return new Promise<boolean>((resolve) => {
+      const timer = setInterval(() => {
+        if (task.thumbnailStatus === 'ready' && task.thumbnailFile) {
+          clearInterval(timer)
+          resolve(true)
+          return
+        }
+        if (task.thumbnailStatus === 'error') {
+          clearInterval(timer)
+          resolve(false)
+          return
+        }
+        if (Date.now() >= deadline) {
+          clearInterval(timer)
+          resolve(task.thumbnailStatus === 'ready' && Boolean(task.thumbnailFile))
+        }
+      }, 120)
+    })
+  }
+
   function cancelUpload(id: string): void {
     const controller = controllerMap.get(id)
     if (controller) {
@@ -884,6 +978,8 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     generateTagsWithAi,
     updateImageMetadata,
     updateModelDimensions,
+    markModelThumbnailPending,
+    applyModelThumbnailResult,
     startUpload,
     cancelUpload,
     removeTask,

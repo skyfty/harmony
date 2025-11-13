@@ -2,7 +2,7 @@
   <v-main class="bg-grey-lighten-4">
 
     <v-app-bar color="primary" prominent flat>
-      <v-app-bar-title>Harmony 资源上传中心ff</v-app-bar-title>
+      <v-app-bar-title>Harmony 资源上传中心</v-app-bar-title>
       <v-spacer></v-spacer>
       <v-btn icon="mdi-refresh" variant="text" @click="refreshTags" :loading="loadingTags"></v-btn>
       <v-menu v-if="authStore.user" location="bottom right">

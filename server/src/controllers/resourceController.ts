@@ -870,6 +870,7 @@ function extractMutationPayload(ctx: Context): AssetMutationPayload {
     tagIds: tagIds.length ? tagIds : undefined,
     categoryId: sanitizeString(rawBody.categoryId),
   }
+  const hasOwn = Object.prototype.hasOwnProperty.bind(rawBody)
 
   const rawSeriesInput = hasOwn('seriesId') ? rawBody.seriesId : hasOwn('series') ? rawBody.series : undefined
   if (hasOwn('seriesId') || hasOwn('series')) {
@@ -902,7 +903,6 @@ function extractMutationPayload(ctx: Context): AssetMutationPayload {
     payload.categoryPathSegments = normalizedSegments
   }
 
-  const hasOwn = Object.prototype.hasOwnProperty.bind(rawBody)
 
   if (hasOwn('color')) {
     payload.color = sanitizeHexColor(rawBody.color)

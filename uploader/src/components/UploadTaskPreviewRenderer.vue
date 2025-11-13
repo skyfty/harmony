@@ -1,7 +1,12 @@
 <template>
   <div class="preview-renderer">
     <div v-if="task.preview.kind === 'model'" class="preview-renderer__model">
-      <ModelPreview :file="task.file" class="preview-renderer__model-canvas" @dimensions="onModelDimensions" />
+      <ModelPreview
+        :file="task.file"
+        :task-id="task.id"
+        class="preview-renderer__model-canvas"
+        @dimensions="onModelDimensions"
+      />
     </div>
     <div v-else-if="task.preview.kind === 'image' && task.preview.url" class="preview-renderer__image">
       <v-img

@@ -4,7 +4,9 @@ import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ResourceCategory } from '@/types/resource-category'
+import type { AssetSeries } from '@/types/asset-series'
 import CategoryPathSelector from '@/components/common/CategoryPathSelector.vue'
+import SeriesSelector from '@/components/common/SeriesSelector.vue'
 import { buildCategoryPathString } from '@/utils/categoryPath'
 import {
   createAssetTag,
@@ -12,6 +14,8 @@ import {
   generateAssetTagSuggestions,
   mapServerAssetToProjectAsset,
   fetchResourceCategories,
+  fetchAssetSeries,
+  createAssetSeries,
   uploadAssetToServer,
 } from '@/api/resourceAssets'
 
@@ -50,6 +54,7 @@ type UploadAssetEntry = {
   description: string
   categoryId: string | null
   categoryPathLabel: string
+  seriesId: string | null
   color: string
   colorHexInput: string
   dimensionLength: number | null
@@ -94,6 +99,11 @@ const resourceCategories = ref<ResourceCategory[]>([])
 const resourceCategoriesLoaded = ref(false)
 const resourceCategoriesLoading = ref(false)
 const resourceCategoriesError = ref<string | null>(null)
+
+const assetSeries = ref<AssetSeries[]>([])
+const assetSeriesLoaded = ref(false)
+const assetSeriesLoading = ref(false)
+const assetSeriesError = ref<string | null>(null)
 
 const categoryIndex = computed(() => {
   const map = new Map<string, ResourceCategory>()
@@ -375,6 +385,33 @@ async function loadResourceCategories(options: { force?: boolean } = {}) {
   }
 }
 
+async function loadAssetSeries(options: { force?: boolean } = {}) {
+  const force = options.force ?? false
+  if (assetSeriesLoading.value) return
+  if (assetSeriesLoaded.value && !force) return
+  assetSeriesLoading.value = true
+  assetSeriesError.value = null
+  try {
+    const seriesList = await fetchAssetSeries()
+    assetSeries.value = Array.isArray(seriesList)
+      ? [...seriesList].sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'zh-CN'))
+      : []
+    assetSeriesLoaded.value = true
+  } catch (error) {
+    assetSeriesError.value = (error as Error).message ?? '系列加载失败'
+  } finally {
+    assetSeriesLoading.value = false
+  }
+}
+
+async function handleCreateSeries(payload: { name: string; description?: string | null }): Promise<AssetSeries> {
+  const created = await createAssetSeries(payload)
+  const map = new Map(assetSeries.value.map((item) => [item.id, item] as const))
+  map.set(created.id, created)
+  assetSeries.value = Array.from(map.values()).sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'zh-CN'))
+  return created
+}
+
 function findCategoryById(targetId: string | null): ResourceCategory | null {
   if (!targetId) return null
   return categoryIndex.value.get(targetId) ?? null
@@ -415,6 +452,21 @@ function handleEntryCategoryCreated(entry: UploadAssetEntry, category: ResourceC
   void loadResourceCategories({ force: true })
 }
 
+function handleEntrySeriesChange(entry: UploadAssetEntry, value: string | null): void {
+  const normalized = typeof value === 'string' ? value.trim() : ''
+  entry.seriesId = normalized.length ? normalized : null
+}
+
+function handleEntrySeriesCreated(entry: UploadAssetEntry, series: AssetSeries): void {
+  if (series && typeof series.id === 'string') {
+    handleEntrySeriesChange(entry, series.id)
+    const map = new Map(assetSeries.value.map((item) => [item.id, item] as const))
+    map.set(series.id, series)
+    assetSeries.value = Array.from(map.values()).sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'zh-CN'))
+    void loadAssetSeries({ force: true })
+  }
+}
+
 // Initialize entries when dialog opens
 watch(
   () => internalOpen.value,
@@ -437,6 +489,7 @@ watch(
           description: asset.description ?? '',
           categoryId: initialCategoryId,
           categoryPathLabel: initialCategoryLabel ?? '',
+          seriesId: typeof asset.seriesId === 'string' ? asset.seriesId : null,
           color: normalizedColor ?? '',
           colorHexInput: formatHexInputDisplay(normalizedColor),
           dimensionLength: typeof asset.dimensionLength === 'number' ? asset.dimensionLength : null,
@@ -455,6 +508,7 @@ watch(
       void nextTick(() => {
         void loadServerTags()
         void loadResourceCategories()
+        void loadAssetSeries()
       })
     } else if (!uploadSubmitting.value) {
       resetUploadState()
@@ -586,6 +640,7 @@ async function submitUpload() {
           description: uploadDescription.length ? uploadDescription : undefined,
           tagIds,
           categoryId: entry.categoryId,
+          seriesId: entry.seriesId,
           color: normalizedColor,
           dimensionLength,
           dimensionWidth,
@@ -685,6 +740,21 @@ async function submitUpload() {
                 class="ml-2"
               />
             </div>
+            <div class="upload-entry__series-row">
+              <SeriesSelector
+                :model-value="entry.seriesId"
+                :series-options="assetSeries"
+                label="资产系列"
+                density="compact"
+                :loading="assetSeriesLoading"
+                :disabled="uploadSubmitting || entry.status === 'success'"
+                :clearable="true"
+                :allow-create="true"
+                :create-series="handleCreateSeries"
+                @update:model-value="(value) => handleEntrySeriesChange(entry, value)"
+                @series-created="(series) => handleEntrySeriesCreated(entry, series)"
+              />
+            </div>
             <div v-if="entry.categoryPathLabel" class="upload-entry__category-label">
               当前分类：{{ entry.categoryPathLabel }}
             </div>
@@ -762,6 +832,9 @@ async function submitUpload() {
         <v-alert v-if="serverTagsError" type="warning" variant="tonal" density="comfortable" class="mt-4">
           {{ serverTagsError }}
         </v-alert>
+        <v-alert v-if="assetSeriesError" type="warning" variant="tonal" density="comfortable" class="mt-4">
+          {{ assetSeriesError }}
+        </v-alert>
       </v-card-text>
       <v-card-actions>
         <v-spacer />
@@ -818,6 +891,14 @@ async function submitUpload() {
 }
 
 .upload-entry__category-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  flex-wrap: nowrap;
+}
+
+.upload-entry__series-row {
   display: flex;
   align-items: center;
   gap: 12px;
