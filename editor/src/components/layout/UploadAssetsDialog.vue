@@ -5,6 +5,7 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ResourceCategory } from '@/types/resource-category'
 import CategoryPathSelector from '@/components/common/CategoryPathSelector.vue'
+import { buildCategoryPathString } from '@/utils/categoryPath'
 import {
   createAssetTag,
   fetchAssetTags,
@@ -93,6 +94,23 @@ const resourceCategories = ref<ResourceCategory[]>([])
 const resourceCategoriesLoaded = ref(false)
 const resourceCategoriesLoading = ref(false)
 const resourceCategoriesError = ref<string | null>(null)
+
+const categoryIndex = computed(() => {
+  const map = new Map<string, ResourceCategory>()
+  const traverse = (nodes: ResourceCategory[]) => {
+    nodes.forEach((node) => {
+      if (!node || typeof node.id !== 'string') {
+        return
+      }
+      map.set(node.id, node)
+      if (Array.isArray(node.children) && node.children.length) {
+        traverse(node.children)
+      }
+    })
+  }
+  traverse(resourceCategories.value ?? [])
+  return map
+})
 
 const uploadTagOptions = computed<TagOption[]>(() => {
   const base: TagOption[] = Array.isArray(props.tagOptions) ? props.tagOptions : []
@@ -357,37 +375,23 @@ async function loadResourceCategories(options: { force?: boolean } = {}) {
   }
 }
 
-function findCategoryById(categories: ResourceCategory[], targetId: string | null): ResourceCategory | null {
+function findCategoryById(targetId: string | null): ResourceCategory | null {
   if (!targetId) return null
-  for (const category of categories) {
-    if (!category || typeof category.id !== 'string') continue
-    if (category.id === targetId) {
-      return category
-    }
-    if (Array.isArray(category.children) && category.children.length) {
-      const match = findCategoryById(category.children, targetId)
-      if (match) return match
-    }
-  }
-  return null
+  return categoryIndex.value.get(targetId) ?? null
 }
 
 function buildCategoryLabel(category: ResourceCategory | null): string {
   if (!category) return ''
-  if (Array.isArray(category.path) && category.path.length) {
-    const segments = category.path
-      .map((item) => (item?.name ?? '').trim())
-      .filter((segment) => segment.length > 0)
-    if (segments.length) {
-      return segments.join(' / ')
-    }
-  }
-  return category.name ?? ''
+  const segments = Array.isArray(category.path) && category.path.length
+    ? category.path.map((item) => (item?.name ?? '').trim()).filter((name) => name.length > 0)
+    : [category.name]
+  const formatted = buildCategoryPathString(segments)
+  return formatted.length ? formatted : (category.name ?? '')
 }
 
 function updateEntryCategoryLabel(entry: UploadAssetEntry): void {
   if (!entry) return
-  const category = findCategoryById(resourceCategories.value, entry.categoryId)
+  const category = findCategoryById(entry.categoryId)
   entry.categoryPathLabel = buildCategoryLabel(category)
 }
 
@@ -395,6 +399,11 @@ function handleEntryCategoryChange(entry: UploadAssetEntry, value: string | null
   const normalized = typeof value === 'string' ? value.trim() : ''
   entry.categoryId = normalized.length ? normalized : null
   updateEntryCategoryLabel(entry)
+}
+
+function handleEntryCategorySelected(entry: UploadAssetEntry, payload: { id: string | null; label: string }): void {
+  entry.categoryId = payload.id ?? null
+  entry.categoryPathLabel = payload.label ?? ''
 }
 
 function handleEntryCategoryCreated(entry: UploadAssetEntry, category: ResourceCategory): void {
@@ -414,13 +423,13 @@ watch(
       uploadEntries.value = props.assets.map((asset) => {
         const normalizedColor = normalizeHexColor(asset.color ?? null)
         const initialCategoryId = typeof asset.categoryId === 'string' ? asset.categoryId : null
+        const initialSegments = Array.isArray(asset.categoryPath)
+          ? asset.categoryPath
+              .map((item) => (item?.name ?? '').trim())
+              .filter((segment) => segment.length > 0)
+          : []
         const initialCategoryLabel = asset.categoryPathString
-          ?? (Array.isArray(asset.categoryPath)
-            ? asset.categoryPath
-                .map((item) => (item?.name ?? '').trim())
-                .filter((segment) => segment.length > 0)
-                .join(' / ')
-            : '')
+          ?? (initialSegments.length ? buildCategoryPathString(initialSegments) : '')
         return {
           assetId: asset.id,
           asset,
@@ -664,6 +673,7 @@ async function submitUpload() {
                 :disabled="uploadSubmitting || entry.status === 'success'"
                 dense
                 @update:model-value="(value) => handleEntryCategoryChange(entry, value)"
+                @category-selected="(payload) => handleEntryCategorySelected(entry, payload)"
                 @category-created="(category) => handleEntryCategoryCreated(entry, category)"
               />
               <v-progress-circular

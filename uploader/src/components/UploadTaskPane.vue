@@ -65,11 +65,8 @@
                 @update:model-value="handleSeriesChange"
                 @series-created="handleSeriesCreate"
               />
-              <div v-if="task.seriesName" class="text-caption text-medium-emphasis mt-1">
-                当前系列：{{ task.seriesName }}
-              </div>
             </v-col>
-            <v-col cols="12">
+            <v-col cols="12" md="6">
               <CategoryPathSelector
                 v-model="task.categoryId"
                 :categories="categories"
@@ -78,9 +75,6 @@
                 @category-selected="handleCategorySelected"
                 @category-created="handleCategoryCreated"
               />
-              <div v-if="task.categoryPathLabel" class="text-caption text-medium-emphasis mt-1">
-                {{ task.categoryPathLabel }}
-              </div>
             </v-col>
             <v-col cols="12">
               <div class="task-color-row">
@@ -194,23 +188,32 @@
                 item-title="name"
                 item-value="id"
                 hide-selected
+                class="tag-selector"
                 @update:model-value="handleTagInput"
-              />
-              <div class="task-ai-row">
-                <v-btn
-                  color="secondary"
-                  variant="tonal"
-                  size="small"
-                  :loading="task.aiTagLoading"
-                  :disabled="task.aiTagLoading || (!task.name && !task.description)"
-                  @click="handleGenerateAiTags"
-                >
-                  使用 AI 生成标签
-                </v-btn>
-                <span v-if="task.aiTagError" class="task-ai-row__error">{{ task.aiTagError }}</span>
-                <span v-else-if="task.aiSuggestedTags.length" class="task-ai-row__hint">
-                  推荐：{{ task.aiSuggestedTags.join('、') }}
-                </span>
+              >
+                <template #append-inner>
+                  <v-tooltip text="使用 AI 生成标签" location="top">
+                    <template #activator="{ props: tooltipProps }">
+                      <v-btn
+                        v-bind="tooltipProps"
+                        class="tag-selector__ai-btn"
+                        icon="mdi-sparkles"
+                        variant="text"
+                        size="small"
+                        color="primary"
+                        :loading="task.aiTagLoading"
+                        :disabled="task.aiTagLoading || (!task.name && !task.description)"
+                        @click.stop="handleGenerateAiTags"
+                      />
+                    </template>
+                  </v-tooltip>
+                </template>
+              </v-combobox>
+              <div v-if="task.aiTagError" class="tag-selector__message tag-selector__message--error">
+                {{ task.aiTagError }}
+              </div>
+              <div v-else-if="task.aiSuggestedTags.length" class="tag-selector__message tag-selector__message--hint">
+                推荐：{{ task.aiSuggestedTags.join('、') }}
               </div>
             </v-col>
           </v-row>
@@ -521,22 +524,28 @@ function handleDescriptionBlur(): void {
   padding: 12px;
 }
 
-.task-ai-row {
+.tag-selector :deep(.v-field__append-inner) {
+  padding-inline-end: 4px;
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-top: 12px;
-  flex-wrap: wrap;
+  gap: 4px;
 }
 
-.task-ai-row__error {
+.tag-selector__ai-btn {
+  margin-inline-start: 4px;
+}
+
+.tag-selector__message {
+  margin-top: 6px;
+  font-size: 0.85rem;
+}
+
+.tag-selector__message--error {
   color: #ef9a9a;
-  font-size: 0.85rem;
 }
 
-.task-ai-row__hint {
+.tag-selector__message--hint {
   color: #80cbc4;
-  font-size: 0.85rem;
 }
 
 .task-dimension-grid {

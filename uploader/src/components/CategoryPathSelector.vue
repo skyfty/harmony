@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { ResourceCategory } from '@/types'
 import { useUploadStore } from '@/stores/upload'
 import { buildCategoryPathString, isAssetTypeName, isRootCategoryName, stripAssetTypeSegments } from '@/utils/categoryPath'
@@ -32,12 +32,9 @@ const uploadStore = useUploadStore()
 const searchText = ref('')
 const loading = ref(false)
 const initialOptions = ref<CategoryOption[]>([])
-const searchOptions = ref<CategoryOption[]>([])
 const selectedId = ref<string | null>(props.modelValue ?? null)
-const latestFetchToken = ref<number>(0)
 const menuOpen = ref(false)
 const navigationStack = ref<ResourceCategory[]>([])
-let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
 watch(
   () => props.modelValue,
@@ -125,54 +122,12 @@ const categoryIndex = computed(() => {
 })
 
 function scheduleSearch(value: string | null): void {
-  const nextValue = value ?? ''
-  searchText.value = nextValue
-  if (debounceTimer) {
-    clearTimeout(debounceTimer)
-    debounceTimer = null
-  }
-  if (!nextValue.trim().length) {
-    searchOptions.value = []
-    return
-  }
-  debounceTimer = setTimeout(runSearch, 250)
-}
-
-async function runSearch(): Promise<void> {
-  const keyword = searchText.value.trim()
-  if (!keyword.length) {
-    searchOptions.value = []
-    return
-  }
-  loading.value = true
-  const token = Date.now()
-  latestFetchToken.value = token
-  try {
-    const results = await uploadStore.searchCategoryOptions(keyword)
-    if (latestFetchToken.value !== token) {
-      return
-    }
-    const unique = new Map<string, CategoryOption>()
-    results.forEach((category) => {
-      const option = toOption(category)
-      if (option) {
-        unique.set(option.id, option)
-      }
-    })
-    searchOptions.value = Array.from(unique.values()).sort((a, b) => a.pathString.localeCompare(b.pathString))
-  } catch (error) {
-    console.warn('[CategoryPathSelector] search failed', error)
-  } finally {
-    if (latestFetchToken.value === token) {
-      loading.value = false
-    }
-  }
+  searchText.value = value ?? ''
 }
 
 const optionMap = computed(() => {
   const map = new Map<string, CategoryOption>()
   initialOptions.value.forEach((option) => map.set(option.id, option))
-  searchOptions.value.forEach((option) => map.set(option.id, option))
   return map
 })
 
@@ -225,9 +180,6 @@ function flattenRootCategories(nodes: ResourceCategory[] | undefined): ResourceC
 }
 
 const currentChildren = computed(() => {
-  if (isSearching.value) {
-    return []
-  }
   const parent = navigationStack.value.length ? navigationStack.value[navigationStack.value.length - 1] : null
   const children = parent ? parent.children ?? [] : flattenRootCategories(props.categories)
   return Array.isArray(children)
@@ -240,12 +192,21 @@ const searchItems = computed(() => {
   if (!keyword.length) {
     return []
   }
-  const base = Array.from(optionMap.value.values())
   const lowerKeyword = keyword.toLowerCase()
-  const matched = base.filter((option) => option.pathString.toLowerCase().includes(lowerKeyword))
-  const result = [...matched]
-  const existing = base.some((option) => option.pathString.toLowerCase() === lowerKeyword)
-  if (!existing) {
+  const result: CategoryOption[] = []
+  currentChildren.value.forEach((child) => {
+    const option = optionMap.value.get(child.id)
+    if (!option) {
+      return
+    }
+    const candidate = `${child.name}`.toLowerCase()
+    const labelCandidate = option.pathString.toLowerCase()
+    if (candidate.includes(lowerKeyword) || labelCandidate.includes(lowerKeyword)) {
+      result.push(option)
+    }
+  })
+  const exactMatch = currentChildren.value.some((child) => child.name.trim().toLowerCase() === lowerKeyword)
+  if (!exactMatch) {
     result.push({
       id: `__create__:${keyword}`,
       label: `创建分类 “${keyword}”`,
@@ -279,11 +240,6 @@ function resetNavigationToSelected(): void {
 
 function clearSearchState(): void {
   searchText.value = ''
-  searchOptions.value = []
-  if (debounceTimer) {
-    clearTimeout(debounceTimer)
-    debounceTimer = null
-  }
   loading.value = false
 }
 
@@ -351,8 +307,24 @@ function handleSearchSelect(option: CategoryOption): void {
   selectCategoryById(option.id)
 }
 
+function getCurrentParentSegments(): string[] {
+  const parent = navigationStack.value.length ? navigationStack.value[navigationStack.value.length - 1] : null
+  if (!parent) {
+    return []
+  }
+  if (Array.isArray(parent.path) && parent.path.length) {
+    return parent.path.map((item) => item?.name ?? '').filter((name) => name.length > 0)
+  }
+  return parent.name ? [parent.name] : []
+}
+
 async function handleCreate(pathString: string): Promise<void> {
-  const segments = normalizeSegments(pathString)
+  const relativeSegments = normalizeSegments(pathString)
+  if (!relativeSegments.length) {
+    return
+  }
+  const baseSegments = getCurrentParentSegments()
+  const segments = [...baseSegments, ...relativeSegments]
   if (!segments.length) {
     return
   }
@@ -365,7 +337,6 @@ async function handleCreate(pathString: string): Promise<void> {
       const next = [...initialOptions.value.filter((item) => item.id !== option.id), option]
       initialOptions.value = next.sort((a, b) => a.pathString.localeCompare(b.pathString))
     }
-    searchOptions.value = []
     searchText.value = ''
     selectCategoryById(created.id)
   } catch (error) {
@@ -378,12 +349,6 @@ async function handleCreate(pathString: string): Promise<void> {
 function handleClear(): void {
   selectCategoryById(null)
 }
-
-onBeforeUnmount(() => {
-  if (debounceTimer) {
-    clearTimeout(debounceTimer)
-  }
-})
 </script>
 
 <template>
@@ -393,9 +358,9 @@ onBeforeUnmount(() => {
       :close-on-content-click="false"
       transition="scale-transition"
       location="bottom start"
-      :offset="[0, 8]"
       content-class="category-menu__overlay"
       max-width="420"
+      offset="-20,0"
       @update:model-value="handleMenuChange"
     >
       <template #activator="{ props: menuProps }">
@@ -405,11 +370,13 @@ onBeforeUnmount(() => {
           :label="label ?? '资源分类'"
           :placeholder="placeholder ?? '选择分类'"
           :hint="hint"
+          
           :persistent-hint="Boolean(hint)"
           :density="dense ? 'compact' : 'comfortable'"
           :disabled="disabled"
           :loading="loading || uploadStore.loadingCategories"
           readonly
+          
           clearable
           class="category-selector__field"
           @click:clear="handleClear"
