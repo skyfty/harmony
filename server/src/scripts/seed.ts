@@ -8,55 +8,54 @@ type CategorySeedEntry = {
   path: string[]
   description?: string
 }
-
 const ASSET_CATEGORY_SEEDS: CategorySeedEntry[] = [
   {
-    path: ['建筑'],
-    description: '与建筑及结构相关的三维或二维资源。',
+    path: ['Architecture'],
+    description: '3D or 2D assets related to buildings and structures.',
   },
   {
-    path: ['建筑', '住宅'],
-    description: '住宅类建筑，例如公寓、别墅等。',
+    path: ['Architecture', 'Residential'],
+    description: 'Residential buildings such as apartments and villas.',
   },
   {
-    path: ['建筑', '商业'],
-    description: '商业用途建筑，如商场、写字楼。',
+    path: ['Architecture', 'Commercial'],
+    description: 'Commercial buildings like malls and office towers.',
   },
   {
-    path: ['建筑', '公共设施'],
-    description: '公共设施建筑，例如学校、医院、车站。',
+    path: ['Architecture', 'Public Facilities'],
+    description: 'Public facility buildings such as schools, hospitals, and stations.',
   },
   {
-    path: ['自然'],
-    description: '自然环境相关的素材及资产。',
+    path: ['Nature'],
+    description: 'Assets and materials related to natural environments.',
   },
   {
-    path: ['自然', '植物'],
-    description: '树木、花草等植物类资源。',
+    path: ['Nature', 'Plants'],
+    description: 'Plant resources like trees, flowers, and shrubs.',
   },
   {
-    path: ['自然', '动物'],
-    description: '动物相关的模型或素材。',
+    path: ['Nature', 'Animals'],
+    description: 'Animal models or materials.',
   },
   {
-    path: ['自然', '地形'],
-    description: '地形、地貌等自然场景资源。',
+    path: ['Nature', 'Terrain'],
+    description: 'Terrain and landform natural scene assets.',
   },
   {
-    path: ['人物'],
-    description: '人物角色相关的资产分类。',
+    path: ['Characters'],
+    description: 'Assets related to character models.',
   },
   {
-    path: ['人物', '现代人物'],
-    description: '现代风格的人物角色。',
+    path: ['Characters', 'Modern Characters'],
+    description: 'Modern-style character models.',
   },
   {
-    path: ['人物', '历史人物'],
-    description: '具有历史背景的人物角色。',
+    path: ['Characters', 'Historical Characters'],
+    description: 'Historical character models.',
   },
   {
-    path: ['人物', '幻想人物'],
-    description: '幻想、科幻或魔幻题材人物。',
+    path: ['Characters', 'Fantasy Characters'],
+    description: 'Fantasy, sci-fi, or magical themed characters.',
   },
 ]
 

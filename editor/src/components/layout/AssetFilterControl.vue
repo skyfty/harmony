@@ -18,7 +18,7 @@
         density="compact"
         :color="hasActiveFilters ? 'primary' : undefined"
         :icon="hasActiveFilters ? 'mdi-filter-variant' : 'mdi-filter-outline'"
-        :title="hasActiveFilters ? '已应用筛选' : '筛选资产'"
+        :title="hasActiveFilters ? 'Filters applied' : 'Filter assets'"
       />
     </template>
     <v-sheet
@@ -29,7 +29,7 @@
       @keydown.esc.stop="overlayOpen = false"
     >
       <div class="asset-filter-popover__header">
-        <span class="asset-filter-popover__title">筛选资产</span>
+        <span class="asset-filter-popover__title">Filter assets</span>
         <v-btn
           v-if="hasActiveFilters"
           variant="text"
@@ -37,12 +37,11 @@
           density="comfortable"
           @click="emit('clear-all')"
         >
-          清除筛选
+          Clear filters
         </v-btn>
       </div>
       <div class="asset-filter-popover__body">
         <div class="asset-filter-popover__column">
-          <div class="asset-filter-popover__column-title">系列</div>
           <div class="asset-filter-popover__column-content">
             <button
               type="button"
@@ -50,7 +49,7 @@
               :class="{ 'is-active': selectedSeries === null }"
               @click="emit('select-series', null)"
             >
-              全部系列
+              All series
             </button>
             <template v-if="hasSeriesOptions">
               <button
@@ -64,11 +63,10 @@
                 {{ option.label }}
               </button>
             </template>
-            <div v-else class="asset-filter-popover__empty">暂无系列</div>
+            <div v-else class="asset-filter-popover__empty">No series</div>
           </div>
         </div>
         <div class="asset-filter-popover__column">
-          <div class="asset-filter-popover__column-title">尺寸分类</div>
           <div class="asset-filter-popover__column-content">
             <button
               type="button"
@@ -76,7 +74,7 @@
               :class="{ 'is-active': !hasSizeFilters }"
               @click="emit('clear-size-filters')"
             >
-              全部尺寸
+              All sizes
             </button>
             <template v-if="hasSizeOptions">
               <button
@@ -90,23 +88,11 @@
                 {{ option.label }}
               </button>
             </template>
-            <div v-else class="asset-filter-popover__empty">暂无尺寸分类</div>
+            <div v-else class="asset-filter-popover__empty">No size categories</div>
           </div>
         </div>
         <div class="asset-filter-popover__column asset-filter-popover__column--tags">
-          <div class="asset-filter-popover__column-title">标签</div>
-          <div class="asset-filter-popover__search">
-            <v-text-field
-              :model-value="props.tagFilterSearch"
-              density="comfortable"
-              variant="solo"
-              hide-details
-              clearable
-              placeholder="搜索标签"
-              prepend-inner-icon="mdi-magnify"
-              @update:model-value="handleSearchInput"
-            />
-          </div>
+   
           <div class="asset-filter-popover__column-content asset-filter-popover__column-content--tags">
             <button
               type="button"
@@ -114,7 +100,7 @@
               :class="{ 'is-active': !hasActiveTagFilters }"
               @click="emit('clear-tag-filters')"
             >
-              全部标签
+              All tags
             </button>
             <template v-if="hasTagOptions">
               <template v-if="props.filteredTagOptions.length">
@@ -129,9 +115,9 @@
                   {{ option.label }}
                 </button>
               </template>
-              <div v-else class="asset-filter-popover__empty">无匹配标签</div>
+              <div v-else class="asset-filter-popover__empty">No matching tags</div>
             </template>
-            <div v-else class="asset-filter-popover__empty">暂无可用标签</div>
+            <div v-else class="asset-filter-popover__empty">No available tags</div>
           </div>
         </div>
       </div>
@@ -199,10 +185,6 @@ watch(
     }
   },
 )
-
-function handleSearchInput(value: string | null) {
-  emit('update:tag-filter-search', value ?? '')
-}
 </script>
 
 <style scoped>

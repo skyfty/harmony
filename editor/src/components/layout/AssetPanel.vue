@@ -124,7 +124,7 @@ async function loadPackageDirectory(providerId: string, options: { force?: boole
       setProviderError(providerId, null)
       await storeProviderCatalog(providerId, directories)
     } catch (error) {
-      setProviderError(providerId, (error as Error).message ?? '资源加载失败')
+      setProviderError(providerId, (error as Error).message ?? 'Failed to load resources')
     } finally {
       setProviderLoading(providerId, false)
     }
@@ -142,7 +142,7 @@ async function loadPackageDirectory(providerId: string, options: { force?: boole
   try {
     const response = await fetch(provider.url)
     if (!response.ok) {
-      throw new Error(`资源加载失败（${response.status}）`)
+      throw new Error(`Failed to load resources (${response.status})`)
     }
     const payload = await response.json()
     const directories = provider.transform ? provider.transform(payload) : []
@@ -150,7 +150,7 @@ async function loadPackageDirectory(providerId: string, options: { force?: boole
     setProviderError(providerId, null)
     await storeProviderCatalog(providerId, directories)
   } catch (error) {
-    setProviderError(providerId, (error as Error).message ?? '资源加载失败')
+    setProviderError(providerId, (error as Error).message ?? 'Failed to load resources')
   } finally {
     setProviderLoading(providerId, false)
   }
@@ -173,7 +173,7 @@ function restoreOpenedDirectories(): string[] {
     const filtered = parsed.filter((value): value is string => typeof value === 'string' && value.length > 0)
     return filtered.length ? Array.from(new Set(filtered)) : [PACKAGES_ROOT_DIRECTORY_ID]
   } catch (error) {
-    console.warn('恢复 ProjectPanel 打开目录状态失败', error)
+    console.warn('Failed to restore ProjectPanel opened directories', error)
     return [PACKAGES_ROOT_DIRECTORY_ID]
   }
 }
@@ -186,7 +186,7 @@ function persistOpenedDirectories(ids: string[]): void {
     const uniqueIds = Array.from(new Set(ids))
     window.localStorage.setItem(OPENED_DIRECTORIES_STORAGE_KEY, JSON.stringify(uniqueIds))
   } catch (error) {
-    console.warn('持久化 ProjectPanel 打开目录状态失败', error)
+    console.warn('Failed to persist ProjectPanel opened directories', error)
   }
 }
 
@@ -295,7 +295,7 @@ async function ensureAssetCached(asset: ProjectAsset) {
   }
   const entry = await assetCacheStore.downloaProjectAsset(asset)
   if (!assetCacheStore.hasCache(asset.id)) {
-    throw new Error(entry.error ?? '资源未下载完成')
+    throw new Error(entry.error ?? 'Asset download is not complete')
   }
 }
 
@@ -315,12 +315,12 @@ async function handleAddAsset(asset: ProjectAsset) {
     }
     const node = await sceneStore.addModelNode({ asset: preparedAsset })
     if (!node) {
-      throw new Error('资源尚未准备就绪')
+      throw new Error('Asset is not ready yet')
     }
   } catch (error) {
-    console.error('添加资源失败', error)
+    console.error('Failed to add asset', error)
     const cacheId = preparedAsset?.id ?? resolveAssetCacheId(asset)
-    assetCacheStore.setError(cacheId, (error as Error).message ?? '添加资源失败')
+    assetCacheStore.setError(cacheId, (error as Error).message ?? 'Failed to add asset')
   } finally {
     addPendingAssetId.value = null
   }
@@ -562,7 +562,7 @@ async function performDeleteAssets() {
       selectedAssetIds.value = selectedAssetIds.value.filter((id) => !removedIds.includes(id))
     }
   } catch (error) {
-    console.error('删除资源失败', error)
+    console.error('Failed to delete assets', error)
   } finally {
     cancelDeleteAssets()
   }
@@ -656,7 +656,7 @@ const categoryBreadcrumbs = computed<CategoryBreadcrumbItem[]>(() => {
   const graph = categoryGraph.value
   items.push({
     id: null,
-    name: '全部资产',
+  name: 'All Assets',
     category: null,
     depth: 0,
     children: graph.roots,
@@ -734,7 +734,7 @@ async function loadCategoryTree(options: { force?: boolean } = {}): Promise<void
     categoryTree.value = Array.isArray(categories) ? categories : []
     categoryTreeLoaded.value = true
   } catch (error) {
-    categoryTreeError.value = (error as Error).message ?? '分类加载失败'
+  categoryTreeError.value = (error as Error).message ?? 'Failed to load categories'
   } finally {
     categoryTreeLoading.value = false
   }
@@ -781,7 +781,7 @@ function isCategoryActive(categoryId: string): boolean {
 
 function buildCategoryLabel(category: ResourceCategory | null): string {
   if (!category) {
-    return '全部资产'
+  return 'All Assets'
   }
   return category.name
 }
@@ -888,7 +888,7 @@ const seriesOptions = computed<SeriesFilterOption[]>(() => {
     if (!map.has(value)) {
       map.set(value, {
         value,
-        label: '未分配系列',
+  label: 'Unassigned series',
         id: null,
         name: null,
         isUnassigned: true,
@@ -957,7 +957,7 @@ const sizeCategoryOptions = computed<SizeCategoryFilterOption[]>(() => {
   if (hasUnassigned) {
     sorted.unshift({
       value: SIZE_UNASSIGNED_VALUE,
-      label: '未分类',
+  label: 'Uncategorized',
       isUnassigned: true,
     })
   }
@@ -1220,7 +1220,7 @@ function handleUploadCompleted(payload: { successCount: number; replacementMap: 
       sceneStore.selectAsset(lastId)
     }
   }
-  showDropFeedback('success', `成功上传 ${payload.successCount} 个资源`)
+  showDropFeedback('success', `Successfully uploaded ${payload.successCount} assets`)
 }
 
 function isInternalAssetDrag(event: DragEvent): boolean {
@@ -1477,7 +1477,7 @@ function extractAssetUrlsFromDataTransfer(dataTransfer: DataTransfer): string[] 
         }
       })
     } catch (error) {
-      console.warn('解析拖拽 HTML 失败', error)
+  console.warn('Failed to parse dropped HTML', error)
     }
   }
   const plain = dataTransfer.getData('text/plain')
@@ -1555,7 +1555,7 @@ async function processAssetDrop(dataTransfer: DataTransfer): Promise<{ assets: P
       const asset = await importLocalFile(file)
       collected.set(asset.id, asset)
     } catch (error) {
-      const message = (error as Error).message ?? `导入失败：${file.name}`
+  const message = (error as Error).message ?? `Import failed: ${file.name}`
       errors.push(message)
     }
   }
@@ -1571,7 +1571,7 @@ async function processAssetDrop(dataTransfer: DataTransfer): Promise<{ assets: P
         collected.set(asset.id, asset)
       }
     } catch (error) {
-      const message = (error as Error).message ?? `导入失败：${url}`
+  const message = (error as Error).message ?? `Import failed: ${url}`
       errors.push(message)
     }
   }
@@ -1581,7 +1581,7 @@ async function processAssetDrop(dataTransfer: DataTransfer): Promise<{ assets: P
 
 const allowAssetDrop = computed(() => true)
 const dropOverlayVisible = computed(() => dropActive.value || dropProcessing.value)
-const dropOverlayMessage = computed(() => (dropProcessing.value ? '正在导入资源…' : '拖拽文件或链接到此处以导入资源'))
+const dropOverlayMessage = computed(() => (dropProcessing.value ? 'Importing assets…' : 'Drag files or links here to import assets'))
 
 function handleGalleryDragEnter(event: DragEvent) {
   if (!allowAssetDrop.value || dropProcessing.value) {
@@ -1660,17 +1660,17 @@ async function handleGalleryDrop(event: DragEvent) {
       selectedAssetIds.value = [lastAsset.id]
     }
     if (assets.length && errors.length) {
-      showDropFeedback('error', `成功导入 ${assets.length} 个资源，但有 ${errors.length} 个失败`)
+      showDropFeedback('error', `Successfully imported ${assets.length} assets, but ${errors.length} failed`)
     } else if (assets.length) {
-      showDropFeedback('success', `成功导入 ${assets.length} 个资源`)
+      showDropFeedback('success', `Successfully imported ${assets.length} assets`)
     } else if (errors.length) {
-      showDropFeedback('error', errors[0] ?? '导入资源失败')
+      showDropFeedback('error', errors[0] ?? 'Failed to import assets')
     } else {
-      showDropFeedback('error', '未检测到可导入的资源')
+      showDropFeedback('error', 'No importable assets detected')
     }
   } catch (error) {
-    console.error('导入资源失败', error)
-    showDropFeedback('error', (error as Error).message ?? '导入资源失败')
+    console.error('Failed to import assets', error)
+    showDropFeedback('error', (error as Error).message ?? 'Failed to import assets')
   } finally {
     dropProcessing.value = false
   }
@@ -1806,7 +1806,7 @@ async function ensureAssetPreview(asset: ProjectAsset) {
   try {
     await assetCacheStore.loadFromIndexedDb(cacheId)
   } catch (error) {
-    console.warn('从 IndexedDB 加载资源失败', error)
+    console.warn('Failed to load asset from IndexedDB', error)
   } finally {
     indexedDbLoadQueue.delete(cacheId)
   }
@@ -2103,7 +2103,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
               density="compact"
               icon="mdi-cloud-upload"
               :disabled="!canUploadSelection"
-              :title="'上传到服务器'"
+              :title="'Upload to Server'"
               @click="openUploadDialog"
             />
             <v-divider vertical class="mx-1" />
@@ -2171,8 +2171,8 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                         class="category-crumb__toggle"
                         :class="{ 'is-active': isBreadcrumbIndexActive(index) }"
                         v-bind="menuProps"
-                        :title="`${categoryTooltip(crumb)} · 展开子分类`"
-                        :aria-label="`${categoryTooltip(crumb)} · 展开子分类`"
+                        :title="`${categoryTooltip(crumb)} · Expand subcategories`"
+                        :aria-label="`${categoryTooltip(crumb)} · Expand subcategories`"
                       >
                         <v-icon size="14">mdi-chevron-down</v-icon>
                       </button>
@@ -2193,35 +2193,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                 <span v-if="index < categoryBreadcrumbs.length - 1" class="category-breadcrumbs__separator"><v-icon icon="mdi-chevron-right"></v-icon></span>
               </template>
             </div>
-            <div class="category-breadcrumbs__actions">
-              <v-progress-circular
-                v-if="categoryTreeLoading"
-                class="category-breadcrumbs__loader"
-                indeterminate
-                size="16"
-                width="2"
-                color="primary"
-              />
-              <v-btn
-                v-else-if="categoryTreeError"
-                variant="text"
-                size="small"
-                density="comfortable"
-                color="error"
-                @click="reloadCategoryTree"
-              >
-                重试
-              </v-btn>
-              <v-btn
-                v-if="categoryPath.length"
-                variant="text"
-                size="small"
-                density="comfortable"
-                @click="clearCategoryFilter"
-              >
-                清除
-              </v-btn>
-            </div>
+            
           </div>
           <div v-if="categoryTreeError" class="category-error-text">
             {{ categoryTreeError }}
@@ -2252,7 +2224,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                   <v-icon size="40" color="primary">mdi-folder</v-icon>
                   <div class="directory-card-text">
                     <span class="directory-card-title">{{ directory.name }}</span>
-                    <span class="directory-card-subtitle">{{ countDirectoryAssets(directory) }} 个资源</span>
+                    <span class="directory-card-subtitle">{{ countDirectoryAssets(directory) }} assets</span>
                   </div>
                   <v-icon class="directory-card-hint" size="18" color="primary">mdi-gesture-double-tap</v-icon>
                 </div>
@@ -2558,10 +2530,10 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 }
 
 .category-breadcrumbs__path {
+  margin: 4px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
   flex: 1 1 auto;
   min-width: 0;
 }
@@ -2594,11 +2566,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   align-items: center;
   justify-content: center;
   gap: 4px;
-  border: 1px solid rgba(233, 236, 241, 0.14);
-  border-radius: 999px;
-  border-right: none;
-  padding: 4px 12px;
-  background: rgba(25, 28, 36, 0.6);
+  padding: 4px 1px;
   color: rgba(233, 236, 241, 0.86);
   font-size: 0.78rem;
   line-height: 1.1;
@@ -2615,9 +2583,6 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 }
 
 .category-crumb__label-button.is-active {
-  border-right: none;
-  border-color: rgba(77, 208, 225, 0.85);
-  background: rgba(2, 119, 189, 0.25);
   color: #e1f5fe;
 }
 
@@ -2631,10 +2596,6 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   justify-content: center;
   min-width: 8px;
   padding: 0 2px;
-  border-radius: 999px;
-  border-left: none;
-  border: 1px solid rgba(233, 236, 241, 0.14);
-  background: rgba(25, 28, 36, 0.6);
   color: rgba(233, 236, 241, 0.86);
   cursor: pointer;
   transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease;
@@ -2642,15 +2603,10 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 
 .category-crumb__toggle:hover,
 .category-crumb__toggle:focus-visible {
-  border-left: none;
-  border-color: rgba(77, 208, 225, 0.6);
   color: #e0f7fa;
 }
 
 .category-crumb__toggle.is-active {
-  border-left: none;
-  border-color: rgba(77, 208, 225, 0.7);
-  background: rgba(2, 119, 189, 0.22);
   color: #e1f5fe;
 }
 
