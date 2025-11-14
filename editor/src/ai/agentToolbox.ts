@@ -270,7 +270,7 @@ const tools: SceneAgentTool[] = [
       if (value === undefined) {
         throw new Error('需要提供布尔值以设置阴影开关。')
       }
-      store.setViewportShadowsEnabled(value)
+  store.setShadowsEnabled(value)
     },
   },
   {

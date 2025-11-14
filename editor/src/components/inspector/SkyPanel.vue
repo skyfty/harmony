@@ -7,10 +7,9 @@ import { SKYBOX_PRESETS, CUSTOM_SKYBOX_PRESET_ID, cloneSkyboxSettings } from '@/
 import { useSceneStore } from '@/stores/sceneStore'
 
 const sceneStore = useSceneStore()
-const { viewportSettings } = storeToRefs(sceneStore)
+const { skybox } = storeToRefs(sceneStore)
 
-const skyboxSettings = computed(() => viewportSettings.value.skybox)
-const shadowsEnabled = computed(() => viewportSettings.value.shadowsEnabled)
+const skyboxSettings = computed(() => skybox.value)
 
 const localSkyboxSettings = ref<SceneSkyboxSettings>(cloneSkyboxSettings(skyboxSettings.value))
 
@@ -33,12 +32,6 @@ function handlePresetSelect(presetId: string | null) {
   }
   sceneStore.applySkyboxPreset(presetId)
 }
-
-
-function handleShadowToggle(value: boolean | null) {
-  sceneStore.setViewportShadowsEnabled(Boolean(value))
-}
-
 function onChange(key: SkyboxParameterKey, event: Event) {
   const value = (event.target as HTMLInputElement).value as unknown as number
   if (Number.isNaN(value)) {

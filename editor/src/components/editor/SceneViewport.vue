@@ -288,9 +288,9 @@ const cameraControlMode = computed<CameraControlMode>({
 const isDragHovering = ref(false)
 const gridVisible = computed(() => sceneStore.viewportSettings.showGrid)
 const axesVisible = computed(() => sceneStore.viewportSettings.showAxes)
-const shadowsEnabled = computed(() => sceneStore.viewportSettings.shadowsEnabled)
+const shadowsEnabled = computed(() => sceneStore.shadowsEnabled)
 const cameraProjectionMode = computed(() => sceneStore.viewportSettings.cameraProjection)
-const skyboxSettings = computed(() => sceneStore.viewportSettings.skybox)
+const skyboxSettings = computed(() => sceneStore.skybox)
 const environmentSettings = computed(() => sceneStore.environmentSettings)
 const canAlignSelection = computed(() => {
   const primaryId = sceneStore.selectedNodeId

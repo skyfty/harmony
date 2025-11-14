@@ -1,4 +1,4 @@
-import type { GroundSettings, SceneNode, AssetIndexEntry, EnvironmentSettings } from '@harmony/schema'
+import type { GroundSettings, SceneNode, AssetIndexEntry, EnvironmentSettings, SceneSkyboxSettings } from '@harmony/schema'
 import type { SceneCameraState } from './scene-camera-state'
 import type { ProjectAsset } from './project-asset'
 import type { SceneViewportSettings } from './scene-viewport-settings'
@@ -16,6 +16,8 @@ export interface StoredSceneDocument {
   selectedNodeIds?: string[]
   camera: SceneCameraState
   viewportSettings: SceneViewportSettings
+  skybox: SceneSkyboxSettings
+  shadowsEnabled: boolean
   environment?: EnvironmentSettings
   groundSettings: GroundSettings
   panelVisibility?: PanelVisibilityState

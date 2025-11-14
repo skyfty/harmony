@@ -383,36 +383,50 @@ const createLoungeChair = (id: string, name: string, position: Vector3LikeLitera
     roughness: 0.6,
   })
 
-const baseDocument = (overrides: Partial<PresetSceneDetail['document']>): PresetSceneDetail['document'] => ({
-  name: overrides.name ?? '未命名预置场景',
-  thumbnail: overrides.thumbnail ?? null,
-  nodes: withEnvironmentNodes(overrides.nodes as SceneNodeDetail[] | undefined),
-  materials: overrides.materials ?? [],
-  selectedNodeId: overrides.selectedNodeId ?? 'harmony:ground',
-  selectedNodeIds: overrides.selectedNodeIds ?? ['harmony:ground'],
-  camera: overrides.camera ?? {
-    position: vec3(32, 20, 32),
-    target: vec3(0, 0, 0),
-    fov: 60,
-    forward: vec3(-0.64, -0.40, -0.64),
-  },
-  viewportSettings: overrides.viewportSettings ?? {
-    showGrid: true,
-    showAxes: true,
-    cameraProjection: 'perspective',
-    cameraControlMode: 'orbit',
-    shadowsEnabled: true,
-    skybox: {
-      presetId: 'clear-day',
-      exposure: 0.6,
-      turbidity: 4,
-      rayleigh: 1.25,
-      mieCoefficient: 0.0025,
-      mieDirectionalG: 0.75,
-      elevation: 25,
-      azimuth: 155,
+const baseDocument = (overrides: Partial<PresetSceneDetail['document']>): PresetSceneDetail['document'] => {
+  const legacyViewport = overrides.viewportSettings as (PresetSceneDetail['document']['viewportSettings'] & {
+    skybox?: Record<string, unknown>
+    shadowsEnabled?: boolean
+  }) | undefined
+
+  const viewportSettings = {
+    showGrid: typeof legacyViewport?.showGrid === 'boolean' ? legacyViewport.showGrid : true,
+    showAxes: typeof legacyViewport?.showAxes === 'boolean' ? legacyViewport.showAxes : true,
+    cameraProjection:
+      typeof legacyViewport?.cameraProjection === 'string' ? legacyViewport.cameraProjection : 'perspective',
+    cameraControlMode:
+      typeof legacyViewport?.cameraControlMode === 'string' ? legacyViewport.cameraControlMode : 'orbit',
+  }
+
+  const skybox = (overrides.skybox ?? legacyViewport?.skybox ?? {
+    presetId: 'clear-day',
+    exposure: 0.6,
+    turbidity: 4,
+    rayleigh: 1.25,
+    mieCoefficient: 0.0025,
+    mieDirectionalG: 0.75,
+    elevation: 25,
+    azimuth: 155,
+  }) as Record<string, unknown>
+
+  const shadowsEnabled = overrides.shadowsEnabled ?? legacyViewport?.shadowsEnabled ?? true
+
+  return {
+    name: overrides.name ?? '未命名预置场景',
+    thumbnail: overrides.thumbnail ?? null,
+    nodes: withEnvironmentNodes(overrides.nodes as SceneNodeDetail[] | undefined),
+    materials: overrides.materials ?? [],
+    selectedNodeId: overrides.selectedNodeId ?? 'harmony:ground',
+    selectedNodeIds: overrides.selectedNodeIds ?? ['harmony:ground'],
+    camera: overrides.camera ?? {
+      position: vec3(32, 20, 32),
+      target: vec3(0, 0, 0),
+      fov: 60,
+      forward: vec3(-0.64, -0.40, -0.64),
     },
-  },
+    viewportSettings,
+    skybox,
+    shadowsEnabled,
   groundSettings: overrides.groundSettings ?? { width: 140, depth: 140 },
   panelVisibility: overrides.panelVisibility ?? { hierarchy: false, inspector: false, project: true },
   panelPlacement: overrides.panelPlacement ?? { hierarchy: 'floating', inspector: 'floating', project: 'docked' },
@@ -421,8 +435,9 @@ const baseDocument = (overrides: Partial<PresetSceneDetail['document']>): Preset
   updatedAt: overrides.updatedAt ?? SCENE_TIMESTAMP,
   assetCatalog: overrides.assetCatalog ?? {},
   assetIndex: overrides.assetIndex ?? {},
-  packageAssetMap: overrides.packageAssetMap ?? {},
-})
+    packageAssetMap: overrides.packageAssetMap ?? {},
+  }
+}
 
 export const PRESET_SCENES: PresetSceneDetail[] = [
   {
@@ -567,18 +582,18 @@ export const PRESET_SCENES: PresetSceneDetail[] = [
         showAxes: true,
         cameraProjection: 'perspective',
         cameraControlMode: 'orbit',
-        shadowsEnabled: true,
-        skybox: {
-          presetId: 'overcast',
-          exposure: 0.4,
-          turbidity: 8,
-          rayleigh: 1.6,
-          mieCoefficient: 0.005,
-          mieDirectionalG: 0.8,
-          elevation: 55,
-          azimuth: 180,
-        },
       },
+      skybox: {
+        presetId: 'overcast',
+        exposure: 0.4,
+        turbidity: 8,
+        rayleigh: 1.6,
+        mieCoefficient: 0.005,
+        mieDirectionalG: 0.8,
+        elevation: 55,
+        azimuth: 180,
+      },
+      shadowsEnabled: true,
       groundSettings: { width: 200, depth: 140 },
     }),
   },
@@ -617,18 +632,18 @@ export const PRESET_SCENES: PresetSceneDetail[] = [
         showAxes: false,
         cameraProjection: 'perspective',
         cameraControlMode: 'orbit',
-        shadowsEnabled: true,
-        skybox: {
-          presetId: 'clear-day',
-          exposure: 0.72,
-          turbidity: 3,
-          rayleigh: 1,
-          mieCoefficient: 0.002,
-          mieDirectionalG: 0.7,
-          elevation: 35,
-          azimuth: 120,
-        },
       },
+      skybox: {
+        presetId: 'clear-day',
+        exposure: 0.72,
+        turbidity: 3,
+        rayleigh: 1,
+        mieCoefficient: 0.002,
+        mieDirectionalG: 0.7,
+        elevation: 35,
+        azimuth: 120,
+      },
+      shadowsEnabled: true,
       groundSettings: { width: 220, depth: 180 },
     }),
   },
@@ -679,18 +694,18 @@ export const PRESET_SCENES: PresetSceneDetail[] = [
         showAxes: false,
         cameraProjection: 'perspective',
         cameraControlMode: 'orbit',
-        shadowsEnabled: true,
-        skybox: {
-          presetId: 'golden-hour',
-          exposure: 0.55,
-          turbidity: 5,
-          rayleigh: 1.2,
-          mieCoefficient: 0.004,
-          mieDirectionalG: 0.85,
-          elevation: 22,
-          azimuth: 210,
-        },
       },
+      skybox: {
+        presetId: 'golden-hour',
+        exposure: 0.55,
+        turbidity: 5,
+        rayleigh: 1.1,
+        mieCoefficient: 0.0045,
+        mieDirectionalG: 0.85,
+        elevation: 18,
+        azimuth: 210,
+      },
+      shadowsEnabled: true,
       groundSettings: { width: 240, depth: 160 },
     }),
   },

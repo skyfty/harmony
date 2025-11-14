@@ -14,6 +14,8 @@ export interface PresetSceneDocument {
   selectedNodeIds?: string[]
   camera?: Record<string, unknown>
   viewportSettings?: Record<string, unknown>
+  skybox?: Record<string, unknown>
+  shadowsEnabled?: boolean
   groundSettings?: Record<string, unknown>
   panelVisibility?: Record<string, unknown>
   panelPlacement?: Record<string, unknown>

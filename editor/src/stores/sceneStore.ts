@@ -2483,14 +2483,13 @@ function normalizeProjectPanelTreeSize(value: unknown): number {
 }
 
 const defaultSkyboxSettings = cloneSkyboxSettings(DEFAULT_SKYBOX_SETTINGS)
+const defaultShadowsEnabled = true
 
 const defaultViewportSettings: SceneViewportSettings = {
   showGrid: true,
   showAxes: false,
   cameraProjection: 'perspective',
   cameraControlMode: 'orbit',
-  shadowsEnabled: true,
-  skybox: cloneSkyboxSettings(defaultSkyboxSettings),
 }
 
 function isCameraProjectionMode(value: unknown): value is CameraProjection {
@@ -2502,7 +2501,6 @@ function isCameraControlMode(value: unknown): value is CameraControlMode {
 }
 
 function cloneViewportSettings(settings?: Partial<SceneViewportSettings> | null): SceneViewportSettings {
-  const baseSkybox = settings?.skybox ?? defaultSkyboxSettings
   return {
     showGrid: settings?.showGrid ?? defaultViewportSettings.showGrid,
     showAxes: settings?.showAxes ?? defaultViewportSettings.showAxes,
@@ -2512,11 +2510,39 @@ function cloneViewportSettings(settings?: Partial<SceneViewportSettings> | null)
     cameraControlMode: isCameraControlMode(settings?.cameraControlMode)
       ? settings!.cameraControlMode
       : defaultViewportSettings.cameraControlMode,
-    shadowsEnabled: typeof settings?.shadowsEnabled === 'boolean'
-      ? settings.shadowsEnabled
-      : defaultViewportSettings.shadowsEnabled,
-    skybox: normalizeSkyboxSettings(baseSkybox),
   }
+}
+
+type LegacyViewportSettings = SceneViewportSettings & {
+  skybox?: Partial<SceneSkyboxSettings> | null
+  shadowsEnabled?: boolean
+}
+
+function cloneSceneSkybox(settings?: Partial<SceneSkyboxSettings> | SceneSkyboxSettings | null): SceneSkyboxSettings {
+  if (!settings) {
+    return cloneSkyboxSettings(defaultSkyboxSettings)
+  }
+  return normalizeSkyboxSettings(settings)
+}
+
+function normalizeShadowsEnabledInput(value: unknown): boolean {
+  return typeof value === 'boolean' ? value : defaultShadowsEnabled
+}
+
+function resolveDocumentSkybox(document: { skybox?: Partial<SceneSkyboxSettings> | SceneSkyboxSettings | null; viewportSettings?: SceneViewportSettings | LegacyViewportSettings | null }): SceneSkyboxSettings {
+  const legacyViewport = document.viewportSettings as LegacyViewportSettings | null | undefined
+  const candidate = document.skybox ?? legacyViewport?.skybox ?? null
+  return cloneSceneSkybox(candidate)
+}
+
+function resolveDocumentShadowsEnabled(document: { shadowsEnabled?: boolean | null; viewportSettings?: SceneViewportSettings | LegacyViewportSettings | null }): boolean {
+  const legacyViewport = document.viewportSettings as LegacyViewportSettings | null | undefined
+  const candidate = typeof document.shadowsEnabled === 'boolean'
+    ? document.shadowsEnabled
+    : typeof legacyViewport?.shadowsEnabled === 'boolean'
+      ? legacyViewport!.shadowsEnabled
+      : undefined
+  return normalizeShadowsEnabledInput(candidate)
 }
 
 function skyboxSettingsEqual(a: SceneSkyboxSettings, b: SceneSkyboxSettings): boolean {
@@ -2537,9 +2563,7 @@ function viewportSettingsEqual(a: SceneViewportSettings, b: SceneViewportSetting
     a.showGrid === b.showGrid &&
     a.showAxes === b.showAxes &&
     a.cameraProjection === b.cameraProjection &&
-    a.cameraControlMode === b.cameraControlMode &&
-    a.shadowsEnabled === b.shadowsEnabled &&
-    skyboxSettingsEqual(a.skybox, b.skybox)
+    a.cameraControlMode === b.cameraControlMode
   )
 }
 
@@ -3867,6 +3891,8 @@ export async function cloneSceneDocumentForExport(
     packageAssetMap,
     materials: scene.materials,
     viewportSettings: scene.viewportSettings,
+  skybox: scene.skybox,
+  shadowsEnabled: scene.shadowsEnabled,
     panelVisibility: scene.panelVisibility,
     panelPlacement: scene.panelPlacement,
     groundSettings: scene.groundSettings,
@@ -3993,15 +4019,31 @@ function normalizeCameraStateInput(value: unknown): SceneCameraState | undefined
   }
 }
 
-function normalizeViewportSettingsInput(value: unknown): Partial<SceneViewportSettings> | undefined {
+function normalizeViewportSettingsInput(value: unknown): (Partial<SceneViewportSettings> & Partial<LegacyViewportSettings>) | undefined {
   if (!isPlainObject(value)) {
     return undefined
   }
-  const input = { ...value } as Partial<SceneViewportSettings>
-  if (input.skybox && !isPlainObject(input.skybox)) {
-    delete (input as Record<string, unknown>).skybox
+  const input = value as LegacyViewportSettings
+  const normalized: Partial<SceneViewportSettings> & Partial<LegacyViewportSettings> = {}
+  if (typeof input.showGrid === 'boolean') {
+    normalized.showGrid = input.showGrid
   }
-  return input
+  if (typeof input.showAxes === 'boolean') {
+    normalized.showAxes = input.showAxes
+  }
+  if (isCameraProjectionMode(input.cameraProjection)) {
+    normalized.cameraProjection = input.cameraProjection
+  }
+  if (isCameraControlMode(input.cameraControlMode)) {
+    normalized.cameraControlMode = input.cameraControlMode
+  }
+  if (input.skybox && isPlainObject(input.skybox)) {
+    normalized.skybox = input.skybox as Partial<SceneSkyboxSettings>
+  }
+  if (typeof input.shadowsEnabled === 'boolean') {
+    normalized.shadowsEnabled = input.shadowsEnabled
+  }
+  return normalized
 }
 
 function normalizePanelVisibilityInput(value: unknown): Partial<PanelVisibilityState> | undefined {
@@ -4211,6 +4253,8 @@ function createHistorySnapshot(store: SceneState): SceneHistoryEntry {
     selectedNodeIds: cloneSelection(store.selectedNodeIds),
     selectedNodeId: store.selectedNodeId,
     viewportSettings: cloneViewportSettings(store.viewportSettings),
+    skybox: cloneSkyboxSettings(store.skybox),
+    shadowsEnabled: normalizeShadowsEnabledInput(store.shadowsEnabled),
     environment: cloneEnvironmentSettings(store.environment),
     groundSettings: cloneGroundSettings(store.groundSettings),
     resourceProviderId: store.resourceProviderId,
@@ -4281,6 +4325,8 @@ function createSceneDocument(
     assetIndex?: Record<string, AssetIndexEntry>
     packageAssetMap?: Record<string, string>
     viewportSettings?: Partial<SceneViewportSettings>
+    skybox?: Partial<SceneSkyboxSettings>
+    shadowsEnabled?: boolean
     panelVisibility?: Partial<PanelVisibilityState>
     panelPlacement?: Partial<PanelPlacementState>
     groundSettings?: Partial<GroundSettings>
@@ -4316,6 +4362,9 @@ function createSceneDocument(
   const assetCatalog = options.assetCatalog ? cloneAssetCatalog(options.assetCatalog) : createEmptyAssetCatalog()
   const assetIndex = options.assetIndex ? cloneAssetIndex(options.assetIndex) : {}
   const packageAssetMap = options.packageAssetMap ? clonePackageAssetMap(options.packageAssetMap) : {}
+  const legacyViewport = options.viewportSettings as LegacyViewportSettings | undefined
+  const skybox = cloneSceneSkybox(options.skybox ?? legacyViewport?.skybox ?? null)
+  const shadowsEnabled = normalizeShadowsEnabledInput(options.shadowsEnabled ?? legacyViewport?.shadowsEnabled)
   const viewportSettings = cloneViewportSettings(options.viewportSettings)
   const panelVisibility = normalizePanelVisibilityState(options.panelVisibility)
   const panelPlacement = normalizePanelPlacementStateInput(options.panelPlacement)
@@ -4330,6 +4379,8 @@ function createSceneDocument(
     selectedNodeIds,
     camera,
     viewportSettings,
+  skybox,
+  shadowsEnabled,
     environment: environmentSettings,
     groundSettings,
     panelVisibility,
@@ -4394,6 +4445,8 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
     selectedNodeIds: cloneSelection(store.selectedNodeIds),
     camera: cloneCameraState(store.camera),
     viewportSettings: cloneViewportSettings(store.viewportSettings),
+    skybox: cloneSkyboxSettings(store.skybox),
+    shadowsEnabled: normalizeShadowsEnabledInput(store.shadowsEnabled),
     environment,
     groundSettings: cloneGroundSettings(store.groundSettings),
     panelVisibility: normalizePanelVisibilityState(store.panelVisibility),
@@ -4623,6 +4676,8 @@ export const useSceneStore = defineStore('scene', {
     const assetIndex = cloneAssetIndex(initialSceneDocument.assetIndex)
     const packageDirectoryCache: Record<string, ProjectDirectory[]> = {}
     const viewportSettings = cloneViewportSettings(initialSceneDocument.viewportSettings)
+    const initialSkybox = resolveDocumentSkybox(initialSceneDocument)
+    const initialShadowsEnabled = resolveDocumentShadowsEnabled(initialSceneDocument)
     let clonedNodes = cloneSceneNodes(initialSceneDocument.nodes)
     const initialEnvironment = initialSceneDocument.environment
       ? cloneEnvironmentSettings(initialSceneDocument.environment)
@@ -4641,7 +4696,7 @@ export const useSceneStore = defineStore('scene', {
         createdAt: initialSceneDocument.createdAt,
         updatedAt: initialSceneDocument.updatedAt,
       },
-  nodes: clonedNodes,
+      nodes: clonedNodes,
       materials: cloneSceneMaterials(initialSceneDocument.materials),
       selectedNodeId: initialSceneDocument.selectedNodeId,
       selectedNodeIds: cloneSelection(initialSceneDocument.selectedNodeIds),
@@ -4656,7 +4711,9 @@ export const useSceneStore = defineStore('scene', {
       selectedAssetId: null,
       camera: cloneCameraState(initialSceneDocument.camera),
       viewportSettings,
-  environment: initialEnvironment,
+      skybox: initialSkybox,
+      shadowsEnabled: initialShadowsEnabled,
+      environment: initialEnvironment,
       groundSettings: cloneGroundSettings(initialSceneDocument.groundSettings),
       panelVisibility: { ...defaultPanelVisibility },
       panelPlacement: { ...defaultPanelPlacement },
@@ -4664,8 +4721,8 @@ export const useSceneStore = defineStore('scene', {
       resourceProviderId: initialSceneDocument.resourceProviderId,
       cameraFocusNodeId: null,
       cameraFocusRequestId: 0,
-  nodeHighlightTargetId: null,
-  nodeHighlightRequestId: 0,
+    nodeHighlightTargetId: null,
+    nodeHighlightRequestId: 0,
       clipboard: null,
       draggingAssetId: null,
       draggingAssetObject: null,
@@ -4745,6 +4802,8 @@ export const useSceneStore = defineStore('scene', {
       if (this.selectedAssetId && !findAssetInTree(nextTree, this.selectedAssetId)) {
         this.selectedAssetId = null
       }
+      this.skybox = cloneSceneSkybox(this.skybox)
+      this.shadowsEnabled = normalizeShadowsEnabledInput(this.shadowsEnabled)
     },
     createSceneDocumentSnapshot(): StoredSceneDocument {
       const snapshot = buildSceneDocumentFromState(this)
@@ -4787,7 +4846,10 @@ export const useSceneStore = defineStore('scene', {
         this.selectedNodeIds = cloneSelection(snapshot.selectedNodeIds)
         this.selectedNodeId = snapshot.selectedNodeId
         this.viewportSettings = cloneViewportSettings(snapshot.viewportSettings)
-  this.environment = cloneEnvironmentSettings(snapshot.environment)
+        const legacyViewport = snapshot.viewportSettings as LegacyViewportSettings | undefined
+        this.skybox = cloneSceneSkybox(snapshot.skybox ?? legacyViewport?.skybox ?? null)
+        this.shadowsEnabled = normalizeShadowsEnabledInput(snapshot.shadowsEnabled ?? legacyViewport?.shadowsEnabled)
+        this.environment = cloneEnvironmentSettings(snapshot.environment)
         this.groundSettings = cloneGroundSettings(snapshot.groundSettings)
         this.resourceProviderId = snapshot.resourceProviderId
 
@@ -6963,11 +7025,16 @@ export const useSceneStore = defineStore('scene', {
     toggleViewportAxesVisible() {
       this.setViewportAxesVisible(!this.viewportSettings.showAxes)
     },
-    setViewportShadowsEnabled(enabled: boolean) {
-      this.setViewportSettings({ shadowsEnabled: enabled })
+    setShadowsEnabled(enabled: boolean) {
+      const next = normalizeShadowsEnabledInput(enabled)
+      if (this.shadowsEnabled === next) {
+        return
+      }
+      this.shadowsEnabled = next
+      commitSceneSnapshot(this, { updateNodes: false, updateCamera: false })
     },
-    toggleViewportShadowsEnabled() {
-      this.setViewportShadowsEnabled(!this.viewportSettings.shadowsEnabled)
+    toggleShadowsEnabled() {
+      this.setShadowsEnabled(!this.shadowsEnabled)
     },
     setViewportCameraProjection(mode: CameraProjection) {
       if (!isCameraProjectionMode(mode)) {
@@ -6988,15 +7055,16 @@ export const useSceneStore = defineStore('scene', {
       this.setViewportSettings({ cameraControlMode: mode })
     },
     setSkyboxSettings(partial: Partial<SceneSkyboxSettings>, options: { markCustom?: boolean } = {}) {
-      const current = cloneSkyboxSettings(this.viewportSettings.skybox)
+      const current = cloneSkyboxSettings(this.skybox)
       const next = normalizeSkyboxSettings({ ...current, ...partial })
       if (options.markCustom && !partial.presetId) {
         next.presetId = CUSTOM_SKYBOX_PRESET_ID
       }
-      if (skyboxSettingsEqual(this.viewportSettings.skybox, next)) {
+      if (skyboxSettingsEqual(this.skybox, next)) {
         return
       }
-      this.setViewportSettings({ skybox: next })
+      this.skybox = next
+      commitSceneSnapshot(this, { updateNodes: false, updateCamera: false })
     },
     applySkyboxPreset(presetId: string) {
       const preset = resolveSkyboxPreset(presetId)
@@ -7007,10 +7075,11 @@ export const useSceneStore = defineStore('scene', {
         presetId,
         ...preset.settings,
       })
-      if (skyboxSettingsEqual(this.viewportSettings.skybox, next)) {
+      if (skyboxSettingsEqual(this.skybox, next)) {
         return
       }
-      this.setViewportSettings({ skybox: next })
+      this.skybox = next
+      commitSceneSnapshot(this, { updateNodes: false, updateCamera: false })
     },
     setPanelVisibility(panel: EditorPanel, visible: boolean) {
       if (this.panelVisibility[panel] === visible) {
@@ -8831,6 +8900,8 @@ export const useSceneStore = defineStore('scene', {
         thumbnail: resolvedThumbnail ?? null,
         resourceProviderId: this.resourceProviderId,
         viewportSettings: this.viewportSettings,
+        skybox: this.skybox,
+        shadowsEnabled: this.shadowsEnabled,
         nodes: baseNodes,
         materials: this.materials,
         groundSettings,
@@ -8842,17 +8913,18 @@ export const useSceneStore = defineStore('scene', {
       })
 
       await scenesStore.saveSceneDocument(sceneDocument)
-
-    this.currentSceneId = sceneDocument.id
-    applyCurrentSceneMeta(this, sceneDocument)
-    applySceneAssetState(this, sceneDocument)
-    this.nodes = cloneSceneNodes(sceneDocument.nodes)
-    this.environment = resolveSceneDocumentEnvironment(sceneDocument)
-    this.rebuildGeneratedMeshRuntimes()
+      this.currentSceneId = sceneDocument.id
+      applyCurrentSceneMeta(this, sceneDocument)
+      applySceneAssetState(this, sceneDocument)
+      this.nodes = cloneSceneNodes(sceneDocument.nodes)
+      this.environment = resolveSceneDocumentEnvironment(sceneDocument)
+      this.rebuildGeneratedMeshRuntimes()
       this.groundSettings = cloneGroundSettings(sceneDocument.groundSettings)
       this.setSelection(sceneDocument.selectedNodeIds ?? (sceneDocument.selectedNodeId ? [sceneDocument.selectedNodeId] : []))
       this.camera = cloneCameraState(sceneDocument.camera)
       this.viewportSettings = cloneViewportSettings(sceneDocument.viewportSettings)
+      this.skybox = cloneSkyboxSettings(sceneDocument.skybox)
+      this.shadowsEnabled = normalizeShadowsEnabledInput(sceneDocument.shadowsEnabled)
       this.panelVisibility = normalizePanelVisibilityState(sceneDocument.panelVisibility)
       this.panelPlacement = normalizePanelPlacementStateInput(sceneDocument.panelPlacement)
       this.resourceProviderId = sceneDocument.resourceProviderId
@@ -8914,6 +8986,8 @@ export const useSceneStore = defineStore('scene', {
           ? (template.packageAssetMap as Record<string, string>)
           : undefined,
         viewportSettings: normalizeViewportSettingsInput(template.viewportSettings),
+        skybox: template.skybox,
+        shadowsEnabled: template.shadowsEnabled,
         panelVisibility: normalizePanelVisibilityInput(template.panelVisibility),
         panelPlacement: normalizePanelPlacementInput(template.panelPlacement),
         groundSettings,
@@ -8926,15 +9000,17 @@ export const useSceneStore = defineStore('scene', {
 
       await scenesStore.saveSceneDocument(sceneDocument)
 
-    this.currentSceneId = sceneDocument.id
-    applyCurrentSceneMeta(this, sceneDocument)
-    applySceneAssetState(this, sceneDocument)
-    this.nodes = cloneSceneNodes(sceneDocument.nodes)
-    this.environment = resolveSceneDocumentEnvironment(sceneDocument)
+      this.currentSceneId = sceneDocument.id
+      applyCurrentSceneMeta(this, sceneDocument)
+      applySceneAssetState(this, sceneDocument)
+      this.nodes = cloneSceneNodes(sceneDocument.nodes)
+      this.environment = resolveSceneDocumentEnvironment(sceneDocument)
       this.groundSettings = cloneGroundSettings(sceneDocument.groundSettings)
       this.setSelection(sceneDocument.selectedNodeIds ?? (sceneDocument.selectedNodeId ? [sceneDocument.selectedNodeId] : []))
       this.camera = cloneCameraState(sceneDocument.camera)
       this.viewportSettings = cloneViewportSettings(sceneDocument.viewportSettings)
+      this.skybox = cloneSkyboxSettings(sceneDocument.skybox)
+      this.shadowsEnabled = normalizeShadowsEnabledInput(sceneDocument.shadowsEnabled)
       this.panelVisibility = normalizePanelVisibilityState(sceneDocument.panelVisibility)
       this.panelPlacement = normalizePanelPlacementStateInput(sceneDocument.panelPlacement)
       this.resourceProviderId = sceneDocument.resourceProviderId
@@ -8972,15 +9048,17 @@ export const useSceneStore = defineStore('scene', {
           refreshViewport: false,
         })
 
-    this.currentSceneId = sceneId
-    applyCurrentSceneMeta(this, scene)
-    applySceneAssetState(this, scene)
-    this.nodes = cloneSceneNodes(scene.nodes)
-    this.environment = resolveSceneDocumentEnvironment(scene)
-    this.rebuildGeneratedMeshRuntimes()
+        this.currentSceneId = sceneId
+        applyCurrentSceneMeta(this, scene)
+        applySceneAssetState(this, scene)
+        this.nodes = cloneSceneNodes(scene.nodes)
+        this.environment = resolveSceneDocumentEnvironment(scene)
+        this.rebuildGeneratedMeshRuntimes()
         this.setSelection(scene.selectedNodeIds ?? (scene.selectedNodeId ? [scene.selectedNodeId] : []))
         this.camera = cloneCameraState(scene.camera)
         this.viewportSettings = cloneViewportSettings(scene.viewportSettings)
+        this.skybox = resolveDocumentSkybox(scene)
+        this.shadowsEnabled = resolveDocumentShadowsEnabled(scene)
         this.panelVisibility = normalizePanelVisibilityState(scene.panelVisibility)
         this.panelPlacement = normalizePanelPlacementStateInput(scene.panelPlacement)
         this.groundSettings = cloneGroundSettings(scene.groundSettings)
