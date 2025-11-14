@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { useSceneStore } from '@/stores/sceneStore'
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { assetProvider } from '@/resources/projectProviders/asset'
 
 const props = withDefaults(
@@ -38,6 +39,7 @@ const dialogOpen = computed({
 })
 
 const sceneStore = useSceneStore()
+const assetCacheStore = useAssetCacheStore()
 const { assetCatalog } = storeToRefs(sceneStore)
 
 const selectedAssetId = ref(props.assetId ?? '')
@@ -57,6 +59,10 @@ function flattenCatalog(catalog: Record<string, ProjectAsset[]> | undefined): Pr
     return []
   }
   return Object.values(catalog).flatMap((group) => (Array.isArray(group) ? group : []))
+}
+
+function assetThumbnailUrl(asset: ProjectAsset): string | null {
+  return assetCacheStore.resolveAssetThumbnail({ asset })
 }
 
 function flattenDirectories(directories: ProjectDirectory[]): ProjectAsset[] {
@@ -418,7 +424,7 @@ function resolveInitials(asset: ProjectAsset): string {
         >
         <v-toolbar density="compact" class="panel-toolbar" height="40px">
           <div class="toolbar-text">
-            <div class="material-title">{{ title ?? 'Select Asset' }}</div>
+            <div class="asset-dialog__title">{{ title ?? 'Select Asset' }}</div>
           </div>
           <v-spacer />
           <v-btn class="toolbar-close" icon="mdi-close" size="small" variant="text" @click="handleCancel" />
@@ -453,10 +459,10 @@ function resolveInitials(asset: ProjectAsset): string {
               >
                 <div class="asset-dialog__thumbnail">
                   <v-img
-                    v-if="asset.thumbnail"
-                    :src="asset.thumbnail"
+                    v-if="assetThumbnailUrl(asset)"
+                    :src="assetThumbnailUrl(asset) || undefined"
                     :alt="asset.name"
-                    height="78"
+                    height="68"
                     cover
                   />
                   <div
@@ -532,9 +538,10 @@ function resolveInitials(asset: ProjectAsset): string {
 }
 
 .asset-dialog__title {
-  font-size: 0.95rem;
+  font-size: 0.85rem;
   font-weight: 600;
-  color: rgba(233, 236, 241, 0.95);
+  letter-spacing: 0.05em;
+  color: rgba(233, 236, 241, 0.94);
 }
 
 .asset-dialog__search {

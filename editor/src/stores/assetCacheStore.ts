@@ -3,6 +3,7 @@ import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneNode } from '@harmony/schema'
 import { fetchAssetBlob } from '@schema/assetCache'
 import type { AssetCacheEntry as SharedAssetCacheEntry, AssetCacheStatus as SharedAssetCacheStatus } from '@schema/assetCache'
+import { extractExtension } from '@/utils/blob'
 import { invalidateModelObject } from './modelObjectCache'
 
 export type AssetCacheStatus = SharedAssetCacheStatus
@@ -13,6 +14,12 @@ export interface AssetDownloadOptions {
   force?: boolean
 }
 
+export interface AssetThumbnailOptions {
+  asset?: ProjectAsset | null
+  assetId?: string | null
+  cacheId?: string | null
+}
+
 const MAX_CACHE_ENTRIES = 10
 
 const ABORT_ERROR_NAME = 'AbortError'
@@ -21,6 +28,72 @@ interface FetchedAssetData {
   blob: Blob
   contentType: string | null
   filename: string | null
+}
+
+const IMAGE_FILE_EXTENSIONS = new Set<string>([
+  'png',
+  'jpg',
+  'jpeg',
+  'gif',
+  'webp',
+  'bmp',
+  'tif',
+  'tiff',
+  'svg',
+  'avif',
+  'ico',
+  'heic',
+  'heif',
+])
+
+function sanitizeUrlCandidate(url: string | null | undefined): string | null {
+  if (!url) {
+    return null
+  }
+  const trimmed = url.trim()
+  return trimmed.length ? trimmed : null
+}
+
+function isLikelyImageAssetUrl(url: string | null | undefined): boolean {
+  const normalized = sanitizeUrlCandidate(url)
+  if (!normalized) {
+    return false
+  }
+  if (normalized.startsWith('data:image/')) {
+    return true
+  }
+  if (normalized.startsWith('blob:')) {
+    return true
+  }
+  if (!/^https?:\/\//i.test(normalized)) {
+    return false
+  }
+  const withoutQuery = normalized.split(/[?#]/)[0] ?? normalized
+  const extension = extractExtension(withoutQuery)
+  if (!extension) {
+    return true
+  }
+  return IMAGE_FILE_EXTENSIONS.has(extension)
+}
+
+function deriveThumbnailFromAsset(asset: ProjectAsset): string | null {
+  const type = asset.type
+  if (type === 'image' || type === 'texture') {
+    const thumbnailCandidate = sanitizeUrlCandidate(asset.thumbnail ?? null)
+    if (thumbnailCandidate && isLikelyImageAssetUrl(thumbnailCandidate)) {
+      return thumbnailCandidate
+    }
+    const downloadCandidate = sanitizeUrlCandidate(asset.downloadUrl)
+    if (downloadCandidate && isLikelyImageAssetUrl(downloadCandidate)) {
+      return downloadCandidate
+    }
+    return null
+  }
+  if (type === 'model') {
+    const thumbnailCandidate = sanitizeUrlCandidate(asset.thumbnail ?? null)
+    return thumbnailCandidate ?? null
+  }
+  return null
 }
 
 function inferFetchedFilename(candidate: string | null, fallbackName: string | null, sourceUrl: string): string | null {
@@ -297,6 +370,34 @@ export const useAssetCacheStore = defineStore('assetCache', {
     },
     getBlobUrl(assetId: string): string | null {
       return this.entries[assetId]?.blobUrl ?? null
+    },
+    resolveAssetThumbnail(options: AssetThumbnailOptions = {}): string | null {
+      const asset = options.asset ?? null
+      const cacheKey = options.cacheId ?? asset?.id ?? options.assetId ?? null
+
+      if (cacheKey) {
+        const entry = this.entries[cacheKey]
+        if (entry && entry.status === 'cached' && entry.blobUrl) {
+          const mimeType = entry.mimeType?.toLowerCase() ?? ''
+          if (mimeType.startsWith('image/')) {
+            return entry.blobUrl
+          }
+          if (!mimeType) {
+            if (!asset || asset.type === 'image' || asset.type === 'texture') {
+              return entry.blobUrl
+            }
+          }
+        }
+      }
+
+      if (asset) {
+        const derived = deriveThumbnailFromAsset(asset)
+        if (derived) {
+          return derived
+        }
+      }
+
+      return null
     },
     createFileFromCache(assetId: string): File | null {
       const entry = this.entries[assetId]

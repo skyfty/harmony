@@ -1764,29 +1764,7 @@ const indexedDbLoadQueue = new Set<string>()
 
 function assetPreviewUrl(asset: ProjectAsset): string | undefined {
   const cacheId = resolveAssetCacheId(asset)
-  const entry = assetCacheStore.entries[cacheId]
-  if (entry && entry.status === 'cached' && entry.blobUrl) {
-    const mime = entry.mimeType ?? ''
-    if (mime.startsWith('image/')) {
-      return entry.blobUrl
-    }
-    if (!mime && (asset.type === 'image' || asset.type === 'texture')) {
-      return entry.blobUrl
-    }
-  }
-  if (asset.type === 'image' || asset.type === 'texture') {
-    if (asset.thumbnail && isLikelyImageUrl(asset.thumbnail)) {
-      return asset.thumbnail
-    }
-    if (isLikelyImageUrl(asset.downloadUrl)) {
-      return asset.downloadUrl
-    }
-  }
-
-  if (asset.type === 'model' && asset.thumbnail) {
-    return asset.thumbnail
-  }
-  return undefined
+  return assetCacheStore.resolveAssetThumbnail({ asset, cacheId }) ?? undefined
 }
 
 async function ensureAssetPreview(asset: ProjectAsset) {
@@ -1947,7 +1925,9 @@ function createDragPreview(asset: ProjectAsset) {
   wrapper.style.minHeight = '96px'
   wrapper.style.backdropFilter = 'blur(4px)'
 
-  if (asset.type === 'model' && asset.thumbnail) {
+  const thumbnailUrl = assetCacheStore.resolveAssetThumbnail({ asset, cacheId: resolveAssetCacheId(asset) })
+
+  if (thumbnailUrl) {
     const thumbnail = document.createElement('div')
     thumbnail.style.width = '64px'
     thumbnail.style.height = '64px'
@@ -1955,7 +1935,7 @@ function createDragPreview(asset: ProjectAsset) {
     thumbnail.style.backgroundColor = asset.previewColor ?? '#455A64'
     thumbnail.style.backgroundSize = 'cover'
     thumbnail.style.backgroundPosition = 'center'
-    thumbnail.style.backgroundImage = `url("${asset.thumbnail}")`
+    thumbnail.style.backgroundImage = `url("${thumbnailUrl}")`
     thumbnail.style.boxShadow = '0 6px 18px rgba(0, 0, 0, 0.35)'
     wrapper.appendChild(thumbnail)
   } else {

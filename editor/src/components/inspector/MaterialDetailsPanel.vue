@@ -634,10 +634,12 @@ function resolveTexturePreviewStyle(slot: SceneMaterialTextureSlot): Record<stri
     }
   }
   const asset = sceneStore.getAsset(ref.assetId)
-  if (asset?.thumbnail && asset.thumbnail.trim().length) {
+  const thumbnailUrl = assetCacheStore.resolveAssetThumbnail({ asset, assetId: ref.assetId })
+  if (thumbnailUrl) {
+    const backgroundColor = asset?.previewColor?.trim().length ? asset.previewColor : fallbackColor
     return {
-      backgroundImage: `url(${asset.thumbnail})`,
-      backgroundColor: asset.previewColor?.trim().length ? asset.previewColor : fallbackColor,
+      backgroundImage: `url(${thumbnailUrl})`,
+      backgroundColor,
     }
   }
   if (asset?.previewColor && asset.previewColor.trim().length) {
