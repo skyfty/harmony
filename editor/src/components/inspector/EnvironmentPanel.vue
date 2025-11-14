@@ -136,6 +136,10 @@ function updateBackgroundMode(mode: EnvironmentBackgroundMode | null) {
   if (!mode || mode === environmentSettings.value.background.mode) {
     return
   }
+  if (mode === 'solidColor') {
+    sceneStore.patchEnvironmentSettings({ background: { mode, hdriAssetId: null } })
+    return
+  }
   sceneStore.patchEnvironmentSettings({ background: { mode } })
 }
 
@@ -483,7 +487,10 @@ function handleEnvironmentDrop(event: DragEvent) {
             class="section-select"
             @update:model-value="(mode) => updateBackgroundMode(mode as EnvironmentBackgroundMode | null)"
           />
-          <div class="material-color">
+          <div
+            v-if="environmentSettings.background.mode === 'solidColor'"
+            class="material-color"
+          >
             <div class="color-input">
               <v-text-field
                 label="Solid Color"
@@ -524,6 +531,7 @@ function handleEnvironmentDrop(event: DragEvent) {
             </div>
           </div>
           <div
+            v-if="environmentSettings.background.mode === 'hdri'"
             class="asset-tile"
             :class="{
               'is-active-drop': isBackgroundDropActive,
@@ -720,6 +728,7 @@ function handleEnvironmentDrop(event: DragEvent) {
             @update:model-value="(mode) => updateEnvironmentMapMode(mode as EnvironmentMapMode | null)"
           />
           <div
+            v-if="environmentSettings.environmentMap.mode === 'custom'"
             class="asset-tile"
             :class="{
               'is-active-drop': isEnvironmentDropActive,
@@ -764,6 +773,16 @@ function handleEnvironmentDrop(event: DragEvent) {
                 title="Clear environment map"
                 @click.stop="clearEnvironmentAsset"
               />
+            </div>
+          </div>
+          <div
+            v-else
+            class="environment-placeholder"
+          >
+            <v-icon size="30" color="rgba(233, 236, 241, 0.45)">mdi-weather-partly-cloudy</v-icon>
+            <div class="placeholder-text">
+              <div class="placeholder-title">Using Skybox Reflections</div>
+              <div class="placeholder-hint">Environment map derives from the active skybox</div>
             </div>
           </div>
         </section>
@@ -988,5 +1007,32 @@ function handleEnvironmentDrop(event: DragEvent) {
 
 .asset-action:disabled {
   color: rgba(233, 236, 241, 0.28) !important;
+}
+
+.environment-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px dashed rgba(255, 255, 255, 0.16);
+  background: rgba(12, 16, 22, 0.45);
+  color: rgba(233, 236, 241, 0.82);
+}
+
+.placeholder-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.placeholder-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.placeholder-hint {
+  font-size: 0.72rem;
+  color: rgba(233, 236, 241, 0.55);
 }
 </style>
