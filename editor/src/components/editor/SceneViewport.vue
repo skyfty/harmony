@@ -7,6 +7,8 @@ import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 // @ts-ignore - local plugin has no .d.ts declaration file
 import { TransformControls } from '@/utils/transformControls.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
+import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
+import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js'
 import Pica from 'pica'
 
 import type {
@@ -59,6 +61,7 @@ import { createWallGroup, updateWallGroup } from '@/utils/wallMesh'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
 import { VIEW_POINT_COMPONENT_TYPE, DISPLAY_BOARD_COMPONENT_TYPE } from '@schema/components'
 import type { ViewPointComponentProps, DisplayBoardComponentProps } from '@schema/components'
+import type { EnvironmentSettings } from '@/types/environment'
 
 
 const props = withDefaults(defineProps<{
@@ -129,7 +132,20 @@ let stats: Stats | null = null
 let statsPanelIndex = 0
 let statsPointerHandler: ((event: MouseEvent) => void) | null = null
 
+let environmentAmbientLight: THREE.AmbientLight | null = null
+let backgroundTexture: THREE.Texture | null = null
+let backgroundAssetId: string | null = null
+let backgroundRegisteredAssetId: string | null = null
+let backgroundLoadToken = 0
+let customEnvironmentTarget: THREE.WebGLRenderTarget | null = null
+let environmentMapAssetId: string | null = null
+let environmentMapRegisteredAssetId: string | null = null
+let environmentMapLoadToken = 0
+let pendingEnvironmentSettings: EnvironmentSettings | null = null
+
 const textureLoader = new THREE.TextureLoader()
+const rgbeLoader = new RGBELoader().setDataType(THREE.FloatType)
+const exrLoader = new EXRLoader().setDataType(THREE.FloatType)
 const textureCache = new Map<string, THREE.Texture>()
 const pendingTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
 const TEXTURE_SLOT_STATE_KEY = '__harmonyTextureSlots'
@@ -275,6 +291,7 @@ const axesVisible = computed(() => sceneStore.viewportSettings.showAxes)
 const shadowsEnabled = computed(() => sceneStore.viewportSettings.shadowsEnabled)
 const cameraProjectionMode = computed(() => sceneStore.viewportSettings.cameraProjection)
 const skyboxSettings = computed(() => sceneStore.viewportSettings.skybox)
+const environmentSettings = computed(() => sceneStore.environmentSettings)
 const canAlignSelection = computed(() => {
   const primaryId = sceneStore.selectedNodeId
   if (!primaryId) {
@@ -2614,14 +2631,15 @@ function initScene() {
   pmremGenerator = new THREE.PMREMGenerator(renderer)
 
   scene = new THREE.Scene()
-  const backgroundColor = new THREE.Color(DEFAULT_BACKGROUND_COLOR)
-  scene.background = backgroundColor
-  scene.fog = new THREE.Fog(backgroundColor.getHex(), 1, 5000)
-  scene.fog.color.copy(backgroundColor)
-  
-  const ambientLight = new THREE.AmbientLight('#ffffff', 0.6);
+  scene.background = new THREE.Color(DEFAULT_BACKGROUND_COLOR)
+  scene.fog = null
 
-  scene.add(ambientLight);
+  const initialEnvironment = environmentSettings.value
+  environmentAmbientLight = new THREE.AmbientLight(
+    initialEnvironment.ambientLightColor,
+    initialEnvironment.ambientLightIntensity,
+  )
+  scene.add(environmentAmbientLight)
 
   applySunDirectionToSunLight()
 
@@ -2645,6 +2663,12 @@ function initScene() {
   applySkyboxSettingsToScene(skyboxSettings.value)
   if (pendingSkyboxSettings) {
     applySkyboxSettingsToScene(pendingSkyboxSettings)
+  }
+
+  if (pendingEnvironmentSettings) {
+    void applyEnvironmentSettingsToScene(pendingEnvironmentSettings)
+  } else {
+    void applyEnvironmentSettingsToScene(initialEnvironment)
   }
 
   perspectiveCamera = new THREE.PerspectiveCamera(DEFAULT_PERSPECTIVE_FOV, width / height || 1, 0.1, 500)
@@ -2870,6 +2894,272 @@ function applySunDirectionToFallbackLight() {
   }
   fallbackDirectionalLight.target.position.set(0, 0, 0)
   fallbackDirectionalLight.target.updateMatrixWorld()
+}
+
+function cloneEnvironmentSettingsLocal(settings: EnvironmentSettings): EnvironmentSettings {
+  try {
+    return structuredClone(settings)
+  } catch (_error) {
+    return JSON.parse(JSON.stringify(settings)) as EnvironmentSettings
+  }
+}
+
+function resolveAssetExtension(asset: ProjectAsset | null, override?: string | null): string | null {
+  const source = override ?? asset?.name ?? asset?.downloadUrl ?? asset?.description ?? asset?.id ?? ''
+  const match = source.match(/\.([a-z0-9]+)(?:$|[?#])/i)
+  return match ? match[1]?.toLowerCase() ?? null : null
+}
+
+async function resolveEnvironmentAssetUrl(assetId: string): Promise<{ url: string; extension: string | null; asset: ProjectAsset } | null> {
+  const asset = sceneStore.getAsset(assetId)
+  if (!asset) {
+    console.warn('Environment asset not found', assetId)
+    return null
+  }
+
+  let entry: Awaited<ReturnType<typeof assetCacheStore.downloaProjectAsset>> | null = null
+  try {
+    entry = await assetCacheStore.downloaProjectAsset(asset)
+  } catch (error) {
+    console.warn('Failed to cache environment asset', assetId, error)
+  }
+
+  const url = entry?.blobUrl ?? asset.downloadUrl ?? asset.description ?? null
+  if (!url) {
+    console.warn('Environment asset has no accessible URL', assetId)
+    return null
+  }
+
+  assetCacheStore.touch(assetId)
+  const extension = resolveAssetExtension(asset, url)
+  return { url, extension, asset }
+}
+
+async function loadEnvironmentTextureFromAsset(assetId: string): Promise<THREE.Texture | null> {
+  const resolved = await resolveEnvironmentAssetUrl(assetId)
+  if (!resolved) {
+    return null
+  }
+
+  const { url, extension } = resolved
+
+  try {
+    if (extension === 'hdr' || extension === 'hdri') {
+      const texture = await rgbeLoader.loadAsync(url)
+      texture.mapping = THREE.EquirectangularReflectionMapping
+      texture.flipY = false
+      texture.needsUpdate = true
+      return texture
+    }
+    if (extension === 'exr') {
+      const texture = await exrLoader.loadAsync(url)
+      texture.mapping = THREE.EquirectangularReflectionMapping
+      texture.flipY = false
+      texture.needsUpdate = true
+      return texture
+    }
+    const texture = await textureLoader.loadAsync(url)
+    texture.mapping = THREE.EquirectangularReflectionMapping
+    texture.colorSpace = THREE.SRGBColorSpace
+    texture.flipY = false
+    texture.needsUpdate = true
+    return texture
+  } catch (error) {
+    console.warn('Failed to load environment texture', assetId, error)
+    return null
+  }
+}
+
+function disposeBackgroundResources() {
+  if (scene && scene.background === backgroundTexture) {
+    scene.background = null
+  }
+  if (backgroundTexture) {
+    backgroundTexture.dispose()
+    backgroundTexture = null
+  }
+  if (backgroundRegisteredAssetId) {
+    assetCacheStore.unregisterUsage(backgroundRegisteredAssetId)
+    backgroundRegisteredAssetId = null
+  }
+  backgroundAssetId = null
+}
+
+function disposeCustomEnvironmentTarget() {
+  if (customEnvironmentTarget) {
+    if (scene && scene.environment === customEnvironmentTarget.texture) {
+      scene.environment = null
+      scene.environmentIntensity = 1
+    }
+    customEnvironmentTarget.dispose()
+    customEnvironmentTarget = null
+  }
+  if (environmentMapRegisteredAssetId) {
+    assetCacheStore.unregisterUsage(environmentMapRegisteredAssetId)
+    environmentMapRegisteredAssetId = null
+  }
+  environmentMapAssetId = null
+}
+
+function applySkyEnvironment() {
+  if (!scene) {
+    return
+  }
+  if (environmentSettings.value.environmentMap.mode !== 'skybox') {
+    return
+  }
+  if (skyEnvironmentTarget) {
+    scene.environment = skyEnvironmentTarget.texture
+    scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY
+  } else {
+    scene.environment = null
+    scene.environmentIntensity = 1
+  }
+}
+
+async function applyBackgroundSettings(background: EnvironmentSettings['background']): Promise<boolean> {
+  backgroundLoadToken += 1
+  const token = backgroundLoadToken
+
+  if (!scene) {
+    return false
+  }
+
+  if (background.mode === 'solidColor') {
+    if (backgroundTexture || backgroundAssetId) {
+      disposeBackgroundResources()
+    }
+    scene.background = new THREE.Color(background.solidColor)
+    return true
+  }
+
+  if (!background.hdriAssetId) {
+    if (backgroundTexture || backgroundAssetId) {
+      disposeBackgroundResources()
+    }
+    scene.background = new THREE.Color(background.solidColor)
+    return true
+  }
+
+  if (backgroundTexture && backgroundAssetId === background.hdriAssetId) {
+    scene.background = backgroundTexture
+    return true
+  }
+
+  const texture = await loadEnvironmentTextureFromAsset(background.hdriAssetId)
+  if (!texture || token !== backgroundLoadToken) {
+    texture?.dispose()
+    return false
+  }
+
+  disposeBackgroundResources()
+  backgroundTexture = texture
+  backgroundAssetId = background.hdriAssetId
+  backgroundRegisteredAssetId = background.hdriAssetId
+  assetCacheStore.registerUsage(background.hdriAssetId)
+  scene.background = texture
+  return true
+}
+
+async function applyEnvironmentMapSettings(mapSettings: EnvironmentSettings['environmentMap']): Promise<boolean> {
+  environmentMapLoadToken += 1
+  const token = environmentMapLoadToken
+
+  if (!scene) {
+    return false
+  }
+
+  if (mapSettings.mode === 'skybox') {
+    disposeCustomEnvironmentTarget()
+    applySkyEnvironment()
+    return true
+  }
+
+  if (!mapSettings.hdriAssetId) {
+    disposeCustomEnvironmentTarget()
+    scene.environment = null
+    scene.environmentIntensity = 1
+    return true
+  }
+
+  if (!pmremGenerator || !renderer) {
+    return false
+  }
+
+  if (customEnvironmentTarget && environmentMapAssetId === mapSettings.hdriAssetId) {
+    scene.environment = customEnvironmentTarget.texture
+    scene.environmentIntensity = 1
+    return true
+  }
+
+  const texture = await loadEnvironmentTextureFromAsset(mapSettings.hdriAssetId)
+  if (!texture || token !== environmentMapLoadToken) {
+    texture?.dispose()
+    return false
+  }
+
+  const target = pmremGenerator.fromEquirectangular(texture)
+  texture.dispose()
+  if (!target || token !== environmentMapLoadToken) {
+    target?.dispose()
+    return false
+  }
+
+  disposeCustomEnvironmentTarget()
+  customEnvironmentTarget = target
+  environmentMapAssetId = mapSettings.hdriAssetId
+  environmentMapRegisteredAssetId = mapSettings.hdriAssetId
+  assetCacheStore.registerUsage(mapSettings.hdriAssetId)
+  scene.environment = target.texture
+  scene.environmentIntensity = 1
+  return true
+}
+
+function applyAmbientLightSettings(settings: EnvironmentSettings) {
+  if (!environmentAmbientLight) {
+    return
+  }
+  environmentAmbientLight.color.set(settings.ambientLightColor)
+  environmentAmbientLight.intensity = settings.ambientLightIntensity
+}
+
+function applyFogSettings(settings: EnvironmentSettings) {
+  if (!scene) {
+    return
+  }
+  if (settings.fogMode === 'none') {
+    scene.fog = null
+    return
+  }
+  const fogColor = new THREE.Color(settings.fogColor)
+  const density = Math.max(0, settings.fogDensity)
+  if (scene.fog instanceof THREE.FogExp2) {
+    scene.fog.color.copy(fogColor)
+    scene.fog.density = density
+  } else {
+    scene.fog = new THREE.FogExp2(fogColor, density)
+  }
+}
+
+async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
+  const snapshot = cloneEnvironmentSettingsLocal(settings)
+
+  if (!scene) {
+    pendingEnvironmentSettings = snapshot
+    return
+  }
+
+  applyAmbientLightSettings(snapshot)
+  applyFogSettings(snapshot)
+
+  const backgroundApplied = await applyBackgroundSettings(snapshot.background)
+  const environmentApplied = await applyEnvironmentMapSettings(snapshot.environmentMap)
+
+  if (backgroundApplied && environmentApplied) {
+    pendingEnvironmentSettings = null
+  } else {
+    pendingEnvironmentSettings = snapshot
+  }
 }
 
 function disposeSkyResources() {

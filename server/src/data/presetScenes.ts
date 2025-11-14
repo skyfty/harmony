@@ -2,6 +2,7 @@ import type { PresetSceneDetail } from '@/types/presetScene'
 
 const SCENE_TIMESTAMP = '2024-01-01T00:00:00.000Z'
 const SKY_NODE_ID = 'harmony:sky'
+const ENVIRONMENT_NODE_ID = 'harmony:environment'
 
 const DEFAULT_TEXTURE_SLOTS = {
   albedo: null,
@@ -93,19 +94,77 @@ const createSkyNode = (): SceneNodeDetail => ({
   materials: [],
 })
 
+const DEFAULT_ENVIRONMENT_SETTINGS = {
+  background: {
+    mode: 'solidColor' as const,
+    solidColor: '#516175',
+    hdriAssetId: null,
+  },
+  ambientLightColor: '#ffffff',
+  ambientLightIntensity: 0.6,
+  fogMode: 'none' as const,
+  fogColor: '#516175',
+  fogDensity: 0.02,
+  environmentMap: {
+    mode: 'skybox' as const,
+    hdriAssetId: null,
+  },
+}
+
+const createEnvironmentNode = (): SceneNodeDetail => ({
+  id: ENVIRONMENT_NODE_ID,
+  name: 'Environment',
+  nodeType: 'Group',
+  position: vec3(0, 0, 0),
+  rotation: vec3(0, 0, 0),
+  scale: vec3(1, 1, 1),
+  offset: vec3(0, 0, 0),
+  visible: true,
+  locked: true,
+  userData: {
+    environment: DEFAULT_ENVIRONMENT_SETTINGS,
+  },
+  materials: [],
+  children: undefined,
+})
+
 const withEnvironmentNodes = (nodes?: SceneNodeDetail[] | null): SceneNodeDetail[] => {
   const source = Array.isArray(nodes) ? nodes : []
-  const filtered = source.filter((node) => node.id !== SKY_NODE_ID)
-  const hasSky = source.some((node) => node.id === SKY_NODE_ID)
-  if (hasSky) {
-    return [...filtered]
+  let skyNode: SceneNodeDetail | null = null
+  let environmentNode: SceneNodeDetail | null = null
+  const others: SceneNodeDetail[] = []
+
+  source.forEach((node) => {
+    if (!skyNode && node.id === SKY_NODE_ID) {
+      skyNode = createSkyNode()
+      return
+    }
+    if (!environmentNode && node.id === ENVIRONMENT_NODE_ID) {
+      environmentNode = createEnvironmentNode()
+      return
+    }
+    if (node.id !== SKY_NODE_ID && node.id !== ENVIRONMENT_NODE_ID) {
+      others.push(node)
+    }
+  })
+
+  const result = [...others]
+
+  if (!skyNode) {
+    skyNode = createSkyNode()
   }
-  const skyNode = createSkyNode()
-  const groundIndex = filtered.findIndex((node) => node.id === 'harmony:ground' || node.dynamicMesh?.type === 'Ground')
-  const next = [...filtered]
-  const insertIndex = groundIndex >= 0 ? groundIndex + 1 : 0
-  next.splice(insertIndex, 0, skyNode)
-  return next
+  const groundIndex = result.findIndex((node) => node.id === 'harmony:ground' || node.dynamicMesh?.type === 'Ground')
+  const skyInsertIndex = groundIndex >= 0 ? groundIndex + 1 : 0
+  result.splice(skyInsertIndex, 0, skyNode)
+
+  if (!environmentNode) {
+    environmentNode = createEnvironmentNode()
+  }
+  const updatedSkyIndex = result.findIndex((node) => node.id === SKY_NODE_ID)
+  const environmentInsertIndex = updatedSkyIndex >= 0 ? updatedSkyIndex + 1 : skyInsertIndex
+  result.splice(environmentInsertIndex, 0, environmentNode)
+
+  return result
 }
 
 const createRectangleWallSegments = (width: number, depth: number, height: number, thickness: number) => {

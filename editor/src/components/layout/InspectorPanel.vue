@@ -10,9 +10,10 @@ import ViewPointPanel from '@/components/inspector/ViewPointPanel.vue'
 import WarpGatePanel from '@/components/inspector/WarpGatePanel.vue'
 import GroundPanel from '@/components/inspector/GroundPanel.vue'
 import SkyPanel from '@/components/inspector/SkyPanel.vue'
+import EnvironmentPanel from '@/components/inspector/EnvironmentPanel.vue'
 import BehaviorPanel from '@/components/inspector/BehaviorPanel.vue'
 import DisplayBoardPanel from '@/components/inspector/DisplayBoardPanel.vue'
-import { useSceneStore,SKY_NODE_ID,GROUND_NODE_ID } from '@/stores/sceneStore'
+import { useSceneStore, SKY_NODE_ID, GROUND_NODE_ID, ENVIRONMENT_NODE_ID } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 import type { BehaviorEventType, SceneBehavior, SceneNodeComponentState } from '@harmony/schema'
 import type { BehaviorActionDefinition } from '@schema/behaviors/definitions'
@@ -64,6 +65,7 @@ const placementTitle = computed(() => (floating.value ? '停靠到右侧' : '浮
 const isLightNode = computed(() => selectedNode.value?.nodeType === 'Light')
 const isGroundNode = computed(() => selectedNode.value?.id === GROUND_NODE_ID)
 const isSkyNode = computed(() => selectedNode.value?.id === SKY_NODE_ID)
+const isEnvironmentNode = computed(() => selectedNode.value?.id === ENVIRONMENT_NODE_ID)
 const showMaterialPanel = computed(
   () => !isLightNode.value && (selectedNode.value?.materials?.length ?? 0) > 0,
 )
@@ -89,7 +91,9 @@ function computeDefaultExpandedPanels() {
   const node = selectedNode.value
   const panels: string[] = []
 
-  if (node?.id === SKY_NODE_ID) {
+  if (node?.id === ENVIRONMENT_NODE_ID) {
+    panels.push('environment')
+  } else if (node?.id === SKY_NODE_ID) {
     panels.push('sky')
   } else if (node?.id === GROUND_NODE_ID) {
     panels.push('ground')
@@ -346,6 +350,7 @@ function handleAddComponent(type: string) {
           />
           <SkyPanel v-if="isSkyNode" />
           <GroundPanel v-if="isGroundNode" />
+          <EnvironmentPanel v-if="isEnvironmentNode" />
 
           <div v-if="nodeComponents.length" class="component-list">
             <div v-for="component in nodeComponents" :key="component.id" class="component-entry" >
