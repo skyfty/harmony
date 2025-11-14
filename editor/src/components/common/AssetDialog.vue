@@ -412,6 +412,11 @@ function resolveInitials(asset: ProjectAsset): string {
   const letters = segments.slice(0, 2).map((part) => part.charAt(0).toUpperCase()).join('')
   return letters || '?'
 }
+
+function handleClose() {
+  emit('close')
+}
+
 </script>
 
 <template>
@@ -423,6 +428,14 @@ function resolveInitials(asset: ProjectAsset): string {
           class="asset-dialog__popover"
           :style="panelStyle"
         >
+           <v-toolbar density="compact" class="panel-toolbar" height="40px">
+          <div class="toolbar-text">
+            <div class="material-title">{{ title ?? '选择资产' }}</div>
+          </div>
+          <v-spacer />
+          <v-btn class="toolbar-close" icon="mdi-close" size="small" variant="text" @click="handleClose" />
+        </v-toolbar>
+
           <div class="asset-dialog__header">
             <span class="asset-dialog__title">{{ title ?? '选择资产' }}</span>
             <v-text-field
