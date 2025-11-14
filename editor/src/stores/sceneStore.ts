@@ -1540,24 +1540,25 @@ function createEnvironmentSceneNode(
   }
 }
 
-function normalizeEnvironmentSceneNode(node: SceneNode | null | undefined): SceneNode {
+function normalizeEnvironmentSceneNode(node: SceneNode | null | undefined, override?: EnvironmentSettings): SceneNode {
   if (!node) {
-    return createEnvironmentSceneNode()
+    return createEnvironmentSceneNode({ settings: override })
   }
-  const settings = cloneEnvironmentSettings(
-    isPlainRecord(node.userData) ? ((node.userData as Record<string, unknown>).environment as EnvironmentSettings | null | undefined) : null,
-  )
+  const existingSettings = isPlainRecord(node.userData)
+    ? ((node.userData as Record<string, unknown>).environment as EnvironmentSettings | null | undefined)
+    : null
+  const settings = override ? cloneEnvironmentSettings(override) : cloneEnvironmentSettings(existingSettings ?? null)
   const visible = node.visible ?? true
   return createEnvironmentSceneNode({ settings, visible })
 }
 
-function ensureEnvironmentNode(nodes: SceneNode[]): SceneNode[] {
+function ensureEnvironmentNode(nodes: SceneNode[], override?: EnvironmentSettings): SceneNode[] {
   let environment: SceneNode | null = null
   const others: SceneNode[] = []
 
   nodes.forEach((node) => {
     if (!environment && isEnvironmentNode(node)) {
-      environment = normalizeEnvironmentSceneNode(node)
+      environment = normalizeEnvironmentSceneNode(node, override)
       return
     }
     if (!isEnvironmentNode(node)) {
@@ -1566,7 +1567,7 @@ function ensureEnvironmentNode(nodes: SceneNode[]): SceneNode[] {
   })
 
   if (!environment) {
-    environment = createEnvironmentSceneNode()
+    environment = createEnvironmentSceneNode({ settings: override })
   }
 
   const result = [...others]
@@ -1607,6 +1608,14 @@ function environmentSettingsEqual(a: EnvironmentSettings, b: EnvironmentSettings
     a.environmentMap.mode === b.environmentMap.mode &&
     a.environmentMap.hdriAssetId === b.environmentMap.hdriAssetId
   )
+}
+
+function resolveSceneDocumentEnvironment(scene: StoredSceneDocument): EnvironmentSettings {
+  if (scene.environment) {
+    return cloneEnvironmentSettings(scene.environment)
+  }
+  const environmentNode = findNodeById(scene.nodes, ENVIRONMENT_NODE_ID)
+  return extractEnvironmentSettings(environmentNode)
 }
 
 function normalizeGroundSceneNode(node: SceneNode | null | undefined, settings?: GroundSettings): SceneNode {
@@ -2396,7 +2405,7 @@ const initialMaterials: SceneMaterial[] = [
   }, { id: DEFAULT_SCENE_MATERIAL_ID }),
 ]
 
-const initialNodes: SceneNode[] = ensureEnvironmentNode(ensureSkyNode([createGroundSceneNode()]))
+const initialNodes: SceneNode[] = ensureEnvironmentNode(ensureSkyNode([createGroundSceneNode()]), DEFAULT_ENVIRONMENT_SETTINGS)
 
 const placeholderDownloadWatchers = new Map<string, WatchStopHandle>()
 
@@ -3478,12 +3487,13 @@ function cloneNode(node: SceneNode): SceneNode {
   }
 }
 
-function createDefaultSceneNodes(settings?: GroundSettings): SceneNode[] {
+function createDefaultSceneNodes(settings?: GroundSettings, environment?: EnvironmentSettings): SceneNode[] {
   const nodes = initialNodes.map((node) => cloneNode(node))
+  const environmentSettings = environment ? cloneEnvironmentSettings(environment) : DEFAULT_ENVIRONMENT_SETTINGS
   if (!settings) {
-    return ensureEnvironmentNode(ensureSkyNode(nodes))
+    return ensureEnvironmentNode(ensureSkyNode(nodes), environmentSettings)
   }
-  return ensureEnvironmentNode(ensureSkyNode(ensureGroundNode(nodes, settings)))
+  return ensureEnvironmentNode(ensureSkyNode(ensureGroundNode(nodes, settings)), environmentSettings)
 }
 
 function cloneSceneNodes(nodes: SceneNode[]): SceneNode[] {
@@ -3860,6 +3870,7 @@ export async function cloneSceneDocumentForExport(
     panelVisibility: scene.panelVisibility,
     panelPlacement: scene.panelPlacement,
     groundSettings: scene.groundSettings,
+    environment: resolveSceneDocumentEnvironment(scene),
   })
 }
 
@@ -4163,6 +4174,12 @@ function migrateScenePersistedState(
     next.hasUnsavedChanges = false
   }
 
+  if (!next.environment || typeof next.environment !== 'object') {
+    next.environment = cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS)
+  } else {
+    next.environment = cloneEnvironmentSettings(next.environment as Partial<EnvironmentSettings> | EnvironmentSettings)
+  }
+
   return next as Partial<SceneState>
 }
 
@@ -4194,6 +4211,7 @@ function createHistorySnapshot(store: SceneState): SceneHistoryEntry {
     selectedNodeIds: cloneSelection(store.selectedNodeIds),
     selectedNodeId: store.selectedNodeId,
     viewportSettings: cloneViewportSettings(store.viewportSettings),
+    environment: cloneEnvironmentSettings(store.environment),
     groundSettings: cloneGroundSettings(store.groundSettings),
     resourceProviderId: store.resourceProviderId,
     runtimeSnapshots: collectSceneRuntimeSnapshots(store.nodes),
@@ -4266,6 +4284,7 @@ function createSceneDocument(
     panelVisibility?: Partial<PanelVisibilityState>
     panelPlacement?: Partial<PanelPlacementState>
     groundSettings?: Partial<GroundSettings>
+    environment?: Partial<EnvironmentSettings>
   } = {},
 ): StoredSceneDocument {
   const id = options.id ?? generateUuid()
@@ -4279,7 +4298,11 @@ function createSceneDocument(
     options.groundSettings
       ?? (existingGroundMesh ? { width: existingGroundMesh.width, depth: existingGroundMesh.depth } : undefined),
   )
-  const nodes = ensureEnvironmentNode(ensureSkyNode(ensureGroundNode(clonedNodes, groundSettings)))
+  const existingEnvironmentNode = clonedNodes.find((node) => isEnvironmentNode(node)) ?? null
+  const environmentSettings = cloneEnvironmentSettings(
+    options.environment ?? (existingEnvironmentNode ? extractEnvironmentSettings(existingEnvironmentNode) : DEFAULT_ENVIRONMENT_SETTINGS),
+  )
+  const nodes = ensureEnvironmentNode(ensureSkyNode(ensureGroundNode(clonedNodes, groundSettings)), environmentSettings)
   const camera = options.camera ? cloneCameraState(options.camera) : cloneCameraState(defaultCameraState)
   const findDefaultSelectableNode = () => nodes.find((node) => !isGroundNode(node) && !isSkyNode(node))?.id ?? null
   let selectedNodeId = options.selectedNodeId ?? findDefaultSelectableNode()
@@ -4307,6 +4330,7 @@ function createSceneDocument(
     selectedNodeIds,
     camera,
     viewportSettings,
+    environment: environmentSettings,
     groundSettings,
     panelVisibility,
     panelPlacement,
@@ -4354,17 +4378,23 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
   normalizeCurrentSceneMeta(store)
   const now = new Date().toISOString()
   const meta = store.currentSceneMeta!
+  const environment = cloneEnvironmentSettings(store.environment)
+  const nodes = ensureEnvironmentNode(
+    ensureSkyNode(ensureGroundNode(cloneSceneNodes(store.nodes), store.groundSettings)),
+    environment,
+  )
 
   return {
     id: store.currentSceneId,
     name: meta.name,
     thumbnail: meta.thumbnail ?? null,
-    nodes: cloneSceneNodes(store.nodes),
+    nodes,
     materials: cloneSceneMaterials(store.materials),
     selectedNodeId: store.selectedNodeId,
     selectedNodeIds: cloneSelection(store.selectedNodeIds),
     camera: cloneCameraState(store.camera),
     viewportSettings: cloneViewportSettings(store.viewportSettings),
+    environment,
     groundSettings: cloneGroundSettings(store.groundSettings),
     panelVisibility: normalizePanelVisibilityState(store.panelVisibility),
     panelPlacement: normalizePanelPlacementStateInput(store.panelPlacement),
@@ -4385,7 +4415,10 @@ function commitSceneSnapshot(
     return
   }
 
-  const normalizedNodes = ensureEnvironmentNode(ensureSkyNode(ensureGroundNode(store.nodes, store.groundSettings)))
+  const normalizedNodes = ensureEnvironmentNode(
+    ensureSkyNode(ensureGroundNode(store.nodes, store.groundSettings)),
+    store.environment,
+  )
   if (normalizedNodes !== store.nodes) {
     store.nodes = normalizedNodes
   }
@@ -4590,7 +4623,14 @@ export const useSceneStore = defineStore('scene', {
     const assetIndex = cloneAssetIndex(initialSceneDocument.assetIndex)
     const packageDirectoryCache: Record<string, ProjectDirectory[]> = {}
     const viewportSettings = cloneViewportSettings(initialSceneDocument.viewportSettings)
-    const clonedNodes = cloneSceneNodes(initialSceneDocument.nodes)
+    let clonedNodes = cloneSceneNodes(initialSceneDocument.nodes)
+    const initialEnvironment = initialSceneDocument.environment
+      ? cloneEnvironmentSettings(initialSceneDocument.environment)
+      : extractEnvironmentSettings(findNodeById(clonedNodes, ENVIRONMENT_NODE_ID))
+    clonedNodes = ensureEnvironmentNode(
+      ensureSkyNode(ensureGroundNode(clonedNodes, initialSceneDocument.groundSettings)),
+      initialEnvironment,
+    )
     componentManager.reset()
     componentManager.syncScene(clonedNodes)
     return {
@@ -4601,7 +4641,7 @@ export const useSceneStore = defineStore('scene', {
         createdAt: initialSceneDocument.createdAt,
         updatedAt: initialSceneDocument.updatedAt,
       },
-      nodes: clonedNodes,
+  nodes: clonedNodes,
       materials: cloneSceneMaterials(initialSceneDocument.materials),
       selectedNodeId: initialSceneDocument.selectedNodeId,
       selectedNodeIds: cloneSelection(initialSceneDocument.selectedNodeIds),
@@ -4616,6 +4656,7 @@ export const useSceneStore = defineStore('scene', {
       selectedAssetId: null,
       camera: cloneCameraState(initialSceneDocument.camera),
       viewportSettings,
+  environment: initialEnvironment,
       groundSettings: cloneGroundSettings(initialSceneDocument.groundSettings),
       panelVisibility: { ...defaultPanelVisibility },
       panelPlacement: { ...defaultPanelPlacement },
@@ -4685,8 +4726,7 @@ export const useSceneStore = defineStore('scene', {
       return directory.assets ?? []
     },
     environmentSettings(state): EnvironmentSettings {
-      const environmentNode = findNodeById(state.nodes, ENVIRONMENT_NODE_ID)
-      return extractEnvironmentSettings(environmentNode)
+      return state.environment
     },
     canUndo(state): boolean {
       return state.undoStack.length > 0
@@ -4747,6 +4787,7 @@ export const useSceneStore = defineStore('scene', {
         this.selectedNodeIds = cloneSelection(snapshot.selectedNodeIds)
         this.selectedNodeId = snapshot.selectedNodeId
         this.viewportSettings = cloneViewportSettings(snapshot.viewportSettings)
+  this.environment = cloneEnvironmentSettings(snapshot.environment)
         this.groundSettings = cloneGroundSettings(snapshot.groundSettings)
         this.resourceProviderId = snapshot.resourceProviderId
 
@@ -4887,7 +4928,10 @@ export const useSceneStore = defineStore('scene', {
           normalized,
         )
       }
-  const updatedNodes = ensureEnvironmentNode(ensureSkyNode(ensureGroundNode(clonedNodes, normalized)))
+      const updatedNodes = ensureEnvironmentNode(
+        ensureSkyNode(ensureGroundNode(clonedNodes, normalized)),
+        this.environment,
+      )
       this.nodes = updatedNodes
       commitSceneSnapshot(this)
       return true
@@ -4917,28 +4961,19 @@ export const useSceneStore = defineStore('scene', {
       return true
     },
     setEnvironmentSettings(settings: EnvironmentSettings) {
-      const environmentNode = findNodeById(this.nodes, ENVIRONMENT_NODE_ID)
-      if (!environmentNode) {
-        return false
-      }
       const normalized = cloneEnvironmentSettings(settings)
-      const current = extractEnvironmentSettings(environmentNode)
-      if (environmentSettingsEqual(current, normalized)) {
+      if (environmentSettingsEqual(this.environment, normalized)) {
         return false
       }
 
       this.captureHistorySnapshot()
-      assignEnvironmentSettings(environmentNode, normalized)
-      this.nodes = [...this.nodes]
+      this.environment = normalized
+      this.nodes = ensureEnvironmentNode(this.nodes, normalized)
       commitSceneSnapshot(this)
       return true
     },
     patchEnvironmentSettings(patch: EnvironmentSettingsPatch) {
-      const environmentNode = findNodeById(this.nodes, ENVIRONMENT_NODE_ID)
-      if (!environmentNode) {
-        return false
-      }
-      const current = extractEnvironmentSettings(environmentNode)
+      const current = this.environment
       const merged: EnvironmentSettings = {
         ...current,
         ...patch,
@@ -8808,11 +8843,12 @@ export const useSceneStore = defineStore('scene', {
 
       await scenesStore.saveSceneDocument(sceneDocument)
 
-      this.currentSceneId = sceneDocument.id
-      applyCurrentSceneMeta(this, sceneDocument)
-      applySceneAssetState(this, sceneDocument)
-      this.nodes = cloneSceneNodes(sceneDocument.nodes)
-  this.rebuildGeneratedMeshRuntimes()
+    this.currentSceneId = sceneDocument.id
+    applyCurrentSceneMeta(this, sceneDocument)
+    applySceneAssetState(this, sceneDocument)
+    this.nodes = cloneSceneNodes(sceneDocument.nodes)
+    this.environment = resolveSceneDocumentEnvironment(sceneDocument)
+    this.rebuildGeneratedMeshRuntimes()
       this.groundSettings = cloneGroundSettings(sceneDocument.groundSettings)
       this.setSelection(sceneDocument.selectedNodeIds ?? (sceneDocument.selectedNodeId ? [sceneDocument.selectedNodeId] : []))
       this.camera = cloneCameraState(sceneDocument.camera)
@@ -8881,6 +8917,7 @@ export const useSceneStore = defineStore('scene', {
         panelVisibility: normalizePanelVisibilityInput(template.panelVisibility),
         panelPlacement: normalizePanelPlacementInput(template.panelPlacement),
         groundSettings,
+        environment: template.environment,
       })
 
       const timestamp = new Date().toISOString()
@@ -8889,10 +8926,11 @@ export const useSceneStore = defineStore('scene', {
 
       await scenesStore.saveSceneDocument(sceneDocument)
 
-      this.currentSceneId = sceneDocument.id
-      applyCurrentSceneMeta(this, sceneDocument)
-      applySceneAssetState(this, sceneDocument)
-      this.nodes = cloneSceneNodes(sceneDocument.nodes)
+    this.currentSceneId = sceneDocument.id
+    applyCurrentSceneMeta(this, sceneDocument)
+    applySceneAssetState(this, sceneDocument)
+    this.nodes = cloneSceneNodes(sceneDocument.nodes)
+    this.environment = resolveSceneDocumentEnvironment(sceneDocument)
       this.groundSettings = cloneGroundSettings(sceneDocument.groundSettings)
       this.setSelection(sceneDocument.selectedNodeIds ?? (sceneDocument.selectedNodeId ? [sceneDocument.selectedNodeId] : []))
       this.camera = cloneCameraState(sceneDocument.camera)
@@ -8934,11 +8972,12 @@ export const useSceneStore = defineStore('scene', {
           refreshViewport: false,
         })
 
-        this.currentSceneId = sceneId
-        applyCurrentSceneMeta(this, scene)
-        applySceneAssetState(this, scene)
-        this.nodes = cloneSceneNodes(scene.nodes)
-  this.rebuildGeneratedMeshRuntimes()
+    this.currentSceneId = sceneId
+    applyCurrentSceneMeta(this, scene)
+    applySceneAssetState(this, scene)
+    this.nodes = cloneSceneNodes(scene.nodes)
+    this.environment = resolveSceneDocumentEnvironment(scene)
+    this.rebuildGeneratedMeshRuntimes()
         this.setSelection(scene.selectedNodeIds ?? (scene.selectedNodeId ? [scene.selectedNodeId] : []))
         this.camera = cloneCameraState(scene.camera)
         this.viewportSettings = cloneViewportSettings(scene.viewportSettings)
@@ -8971,13 +9010,15 @@ export const useSceneStore = defineStore('scene', {
         const fallback = createSceneDocument('Untitled Scene', {
           resourceProviderId: 'builtin',
           groundSettings: this.groundSettings,
+          environment: this.environment,
         })
         await scenesStore.saveSceneDocument(fallback)
         this.currentSceneId = fallback.id
         applyCurrentSceneMeta(this, fallback)
         applySceneAssetState(this, fallback)
         this.nodes = cloneSceneNodes(fallback.nodes)
-  this.rebuildGeneratedMeshRuntimes()
+        this.environment = resolveSceneDocumentEnvironment(fallback)
+        this.rebuildGeneratedMeshRuntimes()
         this.setSelection(fallback.selectedNodeIds ?? (fallback.selectedNodeId ? [fallback.selectedNodeId] : []))
         this.camera = cloneCameraState(fallback.camera)
         this.panelVisibility = normalizePanelVisibilityState(fallback.panelVisibility)
@@ -9134,6 +9175,9 @@ export const useSceneStore = defineStore('scene', {
           panelVisibility: normalizePanelVisibilityInput(entry.panelVisibility),
           panelPlacement: normalizePanelPlacementInput(entry.panelPlacement),
           groundSettings: (entry as { groundSettings?: Partial<GroundSettings> | null }).groundSettings ?? undefined,
+          environment: isPlainRecord((entry as { environment?: unknown }).environment)
+            ? ((entry as { environment?: Partial<EnvironmentSettings> | null }).environment ?? undefined)
+            : undefined,
         })
 
         await hydrateSceneDocumentWithEmbeddedAssets(sceneDocument)

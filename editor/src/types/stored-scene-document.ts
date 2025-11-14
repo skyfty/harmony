@@ -1,4 +1,4 @@
-import type { GroundSettings,SceneNode,AssetIndexEntry } from '@harmony/schema'
+import type { GroundSettings, SceneNode, AssetIndexEntry, EnvironmentSettings } from '@harmony/schema'
 import type { SceneCameraState } from './scene-camera-state'
 import type { ProjectAsset } from './project-asset'
 import type { SceneViewportSettings } from './scene-viewport-settings'
@@ -16,6 +16,7 @@ export interface StoredSceneDocument {
   selectedNodeIds?: string[]
   camera: SceneCameraState
   viewportSettings: SceneViewportSettings
+  environment?: EnvironmentSettings
   groundSettings: GroundSettings
   panelVisibility?: PanelVisibilityState
   panelPlacement?: PanelPlacementState

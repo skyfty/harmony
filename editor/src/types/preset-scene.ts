@@ -1,4 +1,4 @@
-import type { AssetIndexEntry, GroundSettings, SceneMaterial, SceneNode } from '@harmony/schema'
+import type { AssetIndexEntry, GroundSettings, SceneMaterial, SceneNode, EnvironmentSettings } from '@harmony/schema'
 import type { SceneCameraState } from './scene-camera-state'
 import type { SceneViewportSettings } from './scene-viewport-settings'
 import type { PanelVisibilityState } from './panel-visibility-state'
@@ -21,6 +21,7 @@ export interface PresetSceneDocument {
   selectedNodeIds?: string[]
   camera?: SceneCameraState
   viewportSettings?: Partial<SceneViewportSettings>
+  environment?: Partial<EnvironmentSettings>
   groundSettings?: Partial<GroundSettings>
   panelVisibility?: Partial<PanelVisibilityState>
   panelPlacement?: Partial<PanelPlacementState>

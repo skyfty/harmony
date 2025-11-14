@@ -479,6 +479,7 @@ export interface SceneJsonExportDocument {
   createdAt: string;
   updatedAt: string;
   skybox: SceneSkyboxSettings;
+  environment?: EnvironmentSettings;
   nodes: SceneNode[];
   materials: SceneMaterial[];
   groundSettings?: GroundSettings;
@@ -496,6 +497,36 @@ export interface SceneSkyboxSettings {
   mieDirectionalG: number
   elevation: number
   azimuth: number
+}
+
+export type EnvironmentBackgroundMode = 'solidColor' | 'hdri'
+export type EnvironmentMapMode = 'skybox' | 'custom'
+export type EnvironmentFogMode = 'none' | 'exp'
+
+export interface EnvironmentBackgroundSettings {
+  mode: EnvironmentBackgroundMode
+  solidColor: string
+  hdriAssetId: string | null
+}
+
+export interface EnvironmentMapSettings {
+  mode: EnvironmentMapMode
+  hdriAssetId: string | null
+}
+
+export interface EnvironmentSettings {
+  background: EnvironmentBackgroundSettings
+  ambientLightColor: string
+  ambientLightIntensity: number
+  fogMode: EnvironmentFogMode
+  fogColor: string
+  fogDensity: number
+  environmentMap: EnvironmentMapSettings
+}
+
+export type EnvironmentSettingsPatch = Partial<EnvironmentSettings> & {
+  background?: Partial<EnvironmentBackgroundSettings>
+  environmentMap?: Partial<EnvironmentMapSettings>
 }
 export type DynamicMeshType = 'Ground' | 'Wall' | 'Platform'
 

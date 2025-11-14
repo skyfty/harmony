@@ -1,5 +1,5 @@
 import type { Object3D } from 'three'
-import type {SceneNode, AssetIndexEntry,GroundSettings } from '@harmony/schema'
+import type {SceneNode, AssetIndexEntry,GroundSettings, EnvironmentSettings } from '@harmony/schema'
 import type { EditorTool } from './editor-tool'
 import type { ProjectAsset } from './project-asset'
 import type { ProjectDirectory } from './project-directory'
@@ -33,6 +33,7 @@ export interface SceneState {
   selectedAssetId: string | null
   camera: SceneCameraState
   viewportSettings: SceneViewportSettings
+  environment: EnvironmentSettings
   groundSettings: GroundSettings
   panelVisibility: PanelVisibilityState
   projectPanelTreeSize: number

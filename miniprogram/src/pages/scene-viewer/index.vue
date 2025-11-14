@@ -170,6 +170,7 @@ import { effectScope, watchEffect, ref, computed, onUnmounted, watch, reactive, 
 import { onLoad, onUnload, onReady } from '@dcloudio/uni-app';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from '@/components/PlatformCanvas.vue';
@@ -180,6 +181,7 @@ import ResourceCache from '@schema/ResourceCache';
 import { AssetCache, AssetLoader } from '@schema/assetCache';
 import { loadNodeObject } from '@schema/utils/modelAssetLoader';
 import type {
+  EnvironmentSettings,
   SceneNode,
   SceneNodeComponentState,
   SceneSkyboxSettings,
@@ -319,6 +321,9 @@ let sharedResourceCache: ResourceCache | null = null;
 let viewerResourceCache: ResourceCache | null = null;
 let sceneDownloadTask: SceneRequestTask | null = null;
 
+const rgbeLoader = new RGBELoader().setDataType(THREE.FloatType);
+const textureLoader = new THREE.TextureLoader();
+
 function ensureResourceCache(
   document: SceneJsonExportDocument,
   options: SceneGraphBuildOptions,
@@ -359,6 +364,28 @@ const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
   elevation: 22,
   azimuth: 145,
 };
+const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
+const DEFAULT_ENVIRONMENT_BACKGROUND_COLOR = '#516175';
+const DEFAULT_ENVIRONMENT_AMBIENT_COLOR = '#ffffff';
+const DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY = 0.6;
+const DEFAULT_ENVIRONMENT_FOG_COLOR = '#516175';
+const DEFAULT_ENVIRONMENT_FOG_DENSITY = 0.02;
+const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
+  background: {
+    mode: 'solidColor',
+    solidColor: DEFAULT_ENVIRONMENT_BACKGROUND_COLOR,
+    hdriAssetId: null,
+  },
+  ambientLightColor: DEFAULT_ENVIRONMENT_AMBIENT_COLOR,
+  ambientLightIntensity: DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY,
+  fogMode: 'none',
+  fogColor: DEFAULT_ENVIRONMENT_FOG_COLOR,
+  fogDensity: DEFAULT_ENVIRONMENT_FOG_DENSITY,
+  environmentMap: {
+    mode: 'skybox',
+    hdriAssetId: null,
+  },
+};
 const skySunPosition = new THREE.Vector3();
 const DEFAULT_SUN_DIRECTION = new THREE.Vector3(0.35, 1, -0.25).normalize();
 const tempSunDirection = new THREE.Vector3();
@@ -386,6 +413,15 @@ let sunDirectionalLight: THREE.DirectionalLight | null = null;
 let pmremGenerator: THREE.PMREMGenerator | null = null;
 let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null;
 let pendingSkyboxSettings: SceneSkyboxSettings | null = null;
+let environmentAmbientLight: THREE.AmbientLight | null = null;
+let backgroundTexture: THREE.Texture | null = null;
+let backgroundTextureCleanup: (() => void) | null = null;
+let backgroundAssetId: string | null = null;
+let backgroundLoadToken = 0;
+let environmentMapTarget: THREE.WebGLRenderTarget | null = null;
+let environmentMapAssetId: string | null = null;
+let environmentMapLoadToken = 0;
+let pendingEnvironmentSettings: EnvironmentSettings | null = null;
 let renderContext: RenderContext | null = null;
 let currentDocument: SceneJsonExportDocument | null = null;
 type WindowResizeCallback = Parameters<typeof uni.onWindowResize>[0];
@@ -604,6 +640,81 @@ const lanternCurrentSlideDescription = computed(() => {
   }
   return slide.description ?? '';
 });
+
+function normalizeHexColor(value: unknown, fallback: string): string {
+  if (typeof value === 'string') {
+    const sanitized = value.trim();
+    if (HEX_COLOR_PATTERN.test(sanitized)) {
+      return `#${sanitized.slice(1).toLowerCase()}`;
+    }
+  }
+  return fallback;
+}
+
+function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  if (numeric < min) {
+    return min;
+  }
+  if (numeric > max) {
+    return max;
+  }
+  return numeric;
+}
+
+function normalizeAssetId(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
+}
+
+function cloneEnvironmentSettingsLocal(
+  source?: Partial<EnvironmentSettings> | EnvironmentSettings | null,
+): EnvironmentSettings {
+  const backgroundSource = source?.background ?? null;
+  const environmentMapSource = source?.environmentMap ?? null;
+
+  const backgroundMode = backgroundSource?.mode === 'hdri' ? 'hdri' : 'solidColor';
+  const environmentMapMode = environmentMapSource?.mode === 'custom' ? 'custom' : 'skybox';
+  const fogMode = source?.fogMode === 'exp' ? 'exp' : 'none';
+
+  return {
+    background: {
+      mode: backgroundMode,
+      solidColor: normalizeHexColor(backgroundSource?.solidColor, DEFAULT_ENVIRONMENT_BACKGROUND_COLOR),
+      hdriAssetId: normalizeAssetId(backgroundSource?.hdriAssetId ?? null),
+    },
+    ambientLightColor: normalizeHexColor(source?.ambientLightColor, DEFAULT_ENVIRONMENT_AMBIENT_COLOR),
+    ambientLightIntensity: clampNumber(
+      source?.ambientLightIntensity,
+      0,
+      10,
+      DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY,
+    ),
+    fogMode,
+    fogColor: normalizeHexColor(source?.fogColor, DEFAULT_ENVIRONMENT_FOG_COLOR),
+    fogDensity: clampNumber(source?.fogDensity, 0, 5, DEFAULT_ENVIRONMENT_FOG_DENSITY),
+    environmentMap: {
+      mode: environmentMapMode,
+      hdriAssetId: normalizeAssetId(environmentMapSource?.hdriAssetId ?? null),
+    },
+  };
+}
+
+function resolveDocumentEnvironment(document: SceneJsonExportDocument | null | undefined): EnvironmentSettings {
+  if (!document) {
+    return cloneEnvironmentSettingsLocal(DEFAULT_ENVIRONMENT_SETTINGS);
+  }
+  const payload = (document as SceneJsonExportDocument & {
+    environment?: Partial<EnvironmentSettings> | EnvironmentSettings | null;
+  }).environment;
+  return cloneEnvironmentSettingsLocal(payload ?? DEFAULT_ENVIRONMENT_SETTINGS);
+}
 
 type UniImageLoadEvent = Event & {
   detail?: {
@@ -2684,6 +2795,272 @@ function applySunDirectionToSunLight(): void {
   light.target.updateMatrixWorld();
 }
 
+function ensureEnvironmentAmbientLight(): THREE.AmbientLight | null {
+  const scene = renderContext?.scene ?? null;
+  if (!scene) {
+    return null;
+  }
+  if (!environmentAmbientLight) {
+    environmentAmbientLight = new THREE.AmbientLight(
+      DEFAULT_ENVIRONMENT_AMBIENT_COLOR,
+      DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY,
+    );
+    scene.add(environmentAmbientLight);
+  } else if (environmentAmbientLight.parent !== scene) {
+    scene.add(environmentAmbientLight);
+  }
+  return environmentAmbientLight;
+}
+
+function applySkyEnvironmentToScene() {
+  const scene = renderContext?.scene ?? null;
+  if (!scene) {
+    return;
+  }
+  if (skyEnvironmentTarget) {
+    scene.environment = skyEnvironmentTarget.texture;
+    scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY;
+  } else {
+    scene.environment = null;
+    scene.environmentIntensity = 1;
+  }
+}
+
+function disposeBackgroundResources() {
+  const scene = renderContext?.scene ?? null;
+  const previousTexture = backgroundTexture;
+  if (previousTexture) {
+    if (scene && scene.background === previousTexture) {
+      scene.background = null;
+    }
+    previousTexture.dispose();
+  }
+  backgroundTexture = null;
+  backgroundTextureCleanup?.();
+  backgroundTextureCleanup = null;
+  backgroundAssetId = null;
+}
+
+function disposeEnvironmentTarget() {
+  const scene = renderContext?.scene ?? null;
+  if (environmentMapTarget) {
+    if (scene && scene.environment === environmentMapTarget.texture) {
+      scene.environment = null;
+      scene.environmentIntensity = 1;
+    }
+    environmentMapTarget.dispose();
+  }
+  environmentMapTarget = null;
+  environmentMapAssetId = null;
+}
+
+function inferEnvironmentAssetExtension(assetId: string, url: string | null): string {
+  const target = (url ?? assetId) ?? '';
+  const sanitized = target.split('#')[0]?.split('?')[0] ?? '';
+  const index = sanitized.lastIndexOf('.');
+  if (index === -1) {
+    return '';
+  }
+  return sanitized.slice(index + 1).toLowerCase();
+}
+
+async function loadEnvironmentTextureFromAsset(
+  assetId: string,
+): Promise<{ texture: THREE.Texture; dispose?: () => void } | null> {
+  const source = resolveAssetSource(assetId);
+  if (!source) {
+    return null;
+  }
+  let url: string | null = null;
+  let dispose: (() => void) | undefined;
+  switch (source.kind) {
+    case 'remote-url':
+      url = source.url;
+      break;
+    case 'data-url':
+      url = source.dataUrl;
+      break;
+    case 'inline-text': {
+      const result = resolveInlineTextUrl(source.text, assetId);
+      url = result.url;
+      dispose = result.dispose;
+      break;
+    }
+    case 'raw':
+      url = getOrCreateObjectUrl(assetId, source.data);
+      break;
+    default:
+      return null;
+  }
+  if (!url) {
+    return null;
+  }
+  const extension = inferEnvironmentAssetExtension(assetId, url);
+  try {
+    if (extension === 'hdr' || extension === 'hdri') {
+      const texture = await rgbeLoader.loadAsync(url);
+      texture.mapping = THREE.EquirectangularReflectionMapping;
+      texture.flipY = false;
+      texture.needsUpdate = true;
+      return { texture, dispose };
+    }
+    const texture = await textureLoader.loadAsync(url);
+    texture.mapping = THREE.EquirectangularReflectionMapping;
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.flipY = false;
+    texture.needsUpdate = true;
+    return { texture, dispose };
+  } catch (error) {
+    console.warn('[SceneViewer] Failed to load environment texture', assetId, error);
+    dispose?.();
+    return null;
+  }
+}
+
+function applyAmbientLightSettings(settings: EnvironmentSettings) {
+  const ambient = ensureEnvironmentAmbientLight();
+  if (!ambient) {
+    return;
+  }
+  ambient.color.set(settings.ambientLightColor);
+  ambient.intensity = settings.ambientLightIntensity;
+}
+
+function applyFogSettings(settings: EnvironmentSettings) {
+  const scene = renderContext?.scene ?? null;
+  if (!scene) {
+    return;
+  }
+  if (settings.fogMode === 'none') {
+    scene.fog = null;
+    return;
+  }
+  const fogColor = new THREE.Color(settings.fogColor);
+  const density = Math.max(0, settings.fogDensity);
+  if (scene.fog instanceof THREE.FogExp2) {
+    scene.fog.color.copy(fogColor);
+    scene.fog.density = density;
+  } else {
+    scene.fog = new THREE.FogExp2(fogColor, density);
+  }
+}
+
+async function applyBackgroundSettings(
+  background: EnvironmentSettings['background'],
+): Promise<boolean> {
+  const scene = renderContext?.scene ?? null;
+  backgroundLoadToken += 1;
+  const token = backgroundLoadToken;
+  if (!scene) {
+    return false;
+  }
+  if (background.mode !== 'hdri' || !background.hdriAssetId) {
+    disposeBackgroundResources();
+    scene.background = new THREE.Color(background.solidColor);
+    return true;
+  }
+  if (backgroundTexture && backgroundAssetId === background.hdriAssetId) {
+    scene.background = backgroundTexture;
+    return true;
+  }
+  const loaded = await loadEnvironmentTextureFromAsset(background.hdriAssetId);
+  if (!loaded || token !== backgroundLoadToken) {
+    if (loaded) {
+      loaded.texture.dispose();
+      loaded.dispose?.();
+    }
+    return false;
+  }
+  disposeBackgroundResources();
+  backgroundTexture = loaded.texture;
+  backgroundAssetId = background.hdriAssetId;
+  backgroundTextureCleanup = loaded.dispose ?? null;
+  scene.background = backgroundTexture;
+  return true;
+}
+
+async function applyEnvironmentMapSettings(
+  mapSettings: EnvironmentSettings['environmentMap'],
+): Promise<boolean> {
+  const scene = renderContext?.scene ?? null;
+  const renderer = renderContext?.renderer ?? null;
+  environmentMapLoadToken += 1;
+  const token = environmentMapLoadToken;
+  if (!scene) {
+    return false;
+  }
+  if (mapSettings.mode !== 'custom' || !mapSettings.hdriAssetId) {
+    disposeEnvironmentTarget();
+    if (mapSettings.mode === 'skybox') {
+      applySkyEnvironmentToScene();
+    } else {
+      scene.environment = null;
+      scene.environmentIntensity = 1;
+    }
+    return true;
+  }
+  if (!pmremGenerator || !renderer) {
+    return false;
+  }
+  if (environmentMapTarget && environmentMapAssetId === mapSettings.hdriAssetId) {
+    scene.environment = environmentMapTarget.texture;
+    scene.environmentIntensity = 1;
+    return true;
+  }
+  const loaded = await loadEnvironmentTextureFromAsset(mapSettings.hdriAssetId);
+  if (!loaded || token !== environmentMapLoadToken) {
+    if (loaded) {
+      loaded.texture.dispose();
+      loaded.dispose?.();
+    }
+    return false;
+  }
+  const target = pmremGenerator.fromEquirectangular(loaded.texture);
+  loaded.dispose?.();
+  loaded.texture.dispose();
+  if (!target || token !== environmentMapLoadToken) {
+    target?.dispose();
+    return false;
+  }
+  disposeEnvironmentTarget();
+  environmentMapTarget = target;
+  environmentMapAssetId = mapSettings.hdriAssetId;
+  scene.environment = target.texture;
+  scene.environmentIntensity = 1;
+  return true;
+}
+
+async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
+  const scene = renderContext?.scene ?? null;
+  const snapshot = cloneEnvironmentSettingsLocal(settings);
+  if (!scene) {
+    pendingEnvironmentSettings = snapshot;
+    return;
+  }
+  applyAmbientLightSettings(snapshot);
+  applyFogSettings(snapshot);
+  const backgroundApplied = await applyBackgroundSettings(snapshot.background);
+  const environmentApplied = await applyEnvironmentMapSettings(snapshot.environmentMap);
+  if (backgroundApplied && environmentApplied) {
+    pendingEnvironmentSettings = null;
+  } else {
+    pendingEnvironmentSettings = snapshot;
+  }
+}
+
+function disposeEnvironmentResources() {
+  disposeBackgroundResources();
+  disposeEnvironmentTarget();
+  backgroundLoadToken += 1;
+  environmentMapLoadToken += 1;
+  pendingEnvironmentSettings = null;
+  if (environmentAmbientLight) {
+    environmentAmbientLight.parent?.remove(environmentAmbientLight);
+    environmentAmbientLight.dispose?.();
+    environmentAmbientLight = null;
+  }
+}
+
 function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
   const context = renderContext;
   if (!context) {
@@ -2697,7 +3074,7 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
   }
   if (!settings) {
     disposeSkyEnvironment();
-    scene.environment = null;
+    applySkyEnvironmentToScene();
     renderer.toneMappingExposure = DEFAULT_SKYBOX_SETTINGS.exposure;
     pendingSkyboxSettings = null;
     return;
@@ -2736,9 +3113,8 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
   disposeSkyEnvironment();
   if (pmremGenerator && sky) {
     skyEnvironmentTarget = pmremGenerator.fromScene(sky as unknown as THREE.Scene);
-    scene.environment = skyEnvironmentTarget.texture;
-    scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY;
   }
+  applySkyEnvironmentToScene();
   pendingSkyboxSettings = null;
 }
 
@@ -3011,6 +3387,7 @@ function handlePreviewPayload(payload: ScenePreviewPayload | null) {
   warnings.value = [];
   const skyboxSettings = resolveSceneSkybox(payload.document);
   applySkyboxSettings(skyboxSettings);
+  pendingEnvironmentSettings = cloneEnvironmentSettingsLocal(resolveDocumentEnvironment(payload.document));
   try {
     uni.setNavigationBarTitle({ title: payload.title || '场景预览' });
   } catch (_error) {
@@ -3162,6 +3539,7 @@ function teardownRenderer() {
   activeLazyLoadCount = 0;
   activeCameraWatchTween = null;
   controls.dispose();
+  disposeEnvironmentResources();
   disposeSkyResources();
   pmremGenerator?.dispose();
   pmremGenerator = null;
@@ -3256,6 +3634,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   const { canvas } = result;
   currentDocument = payload.document;
   resetAssetResolutionCaches();
+  const environmentSettings = resolveDocumentEnvironment(payload.document);
   if (behaviorAlertToken.value) {
     resolveBehaviorToken(behaviorAlertToken.value, {
       type: 'abort',
@@ -3269,13 +3648,18 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
     resetLanternOverlay();
   }
   hidePurposeControls();
+  disposeEnvironmentResources();
+  pendingEnvironmentSettings = cloneEnvironmentSettingsLocal(environmentSettings);
   scene.children.forEach((child) => disposeObject(child));
   scene.clear();
   sunDirectionalLight = null;
   warnings.value = [];
 
-  const ambientLight = new THREE.AmbientLight('#ffffff', 0.6);
-  scene.add(ambientLight);
+  const ambientLight = ensureEnvironmentAmbientLight();
+  if (ambientLight) {
+    ambientLight.color.set(DEFAULT_ENVIRONMENT_AMBIENT_COLOR);
+    ambientLight.intensity = DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY;
+  }
 
   applySunDirectionToSunLight();
 
@@ -3369,6 +3753,8 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   if (pendingSkyboxSettings) {
     applySkyboxSettings(pendingSkyboxSettings);
   }
+
+  void applyEnvironmentSettingsToScene(environmentSettings);
 
   const width = canvas.width || canvas.clientWidth || 1;
   const height = canvas.height || canvas.clientHeight || 1;
