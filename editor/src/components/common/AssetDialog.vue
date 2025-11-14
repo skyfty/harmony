@@ -506,6 +506,8 @@ function resolveInitials(asset: ProjectAsset): string {
   display: flex;
   flex-direction: column;
 
+  background-color: rgba(18, 22, 28, 0.72);
+
   border-radius: 5px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(14px);

@@ -2935,7 +2935,7 @@ async function resolveEnvironmentAssetUrl(assetId: string): Promise<{ url: strin
   }
 
   assetCacheStore.touch(assetId)
-  const extension = resolveAssetExtension(asset, url)
+  const extension = resolveAssetExtension(asset, entry?.filename ?? url)
   return { url, extension, asset }
 }
 
