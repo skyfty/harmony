@@ -757,15 +757,14 @@ function applyTextureAsset(slot: SceneMaterialTextureSlot, asset: ProjectAsset) 
   ensureTextureAssetCached(asset)
 }
 
-function handleTextureAssetConfirm(asset: ProjectAsset) {
+
+function handleTextureUpdate(asset: ProjectAsset | null) {
   const slot = assetDialogSlot.value
-  assetDialogSelectedId.value = asset.id
-  if (!slot) {
+  assetDialogSelectedId.value = asset?.id ?? ''
+  if (!asset || !slot) {
     return
   }
   applyTextureAsset(slot, asset)
-  assetDialogVisible.value = false
-  assetDialogAnchor.value = null
 }
 
 function handleTextureAssetCancel() {
@@ -1232,7 +1231,7 @@ async function handleImportFileChange(event: Event) {
             :anchor="assetDialogAnchor"
             confirm-text="选择"
             cancel-text="取消"
-            @confirm="handleTextureAssetConfirm"
+            @update:asset="handleTextureUpdate"
             @cancel="handleTextureAssetCancel"
           />
           </div>

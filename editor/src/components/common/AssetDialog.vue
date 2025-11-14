@@ -28,8 +28,7 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   (event: 'update:modelValue', value: boolean): void
-  (event: 'update:assetId', value: string): void
-  (event: 'confirm', value: ProjectAsset): void
+  (event: 'update:asset', value: ProjectAsset | null): void
   (event: 'cancel'): void
 }>()
 
@@ -380,16 +379,9 @@ watch(selectedAssetId, () => {
 
 function handleAssetClick(asset: ProjectAsset) {
   selectedAssetId.value = asset.id
-  emit('update:assetId', asset.id)
+  emit('update:asset', selectedAsset.value)
 }
 
-function handleConfirm() {
-  if (!selectedAsset.value) {
-    return
-  }
-  emit('confirm', selectedAsset.value)
-  dialogOpen.value = false
-}
 
 function handleCancel() {
   emit('cancel')
@@ -413,10 +405,6 @@ function resolveInitials(asset: ProjectAsset): string {
   return letters || '?'
 }
 
-function handleClose() {
-  emit('close')
-}
-
 </script>
 
 <template>
@@ -428,39 +416,28 @@ function handleClose() {
           class="asset-dialog__popover"
           :style="panelStyle"
         >
-           <v-toolbar density="compact" class="panel-toolbar" height="40px">
+        <v-toolbar density="compact" class="panel-toolbar" height="40px">
           <div class="toolbar-text">
-            <div class="material-title">{{ title ?? '选择资产' }}</div>
+            <div class="material-title">{{ title ?? 'Select Asset' }}</div>
           </div>
           <v-spacer />
-          <v-btn class="toolbar-close" icon="mdi-close" size="small" variant="text" @click="handleClose" />
+          <v-btn class="toolbar-close" icon="mdi-close" size="small" variant="text" @click="handleCancel" />
         </v-toolbar>
 
           <div class="asset-dialog__header">
-            <span class="asset-dialog__title">{{ title ?? '选择资产' }}</span>
             <v-text-field
               v-model="searchTerm"
               class="asset-dialog__search"
               density="compact"
-              variant="outlined"
+              variant="underlined"
               prepend-inner-icon="mdi-magnify"
-              placeholder="搜索资产"
+                placeholder="Search assets"
               clearable
               hide-details
             />
           </div>
           <div class="asset-dialog__body">
-            <v-alert
-              v-if="errorMessage"
-              type="error"
-              density="comfortable"
-              variant="tonal"
-              class="asset-dialog__alert"
-            >
-              <div class="asset-dialog__alert-message">{{ errorMessage }}</div>
-              <v-btn size="small" variant="text" @click="retryLoading">重新尝试</v-btn>
-            </v-alert>
-
+ 
             <div v-if="loading" class="asset-dialog__loading">
               <v-progress-circular indeterminate color="primary" />
             </div>
@@ -479,7 +456,7 @@ function handleClose() {
                     v-if="asset.thumbnail"
                     :src="asset.thumbnail"
                     :alt="asset.name"
-                    height="90"
+                    height="78"
                     cover
                   />
                   <div
@@ -489,29 +466,14 @@ function handleClose() {
                   >
                     {{ resolveInitials(asset) }}
                   </div>
-                </div>
-                <div class="asset-dialog__meta">
                   <div class="asset-dialog__name" :title="asset.name">{{ asset.name }}</div>
-                  <div class="asset-dialog__type">{{ asset.type }}</div>
                 </div>
               </div>
             </div>
 
             <div v-if="!loading && !filteredAssets.length" class="asset-dialog__empty">
-              暂无符合条件的资产
+                No assets match the criteria
             </div>
-          </div>
-          <div class="asset-dialog__footer">
-            <v-btn variant="text" size="small" @click="handleCancel">{{ cancelText ?? '取消' }}</v-btn>
-            <v-btn
-              color="primary"
-              variant="flat"
-              size="small"
-              :disabled="!selectedAsset"
-              @click="handleConfirm"
-            >
-              {{ confirmText ?? '确认' }}
-            </v-btn>
           </div>
         </div>
       </div>
@@ -520,22 +482,13 @@ function handleClose() {
 </template>
 
 <style scoped>
-.asset-dialog-popover-enter-active,
-.asset-dialog-popover-leave-active {
-  transition: opacity 0.16s ease, transform 0.16s ease;
-}
-
-.asset-dialog-popover-enter-from,
-.asset-dialog-popover-leave-to {
-  opacity: 0;
-  transform: translateY(8px) scale(0.96);
-}
 
 .asset-dialog__wrapper {
   position: fixed;
   inset: 0;
   pointer-events: none;
   z-index: 40;
+  
 }
 
 .asset-dialog__popover {
@@ -546,19 +499,36 @@ function handleClose() {
   max-height: min(600px, calc(100vh - 32px));
   display: flex;
   flex-direction: column;
-  border-radius: 10px;
+
+  border-radius: 5px;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(14, 18, 24, 0.88);
   backdrop-filter: blur(14px);
-  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
   overflow: hidden;
+}
+
+.panel-toolbar {
+  background-color: transparent;
+  color: #e9ecf1;
+  min-height: 20px;
+  padding: 0 8px;
+}
+
+.toolbar-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.toolbar-close {
+  color: rgba(233, 236, 241, 0.72);
 }
 
 .asset-dialog__header {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  padding: 12px 14px 4px;
+  padding: 1px 4px 4px;
 }
 
 .asset-dialog__title {
@@ -569,7 +539,6 @@ function handleClose() {
 
 .asset-dialog__search {
   flex: 1;
-  max-width: 180px;
   margin-left: auto;
 }
 
@@ -601,15 +570,15 @@ function handleClose() {
 
 .asset-dialog__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: 0.6rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.45rem;
 }
 
 .asset-dialog__tile {
   display: flex;
   flex-direction: column;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
+  border-radius: 6px;
   background: rgba(20, 24, 30, 0.8);
   overflow: hidden;
   cursor: pointer;
@@ -627,36 +596,45 @@ function handleClose() {
 }
 
 .asset-dialog__thumbnail {
+  position: relative;
   width: 100%;
-  height: 90px;
+  height: 78px;
   background: rgba(33, 150, 243, 0.18);
   overflow: hidden;
+}
+
+.asset-dialog__thumbnail :deep(img) {
+  height: 100%;
+  width: 100%;
 }
 
 .asset-dialog__thumbnail-placeholder {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 90px;
-  font-size: 1.2rem;
+  height: 100%;
+  font-size: 1.1rem;
   font-weight: 600;
   color: rgba(255, 255, 255, 0.8);
 }
 
-.asset-dialog__meta {
-  padding: 0.5rem 0.6rem 0.65rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-}
-
 .asset-dialog__name {
-  font-size: 0.85rem;
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 6px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  font-size: 0.78rem;
   font-weight: 600;
   color: rgba(233, 236, 241, 0.95);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  z-index: 1;
+  pointer-events: none;
 }
 
 .asset-dialog__type {
