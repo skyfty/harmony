@@ -17,7 +17,7 @@ import { buildCategoryPathString } from '@/utils/categoryPath'
 
 export type UploadStatus = 'pending' | 'uploading' | 'success' | 'error' | 'canceled'
 
-export type UploadPreviewKind = 'none' | 'image' | 'text' | 'model'
+export type UploadPreviewKind = 'none' | 'image' | 'text' | 'model' | 'hdri'
 
 export interface UploadTaskPreview {
   kind: UploadPreviewKind
@@ -99,6 +99,8 @@ const MODEL_EXTENSIONS = new Set([
   'prefab',
 ])
 
+const HDR_EXTENSIONS = new Set(['hdr', 'hdri'])
+
 const IMAGE_MIME_PREFIX = 'image/'
 const TEXT_MIME_PREFIX = 'text/'
 
@@ -155,6 +157,9 @@ function extractExtension(file: File): string {
 function inferAssetType(file: File): AssetType {
   const mime = file.type ?? ''
   const extension = extractExtension(file)
+  if (HDR_EXTENSIONS.has(extension)) {
+    return 'texture'
+  }
   if (mime.startsWith(IMAGE_MIME_PREFIX) || IMAGE_EXTENSIONS.has(extension)) {
     return 'image'
   }
@@ -197,7 +202,13 @@ function releaseObjectUrl(taskId: string): void {
 async function buildPreview(task: UploadTask): Promise<UploadTaskPreview> {
   releaseObjectUrl(task.id)
   const type = task.type
-  if (type === 'image' || task.file.type.startsWith(IMAGE_MIME_PREFIX) || IMAGE_EXTENSIONS.has(extractExtension(task.file))) {
+  const extension = extractExtension(task.file)
+  if (HDR_EXTENSIONS.has(extension)) {
+    const url = URL.createObjectURL(task.file)
+    objectUrlMap.set(task.id, url)
+    return { kind: 'hdri', url }
+  }
+  if (type === 'image' || task.file.type.startsWith(IMAGE_MIME_PREFIX) || IMAGE_EXTENSIONS.has(extension)) {
     const url = URL.createObjectURL(task.file)
     objectUrlMap.set(task.id, url)
     return { kind: 'image', url }
@@ -205,11 +216,11 @@ async function buildPreview(task: UploadTask): Promise<UploadTaskPreview> {
   if (
     type === 'model' ||
     type === 'mesh' ||
-    MODEL_EXTENSIONS.has(extractExtension(task.file))
+    MODEL_EXTENSIONS.has(extension)
   ) {
     return { kind: 'model' }
   }
-  if (task.file.type.startsWith(TEXT_MIME_PREFIX) || TEXT_EXTENSIONS.has(extractExtension(task.file))) {
+  if (task.file.type.startsWith(TEXT_MIME_PREFIX) || TEXT_EXTENSIONS.has(extension)) {
     const text = await task.file.text().catch(() => '')
     if (text) {
       return { kind: 'text', text: text.slice(0, PREVIEW_TEXT_LIMIT) }
@@ -220,7 +231,7 @@ async function buildPreview(task: UploadTask): Promise<UploadTaskPreview> {
 
 function applyPreview(task: UploadTask, preview: UploadTaskPreview): void {
   task.preview.kind = preview.kind
-  task.preview.url = preview.kind === 'image' ? preview.url : undefined
+  task.preview.url = typeof preview.url === 'string' ? preview.url : undefined
   task.preview.text = preview.kind === 'text' ? preview.text : undefined
 }
 
@@ -715,11 +726,11 @@ export const useUploadStore = defineStore('uploader-upload', () => {
       task.updatedAt = Date.now()
       return
     }
-    if (needsModelThumbnail(task)) {
-      const ready = await waitForModelThumbnail(task)
+    if (needsGeneratedThumbnail(task)) {
+      const ready = await waitForGeneratedThumbnail(task)
       if (!ready || !task.thumbnailFile) {
         task.status = 'error'
-        task.error = task.thumbnailError ?? '模型缩略图尚未生成，请稍候片刻后重试'
+        task.error = task.thumbnailError ?? '缩略图尚未生成，请稍候片刻后重试'
         task.progress = 0
         task.updatedAt = Date.now()
         return
@@ -853,7 +864,7 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     }
   }
 
-  function markModelThumbnailPending(id: string): void {
+  function markThumbnailPending(id: string): void {
     const task = findTask(id)
     task.thumbnailStatus = 'pending'
     task.thumbnailFile = null
@@ -863,7 +874,7 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     task.updatedAt = Date.now()
   }
 
-  function applyModelThumbnailResult(
+  function applyThumbnailResult(
     id: string,
     payload: { file: File | null; width?: number | null; height?: number | null; error?: string | null },
   ): void {
@@ -884,12 +895,16 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     task.updatedAt = Date.now()
   }
 
-  function needsModelThumbnail(task: UploadTask): boolean {
-    return task.type === 'model' || task.type === 'mesh' || task.type === 'prefab'
+  function needsGeneratedThumbnail(task: UploadTask): boolean {
+    if (task.preview.kind === 'model' || task.preview.kind === 'hdri') {
+      return true
+    }
+    const extension = extractExtension(task.file)
+    return MODEL_EXTENSIONS.has(extension) || HDR_EXTENSIONS.has(extension)
   }
 
-  async function waitForModelThumbnail(task: UploadTask, timeoutMs = 5000): Promise<boolean> {
-    if (!needsModelThumbnail(task)) {
+  async function waitForGeneratedThumbnail(task: UploadTask, timeoutMs = 5000): Promise<boolean> {
+    if (!needsGeneratedThumbnail(task)) {
       return true
     }
     if (task.thumbnailStatus === 'ready' && task.thumbnailFile) {
@@ -978,8 +993,8 @@ export const useUploadStore = defineStore('uploader-upload', () => {
     generateTagsWithAi,
     updateImageMetadata,
     updateModelDimensions,
-    markModelThumbnailPending,
-    applyModelThumbnailResult,
+  markThumbnailPending,
+  applyThumbnailResult,
     startUpload,
     cancelUpload,
     removeTask,

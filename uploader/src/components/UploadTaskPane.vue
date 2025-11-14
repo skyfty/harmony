@@ -277,6 +277,8 @@ const previewBadge = computed(() => {
       return '文本'
     case 'model':
       return '模型'
+    case 'hdri':
+      return 'HDRI'
     default:
       return null
   }
