@@ -6,23 +6,6 @@ import type { SkyboxParameterKey } from '@/types/skybox'
 import { SKYBOX_PRESETS, CUSTOM_SKYBOX_PRESET_ID, cloneSkyboxSettings } from '@/stores/skyboxPresets'
 import { useSceneStore } from '@/stores/sceneStore'
 
-const parameterDefinitions = [
-  { key: 'presetId', label: 'Preset' },
-  { key: 'exposure', label: 'Exposure', min: 0.05, max: 2, step: 0.01 },
-  { key: 'turbidity', label: 'Turbidity', min: 1, max: 20, step: 0.1 },
-  { key: 'rayleigh', label: 'Rayleigh Scattering', min: 0, max: 5, step: 0.05 },
-  { key: 'mieCoefficient', label: 'Mie Coefficient', min: 0, max: 0.05, step: 0.0005 },
-  { key: 'mieDirectionalG', label: 'Mie Directionality', min: 0, max: 1, step: 0.01 },
-  { key: 'elevation', label: 'Sun Elevation', min: -10, max: 90, step: 1 },
-  { key: 'azimuth', label: 'Sun Azimuth', min: 0, max: 360, step: 1 },
-] as const
-
-type SliderDefinition = Extract<typeof parameterDefinitions[number], { key: SkyboxParameterKey }>
-
-const sliderDefinitions: SliderDefinition[] = parameterDefinitions.filter(
-  (entry): entry is SliderDefinition => entry.key !== 'presetId',
-)
-
 const sceneStore = useSceneStore()
 const { viewportSettings } = storeToRefs(sceneStore)
 
@@ -51,41 +34,26 @@ function handlePresetSelect(presetId: string | null) {
   sceneStore.applySkyboxPreset(presetId)
 }
 
-function handleSliderInput(key: SkyboxParameterKey, value: number) {
-  if (Number.isNaN(value)) {
-    return
-  }
-  const config = sliderDefinitions.find((entry) => entry.key === key)
-  if (!config) {
-    return
-  }
-  const clamped = Math.min(config.max, Math.max(config.min, value))
-  if (Math.abs(clamped - localSkyboxSettings.value[key]) < 1e-6) {
-    return
-  }
-  localSkyboxSettings.value = {
-    ...localSkyboxSettings.value,
-    [key]: clamped,
-  }
-  sceneStore.setSkyboxSettings({ [key]: clamped } as Partial<SceneSkyboxSettings>, { markCustom: true })
-}
 
 function handleShadowToggle(value: boolean | null) {
   sceneStore.setViewportShadowsEnabled(Boolean(value))
 }
 
-function formatSkyboxValue(key: SkyboxParameterKey, value: number): string {
-  if (key === 'azimuth' || key === 'elevation') {
-    return `${Math.round(value)}°`
+function onChange(key: SkyboxParameterKey, event: Event) {
+  const value = (event.target as HTMLInputElement).value as unknown as number
+  if (Number.isNaN(value)) {
+    return
   }
-  if (key === 'mieCoefficient') {
-    return value.toFixed(4)
+  if (Math.abs(value - localSkyboxSettings.value[key]) < 1e-6) {
+    return
   }
-  if (key === 'mieDirectionalG' || key === 'exposure') {
-    return value.toFixed(2)
+  localSkyboxSettings.value = {
+    ...localSkyboxSettings.value,
+    [key]: value,
   }
-  return value.toFixed(2)
+  sceneStore.setSkyboxSettings({ [key]: value } as Partial<SceneSkyboxSettings>, { markCustom: true })
 }
+
 </script>
 
 <template>
@@ -107,35 +75,130 @@ function formatSkyboxValue(key: SkyboxParameterKey, value: number): string {
             @update:model-value="handlePresetSelect"
           />
         </div>
-        <v-checkbox
-          class="sky-switch"
-          inset
-          density="compact"
-          hide-details
-          color="primary"
-          size="small"
-          :model-value="shadowsEnabled"
-          label="Enable Shadows"
-          @update:model-value="handleShadowToggle"
-        />
-        <div
-          v-for="control in sliderDefinitions"
-          :key="control.key"
-          class="sky-slider"
-        >
+        <div class="sky-slider">
           <div class="slider-label">
-            <span>{{ control.label }}</span>
-            <span class="slider-value">{{ formatSkyboxValue(control.key, localSkyboxSettings[control.key]) }}</span>
+            <span>Exposure</span>
           </div>
-          <v-slider
-            :model-value="localSkyboxSettings[control.key]"
-            :min="control.min"
-            :max="control.max"
-            :step="control.step"
+          <v-text-field
+            :model-value="localSkyboxSettings.exposure"
+            :min="0.05"
+            :max="2.00"
+            :step="0.01"
+            type="number"
+            inputmode="decimal"
             density="compact"
+            variant="underlined"
             hide-details
             color="primary"
-            @update:model-value="(value) => handleSliderInput(control.key, value as number)"
+            @change="onChange('exposure', $event)"
+          />
+        </div>
+        <div class="sky-slider">
+          <div class="slider-label">
+            <span>Turbidity</span>
+          </div>
+          <v-text-field
+            :model-value="localSkyboxSettings.turbidity"
+            :min="1.00"
+            :max="20.00"
+            :step="0.1"
+            type="number"
+            inputmode="decimal"
+            density="compact"
+            variant="underlined"
+            hide-details
+            color="primary"
+            @change="onChange('turbidity', $event)"
+          />
+        </div>
+        <div class="sky-slider">
+          <div class="slider-label">
+            <span>Rayleigh Scattering</span>
+          </div>
+          <v-text-field
+            :model-value="localSkyboxSettings.rayleigh"
+            :min="0.00"
+            :max="5.00"
+            :step="0.05"
+            type="number"
+            inputmode="decimal"
+            density="compact"
+            variant="underlined"
+            hide-details
+            color="primary"
+            @change="onChange('rayleigh', $event)"
+          />
+        </div>
+        <div class="sky-slider">
+          <div class="slider-label">
+            <span>Mie Coefficient</span>
+          </div>
+          <v-text-field
+            :model-value="localSkyboxSettings.mieCoefficient"
+            :min="0.00"
+            :max="0.05"
+            :step="0.0005"
+            type="number"
+            inputmode="decimal"
+            density="compact"
+            variant="underlined"
+            hide-details
+            color="primary"
+            @change="onChange('mieCoefficient', $event)"
+          />
+        </div>
+        <div class="sky-slider">
+          <div class="slider-label">
+            <span>Mie Directionality</span>
+          </div>
+          <v-text-field
+            :model-value="localSkyboxSettings.mieDirectionalG"
+            :min="0"
+            :max="1"
+            :step="0.01"
+            type="number"
+            inputmode="decimal"
+            density="compact"
+            variant="underlined"
+            hide-details
+            color="primary"
+            @change="onChange('mieDirectionalG', $event)"
+          />
+        </div>
+        <div class="sky-slider">
+          <div class="slider-label">
+            <span>Sun Elevation</span>
+          </div>
+          <v-text-field
+            :model-value="localSkyboxSettings.elevation"
+            :min="-10"
+            :max="90"
+            :step="1"
+            type="number"
+            inputmode="numeric"
+            density="compact"
+            variant="underlined"
+            hide-details
+            color="primary"
+            @change="onChange('elevation', $event)"
+          />
+        </div>
+        <div class="sky-slider">
+          <div class="slider-label">
+            <span>Sun Azimuth</span>
+          </div>
+          <v-text-field
+            :model-value="localSkyboxSettings.azimuth"
+            :min="0"
+            :max="360"
+            :step="1"
+            type="number"
+            inputmode="numeric"
+            density="compact"
+            variant="underlined"
+            hide-details
+            color="primary"
+            @change="onChange('azimuth', $event)"
           />
         </div>
       </div>
