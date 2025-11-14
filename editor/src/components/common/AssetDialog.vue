@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
@@ -13,6 +13,7 @@ const props = withDefaults(
     assetType?: string
     seriesId?: string
     assets?: ProjectAsset[]
+    anchor?: { x: number; y: number } | null
     title?: string
     confirmText?: string
     cancelText?: string
@@ -21,6 +22,7 @@ const props = withDefaults(
     assetId: '',
     assetType: '',
     seriesId: '',
+    anchor: null,
   },
 )
 
@@ -45,6 +47,11 @@ const remoteLoaded = ref(false)
 const loading = ref(false)
 const errorMessage = ref<string | null>(null)
 const searchTerm = ref('')
+const gridRef = ref<HTMLDivElement | null>(null)
+const panelRef = ref<HTMLDivElement | null>(null)
+const panelStyle = ref<Record<string, string>>({ top: '0px', left: '0px' })
+let resizeRaf: number | null = null
+let listenersAttached = false
 
 function flattenCatalog(catalog: Record<string, ProjectAsset[]> | undefined): ProjectAsset[] {
   if (!catalog) {
@@ -69,6 +76,135 @@ function flattenDirectories(directories: ProjectDirectory[]): ProjectAsset[] {
   return bucket
 }
 
+function getAnchorPoint(): { x: number; y: number } {
+  if (typeof window === 'undefined') {
+    return { x: 0, y: 0 }
+  }
+  const point = props.anchor
+  if (point && Number.isFinite(point.x) && Number.isFinite(point.y)) {
+    return point
+  }
+  return { x: window.innerWidth / 2, y: window.innerHeight / 2 }
+}
+
+async function updatePanelPosition() {
+  if (!dialogOpen.value) {
+    return
+  }
+  await nextTick()
+  const panel = panelRef.value
+  if (!panel || typeof window === 'undefined') {
+    return
+  }
+  const { innerWidth: viewportWidth, innerHeight: viewportHeight } = window
+  const anchor = getAnchorPoint()
+  const offset = 12
+  const rect = panel.getBoundingClientRect()
+  const width = rect.width
+  const height = rect.height
+
+  let left = anchor.x + offset
+  let top = anchor.y + offset
+
+  if (left + width > viewportWidth - offset) {
+    left = anchor.x - width - offset
+  }
+  if (top + height > viewportHeight - offset) {
+    top = anchor.y - height - offset
+  }
+
+  if (left + width > viewportWidth - offset) {
+    left = viewportWidth - width - offset
+  }
+  if (top + height > viewportHeight - offset) {
+    top = viewportHeight - height - offset
+  }
+
+  if (left < offset) {
+    left = offset
+  }
+  if (top < offset) {
+    top = offset
+  }
+
+  panelStyle.value = {
+    top: `${Math.round(top)}px`,
+    left: `${Math.round(left)}px`,
+  }
+}
+
+function queuePanelReposition() {
+  if (!dialogOpen.value) {
+    return
+  }
+  if (resizeRaf !== null) {
+    cancelAnimationFrame(resizeRaf)
+  }
+  resizeRaf = requestAnimationFrame(async () => {
+    resizeRaf = null
+    await updatePanelPosition()
+  })
+}
+
+function handleWindowResize() {
+  queuePanelReposition()
+}
+
+function handleWindowScroll() {
+  queuePanelReposition()
+}
+
+function handleGlobalPointerDown(event: PointerEvent) {
+  if (!dialogOpen.value) {
+    return
+  }
+  const panel = panelRef.value
+  if (!panel) {
+    return
+  }
+  const target = event.target as Node | null
+  if (target && panel.contains(target)) {
+    return
+  }
+  handleCancel()
+}
+
+function handleKeydown(event: KeyboardEvent) {
+  if (!dialogOpen.value) {
+    return
+  }
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    handleCancel()
+  }
+}
+
+function attachGlobalListeners() {
+  if (typeof window === 'undefined' || listenersAttached) {
+    return
+  }
+  document.addEventListener('pointerdown', handleGlobalPointerDown, true)
+  window.addEventListener('resize', handleWindowResize)
+  window.addEventListener('scroll', handleWindowScroll, true)
+  document.addEventListener('keydown', handleKeydown)
+  listenersAttached = true
+}
+
+function detachGlobalListeners() {
+  if (!listenersAttached || typeof window === 'undefined') {
+    return
+  }
+  document.removeEventListener('pointerdown', handleGlobalPointerDown, true)
+  window.removeEventListener('resize', handleWindowResize)
+  window.removeEventListener('scroll', handleWindowScroll, true)
+  document.removeEventListener('keydown', handleKeydown)
+  listenersAttached = false
+  if (resizeRaf !== null) {
+    cancelAnimationFrame(resizeRaf)
+    resizeRaf = null
+  }
+}
+
 async function loadRemoteAssets() {
   if (remoteLoaded.value || loading.value) {
     return
@@ -84,22 +220,47 @@ async function loadRemoteAssets() {
       remoteAssets.value = []
     }
     remoteLoaded.value = true
+    await scheduleScrollToSelected()
   } catch (error) {
     console.warn('Failed to load asset provider manifest', error)
     errorMessage.value = (error as Error).message ?? '无法加载资产列表'
   } finally {
     loading.value = false
+    if (dialogOpen.value) {
+      queuePanelReposition()
+    }
   }
 }
 
+onMounted(() => {
+  if (dialogOpen.value) {
+    attachGlobalListeners()
+    queuePanelReposition()
+    void scheduleScrollToSelected()
+  }
+})
+
+onBeforeUnmount(() => {
+  detachGlobalListeners()
+})
+
 watch(dialogOpen, (open) => {
   if (open) {
+    attachGlobalListeners()
+    const anchor = getAnchorPoint()
+    panelStyle.value = {
+      top: `${Math.round(anchor.y + 12)}px`,
+      left: `${Math.round(anchor.x + 12)}px`,
+    }
     selectedAssetId.value = props.assetId ?? ''
     if (!props.assets?.length) {
       void loadRemoteAssets()
     }
+    void scheduleScrollToSelected()
+    queuePanelReposition()
   } else {
     searchTerm.value = ''
+    detachGlobalListeners()
   }
 })
 
@@ -110,6 +271,16 @@ watch(
       selectedAssetId.value = next
     } else {
       selectedAssetId.value = ''
+    }
+    void scheduleScrollToSelected()
+  },
+)
+
+watch(
+  () => (props.anchor ? `${props.anchor.x},${props.anchor.y}` : ''),
+  () => {
+    if (dialogOpen.value) {
+      queuePanelReposition()
     }
   },
 )
@@ -132,11 +303,14 @@ const allAssets = computed(() => {
 })
 
 const filteredAssets = computed(() => {
-  const typeFilter = props.assetType?.trim() ?? ''
+  const typeFilterRaw = props.assetType?.trim() ?? ''
+  const typeFilters = typeFilterRaw.length
+    ? typeFilterRaw.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0)
+    : []
   const seriesFilter = props.seriesId?.trim() ?? ''
   const term = searchTerm.value.trim().toLowerCase()
   return allAssets.value.filter((asset) => {
-    if (typeFilter && asset.type !== typeFilter) {
+    if (typeFilters.length && !typeFilters.includes(asset.type)) {
       return false
     }
     if (seriesFilter) {
@@ -159,6 +333,49 @@ const selectedAsset = computed(() => {
     return null
   }
   return allAssets.value.find((asset) => asset.id === id) ?? null
+})
+
+function cssEscape(value: string): string {
+  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+    return CSS.escape(value)
+  }
+  return value.replace(/([!"#$%&'()*+,./:;<=>?@[\\]^`{|}~])/g, '\\$1')
+}
+
+function scrollSelectedAssetIntoView() {
+  if (typeof document === 'undefined') {
+    return
+  }
+  const container = gridRef.value
+  const id = selectedAssetId.value
+  if (!container || !id) {
+    return
+  }
+  const selector = `[data-asset-id="${cssEscape(id)}"]`
+  const target = container.querySelector(selector) as HTMLElement | null
+  if (target) {
+    target.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' })
+  }
+}
+
+async function scheduleScrollToSelected() {
+  if (!dialogOpen.value) {
+    return
+  }
+  await nextTick()
+  scrollSelectedAssetIntoView()
+  await updatePanelPosition()
+}
+
+watch(
+  () => filteredAssets.value.map((asset) => asset.id).join('|'),
+  () => {
+    void scheduleScrollToSelected()
+  },
+)
+
+watch(selectedAssetId, () => {
+  void scheduleScrollToSelected()
 })
 
 function handleAssetClick(asset: ProjectAsset) {
@@ -198,132 +415,181 @@ function resolveInitials(asset: ProjectAsset): string {
 </script>
 
 <template>
-  <v-dialog v-model="dialogOpen" max-width="960">
-    <v-card class="asset-dialog">
-      <v-card-title class="asset-dialog__header">
-        <span class="asset-dialog__title">{{ title ?? '选择资产' }}</span>
-        <v-text-field
-          v-model="searchTerm"
-          class="asset-dialog__search"
-          density="comfortable"
-          variant="outlined"
-          prepend-inner-icon="mdi-magnify"
-          placeholder="搜索资产"
-          clearable
-          hide-details
-        />
-      </v-card-title>
-
-      <v-card-text class="asset-dialog__content">
-        <v-alert
-          v-if="errorMessage"
-          type="error"
-          density="comfortable"
-          variant="tonal"
-          class="asset-dialog__alert"
+  <Teleport to="body">
+    <transition name="asset-dialog-popover">
+      <div v-if="dialogOpen" class="asset-dialog__wrapper">
+        <div
+          ref="panelRef"
+          class="asset-dialog__popover"
+          :style="panelStyle"
         >
-          <div class="asset-dialog__alert-message">{{ errorMessage }}</div>
-          <v-btn size="small" variant="text" @click="retryLoading">重新尝试</v-btn>
-        </v-alert>
+          <div class="asset-dialog__header">
+            <span class="asset-dialog__title">{{ title ?? '选择资产' }}</span>
+            <v-text-field
+              v-model="searchTerm"
+              class="asset-dialog__search"
+              density="compact"
+              variant="outlined"
+              prepend-inner-icon="mdi-magnify"
+              placeholder="搜索资产"
+              clearable
+              hide-details
+            />
+          </div>
+          <div class="asset-dialog__body">
+            <v-alert
+              v-if="errorMessage"
+              type="error"
+              density="comfortable"
+              variant="tonal"
+              class="asset-dialog__alert"
+            >
+              <div class="asset-dialog__alert-message">{{ errorMessage }}</div>
+              <v-btn size="small" variant="text" @click="retryLoading">重新尝试</v-btn>
+            </v-alert>
 
-        <div v-if="loading" class="asset-dialog__loading">
-          <v-progress-circular indeterminate color="primary" />
-        </div>
+            <div v-if="loading" class="asset-dialog__loading">
+              <v-progress-circular indeterminate color="primary" />
+            </div>
 
-        <div v-else class="asset-dialog__grid">
-          <div
-            v-for="asset in filteredAssets"
-            :key="asset.id"
-            class="asset-dialog__tile"
-            :class="{ 'asset-dialog__tile--selected': asset.id === selectedAssetId }"
-            @click="handleAssetClick(asset)"
-          >
-            <div class="asset-dialog__thumbnail">
-              <v-img
-                v-if="asset.thumbnail"
-                :src="asset.thumbnail"
-                :alt="asset.name"
-                height="120"
-                cover
-              />
+            <div v-else ref="gridRef" class="asset-dialog__grid">
               <div
-                v-else
-                class="asset-dialog__thumbnail-placeholder"
-                :style="{ backgroundColor: asset.previewColor || '#455A64' }"
+                v-for="asset in filteredAssets"
+                :key="asset.id"
+                class="asset-dialog__tile"
+                :class="{ 'asset-dialog__tile--selected': asset.id === selectedAssetId }"
+                :data-asset-id="asset.id"
+                @click="handleAssetClick(asset)"
               >
-                {{ resolveInitials(asset) }}
+                <div class="asset-dialog__thumbnail">
+                  <v-img
+                    v-if="asset.thumbnail"
+                    :src="asset.thumbnail"
+                    :alt="asset.name"
+                    height="90"
+                    cover
+                  />
+                  <div
+                    v-else
+                    class="asset-dialog__thumbnail-placeholder"
+                    :style="{ backgroundColor: asset.previewColor || '#455A64' }"
+                  >
+                    {{ resolveInitials(asset) }}
+                  </div>
+                </div>
+                <div class="asset-dialog__meta">
+                  <div class="asset-dialog__name" :title="asset.name">{{ asset.name }}</div>
+                  <div class="asset-dialog__type">{{ asset.type }}</div>
+                </div>
               </div>
             </div>
-            <div class="asset-dialog__meta">
-              <div class="asset-dialog__name" :title="asset.name">{{ asset.name }}</div>
-              <div class="asset-dialog__type">{{ asset.type }}</div>
+
+            <div v-if="!loading && !filteredAssets.length" class="asset-dialog__empty">
+              暂无符合条件的资产
             </div>
           </div>
+          <div class="asset-dialog__footer">
+            <v-btn variant="text" size="small" @click="handleCancel">{{ cancelText ?? '取消' }}</v-btn>
+            <v-btn
+              color="primary"
+              variant="flat"
+              size="small"
+              :disabled="!selectedAsset"
+              @click="handleConfirm"
+            >
+              {{ confirmText ?? '确认' }}
+            </v-btn>
+          </div>
         </div>
-
-        <div v-if="!loading && !filteredAssets.length" class="asset-dialog__empty">
-          暂无符合条件的资产
-        </div>
-      </v-card-text>
-
-      <v-divider />
-
-      <v-card-actions class="asset-dialog__actions">
-        <v-spacer />
-        <v-btn variant="text" @click="handleCancel">{{ cancelText ?? '取消' }}</v-btn>
-        <v-btn
-          color="primary"
-          variant="flat"
-          :disabled="!selectedAsset"
-          @click="handleConfirm"
-        >
-          {{ confirmText ?? '确认' }}
-        </v-btn>
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
+      </div>
+    </transition>
+  </Teleport>
 </template>
 
 <style scoped>
+.asset-dialog-popover-enter-active,
+.asset-dialog-popover-leave-active {
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.asset-dialog-popover-enter-from,
+.asset-dialog-popover-leave-to {
+  opacity: 0;
+  transform: translateY(8px) scale(0.96);
+}
+
+.asset-dialog__wrapper {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 40;
+}
+
+.asset-dialog__popover {
+  position: fixed;
+  pointer-events: auto;
+  width: 320px;
+  max-width: 360px;
+  max-height: min(600px, calc(100vh - 32px));
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(14, 18, 24, 0.88);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
 .asset-dialog__header {
   display: flex;
   align-items: center;
-  gap: 1rem;
+  gap: 0.75rem;
+  padding: 12px 14px 4px;
 }
 
 .asset-dialog__title {
-  font-size: 1.1rem;
+  font-size: 0.95rem;
   font-weight: 600;
+  color: rgba(233, 236, 241, 0.95);
 }
 
 .asset-dialog__search {
-  max-width: 240px;
+  flex: 1;
+  max-width: 180px;
   margin-left: auto;
 }
 
-.asset-dialog__content {
-  min-height: 320px;
+.asset-dialog__body {
+  flex: 1;
+  padding: 8px 14px 8px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 300px;
 }
 
 .asset-dialog__alert {
-  margin-bottom: 0.75rem;
+  align-self: stretch;
 }
 
 .asset-dialog__alert-message {
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.4rem;
 }
 
 .asset-dialog__loading {
+  flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 240px;
+  min-height: 180px;
 }
 
 .asset-dialog__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 0.6rem;
 }
 
 .asset-dialog__tile {
@@ -331,46 +597,48 @@ function resolveInitials(asset: ProjectAsset): string {
   flex-direction: column;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 8px;
-  background: rgba(20, 24, 30, 0.75);
+  background: rgba(20, 24, 30, 0.8);
   overflow: hidden;
   cursor: pointer;
   transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
 
 .asset-dialog__tile:hover {
-  border-color: rgba(77, 208, 225, 0.8);
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.28);
+  border-color: rgba(77, 208, 225, 0.85);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
 }
 
 .asset-dialog__tile--selected {
   border-color: rgba(77, 208, 225, 1);
-  box-shadow: 0 6px 22px rgba(0, 188, 212, 0.35);
+  box-shadow: 0 6px 18px rgba(0, 188, 212, 0.35);
 }
 
 .asset-dialog__thumbnail {
   width: 100%;
-  background: rgba(33, 150, 243, 0.16);
+  height: 90px;
+  background: rgba(33, 150, 243, 0.18);
+  overflow: hidden;
 }
 
 .asset-dialog__thumbnail-placeholder {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 120px;
-  font-size: 1.4rem;
+  height: 90px;
+  font-size: 1.2rem;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.82);
+  color: rgba(255, 255, 255, 0.8);
 }
 
 .asset-dialog__meta {
-  padding: 0.65rem 0.75rem 0.85rem;
+  padding: 0.5rem 0.6rem 0.65rem;
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.3rem;
 }
 
 .asset-dialog__name {
-  font-size: 0.95rem;
+  font-size: 0.85rem;
   font-weight: 600;
   color: rgba(233, 236, 241, 0.95);
   white-space: nowrap;
@@ -379,17 +647,23 @@ function resolveInitials(asset: ProjectAsset): string {
 }
 
 .asset-dialog__type {
-  font-size: 0.8rem;
-  color: rgba(233, 236, 241, 0.65);
+  font-size: 0.72rem;
+  color: rgba(233, 236, 241, 0.6);
 }
 
 .asset-dialog__empty {
-  margin-top: 1.5rem;
+  padding: 12px 0 18px;
   text-align: center;
   color: rgba(233, 236, 241, 0.65);
+  font-size: 0.82rem;
 }
 
-.asset-dialog__actions {
-  padding: 0.75rem 1rem;
+.asset-dialog__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 14px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(10, 14, 20, 0.6);
 }
 </style>
