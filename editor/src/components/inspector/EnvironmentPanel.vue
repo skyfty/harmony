@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type {
   EnvironmentBackgroundMode,
@@ -8,10 +8,13 @@ import type {
 } from '@/types/environment'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import AssetDialog from '@/components/common/AssetDialog.vue'
 
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 
 const sceneStore = useSceneStore()
+const assetCacheStore = useAssetCacheStore()
 const { environmentSettings: storeEnvironmentSettings } = storeToRefs(sceneStore)
 
 const environmentSettings = computed(() => storeEnvironmentSettings.value)
@@ -25,6 +28,17 @@ const environmentMapModeOptions: Array<{ title: string; value: EnvironmentMapMod
   { title: 'Use Skybox', value: 'skybox' },
   { title: 'Custom HDRI', value: 'custom' },
 ]
+
+const backgroundColorMenuOpen = ref(false)
+const ambientColorMenuOpen = ref(false)
+const fogColorMenuOpen = ref(false)
+
+const assetDialogVisible = ref(false)
+const assetDialogSelectedId = ref('')
+const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
+const assetDialogTarget = ref<'background' | 'environment' | null>(null)
+
+const HDRI_ASSET_TYPE = 'texture,image,file' as const
 
 const isBackgroundDropActive = ref(false)
 const isEnvironmentDropActive = ref(false)
@@ -79,6 +93,45 @@ const environmentAssetHint = computed(() => {
   return asset.id
 })
 
+const backgroundPreviewStyle = computed(() => resolveAssetPreviewStyle(backgroundAsset.value))
+const environmentPreviewStyle = computed(() => resolveAssetPreviewStyle(environmentMapAsset.value))
+
+const assetDialogTitle = computed(() => {
+  if (assetDialogTarget.value === 'background') {
+    return '选择背景 HDRI'
+  }
+  if (assetDialogTarget.value === 'environment') {
+    return '选择环境贴图'
+  }
+  return '选择资产'
+})
+
+watch(assetDialogVisible, (open) => {
+  if (!open) {
+    assetDialogTarget.value = null
+    assetDialogAnchor.value = null
+    assetDialogSelectedId.value = ''
+  }
+})
+
+function normalizeHexColor(value: unknown, fallback: string): string {
+  if (typeof value !== 'string') {
+    return fallback
+  }
+  const trimmed = value.trim()
+  const prefixed = trimmed.startsWith('#') ? trimmed : `#${trimmed}`
+  const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(prefixed)
+  if (!match) {
+    return fallback
+  }
+  const hexValue = match[1] ?? ''
+  if (hexValue.length === 3) {
+    const [r, g, b] = hexValue.split('')
+    return `#${r}${r}${g}${g}${b}${b}`.toLowerCase()
+  }
+  return `#${hexValue.toLowerCase()}`
+}
+
 function updateBackgroundMode(mode: EnvironmentBackgroundMode | null) {
   if (!mode || mode === environmentSettings.value.background.mode) {
     return
@@ -86,11 +139,38 @@ function updateBackgroundMode(mode: EnvironmentBackgroundMode | null) {
   sceneStore.patchEnvironmentSettings({ background: { mode } })
 }
 
-function handleBackgroundColorInput(value: string) {
-  if (!value || value === environmentSettings.value.background.solidColor) {
+function handleHexColorChange(target: 'background' | 'ambient' | 'fog', value: string | null) {
+  if (typeof value !== 'string') {
     return
   }
-  sceneStore.patchEnvironmentSettings({ background: { solidColor: value } })
+  if (target === 'background') {
+    const current = environmentSettings.value.background.solidColor
+    const normalized = normalizeHexColor(value, current)
+    if (normalized === current) {
+      return
+    }
+    sceneStore.patchEnvironmentSettings({ background: { solidColor: normalized } })
+    return
+  }
+  if (target === 'ambient') {
+    const current = environmentSettings.value.ambientLightColor
+    const normalized = normalizeHexColor(value, current)
+    if (normalized === current) {
+      return
+    }
+    sceneStore.patchEnvironmentSettings({ ambientLightColor: normalized })
+    return
+  }
+  const current = environmentSettings.value.fogColor
+  const normalized = normalizeHexColor(value, current)
+  if (normalized === current) {
+    return
+  }
+  sceneStore.patchEnvironmentSettings({ fogColor: normalized })
+}
+
+function handleColorPickerInput(target: 'background' | 'ambient' | 'fog', value: string | null) {
+  handleHexColorChange(target, value)
 }
 
 function clearBackgroundAsset() {
@@ -114,16 +194,12 @@ function clearEnvironmentAsset() {
   sceneStore.patchEnvironmentSettings({ environmentMap: { mode: 'skybox', hdriAssetId: null } })
 }
 
-function handleAmbientColorInput(value: string) {
-  if (!value || value === environmentSettings.value.ambientLightColor) {
+function handleAmbientIntensityInput(value: unknown) {
+  if (value === '' || value === null || value === undefined) {
     return
   }
-  sceneStore.patchEnvironmentSettings({ ambientLightColor: value })
-}
-
-function handleAmbientIntensityChange(value: number | number[]) {
-  const numeric = Array.isArray(value) ? value[0] : value
-  if (typeof numeric !== 'number' || Number.isNaN(numeric)) {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
     return
   }
   const clamped = Math.max(0, Math.min(10, numeric))
@@ -131,6 +207,10 @@ function handleAmbientIntensityChange(value: number | number[]) {
     return
   }
   sceneStore.patchEnvironmentSettings({ ambientLightIntensity: clamped })
+}
+
+function formatAmbientIntensity(): string {
+  return environmentSettings.value.ambientLightIntensity.toFixed(2)
 }
 
 function handleFogToggle(enabled: boolean | null) {
@@ -141,23 +221,48 @@ function handleFogToggle(enabled: boolean | null) {
   sceneStore.patchEnvironmentSettings({ fogMode: nextMode })
 }
 
-function handleFogColorInput(value: string) {
-  if (!value || value === environmentSettings.value.fogColor) {
+function handleFogDensityInput(value: unknown) {
+  if (value === '' || value === null || value === undefined) {
     return
   }
-  sceneStore.patchEnvironmentSettings({ fogColor: value })
-}
-
-function handleFogDensityChange(value: number | number[]) {
-  const numeric = Array.isArray(value) ? value[0] : value
-  if (typeof numeric !== 'number' || Number.isNaN(numeric)) {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
     return
   }
-  const clamped = Math.max(0, Math.min(5, numeric))
+  const clamped = Math.max(0, Math.min(1, numeric))
   if (Math.abs(clamped - environmentSettings.value.fogDensity) < 1e-4) {
     return
   }
   sceneStore.patchEnvironmentSettings({ fogDensity: clamped })
+}
+
+function formatFogDensity(): string {
+  return environmentSettings.value.fogDensity.toFixed(3)
+}
+
+function resolveAssetPreviewStyle(asset: ProjectAsset | null): Record<string, string> {
+  const fallback = 'rgba(233, 236, 241, 0.08)'
+  if (!asset) {
+    return {
+      backgroundColor: fallback,
+    }
+  }
+  const thumbnailUrl = assetCacheStore.resolveAssetThumbnail({ asset, assetId: asset.id })
+  if (thumbnailUrl) {
+    const backgroundColor = asset.previewColor?.trim().length ? asset.previewColor : fallback
+    return {
+      backgroundImage: `url(${thumbnailUrl})`,
+      backgroundColor,
+    }
+  }
+  if (asset.previewColor?.trim().length) {
+    return {
+      backgroundColor: asset.previewColor,
+    }
+  }
+  return {
+    backgroundColor: fallback,
+  }
 }
 
 function parseAssetDragPayload(event: DragEvent): { assetId: string } | null {
@@ -295,6 +400,48 @@ function handleEnvironmentDragLeave(event: DragEvent) {
   isEnvironmentDropActive.value = false
 }
 
+function applyEnvironmentAsset(target: 'background' | 'environment', asset: ProjectAsset) {
+  if (target === 'background') {
+    sceneStore.patchEnvironmentSettings({ background: { mode: 'hdri', hdriAssetId: asset.id } })
+    return
+  }
+  sceneStore.patchEnvironmentSettings({ environmentMap: { mode: 'custom', hdriAssetId: asset.id } })
+}
+
+function openAssetDialog(target: 'background' | 'environment', event?: MouseEvent) {
+  if (event) {
+    assetDialogAnchor.value = { x: event.clientX, y: event.clientY }
+  } else {
+    assetDialogAnchor.value = null
+  }
+  assetDialogTarget.value = target
+  assetDialogSelectedId.value =
+    target === 'background'
+      ? environmentSettings.value.background.hdriAssetId ?? ''
+      : environmentSettings.value.environmentMap.hdriAssetId ?? ''
+  assetDialogVisible.value = true
+}
+
+function handleAssetDialogUpdate(asset: ProjectAsset | null) {
+  if (!assetDialogTarget.value) {
+    return
+  }
+  if (!asset) {
+    assetDialogVisible.value = false
+    return
+  }
+  if (!isEnvironmentAsset(asset)) {
+    console.warn('Selected asset is not a supported environment asset')
+    return
+  }
+  applyEnvironmentAsset(assetDialogTarget.value, asset)
+  assetDialogVisible.value = false
+}
+
+function handleAssetDialogCancel() {
+  assetDialogVisible.value = false
+}
+
 function handleBackgroundDrop(event: DragEvent) {
   const asset = resolveDraggedAsset(event)
   isBackgroundDropActive.value = false
@@ -303,7 +450,7 @@ function handleBackgroundDrop(event: DragEvent) {
   }
   event.preventDefault()
   event.stopPropagation()
-  sceneStore.patchEnvironmentSettings({ background: { mode: 'hdri', hdriAssetId: asset.id } })
+  applyEnvironmentAsset('background', asset)
 }
 
 function handleEnvironmentDrop(event: DragEvent) {
@@ -314,7 +461,7 @@ function handleEnvironmentDrop(event: DragEvent) {
   }
   event.preventDefault()
   event.stopPropagation()
-  sceneStore.patchEnvironmentSettings({ environmentMap: { mode: 'custom', hdriAssetId: asset.id } })
+  applyEnvironmentAsset('environment', asset)
 }
 </script>
 
@@ -336,22 +483,50 @@ function handleEnvironmentDrop(event: DragEvent) {
             class="section-select"
             @update:model-value="(mode) => updateBackgroundMode(mode as EnvironmentBackgroundMode | null)"
           />
-          <div class="color-row">
-            <span class="color-label">Solid Color</span>
-            <div class="color-controls">
-              <input
-                class="color-input"
-                type="color"
-                :value="environmentSettings.background.solidColor"
-                @input="(event) => handleBackgroundColorInput((event.target as HTMLInputElement).value)"
+          <div class="material-color">
+            <div class="color-input">
+              <v-text-field
+                label="Solid Color"
+                class="slider-input"
+                density="compact"
+                variant="underlined"
+                hide-details
+                :model-value="environmentSettings.background.solidColor"
+                @update:model-value="(value) => handleHexColorChange('background', value)"
+              />
+              <v-menu
+                v-model="backgroundColorMenuOpen"
+                :close-on-content-click="false"
+                transition="scale-transition"
+                location="bottom start"
               >
-              <span class="color-value">{{ environmentSettings.background.solidColor }}</span>
+                <template #activator="{ props: menuProps }">
+                  <button
+                    class="color-swatch"
+                    type="button"
+                    v-bind="menuProps"
+                    :style="{ backgroundColor: environmentSettings.background.solidColor }"
+                    title="Select solid color"
+                  >
+                    <span class="sr-only">Select solid color</span>
+                  </button>
+                </template>
+                <div class="color-picker">
+                  <v-color-picker
+                    :model-value="environmentSettings.background.solidColor"
+                    mode="hex"
+                    :modes="['hex']"
+                    hide-inputs
+                    @update:model-value="(value) => handleColorPickerInput('background', value)"
+                  />
+                </div>
+              </v-menu>
             </div>
           </div>
           <div
-            class="asset-drop"
+            class="asset-tile"
             :class="{
-              'is-active': isBackgroundDropActive,
+              'is-active-drop': isBackgroundDropActive,
               'is-inactive': environmentSettings.background.mode !== 'hdri',
             }"
             @dragenter="handleBackgroundDragEnter"
@@ -359,51 +534,101 @@ function handleEnvironmentDrop(event: DragEvent) {
             @dragleave="handleBackgroundDragLeave"
             @drop="handleBackgroundDrop"
           >
-            <div class="asset-drop__info">
-              <div class="asset-drop__label">{{ backgroundAssetLabel }}</div>
-              <div class="asset-drop__hint">{{ backgroundAssetHint }}</div>
-            </div>
-            <v-btn
-              variant="text"
-              size="small"
-              class="asset-drop__action"
-              :disabled="!backgroundAsset"
-              @click.stop="clearBackgroundAsset"
+            <div
+              class="asset-thumb"
+              :class="{ 'asset-thumb--empty': !backgroundAsset }"
+              :style="backgroundPreviewStyle"
+              role="button"
+              tabindex="0"
+              :title="backgroundAsset ? 'Change HDRI asset' : 'Select HDRI asset'"
+              @click="openAssetDialog('background', $event)"
+              @keydown.enter.prevent="openAssetDialog('background')"
+              @keydown.space.prevent="openAssetDialog('background')"
             >
-              Clear
-            </v-btn>
+              <v-icon v-if="!backgroundAsset" size="20" color="rgba(233, 236, 241, 0.4)">mdi-image-off</v-icon>
+            </div>
+            <div
+              class="asset-info"
+              role="button"
+              tabindex="0"
+              @click="openAssetDialog('background', $event)"
+              @keydown.enter.prevent="openAssetDialog('background')"
+              @keydown.space.prevent="openAssetDialog('background')"
+            >
+              <div class="asset-name">{{ backgroundAssetLabel }}</div>
+              <div class="asset-hint">{{ backgroundAssetHint }}</div>
+            </div>
+            <div class="asset-actions">
+              <v-btn
+                class="asset-action"
+                icon="mdi-close"
+                size="x-small"
+                variant="text"
+                :disabled="environmentSettings.background.mode !== 'hdri' || !backgroundAsset"
+                title="Clear background HDRI"
+                @click.stop="clearBackgroundAsset"
+              />
+            </div>
           </div>
         </section>
 
         <section class="environment-section">
           <div class="section-title">Ambient Light</div>
-          <div class="color-row">
-            <span class="color-label">Color</span>
-            <div class="color-controls">
-              <input
-                class="color-input"
-                type="color"
-                :value="environmentSettings.ambientLightColor"
-                @input="(event) => handleAmbientColorInput((event.target as HTMLInputElement).value)"
+          <div class="material-color">
+            <div class="color-input">
+              <v-text-field
+                label="Ambient Color"
+                class="slider-input"
+                density="compact"
+                variant="underlined"
+                hide-details
+                :model-value="environmentSettings.ambientLightColor"
+                @update:model-value="(value) => handleHexColorChange('ambient', value)"
+              />
+              <v-menu
+                v-model="ambientColorMenuOpen"
+                :close-on-content-click="false"
+                transition="scale-transition"
+                location="bottom start"
               >
-              <span class="color-value">{{ environmentSettings.ambientLightColor }}</span>
+                <template #activator="{ props: menuProps }">
+                  <button
+                    class="color-swatch"
+                    type="button"
+                    v-bind="menuProps"
+                    :style="{ backgroundColor: environmentSettings.ambientLightColor }"
+                    title="Select ambient color"
+                  >
+                    <span class="sr-only">Select ambient color</span>
+                  </button>
+                </template>
+                <div class="color-picker">
+                  <v-color-picker
+                    :model-value="environmentSettings.ambientLightColor"
+                    mode="hex"
+                    :modes="['hex']"
+                    hide-inputs
+                    @update:model-value="(value) => handleColorPickerInput('ambient', value)"
+                  />
+                </div>
+              </v-menu>
             </div>
           </div>
           <div class="slider-row">
-            <span class="slider-label">Intensity</span>
-            <div class="slider-controls">
-              <v-slider
-                :model-value="environmentSettings.ambientLightIntensity"
-                min="0"
-                max="10"
-                step="0.05"
-                hide-details
-                class="slider"
-                size="small"
-                @update:model-value="handleAmbientIntensityChange"
-              />
-              <span class="slider-value">{{ environmentSettings.ambientLightIntensity.toFixed(2) }}</span>
-            </div>
+            <v-text-field
+              class="slider-input"
+              label="Intensity"
+              density="compact"
+              variant="underlined"
+              hide-details
+              type="number"
+              inputmode="decimal"
+              :min="0"
+              :max="10"
+              :step="0.05"
+              :model-value="formatAmbientIntensity()"
+              @update:model-value="handleAmbientIntensityInput"
+            />
           </div>
         </section>
 
@@ -421,35 +646,65 @@ function handleEnvironmentDrop(event: DragEvent) {
               @update:model-value="handleFogToggle"
             />
           </div>
-          <div class="color-row" :class="{ 'is-disabled': !isFogEnabled }">
-            <span class="color-label">Color</span>
-            <div class="color-controls">
-              <input
-                class="color-input"
-                type="color"
+          <div class="material-color" :class="{ 'is-disabled': !isFogEnabled }">
+            <div class="color-input">
+              <v-text-field
+                label="Fog Color"
+                class="slider-input"
+                density="compact"
+                variant="underlined"
+                hide-details
+                :model-value="environmentSettings.fogColor"
                 :disabled="!isFogEnabled"
-                :value="environmentSettings.fogColor"
-                @input="(event) => handleFogColorInput((event.target as HTMLInputElement).value)"
+                @update:model-value="(value) => handleHexColorChange('fog', value)"
+              />
+              <v-menu
+                v-model="fogColorMenuOpen"
+                :close-on-content-click="false"
+                transition="scale-transition"
+                location="bottom start"
+                :disabled="!isFogEnabled"
               >
-              <span class="color-value">{{ environmentSettings.fogColor }}</span>
+                <template #activator="{ props: menuProps }">
+                  <button
+                    class="color-swatch"
+                    type="button"
+                    v-bind="menuProps"
+                    :disabled="!isFogEnabled"
+                    :style="{ backgroundColor: environmentSettings.fogColor }"
+                    title="Select fog color"
+                  >
+                    <span class="sr-only">Select fog color</span>
+                  </button>
+                </template>
+                <div class="color-picker">
+                  <v-color-picker
+                    :model-value="environmentSettings.fogColor"
+                    mode="hex"
+                    :modes="['hex']"
+                    hide-inputs
+                    @update:model-value="(value) => handleColorPickerInput('fog', value)"
+                  />
+                </div>
+              </v-menu>
             </div>
           </div>
           <div class="slider-row" :class="{ 'is-disabled': !isFogEnabled }">
-            <span class="slider-label">Density</span>
-            <div class="slider-controls">
-              <v-slider
-                :model-value="environmentSettings.fogDensity"
-                min="0"
-                max="1"
-                step="0.005"
-                hide-details
-                class="slider"
-                size="small"
-                :disabled="!isFogEnabled"
-                @update:model-value="handleFogDensityChange"
-              />
-              <span class="slider-value">{{ environmentSettings.fogDensity.toFixed(3) }}</span>
-            </div>
+            <v-text-field
+              class="slider-input"
+              label="Density"
+              density="compact"
+              variant="underlined"
+              hide-details
+              type="number"
+              inputmode="decimal"
+              :min="0"
+              :max="1"
+              :step="0.005"
+              :model-value="formatFogDensity()"
+              :disabled="!isFogEnabled"
+              @update:model-value="handleFogDensityInput"
+            />
           </div>
         </section>
 
@@ -465,9 +720,9 @@ function handleEnvironmentDrop(event: DragEvent) {
             @update:model-value="(mode) => updateEnvironmentMapMode(mode as EnvironmentMapMode | null)"
           />
           <div
-            class="asset-drop"
+            class="asset-tile"
             :class="{
-              'is-active': isEnvironmentDropActive,
+              'is-active-drop': isEnvironmentDropActive,
               'is-inactive': environmentSettings.environmentMap.mode !== 'custom',
             }"
             @dragenter="handleEnvironmentDragEnter"
@@ -475,22 +730,55 @@ function handleEnvironmentDrop(event: DragEvent) {
             @dragleave="handleEnvironmentDragLeave"
             @drop="handleEnvironmentDrop"
           >
-            <div class="asset-drop__info">
-              <div class="asset-drop__label">{{ environmentAssetLabel }}</div>
-              <div class="asset-drop__hint">{{ environmentAssetHint }}</div>
-            </div>
-            <v-btn
-              variant="text"
-              size="small"
-              class="asset-drop__action"
-              :disabled="environmentSettings.environmentMap.mode === 'skybox' && !environmentMapAsset"
-              @click.stop="clearEnvironmentAsset"
+            <div
+              class="asset-thumb"
+              :class="{ 'asset-thumb--empty': !environmentMapAsset }"
+              :style="environmentPreviewStyle"
+              role="button"
+              tabindex="0"
+              :title="environmentMapAsset ? 'Change environment map' : 'Select environment map'"
+              @click="openAssetDialog('environment', $event)"
+              @keydown.enter.prevent="openAssetDialog('environment')"
+              @keydown.space.prevent="openAssetDialog('environment')"
             >
-              Clear
-            </v-btn>
+              <v-icon v-if="!environmentMapAsset" size="20" color="rgba(233, 236, 241, 0.4)">mdi-image-off</v-icon>
+            </div>
+            <div
+              class="asset-info"
+              role="button"
+              tabindex="0"
+              @click="openAssetDialog('environment', $event)"
+              @keydown.enter.prevent="openAssetDialog('environment')"
+              @keydown.space.prevent="openAssetDialog('environment')"
+            >
+              <div class="asset-name">{{ environmentAssetLabel }}</div>
+              <div class="asset-hint">{{ environmentAssetHint }}</div>
+            </div>
+            <div class="asset-actions">
+              <v-btn
+                class="asset-action"
+                icon="mdi-close"
+                size="x-small"
+                variant="text"
+                :disabled="environmentSettings.environmentMap.mode === 'skybox' && !environmentMapAsset"
+                title="Clear environment map"
+                @click.stop="clearEnvironmentAsset"
+              />
+            </div>
           </div>
         </section>
       </div>
+      <AssetDialog
+        v-model="assetDialogVisible"
+        v-model:assetId="assetDialogSelectedId"
+        :asset-type="HDRI_ASSET_TYPE"
+        :title="assetDialogTitle"
+        :anchor="assetDialogAnchor"
+        confirm-text="选择"
+        cancel-text="取消"
+        @update:asset="handleAssetDialogUpdate"
+        @cancel="handleAssetDialogCancel"
+      />
     </v-expansion-panel-text>
   </v-expansion-panel>
 </template>
@@ -505,7 +793,11 @@ function handleEnvironmentDrop(event: DragEvent) {
 .environment-section {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(15, 20, 28, 0.55);
 }
 
 .section-title {
@@ -520,80 +812,78 @@ function handleEnvironmentDrop(event: DragEvent) {
   font-size: 0.82rem;
 }
 
-.color-row {
+.material-color {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.color-row.is-disabled {
-  opacity: 0.5;
-}
-
-.color-label {
-  font-size: 0.8rem;
-  color: rgba(233, 236, 241, 0.82);
-}
-
-.color-controls {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+.material-color.is-disabled {
+  opacity: 0.55;
 }
 
 .color-input {
-  width: 40px;
-  height: 24px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.color-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
   cursor: pointer;
+  padding: 0;
+  background: transparent;
 }
 
-.color-input:disabled {
+.color-swatch:disabled {
+  opacity: 0.45;
   cursor: not-allowed;
-  opacity: 0.6;
 }
 
-.color-value {
-  font-size: 0.78rem;
-  font-variant-numeric: tabular-nums;
-  color: rgba(233, 236, 241, 0.7);
+.color-swatch:focus-visible {
+  outline: 2px solid rgba(107, 152, 255, 0.85);
+  outline-offset: 2px;
+}
+
+.color-picker {
+  padding: 12px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
 }
 
 .slider-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .slider-row.is-disabled {
-  opacity: 0.5;
+  opacity: 0.55;
 }
 
-.slider-label {
-  font-size: 0.8rem;
-  color: rgba(233, 236, 241, 0.82);
+.slider-input {
+  width: 100%;
 }
 
-.slider-controls {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+.slider-input :deep(.v-field-label) {
+  font-size: 0.82rem;
+  font-weight: 600;
 }
 
-.slider {
-  width: 160px;
-}
-
-.slider-value {
-  font-size: 0.78rem;
+.slider-input :deep(input) {
   font-variant-numeric: tabular-nums;
-  color: rgba(233, 236, 241, 0.7);
-  min-width: 56px;
-  text-align: right;
 }
 
 .toggle-row {
@@ -608,57 +898,95 @@ function handleEnvironmentDrop(event: DragEvent) {
   color: rgba(233, 236, 241, 0.82);
 }
 
-.asset-drop {
-  display: flex;
+.asset-tile {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  column-gap: 12px;
+  row-gap: 2px;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding: 10px 12px;
-  border: 1px dashed rgba(109, 132, 155, 0.6);
+  padding: 6px 10px;
+  min-height: 40px;
   border-radius: 8px;
-  background: rgba(19, 32, 44, 0.45);
+  border: 1px dashed rgba(255, 255, 255, 0.16);
+  background: rgba(12, 16, 22, 0.45);
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 
-.asset-drop.is-active {
-  border-color: #4dd0e1;
-  background: rgba(77, 208, 225, 0.12);
+.asset-tile.is-inactive {
+  opacity: 0.65;
 }
 
-.asset-drop.is-inactive {
-  opacity: 0.7;
+.asset-tile.is-active-drop {
+  border-color: rgba(107, 152, 255, 0.85);
+  background: rgba(56, 86, 160, 0.38);
 }
 
-.asset-drop__info {
+.asset-thumb {
+  grid-row: 1 / span 2;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background-color: rgba(233, 236, 241, 0.08);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  cursor: pointer;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.asset-thumb--empty {
+  border-style: dashed;
+}
+
+.asset-thumb:hover {
+  border-color: rgba(77, 208, 225, 0.75);
+  box-shadow: 0 0 0 1px rgba(77, 208, 225, 0.3);
+}
+
+.asset-info {
+  grid-column: 2;
+  grid-row: 1 / span 2;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  min-width: 0;
+  gap: 3px;
+  overflow: hidden;
+  cursor: pointer;
 }
 
-.asset-drop__label {
-  font-size: 0.8rem;
-  color: rgba(233, 236, 241, 0.86);
+.asset-name {
+  font-size: 0.82rem;
   font-weight: 600;
+  color: rgba(233, 236, 241, 0.9);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.asset-drop__hint {
-  font-size: 0.74rem;
-  color: rgba(159, 181, 199, 0.9);
+.asset-hint {
+  font-size: 0.72rem;
+  color: rgba(233, 236, 241, 0.6);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.asset-drop__action {
-  flex-shrink: 0;
-  color: rgba(178, 193, 209, 0.9);
+.asset-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  grid-column: 3;
+  grid-row: 1;
 }
 
-.asset-drop__action:disabled {
-  opacity: 0.5;
+.asset-action {
+  color: rgba(233, 236, 241, 0.76);
+}
+
+.asset-action:disabled {
+  color: rgba(233, 236, 241, 0.28) !important;
 }
 </style>
