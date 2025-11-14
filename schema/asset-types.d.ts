@@ -2,6 +2,7 @@ export type AssetType =
   | 'model'
   | 'image'
   | 'texture'
+  | 'hdri'
   | 'material'
   | 'file'
   | 'prefab'

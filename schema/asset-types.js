@@ -2,6 +2,7 @@ const AssetTypes = Object.freeze([
   'model',
   'image',
   'texture',
+  'hdri',
   'material',
   'file',
   'prefab',

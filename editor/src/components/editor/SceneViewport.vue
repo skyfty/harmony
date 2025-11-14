@@ -2951,7 +2951,6 @@ async function loadEnvironmentTextureFromAsset(assetId: string): Promise<THREE.T
     if (extension === 'hdr' || extension === 'hdri') {
       const texture = await rgbeLoader.loadAsync(url)
       texture.mapping = THREE.EquirectangularReflectionMapping
-      texture.flipY = false
       texture.needsUpdate = true
       return texture
     }

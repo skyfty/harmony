@@ -42,6 +42,7 @@ const ASSET_TYPE_LABELS: Record<AssetType, string> = {
   model: '模型',
   image: '图片',
   texture: '纹理',
+  hdri: 'HDRI',
   material: '材质',
   mesh: '网格',
   prefab: '预制体',

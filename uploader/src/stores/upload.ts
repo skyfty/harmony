@@ -158,7 +158,7 @@ function inferAssetType(file: File): AssetType {
   const mime = file.type ?? ''
   const extension = extractExtension(file)
   if (HDR_EXTENSIONS.has(extension)) {
-    return 'texture'
+    return 'hdri'
   }
   if (mime.startsWith(IMAGE_MIME_PREFIX) || IMAGE_EXTENSIONS.has(extension)) {
     return 'image'
@@ -326,6 +326,7 @@ export const useUploadStore = defineStore('uploader-upload', () => {
           mesh: '网格',
           image: '图片',
           texture: '纹理',
+          hdri: 'HDRI',
           material: '材质',
           prefab: 'Prefab',
           video: '视频',

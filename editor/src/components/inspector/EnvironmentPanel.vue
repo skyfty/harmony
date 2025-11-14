@@ -317,7 +317,7 @@ function isEnvironmentAsset(asset: ProjectAsset | null): asset is ProjectAsset {
   if (!asset) {
     return false
   }
-  if (asset.type === 'image' || asset.type === 'texture') {
+  if (asset.type === 'image' || asset.type === 'texture' || asset.type === 'hdri') {
     return true
   }
   if (asset.type === 'file') {

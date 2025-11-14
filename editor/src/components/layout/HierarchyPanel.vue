@@ -95,6 +95,13 @@ function resolvePrefabAssetId(node: SceneNode | null): string | null {
   return typeof value === 'string' && value.trim().length ? value : null
 }
 
+function isNormalNodeType(node: SceneNode | null): boolean {
+  if (!node) {
+    return false
+  }
+  return node.id !== 'harmony:ground' && node.id !== 'harmony:sky' && node.id !== 'harmony:environment'
+}
+
 const canSavePrefab = computed(() => {
   if (selectedNodeIds.value.length !== 1) {
     return false
@@ -103,10 +110,7 @@ const canSavePrefab = computed(() => {
   if (!node) {
     return false
   }
-  if (node.id === 'harmony:ground') {
-    return false
-  }
-  return true
+  return isNormalNodeType(node)
 })
 
 const canUpdatePrefab = computed(() => {
@@ -114,10 +118,10 @@ const canUpdatePrefab = computed(() => {
     return false
   }
   const node = activeSceneNode.value
-  if (!node) {
+  if (!node ) {
     return false
   }
-  return resolvePrefabAssetId(node) !== null
+  return isNormalNodeType(node) && resolvePrefabAssetId(node) !== null
 })
 
 watch(allNodeIds, (ids) => {
@@ -206,7 +210,7 @@ function nodeSupportsMaterials(node: SceneNode | null | undefined): boolean {
     return false
   }
   const type = node.nodeType ?? 'Mesh'
-  return type !== 'Light' && type !== 'Group'
+  return isNormalNodeType(node) && type !== 'Light' && type !== 'Group'
 }
 
 function supportsMaterialDrop(targetId: string): boolean {
@@ -218,7 +222,7 @@ function supportsMaterialDrop(targetId: string): boolean {
     return item.nodeType !== 'Light' && item.nodeType !== 'Group'
   }
   const node = findSceneNodeById(sceneStore.nodes, targetId)
-  return nodeSupportsMaterials(node)
+  return isNormalNodeType(node) && nodeSupportsMaterials(node)
 }
 
 function parseAssetDragPayload(event: DragEvent): { assetId: string } | null {

@@ -5,6 +5,7 @@ const typeLabelMap: Record<string, string> = {
   mesh: '网格',
   image: '图片',
   texture: '纹理',
+  hdri: 'HDRI',
   material: '材质',
   prefab: 'Prefab',
   video: '视频',

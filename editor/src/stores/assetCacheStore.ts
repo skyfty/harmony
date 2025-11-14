@@ -78,7 +78,7 @@ function isLikelyImageAssetUrl(url: string | null | undefined): boolean {
 
 function deriveThumbnailFromAsset(asset: ProjectAsset): string | null {
   const type = asset.type
-  if (type === 'image' || type === 'texture') {
+  if (type === 'image' || type === 'texture' || type === 'hdri') {
     const thumbnailCandidate = sanitizeUrlCandidate(asset.thumbnail ?? null)
     if (thumbnailCandidate && isLikelyImageAssetUrl(thumbnailCandidate)) {
       return thumbnailCandidate

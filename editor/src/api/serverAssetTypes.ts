@@ -36,6 +36,7 @@ export const SERVER_ASSET_PREVIEW_COLORS: Record<ProjectAsset['type'], string> =
   model: '#26C6DA',
   image: '#1E88E5',
   texture: '#8E24AA',
+  hdri: '#546E7A',
   material: '#FFB74D',
   behavior: '#4DB6AC',
   prefab: '#7986CB',
@@ -47,6 +48,7 @@ export const SERVER_ASSET_PREVIEW_COLORS: Record<ProjectAsset['type'], string> =
 const SERVER_ASSET_TYPE_ALIASES: Partial<Record<string, ServerAssetType>> = {
   meshes: 'mesh',
   videos: 'video',
+  hdr: 'hdri',
 }
 
 export function normalizeServerAssetType(type: string | undefined): ProjectAsset['type'] {
