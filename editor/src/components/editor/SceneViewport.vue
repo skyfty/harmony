@@ -2186,6 +2186,10 @@ watch(skyboxSettings, (settings) => {
   applySkyboxSettingsToScene(settings)
 }, { deep: true, immediate: true })
 
+watch(environmentSettings, (settings) => {
+  void applyEnvironmentSettingsToScene(settings)
+}, { deep: true, immediate: true })
+
 function resetCameraView() {
   if (!camera || !orbitControls) return
 
