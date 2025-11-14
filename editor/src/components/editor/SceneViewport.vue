@@ -6898,7 +6898,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       perspectiveCamera.userData.nodeId = node.id
       object = perspectiveCamera
     }
-  } else if (nodeType === 'Group' || nodeType === 'Sky') {
+  } else if (nodeType === 'Group' || nodeType === 'Sky' || nodeType === 'Environment') {
     let container = getRuntimeObject(node.id)
     if (container !== null) {
       container.userData.usesRuntimeObject = true

@@ -40,7 +40,7 @@ export type GeometryType =
   | 'Torus'
   | 'TorusKnot';
 
-export type SceneNodeType = 'Mesh' | 'Light' | 'Group' | 'Camera' |'Sky'| 'Env' | GeometryType;
+export type SceneNodeType = 'Mesh' | 'Light' | 'Group' | 'Camera' |'Sky'| 'Environment' | GeometryType;
 
 export type PrimitiveNodeLike = GeometryType | SceneNodeType | string | null | undefined
 

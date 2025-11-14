@@ -70,11 +70,11 @@ const showMaterialPanel = computed(
   () => !isLightNode.value && (selectedNode.value?.materials?.length ?? 0) > 0,
 )
 const showTransformPanel = computed(() => {
-  return selectedNode.value?.id !== SKY_NODE_ID && selectedNode.value?.id !== GROUND_NODE_ID;
+  return selectedNode.value?.id !== SKY_NODE_ID && selectedNode.value?.id !== GROUND_NODE_ID && selectedNode.value?.id !== ENVIRONMENT_NODE_ID;
 })
 
 const showAddComponentButton = computed(() => {
-  return selectedNode.value?.id !== SKY_NODE_ID;
+  return selectedNode.value?.id !== SKY_NODE_ID && selectedNode.value?.id !== ENVIRONMENT_NODE_ID;
 
 })
 

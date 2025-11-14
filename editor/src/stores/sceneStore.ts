@@ -227,7 +227,6 @@ export const PREFAB_SOURCE_METADATA_KEY = '__prefabAssetId'
 export const GROUND_NODE_ID = 'harmony:ground'
 export const SKY_NODE_ID = 'harmony:sky'
 export const ENVIRONMENT_NODE_ID = 'harmony:environment'
-export const ENV_NODE_ID = 'harmony:env'
 
 
 const DEFAULT_WALL_HEIGHT = WALL_DEFAULT_HEIGHT
@@ -1530,7 +1529,7 @@ function createEnvironmentSceneNode(
   return {
     id: ENVIRONMENT_NODE_ID,
     name: 'Environment',
-    nodeType: 'Group',
+    nodeType: 'Environment',
     position: createVector(0, 0, 0),
     rotation: createVector(0, 0, 0),
     scale: createVector(1, 1, 1),
