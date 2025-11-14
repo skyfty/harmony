@@ -1,40 +1,39 @@
 <template>
-  <div ref="container" class="model-preview"></div>
-  
+  <div ref="container" class="hdr-preview"></div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import Loader from '@schema/loader'
-import { useUploadStore } from '@/stores/upload'
+import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import pica from 'pica'
+import { useUploadStore } from '@/stores/upload'
 
 interface Props {
   file: File
   taskId: string
-  background?: string
+  src?: string | null
 }
 
 const props = defineProps<Props>()
-const emit = defineEmits<{
-  (e: 'dimensions', payload: { length: number; width: number; height: number }): void
-}>()
-
 const uploadStore = useUploadStore()
-const THUMBNAIL_SIZE = 512
-const ALPHA_THRESHOLD = 10
+const container = ref<HTMLDivElement | null>(null)
+
+const loader = new RGBELoader()
+loader.setDataType(THREE.FloatType)
 const picaInstance = pica()
 
-const container = ref<HTMLDivElement | null>(null)
+const THUMBNAIL_SIZE = 512
+const ROTATION_SPEED = 0.0035
+
 let renderer: THREE.WebGLRenderer | null = null
-let camera: THREE.PerspectiveCamera | null = null
 let scene: THREE.Scene | null = null
+let camera: THREE.PerspectiveCamera | null = null
 let controls: OrbitControls | null = null
 let animationHandle = 0
-const loader = new Loader()
-let currentObject: THREE.Object3D | null = null
+let demoGroup: THREE.Group | null = null
+let currentTexture: THREE.Texture | null = null
 let hasCapturedThumbnail = false
 let thumbnailJobToken = 0
 
@@ -56,44 +55,23 @@ function disposeObject(object: THREE.Object3D | null): void {
   })
 }
 
-function fitCamera(object: THREE.Object3D): void {
-  if (!camera || !controls) {
-    return
-  }
-  const box = new THREE.Box3().setFromObject(object)
-  const size = box.getSize(new THREE.Vector3())
-  const center = box.getCenter(new THREE.Vector3())
-  const maxDim = Math.max(size.x, size.y, size.z)
-  const fov = THREE.MathUtils.degToRad(camera.fov)
-  const distance = maxDim === 0 ? 10 : maxDim / (2 * Math.tan(fov / 2))
-  const offset = distance * 1.2
-  camera.position.set(center.x + offset, center.y + offset, center.z + offset)
-  camera.near = Math.max(0.1, distance / 100)
-  camera.far = distance * 100
-  camera.updateProjectionMatrix()
-  controls.target.copy(center)
-  controls.update()
+function disposeTexture(texture: THREE.Texture | null): void {
+  texture?.dispose()
 }
 
-function clearScene(): void {
-  if (!scene) {
-    return
+function stopAnimation(): void {
+  if (animationHandle) {
+    cancelAnimationFrame(animationHandle)
+    animationHandle = 0
   }
-  const removable: THREE.Object3D[] = []
-  scene.children.forEach((child) => {
-    if (!(child instanceof THREE.Light)) {
-      removable.push(child)
-    }
-  })
-  removable.forEach((child) => {
-    scene?.remove(child)
-    disposeObject(child)
-  })
 }
 
 function renderLoop(): void {
   if (!renderer || !scene || !camera) {
     return
+  }
+  if (demoGroup) {
+    demoGroup.rotation.y += ROTATION_SPEED
   }
   controls?.update()
   renderer.render(scene, camera)
@@ -116,39 +94,92 @@ function setupScene(): void {
     return
   }
   scene = new THREE.Scene()
-  scene.background = null
-  camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000)
-  camera.position.set(3, 3, 3)
+  scene.background = new THREE.Color(0x202020)
 
-  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
+  camera = new THREE.PerspectiveCamera(55, 1, 0.1, 50)
+  camera.position.set(0, 1.2, 3.5)
+
+  renderer = new THREE.WebGLRenderer({ antialias: true })
   renderer.outputColorSpace = THREE.SRGBColorSpace
-  renderer.shadowMap.enabled = true
+  renderer.toneMapping = THREE.ACESFilmicToneMapping
+  renderer.toneMappingExposure = 1.0
   renderer.setSize(container.value.clientWidth, container.value.clientHeight)
-  renderer.setClearColor(0x000000, 0)
   container.value.appendChild(renderer.domElement)
 
   controls = new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
   controls.dampingFactor = 0.05
+  controls.minDistance = 0.5
+  controls.maxDistance = 10
 
-  const ambient = new THREE.AmbientLight(0xffffff, 0.6)
-  const directional = new THREE.DirectionalLight(0xffffff, 0.8)
-  directional.position.set(5, 10, 7.5)
-  scene.add(ambient)
-  scene.add(directional)
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x202020, 0.3)
+  scene.add(hemi)
+
+  demoGroup = new THREE.Group()
+
+  const sphere = new THREE.Mesh(
+    new THREE.SphereGeometry(0.8, 64, 64),
+    new THREE.MeshStandardMaterial({ metalness: 1, roughness: 0.15 })
+  )
+  sphere.position.set(-0.9, 0.8, 0)
+  demoGroup.add(sphere)
+
+  const box = new THREE.Mesh(
+    new THREE.BoxGeometry(1.1, 1.1, 1.1),
+    new THREE.MeshStandardMaterial({ metalness: 0.2, roughness: 0.3 })
+  )
+  box.position.set(1, 0.55, 0)
+  demoGroup.add(box)
+
+  const ground = new THREE.Mesh(
+    new THREE.CircleGeometry(4.5, 64),
+    new THREE.MeshStandardMaterial({ color: 0x808080, metalness: 0, roughness: 1 })
+  )
+  ground.rotation.x = -Math.PI / 2
+  ground.position.y = 0
+  demoGroup.add(ground)
+
+  scene.add(demoGroup)
 
   window.addEventListener('resize', handleResize)
   handleResize()
   renderLoop()
 }
 
-async function loadModel(): Promise<void> {
-  if (!scene || !camera || !controls || !props.file) {
+function applyEnvironment(texture: THREE.Texture): void {
+  if (!scene) {
     return
   }
-  clearScene()
-  currentObject && disposeObject(currentObject)
-  currentObject = null
+  scene.environment = texture
+  scene.background = texture
+  if (demoGroup) {
+    demoGroup.traverse((child) => {
+      const mesh = child as THREE.Mesh
+      if (mesh.isMesh) {
+        const material = mesh.material
+        if (Array.isArray(material)) {
+          material.forEach((mat) => {
+            if ('envMapIntensity' in mat) {
+              ;(mat as THREE.MeshStandardMaterial).envMapIntensity = 1.0
+              mat.needsUpdate = true
+            }
+          })
+        } else if (material && 'envMapIntensity' in material) {
+          ;(material as THREE.MeshStandardMaterial).envMapIntensity = 1.0
+          material.needsUpdate = true
+        }
+      }
+    })
+  }
+  if (renderer && camera) {
+    renderer.render(scene, camera)
+  }
+}
+
+async function loadEnvironment(): Promise<void> {
+  if (!scene || !renderer || !props.file) {
+    return
+  }
 
   const shouldCaptureThumbnail = !hasCapturedThumbnail && Boolean(props.taskId)
   if (shouldCaptureThumbnail) {
@@ -157,52 +188,35 @@ async function loadModel(): Promise<void> {
 
   const jobToken = shouldCaptureThumbnail ? ++thumbnailJobToken : thumbnailJobToken
 
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const handleLoaded = (object: THREE.Object3D | null) => {
-        if (!object) {
-          reject(new Error('模型加载失败'))
-          return
-        }
-        currentObject = object
-        scene?.add(object)
-        fitCamera(object)
-        // Calculate and emit bounding box dimensions in meters (assuming unit = meters)
-        try {
-          const box = new THREE.Box3().setFromObject(object)
-          const size = box.getSize(new THREE.Vector3())
-          const length = Number.isFinite(size.x) ? size.x : 0
-          const width = Number.isFinite(size.z) ? size.z : 0
-          const height = Number.isFinite(size.y) ? size.y : 0
-          emit('dimensions', { length, width, height })
-        } catch (err) {
-          // noop
-        }
-        loader.removeEventListener('loaded', handleLoaded)
-        resolve()
-      }
-      loader.addEventListener('loaded', handleLoaded)
-      try {
-        loader.loadFiles([props.file])
-      } catch (error) {
-        loader.removeEventListener('loaded', handleLoaded)
-        reject(error)
-      }
-    })
+  let createdUrl: string | null = null
+  const sourceUrl = props.src && props.src.length ? props.src : null
+  const url = sourceUrl ?? (() => {
+    createdUrl = URL.createObjectURL(props.file)
+    return createdUrl
+  })()
 
+  try {
+    const texture = await loader.loadAsync(url)
+    texture.mapping = THREE.EquirectangularReflectionMapping
+    texture.colorSpace = THREE.LinearSRGBColorSpace
+    disposeTexture(currentTexture)
+    currentTexture = texture
+    applyEnvironment(texture)
     if (shouldCaptureThumbnail) {
-      await generateThumbnail(jobToken).catch((error) => {
-        console.warn('[uploader] 模型缩略图生成失败', error)
-      })
+      await generateThumbnail(jobToken)
     }
   } catch (error) {
     if (shouldCaptureThumbnail) {
       uploadStore.applyThumbnailResult(props.taskId, {
         file: null,
-        error: error instanceof Error ? error.message : '模型加载失败',
+        error: error instanceof Error ? error.message : 'HDRI 预览失败',
       })
     }
     throw error
+  } finally {
+    if (createdUrl) {
+      URL.revokeObjectURL(createdUrl)
+    }
   }
 }
 
@@ -212,10 +226,10 @@ async function generateThumbnail(jobToken: number): Promise<void> {
   }
   let thumbnailRenderer: THREE.WebGLRenderer | null = null
   try {
-    thumbnailRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true })
+    thumbnailRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true })
     thumbnailRenderer.outputColorSpace = THREE.SRGBColorSpace
-    thumbnailRenderer.shadowMap.enabled = renderer?.shadowMap.enabled ?? true
-    thumbnailRenderer.setClearColor(0x000000, 0)
+    thumbnailRenderer.toneMapping = renderer?.toneMapping ?? THREE.ACESFilmicToneMapping
+    thumbnailRenderer.toneMappingExposure = renderer?.toneMappingExposure ?? 1.0
     thumbnailRenderer.setSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE, false)
     thumbnailRenderer.render(scene, camera)
 
@@ -227,7 +241,11 @@ async function generateThumbnail(jobToken: number): Promise<void> {
     }
 
     const baseName = props.file.name.replace(/\.[^.]+$/, '') || props.file.name
-    const file = new File([blob], `${baseName}-thumbnail.png`, { type: 'image/png', lastModified: Date.now() })
+    const file = new File([blob], `${baseName}-thumbnail.png`, {
+      type: 'image/png',
+      lastModified: Date.now(),
+    })
+
     uploadStore.applyThumbnailResult(props.taskId, {
       file,
       width: outputCanvas.width,
@@ -272,7 +290,7 @@ async function buildThumbnail(source: HTMLCanvasElement): Promise<{ canvas: HTML
   try {
     return await scaleCanvasWithPica(trimmed, THUMBNAIL_SIZE)
   } catch (error) {
-    console.warn('[uploader] pica 缩放失败，将回退到原始 canvas', error)
+    console.warn('[uploader] HDR 缩略图缩放失败，将使用原始尺寸', error)
     return {
       canvas: trimmed,
       blob: await canvasToBlob(trimmed),
@@ -290,17 +308,16 @@ function cropTransparentBounds(source: HTMLCanvasElement): HTMLCanvasElement {
   if (!ctx) {
     return source
   }
-  const { data } = ctx.getImageData(0, 0, width, height)
+  const data = ctx.getImageData(0, 0, width, height).data as Uint8ClampedArray
   let minX = width
   let minY = height
   let maxX = -1
   let maxY = -1
-
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       const offset = (y * width + x) * 4
       const alpha = data[offset + 3] ?? 0
-      if (alpha > ALPHA_THRESHOLD) {
+      if (alpha > 10) {
         if (x < minX) minX = x
         if (x > maxX) maxX = x
         if (y < minY) minY = y
@@ -308,18 +325,14 @@ function cropTransparentBounds(source: HTMLCanvasElement): HTMLCanvasElement {
       }
     }
   }
-
   if (maxX < minX || maxY < minY) {
     return source
   }
-
   const cropWidth = maxX - minX + 1
   const cropHeight = maxY - minY + 1
-
   if (cropWidth === width && cropHeight === height) {
     return source
   }
-
   const target = document.createElement('canvas')
   target.width = cropWidth
   target.height = cropHeight
@@ -357,7 +370,7 @@ async function scaleCanvasWithPica(
   try {
     await picaInstance.resize(source, target, { quality: 3 })
   } catch (error) {
-    console.warn('[uploader] pica resize 失败，改用 Canvas 缩放', error)
+    console.warn('[uploader] HDR 缩略图 pica resize 失败，改用 Canvas 缩放', error)
     const ctx = target.getContext('2d')
     ctx?.drawImage(source, 0, 0, source.width, source.height, 0, 0, targetWidth, targetHeight)
   }
@@ -365,7 +378,7 @@ async function scaleCanvasWithPica(
     const blob = await picaInstance.toBlob(target, 'image/png', 0.95)
     return { canvas: target, blob }
   } catch (error) {
-    console.warn('[uploader] pica toBlob 失败，改用 Canvas toBlob', error)
+    console.warn('[uploader] HDR 缩略图 pica toBlob 失败，改用 Canvas toBlob', error)
     return {
       canvas: target,
       blob: await canvasToBlob(target),
@@ -390,39 +403,49 @@ async function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
 
 onMounted(() => {
   setupScene()
-  loadModel().catch((error) => console.warn('[uploader] 模型预览加载失败', error))
+  loadEnvironment().catch((error) => console.warn('[uploader] HDRI 预览加载失败', error))
 })
 
 watch(
-  () => props.file,
+  [() => props.file, () => props.src],
   () => {
     hasCapturedThumbnail = false
     thumbnailJobToken += 1
-    loadModel().catch((error) => console.warn('[uploader] 模型预览加载失败', error))
+    loadEnvironment().catch((error) => console.warn('[uploader] HDRI 预览加载失败', error))
   },
 )
 
 onBeforeUnmount(() => {
+  stopAnimation()
   window.removeEventListener('resize', handleResize)
-  cancelAnimationFrame(animationHandle)
+  controls?.dispose()
   if (renderer) {
     renderer.dispose()
+    if (renderer.domElement && renderer.domElement.parentElement) {
+      renderer.domElement.parentElement.removeChild(renderer.domElement)
+    }
   }
-  disposeObject(currentObject)
-  controls?.dispose()
-  if (container.value?.firstChild) {
-    container.value.removeChild(container.value.firstChild)
-  }
+  disposeObject(demoGroup)
+  demoGroup = null
+  disposeTexture(currentTexture)
+  currentTexture = null
+  scene = null
+  camera = null
+  renderer = null
 })
 </script>
 
 <style scoped>
-.model-preview {
+.hdr-preview {
   width: 100%;
   height: 100%;
   min-height: 320px;
-  border-radius: 12px;
-  overflow: hidden;
-  background: #1e1e1e;
+  background: #0f0f0f;
+}
+
+.hdr-preview :deep(canvas) {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 </style>

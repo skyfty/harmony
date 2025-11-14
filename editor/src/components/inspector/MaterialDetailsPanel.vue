@@ -14,6 +14,7 @@ import {
   createTextureSettings,
 } from '@/types/material'
 import TexturePanel from './TexturePanel.vue'
+import AssetDialog from '@/components/common/AssetDialog.vue'
 import type { ProjectAsset } from '@/types/project-asset'
 import {type SceneMaterialType} from '@harmony/schema'
 
@@ -169,6 +170,20 @@ const texturePanelExpanded = reactive<Record<SceneMaterialTextureSlot, boolean>>
   }, {} as Record<SceneMaterialTextureSlot, boolean>),
 )
 
+const assetDialogVisible = ref(false)
+const assetDialogSlot = ref<SceneMaterialTextureSlot | null>(null)
+const assetDialogSelectedId = ref('')
+const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
+const TEXTURE_ASSET_TYPE = 'texture,image' as const
+
+const assetDialogTitle = computed(() => {
+  const slot = assetDialogSlot.value
+  if (!slot) {
+    return '选择贴图资产'
+  }
+  return `选择 ${TEXTURE_LABELS[slot]} 贴图`
+})
+
 const activeMaterialIndex = computed(() => {
   const entry = activeNodeMaterial.value
   if (!entry) {
@@ -262,6 +277,14 @@ watch(
     }
   },
 )
+
+watch(assetDialogVisible, (open) => {
+  if (!open) {
+    assetDialogSlot.value = null
+    assetDialogSelectedId.value = ''
+    assetDialogAnchor.value = null
+  }
+})
 
 watch(
   () => activeNodeMaterial.value,
@@ -707,6 +730,49 @@ function assignTexture(slot: SceneMaterialTextureSlot, ref: SceneMaterialTexture
   commitMaterialProps({ textures: { [slot]: payload } })
 }
 
+function ensureTextureAssetCached(asset: ProjectAsset) {
+  void assetCacheStore.downloaProjectAsset(asset).catch((error: unknown) => {
+    console.warn('Failed to cache texture asset', error)
+  })
+}
+
+function handleTextureThumbClick(slot: SceneMaterialTextureSlot, event?: MouseEvent) {
+  if (isUiDisabled.value) {
+    return
+  }
+  if (event) {
+    assetDialogAnchor.value = { x: event.clientX, y: event.clientY }
+  } else {
+    assetDialogAnchor.value = null
+  }
+  assetDialogSlot.value = slot
+  assetDialogSelectedId.value = formTextures[slot]?.assetId ?? ''
+  assetDialogVisible.value = true
+}
+
+function applyTextureAsset(slot: SceneMaterialTextureSlot, asset: ProjectAsset) {
+  const current = formTextures[slot]
+  const nextSettings = current?.settings ? cloneTextureSettings(current.settings) : createTextureSettings()
+  assignTexture(slot, { assetId: asset.id, name: asset.name, settings: nextSettings })
+  ensureTextureAssetCached(asset)
+}
+
+function handleTextureAssetConfirm(asset: ProjectAsset) {
+  const slot = assetDialogSlot.value
+  assetDialogSelectedId.value = asset.id
+  if (!slot) {
+    return
+  }
+  applyTextureAsset(slot, asset)
+  assetDialogVisible.value = false
+  assetDialogAnchor.value = null
+}
+
+function handleTextureAssetCancel() {
+  assetDialogVisible.value = false
+  assetDialogAnchor.value = null
+}
+
 function toggleTexturePanel(slot: SceneMaterialTextureSlot) {
   texturePanelExpanded[slot] = !texturePanelExpanded[slot]
 }
@@ -728,15 +794,13 @@ function handleTextureDrop(slot: SceneMaterialTextureSlot, event: DragEvent) {
   }
   const asset = ensureImageAsset(payload.assetId)
   if (!asset) {
-  console.warn('Dragged asset is not an image and cannot be used as a material texture')
+    console.warn('Dragged asset is not an image and cannot be used as a material texture')
     return
   }
   event.preventDefault()
   event.stopPropagation()
   draggingSlot.value = null
-  void assetCacheStore.downloaProjectAsset(asset).catch((error: unknown) => {
-    console.warn('Failed to cache texture asset', error)
-  })
+  ensureTextureAssetCached(asset)
   assignTexture(slot, { assetId: asset.id, name: asset.name, settings: createTextureSettings() })
 }
 
@@ -1099,6 +1163,8 @@ async function handleImportFileChange(event: Event) {
                     class="texture-thumb"
                     :class="{ 'texture-thumb--empty': !formTextures[slot] }"
                     :style="resolveTexturePreviewStyle(slot)"
+                    role="button"
+                    @click="handleTextureThumbClick(slot, $event)"
                   >
                     <v-icon v-if="!formTextures[slot]" size="20" color="rgba(233, 236, 241, 0.4)">mdi-image-off</v-icon>
                   </div>
@@ -1158,6 +1224,17 @@ async function handleImportFileChange(event: Event) {
               </v-card-actions>
             </v-card>
           </v-dialog>
+          <AssetDialog
+            v-model="assetDialogVisible"
+            v-model:assetId="assetDialogSelectedId"
+            :asset-type="TEXTURE_ASSET_TYPE"
+            :title="assetDialogTitle"
+            :anchor="assetDialogAnchor"
+            confirm-text="选择"
+            cancel-text="取消"
+            @confirm="handleTextureAssetConfirm"
+            @cancel="handleTextureAssetCancel"
+          />
           </div>
         </div>
       </div>
@@ -1437,10 +1514,17 @@ border-radius: 6px;
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
+  cursor: pointer;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
 .texture-thumb--empty {
   border-style: dashed;
+}
+
+.texture-thumb:hover {
+  border-color: rgba(77, 208, 225, 0.75);
+  box-shadow: 0 0 0 1px rgba(77, 208, 225, 0.35);
 }
 
 .texture-info {

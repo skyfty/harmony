@@ -8,6 +8,14 @@
         @dimensions="onModelDimensions"
       />
     </div>
+    <div v-else-if="task.preview.kind === 'hdri'" class="preview-renderer__model">
+      <HDRPreview
+        :file="task.file"
+        :task-id="task.id"
+        :src="task.preview.url"
+        class="preview-renderer__model-canvas"
+      />
+    </div>
     <div v-else-if="task.preview.kind === 'image' && task.preview.url" class="preview-renderer__image">
       <v-img
         :src="task.preview.url"
@@ -29,6 +37,7 @@
 
 <script setup lang="ts">
 import ModelPreview from './ModelPreview.vue'
+import HDRPreview from './HDRPreview.vue'
 import type { UploadTask } from '@/stores/upload'
 import { useUploadStore } from '@/stores/upload'
 import { onMounted, watch } from 'vue'

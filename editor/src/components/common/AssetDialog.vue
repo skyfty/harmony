@@ -1,0 +1,669 @@
+<script setup lang="ts">
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
+import type { ProjectAsset } from '@/types/project-asset'
+import type { ProjectDirectory } from '@/types/project-directory'
+import { useSceneStore } from '@/stores/sceneStore'
+import { assetProvider } from '@/resources/projectProviders/asset'
+
+const props = withDefaults(
+  defineProps<{
+    modelValue: boolean
+    assetId?: string
+    assetType?: string
+    seriesId?: string
+    assets?: ProjectAsset[]
+    anchor?: { x: number; y: number } | null
+    title?: string
+    confirmText?: string
+    cancelText?: string
+  }>(),
+  {
+    assetId: '',
+    assetType: '',
+    seriesId: '',
+    anchor: null,
+  },
+)
+
+const emit = defineEmits<{
+  (event: 'update:modelValue', value: boolean): void
+  (event: 'update:assetId', value: string): void
+  (event: 'confirm', value: ProjectAsset): void
+  (event: 'cancel'): void
+}>()
+
+const dialogOpen = computed({
+  get: () => props.modelValue,
+  set: (value) => emit('update:modelValue', value),
+})
+
+const sceneStore = useSceneStore()
+const { assetCatalog } = storeToRefs(sceneStore)
+
+const selectedAssetId = ref(props.assetId ?? '')
+const remoteAssets = ref<ProjectAsset[]>([])
+const remoteLoaded = ref(false)
+const loading = ref(false)
+const errorMessage = ref<string | null>(null)
+const searchTerm = ref('')
+const gridRef = ref<HTMLDivElement | null>(null)
+const panelRef = ref<HTMLDivElement | null>(null)
+const panelStyle = ref<Record<string, string>>({ top: '0px', left: '0px' })
+let resizeRaf: number | null = null
+let listenersAttached = false
+
+function flattenCatalog(catalog: Record<string, ProjectAsset[]> | undefined): ProjectAsset[] {
+  if (!catalog) {
+    return []
+  }
+  return Object.values(catalog).flatMap((group) => (Array.isArray(group) ? group : []))
+}
+
+function flattenDirectories(directories: ProjectDirectory[]): ProjectAsset[] {
+  const bucket: ProjectAsset[] = []
+  const visit = (list: ProjectDirectory[]) => {
+    list.forEach((dir) => {
+      if (dir.assets?.length) {
+        bucket.push(...dir.assets)
+      }
+      if (dir.children?.length) {
+        visit(dir.children)
+      }
+    })
+  }
+  visit(directories)
+  return bucket
+}
+
+function getAnchorPoint(): { x: number; y: number } {
+  if (typeof window === 'undefined') {
+    return { x: 0, y: 0 }
+  }
+  const point = props.anchor
+  if (point && Number.isFinite(point.x) && Number.isFinite(point.y)) {
+    return point
+  }
+  return { x: window.innerWidth / 2, y: window.innerHeight / 2 }
+}
+
+async function updatePanelPosition() {
+  if (!dialogOpen.value) {
+    return
+  }
+  await nextTick()
+  const panel = panelRef.value
+  if (!panel || typeof window === 'undefined') {
+    return
+  }
+  const { innerWidth: viewportWidth, innerHeight: viewportHeight } = window
+  const anchor = getAnchorPoint()
+  const offset = 12
+  const rect = panel.getBoundingClientRect()
+  const width = rect.width
+  const height = rect.height
+
+  let left = anchor.x + offset
+  let top = anchor.y + offset
+
+  if (left + width > viewportWidth - offset) {
+    left = anchor.x - width - offset
+  }
+  if (top + height > viewportHeight - offset) {
+    top = anchor.y - height - offset
+  }
+
+  if (left + width > viewportWidth - offset) {
+    left = viewportWidth - width - offset
+  }
+  if (top + height > viewportHeight - offset) {
+    top = viewportHeight - height - offset
+  }
+
+  if (left < offset) {
+    left = offset
+  }
+  if (top < offset) {
+    top = offset
+  }
+
+  panelStyle.value = {
+    top: `${Math.round(top)}px`,
+    left: `${Math.round(left)}px`,
+  }
+}
+
+function queuePanelReposition() {
+  if (!dialogOpen.value) {
+    return
+  }
+  if (resizeRaf !== null) {
+    cancelAnimationFrame(resizeRaf)
+  }
+  resizeRaf = requestAnimationFrame(async () => {
+    resizeRaf = null
+    await updatePanelPosition()
+  })
+}
+
+function handleWindowResize() {
+  queuePanelReposition()
+}
+
+function handleWindowScroll() {
+  queuePanelReposition()
+}
+
+function handleGlobalPointerDown(event: PointerEvent) {
+  if (!dialogOpen.value) {
+    return
+  }
+  const panel = panelRef.value
+  if (!panel) {
+    return
+  }
+  const target = event.target as Node | null
+  if (target && panel.contains(target)) {
+    return
+  }
+  handleCancel()
+}
+
+function handleKeydown(event: KeyboardEvent) {
+  if (!dialogOpen.value) {
+    return
+  }
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    handleCancel()
+  }
+}
+
+function attachGlobalListeners() {
+  if (typeof window === 'undefined' || listenersAttached) {
+    return
+  }
+  document.addEventListener('pointerdown', handleGlobalPointerDown, true)
+  window.addEventListener('resize', handleWindowResize)
+  window.addEventListener('scroll', handleWindowScroll, true)
+  document.addEventListener('keydown', handleKeydown)
+  listenersAttached = true
+}
+
+function detachGlobalListeners() {
+  if (!listenersAttached || typeof window === 'undefined') {
+    return
+  }
+  document.removeEventListener('pointerdown', handleGlobalPointerDown, true)
+  window.removeEventListener('resize', handleWindowResize)
+  window.removeEventListener('scroll', handleWindowScroll, true)
+  document.removeEventListener('keydown', handleKeydown)
+  listenersAttached = false
+  if (resizeRaf !== null) {
+    cancelAnimationFrame(resizeRaf)
+    resizeRaf = null
+  }
+}
+
+async function loadRemoteAssets() {
+  if (remoteLoaded.value || loading.value) {
+    return
+  }
+  loading.value = true
+  errorMessage.value = null
+  try {
+    // We only fetch the manifest once per dialog lifecycle to avoid redundant network traffic.
+    const directories = await assetProvider.load?.()
+    if (directories) {
+      remoteAssets.value = flattenDirectories(directories)
+    } else {
+      remoteAssets.value = []
+    }
+    remoteLoaded.value = true
+    await scheduleScrollToSelected()
+  } catch (error) {
+    console.warn('Failed to load asset provider manifest', error)
+    errorMessage.value = (error as Error).message ?? '无法加载资产列表'
+  } finally {
+    loading.value = false
+    if (dialogOpen.value) {
+      queuePanelReposition()
+    }
+  }
+}
+
+onMounted(() => {
+  if (dialogOpen.value) {
+    attachGlobalListeners()
+    queuePanelReposition()
+    void scheduleScrollToSelected()
+  }
+})
+
+onBeforeUnmount(() => {
+  detachGlobalListeners()
+})
+
+watch(dialogOpen, (open) => {
+  if (open) {
+    attachGlobalListeners()
+    const anchor = getAnchorPoint()
+    panelStyle.value = {
+      top: `${Math.round(anchor.y + 12)}px`,
+      left: `${Math.round(anchor.x + 12)}px`,
+    }
+    selectedAssetId.value = props.assetId ?? ''
+    if (!props.assets?.length) {
+      void loadRemoteAssets()
+    }
+    void scheduleScrollToSelected()
+    queuePanelReposition()
+  } else {
+    searchTerm.value = ''
+    detachGlobalListeners()
+  }
+})
+
+watch(
+  () => props.assetId,
+  (next) => {
+    if (typeof next === 'string') {
+      selectedAssetId.value = next
+    } else {
+      selectedAssetId.value = ''
+    }
+    void scheduleScrollToSelected()
+  },
+)
+
+watch(
+  () => (props.anchor ? `${props.anchor.x},${props.anchor.y}` : ''),
+  () => {
+    if (dialogOpen.value) {
+      queuePanelReposition()
+    }
+  },
+)
+
+const sceneAssets = computed(() => flattenCatalog(assetCatalog.value))
+
+const allAssets = computed(() => {
+  const provided = props.assets?.length ? props.assets : []
+  const combined = [...provided, ...sceneAssets.value, ...remoteAssets.value]
+  const unique = new Map<string, ProjectAsset>()
+  combined.forEach((asset) => {
+    if (!asset || !asset.id) {
+      return
+    }
+    if (!unique.has(asset.id)) {
+      unique.set(asset.id, asset)
+    }
+  })
+  return Array.from(unique.values())
+})
+
+const filteredAssets = computed(() => {
+  const typeFilterRaw = props.assetType?.trim() ?? ''
+  const typeFilters = typeFilterRaw.length
+    ? typeFilterRaw.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0)
+    : []
+  const seriesFilter = props.seriesId?.trim() ?? ''
+  const term = searchTerm.value.trim().toLowerCase()
+  return allAssets.value.filter((asset) => {
+    if (typeFilters.length && !typeFilters.includes(asset.type)) {
+      return false
+    }
+    if (seriesFilter) {
+      const assetSeries = asset.seriesId?.trim() ?? ''
+      if (assetSeries !== seriesFilter) {
+        return false
+      }
+    }
+    if (!term) {
+      return true
+    }
+    const haystack = `${asset.name} ${asset.id}`.toLowerCase()
+    return haystack.includes(term)
+  })
+})
+
+const selectedAsset = computed(() => {
+  const id = selectedAssetId.value
+  if (!id) {
+    return null
+  }
+  return allAssets.value.find((asset) => asset.id === id) ?? null
+})
+
+function cssEscape(value: string): string {
+  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+    return CSS.escape(value)
+  }
+  return value.replace(/([!"#$%&'()*+,./:;<=>?@[\\]^`{|}~])/g, '\\$1')
+}
+
+function scrollSelectedAssetIntoView() {
+  if (typeof document === 'undefined') {
+    return
+  }
+  const container = gridRef.value
+  const id = selectedAssetId.value
+  if (!container || !id) {
+    return
+  }
+  const selector = `[data-asset-id="${cssEscape(id)}"]`
+  const target = container.querySelector(selector) as HTMLElement | null
+  if (target) {
+    target.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' })
+  }
+}
+
+async function scheduleScrollToSelected() {
+  if (!dialogOpen.value) {
+    return
+  }
+  await nextTick()
+  scrollSelectedAssetIntoView()
+  await updatePanelPosition()
+}
+
+watch(
+  () => filteredAssets.value.map((asset) => asset.id).join('|'),
+  () => {
+    void scheduleScrollToSelected()
+  },
+)
+
+watch(selectedAssetId, () => {
+  void scheduleScrollToSelected()
+})
+
+function handleAssetClick(asset: ProjectAsset) {
+  selectedAssetId.value = asset.id
+  emit('update:assetId', asset.id)
+}
+
+function handleConfirm() {
+  if (!selectedAsset.value) {
+    return
+  }
+  emit('confirm', selectedAsset.value)
+  dialogOpen.value = false
+}
+
+function handleCancel() {
+  emit('cancel')
+  dialogOpen.value = false
+}
+
+function retryLoading() {
+  remoteLoaded.value = false
+  void loadRemoteAssets()
+}
+
+function resolveInitials(asset: ProjectAsset): string {
+  if (!asset.name) {
+    return '?'
+  }
+  const segments = asset.name.trim().split(/\s+/)
+  if (!segments.length) {
+    return '?'
+  }
+  const letters = segments.slice(0, 2).map((part) => part.charAt(0).toUpperCase()).join('')
+  return letters || '?'
+}
+</script>
+
+<template>
+  <Teleport to="body">
+    <transition name="asset-dialog-popover">
+      <div v-if="dialogOpen" class="asset-dialog__wrapper">
+        <div
+          ref="panelRef"
+          class="asset-dialog__popover"
+          :style="panelStyle"
+        >
+          <div class="asset-dialog__header">
+            <span class="asset-dialog__title">{{ title ?? '选择资产' }}</span>
+            <v-text-field
+              v-model="searchTerm"
+              class="asset-dialog__search"
+              density="compact"
+              variant="outlined"
+              prepend-inner-icon="mdi-magnify"
+              placeholder="搜索资产"
+              clearable
+              hide-details
+            />
+          </div>
+          <div class="asset-dialog__body">
+            <v-alert
+              v-if="errorMessage"
+              type="error"
+              density="comfortable"
+              variant="tonal"
+              class="asset-dialog__alert"
+            >
+              <div class="asset-dialog__alert-message">{{ errorMessage }}</div>
+              <v-btn size="small" variant="text" @click="retryLoading">重新尝试</v-btn>
+            </v-alert>
+
+            <div v-if="loading" class="asset-dialog__loading">
+              <v-progress-circular indeterminate color="primary" />
+            </div>
+
+            <div v-else ref="gridRef" class="asset-dialog__grid">
+              <div
+                v-for="asset in filteredAssets"
+                :key="asset.id"
+                class="asset-dialog__tile"
+                :class="{ 'asset-dialog__tile--selected': asset.id === selectedAssetId }"
+                :data-asset-id="asset.id"
+                @click="handleAssetClick(asset)"
+              >
+                <div class="asset-dialog__thumbnail">
+                  <v-img
+                    v-if="asset.thumbnail"
+                    :src="asset.thumbnail"
+                    :alt="asset.name"
+                    height="90"
+                    cover
+                  />
+                  <div
+                    v-else
+                    class="asset-dialog__thumbnail-placeholder"
+                    :style="{ backgroundColor: asset.previewColor || '#455A64' }"
+                  >
+                    {{ resolveInitials(asset) }}
+                  </div>
+                </div>
+                <div class="asset-dialog__meta">
+                  <div class="asset-dialog__name" :title="asset.name">{{ asset.name }}</div>
+                  <div class="asset-dialog__type">{{ asset.type }}</div>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="!loading && !filteredAssets.length" class="asset-dialog__empty">
+              暂无符合条件的资产
+            </div>
+          </div>
+          <div class="asset-dialog__footer">
+            <v-btn variant="text" size="small" @click="handleCancel">{{ cancelText ?? '取消' }}</v-btn>
+            <v-btn
+              color="primary"
+              variant="flat"
+              size="small"
+              :disabled="!selectedAsset"
+              @click="handleConfirm"
+            >
+              {{ confirmText ?? '确认' }}
+            </v-btn>
+          </div>
+        </div>
+      </div>
+    </transition>
+  </Teleport>
+</template>
+
+<style scoped>
+.asset-dialog-popover-enter-active,
+.asset-dialog-popover-leave-active {
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.asset-dialog-popover-enter-from,
+.asset-dialog-popover-leave-to {
+  opacity: 0;
+  transform: translateY(8px) scale(0.96);
+}
+
+.asset-dialog__wrapper {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 40;
+}
+
+.asset-dialog__popover {
+  position: fixed;
+  pointer-events: auto;
+  width: 320px;
+  max-width: 360px;
+  max-height: min(600px, calc(100vh - 32px));
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(14, 18, 24, 0.88);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.asset-dialog__header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 12px 14px 4px;
+}
+
+.asset-dialog__title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: rgba(233, 236, 241, 0.95);
+}
+
+.asset-dialog__search {
+  flex: 1;
+  max-width: 180px;
+  margin-left: auto;
+}
+
+.asset-dialog__body {
+  flex: 1;
+  padding: 8px 14px 8px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 300px;
+}
+
+.asset-dialog__alert {
+  align-self: stretch;
+}
+
+.asset-dialog__alert-message {
+  margin-bottom: 0.4rem;
+}
+
+.asset-dialog__loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 180px;
+}
+
+.asset-dialog__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 0.6rem;
+}
+
+.asset-dialog__tile {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(20, 24, 30, 0.8);
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.asset-dialog__tile:hover {
+  border-color: rgba(77, 208, 225, 0.85);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+}
+
+.asset-dialog__tile--selected {
+  border-color: rgba(77, 208, 225, 1);
+  box-shadow: 0 6px 18px rgba(0, 188, 212, 0.35);
+}
+
+.asset-dialog__thumbnail {
+  width: 100%;
+  height: 90px;
+  background: rgba(33, 150, 243, 0.18);
+  overflow: hidden;
+}
+
+.asset-dialog__thumbnail-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 90px;
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.asset-dialog__meta {
+  padding: 0.5rem 0.6rem 0.65rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.asset-dialog__name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: rgba(233, 236, 241, 0.95);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.asset-dialog__type {
+  font-size: 0.72rem;
+  color: rgba(233, 236, 241, 0.6);
+}
+
+.asset-dialog__empty {
+  padding: 12px 0 18px;
+  text-align: center;
+  color: rgba(233, 236, 241, 0.65);
+  font-size: 0.82rem;
+}
+
+.asset-dialog__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 14px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(10, 14, 20, 0.6);
+}
+</style>
