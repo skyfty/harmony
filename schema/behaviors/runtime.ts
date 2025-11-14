@@ -73,6 +73,7 @@ export type BehaviorRuntimeEvent =
       behaviorSequenceId: string
       behaviorId: string
       targetNodeId: string | null
+      caging: boolean
       token: string
     }
   | {
@@ -459,6 +460,7 @@ function createWatchEvent(state: BehaviorSequenceState, behavior: SceneBehavior)
     behaviorSequenceId: state.behaviorSequenceId,
     behaviorId: behavior.id,
     targetNodeId: params.targetNodeId ?? state.nodeId,
+    caging: params.caging === true,
     token,
   }
 }

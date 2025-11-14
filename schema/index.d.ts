@@ -40,7 +40,7 @@ export type GeometryType =
   | 'Torus'
   | 'TorusKnot';
 
-export type SceneNodeType = 'Mesh' | 'Light' | 'Group' | 'Camera' | GeometryType;
+export type SceneNodeType = 'Mesh' | 'Light' | 'Group' | 'Camera' |'Sky'| 'Env' | GeometryType;
 
 export type PrimitiveNodeLike = GeometryType | SceneNodeType | string | null | undefined
 
@@ -257,6 +257,8 @@ export interface ShowAlertBehaviorParams {
 export interface WatchBehaviorParams {
   /** Target scene node id to focus the camera on. */
   targetNodeId: string | null
+  /** Lock the camera on the target while watching. Defaults to disabled. */
+  caging?: boolean
 }
 
 export interface ShowPurposeBehaviorParams {

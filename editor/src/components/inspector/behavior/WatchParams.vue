@@ -14,16 +14,24 @@ const emit = defineEmits<{
 
 const params = computed<WatchBehaviorParams>(() => ({
   targetNodeId: props.modelValue?.targetNodeId ?? null,
+  caging: props.modelValue?.caging ?? false,
 }))
 
 const pickerRef = ref<{ cancelPicking: () => void } | null>(null)
 
-function updateParams(next: WatchBehaviorParams) {
-  emit('update:modelValue', next)
+function emitUpdate(patch: Partial<WatchBehaviorParams>) {
+  emit('update:modelValue', {
+    ...params.value,
+    ...patch,
+  })
 }
 
 function handleTargetChange(nodeId: string | null) {
-  updateParams({ targetNodeId: nodeId })
+  emitUpdate({ targetNodeId: nodeId })
+}
+
+function handleCagingChange(enabled: boolean) {
+  emitUpdate({ caging: enabled })
 }
 
 function handlePickStateChange(active: boolean) {
@@ -51,6 +59,15 @@ onBeforeUnmount(() => {
       selection-hint="点击场景中的节点进行选择，显示在左侧，右侧显示清除按钮。"
       @update:modelValue="handleTargetChange"
       @pick-state-change="handlePickStateChange"
+    />
+    <v-switch
+      :model-value="params.caging"
+      inset
+      color="primary"
+      density="compact"
+      hide-details
+      label="锁定观察时的相机"
+      @update:model-value="handleCagingChange(Boolean($event))"
     />
   </div>
 </template>
