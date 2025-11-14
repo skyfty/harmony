@@ -648,7 +648,6 @@ function handleEnvironmentDrop(event: DragEvent) {
               :model-value="isFogEnabled"
               density="compact"
               hide-details
-              inset
               color="primary"
               size="small"
               @update:model-value="handleFogToggle"
