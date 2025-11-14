@@ -9,9 +9,10 @@ import GuideboardPanel from '@/components/inspector/GuideboardPanel.vue'
 import ViewPointPanel from '@/components/inspector/ViewPointPanel.vue'
 import WarpGatePanel from '@/components/inspector/WarpGatePanel.vue'
 import GroundPanel from '@/components/inspector/GroundPanel.vue'
+import SkyPanel from '@/components/inspector/SkyPanel.vue'
 import BehaviorPanel from '@/components/inspector/BehaviorPanel.vue'
 import DisplayBoardPanel from '@/components/inspector/DisplayBoardPanel.vue'
-import { useSceneStore } from '@/stores/sceneStore'
+import { useSceneStore,SKY_NODE_ID,GROUND_NODE_ID } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 import type { BehaviorEventType, SceneBehavior, SceneNodeComponentState } from '@harmony/schema'
 import type { BehaviorActionDefinition } from '@schema/behaviors/definitions'
@@ -39,6 +40,7 @@ const props = defineProps<{
   captureViewportScreenshot?: () => Promise<Blob | null>
 }>()
 
+
 const emit = defineEmits<{
   (event: 'collapse'): void
   (event: 'toggle-placement'): void
@@ -60,7 +62,8 @@ const placementIcon = computed(() => (floating.value ? 'mdi-dock-right' : 'mdi-a
 const placementTitle = computed(() => (floating.value ? '停靠到右侧' : '浮动显示'))
 
 const isLightNode = computed(() => selectedNode.value?.nodeType === 'Light')
-const isGroundNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'Ground')
+const isGroundNode = computed(() => selectedNode.value?.id === GROUND_NODE_ID)
+const isSkyNode = computed(() => selectedNode.value?.id === SKY_NODE_ID)
 const showMaterialPanel = computed(
   () => !isLightNode.value && (selectedNode.value?.materials?.length ?? 0) > 0,
 )
@@ -86,7 +89,9 @@ function computeDefaultExpandedPanels() {
   const node = selectedNode.value
   const panels: string[] = []
 
-  if (node?.dynamicMesh?.type === 'Ground') {
+  if (node?.id === SKY_NODE_ID) {
+    panels.push('sky')
+  } else if (node?.id === GROUND_NODE_ID) {
     panels.push('ground')
   } else if (node?.nodeType === 'Light') {
     panels.push('light')
@@ -245,7 +250,9 @@ watch(
     if ((components.length > 0) || !selectedNode.value) {
       defaults.add('components')
     }
-    if (selectedNode.value?.dynamicMesh?.type === 'Ground') {
+    if (selectedNode.value?.id === SKY_NODE_ID) {
+      defaults.add('sky')
+    } else if (selectedNode.value?.id === GROUND_NODE_ID) {
       defaults.add('ground')
     } else if (selectedNode.value?.nodeType === 'Light') {
       defaults.add('light')
@@ -337,6 +344,7 @@ function handleAddComponent(type: string) {
             @open-details="handleOpenMaterialDetails"
             @close-details="handleMaterialPanelRequestCloseDetails"
           />
+          <SkyPanel v-if="isSkyNode" />
           <GroundPanel v-if="isGroundNode" />
 
           <div v-if="nodeComponents.length" class="component-list">

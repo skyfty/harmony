@@ -38,8 +38,7 @@ import { createPrimitiveMesh } from '@schema/geometry'
 import type {CameraProjection,CameraControlMode } from '@harmony/schema'
 
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
-import type { SkyboxParameterKey } from '@/types/skybox'
-import { SKYBOX_PRESETS, CUSTOM_SKYBOX_PRESET_ID, cloneSkyboxSettings } from '@/stores/skyboxPresets'
+import { cloneSkyboxSettings } from '@/stores/skyboxPresets'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
 import type { SceneExportOptions } from '@/types/scene-export'
 import { prepareGLBSceneExport, prepareJsonSceneExport } from '@/utils/sceneExport'
@@ -283,7 +282,6 @@ const canAlignSelection = computed(() => {
   }
   return sceneStore.selectedNodeIds.some((id) => id !== primaryId && !sceneStore.isNodeSelectionLocked(id))
 })
-const skyboxPresetList = SKYBOX_PRESETS
 const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((tool) => [tool.key, tool.value]))
 let activeCameraMode: CameraProjection = cameraProjectionMode.value
 
@@ -2002,29 +2000,6 @@ function applyGridVisibility(visible: boolean) {
 
 function applyAxesVisibility(visible: boolean) {
   axesHelper.visible = visible
-}
-
-function handleSkyboxPresetSelect(presetId: string) {
-  if (!presetId || presetId === CUSTOM_SKYBOX_PRESET_ID) {
-    return
-  }
-  sceneStore.applySkyboxPreset(presetId)
-}
-
-function handleSkyboxParameterChange(payload: { key: SkyboxParameterKey; value: number }) {
-  if (Number.isNaN(payload.value)) {
-    return
-  }
-  sceneStore.setSkyboxSettings(
-    {
-      [payload.key]: payload.value,
-    } as Partial<SceneSkyboxSettings>,
-    { markCustom: true },
-  )
-}
-
-function handleShadowsEnabledChange(enabled: boolean) {
-  sceneStore.setViewportShadowsEnabled(Boolean(enabled))
 }
 
 function handleAlignSelection(mode: AlignMode) {
@@ -7055,25 +7030,18 @@ defineExpose<SceneViewportHandle>({
       <ViewportToolbar
         :show-grid="gridVisible"
         :show-axes="axesVisible"
-        :camera-mode="cameraProjectionMode"
         :camera-control-mode="cameraControlMode"
         :can-drop-selection="canDropSelection"
         :can-align-selection="canAlignSelection"
-        :skybox-settings="skyboxSettings"
-        :skybox-presets="skyboxPresetList"
         :active-build-tool="activeBuildTool"
-        :shadows-enabled="shadowsEnabled"
         @reset-camera="resetCameraView"
         @drop-to-ground="dropSelectionToGround"
-        @select-skybox-preset="handleSkyboxPresetSelect"
-        @change-skybox-parameter="handleSkyboxParameterChange"
         @align-selection="handleAlignSelection"
         @capture-screenshot="handleCaptureScreenshot"
         @orbit-left="handleOrbitLeft"
         @orbit-right="handleOrbitRight"
         @toggle-camera-control="handleToggleCameraControlMode"
         @change-build-tool="handleBuildToolChange"
-        @change-shadows-enabled="handleShadowsEnabledChange"
       />
     </div>
     <div ref="gizmoContainerRef" class="viewport-gizmo-container"></div>

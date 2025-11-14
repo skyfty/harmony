@@ -95,16 +95,6 @@
         @click="toggleAxesVisibility"
       />
 
-      <SkyboxPresetSelector
-        :skybox-settings="skyboxSettings"
-        :skybox-presets="skyboxPresets"
-        :shadows-enabled="shadowsEnabled"
-        @select-skybox-preset="emit('select-skybox-preset', $event)"
-        @change-skybox-parameter="emit('change-skybox-parameter', $event)"
-        @change-shadows-enabled="emit('change-shadows-enabled', $event)"
-      />
-      <v-divider vertical />
-
       <v-btn
         icon="mdi-rotate-left"
         density="compact"
@@ -163,40 +153,31 @@
 
 <script setup lang="ts">
 import { computed, ref, toRefs } from 'vue'
-import type { SceneSkyboxSettings, CameraControlMode, CameraProjection } from '@harmony/schema'
-import type { SkyboxParameterKey, SkyboxPresetDefinition } from '@/types/skybox'
+import type { CameraControlMode } from '@harmony/schema'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { BuildTool } from '@/types/build-tool'
-import SkyboxPresetSelector from '@/components/common/SkyboxPresetSelector.vue'
 
 const GROUND_NODE_ID = 'harmony:ground'
 
 const props = defineProps<{
   showGrid: boolean
   showAxes: boolean
-  cameraMode: CameraProjection
   canDropSelection: boolean
   canAlignSelection: boolean
-  skyboxSettings: SceneSkyboxSettings
   cameraControlMode: CameraControlMode
-  skyboxPresets: SkyboxPresetDefinition[]
   activeBuildTool: BuildTool | null
-  shadowsEnabled: boolean
 }>()
 
 const emit = defineEmits<{
   (event: 'reset-camera'): void
   (event: 'drop-to-ground'): void
-  (event: 'select-skybox-preset', presetId: string): void
-  (event: 'change-skybox-parameter', payload: { key: SkyboxParameterKey; value: number }): void
   (event: 'align-selection', mode: AlignMode): void
   (event: 'capture-screenshot'): void
   (event: 'orbit-left'): void
   (event: 'orbit-right'): void
   (event: 'toggle-camera-control'): void
   (event: 'change-build-tool', tool: BuildTool | null): void
-  (event: 'change-shadows-enabled', enabled: boolean): void
 }>()
 
 const {
@@ -204,11 +185,8 @@ const {
   showAxes,
   canDropSelection,
   canAlignSelection,
-  skyboxSettings,
-  skyboxPresets,
   cameraControlMode,
   activeBuildTool,
-  shadowsEnabled,
 } = toRefs(props)
 const sceneStore = useSceneStore()
 

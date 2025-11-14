@@ -1,6 +1,7 @@
 import type { PresetSceneDetail } from '@/types/presetScene'
 
 const SCENE_TIMESTAMP = '2024-01-01T00:00:00.000Z'
+const SKY_NODE_ID = 'harmony:sky'
 
 const DEFAULT_TEXTURE_SLOTS = {
   albedo: null,
@@ -71,6 +72,41 @@ const createGroundNode = (width: number, depth: number, color: string) => ({
     textureName: null,
   },
 })
+
+type SceneNodeDetail = {
+  id: string
+  dynamicMesh?: { type?: string }
+  [key: string]: unknown
+}
+
+const createSkyNode = (): SceneNodeDetail => ({
+  id: SKY_NODE_ID,
+  name: 'Sky',
+  nodeType: 'Group',
+  position: vec3(0, 0, 0),
+  rotation: vec3(0, 0, 0),
+  scale: vec3(1, 1, 1),
+  offset: vec3(0, 0, 0),
+  visible: true,
+  locked: true,
+  children: [],
+  materials: [],
+})
+
+const withEnvironmentNodes = (nodes?: SceneNodeDetail[] | null): SceneNodeDetail[] => {
+  const source = Array.isArray(nodes) ? nodes : []
+  const filtered = source.filter((node) => node.id !== SKY_NODE_ID)
+  const hasSky = source.some((node) => node.id === SKY_NODE_ID)
+  if (hasSky) {
+    return [...filtered]
+  }
+  const skyNode = createSkyNode()
+  const groundIndex = filtered.findIndex((node) => node.id === 'harmony:ground' || node.dynamicMesh?.type === 'Ground')
+  const next = [...filtered]
+  const insertIndex = groundIndex >= 0 ? groundIndex + 1 : 0
+  next.splice(insertIndex, 0, skyNode)
+  return next
+}
 
 const createRectangleWallSegments = (width: number, depth: number, height: number, thickness: number) => {
   const halfW = width / 2
@@ -291,7 +327,7 @@ const createLoungeChair = (id: string, name: string, position: Vector3LikeLitera
 const baseDocument = (overrides: Partial<PresetSceneDetail['document']>): PresetSceneDetail['document'] => ({
   name: overrides.name ?? '未命名预置场景',
   thumbnail: overrides.thumbnail ?? null,
-  nodes: overrides.nodes ?? [],
+  nodes: withEnvironmentNodes(overrides.nodes as SceneNodeDetail[] | undefined),
   materials: overrides.materials ?? [],
   selectedNodeId: overrides.selectedNodeId ?? 'harmony:ground',
   selectedNodeIds: overrides.selectedNodeIds ?? ['harmony:ground'],

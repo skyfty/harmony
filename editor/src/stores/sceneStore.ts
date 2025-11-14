@@ -217,6 +217,8 @@ const NODE_PREFAB_PREVIEW_COLOR = '#7986CB'
 const PREFAB_PLACEMENT_EPSILON = 1e-3
 
 export const PREFAB_SOURCE_METADATA_KEY = '__prefabAssetId'
+export const GROUND_NODE_ID = 'harmony:ground'
+export const SKY_NODE_ID = 'harmony:sky'
 
 
 const DEFAULT_WALL_HEIGHT = WALL_DEFAULT_HEIGHT
@@ -234,7 +236,6 @@ const MAX_SPAWN_ATTEMPTS = 64
 const COLLISION_MARGIN = 0.35
 const DEFAULT_SPAWN_RADIUS = GRID_CELL_SIZE * 0.75
 const GROUND_CONTACT_EPSILON = 1e-4
-const GROUND_NODE_ID = 'harmony:ground'
 const DEFAULT_GROUND_EXTENT = 100
 const MIN_GROUND_EXTENT = 1
 const MAX_GROUND_EXTENT = 20000
@@ -1377,6 +1378,55 @@ function isGroundNode(node: SceneNode): boolean {
   return node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'Ground'
 }
 
+function createSkySceneNode(overrides: { visible?: boolean; userData?: Record<string, unknown> | null } = {}): SceneNode {
+  return {
+    id: SKY_NODE_ID,
+    name: 'Sky',
+    nodeType: 'Group',
+    position: createVector(0, 0, 0),
+    rotation: createVector(0, 0, 0),
+    scale: createVector(1, 1, 1),
+    offset: createVector(0, 0, 0),
+    visible: overrides.visible ?? true,
+    locked: true,
+    userData: overrides.userData ?? null,
+  }
+}
+
+function isSkyNode(node: SceneNode): boolean {
+  return node.id === SKY_NODE_ID
+}
+
+function normalizeSkySceneNode(node: SceneNode | null | undefined): SceneNode {
+  if (!node) {
+    return createSkySceneNode()
+  }
+  const visible = node.visible ?? true
+  const userData = clonePlainRecord(node.userData as Record<string, unknown> | null) ?? null
+  return createSkySceneNode({ visible, userData })
+}
+
+function ensureSkyNode(nodes: SceneNode[]): SceneNode[] {
+  let skyNode: SceneNode | null = null
+  const others: SceneNode[] = []
+  nodes.forEach((node) => {
+    if (!skyNode && isSkyNode(node)) {
+      skyNode = normalizeSkySceneNode(node)
+      return
+    }
+    if (!isSkyNode(node)) {
+      others.push(node)
+    }
+  })
+  if (!skyNode) {
+    skyNode = createSkySceneNode()
+  }
+  const insertIndex = others.findIndex((node) => isGroundNode(node))
+  const next = [...others]
+  next.splice(insertIndex >= 0 ? insertIndex + 1 : 0, 0, skyNode)
+  return next
+}
+
 function normalizeGroundSceneNode(node: SceneNode | null | undefined, settings?: GroundSettings): SceneNode {
   if (!node) {
     return createGroundSceneNode({}, settings)
@@ -2164,7 +2214,7 @@ const initialMaterials: SceneMaterial[] = [
   }, { id: DEFAULT_SCENE_MATERIAL_ID }),
 ]
 
-const initialNodes: SceneNode[] = [createGroundSceneNode()]
+const initialNodes: SceneNode[] = ensureSkyNode([createGroundSceneNode()])
 
 const placeholderDownloadWatchers = new Map<string, WatchStopHandle>()
 
@@ -2520,7 +2570,7 @@ function evaluateWarpGateAttributes(
 const initialSceneDocument = createSceneDocument('Sample Scene', {
   nodes: initialNodes,
   materials: initialMaterials,
-  selectedNodeId: initialNodes[0]?.id ?? null,
+  selectedNodeId: GROUND_NODE_ID,
   resourceProviderId: 'builtin',
   assetCatalog: initialAssetCatalog,
   assetIndex: initialAssetIndex,
@@ -2621,6 +2671,9 @@ function collectClipboardPayload(nodes: SceneNode[], ids: string[]): { entries: 
   const topLevelIds = filterTopLevelNodeIds(uniqueIds, parentMap)
   const entries: ClipboardEntry[] = []
   topLevelIds.forEach((id) => {
+    if (id === GROUND_NODE_ID || id === SKY_NODE_ID) {
+      return
+    }
     const found = findNodeById(nodes, id)
     if (found) {
       entries.push({ sourceId: id, node: cloneNode(found) })
@@ -3246,9 +3299,9 @@ function cloneNode(node: SceneNode): SceneNode {
 function createDefaultSceneNodes(settings?: GroundSettings): SceneNode[] {
   const nodes = initialNodes.map((node) => cloneNode(node))
   if (!settings) {
-    return nodes
+    return ensureSkyNode(nodes)
   }
-  return ensureGroundNode(nodes, settings)
+  return ensureSkyNode(ensureGroundNode(nodes, settings))
 }
 
 function cloneSceneNodes(nodes: SceneNode[]): SceneNode[] {
@@ -4044,11 +4097,12 @@ function createSceneDocument(
     options.groundSettings
       ?? (existingGroundMesh ? { width: existingGroundMesh.width, depth: existingGroundMesh.depth } : undefined),
   )
-  const nodes = ensureGroundNode(clonedNodes, groundSettings)
+  const nodes = ensureSkyNode(ensureGroundNode(clonedNodes, groundSettings))
   const camera = options.camera ? cloneCameraState(options.camera) : cloneCameraState(defaultCameraState)
-  let selectedNodeId = options.selectedNodeId ?? (nodes.find((node) => !isGroundNode(node))?.id ?? null)
+  const findDefaultSelectableNode = () => nodes.find((node) => !isGroundNode(node) && !isSkyNode(node))?.id ?? null
+  let selectedNodeId = options.selectedNodeId ?? findDefaultSelectableNode()
   if (selectedNodeId && !nodes.some((node) => node.id === selectedNodeId)) {
-    selectedNodeId = nodes.find((node) => !isGroundNode(node))?.id ?? null
+    selectedNodeId = findDefaultSelectableNode()
   }
   const selectedNodeIds = normalizeSelectionIds(nodes, options.selectedNodeIds ?? (selectedNodeId ? [selectedNodeId] : []))
   const now = new Date().toISOString()
@@ -4147,6 +4201,11 @@ function commitSceneSnapshot(
 ) {
   if (!store.currentSceneId) {
     return
+  }
+
+  const normalizedNodes = ensureSkyNode(ensureGroundNode(store.nodes, store.groundSettings))
+  if (normalizedNodes !== store.nodes) {
+    store.nodes = normalizedNodes
   }
 
   normalizeCurrentSceneMeta(store)
@@ -4316,6 +4375,9 @@ function insertNodeMutable(
   for (let index = 0; index < nodes.length; index += 1) {
     const current = nodes[index]!
     if (current.id === targetId) {
+      if (current.id === SKY_NODE_ID && position === 'inside') {
+        return false
+      }
       if (position === 'inside') {
         const children = current.children ? [...current.children, node] : [node]
         current.children = children
@@ -4639,7 +4701,7 @@ export const useSceneStore = defineStore('scene', {
           normalized,
         )
       }
-      const updatedNodes = ensureGroundNode(clonedNodes, normalized)
+  const updatedNodes = ensureSkyNode(ensureGroundNode(clonedNodes, normalized))
       this.nodes = updatedNodes
       commitSceneSnapshot(this)
       return true
@@ -5471,6 +5533,9 @@ export const useSceneStore = defineStore('scene', {
       return node?.locked ?? false
     },
     setNodeSelectionLock(id: string, locked: boolean) {
+      if (id === GROUND_NODE_ID || id === SKY_NODE_ID) {
+        return
+      }
       let updated = false
       visitNode(this.nodes, id, (node) => {
         const current = node.locked ?? false
@@ -5498,6 +5563,9 @@ export const useSceneStore = defineStore('scene', {
       const apply = (nodes: SceneNode[]) => {
         nodes.forEach((node) => {
           const current = node.locked ?? false
+          if (node.id === GROUND_NODE_ID || node.id === SKY_NODE_ID) {
+            return
+          }
           if (current !== locked) {
             node.locked = locked
             updated = true
@@ -6742,8 +6810,15 @@ export const useSceneStore = defineStore('scene', {
       const { nodeId, targetId, position } = payload
       if (!nodeId) return false
       if (targetId && nodeId === targetId) return false
+      if (nodeId === GROUND_NODE_ID || nodeId === SKY_NODE_ID) {
+        return false
+      }
 
       if (targetId && isDescendantNode(this.nodes, nodeId, targetId)) {
+        return false
+      }
+
+      if (targetId === SKY_NODE_ID && position === 'inside') {
         return false
       }
 
@@ -6763,6 +6838,10 @@ export const useSceneStore = defineStore('scene', {
           return false
         }
         newParentId = parentMap.get(targetId) ?? null
+      }
+
+      if (newParentId === SKY_NODE_ID) {
+        return false
       }
 
       let updatedLocal: { position: THREE.Vector3; rotation: THREE.Vector3; scale: THREE.Vector3 } | null = null
@@ -7130,6 +7209,9 @@ export const useSceneStore = defineStore('scene', {
       let rotation: Vector3Like = { ...baseRotation }
       let scale: Vector3Like = { ...baseScale }
       let targetParentId = payload.parentId ?? null
+      if (targetParentId === SKY_NODE_ID) {
+        targetParentId = null
+      }
       const shouldSnapToGrid =
         payload.snapToGrid !== undefined ? payload.snapToGrid : !(payload.editorFlags?.ignoreGridSnapping)
       let workingObject: Object3D
@@ -7387,7 +7469,10 @@ export const useSceneStore = defineStore('scene', {
       componentManager.attachRuntime(node, payload.object)
       componentManager.syncNode(node)
       let nextTree: SceneNode[]
-      const parentId = payload.parentId ?? null
+      let parentId = payload.parentId ?? null
+      if (parentId === SKY_NODE_ID) {
+        parentId = null
+      }
       if (parentId) {
         const workingTree = [...this.nodes]
         const inserted = insertNodeMutable(workingTree, parentId, node, 'inside')
@@ -7979,7 +8064,7 @@ export const useSceneStore = defineStore('scene', {
       if (!Array.isArray(ids) || ids.length === 0) {
         return
       }
-      const existingIds = ids.filter((id) => id !== GROUND_NODE_ID && !!findNodeById(this.nodes, id))
+  const existingIds = ids.filter((id) => id !== GROUND_NODE_ID && id !== SKY_NODE_ID && !!findNodeById(this.nodes, id))
       if (!existingIds.length) {
         return
       }
@@ -8008,7 +8093,7 @@ export const useSceneStore = defineStore('scene', {
 
       const parentMap = buildParentMap(this.nodes)
       const validIds = selection.filter((id) => {
-        if (!id || id === GROUND_NODE_ID) {
+        if (!id || id === GROUND_NODE_ID || id === SKY_NODE_ID) {
           return false
         }
         if (this.isNodeSelectionLocked(id)) {
