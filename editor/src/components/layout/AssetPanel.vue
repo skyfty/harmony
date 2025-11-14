@@ -68,7 +68,6 @@ const selectedAssetIds = ref<string[]>([])
 const dropActive = ref(false)
 const dropProcessing = ref(false)
 const dropDragDepth = ref(0)
-const dropFeedback = ref<{ kind: 'success' | 'error'; message: string } | null>(null)
 let dropFeedbackTimer: number | null = null
 const uploadDialogOpen = ref(false)
 
@@ -575,7 +574,6 @@ function isAssetDragging(assetId: string) {
 const categoryTree = ref<ResourceCategory[]>([])
 const categoryTreeLoaded = ref(false)
 const categoryTreeLoading = ref(false)
-const categoryTreeError = ref<string | null>(null)
 const categoryPath = ref<ResourceCategory[]>([])
 
 interface CategoryBreadcrumbItem {
@@ -728,13 +726,12 @@ async function loadCategoryTree(options: { force?: boolean } = {}): Promise<void
     return
   }
   categoryTreeLoading.value = true
-  categoryTreeError.value = null
   try {
     const categories = await fetchResourceCategories()
     categoryTree.value = Array.isArray(categories) ? categories : []
     categoryTreeLoaded.value = true
   } catch (error) {
-  categoryTreeError.value = (error as Error).message ?? 'Failed to load categories'
+    console.error('Failed to load categories', error)
   } finally {
     categoryTreeLoading.value = false
   }
@@ -1193,13 +1190,12 @@ function clearDropFeedbackTimer() {
 }
 
 function showDropFeedback(kind: 'success' | 'error', message: string) {
-  dropFeedback.value = { kind, message }
+  console.log(`[Asset Gallery] ${kind.toUpperCase()}: ${message}`)
   if (typeof window === 'undefined') {
     return
   }
   clearDropFeedbackTimer()
   dropFeedbackTimer = window.setTimeout(() => {
-    dropFeedback.value = null
     dropFeedbackTimer = null
   }, 4000)
 }
@@ -1638,7 +1634,6 @@ async function handleGalleryDrop(event: DragEvent) {
   dropActive.value = false
   dropDragDepth.value = 0
   clearDropFeedbackTimer()
-  dropFeedback.value = null
   try {
     const { assets, errors } = await processAssetDrop(event.dataTransfer)
     if (assets.length) {
@@ -2072,7 +2067,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
       <Pane :size="galleryPaneSize">
         <div
           class="project-gallery"
-          :class="{ 'is-drop-target': dropOverlayVisible, 'has-drop-feedback': dropFeedback }"
+          :class="{ 'is-drop-target': dropOverlayVisible }"
           @dragenter="handleGalleryDragEnter"
           @dragover="handleGalleryDragOver"
           @dragleave="handleGalleryDragLeave"
@@ -2194,18 +2189,6 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
               </template>
             </div>
             
-          </div>
-          <div v-if="categoryTreeError" class="category-error-text">
-            {{ categoryTreeError }}
-          </div>
-          <div
-            v-if="dropFeedback"
-            :class="[
-              'drop-feedback',
-              dropFeedback.kind === 'error' ? 'drop-feedback--error' : 'drop-feedback--success',
-            ]"
-          >
-            {{ dropFeedback.message }}
           </div>
           <v-divider />
           <div class="project-gallery-scroll">

@@ -1189,10 +1189,6 @@ function initializeWarpGateBehavior(nodeId: string): void {
       type: 'hidePurpose',
       params: {},
     },
-    {
-      type: 'look',
-      params: {},
-    },
   ])
 
   sceneStore.updateNodeComponentProps(nodeId, behaviorComponent.id, { behaviors: nextBehaviors })

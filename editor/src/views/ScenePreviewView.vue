@@ -57,6 +57,7 @@ const lastUpdateTime = ref<string | null>(null)
 const warningMessages = ref<string[]>([])
 const isFirstPersonMouseControlEnabled = ref(true)
 const isVolumeMenuOpen = ref(false)
+const isCameraCaged = ref(false)
 
 const resourceProgress = reactive({
 	active: false,
@@ -884,11 +885,13 @@ watch(controlMode, (mode) => {
 })
 
 watch(isFirstPersonMouseControlEnabled, (enabled) => {
-	if (controlMode.value === 'first-person' && firstPersonControls) {
-		firstPersonControls.activeLook = enabled
+	if (enabled && controlMode.value === 'first-person' && firstPersonControls && !isCameraCaged.value) {
 		resetFirstPersonPointerDelta()
+		clampFirstPersonPitch(true)
+		syncFirstPersonOrientation()
+		syncLastFirstPersonStateFromCamera()
 	}
-	updateCanvasCursor()
+	updateCameraControlActivation()
 })
 
 function isInputLikeElement(target: EventTarget | null): boolean {
@@ -903,16 +906,31 @@ function isInputLikeElement(target: EventTarget | null): boolean {
 	return element.isContentEditable
 }
 
+function updateCameraControlActivation(): void {
+	const caged = isCameraCaged.value
+	if (firstPersonControls) {
+		const enableFirstPerson = controlMode.value === 'first-person' && !caged
+		firstPersonControls.enabled = enableFirstPerson
+		firstPersonControls.activeLook = enableFirstPerson && isFirstPersonMouseControlEnabled.value
+	}
+	if (mapControls) {
+		mapControls.enabled = controlMode.value === 'third-person' && !caged
+	}
+	updateCanvasCursor()
+}
+
 function updateCanvasCursor() {
 	const canvas = renderer?.domElement
 	if (!canvas) {
 		return
 	}
 	if (controlMode.value !== 'first-person') {
-		canvas.style.cursor = mapControls?.enabled ? 'grab' : 'default'
+		const canOrbit = !isCameraCaged.value && Boolean(mapControls?.enabled)
+		canvas.style.cursor = canOrbit ? 'grab' : 'default'
 		return
 	}
-	canvas.style.cursor = isFirstPersonMouseControlEnabled.value ? 'crosshair' : 'default'
+	const allowLook = isFirstPersonMouseControlEnabled.value && !isCameraCaged.value
+	canvas.style.cursor = allowLook ? 'crosshair' : 'default'
 }
 
 function setFirstPersonMouseControl(enabled: boolean) {
@@ -920,20 +938,31 @@ function setFirstPersonMouseControl(enabled: boolean) {
 		return
 	}
 	isFirstPersonMouseControlEnabled.value = enabled
-	if (controlMode.value === 'first-person' && firstPersonControls) {
-		firstPersonControls.activeLook = enabled
+	if (enabled && controlMode.value === 'first-person' && firstPersonControls && !isCameraCaged.value) {
 		resetFirstPersonPointerDelta()
-		if (enabled) {
-			clampFirstPersonPitch(true)
-			syncFirstPersonOrientation()
-			syncLastFirstPersonStateFromCamera()
-		}
+		clampFirstPersonPitch(true)
+		syncFirstPersonOrientation()
+		syncLastFirstPersonStateFromCamera()
 	}
-	updateCanvasCursor()
+	updateCameraControlActivation()
 }
 
 function toggleFirstPersonMouseControl() {
 	setFirstPersonMouseControl(!isFirstPersonMouseControlEnabled.value)
+}
+
+function setCameraCaging(enabled: boolean) {
+	if (isCameraCaged.value === enabled) {
+		return
+	}
+	isCameraCaged.value = enabled
+	updateCameraControlActivation()
+	if (!enabled && controlMode.value === 'first-person' && firstPersonControls && isFirstPersonMouseControlEnabled.value) {
+		resetFirstPersonPointerDelta()
+		clampFirstPersonPitch(true)
+		syncFirstPersonOrientation()
+		syncLastFirstPersonStateFromCamera()
+	}
 }
 
 function clearBehaviorAlert() {
@@ -1664,7 +1693,7 @@ function handleTriggerBehaviorEvent(event: Extract<BehaviorRuntimeEvent, { type:
 	processBehaviorEvents(followUps)
 }
 
-function performWatchFocus(targetNodeId: string | null): { success: boolean; message?: string } {
+function performWatchFocus(targetNodeId: string | null, caging = false): { success: boolean; message?: string } {
 	const activeCamera = camera
 	if (!activeCamera) {
 		return { success: false, message: 'Camera unavailable' }
@@ -1718,12 +1747,13 @@ function performWatchFocus(targetNodeId: string | null): { success: boolean; mes
 		activeCamera.lookAt(focusPoint)
 		syncLastFirstPersonStateFromCamera()
 	}
+	setCameraCaging(Boolean(caging))
 	return { success: true }
 }
 
 function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watch-node' }>) {
 	const targetId = event.targetNodeId ?? event.nodeId ?? null
-	const result = performWatchFocus(targetId)
+	const result = performWatchFocus(targetId, event.caging)
 	if (!result.success) {
 		resolveBehaviorToken(event.token, { type: 'fail', message: result.message })
 		return
@@ -1759,7 +1789,7 @@ function handlePurposeWatchClick(): void {
 		console.warn('[ScenePreview] Watch button ignored: no target node available')
 		return
 	}
-	const result = performWatchFocus(targetId)
+	const result = performWatchFocus(targetId, true)
 	if (!result.success) {
 		console.warn('[ScenePreview] Failed to move camera to watch target', result.message)
 	}
@@ -1951,6 +1981,7 @@ function resetCameraToLevelView() {
 		return
 	}
 	activeCameraLookTween = null
+	setCameraCaging(false)
 	if (controlMode.value === 'first-person' && firstPersonControls) {
 		camera.position.y = CAMERA_HEIGHT
 		tempDirection.set(0, 0, 0)
@@ -2063,11 +2094,6 @@ function applyControlMode(mode: ControlMode) {
 	}
 	activeCameraLookTween = null
 	if (mode === 'first-person') {
-		mapControls && (mapControls.enabled = false)
-		firstPersonControls && (firstPersonControls.enabled = true)
-		if (firstPersonControls) {
-			firstPersonControls.activeLook = isFirstPersonMouseControlEnabled.value
-		}
 		activeCamera.position.copy(lastFirstPersonState.position)
 		activeCamera.position.y = CAMERA_HEIGHT
 		const target = new THREE.Vector3().copy(lastFirstPersonState.position).add(lastFirstPersonState.direction)
@@ -2077,13 +2103,11 @@ function applyControlMode(mode: ControlMode) {
 		resetFirstPersonPointerDelta()
 		syncLastFirstPersonStateFromCamera()
 	} else {
-		firstPersonControls && (firstPersonControls.enabled = false)
-		mapControls && (mapControls.enabled = true)
 		activeCamera.position.copy(lastOrbitState.position)
 		mapControls?.target.copy(lastOrbitState.target)
 		mapControls?.update()
 	}
-	updateCanvasCursor()
+	updateCameraControlActivation()
 }
 
 function initRenderer() {
@@ -2149,8 +2173,6 @@ function initControls() {
 	firstPersonControls.lookSpeed = FIRST_PERSON_LOOK_SPEED
 	firstPersonControls.movementSpeed = FIRST_PERSON_MOVE_SPEED
 	firstPersonControls.lookVertical = true
-	firstPersonControls.activeLook = isFirstPersonMouseControlEnabled.value
-	firstPersonControls.enabled = controlMode.value === 'first-person'
 
 	mapControls = new MapControls(camera, renderer.domElement)
 	mapControls.enableDamping = false
@@ -2158,7 +2180,6 @@ function initControls() {
 	mapControls.maxPolarAngle = Math.PI / 2 - 0.05
 	mapControls.minDistance = 1
 	mapControls.maxDistance = 200
-	mapControls.enabled = controlMode.value === 'third-person'
 	mapControls.target.copy(lastOrbitState.target)
 	mapControls.addEventListener('start', () => {
 		activeCameraLookTween = null
@@ -2297,6 +2318,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	resetAnimationControllers()
 	hidePurposeControls()
 	activeCameraLookTween = null
+	setCameraCaging(false)
 	dismissBehaviorAlert()
 	resetLanternOverlay()
 	resetAssetResolutionCaches()

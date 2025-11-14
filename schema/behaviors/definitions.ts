@@ -162,6 +162,7 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
     createDefaultParams(): WatchBehaviorParams {
       return {
         targetNodeId: null,
+        caging: false,
       }
     },
   },
@@ -529,6 +530,7 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
         type: 'watch',
         params: {
           targetNodeId: params?.targetNodeId ?? null,
+          caging: params?.caging === true,
         },
       }
     }
@@ -762,6 +764,7 @@ export function ensureBehaviorParams(
           type: 'watch',
           params: {
             targetNodeId: params?.targetNodeId ?? null,
+            caging: params?.caging === true,
           },
         }
       }

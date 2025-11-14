@@ -219,6 +219,7 @@ const PREFAB_PLACEMENT_EPSILON = 1e-3
 export const PREFAB_SOURCE_METADATA_KEY = '__prefabAssetId'
 export const GROUND_NODE_ID = 'harmony:ground'
 export const SKY_NODE_ID = 'harmony:sky'
+export const ENV_NODE_ID = 'harmony:env'
 
 
 const DEFAULT_WALL_HEIGHT = WALL_DEFAULT_HEIGHT
@@ -1382,13 +1383,14 @@ function createSkySceneNode(overrides: { visible?: boolean; userData?: Record<st
   return {
     id: SKY_NODE_ID,
     name: 'Sky',
-    nodeType: 'Group',
+    nodeType: 'Sky',
     position: createVector(0, 0, 0),
     rotation: createVector(0, 0, 0),
     scale: createVector(1, 1, 1),
     offset: createVector(0, 0, 0),
     visible: overrides.visible ?? true,
     locked: true,
+    editorFlags: { editorOnly: true },
     userData: overrides.userData ?? null,
   }
 }

@@ -67,6 +67,15 @@ const isSkyNode = computed(() => selectedNode.value?.id === SKY_NODE_ID)
 const showMaterialPanel = computed(
   () => !isLightNode.value && (selectedNode.value?.materials?.length ?? 0) > 0,
 )
+const showTransformPanel = computed(() => {
+  return selectedNode.value?.id !== SKY_NODE_ID && selectedNode.value?.id !== GROUND_NODE_ID;
+})
+
+const showAddComponentButton = computed(() => {
+  return selectedNode.value?.id !== SKY_NODE_ID;
+
+})
+
 const nodeComponents = computed<SceneNodeComponentState[]>(() =>
   Object.values(selectedNode.value?.components ?? {}).filter(
     (entry): entry is SceneNodeComponentState => Boolean(entry),
@@ -336,7 +345,7 @@ function handleAddComponent(type: string) {
             variant="accordion"
             class="inspector-panels"
           >
-          <TransformPanel />
+          <TransformPanel v-if="showTransformPanel"/>
           <LightPanel v-if="isLightNode"/>
           <MaterialPanel
             v-else-if="showMaterialPanel"
@@ -361,7 +370,7 @@ function handleAddComponent(type: string) {
             </div>
           </div>
 
-          <div class="component-actions">
+          <div class="component-actions" v-if="showAddComponentButton">
             <v-menu location="top" origin="auto" transition="null" v-if="availableComponents.length">
               <template #activator="{ props }">
                 <v-btn v-bind="props"
