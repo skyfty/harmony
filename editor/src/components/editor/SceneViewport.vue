@@ -121,6 +121,7 @@ let nodeFlashIntervalHandle: number | null = null
 let nodeFlashTimeoutHandle: number | null = null
 let nodeFlashActiveToken: number | null = null
 let sky: Sky | null = null
+let shouldRenderSkyBackground = true
 let pmremGenerator: THREE.PMREMGenerator | null = null
 let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null
 let fallbackDirectionalLight: THREE.DirectionalLight | null = null
@@ -2738,6 +2739,18 @@ function initScene() {
   applyCameraState(props.cameraState)
 }
 
+function syncSkyVisibility() {
+  if (!sky) {
+    return
+  }
+  sky.visible = shouldRenderSkyBackground
+}
+
+function setSkyBackgroundEnabled(enabled: boolean) {
+  shouldRenderSkyBackground = enabled
+  syncSkyVisibility()
+}
+
 function ensureSkyExists() {
   if (!scene || sky) {
     return
@@ -2748,6 +2761,7 @@ function ensureSkyExists() {
   sky.scale.setScalar(SKY_SCALE)
   sky.frustumCulled = false
   scene.add(sky)
+  syncSkyVisibility()
 }
 
 function applySkyboxSettingsToScene(settings: SceneSkyboxSettings | null) {
@@ -2824,7 +2838,11 @@ function updateSkyLighting(settings: SceneSkyboxSettings) {
     skyEnvironmentTarget = null
   }
 
+  const previousVisibility = sky.visible
+  sky.visible = true
   skyEnvironmentTarget = pmremGenerator.fromScene(sky as unknown as THREE.Scene)
+  sky.visible = previousVisibility
+  syncSkyVisibility()
   if (scene) {
     scene.environment = skyEnvironmentTarget.texture
     scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY
@@ -3028,18 +3046,23 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
     return false
   }
 
+  if (background.mode === 'skybox') {
+    disposeBackgroundResources()
+    setSkyBackgroundEnabled(true)
+    scene.background = null
+    return true
+  }
+
+  setSkyBackgroundEnabled(false)
+
   if (background.mode === 'solidColor') {
-    if (backgroundTexture || backgroundAssetId) {
-      disposeBackgroundResources()
-    }
+    disposeBackgroundResources()
     scene.background = new THREE.Color(background.solidColor)
     return true
   }
 
   if (!background.hdriAssetId) {
-    if (backgroundTexture || backgroundAssetId) {
-      disposeBackgroundResources()
-    }
+    disposeBackgroundResources()
     scene.background = new THREE.Color(background.solidColor)
     return true
   }

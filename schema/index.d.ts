@@ -497,7 +497,7 @@ export interface SceneSkyboxSettings {
   azimuth: number
 }
 
-export type EnvironmentBackgroundMode = 'solidColor' | 'hdri'
+export type EnvironmentBackgroundMode = 'skybox' | 'solidColor' | 'hdri'
 export type EnvironmentMapMode = 'skybox' | 'custom'
 export type EnvironmentFogMode = 'none' | 'exp'
 

@@ -55,7 +55,7 @@
     </v-autocomplete>
 
     <v-dialog v-model="createDialog" max-width="420">
-      <v-card>
+      <v-card class="create-series-dialog__popover">
         <v-card-title>创建新系列</v-card-title>
         <v-card-text>
           <v-text-field v-model="createForm.name" label="系列名称" required autofocus />
@@ -197,6 +197,13 @@ async function submitCreate(): Promise<void> {
   width: 100%;
 }
 
+.create-series-dialog__popover {
+  background-color: rgba(18, 22, 28, 0.72);
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
+}
 .series-item__title {
   display: flex;
   align-items: center;

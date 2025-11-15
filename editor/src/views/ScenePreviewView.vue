@@ -13,6 +13,7 @@ import type {
 	SceneNodeComponentState,
 	SceneSkyboxSettings,
 } from '@harmony/schema'
+import type { EnvironmentBackgroundMode } from '@/types/environment'
 import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
 import { subscribeToScenePreview } from '@/utils/previewChannel'
 import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
@@ -199,7 +200,7 @@ const DEFAULT_ENVIRONMENT_FOG_COLOR = '#516175'
 const DEFAULT_ENVIRONMENT_FOG_DENSITY = 0.02
 const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
 	background: {
-		mode: 'solidColor',
+		mode: 'skybox',
 		solidColor: DEFAULT_ENVIRONMENT_BACKGROUND_COLOR,
 		hdriAssetId: null,
 	},
@@ -247,6 +248,7 @@ let rootGroup: THREE.Group | null = null
 let fallbackLight: THREE.HemisphereLight | null = null
 let sunDirectionalLight: THREE.DirectionalLight | null = null
 let sky: Sky | null = null
+let shouldRenderSkyBackground = true
 let pmremGenerator: THREE.PMREMGenerator | null = null
 let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null
 let pendingSkyboxSettings: SceneSkyboxSettings | null = null
@@ -369,7 +371,12 @@ function cloneEnvironmentSettingsLocal(
 	const backgroundSource = source?.background ?? null
 	const environmentMapSource = source?.environmentMap ?? null
 
-	const backgroundMode = backgroundSource?.mode === 'hdri' ? 'hdri' : 'solidColor'
+	let backgroundMode: EnvironmentBackgroundMode = 'skybox'
+	if (backgroundSource?.mode === 'hdri') {
+		backgroundMode = 'hdri'
+	} else if (backgroundSource?.mode === 'solidColor') {
+		backgroundMode = 'solidColor'
+	}
 	const environmentMapMode = environmentMapSource?.mode === 'custom' ? 'custom' : 'skybox'
 	const fogMode = source?.fogMode === 'exp' ? 'exp' : 'none'
 
@@ -2477,6 +2484,18 @@ function disposeSkyResources() {
 	sky = null
 }
 
+function syncSkyVisibility() {
+	if (!sky) {
+		return
+	}
+	sky.visible = shouldRenderSkyBackground
+}
+
+function setSkyBackgroundEnabled(enabled: boolean) {
+	shouldRenderSkyBackground = enabled
+	syncSkyVisibility()
+}
+
 function ensureSkyExists() {
 	if (!scene) {
 		return
@@ -2485,6 +2504,7 @@ function ensureSkyExists() {
 		if (sky.parent !== scene) {
 			scene.add(sky)
 		}
+		syncSkyVisibility()
 		return
 	}
 	sky = new Sky()
@@ -2492,6 +2512,7 @@ function ensureSkyExists() {
 	sky.scale.setScalar(SKY_SCALE)
 	sky.frustumCulled = false
 	scene.add(sky)
+	syncSkyVisibility()
 }
 
 function updateSkyLighting(settings: SceneSkyboxSettings) {
@@ -2641,7 +2662,11 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
 		pmremGenerator = new THREE.PMREMGenerator(renderer)
 	}
 	disposeSkyEnvironment()
+	const previousVisibility = sky.visible
+	sky.visible = true
 	skyEnvironmentTarget = pmremGenerator.fromScene(sky as unknown as THREE.Scene)
+	sky.visible = previousVisibility
+	syncSkyVisibility()
 	applySkyEnvironmentToScene()
 	pendingSkyboxSettings = null
 }
@@ -2770,6 +2795,13 @@ async function applyBackgroundSettings(
 	if (!scene) {
 		return false
 	}
+	if (background.mode === 'skybox') {
+		disposeBackgroundResources()
+		setSkyBackgroundEnabled(true)
+		scene.background = null
+		return true
+	}
+	setSkyBackgroundEnabled(false)
 	if (background.mode !== 'hdri' || !background.hdriAssetId) {
 		disposeBackgroundResources()
 		scene.background = new THREE.Color(background.solidColor)

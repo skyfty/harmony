@@ -1445,7 +1445,7 @@ const DEFAULT_ENVIRONMENT_FOG_DENSITY = 0.02
 
 const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
   background: {
-    mode: 'solidColor',
+    mode: 'skybox',
     solidColor: DEFAULT_ENVIRONMENT_BACKGROUND_COLOR,
     hdriAssetId: null,
   },
@@ -1496,7 +1496,12 @@ function cloneEnvironmentSettings(source?: Partial<EnvironmentSettings> | Enviro
   const backgroundSource = source?.background ?? null
   const environmentMapSource = source?.environmentMap ?? null
 
-  const backgroundMode: EnvironmentBackgroundMode = backgroundSource?.mode === 'hdri' ? 'hdri' : 'solidColor'
+  let backgroundMode: EnvironmentBackgroundMode = 'skybox'
+  if (backgroundSource?.mode === 'hdri') {
+    backgroundMode = 'hdri'
+  } else if (backgroundSource?.mode === 'solidColor') {
+    backgroundMode = 'solidColor'
+  }
   const environmentMapMode: EnvironmentMapMode = environmentMapSource?.mode === 'custom' ? 'custom' : 'skybox'
   const fogMode: EnvironmentFogMode = source?.fogMode === 'exp' ? 'exp' : 'none'
 

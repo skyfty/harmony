@@ -1,4 +1,4 @@
-export type EnvironmentBackgroundMode = 'solidColor' | 'hdri'
+export type EnvironmentBackgroundMode = 'skybox' | 'solidColor' | 'hdri'
 export type EnvironmentFogMode = 'none' | 'exp'
 export type EnvironmentMapMode = 'skybox' | 'custom'
 

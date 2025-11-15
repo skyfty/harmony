@@ -20,6 +20,7 @@ const { environmentSettings: storeEnvironmentSettings } = storeToRefs(sceneStore
 const environmentSettings = computed(() => storeEnvironmentSettings.value)
 
 const backgroundModeOptions: Array<{ title: string; value: EnvironmentBackgroundMode }> = [
+  { title: 'Skybox', value: 'skybox' },
   { title: 'Solid Color', value: 'solidColor' },
   { title: 'HDRI', value: 'hdri' },
 ]
@@ -187,7 +188,7 @@ function handleColorPickerInput(target: 'background' | 'ambient' | 'fog', value:
 }
 
 function clearBackgroundAsset() {
-  if (!environmentSettings.value.background.hdriAssetId && environmentSettings.value.background.mode === 'solidColor') {
+  if (environmentSettings.value.background.mode !== 'hdri') {
     return
   }
   sceneStore.patchEnvironmentSettings({
@@ -514,7 +515,17 @@ function handleEnvironmentDrop(event: DragEvent) {
             @update:model-value="(mode) => updateBackgroundMode(mode as EnvironmentBackgroundMode | null)"
           />
           <div
-            v-if="environmentSettings.background.mode === 'solidColor'"
+            v-if="environmentSettings.background.mode === 'skybox'"
+            class="environment-placeholder"
+          >
+            <v-icon size="30" color="rgba(233, 236, 241, 0.45)">mdi-weather-sunset</v-icon>
+            <div class="placeholder-text">
+              <div class="placeholder-title">Using Procedural Skybox</div>
+              <div class="placeholder-hint">Customize it via Sky Settings</div>
+            </div>
+          </div>
+          <div
+            v-else-if="environmentSettings.background.mode === 'solidColor'"
             class="material-color"
           >
             <div class="color-input">
@@ -557,7 +568,7 @@ function handleEnvironmentDrop(event: DragEvent) {
             </div>
           </div>
           <div
-            v-if="environmentSettings.background.mode === 'hdri'"
+            v-else
             class="asset-tile"
             :class="{
               'is-active-drop': isBackgroundDropActive,
