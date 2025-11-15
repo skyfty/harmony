@@ -66,6 +66,11 @@ type UploadAssetEntry = {
   error: string | null
   uploadedAssetId: string | null
   aiLastSignature: string | null
+  tagValues: string[]
+  aiSuggestedTags: string[]
+  aiError: string | null
+  aiLoading: boolean
+  hasPendingChanges: boolean
 }
 
 type DimensionKey = 'dimensionLength' | 'dimensionWidth' | 'dimensionHeight'
@@ -73,27 +78,26 @@ type ImageDimensionKey = 'imageWidth' | 'imageHeight'
 
 // Local state for dialog
 const uploadEntries = ref<UploadAssetEntry[]>([])
-const uploadPrimaryEntry = computed<UploadAssetEntry | null>(() => uploadEntries.value[0] ?? null)
-const uploadPrimaryDescription = computed<string>({
-  get() {
-    return uploadPrimaryEntry.value?.description ?? ''
-  },
-  set(value: string) {
-    if (uploadPrimaryEntry.value) {
-      uploadPrimaryEntry.value.description = value
+const activeEntryId = ref<string | null>(null)
+const activeEntry = computed<UploadAssetEntry | null>(() => {
+  if (!uploadEntries.value.length) {
+    return null
+  }
+  if (activeEntryId.value) {
+    const found = uploadEntries.value.find((entry) => entry.assetId === activeEntryId.value)
+    if (found) {
+      return found
     }
-  },
+  }
+  return uploadEntries.value[0] ?? null
 })
-const uploadSelectedTagIds = ref<string[]>([])
 const uploadSubmitting = ref(false)
 const uploadError = ref<string | null>(null)
-const aiTagLoading = ref(false)
-const aiTagError = ref<string | null>(null)
-const aiSuggestedTags = ref<string[]>([])
 const serverTags = ref<TagOption[]>([])
 const serverTagsLoaded = ref(false)
 const serverTagsLoading = ref(false)
 const serverTagsError = ref<string | null>(null)
+const closeGuardDialogOpen = ref(false)
 
 const resourceCategories = ref<ResourceCategory[]>([])
 const resourceCategoriesLoaded = ref(false)
@@ -134,16 +138,36 @@ const uploadTagOptions = computed<TagOption[]>(() => {
   return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
 })
 
-const canSubmitUpload = computed(() => uploadEntries.value.length > 0 && !uploadSubmitting.value)
-const canRequestAiTags = computed(() => {
-  const entry = uploadEntries.value[0]
+const canUploadAll = computed(
+  () => uploadEntries.value.some((entry) => entry.status !== 'success') && !uploadSubmitting.value,
+)
+const canUploadCurrent = computed(() => {
+  const entry = activeEntry.value
+  if (!entry) return false
+  if (uploadSubmitting.value) return false
+  return entry.status !== 'success' && entry.status !== 'uploading'
+})
+const hasUploadingEntries = computed(() => uploadEntries.value.some((entry) => entry.status === 'uploading'))
+const hasDirtyEntries = computed(() => uploadEntries.value.some((entry) => entry.hasPendingChanges && entry.status !== 'success'))
+const shouldConfirmClose = computed(() => hasUploadingEntries.value || hasDirtyEntries.value)
+const closeGuardMessage = computed(() => {
+  if (hasUploadingEntries.value) {
+    return 'Some assets are still uploading. Closing now may interrupt the process. Continue?'
+  }
+  if (hasDirtyEntries.value) {
+    return 'Some assets have unsaved changes. Close without uploading?'
+  }
+  return ''
+})
+
+// Helpers and UI logic moved from ProjectPanel
+function canRequestAiTagsForEntry(entry: UploadAssetEntry | null): boolean {
   if (!entry) return false
   const name = entry.name?.trim().length ? entry.name.trim() : entry.asset.name?.trim()
   const description = entry.description?.trim() ?? ''
   return Boolean(name || description)
-})
+}
 
-// Helpers and UI logic moved from ProjectPanel
 function normalizeHexColor(value: string | null | undefined): string | null {
   if (typeof value !== 'string') return null
   const trimmed = value.trim()
@@ -162,6 +186,7 @@ function applyEntryColor(entry: UploadAssetEntry, value: string | null): void {
   if (normalized) {
     entry.color = normalized
     entry.colorHexInput = normalized.toUpperCase()
+    markEntryDirty(entry)
   }
 }
 
@@ -171,12 +196,35 @@ function handleEntryColorInput(entry: UploadAssetEntry, value: string | number |
   entry.colorHexInput = hex.length ? `#${hex.toUpperCase()}` : ''
   if (!hex.length) {
     entry.color = ''
+    markEntryDirty(entry)
     return
   }
   const normalized = normalizeHexColor(entry.colorHexInput)
   if (normalized) {
     entry.color = normalized
+    markEntryDirty(entry)
   }
+}
+
+function handleEntryNameChange(entry: UploadAssetEntry, value: string | null): void {
+  entry.name = (value ?? '').toString()
+  markEntryDirty(entry)
+}
+
+function handleEntryDescriptionChange(entry: UploadAssetEntry, value: string | null): void {
+  entry.description = (value ?? '').toString()
+  markEntryDirty(entry)
+}
+
+function handleEntryTagsChange(entry: UploadAssetEntry, value: string[] | string | null): void {
+  if (Array.isArray(value)) {
+    entry.tagValues = value
+  } else if (typeof value === 'string') {
+    entry.tagValues = value.trim().length ? [value] : []
+  } else {
+    entry.tagValues = []
+  }
+  markEntryDirty(entry)
 }
 
 function formatDimension(value: number | null): string {
@@ -186,6 +234,7 @@ function formatDimension(value: number | null): string {
 function setEntryDimension(entry: UploadAssetEntry, key: DimensionKey, value: string | number | null): void {
   const parsed = typeof value === 'number' ? value : Number.parseFloat((value ?? '').toString())
   entry[key] = Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+  markEntryDirty(entry)
 }
 
 function formatInteger(value: number | null): string {
@@ -195,6 +244,7 @@ function formatInteger(value: number | null): string {
 function setEntryImageDimension(entry: UploadAssetEntry, key: ImageDimensionKey, value: string | number | null): void {
   const parsed = typeof value === 'number' ? value : Number.parseFloat((value ?? '').toString())
   entry[key] = Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : null
+  markEntryDirty(entry)
 }
 
 function computeSizeCategory(length: number | null, width: number | null, height: number | null): string | null {
@@ -218,12 +268,6 @@ function entrySizeCategory(entry: UploadAssetEntry): string | null {
 function createTagOption(id: string, name: string): TagOption {
   const label = name && name.trim().length ? name.trim() : id
   return { value: id, label, id, name: label }
-}
-
-function findTagOptionByName(options: TagOption[], name: string): TagOption | undefined {
-  const normalized = name.trim().toLowerCase()
-  if (!normalized) return undefined
-  return options.find((option) => option.name.toLowerCase() === normalized || option.label.toLowerCase() === normalized)
 }
 
 function buildAiSignature(entry: UploadAssetEntry): string {
@@ -254,10 +298,10 @@ function buildExtraHints(entry: UploadAssetEntry): string[] {
   return hints
 }
 
-function integrateSuggestedTags(tags: string[]): number {
+function integrateSuggestedTags(entry: UploadAssetEntry, tags: string[]): number {
   if (!tags.length) return 0
   const existing = new Set(
-    uploadSelectedTagIds.value
+    entry.tagValues
       .map((value) => (typeof value === 'string' ? value.trim().toLowerCase() : ''))
       .filter((value) => value.length > 0),
   )
@@ -276,22 +320,89 @@ function integrateSuggestedTags(tags: string[]): number {
     existing.add(normalized)
   })
   if (!appended.length) return 0
-  uploadSelectedTagIds.value = [...uploadSelectedTagIds.value, ...appended]
+  entry.tagValues = [...entry.tagValues, ...appended]
+  markEntryDirty(entry)
   return appended.length
 }
 
+function markEntryDirty(entry: UploadAssetEntry | null): void {
+  if (!entry) return
+  entry.hasPendingChanges = true
+  if (entry.status === 'success') {
+    return
+  }
+  if (entry.status === 'error') {
+    entry.error = null
+  }
+  entry.status = 'pending'
+}
+
+function createUploadEntry(asset: ProjectAsset): UploadAssetEntry {
+  const normalizedColor = normalizeHexColor(asset.color ?? null)
+  const initialCategoryId = typeof asset.categoryId === 'string' ? asset.categoryId : null
+  const initialSegments = Array.isArray(asset.categoryPath)
+    ? asset.categoryPath
+        .map((item) => (item?.name ?? '').trim())
+        .filter((segment) => segment.length > 0)
+    : []
+  const initialCategoryLabel =
+    asset.categoryPathString ?? (initialSegments.length ? buildCategoryPathString(initialSegments) : '')
+  const tagCandidates = new Set<string>()
+  if (Array.isArray(asset.tagIds)) {
+    asset.tagIds.forEach((id) => {
+      const trimmed = typeof id === 'string' ? id.trim() : ''
+      if (trimmed.length) {
+        tagCandidates.add(trimmed)
+      }
+    })
+  }
+  if (Array.isArray(asset.tags)) {
+    asset.tags.forEach((tag) => {
+      const trimmed = typeof tag === 'string' ? tag.trim() : ''
+      if (trimmed.length) {
+        tagCandidates.add(trimmed)
+      }
+    })
+  }
+  return {
+    assetId: asset.id,
+    asset,
+    name: asset.name,
+    description: asset.description ?? '',
+    categoryId: initialCategoryId,
+    categoryPathLabel: initialCategoryLabel ?? '',
+    seriesId: typeof asset.seriesId === 'string' ? asset.seriesId : null,
+    color: normalizedColor ?? '',
+    colorHexInput: formatHexInputDisplay(normalizedColor),
+    dimensionLength: typeof asset.dimensionLength === 'number' ? asset.dimensionLength : null,
+    dimensionWidth: typeof asset.dimensionWidth === 'number' ? asset.dimensionWidth : null,
+    dimensionHeight: typeof asset.dimensionHeight === 'number' ? asset.dimensionHeight : null,
+    imageWidth: typeof asset.imageWidth === 'number' ? asset.imageWidth : null,
+    imageHeight: typeof asset.imageHeight === 'number' ? asset.imageHeight : null,
+    status: 'pending',
+    error: null,
+    uploadedAssetId: null,
+    aiLastSignature: null,
+    tagValues: Array.from(tagCandidates.values()),
+    aiSuggestedTags: [],
+    aiError: null,
+    aiLoading: false,
+    hasPendingChanges: false,
+  }
+}
+
 async function requestAiTagsForEntry(entry: UploadAssetEntry, options: { auto?: boolean } = {}): Promise<void> {
-  if (aiTagLoading.value) return
+  if (!entry || entry.aiLoading) return
   const preferredName = entry.name?.trim().length ? entry.name.trim() : entry.asset.name
   const description = entry.description?.trim() ?? ''
   if (!preferredName && !description) {
-    if (!options.auto) aiTagError.value = 'Please enter a name or description first'
+    if (!options.auto) entry.aiError = 'Please enter a name or description first'
     return
   }
   const signature = buildAiSignature(entry)
   if (options.auto && entry.aiLastSignature === signature) return
-  aiTagLoading.value = true
-  aiTagError.value = null
+  entry.aiLoading = true
+  entry.aiError = null
   try {
     const result = await generateAssetTagSuggestions({
       name: preferredName,
@@ -299,30 +410,29 @@ async function requestAiTagsForEntry(entry: UploadAssetEntry, options: { auto?: 
       assetType: entry.asset.type,
       extraHints: buildExtraHints(entry),
     })
-    const added = integrateSuggestedTags(result.tags ?? [])
-    aiSuggestedTags.value = result.tags ?? []
+    const added = integrateSuggestedTags(entry, result.tags ?? [])
+    entry.aiSuggestedTags = result.tags ?? []
     entry.aiLastSignature = signature
     if (!added && !options.auto) {
-      aiTagError.value = 'AI suggested tags already exist. You can continue editing or upload.'
+      entry.aiError = 'AI suggested tags already exist. You can continue editing or upload.'
     }
   } catch (error) {
     if (options.auto) {
       console.warn('Auto tag generation failed', error)
       return
     }
-    aiTagError.value = (error as Error).message ?? 'Failed to generate tags'
+    entry.aiError = (error as Error).message ?? 'Failed to generate tags'
   } finally {
-    aiTagLoading.value = false
+    entry.aiLoading = false
   }
 }
 
-function handleGenerateTagsClick(): void {
-  const entry = uploadEntries.value[0]
-  if (!entry) {
-    aiTagError.value = 'No asset available. Please select assets to upload first.'
+function handleGenerateTagsClick(entry?: UploadAssetEntry): void {
+  const target = entry ?? activeEntry.value
+  if (!target) {
     return
   }
-  void requestAiTagsForEntry(entry, { auto: false })
+  void requestAiTagsForEntry(target, { auto: false })
 }
 
 function handleEntryDescriptionBlur(entry: UploadAssetEntry): void {
@@ -330,13 +440,28 @@ function handleEntryDescriptionBlur(entry: UploadAssetEntry): void {
   void requestAiTagsForEntry(entry, { auto: true })
 }
 
+function handleRequestDialogClose(): void {
+  if (!shouldConfirmClose.value) {
+    internalOpen.value = false
+    return
+  }
+  closeGuardDialogOpen.value = true
+}
+
+function confirmDialogClose(): void {
+  closeGuardDialogOpen.value = false
+  internalOpen.value = false
+}
+
+function cancelDialogClose(): void {
+  closeGuardDialogOpen.value = false
+}
+
 function resetUploadState() {
   uploadEntries.value = []
-  uploadSelectedTagIds.value = []
   uploadError.value = null
-  aiTagLoading.value = false
-  aiTagError.value = null
-  aiSuggestedTags.value = []
+  activeEntryId.value = null
+  closeGuardDialogOpen.value = false
 }
 
 async function loadServerTags(options: { force?: boolean } = {}) {
@@ -436,11 +561,13 @@ function handleEntryCategoryChange(entry: UploadAssetEntry, value: string | null
   const normalized = typeof value === 'string' ? value.trim() : ''
   entry.categoryId = normalized.length ? normalized : null
   updateEntryCategoryLabel(entry)
+  markEntryDirty(entry)
 }
 
 function handleEntryCategorySelected(entry: UploadAssetEntry, payload: { id: string | null; label: string }): void {
   entry.categoryId = payload.id ?? null
   entry.categoryPathLabel = payload.label ?? ''
+  markEntryDirty(entry)
 }
 
 function handleEntryCategoryCreated(entry: UploadAssetEntry, category: ResourceCategory): void {
@@ -455,6 +582,7 @@ function handleEntryCategoryCreated(entry: UploadAssetEntry, category: ResourceC
 function handleEntrySeriesChange(entry: UploadAssetEntry, value: string | null): void {
   const normalized = typeof value === 'string' ? value.trim() : ''
   entry.seriesId = normalized.length ? normalized : null
+  markEntryDirty(entry)
 }
 
 function handleEntrySeriesCreated(entry: UploadAssetEntry, series: AssetSeries): void {
@@ -472,38 +600,8 @@ watch(
   () => internalOpen.value,
   (open) => {
     if (open) {
-      uploadEntries.value = props.assets.map((asset) => {
-        const normalizedColor = normalizeHexColor(asset.color ?? null)
-        const initialCategoryId = typeof asset.categoryId === 'string' ? asset.categoryId : null
-        const initialSegments = Array.isArray(asset.categoryPath)
-          ? asset.categoryPath
-              .map((item) => (item?.name ?? '').trim())
-              .filter((segment) => segment.length > 0)
-          : []
-        const initialCategoryLabel = asset.categoryPathString
-          ?? (initialSegments.length ? buildCategoryPathString(initialSegments) : '')
-        return {
-          assetId: asset.id,
-          asset,
-          name: asset.name,
-          description: asset.description ?? '',
-          categoryId: initialCategoryId,
-          categoryPathLabel: initialCategoryLabel ?? '',
-          seriesId: typeof asset.seriesId === 'string' ? asset.seriesId : null,
-          color: normalizedColor ?? '',
-          colorHexInput: formatHexInputDisplay(normalizedColor),
-          dimensionLength: typeof asset.dimensionLength === 'number' ? asset.dimensionLength : null,
-          dimensionWidth: typeof asset.dimensionWidth === 'number' ? asset.dimensionWidth : null,
-          dimensionHeight: typeof asset.dimensionHeight === 'number' ? asset.dimensionHeight : null,
-          imageWidth: typeof asset.imageWidth === 'number' ? asset.imageWidth : null,
-          imageHeight: typeof asset.imageHeight === 'number' ? asset.imageHeight : null,
-          status: 'pending',
-          error: null,
-          uploadedAssetId: null,
-          aiLastSignature: null,
-        }
-      })
-      uploadSelectedTagIds.value = []
+      uploadEntries.value = props.assets.map((asset) => createUploadEntry(asset))
+      activeEntryId.value = uploadEntries.value[0]?.assetId ?? null
       uploadError.value = null
       void nextTick(() => {
         void loadServerTags()
@@ -515,6 +613,21 @@ watch(
     }
   },
   { immediate: false }
+)
+
+watch(
+  () => uploadEntries.value.map((entry) => entry.assetId),
+  (ids) => {
+    if (!ids.length) {
+      activeEntryId.value = null
+      return
+    }
+    if (activeEntryId.value && ids.includes(activeEntryId.value)) {
+      return
+    }
+    activeEntryId.value = ids[0] ?? null
+  },
+  { immediate: true },
 )
 
 watch(
@@ -534,30 +647,25 @@ async function createUploadFileFromCache(asset: ProjectAsset): Promise<File> {
   throw new Error('资源文件尚未缓存，无法上传')
 }
 
-async function ensureUploadTagIds(): Promise<string[]> {
+async function resolveEntriesTagIds(entries: UploadAssetEntry[]): Promise<Map<string, string[]>> {
+  const resolved = new Map<string, string[]>()
+  if (!entries.length) return resolved
   const existingOptions = uploadTagOptions.value
-  const resolved = new Set<string>()
+  const optionById = new Map(existingOptions.map((option) => [option.value, option] as const))
+  const optionByName = new Map(existingOptions.map((option) => [option.name.trim().toLowerCase(), option] as const))
   const pendingNames = new Map<string, string>()
-  const createdNameMap = new Map<string, string>()
 
-  uploadSelectedTagIds.value.forEach((value) => {
-    const raw = typeof value === 'string' ? value : (value as TagOption | undefined)?.value ?? ''
-    const trimmed = raw.trim()
-    if (!trimmed.length) return
-    const matchById = existingOptions.find((option) => option.value === trimmed)
-    if (matchById) {
-      resolved.add(matchById.value)
-      return
-    }
-    const matchByName = findTagOptionByName(existingOptions, trimmed)
-    if (matchByName) {
-      resolved.add(matchByName.value)
-      return
-    }
-    const normalized = trimmed.toLowerCase()
-    if (!pendingNames.has(normalized)) {
-      pendingNames.set(normalized, trimmed)
-    }
+  entries.forEach((entry) => {
+    entry.tagValues.forEach((value) => {
+      const raw = typeof value === 'string' ? value.trim() : ''
+      if (!raw.length) return
+      if (optionById.has(raw)) return
+      const normalizedName = raw.toLowerCase()
+      if (optionByName.has(normalizedName)) return
+      if (!pendingNames.has(normalizedName)) {
+        pendingNames.set(normalizedName, raw)
+      }
+    })
   })
 
   if (pendingNames.size > 0) {
@@ -568,13 +676,10 @@ async function ensureUploadTagIds(): Promise<string[]> {
       created.forEach((tag) => {
         const option = createTagOption(tag.id, tag.name)
         optionMap.set(option.value, option)
-        createdNameMap.set(option.name.trim().toLowerCase(), option.value)
+        optionById.set(option.value, option)
+        optionByName.set(option.name.trim().toLowerCase(), option)
       })
       serverTags.value = Array.from(optionMap.values()).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
-      pendingNames.forEach((_original, normalized) => {
-        const createdId = createdNameMap.get(normalized)
-        if (createdId) resolved.add(createdId)
-      })
     } catch (error) {
       const fallback = originalNames[0]
       throw new Error((error as Error).message ?? (fallback ? `Failed to create tag "${fallback}"` : 'Failed to create tag'))
@@ -582,42 +687,49 @@ async function ensureUploadTagIds(): Promise<string[]> {
   }
 
   const updatedOptions = uploadTagOptions.value
-  uploadSelectedTagIds.value = uploadSelectedTagIds.value
-    .map((value) => {
-      const raw = typeof value === 'string' ? value : (value as TagOption | undefined)?.value ?? ''
-      const trimmed = raw.trim()
-      if (!trimmed.length) return ''
-      const matchById = updatedOptions.find((option) => option.value === trimmed)
-      if (matchById) return matchById.value
-      const matchByName = findTagOptionByName(updatedOptions, trimmed)
-      if (matchByName) return matchByName.value
-      const createdId = createdNameMap.get(trimmed.toLowerCase())
-      return createdId ?? trimmed
-    })
-    .filter((value) => value.trim().length > 0)
+  const updatedById = new Map(updatedOptions.map((option) => [option.value, option] as const))
+  const updatedByName = new Map(updatedOptions.map((option) => [option.name.trim().toLowerCase(), option] as const))
 
-  uploadSelectedTagIds.value.forEach((id) => {
-    const match = updatedOptions.find((option) => option.value === id)
-    resolved.add(match ? match.value : id)
+  entries.forEach((entry) => {
+    const resolvedIds: string[] = []
+    entry.tagValues.forEach((value) => {
+      const raw = typeof value === 'string' ? value.trim() : ''
+      if (!raw.length) return
+      const matchById = updatedById.get(raw)
+      if (matchById) {
+        resolvedIds.push(matchById.value)
+        return
+      }
+      const normalized = raw.toLowerCase()
+      const matchByName = updatedByName.get(normalized)
+      if (matchByName) {
+        resolvedIds.push(matchByName.value)
+        return
+      }
+      resolvedIds.push(raw)
+    })
+    resolved.set(entry.assetId, resolvedIds)
   })
 
-  return Array.from(resolved)
+  return resolved
 }
 
-async function submitUpload() {
-  if (uploadSubmitting.value || !uploadEntries.value.length) return
-  const missingCategory = uploadEntries.value.find((entry) => !entry.categoryId || !entry.categoryId.trim().length)
+async function submitUpload(options: { entries?: UploadAssetEntry[] } = {}) {
+  if (uploadSubmitting.value) return
+  const targetEntries = (options.entries ?? uploadEntries.value).filter((entry) => entry && entry.status !== 'success')
+  if (!targetEntries.length) return
+  const missingCategory = targetEntries.find((entry) => !entry.categoryId || !entry.categoryId.trim().length)
   if (missingCategory) {
     uploadError.value = 'Please select a category for all assets'
+    activeEntryId.value = missingCategory.assetId
     return
   }
   uploadSubmitting.value = true
   uploadError.value = null
   try {
-    const tagIds = await ensureUploadTagIds()
+    const tagMap = await resolveEntriesTagIds(targetEntries)
     const replacementMap = new Map<string, string>()
-    for (const entry of uploadEntries.value) {
-      if (entry.status === 'success') continue
+    for (const entry of targetEntries) {
       entry.status = 'uploading'
       entry.error = null
       try {
@@ -632,6 +744,7 @@ async function submitUpload() {
         const dimensionHeight = typeof entry.dimensionHeight === 'number' && Number.isFinite(entry.dimensionHeight) ? entry.dimensionHeight : null
         const imageWidth = typeof entry.imageWidth === 'number' && Number.isFinite(entry.imageWidth) ? Math.round(entry.imageWidth) : null
         const imageHeight = typeof entry.imageHeight === 'number' && Number.isFinite(entry.imageHeight) ? Math.round(entry.imageHeight) : null
+        const tagIds = tagMap.get(entry.assetId) ?? []
 
         const serverAsset = await uploadAssetToServer({
           file,
@@ -660,276 +773,416 @@ async function submitUpload() {
         assetCacheStore.removeCache(entry.assetId)
         entry.status = 'success'
         entry.uploadedAssetId = replaced.id
+        entry.hasPendingChanges = false
         replacementMap.set(entry.assetId, replaced.id)
       } catch (error) {
         entry.status = 'error'
         entry.error = (error as Error).message ?? 'Upload failed'
+        entry.hasPendingChanges = true
       }
     }
 
-    const hasErrors = uploadEntries.value.some((entry) => entry.status === 'error')
+    if (replacementMap.size) {
+      emit('uploaded', { successCount: replacementMap.size, replacementMap: Object.fromEntries(replacementMap.entries()) })
+    }
+
+    const hasErrors = targetEntries.some((entry) => entry.status === 'error')
     if (hasErrors) {
       uploadError.value = 'Some assets failed to upload. Please check errors and retry.'
       return
     }
 
-    // Success
-    const successCount = replacementMap.size || uploadEntries.value.length
-    internalOpen.value = false
-    resetUploadState()
-    emit('uploaded', { successCount, replacementMap: Object.fromEntries(replacementMap.entries()) })
+    const allUploaded = uploadEntries.value.every((entry) => entry.status === 'success')
+    if (allUploaded) {
+      internalOpen.value = false
+      resetUploadState()
+    }
   } catch (error) {
     uploadError.value = (error as Error).message ?? 'Failed to upload assets'
   } finally {
     uploadSubmitting.value = false
   }
 }
+
+function handleUploadCurrent(): void {
+  if (!activeEntry.value) return
+  void submitUpload({ entries: [activeEntry.value] })
+}
+
+function handleUploadAll(): void {
+  void submitUpload()
+}
 </script>
 
 <template>
-  <v-dialog v-model="internalOpen" max-width="720" persistent>
-    <v-card   class="material-details-panel">
-      <v-card-title>Upload Assets to Server</v-card-title>
+  <v-dialog v-model="internalOpen" max-width="900" persistent>
+    <v-card class="material-details-panel">
+      <v-card-title class="dialog-title">
+        <div>
+          <div class="dialog-title__main">Upload Assets to Server</div>
+          <div v-if="uploadEntries.length" class="dialog-title__subtitle">
+            Edit {{ uploadEntries.length }} {{ uploadEntries.length === 1 ? 'asset' : 'assets' }} before uploading.
+          </div>
+        </div>
+        <v-chip v-if="hasUploadingEntries" size="small" color="primary" variant="tonal">
+          Uploading…
+        </v-chip>
+      </v-card-title>
       <v-card-text>
         <v-alert v-if="uploadError" type="error" variant="tonal" density="comfortable" class="mb-4">
           {{ uploadError }}
         </v-alert>
-        <div class="upload-section">
-          <div v-for="entry in uploadEntries" :key="entry.assetId" class="upload-entry">
-            <div class="upload-entry__header">
-              <span class="upload-entry__name">{{ entry.asset.name }}</span>
-              <v-chip size="small" color="primary" variant="tonal">{{ entry.asset.type }}</v-chip>
-            </div>
-            <div class="upload-entry__name-row">
-              <v-text-field
-                class="upload-entry__name-input"
-                v-model="entry.name"
-                label="Asset Name"
-            density="compact"
-            variant="underlined"
-                :disabled="uploadSubmitting || entry.status === 'success'"
+        <div v-if="uploadEntries.length" class="upload-tabs-container">
+          <v-tabs v-model="activeEntryId" class="upload-tabs" density="comfortable" color="primary">
+            <v-tab v-for="entry in uploadEntries" :key="entry.assetId" :value="entry.assetId" class="upload-tab">
+              <span class="upload-tab__name">{{ entry.name || entry.asset.name }}</span>
+              <v-icon v-if="entry.status === 'success'" size="16" color="success">mdi-check-circle</v-icon>
+              <v-progress-circular
+                v-else-if="entry.status === 'uploading'"
+                indeterminate
+                size="14"
+                width="3"
+                color="primary"
               />
-            </div>
-            <div class="upload-entry__series-row ">
-              <SeriesSelector
-                :model-value="entry.seriesId"
-                :series-options="assetSeries"
-                label="Asset Series"
-                density="compact"
-                :loading="assetSeriesLoading"
-                :disabled="uploadSubmitting || entry.status === 'success'"
-                :clearable="true"
-                :allow-create="true"
-                :create-series="handleCreateSeries"
-                @update:model-value="(value) => handleEntrySeriesChange(entry, value)"
-                @series-created="(series) => handleEntrySeriesCreated(entry, series)"
-              />
-            </div>
-            <div class="upload-entry__category-row">
-              <CategoryPathSelector
-                :model-value="entry.categoryId"
-                :categories="resourceCategories"
-                label="Asset Category"
-                placeholder="Select or create a category"
-                class="category-selector"
-                :disabled="uploadSubmitting || entry.status === 'success'"
-                @update:model-value="(value) => handleEntryCategoryChange(entry, value)"
-                @category-selected="(payload) => handleEntryCategorySelected(entry, payload)"
-                @category-created="(category) => handleEntryCategoryCreated(entry, category)"
-              />
-            </div>
-            <div class="upload-entry__color-row">
-              <div class="color-input">
-                <v-text-field
-                  class="upload-entry__color-input"
-                  :model-value="entry.colorHexInput"
-                  label="Primary Color"
+              <v-icon v-else-if="entry.status === 'error'" size="16" color="error">mdi-alert-circle</v-icon>
+            </v-tab>
+          </v-tabs>
+          <v-window v-model="activeEntryId" class="upload-window">
+            <v-window-item v-for="entry in uploadEntries" :key="entry.assetId" :value="entry.assetId">
+              <div class="upload-entry-tab">
+                <div class="upload-entry__header">
+                  <div>
+                    <div class="upload-entry__name">{{ entry.asset.name }}</div>
+                    <div class="upload-entry__meta">Local ID: {{ entry.assetId }}</div>
+                  </div>
+                  <v-chip size="small" color="primary" variant="tonal">{{ entry.asset.type }}</v-chip>
+                </div>
+                <div v-if="entry.status === 'error'" class="upload-entry__error">{{ entry.error }}</div>
+                <div v-else-if="entry.status === 'success'" class="upload-entry__success">Uploaded</div>
+
+                <div class="upload-entry__name-row">
+                  <v-text-field
+                    class="upload-entry__name-input"
+                    :model-value="entry.name"
+                    label="Asset Name"
+                    density="compact"
+                    variant="underlined"
+                    :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                    @update:model-value="(value) => handleEntryNameChange(entry, value)">
+                  </v-text-field>
+                </div>
+
+                <div class="upload-entry__series-row">
+                  <SeriesSelector
+                    :model-value="entry.seriesId"
+                    :series-options="assetSeries"
+                    label="Asset Series"
+                    density="compact"
+                    :loading="assetSeriesLoading"
+                    :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                    :clearable="true"
+                    :allow-create="true"
+                    :create-series="handleCreateSeries"
+                    @update:model-value="(value) => handleEntrySeriesChange(entry, value)"
+                    @series-created="(series) => handleEntrySeriesCreated(entry, series)"
+                  />
+                </div>
+
+                <div class="upload-entry__category-row">
+                  <CategoryPathSelector
+                    :model-value="entry.categoryId"
+                    :categories="resourceCategories"
+                    label="Asset Category"
+                    placeholder="Select or create a category"
+                    class="category-selector"
+                    :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                    @update:model-value="(value) => handleEntryCategoryChange(entry, value)"
+                    @category-selected="(payload) => handleEntryCategorySelected(entry, payload)"
+                    @category-created="(category) => handleEntryCategoryCreated(entry, category)"
+                  />
+                </div>
+
+                <div class="upload-entry__color-row">
+                  <div class="color-input">
+                    <v-text-field
+                      class="upload-entry__color-input"
+                      :model-value="entry.colorHexInput"
+                      label="Primary Color"
+                      density="compact"
+                      variant="underlined"
+                      placeholder="#RRGGBB"
+                      hide-details
+                      spellcheck="false"
+                      autocorrect="off"
+                      autocomplete="off"
+                      :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                      @update:model-value="(value) => handleEntryColorInput(entry, value)"
+                    />
+                    <v-menu :close-on-content-click="false" transition="scale-transition" location="bottom start">
+                      <template #activator="{ props: menuProps }">
+                        <button
+                          class="color-swatch"
+                          type="button"
+                          v-bind="menuProps"
+                          :style="{ backgroundColor: entry.color || '#455A64' }"
+                          :title="(entry.color || '').toUpperCase() || 'Pick a color'"
+                          :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                        >
+                          <span class="sr-only">Pick color</span>
+                        </button>
+                      </template>
+                      <div class="color-picker">
+                        <v-color-picker
+                          :model-value="entry.color || '#455A64'"
+                          mode="hex"
+                          :modes="['hex']"
+                          hide-inputs
+                          @update:model-value="(value) => applyEntryColor(entry, value as string)"
+                        />
+                      </div>
+                    </v-menu>
+                  </div>
+                </div>
+
+                <div v-if="entry.asset.type === 'model' || entry.asset.type === 'prefab'" class="upload-entry__dimensions">
+                  <v-text-field
+                    :model-value="formatDimension(entry.dimensionLength)"
+                    label="Length (m)"
+                    type="number"
+                    density="compact"
+                    variant="underlined"
+                    step="0.01"
+                    min="0"
+                    suffix="m"
+                    :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                    @update:model-value="(value) => setEntryDimension(entry, 'dimensionLength', value)"
+                  />
+                  <v-text-field
+                    :model-value="formatDimension(entry.dimensionWidth)"
+                    label="Width (m)"
+                    type="number"
+                    density="compact"
+                    variant="underlined"
+                    step="0.01"
+                    min="0"
+                    suffix="m"
+                    :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                    @update:model-value="(value) => setEntryDimension(entry, 'dimensionWidth', value)"
+                  />
+                  <v-text-field
+                    :model-value="formatDimension(entry.dimensionHeight)"
+                    label="Height (m)"
+                    type="number"
+                    density="compact"
+                    variant="underlined"
+                    step="0.01"
+                    min="0"
+                    suffix="m"
+                    :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                    @update:model-value="(value) => setEntryDimension(entry, 'dimensionHeight', value)"
+                  />
+                  <v-chip v-if="entrySizeCategory(entry)" class="upload-entry__size-chip" size="small" color="secondary" variant="tonal">
+                    Size category: {{ entrySizeCategory(entry) }}
+                  </v-chip>
+                </div>
+                <div v-else-if="entry.asset.type === 'image'" class="upload-entry__dimensions">
+                  <v-text-field
+                    :model-value="formatInteger(entry.imageWidth)"
+                    label="Image width (px)"
+                    type="number"
+                    density="compact"
+                    variant="underlined"
+                    step="1"
+                    min="0"
+                    suffix="px"
+                    :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                    @update:model-value="(value) => setEntryImageDimension(entry, 'imageWidth', value)"
+                  />
+                  <v-text-field
+                    :model-value="formatInteger(entry.imageHeight)"
+                    label="Image height (px)"
+                    type="number"
+                    density="compact"
+                    variant="underlined"
+                    step="1"
+                    min="0"
+                    suffix="px"
+                    :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                    @update:model-value="(value) => setEntryImageDimension(entry, 'imageHeight', value)"
+                  />
+                </div>
+
+                <v-textarea
+                  class="upload-description-textarea"
+                  :model-value="entry.description"
+                  label="Description"
                   density="compact"
                   variant="underlined"
-                  placeholder="#RRGGBB"
-                  hide-details
-                  spellcheck="false"
-                  autocorrect="off"
-                  autocomplete="off"
-                  :disabled="uploadSubmitting || entry.status === 'success'"
-                  @update:model-value="(value) => handleEntryColorInput(entry, value)"
+                  rows="4"
+                  :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                  @update:model-value="(value) => handleEntryDescriptionChange(entry, value)"
+                  @blur="() => handleEntryDescriptionBlur(entry)"
                 />
-                <v-menu :close-on-content-click="false" transition="scale-transition" location="bottom start">
-                  <template #activator="{ props: menuProps }">
-                    <button
-                      class="color-swatch"
-                      type="button"
-                      v-bind="menuProps"
-                      :style="{ backgroundColor: entry.color || '#455A64' }"
-                      :title="(entry.color || '').toUpperCase() || 'Pick a color'"
-                      :disabled="uploadSubmitting || entry.status === 'success'"
-                    >
-                      <span class="sr-only">Pick color</span>
-                    </button>
-                  </template>
-                  <div class="color-picker">
-                    <v-color-picker :model-value="entry.color || '#455A64'" mode="hex" :modes="['hex']" hide-inputs @update:model-value="(value) => applyEntryColor(entry, value as string)" />
-                  </div>
-                </v-menu>
-              </div>
-            </div>
 
-            <div v-if="entry.asset.type === 'model' || entry.asset.type === 'prefab'" class="upload-entry__dimensions">
-              <v-text-field :model-value="formatDimension(entry.dimensionLength)" label="Length (m)" type="number" density="compact" variant="underlined" step="0.01" min="0" suffix="m" :disabled="uploadSubmitting || entry.status === 'success'" @update:model-value="(value) => setEntryDimension(entry, 'dimensionLength', value)" />
-              <v-text-field :model-value="formatDimension(entry.dimensionWidth)" label="Width (m)" type="number" density="compact" variant="underlined" step="0.01" min="0" suffix="m" :disabled="uploadSubmitting || entry.status === 'success'" @update:model-value="(value) => setEntryDimension(entry, 'dimensionWidth', value)" />
-              <v-text-field :model-value="formatDimension(entry.dimensionHeight)" label="Height (m)" type="number" density="compact" variant="underlined" step="0.01" min="0" suffix="m" :disabled="uploadSubmitting || entry.status === 'success'" @update:model-value="(value) => setEntryDimension(entry, 'dimensionHeight', value)" />
-              <v-chip v-if="entrySizeCategory(entry)" class="upload-entry__size-chip" size="small" color="secondary" variant="tonal">
-                Size category: {{ entrySizeCategory(entry) }}
-              </v-chip>
-            </div>
-            <div v-else-if="entry.asset.type === 'image'" class="upload-entry__dimensions">
-              <v-text-field :model-value="formatInteger(entry.imageWidth)" label="Image width (px)" type="number" density="compact" variant="underlined" step="1" min="0" suffix="px" :disabled="uploadSubmitting || entry.status === 'success'" @update:model-value="(value) => setEntryImageDimension(entry, 'imageWidth', value)" />
-              <v-text-field :model-value="formatInteger(entry.imageHeight)" label="Image height (px)" type="number" density="compact" variant="underlined" step="1" min="0" suffix="px" :disabled="uploadSubmitting || entry.status === 'success'" @update:model-value="(value) => setEntryImageDimension(entry, 'imageHeight', value)" />
-            </div>
-            <div v-if="entry.status === 'error'" class="upload-entry__error">{{ entry.error }}</div>
-            <div v-else-if="entry.status === 'success'" class="upload-entry__success">Uploaded</div>
-          </div>
+                <v-combobox
+                  class="upload-tags-combobox"
+                  :model-value="entry.tagValues"
+                  :items="uploadTagOptions"
+                  item-title="label"
+                  item-value="value"
+                  label="Select or create tags"
+                  density="comfortable"
+                  variant="underlined"
+                  multiple
+                  chips
+                  closable-chips
+                  clearable
+                  hide-selected
+                  new-value-mode="add"
+                  :loading="serverTagsLoading"
+                  :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                  @update:model-value="(value) => handleEntryTagsChange(entry, value as string[])"
+                />
+
+                <div class="upload-ai-row">
+                  <v-btn
+                    color="secondary"
+                    variant="tonal"
+                    size="small"
+                    :disabled="uploadSubmitting || !canRequestAiTagsForEntry(entry) || entry.aiLoading"
+                    :loading="entry.aiLoading"
+                    @click="() => handleGenerateTagsClick(entry)"
+                  >
+                    Generate tags with AI
+                  </v-btn>
+                  <span v-if="entry.aiError" class="upload-ai-row__error">{{ entry.aiError }}</span>
+                  <span v-else-if="entry.aiSuggestedTags.length" class="upload-ai-row__hint">Suggested: {{ entry.aiSuggestedTags.join(', ') }}</span>
+                </div>
+              </div>
+            </v-window-item>
+          </v-window>
         </div>
-        <v-textarea v-model="uploadPrimaryDescription" label="Description" density="compact" variant="underlined" rows="4" class="upload-description-textarea" :disabled="uploadSubmitting || !!(uploadPrimaryEntry && uploadPrimaryEntry.status === 'success')" @blur="() => uploadPrimaryEntry && handleEntryDescriptionBlur(uploadPrimaryEntry)" />
-        <v-combobox
-          v-model="uploadSelectedTagIds"
-          :items="uploadTagOptions"
-          item-title="label"
-          item-value="value"
-          label="Select or create tags"
-          density="comfortable"
-          variant="underlined"
-          multiple
-          chips
-          closable-chips
-          clearable
-          hide-selected
-          new-value-mode="add"
-          :loading="serverTagsLoading"
-          :disabled="uploadSubmitting"
-        />
-        <div class="upload-ai-row">
-          <v-btn color="secondary" variant="tonal" size="small" :disabled="uploadSubmitting || !uploadEntries.length || aiTagLoading || !canRequestAiTags" :loading="aiTagLoading" @click="handleGenerateTagsClick">
-            Generate tags with AI
-          </v-btn>
-          <span v-if="aiTagError" class="upload-ai-row__error">{{ aiTagError }}</span>
-          <span v-else-if="aiSuggestedTags.length" class="upload-ai-row__hint">Suggested: {{ aiSuggestedTags.join(', ') }}</span>
+        <div v-else class="upload-empty-state">
+          Select local assets to begin uploading.
         </div>
       </v-card-text>
+      <v-card-actions class="upload-actions">
+        <v-spacer />
+        <v-btn variant="text" :disabled="uploadSubmitting && !shouldConfirmClose" @click="handleRequestDialogClose">Cancel</v-btn>
+        <v-btn color="secondary" variant="tonal" :disabled="!canUploadCurrent" :loading="uploadSubmitting && !!activeEntry && activeEntry.status === 'uploading'" @click="handleUploadCurrent">
+          Upload Current
+        </v-btn>
+        <v-btn color="primary" variant="flat" :loading="uploadSubmitting" :disabled="!canUploadAll" @click="handleUploadAll">
+          Upload All
+        </v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
+
+  <v-dialog v-model="closeGuardDialogOpen" max-width="420">
+    <v-card>
+      <v-card-title>Close upload dialog?</v-card-title>
+      <v-card-text>{{ closeGuardMessage }}</v-card-text>
       <v-card-actions>
         <v-spacer />
-        <v-btn variant="text" :disabled="uploadSubmitting" @click="internalOpen = false">Cancel</v-btn>
-        <v-btn color="primary" variant="flat" :loading="uploadSubmitting" :disabled="!canSubmitUpload" @click="submitUpload">
-          Upload
-        </v-btn>
+        <v-btn variant="text" @click="cancelDialogClose">Stay</v-btn>
+        <v-btn color="warning" variant="flat" @click="confirmDialogClose">Leave</v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>
 </template>
 
 <style scoped>
-
-
-.material-details-panel-enter-active,
-.material-details-panel-leave-active {
-  transition: opacity 0.18s ease, transform 0.18s ease;
-}
-
-.material-details-panel-enter-from,
-.material-details-panel-leave-to {
-  opacity: 0;
-  transform: translate(-105%, 10px);
-}
-
 .material-details-panel {
   border-radius: 5px;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  background-color: rgba(18, 22, 28, 0.72);
+  background-color: rgba(18, 22, 28, 0.92);
   backdrop-filter: blur(14px);
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
 }
 
+.dialog-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
 
-.upload-section {
+.dialog-title__main {
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.dialog-title__subtitle {
+  font-size: 0.9rem;
+  color: #90a4ae;
+}
+
+.upload-tabs-container {
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
 
-.upload-entry {
-  padding: 12px 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+.upload-tabs :deep(.v-tab) {
+  text-transform: none;
+  font-weight: 500;
 }
 
-.upload-entry:last-child {
-  border-bottom: none;
+.upload-tab {
+  gap: 6px;
+}
+
+.upload-tab__name {
+  max-width: 200px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.upload-window {
+  min-height: 420px;
+}
+
+.upload-entry-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 2px 12px;
 }
 
 .upload-entry__header {
   display: flex;
-  align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  align-items: flex-start;
+  gap: 12px;
 }
-.category-selector {
-  width: 100%;
-}
+
 .upload-entry__name {
   font-weight: 600;
   color: #e9ecf1;
 }
 
-.upload-entry__name-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: nowrap;
+.upload-entry__meta {
+  font-size: 0.8rem;
+  color: #90a4ae;
 }
 
-.upload-entry__name-input {
-  flex: 1;
+.category-selector {
+  width: 100%;
 }
 
-.upload-entry__name-input :deep(.v-input) {
-  margin-bottom: 0;
-}
-
-.upload-entry__category-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 15px;
-  flex-wrap: nowrap;
-}
-
-.upload-entry__series-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 8px;
-  flex-wrap: nowrap;
-}
-
-.upload-entry__category-label {
-  margin-top: 4px;
-  font-size: 0.85rem;
-  color: #cfd8dc;
-}
-
+.upload-entry__name-row,
+.upload-entry__series-row,
+.upload-entry__category-row,
 .upload-entry__color-row {
   display: flex;
-  align-items: center;
   gap: 12px;
-  margin-top: 8px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
 }
 
 .upload-entry__color-input {
   min-width: 120px;
-}
-
-.upload-entry__color-input :deep(.v-input) {
-  margin-bottom: 0;
 }
 
 .color-input {
@@ -977,25 +1230,33 @@ async function submitUpload() {
 .upload-entry__error {
   color: #ef5350;
   font-size: 0.85rem;
-  margin-top: 6px;
 }
 
 .upload-entry__success {
   color: #66bb6a;
   font-size: 0.85rem;
-  margin-top: 6px;
+}
+
+.upload-entry__dimensions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.upload-entry__size-chip {
+  align-self: center;
+}
+
+.upload-description-textarea :deep(textarea) {
+  overflow-y: auto;
+  resize: none;
 }
 
 .upload-ai-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-top: 12px;
   flex-wrap: wrap;
-}
-
-.v-textarea + .v-combobox {
-  margin-top: 12px;
 }
 
 .upload-ai-row__error {
@@ -1008,19 +1269,16 @@ async function submitUpload() {
   font-size: 0.85rem;
 }
 
-.upload-entry__dimensions {
-  display: flex;
-  flex-wrap: wrap;
+.upload-empty-state {
+  padding: 48px 12px;
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  text-align: center;
+  color: #90a4ae;
+}
+
+.upload-actions {
+  padding: 12px 20px;
   gap: 12px;
-  margin-top: 12px;
-}
-
-.upload-entry__size-chip {
-  align-self: center;
-}
-
-.upload-description-textarea :deep(textarea) {
-  overflow-y: auto;
-  resize: none;
 }
 </style>
