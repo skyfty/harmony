@@ -427,6 +427,7 @@ function handleEnvironmentDragLeave(event: DragEvent) {
 
 function applyEnvironmentAsset(target: 'background' | 'environment', asset: ProjectAsset) {
   if (target === 'background') {
+    const shouldLinkEnvironment = !environmentSettings.value.environmentMap.hdriAssetId
     sceneStore.patchEnvironmentSettings({
       background: {
         mode: 'hdri',
@@ -434,9 +435,23 @@ function applyEnvironmentAsset(target: 'background' | 'environment', asset: Proj
         hdriAssetId: asset.id,
       },
     })
+    if (shouldLinkEnvironment) {
+      sceneStore.patchEnvironmentSettings({ environmentMap: { mode: 'custom', hdriAssetId: asset.id } })
+    }
     return
   }
+  const shouldLinkBackground =
+    environmentSettings.value.background.mode !== 'hdri' || !environmentSettings.value.background.hdriAssetId
   sceneStore.patchEnvironmentSettings({ environmentMap: { mode: 'custom', hdriAssetId: asset.id } })
+  if (shouldLinkBackground) {
+    sceneStore.patchEnvironmentSettings({
+      background: {
+        mode: 'hdri',
+        solidColor: environmentSettings.value.background.solidColor,
+        hdriAssetId: asset.id,
+      },
+    })
+  }
 }
 
 function openAssetDialog(target: 'background' | 'environment', event?: MouseEvent) {
@@ -526,7 +541,7 @@ function handleEnvironmentDrop(event: DragEvent) {
           </div>
           <div
             v-else-if="environmentSettings.background.mode === 'solidColor'"
-            class="material-color"
+            class="material-color drop-target"
           >
             <div class="color-input">
               <v-text-field
