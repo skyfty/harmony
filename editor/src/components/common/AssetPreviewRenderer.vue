@@ -33,13 +33,6 @@
         <div class="upload-preview__fallback-text">{{ previewState.error ?? '暂无预览' }}</div>
       </div>
     </div>
-    <div class="upload-preview__info">
-      <div class="upload-preview__title">{{ asset.name }}</div>
-      <div class="upload-preview__meta">
-        <span>{{ typeLabel }}</span>
-        <span v-if="asset.sizeCategory">· {{ asset.sizeCategory }}</span>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -47,8 +40,8 @@
 import { computed, onBeforeUnmount, reactive, watch } from 'vue'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import ModelPreview from '@/components/upload/ModelPreview.vue'
-import HDRPreview from '@/components/upload/HDRPreview.vue'
+import ModelPreview from '@/components/common/ModelPreview.vue'
+import HDRPreview from '@/components/common/HDRPreview.vue'
 
 const props = defineProps<{
   asset: ProjectAsset

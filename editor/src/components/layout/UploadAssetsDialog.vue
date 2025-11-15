@@ -7,7 +7,7 @@ import type { ResourceCategory } from '@/types/resource-category'
 import type { AssetSeries } from '@/types/asset-series'
 import CategoryPathSelector from '@/components/common/CategoryPathSelector.vue'
 import SeriesSelector from '@/components/common/SeriesSelector.vue'
-import UploadAssetPreviewRenderer from '@/components/upload/UploadAssetPreviewRenderer.vue'
+import AssetPreviewRenderer from '@/components/common/AssetPreviewRenderer.vue'
 import { buildCategoryPathString } from '@/utils/categoryPath'
 import {
   createAssetTag,
@@ -896,9 +896,6 @@ function handleUploadAll(): void {
         </v-chip>
       </v-card-title>
       <v-card-text>
-        <v-alert v-if="uploadError" type="error" variant="tonal" density="comfortable" class="mb-4">
-          {{ uploadError }}
-        </v-alert>
         <div v-if="uploadEntries.length" class="upload-tabs-container">
           <v-tabs v-model="activeEntryId" class="upload-tabs" density="comfortable" color="primary">
             <v-tab v-for="entry in uploadEntries" :key="entry.assetId" :value="entry.assetId" class="upload-tab">
@@ -1135,7 +1132,7 @@ function handleUploadAll(): void {
                     </div>
                   </div>
                   <div class="upload-entry__preview-pane">
-                    <UploadAssetPreviewRenderer
+                    <AssetPreviewRenderer
                       :asset="entry.asset"
                       :primary-color="entry.color || entry.asset.color || null"
                       @dimensions="(payload) => handlePreviewDimensions(entry, payload)"
@@ -1152,6 +1149,12 @@ function handleUploadAll(): void {
         </div>
       </v-card-text>
       <v-card-actions class="upload-actions">
+        <div class="upload-actions__error" role="status" aria-live="polite">
+          <template v-if="uploadError">
+            <v-icon size="18" color="error">mdi-alert-circle</v-icon>
+            <span>{{ uploadError }}</span>
+          </template>
+        </div>
         <v-spacer />
         <v-btn variant="text" :disabled="uploadSubmitting && !shouldConfirmClose" @click="handleRequestDialogClose">Cancel</v-btn>
         <v-btn color="secondary" variant="tonal" :disabled="!canUploadCurrent" :loading="uploadSubmitting && !!activeEntry && activeEntry.status === 'uploading'" @click="handleUploadCurrent">
@@ -1375,5 +1378,19 @@ function handleUploadAll(): void {
 .upload-actions {
   padding: 12px 20px;
   gap: 12px;
+}
+
+.upload-actions__error {
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #ef9a9a;
+  font-size: 0.9rem;
+  flex: 0 1 55%;
+}
+
+.upload-actions__error :deep(.v-icon) {
+  margin-bottom: -2px;
 }
 </style>
