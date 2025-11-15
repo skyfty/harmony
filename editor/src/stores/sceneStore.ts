@@ -1589,12 +1589,6 @@ function extractEnvironmentSettings(node: SceneNode | null | undefined): Environ
   return cloneEnvironmentSettings(payload ?? DEFAULT_ENVIRONMENT_SETTINGS)
 }
 
-function assignEnvironmentSettings(node: SceneNode, settings: EnvironmentSettings) {
-  const baseUserData = isPlainRecord(node.userData) ? clonePlainRecord(node.userData as Record<string, unknown>) ?? {} : {}
-  baseUserData.environment = cloneEnvironmentSettings(settings)
-  node.userData = baseUserData
-}
-
 function environmentSettingsEqual(a: EnvironmentSettings, b: EnvironmentSettings, epsilon = 1e-4): boolean {
   return (
     a.background.mode === b.background.mode &&
@@ -9336,6 +9330,10 @@ export const useSceneStore = defineStore('scene', {
       'assetIndex',
       'packageAssetMap',
       'hasUnsavedChanges',
+      'groundSettings',
+      'skybox',
+      'shadowsEnabled',
+      'environment',
     ],
     migrations: migrateScenePersistedState,
   },

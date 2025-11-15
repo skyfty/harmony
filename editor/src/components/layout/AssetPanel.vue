@@ -755,16 +755,6 @@ function handleBreadcrumbChildSelect(_crumbIndex: number, category: ResourceCate
   categoryPath.value = buildCategoryPathChain(category)
 }
 
-function clearCategoryFilter(): void {
-  if (categoryPath.value.length) {
-    categoryPath.value = []
-  }
-}
-
-function reloadCategoryTree(): void {
-  void loadCategoryTree({ force: true })
-}
-
 function isBreadcrumbIndexActive(index: number): boolean {
   if (index === 0) {
     return categoryPath.value.length === 0
@@ -1277,6 +1267,8 @@ const EXTENSION_TYPE_MAP: Map<string, ProjectAsset['type']> = new Map([
   ['stl', 'model'],
   ['prefab', 'prefab'],
   ['mtl', 'material'],
+  ['hdr', 'hdri'],
+  ['exr', 'hdri'],
 ])
 
 function inferAssetTypeFromExtension(extension: string | null | undefined): ProjectAsset['type'] | null {
