@@ -5043,12 +5043,8 @@ export const useSceneStore = defineStore('scene', {
         },
       }
 
-      if (merged.background.mode === 'solidColor') {
-        merged.background.hdriAssetId = null
-      }
-      if (merged.environmentMap.mode === 'skybox') {
-        merged.environmentMap.hdriAssetId = null
-      }
+      // Preserve user-selected HDRI assets across mode changes.
+      // Explicit clearing happens only via dedicated actions (e.g., Clear buttons).
 
       return this.setEnvironmentSettings(merged)
     },

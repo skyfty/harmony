@@ -136,11 +136,14 @@ function updateBackgroundMode(mode: EnvironmentBackgroundMode | null) {
   if (!mode || mode === environmentSettings.value.background.mode) {
     return
   }
-  if (mode === 'solidColor') {
-    sceneStore.patchEnvironmentSettings({ background: { mode, hdriAssetId: null } })
-    return
-  }
-  sceneStore.patchEnvironmentSettings({ background: { mode } })
+  // Preserve previously chosen HDRI when toggling modes; don't clear hdriAssetId here
+  sceneStore.patchEnvironmentSettings({
+    background: {
+      mode,
+      solidColor: environmentSettings.value.background.solidColor,
+      hdriAssetId: environmentSettings.value.background.hdriAssetId,
+    },
+  })
 }
 
 function handleHexColorChange(target: 'background' | 'ambient' | 'fog', value: string | null) {
@@ -153,7 +156,13 @@ function handleHexColorChange(target: 'background' | 'ambient' | 'fog', value: s
     if (normalized === current) {
       return
     }
-    sceneStore.patchEnvironmentSettings({ background: { solidColor: normalized } })
+    sceneStore.patchEnvironmentSettings({
+      background: {
+        mode: environmentSettings.value.background.mode,
+        solidColor: normalized,
+        hdriAssetId: environmentSettings.value.background.hdriAssetId,
+      },
+    })
     return
   }
   if (target === 'ambient') {
@@ -181,14 +190,25 @@ function clearBackgroundAsset() {
   if (!environmentSettings.value.background.hdriAssetId && environmentSettings.value.background.mode === 'solidColor') {
     return
   }
-  sceneStore.patchEnvironmentSettings({ background: { mode: 'solidColor', hdriAssetId: null } })
+  sceneStore.patchEnvironmentSettings({
+    background: {
+      mode: 'solidColor',
+      solidColor: environmentSettings.value.background.solidColor,
+      hdriAssetId: null,
+    },
+  })
 }
 
 function updateEnvironmentMapMode(mode: EnvironmentMapMode | null) {
   if (!mode || mode === environmentSettings.value.environmentMap.mode) {
     return
   }
-  sceneStore.patchEnvironmentSettings({ environmentMap: { mode } })
+  sceneStore.patchEnvironmentSettings({
+    environmentMap: {
+      mode,
+      hdriAssetId: environmentSettings.value.environmentMap.hdriAssetId,
+    },
+  })
 }
 
 function clearEnvironmentAsset() {
@@ -406,7 +426,13 @@ function handleEnvironmentDragLeave(event: DragEvent) {
 
 function applyEnvironmentAsset(target: 'background' | 'environment', asset: ProjectAsset) {
   if (target === 'background') {
-    sceneStore.patchEnvironmentSettings({ background: { mode: 'hdri', hdriAssetId: asset.id } })
+    sceneStore.patchEnvironmentSettings({
+      background: {
+        mode: 'hdri',
+        solidColor: environmentSettings.value.background.solidColor,
+        hdriAssetId: asset.id,
+      },
+    })
     return
   }
   sceneStore.patchEnvironmentSettings({ environmentMap: { mode: 'custom', hdriAssetId: asset.id } })
@@ -632,7 +658,7 @@ function handleEnvironmentDrop(event: DragEvent) {
                 icon="mdi-close"
                 size="x-small"
                 variant="text"
-                :disabled="environmentSettings.environmentMap.mode === 'skybox' && !environmentMapAsset"
+                :disabled="!environmentMapAsset"
                 title="Clear environment map"
                 @click.stop="clearEnvironmentAsset"
               />
