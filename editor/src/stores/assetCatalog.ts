@@ -3,7 +3,7 @@ import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 
 export interface AssetCategoryDefinition {
-  key: 'models' | 'meshes' | 'images' | 'textures' | 'materials' | 'behaviors' | 'prefabs' | 'videos' | 'others'
+  key: 'models' | 'meshes' | 'images' | 'textures' | 'materials' | 'behaviors' | 'prefabs' | 'videos' | 'hdri'| 'others'
   id: string
   label: string
   extensions: string[]
@@ -61,6 +61,12 @@ export const ASSET_CATEGORY_CONFIG: AssetCategoryDefinition[] = [
     id: `${ASSETS_ROOT_DIRECTORY_ID}-videos`,
     label: 'Videos',
     extensions: ['.mp4', '.mov', '.webm', '.mkv', '.avi'],
+  },
+  {
+    key: 'hdri',
+    id: `${ASSETS_ROOT_DIRECTORY_ID}-hdri`,
+    label: 'HDRi',
+    extensions: ['.hdr', '.exr'],
   },
   {
     key: 'others',

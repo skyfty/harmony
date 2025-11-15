@@ -38,7 +38,7 @@ const assetDialogSelectedId = ref('')
 const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
 const assetDialogTarget = ref<'background' | 'environment' | null>(null)
 
-const HDRI_ASSET_TYPE = 'texture,image,file' as const
+const HDRI_ASSET_TYPE = 'hdri' as const
 
 const isBackgroundDropActive = ref(false)
 const isEnvironmentDropActive = ref(false)
