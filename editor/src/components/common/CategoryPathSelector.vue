@@ -33,6 +33,18 @@ const selectedId = ref<string | null>(props.modelValue ?? null)
 const menuOpen = ref(false)
 const navigationStack = ref<ResourceCategory[]>([])
 
+function openMenu(): void {
+  if (menuOpen.value) return
+  menuOpen.value = true
+  resetNavigationToSelected()
+}
+
+function closeMenu(): void {
+  if (!menuOpen.value) return
+  menuOpen.value = false
+  clearSearchState()
+}
+
 watch(
   () => props.modelValue,
   (value) => {
@@ -244,12 +256,15 @@ function clearSearchState(): void {
 }
 
 function handleMenuChange(open: boolean): void {
-  menuOpen.value = open
   if (open) {
-    resetNavigationToSelected()
+    openMenu()
   } else {
-    clearSearchState()
+    closeMenu()
   }
+}
+
+function handleMenuOutsideClick(): void {
+  closeMenu()
 }
 
 function navigateTo(index: number | null): void {
@@ -278,7 +293,7 @@ function selectCategoryById(id: string | null, options?: { keepOpen?: boolean })
     emit('update:modelValue', null)
     emit('category-selected', { id: null, label: '' })
     clearSearchState()
-    menuOpen.value = false
+  closeMenu()
     return
   }
   selectedId.value = id
@@ -287,7 +302,7 @@ function selectCategoryById(id: string | null, options?: { keepOpen?: boolean })
   emit('category-selected', { id, label })
   clearSearchState()
   if (!options?.keepOpen) {
-    menuOpen.value = false
+    closeMenu()
   }
 }
 
@@ -363,6 +378,7 @@ function handleClear(): void {
       max-width="420"
       :offset="[-4, 4]"
       @update:model-value="handleMenuChange"
+      @click:outside="handleMenuOutsideClick"
     >
       <template #activator="{ props: menuProps }">
         <v-text-field

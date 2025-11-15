@@ -7,6 +7,7 @@ import type { ResourceCategory } from '@/types/resource-category'
 import type { AssetSeries } from '@/types/asset-series'
 import CategoryPathSelector from '@/components/common/CategoryPathSelector.vue'
 import SeriesSelector from '@/components/common/SeriesSelector.vue'
+import UploadAssetPreviewRenderer from '@/components/upload/UploadAssetPreviewRenderer.vue'
 import { buildCategoryPathString } from '@/utils/categoryPath'
 import {
   createAssetTag,
@@ -18,6 +19,19 @@ import {
   createAssetSeries,
   uploadAssetToServer,
 } from '@/api/resourceAssets'
+
+const TYPE_COLOR_FALLBACK: Record<ProjectAsset['type'], string> = {
+  model: '#26c6da',
+  mesh: '#26c6da',
+  image: '#1e88e5',
+  texture: '#8e24aa',
+  hdri: '#009688',
+  material: '#ffb74d',
+  prefab: '#7986cb',
+  video: '#ff7043',
+  file: '#546e7a',
+  behavior: '#607d8b',
+}
 
 const props = defineProps<{
   modelValue: boolean
@@ -204,6 +218,28 @@ function handleEntryColorInput(entry: UploadAssetEntry, value: string | number |
     entry.color = normalized
     markEntryDirty(entry)
   }
+}
+
+function handleEntryColorBlur(entry: UploadAssetEntry): void {
+  const normalized = normalizeHexColor(entry.colorHexInput)
+  if (!normalized) {
+    entry.colorHexInput = ''
+    entry.color = ''
+    markEntryDirty(entry)
+    return
+  }
+  entry.color = normalized
+  entry.colorHexInput = normalized.toUpperCase()
+  markEntryDirty(entry)
+}
+
+function entryColorPreview(entry: UploadAssetEntry): string {
+  return (
+    normalizeHexColor(entry.color) ??
+    normalizeHexColor(entry.asset.color ?? null) ??
+    TYPE_COLOR_FALLBACK[entry.asset.type] ??
+    '#455A64'
+  )
 }
 
 function handleEntryNameChange(entry: UploadAssetEntry, value: string | null): void {
@@ -595,6 +631,37 @@ function handleEntrySeriesCreated(entry: UploadAssetEntry, series: AssetSeries):
   }
 }
 
+function handlePreviewDimensions(entry: UploadAssetEntry, payload: { length: number; width: number; height: number }): void {
+  if (!payload) return
+  const applyValue = (key: DimensionKey, value: number) => {
+    if (!Number.isFinite(value) || value <= 0) return
+    const current = entry[key]
+    if (typeof current === 'number' && Number.isFinite(current) && current > 0) {
+      return
+    }
+    entry[key] = Number.parseFloat(value.toFixed(3))
+    markEntryDirty(entry)
+  }
+  applyValue('dimensionLength', payload.length)
+  applyValue('dimensionWidth', payload.width)
+  applyValue('dimensionHeight', payload.height)
+}
+
+function handlePreviewImageMeta(entry: UploadAssetEntry, payload: { width: number; height: number }): void {
+  if (!payload) return
+  const applyImageValue = (key: ImageDimensionKey, value: number) => {
+    if (!Number.isFinite(value) || value <= 0) return
+    const current = entry[key]
+    if (typeof current === 'number' && Number.isFinite(current) && current > 0) {
+      return
+    }
+    entry[key] = Math.round(value)
+    markEntryDirty(entry)
+  }
+  applyImageValue('imageWidth', payload.width)
+  applyImageValue('imageHeight', payload.height)
+}
+
 // Initialize entries when dialog opens
 watch(
   () => internalOpen.value,
@@ -815,7 +882,7 @@ function handleUploadAll(): void {
 </script>
 
 <template>
-  <v-dialog v-model="internalOpen" max-width="900" persistent>
+  <v-dialog v-model="internalOpen" max-width="1200" persistent>
     <v-card class="material-details-panel">
       <v-card-title class="dialog-title">
         <div>
@@ -860,203 +927,221 @@ function handleUploadAll(): void {
                 <div v-if="entry.status === 'error'" class="upload-entry__error">{{ entry.error }}</div>
                 <div v-else-if="entry.status === 'success'" class="upload-entry__success">Uploaded</div>
 
-                <div class="upload-entry__name-row">
-                  <v-text-field
-                    class="upload-entry__name-input"
-                    :model-value="entry.name"
-                    label="Asset Name"
-                    density="compact"
-                    variant="underlined"
-                    :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
-                    @update:model-value="(value) => handleEntryNameChange(entry, value)">
-                  </v-text-field>
-                </div>
+                <div class="upload-entry__body">
+                  <div class="upload-entry__form">
+                    <div class="upload-entry__name-row">
+                      <v-text-field
+                        class="upload-entry__name-input"
+                        :model-value="entry.name"
+                        label="Asset Name"
+                        density="compact"
+                        variant="underlined"
+                        :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                        @update:model-value="(value) => handleEntryNameChange(entry, value)">
+                      </v-text-field>
+                    </div>
 
-                <div class="upload-entry__series-row">
-                  <SeriesSelector
-                    :model-value="entry.seriesId"
-                    :series-options="assetSeries"
-                    label="Asset Series"
-                    density="compact"
-                    :loading="assetSeriesLoading"
-                    :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
-                    :clearable="true"
-                    :allow-create="true"
-                    :create-series="handleCreateSeries"
-                    @update:model-value="(value) => handleEntrySeriesChange(entry, value)"
-                    @series-created="(series) => handleEntrySeriesCreated(entry, series)"
-                  />
-                </div>
+                    <div class="upload-entry__series-row">
+                      <SeriesSelector
+                        :model-value="entry.seriesId"
+                        :series-options="assetSeries"
+                        label="Asset Series"
+                        density="compact"
+                        :loading="assetSeriesLoading"
+                        :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                        :clearable="true"
+                        :allow-create="true"
+                        :create-series="handleCreateSeries"
+                        @update:model-value="(value) => handleEntrySeriesChange(entry, value)"
+                        @series-created="(series) => handleEntrySeriesCreated(entry, series)"
+                      />
+                    </div>
 
-                <div class="upload-entry__category-row">
-                  <CategoryPathSelector
-                    :model-value="entry.categoryId"
-                    :categories="resourceCategories"
-                    label="Asset Category"
-                    placeholder="Select or create a category"
-                    class="category-selector"
-                    :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
-                    @update:model-value="(value) => handleEntryCategoryChange(entry, value)"
-                    @category-selected="(payload) => handleEntryCategorySelected(entry, payload)"
-                    @category-created="(category) => handleEntryCategoryCreated(entry, category)"
-                  />
-                </div>
+                    <div class="upload-entry__category-row">
+                      <CategoryPathSelector
+                        :model-value="entry.categoryId"
+                        :categories="resourceCategories"
+                        label="Asset Category"
+                        placeholder="Select or create a category"
+                        class="category-selector"
+                        :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                        @update:model-value="(value) => handleEntryCategoryChange(entry, value)"
+                        @category-selected="(payload) => handleEntryCategorySelected(entry, payload)"
+                        @category-created="(category) => handleEntryCategoryCreated(entry, category)"
+                      />
+                    </div>
 
-                <div class="upload-entry__color-row">
-                  <div class="color-input">
-                    <v-text-field
-                      class="upload-entry__color-input"
-                      :model-value="entry.colorHexInput"
-                      label="Primary Color"
-                      density="compact"
-                      variant="underlined"
-                      placeholder="#RRGGBB"
-                      hide-details
-                      spellcheck="false"
-                      autocorrect="off"
-                      autocomplete="off"
-                      :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
-                      @update:model-value="(value) => handleEntryColorInput(entry, value)"
-                    />
-                    <v-menu :close-on-content-click="false" transition="scale-transition" location="bottom start">
-                      <template #activator="{ props: menuProps }">
-                        <button
-                          class="color-swatch"
-                          type="button"
-                          v-bind="menuProps"
-                          :style="{ backgroundColor: entry.color || '#455A64' }"
-                          :title="(entry.color || '').toUpperCase() || 'Pick a color'"
+                    <div class="upload-entry__color-row">
+                      <v-text-field
+                        class="upload-entry__color-input"
+                        :model-value="entry.colorHexInput"
+                        label="Primary Color"
+                        density="compact"
+                        variant="underlined"
+                        placeholder="#RRGGBB"
+                        hide-details
+                        spellcheck="false"
+                        autocorrect="off"
+                        autocomplete="off"
+                        :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                        @update:model-value="(value) => handleEntryColorInput(entry, value)"
+                        @blur="() => handleEntryColorBlur(entry)"
+                      >
+                        <template #append-inner>
+                          <v-menu :close-on-content-click="false" transition="scale-transition" location="bottom start">
+                            <template #activator="{ props: menuProps }">
+                              <v-btn
+                                v-bind="menuProps"
+                                class="color-swatch"
+                                :style="{ backgroundColor: entryColorPreview(entry) }"
+                                variant="tonal"
+                                size="small"
+                                :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                              >
+                                <v-icon color="white" size="16">mdi-eyedropper-variant</v-icon>
+                              </v-btn>
+                            </template>
+                            <div class="color-picker">
+                              <v-color-picker
+                                :model-value="entryColorPreview(entry)"
+                                mode="hex"
+                                :modes="['hex']"
+                                hide-inputs
+                                @update:model-value="(value) => applyEntryColor(entry, value as string)"
+                              />
+                            </div>
+                          </v-menu>
+                        </template>
+                      </v-text-field>
+                    </div>
+
+                    <div v-if="entry.asset.type === 'model' || entry.asset.type === 'prefab'" class="upload-entry__dimensions">
+                      <div class="upload-entry__dimension-grid">
+                        <v-text-field
+                          :model-value="formatDimension(entry.dimensionLength)"
+                          label="Length (m)"
+                          type="number"
+                          density="compact"
+                          variant="underlined"
+                          step="0.01"
+                          min="0"
+                          suffix="m"
                           :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
-                        >
-                          <span class="sr-only">Pick color</span>
-                        </button>
-                      </template>
-                      <div class="color-picker">
-                        <v-color-picker
-                          :model-value="entry.color || '#455A64'"
-                          mode="hex"
-                          :modes="['hex']"
-                          hide-inputs
-                          @update:model-value="(value) => applyEntryColor(entry, value as string)"
+                          @update:model-value="(value) => setEntryDimension(entry, 'dimensionLength', value)"
+                        />
+                        <v-text-field
+                          :model-value="formatDimension(entry.dimensionWidth)"
+                          label="Width (m)"
+                          type="number"
+                          density="compact"
+                          variant="underlined"
+                          step="0.01"
+                          min="0"
+                          suffix="m"
+                          :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                          @update:model-value="(value) => setEntryDimension(entry, 'dimensionWidth', value)"
+                        />
+                        <v-text-field
+                          :model-value="formatDimension(entry.dimensionHeight)"
+                          label="Height (m)"
+                          type="number"
+                          density="compact"
+                          variant="underlined"
+                          step="0.01"
+                          min="0"
+                          suffix="m"
+                          :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                          @update:model-value="(value) => setEntryDimension(entry, 'dimensionHeight', value)"
                         />
                       </div>
-                    </v-menu>
+                      <v-chip v-if="entrySizeCategory(entry)" class="upload-entry__size-chip" size="small" color="secondary" variant="tonal">
+                        Size category: {{ entrySizeCategory(entry) }}
+                      </v-chip>
+                    </div>
+                    <div v-else-if="entry.asset.type === 'image'" class="upload-entry__dimensions">
+                      <div class="upload-entry__dimension-grid">
+                        <v-text-field
+                          :model-value="formatInteger(entry.imageWidth)"
+                          label="Image width (px)"
+                          type="number"
+                          density="compact"
+                          variant="underlined"
+                          step="1"
+                          min="0"
+                          suffix="px"
+                          :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                          @update:model-value="(value) => setEntryImageDimension(entry, 'imageWidth', value)"
+                        />
+                        <v-text-field
+                          :model-value="formatInteger(entry.imageHeight)"
+                          label="Image height (px)"
+                          type="number"
+                          density="compact"
+                          variant="underlined"
+                          step="1"
+                          min="0"
+                          suffix="px"
+                          :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                          @update:model-value="(value) => setEntryImageDimension(entry, 'imageHeight', value)"
+                        />
+                      </div>
+                    </div>
+
+                    <v-textarea
+                      class="upload-description-textarea"
+                      :model-value="entry.description"
+                      label="Description"
+                      density="compact"
+                      variant="underlined"
+                      rows="2"
+                      :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                      @update:model-value="(value) => handleEntryDescriptionChange(entry, value)"
+                      @blur="() => handleEntryDescriptionBlur(entry)"
+                    />
+
+                    <v-combobox
+                      class="upload-tags-combobox"
+                      :model-value="entry.tagValues"
+                      :items="uploadTagOptions"
+                      item-title="label"
+                      item-value="value"
+                      label="Select or create tags"
+                      density="comfortable"
+                      variant="underlined"
+                      multiple
+                      chips
+                      closable-chips
+                      clearable
+                      hide-selected
+                      new-value-mode="add"
+                      :loading="serverTagsLoading"
+                      :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                      @update:model-value="(value) => handleEntryTagsChange(entry, value as string[])"
+                    />
+
+                    <div class="upload-ai-row">
+                      <v-btn
+                        color="secondary"
+                        variant="tonal"
+                        size="small"
+                        :disabled="uploadSubmitting || !canRequestAiTagsForEntry(entry) || entry.aiLoading"
+                        :loading="entry.aiLoading"
+                        @click="() => handleGenerateTagsClick(entry)"
+                      >
+                        Generate tags with AI
+                      </v-btn>
+                      <span v-if="entry.aiError" class="upload-ai-row__error">{{ entry.aiError }}</span>
+                      <span v-else-if="entry.aiSuggestedTags.length" class="upload-ai-row__hint">Suggested: {{ entry.aiSuggestedTags.join(', ') }}</span>
+                    </div>
                   </div>
-                </div>
-
-                <div v-if="entry.asset.type === 'model' || entry.asset.type === 'prefab'" class="upload-entry__dimensions">
-                  <v-text-field
-                    :model-value="formatDimension(entry.dimensionLength)"
-                    label="Length (m)"
-                    type="number"
-                    density="compact"
-                    variant="underlined"
-                    step="0.01"
-                    min="0"
-                    suffix="m"
-                    :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
-                    @update:model-value="(value) => setEntryDimension(entry, 'dimensionLength', value)"
-                  />
-                  <v-text-field
-                    :model-value="formatDimension(entry.dimensionWidth)"
-                    label="Width (m)"
-                    type="number"
-                    density="compact"
-                    variant="underlined"
-                    step="0.01"
-                    min="0"
-                    suffix="m"
-                    :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
-                    @update:model-value="(value) => setEntryDimension(entry, 'dimensionWidth', value)"
-                  />
-                  <v-text-field
-                    :model-value="formatDimension(entry.dimensionHeight)"
-                    label="Height (m)"
-                    type="number"
-                    density="compact"
-                    variant="underlined"
-                    step="0.01"
-                    min="0"
-                    suffix="m"
-                    :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
-                    @update:model-value="(value) => setEntryDimension(entry, 'dimensionHeight', value)"
-                  />
-                  <v-chip v-if="entrySizeCategory(entry)" class="upload-entry__size-chip" size="small" color="secondary" variant="tonal">
-                    Size category: {{ entrySizeCategory(entry) }}
-                  </v-chip>
-                </div>
-                <div v-else-if="entry.asset.type === 'image'" class="upload-entry__dimensions">
-                  <v-text-field
-                    :model-value="formatInteger(entry.imageWidth)"
-                    label="Image width (px)"
-                    type="number"
-                    density="compact"
-                    variant="underlined"
-                    step="1"
-                    min="0"
-                    suffix="px"
-                    :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
-                    @update:model-value="(value) => setEntryImageDimension(entry, 'imageWidth', value)"
-                  />
-                  <v-text-field
-                    :model-value="formatInteger(entry.imageHeight)"
-                    label="Image height (px)"
-                    type="number"
-                    density="compact"
-                    variant="underlined"
-                    step="1"
-                    min="0"
-                    suffix="px"
-                    :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
-                    @update:model-value="(value) => setEntryImageDimension(entry, 'imageHeight', value)"
-                  />
-                </div>
-
-                <v-textarea
-                  class="upload-description-textarea"
-                  :model-value="entry.description"
-                  label="Description"
-                  density="compact"
-                  variant="underlined"
-                  rows="4"
-                  :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
-                  @update:model-value="(value) => handleEntryDescriptionChange(entry, value)"
-                  @blur="() => handleEntryDescriptionBlur(entry)"
-                />
-
-                <v-combobox
-                  class="upload-tags-combobox"
-                  :model-value="entry.tagValues"
-                  :items="uploadTagOptions"
-                  item-title="label"
-                  item-value="value"
-                  label="Select or create tags"
-                  density="comfortable"
-                  variant="underlined"
-                  multiple
-                  chips
-                  closable-chips
-                  clearable
-                  hide-selected
-                  new-value-mode="add"
-                  :loading="serverTagsLoading"
-                  :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
-                  @update:model-value="(value) => handleEntryTagsChange(entry, value as string[])"
-                />
-
-                <div class="upload-ai-row">
-                  <v-btn
-                    color="secondary"
-                    variant="tonal"
-                    size="small"
-                    :disabled="uploadSubmitting || !canRequestAiTagsForEntry(entry) || entry.aiLoading"
-                    :loading="entry.aiLoading"
-                    @click="() => handleGenerateTagsClick(entry)"
-                  >
-                    Generate tags with AI
-                  </v-btn>
-                  <span v-if="entry.aiError" class="upload-ai-row__error">{{ entry.aiError }}</span>
-                  <span v-else-if="entry.aiSuggestedTags.length" class="upload-ai-row__hint">Suggested: {{ entry.aiSuggestedTags.join(', ') }}</span>
+                  <div class="upload-entry__preview-pane">
+                    <UploadAssetPreviewRenderer
+                      :asset="entry.asset"
+                      :primary-color="entry.color || entry.asset.color || null"
+                      @dimensions="(payload) => handlePreviewDimensions(entry, payload)"
+                      @image-meta="(payload) => handlePreviewImageMeta(entry, payload)"
+                    />
+                  </div>
                 </div>
               </div>
             </v-window-item>
@@ -1151,6 +1236,31 @@ function handleUploadAll(): void {
   padding: 4px 2px 12px;
 }
 
+.upload-entry__body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  align-items: stretch;
+}
+
+.upload-entry__form {
+  flex: 1 1 420px;
+  min-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.upload-entry__preview-pane {
+  flex: 1 1 360px;
+  min-width: 320px;
+  display: flex;
+}
+
+.upload-entry__preview-pane :deep(.upload-preview) {
+  width: 100%;
+}
+
 .upload-entry__header {
   display: flex;
   justify-content: space-between;
@@ -1185,46 +1295,20 @@ function handleUploadAll(): void {
   min-width: 120px;
 }
 
-.color-input {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
+.upload-entry__color-row :deep(.v-field__append-inner) {
+  padding-inline-end: 4px;
 }
 
 .color-swatch {
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  cursor: pointer;
-  padding: 0;
-  background: transparent;
-}
-
-.color-swatch:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.color-swatch:focus-visible {
-  outline: 2px solid rgba(107, 152, 255, 0.85);
-  outline-offset: 2px;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  box-shadow: none;
 }
 
 .color-picker {
   padding: 12px;
-}
-
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  border: 0;
 }
 
 .upload-entry__error {
@@ -1239,8 +1323,19 @@ function handleUploadAll(): void {
 
 .upload-entry__dimensions {
   display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.upload-entry__dimension-grid {
+  display: flex;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+.upload-entry__dimension-grid :deep(.v-text-field) {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .upload-entry__size-chip {
