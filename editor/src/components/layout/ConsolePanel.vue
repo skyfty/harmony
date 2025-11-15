@@ -1,23 +1,14 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
+import { useConsoleStore, type ConsoleLogEntry, type ConsoleLogLevel } from '@/stores/consoleStore'
 
-type LogLevel = 'info' | 'warn' | 'error'
-
-interface LogEntry {
-  id: number
-  level: LogLevel
-  timestamp: number
-  message: string
-}
-
-const MAX_LOG_ENTRIES = 500
-let nextEntryId = 0
-const activeLevels = ref<LogLevel[]>(['info', 'warn', 'error'])
-const entries = ref<LogEntry[]>([])
+const consoleStore = useConsoleStore()
+const { entries } = storeToRefs(consoleStore)
+const activeLevels = ref<ConsoleLogLevel[]>(['info', 'warn', 'error'])
 const logListRef = ref<HTMLElement | null>(null)
-const restoreConsoleFns: Array<() => void> = []
 
-const levelDefinitions: Array<{ level: LogLevel; label: string; icon: string }> = [
+const levelDefinitions: Array<{ level: ConsoleLogLevel; label: string; icon: string }> = [
   { level: 'info', label: 'Info', icon: 'mdi-information-outline' },
   { level: 'warn', label: 'Warn', icon: 'mdi-alert-outline' },
   { level: 'error', label: 'Error', icon: 'mdi-alert-circle-outline' },
@@ -29,7 +20,7 @@ const timeFormatter = new Intl.DateTimeFormat(undefined, {
   second: '2-digit',
 })
 
-const filteredEntries = computed(() => {
+const filteredEntries = computed<ConsoleLogEntry[]>(() => {
   const visibleLevels = new Set(activeLevels.value)
   return entries.value.filter((entry) => {
     if (!visibleLevels.has(entry.level)) {
@@ -39,7 +30,7 @@ const filteredEntries = computed(() => {
   })
 })
 
-function toggleLevel(level: LogLevel): void {
+function toggleLevel(level: ConsoleLogLevel): void {
   if (activeLevels.value.includes(level)) {
     activeLevels.value = activeLevels.value.filter((item) => item !== level)
     return
@@ -48,37 +39,11 @@ function toggleLevel(level: LogLevel): void {
 }
 
 function clearLogs(): void {
-  entries.value = []
+  consoleStore.clear()
 }
 
 function formatTimestamp(value: number): string {
   return timeFormatter.format(new Date(value))
-}
-
-function formatArg(arg: unknown): string {
-  if (typeof arg === 'string') {
-    return arg
-  }
-  if (arg instanceof Error) {
-    return `${arg.name}: ${arg.message}`
-  }
-  try {
-    return JSON.stringify(arg)
-  } catch (error) {
-    return String(arg)
-  }
-}
-
-function pushEntry(level: LogLevel, payload: unknown[]): void {
-  const message = payload.map(formatArg).join(' ')
-  const timestamp = Date.now()
-  const record: LogEntry = {
-    id: ++nextEntryId,
-    level,
-    timestamp,
-    message,
-  }
-  entries.value = [...entries.value.slice(-MAX_LOG_ENTRIES + 1), record]
 }
 
 watch(entries, () => {
@@ -91,39 +56,8 @@ watch(entries, () => {
   })
 })
 
-// Mirror console output into local log history while preserving native behavior.
 onMounted(() => {
-  if (typeof window === 'undefined') {
-    return
-  }
-  const target = window.console
-  const consoleMap = target as unknown as Record<string, (...values: unknown[]) => unknown>
-  const patchers: Array<{ method: keyof Console; level: LogLevel }> = [
-    { method: 'log', level: 'info' },
-    { method: 'info', level: 'info' },
-    { method: 'warn', level: 'warn' },
-    { method: 'error', level: 'error' },
-  ]
-  patchers.forEach(({ method, level }) => {
-    const methodName = method as string
-    const original = consoleMap[methodName]
-    if (typeof original !== 'function') {
-      return
-    }
-    const patched = (...args: unknown[]) => {
-      pushEntry(level, args)
-      return original.apply(target, args)
-    }
-    consoleMap[methodName] = patched
-    restoreConsoleFns.push(() => {
-      consoleMap[methodName] = original
-    })
-  })
-})
-
-onBeforeUnmount(() => {
-  restoreConsoleFns.forEach((restore) => restore())
-  restoreConsoleFns.length = 0
+  consoleStore.startCapture()
 })
 </script>
 

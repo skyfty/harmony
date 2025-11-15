@@ -370,7 +370,7 @@ function handleClear(): void {
           :label="label ?? '资源分类'"
           :placeholder="placeholder ?? '选择分类'"
           :hint="hint"
-                variant="outlined"
+                variant="underlined"
           :persistent-hint="Boolean(hint)"
           density="compact"
           :disabled="disabled"

@@ -579,7 +579,76 @@ function handleEnvironmentDrop(event: DragEvent) {
             </div>
           </div>
         </section>
-
+<section class="environment-section">
+          <div class="section-title">Environment Map</div>
+          <v-select
+            :items="environmentMapModeOptions"
+            :model-value="environmentSettings.environmentMap.mode"
+            density="compact"
+            hide-details
+            variant="underlined"
+            class="section-select"
+            @update:model-value="(mode) => updateEnvironmentMapMode(mode as EnvironmentMapMode | null)"
+          />
+          <div
+            v-if="environmentSettings.environmentMap.mode === 'custom'"
+            class="asset-tile"
+            :class="{
+              'is-active-drop': isEnvironmentDropActive,
+              'is-inactive': environmentSettings.environmentMap.mode !== 'custom',
+            }"
+            @dragenter="handleEnvironmentDragEnter"
+            @dragover="handleEnvironmentDragOver"
+            @dragleave="handleEnvironmentDragLeave"
+            @drop="handleEnvironmentDrop"
+          >
+            <div
+              class="asset-thumb"
+              :class="{ 'asset-thumb--empty': !environmentMapAsset }"
+              :style="environmentPreviewStyle"
+              role="button"
+              tabindex="0"
+              :title="environmentMapAsset ? 'Change environment map' : 'Select environment map'"
+              @click="openAssetDialog('environment', $event)"
+              @keydown.enter.prevent="openAssetDialog('environment')"
+              @keydown.space.prevent="openAssetDialog('environment')"
+            >
+              <v-icon v-if="!environmentMapAsset" size="20" color="rgba(233, 236, 241, 0.4)">mdi-image-off</v-icon>
+            </div>
+            <div
+              class="asset-info"
+              role="button"
+              tabindex="0"
+              @click="openAssetDialog('environment', $event)"
+              @keydown.enter.prevent="openAssetDialog('environment')"
+              @keydown.space.prevent="openAssetDialog('environment')"
+            >
+              <div class="asset-name">{{ environmentAssetLabel }}</div>
+              <div class="asset-hint">{{ environmentAssetHint }}</div>
+            </div>
+            <div class="asset-actions">
+              <v-btn
+                class="asset-action"
+                icon="mdi-close"
+                size="x-small"
+                variant="text"
+                :disabled="environmentSettings.environmentMap.mode === 'skybox' && !environmentMapAsset"
+                title="Clear environment map"
+                @click.stop="clearEnvironmentAsset"
+              />
+            </div>
+          </div>
+          <div
+            v-else
+            class="environment-placeholder"
+          >
+            <v-icon size="30" color="rgba(233, 236, 241, 0.45)">mdi-weather-partly-cloudy</v-icon>
+            <div class="placeholder-text">
+              <div class="placeholder-title">Using Skybox Reflections</div>
+              <div class="placeholder-hint">Environment map derives from the active skybox</div>
+            </div>
+          </div>
+        </section>
         <section class="environment-section">
           <div class="section-title">Ambient Light</div>
           <div class="material-color">
@@ -715,76 +784,7 @@ function handleEnvironmentDrop(event: DragEvent) {
           </div>
         </section>
 
-        <section class="environment-section">
-          <div class="section-title">Environment Map</div>
-          <v-select
-            :items="environmentMapModeOptions"
-            :model-value="environmentSettings.environmentMap.mode"
-            density="compact"
-            hide-details
-            variant="underlined"
-            class="section-select"
-            @update:model-value="(mode) => updateEnvironmentMapMode(mode as EnvironmentMapMode | null)"
-          />
-          <div
-            v-if="environmentSettings.environmentMap.mode === 'custom'"
-            class="asset-tile"
-            :class="{
-              'is-active-drop': isEnvironmentDropActive,
-              'is-inactive': environmentSettings.environmentMap.mode !== 'custom',
-            }"
-            @dragenter="handleEnvironmentDragEnter"
-            @dragover="handleEnvironmentDragOver"
-            @dragleave="handleEnvironmentDragLeave"
-            @drop="handleEnvironmentDrop"
-          >
-            <div
-              class="asset-thumb"
-              :class="{ 'asset-thumb--empty': !environmentMapAsset }"
-              :style="environmentPreviewStyle"
-              role="button"
-              tabindex="0"
-              :title="environmentMapAsset ? 'Change environment map' : 'Select environment map'"
-              @click="openAssetDialog('environment', $event)"
-              @keydown.enter.prevent="openAssetDialog('environment')"
-              @keydown.space.prevent="openAssetDialog('environment')"
-            >
-              <v-icon v-if="!environmentMapAsset" size="20" color="rgba(233, 236, 241, 0.4)">mdi-image-off</v-icon>
-            </div>
-            <div
-              class="asset-info"
-              role="button"
-              tabindex="0"
-              @click="openAssetDialog('environment', $event)"
-              @keydown.enter.prevent="openAssetDialog('environment')"
-              @keydown.space.prevent="openAssetDialog('environment')"
-            >
-              <div class="asset-name">{{ environmentAssetLabel }}</div>
-              <div class="asset-hint">{{ environmentAssetHint }}</div>
-            </div>
-            <div class="asset-actions">
-              <v-btn
-                class="asset-action"
-                icon="mdi-close"
-                size="x-small"
-                variant="text"
-                :disabled="environmentSettings.environmentMap.mode === 'skybox' && !environmentMapAsset"
-                title="Clear environment map"
-                @click.stop="clearEnvironmentAsset"
-              />
-            </div>
-          </div>
-          <div
-            v-else
-            class="environment-placeholder"
-          >
-            <v-icon size="30" color="rgba(233, 236, 241, 0.45)">mdi-weather-partly-cloudy</v-icon>
-            <div class="placeholder-text">
-              <div class="placeholder-title">Using Skybox Reflections</div>
-              <div class="placeholder-hint">Environment map derives from the active skybox</div>
-            </div>
-          </div>
-        </section>
+        
       </div>
       <AssetDialog
         v-model="assetDialogVisible"

@@ -124,6 +124,7 @@ const canUpdatePrefab = computed(() => {
   return isNormalNodeType(node) && resolvePrefabAssetId(node) !== null
 })
 
+
 watch(allNodeIds, (ids) => {
   if (selectionAnchorId.value && !ids.includes(selectionAnchorId.value)) {
     selectionAnchorId.value = selectedNodeIds.value[selectedNodeIds.value.length - 1] ?? null
@@ -702,7 +703,7 @@ function handleTreeDragLeave(event: DragEvent) {
           variant="text"
           density="compact"
           color="error"
-          :disabled="!hasSelection"
+          :disabled="!hasSelection "
           @click="handleDeleteSelected"
         />
         <v-spacer />

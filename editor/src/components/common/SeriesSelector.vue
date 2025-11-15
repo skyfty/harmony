@@ -10,7 +10,7 @@
       :custom-filter="filter"
       item-title="name"
       item-value="id"
-      variant="outlined"
+      variant="underlined"
       :density="density"
       hide-details="auto"
       :return-object="false"

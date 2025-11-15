@@ -202,13 +202,13 @@ function computeSizeCategory(length: number | null, width: number | null, height
     .filter((candidate): candidate is number => typeof candidate === 'number' && Number.isFinite(candidate) && candidate > 0)
   if (!values.length) return null
   const max = Math.max(...values)
-  if (max < 0.1) return '微型'
-  if (max < 0.5) return '小型'
-  if (max < 1) return '普通'
-  if (max < 3) return '中型'
-  if (max < 10) return '大型'
-  if (max < 30) return '巨型'
-  return '巨大型'
+  if (max < 0.1) return 'Tiny'
+  if (max < 0.5) return 'Small'
+  if (max < 1) return 'Normal'
+  if (max < 3) return 'Medium'
+  if (max < 10) return 'Large'
+  if (max < 30) return 'Huge'
+  return 'Gigantic'
 }
 
 function entrySizeCategory(entry: UploadAssetEntry): string | null {
@@ -235,21 +235,21 @@ function buildAiSignature(entry: UploadAssetEntry): string {
 function buildExtraHints(entry: UploadAssetEntry): string[] {
   const hints: string[] = []
   const color = normalizeHexColor(entry.color) ?? normalizeHexColor(entry.asset.color ?? null)
-  if (color) hints.push(`主要颜色 ${color}`)
+  if (color) hints.push(`Primary color ${color}`)
   if (entry.asset.type === 'model' || entry.asset.type === 'prefab') {
     const parts: string[] = []
-    if (typeof entry.dimensionLength === 'number' && Number.isFinite(entry.dimensionLength) && entry.dimensionLength > 0) parts.push(`长度 ${entry.dimensionLength.toFixed(2)} 米`)
-    if (typeof entry.dimensionWidth === 'number' && Number.isFinite(entry.dimensionWidth) && entry.dimensionWidth > 0) parts.push(`宽度 ${entry.dimensionWidth.toFixed(2)} 米`)
-    if (typeof entry.dimensionHeight === 'number' && Number.isFinite(entry.dimensionHeight) && entry.dimensionHeight > 0) parts.push(`高度 ${entry.dimensionHeight.toFixed(2)} 米`)
-    if (parts.length) hints.push(`模型尺寸 ${parts.join('，')}`)
+    if (typeof entry.dimensionLength === 'number' && Number.isFinite(entry.dimensionLength) && entry.dimensionLength > 0) parts.push(`Length ${entry.dimensionLength.toFixed(2)} m`)
+    if (typeof entry.dimensionWidth === 'number' && Number.isFinite(entry.dimensionWidth) && entry.dimensionWidth > 0) parts.push(`Width ${entry.dimensionWidth.toFixed(2)} m`)
+    if (typeof entry.dimensionHeight === 'number' && Number.isFinite(entry.dimensionHeight) && entry.dimensionHeight > 0) parts.push(`Height ${entry.dimensionHeight.toFixed(2)} m`)
+    if (parts.length) hints.push(`Model dimensions ${parts.join(', ')}`)
     const sizeCategory = entrySizeCategory(entry)
-    if (sizeCategory) hints.push(`尺寸分类 ${sizeCategory}`)
+    if (sizeCategory) hints.push(`Size category ${sizeCategory}`)
   }
   if (entry.asset.type === 'image') {
     const parts: string[] = []
-    if (typeof entry.imageWidth === 'number' && Number.isFinite(entry.imageWidth) && entry.imageWidth > 0) parts.push(`宽度 ${Math.round(entry.imageWidth)} 像素`)
-    if (typeof entry.imageHeight === 'number' && Number.isFinite(entry.imageHeight) && entry.imageHeight > 0) parts.push(`高度 ${Math.round(entry.imageHeight)} 像素`)
-    if (parts.length) hints.push(`图片尺寸 ${parts.join('，')}`)
+    if (typeof entry.imageWidth === 'number' && Number.isFinite(entry.imageWidth) && entry.imageWidth > 0) parts.push(`Width ${Math.round(entry.imageWidth)} px`)
+    if (typeof entry.imageHeight === 'number' && Number.isFinite(entry.imageHeight) && entry.imageHeight > 0) parts.push(`Height ${Math.round(entry.imageHeight)} px`)
+    if (parts.length) hints.push(`Image size ${parts.join(', ')}`)
   }
   return hints
 }
@@ -285,7 +285,7 @@ async function requestAiTagsForEntry(entry: UploadAssetEntry, options: { auto?: 
   const preferredName = entry.name?.trim().length ? entry.name.trim() : entry.asset.name
   const description = entry.description?.trim() ?? ''
   if (!preferredName && !description) {
-    if (!options.auto) aiTagError.value = '请先填写资源名称或描述'
+    if (!options.auto) aiTagError.value = 'Please enter a name or description first'
     return
   }
   const signature = buildAiSignature(entry)
@@ -303,14 +303,14 @@ async function requestAiTagsForEntry(entry: UploadAssetEntry, options: { auto?: 
     aiSuggestedTags.value = result.tags ?? []
     entry.aiLastSignature = signature
     if (!added && !options.auto) {
-      aiTagError.value = 'AI 生成的标签已存在，可继续编辑或上传'
+      aiTagError.value = 'AI suggested tags already exist. You can continue editing or upload.'
     }
   } catch (error) {
     if (options.auto) {
-      console.warn('自动生成标签失败', error)
+      console.warn('Auto tag generation failed', error)
       return
     }
-    aiTagError.value = (error as Error).message ?? '生成标签失败'
+    aiTagError.value = (error as Error).message ?? 'Failed to generate tags'
   } finally {
     aiTagLoading.value = false
   }
@@ -319,7 +319,7 @@ async function requestAiTagsForEntry(entry: UploadAssetEntry, options: { auto?: 
 function handleGenerateTagsClick(): void {
   const entry = uploadEntries.value[0]
   if (!entry) {
-    aiTagError.value = '暂无可用资源，请先选择要上传的资源'
+    aiTagError.value = 'No asset available. Please select assets to upload first.'
     return
   }
   void requestAiTagsForEntry(entry, { auto: false })
@@ -362,7 +362,7 @@ async function loadServerTags(options: { force?: boolean } = {}) {
     serverTags.value = Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
     serverTagsLoaded.value = true
   } catch (error) {
-    serverTagsError.value = (error as Error).message ?? '标签加载失败'
+    serverTagsError.value = (error as Error).message ?? 'Failed to load tags'
   } finally {
     serverTagsLoading.value = false
   }
@@ -379,7 +379,7 @@ async function loadResourceCategories(options: { force?: boolean } = {}) {
     resourceCategories.value = Array.isArray(categories) ? categories : []
     resourceCategoriesLoaded.value = true
   } catch (error) {
-    resourceCategoriesError.value = (error as Error).message ?? '分类加载失败'
+    resourceCategoriesError.value = (error as Error).message ?? 'Failed to load categories'
   } finally {
     resourceCategoriesLoading.value = false
   }
@@ -398,7 +398,7 @@ async function loadAssetSeries(options: { force?: boolean } = {}) {
       : []
     assetSeriesLoaded.value = true
   } catch (error) {
-    assetSeriesError.value = (error as Error).message ?? '系列加载失败'
+    assetSeriesError.value = (error as Error).message ?? 'Failed to load series'
   } finally {
     assetSeriesLoading.value = false
   }
@@ -577,7 +577,7 @@ async function ensureUploadTagIds(): Promise<string[]> {
       })
     } catch (error) {
       const fallback = originalNames[0]
-      throw new Error((error as Error).message ?? (fallback ? `创建标签“${fallback}”失败` : '创建标签失败'))
+      throw new Error((error as Error).message ?? (fallback ? `Failed to create tag "${fallback}"` : 'Failed to create tag'))
     }
   }
 
@@ -608,7 +608,7 @@ async function submitUpload() {
   if (uploadSubmitting.value || !uploadEntries.value.length) return
   const missingCategory = uploadEntries.value.find((entry) => !entry.categoryId || !entry.categoryId.trim().length)
   if (missingCategory) {
-    uploadError.value = '请为所有资源选择分类'
+    uploadError.value = 'Please select a category for all assets'
     return
   }
   uploadSubmitting.value = true
@@ -622,7 +622,7 @@ async function submitUpload() {
       entry.error = null
       try {
         const asset = sceneStore.getAsset(entry.assetId) ?? entry.asset
-        if (!asset) throw new Error('未找到资源信息')
+        if (!asset) throw new Error('Asset not found')
         const file = await createUploadFileFromCache(asset)
         const uploadName = entry.name.trim().length ? entry.name.trim() : asset.name
         const uploadDescription = entry.description.trim()
@@ -650,7 +650,7 @@ async function submitUpload() {
         })
         const mapped = mapServerAssetToProjectAsset(serverAsset)
         const replaced = sceneStore.replaceLocalAssetWithServerAsset(entry.assetId, mapped, { source: { type: 'url' } })
-        if (!replaced) throw new Error('更新资源引用失败')
+        if (!replaced) throw new Error('Failed to update asset reference')
         await assetCacheStore.storeAssetBlob(replaced.id, {
           blob: file,
           mimeType: file.type || null,
@@ -663,13 +663,13 @@ async function submitUpload() {
         replacementMap.set(entry.assetId, replaced.id)
       } catch (error) {
         entry.status = 'error'
-        entry.error = (error as Error).message ?? '上传失败'
+        entry.error = (error as Error).message ?? 'Upload failed'
       }
     }
 
     const hasErrors = uploadEntries.value.some((entry) => entry.status === 'error')
     if (hasErrors) {
-      uploadError.value = '部分资源上传失败，请检查错误信息后重试。'
+      uploadError.value = 'Some assets failed to upload. Please check errors and retry.'
       return
     }
 
@@ -679,7 +679,7 @@ async function submitUpload() {
     resetUploadState()
     emit('uploaded', { successCount, replacementMap: Object.fromEntries(replacementMap.entries()) })
   } catch (error) {
-    uploadError.value = (error as Error).message ?? '上传资源失败'
+    uploadError.value = (error as Error).message ?? 'Failed to upload assets'
   } finally {
     uploadSubmitting.value = false
   }
@@ -688,20 +688,11 @@ async function submitUpload() {
 
 <template>
   <v-dialog v-model="internalOpen" max-width="720" persistent>
-    <v-card>
+    <v-card   class="material-details-panel">
       <v-card-title>Upload Assets to Server</v-card-title>
       <v-card-text>
         <v-alert v-if="uploadError" type="error" variant="tonal" density="comfortable" class="mb-4">
           {{ uploadError }}
-        </v-alert>
-        <v-alert
-          v-if="resourceCategoriesError"
-          type="warning"
-          variant="tonal"
-          density="comfortable"
-          class="mb-4"
-        >
-          {{ resourceCategoriesError }}
         </v-alert>
         <div class="upload-section">
           <div v-for="entry in uploadEntries" :key="entry.assetId" class="upload-entry">
@@ -714,26 +705,16 @@ async function submitUpload() {
                 class="upload-entry__name-input"
                 v-model="entry.name"
                 label="Asset Name"
-                density="compact"
-                variant="outlined"
+            density="compact"
+            variant="underlined"
                 :disabled="uploadSubmitting || entry.status === 'success'"
               />
             </div>
-            <div class="upload-entry__category-row">
-              <CategoryPathSelector
-                :model-value="entry.categoryId"
-                :categories="resourceCategories"
-                label="资产分类"
-                placeholder="选择或创建分类"
-                :disabled="uploadSubmitting || entry.status === 'success'"
-                @update:model-value="(value) => handleEntryCategoryChange(entry, value)"
-                @category-selected="(payload) => handleEntryCategorySelected(entry, payload)"
-                @category-created="(category) => handleEntryCategoryCreated(entry, category)"
-              />
+            <div class="upload-entry__series-row ">
               <SeriesSelector
                 :model-value="entry.seriesId"
                 :series-options="assetSeries"
-                label="资产系列"
+                label="Asset Series"
                 density="compact"
                 :loading="assetSeriesLoading"
                 :disabled="uploadSubmitting || entry.status === 'success'"
@@ -744,53 +725,72 @@ async function submitUpload() {
                 @series-created="(series) => handleEntrySeriesCreated(entry, series)"
               />
             </div>
-            <div class="upload-entry__color-row">
-              <v-text-field
-                class="upload-entry__color-input"
-                :model-value="entry.colorHexInput"
-                label="主体颜色"
-                density="compact"
-                variant="outlined"
-                placeholder="#RRGGBB"
-                hide-details
-                spellcheck="false"
-                autocorrect="off"
-                autocomplete="off"
+            <div class="upload-entry__category-row">
+              <CategoryPathSelector
+                :model-value="entry.categoryId"
+                :categories="resourceCategories"
+                label="Asset Category"
+                placeholder="Select or create a category"
+                class="category-selector"
                 :disabled="uploadSubmitting || entry.status === 'success'"
-                @update:model-value="(value) => handleEntryColorInput(entry, value)"
-              >
-                <template #append-inner>
-                  <v-menu :close-on-content-click="false" transition="scale-transition" location="bottom start">
-                    <template #activator="{ props: menuProps }">
-                      <v-btn v-bind="menuProps" density="compact" class="upload-entry__color-button" :style="{ backgroundColor: entry.color || '#455A64' }" :title="(entry.color || '').toUpperCase()" :disabled="uploadSubmitting || entry.status === 'success'" variant="tonal" size="small">
-                        <v-icon color="white">mdi-eyedropper-variant</v-icon>
-                      </v-btn>
-                    </template>
-                    <div class="upload-entry__color-picker">
-                      <v-color-picker :model-value="entry.color || '#455A64'" mode="hex" :modes="['hex']" hide-inputs @update:model-value="(value) => applyEntryColor(entry, value as string)" />
-                    </div>
-                  </v-menu>
-                </template>
-              </v-text-field>
+                @update:model-value="(value) => handleEntryCategoryChange(entry, value)"
+                @category-selected="(payload) => handleEntryCategorySelected(entry, payload)"
+                @category-created="(category) => handleEntryCategoryCreated(entry, category)"
+              />
+            </div>
+            <div class="upload-entry__color-row">
+              <div class="color-input">
+                <v-text-field
+                  class="upload-entry__color-input"
+                  :model-value="entry.colorHexInput"
+                  label="Primary Color"
+                  density="compact"
+                  variant="underlined"
+                  placeholder="#RRGGBB"
+                  hide-details
+                  spellcheck="false"
+                  autocorrect="off"
+                  autocomplete="off"
+                  :disabled="uploadSubmitting || entry.status === 'success'"
+                  @update:model-value="(value) => handleEntryColorInput(entry, value)"
+                />
+                <v-menu :close-on-content-click="false" transition="scale-transition" location="bottom start">
+                  <template #activator="{ props: menuProps }">
+                    <button
+                      class="color-swatch"
+                      type="button"
+                      v-bind="menuProps"
+                      :style="{ backgroundColor: entry.color || '#455A64' }"
+                      :title="(entry.color || '').toUpperCase() || 'Pick a color'"
+                      :disabled="uploadSubmitting || entry.status === 'success'"
+                    >
+                      <span class="sr-only">Pick color</span>
+                    </button>
+                  </template>
+                  <div class="color-picker">
+                    <v-color-picker :model-value="entry.color || '#455A64'" mode="hex" :modes="['hex']" hide-inputs @update:model-value="(value) => applyEntryColor(entry, value as string)" />
+                  </div>
+                </v-menu>
+              </div>
             </div>
 
             <div v-if="entry.asset.type === 'model' || entry.asset.type === 'prefab'" class="upload-entry__dimensions">
-              <v-text-field :model-value="formatDimension(entry.dimensionLength)" label="长度 (m)" type="number" density="compact" variant="outlined" step="0.01" min="0" suffix="m" :disabled="uploadSubmitting || entry.status === 'success'" @update:model-value="(value) => setEntryDimension(entry, 'dimensionLength', value)" />
-              <v-text-field :model-value="formatDimension(entry.dimensionWidth)" label="宽度 (m)" type="number" density="compact" variant="outlined" step="0.01" min="0" suffix="m" :disabled="uploadSubmitting || entry.status === 'success'" @update:model-value="(value) => setEntryDimension(entry, 'dimensionWidth', value)" />
-              <v-text-field :model-value="formatDimension(entry.dimensionHeight)" label="高度 (m)" type="number" density="compact" variant="outlined" step="0.01" min="0" suffix="m" :disabled="uploadSubmitting || entry.status === 'success'" @update:model-value="(value) => setEntryDimension(entry, 'dimensionHeight', value)" />
+              <v-text-field :model-value="formatDimension(entry.dimensionLength)" label="Length (m)" type="number" density="compact" variant="underlined" step="0.01" min="0" suffix="m" :disabled="uploadSubmitting || entry.status === 'success'" @update:model-value="(value) => setEntryDimension(entry, 'dimensionLength', value)" />
+              <v-text-field :model-value="formatDimension(entry.dimensionWidth)" label="Width (m)" type="number" density="compact" variant="underlined" step="0.01" min="0" suffix="m" :disabled="uploadSubmitting || entry.status === 'success'" @update:model-value="(value) => setEntryDimension(entry, 'dimensionWidth', value)" />
+              <v-text-field :model-value="formatDimension(entry.dimensionHeight)" label="Height (m)" type="number" density="compact" variant="underlined" step="0.01" min="0" suffix="m" :disabled="uploadSubmitting || entry.status === 'success'" @update:model-value="(value) => setEntryDimension(entry, 'dimensionHeight', value)" />
               <v-chip v-if="entrySizeCategory(entry)" class="upload-entry__size-chip" size="small" color="secondary" variant="tonal">
-                尺寸分类：{{ entrySizeCategory(entry) }}
+                Size category: {{ entrySizeCategory(entry) }}
               </v-chip>
             </div>
             <div v-else-if="entry.asset.type === 'image'" class="upload-entry__dimensions">
-              <v-text-field :model-value="formatInteger(entry.imageWidth)" label="图片宽度 (px)" type="number" density="compact" variant="outlined" step="1" min="0" suffix="px" :disabled="uploadSubmitting || entry.status === 'success'" @update:model-value="(value) => setEntryImageDimension(entry, 'imageWidth', value)" />
-              <v-text-field :model-value="formatInteger(entry.imageHeight)" label="图片高度 (px)" type="number" density="compact" variant="outlined" step="1" min="0" suffix="px" :disabled="uploadSubmitting || entry.status === 'success'" @update:model-value="(value) => setEntryImageDimension(entry, 'imageHeight', value)" />
+              <v-text-field :model-value="formatInteger(entry.imageWidth)" label="Image width (px)" type="number" density="compact" variant="underlined" step="1" min="0" suffix="px" :disabled="uploadSubmitting || entry.status === 'success'" @update:model-value="(value) => setEntryImageDimension(entry, 'imageWidth', value)" />
+              <v-text-field :model-value="formatInteger(entry.imageHeight)" label="Image height (px)" type="number" density="compact" variant="underlined" step="1" min="0" suffix="px" :disabled="uploadSubmitting || entry.status === 'success'" @update:model-value="(value) => setEntryImageDimension(entry, 'imageHeight', value)" />
             </div>
             <div v-if="entry.status === 'error'" class="upload-entry__error">{{ entry.error }}</div>
             <div v-else-if="entry.status === 'success'" class="upload-entry__success">Uploaded</div>
           </div>
         </div>
-        <v-textarea v-model="uploadPrimaryDescription" label="Description" density="compact" variant="outlined" rows="4" class="upload-description-textarea" :disabled="uploadSubmitting || !!(uploadPrimaryEntry && uploadPrimaryEntry.status === 'success')" @blur="() => uploadPrimaryEntry && handleEntryDescriptionBlur(uploadPrimaryEntry)" />
+        <v-textarea v-model="uploadPrimaryDescription" label="Description" density="compact" variant="underlined" rows="4" class="upload-description-textarea" :disabled="uploadSubmitting || !!(uploadPrimaryEntry && uploadPrimaryEntry.status === 'success')" @blur="() => uploadPrimaryEntry && handleEntryDescriptionBlur(uploadPrimaryEntry)" />
         <v-combobox
           v-model="uploadSelectedTagIds"
           :items="uploadTagOptions"
@@ -798,7 +798,7 @@ async function submitUpload() {
           item-value="value"
           label="Select or create tags"
           density="comfortable"
-          variant="outlined"
+          variant="underlined"
           multiple
           chips
           closable-chips
@@ -810,17 +810,11 @@ async function submitUpload() {
         />
         <div class="upload-ai-row">
           <v-btn color="secondary" variant="tonal" size="small" :disabled="uploadSubmitting || !uploadEntries.length || aiTagLoading || !canRequestAiTags" :loading="aiTagLoading" @click="handleGenerateTagsClick">
-            使用 AI 生成标签
+            Generate tags with AI
           </v-btn>
           <span v-if="aiTagError" class="upload-ai-row__error">{{ aiTagError }}</span>
-          <span v-else-if="aiSuggestedTags.length" class="upload-ai-row__hint">推荐：{{ aiSuggestedTags.join('、') }}</span>
+          <span v-else-if="aiSuggestedTags.length" class="upload-ai-row__hint">Suggested: {{ aiSuggestedTags.join(', ') }}</span>
         </div>
-        <v-alert v-if="serverTagsError" type="warning" variant="tonal" density="comfortable" class="mt-4">
-          {{ serverTagsError }}
-        </v-alert>
-        <v-alert v-if="assetSeriesError" type="warning" variant="tonal" density="comfortable" class="mt-4">
-          {{ assetSeriesError }}
-        </v-alert>
       </v-card-text>
       <v-card-actions>
         <v-spacer />
@@ -834,6 +828,28 @@ async function submitUpload() {
 </template>
 
 <style scoped>
+
+
+.material-details-panel-enter-active,
+.material-details-panel-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.material-details-panel-enter-from,
+.material-details-panel-leave-to {
+  opacity: 0;
+  transform: translate(-105%, 10px);
+}
+
+.material-details-panel {
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background-color: rgba(18, 22, 28, 0.72);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
+}
+
+
 .upload-section {
   display: flex;
   flex-direction: column;
@@ -855,7 +871,9 @@ async function submitUpload() {
   justify-content: space-between;
   margin-bottom: 8px;
 }
-
+.category-selector {
+  width: 100%;
+}
 .upload-entry__name {
   font-weight: 600;
   color: #e9ecf1;
@@ -880,7 +898,7 @@ async function submitUpload() {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-top: 8px;
+  margin-top: 15px;
   flex-wrap: nowrap;
 }
 
@@ -912,6 +930,48 @@ async function submitUpload() {
 
 .upload-entry__color-input :deep(.v-input) {
   margin-bottom: 0;
+}
+
+.color-input {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.color-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  cursor: pointer;
+  padding: 0;
+  background: transparent;
+}
+
+.color-swatch:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.color-swatch:focus-visible {
+  outline: 2px solid rgba(107, 152, 255, 0.85);
+  outline-offset: 2px;
+}
+
+.color-picker {
+  padding: 12px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
 }
 
 .upload-entry__error {
@@ -946,21 +1006,6 @@ async function submitUpload() {
 .upload-ai-row__hint {
   color: #b2dfdb;
   font-size: 0.85rem;
-}
-
-.upload-entry__color-button {
-  width: 27px;
-  min-width: 27px;
-  height: 27px;
-  border-radius: 4px;
-  align-self: center;
-  display: inline-flex;
-  justify-content: center;
-  align-items: center;
-}
-
-.upload-entry__color-picker {
-  padding: 12px;
 }
 
 .upload-entry__dimensions {
