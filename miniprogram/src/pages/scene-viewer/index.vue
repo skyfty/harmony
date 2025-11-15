@@ -372,7 +372,7 @@ const DEFAULT_ENVIRONMENT_FOG_COLOR = '#516175';
 const DEFAULT_ENVIRONMENT_FOG_DENSITY = 0.02;
 const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
   background: {
-    mode: 'solidColor',
+    mode: 'skybox',
     solidColor: DEFAULT_ENVIRONMENT_BACKGROUND_COLOR,
     hdriAssetId: null,
   },
@@ -386,6 +386,7 @@ const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
     hdriAssetId: null,
   },
 };
+const ENVIRONMENT_NODE_ID = 'harmony:environment' as const;
 const skySunPosition = new THREE.Vector3();
 const DEFAULT_SUN_DIRECTION = new THREE.Vector3(0.35, 1, -0.25).normalize();
 const tempSunDirection = new THREE.Vector3();
@@ -413,6 +414,7 @@ let sunDirectionalLight: THREE.DirectionalLight | null = null;
 let pmremGenerator: THREE.PMREMGenerator | null = null;
 let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null;
 let pendingSkyboxSettings: SceneSkyboxSettings | null = null;
+let shouldRenderSkyBackground = true;
 let environmentAmbientLight: THREE.AmbientLight | null = null;
 let backgroundTexture: THREE.Texture | null = null;
 let backgroundTextureCleanup: (() => void) | null = null;
@@ -673,13 +675,51 @@ function normalizeAssetId(value: unknown): string | null {
   return trimmed.length ? trimmed : null;
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function extractEnvironmentSettingsFromNodes(
+  nodes: SceneNode[] | null | undefined,
+): EnvironmentSettings | null {
+  if (!Array.isArray(nodes) || !nodes.length) {
+    return null;
+  }
+  const stack: SceneNode[] = [...nodes];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    if (node.id === ENVIRONMENT_NODE_ID || node.nodeType === 'Environment') {
+      const payload = isPlainRecord(node.userData)
+        ? ((node.userData as Record<string, unknown>).environment as
+            | EnvironmentSettings
+            | Partial<EnvironmentSettings>
+            | null
+            | undefined)
+        : null;
+      return cloneEnvironmentSettingsLocal(payload ?? DEFAULT_ENVIRONMENT_SETTINGS);
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  return null;
+}
+
 function cloneEnvironmentSettingsLocal(
   source?: Partial<EnvironmentSettings> | EnvironmentSettings | null,
 ): EnvironmentSettings {
   const backgroundSource = source?.background ?? null;
   const environmentMapSource = source?.environmentMap ?? null;
 
-  const backgroundMode = backgroundSource?.mode === 'hdri' ? 'hdri' : 'solidColor';
+  let backgroundMode: EnvironmentSettings['background']['mode'] = 'skybox';
+  if (backgroundSource?.mode === 'hdri') {
+    backgroundMode = 'hdri';
+  } else if (backgroundSource?.mode === 'solidColor') {
+    backgroundMode = 'solidColor';
+  }
   const environmentMapMode = environmentMapSource?.mode === 'custom' ? 'custom' : 'skybox';
   const fogMode = source?.fogMode === 'exp' ? 'exp' : 'none';
 
@@ -713,7 +753,14 @@ function resolveDocumentEnvironment(document: SceneJsonExportDocument | null | u
   const payload = (document as SceneJsonExportDocument & {
     environment?: Partial<EnvironmentSettings> | EnvironmentSettings | null;
   }).environment;
-  return cloneEnvironmentSettingsLocal(payload ?? DEFAULT_ENVIRONMENT_SETTINGS);
+  if (payload) {
+    return cloneEnvironmentSettingsLocal(payload);
+  }
+  const derived = extractEnvironmentSettingsFromNodes(document.nodes);
+  if (derived) {
+    return derived;
+  }
+  return cloneEnvironmentSettingsLocal(DEFAULT_ENVIRONMENT_SETTINGS);
 }
 
 type UniImageLoadEvent = Event & {
@@ -2706,21 +2753,36 @@ function disposeSkyResources() {
   sky = null;
 }
 
+function syncSkyVisibility() {
+  if (!sky) {
+    return;
+  }
+  sky.visible = shouldRenderSkyBackground;
+}
+
+function setSkyBackgroundEnabled(enabled: boolean) {
+  shouldRenderSkyBackground = enabled;
+  syncSkyVisibility();
+}
+
 function ensureSkyExists() {
-  if (!renderContext?.scene) {
+  const scene = renderContext?.scene ?? null;
+  if (!scene) {
     return;
   }
   if (sky) {
-    if (sky.parent !== renderContext.scene) {
-      renderContext.scene.add(sky);
+    if (sky.parent !== scene) {
+      scene.add(sky);
     }
+    syncSkyVisibility();
     return;
   }
   sky = new Sky();
   sky.name = 'HarmonySky';
   sky.scale.setScalar(SKY_SCALE);
   sky.frustumCulled = false;
-  renderContext.scene.add(sky);
+  scene.add(sky);
+  syncSkyVisibility();
 }
 
 function updateSkyLighting(settings: SceneSkyboxSettings) {
@@ -2954,6 +3016,13 @@ async function applyBackgroundSettings(
   if (!scene) {
     return false;
   }
+  if (background.mode === 'skybox') {
+    disposeBackgroundResources();
+    setSkyBackgroundEnabled(true);
+    scene.background = null;
+    return true;
+  }
+  setSkyBackgroundEnabled(false);
   if (background.mode !== 'hdri' || !background.hdriAssetId) {
     disposeBackgroundResources();
     scene.background = new THREE.Color(background.solidColor);
@@ -3112,7 +3181,11 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
   }
   disposeSkyEnvironment();
   if (pmremGenerator && sky) {
+    const previousVisibility = sky.visible;
+    sky.visible = true;
     skyEnvironmentTarget = pmremGenerator.fromScene(sky as unknown as THREE.Scene);
+    sky.visible = previousVisibility;
+    syncSkyVisibility();
   }
   applySkyEnvironmentToScene();
   pendingSkyboxSettings = null;

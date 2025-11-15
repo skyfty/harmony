@@ -214,6 +214,7 @@ const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
 		hdriAssetId: null,
 	},
 }
+const ENVIRONMENT_NODE_ID = 'harmony:environment' as const
 const CAMERA_WATCH_TWEEN_DURATION = 0.45
 const CAMERA_LEVEL_TWEEN_DURATION = 0.35
 type CameraLookTweenMode = 'first-person' | 'orbit'
@@ -365,6 +366,39 @@ function normalizeAssetId(value: unknown): string | null {
 	return trimmed.length ? trimmed : null
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function extractEnvironmentSettingsFromNodes(
+	sourceNodes: SceneNode[] | null | undefined,
+): EnvironmentSettings | null {
+	if (!Array.isArray(sourceNodes) || !sourceNodes.length) {
+		return null
+	}
+	const stack: SceneNode[] = [...sourceNodes]
+	while (stack.length) {
+		const node = stack.pop()
+		if (!node) {
+			continue
+		}
+		if (node.id === ENVIRONMENT_NODE_ID || node.nodeType === 'Environment') {
+			const payload = isPlainRecord(node.userData)
+				? ((node.userData as Record<string, unknown>).environment as
+						| EnvironmentSettings
+						| Partial<EnvironmentSettings>
+						| null
+						| undefined)
+				: null
+			return cloneEnvironmentSettingsLocal(payload ?? DEFAULT_ENVIRONMENT_SETTINGS)
+		}
+		if (Array.isArray(node.children) && node.children.length) {
+			stack.push(...node.children)
+		}
+	}
+	return null
+}
+
 function cloneEnvironmentSettingsLocal(
 	source?: Partial<EnvironmentSettings> | EnvironmentSettings | null,
 ): EnvironmentSettings {
@@ -410,7 +444,14 @@ function resolveDocumentEnvironment(document: SceneJsonExportDocument | null | u
 	const payload = (document as SceneJsonExportDocument & {
 		environment?: Partial<EnvironmentSettings> | EnvironmentSettings | null
 	}).environment
-	return cloneEnvironmentSettingsLocal(payload ?? DEFAULT_ENVIRONMENT_SETTINGS)
+	if (payload) {
+		return cloneEnvironmentSettingsLocal(payload)
+	}
+	const derived = extractEnvironmentSettingsFromNodes(document.nodes)
+	if (derived) {
+		return derived
+	}
+	return cloneEnvironmentSettingsLocal(DEFAULT_ENVIRONMENT_SETTINGS)
 }
 
 function resolveNodeIdFromObject(object: THREE.Object3D | null | undefined): string | null {
