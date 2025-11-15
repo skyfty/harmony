@@ -174,7 +174,7 @@ const assetDialogVisible = ref(false)
 const assetDialogSlot = ref<SceneMaterialTextureSlot | null>(null)
 const assetDialogSelectedId = ref('')
 const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
-const TEXTURE_ASSET_TYPE = 'texture,image' as const
+const TEXTURE_ASSET_TYPE = 'texture,image,hdri' as const
 
 const assetDialogTitle = computed(() => {
   const slot = assetDialogSlot.value
@@ -677,7 +677,7 @@ function ensureImageAsset(assetId: string): ProjectAsset | null {
   if (!asset) {
     return null
   }
-  if (asset.type !== 'image' && asset.type !== 'texture') {
+  if (asset.type !== 'image' && asset.type !== 'texture' && asset.type !== 'hdri') {
     return null
   }
   return asset

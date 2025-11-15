@@ -3975,6 +3975,115 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+const ASSET_REFERENCE_SKIP_KEYS = new Set<string>([PREFAB_SOURCE_METADATA_KEY])
+
+function isAssetReferenceKey(key: string | null | undefined): boolean {
+  if (!key) {
+    return false
+  }
+  const normalized = key.trim().toLowerCase()
+  if (!normalized) {
+    return false
+  }
+  return normalized.includes('assetid')
+}
+
+function normalizePrefabAssetIdCandidate(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  let candidate = value.trim()
+  if (!candidate) {
+    return null
+  }
+  const assetProtocol = 'asset://'
+  if (candidate.startsWith(assetProtocol)) {
+    candidate = candidate.slice(assetProtocol.length)
+  }
+  if (!candidate) {
+    return null
+  }
+  if (candidate.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)) {
+    return null
+  }
+  if (/^(?:https?:|data:|blob:)/i.test(candidate)) {
+    return null
+  }
+  if (candidate.length > 256) {
+    return null
+  }
+  return candidate
+}
+
+function collectAssetIdCandidate(bucket: Set<string>, value: unknown) {
+  if (Array.isArray(value)) {
+    value.forEach((entry) => collectAssetIdCandidate(bucket, entry))
+    return
+  }
+  const normalized = normalizePrefabAssetIdCandidate(value)
+  if (normalized) {
+    bucket.add(normalized)
+  }
+}
+
+function collectAssetIdsFromUnknown(value: unknown, bucket: Set<string>) {
+  if (!value) {
+    return
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry) => collectAssetIdsFromUnknown(entry, bucket))
+    return
+  }
+  if (!isPlainObject(value)) {
+    return
+  }
+  Object.entries(value).forEach(([key, entry]) => {
+    if (ASSET_REFERENCE_SKIP_KEYS.has(key)) {
+      return
+    }
+    if (isAssetReferenceKey(key)) {
+      collectAssetIdCandidate(bucket, entry)
+    } else {
+      collectAssetIdsFromUnknown(entry, bucket)
+    }
+  })
+}
+
+function collectNodeAssetDependencies(node: SceneNode | null | undefined, bucket: Set<string>) {
+  if (!node) {
+    return
+  }
+  collectAssetIdCandidate(bucket, node.sourceAssetId)
+  collectAssetIdCandidate(bucket, node.importMetadata?.assetId)
+  if (node.materials?.length) {
+    node.materials.forEach((material) => {
+      collectAssetIdsFromUnknown(material, bucket)
+    })
+  }
+  if (node.components) {
+    Object.values(node.components).forEach((component) => {
+      if (component?.props) {
+        collectAssetIdsFromUnknown(component.props, bucket)
+      }
+    })
+  }
+  if (node.userData) {
+    collectAssetIdsFromUnknown(node.userData, bucket)
+  }
+  if (node.children?.length) {
+    node.children.forEach((child) => collectNodeAssetDependencies(child, bucket))
+  }
+}
+
+function collectPrefabAssetReferences(root: SceneNode | null | undefined): string[] {
+  if (!root) {
+    return []
+  }
+  const bucket = new Set<string>()
+  collectNodeAssetDependencies(root, bucket)
+  return Array.from(bucket)
+}
+
 function parseVector3Like(value: unknown): THREE.Vector3 | null {
   if (!isPlainObject(value)) {
     return null
@@ -6576,6 +6685,63 @@ export const useSceneStore = defineStore('scene', {
       const text = await entry.blob.text()
       return deserializeNodePrefab(text)
     },
+    async ensurePrefabDependencies(assetIds: string[], options: { providerId?: string | null } = {}) {
+      const providerId = options.providerId ?? null
+      const normalizedIds = Array.from(
+        new Set(
+          assetIds
+            .map((value) => (typeof value === 'string' ? value.trim() : ''))
+            .filter((value) => value.length > 0 && !value.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)),
+        ),
+      )
+
+      if (!normalizedIds.length) {
+        return
+      }
+
+      const assetCache = useAssetCacheStore()
+      const missingIds = normalizedIds.filter((assetId) => !this.getAsset(assetId))
+
+      if (missingIds.length && providerId) {
+        const providerDirectories = this.packageDirectoryCache[providerId]
+        if (providerDirectories?.length) {
+          missingIds.forEach((assetId) => {
+            const providerAsset = findAssetInTree(providerDirectories, assetId)
+            if (providerAsset) {
+              this.copyPackageAssetToAssets(providerId, providerAsset)
+            }
+          })
+        } else {
+          console.warn(`Provider ${providerId} is not loaded; prefab dependencies may be unavailable.`)
+        }
+      }
+
+      const resolvedAssets: ProjectAsset[] = []
+      normalizedIds.forEach((assetId) => {
+        const asset = this.getAsset(assetId)
+        if (asset) {
+          resolvedAssets.push(asset)
+        }
+      })
+
+      if (!resolvedAssets.length) {
+        return
+      }
+
+      await Promise.all(
+        resolvedAssets.map(async (asset) => {
+          if (assetCache.hasCache(asset.id)) {
+            assetCache.touch(asset.id)
+            return
+          }
+          try {
+            await assetCache.downloaProjectAsset(asset)
+          } catch (error) {
+            console.warn(`Failed to preload prefab dependency ${asset.id}`, error)
+          }
+        }),
+      )
+    },
     async instantiateNodePrefabAsset(assetId: string, position?: THREE.Vector3): Promise<SceneNode> {
       const asset = this.getAsset(assetId)
       if (!asset) {
@@ -6586,6 +6752,13 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const prefab = await this.loadNodePrefab(assetId)
+      const dependencyAssetIds = collectPrefabAssetReferences(prefab.root)
+      const sourceMeta = this.assetIndex[assetId]?.source ?? null
+      const dependencyProviderId = sourceMeta && sourceMeta.type === 'package' ? sourceMeta.providerId ?? null : null
+      if (dependencyAssetIds.length) {
+        await this.ensurePrefabDependencies(dependencyAssetIds, { providerId: dependencyProviderId })
+      }
+
       const assetCache = useAssetCacheStore()
       const idMap = new Map<string, string>()
       const runtimeSnapshots = new Map<string, Object3D>()

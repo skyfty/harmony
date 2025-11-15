@@ -92,32 +92,6 @@ const fallbackIcon = computed(() => {
   }
 })
 
-const typeLabel = computed(() => {
-  const type = props.asset.type
-  switch (type) {
-    case 'model':
-      return '3D 模型'
-    case 'mesh':
-      return '网格'
-    case 'prefab':
-      return '预制体'
-    case 'texture':
-      return '贴图'
-    case 'image':
-      return '图片'
-    case 'hdri':
-      return 'HDRI'
-    case 'material':
-      return '材质'
-    case 'video':
-      return '视频'
-    case 'file':
-      return '文件'
-    default:
-      return type ?? '资源'
-  }
-})
-
 function cleanupObjectUrl(): void {
   if (objectUrl) {
     URL.revokeObjectURL(objectUrl)
