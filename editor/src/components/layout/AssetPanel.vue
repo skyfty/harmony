@@ -1324,6 +1324,7 @@ const DEFAULT_PREVIEW_COLORS: Record<ProjectAsset['type'], string> = {
   file: '#37474F',
   video: '#1E88E5',
   mesh: '#8D6E63',
+  hdri: '#0097A7',
 }
 
 function resolvePreviewColor(type: ProjectAsset['type']): string {

@@ -10,13 +10,11 @@ const { selectedNode } = storeToRefs(sceneStore)
 const props = defineProps<{ disabled?: boolean }>()
 
 type VectorDisplay = { x: string; y: string; z: string }
-type VectorAxis = 'x' | 'y' | 'z'
 
 const transformForm = reactive({
   position: createZeroVector(),
   rotation: createZeroVector(),
   scale: createScaleVector(),
-  offset: createZeroVector(),
 })
 
 watch(
@@ -41,11 +39,6 @@ watch(
       y: formatNumeric(node.scale.y),
       z: formatNumeric(node.scale.z),
     }
-    transformForm.offset = {
-      x: formatNumeric(node.offset?.x ?? 0),
-      y: formatNumeric(node.offset?.y ?? 0),
-      z: formatNumeric(node.offset?.z ?? 0),
-    }
   },
   { immediate: true, deep: true }
 )
@@ -58,7 +51,6 @@ function resetTransformForm() {
   transformForm.position = createZeroVector()
   transformForm.rotation = createZeroVector()
   transformForm.scale = createScaleVector()
-  transformForm.offset = createZeroVector()
 }
 
 function formatNumeric(value: number) {
@@ -73,33 +65,6 @@ function createScaleVector(): VectorDisplay {
   return { x: '1.0', y: '1.0', z: '1.0' }
 }
 
-function handleOffsetAxisUpdate(axis: VectorAxis, rawValue: string) {
-  if (props.disabled) {
-    return
-  }
-  const node = selectedNode.value
-  if (!node) {
-    return
-  }
-  const numeric = Number.parseFloat(rawValue)
-  if (!Number.isFinite(numeric)) {
-    const source = node.offset as Record<VectorAxis, number> | undefined
-    transformForm.offset[axis] = formatNumeric(source?.[axis] ?? 0)
-    return
-  }
-  const currentOffset = (node.offset as Record<VectorAxis, number> | undefined) ?? { x: 0, y: 0, z: 0 }
-  if (currentOffset[axis] === numeric) {
-    transformForm.offset[axis] = formatNumeric(numeric)
-    return
-  }
-  const nextOffset = {
-    x: axis === 'x' ? numeric : currentOffset.x,
-    y: axis === 'y' ? numeric : currentOffset.y,
-    z: axis === 'z' ? numeric : currentOffset.z,
-  }
-  sceneStore.setNodeOffset({ id: node.id, offset: nextOffset })
-  transformForm.offset[axis] = formatNumeric(numeric)
-}
 </script>
 
 <template>
@@ -130,15 +95,6 @@ function handleOffsetAxisUpdate(axis: VectorAxis, rawValue: string) {
           min="0.01"
           :disabled="props.disabled"
           :readonly="true"
-        />
-      </div>
-      <div class="section-block">
-        <InspectorVectorControls
-          label="Offset"
-          :model-value="transformForm.offset"
-          :disabled="props.disabled"
-          :readonly="props.disabled"
-          @update:axis="handleOffsetAxisUpdate"
         />
       </div>
       </div>

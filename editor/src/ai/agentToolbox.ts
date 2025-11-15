@@ -155,15 +155,6 @@ const tools: SceneAgentTool[] = [
               z: { type: 'number' },
             },
           },
-          offset: {
-            type: 'object',
-            description: '相对父节点的偏移量。',
-            properties: {
-              x: { type: 'number' },
-              y: { type: 'number' },
-              z: { type: 'number' },
-            },
-          },
         },
       },
     },
@@ -173,15 +164,13 @@ const tools: SceneAgentTool[] = [
       const position = parseVector3(args?.position)
       const rotation = parseVector3(args?.rotation)
       const scale = parseVector3(args?.scale)
-      const offset = parseVector3(args?.offset)
       if (position) payload.position = position
       if (rotation) payload.rotation = rotation
       if (scale) payload.scale = scale
-      if (offset) payload.offset = offset
       if (Object.keys(payload).length === 1) {
         throw new Error('未提供任何可应用的变换参数。')
       }
-      store.updateNodeProperties(payload as { id: string; position?: Vector3Like; rotation?: Vector3Like; scale?: Vector3Like; offset?: Vector3Like })
+      store.updateNodeProperties(payload as { id: string; position?: Vector3Like; rotation?: Vector3Like; scale?: Vector3Like })
     },
   },
   {

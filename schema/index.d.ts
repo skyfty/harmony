@@ -439,7 +439,6 @@ export interface SceneNode {
   position: Vector3Like;
   rotation: Vector3Like;
   scale: Vector3Like;
-  offset?: Vector3Like;
   sourceAssetId?: string;
   visible?: boolean;
   locked?: boolean;

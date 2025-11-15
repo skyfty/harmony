@@ -5774,8 +5774,10 @@ function handleTransformChange() {
 
   const mode = transformControls.getMode()
   const nodeId = target.userData.nodeId as string
+  const isTranslateMode = mode === 'translate'
+  const shouldSnapTranslate = isTranslateMode && props.activeTool !== 'translate'
 
-  if (mode === 'translate') {
+  if (isTranslateMode && shouldSnapTranslate) {
     snapVectorToGridForNode(target.position, nodeId)
   }
 
@@ -5795,7 +5797,9 @@ function handleTransformChange() {
             return
           }
           transformWorldPositionBuffer.copy(entry.initialWorldPosition).add(transformDeltaPosition)
-          snapVectorToGridForNode(transformWorldPositionBuffer, entry.nodeId)
+          if (shouldSnapTranslate) {
+            snapVectorToGridForNode(transformWorldPositionBuffer, entry.nodeId)
+          }
           transformLocalPositionHelper.copy(transformWorldPositionBuffer)
           if (entry.parent) {
             entry.parent.worldToLocal(transformLocalPositionHelper)

@@ -394,11 +394,6 @@ function handleCancel() {
   dialogOpen.value = false
 }
 
-function retryLoading() {
-  remoteLoaded.value = false
-  void loadRemoteAssets()
-}
-
 function resolveInitials(asset: ProjectAsset): string {
   if (!asset.name) {
     return '?'
