@@ -480,9 +480,9 @@ export interface SceneJsonExportDocument {
   nodes: SceneNode[];
   materials: SceneMaterial[];
   groundSettings?: GroundSettings;
+  outlineMeshMap?: SceneOutlineMeshMap;
   assetIndex?: Record<string, AssetIndexEntry>;
   packageAssetMap?: Record<string, string>;
-  outlineMeshMap?: SceneOutlineMeshMap;
 }
 
 export interface SceneSkyboxSettings {

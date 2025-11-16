@@ -265,6 +265,8 @@ interface NodePrefabData {
   formatVersion: number
   name: string
   root: SceneNode
+  assetIndex?: Record<string, AssetIndexEntry>
+  packageAssetMap?: Record<string, string>
 }
 
 type MaterialTextureMap = Partial<Record<SceneMaterialTextureSlot, SceneMaterialTextureRef | null>>
@@ -3641,11 +3643,24 @@ function deserializeNodePrefab(raw: string): NodePrefabData {
   }
   const normalizedName = normalizePrefabName(typeof candidate.name === 'string' ? candidate.name : '') || 'Unnamed Prefab'
   const root = prepareNodePrefabRoot(candidate.root as SceneNode, { regenerateIds: false })
-  return {
+  const assetIndex = candidate.assetIndex && isAssetIndex(candidate.assetIndex)
+    ? cloneAssetIndex(candidate.assetIndex as Record<string, AssetIndexEntry>)
+    : undefined
+  const packageAssetMap = candidate.packageAssetMap && isPackageAssetMap(candidate.packageAssetMap)
+    ? clonePackageAssetMap(candidate.packageAssetMap as Record<string, string>)
+    : undefined
+  const prefab: NodePrefabData = {
     formatVersion: NODE_PREFAB_FORMAT_VERSION,
     name: normalizedName,
     root,
   }
+  if (assetIndex && Object.keys(assetIndex).length) {
+    prefab.assetIndex = assetIndex
+  }
+  if (packageAssetMap && Object.keys(packageAssetMap).length) {
+    prefab.packageAssetMap = packageAssetMap
+  }
+  return prefab
 }
 
 function getAssetFromCatalog(catalog: Record<string, ProjectAsset[]>, assetId: string): ProjectAsset | null {
@@ -4082,6 +4097,155 @@ function collectPrefabAssetReferences(root: SceneNode | null | undefined): strin
   const bucket = new Set<string>()
   collectNodeAssetDependencies(root, bucket)
   return Array.from(bucket)
+}
+
+function extractAssetIdFromPackageMapKey(key: string): string | null {
+  if (!key) {
+    return null
+  }
+  if (key.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)) {
+    const embeddedId = key.slice(LOCAL_EMBEDDED_ASSET_PREFIX.length)
+    return embeddedId.trim().length ? embeddedId.trim() : null
+  }
+  if (key.startsWith('url::')) {
+    const remoteId = key.slice('url::'.length)
+    return remoteId.trim().length ? remoteId.trim() : null
+  }
+  const separatorIndex = key.indexOf('::')
+  if (separatorIndex >= 0 && separatorIndex < key.length - 2) {
+    const suffix = key.slice(separatorIndex + 2)
+    return suffix.trim().length ? suffix.trim() : null
+  }
+  return null
+}
+
+function buildAssetIndexSubsetForPrefab(
+  source: Record<string, AssetIndexEntry>,
+  assetIds: Iterable<string>,
+): Record<string, AssetIndexEntry> | undefined {
+  const subset: Record<string, AssetIndexEntry> = {}
+  for (const rawId of assetIds) {
+    const assetId = typeof rawId === 'string' ? rawId.trim() : ''
+    if (!assetId) {
+      continue
+    }
+    const entry = source[assetId]
+    if (!entry) {
+      continue
+    }
+    subset[assetId] = {
+      categoryId: entry.categoryId,
+      source: entry.source ? { ...entry.source } : undefined,
+    }
+  }
+  return Object.keys(subset).length ? subset : undefined
+}
+
+function buildPackageAssetMapSubsetForPrefab(
+  source: Record<string, string>,
+  assetIds: Iterable<string>,
+): Record<string, string> | undefined {
+  const normalizedIds = Array.from(assetIds)
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .filter((value): value is string => value.length > 0)
+  if (!normalizedIds.length) {
+    return undefined
+  }
+  const assetIdSet = new Set(normalizedIds)
+  const subset: Record<string, string> = {}
+  Object.entries(source).forEach(([rawKey, rawValue]) => {
+    const key = typeof rawKey === 'string' ? rawKey.trim() : ''
+    const value = typeof rawValue === 'string' ? rawValue.trim() : ''
+    if (!key || !value) {
+      return
+    }
+    if (assetIdSet.has(value)) {
+      subset[key] = value
+      return
+    }
+    const derivedId = extractAssetIdFromPackageMapKey(key)
+    if (derivedId && assetIdSet.has(derivedId)) {
+      subset[key] = value
+    }
+  })
+  return Object.keys(subset).length ? subset : undefined
+}
+
+function mergeAssetIndexEntries(
+  current: Record<string, AssetIndexEntry>,
+  additions?: Record<string, AssetIndexEntry>,
+  filter?: Set<string>,
+): { next: Record<string, AssetIndexEntry>; changed: boolean } {
+  if (!additions || !Object.keys(additions).length) {
+    return { next: current, changed: false }
+  }
+  const next: Record<string, AssetIndexEntry> = { ...current }
+  let changed = false
+  Object.entries(additions).forEach(([assetId, entry]) => {
+    if (!entry || typeof entry.categoryId !== 'string') {
+      return
+    }
+    if (filter && filter.size && !filter.has(assetId)) {
+      return
+    }
+    const existing = next[assetId]
+    if (!existing) {
+      next[assetId] = {
+        categoryId: entry.categoryId,
+        source: entry.source ? { ...entry.source } : undefined,
+      }
+      changed = true
+      return
+    }
+    let updated: AssetIndexEntry | null = null
+    if (!existing.categoryId && entry.categoryId) {
+      updated = { ...(updated ?? existing), categoryId: entry.categoryId }
+    }
+    if (!existing.source && entry.source) {
+      updated = {
+        ...(updated ?? existing),
+        source: { ...entry.source },
+      }
+    }
+    if (updated) {
+      next[assetId] = updated
+      changed = true
+    }
+  })
+  return { next, changed }
+}
+
+function mergePackageAssetMapEntries(
+  current: Record<string, string>,
+  additions?: Record<string, string>,
+  filter?: Set<string>,
+): { next: Record<string, string>; changed: boolean } {
+  if (!additions || !Object.keys(additions).length) {
+    return { next: current, changed: false }
+  }
+  const next: Record<string, string> = { ...current }
+  let changed = false
+  Object.entries(additions).forEach(([rawKey, rawValue]) => {
+    const key = typeof rawKey === 'string' ? rawKey.trim() : ''
+    const value = typeof rawValue === 'string' ? rawValue.trim() : ''
+    if (!key || !value) {
+      return
+    }
+    if (filter && filter.size) {
+      if (!filter.has(value)) {
+        const derived = extractAssetIdFromPackageMapKey(key)
+        if (!derived || !filter.has(derived)) {
+          return
+        }
+      }
+    }
+    if (key in next) {
+      return
+    }
+    next[key] = value
+    changed = true
+  })
+  return { next, changed }
 }
 
 function parseVector3Like(value: unknown): THREE.Vector3 | null {
@@ -6598,6 +6762,24 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const prefabData = createNodePrefabData(node, options.name ?? node.name ?? '')
+      const dependencyAssetIds = new Set(collectPrefabAssetReferences(prefabData.root))
+      if (dependencyAssetIds.size) {
+        const assetIndexSubset = buildAssetIndexSubsetForPrefab(this.assetIndex, dependencyAssetIds)
+        if (assetIndexSubset) {
+          prefabData.assetIndex = assetIndexSubset
+        } else {
+          delete prefabData.assetIndex
+        }
+        const packageAssetMapSubset = buildPackageAssetMapSubsetForPrefab(this.packageAssetMap, dependencyAssetIds)
+        if (packageAssetMapSubset) {
+          prefabData.packageAssetMap = packageAssetMapSubset
+        } else {
+          delete prefabData.packageAssetMap
+        }
+      } else {
+        delete prefabData.assetIndex
+        delete prefabData.packageAssetMap
+      }
       const serialized = serializeNodePrefab(prefabData)
       const targetAssetId = options.assetId ?? generateUuid()
       const fileName = buildNodePrefabFilename(prefabData.name)
@@ -6753,10 +6935,34 @@ export const useSceneStore = defineStore('scene', {
 
       const prefab = await this.loadNodePrefab(assetId)
       const dependencyAssetIds = collectPrefabAssetReferences(prefab.root)
+      const dependencyFilter = dependencyAssetIds.length ? new Set(dependencyAssetIds) : undefined
       const sourceMeta = this.assetIndex[assetId]?.source ?? null
       const dependencyProviderId = sourceMeta && sourceMeta.type === 'package' ? sourceMeta.providerId ?? null : null
       if (dependencyAssetIds.length) {
         await this.ensurePrefabDependencies(dependencyAssetIds, { providerId: dependencyProviderId })
+      }
+
+      const prefabAssetIndex = prefab.assetIndex && isAssetIndex(prefab.assetIndex) ? prefab.assetIndex : undefined
+      const prefabPackageAssetMap = prefab.packageAssetMap && isPackageAssetMap(prefab.packageAssetMap)
+        ? prefab.packageAssetMap
+        : undefined
+      if (prefabAssetIndex || prefabPackageAssetMap) {
+        const { next: mergedIndex, changed: assetIndexChanged } = mergeAssetIndexEntries(
+          this.assetIndex,
+          prefabAssetIndex,
+          dependencyFilter,
+        )
+        if (assetIndexChanged) {
+          this.assetIndex = mergedIndex
+        }
+        const { next: mergedPackageMap, changed: packageMapChanged } = mergePackageAssetMapEntries(
+          this.packageAssetMap,
+          prefabPackageAssetMap,
+          dependencyFilter,
+        )
+        if (packageMapChanged) {
+          this.packageAssetMap = mergedPackageMap
+        }
       }
 
       const assetCache = useAssetCacheStore()
@@ -8997,8 +9203,6 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const scenesStore = useScenesStore()
-      await scenesStore.initialize()
-
       const document = buildSceneDocumentFromState(this)
       await scenesStore.saveSceneDocument(document)
       applyCurrentSceneMeta(this, document)
@@ -9010,8 +9214,6 @@ export const useSceneStore = defineStore('scene', {
       thumbnailOrOptions?: string | null | { thumbnail?: string | null; groundSettings?: Partial<GroundSettings> },
     ) {
       const scenesStore = useScenesStore()
-      await scenesStore.initialize()
-
       const displayName = name.trim() || 'Untitled Scene'
       let resolvedThumbnail: string | null | undefined
       let resolvedGroundOptions: Partial<GroundSettings> | undefined
@@ -9070,8 +9272,6 @@ export const useSceneStore = defineStore('scene', {
       options: { groundWidth?: number; groundDepth?: number } = {},
     ) {
       const scenesStore = useScenesStore()
-      await scenesStore.initialize()
-
       const displayName = name.trim() || template.name?.trim() || 'Untitled Scene'
 
       const fallbackWidth = this.groundSettings.width
@@ -9161,7 +9361,6 @@ export const useSceneStore = defineStore('scene', {
         return true
       }
       const scenesStore = useScenesStore()
-      await scenesStore.initialize()
       const scene = await scenesStore.loadSceneDocument(sceneId)
       if (!scene) {
         return false
@@ -9203,8 +9402,6 @@ export const useSceneStore = defineStore('scene', {
     },
     async deleteScene(sceneId: string) {
       const scenesStore = useScenesStore()
-      await scenesStore.initialize()
-
       const target = await scenesStore.loadSceneDocument(sceneId)
       if (!target) {
         return false
@@ -9258,7 +9455,6 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
       const scenesStore = useScenesStore()
-      await scenesStore.initialize()
       const document = await scenesStore.loadSceneDocument(sceneId)
       if (!document) {
         return false
@@ -9276,7 +9472,6 @@ export const useSceneStore = defineStore('scene', {
     },
     async updateSceneThumbnail(sceneId: string, thumbnail: string | null) {
       const scenesStore = useScenesStore()
-      await scenesStore.initialize()
       const document = await scenesStore.loadSceneDocument(sceneId)
       if (!document) {
         return false
@@ -9300,7 +9495,6 @@ export const useSceneStore = defineStore('scene', {
         return null
       }
       const scenesStore = useScenesStore()
-      await scenesStore.initialize()
       const uniqueIds = Array.from(new Set(sceneIds))
       const collected: StoredSceneDocument[] = []
       for (const id of uniqueIds) {
@@ -9338,7 +9532,6 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const scenesStore = useScenesStore()
-      await scenesStore.initialize()
       const existingNames = new Set(scenesStore.metadata.map((scene) => scene.name))
       const imported: StoredSceneDocument[] = []
       const renamedScenes: Array<{ originalName: string; renamedName: string }> = []

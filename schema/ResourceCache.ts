@@ -20,33 +20,6 @@ function extractPresetRelativePath(candidate: string): string | null {
   return relativeSegments.join('/');
 }
 
-function buildPresetAssetLookup(): Map<string, string> {
-  const lookup = new Map<string, string>();
-
-  const glob = (import.meta as unknown as { glob?: (pattern: string, options?: Record<string, unknown>) => Record<string, unknown> }).glob;
-  if (typeof glob === 'function') {
-    const modules = glob('../src/preset/**/*', {
-      eager: true,
-      import: 'default',
-      query: '?url',
-    }) as Record<string, string>;
-    Object.entries(modules).forEach(([key, url]) => {
-      const relative = extractPresetRelativePath(key);
-      if (!relative) {
-        return;
-      }
-      const normalized = relative.replace(/^[\\/]+/, '').replace(/\\/g, '/');
-      const lower = normalized.toLowerCase();
-      lookup.set(`preset:${normalized}`, url);
-      lookup.set(`preset:${lower}`, url);
-    });
-  }
-
-  return lookup;
-}
-
-const presetAssetLookup = buildPresetAssetLookup();
-
 const NodeBuffer: { from: (data: string, encoding: string) => any } | undefined =
   typeof globalThis !== 'undefined' && (globalThis as any).Buffer
     ? (globalThis as any).Buffer
@@ -314,13 +287,6 @@ export default class ResourceCache implements MaterialAssetProvider {
       return { kind: 'data-url', dataUrl: value };
     }
 
-    if (provider === 'preset') {
-      const url = this.resolvePresetUrl(value || assetId);
-      if (url) {
-        return { kind: 'remote-url', url };
-      }
-    }
-
     if (value && (value.startsWith('http://') || value.startsWith('https://'))) {
       return { kind: 'remote-url', url: value };
     }
@@ -330,18 +296,6 @@ export default class ResourceCache implements MaterialAssetProvider {
       if (url) {
         return { kind: 'remote-url', url };
       }
-    }
-
-    if (value) {
-      const presetUrl = this.resolvePresetUrl(value);
-      if (presetUrl) {
-        return { kind: 'remote-url', url: presetUrl };
-      }
-    }
-
-    const fallback = this.resolvePresetUrl(assetId);
-    if (fallback) {
-      return { kind: 'remote-url', url: fallback };
     }
 
     if (value) {
@@ -361,27 +315,6 @@ export default class ResourceCache implements MaterialAssetProvider {
     }
     if (value.startsWith('http://') || value.startsWith('https://')) {
       return value;
-    }
-    if (provider === 'preset') {
-      return this.resolvePresetUrl(value);
-    }
-    return null;
-  }
-
-  private resolvePresetUrl(assetId: string): string | null {
-    const normalizedId = assetId.startsWith('preset:') ? assetId : `preset:${assetId}`;
-    const direct = presetAssetLookup.get(normalizedId) ?? presetAssetLookup.get(normalizedId.toLowerCase());
-    if (direct) {
-      return direct;
-    }
-    if (this.options.presetAssetBaseUrl) {
-      const base = this.options.presetAssetBaseUrl.replace(/\/+$/, '');
-      const suffix = normalizedId.replace(/^preset:/, '');
-      return `${base}/${suffix}`;
-    }
-    const relative = normalizedId.replace(/^preset:/, '').replace(/^[\\/]+/, '').replace(/\\/g, '/');
-    if (relative) {
-      return `/src/preset/${relative}`;
     }
     return null;
   }
