@@ -456,6 +456,9 @@ function shouldExcludeNodeForJsonExport(node: SceneNode, options: SceneExportOpt
   if (!options.includeSkybox && node.name === 'HarmonySky') {
     return true
   }
+  if (node.nodeType === 'Sky' || node.nodeType === 'Environment') {
+    return true
+  }
   return false
 }
 

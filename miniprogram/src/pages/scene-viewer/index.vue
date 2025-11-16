@@ -227,7 +227,6 @@ interface ScenePreviewPayload {
   updatedAt?: string;
   assetOverrides?: Record<string, string | ArrayBuffer>;
   resolveAssetUrl?: (assetId: string) => string | Promise<string | null> | null;
-  presetAssetBaseUrl?: string;
   enableGround?: boolean;
 }
 
@@ -249,7 +248,6 @@ interface RenderContext {
   controls: OrbitControls;
 }
 
-const PRESET_ASSET_BASE_URL = '/package-scene/static/preset';
 const DEFAULT_SCENE_URL = 'https://cdn.touchmagic.cn/uploads/UntitledScene(4).json';
 const SCENE_DOWNLOAD_TIMEOUT = 120000;
 
@@ -1016,11 +1014,6 @@ function resolvePackageEntryLike(assetId: string, provider: string, rawValue: st
   }
   if (/^(https?:)?\/\//i.test(value)) {
     return { kind: 'remote-url', url: value };
-  }
-  if (provider === 'preset') {
-    const base = (previewPayload.value?.presetAssetBaseUrl || PRESET_ASSET_BASE_URL).replace(/\/$/, '');
-    const normalized = value.replace(/^preset:/, '').replace(/^\/+/, '');
-    return { kind: 'remote-url', url: `${base}/${normalized}` };
   }
   if (provider === 'local') {
     const buffer = base64ToArrayBuffer(value);
@@ -3753,7 +3746,6 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   try {
     const buildOptions: SceneGraphBuildOptions = {
       enableGround: payload.enableGround ?? true,
-      presetAssetBaseUrl: payload.presetAssetBaseUrl || PRESET_ASSET_BASE_URL,
       lazyLoadMeshes: true,
       onProgress: (info) => {
         const hasProgress = typeof info.progress === 'number' && Number.isFinite(info.progress);

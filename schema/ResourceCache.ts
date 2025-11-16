@@ -3,23 +3,6 @@ import type { SceneGraphBuildOptions } from './sceneGraph';
 import type { MaterialAssetSource, MaterialAssetProvider } from './material';
 import type { SceneJsonExportDocument } from '@harmony/schema';
 
-function extractPresetRelativePath(candidate: string): string | null {
-  if (!candidate) {
-    return null;
-  }
-  const withoutQuery = candidate.replace(/\?.*$/, '');
-  const parts = withoutQuery.split(/[\\/]+/).filter(Boolean);
-  const presetIndex = parts.lastIndexOf('preset');
-  if (presetIndex === -1) {
-    return null;
-  }
-  const relativeSegments = parts.slice(presetIndex + 1);
-  if (!relativeSegments.length) {
-    return null;
-  }
-  return relativeSegments.join('/');
-}
-
 const NodeBuffer: { from: (data: string, encoding: string) => any } | undefined =
   typeof globalThis !== 'undefined' && (globalThis as any).Buffer
     ? (globalThis as any).Buffer
@@ -291,13 +274,12 @@ export default class ResourceCache implements MaterialAssetProvider {
       return { kind: 'remote-url', url: value };
     }
 
-    if (provider && provider !== 'local' && value) {
-      const url = this.buildProviderUrl(provider, value);
-      if (url) {
-        return { kind: 'remote-url', url };
-      }
+    const map = this.document.packageAssetMap ?? {};
+    const key = `url::${assetId}`;
+    const candidate = map[key];
+    if (typeof candidate === 'string') {
+      return { kind: 'remote-url', url: candidate };
     }
-
     if (value) {
       const buffer = this.base64ToArrayBuffer(value);
       if (buffer) {
@@ -308,15 +290,4 @@ export default class ResourceCache implements MaterialAssetProvider {
     this.warn(`未解析资源映射 ${provider}::${assetId}`);
     return null;
   }
-
-  private buildProviderUrl(provider: string, value: string): string | null {
-    if (!value) {
-      return null;
-    }
-    if (value.startsWith('http://') || value.startsWith('https://')) {
-      return value;
-    }
-    return null;
-  }
-
 }

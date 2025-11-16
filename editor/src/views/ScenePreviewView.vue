@@ -140,7 +140,6 @@ const behaviorProximityState = new Map<string, BehaviorProximityStateEntry>()
 const behaviorProximityThresholdCache = new Map<string, BehaviorProximityThreshold>()
 
 const rgbeLoader = new RGBELoader().setDataType(THREE.FloatType)
-const textureLoader = new THREE.TextureLoader()
 
 const MAX_CONCURRENT_LAZY_LOADS = 2
 
@@ -235,11 +234,6 @@ type AssetSourceResolution =
 	| { kind: 'remote-url'; url: string }
 	| { kind: 'inline-text'; text: string }
 	| { kind: 'raw'; data: ArrayBuffer }
-
-const {
-	assetUrlById: presetAssetLookup,
-	relativeByCanonical: presetAssetRelativeLookup,
-} = buildPresetAssetLookup()
 
 let renderer: THREE.WebGLRenderer | null = null
 let scene: THREE.Scene | null = null
@@ -557,10 +551,6 @@ function resolveAssetSource(assetId: string): AssetSourceResolution | null {
 	if (indexResolved) {
 		return indexResolved
 	}
-	const fallback = resolvePackageEntryLike(trimmed, 'preset', trimmed)
-	if (fallback) {
-		return fallback
-	}
 	return null
 }
 
@@ -643,30 +633,16 @@ function resolvePackageEntryLike(assetId: string, provider: string, rawValue: st
 	if (value.startsWith('data:')) {
 		return { kind: 'data-url', dataUrl: value }
 	}
-	if (provider === 'preset') {
-		const presetUrl = resolvePresetAssetUrl(value || assetId)
-		if (presetUrl) {
-			return { kind: 'remote-url', url: presetUrl }
-		}
-	}
 	if (value && /^(https?:)?\/\//i.test(value)) {
 		return { kind: 'remote-url', url: value }
 	}
-	if (provider && provider !== 'local' && value) {
-		const providerUrl = buildProviderUrl(provider, value)
-		if (providerUrl) {
-			return { kind: 'remote-url', url: providerUrl }
+	if (currentDocument != null) {
+		const packageMap = currentDocument.packageAssetMap ?? {}
+    	const key = `url::${assetId}`;
+		const providerUrl = packageMap[key];
+		if (typeof providerUrl === 'string' && /^(https?:)?\/\//i.test(providerUrl)) {
+			return { kind: 'remote-url', url: providerUrl };
 		}
-	}
-	if (value) {
-		const presetCandidate = resolvePresetAssetUrl(value)
-		if (presetCandidate) {
-			return { kind: 'remote-url', url: presetCandidate }
-		}
-	}
-	const fallback = resolvePresetAssetUrl(assetId)
-	if (fallback) {
-		return { kind: 'remote-url', url: fallback }
 	}
 	if (value) {
 		const buffer = base64ToArrayBuffer(value)
@@ -708,130 +684,7 @@ function buildProviderUrl(provider: string, value: string): string | null {
 	if (/^(https?:)?\/\//i.test(value)) {
 		return value
 	}
-	if (provider === 'preset') {
-		return resolvePresetAssetUrl(value)
-	}
 	return null
-}
-
-function canonicalizePresetRelativeKey(candidate: string): string | null {
-	const trimmed = candidate.trim()
-	if (!trimmed.length) {
-		return null
-	}
-	let relative = extractPresetRelativePath(trimmed)
-	if (!relative && trimmed.startsWith('preset:')) {
-		relative = trimmed.slice('preset:'.length)
-	}
-	const normalized = (relative ?? trimmed)
-		.replace(/^preset:/, '')
-		.replace(/^[\\/]+/, '')
-		.replace(/\\/g, '/')
-		.trim()
-	if (!normalized.length) {
-		return null
-	}
-	return normalized.toLowerCase()
-}
-
-function resolvePresetAssetUrl(assetId: string): string | null {
-	if (!assetId) {
-		return null
-	}
-	const trimmed = assetId.trim()
-	if (!trimmed.length) {
-		return null
-	}
-	const normalizedId = trimmed.startsWith('preset:') ? trimmed : `preset:${trimmed}`
-	const normalizedKey = normalizedId.replace(/\\/g, '/')
-	let direct = presetAssetLookup.get(normalizedKey)
-	if (!direct) {
-		direct = presetAssetLookup.get(normalizedKey.toLowerCase())
-	}
-	if (!direct) {
-		const canonical = canonicalizePresetRelativeKey(normalizedKey)
-		if (canonical) {
-			const relativeVariant = presetAssetRelativeLookup.get(canonical)
-			if (relativeVariant) {
-				const variantKey = `preset:${relativeVariant}`
-				const variantDirect =
-					presetAssetLookup.get(variantKey) ?? presetAssetLookup.get(variantKey.toLowerCase())
-				if (variantDirect) {
-					return variantDirect
-				}
-				return new URL(`../preset/${relativeVariant}`, import.meta.url).href
-			}
-		}
-	}
-	if (direct) {
-		return direct
-	}
-	const canonicalFallback = canonicalizePresetRelativeKey(normalizedKey)
-	if (canonicalFallback) {
-		const relativeVariant = presetAssetRelativeLookup.get(canonicalFallback)
-		if (relativeVariant) {
-			return new URL(`../preset/${relativeVariant}`, import.meta.url).href
-		}
-		return new URL(`../preset/${canonicalFallback}`, import.meta.url).href
-	}
-	const relative = normalizedKey.replace(/^preset:/, '').replace(/^[\\/]+/, '').replace(/\\/g, '/')
-	if (!relative.length) {
-		return null
-	}
-	return new URL(`../preset/${relative}`, import.meta.url).href
-}
-
-function buildPresetAssetLookup(): {
-	assetUrlById: Map<string, string>
-	relativeByCanonical: Map<string, string>
-} {
-	const urlLookup = new Map<string, string>()
-	const relativeLookup = new Map<string, string>()
-	const modules = import.meta.glob('../preset/**/*', {
-		eager: true,
-		import: 'default',
-		query: '?url',
-	}) as Record<string, string>
-	Object.entries(modules).forEach(([key, url]) => {
-		if (typeof url !== 'string' || !url.trim().length) {
-			return
-		}
-		const relative = extractPresetRelativePath(key)
-		if (!relative) {
-			return
-		}
-		const normalized = relative.replace(/^[\\/]+/, '').replace(/\\/g, '/')
-		if (!normalized.length) {
-			return
-		}
-		const lower = normalized.toLowerCase()
-		urlLookup.set(`preset:${normalized}`, url)
-		urlLookup.set(`preset:${lower}`, url)
-		if (!relativeLookup.has(lower)) {
-			relativeLookup.set(lower, normalized)
-		}
-	})
-	return {
-		assetUrlById: urlLookup,
-		relativeByCanonical: relativeLookup,
-	}
-}
-
-function extractPresetRelativePath(candidate: string): string | null {
-	if (!candidate) {
-		return null
-	}
-	const withoutQuery = candidate.replace(/\?.*$/, '')
-	const parts = withoutQuery.split(/[\\/]+/).filter(Boolean)
-	const presetIndex = parts.lastIndexOf('preset')
-	if (presetIndex === -1) {
-		return null
-	}
-	const relativeSegments = parts.slice(presetIndex + 1)
-	if (!relativeSegments.length) {
-		return null
-	}
-	return relativeSegments.join('/')
 }
 
 function base64ToArrayBuffer(value: string): ArrayBuffer | null {
@@ -2738,16 +2591,6 @@ function disposeEnvironmentTarget() {
 	environmentMapAssetId = null
 }
 
-function inferEnvironmentAssetExtension(assetId: string, url: string | null): string {
-	const target = (url ?? assetId) ?? ''
-	const sanitized = target.split('#')[0]?.split('?')[0] ?? ''
-	const index = sanitized.lastIndexOf('.')
-	if (index === -1) {
-		return ''
-	}
-	return sanitized.slice(index + 1).toLowerCase()
-}
-
 async function loadEnvironmentTextureFromAsset(
 	assetId: string,
 ): Promise<{ texture: THREE.Texture; dispose?: () => void } | null> {
@@ -2779,19 +2622,9 @@ async function loadEnvironmentTextureFromAsset(
 	if (!url) {
 		return null
 	}
-	const extension = inferEnvironmentAssetExtension(assetId, url)
 	try {
-		if (extension === 'hdr' || extension === 'hdri') {
-			const texture = await rgbeLoader.loadAsync(url)
-			texture.mapping = THREE.EquirectangularReflectionMapping
-			texture.flipY = false
-			texture.needsUpdate = true
-			return { texture, dispose }
-		}
-		const texture = await textureLoader.loadAsync(url)
+		const texture = await rgbeLoader.loadAsync(url)
 		texture.mapping = THREE.EquirectangularReflectionMapping
-		texture.colorSpace = THREE.SRGBColorSpace
-		texture.flipY = false
 		texture.needsUpdate = true
 		return { texture, dispose }
 	} catch (error) {
