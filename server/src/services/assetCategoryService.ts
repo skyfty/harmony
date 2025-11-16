@@ -4,6 +4,10 @@ import type { AssetCategoryDocument } from '@/types/models'
 import { AssetCategoryModel, normalizeCategoryName } from '@/models/AssetCategory'
 import { AssetModel } from '@/models/Asset'
 
+const ROOT_CATEGORY_NAME = '资产库'
+const ROOT_CATEGORY_DESCRIPTION = 'Default root bucket for uncategorized assets'
+const ROOT_CATEGORY_NORMALIZED = normalizeCategoryName(ROOT_CATEGORY_NAME)
+
 export interface CategoryNodeDto {
   id: string
   name: string
@@ -114,6 +118,44 @@ function ensurePathArrays(category: AssetCategoryDocument, parent: AssetCategory
   category.pathNames = [...parentPathNames, category.name]
   category.depth = category.pathIds.length - 1
   category.rootId = parent ? (parent.rootId as Types.ObjectId) : (category._id as Types.ObjectId)
+}
+
+export async function ensureRootCategory(): Promise<AssetCategoryDocument> {
+  let root = await AssetCategoryModel.findOne({ parentId: null, normalizedName: ROOT_CATEGORY_NORMALIZED }).exec()
+  if (!root) {
+    root = new AssetCategoryModel({
+      name: ROOT_CATEGORY_NAME,
+      description: ROOT_CATEGORY_DESCRIPTION,
+      parentId: null,
+      depth: 0,
+      pathIds: [],
+      pathNames: [],
+      rootId: undefined,
+      normalizedName: ROOT_CATEGORY_NORMALIZED,
+    })
+    ensurePathArrays(root, null)
+    await root.save()
+    return root
+  }
+
+  let requiresSave = false
+  if (root.parentId) {
+    root.parentId = null
+    requiresSave = true
+  }
+  const lastPathId = root.pathIds[root.pathIds.length - 1]
+  if (root.depth !== 0 || !lastPathId || !lastPathId.equals(root._id as Types.ObjectId)) {
+    ensurePathArrays(root, null)
+    requiresSave = true
+  }
+  if (requiresSave) {
+    await root.save()
+  }
+  return root
+}
+
+export async function getRootCategory(): Promise<AssetCategoryDocument | null> {
+  return AssetCategoryModel.findOne({ parentId: null, normalizedName: ROOT_CATEGORY_NORMALIZED }).exec()
 }
 
 export async function ensureCategoryPath(

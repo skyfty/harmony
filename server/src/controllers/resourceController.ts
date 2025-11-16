@@ -24,7 +24,9 @@ import type { CategoryNodeDto, CategoryPathItemDto, CategoryTreeNode } from '@/s
 import {
   deleteCategoryStrict,
   ensureCategoryConsistency,
+  ensureRootCategory,
   ensureCategoryPath,
+  getRootCategory,
   getCategoryPathItems,
   getCategoryTree,
   listCategoryChildren as listCategoryChildrenService,
@@ -474,6 +476,7 @@ let defaultCategoryInitialization: Promise<void> | null = null
 async function ensureDefaultCategories(): Promise<void> {
   if (!defaultCategoryInitialization) {
     defaultCategoryInitialization = (async () => {
+      await ensureRootCategory()
       await ensureCategoryConsistency()
     })().catch((error) => {
       defaultCategoryInitialization = null
@@ -508,7 +511,8 @@ async function resolveCategoryForPayload(
   if (normalizedSegments.length) {
     return ensureCategoryPath(normalizedSegments)
   }
-  return ensureCategoryPath([])
+  const rootCategory = (await getRootCategory()) ?? (await ensureRootCategory())
+  return rootCategory
 }
 
 async function resolveSeriesObjectId(input: string | null | undefined): Promise<Types.ObjectId | null> {

@@ -7114,6 +7114,7 @@ onMounted(() => {
     viewportResizeObserver = new ResizeObserver(() => scheduleToolbarUpdate())
     viewportResizeObserver.observe(viewportEl.value)
   }
+
   sceneStore.ensureCurrentSceneLoaded().then(() => {
     syncSceneGraph()
   })
@@ -7168,10 +7169,10 @@ watch(
       pendingSceneGraphSync = true
       return
     }
-    if (sceneStore.isSceneReady) {
- 
-          syncSceneGraph()
-    }
+
+    sceneStore.ensureCurrentSceneLoaded().then(() => {
+      syncSceneGraph()
+    })
     refreshPlaceholderOverlays()
   }
 )

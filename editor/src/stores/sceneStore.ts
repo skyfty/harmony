@@ -9409,7 +9409,6 @@ export const useSceneStore = defineStore('scene', {
     async ensureCurrentSceneLoaded() {
       this.isSceneReady = false
       const scenesStore = useScenesStore()
-      await scenesStore.initialize()
 
       try {
         if (!scenesStore.metadata.length) {

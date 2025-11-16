@@ -785,12 +785,6 @@ async function submitUpload(options: { entries?: UploadAssetEntry[] } = {}) {
   if (uploadSubmitting.value) return
   const targetEntries = (options.entries ?? uploadEntries.value).filter((entry) => entry && entry.status !== 'success')
   if (!targetEntries.length) return
-  const missingCategory = targetEntries.find((entry) => !entry.categoryId || !entry.categoryId.trim().length)
-  if (missingCategory) {
-    uploadError.value = 'Please select a category for all assets'
-    activeEntryId.value = missingCategory.assetId
-    return
-  }
   uploadSubmitting.value = true
   uploadError.value = null
   try {
@@ -859,11 +853,7 @@ async function submitUpload(options: { entries?: UploadAssetEntry[] } = {}) {
       return
     }
 
-    const allUploaded = uploadEntries.value.every((entry) => entry.status === 'success')
-    if (allUploaded) {
-      internalOpen.value = false
-      resetUploadState()
-    }
+    // Keep dialog open after all uploads so users can review results or close manually.
   } catch (error) {
     uploadError.value = (error as Error).message ?? 'Failed to upload assets'
   } finally {
@@ -960,6 +950,7 @@ function handleUploadAll(): void {
                         :categories="resourceCategories"
                         label="Asset Category"
                         placeholder="Select or create a category"
+                        hint="Optional. Leave empty to keep the asset in the root category."
                         class="category-selector"
                         :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
                         @update:model-value="(value) => handleEntryCategoryChange(entry, value)"
