@@ -129,6 +129,7 @@ const skySunPosition = new THREE.Vector3()
 const DEFAULT_SUN_DIRECTION = new THREE.Vector3(0.35, 1, -0.3).normalize()
 const tempSunDirection = new THREE.Vector3()
 let sunDirectionalLight: THREE.DirectionalLight | null = null
+let isSunLightSuppressed = false
 let stats: Stats | null = null
 let statsPanelIndex = 0
 let statsPointerHandler: ((event: MouseEvent) => void) | null = null
@@ -2883,7 +2884,30 @@ function ensureSunLight(): THREE.DirectionalLight | null {
   return sunDirectionalLight
 }
 
+function updateSunLightVisibility() {
+  if (sunDirectionalLight) {
+    sunDirectionalLight.visible = !isSunLightSuppressed
+  }
+}
+
+function setSunLightSuppressed(suppressed: boolean) {
+  if (isSunLightSuppressed === suppressed) {
+    return
+  }
+  isSunLightSuppressed = suppressed
+  if (!suppressed) {
+    applySunDirectionToSunLight()
+  } else {
+    updateSunLightVisibility()
+  }
+}
+
 function applySunDirectionToSunLight() {
+  if (isSunLightSuppressed) {
+    updateSunLightVisibility()
+    return
+  }
+
   const light = ensureSunLight()
   if (!light) {
     return
@@ -2902,6 +2926,7 @@ function applySunDirectionToSunLight() {
 
   light.target.position.set(0, 0, 0)
   light.target.updateMatrixWorld()
+  updateSunLightVisibility()
 }
 
 function applySunDirectionToFallbackLight() {
@@ -3094,6 +3119,9 @@ async function applyEnvironmentMapSettings(mapSettings: EnvironmentSettings['env
   if (!scene) {
     return false
   }
+
+  const shouldSuppressSunLight = mapSettings.mode !== 'skybox' && Boolean(mapSettings.hdriAssetId)
+  setSunLightSuppressed(shouldSuppressSunLight)
 
   if (mapSettings.mode === 'skybox') {
     disposeCustomEnvironmentTarget()
@@ -6335,7 +6363,7 @@ function ensureFallbackLighting() {
   if (!hasLight) {
     const ambient = new THREE.AmbientLight(0xffffff, FALLBACK_AMBIENT_INTENSITY)
     fallbackLightGroup.add(ambient)
-    if (!sunDirectionalLight) {
+    if (!sunDirectionalLight && !isSunLightSuppressed) {
       const directional = new THREE.DirectionalLight(0xffffff, FALLBACK_DIRECTIONAL_INTENSITY)
       directional.castShadow = true
       directional.shadow.mapSize.set(FALLBACK_DIRECTIONAL_SHADOW_MAP_SIZE, FALLBACK_DIRECTIONAL_SHADOW_MAP_SIZE)

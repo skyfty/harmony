@@ -628,7 +628,7 @@ function resolveAssetSourceFromIndex(assetId: string, packageMap: Record<string,
 	return null
 }
 
-function resolvePackageEntryLike(assetId: string, provider: string, rawValue: string): AssetSourceResolution | null {
+function resolvePackageEntryLike(assetId: string, _provider: string, rawValue: string): AssetSourceResolution | null {
 	const value = typeof rawValue === 'string' ? rawValue.trim() : ''
 	if (value.startsWith('data:')) {
 		return { kind: 'data-url', dataUrl: value }
@@ -675,16 +675,6 @@ function getPackageEntry(assetId: string, packageMap: Record<string, string>): {
 	}
 	packageEntryCache.set(assetId, found)
 	return found
-}
-
-function buildProviderUrl(provider: string, value: string): string | null {
-	if (!value) {
-		return null
-	}
-	if (/^(https?:)?\/\//i.test(value)) {
-		return value
-	}
-	return null
 }
 
 function base64ToArrayBuffer(value: string): ArrayBuffer | null {
