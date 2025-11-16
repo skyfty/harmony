@@ -6503,6 +6503,7 @@ async function ensureMaterialTexture(ref: SceneMaterialTextureRef): Promise<THRE
   }
 
   const loader = async (): Promise<THREE.Texture | null> => {
+    const asset = sceneStore.getAsset(cacheKey)
     let entry = assetCacheStore.getEntry(cacheKey)
     if (entry.status !== 'cached') {
       await assetCacheStore.loadFromIndexedDb(cacheKey)
@@ -6510,7 +6511,6 @@ async function ensureMaterialTexture(ref: SceneMaterialTextureRef): Promise<THRE
     }
 
     if (entry.status !== 'cached') {
-      const asset = sceneStore.getAsset(cacheKey)
       const url = entry.downloadUrl ?? asset?.downloadUrl ?? asset?.description ?? null
       if (!url) {
         console.warn('Texture asset missing download URL', cacheKey)
@@ -6535,7 +6535,13 @@ async function ensureMaterialTexture(ref: SceneMaterialTextureRef): Promise<THRE
 
     const blobUrl = URL.createObjectURL(file)
     try {
-      const texture = await textureLoader.loadAsync(blobUrl)
+      const extension = resolveAssetExtension(asset ?? null, file.name ?? null)
+      let texture: THREE.Texture
+      if (extension === 'hdr' || extension === 'hdri' || extension === 'rgbe') {
+        texture = await rgbeLoader.loadAsync(blobUrl)
+      } else {
+        texture = await textureLoader.loadAsync(blobUrl)
+      }
       texture.name = ref.name ?? file.name ?? cacheKey
       texture.needsUpdate = true
       textureCache.set(cacheKey, texture)
@@ -7198,9 +7204,9 @@ watch(
       return
     }
 
-    sceneStore.ensureCurrentSceneLoaded().then(() => {
+    if (sceneStore.isSceneReady) {
       syncSceneGraph()
-    })
+    }
     refreshPlaceholderOverlays()
   }
 )

@@ -5055,6 +5055,10 @@ export const useSceneStore = defineStore('scene', {
     },
   },
   actions: {
+
+    initialize() {
+      
+    },
     onPersistHydrated(_state?: Partial<SceneState>) {
       const nextTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
       this.projectTree = nextTree

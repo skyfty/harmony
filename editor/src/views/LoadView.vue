@@ -3,6 +3,8 @@ import { computed, defineComponent, h, nextTick, onMounted, ref, shallowRef } fr
 import EditorView from '@/views/EditorView.vue'
 import { useScenesStore } from '@/stores/scenesStore'
 import { waitForPiniaHydration } from '@/utils/piniaPersist'
+import { useSceneStore } from '@/stores/sceneStore'
+
 
 const LoadingScreen = defineComponent({
   name: 'EditorLoadingScreen',
@@ -91,6 +93,8 @@ async function bootstrap() {
 
     statusMessage.value = '同步本地存档…'
     progress.value = 28
+    const sceneStore = useSceneStore()
+    sceneStore.initialize()
     await waitForPiniaHydration()
 
     statusMessage.value = '检查场景数据…'
