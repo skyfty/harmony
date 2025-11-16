@@ -117,7 +117,7 @@ class SceneGraphBuilder {
   async build(): Promise<THREE.Group> {
     const materials = Array.isArray(this.document.materials) ? (this.document.materials as SceneMaterial[]) : [];
     const nodes = Array.isArray(this.document.nodes) ? (this.document.nodes as SceneNodeWithExtras[]) : [];
-    await this.preloadAssets(materials, nodes);
+    await this.preloadAssets(nodes);
     await this.materialFactory.prepareTemplates(materials);
     await this.buildNodes(nodes, this.root);
     return this.root;
@@ -209,12 +209,10 @@ class SceneGraphBuilder {
   }
 
   private async preloadAssets(
-    materials: SceneMaterial[],
     nodes: SceneNodeWithExtras[],
   ): Promise<void> {
-    const textureRequests = this.collectTexturePreloadRequests(materials, nodes);
     const meshAssetIds = this.buildOptions.lazyLoadMeshes ? [] : this.collectMeshAssetIds(nodes);
-    const total = textureRequests.length + meshAssetIds.length;
+    const total = meshAssetIds.length;
     this.beginProgress(total);
     if (total === 0) {
       this.finalizeProgress();
@@ -222,14 +220,6 @@ class SceneGraphBuilder {
     }
 
     const tasks: Promise<void>[] = [];
-
-    textureRequests.forEach((request) => {
-      tasks.push(
-        this.preloadTextureAsset(request.assetId, request.settings).finally(() => {
-          this.incrementProgress('texture', request.assetId, `纹理 ${request.assetId}`);
-        }),
-      );
-    });
 
     meshAssetIds.forEach((assetId) => {
       tasks.push(
@@ -243,61 +233,6 @@ class SceneGraphBuilder {
     this.finalizeProgress();
   }
 
-  private collectTexturePreloadRequests(
-    materials: SceneMaterial[],
-    nodes: SceneNodeWithExtras[],
-  ): Array<{ assetId: string; settings: SceneMaterialTextureSettings | null }> {
-    const requests = new Map<string, { assetId: string; settings: SceneMaterialTextureSettings | null }>();
-
-    const enqueue = (
-      candidate: { assetId?: string; settings?: SceneMaterialTextureSettings | null } | null | undefined,
-    ): void => {
-      if (!candidate || typeof candidate.assetId !== 'string' || !candidate.assetId) {
-        return;
-      }
-      const signature = `${candidate.assetId}::${textureSettingsSignature(candidate.settings ?? null)}`;
-      if (!requests.has(signature)) {
-        requests.set(signature, {
-          assetId: candidate.assetId,
-          settings: candidate.settings ?? null,
-        });
-      }
-    };
-
-    materials.forEach((material) => {
-      if (!material) {
-        return;
-      }
-      const textures = material.textures ?? {};
-      Object.values(textures).forEach((ref) => {
-        enqueue(ref as { assetId?: string; settings?: SceneMaterialTextureSettings | null } | null);
-      });
-    });
-
-    const stack: SceneNodeWithExtras[] = [...nodes];
-    while (stack.length) {
-      const node = stack.pop();
-      if (!node) {
-        continue;
-      }
-      if (Array.isArray(node.materials)) {
-        node.materials.forEach((entry) => {
-          if (!entry) {
-            return;
-          }
-          const textures = entry.textures ?? {};
-          Object.values(textures).forEach((ref) => {
-            enqueue(ref as { assetId?: string; settings?: SceneMaterialTextureSettings | null } | null);
-          });
-        });
-      }
-      if (Array.isArray(node.children) && node.children.length) {
-        stack.push(...(node.children as SceneNodeWithExtras[]));
-      }
-    }
-
-    return Array.from(requests.values());
-  }
 
   private collectMeshAssetIds(nodes: SceneNodeWithExtras[]): string[] {
     const ids = new Set<string>();
@@ -317,20 +252,6 @@ class SceneGraphBuilder {
     return Array.from(ids);
   }
 
-  private async preloadTextureAsset(
-    assetId: string,
-    settings: SceneMaterialTextureSettings | null,
-  ): Promise<void> {
-    if (!assetId) {
-      return;
-    }
-    try {
-      await this.materialFactory.preloadTexture(assetId, settings ?? null);
-    } catch (error) {
-      console.warn('纹理预加载失败', assetId, error);
-      this.warn(`纹理 ${assetId} 预加载失败`);
-    }
-  }
 
   private async preloadMeshAsset(assetId: string): Promise<void> {
     if (!assetId) {

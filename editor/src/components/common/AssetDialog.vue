@@ -6,6 +6,7 @@ import type { ProjectDirectory } from '@/types/project-directory'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { assetProvider } from '@/resources/projectProviders/asset'
+import { determineAssetCategoryId } from '@/stores/assetCatalog'
 
 const props = withDefaults(
   defineProps<{
@@ -332,14 +333,6 @@ const filteredAssets = computed(() => {
   })
 })
 
-const selectedAsset = computed(() => {
-  const id = selectedAssetId.value
-  if (!id) {
-    return null
-  }
-  return allAssets.value.find((asset) => asset.id === id) ?? null
-})
-
 function cssEscape(value: string): string {
   if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
     return CSS.escape(value)
@@ -385,7 +378,37 @@ watch(selectedAssetId, () => {
 
 function handleAssetClick(asset: ProjectAsset) {
   selectedAssetId.value = asset.id
-  emit('update:asset', selectedAsset.value)
+  emit('update:asset', ensureSceneAssetMapping(asset))
+}
+
+function ensureSceneAssetMapping(asset: ProjectAsset): ProjectAsset {
+  if (!asset || !asset.id) {
+    return asset
+  }
+
+  const existing = sceneStore.getAsset(asset.id)
+  if (existing) {
+    const remoteKey = `url::${existing.id}`
+    if (!sceneStore.packageAssetMap[remoteKey] && existing.downloadUrl && existing.downloadUrl.trim().length) {
+      void sceneStore.syncAssetPackageMapEntry(existing, sceneStore.assetIndex[existing.id]?.source)
+    }
+    return existing
+  }
+
+  try {
+    const normalizedAsset: ProjectAsset = {
+      ...asset,
+      gleaned: asset.gleaned ?? true,
+    }
+    return sceneStore.registerAsset(normalizedAsset, {
+      categoryId: determineAssetCategoryId(normalizedAsset),
+      source: { type: 'url' },
+      commitOptions: { updateNodes: false, updateCamera: false },
+    })
+  } catch (error) {
+    console.warn('Failed to register selected asset for scene mapping', asset.id, error)
+    return asset
+  }
 }
 
 

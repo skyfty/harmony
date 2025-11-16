@@ -197,16 +197,6 @@ export class SceneMaterialFactory {
     return resolved.length ? resolved : [this.createDefaultMaterial('#ffffff')];
   }
 
-  async preloadTexture(
-    assetId: string,
-    settings?: Partial<SceneMaterialTextureSettings> | null,
-  ): Promise<void> {
-    if (!assetId) {
-      return;
-    }
-    await this.ensureTexture(assetId, settings ?? null);
-  }
-
   createDefaultMaterial(colorHex: string): THREE.Material {
     const material = new THREE.MeshStandardMaterial({
       color: new THREE.Color(colorHex),
@@ -433,7 +423,7 @@ export class SceneMaterialFactory {
           return;
         }
         try {
-          const texture = await this.ensureTexture(ref.assetId, ref.settings ?? null);
+          const texture = await this.ensureTexture(ref.assetId, ref.name, ref.settings ?? null);
           if (texture) {
             const assignment = MATERIAL_TEXTURE_ASSIGNMENTS[slot];
             resolved[assignment.key] = texture;
@@ -464,6 +454,7 @@ export class SceneMaterialFactory {
 
   private async ensureTexture(
     assetId: string,
+    name: string | undefined,
     settings: Partial<SceneMaterialTextureSettings> | null,
   ): Promise<THREE.Texture | null> {
     const signature = `${assetId}::${textureSettingsSignature(settings as SceneMaterialTextureSettings | null)}`;
@@ -471,7 +462,7 @@ export class SceneMaterialFactory {
       return this.textureCache.get(signature)!;
     }
 
-    const pending = this.createTextureInstance(assetId, settings)
+    const pending = this.createTextureInstance(assetId, name, settings)
       .catch((error) => {
         console.warn('纹理加载失败', assetId, error);
         this.warn?.(`纹理 ${assetId} 加载失败`);
@@ -484,6 +475,7 @@ export class SceneMaterialFactory {
 
   private async createTextureInstance(
     assetId: string,
+    name: string | undefined,
     settings: Partial<SceneMaterialTextureSettings> | null,
   ): Promise<THREE.Texture | null> {
     const source = await this.provider.acquireAssetSource(assetId);
@@ -497,7 +489,7 @@ export class SceneMaterialFactory {
     }
 
     const texture = await this.loadTextureFromUrl(url, {
-      hdr: this.isHdrSource(assetId, source, url),
+      hdr: this.isHdrSource(assetId, name, source, url),
     });
     if (!texture) {
       return null;
@@ -528,7 +520,7 @@ export class SceneMaterialFactory {
     }
   }
 
-  private isHdrSource(assetId: string, source: MaterialAssetSource, url: string | null): boolean {
+  private isHdrSource(assetId: string, name: string | undefined, source: MaterialAssetSource, url: string | null): boolean {
     const matchesHdrExtension = (value: string | null | undefined) => {
       if (!value) {
         return false;
@@ -541,6 +533,9 @@ export class SceneMaterialFactory {
       return true;
     }
     if (matchesHdrExtension(url)) {
+      return true;
+    }
+    if (name && matchesHdrExtension(name)) {
       return true;
     }
     if (url && HDR_DATA_URL_PATTERN.test(url)) {
