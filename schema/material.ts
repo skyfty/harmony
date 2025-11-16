@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import type {
   SceneMaterial,
   SceneMaterialProps,
@@ -21,6 +22,7 @@ export interface SceneMaterialFactoryOptions {
   provider: MaterialAssetProvider;
   loadingManager?: THREE.LoadingManager;
   textureLoader?: THREE.TextureLoader;
+  hdrLoader?: RGBELoader;
   warn?: (message: string) => void;
 }
 
@@ -35,6 +37,9 @@ const MATERIAL_TEXTURE_ASSIGNMENTS: Record<
   ao: { key: 'aoMap' },
   emissive: { key: 'emissiveMap', colorSpace: 'srgb' },
 };
+
+const HDR_EXTENSION_PATTERN = /\.(hdr|hdri|rgbe)$/i;
+const HDR_DATA_URL_PATTERN = /^data:image\/(?:vnd\.radiance|hdr|x-rgbe)/i;
 
 export const DEFAULT_TEXTURE_SETTINGS: SceneMaterialTextureSettings = {
   wrapS: 'ClampToEdgeWrapping',
@@ -119,6 +124,7 @@ export class SceneMaterialFactory {
   private readonly warn?: (message: string) => void;
   private readonly loadingManager: THREE.LoadingManager;
   private readonly textureLoader: THREE.TextureLoader;
+  private readonly hdrLoader: RGBELoader | null;
 
   constructor(options: SceneMaterialFactoryOptions) {
     if (!options?.provider) {
@@ -127,7 +133,18 @@ export class SceneMaterialFactory {
     this.provider = options.provider;
     this.warn = options.warn;
     this.loadingManager = options.loadingManager ?? new THREE.LoadingManager();
-    this.textureLoader = options.textureLoader ?? new THREE.TextureLoader(this.loadingManager);
+    if (options.textureLoader) {
+      options.textureLoader.manager = this.loadingManager;
+      this.textureLoader = options.textureLoader;
+    } else {
+      this.textureLoader = new THREE.TextureLoader(this.loadingManager);
+    }
+    if (options.hdrLoader) {
+      options.hdrLoader.manager = this.loadingManager;
+      this.hdrLoader = options.hdrLoader;
+    } else {
+      this.hdrLoader = new RGBELoader(this.loadingManager).setDataType(THREE.FloatType);
+    }
   }
 
   async prepareTemplates(materials: readonly SceneMaterial[] | null | undefined): Promise<void> {
@@ -479,7 +496,9 @@ export class SceneMaterialFactory {
       return null;
     }
 
-    const texture = await this.loadTextureFromUrl(url);
+    const texture = await this.loadTextureFromUrl(url, {
+      hdr: this.isHdrSource(assetId, source, url),
+    });
     if (!texture) {
       return null;
     }
@@ -509,7 +528,42 @@ export class SceneMaterialFactory {
     }
   }
 
-  private async loadTextureFromUrl(url: string): Promise<THREE.Texture | null> {
+  private isHdrSource(assetId: string, source: MaterialAssetSource, url: string | null): boolean {
+    const matchesHdrExtension = (value: string | null | undefined) => {
+      if (!value) {
+        return false;
+      }
+      const sanitized = value.split('?')[0]?.split('#')[0] ?? value;
+      return HDR_EXTENSION_PATTERN.test(sanitized);
+    };
+
+    if (matchesHdrExtension(assetId)) {
+      return true;
+    }
+    if (matchesHdrExtension(url)) {
+      return true;
+    }
+    if (url && HDR_DATA_URL_PATTERN.test(url)) {
+      return true;
+    }
+    if (source.kind === 'data-url' && HDR_DATA_URL_PATTERN.test(source.dataUrl)) {
+      return true;
+    }
+    return false;
+  }
+
+  private async loadTextureFromUrl(url: string, options?: { hdr?: boolean }): Promise<THREE.Texture | null> {
+    if (options?.hdr && this.hdrLoader) {
+      try {
+        const texture = await this.hdrLoader.loadAsync(url);
+        texture.colorSpace = THREE.LinearSRGBColorSpace;
+        texture.needsUpdate = true;
+        return texture;
+      } catch (_error) {
+        return null;
+      }
+    }
+
     return await new Promise((resolve) => {
       this.textureLoader.load(
         url,

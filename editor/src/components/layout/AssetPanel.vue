@@ -39,15 +39,22 @@ const {
 } = storeToRefs(sceneStore)
 
 const openedDirectories = ref<string[]>(restoreOpenedDirectories())
-watch(openedDirectories, (ids) => {
+watch(openedDirectories, (ids, previousIds) => {
   const sanitized = sanitizeOpenedDirectories(ids, projectTree.value)
+  if (!arraysEqual(sanitized, ids)) {
+    openedDirectories.value = sanitized
+    return
+  }
   persistOpenedDirectories(sanitized)
+  triggerProviderLoadForOpenedDirectories(sanitized, previousIds)
 })
 watch(projectTree, () => {
   const sanitized = sanitizeOpenedDirectories(openedDirectories.value, projectTree.value)
   if (!arraysEqual(sanitized, openedDirectories.value)) {
     openedDirectories.value = sanitized
+    return
   }
+  triggerProviderLoadForOpenedDirectories(sanitized)
 })
 
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
@@ -187,6 +194,22 @@ function persistOpenedDirectories(ids: string[]): void {
   } catch (error) {
     console.warn('Failed to persist ProjectPanel opened directories', error)
   }
+}
+
+function triggerProviderLoadForOpenedDirectories(ids: string[], previousIds?: string[]): void {
+  if (!ids.length) {
+    return
+  }
+  const previousSet = new Set(previousIds ?? [])
+  ids.forEach((id) => {
+    const providerId = extractProviderIdFromPackageDirectoryId(id)
+    if (!providerId) {
+      return
+    }
+    if (!previousSet.has(id) || !sceneStore.isPackageLoaded(providerId)) {
+      void loadPackageDirectory(providerId)
+    }
+  })
 }
 
 function collectDirectoryIds(directories: ProjectDirectory[] | undefined, bucket: Set<string>): void {

@@ -3273,6 +3273,9 @@ async function updateScene(document: SceneJsonExportDocument) {
 				resourceProgress.active = info.total > 0 && info.loaded < info.total
 			},
 			lazyLoadMeshes: true,
+			materialFactoryOptions: {
+				hdrLoader: rgbeLoader,
+			},
 		}
 		const resourceCache = ensureEditorResourceCache(document, buildOptions)
 		graphResult = await buildSceneGraph(document, resourceCache, buildOptions)

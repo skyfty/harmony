@@ -311,7 +311,7 @@ function optionalNumberEquals(a?: number, b?: number, epsilon = 1e-6): boolean {
 
 type MediaDimensions = { width: number; height: number }
 
-const IMAGE_EXTENSION_PATTERN = /\.(apng|avif|bmp|gif|jpe?g|png|tiff?|webp|heic|heif|ico|svg)$/i
+const IMAGE_EXTENSION_PATTERN = /\.(apng|avif|bmp|gif|jpe?g|png|tiff?|webp|heic|heif|ico|svg|hdr|hdri|rgbe)$/i
 const CAN_MEASURE_MEDIA =
   typeof window !== 'undefined' &&
   typeof Image !== 'undefined' &&

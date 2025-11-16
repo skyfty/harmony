@@ -3747,6 +3747,9 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
     const buildOptions: SceneGraphBuildOptions = {
       enableGround: payload.enableGround ?? true,
       lazyLoadMeshes: true,
+      materialFactoryOptions: {
+        hdrLoader: rgbeLoader,
+      },
       onProgress: (info) => {
         const hasProgress = typeof info.progress === 'number' && Number.isFinite(info.progress);
         resourcePreload.total = info.total;

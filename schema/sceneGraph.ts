@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import Loader, { type LoaderLoadedPayload } from '@schema/loader';
 import type { AssetCacheEntry } from './assetCache';
 import { SceneMaterialFactory, textureSettingsSignature } from './material';
+import type { SceneMaterialFactoryOptions } from './material';
 import { createPrimitiveGeometry } from './geometry';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import ResourceCache from './ResourceCache';
@@ -64,6 +65,7 @@ export interface SceneGraphBuildOptions {
   assetOverrides?: Record<string, string | ArrayBuffer>;
   onProgress?: (progress: SceneGraphResourceProgress) => void;
   lazyLoadMeshes?: boolean;
+  materialFactoryOptions?: Pick<SceneMaterialFactoryOptions, 'textureLoader' | 'hdrLoader'>;
 }
 
 type MeshTemplate = {
@@ -101,10 +103,13 @@ class SceneGraphBuilder {
       warn: (message) => this.warn(message),
       reportDownloadProgress: (payload) => this.reportAssetDownloadProgress(payload.assetId, payload.progress),
     });
+    const materialFactoryOverrides = options.materialFactoryOptions ?? {};
     this.materialFactory = new SceneMaterialFactory({
       provider: this.resourceCache,
       loadingManager: this.loadingManager,
       warn: (message) => this.warn(message),
+      textureLoader: materialFactoryOverrides.textureLoader,
+      hdrLoader: materialFactoryOverrides.hdrLoader,
     });
     this.onProgress = options.onProgress;
   }
