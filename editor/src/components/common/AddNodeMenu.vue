@@ -47,7 +47,6 @@ const uiStore = useUiStore()
 const assetCacheStore = useAssetCacheStore()
 
 const DISPLAY_BOARD_INITIAL_HEIGHT = 0.5
-const DISPLAY_BOARD_WARP_GATE_OFFSET = 0.5
 const DISPLAY_BOARD_EPSILON = 1e-4
 
 const VIEW_POINT_RADIUS = 0.12
@@ -1201,7 +1200,7 @@ function handleCreateEmptyNode() {
   const parentCandidate = sceneStore.selectedNode
   const parentId = parentCandidate && !parentCandidate.isPlaceholder ? parentCandidate.id : null
   sceneStore.addSceneNode({
-    nodeType: 'Mesh',
+    nodeType: 'Empty',
     object: emptyObject,
     name,
     parentId,
@@ -1236,7 +1235,6 @@ async function handleCreateDisplayBoardNode(): Promise<void> {
     }
   }
 
-  const fallbackBoardPosition = spawnPosition.clone()
 
   const created = await sceneStore.addModelNode({
     object: boardRoot,
@@ -1258,106 +1256,6 @@ async function handleCreateDisplayBoardNode(): Promise<void> {
 
   if (!created.components?.[DISPLAY_BOARD_COMPONENT_TYPE]) {
     sceneStore.addNodeComponent(created.id, DISPLAY_BOARD_COMPONENT_TYPE)
-  }
-
-  if (!created.components?.[GUIDEBOARD_COMPONENT_TYPE]) {
-    sceneStore.addNodeComponent(created.id, GUIDEBOARD_COMPONENT_TYPE)
-  }
-
-  const refreshedNode = findNodeWithParent(sceneStore.nodes, created.id)?.node ?? created
-  const guideboardState = refreshedNode.components?.[GUIDEBOARD_COMPONENT_TYPE] as
-    | SceneNodeComponentState<GuideboardComponentProps>
-    | undefined
-  if (guideboardState && guideboardState.props.initiallyVisible !== true) {
-    sceneStore.updateNodeComponentProps(refreshedNode.id, guideboardState.id, {
-      initiallyVisible: true,
-    })
-  }
-
-  ensureBehaviorComponent(created.id)
-  initializeGuideboardBehavior(created.id, created.name ?? name)
-
-  await handleCreateViewPointNode({ parentId: created.id, autoBehaviors: true })
-
-  const runtimeObject = getRuntimeObject(created.id)
-  const boardWorldPosition = fallbackBoardPosition.clone()
-  const boardWorldQuaternion = new THREE.Quaternion()
-  if (runtimeObject) {
-    runtimeObject.updateMatrixWorld(true)
-    runtimeObject.getWorldPosition(boardWorldPosition)
-    runtimeObject.getWorldQuaternion(boardWorldQuaternion)
-  } else {
-    boardWorldQuaternion.identity()
-  }
-
-  let forward = new THREE.Vector3(0, 0, -1).applyQuaternion(boardWorldQuaternion)
-  if (forward.lengthSq() < 1e-6) {
-    forward = new THREE.Vector3(0, 0, -1)
-  } else {
-    forward.normalize()
-  }
-
-  const warpGateCenter = boardWorldPosition.clone().add(forward.clone().multiplyScalar(DISPLAY_BOARD_WARP_GATE_OFFSET))
-  const warpGateName = getNextWarpGateName()
-
-  const warpGateMesh =  createPrimitiveMesh("Circle",{color: WARP_GATE_COLOR,doubleSided: true})
-  warpGateMesh.name = `${warpGateName} Visual`
-  warpGateMesh.castShadow = false
-  warpGateMesh.receiveShadow = false
-  warpGateMesh.userData = {
-    ...(warpGateMesh.userData ?? {}),
-    ignoreGridSnapping: true,
-    warpGate: true,
-  }
-
-  const warpGateRoot = new THREE.Object3D()
-  warpGateRoot.name = warpGateName
-  warpGateRoot.add(warpGateMesh)
-  warpGateRoot.userData = {
-    ...(warpGateRoot.userData ?? {}),
-    ignoreGridSnapping: true,
-    warpGate: true,
-  }
-
-  const warpGateSpawn = warpGateCenter.clone()
-  warpGateSpawn.y -= WARP_GATE_RADIUS + DISPLAY_BOARD_EPSILON
-
-  let warpGateFacing = forward.clone().negate()
-  if (warpGateFacing.lengthSq() < 1e-6) {
-    warpGateFacing = new THREE.Vector3(0, 0, 1)
-  } else {
-    warpGateFacing.normalize()
-  }
-  const warpGateQuaternion = new THREE.Quaternion().setFromUnitVectors(
-    new THREE.Vector3(0, 0, 1),
-    warpGateFacing,
-  )
-  const warpGateEuler = new THREE.Euler().setFromQuaternion(warpGateQuaternion, 'XYZ')
-  const warpGateRotation = new THREE.Vector3(warpGateEuler.x, warpGateEuler.y, warpGateEuler.z)
-
-  const warpGateNode = await sceneStore.addModelNode({
-    object: warpGateRoot,
-    nodeType: 'Circle',
-    name: warpGateName,
-    parentId: created.id,
-    position: warpGateSpawn,
-    rotation: warpGateRotation,
-    snapToGrid: false,
-    editorFlags: {
-      ignoreGridSnapping: true,
-    },
-  })
-
-  if (warpGateNode) {
-    const warpGatePrimaryMaterial = warpGateNode.materials?.[0] ?? null
-    if (warpGatePrimaryMaterial) {
-      sceneStore.updateNodeMaterialProps(warpGateNode.id, warpGatePrimaryMaterial.id, { side: 'double' })
-    }
-    if (!warpGateNode.components?.[WARP_GATE_COMPONENT_TYPE]) {
-      sceneStore.addNodeComponent(warpGateNode.id, WARP_GATE_COMPONENT_TYPE)
-    }
-    ensureBehaviorComponent(warpGateNode.id)
-    initializeWarpGateBehavior(warpGateNode.id)
   }
 
   sceneStore.selectNode(created.id)

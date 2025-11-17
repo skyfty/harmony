@@ -1,4 +1,4 @@
-import type { LightNodeType,SceneNodeType } from '@harmony/schema'
+import type { LightNodeType, SceneNodeType } from '@harmony/schema'
 
 export const NODE_TYPE_ICONS: Record<SceneNodeType, string> = {
   Mesh: 'mdi-cube-outline',
@@ -20,6 +20,7 @@ export const NODE_TYPE_ICONS: Record<SceneNodeType, string> = {
   Torus: 'mdi-torus',
   TorusKnot: 'mdi-torus-knot',
   Box: 'mdi-cube-outline',
+  Empty: 'mdi-vector-point',
 }
 
 export const LIGHT_TYPE_ICONS: Record<LightNodeType, string> = {

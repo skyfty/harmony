@@ -5,14 +5,9 @@ import { componentManager, type ComponentDefinition } from '../componentManager'
 import type { SceneNode, SceneNodeComponentState } from '../../index'
 
 export const DISPLAY_BOARD_COMPONENT_TYPE = 'displayBoard'
-export const DISPLAY_BOARD_DEFAULT_MAX_WIDTH = 1.0
-export const DISPLAY_BOARD_DEFAULT_MAX_HEIGHT = 1.0
-
 const DISPLAY_BOARD_RESOLVER_KEY = '__harmonyResolveDisplayBoardMedia'
 
 export interface DisplayBoardComponentProps {
-  maxWidth: number
-  maxHeight: number
   assetId: string
   intrinsicWidth?: number
   intrinsicHeight?: number
@@ -29,12 +24,6 @@ export interface DisplayBoardResolvedMedia {
 export function clampDisplayBoardComponentProps(
   props: Partial<DisplayBoardComponentProps> | null | undefined,
 ): DisplayBoardComponentProps {
-  const maxWidth = Number.isFinite(props?.maxWidth) && (props?.maxWidth ?? 0) > 0
-    ? Math.min(100, props!.maxWidth!)
-    : DISPLAY_BOARD_DEFAULT_MAX_WIDTH
-  const maxHeight = Number.isFinite(props?.maxHeight) && (props?.maxHeight ?? 0) > 0
-    ? Math.min(100, props!.maxHeight!)
-    : DISPLAY_BOARD_DEFAULT_MAX_HEIGHT
   const legacyUrl = typeof (props as { url?: unknown })?.url === 'string'
     ? ((props as { url?: string }).url ?? '').trim()
     : ''
@@ -50,7 +39,7 @@ export function clampDisplayBoardComponentProps(
   const intrinsicHeight = Number.isFinite(props?.intrinsicHeight) && (props?.intrinsicHeight ?? 0) > 0
     ? props!.intrinsicHeight!
     : undefined
-  const result: DisplayBoardComponentProps = { maxWidth, maxHeight, assetId }
+  const result: DisplayBoardComponentProps = { assetId }
   if (intrinsicWidth !== undefined) {
     result.intrinsicWidth = intrinsicWidth
   }
@@ -62,8 +51,6 @@ export function clampDisplayBoardComponentProps(
 
 export function cloneDisplayBoardComponentProps(props: DisplayBoardComponentProps): DisplayBoardComponentProps {
   const cloned: DisplayBoardComponentProps = {
-    maxWidth: props.maxWidth,
-    maxHeight: props.maxHeight,
     assetId: props.assetId,
   }
   if (typeof props.intrinsicWidth === 'number') {
@@ -228,7 +215,7 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
     mediaSize: { width: number; height: number } | null,
   ): void {
     const { widthSegments, heightSegments } = this.resolveGeometrySegments(mesh.geometry)
-    const targetSize = this.computeTargetSize(props, mediaSize)
+    const targetSize = this.computeTargetSize(mesh, props, mediaSize)
     if (!targetSize) {
       return
     }
@@ -239,21 +226,22 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
   }
 
   private computeTargetSize(
+    mesh: PlaneMesh,
     props: DisplayBoardComponentProps,
     mediaSize: { width: number; height: number } | null,
   ): { width: number; height: number } | null {
-    const maxWidth = Math.max(1e-3, props.maxWidth)
-    const maxHeight = Math.max(1e-3, props.maxHeight)
+    const { maxWidth, maxHeight } = this.resolveScaleLimits(mesh)
     const intrinsic = this.getIntrinsicSize(props)
     const sourceSize = mediaSize && mediaSize.width > 0 && mediaSize.height > 0
       ? mediaSize
       : intrinsic
+
     if (!sourceSize || sourceSize.width <= 0 || sourceSize.height <= 0) {
-      const base = Math.min(maxWidth, maxHeight)
-      return { width: base, height: base }
+      const fallback = Math.min(maxWidth, maxHeight)
+      return this.convertWorldSizeToGeometry(mesh, { width: fallback, height: fallback })
     }
 
-    const aspect = sourceSize.width / sourceSize.height
+    const aspect = sourceSize.width / Math.max(sourceSize.height, 1e-6)
     let width = maxWidth
     let height = width / Math.max(aspect, 1e-6)
     if (height > maxHeight) {
@@ -262,7 +250,31 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
     }
     width = Math.max(1e-3, width)
     height = Math.max(1e-3, height)
-    return { width, height }
+    return this.convertWorldSizeToGeometry(mesh, { width, height })
+  }
+
+  private resolveScaleLimits(mesh: PlaneMesh): { maxWidth: number; maxHeight: number } {
+    return {
+      maxWidth: this.resolveScaleComponent(mesh.scale.x),
+      maxHeight: this.resolveScaleComponent(mesh.scale.y),
+    }
+  }
+
+  private resolveScaleComponent(value: number | undefined): number {
+    const magnitude = Math.abs(value ?? 1)
+    return magnitude > 1e-3 ? magnitude : 1e-3
+  }
+
+  private convertWorldSizeToGeometry(
+    mesh: PlaneMesh,
+    worldSize: { width: number; height: number },
+  ): { width: number; height: number } {
+    const scaleX = this.resolveScaleComponent(mesh.scale.x)
+    const scaleY = this.resolveScaleComponent(mesh.scale.y)
+    return {
+      width: worldSize.width / scaleX,
+      height: worldSize.height / scaleY,
+    }
   }
 
   private resolveGeometrySegments(geometry: THREE.BufferGeometry): { widthSegments: number; heightSegments: number } {
@@ -401,24 +413,12 @@ const displayBoardComponentDefinition: ComponentDefinition<DisplayBoardComponent
   label: 'Display Board',
   icon: 'mdi-monitor',
   order: 45,
-  inspector: [
-    {
-      id: 'layout',
-      label: 'Layout',
-      fields: [
-        { kind: 'number', key: 'maxWidth', label: 'Max Width (m)', min: 0.01, step: 0.05 },
-        { kind: 'number', key: 'maxHeight', label: 'Max Height (m)', min: 0.01, step: 0.05 },
-      ],
-    },
-  ],
   canAttach(node: SceneNode) {
     const type = (node.nodeType ?? '').toLowerCase()
     return type === 'plane'
   },
   createDefaultProps(_node: SceneNode) {
     return {
-      maxWidth: DISPLAY_BOARD_DEFAULT_MAX_WIDTH,
-      maxHeight: DISPLAY_BOARD_DEFAULT_MAX_HEIGHT,
       assetId: '',
       intrinsicWidth: undefined,
       intrinsicHeight: undefined,
@@ -438,9 +438,9 @@ export function createDisplayBoardComponentState(
 ): SceneNodeComponentState<DisplayBoardComponentProps> {
   const defaults = displayBoardComponentDefinition.createDefaultProps(node)
   const merged = clampDisplayBoardComponentProps({
-    maxWidth: overrides?.maxWidth ?? defaults.maxWidth,
-    maxHeight: overrides?.maxHeight ?? defaults.maxHeight,
     assetId: overrides?.assetId ?? defaults.assetId,
+    intrinsicWidth: overrides?.intrinsicWidth ?? defaults.intrinsicWidth,
+    intrinsicHeight: overrides?.intrinsicHeight ?? defaults.intrinsicHeight,
   })
   return {
     id: options.id ?? '',

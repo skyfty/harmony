@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import Loader, { type LoaderLoadedPayload } from '@schema/loader';
 import type { AssetCacheEntry } from './assetCache';
-import { SceneMaterialFactory, textureSettingsSignature } from './material';
+import { SceneMaterialFactory } from './material';
 import type { SceneMaterialFactoryOptions } from './material';
 import { createPrimitiveGeometry } from './geometry';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
@@ -14,7 +14,6 @@ import type {
   SceneNodeComponentState,
   SceneNodeEditorFlags,
   SceneNodeMaterial,
-  SceneMaterialTextureSettings,
   SceneOutlineMesh,
   SceneOutlineMeshMap,
 } from '@harmony/schema';

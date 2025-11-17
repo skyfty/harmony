@@ -39,6 +39,7 @@ const GEOMETRY_FACTORIES: Record<GeometryType, (options?: PrimitiveGeometryOptio
   Ring: () => new THREE.RingGeometry(0.3, 0.6, 32),
   Torus: () => new THREE.TorusGeometry(0.5, 0.2, 16, 64),
   TorusKnot: () => new THREE.TorusKnotGeometry(0.4, 0.15, 120, 12),
+  Empty: () => new THREE.BufferGeometry(),
 }
 
 export function isGeometryType(candidate: PrimitiveNodeLike): candidate is GeometryType {

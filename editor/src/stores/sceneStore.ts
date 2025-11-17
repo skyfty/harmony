@@ -1088,7 +1088,7 @@ function applyDisplayBoardComponentPropsToNode(
 
   const normalized = clampDisplayBoardComponentProps(props)
   const mediaSize = resolveDisplayBoardMediaSize(normalized, mesh)
-  const targetSize = computeDisplayBoardPlaneSize(normalized, mediaSize)
+  const targetSize = computeDisplayBoardPlaneSize(mesh, normalized, mediaSize)
   if (!targetSize) {
     return false
   }
@@ -1113,6 +1113,19 @@ function applyDisplayBoardComponentPropsToNode(
   mesh.geometry = nextGeometry
   previous?.dispose?.()
   return true
+}
+
+function refreshDisplayBoardGeometry(node: SceneNode | null | undefined): void {
+  if (!node) {
+    return
+  }
+  const componentState = node.components?.[DISPLAY_BOARD_COMPONENT_TYPE] as
+    | SceneNodeComponentState<DisplayBoardComponentProps>
+    | undefined
+  if (!componentState || componentState.enabled === false) {
+    return
+  }
+  applyDisplayBoardComponentPropsToNode(node, componentState.props as DisplayBoardComponentProps)
 }
 
 const DISPLAY_BOARD_GEOMETRY_EPSILON = 1e-4
@@ -1172,16 +1185,16 @@ function resolveDisplayBoardMediaSize(
 }
 
 function computeDisplayBoardPlaneSize(
+  mesh: DisplayBoardPlaneMesh,
   props: DisplayBoardComponentProps,
   mediaSize: { width: number; height: number } | null,
 ): { width: number; height: number } | null {
-  const maxWidth = Math.max(1e-3, props.maxWidth)
-  const maxHeight = Math.max(1e-3, props.maxHeight)
+  const { maxWidth, maxHeight } = resolveDisplayBoardScaleLimits(mesh)
   const source = mediaSize && mediaSize.width > 0 && mediaSize.height > 0 ? mediaSize : null
 
   if (!source) {
     const fallback = Math.min(maxWidth, maxHeight)
-    return { width: fallback, height: fallback }
+    return convertWorldSizeToGeometry(mesh, { width: fallback, height: fallback })
   }
 
   const aspect = source.width / Math.max(source.height, 1e-6)
@@ -1196,7 +1209,31 @@ function computeDisplayBoardPlaneSize(
   width = Math.max(1e-3, width)
   height = Math.max(1e-3, height)
 
-  return { width, height }
+  return convertWorldSizeToGeometry(mesh, { width, height })
+}
+
+function resolveDisplayBoardScaleLimits(mesh: DisplayBoardPlaneMesh): { maxWidth: number; maxHeight: number } {
+  return {
+    maxWidth: resolveScaleComponent(mesh.scale.x),
+    maxHeight: resolveScaleComponent(mesh.scale.y),
+  }
+}
+
+function resolveScaleComponent(candidate: number): number {
+  const magnitude = Math.abs(candidate)
+  return magnitude > 1e-3 ? magnitude : 1e-3
+}
+
+function convertWorldSizeToGeometry(
+  mesh: DisplayBoardPlaneMesh,
+  worldSize: { width: number; height: number },
+): { width: number; height: number } {
+  const scaleX = resolveScaleComponent(mesh.scale.x)
+  const scaleY = resolveScaleComponent(mesh.scale.y)
+  return {
+    width: worldSize.width / scaleX,
+    height: worldSize.height / scaleY,
+  }
 }
 
 function extractPlaneGeometrySize(geometry: THREE.BufferGeometry): { width: number; height: number } | null {
@@ -5396,6 +5433,10 @@ export const useSceneStore = defineStore('scene', {
         node.scale = cloneVector(payload.scale)
       })
       this.nodes = [...this.nodes]
+      if (scaleChanged) {
+        const updatedNode = findNodeById(this.nodes, payload.id)
+        refreshDisplayBoardGeometry(updatedNode)
+      }
       commitSceneSnapshot(this)
     },
     updateNodeProperties(payload: TransformUpdatePayload) {
@@ -5404,6 +5445,7 @@ export const useSceneStore = defineStore('scene', {
         return
       }
       let changed = false
+      let scaleChanged = false
       if (payload.position && !vectorsEqual(target.position, payload.position)) {
         changed = true
       }
@@ -5412,6 +5454,7 @@ export const useSceneStore = defineStore('scene', {
       }
       if (payload.scale && !vectorsEqual(target.scale, payload.scale)) {
         changed = true
+        scaleChanged = true
       }
       if (!changed) {
         return
@@ -5436,6 +5479,10 @@ export const useSceneStore = defineStore('scene', {
       })
       // trigger reactivity for listeners relying on reference changes
       this.nodes = [...this.nodes]
+      if (scaleChanged) {
+        const updatedNode = findNodeById(this.nodes, payload.id)
+        refreshDisplayBoardGeometry(updatedNode)
+      }
       commitSceneSnapshot(this)
     },
     updateNodePropertiesBatch(payloads: TransformUpdatePayload[]) {
@@ -5444,6 +5491,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const prepared: TransformUpdatePayload[] = []
+      const scaleRefreshTargets = new Set<string>()
 
       payloads.forEach((payload) => {
         if (!payload || !payload.id) {
@@ -5466,6 +5514,7 @@ export const useSceneStore = defineStore('scene', {
         if (payload.scale && !vectorsEqual(target.scale, payload.scale)) {
           next.scale = cloneVector(payload.scale)
           changed = true
+          scaleRefreshTargets.add(payload.id)
         }
         if (changed) {
           prepared.push(next)
@@ -5508,6 +5557,12 @@ export const useSceneStore = defineStore('scene', {
       })
 
       this.nodes = [...this.nodes]
+      if (scaleRefreshTargets.size) {
+        scaleRefreshTargets.forEach((id) => {
+          const updatedNode = findNodeById(this.nodes, id)
+          refreshDisplayBoardGeometry(updatedNode)
+        })
+      }
       commitSceneSnapshot(this)
     },
     renameNode(id: string, name: string) {
@@ -8570,19 +8625,11 @@ export const useSceneStore = defineStore('scene', {
         const hasIntrinsicWidth = Object.prototype.hasOwnProperty.call(typedPatch, 'intrinsicWidth')
         const hasIntrinsicHeight = Object.prototype.hasOwnProperty.call(typedPatch, 'intrinsicHeight')
         const merged = clampDisplayBoardComponentProps({
-          maxWidth: typeof typedPatch.maxWidth === 'number' && Number.isFinite(typedPatch.maxWidth)
-            ? typedPatch.maxWidth
-            : currentProps.maxWidth,
-          maxHeight: typeof typedPatch.maxHeight === 'number' && Number.isFinite(typedPatch.maxHeight)
-            ? typedPatch.maxHeight
-            : currentProps.maxHeight,
           assetId: typeof typedPatch.assetId === 'string' ? typedPatch.assetId : currentProps.assetId,
           intrinsicWidth: hasIntrinsicWidth ? typedPatch.intrinsicWidth ?? undefined : currentProps.intrinsicWidth,
           intrinsicHeight: hasIntrinsicHeight ? typedPatch.intrinsicHeight ?? undefined : currentProps.intrinsicHeight,
         })
         const unchanged =
-          Math.abs((currentProps.maxWidth ?? 0) - merged.maxWidth) < 1e-6 &&
-          Math.abs((currentProps.maxHeight ?? 0) - merged.maxHeight) < 1e-6 &&
           (currentProps.assetId ?? '') === merged.assetId &&
           optionalNumberEquals(currentProps.intrinsicWidth, merged.intrinsicWidth) &&
           optionalNumberEquals(currentProps.intrinsicHeight, merged.intrinsicHeight)

@@ -3,6 +3,7 @@ import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import type {
   SceneMaterial,
   SceneMaterialProps,
+  SceneMaterialTextureRef,
   SceneMaterialTextureSettings,
   SceneMaterialTextureSlotMap,
   SceneMaterialType,
@@ -414,7 +415,7 @@ export class SceneMaterialFactory {
     const resolved: Record<string, THREE.Texture> = {};
     const entries = Object.entries(textures) as Array<[
       keyof SceneMaterialTextureSlotMap,
-      { assetId?: string; settings?: SceneMaterialTextureSettings | null } | null,
+      SceneMaterialTextureRef | null,
     ]>;
 
     await Promise.all(

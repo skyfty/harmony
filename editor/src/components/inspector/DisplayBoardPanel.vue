@@ -6,8 +6,6 @@ import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import {
   DISPLAY_BOARD_COMPONENT_TYPE,
-  DISPLAY_BOARD_DEFAULT_MAX_HEIGHT,
-  DISPLAY_BOARD_DEFAULT_MAX_WIDTH,
   type DisplayBoardComponentProps,
 } from '@schema/components'
 
@@ -25,8 +23,6 @@ const displayBoardComponent = computed(
 const componentEnabled = computed(() => displayBoardComponent.value?.enabled !== false)
 
 const localProps = reactive({
-  maxWidth: DISPLAY_BOARD_DEFAULT_MAX_WIDTH,
-  maxHeight: DISPLAY_BOARD_DEFAULT_MAX_HEIGHT,
   assetId: '',
 })
 
@@ -44,8 +40,6 @@ watch(
   () => displayBoardComponent.value?.props,
   (props) => {
     const next = props as Partial<DisplayBoardComponentProps> | undefined
-    localProps.maxWidth = Number.isFinite(next?.maxWidth) ? (next!.maxWidth as number) : DISPLAY_BOARD_DEFAULT_MAX_WIDTH
-    localProps.maxHeight = Number.isFinite(next?.maxHeight) ? (next!.maxHeight as number) : DISPLAY_BOARD_DEFAULT_MAX_HEIGHT
     const explicitAssetId = normalizeAssetId(next?.assetId as string | undefined)
     if (explicitAssetId.length) {
       localProps.assetId = explicitAssetId
@@ -58,19 +52,6 @@ watch(
   },
   { immediate: true, deep: true },
 )
-
-function updateComponentProps(partial: Partial<DisplayBoardComponentProps>) {
-  const component = displayBoardComponent.value
-  const nodeId = selectedNodeId.value
-  if (!component || !nodeId) {
-    return
-  }
-  let next: Partial<DisplayBoardComponentProps> = partial
-  if (typeof partial.assetId === 'string') {
-    next = { ...partial, assetId: normalizeAssetId(partial.assetId) }
-  }
-  sceneStore.updateNodeComponentProps(nodeId, component.id, next)
-}
 
 function handleToggleComponent() {
   const component = displayBoardComponent.value
@@ -88,19 +69,6 @@ function handleRemoveComponent() {
     return
   }
   sceneStore.removeNodeComponent(nodeId, component.id)
-}
-
-function handleNumericChange(key: 'maxWidth' | 'maxHeight', value: string | number) {
-  if (!componentEnabled.value) {
-    return
-  }
-  const parsed = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(parsed)) {
-    return
-  }
-  const clamped = Math.max(0.01, Math.min(100, parsed))
-  localProps[key] = clamped
-  updateComponentProps({ [key]: clamped })
 }
 
 async function handleClearAsset() {
@@ -315,32 +283,6 @@ const mediaPreviewStyle = computed(() => {
     </v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="display-board-settings">
-        <div class="display-board-settings__row">
-          <v-text-field
-            :model-value="localProps.maxWidth"
-            label="Max Width (m)"
-            type="number"
-            variant="solo"
-            density="comfortable"
-            hide-details
-            step="0.05"
-            min="0.01"
-            :disabled="!componentEnabled"
-            @update:modelValue="(value) => handleNumericChange('maxWidth', value)"
-          />
-          <v-text-field
-            :model-value="localProps.maxHeight"
-            label="Max Height (m)"
-            type="number"
-            variant="solo"
-            density="comfortable"
-            hide-details
-            step="0.05"
-            min="0.01"
-            :disabled="!componentEnabled"
-            @update:modelValue="(value) => handleNumericChange('maxHeight', value)"
-          />
-        </div>
 
         <div
           class="display-board-drop"
@@ -409,6 +351,9 @@ const mediaPreviewStyle = computed(() => {
 .display-board-settings__row {
   display: flex;
   gap: 0.6rem;
+}
+.display-board-settings__hint {
+  margin-bottom: 1rem;
 }
 
 .display-board-settings__row :deep(.v-text-field) {
