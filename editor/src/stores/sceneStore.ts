@@ -1186,7 +1186,7 @@ function resolveDisplayBoardMediaSize(
 
 function computeDisplayBoardPlaneSize(
   mesh: DisplayBoardPlaneMesh,
-  props: DisplayBoardComponentProps,
+  _props: DisplayBoardComponentProps,
   mediaSize: { width: number; height: number } | null,
 ): { width: number; height: number } | null {
   const { maxWidth, maxHeight } = resolveDisplayBoardScaleLimits(mesh)
@@ -2695,6 +2695,36 @@ function ensureAiModelMeshRuntime(node: SceneNode): boolean {
     return true
   } catch (error) {
     console.warn('Failed to rebuild AI generated mesh runtime', node.id, error)
+    return false
+  }
+}
+
+function ensureDynamicMeshRuntime(node: SceneNode): boolean {
+  const meshDefinition = node.dynamicMesh
+  if (!meshDefinition) {
+    return false
+  }
+
+  const meshType = normalizeDynamicMeshType(meshDefinition.type)
+  if (meshType !== 'Wall') {
+    return false
+  }
+
+  if (getRuntimeObject(node.id)) {
+    return false
+  }
+
+  try {
+    const runtime = createWallGroup(meshDefinition as WallDynamicMesh)
+    runtime.name = node.name ?? runtime.name
+    prepareRuntimeObjectForNode(runtime)
+    tagObjectWithNodeId(runtime, node.id)
+    registerRuntimeObject(node.id, runtime)
+    componentManager.attachRuntime(node, runtime)
+    componentManager.syncNode(node)
+    return true
+  } catch (error) {
+    console.warn('Failed to rebuild wall mesh runtime', node.id, error)
     return false
   }
 }
@@ -8265,7 +8295,8 @@ export const useSceneStore = defineStore('scene', {
       let created = 0
       const visitNodes = (list: SceneNode[]) => {
         list.forEach((node) => {
-          if (ensureAiModelMeshRuntime(node)) {
+          const ensured = ensureDynamicMeshRuntime(node) || ensureAiModelMeshRuntime(node)
+          if (ensured) {
             created += 1
           }
           if (node.children?.length) {
@@ -9663,7 +9694,6 @@ export const useSceneStore = defineStore('scene', {
           applyCurrentSceneMeta(this, fallback)
           applySceneAssetState(this, fallback)
           this.nodes = cloneSceneNodes(fallback.nodes)
-          this.rebuildGeneratedMeshRuntimes()
           this.setSelection(fallback.selectedNodeIds ?? (fallback.selectedNodeId ? [fallback.selectedNodeId] : []))
           this.camera = cloneCameraState(fallback.camera)
           this.viewportSettings = cloneViewportSettings(fallback.viewportSettings)
