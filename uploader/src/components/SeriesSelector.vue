@@ -84,6 +84,7 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
+import type { FilterFunction } from 'vuetify'
 import type { AssetSeries } from '@/types'
 
 type CreateSeriesHandler = (payload: { name: string; description?: string | null }) => Promise<AssetSeries>
@@ -130,14 +131,21 @@ function handleUpdate(value: string | AssetSeries | null): void {
   emit('update:modelValue', normalized)
 }
 
-function filter(item: { raw: AssetSeries }, queryText: string): boolean {
+const filter: FilterFunction = (value, queryText, item): boolean => {
   const query = queryText?.toLowerCase?.().trim() ?? ''
   if (!query.length) {
     return true
   }
-  const nameMatch = item.raw.name.toLowerCase().includes(query)
-  const descriptionMatch = item.raw.description ? item.raw.description.toLowerCase().includes(query) : false
-  return nameMatch || descriptionMatch
+
+  const series = (item as { raw?: AssetSeries } | undefined)?.raw
+  if (series) {
+    const nameMatch = series.name?.toLowerCase?.().includes(query) ?? false
+    const descriptionMatch = series.description ? series.description.toLowerCase().includes(query) : false
+    return nameMatch || descriptionMatch
+  }
+
+  const normalizedValue = typeof value === 'string' ? value.toLowerCase() : ''
+  return normalizedValue.includes(query)
 }
 
 const createDialog = ref(false)

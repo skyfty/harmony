@@ -294,6 +294,7 @@ const TYPE_COLOR_FALLBACK: Record<AssetType, string> = {
   image: '#1e88e5',
   texture: '#8e24aa',
   material: '#ffb74d',
+  hdri: '#80cbc4',
   prefab: '#7986cb',
   video: '#ff7043',
   file: '#546e7a',

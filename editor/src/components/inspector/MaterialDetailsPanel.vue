@@ -264,10 +264,6 @@ const panelStyle = computed(() => {
 watch(
   () => props.visible,
   (visible) => {
-    if (visible && !activeNodeMaterial.value) {
-      emit('close')
-      return
-    }
     if (!visible) {
       baseColorMenuOpen.value = false
       emissiveColorMenuOpen.value = false
@@ -958,7 +954,7 @@ async function handleImportFileChange(event: Event) {
   <Teleport to="body">
     <transition name="material-details-panel">
       <div
-        v-if="visible && anchor && activeNodeMaterial"
+        v-if="visible && anchor"
         ref="panelRef"
         class="material-details-panel"
         :style="panelStyle"
@@ -990,252 +986,241 @@ async function handleImportFileChange(event: Event) {
         </v-toolbar>
         <v-divider />
         <div class="panel-content">
-          <div class="panel-content-inner">
-
-
-          <div class="material-metadata">
-            <v-text-field
-              label=""
-              variant="solo"
-              density="compact"
-              
-              hide-details
-              :model-value="materialForm.name"
-              @update:model-value="handleNameChange"
-            />
-
-            <!-- <v-select
-              label="材质类型"
-              density="compact"
-              variant="solo"
-              hide-details
-              :items="materialClassOptions"
-              :model-value="selectedMaterialType"
-              @update:model-value="handleMaterialClassChange"
-            /> -->
-
-          </div>
-
-          <div class="material-properties">
-            <div class="material-color">
-              <div class="color-input">
-                <v-text-field
-                label="Color"
-                class="slider-input"
-                  :model-value="materialForm.color"
-                  density="compact"
-              variant="underlined"
-                  hide-details
-                  @update:model-value="(value) => handleHexColorChange('color', value ?? materialForm.color)"
-                />
-                <v-menu
-                  v-model="baseColorMenuOpen"
-                  :close-on-content-click="false"
-                  transition="scale-transition"
-                  location="bottom start"
-                >
-                  <template #activator="{ props: menuProps }">
-                    <button
-                      class="color-swatch"
-                      type="button"
-                      v-bind="menuProps"
-                      :style="{ backgroundColor: materialForm.color }"
-                    >
-                              <span class="sr-only">Choose color</span>
-                    </button>
-                  </template>
-                  <div class="color-picker">
-                    <v-color-picker
-                      :model-value="materialForm.color"
-                      mode="hex"
-                      :modes="['hex']"
-                      hide-inputs
-                      @update:model-value="(value) => handleColorPickerInput('color', value)"
-                    />
-                  </div>
-                </v-menu>
-              </div>
-            </div>
-            <div class="material-color">
-              <div class="color-input">
-                <v-text-field
-                class="slider-input"
-                label="Emissive"
-                  :model-value="materialForm.emissive"
-                  density="compact"
-                  variant="underlined"
-                  hide-details
-                  @update:model-value="(value) => handleHexColorChange('emissive', value ?? materialForm.emissive)"
-                />
-                <v-menu
-                  v-model="emissiveColorMenuOpen"
-                  :close-on-content-click="false"
-                  transition="scale-transition"
-                  location="bottom start"
-                >
-                  <template #activator="{ props: menuProps }">
-                    <button
-                      class="color-swatch"
-                      type="button"
-                      v-bind="menuProps"
-                      :style="{ backgroundColor: materialForm.emissive }"
-                    >
-                      <span class="sr-only">Choose emissive color</span>
-                    </button>
-                  </template>
-                  <div class="color-picker">
-                    <v-color-picker
-                      :model-value="materialForm.emissive"
-                      mode="hex"
-                      :modes="['hex']"
-                      hide-inputs
-                      @update:model-value="(value) => handleColorPickerInput('emissive', value)"
-                    />
-                  </div>
-                </v-menu>
-              </div>
-            </div>
-            <v-select
-              class="side-select"
-              label="Side"
-              density="compact"
-              transition="null"
-              hide-details
-              :items="SIDE_OPTIONS"
-              item-value="value"
-              item-title="label"
-              variant="underlined"
-              :model-value="materialForm.side"
-              @update:model-value="handleSideChange"
-            />
-
-            <v-select
-              v-if="showAllProperties"
-              v-model="materialFlagSelection"
-              class="material-flag-select"
-              label="Render Options"
-              density="compact"
-              variant="underlined"
-              hide-details
-              multiple
-              :items="MATERIAL_FLAG_OPTIONS"
-              item-title="label"
-              item-value="value"
-            />
-
-            <div
-              v-for="field in visibleSliderFields"
-              :key="field"
-              class="slider-row"
-            >
+          <div v-if="activeNodeMaterial" class="panel-content-inner">
+            <div class="material-metadata">
               <v-text-field
-                class="slider-input"
-                :label="field"
-                :model-value="formatSliderValue(field)"
-                :min="SLIDER_CONFIG[field].min"
-                :max="SLIDER_CONFIG[field].max"
-                :step="SLIDER_CONFIG[field].step"
-                type="number"
+                label=""
+                variant="solo"
                 density="compact"
                 hide-details
-                variant="underlined"
-                inputmode="decimal"
-                @update:model-value="(value) => handleSliderChange(field, value)"
+                :model-value="materialForm.name"
+                @update:model-value="handleNameChange"
               />
             </div>
-          </div>
 
-          <div class="texture-section">
-            <div class="texture-grid">
-              <div
-                v-for="slot in visibleTextureSlots"
-                :key="slot"
-                class="texture-item"
-              >
-                <div
-                  class="texture-tile"
-                  :class="{ 'is-active-drop': draggingSlot === slot }"
-                  @dragenter="(event) => handleTextureDragEnter(slot, event)"
-                  @dragover="(event) => handleTextureDragOver(slot, event)"
-                  @dragleave="(event) => handleTextureDragLeave(slot, event)"
-                  @drop="(event) => handleTextureDrop(slot, event)"
-                >
-                  <div
-                    class="texture-thumb"
-                    :class="{ 'texture-thumb--empty': !formTextures[slot] }"
-                    :style="resolveTexturePreviewStyle(slot)"
-                    role="button"
-                    @click="handleTextureThumbClick(slot, $event)"
+            <div class="material-properties">
+              <div class="material-color">
+                <div class="color-input">
+                  <v-text-field
+                    label="Color"
+                    class="slider-input"
+                    :model-value="materialForm.color"
+                    density="compact"
+                    variant="underlined"
+                    hide-details
+                    @update:model-value="(value) => handleHexColorChange('color', value ?? materialForm.color)"
+                  />
+                  <v-menu
+                    v-model="baseColorMenuOpen"
+                    :close-on-content-click="false"
+                    transition="scale-transition"
+                    location="bottom start"
                   >
-                    <v-icon v-if="!formTextures[slot]" size="20" color="rgba(233, 236, 241, 0.4)">mdi-image-off</v-icon>
-                  </div>
-                  <div class="texture-info">
-                    <div class="texture-name">{{ resolveTextureName(slot) }}</div>
-                    <div class="texture-slot-label">{{ TEXTURE_LABELS[slot] }}</div>
-                  </div>
-                  <div class="texture-actions">
-                    <v-btn
-                      class="texture-remove"
-                      icon="mdi-close"
-                      size="x-small"
-                      variant="text"
-                      :disabled="!formTextures[slot]"
-                      title="Remove texture"
-                      @click.stop="handleTextureRemove(slot)"
-                    />
-                    <v-btn
-                      class="texture-toggle"
-                      size="x-small"
-                      variant="text"
-                      :icon="texturePanelExpanded[slot] ? 'mdi-chevron-up' : 'mdi-chevron-down'"
-                      :title="texturePanelExpanded[slot] ? 'Hide texture settings' : 'Show texture settings'"
-                      @click.stop="toggleTexturePanel(slot)"
-                    />
-                  </div>
+                    <template #activator="{ props: menuProps }">
+                      <button
+                        class="color-swatch"
+                        type="button"
+                        v-bind="menuProps"
+                        :style="{ backgroundColor: materialForm.color }"
+                      >
+                        <span class="sr-only">Choose color</span>
+                      </button>
+                    </template>
+                    <div class="color-picker">
+                      <v-color-picker
+                        :model-value="materialForm.color"
+                        mode="hex"
+                        :modes="['hex']"
+                        hide-inputs
+                        @update:model-value="(value) => handleColorPickerInput('color', value)"
+                      />
+                    </div>
+                  </v-menu>
                 </div>
-                <TexturePanel
-                  v-if="texturePanelExpanded[slot]"
-                  class="texture-panel-wrapper"
-                  :model-value="formTextures[slot]"
-                  :disabled="isUiDisabled || !formTextures[slot]"
-                  @update:model-value="(value) => handleTexturePanelChange(slot, value)"
+              </div>
+              <div class="material-color">
+                <div class="color-input">
+                  <v-text-field
+                    class="slider-input"
+                    label="Emissive"
+                    :model-value="materialForm.emissive"
+                    density="compact"
+                    variant="underlined"
+                    hide-details
+                    @update:model-value="(value) => handleHexColorChange('emissive', value ?? materialForm.emissive)"
+                  />
+                  <v-menu
+                    v-model="emissiveColorMenuOpen"
+                    :close-on-content-click="false"
+                    transition="scale-transition"
+                    location="bottom start"
+                  >
+                    <template #activator="{ props: menuProps }">
+                      <button
+                        class="color-swatch"
+                        type="button"
+                        v-bind="menuProps"
+                        :style="{ backgroundColor: materialForm.emissive }"
+                      >
+                        <span class="sr-only">Choose emissive color</span>
+                      </button>
+                    </template>
+                    <div class="color-picker">
+                      <v-color-picker
+                        :model-value="materialForm.emissive"
+                        mode="hex"
+                        :modes="['hex']"
+                        hide-inputs
+                        @update:model-value="(value) => handleColorPickerInput('emissive', value)"
+                      />
+                    </div>
+                  </v-menu>
+                </div>
+              </div>
+              <v-select
+                class="side-select"
+                label="Side"
+                density="compact"
+                transition="null"
+                hide-details
+                :items="SIDE_OPTIONS"
+                item-value="value"
+                item-title="label"
+                variant="underlined"
+                :model-value="materialForm.side"
+                @update:model-value="handleSideChange"
+              />
+
+              <v-select
+                v-if="showAllProperties"
+                v-model="materialFlagSelection"
+                class="material-flag-select"
+                label="Render Options"
+                density="compact"
+                variant="underlined"
+                hide-details
+                multiple
+                :items="MATERIAL_FLAG_OPTIONS"
+                item-title="label"
+                item-value="value"
+              />
+
+              <div
+                v-for="field in visibleSliderFields"
+                :key="field"
+                class="slider-row"
+              >
+                <v-text-field
+                  class="slider-input"
+                  :label="field"
+                  :model-value="formatSliderValue(field)"
+                  :min="SLIDER_CONFIG[field].min"
+                  :max="SLIDER_CONFIG[field].max"
+                  :step="SLIDER_CONFIG[field].step"
+                  type="number"
+                  density="compact"
+                  hide-details
+                  variant="underlined"
+                  inputmode="decimal"
+                  @update:model-value="(value) => handleSliderChange(field, value)"
                 />
               </div>
             </div>
-          </div>
 
-          <input
-            ref="importInputRef"
-            type="file"
-            accept="application/json"
-            style="display: none"
-            @change="handleImportFileChange"
-          />
-          <v-dialog v-model="saveSharedDialogVisible" max-width="420">
-            <v-card>
-              <v-card-title class="text-h6">Update Shared Material</v-card-title>
-              <v-card-text>
-                Choosing "Update Shared" will overwrite the shared material and synchronize it across all referencing objects; choosing "Detach" will keep only the current object's material as a separate instance.
-              </v-card-text>
-              <v-card-actions>
-                <v-btn variant="text" @click="handleCancelSharedDialog">Cancel</v-btn>
-                <v-spacer />
-                <v-btn variant="text" @click="handleDetachSharedMaterial">Detach</v-btn>
-                <v-btn color="primary" variant="tonal" @click="handleConfirmSaveShared">Update Shared</v-btn>
-              </v-card-actions>
-            </v-card>
-          </v-dialog>
-          <AssetDialog
-            v-model="assetDialogVisible"
-            v-model:assetId="assetDialogSelectedId"
-            :asset-type="TEXTURE_ASSET_TYPE"
-            :title="assetDialogTitle"
-            :anchor="assetDialogAnchor"
-            confirm-text="选择"
-            cancel-text="取消"
-            @update:asset="handleTextureUpdate"
-            @cancel="handleTextureAssetCancel"
-          />
+            <div class="texture-section">
+              <div class="texture-grid">
+                <div
+                  v-for="slot in visibleTextureSlots"
+                  :key="slot"
+                  class="texture-item"
+                >
+                  <div
+                    class="texture-tile"
+                    :class="{ 'is-active-drop': draggingSlot === slot }"
+                    @dragenter="(event) => handleTextureDragEnter(slot, event)"
+                    @dragover="(event) => handleTextureDragOver(slot, event)"
+                    @dragleave="(event) => handleTextureDragLeave(slot, event)"
+                    @drop="(event) => handleTextureDrop(slot, event)"
+                  >
+                    <div
+                      class="texture-thumb"
+                      :class="{ 'texture-thumb--empty': !formTextures[slot] }"
+                      :style="resolveTexturePreviewStyle(slot)"
+                      role="button"
+                      @click="handleTextureThumbClick(slot, $event)"
+                    >
+                      <v-icon v-if="!formTextures[slot]" size="20" color="rgba(233, 236, 241, 0.4)">mdi-image-off</v-icon>
+                    </div>
+                    <div class="texture-info">
+                      <div class="texture-name">{{ resolveTextureName(slot) }}</div>
+                      <div class="texture-slot-label">{{ TEXTURE_LABELS[slot] }}</div>
+                    </div>
+                    <div class="texture-actions">
+                      <v-btn
+                        class="texture-remove"
+                        icon="mdi-close"
+                        size="x-small"
+                        variant="text"
+                        :disabled="!formTextures[slot]"
+                        title="Remove texture"
+                        @click.stop="handleTextureRemove(slot)"
+                      />
+                      <v-btn
+                        class="texture-toggle"
+                        size="x-small"
+                        variant="text"
+                        :icon="texturePanelExpanded[slot] ? 'mdi-chevron-up' : 'mdi-chevron-down'"
+                        :title="texturePanelExpanded[slot] ? 'Hide texture settings' : 'Show texture settings'"
+                        @click.stop="toggleTexturePanel(slot)"
+                      />
+                    </div>
+                  </div>
+                  <TexturePanel
+                    v-if="texturePanelExpanded[slot]"
+                    class="texture-panel-wrapper"
+                    :model-value="formTextures[slot]"
+                    :disabled="isUiDisabled || !formTextures[slot]"
+                    @update:model-value="(value) => handleTexturePanelChange(slot, value)"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <input
+              ref="importInputRef"
+              type="file"
+              accept="application/json"
+              style="display: none"
+              @change="handleImportFileChange"
+            />
+            <v-dialog v-model="saveSharedDialogVisible" max-width="420">
+              <v-card>
+                <v-card-title class="text-h6">Update Shared Material</v-card-title>
+                <v-card-text>
+                  Choosing "Update Shared" will overwrite the shared material and synchronize it across all referencing objects; choosing "Detach" will keep only the current object's material as a separate instance.
+                </v-card-text>
+                <v-card-actions>
+                  <v-btn variant="text" @click="handleCancelSharedDialog">Cancel</v-btn>
+                  <v-spacer />
+                  <v-btn variant="text" @click="handleDetachSharedMaterial">Detach</v-btn>
+                  <v-btn color="primary" variant="tonal" @click="handleConfirmSaveShared">Update Shared</v-btn>
+                </v-card-actions>
+              </v-card>
+            </v-dialog>
+            <AssetDialog
+              v-model="assetDialogVisible"
+              v-model:assetId="assetDialogSelectedId"
+              :asset-type="TEXTURE_ASSET_TYPE"
+              :title="assetDialogTitle"
+              :anchor="assetDialogAnchor"
+              confirm-text="选择"
+              cancel-text="取消"
+              @update:asset="handleTextureUpdate"
+              @cancel="handleTextureAssetCancel"
+            />
+          </div>
+          <div v-else class="panel-empty-state">
+            <div class="empty-message">该节点没有材质信息</div>
           </div>
         </div>
       </div>
@@ -1595,5 +1580,20 @@ border-radius: 6px;
   min-width: 160px;
   min-height: 28px;
   
+}
+
+.panel-empty-state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  color: rgba(233, 236, 241, 0.7);
+}
+
+.empty-message {
+  font-size: 0.85rem;
+  line-height: 1.4;
 }
 </style>
