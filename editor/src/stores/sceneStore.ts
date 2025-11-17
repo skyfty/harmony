@@ -3627,7 +3627,9 @@ function stripPrefabTransientFields(node: SceneNode): SceneNode {
   delete (sanitized as { downloadError?: string | null }).downloadError
   delete (sanitized as { isPlaceholder?: boolean }).isPlaceholder
   sanitized.visible = sanitized.visible ?? true
-  sanitized.locked = sanitized.locked ?? false
+  if ('locked' in sanitized) {
+    delete sanitized.locked
+  }
   const cleanedUserData = sanitizePrefabUserData(sanitized.userData as Record<string, unknown> | null)
   if (cleanedUserData) {
     sanitized.userData = cleanedUserData
@@ -3680,7 +3682,6 @@ function createNodePrefabData(node: SceneNode, name: string): NodePrefabData {
   const root = prepareNodePrefabRoot(node, { regenerateIds: false })
   root.position = { x: 0, y: 0, z: 0 }
   root.rotation = { x: 0, y: 0, z: 0 }
-  root.scale = { x: 1, y: 1, z: 1 }
   return {
     formatVersion: NODE_PREFAB_FORMAT_VERSION,
     name: normalizedName,
