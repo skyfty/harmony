@@ -2,11 +2,13 @@
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore, type HierarchyDropPosition, PREFAB_SOURCE_METADATA_KEY } from '@/stores/sceneStore'
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneNode } from '@harmony/schema'
 import { getNodeIcon } from '@/types/node-icons'
 import AddNodeMenu from '../common/AddNodeMenu.vue'
+import { Vector3 } from 'three'
 
 const props = defineProps<{ floating?: boolean }>()
 
@@ -16,6 +18,7 @@ const emit = defineEmits<{
 }>()
 
 const sceneStore = useSceneStore()
+const assetCacheStore = useAssetCacheStore()
 const { hierarchyItems, selectedNodeId, selectedNodeIds, draggingAssetId } = storeToRefs(sceneStore)
 
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
@@ -32,6 +35,8 @@ const dragState = ref<{ sourceId: string | null; targetId: string | null; positi
 )
 const panelRef = ref<HTMLDivElement | null>(null)
 const materialDropTargetId = ref<string | null>(null)
+const assetDropTargetId = ref<string | null>(null)
+const assetRootDropActive = ref(false)
 const isSavingPrefab = ref(false)
 const isUpdatingPrefab = ref(false)
 
@@ -61,6 +66,8 @@ watch(
 watch(draggingAssetId, (value) => {
   if (!value) {
     materialDropTargetId.value = null
+    assetDropTargetId.value = null
+    assetRootDropActive.value = false
   }
 })
 
@@ -148,20 +155,17 @@ watch(
   { immediate: true, deep: true },
 )
 
-const rootDropClasses = computed(() => ({
-  'root-drop-active':
+const rootDropClasses = computed(() => {
+  const isNodeDragActive =
     dragState.value.sourceId !== null &&
     dragState.value.targetId === null &&
-    dragState.value.position !== null,
-  'root-drop-before':
-    dragState.value.sourceId !== null &&
-    dragState.value.targetId === null &&
-    dragState.value.position === 'before',
-  'root-drop-after':
-    dragState.value.sourceId !== null &&
-    dragState.value.targetId === null &&
-    dragState.value.position === 'after',
-}))
+    dragState.value.position !== null
+  return {
+    'root-drop-active': isNodeDragActive || assetRootDropActive.value,
+    'root-drop-before': isNodeDragActive && dragState.value.position === 'before',
+    'root-drop-after': isNodeDragActive && dragState.value.position === 'after',
+  }
+})
 
 function expandAll(items: HierarchyTreeItem[]): string[] {
   const collected: string[] = []
@@ -257,6 +261,102 @@ function resolveMaterialAssetFromEvent(event: DragEvent): MaterialAsset | null {
     return null
   }
   return asset as MaterialAsset
+}
+
+function resolveHierarchyAssetFromEvent(event: DragEvent): ProjectAsset | null {
+  const payload = parseAssetDragPayload(event)
+  if (!payload) {
+    return null
+  }
+  let asset = sceneStore.getAsset(payload.assetId)
+  if (!asset) {
+    return null
+  }
+  const meta = sceneStore.assetIndex?.[asset.id]
+  if (meta?.source?.type === 'package' && meta.source.providerId) {
+    asset = sceneStore.copyPackageAssetToAssets(meta.source.providerId, asset)
+  }
+  return asset.type === 'model' || asset.type === 'prefab' ? asset : null
+}
+
+async function ensureModelAssetCached(asset: ProjectAsset): Promise<void> {
+  if (asset.type !== 'model') {
+    return
+  }
+  if (assetCacheStore.hasCache(asset.id)) {
+    return
+  }
+  await assetCacheStore.downloaProjectAsset(asset)
+  if (!assetCacheStore.hasCache(asset.id)) {
+    const reason = assetCacheStore.getError(asset.id)
+    throw new Error(reason ?? '模型资源尚未准备就绪')
+  }
+}
+
+async function handleAssetDropOnNode(asset: ProjectAsset, parentId: string): Promise<void> {
+  try {
+    const parentCenter = sceneStore.getNodeWorldCenter(parentId)
+    const spawnCenter = parentCenter ? parentCenter.clone() : null
+    if (asset.type === 'prefab') {
+      const instantiated = await sceneStore.instantiateNodePrefabAsset(
+        asset.id,
+        spawnCenter ?? undefined,
+      )
+      const moved = sceneStore.moveNode({ nodeId: instantiated.id, targetId: parentId, position: 'inside' })
+      if (moved && !opened.value.includes(parentId)) {
+        opened.value = [...opened.value, parentId]
+      }
+      if (!moved) {
+        console.warn('Failed to nest prefab under target node', asset.id, parentId)
+      }
+      return
+    }
+
+    if (asset.type === 'model') {
+      await ensureModelAssetCached(asset)
+      const payload: {
+        asset: ProjectAsset
+        parentId: string
+        position?: Vector3
+      } = {
+        asset,
+        parentId,
+      }
+      if (spawnCenter) {
+        payload.position = spawnCenter.clone()
+      }
+      const node = await sceneStore.addModelNode(payload)
+      if (!node) {
+        console.warn('Failed to add model asset as child node', asset.id, parentId)
+        return
+      }
+      if (!opened.value.includes(parentId)) {
+        opened.value = [...opened.value, parentId]
+      }
+    }
+  } catch (error) {
+    console.error('Failed to drop asset onto hierarchy node', asset.id, parentId, error)
+    assetCacheStore.setError(asset.id, (error as Error).message ?? 'Failed to place asset')
+  }
+}
+
+async function handleAssetDropOnRoot(asset: ProjectAsset): Promise<void> {
+  try {
+    if (asset.type === 'prefab') {
+      await sceneStore.instantiateNodePrefabAsset(asset.id)
+      return
+    }
+    if (asset.type === 'model') {
+      await ensureModelAssetCached(asset)
+      const node = await sceneStore.addModelNode({ asset })
+      if (!node) {
+        console.warn('Failed to add model asset to hierarchy root', asset.id)
+      }
+    }
+  } catch (error) {
+    console.error('Failed to drop asset into hierarchy root', asset.id, error)
+    assetCacheStore.setError(asset.id, (error as Error).message ?? 'Failed to place asset')
+  }
 }
 
 function applyMaterialAssetToNode(nodeId: string, asset: MaterialAsset): boolean {
@@ -445,6 +545,8 @@ function handleTreeBackgroundMouseDown(event: MouseEvent) {
 function resetDragState() {
   dragState.value = { sourceId: null, targetId: null, position: null }
   materialDropTargetId.value = null
+  assetDropTargetId.value = null
+  assetRootDropActive.value = false
 }
 
 function resolveDropPosition(event: DragEvent): HierarchyDropPosition {
@@ -462,6 +564,7 @@ function resolveDropPosition(event: DragEvent): HierarchyDropPosition {
 function getNodeDropClasses(id: string) {
   const classes: Record<string, boolean> = {
     'material-drop-target': materialDropTargetId.value === id,
+    'asset-drop-target': assetDropTargetId.value === id,
   }
   if (dragState.value.targetId !== id) {
     return classes
@@ -509,7 +612,30 @@ function handleDragOver(event: DragEvent, targetId: string) {
     materialDropTargetId.value = targetId
     return
   }
+  const hierarchyAsset = resolveHierarchyAssetFromEvent(event)
+  if (hierarchyAsset) {
+    materialDropTargetId.value = null
+    const isSupported = hierarchyAsset.type === 'model' || hierarchyAsset.type === 'prefab'
+    if (!isSupported) {
+      assetDropTargetId.value = null
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = 'none'
+      }
+      return
+    }
+    assetDropTargetId.value = targetId
+    assetRootDropActive.value = false
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy'
+    }
+    return
+  }
   materialDropTargetId.value = null
+  if (assetDropTargetId.value === targetId) {
+    assetDropTargetId.value = null
+  }
   const sourceId = dragState.value.sourceId
   if (!sourceId || targetId === sourceId) return
 
@@ -540,13 +666,16 @@ function handleDragLeave(event: DragEvent, targetId: string) {
   if (materialDropTargetId.value === targetId) {
     materialDropTargetId.value = null
   }
+  if (assetDropTargetId.value === targetId) {
+    assetDropTargetId.value = null
+  }
   if (!dragState.value.sourceId) return
   if (dragState.value.targetId === targetId) {
     dragState.value = { ...dragState.value, targetId: null, position: null }
   }
 }
 
-function handleDrop(event: DragEvent, targetId: string) {
+async function handleDrop(event: DragEvent, targetId: string) {
   const materialAsset = resolveMaterialAssetFromEvent(event)
   if (materialAsset) {
     materialDropTargetId.value = null
@@ -566,6 +695,20 @@ function handleDrop(event: DragEvent, targetId: string) {
     return
   }
   materialDropTargetId.value = null
+  const hierarchyAsset = resolveHierarchyAssetFromEvent(event)
+  if (hierarchyAsset) {
+    assetDropTargetId.value = null
+    assetRootDropActive.value = false
+    event.preventDefault()
+    event.stopPropagation()
+    if (hierarchyAsset.type === 'model' || hierarchyAsset.type === 'prefab') {
+      await handleAssetDropOnNode(hierarchyAsset, targetId)
+    } else {
+      console.warn('Unsupported asset type for hierarchy drop', hierarchyAsset.type)
+    }
+    resetDragState()
+    return
+  }
   const { sourceId, position } = dragState.value
   if (!sourceId || !position) {
     resetDragState()
@@ -593,6 +736,26 @@ function handleTreeDragOver(event: DragEvent) {
     }
     return
   }
+  const hierarchyAsset = resolveHierarchyAssetFromEvent(event)
+  if (hierarchyAsset) {
+    materialDropTargetId.value = null
+    const isSupported = hierarchyAsset.type === 'model' || hierarchyAsset.type === 'prefab'
+    if (!isSupported) {
+      assetRootDropActive.value = false
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = 'none'
+      }
+      return
+    }
+    assetDropTargetId.value = null
+    assetRootDropActive.value = true
+    event.preventDefault()
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy'
+    }
+    return
+  }
+  assetRootDropActive.value = false
   const { sourceId } = dragState.value
   if (!sourceId) return
   const container = event.currentTarget as HTMLElement | null
@@ -607,11 +770,25 @@ function handleTreeDragOver(event: DragEvent) {
   }
 }
 
-function handleTreeDrop(event: DragEvent) {
+async function handleTreeDrop(event: DragEvent) {
   if (resolveMaterialAssetFromEvent(event)) {
     materialDropTargetId.value = null
     event.preventDefault()
     event.stopPropagation()
+    resetDragState()
+    return
+  }
+  const hierarchyAsset = resolveHierarchyAssetFromEvent(event)
+  if (hierarchyAsset) {
+    assetDropTargetId.value = null
+    assetRootDropActive.value = false
+    event.preventDefault()
+    event.stopPropagation()
+    if (hierarchyAsset.type === 'model' || hierarchyAsset.type === 'prefab') {
+      await handleAssetDropOnRoot(hierarchyAsset)
+    } else {
+      console.warn('Unsupported asset type for hierarchy root drop', hierarchyAsset.type)
+    }
     resetDragState()
     return
   }
@@ -633,6 +810,10 @@ function handleTreeDragLeave(event: DragEvent) {
   if (materialDropTargetId.value) {
     materialDropTargetId.value = null
   }
+  if (assetDropTargetId.value) {
+    assetDropTargetId.value = null
+  }
+  assetRootDropActive.value = false
   const { sourceId } = dragState.value
   if (!sourceId) return
   const container = event.currentTarget as HTMLElement | null
@@ -991,6 +1172,11 @@ function handleTreeDragLeave(event: DragEvent) {
 
 .node-label.material-drop-target {
   background: rgba(90, 148, 255, 0.18);
+  color: #fafafa;
+}
+
+.node-label.asset-drop-target {
+  background: rgba(77, 208, 225, 0.12);
   color: #fafafa;
 }
 

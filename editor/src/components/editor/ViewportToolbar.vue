@@ -89,14 +89,12 @@
         </template>
         <v-list density="compact" class="rotation-menu">
           <template v-for="(section, index) in rotationSections" :key="section.id">
-            <v-list-subheader class="rotation-menu__subheader">{{ section.label }}</v-list-subheader>
             <v-list-item
               v-for="action in section.actions"
               :key="action.id"
               :title="action.label"
               @click="handleRotationAction(action)"
             >
-              <v-list-item-title>{{ action.label }}</v-list-item-title>
             </v-list-item>
             <v-divider v-if="index < rotationSections.length - 1" class="rotation-menu__divider" />
           </template>

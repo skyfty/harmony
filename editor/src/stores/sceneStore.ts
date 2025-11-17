@@ -6658,6 +6658,25 @@ export const useSceneStore = defineStore('scene', {
       }
       return findAssetInTree(this.projectTree, assetId)
     },
+    getNodeWorldCenter(nodeId: string): THREE.Vector3 | null {
+      if (!nodeId) {
+        return null
+      }
+      const boundsMap = collectNodeBoundingInfo(this.nodes)
+      const info = boundsMap.get(nodeId)
+      if (info && info.bounds && !info.bounds.isEmpty()) {
+        return info.bounds.getCenter(new Vector3())
+      }
+      const matrix = computeWorldMatrixForNode(this.nodes, nodeId)
+      if (!matrix) {
+        return null
+      }
+      const position = new Vector3()
+      const quaternion = new Quaternion()
+      const scale = new Vector3()
+      matrix.decompose(position, quaternion, scale)
+      return position
+    },
     async ensureLocalAssetFromFile(
       file: File,
       metadata: {
