@@ -1403,6 +1403,7 @@ onBeforeUnmount(() => {
             @collapse="inspectorOpen = false"
             @toggle-placement="togglePanelPlacement('inspector')"
             @open-material-details="(payload) => handleInspectorMaterialDetailsOpen('docked', payload)"
+            @close-material-details="() => handleInspectorMaterialDetailsClose('docked')"
             @open-behavior-details="(payload) => handleInspectorBehaviorDetailsOpen('docked', payload)"
             @close-behavior-details="() => handleInspectorBehaviorDetailsClose('docked')"
           />
@@ -1439,6 +1440,7 @@ onBeforeUnmount(() => {
               @collapse="inspectorOpen = false"
               @toggle-placement="togglePanelPlacement('inspector')"
               @open-material-details="(payload) => handleInspectorMaterialDetailsOpen('floating', payload)"
+              @close-material-details="() => handleInspectorMaterialDetailsClose('floating')"
               @open-behavior-details="(payload) => handleInspectorBehaviorDetailsOpen('floating', payload)"
               @close-behavior-details="() => handleInspectorBehaviorDetailsClose('floating')"
             />

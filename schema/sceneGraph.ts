@@ -16,6 +16,7 @@ import type {
   SceneNodeMaterial,
   SceneOutlineMesh,
   SceneOutlineMeshMap,
+  GroundDynamicMesh,
 } from '@harmony/schema';
 import type { GuideboardComponentProps } from './components/definitions/guideboardComponent';
 import { GUIDEBOARD_COMPONENT_TYPE } from './components/definitions/guideboardComponent';
@@ -78,6 +79,7 @@ class SceneGraphBuilder {
   private readonly resourceCache: ResourceCache;
   private readonly loadingManager = new THREE.LoadingManager();
   private readonly materialFactory: SceneMaterialFactory;
+  private readonly groundTextureLoader: THREE.TextureLoader;
   private readonly meshTemplateCache = new Map<string, MeshTemplate>();
   private readonly pendingMeshLoads = new Map<string, Promise<MeshTemplate | null>>();
   private readonly document: SceneJsonExportDocument;
@@ -103,6 +105,7 @@ class SceneGraphBuilder {
       reportDownloadProgress: (payload) => this.reportAssetDownloadProgress(payload.assetId, payload.progress),
     });
     const materialFactoryOverrides = options.materialFactoryOptions ?? {};
+    this.groundTextureLoader = new THREE.TextureLoader(this.loadingManager);
     this.materialFactory = new SceneMaterialFactory({
       provider: this.resourceCache,
       loadingManager: this.loadingManager,
@@ -777,18 +780,19 @@ class SceneGraphBuilder {
     }
   }
 
-  private async buildGroundMesh(meshInfo: any, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
-    const width = Number(meshInfo.width) || 10;
-    const depth = Number(meshInfo.depth) || 10;
-    const rows = Number(meshInfo.rows) || 1;
-    const columns = Number(meshInfo.columns) || 1;
-    const geometry = new THREE.PlaneGeometry(width, depth, columns, rows);
-    geometry.rotateX(-Math.PI / 2);
+  private async buildGroundMesh(meshInfo: GroundDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const geometry = this.createGroundGeometry(meshInfo);
     const materials = await this.resolveNodeMaterials(node);
-    const mesh = new THREE.Mesh(geometry, materials.length > 1 ? materials : materials[0]);
+    const materialAssignment = materials.length > 1 ? materials : materials[0];
+    const mesh = new THREE.Mesh(geometry, materialAssignment);
     mesh.name = node.name ?? 'Ground';
     mesh.castShadow = false;
     mesh.receiveShadow = true;
+    mesh.userData = {
+      ...(mesh.userData ?? {}),
+      dynamicMeshType: 'Ground',
+    };
+    this.applyGroundTexture(mesh, meshInfo);
     this.applyTransform(mesh, node);
     this.applyVisibility(mesh, node);
     this.recordMeshStatistics(mesh);
@@ -841,6 +845,162 @@ class SceneGraphBuilder {
     this.applyTransform(container, node);
     this.applyVisibility(container, node);
     return container;
+  }
+
+  private createGroundGeometry(meshInfo: GroundDynamicMesh): THREE.BufferGeometry {
+  const columns = Math.max(1, Math.floor(Number(meshInfo.columns)) || 1);
+  const rows = Math.max(1, Math.floor(Number(meshInfo.rows)) || 1);
+    const vertexColumns = columns + 1;
+    const vertexRows = rows + 1;
+    const vertexCount = vertexColumns * vertexRows;
+
+    const positions = new Float32Array(vertexCount * 3);
+    const normals = new Float32Array(vertexCount * 3);
+    const uvs = new Float32Array(vertexCount * 2);
+    const indices = new Uint32Array(columns * rows * 6);
+
+    const rawCellSize = Number(meshInfo.cellSize);
+    const cellSize = Number.isFinite(rawCellSize) && rawCellSize > 0
+      ? rawCellSize
+      : (() => {
+        const rawWidth = Number(meshInfo.width);
+        if (Number.isFinite(rawWidth) && rawWidth > 0 && columns > 0) {
+          return rawWidth / columns;
+        }
+        const rawDepth = Number(meshInfo.depth);
+        if (Number.isFinite(rawDepth) && rawDepth > 0 && rows > 0) {
+          return rawDepth / rows;
+        }
+        return 1;
+      })();
+    const width = (() => {
+      const rawWidth = Number(meshInfo.width);
+      if (Number.isFinite(rawWidth) && rawWidth > 0) {
+        return rawWidth;
+      }
+      return columns * cellSize;
+    })();
+    const depth = (() => {
+      const rawDepth = Number(meshInfo.depth);
+      if (Number.isFinite(rawDepth) && rawDepth > 0) {
+        return rawDepth;
+      }
+      return rows * cellSize;
+    })();
+    const halfWidth = width * 0.5;
+    const halfDepth = depth * 0.5;
+
+    let vertexIndex = 0;
+    for (let row = 0; row <= rows; row += 1) {
+      const z = -halfDepth + row * cellSize;
+      for (let column = 0; column <= columns; column += 1) {
+        const x = -halfWidth + column * cellSize;
+        const height = this.resolveGroundHeight(meshInfo, row, column);
+
+        positions[vertexIndex * 3 + 0] = x;
+        positions[vertexIndex * 3 + 1] = height;
+        positions[vertexIndex * 3 + 2] = z;
+
+        normals[vertexIndex * 3 + 0] = 0;
+        normals[vertexIndex * 3 + 1] = 1;
+        normals[vertexIndex * 3 + 2] = 0;
+
+        uvs[vertexIndex * 2 + 0] = columns === 0 ? 0 : column / columns;
+        uvs[vertexIndex * 2 + 1] = rows === 0 ? 0 : 1 - row / rows;
+
+        vertexIndex += 1;
+      }
+    }
+
+    let indexPointer = 0;
+    for (let row = 0; row < rows; row += 1) {
+      for (let column = 0; column < columns; column += 1) {
+        const a = row * vertexColumns + column;
+        const b = a + 1;
+        const c = (row + 1) * vertexColumns + column;
+        const d = c + 1;
+
+        indices[indexPointer + 0] = a;
+        indices[indexPointer + 1] = c;
+        indices[indexPointer + 2] = b;
+        indices[indexPointer + 3] = b;
+        indices[indexPointer + 4] = c;
+        indices[indexPointer + 5] = d;
+        indexPointer += 6;
+      }
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+    geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+    geometry.computeVertexNormals();
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+    return geometry;
+  }
+
+  private resolveGroundHeight(meshInfo: GroundDynamicMesh, row: number, column: number): number {
+    const key = this.getGroundHeightKey(row, column);
+    const heightMap = meshInfo.heightMap ?? {};
+    const value = heightMap[key];
+    return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  }
+
+  private getGroundHeightKey(row: number, column: number): string {
+    return `${row}:${column}`;
+  }
+
+  private applyGroundTexture(mesh: THREE.Mesh, meshInfo: GroundDynamicMesh): void {
+  const userData = (mesh.userData ?? (mesh.userData = {})) as Record<string, any>;
+    const previousTexture = userData.groundTexture as THREE.Texture | undefined;
+    if (previousTexture) {
+      previousTexture.dispose?.();
+      delete userData.groundTexture;
+    }
+
+    if (!meshInfo.textureDataUrl) {
+      this.assignGroundTexture(mesh, null);
+      return;
+    }
+
+    try {
+      const texture = this.groundTextureLoader.load(
+        meshInfo.textureDataUrl,
+        () => {
+          this.assignGroundTexture(mesh, texture);
+        },
+        undefined,
+        (error) => {
+          console.warn('Ground texture load failed', error);
+          this.assignGroundTexture(mesh, null);
+        },
+      );
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.wrapT = THREE.RepeatWrapping;
+      texture.anisotropy = Math.min(16, texture.anisotropy || 8);
+      texture.name = meshInfo.textureName ?? 'GroundTexture';
+      this.assignGroundTexture(mesh, texture);
+      userData.groundTexture = texture;
+    } catch (error) {
+      console.warn('Ground texture load error', error);
+      this.assignGroundTexture(mesh, null);
+    }
+  }
+
+  private assignGroundTexture(mesh: THREE.Mesh, texture: THREE.Texture | null): void {
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    materials.forEach((material) => {
+      if (!material) {
+        return;
+      }
+      const typed = material as THREE.Material & { map?: THREE.Texture | null };
+      if ('map' in typed) {
+        typed.map = texture;
+      }
+      typed.needsUpdate = true;
+    });
   }
 
   private recordMeshStatistics(object: THREE.Object3D): void {

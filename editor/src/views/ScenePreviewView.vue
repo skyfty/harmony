@@ -2776,6 +2776,11 @@ function disposeObjectResources(object: THREE.Object3D) {
 		mesh.geometry?.dispose?.()
 		const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
 		materials.forEach((material) => material?.dispose?.())
+		const groundTexture = (mesh.userData?.groundTexture as THREE.Texture | undefined) ?? null
+		if (groundTexture) {
+			groundTexture.dispose?.()
+			delete mesh.userData.groundTexture
+		}
 	}
 }
 
