@@ -66,6 +66,16 @@ type CategoryTreeItem = {
 
 const categoryTreeSelection = ref<string[]>([])
 
+function isCategoryTreeItem(item: unknown): item is CategoryTreeItem {
+  if (!item || typeof item !== 'object') {
+    return false
+  }
+  const record = item as Record<string, unknown>
+  return typeof record.id === 'string'
+    && typeof record.title === 'string'
+    && typeof record.pathString === 'string'
+}
+
 function categoryToTreeItem(category: ResourceCategory): CategoryTreeItem {
   const pathNames = Array.isArray(category.path) && category.path.length
     ? category.path.map((item) => item?.name ?? '').filter((name) => name.length > 0)
@@ -122,8 +132,11 @@ watch(
   { immediate: true },
 )
 
-function handleTreeSelection(selection: string[]): void {
-  const next = selection[0] ?? null
+function handleTreeSelection(selection: unknown): void {
+  const normalized = Array.isArray(selection)
+    ? selection.filter((item): item is string => typeof item === 'string')
+    : []
+  const next = normalized[0] ?? null
   if (next !== filter.categoryId) {
     filter.categoryId = next
   }
@@ -323,8 +336,8 @@ onMounted(() => {
             <template #prepend>
               <v-icon icon="mdi-folder" size="small" class="mr-1" />
             </template>
-            <template #label="{ item }">
-              <div class="d-flex flex-column">
+            <template #title="{ item }">
+              <div v-if="isCategoryTreeItem(item)" class="d-flex flex-column">
                 <span>{{ item.title }}</span>
                 <span class="text-caption text-medium-emphasis">{{ item.pathString }}</span>
               </div>
