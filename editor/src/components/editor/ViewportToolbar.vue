@@ -73,6 +73,35 @@
         :title="button.title"
         @click="emitAlign(button.mode)"
       />
+  <v-menu v-model="rotationMenuOpen" location="bottom" :offset="8">
+        <template #activator="{ props: menuProps }">
+          <v-btn
+            v-bind="menuProps"
+            icon="mdi-rotate-3d-variant"
+            density="compact"
+            size="small"
+            class="toolbar-button"
+            title="旋转"
+            :disabled="!canRotateSelection"
+            :color="rotationMenuOpen ? 'primary' : undefined"
+            :variant="rotationMenuOpen ? 'flat' : 'text'"
+          />
+        </template>
+        <v-list density="compact" class="rotation-menu">
+          <template v-for="(section, index) in rotationSections" :key="section.id">
+            <v-list-subheader class="rotation-menu__subheader">{{ section.label }}</v-list-subheader>
+            <v-list-item
+              v-for="action in section.actions"
+              :key="action.id"
+              :title="action.label"
+              @click="handleRotationAction(action)"
+            >
+              <v-list-item-title>{{ action.label }}</v-list-item-title>
+            </v-list-item>
+            <v-divider v-if="index < rotationSections.length - 1" class="rotation-menu__divider" />
+          </template>
+        </v-list>
+      </v-menu>
       <v-divider vertical />
       <v-btn
         :icon="showGrid ? 'mdi-grid' : 'mdi-grid-off'"
@@ -152,7 +181,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, toRefs } from 'vue'
+import { computed, ref, toRefs, watch } from 'vue'
 import type { CameraControlMode } from '@harmony/schema'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -165,6 +194,7 @@ const props = defineProps<{
   showAxes: boolean
   canDropSelection: boolean
   canAlignSelection: boolean
+  canRotateSelection: boolean
   cameraControlMode: CameraControlMode
   activeBuildTool: BuildTool | null
 }>()
@@ -173,6 +203,7 @@ const emit = defineEmits<{
   (event: 'reset-camera'): void
   (event: 'drop-to-ground'): void
   (event: 'align-selection', mode: AlignMode): void
+  (event: 'rotate-selection', payload: { axis: RotationAxis; degrees: number }): void
   (event: 'capture-screenshot'): void
   (event: 'orbit-left'): void
   (event: 'orbit-right'): void
@@ -185,6 +216,7 @@ const {
   showAxes,
   canDropSelection,
   canAlignSelection,
+  canRotateSelection,
   cameraControlMode,
   activeBuildTool,
 } = toRefs(props)
@@ -193,6 +225,52 @@ const sceneStore = useSceneStore()
 const selectionCount = computed(() => (sceneStore.selectedNodeIds ? sceneStore.selectedNodeIds.length : 0))
 const activeNode = computed(() => sceneStore.selectedNode)
 const isSavingPrefab = ref(false)
+const rotationMenuOpen = ref(false)
+
+type RotationAxis = 'x' | 'y'
+
+type RotationAction = {
+  id: string
+  label: string
+  axis: RotationAxis
+  degrees: number
+}
+
+const rotationSections = [
+  {
+    id: 'vertical',
+    label: '垂直旋转',
+    actions: [
+      { id: 'vertical-45', label: '垂直旋转45°', axis: 'x', degrees: 45 },
+      { id: 'vertical-90', label: '垂直旋转90°', axis: 'x', degrees: 90 },
+      { id: 'vertical-180', label: '垂直旋转180°', axis: 'x', degrees: 180 },
+    ],
+  },
+  {
+    id: 'horizontal',
+    label: '水平旋转',
+    actions: [
+      { id: 'horizontal-45', label: '水平旋转45°', axis: 'y', degrees: 45 },
+      { id: 'horizontal-90', label: '水平旋转90°', axis: 'y', degrees: 90 },
+      { id: 'horizontal-180', label: '水平旋转180°', axis: 'y', degrees: 180 },
+    ],
+  },
+] satisfies Array<{ id: string; label: string; actions: RotationAction[] }>
+
+watch(canRotateSelection, (enabled) => {
+  if (!enabled && rotationMenuOpen.value) {
+    rotationMenuOpen.value = false
+  }
+})
+
+function handleRotationAction(action: RotationAction) {
+  if (!canRotateSelection.value) {
+    rotationMenuOpen.value = false
+    return
+  }
+  emit('rotate-selection', { axis: action.axis, degrees: action.degrees })
+  rotationMenuOpen.value = false
+}
 
 const canSavePrefab = computed(() => {
   const node = activeNode.value

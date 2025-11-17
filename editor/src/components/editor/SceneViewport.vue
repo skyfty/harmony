@@ -301,6 +301,9 @@ const canAlignSelection = computed(() => {
   }
   return sceneStore.selectedNodeIds.some((id) => id !== primaryId && !sceneStore.isNodeSelectionLocked(id))
 })
+const canRotateSelection = computed(() =>
+  sceneStore.selectedNodeIds.some((id) => id !== GROUND_NODE_ID && !sceneStore.isNodeSelectionLocked(id))
+)
 const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((tool) => [tool.key, tool.value]))
 let activeCameraMode: CameraProjection = cameraProjectionMode.value
 
@@ -957,6 +960,76 @@ function alignSelection(mode: AlignMode) {
   updateGridHighlightFromObject(primaryObject)
   updatePlaceholderOverlayPositions()
   updateSelectionHighlights()
+}
+
+type SelectionRotationOptions = { axis: 'x' | 'y'; degrees: number }
+
+function rotateSelection({ axis, degrees }: SelectionRotationOptions) {
+  if (!Number.isFinite(degrees) || degrees === 0) {
+    return
+  }
+
+  const unlockedSelection = sceneStore.selectedNodeIds.filter(
+    (id) => id !== GROUND_NODE_ID && !sceneStore.isNodeSelectionLocked(id)
+  )
+  if (!unlockedSelection.length) {
+    return
+  }
+
+  const parentMap = buildParentIndex(props.sceneNodes, null, new Map<string, string | null>())
+  const topLevelIds = filterTopLevelSelection(unlockedSelection, parentMap)
+  if (!topLevelIds.length) {
+    return
+  }
+
+  const delta = THREE.MathUtils.degToRad(degrees)
+  if (!Number.isFinite(delta) || delta === 0) {
+    return
+  }
+
+  const updates: TransformUpdatePayload[] = []
+
+  for (const nodeId of topLevelIds) {
+    const targetObject = objectMap.get(nodeId)
+    if (!targetObject) {
+      continue
+    }
+
+    const nextRotation = targetObject.rotation.clone()
+    if (axis === 'x') {
+      nextRotation.x += delta
+    } else if (axis === 'y') {
+      nextRotation.y += delta
+    } else {
+      continue
+    }
+
+    targetObject.rotation.copy(nextRotation)
+    targetObject.updateMatrixWorld(true)
+
+    updates.push({
+      id: nodeId,
+      rotation: toEulerLike(nextRotation),
+    })
+  }
+
+  if (!updates.length) {
+    return
+  }
+
+  if (typeof sceneStore.updateNodePropertiesBatch === 'function') {
+    sceneStore.updateNodePropertiesBatch(updates)
+  } else {
+    updates.forEach((update) => sceneStore.updateNodeProperties(update))
+  }
+
+  const primaryId = sceneStore.selectedNodeId
+  const primaryObject = primaryId ? objectMap.get(primaryId) ?? null : null
+  updateSelectionBox(primaryObject)
+  updateGridHighlightFromObject(primaryObject)
+  updatePlaceholderOverlayPositions()
+  updateSelectionHighlights()
+  gizmoControls?.update()
 }
 
 function updateSelectDragPosition(drag: SelectionDragState, event: PointerEvent): boolean {
@@ -2023,6 +2096,10 @@ function applyAxesVisibility(visible: boolean) {
 
 function handleAlignSelection(mode: AlignMode) {
   alignSelection(mode)
+}
+
+function handleRotateSelection(options: SelectionRotationOptions) {
+  rotateSelection(options)
 }
 
 function createScreenshotFileName(): string {
@@ -7388,10 +7465,12 @@ defineExpose<SceneViewportHandle>({
         :camera-control-mode="cameraControlMode"
         :can-drop-selection="canDropSelection"
         :can-align-selection="canAlignSelection"
+        :can-rotate-selection="canRotateSelection"
         :active-build-tool="activeBuildTool"
         @reset-camera="resetCameraView"
         @drop-to-ground="dropSelectionToGround"
         @align-selection="handleAlignSelection"
+        @rotate-selection="handleRotateSelection"
         @capture-screenshot="handleCaptureScreenshot"
         @orbit-left="handleOrbitLeft"
         @orbit-right="handleOrbitRight"
