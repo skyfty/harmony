@@ -935,8 +935,11 @@ function computeForwardVector(position: Vector3Like, target: Vector3Like): THREE
 
 type LightNodeExtras = Partial<Omit<LightNodeProperties, 'type' | 'color' | 'intensity' | 'target'>>
 
-function cloneDynamicMeshVector3(vec: Vector3Like): THREE.Vector3 {
-  return new THREE.Vector3(vec.x, vec.y, vec.z)
+function cloneDynamicMeshVector3(vec: Vector3Like): Vector3Like {
+  const x = Number.isFinite(vec.x) ? vec.x : 0
+  const y = Number.isFinite(vec.y) ? vec.y : 0
+  const z = Number.isFinite(vec.z) ? vec.z : 0
+  return { x, y, z }
 }
 
 function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMesh {
@@ -998,7 +1001,7 @@ function normalizeWallDimensions(values: { height?: number; width?: number; thic
   return { height, width, thickness }
 }
 
-function buildWallWorldSegments(segments: Array<{ start: THREE.Vector3; end: THREE.Vector3 }>): WallWorldSegment[] {
+function buildWallWorldSegments(segments: Array<{ start: Vector3Like; end: Vector3Like }>): WallWorldSegment[] {
   return segments
     .map((segment) => {
       if (!segment?.start || !segment?.end) {
@@ -1045,7 +1048,7 @@ function computeWallCenter(segments: WallWorldSegment[]): Vector3 {
 }
 
 function buildWallDynamicMeshFromWorldSegments(
-  segments: Array<{ start: THREE.Vector3; end: THREE.Vector3 }>,
+  segments: Array<{ start: Vector3Like; end: Vector3Like }>,
   dimensions: { height?: number; width?: number; thickness?: number } = {},
 ): { center: Vector3; definition: WallDynamicMesh } | null {
   const worldSegments = buildWallWorldSegments(segments)
@@ -8377,7 +8380,7 @@ export const useSceneStore = defineStore('scene', {
       return `${prefix}${nextIndex.toString().padStart(2, '0')}`
     },
     createWallNode(payload: {
-      segments: Array<{ start: THREE.Vector3; end: THREE.Vector3 }>
+      segments: Array<{ start: Vector3Like; end: Vector3Like }>
       dimensions?: { height?: number; width?: number; thickness?: number }
       name?: string
     }): SceneNode | null {
@@ -8400,7 +8403,7 @@ export const useSceneStore = defineStore('scene', {
       return node
     },
     updateWallNodeGeometry(nodeId: string, payload: {
-      segments: Array<{ start: THREE.Vector3; end: THREE.Vector3 }>
+      segments: Array<{ start: Vector3Like; end: Vector3Like }>
       dimensions?: { height?: number; width?: number; thickness?: number }
     }): boolean {
   const node = findNodeById(this.nodes, nodeId)

@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import type { SceneSummary } from '@/types/scene-summary'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
+import { toRaw } from 'vue'
 
 interface ScenesState {
   metadata: SceneSummary[]
@@ -15,6 +16,76 @@ const STORE_METADATA = 'sceneMetadata'
 const STORE_DOCUMENTS = 'sceneDocuments'
 
 const memoryDocuments = new Map<string, StoredSceneDocument>()
+
+// Deeply unwrap Vue proxies so IndexedDB receives cloneable values.
+function cloneForIndexedDb<T>(value: T, seen = new WeakMap<object, any>()): T {
+  if (value === null || typeof value !== 'object') {
+    return value
+  }
+
+  if (value instanceof Date) {
+    return new Date(value.getTime()) as T
+  }
+
+  if (value instanceof RegExp) {
+    return new RegExp(value.source, value.flags) as T
+  }
+
+  if (value instanceof URL) {
+    return new URL(value.toString()) as T
+  }
+
+  if (value instanceof ArrayBuffer) {
+    return value.slice(0) as T
+  }
+
+  if (ArrayBuffer.isView(value)) {
+    if (value instanceof DataView) {
+      return new DataView(value.buffer.slice(0), value.byteOffset, value.byteLength) as T
+    }
+    const ctor = (value as any).constructor as { new (buffer: ArrayBufferLike | ArrayLike<unknown>): any }
+    return new ctor(value as any) as T
+  }
+
+  const rawObject = toRaw(value as object)
+  if (seen.has(rawObject)) {
+    return seen.get(rawObject)
+  }
+
+  if (rawObject instanceof Map) {
+    const clone = new Map()
+    seen.set(rawObject, clone)
+    rawObject.forEach((mapValue, mapKey) => {
+      clone.set(mapKey, cloneForIndexedDb(mapValue, seen))
+    })
+    return clone as unknown as T
+  }
+
+  if (rawObject instanceof Set) {
+    const clone = new Set()
+    seen.set(rawObject, clone)
+    rawObject.forEach((setValue) => {
+      clone.add(cloneForIndexedDb(setValue, seen))
+    })
+    return clone as unknown as T
+  }
+
+  if (Array.isArray(rawObject)) {
+    const clone: unknown[] = []
+    seen.set(rawObject, clone)
+    rawObject.forEach((item) => {
+      clone.push(cloneForIndexedDb(item, seen))
+    })
+    return clone as T
+  }
+
+  const clone: Record<string, unknown> = {}
+  seen.set(rawObject, clone)
+  Object.keys(rawObject).forEach((key) => {
+    clone[key] = cloneForIndexedDb((rawObject as Record<string, unknown>)[key], seen)
+  })
+  return clone as T
+}
 
 function isIndexedDbAvailable(): boolean {
   return typeof window !== 'undefined' && typeof window.indexedDB !== 'undefined'
@@ -95,16 +166,17 @@ function toMetadata(document: StoredSceneDocument): SceneSummary {
 }
 
 async function writeSceneDocument(document: StoredSceneDocument): Promise<void> {
+  const prepared = cloneForIndexedDb(document)
   if (!isIndexedDbAvailable()) {
-    memoryDocuments.set(document.id, structuredClone(document))
+    memoryDocuments.set(prepared.id, prepared)
     return
   }
   const db = await openDatabase()
   const tx = db.transaction([STORE_DOCUMENTS, STORE_METADATA], 'readwrite')
   const docs = tx.objectStore(STORE_DOCUMENTS)
   const meta = tx.objectStore(STORE_METADATA)
-  docs.put(document)
-  meta.put(toMetadata(document))
+  docs.put(prepared)
+  meta.put(toMetadata(prepared))
   await new Promise<void>((resolve, reject) => {
     tx.oncomplete = () => resolve()
     tx.onerror = () => reject(tx.error ?? new Error('Failed to write scene document'))
@@ -113,15 +185,16 @@ async function writeSceneDocument(document: StoredSceneDocument): Promise<void> 
 }
 
 async function writeSceneDocuments(documents: StoredSceneDocument[]): Promise<void> {
+  const preparedDocs = documents.map((doc) => cloneForIndexedDb(doc))
   if (!isIndexedDbAvailable()) {
-    documents.forEach((doc) => memoryDocuments.set(doc.id, structuredClone(doc)))
+    preparedDocs.forEach((doc) => memoryDocuments.set(doc.id, doc))
     return
   }
   const db = await openDatabase()
   const tx = db.transaction([STORE_DOCUMENTS, STORE_METADATA], 'readwrite')
   const docs = tx.objectStore(STORE_DOCUMENTS)
   const meta = tx.objectStore(STORE_METADATA)
-  documents.forEach((document) => {
+  preparedDocs.forEach((document) => {
     docs.put(document)
     meta.put(toMetadata(document))
   })

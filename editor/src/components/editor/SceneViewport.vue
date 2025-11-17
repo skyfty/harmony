@@ -3468,18 +3468,18 @@ function captureThumbnail() {
     return
   }
 
-  void (async () => {
-    try {
-      const thumbnail = await createThumbnailDataUrl(sourceCanvas)
-      if (sceneStore.currentSceneId === sceneId) {
-        await sceneStore.updateSceneThumbnail(sceneId, thumbnail)
-      }
-    } catch (error) {
-      console.warn('Failed to capture scene thumbnail', error)
-      const fallbackThumbnail = sourceCanvas.toDataURL('image/jpeg', THUMBNAIL_JPEG_QUALITY)
-      void sceneStore.updateSceneThumbnail(sceneId, fallbackThumbnail)
-    }
-  })()
+  // void (async () => {
+  //   try {
+  //     const thumbnail = await createThumbnailDataUrl(sourceCanvas)
+  //     if (sceneStore.currentSceneId === sceneId) {
+  //       await sceneStore.updateSceneThumbnail(sceneId, thumbnail)
+  //     }
+  //   } catch (error) {
+  //     console.warn('Failed to capture scene thumbnail', error)
+  //     const fallbackThumbnail = sourceCanvas.toDataURL('image/jpeg', THUMBNAIL_JPEG_QUALITY)
+  //     void sceneStore.updateSceneThumbnail(sceneId, fallbackThumbnail)
+  //   }
+  // })()
 }
 
 function createGridHighlight() {
