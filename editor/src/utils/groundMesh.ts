@@ -128,14 +128,17 @@ function applyGroundTexture(mesh: THREE.Mesh, definition: GroundDynamicMesh) {
   }
 
   const previousTexture = mesh.userData.groundTexture as THREE.Texture | undefined
+  const wasDynamicTextureApplied = Boolean(previousTexture && material.map === previousTexture)
   if (previousTexture) {
     disposeGroundTexture(previousTexture)
     delete mesh.userData.groundTexture
   }
 
   if (!definition.textureDataUrl) {
-    material.map = null
-    material.needsUpdate = true
+    if (wasDynamicTextureApplied) {
+      material.map = null
+      material.needsUpdate = true
+    }
     return
   }
 

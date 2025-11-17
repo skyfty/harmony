@@ -3482,6 +3482,42 @@ async function startRenderIfReady() {
   }
 }
 
+type MeshStandardTextureKey =
+  | 'map'
+  | 'normalMap'
+  | 'metalnessMap'
+  | 'roughnessMap'
+  | 'aoMap'
+  | 'emissiveMap'
+  | 'displacementMap';
+
+const STANDARD_TEXTURE_KEYS: MeshStandardTextureKey[] = [
+  'map',
+  'normalMap',
+  'metalnessMap',
+  'roughnessMap',
+  'aoMap',
+  'emissiveMap',
+  'displacementMap',
+];
+
+function disposeMaterialTextures(material: THREE.Material | null | undefined): void {
+  if (!material) {
+    return;
+  }
+  const standard = material as THREE.MeshStandardMaterial &
+    Partial<Record<MeshStandardTextureKey, THREE.Texture | null>>;
+  STANDARD_TEXTURE_KEYS.forEach((key) => {
+    const texture = standard[key];
+    if (texture && typeof texture.dispose === 'function') {
+      texture.dispose();
+    }
+    if (key in standard) {
+      (standard as Record<string, unknown>)[key] = null;
+    }
+  });
+}
+
 function disposeObject(object: THREE.Object3D) {
   object.traverse((child) => {
     if ((child as THREE.Mesh).isMesh) {
@@ -3490,8 +3526,15 @@ function disposeObject(object: THREE.Object3D) {
         mesh.geometry.dispose();
       }
       if (Array.isArray(mesh.material)) {
-        mesh.material.forEach((material) => material?.dispose?.());
+        mesh.material.forEach((material) => {
+          if (!material) {
+            return;
+          }
+          disposeMaterialTextures(material);
+          material.dispose?.();
+        });
       } else if (mesh.material) {
+        disposeMaterialTextures(mesh.material);
         mesh.material.dispose?.();
       }
     }

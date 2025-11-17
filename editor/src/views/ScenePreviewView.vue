@@ -2770,12 +2770,54 @@ function disposeEnvironmentResources() {
 	}
 }
 
+type MeshStandardTextureKey =
+	| 'map'
+	| 'normalMap'
+	| 'metalnessMap'
+	| 'roughnessMap'
+	| 'aoMap'
+	| 'emissiveMap'
+	| 'displacementMap'
+
+const STANDARD_TEXTURE_KEYS: MeshStandardTextureKey[] = [
+	'map',
+	'normalMap',
+	'metalnessMap',
+	'roughnessMap',
+	'aoMap',
+	'emissiveMap',
+	'displacementMap',
+]
+
+function disposeMaterialTextures(material: THREE.Material | null | undefined) {
+	if (!material) {
+		return
+	}
+	const standard = material as THREE.MeshStandardMaterial &
+		Partial<Record<MeshStandardTextureKey, THREE.Texture | null>>
+	STANDARD_TEXTURE_KEYS.forEach((key) => {
+		const texture = standard[key]
+		if (texture && typeof texture.dispose === 'function') {
+			texture.dispose()
+		}
+		if (key in standard) {
+			;(standard as Record<string, unknown>)[key] = null
+		}
+	})
+}
+
 function disposeObjectResources(object: THREE.Object3D) {
 	const mesh = object as THREE.Mesh
 	if ((mesh as any).isMesh) {
 		mesh.geometry?.dispose?.()
 		const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-		materials.forEach((material) => material?.dispose?.())
+		materials.forEach((material) => {
+			if (!material) {
+				return
+			}
+			disposeMaterialTextures(material)
+			material.dispose?.()
+		})
 		const groundTexture = (mesh.userData?.groundTexture as THREE.Texture | undefined) ?? null
 		if (groundTexture) {
 			groundTexture.dispose?.()

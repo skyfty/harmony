@@ -51,7 +51,7 @@ const emit = defineEmits<{
 }>()
 
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
-const TEXTURE_SLOTS: SceneMaterialTextureSlot[] = ['albedo', 'normal', 'metalness', 'roughness', 'ao', 'emissive']
+const TEXTURE_SLOTS: SceneMaterialTextureSlot[] = ['albedo', 'normal', 'metalness', 'roughness', 'ao', 'emissive', 'displacement']
 const COMMON_TEXTURE_SLOTS: SceneMaterialTextureSlot[] = ['albedo', 'normal', 'roughness']
 const MATERIAL_FLAG_OPTIONS = [
   { value: 'transparent', label: 'Transparent' },
@@ -66,6 +66,7 @@ const TEXTURE_LABELS: Record<SceneMaterialTextureSlot, string> = {
   roughness: 'Roughness',
   ao: 'Ambient Occlusion',
   emissive: 'Emissive',
+  displacement: 'Displacement',
 }
 const SIDE_OPTIONS: Array<{ value: SceneMaterialSide; label: string }> = [
   { value: 'front', label: 'Front' },

@@ -37,6 +37,7 @@ const MATERIAL_TEXTURE_ASSIGNMENTS: Record<
   roughness: { key: 'roughnessMap' },
   ao: { key: 'aoMap' },
   emissive: { key: 'emissiveMap', colorSpace: 'srgb' },
+  displacement: { key: 'displacementMap' },
 };
 
 const HDR_EXTENSION_PATTERN = /\.(hdr|hdri|rgbe)$/i;

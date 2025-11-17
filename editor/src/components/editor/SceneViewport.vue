@@ -158,7 +158,7 @@ const WRAP_MODE_MAP: Record<SceneTextureWrapMode, THREE.Wrapping> = {
   RepeatWrapping: THREE.RepeatWrapping,
   MirroredRepeatWrapping: THREE.MirroredRepeatWrapping,
 }
-type MeshStandardTextureKey = 'map' | 'normalMap' | 'metalnessMap' | 'roughnessMap' | 'aoMap' | 'emissiveMap'
+type MeshStandardTextureKey = 'map' | 'normalMap' | 'metalnessMap' | 'roughnessMap' | 'aoMap' | 'emissiveMap' | 'displacementMap'
 const MATERIAL_TEXTURE_ASSIGNMENTS: Record<SceneMaterialTextureSlot, { key: MeshStandardTextureKey; colorSpace?: THREE.ColorSpace }> = {
   albedo: { key: 'map', colorSpace: THREE.SRGBColorSpace },
   normal: { key: 'normalMap' },
@@ -166,6 +166,7 @@ const MATERIAL_TEXTURE_ASSIGNMENTS: Record<SceneMaterialTextureSlot, { key: Mesh
   roughness: { key: 'roughnessMap' },
   ao: { key: 'aoMap' },
   emissive: { key: 'emissiveMap', colorSpace: THREE.SRGBColorSpace },
+  displacement: { key: 'displacementMap' },
 }
 
 const MATERIAL_CLONED_KEY = '__harmonyMaterialCloned'
@@ -2586,9 +2587,10 @@ function applyCameraControlMode(mode: CameraControlMode) {
   }
 
   const domElement = canvasRef.value
-  orbitControls = mode === 'map' ? new MapControls(camera, domElement) : new OrbitControls(camera, domElement)
+  const useMapControls = mode === 'map' || mode === 'orbit'
+  orbitControls = useMapControls ? new MapControls(camera, domElement) : new OrbitControls(camera, domElement)
   orbitControls.enableDamping = false
-  orbitControls.dampingFactor = 0.05
+  orbitControls.dampingFactor = mode === 'orbit' ? 0.08 : 0.05
   orbitControls.minDistance = MIN_CAMERA_DISTANCE
   orbitControls.maxDistance = MAX_CAMERA_DISTANCE
   orbitControls.minZoom = MIN_ORTHOGRAPHIC_ZOOM
@@ -2596,9 +2598,12 @@ function applyCameraControlMode(mode: CameraControlMode) {
   orbitControls.screenSpacePanning = false
   if (mode === 'map') {
     orbitControls.minPolarAngle = orbitControls.maxPolarAngle = THREE.MathUtils.degToRad(50)
-  } else {
-    orbitControls.maxPolarAngle = Math.PI
+  } else if (mode === 'orbit') {
     orbitControls.minPolarAngle = 0
+    orbitControls.maxPolarAngle = Math.PI / 2 - 0.05
+  } else {
+    orbitControls.minPolarAngle = 0
+    orbitControls.maxPolarAngle = Math.PI
   }
   if (previousTarget) {
     orbitControls.target.copy(previousTarget)
@@ -6474,6 +6479,7 @@ type HarmonyMaterialState = {
   roughnessMap?: THREE.Texture | null
   aoMap?: THREE.Texture | null
   emissiveMap?: THREE.Texture | null
+  displacementMap?: THREE.Texture | null
 }
 
 function ensureMeshMaterialsUnique(mesh: THREE.Mesh) {
@@ -6524,6 +6530,7 @@ function getMaterialBaseline(material: THREE.Material): HarmonyMaterialState {
     roughnessMap: 'roughnessMap' in standard ? standard.roughnessMap ?? null : undefined,
     aoMap: 'aoMap' in standard ? standard.aoMap ?? null : undefined,
     emissiveMap: 'emissiveMap' in standard ? standard.emissiveMap ?? null : undefined,
+    displacementMap: 'displacementMap' in standard ? standard.displacementMap ?? null : undefined,
   }
   userData[MATERIAL_ORIGINAL_KEY] = state
   return state
@@ -6872,6 +6879,9 @@ function restoreMaterialFromBaseline(material: THREE.Material) {
   }
   if (baseline.emissiveMap !== undefined && 'emissiveMap' in standard) {
     standard.emissiveMap = baseline.emissiveMap ?? null
+  }
+  if (baseline.displacementMap !== undefined && 'displacementMap' in standard) {
+    standard.displacementMap = baseline.displacementMap ?? null
   }
 
   const slotState = typed.userData?.[TEXTURE_SLOT_STATE_KEY] as Record<SceneMaterialTextureSlot, string | null> | undefined

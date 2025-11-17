@@ -199,6 +199,7 @@ export const IMPORT_TEXTURE_SLOT_MAP: Array<{ slot: SceneMaterialTextureSlot; ke
   { slot: 'roughness', key: 'roughnessMap' },
   { slot: 'ao', key: 'aoMap' },
   { slot: 'emissive', key: 'emissiveMap' },
+  { slot: 'displacement', key: 'displacementMap' },
 ]
 
 const HISTORY_LIMIT = 50
@@ -259,7 +260,7 @@ declare module '@/types/scene-state' {
 }
 const OPACITY_EPSILON = 1e-3
 
-const MATERIAL_TEXTURE_SLOTS: SceneMaterialTextureSlot[] = ['albedo', 'normal', 'metalness', 'roughness', 'ao', 'emissive']
+const MATERIAL_TEXTURE_SLOTS: SceneMaterialTextureSlot[] = ['albedo', 'normal', 'metalness', 'roughness', 'ao', 'emissive', 'displacement']
 
 interface NodePrefabData {
   formatVersion: number

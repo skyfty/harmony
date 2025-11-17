@@ -80,7 +80,8 @@ export type SceneMaterialTextureSlot =
   | 'metalness'
   | 'roughness'
   | 'ao'
-  | 'emissive';
+  | 'emissive'
+  | 'displacement';
 
 export type SceneTextureWrapMode = 'ClampToEdgeWrapping' | 'RepeatWrapping' | 'MirroredRepeatWrapping';
 
