@@ -26,6 +26,7 @@ services:
       - "4000:4000" # 可选：仅用于本机调试；线上建议通过 Nginx/反向代理暴露域名
     volumes:
       - /www/web/v_touchmagic_cn/harmony/server/uploads:/app/uploads
+      - ./server/.env.production:/app/server/.env.production:ro
     restart: unless-stopped
 
   admin:
