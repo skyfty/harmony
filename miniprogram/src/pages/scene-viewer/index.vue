@@ -141,7 +141,6 @@
         class="viewer-purpose-controls"
       >
         <button
-          v-if="purposeActionMode === 'watch'"
           class="viewer-purpose-icon-button viewer-purpose-icon-button--primary"
           aria-label="观察"
           @tap="handlePurposeWatchTap"
@@ -149,7 +148,6 @@
           <image :src="purposeWatchIcon" mode="aspectFit" class="viewer-purpose-icon" />
         </button>
         <button
-          v-else
           class="viewer-purpose-icon-button viewer-purpose-icon-button--secondary"
           aria-label="平视"
           @tap="handlePurposeResetTap"
@@ -517,7 +515,6 @@ const lanternImageBoxStyle = computed(() => {
 const purposeControlsVisible = ref(false);
 const purposeTargetNodeId = ref<string | null>(null);
 const purposeSourceNodeId = ref<string | null>(null);
-const purposeActionMode = ref<'watch' | 'reset'>('watch');
 const isCameraCaged = ref(false);
 
 type LanternTextState = { text: string; loading: boolean; error: string | null };
@@ -2394,13 +2391,11 @@ function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watc
 function showPurposeControls(targetNodeId: string | null, sourceNodeId: string | null): void {
   purposeSourceNodeId.value = sourceNodeId ?? null;
   purposeTargetNodeId.value = targetNodeId ?? sourceNodeId ?? null;
-  purposeActionMode.value = 'watch';
   purposeControlsVisible.value = true;
 }
 
 function hidePurposeControls(): void {
   purposeControlsVisible.value = false;
-  purposeActionMode.value = 'watch';
 }
 
 function handleShowPurposeControlsEvent(
@@ -2424,7 +2419,6 @@ function handlePurposeWatchTap(): void {
     uni.showToast({ title: result.message || '无法定位观察目标', icon: 'none' });
     return;
   }
-  purposeActionMode.value = 'reset';
 }
 
 function handlePurposeResetTap(): void {
@@ -2433,7 +2427,6 @@ function handlePurposeResetTap(): void {
     uni.showToast({ title: result.message || '相机不可用', icon: 'none' });
     return;
   }
-  purposeActionMode.value = 'watch';
 }
 
 function resetCameraToLevelView(): { success: boolean; message?: string } {
@@ -2455,7 +2448,6 @@ function resetCameraToLevelView(): { success: boolean; message?: string } {
       controls.update();
     });
     lockControlsPitchToCurrent(controls, camera);
-    purposeActionMode.value = 'watch';
     return { success: true };
   }
   const startPosition = camera.position.clone();
@@ -2467,7 +2459,6 @@ function resetCameraToLevelView(): { success: boolean; message?: string } {
     duration: CAMERA_LEVEL_DURATION,
     elapsed: 0,
   };
-  purposeActionMode.value = 'watch';
   return { success: true };
 }
 

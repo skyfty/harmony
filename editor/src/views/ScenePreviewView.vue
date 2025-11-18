@@ -122,7 +122,6 @@ const lanternEventToken = ref<string | null>(null)
 const purposeControlsVisible = ref(false)
 const purposeTargetNodeId = ref<string | null>(null)
 const purposeSourceNodeId = ref<string | null>(null)
-const purposeActionMode = ref<'watch' | 'reset'>('watch')
 
 type LanternTextState = { text: string; loading: boolean; error: string | null }
 type LanternImageState = { url: string | null; loading: boolean; error: string | null }
@@ -848,7 +847,6 @@ function clearBehaviorAlert() {
 	behaviorAlertCancelText.value = 'Cancel'
 }
 
-	purposeActionMode.value = 'watch'
 function normalizeLanternLayout(layout: string | null | undefined): 'imageTop' | 'imageLeft' | 'imageRight' {
 	switch (layout) {
 		case 'imageLeft':
@@ -1653,7 +1651,6 @@ function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watc
 function showPurposeControls(targetNodeId: string | null, sourceNodeId: string | null): void {
 	purposeSourceNodeId.value = sourceNodeId ?? null
 	purposeTargetNodeId.value = targetNodeId ?? sourceNodeId ?? null
-	purposeActionMode.value = 'watch'
 	purposeControlsVisible.value = true
 }
 
@@ -1661,7 +1658,6 @@ function hidePurposeControls(): void {
 	purposeControlsVisible.value = false
 	purposeTargetNodeId.value = null
 	purposeSourceNodeId.value = null
-	purposeActionMode.value = 'watch'
 }
 
 function handleShowPurposeControlsEvent(
@@ -1685,12 +1681,10 @@ function handlePurposeWatchClick(): void {
 		console.warn('[ScenePreview] Failed to move camera to watch target', result.message)
 		return
 	}
-	purposeActionMode.value = 'reset'
 }
 
 function handlePurposeResetClick(): void {
 	resetCameraToLevelView()
-	purposeActionMode.value = 'watch'
 }
 
 function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look-level' }>) {
@@ -1903,7 +1897,6 @@ function resetCameraToLevelView() {
 	} else if (mapControls && camera) {
 		const startTarget = mapControls.target.clone()
 		const levelTarget = startTarget.clone()
-					purposeActionMode.value = 'reset'
 		if (startTarget.distanceToSquared(levelTarget) < 1e-6) {
 			mapControls.target.copy(levelTarget)
 			mapControls.update()
@@ -1921,7 +1914,6 @@ function resetCameraToLevelView() {
 		}
 	} else {
 		tempDirection.set(0, 0, 0)
-					purposeActionMode.value = 'reset'
 		const yaw = Math.atan2(tempDirection.x, -tempDirection.z)
 		tempDirection.set(Math.sin(yaw), 0, -Math.cos(yaw))
 		tempTarget.copy(camera.position).add(tempDirection)
@@ -3440,7 +3432,6 @@ onBeforeUnmount(() => {
 			class="scene-preview__purpose-controls"
 		>
 			<v-btn
-				v-if="purposeActionMode === 'watch'"
 				class="scene-preview__purpose-button"
 				color="primary"
 				variant="elevated"
@@ -3450,7 +3441,6 @@ onBeforeUnmount(() => {
 				观察
 			</v-btn>
 			<v-btn
-				v-else
 				class="scene-preview__purpose-button"
 				color="primary"
 				variant="tonal"
