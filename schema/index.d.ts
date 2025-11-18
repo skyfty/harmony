@@ -485,6 +485,25 @@ export interface SceneJsonExportDocument {
   outlineMeshMap?: SceneOutlineMeshMap;
   assetIndex?: Record<string, AssetIndexEntry>;
   packageAssetMap?: Record<string, string>;
+  resourceSummary?: SceneResourceSummary;
+}
+
+export interface SceneResourceSummaryEntry {
+  assetId: string;
+  bytes: number;
+  embedded?: boolean;
+  inline?: boolean;
+  downloadUrl?: string | null;
+  source?: 'embedded' | 'remote' | 'inline';
+}
+
+export interface SceneResourceSummary {
+  totalBytes: number;
+  embeddedBytes: number;
+  externalBytes: number;
+  computedAt: string;
+  assets: SceneResourceSummaryEntry[];
+  unknownAssetIds?: string[];
 }
 
 export interface SceneSkyboxSettings {

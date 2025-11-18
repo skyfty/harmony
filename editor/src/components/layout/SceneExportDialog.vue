@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import type { SceneExportFormat, SceneExportOptions } from '@/types/scene-export'
+import type { SceneResourceSummary } from '@harmony/schema'
 
 
 const props = defineProps<{
@@ -11,6 +12,8 @@ const props = defineProps<{
   progress: number
   progressMessage: string
   errorMessage?: string | null
+  resourceSummary?: SceneResourceSummary | null
+  resourceSummaryLoading?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -62,6 +65,26 @@ const progressLabel = computed(() => {
   return props.progressMessage || `Export progress ${Math.round(progressValue.value)}%`
 })
 
+const hasResourceSummary = computed(() => Boolean(props.resourceSummary))
+
+const summaryDisplay = computed(() => {
+  const summary = props.resourceSummary
+  if (!summary) {
+    return {
+      total: '0 B',
+      embedded: '0 B',
+      external: '0 B',
+      unknownCount: 0,
+    }
+  }
+  return {
+    total: formatByteSize(summary.totalBytes),
+    embedded: formatByteSize(summary.embeddedBytes),
+    external: formatByteSize(summary.externalBytes),
+    unknownCount: summary.unknownAssetIds?.length ?? 0,
+  }
+})
+
 watch(
   () => props.modelValue,
   (open) => {
@@ -84,6 +107,21 @@ watch(
     }
   },
 )
+
+function formatByteSize(value: number | null | undefined): string {
+  if (!value || value <= 0) {
+    return '0 B'
+  }
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let size = value
+  let index = 0
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024
+    index += 1
+  }
+  const digits = index === 0 ? 0 : size >= 100 ? 0 : size >= 10 ? 1 : 2
+  return `${size.toFixed(digits)} ${units[index]}`
+}
 
 function sanitizeInputName(input: string): string {
   const trimmed = (input ?? '').trim()
@@ -254,6 +292,27 @@ function handleConfirm() {
           />
         </div>
 
+        <div class="summary-section">
+          <div v-if="resourceSummaryLoading" class="summary-item summary-item--loading">
+            正在分析资源大小…
+          </div>
+          <div v-else-if="hasResourceSummary" class="summary-item">
+            <div class="summary-row">
+              <span class="summary-label">资源总大小</span>
+              <span class="summary-value">{{ summaryDisplay.total }}</span>
+            </div>
+            <div class="summary-sub">
+              嵌入资源：{{ summaryDisplay.embedded }} · 外部资源：{{ summaryDisplay.external }}
+            </div>
+            <div v-if="summaryDisplay.unknownCount" class="summary-warning">
+              有 {{ summaryDisplay.unknownCount }} 个资源大小未知
+            </div>
+          </div>
+          <div v-else class="summary-item summary-item--empty">
+            资源大小暂不可用
+          </div>
+        </div>
+
         <transition name="fade">
           <div v-if="exporting || progressValue > 0" class="progress-section">
             <v-progress-linear
@@ -332,6 +391,55 @@ function handleConfirm() {
   gap: 8px 12px;
   margin-top: 8px;
   margin-bottom: 12px;
+}
+
+.summary-section {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 16px;
+  background: rgba(0, 0, 0, 0.02);
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+}
+
+.summary-item {
+  width: 100%;
+}
+
+.summary-item--loading,
+.summary-item--empty {
+  color: rgba(0, 0, 0, 0.56);
+  font-size: 0.9rem;
+}
+
+.summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.summary-label {
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.72);
+}
+
+.summary-value {
+  font-weight: 700;
+  color: #1976d2;
+}
+
+.summary-sub {
+  font-size: 0.82rem;
+  color: rgba(0, 0, 0, 0.56);
+}
+
+.summary-warning {
+  margin-top: 6px;
+  font-size: 0.78rem;
+  color: #e65100;
 }
 
 .progress-section {

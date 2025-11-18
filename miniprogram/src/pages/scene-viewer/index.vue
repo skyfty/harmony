@@ -11,7 +11,7 @@
       <view
         v-if="behaviorAlertVisible"
         class="viewer-behavior-overlay"
-  @tap.self="cancelBehaviorAlert"
+        @tap.self="cancelBehaviorAlert"
       >
         <view class="viewer-behavior-dialog">
           <text class="viewer-behavior-title">{{ behaviorAlertTitle }}</text>
@@ -79,57 +79,23 @@
           </view>
         </view>
       </view>
-      <view
-        v-if="loading || resourcePreload.active || sceneDownload.active"
-        class="viewer-overlay"
-      >
-        <view class="viewer-overlay__content">
-          <text class="viewer-overlay__message">
-            {{
-              resourcePreload.active
-                ? '资源加载中…'
-                : sceneDownload.active
-                  ? sceneDownload.label || '正在下载场景…'
-                  : '正在加载场景…'
-            }}
-          </text>
-          <progress
-            v-if="sceneDownload.active"
-            :percent="sceneDownloadPercent"
-            show-info
-            stroke-width="6"
-            class="viewer-overlay__progress"
-          />
-          <progress
-            v-else-if="resourcePreload.active"
-            :percent="resourcePreloadPercent"
-            show-info
-            stroke-width="6"
-            class="viewer-overlay__progress"
-          />
-          <text
-            v-if="sceneDownload.active && sceneDownload.total"
-            class="viewer-overlay__caption"
-          >
-            已下载 {{ formatByteSize(sceneDownload.loaded) }} / {{ formatByteSize(sceneDownload.total) }}
-          </text>
-          <text
-            v-if="resourcePreload.label && !sceneDownload.active"
-            class="viewer-overlay__caption"
-          >
-            {{ resourcePreload.label }}
-          </text>
-          <text
-            v-if="resourcePreloadAssetCaption && !sceneDownload.active"
-            class="viewer-overlay__asset"
-          >
-            {{ resourcePreloadAssetCaption }}
-          </text>
-          <text
-            v-if="resourcePreload.active && resourcePreload.total && !sceneDownload.active"
-            class="viewer-overlay__caption"
-          >
-            已加载 {{ resourcePreload.loaded }} / {{ resourcePreload.total }}
+      <view v-if="overlayActive" class="viewer-overlay">
+        <view class="viewer-overlay__content viewer-overlay__card">
+          <text v-if="overlayTitle" class="viewer-overlay__title">{{ overlayTitle }}</text>
+          <view class="viewer-progress">
+            <view class="viewer-progress__bar">
+              <view
+                class="viewer-progress__bar-fill"
+                :style="{ width: overlayPercent + '%' }"
+              />
+            </view>
+            <view class="viewer-progress__stats">
+              <text class="viewer-progress__percent">{{ overlayPercent }}%</text>
+              <text v-if="overlayBytesLabel" class="viewer-progress__bytes">{{ overlayBytesLabel }}</text>
+            </view>
+          </view>
+          <text v-if="overlayLabel" class="viewer-overlay__caption">
+            {{ overlayLabel }}
           </text>
         </view>
       </view>
@@ -274,10 +240,9 @@ const resourcePreload = reactive({
   active: false,
   loaded: 0,
   total: 0,
+  loadedBytes: 0,
+  totalBytes: 0,
   label: '',
-  currentAssetId: '' as string,
-  currentProgress: null as number | null,
-  currentKind: '' as SceneGraphResourceProgress['kind'] | '',
 });
 
 const sceneDownload = reactive({
@@ -289,29 +254,29 @@ const sceneDownload = reactive({
 });
 
 const resourcePreloadPercent = computed(() => {
-  const total = resourcePreload.total;
-  const loaded = resourcePreload.loaded;
-  const partial = resourcePreload.currentProgress;
-  if (total > 0) {
-    const baseRatio = Math.min(1, Math.max(0, loaded / total));
-    const pendingRatio = partial != null && loaded < total
-      ? Math.max(0, Math.min(1, partial / 100)) / total
+  if (resourcePreload.totalBytes > 0) {
+    const ratio = resourcePreload.totalBytes > 0
+      ? Math.min(1, Math.max(0, resourcePreload.loadedBytes / resourcePreload.totalBytes))
       : 0;
-    const ratio = Math.min(1, baseRatio + pendingRatio);
-    return Math.round(ratio * 100);
+    const computedPercent = Math.round(ratio * 100);
+    return resourcePreload.active ? computedPercent : 100;
   }
-  if (partial != null) {
-    return Math.round(Math.max(0, Math.min(100, partial)));
+  if (resourcePreload.total > 0) {
+    const ratio = Math.min(1, Math.max(0, resourcePreload.loaded / resourcePreload.total));
+    const computedPercent = Math.round(ratio * 100);
+    return resourcePreload.active ? computedPercent : 100;
   }
   return resourcePreload.active ? 0 : 100;
 });
 
-const sceneDownloadPercent = computed(() => {
-  if (!sceneDownload.active) {
-    return 0;
+const resourcePreloadBytesLabel = computed(() => {
+  if (resourcePreload.totalBytes > 0) {
+    return `${formatByteSize(resourcePreload.loadedBytes)} / ${formatByteSize(resourcePreload.totalBytes)}`;
   }
-  const normalized = Math.max(0, Math.min(100, Math.round(sceneDownload.percent)));
-  return Number.isFinite(normalized) ? normalized : 0;
+  if (resourcePreload.total > 0) {
+    return `已加载 ${resourcePreload.loaded} / ${resourcePreload.total}`;
+  }
+  return '';
 });
 
 const sceneAssetCache = new AssetCache();
@@ -319,8 +284,11 @@ const sceneAssetLoader = new AssetLoader(sceneAssetCache);
 let sharedResourceCache: ResourceCache | null = null;
 let viewerResourceCache: ResourceCache | null = null;
 let sceneDownloadTask: SceneRequestTask | null = null;
+const globalApp = globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } };
+const isWeChatMiniProgram = Boolean(globalApp.wx && typeof globalApp.wx.getSystemInfoSync === 'function');
+const DEFAULT_RGBE_DATA_TYPE = isWeChatMiniProgram ? THREE.UnsignedByteType : THREE.FloatType;
 
-const rgbeLoader = new RGBELoader().setDataType(THREE.FloatType);
+const rgbeLoader = new RGBELoader().setDataType(DEFAULT_RGBE_DATA_TYPE);
 const textureLoader = new THREE.TextureLoader();
 
 function ensureResourceCache(
@@ -335,15 +303,60 @@ function ensureResourceCache(
   return sharedResourceCache;
 }
 
-const resourcePreloadAssetCaption = computed(() => {
-  const assetId = resourcePreload.currentAssetId;
-  if (!assetId) {
-    return '';
+const overlayActive = computed(() => loading.value || sceneDownload.active || resourcePreload.active);
+
+const overlayTitle = computed(() => {
+  if (sceneDownload.active) {
+    return '正在下载场景';
   }
-  if (resourcePreload.currentProgress != null) {
-    return `当前资源：${assetId} (${resourcePreload.currentProgress}%)`;
+  if (resourcePreload.active) {
+    return '资源加载中';
   }
-  return `当前资源：${assetId}`;
+  if (loading.value) {
+    return '正在初始化场景';
+  }
+  return '';
+});
+
+const overlayPercent = computed(() => {
+  if (sceneDownload.active) {
+    if (sceneDownload.total > 0) {
+      const ratio = Math.min(1, Math.max(0, sceneDownload.loaded / sceneDownload.total));
+      return Math.round(ratio * 100);
+    }
+    const normalized = Math.max(0, Math.min(100, Math.round(sceneDownload.percent)));
+    return Number.isFinite(normalized) ? normalized : 0;
+  }
+  if (resourcePreload.active) {
+    return resourcePreloadPercent.value;
+  }
+  if (loading.value) {
+    return 0;
+  }
+  return resourcePreloadPercent.value;
+});
+
+const overlayBytesLabel = computed(() => {
+  if (sceneDownload.active && sceneDownload.total > 0) {
+    return `${formatByteSize(sceneDownload.loaded)} / ${formatByteSize(sceneDownload.total)}`;
+  }
+  if (resourcePreload.active && resourcePreloadBytesLabel.value) {
+    return resourcePreloadBytesLabel.value;
+  }
+  return '';
+});
+
+const overlayLabel = computed(() => {
+  if (sceneDownload.active) {
+    return sceneDownload.label || '正在下载场景数据…';
+  }
+  if (resourcePreload.label) {
+    return resourcePreload.label;
+  }
+  if (loading.value) {
+    return '正在加载场景…';
+  }
+  return '';
 });
 
 const SKY_ENVIRONMENT_INTENSITY = 0.35;
@@ -431,6 +444,53 @@ let canvasResult: UseCanvasResult | null = null;
 let initializing = false;
 const scope = effectScope();
 const bootstrapFinished = ref(false);
+
+function supportsFloatTextureLinearFiltering(): boolean {
+  const renderer = renderContext?.renderer ?? null;
+  if (!renderer) {
+    return !isWeChatMiniProgram;
+  }
+  if (renderer.capabilities.isWebGL2) {
+    return true;
+  }
+  const extensions = renderer.extensions as { has?: (name: string) => boolean };
+  const hasExtension = (name: string) => (typeof extensions?.has === 'function' ? extensions.has(name) : false);
+  return hasExtension('OES_texture_float_linear') || hasExtension('OES_texture_half_float_linear');
+}
+
+function ensureFloatTextureFilterCompatibility(texture: THREE.Texture | null | undefined): void {
+  if (!texture) {
+    return;
+  }
+  const type = texture.type;
+  if (type !== THREE.FloatType && type !== THREE.HalfFloatType) {
+    return;
+  }
+  if (supportsFloatTextureLinearFiltering()) {
+    return;
+  }
+  let changed = false;
+  if (texture.minFilter !== THREE.NearestFilter) {
+    texture.minFilter = THREE.NearestFilter;
+    changed = true;
+  }
+  if (texture.magFilter !== THREE.NearestFilter) {
+    texture.magFilter = THREE.NearestFilter;
+    changed = true;
+  }
+  if (texture.generateMipmaps) {
+    texture.generateMipmaps = false;
+    changed = true;
+  }
+  const anyTexture = texture as THREE.Texture & { anisotropy?: number };
+  if (typeof anyTexture.anisotropy === 'number' && anyTexture.anisotropy > 1) {
+    anyTexture.anisotropy = 1;
+    changed = true;
+  }
+  if (changed) {
+    texture.needsUpdate = true;
+  }
+}
 
 const previewComponentManager = new ComponentManager();
 previewComponentManager.registerDefinition(wallComponentDefinition);
@@ -2798,6 +2858,7 @@ async function loadEnvironmentTextureFromAsset(
       texture.mapping = THREE.EquirectangularReflectionMapping;
       texture.flipY = false;
       texture.needsUpdate = true;
+      ensureFloatTextureFilterCompatibility(texture);
       return { texture };
     }
     const texture = await textureLoader.loadAsync(resolve.url);
@@ -2805,6 +2866,7 @@ async function loadEnvironmentTextureFromAsset(
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.flipY = false;
     texture.needsUpdate = true;
+    ensureFloatTextureFilterCompatibility(texture);
     return { texture };
   } catch (error) {
     console.warn('[SceneViewer] Failed to load environment texture', assetId, error);
@@ -2927,6 +2989,7 @@ async function applyEnvironmentMapSettings(
   disposeEnvironmentTarget();
   environmentMapTarget = target;
   environmentMapAssetId = mapSettings.hdriAssetId;
+  ensureFloatTextureFilterCompatibility(target.texture);
   scene.environment = target.texture;
   scene.environmentIntensity = 1;
   return true;
@@ -3627,10 +3690,23 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   resourcePreload.active = true;
   resourcePreload.loaded = 0;
   resourcePreload.total = 0;
+  resourcePreload.loadedBytes = 0;
+  resourcePreload.totalBytes = 0;
   resourcePreload.label = '准备加载资源...';
-  resourcePreload.currentAssetId = '';
-  resourcePreload.currentProgress = null;
-  resourcePreload.currentKind = '';
+  const summary = payload.document.resourceSummary;
+  if (summary) {
+    const totalBytes = typeof summary.totalBytes === 'number' && Number.isFinite(summary.totalBytes) && summary.totalBytes > 0
+      ? summary.totalBytes
+      : 0;
+    const embeddedBytes = typeof summary.embeddedBytes === 'number' && Number.isFinite(summary.embeddedBytes) && summary.embeddedBytes >= 0
+      ? summary.embeddedBytes
+      : 0;
+    resourcePreload.totalBytes = totalBytes;
+    resourcePreload.loadedBytes = totalBytes > 0 ? Math.min(embeddedBytes, totalBytes) : embeddedBytes;
+    if (Array.isArray(summary.assets)) {
+      resourcePreload.total = summary.assets.length;
+    }
+  }
 
   let graph: Awaited<ReturnType<typeof buildSceneGraph>> | null = null;
   try {
@@ -3641,31 +3717,19 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
         hdrLoader: rgbeLoader,
       },
       onProgress: (info) => {
-        const hasProgress = typeof info.progress === 'number' && Number.isFinite(info.progress);
         resourcePreload.total = info.total;
         resourcePreload.loaded = info.loaded;
-        resourcePreload.currentKind = info.kind;
-        if (info.assetId) {
-          resourcePreload.currentAssetId = info.assetId;
-        } else if (!hasProgress && info.loaded >= info.total) {
-          resourcePreload.currentAssetId = '';
+        if (typeof info.bytesTotal === 'number' && Number.isFinite(info.bytesTotal) && info.bytesTotal > 0) {
+          resourcePreload.totalBytes = info.bytesTotal;
         }
-        if (hasProgress) {
-          const clamped = Math.max(0, Math.min(100, Math.round(info.progress ?? 0)));
-          resourcePreload.currentProgress = clamped;
-        } else if (!info.assetId || info.loaded >= info.total) {
-          resourcePreload.currentProgress = null;
+        if (typeof info.bytesLoaded === 'number' && Number.isFinite(info.bytesLoaded) && info.bytesLoaded >= 0) {
+          resourcePreload.loadedBytes = info.bytesLoaded;
         }
         const fallbackLabel = info.assetId ? `加载 ${info.assetId}` : '正在加载资源';
         resourcePreload.label = info.message || fallbackLabel;
         const stillLoadingByCount = info.total > 0 && info.loaded < info.total;
-        const stillLoadingByProgress = hasProgress && (resourcePreload.currentProgress ?? 0) < 100;
-        resourcePreload.active = stillLoadingByCount || stillLoadingByProgress;
-        if (!resourcePreload.active && info.loaded >= info.total) {
-          resourcePreload.currentAssetId = '';
-          resourcePreload.currentProgress = null;
-          resourcePreload.currentKind = '';
-        }
+        const stillLoadingByBytes = resourcePreload.totalBytes > 0 && resourcePreload.loadedBytes < resourcePreload.totalBytes;
+        resourcePreload.active = stillLoadingByCount || stillLoadingByBytes;
       },
     };
     if (payload.assetOverrides) {
@@ -3678,12 +3742,17 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   viewerResourceCache = resourceCache;
   graph = await buildSceneGraph(payload.document, resourceCache, buildOptions);
   } finally {
-    if (!resourcePreload.active || resourcePreload.loaded >= resourcePreload.total) {
+    const fullyLoadedByCount = resourcePreload.total > 0 && resourcePreload.loaded >= resourcePreload.total;
+    const fullyLoadedByBytes = resourcePreload.totalBytes > 0 && resourcePreload.loadedBytes >= resourcePreload.totalBytes;
+    if (!resourcePreload.active || fullyLoadedByCount || fullyLoadedByBytes) {
+      if (resourcePreload.total > 0) {
+        resourcePreload.loaded = resourcePreload.total;
+      }
+      if (resourcePreload.totalBytes > 0) {
+        resourcePreload.loadedBytes = resourcePreload.totalBytes;
+      }
       resourcePreload.active = false;
       resourcePreload.label = '';
-      resourcePreload.currentAssetId = '';
-      resourcePreload.currentProgress = null;
-      resourcePreload.currentKind = '';
     }
   }
   if (!graph) {
@@ -3910,6 +3979,15 @@ onUnmounted(() => {
   padding: 6px 12px;
   border-radius: 16px;
   border: none;
+
+.viewer-overlay__content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 80%;
+  max-width: 320px;
+}
   font-size: 14px;
   line-height: 1.4;
   background-color: #1f7aec;
@@ -3974,23 +4052,82 @@ onUnmounted(() => {
   max-width: 320px;
 }
 
-.viewer-overlay__message {
-  font-size: 14px;
-  font-weight: 600;
+.viewer-overlay__card {
+  width: 100%;
+  background: rgba(20, 22, 34, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 18px;
+  padding: 24px 22px;
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(14px);
 }
 
-.viewer-overlay__progress {
+.viewer-overlay__title {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+}
+
+.viewer-progress {
   width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.viewer-progress__bar {
+  position: relative;
+  width: 100%;
+  height: 12px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.viewer-progress__bar-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  border-radius: inherit;
+  transition: width 0.35s ease;
+  background-image: linear-gradient(90deg, rgba(94, 161, 255, 0.25) 0%, rgba(94, 161, 255, 0.75) 45%, rgba(188, 120, 255, 0.86) 100%);
+  background-size: 200% 100%;
+  animation: viewer-progress-fill 1.8s linear infinite;
+}
+
+@keyframes viewer-progress-fill {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: -200% 50%;
+  }
+}
+
+.viewer-progress__stats {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.viewer-progress__percent {
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.viewer-progress__bytes {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.72);
 }
 
 .viewer-overlay__caption {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.75);
-}
-
-.viewer-overlay__asset {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.88);
+  color: rgba(255, 255, 255, 0.78);
+  text-align: center;
 }
 
 .viewer-overlay.error {

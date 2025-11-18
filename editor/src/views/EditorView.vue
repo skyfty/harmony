@@ -21,6 +21,7 @@ import { generateUuid } from '@/utils/uuid'
 import {
   useSceneStore,
   buildPackageAssetMapForExport,
+  calculateSceneResourceSummary,
   type EditorPanel,
   type SceneBundleImportPayload,
   type SceneBundleImportScene,
@@ -50,6 +51,7 @@ import type {
   BehaviorEventType,
   SceneBehavior,
   SceneNodeComponentState,
+  SceneResourceSummary,
 } from '@harmony/schema'
 
 const sceneStore = useSceneStore()
@@ -110,6 +112,9 @@ const exportPreferences = ref<SceneExportOptions>({
   rotateCoordinateSystem: true,
   format: 'json',
 })
+const exportSummaryLoading = ref(false)
+const exportResourceSummary = ref<SceneResourceSummary | null>(null)
+let pendingExportSummary: Promise<SceneResourceSummary | null> | null = null
 const viewportRef = ref<SceneViewportHandle | null>(null)
 const isNewSceneDialogOpen = ref(false)
 const showStatsPanel = ref(true)
@@ -157,6 +162,60 @@ type BehaviorDetailsContext = {
   actions: BehaviorActionDefinition[]
   sequenceId: string
   nodeId: string | null
+}
+
+function formatByteSize(value: number | null | undefined): string {
+  if (!value || value <= 0) {
+    return '0 B'
+  }
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let size = value
+  let index = 0
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024
+    index += 1
+  }
+  const digits = index === 0 ? 0 : size >= 100 ? 0 : size >= 10 ? 1 : 2
+  return `${size.toFixed(digits)} ${units[index]}`
+}
+
+async function refreshExportSummary(force = false): Promise<SceneResourceSummary | null> {
+  if (!force && exportResourceSummary.value && !pendingExportSummary) {
+    return exportResourceSummary.value
+  }
+
+  if (pendingExportSummary) {
+    return pendingExportSummary
+  }
+
+  if (force) {
+    exportResourceSummary.value = null
+  }
+  exportSummaryLoading.value = true
+
+  pendingExportSummary = (async () => {
+    try {
+      const snapshot = sceneStore.createSceneDocumentSnapshot() as StoredSceneDocument
+      const packageAssetMap = await buildPackageAssetMapForExport(snapshot, { embedResources: true })
+      snapshot.packageAssetMap = packageAssetMap
+      const summary = await calculateSceneResourceSummary(snapshot, { embedResources: true })
+      snapshot.resourceSummary = summary
+      exportResourceSummary.value = summary
+      return summary
+    } catch (error) {
+      console.warn('Failed to calculate resource summary', error)
+      exportResourceSummary.value = null
+      return null
+    } finally {
+      exportSummaryLoading.value = false
+    }
+  })()
+
+  try {
+    return await pendingExportSummary
+  } finally {
+    pendingExportSummary = null
+  }
 }
 
 const behaviorDetailsState = reactive({
@@ -586,6 +645,8 @@ function openExportDialog() {
   exportProgress.value = 0
   exportProgressMessage.value = ''
   exportErrorMessage.value = null
+  exportResourceSummary.value = null
+  void refreshExportSummary(true)
   isExportDialogOpen.value = true
 }
 
@@ -608,6 +669,23 @@ async function handleExportDialogConfirm(options: SceneExportOptions) {
     console.warn('Scene viewport unavailable for export')
     exportErrorMessage.value = 'Unable to access the scene viewport; export was cancelled.'
     return
+  }
+
+  let summary: SceneResourceSummary | null = null
+  if (options.format === 'json') {
+    summary = await refreshExportSummary(true)
+    const sizeLabel = summary ? formatByteSize(summary.totalBytes) : null
+    const proceed = window.confirm(
+      summary
+        ? `导出该场景需要打包约 ${sizeLabel} 的资源，是否继续？`
+        : '暂时无法计算资源总大小，仍要继续导出吗？',
+    )
+    if (!proceed) {
+      exportProgress.value = 0
+      exportProgressMessage.value = ''
+      exportErrorMessage.value = null
+      return
+    }
   }
 
   isExporting.value = true
@@ -1553,6 +1631,8 @@ onBeforeUnmount(() => {
       :progress="exportProgress"
       :progress-message="exportProgressMessage"
       :error-message="exportErrorMessage"
+      :resource-summary="exportResourceSummary"
+      :resource-summary-loading="exportSummaryLoading"
       @confirm="handleExportDialogConfirm"
       @cancel="handleExportDialogCancel"
     />

@@ -65,7 +65,7 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PresetSceneDocument } from '@/types/preset-scene'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SceneViewportSettings } from '@/types/scene-viewport-settings'
-import type { SceneSkyboxSettings, CameraControlMode, CameraProjection } from '@harmony/schema'
+import type { SceneSkyboxSettings, CameraControlMode, CameraProjection, SceneResourceSummary } from '@harmony/schema'
 
 import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
 import type {
@@ -3947,6 +3947,256 @@ export async function buildPackageAssetMapForExport(
   return baseMap
 }
 
+function estimateInlineAssetByteSize(raw: string | null | undefined): number {
+  if (!raw) {
+    return 0
+  }
+  const trimmed = raw.trim()
+  if (!trimmed.length) {
+    return 0
+  }
+  if (trimmed.startsWith('data:')) {
+    try {
+      return dataUrlToBlob(trimmed).size
+    } catch (_error) {
+      return 0
+    }
+  }
+  if (/^[A-Za-z0-9+/=\s-]+$/.test(trimmed) && trimmed.length >= 12) {
+    const sanitized = trimmed.replace(/[^A-Za-z0-9+/=]/g, '')
+    if (!sanitized.length) {
+      return 0
+    }
+    const padding = sanitized.endsWith('==') ? 2 : sanitized.endsWith('=') ? 1 : 0
+    return Math.max(0, Math.floor((sanitized.length * 3) / 4) - padding)
+  }
+  return 0
+}
+
+function normalizeHttpUrl(value: string | null | undefined): string | null {
+  if (!value) {
+    return null
+  }
+  const trimmed = value.trim()
+  if (!trimmed.length) {
+    return null
+  }
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    return trimmed
+  }
+  return null
+}
+
+async function probeRemoteAssetSize(url: string): Promise<number> {
+  if (typeof fetch !== 'function') {
+    return 0
+  }
+  try {
+    const response = await fetch(url, { method: 'HEAD' })
+    if (!response.ok) {
+      return 0
+    }
+    const lengthHeader = response.headers.get('content-length')
+    if (!lengthHeader) {
+      return 0
+    }
+    const parsed = Number.parseInt(lengthHeader, 10)
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
+  } catch (_error) {
+    return 0
+  }
+}
+
+function resolveAssetDownloadUrl(
+  assetId: string,
+  indexEntry: AssetIndexEntry | undefined,
+  catalog: Record<string, ProjectAsset[]>,
+  packageMap: Record<string, string>,
+): string | null {
+  const pickUrl = (input: unknown): string | null => {
+    if (!input || typeof input !== 'object') {
+      return null
+    }
+    const record = input as Record<string, unknown>
+    const directKeys: Array<keyof typeof record> = ['downloadUrl', 'url']
+    for (const key of directKeys) {
+      const candidate = normalizeHttpUrl(typeof record[key] === 'string' ? (record[key] as string) : null)
+      if (candidate) {
+        return candidate
+      }
+    }
+    if (record.source && typeof record.source === 'object') {
+      const nested = pickUrl(record.source)
+      if (nested) {
+        return nested
+      }
+    }
+    return null
+  }
+
+  const fromIndex = pickUrl(indexEntry as Record<string, unknown> | undefined)
+  if (fromIndex) {
+    return fromIndex
+  }
+
+  const mapUrl = normalizeHttpUrl(packageMap[`url::${assetId}`])
+  if (mapUrl) {
+    return mapUrl
+  }
+
+  const asset = getAssetFromCatalog(catalog, assetId)
+  if (asset) {
+    const candidate = normalizeHttpUrl(asset.downloadUrl) ?? normalizeHttpUrl(asset.description)
+    if (candidate) {
+      return candidate
+    }
+  }
+
+  return null
+}
+
+export async function calculateSceneResourceSummary(
+  scene: StoredSceneDocument,
+  options: SceneBundleExportOptions,
+): Promise<SceneResourceSummary> {
+  const packageMap = scene.packageAssetMap ?? {}
+  const assetIndex = scene.assetIndex ?? {}
+  const assetCatalog = scene.assetCatalog ?? {}
+
+  const summary: SceneResourceSummary = {
+    totalBytes: 0,
+    embeddedBytes: 0,
+    externalBytes: 0,
+    computedAt: new Date().toISOString(),
+    assets: [],
+    unknownAssetIds: [],
+  }
+
+  const processed = new Set<string>()
+  const packageEntriesByAsset = new Map<string, Array<{ key: string; value: string }>>()
+
+  Object.entries(packageMap).forEach(([key, value]) => {
+    const separator = key.indexOf('::')
+    if (separator === -1) {
+      return
+    }
+    const assetId = key.slice(separator + 2)
+    if (!assetId) {
+      return
+    }
+    const list = packageEntriesByAsset.get(assetId) ?? []
+    list.push({ key, value })
+    packageEntriesByAsset.set(assetId, list)
+  })
+
+  Object.entries(packageMap).forEach(([key, value]) => {
+    if (!key.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)) {
+      return
+    }
+    const assetId = key.slice(LOCAL_EMBEDDED_ASSET_PREFIX.length)
+    if (!assetId || processed.has(assetId)) {
+      return
+    }
+    const bytes = estimateInlineAssetByteSize(value)
+    summary.assets.push({ assetId, bytes, embedded: true, source: 'embedded' })
+    summary.totalBytes += bytes
+    summary.embeddedBytes += bytes
+    processed.add(assetId)
+  })
+
+  const assetIds = new Set<string>(Object.keys(assetIndex))
+  packageEntriesByAsset.forEach((_entries, assetId) => {
+    if (assetId) {
+      assetIds.add(assetId)
+    }
+  })
+
+  const assetCache = useAssetCacheStore()
+
+  for (const assetId of assetIds) {
+    if (!assetId || processed.has(assetId)) {
+      continue
+    }
+
+    const indexEntry = assetIndex[assetId]
+    const inlineCandidates: string[] = []
+    const directInline = (indexEntry as unknown as { inline?: string })?.inline
+    if (typeof directInline === 'string') {
+      inlineCandidates.push(directInline)
+    }
+    const sourceInline = (indexEntry as unknown as { source?: { inline?: string } })?.source?.inline
+    if (typeof sourceInline === 'string') {
+      inlineCandidates.push(sourceInline)
+    }
+    const packageEntries = packageEntriesByAsset.get(assetId) ?? []
+    packageEntries.forEach(({ value }) => {
+      const trimmed = typeof value === 'string' ? value.trim() : ''
+      if (!trimmed) {
+        return
+      }
+      if (trimmed.startsWith('data:')) {
+        inlineCandidates.push(trimmed)
+        return
+      }
+      if (!normalizeHttpUrl(trimmed)) {
+        const estimated = estimateInlineAssetByteSize(trimmed)
+        if (estimated > 0) {
+          inlineCandidates.push(trimmed)
+        }
+      }
+    })
+
+    let inlineBytes = 0
+    inlineCandidates.forEach((candidate) => {
+      const size = estimateInlineAssetByteSize(candidate)
+      if (size > inlineBytes) {
+        inlineBytes = size
+      }
+    })
+
+    if (inlineBytes > 0) {
+      summary.assets.push({ assetId, bytes: inlineBytes, embedded: true, inline: true, source: 'inline' })
+      summary.totalBytes += inlineBytes
+      summary.embeddedBytes += inlineBytes
+      processed.add(assetId)
+      continue
+    }
+
+    const cacheEntry = assetCache.getEntry(assetId)
+    let bytes = cacheEntry?.status === 'cached' && cacheEntry.size > 0 ? cacheEntry.size : 0
+    const downloadUrl = resolveAssetDownloadUrl(assetId, indexEntry, assetCatalog, packageMap)
+
+    if (!bytes && options.embedResources) {
+      // If resources are embedded, prefer cached array buffer size if available.
+      bytes = cacheEntry?.arrayBuffer?.byteLength ?? bytes
+    }
+
+    if (!bytes && downloadUrl) {
+      bytes = await probeRemoteAssetSize(downloadUrl)
+    }
+
+    if (bytes > 0) {
+      summary.assets.push({ assetId, bytes, embedded: false, source: 'remote', downloadUrl: downloadUrl ?? null })
+      summary.totalBytes += bytes
+      summary.externalBytes += bytes
+      processed.add(assetId)
+    } else {
+      summary.unknownAssetIds?.push(assetId)
+    }
+  }
+
+  if (!summary.unknownAssetIds?.length) {
+    delete summary.unknownAssetIds
+  }
+
+  if (!summary.totalBytes) {
+    summary.embeddedBytes = 0
+    summary.externalBytes = 0
+  }
+
+  return summary
+}
+
 export async function cloneSceneDocumentForExport(
   scene: StoredSceneDocument,
   options: SceneBundleExportOptions,
@@ -3965,6 +4215,7 @@ export async function cloneSceneDocumentForExport(
     assetCatalog: scene.assetCatalog,
     assetIndex: scene.assetIndex,
     packageAssetMap,
+    resourceSummary: scene.resourceSummary,
     materials: scene.materials,
     viewportSettings: scene.viewportSettings,
   skybox: scene.skybox,
@@ -4658,6 +4909,7 @@ function createSceneDocument(
     assetCatalog?: Record<string, ProjectAsset[]>
     assetIndex?: Record<string, AssetIndexEntry>
     packageAssetMap?: Record<string, string>
+    resourceSummary?: SceneResourceSummary
     viewportSettings?: Partial<SceneViewportSettings>
     skybox?: Partial<SceneSkyboxSettings>
     shadowsEnabled?: boolean
@@ -4696,6 +4948,18 @@ function createSceneDocument(
   const assetCatalog = options.assetCatalog ? cloneAssetCatalog(options.assetCatalog) : createEmptyAssetCatalog()
   const assetIndex = options.assetIndex ? cloneAssetIndex(options.assetIndex) : {}
   const packageAssetMap = options.packageAssetMap ? clonePackageAssetMap(options.packageAssetMap) : {}
+  let resourceSummary: SceneResourceSummary | undefined
+  if (options.resourceSummary) {
+    try {
+      resourceSummary = structuredClone(options.resourceSummary)
+    } catch (_error) {
+      try {
+        resourceSummary = JSON.parse(JSON.stringify(options.resourceSummary)) as SceneResourceSummary
+      } catch (_jsonError) {
+        resourceSummary = { ...options.resourceSummary }
+      }
+    }
+  }
   const legacyViewport = options.viewportSettings as LegacyViewportSettings | undefined
   const skybox = cloneSceneSkybox(options.skybox ?? legacyViewport?.skybox ?? null)
   const shadowsEnabled = normalizeShadowsEnabledInput(options.shadowsEnabled ?? legacyViewport?.shadowsEnabled)
@@ -4725,6 +4989,7 @@ function createSceneDocument(
     assetCatalog,
     assetIndex,
     packageAssetMap,
+    resourceSummary,
   }
 }
 

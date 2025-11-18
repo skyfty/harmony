@@ -17,6 +17,7 @@ import type {
   SceneOutlineMesh,
   SceneOutlineMeshMap,
   GroundDynamicMesh,
+  SceneResourceSummaryEntry,
 } from '@harmony/schema';
 import type { GuideboardComponentProps } from './components/definitions/guideboardComponent';
 import { GUIDEBOARD_COMPONENT_TYPE } from './components/definitions/guideboardComponent';
@@ -56,6 +57,8 @@ export interface SceneGraphResourceProgress {
   assetId: string | null;
   message?: string;
   progress?: number;
+  bytesTotal?: number;
+  bytesLoaded?: number;
 }
 
 export interface SceneGraphBuildOptions {
@@ -88,6 +91,10 @@ class SceneGraphBuilder {
   private readonly buildOptions: SceneGraphBuildOptions;
   private progressTotal = 0;
   private progressLoaded = 0;
+  private readonly assetSizeMap = new Map<string, number>();
+  private readonly assetLoadedMap = new Map<string, number>();
+  private progressBytesTotal = 0;
+  private progressBytesLoaded = 0;
   constructor(
     document: SceneJsonExportDocument,
     options: SceneGraphBuildOptions,
@@ -114,6 +121,39 @@ class SceneGraphBuilder {
       hdrLoader: materialFactoryOverrides.hdrLoader,
     });
     this.onProgress = options.onProgress;
+
+    const summary = document.resourceSummary;
+    if (summary && Array.isArray(summary.assets)) {
+      let aggregatedTotal = 0;
+      let aggregatedPreloaded = 0;
+
+      summary.assets.forEach((entry) => {
+        if (!entry || typeof entry.assetId !== 'string' || !entry.assetId.length) {
+          return;
+        }
+        const size = Number.isFinite(entry.bytes) && entry.bytes > 0 ? entry.bytes : 0;
+        if (size > 0 || !this.assetSizeMap.has(entry.assetId)) {
+          this.assetSizeMap.set(entry.assetId, size);
+        }
+        aggregatedTotal += size;
+        if (this.isSummaryAssetPreloaded(entry)) {
+          this.assetLoadedMap.set(entry.assetId, size);
+          aggregatedPreloaded += size;
+        }
+      });
+
+      const resolvedTotal = Number.isFinite(summary.totalBytes) && summary.totalBytes > 0 ? summary.totalBytes : aggregatedTotal;
+      this.progressBytesTotal = resolvedTotal;
+
+      const resolvedPreloaded = Number.isFinite(summary.embeddedBytes) && summary.embeddedBytes >= 0
+        ? summary.embeddedBytes
+        : aggregatedPreloaded;
+
+      if (resolvedPreloaded > 0) {
+        const cappedPreloaded = resolvedTotal > 0 ? Math.min(resolvedPreloaded, resolvedTotal) : resolvedPreloaded;
+        this.progressBytesLoaded = cappedPreloaded;
+      }
+    }
   }
 
   async build(): Promise<THREE.Group> {
@@ -143,6 +183,22 @@ class SceneGraphBuilder {
     this.warnings.push(message);
   }
 
+  private isSummaryAssetPreloaded(entry: SceneResourceSummaryEntry | null | undefined): boolean {
+    if (!entry) {
+      return false;
+    }
+    if (entry.inline) {
+      return true;
+    }
+    if (entry.embedded) {
+      return true;
+    }
+    if (entry.source === 'embedded' || entry.source === 'inline') {
+      return true;
+    }
+    return false;
+  }
+
   private beginProgress(total: number): void {
     this.progressTotal = total;
     this.progressLoaded = 0;
@@ -156,6 +212,8 @@ class SceneGraphBuilder {
       kind: 'asset',
       assetId: null,
       message,
+      bytesTotal: this.progressBytesTotal,
+      bytesLoaded: this.progressBytesLoaded,
     });
   }
 
@@ -172,6 +230,8 @@ class SceneGraphBuilder {
       kind,
       assetId,
       message,
+      bytesTotal: this.progressBytesTotal,
+      bytesLoaded: this.progressBytesLoaded,
     });
   }
 
@@ -188,6 +248,8 @@ class SceneGraphBuilder {
       kind: 'asset',
       assetId: null,
       message,
+      bytesTotal: this.progressBytesTotal,
+      bytesLoaded: this.progressBytesLoaded,
     });
   }
 
@@ -207,6 +269,8 @@ class SceneGraphBuilder {
       assetId,
       message,
       progress: clamped,
+      bytesTotal: this.progressBytesTotal,
+      bytesLoaded: this.progressBytesLoaded,
     });
   }
 

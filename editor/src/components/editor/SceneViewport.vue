@@ -25,7 +25,7 @@ import type {
   WallDynamicMesh 
 } from '@harmony/schema'
 import { createTextureSettings, textureSettingsSignature } from '@/types/material'
-import { useSceneStore, getRuntimeObject, buildPackageAssetMapForExport } from '@/stores/sceneStore'
+import { useSceneStore, getRuntimeObject, buildPackageAssetMapForExport, calculateSceneResourceSummary } from '@/stores/sceneStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
@@ -2448,6 +2448,8 @@ async function exportScene(options: SceneExportOptions, onProgress: (progress: n
     let snapshot = sceneStore.createSceneDocumentSnapshot() as StoredSceneDocument
     const packageAssetMap = await buildPackageAssetMapForExport(snapshot,{embedResources:true})
     snapshot.packageAssetMap = packageAssetMap
+    const resourceSummary = await calculateSceneResourceSummary(snapshot,{embedResources:true})
+    snapshot.resourceSummary = resourceSummary
     onProgress(35, 'Applying export preferences...')
     const jsonDocument = await prepareJsonSceneExport(snapshot, options)
 

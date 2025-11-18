@@ -66,15 +66,49 @@ const resourceProgress = reactive({
 	active: false,
 	loaded: 0,
 	total: 0,
+	loadedBytes: 0,
+	totalBytes: 0,
 	label: '',
 })
 
 const resourceProgressPercent = computed(() => {
+	if (resourceProgress.totalBytes > 0) {
+		if (!resourceProgress.totalBytes) {
+			return resourceProgress.active ? 0 : 100
+		}
+		const ratio = resourceProgress.loadedBytes / resourceProgress.totalBytes
+		return Math.min(100, Math.max(0, Math.round(ratio * 100)))
+	}
 	if (!resourceProgress.total) {
 		return resourceProgress.active ? 0 : 100
 	}
 	return Math.min(100, Math.round((resourceProgress.loaded / resourceProgress.total) * 100))
 })
+
+const resourceProgressBytesLabel = computed(() => {
+	if (resourceProgress.totalBytes > 0) {
+		return `${formatByteSize(resourceProgress.loadedBytes)} / ${formatByteSize(resourceProgress.totalBytes)}`
+	}
+	if (resourceProgress.total > 0) {
+		return `已加载 ${resourceProgress.loaded} / ${resourceProgress.total}`
+	}
+	return ''
+})
+
+function formatByteSize(value: number | null | undefined): string {
+	if (!value || value <= 0) {
+		return '0 B'
+	}
+	const units = ['B', 'KB', 'MB', 'GB', 'TB']
+	let size = value
+	let index = 0
+	while (size >= 1024 && index < units.length - 1) {
+		size /= 1024
+		index += 1
+	}
+	const digits = index === 0 ? 0 : size >= 100 ? 0 : size >= 10 ? 1 : 2
+	return `${size.toFixed(digits)} ${units[index]}`
+}
 
 const previewComponentManager = new ComponentManager()
 previewComponentManager.registerDefinition(wallComponentDefinition)
@@ -3151,6 +3185,8 @@ async function updateScene(document: SceneJsonExportDocument) {
 	resourceProgress.active = true
 	resourceProgress.loaded = 0
 	resourceProgress.total = 0
+	resourceProgress.loadedBytes = 0
+	resourceProgress.totalBytes = 0
 	resourceProgress.label = '准备加载资源...'
 
 	let graphResult: Awaited<ReturnType<typeof buildSceneGraph>> | null = null
@@ -3159,8 +3195,16 @@ async function updateScene(document: SceneJsonExportDocument) {
 			onProgress: (info) => {
 				resourceProgress.total = info.total
 				resourceProgress.loaded = info.loaded
+				if (typeof info.bytesTotal === 'number' && Number.isFinite(info.bytesTotal) && info.bytesTotal > 0) {
+					resourceProgress.totalBytes = info.bytesTotal
+				}
+				if (typeof info.bytesLoaded === 'number' && Number.isFinite(info.bytesLoaded) && info.bytesLoaded >= 0) {
+					resourceProgress.loadedBytes = info.bytesLoaded
+				}
 				resourceProgress.label = info.message || (info.assetId ? `加载 ${info.assetId}` : '')
-				resourceProgress.active = info.total > 0 && info.loaded < info.total
+				const stillLoadingByCount = info.total > 0 && info.loaded < info.total
+				const stillLoadingByBytes = resourceProgress.totalBytes > 0 && resourceProgress.loadedBytes < resourceProgress.totalBytes
+				resourceProgress.active = stillLoadingByCount || stillLoadingByBytes
 			},
 			lazyLoadMeshes: true,
 			materialFactoryOptions: {
@@ -3171,6 +3215,9 @@ async function updateScene(document: SceneJsonExportDocument) {
 		graphResult = await buildSceneGraph(document, resourceCache, buildOptions)
 	} finally {
 		resourceProgress.active = false
+			if (resourceProgress.totalBytes > 0) {
+				resourceProgress.loadedBytes = resourceProgress.totalBytes
+			}
 		resourceProgress.label = ''
 	}
 	if (!graphResult) {
@@ -3372,9 +3419,20 @@ onBeforeUnmount(() => {
 		>
 			<v-card class="scene-preview__preload-card" elevation="12">
 				<div class="scene-preview__preload-title">资源加载中</div>
-				<v-progress-linear :model-value="resourceProgressPercent" color="primary" height="6" rounded />
-				<div class="scene-preview__preload-label">
-					{{ resourceProgress.label || `已加载 ${resourceProgress.loaded} / ${resourceProgress.total}` }}
+				<div class="scene-preview__progress">
+					<div class="scene-preview__progress-bar">
+						<div
+							class="scene-preview__progress-bar-fill"
+							:style="{ '--progress': `${resourceProgressPercent}%` }"
+						/>
+					</div>
+					<div class="scene-preview__progress-stats">
+						<span class="scene-preview__progress-percent">{{ resourceProgressPercent }}%</span>
+						<span class="scene-preview__progress-bytes">{{ resourceProgressBytesLabel }}</span>
+					</div>
+				</div>
+				<div v-if="resourceProgress.label" class="scene-preview__preload-label">
+					{{ resourceProgress.label }}
 				</div>
 			</v-card>
 		</div>
@@ -3740,6 +3798,60 @@ onBeforeUnmount(() => {
 	font-weight: 600;
 	text-align: center;
 	color: #f5f7ff;
+}
+
+.scene-preview__progress {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.scene-preview__progress-bar {
+	position: relative;
+	width: 100%;
+	height: 10px;
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.12);
+	overflow: hidden;
+}
+
+.scene-preview__progress-bar-fill {
+	position: absolute;
+	top: 0;
+	left: 0;
+	height: 100%;
+	width: var(--progress, 0%);
+	background: linear-gradient(90deg, #4facfe, #00f2fe, #4facfe);
+	background-size: 200% 100%;
+	animation: scene-preview-progress-shimmer 1.5s linear infinite;
+	transition: width 0.3s ease;
+	box-shadow: 0 0 12px rgba(79, 172, 254, 0.45);
+}
+
+@keyframes scene-preview-progress-shimmer {
+	0% {
+		background-position: 0% 0;
+	}
+	100% {
+		background-position: 200% 0;
+	}
+}
+
+.scene-preview__progress-stats {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	font-size: 0.8rem;
+	color: rgba(245, 247, 255, 0.8);
+}
+
+.scene-preview__progress-percent {
+	font-weight: 700;
+	color: #5ac8ff;
+}
+
+.scene-preview__progress-bytes {
+	font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
 }
 
 .scene-preview__preload-label {
