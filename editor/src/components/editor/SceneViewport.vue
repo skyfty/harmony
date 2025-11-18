@@ -4830,7 +4830,6 @@ function handlePointerUp(event: PointerEvent) {
 
       event.preventDefault()
       event.stopPropagation()
-      recenterCameraOnPointer(event)
     }
     return
   }
