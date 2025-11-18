@@ -135,13 +135,78 @@ let stats: Stats | null = null
 let statsPanelIndex = 0
 let statsPointerHandler: ((event: MouseEvent) => void) | null = null
 
+let environmentAmbientLight: THREE.AmbientLight | null = null
+let backgroundTexture: THREE.Texture | null = null
+let backgroundAssetId: string | null = null
+let backgroundRegisteredAssetId: string | null = null
+let backgroundLoadToken = 0
+let customEnvironmentTarget: THREE.WebGLRenderTarget | null = null
+let environmentMapAssetId: string | null = null
+let environmentMapRegisteredAssetId: string | null = null
+let environmentMapLoadToken = 0
+let pendingEnvironmentSettings: EnvironmentSettings | null = null
+
+const textureLoader = new THREE.TextureLoader()
+const rgbeLoader = new RGBELoader().setDataType(THREE.FloatType)
+const exrLoader = new EXRLoader().setDataType(THREE.FloatType)
+const textureCache = new Map<string, THREE.Texture>()
+const pendingTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
+const TEXTURE_SLOT_STATE_KEY = '__harmonyTextureSlots'
+const TEXTURE_SLOT_OVERRIDES_KEY = '__harmonyTextureOverrides'
+const DEFAULT_TEXTURE_SETTINGS_SIGNATURE = textureSettingsSignature()
+const WRAP_MODE_MAP: Record<SceneTextureWrapMode, THREE.Wrapping> = {
+  ClampToEdgeWrapping: THREE.ClampToEdgeWrapping,
+  RepeatWrapping: THREE.RepeatWrapping,
+  MirroredRepeatWrapping: THREE.MirroredRepeatWrapping,
+}
+type MeshStandardTextureKey =
+  | 'map'
+  | 'normalMap'
+  | 'metalnessMap'
+  | 'roughnessMap'
+  | 'aoMap'
+  | 'emissiveMap'
+  | 'displacementMap'
+const MATERIAL_TEXTURE_ASSIGNMENTS: Record<
+  SceneMaterialTextureSlot,
+  { key: MeshStandardTextureKey; colorSpace?: THREE.ColorSpace }
+> = {
+  albedo: { key: 'map', colorSpace: THREE.SRGBColorSpace },
+  normal: { key: 'normalMap' },
+  metalness: { key: 'metalnessMap' },
+  roughness: { key: 'roughnessMap' },
+  ao: { key: 'aoMap' },
+  emissive: { key: 'emissiveMap', colorSpace: THREE.SRGBColorSpace },
+  displacement: { key: 'displacementMap' },
+}
+const MATERIAL_CLONED_KEY = '__harmonyMaterialCloned'
+const MATERIAL_ORIGINAL_KEY = '__harmonyMaterialOriginal'
+const MATERIAL_CLASS_NAMES = [
+  'MeshBasicMaterial',
+  'MeshNormalMaterial',
+  'MeshLambertMaterial',
+  'MeshMatcapMaterial',
+  'MeshPhongMaterial',
+  'MeshToonMaterial',
+  'MeshStandardMaterial',
+  'MeshPhysicalMaterial',
+] as SceneMaterialType[]
+const MATERIAL_CLASS_MAP: Record<SceneMaterialType, new () => THREE.Material> = MATERIAL_CLASS_NAMES.reduce(
+  (map, className) => {
+    const candidate = (THREE as unknown as Record<SceneMaterialType, unknown>)[className]
+    const ctor = typeof candidate === 'function'
+      ? (candidate as new () => THREE.Material)
+      : THREE.MeshStandardMaterial
+    map[className] = ctor
+    return map
+  },
+  {} as Record<SceneMaterialType, new () => THREE.Material>,
+)
+
 // Dynamic render quality controls
 const MIN_BASE_PIXEL_RATIO = 0.65
 const MAX_BASE_PIXEL_RATIO = 1.25
 const MIN_INTERACTIVE_PIXEL_RATIO = 0.35
-const PERFORMANCE_SAMPLE_WINDOW = 45
-const TRIANGLE_SEVERITY_THRESHOLDS = [400_000, 900_000, 1_600_000, 2_500_000]
-const TEXTURE_SEVERITY_THRESHOLDS = [80, 140, 220, 320]
 const devicePixelRatio = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
 const preferredBasePixelRatio = clampToRange(devicePixelRatio, MIN_BASE_PIXEL_RATIO, MAX_BASE_PIXEL_RATIO)
 let normalPixelRatio = preferredBasePixelRatio
@@ -153,10 +218,6 @@ const INTERACTION_RESTORE_DELAY_MS = 180
 let interactionRestoreTimer: number | null = null
 let isInteractiveQuality = false
 let savedShadowEnabled: boolean | null = null
-const frameTimeSamples: number[] = []
-let frameTimeSampleSum = 0
-let lastFrameTimestamp: number | null = null
-let currentQualitySeverity = 0
 
 function applyInteractiveQuality(enabled: boolean) {
   if (!renderer) return
@@ -244,222 +305,13 @@ function setInteractivePixelRatio(target: number) {
   }
 }
 
-function resetPerformanceTracking() {
-  frameTimeSamples.length = 0
-  frameTimeSampleSum = 0
-  lastFrameTimestamp = null
-}
-
-function getBasePixelRatioForSeverity(severity: number): number {
-  const capped = Math.min(Math.max(severity, 0), 4)
-  switch (capped) {
-    case 0:
-      return preferredBasePixelRatio
-    case 1:
-      return Math.min(preferredBasePixelRatio, 1)
-    case 2:
-      return Math.min(preferredBasePixelRatio, 0.85)
-    case 3:
-      return Math.min(preferredBasePixelRatio, 0.75)
-    default:
-      return Math.max(MIN_BASE_PIXEL_RATIO, Math.min(preferredBasePixelRatio, 0.65))
-  }
-}
-
-function getInteractivePixelRatioForSeverity(severity: number, baseTarget: number): number {
-  const capped = Math.min(Math.max(severity, 0), 4)
-  let target: number
-  switch (capped) {
-    case 0:
-      target = baseTarget * 0.75
-      break
-    case 1:
-      target = baseTarget * 0.6
-      break
-    case 2:
-      target = Math.min(baseTarget * 0.5, 0.5)
-      break
-    case 3:
-      target = Math.min(baseTarget * 0.45, 0.42)
-      break
-    default:
-      target = Math.min(baseTarget * 0.4, 0.35)
-      break
-  }
-  return clampInteractivePixelRatioValue(target, baseTarget)
-}
-
 function resetDynamicQualityState() {
-  currentQualitySeverity = 0
-  resetPerformanceTracking()
-  const baseTarget = getBasePixelRatioForSeverity(0)
+  const baseTarget = clampBasePixelRatio(preferredBasePixelRatio)
   setBasePixelRatio(baseTarget)
-  setInteractivePixelRatio(getInteractivePixelRatioForSeverity(0, baseTarget))
-}
-
-function computeSeverityFromThresholds(value: number, thresholds: number[]): number {
-  let severity = 0
-  for (let index = 0; index < thresholds.length; index += 1) {
-    if (value >= thresholds[index]!) {
-      severity = index + 1
-    } else {
-      break
-    }
-  }
-  return severity
-}
-
-function computeFpsSeverity(fps: number): number {
-  if (!Number.isFinite(fps) || fps <= 0) {
-    return 0
-  }
-  if (fps < 18) {
-    return 4
-  }
-  if (fps < 26) {
-    return 3
-  }
-  if (fps < 36) {
-    return 2
-  }
-  if (fps < 48) {
-    return 1
-  }
-  return 0
-}
-
-function recordFrameTiming(timestamp?: number): number | null {
-  const nowValue = typeof timestamp === 'number'
-    ? timestamp
-    : (typeof performance !== 'undefined' ? performance.now() : Date.now())
-  if (!Number.isFinite(nowValue)) {
-    return null
-  }
-  if (lastFrameTimestamp === null) {
-    lastFrameTimestamp = nowValue
-    return null
-  }
-  const delta = nowValue - lastFrameTimestamp
-  lastFrameTimestamp = nowValue
-  if (delta <= 0) {
-    return null
-  }
-  frameTimeSamples.push(delta)
-  frameTimeSampleSum += delta
-  if (frameTimeSamples.length > PERFORMANCE_SAMPLE_WINDOW) {
-    frameTimeSampleSum -= frameTimeSamples.shift() ?? 0
-  }
-  if (frameTimeSamples.length < PERFORMANCE_SAMPLE_WINDOW) {
-    return null
-  }
-  const averageDelta = frameTimeSampleSum / frameTimeSamples.length
-  if (!Number.isFinite(averageDelta) || averageDelta <= 0) {
-    return null
-  }
-  return 1000 / averageDelta
-}
-
-function updatePerformanceQualityTargets(fps: number | null) {
-  if (!renderer) {
-    return
-  }
-  const triangleCount = renderer.info.render?.triangles ?? 0
-  const textureCount = renderer.info.memory?.textures ?? 0
-  const triangleSeverity = computeSeverityFromThresholds(triangleCount, TRIANGLE_SEVERITY_THRESHOLDS)
-  const textureSeverity = computeSeverityFromThresholds(textureCount, TEXTURE_SEVERITY_THRESHOLDS)
-  const fpsSeverity = fps !== null ? computeFpsSeverity(fps) : 0
-  const severity = Math.max(triangleSeverity, textureSeverity, fpsSeverity)
-  if (severity === currentQualitySeverity) {
-    return
-  }
-  currentQualitySeverity = severity
-  const baseTarget = getBasePixelRatioForSeverity(severity)
-  const interactiveTarget = getInteractivePixelRatioForSeverity(severity, baseTarget)
-  setBasePixelRatio(baseTarget)
+  const interactiveTarget = clampInteractivePixelRatioValue(Math.min(baseTarget * 0.7, baseTarget), baseTarget)
   setInteractivePixelRatio(interactiveTarget)
 }
 
-let environmentAmbientLight: THREE.AmbientLight | null = null
-let backgroundTexture: THREE.Texture | null = null
-let backgroundAssetId: string | null = null
-let backgroundRegisteredAssetId: string | null = null
-let backgroundLoadToken = 0
-let customEnvironmentTarget: THREE.WebGLRenderTarget | null = null
-let environmentMapAssetId: string | null = null
-let environmentMapRegisteredAssetId: string | null = null
-let environmentMapLoadToken = 0
-let pendingEnvironmentSettings: EnvironmentSettings | null = null
-
-const textureLoader = new THREE.TextureLoader()
-const rgbeLoader = new RGBELoader().setDataType(THREE.FloatType)
-const exrLoader = new EXRLoader().setDataType(THREE.FloatType)
-const textureCache = new Map<string, THREE.Texture>()
-const pendingTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
-const TEXTURE_SLOT_STATE_KEY = '__harmonyTextureSlots'
-const TEXTURE_SLOT_OVERRIDES_KEY = '__harmonyTextureOverrides'
-const DEFAULT_TEXTURE_SETTINGS_SIGNATURE = textureSettingsSignature()
-const WRAP_MODE_MAP: Record<SceneTextureWrapMode, THREE.Wrapping> = {
-  ClampToEdgeWrapping: THREE.ClampToEdgeWrapping,
-  RepeatWrapping: THREE.RepeatWrapping,
-  MirroredRepeatWrapping: THREE.MirroredRepeatWrapping,
-}
-type MeshStandardTextureKey = 'map' | 'normalMap' | 'metalnessMap' | 'roughnessMap' | 'aoMap' | 'emissiveMap' | 'displacementMap'
-const MATERIAL_TEXTURE_ASSIGNMENTS: Record<SceneMaterialTextureSlot, { key: MeshStandardTextureKey; colorSpace?: THREE.ColorSpace }> = {
-  albedo: { key: 'map', colorSpace: THREE.SRGBColorSpace },
-  normal: { key: 'normalMap' },
-  metalness: { key: 'metalnessMap' },
-  roughness: { key: 'roughnessMap' },
-  ao: { key: 'aoMap' },
-  emissive: { key: 'emissiveMap', colorSpace: THREE.SRGBColorSpace },
-  displacement: { key: 'displacementMap' },
-}
-
-const MATERIAL_CLONED_KEY = '__harmonyMaterialCloned'
-const MATERIAL_ORIGINAL_KEY = '__harmonyMaterialOriginal'
-
-
-const MATERIAL_CLASS_NAMES = [
-  'MeshBasicMaterial',
-  'MeshNormalMaterial',
-  'MeshLambertMaterial',
-  'MeshMatcapMaterial',
-  'MeshPhongMaterial',
-  'MeshToonMaterial',
-  'MeshStandardMaterial',
-  'MeshPhysicalMaterial',
-] as SceneMaterialType[]
-
-const MATERIAL_CLASS_MAP: Record<SceneMaterialType, new () => THREE.Material> = MATERIAL_CLASS_NAMES.reduce((map, className) => {
-  const candidate = (THREE as unknown as Record<SceneMaterialType, unknown>)[className]
-  const ctor = typeof candidate === 'function' ? (candidate as new () => THREE.Material) : THREE.MeshStandardMaterial
-  map[className] = ctor
-  return map
-}, {} as Record<SceneMaterialType, new () => THREE.Material>)
-
-function ensureMaterialType(
-  material: THREE.Material,
-  type: SceneMaterialType,
-): { material: THREE.Material; replaced: boolean; dispose?: () => void } {
-  const currentType = material.type ?? material.constructor?.name ?? ''
-  if (currentType === type) {
-    return { material, replaced: false }
-  }
-  const ctor = MATERIAL_CLASS_MAP[type]
-  if (!ctor) {
-    return { material, replaced: false }
-  }
-  const next = new ctor()
-  next.name = material.name
-  next.userData = { ...(material.userData ?? {}) }
-  if (next.userData[MATERIAL_ORIGINAL_KEY]) {
-    delete next.userData[MATERIAL_ORIGINAL_KEY]
-  }
-  return {
-    material: next,
-    replaced: true,
-    dispose: typeof material.dispose === 'function' ? () => material.dispose() : undefined,
-  }
-}
 
 function applyRendererShadowSetting() {
   if (!renderer) {
@@ -3584,7 +3436,7 @@ function disposeSkyResources() {
   pmremGenerator = null
 }
 
-function animate(timestamp?: number) {
+function animate() {
   if (!renderer || !scene || !camera) {
     return
   }
@@ -3664,8 +3516,6 @@ function animate(timestamp?: number) {
   renderer.render(scene, camera)
   gizmoControls?.render()
   stats?.end()
-  const frameFps = recordFrameTiming(timestamp)
-  updatePerformanceQualityTargets(frameFps)
 }
 
 function disposeScene() {
@@ -6758,6 +6608,34 @@ type HarmonyMaterialState = {
   aoMap?: THREE.Texture | null
   emissiveMap?: THREE.Texture | null
   displacementMap?: THREE.Texture | null
+}
+
+function ensureMaterialType(
+  material: THREE.Material,
+  type: SceneMaterialType,
+): { material: THREE.Material; replaced: boolean; dispose?: () => void } {
+  const currentType = material.type ?? material.constructor?.name ?? ''
+  if (currentType === type) {
+    return { material, replaced: false }
+  }
+
+  const ctor = MATERIAL_CLASS_MAP[type]
+  if (!ctor) {
+    return { material, replaced: false }
+  }
+
+  const next = new ctor()
+  next.name = material.name
+  next.userData = { ...(material.userData ?? {}) }
+  if (next.userData[MATERIAL_ORIGINAL_KEY]) {
+    delete next.userData[MATERIAL_ORIGINAL_KEY]
+  }
+
+  return {
+    material: next,
+    replaced: true,
+    dispose: typeof material.dispose === 'function' ? () => material.dispose() : undefined,
+  }
 }
 
 function ensureMeshMaterialsUnique(mesh: THREE.Mesh) {
