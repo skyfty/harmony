@@ -67,14 +67,14 @@ export default class ResourceCache implements MaterialAssetProvider {
     if (!entry) {
       return null;
     }
+    if (entry.downloadUrl) {
+      return { kind: 'remote-url', url: entry.downloadUrl };
+    }
     if (entry.arrayBuffer && entry.arrayBuffer.byteLength) {
       return { kind: 'arraybuffer', data: entry.arrayBuffer };
     }
     if (entry.blobUrl) {
       return { kind: 'remote-url', url: entry.blobUrl };
-    }
-    if (entry.downloadUrl) {
-      return { kind: 'remote-url', url: entry.downloadUrl };
     }
     return null;
   }
