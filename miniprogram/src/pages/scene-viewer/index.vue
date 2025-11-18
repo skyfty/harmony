@@ -220,6 +220,7 @@ import {
   PROXIMITY_MIN_DISTANCE,
   PROXIMITY_RADIUS_SCALE,
 } from '@schema/behaviors/runtime';
+type ResolvedAssetUrl = { url: string; mimeType?: string | null; dispose?: () => void }
 
 interface ScenePreviewPayload {
   document: SceneJsonExportDocument;
@@ -966,7 +967,7 @@ async function ensureLanternImage(assetId: string): Promise<void> {
       if (!resolved) {
         throw new Error('无法解析图片资源');
       }
-      state.url = resolved;
+      state.url = resolved.url;
     } catch (error) {
       state.error = (error as Error).message ?? '图片资源加载失败';
       state.url = null;
@@ -1030,40 +1031,96 @@ async function acquireViewerAssetEntry(assetId: string): Promise<AssetCacheEntry
   }
 }
 
-function buildResolvedAssetUrl(entry: AssetCacheEntry | null): string | null {
-  return entry? entry.downloadUrl:null;
+function inferMimeTypeFromAssetId(assetId: string): string | null {
+	const lower = assetId.toLowerCase()
+	if (lower.endsWith('.png')) {
+		return 'image/png'
+	}
+	if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
+		return 'image/jpeg'
+	}
+	if (lower.endsWith('.gif')) {
+		return 'image/gif'
+	}
+	if (lower.endsWith('.webp')) {
+		return 'image/webp'
+	}
+	if (lower.endsWith('.svg')) {
+		return 'image/svg+xml'
+	}
+	if (lower.endsWith('.json')) {
+		return 'application/json'
+	}
+	if (lower.endsWith('.txt')) {
+		return 'text/plain'
+	}
+	return null
+}
+function getOrCreateObjectUrl(assetId: string, data: ArrayBuffer, mimeHint?: string): string {
+	const cached = assetObjectUrlCache.get(assetId)
+	if (cached) {
+		return cached
+	}
+	const mimeType = mimeHint ?? inferMimeTypeFromAssetId(assetId) ?? 'application/octet-stream'
+	const blob = new Blob([data], { type: mimeType })
+	const url = URL.createObjectURL(blob)
+	assetObjectUrlCache.set(assetId, url)
+	return url
+}
+function buildResolvedAssetUrl(assetId: string, entry: AssetCacheEntry | null): ResolvedAssetUrl | null {
+	if (!entry) {
+		return null
+	}
+	const mimeType = entry.mimeType ?? inferMimeTypeFromAssetId(assetId)
+	if (entry.downloadUrl) {
+		return { url: entry.downloadUrl, mimeType }
+	}
+	if (entry.blobUrl) {
+		return { url: entry.blobUrl, mimeType }
+	}
+	if (entry.arrayBuffer && entry.arrayBuffer.byteLength) {
+		const url = getOrCreateObjectUrl(assetId, entry.arrayBuffer, mimeType ?? undefined)
+		return { url, mimeType }
+	}
+	return null
 }
 
-async function resolveAssetUrlFromCache(assetId: string): Promise<string | null> {
+async function resolveAssetUrlFromCache(assetId: string): Promise<ResolvedAssetUrl | null> {
   const entry = await acquireViewerAssetEntry(assetId);
-  return buildResolvedAssetUrl(entry);
+  return buildResolvedAssetUrl(assetId, entry);
 }
 
-async function resolveAssetUrlReference(candidate: string): Promise<string | null> {
-  const trimmed = candidate.trim();
-  if (!trimmed.length) {
-    return null;
-  }
-  if (trimmed.startsWith('data:') || isExternalAssetReference(trimmed)) {
-    return trimmed;
-  }
-  const assetId = trimmed.startsWith('asset://') ? trimmed.slice('asset://'.length) : trimmed;
-  return await resolveAssetUrlFromCache(assetId);
+function inferMimeTypeFromUrl(url: string): string | null {
+	const cleaned = url.split('?')[0]?.split('#')[0] ?? url
+	return inferMimeTypeFromAssetId(cleaned)
 }
 
-async function resolveDisplayBoardMediaSource(candidate: string): Promise<string | null> {
-  const trimmed = candidate.trim();
-  if (!trimmed.length) {
-    return null;
-  }
-  if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:')) {
-    return trimmed;
-  }
-  const assetId = trimmed.startsWith('asset://') ? trimmed.slice('asset://'.length) : trimmed;
-  if (!assetId.length) {
-    return null;
-  }
-  return await resolveAssetUrlFromCache(assetId);
+async function resolveAssetUrlReference(candidate: string): Promise<ResolvedAssetUrl | null> {
+	const trimmed = candidate.trim()
+	if (!trimmed.length) {
+		return null
+	}
+	if (trimmed.startsWith('data:') || isExternalAssetReference(trimmed)) {
+		return { url: trimmed, mimeType: inferMimeTypeFromUrl(trimmed) }
+	}
+	const assetId = trimmed.startsWith('asset://') ? trimmed.slice('asset://'.length) : trimmed
+	return await resolveAssetUrlFromCache(assetId)
+}
+
+
+async function resolveDisplayBoardMediaSource(candidate: string): Promise<ResolvedAssetUrl | null> {
+	const trimmed = candidate.trim()
+	if (!trimmed.length) {
+		return null
+	}
+	if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:')) {
+		return { url: trimmed, mimeType: inferMimeTypeFromUrl(trimmed) }
+	}
+	const assetId = trimmed.startsWith('asset://') ? trimmed.slice('asset://'.length) : trimmed
+	if (!assetId.length) {
+		return null
+	}
+	return await resolveAssetUrlFromCache(assetId)
 }
 
 (globalThis as typeof globalThis & { [DISPLAY_BOARD_RESOLVER_KEY]?: typeof resolveDisplayBoardMediaSource })[
@@ -2726,8 +2783,8 @@ function disposeEnvironmentTarget() {
   environmentMapAssetId = null;
 }
 
-function inferEnvironmentAssetExtension(assetId: string, url: string | null): string {
-  const target = (url ?? assetId) ?? '';
+function inferEnvironmentAssetExtension(assetId: string, resolve: ResolvedAssetUrl | null): string {
+  const target = (resolve?.url ?? assetId) ?? '';
   const sanitized = target.split('#')[0]?.split('?')[0] ?? '';
   const index = sanitized.lastIndexOf('.');
   if (index === -1) {
@@ -2739,20 +2796,20 @@ function inferEnvironmentAssetExtension(assetId: string, url: string | null): st
 async function loadEnvironmentTextureFromAsset(
   assetId: string,
 ): Promise<{ texture: THREE.Texture; dispose?: () => void } | null> {
-  const url = await resolveAssetUrlReference(assetId);
-  if (!url) {
+  const resolve = await resolveAssetUrlReference(assetId);
+  if (!resolve) {
     return null;
   }
-  const extension = inferEnvironmentAssetExtension(assetId, url);
+  const extension = inferEnvironmentAssetExtension(assetId, resolve);
   try {
     if (extension === 'hdr' || extension === 'hdri') {
-      const texture = await rgbeLoader.loadAsync(url);
+      const texture = await rgbeLoader.loadAsync(resolve.url);
       texture.mapping = THREE.EquirectangularReflectionMapping;
       texture.flipY = false;
       texture.needsUpdate = true;
       return { texture };
     }
-    const texture = await textureLoader.loadAsync(url);
+    const texture = await textureLoader.loadAsync(resolve.url);
     texture.mapping = THREE.EquirectangularReflectionMapping;
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.flipY = false;

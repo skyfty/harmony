@@ -538,15 +538,15 @@ function buildResolvedAssetUrl(assetId: string, entry: AssetCacheEntry | null): 
 		return null
 	}
 	const mimeType = entry.mimeType ?? inferMimeTypeFromAssetId(assetId)
+	if (entry.downloadUrl) {
+		return { url: entry.downloadUrl, mimeType }
+	}
 	if (entry.blobUrl) {
 		return { url: entry.blobUrl, mimeType }
 	}
 	if (entry.arrayBuffer && entry.arrayBuffer.byteLength) {
 		const url = getOrCreateObjectUrl(assetId, entry.arrayBuffer, mimeType ?? undefined)
 		return { url, mimeType }
-	}
-	if (entry.downloadUrl) {
-		return { url: entry.downloadUrl, mimeType }
 	}
 	return null
 }
