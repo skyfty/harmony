@@ -3,6 +3,7 @@ import { reactive, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import InspectorVectorControls from '@/components/common/VectorControls.vue'
 import { useSceneStore } from '@/stores/sceneStore'
+import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 
 const sceneStore = useSceneStore()
 const { selectedNode } = storeToRefs(sceneStore)
@@ -16,6 +17,32 @@ const transformForm = reactive({
   rotation: createZeroVector(),
   scale: createScaleVector(),
 })
+
+function resetPosition() {
+  applyTransformReset({ position: createNumericVector(0, 0, 0) })
+}
+
+function resetRotation() {
+  applyTransformReset({ rotation: createNumericVector(0, 0, 0) })
+}
+
+function resetScale() {
+  applyTransformReset({ scale: createNumericVector(1, 1, 1) })
+}
+
+function applyTransformReset(patch: Partial<Pick<TransformUpdatePayload, 'position' | 'rotation' | 'scale'>>) {
+  if (props.disabled) {
+    return
+  }
+  const node = selectedNode.value
+  if (!node) {
+    return
+  }
+  sceneStore.updateNodeProperties({
+    id: node.id,
+    ...patch,
+  })
+}
 
 watch(
   selectedNode,
@@ -65,6 +92,10 @@ function createScaleVector(): VectorDisplay {
   return { x: '1.0', y: '1.0', z: '1.0' }
 }
 
+function createNumericVector(x: number, y: number, z: number) {
+  return { x, y, z }
+}
+
 </script>
 
 <template>
@@ -72,7 +103,7 @@ function createScaleVector(): VectorDisplay {
     <v-expansion-panel-title>Transform</v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="transform-field-grid">
-      <div class="section-block">
+      <div class="section-block" @dblclick.stop="resetPosition">
         <InspectorVectorControls
           label="Position"
           :model-value="transformForm.position"
@@ -80,7 +111,7 @@ function createScaleVector(): VectorDisplay {
           :readonly="true"
         />
       </div>
-      <div class="section-block">
+      <div class="section-block" @dblclick.stop="resetRotation">
         <InspectorVectorControls
           label="Rotation"
           :model-value="transformForm.rotation"
@@ -88,7 +119,7 @@ function createScaleVector(): VectorDisplay {
           :readonly="true"
         />
       </div>
-      <div class="section-block">
+      <div class="section-block" @dblclick.stop="resetScale">
         <InspectorVectorControls
           label="Scale"
           :model-value="transformForm.scale"

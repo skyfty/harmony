@@ -134,8 +134,7 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
     }
 
     const resolver = this.getResolver()
-    const resolved = resolver ? await resolver(assetId) : null
-    const media = resolved ?? (this.isLikelyDirectUrl(assetId) ? { url: assetId } : null)
+    const media = resolver ? await resolver(assetId) : null
     if (!media) {
       this.resetTexture(mesh)
       this.updateGeometry(mesh, props, intrinsic)
@@ -173,6 +172,71 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
         this.pending = null
       }
     }
+  }
+
+  private async loadVideo(resolved: string): Promise<{
+    texture: THREE.Texture
+    width: number
+    height: number
+    dispose: () => void
+  }> {
+    if (typeof document === 'undefined') {
+      throw new Error('Video playback is not supported in this environment')
+    }
+    const video = document.createElement('video')
+    video.src = resolved
+    video.crossOrigin = 'anonymous'
+    video.playsInline = true
+    video.muted = true
+    video.loop = true
+    await new Promise<void>((resolve, reject) => {
+      const handleLoaded = () => {
+        cleanup()
+        resolve()
+      }
+      const handleError = () => {
+        cleanup()
+        reject(new Error('Failed to load video source'))
+      }
+      const cleanup = () => {
+        video.removeEventListener('loadedmetadata', handleLoaded)
+        video.removeEventListener('error', handleError)
+      }
+      video.addEventListener('loadedmetadata', handleLoaded, { once: true })
+      video.addEventListener('error', handleError, { once: true })
+    })
+    try {
+      await video.play()
+    } catch (_error) {
+      /* autoplay may be blocked; ignore */
+    }
+    const texture = new THREE.VideoTexture(video)
+    texture.colorSpace = THREE.SRGBColorSpace
+    const width = video.videoWidth || 1
+    const height = video.videoHeight || 1
+    const dispose = () => {
+      texture.dispose()
+      video.pause()
+      video.removeAttribute('src')
+      video.load()
+    }
+    return { texture, width, height, dispose }
+  }
+
+  private isVideoType(mimeType: string, url: string): boolean {
+    const normalized = mimeType.toLowerCase()
+    if (normalized.startsWith('video/')) {
+      return true
+    }
+    if (normalized === 'application/octet-stream') {
+      return this.hasVideoExtension(url)
+    }
+    return false
+  }
+
+  private hasVideoExtension(url: string): boolean {
+    const lower = url.toLowerCase()
+    return ['.mp4', '.webm', '.ogv', '.mov', '.m4v'].some((ext) => lower.includes(ext))
   }
 
   private resetTexture(mesh?: PlaneMesh): void {
@@ -309,88 +373,21 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
     return geometry instanceof THREE.PlaneGeometry || geometry.type === 'PlaneGeometry'
   }
 
-  private async loadImage(resolved: DisplayBoardResolvedMedia): Promise<{
+  private async loadImage(resolved: string): Promise<{
     texture: THREE.Texture
     width: number
     height: number
     dispose: () => void
   }> {
-    const texture = await this.textureLoader.loadAsync(resolved.url)
+    const texture = await this.textureLoader.loadAsync(resolved)
     texture.colorSpace = THREE.SRGBColorSpace
     const image = texture.image as { width?: number; height?: number; naturalWidth?: number; naturalHeight?: number }
     const width = image?.naturalWidth ?? image?.width ?? 1
     const height = image?.naturalHeight ?? image?.height ?? 1
     const dispose = () => {
       texture.dispose()
-      resolved.dispose?.()
     }
     return { texture, width, height, dispose }
-  }
-
-  private async loadVideo(resolved: DisplayBoardResolvedMedia): Promise<{
-    texture: THREE.Texture
-    width: number
-    height: number
-    dispose: () => void
-  }> {
-    if (typeof document === 'undefined') {
-      throw new Error('Video playback is not supported in this environment')
-    }
-    const video = document.createElement('video')
-    video.src = resolved.url
-    video.crossOrigin = 'anonymous'
-    video.playsInline = true
-    video.muted = true
-    video.loop = true
-    await new Promise<void>((resolve, reject) => {
-      const handleLoaded = () => {
-        cleanup()
-        resolve()
-      }
-      const handleError = () => {
-        cleanup()
-        reject(new Error('Failed to load video source'))
-      }
-      const cleanup = () => {
-        video.removeEventListener('loadedmetadata', handleLoaded)
-        video.removeEventListener('error', handleError)
-      }
-      video.addEventListener('loadedmetadata', handleLoaded, { once: true })
-      video.addEventListener('error', handleError, { once: true })
-    })
-    try {
-      await video.play()
-    } catch (_error) {
-      /* autoplay may be blocked; ignore */
-    }
-    const texture = new THREE.VideoTexture(video)
-    texture.colorSpace = THREE.SRGBColorSpace
-    const width = video.videoWidth || 1
-    const height = video.videoHeight || 1
-    const dispose = () => {
-      texture.dispose()
-      video.pause()
-      video.removeAttribute('src')
-      video.load()
-      resolved.dispose?.()
-    }
-    return { texture, width, height, dispose }
-  }
-
-  private isVideoType(mimeType: string, url: string): boolean {
-    const normalized = mimeType.toLowerCase()
-    if (normalized.startsWith('video/')) {
-      return true
-    }
-    if (normalized === 'application/octet-stream') {
-      return this.hasVideoExtension(url)
-    }
-    return false
-  }
-
-  private hasVideoExtension(url: string): boolean {
-    const lower = url.toLowerCase()
-    return ['.mp4', '.webm', '.ogv', '.mov', '.m4v'].some((ext) => lower.includes(ext))
   }
 
   private isLikelyDirectUrl(value: string): boolean {

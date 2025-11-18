@@ -24,6 +24,7 @@ const { hierarchyItems, selectedNodeId, selectedNodeIds, draggingAssetId } = sto
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 
 const opened = ref<string[]>([])
+const openedInitialized = ref(false)
 const selectionAnchorId = ref<string | null>(null)
 const suppressSelectionSync = ref(false)
 const dragState = ref<{ sourceId: string | null; targetId: string | null; position: HierarchyDropPosition | null }>(
@@ -57,8 +58,23 @@ const active = computed({
 
 watch(
   hierarchyItems,
-  (items) => {
-    opened.value = expandAll(items)
+  (items: HierarchyTreeItem[]) => {
+    const flattened = Array.isArray(items) ? flattenHierarchyItems(items) : []
+    if (!openedInitialized.value) {
+      opened.value = flattened.map((item) => item.id)
+      openedInitialized.value = true
+      return
+    }
+
+    if (!opened.value.length) {
+      return
+    }
+
+    const availableIds = new Set(flattened.map((item) => item.id))
+    const nextOpened = opened.value.filter((id) => availableIds.has(id))
+    if (nextOpened.length !== opened.value.length) {
+      opened.value = nextOpened
+    }
   },
   { immediate: true },
 )
@@ -166,17 +182,6 @@ const rootDropClasses = computed(() => {
     'root-drop-after': isNodeDragActive && dragState.value.position === 'after',
   }
 })
-
-function expandAll(items: HierarchyTreeItem[]): string[] {
-  const collected: string[] = []
-  for (const item of items) {
-    collected.push(item.id)
-    if (Array.isArray(item.children) && item.children.length) {
-      collected.push(...expandAll(item.children))
-    }
-  }
-  return collected
-}
 
 function flattenHierarchyItems(items: HierarchyTreeItem[]): HierarchyTreeItem[] {
   const result: HierarchyTreeItem[] = []

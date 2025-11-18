@@ -141,6 +141,7 @@
         class="viewer-purpose-controls"
       >
         <button
+          v-if="purposeActionMode === 'watch'"
           class="viewer-purpose-icon-button viewer-purpose-icon-button--primary"
           aria-label="观察"
           @tap="handlePurposeWatchTap"
@@ -148,6 +149,7 @@
           <image :src="purposeWatchIcon" mode="aspectFit" class="viewer-purpose-icon" />
         </button>
         <button
+          v-else
           class="viewer-purpose-icon-button viewer-purpose-icon-button--secondary"
           aria-label="平视"
           @tap="handlePurposeResetTap"
@@ -514,6 +516,8 @@ const lanternImageBoxStyle = computed(() => {
 const purposeControlsVisible = ref(false);
 const purposeTargetNodeId = ref<string | null>(null);
 const purposeSourceNodeId = ref<string | null>(null);
+const purposeActionMode = ref<'watch' | 'reset'>('watch');
+const isCameraCaged = ref(false);
 
 type LanternTextState = { text: string; loading: boolean; error: string | null };
 type LanternImageState = { url: string | null; loading: boolean; error: string | null };
@@ -1858,6 +1862,18 @@ function lockControlsPitchToCurrent(controls: OrbitControls, camera: THREE.Persp
   controls.maxPolarAngle = phi;
 }
 
+function setCameraCaging(enabled: boolean): void {
+  if (isCameraCaged.value === enabled) {
+    return;
+  }
+  isCameraCaged.value = enabled;
+  const controls = renderContext?.controls;
+  if (controls) {
+    controls.enabled = !enabled;
+    controls.update();
+  }
+}
+
 function easeInOutCubic(t: number): number {
   if (t <= 0) {
     return 0;
@@ -2248,7 +2264,7 @@ function handleTriggerBehaviorEvent(event: Extract<BehaviorRuntimeEvent, { type:
   processBehaviorEvents(followUps);
 }
 
-function performWatchFocus(targetNodeId: string | null): { success: boolean; message?: string } {
+function performWatchFocus(targetNodeId: string | null, caging?: boolean): { success: boolean; message?: string } {
   const context = renderContext;
   if (!context) {
     return { success: false, message: '相机不可用' };
@@ -2261,6 +2277,10 @@ function performWatchFocus(targetNodeId: string | null): { success: boolean; mes
   if (!focus) {
     return { success: false, message: '未找到目标节点' };
   }
+  const finishSuccess = () => {
+    setCameraCaging(Boolean(caging));
+    return { success: true };
+  };
   activeCameraWatchTween = null;
   const startPosition = camera.position.clone();
   if (Math.abs(startPosition.y - HUMAN_EYE_HEIGHT) > 1e-6) {
@@ -2277,7 +2297,7 @@ function performWatchFocus(targetNodeId: string | null): { success: boolean; mes
       controls.update();
     });
     lockControlsPitchToCurrent(controls, camera);
-    return { success: true };
+    return finishSuccess();
   }
 
   tempMovementVec.normalize();
@@ -2291,7 +2311,7 @@ function performWatchFocus(targetNodeId: string | null): { success: boolean; mes
       controls.update();
     });
     lockControlsPitchToCurrent(controls, camera);
-    return { success: true };
+    return finishSuccess();
   }
 
   activeCameraWatchTween = {
@@ -2302,11 +2322,11 @@ function performWatchFocus(targetNodeId: string | null): { success: boolean; mes
     elapsed: 0,
   };
 
-  return { success: true };
+  return finishSuccess();
 }
 
 function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watch-node' }>) {
-  const result = performWatchFocus(event.targetNodeId ?? event.nodeId ?? null);
+  const result = performWatchFocus(event.targetNodeId ?? event.nodeId ?? null, event.caging);
   if (!result.success) {
     resolveBehaviorToken(event.token, { type: 'fail', message: result.message });
     return;
@@ -2317,11 +2337,13 @@ function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watc
 function showPurposeControls(targetNodeId: string | null, sourceNodeId: string | null): void {
   purposeSourceNodeId.value = sourceNodeId ?? null;
   purposeTargetNodeId.value = targetNodeId ?? sourceNodeId ?? null;
+  purposeActionMode.value = 'watch';
   purposeControlsVisible.value = true;
 }
 
 function hidePurposeControls(): void {
   purposeControlsVisible.value = false;
+  purposeActionMode.value = 'watch';
 }
 
 function handleShowPurposeControlsEvent(
@@ -2340,17 +2362,21 @@ function handlePurposeWatchTap(): void {
     uni.showToast({ title: '缺少观察目标', icon: 'none' });
     return;
   }
-  const result = performWatchFocus(targetNodeId);
+  const result = performWatchFocus(targetNodeId, true);
   if (!result.success) {
     uni.showToast({ title: result.message || '无法定位观察目标', icon: 'none' });
+    return;
   }
+  purposeActionMode.value = 'reset';
 }
 
 function handlePurposeResetTap(): void {
   const result = resetCameraToLevelView();
   if (!result.success) {
     uni.showToast({ title: result.message || '相机不可用', icon: 'none' });
+    return;
   }
+  purposeActionMode.value = 'watch';
 }
 
 function resetCameraToLevelView(): { success: boolean; message?: string } {
@@ -2360,6 +2386,7 @@ function resetCameraToLevelView(): { success: boolean; message?: string } {
   }
   const { camera, controls } = context;
   activeCameraWatchTween = null;
+  setCameraCaging(false);
   camera.position.y = HUMAN_EYE_HEIGHT;
   const startTarget = controls.target.clone();
   const levelTarget = startTarget.clone();
@@ -2371,6 +2398,7 @@ function resetCameraToLevelView(): { success: boolean; message?: string } {
       controls.update();
     });
     lockControlsPitchToCurrent(controls, camera);
+    purposeActionMode.value = 'watch';
     return { success: true };
   }
   const startPosition = camera.position.clone();
@@ -2382,6 +2410,7 @@ function resetCameraToLevelView(): { success: boolean; message?: string } {
     duration: CAMERA_LEVEL_DURATION,
     elapsed: 0,
   };
+  purposeActionMode.value = 'watch';
   return { success: true };
 }
 
@@ -3313,6 +3342,9 @@ function translateCamera(forwardDelta: number, rightDelta: number): void {
   if (!renderContext) {
     return;
   }
+  if (isCameraCaged.value) {
+    return;
+  }
   const { camera, controls } = renderContext;
   activeCameraWatchTween = null;
   tempForwardVec.copy(controls.target).sub(camera.position);
@@ -3367,6 +3399,9 @@ function handleWheelEvent(event: WheelEvent): void {
     return;
   }
   event.preventDefault?.();
+  if (isCameraCaged.value) {
+    return;
+  }
   const deltaY = event.deltaY || 0;
   if (!deltaY) {
     return;
@@ -3399,6 +3434,7 @@ function teardownRenderer() {
     resetLanternOverlay();
   }
   hidePurposeControls();
+  setCameraCaging(false);
   previewComponentManager.reset();
   resetBehaviorRuntime();
   resetBehaviorProximity();
@@ -3476,6 +3512,7 @@ async function ensureRendererContext(result: UseCanvasResult) {
   controls.maxPolarAngle = CAMERA_HORIZONTAL_POLAR_ANGLE;
   controls.minDistance = CAMERA_FORWARD_OFFSET;
   controls.maxDistance = CAMERA_FORWARD_OFFSET;
+  controls.enabled = !isCameraCaged.value;
 
   controls.addEventListener('start', () => {
     activeCameraWatchTween = null;
