@@ -135,6 +135,66 @@ let stats: Stats | null = null
 let statsPanelIndex = 0
 let statsPointerHandler: ((event: MouseEvent) => void) | null = null
 
+// Dynamic render quality controls
+let normalPixelRatio = Math.min(2, (typeof window !== 'undefined' ? window.devicePixelRatio : 1) || 1)
+const INTERACTION_PIXEL_RATIO = Math.max(0.5, Math.min(1, normalPixelRatio * 0.6))
+const INTERACTION_RESTORE_DELAY_MS = 180
+let interactionRestoreTimer: number | null = null
+let isInteractiveQuality = false
+let savedShadowEnabled: boolean | null = null
+
+function applyInteractiveQuality(enabled: boolean) {
+  if (!renderer) return
+  if (enabled === isInteractiveQuality) return
+  isInteractiveQuality = enabled
+  if (enabled) {
+    // Lower resolution and disable expensive features during interaction
+    try {
+      normalPixelRatio = Math.min(2, (typeof window !== 'undefined' ? window.devicePixelRatio : 1) || normalPixelRatio)
+      renderer.setPixelRatio(INTERACTION_PIXEL_RATIO)
+    } catch {}
+    if (savedShadowEnabled === null) {
+      savedShadowEnabled = renderer.shadowMap.enabled
+    }
+    renderer.shadowMap.enabled = false
+    if (fallbackDirectionalLight) {
+      fallbackDirectionalLight.castShadow = false
+    }
+  } else {
+    // Restore normal quality
+    try {
+      renderer.setPixelRatio(normalPixelRatio)
+    } catch {}
+    if (savedShadowEnabled !== null) {
+      renderer.shadowMap.enabled = savedShadowEnabled
+    } else {
+      applyRendererShadowSetting()
+    }
+    if (fallbackDirectionalLight) {
+      fallbackDirectionalLight.castShadow = Boolean(shadowsEnabled.value)
+    }
+    savedShadowEnabled = null
+  }
+}
+
+function beginInteractiveQuality() {
+  if (interactionRestoreTimer !== null) {
+    window.clearTimeout(interactionRestoreTimer)
+    interactionRestoreTimer = null
+  }
+  applyInteractiveQuality(true)
+}
+
+function scheduleEndInteractiveQuality() {
+  if (interactionRestoreTimer !== null) {
+    window.clearTimeout(interactionRestoreTimer)
+  }
+  interactionRestoreTimer = window.setTimeout(() => {
+    interactionRestoreTimer = null
+    applyInteractiveQuality(false)
+  }, INTERACTION_RESTORE_DELAY_MS)
+}
+
 let environmentAmbientLight: THREE.AmbientLight | null = null
 let backgroundTexture: THREE.Texture | null = null
 let backgroundAssetId: string | null = null
@@ -1584,6 +1644,8 @@ const draggingChangedHandler = (event: unknown) => {
   }
 
   if (!value) {
+    // Dragging ends
+    scheduleEndInteractiveQuality()
     if (transformControlsDirty) {
       commitTransformControlUpdates()
     }
@@ -1597,6 +1659,8 @@ const draggingChangedHandler = (event: unknown) => {
       refreshPlaceholderOverlays()
     }
   } else {
+    // Dragging begins
+    beginInteractiveQuality()
     transformControlsDirty = false
     const nodeId = (transformControls?.object as THREE.Object3D | null)?.userData?.nodeId as string | undefined
     sceneStore.beginTransformInteraction(nodeId ?? null)
@@ -2685,6 +2749,13 @@ function applyCameraControlMode(mode: CameraControlMode) {
 
   if (previousControls) {
     previousControls.removeEventListener('change', handleControlsChange)
+    // Remove interaction listeners if previously attached
+    // @ts-ignore - shared event names across controls
+    previousControls.removeEventListener('start', beginInteractiveQuality)
+    // @ts-ignore
+    previousControls.removeEventListener('end', scheduleEndInteractiveQuality)
+    // @ts-ignore
+    previousControls.removeEventListener('change', scheduleEndInteractiveQuality)
     previousControls.dispose()
   }
 
@@ -2714,6 +2785,13 @@ function applyCameraControlMode(mode: CameraControlMode) {
   }
   orbitControls.enabled = previousEnabled
   orbitControls.addEventListener('change', handleControlsChange)
+  // Track user interaction to lower render cost while moving the camera
+  // @ts-ignore - both OrbitControls and MapControls emit these events
+  orbitControls.addEventListener('start', beginInteractiveQuality)
+  // @ts-ignore
+  orbitControls.addEventListener('end', scheduleEndInteractiveQuality)
+  // @ts-ignore
+  orbitControls.addEventListener('change', scheduleEndInteractiveQuality)
   bindControlsToCamera(camera)
   if (gizmoControls && orbitControls) {
     gizmoControls.attachControls(orbitControls as OrbitControls)
@@ -2807,9 +2885,12 @@ function initScene() {
     canvas: canvasRef.value,
     antialias: true,
     powerPreference: 'high-performance',
-    preserveDrawingBuffer: true,
+    // Preserve buffer is expensive; keep it off for higher FPS and render before capture when needed
+    preserveDrawingBuffer: false,
   })
-  renderer.setPixelRatio(window.devicePixelRatio)
+  // Cap pixel ratio to avoid extreme fill-rate on HiDPI displays
+  normalPixelRatio = Math.min(2, window.devicePixelRatio || 1)
+  renderer.setPixelRatio(normalPixelRatio)
   renderer.setSize(width, height)
   renderer.shadowMap.enabled = Boolean(shadowsEnabled.value)
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
@@ -3514,6 +3595,13 @@ function disposeScene() {
 
   resizeObserver?.disconnect()
   resizeObserver = null
+
+  // Clear any pending interactive quality timer and restore quality
+  if (interactionRestoreTimer !== null) {
+    window.clearTimeout(interactionRestoreTimer)
+    interactionRestoreTimer = null
+  }
+  applyInteractiveQuality(false)
 
   if (canvasRef.value) {
     canvasRef.value.removeEventListener('pointerdown', handlePointerDown, { capture: true })
