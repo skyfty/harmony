@@ -136,12 +136,27 @@ let statsPanelIndex = 0
 let statsPointerHandler: ((event: MouseEvent) => void) | null = null
 
 // Dynamic render quality controls
-let normalPixelRatio = Math.min(2, (typeof window !== 'undefined' ? window.devicePixelRatio : 1) || 1)
-const INTERACTION_PIXEL_RATIO = Math.max(0.5, Math.min(1, normalPixelRatio * 0.6))
+const MIN_BASE_PIXEL_RATIO = 0.65
+const MAX_BASE_PIXEL_RATIO = 1.25
+const MIN_INTERACTIVE_PIXEL_RATIO = 0.35
+const PERFORMANCE_SAMPLE_WINDOW = 45
+const TRIANGLE_SEVERITY_THRESHOLDS = [400_000, 900_000, 1_600_000, 2_500_000]
+const TEXTURE_SEVERITY_THRESHOLDS = [80, 140, 220, 320]
+const devicePixelRatio = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+const preferredBasePixelRatio = clampToRange(devicePixelRatio, MIN_BASE_PIXEL_RATIO, MAX_BASE_PIXEL_RATIO)
+let normalPixelRatio = preferredBasePixelRatio
+let targetInteractivePixelRatio = Math.min(
+  preferredBasePixelRatio,
+  Math.max(MIN_INTERACTIVE_PIXEL_RATIO, preferredBasePixelRatio * 0.7),
+)
 const INTERACTION_RESTORE_DELAY_MS = 180
 let interactionRestoreTimer: number | null = null
 let isInteractiveQuality = false
 let savedShadowEnabled: boolean | null = null
+const frameTimeSamples: number[] = []
+let frameTimeSampleSum = 0
+let lastFrameTimestamp: number | null = null
+let currentQualitySeverity = 0
 
 function applyInteractiveQuality(enabled: boolean) {
   if (!renderer) return
@@ -150,8 +165,7 @@ function applyInteractiveQuality(enabled: boolean) {
   if (enabled) {
     // Lower resolution and disable expensive features during interaction
     try {
-      normalPixelRatio = Math.min(2, (typeof window !== 'undefined' ? window.devicePixelRatio : 1) || normalPixelRatio)
-      renderer.setPixelRatio(INTERACTION_PIXEL_RATIO)
+      renderer.setPixelRatio(targetInteractivePixelRatio)
     } catch {}
     if (savedShadowEnabled === null) {
       savedShadowEnabled = renderer.shadowMap.enabled
@@ -193,6 +207,176 @@ function scheduleEndInteractiveQuality() {
     interactionRestoreTimer = null
     applyInteractiveQuality(false)
   }, INTERACTION_RESTORE_DELAY_MS)
+}
+
+function clampBasePixelRatio(value: number): number {
+  return clampToRange(value, MIN_BASE_PIXEL_RATIO, preferredBasePixelRatio)
+}
+
+function clampInteractivePixelRatioValue(value: number, baseLimit = normalPixelRatio): number {
+  const effectiveMax = Math.min(baseLimit, preferredBasePixelRatio)
+  return clampToRange(value, MIN_INTERACTIVE_PIXEL_RATIO, effectiveMax)
+}
+
+function setBasePixelRatio(target: number) {
+  const clamped = clampBasePixelRatio(target)
+  if (Math.abs(clamped - normalPixelRatio) <= 0.01) {
+    return
+  }
+  normalPixelRatio = clamped
+  if (!isInteractiveQuality && renderer) {
+    try {
+      renderer.setPixelRatio(normalPixelRatio)
+    } catch {}
+  }
+}
+
+function setInteractivePixelRatio(target: number) {
+  const clamped = clampInteractivePixelRatioValue(target, normalPixelRatio)
+  if (Math.abs(clamped - targetInteractivePixelRatio) <= 0.01) {
+    return
+  }
+  targetInteractivePixelRatio = clamped
+  if (isInteractiveQuality && renderer) {
+    try {
+      renderer.setPixelRatio(targetInteractivePixelRatio)
+    } catch {}
+  }
+}
+
+function resetPerformanceTracking() {
+  frameTimeSamples.length = 0
+  frameTimeSampleSum = 0
+  lastFrameTimestamp = null
+}
+
+function getBasePixelRatioForSeverity(severity: number): number {
+  const capped = Math.min(Math.max(severity, 0), 4)
+  switch (capped) {
+    case 0:
+      return preferredBasePixelRatio
+    case 1:
+      return Math.min(preferredBasePixelRatio, 1)
+    case 2:
+      return Math.min(preferredBasePixelRatio, 0.85)
+    case 3:
+      return Math.min(preferredBasePixelRatio, 0.75)
+    default:
+      return Math.max(MIN_BASE_PIXEL_RATIO, Math.min(preferredBasePixelRatio, 0.65))
+  }
+}
+
+function getInteractivePixelRatioForSeverity(severity: number, baseTarget: number): number {
+  const capped = Math.min(Math.max(severity, 0), 4)
+  let target: number
+  switch (capped) {
+    case 0:
+      target = baseTarget * 0.75
+      break
+    case 1:
+      target = baseTarget * 0.6
+      break
+    case 2:
+      target = Math.min(baseTarget * 0.5, 0.5)
+      break
+    case 3:
+      target = Math.min(baseTarget * 0.45, 0.42)
+      break
+    default:
+      target = Math.min(baseTarget * 0.4, 0.35)
+      break
+  }
+  return clampInteractivePixelRatioValue(target, baseTarget)
+}
+
+function resetDynamicQualityState() {
+  currentQualitySeverity = 0
+  resetPerformanceTracking()
+  const baseTarget = getBasePixelRatioForSeverity(0)
+  setBasePixelRatio(baseTarget)
+  setInteractivePixelRatio(getInteractivePixelRatioForSeverity(0, baseTarget))
+}
+
+function computeSeverityFromThresholds(value: number, thresholds: number[]): number {
+  let severity = 0
+  for (let index = 0; index < thresholds.length; index += 1) {
+    if (value >= thresholds[index]!) {
+      severity = index + 1
+    } else {
+      break
+    }
+  }
+  return severity
+}
+
+function computeFpsSeverity(fps: number): number {
+  if (!Number.isFinite(fps) || fps <= 0) {
+    return 0
+  }
+  if (fps < 18) {
+    return 4
+  }
+  if (fps < 26) {
+    return 3
+  }
+  if (fps < 36) {
+    return 2
+  }
+  if (fps < 48) {
+    return 1
+  }
+  return 0
+}
+
+function recordFrameTiming(timestamp?: number): number | null {
+  const nowValue = typeof timestamp === 'number'
+    ? timestamp
+    : (typeof performance !== 'undefined' ? performance.now() : Date.now())
+  if (!Number.isFinite(nowValue)) {
+    return null
+  }
+  if (lastFrameTimestamp === null) {
+    lastFrameTimestamp = nowValue
+    return null
+  }
+  const delta = nowValue - lastFrameTimestamp
+  lastFrameTimestamp = nowValue
+  if (delta <= 0) {
+    return null
+  }
+  frameTimeSamples.push(delta)
+  frameTimeSampleSum += delta
+  if (frameTimeSamples.length > PERFORMANCE_SAMPLE_WINDOW) {
+    frameTimeSampleSum -= frameTimeSamples.shift() ?? 0
+  }
+  if (frameTimeSamples.length < PERFORMANCE_SAMPLE_WINDOW) {
+    return null
+  }
+  const averageDelta = frameTimeSampleSum / frameTimeSamples.length
+  if (!Number.isFinite(averageDelta) || averageDelta <= 0) {
+    return null
+  }
+  return 1000 / averageDelta
+}
+
+function updatePerformanceQualityTargets(fps: number | null) {
+  if (!renderer) {
+    return
+  }
+  const triangleCount = renderer.info.render?.triangles ?? 0
+  const textureCount = renderer.info.memory?.textures ?? 0
+  const triangleSeverity = computeSeverityFromThresholds(triangleCount, TRIANGLE_SEVERITY_THRESHOLDS)
+  const textureSeverity = computeSeverityFromThresholds(textureCount, TEXTURE_SEVERITY_THRESHOLDS)
+  const fpsSeverity = fps !== null ? computeFpsSeverity(fps) : 0
+  const severity = Math.max(triangleSeverity, textureSeverity, fpsSeverity)
+  if (severity === currentQualitySeverity) {
+    return
+  }
+  currentQualitySeverity = severity
+  const baseTarget = getBasePixelRatioForSeverity(severity)
+  const interactiveTarget = getInteractivePixelRatioForSeverity(severity, baseTarget)
+  setBasePixelRatio(baseTarget)
+  setInteractivePixelRatio(interactiveTarget)
 }
 
 let environmentAmbientLight: THREE.AmbientLight | null = null
@@ -336,7 +520,6 @@ const CAMERA_DISTANCE_EPSILON = 1e-3
 const ORTHO_FRUSTUM_SIZE = 20
 const DROP_TO_GROUND_EPSILON = 1e-4
 const ALIGN_DELTA_EPSILON = 1e-6
-const CAMERA_RECENTER_DURATION_MS = 320
 const RIGHT_CLICK_ROTATION_STEP = THREE.MathUtils.degToRad(15)
 const GROUND_HEIGHT_STEP = 0.5
 
@@ -1438,110 +1621,6 @@ function easeInOutCubic(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
 }
 
-function startCameraTransition(targetPosition: THREE.Vector3, targetLookAt: THREE.Vector3, duration = CAMERA_RECENTER_DURATION_MS) {
-  if (!camera || !orbitControls) {
-    return
-  }
-
-  const startPosition = camera.position.clone()
-  const startTarget = orbitControls.target.clone()
-  const endPosition = targetPosition.clone()
-  const endTarget = targetLookAt.clone()
-  const positionDeltaSq = startPosition.distanceToSquared(endPosition)
-  const targetDeltaSq = startTarget.distanceToSquared(endTarget)
-  const effectiveDuration = duration <= 0 ? 0 : Math.max(duration, 0)
-
-  if (positionDeltaSq < 1e-6 && targetDeltaSq < 1e-6) {
-    cameraTransitionState = null
-    const previousApplying = isApplyingCameraState
-    if (!previousApplying) {
-      isApplyingCameraState = true
-    }
-    camera.position.copy(endPosition)
-    orbitControls.target.copy(endTarget)
-    orbitControls.update()
-    if (!previousApplying) {
-      isApplyingCameraState = false
-    }
-
-    if (perspectiveCamera && camera !== perspectiveCamera) {
-      perspectiveCamera.position.copy(camera.position)
-      perspectiveCamera.quaternion.copy(camera.quaternion)
-    }
-
-    clampCameraZoom()
-    clampCameraAboveGround()
-
-    const snapshot = buildCameraState()
-    if (snapshot) {
-      emit('updateCamera', snapshot)
-    }
-    return
-  }
-
-  const transitionDuration = effectiveDuration === 0 ? CAMERA_RECENTER_DURATION_MS : effectiveDuration
-
-  cameraTransitionState = {
-    startPosition,
-    startTarget,
-    endPosition,
-    endTarget,
-    startTime: performance.now(),
-    duration: transitionDuration,
-  }
-}
-
-function recenterCameraOnPointer(event: MouseEvent) {
-  if (!camera || !orbitControls || !canvasRef.value) {
-    return
-  }
-
-  if (transformControls?.dragging) {
-    return
-  }
-
-  const rect = canvasRef.value.getBoundingClientRect()
-  if (rect.width === 0 || rect.height === 0) {
-    return
-  }
-
-  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
-  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
-  raycaster.setFromCamera(pointer, camera)
-
-  const clipBasedDistance = THREE.MathUtils.clamp((camera.near + camera.far) * 0.05, MIN_CAMERA_DISTANCE, MAX_CAMERA_DISTANCE)
-
-  const intersections = raycaster.intersectObjects(rootGroup.children, true)
-  let targetResolved = false
-  if (intersections.length > 0) {
-    const intersection = intersections[0]
-    if (intersection?.point) {
-      cameraFocusTargetHelper.copy(intersection.point)
-      targetResolved = true
-    }
-  }
-
-  if (!targetResolved) {
-    if (raycaster.ray.intersectPlane(groundPlane, cameraFocusTargetHelper)) {
-      targetResolved = true
-    } else {
-      cameraFocusTargetHelper.copy(raycaster.ray.origin).addScaledVector(raycaster.ray.direction, clipBasedDistance * 2)
-      targetResolved = true
-    }
-  }
-
-  cameraFocusDirectionHelper.copy(raycaster.ray.direction).normalize()
-  cameraFocusPositionHelper.copy(cameraFocusTargetHelper).addScaledVector(cameraFocusDirectionHelper, -clipBasedDistance)
-
-  if (cameraFocusPositionHelper.y < MIN_CAMERA_HEIGHT) {
-    cameraFocusPositionHelper.y = MIN_CAMERA_HEIGHT
-  }
-
-  cameraFocusTargetHelper.y = Math.max(cameraFocusTargetHelper.y, MIN_TARGET_HEIGHT)
-
-  startCameraTransition(cameraFocusPositionHelper, cameraFocusTargetHelper)
-}
-
 const overlayContainerRef = ref<HTMLDivElement | null>(null)
 const placeholderOverlays = reactive<Record<string, PlaceholderOverlayState>>({})
 const placeholderOverlayList = computed(() => Object.values(placeholderOverlays))
@@ -1579,9 +1658,6 @@ const alignLocalPositionHelper = new THREE.Vector3()
 const viewPointScaleHelper = new THREE.Vector3()
 const viewPointParentScaleHelper = new THREE.Vector3()
 const viewPointNodeScaleHelper = new THREE.Vector3()
-const cameraFocusTargetHelper = new THREE.Vector3()
-const cameraFocusDirectionHelper = new THREE.Vector3()
-const cameraFocusPositionHelper = new THREE.Vector3()
 const cameraTransitionCurrentPosition = new THREE.Vector3()
 const cameraTransitionCurrentTarget = new THREE.Vector3()
 
@@ -2876,6 +2952,7 @@ function initScene() {
     return
   }
 
+  resetDynamicQualityState()
   const width = viewportEl.value.clientWidth
   const height = viewportEl.value.clientHeight
 
@@ -2888,8 +2965,7 @@ function initScene() {
     // Preserve buffer is expensive; keep it off for higher FPS and render before capture when needed
     preserveDrawingBuffer: false,
   })
-  // Cap pixel ratio to avoid extreme fill-rate on HiDPI displays
-  normalPixelRatio = Math.min(2, window.devicePixelRatio || 1)
+  // Dynamic quality manager keeps pixel ratio capped for the current device
   renderer.setPixelRatio(normalPixelRatio)
   renderer.setSize(width, height)
   renderer.shadowMap.enabled = Boolean(shadowsEnabled.value)
@@ -3508,7 +3584,7 @@ function disposeSkyResources() {
   pmremGenerator = null
 }
 
-function animate() {
+function animate(timestamp?: number) {
   if (!renderer || !scene || !camera) {
     return
   }
@@ -3588,6 +3664,8 @@ function animate() {
   renderer.render(scene, camera)
   gizmoControls?.render()
   stats?.end()
+  const frameFps = recordFrameTiming(timestamp)
+  updatePerformanceQualityTargets(frameFps)
 }
 
 function disposeScene() {
@@ -3696,6 +3774,7 @@ function disposeScene() {
   wallPreviewNeedsSync = false
   wallPreviewSignature = null
   pendingSceneGraphSync = false
+  resetDynamicQualityState()
 }
 
 async function blobToDataUrl(blob: Blob): Promise<string> {
