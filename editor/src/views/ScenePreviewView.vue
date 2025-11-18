@@ -2795,13 +2795,14 @@ function disposeMaterialTextures(material: THREE.Material | null | undefined) {
 	}
 	const standard = material as THREE.MeshStandardMaterial &
 		Partial<Record<MeshStandardTextureKey, THREE.Texture | null>>
+	const materialRecord = standard as unknown as Record<string, unknown>
 	STANDARD_TEXTURE_KEYS.forEach((key) => {
 		const texture = standard[key]
 		if (texture && typeof texture.dispose === 'function') {
 			texture.dispose()
 		}
 		if (key in standard) {
-			;(standard as Record<string, unknown>)[key] = null
+			materialRecord[key] = null
 		}
 	})
 }

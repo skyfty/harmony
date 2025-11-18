@@ -110,6 +110,7 @@ let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera | null = null
 let orbitControls: OrbitControls | MapControls | null = null
 let gizmoControls: ViewportGizmo | null = null
 let transformControls: TransformControls | null = null
+let transformControlsDirty = false
 let resizeObserver: ResizeObserver | null = null
 let selectionBoxHelper: THREE.Box3Helper | null = null
 let selectionTrackedObject: THREE.Object3D | null = null
@@ -1083,9 +1084,106 @@ function updateSelectDragPosition(drag: SelectionDragState, event: PointerEvent)
   updateGridHighlightFromObject(drag.object)
   updateSelectionHighlights()
 
-  emit('updateNodeTransform', updates)
-
   return true
+}
+
+type VectorCoordinates = Pick<THREE.Vector3, 'x' | 'y' | 'z'>
+
+function cloneVectorCoordinates(vector: VectorCoordinates): THREE.Vector3 {
+  const safeX = Number.isFinite(vector.x) ? vector.x : 0
+  const safeY = Number.isFinite(vector.y) ? vector.y : 0
+  const safeZ = Number.isFinite(vector.z) ? vector.z : 0
+  return new THREE.Vector3(safeX, safeY, safeZ)
+}
+
+function emitTransformUpdates(updates: TransformUpdatePayload[]) {
+  if (!updates.length) {
+    return
+  }
+
+  const normalized = updates.map((update) => {
+    const entry: TransformUpdatePayload = { id: update.id }
+    if (update.position) {
+      entry.position = cloneVectorCoordinates(update.position as VectorCoordinates)
+    }
+    if (update.rotation) {
+      entry.rotation = cloneVectorCoordinates(update.rotation as VectorCoordinates)
+    }
+    if (update.scale) {
+      entry.scale = cloneVectorCoordinates(update.scale as VectorCoordinates)
+    }
+    return entry
+  })
+
+  emit('updateNodeTransform', normalized.length === 1 ? normalized[0]! : normalized)
+}
+
+function buildSelectionDragUpdates(drag: SelectionDragState): TransformUpdatePayload[] {
+  const updates: TransformUpdatePayload[] = [
+    {
+      id: drag.nodeId,
+      position: drag.object.position.clone(),
+      rotation: toEulerLike(drag.object.rotation),
+      scale: drag.object.scale.clone(),
+    },
+  ]
+
+  drag.companions.forEach((companion) => {
+    updates.push({
+      id: companion.nodeId,
+      position: companion.object.position.clone(),
+    })
+  })
+
+  return updates
+}
+
+function commitSelectionDragTransforms(drag: SelectionDragState) {
+  const updates = buildSelectionDragUpdates(drag)
+  emitTransformUpdates(updates)
+}
+
+function buildTransformControlUpdates(): TransformUpdatePayload[] {
+  const updates: TransformUpdatePayload[] = []
+  const target = transformControls?.object as THREE.Object3D | null
+  const nodeId = target?.userData?.nodeId as string | undefined
+  if (!target) {
+    return updates
+  }
+  if (!nodeId) {
+    return updates
+  }
+
+  const groupStateSnapshot = transformGroupState
+  if (groupStateSnapshot && groupStateSnapshot.entries.size > 0) {
+    groupStateSnapshot.entries.forEach((entry) => {
+      updates.push({
+        id: entry.nodeId,
+        position: entry.object.position.clone(),
+        rotation: toEulerLike(entry.object.rotation),
+        scale: entry.object.scale.clone(),
+      })
+    })
+    return updates
+  }
+
+  updates.push({
+    id: nodeId,
+    position: target.position.clone(),
+    rotation: toEulerLike(target.rotation),
+    scale: target.scale.clone(),
+  })
+
+  return updates
+}
+
+function commitTransformControlUpdates() {
+  const updates = buildTransformControlUpdates()
+  transformControlsDirty = false
+  if (!updates.length) {
+    return
+  }
+  emitTransformUpdates(updates)
 }
 
 function rotateActiveSelection(nodeId: string) {
@@ -1486,6 +1584,9 @@ const draggingChangedHandler = (event: unknown) => {
   }
 
   if (!value) {
+    if (transformControlsDirty) {
+      commitTransformControlUpdates()
+    }
     sceneStore.endTransformInteraction()
     transformGroupState = null
     updateGridHighlightFromObject(targetObject)
@@ -1496,6 +1597,7 @@ const draggingChangedHandler = (event: unknown) => {
       refreshPlaceholderOverlays()
     }
   } else {
+    transformControlsDirty = false
     const nodeId = (transformControls?.object as THREE.Object3D | null)?.userData?.nodeId as string | undefined
     sceneStore.beginTransformInteraction(nodeId ?? null)
     transformGroupState = buildTransformGroupState(nodeId ?? null)
@@ -4701,6 +4803,7 @@ function handlePointerUp(event: PointerEvent) {
     restoreOrbitAfterSelectDrag()
     updateGridHighlightFromObject(drag.object)
     if (drag.hasDragged) {
+      commitSelectionDragTransforms(drag)
       sceneStore.endTransformInteraction()
       updateSelectionHighlights()
       return
@@ -4790,12 +4893,13 @@ function handlePointerCancel(event: PointerEvent) {
   }
 
   if (pointerTrackingState.selectionDrag) {
+    const dragState = pointerTrackingState.selectionDrag
     restoreOrbitAfterSelectDrag()
-    updateGridHighlightFromObject(pointerTrackingState.selectionDrag.object)
-  }
-
-  if (pointerTrackingState.selectionDrag && pointerTrackingState.selectionDrag.hasDragged) {
-    sceneStore.endTransformInteraction()
+    updateGridHighlightFromObject(dragState.object)
+    if (dragState.hasDragged) {
+      commitSelectionDragTransforms(dragState)
+      sceneStore.endTransformInteraction()
+    }
   }
 
   updateSelectionHighlights()
@@ -5987,8 +6091,16 @@ function handleTransformChange() {
     return
   }
 
-  const payload = updates.length === 1 ? updates[0]! : updates
-  emit('updateNodeTransform', payload)
+  if (transformControls?.dragging) {
+    transformControlsDirty = true
+    return
+  }
+
+  if (transformControlsDirty) {
+    return
+  }
+
+  emitTransformUpdates(updates)
 
 }
 
