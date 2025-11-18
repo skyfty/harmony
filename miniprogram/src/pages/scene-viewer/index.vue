@@ -178,7 +178,7 @@ import type { StoredSceneEntry } from '@/stores/sceneStore';
 import { parseSceneDocument, useSceneStore } from '@/stores/sceneStore';
 import { buildSceneGraph, type SceneGraphBuildOptions, type SceneGraphResourceProgress } from '@schema/sceneGraph';
 import ResourceCache from '@schema/ResourceCache';
-import { AssetCache, AssetLoader } from '@schema/assetCache';
+import { AssetCache, AssetLoader, type AssetCacheEntry } from '@schema/assetCache';
 import { loadNodeObject } from '@schema/utils/modelAssetLoader';
 import type {
   EnvironmentSettings,
@@ -516,9 +516,12 @@ const purposeTargetNodeId = ref<string | null>(null);
 const purposeSourceNodeId = ref<string | null>(null);
 
 type LanternTextState = { text: string; loading: boolean; error: string | null };
+type LanternImageState = { url: string | null; loading: boolean; error: string | null };
 
 const lanternTextState = reactive<Record<string, LanternTextState>>({});
 const lanternTextPromises = new Map<string, Promise<void>>();
+const lanternImageState = reactive<Record<string, LanternImageState>>({});
+const lanternImagePromises = new Map<string, Promise<void>>();
 
 const activeBehaviorDelayTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const activeBehaviorAnimations = new Map<string, () => void>();
@@ -583,7 +586,6 @@ type CameraWatchTween = {
 let activeCameraWatchTween: CameraWatchTween | null = null;
 
 const assetObjectUrlCache = new Map<string, string>();
-const packageEntryCache = new Map<string, { provider: string; value: string } | null>();
 const DISPLAY_BOARD_RESOLVER_KEY = '__harmonyResolveDisplayBoardMedia';
 
 const lanternTotalSlides = computed(() => lanternSlides.value.length);
@@ -612,6 +614,17 @@ function getLanternTextState(assetId: string): LanternTextState {
   return lanternTextState[assetId];
 }
 
+function getLanternImageState(assetId: string): LanternImageState {
+  if (!lanternImageState[assetId]) {
+    lanternImageState[assetId] = reactive({
+      url: null,
+      loading: false,
+      error: null,
+    }) as LanternImageState;
+  }
+  return lanternImageState[assetId];
+}
+
 const lanternCurrentSlideTextState = computed(() => {
   const slide = lanternCurrentSlide.value;
   if (!slide || !slide.descriptionAssetId) {
@@ -622,8 +635,14 @@ const lanternCurrentSlideTextState = computed(() => {
 
 const lanternCurrentSlideImage = computed(() => {
   const slide = lanternCurrentSlide.value;
-  const assetId = slide?.imageAssetId ?? null;
-  return resolveLanternImageSource(assetId);
+  if (!slide?.imageAssetId) {
+    return null;
+  }
+  const assetId = slide.imageAssetId.trim();
+  if (!assetId.length) {
+    return null;
+  }
+  return lanternImageState[assetId]?.url ?? null;
 });
 
 const lanternCurrentSlideDescription = computed(() => {
@@ -820,25 +839,41 @@ watch(
   lanternSlides,
   (slidesList) => {
     const list = Array.isArray(slidesList) ? slidesList : [];
-    const activeAssets = new Set<string>();
-    list.forEach((slide) => {
-      const assetId = slide?.descriptionAssetId?.trim();
-      if (assetId) {
-        activeAssets.add(assetId);
-        void ensureLanternText(assetId);
+    const activeTextIds = new Set<string>();
+    const activeImageIds = new Set<string>();
+    for (const slide of list) {
+      const textAssetId = slide?.descriptionAssetId?.trim();
+      if (textAssetId) {
+        activeTextIds.add(textAssetId);
+        void ensureLanternText(textAssetId);
       }
-    });
+      const imageAssetId = slide?.imageAssetId?.trim();
+      if (imageAssetId) {
+        activeImageIds.add(imageAssetId);
+        void ensureLanternImage(imageAssetId);
+      }
+    }
     if (lanternActiveSlideIndex.value >= list.length) {
       lanternActiveSlideIndex.value = list.length ? list.length - 1 : 0;
     }
     Object.keys(lanternTextState).forEach((key) => {
-      if (!activeAssets.has(key)) {
+      if (!activeTextIds.has(key)) {
         delete lanternTextState[key];
       }
     });
+    Object.keys(lanternImageState).forEach((key) => {
+      if (!activeImageIds.has(key)) {
+        delete lanternImageState[key];
+      }
+    });
     Array.from(lanternTextPromises.keys()).forEach((key) => {
-      if (!activeAssets.has(key)) {
+      if (!activeTextIds.has(key)) {
         lanternTextPromises.delete(key);
+      }
+    });
+    Array.from(lanternImagePromises.keys()).forEach((key) => {
+      if (!activeImageIds.has(key)) {
+        lanternImagePromises.delete(key);
       }
     });
   },
@@ -851,6 +886,10 @@ watch(
     const assetId = slide?.descriptionAssetId?.trim();
     if (assetId) {
       void ensureLanternText(assetId);
+    }
+    const imageAssetId = slide?.imageAssetId?.trim();
+    if (imageAssetId) {
+      void ensureLanternImage(imageAssetId);
     }
     resetLanternImageMetrics();
   },
@@ -905,51 +944,35 @@ async function ensureLanternText(assetId: string): Promise<void> {
   await promise;
 }
 
-function base64ToArrayBuffer(value: string): ArrayBuffer | null {
-  try {
-    const clean = value.replace(/^data:[^,]+,/, '').replace(/\s/g, '');
-    if (typeof atob === 'function') {
-      const binary = atob(clean);
-      const length = binary.length;
-      const buffer = new Uint8Array(length);
-      for (let index = 0; index < length; index += 1) {
-        buffer[index] = binary.charCodeAt(index);
-      }
-      return buffer.buffer;
-    }
-    const nodeBuffer = (globalThis as any)?.Buffer;
-    if (nodeBuffer && typeof nodeBuffer.from === 'function') {
-      return nodeBuffer.from(clean, 'base64').buffer;
-    }
-  } catch (error) {
-    console.warn('base64 解析失败', error);
+async function ensureLanternImage(assetId: string): Promise<void> {
+  const trimmed = assetId.trim();
+  if (!trimmed.length) {
+    return;
   }
-  return null;
-}
-
-function decodeDataUrlText(dataUrl: string): string | null {
-  try {
-    const commaIndex = dataUrl.indexOf(',');
-    if (commaIndex === -1) {
-      return null;
-    }
-    const payload = dataUrl.slice(commaIndex + 1);
-    if (typeof atob === 'function') {
-      const binary = atob(payload);
-      const bytes = new Uint8Array(binary.length);
-      for (let index = 0; index < binary.length; index += 1) {
-        bytes[index] = binary.charCodeAt(index);
-      }
-      return new TextDecoder().decode(bytes);
-    }
-    const nodeBuffer = (globalThis as any)?.Buffer;
-    if (nodeBuffer && typeof nodeBuffer.from === 'function') {
-      return nodeBuffer.from(payload, 'base64').toString('utf-8');
-    }
-  } catch (error) {
-    console.warn('解码 dataUrl 失败', error);
+  if (lanternImagePromises.has(trimmed)) {
+    await lanternImagePromises.get(trimmed);
+    return;
   }
-  return null;
+  const promise = (async () => {
+    const state = getLanternImageState(trimmed);
+    state.loading = true;
+    state.error = null;
+    try {
+      const resolved = await resolveAssetUrlFromCache(trimmed);
+      if (!resolved) {
+        throw new Error('无法解析图片资源');
+      }
+      state.url = resolved;
+    } catch (error) {
+      state.error = (error as Error).message ?? '图片资源加载失败';
+      state.url = null;
+    } finally {
+      state.loading = false;
+      lanternImagePromises.delete(trimmed);
+    }
+  })();
+  lanternImagePromises.set(trimmed, promise);
+  await promise;
 }
 
 async function fetchTextFromUrl(url: string): Promise<string> {
@@ -980,254 +1003,63 @@ async function fetchTextFromUrl(url: string): Promise<string> {
   });
 }
 
-function getPackageEntry(assetId: string, packageMap: Record<string, string>): { provider: string; value: string } | null {
-  if (packageEntryCache.has(assetId)) {
-    return packageEntryCache.get(assetId) ?? null;
-  }
-  let found: { provider: string; value: string } | null = null;
-  for (const [key, rawValue] of Object.entries(packageMap)) {
-    if (typeof rawValue !== 'string') {
-      continue;
-    }
-    const separator = key.indexOf('::');
-    if (separator === -1) {
-      continue;
-    }
-    const provider = key.slice(0, separator);
-    const id = key.slice(separator + 2);
-    if (id === assetId) {
-      found = { provider, value: rawValue };
-      break;
-    }
-  }
-  packageEntryCache.set(assetId, found);
-  return found;
+const EXTERNAL_ASSET_PATTERN = /^(https?:)?\/\//i;
+
+function isExternalAssetReference(value: string): boolean {
+  return EXTERNAL_ASSET_PATTERN.test(value);
 }
 
-function resolvePackageEntryLike(assetId: string, provider: string, rawValue: string): AssetSourceResolution | null {
-  const value = (rawValue ?? '').trim();
-  if (!value.length) {
-    return null;
-  }
-  if (value.startsWith('data:')) {
-    return { kind: 'data-url', dataUrl: value };
-  }
-  if (/^(https?:)?\/\//i.test(value)) {
-    return { kind: 'remote-url', url: value };
-  }
-  if (provider === 'local') {
-    const buffer = base64ToArrayBuffer(value);
-    if (buffer) {
-      return { kind: 'raw', data: buffer };
-    }
-  }
-  return { kind: 'inline-text', text: value };
-}
-
-function resolveAssetSourceFromIndex(assetId: string, packageMap: Record<string, string>): AssetSourceResolution | null {
-  if (!currentDocument?.assetIndex) {
-    return null;
-  }
-  const entry = (currentDocument.assetIndex as Record<string, any>)[assetId];
-  if (!entry || typeof entry !== 'object') {
-    return null;
-  }
-  const inline = typeof entry.inline === 'string' ? entry.inline.trim() : '';
-  if (inline) {
-    if (inline.startsWith('data:')) {
-      return { kind: 'data-url', dataUrl: inline };
-    }
-    if (/^(https?:)?\/\//i.test(inline)) {
-      return { kind: 'remote-url', url: inline };
-    }
-    return { kind: 'inline-text', text: inline };
-  }
-  const url = typeof entry.url === 'string' ? entry.url.trim() : '';
-  if (url) {
-    return { kind: 'remote-url', url };
-  }
-  const source = entry.source;
-  if (source && typeof source === 'object') {
-    const sourceInline = typeof source.inline === 'string' ? source.inline.trim() : '';
-    if (sourceInline) {
-      if (sourceInline.startsWith('data:')) {
-        return { kind: 'data-url', dataUrl: sourceInline };
-      }
-      if (/^(https?:)?\/\//i.test(sourceInline)) {
-        return { kind: 'remote-url', url: sourceInline };
-      }
-      return { kind: 'inline-text', text: sourceInline };
-    }
-    const sourceUrl = typeof source.url === 'string' ? source.url.trim() : '';
-    if (sourceUrl) {
-      return { kind: 'remote-url', url: sourceUrl };
-    }
-    const providerId = typeof source.providerId === 'string' ? source.providerId.trim() : '';
-    const originalAssetId = typeof source.originalAssetId === 'string' ? source.originalAssetId.trim() : assetId;
-    const mapped = providerId ? packageMap[`${providerId}::${originalAssetId}`] : undefined;
-    if (mapped && typeof mapped === 'string') {
-      const resolved = resolvePackageEntryLike(originalAssetId, providerId, mapped);
-      if (resolved) {
-        return resolved;
-      }
-    }
-  }
-  return null;
-}
-
-function resolveAssetSource(assetId: string): AssetSourceResolution | null {
+async function acquireViewerAssetEntry(assetId: string): Promise<AssetCacheEntry | null> {
   const trimmed = assetId.trim();
   if (!trimmed.length) {
     return null;
   }
-  if (/^(https?:)?\/\//i.test(trimmed)) {
-    return { kind: 'remote-url', url: trimmed };
-  }
-  if (trimmed.startsWith('data:')) {
-    return { kind: 'data-url', dataUrl: trimmed };
-  }
-  const overrides = previewPayload.value?.assetOverrides;
-  const overrideValue = overrides?.[trimmed];
-  if (overrideValue != null) {
-    if (typeof overrideValue === 'string') {
-      if (overrideValue.startsWith('data:')) {
-        return { kind: 'data-url', dataUrl: overrideValue };
-      }
-      if (/^(https?:)?\/\//i.test(overrideValue)) {
-        return { kind: 'remote-url', url: overrideValue };
-      }
-      const buffer = base64ToArrayBuffer(overrideValue);
-      if (buffer) {
-        return { kind: 'raw', data: buffer };
-      }
-      return { kind: 'inline-text', text: overrideValue };
-    }
-    if (overrideValue instanceof ArrayBuffer) {
-      return { kind: 'raw', data: overrideValue };
-    }
-  }
-  if (!currentDocument) {
+  const cache = viewerResourceCache ?? sharedResourceCache;
+  if (!cache) {
     return null;
   }
-  const packageMap = currentDocument.packageAssetMap ?? {};
-  const direct = packageMap[trimmed];
-  if (typeof direct === 'string' && direct.trim().length) {
-    const resolved = resolvePackageEntryLike(trimmed, 'local', direct);
-    if (resolved) {
-      return resolved;
-    }
+  try {
+    return await cache.acquireAssetEntry(trimmed);
+  } catch (error) {
+    console.warn('[SceneViewer] Failed to acquire asset entry', trimmed, error);
+    return null;
   }
-  const embedded = packageMap[`local::${trimmed}`];
-  if (typeof embedded === 'string' && embedded.trim().length) {
-    const resolved = resolvePackageEntryLike(trimmed, 'local', embedded);
-    if (resolved) {
-      return resolved;
-    }
-  }
-  const packageEntry = getPackageEntry(trimmed, packageMap);
-  if (packageEntry) {
-    const resolved = resolvePackageEntryLike(trimmed, packageEntry.provider, packageEntry.value);
-    if (resolved) {
-      return resolved;
-    }
-  }
-  const indexResolved = resolveAssetSourceFromIndex(trimmed, packageMap);
-  if (indexResolved) {
-    return indexResolved;
-  }
-  const resolveAssetUrl = previewPayload.value?.resolveAssetUrl;
-  if (typeof resolveAssetUrl === 'function') {
-    try {
-      const maybe = resolveAssetUrl(trimmed);
-      if (typeof maybe === 'string' && maybe.trim().length) {
-        const normalized = maybe.trim();
-        if (normalized.startsWith('data:')) {
-          return { kind: 'data-url', dataUrl: normalized };
-        }
-        return { kind: 'remote-url', url: normalized };
-      }
-    } catch (error) {
-      console.warn('resolveAssetUrl 调用失败', error);
-    }
-  }
-  return null;
 }
 
-function inferMimeTypeFromAssetId(assetId: string): string | null {
-  const lower = assetId.toLowerCase();
-  if (lower.endsWith('.png')) return 'image/png';
-  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
-  if (lower.endsWith('.webp')) return 'image/webp';
-  if (lower.endsWith('.gif')) return 'image/gif';
-  if (lower.endsWith('.svg')) return 'image/svg+xml';
-  if (lower.endsWith('.txt')) return 'text/plain';
-  if (lower.endsWith('.json')) return 'application/json';
-  return null;
+function buildResolvedAssetUrl(entry: AssetCacheEntry | null): string | null {
+  return entry? entry.downloadUrl:null;
 }
 
-function getOrCreateObjectUrl(assetId: string, data: ArrayBuffer, mimeHint?: string): string {
-  const cached = assetObjectUrlCache.get(assetId);
-  if (cached) {
-    return cached;
-  }
-  const mimeType = mimeHint ?? inferMimeTypeFromAssetId(assetId) ?? 'application/octet-stream';
-  const blob = new Blob([data], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  assetObjectUrlCache.set(assetId, url);
-  return url;
+async function resolveAssetUrlFromCache(assetId: string): Promise<string | null> {
+  const entry = await acquireViewerAssetEntry(assetId);
+  return buildResolvedAssetUrl(entry);
 }
 
-function inferMimeTypeFromUrl(url: string): string | null {
-  const cleaned = url.split('?')[0]?.split('#')[0] ?? url;
-  return inferMimeTypeFromAssetId(cleaned);
-}
-
-function resolveInlineTextUrl(text: string, assetId: string): { url: string; mimeType: string | null; dispose: () => void } {
-  const mimeType = inferMimeTypeFromAssetId(assetId) ?? 'text/plain';
-  const blob = new Blob([text], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  return {
-    url,
-    mimeType,
-    dispose: () => {
-      URL.revokeObjectURL(url);
-    },
-  };
-}
-
-async function resolveDisplayBoardMediaSource(candidate: string): Promise<{ url: string; mimeType?: string | null; dispose?: () => void } | null> {
+async function resolveAssetUrlReference(candidate: string): Promise<string | null> {
   const trimmed = candidate.trim();
   if (!trimmed.length) {
     return null;
+  }
+  if (trimmed.startsWith('data:') || isExternalAssetReference(trimmed)) {
+    return trimmed;
+  }
+  const assetId = trimmed.startsWith('asset://') ? trimmed.slice('asset://'.length) : trimmed;
+  return await resolveAssetUrlFromCache(assetId);
+}
+
+async function resolveDisplayBoardMediaSource(candidate: string): Promise<string | null> {
+  const trimmed = candidate.trim();
+  if (!trimmed.length) {
+    return null;
+  }
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:')) {
+    return trimmed;
   }
   const assetId = trimmed.startsWith('asset://') ? trimmed.slice('asset://'.length) : trimmed;
   if (!assetId.length) {
     return null;
   }
-  const source = resolveAssetSource(assetId);
-  if (!source) {
-    if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:')) {
-      return { url: trimmed, mimeType: inferMimeTypeFromUrl(trimmed) };
-    }
-    return null;
-  }
-  switch (source.kind) {
-    case 'remote-url':
-      return { url: source.url, mimeType: inferMimeTypeFromUrl(source.url) };
-    case 'data-url':
-      return { url: source.dataUrl, mimeType: inferMimeTypeFromUrl(source.dataUrl) };
-    case 'inline-text': {
-      const result = resolveInlineTextUrl(source.text, assetId);
-      return result;
-    }
-    case 'raw': {
-      const mimeType = inferMimeTypeFromAssetId(assetId);
-      const url = getOrCreateObjectUrl(assetId, source.data, mimeType ?? undefined);
-      return { url, mimeType };
-    }
-    default:
-      return null;
-  }
+  return await resolveAssetUrlFromCache(assetId);
 }
 
 (globalThis as typeof globalThis & { [DISPLAY_BOARD_RESOLVER_KEY]?: typeof resolveDisplayBoardMediaSource })[
@@ -1247,7 +1079,6 @@ function clearAssetObjectUrlCache(): void {
 
 function resetAssetResolutionCaches(): void {
   clearAssetObjectUrlCache();
-  packageEntryCache.clear();
 }
 
 async function loadTextAssetContent(assetId: string): Promise<string | null> {
@@ -1255,47 +1086,35 @@ async function loadTextAssetContent(assetId: string): Promise<string | null> {
   if (!trimmed.length) {
     return null;
   }
-  const source = resolveAssetSource(trimmed);
-  if (!source) {
+  if (isExternalAssetReference(trimmed)) {
+    return await fetchTextFromUrl(trimmed);
+  }
+  const entry = await acquireViewerAssetEntry(trimmed);
+  if (!entry) {
     return null;
   }
-  switch (source.kind) {
-    case 'inline-text':
-      return source.text;
-    case 'data-url':
-      return decodeDataUrlText(source.dataUrl);
-    case 'remote-url':
-      return await fetchTextFromUrl(source.url);
-    case 'raw':
-      try {
-        return new TextDecoder().decode(source.data);
-      } catch (error) {
-        console.warn('解码文本 ArrayBuffer 失败', error);
-        return null;
-      }
-    default:
+  if (entry.downloadUrl) {
+    return await fetchTextFromUrl(entry.downloadUrl);
+  }
+  if (entry.arrayBuffer && entry.arrayBuffer.byteLength) {
+    try {
+      return new TextDecoder().decode(entry.arrayBuffer);
+    } catch (error) {
+      console.warn('解码文本 ArrayBuffer 失败', error);
       return null;
+    }
   }
-}
-
-function resolveLanternImageSource(assetId: string | null | undefined): string | null {
-  if (!assetId) {
-    return null;
+  if (entry.blob && typeof entry.blob.text === 'function') {
+    try {
+      return await entry.blob.text();
+    } catch (error) {
+      console.warn('读取文本 Blob 失败', error);
+    }
   }
-  const source = resolveAssetSource(assetId);
-  if (!source) {
-    return null;
+  if (entry.blobUrl && typeof fetch === 'function') {
+    return await fetchTextFromUrl(entry.blobUrl);
   }
-  switch (source.kind) {
-    case 'data-url':
-      return source.dataUrl;
-    case 'remote-url':
-      return source.url;
-    case 'raw':
-      return getOrCreateObjectUrl(assetId, source.data, inferMimeTypeFromAssetId(assetId) ?? undefined);
-    default:
-      return null;
-  }
+  return null;
 }
 
 function resetLanternOverlay(): void {
@@ -1454,32 +1273,6 @@ function handleLanternTouchCancel(): void {
   resetLanternSwipeTracking();
 }
 
-function formatTimestamp(value?: string | null): string {
-  if (!value) {
-    return '';
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  const month = `${date.getMonth() + 1}`.padStart(2, '0');
-  const day = `${date.getDate()}`.padStart(2, '0');
-  const hour = `${date.getHours()}`.padStart(2, '0');
-  const minute = `${date.getMinutes()}`.padStart(2, '0');
-  return `${date.getFullYear()}-${month}-${day} ${hour}:${minute}`;
-}
-
-function clearBehaviorAlert() {
-  behaviorAlertVisible.value = false;
-  behaviorAlertTitle.value = '';
-  behaviorAlertMessage.value = '';
-  behaviorAlertToken.value = null;
-  behaviorAlertShowConfirm.value = true;
-  behaviorAlertShowCancel.value = false;
-  behaviorAlertConfirmText.value = '确定';
-  behaviorAlertCancelText.value = '取消';
-}
-
 async function loadBehaviorAlertContent(assetId: string, token: string, fallback: string): Promise<void> {
   try {
     const content = await loadTextAssetContent(assetId);
@@ -1496,7 +1289,6 @@ async function loadBehaviorAlertContent(assetId: string, token: string, fallback
 }
 
 function presentBehaviorAlert(event: Extract<BehaviorRuntimeEvent, { type: 'show-alert' }>) {
-  clearBehaviorAlert();
   behaviorAlertToken.value = event.token;
   const legacyParams = event.params as typeof event.params & { title?: string; message?: string };
   const anyParams = event.params as unknown as Record<string, unknown>;
@@ -1524,7 +1316,6 @@ function presentBehaviorAlert(event: Extract<BehaviorRuntimeEvent, { type: 'show
 
 function confirmBehaviorAlert() {
   const token = behaviorAlertToken.value;
-  clearBehaviorAlert();
   if (!token) {
     return;
   }
@@ -1533,7 +1324,6 @@ function confirmBehaviorAlert() {
 
 function cancelBehaviorAlert() {
   const token = behaviorAlertToken.value;
-  clearBehaviorAlert();
   if (!token) {
     return;
   }
@@ -2641,14 +2431,12 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
       handleLookLevelEvent(event);
       break;
     case 'sequence-complete':
-      clearBehaviorAlert();
       resetLanternOverlay();
       if (event.status === 'failure' || event.status === 'aborted') {
         console.warn('行为序列结束', event);
       }
       break;
     case 'sequence-error':
-      clearBehaviorAlert();
       resetLanternOverlay();
       console.error('行为序列执行出错', event.message);
       break;
@@ -2922,31 +2710,7 @@ function inferEnvironmentAssetExtension(assetId: string, url: string | null): st
 async function loadEnvironmentTextureFromAsset(
   assetId: string,
 ): Promise<{ texture: THREE.Texture; dispose?: () => void } | null> {
-  const source = resolveAssetSource(assetId);
-  if (!source) {
-    return null;
-  }
-  let url: string | null = null;
-  let dispose: (() => void) | undefined;
-  switch (source.kind) {
-    case 'remote-url':
-      url = source.url;
-      break;
-    case 'data-url':
-      url = source.dataUrl;
-      break;
-    case 'inline-text': {
-      const result = resolveInlineTextUrl(source.text, assetId);
-      url = result.url;
-      dispose = result.dispose;
-      break;
-    }
-    case 'raw':
-      url = getOrCreateObjectUrl(assetId, source.data);
-      break;
-    default:
-      return null;
-  }
+  const url = await resolveAssetUrlReference(assetId);
   if (!url) {
     return null;
   }
@@ -2957,17 +2721,16 @@ async function loadEnvironmentTextureFromAsset(
       texture.mapping = THREE.EquirectangularReflectionMapping;
       texture.flipY = false;
       texture.needsUpdate = true;
-      return { texture, dispose };
+      return { texture };
     }
     const texture = await textureLoader.loadAsync(url);
     texture.mapping = THREE.EquirectangularReflectionMapping;
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.flipY = false;
     texture.needsUpdate = true;
-    return { texture, dispose };
+    return { texture };
   } catch (error) {
     console.warn('[SceneViewer] Failed to load environment texture', assetId, error);
-    dispose?.();
     return null;
   }
 }
@@ -3507,13 +3270,14 @@ function disposeMaterialTextures(material: THREE.Material | null | undefined): v
   }
   const standard = material as THREE.MeshStandardMaterial &
     Partial<Record<MeshStandardTextureKey, THREE.Texture | null>>;
+  const materialRecord = standard as unknown as Record<string, unknown>;
   STANDARD_TEXTURE_KEYS.forEach((key) => {
     const texture = standard[key];
     if (texture && typeof texture.dispose === 'function') {
       texture.dispose();
     }
     if (key in standard) {
-      (standard as Record<string, unknown>)[key] = null;
+      materialRecord[key] = null;
     }
   });
 }
@@ -3629,7 +3393,6 @@ function teardownRenderer() {
       message: '视图卸载',
     });
   }
-  clearBehaviorAlert();
   if (lanternEventToken.value) {
     closeLanternOverlay({ type: 'abort', message: '视图卸载' });
   } else {
@@ -3750,7 +3513,6 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
       message: '场景重新初始化',
     });
   }
-  clearBehaviorAlert();
   if (lanternEventToken.value) {
     closeLanternOverlay({ type: 'abort', message: '场景重新初始化' });
   } else {

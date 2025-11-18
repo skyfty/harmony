@@ -18,7 +18,7 @@ import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
 import { subscribeToScenePreview } from '@/utils/previewChannel'
 import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
 import ResourceCache from '@schema/ResourceCache'
-import { AssetCache, AssetLoader } from '@schema/assetCache'
+import { AssetCache, AssetLoader, type AssetCacheEntry } from '@schema/assetCache'
 import { loadNodeObject } from '@schema/utils/modelAssetLoader'
 import { ComponentManager } from '@schema/components/componentManager'
 import {
@@ -124,9 +124,12 @@ const purposeTargetNodeId = ref<string | null>(null)
 const purposeSourceNodeId = ref<string | null>(null)
 
 type LanternTextState = { text: string; loading: boolean; error: string | null }
+type LanternImageState = { url: string | null; loading: boolean; error: string | null }
 
 const lanternTextState = reactive<Record<string, LanternTextState>>({})
 const lanternTextPromises = new Map<string, Promise<void>>()
+const lanternImageState = reactive<Record<string, LanternImageState>>({})
+const lanternImagePromises = new Map<string, Promise<void>>()
 
 const activeBehaviorDelayTimers = new Map<string, number>()
 const activeBehaviorAnimations = new Map<string, () => void>()
@@ -226,21 +229,15 @@ type CameraLookTween = {
 }
 let activeCameraLookTween: CameraLookTween | null = null
 const assetObjectUrlCache = new Map<string, string>()
-const packageEntryCache = new Map<string, { provider: string; value: string } | null>()
 const DISPLAY_BOARD_RESOLVER_KEY = '__harmonyResolveDisplayBoardMedia'
 
-type AssetSourceResolution =
-	| { kind: 'data-url'; dataUrl: string }
-	| { kind: 'remote-url'; url: string }
-	| { kind: 'inline-text'; text: string }
-	| { kind: 'raw'; data: ArrayBuffer }
+type ResolvedAssetUrl = { url: string; mimeType?: string | null; dispose?: () => void }
 
 let renderer: THREE.WebGLRenderer | null = null
 let scene: THREE.Scene | null = null
 let camera: THREE.PerspectiveCamera | null = null
 let listener: THREE.AudioListener | null = null
 let rootGroup: THREE.Group | null = null
-let fallbackLight: THREE.HemisphereLight | null = null
 let sunDirectionalLight: THREE.DirectionalLight | null = null
 let sky: Sky | null = null
 let shouldRenderSkyBackground = true
@@ -497,7 +494,6 @@ function resolveDocumentSkybox(document: SceneJsonExportDocument | null | undefi
 
 function resetAssetResolutionCaches(): void {
 	clearAssetObjectUrlCache()
-	packageEntryCache.clear()
 }
 
 function clearAssetObjectUrlCache(): void {
@@ -513,186 +509,62 @@ function clearAssetObjectUrlCache(): void {
 	assetObjectUrlCache.clear()
 }
 
-function resolveAssetSource(assetId: string): AssetSourceResolution | null {
+const EXTERNAL_ASSET_PATTERN = /^(https?:)?\/\//i
+
+function isExternalAssetReference(value: string): boolean {
+	return EXTERNAL_ASSET_PATTERN.test(value)
+}
+
+async function acquirePreviewAssetEntry(assetId: string): Promise<AssetCacheEntry | null> {
 	const trimmed = assetId.trim()
 	if (!trimmed.length) {
 		return null
 	}
-	if (/^(https?:)?\/\//i.test(trimmed)) {
-		return { kind: 'remote-url', url: trimmed }
-	}
-	if (trimmed.startsWith('data:')) {
-		return { kind: 'data-url', dataUrl: trimmed }
-	}
-	if (!currentDocument) {
+	const cache = editorResourceCache
+	if (!cache) {
 		return null
 	}
-	const packageMap = currentDocument.packageAssetMap ?? {}
-	const embeddedKey = `local::${trimmed}`
-	const embeddedValue = packageMap[embeddedKey]
-	if (typeof embeddedValue === 'string' && embeddedValue.startsWith('data:')) {
-		return { kind: 'data-url', dataUrl: embeddedValue }
-	}
-	const directValue = packageMap[trimmed]
-	if (typeof directValue === 'string' && directValue.trim().length) {
-		const resolved = resolvePackageEntryLike(trimmed, 'local', directValue.trim())
-		if (resolved) {
-			return resolved
-		}
-	}
-	const packageEntry = getPackageEntry(trimmed, packageMap)
-	if (packageEntry) {
-		const resolved = resolvePackageEntryLike(trimmed, packageEntry.provider, packageEntry.value)
-		if (resolved) {
-			return resolved
-		}
-	}
-	const indexResolved = resolveAssetSourceFromIndex(trimmed, packageMap)
-	if (indexResolved) {
-		return indexResolved
-	}
-	return null
-}
-
-function resolveAssetSourceFromIndex(assetId: string, packageMap: Record<string, string>): AssetSourceResolution | null {
-	if (!currentDocument?.assetIndex) {
-		return null
-	}
-	const entry = (currentDocument.assetIndex as Record<string, unknown>)[assetId]
-	if (!entry || typeof entry !== 'object') {
-		return null
-	}
-	const record = entry as Record<string, unknown>
-	const inline = typeof record.inline === 'string' ? record.inline.trim() : ''
-	if (inline.length) {
-		if (inline.startsWith('data:')) {
-			return { kind: 'data-url', dataUrl: inline }
-		}
-		if (/^(https?:)?\/\//i.test(inline)) {
-			return { kind: 'remote-url', url: inline }
-		}
-		return { kind: 'inline-text', text: inline }
-	}
-	const directUrlCandidates = [record.url, record.downloadUrl]
-	for (const candidate of directUrlCandidates) {
-		if (typeof candidate === 'string') {
-			const normalized = candidate.trim()
-			if (normalized.length) {
-				return { kind: 'remote-url', url: normalized }
-			}
-		}
-	}
-	const source = record.source
-	if (source && typeof source === 'object') {
-		const sourceRecord = source as Record<string, unknown>
-		const sourceInline = typeof sourceRecord.inline === 'string' ? sourceRecord.inline.trim() : ''
-		if (sourceInline.length) {
-			if (sourceInline.startsWith('data:')) {
-				return { kind: 'data-url', dataUrl: sourceInline }
-			}
-			if (/^(https?:)?\/\//i.test(sourceInline)) {
-				return { kind: 'remote-url', url: sourceInline }
-			}
-			return { kind: 'inline-text', text: sourceInline }
-		}
-		const sourceUrlCandidates = [sourceRecord.url, sourceRecord.downloadUrl]
-		for (const candidate of sourceUrlCandidates) {
-			if (typeof candidate === 'string') {
-				const normalized = candidate.trim()
-				if (normalized.length) {
-					return { kind: 'remote-url', url: normalized }
-				}
-			}
-		}
-		const providerId = typeof sourceRecord.providerId === 'string' ? sourceRecord.providerId.trim() : ''
-		const originalAssetId = typeof sourceRecord.originalAssetId === 'string'
-			? sourceRecord.originalAssetId.trim()
-			: assetId
-		let providerValue = ''
-		if (typeof sourceRecord.value === 'string' && sourceRecord.value.trim().length) {
-			providerValue = sourceRecord.value.trim()
-		}
-		if (providerId) {
-			const mapKey = `${providerId}::${originalAssetId}`
-			const mapped = packageMap[mapKey]
-			const resolved = resolvePackageEntryLike(
-				originalAssetId,
-				providerId,
-				typeof mapped === 'string' && mapped.trim().length ? mapped.trim() : providerValue || originalAssetId,
-			)
-			if (resolved) {
-				return resolved
-			}
-		}
-	}
-	return null
-}
-
-function resolvePackageEntryLike(assetId: string, _provider: string, rawValue: string): AssetSourceResolution | null {
-	const value = typeof rawValue === 'string' ? rawValue.trim() : ''
-	if (value.startsWith('data:')) {
-		return { kind: 'data-url', dataUrl: value }
-	}
-	if (value && /^(https?:)?\/\//i.test(value)) {
-		return { kind: 'remote-url', url: value }
-	}
-	if (currentDocument != null) {
-		const packageMap = currentDocument.packageAssetMap ?? {}
-    	const key = `url::${assetId}`;
-		const providerUrl = packageMap[key];
-		if (typeof providerUrl === 'string' && /^(https?:)?\/\//i.test(providerUrl)) {
-			return { kind: 'remote-url', url: providerUrl };
-		}
-	}
-	if (value) {
-		const buffer = base64ToArrayBuffer(value)
-		if (buffer) {
-			return { kind: 'raw', data: buffer }
-		}
-	}
-	return null
-}
-
-function getPackageEntry(assetId: string, packageMap: Record<string, string>): { provider: string; value: string } | null {
-	if (packageEntryCache.has(assetId)) {
-		return packageEntryCache.get(assetId) ?? null
-	}
-	let found: { provider: string; value: string } | null = null
-	for (const [key, value] of Object.entries(packageMap)) {
-		if (typeof value !== 'string' || !value.trim().length) {
-			continue
-		}
-		const separator = key.indexOf('::')
-		if (separator === -1) {
-			continue
-		}
-		const provider = key.slice(0, separator)
-		const id = key.slice(separator + 2)
-		if (id === assetId) {
-			found = { provider, value: value.trim() }
-			break
-		}
-	}
-	packageEntryCache.set(assetId, found)
-	return found
-}
-
-function base64ToArrayBuffer(value: string): ArrayBuffer | null {
 	try {
-		const clean = value.replace(/^data:[^,]+,/, '').replace(/\s/g, '')
-		if (typeof atob === 'function') {
-			const binary = atob(clean)
-			const length = binary.length
-			const buffer = new Uint8Array(length)
-			for (let index = 0; index < length; index += 1) {
-				buffer[index] = binary.charCodeAt(index)
-			}
-			return buffer.buffer
-		}
+		return await cache.acquireAssetEntry(trimmed)
 	} catch (error) {
-		console.warn('[ScenePreview] Failed to decode base64 asset', error)
+		console.warn('[ScenePreview] Failed to acquire asset entry', trimmed, error)
+		return null
+	}
+}
+
+function buildResolvedAssetUrl(assetId: string, entry: AssetCacheEntry | null): ResolvedAssetUrl | null {
+	if (!entry) {
+		return null
+	}
+	const mimeType = entry.mimeType ?? inferMimeTypeFromAssetId(assetId)
+	if (entry.blobUrl) {
+		return { url: entry.blobUrl, mimeType }
+	}
+	if (entry.arrayBuffer && entry.arrayBuffer.byteLength) {
+		const url = getOrCreateObjectUrl(assetId, entry.arrayBuffer, mimeType ?? undefined)
+		return { url, mimeType }
+	}
+	if (entry.downloadUrl) {
+		return { url: entry.downloadUrl, mimeType }
 	}
 	return null
+}
+
+async function resolveAssetUrlFromCache(assetId: string): Promise<ResolvedAssetUrl | null> {
+	const entry = await acquirePreviewAssetEntry(assetId)
+	return buildResolvedAssetUrl(assetId, entry)
+}
+
+async function resolveAssetUrlReference(candidate: string): Promise<ResolvedAssetUrl | null> {
+	const trimmed = candidate.trim()
+	if (!trimmed.length) {
+		return null
+	}
+	if (trimmed.startsWith('data:') || isExternalAssetReference(trimmed)) {
+		return { url: trimmed, mimeType: inferMimeTypeFromUrl(trimmed) }
+	}
+	const assetId = trimmed.startsWith('asset://') ? trimmed.slice('asset://'.length) : trimmed
+	return await resolveAssetUrlFromCache(assetId)
 }
 
 function inferMimeTypeFromAssetId(assetId: string): string | null {
@@ -738,52 +610,19 @@ function inferMimeTypeFromUrl(url: string): string | null {
 	return inferMimeTypeFromAssetId(cleaned)
 }
 
-function resolveInlineTextUrl(text: string, assetId: string): { url: string; mimeType: string | null; dispose: () => void } {
-	const mimeType = inferMimeTypeFromAssetId(assetId) ?? 'text/plain'
-	const blob = new Blob([text], { type: mimeType })
-	const url = URL.createObjectURL(blob)
-	return {
-		url,
-		mimeType,
-		dispose: () => {
-			URL.revokeObjectURL(url)
-		},
-	}
-}
-
-async function resolveDisplayBoardMediaSource(candidate: string): Promise<{ url: string; mimeType?: string | null; dispose?: () => void } | null> {
+async function resolveDisplayBoardMediaSource(candidate: string): Promise<ResolvedAssetUrl | null> {
 	const trimmed = candidate.trim()
 	if (!trimmed.length) {
 		return null
+	}
+	if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:')) {
+		return { url: trimmed, mimeType: inferMimeTypeFromUrl(trimmed) }
 	}
 	const assetId = trimmed.startsWith('asset://') ? trimmed.slice('asset://'.length) : trimmed
 	if (!assetId.length) {
 		return null
 	}
-	const source = resolveAssetSource(assetId)
-	if (!source) {
-		if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:')) {
-			return { url: trimmed, mimeType: inferMimeTypeFromUrl(trimmed) }
-		}
-		return null
-	}
-	switch (source.kind) {
-		case 'remote-url':
-			return { url: source.url, mimeType: inferMimeTypeFromUrl(source.url) }
-		case 'data-url':
-			return { url: source.dataUrl, mimeType: inferMimeTypeFromUrl(source.dataUrl) }
-		case 'inline-text': {
-			const result = resolveInlineTextUrl(source.text, assetId)
-			return result
-		}
-		case 'raw': {
-			const mimeType = inferMimeTypeFromAssetId(assetId)
-			const url = getOrCreateObjectUrl(assetId, source.data, mimeType ?? undefined)
-			return { url, mimeType }
-		}
-		default:
-			return null
-	}
+	return await resolveAssetUrlFromCache(assetId)
 }
 
 ;(globalThis as typeof globalThis & { [DISPLAY_BOARD_RESOLVER_KEY]?: typeof resolveDisplayBoardMediaSource })[
@@ -811,7 +650,17 @@ const lanternCurrentSlide = computed(() => {
 	return lanternSlides.value[index] ?? null
 })
 const lanternHasMultipleSlides = computed(() => lanternTotalSlides.value > 1)
-const lanternCurrentSlideImage = computed(() => resolveLanternImageSource(lanternCurrentSlide.value?.imageAssetId ?? null))
+const lanternCurrentSlideImage = computed(() => {
+	const slide = lanternCurrentSlide.value
+	if (!slide?.imageAssetId) {
+		return null
+	}
+	const assetId = slide.imageAssetId.trim()
+	if (!assetId.length) {
+		return null
+	}
+	return lanternImageState[assetId]?.url ?? null
+})
 const lanternCurrentSlideTextState = computed(() => {
 	const slide = lanternCurrentSlide.value
 	if (!slide || !slide.descriptionAssetId) {
@@ -842,22 +691,38 @@ watch(
 	lanternSlides,
 	(slidesList) => {
 		const list = Array.isArray(slidesList) ? slidesList : []
-		const activeIds = new Set<string>()
+		const activeTextIds = new Set<string>()
+		const activeImageIds = new Set<string>()
 		for (const slide of list) {
 			const candidate = slide?.descriptionAssetId?.trim()
 			if (candidate) {
-				activeIds.add(candidate)
+				activeTextIds.add(candidate)
 				void ensureLanternText(candidate)
+			}
+			const imageCandidate = slide?.imageAssetId?.trim()
+			if (imageCandidate) {
+				activeImageIds.add(imageCandidate)
+				void ensureLanternImage(imageCandidate)
 			}
 		}
 		Object.keys(lanternTextState).forEach((existing) => {
-			if (!activeIds.has(existing)) {
+			if (!activeTextIds.has(existing)) {
 				delete lanternTextState[existing]
 			}
 		})
+		Object.keys(lanternImageState).forEach((existing) => {
+			if (!activeImageIds.has(existing)) {
+				delete lanternImageState[existing]
+			}
+		})
 		Array.from(lanternTextPromises.keys()).forEach((existing) => {
-			if (!activeIds.has(existing)) {
+			if (!activeTextIds.has(existing)) {
 				lanternTextPromises.delete(existing)
+			}
+		})
+		Array.from(lanternImagePromises.keys()).forEach((existing) => {
+			if (!activeImageIds.has(existing)) {
+				lanternImagePromises.delete(existing)
 			}
 		})
 	},
@@ -870,6 +735,10 @@ watch(
 		const assetId = typeof slide?.descriptionAssetId === 'string' ? slide.descriptionAssetId.trim() : ''
 		if (assetId) {
 			void ensureLanternText(assetId)
+		}
+		const imageAssetId = typeof slide?.imageAssetId === 'string' ? slide.imageAssetId.trim() : ''
+		if (imageAssetId) {
+			void ensureLanternImage(imageAssetId)
 		}
 	},
 	{ immediate: true },
@@ -1022,36 +891,6 @@ function resetLanternOverlay(): void {
 	lanternEventToken.value = null
 }
 
-function resolveLanternImageSource(assetId: string | null): string | null {
-	if (!assetId) {
-		return null
-	}
-	const trimmed = assetId.trim()
-	if (!trimmed.length) {
-		return null
-	}
-	const resolved = resolveAssetSource(trimmed)
-	if (!resolved) {
-		return /^(https?:)?\/\//i.test(trimmed) || trimmed.startsWith('data:') ? trimmed : null
-	}
-	switch (resolved.kind) {
-		case 'data-url':
-			return resolved.dataUrl
-		case 'remote-url':
-			return resolved.url
-		case 'raw':
-			return getOrCreateObjectUrl(trimmed, resolved.data)
-		case 'inline-text':
-			const inline = resolved.text.trim()
-			if (/^(https?:)?\/\//i.test(inline) || inline.startsWith('data:')) {
-				return inline
-			}
-			return null
-		default:
-			return null
-	}
-}
-
 function getLanternTextState(assetId: string): LanternTextState {
 	if (!lanternTextState[assetId]) {
 		lanternTextState[assetId] = {
@@ -1061,6 +900,17 @@ function getLanternTextState(assetId: string): LanternTextState {
 		}
 	}
 	return lanternTextState[assetId]!
+}
+
+function getLanternImageState(assetId: string): LanternImageState {
+	if (!lanternImageState[assetId]) {
+		lanternImageState[assetId] = {
+			url: null,
+			loading: false,
+			error: null,
+		}
+	}
+	return lanternImageState[assetId]!
 }
 
 function decodeDataUrlText(dataUrl: string): string | null {
@@ -1101,27 +951,31 @@ async function loadTextAssetContent(assetId: string): Promise<string | null> {
 	if (!trimmed.length) {
 		return null
 	}
-	const source = resolveAssetSource(trimmed)
-	if (!source) {
+	if (trimmed.startsWith('data:')) {
+		return decodeDataUrlText(trimmed)
+	}
+	if (isExternalAssetReference(trimmed)) {
+		return await fetchTextFromUrl(trimmed)
+	}
+	const entry = await acquirePreviewAssetEntry(trimmed)
+	if (!entry) {
 		return null
 	}
-	switch (source.kind) {
-		case 'inline-text':
-			return source.text
-		case 'data-url':
-			return decodeDataUrlText(source.dataUrl)
-		case 'remote-url':
-			return await fetchTextFromUrl(source.url)
-		case 'raw':
-			try {
-				return new TextDecoder().decode(source.data)
-			} catch (error) {
-				console.warn('[ScenePreview] Failed to decode text asset buffer', error)
-				return null
-			}
-		default:
+	if (entry.arrayBuffer && entry.arrayBuffer.byteLength) {
+		try {
+			return new TextDecoder().decode(entry.arrayBuffer)
+		} catch (error) {
+			console.warn('[ScenePreview] Failed to decode text asset buffer', error)
 			return null
+		}
 	}
+	if (entry.blob) {
+		return await entry.blob.text()
+	}
+	if (entry.downloadUrl) {
+		return await fetchTextFromUrl(entry.downloadUrl)
+	}
+	return null
 }
 
 async function ensureLanternText(assetId: string): Promise<void> {
@@ -1152,6 +1006,37 @@ async function ensureLanternText(assetId: string): Promise<void> {
 		}
 	})()
 	lanternTextPromises.set(trimmed, promise)
+	await promise
+}
+
+async function ensureLanternImage(assetId: string): Promise<void> {
+	const trimmed = assetId.trim()
+	if (!trimmed.length) {
+		return
+	}
+	if (lanternImagePromises.has(trimmed)) {
+		await lanternImagePromises.get(trimmed)
+		return
+	}
+	const promise = (async () => {
+		const state = getLanternImageState(trimmed)
+		state.loading = true
+		state.error = null
+		try {
+			const resolved = await resolveAssetUrlFromCache(trimmed)
+			if (!resolved) {
+				throw new Error('Unable to resolve image asset')
+			}
+			state.url = resolved.url
+		} catch (error) {
+			state.error = (error as Error).message ?? 'Failed to load image asset'
+			state.url = null
+		} finally {
+			state.loading = false
+			lanternImagePromises.delete(trimmed)
+		}
+	})()
+	lanternImagePromises.set(trimmed, promise)
 	await promise
 }
 
@@ -2118,7 +2003,7 @@ function initRenderer() {
 		return
 	}
 	hidePurposeControls()
-	renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true })
+	renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: false,powerPreference: 'high-performance' })
 	renderer.outputColorSpace = THREE.SRGBColorSpace
 	renderer.toneMapping = THREE.ACESFilmicToneMapping
 	renderer.toneMappingExposure = DEFAULT_SKYBOX_SETTINGS.exposure
@@ -2148,9 +2033,6 @@ function initRenderer() {
 	rootGroup = new THREE.Group()
 	rootGroup.name = 'ScenePreviewRoot'
 	scene.add(rootGroup)
-
-	fallbackLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.35)
-	scene.add(fallbackLight)
 
 	applySunDirectionToSunLight()
 
@@ -2415,9 +2297,6 @@ function updateSkyLighting(settings: SceneSkyboxSettings) {
 		sunUniform.value = skySunPosition.clone()
 	}
 	applySunDirectionToSunLight()
-	if (fallbackLight) {
-		fallbackLight.position.copy(skySunPosition.clone().multiplyScalar(50))
-	}
 }
 
 function ensureSunDirectionalLight(): THREE.DirectionalLight | null {
@@ -2584,42 +2463,18 @@ function disposeEnvironmentTarget() {
 async function loadEnvironmentTextureFromAsset(
 	assetId: string,
 ): Promise<{ texture: THREE.Texture; dispose?: () => void } | null> {
-	const source = resolveAssetSource(assetId)
-	if (!source) {
+	const resolved = await resolveAssetUrlReference(assetId)
+	if (!resolved) {
 		return null
 	}
-	let url: string | null = null
-	let dispose: (() => void) | undefined
-	switch (source.kind) {
-		case 'remote-url':
-			url = source.url
-			break
-		case 'data-url':
-			url = source.dataUrl
-			break
-		case 'inline-text': {
-			const result = resolveInlineTextUrl(source.text, assetId)
-			url = result.url
-			dispose = result.dispose
-			break
-		}
-		case 'raw':
-			url = getOrCreateObjectUrl(assetId, source.data)
-			break
-		default:
-			return null
-	}
-	if (!url) {
-		return null
-	}
+	const dispose = resolved.dispose
 	try {
-		const texture = await rgbeLoader.loadAsync(url)
+		const texture = await rgbeLoader.loadAsync(resolved.url)
 		texture.mapping = THREE.EquirectangularReflectionMapping
 		texture.needsUpdate = true
 		return { texture, dispose }
 	} catch (error) {
 		console.warn('[ScenePreview] Failed to load environment texture', assetId, error)
-		dispose?.()
 		return null
 	}
 }
@@ -3264,18 +3119,6 @@ function reconcileNodeLists(
 	})
 }
 
-function refreshFallbackLighting() {
-	if (!fallbackLight) {
-		return
-	}
-	let hasLight = false
-	nodeObjectMap.forEach((object) => {
-		if ((object as any).isLight) {
-			hasLight = true
-		}
-	})
-	fallbackLight.visible = !hasLight
-}
 
 function refreshAnimations() {
 	resetAnimationControllers()
@@ -3366,7 +3209,6 @@ async function updateScene(document: SceneJsonExportDocument) {
 		}
 		currentDocument = document
 		refreshAnimations()
-		refreshFallbackLighting()
 		initializeLazyPlaceholders(document)
 		void applyEnvironmentSettingsToScene(environmentSettings)
 		return
@@ -3383,7 +3225,6 @@ async function updateScene(document: SceneJsonExportDocument) {
 
 	currentDocument = document
 	refreshAnimations()
-	refreshFallbackLighting()
 	initializeLazyPlaceholders(document)
 	void applyEnvironmentSettingsToScene(environmentSettings)
 }

@@ -8,6 +8,10 @@ const NodeBuffer: { from: (data: string, encoding: string) => any } | undefined 
     ? (globalThis as any).Buffer
     : undefined;
 
+const REMOTE_URL_PATTERN = /^(https?:)?\/\//i;
+const sharedTextEncoder: TextEncoder | null =
+  typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
+
 type AssetDownloadReporter = (payload: { assetId: string; progress: number }) => void;
 
 type ResourceCacheHookOptions = {
@@ -134,6 +138,18 @@ export default class ResourceCache implements MaterialAssetProvider {
   }
 
   private async resolveAssetSource(assetId: string): Promise<AssetSource | null> {
+    if (!assetId) {
+      return null;
+    }
+
+    if (this.isRemoteUrl(assetId)) {
+      return { kind: 'remote-url', url: assetId };
+    }
+
+    if (assetId.startsWith('data:')) {
+      return { kind: 'data-url', dataUrl: assetId };
+    }
+
     const override = this.resolveOverride(assetId);
     if (override) {
       return override;
@@ -152,18 +168,9 @@ export default class ResourceCache implements MaterialAssetProvider {
       }
     }
 
-    const assetIndex = this.document.assetIndex as Record<string, any> | undefined;
-    const assetInfo = assetIndex && typeof assetIndex === 'object' ? assetIndex[assetId] : undefined;
-    const assetSource = assetInfo && typeof assetInfo === 'object' ? assetInfo.source : undefined;
-    if (assetSource && typeof assetSource === 'object' && assetSource.type === 'package' && assetSource.providerId) {
-      const resolved = await this.resolvePackageEntry(
-        assetId,
-        assetSource.providerId,
-        assetSource.originalAssetId ?? assetId,
-      );
-      if (resolved) {
-        return resolved;
-      }
+    const indexSource = await this.resolveAssetIndexSource(assetId);
+    if (indexSource) {
+      return indexSource;
     }
 
     if (typeof this.options.resolveAssetUrl === 'function') {
@@ -189,12 +196,16 @@ export default class ResourceCache implements MaterialAssetProvider {
       if (entry.startsWith('data:')) {
         return { kind: 'data-url', dataUrl: entry };
       }
-      if (entry.startsWith('http://') || entry.startsWith('https://')) {
+      if (this.isRemoteUrl(entry)) {
         return { kind: 'remote-url', url: entry };
       }
       const buffer = this.base64ToArrayBuffer(entry);
       if (buffer) {
         return { kind: 'arraybuffer', data: buffer };
+      }
+      const encoded = this.encodeInlineText(entry);
+      if (encoded) {
+        return { kind: 'arraybuffer', data: encoded };
       }
     }
     if (entry instanceof ArrayBuffer) {
@@ -228,10 +239,16 @@ export default class ResourceCache implements MaterialAssetProvider {
 
   private resolveEmbedded(assetId: string): AssetSource | null {
     const map = this.document.packageAssetMap ?? {};
-    const key = `local::${assetId}`;
-    const candidate = map[key];
-    if (typeof candidate === 'string' && candidate.startsWith('data:')) {
-      return { kind: 'data-url', dataUrl: candidate };
+    const keys = [`local::${assetId}`, assetId];
+    for (const key of keys) {
+      const candidate = map[key];
+      if (typeof candidate !== 'string') {
+        continue;
+      }
+      const resolved = this.resolveInlineStringAsset(assetId, candidate);
+      if (resolved) {
+        return resolved;
+      }
     }
     return null;
   }
@@ -285,9 +302,171 @@ export default class ResourceCache implements MaterialAssetProvider {
       if (buffer) {
         return { kind: 'arraybuffer', data: buffer };
       }
+      const encoded = this.encodeInlineText(value);
+      if (encoded) {
+        return {
+          kind: 'arraybuffer',
+          data: encoded,
+          mimeType: this.inferMimeTypeFromAssetId(assetId),
+        };
+      }
     }
 
     this.warn(`未解析资源映射 ${provider}::${assetId}`);
     return null;
+  }
+
+  private async resolveAssetIndexSource(assetId: string): Promise<AssetSource | null> {
+    const assetIndex = this.document.assetIndex as Record<string, any> | undefined;
+    if (!assetIndex || typeof assetIndex !== 'object') {
+      return null;
+    }
+    const entry = assetIndex[assetId];
+    if (!entry || typeof entry !== 'object') {
+      return null;
+    }
+
+    const inlineValue = typeof entry.inline === 'string' ? entry.inline.trim() : '';
+    if (inlineValue) {
+      const resolvedInline = this.resolveInlineStringAsset(assetId, inlineValue);
+      if (resolvedInline) {
+        return resolvedInline;
+      }
+    }
+
+    const directUrl = this.pickUrlCandidate(entry.url, entry.downloadUrl);
+    if (directUrl) {
+      return { kind: 'remote-url', url: directUrl };
+    }
+
+    const source = entry.source;
+    if (source && typeof source === 'object') {
+      const sourceInline = typeof source.inline === 'string' ? source.inline.trim() : '';
+      if (sourceInline) {
+        const resolvedInline = this.resolveInlineStringAsset(assetId, sourceInline);
+        if (resolvedInline) {
+          return resolvedInline;
+        }
+      }
+
+      const sourceUrl = this.pickUrlCandidate(source.url, source.downloadUrl);
+      if (sourceUrl) {
+        return { kind: 'remote-url', url: sourceUrl };
+      }
+
+      const providerId = typeof source.providerId === 'string' ? source.providerId.trim() : '';
+      const originalAssetId =
+        typeof source.originalAssetId === 'string' && source.originalAssetId.trim().length
+          ? source.originalAssetId.trim()
+          : assetId;
+      const providerValue = typeof source.value === 'string' ? source.value.trim() : '';
+
+      if (providerId) {
+        const map = this.document.packageAssetMap ?? {};
+        const mapped = map[`${providerId}::${originalAssetId}`];
+        const candidate =
+          typeof mapped === 'string' && mapped.trim().length ? mapped.trim() : providerValue || originalAssetId;
+        const resolved = await this.resolvePackageEntry(originalAssetId, providerId, candidate);
+        if (resolved) {
+          return resolved;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  private resolveInlineStringAsset(assetId: string, rawValue: string): AssetSource | null {
+    const value = typeof rawValue === 'string' ? rawValue.trim() : '';
+    if (!value.length) {
+      return null;
+    }
+    if (value.startsWith('data:')) {
+      return { kind: 'data-url', dataUrl: value };
+    }
+    if (this.isRemoteUrl(value)) {
+      return { kind: 'remote-url', url: value };
+    }
+    const buffer = this.base64ToArrayBuffer(value);
+    if (buffer) {
+      return {
+        kind: 'arraybuffer',
+        data: buffer,
+        mimeType: this.inferMimeTypeFromAssetId(assetId),
+      };
+    }
+    const encoded = this.encodeInlineText(value);
+    if (encoded) {
+      return {
+        kind: 'arraybuffer',
+        data: encoded,
+        mimeType: this.inferMimeTypeFromAssetId(assetId) ?? 'text/plain',
+      };
+    }
+    return null;
+  }
+
+  private encodeInlineText(value: string): ArrayBuffer | null {
+    if (!value.length) {
+      return null;
+    }
+    try {
+      if (sharedTextEncoder) {
+        return sharedTextEncoder.encode(value).buffer;
+      }
+      if (NodeBuffer) {
+        const buf = NodeBuffer.from(value, 'utf-8');
+        return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+      }
+    } catch (error) {
+      console.warn('文本资源编码失败', error);
+    }
+    return null;
+  }
+
+  private inferMimeTypeFromAssetId(assetId: string | undefined): string | null {
+    if (!assetId) {
+      return null;
+    }
+    const lower = assetId.toLowerCase();
+    if (lower.endsWith('.png')) {
+      return 'image/png';
+    }
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
+      return 'image/jpeg';
+    }
+    if (lower.endsWith('.webp')) {
+      return 'image/webp';
+    }
+    if (lower.endsWith('.gif')) {
+      return 'image/gif';
+    }
+    if (lower.endsWith('.svg')) {
+      return 'image/svg+xml';
+    }
+    if (lower.endsWith('.json')) {
+      return 'application/json';
+    }
+    if (lower.endsWith('.txt')) {
+      return 'text/plain';
+    }
+    return null;
+  }
+
+  private pickUrlCandidate(...candidates: Array<unknown>): string | null {
+    for (const candidate of candidates) {
+      if (typeof candidate !== 'string') {
+        continue;
+      }
+      const trimmed = candidate.trim();
+      if (trimmed.length) {
+        return trimmed;
+      }
+    }
+    return null;
+  }
+
+  private isRemoteUrl(value: string): boolean {
+    return REMOTE_URL_PATTERN.test(value);
   }
 }
