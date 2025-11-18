@@ -215,7 +215,7 @@ interface RenderContext {
   controls: OrbitControls;
 }
 
-const DEFAULT_SCENE_URL = 'https://cdn.touchmagic.cn/uploads/UntitledScene(4).json';
+const DEFAULT_SCENE_URL = 'https://cdn.touchmagic.cn/uploads/a.json';
 const SCENE_DOWNLOAD_TIMEOUT = 120000;
 
 const sceneStore = useSceneStore();
@@ -2857,6 +2857,8 @@ async function loadEnvironmentTextureFromAsset(
       const texture = await rgbeLoader.loadAsync(resolve.url);
       texture.mapping = THREE.EquirectangularReflectionMapping;
       texture.flipY = false;
+      texture.magFilter = THREE.NearestFilter;
+      texture.minFilter = THREE.NearestFilter;
       texture.needsUpdate = true;
       ensureFloatTextureFilterCompatibility(texture);
       return { texture };
@@ -2864,6 +2866,8 @@ async function loadEnvironmentTextureFromAsset(
     const texture = await textureLoader.loadAsync(resolve.url);
     texture.mapping = THREE.EquirectangularReflectionMapping;
     texture.colorSpace = THREE.SRGBColorSpace;
+    texture.magFilter = THREE.NearestFilter;
+    texture.minFilter = THREE.NearestFilter;
     texture.flipY = false;
     texture.needsUpdate = true;
     ensureFloatTextureFilterCompatibility(texture);
