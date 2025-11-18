@@ -249,7 +249,7 @@ interface RenderContext {
   controls: OrbitControls;
 }
 
-const DEFAULT_SCENE_URL = 'https://cdn.touchmagic.cn/uploads/UntitledScene(4).json';
+const DEFAULT_SCENE_URL = 'https://cdn.touchmagic.cn/uploads/a.json';
 const SCENE_DOWNLOAD_TIMEOUT = 120000;
 
 const sceneStore = useSceneStore();
