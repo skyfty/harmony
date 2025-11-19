@@ -256,3 +256,7 @@ export async function ensureEditorUser(): Promise<void> {
 export async function ensureUploaderUser(): Promise<void> {
   await ensureUserWithCredentials(appConfig.uploaderUser)
 }
+
+export async function ensureMiniProgramTestUser(): Promise<void> {
+  await ensureUserWithCredentials(appConfig.miniProgramTestUser)
+}

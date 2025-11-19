@@ -34,6 +34,6 @@ export async function ensureTestAccountLogin(force = false): Promise<void> {
       await apiLogin({ username, password });
       return;
     }
-  console.error('Unable to register test account', error);
+    console.error('Unable to register test account', error);
   }
 }

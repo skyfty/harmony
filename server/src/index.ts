@@ -12,7 +12,7 @@ import { appConfig } from '@/config/env'
 import { connectDatabase, disconnectDatabase } from '@/config/database'
 import { errorHandler } from '@/middleware/errorHandler'
 import routes from '@/routes'
-import { createInitialAdmin, ensureUploaderUser } from '@/services/authService'
+import { createInitialAdmin, ensureUploaderUser, ensureMiniProgramTestUser } from '@/services/authService'
 import { koaBody } from '@/utils/bodyParser'
 
 type HarmonyKoa = Koa<DefaultState, DefaultContext>
@@ -28,6 +28,7 @@ async function bootstrap(): Promise<void> {
   await connectDatabase()
   await createInitialAdmin()
   await ensureUploaderUser()
+  await ensureMiniProgramTestUser()
 
   const app: HarmonyKoa = new Koa()
 
