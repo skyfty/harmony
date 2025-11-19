@@ -3721,6 +3721,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
         hdrLoader: rgbeLoader,
       },
       onProgress: (info) => {
+        console.log('[SceneViewer] Resource load progress', info);
         resourcePreload.total = info.total;
         resourcePreload.loaded = info.loaded;
         if (typeof info.bytesTotal === 'number' && Number.isFinite(info.bytesTotal) && info.bytesTotal > 0) {

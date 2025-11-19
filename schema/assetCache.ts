@@ -512,7 +512,8 @@ export async function fetchAssetBlob(
     throw new Error('资源下载失败（无效的下载地址）')
   }
 
-  if (typeof fetch === 'function') {
+  if (typeof fetch === 'function') {  console.log('使用 fetch 下载资源：', url);
+
     let lastNetworkError: unknown = null
     for (const candidate of candidates) {
       try {
@@ -542,6 +543,7 @@ export async function fetchAssetBlob(
   if (uniGlobal && typeof uniGlobal.request === 'function') {
     return await fetchViaUni(fallbackUrl, controller, onProgress)
   }
+  console.log('使用 fetchViaXmlHttp 下载资源：', url);
 
   return await fetchViaXmlHttp(fallbackUrl, controller, onProgress)
 }
@@ -551,7 +553,9 @@ async function readBlobWithProgress(
   onProgress: (value: number) => void,
   requestUrl: string,
 ): Promise<AssetBlobPayload> {
+  console.log('使用 readBlobWithProgress 读取响应体 11111111111 ：', requestUrl);
   if (!response.body) {
+  console.log('使用 readBlobWithProgress 读取响应体 222222222222 ：', requestUrl);
     const blob = await response.blob()
     onProgress(100)
     return {
@@ -562,13 +566,16 @@ async function readBlobWithProgress(
     }
   }
 
+  console.log('使用 readBlobWithProgress 读取响应体 3333333333333333 ：', requestUrl);
   const reader = response.body.getReader()
   const chunks: BlobPart[] = []
   let received = 0
   const total = Number.parseInt(response.headers.get('content-length') ?? '0', 10)
+  console.log('使用 readBlobWithProgress 读取响应体 44444444444 ：', requestUrl, total);
 
   while (true) {
     const { done, value } = await reader.read()
+    console.log('下载中，已接收字节数：', requestUrl,received);
     if (done) {
       break
     }
@@ -600,6 +607,7 @@ async function fetchViaUni(
   controller: AbortController,
   onProgress: (value: number) => void,
 ): Promise<AssetBlobPayload> {
+  console.log('使用 uni.request 下载资源：', url);
   const uniGlobal = uni
   if (!uniGlobal || typeof uniGlobal.request !== 'function') {
     throw new Error('uni.request 不可用')
