@@ -1453,7 +1453,11 @@ function normalizeSkySceneNode(node: SceneNode | null | undefined): SceneNode {
   }
   const visible = node.visible ?? true
   const userData = clonePlainRecord(node.userData as Record<string, unknown> | null) ?? null
-  return createSkySceneNode({ visible, userData })
+  const normalized = createSkySceneNode({ visible, userData })
+  if (node.children?.length) {
+    normalized.children = node.children.map(cloneNode)
+  }
+  return normalized
 }
 
 function ensureSkyNode(nodes: SceneNode[]): SceneNode[] {
@@ -1594,7 +1598,11 @@ function normalizeEnvironmentSceneNode(node: SceneNode | null | undefined, overr
     : null
   const settings = override ? cloneEnvironmentSettings(override) : cloneEnvironmentSettings(existingSettings ?? null)
   const visible = node.visible ?? true
-  return createEnvironmentSceneNode({ settings, visible })
+  const normalized = createEnvironmentSceneNode({ settings, visible })
+  if (node.children?.length) {
+    normalized.children = node.children.map(cloneNode)
+  }
+  return normalized
 }
 
 function ensureEnvironmentNode(nodes: SceneNode[], override?: EnvironmentSettings): SceneNode[] {
@@ -1663,6 +1671,7 @@ function normalizeGroundSceneNode(node: SceneNode | null | undefined, settings?:
   }
   if (node.dynamicMesh?.type === 'Ground') {
     const primaryMaterial = getPrimaryNodeMaterial(node)
+    const children = node.children?.length ? node.children.map(cloneNode) : undefined
     return {
       ...node,
       id: GROUND_NODE_ID,
@@ -1683,6 +1692,7 @@ function normalizeGroundSceneNode(node: SceneNode | null | undefined, settings?:
       locked: true,
       dynamicMesh: createGroundDynamicMeshDefinition(node.dynamicMesh, settings),
       sourceAssetId: undefined,
+      children,
     }
   }
   return createGroundSceneNode({}, settings)
