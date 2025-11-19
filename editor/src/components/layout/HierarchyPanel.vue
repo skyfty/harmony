@@ -537,6 +537,19 @@ function handleTreeBackgroundMouseDown(event: MouseEvent) {
   if (!target) {
     return
   }
+  const container = event.currentTarget as HTMLElement | null
+  if (container) {
+    const rect = container.getBoundingClientRect()
+    const onVerticalScrollbar =
+      container.scrollHeight > container.clientHeight &&
+      event.clientX >= rect.left + container.clientWidth
+    const onHorizontalScrollbar =
+      container.scrollWidth > container.clientWidth &&
+      event.clientY >= rect.top + container.clientHeight
+    if (onVerticalScrollbar || onHorizontalScrollbar) {
+      return
+    }
+  }
   if (target.closest('.node-label') || target.closest('.tree-node-trailing') || target.closest('.v-btn')) {
     return
   }
