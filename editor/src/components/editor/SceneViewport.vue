@@ -7,6 +7,9 @@ import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { OutlinePass } from 'three/examples/jsm/postprocessing/OutlinePass.js'
+import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js'
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+
 // @ts-ignore - local plugin has no .d.ts declaration file
 import { TransformControls } from '@/utils/transformControls.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
@@ -109,6 +112,7 @@ let renderer: THREE.WebGLRenderer | null = null
 let composer: EffectComposer | null = null
 let renderPass: RenderPass | null = null
 let outlinePass: OutlinePass | null = null
+let fxaaPass: ShaderPass | null = null
 let scene: THREE.Scene | null = null
 let perspectiveCamera: THREE.PerspectiveCamera | null = null
 let orthographicCamera: THREE.OrthographicCamera | null = null
@@ -228,6 +232,8 @@ function applyPixelRatioToRenderer(value: number) {
   try {
     renderer?.setPixelRatio(value)
     composer?.setPixelRatio(value)
+    const { width, height } = getViewportSize()
+    updateFxaaResolution(width, height)
   } catch {}
 }
 
@@ -2137,6 +2143,30 @@ function configureOutlinePassAppearance(pass: OutlinePass) {
   pass.usePatternTexture = false
 }
 
+function updateFxaaResolution(width: number, height: number) {
+  if (!fxaaPass) {
+    return
+  }
+
+  const safeWidth = Math.max(1, width)
+  const safeHeight = Math.max(1, height)
+  const pixelRatio = renderer?.getPixelRatio?.() ?? 1
+  const uniform = fxaaPass.uniforms?.['resolution']
+  if (!uniform?.value) {
+    return
+  }
+  const inverseWidth = 1 / (safeWidth * pixelRatio)
+  const inverseHeight = 1 / (safeHeight * pixelRatio)
+
+  const value = uniform.value as THREE.Vector2 & { x: number; y: number }
+  if (typeof value.set === 'function') {
+    value.set(inverseWidth, inverseHeight)
+  } else {
+    value.x = inverseWidth
+    value.y = inverseHeight
+  }
+}
+
 function createPostProcessingPipeline(width: number, height: number) {
   if (!renderer || !scene || !camera) {
     return
@@ -2144,16 +2174,25 @@ function createPostProcessingPipeline(width: number, height: number) {
 
   disposePostProcessing()
 
+  const safeWidth = Math.max(1, width)
+  const safeHeight = Math.max(1, height)
+
   composer = new EffectComposer(renderer)
-  composer.setPixelRatio(isInteractiveQuality ? targetInteractivePixelRatio : normalPixelRatio)
-  composer.setSize(width, height)
+  const currentPixelRatio = isInteractiveQuality ? targetInteractivePixelRatio : normalPixelRatio
+  composer.setPixelRatio(currentPixelRatio)
+  composer.setSize(safeWidth, safeHeight)
 
   renderPass = new RenderPass(scene, camera)
   composer.addPass(renderPass)
 
-  outlinePass = new OutlinePass(new THREE.Vector2(width, height), scene, camera)
+  outlinePass = new OutlinePass(new THREE.Vector2(safeWidth, safeHeight), scene, camera)
   configureOutlinePassAppearance(outlinePass)
   composer.addPass(outlinePass)
+
+  fxaaPass = new ShaderPass(FXAAShader)
+  composer.addPass(fxaaPass)
+
+  updateFxaaResolution(safeWidth, safeHeight)
 
   updateOutlineSelectionTargets()
 }
@@ -2167,6 +2206,7 @@ function disposePostProcessing() {
   outlinePass?.dispose?.()
   outlinePass = null
   renderPass = null
+  fxaaPass = null
 }
 
 function renderViewportFrame() {
@@ -2934,9 +2974,13 @@ function initScene() {
     if (!renderer || !viewportEl.value) return
     const w = viewportEl.value.clientWidth
     const h = viewportEl.value.clientHeight
+    if (w <= 0 || h <= 0) {
+      return
+    }
     renderer.setSize(w, h)
     composer?.setSize(w, h)
     outlinePass?.setSize(w, h)
+    updateFxaaResolution(w, h)
     if (perspectiveCamera) {
       perspectiveCamera.aspect = h === 0 ? 1 : w / h
       perspectiveCamera.updateProjectionMatrix()

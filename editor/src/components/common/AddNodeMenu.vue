@@ -18,7 +18,7 @@ import { useUiStore } from '@/stores/uiStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import UrlInputDialog from './UrlInputDialog.vue'
 import { generateUuid } from '@/utils/uuid'
-import { type LightNodeType, type SceneNode } from '@harmony/schema'
+import { type LightNodeType, type SceneNode, type Vector3Like } from '@harmony/schema'
 import { determineAssetCategoryId } from '@/stores/assetCatalog'
 import { blobToDataUrl } from '@/utils/blob'
 import {
@@ -69,6 +69,12 @@ const tempViewPointVecA = new THREE.Vector3()
 const tempViewPointVecB = new THREE.Vector3()
 const tempViewPointVecC = new THREE.Vector3()
 const tempViewPointQuat = new THREE.Quaternion()
+const tempGroupCameraPosition = new THREE.Vector3()
+const tempGroupCameraTarget = new THREE.Vector3()
+const tempGroupDirection = new THREE.Vector3()
+const tempGroupSpawn = new THREE.Vector3()
+
+const GROUP_SPAWN_DISTANCE = 6
 
 interface NodeCreationOptions {
   parentId?: string | null
@@ -577,11 +583,50 @@ function handleAddGroup() {
   const groupName = getNextGroupName()
   const group = new THREE.Group()
   group.name = groupName
+  const spawnPosition = computeGroupSpawnPosition()
   sceneStore.addSceneNode({
     nodeType: 'Group',
     object: group,
-    name: groupName
+    name: groupName,
+    ...(spawnPosition ? { position: spawnPosition } : {}),
   })
+}
+
+function computeGroupSpawnPosition(): Vector3Like | null {
+  const camera = sceneStore.camera
+  if (!camera) {
+    return null
+  }
+
+  tempGroupCameraPosition.set(camera.position.x, camera.position.y, camera.position.z)
+  tempGroupCameraTarget.set(camera.target.x, camera.target.y, camera.target.z)
+
+  if (camera.forward) {
+    tempGroupDirection.set(camera.forward.x, camera.forward.y, camera.forward.z)
+  } else {
+    tempGroupDirection.copy(tempGroupCameraTarget).sub(tempGroupCameraPosition)
+  }
+
+  if (tempGroupDirection.lengthSq() < 1e-6) {
+    tempGroupDirection.set(0, 0, -1)
+  }
+
+  if (Math.abs(tempGroupDirection.y) > 0.95) {
+    tempGroupDirection.y = 0
+    if (tempGroupDirection.lengthSq() < 1e-6) {
+      tempGroupDirection.set(0, 0, -1)
+    }
+  }
+
+  tempGroupDirection.normalize()
+  tempGroupSpawn.copy(tempGroupCameraPosition).addScaledVector(tempGroupDirection, GROUP_SPAWN_DISTANCE)
+  tempGroupSpawn.y = tempGroupCameraTarget.y
+
+  return {
+    x: tempGroupSpawn.x,
+    y: tempGroupSpawn.y,
+    z: tempGroupSpawn.z,
+  }
 }
 
 function collectNodeNames(nodes: SceneNode[] | undefined, bucket: Set<string>) {
