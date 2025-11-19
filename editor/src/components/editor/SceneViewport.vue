@@ -4,6 +4,9 @@ import { storeToRefs } from 'pinia'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
+import { OutlinePass } from 'three/examples/jsm/postprocessing/OutlinePass.js'
 // @ts-ignore - local plugin has no .d.ts declaration file
 import { TransformControls } from '@/utils/transformControls.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
@@ -103,6 +106,9 @@ const statsHostRef = ref<HTMLDivElement | null>(null)
 const gizmoContainerRef = ref<HTMLDivElement | null>(null)
 
 let renderer: THREE.WebGLRenderer | null = null
+let composer: EffectComposer | null = null
+let renderPass: RenderPass | null = null
+let outlinePass: OutlinePass | null = null
 let scene: THREE.Scene | null = null
 let perspectiveCamera: THREE.PerspectiveCamera | null = null
 let orthographicCamera: THREE.OrthographicCamera | null = null
@@ -112,10 +118,9 @@ let gizmoControls: ViewportGizmo | null = null
 let transformControls: TransformControls | null = null
 let transformControlsDirty = false
 let resizeObserver: ResizeObserver | null = null
-let selectionBoxHelper: THREE.Box3Helper | null = null
-let selectionTrackedObject: THREE.Object3D | null = null
 let gridHighlight: THREE.Group | null = null
 const selectionHighlights = new Map<string, THREE.Group>()
+const outlineSelectionTargets: THREE.Object3D[] = []
 let nodePickerHighlight: THREE.Group | null = null
 let nodeFlashHighlight: THREE.Group | null = null
 let nodeFlashIntervalHandle: number | null = null
@@ -219,15 +224,20 @@ let interactionRestoreTimer: number | null = null
 let isInteractiveQuality = false
 let savedShadowEnabled: boolean | null = null
 
+function applyPixelRatioToRenderer(value: number) {
+  try {
+    renderer?.setPixelRatio(value)
+    composer?.setPixelRatio(value)
+  } catch {}
+}
+
 function applyInteractiveQuality(enabled: boolean) {
   if (!renderer) return
   if (enabled === isInteractiveQuality) return
   isInteractiveQuality = enabled
   if (enabled) {
     // Lower resolution and disable expensive features during interaction
-    try {
-      renderer.setPixelRatio(targetInteractivePixelRatio)
-    } catch {}
+    applyPixelRatioToRenderer(targetInteractivePixelRatio)
     if (savedShadowEnabled === null) {
       savedShadowEnabled = renderer.shadowMap.enabled
     }
@@ -237,9 +247,7 @@ function applyInteractiveQuality(enabled: boolean) {
     }
   } else {
     // Restore normal quality
-    try {
-      renderer.setPixelRatio(normalPixelRatio)
-    } catch {}
+    applyPixelRatioToRenderer(normalPixelRatio)
     if (savedShadowEnabled !== null) {
       renderer.shadowMap.enabled = savedShadowEnabled
     } else {
@@ -285,10 +293,8 @@ function setBasePixelRatio(target: number) {
     return
   }
   normalPixelRatio = clamped
-  if (!isInteractiveQuality && renderer) {
-    try {
-      renderer.setPixelRatio(normalPixelRatio)
-    } catch {}
+  if (!isInteractiveQuality) {
+    applyPixelRatioToRenderer(normalPixelRatio)
   }
 }
 
@@ -298,10 +304,8 @@ function setInteractivePixelRatio(target: number) {
     return
   }
   targetInteractivePixelRatio = clamped
-  if (isInteractiveQuality && renderer) {
-    try {
-      renderer.setPixelRatio(targetInteractivePixelRatio)
-    } catch {}
+  if (isInteractiveQuality) {
+    applyPixelRatioToRenderer(targetInteractivePixelRatio)
   }
 }
 
@@ -970,7 +974,6 @@ function dropSelectionToGround() {
 
   const primaryId = sceneStore.selectedNodeId
   const primaryObject = primaryId ? objectMap.get(primaryId) ?? null : null
-  updateSelectionBox(primaryObject)
   updateGridHighlightFromObject(primaryObject)
   updatePlaceholderOverlayPositions()
   updateSelectionHighlights()
@@ -1053,7 +1056,6 @@ function alignSelection(mode: AlignMode) {
   }
 
   const primaryObject = objectMap.get(primaryId) ?? null
-  updateSelectionBox(primaryObject)
   updateGridHighlightFromObject(primaryObject)
   updatePlaceholderOverlayPositions()
   updateSelectionHighlights()
@@ -1122,7 +1124,6 @@ function rotateSelection({ axis, degrees }: SelectionRotationOptions) {
 
   const primaryId = sceneStore.selectedNodeId
   const primaryObject = primaryId ? objectMap.get(primaryId) ?? null : null
-  updateSelectionBox(primaryObject)
   updateGridHighlightFromObject(primaryObject)
   updatePlaceholderOverlayPositions()
   updateSelectionHighlights()
@@ -1175,7 +1176,6 @@ function updateSelectDragPosition(drag: SelectionDragState, event: PointerEvent)
     })
   })
 
-  updateSelectionBox(drag.object)
   updateGridHighlightFromObject(drag.object)
   updateSelectionHighlights()
 
@@ -1321,7 +1321,6 @@ function rotateActiveSelection(nodeId: string) {
     return
   }
 
-  updateSelectionBox(primaryObject)
   updateGridHighlightFromObject(primaryObject)
   updatePlaceholderOverlayPositions()
   updateSelectionHighlights()
@@ -2119,10 +2118,73 @@ function bindControlsToCamera(newCamera: THREE.PerspectiveCamera | THREE.Orthogr
   }
 }
 
+function updatePostProcessingCamera(target: THREE.PerspectiveCamera | THREE.OrthographicCamera) {
+  if (renderPass) {
+    renderPass.camera = target
+  }
+  if (outlinePass) {
+    outlinePass.renderCamera = target
+  }
+}
+
+function configureOutlinePassAppearance(pass: OutlinePass) {
+  pass.edgeStrength = 3.25
+  pass.edgeGlow = 0.45
+  pass.edgeThickness = 1.65
+  pass.pulsePeriod = 0
+  pass.visibleEdgeColor.setHex(0x4dd0e1)
+  pass.hiddenEdgeColor.setHex(0x123040)
+  pass.usePatternTexture = false
+}
+
+function createPostProcessingPipeline(width: number, height: number) {
+  if (!renderer || !scene || !camera) {
+    return
+  }
+
+  disposePostProcessing()
+
+  composer = new EffectComposer(renderer)
+  composer.setPixelRatio(isInteractiveQuality ? targetInteractivePixelRatio : normalPixelRatio)
+  composer.setSize(width, height)
+
+  renderPass = new RenderPass(scene, camera)
+  composer.addPass(renderPass)
+
+  outlinePass = new OutlinePass(new THREE.Vector2(width, height), scene, camera)
+  configureOutlinePassAppearance(outlinePass)
+  composer.addPass(outlinePass)
+
+  updateOutlineSelectionTargets()
+}
+
+function disposePostProcessing() {
+  if (composer) {
+    composer.renderTarget1.dispose()
+    composer.renderTarget2.dispose()
+    composer = null
+  }
+  outlinePass?.dispose?.()
+  outlinePass = null
+  renderPass = null
+}
+
+function renderViewportFrame() {
+  if (!renderer || !scene || !camera) {
+    return
+  }
+  if (composer) {
+    composer.render()
+  } else {
+    renderer.render(scene, camera)
+  }
+}
+
 function activateCamera(newCamera: THREE.PerspectiveCamera | THREE.OrthographicCamera, mode: CameraProjection) {
   camera = newCamera
   activeCameraMode = mode
   bindControlsToCamera(newCamera)
+  updatePostProcessingCamera(newCamera)
   if (gizmoControls) {
     gizmoControls.camera = newCamera
     gizmoControls.update()
@@ -2213,7 +2275,7 @@ function handleCaptureScreenshot() {
   }
 
   try {
-    renderer.render(scene, camera)
+    renderViewportFrame()
     const dataUrl = renderer.domElement.toDataURL('image/png')
     const link = document.createElement('a')
     link.href = dataUrl
@@ -2234,7 +2296,7 @@ async function captureScreenshot(mimeType: string = 'image/png'): Promise<Blob |
   }
 
   try {
-    renderer.render(scene, camera)
+    renderViewportFrame()
     const canvas = renderer.domElement
     if (typeof canvas.toBlob === 'function') {
       const blob = await new Promise<Blob | null>((resolve) => {
@@ -2457,50 +2519,6 @@ async function exportScene(options: SceneExportOptions, onProgress: (progress: n
   } else {
     throw new Error(`Unsupported export format: ${options.format}`)
   }
-}
-
-function clearSelectionBox() {
-  if (!selectionBoxHelper) return
-
-  if (selectionBoxHelper.parent) {
-    selectionBoxHelper.parent.remove(selectionBoxHelper)
-  }
-
-  selectionBoxHelper.geometry.dispose()
-  if (Array.isArray(selectionBoxHelper.material)) {
-    selectionBoxHelper.material.forEach((material) => material.dispose())
-  } else {
-    selectionBoxHelper.material.dispose()
-  }
-
-  selectionBoxHelper = null
-  selectionTrackedObject = null
-}
-
-function updateSelectionBox(object: THREE.Object3D | null) {
-  if (!scene) {
-    selectionTrackedObject = object
-    return
-  }
-
-  if (!object) {
-    clearSelectionBox()
-    return
-  }
-
-  if (!selectionBoxHelper) {
-    const box = new THREE.Box3().setFromObject(object)
-    selectionBoxHelper = new THREE.Box3Helper(box, 0x82b1ff)
-    selectionBoxHelper.frustumCulled = false
-    scene.add(selectionBoxHelper)
-  } else {
-    selectionBoxHelper.box.setFromObject(object)
-    if (!selectionBoxHelper.parent) {
-      scene.add(selectionBoxHelper)
-    }
-  }
-
-  selectionTrackedObject = object
 }
 
 function buildCameraState(): SceneCameraState | null {
@@ -2820,7 +2838,7 @@ function initScene() {
     preserveDrawingBuffer: false,
   })
   // Dynamic quality manager keeps pixel ratio capped for the current device
-  renderer.setPixelRatio(normalPixelRatio)
+  applyPixelRatioToRenderer(normalPixelRatio)
   renderer.setSize(width, height)
   renderer.shadowMap.enabled = Boolean(shadowsEnabled.value)
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
@@ -2857,9 +2875,6 @@ function initScene() {
   applyGridVisibility(gridVisible.value)
   applyAxesVisibility(axesVisible.value)
   ensureFallbackLighting()
-  if (selectionTrackedObject) {
-    updateSelectionBox(selectionTrackedObject)
-  }
 
   applySkyboxSettingsToScene(skyboxSettings.value)
   if (pendingSkyboxSettings) {
@@ -2888,7 +2903,8 @@ function initScene() {
   transformControls.addEventListener('dragging-changed', draggingChangedHandler as any)
   transformControls.addEventListener('objectChange', handleTransformChange)
   scene.add(transformControls.getHelper())
-  
+
+  createPostProcessingPipeline(width, height)
 
   bindControlsToCamera(camera)
   if (cameraProjectionMode.value !== activeCameraMode && (cameraProjectionMode.value === 'orthographic' || cameraProjectionMode.value === 'perspective')) {
@@ -2919,6 +2935,8 @@ function initScene() {
     const w = viewportEl.value.clientWidth
     const h = viewportEl.value.clientHeight
     renderer.setSize(w, h)
+    composer?.setSize(w, h)
+    outlinePass?.setSize(w, h)
     if (perspectiveCamera) {
       perspectiveCamera.aspect = h === 0 ? 1 : w / h
       perspectiveCamera.updateProjectionMatrix()
@@ -3503,9 +3521,6 @@ function animate() {
     })
   }
 
-  if (selectionBoxHelper && selectionTrackedObject) {
-    selectionBoxHelper.box.setFromObject(selectionTrackedObject)
-  }
   if (wallPreviewNeedsSync) {
     wallPreviewNeedsSync = false
     syncWallPreview()
@@ -3515,7 +3530,7 @@ function animate() {
     sky.position.copy(camera.position)
   }
   gizmoControls?.cameraUpdate()
-  renderer.render(scene, camera)
+  renderViewportFrame()
   gizmoControls?.render()
   stats?.end()
 }
@@ -3583,6 +3598,7 @@ function disposeScene() {
   isSelectDragOrbitDisabled = false
   isGroundSelectionOrbitDisabled = false
 
+  disposePostProcessing()
   renderer?.dispose()
   renderer = null
 
@@ -3605,7 +3621,7 @@ function disposeScene() {
     gridHighlight = null
   }
 
-  clearSelectionBox()
+  clearOutlineSelectionTargets()
   disposeDragPreview()
   dragPreviewGroup.removeFromParent()
 
@@ -3892,6 +3908,43 @@ function clearSelectionHighlights() {
     disposeSelectionIndicator(group)
   })
   selectionHighlights.clear()
+}
+
+function resolveOutlineTargetForNode(nodeId: string | null | undefined): THREE.Object3D | null {
+  if (!nodeId) {
+    return null
+  }
+  return objectMap.get(nodeId) ?? null
+}
+
+function updateOutlineSelectionTargets() {
+  outlineSelectionTargets.length = 0
+  const ids = sceneStore.selectedNodeIds.length
+    ? sceneStore.selectedNodeIds
+    : props.selectedNodeId
+      ? [props.selectedNodeId]
+      : []
+
+  ids.forEach((id) => {
+    if (!id) {
+      return
+    }
+    const target = resolveOutlineTargetForNode(id)
+    if (target && !outlineSelectionTargets.includes(target)) {
+      outlineSelectionTargets.push(target)
+    }
+  })
+
+  if (outlinePass) {
+    outlinePass.selectedObjects = outlineSelectionTargets.slice()
+  }
+}
+
+function clearOutlineSelectionTargets() {
+  outlineSelectionTargets.length = 0
+  if (outlinePass) {
+    outlinePass.selectedObjects = []
+  }
 }
 
 function ensureNodePickerIndicator(): THREE.Group | null {
@@ -6101,7 +6154,6 @@ function handleTransformChange() {
     })
   }
 
-  updateSelectionBox(target)
   updateGridHighlightFromObject(target)
   updateSelectionHighlights()
 
@@ -6417,6 +6469,7 @@ function syncSceneGraph() {
 
   // 重新附加选择并确保工具模式正确
   attachSelection(props.selectedNodeId, props.activeTool)
+  updateOutlineSelectionTargets()
 
   refreshPlaceholderOverlays()
   ensureFallbackLighting()
@@ -6424,7 +6477,7 @@ function syncSceneGraph() {
 }
 
 function disposeSceneNodes() {
-  clearSelectionBox()
+  clearOutlineSelectionTargets()
   clearLightHelpers()
   const nodeIds = Array.from(objectMap.keys())
   nodeIds.forEach((id) => {
@@ -7275,7 +7328,7 @@ function applyTransformSpace(tool: EditorTool) {
 function attachSelection(nodeId: string | null, tool: EditorTool = props.activeTool) {
   const locked = nodeId ? sceneStore.isNodeSelectionLocked(nodeId) : false
   const target = !locked && nodeId ? objectMap.get(nodeId) ?? null : null
-  updateSelectionBox(target)
+  updateOutlineSelectionTargets()
 
   if (!nodeId || locked || !target) {
     updateGridHighlight(null)
@@ -7380,6 +7433,7 @@ onMounted(() => {
   initScene()
   updateToolMode(props.activeTool)
   attachSelection(props.selectedNodeId)
+  updateOutlineSelectionTargets()
   updateSelectionHighlights()
   window.addEventListener('keyup', handleViewportShortcut, { capture: true })
   window.addEventListener('keydown', handleAltOverrideKeyDown, { capture: true })
@@ -7538,6 +7592,7 @@ watch(
   () => props.selectedNodeId,
   (id) => {
     attachSelection(id)
+    updateOutlineSelectionTargets()
     updateSelectionHighlights()
   }
 )
@@ -7545,6 +7600,7 @@ watch(
 watch(
   () => sceneStore.selectedNodeIds.slice(),
   () => {
+    updateOutlineSelectionTargets()
     updateSelectionHighlights()
   }
 )
