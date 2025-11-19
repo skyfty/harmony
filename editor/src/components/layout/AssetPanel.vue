@@ -3,7 +3,13 @@ import { computed, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'v
 import { storeToRefs } from 'pinia'
 import { Splitpanes, Pane } from 'splitpanes'
 import 'splitpanes/dist/splitpanes.css'
-import { useSceneStore, extractProviderIdFromPackageDirectoryId } from '@/stores/sceneStore'
+import {
+  useSceneStore,
+  extractProviderIdFromPackageDirectoryId,
+  GROUND_NODE_ID,
+  SKY_NODE_ID,
+  ENVIRONMENT_NODE_ID,
+} from '@/stores/sceneStore'
 import { PACKAGES_ROOT_DIRECTORY_ID, determineAssetCategoryId } from '@/stores/assetCatalog'
 import type { ResourceCategory } from '@/types/resource-category'
 import { fetchResourceCategories } from '@/api/resourceAssets'
@@ -12,9 +18,12 @@ import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { resourceProviders } from '@/resources/projectProviders'
+import { assetProvider } from '@/resources/projectProviders/asset'
 import { loadProviderCatalog, storeProviderCatalog } from '@/stores/providerCatalogCache'
 import { getCachedModelObject } from '@/stores/modelObjectCache'
 import { dataUrlToBlob, extractExtension } from '@/utils/blob'
+import type { SceneNode } from '@harmony/schema'
+import type { SceneMaterialTextureRef } from '@/types/material'
 
 import UploadAssetsDialog from './UploadAssetsDialog.vue'
 import AssetFilterControl from './AssetFilterControl.vue'
@@ -27,6 +36,8 @@ import type {
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
 
+const PRESET_PROVIDER_ID = assetProvider.id
+
 const {
   projectTree,
   activeDirectoryId,
@@ -36,6 +47,7 @@ const {
   projectPanelTreeSize,
   draggingAssetId,
   assetIndex,
+  selectedNodeId,
 } = storeToRefs(sceneStore)
 
 const openedDirectories = ref<string[]>(restoreOpenedDirectories())
@@ -159,6 +171,25 @@ async function loadPackageDirectory(providerId: string, options: { force?: boole
     setProviderError(providerId, (error as Error).message ?? 'Failed to load resources')
   } finally {
     setProviderLoading(providerId, false)
+  }
+}
+
+const presetRefreshPending = ref(false)
+
+async function refreshPresetProviderAssets(): Promise<void> {
+  if (!PRESET_PROVIDER_ID) {
+    return
+  }
+  if (presetRefreshPending.value) {
+    return
+  }
+  presetRefreshPending.value = true
+  try {
+    await loadPackageDirectory(PRESET_PROVIDER_ID, { force: true })
+  } catch (error) {
+    console.error('Failed to refresh preset assets', error)
+  } finally {
+    presetRefreshPending.value = false
   }
 }
 
@@ -321,7 +352,80 @@ async function ensureAssetCached(asset: ProjectAsset) {
   }
 }
 
+const MODEL_ASSET_TYPES = new Set<ProjectAsset['type']>(['model', 'mesh'])
+const MATERIAL_ASSET_TYPES = new Set<ProjectAsset['type']>(['material'])
+const TEXTURE_ASSET_TYPES = new Set<ProjectAsset['type']>(['texture', 'image'])
+
+const selectedSceneNode = computed<SceneNode | null>(() => findSceneNodeById(sceneStore.nodes, selectedNodeId.value))
+
+function findSceneNodeById(nodes: SceneNode[] | undefined, id: string | null | undefined): SceneNode | null {
+  if (!Array.isArray(nodes) || !id) {
+    return null
+  }
+  for (const node of nodes) {
+    if (!node) {
+      continue
+    }
+    if (node.id === id) {
+      return node
+    }
+    const child = findSceneNodeById(node.children, id)
+    if (child) {
+      return child
+    }
+  }
+  return null
+}
+
+function isNormalSceneNode(node: SceneNode | null): boolean {
+  if (!node) {
+    return false
+  }
+  return node.id !== GROUND_NODE_ID && node.id !== SKY_NODE_ID && node.id !== ENVIRONMENT_NODE_ID
+}
+
+function nodeSupportsMaterials(node: SceneNode | null): boolean {
+  if (!node || !isNormalSceneNode(node)) {
+    return false
+  }
+  const type = node.nodeType ?? 'Mesh'
+  return type !== 'Light' && type !== 'Group'
+}
+
+function resolveModelParentNode(node: SceneNode | null): SceneNode | null {
+  if (!node) {
+    return null
+  }
+  return isNormalSceneNode(node) ? node : null
+}
+
+function canAddAsset(asset: ProjectAsset): boolean {
+  if (!asset?.gleaned) {
+    return false
+  }
+  if (isAssetDownloading(asset)) {
+    return false
+  }
+
+  if (asset.type === 'prefab' || MODEL_ASSET_TYPES.has(asset.type)) {
+    return true
+  }
+
+  if (MATERIAL_ASSET_TYPES.has(asset.type) || TEXTURE_ASSET_TYPES.has(asset.type)) {
+    const node = selectedSceneNode.value
+    if (!node || !isNormalSceneNode(node)) {
+      return false
+    }
+    return nodeSupportsMaterials(node)
+  }
+
+  return true
+}
+
 async function handleAddAsset(asset: ProjectAsset) {
+  if (!canAddAsset(asset)) {
+    return
+  }
   if (addPendingAssetId.value === asset.id) {
     return
   }
@@ -331,14 +435,52 @@ async function handleAddAsset(asset: ProjectAsset) {
     preparedAsset = prepareAssetForOperations(asset)
     assetCacheStore.setError(preparedAsset.id, null)
     await ensureAssetCached(preparedAsset)
+    const currentNode = selectedSceneNode.value
+    const parentNode = resolveModelParentNode(currentNode)
     if (preparedAsset.type === 'prefab') {
-      await sceneStore.instantiateNodePrefabAsset(preparedAsset.id)
+      const instantiated = await sceneStore.instantiateNodePrefabAsset(preparedAsset.id)
+      if (instantiated && parentNode?.id) {
+        const moved = sceneStore.moveNode({ nodeId: instantiated.id, targetId: parentNode.id, position: 'inside' })
+        if (!moved) {
+          console.warn('Failed to reparent prefab under selected node', instantiated.id, parentNode.id)
+        }
+      }
       return
     }
-    const node = await sceneStore.addModelNode({ asset: preparedAsset })
-    if (!node) {
-      throw new Error('Asset is not ready yet')
+    if (MODEL_ASSET_TYPES.has(preparedAsset.type)) {
+      const node = await sceneStore.addModelNode({ asset: preparedAsset, parentId: parentNode?.id ?? undefined })
+      if (!node) {
+        throw new Error('Asset is not ready yet')
+      }
+      return
     }
+    if (MATERIAL_ASSET_TYPES.has(preparedAsset.type)) {
+      if (!currentNode || !nodeSupportsMaterials(currentNode)) {
+        throw new Error('Select a compatible node to apply the material')
+      }
+      const primary = currentNode.materials?.[0] ?? null
+      const applied = primary
+        ? sceneStore.assignNodeMaterial(currentNode.id, primary.id, preparedAsset.id)
+        : Boolean(sceneStore.addNodeMaterial(currentNode.id, { materialId: preparedAsset.id }))
+      if (!applied) {
+        throw new Error('Failed to apply material to the selected node')
+      }
+      return
+    }
+    if (TEXTURE_ASSET_TYPES.has(preparedAsset.type)) {
+      if (!currentNode || !nodeSupportsMaterials(currentNode)) {
+        throw new Error('Select a compatible node to apply the texture')
+      }
+      const textureRef: SceneMaterialTextureRef = preparedAsset.name?.trim().length
+        ? { assetId: preparedAsset.id, name: preparedAsset.name }
+        : { assetId: preparedAsset.id }
+      const applied = sceneStore.setNodePrimaryTexture(currentNode.id, textureRef, 'albedo')
+      if (!applied) {
+        throw new Error('Failed to apply texture to the selected node')
+      }
+      return
+    }
+    console.warn('Add asset action is not implemented for asset type', preparedAsset.type)
   } catch (error) {
     console.error('Failed to add asset', error)
     const cacheId = preparedAsset?.id ?? resolveAssetCacheId(asset)
@@ -502,7 +644,7 @@ function detachDragSuppressionListeners() {
 
 function initializeDragSuppression(preparedAsset: ProjectAsset, sourceAssetId: string) {
   detachDragSuppressionListeners()
-  const preparedAssetId = preparedAsset.type === 'model' ? preparedAsset.id : null
+  const preparedAssetId = MODEL_ASSET_TYPES.has(preparedAsset.type) ? preparedAsset.id : null
   dragSuppressionSourceAssetId = sourceAssetId
   dragSuppressionPreparedAssetId = preparedAssetId
   dragSuppressionActive = false
@@ -802,6 +944,7 @@ function categoryTooltip(crumb: CategoryBreadcrumbItem): string {
 
 onMounted(() => {
   void loadCategoryTree()
+  void refreshPresetProviderAssets()
 })
 
 watch(categoryTree, () => {
@@ -2248,6 +2391,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                       size="small"
                       style="min-width: 20px; height: 20px;"
                       :loading="addPendingAssetId === asset.id"
+                      :disabled="!canAddAsset(asset)"
                       @click.stop="handleAddAsset(asset)"
                     />
                   </div>

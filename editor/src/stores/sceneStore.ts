@@ -3143,11 +3143,11 @@ function computeAssetSpawnTransform(asset: ProjectAsset, position?: Vector3Like)
   const rotation: Vector3Like = { x: 0, y: 0, z: 0 }
   const scale: Vector3Like = { x: 1, y: 1, z: 1 }
 
-  if (!position && asset.type !== 'model') {
+  if (!position && asset.type !== 'model' && asset.type !== 'mesh') {
     spawnPosition.y = 1
   }
 
-  if (asset.type === 'model') {
+  if (asset.type === 'model' || asset.type === 'mesh') {
     const baseHeight = Math.max(scale.y, 0)
     const offset = baseHeight / 2
     spawnPosition.y = (position?.y ?? spawnPosition.y) + offset
@@ -6799,7 +6799,7 @@ export const useSceneStore = defineStore('scene', {
             })
           }
 
-          const shouldCacheModelObject = asset?.type === 'model'
+          const shouldCacheModelObject = asset?.type === 'model' || asset?.type === 'mesh'
           let baseObject: Object3D | null = null
 
           if (shouldCacheModelObject) {
@@ -8417,7 +8417,7 @@ export const useSceneStore = defineStore('scene', {
       
       if (payload.asset) {
         const asset = payload.asset
-        if (asset.type !== 'model') {
+        if (asset.type !== 'model' && asset.type !== 'mesh') {
           return null
         }
 
