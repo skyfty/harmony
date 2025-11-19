@@ -1570,32 +1570,45 @@ function resolveActiveModelParentId(): string | null {
 
 async function handleAddNode(geometry: GeometryType) {
   const mesh = createPrimitiveMesh(geometry)
-  const parentId = resolveActiveModelParentId()
+  const selectedNode = sceneStore.selectedNode
+  const parentIsGroup = Boolean(
+    selectedNode && !selectedNode.isPlaceholder && selectedNode.nodeType === 'Group'
+  )
+  const parentId = parentIsGroup ? selectedNode?.id ?? null : resolveActiveModelParentId()
 
   let spawnY = 0
-  const bufferGeometry = mesh.geometry as THREE.BufferGeometry
-  if (!bufferGeometry.boundingBox) {
-    bufferGeometry.computeBoundingBox()
-  }
-  const boundingBox = bufferGeometry.boundingBox
-  if (boundingBox) {
-    const minY = boundingBox.min.y
-    if (Number.isFinite(minY) && minY < 0) {
-      const EPSILON = 1e-3
-      spawnY = -minY + EPSILON
+  if (!parentIsGroup) {
+    const bufferGeometry = mesh.geometry as THREE.BufferGeometry
+    if (!bufferGeometry.boundingBox) {
+      bufferGeometry.computeBoundingBox()
+    }
+    const boundingBox = bufferGeometry.boundingBox
+    if (boundingBox) {
+      const minY = boundingBox.min.y
+      if (Number.isFinite(minY) && minY < 0) {
+        const EPSILON = 1e-3
+        spawnY = -minY + EPSILON
+      }
     }
   }
 
   mesh.position.set(0, 0, 0)
   mesh.updateMatrixWorld(true)
 
-  await sceneStore.addModelNode({
+  const created = await sceneStore.addModelNode({
     object: mesh,
     nodeType: geometry,
     name: mesh.name,
-    baseY: spawnY,
+    baseY: parentIsGroup ? 0 : spawnY,
     parentId,
   })
+
+  if (created && parentIsGroup) {
+    sceneStore.updateNodeProperties({
+      id: created.id,
+      position: { x: 0, y: 0, z: 0 },
+    })
+  }
 }
 
 function handleAddLight(type: LightNodeType) {
