@@ -2239,17 +2239,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                     />
                   </div>
                   <div class="asset-actions">
-                    <div class="asset-progress" v-if="isAssetDownloading(asset)">
-                      <v-progress-linear
-                        :model-value="assetDownloadProgress(asset)"
-                        color="primary"
-                        height="4"
-                        rounded
-                      />
-                    </div>
-                    <div class="asset-progress" v-else-if="assetDownloadError(asset)">
-                      <v-icon size="18" color="error">mdi-alert-circle-outline</v-icon>
-                    </div>
+          
                     <v-btn
                       color="primary"
                       variant="tonal"
