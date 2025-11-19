@@ -529,6 +529,17 @@ function pointerHitsSelectableObject(event: PointerEvent): boolean {
   return !!selectionHit
 }
 
+function isObjectWorldVisible(object: THREE.Object3D | null): boolean {
+  let current: THREE.Object3D | null = object
+  while (current) {
+    if (!current.visible) {
+      return false
+    }
+    current = current.parent ?? null
+  }
+  return true
+}
+
 function normalizeWallDimensionsForViewport(values: { height?: number; width?: number; thickness?: number }): {
   height: number
   width: number
@@ -802,6 +813,12 @@ function pickNodeAtPointer(event: PointerEvent): NodeHitResult | null {
     if (!baseObject) {
       continue
     }
+    if (!sceneStore.isNodeVisible(nodeId)) {
+      continue
+    }
+    if (!isObjectWorldVisible(baseObject)) {
+      continue
+    }
     return {
       nodeId,
       object: baseObject,
@@ -828,6 +845,12 @@ function pickActiveSelectionBoundingBoxHit(event: PointerEvent): NodeHitResult |
 
   const targetObject = objectMap.get(primaryId)
   if (!targetObject) {
+    return null
+  }
+  if (!sceneStore.isNodeVisible(primaryId)) {
+    return null
+  }
+  if (!isObjectWorldVisible(targetObject)) {
     return null
   }
 
