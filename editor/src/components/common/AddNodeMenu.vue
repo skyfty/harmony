@@ -583,16 +583,22 @@ function handleAddGroup() {
   const groupName = getNextGroupName()
   const group = new THREE.Group()
   group.name = groupName
-  const spawnPosition = computeGroupSpawnPosition()
+  const selectedNode = sceneStore.selectedNode
+  const parentId = selectedNode && !selectedNode.isPlaceholder ? selectedNode.id : null
+  const spawnPosition = computeGroupSpawnPosition(parentId)
   sceneStore.addSceneNode({
     nodeType: 'Group',
     object: group,
     name: groupName,
     ...(spawnPosition ? { position: spawnPosition } : {}),
+    parentId: parentId ?? undefined,
   })
 }
 
-function computeGroupSpawnPosition(): Vector3Like | null {
+function computeGroupSpawnPosition(parentId: string | null): Vector3Like | null {
+  if (parentId) {
+    return { x: 0, y: 0, z: 0 }
+  }
   const camera = sceneStore.camera
   if (!camera) {
     return null

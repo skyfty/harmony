@@ -8,7 +8,8 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { OutlinePass } from 'three/examples/jsm/postprocessing/OutlinePass.js'
 import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js'
-import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js'
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 
 // @ts-ignore - local plugin has no .d.ts declaration file
 import { TransformControls } from '@/utils/transformControls.js'
@@ -113,6 +114,7 @@ let composer: EffectComposer | null = null
 let renderPass: RenderPass | null = null
 let outlinePass: OutlinePass | null = null
 let fxaaPass: ShaderPass | null = null
+let outputPass: OutputPass | null = null
 let scene: THREE.Scene | null = null
 let perspectiveCamera: THREE.PerspectiveCamera | null = null
 let orthographicCamera: THREE.OrthographicCamera | null = null
@@ -2190,7 +2192,13 @@ function createPostProcessingPipeline(width: number, height: number) {
   composer.addPass(outlinePass)
 
   fxaaPass = new ShaderPass(FXAAShader)
+  if (fxaaPass.material) {
+    fxaaPass.material.toneMapped = true
+  }
   composer.addPass(fxaaPass)
+
+  outputPass = new OutputPass()
+  composer.addPass(outputPass)
 
   updateFxaaResolution(safeWidth, safeHeight)
 
@@ -2207,6 +2215,7 @@ function disposePostProcessing() {
   outlinePass = null
   renderPass = null
   fxaaPass = null
+  outputPass = null
 }
 
 function renderViewportFrame() {
