@@ -18,6 +18,7 @@ import type {
   SceneOutlineMeshMap,
   GroundDynamicMesh,
   SceneResourceSummaryEntry,
+  SceneMaterialTextureSlot,
 } from '@harmony/schema';
 import type { GuideboardComponentProps } from './components/definitions/guideboardComponent';
 import { GUIDEBOARD_COMPONENT_TYPE } from './components/definitions/guideboardComponent';
@@ -42,6 +43,16 @@ type SceneNodeWithExtras = SceneNode & {
   components?: SceneNodeComponentMap;
   editorFlags?: SceneNodeEditorFlags;
 };
+
+const MATERIAL_TEXTURE_SLOTS: SceneMaterialTextureSlot[] = [
+  'albedo',
+  'normal',
+  'metalness',
+  'roughness',
+  'ao',
+  'emissive',
+  'displacement',
+];
 
 export interface SceneGraphBuildResult {
   root: THREE.Group;
@@ -159,7 +170,7 @@ class SceneGraphBuilder {
   async build(): Promise<THREE.Group> {
     const materials = Array.isArray(this.document.materials) ? (this.document.materials as SceneMaterial[]) : [];
     const nodes = Array.isArray(this.document.nodes) ? (this.document.nodes as SceneNodeWithExtras[]) : [];
-    await this.preloadAssets(nodes);
+    await this.preloadAssets(nodes, materials);
     await this.materialFactory.prepareTemplates(materials);
     await this.buildNodes(nodes, this.root);
     return this.root;
@@ -258,6 +269,13 @@ class SceneGraphBuilder {
       return;
     }
     const clamped = Math.max(0, Math.min(100, Math.round(progress)));
+    if (assetId && this.assetSizeMap.has(assetId)) {
+      const size = this.assetSizeMap.get(assetId) ?? 0;
+      if (size > 0) {
+        const loadedBytes = Math.round((size * clamped) / 100);
+        this.updateAssetLoadedBytes(assetId, loadedBytes);
+      }
+    }
     const label = assetId && assetId.trim().length ? assetId : '资源';
     const message = clamped >= 100
       ? `资源 ${label} 下载完成`
@@ -276,9 +294,11 @@ class SceneGraphBuilder {
 
   private async preloadAssets(
     nodes: SceneNodeWithExtras[],
+    materials: SceneMaterial[],
   ): Promise<void> {
     const meshAssetIds = this.buildOptions.lazyLoadMeshes ? [] : this.collectMeshAssetIds(nodes);
-    const total = meshAssetIds.length;
+    const textureAssetIds = this.collectTextureAssetIds(nodes, materials);
+    const total = meshAssetIds.length + textureAssetIds.length;
     this.beginProgress(total);
     if (total === 0) {
       this.finalizeProgress();
@@ -287,10 +307,18 @@ class SceneGraphBuilder {
 
     const tasks: Promise<void>[] = [];
 
-    meshAssetIds.forEach((assetId) => {
+    meshAssetIds.forEach((assetId: string) => {
       tasks.push(
         this.preloadMeshAsset(assetId).finally(() => {
           this.incrementProgress('mesh', assetId, `模型 ${assetId}`);
+        }),
+      );
+    });
+
+    textureAssetIds.forEach((assetId: string) => {
+      tasks.push(
+        this.preloadTextureAsset(assetId).finally(() => {
+          this.incrementProgress('texture', assetId, `纹理 ${assetId}`);
         }),
       );
     });
@@ -316,6 +344,143 @@ class SceneGraphBuilder {
       }
     }
     return Array.from(ids);
+  }
+
+  private collectTextureAssetIds(
+    nodes: SceneNodeWithExtras[],
+    materials: SceneMaterial[],
+  ): string[] {
+    const ids = new Set<string>();
+    const materialMap = new Map<string, SceneMaterial>();
+    materials.forEach((material: SceneMaterial) => {
+      if (!material || typeof material !== 'object' || typeof material.id !== 'string') {
+        return;
+      }
+      const trimmed = material.id.trim();
+      if (trimmed) {
+        materialMap.set(trimmed, material);
+      }
+    });
+
+    const stack: SceneNodeWithExtras[] = Array.isArray(nodes) ? [...nodes] : [];
+    while (stack.length) {
+      const node = stack.pop();
+      if (!node) {
+        continue;
+      }
+      if (Array.isArray(node.materials) && node.materials.length) {
+        (node.materials as SceneNodeMaterial[]).forEach((nodeMaterial: SceneNodeMaterial) => {
+          this.collectTextureRefsFromMaterial(nodeMaterial, ids);
+          const baseId = typeof nodeMaterial?.materialId === 'string' ? nodeMaterial.materialId.trim() : '';
+          if (baseId) {
+            const baseMaterial = materialMap.get(baseId);
+            if (baseMaterial) {
+              this.collectTextureRefsFromMaterial(baseMaterial, ids);
+            }
+          }
+        });
+      }
+      if (Array.isArray(node.children) && node.children.length) {
+        stack.push(...(node.children as SceneNodeWithExtras[]));
+      }
+    }
+
+    return Array.from(ids);
+  }
+
+  private collectTextureRefsFromMaterial(
+    material: SceneMaterial | SceneNodeMaterial | null | undefined,
+    bucket: Set<string>,
+  ): void {
+    if (!material || typeof material !== 'object') {
+      return;
+    }
+    const textures = material.textures as Partial<Record<SceneMaterialTextureSlot, { assetId?: string } | null>> | undefined;
+    if (!textures) {
+      return;
+    }
+    MATERIAL_TEXTURE_SLOTS.forEach((slot) => {
+      const ref = textures[slot];
+      const assetId = typeof ref === 'object' && ref ? (ref.assetId ?? '').trim() : '';
+      if (assetId) {
+        bucket.add(assetId);
+      }
+    });
+  }
+
+  private async preloadTextureAsset(assetId: string): Promise<void> {
+    if (!assetId) {
+      return;
+    }
+    try {
+      const entry = await this.resourceCache.acquireAssetEntry(assetId);
+      if (entry) {
+        this.registerAssetEntryLoad(assetId, entry);
+      }
+    } catch (error) {
+      console.warn('纹理预加载失败', assetId, error);
+      this.warn(`纹理 ${assetId} 预加载失败`);
+    }
+  }
+
+  private resolveEntrySize(entry: AssetCacheEntry | null | undefined): number {
+    if (!entry) {
+      return 0;
+    }
+    if (typeof entry.size === 'number' && entry.size > 0) {
+      return entry.size;
+    }
+    if (entry.arrayBuffer && entry.arrayBuffer.byteLength > 0) {
+      return entry.arrayBuffer.byteLength;
+    }
+    if (entry.blob && typeof entry.blob.size === 'number' && entry.blob.size > 0) {
+      return entry.blob.size;
+    }
+    return 0;
+  }
+
+  private updateAssetSize(assetId: string, size: number): void {
+    if (!assetId || size <= 0) {
+      return;
+    }
+    const previous = this.assetSizeMap.get(assetId) ?? 0;
+    if (size > previous) {
+      this.assetSizeMap.set(assetId, size);
+      const delta = size - previous;
+      this.progressBytesTotal += delta;
+      if (this.progressBytesLoaded > this.progressBytesTotal) {
+        this.progressBytesLoaded = this.progressBytesTotal;
+      }
+    } else if (!this.assetSizeMap.has(assetId)) {
+      this.assetSizeMap.set(assetId, size);
+    }
+  }
+
+  private updateAssetLoadedBytes(assetId: string, loadedBytes: number): void {
+    if (!assetId || loadedBytes < 0) {
+      return;
+    }
+    const size = this.assetSizeMap.get(assetId) ?? 0;
+    const normalized = size > 0 ? Math.min(loadedBytes, size) : loadedBytes;
+    const previous = this.assetLoadedMap.get(assetId) ?? 0;
+    if (normalized > previous) {
+      this.assetLoadedMap.set(assetId, normalized);
+      this.progressBytesLoaded += normalized - previous;
+      if (this.progressBytesTotal > 0 && this.progressBytesLoaded > this.progressBytesTotal) {
+        this.progressBytesLoaded = this.progressBytesTotal;
+      }
+    }
+  }
+
+  private registerAssetEntryLoad(assetId: string, entry: AssetCacheEntry | null): void {
+    if (!assetId || !entry) {
+      return;
+    }
+    const size = this.resolveEntrySize(entry);
+    if (size > 0) {
+      this.updateAssetSize(assetId, size);
+      this.updateAssetLoadedBytes(assetId, size);
+    }
   }
 
 
@@ -793,6 +958,8 @@ class SceneGraphBuilder {
       return null;
     }
 
+    this.registerAssetEntryLoad(assetId, entry);
+
     const file = this.createFileFromEntry(assetId, entry);
     if (!file) {
       this.warn(`无法创建文件对象 ${assetId}`);
@@ -1036,7 +1203,7 @@ class SceneGraphBuilder {
           this.assignGroundTexture(mesh, texture);
         },
         undefined,
-        (error) => {
+        (error: unknown) => {
           console.warn('Ground texture load failed', error);
           this.assignGroundTexture(mesh, null);
         },
@@ -1055,7 +1222,7 @@ class SceneGraphBuilder {
 
   private assignGroundTexture(mesh: THREE.Mesh, texture: THREE.Texture | null): void {
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    materials.forEach((material) => {
+    materials.forEach((material: THREE.Material | null | undefined) => {
       if (!material) {
         return;
       }

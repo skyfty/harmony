@@ -1180,7 +1180,7 @@ function getErrorMessage(error: unknown): string {
 <style scoped lang="scss">
 .page {
   padding: 20px 20px 120px;
-  padding-top: 84px;
+  padding-top: 74px;
   min-height: 100vh;
   background: #f5f7fb;
   box-sizing: border-box;

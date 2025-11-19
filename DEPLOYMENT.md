@@ -193,6 +193,13 @@ docker compose -f docker-compose.prod.yml up -d
 docker compose -f docker-compose.prod.yml ps
 ```
 
+如需仅启动后端与数据库，可针对 `server` 与 `mongo` 服务单独执行：
+```bash
+docker compose -f docker-compose.prod.yml build server mongo
+docker compose -f docker-compose.prod.yml up -d server mongo
+docker compose -f docker-compose.prod.yml ps server mongo
+```
+
 日志查看：
 ```bash
 docker compose -f docker-compose.prod.yml logs -f server

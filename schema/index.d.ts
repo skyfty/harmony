@@ -497,6 +497,14 @@ export interface SceneResourceSummaryEntry {
   source?: 'embedded' | 'remote' | 'inline';
 }
 
+export interface SceneResourceMeshTextureUsage {
+  nodeId: string;
+  nodeName?: string;
+  totalBytes: number;
+  textureAssetIds: string[];
+  textures: SceneResourceSummaryEntry[];
+}
+
 export interface SceneResourceSummary {
   totalBytes: number;
   embeddedBytes: number;
@@ -504,6 +512,8 @@ export interface SceneResourceSummary {
   computedAt: string;
   assets: SceneResourceSummaryEntry[];
   unknownAssetIds?: string[];
+  textureBytes?: number;
+  meshTextureUsage?: SceneResourceMeshTextureUsage[];
 }
 
 export interface SceneSkyboxSettings {

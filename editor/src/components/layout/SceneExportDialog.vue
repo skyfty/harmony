@@ -75,6 +75,7 @@ const summaryDisplay = computed(() => {
       embedded: '0 B',
       external: '0 B',
       unknownCount: 0,
+      textures: '0 B',
     }
   }
   return {
@@ -82,6 +83,7 @@ const summaryDisplay = computed(() => {
     embedded: formatByteSize(summary.embeddedBytes),
     external: formatByteSize(summary.externalBytes),
     unknownCount: summary.unknownAssetIds?.length ?? 0,
+    textures: formatByteSize(summary.textureBytes ?? 0),
   }
 })
 
@@ -303,6 +305,9 @@ function handleConfirm() {
             </div>
             <div class="summary-sub">
               嵌入资源：{{ summaryDisplay.embedded }} · 外部资源：{{ summaryDisplay.external }}
+            </div>
+            <div class="summary-sub">
+              纹理资源：{{ summaryDisplay.textures }}
             </div>
             <div v-if="summaryDisplay.unknownCount" class="summary-warning">
               有 {{ summaryDisplay.unknownCount }} 个资源大小未知

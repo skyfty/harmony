@@ -78,7 +78,6 @@ export async function request<TResponse = any, TData = any>(
         if (status >= 200 && status < 300) {
           resolve(res.data as TResponse);
         } else if (status === 401) {
-          clearAuthToken();
           reject(new Error('未授权，请重新登录'));
         } else {
           const message = (res.data as Record<string, any>)?.message || `请求失败(${status})`;

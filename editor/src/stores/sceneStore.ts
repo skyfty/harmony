@@ -65,7 +65,13 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PresetSceneDocument } from '@/types/preset-scene'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SceneViewportSettings } from '@/types/scene-viewport-settings'
-import type { SceneSkyboxSettings, CameraControlMode, CameraProjection, SceneResourceSummary } from '@harmony/schema'
+import type {
+  SceneSkyboxSettings,
+  CameraControlMode,
+  CameraProjection,
+  SceneResourceSummary,
+  SceneResourceSummaryEntry,
+} from '@harmony/schema'
 
 import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
 import type {
@@ -4072,6 +4078,131 @@ export async function calculateSceneResourceSummary(
     unknownAssetIds: [],
   }
 
+  type MeshTextureUsageAccumulator = {
+    nodeId: string
+    nodeName?: string
+    assetIds: Set<string>
+    textures: SceneResourceSummaryEntry[]
+    totalBytes: number
+  }
+
+  const materialById = new Map<string, SceneMaterial>()
+  ;(scene.materials ?? []).forEach((material) => {
+    if (!material || typeof material !== 'object' || typeof material.id !== 'string') {
+      return
+    }
+    const trimmed = material.id.trim()
+    if (!trimmed) {
+      return
+    }
+    materialById.set(trimmed, material)
+  })
+
+  const meshTextureUsageMap = new Map<string, MeshTextureUsageAccumulator>()
+  const textureAssetConsumers = new Map<string, Set<string>>()
+  const nodeNameById = new Map<string, string | undefined>()
+  const countedTextureAssets = new Set<string>()
+  let textureBytes = 0
+
+  const assetIds = new Set<string>()
+
+  const registerTextureUsage = (node: SceneNode, assetId: string | null | undefined): void => {
+    const normalizedId = typeof assetId === 'string' ? assetId.trim() : ''
+    if (!normalizedId) {
+      return
+    }
+    assetIds.add(normalizedId)
+    const consumers = textureAssetConsumers.get(normalizedId) ?? new Set<string>()
+    consumers.add(node.id)
+    textureAssetConsumers.set(normalizedId, consumers)
+
+    let usage = meshTextureUsageMap.get(node.id)
+    if (!usage) {
+      usage = {
+        nodeId: node.id,
+        nodeName: node.name ?? undefined,
+        assetIds: new Set<string>(),
+        textures: [],
+        totalBytes: 0,
+      }
+      meshTextureUsageMap.set(node.id, usage)
+    }
+    usage.assetIds.add(normalizedId)
+  }
+
+  const collectMaterialTextureRefs = (
+    material: SceneMaterial | SceneNodeMaterial | null | undefined,
+    node: SceneNode,
+  ): void => {
+    if (!material || typeof material !== 'object') {
+      return
+    }
+    const textures = material.textures as SceneMaterial['textures'] | undefined
+    if (!textures) {
+      return
+    }
+    MATERIAL_TEXTURE_SLOTS.forEach((slot) => {
+      const ref = textures[slot]
+      const assetId = typeof ref === 'object' && ref ? (ref.assetId ?? '').trim() : ''
+      if (assetId) {
+        registerTextureUsage(node, assetId)
+      }
+    })
+  }
+
+  const recordTextureAssetEntry = (assetId: string, entry: SceneResourceSummaryEntry): void => {
+    const consumers = textureAssetConsumers.get(assetId)
+    if (!consumers || consumers.size === 0) {
+      return
+    }
+    if (!countedTextureAssets.has(assetId)) {
+      countedTextureAssets.add(assetId)
+      textureBytes += entry.bytes
+    }
+    consumers.forEach((nodeId) => {
+      const usage = meshTextureUsageMap.get(nodeId)
+      if (!usage) {
+        return
+      }
+      const alreadyTracked = usage.textures.some((existing) => existing.assetId === assetId)
+      if (!alreadyTracked) {
+        usage.textures.push({ ...entry })
+        usage.totalBytes += entry.bytes
+      }
+    })
+  }
+
+  const traverseNodesForTextures = (nodes: SceneNode[] | null | undefined): void => {
+    if (!Array.isArray(nodes) || !nodes.length) {
+      return
+    }
+    const stack: SceneNode[] = [...nodes]
+    while (stack.length) {
+      const node = stack.pop()
+      if (!node) {
+        continue
+      }
+      nodeNameById.set(node.id, node.name ?? undefined)
+      if (Array.isArray(node.materials) && node.materials.length) {
+        node.materials.forEach((nodeMaterial) => {
+          collectMaterialTextureRefs(nodeMaterial, node)
+          const baseId = nodeMaterial?.materialId?.trim()
+          if (baseId) {
+            const baseMaterial = materialById.get(baseId)
+            if (baseMaterial) {
+              collectMaterialTextureRefs(baseMaterial, node)
+            }
+          }
+        })
+      }
+      if (Array.isArray(node.children) && node.children.length) {
+        stack.push(...(node.children as SceneNode[]))
+      }
+    }
+  }
+
+  traverseNodesForTextures(scene.nodes ?? [])
+
   const processed = new Set<string>()
   const packageEntriesByAsset = new Map<string, Array<{ key: string; value: string }>>()
 
@@ -4098,13 +4229,19 @@ export async function calculateSceneResourceSummary(
       return
     }
     const bytes = estimateInlineAssetByteSize(value)
-    summary.assets.push({ assetId, bytes, embedded: true, source: 'embedded' })
+    const entry: SceneResourceSummaryEntry = { assetId, bytes, embedded: true, source: 'embedded' }
+    summary.assets.push(entry)
+    recordTextureAssetEntry(assetId, entry)
     summary.totalBytes += bytes
     summary.embeddedBytes += bytes
     processed.add(assetId)
   })
 
-  const assetIds = new Set<string>(Object.keys(assetIndex))
+  Object.keys(assetIndex).forEach((assetId) => {
+    if (assetId) {
+      assetIds.add(assetId)
+    }
+  })
   packageEntriesByAsset.forEach((_entries, assetId) => {
     if (assetId) {
       assetIds.add(assetId)
@@ -4117,51 +4254,7 @@ export async function calculateSceneResourceSummary(
     if (!assetId || processed.has(assetId)) {
       continue
     }
-
     const indexEntry = assetIndex[assetId]
-    const inlineCandidates: string[] = []
-    const directInline = (indexEntry as unknown as { inline?: string })?.inline
-    if (typeof directInline === 'string') {
-      inlineCandidates.push(directInline)
-    }
-    const sourceInline = (indexEntry as unknown as { source?: { inline?: string } })?.source?.inline
-    if (typeof sourceInline === 'string') {
-      inlineCandidates.push(sourceInline)
-    }
-    const packageEntries = packageEntriesByAsset.get(assetId) ?? []
-    packageEntries.forEach(({ value }) => {
-      const trimmed = typeof value === 'string' ? value.trim() : ''
-      if (!trimmed) {
-        return
-      }
-      if (trimmed.startsWith('data:')) {
-        inlineCandidates.push(trimmed)
-        return
-      }
-      if (!normalizeHttpUrl(trimmed)) {
-        const estimated = estimateInlineAssetByteSize(trimmed)
-        if (estimated > 0) {
-          inlineCandidates.push(trimmed)
-        }
-      }
-    })
-
-    let inlineBytes = 0
-    inlineCandidates.forEach((candidate) => {
-      const size = estimateInlineAssetByteSize(candidate)
-      if (size > inlineBytes) {
-        inlineBytes = size
-      }
-    })
-
-    if (inlineBytes > 0) {
-      summary.assets.push({ assetId, bytes: inlineBytes, embedded: true, inline: true, source: 'inline' })
-      summary.totalBytes += inlineBytes
-      summary.embeddedBytes += inlineBytes
-      processed.add(assetId)
-      continue
-    }
-
     const cacheEntry = assetCache.getEntry(assetId)
     let bytes = cacheEntry?.status === 'cached' && cacheEntry.size > 0 ? cacheEntry.size : 0
     const downloadUrl = resolveAssetDownloadUrl(assetId, indexEntry, assetCatalog, packageMap)
@@ -4171,12 +4264,16 @@ export async function calculateSceneResourceSummary(
       bytes = cacheEntry?.arrayBuffer?.byteLength ?? bytes
     }
 
-    if (!bytes && downloadUrl) {
-      bytes = await probeRemoteAssetSize(downloadUrl)
-    }
-
     if (bytes > 0) {
-      summary.assets.push({ assetId, bytes, embedded: false, source: 'remote', downloadUrl: downloadUrl ?? null })
+      const entry: SceneResourceSummaryEntry = {
+        assetId,
+        bytes,
+        embedded: false,
+        source: 'remote',
+        downloadUrl: downloadUrl ?? null,
+      }
+      summary.assets.push(entry)
+      recordTextureAssetEntry(assetId, entry)
       summary.totalBytes += bytes
       summary.externalBytes += bytes
       processed.add(assetId)
@@ -4192,6 +4289,33 @@ export async function calculateSceneResourceSummary(
   if (!summary.totalBytes) {
     summary.embeddedBytes = 0
     summary.externalBytes = 0
+  }
+
+  if (textureBytes > 0) {
+    summary.textureBytes = textureBytes
+  }
+
+  if (meshTextureUsageMap.size > 0) {
+    const meshTextureUsage = Array.from(meshTextureUsageMap.values()).map((usage) => {
+      const textures = usage.textures.map((entry) => ({ ...entry }))
+      const assetIdSet = usage.assetIds
+      assetIdSet.forEach((assetId) => {
+        const exists = textures.some((entry) => entry.assetId === assetId)
+        if (!exists) {
+          textures.push({ assetId, bytes: 0 })
+        }
+      })
+      return {
+        nodeId: usage.nodeId,
+        nodeName: usage.nodeName,
+        totalBytes: usage.totalBytes,
+        textureAssetIds: Array.from(assetIdSet),
+        textures,
+      }
+    }).filter((usage) => usage.textureAssetIds.length > 0)
+    if (meshTextureUsage.length > 0) {
+      summary.meshTextureUsage = meshTextureUsage
+    }
   }
 
   return summary

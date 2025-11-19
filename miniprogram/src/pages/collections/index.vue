@@ -87,7 +87,7 @@ interface CollectionCard {
   rating: number;
   likes: number;
   liked: boolean;
-  userRating: number;
+  userRating: number;。
 }
 
 const loading = ref(false);
