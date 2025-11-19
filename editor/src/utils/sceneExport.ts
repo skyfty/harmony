@@ -331,6 +331,7 @@ export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, opti
     groundSettings: snapshot.groundSettings,
     assetIndex: snapshot.assetIndex,
     packageAssetMap: snapshot.packageAssetMap,
+    resourceSummary: snapshot.resourceSummary,
   };
   return await sanitizeSceneDocumentForJsonExport(exportDocument, options)
 
