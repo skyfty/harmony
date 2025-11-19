@@ -122,6 +122,7 @@ onMounted(() => {
 <style scoped lang="scss">
 .page {
   padding: 20px 20px 96px;
+  padding-top: 84px;
   min-height: 100vh;
   background: #f5f7fb;
   box-sizing: border-box;

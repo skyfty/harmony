@@ -28,6 +28,7 @@ function goBack() {
   background: #f5f7fb;
   display: flex;
   flex-direction: column;
+  padding-top: 84px;
 }
 
 .header {

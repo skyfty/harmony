@@ -317,6 +317,7 @@ function confirmDelete(sceneId: string) {
     flex-direction: column;
     height: 100vh;
     padding: 16px 16px 96px;
+  padding-top: 84px;
     box-sizing: border-box;
     background-color: #f5f7fb;
     gap: 12px;

@@ -260,6 +260,7 @@ function handleNavigate(target: NavKey): void {
 <style scoped lang="scss">
 .page {
   padding: 20px 20px calc(96px + env(safe-area-inset-bottom));
+  padding-top: 84px;
   min-height: 100vh;
   background: #f5f7fb;
   box-sizing: border-box;

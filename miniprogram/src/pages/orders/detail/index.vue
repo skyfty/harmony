@@ -216,6 +216,7 @@ function handleNavigate(target: NavKey): void {
 <style scoped lang="scss">
 .page {
   padding: 20px 20px 96px;
+  padding-top: 84px;
   background: #f6f8fc;
   min-height: 100vh;
   display: flex;

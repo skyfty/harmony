@@ -489,6 +489,7 @@ function showModal(options: UniApp.ShowModalOptions): Promise<UniApp.ShowModalRe
 <style scoped lang="scss">
 .page {
   padding: 20px 20px 96px;
+  padding-top: 84px;
   // iOS 安全区适配（新旧写法都加，取其一生效）
   padding-bottom: calc(96px + env(safe-area-inset-bottom));
   padding-bottom: calc(96px + constant(safe-area-inset-bottom));

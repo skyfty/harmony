@@ -16,12 +16,16 @@ onHide(() => {
 });
 </script>
 <style>
-.page-container{
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
+:root {
+  --page-toolbar-offset: 64px;
+}
+
+.page-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
 }
 
 /* page-level padding handled by individual views */

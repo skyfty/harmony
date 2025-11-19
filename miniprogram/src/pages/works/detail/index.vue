@@ -617,6 +617,7 @@ watch(isOwner, (value) => {
 
 .page {
   padding: 20px 20px 120px;
+  padding-top: 84px;
   min-height: 100vh;
   background: #f5f7fb;
   box-sizing: border-box;

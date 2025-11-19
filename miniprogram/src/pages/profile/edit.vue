@@ -229,6 +229,7 @@ onMounted(() => {
   min-height: 100vh;
   background: #f5f7fb;
   padding-bottom: 40px;
+  padding-top: 84px;
 }
 
 .header {
