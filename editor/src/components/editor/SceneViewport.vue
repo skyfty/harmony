@@ -3914,26 +3914,64 @@ function resolveOutlineTargetForNode(nodeId: string | null | undefined): THREE.O
   if (!nodeId) {
     return null
   }
-  return objectMap.get(nodeId) ?? null
+
+  const cached = objectMap.get(nodeId)
+  if (cached) {
+    return cached
+  }
+
+  if (!scene) {
+    return null
+  }
+
+  let fallback: THREE.Object3D | null = null
+  scene.traverse((candidate) => {
+    if (fallback) {
+      return
+    }
+    if ((candidate.userData?.nodeId as string | undefined) === nodeId) {
+      fallback = candidate
+    }
+  })
+  return fallback
+}
+
+function collectVisibleMeshesForOutline(object: THREE.Object3D, collector: Set<THREE.Object3D>) {
+  if (!object.visible) {
+    return
+  }
+
+  const meshCandidate = object as THREE.Mesh
+  if (meshCandidate?.isMesh || (meshCandidate as { isSkinnedMesh?: boolean }).isSkinnedMesh) {
+    collector.add(meshCandidate)
+  }
+
+  object.children.forEach((child) => {
+    collectVisibleMeshesForOutline(child, collector)
+  })
 }
 
 function updateOutlineSelectionTargets() {
-  outlineSelectionTargets.length = 0
-  const ids = sceneStore.selectedNodeIds.length
-    ? sceneStore.selectedNodeIds
-    : props.selectedNodeId
-      ? [props.selectedNodeId]
-      : []
+  const meshSet = new Set<THREE.Object3D>()
+  const idSources: Array<string | null | undefined> = [
+    ...sceneStore.selectedNodeIds,
+    props.selectedNodeId,
+    sceneStore.selectedNodeId,
+  ]
 
-  ids.forEach((id) => {
+  idSources.forEach((id) => {
     if (!id) {
       return
     }
     const target = resolveOutlineTargetForNode(id)
-    if (target && !outlineSelectionTargets.includes(target)) {
-      outlineSelectionTargets.push(target)
+    if (!target) {
+      return
     }
+    collectVisibleMeshesForOutline(target, meshSet)
   })
+
+  outlineSelectionTargets.length = 0
+  outlineSelectionTargets.push(...meshSet)
 
   if (outlinePass) {
     outlinePass.selectedObjects = outlineSelectionTargets.slice()
