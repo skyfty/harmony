@@ -637,6 +637,11 @@ const purposeControlsVisible = ref(false);
 const purposeTargetNodeId = ref<string | null>(null);
 const purposeSourceNodeId = ref<string | null>(null);
 const purposeActiveMode = ref<'watch' | 'level'>('level');
+type CameraViewMode = 'level' | 'watching';
+const cameraViewState = reactive<{ mode: CameraViewMode; targetNodeId: string | null }>({
+  mode: 'level',
+  targetNodeId: null,
+});
 const isCameraCaged = ref(false);
 
 type LanternTextState = { text: string; loading: boolean; error: string | null };
@@ -2579,6 +2584,18 @@ function handleTriggerBehaviorEvent(event: Extract<BehaviorRuntimeEvent, { type:
   processBehaviorEvents(followUps);
 }
 
+function setCameraViewState(mode: CameraViewMode, targetNodeId: string | null = null): void {
+  cameraViewState.mode = mode;
+  cameraViewState.targetNodeId = mode === 'watching' ? targetNodeId : null;
+}
+
+function isRedundantWatchRequest(targetNodeId: string | null): boolean {
+  if (!targetNodeId) {
+    return false;
+  }
+  return cameraViewState.mode === 'watching' && cameraViewState.targetNodeId === targetNodeId;
+}
+
 function performWatchFocus(targetNodeId: string | null, caging?: boolean): { success: boolean; message?: string } {
   const context = renderContext;
   if (!context) {
@@ -2586,6 +2603,12 @@ function performWatchFocus(targetNodeId: string | null, caging?: boolean): { suc
   }
   if (!targetNodeId) {
     return { success: false, message: '缺少观察目标' };
+  }
+  if (isRedundantWatchRequest(targetNodeId)) {
+    setCameraCaging(Boolean(caging));
+    purposeActiveMode.value = 'watch';
+    setCameraViewState('watching', targetNodeId);
+    return { success: true };
   }
   const { camera, controls } = context;
   const focus = resolveNodeFocusPoint(targetNodeId);
@@ -2595,6 +2618,7 @@ function performWatchFocus(targetNodeId: string | null, caging?: boolean): { suc
   const finishSuccess = () => {
     setCameraCaging(Boolean(caging));
     purposeActiveMode.value = 'watch';
+    setCameraViewState('watching', targetNodeId);
     return { success: true };
   };
   activeCameraWatchTween = null;
@@ -2696,6 +2720,11 @@ function resetCameraToLevelView(): { success: boolean; message?: string } {
   if (!context) {
     return { success: false, message: '相机不可用' };
   }
+  if (cameraViewState.mode === 'level') {
+    setCameraCaging(false);
+    purposeActiveMode.value = 'level';
+    return { success: true };
+  }
   const { camera, controls } = context;
   activeCameraWatchTween = null;
   setCameraCaging(false);
@@ -2705,6 +2734,7 @@ function resetCameraToLevelView(): { success: boolean; message?: string } {
   levelTarget.y = camera.position.y;
   const finishSuccess = () => {
     purposeActiveMode.value = 'level';
+    setCameraViewState('level');
     return { success: true };
   };
   if (startTarget.distanceToSquared(levelTarget) < 1e-6) {
@@ -4550,11 +4580,13 @@ onUnmounted(() => {
 .viewer-purpose-controls {
   position: absolute;
   left: 16px;
+  right: 16px;
   bottom: 16px;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  justify-content: space-between;
   gap: 14px;
-  align-items: stretch;
+  align-items: flex-end;
   z-index: 1600;
 }
 
@@ -4576,6 +4608,15 @@ onUnmounted(() => {
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.38);
   transition: transform 0.28s ease, box-shadow 0.28s ease, opacity 0.28s ease;
   text-align: left;
+  flex: 1 1 0;
+}
+
+.viewer-purpose-chip--watch {
+  margin-right: auto;
+}
+
+.viewer-purpose-chip--level {
+  margin-left: auto;
 }
 
 .viewer-purpose-chip__halo {

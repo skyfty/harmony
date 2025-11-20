@@ -63,6 +63,14 @@ const isFirstPersonMouseControlEnabled = ref(true)
 const isVolumeMenuOpen = ref(false)
 const isCameraCaged = ref(false)
 
+type CameraViewMode = 'level' | 'watching'
+const cameraViewState = reactive<{ mode: CameraViewMode; watchTargetId: string | null }>(
+	{
+		mode: 'level',
+		watchTargetId: null,
+	},
+)
+
 const resourceProgress = reactive({
 	active: false,
 	loaded: 0,
@@ -1810,6 +1818,18 @@ function handleTriggerBehaviorEvent(event: Extract<BehaviorRuntimeEvent, { type:
 	processBehaviorEvents(followUps)
 }
 
+function setCameraViewState(mode: CameraViewMode, targetNodeId: string | null = null): void {
+	cameraViewState.mode = mode
+	cameraViewState.watchTargetId = mode === 'watching' ? targetNodeId : null
+}
+
+function isCameraWatchRedundant(targetNodeId: string | null): boolean {
+	if (!targetNodeId) {
+		return false
+	}
+	return cameraViewState.mode === 'watching' && cameraViewState.watchTargetId === targetNodeId
+}
+
 function performWatchFocus(targetNodeId: string | null, caging = false): { success: boolean; message?: string } {
 	const activeCamera = camera
 	if (!activeCamera) {
@@ -1818,6 +1838,10 @@ function performWatchFocus(targetNodeId: string | null, caging = false): { succe
 	const resolvedTarget = targetNodeId ?? null
 	if (!resolvedTarget) {
 		return { success: false, message: 'Target node not provided' }
+	}
+	if (isCameraWatchRedundant(resolvedTarget)) {
+		setCameraCaging(Boolean(caging))
+		return { success: true }
 	}
 	activeCameraLookTween = null
 	const focus = resolveNodeFocusPoint(resolvedTarget, tempTarget)
@@ -1865,6 +1889,7 @@ function performWatchFocus(targetNodeId: string | null, caging = false): { succe
 		syncLastFirstPersonStateFromCamera()
 	}
 	setCameraCaging(Boolean(caging))
+	setCameraViewState('watching', resolvedTarget)
 	return { success: true }
 }
 
@@ -2098,6 +2123,10 @@ function resetCameraToLevelView() {
 	if (!camera) {
 		return
 	}
+	if (cameraViewState.mode === 'level') {
+		setCameraCaging(false)
+		return
+	}
 	activeCameraLookTween = null
 	setCameraCaging(false)
 	if (controlMode.value === 'first-person' && firstPersonControls) {
@@ -2149,6 +2178,7 @@ function resetCameraToLevelView() {
 		tempTarget.copy(camera.position).add(tempDirection)
 		camera.lookAt(tempTarget)
 	}
+	setCameraViewState('level')
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
