@@ -409,7 +409,7 @@ const SKY_SCALE = 2500;
 const HUMAN_EYE_HEIGHT = 1.7;
 const CAMERA_FORWARD_OFFSET = 1.5;
 const CAMERA_HORIZONTAL_POLAR_ANGLE = Math.PI / 2;
-const CAMERA_WATCH_DURATION = 0.45;
+const CAMERA_WATCH_DURATION = 0.35;
 const CAMERA_LEVEL_DURATION = 0.35;
 const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
   presetId: 'clear-day',
@@ -708,6 +708,23 @@ type CameraWatchTween = {
 };
 
 let activeCameraWatchTween: CameraWatchTween | null = null;
+type FrameDeltaMode = 'seconds' | 'milliseconds';
+let frameDeltaMode: FrameDeltaMode | null = null;
+
+// Normalize per-frame delta to seconds; some runtimes emit milliseconds.
+function normalizeFrameDelta(delta: number): number {
+  if (!Number.isFinite(delta) || delta <= 0) {
+    return 0;
+  }
+  if (frameDeltaMode === null) {
+    frameDeltaMode = delta > 5 ? 'milliseconds' : 'seconds';
+  } else if (frameDeltaMode === 'milliseconds' && delta <= 1) {
+    frameDeltaMode = 'seconds';
+  } else if (frameDeltaMode === 'seconds' && delta > 5) {
+    frameDeltaMode = 'milliseconds';
+  }
+  return frameDeltaMode === 'milliseconds' ? delta / 1000 : delta;
+}
 
 const assetObjectUrlCache = new Map<string, string>();
 const DISPLAY_BOARD_RESOLVER_KEY = '__harmonyResolveDisplayBoardMedia';
@@ -2182,14 +2199,14 @@ function easeInOutCubic(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
-function applyCameraWatchTween(delta: number): void {
-  if (!activeCameraWatchTween || !renderContext) {
+function applyCameraWatchTween(deltaSeconds: number): void {
+  if (!activeCameraWatchTween || !renderContext || deltaSeconds <= 0) {
     return;
   }
   const tween = activeCameraWatchTween;
   const { controls, camera } = renderContext;
   const duration = tween.duration > 0 ? tween.duration : 0.0001;
-  tween.elapsed = Math.min(tween.elapsed + delta, tween.duration);
+  tween.elapsed = Math.min(tween.elapsed + deltaSeconds, tween.duration);
   const eased = easeInOutCubic(Math.min(1, tween.elapsed / duration));
   tempMovementVec.copy(tween.from).lerp(tween.to, eased);
   withControlsVerticalFreedom(controls, () => {
@@ -3750,6 +3767,7 @@ function teardownRenderer() {
   lazyPlaceholderStates.clear();
   activeLazyLoadCount = 0;
   activeCameraWatchTween = null;
+  frameDeltaMode = null;
   controls.dispose();
   disposeEnvironmentResources();
   disposeSkyResources();
@@ -3779,6 +3797,7 @@ async function ensureRendererContext(result: UseCanvasResult) {
   }
   await result.recomputeSize?.();
   activeCameraWatchTween = null;
+  frameDeltaMode = null;
   const { canvas } = result;
   const pixelRatio =
     result.canvas?.ownerDocument?.defaultView?.devicePixelRatio || uni.getSystemInfoSync().pixelRatio || 1;
@@ -3985,14 +4004,17 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   scope.run(() => {
     watchEffect((onCleanup) => {
       const { cancel } = result.useFrame((delta) => {
-        if (activeCameraWatchTween) {
-          applyCameraWatchTween(delta);
+        const deltaSeconds = normalizeFrameDelta(delta);
+        if (activeCameraWatchTween && deltaSeconds > 0) {
+          applyCameraWatchTween(deltaSeconds);
         } else {
           controls.update();
         }
-        animationMixers.forEach((mixer) => mixer.update(delta));
+        if (deltaSeconds > 0) {
+          animationMixers.forEach((mixer) => mixer.update(deltaSeconds));
+        }
         updateBehaviorProximity();
-        updateLazyPlaceholders(delta);
+        updateLazyPlaceholders(deltaSeconds);
         renderer.render(scene, camera);
       });
       onCleanup(() => {
