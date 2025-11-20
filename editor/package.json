@@ -23,7 +23,9 @@
     "vue": "^3.5.13",
     "vue-router": "^4.5.1",
     "vuetify": "^3.10.5",
-    "vuetify_densest": "^0.1.2"
+    "vuetify_densest": "^0.1.2",
+    "v-viewer": "^3.0.0",
+    "viewerjs": "^1.11.6"
   },
   "devDependencies": {
     "@types/node": "^24.6.0",

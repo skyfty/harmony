@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type ComponentPublicInstance } from 'vue'
 import * as THREE from 'three'
 import { FirstPersonControls } from 'three/examples/jsm/controls/FirstPersonControls.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
@@ -45,8 +45,9 @@ import {
 	type BehaviorEventResolution,
 	type BehaviorRuntimeListener,
 } from '@schema/behaviors/runtime'
-
-import {PROXIMITY_EXIT_PADDING, DEFAULT_OBJECT_RADIUS, PROXIMITY_MIN_DISTANCE, PROXIMITY_RADIUS_SCALE} from '@schema/behaviors/runtime'
+import { PROXIMITY_EXIT_PADDING, DEFAULT_OBJECT_RADIUS, PROXIMITY_MIN_DISTANCE, PROXIMITY_RADIUS_SCALE } from '@schema/behaviors/runtime'
+import type Viewer from 'viewerjs'
+import type { ViewerOptions } from 'viewerjs'
 
 type ControlMode = 'first-person' | 'third-person'
 
@@ -134,6 +135,41 @@ const behaviorAlertCancelText = ref('Cancel')
 
 const lanternOverlayVisible = ref(false)
 const lanternSlides = ref<LanternSlideDefinition[]>([])
+const lanternActiveSlideIndex = ref(0)
+const lanternEventToken = ref<string | null>(null)
+
+const purposeControlsVisible = ref(false)
+const purposeTargetNodeId = ref<string | null>(null)
+const purposeSourceNodeId = ref<string | null>(null)
+
+type LanternTextState = { text: string; loading: boolean; error: string | null }
+type LanternImageState = { url: string | null; loading: boolean; error: string | null }
+
+const lanternTextState = reactive<Record<string, LanternTextState>>({})
+const lanternTextPromises = new Map<string, Promise<void>>()
+const lanternImageState = reactive<Record<string, LanternImageState>>({})
+const lanternImagePromises = new Map<string, Promise<void>>()
+const lanternImageNaturalSize = reactive({ width: 0, height: 0 })
+const lanternViewportSize = reactive({
+	width: typeof window !== 'undefined' ? window.innerWidth : 1280,
+	height: typeof window !== 'undefined' ? window.innerHeight : 720,
+})
+const lanternViewerRoot = ref<HTMLElement | ComponentPublicInstance | null>(null)
+let lanternViewerInstance: Viewer | null = null
+const lanternViewerOptions: ViewerOptions = {
+	inline: false,
+	toolbar: true,
+	navbar: false,
+	title: false,
+	tooltip: false,
+	movable: true,
+	zoomable: true,
+	rotatable: false,
+	scalable: false,
+	transition: false,
+	fullscreen: true,
+	zIndex: 2300,
+}
 
 const editorAssetCache = new AssetCache()
 const editorAssetLoader = new AssetLoader(editorAssetCache)
@@ -150,39 +186,6 @@ function ensureEditorResourceCache(
 	}
 	return editorResourceCache
 }
-const lanternActiveSlideIndex = ref(0)
-const lanternEventToken = ref<string | null>(null)
-
-const purposeControlsVisible = ref(false)
-const purposeTargetNodeId = ref<string | null>(null)
-const purposeSourceNodeId = ref<string | null>(null)
-
-type LanternTextState = { text: string; loading: boolean; error: string | null }
-type LanternImageState = { url: string | null; loading: boolean; error: string | null }
-
-const lanternTextState = reactive<Record<string, LanternTextState>>({})
-const lanternTextPromises = new Map<string, Promise<void>>()
-const lanternImageState = reactive<Record<string, LanternImageState>>({})
-const lanternImagePromises = new Map<string, Promise<void>>()
-const lanternFullscreenVisible = ref(false)
-const lanternFullscreenScale = ref(1)
-const lanternFullscreenBaseScale = ref(1)
-const lanternFullscreenMinScale = ref(1)
-const lanternFullscreenOffset = reactive({ x: 0, y: 0 })
-const lanternImageNaturalSize = reactive({ width: 0, height: 0 })
-const lanternFullscreenViewport = reactive({
-	width: typeof window !== 'undefined' ? window.innerWidth : 1280,
-	height: typeof window !== 'undefined' ? window.innerHeight : 720,
-})
-const LANTERN_FULLSCREEN_MAX_SCALE = 6
-const LANTERN_FULLSCREEN_MIN_FACTOR = 0.5
-const lanternFullscreenStageRef = ref<HTMLDivElement | null>(null)
-const lanternFullscreenPointerMap = new Map<number, { x: number; y: number }>()
-let lanternFullscreenPanPointerId: number | null = null
-const lanternFullscreenPanStart = { x: 0, y: 0 }
-const lanternFullscreenOffsetStart = { x: 0, y: 0 }
-let lanternFullscreenInitialDistance = 0
-let lanternFullscreenInitialScale = 1
 
 const activeBehaviorDelayTimers = new Map<string, number>()
 const activeBehaviorAnimations = new Map<string, () => void>()
@@ -740,20 +743,134 @@ const lanternCurrentSlideDescription = computed(() => {
 	return slide.description ?? ''
 })
 
-const lanternFullscreenImageStyle = computed(() => {
-	const baseWidth = Math.max(lanternImageNaturalSize.width || lanternFullscreenViewport.width || 1, 1)
-	const baseHeight = Math.max(lanternImageNaturalSize.height || lanternFullscreenViewport.height || 1, 1)
-	const translateX = `${lanternFullscreenOffset.x}px`
-	const translateY = `${lanternFullscreenOffset.y}px`
-	const scale = lanternFullscreenScale.value
-	return {
-		width: `${baseWidth}px`,
-		height: `${baseHeight}px`,
-		maxWidth: 'none',
-		maxHeight: 'none',
-		transform: `translate3d(${translateX}, ${translateY}, 0) scale(${scale})`,
+function resetLanternImageMetrics(): void {
+	lanternImageNaturalSize.width = 0
+	lanternImageNaturalSize.height = 0
+}
+
+function updateLanternViewportSize(): void {
+	if (typeof window === 'undefined') {
+		return
 	}
-})
+	lanternViewportSize.width = window.innerWidth
+	lanternViewportSize.height = window.innerHeight
+}
+
+function handleLanternViewportResize(): void {
+	updateLanternViewportSize()
+	syncLanternViewerLater()
+}
+
+function getLanternViewerElement(): HTMLElement | null {
+	const target = lanternViewerRoot.value
+	if (!target) {
+		return null
+	}
+	if (typeof (target as ComponentPublicInstance).$el !== 'undefined') {
+		const element = (target as ComponentPublicInstance & { $el?: HTMLElement }).$el
+		if (element) {
+			return element
+		}
+	}
+	if (target instanceof HTMLElement) {
+		return target
+	}
+	return null
+}
+
+function resolveLanternViewer(): Viewer | null {
+	if (lanternViewerInstance) {
+		return lanternViewerInstance
+	}
+	const element = getLanternViewerElement()
+	if (!element) {
+		return null
+	}
+	const instance = (element as unknown as { $viewer?: Viewer }).$viewer
+	if (instance) {
+		lanternViewerInstance = instance
+		return instance
+	}
+	return null
+}
+
+function isLanternViewerOpen(): boolean {
+	if (typeof window === 'undefined') {
+		return false
+	}
+	const viewer = resolveLanternViewer()
+	if (!viewer) {
+		return false
+	}
+	const state = viewer as unknown as { isShown?: boolean }
+	return Boolean(state?.isShown)
+}
+
+function syncLanternViewer(): void {
+	if (typeof window === 'undefined') {
+		return
+	}
+	const viewer = resolveLanternViewer()
+	viewer?.update?.()
+}
+
+function syncLanternViewerLater(): void {
+	if (typeof window === 'undefined') {
+		return
+	}
+	nextTick(() => {
+		syncLanternViewer()
+	})
+}
+
+function handleLanternImageLoad(event: Event): void {
+	const target = event?.target as HTMLImageElement | null
+	if (!target) {
+		return
+	}
+	const width = target.naturalWidth || target.width || 0
+	const height = target.naturalHeight || target.height || 0
+	if (width > 0 && height > 0) {
+		lanternImageNaturalSize.width = width
+		lanternImageNaturalSize.height = height
+		syncLanternViewerLater()
+	}
+}
+
+function openLanternImageFullscreen(): void {
+	const imageUrl = lanternCurrentSlideImage.value
+	if (!imageUrl) {
+		return
+	}
+	const fallbackPreview = () => {
+		if (typeof window !== 'undefined') {
+			window.open(imageUrl, '_blank', 'noopener')
+		}
+	}
+	if (typeof window === 'undefined') {
+		fallbackPreview()
+		return
+	}
+	syncLanternViewerLater()
+	nextTick(() => {
+		const viewer = resolveLanternViewer()
+		if (viewer && typeof viewer.view === 'function') {
+			viewer.update?.()
+			viewer.view(0)
+			return
+		}
+		fallbackPreview()
+	})
+}
+
+function closeLanternImageFullscreen(): void {
+	if (typeof window === 'undefined') {
+		return
+	}
+	const viewer = resolveLanternViewer()
+	viewer?.hide?.()
+}
+
 
 watch(
 	lanternSlides,
@@ -772,6 +889,9 @@ watch(
 				activeImageIds.add(imageCandidate)
 				void ensureLanternImage(imageCandidate)
 			}
+		}
+		if (lanternActiveSlideIndex.value >= list.length) {
+			lanternActiveSlideIndex.value = list.length ? list.length - 1 : 0
 		}
 		Object.keys(lanternTextState).forEach((existing) => {
 			if (!activeTextIds.has(existing)) {
@@ -808,6 +928,7 @@ watch(
 		if (imageAssetId) {
 			void ensureLanternImage(imageAssetId)
 		}
+		resetLanternImageMetrics()
 	},
 	{ immediate: true },
 )
@@ -815,57 +936,36 @@ watch(
 watch(
 	lanternCurrentSlideImage,
 	() => {
-		lanternImageNaturalSize.width = 0
-		lanternImageNaturalSize.height = 0
-		if (lanternFullscreenVisible.value) {
-			closeLanternImageFullscreen()
-		}
+		resetLanternImageMetrics()
+		closeLanternImageFullscreen()
+		syncLanternViewerLater()
 	},
 	{ immediate: true },
 )
 
 watch(lanternOverlayVisible, (visible) => {
-	if (!visible && lanternFullscreenVisible.value) {
-		closeLanternImageFullscreen()
-	}
 	if (visible) {
-		updateLanternFullscreenViewport()
+		updateLanternViewportSize()
+		syncLanternViewerLater()
+	} else {
+		resetLanternImageMetrics()
+		closeLanternImageFullscreen()
 	}
 })
 
 watch(
 	() => [lanternImageNaturalSize.width, lanternImageNaturalSize.height],
 	() => {
-		if (lanternFullscreenVisible.value) {
-			recomputeLanternFullscreenLayout(false)
-		}
+		syncLanternViewerLater()
 	},
 )
 
 watch(
-	() => [lanternFullscreenViewport.width, lanternFullscreenViewport.height],
+	() => [lanternViewportSize.width, lanternViewportSize.height],
 	() => {
-		if (lanternFullscreenVisible.value) {
-			recomputeLanternFullscreenLayout(false)
-		}
+		syncLanternViewerLater()
 	},
 )
-
-watch(lanternFullscreenVisible, (visible) => {
-	if (typeof window !== 'undefined') {
-		const target = window
-		if (visible) {
-			target.addEventListener('keydown', handleLanternFullscreenKeydown)
-		} else {
-			target.removeEventListener('keydown', handleLanternFullscreenKeydown)
-		}
-	}
-	if (visible) {
-		recomputeLanternFullscreenLayout(false)
-	} else {
-		resetLanternFullscreenGestures()
-	}
-})
 
 watch(volumePercent, (value) => {
 	if (!listener) {
@@ -1013,6 +1113,7 @@ function resetLanternOverlay(): void {
 	lanternActiveSlideIndex.value = 0
 	lanternEventToken.value = null
 	closeLanternImageFullscreen()
+	resetLanternImageMetrics()
 }
 
 function getLanternTextState(assetId: string): LanternTextState {
@@ -1035,289 +1136,6 @@ function getLanternImageState(assetId: string): LanternImageState {
 		}
 	}
 	return lanternImageState[assetId]!
-}
-
-function updateLanternFullscreenViewport(): void {
-	if (typeof window === 'undefined') {
-		return
-	}
-	lanternFullscreenViewport.width = window.innerWidth
-	lanternFullscreenViewport.height = window.innerHeight
-}
-
-function handleLanternFullscreenResize(): void {
-	updateLanternFullscreenViewport()
-	if (lanternFullscreenVisible.value) {
-		recomputeLanternFullscreenLayout(false)
-	}
-}
-
-function computeLanternFullscreenBaseScale(): number {
-	const viewportWidth = Math.max(lanternFullscreenViewport.width || 1, 1)
-	const viewportHeight = Math.max(lanternFullscreenViewport.height || 1, 1)
-	const naturalWidth = Math.max(lanternImageNaturalSize.width || viewportWidth, 1)
-	const naturalHeight = Math.max(lanternImageNaturalSize.height || viewportHeight, 1)
-	const widthScale = viewportWidth / naturalWidth
-	const heightScale = viewportHeight / naturalHeight
-	const scale = Math.min(widthScale, heightScale, 1)
-	return Number.isFinite(scale) && scale > 0 ? scale : 1
-}
-
-function clampLanternFullscreenOffsetWithScale(scale: number): void {
-	const viewportWidth = Math.max(lanternFullscreenViewport.width || 1, 1)
-	const viewportHeight = Math.max(lanternFullscreenViewport.height || 1, 1)
-	const naturalWidth = Math.max(lanternImageNaturalSize.width || viewportWidth, 1)
-	const naturalHeight = Math.max(lanternImageNaturalSize.height || viewportHeight, 1)
-	const halfWidth = Math.max(0, (naturalWidth * scale - viewportWidth) / 2)
-	const halfHeight = Math.max(0, (naturalHeight * scale - viewportHeight) / 2)
-	if (lanternFullscreenOffset.x > halfWidth) {
-		lanternFullscreenOffset.x = halfWidth
-	} else if (lanternFullscreenOffset.x < -halfWidth) {
-		lanternFullscreenOffset.x = -halfWidth
-	}
-	if (lanternFullscreenOffset.y > halfHeight) {
-		lanternFullscreenOffset.y = halfHeight
-	} else if (lanternFullscreenOffset.y < -halfHeight) {
-		lanternFullscreenOffset.y = -halfHeight
-	}
-}
-
-function applyLanternFullscreenScale(scale: number, anchor?: { x: number; y: number }): void {
-	const minScale = Math.max(lanternFullscreenMinScale.value, 0.1)
-	const prevScale = lanternFullscreenScale.value || lanternFullscreenBaseScale.value
-	const safeScale = Number.isFinite(scale) && scale > 0 ? scale : lanternFullscreenBaseScale.value
-	const clamped = Math.min(LANTERN_FULLSCREEN_MAX_SCALE, Math.max(minScale, safeScale))
-	if (anchor && prevScale > 0) {
-		const ratio = clamped / prevScale
-		lanternFullscreenOffset.x = anchor.x - (anchor.x - lanternFullscreenOffset.x) * ratio
-		lanternFullscreenOffset.y = anchor.y - (anchor.y - lanternFullscreenOffset.y) * ratio
-	}
-	lanternFullscreenScale.value = clamped
-	clampLanternFullscreenOffsetWithScale(clamped)
-}
-
-function recomputeLanternFullscreenLayout(resetScale: boolean, anchor?: { x: number; y: number }): void {
-	const baseScale = computeLanternFullscreenBaseScale()
-	lanternFullscreenBaseScale.value = baseScale
-	lanternFullscreenMinScale.value = Math.max(baseScale * LANTERN_FULLSCREEN_MIN_FACTOR, 0.2)
-	if (resetScale) {
-		lanternFullscreenOffset.x = 0
-		lanternFullscreenOffset.y = 0
-		applyLanternFullscreenScale(baseScale, anchor)
-	} else {
-		applyLanternFullscreenScale(lanternFullscreenScale.value, anchor)
-	}
-}
-
-function resetLanternFullscreenGestures(): void {
-	lanternFullscreenPointerMap.clear()
-	lanternFullscreenPanPointerId = null
-	lanternFullscreenInitialDistance = 0
-	lanternFullscreenInitialScale = lanternFullscreenScale.value
-	lanternFullscreenPanStart.x = 0
-	lanternFullscreenPanStart.y = 0
-	lanternFullscreenOffsetStart.x = lanternFullscreenOffset.x
-	lanternFullscreenOffsetStart.y = lanternFullscreenOffset.y
-}
-
-function closeLanternImageFullscreen(): void {
-	if (!lanternFullscreenVisible.value) {
-		return
-	}
-	lanternFullscreenVisible.value = false
-	resetLanternFullscreenGestures()
-}
-
-function openLanternImageFullscreen(): void {
-	if (!lanternCurrentSlideImage.value) {
-		return
-	}
-	updateLanternFullscreenViewport()
-	recomputeLanternFullscreenLayout(true)
-	resetLanternFullscreenGestures()
-	lanternFullscreenVisible.value = true
-}
-
-function handleLanternImageLoad(event: Event): void {
-	const target = event.target as HTMLImageElement | null
-	if (!target) {
-		return
-	}
-	const nextWidth = target.naturalWidth || target.width
-	const nextHeight = target.naturalHeight || target.height
-	if (nextWidth > 0 && nextHeight > 0) {
-		lanternImageNaturalSize.width = nextWidth
-		lanternImageNaturalSize.height = nextHeight
-		if (lanternFullscreenVisible.value) {
-			recomputeLanternFullscreenLayout(false)
-		}
-	}
-}
-
-function computePointerDistance(first: { x: number; y: number }, second: { x: number; y: number }): number {
-	const deltaX = first.x - second.x
-	const deltaY = first.y - second.y
-	return Math.hypot(deltaX, deltaY)
-}
-
-function computePointerAnchor(points: Array<{ x: number; y: number }>, rect: DOMRect): { x: number; y: number } {
-	if (!points.length) {
-		return { x: 0, y: 0 }
-	}
-	const sum = points.reduce(
-		(acc, point) => {
-			acc.x += point.x
-			acc.y += point.y
-			return acc
-		},
-		{ x: 0, y: 0 },
-	)
-	const averageX = sum.x / points.length
-	const averageY = sum.y / points.length
-	const centerX = rect.left + rect.width / 2
-	const centerY = rect.top + rect.height / 2
-	return { x: averageX - centerX, y: averageY - centerY }
-}
-
-function handleLanternFullscreenPointerDown(event: PointerEvent): void {
-	if (!lanternFullscreenVisible.value) {
-		return
-	}
-	const stage = (event.currentTarget as HTMLElement | null) ?? lanternFullscreenStageRef.value
-	stage?.setPointerCapture(event.pointerId)
-	lanternFullscreenPointerMap.set(event.pointerId, { x: event.clientX, y: event.clientY })
-	if (lanternFullscreenPointerMap.size === 1) {
-		lanternFullscreenPanPointerId = event.pointerId
-		lanternFullscreenPanStart.x = event.clientX
-		lanternFullscreenPanStart.y = event.clientY
-		lanternFullscreenOffsetStart.x = lanternFullscreenOffset.x
-		lanternFullscreenOffsetStart.y = lanternFullscreenOffset.y
-		lanternFullscreenInitialDistance = 0
-		lanternFullscreenInitialScale = lanternFullscreenScale.value
-	} else if (lanternFullscreenPointerMap.size === 2) {
-		const points = Array.from(lanternFullscreenPointerMap.values())
-		if (points.length >= 2) {
-			lanternFullscreenInitialDistance = computePointerDistance(points[0]!, points[1]!)
-			lanternFullscreenInitialScale = lanternFullscreenScale.value
-		} else {
-			lanternFullscreenInitialDistance = 0
-			lanternFullscreenInitialScale = lanternFullscreenScale.value
-		}
-		lanternFullscreenPanPointerId = null
-	}
-	event.preventDefault()
-}
-
-function handleLanternFullscreenPointerMove(event: PointerEvent): void {
-	if (!lanternFullscreenVisible.value) {
-		return
-	}
-	const record = lanternFullscreenPointerMap.get(event.pointerId)
-	if (!record) {
-		return
-	}
-	record.x = event.clientX
-	record.y = event.clientY
-	if (lanternFullscreenPointerMap.size >= 2) {
-		const points = Array.from(lanternFullscreenPointerMap.values())
-		if (points.length >= 2) {
-			const distance = computePointerDistance(points[0]!, points[1]!)
-		if (lanternFullscreenInitialDistance > 0) {
-				const stageElement = (event.currentTarget as HTMLElement | null) ?? lanternFullscreenStageRef.value
-				const rect = stageElement?.getBoundingClientRect()
-				const anchor = rect ? computePointerAnchor(points.slice(0, 2) as Array<{ x: number; y: number }>, rect) : undefined
-			const ratio = distance / lanternFullscreenInitialDistance
-			applyLanternFullscreenScale(lanternFullscreenInitialScale * ratio, anchor)
-		}
-		}
-		lanternFullscreenPanPointerId = null
-		event.preventDefault()
-		return
-	}
-	if (lanternFullscreenPanPointerId !== event.pointerId) {
-		return
-	}
-	const deltaX = event.clientX - lanternFullscreenPanStart.x
-	const deltaY = event.clientY - lanternFullscreenPanStart.y
-	lanternFullscreenOffset.x = lanternFullscreenOffsetStart.x + deltaX
-	lanternFullscreenOffset.y = lanternFullscreenOffsetStart.y + deltaY
-	clampLanternFullscreenOffsetWithScale(lanternFullscreenScale.value)
-	event.preventDefault()
-}
-
-function handleLanternFullscreenPointerUp(event: PointerEvent): void {
-	if (!lanternFullscreenVisible.value) {
-		return
-	}
-	const stage = (event.currentTarget as HTMLElement | null) ?? lanternFullscreenStageRef.value
-	stage?.releasePointerCapture(event.pointerId)
-	lanternFullscreenPointerMap.delete(event.pointerId)
-	if (lanternFullscreenPointerMap.size === 1) {
-		const iterator = lanternFullscreenPointerMap.entries().next()
-		if (!iterator.done) {
-			const [pointerId, point] = iterator.value
-			lanternFullscreenPanPointerId = pointerId
-			lanternFullscreenPanStart.x = point.x
-			lanternFullscreenPanStart.y = point.y
-		}
-		lanternFullscreenOffsetStart.x = lanternFullscreenOffset.x
-		lanternFullscreenOffsetStart.y = lanternFullscreenOffset.y
-		lanternFullscreenInitialDistance = 0
-		lanternFullscreenInitialScale = lanternFullscreenScale.value
-	} else if (lanternFullscreenPointerMap.size >= 2) {
-		const points = Array.from(lanternFullscreenPointerMap.values())
-		if (points.length >= 2) {
-			lanternFullscreenInitialDistance = computePointerDistance(points[0]!, points[1]!)
-			lanternFullscreenInitialScale = lanternFullscreenScale.value
-		} else {
-			lanternFullscreenInitialDistance = 0
-			lanternFullscreenInitialScale = lanternFullscreenScale.value
-		}
-		lanternFullscreenPanPointerId = null
-	} else {
-		lanternFullscreenPanPointerId = null
-		lanternFullscreenInitialDistance = 0
-		lanternFullscreenInitialScale = lanternFullscreenScale.value
-	}
-	event.preventDefault()
-}
-
-function handleLanternFullscreenPointerCancel(event: PointerEvent): void {
-	if (!lanternFullscreenVisible.value) {
-		return
-	}
-	const stage = (event.currentTarget as HTMLElement | null) ?? lanternFullscreenStageRef.value
-	stage?.releasePointerCapture(event.pointerId)
-	lanternFullscreenPointerMap.delete(event.pointerId)
-	resetLanternFullscreenGestures()
-}
-
-function handleLanternFullscreenWheel(event: WheelEvent): void {
-	if (!lanternFullscreenVisible.value) {
-		return
-	}
-	const stage = (event.currentTarget as HTMLElement | null) ?? lanternFullscreenStageRef.value
-	const rect = stage?.getBoundingClientRect()
-	const direction = event.deltaY < 0 ? 1 : -1
-	const multiplier = direction > 0 ? 1.12 : 0.88
-	const anchor = rect
-		? {
-			x: event.clientX - (rect.left + rect.width / 2),
-			y: event.clientY - (rect.top + rect.height / 2),
-		}
-		: undefined
-	applyLanternFullscreenScale(lanternFullscreenScale.value * multiplier, anchor)
-	event.preventDefault()
-}
-
-function handleLanternFullscreenKeydown(event: KeyboardEvent): void {
-	if (!lanternFullscreenVisible.value) {
-		return
-	}
-	if (event.key === 'Escape' || event.key === 'Esc') {
-		event.preventDefault()
-		closeLanternImageFullscreen()
-	}
 }
 
 function decodeDataUrlText(dataUrl: string): string | null {
@@ -1450,6 +1268,7 @@ async function ensureLanternImage(assetId: string): Promise<void> {
 function closeLanternOverlay(resolution?: BehaviorEventResolution): void {
 	const token = lanternEventToken.value
 	resetLanternOverlay()
+	closeLanternImageFullscreen()
 	if (token && resolution) {
 		resolveBehaviorToken(token, resolution)
 	}
@@ -1487,6 +1306,10 @@ function confirmLanternOverlay(): void {
 }
 
 function cancelLanternOverlay(): void {
+	if (isLanternViewerOpen()) {
+		closeLanternImageFullscreen()
+		return
+	}
 	closeLanternOverlay({ type: 'abort', message: 'User dismissed lantern slides' })
 }
 
@@ -3723,9 +3546,9 @@ onMounted(() => {
 	unsubscribe = subscribeToScenePreview((snapshot) => {
 		applySnapshot(snapshot)
 	})
-	updateLanternFullscreenViewport()
+	updateLanternViewportSize()
 	if (typeof window !== 'undefined') {
-		window.addEventListener('resize', handleLanternFullscreenResize)
+		window.addEventListener('resize', handleLanternViewportResize)
 	}
 })
 
@@ -3748,14 +3571,14 @@ onBeforeUnmount(() => {
 	document.removeEventListener('fullscreenchange', handleFullscreenChange)
 	window.removeEventListener('keydown', handleKeyDown)
 	window.removeEventListener('keyup', handleKeyUp)
-	window.removeEventListener('keydown', handleLanternFullscreenKeydown)
-	window.removeEventListener('resize', handleLanternFullscreenResize)
+	window.removeEventListener('resize', handleLanternViewportResize)
 	disposeScene()
 	disposeEnvironmentResources()
 	disposeSkyResources()
 	pmremGenerator?.dispose()
 	pmremGenerator = null
 	pendingSkyboxSettings = null
+	lanternViewerInstance = null
 	animationMixers.forEach((mixer) => mixer.stopAllAction())
 	animationMixers = []
 	if (firstPersonControls) {
@@ -4055,6 +3878,8 @@ onBeforeUnmount(() => {
 					<div
 						v-if="lanternCurrentSlideImage"
 						class="scene-preview__lantern-image"
+						v-viewer="lanternViewerOptions"
+						ref="lanternViewerRoot"
 					>
 						<img
 							:src="lanternCurrentSlideImage"
@@ -4135,37 +3960,6 @@ onBeforeUnmount(() => {
 						Continue
 					</v-btn>
 				</div>
-			</div>
-		</div>
-		<div
-			v-if="lanternFullscreenVisible && lanternCurrentSlideImage"
-			class="scene-preview__lantern-fullscreen"
-			@click.self="closeLanternImageFullscreen"
-		>
-			<v-btn
-				icon="mdi-close"
-				variant="tonal"
-				size="small"
-				class="scene-preview__lantern-fullscreen-close"
-				@click="closeLanternImageFullscreen"
-			/>
-			<div
-				ref="lanternFullscreenStageRef"
-				class="scene-preview__lantern-fullscreen-stage"
-				@click.stop
-				@pointerdown.stop="handleLanternFullscreenPointerDown"
-				@pointermove="handleLanternFullscreenPointerMove"
-				@pointerup="handleLanternFullscreenPointerUp"
-				@pointercancel="handleLanternFullscreenPointerCancel"
-				@wheel.prevent="handleLanternFullscreenWheel"
-			>
-				<img
-					:src="lanternCurrentSlideImage"
-					:alt="lanternCurrentSlide?.title || 'Lantern slide image'"
-					class="scene-preview__lantern-fullscreen-image"
-					:style="lanternFullscreenImageStyle"
-					@load="handleLanternImageLoad"
-				/>
 			</div>
 		</div>
 	</div>

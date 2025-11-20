@@ -56,6 +56,8 @@
             v-if="lanternCurrentSlideImage"
             class="viewer-lantern-image-wrapper"
             :style="lanternImageBoxStyle"
+            v-viewer="lanternViewerOptions"
+            ref="lanternViewerRoot"
           >
             <image
               :src="lanternCurrentSlideImage"
@@ -77,34 +79,6 @@
           </view>
           <view v-if="lanternHasMultipleSlides" class="viewer-lantern-indicator">
             <text class="viewer-lantern-counter">{{ lanternActiveSlideIndex + 1 }} / {{ lanternTotalSlides }}</text>
-          </view>
-        </view>
-        <view
-          v-if="lanternFullscreenVisible && lanternCurrentSlideImage"
-          class="viewer-lantern-fullscreen"
-          @tap.self="closeLanternImageFullscreen"
-        >
-          <button
-            class="viewer-lantern-fullscreen__close"
-            aria-label="关闭全屏图片"
-            @tap.stop="closeLanternImageFullscreen"
-          >
-            <image :src="lanternCloseIcon" mode="aspectFit" class="viewer-lantern-fullscreen__close-icon" />
-          </button>
-          <view
-            class="viewer-lantern-fullscreen__stage"
-            @tap.stop
-            @touchstart="handleLanternFullscreenTouchStart"
-            @touchmove="handleLanternFullscreenTouchMove"
-            @touchend="handleLanternFullscreenTouchEnd"
-            @touchcancel="handleLanternFullscreenTouchCancel"
-          >
-            <image
-              :src="lanternCurrentSlideImage"
-              mode="aspectFit"
-              class="viewer-lantern-fullscreen__image"
-              :style="lanternFullscreenImageStyle"
-            />
           </view>
         </view>
       </view>
@@ -161,7 +135,7 @@
 </template>
 
 <script setup lang="ts">
-import { effectScope, watchEffect, ref, computed, onUnmounted, watch, reactive, type ComponentPublicInstance } from 'vue';
+import { effectScope, watchEffect, ref, computed, onUnmounted, watch, reactive, nextTick, type ComponentPublicInstance } from 'vue';
 import { onLoad, onUnload, onReady } from '@dcloudio/uni-app';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -175,6 +149,8 @@ import { buildSceneGraph, type SceneGraphBuildOptions, type SceneGraphResourcePr
 import ResourceCache from '@schema/ResourceCache';
 import { AssetCache, AssetLoader, type AssetCacheEntry } from '@schema/assetCache';
 import { loadNodeObject } from '@schema/utils/modelAssetLoader';
+import type Viewer from 'viewerjs';
+import type { ViewerOptions } from 'viewerjs';
 import type {
   EnvironmentSettings,
   SceneNode,
@@ -570,13 +546,22 @@ const lanternViewportSize = reactive({
   height: initialSystemInfo?.windowHeight || initialSystemInfo?.screenHeight || 667,
 });
 const lanternImageNaturalSize = reactive({ width: 0, height: 0 });
-const lanternFullscreenVisible = ref(false);
-const lanternFullscreenScale = ref(1);
-const lanternFullscreenBaseScale = ref(1);
-const lanternFullscreenMinScale = ref(1);
-const lanternFullscreenOffset = reactive({ x: 0, y: 0 });
-const LANTERN_FULLSCREEN_MAX_SCALE = 6;
-const LANTERN_FULLSCREEN_MIN_FACTOR = 0.5;
+const lanternViewerRoot = ref<HTMLElement | ComponentPublicInstance | null>(null);
+let lanternViewerInstance: Viewer | null = null;
+const lanternViewerOptions: ViewerOptions = {
+  inline: false,
+  toolbar: true,
+  navbar: false,
+  title: false,
+  tooltip: false,
+  movable: true,
+  zoomable: true,
+  rotatable: false,
+  scalable: false,
+  transition: false,
+  fullscreen: true,
+  zIndex: 3000,
+};
 const lanternImageBoxStyle = computed(() => {
   const viewportWidth = lanternViewportSize.width || 375;
   const viewportHeight = lanternViewportSize.height || 667;
@@ -672,11 +657,6 @@ const LANTERN_SWIPE_TRIGGER_THRESHOLD = 60;
 let lanternSwipeStartX: number | null = null;
 let lanternSwipeStartY: number | null = null;
 let lanternSwipeActive = false;
-let lanternFullscreenPanTouchId: number | null = null;
-const lanternFullscreenPanStart = { x: 0, y: 0 };
-const lanternFullscreenOffsetStart = { x: 0, y: 0 };
-let lanternFullscreenInitialDistance = 0;
-let lanternFullscreenInitialScale = 1;
 
 type CameraWatchTween = {
   from: THREE.Vector3;
@@ -763,20 +743,6 @@ const lanternCurrentSlideDescription = computed(() => {
   return slide.description ?? '';
 });
 
-const lanternFullscreenImageStyle = computed(() => {
-  const translateX = `${lanternFullscreenOffset.x}px`;
-  const translateY = `${lanternFullscreenOffset.y}px`;
-  const scale = lanternFullscreenScale.value;
-  const baseWidth = Math.max(lanternImageNaturalSize.width || lanternViewportSize.width || 1, 1);
-  const baseHeight = Math.max(lanternImageNaturalSize.height || lanternViewportSize.height || 1, 1);
-  return {
-    width: `${baseWidth}px`,
-    height: `${baseHeight}px`,
-    maxWidth: 'none',
-    maxHeight: 'none',
-    transform: `translate3d(${translateX}, ${translateY}, 0) scale(${scale})`,
-  } as Record<string, string>;
-});
 
 function normalizeHexColor(value: unknown, fallback: string): string {
   if (typeof value === 'string') {
@@ -928,15 +894,75 @@ function resetLanternImageMetrics(): void {
   lanternImageNaturalSize.height = 0;
 }
 
+function getLanternViewerElement(): HTMLElement | null {
+  const target = lanternViewerRoot.value;
+  if (!target) {
+    return null;
+  }
+  if (typeof (target as ComponentPublicInstance).$el !== 'undefined') {
+    const element = (target as ComponentPublicInstance & { $el?: HTMLElement }).$el;
+    if (element) {
+      return element;
+    }
+  }
+  if (target instanceof HTMLElement) {
+    return target;
+  }
+  return null;
+}
+
+function resolveLanternViewer(): Viewer | null {
+  if (lanternViewerInstance) {
+    return lanternViewerInstance;
+  }
+  const element = getLanternViewerElement();
+  if (!element) {
+    return null;
+  }
+  const instance = (element as unknown as { $viewer?: Viewer }).$viewer;
+  if (instance) {
+    lanternViewerInstance = instance;
+    return instance;
+  }
+  return null;
+}
+
+function isLanternViewerOpen(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+  const viewer = resolveLanternViewer();
+  if (!viewer) {
+    return false;
+  }
+  const state = viewer as unknown as { isShown?: boolean };
+  return Boolean(state?.isShown);
+}
+
+function syncLanternViewer(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  const viewer = resolveLanternViewer();
+  viewer?.update?.();
+}
+
+function syncLanternViewerLater(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  nextTick(() => {
+    syncLanternViewer();
+  });
+}
+
 function handleLanternImageLoad(event: UniImageLoadEvent): void {
   const width = event?.detail?.width ?? 0;
   const height = event?.detail?.height ?? 0;
   if (width > 0 && height > 0) {
     lanternImageNaturalSize.width = width;
     lanternImageNaturalSize.height = height;
-    if (lanternFullscreenVisible.value) {
-      recomputeLanternFullscreenLayout(false);
-    }
+    syncLanternViewerLater();
     return;
   }
   const currentSrc = lanternCurrentSlideImage.value;
@@ -949,201 +975,44 @@ function handleLanternImageLoad(event: UniImageLoadEvent): void {
       if (info?.width && info?.height) {
         lanternImageNaturalSize.width = info.width;
         lanternImageNaturalSize.height = info.height;
-        if (lanternFullscreenVisible.value) {
-          recomputeLanternFullscreenLayout(false);
-        }
+        syncLanternViewerLater();
       }
     },
   });
 }
 
-function computeLanternFullscreenBaseScale(): number {
-  const viewportWidth = Math.max(lanternViewportSize.width || 375, 1);
-  const viewportHeight = Math.max(lanternViewportSize.height || 667, 1);
-  const naturalWidth = Math.max(lanternImageNaturalSize.width || viewportWidth, 1);
-  const naturalHeight = Math.max(lanternImageNaturalSize.height || viewportHeight, 1);
-  const widthScale = viewportWidth / naturalWidth;
-  const heightScale = viewportHeight / naturalHeight;
-  const scale = Math.min(widthScale, heightScale, 1);
-  return Number.isFinite(scale) && scale > 0 ? scale : 1;
-}
-
-function clampLanternFullscreenOffsetWithScale(scale: number): void {
-  const viewportWidth = Math.max(lanternViewportSize.width || 375, 1);
-  const viewportHeight = Math.max(lanternViewportSize.height || 667, 1);
-  const naturalWidth = Math.max(lanternImageNaturalSize.width || viewportWidth, 1);
-  const naturalHeight = Math.max(lanternImageNaturalSize.height || viewportHeight, 1);
-  const halfWidth = Math.max(0, (naturalWidth * scale - viewportWidth) / 2);
-  const halfHeight = Math.max(0, (naturalHeight * scale - viewportHeight) / 2);
-  if (lanternFullscreenOffset.x > halfWidth) {
-    lanternFullscreenOffset.x = halfWidth;
-  }
-  if (lanternFullscreenOffset.x < -halfWidth) {
-    lanternFullscreenOffset.x = -halfWidth;
-  }
-  if (lanternFullscreenOffset.y > halfHeight) {
-    lanternFullscreenOffset.y = halfHeight;
-  }
-  if (lanternFullscreenOffset.y < -halfHeight) {
-    lanternFullscreenOffset.y = -halfHeight;
-  }
-}
-
-function applyLanternFullscreenScale(scale: number): void {
-  const minScale = Math.max(lanternFullscreenMinScale.value, 0.1);
-  const safeScale = Number.isFinite(scale) && scale > 0 ? scale : lanternFullscreenBaseScale.value;
-  const clamped = Math.min(LANTERN_FULLSCREEN_MAX_SCALE, Math.max(minScale, safeScale));
-  lanternFullscreenScale.value = clamped;
-  clampLanternFullscreenOffsetWithScale(clamped);
-}
-
-function recomputeLanternFullscreenLayout(resetScale: boolean): void {
-  const baseScale = computeLanternFullscreenBaseScale();
-  lanternFullscreenBaseScale.value = baseScale;
-  lanternFullscreenMinScale.value = Math.max(baseScale * LANTERN_FULLSCREEN_MIN_FACTOR, 0.2);
-  if (resetScale) {
-    lanternFullscreenOffset.x = 0;
-    lanternFullscreenOffset.y = 0;
-    applyLanternFullscreenScale(baseScale);
-  } else {
-    applyLanternFullscreenScale(lanternFullscreenScale.value);
-  }
-}
-
-function resetLanternFullscreenGestures(): void {
-  lanternFullscreenPanTouchId = null;
-  lanternFullscreenInitialDistance = 0;
-  lanternFullscreenInitialScale = lanternFullscreenScale.value;
-  lanternFullscreenPanStart.x = 0;
-  lanternFullscreenPanStart.y = 0;
-  lanternFullscreenOffsetStart.x = lanternFullscreenOffset.x;
-  lanternFullscreenOffsetStart.y = lanternFullscreenOffset.y;
-}
-
 function openLanternImageFullscreen(): void {
-  if (!lanternCurrentSlideImage.value) {
+  const imageUrl = lanternCurrentSlideImage.value;
+  if (!imageUrl) {
     return;
   }
-  refreshLanternViewportSize();
-  recomputeLanternFullscreenLayout(true);
-  resetLanternFullscreenGestures();
-  lanternFullscreenVisible.value = true;
+  const fallbackPreview = () => {
+    if (typeof uni !== 'undefined' && typeof uni.previewImage === 'function') {
+      uni.previewImage({ urls: [imageUrl] });
+    }
+  };
+  if (typeof window === 'undefined') {
+    fallbackPreview();
+    return;
+  }
+  syncLanternViewerLater();
+  nextTick(() => {
+    const viewer = resolveLanternViewer();
+    if (viewer && typeof viewer.view === 'function') {
+      viewer.update?.();
+      viewer.view(0);
+    } else {
+      fallbackPreview();
+    }
+  });
 }
 
 function closeLanternImageFullscreen(): void {
-  if (!lanternFullscreenVisible.value) {
+  if (typeof window === 'undefined') {
     return;
   }
-  lanternFullscreenVisible.value = false;
-  resetLanternFullscreenGestures();
-}
-
-function getTouchByIdentifier(list: TouchList, identifier: number | null): Touch | null {
-  if (identifier == null) {
-    return null;
-  }
-  for (let index = 0; index < list.length; index += 1) {
-    const touch = list.item(index);
-    if (touch && touch.identifier === identifier) {
-      return touch;
-    }
-  }
-  return null;
-}
-
-function computeTouchDistance(first: Touch, second: Touch): number {
-  const deltaX = first.clientX - second.clientX;
-  const deltaY = first.clientY - second.clientY;
-  return Math.hypot(deltaX, deltaY);
-}
-
-function handleLanternFullscreenTouchStart(event: TouchEvent): void {
-  if (!lanternFullscreenVisible.value) {
-    return;
-  }
-  if (event.touches.length >= 2) {
-    const touches = Array.from(event.touches).slice(0, 2);
-    lanternFullscreenInitialDistance = computeTouchDistance(touches[0], touches[1]);
-    lanternFullscreenInitialScale = lanternFullscreenScale.value;
-    lanternFullscreenPanTouchId = null;
-  } else if (event.touches.length === 1) {
-    const touch = event.touches[0];
-    lanternFullscreenPanTouchId = touch.identifier;
-    lanternFullscreenPanStart.x = touch.clientX;
-    lanternFullscreenPanStart.y = touch.clientY;
-    lanternFullscreenOffsetStart.x = lanternFullscreenOffset.x;
-    lanternFullscreenOffsetStart.y = lanternFullscreenOffset.y;
-  }
-  event.stopPropagation?.();
-}
-
-function handleLanternFullscreenTouchMove(event: TouchEvent): void {
-  if (!lanternFullscreenVisible.value) {
-    return;
-  }
-  if (event.touches.length >= 2) {
-    const touches = Array.from(event.touches).slice(0, 2);
-    const distance = computeTouchDistance(touches[0], touches[1]);
-    if (lanternFullscreenInitialDistance > 0) {
-      const ratio = distance / lanternFullscreenInitialDistance;
-      applyLanternFullscreenScale(lanternFullscreenInitialScale * ratio);
-    }
-    event.preventDefault?.();
-    event.stopPropagation?.();
-    return;
-  }
-  const touch = getTouchByIdentifier(event.touches, lanternFullscreenPanTouchId);
-  if (!touch) {
-    return;
-  }
-  const deltaX = touch.clientX - lanternFullscreenPanStart.x;
-  const deltaY = touch.clientY - lanternFullscreenPanStart.y;
-  lanternFullscreenOffset.x = lanternFullscreenOffsetStart.x + deltaX;
-  lanternFullscreenOffset.y = lanternFullscreenOffsetStart.y + deltaY;
-  clampLanternFullscreenOffsetWithScale(lanternFullscreenScale.value);
-  event.preventDefault?.();
-  event.stopPropagation?.();
-}
-
-function handleLanternFullscreenTouchEnd(event: TouchEvent): void {
-  if (!lanternFullscreenVisible.value) {
-    return;
-  }
-  if (event.touches.length >= 2) {
-    const touches = Array.from(event.touches).slice(0, 2);
-    lanternFullscreenInitialDistance = computeTouchDistance(touches[0], touches[1]);
-    lanternFullscreenInitialScale = lanternFullscreenScale.value;
-    lanternFullscreenPanTouchId = null;
-  } else if (event.touches.length === 1) {
-    const touch = event.touches[0];
-    lanternFullscreenPanTouchId = touch.identifier;
-    lanternFullscreenPanStart.x = touch.clientX;
-    lanternFullscreenPanStart.y = touch.clientY;
-    lanternFullscreenOffsetStart.x = lanternFullscreenOffset.x;
-    lanternFullscreenOffsetStart.y = lanternFullscreenOffset.y;
-    lanternFullscreenInitialDistance = 0;
-    lanternFullscreenInitialScale = lanternFullscreenScale.value;
-  } else {
-    resetLanternFullscreenGestures();
-  }
-  event.stopPropagation?.();
-}
-
-function handleLanternFullscreenTouchCancel(): void {
-  if (!lanternFullscreenVisible.value) {
-    return;
-  }
-  resetLanternFullscreenGestures();
-}
-
-function handleLanternFullscreenKeydown(event: KeyboardEvent): void {
-  if (!lanternFullscreenVisible.value) {
-    return;
-  }
-  if (event.key === 'Escape' || event.key === 'Esc') {
-    event.preventDefault?.();
-    closeLanternImageFullscreen();
-  }
+  const viewer = resolveLanternViewer();
+  viewer?.hide?.();
 }
 
 refreshLanternViewportSize();
@@ -1213,9 +1082,8 @@ watch(
   lanternCurrentSlideImage,
   () => {
     resetLanternImageMetrics();
-    if (lanternFullscreenVisible.value) {
-      closeLanternImageFullscreen();
-    }
+    closeLanternImageFullscreen();
+    syncLanternViewerLater();
   },
   { immediate: true },
 );
@@ -1223,46 +1091,26 @@ watch(
 watch(lanternOverlayVisible, (visible) => {
   if (visible) {
     refreshLanternViewportSize();
+    syncLanternViewerLater();
   } else {
     resetLanternImageMetrics();
-    if (lanternFullscreenVisible.value) {
-      closeLanternImageFullscreen();
-    }
+    closeLanternImageFullscreen();
   }
 });
 
 watch(
   () => [lanternImageNaturalSize.width, lanternImageNaturalSize.height],
   () => {
-    if (lanternFullscreenVisible.value) {
-      recomputeLanternFullscreenLayout(false);
-    }
+    syncLanternViewerLater();
   },
 );
 
 watch(
   () => [lanternViewportSize.width, lanternViewportSize.height],
   () => {
-    if (lanternFullscreenVisible.value) {
-      recomputeLanternFullscreenLayout(false);
-    }
+    syncLanternViewerLater();
   },
 );
-
-watch(lanternFullscreenVisible, (visible) => {
-  const target = typeof window !== 'undefined' ? window : undefined;
-  if (visible) {
-    recomputeLanternFullscreenLayout(false);
-    if (target && typeof target.addEventListener === 'function') {
-      target.addEventListener('keydown', handleLanternFullscreenKeydown);
-    }
-  } else {
-    if (target && typeof target.removeEventListener === 'function') {
-      target.removeEventListener('keydown', handleLanternFullscreenKeydown);
-    }
-    resetLanternFullscreenGestures();
-  }
-});
 
 async function ensureLanternText(assetId: string): Promise<void> {
   const trimmed = assetId.trim();
@@ -1607,7 +1455,8 @@ function isTapInsideLanternDialog(event: Event): boolean {
 }
 
 function handleLanternOverlayTap(event: Event): void {
-  if (lanternFullscreenVisible.value) {
+  if (isLanternViewerOpen()) {
+    closeLanternImageFullscreen();
     return;
   }
   if (!isTapInsideLanternDialog(event)) {
@@ -4230,6 +4079,7 @@ onUnload(() => {
   }
   resetSceneDownloadState();
   sharedResourceCache = null;
+  lanternViewerInstance = null;
   (globalThis as typeof globalThis & { [DISPLAY_BOARD_RESOLVER_KEY]?: typeof resolveDisplayBoardMediaSource })[
     DISPLAY_BOARD_RESOLVER_KEY
   ] = undefined;
@@ -4627,61 +4477,6 @@ onUnmounted(() => {
   font-size: 12px;
   opacity: 0.72;
   letter-spacing: 0.5px;
-}
-
-.viewer-lantern-fullscreen {
-  position: absolute;
-  inset: 0;
-  z-index: 2400;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(2, 4, 10, 0.95);
-  overflow: hidden;
-}
-
-.viewer-lantern-fullscreen__stage {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  touch-action: none;
-}
-
-.viewer-lantern-fullscreen__image {
-  display: block;
-  max-width: none;
-  max-height: none;
-  will-change: transform;
-  transition: transform 80ms ease-out;
-}
-
-.viewer-lantern-fullscreen__close {
-  position: absolute;
-  top: 18px;
-  right: 18px;
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.45);
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  z-index: 1;
-}
-
-.viewer-lantern-fullscreen__close:active {
-  opacity: 0.75;
-}
-
-.viewer-lantern-fullscreen__close-icon {
-  width: 20px;
-  height: 20px;
 }
 
 .viewer-purpose-controls {

@@ -4003,26 +4003,6 @@ function normalizeHttpUrl(value: string | null | undefined): string | null {
   return null
 }
 
-async function probeRemoteAssetSize(url: string): Promise<number> {
-  if (typeof fetch !== 'function') {
-    return 0
-  }
-  try {
-    const response = await fetch(url, { method: 'HEAD' })
-    if (!response.ok) {
-      return 0
-    }
-    const lengthHeader = response.headers.get('content-length')
-    if (!lengthHeader) {
-      return 0
-    }
-    const parsed = Number.parseInt(lengthHeader, 10)
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
-  } catch (_error) {
-    return 0
-  }
-}
-
 function resolveAssetDownloadUrl(
   assetId: string,
   indexEntry: AssetIndexEntry | undefined,

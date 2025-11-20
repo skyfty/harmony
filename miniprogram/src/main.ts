@@ -8,11 +8,18 @@ import App from "./App.vue";
 // #ifdef MP-WEIXIN
 import '@minisheep/three-platform-adapter/wechat';
 // #endif
+// #ifdef H5
+import Viewer from 'v-viewer';
+import 'viewerjs/dist/viewer.css';
+// #endif
 
 export function createApp() {
   const app = createSSRApp(App);
   const pinia = createPinia();
   app.use(pinia);
+  // #ifdef H5
+  app.use(Viewer);
+  // #endif
   return {
     app,
     pinia,
