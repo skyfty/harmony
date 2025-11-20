@@ -886,18 +886,15 @@ function handleUploadAll(): void {
 
 <template>
   <v-dialog v-model="internalOpen" max-width="1200" persistent>
+
     <v-card class="material-details-panel">
-      <v-card-title class="dialog-title">
-        <div>
-          <div class="dialog-title__main">Upload Assets to Server</div>
-          <div v-if="uploadEntries.length" class="dialog-title__subtitle">
-            Edit {{ uploadEntries.length }} {{ uploadEntries.length === 1 ? 'asset' : 'assets' }} before uploading.
-          </div>
+      <v-toolbar density="compact" class="panel-toolbar" height="40px">
+        <div class="toolbar-text">
+          <div class="material-title">Upload Assets to Server</div>
         </div>
-        <v-chip v-if="hasUploadingEntries" size="small" color="primary" variant="tonal">
-          Uploading…
-        </v-chip>
-      </v-card-title>
+        <v-spacer />
+        <v-btn class="toolbar-close" icon="mdi-close" size="small" variant="text" @click="handleRequestDialogClose" />
+      </v-toolbar>
       <v-card-text>
         <div v-if="uploadEntries.length" class="upload-tabs-container">
           <v-tabs v-model="activeEntryId" class="upload-tabs" density="comfortable" color="primary">
@@ -1160,7 +1157,6 @@ function handleUploadAll(): void {
           </template>
         </div>
         <v-spacer />
-        <v-btn variant="text" :disabled="uploadSubmitting && !shouldConfirmClose" @click="handleRequestDialogClose">Cancel</v-btn>
         <v-btn color="secondary" variant="tonal" :disabled="!canUploadCurrent" :loading="uploadSubmitting && !!activeEntry && activeEntry.status === 'uploading'" @click="handleUploadCurrent">
           Upload Current
         </v-btn>
@@ -1185,14 +1181,43 @@ function handleUploadAll(): void {
 </template>
 
 <style scoped>
+
+.material-details-panel-enter-active,
+.material-details-panel-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.material-details-panel-enter-from,
+.material-details-panel-leave-to {
+  opacity: 0;
+  transform: translate(-105%, 10px);
+}
+
 .material-details-panel {
   border-radius: 5px;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  background-color: rgba(18, 22, 28, 0.92);
+  background-color: rgba(18, 22, 28, 0.72);
   backdrop-filter: blur(14px);
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
 }
 
+
+.panel-toolbar {
+  background-color: transparent;
+  color: #e9ecf1;
+  min-height: 20px;
+  padding: 0 8px;
+}
+
+.toolbar-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.toolbar-close {
+  color: rgba(233, 236, 241, 0.72);
+}
 .dialog-title {
   display: flex;
   align-items: center;

@@ -194,7 +194,13 @@ function handleConfirm() {
     scrollable
   >
     <v-card>
-      <v-card-title class="dialog-title">Scene Export</v-card-title>
+      <v-toolbar density="compact" class="panel-toolbar" height="40px">
+        <div class="toolbar-text">
+          <div class="material-title">Scene Export</div>
+        </div>
+        <v-spacer />
+        <v-btn class="toolbar-close" icon="mdi-close" size="small" variant="text" @click="handleCancel" />
+      </v-toolbar>
       <v-card-text>
         <div class="file-input-row">
           <v-text-field
@@ -345,14 +351,6 @@ function handleConfirm() {
       </v-card-text>
       <v-divider />
       <v-card-actions class="dialog-actions">
-        <v-btn
-          variant="text"
-          color="secondary"
-          :disabled="exporting"
-          @click="handleCancel"
-        >
-          Cancel
-        </v-btn>
         <v-spacer />
         <v-btn
           color="primary"
@@ -369,6 +367,52 @@ function handleConfirm() {
 </template>
 
 <style scoped>
+
+.material-details-panel-enter-active,
+.material-details-panel-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.material-details-panel-enter-from,
+.material-details-panel-leave-to {
+  opacity: 0;
+  transform: translate(-105%, 10px);
+}
+
+.material-details-panel {
+  position: fixed;
+  top: 0;
+  left: 0;
+  transform: translateX(-100%);
+  width: 300px;
+  max-height: calc(100% - 400px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background-color: rgba(18, 22, 28, 0.72);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
+  z-index: 24;
+}
+
+
+.panel-toolbar {
+  background-color: transparent;
+  color: #e9ecf1;
+  min-height: 20px;
+  padding: 0 8px;
+}
+
+.toolbar-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.toolbar-close {
+  color: rgba(233, 236, 241, 0.72);
+}
 .dialog-title {
   font-weight: 600;
 }
