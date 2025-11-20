@@ -20,9 +20,18 @@ import {
   uploadAssetToServer,
 } from '@/api/resourceAssets'
 import { ensureAuthenticatedForResourceUpload } from '@/utils/uploadGuard'
+import {
+  generateAssetThumbnail,
+  ASSET_THUMBNAIL_HEIGHT,
+  ASSET_THUMBNAIL_WIDTH,
+  createThumbnailFromCanvas,
+} from '@/utils/assetThumbnail'
 
 const TYPE_COLOR_FALLBACK: Record<ProjectAsset['type'], string> = {
   model: '#26c6da',
+    thumbnailFile: null,
+    thumbnailPreviewUrl: null,
+    thumbnailCapturedAt: null,
   mesh: '#26c6da',
   image: '#1e88e5',
   texture: '#8e24aa',
@@ -77,6 +86,9 @@ type UploadAssetEntry = {
   dimensionHeight: number | null
   imageWidth: number | null
   imageHeight: number | null
+  thumbnailFile: File | null
+  thumbnailPreviewUrl: string | null
+  thumbnailCapturedAt: number | null
   status: 'pending' | 'uploading' | 'success' | 'error'
   error: string | null
   uploadedAssetId: string | null
@@ -93,6 +105,7 @@ type ImageDimensionKey = 'imageWidth' | 'imageHeight'
 
 // Local state for dialog
 const uploadEntries = ref<UploadAssetEntry[]>([])
+const previewRefs = ref<Record<string, InstanceType<typeof AssetPreviewRenderer> | null>>({})
 const activeEntryId = ref<string | null>(null)
 const activeEntry = computed<UploadAssetEntry | null>(() => {
   if (!uploadEntries.value.length) {
@@ -495,10 +508,17 @@ function cancelDialogClose(): void {
 }
 
 function resetUploadState() {
+  uploadEntries.value.forEach((entry) => {
+    if (entry.thumbnailPreviewUrl) {
+      URL.revokeObjectURL(entry.thumbnailPreviewUrl)
+      entry.thumbnailPreviewUrl = null
+    }
+  })
   uploadEntries.value = []
   uploadError.value = null
   activeEntryId.value = null
   closeGuardDialogOpen.value = false
+  previewRefs.value = {}
 }
 
 async function loadServerTags(options: { force?: boolean } = {}) {
@@ -663,6 +683,60 @@ function handlePreviewImageMeta(entry: UploadAssetEntry, payload: { width: numbe
   applyImageValue('imageHeight', payload.height)
 }
 
+function registerPreviewRef(entryId: string, instance: InstanceType<typeof AssetPreviewRenderer> | null): void {
+  previewRefs.value = { ...previewRefs.value, [entryId]: instance }
+  if (!instance) {
+    return
+  }
+  const entry = uploadEntries.value.find((item) => item.assetId === entryId)
+  if (entry && isModelAsset(entry.asset) && !entry.thumbnailFile) {
+    // Capture default snapshot once preview becomes ready.
+    void nextTick(() => capturePreviewThumbnail(entry, { silent: true }))
+  }
+}
+
+function isModelAsset(asset: ProjectAsset): boolean {
+  return ['model', 'mesh', 'prefab'].includes(asset.type)
+}
+
+async function capturePreviewThumbnail(entry: UploadAssetEntry, options: { silent?: boolean } = {}): Promise<void> {
+  if (!isModelAsset(entry.asset)) {
+    return
+  }
+  const instance = previewRefs.value[entry.assetId]
+  if (!instance?.captureSnapshot) {
+    if (!options.silent) {
+      entry.error = 'Preview is not ready for capture yet.'
+    }
+    return
+  }
+  try {
+    const canvas = await instance.captureSnapshot()
+    if (!canvas) {
+      if (!options.silent) {
+        entry.error = 'Failed to capture preview.'
+      }
+      return
+    }
+    const file = await createThumbnailFromCanvas(entry.asset, canvas, {
+      width: ASSET_THUMBNAIL_WIDTH,
+      height: ASSET_THUMBNAIL_HEIGHT,
+    })
+    if (entry.thumbnailPreviewUrl) {
+      URL.revokeObjectURL(entry.thumbnailPreviewUrl)
+    }
+    entry.thumbnailFile = file
+    entry.thumbnailPreviewUrl = URL.createObjectURL(file)
+    entry.thumbnailCapturedAt = Date.now()
+    entry.error = null
+    markEntryDirty(entry)
+  } catch (error) {
+    if (!options.silent) {
+      entry.error = (error as Error).message ?? 'Failed to capture thumbnail.'
+    }
+  }
+}
+
 // Initialize entries when dialog opens
 watch(
   () => internalOpen.value,
@@ -813,6 +887,24 @@ async function submitUpload(options: { entries?: UploadAssetEntry[] } = {}) {
         const uploadName = entry.name.trim().length ? entry.name.trim() : asset.name
         const uploadDescription = entry.description.trim()
         const normalizedColor = normalizeHexColor(entry.color)
+        let thumbnailFile: File | null = entry.thumbnailFile
+        if (!thumbnailFile) {
+          try {
+            const thumbnailAsset: ProjectAsset = {
+              ...asset,
+              color: normalizedColor ?? asset.color,
+              previewColor: normalizedColor ?? asset.previewColor,
+            }
+            thumbnailFile = await generateAssetThumbnail({
+              asset: thumbnailAsset,
+              file,
+              width: ASSET_THUMBNAIL_WIDTH,
+              height: ASSET_THUMBNAIL_HEIGHT,
+            })
+          } catch (thumbnailError) {
+            throw new Error(`Failed to generate thumbnail: ${(thumbnailError as Error).message ?? 'Unknown error'}`)
+          }
+        }
         const dimensionLength = typeof entry.dimensionLength === 'number' && Number.isFinite(entry.dimensionLength) ? entry.dimensionLength : null
         const dimensionWidth = typeof entry.dimensionWidth === 'number' && Number.isFinite(entry.dimensionWidth) ? entry.dimensionWidth : null
         const dimensionHeight = typeof entry.dimensionHeight === 'number' && Number.isFinite(entry.dimensionHeight) ? entry.dimensionHeight : null
@@ -822,6 +914,7 @@ async function submitUpload(options: { entries?: UploadAssetEntry[] } = {}) {
 
         const serverAsset = await uploadAssetToServer({
           file,
+          thumbnailFile,
           name: uploadName,
           type: asset.type,
           description: uploadDescription.length ? uploadDescription : undefined,
@@ -1133,12 +1226,31 @@ function handleUploadAll(): void {
                     </div>
                   </div>
                   <div class="upload-entry__preview-pane">
-                    <AssetPreviewRenderer
-                      :asset="entry.asset"
-                      :primary-color="entry.color || entry.asset.color || null"
-                      @dimensions="(payload) => handlePreviewDimensions(entry, payload)"
-                      @image-meta="(payload) => handlePreviewImageMeta(entry, payload)"
-                    />
+                    <div class="upload-preview-wrapper">
+                      <AssetPreviewRenderer
+                        :asset="entry.asset"
+                        :primary-color="entry.color || entry.asset.color || null"
+                        :ref="(instance) => registerPreviewRef(entry.assetId, instance as InstanceType<typeof AssetPreviewRenderer> | null)"
+                        @dimensions="(payload) => handlePreviewDimensions(entry, payload)"
+                        @image-meta="(payload) => handlePreviewImageMeta(entry, payload)"
+                      />
+                      <div v-if="['model', 'mesh', 'prefab'].includes(entry.asset.type)" class="upload-preview__actions">
+                        <v-btn
+                          color="primary"
+                          variant="flat"
+                          size="small"
+                          prepend-icon="mdi-camera"
+                          :disabled="uploadSubmitting || entry.status === 'uploading'"
+                          @click="() => capturePreviewThumbnail(entry)"
+                        >
+                          Capture Thumbnail
+                        </v-btn>
+                        <div v-if="entry.thumbnailPreviewUrl" class="upload-preview__thumb">
+                          <img :src="entry.thumbnailPreviewUrl" alt="Captured thumbnail" />
+                          <span class="upload-preview__thumb-label">Last capture</span>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1341,6 +1453,45 @@ function handleUploadAll(): void {
 
 .color-picker {
   padding: 12px;
+}
+
+.upload-preview-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.upload-preview__actions {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+  z-index: 2;
+}
+
+.upload-preview__thumb {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 6px;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.upload-preview__thumb img {
+  width: 128px;
+  height: auto;
+  border-radius: 4px;
+  object-fit: cover;
+}
+
+.upload-preview__thumb-label {
+  font-size: 0.72rem;
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .upload-entry__error {

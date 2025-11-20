@@ -381,6 +381,7 @@ export async function createAssetTag(payload: {
 
 export interface UploadAssetOptions {
   file: File
+  thumbnailFile?: File | null
   name: string
   type: ProjectAsset['type']
   description?: string
@@ -400,6 +401,10 @@ export async function uploadAssetToServer(options: UploadAssetOptions): Promise<
   const url = buildServerApiUrl('/resources/assets')
   const formData = new FormData()
   formData.append('file', options.file)
+  if (options.thumbnailFile) {
+    const thumbnailName = options.thumbnailFile.name && options.thumbnailFile.name.trim().length ? options.thumbnailFile.name : 'thumbnail.png'
+    formData.append('thumbnail', options.thumbnailFile, thumbnailName)
+  }
   formData.append('name', options.name)
   formData.append('type', options.type)
   if (options.description) {

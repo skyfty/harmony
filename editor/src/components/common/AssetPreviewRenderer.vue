@@ -10,6 +10,7 @@
         v-else-if="showModelPreview"
         :file="previewState.file"
         class="upload-preview__renderer"
+        ref="modelPreviewRef"
         @dimensions="(payload) => emit('dimensions', payload)"
       />
       <HDRPreview
@@ -37,7 +38,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import ModelPreview from '@/components/common/ModelPreview.vue'
@@ -61,6 +62,7 @@ const previewState = reactive({
   file: null as File | null,
   imageUrl: null as string | null,
 })
+const modelPreviewRef = ref<InstanceType<typeof ModelPreview> | null>(null)
 
 const requiresFileTypes = new Set(['model', 'prefab', 'mesh', 'hdri'])
 let objectUrl: string | null = null
@@ -221,6 +223,35 @@ onBeforeUnmount(() => {
     img.onerror = null
   })
   metaProbes.clear()
+})
+
+async function waitForModelPreviewReady(timeoutMs = 4000): Promise<boolean> {
+  if (showModelPreview.value && modelPreviewRef.value) {
+    return true
+  }
+  if (typeof performance === 'undefined') {
+    return Boolean(modelPreviewRef.value)
+  }
+  const start = performance.now()
+  while (performance.now() - start < timeoutMs) {
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    if (showModelPreview.value && modelPreviewRef.value) {
+      return true
+    }
+  }
+  return false
+}
+
+async function captureSnapshot(): Promise<HTMLCanvasElement | null> {
+  const ready = await waitForModelPreviewReady()
+  if (!ready) {
+    return null
+  }
+  return (await modelPreviewRef.value?.captureSnapshot?.()) ?? null
+}
+
+defineExpose({
+  captureSnapshot,
 })
 </script>
 

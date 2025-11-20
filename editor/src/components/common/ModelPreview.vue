@@ -113,7 +113,7 @@ function setupScene(): void {
   camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000)
   camera.position.set(3, 3, 3)
 
-  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true })
   renderer.outputColorSpace = THREE.SRGBColorSpace
   renderer.shadowMap.enabled = true
   renderer.setSize(container.value.clientWidth, container.value.clientHeight)
@@ -203,6 +203,29 @@ onBeforeUnmount(() => {
   renderer = null
   scene = null
   camera = null
+})
+
+async function captureSnapshot(): Promise<HTMLCanvasElement | null> {
+  if (!renderer) {
+    return null
+  }
+  const source = renderer.domElement
+  if (!source.width || !source.height) {
+    return null
+  }
+  const canvas = document.createElement('canvas')
+  canvas.width = source.width
+  canvas.height = source.height
+  const context = canvas.getContext('2d')
+  if (!context) {
+    return null
+  }
+  context.drawImage(source, 0, 0)
+  return canvas
+}
+
+defineExpose({
+  captureSnapshot,
 })
 </script>
 
