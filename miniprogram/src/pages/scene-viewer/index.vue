@@ -52,6 +52,7 @@
           <button class="viewer-lantern-close" aria-label="关闭幻灯片" @tap="cancelLanternOverlay">
             <image :src="lanternCloseIcon" mode="aspectFit" class="viewer-lantern-close-icon" />
           </button>
+          <!-- #ifdef H5 -->
           <view
             v-if="lanternCurrentSlideImage"
             class="viewer-lantern-image-wrapper"
@@ -67,6 +68,23 @@
               @tap="openLanternImageFullscreen"
             />
           </view>
+          <!-- #endif -->
+          <!-- #ifndef H5 -->
+          <view
+            v-if="lanternCurrentSlideImage"
+            class="viewer-lantern-image-wrapper"
+            :style="lanternImageBoxStyle"
+            ref="lanternViewerRoot"
+          >
+            <image
+              :src="lanternCurrentSlideImage"
+              mode="aspectFit"
+              class="viewer-lantern-image"
+              @load="handleLanternImageLoad"
+              @tap="openLanternImageFullscreen"
+            />
+          </view>
+          <!-- #endif -->
           <view class="viewer-lantern-body">
             <text class="viewer-lantern-title">{{ lanternCurrentTitle }}</text>
             <scroll-view
@@ -110,18 +128,40 @@
         class="viewer-purpose-controls"
       >
         <button
-          class="viewer-purpose-icon-button viewer-purpose-icon-button--primary"
-          aria-label="观察"
+          class="viewer-purpose-chip viewer-purpose-chip--watch"
+          :class="{ 'is-active': purposeActiveMode === 'watch' }"
+          aria-label="观察模式"
           @tap="handlePurposeWatchTap"
         >
-          <image :src="purposeWatchIcon" mode="aspectFit" class="viewer-purpose-icon" />
+          <view class="viewer-purpose-chip__halo"></view>
+          <view class="viewer-purpose-chip__content">
+            <view class="viewer-purpose-chip__icon-wrap">
+              <view class="viewer-purpose-chip__icon-pulse"></view>
+              <image :src="purposeWatchIcon" mode="aspectFit" class="viewer-purpose-chip__icon" />
+            </view>
+            <view class="viewer-purpose-chip__texts">
+              <text class="viewer-purpose-chip__title">观察</text>
+              <text class="viewer-purpose-chip__subtitle">锁定目标视角</text>
+            </view>
+          </view>
         </button>
         <button
-          class="viewer-purpose-icon-button viewer-purpose-icon-button--secondary"
-          aria-label="平视"
+          class="viewer-purpose-chip viewer-purpose-chip--level"
+          :class="{ 'is-active': purposeActiveMode === 'level' }"
+          aria-label="平视模式"
           @tap="handlePurposeResetTap"
         >
-          <image :src="purposeResetIcon" mode="aspectFit" class="viewer-purpose-icon" />
+          <view class="viewer-purpose-chip__halo"></view>
+          <view class="viewer-purpose-chip__content">
+            <view class="viewer-purpose-chip__icon-wrap">
+              <view class="viewer-purpose-chip__icon-pulse"></view>
+              <image :src="purposeResetIcon" mode="aspectFit" class="viewer-purpose-chip__icon" />
+            </view>
+            <view class="viewer-purpose-chip__texts">
+              <text class="viewer-purpose-chip__title">平视</text>
+              <text class="viewer-purpose-chip__subtitle">回到人眼高度</text>
+            </view>
+          </view>
         </button>
       </view>
     </view>
@@ -596,6 +636,7 @@ const lanternImageBoxStyle = computed(() => {
 const purposeControlsVisible = ref(false);
 const purposeTargetNodeId = ref<string | null>(null);
 const purposeSourceNodeId = ref<string | null>(null);
+const purposeActiveMode = ref<'watch' | 'level'>('level');
 const isCameraCaged = ref(false);
 
 type LanternTextState = { text: string; loading: boolean; error: string | null };
@@ -2536,6 +2577,7 @@ function performWatchFocus(targetNodeId: string | null, caging?: boolean): { suc
   }
   const finishSuccess = () => {
     setCameraCaging(Boolean(caging));
+    purposeActiveMode.value = 'watch';
     return { success: true };
   };
   activeCameraWatchTween = null;
@@ -2644,6 +2686,10 @@ function resetCameraToLevelView(): { success: boolean; message?: string } {
   const startTarget = controls.target.clone();
   const levelTarget = startTarget.clone();
   levelTarget.y = camera.position.y;
+  const finishSuccess = () => {
+    purposeActiveMode.value = 'level';
+    return { success: true };
+  };
   if (startTarget.distanceToSquared(levelTarget) < 1e-6) {
     withControlsVerticalFreedom(controls, () => {
       controls.target.copy(levelTarget);
@@ -2651,7 +2697,7 @@ function resetCameraToLevelView(): { success: boolean; message?: string } {
       controls.update();
     });
     lockControlsPitchToCurrent(controls, camera);
-    return { success: true };
+    return finishSuccess();
   }
   const startPosition = camera.position.clone();
   startPosition.y = HUMAN_EYE_HEIGHT;
@@ -2662,7 +2708,7 @@ function resetCameraToLevelView(): { success: boolean; message?: string } {
     duration: CAMERA_LEVEL_DURATION,
     elapsed: 0,
   };
-  return { success: true };
+  return finishSuccess();
 }
 
 function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look-level' }>) {
@@ -4484,38 +4530,213 @@ onUnmounted(() => {
   left: 16px;
   bottom: 16px;
   display: flex;
-  gap: 12px;
+  flex-direction: column;
+  gap: 14px;
+  align-items: stretch;
   z-index: 1600;
 }
 
-.viewer-purpose-icon-button {
+.viewer-purpose-chip {
+  position: relative;
+  min-width: 160px;
+  min-height: 64px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 18px;
+  background-color: transparent;
+  overflow: hidden;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  color: #ffffff;
+  opacity: 0.92;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.38);
+  transition: transform 0.28s ease, box-shadow 0.28s ease, opacity 0.28s ease;
+  text-align: left;
+}
+
+.viewer-purpose-chip__halo {
+  position: absolute;
+  inset: -24%;
+  border-radius: 28px;
+  opacity: 0.55;
+  pointer-events: none;
+  transition: opacity 0.28s ease;
+}
+
+.viewer-purpose-chip__content {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 14px;
+  padding: 14px 20px;
+  border-radius: 16px;
+  background: rgba(10, 15, 32, 0.85);
+}
+
+.viewer-purpose-chip__icon-wrap {
+  position: relative;
   width: 44px;
   height: 44px;
-  border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  background-color: rgba(12, 16, 28, 0.65);
+  border-radius: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0;
-  transition: opacity 0.2s ease;
+  background: rgba(6, 12, 26, 0.7);
+  overflow: hidden;
 }
 
-.viewer-purpose-icon-button--primary {
-  background-image: linear-gradient(135deg, #1f7aec, #5d9bff);
-  border: none;
+.viewer-purpose-chip__icon-pulse {
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  opacity: 0.35;
+  animation: viewer-purpose-icon-pulse 3.2s ease-in-out infinite;
+  pointer-events: none;
 }
 
-.viewer-purpose-icon-button--secondary {
-  background-color: rgba(12, 16, 28, 0.65);
-}
-
-.viewer-purpose-icon-button:active {
-  opacity: 0.8;
-}
-
-.viewer-purpose-icon {
+.viewer-purpose-chip__icon {
   width: 22px;
   height: 22px;
+  z-index: 1;
+}
+
+.viewer-purpose-chip__texts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.viewer-purpose-chip__title {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  line-height: 1.1;
+}
+
+.viewer-purpose-chip__subtitle {
+  font-size: 12px;
+  line-height: 1.3;
+  opacity: 0.85;
+  letter-spacing: 0.5px;
+}
+
+.viewer-purpose-chip--watch .viewer-purpose-chip__content {
+  background: linear-gradient(135deg, rgba(34, 98, 255, 0.92), rgba(10, 196, 254, 0.66));
+  box-shadow: inset 0 0 18px rgba(68, 183, 255, 0.55);
+}
+
+.viewer-purpose-chip--watch .viewer-purpose-chip__halo {
+  background: linear-gradient(125deg, rgba(40, 110, 255, 0.55), rgba(13, 216, 255, 0.25), rgba(14, 35, 78, 0));
+  animation: viewer-purpose-watch-halo 7s linear infinite;
+}
+
+.viewer-purpose-chip--watch .viewer-purpose-chip__icon-wrap {
+  background: rgba(7, 33, 86, 0.72);
+}
+
+.viewer-purpose-chip--watch .viewer-purpose-chip__icon-pulse {
+  border-color: rgba(173, 230, 255, 0.85);
+  box-shadow: 0 0 16px rgba(76, 198, 255, 0.7);
+}
+
+.viewer-purpose-chip--watch .viewer-purpose-chip__title {
+  text-shadow: 0 0 8px rgba(77, 197, 255, 0.8);
+}
+
+.viewer-purpose-chip--watch .viewer-purpose-chip__subtitle {
+  color: rgba(224, 247, 255, 0.95);
+}
+
+.viewer-purpose-chip--level .viewer-purpose-chip__content {
+  background: linear-gradient(135deg, rgba(45, 255, 190, 0.85), rgba(22, 89, 163, 0.75));
+  box-shadow: inset 0 0 16px rgba(48, 255, 198, 0.5);
+}
+
+.viewer-purpose-chip--level .viewer-purpose-chip__halo {
+  background: linear-gradient(140deg, rgba(38, 255, 197, 0.38), rgba(22, 125, 255, 0.18), rgba(5, 18, 36, 0));
+  animation: viewer-purpose-level-halo 5s ease-in-out infinite;
+}
+
+.viewer-purpose-chip--level .viewer-purpose-chip__icon-wrap {
+  background: rgba(3, 28, 35, 0.7);
+}
+
+.viewer-purpose-chip--level .viewer-purpose-chip__icon-pulse {
+  border-color: rgba(168, 255, 226, 0.85);
+  box-shadow: 0 0 14px rgba(64, 255, 200, 0.65);
+}
+
+.viewer-purpose-chip--level .viewer-purpose-chip__title {
+  text-shadow: 0 0 8px rgba(94, 255, 211, 0.8);
+}
+
+.viewer-purpose-chip--level .viewer-purpose-chip__subtitle {
+  color: rgba(219, 255, 243, 0.92);
+}
+
+.viewer-purpose-chip.is-active {
+  transform: translateY(-6px) scale(1.02);
+  opacity: 1;
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.45);
+}
+
+.viewer-purpose-chip.is-active .viewer-purpose-chip__halo {
+  opacity: 0.9;
+}
+
+.viewer-purpose-chip.is-active .viewer-purpose-chip__subtitle {
+  opacity: 0.98;
+}
+
+.viewer-purpose-chip.is-active .viewer-purpose-chip__icon-pulse {
+  animation-duration: 1.8s;
+}
+
+.viewer-purpose-chip:active {
+  transform: scale(0.97);
+}
+
+@keyframes viewer-purpose-icon-pulse {
+  0%, 100% {
+    opacity: 0.25;
+    transform: scale(0.92);
+  }
+  45% {
+    opacity: 0.85;
+    transform: scale(1);
+  }
+  70% {
+    opacity: 0.4;
+    transform: scale(1.08);
+  }
+}
+
+@keyframes viewer-purpose-watch-halo {
+  0% {
+    transform: rotate(0deg) scale(1);
+  }
+  50% {
+    transform: rotate(180deg) scale(1.05);
+  }
+  100% {
+    transform: rotate(360deg) scale(1);
+  }
+}
+
+@keyframes viewer-purpose-level-halo {
+  0%, 100% {
+    opacity: 0.45;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(1.08);
+  }
 }
 </style>
