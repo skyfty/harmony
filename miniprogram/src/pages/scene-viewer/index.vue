@@ -2150,9 +2150,33 @@ function applyCameraWatchTween(delta: number): void {
   const duration = tween.duration > 0 ? tween.duration : 0.0001;
   tween.elapsed = Math.min(tween.elapsed + delta, tween.duration);
   const eased = easeInOutCubic(Math.min(1, tween.elapsed / duration));
-  tempMovementVec.copy(tween.from).lerp(tween.to, eased);
+  
+  // Use quaternion slerp for smooth rotation interpolation
+  const fromDir = tempMovementVec.copy(tween.from).sub(tween.startPosition).normalize();
+  const toDir = tempForwardVec.copy(tween.to).sub(tween.startPosition).normalize();
+  
+  // Create quaternions from the direction vectors
+  const fromQuat = new THREE.Quaternion();
+  const toQuat = new THREE.Quaternion();
+  const upVector = new THREE.Vector3(0, 1, 0);
+  
+  // Set quaternions to look in the respective directions
+  fromQuat.setFromRotationMatrix(
+    new THREE.Matrix4().lookAt(new THREE.Vector3(0, 0, 0), fromDir, upVector)
+  );
+  toQuat.setFromRotationMatrix(
+    new THREE.Matrix4().lookAt(new THREE.Vector3(0, 0, 0), toDir, upVector)
+  );
+  
+  // Perform spherical linear interpolation (slerp)
+  const slerpedQuat = fromQuat.clone().slerp(toQuat, eased);
+  
+  // Convert back to target position
+  const interpolatedDir = new THREE.Vector3(0, 0, -1).applyQuaternion(slerpedQuat);
+  const interpolatedTarget = tween.startPosition.clone().add(interpolatedDir.multiplyScalar(CAMERA_FORWARD_OFFSET));
+  
   withControlsVerticalFreedom(controls, () => {
-    controls.target.copy(tempMovementVec);
+    controls.target.copy(interpolatedTarget);
     camera.position.copy(tween.startPosition);
     camera.position.y = HUMAN_EYE_HEIGHT;
     camera.lookAt(controls.target);
