@@ -4744,13 +4744,37 @@ onUnmounted(() => {
 }
 
 .viewer-purpose-chip.is-active {
-  transform: translateY(-6px) scale(1.02);
+  transform: none;
   opacity: 1;
-  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.45);
+  box-shadow: none;
+}
+
+.viewer-purpose-chip.is-active::after {
+  content: '';
+  position: absolute;
+  inset: -10px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  background: radial-gradient(circle, rgba(136, 222, 255, 0.45) 0%, rgba(136, 222, 255, 0.08) 60%, transparent 100%);
+  box-shadow:
+    0 0 32px rgba(118, 212, 255, 0.45),
+    0 0 64px rgba(118, 212, 255, 0.28);
+  opacity: 0.95;
+  transform-origin: center;
+  animation: viewer-purpose-active-glow 3.2s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.viewer-purpose-chip.is-active .viewer-purpose-chip__content {
+  filter: brightness(1.15) saturate(1.08);
+  box-shadow:
+    inset 0 0 24px rgba(255, 255, 255, 0.18),
+    0 0 22px rgba(120, 207, 255, 0.35);
 }
 
 .viewer-purpose-chip.is-active .viewer-purpose-chip__halo {
-  opacity: 0.9;
+  opacity: 1;
+  filter: saturate(1.15);
 }
 
 .viewer-purpose-chip.is-active .viewer-purpose-chip__subtitle {
@@ -4800,6 +4824,21 @@ onUnmounted(() => {
   50% {
     opacity: 0.9;
     transform: scale(1.08);
+  }
+}
+
+@keyframes viewer-purpose-active-glow {
+  0% {
+    opacity: 0.65;
+    transform: scale(0.94);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+  100% {
+    opacity: 0.65;
+    transform: scale(0.94);
   }
 }
 </style>

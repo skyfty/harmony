@@ -3723,8 +3723,9 @@ onBeforeUnmount(() => {
 		>
 			<v-btn
 				class="scene-preview__purpose-button"
+				:class="{ 'scene-preview__purpose-button--active': cameraViewState.mode === 'watching' }"
 				color="primary"
-				variant="elevated"
+				variant="tonal"
 				size="small"
 				@click="handlePurposeWatchClick"
 			>
@@ -3732,6 +3733,7 @@ onBeforeUnmount(() => {
 			</v-btn>
 			<v-btn
 				class="scene-preview__purpose-button"
+				:class="{ 'scene-preview__purpose-button--active': cameraViewState.mode === 'level' }"
 				color="primary"
 				variant="tonal"
 				size="small"
@@ -4077,6 +4079,21 @@ onBeforeUnmount(() => {
 	}
 }
 
+@keyframes scene-preview-purpose-glow {
+	0% {
+		opacity: 0.6;
+		transform: scale(0.94);
+	}
+	50% {
+		opacity: 1;
+		transform: scale(1.05);
+	}
+	100% {
+		opacity: 0.6;
+		transform: scale(0.94);
+	}
+}
+
 .scene-preview__progress-stats {
 	display: flex;
 	justify-content: space-between;
@@ -4148,6 +4165,38 @@ onBeforeUnmount(() => {
 
 .scene-preview__purpose-button {
 	min-width: 0;
+	position: relative;
+	overflow: visible;
+	z-index: 0;
+	transition: box-shadow 0.25s ease, filter 0.25s ease;
+}
+
+.scene-preview__purpose-button--active {
+	filter: brightness(1.12) saturate(1.05);
+	box-shadow:
+		0 0 26px rgba(110, 198, 255, 0.65),
+		0 0 48px rgba(110, 198, 255, 0.35);
+}
+
+.scene-preview__purpose-button--active::after {
+	content: '';
+	position: absolute;
+	inset: -10px;
+	border-radius: 999px;
+	border: 1px solid rgba(255, 255, 255, 0.5);
+	background: radial-gradient(circle, rgba(120, 208, 255, 0.4) 0%, rgba(120, 208, 255, 0.1) 60%, transparent 100%);
+	box-shadow:
+		0 0 28px rgba(120, 210, 255, 0.55),
+		0 0 64px rgba(120, 210, 255, 0.32);
+	opacity: 0.95;
+	pointer-events: none;
+	z-index: -1;
+	transform-origin: center;
+	animation: scene-preview-purpose-glow 3s ease-in-out infinite;
+}
+
+.scene-preview__purpose-button--active :deep(.v-btn__overlay) {
+	opacity: 0.15;
 }
 
 .scene-preview__control-bar {
