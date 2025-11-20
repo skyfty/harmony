@@ -396,13 +396,32 @@ function resolveModelParentNode(node: SceneNode | null): SceneNode | null {
   if (!node) {
     return null
   }
-  return isNormalSceneNode(node) ? node : null
+  if (node.id === GROUND_NODE_ID || node.id === SKY_NODE_ID || node.id === ENVIRONMENT_NODE_ID) {
+    return null
+  }
+  return node
+}
+
+function snapNodeToParentOrigin(nodeId: string | null | undefined): void {
+  if (!nodeId) {
+    return
+  }
+  const target = findSceneNodeById(sceneStore.nodes, nodeId)
+  if (!target) {
+    return
+  }
+  const rotation = target.rotation ?? { x: 0, y: 0, z: 0 }
+  const scale = target.scale ?? { x: 1, y: 1, z: 1 }
+  sceneStore.updateNodeTransform({
+    id: nodeId,
+    position: { x: 0, y: 0, z: 0 },
+    rotation,
+    scale,
+  })
 }
 
 function canAddAsset(asset: ProjectAsset): boolean {
-  if (!asset?.gleaned) {
-    return false
-  }
+
   if (isAssetDownloading(asset)) {
     return false
   }
@@ -441,7 +460,9 @@ async function handleAddAsset(asset: ProjectAsset) {
       const instantiated = await sceneStore.instantiateNodePrefabAsset(preparedAsset.id)
       if (instantiated && parentNode?.id) {
         const moved = sceneStore.moveNode({ nodeId: instantiated.id, targetId: parentNode.id, position: 'inside' })
-        if (!moved) {
+        if (moved) {
+          snapNodeToParentOrigin(instantiated.id)
+        } else {
           console.warn('Failed to reparent prefab under selected node', instantiated.id, parentNode.id)
         }
       }
@@ -451,6 +472,9 @@ async function handleAddAsset(asset: ProjectAsset) {
       const node = await sceneStore.addModelNode({ asset: preparedAsset, parentId: parentNode?.id ?? undefined })
       if (!node) {
         throw new Error('Asset is not ready yet')
+      }
+      if (parentNode?.id) {
+        snapNodeToParentOrigin(node.id)
       }
       return
     }

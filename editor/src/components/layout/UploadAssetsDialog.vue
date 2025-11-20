@@ -19,6 +19,7 @@ import {
   createAssetSeries,
   uploadAssetToServer,
 } from '@/api/resourceAssets'
+import { ensureAuthenticatedForResourceUpload } from '@/utils/uploadGuard'
 
 const TYPE_COLOR_FALLBACK: Record<ProjectAsset['type'], string> = {
   model: '#26c6da',
@@ -783,8 +784,20 @@ async function resolveEntriesTagIds(entries: UploadAssetEntry[]): Promise<Map<st
 
 async function submitUpload(options: { entries?: UploadAssetEntry[] } = {}) {
   if (uploadSubmitting.value) return
-  const targetEntries = (options.entries ?? uploadEntries.value).filter((entry) => entry && entry.status !== 'success')
+  const resolveTargetEntries = () =>
+    (options.entries ?? uploadEntries.value).filter((entry) => entry && entry.status !== 'success')
+
+  if (!resolveTargetEntries().length) return
+
+  const authenticated = await ensureAuthenticatedForResourceUpload()
+  if (!authenticated) {
+    uploadError.value = 'Please log in to upload assets.'
+    return
+  }
+
+  const targetEntries = resolveTargetEntries()
   if (!targetEntries.length) return
+
   uploadSubmitting.value = true
   uploadError.value = null
   try {
