@@ -270,7 +270,11 @@ async function enterExhibition(): Promise<void> {
     // 记录参观失败不会阻止进入场景，仅在控制台输出便于排查
     console.warn('[enterExhibition] failed to record visit', err);
   }
-  uni.navigateTo({ url: '/pages/scene-viewer/index' });
+  const sceneUrl = typeof exhibition.value.scene === 'string' ? exhibition.value.scene.trim() : '';
+  const target = sceneUrl
+    ? `/pages/scene-viewer/index?sceneUrl=${encodeURIComponent(sceneUrl)}`
+    : '/pages/scene-viewer/index';
+  uni.navigateTo({ url: target });
 }
 
 async function shareExhibition(): Promise<void> {

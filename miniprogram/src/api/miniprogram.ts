@@ -91,6 +91,7 @@ export interface ExhibitionSummary {
   description?: string;
   coverUrl?: string;
   coverUrls: string[];
+  scene?: string;
   status: 'draft' | 'published' | 'withdrawn';
   startDate?: string;
   endDate?: string;
