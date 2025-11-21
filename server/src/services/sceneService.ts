@@ -291,4 +291,3 @@ export function extractUploadedFile(files: Record<string, unknown> | undefined, 
 export function resolveSceneFilePath(fileKey: string): string {
   return resolveAbsolutePath(fileKey)
 }
-*** End of File

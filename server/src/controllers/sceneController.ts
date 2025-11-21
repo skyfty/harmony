@@ -238,4 +238,3 @@ export async function downloadSceneFile(ctx: Context): Promise<void> {
   ctx.set('Content-Length', stats.size.toString())
   ctx.body = createReadStream(filePath)
 }
-*** End of File
