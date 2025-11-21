@@ -9,6 +9,7 @@ import presetSceneRouter from './presetScenes'
 import assistantRouter from './aiAssistant'
 import aiTagRouter from './aiTags'
 import sceneRouter from './scenes'
+import userSceneRouter from './userScenes'
 
 export const routes: Router[] = [
   authRouter,
@@ -21,6 +22,7 @@ export const routes: Router[] = [
   miniprogramRouter,
   assistantRouter,
   aiTagRouter,
+  userSceneRouter,
 ]
 
 export default routes

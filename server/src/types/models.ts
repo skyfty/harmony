@@ -183,6 +183,14 @@ export interface OrderDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
+export interface UserSceneDocument extends Document<Types.ObjectId> {
+  userId: string
+  sceneId: string
+  document: Record<string, unknown>
+  createdAt: Date
+  updatedAt: Date
+}
+
 export type AssetType = SchemaAssetType
 
 export interface AssetCategoryDocument extends Document<Types.ObjectId> {

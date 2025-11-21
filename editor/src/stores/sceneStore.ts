@@ -97,7 +97,7 @@ import {
 import { useAssetCacheStore } from './assetCacheStore'
 import type { AssetCacheEntry } from './assetCacheStore'
 import { useUiStore } from './uiStore'
-import { useScenesStore } from './scenesStore'
+import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
 import { loadObjectFromFile } from '@/utils/assetImport'
 import { generateUuid } from '@/utils/uuid'
 import { getCachedModelObject, getOrLoadModelObject } from './modelObjectCache'
@@ -262,9 +262,14 @@ const WALL_DIMENSION_EPSILON = 1e-4
 declare module '@/types/scene-state' {
   interface SceneState {
     panelPlacement: PanelPlacementState
+    workspaceId: string
+    workspaceType: SceneWorkspaceType
+    workspaceLabel: string
   }
 }
 const OPACITY_EPSILON = 1e-3
+
+let workspaceScopeStopHandle: WatchStopHandle | null = null
 
 const MATERIAL_TEXTURE_SLOTS: SceneMaterialTextureSlot[] = ['albedo', 'normal', 'metalness', 'roughness', 'ao', 'emissive', 'displacement']
 
@@ -5482,6 +5487,9 @@ export const useSceneStore = defineStore('scene', {
       pendingTransformSnapshot: null,
       isSceneReady: false,
       hasUnsavedChanges: false,
+      workspaceId: '',
+      workspaceType: 'local',
+      workspaceLabel: '本地用户',
     }
   },
   getters: {
@@ -5543,7 +5551,69 @@ export const useSceneStore = defineStore('scene', {
   actions: {
 
     initialize() {
-      
+      if (workspaceScopeStopHandle) {
+        return
+      }
+      const scenesStore = useScenesStore()
+      workspaceScopeStopHandle = watch(
+        [() => scenesStore.workspaceId, () => scenesStore.workspaceType],
+        ([nextId, nextType], [prevId, prevType]) => {
+          if (!nextId) {
+            return
+          }
+          const descriptor = {
+            id: nextId,
+            type: (nextType ?? 'local') as SceneWorkspaceType,
+            label: scenesStore.workspaceLabel,
+          }
+          const previous = {
+            id: typeof prevId === 'string' ? (prevId as string) : null,
+            type: (prevType as SceneWorkspaceType | undefined) ?? null,
+          }
+          const run = async () => {
+            try {
+              await this.applyWorkspaceDescriptor(descriptor, previous)
+            } catch (error) {
+              console.error('[SceneStore] Failed to switch workspace', error)
+            }
+          }
+          void run()
+        },
+        { immediate: true },
+      )
+      watch(
+        () => scenesStore.workspaceLabel,
+        (label) => {
+          if (typeof label === 'string' && label.length) {
+            this.workspaceLabel = label
+          }
+        },
+        { immediate: true },
+      )
+    },
+    async applyWorkspaceDescriptor(
+      descriptor: { id: string; type: SceneWorkspaceType; label: string },
+      previous: { id: string | null; type: SceneWorkspaceType | null } | null,
+    ) {
+      const isInitial = !previous || !previous.id
+      const changed = isInitial || descriptor.id !== this.workspaceId || descriptor.type !== this.workspaceType
+      this.workspaceLabel = descriptor.label
+      if (!changed) {
+        return
+      }
+      if (!isInitial) {
+        try {
+          await this.saveActiveScene({ force: true })
+        } catch (error) {
+          console.warn('[SceneStore] Failed to auto-save before workspace switch', error)
+        }
+        this.nodes.forEach((node) => releaseRuntimeTree(node))
+      }
+      this.$reset()
+      this.workspaceId = descriptor.id
+      this.workspaceType = descriptor.type
+      this.workspaceLabel = descriptor.label
+      await this.ensureCurrentSceneLoaded()
     },
     onPersistHydrated(_state?: Partial<SceneState>) {
       const nextTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
@@ -10190,7 +10260,11 @@ export const useSceneStore = defineStore('scene', {
       'skybox',
       'shadowsEnabled',
       'environment',
+      'workspaceId',
+      'workspaceType',
+      'workspaceLabel',
     ],
+    shouldPersist: (state: Partial<SceneState>) => state.workspaceType !== 'user',
     migrations: migrateScenePersistedState,
   },
 })

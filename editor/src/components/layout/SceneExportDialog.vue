@@ -442,12 +442,13 @@ function handleConfirm() {
   margin-bottom: 12px;
 }
 
+
 .summary-section {
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
   padding: 12px;
   margin-bottom: 16px;
-  background: rgba(0, 0, 0, 0.02);
+  background: rgba(22, 29, 40, 0.72);
   min-height: 72px;
   display: flex;
   align-items: center;
@@ -459,7 +460,7 @@ function handleConfirm() {
 
 .summary-item--loading,
 .summary-item--empty {
-  color: rgba(0, 0, 0, 0.56);
+  color: rgba(239, 244, 255, 0.78);
   font-size: 0.9rem;
 }
 
@@ -472,23 +473,23 @@ function handleConfirm() {
 
 .summary-label {
   font-weight: 600;
-  color: rgba(0, 0, 0, 0.72);
+  color: rgba(255, 255, 255, 0.9);
 }
 
 .summary-value {
   font-weight: 700;
-  color: #1976d2;
+  color: #7fb3ff;
 }
 
 .summary-sub {
   font-size: 0.82rem;
-  color: rgba(0, 0, 0, 0.56);
+  color: rgba(224, 231, 247, 0.76);
 }
 
 .summary-warning {
   margin-top: 6px;
   font-size: 0.78rem;
-  color: #e65100;
+  color: #ffb74d;
 }
 
 .progress-section {
