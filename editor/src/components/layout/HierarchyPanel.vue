@@ -604,7 +604,7 @@ function handleDragStart(event: DragEvent, nodeId: string) {
   event.dataTransfer?.setData('text/plain', nodeId)
   event.dataTransfer?.setData('application/x-harmony-node', nodeId)
   if (event.dataTransfer) {
-    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.effectAllowed = 'copyMove'
   }
 }
 

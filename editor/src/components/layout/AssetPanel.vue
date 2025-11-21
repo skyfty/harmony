@@ -37,6 +37,8 @@ const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
 
 const PRESET_PROVIDER_ID = assetProvider.id
+const galleryRoot = ref<HTMLElement | null>(null)
+const galleryHovered = ref(false)
 
 const {
   projectTree,
@@ -70,6 +72,7 @@ watch(projectTree, () => {
 })
 
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
+const NODE_DRAG_MIME = 'application/x-harmony-node'
 let dragPreviewEl: HTMLDivElement | null = null
 let dragImageOffset: { x: number; y: number } | null = null
 let dragSuppressionPreparedAssetId: string | null = null
@@ -79,6 +82,7 @@ let dragSuppressionSourceAssetId: string | null = null
 let windowDragOverListener: ((event: DragEvent) => void) | null = null
 let windowDropListener: ((event: DragEvent) => void) | null = null
 let hiddenDragImageEl: HTMLDivElement | null = null
+let windowPasteListener: ((event: ClipboardEvent) => void) | null = null
 const addPendingAssetId = ref<string | null>(null)
 const deleteDialogOpen = ref(false)
 const pendingDeleteAssets = ref<ProjectAsset[]>([])
@@ -971,6 +975,16 @@ onMounted(() => {
   void refreshPresetProviderAssets()
 })
 
+onMounted(() => {
+  if (typeof window === 'undefined') {
+    return
+  }
+  windowPasteListener = (event: ClipboardEvent) => {
+    void handleGalleryClipboardPaste(event)
+  }
+  window.addEventListener('paste', windowPasteListener, true)
+})
+
 watch(categoryTree, () => {
   if (!categoryPath.value.length) {
     return
@@ -1413,6 +1427,17 @@ function isAssetDropPayload(dataTransfer: DataTransfer): boolean {
   return stringTypes.some((type) => types.includes(type))
 }
 
+function extractSceneNodeDragId(event: DragEvent): string | null {
+  if (!event.dataTransfer) {
+    return null
+  }
+  const value = event.dataTransfer.getData(NODE_DRAG_MIME)
+  if (typeof value === 'string' && value.trim().length) {
+    return value.trim()
+  }
+  return null
+}
+
 function assetTypeFromMimeType(mime: string | null | undefined): ProjectAsset['type'] | null {
   if (!mime) {
     return null
@@ -1760,13 +1785,20 @@ async function processAssetDrop(dataTransfer: DataTransfer): Promise<{ assets: P
 
 const allowAssetDrop = computed(() => true)
 const dropOverlayVisible = computed(() => dropActive.value || dropProcessing.value)
-const dropOverlayMessage = computed(() => (dropProcessing.value ? 'Importing assets…' : 'Drag files or links here to import assets'))
+const dropOverlayMessage = computed(() =>
+  dropProcessing.value ? 'Processing assets…' : 'Drag files, links, or scene nodes here to add assets',
+)
 
 function handleGalleryDragEnter(event: DragEvent) {
   if (!allowAssetDrop.value || dropProcessing.value) {
     return
   }
-  if (!event.dataTransfer || isInternalAssetDrag(event) || !isAssetDropPayload(event.dataTransfer)) {
+  if (!event.dataTransfer) {
+    return
+  }
+  const draggedNodeId = extractSceneNodeDragId(event)
+  const hasAssetPayload = isAssetDropPayload(event.dataTransfer)
+  if (!draggedNodeId && (isInternalAssetDrag(event) || !hasAssetPayload)) {
     return
   }
   event.preventDefault()
@@ -1780,7 +1812,12 @@ function handleGalleryDragOver(event: DragEvent) {
   if (!allowAssetDrop.value || dropProcessing.value) {
     return
   }
-  if (!event.dataTransfer || isInternalAssetDrag(event) || !isAssetDropPayload(event.dataTransfer)) {
+  if (!event.dataTransfer) {
+    return
+  }
+  const draggedNodeId = extractSceneNodeDragId(event)
+  const hasAssetPayload = isAssetDropPayload(event.dataTransfer)
+  if (!draggedNodeId && (isInternalAssetDrag(event) || !hasAssetPayload)) {
     return
   }
   event.preventDefault()
@@ -1796,6 +1833,11 @@ function handleGalleryDragLeave(event: DragEvent) {
   if (!event.dataTransfer) {
     return
   }
+  const draggedNodeId = extractSceneNodeDragId(event)
+  const hasAssetPayload = isAssetDropPayload(event.dataTransfer)
+  if (!draggedNodeId && !hasAssetPayload) {
+    return
+  }
   event.preventDefault()
   event.stopPropagation()
   dropDragDepth.value = Math.max(0, dropDragDepth.value - 1)
@@ -1808,7 +1850,12 @@ async function handleGalleryDrop(event: DragEvent) {
   if (!allowAssetDrop.value || dropProcessing.value) {
     return
   }
-  if (!event.dataTransfer || isInternalAssetDrag(event) || !isAssetDropPayload(event.dataTransfer)) {
+  if (!event.dataTransfer) {
+    return
+  }
+  const draggedNodeId = extractSceneNodeDragId(event)
+  const hasAssetPayload = isAssetDropPayload(event.dataTransfer)
+  if (!draggedNodeId && (isInternalAssetDrag(event) || !hasAssetPayload)) {
     return
   }
   event.preventDefault()
@@ -1818,6 +1865,10 @@ async function handleGalleryDrop(event: DragEvent) {
   dropDragDepth.value = 0
   clearDropFeedbackTimer()
   try {
+    if (draggedNodeId) {
+      await handleSceneNodeDrop(draggedNodeId)
+      return
+    }
     const { assets, errors } = await processAssetDrop(event.dataTransfer)
     if (assets.length) {
       const categoryOrder = assets.map((asset) => determineAssetCategoryId(asset))
@@ -1847,11 +1898,80 @@ async function handleGalleryDrop(event: DragEvent) {
       showDropFeedback('error', 'No importable assets detected')
     }
   } catch (error) {
-    console.error('Failed to import assets', error)
-    showDropFeedback('error', (error as Error).message ?? 'Failed to import assets')
+    console.error('Failed to process gallery drop payload', error)
+    showDropFeedback('error', (error as Error).message ?? 'Failed to process drop payload')
   } finally {
     dropProcessing.value = false
   }
+}
+
+function isEditableElement(target: EventTarget | null): boolean {
+  if (!target) {
+    return false
+  }
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+    return true
+  }
+  return target instanceof HTMLElement ? target.isContentEditable : false
+}
+
+function shouldHandleGalleryPaste(event: ClipboardEvent): boolean {
+  if (!galleryRoot.value) {
+    return false
+  }
+  const targetNode = event.target instanceof Node ? event.target : null
+  if (isEditableElement(targetNode)) {
+    return false
+  }
+  const activeElement = typeof document !== 'undefined' ? document.activeElement : null
+  if (isEditableElement(activeElement)) {
+    return false
+  }
+  if (targetNode && galleryRoot.value.contains(targetNode)) {
+    return true
+  }
+  if (activeElement && galleryRoot.value.contains(activeElement)) {
+    return true
+  }
+  return galleryHovered.value
+}
+
+async function handleGalleryClipboardPaste(event: ClipboardEvent): Promise<void> {
+  if (!shouldHandleGalleryPaste(event)) {
+    return
+  }
+  const serialized = event.clipboardData?.getData('text/plain')?.trim()
+  if (!serialized) {
+    return
+  }
+  const asset = await sceneStore.importPrefabAssetFromClipboard(serialized)
+  if (asset) {
+    event.preventDefault()
+  }
+}
+
+function handleGalleryPointerEnter() {
+  galleryHovered.value = true
+}
+
+function handleGalleryPointerLeave() {
+  galleryHovered.value = false
+}
+
+async function handleSceneNodeDrop(nodeId: string): Promise<void> {
+  if (!nodeId) {
+    throw new Error('无效的节点引用')
+  }
+  const node = findSceneNodeById(sceneStore.nodes, nodeId)
+  if (!node) {
+    throw new Error('该节点已被删除或不可用')
+  }
+  if (!isNormalSceneNode(node)) {
+    throw new Error('该节点无法保存为预制件')
+  }
+  await sceneStore.saveNodePrefab(nodeId)
+  const label = node.name?.trim().length ? node.name.trim() : 'Prefab'
+  showDropFeedback('success', `Prefab "${label}" saved to assets`)
 }
 
 const selectedAssets = computed(() =>
@@ -2158,6 +2278,10 @@ function destroyDragPreview() {
 onBeforeUnmount(() => {
   destroyDragPreview()
   detachDragSuppressionListeners()
+  if (typeof window !== 'undefined' && windowPasteListener) {
+    window.removeEventListener('paste', windowPasteListener, true)
+    windowPasteListener = null
+  }
   sceneStore.setDraggingAssetId(null)
   if (searchDebounceHandle !== null) {
     clearTimeout(searchDebounceHandle)
@@ -2229,12 +2353,15 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
       </Pane>
       <Pane :size="galleryPaneSize">
         <div
+          ref="galleryRoot"
           class="project-gallery"
           :class="{ 'is-drop-target': dropOverlayVisible }"
           @dragenter="handleGalleryDragEnter"
           @dragover="handleGalleryDragOver"
           @dragleave="handleGalleryDragLeave"
           @drop="handleGalleryDrop"
+          @pointerenter="handleGalleryPointerEnter"
+          @pointerleave="handleGalleryPointerLeave"
         >
           <v-toolbar density="compact" height="46">
             <v-checkbox-btn

@@ -1,6 +1,8 @@
-import type { SceneNode } from  '@harmony/schema'
+import type { NodePrefabData } from './node-prefab'
 
 export interface ClipboardEntry {
   sourceId: string
-  node: SceneNode
+  prefab: NodePrefabData
+  serialized: string
+  dependencyAssetIds: string[]
 }

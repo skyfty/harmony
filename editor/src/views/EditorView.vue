@@ -897,7 +897,7 @@ async function handleAction(action: string) {
       break
     }
     case 'Paste': {
-      sceneStore.pasteClipboard(sceneStore.selectedNodeId)
+      await sceneStore.pasteClipboard(sceneStore.selectedNodeId)
       break
     }
     case 'Delete': {
@@ -1385,9 +1385,7 @@ async function handleEditorViewShortcut(event: KeyboardEvent) {
       }
       case 'KeyV': {
         if (!event.shiftKey) {
-          handled = (sceneStore.clipboard?.entries.length ?? 0) > 0
-            ? sceneStore.pasteClipboard(sceneStore.selectedNodeId)
-            : false
+          handled = await sceneStore.pasteClipboard(sceneStore.selectedNodeId)
         }
         break
       }
