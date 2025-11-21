@@ -6,12 +6,24 @@
         <text class="section-title">最新展览</text>
         <text class="section-more" @tap="goExhibitionListLatest">更多</text>
       </view>
-      <view class="works-grid">
-        <view class="work-card" v-for="card in latestExhibitions" :key="card.id" @tap="openExhibition(card.id)">
-          <view class="work-thumb" :style="{ background: card.gradient }"></view>
-          <view class="work-info">
-            <text class="work-name">{{ card.name }}</text>
-            <text class="work-subtitle">{{ card.subtitle }}</text>
+      <view class="works-grid works-grid--masonry">
+        <view
+          class="work-card"
+          v-for="card in latestExhibitions"
+          :key="card.id"
+          :style="{ background: card.gradient }"
+          @tap="openExhibition(card.id)"
+        >
+          <view class="work-card__preview" :style="{ height: card.previewHeight + 'px' }">
+            <image
+              v-if="card.previewImage"
+              class="work-card__image"
+              :src="card.previewImage"
+              mode="aspectFill"
+            />
+            <view v-else class="work-card__placeholder">
+              <text>暂无预览</text>
+            </view>
             <view class="work-card__stats">
               <view class="stat-item">
                 <text class="stat-icon stat-icon--star" :class="{ 'is-active': card.userRating > 0 }">★</text>
@@ -32,12 +44,24 @@
         <text class="section-title">最佳展览</text>
         <text class="section-more" @tap="goExhibitionListBest">更多</text>
       </view>
-      <view class="works-grid">
-        <view class="work-card" v-for="card in bestExhibitions" :key="card.id" @tap="openExhibition(card.id)">
-          <view class="work-thumb" :style="{ background: card.gradient }"></view>
-          <view class="work-info">
-            <text class="work-name">{{ card.name }}</text>
-            <text class="work-subtitle">{{ card.subtitle }}</text>
+      <view class="works-grid works-grid--masonry">
+        <view
+          class="work-card"
+          v-for="card in bestExhibitions"
+          :key="card.id"
+          :style="{ background: card.gradient }"
+          @tap="openExhibition(card.id)"
+        >
+          <view class="work-card__preview" :style="{ height: card.previewHeight + 'px' }">
+            <image
+              v-if="card.previewImage"
+              class="work-card__image"
+              :src="card.previewImage"
+              mode="aspectFill"
+            />
+            <view v-else class="work-card__placeholder">
+              <text>暂无预览</text>
+            </view>
             <view class="work-card__stats">
               <view class="stat-item">
                 <text class="stat-icon stat-icon--star" :class="{ 'is-active': card.userRating > 0 }">★</text>
@@ -58,12 +82,24 @@
         <text class="section-title">最佳作品</text>
         <text class="section-more" @tap="goWorksListBest">更多</text>
       </view>
-      <view class="works-grid">
-        <view class="work-card" v-for="work in bestWorks" :key="work.id" @tap="openWorkDetail(work.id)">
-          <view class="work-thumb" :style="{ background: work.gradient }"></view>
-          <view class="work-info">
-            <text class="work-name">{{ work.name }}</text>
-            <text class="work-subtitle">{{ work.subtitle }}</text>
+      <view class="works-grid works-grid--masonry">
+        <view
+          class="work-card"
+          v-for="work in bestWorks"
+          :key="work.id"
+          :style="{ background: work.gradient }"
+          @tap="openWorkDetail(work.id)"
+        >
+          <view class="work-card__preview" :style="{ height: work.previewHeight + 'px' }">
+            <image
+              v-if="work.previewImage"
+              class="work-card__image"
+              :src="work.previewImage"
+              mode="aspectFill"
+            />
+            <view v-else class="work-card__placeholder">
+              <text>暂无预览</text>
+            </view>
             <view class="work-card__stats">
               <view class="stat-item">
                 <text class="stat-icon stat-icon--star" :class="{ 'is-active': work.userRating > 0 }">★</text>
@@ -100,6 +136,8 @@ type ExhibitionCard = {
   userRating: number;
   likes: number;
   liked: boolean;
+  previewImage: string;
+  previewHeight: number;
 };
 
 type WorkCard = {
@@ -112,9 +150,68 @@ type WorkCard = {
   userRating: number;
   likes: number;
   liked: boolean;
+  previewImage: string;
+  previewHeight: number;
 };
 
 const worksStore = useWorksStore();
+
+const gradientPalette = [
+  'linear-gradient(135deg, #ffe0f2, #ffd0ec)',
+  'linear-gradient(135deg, #dff5ff, #c6ebff)',
+  'linear-gradient(135deg, #fff0ce, #ffe2a8)',
+  'linear-gradient(135deg, #e7e4ff, #f1eeff)',
+  'linear-gradient(135deg, #ffd6ec, #ffeaf5)',
+  'linear-gradient(135deg, #c1d8ff, #a0c5ff)',
+  'linear-gradient(135deg, #b7f5ec, #90e0d9)',
+  'linear-gradient(135deg, #ffd59e, #ffe8c9)',
+];
+
+const previewHeightPattern = [168, 210, 238, 192, 224, 256];
+
+function ensureBackground(source: string | undefined, index: number): string {
+  if (source && source.startsWith('linear-gradient')) {
+    return source;
+  }
+  if (source && source.startsWith('url(')) {
+    return source;
+  }
+  if (source && /^(https?:)?\/\//i.test(source)) {
+    return `url(${source})`;
+  }
+  const paletteIndex = ((index % gradientPalette.length) + gradientPalette.length) % gradientPalette.length;
+  return gradientPalette[paletteIndex];
+}
+
+function extractCssImage(value?: string): string {
+  if (!value) {
+    return '';
+  }
+  const match = value.match(/^url\((.*)\)$/i);
+  if (match && match[1]) {
+    return match[1].replace(/^['"]|['"]$/g, '');
+  }
+  if (/^(https?:)?\/\//i.test(value) || value.startsWith('data:')) {
+    return value;
+  }
+  return '';
+}
+
+function resolvePreviewImage(...sources: Array<string | undefined>): string {
+  for (const source of sources) {
+    const resolved = extractCssImage(source);
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return '';
+}
+
+function computePreviewHeight(index: number): number {
+  const normalizedIndex = Number.isFinite(index) ? index : 0;
+  const patternIndex = ((normalizedIndex % previewHeightPattern.length) + previewHeightPattern.length) % previewHeightPattern.length;
+  return previewHeightPattern[patternIndex];
+}
 
 onShow(async () => {
   try {
@@ -177,17 +274,22 @@ const latestExhibitions = computed<ExhibitionCard[]>(() =>
     .slice()
     .sort(sortByUpdated)
     .slice(0, 4)
-    .map((item) => ({
-      id: item.id,
-      name: item.name,
-      subtitle: formatExhibitionSubtitle(item),
-      gradient: item.cover,
-      rating: item.rating,
-      ratingCount: item.ratingCount,
-      userRating: item.userRatingScore ?? 0,
-      likes: item.likesCount ?? 0,
-      liked: item.liked,
-    })),
+    .map((item, index) => {
+      const previewImage = resolvePreviewImage(item.primaryCover, item.coverImages?.[0], item.cover);
+      return {
+        id: item.id,
+        name: item.name,
+        subtitle: formatExhibitionSubtitle(item),
+        gradient: ensureBackground(item.cover || previewImage, index),
+        rating: item.rating,
+        ratingCount: item.ratingCount,
+        userRating: item.userRatingScore ?? 0,
+        likes: item.likesCount ?? 0,
+        liked: item.liked,
+        previewImage,
+        previewHeight: computePreviewHeight(index),
+      };
+    }),
 );
 
 const bestExhibitions = computed<ExhibitionCard[]>(() =>
@@ -200,17 +302,22 @@ const bestExhibitions = computed<ExhibitionCard[]>(() =>
       return b.rating - a.rating;
     })
     .slice(0, 4)
-    .map((item) => ({
-      id: item.id,
-      name: item.name,
-      subtitle: formatExhibitionSubtitle(item),
-      gradient: item.cover,
-      rating: item.rating,
-      ratingCount: item.ratingCount,
-      userRating: item.userRatingScore ?? 0,
-      likes: item.likesCount ?? 0,
-      liked: item.liked,
-    })),
+    .map((item, index) => {
+      const previewImage = resolvePreviewImage(item.primaryCover, item.coverImages?.[0], item.cover);
+      return {
+        id: item.id,
+        name: item.name,
+        subtitle: formatExhibitionSubtitle(item),
+        gradient: ensureBackground(item.cover || previewImage, index),
+        rating: item.rating,
+        ratingCount: item.ratingCount,
+        userRating: item.userRatingScore ?? 0,
+        likes: item.likesCount ?? 0,
+        liked: item.liked,
+        previewImage,
+        previewHeight: computePreviewHeight(index),
+      };
+    }),
 );
 
 const bestWorks = computed<WorkCard[]>(() =>
@@ -223,17 +330,22 @@ const bestWorks = computed<WorkCard[]>(() =>
       return b.rating - a.rating;
     })
     .slice(0, 4)
-    .map((item: WorkItem) => ({
-      id: item.id,
-      name: item.name,
-      subtitle: formatWorkSubtitle(item),
-      gradient: item.gradient,
-      rating: item.rating,
-      ratingCount: item.ratingCount,
-      userRating: item.userRatingScore ?? 0,
-      likes: item.likes,
-      liked: item.liked,
-    })),
+    .map((item: WorkItem, index) => {
+      const previewImage = resolvePreviewImage(item.thumbnailUrl, item.fileUrl);
+      return {
+        id: item.id,
+        name: item.name,
+        subtitle: formatWorkSubtitle(item),
+        gradient: ensureBackground(item.gradient, index),
+        rating: item.rating,
+        ratingCount: item.ratingCount,
+        userRating: item.userRatingScore ?? 0,
+        likes: item.likes,
+        liked: item.liked,
+        previewImage,
+        previewHeight: computePreviewHeight(index),
+      };
+    }),
 );
 
 function handleNavigate(target: NavKey) {
@@ -365,33 +477,38 @@ function openWorkDetail(id: string) {
   font-size: 14px;
 }
 
+
 .work-card__stats {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  padding: 8px 12px;
+  border-radius: 16px;
+  background: rgba(6, 9, 20, 0.58);
+  backdrop-filter: blur(8px);
   display: flex;
-  gap: 8px;
-  margin-top: 6px;
+  justify-content: space-between;
+  gap: 10px;
+  box-shadow: 0 15px 32px rgba(6, 9, 20, 0.45);
 }
 
 .stat-item {
   display: flex;
   align-items: center;
-  gap: 4px;
-  background: rgba(31, 122, 236, 0.08);
-  padding: 4px 8px;
-  border-radius: 10px;
+  justify-content: center;
+  gap: 6px;
+  flex: 1;
 }
 
 .stat-icon {
   font-size: 12px;
-  color: #c1c7d4;
+  color: rgba(255, 255, 255, 0.75);
   transition: color 0.2s ease;
 }
 
 .stat-icon--star.is-active {
   color: #ffb400;
-}
-
-.stat-icon--heart {
-  color: #c1c7d4;
 }
 
 .stat-icon--heart.is-active {
@@ -400,7 +517,7 @@ function openWorkDetail(id: string) {
 
 .stat-value {
   font-size: 12px;
-  color: #1f1f1f;
+  color: rgba(255, 255, 255, 0.92);
 }
 .panel-title {
   font-size: 16px;
@@ -450,38 +567,57 @@ function openWorkDetail(id: string) {
 }
 
 .works-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  width: 100%;
+}
+
+.works-grid--masonry {
+  column-count: 2;
+  column-gap: 16px;
+}
+
+@media (min-width: 540px) {
+  .works-grid--masonry {
+    column-count: 3;
+  }
 }
 
 .work-card {
+  border-radius: 24px;
+  padding: 6px;
+  color: #ffffff;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  box-shadow: 0 18px 38px rgba(31, 122, 236, 0.18);
+  position: relative;
+  margin-bottom: 16px;
+  break-inside: avoid;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(6px);
 }
 
-.work-thumb {
+.work-card__preview {
+  border-radius: 20px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.16);
+  position: relative;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+
+.work-card__image {
   width: 100%;
-  height: 110px;
-  border-radius: 18px;
-  box-shadow: 0 12px 24px rgba(31, 122, 236, 0.12);
+  height: 100%;
+  display: block;
+  object-fit: cover;
 }
 
-.work-info {
+.work-card__placeholder {
+  position: absolute;
+  inset: 0;
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.work-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: #1f1f1f;
-}
-
-.work-subtitle {
+  align-items: center;
+  justify-content: center;
   font-size: 12px;
-  color: #8a94a6;
+  color: rgba(255, 255, 255, 0.9);
 }
+
 </style>

@@ -45,22 +45,8 @@
     </view>
 
     <view v-if="collection" class="info-card">
-      <text class="info-title">作品集信息</text>
       <view class="info-row">
-        <text class="info-label">标题</text>
-        <text class="info-value">{{ collection.title || '未命名作品集' }}</text>
-      </view>
-      <view class="info-row">
-        <text class="info-label">简介</text>
         <text class="info-value info-value--multiline">{{ collection.description || '尚未填写描述' }}</text>
-      </view>
-      <view class="info-row">
-        <text class="info-label">可见性</text>
-        <text class="info-value">{{ collection.isPublic ? '公开' : '仅自己可见' }}</text>
-      </view>
-      <view class="info-row">
-        <text class="info-label">更新时间</text>
-        <text class="info-value">{{ collection.updatedAt }}</text>
       </view>
     </view>
 
@@ -69,9 +55,13 @@
         <text class="works-title">包含作品</text>
         <text class="works-meta">共 {{ worksInCollection.length }} 个</text>
       </view>
-      <view v-if="worksInCollection.length" class="works-grid">
+      <view v-if="worksInCollection.length" class="works-grid works-grid--masonry">
         <view class="work-card" v-for="work in worksInCollection" :key="work.id" :style="{ background: work.gradient }">
-          <view class="work-card__preview" @tap="openWorkDetail(work.id)">
+          <view
+            class="work-card__preview"
+            :style="{ height: work.previewHeight + 'px' }"
+            @tap="openWorkDetail(work.id)"
+          >
             <image
               v-if="workPreview(work)"
               class="work-card__image"
@@ -153,6 +143,7 @@ interface WorkDisplay {
   type: WorkMediaType;
   thumbnailUrl?: string;
   fileUrl: string;
+  previewHeight: number;
 }
 
 const collectionId = ref('');
@@ -178,6 +169,14 @@ const gradientPalette = [
   'linear-gradient(135deg, #b7f5ec, #90e0d9)',
   'linear-gradient(135deg, #ffd59e, #ffe8c9)',
 ];
+
+const previewHeightPattern = [168, 210, 238, 192, 224, 256];
+
+function computePreviewHeight(index: number): number {
+  const normalizedIndex = Number.isFinite(index) ? index : 0;
+  const patternIndex = ((normalizedIndex % previewHeightPattern.length) + previewHeightPattern.length) % previewHeightPattern.length;
+  return previewHeightPattern[patternIndex];
+}
 
 function ensureBackground(url: string | undefined, index: number): string {
   if (url && url.startsWith('http')) {
@@ -228,6 +227,7 @@ const worksInCollection = computed<WorkDisplay[]>(() => {
     type: (work.mediaType ?? 'image') as WorkMediaType,
     thumbnailUrl: work.thumbnailUrl ?? undefined,
     fileUrl: work.fileUrl,
+    previewHeight: computePreviewHeight(index),
   }));
 });
 
@@ -739,13 +739,21 @@ async function handleDelete(): Promise<void> {
 }
 
 .works-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 16px;
+  width: 100%;
+}
+
+.works-grid--masonry {
+  column-count: 2;
+  column-gap: 16px;
+}
+
+@media (min-width: 540px) {
+  .works-grid--masonry {
+    column-count: 3;
+  }
 }
 
 .work-card {
-  min-height: 160px;
   border-radius: 18px;
   padding: 18px;
   color: #ffffff;
@@ -755,10 +763,12 @@ async function handleDelete(): Promise<void> {
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
   position: relative;
   gap: 12px;
+  break-inside: avoid;
+  width: 100%;
+  margin-bottom: 16px;
 }
 
 .work-card__preview {
-  height: 150px;
   border-radius: 12px;
   overflow: hidden;
   background: rgba(255, 255, 255, 0.16);
@@ -820,57 +830,53 @@ async function handleDelete(): Promise<void> {
 }
 
 .actions-section {
-  margin: 40px 20px 120px;
-  padding: 0 16px;
+  margin: 24px 0 120px;
+  padding: 22px 20px;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 24px;
+  box-shadow: 0 18px 42px rgba(31, 122, 236, 0.12);
   display: flex;
   flex-direction: column;
-  align-items: stretch;
-  gap: 12px;
+  gap: 14px;
 }
 
 .action-btn {
   width: 100%;
-  padding: 14px 20px;
-  border: none;
-  border-radius: 12px;
+  padding: 14px 18px;
+  border-radius: 16px;
+  border: 1px solid transparent;
   font-size: 15px;
   font-weight: 600;
+  letter-spacing: 0.02em;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.3s;
+  gap: 6px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
 
-  &:active {
-    transform: scale(0.98);
-  }
+.action-btn:active {
+  transform: translateY(1px) scale(0.99);
 }
 
 .action-btn-edit {
-  background: rgba(31, 122, 236, 0.12);
-  color: #1f7aec;
-
-  &:active {
-    background: rgba(31, 122, 236, 0.18);
-  }
+  background: rgba(31, 122, 236, 0.08);
+  color: #1f6de0;
+  border-color: rgba(31, 122, 236, 0.24);
+  box-shadow: 0 8px 20px rgba(31, 122, 236, 0.15);
 }
 
 .action-btn-delete {
   background: rgba(255, 87, 87, 0.12);
-  color: #ff5757;
-
-  &:active {
-    background: rgba(255, 87, 87, 0.18);
-  }
+  color: #ff4f4f;
+  border-color: rgba(255, 87, 87, 0.24);
+  box-shadow: 0 8px 20px rgba(255, 87, 87, 0.18);
 }
 
 .action-btn-create {
   background: linear-gradient(135deg, #3f97ff 0%, #7ec6ff 100%);
   color: #ffffff;
-  box-shadow: 0 6px 20px rgba(63, 151, 255, 0.3);
-
-  &:active {
-    box-shadow: 0 3px 12px rgba(63, 151, 255, 0.2);
-  }
+  box-shadow: 0 10px 26px rgba(63, 151, 255, 0.35);
 }
 
 .empty {

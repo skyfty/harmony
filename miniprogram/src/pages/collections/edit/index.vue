@@ -56,12 +56,12 @@
     <text class="card-title">刚创作的作品</text>
         <text class="card-meta">点击右上角可移除单个作品</text>
       </view>
-      <view class="works-grid">
+      <view class="works-grid works-grid--masonry">
         <view
           class="work-thumb"
           v-for="item in displayItems"
           :key="item.id"
-          :style="{ background: item.gradient }"
+          :style="{ background: item.gradient, height: item.previewHeight + 'px' }"
           @tap="openWorkPreview(item)"
         >
           <image v-if="item.preview" class="work-thumb__image" :src="item.preview" mode="aspectFill" />
@@ -72,7 +72,7 @@
               {{ (editableEntries[item.id] && editableEntries[item.id].name) || item.name }}
             </text>
           </view>
-          <button class="delete-icon" @tap.stop="confirmRemove(item.id)">×</button>
+          <button class="work-thumb__delete" @tap.stop="confirmRemove(item.id)">×</button>
         </view>
       </view>
     </view>
@@ -229,6 +229,7 @@ type DisplayItem = {
   kind: 'existing' | 'pending';
   work?: WorkItem;
   upload?: PendingWorkUpload;
+  previewHeight: number;
 };
 
 type EditableEntry = {
@@ -297,9 +298,18 @@ const fallbackGradients = [
   'linear-gradient(135deg, #ffd59e, #ffe8c9)',
 ];
 
+const previewHeightPattern = [156, 188, 220, 172, 204, 236, 260];
+
+function computePreviewHeight(index: number): number {
+  const normalizedIndex = Number.isFinite(index) ? index : 0;
+  const patternIndex = ((normalizedIndex % previewHeightPattern.length) + previewHeightPattern.length) % previewHeightPattern.length;
+  return previewHeightPattern[patternIndex];
+}
+
 const rawDisplayItems = computed<DisplayItem[]>(() => {
   const items: DisplayItem[] = [];
   selectedExistingWorks.value.forEach((work) => {
+    const previewHeight = computePreviewHeight(items.length);
     items.push({
       id: work.id,
       name: work.name,
@@ -311,10 +321,12 @@ const rawDisplayItems = computed<DisplayItem[]>(() => {
       sizeLabel: work.size,
       kind: 'existing',
       work,
+      previewHeight,
     });
   });
   pendingUploads.value.forEach((upload, index) => {
     const gradientIndex = (selectedExistingWorks.value.length + index) % fallbackGradients.length;
+    const previewHeight = computePreviewHeight(items.length);
     items.push({
       id: upload.id,
       name: upload.name,
@@ -326,6 +338,7 @@ const rawDisplayItems = computed<DisplayItem[]>(() => {
       sizeLabel: formatWorkSize(upload.size),
       kind: 'pending',
       upload,
+      previewHeight,
     });
   });
   return items;
@@ -1385,14 +1398,22 @@ function getErrorMessage(error: unknown): string {
 }
 
 .works-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
+  width: 100%;
+}
+
+.works-grid--masonry {
+  column-count: 2;
+  column-gap: 12px;
+}
+
+@media (min-width: 540px) {
+  .works-grid--masonry {
+    column-count: 3;
+  }
 }
 
 .work-thumb {
-  width: 102px;
-  height: 102px;
+  width: 100%;
   border-radius: 14px;
   position: relative;
   overflow: hidden;
@@ -1400,6 +1421,8 @@ function getErrorMessage(error: unknown): string {
   display: flex;
   align-items: center;
   justify-content: center;
+  margin-bottom: 12px;
+  break-inside: avoid;
 }
 
 .work-thumb__image {
@@ -1424,6 +1447,31 @@ function getErrorMessage(error: unknown): string {
   background: rgba(31, 122, 236, 0.9);
   color: #fff;
   font-size: 10px;
+}
+
+.work-thumb__delete {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.88), rgba(15, 23, 42, 0.68));
+  color: #ffffff;
+  font-size: 16px;
+  line-height: 1;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.38), 0 0 0 1px rgba(255, 255, 255, 0.2);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.work-thumb__delete:active {
+  transform: scale(0.9);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.32), 0 0 0 1px rgba(255, 255, 255, 0.24);
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(15, 23, 42, 0.78));
 }
 
 .work-thumb__footer {
@@ -1750,20 +1798,4 @@ function getErrorMessage(error: unknown): string {
   box-shadow: 0 10px 24px rgba(31, 122, 236, 0.2);
 }
 
-.delete-icon {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 22px;
-  height: 22px;
-  line-height: 22px;
-  text-align: center;
-  border: none;
-  border-radius: 50%;
-  background: rgba(217, 48, 37, 0.95);
-  border: 1px solid rgba(255, 255, 255, 0.9);
-  color: #ffffff;
-  font-size: 14px;
-  box-shadow: 0 4px 10px rgba(217, 48, 37, 0.25);
-}
 </style>

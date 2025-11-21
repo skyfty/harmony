@@ -22,7 +22,6 @@
       <view class="stat stat--rating stat--action" @tap="openWorkRatingModal">
         <text class="stat-icon">★</text>
         <text class="stat-value">{{ workRating }}</text>
-        <text class="stat-desc">{{ workRatingSummary }}</text>
       </view>
       <view
         class="stat stat--likes stat--action"
@@ -31,31 +30,17 @@
       >
         <text class="stat-icon">❤</text>
         <text class="stat-value">{{ workLikes }}</text>
-        <text class="stat-desc">{{ workLikeSummary }}</text>
       </view>
     </view>
 
     <view v-if="work" class="info-card">
-      <text class="info-title">作品信息</text>
-      <view class="info-row">
-        <text class="info-label">标题</text>
-        <text class="info-value">{{ work.title || '未命名作品' }}</text>
-      </view>
       <view class="info-row">
         <text class="info-label">简介</text>
         <text class="info-value info-value--multiline">{{ work.description || '尚未填写描述' }}</text>
       </view>
       <view class="info-row">
-        <text class="info-label">类型</text>
-        <text class="info-value">{{ workTypeLabel }}</text>
-      </view>
-      <view class="info-row">
         <text class="info-label">创建时间</text>
         <text class="info-value">{{ workCreatedAt }}</text>
-      </view>
-      <view class="info-row">
-        <text class="info-label">更新时间</text>
-        <text class="info-value">{{ workUpdatedAt }}</text>
       </view>
     </view>
 
@@ -289,7 +274,7 @@ const workRatingAction = computed(() => {
 const workRatingSummary = computed(() => {
   const count = workRatingCount.value;
   const prefix = count > 0 ? `共 ${count} 次评分` : '尚无评分';
-  return `${prefix} · ${workRatingAction.value}`;
+  return `${prefix}`;
 });
 
 const workLiked = computed(() => Boolean(work.value?.liked));

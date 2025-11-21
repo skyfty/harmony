@@ -74,61 +74,31 @@
         <view v-if="!hasCollectionSelected" class="empty-tip">请选择作品集后显示可用展品。</view>
         <view v-else-if="workOptions.length" class="work-list">
           <view
-            v-for="work in workOptions"
+            v-for="(work, index) in workOptions"
             :key="work.id"
             class="work-item"
-            :class="{ 'is-selected': isWorkSelected(work.id) }"
+            :class="[getWorkTileClass(index), { 'is-selected': isWorkSelected(work.id), 'is-cover': isCoverSelected(work.id) }]"
             @tap="toggleWorkSelection(work.id)"
           >
             <image class="work-thumb" :src="work.thumbnailUrl || work.fileUrl" mode="aspectFill" />
-            <view class="work-info">
-              <text class="work-name">{{ work.title || '未命名作品' }}</text>
-              <text class="work-meta">{{ formatWorkMeta(work) }}</text>
+            <view class="work-item__overlay" :class="{ 'is-visible': isWorkSelected(work.id) }" />
+            <view v-if="isWorkSelected(work.id)" class="work-item__badge">
+              <text class="work-item__badge-icon">{{ isCoverSelected(work.id) ? '📌' : '✓' }}</text>
+              <text class="work-item__badge-text">{{ isCoverSelected(work.id) ? '封面图' : '已选择' }}</text>
             </view>
             <button
-              class="cover-toggle icon-btn"
+              class="cover-toggle"
               :class="{ 'is-cover': isCoverSelected(work.id) }"
               @tap.stop="toggleCoverWork(work)"
             >
-              <text v-if="isCoverSelected(work.id)">📌</text>
-              <text v-else>⭐</text>
+              <text class="cover-toggle__text">{{ isCoverSelected(work.id) ? '取消封面' : '设为封面' }}</text>
             </button>
           </view>
         </view>
         <view v-else class="empty-tip">该作品集暂无作品，请先在作品集中添加作品。</view>
       </view>
 
-      <view class="form-card">
-        <view class="section-header">
-          <text class="section-title">展览封面</text>
-          <text class="section-hint">至少选择一张展示图，可从作品中勾选或手动添加</text>
-        </view>
-        <view class="cover-preview" v-if="coverPreview.length">
-          <view
-            v-for="item in coverPreview"
-            :key="item.url"
-            class="cover-preview__item"
-          >
-            <image class="cover-preview__image" :src="item.url" mode="aspectFill" />
-            <view class="cover-preview__overlay">
-              <text class="cover-preview__badge">{{ item.source === 'work' ? '作品' : '自定义' }}</text>
-              <button class="cover-preview__remove" @tap.stop="removeCover(item)">×</button>
-            </view>
-          </view>
-        </view>
-        <view class="manual-cover">
-          <input
-            class="manual-input"
-            type="text"
-            placeholder="输入图片链接，例如 https://"
-            :value="manualCoverInput"
-            @input="onManualCoverInput"
-            @confirm="addManualCover"
-          />
-          <button class="manual-add icon-btn" @tap="addManualCover"><text class="icon">＋</text></button>
-        </view>
-      </view>
-
+      
       <button class="submit-btn" :disabled="submitting" @tap="submit">
         {{ submitting ? '保存中…' : isEditing ? '保存修改' : '立即创建' }}
       </button>
@@ -401,6 +371,12 @@ function isCoverSelected(id: string): boolean {
   return coverWorkIds.value.includes(id);
 }
 
+const tileClassPattern = ['tile-square', 'tile-portrait', 'tile-landscape', 'tile-wide'];
+
+function getWorkTileClass(index: number): string {
+  return tileClassPattern[index % tileClassPattern.length];
+}
+
 function syncSelectedWorksForCollection(collectionId: string): void {
   if (!collectionId) {
     selectedWorkIds.value = [];
@@ -416,11 +392,6 @@ function syncSelectedWorksForCollection(collectionId: string): void {
   const allowedIds = new Set((collection.works ?? []).map((work) => work.id));
   selectedWorkIds.value = selectedWorkIds.value.filter((id) => allowedIds.has(id));
   coverWorkIds.value = coverWorkIds.value.filter((id) => allowedIds.has(id));
-}
-
-function formatWorkMeta(work: WorkSummary): string {
-  const type = work.mediaType === 'video' ? '视频' : work.mediaType === 'model' ? '模型' : '图片';
-  return `${type} · ${formatDateLabel(work.updatedAt || work.createdAt)}`;
 }
 
 function onManualCoverInput(event: any): void {
@@ -502,17 +473,6 @@ async function submit(): Promise<void> {
 
 function getCombinedWorkIds(): string[] {
   return Array.from(new Set([...selectedWorkIds.value, ...coverWorkIds.value]));
-}
-
-function formatDateLabel(iso?: string): string {
-  if (!iso) {
-    return '刚刚';
-  }
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) {
-    return '刚刚';
-  }
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
 function getErrorMessage(reason: unknown): string {
@@ -702,59 +662,132 @@ function getErrorMessage(reason: unknown): string {
 }
 
 .work-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(140px, 1fr));
+  gap: 16px;
 }
 
 .work-item {
-  display: flex;
-  gap: 12px;
+  position: relative;
+  overflow: hidden;
+  border-radius: 20px;
+  height: 180px;
+  background: linear-gradient(145deg, #dbe3f4, #f0f4fb);
+  box-shadow: 0 12px 28px rgba(31, 122, 236, 0.12);
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
 }
 
 .work-item.is-selected {
-  border-style: solid;
-  border-color: #1f7aec;
-  background: rgba(31, 122, 236, 0.12);
+  transform: translateY(-4px) scale(1.01);
+  box-shadow: 0 26px 48px rgba(31, 122, 236, 0.28);
+}
+
+.work-item.is-cover {
+  box-shadow: 0 32px 56px rgba(31, 122, 236, 0.35);
+}
+
+.work-item.is-cover .work-item__overlay {
+  background: linear-gradient(155deg, rgba(255, 198, 92, 0.55), rgba(31, 122, 236, 0.3));
 }
 
 .work-thumb {
-  width: 64px;
-  height: 64px;
-  border-radius: 12px;
-  background: #e3e9f2;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
-.work-info {
-  flex: 1;
+.tile-square {
+  height: 180px;
+}
+
+.tile-portrait {
+  height: 220px;
+}
+
+.tile-landscape {
+  height: 150px;
+}
+
+.tile-wide {
+  height: 200px;
+  grid-column: span 2;
+}
+
+.work-item__overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(155deg, rgba(31, 122, 236, 0.45), rgba(98, 166, 255, 0.32));
+  opacity: 0;
+  transition: opacity 0.25s ease, background 0.25s ease;
+}
+
+.work-item__overlay.is-visible {
+  opacity: 1;
+}
+
+.work-item__badge {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.work-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: #1f1f1f;
-}
-
-.work-meta {
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #15479c;
   font-size: 12px;
-  color: #5f6b83;
+  font-weight: 600;
+  box-shadow: 0 18px 34px rgba(31, 122, 236, 0.28);
+  animation: badge-pop 0.26s ease;
+}
+
+.work-item__badge-icon {
+  font-size: 14px;
+}
+
+.work-item__badge-text {
+  line-height: 1;
+}
+
+@keyframes badge-pop {
+  0% {
+    transform: translateY(6px) scale(0.9);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
 }
 
 .cover-toggle {
-  padding: 6px 12px;
-  border-radius: 14px;
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  padding: 8px 14px;
   border: none;
-  background: rgba(31, 122, 236, 0.12);
-  color: #1f7aec;
+  border-radius: 999px;
+  background: rgba(12, 30, 66, 0.72);
+  color: #ffffff;
   font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 18px 36px rgba(12, 30, 66, 0.32);
+  transition: transform 0.2s ease, background 0.2s ease;
+}
+
+.cover-toggle:active {
+  transform: scale(0.94);
 }
 
 .cover-toggle.is-cover {
-  background: linear-gradient(135deg, #1f7aec, #62a6ff);
-  color: #ffffff;
+  background: linear-gradient(135deg, #ffb347, #ff6969);
+  box-shadow: 0 20px 40px rgba(255, 120, 92, 0.38);
+}
+
+.cover-toggle__text {
+  line-height: 1;
 }
 
 .cover-preview {
