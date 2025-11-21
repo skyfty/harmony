@@ -147,3 +147,24 @@ export interface AssetMutationPayload {
   categoryId?: string | null
   categoryPathSegments?: string[]
 }
+
+export interface SceneSummary {
+  id: string
+  name: string
+  description?: string | null
+  fileKey: string
+  fileUrl: string
+  fileSize: number
+  fileType?: string | null
+  originalFilename?: string | null
+  metadata?: Record<string, unknown> | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type SceneDetail = SceneSummary
+
+export interface SceneListParams extends PagedRequest {
+  createdFrom?: string
+  createdTo?: string
+}
