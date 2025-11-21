@@ -1172,6 +1172,32 @@ function initializeWarpGateBehavior(nodeId: string): void {
 
   const sharedTargetNode = viewPointNode ?? parent ?? null
   const sharedTargetNodeId = sharedTargetNode?.id ?? null
+  const viewPointTargetNodeId = viewPointNode?.id ?? null
+  let viewPointShowSequenceId: string | null = null
+  let viewPointHideSequenceId: string | null = null
+
+  if (viewPointNode) {
+    const viewPointBehaviorComponent = viewPointNode.components?.[BEHAVIOR_COMPONENT_TYPE] as
+      | SceneNodeComponentState<BehaviorComponentProps>
+      | undefined
+    const viewPointProps = viewPointBehaviorComponent?.props as BehaviorComponentProps | undefined
+    const viewPointBehaviors = Array.isArray(viewPointProps?.behaviors) ? viewPointProps.behaviors : []
+    const normalizedShowName = VIEW_POINT_SHOW_BEHAVIOR_NAME.trim().toLowerCase()
+    const normalizedHideName = VIEW_POINT_HIDE_BEHAVIOR_NAME.trim().toLowerCase()
+
+    viewPointBehaviors.forEach((behavior) => {
+      if (behavior.action !== 'perform') {
+        return
+      }
+      const normalizedName = behavior.name?.trim().toLowerCase() ?? ''
+      if (normalizedName === normalizedShowName) {
+        viewPointShowSequenceId = behavior.sequenceId
+      } else if (normalizedName === normalizedHideName) {
+        viewPointHideSequenceId = behavior.sequenceId
+      }
+    })
+  }
+
   const parentName = parent?.name?.trim() || activeNode.name?.trim() || 'Warp Gate'
 
   const clickBehaviorName = `Click ${parentName}`
@@ -1214,7 +1240,7 @@ function initializeWarpGateBehavior(nodeId: string): void {
     },
   ])
 
-  appendSequence('approach', approachBehaviorName, [
+  const approachScripts: SceneBehaviorScriptBinding[] = [
     {
       type: 'hide',
       params: {
@@ -1227,9 +1253,19 @@ function initializeWarpGateBehavior(nodeId: string): void {
         targetNodeId: sharedTargetNodeId ?? null,
       },
     },
-  ])
+    {
+      type: 'trigger',
+      params: {
+        targetNodeId: viewPointTargetNodeId ?? null,
+        sequenceId: viewPointShowSequenceId,
+      },
+    }
+  ]
 
-  appendSequence('depart', departBehaviorName, [
+
+  appendSequence('approach', approachBehaviorName, approachScripts)
+
+  const departScripts: SceneBehaviorScriptBinding[] = [
     {
       type: 'show',
       params: {
@@ -1240,7 +1276,16 @@ function initializeWarpGateBehavior(nodeId: string): void {
       type: 'hidePurpose',
       params: {},
     },
-  ])
+    {
+      type: 'trigger',
+      params: {
+        targetNodeId: viewPointTargetNodeId ?? null,
+        sequenceId: viewPointHideSequenceId,
+      },
+    }
+  ]
+
+  appendSequence('depart', departBehaviorName, departScripts)
 
   sceneStore.updateNodeComponentProps(nodeId, behaviorComponent.id, { behaviors: nextBehaviors })
 }

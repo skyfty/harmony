@@ -95,13 +95,12 @@ function handleVisibilityChange(value: boolean | null) {
     </v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="guideboard-settings">
-        <v-checkbox
+        <v-switch
           :model-value="localInitiallyVisible"
           label="Initially Visible"
           color="primary"
           density="comfortable"
           :disabled="!guideboardComponent?.enabled"
-          inset
           @update:modelValue="handleVisibilityChange"
         />
       </div>

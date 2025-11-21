@@ -170,7 +170,7 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
     id: 'showPurpose',
     label: 'Show Purpose',
     description: 'Display observe and level view buttons in the viewer.',
-    icon: 'mdi-crosshairs-eye',
+    icon: 'mdi-crosshairs',
     createDefaultParams(): ShowPurposeBehaviorParams {
       return {
         targetNodeId: null,
