@@ -124,11 +124,16 @@ function setupScene(): void {
   controls.enableDamping = true
   controls.dampingFactor = 0.05
 
-  const ambient = new THREE.AmbientLight(0xffffff, 0.7)
-  const directional = new THREE.DirectionalLight(0xffffff, 0.9)
+  const ambient = new THREE.AmbientLight(0xffffff, 1.5)
+  const directional = new THREE.DirectionalLight(0xffffff, 2.0)
   directional.position.set(5, 10, 7.5)
+  
+  const fillLight = new THREE.DirectionalLight(0xffffff, 1.0)
+  fillLight.position.set(-5, 0, -5)
+
   scene.add(ambient)
   scene.add(directional)
+  scene.add(fillLight)
 
   window.addEventListener('resize', handleResize)
   handleResize()
