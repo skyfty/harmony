@@ -10,4 +10,9 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  server: {
+    port: 8098,
+    open: false, //启动后是否自动打开浏览器
+    sourcemapIgnoreList: false,
+  },
 })

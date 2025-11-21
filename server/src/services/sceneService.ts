@@ -34,6 +34,7 @@ export type SceneData = {
   fileType: string | null
   originalFilename: string | null
   metadata: Record<string, unknown> | null
+  publishedBy: string | null
   createdAt: string
   updatedAt: string
 }
@@ -51,6 +52,7 @@ export type SceneCreatePayload = {
   description?: string | null
   metadata?: Record<string, unknown> | null
   file: UploadedFilePayload
+  publishedBy: string
 }
 
 export type SceneUpdatePayload = {
@@ -137,6 +139,12 @@ function mapSceneDocument(scene: SceneDocLike): SceneData {
   const metadata = scene.metadata && typeof scene.metadata === 'object' ? (scene.metadata as Record<string, unknown>) : null
   const createdAt = scene.createdAt instanceof Date ? scene.createdAt.toISOString() : new Date(scene.createdAt).toISOString()
   const updatedAt = scene.updatedAt instanceof Date ? scene.updatedAt.toISOString() : new Date(scene.updatedAt).toISOString()
+  let publishedBy: string | null = null
+  if (scene.publishedBy instanceof Types.ObjectId) {
+    publishedBy = scene.publishedBy.toString()
+  } else if (scene.publishedBy) {
+    publishedBy = String(scene.publishedBy)
+  }
   return {
     id,
     name: scene.name,
@@ -147,6 +155,7 @@ function mapSceneDocument(scene: SceneDocLike): SceneData {
     fileType: sanitizeString(scene.fileType),
     originalFilename: sanitizeString(scene.originalFilename),
     metadata,
+    publishedBy,
     createdAt,
     updatedAt,
   }
@@ -195,6 +204,7 @@ export async function createScene(payload: SceneCreatePayload): Promise<SceneDat
       fileType: stored.fileType,
       originalFilename: stored.originalFilename,
       metadata: payload.metadata ?? null,
+      publishedBy: new Types.ObjectId(payload.publishedBy),
     })
     return mapSceneDocument(created.toObject() as SceneDocLike)
   } catch (error) {

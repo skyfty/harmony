@@ -256,6 +256,7 @@ export interface SceneDocument extends Document<Types.ObjectId> {
   fileType?: string | null
   originalFilename?: string | null
   metadata?: Record<string, unknown> | null
+  publishedBy: Types.ObjectId | null
   createdAt: Date
   updatedAt: Date
 }

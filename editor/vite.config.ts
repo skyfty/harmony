@@ -41,6 +41,8 @@ export default defineConfig({
     sourcemap: true,
   },
   server: {
+    port: 8088,
+    open: false, //启动后是否自动打开浏览器
     sourcemapIgnoreList: false,
   },
 })

@@ -11,6 +11,7 @@ const sceneSchema = new Schema<SceneDocument>(
     fileType: { type: String, default: null },
     originalFilename: { type: String, default: null },
     metadata: { type: Schema.Types.Mixed, default: null },
+    publishedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
   },
   {
     timestamps: true,
@@ -20,5 +21,6 @@ const sceneSchema = new Schema<SceneDocument>(
 
 sceneSchema.index({ name: 1 })
 sceneSchema.index({ createdAt: -1 })
+sceneSchema.index({ publishedBy: 1, createdAt: -1 })
 
 export const SceneModel = model<SceneDocument>('Scene', sceneSchema)

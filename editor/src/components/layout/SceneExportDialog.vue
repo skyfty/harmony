@@ -20,6 +20,7 @@ const emit = defineEmits<{
   (event: 'update:modelValue', value: boolean): void
   (event: 'confirm', payload: SceneExportOptions): void
   (event: 'cancel'): void
+  (event: 'publish', payload: SceneExportOptions): void
 }>()
 
 const form = reactive<SceneExportOptions>(getInitialFormState())
@@ -182,6 +183,20 @@ function handleConfirm() {
     fileName:  normalFileizeInputName(form.fileName),
   }
   emit('confirm', payload)
+}
+
+function handlePublish() {
+  if (props.exporting) {
+    return
+  }
+  if (!validate()) {
+    return
+  }
+  const payload: SceneExportOptions = {
+    ...form,
+    fileName: normalFileizeInputName(form.fileName),
+  }
+  emit('publish', payload)
 }
 
 </script>
@@ -352,6 +367,16 @@ function handleConfirm() {
       <v-divider />
       <v-card-actions class="dialog-actions">
         <v-spacer />
+        <v-btn
+          color="secondary"
+          variant="tonal"
+          :loading="exporting"
+          :disabled="exporting"
+          style="margin-right: 8px"
+          @click="handlePublish"
+        >
+          Publish
+        </v-btn>
         <v-btn
           color="primary"
           variant="flat"

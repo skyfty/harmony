@@ -11,6 +11,7 @@ import MenuBar from './MenuBar.vue'
 import SceneManagerDialog from '@/components/layout/SceneManagerDialog.vue'
 import NewSceneDialog from '@/components/layout/NewSceneDialog.vue'
 import SceneExportDialog from '@/components/layout/SceneExportDialog.vue'
+import { publishScene } from '@/api/scenes'
 import type { SceneExportOptions } from '@/types/scene-export'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PresetSceneDocument } from '@/types/preset-scene'
@@ -659,63 +660,116 @@ function sanitizeExportFileName(input: string): string {
   return withoutExtension || 'scene'
 }
 
-async function handleExportDialogConfirm(options: SceneExportOptions) {
+type SceneExportWorkflowConfig = {
+  action: 'export' | 'publish'
+  startMessage: string
+  successMessage: string
+  failureMessage: string
+  afterExport: (context: {
+    blob: Blob
+    fileName: string
+    updateProgress: (value: number, message?: string) => void
+  }) => Promise<void>
+}
+
+type SceneMetaShape = {
+  name?: string | null
+  description?: string | null
+  metadata?: unknown
+} | null
+
+function getCurrentSceneMeta(): SceneMetaShape {
+  const source = sceneStore as unknown as { currentSceneMeta?: SceneMetaShape }
+  return source.currentSceneMeta ?? null
+}
+
+function normalizeOptionalString(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  return trimmed.length ? trimmed : null
+}
+
+function extractPublishableMetadata(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+  return value as Record<string, unknown>
+}
+
+function resolvePublishName(fallbackFileName: string): string {
+  const metaName = normalizeOptionalString(getCurrentSceneMeta()?.name)
+  if (metaName) {
+    return metaName
+  }
+  const sanitized = sanitizeExportFileName(fallbackFileName)
+  return sanitized || 'scene'
+}
+
+async function runSceneExportWorkflow(options: SceneExportOptions, config: SceneExportWorkflowConfig): Promise<boolean> {
   if (isExporting.value) {
-    return
+    return false
   }
 
   const viewport = viewportRef.value
   if (!viewport) {
     console.warn('Scene viewport unavailable for export')
     exportErrorMessage.value = 'Unable to access the scene viewport; export was cancelled.'
-    return
+    return false
   }
 
-  let summary: SceneResourceSummary | null = null
   if (options.format === 'json') {
-    summary = await refreshExportSummary(true)
+    const summary = await refreshExportSummary(true)
     const sizeLabel = summary ? formatByteSize(summary.totalBytes) : null
-    const proceed = window.confirm(
-      summary
-        ? `导出该场景需要打包约 ${sizeLabel} 的资源，是否继续？`
-        : '暂时无法计算资源总大小，仍要继续导出吗？',
-    )
+    const confirmMessage = summary
+      ? `导出该场景需要打包约 ${sizeLabel} 的资源，是否继续？`
+      : '暂时无法计算资源总大小，仍要继续导出吗？'
+    const proceed = typeof window !== 'undefined' ? window.confirm(confirmMessage) : true
     if (!proceed) {
       exportProgress.value = 0
       exportProgressMessage.value = ''
       exportErrorMessage.value = null
-      return
+      return false
     }
   }
 
   isExporting.value = true
   exportErrorMessage.value = null
   exportProgress.value = 5
-  exportProgressMessage.value = 'Preparing export...'
+  exportProgressMessage.value = config.startMessage
 
   const { fileName, ...preferenceSnapshot } = options
   exportPreferences.value = { fileName, ...preferenceSnapshot }
 
-  let exportSucceeded = false
+  let workflowSucceeded = false
+  const updateProgress = (value: number, message?: string) => {
+    if (Number.isFinite(value)) {
+      exportProgress.value = Math.min(Math.max(value, 0), 100)
+    }
+    if (message) {
+      exportProgressMessage.value = message
+    }
+  }
 
   try {
     const blob = await viewport.exportScene(options, (progress, message) => {
-      exportProgress.value = progress
-      exportProgressMessage.value = message ?? `Export progress ${Math.round(progress)}%`
+      const label = message ?? `${config.action === 'publish' ? 'Publish' : 'Export'} progress ${Math.round(progress)}%`
+      updateProgress(progress, label)
     })
-    triggerDownload(blob, fileName)
-
-    exportSucceeded = true
-    exportProgress.value = 100
-    exportProgressMessage.value = 'Export complete'
+    await config.afterExport({ blob, fileName, updateProgress })
+    updateProgress(100, config.successMessage)
+    workflowSucceeded = true
+    return true
   } catch (error) {
-    const message = (error as Error)?.message ?? 'Export failed'
+    const message = (error as Error)?.message ?? config.failureMessage
     exportErrorMessage.value = message
     exportProgressMessage.value = message
-    console.error('Scene export failed', error)
+    console.error(`Scene ${config.action} failed`, error)
+    return false
   } finally {
     isExporting.value = false
-    if (exportSucceeded) {
+    if (workflowSucceeded) {
       setTimeout(() => {
         isExportDialogOpen.value = false
         exportProgress.value = 0
@@ -723,6 +777,42 @@ async function handleExportDialogConfirm(options: SceneExportOptions) {
       }, 600)
     }
   }
+}
+
+async function handleExportDialogConfirm(options: SceneExportOptions) {
+  await runSceneExportWorkflow(options, {
+    action: 'export',
+    startMessage: 'Preparing export...',
+    successMessage: 'Export complete',
+    failureMessage: 'Export failed',
+    afterExport: async ({ blob, fileName }) => {
+      triggerDownload(blob, fileName)
+    },
+  })
+}
+
+async function handleExportDialogPublish(options: SceneExportOptions) {
+  await runSceneExportWorkflow(options, {
+    action: 'publish',
+    startMessage: 'Preparing publish...',
+    successMessage: 'Publish complete',
+    failureMessage: 'Publish failed',
+    afterExport: async ({ blob, fileName, updateProgress }) => {
+      updateProgress(85, 'Uploading scene…')
+      const meta = getCurrentSceneMeta()
+      const description = normalizeOptionalString(meta?.description)
+      const metadata = extractPublishableMetadata(meta?.metadata)
+      await publishScene({
+        name: resolvePublishName(fileName),
+        description: description ?? undefined,
+        metadata: metadata ?? undefined,
+        file: blob,
+        fileName,
+        mimeType: options.format === 'glb' ? 'model/gltf-binary' : 'application/json',
+      })
+      updateProgress(95, 'Finalizing publish…')
+    },
+  })
 }
 
 function handleExportDialogCancel() {
@@ -1352,6 +1442,12 @@ async function handleEditorViewShortcut(event: KeyboardEvent) {
     }
   }
 
+  console.log('Shortcut event:', event.code, {
+    ctrl: event.ctrlKey,
+    meta: event.metaKey,
+    shift: event.shiftKey,
+    alt: event.altKey,
+  })
   if (!handled && (event.ctrlKey || event.metaKey) && !event.altKey) {
     switch (event.code) {
       case 'KeyZ': {
@@ -1632,6 +1728,7 @@ onBeforeUnmount(() => {
       :resource-summary="exportResourceSummary"
       :resource-summary-loading="exportSummaryLoading"
       @confirm="handleExportDialogConfirm"
+      @publish="handleExportDialogPublish"
       @cancel="handleExportDialogCancel"
     />
   </div>

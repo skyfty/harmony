@@ -53,6 +53,14 @@ function readRequestFiles(ctx: Context): Record<string, unknown> | undefined {
   return (ctx.request as unknown as { files?: Record<string, unknown> }).files
 }
 
+function requireUserId(ctx: Context): string {
+  const userId = (ctx.state as { user?: { id?: string } } | undefined)?.user?.id
+  if (!userId || !Types.ObjectId.isValid(userId)) {
+    ctx.throw(401, '用户身份无效')
+  }
+  return userId
+}
+
 export async function listSceneSummaries(ctx: Context): Promise<void> {
   const query = ctx.query as Record<string, string | string[] | undefined>
   const page = parseNumber(query.page, 1, { min: 1 })
@@ -121,6 +129,7 @@ export async function createSceneEntry(ctx: Context): Promise<void> {
   if (!file) {
     ctx.throw(400, '场景文件不能为空')
   }
+  const publishedBy = requireUserId(ctx)
   const name = sanitizeString(body?.name)
   if (!name) {
     ctx.throw(400, '场景名称不能为空')
@@ -137,6 +146,7 @@ export async function createSceneEntry(ctx: Context): Promise<void> {
     description: description ?? null,
     metadata,
     file,
+    publishedBy,
   }
   let scene: SceneData
   try {
