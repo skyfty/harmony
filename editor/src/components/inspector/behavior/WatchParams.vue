@@ -55,18 +55,17 @@ onBeforeUnmount(() => {
       ref="pickerRef"
       :model-value="params.targetNodeId"
       pick-hint="Select a node to watch"
-      placeholder="未选择节点"
-      selection-hint="点击场景中的节点进行选择，显示在左侧，右侧显示清除按钮。"
+      placeholder="No node selected"
+      selection-hint="Click a node in the scene to select; it appears on the left with a clear button on the right."
       @update:modelValue="handleTargetChange"
       @pick-state-change="handlePickStateChange"
     />
     <v-switch
       :model-value="params.caging"
-      inset
       color="primary"
       density="compact"
       hide-details
-      label="锁定观察时的相机"
+      label="Lock camera while watching"
       @update:model-value="handleCagingChange(Boolean($event))"
     />
   </div>

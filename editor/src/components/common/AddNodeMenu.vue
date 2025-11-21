@@ -1209,6 +1209,7 @@ function initializeWarpGateBehavior(nodeId: string): void {
       type: 'watch',
       params: {
         targetNodeId: sharedTargetNodeId ?? null,
+        caging: true,
       },
     },
   ])
