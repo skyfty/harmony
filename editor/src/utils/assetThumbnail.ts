@@ -1,8 +1,11 @@
 import Pica from 'pica'
+import * as THREE from 'three'
+import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import type { ProjectAsset } from '@/types/project-asset'
 
 const IMAGE_ASSET_TYPES = new Set<ProjectAsset['type']>(['image', 'texture'])
 const MODEL_ASSET_TYPES = new Set<ProjectAsset['type']>(['model', 'mesh', 'prefab'])
+const HDRI_ASSET_TYPES = new Set<ProjectAsset['type']>(['hdri'])
 
 const DEFAULT_BACKGROUND = '#161b22'
 const IMAGE_OUTPUT_TYPE = 'image/jpeg'
@@ -29,6 +32,11 @@ export async function generateAssetThumbnail(options: GenerateThumbnailOptions):
 
   if (typeof document === 'undefined') {
     throw new Error('Thumbnail generation requires a browser environment')
+  }
+
+  if (HDRI_ASSET_TYPES.has(options.asset.type)) {
+    const blob = await generateHdriThumbnail(options.file, width, height)
+    return blobToFile(blob, buildThumbnailFilename(options.asset, 'jpg'))
   }
 
   if (IMAGE_ASSET_TYPES.has(options.asset.type)) {
@@ -133,6 +141,130 @@ async function generateDefaultThumbnail(asset: ProjectAsset, width: number, heig
   context.fillText(label, width / 2, height / 2)
 
   return canvasToBlob(canvas, MODEL_OUTPUT_TYPE)
+}
+
+async function generateHdriThumbnail(file: File, width: number, height: number): Promise<Blob> {
+  if (typeof window === 'undefined') {
+    throw new Error('HDRI thumbnail generation requires a browser environment')
+  }
+
+  const url = URL.createObjectURL(file)
+  const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true })
+  renderer.outputColorSpace = THREE.SRGBColorSpace
+  renderer.toneMapping = THREE.ACESFilmicToneMapping
+  renderer.toneMappingExposure = 1.0
+  const renderScale = Math.min(window.devicePixelRatio || 1, 2)
+  renderer.setPixelRatio(renderScale)
+  renderer.setSize(width, height, false)
+
+  const scene = new THREE.Scene()
+  const camera = new THREE.PerspectiveCamera(55, width / height, 0.1, 50)
+  camera.position.set(0, 1.05, 3.2)
+  camera.lookAt(0, 0.8, 0)
+
+  const disposeStack: Array<() => void> = []
+
+  try {
+    const loader = new RGBELoader().setDataType(THREE.FloatType)
+    const texture = await loader.loadAsync(url)
+    texture.mapping = THREE.EquirectangularReflectionMapping
+    texture.colorSpace = THREE.LinearSRGBColorSpace
+    scene.background = texture
+    disposeStack.push(() => {
+      scene.background = null
+      texture.dispose()
+    })
+
+    const pmremGenerator = new THREE.PMREMGenerator(renderer)
+    pmremGenerator.compileEquirectangularShader()
+    const envTarget = pmremGenerator.fromEquirectangular(texture)
+    const envTexture = envTarget.texture
+    scene.environment = envTexture
+    disposeStack.push(() => {
+      scene.environment = null
+      envTexture.dispose()
+      envTarget.dispose()
+      pmremGenerator.dispose()
+    })
+
+    const ambient = new THREE.AmbientLight(0xffffff, 0.25)
+    scene.add(ambient)
+    disposeStack.push(() => {
+      scene.remove(ambient)
+    })
+
+    const demoGroup = new THREE.Group()
+    demoGroup.rotation.y = -Math.PI / 10
+
+    const sphereGeometry = new THREE.SphereGeometry(0.9, 64, 64)
+    const sphereMaterial = new THREE.MeshStandardMaterial({ metalness: 1, roughness: 0.1, envMapIntensity: 1.2 })
+    sphereMaterial.envMap = envTexture
+    sphereMaterial.needsUpdate = true
+    const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial)
+    sphere.position.set(-0.95, 0.8, 0)
+    demoGroup.add(sphere)
+    disposeStack.push(() => {
+      sphereGeometry.dispose()
+      sphereMaterial.dispose()
+    })
+
+    const boxGeometry = new THREE.BoxGeometry(1.2, 1.2, 1.2)
+    const boxMaterial = new THREE.MeshStandardMaterial({ metalness: 0.25, roughness: 0.35, envMapIntensity: 1 })
+    boxMaterial.envMap = envTexture
+    boxMaterial.needsUpdate = true
+    const box = new THREE.Mesh(boxGeometry, boxMaterial)
+    box.position.set(1.05, 0.6, 0)
+    demoGroup.add(box)
+    disposeStack.push(() => {
+      boxGeometry.dispose()
+      boxMaterial.dispose()
+    })
+
+    const groundGeometry = new THREE.CircleGeometry(4.5, 64)
+    const groundMaterial = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0, roughness: 1 })
+    const ground = new THREE.Mesh(groundGeometry, groundMaterial)
+    ground.rotation.x = -Math.PI / 2
+    ground.position.y = -0.05
+    demoGroup.add(ground)
+    disposeStack.push(() => {
+      groundGeometry.dispose()
+      groundMaterial.dispose()
+    })
+
+    scene.add(demoGroup)
+    disposeStack.push(() => {
+      scene.remove(demoGroup)
+    })
+
+    renderer.render(scene, camera)
+
+    const sourceCanvas = renderer.domElement
+    const targetCanvas = ensureCanvas(width, height)
+    if (thumbnailResizer) {
+      await thumbnailResizer.resize(sourceCanvas, targetCanvas, { alpha: false })
+    } else {
+      const targetContext = targetCanvas.getContext('2d')
+      targetContext?.drawImage(sourceCanvas, 0, 0, width, height)
+    }
+
+    const blob = await canvasToBlob(targetCanvas, IMAGE_OUTPUT_TYPE, IMAGE_OUTPUT_QUALITY)
+    return blob
+  } catch (error) {
+    throw new Error((error as Error).message || 'Failed to render HDRI thumbnail')
+  } finally {
+    disposeStack.reverse().forEach((dispose) => {
+      try {
+        dispose()
+      } catch (error) {
+        console.warn('HDRI thumbnail cleanup failed', error)
+      }
+    })
+    renderer.dispose()
+    if (typeof renderer.forceContextLoss === 'function') {
+      renderer.forceContextLoss()
+    }
+    URL.revokeObjectURL(url)
+  }
 }
 
 function ensureCanvas(width: number, height: number): HTMLCanvasElement {
