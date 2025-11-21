@@ -40,6 +40,7 @@ export const SERVER_ASSET_PREVIEW_COLORS: Record<ProjectAsset['type'], string> =
   material: '#FFB74D',
   behavior: '#4DB6AC',
   prefab: '#7986CB',
+  preset: '#7986CB',
   video: '#FF7043',
   mesh: '#26C6DA',
   file: '#546E7A',

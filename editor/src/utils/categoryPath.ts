@@ -8,6 +8,7 @@ const typeLabelMap: Record<string, string> = {
   hdri: 'HDRI',
   material: '材质',
   prefab: 'Prefab',
+  preset: 'Preset',
   video: '视频',
   file: '文件',
 }

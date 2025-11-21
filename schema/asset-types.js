@@ -8,6 +8,7 @@ const AssetTypes = Object.freeze([
   'prefab',
   'video',
   'mesh',
+  'preset',
 ])
 
 const DEFAULT_ASSET_TYPE = 'file'

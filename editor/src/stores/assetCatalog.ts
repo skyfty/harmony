@@ -153,6 +153,7 @@ export function determineAssetCategoryId(asset: ProjectAsset): string {
     case 'behavior':
       return ASSET_CATEGORY_ID_BY_KEY.behaviors
     case 'prefab':
+    case 'preset':
       return ASSET_CATEGORY_ID_BY_KEY.prefabs
     case 'video':
       return ASSET_CATEGORY_ID_BY_KEY.videos
