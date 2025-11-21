@@ -1,5 +1,5 @@
 <template>
-  <div ref="container" class="preset-preview"></div>
+  <div ref="container" class="prefab-preview"></div>
 </template>
 
 <script setup lang="ts">
@@ -9,7 +9,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { AssetCache, AssetLoader } from '@schema/assetCache'
 import ResourceCache from '@schema/ResourceCache'
 import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
-import type { SceneJsonExportDocument, SceneSkyboxSettings } from '@harmony/schema'
+import type { AssetIndexEntry, SceneJsonExportDocument, SceneNode } from '@harmony/schema'
 import { normalizeSkyboxSettings } from '@/stores/skyboxPresets'
 
 const props = defineProps<{
@@ -138,84 +138,163 @@ function emitDimensions(object: THREE.Object3D | null): void {
 
 function generatePreviewId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return `preset-preview-${crypto.randomUUID()}`
+    return `prefab-preview-${crypto.randomUUID()}`
   }
-  return `preset-preview-${Date.now()}`
+  return `prefab-preview-${Date.now()}`
+}
+
+const NODE_PREFAB_FORMAT_VERSION = 1
+
+type PrefabFilePayload = {
+  formatVersion?: unknown
+  name?: unknown
+  root?: unknown
+  assetIndex?: unknown
+  packageAssetMap?: unknown
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isVector3Like(value: unknown): value is { x: number; y: number; z: number } {
+  if (!isPlainObject(value)) {
+    return false
+  }
+  const { x, y, z } = value as Record<string, unknown>
+  return [x, y, z].every((component) => typeof component === 'number' && Number.isFinite(component))
+}
+
+function isSceneNodeLike(value: unknown): value is SceneNode {
+  if (!isPlainObject(value)) {
+    return false
+  }
+  const candidate = value as Record<string, unknown>
+  if (typeof candidate.id !== 'string' || !candidate.id.trim().length) {
+    return false
+  }
+  if (typeof candidate.name !== 'string') {
+    return false
+  }
+  if (typeof candidate.nodeType !== 'string' || !candidate.nodeType.trim().length) {
+    return false
+  }
+  if (!isVector3Like(candidate.position) || !isVector3Like(candidate.rotation) || !isVector3Like(candidate.scale)) {
+    return false
+  }
+  return true
+}
+
+function cloneDeep<T>(value: T): T {
+  if (typeof structuredClone === 'function') {
+    return structuredClone(value)
+  }
+  return JSON.parse(JSON.stringify(value)) as T
+}
+
+function sanitizeAssetIndex(value: unknown): Record<string, AssetIndexEntry> | undefined {
+  if (!isPlainObject(value)) {
+    return undefined
+  }
+  const result: Record<string, AssetIndexEntry> = {}
+  Object.entries(value).forEach(([assetId, entry]) => {
+    if (!isPlainObject(entry)) {
+      return
+    }
+    const clonedEntry = cloneDeep(entry) as Partial<AssetIndexEntry> & Record<string, unknown>
+    const categoryId = typeof clonedEntry.categoryId === 'string' ? clonedEntry.categoryId.trim() : ''
+    if (!categoryId) {
+      return
+    }
+    const normalized: AssetIndexEntry = { categoryId }
+    if (clonedEntry.source && typeof clonedEntry.source === 'object') {
+      normalized.source = clonedEntry.source as AssetIndexEntry['source']
+    }
+    result[assetId] = normalized
+  })
+  return Object.keys(result).length ? result : undefined
+}
+
+function sanitizePackageAssetMap(value: unknown): Record<string, string> | undefined {
+  if (!isPlainObject(value)) {
+    return undefined
+  }
+  const result: Record<string, string> = {}
+  Object.entries(value).forEach(([assetId, mapped]) => {
+    if (typeof mapped === 'string' && mapped.trim().length) {
+      result[assetId] = mapped.trim()
+    }
+  })
+  return Object.keys(result).length ? result : undefined
 }
 
 function normalizeSceneDocument(raw: unknown): SceneJsonExportDocument {
-  const candidate = raw && typeof raw === 'object' && raw !== null && 'document' in raw
-    ? (raw as { document: unknown }).document
-    : raw
-  if (!candidate || typeof candidate !== 'object') {
-    throw new Error('预置场景文件格式不正确')
+  if (!isPlainObject(raw)) {
+    throw new Error('Prefab 资源文件格式不正确')
   }
-  const base = candidate as Record<string, unknown>
-  const now = new Date().toISOString()
-  const id = typeof base.id === 'string' && base.id.trim().length ? base.id.trim() : generatePreviewId()
-  const name = typeof base.name === 'string' && base.name.trim().length ? base.name.trim() : 'Preset Preview'
-  const skybox = normalizeSkyboxSettings(base.skybox as Partial<SceneSkyboxSettings> | undefined)
-  const createdAt = typeof base.createdAt === 'string' ? base.createdAt : now
-  const updatedAt = typeof base.updatedAt === 'string' ? base.updatedAt : createdAt
+  const payload = raw as PrefabFilePayload
+  if ('formatVersion' in payload && payload.formatVersion !== undefined) {
+    const version = Number(payload.formatVersion)
+    if (!Number.isFinite(version)) {
+      throw new Error('Prefab 版本号无效')
+    }
+    if (version !== NODE_PREFAB_FORMAT_VERSION) {
+      throw new Error(`暂不支持的 Prefab 版本: ${version}`)
+    }
+  }
+  const rootCandidate = payload.root
+  if (!isPlainObject(rootCandidate)) {
+    throw new Error('Prefab 数据缺少有效的根节点')
+  }
 
-  const nodes = Array.isArray(base.nodes) ? (base.nodes as SceneJsonExportDocument['nodes']) : []
-  const materials = Array.isArray(base.materials) ? (base.materials as SceneJsonExportDocument['materials']) : []
-  const groundSettings = typeof base.groundSettings === 'object' && base.groundSettings
-    ? (base.groundSettings as SceneJsonExportDocument['groundSettings'])
-    : undefined
-  const outlineMeshMap = typeof base.outlineMeshMap === 'object' && base.outlineMeshMap
-    ? (base.outlineMeshMap as SceneJsonExportDocument['outlineMeshMap'])
-    : undefined
-  const assetIndex = typeof base.assetIndex === 'object' && base.assetIndex
-    ? (base.assetIndex as Record<string, unknown>)
-    : {}
-  const packageAssetMap = typeof base.packageAssetMap === 'object' && base.packageAssetMap
-    ? (base.packageAssetMap as Record<string, string>)
-    : {}
-  const resourceSummary = typeof base.resourceSummary === 'object' && base.resourceSummary
-    ? (base.resourceSummary as SceneJsonExportDocument['resourceSummary'])
-    : undefined
-  const environment = typeof base.environment === 'object' && base.environment
-    ? (base.environment as SceneJsonExportDocument['environment'])
-    : undefined
+  const now = new Date().toISOString()
+  const id = generatePreviewId()
+  const name = typeof payload.name === 'string' && payload.name.trim().length
+    ? payload.name.trim()
+    : 'Prefab Preview'
+
+  const skybox = normalizeSkyboxSettings()
+  const clonedRoot = cloneDeep(rootCandidate)
+  if (!isSceneNodeLike(clonedRoot)) {
+    throw new Error('Prefab 根节点数据无效')
+  }
+  const nodes: SceneNode[] = [clonedRoot]
+  const assetIndex = sanitizeAssetIndex(payload.assetIndex)
+  const packageAssetMap = sanitizePackageAssetMap(payload.packageAssetMap)
 
   return {
     id,
     name,
-    createdAt,
-    updatedAt,
+    createdAt: now,
+    updatedAt: now,
     skybox,
-    environment,
     nodes,
-    materials,
-    groundSettings,
-    outlineMeshMap,
-    assetIndex: assetIndex as Record<string, any>,
+    materials: [],
+    assetIndex,
     packageAssetMap,
-    resourceSummary,
   }
 }
 
-async function parsePresetFile(file: File): Promise<SceneJsonExportDocument> {
+async function parsePrefabFile(file: File): Promise<SceneJsonExportDocument> {
   const text = await file.text()
   const parsed = JSON.parse(text) as unknown
   return normalizeSceneDocument(parsed)
 }
 
-async function loadPresetScene(): Promise<void> {
+async function loadPrefabScene(): Promise<void> {
   const token = ++loadToken
   clearScene()
   if (!scene || !camera || !controls || !props.file) {
     return
   }
   try {
-    const document = await parsePresetFile(props.file)
+    const document = await parsePrefabFile(props.file)
     const buildOptions: SceneGraphBuildOptions = {
       enableGround: true,
       lazyLoadMeshes: false,
     }
     const resourceCache = new ResourceCache(document, buildOptions, assetLoader, {
-      warn: (message) => console.warn('[PresetPreview] resource warning:', message),
+      warn: (message) => console.warn('[PrefabPreview] resource warning:', message),
       reportDownloadProgress: undefined,
     })
     const { root } = await buildSceneGraph(document, resourceCache, buildOptions)
@@ -228,7 +307,7 @@ async function loadPresetScene(): Promise<void> {
     fitCamera(root)
     emitDimensions(root)
   } catch (error) {
-    console.warn('[PresetPreview] failed to load preset scene', error)
+    console.warn('[PrefabPreview] failed to load prefab scene', error)
   }
 }
 
@@ -302,7 +381,7 @@ function setupScene(): void {
 watch(
   () => props.file,
   () => {
-    void loadPresetScene()
+    void loadPrefabScene()
   },
   { immediate: true },
 )
@@ -317,7 +396,7 @@ watch(
 onMounted(() => {
   setupScene()
   if (props.file) {
-    void loadPresetScene()
+    void loadPrefabScene()
   }
 })
 
@@ -360,7 +439,7 @@ defineExpose({
 </script>
 
 <style scoped>
-.preset-preview {
+.prefab-preview {
   width: 100%;
   height: 100%;
   min-height: 260px;
@@ -369,7 +448,7 @@ defineExpose({
   background: rgba(15, 18, 24, 0.92);
 }
 
-.preset-preview canvas {
+.prefab-preview canvas {
   width: 100% !important;
   height: 100% !important;
   display: block;

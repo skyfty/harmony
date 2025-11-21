@@ -13,8 +13,8 @@
         ref="threePreviewRef"
         @dimensions="(payload) => emit('dimensions', payload)"
       />
-      <PresetPreview
-        v-else-if="showPresetPreview"
+      <PrefabPreview
+        v-else-if="showPrefabPreview"
         :file="previewState.file"
         class="upload-preview__renderer"
         ref="threePreviewRef"
@@ -49,7 +49,7 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import ModelPreview from '@/components/common/ModelPreview.vue'
-import PresetPreview from '@/components/common/PresetPreview.vue'
+import PrefabPreview from '@/components/common/PrefabPreview.vue'
 import HDRPreview from '@/components/common/HDRPreview.vue'
 
 const props = defineProps<{
@@ -70,17 +70,17 @@ const previewState = reactive({
   file: null as File | null,
   imageUrl: null as string | null,
 })
-type ThreePreviewInstance = InstanceType<typeof ModelPreview> | InstanceType<typeof PresetPreview>
+type ThreePreviewInstance = InstanceType<typeof ModelPreview> | InstanceType<typeof PrefabPreview>
 
 const threePreviewRef = ref<ThreePreviewInstance | null>(null)
 
-const requiresFileTypes = new Set(['model', 'prefab', 'mesh', 'hdri', 'preset'])
+const requiresFileTypes = new Set(['model', 'prefab', 'mesh', 'hdri'])
 let objectUrl: string | null = null
 let loadToken = 0
 const metaProbes = new Set<HTMLImageElement>()
 
-const showModelPreview = computed(() => Boolean(previewState.file) && ['model', 'prefab', 'mesh'].includes(props.asset.type))
-const showPresetPreview = computed(() => Boolean(previewState.file) && props.asset.type === 'preset')
+const showModelPreview = computed(() => Boolean(previewState.file) && ['model', 'mesh'].includes(props.asset.type))
+const showPrefabPreview = computed(() => Boolean(previewState.file) && props.asset.type === 'prefab')
 const showHdrPreview = computed(() => Boolean(previewState.file) && props.asset.type === 'hdri')
 
 const fallbackColor = computed(() => {
@@ -94,7 +94,6 @@ const fallbackIcon = computed(() => {
     case 'model':
     case 'mesh':
     case 'prefab':
-    case 'preset':
       return 'mdi-cube-outline'
     case 'image':
     case 'texture':
@@ -238,7 +237,7 @@ onBeforeUnmount(() => {
 })
 
 async function waitForThreePreviewReady(timeoutMs = 4000): Promise<boolean> {
-  if ((showModelPreview.value || showPresetPreview.value) && threePreviewRef.value) {
+  if ((showModelPreview.value || showPrefabPreview.value) && threePreviewRef.value) {
     return true
   }
   if (typeof performance === 'undefined') {
@@ -247,7 +246,7 @@ async function waitForThreePreviewReady(timeoutMs = 4000): Promise<boolean> {
   const start = performance.now()
   while (performance.now() - start < timeoutMs) {
     await new Promise((resolve) => requestAnimationFrame(resolve))
-    if ((showModelPreview.value || showPresetPreview.value) && threePreviewRef.value) {
+    if ((showModelPreview.value || showPrefabPreview.value) && threePreviewRef.value) {
       return true
     }
   }

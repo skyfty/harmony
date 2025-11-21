@@ -8,7 +8,6 @@ export type AssetType =
   | 'prefab'
   | 'video'
   | 'mesh'
-  | 'preset'
 
 export const AssetTypes: readonly AssetType[]
 export const DEFAULT_ASSET_TYPE: AssetType

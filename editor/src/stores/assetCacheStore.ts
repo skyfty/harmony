@@ -89,7 +89,7 @@ function deriveThumbnailFromAsset(asset: ProjectAsset): string | null {
     }
     return null
   }
-  if (type === 'model') {
+  if (type === 'model' || type == 'prefab' || type === 'mesh') {
     const thumbnailCandidate = sanitizeUrlCandidate(asset.thumbnail ?? null)
     return thumbnailCandidate ?? null
   }
@@ -373,8 +373,14 @@ export const useAssetCacheStore = defineStore('assetCache', {
     },
     resolveAssetThumbnail(options: AssetThumbnailOptions = {}): string | null {
       const asset = options.asset ?? null
-      const cacheKey = options.cacheId ?? asset?.id ?? options.assetId ?? null
 
+      if (asset) {
+        const derived = deriveThumbnailFromAsset(asset)
+        if (derived) {
+          return derived
+        }
+      }
+      const cacheKey = options.cacheId ?? asset?.id ?? options.assetId ?? null
       if (cacheKey) {
         const entry = this.entries[cacheKey]
         if (entry && entry.status === 'cached' && entry.blobUrl) {
@@ -387,13 +393,6 @@ export const useAssetCacheStore = defineStore('assetCache', {
               return entry.blobUrl
             }
           }
-        }
-      }
-
-      if (asset) {
-        const derived = deriveThumbnailFromAsset(asset)
-        if (derived) {
-          return derived
         }
       }
 
