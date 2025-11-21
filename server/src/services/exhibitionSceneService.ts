@@ -2,62 +2,25 @@ import path from 'node:path'
 import fs from 'fs-extra'
 import { nanoid } from 'nanoid'
 import { Types } from 'mongoose'
+import type {
+  AssetIndexEntry,
+  AssetSourceMetadata,
+  LanternBehaviorParams,
+  LanternSlideDefinition,
+  SceneBehavior,
+  SceneJsonExportDocument,
+  SceneNode,
+  SceneNodeComponentState,
+  SceneResourceSummaryEntry,
+} from '@harmony/schema'
 import { appConfig } from '@/config/env'
 import { SceneModel } from '@/models/Scene'
 import type { SceneDocument } from '@/types/models'
 import { resolveSceneFilePath } from '@/services/sceneService'
 
 const SCENE_INSTANCE_PREFIX = 'scene-instances'
-
-type SceneNodeComponentState<TProps = Record<string, unknown>> = {
-  props?: TProps
-  [key: string]: unknown
-}
-
-type SceneNode = {
-  components?: Record<string, SceneNodeComponentState>
-  children?: SceneNode[]
-  [key: string]: unknown
-}
-
-type LanternSlideDefinition = {
-  imageAssetId?: string | null
-  [key: string]: unknown
-}
-
-type LanternBehaviorParams = {
-  slides?: LanternSlideDefinition[]
-  [key: string]: unknown
-}
-
-type SceneBehavior = {
-  action?: string
-  script?: {
-    type?: string
-    params?: unknown
-  } | null
-  [key: string]: unknown
-}
-
-type SceneResourceSummaryEntry = {
-  assetId: string
-  downloadUrl?: string | null
-  [key: string]: unknown
-}
-
-type SceneJsonExportDocument = {
-  id?: string
-  name?: string
-  createdAt?: string
-  updatedAt?: string
-  nodes?: SceneNode[]
-  packageAssetMap?: Record<string, string>
-  assetIndex?: Record<string, Record<string, unknown>>
-  resourceSummary?: {
-    assets?: SceneResourceSummaryEntry[]
-  } | null
-  [key: string]: unknown
-}
+// Align with editor asset catalog's Images category id so generated entries remain consistent.
+const EXHIBITION_IMAGE_CATEGORY_ID = 'dir-assets-root-images'
 
 export type ExhibitionWorkMedia = {
   fileUrl?: string | null
@@ -158,7 +121,20 @@ function collectScenePlaceholders(document: SceneJsonExportDocument): ScenePlace
       continue
     }
     const display = getComponent<{ assetId?: string }>(current.node, 'displayBoard')
-    const assetId = parseAssetId(display?.props?.assetId)
+    const assetId = parseAssetId(
+      display?.props?.assetId,
+      display
+        ? {
+            onGenerate: (generated) => {
+              if (!display.props || typeof display.props !== 'object') {
+                display.props = { assetId: generated } as { assetId?: string }
+                return
+              }
+              display.props.assetId = generated
+            },
+          }
+        : undefined,
+    )
     if (assetId) {
       const placeholder: ScenePlaceholder = {
         assetId,
@@ -206,7 +182,11 @@ function collectLanternData(node: SceneNode, placeholder: ScenePlaceholder): voi
         return
       }
       placeholder.slides.push(slide)
-      const slideAssetId = parseAssetId(slide.imageAssetId)
+      const slideAssetId = parseAssetId(slide.imageAssetId, {
+        onGenerate: (generated) => {
+          slide.imageAssetId = generated
+        },
+      })
       if (slideAssetId) {
         placeholder.assetIds.add(slideAssetId)
       }
@@ -227,7 +207,8 @@ function applyImagesToPlaceholders(
       updateAssetReferences(document, assetId, imageUrl)
     })
     placeholder.slides.forEach((slide: LanternSlideDefinition) => {
-      if (!parseAssetId(slide.imageAssetId)) {
+      const candidate = typeof slide.imageAssetId === 'string' ? slide.imageAssetId.trim() : ''
+      if (!candidate.length) {
         slide.imageAssetId = placeholder.assetId
       }
     })
@@ -235,23 +216,27 @@ function applyImagesToPlaceholders(
 }
 
 function updateAssetReferences(document: SceneJsonExportDocument, assetId: string, imageUrl: string): void {
-  if (!assetId || !imageUrl) {
+  const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+  const normalizedUrl = typeof imageUrl === 'string' ? imageUrl.trim() : ''
+  if (!normalizedAssetId || !normalizedUrl) {
     return
   }
-  if (!document.packageAssetMap || typeof document.packageAssetMap !== 'object') {
-    document.packageAssetMap = {}
+
+  const packageMap = ensurePackageAssetMap(document)
+  packageMap[`url::${normalizedAssetId}`] = normalizedUrl
+
+  const entry = ensureAssetIndexEntry(document, normalizedAssetId)
+  entry.downloadUrl = normalizedUrl
+  entry.url = normalizedUrl
+  if (!entry.source || entry.source.type !== 'url') {
+    entry.source = { type: 'url' }
   }
-  document.packageAssetMap[assetId] = imageUrl
-  if (document.assetIndex && document.assetIndex[assetId]) {
-    const entry = document.assetIndex[assetId] as Record<string, unknown>
-    entry['downloadUrl'] = imageUrl
-    entry['url'] = imageUrl
-  }
+
   const summary = document.resourceSummary
   if (summary && Array.isArray(summary.assets)) {
     summary.assets.forEach((item: SceneResourceSummaryEntry) => {
-      if (item && item.assetId === assetId) {
-        item.downloadUrl = imageUrl
+      if (item && item.assetId === normalizedAssetId) {
+        item.downloadUrl = normalizedUrl
       }
     })
   }
@@ -314,6 +299,46 @@ function collectWorkImageUrls(works: ExhibitionWorkMedia[]): string[] {
   return urls
 }
 
+type MutableAssetIndexEntry = AssetIndexEntry & {
+  downloadUrl?: string | null
+  url?: string | null
+  [key: string]: unknown
+}
+
+function ensurePackageAssetMap(document: SceneJsonExportDocument): Record<string, string> {
+  if (!document.packageAssetMap || typeof document.packageAssetMap !== 'object') {
+    document.packageAssetMap = {}
+  }
+  return document.packageAssetMap
+}
+
+function ensureAssetIndex(document: SceneJsonExportDocument): Record<string, MutableAssetIndexEntry> {
+  if (!document.assetIndex || typeof document.assetIndex !== 'object') {
+    document.assetIndex = {}
+  }
+  return document.assetIndex as Record<string, MutableAssetIndexEntry>
+}
+
+function ensureAssetIndexEntry(document: SceneJsonExportDocument, assetId: string): MutableAssetIndexEntry {
+  const assetIndex = ensureAssetIndex(document)
+  const existing = assetIndex[assetId]
+  if (existing) {
+    if (!existing.categoryId) {
+      existing.categoryId = EXHIBITION_IMAGE_CATEGORY_ID
+    }
+    return existing
+  }
+  const entry: MutableAssetIndexEntry = {
+    categoryId: EXHIBITION_IMAGE_CATEGORY_ID,
+  }
+  assetIndex[assetId] = entry
+  return entry
+}
+
+function createGeneratedAssetId(): string {
+  return `exhibit-asset-${nanoid(10)}`
+}
+
 function getComponent<T = Record<string, unknown>>(
   node: SceneNode,
   type: string,
@@ -329,12 +354,23 @@ function getComponent<T = Record<string, unknown>>(
   return component
 }
 
-function parseAssetId(value: unknown): string | null {
-  if (typeof value !== 'string') {
+type ParseAssetIdOptions = {
+  onGenerate?: (assetId: string) => void
+}
+
+function parseAssetId(value: unknown, options?: ParseAssetIdOptions): string | null {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (trimmed.length) {
+      return trimmed
+    }
+  }
+  if (!options?.onGenerate) {
     return null
   }
-  const trimmed = value.trim()
-  return trimmed.length ? trimmed : null
+  const generated = createGeneratedAssetId()
+  options.onGenerate(generated)
+  return generated
 }
 
 function buildSceneInstanceFileKey(exhibitionId: string): string {
