@@ -3,6 +3,7 @@ import { Types } from 'mongoose'
 import { ExhibitionModel } from '@/models/Exhibition'
 import { WorkCollectionModel } from '@/models/WorkCollection'
 import { UserModel } from '@/models/User'
+import { generateExhibitionSceneInstance, deleteSceneInstanceByUrl } from '@/services/exhibitionSceneService'
 import { ensureUserId, getOptionalUserId } from './utils'
 import { fetchWorkResponsesByIds, type WorkResponse } from './workHelpers'
 
@@ -25,6 +26,7 @@ interface ExhibitionLean {
   description?: string
   coverUrl?: string
   coverUrls?: string[]
+  scene?: string
   startDate?: Date
   endDate?: Date
   workIds: Types.ObjectId[]
@@ -73,6 +75,7 @@ interface ExhibitionResponse {
   description?: string
   coverUrl?: string
   coverUrls: string[]
+  scene?: string
   status: 'draft' | 'published' | 'withdrawn'
   startDate?: string
   endDate?: string
@@ -246,6 +249,7 @@ function buildExhibitionResponse(
     description: exhibition.description ?? undefined,
     coverUrl: coverUrls[0],
     coverUrls,
+    scene: exhibition.scene ?? undefined,
     status: exhibition.status,
     startDate: exhibition.startDate ? exhibition.startDate.toISOString() : undefined,
     endDate: exhibition.endDate ? exhibition.endDate.toISOString() : undefined,
@@ -308,6 +312,18 @@ export async function createExhibition(ctx: Context): Promise<void> {
     status: body.status ?? 'published',
   })
   const works = await fetchWorkResponsesByIds(workIds, userId)
+  const sceneUrl = await generateExhibitionSceneInstance({
+    exhibitionId: exhibition._id.toString(),
+    works: works.map((work) => ({
+      fileUrl: work.fileUrl,
+      thumbnailUrl: work.thumbnailUrl,
+      mediaType: work.mediaType,
+    })),
+  })
+  if (sceneUrl && sceneUrl !== exhibition.scene) {
+    exhibition.scene = sceneUrl
+    await exhibition.save()
+  }
   ctx.status = 201
   ctx.body = buildExhibitionResponse(
     exhibition.toObject() as ExhibitionLean,
@@ -443,8 +459,20 @@ export async function updateExhibition(ctx: Context): Promise<void> {
   } else if (exhibition.coverUrl) {
     exhibition.coverUrls = [exhibition.coverUrl]
   }
-  await exhibition.save()
   const works = await fetchWorkResponsesByIds(exhibition.workIds ?? [], userId)
+  const sceneUrl = await generateExhibitionSceneInstance({
+    exhibitionId: exhibition._id.toString(),
+    works: works.map((work) => ({
+      fileUrl: work.fileUrl,
+      thumbnailUrl: work.thumbnailUrl,
+      mediaType: work.mediaType,
+    })),
+    previousSceneUrl: exhibition.scene ?? null,
+  })
+  if (sceneUrl && sceneUrl !== exhibition.scene) {
+    exhibition.scene = sceneUrl
+  }
+  await exhibition.save()
   if (!loadedCollections) {
     loadedCollections = await loadCollectionsByIds(exhibition.collectionIds ?? [])
   }
@@ -462,11 +490,14 @@ export async function deleteExhibition(ctx: Context): Promise<void> {
   if (!Types.ObjectId.isValid(id)) {
     ctx.throw(400, 'Invalid exhibition id')
   }
-  const exhibition = await ExhibitionModel.findOneAndDelete({ _id: id, ownerId: userId }).exec()
+  const exhibition = (await ExhibitionModel.findOneAndDelete({ _id: id, ownerId: userId }).lean().exec()) as
+    | ExhibitionLean
+    | null
   if (!exhibition) {
     ctx.throw(404, 'Exhibition not found')
     return
   }
+  await deleteSceneInstanceByUrl(exhibition.scene)
   ctx.body = { success: true }
 }
 

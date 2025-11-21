@@ -102,6 +102,7 @@ export interface ExhibitionItem {
 	cover: string;
 	primaryCover?: string;
 	coverImages: string[];
+	scene?: string;
 	dateRange: string;
 	workIds: string[];
 	workCount: number;
@@ -352,6 +353,7 @@ function mapExhibitionSummary(summary: ExhibitionSummary, index: number): Exhibi
 		cover: ensureBackground(primaryCover, index),
 		primaryCover,
 		coverImages,
+		scene: summary.scene ?? undefined,
 		dateRange: formatDateRange(summary.startDate, summary.endDate),
 		workIds: Array.isArray(summary.works) ? summary.works.map((item) => item.id) : [],
 		workCount: Array.isArray(summary.works) ? summary.works.length : summary.workCount ?? 0,

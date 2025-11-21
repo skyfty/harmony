@@ -98,6 +98,7 @@ export interface ExhibitionDocument extends Document<Types.ObjectId> {
   description?: string
   coverUrl?: string
   coverUrls: string[]
+  scene?: string
   startDate?: Date
   endDate?: Date
   workIds: Types.ObjectId[]
