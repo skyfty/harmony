@@ -15,16 +15,19 @@ type PreviewMessageEvent = {
 }
 
 const CHANNEL_NAME = 'harmony-scene-preview'
-const STORAGE_KEY = 'harmony:scene-preview:last'
+const SNAPSHOT_RECORD_KEY = 'harmony:scene-preview:last'
 const SNAPSHOT_STORAGE_VERSION = 1
 const MAX_STORAGE_BYTES = 4 * 1024 * 1024
 const MIN_PERSIST_INTERVAL_MS = 1000
+const SNAPSHOT_DB_NAME = 'harmony-scene-preview'
+const SNAPSHOT_DB_VERSION = 1
+const SNAPSHOT_STORE_NAME = 'snapshots'
 
 const listeners = new Set<PreviewListener>()
 let channel: BroadcastChannel | null = null
-let storageListenerAttached = false
 let storageDisabled = false
 let lastPersistTimestamp = 0
+let snapshotDbPromise: Promise<IDBDatabase | null> | null = null
 
 const NodeBuffer = typeof globalThis !== 'undefined' && (globalThis as any).Buffer
   ? (globalThis as any).Buffer
@@ -55,24 +58,6 @@ function handleChannelMessage(event: MessageEvent<PreviewMessageEvent | undefine
   notifyListeners(data.payload)
 }
 
-function ensureStorageListener() {
-  if (storageListenerAttached || typeof window === 'undefined') {
-    return
-  }
-  window.addEventListener('storage', handleStorageEvent)
-  storageListenerAttached = true
-}
-
-function handleStorageEvent(event: StorageEvent) {
-  if (!event.key || event.key !== STORAGE_KEY || !event.newValue) {
-    return
-  }
-  const snapshot = safeParseSnapshot(event.newValue)
-  if (snapshot) {
-    notifyListeners(snapshot)
-  }
-}
-
 function notifyListeners(snapshot: ScenePreviewSnapshot) {
   listeners.forEach((listener) => {
     try {
@@ -96,8 +81,12 @@ function safeParseSnapshot(payload: string): ScenePreviewSnapshot | null {
   }
 }
 
-function persistSnapshot(snapshot: ScenePreviewSnapshot) {
+async function persistSnapshot(snapshot: ScenePreviewSnapshot) {
   if (typeof window === 'undefined' || storageDisabled) {
+    return
+  }
+  if (!isIndexedDbAvailable()) {
+    disableSnapshotPersistence('IndexedDB is not available, snapshot persistence disabled')
     return
   }
   const now = Date.now()
@@ -117,12 +106,12 @@ function persistSnapshot(snapshot: ScenePreviewSnapshot) {
       disableSnapshotPersistence('snapshot envelope exceeds storage budget, persistence disabled')
       return
     }
-    window.localStorage.setItem(STORAGE_KEY, envelopeString)
+    await writeSnapshotEnvelope(envelopeString)
   } catch (error) {
     if (isQuotaExceededError(error)) {
-      disableSnapshotPersistence('localStorage quota exceeded, snapshot persistence disabled', error)
+      disableSnapshotPersistence('IndexedDB quota exceeded, snapshot persistence disabled', error)
       try {
-        window.localStorage.removeItem(STORAGE_KEY)
+        await clearSnapshotEnvelope()
       } catch {
         // ignore cleanup errors
       }
@@ -136,7 +125,7 @@ export function broadcastScenePreviewUpdate(snapshot: ScenePreviewSnapshot): voi
   if (typeof window === 'undefined') {
     return
   }
-  persistSnapshot(snapshot)
+  void persistSnapshot(snapshot)
   const channelInstance = ensureChannel()
   if (channelInstance) {
     try {
@@ -155,14 +144,19 @@ export function broadcastScenePreviewUpdate(snapshot: ScenePreviewSnapshot): voi
 export function subscribeToScenePreview(listener: PreviewListener): () => void {
   listeners.add(listener)
   ensureChannel()
-  ensureStorageListener()
-  const snapshot = readStoredScenePreviewSnapshot()
-  if (snapshot) {
-    const schedule = typeof queueMicrotask === 'function'
-      ? queueMicrotask
-      : (cb: () => void) => Promise.resolve().then(cb)
-    schedule(() => listener(snapshot))
-  }
+  void readStoredScenePreviewSnapshot()
+    .then((snapshot) => {
+      if (!snapshot) {
+        return
+      }
+      const schedule = typeof queueMicrotask === 'function'
+        ? queueMicrotask
+        : (cb: () => void) => Promise.resolve().then(cb)
+      schedule(() => listener(snapshot))
+    })
+    .catch((error) => {
+      console.warn('[PreviewChannel] failed to deliver stored snapshot', error)
+    })
   return () => {
     listeners.delete(listener)
     if (!listeners.size && channel) {
@@ -173,12 +167,12 @@ export function subscribeToScenePreview(listener: PreviewListener): () => void {
   }
 }
 
-export function readStoredScenePreviewSnapshot(): ScenePreviewSnapshot | null {
-  if (typeof window === 'undefined') {
+export async function readStoredScenePreviewSnapshot(): Promise<ScenePreviewSnapshot | null> {
+  if (typeof window === 'undefined' || !isIndexedDbAvailable()) {
     return null
   }
   try {
-    const serialized = window.localStorage.getItem(STORAGE_KEY)
+    const serialized = await readSnapshotEnvelope()
     if (!serialized) {
       return null
     }
@@ -186,7 +180,7 @@ export function readStoredScenePreviewSnapshot(): ScenePreviewSnapshot | null {
     if (snapshot) {
       return snapshot
     }
-    window.localStorage.removeItem(STORAGE_KEY)
+    await clearSnapshotEnvelope()
     return null
   } catch (error) {
     console.warn('[PreviewChannel] failed to read stored snapshot', error)
@@ -366,4 +360,155 @@ function disableSnapshotPersistence(message: string, error?: unknown) {
   } else {
     console.warn(`[PreviewChannel] ${message}`)
   }
+}
+
+function isIndexedDbAvailable(): boolean {
+  return typeof window !== 'undefined' && typeof window.indexedDB !== 'undefined'
+}
+
+async function getSnapshotDb(): Promise<IDBDatabase | null> {
+  if (!isIndexedDbAvailable()) {
+    return null
+  }
+  if (snapshotDbPromise) {
+    return snapshotDbPromise
+  }
+  snapshotDbPromise = new Promise<IDBDatabase | null>((resolve) => {
+    try {
+      const request = window.indexedDB.open(SNAPSHOT_DB_NAME, SNAPSHOT_DB_VERSION)
+      request.onupgradeneeded = () => {
+        const db = request.result
+        if (!db.objectStoreNames.contains(SNAPSHOT_STORE_NAME)) {
+          db.createObjectStore(SNAPSHOT_STORE_NAME, { keyPath: 'key' })
+        }
+      }
+      request.onsuccess = () => {
+        request.result.onclose = () => {
+          snapshotDbPromise = null
+        }
+        resolve(request.result)
+      }
+      request.onerror = () => {
+        console.warn('[PreviewChannel] failed to open IndexedDB', request.error)
+        snapshotDbPromise = null
+        resolve(null)
+      }
+      request.onblocked = () => {
+        console.warn('[PreviewChannel] IndexedDB upgrade blocked')
+      }
+    } catch (error) {
+      console.warn('[PreviewChannel] unexpected error while opening IndexedDB', error)
+      snapshotDbPromise = null
+      resolve(null)
+    }
+  })
+  return snapshotDbPromise
+}
+
+type SnapshotRecord = {
+  key: typeof SNAPSHOT_RECORD_KEY
+  envelope: string
+  updatedAt: number
+}
+
+async function readSnapshotEnvelope(): Promise<string | null> {
+  const db = await getSnapshotDb()
+  if (!db) {
+    return null
+  }
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(SNAPSHOT_STORE_NAME, 'readonly')
+    const store = transaction.objectStore(SNAPSHOT_STORE_NAME)
+    const request = store.get(SNAPSHOT_RECORD_KEY)
+    let settled = false
+    const rejectOnce = (reason: unknown) => {
+      if (settled) {
+        return
+      }
+      settled = true
+      reject(reason)
+    }
+    request.onsuccess = () => {
+      if (settled) {
+        return
+      }
+      settled = true
+      const record = request.result as SnapshotRecord | undefined
+      resolve(record?.envelope ?? null)
+    }
+    request.onerror = () => {
+      rejectOnce(request.error ?? new Error('IndexedDB request failed'))
+    }
+    transaction.onabort = () => {
+      rejectOnce(transaction.error ?? new Error('IndexedDB transaction aborted'))
+    }
+    transaction.onerror = () => {
+      rejectOnce(transaction.error ?? new Error('IndexedDB transaction failed'))
+    }
+  })
+}
+
+async function writeSnapshotEnvelope(envelope: string): Promise<void> {
+  const db = await getSnapshotDb()
+  if (!db) {
+    throw new Error('IndexedDB is not available')
+  }
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction(SNAPSHOT_STORE_NAME, 'readwrite')
+    const store = transaction.objectStore(SNAPSHOT_STORE_NAME)
+    const record: SnapshotRecord = {
+      key: SNAPSHOT_RECORD_KEY,
+      envelope,
+      updatedAt: Date.now(),
+    }
+    const request = store.put(record)
+    let settled = false
+    const rejectOnce = (reason: unknown) => {
+      if (settled) {
+        return
+      }
+      settled = true
+      reject(reason)
+    }
+    transaction.oncomplete = () => {
+      if (settled) {
+        return
+      }
+      settled = true
+      resolve()
+    }
+    request.onerror = () => rejectOnce(request.error ?? new Error('IndexedDB request failed'))
+    transaction.onabort = () => rejectOnce(transaction.error ?? new Error('IndexedDB transaction aborted'))
+    transaction.onerror = () => rejectOnce(transaction.error ?? new Error('IndexedDB transaction failed'))
+  })
+}
+
+async function clearSnapshotEnvelope(): Promise<void> {
+  const db = await getSnapshotDb()
+  if (!db) {
+    return
+  }
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction(SNAPSHOT_STORE_NAME, 'readwrite')
+    const store = transaction.objectStore(SNAPSHOT_STORE_NAME)
+    const request = store.delete(SNAPSHOT_RECORD_KEY)
+    let settled = false
+    const rejectOnce = (reason: unknown) => {
+      if (settled) {
+        return
+      }
+      settled = true
+      reject(reason)
+    }
+    transaction.oncomplete = () => {
+      if (settled) {
+        return
+      }
+      settled = true
+      resolve()
+    }
+    request.onerror = () => rejectOnce(request.error ?? new Error('IndexedDB request failed'))
+    transaction.onabort = () => rejectOnce(transaction.error ?? new Error('IndexedDB transaction aborted'))
+    transaction.onerror = () => rejectOnce(transaction.error ?? new Error('IndexedDB transaction failed'))
+  })
 }
