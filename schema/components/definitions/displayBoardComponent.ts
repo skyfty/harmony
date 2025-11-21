@@ -11,6 +11,7 @@ export interface DisplayBoardComponentProps {
   assetId: string
   intrinsicWidth?: number
   intrinsicHeight?: number
+  adaptation: 'fit' | 'fill'
 }
 
 type DisplayBoardMediaResolver = (source: string) => Promise<DisplayBoardResolvedMedia | null>
@@ -19,6 +20,13 @@ export interface DisplayBoardResolvedMedia {
   url: string
   mimeType?: string | null
   dispose?: () => void
+}
+
+function resolvePositiveDimension(value: number | null | undefined): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return undefined
+  }
+  return value > 0 ? value : undefined
 }
 
 export function clampDisplayBoardComponentProps(
@@ -33,13 +41,11 @@ export function clampDisplayBoardComponentProps(
   if (assetId.startsWith('asset://')) {
     assetId = assetId.slice('asset://'.length)
   }
-  const intrinsicWidth = Number.isFinite(props?.intrinsicWidth) && (props?.intrinsicWidth ?? 0) > 0
-    ? props!.intrinsicWidth!
-    : undefined
-  const intrinsicHeight = Number.isFinite(props?.intrinsicHeight) && (props?.intrinsicHeight ?? 0) > 0
-    ? props!.intrinsicHeight!
-    : undefined
-  const result: DisplayBoardComponentProps = { assetId }
+  const intrinsicWidth = resolvePositiveDimension(props?.intrinsicWidth)
+  const intrinsicHeight = resolvePositiveDimension(props?.intrinsicHeight)
+  const adaptation: DisplayBoardComponentProps['adaptation'] = props?.adaptation === 'fill' ? 'fill' : 'fit'
+
+  const result: DisplayBoardComponentProps = { assetId, adaptation }
   if (intrinsicWidth !== undefined) {
     result.intrinsicWidth = intrinsicWidth
   }
@@ -52,6 +58,7 @@ export function clampDisplayBoardComponentProps(
 export function cloneDisplayBoardComponentProps(props: DisplayBoardComponentProps): DisplayBoardComponentProps {
   const cloned: DisplayBoardComponentProps = {
     assetId: props.assetId,
+    adaptation: props.adaptation === 'fill' ? 'fill' : 'fit',
   }
   if (typeof props.intrinsicWidth === 'number') {
     cloned.intrinsicWidth = props.intrinsicWidth
@@ -115,16 +122,17 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
 
     const props = clampDisplayBoardComponentProps(this.context.getProps())
     const assetId = props.assetId.trim()
+    const intrinsicSize = this.resolveIntrinsicMediaSize(props)
 
     if (!assetId) {
       this.resetTexture(mesh)
-      this.updateGeometry(mesh)
-      this.applyTextureCropping(mesh, null, null)
+      this.updateGeometry(mesh, props, intrinsicSize)
+      this.applyTextureCropping(mesh, null, null, props.adaptation)
       return
     }
 
-    // Ensure the plane immediately reflects the node's current scale while media loads.
-    this.updateGeometry(mesh)
+    // Ensure the plane immediately reflects the node's current configuration while media loads.
+    this.updateGeometry(mesh, props, intrinsicSize)
 
     if (this.pending) {
       this.pending.cancelled = true
@@ -134,8 +142,8 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
     const media = resolver ? await resolver(assetId) : null
     if (!media) {
       this.resetTexture(mesh)
-      this.updateGeometry(mesh)
-      this.applyTextureCropping(mesh, null, null)
+      this.updateGeometry(mesh, props, intrinsicSize)
+      this.applyTextureCropping(mesh, null, null, props.adaptation)
       return
     }
 
@@ -152,10 +160,11 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
         return
       }
 
-    this.currentCleanup?.()
-    this.assignTexture(mesh, handle.texture)
-    this.applyTextureCropping(mesh, handle.texture, { width: handle.width, height: handle.height })
-    this.updateGeometry(mesh)
+      this.currentCleanup?.()
+      this.assignTexture(mesh, handle.texture)
+      const resolvedSize = { width: handle.width, height: handle.height }
+      this.applyTextureCropping(mesh, handle.texture, resolvedSize, props.adaptation)
+      this.updateGeometry(mesh, props, resolvedSize)
       this.currentCleanup = () => {
         handle.dispose()
         this.disposeTexture()
@@ -165,8 +174,8 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
       console.warn('[DisplayBoardComponent] Failed to load media', error)
       media.dispose?.()
       this.resetTexture(mesh)
-      this.updateGeometry(mesh)
-      this.applyTextureCropping(mesh, null, null)
+      this.updateGeometry(mesh, props, intrinsicSize)
+      this.applyTextureCropping(mesh, null, null, props.adaptation)
     } finally {
       if (this.pending === token) {
         this.pending = null
@@ -274,9 +283,13 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
     })
   }
 
-  private updateGeometry(mesh: PlaneMesh): void {
+  private updateGeometry(
+    mesh: PlaneMesh,
+    props: DisplayBoardComponentProps,
+    mediaSize: { width: number; height: number } | null,
+  ): void {
     const { widthSegments, heightSegments } = this.resolveGeometrySegments(mesh.geometry)
-    const targetSize = this.computeTargetSize(mesh)
+    const targetSize = this.computeTargetSize(mesh, props, mediaSize)
     if (!targetSize) {
       return
     }
@@ -286,9 +299,66 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
     previous?.dispose?.()
   }
 
-  private computeTargetSize(mesh: PlaneMesh): { width: number; height: number } | null {
+  private resolveIntrinsicMediaSize(props: DisplayBoardComponentProps): { width: number; height: number } | null {
+    const width = typeof props.intrinsicWidth === 'number' && props.intrinsicWidth > 0 ? props.intrinsicWidth : null
+    const height = typeof props.intrinsicHeight === 'number' && props.intrinsicHeight > 0 ? props.intrinsicHeight : null
+    if (!width || !height) {
+      return null
+    }
+    return { width, height }
+  }
+
+  private computeTargetSize(
+    mesh: PlaneMesh,
+    props: DisplayBoardComponentProps,
+    mediaSize: { width: number; height: number } | null,
+  ): { width: number; height: number } | null {
+    const adaptation = props.adaptation === 'fill' ? 'fill' : 'fit'
     const boardSize = this.resolveBoardWorldSize(mesh)
-    return this.convertWorldSizeToGeometry(mesh, boardSize)
+    if (adaptation === 'fill') {
+      return this.convertWorldSizeToGeometry(mesh, boardSize)
+    }
+
+    const source = this.selectEffectiveMediaSize(mediaSize, props)
+    if (!source) {
+      const fallback = Math.max(Math.min(boardSize.width, boardSize.height), 1e-3)
+      return this.convertWorldSizeToGeometry(mesh, { width: fallback, height: fallback })
+    }
+
+    const fitted = this.fitMediaWithinBoard(boardSize, source)
+    return this.convertWorldSizeToGeometry(mesh, fitted)
+  }
+
+  private selectEffectiveMediaSize(
+    mediaSize: { width: number; height: number } | null,
+    props: DisplayBoardComponentProps,
+  ): { width: number; height: number } | null {
+    if (mediaSize && mediaSize.width > 0 && mediaSize.height > 0) {
+      return mediaSize
+    }
+    return this.resolveIntrinsicMediaSize(props)
+  }
+
+  private fitMediaWithinBoard(
+    boardSize: { width: number; height: number },
+    mediaSize: { width: number; height: number },
+  ): { width: number; height: number } {
+    const maxWidth = Math.max(boardSize.width, 1e-3)
+    const maxHeight = Math.max(boardSize.height, 1e-3)
+    const aspect = mediaSize.width / Math.max(mediaSize.height, 1e-6)
+
+    let width = maxWidth
+    let height = width / Math.max(aspect, 1e-6)
+
+    if (height > maxHeight) {
+      height = maxHeight
+      width = height * aspect
+    }
+
+    return {
+      width: Math.max(width, 1e-3),
+      height: Math.max(height, 1e-3),
+    }
   }
 
   private resolveScaleComponent(value: number | undefined): number {
@@ -319,13 +389,21 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
     mesh: PlaneMesh,
     texture: THREE.Texture | null,
     mediaSize: { width: number; height: number } | null,
+    adaptation: DisplayBoardComponentProps['adaptation'],
   ): void {
-    if (!texture || !mediaSize) {
+    if (!texture) {
       return
     }
     texture.wrapS = THREE.ClampToEdgeWrapping
     texture.wrapT = THREE.ClampToEdgeWrapping
     texture.center.set(0.5, 0.5)
+
+    if (!mediaSize || adaptation !== 'fill') {
+      texture.repeat.set(1, 1)
+      texture.offset.set(0, 0)
+      texture.needsUpdate = true
+      return
+    }
 
     const boardSize = this.resolveBoardWorldSize(mesh)
     const boardAspect = boardSize.width / Math.max(boardSize.height, 1e-6)
@@ -338,11 +416,11 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
     let offsetY = 0
 
     if (boardAspect > mediaAspect + epsilon) {
-      repeatX = this.clampRepeatValue(mediaAspect / boardAspect)
-      offsetX = (1 - repeatX) / 2
-    } else if (boardAspect < mediaAspect - epsilon) {
-      repeatY = this.clampRepeatValue(boardAspect / mediaAspect)
+      repeatY = this.clampRepeatValue(mediaAspect / boardAspect)
       offsetY = (1 - repeatY) / 2
+    } else if (boardAspect < mediaAspect - epsilon) {
+      repeatX = this.clampRepeatValue(boardAspect / mediaAspect)
+      offsetX = (1 - repeatX) / 2
     }
 
     texture.repeat.set(repeatX, repeatY)
@@ -421,6 +499,7 @@ const displayBoardComponentDefinition: ComponentDefinition<DisplayBoardComponent
       assetId: '',
       intrinsicWidth: undefined,
       intrinsicHeight: undefined,
+      adaptation: 'fit' as const,
     }
   },
   createInstance(context) {
@@ -440,6 +519,7 @@ export function createDisplayBoardComponentState(
     assetId: overrides?.assetId ?? defaults.assetId,
     intrinsicWidth: overrides?.intrinsicWidth ?? defaults.intrinsicWidth,
     intrinsicHeight: overrides?.intrinsicHeight ?? defaults.intrinsicHeight,
+    adaptation: overrides?.adaptation ?? defaults.adaptation,
   })
   return {
     id: options.id ?? '',

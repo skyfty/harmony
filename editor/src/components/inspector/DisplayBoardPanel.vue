@@ -24,7 +24,13 @@ const componentEnabled = computed(() => displayBoardComponent.value?.enabled !==
 
 const localProps = reactive({
   assetId: '',
+  adaptation: 'fit' as DisplayBoardComponentProps['adaptation'],
 })
+
+const adaptationOptions: Array<{ label: string; value: DisplayBoardComponentProps['adaptation'] }> = [
+  { label: 'Fit', value: 'fit' },
+  { label: 'Fill', value: 'fill' },
+]
 
 const isDragActive = ref(false)
 
@@ -49,6 +55,7 @@ watch(
         : ''
       localProps.assetId = legacyUrl
     }
+    localProps.adaptation = next?.adaptation === 'fill' ? 'fill' : 'fit'
   },
   { immediate: true, deep: true },
 )
@@ -206,6 +213,22 @@ async function handleDrop(event: DragEvent) {
   await sceneStore.applyDisplayBoardAsset(nodeId, component.id, normalizedId, { updateMaterial: true })
 }
 
+function handleAdaptationChange(value: string | null) {
+  const component = displayBoardComponent.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId) {
+    return
+  }
+  if (value !== 'fit' && value !== 'fill') {
+    return
+  }
+  if (localProps.adaptation === value) {
+    return
+  }
+  localProps.adaptation = value
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { adaptation: value })
+}
+
 const activeAsset = computed(() => {
   const id = normalizeAssetId(localProps.assetId)
   if (!id.length) {
@@ -283,6 +306,21 @@ const mediaPreviewStyle = computed(() => {
     </v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="display-board-settings">
+
+        <div class="display-board-settings__row">
+          <v-select
+            label="Adaptation"
+            density="compact"
+            variant="underlined"
+            hide-details
+            :items="adaptationOptions"
+            item-title="label"
+            item-value="value"
+            :model-value="localProps.adaptation"
+            :disabled="!componentEnabled"
+            @update:model-value="handleAdaptationChange"
+          />
+        </div>
 
         <div
           class="display-board-drop"
