@@ -2,7 +2,7 @@ import Pica from 'pica'
 import type { ProjectAsset } from '@/types/project-asset'
 
 const IMAGE_ASSET_TYPES = new Set<ProjectAsset['type']>(['image', 'texture'])
-const MODEL_ASSET_TYPES = new Set<ProjectAsset['type']>(['model', 'mesh', 'prefab'])
+const MODEL_ASSET_TYPES = new Set<ProjectAsset['type']>(['model', 'mesh', 'prefab', 'preset'])
 
 const DEFAULT_BACKGROUND = '#161b22'
 const IMAGE_OUTPUT_TYPE = 'image/jpeg'

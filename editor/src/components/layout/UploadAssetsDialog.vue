@@ -29,15 +29,13 @@ import {
 
 const TYPE_COLOR_FALLBACK: Record<ProjectAsset['type'], string> = {
   model: '#26c6da',
-    thumbnailFile: null,
-    thumbnailPreviewUrl: null,
-    thumbnailCapturedAt: null,
   mesh: '#26c6da',
   image: '#1e88e5',
   texture: '#8e24aa',
   hdri: '#009688',
   material: '#ffb74d',
   prefab: '#7986cb',
+  preset: '#7986cb',
   video: '#ff7043',
   file: '#546e7a',
   behavior: '#607d8b',
@@ -330,7 +328,7 @@ function buildExtraHints(entry: UploadAssetEntry): string[] {
   const hints: string[] = []
   const color = normalizeHexColor(entry.color) ?? normalizeHexColor(entry.asset.color ?? null)
   if (color) hints.push(`Primary color ${color}`)
-  if (entry.asset.type === 'model' || entry.asset.type === 'prefab') {
+  if (['model', 'prefab', 'preset'].includes(entry.asset.type)) {
     const parts: string[] = []
     if (typeof entry.dimensionLength === 'number' && Number.isFinite(entry.dimensionLength) && entry.dimensionLength > 0) parts.push(`Length ${entry.dimensionLength.toFixed(2)} m`)
     if (typeof entry.dimensionWidth === 'number' && Number.isFinite(entry.dimensionWidth) && entry.dimensionWidth > 0) parts.push(`Width ${entry.dimensionWidth.toFixed(2)} m`)
@@ -696,7 +694,7 @@ function registerPreviewRef(entryId: string, instance: InstanceType<typeof Asset
 }
 
 function isModelAsset(asset: ProjectAsset): boolean {
-  return ['model', 'mesh', 'prefab'].includes(asset.type)
+  return ['model', 'mesh', 'prefab', 'preset'].includes(asset.type)
 }
 
 async function capturePreviewThumbnail(entry: UploadAssetEntry, options: { silent?: boolean } = {}): Promise<void> {
@@ -1234,7 +1232,7 @@ function handleUploadAll(): void {
                         @dimensions="(payload) => handlePreviewDimensions(entry, payload)"
                         @image-meta="(payload) => handlePreviewImageMeta(entry, payload)"
                       />
-                      <div v-if="['model', 'mesh', 'prefab'].includes(entry.asset.type)" class="upload-preview__actions">
+                      <div v-if="['model', 'mesh', 'prefab', 'preset'].includes(entry.asset.type)" class="upload-preview__actions">
                         <v-btn
                           color="primary"
                           variant="flat"
