@@ -1196,18 +1196,53 @@ function resolveDisplayBoardMediaSize(
 
 function computeDisplayBoardPlaneSize(
   mesh: DisplayBoardPlaneMesh,
-  _props: DisplayBoardComponentProps,
+  props: DisplayBoardComponentProps,
   mediaSize: { width: number; height: number } | null,
 ): { width: number; height: number } | null {
   const { maxWidth, maxHeight } = resolveDisplayBoardScaleLimits(mesh)
-  const source = mediaSize && mediaSize.width > 0 && mediaSize.height > 0 ? mediaSize : null
+  const adaptation = props.adaptation === 'fill' ? 'fill' : 'fit'
 
+  if (adaptation === 'fill') {
+    return convertWorldSizeToGeometry(mesh, {
+      width: Math.max(maxWidth, 1e-3),
+      height: Math.max(maxHeight, 1e-3),
+    })
+  }
+
+  const source = selectDisplayBoardMediaSize(props, mediaSize)
   if (!source) {
-    const fallback = Math.min(maxWidth, maxHeight)
+    const fallback = Math.max(Math.min(maxWidth, maxHeight), 1e-3)
     return convertWorldSizeToGeometry(mesh, { width: fallback, height: fallback })
   }
 
-  const aspect = source.width / Math.max(source.height, 1e-6)
+  const fitted = fitDisplayBoardMediaWithinLimits({ maxWidth, maxHeight }, source)
+  return convertWorldSizeToGeometry(mesh, fitted)
+}
+
+function selectDisplayBoardMediaSize(
+  props: DisplayBoardComponentProps,
+  mediaSize: { width: number; height: number } | null,
+): { width: number; height: number } | null {
+  if (mediaSize && mediaSize.width > 0 && mediaSize.height > 0) {
+    return mediaSize
+  }
+  const intrinsicWidth = typeof props.intrinsicWidth === 'number' && props.intrinsicWidth > 0 ? props.intrinsicWidth : null
+  const intrinsicHeight =
+    typeof props.intrinsicHeight === 'number' && props.intrinsicHeight > 0 ? props.intrinsicHeight : null
+  if (!intrinsicWidth || !intrinsicHeight) {
+    return null
+  }
+  return { width: intrinsicWidth, height: intrinsicHeight }
+}
+
+function fitDisplayBoardMediaWithinLimits(
+  limits: { maxWidth: number; maxHeight: number },
+  mediaSize: { width: number; height: number },
+): { width: number; height: number } {
+  const maxWidth = Math.max(limits.maxWidth, 1e-3)
+  const maxHeight = Math.max(limits.maxHeight, 1e-3)
+  const aspect = mediaSize.width / Math.max(mediaSize.height, 1e-6)
+
   let width = maxWidth
   let height = width / Math.max(aspect, 1e-6)
 
@@ -1216,10 +1251,10 @@ function computeDisplayBoardPlaneSize(
     width = height * aspect
   }
 
-  width = Math.max(1e-3, width)
-  height = Math.max(1e-3, height)
-
-  return convertWorldSizeToGeometry(mesh, { width, height })
+  return {
+    width: Math.max(width, 1e-3),
+    height: Math.max(height, 1e-3),
+  }
 }
 
 function resolveDisplayBoardScaleLimits(mesh: DisplayBoardPlaneMesh): { maxWidth: number; maxHeight: number } {
@@ -9058,15 +9093,23 @@ export const useSceneStore = defineStore('scene', {
         const typedPatch = patch as Partial<DisplayBoardComponentProps>
         const hasIntrinsicWidth = Object.prototype.hasOwnProperty.call(typedPatch, 'intrinsicWidth')
         const hasIntrinsicHeight = Object.prototype.hasOwnProperty.call(typedPatch, 'intrinsicHeight')
+        const hasAdaptation = Object.prototype.hasOwnProperty.call(typedPatch, 'adaptation')
+        const nextAdaptation = hasAdaptation
+          ? typedPatch.adaptation === 'fill'
+            ? 'fill'
+            : 'fit'
+          : currentProps.adaptation ?? 'fit'
         const merged = clampDisplayBoardComponentProps({
           assetId: typeof typedPatch.assetId === 'string' ? typedPatch.assetId : currentProps.assetId,
           intrinsicWidth: hasIntrinsicWidth ? typedPatch.intrinsicWidth ?? undefined : currentProps.intrinsicWidth,
           intrinsicHeight: hasIntrinsicHeight ? typedPatch.intrinsicHeight ?? undefined : currentProps.intrinsicHeight,
+          adaptation: nextAdaptation,
         })
         const unchanged =
           (currentProps.assetId ?? '') === merged.assetId &&
           optionalNumberEquals(currentProps.intrinsicWidth, merged.intrinsicWidth) &&
-          optionalNumberEquals(currentProps.intrinsicHeight, merged.intrinsicHeight)
+          optionalNumberEquals(currentProps.intrinsicHeight, merged.intrinsicHeight) &&
+          (currentProps.adaptation ?? 'fit') === merged.adaptation
         if (unchanged) {
           return false
         }
