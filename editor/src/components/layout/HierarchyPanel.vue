@@ -23,8 +23,6 @@ const { hierarchyItems, selectedNodeId, selectedNodeIds, draggingAssetId } = sto
 
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 
-const opened = ref<string[]>([])
-const openedInitialized = ref(false)
 const selectionAnchorId = ref<string | null>(null)
 const suppressSelectionSync = ref(false)
 const dragState = ref<{ sourceId: string | null; targetId: string | null; position: HierarchyDropPosition | null }>(
@@ -45,6 +43,13 @@ const floating = computed(() => props.floating ?? false)
 const placementIcon = computed(() => (floating.value ? 'mdi-dock-left' : 'mdi-arrow-expand'))
 const placementTitle = computed(() => (floating.value ? '停靠到左侧' : '浮动显示'))
 
+const openedIds = computed({
+  get: () => sceneStore.getExpandedGroupIds(),
+  set: (next: string[]) => {
+    sceneStore.syncGroupExpansionState(next, { captureHistory: false })
+  },
+})
+
 
 const active = computed({
   get: () => (selectedNodeId.value ? [selectedNodeId.value] : []),
@@ -55,29 +60,6 @@ const active = computed({
     }
   },
 })
-
-watch(
-  hierarchyItems,
-  (items: HierarchyTreeItem[]) => {
-    const flattened = Array.isArray(items) ? flattenHierarchyItems(items) : []
-    if (!openedInitialized.value) {
-      opened.value = flattened.map((item) => item.id)
-      openedInitialized.value = true
-      return
-    }
-
-    if (!opened.value.length) {
-      return
-    }
-
-    const availableIds = new Set(flattened.map((item) => item.id))
-    const nextOpened = opened.value.filter((id) => availableIds.has(id))
-    if (nextOpened.length !== opened.value.length) {
-      opened.value = nextOpened
-    }
-  },
-  { immediate: true },
-)
 
 watch(draggingAssetId, (value) => {
   if (!value) {
@@ -109,6 +91,41 @@ const activeSceneNode = computed<SceneNode | null>(() => {
   }
   return findSceneNodeById(sceneStore.nodes, id)
 })
+
+const selectedGroupId = computed(() => {
+  const node = activeSceneNode.value
+  return node?.nodeType === 'Group' ? node.id : null
+})
+
+const selectedGroupExpanded = computed(() => {
+  const id = selectedGroupId.value
+  if (!id) {
+    return false
+  }
+  return sceneStore.isGroupExpanded(id)
+})
+
+const groupToggleIcon = computed(() => {
+  if (!selectedGroupId.value) {
+    return 'mdi-unfold-more-horizontal'
+  }
+  return selectedGroupExpanded.value ? 'mdi-unfold-less-horizontal' : 'mdi-unfold-more-horizontal'
+})
+
+const groupToggleTitle = computed(() => {
+  if (!selectedGroupId.value) {
+    return '展开/收起选中的组合'
+  }
+  return selectedGroupExpanded.value ? '收起组合' : '展开组合'
+})
+
+function handleToggleSelectedGroupExpansion() {
+  const id = selectedGroupId.value
+  if (!id) {
+    return
+  }
+  sceneStore.toggleGroupExpansion(id, { captureHistory: false })
+}
 
 function resolvePrefabAssetId(node: SceneNode | null): string | null {
   if (!node || !node.userData || typeof node.userData !== 'object') {
@@ -308,8 +325,8 @@ async function handleAssetDropOnNode(asset: ProjectAsset, parentId: string): Pro
         spawnCenter ?? undefined,
       )
       const moved = sceneStore.moveNode({ nodeId: instantiated.id, targetId: parentId, position: 'inside' })
-      if (moved && !opened.value.includes(parentId)) {
-        opened.value = [...opened.value, parentId]
+      if (moved) {
+        sceneStore.setGroupExpanded(parentId, true, { captureHistory: false })
       }
       if (!moved) {
         console.warn('Failed to nest prefab under target node', asset.id, parentId)
@@ -335,9 +352,7 @@ async function handleAssetDropOnNode(asset: ProjectAsset, parentId: string): Pro
         console.warn('Failed to add model asset as child node', asset.id, parentId)
         return
       }
-      if (!opened.value.includes(parentId)) {
-        opened.value = [...opened.value, parentId]
-      }
+      sceneStore.setGroupExpanded(parentId, true, { captureHistory: false })
     }
   } catch (error) {
     console.error('Failed to drop asset onto hierarchy node', asset.id, parentId, error)
@@ -735,14 +750,21 @@ async function handleDrop(event: DragEvent, targetId: string) {
   event.preventDefault()
   event.stopPropagation()
   const moved = sceneStore.moveNode({ nodeId: sourceId, targetId, position })
-  if (moved && position === 'inside' && !opened.value.includes(targetId)) {
-    opened.value = [...opened.value, targetId]
+  if (moved && position === 'inside') {
+    sceneStore.setGroupExpanded(targetId, true, { captureHistory: false })
   }
   resetDragState()
 }
 
 function handleNodeDoubleClick(nodeId: string) {
-  setActiveNode(nodeId)
+  const nextSelection = sceneStore.handleNodeDoubleClick(nodeId)
+  if (Array.isArray(nextSelection) && nextSelection.length) {
+    suppressSelectionSync.value = true
+    sceneStore.setSelection(nextSelection, { primaryId: nextSelection[nextSelection.length - 1] })
+    selectionAnchorId.value = nextSelection[nextSelection.length - 1] ?? null
+  } else {
+    setActiveNode(nodeId)
+  }
   sceneStore.requestCameraFocus(nodeId)
 }
 
@@ -905,6 +927,16 @@ function handleTreeDragLeave(event: DragEvent) {
           :disabled="!hasSelection "
           @click="handleDeleteSelected"
         />
+        <v-btn
+          :class="['global-toggle-btn', 'group-toggle-btn', { 'is-active': selectedGroupId && selectedGroupExpanded }]"
+          :icon="groupToggleIcon"
+          variant="text"
+          density="compact"
+          color="primary"
+          :title="groupToggleTitle"
+          :disabled="!selectedGroupId"
+          @click="handleToggleSelectedGroupExpansion"
+        />
         <v-spacer />
         <div class="tree-toolbar-right">
         <v-btn
@@ -941,7 +973,7 @@ function handleTreeDragLeave(event: DragEvent) {
         @mousedown="handleTreeBackgroundMouseDown"
       >
         <v-treeview
-          v-model:opened="opened"
+          v-model:opened="openedIds"
           v-model:activated="active"
           density="compact"
           :items="hierarchyItems"

@@ -457,6 +457,7 @@ export interface SceneNode {
   downloadStatus?: SceneNodeDownloadStatus;
   downloadError?: string | null;
   userData?: Record<string, unknown> | null;
+  groupExpanded?: boolean;
 }
 
 export interface GroundSettings {

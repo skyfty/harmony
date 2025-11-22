@@ -2457,6 +2457,7 @@ async function convertObjectToSceneNode(
       rotation,
       scale,
       visible,
+      groupExpanded: true,
       children: childrenNodes,
     }
     context.converted.add(object)
@@ -2965,6 +2966,81 @@ function buildParentMap(
     }
   })
   return map
+}
+
+function buildNodeLookup(nodes: SceneNode[]): Map<string, SceneNode> {
+  const lookup = new Map<string, SceneNode>()
+  const traverse = (list: SceneNode[]) => {
+    list.forEach((node) => {
+      lookup.set(node.id, node)
+      if (node.children?.length) {
+        traverse(node.children)
+      }
+    })
+  }
+  traverse(nodes)
+  return lookup
+}
+
+function isGroupNode(node: SceneNode | null | undefined): node is SceneNode {
+  return !!node && node.nodeType === 'Group'
+}
+
+function isGroupExpandedFlag(node: SceneNode | null | undefined): boolean {
+  if (!isGroupNode(node)) {
+    return false
+  }
+  return node.groupExpanded !== false
+}
+
+function collectExpandedGroupIds(nodes: SceneNode[]): string[] {
+  const result: string[] = []
+  const traverse = (list: SceneNode[]) => {
+    list.forEach((node) => {
+      if (isGroupNode(node) && isGroupExpandedFlag(node)) {
+        result.push(node.id)
+      }
+      if (node.children?.length) {
+        traverse(node.children)
+      }
+    })
+  }
+  traverse(nodes)
+  return result
+}
+
+function findNearestGroupAncestorId(
+  nodeId: string,
+  context: { parentMap: Map<string, string | null>; nodeLookup: Map<string, SceneNode> },
+): string | null {
+  let parentId = context.parentMap.get(nodeId) ?? null
+  while (parentId) {
+    const parentNode = context.nodeLookup.get(parentId)
+    if (isGroupNode(parentNode)) {
+      return parentId
+    }
+    parentId = context.parentMap.get(parentId) ?? null
+  }
+  return null
+}
+
+function resolveSelectableNodeId(
+  nodeId: string,
+  context: { parentMap: Map<string, string | null>; nodeLookup: Map<string, SceneNode> },
+): string {
+  let currentId = nodeId
+  while (true) {
+    const parentId = context.parentMap.get(currentId) ?? null
+    if (!parentId) {
+      return currentId
+    }
+    const parentNode = context.nodeLookup.get(parentId)
+    if (isGroupNode(parentNode) && !isGroupExpandedFlag(parentNode)) {
+      currentId = parentId
+      continue
+    }
+    return currentId
+  }
 }
 
 function filterTopLevelNodeIds(ids: string[], parentMap: Map<string, string | null>): string[] {
@@ -3750,6 +3826,27 @@ function resetPrefabRootTransform(root: SceneNode) {
   root.scale = root.scale ?? { x: 1, y: 1, z: 1 }
 }
 
+function ensurePrefabGroupRoot(node: SceneNode): SceneNode {
+  if (node.nodeType === 'Group') {
+    const cloned = cloneNode(node)
+    cloned.groupExpanded = false
+    return cloned
+  }
+  const wrapper: SceneNode = {
+    id: generateUuid(),
+    name: node.name?.trim().length ? `${node.name} Group` : 'Group Root',
+    nodeType: 'Group',
+    position: createVector(0, 0, 0),
+    rotation: createVector(0, 0, 0),
+    scale: createVector(1, 1, 1),
+    visible: node.visible ?? true,
+    locked: false,
+    groupExpanded: false,
+    children: [cloneNode(node)],
+  }
+  return wrapper
+}
+
 function createNodePrefabData(node: SceneNode, name: string, options: { resetRootTransform?: boolean } = {}): NodePrefabData {
   const normalizedName = normalizePrefabName(name) || 'Unnamed Prefab'
   const root = prepareNodePrefabRoot(node, { regenerateIds: false })
@@ -3827,7 +3924,8 @@ function buildSerializedPrefabPayload(
     resetRootTransform?: boolean
   },
 ): SerializedPrefabPayload {
-  const prefabData = createNodePrefabData(node, context.name ?? node.name ?? '', {
+  const prefabRoot = ensurePrefabGroupRoot(node)
+  const prefabData = createNodePrefabData(prefabRoot, context.name ?? node.name ?? '', {
     resetRootTransform: context.resetRootTransform !== false,
   })
   const dependencyAssetIds = collectPrefabAssetReferences(prefabData.root)
@@ -5110,14 +5208,23 @@ function normalizeSelectionIds(nodes: SceneNode[], ids?: string[] | null): strin
     return []
   }
   const validIds = new Set(flattenNodeIds(nodes))
+  const parentMap = buildParentMap(nodes)
+  const nodeLookup = buildNodeLookup(nodes)
   const seen = new Set<string>()
   const normalized: string[] = []
   ids.forEach((id) => {
     if (!validIds.has(id) || seen.has(id)) {
       return
     }
-    normalized.push(id)
-    seen.add(id)
+    const resolvedId = resolveSelectableNodeId(id, { parentMap, nodeLookup })
+    if (seen.has(resolvedId)) {
+      return
+    }
+    if (!validIds.has(resolvedId)) {
+      return
+    }
+    normalized.push(resolvedId)
+    seen.add(resolvedId)
   })
   return normalized
 }
@@ -5989,6 +6096,117 @@ export const useSceneStore = defineStore('scene', {
       this.selectedNodeIds = normalized
       this.selectedNodeId = nextPrimary
       return true
+    },
+    isGroupExpanded(nodeId: string): boolean {
+      const node = findNodeById(this.nodes, nodeId)
+      return isGroupExpandedFlag(node)
+    },
+    getExpandedGroupIds(): string[] {
+      return collectExpandedGroupIds(this.nodes)
+    },
+    setGroupExpanded(nodeId: string, expanded: boolean, options: { captureHistory?: boolean; commit?: boolean } = {}) {
+      const node = findNodeById(this.nodes, nodeId)
+      if (!isGroupNode(node)) {
+        return false
+      }
+      const normalized = expanded !== false
+      const current = isGroupExpandedFlag(node)
+      if (current === normalized) {
+        return false
+      }
+      if (options.captureHistory !== false) {
+        this.captureHistorySnapshot()
+      }
+      node.groupExpanded = normalized
+      this.nodes = [...this.nodes]
+      if (!normalized) {
+        this.setSelection([...this.selectedNodeIds])
+      }
+      if (options.commit !== false) {
+        commitSceneSnapshot(this)
+      }
+      return true
+    },
+    syncGroupExpansionState(ids: string[], options: { captureHistory?: boolean; commit?: boolean } = {}) {
+      const targetIds = new Set(ids)
+      const assignments: Array<{ node: SceneNode; next: boolean }> = []
+      const collectAssignments = (list: SceneNode[]) => {
+        list.forEach((node) => {
+          if (isGroupNode(node)) {
+            const desired = targetIds.has(node.id)
+            const current = isGroupExpandedFlag(node)
+            if (desired !== current) {
+              assignments.push({ node, next: desired })
+            }
+          }
+          if (node.children?.length) {
+            collectAssignments(node.children)
+          }
+        })
+      }
+      collectAssignments(this.nodes)
+      if (!assignments.length) {
+        return false
+      }
+      if (options.captureHistory !== false) {
+        this.captureHistorySnapshot()
+      }
+      let selectionNeedsNormalization = false
+      assignments.forEach(({ node, next }) => {
+        node.groupExpanded = next
+        if (!next) {
+          selectionNeedsNormalization = true
+        }
+      })
+      this.nodes = [...this.nodes]
+      if (selectionNeedsNormalization) {
+        this.setSelection([...this.selectedNodeIds])
+      }
+      if (options.commit !== false) {
+        commitSceneSnapshot(this)
+      }
+      return true
+    },
+    toggleGroupExpansion(nodeId: string, options: { captureHistory?: boolean; commit?: boolean } = {}) {
+      const node = findNodeById(this.nodes, nodeId)
+      if (!isGroupNode(node)) {
+        return false
+      }
+      const next = !isGroupExpandedFlag(node)
+      return this.setGroupExpanded(nodeId, next, options)
+    },
+    findParentGroupId(nodeId: string): string | null {
+      const parentMap = buildParentMap(this.nodes)
+      const nodeLookup = buildNodeLookup(this.nodes)
+      return findNearestGroupAncestorId(nodeId, { parentMap, nodeLookup })
+    },
+    handleNodeDoubleClick(nodeId: string): string[] | null {
+      if (!nodeId) {
+        return null
+      }
+      const nodeLookup = buildNodeLookup(this.nodes)
+      if (!nodeLookup.has(nodeId)) {
+        return null
+      }
+      const parentMap = buildParentMap(this.nodes)
+      const groupId = findNearestGroupAncestorId(nodeId, { parentMap, nodeLookup })
+      if (!groupId) {
+        return [nodeId]
+      }
+      const groupNode = nodeLookup.get(groupId)
+      if (!isGroupNode(groupNode)) {
+        return [nodeId]
+      }
+      const expanded = isGroupExpandedFlag(groupNode)
+      if (!expanded) {
+        this.setGroupExpanded(groupId, true, { captureHistory: false })
+        return [nodeId]
+      }
+      if (this.selectedNodeId === nodeId) {
+        this.setGroupExpanded(groupId, false, { captureHistory: false })
+        return [groupId]
+      }
+      return [nodeId]
     },
     selectNode(id: string | null) {
       this.setSelection(id ? [id] : [], {primaryId: id })
@@ -7686,6 +7904,9 @@ export const useSceneStore = defineStore('scene', {
       duplicate.position = toPlainVector(spawnPosition)
       duplicate.rotation = duplicate.rotation ?? { x: 0, y: 0, z: 0 }
       duplicate.scale = duplicate.scale ?? { x: 1, y: 1, z: 1 }
+      if (duplicate.nodeType === 'Group') {
+        duplicate.groupExpanded = false
+      }
       if (options.sourceAssetId) {
         attachPrefabMetadata(duplicate, options.sourceAssetId)
       } else if (duplicate.userData && isPlainRecord(duplicate.userData)) {
@@ -7740,6 +7961,9 @@ export const useSceneStore = defineStore('scene', {
         }
       }
       useAssetCacheStore().recalculateUsage(this.nodes)
+      if (duplicate.nodeType === 'Group') {
+        duplicate.groupExpanded = false
+      }
       this.setSelection([duplicate.id], { primaryId: duplicate.id })
       commitSceneSnapshot(this)
       return duplicate
@@ -8216,6 +8440,100 @@ export const useSceneStore = defineStore('scene', {
       this.nodeHighlightTargetId = null
     },
 
+    recenterGroupNode(groupId: string, options: { captureHistory?: boolean; commit?: boolean } = {}) {
+      const group = findNodeById(this.nodes, groupId)
+      if (!isGroupNode(group) || !group.children?.length) {
+        return false
+      }
+
+      const parentMap = buildParentMap(this.nodes)
+      const parentId = parentMap.get(groupId) ?? null
+      const parentWorldMatrix = parentId ? computeWorldMatrixForNode(this.nodes, parentId) : new Matrix4()
+      if (!parentWorldMatrix) {
+        return false
+      }
+
+      const childWorldMatrices = new Map<string, Matrix4>()
+      group.children.forEach((child) => {
+        const worldMatrix = computeWorldMatrixForNode(this.nodes, child.id)
+        if (worldMatrix) {
+          childWorldMatrices.set(child.id, worldMatrix)
+        }
+      })
+      if (!childWorldMatrices.size) {
+        return false
+      }
+
+      const boundingInfo = collectNodeBoundingInfo([group])
+      const groupInfo = boundingInfo.get(groupId)
+      if (!groupInfo || groupInfo.bounds.isEmpty()) {
+        return false
+      }
+
+      const centerWorld = groupInfo.bounds.getCenter(new Vector3())
+      const parentInverse = parentWorldMatrix.clone().invert()
+      const newLocalPositionVec = centerWorld.clone().applyMatrix4(parentInverse)
+      if (!Number.isFinite(newLocalPositionVec.x) || !Number.isFinite(newLocalPositionVec.y) || !Number.isFinite(newLocalPositionVec.z)) {
+        newLocalPositionVec.set(0, 0, 0)
+      }
+
+      const rotationVec = group.rotation ?? createVector(0, 0, 0)
+      const scaleVec = group.scale ?? createVector(1, 1, 1)
+      const groupQuaternion = new Quaternion().setFromEuler(new Euler(rotationVec.x, rotationVec.y, rotationVec.z, 'XYZ'))
+      const groupScale = new Vector3(scaleVec.x, scaleVec.y, scaleVec.z)
+      const newGroupLocalPosition = new Vector3(newLocalPositionVec.x, newLocalPositionVec.y, newLocalPositionVec.z)
+      const newGroupWorldMatrix = new Matrix4().multiplyMatrices(
+        parentWorldMatrix,
+        new Matrix4().compose(newGroupLocalPosition.clone(), groupQuaternion.clone(), groupScale.clone()),
+      )
+      const groupInverseWorldMatrix = newGroupWorldMatrix.clone().invert()
+
+      const childAdjustments: Array<{ id: string; position: Vector3Like; rotation: Vector3Like; scale: Vector3Like }> = []
+      childWorldMatrices.forEach((worldMatrix, childId) => {
+        const localMatrix = new Matrix4().multiplyMatrices(groupInverseWorldMatrix, worldMatrix)
+        const position = new Vector3()
+        const quaternion = new Quaternion()
+        const scale = new Vector3()
+        localMatrix.decompose(position, quaternion, scale)
+        const euler = new Euler().setFromQuaternion(quaternion, 'XYZ')
+        const rotationVec3 = new Vector3(euler.x, euler.y, euler.z)
+        childAdjustments.push({
+          id: childId,
+          position: toPlainVector(position),
+          rotation: toPlainVector(rotationVec3),
+          scale: toPlainVector(scale),
+        })
+      })
+
+      if (!childAdjustments.length) {
+        return false
+      }
+
+      if (options.captureHistory !== false) {
+        this.captureHistorySnapshot()
+      }
+
+      group.position = toPlainVector(newGroupLocalPosition)
+      componentManager.syncNode(group)
+
+      childAdjustments.forEach((adjustment) => {
+        const childNode = findNodeById(this.nodes, adjustment.id)
+        if (!childNode) {
+          return
+        }
+        childNode.position = adjustment.position
+        childNode.rotation = adjustment.rotation
+        childNode.scale = adjustment.scale
+        componentManager.syncNode(childNode)
+      })
+
+      this.nodes = [...this.nodes]
+      if (options.commit) {
+        commitSceneSnapshot(this)
+      }
+      return true
+    },
+
     isDescendant(ancestorId: string, maybeChildId: string) {
       if (!ancestorId || !maybeChildId) return false
       if (ancestorId === maybeChildId) return true
@@ -8307,6 +8625,12 @@ export const useSceneStore = defineStore('scene', {
 
       this.captureHistorySnapshot()
       this.nodes = tree
+      if (oldParentId) {
+        this.recenterGroupNode(oldParentId, { captureHistory: false, commit: false })
+      }
+      if (newParentId && newParentId !== oldParentId) {
+        this.recenterGroupNode(newParentId, { captureHistory: false, commit: false })
+      }
       commitSceneSnapshot(this)
       return true
     },
@@ -8863,6 +9187,10 @@ export const useSceneStore = defineStore('scene', {
         userData: warpGateEvaluation.sanitizedUserData,
       }
 
+      if (nodeType === 'Group') {
+        node.groupExpanded = true
+      }
+
       node.components = normalizeNodeComponents(node, payload.components, {
         attachGuideboard: guideboardEvaluation.shouldAttachGuideboard,
         attachViewPoint: viewPointEvaluation.shouldAttachViewPoint,
@@ -8887,6 +9215,9 @@ export const useSceneStore = defineStore('scene', {
         nextTree = [node, ...this.nodes]
       }
       this.nodes = nextTree
+      if (parentId) {
+        this.recenterGroupNode(parentId, { captureHistory: false, commit: false })
+      }
       this.setSelection([id], { primaryId: id })
       commitSceneSnapshot(this)
 
@@ -9741,6 +10072,7 @@ export const useSceneStore = defineStore('scene', {
         scale: createVector(groupLocalScaleVec.x, groupLocalScaleVec.y, groupLocalScaleVec.z),
         visible: true,
         locked: false,
+        groupExpanded: true,
         children: removedNodes,
       }
 
