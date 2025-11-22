@@ -3,7 +3,7 @@ import type { LightNodeType, SceneNodeType } from '@harmony/schema'
 export const NODE_TYPE_ICONS: Record<SceneNodeType, string> = {
   Mesh: 'mdi-cube-outline',
   Light: 'mdi-lightbulb-outline',
-  Group: 'mdi-folder-outline',
+  Group: 'mdi-cube',
   Sky: 'mdi-weather-partly-cloudy',
   Environment: 'mdi-earth',
   Camera: 'mdi-video-outline',
@@ -34,9 +34,17 @@ type NodeIconParams = {
   nodeType?: SceneNodeType | null
   lightType?: LightNodeType | null
   hasChildren?: boolean
+  nodeId?: string | null
 }
 
-export function getNodeIcon({ nodeType, lightType, hasChildren }: NodeIconParams): string {
+const GROUND_NODE_ID = 'harmony:ground'
+const GROUND_ICON = 'mdi-grass'
+
+export function getNodeIcon({ nodeType, lightType, hasChildren, nodeId }: NodeIconParams): string {
+  if (nodeId === GROUND_NODE_ID || nodeType === 'Ground') {
+    return GROUND_ICON
+  }
+
   if (nodeType === 'Light') {
     if (lightType && lightType in LIGHT_TYPE_ICONS) {
       return LIGHT_TYPE_ICONS[lightType]

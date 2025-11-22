@@ -5023,7 +5023,15 @@ function handlePointerUp(event: PointerEvent) {
           if (!hit) {
             hit = pickActiveSelectionBoundingBoxHit(event)
           }
-          if (hit && hit.nodeId === primaryId) {
+
+          const primaryNode = findSceneNode(props.sceneNodes, primaryId)
+          const hitMatchesPrimary = Boolean(
+            hit &&
+            (hit.nodeId === primaryId ||
+              (primaryNode?.nodeType === 'Group' && sceneStore.isDescendant(primaryId, hit.nodeId)))
+          )
+
+          if (hitMatchesPrimary) {
             event.preventDefault()
             event.stopPropagation()
             rotateActiveSelection(primaryId)

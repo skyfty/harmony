@@ -492,6 +492,7 @@ function getNodeInteractionClasses(id: string) {
 
 function resolveNodeIcon(item: HierarchyTreeItem) {
   return getNodeIcon({
+    nodeId: item.id,
     nodeType: item.nodeType,
     lightType: item.lightType,
     hasChildren: Boolean(item.children?.length),
