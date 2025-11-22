@@ -786,7 +786,7 @@ function resolveNodeIdFromObject(object: THREE.Object3D | null): string | null {
   return null
 }
 
-function pickNodeAtPointer(event: PointerEvent): NodeHitResult | null {
+function pickNodeAtPointer(event: { clientX: number; clientY: number }): NodeHitResult | null {
   if (!canvasRef.value || !camera) {
     return null
   }
@@ -2995,6 +2995,7 @@ function initScene() {
   gizmoControls.update()
 
   canvasRef.value.addEventListener('pointerdown', handlePointerDown, { capture: true })
+  canvasRef.value.addEventListener('dblclick', handleCanvasDoubleClick, { capture: true })
   canvasRef.value.addEventListener('contextmenu', handleViewportContextMenu)
   if (typeof window !== 'undefined') {
     window.addEventListener('pointermove', handlePointerMove)
@@ -3626,6 +3627,7 @@ function disposeScene() {
 
   if (canvasRef.value) {
     canvasRef.value.removeEventListener('pointerdown', handlePointerDown, { capture: true })
+    canvasRef.value.removeEventListener('dblclick', handleCanvasDoubleClick, { capture: true })
     canvasRef.value.removeEventListener('contextmenu', handleViewportContextMenu)
   }
   if (typeof window !== 'undefined') {
@@ -5089,6 +5091,29 @@ function handlePointerCancel(event: PointerEvent) {
 
   updateSelectionHighlights()
   pointerTrackingState = null
+}
+
+function handleCanvasDoubleClick(event: MouseEvent) {
+  if (!scene || !camera || !canvasRef.value) {
+    return
+  }
+  if (nodePickerStore.isActive || isAltOverrideActive) {
+    return
+  }
+  if (transformControls?.dragging) {
+    return
+  }
+  const hit = pickNodeAtPointer(event)
+  if (!hit) {
+    return
+  }
+  const nextSelection = sceneStore.handleNodeDoubleClick(hit.nodeId)
+  const appliedSelection = Array.isArray(nextSelection) && nextSelection.length ? nextSelection : [hit.nodeId]
+  emitSelectionChange(appliedSelection)
+  const focusTarget = appliedSelection[appliedSelection.length - 1] ?? hit.nodeId
+  sceneStore.requestCameraFocus(focusTarget)
+  event.preventDefault()
+  event.stopPropagation()
 }
 
 function commitGroundModification(
