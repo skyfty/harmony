@@ -132,6 +132,7 @@ import {
 } from './assetCatalog'
 import type {
   DisplayBoardComponentProps,
+  EffectComponentProps,
   GuideboardComponentProps,
   ViewPointComponentProps,
   WallComponentProps,
@@ -143,6 +144,7 @@ import {
   VIEW_POINT_COMPONENT_TYPE,
   WARP_GATE_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
+  EFFECT_COMPONENT_TYPE,
   BEHAVIOR_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_THICKNESS,
@@ -163,6 +165,9 @@ import {
   clampWarpGateComponentProps,
   cloneWarpGateComponentProps,
   createWarpGateComponentState,
+  clampEffectComponentProps,
+  cloneEffectComponentProps,
+  createEffectComponentState,
   componentManager,
   resolveWallComponentPropsFromMesh,
 } from '@schema/components'
@@ -665,6 +670,37 @@ function normalizeNodeComponents(
   } else if (options.attachWarpGate) {
     normalized[WARP_GATE_COMPONENT_TYPE] = {
       ...createWarpGateComponentState(node, undefined, { id: generateUuid(), enabled: true }),
+    }
+  }
+
+  const existingEffect = normalized[EFFECT_COMPONENT_TYPE] as
+    | SceneNodeComponentState<EffectComponentProps>
+    | undefined
+  if (existingEffect) {
+    const nextProps = cloneEffectComponentProps(
+      clampEffectComponentProps(existingEffect.props as Partial<EffectComponentProps>),
+    )
+
+    let clonedMetadata: Record<string, unknown> | undefined
+    if (existingEffect.metadata) {
+      try {
+        clonedMetadata = structuredClone(existingEffect.metadata)
+      } catch (_error) {
+        try {
+          clonedMetadata = JSON.parse(JSON.stringify(existingEffect.metadata)) as Record<string, unknown>
+        } catch (_jsonError) {
+          console.warn('Failed to deeply clone effect component metadata, using shallow copy', _jsonError)
+          clonedMetadata = { ...existingEffect.metadata }
+        }
+      }
+    }
+
+    normalized[EFFECT_COMPONENT_TYPE] = {
+      id: existingEffect.id && existingEffect.id.trim().length ? existingEffect.id : generateUuid(),
+      type: EFFECT_COMPONENT_TYPE,
+      enabled: existingEffect.enabled ?? true,
+      props: nextProps,
+      metadata: clonedMetadata,
     }
   }
 
@@ -9765,6 +9801,25 @@ export const useSceneStore = defineStore('scene', {
           return false
         }
         nextProps = cloneDisplayBoardComponentProps(merged)
+      } else if (type === EFFECT_COMPONENT_TYPE) {
+        const currentProps = component.props as EffectComponentProps
+        const typedPatch = patch as Partial<EffectComponentProps>
+        const merged = clampEffectComponentProps({
+          ...currentProps,
+          ...typedPatch,
+          groundLight: {
+            ...currentProps.groundLight,
+            ...(typedPatch.groundLight ?? {}),
+          },
+        })
+        const unchanged =
+          currentProps.effectType === merged.effectType &&
+          currentProps.groundLight.color === merged.groundLight.color &&
+          Math.abs(currentProps.groundLight.intensity - merged.groundLight.intensity) <= 1e-4
+        if (unchanged) {
+          return false
+        }
+        nextProps = cloneEffectComponentProps(merged)
       } else {
         const currentProps = component.props as Record<string, unknown>
         const merged = { ...currentProps, ...patch }

@@ -28,6 +28,7 @@ import {
 	wallComponentDefinition,
 	viewPointComponentDefinition,
 	warpGateComponentDefinition,
+	effectComponentDefinition,
 	GUIDEBOARD_COMPONENT_TYPE,
 } from '@schema/components'
 import type { GuideboardComponentProps } from '@schema/components'
@@ -125,6 +126,7 @@ previewComponentManager.registerDefinition(guideboardComponentDefinition)
 previewComponentManager.registerDefinition(displayBoardComponentDefinition)
 previewComponentManager.registerDefinition(viewPointComponentDefinition)
 previewComponentManager.registerDefinition(warpGateComponentDefinition)
+previewComponentManager.registerDefinition(effectComponentDefinition)
 previewComponentManager.registerDefinition(behaviorComponentDefinition)
 
 const previewNodeMap = new Map<string, SceneNode>()

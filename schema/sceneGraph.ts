@@ -26,6 +26,12 @@ import type { ViewPointComponentProps } from './components/definitions/viewPoint
 import { VIEW_POINT_COMPONENT_TYPE } from './components/definitions/viewPointComponent';
 import type { WarpGateComponentProps } from './components/definitions/warpGateComponent';
 import { WARP_GATE_COMPONENT_TYPE } from './components/definitions/warpGateComponent';
+import type { EffectComponentProps } from './components/definitions/effectComponent';
+import {
+  EFFECT_COMPONENT_TYPE,
+  EFFECT_METADATA_KEY,
+  clampEffectComponentProps,
+} from './components/definitions/effectComponent';
 
 type SceneNodeWithExtras = SceneNode & {
   light?: {
@@ -584,6 +590,21 @@ class SceneGraphBuilder {
     if (warpGateState?.enabled) {
       helperData.warpGate = true;
     }
+    const effectState = node.components?.[EFFECT_COMPONENT_TYPE] as
+      | SceneNodeComponentState<EffectComponentProps>
+      | undefined;
+    if (effectState?.enabled) {
+      const effectProps = clampEffectComponentProps(effectState.props as Partial<EffectComponentProps>);
+      const registry = (helperData as Record<string, unknown>)[EFFECT_METADATA_KEY] as
+        | Record<string, unknown>
+        | undefined;
+      const map = registry ?? {};
+      map[effectState.id ?? EFFECT_COMPONENT_TYPE] = {
+        type: effectProps.effectType,
+        props: effectProps,
+      };
+      (helperData as Record<string, unknown>)[EFFECT_METADATA_KEY] = map;
+    }
     placeholder.userData = helperData;
 
     if (Array.isArray(node.children) && node.children.length) {
@@ -851,6 +872,19 @@ class SceneGraphBuilder {
       | undefined;
     if (warpGateState?.enabled) {
       metadata.warpGate = true;
+    }
+    const effectState = node.components?.[EFFECT_COMPONENT_TYPE] as
+      | SceneNodeComponentState<EffectComponentProps>
+      | undefined;
+    if (effectState?.enabled) {
+      const effectProps = clampEffectComponentProps(effectState.props as Partial<EffectComponentProps>);
+      const existing = metadata[EFFECT_METADATA_KEY] as Record<string, unknown> | undefined;
+      const map = existing ?? {};
+      map[effectState.id ?? EFFECT_COMPONENT_TYPE] = {
+        type: effectProps.effectType,
+        props: effectProps,
+      };
+      metadata[EFFECT_METADATA_KEY] = map;
     }
   }
 

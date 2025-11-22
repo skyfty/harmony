@@ -8,6 +8,7 @@ import WallPanel from '@/components/inspector/WallPanel.vue'
 import GuideboardPanel from '@/components/inspector/GuideboardPanel.vue'
 import ViewPointPanel from '@/components/inspector/ViewPointPanel.vue'
 import WarpGatePanel from '@/components/inspector/WarpGatePanel.vue'
+import EffectPanel from '@/components/inspector/EffectPanel.vue'
 import GroundPanel from '@/components/inspector/GroundPanel.vue'
 import SkyPanel from '@/components/inspector/SkyPanel.vue'
 import EnvironmentPanel from '@/components/inspector/EnvironmentPanel.vue'
@@ -25,6 +26,7 @@ import {
   VIEW_POINT_COMPONENT_TYPE,
   WARP_GATE_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
+  EFFECT_COMPONENT_TYPE,
   componentManager,
 } from '@schema/components'
 
@@ -368,6 +370,7 @@ function handleAddComponent(type: string) {
               <GuideboardPanel v-else-if="component.type === GUIDEBOARD_COMPONENT_TYPE" />
               <ViewPointPanel v-else-if="component.type === VIEW_POINT_COMPONENT_TYPE" />
               <WarpGatePanel v-else-if="component.type === WARP_GATE_COMPONENT_TYPE" />
+              <EffectPanel v-else-if="component.type === EFFECT_COMPONENT_TYPE" />
               <WallPanel v-else-if="component.type === WALL_COMPONENT_TYPE" />
               <BehaviorPanel
                 v-else-if="component.type === BEHAVIOR_COMPONENT_TYPE"
