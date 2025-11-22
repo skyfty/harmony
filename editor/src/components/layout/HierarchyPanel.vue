@@ -1,14 +1,21 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useSceneStore, type HierarchyDropPosition, PREFAB_SOURCE_METADATA_KEY } from '@/stores/sceneStore'
+import {
+  useSceneStore,
+  type HierarchyDropPosition,
+  PREFAB_SOURCE_METADATA_KEY,
+  GROUND_NODE_ID,
+  SKY_NODE_ID,
+  ENVIRONMENT_NODE_ID,
+} from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneNode } from '@harmony/schema'
 import { getNodeIcon } from '@/types/node-icons'
 import AddNodeMenu from '../common/AddNodeMenu.vue'
-import { Vector3 } from 'three'
+import { Group, Vector3 } from 'three'
 
 const props = defineProps<{ floating?: boolean }>()
 
@@ -232,6 +239,141 @@ function findSceneNodeById(nodes: SceneNode[] | undefined, id: string): SceneNod
   return null
 }
 
+type ParentInfo = { parentId: string | null; parentNode: SceneNode | null }
+
+function findParentInfo(nodeId: string): ParentInfo {
+  if (!nodeId) {
+    return { parentId: null, parentNode: null }
+  }
+  const stack: Array<{ list: SceneNode[]; parent: SceneNode | null }> = [{ list: sceneStore.nodes, parent: null }]
+  while (stack.length) {
+    const current = stack.pop()
+    if (!current) {
+      continue
+    }
+    for (const entry of current.list) {
+      if (!entry) {
+        continue
+      }
+      if (entry.id === nodeId) {
+        return { parentId: current.parent?.id ?? null, parentNode: current.parent ?? null }
+      }
+      if (entry.children?.length) {
+        stack.push({ list: entry.children, parent: entry })
+      }
+    }
+  }
+  return { parentId: null, parentNode: null }
+}
+
+function wrapNodeIntoNewGroup(targetId: string, adoptNodeId?: string | null): string | null {
+  if (!targetId) {
+    return null
+  }
+  const protectedIds = new Set([GROUND_NODE_ID, SKY_NODE_ID, ENVIRONMENT_NODE_ID])
+  if (protectedIds.has(targetId)) {
+    return null
+  }
+  if (adoptNodeId && protectedIds.has(adoptNodeId)) {
+    return null
+  }
+  const targetNode = findSceneNodeById(sceneStore.nodes, targetId)
+  if (!targetNode) {
+    return null
+  }
+  const { parentId } = findParentInfo(targetId)
+  const previousSelectionIds = [...sceneStore.selectedNodeIds]
+  const previousPrimaryId = sceneStore.selectedNodeId ?? null
+  const groupName = typeof sceneStore.generateGroupNodeName === 'function'
+    ? sceneStore.generateGroupNodeName()
+    : 'Group'
+  const groupObject = new Group()
+  groupObject.name = groupName
+  const groupNode = sceneStore.addSceneNode({
+    nodeType: 'Group',
+    object: groupObject,
+    name: groupName,
+    parentId: parentId ?? undefined,
+  })
+  if (!groupNode) {
+    sceneStore.setSelection(previousSelectionIds, { primaryId: previousPrimaryId })
+    return null
+  }
+
+  const repositioned = sceneStore.moveNode({ nodeId: groupNode.id, targetId, position: 'before' })
+  if (!repositioned) {
+    console.warn('Failed to align new group before target node', groupNode.id, targetId)
+  }
+
+  const movedTarget = sceneStore.moveNode({ nodeId: targetId, targetId: groupNode.id, position: 'inside' })
+  if (!movedTarget) {
+    console.warn('Failed to move target node into new group', targetId, groupNode.id)
+    sceneStore.setSelection(previousSelectionIds, { primaryId: previousPrimaryId })
+    return null
+  }
+
+  if (adoptNodeId && adoptNodeId !== targetId) {
+    const movedAdopted = sceneStore.moveNode({ nodeId: adoptNodeId, targetId: groupNode.id, position: 'inside' })
+    if (!movedAdopted) {
+      console.warn('Failed to move dragged node into new group', adoptNodeId, groupNode.id)
+      sceneStore.setSelection(previousSelectionIds, { primaryId: previousPrimaryId })
+      return null
+    }
+  }
+
+  sceneStore.setGroupExpanded(groupNode.id, true, { captureHistory: false })
+  sceneStore.setSelection(previousSelectionIds, { primaryId: previousPrimaryId })
+  return groupNode.id
+}
+
+type NodeDropResolution = { targetId: string | null; position: HierarchyDropPosition } | 'handled' | null
+
+function resolveNodeDropResolution(sourceId: string, targetId: string): NodeDropResolution {
+  if (!sourceId || !targetId) {
+    return null
+  }
+  const targetNode = findSceneNodeById(sceneStore.nodes, targetId)
+  if (!targetNode) {
+    return null
+  }
+  if (!sceneStore.nodeAllowsChildCreation(targetId)) {
+    return null
+  }
+  if (targetNode.nodeType === 'Group') {
+    return { targetId, position: 'inside' }
+  }
+  const { parentNode } = findParentInfo(targetId)
+  if (parentNode && parentNode.nodeType === 'Group') {
+    return { targetId, position: 'after' }
+  }
+  const newGroupId = wrapNodeIntoNewGroup(targetId, sourceId)
+  if (!newGroupId) {
+    return null
+  }
+  return 'handled'
+}
+
+function resolveAssetDropParentId(targetId: string): string | null {
+  if (!targetId) {
+    return null
+  }
+  const targetNode = findSceneNodeById(sceneStore.nodes, targetId)
+  if (!targetNode) {
+    return null
+  }
+  if (!sceneStore.nodeAllowsChildCreation(targetId)) {
+    return null
+  }
+  if (targetNode.nodeType === 'Group') {
+    return targetId
+  }
+  const { parentId, parentNode } = findParentInfo(targetId)
+  if (parentNode && parentNode.nodeType === 'Group') {
+    return parentId
+  }
+  return wrapNodeIntoNewGroup(targetId)
+}
+
 function nodeSupportsMaterials(node: SceneNode | null | undefined): boolean {
   if (!node) {
     return false
@@ -315,21 +457,27 @@ async function ensureModelAssetCached(asset: ProjectAsset): Promise<void> {
   }
 }
 
-async function handleAssetDropOnNode(asset: ProjectAsset, parentId: string): Promise<void> {
+async function handleAssetDropOnNode(asset: ProjectAsset, targetId: string): Promise<void> {
+  let resolvedParentId: string | null = null
   try {
-    const parentCenter = sceneStore.getNodeWorldCenter(parentId)
+    resolvedParentId = resolveAssetDropParentId(targetId)
+    if (!resolvedParentId) {
+      console.warn('Unable to resolve valid group parent for asset drop', asset.id, targetId)
+      return
+    }
+    const parentCenter = sceneStore.getNodeWorldCenter(resolvedParentId)
     const spawnCenter = parentCenter ? parentCenter.clone() : null
     if (asset.type === 'prefab') {
       const instantiated = await sceneStore.instantiateNodePrefabAsset(
         asset.id,
         spawnCenter ?? undefined,
       )
-      const moved = sceneStore.moveNode({ nodeId: instantiated.id, targetId: parentId, position: 'inside' })
+      const moved = sceneStore.moveNode({ nodeId: instantiated.id, targetId: resolvedParentId, position: 'inside' })
       if (moved) {
-        sceneStore.setGroupExpanded(parentId, true, { captureHistory: false })
+        sceneStore.setGroupExpanded(resolvedParentId, true, { captureHistory: false })
       }
       if (!moved) {
-        console.warn('Failed to nest prefab under target node', asset.id, parentId)
+        console.warn('Failed to nest prefab under target node', asset.id, resolvedParentId)
       }
       return
     }
@@ -342,20 +490,20 @@ async function handleAssetDropOnNode(asset: ProjectAsset, parentId: string): Pro
         position?: Vector3
       } = {
         asset,
-        parentId,
+        parentId: resolvedParentId,
       }
       if (spawnCenter) {
         payload.position = spawnCenter.clone()
       }
       const node = await sceneStore.addModelNode(payload)
       if (!node) {
-        console.warn('Failed to add model asset as child node', asset.id, parentId)
+        console.warn('Failed to add model asset as child node', asset.id, resolvedParentId)
         return
       }
-      sceneStore.setGroupExpanded(parentId, true, { captureHistory: false })
+      sceneStore.setGroupExpanded(resolvedParentId, true, { captureHistory: false })
     }
   } catch (error) {
-    console.error('Failed to drop asset onto hierarchy node', asset.id, parentId, error)
+    console.error('Failed to drop asset onto hierarchy node', asset.id, resolvedParentId ?? targetId, error)
     assetCacheStore.setError(asset.id, (error as Error).message ?? 'Failed to place asset')
   }
 }
@@ -657,6 +805,13 @@ function handleDragOver(event: DragEvent, targetId: string) {
       }
       return
     }
+    if (!sceneStore.nodeAllowsChildCreation(targetId)) {
+      assetDropTargetId.value = null
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = 'none'
+      }
+      return
+    }
     assetDropTargetId.value = targetId
     assetRootDropActive.value = false
     event.preventDefault()
@@ -685,6 +840,15 @@ function handleDragOver(event: DragEvent, targetId: string) {
   }
 
   const position = resolveDropPosition(event)
+  if (position === 'inside' && !sceneStore.nodeAllowsChildCreation(targetId)) {
+    dragState.value = { sourceId, targetId, position: null }
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'none'
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    return
+  }
   dragState.value = { sourceId, targetId, position }
   event.preventDefault()
   event.stopPropagation()
@@ -735,6 +899,10 @@ async function handleDrop(event: DragEvent, targetId: string) {
     assetRootDropActive.value = false
     event.preventDefault()
     event.stopPropagation()
+    if (!sceneStore.nodeAllowsChildCreation(targetId)) {
+      resetDragState()
+      return
+    }
     if (hierarchyAsset.type === 'model' || hierarchyAsset.type === 'prefab') {
       await handleAssetDropOnNode(hierarchyAsset, targetId)
     } else {
@@ -750,9 +918,24 @@ async function handleDrop(event: DragEvent, targetId: string) {
   }
   event.preventDefault()
   event.stopPropagation()
-  const moved = sceneStore.moveNode({ nodeId: sourceId, targetId, position })
-  if (moved && position === 'inside') {
-    sceneStore.setGroupExpanded(targetId, true, { captureHistory: false })
+  let resolvedTargetId: string | null = targetId
+  let resolvedPosition = position
+  if (position === 'inside') {
+    const resolution = resolveNodeDropResolution(sourceId, targetId)
+    if (!resolution) {
+      resetDragState()
+      return
+    }
+    if (resolution === 'handled') {
+      resetDragState()
+      return
+    }
+    resolvedTargetId = resolution.targetId
+    resolvedPosition = resolution.position
+  }
+  const moved = sceneStore.moveNode({ nodeId: sourceId, targetId: resolvedTargetId, position: resolvedPosition })
+  if (moved && resolvedPosition === 'inside' && resolvedTargetId) {
+    sceneStore.setGroupExpanded(resolvedTargetId, true, { captureHistory: false })
   }
   resetDragState()
 }

@@ -1446,6 +1446,7 @@ function createGroundSceneNode(
     id: GROUND_NODE_ID,
     name: 'Ground',
     nodeType: 'Mesh',
+    allowChildNodes: false,
     materials: [
       createNodeMaterial(null, createMaterialProps({
         color: '#707070',
@@ -1472,6 +1473,7 @@ function createSkySceneNode(overrides: { visible?: boolean; userData?: Record<st
     id: SKY_NODE_ID,
     name: 'Sky',
     nodeType: 'Sky',
+    allowChildNodes: false,
     position: createVector(0, 0, 0),
     rotation: createVector(0, 0, 0),
     scale: createVector(1, 1, 1),
@@ -1619,6 +1621,7 @@ function createEnvironmentSceneNode(
     id: ENVIRONMENT_NODE_ID,
     name: 'Environment',
     nodeType: 'Environment',
+    allowChildNodes: false,
     position: createVector(0, 0, 0),
     rotation: createVector(0, 0, 0),
     scale: createVector(1, 1, 1),
@@ -1716,6 +1719,7 @@ function normalizeGroundSceneNode(node: SceneNode | null | undefined, settings?:
       id: GROUND_NODE_ID,
       name: 'Ground',
   nodeType: 'Mesh',
+      allowChildNodes: false,
       materials: [
         createNodeMaterial(null, createMaterialProps({
           color: primaryMaterial?.color ?? '#707070',
@@ -5549,6 +5553,24 @@ function isDescendantNode(nodes: SceneNode[], ancestorId: string, childId: strin
   return nodeContainsId(ancestor, childId)
 }
 
+function allowsChildNodes(node: SceneNode | null | undefined): boolean {
+  if (!node) {
+    return true
+  }
+  if (node.allowChildNodes === false) {
+    return false
+  }
+  const nodeId = node.id
+  if (nodeId === GROUND_NODE_ID || nodeId === SKY_NODE_ID || nodeId === ENVIRONMENT_NODE_ID) {
+    return false
+  }
+  const nodeType = node.nodeType
+  if (nodeType === 'Sky' || nodeType === 'Environment') {
+    return false
+  }
+  return true
+}
+
 function detachNodeImmutable(nodes: SceneNode[], targetId: string): DetachResult {
   const nextTree: SceneNode[] = []
   let removed: SceneNode | null = null
@@ -5600,6 +5622,9 @@ function insertNodeMutable(
         return false
       }
       if (position === 'inside') {
+        if (!allowsChildNodes(current)) {
+          return false
+        }
         const children = current.children ? [...current.children, node] : [node]
         current.children = children
       } else if (position === 'before') {
@@ -8603,6 +8628,13 @@ export const useSceneStore = defineStore('scene', {
       if (ancestorId === maybeChildId) return true
       return isDescendantNode(this.nodes, ancestorId, maybeChildId)
     },
+    nodeAllowsChildCreation(nodeId: string | null) {
+      if (!nodeId) {
+        return true
+      }
+      const node = findNodeById(this.nodes, nodeId)
+      return allowsChildNodes(node)
+    },
 
     moveNode(payload: { nodeId: string; targetId: string | null; position: HierarchyDropPosition }) {
       const { nodeId, targetId, position } = payload
@@ -8643,6 +8675,13 @@ export const useSceneStore = defineStore('scene', {
       }
 
       let updatedLocal: { position: THREE.Vector3; rotation: THREE.Vector3; scale: THREE.Vector3 } | null = null
+
+      if (newParentId && newParentId !== oldParentId) {
+        const candidateParent = findNodeById(this.nodes, newParentId)
+        if (!candidateParent || candidateParent.nodeType !== 'Group' || !allowsChildNodes(candidateParent)) {
+          return false
+        }
+      }
 
       if (newParentId !== oldParentId) {
         const nodeWorldMatrix = computeWorldMatrixForNode(this.nodes, nodeId)
@@ -9271,6 +9310,12 @@ export const useSceneStore = defineStore('scene', {
       let parentId = payload.parentId ?? null
       if (parentId === SKY_NODE_ID || parentId === ENVIRONMENT_NODE_ID) {
         parentId = null
+      }
+      if (parentId) {
+        const parentNode = findNodeById(this.nodes, parentId)
+        if (!allowsChildNodes(parentNode)) {
+          parentId = null
+        }
       }
       if (parentId) {
         const workingTree = [...this.nodes]

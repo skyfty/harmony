@@ -397,7 +397,13 @@ function nodeSupportsMaterials(node: SceneNode | null): boolean {
 }
 
 function resolveModelParentNode(node: SceneNode | null): SceneNode | null {
-  if (!node) {
+  if (!node || node.isPlaceholder) {
+    return null
+  }
+  if (node.nodeType !== 'Group') {
+    return null
+  }
+  if (!sceneStore.nodeAllowsChildCreation(node.id)) {
     return null
   }
   if (node.id === GROUND_NODE_ID || node.id === SKY_NODE_ID || node.id === ENVIRONMENT_NODE_ID) {

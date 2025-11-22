@@ -584,7 +584,10 @@ function handleAddGroup() {
   const group = new THREE.Group()
   group.name = groupName
   const selectedNode = sceneStore.selectedNode
-  const parentId = selectedNode && !selectedNode.isPlaceholder ? selectedNode.id : null
+  let parentId = selectedNode && !selectedNode.isPlaceholder ? selectedNode.id : null
+  if (parentId && !sceneStore.nodeAllowsChildCreation(parentId)) {
+    parentId = null
+  }
   const spawnPosition = computeGroupSpawnPosition(parentId)
   sceneStore.addSceneNode({
     nodeType: 'Group',
@@ -763,10 +766,17 @@ function resolveTargetParentNode(parentId?: string | null): SceneNode | null {
   if (typeof parentId === 'string' && parentId.trim().length) {
     const located = findNodeWithParent(sceneStore.nodes, parentId)
     if (located?.node) {
-      return located.node
+      if (sceneStore.nodeAllowsChildCreation(located.node.id)) {
+        return located.node
+      }
+      return null
     }
   }
-  return resolveSelectedSceneNode()
+  const selected = resolveSelectedSceneNode()
+  if (selected && !sceneStore.nodeAllowsChildCreation(selected.id)) {
+    return null
+  }
+  return selected
 }
 
 const canCreateShowcaseNodes = computed(() => Boolean(resolveSelectedSceneNode()))
@@ -1295,7 +1305,10 @@ function handleCreateEmptyNode() {
   const name = getNextEmptyName()
   emptyObject.name = name
   const parentCandidate = sceneStore.selectedNode
-  const parentId = parentCandidate && !parentCandidate.isPlaceholder ? parentCandidate.id : null
+  let parentId = parentCandidate && !parentCandidate.isPlaceholder ? parentCandidate.id : null
+  if (parentId && !sceneStore.nodeAllowsChildCreation(parentId)) {
+    parentId = null
+  }
   sceneStore.addSceneNode({
     nodeType: 'Empty',
     object: emptyObject,
@@ -1608,25 +1621,16 @@ async function handleCreateShowcaseVisit(): Promise<void> {
   }
 }
 
-function resolveActiveModelParentId(): string | null {
-  const active = sceneStore.selectedNode
-  if (!active) {
-    return null
-  }
-  if (active.isPlaceholder) {
-    return null
-  }
-  const disallowed = ['Group', 'Light', 'Camera']
-  return disallowed.includes(active.nodeType) ? null : active.id
-}
-
 async function handleAddNode(geometry: GeometryType) {
   const mesh = createPrimitiveMesh(geometry)
   const selectedNode = sceneStore.selectedNode
   const parentIsGroup = Boolean(
     selectedNode && !selectedNode.isPlaceholder && selectedNode.nodeType === 'Group'
   )
-  const parentId = parentIsGroup ? selectedNode?.id ?? null : resolveActiveModelParentId()
+  const candidateParentId = parentIsGroup ? selectedNode?.id ?? null : null
+  const parentId = candidateParentId && sceneStore.nodeAllowsChildCreation(candidateParentId)
+    ? candidateParentId
+    : null
 
   let spawnY = 0
   if (!parentIsGroup) {
@@ -1652,7 +1656,7 @@ async function handleAddNode(geometry: GeometryType) {
     nodeType: geometry,
     name: mesh.name,
     baseY: parentIsGroup ? 0 : spawnY,
-    parentId,
+    parentId: parentId ?? undefined,
   })
 
   if (created && parentIsGroup) {
