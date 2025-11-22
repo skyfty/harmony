@@ -2264,7 +2264,35 @@ function updateOrbitCameraLookTween(delta: number): void {
 	const duration = tween.duration > 0 ? tween.duration : 0.0001
 	tween.elapsed = Math.min(tween.elapsed + delta, tween.duration)
 	const progress = easeInOutCubic(Math.min(1, tween.elapsed / duration))
-	tempTarget.copy(tween.from).lerp(tween.to, progress)
+	
+	// Use quaternion slerp for smooth rotation interpolation
+	const cameraPos = camera?.position ?? new THREE.Vector3(0, 0, 0)
+	const fromDir = tempDirection.copy(tween.from).sub(cameraPos).normalize()
+	const toDir = tempPosition.copy(tween.to).sub(cameraPos).normalize()
+	
+	// Create quaternions representing the rotations
+	const fromQuat = new THREE.Quaternion()
+	const toQuat = new THREE.Quaternion()
+	
+	// Use setFromUnitVectors to create quaternions that rotate from a reference direction to our target directions
+	const referenceDir = new THREE.Vector3(0, 0, -1)
+	fromQuat.setFromUnitVectors(referenceDir, fromDir)
+	toQuat.setFromUnitVectors(referenceDir, toDir)
+	
+	// Perform spherical linear interpolation (slerp)
+	const slerpedQuat = fromQuat.clone().slerp(toQuat, progress)
+	
+	// Apply the interpolated rotation to get the new direction
+	const interpolatedDir = referenceDir.clone().applyQuaternion(slerpedQuat)
+	
+	// Compute distance - interpolate linearly to handle targets at different distances
+	const fromDist = cameraPos.distanceTo(tween.from)
+	const toDist = cameraPos.distanceTo(tween.to)
+	const interpolatedDist = fromDist + (toDist - fromDist) * progress
+	
+	// Compute the interpolated target position
+	tempTarget.copy(cameraPos).add(interpolatedDir.multiplyScalar(interpolatedDist))
+	
 	mapControls.target.copy(tempTarget)
 	if (tween.elapsed >= tween.duration) {
 		mapControls.target.copy(tween.to)
@@ -2280,7 +2308,35 @@ function updateFirstPersonCameraLookTween(delta: number): void {
 	const duration = tween.duration > 0 ? tween.duration : 0.0001
 	tween.elapsed = Math.min(tween.elapsed + delta, tween.duration)
 	const progress = easeInOutCubic(Math.min(1, tween.elapsed / duration))
-	tempTarget.copy(tween.from).lerp(tween.to, progress)
+	
+	// Use quaternion slerp for smooth rotation interpolation
+	const cameraPos = camera.position
+	const fromDir = tempDirection.copy(tween.from).sub(cameraPos).normalize()
+	const toDir = tempPosition.copy(tween.to).sub(cameraPos).normalize()
+	
+	// Create quaternions representing the rotations
+	const fromQuat = new THREE.Quaternion()
+	const toQuat = new THREE.Quaternion()
+	
+	// Use setFromUnitVectors to create quaternions that rotate from a reference direction to our target directions
+	const referenceDir = new THREE.Vector3(0, 0, -1)
+	fromQuat.setFromUnitVectors(referenceDir, fromDir)
+	toQuat.setFromUnitVectors(referenceDir, toDir)
+	
+	// Perform spherical linear interpolation (slerp)
+	const slerpedQuat = fromQuat.clone().slerp(toQuat, progress)
+	
+	// Apply the interpolated rotation to get the new direction
+	const interpolatedDir = referenceDir.clone().applyQuaternion(slerpedQuat)
+	
+	// Compute distance - interpolate linearly to handle targets at different distances
+	const fromDist = cameraPos.distanceTo(tween.from)
+	const toDist = cameraPos.distanceTo(tween.to)
+	const interpolatedDist = fromDist + (toDist - fromDist) * progress
+	
+	// Compute the interpolated target position
+	tempTarget.copy(cameraPos).add(interpolatedDir.multiplyScalar(interpolatedDist))
+	
 	firstPersonControls.lookAt(tempTarget.x, tempTarget.y, tempTarget.z)
 	if (tween.elapsed >= tween.duration) {
 		firstPersonControls.lookAt(tween.to.x, tween.to.y, tween.to.z)
