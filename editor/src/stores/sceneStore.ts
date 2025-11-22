@@ -2960,6 +2960,16 @@ export function getRuntimeObject(id: string): Object3D | null {
   return runtimeObjectRegistry.get(id) ?? null
 }
 
+function reattachRuntimeObjectsForNodes(nodes: SceneNode[]): void {
+  runtimeObjectRegistry.forEach((object, nodeId) => {
+    const node = findNodeById(nodes, nodeId)
+    if (!node) {
+      return
+    }
+    componentManager.attachRuntime(node, object)
+  })
+}
+
 function tagObjectWithNodeId(object: Object3D, nodeId: string) {
   object.userData = {
     ...(object.userData ?? {}),
@@ -10957,6 +10967,7 @@ export const useSceneStore = defineStore('scene', {
         useAssetCacheStore().recalculateUsage(this.nodes)
         componentManager.reset()
         componentManager.syncScene(this.nodes)
+        reattachRuntimeObjectsForNodes(this.nodes)
         this.rebuildGeneratedMeshRuntimes()
       } finally {
         this.isSceneReady = true
