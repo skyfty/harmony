@@ -5126,8 +5126,6 @@ function handleCanvasDoubleClick(event: MouseEvent) {
   const nextSelection = sceneStore.handleNodeDoubleClick(hit.nodeId)
   const appliedSelection = Array.isArray(nextSelection) && nextSelection.length ? nextSelection : [hit.nodeId]
   emitSelectionChange(appliedSelection)
-  const focusTarget = appliedSelection[appliedSelection.length - 1] ?? hit.nodeId
-  sceneStore.requestCameraFocus(focusTarget)
   event.preventDefault()
   event.stopPropagation()
 }
