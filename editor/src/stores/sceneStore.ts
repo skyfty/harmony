@@ -9815,7 +9815,8 @@ export const useSceneStore = defineStore('scene', {
         const unchanged =
           currentProps.effectType === merged.effectType &&
           currentProps.groundLight.color === merged.groundLight.color &&
-          Math.abs(currentProps.groundLight.intensity - merged.groundLight.intensity) <= 1e-4
+          Math.abs(currentProps.groundLight.intensity - merged.groundLight.intensity) <= 1e-4 &&
+          Math.abs(currentProps.groundLight.scale - merged.groundLight.scale) <= 1e-4
         if (unchanged) {
           return false
         }

@@ -208,6 +208,7 @@ import {
   viewPointComponentDefinition,
   warpGateComponentDefinition,
   effectComponentDefinition,
+  RUNTIME_REGISTRY_KEY,
   GUIDEBOARD_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
 } from '@schema/components';
@@ -656,8 +657,13 @@ const lanternImagePromises = new Map<string, Promise<void>>();
 
 const activeBehaviorDelayTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const activeBehaviorAnimations = new Map<string, () => void>();
-const nodeAnimationControllers = new Map<string, { mixer: THREE.AnimationMixer; clips: THREE.AnimationClip[] }>();
+const nodeAnimationControllers = new Map<string, {
+  mixer: THREE.AnimationMixer;
+  clips: THREE.AnimationClip[];
+  defaultClip: THREE.AnimationClip | null;
+}>();
 let animationMixers: THREE.AnimationMixer[] = [];
+let effectRuntimeTickers: Array<(delta: number) => void> = [];
 
 type BehaviorProximityCandidate = { hasApproach: boolean; hasDepart: boolean };
 type BehaviorProximityState = { inside: boolean; lastDistance: number | null };
@@ -2355,6 +2361,26 @@ function updateBehaviorProximity(): void {
   });
 }
 
+function resetEffectRuntimeTickers(): void {
+  effectRuntimeTickers = [];
+}
+
+function refreshEffectRuntimeTickers(): void {
+  resetEffectRuntimeTickers();
+  nodeObjectMap.forEach((object) => {
+    const registry = object.userData?.[RUNTIME_REGISTRY_KEY] as Record<string, { tick?: (delta: number) => void }> | undefined;
+    if (!registry) {
+      return;
+    }
+    Object.values(registry).forEach((entry) => {
+      const tick = (entry as { tick?: (delta: number) => void }).tick;
+      if (typeof tick === 'function') {
+        effectRuntimeTickers.push(tick);
+      }
+    });
+  });
+}
+
 function resetAnimationControllers(): void {
   activeBehaviorAnimations.forEach((cancel) => {
     try {
@@ -2377,6 +2403,48 @@ function resetAnimationControllers(): void {
   });
   animationMixers = [];
   nodeAnimationControllers.clear();
+  resetEffectRuntimeTickers();
+}
+
+function pickDefaultAnimationClip(clips: THREE.AnimationClip[]): THREE.AnimationClip | null {
+  if (!Array.isArray(clips) || !clips.length) {
+    return null;
+  }
+  const finite = clips.find((clip) => Number.isFinite(clip.duration) && clip.duration > 0);
+  return finite ?? clips[0] ?? null;
+}
+
+function playAnimationClip(
+  mixer: THREE.AnimationMixer,
+  clip: THREE.AnimationClip,
+  options: { loop?: boolean } = {},
+): THREE.AnimationAction {
+  const { loop = false } = options;
+  const action = mixer.clipAction(clip);
+  action.reset();
+  action.enabled = true;
+  if (loop) {
+    action.setLoop(THREE.LoopRepeat, Number.POSITIVE_INFINITY);
+    action.clampWhenFinished = false;
+  } else {
+    action.setLoop(THREE.LoopOnce, 0);
+    action.clampWhenFinished = true;
+  }
+  action.play();
+  return action;
+}
+
+function restartDefaultAnimation(nodeId: string): void {
+  const controller = nodeAnimationControllers.get(nodeId);
+  if (!controller) {
+    return;
+  }
+  const clip = controller.defaultClip ?? pickDefaultAnimationClip(controller.clips);
+  if (!clip) {
+    return;
+  }
+  controller.defaultClip = clip;
+  playAnimationClip(controller.mixer, clip, { loop: true });
 }
 
 function refreshAnimationControllers(root: THREE.Object3D): void {
@@ -2398,9 +2466,14 @@ function refreshAnimationControllers(root: THREE.Object3D): void {
     const mixer = new THREE.AnimationMixer(object);
     mixer.timeScale = 1;
     mixers.push(mixer);
-    nodeAnimationControllers.set(nodeId, { mixer, clips: validClips });
+    const defaultClip = pickDefaultAnimationClip(validClips);
+    nodeAnimationControllers.set(nodeId, { mixer, clips: validClips, defaultClip });
+    if (defaultClip) {
+      playAnimationClip(mixer, defaultClip, { loop: true });
+    }
   });
   animationMixers = mixers;
+  refreshEffectRuntimeTickers();
 }
 
 function handleDelayEvent(event: Extract<BehaviorRuntimeEvent, { type: 'delay' }>) {
@@ -2521,18 +2594,8 @@ function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: '
     return;
   }
   const mixer = controller.mixer;
-  const action = mixer.clipAction(clip);
   mixer.stopAllAction();
-  action.reset();
-  action.enabled = true;
-  if (event.loop) {
-    action.setLoop(THREE.LoopRepeat, Number.POSITIVE_INFINITY);
-    action.clampWhenFinished = false;
-  } else {
-    action.setLoop(THREE.LoopOnce, 0);
-    action.clampWhenFinished = true;
-  }
-  action.play();
+  const action = playAnimationClip(mixer, clip, { loop: Boolean(event.loop) });
   const token = event.token;
   if (!token) {
     return;
@@ -2552,6 +2615,7 @@ function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: '
     }
     mixer.removeEventListener('finished', onFinished);
     activeBehaviorAnimations.delete(token);
+    restartDefaultAnimation(targetNodeId);
     resolveBehaviorToken(token, { type: 'continue' });
   };
   const cancel = () => {
@@ -2561,6 +2625,7 @@ function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: '
     } catch (error) {
       console.warn('停止动画失败', error);
     }
+    restartDefaultAnimation(targetNodeId);
   };
   activeBehaviorAnimations.set(token, cancel);
   mixer.addEventListener('finished', onFinished);
@@ -4044,6 +4109,13 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
         }
         if (deltaSeconds > 0) {
           animationMixers.forEach((mixer) => mixer.update(deltaSeconds));
+          effectRuntimeTickers.forEach((tick) => {
+            try {
+              tick(deltaSeconds);
+            } catch (error) {
+              console.warn('更新特效动画失败', error);
+            }
+          });
         }
         updateBehaviorProximity();
         updateLazyPlaceholders(deltaSeconds);

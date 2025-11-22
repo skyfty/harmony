@@ -29,6 +29,7 @@ import {
 	viewPointComponentDefinition,
 	warpGateComponentDefinition,
 	effectComponentDefinition,
+	RUNTIME_REGISTRY_KEY,
 	GUIDEBOARD_COMPONENT_TYPE,
 } from '@schema/components'
 import type { GuideboardComponentProps } from '@schema/components'
@@ -199,7 +200,14 @@ function ensureEditorResourceCache(
 
 const activeBehaviorDelayTimers = new Map<string, number>()
 const activeBehaviorAnimations = new Map<string, () => void>()
-const nodeAnimationControllers = new Map<string, { mixer: THREE.AnimationMixer; clips: THREE.AnimationClip[] }>()
+const nodeAnimationControllers = new Map<string, {
+	mixer: THREE.AnimationMixer
+	clips: THREE.AnimationClip[]
+	defaultClip: THREE.AnimationClip | null
+}>()
+const selectedPrimaryNodeId = ref<string | null>(null)
+const selectedNodeIds = ref<string[]>([])
+const selectedNodeIdSet = ref(new Set<string>())
 type BehaviorProximityCandidate = { hasApproach: boolean; hasDepart: boolean }
 type BehaviorProximityStateEntry = { inside: boolean; lastDistance: number | null }
 type BehaviorProximityThreshold = { enter: number; exit: number; objectId: string }
@@ -348,6 +356,7 @@ const lastOrbitState = {
 	target: defaultOrbitState.target.clone(),
 }
 let animationMixers: THREE.AnimationMixer[] = []
+let effectRuntimeTickers: Array<(delta: number) => void> = []
 
 function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null): void {
 	previewNodeMap.clear()
@@ -1421,6 +1430,35 @@ function stopBehaviorAnimation(token: string) {
 	}
 }
 
+function resetEffectRuntimeTickers(): void {
+	effectRuntimeTickers = []
+}
+
+function refreshEffectRuntimeTickers(): void {
+	resetEffectRuntimeTickers()
+	if (!selectedNodeIdSet.value.size) {
+		return
+	}
+	const uniqueTickers = new Set<(delta: number) => void>()
+	selectedNodeIdSet.value.forEach((nodeId) => {
+		const object = nodeObjectMap.get(nodeId)
+		if (!object) {
+			return
+		}
+		const registry = object.userData?.[RUNTIME_REGISTRY_KEY] as Record<string, { tick?: (delta: number) => void }> | undefined
+		if (!registry) {
+			return
+		}
+		Object.values(registry).forEach((entry) => {
+			const tick = (entry as { tick?: (delta: number) => void }).tick
+			if (typeof tick === 'function') {
+				uniqueTickers.add(tick)
+			}
+		})
+	})
+	effectRuntimeTickers = uniqueTickers.size ? Array.from(uniqueTickers) : []
+}
+
 function resetAnimationControllers(): void {
 	Array.from(activeBehaviorAnimations.entries()).forEach(([token, cancel]) => {
 		try {
@@ -1444,6 +1482,74 @@ function resetAnimationControllers(): void {
 	})
 	animationMixers = []
 	nodeAnimationControllers.clear()
+	resetEffectRuntimeTickers()
+}
+
+function applySelectionFromDocument(document: SceneJsonExportDocument | null | undefined): void {
+	const primarySelectionSource = document as SceneJsonExportDocument & { selectedNodeId?: unknown }
+	const primaryNodeId = typeof primarySelectionSource?.selectedNodeId === 'string' && primarySelectionSource.selectedNodeId.length
+		? primarySelectionSource.selectedNodeId
+		: null
+	selectedPrimaryNodeId.value = primaryNodeId
+	selectedNodeIds.value = []
+	selectedNodeIdSet.value.clear()
+	const selectionCollectionSource = document as SceneJsonExportDocument & { selectedNodeIds?: unknown }
+	const candidateSelectionIds = Array.isArray(selectionCollectionSource?.selectedNodeIds)
+		? (selectionCollectionSource.selectedNodeIds as unknown[])
+		: []
+	candidateSelectionIds.forEach((candidateId) => {
+		if (typeof candidateId !== 'string' || !candidateId.length || selectedNodeIdSet.value.has(candidateId)) {
+			return
+		}
+		selectedNodeIdSet.value.add(candidateId)
+		selectedNodeIds.value.push(candidateId)
+	})
+	if (selectedPrimaryNodeId.value && !selectedNodeIdSet.value.has(selectedPrimaryNodeId.value)) {
+		selectedNodeIdSet.value.add(selectedPrimaryNodeId.value)
+		selectedNodeIds.value.push(selectedPrimaryNodeId.value)
+	}
+	refreshEffectRuntimeTickers()
+}
+
+function pickDefaultAnimationClip(clips: THREE.AnimationClip[]): THREE.AnimationClip | null {
+	if (!Array.isArray(clips) || !clips.length) {
+		return null
+	}
+	const finite = clips.find((clip) => Number.isFinite(clip.duration) && clip.duration > 0)
+	return finite ?? clips[0] ?? null
+}
+
+function playAnimationClip(
+	mixer: THREE.AnimationMixer,
+	clip: THREE.AnimationClip,
+	options: { loop?: boolean } = {},
+): THREE.AnimationAction {
+	const { loop = false } = options
+	const action = mixer.clipAction(clip)
+	action.reset()
+	action.enabled = true
+	if (loop) {
+		action.setLoop(THREE.LoopRepeat, Number.POSITIVE_INFINITY)
+		action.clampWhenFinished = false
+	} else {
+		action.setLoop(THREE.LoopOnce, 0)
+		action.clampWhenFinished = true
+	}
+	action.play()
+	return action
+}
+
+function restartDefaultAnimation(nodeId: string): void {
+	const controller = nodeAnimationControllers.get(nodeId)
+	if (!controller) {
+		return
+	}
+	const clip = controller.defaultClip ?? pickDefaultAnimationClip(controller.clips)
+	if (!clip) {
+		return
+	}
+	controller.defaultClip = clip
+	playAnimationClip(controller.mixer, clip, { loop: true })
 }
 
 function startTimedAnimation(
@@ -1755,18 +1861,8 @@ function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: '
 		return
 	}
 	const mixer = controller.mixer
-	const action = mixer.clipAction(clip)
 	mixer.stopAllAction()
-	action.reset()
-	action.enabled = true
-	if (event.loop) {
-		action.setLoop(THREE.LoopRepeat, Number.POSITIVE_INFINITY)
-		action.clampWhenFinished = false
-	} else {
-		action.setLoop(THREE.LoopOnce, 0)
-		action.clampWhenFinished = true
-	}
-	action.play()
+	const action = playAnimationClip(mixer, clip, { loop: Boolean(event.loop) })
 	const token = event.token
 	if (!token) {
 		return
@@ -1786,6 +1882,7 @@ function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: '
 		}
 		mixer.removeEventListener('finished', onFinished)
 		activeBehaviorAnimations.delete(token)
+		restartDefaultAnimation(targetNodeId)
 		resolveBehaviorToken(token, { type: 'continue' })
 	}
 	const cancel = () => {
@@ -1795,6 +1892,7 @@ function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: '
 		} catch (cancelError) {
 			console.warn('[ScenePreview] Failed to stop animation action', cancelError)
 		}
+		restartDefaultAnimation(targetNodeId)
 	}
 	activeBehaviorAnimations.set(token, cancel)
 	mixer.addEventListener('finished', onFinished)
@@ -2443,6 +2541,13 @@ function startAnimationLoop() {
 
 		if (isPlaying.value) {
 			animationMixers.forEach((mixer) => mixer.update(delta))
+			effectRuntimeTickers.forEach((tick) => {
+				try {
+					tick(delta)
+				} catch (error) {
+					console.warn('[ScenePreview] Failed to advance effect runtime', error)
+				}
+			})
 		}
 
 		updateBehaviorProximity()
@@ -2465,6 +2570,9 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	if (!options.preservePreviewNodeMap) {
 		previewNodeMap.clear()
 	}
+	selectedPrimaryNodeId.value = null
+	selectedNodeIds.value = []
+	selectedNodeIdSet.value.clear()
 	previewComponentManager.reset()
 	resetBehaviorRuntime()
 	resetBehaviorProximity()
@@ -3361,9 +3469,9 @@ function reconcileNodeLists(
 	nextNodes.forEach((node, index) => {
 		const existing = nodeObjectMap.get(node.id) ?? null
 		const previous = previousMap.get(node.id) ?? null
-			const shouldReplace = !existing || !previous || structuralSignature(node) !== structuralSignature(previous)
-			let object = existing
-			if (shouldReplace) {
+		const shouldReplace = !existing || !previous || structuralSignature(node) !== structuralSignature(previous)
+		let object = existing
+		if (shouldReplace) {
 			if (existing) {
 				removeNodeSubtree(node.id)
 			}
@@ -3396,8 +3504,14 @@ function refreshAnimations() {
 		const mixer = new THREE.AnimationMixer(object)
 		mixer.timeScale = isPlaying.value ? 1 : 0
 		animationMixers.push(mixer)
-		nodeAnimationControllers.set(nodeId, { mixer, clips: validClips })
+		const defaultClip = pickDefaultAnimationClip(validClips)
+		nodeAnimationControllers.set(nodeId, { mixer, clips: validClips, defaultClip })
+		if (defaultClip) {
+			playAnimationClip(mixer, defaultClip, { loop: true })
+		}
 	})
+
+	refreshEffectRuntimeTickers()
 }
 
 async function updateScene(document: SceneJsonExportDocument) {
@@ -3482,6 +3596,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 			registerSubtree(child, pendingObjects)
 		}
 		currentDocument = document
+		applySelectionFromDocument(document)
 		refreshAnimations()
 		initializeLazyPlaceholders(document)
 		void applyEnvironmentSettingsToScene(environmentSettings)
@@ -3498,6 +3613,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	}
 
 	currentDocument = document
+	applySelectionFromDocument(document)
 	refreshAnimations()
 	initializeLazyPlaceholders(document)
 	void applyEnvironmentSettingsToScene(environmentSettings)

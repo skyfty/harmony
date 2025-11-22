@@ -66,7 +66,7 @@ import type { BuildTool } from '@/types/build-tool'
 import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache } from '@/utils/groundMesh'
 import { createWallGroup, updateWallGroup } from '@/utils/wallMesh'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
-import { VIEW_POINT_COMPONENT_TYPE, DISPLAY_BOARD_COMPONENT_TYPE } from '@schema/components'
+import { VIEW_POINT_COMPONENT_TYPE, DISPLAY_BOARD_COMPONENT_TYPE, RUNTIME_REGISTRY_KEY } from '@schema/components'
 import type { ViewPointComponentProps, DisplayBoardComponentProps } from '@schema/components'
 import type { EnvironmentSettings } from '@/types/environment'
 
@@ -334,6 +334,32 @@ function applyRendererShadowSetting() {
     sunDirectionalLight.castShadow = castShadows
   }
 }
+
+function resetEffectRuntimeTickers(): void {
+  effectRuntimeTickers = []
+}
+
+function refreshEffectRuntimeTickers(): void {
+  const uniqueTickers = new Set<(delta: number) => void>()
+  const visited = new Set<string>()
+  rootGroup.traverse((candidate) => {
+    if (visited.has(candidate.uuid)) {
+      return
+    }
+    visited.add(candidate.uuid)
+    const registry = candidate.userData?.[RUNTIME_REGISTRY_KEY] as Record<string, { tick?: (delta: number) => void }> | undefined
+    if (!registry) {
+      return
+    }
+    Object.values(registry).forEach((entry) => {
+      const tick = (entry as { tick?: (delta: number) => void }).tick
+      if (typeof tick === 'function') {
+        uniqueTickers.add(tick)
+      }
+    })
+  })
+  effectRuntimeTickers = uniqueTickers.size ? Array.from(uniqueTickers) : []
+}
 const DEFAULT_BACKGROUND_COLOR = 0x516175
 const GROUND_NODE_ID = 'harmony:ground'
 const SKY_ENVIRONMENT_INTENSITY = 0.35
@@ -350,6 +376,8 @@ const pointer = new THREE.Vector2()
 const CLICK_DRAG_THRESHOLD_PX = 5
 const rootGroup = new THREE.Group()
 const objectMap = new Map<string, THREE.Object3D>()
+const renderClock = new THREE.Clock()
+let effectRuntimeTickers: Array<(delta: number) => void> = []
 type LightHelperObject = THREE.Object3D & { dispose?: () => void; update?: () => void }
 const lightHelpers: LightHelperObject[] = []
 const lightHelpersNeedingUpdate = new Set<LightHelperObject>()
@@ -3471,6 +3499,7 @@ function initScene() {
   })
   resizeObserver.observe(viewportEl.value)
 
+  renderClock.start()
   animate()
   
   applyCameraState(props.cameraState)
@@ -3987,6 +4016,9 @@ function animate() {
   requestAnimationFrame(animate)
   stats?.begin()
 
+  const delta = renderClock.running ? renderClock.getDelta() : 0
+  const effectiveDelta = delta > 0 ? Math.min(delta, 0.1) : 0
+
   let controlsUpdated = false
 
   if (cameraTransitionState && orbitControls) {
@@ -4054,6 +4086,15 @@ function animate() {
   }
   gizmoControls?.cameraUpdate()
   updateFaceSnapEffectIntensity()
+  if (effectiveDelta > 0 && effectRuntimeTickers.length) {
+    effectRuntimeTickers.forEach((tick) => {
+      try {
+        tick(effectiveDelta)
+      } catch (error) {
+        console.warn('[SceneViewport] Failed to advance effect runtime', error)
+      }
+    })
+  }
   renderViewportFrame()
   gizmoControls?.render()
   stats?.end()
@@ -4138,6 +4179,7 @@ function disposeScene() {
   disposePostProcessing()
   renderer?.dispose()
   renderer = null
+  renderClock.stop()
 
   if (gridHighlight) {
     gridHighlight.removeFromParent()
@@ -4176,6 +4218,7 @@ function disposeScene() {
 
   clearPlaceholderOverlays()
   objectMap.clear()
+  resetEffectRuntimeTickers()
   wallPreviewNeedsSync = false
   wallPreviewSignature = null
   pendingSceneGraphSync = false
@@ -7129,6 +7172,7 @@ function syncSceneGraph() {
 
   refreshPlaceholderOverlays()
   ensureFallbackLighting()
+  refreshEffectRuntimeTickers()
   updateSelectionHighlights()
 }
 
@@ -7141,6 +7185,7 @@ function disposeSceneNodes() {
       disposeNodeSubtree(id)
     }
   })
+  resetEffectRuntimeTickers()
 }
 
 function registerLightHelper(nodeId: string, helper: LightHelperObject, requiresContinuousUpdate = false) {

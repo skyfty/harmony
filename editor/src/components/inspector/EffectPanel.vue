@@ -12,8 +12,11 @@ import {
   DEFAULT_EFFECT_TYPE,
   DEFAULT_GROUND_LIGHT_COLOR,
   DEFAULT_GROUND_LIGHT_INTENSITY,
+  DEFAULT_GROUND_LIGHT_SCALE,
   GROUND_LIGHT_INTENSITY_MIN,
   GROUND_LIGHT_INTENSITY_MAX,
+  GROUND_LIGHT_SCALE_MIN,
+  GROUND_LIGHT_SCALE_MAX,
 } from '@schema/components'
 
 const sceneStore = useSceneStore()
@@ -31,6 +34,7 @@ const localState = reactive({
   effectType: DEFAULT_EFFECT_TYPE as EffectTypeId,
   groundLightColor: DEFAULT_GROUND_LIGHT_COLOR,
   groundLightIntensity: DEFAULT_GROUND_LIGHT_INTENSITY,
+  groundLightScale: DEFAULT_GROUND_LIGHT_SCALE,
 })
 
 const syncing = ref(false)
@@ -48,6 +52,7 @@ watch(
     localState.effectType = normalized.effectType
     localState.groundLightColor = normalized.groundLight.color
     localState.groundLightIntensity = normalized.groundLight.intensity
+    localState.groundLightScale = normalized.groundLight.scale
     nextTick(() => {
       syncing.value = false
     })
@@ -82,6 +87,24 @@ watch(
       return
     }
     applyGroundLight({ intensity: value })
+  },
+)
+
+watch(
+  () => localState.groundLightScale,
+  (value, previous) => {
+    if (syncing.value) {
+      return
+    }
+    const numeric = typeof value === 'number' ? value : Number(value)
+    if (!Number.isFinite(numeric)) {
+      return
+    }
+    const prevNumeric = typeof previous === 'number' ? previous : Number(previous)
+    if (Number.isFinite(prevNumeric) && Math.abs(numeric - prevNumeric) <= 1e-4) {
+      return
+    }
+    applyGroundLight({ scale: numeric })
   },
 )
 
@@ -149,6 +172,23 @@ function handleGroundLightColorInput(value: string | null) {
 
 function handleGroundLightColorPickerInput(value: string | null) {
   handleGroundLightColorInput(value)
+}
+
+function handleGroundLightScaleInput(value: string | number | null) {
+  if (!componentEnabled.value) {
+    return
+  }
+  if (value === '' || value === null || value === undefined) {
+    return
+  }
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  if (Math.abs(numeric - localState.groundLightScale) <= 1e-4) {
+    return
+  }
+  localState.groundLightScale = numeric
 }
 
 function handleToggleComponent() {
@@ -261,6 +301,22 @@ function handleRemoveComponent() {
               </div>
             </v-menu>
           </div>
+          <v-text-field
+            :model-value="localState.groundLightScale"
+            :min="GROUND_LIGHT_SCALE_MIN"
+            :max="GROUND_LIGHT_SCALE_MAX"
+            :step="0.05"
+            label="Scale"
+            type="number"
+            density="compact"
+            variant="underlined"
+            color="primary"
+            inputmode="decimal"
+            hide-details
+            class="slider-input"
+            :disabled="!componentEnabled"
+            @update:model-value="handleGroundLightScaleInput"
+          />
           <v-text-field
             v-model="localState.groundLightIntensity"
             :min="GROUND_LIGHT_INTENSITY_MIN"
