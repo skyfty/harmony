@@ -135,6 +135,7 @@ const inspectorIcon = computed(() =>
     nodeType: selectedNode.value?.nodeType ?? null,
     lightType: selectedNode.value?.light?.type ?? null,
     hasChildren: Boolean(selectedNode.value?.children?.length),
+    dynamicMeshType: selectedNode.value?.dynamicMesh?.type ?? null,
   }),
 )
 

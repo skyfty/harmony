@@ -7,5 +7,6 @@ export interface HierarchyTreeItem {
   locked: boolean
   nodeType?: SceneNodeType
   lightType?: LightNodeType
+  dynamicMeshType?: string
   children?: HierarchyTreeItem[]
 }

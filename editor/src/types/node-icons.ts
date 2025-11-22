@@ -35,14 +35,20 @@ type NodeIconParams = {
   lightType?: LightNodeType | null
   hasChildren?: boolean
   nodeId?: string | null
+  dynamicMeshType?: string | null
 }
 
 const GROUND_NODE_ID = 'harmony:ground'
 const GROUND_ICON = 'mdi-grass'
+const WALL_ICON = 'mdi-wall'
 
-export function getNodeIcon({ nodeType, lightType, hasChildren, nodeId }: NodeIconParams): string {
+export function getNodeIcon({ nodeType, lightType, hasChildren, nodeId, dynamicMeshType }: NodeIconParams): string {
   if (nodeId === GROUND_NODE_ID || nodeType === 'Ground') {
     return GROUND_ICON
+  }
+
+  if (dynamicMeshType === 'Wall') {
+    return WALL_ICON
   }
 
   if (nodeType === 'Light') {

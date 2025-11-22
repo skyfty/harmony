@@ -3653,6 +3653,7 @@ function toHierarchyItem(node: SceneNode): HierarchyTreeItem {
     locked: node.locked ?? false,
     nodeType: node.nodeType,
     lightType: node.light?.type,
+    dynamicMeshType: node.dynamicMesh?.type,
     children: node.children?.map(toHierarchyItem),
   }
 }

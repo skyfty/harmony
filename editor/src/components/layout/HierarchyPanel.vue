@@ -644,6 +644,7 @@ function resolveNodeIcon(item: HierarchyTreeItem) {
     nodeType: item.nodeType,
     lightType: item.lightType,
     hasChildren: Boolean(item.children?.length),
+    dynamicMeshType: item.dynamicMeshType,
   })
 }
 

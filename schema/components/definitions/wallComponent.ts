@@ -70,7 +70,7 @@ class WallComponent extends Component<WallComponentProps> {
 
 const wallComponentDefinition: ComponentDefinition<WallComponentProps> = {
   type: WALL_COMPONENT_TYPE,
-  label: 'Wall Component',
+  label: 'Wall',
   icon: 'mdi-wall',
   order: 50,
   inspector: [
