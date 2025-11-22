@@ -340,14 +340,22 @@ function resetEffectRuntimeTickers(): void {
 }
 
 function refreshEffectRuntimeTickers(): void {
+  resetEffectRuntimeTickers()
+  const selectedIds = Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds : []
+  if (!selectedIds.length) {
+    return
+  }
+
   const uniqueTickers = new Set<(delta: number) => void>()
-  const visited = new Set<string>()
-  rootGroup.traverse((candidate) => {
-    if (visited.has(candidate.uuid)) {
+  selectedIds.forEach((nodeId) => {
+    if (typeof nodeId !== 'string' || !nodeId.length) {
       return
     }
-    visited.add(candidate.uuid)
-    const registry = candidate.userData?.[RUNTIME_REGISTRY_KEY] as Record<string, { tick?: (delta: number) => void }> | undefined
+    const object = objectMap.get(nodeId)
+    if (!object) {
+      return
+    }
+    const registry = object.userData?.[RUNTIME_REGISTRY_KEY] as Record<string, { tick?: (delta: number) => void }> | undefined
     if (!registry) {
       return
     }
@@ -8296,6 +8304,7 @@ watch(
     attachSelection(id)
     updateOutlineSelectionTargets()
     updateSelectionHighlights()
+    refreshEffectRuntimeTickers()
   }
 )
 
@@ -8304,6 +8313,7 @@ watch(
   () => {
     updateOutlineSelectionTargets()
     updateSelectionHighlights()
+    refreshEffectRuntimeTickers()
   }
 )
 

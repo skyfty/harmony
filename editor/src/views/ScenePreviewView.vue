@@ -205,9 +205,6 @@ const nodeAnimationControllers = new Map<string, {
 	clips: THREE.AnimationClip[]
 	defaultClip: THREE.AnimationClip | null
 }>()
-const selectedPrimaryNodeId = ref<string | null>(null)
-const selectedNodeIds = ref<string[]>([])
-const selectedNodeIdSet = ref(new Set<string>())
 type BehaviorProximityCandidate = { hasApproach: boolean; hasDepart: boolean }
 type BehaviorProximityStateEntry = { inside: boolean; lastDistance: number | null }
 type BehaviorProximityThreshold = { enter: number; exit: number; objectId: string }
@@ -1436,15 +1433,8 @@ function resetEffectRuntimeTickers(): void {
 
 function refreshEffectRuntimeTickers(): void {
 	resetEffectRuntimeTickers()
-	if (!selectedNodeIdSet.value.size) {
-		return
-	}
 	const uniqueTickers = new Set<(delta: number) => void>()
-	selectedNodeIdSet.value.forEach((nodeId) => {
-		const object = nodeObjectMap.get(nodeId)
-		if (!object) {
-			return
-		}
+	nodeObjectMap.forEach((object) => {
 		const registry = object.userData?.[RUNTIME_REGISTRY_KEY] as Record<string, { tick?: (delta: number) => void }> | undefined
 		if (!registry) {
 			return
@@ -1483,32 +1473,6 @@ function resetAnimationControllers(): void {
 	animationMixers = []
 	nodeAnimationControllers.clear()
 	resetEffectRuntimeTickers()
-}
-
-function applySelectionFromDocument(document: SceneJsonExportDocument | null | undefined): void {
-	const primarySelectionSource = document as SceneJsonExportDocument & { selectedNodeId?: unknown }
-	const primaryNodeId = typeof primarySelectionSource?.selectedNodeId === 'string' && primarySelectionSource.selectedNodeId.length
-		? primarySelectionSource.selectedNodeId
-		: null
-	selectedPrimaryNodeId.value = primaryNodeId
-	selectedNodeIds.value = []
-	selectedNodeIdSet.value.clear()
-	const selectionCollectionSource = document as SceneJsonExportDocument & { selectedNodeIds?: unknown }
-	const candidateSelectionIds = Array.isArray(selectionCollectionSource?.selectedNodeIds)
-		? (selectionCollectionSource.selectedNodeIds as unknown[])
-		: []
-	candidateSelectionIds.forEach((candidateId) => {
-		if (typeof candidateId !== 'string' || !candidateId.length || selectedNodeIdSet.value.has(candidateId)) {
-			return
-		}
-		selectedNodeIdSet.value.add(candidateId)
-		selectedNodeIds.value.push(candidateId)
-	})
-	if (selectedPrimaryNodeId.value && !selectedNodeIdSet.value.has(selectedPrimaryNodeId.value)) {
-		selectedNodeIdSet.value.add(selectedPrimaryNodeId.value)
-		selectedNodeIds.value.push(selectedPrimaryNodeId.value)
-	}
-	refreshEffectRuntimeTickers()
 }
 
 function pickDefaultAnimationClip(clips: THREE.AnimationClip[]): THREE.AnimationClip | null {
@@ -2570,9 +2534,6 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	if (!options.preservePreviewNodeMap) {
 		previewNodeMap.clear()
 	}
-	selectedPrimaryNodeId.value = null
-	selectedNodeIds.value = []
-	selectedNodeIdSet.value.clear()
 	previewComponentManager.reset()
 	resetBehaviorRuntime()
 	resetBehaviorProximity()
@@ -3596,7 +3557,6 @@ async function updateScene(document: SceneJsonExportDocument) {
 			registerSubtree(child, pendingObjects)
 		}
 		currentDocument = document
-		applySelectionFromDocument(document)
 		refreshAnimations()
 		initializeLazyPlaceholders(document)
 		void applyEnvironmentSettingsToScene(environmentSettings)
@@ -3613,7 +3573,6 @@ async function updateScene(document: SceneJsonExportDocument) {
 	}
 
 	currentDocument = document
-	applySelectionFromDocument(document)
 	refreshAnimations()
 	initializeLazyPlaceholders(document)
 	void applyEnvironmentSettingsToScene(environmentSettings)
