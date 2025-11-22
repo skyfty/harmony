@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>Three.js Advanced Teleport Beam Effect</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        #canvas-container { width: 100%; height: 100vh; }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // --- 场景基础设置 ---
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x000000, 0.03); // 增加一点雾效
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 7, 10); // 调整相机位置
+        camera.lookAt(0, 3, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.target.set(0, 3, 0); // 更改看向目标
+
+        // 添加一个更简洁的深色地面，避免网格线太突出
+        const groundGeo = new THREE.PlaneGeometry(20, 20);
+        const groundMat = new THREE.MeshBasicMaterial({ color: 0x0a0a0a }); // 深灰色
+        const ground = new THREE.Mesh(groundGeo, groundMat);
+        ground.rotation.x = -Math.PI / 2;
+        scene.add(ground);
+
+        // --- 核心特效参数 ---
+        const BEAM_HEIGHT = 8;
+        const BEAM_BASE_RADIUS = 1.5; // 光柱的整体基底半径
+        const BEAM_COLOR = new THREE.Color(0x00ffff); // 青色/天蓝色
+
+        // --- Shader 定义 (复用之前光柱的Shader，但可能需要微调) ---
+
+        /**
+         * 光束着色器 (Vertex Shader)
+         * 负责处理顶点位置和传递 UV 坐标
+         */
+        const beamVertexShader = `
+            varying vec2 vUv;
+            varying vec3 vPosition;
+            
+            void main() {
+                vUv = uv;
+                vPosition = position;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+        `;
+
+        /**
+         * 光束着色器 (Fragment Shader)
+         * 核心魔法所在：处理垂直渐变、基于噪点的向上流动动画、边缘柔化。
+         * 针对多条光束，可能需要更强的底部亮度
+         */
+        const beamFragmentShader = `
+            uniform float uTime;
+            uniform vec3 uColor;
+            uniform float uHeight; // 新增：光束的实际高度，用于计算更精确的垂直渐变
+            
+            varying vec2 vUv;
+            varying vec3 vPosition;
+
+            // 简单的伪随机函数，用于产生噪点
+            float random(vec2 st) {
+                return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
+            }
+
+            // 简单的 2D 噪声函数
+            float noise(vec2 st) {
+                vec2 i = floor(st);
+                vec2 f = fract(st);
+                float a = random(i);
+                float b = random(i + vec2(1.0, 0.0));
+                float c = random(i + vec2(0.0, 1.0));
+                float d = random(i + vec2(1.0, 1.0));
+                vec2 u = f*f*(3.0-2.0*f);
+                return mix(a, b, u.x) + (c - a)* u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+            }
+
+            void main() {
+                // 计算实际的Y坐标 (从0到uHeight)
+                float currentY = vPosition.y + uHeight / 2.0; // 如果几何体中心在0, 底部在-uHeight/2, 顶部在uHeight/2
+                float normalizedY = currentY / uHeight; // 归一化到0-1
+
+                // 1. 基础垂直渐变：底部最亮(normalizedY=0)，顶部透明(normalizedY=1)
+                // 更强的底部亮度，顶部消散快
+                float verticalFade = pow(1.0 - normalizedY, 2.5); 
+
+                // 2. 噪点纹理动画：产生向上流动的能量感
+                vec2 noiseUV = vUv * vec2(1.5, 6.0); // 调整噪点的密度，更细长
+                noiseUV.y -= uTime * 3.0; // 向上流动的速度
+                float flowNoise = noise(noiseUV);
+                
+                // 3. 边缘柔化 (对于细长的光束，这个效果可能不那么明显，但可以保留)
+                // vUv.x 从 0 到 1，中心是 0.5
+                float edgeFade = smoothstep(0.4, 0.0, abs(vUv.x - 0.5)); // 更窄的柔化区域
+
+                // 组合所有 alpha 因素
+                // 基础透明度 + 噪点带来的亮度波动
+                float finalAlpha = verticalFade * edgeFade * (0.4 + flowNoise * 0.9); // 增强噪点影响，底部亮度更高
+                
+                // 确保底部始终有点亮度，不完全受噪点影响，尤其是在低噪声区域
+                finalAlpha += smoothstep(0.1, 0.0, normalizedY) * 0.4; // 底部很亮
+
+                gl_FragColor = vec4(uColor, finalAlpha);
+            }
+        `;
+
+        // 创建多条光束
+        const beams = [];
+        const numberOfBeams = 16; // 光束数量
+        const beamGroup = new THREE.Group(); // 用于管理所有光束
+        scene.add(beamGroup);
+
+        const beamGeometry = new THREE.PlaneGeometry(0.2, BEAM_HEIGHT, 1, 1); // 使用 PlaneGeometry 更薄
+        beamGeometry.translate(0, BEAM_HEIGHT / 2, 0); // 底部在 y=0
+
+        for (let i = 0; i < numberOfBeams; i++) {
+            const angle = (i / numberOfBeams) * Math.PI * 2;
+            const x = Math.cos(angle) * (BEAM_BASE_RADIUS * 0.7); // 调整光束分布半径
+            const z = Math.sin(angle) * (BEAM_BASE_RADIUS * 0.7);
+
+            const beamMaterial = new THREE.ShaderMaterial({
+                uniforms: {
+                    uTime: { value: 0 },
+                    uColor: { value: BEAM_COLOR },
+                    uHeight: { value: BEAM_HEIGHT }
+                },
+                vertexShader: beamVertexShader,
+                fragmentShader: beamFragmentShader,
+                transparent: true,
+                depthWrite: false,
+                blending: THREE.AdditiveBlending,
+                side: THREE.DoubleSide
+            });
+
+            const beamMesh = new THREE.Mesh(beamGeometry, beamMaterial);
+            beamMesh.position.set(x, 0, z);
+            beamMesh.rotation.y = angle + Math.PI / 2; // 让平面朝向中心
+            beamGroup.add(beamMesh);
+            beams.push(beamMesh);
+        }
+
+        // --- 底部光环系统 ---
+        const groundRingGroup = new THREE.Group();
+        scene.add(groundRingGroup);
+
+        const ringCount = 4; // 多个同心圆环
+        const ringColor = BEAM_COLOR;
+
+        for(let i = 0; i < ringCount; i++) {
+            const innerRadius = BEAM_BASE_RADIUS * (0.3 + i * 0.2); // 逐渐增大的半径
+            const outerRadius = BEAM_BASE_RADIUS * (0.4 + i * 0.25); // 确保环有宽度
+
+            const ringGeo = new THREE.RingGeometry(innerRadius, outerRadius, 64);
+            const ringMat = new THREE.MeshBasicMaterial({
+                color: ringColor,
+                side: THREE.DoubleSide,
+                transparent: true,
+                opacity: 0.2 + (ringCount - 1 - i) * 0.1, // 外层环更透明
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
+            });
+
+            const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+            ringMesh.rotation.x = -Math.PI / 2;
+            ringMesh.position.y = 0.01 + i * 0.001; // 微小Z偏移避免闪烁
+            groundRingGroup.add(ringMesh);
+        }
+
+        // 最内层一个更亮的小圆盘
+        const centerDiscGeo = new THREE.CircleGeometry(BEAM_BASE_RADIUS * 0.2, 32);
+        const centerDiscMat = new THREE.MeshBasicMaterial({
+            color: BEAM_COLOR,
+            transparent: true,
+            opacity: 0.6,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+        });
+        const centerDisc = new THREE.Mesh(centerDiscGeo, centerDiscMat);
+        centerDisc.rotation.x = -Math.PI / 2;
+        centerDisc.position.y = 0.02;
+        groundRingGroup.add(centerDisc);
+
+        // --- 底部扩散光效 (Sprite或额外的ShaderMaterial) ---
+        // 我们可以使用一个Sprite来模拟光晕
+        const spriteMap = new THREE.TextureLoader().load('https://threejs.org/examples/textures/sprites/disc.png'); // 使用一个圆盘纹理
+        const spriteMaterial = new THREE.SpriteMaterial({
+            map: spriteMap,
+            color: BEAM_COLOR,
+            transparent: true,
+            blending: THREE.AdditiveBlending,
+            opacity: 0.5,
+            depthWrite: false
+        });
+        const groundFlare = new THREE.Sprite(spriteMaterial);
+        groundFlare.scale.set(BEAM_BASE_RADIUS * 3, BEAM_BASE_RADIUS * 3, 1); // 调整大小
+        groundFlare.position.y = 0.05;
+        groundRingGroup.add(groundFlare);
+
+
+        // --- 粒子系统 (复用之前的，但可能需要调整参数) ---
+        
+        const particleCount = 200;
+        const particlesGeometry = new THREE.BufferGeometry();
+        const posArray = new Float32Array(particleCount * 3);
+        const particleData = [];
+
+        for(let i = 0; i < particleCount * 3; i += 3) {
+            const angle = Math.random() * Math.PI * 2;
+            const radius = Math.random() * BEAM_BASE_RADIUS * 0.6; // 粒子在光柱内部
+            posArray[i] = Math.cos(angle) * radius;     // x
+            posArray[i + 1] = Math.random() * BEAM_HEIGHT; // y (初始随机高度)
+            posArray[i + 2] = Math.sin(angle) * radius; // z
+            
+            particleData.push({
+                speed: 0.03 + Math.random() * 0.08, // 随机向上速度
+                initialY: posArray[i+1]
+            });
+        }
+        particlesGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+
+        const particlesMaterial = new THREE.PointsMaterial({
+            size: 0.1, // 粒子更小
+            color: BEAM_COLOR,
+            blending: THREE.AdditiveBlending,
+            transparent: true,
+            opacity: 0.6,
+            depthWrite: false,
+            map: spriteMap // 可以用圆点纹理让粒子更柔和
+        });
+
+        const particleSystem = new THREE.Points(particlesGeometry, particlesMaterial);
+        scene.add(particleSystem);
+
+
+        // --- 动画循环 ---
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const elapsedTime = clock.getElapsedTime();
+
+            // 更新光束 Shader 的时间 uniform
+            beams.forEach(beam => {
+                beam.material.uniforms.uTime.value = elapsedTime;
+            });
+            
+            // 让整个光束组缓慢旋转，产生动态感
+            beamGroup.rotation.y = elapsedTime * -0.3;
+
+            // 底部光环动画
+            groundRingGroup.children.forEach((obj, index) => {
+                // 圆环可以有独立的旋转或脉冲效果
+                if (obj.isMesh && obj.geometry.type === 'RingGeometry') {
+                    obj.rotation.z = elapsedTime * (0.05 + index * 0.02); // 不同速度旋转
+                    obj.material.opacity = 0.2 + Math.sin(elapsedTime * 2 + index * 0.5) * 0.05; // 微弱的脉冲
+                }
+            });
+            // 底部光晕脉冲
+            groundFlare.material.opacity = 0.4 + Math.sin(elapsedTime * 3) * 0.15;
+            groundFlare.scale.set(
+                BEAM_BASE_RADIUS * 3 * (1 + Math.sin(elapsedTime * 2.5) * 0.05),
+                BEAM_BASE_RADIUS * 3 * (1 + Math.sin(elapsedTime * 2.5) * 0.05),
+                1
+            );
+
+
+            // 更新粒子位置
+            const positions = particlesGeometry.attributes.position.array;
+            for(let i = 0; i < particleCount; i++) {
+                const i3 = i * 3;
+                const data = particleData[i];
+                
+                positions[i3 + 1] += data.speed;
+
+                if(positions[i3 + 1] > BEAM_HEIGHT) {
+                    positions[i3 + 1] = 0;
+                }
+            }
+            particlesGeometry.attributes.position.needsUpdate = true;
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // 窗口大小调整适配
+        window.addEventListener('resize', onWindowResize, false);
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        animate();
+    </script>
+</body>
+</html>

@@ -28,8 +28,8 @@ import type {
   SceneTextureWrapMode,
   SceneMaterialTextureSettings,
   SceneSkyboxSettings,
-  GroundDynamicMesh, 
-  WallDynamicMesh 
+  GroundDynamicMesh,
+  WallDynamicMesh,
 } from '@harmony/schema'
 import { createTextureSettings, textureSettingsSignature } from '@/types/material'
 import { useSceneStore, getRuntimeObject, buildPackageAssetMapForExport, calculateSceneResourceSummary } from '@/stores/sceneStore'
@@ -44,7 +44,7 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { getCachedModelObject, getOrLoadModelObject } from '@/stores/modelObjectCache'
 import { loadObjectFromFile } from '@/utils/assetImport'
 import { createPrimitiveMesh } from '@schema/geometry'
-import type {CameraProjection,CameraControlMode } from '@harmony/schema'
+import type { CameraProjection, CameraControlMode } from '@harmony/schema'
 
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import { cloneSkyboxSettings } from '@/stores/skyboxPresets'
@@ -69,7 +69,6 @@ import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
 import { VIEW_POINT_COMPONENT_TYPE, DISPLAY_BOARD_COMPONENT_TYPE } from '@schema/components'
 import type { ViewPointComponentProps, DisplayBoardComponentProps } from '@schema/components'
 import type { EnvironmentSettings } from '@/types/environment'
-
 
 const props = withDefaults(defineProps<{
   sceneNodes: SceneNode[]
@@ -365,13 +364,16 @@ const GRID_SNAP_SPACING = GRID_MINOR_SPACING
 const WALL_DIAGONAL_SNAP_THRESHOLD = THREE.MathUtils.degToRad(20)
 const GRID_MINOR_DASH_SIZE = GRID_MINOR_SPACING * 0.12
 const GRID_MINOR_GAP_SIZE = GRID_MINOR_SPACING * 0.2
-const FACE_SNAP_DISTANCE_THRESHOLD = 0.08
+const FACE_SNAP_PREVIEW_DISTANCE = 0.22
+const FACE_SNAP_COMMIT_DISTANCE = 0.04
 const FACE_SNAP_MIN_OVERLAP = 0.1
 const FACE_SNAP_MOVEMENT_EPSILON = 1e-4
-const FACE_SNAP_EFFECT_DURATION = 360
-const FACE_SNAP_EFFECT_MAX_OPACITY = 0.42
-const FACE_SNAP_EFFECT_MIN_SIZE = 0.08
-const FACE_SNAP_EFFECT_MAX_SIZE = 40
+const FACE_SNAP_EFFECT_MAX_OPACITY = 0.78
+const FACE_SNAP_EFFECT_MIN_OPACITY = 0.2
+const FACE_SNAP_EFFECT_MIN_SIZE = 0.12
+const FACE_SNAP_EFFECT_MAX_SIZE = 48
+const FACE_SNAP_EFFECT_SCALE_PULSE = 0.22
+const FACE_SNAP_EFFECT_PULSE_SPEED = 140
 const GRID_BASE_HEIGHT = 0.03
 const GRID_HIGHLIGHT_HEIGHT = 0.03
 const GRID_HIGHLIGHT_PADDING = 0.1
@@ -1554,8 +1556,6 @@ const cameraTransitionCurrentPosition = new THREE.Vector3()
 const cameraTransitionCurrentTarget = new THREE.Vector3()
 const faceSnapPrimaryBounds = new THREE.Box3()
 const faceSnapCandidateBounds = new THREE.Box3()
-const faceSnapBestOverlapMin = new THREE.Vector3()
-const faceSnapBestOverlapMax = new THREE.Vector3()
 const faceSnapWorldDelta = new THREE.Vector3()
 const faceSnapLocalDelta = new THREE.Vector3()
 const faceSnapPlaneCenter = new THREE.Vector3()
@@ -1565,11 +1565,8 @@ const faceSnapParentQuaternion = new THREE.Quaternion()
 const faceSnapParentScale = new THREE.Vector3()
 const faceSnapDefaultNormal = new THREE.Vector3(0, 0, 1)
 const faceSnapExcludedIds = new Set<string>()
-let faceSnapEffectPlane: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial> | null = null
-let faceSnapEffectMaterial: THREE.MeshBasicMaterial | null = null
-let faceSnapEffectStartTime = 0
-let faceSnapEffectActive = false
 type AxisKey = 'x' | 'y' | 'z'
+type SnapDirection = 1 | -1
 const FACE_SNAP_AXES: AxisKey[] = ['x', 'y', 'z']
 const FACE_SNAP_OTHER_AXES: Record<AxisKey, [AxisKey, AxisKey]> = {
   x: ['y', 'z'],
@@ -1582,6 +1579,54 @@ const FACE_SNAP_EFFECT_SIZE_MAPPING: Record<AxisKey, [AxisKey, AxisKey]> = {
   z: ['x', 'y'],
 }
 const AXIS_INDEX: Record<AxisKey, 0 | 1 | 2> = { x: 0, y: 1, z: 2 }
+type FaceSnapAxisResult = {
+  valid: boolean
+  direction: SnapDirection
+  gap: number
+  overlapArea: number
+  overlapMin: THREE.Vector3
+  overlapMax: THREE.Vector3
+}
+const faceSnapAxisResults: Record<AxisKey, FaceSnapAxisResult> = {
+  x: {
+    valid: false,
+    direction: 1,
+    gap: Number.POSITIVE_INFINITY,
+    overlapArea: 0,
+    overlapMin: new THREE.Vector3(),
+    overlapMax: new THREE.Vector3(),
+  },
+  y: {
+    valid: false,
+    direction: 1,
+    gap: Number.POSITIVE_INFINITY,
+    overlapArea: 0,
+    overlapMin: new THREE.Vector3(),
+    overlapMax: new THREE.Vector3(),
+  },
+  z: {
+    valid: false,
+    direction: 1,
+    gap: Number.POSITIVE_INFINITY,
+    overlapArea: 0,
+    overlapMin: new THREE.Vector3(),
+    overlapMax: new THREE.Vector3(),
+  },
+}
+type FaceSnapEffectIndicator = {
+  plane: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>
+  material: THREE.MeshBasicMaterial
+  targetOpacity: number
+  closeness: number
+  baseScale: THREE.Vector2
+  pulseSeed: number
+  active: boolean
+}
+const faceSnapEffectIndicators: Record<AxisKey, FaceSnapEffectIndicator | null> = {
+  x: null,
+  y: null,
+  z: null,
+}
 
 function buildTransformGroupState(primaryId: string | null): TransformGroupState | null {
   const selectedIds = sceneStore.selectedNodeIds.filter((id) => !sceneStore.isNodeSelectionLocked(id))
@@ -2608,13 +2653,19 @@ function snapVectorToGridForNode(vec: THREE.Vector3, nodeId: string | null | und
   return snapVectorToGrid(vec)
 }
 
-function ensureFaceSnapEffectIndicator() {
-  if (!scene || faceSnapEffectPlane) {
-    return
+function ensureFaceSnapEffectIndicator(axis: AxisKey): FaceSnapEffectIndicator | null {
+  if (!scene) {
+    return null
   }
+
+  let indicator = faceSnapEffectIndicators[axis]
+  if (indicator) {
+    return indicator
+  }
+
   const geometry = new THREE.PlaneGeometry(1, 1)
   const material = new THREE.MeshBasicMaterial({
-    color: 0x4dd0e1,
+    color: 0x00f0ff,
     transparent: true,
     opacity: 0,
     blending: THREE.AdditiveBlending,
@@ -2623,30 +2674,65 @@ function ensureFaceSnapEffectIndicator() {
     depthWrite: false,
   })
   material.toneMapped = false
-  faceSnapEffectMaterial = material
-  faceSnapEffectPlane = new THREE.Mesh(geometry, material)
-  faceSnapEffectPlane.visible = false
-  faceSnapEffectPlane.renderOrder = 1024
-  scene.add(faceSnapEffectPlane)
+
+  const plane = new THREE.Mesh(geometry, material)
+  plane.visible = false
+  plane.renderOrder = 1024
+  scene.add(plane)
+
+  indicator = {
+    plane,
+    material,
+    targetOpacity: 0,
+    closeness: 0,
+    baseScale: new THREE.Vector2(1, 1),
+    pulseSeed: 0,
+    active: false,
+  }
+  faceSnapEffectIndicators[axis] = indicator
+  return indicator
 }
 
-function triggerFaceSnapEffect(axis: AxisKey, direction: 1 | -1, overlapMin: THREE.Vector3, overlapMax: THREE.Vector3) {
-  ensureFaceSnapEffectIndicator()
-  if (!faceSnapEffectPlane || !faceSnapEffectMaterial) {
+function ensureFaceSnapEffectPool() {
+  FACE_SNAP_AXES.forEach((axis) => ensureFaceSnapEffectIndicator(axis))
+}
+
+function resetFaceSnapAxisResults() {
+  FACE_SNAP_AXES.forEach((axis) => {
+    const result = faceSnapAxisResults[axis]
+    result.valid = false
+    result.direction = 1
+    result.gap = Number.POSITIVE_INFINITY
+    result.overlapArea = 0
+    result.overlapMin.setScalar(0)
+    result.overlapMax.setScalar(0)
+  })
+}
+
+function triggerFaceSnapEffect(
+  axis: AxisKey,
+  direction: SnapDirection,
+  overlapMin: THREE.Vector3,
+  overlapMax: THREE.Vector3,
+  gap: number,
+) {
+  const indicator = ensureFaceSnapEffectIndicator(axis)
+  if (!indicator) {
     return
   }
+
+  const { plane, material, baseScale } = indicator
 
   faceSnapPlaneCenter.set(
     (overlapMin.x + overlapMax.x) * 0.5,
     (overlapMin.y + overlapMax.y) * 0.5,
     (overlapMin.z + overlapMax.z) * 0.5,
   )
-  faceSnapEffectPlane.position.copy(faceSnapPlaneCenter)
 
   faceSnapPlaneNormal.set(0, 0, 0)
   faceSnapPlaneNormal.setComponent(AXIS_INDEX[axis], direction)
   faceSnapPlaneNormal.normalize()
-  faceSnapEffectPlane.quaternion.setFromUnitVectors(faceSnapDefaultNormal, faceSnapPlaneNormal)
+  plane.quaternion.setFromUnitVectors(faceSnapDefaultNormal, faceSnapPlaneNormal)
 
   const [widthAxis, heightAxis] = FACE_SNAP_EFFECT_SIZE_MAPPING[axis]
   const width = THREE.MathUtils.clamp(
@@ -2665,66 +2751,117 @@ function triggerFaceSnapEffect(axis: AxisKey, direction: 1 | -1, overlapMin: THR
     FACE_SNAP_EFFECT_MIN_SIZE,
     FACE_SNAP_EFFECT_MAX_SIZE,
   )
-  faceSnapEffectPlane.scale.set(width, height, 1)
 
-  faceSnapEffectMaterial.opacity = FACE_SNAP_EFFECT_MAX_OPACITY
-  faceSnapEffectMaterial.needsUpdate = true
-  faceSnapEffectPlane.visible = true
-  faceSnapEffectStartTime = performance.now()
-  faceSnapEffectActive = true
+  const axisIndex = AXIS_INDEX[axis]
+  if (gap > FACE_SNAP_COMMIT_DISTANCE) {
+    const contactCenter = faceSnapPlaneCenter.getComponent(axisIndex)
+    const offset = gap * 0.5
+    faceSnapPlaneCenter.setComponent(axisIndex, contactCenter - direction * offset)
+  }
+
+  plane.position.copy(faceSnapPlaneCenter)
+
+  const closeness = THREE.MathUtils.clamp(1 - gap / FACE_SNAP_PREVIEW_DISTANCE, 0, 1)
+  indicator.closeness = closeness
+  const easedCloseness = Math.pow(closeness, 0.75)
+  indicator.targetOpacity = THREE.MathUtils.lerp(
+    FACE_SNAP_EFFECT_MIN_OPACITY,
+    FACE_SNAP_EFFECT_MAX_OPACITY,
+    easedCloseness,
+  )
+
+  const baseScaleBoost = 1 + FACE_SNAP_EFFECT_SCALE_PULSE * easedCloseness
+  baseScale.set(width * baseScaleBoost, height * baseScaleBoost)
+  plane.scale.set(baseScale.x, baseScale.y, 1)
+
+  indicator.pulseSeed = performance.now()
+  material.opacity = indicator.targetOpacity
+  material.needsUpdate = true
+  plane.visible = true
+  indicator.active = true
 }
 
-function hideFaceSnapEffect() {
-  if (!faceSnapEffectPlane || !faceSnapEffectMaterial) {
+function hideFaceSnapEffect(axis?: AxisKey) {
+  if (typeof axis === 'undefined') {
+    FACE_SNAP_AXES.forEach((key) => hideFaceSnapEffect(key))
     return
   }
-  faceSnapEffectActive = false
-  faceSnapEffectPlane.visible = false
-  faceSnapEffectMaterial.opacity = 0
-  faceSnapEffectMaterial.needsUpdate = true
+
+  const indicator = faceSnapEffectIndicators[axis]
+  if (!indicator) {
+    return
+  }
+
+  indicator.active = false
+  indicator.targetOpacity = 0
+  indicator.closeness = 0
+  indicator.baseScale.set(1, 1)
+  indicator.material.opacity = 0
+  indicator.material.needsUpdate = true
+  indicator.plane.visible = false
 }
 
 function updateFaceSnapEffectIntensity() {
-  if (!faceSnapEffectPlane || !faceSnapEffectMaterial) {
-    return
-  }
-  if (!faceSnapEffectActive) {
-    if (faceSnapEffectPlane.visible) {
-      faceSnapEffectPlane.visible = false
-      faceSnapEffectMaterial.opacity = 0
-      faceSnapEffectMaterial.needsUpdate = true
+  FACE_SNAP_AXES.forEach((axis) => {
+    const indicator = faceSnapEffectIndicators[axis]
+    if (!indicator) {
+      return
     }
-    return
-  }
 
-  const elapsed = performance.now() - faceSnapEffectStartTime
-  if (elapsed >= FACE_SNAP_EFFECT_DURATION) {
-    faceSnapEffectActive = false
-    faceSnapEffectPlane.visible = false
-    faceSnapEffectMaterial.opacity = 0
-    faceSnapEffectMaterial.needsUpdate = true
-    return
-  }
+    const { plane, material, baseScale } = indicator
+    if (!indicator.active) {
+      if (plane.visible) {
+        plane.visible = false
+        material.opacity = 0
+        material.needsUpdate = true
+      }
+      return
+    }
 
-  const fade = 1 - elapsed / FACE_SNAP_EFFECT_DURATION
-  faceSnapEffectMaterial.opacity = FACE_SNAP_EFFECT_MAX_OPACITY * fade
-  faceSnapEffectMaterial.needsUpdate = true
+    const elapsed = performance.now() - indicator.pulseSeed
+    const pulse = Math.sin(elapsed / FACE_SNAP_EFFECT_PULSE_SPEED)
+    const pulseSecondary = Math.sin(elapsed / (FACE_SNAP_EFFECT_PULSE_SPEED * 0.68))
+
+    const opacityPulse = indicator.closeness * 0.18 * pulseSecondary
+    const opacity = THREE.MathUtils.clamp(
+      indicator.targetOpacity + opacityPulse,
+      FACE_SNAP_EFFECT_MIN_OPACITY * 0.5,
+      1,
+    )
+    material.opacity = opacity
+    material.needsUpdate = true
+
+    const scalePulse = indicator.closeness * 0.3 * pulse
+    const scaleFactor = 1 + scalePulse
+    plane.scale.set(baseScale.x * scaleFactor, baseScale.y * scaleFactor, 1)
+  })
 }
 
-function applyFaceAlignmentSnap(target: THREE.Object3D, movementDelta: THREE.Vector3, excludedIds: Set<string>) {
+function applyFaceAlignmentSnap(
+  target: THREE.Object3D,
+  movementDelta: THREE.Vector3,
+  excludedIds: Set<string>,
+) {
+  if (!scene) {
+    return
+  }
+
+  ensureFaceSnapEffectPool()
+
+  target.updateMatrixWorld(true)
   faceSnapPrimaryBounds.setFromObject(target)
   if (faceSnapPrimaryBounds.isEmpty()) {
     hideFaceSnapEffect()
     return
   }
 
-  let bestAxis: AxisKey | null = null
-  let bestDirection: 1 | -1 = 1
-  let bestGap = FACE_SNAP_DISTANCE_THRESHOLD + 1
-  let bestOverlapArea = 0
+  resetFaceSnapAxisResults()
 
   objectMap.forEach((candidate, candidateId) => {
     if (!candidate) {
+      return
+    }
+    if (candidate === target) {
       return
     }
     if (excludedIds.has(candidateId)) {
@@ -2740,12 +2877,12 @@ function applyFaceAlignmentSnap(target: THREE.Object3D, movementDelta: THREE.Vec
       return
     }
 
-    for (const axis of FACE_SNAP_AXES) {
+    FACE_SNAP_AXES.forEach((axis) => {
       evaluateDirection(axis, 1)
       evaluateDirection(axis, -1)
-    }
+    })
 
-    function evaluateDirection(axis: AxisKey, direction: 1 | -1) {
+    function evaluateDirection(axis: AxisKey, direction: SnapDirection) {
       const axisIndex = AXIS_INDEX[axis]
       const primaryMin = faceSnapPrimaryBounds.min.getComponent(axisIndex)
       const primaryMax = faceSnapPrimaryBounds.max.getComponent(axisIndex)
@@ -2756,7 +2893,7 @@ function applyFaceAlignmentSnap(target: THREE.Object3D, movementDelta: THREE.Vec
         ? candidateMin - primaryMax
         : primaryMin - candidateMax
 
-      if (rawGap < -FACE_SNAP_MOVEMENT_EPSILON || rawGap > FACE_SNAP_DISTANCE_THRESHOLD) {
+      if (rawGap < -FACE_SNAP_MOVEMENT_EPSILON || rawGap > FACE_SNAP_PREVIEW_DISTANCE) {
         return
       }
 
@@ -2801,56 +2938,76 @@ function applyFaceAlignmentSnap(target: THREE.Object3D, movementDelta: THREE.Vec
       }
 
       const overlapArea = (firstMax - firstMin) * (secondMax - secondMin)
+      const result = faceSnapAxisResults[axis]
 
       if (
-        gap < bestGap - FACE_SNAP_MOVEMENT_EPSILON ||
-        (Math.abs(gap - bestGap) <= FACE_SNAP_MOVEMENT_EPSILON && overlapArea > bestOverlapArea)
+        !result.valid ||
+        gap < result.gap - FACE_SNAP_MOVEMENT_EPSILON ||
+        (Math.abs(gap - result.gap) <= FACE_SNAP_MOVEMENT_EPSILON && overlapArea > result.overlapArea)
       ) {
-        bestGap = gap
-        bestAxis = axis
-        bestDirection = direction
-        bestOverlapArea = overlapArea
+        result.valid = true
+        result.direction = direction
+        result.gap = gap
+        result.overlapArea = overlapArea
 
         const contact = direction === 1 ? candidateMin : candidateMax
-        faceSnapBestOverlapMin.setComponent(axisIndex, contact)
-        faceSnapBestOverlapMax.setComponent(axisIndex, contact)
-        faceSnapBestOverlapMin.setComponent(firstIndex, firstMin)
-        faceSnapBestOverlapMax.setComponent(firstIndex, firstMax)
-        faceSnapBestOverlapMin.setComponent(secondIndex, secondMin)
-        faceSnapBestOverlapMax.setComponent(secondIndex, secondMax)
+        result.overlapMin.setComponent(axisIndex, contact)
+        result.overlapMax.setComponent(axisIndex, contact)
+        result.overlapMin.setComponent(firstIndex, firstMin)
+        result.overlapMax.setComponent(firstIndex, firstMax)
+        result.overlapMin.setComponent(secondIndex, secondMin)
+        result.overlapMax.setComponent(secondIndex, secondMax)
       }
     }
   })
 
-  if (bestAxis === null) {
+  let anyValidAxis = false
+  faceSnapWorldDelta.set(0, 0, 0)
+
+  FACE_SNAP_AXES.forEach((axis) => {
+    const result = faceSnapAxisResults[axis]
+    if (!result.valid) {
+      hideFaceSnapEffect(axis)
+      return
+    }
+
+    anyValidAxis = true
+    triggerFaceSnapEffect(axis, result.direction, result.overlapMin, result.overlapMax, result.gap)
+
+    if (result.gap > FACE_SNAP_MOVEMENT_EPSILON) {
+      const axisIndex = AXIS_INDEX[axis]
+      const component = faceSnapWorldDelta.getComponent(axisIndex) + result.direction * result.gap
+      faceSnapWorldDelta.setComponent(axisIndex, component)
+    }
+  })
+
+  if (!anyValidAxis) {
     hideFaceSnapEffect()
     return
   }
 
-  if (bestGap > FACE_SNAP_MOVEMENT_EPSILON) {
-    faceSnapWorldDelta.set(0, 0, 0)
-    faceSnapWorldDelta.setComponent(AXIS_INDEX[bestAxis], bestDirection * bestGap)
-    faceSnapLocalDelta.copy(faceSnapWorldDelta)
-
-    const parent = target.parent
-    if (parent) {
-      parent.updateMatrixWorld(true)
-      parent.matrixWorld.decompose(faceSnapParentPosition, faceSnapParentQuaternion, faceSnapParentScale)
-      faceSnapParentQuaternion.invert()
-      faceSnapLocalDelta.applyQuaternion(faceSnapParentQuaternion)
-
-      const safeDivide = (value: number) => (Math.abs(value) <= 1e-6 ? 1 : value)
-      faceSnapLocalDelta.set(
-        faceSnapLocalDelta.x / safeDivide(faceSnapParentScale.x),
-        faceSnapLocalDelta.y / safeDivide(faceSnapParentScale.y),
-        faceSnapLocalDelta.z / safeDivide(faceSnapParentScale.z),
-      )
-    }
-
-    target.position.add(faceSnapLocalDelta)
+  if (faceSnapWorldDelta.lengthSq() <= FACE_SNAP_MOVEMENT_EPSILON * FACE_SNAP_MOVEMENT_EPSILON) {
+    return
   }
 
-  triggerFaceSnapEffect(bestAxis, bestDirection, faceSnapBestOverlapMin, faceSnapBestOverlapMax)
+  faceSnapLocalDelta.copy(faceSnapWorldDelta)
+
+  const parent = target.parent
+  if (parent) {
+    parent.updateMatrixWorld(true)
+    parent.matrixWorld.decompose(faceSnapParentPosition, faceSnapParentQuaternion, faceSnapParentScale)
+    faceSnapParentQuaternion.invert()
+    faceSnapLocalDelta.applyQuaternion(faceSnapParentQuaternion)
+
+    const safeDivide = (value: number) => (Math.abs(value) <= 1e-6 ? 1 : value)
+    faceSnapLocalDelta.set(
+      faceSnapLocalDelta.x / safeDivide(faceSnapParentScale.x),
+      faceSnapLocalDelta.y / safeDivide(faceSnapParentScale.y),
+      faceSnapLocalDelta.z / safeDivide(faceSnapParentScale.z),
+    )
+  }
+
+  target.position.add(faceSnapLocalDelta)
 }
 
 export type SceneViewportHandle = {
@@ -2858,7 +3015,6 @@ export type SceneViewportHandle = {
   captureThumbnail(): void
   captureScreenshot(mimeType?: string): Promise<Blob | null>
 }
-
 
 async function exportScene(options: SceneExportOptions, onProgress: (progress: number, message?: string) => void): Promise<Blob> {
   if (!scene) {
@@ -2869,9 +3025,9 @@ async function exportScene(options: SceneExportOptions, onProgress: (progress: n
     return prepareGLBSceneExport(scene, options)
   } else if (options.format === 'json') {
     let snapshot = sceneStore.createSceneDocumentSnapshot() as StoredSceneDocument
-    const packageAssetMap = await buildPackageAssetMapForExport(snapshot,{embedResources:true})
+    const packageAssetMap = await buildPackageAssetMapForExport(snapshot, { embedResources: true })
     snapshot.packageAssetMap = packageAssetMap
-    const resourceSummary = await calculateSceneResourceSummary(snapshot,{embedResources:true})
+    const resourceSummary = await calculateSceneResourceSummary(snapshot, { embedResources: true })
     snapshot.resourceSummary = resourceSummary
     onProgress(35, 'Applying export preferences...')
     const jsonDocument = await prepareJsonSceneExport(snapshot, options)
@@ -3233,7 +3389,7 @@ function initScene() {
   if (gridHighlight) {
     scene.add(gridHighlight)
   }
-  ensureFaceSnapEffectIndicator()
+  ensureFaceSnapEffectPool()
   applyGridVisibility(gridVisible.value)
   applyAxesVisibility(axesVisible.value)
   ensureFallbackLighting()
@@ -3916,15 +4072,16 @@ function disposeScene() {
   }
   applyInteractiveQuality(false)
   hideFaceSnapEffect()
-  if (faceSnapEffectPlane) {
-    faceSnapEffectPlane.removeFromParent()
-    faceSnapEffectPlane.geometry.dispose()
-  }
-  faceSnapEffectMaterial?.dispose()
-  faceSnapEffectPlane = null
-  faceSnapEffectMaterial = null
-  faceSnapEffectActive = false
-  faceSnapEffectStartTime = 0
+  FACE_SNAP_AXES.forEach((axis) => {
+    const indicator = faceSnapEffectIndicators[axis]
+    if (!indicator) {
+      return
+    }
+    indicator.plane.removeFromParent()
+    indicator.plane.geometry.dispose()
+    indicator.material.dispose()
+    faceSnapEffectIndicators[axis] = null
+  })
   hasTransformLastWorldPosition = false
 
   if (canvasRef.value) {
