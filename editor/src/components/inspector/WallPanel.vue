@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { SceneNodeComponentState } from '@harmony/schema'
@@ -22,6 +22,9 @@ const localHeight = ref<number>(WALL_DEFAULT_HEIGHT)
 const localWidth = ref<number>(WALL_DEFAULT_WIDTH)
 const localThickness = ref<number>(WALL_DEFAULT_THICKNESS)
 
+const isSyncingFromScene = ref(false)
+const isApplyingDimensions = ref(false)
+
 const wallComponent = computed(
   () => selectedNode.value?.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined,
 )
@@ -32,12 +35,36 @@ watch(
     if (!props) {
       return
     }
-    localHeight.value = props.height
-    localWidth.value = props.width
-    localThickness.value = props.thickness
+    isSyncingFromScene.value = true
+    localHeight.value = props.height ?? WALL_DEFAULT_HEIGHT
+    localWidth.value = props.width ?? WALL_DEFAULT_WIDTH
+    localThickness.value = props.thickness ?? WALL_DEFAULT_THICKNESS
+    nextTick(() => {
+      isSyncingFromScene.value = false
+    })
   },
   { immediate: true, deep: true },
 )
+
+watch([
+  localHeight,
+  localWidth,
+  localThickness,
+], ([height, width, thickness], [prevHeight, prevWidth, prevThickness]) => {
+  if (isSyncingFromScene.value || isApplyingDimensions.value) {
+    return
+  }
+
+  if (!Number.isFinite(height) || !Number.isFinite(width) || !Number.isFinite(thickness)) {
+    return
+  }
+
+  if (height === prevHeight && width === prevWidth && thickness === prevThickness) {
+    return
+  }
+
+  applyDimensions()
+})
 
 function handleToggleComponent() {
   const component = wallComponent.value
@@ -53,7 +80,7 @@ function handleToggleComponent() {
 function handleRemoveComponent() {
   const component = wallComponent.value
   const nodeId = selectedNodeId.value
-    if (!component || !nodeId) {
+  if (!component || !nodeId) {
     return
   }
   sceneStore.removeNodeComponent(nodeId, component.id)
@@ -67,26 +94,51 @@ function clampDimension(value: number, fallback: number, min: number): number {
 }
 
 function applyDimensions() {
+  if (isApplyingDimensions.value) {
+    return
+  }
+
   const component = wallComponent.value
   const nodeId = selectedNodeId.value
   if (!component || !nodeId) {
     return
   }
 
-  const props = component.props as WallComponentProps
-  const nextHeight = clampDimension(Number(localHeight.value), props.height ?? WALL_DEFAULT_HEIGHT, WALL_MIN_HEIGHT)
-  const nextWidth = clampDimension(Number(localWidth.value), props.width ?? WALL_DEFAULT_WIDTH, WALL_MIN_WIDTH)
-  const nextThickness = clampDimension(Number(localThickness.value), props.thickness ?? WALL_DEFAULT_THICKNESS, WALL_MIN_THICKNESS)
+  isApplyingDimensions.value = true
+  const props = (component.props ?? {}) as Partial<WallComponentProps>
 
-  localHeight.value = nextHeight
-  localWidth.value = nextWidth
-  localThickness.value = nextThickness
+  try {
+    const nextHeight = clampDimension(Number(localHeight.value), props.height ?? WALL_DEFAULT_HEIGHT, WALL_MIN_HEIGHT)
+    const nextWidth = clampDimension(Number(localWidth.value), props.width ?? WALL_DEFAULT_WIDTH, WALL_MIN_WIDTH)
+    const nextThickness = clampDimension(Number(localThickness.value), props.thickness ?? WALL_DEFAULT_THICKNESS, WALL_MIN_THICKNESS)
 
-  sceneStore.updateNodeComponentProps(nodeId, component.id, {
-    height: nextHeight,
-    width: nextWidth,
-    thickness: nextThickness,
-  })
+    const hasChanges =
+      props.height !== nextHeight ||
+      props.width !== nextWidth ||
+      props.thickness !== nextThickness
+
+    if (localHeight.value !== nextHeight) {
+      localHeight.value = nextHeight
+    }
+    if (localWidth.value !== nextWidth) {
+      localWidth.value = nextWidth
+    }
+    if (localThickness.value !== nextThickness) {
+      localThickness.value = nextThickness
+    }
+
+    if (hasChanges) {
+      sceneStore.updateNodeComponentProps(nodeId, component.id, {
+        height: nextHeight,
+        width: nextWidth,
+        thickness: nextThickness,
+      })
+    }
+  } finally {
+    nextTick(() => {
+      isApplyingDimensions.value = false
+    })
+  }
 }
 </script>
 
