@@ -6244,6 +6244,8 @@ export const useSceneStore = defineStore('scene', {
       if (!positionChanged && !rotationChanged && !scaleChanged) {
         return
       }
+      const parentMap = buildParentMap(this.nodes)
+      const parentId = parentMap.get(payload.id) ?? null
       const isActiveTransform = this.activeTransformNodeId === payload.id
       if (isActiveTransform) {
         if (!this.transformSnapshotCaptured) {
@@ -6262,7 +6264,12 @@ export const useSceneStore = defineStore('scene', {
         node.rotation = cloneVector(payload.rotation)
         node.scale = cloneVector(payload.scale)
       })
-      this.nodes = [...this.nodes]
+      const recentered = parentId
+        ? this.recenterGroupAncestry(parentId, { captureHistory: false, parentMap })
+        : false
+      if (!recentered) {
+        this.nodes = [...this.nodes]
+      }
       if (scaleChanged) {
         const updatedNode = findNodeById(this.nodes, payload.id)
         refreshDisplayBoardGeometry(updatedNode)
@@ -6274,6 +6281,7 @@ export const useSceneStore = defineStore('scene', {
       if (!target) {
         return
       }
+      const parentMap = buildParentMap(this.nodes)
       let changed = false
       let scaleChanged = false
       if (payload.position && !vectorsEqual(target.position, payload.position)) {
@@ -6302,13 +6310,19 @@ export const useSceneStore = defineStore('scene', {
       } else {
         this.captureHistorySnapshot()
       }
+      const parentId = parentMap.get(payload.id) ?? null
       visitNode(this.nodes, payload.id, (node) => {
         if (payload.position) node.position = cloneVector(payload.position)
         if (payload.rotation) node.rotation = cloneVector(payload.rotation)
         if (payload.scale) node.scale = cloneVector(payload.scale)
       })
-      // trigger reactivity for listeners relying on reference changes
-      this.nodes = [...this.nodes]
+      const recentered = parentId
+        ? this.recenterGroupAncestry(parentId, { captureHistory: false, parentMap })
+        : false
+      if (!recentered) {
+        // trigger reactivity for listeners relying on reference changes
+        this.nodes = [...this.nodes]
+      }
       if (scaleChanged) {
         const updatedNode = findNodeById(this.nodes, payload.id)
         refreshDisplayBoardGeometry(updatedNode)
@@ -6320,8 +6334,10 @@ export const useSceneStore = defineStore('scene', {
         return
       }
 
+      const parentMap = buildParentMap(this.nodes)
       const prepared: TransformUpdatePayload[] = []
       const scaleRefreshTargets = new Set<string>()
+      const affectedParentIds = new Set<string>()
 
       payloads.forEach((payload) => {
         if (!payload || !payload.id) {
@@ -6348,6 +6364,10 @@ export const useSceneStore = defineStore('scene', {
         }
         if (changed) {
           prepared.push(next)
+          const parentId = parentMap.get(payload.id) ?? null
+          if (parentId) {
+            affectedParentIds.add(parentId)
+          }
         }
       })
 
@@ -6385,8 +6405,15 @@ export const useSceneStore = defineStore('scene', {
           }
         })
       })
-
-      this.nodes = [...this.nodes]
+      let recentered = false
+      affectedParentIds.forEach((parentId) => {
+        if (this.recenterGroupAncestry(parentId, { captureHistory: false, parentMap })) {
+          recentered = true
+        }
+      })
+      if (!recentered) {
+        this.nodes = [...this.nodes]
+      }
       if (scaleRefreshTargets.size) {
         scaleRefreshTargets.forEach((id) => {
           const updatedNode = findNodeById(this.nodes, id)
@@ -8440,13 +8467,16 @@ export const useSceneStore = defineStore('scene', {
       this.nodeHighlightTargetId = null
     },
 
-    recenterGroupNode(groupId: string, options: { captureHistory?: boolean; commit?: boolean } = {}) {
+    recenterGroupNode(
+      groupId: string,
+      options: { captureHistory?: boolean; commit?: boolean; parentMap?: Map<string, string | null> } = {},
+    ) {
       const group = findNodeById(this.nodes, groupId)
       if (!isGroupNode(group) || !group.children?.length) {
         return false
       }
 
-      const parentMap = buildParentMap(this.nodes)
+      const parentMap = options.parentMap ?? buildParentMap(this.nodes)
       const parentId = parentMap.get(groupId) ?? null
       const parentWorldMatrix = parentId ? computeWorldMatrixForNode(this.nodes, parentId) : new Matrix4()
       if (!parentWorldMatrix) {
@@ -8532,6 +8562,40 @@ export const useSceneStore = defineStore('scene', {
         commitSceneSnapshot(this)
       }
       return true
+    },
+
+    recenterGroupAncestry(
+      startGroupId: string | null,
+      options: { captureHistory?: boolean; parentMap?: Map<string, string | null> } = {},
+    ) {
+      if (!startGroupId) {
+        return false
+      }
+      const parentMap = options.parentMap ?? buildParentMap(this.nodes)
+      const visited = new Set<string>()
+      let current: string | null = startGroupId
+      let changed = false
+      let isFirst = true
+      const captureFirst = options.captureHistory === true
+
+      while (current) {
+        if (visited.has(current)) {
+          break
+        }
+        const recentered = this.recenterGroupNode(current, {
+          captureHistory: captureFirst && isFirst,
+          commit: false,
+          parentMap,
+        })
+        if (recentered) {
+          changed = true
+        }
+        visited.add(current)
+        current = parentMap.get(current) ?? null
+        isFirst = false
+      }
+
+      return changed
     },
 
     isDescendant(ancestorId: string, maybeChildId: string) {
@@ -8625,11 +8689,12 @@ export const useSceneStore = defineStore('scene', {
 
       this.captureHistorySnapshot()
       this.nodes = tree
+      const postMoveParentMap = buildParentMap(this.nodes)
       if (oldParentId) {
-        this.recenterGroupNode(oldParentId, { captureHistory: false, commit: false })
+        this.recenterGroupAncestry(oldParentId, { captureHistory: false, parentMap: postMoveParentMap })
       }
       if (newParentId && newParentId !== oldParentId) {
-        this.recenterGroupNode(newParentId, { captureHistory: false, commit: false })
+        this.recenterGroupAncestry(newParentId, { captureHistory: false, parentMap: postMoveParentMap })
       }
       commitSceneSnapshot(this)
       return true
@@ -9216,7 +9281,8 @@ export const useSceneStore = defineStore('scene', {
       }
       this.nodes = nextTree
       if (parentId) {
-        this.recenterGroupNode(parentId, { captureHistory: false, commit: false })
+        const parentMap = buildParentMap(this.nodes)
+        this.recenterGroupAncestry(parentId, { captureHistory: false, parentMap })
       }
       this.setSelection([id], { primaryId: id })
       commitSceneSnapshot(this)
@@ -9382,10 +9448,18 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
+      const parentMap = buildParentMap(this.nodes)
+      const parentId = parentMap.get(nodeId) ?? null
+
       this.captureHistorySnapshot()
       node.position = createVector(build.center.x, build.center.y, build.center.z)
       node.dynamicMesh = build.definition
-      this.nodes = [...this.nodes]
+      const recentered = parentId
+        ? this.recenterGroupAncestry(parentId, { captureHistory: false, parentMap })
+        : false
+      if (!recentered) {
+        this.nodes = [...this.nodes]
+      }
       commitSceneSnapshot(this)
 
       const runtime = getRuntimeObject(nodeId)
@@ -9802,20 +9876,35 @@ export const useSceneStore = defineStore('scene', {
       if (!Array.isArray(ids) || ids.length === 0) {
         return
       }
-  const existingIds = ids.filter(
-    (id) => id !== GROUND_NODE_ID && id !== SKY_NODE_ID && id !== ENVIRONMENT_NODE_ID && !!findNodeById(this.nodes, id),
-  )
+      const existingIds = ids.filter(
+        (id) => id !== GROUND_NODE_ID && id !== SKY_NODE_ID && id !== ENVIRONMENT_NODE_ID && !!findNodeById(this.nodes, id),
+      )
       if (!existingIds.length) {
         return
       }
       const idSet = new Set(existingIds)
+      const parentMap = buildParentMap(this.nodes)
+      const affectedParentIds = new Set<string>()
+      existingIds.forEach((id) => {
+        const parentId = parentMap.get(id) ?? null
+        if (parentId) {
+          affectedParentIds.add(parentId)
+        }
+      })
 
       this.captureHistorySnapshot()
 
       const removed: string[] = []
       this.nodes = pruneNodes(this.nodes, idSet, removed)
 
-  removed.forEach((id) => stopPlaceholderWatcher(id))
+      removed.forEach((id) => stopPlaceholderWatcher(id))
+
+      affectedParentIds.forEach((parentId) => {
+        if (!findNodeById(this.nodes, parentId)) {
+          return
+        }
+        this.recenterGroupAncestry(parentId, { captureHistory: false })
+      })
 
       const prevSelection = cloneSelection(this.selectedNodeIds)
       const nextSelection = prevSelection.filter((id) => !removed.includes(id))
@@ -10135,6 +10224,14 @@ export const useSceneStore = defineStore('scene', {
       const working = cloneSceneNodes(this.nodes)
       const duplicateIdMap = new Map<string, string>()
       const duplicates: SceneNode[] = []
+      const affectedParentIds = new Set<string>()
+
+      topLevelIds.forEach((id) => {
+        const parentId = parentMap.get(id) ?? null
+        if (parentId) {
+          affectedParentIds.add(parentId)
+        }
+      })
 
       this.captureHistorySnapshot()
 
@@ -10162,6 +10259,12 @@ export const useSceneStore = defineStore('scene', {
       }
 
       this.nodes = working
+      affectedParentIds.forEach((parentId) => {
+        if (!findNodeById(this.nodes, parentId)) {
+          return
+        }
+        this.recenterGroupAncestry(parentId, { captureHistory: false })
+      })
       assetCache.recalculateUsage(this.nodes)
 
       if (selectDuplicates) {
@@ -10296,6 +10399,10 @@ export const useSceneStore = defineStore('scene', {
       })
       if (adjusted) {
         this.nodes = [...this.nodes]
+      }
+
+      if (parentId) {
+        this.recenterGroupAncestry(parentId, { captureHistory: false })
       }
 
       useAssetCacheStore().recalculateUsage(this.nodes)
