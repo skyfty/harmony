@@ -4754,9 +4754,26 @@ async function handlePointerDown(event: PointerEvent) {
     }
   }
 
+  const currentPrimaryId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+
   let dragHit = hit
-  if (!dragHit && button === 0 && props.activeTool === 'select') {
-    dragHit = pickActiveSelectionBoundingBoxHit(event)
+  if (button === 0 && props.activeTool === 'select') {
+    if (dragHit && currentPrimaryId && dragHit.nodeId !== currentPrimaryId) {
+      if (sceneStore.isDescendant(currentPrimaryId, dragHit.nodeId)) {
+        const primaryObject = objectMap.get(currentPrimaryId)
+        if (primaryObject) {
+          const worldPoint = dragHit.point.clone()
+          dragHit = {
+            nodeId: currentPrimaryId,
+            object: primaryObject,
+            point: worldPoint,
+          }
+        }
+      }
+    }
+    if (!dragHit) {
+      dragHit = pickActiveSelectionBoundingBoxHit(event)
+    }
   }
 
   const activeTransformAxis = button === 0 && props.activeTool !== 'select' ? (transformControls?.axis ?? null) : null
@@ -4767,7 +4784,6 @@ async function handlePointerDown(event: PointerEvent) {
     /* noop */
   }
 
-  const currentPrimaryId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
   const selectionDrag = button === 0 && props.activeTool === 'select' && dragHit && currentPrimaryId && dragHit.nodeId === currentPrimaryId
     ? createSelectionDragState(dragHit.nodeId, dragHit.object, dragHit.point, event)
     : null
