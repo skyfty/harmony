@@ -88,7 +88,6 @@ class GroundLightEffectController implements EffectController {
   private readonly ringEntries: RingEntry[] = []
   private readonly rings: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>[] = []
   private readonly centerDisc: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>
-  private readonly glowDisc: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>
   private readonly particleState: ParticleState
   private readonly particleSystem: THREE.Points
   private elapsed = 0
@@ -173,19 +172,6 @@ class GroundLightEffectController implements EffectController {
     this.centerDisc.position.y = 0.015
     this.group.add(this.centerDisc)
 
-    const glowGeometry = new THREE.CircleGeometry(GROUND_LIGHT_BEAM_RADIUS * 2.8, 64)
-    const glowMaterial = new THREE.MeshBasicMaterial({
-      color: this.color,
-      transparent: true,
-      opacity: 0.35,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    })
-    this.glowDisc = new THREE.Mesh(glowGeometry, glowMaterial)
-    this.glowDisc.rotation.x = -Math.PI / 2
-    this.glowDisc.position.y = 0.005
-    this.group.add(this.glowDisc)
-
     const particleGeometry = new THREE.BufferGeometry()
     const positions = new Float32Array(GROUND_LIGHT_PARTICLE_COUNT * 3)
     const velocities = new Float32Array(GROUND_LIGHT_PARTICLE_COUNT)
@@ -250,11 +236,6 @@ class GroundLightEffectController implements EffectController {
       }
     })
 
-    const glowOpacity = 0.28 + Math.sin(this.elapsed * 2.5) * 0.12
-    this.glowDisc.material.opacity = glowOpacity * this.intensityFactor
-    const glowScale = 1 + Math.sin(this.elapsed * 1.6) * 0.06 * this.intensityFactor
-    this.glowDisc.scale.setScalar(glowScale)
-
     this.centerDisc.material.opacity = 0.55 * this.intensityFactor
 
     const positionAttribute = this.particleState.geometry.getAttribute('position') as THREE.BufferAttribute | undefined
@@ -296,8 +277,6 @@ class GroundLightEffectController implements EffectController {
     })
     this.centerDisc.geometry.dispose()
     this.centerDisc.material.dispose()
-    this.glowDisc.geometry.dispose()
-    this.glowDisc.material.dispose()
     this.particleState.geometry.dispose()
     this.particleState.material.dispose()
   }
@@ -314,7 +293,6 @@ class GroundLightEffectController implements EffectController {
       mesh.material.color.copy(this.color)
     })
     this.centerDisc.material.color.copy(this.color)
-    this.glowDisc.material.color.copy(this.color)
     this.particleState.material.color.copy(this.color)
   }
 
