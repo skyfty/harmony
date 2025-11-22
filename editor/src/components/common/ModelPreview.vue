@@ -121,7 +121,7 @@ function setupScene(): void {
   container.value.appendChild(renderer.domElement)
 
   controls = new OrbitControls(camera, renderer.domElement)
-  controls.enableDamping = true
+  controls.enableDamping = false
   controls.dampingFactor = 0.05
 
   const ambient = new THREE.AmbientLight(0xffffff, 1.5)
