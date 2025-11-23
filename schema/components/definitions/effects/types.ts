@@ -6,6 +6,11 @@ export interface GroundLightEffectProps {
   color: string
   intensity: number
   scale: number
+  particleSize: number
+  particleCount: number
+  showParticles: boolean
+  showBeams: boolean
+  showRings: boolean
 }
 
 export interface EffectComponentProps {

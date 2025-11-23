@@ -6,10 +6,19 @@ import {
   DEFAULT_GROUND_LIGHT_COLOR,
   DEFAULT_GROUND_LIGHT_INTENSITY,
   DEFAULT_GROUND_LIGHT_SCALE,
+  DEFAULT_GROUND_LIGHT_PARTICLE_SIZE,
+  DEFAULT_GROUND_LIGHT_PARTICLE_COUNT,
+  DEFAULT_GROUND_LIGHT_SHOW_PARTICLES,
+  DEFAULT_GROUND_LIGHT_SHOW_BEAMS,
+  DEFAULT_GROUND_LIGHT_SHOW_RINGS,
   GROUND_LIGHT_INTENSITY_MAX,
   GROUND_LIGHT_INTENSITY_MIN,
   GROUND_LIGHT_SCALE_MAX,
   GROUND_LIGHT_SCALE_MIN,
+  GROUND_LIGHT_PARTICLE_SIZE_MIN,
+  GROUND_LIGHT_PARTICLE_SIZE_MAX,
+  GROUND_LIGHT_PARTICLE_COUNT_MIN,
+  GROUND_LIGHT_PARTICLE_COUNT_MAX,
 } from './effects/groundLight'
 import { effectControllerFactories } from './effects'
 import type {
@@ -23,10 +32,19 @@ export {
   DEFAULT_GROUND_LIGHT_COLOR,
   DEFAULT_GROUND_LIGHT_INTENSITY,
   DEFAULT_GROUND_LIGHT_SCALE,
+  DEFAULT_GROUND_LIGHT_PARTICLE_SIZE,
+  DEFAULT_GROUND_LIGHT_PARTICLE_COUNT,
+  DEFAULT_GROUND_LIGHT_SHOW_PARTICLES,
+  DEFAULT_GROUND_LIGHT_SHOW_BEAMS,
+  DEFAULT_GROUND_LIGHT_SHOW_RINGS,
   GROUND_LIGHT_INTENSITY_MIN,
   GROUND_LIGHT_INTENSITY_MAX,
   GROUND_LIGHT_SCALE_MIN,
   GROUND_LIGHT_SCALE_MAX,
+  GROUND_LIGHT_PARTICLE_SIZE_MIN,
+  GROUND_LIGHT_PARTICLE_SIZE_MAX,
+  GROUND_LIGHT_PARTICLE_COUNT_MIN,
+  GROUND_LIGHT_PARTICLE_COUNT_MAX,
 }
 
 export const EFFECT_COMPONENT_TYPE = 'effect'
@@ -56,6 +74,34 @@ function normalizeHexColor(value: unknown, fallback: string): string {
   return `#${trimmed.slice(1).toLowerCase()}`
 }
 
+function normalizeBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === 'boolean') {
+    return value
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      return fallback
+    }
+    if (value === 1) {
+      return true
+    }
+    if (value === 0) {
+      return false
+    }
+    return fallback
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === 'true') {
+      return true
+    }
+    if (normalized === 'false') {
+      return false
+    }
+  }
+  return fallback
+}
+
 export function clampEffectComponentProps(
   props: Partial<EffectComponentProps> | null | undefined,
 ): EffectComponentProps {
@@ -77,6 +123,34 @@ export function clampEffectComponentProps(
     GROUND_LIGHT_SCALE_MAX,
     DEFAULT_GROUND_LIGHT_SCALE,
   )
+  const particleSize = clampNumber(
+    (groundLightSource as { particleSize?: number }).particleSize,
+    GROUND_LIGHT_PARTICLE_SIZE_MIN,
+    GROUND_LIGHT_PARTICLE_SIZE_MAX,
+    DEFAULT_GROUND_LIGHT_PARTICLE_SIZE,
+  )
+  const rawParticleCount = clampNumber(
+    (groundLightSource as { particleCount?: number }).particleCount,
+    GROUND_LIGHT_PARTICLE_COUNT_MIN,
+    GROUND_LIGHT_PARTICLE_COUNT_MAX,
+    DEFAULT_GROUND_LIGHT_PARTICLE_COUNT,
+  )
+  const particleCount = Math.min(
+    GROUND_LIGHT_PARTICLE_COUNT_MAX,
+    Math.max(GROUND_LIGHT_PARTICLE_COUNT_MIN, Math.round(rawParticleCount)),
+  )
+  const showParticles = normalizeBoolean(
+    (groundLightSource as { showParticles?: unknown }).showParticles,
+    DEFAULT_GROUND_LIGHT_SHOW_PARTICLES,
+  )
+  const showBeams = normalizeBoolean(
+    (groundLightSource as { showBeams?: unknown }).showBeams,
+    DEFAULT_GROUND_LIGHT_SHOW_BEAMS,
+  )
+  const showRings = normalizeBoolean(
+    (groundLightSource as { showRings?: unknown }).showRings,
+    DEFAULT_GROUND_LIGHT_SHOW_RINGS,
+  )
 
   return {
     effectType,
@@ -84,6 +158,11 @@ export function clampEffectComponentProps(
       color,
       intensity,
       scale,
+      particleSize,
+      particleCount,
+      showParticles,
+      showBeams,
+      showRings,
     },
   }
 }
@@ -95,6 +174,11 @@ export function cloneEffectComponentProps(props: EffectComponentProps): EffectCo
       color: props.groundLight.color,
       intensity: props.groundLight.intensity,
       scale: props.groundLight.scale,
+      particleSize: props.groundLight.particleSize,
+      particleCount: props.groundLight.particleCount,
+      showParticles: props.groundLight.showParticles,
+      showBeams: props.groundLight.showBeams,
+      showRings: props.groundLight.showRings,
     },
   }
 }

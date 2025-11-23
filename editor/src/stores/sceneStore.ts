@@ -5912,7 +5912,7 @@ export const useSceneStore = defineStore('scene', {
       this.shadowsEnabled = normalizeShadowsEnabledInput(this.shadowsEnabled)
       void this.refreshRuntimeState({ showOverlay: false, refreshViewport: false })
     },
-    async refreshRuntimeState(options: { showOverlay?: boolean; refreshViewport?: boolean } = {}) {
+    async refreshRuntimeState(options: { showOverlay?: boolean; refreshViewport?: boolean; skipComponentSync?: boolean } = {}) {
       if (runtimeRefreshInFlight) {
         try {
           await runtimeRefreshInFlight
@@ -5924,12 +5924,15 @@ export const useSceneStore = defineStore('scene', {
       const task = (async () => {
         const showOverlay = options.showOverlay ?? false
         const refreshViewport = options.refreshViewport ?? false
+        const skipComponentSync = options.skipComponentSync ?? false
 
         clearRuntimeObjectRegistry()
         componentManager.reset()
 
         if (!this.nodes.length) {
-          componentManager.syncScene(this.nodes)
+          if (!skipComponentSync) {
+            componentManager.syncScene(this.nodes)
+          }
           useAssetCacheStore().recalculateUsage(this.nodes)
           return
         }
@@ -5960,8 +5963,10 @@ export const useSceneStore = defineStore('scene', {
           })
         }
 
-        reattachRuntimeObjectsForNodes(this.nodes)
-        componentManager.syncScene(this.nodes)
+        if (!skipComponentSync) {
+          reattachRuntimeObjectsForNodes(this.nodes)
+          componentManager.syncScene(this.nodes)
+        }
         useAssetCacheStore().recalculateUsage(this.nodes)
       })()
 
@@ -9887,7 +9892,7 @@ export const useSceneStore = defineStore('scene', {
         }
         nextProps = cloneDisplayBoardComponentProps(merged)
       } else if (type === EFFECT_COMPONENT_TYPE) {
-        const currentProps = component.props as EffectComponentProps
+        const currentProps = clampEffectComponentProps(component.props as EffectComponentProps)
         const typedPatch = patch as Partial<EffectComponentProps>
         const merged = clampEffectComponentProps({
           ...currentProps,
@@ -9901,7 +9906,12 @@ export const useSceneStore = defineStore('scene', {
           currentProps.effectType === merged.effectType &&
           currentProps.groundLight.color === merged.groundLight.color &&
           Math.abs(currentProps.groundLight.intensity - merged.groundLight.intensity) <= 1e-4 &&
-          Math.abs(currentProps.groundLight.scale - merged.groundLight.scale) <= 1e-4
+          Math.abs(currentProps.groundLight.scale - merged.groundLight.scale) <= 1e-4 &&
+          Math.abs(currentProps.groundLight.particleSize - merged.groundLight.particleSize) <= 1e-4 &&
+          currentProps.groundLight.particleCount === merged.groundLight.particleCount &&
+          currentProps.groundLight.showParticles === merged.groundLight.showParticles &&
+          currentProps.groundLight.showBeams === merged.groundLight.showBeams &&
+          currentProps.groundLight.showRings === merged.groundLight.showRings
         if (unchanged) {
           return false
         }
@@ -11012,7 +11022,7 @@ export const useSceneStore = defineStore('scene', {
         renamedScenes,
       }
     },
-    async ensureCurrentSceneLoaded() {
+    async ensureCurrentSceneLoaded(options: { skipComponentSync?: boolean } = {}) {
       this.isSceneReady = false
       const scenesStore = useScenesStore()
 
@@ -11032,9 +11042,9 @@ export const useSceneStore = defineStore('scene', {
           this.panelPlacement = normalizePanelPlacementStateInput(fallback.panelPlacement)
           this.resourceProviderId = fallback.resourceProviderId
           this.hasUnsavedChanges = false
-          await this.refreshRuntimeState({ showOverlay: false, refreshViewport: false })
+          await this.refreshRuntimeState({ showOverlay: false, refreshViewport: false, skipComponentSync: options.skipComponentSync })
         } else {
-          await this.refreshRuntimeState({ showOverlay: true, refreshViewport: false })
+          await this.refreshRuntimeState({ showOverlay: true, refreshViewport: false, skipComponentSync: options.skipComponentSync })
         }
       } finally {
         this.isSceneReady = true

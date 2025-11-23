@@ -212,7 +212,7 @@ import {
   GUIDEBOARD_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
 } from '@schema/components';
-import type { GuideboardComponentProps } from '@schema/components';
+import type { EffectComponentProps, GuideboardComponentProps } from '@schema/components';
 import {
   addBehaviorRuntimeListener,
   hasRegisteredBehaviors,
@@ -2363,22 +2363,46 @@ function updateBehaviorProximity(): void {
 
 function resetEffectRuntimeTickers(): void {
   effectRuntimeTickers = [];
+  nodeObjectMap.forEach((object) => {
+    const userData = object.userData;
+    if (userData && Object.prototype.hasOwnProperty.call(userData, '__harmonyGroundLightActive')) {
+      delete userData.__harmonyGroundLightActive;
+    }
+  });
 }
 
 function refreshEffectRuntimeTickers(): void {
   resetEffectRuntimeTickers();
+  const uniqueTickers = new Set<(delta: number) => void>();
   nodeObjectMap.forEach((object) => {
-    const registry = object.userData?.[RUNTIME_REGISTRY_KEY] as Record<string, { tick?: (delta: number) => void }> | undefined;
+    const registry = object.userData?.[RUNTIME_REGISTRY_KEY] as Record<string, { tick?: (delta: number) => void; props?: EffectComponentProps }> | undefined;
     if (!registry) {
       return;
     }
+    const userData = object.userData ?? (object.userData = {});
+    let groundLightSeen = false;
+    let groundLightActive = false;
     Object.values(registry).forEach((entry) => {
-      const tick = (entry as { tick?: (delta: number) => void }).tick;
+      const typedEntry = entry as { tick?: (delta: number) => void; props?: EffectComponentProps };
+      const props = typedEntry.props;
+      if (props?.effectType === 'groundLight') {
+        groundLightSeen = true;
+        const { showParticles, showBeams, showRings, particleCount } = props.groundLight;
+        const hasVisibleParticles = showParticles && particleCount > 0;
+        groundLightActive = hasVisibleParticles || showBeams || showRings;
+      }
+      const tick = typedEntry.tick;
       if (typeof tick === 'function') {
-        effectRuntimeTickers.push(tick);
+        uniqueTickers.add(tick);
       }
     });
+    if (groundLightSeen) {
+      userData.__harmonyGroundLightActive = groundLightActive;
+    } else if (Object.prototype.hasOwnProperty.call(userData, '__harmonyGroundLightActive')) {
+      delete userData.__harmonyGroundLightActive;
+    }
   });
+  effectRuntimeTickers = uniqueTickers.size ? Array.from(uniqueTickers) : [];
 }
 
 function resetAnimationControllers(): void {

@@ -8158,8 +8158,9 @@ onMounted(() => {
     viewportResizeObserver.observe(viewportEl.value)
   }
 
-  sceneStore.ensureCurrentSceneLoaded().then(() => {
+  sceneStore.ensureCurrentSceneLoaded({ skipComponentSync: true }).then(() => {
     syncSceneGraph()
+    sceneStore.syncComponentRuntimes()
   })
 })
 
