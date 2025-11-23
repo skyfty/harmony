@@ -521,9 +521,9 @@ const GRID_SNAP_SPACING = GRID_MINOR_SPACING
 const WALL_DIAGONAL_SNAP_THRESHOLD = THREE.MathUtils.degToRad(20)
 const GRID_MINOR_DASH_SIZE = GRID_MINOR_SPACING * 0.12
 const GRID_MINOR_GAP_SIZE = GRID_MINOR_SPACING * 0.2
-const FACE_SNAP_PREVIEW_DISTANCE = 0.22
+const FACE_SNAP_PREVIEW_DISTANCE = 0.1
 const FACE_SNAP_COMMIT_DISTANCE = 0.04
-const FACE_SNAP_MIN_OVERLAP = 0.1
+const FACE_SNAP_MIN_OVERLAP = 0.05
 const FACE_SNAP_MOVEMENT_EPSILON = 1e-4
 const FACE_SNAP_EFFECT_MAX_OPACITY = 0.78
 const FACE_SNAP_EFFECT_MIN_OPACITY = 0.2
@@ -1683,6 +1683,37 @@ function handleAltOverrideBlur() {
   deactivateAltOverride()
 }
 
+function updateFaceSnapCommitState(active: boolean) {
+  if (isFaceSnapCommitActive === active) {
+    return
+  }
+  isFaceSnapCommitActive = active
+}
+
+function handleFaceSnapCommitKeyDown(event: KeyboardEvent) {
+  if (event.key !== 'Shift') {
+    return
+  }
+  if (event.defaultPrevented) {
+    return
+  }
+  if (isEditableKeyboardTarget(event.target)) {
+    return
+  }
+  updateFaceSnapCommitState(true)
+}
+
+function handleFaceSnapCommitKeyUp(event: KeyboardEvent) {
+  if (event.key !== 'Shift') {
+    return
+  }
+  updateFaceSnapCommitState(event.shiftKey)
+}
+
+function handleFaceSnapCommitBlur() {
+  updateFaceSnapCommitState(false)
+}
+
 function handleViewportContextMenu(event: MouseEvent) {
   event.preventDefault()
 }
@@ -1746,6 +1777,7 @@ const faceSnapParentQuaternion = new THREE.Quaternion()
 const faceSnapParentScale = new THREE.Vector3()
 const faceSnapDefaultNormal = new THREE.Vector3(0, 0, 1)
 const faceSnapExcludedIds = new Set<string>()
+let isFaceSnapCommitActive = false
 type AxisKey = 'x' | 'y' | 'z'
 type SnapDirection = 1 | -1
 const FACE_SNAP_AXES: AxisKey[] = ['x', 'y', 'z']
@@ -3178,6 +3210,10 @@ function applyFaceAlignmentSnap(
   }
 
   if (faceSnapWorldDelta.lengthSq() <= FACE_SNAP_MOVEMENT_EPSILON * FACE_SNAP_MOVEMENT_EPSILON) {
+    return
+  }
+
+  if (!isFaceSnapCommitActive) {
     return
   }
 
@@ -8605,6 +8641,9 @@ onMounted(() => {
   window.addEventListener('keydown', handleAltOverrideKeyDown, { capture: true })
   window.addEventListener('keyup', handleAltOverrideKeyUp, { capture: true })
   window.addEventListener('blur', handleAltOverrideBlur, { capture: true })
+  window.addEventListener('keydown', handleFaceSnapCommitKeyDown, { capture: true })
+  window.addEventListener('keyup', handleFaceSnapCommitKeyUp, { capture: true })
+  window.addEventListener('blur', handleFaceSnapCommitBlur, { capture: true })
   if (typeof window !== 'undefined') {
     window.addEventListener('resize', handleViewportOverlayResize, { passive: true })
   }
@@ -8630,6 +8669,9 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleAltOverrideKeyDown, { capture: true })
   window.removeEventListener('keyup', handleAltOverrideKeyUp, { capture: true })
   window.removeEventListener('blur', handleAltOverrideBlur, { capture: true })
+  window.removeEventListener('keydown', handleFaceSnapCommitKeyDown, { capture: true })
+  window.removeEventListener('keyup', handleFaceSnapCommitKeyUp, { capture: true })
+  window.removeEventListener('blur', handleFaceSnapCommitBlur, { capture: true })
   if (typeof window !== 'undefined') {
     window.removeEventListener('resize', handleViewportOverlayResize)
   }
