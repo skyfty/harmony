@@ -1540,9 +1540,6 @@ async function handleCreateWarpGateNode(options: NodeCreationOptions = {}): Prom
 
   const parent = resolveTargetParentNode(parentId)
   const resolvedParentId = parent?.id
-  const referencePosition = parent ? computeViewPointWorldPosition(parent, WARP_GATE_RADIUS) : null
-  const spawnPosition = referencePosition ? referencePosition.clone() : new THREE.Vector3(0, 0, 0)
-  spawnPosition.y = WARP_GATE_ELEVATION
 
   const created = await sceneStore.addModelNode({
     object: warpGateRoot,
@@ -1550,7 +1547,6 @@ async function handleCreateWarpGateNode(options: NodeCreationOptions = {}): Prom
     name,
     baseY: 0,
     parentId: resolvedParentId,
-    position: spawnPosition,
     snapToGrid: false,
     editorFlags: {
       ignoreGridSnapping: true,
