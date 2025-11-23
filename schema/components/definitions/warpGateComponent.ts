@@ -148,7 +148,7 @@ function normalizeBoolean(value: unknown, fallback: boolean): boolean {
   return fallback
 }
 
-function computeWarpGateEffectActive(props: WarpGateComponentProps): boolean {
+export function computeWarpGateEffectActive(props: WarpGateComponentProps): boolean {
   const particlesVisible = props.showParticles && props.particleCount > 0
   return particlesVisible || props.showBeams || props.showRings
 }
@@ -272,7 +272,14 @@ type ParticleState = {
   count: number
 }
 
-class WarpGateEffectController {
+export interface WarpGateEffectInstance {
+  group: THREE.Group
+  update(props: WarpGateComponentProps): void
+  tick(delta: number): void
+  dispose(): void
+}
+
+class WarpGateEffectController implements WarpGateEffectInstance {
   readonly group: THREE.Group
   private readonly beams: BeamEntry[] = []
   private readonly beamGeometry: THREE.PlaneGeometry
@@ -568,12 +575,12 @@ class WarpGateEffectController {
   }
 }
 
-function createWarpGateEffectController(initial: WarpGateComponentProps): WarpGateEffectController {
+export function createWarpGateEffectInstance(initial: WarpGateComponentProps): WarpGateEffectInstance {
   return new WarpGateEffectController(initial)
 }
 
 class WarpGateComponent extends Component<WarpGateComponentProps> {
-  private controller: WarpGateEffectController | null = null
+  private controller: WarpGateEffectInstance | null = null
   private runtimeObject: Object3D | null = null
   private currentProps: WarpGateComponentProps
 
@@ -634,7 +641,7 @@ class WarpGateComponent extends Component<WarpGateComponentProps> {
     this.runtimeObject = object
 
     if (!this.controller) {
-      this.controller = createWarpGateEffectController(effectiveProps)
+      this.controller = createWarpGateEffectInstance(effectiveProps)
       object.add(this.controller.group)
     } else if (this.controller.group.parent !== object) {
       this.controller.group.removeFromParent()

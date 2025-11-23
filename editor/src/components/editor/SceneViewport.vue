@@ -71,12 +71,19 @@ import {
   DISPLAY_BOARD_COMPONENT_TYPE,
   WARP_GATE_RUNTIME_REGISTRY_KEY,
   WARP_GATE_COMPONENT_TYPE,
-  DEFAULT_GROUND_LIGHT_COLOR,
-  GROUND_LIGHT_INTENSITY_MAX,
-  DEFAULT_GROUND_LIGHT_PARTICLE_SIZE,
   clampWarpGateComponentProps,
+  computeWarpGateEffectActive,
+  WARP_GATE_EFFECT_METADATA_KEY,
+  WARP_GATE_EFFECT_ACTIVE_FLAG,
+  cloneWarpGateComponentProps,
+  createWarpGateEffectInstance,
 } from '@schema/components'
-import type { ViewPointComponentProps, DisplayBoardComponentProps, WarpGateComponentProps } from '@schema/components'
+import type {
+  ViewPointComponentProps,
+  DisplayBoardComponentProps,
+  WarpGateComponentProps,
+  WarpGateEffectInstance,
+} from '@schema/components'
 import type { EnvironmentSettings } from '@/types/environment'
 
 const props = withDefaults(defineProps<{
@@ -373,17 +380,8 @@ const objectMap = new Map<string, THREE.Object3D>()
 const renderClock = new THREE.Clock()
 let effectRuntimeTickers: Array<(delta: number) => void> = []
 const WARP_GATE_PLACEHOLDER_KEY = '__harmonyWarpGatePlaceholder'
-const WARP_GATE_PLACEHOLDER_BEAM_COUNT = 12
-const WARP_GATE_PLACEHOLDER_RING_COUNT = 3
-const WARP_GATE_PLACEHOLDER_PARTICLE_CAP = 240
 type WarpGatePlaceholderHandle = {
-  visualGroup: THREE.Group
-  centerDisc: THREE.Mesh
-  ringMeshes: THREE.Mesh[]
-  beamMeshes: THREE.Mesh[]
-  particleSystem: THREE.Points | null
-  particleGeometry: THREE.BufferGeometry | null
-  particleMaterial: THREE.PointsMaterial | null
+  controller: WarpGateEffectInstance | null
 }
 
 type EffectPlaybackEntry = {
@@ -2047,6 +2045,16 @@ function findAssetMetadata(assetId: string): ProjectAsset | null {
 }
 
 function disposeObjectResources(object: THREE.Object3D) {
+  const placeholderHandle = object.userData?.[WARP_GATE_PLACEHOLDER_KEY] as WarpGatePlaceholderHandle | undefined
+  if (placeholderHandle?.controller) {
+    placeholderHandle.controller.group.removeFromParent()
+    placeholderHandle.controller.dispose()
+    placeholderHandle.controller = null
+    if (object.userData) {
+      delete object.userData[WARP_GATE_PLACEHOLDER_KEY]
+    }
+  }
+
   object.traverse((child) => {
     const meshChild = child as THREE.Mesh
     if (meshChild?.isMesh) {
@@ -8032,197 +8040,64 @@ function resolveWarpGateProps(node: SceneNode): WarpGateComponentProps {
 }
 
 function createWarpGatePlaceholderObject(node: SceneNode): THREE.Object3D {
-  // Lightweight static preview used when no runtime warp gate object exists yet.
+  // Lightweight preview used when no runtime warp gate object exists yet.
   const root = new THREE.Group()
   root.name = node.name ?? 'Warp Gate'
   root.castShadow = false
   root.receiveShadow = false
-  root.userData = {
-    ...(root.userData ?? {}),
-    warpGate: true,
-    warpGatePlaceholder: true,
-  }
 
-  const visualGroup = new THREE.Group()
-  visualGroup.name = `${root.name} Visual`
-  visualGroup.castShadow = false
-  visualGroup.receiveShadow = false
-  visualGroup.userData = {
-    ...(visualGroup.userData ?? {}),
-    warpGate: true,
-  }
-  root.add(visualGroup)
+  const props = resolveWarpGateProps(node)
+  const controller = createWarpGateEffectInstance(props)
+  controller.group.removeFromParent()
+  root.add(controller.group)
 
-  const rings: THREE.Mesh[] = []
-  for (let index = 0; index < WARP_GATE_PLACEHOLDER_RING_COUNT; index += 1) {
-    const innerRadius = 0.35 + index * 0.12
-    const outerRadius = innerRadius + 0.09
-    const geometry = new THREE.RingGeometry(innerRadius, outerRadius, 56)
-    const material = new THREE.MeshBasicMaterial({
-      color: DEFAULT_GROUND_LIGHT_COLOR,
-      transparent: true,
-      opacity: Math.max(0.1, 0.28 - index * 0.06),
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    })
-    const ring = new THREE.Mesh(geometry, material)
-    ring.rotation.x = -Math.PI / 2
-    ring.position.y = 0.015 + index * 0.012
-    ring.castShadow = false
-    ring.receiveShadow = false
-    ring.userData = { ...(ring.userData ?? {}), warpGate: true }
-    visualGroup.add(ring)
-    rings.push(ring)
-  }
+  const userData = root.userData ?? (root.userData = {})
+  userData.warpGate = true
+  userData.warpGatePlaceholder = true
+  const handle: WarpGatePlaceholderHandle = { controller }
+  userData[WARP_GATE_PLACEHOLDER_KEY] = handle
 
-  const centerDiscGeometry = new THREE.CircleGeometry(0.32, 48)
-  const centerDiscMaterial = new THREE.MeshBasicMaterial({
-    color: DEFAULT_GROUND_LIGHT_COLOR,
-    transparent: true,
-    opacity: 0.45,
-    depthWrite: false,
-  })
-  const centerDisc = new THREE.Mesh(centerDiscGeometry, centerDiscMaterial)
-  centerDisc.rotation.x = -Math.PI / 2
-  centerDisc.position.y = 0.01
-  centerDisc.castShadow = false
-  centerDisc.receiveShadow = false
-  centerDisc.userData = { ...(centerDisc.userData ?? {}), warpGate: true }
-  visualGroup.add(centerDisc)
-
-  const beamMaterial = new THREE.MeshBasicMaterial({
-    color: DEFAULT_GROUND_LIGHT_COLOR,
-    transparent: true,
-    opacity: 0.25,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-  })
-  const beams: THREE.Mesh[] = []
-  for (let index = 0; index < WARP_GATE_PLACEHOLDER_BEAM_COUNT; index += 1) {
-    const geometry = new THREE.CylinderGeometry(0.04, 0.04, 1.6, 12, 1, true)
-    geometry.translate(0, 0.8, 0)
-    const beam = new THREE.Mesh(geometry, beamMaterial)
-    const angle = (index / WARP_GATE_PLACEHOLDER_BEAM_COUNT) * Math.PI * 2
-    const radius = 0.45
-    beam.position.set(Math.cos(angle) * radius, 0, Math.sin(angle) * radius)
-    beam.rotation.y = angle
-    beam.castShadow = false
-    beam.receiveShadow = false
-    beam.userData = { ...(beam.userData ?? {}), warpGate: true }
-    visualGroup.add(beam)
-    beams.push(beam)
-  }
-
-  const handle: WarpGatePlaceholderHandle = {
-    visualGroup,
-    centerDisc,
-    ringMeshes: rings,
-    beamMeshes: beams,
-    particleSystem: null,
-    particleGeometry: null,
-    particleMaterial: null,
-  }
-  root.userData[WARP_GATE_PLACEHOLDER_KEY] = handle
-
-  applyWarpGatePlaceholderState(root, node)
+  applyWarpGatePlaceholderState(root, node, props)
 
   return root
 }
 
-function applyWarpGatePlaceholderState(object: THREE.Object3D, node: SceneNode): void {
+function applyWarpGatePlaceholderState(
+  object: THREE.Object3D,
+  node: SceneNode,
+  providedProps?: WarpGateComponentProps,
+): void {
   const handle = object.userData?.[WARP_GATE_PLACEHOLDER_KEY] as WarpGatePlaceholderHandle | undefined
-  if (!handle) {
+  if (!handle?.controller) {
     return
   }
 
-  const props = resolveWarpGateProps(node)
-  const color = new THREE.Color(props.color ?? DEFAULT_GROUND_LIGHT_COLOR)
-  const normalizedIntensity = THREE.MathUtils.clamp(
-    props.intensity / Math.max(GROUND_LIGHT_INTENSITY_MAX, 1e-3),
-    0,
-    1,
-  )
-
-  handle.visualGroup.scale.setScalar(Math.max(props.scale, 0.01))
-
-  const discMaterial = handle.centerDisc.material as THREE.MeshBasicMaterial
-  discMaterial.color.copy(color)
-  discMaterial.opacity = 0.35 + normalizedIntensity * 0.4
-  discMaterial.needsUpdate = true
-  handle.centerDisc.visible = props.showRings
-
-  handle.ringMeshes.forEach((ring, index) => {
-    const material = ring.material as THREE.MeshBasicMaterial
-    material.color.copy(color)
-    const baseOpacity = Math.max(0.05, 0.26 - index * 0.05)
-    material.opacity = THREE.MathUtils.clamp(baseOpacity + normalizedIntensity * 0.35, 0, 1)
-    material.needsUpdate = true
-    ring.visible = props.showRings
-  })
-
-  const beamOpacity = THREE.MathUtils.clamp(0.2 + normalizedIntensity * 0.5, 0, 1)
-  handle.beamMeshes.forEach((beam) => {
-    const material = beam.material as THREE.MeshBasicMaterial
-    material.color.copy(color)
-    material.opacity = beamOpacity
-    material.needsUpdate = true
-    beam.visible = props.showBeams
-  })
-
-  const wantsParticles = props.showParticles && props.particleCount > 0
-  if (wantsParticles) {
-    const desiredCount = Math.min(props.particleCount, WARP_GATE_PLACEHOLDER_PARTICLE_CAP)
-    if (!handle.particleSystem || !handle.particleGeometry || !handle.particleMaterial) {
-      const geometry = new THREE.BufferGeometry()
-      const material = new THREE.PointsMaterial({
-        color,
-        size: Math.max(props.particleSize, DEFAULT_GROUND_LIGHT_PARTICLE_SIZE),
-        transparent: true,
-        opacity: 0.35 + normalizedIntensity * 0.45,
-        depthWrite: false,
-        sizeAttenuation: true,
-      })
-      const particleSystem = new THREE.Points(geometry, material)
-      particleSystem.name = `${object.name ?? 'Warp Gate'} Particles`
-      particleSystem.frustumCulled = false
-      particleSystem.userData = { ...(particleSystem.userData ?? {}), warpGate: true }
-      handle.visualGroup.add(particleSystem)
-      handle.particleSystem = particleSystem
-      handle.particleGeometry = geometry
-      handle.particleMaterial = material
-    }
-
-    const geometry = handle.particleGeometry as THREE.BufferGeometry
-    let positions = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
-    if (!positions || positions.count !== desiredCount) {
-      positions = new THREE.BufferAttribute(new Float32Array(desiredCount * 3), 3)
-      geometry.setAttribute('position', positions)
-    }
-    const array = positions.array as Float32Array
-    for (let index = 0; index < desiredCount; index += 1) {
-      const radius = Math.random() * 0.5
-      const theta = Math.random() * Math.PI * 2
-      array[index * 3] = Math.cos(theta) * radius
-      array[index * 3 + 1] = Math.random() * 1.6
-      array[index * 3 + 2] = Math.sin(theta) * radius
-    }
-    positions.needsUpdate = true
-
-    const material = handle.particleMaterial as THREE.PointsMaterial
-    material.color.copy(color)
-    material.size = Math.max(props.particleSize, DEFAULT_GROUND_LIGHT_PARTICLE_SIZE)
-    material.opacity = 0.35 + normalizedIntensity * 0.45
-    material.needsUpdate = true
-
-    const system = handle.particleSystem as THREE.Points
-    system.visible = true
-  } else if (handle.particleSystem) {
-    handle.particleSystem.visible = false
-  }
+  const props = providedProps ?? resolveWarpGateProps(node)
+  handle.controller.update(props)
 
   const userData = object.userData ?? (object.userData = {})
+  userData.warpGatePlaceholder = true
+
+  const componentEntry = node.components?.[WARP_GATE_COMPONENT_TYPE] as
+    | SceneNodeComponentState<WarpGateComponentProps>
+    | undefined
+  const enabled = componentEntry?.enabled !== false
+
+  if (!enabled) {
+    delete userData.warpGate
+    delete userData[WARP_GATE_EFFECT_METADATA_KEY]
+    if (WARP_GATE_EFFECT_ACTIVE_FLAG in userData) {
+      delete userData[WARP_GATE_EFFECT_ACTIVE_FLAG]
+    }
+    userData.warpGateVisible = false
+    return
+  }
+
+  const active = computeWarpGateEffectActive(props)
   userData.warpGate = true
-  userData.warpGateVisible = props.showBeams || props.showParticles || props.showRings
+  userData.warpGateVisible = active
+  userData[WARP_GATE_EFFECT_ACTIVE_FLAG] = active
+  userData[WARP_GATE_EFFECT_METADATA_KEY] = cloneWarpGateComponentProps(props)
 }
 
 function createObjectFromNode(node: SceneNode): THREE.Object3D {
