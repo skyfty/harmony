@@ -33,10 +33,10 @@ import { koaBody } from '@/utils/bodyParser'
 const resourceRouter = new Router({ prefix: '/api/resources' })
 
 resourceRouter.get('/assets/manifest', getAssetManifest)
-
-resourceRouter.use(authMiddleware)
 resourceRouter.get('/categories', listResourceCategories)
 resourceRouter.get('/categories/search', searchAssetCategories)
+
+resourceRouter.use(authMiddleware)
 resourceRouter.post('/categories', createAssetCategory)
 resourceRouter.get('/categories/:id/children', getAssetCategoryChildren)
 resourceRouter.get('/categories/:id/path', getAssetCategoryPath)
