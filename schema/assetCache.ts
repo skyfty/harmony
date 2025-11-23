@@ -1,4 +1,4 @@
-import type { SceneNode } from '@harmony/schema'
+import type { SceneMaterialTextureRef, SceneNode, SceneNodeMaterial, SceneMaterialTextureSlotMap } from './index.js'
 
 const NodeBuffer: { from: (data: string, encoding: string) => { buffer: ArrayBuffer; byteOffset: number; byteLength: number } } | undefined =
   typeof globalThis !== 'undefined' && (globalThis as any).Buffer
@@ -252,12 +252,12 @@ export class AssetCache {
       if (node.sourceAssetId) {
         counts.set(node.sourceAssetId, (counts.get(node.sourceAssetId) ?? 0) + 1)
       }
-      node.materials?.forEach((material) => {
-        const textures = material.textures ?? null
+      node.materials?.forEach((material: SceneNodeMaterial) => {
+        const textures = (material.textures as SceneMaterialTextureSlotMap | undefined) ?? null
         if (!textures) {
           return
         }
-        Object.values(textures).forEach((ref) => {
+        Object.values(textures as SceneMaterialTextureSlotMap).forEach((ref: SceneMaterialTextureRef | null) => {
           const assetId = ref?.assetId
           if (!assetId) {
             return
@@ -371,7 +371,7 @@ export class AssetLoader {
         })
       }
       case 'blob': {
-        const entry = await this.cache.storeBlob(assetId, source.blob ?? new Blob(), {
+        const entry = await this.cache.storeBlob(assetId, source.blob ?? new Blob([]), {
           mimeType: source.mimeType ?? null,
           filename: source.filename ?? null,
           downloadUrl: source.url ?? null,
@@ -564,7 +564,7 @@ async function readBlobWithProgress(
   }
 
   const reader = response.body.getReader()
-  const chunks: BlobPart[] = []
+  const chunks: ArrayBuffer[] = []
   let received = 0
   const total = Number.parseInt(response.headers.get('content-length') ?? '0', 10)
 
@@ -641,7 +641,7 @@ async function fetchViaXmlHttp(
     const request = new XMLHttpRequest()
     request.open('GET', url, true)
     request.responseType = 'arraybuffer'
-    request.onprogress = (event) => {
+    request.onprogress = (event: ProgressEvent<EventTarget>) => {
       if (!event.lengthComputable) {
         return
       }
