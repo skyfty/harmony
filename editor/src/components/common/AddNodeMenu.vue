@@ -58,7 +58,6 @@ const VIEW_POINT_SHOW_BEHAVIOR_NAME = 'Show View Point'
 const VIEW_POINT_HIDE_BEHAVIOR_NAME = 'Hide View Point'
 
 const WARP_GATE_RADIUS = 1
-const WARP_GATE_COLOR = 0x9c27b0
 const WARP_GATE_ELEVATION = 0.5
 
 const GUIDEBOARD_RADIUS = 1
@@ -1520,7 +1519,7 @@ async function handleCreateGuideboardNode(options: NodeCreationOptions = {}): Pr
 async function handleCreateWarpGateNode(options: NodeCreationOptions = {}): Promise<SceneNode | null> {
   const { parentId, autoBehaviors = false } = options
   const name = getNextWarpGateName()
-  const warpGateMesh = createPrimitiveMesh("Circle", {color: WARP_GATE_COLOR,doubleSided: true})
+  const warpGateMesh = new THREE.Object3D()
   warpGateMesh.name = `${name} Visual`
   warpGateMesh.castShadow = false
   warpGateMesh.receiveShadow = false
@@ -1547,7 +1546,7 @@ async function handleCreateWarpGateNode(options: NodeCreationOptions = {}): Prom
 
   const created = await sceneStore.addModelNode({
     object: warpGateRoot,
-    nodeType: 'Circle',
+    nodeType: 'WarpGate',
     name,
     baseY: 0,
     parentId: resolvedParentId,

@@ -66,7 +66,7 @@ import type { BuildTool } from '@/types/build-tool'
 import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache } from '@/utils/groundMesh'
 import { createWallGroup, updateWallGroup } from '@/utils/wallMesh'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
-import { VIEW_POINT_COMPONENT_TYPE, DISPLAY_BOARD_COMPONENT_TYPE, RUNTIME_REGISTRY_KEY } from '@schema/components'
+import { VIEW_POINT_COMPONENT_TYPE, DISPLAY_BOARD_COMPONENT_TYPE, WARP_GATE_RUNTIME_REGISTRY_KEY } from '@schema/components'
 import type { ViewPointComponentProps, DisplayBoardComponentProps } from '@schema/components'
 import type { EnvironmentSettings } from '@/types/environment'
 
@@ -355,7 +355,7 @@ function refreshEffectRuntimeTickers(): void {
     if (!object) {
       return
     }
-    const registry = object.userData?.[RUNTIME_REGISTRY_KEY] as Record<string, { tick?: (delta: number) => void }> | undefined
+    const registry = object.userData?.[WARP_GATE_RUNTIME_REGISTRY_KEY] as Record<string, { tick?: (delta: number) => void }> | undefined
     if (!registry) {
       return
     }

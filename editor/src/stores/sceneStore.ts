@@ -9891,6 +9891,26 @@ export const useSceneStore = defineStore('scene', {
           return false
         }
         nextProps = cloneDisplayBoardComponentProps(merged)
+      } else if (type === WARP_GATE_COMPONENT_TYPE) {
+        const currentProps = clampWarpGateComponentProps(component.props as WarpGateComponentProps)
+        const typedPatch = patch as Partial<WarpGateComponentProps>
+        const merged = clampWarpGateComponentProps({
+          ...currentProps,
+          ...typedPatch,
+        })
+        const unchanged =
+          currentProps.color === merged.color &&
+          Math.abs(currentProps.intensity - merged.intensity) <= 1e-4 &&
+          Math.abs(currentProps.scale - merged.scale) <= 1e-4 &&
+          Math.abs(currentProps.particleSize - merged.particleSize) <= 1e-4 &&
+          currentProps.particleCount === merged.particleCount &&
+          currentProps.showParticles === merged.showParticles &&
+          currentProps.showBeams === merged.showBeams &&
+          currentProps.showRings === merged.showRings
+        if (unchanged) {
+          return false
+        }
+        nextProps = cloneWarpGateComponentProps(merged)
       } else if (type === EFFECT_COMPONENT_TYPE) {
         const currentProps = clampEffectComponentProps(component.props as EffectComponentProps)
         const typedPatch = patch as Partial<EffectComponentProps>

@@ -25,13 +25,12 @@ import { GUIDEBOARD_COMPONENT_TYPE } from './components/definitions/guideboardCo
 import type { ViewPointComponentProps } from './components/definitions/viewPointComponent';
 import { VIEW_POINT_COMPONENT_TYPE } from './components/definitions/viewPointComponent';
 import type { WarpGateComponentProps } from './components/definitions/warpGateComponent';
-import { WARP_GATE_COMPONENT_TYPE } from './components/definitions/warpGateComponent';
-import type { EffectComponentProps } from './components/definitions/effectComponent';
 import {
-  EFFECT_COMPONENT_TYPE,
-  EFFECT_METADATA_KEY,
-  clampEffectComponentProps,
-} from './components/definitions/effectComponent';
+  WARP_GATE_COMPONENT_TYPE,
+  WARP_GATE_EFFECT_METADATA_KEY,
+  clampWarpGateComponentProps,
+  cloneWarpGateComponentProps,
+} from './components/definitions/warpGateComponent';
 
 type SceneNodeWithExtras = SceneNode & {
   light?: {
@@ -554,6 +553,8 @@ class SceneGraphBuilder {
         return this.buildLightNode(node);
       case 'Mesh':
         return this.buildMeshNode(node);
+      case 'WarpGate':
+        return this.buildWarpGateNode(node);
       case 'Camera':
         this.warn(`暂不支持相机节点 ${node.name ?? node.id}`);
         return null;
@@ -589,21 +590,8 @@ class SceneGraphBuilder {
       | undefined;
     if (warpGateState?.enabled) {
       helperData.warpGate = true;
-    }
-    const effectState = node.components?.[EFFECT_COMPONENT_TYPE] as
-      | SceneNodeComponentState<EffectComponentProps>
-      | undefined;
-    if (effectState?.enabled) {
-      const effectProps = clampEffectComponentProps(effectState.props as Partial<EffectComponentProps>);
-      const registry = (helperData as Record<string, unknown>)[EFFECT_METADATA_KEY] as
-        | Record<string, unknown>
-        | undefined;
-      const map = registry ?? {};
-      map[effectState.id ?? EFFECT_COMPONENT_TYPE] = {
-        type: effectProps.effectType,
-        props: effectProps,
-      };
-      (helperData as Record<string, unknown>)[EFFECT_METADATA_KEY] = map;
+      const props = clampWarpGateComponentProps(warpGateState.props as Partial<WarpGateComponentProps>);
+      (helperData as Record<string, unknown>)[WARP_GATE_EFFECT_METADATA_KEY] = cloneWarpGateComponentProps(props);
     }
     placeholder.userData = helperData;
 
@@ -636,6 +624,19 @@ class SceneGraphBuilder {
         group.add(asset);
       }
     }
+
+    if (Array.isArray(node.children) && node.children.length) {
+      await this.buildNodes(node.children as SceneNodeWithExtras[], group);
+    }
+
+    return group;
+  }
+
+  private async buildWarpGateNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const group = new THREE.Group();
+    group.name = node.name ?? 'Warp Gate';
+    this.applyTransform(group, node);
+    this.applyVisibility(group, node);
 
     if (Array.isArray(node.children) && node.children.length) {
       await this.buildNodes(node.children as SceneNodeWithExtras[], group);
@@ -872,19 +873,8 @@ class SceneGraphBuilder {
       | undefined;
     if (warpGateState?.enabled) {
       metadata.warpGate = true;
-    }
-    const effectState = node.components?.[EFFECT_COMPONENT_TYPE] as
-      | SceneNodeComponentState<EffectComponentProps>
-      | undefined;
-    if (effectState?.enabled) {
-      const effectProps = clampEffectComponentProps(effectState.props as Partial<EffectComponentProps>);
-      const existing = metadata[EFFECT_METADATA_KEY] as Record<string, unknown> | undefined;
-      const map = existing ?? {};
-      map[effectState.id ?? EFFECT_COMPONENT_TYPE] = {
-        type: effectProps.effectType,
-        props: effectProps,
-      };
-      metadata[EFFECT_METADATA_KEY] = map;
+      const props = clampWarpGateComponentProps(warpGateState.props as Partial<WarpGateComponentProps>);
+      metadata[WARP_GATE_EFFECT_METADATA_KEY] = cloneWarpGateComponentProps(props);
     }
   }
 

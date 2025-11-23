@@ -208,11 +208,12 @@ import {
   viewPointComponentDefinition,
   warpGateComponentDefinition,
   effectComponentDefinition,
-  RUNTIME_REGISTRY_KEY,
+  WARP_GATE_RUNTIME_REGISTRY_KEY,
+  WARP_GATE_EFFECT_ACTIVE_FLAG,
   GUIDEBOARD_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
 } from '@schema/components';
-import type { EffectComponentProps, GuideboardComponentProps } from '@schema/components';
+import type { GuideboardComponentProps, WarpGateComponentProps } from '@schema/components';
 import {
   addBehaviorRuntimeListener,
   hasRegisteredBehaviors,
@@ -664,6 +665,26 @@ const nodeAnimationControllers = new Map<string, {
 }>();
 let animationMixers: THREE.AnimationMixer[] = [];
 let effectRuntimeTickers: Array<(delta: number) => void> = [];
+
+type WarpGateRuntimeRegistryEntry = {
+  tick?: (delta: number) => void;
+  props?: Partial<WarpGateComponentProps> | null;
+};
+
+function isWarpGateEffectActive(props: Partial<WarpGateComponentProps> | null | undefined): boolean {
+  if (!props) {
+    return false;
+  }
+  const nested = (props as { groundLight?: Partial<WarpGateComponentProps> | null | undefined }).groundLight;
+  if (nested && typeof nested === 'object') {
+    return isWarpGateEffectActive(nested);
+  }
+  const showParticles = props.showParticles === true;
+  const particleCount = typeof props.particleCount === 'number' ? props.particleCount : 0;
+  const showBeams = props.showBeams === true;
+  const showRings = props.showRings === true;
+  return (showParticles && particleCount > 0) || showBeams || showRings;
+}
 
 type BehaviorProximityCandidate = { hasApproach: boolean; hasDepart: boolean };
 type BehaviorProximityState = { inside: boolean; lastDistance: number | null };
@@ -2365,8 +2386,8 @@ function resetEffectRuntimeTickers(): void {
   effectRuntimeTickers = [];
   nodeObjectMap.forEach((object) => {
     const userData = object.userData;
-    if (userData && Object.prototype.hasOwnProperty.call(userData, '__harmonyGroundLightActive')) {
-      delete userData.__harmonyGroundLightActive;
+    if (userData && Object.prototype.hasOwnProperty.call(userData, WARP_GATE_EFFECT_ACTIVE_FLAG)) {
+      delete userData[WARP_GATE_EFFECT_ACTIVE_FLAG];
     }
   });
 }
@@ -2375,31 +2396,31 @@ function refreshEffectRuntimeTickers(): void {
   resetEffectRuntimeTickers();
   const uniqueTickers = new Set<(delta: number) => void>();
   nodeObjectMap.forEach((object) => {
-    const registry = object.userData?.[RUNTIME_REGISTRY_KEY] as Record<string, { tick?: (delta: number) => void; props?: EffectComponentProps }> | undefined;
+    const registry = object.userData?.[WARP_GATE_RUNTIME_REGISTRY_KEY] as Record<string, WarpGateRuntimeRegistryEntry> | undefined;
     if (!registry) {
       return;
     }
     const userData = object.userData ?? (object.userData = {});
-    let groundLightSeen = false;
-    let groundLightActive = false;
+    let warpGateSeen = false;
+    let warpGateActive = false;
     Object.values(registry).forEach((entry) => {
-      const typedEntry = entry as { tick?: (delta: number) => void; props?: EffectComponentProps };
-      const props = typedEntry.props;
-      if (props?.effectType === 'groundLight') {
-        groundLightSeen = true;
-        const { showParticles, showBeams, showRings, particleCount } = props.groundLight;
-        const hasVisibleParticles = showParticles && particleCount > 0;
-        groundLightActive = hasVisibleParticles || showBeams || showRings;
+      if (!entry) {
+        return;
       }
-      const tick = typedEntry.tick;
-      if (typeof tick === 'function') {
-        uniqueTickers.add(tick);
+      if (typeof entry.tick === 'function') {
+        uniqueTickers.add(entry.tick);
+      }
+      if (entry.props) {
+        warpGateSeen = true;
+        if (isWarpGateEffectActive(entry.props)) {
+          warpGateActive = true;
+        }
       }
     });
-    if (groundLightSeen) {
-      userData.__harmonyGroundLightActive = groundLightActive;
-    } else if (Object.prototype.hasOwnProperty.call(userData, '__harmonyGroundLightActive')) {
-      delete userData.__harmonyGroundLightActive;
+    if (warpGateSeen) {
+      userData[WARP_GATE_EFFECT_ACTIVE_FLAG] = warpGateActive;
+    } else if (Object.prototype.hasOwnProperty.call(userData, WARP_GATE_EFFECT_ACTIVE_FLAG)) {
+      delete userData[WARP_GATE_EFFECT_ACTIVE_FLAG];
     }
   });
   effectRuntimeTickers = uniqueTickers.size ? Array.from(uniqueTickers) : [];
