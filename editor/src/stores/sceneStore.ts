@@ -2946,8 +2946,20 @@ const initialSceneDocument = createSceneDocument('Sample Scene', {
 })
 
 const runtimeObjectRegistry = new Map<string, Object3D>()
+let runtimeRefreshInFlight: Promise<void> | null = null
+
+function clearRuntimeObjectRegistry() {
+  runtimeObjectRegistry.forEach((_object, nodeId) => {
+    componentManager.detachRuntime(nodeId)
+  })
+  runtimeObjectRegistry.clear()
+}
 
 function registerRuntimeObject(id: string, object: Object3D) {
+  const existing = runtimeObjectRegistry.get(id)
+  if (existing && existing !== object) {
+    componentManager.detachRuntime(id)
+  }
   runtimeObjectRegistry.set(id, object)
 }
 
@@ -5898,6 +5910,69 @@ export const useSceneStore = defineStore('scene', {
       }
       this.skybox = cloneSceneSkybox(this.skybox)
       this.shadowsEnabled = normalizeShadowsEnabledInput(this.shadowsEnabled)
+      void this.refreshRuntimeState({ showOverlay: false, refreshViewport: false })
+    },
+    async refreshRuntimeState(options: { showOverlay?: boolean; refreshViewport?: boolean } = {}) {
+      if (runtimeRefreshInFlight) {
+        try {
+          await runtimeRefreshInFlight
+        } catch {
+          // swallow previous errors to allow retry
+        }
+      }
+
+      const task = (async () => {
+        const showOverlay = options.showOverlay ?? false
+        const refreshViewport = options.refreshViewport ?? false
+
+        clearRuntimeObjectRegistry()
+        componentManager.reset()
+
+        if (!this.nodes.length) {
+          componentManager.syncScene(this.nodes)
+          useAssetCacheStore().recalculateUsage(this.nodes)
+          return
+        }
+
+        await this.ensureSceneAssetsReady({
+          nodes: this.nodes,
+          showOverlay,
+          refreshViewport,
+        })
+
+        this.rebuildGeneratedMeshRuntimes()
+
+        const assetNodeMap = collectNodesByAssetId(this.nodes)
+        const missingAssetNodes: SceneNode[] = []
+        assetNodeMap.forEach((nodesForAsset) => {
+          nodesForAsset.forEach((node) => {
+            if (!runtimeObjectRegistry.has(node.id)) {
+              missingAssetNodes.push(node)
+            }
+          })
+        })
+
+        if (missingAssetNodes.length) {
+          await this.ensureSceneAssetsReady({
+            nodes: missingAssetNodes,
+            showOverlay: false,
+            refreshViewport,
+          })
+        }
+
+        reattachRuntimeObjectsForNodes(this.nodes)
+        componentManager.syncScene(this.nodes)
+        useAssetCacheStore().recalculateUsage(this.nodes)
+      })()
+
+      runtimeRefreshInFlight = task
+      try {
+        await task
+      } finally {
+        if (runtimeRefreshInFlight === task) {
+          runtimeRefreshInFlight = null
+        }
+      }
     },
     createSceneDocumentSnapshot(): StoredSceneDocument {
       const snapshot = buildSceneDocumentFromState(this)
@@ -10957,18 +11032,10 @@ export const useSceneStore = defineStore('scene', {
           this.panelPlacement = normalizePanelPlacementStateInput(fallback.panelPlacement)
           this.resourceProviderId = fallback.resourceProviderId
           this.hasUnsavedChanges = false
+          await this.refreshRuntimeState({ showOverlay: false, refreshViewport: false })
         } else {
-          await this.ensureSceneAssetsReady({
-            nodes: this.nodes,
-            showOverlay: true,
-            refreshViewport: false,
-          })
+          await this.refreshRuntimeState({ showOverlay: true, refreshViewport: false })
         }
-        useAssetCacheStore().recalculateUsage(this.nodes)
-        componentManager.reset()
-        componentManager.syncScene(this.nodes)
-        reattachRuntimeObjectsForNodes(this.nodes)
-        this.rebuildGeneratedMeshRuntimes()
       } finally {
         this.isSceneReady = true
       }
