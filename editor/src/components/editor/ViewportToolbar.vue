@@ -322,6 +322,7 @@ const buildToolButtons = [
   { id: 'ground', icon: 'mdi-terrain', label: 'Ground Tool' },
   { id: 'wall', icon: 'mdi-wall', label: 'Wall Tool' },
   { id: 'platform', icon: 'mdi-layers-triple', label: 'Platform Tool' },
+  { id: 'surface', icon: 'mdi-vector-polygon', label: 'Surface Tool' },
 ] satisfies Array<{ id: BuildTool; icon: string; label: string }>
 
 const cameraModeTitle = computed(() =>

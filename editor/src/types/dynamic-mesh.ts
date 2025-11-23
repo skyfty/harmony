@@ -5,6 +5,7 @@ const LEGACY_DYNAMIC_MESH_TYPE_MAP: Record<string, DynamicMeshType> = {
   ground: 'Ground',
   wall: 'Wall',
   platform: 'Platform',
+  surface: 'Surface',
 }
 
 export function normalizeDynamicMeshType(input: DynamicMeshType | string | null | undefined): DynamicMeshType {

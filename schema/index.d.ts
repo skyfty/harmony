@@ -557,7 +557,7 @@ export type EnvironmentSettingsPatch = Partial<EnvironmentSettings> & {
   background?: Partial<EnvironmentBackgroundSettings>
   environmentMap?: Partial<EnvironmentMapSettings>
 }
-export type DynamicMeshType = 'Ground' | 'Wall' | 'Platform'
+export type DynamicMeshType = 'Ground' | 'Wall' | 'Platform' | 'Surface'
 
 export interface GroundHeightMap {
   [key: string]: number
@@ -601,4 +601,13 @@ export interface PlatformDynamicMesh {
   height: number
 }
 
-export type SceneDynamicMesh = GroundDynamicMesh | WallDynamicMesh | PlatformDynamicMesh
+export interface SurfaceDynamicMesh {
+  type: 'Surface'
+  /**
+   * Polygon footprint described in clockwise order, relative to the node origin.
+   */
+  points: Vector3Like[]
+  normal: Vector3Like
+}
+
+export type SceneDynamicMesh = GroundDynamicMesh | WallDynamicMesh | PlatformDynamicMesh | SurfaceDynamicMesh

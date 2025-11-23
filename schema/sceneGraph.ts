@@ -19,6 +19,7 @@ import type {
   GroundDynamicMesh,
   SceneResourceSummaryEntry,
   SceneMaterialTextureSlot,
+  SurfaceDynamicMesh,
 } from '@harmony/schema';
 import type { GuideboardComponentProps } from './components/definitions/guideboardComponent';
 import { GUIDEBOARD_COMPONENT_TYPE } from './components/definitions/guideboardComponent';
@@ -723,6 +724,9 @@ class SceneGraphBuilder {
     if (meshInfo?.type === 'Wall') {
       return this.buildWallMesh(meshInfo, node);
     }
+    if (meshInfo?.type === 'Surface') {
+      return this.buildSurfaceMesh(meshInfo as SurfaceDynamicMesh, node);
+    }
 
     const outlineMesh = this.resolveOutlineMeshForNode(node);
 
@@ -1054,6 +1058,24 @@ class SceneGraphBuilder {
     return mesh;
   }
 
+  private async buildSurfaceMesh(meshInfo: SurfaceDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const geometry = this.createSurfaceGeometry(meshInfo);
+    const materials = await this.resolveNodeMaterials(node);
+    const materialAssignment = materials.length > 1 ? materials : materials[0];
+    const mesh = new THREE.Mesh(geometry, materialAssignment);
+    mesh.name = node.name ?? 'Surface';
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.userData = {
+      ...(mesh.userData ?? {}),
+      dynamicMeshType: 'Surface',
+    };
+    this.applyTransform(mesh, node);
+    this.applyVisibility(mesh, node);
+    this.recordMeshStatistics(mesh);
+    return mesh;
+  }
+
   private async buildWallMesh(meshInfo: any, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
     const container = new THREE.Group();
     container.name = node.name ?? 'Wall';
@@ -1190,6 +1212,28 @@ class SceneGraphBuilder {
     geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
     geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
     geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+    geometry.computeVertexNormals();
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+    return geometry;
+  }
+
+  private createSurfaceGeometry(meshInfo: SurfaceDynamicMesh): THREE.BufferGeometry {
+    const footprint = Array.isArray(meshInfo.points) ? meshInfo.points : [];
+    if (footprint.length < 3) {
+      return new THREE.BufferGeometry();
+    }
+
+    const shape = new THREE.Shape();
+    const first = footprint[0]!;
+    shape.moveTo(first.x, first.z);
+    for (let index = 1; index < footprint.length; index += 1) {
+      const vertex = footprint[index]!;
+      shape.lineTo(vertex.x, vertex.z);
+    }
+
+    const geometry = new THREE.ShapeGeometry(shape);
+    geometry.rotateX(-Math.PI / 2);
     geometry.computeVertexNormals();
     geometry.computeBoundingBox();
     geometry.computeBoundingSphere();
