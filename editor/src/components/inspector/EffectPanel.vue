@@ -12,7 +12,6 @@ import {
   DEFAULT_EFFECT_TYPE,
   DEFAULT_GROUND_LIGHT_COLOR,
   DEFAULT_GROUND_LIGHT_INTENSITY,
-  DEFAULT_GROUND_LIGHT_SCALE,
   DEFAULT_GROUND_LIGHT_PARTICLE_SIZE,
   DEFAULT_GROUND_LIGHT_PARTICLE_COUNT,
   DEFAULT_GROUND_LIGHT_SHOW_PARTICLES,
@@ -20,8 +19,6 @@ import {
   DEFAULT_GROUND_LIGHT_SHOW_RINGS,
   GROUND_LIGHT_INTENSITY_MIN,
   GROUND_LIGHT_INTENSITY_MAX,
-  GROUND_LIGHT_SCALE_MIN,
-  GROUND_LIGHT_SCALE_MAX,
   GROUND_LIGHT_PARTICLE_SIZE_MIN,
   GROUND_LIGHT_PARTICLE_SIZE_MAX,
   GROUND_LIGHT_PARTICLE_COUNT_MIN,
@@ -43,7 +40,6 @@ const localState = reactive({
   effectType: DEFAULT_EFFECT_TYPE as EffectTypeId,
   groundLightColor: DEFAULT_GROUND_LIGHT_COLOR,
   groundLightIntensity: DEFAULT_GROUND_LIGHT_INTENSITY,
-  groundLightScale: DEFAULT_GROUND_LIGHT_SCALE,
   groundLightParticleSize: DEFAULT_GROUND_LIGHT_PARTICLE_SIZE,
   groundLightParticleCount: DEFAULT_GROUND_LIGHT_PARTICLE_COUNT,
   groundLightShowParticles: DEFAULT_GROUND_LIGHT_SHOW_PARTICLES,
@@ -66,7 +62,6 @@ watch(
     localState.effectType = normalized.effectType
     localState.groundLightColor = normalized.groundLight.color
     localState.groundLightIntensity = normalized.groundLight.intensity
-    localState.groundLightScale = normalized.groundLight.scale
     localState.groundLightParticleSize = normalized.groundLight.particleSize
     localState.groundLightParticleCount = normalized.groundLight.particleCount
     localState.groundLightShowParticles = normalized.groundLight.showParticles
@@ -106,24 +101,6 @@ watch(
       return
     }
     applyGroundLight({ intensity: value })
-  },
-)
-
-watch(
-  () => localState.groundLightScale,
-  (value, previous) => {
-    if (syncing.value) {
-      return
-    }
-    const numeric = typeof value === 'number' ? value : Number(value)
-    if (!Number.isFinite(numeric)) {
-      return
-    }
-    const prevNumeric = typeof previous === 'number' ? previous : Number(previous)
-    if (Number.isFinite(prevNumeric) && Math.abs(numeric - prevNumeric) <= 1e-4) {
-      return
-    }
-    applyGroundLight({ scale: numeric })
   },
 )
 
@@ -261,22 +238,6 @@ function handleGroundLightColorPickerInput(value: string | null) {
   handleGroundLightColorInput(value)
 }
 
-function handleGroundLightScaleInput(value: string | number | null) {
-  if (!componentEnabled.value) {
-    return
-  }
-  if (value === '' || value === null || value === undefined) {
-    return
-  }
-  const numeric = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(numeric)) {
-    return
-  }
-  if (Math.abs(numeric - localState.groundLightScale) <= 1e-4) {
-    return
-  }
-  localState.groundLightScale = numeric
-}
 
 function handleGroundLightParticleSizeInput(value: string | number | null) {
   if (!componentEnabled.value) {
@@ -427,22 +388,6 @@ function handleRemoveComponent() {
               </div>
             </v-menu>
           </div>
-          <v-text-field
-            :model-value="localState.groundLightScale"
-            :min="GROUND_LIGHT_SCALE_MIN"
-            :max="GROUND_LIGHT_SCALE_MAX"
-            :step="0.05"
-            label="Scale"
-            type="number"
-            density="compact"
-            variant="underlined"
-            color="primary"
-            inputmode="decimal"
-            hide-details
-            class="slider-input"
-            :disabled="!componentEnabled"
-            @update:model-value="handleGroundLightScaleInput"
-          />
           <v-text-field
             v-model="localState.groundLightIntensity"
             :min="GROUND_LIGHT_INTENSITY_MIN"

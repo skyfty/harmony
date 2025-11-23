@@ -877,7 +877,7 @@ function normalizeSceneNodeType(input: SceneNodeType | string | null | undefined
 
 function sceneNodeTypeSupportsMaterials(nodeType: SceneNodeType | string | null | undefined): boolean {
   const normalized = normalizeSceneNodeType(nodeType)
-  return normalized !== 'Light' && normalized !== 'Group' && normalized !== 'Camera'
+  return normalized !== 'Light' && normalized !== 'Group' && normalized !== 'Camera' && normalized !== 'WarpGate'
 }
 
 function extractMaterialProps(material: SceneNodeMaterial | undefined | null): SceneMaterialProps {
@@ -9905,7 +9905,6 @@ export const useSceneStore = defineStore('scene', {
         const unchanged =
           currentProps.color === merged.color &&
           Math.abs(currentProps.intensity - merged.intensity) <= 1e-4 &&
-          Math.abs(currentProps.scale - merged.scale) <= 1e-4 &&
           Math.abs(currentProps.particleSize - merged.particleSize) <= 1e-4 &&
           currentProps.particleCount === merged.particleCount &&
           currentProps.showParticles === merged.showParticles &&
@@ -9930,7 +9929,6 @@ export const useSceneStore = defineStore('scene', {
           currentProps.effectType === merged.effectType &&
           currentProps.groundLight.color === merged.groundLight.color &&
           Math.abs(currentProps.groundLight.intensity - merged.groundLight.intensity) <= 1e-4 &&
-          Math.abs(currentProps.groundLight.scale - merged.groundLight.scale) <= 1e-4 &&
           Math.abs(currentProps.groundLight.particleSize - merged.groundLight.particleSize) <= 1e-4 &&
           currentProps.groundLight.particleCount === merged.groundLight.particleCount &&
           currentProps.groundLight.showParticles === merged.groundLight.showParticles &&

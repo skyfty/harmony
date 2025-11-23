@@ -9,7 +9,6 @@ import {
   clampWarpGateComponentProps,
   DEFAULT_GROUND_LIGHT_COLOR,
   DEFAULT_GROUND_LIGHT_INTENSITY,
-  DEFAULT_GROUND_LIGHT_SCALE,
   DEFAULT_GROUND_LIGHT_PARTICLE_SIZE,
   DEFAULT_GROUND_LIGHT_PARTICLE_COUNT,
   DEFAULT_GROUND_LIGHT_SHOW_PARTICLES,
@@ -17,16 +16,11 @@ import {
   DEFAULT_GROUND_LIGHT_SHOW_RINGS,
   GROUND_LIGHT_INTENSITY_MIN,
   GROUND_LIGHT_INTENSITY_MAX,
-  GROUND_LIGHT_SCALE_MIN,
-  GROUND_LIGHT_SCALE_MAX,
   GROUND_LIGHT_PARTICLE_SIZE_MIN,
   GROUND_LIGHT_PARTICLE_SIZE_MAX,
   GROUND_LIGHT_PARTICLE_COUNT_MIN,
   GROUND_LIGHT_PARTICLE_COUNT_MAX,
 } from '@schema/components'
-
-const SCALE_MIN = GROUND_LIGHT_SCALE_MIN
-const SCALE_MAX = GROUND_LIGHT_SCALE_MAX
 const INTENSITY_MIN = GROUND_LIGHT_INTENSITY_MIN
 const INTENSITY_MAX = GROUND_LIGHT_INTENSITY_MAX
 const PARTICLE_SIZE_MIN = GROUND_LIGHT_PARTICLE_SIZE_MIN
@@ -48,7 +42,6 @@ const componentEnabled = computed(() => warpGateComponent.value?.enabled !== fal
 const localState = reactive({
   color: DEFAULT_GROUND_LIGHT_COLOR,
   intensity: DEFAULT_GROUND_LIGHT_INTENSITY,
-  scale: DEFAULT_GROUND_LIGHT_SCALE,
   particleSize: DEFAULT_GROUND_LIGHT_PARTICLE_SIZE,
   particleCount: DEFAULT_GROUND_LIGHT_PARTICLE_COUNT,
   showParticles: DEFAULT_GROUND_LIGHT_SHOW_PARTICLES,
@@ -72,7 +65,6 @@ watch(
     syncing.value = true
     localState.color = normalized.color
     localState.intensity = normalized.intensity
-    localState.scale = normalized.scale
     localState.particleSize = normalized.particleSize
     localState.particleCount = normalized.particleCount
     localState.showParticles = normalized.showParticles
@@ -111,25 +103,6 @@ watch(
       return
     }
     applyWarpGate({ intensity: clamped })
-  },
-)
-
-watch(
-  () => localState.scale,
-  (value, previous) => {
-    if (syncing.value || !componentEnabled.value) {
-      return
-    }
-    const prevValue = typeof previous === 'number' ? previous : Number(previous)
-    const clamped = Math.min(Math.max(value, SCALE_MIN), SCALE_MAX)
-    if (clamped !== value) {
-      localState.scale = clamped
-      return
-    }
-    if (Number.isFinite(prevValue) && Math.abs(clamped - prevValue) <= 1e-4) {
-      return
-    }
-    applyWarpGate({ scale: clamped })
   },
 )
 
@@ -249,21 +222,6 @@ const handleColorPickerInput = (value: string | null) => {
   handleColorInput(value)
 }
 
-const handleScaleInput = (value: string | number | null) => {
-  if (!componentEnabled.value) {
-    return
-  }
-  if (value === '' || value === null || value === undefined) {
-    return
-  }
-  const numeric = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(numeric)) {
-    return
-  }
-  const clamped = Math.min(Math.max(numeric, SCALE_MIN), SCALE_MAX)
-  localState.scale = clamped
-}
-
 const handleParticleSizeInput = (value: string | number | null) => {
   if (!componentEnabled.value) {
     return
@@ -299,7 +257,6 @@ const handleParticleCountInput = (value: string | number | null) => {
 
 defineExpose({
 	handleColorPickerInput,
-	handleScaleInput,
 	handleParticleSizeInput,
 	handleParticleCountInput,
 })
@@ -402,22 +359,6 @@ function handleRemoveComponent() {
           </v-menu>
         </div>
         <v-text-field
-          :model-value="localState.scale"
-          :min="SCALE_MIN"
-          :max="SCALE_MAX"
-          :step="0.05"
-          label="Scale"
-          type="number"
-          density="compact"
-          variant="underlined"
-          color="primary"
-          inputmode="decimal"
-          hide-details
-          class="slider-input"
-          :disabled="!componentEnabled"
-          @update:model-value="handleScaleInput"
-        />
-        <v-text-field
           v-model="localState.intensity"
           :min="INTENSITY_MIN"
           :max="INTENSITY_MAX"
@@ -468,7 +409,6 @@ function handleRemoveComponent() {
           v-model="localState.showParticles"
           label="Show Particles"
           hide-details
-          inset
           density="compact"
           class="switch-control"
           color="primary"
@@ -478,7 +418,6 @@ function handleRemoveComponent() {
           v-model="localState.showBeams"
           label="Show Light Beams"
           hide-details
-          inset
           density="compact"
           class="switch-control"
           color="primary"
@@ -488,7 +427,6 @@ function handleRemoveComponent() {
           v-model="localState.showRings"
           label="Show Halo"
           hide-details
-          inset
           density="compact"
           class="switch-control"
           color="primary"

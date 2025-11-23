@@ -11,13 +11,11 @@ export const DEFAULT_GROUND_LIGHT_INTENSITY = 1
 export const DEFAULT_GROUND_LIGHT_SCALE = 1
 export const DEFAULT_GROUND_LIGHT_PARTICLE_SIZE = 0.12
 export const DEFAULT_GROUND_LIGHT_PARTICLE_COUNT = 160
-export const DEFAULT_GROUND_LIGHT_SHOW_PARTICLES = true
+export const DEFAULT_GROUND_LIGHT_SHOW_PARTICLES = false
 export const DEFAULT_GROUND_LIGHT_SHOW_BEAMS = true
 export const DEFAULT_GROUND_LIGHT_SHOW_RINGS = true
 export const GROUND_LIGHT_INTENSITY_MIN = 0
 export const GROUND_LIGHT_INTENSITY_MAX = 5
-export const GROUND_LIGHT_SCALE_MIN = 0.2
-export const GROUND_LIGHT_SCALE_MAX = 3
 export const GROUND_LIGHT_PARTICLE_SIZE_MIN = 0.02
 export const GROUND_LIGHT_PARTICLE_SIZE_MAX = 0.4
 export const GROUND_LIGHT_PARTICLE_COUNT_MIN = 0
@@ -81,7 +79,6 @@ type WarpGateRuntimeEntry = {
 export interface WarpGateEffectProps {
   color: string
   intensity: number
-  scale: number
   particleSize: number
   particleCount: number
   showParticles: boolean
@@ -164,12 +161,6 @@ export function clampWarpGateComponentProps(
     GROUND_LIGHT_INTENSITY_MAX,
     DEFAULT_GROUND_LIGHT_INTENSITY,
   )
-  const scale = clampNumber(
-    (source as { scale?: number }).scale,
-    GROUND_LIGHT_SCALE_MIN,
-    GROUND_LIGHT_SCALE_MAX,
-    DEFAULT_GROUND_LIGHT_SCALE,
-  )
   const particleSize = clampNumber(
     (source as { particleSize?: number }).particleSize,
     GROUND_LIGHT_PARTICLE_SIZE_MIN,
@@ -192,7 +183,6 @@ export function clampWarpGateComponentProps(
   return {
     color,
     intensity,
-    scale,
     particleSize,
     particleCount,
     showParticles,
@@ -205,7 +195,6 @@ export function cloneWarpGateComponentProps(props: WarpGateComponentProps): Warp
   return {
     color: props.color,
     intensity: props.intensity,
-    scale: props.scale,
     particleSize: props.particleSize,
     particleCount: props.particleCount,
     showParticles: props.showParticles,
@@ -292,7 +281,6 @@ class WarpGateEffectController implements WarpGateEffectInstance {
   private readonly color = new THREE.Color(DEFAULT_GROUND_LIGHT_COLOR)
   private intensity = DEFAULT_GROUND_LIGHT_INTENSITY
   private intensityFactor = 1
-  private scale = DEFAULT_GROUND_LIGHT_SCALE
   private particleSize = DEFAULT_GROUND_LIGHT_PARTICLE_SIZE
   private showParticles = DEFAULT_GROUND_LIGHT_SHOW_PARTICLES
   private showBeams = DEFAULT_GROUND_LIGHT_SHOW_BEAMS
@@ -479,7 +467,6 @@ class WarpGateEffectController implements WarpGateEffectInstance {
   private applySettings(settings: WarpGateComponentProps): void {
     this.setColor(settings.color)
     this.setIntensity(settings.intensity)
-    this.setScale(settings.scale)
     this.setParticleCount(settings.particleCount)
     this.setParticleSize(settings.particleSize)
     this.setVisibilityOptions({
@@ -503,15 +490,6 @@ class WarpGateEffectController implements WarpGateEffectInstance {
     const normalized = this.intensity
     const factor = normalized <= 0 ? 0 : 0.35 + (normalized / GROUND_LIGHT_INTENSITY_MAX) * 0.9
     this.intensityFactor = factor
-  }
-
-  private setScale(scale: number): void {
-    const clamped = Math.min(Math.max(scale, GROUND_LIGHT_SCALE_MIN), GROUND_LIGHT_SCALE_MAX)
-    if (Math.abs(clamped - this.scale) <= 1e-4) {
-      return
-    }
-    this.scale = clamped
-    this.group.scale.setScalar(this.scale)
   }
 
   private setParticleSize(size: number): void {
