@@ -21,6 +21,7 @@ export const NODE_TYPE_ICONS: Record<SceneNodeType, string> = {
   TorusKnot: 'mdi-torus-knot',
   Box: 'mdi-cube-outline',
   Empty: 'mdi-vector-point',
+  WarpGate: 'mdi-atom-variant',
 }
 
 export const LIGHT_TYPE_ICONS: Record<LightNodeType, string> = {
@@ -43,7 +44,7 @@ const GROUND_ICON = 'mdi-grass'
 const WALL_ICON = 'mdi-wall'
 
 export function getNodeIcon({ nodeType, lightType, hasChildren, nodeId, dynamicMeshType }: NodeIconParams): string {
-  if (nodeId === GROUND_NODE_ID || nodeType === 'Ground') {
+  if (nodeId === GROUND_NODE_ID) {
     return GROUND_ICON
   }
 

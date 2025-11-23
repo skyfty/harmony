@@ -167,7 +167,6 @@ import {
   createWarpGateComponentState,
   clampEffectComponentProps,
   cloneEffectComponentProps,
-  createEffectComponentState,
   componentManager,
   resolveWallComponentPropsFromMesh,
 } from '@schema/components'
@@ -9849,7 +9848,12 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
-      let nextProps: Record<string, unknown> | WallComponentProps | DisplayBoardComponentProps
+      let nextProps:
+        | Record<string, unknown>
+        | WallComponentProps
+        | DisplayBoardComponentProps
+        | WarpGateComponentProps
+        | EffectComponentProps
       if (type === WALL_COMPONENT_TYPE) {
         const currentProps = component.props as WallComponentProps
         const merged = clampWallProps({

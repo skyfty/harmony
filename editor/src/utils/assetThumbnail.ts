@@ -330,7 +330,7 @@ function buildThumbnailFilename(asset: ProjectAsset, extension: string): string 
 
 function resolvePreviewColor(asset: ProjectAsset): string {
   const candidates = [asset.color, asset.previewColor, DEFAULT_BACKGROUND]
-  const match = candidates.find((entry): entry is string => typeof entry === 'string' && entry.trim().length)
+  const match = candidates.find((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
   return match ?? DEFAULT_BACKGROUND
 }
 
@@ -396,7 +396,7 @@ function extractOpaqueBounds(canvas: HTMLCanvasElement, threshold: number): Boun
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       const index = (y * width + x) * 4 + 3
-      const alpha = data[index]
+      const alpha = data[index] ?? 0
       if (alpha > threshold) {
         if (x < minX) minX = x
         if (y < minY) minY = y

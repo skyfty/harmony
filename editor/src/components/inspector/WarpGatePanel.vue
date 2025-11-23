@@ -25,6 +25,15 @@ import {
   GROUND_LIGHT_PARTICLE_COUNT_MAX,
 } from '@schema/components'
 
+const SCALE_MIN = GROUND_LIGHT_SCALE_MIN
+const SCALE_MAX = GROUND_LIGHT_SCALE_MAX
+const INTENSITY_MIN = GROUND_LIGHT_INTENSITY_MIN
+const INTENSITY_MAX = GROUND_LIGHT_INTENSITY_MAX
+const PARTICLE_SIZE_MIN = GROUND_LIGHT_PARTICLE_SIZE_MIN
+const PARTICLE_SIZE_MAX = GROUND_LIGHT_PARTICLE_SIZE_MAX
+const PARTICLE_COUNT_MIN = GROUND_LIGHT_PARTICLE_COUNT_MIN
+const PARTICLE_COUNT_MAX = GROUND_LIGHT_PARTICLE_COUNT_MAX
+
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
@@ -49,6 +58,12 @@ const localState = reactive({
 
 const syncing = ref(false)
 const colorMenuOpen = ref(false)
+
+watch(componentEnabled, (enabled) => {
+  if (!enabled && colorMenuOpen.value) {
+    colorMenuOpen.value = false
+  }
+})
 
 watch(
   () => warpGateComponent.value?.props,
@@ -87,10 +102,15 @@ watch(
       return
     }
     const prevValue = typeof previous === 'number' ? previous : Number(previous)
-    if (Number.isFinite(prevValue) && Math.abs(value - prevValue) <= 1e-4) {
+    const clamped = Math.min(Math.max(value, INTENSITY_MIN), INTENSITY_MAX)
+    if (clamped !== value) {
+      localState.intensity = clamped
       return
     }
-    applyWarpGate({ intensity: value })
+    if (Number.isFinite(prevValue) && Math.abs(clamped - prevValue) <= 1e-4) {
+      return
+    }
+    applyWarpGate({ intensity: clamped })
   },
 )
 
@@ -101,10 +121,15 @@ watch(
       return
     }
     const prevValue = typeof previous === 'number' ? previous : Number(previous)
-    if (Number.isFinite(prevValue) && Math.abs(value - prevValue) <= 1e-4) {
+    const clamped = Math.min(Math.max(value, SCALE_MIN), SCALE_MAX)
+    if (clamped !== value) {
+      localState.scale = clamped
       return
     }
-    applyWarpGate({ scale: value })
+    if (Number.isFinite(prevValue) && Math.abs(clamped - prevValue) <= 1e-4) {
+      return
+    }
+    applyWarpGate({ scale: clamped })
   },
 )
 
@@ -115,10 +140,15 @@ watch(
       return
     }
     const prevValue = typeof previous === 'number' ? previous : Number(previous)
-    if (Number.isFinite(prevValue) && Math.abs(value - prevValue) <= 1e-4) {
+    const clamped = Math.min(Math.max(value, PARTICLE_SIZE_MIN), PARTICLE_SIZE_MAX)
+    if (clamped !== value) {
+      localState.particleSize = clamped
       return
     }
-    applyWarpGate({ particleSize: value })
+    if (Number.isFinite(prevValue) && Math.abs(clamped - prevValue) <= 1e-4) {
+      return
+    }
+    applyWarpGate({ particleSize: clamped })
   },
 )
 
@@ -129,10 +159,18 @@ watch(
       return
     }
     const prevValue = typeof previous === 'number' ? previous : Number(previous)
-    if (Number.isFinite(prevValue) && Math.round(value) === Math.round(prevValue)) {
+    const clamped = Math.min(
+      PARTICLE_COUNT_MAX,
+      Math.max(PARTICLE_COUNT_MIN, Math.round(value)),
+    )
+    if (clamped !== value) {
+      localState.particleCount = clamped
       return
     }
-    applyWarpGate({ particleCount: Math.round(value) })
+    if (Number.isFinite(prevValue) && Math.round(clamped) === Math.round(prevValue)) {
+      return
+    }
+    applyWarpGate({ particleCount: clamped })
   },
 )
 
@@ -196,7 +234,7 @@ function normalizeHexColor(value: unknown, fallback: string): string {
   return `#${hex.toLowerCase()}`
 }
 
-function handleColorInput(value: string | null) {
+const handleColorInput = (value: string | null) => {
   if (!componentEnabled.value || typeof value !== 'string') {
     return
   }
@@ -207,11 +245,11 @@ function handleColorInput(value: string | null) {
   localState.color = normalized
 }
 
-function handleColorPickerInput(value: string | null) {
+const handleColorPickerInput = (value: string | null) => {
   handleColorInput(value)
 }
 
-function handleScaleInput(value: string | number | null) {
+const handleScaleInput = (value: string | number | null) => {
   if (!componentEnabled.value) {
     return
   }
@@ -222,10 +260,11 @@ function handleScaleInput(value: string | number | null) {
   if (!Number.isFinite(numeric)) {
     return
   }
-  localState.scale = numeric
+  const clamped = Math.min(Math.max(numeric, SCALE_MIN), SCALE_MAX)
+  localState.scale = clamped
 }
 
-function handleParticleSizeInput(value: string | number | null) {
+const handleParticleSizeInput = (value: string | number | null) => {
   if (!componentEnabled.value) {
     return
   }
@@ -236,11 +275,11 @@ function handleParticleSizeInput(value: string | number | null) {
   if (!Number.isFinite(numeric)) {
     return
   }
-  const clamped = Math.min(Math.max(numeric, GROUND_LIGHT_PARTICLE_SIZE_MIN), GROUND_LIGHT_PARTICLE_SIZE_MAX)
+  const clamped = Math.min(Math.max(numeric, PARTICLE_SIZE_MIN), PARTICLE_SIZE_MAX)
   localState.particleSize = clamped
 }
 
-function handleParticleCountInput(value: string | number | null) {
+const handleParticleCountInput = (value: string | number | null) => {
   if (!componentEnabled.value) {
     return
   }
@@ -252,11 +291,18 @@ function handleParticleCountInput(value: string | number | null) {
     return
   }
   const integer = Math.min(
-    GROUND_LIGHT_PARTICLE_COUNT_MAX,
-    Math.max(GROUND_LIGHT_PARTICLE_COUNT_MIN, Math.round(numeric)),
+    PARTICLE_COUNT_MAX,
+    Math.max(PARTICLE_COUNT_MIN, Math.round(numeric)),
   )
   localState.particleCount = integer
 }
+
+defineExpose({
+	handleColorPickerInput,
+	handleScaleInput,
+	handleParticleSizeInput,
+	handleParticleCountInput,
+})
 
 function handleToggleComponent() {
   const component = warpGateComponent.value
@@ -357,8 +403,8 @@ function handleRemoveComponent() {
         </div>
         <v-text-field
           :model-value="localState.scale"
-          :min="GROUND_LIGHT_SCALE_MIN"
-          :max="GROUND_LIGHT_SCALE_MAX"
+          :min="SCALE_MIN"
+          :max="SCALE_MAX"
           :step="0.05"
           label="Scale"
           type="number"
@@ -373,8 +419,8 @@ function handleRemoveComponent() {
         />
         <v-text-field
           v-model="localState.intensity"
-          :min="GROUND_LIGHT_INTENSITY_MIN"
-          :max="GROUND_LIGHT_INTENSITY_MAX"
+          :min="INTENSITY_MIN"
+          :max="INTENSITY_MAX"
           :step="0.05"
           label="Intensity"
           type="number"
@@ -388,8 +434,8 @@ function handleRemoveComponent() {
         />
         <v-text-field
           :model-value="localState.particleSize"
-          :min="GROUND_LIGHT_PARTICLE_SIZE_MIN"
-          :max="GROUND_LIGHT_PARTICLE_SIZE_MAX"
+          :min="PARTICLE_SIZE_MIN"
+          :max="PARTICLE_SIZE_MAX"
           :step="0.01"
           label="Particle Size"
           type="number"
@@ -404,8 +450,8 @@ function handleRemoveComponent() {
         />
         <v-text-field
           :model-value="localState.particleCount"
-          :min="GROUND_LIGHT_PARTICLE_COUNT_MIN"
-          :max="GROUND_LIGHT_PARTICLE_COUNT_MAX"
+          :min="PARTICLE_COUNT_MIN"
+          :max="PARTICLE_COUNT_MAX"
           :step="1"
           label="Particle Count"
           type="number"
@@ -534,117 +580,5 @@ function handleRemoveComponent() {
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
   border: 0;
-}
-</style><script setup lang="ts">
-import { computed } from 'vue'
-import { storeToRefs } from 'pinia'
-import type { SceneNodeComponentState } from '@harmony/schema'
-import { useSceneStore } from '@/stores/sceneStore'
-import { WARP_GATE_COMPONENT_TYPE, type WarpGateComponentProps } from '@schema/components'
-
-const sceneStore = useSceneStore()
-const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
-
-const warpGateComponent = computed(
-  () => selectedNode.value?.components?.[WARP_GATE_COMPONENT_TYPE] as
-    | SceneNodeComponentState<WarpGateComponentProps>
-    | undefined,
-)
-
-function handleToggleComponent() {
-  const component = warpGateComponent.value
-  const nodeId = selectedNodeId.value
-  if (!component || !nodeId) {
-    return
-  }
-  sceneStore.toggleNodeComponentEnabled(nodeId, component.id)
-}
-
-function handleRemoveComponent() {
-  const component = warpGateComponent.value
-  const nodeId = selectedNodeId.value
-  if (!component || !nodeId) {
-    return
-  }
-  sceneStore.removeNodeComponent(nodeId, component.id)
-}
-</script>
-
-<template>
-  <v-expansion-panel value="warp-gate">
-    <v-expansion-panel-title>
-      <div class="warp-gate-panel-header">
-        <span class="warp-gate-panel-title">Warp Gate Component</span>
-        <v-spacer />
-        <v-menu
-          v-if="warpGateComponent"
-          location="bottom end"
-          origin="auto"
-          transition="fade-transition"
-        >
-          <template #activator="{ props }">
-            <v-btn
-              v-bind="props"
-              icon
-              variant="text"
-              size="small"
-              class="component-menu-btn"
-              @click.stop
-            >
-              <v-icon size="18">mdi-dots-vertical</v-icon>
-            </v-btn>
-          </template>
-          <v-list density="compact">
-            <v-list-item @click.stop="handleToggleComponent()">
-              <v-list-item-title>{{ warpGateComponent.enabled ? 'Disable' : 'Enable' }}</v-list-item-title>
-            </v-list-item>
-            <v-divider class="component-menu-divider" inset />
-            <v-list-item @click.stop="handleRemoveComponent()">
-              <v-list-item-title>Remove</v-list-item-title>
-            </v-list-item>
-          </v-list>
-        </v-menu>
-      </div>
-    </v-expansion-panel-title>
-    <v-expansion-panel-text>
-      <div class="warp-gate-settings">
-        <p class="warp-gate-hint">Warp gates have no adjustable parameters yet. Use behaviors to define their actions.</p>
-      </div>
-    </v-expansion-panel-text>
-  </v-expansion-panel>
-</template>
-
-<style scoped>
-.warp-gate-panel-header {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  width: 100%;
-}
-
-.warp-gate-panel-title {
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
-
-.component-menu-btn {
-  color: rgba(233, 236, 241, 0.82);
-}
-
-.component-menu-divider {
-  margin-inline: 0.6rem;
-}
-
-.warp-gate-settings {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  padding-inline: 0.4rem;
-}
-
-.warp-gate-hint {
-  font-size: 0.78rem;
-  color: rgba(220, 225, 232, 0.65);
-  margin: 0;
 }
 </style>

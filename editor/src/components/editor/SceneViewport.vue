@@ -8160,7 +8160,6 @@ onMounted(() => {
 
   sceneStore.ensureCurrentSceneLoaded({ skipComponentSync: true }).then(() => {
     syncSceneGraph()
-    sceneStore.syncComponentRuntimes()
   })
 })
 

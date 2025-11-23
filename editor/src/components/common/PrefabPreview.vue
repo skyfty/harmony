@@ -58,16 +58,18 @@ function disposeMaterialTextures(material: THREE.Material | null | undefined): v
   if (!material) {
     return
   }
-  const typed = material as THREE.Material & {
-    map?: THREE.Texture | null
-    envMap?: THREE.Texture | null
-    normalMap?: THREE.Texture | null
-    metalnessMap?: THREE.Texture | null
-    roughnessMap?: THREE.Texture | null
-    aoMap?: THREE.Texture | null
-    emissiveMap?: THREE.Texture | null
-  }
-  const textureKeys: Array<keyof typeof typed> = [
+  type TextureKey =
+    | 'map'
+    | 'envMap'
+    | 'normalMap'
+    | 'metalnessMap'
+    | 'roughnessMap'
+    | 'aoMap'
+    | 'emissiveMap'
+
+  const typed = material as THREE.Material & Partial<Record<TextureKey, THREE.Texture | null>>
+
+  const textureKeys: TextureKey[] = [
     'map',
     'envMap',
     'normalMap',
@@ -80,7 +82,7 @@ function disposeMaterialTextures(material: THREE.Material | null | undefined): v
     const texture = typed[key]
     if (texture && texture instanceof THREE.Texture) {
       texture.dispose()
-      typed[key] = null as any
+      typed[key] = null
     }
   })
 }
