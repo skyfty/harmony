@@ -86,6 +86,7 @@ import {
   cloneWarpGateComponentProps,
   cloneGuideboardComponentProps,
   createWarpGateEffectInstance,
+  createGuideboardEffectInstance,
   GUIDEBOARD_DEFAULT_GLOW_COLOR,
   GUIDEBOARD_GLOW_INTENSITY_MAX,
   GUIDEBOARD_GLOW_RADIUS_MIN,
