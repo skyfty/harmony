@@ -565,6 +565,26 @@ const worldUp = new THREE.Vector3(0, 1, 0);
 const tempForwardVec = new THREE.Vector3();
 const tempRightVec = new THREE.Vector3();
 const tempMovementVec = new THREE.Vector3();
+const tempYawForwardVec = new THREE.Vector3();
+const cameraRotationAnchor = new THREE.Vector3();
+let programmaticCameraMutationDepth = 0;
+let suppressSelfYawRecenter = false;
+
+function runWithProgrammaticCameraMutation<T>(callback: () => T): T {
+  programmaticCameraMutationDepth += 1;
+  try {
+    return callback();
+  } finally {
+    programmaticCameraMutationDepth = Math.max(0, programmaticCameraMutationDepth - 1);
+    if (programmaticCameraMutationDepth === 0 && renderContext) {
+      cameraRotationAnchor.copy(renderContext.camera.position);
+    }
+  }
+}
+
+function isProgrammaticCameraMutationActive(): boolean {
+  return programmaticCameraMutationDepth > 0;
+}
 
 let wheelListenerCleanup: (() => void) | null = null;
 
@@ -2246,8 +2266,10 @@ function setCameraCaging(enabled: boolean): void {
   isCameraCaged.value = enabled;
   const controls = renderContext?.controls;
   if (controls) {
-    controls.enabled = !enabled;
-    controls.update();
+    runWithProgrammaticCameraMutation(() => {
+      controls.enabled = !enabled;
+      controls.update();
+    });
   }
 }
 
@@ -2271,18 +2293,24 @@ function applyCameraWatchTween(deltaSeconds: number): void {
   tween.elapsed = Math.min(tween.elapsed + deltaSeconds, tween.duration);
   const eased = easeInOutCubic(Math.min(1, tween.elapsed / duration));
   tempMovementVec.copy(tween.from).lerp(tween.to, eased);
-  withControlsVerticalFreedom(controls, () => {
-    controls.target.copy(tempMovementVec);
-    camera.position.copy(tween.startPosition);
-    camera.position.y = HUMAN_EYE_HEIGHT;
-    camera.lookAt(controls.target);
-    controls.update();
+  runWithProgrammaticCameraMutation(() => {
+    withControlsVerticalFreedom(controls, () => {
+      controls.target.copy(tempMovementVec);
+      camera.position.copy(tween.startPosition);
+      camera.position.y = HUMAN_EYE_HEIGHT;
+      camera.lookAt(controls.target);
+      controls.update();
+    });
   });
   lockControlsPitchToCurrent(controls, camera);
   if (tween.elapsed >= tween.duration) {
-    controls.target.copy(tween.to);
-    camera.lookAt(controls.target);
-    controls.update();
+    runWithProgrammaticCameraMutation(() => {
+      withControlsVerticalFreedom(controls, () => {
+        controls.target.copy(tween.to);
+        camera.lookAt(controls.target);
+        controls.update();
+      });
+    });
     lockControlsPitchToCurrent(controls, camera);
     activeCameraWatchTween = null;
   }
@@ -2656,20 +2684,24 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
   const durationSeconds = Math.max(0, event.duration ?? 0);
   
   const updateFrame = (alpha: number) => {
-    withControlsVerticalFreedom(controls, () => {
-      camera.position.lerpVectors(startPosition, destination, alpha);
-      controls.target.lerpVectors(startTarget, lookTarget, alpha);
-      camera.lookAt(controls.target);
-      controls.update();
+    runWithProgrammaticCameraMutation(() => {
+      withControlsVerticalFreedom(controls, () => {
+        camera.position.lerpVectors(startPosition, destination, alpha);
+        controls.target.lerpVectors(startTarget, lookTarget, alpha);
+        camera.lookAt(controls.target);
+        controls.update();
+      });
     });
     lockControlsPitchToCurrent(controls, camera);
   };
   const finalize = () => {
-    withControlsVerticalFreedom(controls, () => {
-      camera.position.copy(destination);
-      controls.target.copy(lookTarget);
-      camera.lookAt(controls.target);
-      controls.update();
+    runWithProgrammaticCameraMutation(() => {
+      withControlsVerticalFreedom(controls, () => {
+        camera.position.copy(destination);
+        controls.target.copy(lookTarget);
+        camera.lookAt(controls.target);
+        controls.update();
+      });
     });
     lockControlsPitchToCurrent(controls, camera);
     resolveBehaviorToken(event.token, { type: 'continue' });
@@ -2823,11 +2855,13 @@ function performWatchFocus(targetNodeId: string | null, caging?: boolean): { suc
 
   tempMovementVec.copy(focus).sub(startPosition);
   if (tempMovementVec.lengthSq() < 1e-8) {
-    withControlsVerticalFreedom(controls, () => {
-      controls.target.copy(focus);
-      camera.position.copy(startPosition);
-      camera.lookAt(focus);
-      controls.update();
+    runWithProgrammaticCameraMutation(() => {
+      withControlsVerticalFreedom(controls, () => {
+        controls.target.copy(focus);
+        camera.position.copy(startPosition);
+        camera.lookAt(focus);
+        controls.update();
+      });
     });
     lockControlsPitchToCurrent(controls, camera);
     return finishSuccess();
@@ -2837,11 +2871,13 @@ function performWatchFocus(targetNodeId: string | null, caging?: boolean): { suc
   tempForwardVec.copy(tempMovementVec).multiplyScalar(CAMERA_FORWARD_OFFSET).add(startPosition);
   const startTarget = controls.target.clone();
   if (startTarget.distanceToSquared(tempForwardVec) < 1e-6) {
-    withControlsVerticalFreedom(controls, () => {
-      camera.position.copy(startPosition);
-      controls.target.copy(tempForwardVec);
-      camera.lookAt(tempForwardVec);
-      controls.update();
+    runWithProgrammaticCameraMutation(() => {
+      withControlsVerticalFreedom(controls, () => {
+        camera.position.copy(startPosition);
+        controls.target.copy(tempForwardVec);
+        camera.lookAt(tempForwardVec);
+        controls.update();
+      });
     });
     lockControlsPitchToCurrent(controls, camera);
     return finishSuccess();
@@ -2931,10 +2967,12 @@ function resetCameraToLevelView(): { success: boolean; message?: string } {
     return { success: true };
   };
   if (startTarget.distanceToSquared(levelTarget) < 1e-6) {
-    withControlsVerticalFreedom(controls, () => {
-      controls.target.copy(levelTarget);
-      camera.lookAt(levelTarget);
-      controls.update();
+    runWithProgrammaticCameraMutation(() => {
+      withControlsVerticalFreedom(controls, () => {
+        controls.target.copy(levelTarget);
+        camera.lookAt(levelTarget);
+        controls.update();
+      });
     });
     lockControlsPitchToCurrent(controls, camera);
     return finishSuccess();
@@ -3952,8 +3990,10 @@ function handleWheelEvent(event: WheelEvent): void {
   }
   const direction = deltaY < 0 ? 1 : -1;
   const magnitude = Math.min(Math.abs(deltaY) / 120, 3) || 1;
-  translateCamera(direction * WHEEL_MOVE_STEP * magnitude, 0);
-  renderContext.controls.update();
+  runWithProgrammaticCameraMutation(() => {
+    translateCamera(direction * WHEEL_MOVE_STEP * magnitude, 0);
+    renderContext.controls.update();
+  });
 }
 
 function teardownRenderer() {
@@ -4062,9 +4102,35 @@ async function ensureRendererContext(result: UseCanvasResult) {
 
   controls.addEventListener('start', () => {
     activeCameraWatchTween = null;
+    cameraRotationAnchor.copy(camera.position);
   });
 
-  controls.update();
+  const handleControlsChange = () => {
+    if (!renderContext || isProgrammaticCameraMutationActive() || suppressSelfYawRecenter) {
+      return;
+    }
+    const { camera: contextCamera, controls: contextControls } = renderContext;
+    tempYawForwardVec.copy(contextControls.target).sub(contextCamera.position);
+    if (tempYawForwardVec.lengthSq() < 1e-8) {
+      return;
+    }
+    suppressSelfYawRecenter = true;
+    tempYawForwardVec.normalize();
+    contextCamera.position.copy(cameraRotationAnchor);
+    contextControls.target.copy(contextCamera.position).addScaledVector(tempYawForwardVec, CAMERA_FORWARD_OFFSET);
+    contextCamera.lookAt(contextControls.target);
+    suppressSelfYawRecenter = false;
+  };
+
+  controls.addEventListener('change', handleControlsChange);
+  controls.addEventListener('end', () => {
+    cameraRotationAnchor.copy(camera.position);
+  });
+
+  runWithProgrammaticCameraMutation(() => {
+    controls.update();
+  });
+  cameraRotationAnchor.copy(camera.position);
   lockControlsPitchToCurrent(controls, camera);
   setupWheelControls(canvas);
 
@@ -4231,6 +4297,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
         if (activeCameraWatchTween && deltaSeconds > 0) {
           applyCameraWatchTween(deltaSeconds);
         } else {
+          cameraRotationAnchor.copy(camera.position);
           controls.update();
         }
         if (deltaSeconds > 0) {
