@@ -197,8 +197,9 @@ async function refreshExportSummary(force = false): Promise<SceneResourceSummary
   pendingExportSummary = (async () => {
     try {
       const snapshot = sceneStore.createSceneDocumentSnapshot() as StoredSceneDocument
-      const packageAssetMap = await buildPackageAssetMapForExport(snapshot, { embedResources: true })
+      const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(snapshot, { embedResources: true })
       snapshot.packageAssetMap = packageAssetMap
+      snapshot.assetIndex = assetIndex
       const summary = await calculateSceneResourceSummary(snapshot, { embedResources: true })
       snapshot.resourceSummary = summary
       exportResourceSummary.value = summary
@@ -902,7 +903,9 @@ async function saveCurrentScene(): Promise<boolean> {
       viewportRef.value?.captureThumbnail()
       const document = await sceneStore.saveActiveScene({force: true})
       if (document) {
-        document.packageAssetMap = await buildPackageAssetMapForExport(document,{embedResources:true})
+        const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(document,{embedResources:true})
+        document.packageAssetMap = packageAssetMap
+        document.assetIndex = assetIndex
         broadcastScenePreview(document)
       }
       return true
@@ -925,7 +928,7 @@ async function exportCurrentScene() {
   }
 
   await saveCurrentScene()
-  const bundle = await sceneStore.exportSceneBundle([currentSceneId], { embedResources: true })
+  const bundle = await sceneStore.exportSceneBundle([currentSceneId])
   if (!bundle || !bundle.scenes.length) {
     console.warn('Failed to export current scene')
     return

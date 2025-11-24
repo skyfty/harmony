@@ -4284,25 +4284,27 @@ function resolveEmbeddedAssetFilename(scene: StoredSceneDocument, assetId: strin
   return ensureExtension(filename, extension)
 }
 
-export async function buildPackageAssetMapForExport(
+async function buildPackageEmbedAssetMapForExport(
   scene: StoredSceneDocument,
-  options: SceneBundleExportOptions,
-): Promise<Record<string, string>> {
-  const embedResources = options.embedResources ?? false
-  const baseMap = stripAssetEntries(clonePackageAssetMap(scene.packageAssetMap))
-
-  if (!embedResources) {
-    return baseMap
+  packageAssetMap: Record<string, string>,
+  usedAssetIds: Set<string>): Promise<Record<string, string>> {
+  if (!usedAssetIds.size) {
+    return packageAssetMap
   }
-
   const assetCache = useAssetCacheStore()
   const assetIdsToEmbed = new Set<string>()
 
-  Object.entries(scene.assetIndex).forEach(([assetId, entry]) => {
+  const assetIndex = scene.assetIndex ?? {}
+  usedAssetIds.forEach((assetId) => {
+    const entry = assetIndex[assetId]
     if (entry?.source?.type === 'local') {
       assetIdsToEmbed.add(assetId)
     }
   })
+
+  if (!assetIdsToEmbed.size) {
+    return packageAssetMap
+  }
 
   const normalizeUrl = (value: string | null | undefined): string | null => {
     if (!value) {
@@ -4329,26 +4331,26 @@ export async function buildPackageAssetMapForExport(
       if (!cacheEntry || cacheEntry.status !== 'cached' || !cacheEntry.blob) {
         const downloadUrl = normalizeUrl(asset.downloadUrl) ?? normalizeUrl(asset.description)
         if (!downloadUrl) {
-          console.warn('缺少资源数据，无法嵌入导出场景', assetId)
+          console.warn('Missing asset data, cannot embed in exported scene', assetId)
           return
         }
         try {
           cacheEntry = await assetCache.downloadAsset(assetId, downloadUrl, asset.name)
         } catch (error) {
-          console.warn('下载资源数据失败，无法嵌入导出场景', assetId, error)
+          console.warn('Failed to download asset data, cannot embed in exported scene', assetId, error)
           return
         }
       }
 
       if (!cacheEntry || cacheEntry.status !== 'cached' || !cacheEntry.blob) {
-        console.warn('资源未缓存，无法嵌入导出场景', assetId)
+        console.warn('Asset not cached, cannot embed in exported scene', assetId)
         return
       }
 
       try {
-        baseMap[`${LOCAL_EMBEDDED_ASSET_PREFIX}${assetId}`] = await blobToDataUrl(cacheEntry.blob)
+        packageAssetMap[`${LOCAL_EMBEDDED_ASSET_PREFIX}${assetId}`] = await blobToDataUrl(cacheEntry.blob)
       } catch (error) {
-        console.warn('序列化资源失败，无法嵌入导出场景', assetId, error)
+        console.warn('Failed to serialize asset, cannot embed in exported scene', assetId, error)
       }
     })())
   })
@@ -4356,8 +4358,21 @@ export async function buildPackageAssetMapForExport(
   if (embedTasks.length) {
     await Promise.all(embedTasks)
   }
+  return packageAssetMap
+}
 
-  return baseMap
+export async function buildPackageAssetMapForExport(
+  scene: StoredSceneDocument,
+  options: SceneBundleExportOptions,
+): Promise<{ packageAssetMap: Record<string, string>; assetIndex: Record<string, AssetIndexEntry> }> {
+  const usedAssetIds = collectSceneAssetReferences(scene)
+  let packageAssetMap = filterPackageAssetMapByUsage(stripAssetEntries(clonePackageAssetMap(scene.packageAssetMap)),usedAssetIds)
+  const assetIndex = filterAssetIndexByUsage(scene.assetIndex, usedAssetIds)
+  const embedResources = options.embedResources ?? false
+  if (embedResources) {
+    packageAssetMap = await buildPackageEmbedAssetMapForExport(scene, packageAssetMap, usedAssetIds);
+  }
+  return { packageAssetMap, assetIndex }
 }
 
 function estimateInlineAssetByteSize(raw: string | null | undefined): number {
@@ -4712,7 +4727,7 @@ export async function cloneSceneDocumentForExport(
   scene: StoredSceneDocument,
   options: SceneBundleExportOptions,
 ): Promise<StoredSceneDocument> {
-  const packageAssetMap = await buildPackageAssetMapForExport(scene, options)
+  const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(scene,options)
   return createSceneDocument(scene.name, {
     id: scene.id,
     nodes: scene.nodes,
@@ -4724,13 +4739,13 @@ export async function cloneSceneDocumentForExport(
     createdAt: scene.createdAt,
     updatedAt: scene.updatedAt,
     assetCatalog: scene.assetCatalog,
-    assetIndex: scene.assetIndex,
+    assetIndex: assetIndex,
     packageAssetMap,
     resourceSummary: scene.resourceSummary,
     materials: scene.materials,
     viewportSettings: scene.viewportSettings,
-  skybox: scene.skybox,
-  shadowsEnabled: scene.shadowsEnabled,
+    skybox: scene.skybox,
+    shadowsEnabled: scene.shadowsEnabled,
     panelVisibility: scene.panelVisibility,
     panelPlacement: scene.panelPlacement,
     groundSettings: scene.groundSettings,
@@ -4931,6 +4946,114 @@ function collectPrefabAssetReferences(root: SceneNode | null | undefined): strin
   const bucket = new Set<string>()
   collectNodeAssetDependencies(root, bucket)
   return Array.from(bucket)
+}
+
+export function collectSceneAssetReferences(scene: StoredSceneDocument): Set<string> {
+  const bucket = new Set<string>()
+  const materialIds = new Set<string>()
+
+  const traverseNodes = (nodes: SceneNode[] | null | undefined): void => {
+    if (!Array.isArray(nodes) || !nodes.length) {
+      return
+    }
+    nodes.forEach((node) => {
+      if (!node) {
+        return
+      }
+      collectNodeAssetDependencies(node, bucket)
+      if (Array.isArray(node.materials) && node.materials.length) {
+        node.materials.forEach((material) => {
+          const baseId = typeof material?.materialId === 'string' ? material.materialId.trim() : ''
+          if (baseId) {
+            materialIds.add(baseId)
+          }
+        })
+      }
+      if (Array.isArray(node.children) && node.children.length) {
+        traverseNodes(node.children as SceneNode[])
+      }
+    })
+  }
+
+  traverseNodes(scene.nodes ?? [])
+
+  const materialById = new Map<string, SceneMaterial>()
+  if (Array.isArray(scene.materials) && scene.materials.length) {
+    scene.materials.forEach((material) => {
+      const materialId = typeof material?.id === 'string' ? material.id.trim() : ''
+      if (materialId) {
+        materialById.set(materialId, material)
+      }
+    })
+  }
+
+  materialIds.forEach((materialId) => {
+    const material = materialById.get(materialId)
+    if (material) {
+      collectAssetIdsFromUnknown(material, bucket)
+    }
+  })
+
+  collectAssetIdsFromUnknown(scene.skybox, bucket)
+  collectAssetIdsFromUnknown(scene.environment, bucket)
+  collectAssetIdsFromUnknown(scene.groundSettings, bucket)
+
+  const catalog = scene.assetCatalog ?? {}
+  const removable: string[] = []
+  bucket.forEach((assetId) => {
+    const asset = getAssetFromCatalog(catalog, assetId)
+    if (asset?.type === 'prefab') {
+      removable.push(assetId)
+    }
+  })
+  removable.forEach((assetId) => bucket.delete(assetId))
+
+  return bucket
+}
+
+function filterPackageAssetMapByUsage(
+  map: Record<string, string>,
+  usedAssetIds: Set<string>,
+): Record<string, string> {
+  if (!usedAssetIds.size) {
+    return {}
+  }
+  const filtered: Record<string, string> = {}
+  Object.entries(map).forEach(([rawKey, rawValue]) => {
+    const key = typeof rawKey === 'string' ? rawKey.trim() : ''
+    const value = typeof rawValue === 'string' ? rawValue.trim() : ''
+    if (!key || !value) {
+      return
+    }
+    const derivedId = extractAssetIdFromPackageMapKey(key)
+    const valueUsed = usedAssetIds.has(value)
+    const derivedUsed = derivedId ? usedAssetIds.has(derivedId) : false
+    if (valueUsed || derivedUsed || !derivedId) {
+      filtered[key] = rawValue
+    }
+  })
+  return filtered
+}
+
+function filterAssetIndexByUsage(
+  assetIndex: Record<string, AssetIndexEntry> | undefined,
+  usedAssetIds: Set<string>,
+): Record<string, AssetIndexEntry> {
+  if (!assetIndex || !usedAssetIds.size) {
+    return {}
+  }
+  const filtered: Record<string, AssetIndexEntry> = {}
+  usedAssetIds.forEach((assetId) => {
+    const entry = assetIndex[assetId]
+    if (!entry) {
+      return
+    }
+    filtered[assetId] = {
+      categoryId: entry.categoryId,
+      source: entry.source ? { ...entry.source } : undefined,
+    }
+  })
+  return filtered
 }
 
 function extractAssetIdFromPackageMapKey(key: string): string | null {

@@ -3252,10 +3252,10 @@ async function exportScene(options: SceneExportOptions, onProgress: (progress: n
     return prepareGLBSceneExport(scene, options)
   } else if (options.format === 'json') {
     let snapshot = sceneStore.createSceneDocumentSnapshot() as StoredSceneDocument
-    const packageAssetMap = await buildPackageAssetMapForExport(snapshot, { embedResources: true })
+    const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(snapshot, { embedResources: true })
     snapshot.packageAssetMap = packageAssetMap
-    const resourceSummary = await calculateSceneResourceSummary(snapshot, { embedResources: true })
-    snapshot.resourceSummary = resourceSummary
+    snapshot.assetIndex = assetIndex
+    snapshot.resourceSummary = await calculateSceneResourceSummary(snapshot, { embedResources: true })
     onProgress(35, 'Applying export preferences...')
     const jsonDocument = await prepareJsonSceneExport(snapshot, options)
 
