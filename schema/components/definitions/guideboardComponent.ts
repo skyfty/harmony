@@ -175,13 +175,14 @@ class GuideboardGlowEffectController {
   private readonly haloMaterial: THREE.SpriteMaterial
   private readonly ring: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>
   private readonly ringMaterial: THREE.MeshBasicMaterial
-  private readonly light: THREE.PointLight
   private readonly color = new THREE.Color(GUIDEBOARD_DEFAULT_GLOW_COLOR)
   private glowIntensity = GUIDEBOARD_DEFAULT_GLOW_INTENSITY
   private glowRadius = GUIDEBOARD_DEFAULT_GLOW_RADIUS
   private pulseSpeed = GUIDEBOARD_DEFAULT_PULSE_SPEED
   private pulseStrength = GUIDEBOARD_DEFAULT_PULSE_STRENGTH
   private elapsed = 0
+  private flickerTime = 0
+  private readonly flickerSeed = Math.random() * Math.PI * 2
   private disposed = false
 
   constructor(initial: GuideboardComponentProps) {
@@ -216,10 +217,6 @@ class GuideboardGlowEffectController {
     this.ring.renderOrder = 6
     this.group.add(this.ring)
 
-    this.light = new THREE.PointLight(this.color, this.glowIntensity * 3.2, this.glowRadius * 5)
-    this.light.name = `${GUIDEBOARD_EFFECT_GROUP_NAME}:Light`
-    this.group.add(this.light)
-
     this.applyProps(initial)
   }
 
@@ -235,8 +232,10 @@ class GuideboardGlowEffectController {
       return
     }
     this.elapsed += delta * Math.max(this.pulseSpeed, 0)
+    this.flickerTime += delta
     const pulsePhase = this.elapsed * Math.PI * 2
-    this.updateVisuals(pulsePhase)
+    const flicker = this.computeFlicker(this.flickerTime)
+    this.updateVisuals(pulsePhase, flicker)
   }
 
   dispose(): void {
@@ -246,7 +245,6 @@ class GuideboardGlowEffectController {
     this.disposed = true
     this.group.remove(this.halo)
     this.group.remove(this.ring)
-    this.group.remove(this.light)
     this.haloMaterial.dispose()
     this.ring.geometry.dispose()
     this.ringMaterial.dispose()
@@ -256,16 +254,22 @@ class GuideboardGlowEffectController {
     this.color.set(props.glowColor)
     this.haloMaterial.color.copy(this.color)
     this.ringMaterial.color.copy(this.color)
-    this.light.color.copy(this.color)
     this.glowIntensity = props.glowIntensity
     this.glowRadius = props.glowRadius
     this.pulseSpeed = props.pulseSpeed
     this.pulseStrength = props.pulseStrength
     this.elapsed = 0
-    this.updateVisuals(0)
+    this.flickerTime = 0
+    this.updateVisuals(0, 0)
   }
 
-  private updateVisuals(phase: number): void {
+  private computeFlicker(time: number): number {
+    const slow = Math.sin(time * 6 + this.flickerSeed) * 0.12
+    const fast = Math.sin(time * 12.7 + this.flickerSeed * 1.618) * 0.08
+    return slow + fast
+  }
+
+  private updateVisuals(phase: number, flicker: number): void {
     const maxIntensity = Math.max(GUIDEBOARD_GLOW_INTENSITY_MAX, 1)
     const intensity = Math.max(this.glowIntensity, 0)
     const normalizedIntensity = Math.min(intensity / maxIntensity, 1)
@@ -275,17 +279,14 @@ class GuideboardGlowEffectController {
         ? (Math.sin(phase) * 0.5 + 0.5) * Math.min(pulseAmount, GUIDEBOARD_PULSE_STRENGTH_MAX)
         : 0
     const baseRadius = Math.max(this.glowRadius, GUIDEBOARD_GLOW_RADIUS_MIN)
-    const scale = baseRadius * (1 + pulse * 0.25)
+    const flickerScale = 1 + flicker * (0.1 + Math.min(pulseAmount, 0.6) * 0.4)
+    const scale = baseRadius * (1 + pulse * 0.25) * flickerScale
     this.halo.scale.setScalar(scale * 2.1)
     this.ring.scale.setScalar(scale * 1.2)
-    const haloOpacity = normalizedIntensity * 0.8 + pulse * 0.35
-    const ringOpacity = normalizedIntensity * 0.6 + pulse * 0.28
+    const haloOpacity = (normalizedIntensity * 0.8 + pulse * 0.35) * (1 + flicker * 0.4)
+    const ringOpacity = (normalizedIntensity * 0.6 + pulse * 0.28) * (1 + flicker * 0.35)
     this.haloMaterial.opacity = Math.min(1, Math.max(0, haloOpacity))
     this.ringMaterial.opacity = Math.min(1, Math.max(0, ringOpacity))
-    this.light.intensity = intensity * (1.4 + pulse * 0.7)
-    this.light.distance = baseRadius * 5
-    this.light.decay = 2
-    this.light.position.set(0, baseRadius * 0.25, 0)
   }
 }
 
