@@ -8,6 +8,7 @@ import {
   DISPLAY_BOARD_COMPONENT_TYPE,
   type DisplayBoardComponentProps,
 } from '@schema/components'
+import AssetDialog from '@/components/common/AssetDialog.vue'
 
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 
@@ -33,6 +34,10 @@ const adaptationOptions: Array<{ label: string; value: DisplayBoardComponentProp
 ]
 
 const isDragActive = ref(false)
+const assetDialogVisible = ref(false)
+const assetDialogSelectedId = ref('')
+const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
+const ASSET_DIALOG_TYPES = 'image,texture'
 
 function normalizeAssetId(value: string | null | undefined): string {
   const trimmed = typeof value === 'string' ? value.trim() : ''
@@ -58,6 +63,14 @@ watch(
     localProps.adaptation = next?.adaptation === 'fill' ? 'fill' : 'fit'
   },
   { immediate: true, deep: true },
+)
+
+watch(
+  () => localProps.assetId,
+  (next) => {
+    assetDialogSelectedId.value = normalizeAssetId(next)
+  },
+  { immediate: true },
 )
 
 function handleToggleComponent() {
@@ -266,13 +279,59 @@ const mediaPreviewStyle = computed(() => {
   }
   return null
 })
+
+watch(componentEnabled, (enabled) => {
+  if (!enabled && assetDialogVisible.value) {
+    assetDialogVisible.value = false
+  }
+})
+
+watch(assetDialogVisible, (open) => {
+  if (!open) {
+    assetDialogAnchor.value = null
+  }
+})
+
+function handleOpenAssetDialog(event: MouseEvent) {
+  if (!componentEnabled.value) {
+    return
+  }
+  assetDialogAnchor.value = { x: event.clientX, y: event.clientY }
+  assetDialogSelectedId.value = normalizeAssetId(localProps.assetId)
+  assetDialogVisible.value = true
+}
+
+async function handleAssetDialogUpdate(asset: ProjectAsset | null) {
+  if (!asset || !componentEnabled.value) {
+    return
+  }
+  if (!isSupportedAsset(asset)) {
+    return
+  }
+  const normalizedId = normalizeAssetId(asset.id)
+  if (!normalizedId.length) {
+    return
+  }
+  localProps.assetId = normalizedId
+  const component = displayBoardComponent.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId) {
+    return
+  }
+  await sceneStore.applyDisplayBoardAsset(nodeId, component.id, normalizedId, { updateMaterial: true })
+  assetDialogVisible.value = false
+}
+
+function handleAssetDialogCancel() {
+  assetDialogVisible.value = false
+}
 </script>
 
 <template>
   <v-expansion-panel value="displayBoard">
     <v-expansion-panel-title>
       <div class="display-board-panel__header">
-        <span class="display-board-panel__title">Display Board Component</span>
+        <span class="display-board-panel__title">Display Board</span>
         <v-spacer />
         <v-menu
           v-if="displayBoardComponent"
@@ -330,7 +389,10 @@ const mediaPreviewStyle = computed(() => {
           @dragleave="handleDragLeave"
           @drop="handleDrop"
         >
-          <div class="display-board-drop__preview">
+          <div
+            class="display-board-drop__preview"
+            @click.stop="handleOpenAssetDialog"
+          >
             <div
               v-if="mediaPreviewStyle"
               class="display-board-drop__thumbnail"
@@ -354,6 +416,17 @@ const mediaPreviewStyle = computed(() => {
             Clear
           </v-btn>
         </div>
+        <AssetDialog
+          v-model="assetDialogVisible"
+          v-model:assetId="assetDialogSelectedId"
+          :asset-type="ASSET_DIALOG_TYPES"
+          title="选择图片资源"
+          confirm-text="选择"
+          cancel-text="取消"
+          :anchor="assetDialogAnchor"
+          @update:asset="handleAssetDialogUpdate"
+          @cancel="handleAssetDialogCancel"
+        />
       </div>
     </v-expansion-panel-text>
   </v-expansion-panel>
@@ -430,6 +503,7 @@ const mediaPreviewStyle = computed(() => {
   overflow: hidden;
   flex-shrink: 0;
   background-color: rgba(20, 24, 32, 0.55);
+  cursor: pointer;
 }
 
 .display-board-drop__thumbnail {
