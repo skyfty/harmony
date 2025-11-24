@@ -8495,9 +8495,9 @@ function applyGuideboardPlaceholderState(
   }
 
   const nodeVisibility = node.visible ?? true
-  const initiallyVisible = props.initiallyVisible === true
   const active = computeGuideboardEffectActive(props)
-  object.visible = nodeVisibility && initiallyVisible
+  // Keep guideboards visible while editing so artists can position them even if they start hidden in preview
+  object.visible = nodeVisibility
 
   controller.update(props)
   controller.group.visible = active
