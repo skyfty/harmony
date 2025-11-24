@@ -1394,7 +1394,6 @@ async function handleCreateViewPointNode(options: NodeCreationOptions = {}): Pro
 
   const parent = resolveTargetParentNode(parentId)
   const resolvedParentId = parent?.id
-  const worldPosition = parent ? computeViewPointWorldPosition(parent, VIEW_POINT_RADIUS) : null
 
   const created = await sceneStore.addModelNode({
     object: markerRoot,
@@ -1402,7 +1401,6 @@ async function handleCreateViewPointNode(options: NodeCreationOptions = {}): Pro
     name,
     baseY: 0,
     parentId: resolvedParentId,
-    position: worldPosition ?? undefined,
     snapToGrid: false,
     editorFlags: {
       editorOnly: true,
@@ -1460,23 +1458,12 @@ async function handleCreateGuideboardNode(options: NodeCreationOptions = {}): Pr
   const resolvedParentId = parent?.id
   const siblingViewPoint = parent ? findFirstViewPointUnderParent(parent) : null
 
-  const computedPosition = siblingViewPoint
-    ? new THREE.Vector3(
-        siblingViewPoint.position.x,
-        siblingViewPoint.position.y,
-        siblingViewPoint.position.z,
-      )
-    : parent
-    ? computeViewPointWorldPosition(parent, GUIDEBOARD_RADIUS)
-    : null
-
   const created = await sceneStore.addModelNode({
     object: guideboardRoot,
     nodeType: 'Guideboard',
     name,
     baseY: 0,
     parentId: resolvedParentId,
-    position: computedPosition ?? undefined,
     snapToGrid: false,
     editorFlags: {
       ignoreGridSnapping: true,
