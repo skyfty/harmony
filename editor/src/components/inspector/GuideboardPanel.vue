@@ -321,17 +321,6 @@ function handleVisibilityChange(value: boolean | null) {
     </v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="guideboard-settings">
-        <p class="guideboard-hint">
-          Configure the glow that highlights this guideboard so users can find their next action quickly.
-        </p>
-        <v-switch
-          :model-value="localState.initiallyVisible"
-          label="Initially Visible"
-          color="primary"
-          density="comfortable"
-          :disabled="!componentEnabled"
-          @update:modelValue="handleVisibilityChange"
-        />
         <div class="color-input">
           <v-text-field
             label="Glow Color"
@@ -436,6 +425,14 @@ function handleVisibilityChange(value: boolean | null) {
           :disabled="!componentEnabled"
           @update:model-value="handlePulseStrengthInput"
         />
+        <v-switch
+          :model-value="localState.initiallyVisible"
+          label="Initially Visible"
+          color="primary"
+          density="compact"
+          :disabled="!componentEnabled"
+          @update:modelValue="handleVisibilityChange"
+        />
       </div>
     </v-expansion-panel-text>
   </v-expansion-panel>
@@ -498,10 +495,6 @@ function handleVisibilityChange(value: boolean | null) {
 
 .color-picker {
   padding: 0.4rem;
-}
-
-.slider-input {
-  max-width: 210px;
 }
 
 .sr-only {
