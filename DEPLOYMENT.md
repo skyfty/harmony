@@ -1,7 +1,7 @@
 # Harmony 全栈生产部署指南 (server / admin / editor / uploader)
 
 本指南覆盖以下子工程的生产部署、升级与回滚流程：
-- `server`：Koa + Mongo，API 与资源上传（域名：`cdn.touchmagic.cn` 用于静态与 API 反代）。
+- `server`：Koa + Mongo，API 与资源上传（域名：`v.touchmagic.cn` 用于静态与 API 反代）。
 - `admin`：后台管理前端（域名：`admin.v.touchmagic.cn`）。
 - `editor`：场景/编辑器前端（域名：`editor.v.touchmagic.cn`）。
 - `uploader`：独立资源上传前端（域名建议如 `uploader.v.touchmagic.cn`）。
@@ -13,7 +13,7 @@
 - 升级采用原地重建镜像 + 无状态前端替换；数据与配置不丢失。
 
 ## 一、前置条件
-1. 已解析域名：在域名服务商控制台添加 `cdn.touchmagic.cn` A 记录指向服务器公网 IP。
+1. 已解析域名：在域名服务商控制台添加 `v.touchmagic.cn` A 记录指向服务器公网 IP。
 2. 服务器操作系统：Linux (Ubuntu/CentOS 等)。
 3. 已拥有具备 sudo 权限的 SSH 账号。
 4. 服务器已安装或即将安装 Docker 与 Docker Compose（v2）。
@@ -103,7 +103,7 @@ cd harmony
 > 部署前：进入 `server/` 修改 `.env.production`，至少更新 `JWT_SECRET`、数据库地址以及 OpenAI 密钥（如需）。本地开发可根据需要调整 `.env.development`。
 
 ### admin（`admin/.env.development` / `admin/.env.production`）
-- `VITE_API_BASE_URL`：后台前端访问后端的基础地址。开发版指向 `http://localhost:4000`，生产版改为生产域名（通常为 `https://cdn.touchmagic.cn`）。
+- `VITE_API_BASE_URL`：后台前端访问后端的基础地址。开发版指向 `http://localhost:4000`，生产版改为生产域名（通常为 `https://v.touchmagic.cn`）。
 
 ### editor（`editor/.env.development` / `editor/.env.production`）
 - `VITE_SERVER_API_BASE_URL`：编辑器访问 API 的域名。
@@ -120,7 +120,7 @@ cd harmony
 
 关键变量提醒：
 - `MONGODB_URI=mongodb://mongo:27017/harmony`：容器内部使用服务名 `mongo` 与其内部端口 27017，不受宿主机映射影响。
-- `ASSET_PUBLIC_URL=https://cdn.touchmagic.cn/uploads`：用于上传资源外链访问；反向代理需对应配置路径 `/uploads`。
+- `ASSET_PUBLIC_URL=https://v.touchmagic.cn/uploads`：用于上传资源外链访问；反向代理需对应配置路径 `/uploads`。
 - `UPLOADER_USER_USERNAME` / `UPLOADER_USER_PASSWORD` / `UPLOADER_USER_DISPLAY_NAME`：确保 uploader 服务拥有独立账号，生产环境请改为强密码。
 
 ### 初始化默认账号 / 基础数据
@@ -158,9 +158,9 @@ docker compose -f docker-compose.prod.yml run --rm server npm run seed:prod
 `/www/web/v_touchmagic_cn/harmony/config/admin-app-config.json`
 ```json
 {
-  "serverApiBaseUrl": "https://cdn.touchmagic.cn",
+  "serverApiBaseUrl": "https://v.touchmagic.cn",
   "serverApiPrefix": "/api",
-  "assetPublicBaseUrl": "https://cdn.touchmagic.cn/uploads"
+  "assetPublicBaseUrl": "https://v.touchmagic.cn/uploads"
 }
 ```
 `editor`、`uploader` 同理，可视业务需要分别配置。例如 `uploader`：
@@ -168,7 +168,7 @@ docker compose -f docker-compose.prod.yml run --rm server npm run seed:prod
 `/www/web/v_touchmagic_cn/harmony/config/uploader-app-config.json`
 ```json
 {
-  "serverApiBaseUrl": "https://cdn.touchmagic.cn",
+  "serverApiBaseUrl": "https://v.touchmagic.cn",
   "serverApiPrefix": "/api"
 }
 ```
@@ -224,14 +224,14 @@ docker exec -it harmony-mongo sh -c 'apt-get update && apt-get install -y mongod
 2. 安装 Certbot 获取证书：
 ```bash
 sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d cdn.touchmagic.cn --redirect --hsts --staple-ocsp --email admin@example.com --agree-tos --no-eff-email
+sudo certbot --nginx -d v.touchmagic.cn --redirect --hsts --staple-ocsp --email admin@example.com --agree-tos --no-eff-email
 ```
 3. 建立站点配置 `/etc/nginx/sites-available/harmony-sites.conf`：
 ```nginx
 server {
   listen 80;
   listen 443 ssl http2; # certbot 将自动插入 ssl 证书指令
-  server_name cdn.touchmagic.cn;
+  server_name v.touchmagic.cn;
 
   client_max_body_size 100m;
 
@@ -310,9 +310,9 @@ sudo systemctl reload nginx
 
 ## 九、验证部署 (API / 静态 / 前端)
 ```bash
-curl -I https://cdn.touchmagic.cn/uploads/非存在文件
+curl -I https://v.touchmagic.cn/uploads/非存在文件
 # 期望 404
-curl -I https://cdn.touchmagic.cn/uploads/实际文件名
+curl -I https://v.touchmagic.cn/uploads/实际文件名
 # 期望 200 并带缓存头
 
 curl -I https://admin.v.touchmagic.cn/
