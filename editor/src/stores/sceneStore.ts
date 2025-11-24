@@ -4289,7 +4289,7 @@ export async function buildPackageAssetMapForExport(
   options: SceneBundleExportOptions,
 ): Promise<Record<string, string>> {
   const embedResources = options.embedResources ?? false
-  const baseMap = stripEmbeddedAssetEntries(clonePackageAssetMap(scene.packageAssetMap))
+  const baseMap = stripAssetEntries(clonePackageAssetMap(scene.packageAssetMap))
 
   if (!embedResources) {
     return baseMap
@@ -5247,7 +5247,7 @@ function clonePackageAssetMap(map: Record<string, string>): Record<string, strin
   return { ...map }
 }
 
-function stripEmbeddedAssetEntries(map: Record<string, string>): Record<string, string> {
+function stripAssetEntries(map: Record<string, string>): Record<string, string> {
   const result: Record<string, string> = {}
   Object.entries(map).forEach(([key, value]) => {
     if (!key.startsWith(LOCAL_EMBEDDED_ASSET_PREFIX)) {
