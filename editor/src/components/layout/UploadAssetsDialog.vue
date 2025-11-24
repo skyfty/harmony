@@ -103,6 +103,7 @@ type ImageDimensionKey = 'imageWidth' | 'imageHeight'
 // Local state for dialog
 const uploadEntries = ref<UploadAssetEntry[]>([])
 const previewRefs = ref<Record<string, InstanceType<typeof AssetPreviewRenderer> | null>>({})
+const thumbnailInputRefs = ref<Record<string, HTMLInputElement | null>>({})
 const activeEntryId = ref<string | null>(null)
 const activeEntry = computed<UploadAssetEntry | null>(() => {
   if (!uploadEntries.value.length) {
@@ -519,6 +520,7 @@ function resetUploadState() {
   activeEntryId.value = null
   closeGuardDialogOpen.value = false
   previewRefs.value = {}
+  thumbnailInputRefs.value = {}
 }
 
 async function loadServerTags(options: { force?: boolean } = {}) {
@@ -693,6 +695,49 @@ function registerPreviewRef(entryId: string, instance: InstanceType<typeof Asset
     // Capture default snapshot once preview becomes ready.
     void nextTick(() => capturePreviewThumbnail(entry, { silent: true }))
   }
+}
+
+function registerThumbnailInput(entryId: string, element: HTMLInputElement | null): void {
+  const next = { ...thumbnailInputRefs.value }
+  if (!element) {
+    delete next[entryId]
+  } else {
+    next[entryId] = element
+  }
+  thumbnailInputRefs.value = next
+}
+
+function promptThumbnailUpload(entry: UploadAssetEntry): void {
+  if (!entry) return
+  const input = thumbnailInputRefs.value[entry.assetId]
+  if (!input) return
+  input.value = ''
+  input.click()
+}
+
+function handleThumbnailFileSelected(entry: UploadAssetEntry, event: Event): void {
+  if (!entry) return
+  const input = event.target as HTMLInputElement | null
+  if (!input) return
+  const file = input.files?.[0]
+  if (!file) {
+    input.value = ''
+    return
+  }
+  if (!file.type.startsWith('image/')) {
+    entry.error = 'Thumbnail must be an image file.'
+    input.value = ''
+    return
+  }
+  if (entry.thumbnailPreviewUrl) {
+    URL.revokeObjectURL(entry.thumbnailPreviewUrl)
+  }
+  entry.thumbnailFile = file
+  entry.thumbnailPreviewUrl = URL.createObjectURL(file)
+  entry.thumbnailCapturedAt = Date.now()
+  entry.error = null
+  markEntryDirty(entry)
+  input.value = ''
 }
 
 function isModelAsset(asset: ProjectAsset): boolean {
@@ -1015,7 +1060,6 @@ function handleUploadAll(): void {
                   <v-chip size="small" color="primary" variant="tonal">{{ entry.asset.type }}</v-chip>
                 </div>
                 <div v-if="entry.status === 'error'" class="upload-entry__error">{{ entry.error }}</div>
-                <div v-else-if="entry.status === 'success'" class="upload-entry__success">Uploaded</div>
 
                 <div class="upload-entry__body">
                   <div class="upload-entry__form">
@@ -1237,17 +1281,34 @@ function handleUploadAll(): void {
                       <div v-if="['model', 'mesh', 'prefab'].includes(entry.asset.type)" class="upload-preview__actions">
                         <v-btn
                           color="primary"
-                          variant="flat"
+                          variant="tonal"
                           size="small"
-                          prepend-icon="mdi-camera"
+                          icon="mdi-camera"
                           :disabled="uploadSubmitting || entry.status === 'uploading'"
+                          title="Capture thumbnail"
+                          aria-label="Capture thumbnail"
                           @click="() => capturePreviewThumbnail(entry)"
-                        >
-                          Capture Thumbnail
-                        </v-btn>
+                        />
+                        <v-btn
+                          color="secondary"
+                          variant="tonal"
+                          size="small"
+                          icon="mdi-upload"
+                          :disabled="uploadSubmitting || entry.status === 'uploading'"
+                          title="Upload custom thumbnail"
+                          aria-label="Upload custom thumbnail"
+                          @click="() => promptThumbnailUpload(entry)"
+                        />
+                        <input
+                          type="file"
+                          accept="image/*"
+                          class="upload-preview__file-input"
+                          :ref="(el) => registerThumbnailInput(entry.assetId, el as HTMLInputElement | null)"
+                          @change="(event) => handleThumbnailFileSelected(entry, event)"
+                        />
                         <div v-if="entry.thumbnailPreviewUrl" class="upload-preview__thumb">
                           <img :src="entry.thumbnailPreviewUrl" alt="Captured thumbnail" />
-                          <span class="upload-preview__thumb-label">Last capture</span>
+                          <span class="upload-preview__thumb-label">Current thumbnail</span>
                         </div>
                       </div>
                     </div>
@@ -1465,9 +1526,10 @@ function handleUploadAll(): void {
   top: 12px;
   right: 12px;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   gap: 8px;
-  align-items: flex-end;
+  align-items: center;
+  justify-content: flex-end;
   z-index: 2;
 }
 
@@ -1492,6 +1554,10 @@ function handleUploadAll(): void {
 .upload-preview__thumb-label {
   font-size: 0.72rem;
   color: rgba(255, 255, 255, 0.85);
+}
+
+.upload-preview__file-input {
+  display: none;
 }
 
 .upload-entry__error {
