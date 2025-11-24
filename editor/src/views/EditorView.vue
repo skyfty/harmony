@@ -906,6 +906,7 @@ async function saveCurrentScene(): Promise<boolean> {
         const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(document,{embedResources:true})
         document.packageAssetMap = packageAssetMap
         document.assetIndex = assetIndex
+        document.resourceSummary = await calculateSceneResourceSummary(document, { embedResources: true })
         broadcastScenePreview(document)
       }
       return true

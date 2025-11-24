@@ -87,6 +87,19 @@ const resourceProgress = reactive({
 	label: '',
 })
 
+type SceneGraphResourceProgressInfo = Parameters<NonNullable<SceneGraphBuildOptions['onProgress']>>[0]
+
+type ResourceProgressItem = {
+	id: string
+	assetId: string
+	label: string
+	kind: SceneGraphResourceProgressInfo['kind']
+	progress: number
+}
+
+const resourceProgressItems = ref<ResourceProgressItem[]>([])
+const RESOURCE_PROGRESS_COMPLETE_PATTERNS = ['下载完成', '加载完成'] as const
+
 const resourceProgressPercent = computed(() => {
 	if (resourceProgress.totalBytes > 0) {
 		if (!resourceProgress.totalBytes) {
@@ -124,6 +137,61 @@ function formatByteSize(value: number | null | undefined): string {
 	}
 	const digits = index === 0 ? 0 : size >= 100 ? 0 : size >= 10 ? 1 : 2
 	return `${size.toFixed(digits)} ${units[index]}`
+}
+
+function clampProgressPercent(value: number): number {
+	if (!Number.isFinite(value)) {
+		return 0
+	}
+	if (value <= 0) {
+		return 0
+	}
+	if (value >= 100) {
+		return 100
+	}
+	return Math.round(value)
+}
+
+function normalizeResourceProgressPercent(info: SceneGraphResourceProgressInfo, previous: number): number {
+	if (typeof info.progress === 'number' && Number.isFinite(info.progress)) {
+		return clampProgressPercent(info.progress)
+	}
+	if (info.kind !== 'asset') {
+		return 100
+	}
+	if (info.message) {
+		const messageText = info.message
+		if (RESOURCE_PROGRESS_COMPLETE_PATTERNS.some((pattern) => messageText.includes(pattern))) {
+			return 100
+		}
+	}
+	if (info.total > 0 && info.loaded >= info.total) {
+		return 100
+	}
+	return previous
+}
+
+function updateResourceProgressDetails(info: SceneGraphResourceProgressInfo): void {
+	const assetId = typeof info.assetId === 'string' ? info.assetId.trim() : ''
+	if (!assetId) {
+		return
+	}
+	const label = info.message && info.message.trim().length ? info.message : assetId
+	const existingIndex = resourceProgressItems.value.findIndex((item) => item.id === assetId)
+	const previous = existingIndex >= 0 ? resourceProgressItems.value[existingIndex].progress : 0
+	const normalized = normalizeResourceProgressPercent(info, previous)
+	const nextItem: ResourceProgressItem = {
+		id: assetId,
+		assetId,
+		label,
+		kind: info.kind,
+		progress: Math.max(previous, normalized),
+	}
+	if (existingIndex >= 0) {
+		resourceProgressItems.value.splice(existingIndex, 1, nextItem)
+	} else {
+		resourceProgressItems.value.push(nextItem)
+	}
 }
 
 const previewComponentManager = new ComponentManager()
@@ -3582,6 +3650,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	resourceProgress.loadedBytes = 0
 	resourceProgress.totalBytes = 0
 	resourceProgress.label = '准备加载资源...'
+	resourceProgressItems.value = []
 
 	let graphResult: Awaited<ReturnType<typeof buildSceneGraph>> | null = null
 	try {
@@ -3596,6 +3665,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 					resourceProgress.loadedBytes = info.bytesLoaded
 				}
 				resourceProgress.label = info.message || (info.assetId ? `加载 ${info.assetId}` : '')
+				updateResourceProgressDetails(info)
 				const stillLoadingByCount = info.total > 0 && info.loaded < info.total
 				const stillLoadingByBytes = resourceProgress.totalBytes > 0 && resourceProgress.loadedBytes < resourceProgress.totalBytes
 				resourceProgress.active = stillLoadingByCount || stillLoadingByBytes
@@ -3609,10 +3679,11 @@ async function updateScene(document: SceneJsonExportDocument) {
 		graphResult = await buildSceneGraph(document, resourceCache, buildOptions)
 	} finally {
 		resourceProgress.active = false
-			if (resourceProgress.totalBytes > 0) {
-				resourceProgress.loadedBytes = resourceProgress.totalBytes
-			}
+		if (resourceProgress.totalBytes > 0) {
+			resourceProgress.loadedBytes = resourceProgress.totalBytes
+		}
 		resourceProgress.label = ''
+		resourceProgressItems.value = []
 	}
 	if (!graphResult) {
 		return
@@ -3829,6 +3900,28 @@ onBeforeUnmount(() => {
 					<div class="scene-preview__progress-stats">
 						<span class="scene-preview__progress-percent">{{ resourceProgressPercent }}%</span>
 						<span class="scene-preview__progress-bytes">{{ resourceProgressBytesLabel }}</span>
+					</div>
+				</div>
+				<div
+					v-if="resourceProgressItems.length"
+					class="scene-preview__resource-list"
+				>
+					<div
+						v-for="item in resourceProgressItems"
+						:key="item.id"
+						class="scene-preview__resource-item"
+					>
+						<div class="scene-preview__resource-header">
+							<span class="scene-preview__resource-name">{{ item.label }}</span>
+							<span class="scene-preview__resource-value">{{ item.progress }}%</span>
+						</div>
+						<div class="scene-preview__progress-bar scene-preview__resource-progress-bar">
+							<div
+								class="scene-preview__progress-bar-fill"
+								:class="{ 'scene-preview__progress-bar-fill--complete': item.progress >= 100 }"
+								:style="{ '--progress': `${item.progress}%` }"
+							/>
+						</div>
 					</div>
 				</div>
 				<div v-if="resourceProgress.label" class="scene-preview__preload-label">
@@ -4294,6 +4387,57 @@ onBeforeUnmount(() => {
 
 .scene-preview__progress-bytes {
 	font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+}
+
+.scene-preview__resource-list {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	max-height: 220px;
+	overflow-y: auto;
+	padding-right: 4px;
+}
+
+.scene-preview__resource-item {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 8px 10px;
+	background: rgba(255, 255, 255, 0.06);
+	border-radius: 10px;
+	backdrop-filter: blur(6px);
+}
+
+.scene-preview__resource-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	font-size: 0.78rem;
+	color: rgba(245, 247, 255, 0.85);
+}
+
+.scene-preview__resource-name {
+	flex: 1 1 auto;
+	margin-right: 8px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.scene-preview__resource-value {
+	font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+	font-size: 0.75rem;
+	color: #5ac8ff;
+}
+
+.scene-preview__resource-progress-bar {
+	height: 8px;
+}
+
+.scene-preview__progress-bar-fill--complete {
+	animation: none;
+	background: linear-gradient(90deg, #43e97b, #38f9d7);
+	box-shadow: 0 0 12px rgba(67, 233, 123, 0.4);
 }
 
 .scene-preview__preload-label {

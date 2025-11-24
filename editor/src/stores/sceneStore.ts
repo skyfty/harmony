@@ -3294,7 +3294,11 @@ function filterTopLevelNodeIds(ids: string[], parentMap: Map<string, string | nu
 function collectRuntimeSnapshots(node: SceneNode, bucket: Map<string, Object3D>) {
   const runtime = getRuntimeObject(node.id)
   if (runtime) {
-    bucket.set(node.id, runtime.clone(true))
+    try {
+      bucket.set(node.id, runtime.clone(true))
+    } catch (error) {
+      console.warn('Failed to clone runtime object for history snapshot', node.id, error)
+    }
   }
   node.children?.forEach((child) => collectRuntimeSnapshots(child, bucket))
 }
@@ -3478,10 +3482,14 @@ function duplicateNodeTree(original: SceneNode, context: DuplicateContext): Scen
 
   const runtimeObject = getRuntimeObject(original.id) ?? context.runtimeSnapshots.get(original.id) ?? null
   if (runtimeObject) {
-    const clonedObject = runtimeObject.clone(true)
-    tagObjectWithNodeId(clonedObject, duplicated.id)
-    registerRuntimeObject(duplicated.id, clonedObject)
-    componentManager.attachRuntime(duplicated, clonedObject)
+    try {
+      const clonedObject = runtimeObject.clone(true)
+      tagObjectWithNodeId(clonedObject, duplicated.id)
+      registerRuntimeObject(duplicated.id, clonedObject)
+      componentManager.attachRuntime(duplicated, clonedObject)
+    } catch (error) {
+      console.warn('Failed to clone runtime object while duplicating node', original.id, error)
+    }
   }
 
   componentManager.syncNode(duplicated)
@@ -6339,12 +6347,16 @@ export const useSceneStore = defineStore('scene', {
         assetCache.recalculateUsage(this.nodes)
 
         snapshot.runtimeSnapshots.forEach((object, nodeId) => {
-          const clonedObject = object.clone(true)
-          tagObjectWithNodeId(clonedObject, nodeId)
-          registerRuntimeObject(nodeId, clonedObject)
-          const node = findNodeById(this.nodes, nodeId)
-          if (node) {
-            componentManager.attachRuntime(node, clonedObject)
+          try {
+            const clonedObject = object.clone(true)
+            tagObjectWithNodeId(clonedObject, nodeId)
+            registerRuntimeObject(nodeId, clonedObject)
+            const node = findNodeById(this.nodes, nodeId)
+            if (node) {
+              componentManager.attachRuntime(node, clonedObject)
+            }
+          } catch (error) {
+            console.warn('Failed to clone stored runtime snapshot during restore', nodeId, error)
           }
         })
 
