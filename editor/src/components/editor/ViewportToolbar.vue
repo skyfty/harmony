@@ -38,6 +38,17 @@
         @click="handleGroupSelection"
       />
       <v-btn
+        icon="mdi-checkbox-marked-circle-outline"
+        density="compact"
+        size="small"
+        color="undefined"
+        variant="text"
+        class="toolbar-button"
+        title="应用变换到节点"
+        :disabled="!canApplyTransformsToGroup"
+        @click="handleApplyTransformsToGroup"
+      />
+      <v-btn
         icon="mdi-content-save-cog-outline"
         density="compact"
         size="small"
@@ -281,6 +292,14 @@ const canSavePrefab = computed(() => {
   return true
 })
 
+const canApplyTransformsToGroup = computed(() => {
+  const node = activeNode.value
+  if (!node || node.nodeType !== 'Group') {
+    return false
+  }
+  return Array.isArray(node.children) && node.children.length > 0
+})
+
 function handleGroupSelection() {
   if ((selectionCount.value ?? 0) < 2) return
   // call the store action to group selected nodes
@@ -307,6 +326,14 @@ async function handleSavePrefab() {
   } finally {
     isSavingPrefab.value = false
   }
+}
+
+function handleApplyTransformsToGroup() {
+  const node = activeNode.value
+  if (!node || node.nodeType !== 'Group') {
+    return
+  }
+  sceneStore.applyTransformsToGroup(node.id)
 }
 
 let orbitIntervalId: number | null = null

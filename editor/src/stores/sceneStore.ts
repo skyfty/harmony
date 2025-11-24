@@ -6664,8 +6664,6 @@ export const useSceneStore = defineStore('scene', {
       if (!positionChanged && !rotationChanged && !scaleChanged) {
         return
       }
-      const parentMap = buildParentMap(this.nodes)
-      const parentId = parentMap.get(payload.id) ?? null
       const isActiveTransform = this.activeTransformNodeId === payload.id
       if (isActiveTransform) {
         if (!this.transformSnapshotCaptured) {
@@ -6684,12 +6682,7 @@ export const useSceneStore = defineStore('scene', {
         node.rotation = cloneVector(payload.rotation)
         node.scale = cloneVector(payload.scale)
       })
-      const recentered = parentId
-        ? this.recenterGroupAncestry(parentId, { captureHistory: false, parentMap })
-        : false
-      if (!recentered) {
-        this.nodes = [...this.nodes]
-      }
+      this.nodes = [...this.nodes]
       if (scaleChanged) {
         const updatedNode = findNodeById(this.nodes, payload.id)
         refreshDisplayBoardGeometry(updatedNode)
@@ -6701,7 +6694,6 @@ export const useSceneStore = defineStore('scene', {
       if (!target) {
         return
       }
-      const parentMap = buildParentMap(this.nodes)
       let changed = false
       let scaleChanged = false
       if (payload.position && !vectorsEqual(target.position, payload.position)) {
@@ -6730,19 +6722,13 @@ export const useSceneStore = defineStore('scene', {
       } else {
         this.captureHistorySnapshot()
       }
-      const parentId = parentMap.get(payload.id) ?? null
       visitNode(this.nodes, payload.id, (node) => {
         if (payload.position) node.position = cloneVector(payload.position)
         if (payload.rotation) node.rotation = cloneVector(payload.rotation)
         if (payload.scale) node.scale = cloneVector(payload.scale)
       })
-      const recentered = parentId
-        ? this.recenterGroupAncestry(parentId, { captureHistory: false, parentMap })
-        : false
-      if (!recentered) {
-        // trigger reactivity for listeners relying on reference changes
-        this.nodes = [...this.nodes]
-      }
+      // trigger reactivity for listeners relying on reference changes
+      this.nodes = [...this.nodes]
       if (scaleChanged) {
         const updatedNode = findNodeById(this.nodes, payload.id)
         refreshDisplayBoardGeometry(updatedNode)
@@ -6754,10 +6740,8 @@ export const useSceneStore = defineStore('scene', {
         return
       }
 
-      const parentMap = buildParentMap(this.nodes)
       const prepared: TransformUpdatePayload[] = []
       const scaleRefreshTargets = new Set<string>()
-      const affectedParentIds = new Set<string>()
 
       payloads.forEach((payload) => {
         if (!payload || !payload.id) {
@@ -6784,10 +6768,6 @@ export const useSceneStore = defineStore('scene', {
         }
         if (changed) {
           prepared.push(next)
-          const parentId = parentMap.get(payload.id) ?? null
-          if (parentId) {
-            affectedParentIds.add(parentId)
-          }
         }
       })
 
@@ -6825,15 +6805,7 @@ export const useSceneStore = defineStore('scene', {
           }
         })
       })
-      let recentered = false
-      affectedParentIds.forEach((parentId) => {
-        if (this.recenterGroupAncestry(parentId, { captureHistory: false, parentMap })) {
-          recentered = true
-        }
-      })
-      if (!recentered) {
-        this.nodes = [...this.nodes]
-      }
+      this.nodes = [...this.nodes]
       if (scaleRefreshTargets.size) {
         scaleRefreshTargets.forEach((id) => {
           const updatedNode = findNodeById(this.nodes, id)
@@ -9016,6 +8988,22 @@ export const useSceneStore = defineStore('scene', {
       }
 
       return changed
+    },
+    applyTransformsToGroup(groupId: string) {
+      if (!groupId) {
+        return false
+      }
+      const group = findNodeById(this.nodes, groupId)
+      if (!isGroupNode(group) || !group.children?.length) {
+        return false
+      }
+      const parentMap = buildParentMap(this.nodes)
+      const changed = this.recenterGroupAncestry(groupId, { captureHistory: true, parentMap })
+      if (!changed) {
+        return false
+      }
+      commitSceneSnapshot(this)
+      return true
     },
 
     isDescendant(ancestorId: string, maybeChildId: string) {
