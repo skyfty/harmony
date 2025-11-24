@@ -1777,18 +1777,35 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
 		? Math.max(DEFAULT_OBJECT_RADIUS, computeObjectBoundingRadius(ownerObject))
 		: DEFAULT_OBJECT_RADIUS
 	const destination = focusPoint.clone()
-	tempDirection.copy(activeCamera.position).sub(focusPoint)
-	tempDirection.y = 0
-	if (tempDirection.lengthSq() < 1e-6) {
-		tempDirection.set(0, 0, 1)
-		tempDirection.applyQuaternion(tempQuaternion)
+	let usedTargetOrientation = false
+	if (ownerObject) {
+		ownerObject.getWorldDirection(tempDirection)
 		tempDirection.y = 0
+		if (tempDirection.lengthSq() < 1e-6) {
+			tempDirection.set(0, 0, -1)
+			tempDirection.applyQuaternion(tempQuaternion)
+			tempDirection.y = 0
+		}
+		if (tempDirection.lengthSq() >= 1e-6) {
+			tempDirection.normalize().multiplyScalar(desiredDistance)
+			destination.sub(tempDirection)
+			usedTargetOrientation = true
+		}
 	}
-	if (tempDirection.lengthSq() < 1e-6) {
-		tempDirection.set(0, 0, 1)
+	if (!usedTargetOrientation) {
+		tempDirection.copy(activeCamera.position).sub(focusPoint)
+		tempDirection.y = 0
+		if (tempDirection.lengthSq() < 1e-6 && ownerObject) {
+			tempDirection.set(0, 0, -1)
+			tempDirection.applyQuaternion(tempQuaternion)
+			tempDirection.y = 0
+		}
+		if (tempDirection.lengthSq() < 1e-6) {
+			tempDirection.set(0, 0, 1)
+		}
+		tempDirection.normalize().multiplyScalar(desiredDistance)
+		destination.add(tempDirection)
 	}
-	tempDirection.normalize().multiplyScalar(desiredDistance)
-	destination.add(tempDirection)
 	destination.y = CAMERA_HEIGHT
 	const lookPoint = focusPoint.clone()
 	lookPoint.y = CAMERA_HEIGHT
@@ -3842,24 +3859,32 @@ onBeforeUnmount(() => {
 			class="scene-preview__purpose-controls"
 		>
 			<v-btn
-				class="scene-preview__purpose-button"
+				class="scene-preview__purpose-button scene-preview__purpose-button--watch"
 				:class="{ 'scene-preview__purpose-button--active': cameraViewState.mode === 'watching' }"
-				color="primary"
-				variant="tonal"
-				size="small"
+				prepend-icon="mdi-eye-outline"
+				rounded="pill"
+				variant="flat"
+				:elevation="0"
+				:ripple="false"
+				:aria-pressed="cameraViewState.mode === 'watching'"
+				title="观察视角"
 				@click="handlePurposeWatchClick"
 			>
-				观察
+				<span class="scene-preview__purpose-label">观察</span>
 			</v-btn>
 			<v-btn
-				class="scene-preview__purpose-button"
+				class="scene-preview__purpose-button scene-preview__purpose-button--level"
 				:class="{ 'scene-preview__purpose-button--active': cameraViewState.mode === 'level' }"
-				color="primary"
-				variant="tonal"
-				size="small"
+				prepend-icon="mdi-panorama-horizontal-outline"
+				rounded="pill"
+				variant="flat"
+				:elevation="0"
+				:ripple="false"
+				:aria-pressed="cameraViewState.mode === 'level'"
+				title="恢复平视"
 				@click="handlePurposeResetClick"
 			>
-				平视
+				<span class="scene-preview__purpose-label">平视</span>
 			</v-btn>
 		</div>
 		<v-sheet class="scene-preview__control-bar" elevation="10">
@@ -4199,18 +4224,27 @@ onBeforeUnmount(() => {
 	}
 }
 
-@keyframes scene-preview-purpose-glow {
+@keyframes scene-preview-purpose-flow {
 	0% {
-		opacity: 0.6;
-		transform: scale(0.94);
+		background-position: 0% 50%;
 	}
 	50% {
-		opacity: 1;
-		transform: scale(1.05);
+		background-position: 100% 50%;
 	}
 	100% {
-		opacity: 0.6;
-		transform: scale(0.94);
+		background-position: 0% 50%;
+	}
+}
+
+@keyframes scene-preview-purpose-shine {
+	0% {
+		background-position: 50% 130%;
+	}
+	50% {
+		background-position: 50% -10%;
+	}
+	100% {
+		background-position: 50% 130%;
 	}
 }
 
@@ -4278,45 +4312,176 @@ onBeforeUnmount(() => {
 	left: 24px;
 	bottom: 24px;
 	display: flex;
-	gap: 12px;
+	flex-wrap: wrap;
+	gap: 16px;
 	z-index: 1900;
 	pointer-events: auto;
 }
 
+
 .scene-preview__purpose-button {
-	min-width: 0;
+	--purpose-accent-start: #4c6fff;
+	--purpose-accent-mid: #20d4ff;
+	--purpose-accent-end: #63ffd6;
 	position: relative;
-	overflow: visible;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0 28px;
+	height: 56px;
+	min-width: 156px;
+	border-radius: 999px;
+	box-sizing: border-box;
 	z-index: 0;
-	transition: box-shadow 0.25s ease, filter 0.25s ease;
+	color: #f9fbff !important;
+	background: linear-gradient(135deg, var(--purpose-accent-start), var(--purpose-accent-mid), var(--purpose-accent-end));
+	background-size: 240% 240%;
+	box-shadow: 0 16px 35px rgba(24, 196, 255, 0.25);
+	animation: scene-preview-purpose-flow 7s ease infinite;
+	transition: transform 0.3s ease, box-shadow 0.3s ease, filter 0.3s ease;
+	letter-spacing: 0.04em;
+	text-transform: none;
+	font-weight: 600;
+	filter: saturate(0.95);
+	overflow: visible;
+}
+
+.scene-preview__purpose-button::before {
+	content: '';
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	width: calc(100% + 42px);
+	height: calc(100% + 42px);
+	border-radius: inherit;
+	background: linear-gradient(135deg, var(--purpose-accent-start), var(--purpose-accent-mid), var(--purpose-accent-end));
+	transform: translate(-50%, -50%);
+	filter: blur(38px);
+	opacity: 0.55;
+	transition: opacity 0.35s ease, filter 0.35s ease;
+	pointer-events: none;
+	z-index: -2;
+}
+
+.scene-preview__purpose-button::after {
+	content: '';
+	position: absolute;
+	inset: 2px;
+	border-radius: inherit;
+	border: 1px solid rgba(255, 255, 255, 0.24);
+	box-shadow: inset 0 0 18px rgba(255, 255, 255, 0.12);
+	opacity: 0.7;
+	background-size: 140% 220%;
+	background-position: 50% 130%;
+	transition: opacity 0.35s ease, border-color 0.35s ease, box-shadow 0.35s ease;
+	pointer-events: none;
+	z-index: -1;
+}
+
+.scene-preview__purpose-button:hover {
+	transform: translateY(-3px) scale(1.02);
+	box-shadow: 0 22px 44px rgba(24, 196, 255, 0.4);
+	filter: saturate(1.05);
+}
+
+.scene-preview__purpose-button:hover::before {
+	opacity: 0.82;
+	filter: blur(48px);
+}
+
+.scene-preview__purpose-button:hover::after {
+	opacity: 0.92;
+	border-color: rgba(255, 255, 255, 0.4);
+	box-shadow: inset 0 0 22px rgba(255, 255, 255, 0.18);
+}
+
+.scene-preview__purpose-button:focus-visible {
+	outline: none;
+	box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.35), 0 20px 46px rgba(24, 196, 255, 0.45);
+	filter: saturate(1.1);
+}
+
+.scene-preview__purpose-button:focus-visible::before {
+	opacity: 0.9;
+	filter: blur(56px);
+}
+
+.scene-preview__purpose-button:focus-visible::after {
+	opacity: 0.96;
+	border-color: rgba(255, 255, 255, 0.55);
+	box-shadow: inset 0 0 26px rgba(255, 255, 255, 0.2);
+}
+
+.scene-preview__purpose-button:active {
+	transform: translateY(0) scale(0.99);
 }
 
 .scene-preview__purpose-button--active {
-	filter: brightness(1.12) saturate(1.05);
-	box-shadow:
-		0 0 26px rgba(110, 198, 255, 0.65),
-		0 0 48px rgba(110, 198, 255, 0.35);
+	filter: saturate(1.12) brightness(1.03);
+	box-shadow: 0 26px 58px rgba(86, 210, 255, 0.55);
+	animation-duration: 4s;
+}
+
+.scene-preview__purpose-button--active::before {
+	opacity: 0.95;
+	filter: blur(60px);
 }
 
 .scene-preview__purpose-button--active::after {
-	content: '';
-	position: absolute;
-	inset: -10px;
-	border-radius: 999px;
-	border: 1px solid rgba(255, 255, 255, 0.5);
-	background: radial-gradient(circle, rgba(120, 208, 255, 0.4) 0%, rgba(120, 208, 255, 0.1) 60%, transparent 100%);
-	box-shadow:
-		0 0 28px rgba(120, 210, 255, 0.55),
-		0 0 64px rgba(120, 210, 255, 0.32);
-	opacity: 0.95;
-	pointer-events: none;
-	z-index: -1;
-	transform-origin: center;
-	animation: scene-preview-purpose-glow 3s ease-in-out infinite;
+	opacity: 1;
+	border-color: rgba(255, 255, 255, 0.68);
+	box-shadow: inset 0 0 28px rgba(255, 255, 255, 0.22);
+	animation-duration: 3.2s;
 }
 
-.scene-preview__purpose-button--active :deep(.v-btn__overlay) {
-	opacity: 0.15;
+.scene-preview__purpose-button--watch {
+	--purpose-accent-start: #455bff;
+	--purpose-accent-mid: #24c6ff;
+	--purpose-accent-end: #6ffff2;
+}
+
+.scene-preview__purpose-button--level {
+	--purpose-accent-start: #ff7b54;
+	--purpose-accent-mid: #ffb26b;
+	--purpose-accent-end: #ffd56f;
+}
+
+.scene-preview__purpose-button :deep(.v-btn__content) {
+	position: relative;
+	z-index: 1;
+	gap: 10px;
+	font-weight: 600;
+	font-size: 1.05rem;
+	text-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.scene-preview__purpose-button :deep(.v-icon) {
+	font-size: 22px;
+}
+
+.scene-preview__purpose-button :deep(.v-btn__overlay),
+.scene-preview__purpose-button :deep(.v-btn__underlay) {
+	opacity: 0;
+}
+
+.scene-preview__purpose-label {
+	position: relative;
+	z-index: 1;
+}
+
+@media (max-width: 720px) {
+	.scene-preview__purpose-controls {
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 12px;
+		left: 16px;
+		bottom: 16px;
+	}
+
+	.scene-preview__purpose-button {
+		min-width: 0;
+		width: 180px;
+	}
 }
 
 .scene-preview__control-bar {

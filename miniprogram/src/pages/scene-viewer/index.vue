@@ -2555,18 +2555,35 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
     ? Math.max(DEFAULT_OBJECT_RADIUS, computeObjectBoundingRadius(ownerObject))
     : DEFAULT_OBJECT_RADIUS;
   const destination = focusPoint.clone();
-  tempVector.copy(camera.position).sub(focusPoint);
-  tempVector.y = 0;
-  if (tempVector.lengthSq() < 1e-6) {
-    tempVector.set(0, 0, 1);
-    tempVector.applyQuaternion(tempQuaternion);
+  let usedTargetOrientation = false;
+  if (ownerObject) {
+    ownerObject.getWorldDirection(tempVector);
     tempVector.y = 0;
+    if (tempVector.lengthSq() < 1e-6) {
+      tempVector.set(0, 0, -1);
+      tempVector.applyQuaternion(tempQuaternion);
+      tempVector.y = 0;
+    }
+    if (tempVector.lengthSq() >= 1e-6) {
+      tempVector.normalize().multiplyScalar(desiredDistance);
+      destination.sub(tempVector);
+      usedTargetOrientation = true;
+    }
   }
-  if (tempVector.lengthSq() < 1e-6) {
-    tempVector.set(0, 0, 1);
+  if (!usedTargetOrientation) {
+    tempVector.copy(camera.position).sub(focusPoint);
+    tempVector.y = 0;
+    if (tempVector.lengthSq() < 1e-6 && ownerObject) {
+      tempVector.set(0, 0, -1);
+      tempVector.applyQuaternion(tempQuaternion);
+      tempVector.y = 0;
+    }
+    if (tempVector.lengthSq() < 1e-6) {
+      tempVector.set(0, 0, 1);
+    }
+    tempVector.normalize().multiplyScalar(desiredDistance);
+    destination.add(tempVector);
   }
-  tempVector.normalize().multiplyScalar(desiredDistance);
-  destination.add(tempVector);
   destination.y = HUMAN_EYE_HEIGHT;
   const lookTarget = new THREE.Vector3(focusPoint.x, HUMAN_EYE_HEIGHT, focusPoint.z);
 
