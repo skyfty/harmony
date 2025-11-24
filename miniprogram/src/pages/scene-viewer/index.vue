@@ -1382,6 +1382,15 @@ function inferMimeTypeFromUrl(url: string): string | null {
 	return inferMimeTypeFromAssetId(cleaned)
 }
 
+function normalizeDisplayBoardAssetId(candidate: string): string {
+  const trimmed = candidate.trim()
+  if (!trimmed.length) {
+    return ''
+  }
+  const withoutScheme = trimmed.startsWith('asset://') ? trimmed.slice('asset://'.length) : trimmed
+  return withoutScheme.trim()
+}
+
 async function resolveAssetUrlReference(candidate: string): Promise<ResolvedAssetUrl | null> {
 	const trimmed = candidate.trim()
 	if (!trimmed.length) {
@@ -1403,8 +1412,8 @@ async function resolveDisplayBoardMediaSource(candidate: string): Promise<Resolv
 	if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:')) {
 		return { url: trimmed, mimeType: inferMimeTypeFromUrl(trimmed) }
 	}
-	const assetId = trimmed.startsWith('asset://') ? trimmed.slice('asset://'.length) : trimmed
-	if (!assetId.length) {
+  const assetId = normalizeDisplayBoardAssetId(trimmed)
+  if (!assetId.length) {
 		return null
 	}
 	return await resolveAssetUrlFromCache(assetId)

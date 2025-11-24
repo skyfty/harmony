@@ -1323,18 +1323,23 @@ function computeDisplayBoardPlaneSize(
   mediaSize: { width: number; height: number } | null,
 ): { width: number; height: number } | null {
   const { maxWidth, maxHeight } = resolveDisplayBoardScaleLimits(mesh)
-  const adaptation = props.adaptation === 'fill' ? 'fill' : 'fit'
+  const boardSize = {
+    width: Math.max(maxWidth, 1e-3),
+    height: Math.max(maxHeight, 1e-3),
+  }
+  const hasAsset = typeof props.assetId === 'string' && props.assetId.trim().length > 0
+  if (!hasAsset) {
+    return convertWorldSizeToGeometry(mesh, boardSize)
+  }
 
+  const adaptation = props.adaptation === 'fill' ? 'fill' : 'fit'
   if (adaptation === 'fill') {
-    return convertWorldSizeToGeometry(mesh, {
-      width: Math.max(maxWidth, 1e-3),
-      height: Math.max(maxHeight, 1e-3),
-    })
+    return convertWorldSizeToGeometry(mesh, boardSize)
   }
 
   const source = selectDisplayBoardMediaSize(props, mediaSize)
   if (!source) {
-    const fallback = Math.max(Math.min(maxWidth, maxHeight), 1e-3)
+    const fallback = Math.max(Math.min(boardSize.width, boardSize.height), 1e-3)
     return convertWorldSizeToGeometry(mesh, { width: fallback, height: fallback })
   }
 

@@ -313,8 +313,13 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
     props: DisplayBoardComponentProps,
     mediaSize: { width: number; height: number } | null,
   ): { width: number; height: number } | null {
-    const adaptation = props.adaptation === 'fill' ? 'fill' : 'fit'
     const boardSize = this.resolveBoardWorldSize(mesh)
+    const hasAsset = typeof props.assetId === 'string' && props.assetId.trim().length > 0
+    if (!hasAsset) {
+      return this.convertWorldSizeToGeometry(mesh, boardSize)
+    }
+
+    const adaptation = props.adaptation === 'fill' ? 'fill' : 'fit'
     if (adaptation === 'fill') {
       return this.convertWorldSizeToGeometry(mesh, boardSize)
     }
