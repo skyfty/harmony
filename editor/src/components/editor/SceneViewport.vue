@@ -74,12 +74,19 @@ import {
   WARP_GATE_RUNTIME_REGISTRY_KEY,
   GUIDEBOARD_RUNTIME_REGISTRY_KEY,
   WARP_GATE_COMPONENT_TYPE,
+  GUIDEBOARD_COMPONENT_TYPE,
   clampWarpGateComponentProps,
+  clampGuideboardComponentProps,
   computeWarpGateEffectActive,
+  computeGuideboardEffectActive,
   WARP_GATE_EFFECT_METADATA_KEY,
+  GUIDEBOARD_EFFECT_METADATA_KEY,
   WARP_GATE_EFFECT_ACTIVE_FLAG,
+  GUIDEBOARD_EFFECT_ACTIVE_FLAG,
   cloneWarpGateComponentProps,
+  cloneGuideboardComponentProps,
   createWarpGateEffectInstance,
+  createGuideboardEffectInstance,
 } from '@schema/components'
 import type {
   ViewPointComponentProps,
@@ -87,6 +94,7 @@ import type {
   GuideboardComponentProps,
   WarpGateComponentProps,
   WarpGateEffectInstance,
+  GuideboardEffectInstance,
 } from '@schema/components'
 import type { EnvironmentSettings } from '@/types/environment'
 
@@ -386,6 +394,11 @@ let effectRuntimeTickers: Array<(delta: number) => void> = []
 const WARP_GATE_PLACEHOLDER_KEY = '__harmonyWarpGatePlaceholder'
 type WarpGatePlaceholderHandle = {
   controller: WarpGateEffectInstance | null
+}
+
+const GUIDEBOARD_PLACEHOLDER_KEY = '__harmonyGuideboardPlaceholder'
+type GuideboardPlaceholderHandle = {
+  controller: GuideboardEffectInstance | null
 }
 
 type EffectPlaybackEntry = {
@@ -7369,7 +7382,8 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   userData.dynamicMeshType = node.dynamicMesh?.type ?? null
   userData.lightType = node.light?.type ?? null
   userData.sourceAssetId = node.sourceAssetId ?? null
-  const hasRuntimeObject = nodeType === 'Mesh' || nodeType === 'WarpGate' ? sceneStore.hasRuntimeObject(node.id) : false
+  const runtimeBackedType = nodeType === 'Mesh' || nodeType === 'WarpGate' || nodeType === 'Guideboard'
+  const hasRuntimeObject = runtimeBackedType ? sceneStore.hasRuntimeObject(node.id) : false
   userData.usesRuntimeObject = hasRuntimeObject
 
   object.name = node.name
@@ -7404,6 +7418,10 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
 
   if (nodeType === 'WarpGate' && !hasRuntimeObject) {
     applyWarpGatePlaceholderState(object, node)
+  }
+
+  if (nodeType === 'Guideboard' && !hasRuntimeObject) {
+    applyGuideboardPlaceholderState(object, node)
   }
 
   if (nodeType === 'Light') {
@@ -7503,7 +7521,9 @@ function shouldRecreateNode(object: THREE.Object3D, node: SceneNode): boolean {
     return true
   }
   const expectsRuntime =
-    nodeType === 'Mesh' || nodeType === 'WarpGate' ? sceneStore.hasRuntimeObject(node.id) : false
+    nodeType === 'Mesh' || nodeType === 'WarpGate' || nodeType === 'Guideboard'
+      ? sceneStore.hasRuntimeObject(node.id)
+      : false
   if (Boolean(userData.usesRuntimeObject) !== expectsRuntime) {
     return true
   }
@@ -8399,6 +8419,92 @@ function applyWarpGatePlaceholderState(
   userData[WARP_GATE_EFFECT_METADATA_KEY] = cloneWarpGateComponentProps(props)
 }
 
+function resolveGuideboardProps(node: SceneNode): GuideboardComponentProps {
+  const entry = node.components?.[GUIDEBOARD_COMPONENT_TYPE] as
+    | SceneNodeComponentState<GuideboardComponentProps>
+    | undefined
+  if (!entry) {
+    return clampGuideboardComponentProps(null)
+  }
+  if (entry.enabled === false) {
+    const defaults = clampGuideboardComponentProps(null)
+    return {
+      ...defaults,
+      initiallyVisible: false,
+      glowIntensity: 0,
+      pulseSpeed: 0,
+      pulseStrength: 0,
+    }
+  }
+  return clampGuideboardComponentProps(entry.props)
+}
+
+function createGuideboardPlaceholderObject(node: SceneNode): THREE.Object3D {
+  const root = new THREE.Group()
+  root.name = node.name ?? 'Guideboard'
+  root.castShadow = false
+  root.receiveShadow = false
+
+  const userData = root.userData ?? (root.userData = {})
+  userData.guideboardPlaceholder = true
+
+  const props = resolveGuideboardProps(node)
+  const controller = createGuideboardEffectInstance(props)
+  controller.group.removeFromParent()
+  root.add(controller.group)
+
+  const handle: GuideboardPlaceholderHandle = { controller }
+  userData[GUIDEBOARD_PLACEHOLDER_KEY] = handle
+
+  applyGuideboardPlaceholderState(root, node, props)
+
+  return root
+}
+
+function applyGuideboardPlaceholderState(
+  object: THREE.Object3D,
+  node: SceneNode,
+  providedProps?: GuideboardComponentProps,
+): void {
+  const handle = object.userData?.[GUIDEBOARD_PLACEHOLDER_KEY] as GuideboardPlaceholderHandle | undefined
+  const controller = handle?.controller ?? null
+  if (!controller) {
+    return
+  }
+
+  const props = providedProps ?? resolveGuideboardProps(node)
+  const componentEntry = node.components?.[GUIDEBOARD_COMPONENT_TYPE] as
+    | SceneNodeComponentState<GuideboardComponentProps>
+    | undefined
+  const enabled = componentEntry?.enabled !== false
+
+  const userData = object.userData ?? (object.userData = {})
+  userData.guideboardPlaceholder = true
+
+  if (!enabled) {
+    object.visible = false
+    delete userData.guideboard
+    delete userData[GUIDEBOARD_EFFECT_METADATA_KEY]
+    if (GUIDEBOARD_EFFECT_ACTIVE_FLAG in userData) {
+      delete userData[GUIDEBOARD_EFFECT_ACTIVE_FLAG]
+    }
+    controller.group.visible = false
+    return
+  }
+
+  const nodeVisibility = node.visible ?? true
+  const initiallyVisible = props.initiallyVisible === true
+  const active = computeGuideboardEffectActive(props)
+  object.visible = nodeVisibility && initiallyVisible
+
+  controller.update(props)
+  controller.group.visible = active
+
+  userData.guideboard = true
+  userData[GUIDEBOARD_EFFECT_METADATA_KEY] = cloneGuideboardComponentProps(props)
+  userData[GUIDEBOARD_EFFECT_ACTIVE_FLAG] = active
+}
+
 function createObjectFromNode(node: SceneNode): THREE.Object3D {
   let object: THREE.Object3D
 
@@ -8509,6 +8615,14 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     } else {
       object = createWarpGatePlaceholderObject(node)
     }
+  } else if (nodeType === 'Guideboard') {
+    const runtimeObject = getRuntimeObject(node.id)
+    if (runtimeObject) {
+      runtimeObject.userData.usesRuntimeObject = true
+      object = runtimeObject
+    } else {
+      object = createGuideboardPlaceholderObject(node)
+    }
   } else {
     let container = getRuntimeObject(node.id)
     if (container !== null) {
@@ -8549,6 +8663,12 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     applyMaterialOverrides(object, node.materials)
   } else {
     resetMaterialOverrides(object)
+  }
+
+  if (nodeType === 'WarpGate' && !sceneStore.hasRuntimeObject(node.id)) {
+    applyWarpGatePlaceholderState(object, node)
+  } else if (nodeType === 'Guideboard' && !sceneStore.hasRuntimeObject(node.id)) {
+    applyGuideboardPlaceholderState(object, node)
   }
 
   return object

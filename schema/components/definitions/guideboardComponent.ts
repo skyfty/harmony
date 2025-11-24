@@ -289,8 +289,19 @@ class GuideboardGlowEffectController {
   }
 }
 
+export type GuideboardEffectInstance = {
+  group: THREE.Group
+  update(props: GuideboardComponentProps): void
+  tick(delta: number): void
+  dispose(): void
+}
+
+export function createGuideboardEffectInstance(initial: GuideboardComponentProps): GuideboardEffectInstance {
+  return new GuideboardGlowEffectController(initial)
+}
+
 class GuideboardComponent extends Component<GuideboardComponentProps> {
-  private controller: GuideboardGlowEffectController | null = null
+  private controller: GuideboardEffectInstance | null = null
   private runtimeObject: Object3D | null = null
   private currentProps: GuideboardComponentProps
   private playbackActive = true
@@ -362,15 +373,14 @@ class GuideboardComponent extends Component<GuideboardComponentProps> {
     object.visible = effectiveProps.initiallyVisible === true
 
     if (!this.controller) {
-      this.controller = new GuideboardGlowEffectController(effectiveProps)
+      this.controller = createGuideboardEffectInstance(effectiveProps)
       object.add(this.controller.group)
     } else if (this.controller.group.parent !== object) {
       this.controller.group.removeFromParent()
       object.add(this.controller.group)
-      this.controller.update(effectiveProps)
-    } else {
-      this.controller.update(effectiveProps)
     }
+
+    this.controller.update(effectiveProps)
 
     this.updateUserData(object, effectiveProps)
     this.registerRuntimeInterface(object, effectiveProps)
