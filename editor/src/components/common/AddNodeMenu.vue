@@ -1370,7 +1370,7 @@ async function handleCreateViewPointNode(options: NodeCreationOptions = {}): Pro
   const { parentId, autoBehaviors = false } = options
   const name = getNextViewPointName()
 
-  const markerMesh = createPrimitiveMesh('Plane',{color: VIEW_POINT_COLOR,doubleSided: true})
+  const markerMesh = createPrimitiveMesh('Sphere',{color: VIEW_POINT_COLOR,doubleSided: true})
   markerMesh.name = `${name} Helper`
   markerMesh.castShadow = false
   markerMesh.receiveShadow = false
@@ -1400,6 +1400,7 @@ async function handleCreateViewPointNode(options: NodeCreationOptions = {}): Pro
     nodeType: 'Sphere',
     name,
     baseY: 0,
+    position: new THREE.Vector3(0, 0, 0),
     parentId: resolvedParentId,
     snapToGrid: false,
     editorFlags: {
@@ -1463,6 +1464,7 @@ async function handleCreateGuideboardNode(options: NodeCreationOptions = {}): Pr
     nodeType: 'Guideboard',
     name,
     baseY: 0,
+    position: new THREE.Vector3(0, 0, 0),
     parentId: resolvedParentId,
     snapToGrid: false,
     editorFlags: {
@@ -1531,6 +1533,7 @@ async function handleCreateWarpGateNode(options: NodeCreationOptions = {}): Prom
     nodeType: 'WarpGate',
     name,
     baseY: 0,
+    position: new THREE.Vector3(0, 0, 0),
     parentId: resolvedParentId,
     snapToGrid: false,
     editorFlags: {

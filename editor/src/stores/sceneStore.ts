@@ -604,32 +604,6 @@ function normalizeNodeComponents(
     }
   }
 
-  const hasWarpGateComponent = Boolean((normalized[WARP_GATE_COMPONENT_TYPE] as SceneNodeComponentState | undefined)?.enabled)
-  const hasGuideboardComponent = Boolean((normalized[GUIDEBOARD_COMPONENT_TYPE] as SceneNodeComponentState | undefined)?.enabled)
-  const previousType = normalizeSceneNodeType(node.nodeType)
-  let nextType = previousType
-
-  if (hasWarpGateComponent) {
-    nextType = 'WarpGate'
-  } else if (hasGuideboardComponent) {
-    nextType = 'Guideboard'
-  } else if (previousType === 'WarpGate' || previousType === 'Guideboard') {
-    nextType = 'Mesh'
-  }
-
-  if (nextType !== previousType) {
-    node.nodeType = nextType
-    if (!sceneNodeTypeSupportsMaterials(nextType)) {
-      node.materials = undefined
-    }
-    if (nextType === 'WarpGate' || nextType === 'Guideboard') {
-      node.sourceAssetId = undefined
-      if (node.importMetadata) {
-        node.importMetadata = undefined
-      }
-    }
-  }
-
   const existingViewPoint = normalized[VIEW_POINT_COMPONENT_TYPE] as
     | SceneNodeComponentState<ViewPointComponentProps>
     | undefined
