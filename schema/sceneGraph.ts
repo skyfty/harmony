@@ -22,7 +22,12 @@ import type {
   SurfaceDynamicMesh,
 } from '@harmony/schema';
 import type { GuideboardComponentProps } from './components/definitions/guideboardComponent';
-import { GUIDEBOARD_COMPONENT_TYPE } from './components/definitions/guideboardComponent';
+import {
+  GUIDEBOARD_COMPONENT_TYPE,
+  GUIDEBOARD_EFFECT_METADATA_KEY,
+  clampGuideboardComponentProps,
+  cloneGuideboardComponentProps,
+} from './components/definitions/guideboardComponent';
 import type { ViewPointComponentProps } from './components/definitions/viewPointComponent';
 import { VIEW_POINT_COMPONENT_TYPE } from './components/definitions/viewPointComponent';
 import type { WarpGateComponentProps } from './components/definitions/warpGateComponent';
@@ -861,8 +866,9 @@ class SceneGraphBuilder {
       | undefined;
     if (guideboardState?.enabled) {
       metadata.isGuideboard = true;
-      const props = guideboardState.props as GuideboardComponentProps | undefined;
-      metadata.guideboardInitiallyVisible = props?.initiallyVisible === true;
+      const props = clampGuideboardComponentProps(guideboardState.props as Partial<GuideboardComponentProps>);
+      metadata.guideboardInitiallyVisible = props.initiallyVisible === true;
+      metadata[GUIDEBOARD_EFFECT_METADATA_KEY] = cloneGuideboardComponentProps(props);
     }
     const viewPointState = node.components?.[VIEW_POINT_COMPONENT_TYPE] as
       | SceneNodeComponentState<ViewPointComponentProps>

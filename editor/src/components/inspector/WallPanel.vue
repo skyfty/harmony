@@ -146,7 +146,7 @@ function applyDimensions() {
   <v-expansion-panel value="wall">
     <v-expansion-panel-title>
       <div class="wall-panel-header">
-        <span class="wall-panel-title">Wall Component</span>
+        <span class="wall-panel-title">Wall</span>
         <v-spacer />
         <v-menu
           v-if="wallComponent"
