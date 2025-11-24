@@ -57,8 +57,7 @@ const VIEW_POINT_COLOR = 0xff8a65
 const VIEW_POINT_SHOW_BEHAVIOR_NAME = 'Show View Point'
 const VIEW_POINT_HIDE_BEHAVIOR_NAME = 'Hide View Point'
 
-const GUIDEBOARD_RADIUS = 1
-const GUIDEBOARD_COLOR = 0x9c27b0
+const GUIDEBOARD_RADIUS = 0.75
 
 const tempViewPointBox = new THREE.Box3()
 const tempViewPointVecA = new THREE.Vector3()

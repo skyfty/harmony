@@ -673,11 +673,13 @@ let effectRuntimeTickers: Array<(delta: number) => void> = [];
 type WarpGateRuntimeRegistryEntry = {
   tick?: (delta: number) => void;
   props?: Partial<WarpGateComponentProps> | null;
+  setPlaybackActive?: (active: boolean) => void
 };
 
 type GuideboardRuntimeRegistryEntry = {
   tick?: (delta: number) => void;
   props?: Partial<GuideboardComponentProps> | null;
+  setPlaybackActive?: (active: boolean) => void
 };
 
 function isWarpGateEffectActive(props: Partial<WarpGateComponentProps> | null | undefined): boolean {

@@ -9,7 +9,7 @@ export const GUIDEBOARD_DEFAULT_INITIAL_VISIBILITY = false
 
 export const GUIDEBOARD_DEFAULT_GLOW_COLOR = '#ffd54f'
 export const GUIDEBOARD_DEFAULT_GLOW_INTENSITY = 1.4
-export const GUIDEBOARD_DEFAULT_GLOW_RADIUS = 1.1
+export const GUIDEBOARD_DEFAULT_GLOW_RADIUS = 0.85
 export const GUIDEBOARD_DEFAULT_PULSE_SPEED = 1
 export const GUIDEBOARD_DEFAULT_PULSE_STRENGTH = 0.25
 
@@ -46,6 +46,7 @@ type GuideboardRuntimeEntry = {
   setProps(patch: Partial<GuideboardComponentProps> | null | undefined): void
   tick(delta: number): void
   props: GuideboardComponentProps
+  setPlaybackActive?(active: boolean): void
 }
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
@@ -200,7 +201,7 @@ class GuideboardGlowEffectController {
     this.halo.renderOrder = 5
     this.group.add(this.halo)
 
-    const ringGeometry = new THREE.RingGeometry(0.4, 0.6, 64)
+    const ringGeometry = new THREE.RingGeometry(0.36, 0.54, 64)
     this.ringMaterial = new THREE.MeshBasicMaterial({
       color: this.color,
       transparent: true,
@@ -215,7 +216,7 @@ class GuideboardGlowEffectController {
     this.ring.renderOrder = 6
     this.group.add(this.ring)
 
-    this.light = new THREE.PointLight(this.color, this.glowIntensity * 4, this.glowRadius * 6)
+    this.light = new THREE.PointLight(this.color, this.glowIntensity * 3.2, this.glowRadius * 5)
     this.light.name = `${GUIDEBOARD_EFFECT_GROUP_NAME}:Light`
     this.group.add(this.light)
 
@@ -274,15 +275,15 @@ class GuideboardGlowEffectController {
         ? (Math.sin(phase) * 0.5 + 0.5) * Math.min(pulseAmount, GUIDEBOARD_PULSE_STRENGTH_MAX)
         : 0
     const baseRadius = Math.max(this.glowRadius, GUIDEBOARD_GLOW_RADIUS_MIN)
-    const scale = baseRadius * (1 + pulse * 0.3)
-    this.halo.scale.setScalar(scale * 2)
-    this.ring.scale.setScalar(scale * 1.1)
-    const haloOpacity = normalizedIntensity * 0.65 + pulse * 0.25
-    const ringOpacity = normalizedIntensity * 0.55 + pulse * 0.2
+    const scale = baseRadius * (1 + pulse * 0.25)
+    this.halo.scale.setScalar(scale * 2.1)
+    this.ring.scale.setScalar(scale * 1.2)
+    const haloOpacity = normalizedIntensity * 0.8 + pulse * 0.35
+    const ringOpacity = normalizedIntensity * 0.6 + pulse * 0.28
     this.haloMaterial.opacity = Math.min(1, Math.max(0, haloOpacity))
     this.ringMaterial.opacity = Math.min(1, Math.max(0, ringOpacity))
-    this.light.intensity = intensity * (1.2 + pulse * 0.6)
-    this.light.distance = baseRadius * 6
+    this.light.intensity = intensity * (1.4 + pulse * 0.7)
+    this.light.distance = baseRadius * 5
     this.light.decay = 2
     this.light.position.set(0, baseRadius * 0.25, 0)
   }
@@ -292,6 +293,7 @@ class GuideboardComponent extends Component<GuideboardComponentProps> {
   private controller: GuideboardGlowEffectController | null = null
   private runtimeObject: Object3D | null = null
   private currentProps: GuideboardComponentProps
+  private playbackActive = true
 
   constructor(context: ComponentRuntimeContext<GuideboardComponentProps>) {
     super(context)
@@ -311,6 +313,9 @@ class GuideboardComponent extends Component<GuideboardComponentProps> {
   }
 
   onUpdate(deltaTime: number): void {
+    if (!this.playbackActive) {
+      return
+    }
     this.controller?.tick(deltaTime)
   }
 
@@ -319,6 +324,7 @@ class GuideboardComponent extends Component<GuideboardComponentProps> {
     this.updateUserData(this.runtimeObject, null)
     this.unregisterRuntimeInterface(this.runtimeObject)
     this.runtimeObject = null
+    this.playbackActive = true
   }
 
   private applyRuntime(object: Object3D | null, provided?: GuideboardComponentProps, options: { alreadyClamped?: boolean } = {}): void {
@@ -328,6 +334,7 @@ class GuideboardComponent extends Component<GuideboardComponentProps> {
       this.updateUserData(previous, null)
       this.unregisterRuntimeInterface(previous)
       this.runtimeObject = null
+      this.playbackActive = true
       return
     }
 
@@ -378,6 +385,16 @@ class GuideboardComponent extends Component<GuideboardComponentProps> {
     this.controller = null
   }
 
+  private setPlaybackActive(active: boolean): void {
+    if (this.playbackActive === active) {
+      return
+    }
+    this.playbackActive = active
+    if (!active) {
+      this.controller?.update(this.currentProps)
+    }
+  }
+
   private updateUserData(object: Object3D | null, props: GuideboardComponentProps | null): void {
     if (!object) {
       return
@@ -420,9 +437,15 @@ class GuideboardComponent extends Component<GuideboardComponentProps> {
         entry.props = cloneGuideboardComponentProps(self.currentProps)
       },
       tick(delta: number) {
+        if (!self.playbackActive) {
+          return
+        }
         self.controller?.tick(delta)
       },
       props: cloneGuideboardComponentProps(props),
+      setPlaybackActive(active: boolean) {
+        self.setPlaybackActive(active)
+      },
     }
     registry[this.context.componentId] = entry
   }

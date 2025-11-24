@@ -409,6 +409,7 @@ type WarpGateRuntimeRegistryEntry = {
 type GuideboardRuntimeRegistryEntry = {
   tick?: (delta: number) => void
   props?: Partial<GuideboardComponentProps> | null
+  setPlaybackActive?: (active: boolean) => void
 }
 
 // Collects and manages playback lifecycles for runtime effect components that need to
@@ -451,7 +452,6 @@ function createEffectPlaybackManager(): {
     },
     {
       registryKey: GUIDEBOARD_RUNTIME_REGISTRY_KEY,
-      requiresSelection: false,
       collect(object, nodeId) {
         const registry = object.userData?.[GUIDEBOARD_RUNTIME_REGISTRY_KEY] as
           | Record<string, GuideboardRuntimeRegistryEntry>
@@ -459,10 +459,21 @@ function createEffectPlaybackManager(): {
         if (!registry) {
           return []
         }
-        return Object.entries(registry).map(([componentId, entry]) => ({
-          id: `${nodeId}:${GUIDEBOARD_RUNTIME_REGISTRY_KEY}:${componentId}`,
-          tick: typeof entry?.tick === 'function' ? entry.tick.bind(entry) : undefined,
-        }))
+        return Object.entries(registry).map(([componentId, entry]) => {
+          const playbackId = `${nodeId}:${GUIDEBOARD_RUNTIME_REGISTRY_KEY}:${componentId}`
+          return {
+            id: playbackId,
+            tick: typeof entry?.tick === 'function' ? entry.tick.bind(entry) : undefined,
+            activate:
+              typeof entry?.setPlaybackActive === 'function'
+                ? () => entry.setPlaybackActive?.(true)
+                : undefined,
+            deactivate:
+              typeof entry?.setPlaybackActive === 'function'
+                ? () => entry.setPlaybackActive?.(false)
+                : undefined,
+          }
+        })
       },
     },
   ]

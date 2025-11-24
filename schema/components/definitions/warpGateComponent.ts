@@ -74,6 +74,7 @@ type WarpGateRuntimeEntry = {
   setProps(patch: Partial<WarpGateComponentProps> | null | undefined): void
   tick(delta: number): void
   props: WarpGateComponentProps
+  setPlaybackActive?(active: boolean): void
 }
 
 export interface WarpGateEffectProps {
@@ -561,6 +562,7 @@ class WarpGateComponent extends Component<WarpGateComponentProps> {
   private controller: WarpGateEffectInstance | null = null
   private runtimeObject: Object3D | null = null
   private currentProps: WarpGateComponentProps
+  private playbackActive = true
 
   constructor(context: ComponentRuntimeContext<WarpGateComponentProps>) {
     super(context)
@@ -581,6 +583,9 @@ class WarpGateComponent extends Component<WarpGateComponentProps> {
   }
 
   onUpdate(delta: number): void {
+    if (!this.playbackActive) {
+      return
+    }
     this.controller?.tick(delta)
   }
 
@@ -589,6 +594,7 @@ class WarpGateComponent extends Component<WarpGateComponentProps> {
     this.updateUserData(this.runtimeObject, null)
     this.unregisterRuntimeInterface(this.runtimeObject)
     this.runtimeObject = null
+    this.playbackActive = true
   }
 
   private applyEffect(object: Object3D | null, provided?: WarpGateComponentProps, options: { alreadyClamped?: boolean } = {}): void {
@@ -602,6 +608,7 @@ class WarpGateComponent extends Component<WarpGateComponentProps> {
         this.unregisterRuntimeInterface(previous)
       }
       this.runtimeObject = object
+      this.playbackActive = true
       return
     }
 
@@ -638,6 +645,17 @@ class WarpGateComponent extends Component<WarpGateComponentProps> {
     this.controller.group.parent?.remove(this.controller.group)
     this.controller.dispose()
     this.controller = null
+    this.playbackActive = true
+  }
+
+  private setPlaybackActive(active: boolean): void {
+    if (this.playbackActive === active) {
+      return
+    }
+    this.playbackActive = active
+    if (!active) {
+      this.controller?.update(this.currentProps)
+    }
   }
 
   private updateUserData(object: Object3D | null, props: WarpGateComponentProps | null): void {
@@ -681,9 +699,15 @@ class WarpGateComponent extends Component<WarpGateComponentProps> {
         self.applyEffect(self.runtimeObject, nextProps, { alreadyClamped: true })
       },
       tick(delta: number) {
+        if (!self.playbackActive) {
+          return
+        }
         self.controller?.tick(delta)
       },
       props: cloneWarpGateComponentProps(props),
+      setPlaybackActive(active: boolean) {
+        self.setPlaybackActive(active)
+      },
     }
   }
 
