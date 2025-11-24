@@ -604,6 +604,32 @@ function normalizeNodeComponents(
     }
   }
 
+  const hasWarpGateComponent = Boolean((normalized[WARP_GATE_COMPONENT_TYPE] as SceneNodeComponentState | undefined)?.enabled)
+  const hasGuideboardComponent = Boolean((normalized[GUIDEBOARD_COMPONENT_TYPE] as SceneNodeComponentState | undefined)?.enabled)
+  const previousType = normalizeSceneNodeType(node.nodeType)
+  let nextType = previousType
+
+  if (hasWarpGateComponent) {
+    nextType = 'WarpGate'
+  } else if (hasGuideboardComponent) {
+    nextType = 'Guideboard'
+  } else if (previousType === 'WarpGate' || previousType === 'Guideboard') {
+    nextType = 'Mesh'
+  }
+
+  if (nextType !== previousType) {
+    node.nodeType = nextType
+    if (!sceneNodeTypeSupportsMaterials(nextType)) {
+      node.materials = undefined
+    }
+    if (nextType === 'WarpGate' || nextType === 'Guideboard') {
+      node.sourceAssetId = undefined
+      if (node.importMetadata) {
+        node.importMetadata = undefined
+      }
+    }
+  }
+
   const existingViewPoint = normalized[VIEW_POINT_COMPONENT_TYPE] as
     | SceneNodeComponentState<ViewPointComponentProps>
     | undefined
@@ -3841,14 +3867,18 @@ function cloneEditorFlags(flags?: SceneNodeEditorFlags | null): SceneNodeEditorF
 }
 
 function cloneNode(node: SceneNode): SceneNode {
-  const nodeType = normalizeSceneNodeType(node.nodeType)
-  const materials = sceneNodeTypeSupportsMaterials(nodeType) ? cloneNodeMaterials(node.materials) : undefined
   const clonedUserData = clonePlainRecord(node.userData ?? undefined)
   const viewPointResult = evaluateViewPointAttributes(clonedUserData)
   const guideboardResult = evaluateGuideboardAttributes(viewPointResult.sanitizedUserData, node.name)
   const warpGateResult = evaluateWarpGateAttributes(guideboardResult.sanitizedUserData)
+
+  const workingNode: SceneNode = {
+    ...node,
+    userData: warpGateResult.sanitizedUserData,
+  }
+
   const normalizedComponents = normalizeNodeComponents(
-    { ...node, userData: warpGateResult.sanitizedUserData } as SceneNode,
+    workingNode,
     node.components,
     {
       attachGuideboard: guideboardResult.shouldAttachGuideboard,
@@ -3857,8 +3887,14 @@ function cloneNode(node: SceneNode): SceneNode {
       viewPointOverrides: viewPointResult.componentOverrides,
     },
   )
+
+  const nodeType = normalizeSceneNodeType(workingNode.nodeType)
+  const materialsSource = workingNode.materials
+  const materials = sceneNodeTypeSupportsMaterials(nodeType) ? cloneNodeMaterials(materialsSource) : undefined
+  const children = node.children ? node.children.map(cloneNode) : undefined
+
   return {
-    ...node,
+    ...workingNode,
     nodeType,
     materials,
     components: normalizedComponents,
@@ -3868,22 +3904,21 @@ function cloneNode(node: SceneNode): SceneNode {
           target: node.light.target ? cloneVector(node.light.target) : undefined,
         }
       : undefined,
-    camera: node.camera
-      ? { ...node.camera }
-      : undefined,
+    camera: node.camera ? { ...node.camera } : undefined,
     position: cloneVector(node.position),
     rotation: cloneVector(node.rotation),
     scale: cloneVector(node.scale),
-    children: node.children ? node.children.map(cloneNode) : undefined,
+    children,
     dynamicMesh: cloneDynamicMeshDefinition(node.dynamicMesh),
-    importMetadata: node.importMetadata
+    importMetadata: workingNode.importMetadata
       ? {
-          assetId: node.importMetadata.assetId,
-          objectPath: [...node.importMetadata.objectPath],
+          assetId: workingNode.importMetadata.assetId,
+          objectPath: Array.isArray(workingNode.importMetadata.objectPath)
+            ? [...workingNode.importMetadata.objectPath]
+            : [],
         }
       : undefined,
     editorFlags: cloneEditorFlags(node.editorFlags),
-    userData: warpGateResult.sanitizedUserData,
   }
 }
 

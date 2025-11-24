@@ -65,12 +65,6 @@ const MATERIAL_TEXTURE_SLOTS: SceneMaterialTextureSlot[] = [
   'displacement',
 ];
 
-const GUIDEBOARD_MARKER_RADIUS = 0.36
-const GUIDEBOARD_MARKER_WIDTH_SEGMENTS = 24
-const GUIDEBOARD_MARKER_HEIGHT_SEGMENTS = 18
-const GUIDEBOARD_MARKER_COLOR = 0x9c27b0
-const GUIDEBOARD_MARKER_OPACITY = 0.28
-
 export interface SceneGraphBuildResult {
   root: THREE.Group;
   warnings: string[];
@@ -554,27 +548,56 @@ class SceneGraphBuilder {
     }
   }
 
+  private hasEnabledWarpGateComponent(node: SceneNodeWithExtras): boolean {
+    const state = node.components?.[WARP_GATE_COMPONENT_TYPE] as
+      | SceneNodeComponentState<WarpGateComponentProps>
+      | undefined
+    return Boolean(state?.enabled)
+  }
+
+  private hasEnabledGuideboardComponent(node: SceneNodeWithExtras): boolean {
+    const state = node.components?.[GUIDEBOARD_COMPONENT_TYPE] as
+      | SceneNodeComponentState<GuideboardComponentProps>
+      | undefined
+    return Boolean(state?.enabled)
+  }
+
   private async buildSingleNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
     if (node.editorFlags?.editorOnly) {
       return this.buildEditorOnlyNode(node);
     }
-    switch (node.nodeType) {
-      case 'Group':
-        return this.buildGroupNode(node);
-      case 'Light':
-        return this.buildLightNode(node);
-      case 'Mesh':
-        return this.buildMeshNode(node);
-      case 'WarpGate':
-        return this.buildWarpGateNode(node);
-      case 'Guideboard':
-        return this.buildGuideboardNode(node);
-      case 'Camera':
-        this.warn(`暂不支持相机节点 ${node.name ?? node.id}`);
-        return null;
-      default:
-        return this.buildPrimitiveNode(node);
+    const explicitType = typeof node.nodeType === 'string' ? node.nodeType : ''
+    const normalizedType = explicitType.toLowerCase()
+
+    if (normalizedType === 'group') {
+      return this.buildGroupNode(node)
     }
+    if (normalizedType === 'light') {
+      return this.buildLightNode(node)
+    }
+    if (normalizedType === 'warpgate') {
+      return this.buildWarpGateNode(node)
+    }
+    if (normalizedType === 'guideboard') {
+      return this.buildGuideboardNode(node)
+    }
+    if (normalizedType === 'camera') {
+      this.warn(`暂不支持相机节点 ${node.name ?? node.id}`)
+      return null
+    }
+
+    if (this.hasEnabledWarpGateComponent(node)) {
+      return this.buildWarpGateNode(node)
+    }
+    if (this.hasEnabledGuideboardComponent(node)) {
+      return this.buildGuideboardNode(node)
+    }
+
+    if (normalizedType === 'mesh') {
+      return this.buildMeshNode(node)
+    }
+
+    return this.buildPrimitiveNode(node)
   }
 
   private async buildEditorOnlyNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
@@ -664,30 +687,6 @@ class SceneGraphBuilder {
     group.name = node.name ?? 'Guideboard';
     this.applyTransform(group, node);
     this.applyVisibility(group, node);
-
-    const geometry = new THREE.SphereGeometry(
-      GUIDEBOARD_MARKER_RADIUS,
-      GUIDEBOARD_MARKER_WIDTH_SEGMENTS,
-      GUIDEBOARD_MARKER_HEIGHT_SEGMENTS,
-    );
-    const material = new THREE.MeshBasicMaterial({
-      color: GUIDEBOARD_MARKER_COLOR,
-      transparent: true,
-      opacity: GUIDEBOARD_MARKER_OPACITY,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    });
-    const marker = new THREE.Mesh(geometry, material);
-    marker.name = `${group.name} Marker`;
-    marker.castShadow = false;
-    marker.receiveShadow = false;
-    marker.renderOrder = 1;
-    marker.userData = {
-      ...(marker.userData ?? {}),
-      guideboardMarker: true,
-    };
-    group.add(marker);
-    this.recordMeshStatistics(marker);
 
     if (Array.isArray(node.children) && node.children.length) {
       await this.buildNodes(node.children as SceneNodeWithExtras[], group);

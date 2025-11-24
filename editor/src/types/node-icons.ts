@@ -22,6 +22,7 @@ export const NODE_TYPE_ICONS: Record<SceneNodeType, string> = {
   Box: 'mdi-cube-outline',
   Empty: 'mdi-vector-point',
   WarpGate: 'mdi-atom-variant',
+  Guideboard: 'mdi-sign-direction',
 }
 
 export const LIGHT_TYPE_ICONS: Record<LightNodeType, string> = {
