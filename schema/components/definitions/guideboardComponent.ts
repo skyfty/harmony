@@ -505,7 +505,11 @@ const guideboardComponentDefinition: ComponentDefinition<GuideboardComponentProp
     },
   ],
   canAttach(_node: SceneNode) {
-    return true
+    const type = (typeof _node.nodeType === 'string' ? _node.nodeType : '').trim().toLowerCase()
+    if (type === 'guideboard') {
+      return true
+    }
+    return !type
   },
   createDefaultProps(_node: SceneNode) {
     return clampGuideboardComponentProps({

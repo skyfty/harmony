@@ -30,8 +30,12 @@ import {
 	warpGateComponentDefinition,
 	effectComponentDefinition,
 	GUIDEBOARD_COMPONENT_TYPE,
+	GUIDEBOARD_RUNTIME_REGISTRY_KEY,
+	GUIDEBOARD_EFFECT_ACTIVE_FLAG,
 	WARP_GATE_RUNTIME_REGISTRY_KEY,
 	WARP_GATE_EFFECT_ACTIVE_FLAG,
+	clampGuideboardComponentProps,
+	computeGuideboardEffectActive,
 } from '@schema/components'
 import type { GuideboardComponentProps, WarpGateComponentProps } from '@schema/components'
 import {
@@ -361,6 +365,11 @@ type WarpGateRuntimeRegistryEntry = {
 	props?: Partial<WarpGateComponentProps> | null
 }
 
+type GuideboardRuntimeRegistryEntry = {
+	tick?: (delta: number) => void
+	props?: Partial<GuideboardComponentProps> | null
+}
+
 function isWarpGateEffectActive(props: Partial<WarpGateComponentProps> | null | undefined): boolean {
 	if (!props) {
 		return false
@@ -374,6 +383,14 @@ function isWarpGateEffectActive(props: Partial<WarpGateComponentProps> | null | 
 	const showBeams = props.showBeams === true
 	const showRings = props.showRings === true
 	return (showParticles && particleCount > 0) || showBeams || showRings
+}
+
+function isGuideboardEffectActive(props: Partial<GuideboardComponentProps> | null | undefined): boolean {
+	if (!props) {
+		return false
+	}
+	const normalized = clampGuideboardComponentProps(props)
+	return computeGuideboardEffectActive(normalized)
 }
 
 function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null): void {
@@ -1464,6 +1481,9 @@ function resetEffectRuntimeTickers(): void {
 		if (userData && Object.prototype.hasOwnProperty.call(userData, WARP_GATE_EFFECT_ACTIVE_FLAG)) {
 			delete userData[WARP_GATE_EFFECT_ACTIVE_FLAG]
 		}
+		if (userData && Object.prototype.hasOwnProperty.call(userData, GUIDEBOARD_EFFECT_ACTIVE_FLAG)) {
+			delete userData[GUIDEBOARD_EFFECT_ACTIVE_FLAG]
+		}
 	})
 }
 
@@ -1471,31 +1491,63 @@ function refreshEffectRuntimeTickers(): void {
 	resetEffectRuntimeTickers()
 	const uniqueTickers = new Set<(delta: number) => void>()
 	nodeObjectMap.forEach((object) => {
-		const registry = object.userData?.[WARP_GATE_RUNTIME_REGISTRY_KEY] as Record<string, WarpGateRuntimeRegistryEntry> | undefined
-		if (!registry) {
+		const warpGateRegistry = object.userData?.[WARP_GATE_RUNTIME_REGISTRY_KEY] as
+			Record<string, WarpGateRuntimeRegistryEntry> | undefined
+		const guideboardRegistry = object.userData?.[GUIDEBOARD_RUNTIME_REGISTRY_KEY] as
+			Record<string, GuideboardRuntimeRegistryEntry> | undefined
+		if (!warpGateRegistry && !guideboardRegistry) {
 			return
 		}
 		const userData = object.userData ?? (object.userData = {})
-		let warpGateSeen = false
-		let warpGateActive = false
-		Object.values(registry).forEach((entry) => {
-			if (!entry) {
-				return
-			}
-			if (typeof entry.tick === 'function') {
-				uniqueTickers.add(entry.tick)
-			}
-			if (entry.props) {
-				warpGateSeen = true
-				if (isWarpGateEffectActive(entry.props)) {
-					warpGateActive = true
+		if (warpGateRegistry) {
+			let warpGateSeen = false
+			let warpGateActive = false
+			Object.values(warpGateRegistry).forEach((entry) => {
+				if (!entry) {
+					return
 				}
+				if (typeof entry.tick === 'function') {
+					uniqueTickers.add(entry.tick)
+				}
+				if (entry.props) {
+					warpGateSeen = true
+					if (isWarpGateEffectActive(entry.props)) {
+						warpGateActive = true
+					}
+				}
+			})
+			if (warpGateSeen) {
+				userData[WARP_GATE_EFFECT_ACTIVE_FLAG] = warpGateActive
+			} else if (Object.prototype.hasOwnProperty.call(userData, WARP_GATE_EFFECT_ACTIVE_FLAG)) {
+				delete userData[WARP_GATE_EFFECT_ACTIVE_FLAG]
 			}
-		})
-		if (warpGateSeen) {
-			userData[WARP_GATE_EFFECT_ACTIVE_FLAG] = warpGateActive
 		} else if (Object.prototype.hasOwnProperty.call(userData, WARP_GATE_EFFECT_ACTIVE_FLAG)) {
 			delete userData[WARP_GATE_EFFECT_ACTIVE_FLAG]
+		}
+		if (guideboardRegistry) {
+			let guideboardSeen = false
+			let guideboardActive = false
+			Object.values(guideboardRegistry).forEach((entry) => {
+				if (!entry) {
+					return
+				}
+				if (typeof entry.tick === 'function') {
+					uniqueTickers.add(entry.tick)
+				}
+				if (entry.props) {
+					guideboardSeen = true
+					if (isGuideboardEffectActive(entry.props)) {
+						guideboardActive = true
+					}
+				}
+			})
+			if (guideboardSeen) {
+				userData[GUIDEBOARD_EFFECT_ACTIVE_FLAG] = guideboardActive
+			} else if (Object.prototype.hasOwnProperty.call(userData, GUIDEBOARD_EFFECT_ACTIVE_FLAG)) {
+				delete userData[GUIDEBOARD_EFFECT_ACTIVE_FLAG]
+			}
+		} else if (Object.prototype.hasOwnProperty.call(userData, GUIDEBOARD_EFFECT_ACTIVE_FLAG)) {
+			delete userData[GUIDEBOARD_EFFECT_ACTIVE_FLAG]
 		}
 	})
 	effectRuntimeTickers = uniqueTickers.size ? Array.from(uniqueTickers) : []

@@ -1438,13 +1438,14 @@ async function handleCreateViewPointNode(options: NodeCreationOptions = {}): Pro
 async function handleCreateGuideboardNode(options: NodeCreationOptions = {}): Promise<SceneNode | null> {
   const { parentId, autoBehaviors = false } = options
   const name = getNextGuideboardName()
-  const guideboardMesh = createPrimitiveMesh("Sphere", {color: GUIDEBOARD_COLOR,doubleSided: true})
+  const guideboardMesh = new THREE.Object3D()
   guideboardMesh.name = `${name} Visual`
   guideboardMesh.castShadow = false
   guideboardMesh.receiveShadow = false
   guideboardMesh.userData = {
     ...(guideboardMesh.userData ?? {}),
     ignoreGridSnapping: true,
+    guideboardHelper: true,
   }
 
   const guideboardRoot = new THREE.Object3D()
@@ -1453,6 +1454,7 @@ async function handleCreateGuideboardNode(options: NodeCreationOptions = {}): Pr
   guideboardRoot.userData = {
     ...(guideboardRoot.userData ?? {}),
     ignoreGridSnapping: true,
+    guideboard: true,
   }
 
   const parent = resolveTargetParentNode(parentId)
@@ -1471,7 +1473,7 @@ async function handleCreateGuideboardNode(options: NodeCreationOptions = {}): Pr
 
   const created = await sceneStore.addModelNode({
     object: guideboardRoot,
-    nodeType: 'Sphere',
+    nodeType: 'Guideboard',
     name,
     baseY: 0,
     parentId: resolvedParentId,

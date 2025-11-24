@@ -72,6 +72,7 @@ import {
   VIEW_POINT_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
   WARP_GATE_RUNTIME_REGISTRY_KEY,
+  GUIDEBOARD_RUNTIME_REGISTRY_KEY,
   WARP_GATE_COMPONENT_TYPE,
   clampWarpGateComponentProps,
   computeWarpGateEffectActive,
@@ -83,6 +84,7 @@ import {
 import type {
   ViewPointComponentProps,
   DisplayBoardComponentProps,
+  GuideboardComponentProps,
   WarpGateComponentProps,
   WarpGateEffectInstance,
 } from '@schema/components'
@@ -396,11 +398,17 @@ type EffectPlaybackEntry = {
 type EffectRuntimeAdapter = {
   registryKey: string
   collect(object: THREE.Object3D, nodeId: string): EffectPlaybackEntry[]
+  requiresSelection?: boolean
 }
 
 type WarpGateRuntimeRegistryEntry = {
   tick?: (delta: number) => void
   setPlaybackActive?: (active: boolean) => void
+}
+
+type GuideboardRuntimeRegistryEntry = {
+  tick?: (delta: number) => void
+  props?: Partial<GuideboardComponentProps> | null
 }
 
 // Collects and manages playback lifecycles for runtime effect components that need to
@@ -441,6 +449,22 @@ function createEffectPlaybackManager(): {
         })
       },
     },
+    {
+      registryKey: GUIDEBOARD_RUNTIME_REGISTRY_KEY,
+      requiresSelection: false,
+      collect(object, nodeId) {
+        const registry = object.userData?.[GUIDEBOARD_RUNTIME_REGISTRY_KEY] as
+          | Record<string, GuideboardRuntimeRegistryEntry>
+          | undefined
+        if (!registry) {
+          return []
+        }
+        return Object.entries(registry).map(([componentId, entry]) => ({
+          id: `${nodeId}:${GUIDEBOARD_RUNTIME_REGISTRY_KEY}:${componentId}`,
+          tick: typeof entry?.tick === 'function' ? entry.tick.bind(entry) : undefined,
+        }))
+      },
+    },
   ]
 
   function refresh(selectedIds: readonly string[], objects: Map<string, THREE.Object3D>): void {
@@ -456,9 +480,11 @@ function createEffectPlaybackManager(): {
           return
         }
         const isSelected = selectedSet.has(nodeId)
+        const requiresSelection = adapter.requiresSelection !== false
         entries.forEach((entry) => {
           staleEntries.delete(entry.id)
-          if (isSelected) {
+          const shouldActivate = !requiresSelection || isSelected
+          if (shouldActivate) {
             if (!activeEntries.has(entry.id)) {
               entry.activate?.()
             }

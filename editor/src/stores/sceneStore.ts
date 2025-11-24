@@ -861,6 +861,7 @@ const LEGACY_NODE_TYPE_MAP: Record<string, SceneNodeType> = {
   light: 'Light',
   group: 'Group',
   camera: 'Camera',
+  guideboard: 'Guideboard',
 }
 
 function normalizeSceneNodeType(input: SceneNodeType | string | null | undefined): SceneNodeType {
@@ -879,7 +880,13 @@ function normalizeSceneNodeType(input: SceneNodeType | string | null | undefined
 
 function sceneNodeTypeSupportsMaterials(nodeType: SceneNodeType | string | null | undefined): boolean {
   const normalized = normalizeSceneNodeType(nodeType)
-  return normalized !== 'Light' && normalized !== 'Group' && normalized !== 'Camera' && normalized !== 'WarpGate'
+  return (
+    normalized !== 'Light'
+    && normalized !== 'Group'
+    && normalized !== 'Camera'
+    && normalized !== 'WarpGate'
+    && normalized !== 'Guideboard'
+  )
 }
 
 function extractMaterialProps(material: SceneNodeMaterial | undefined | null): SceneMaterialProps {

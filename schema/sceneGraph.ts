@@ -65,6 +65,12 @@ const MATERIAL_TEXTURE_SLOTS: SceneMaterialTextureSlot[] = [
   'displacement',
 ];
 
+const GUIDEBOARD_MARKER_RADIUS = 0.45
+const GUIDEBOARD_MARKER_WIDTH_SEGMENTS = 24
+const GUIDEBOARD_MARKER_HEIGHT_SEGMENTS = 18
+const GUIDEBOARD_MARKER_COLOR = 0x9c27b0
+const GUIDEBOARD_MARKER_OPACITY = 0.28
+
 export interface SceneGraphBuildResult {
   root: THREE.Group;
   warnings: string[];
@@ -561,6 +567,8 @@ class SceneGraphBuilder {
         return this.buildMeshNode(node);
       case 'WarpGate':
         return this.buildWarpGateNode(node);
+      case 'Guideboard':
+        return this.buildGuideboardNode(node);
       case 'Camera':
         this.warn(`暂不支持相机节点 ${node.name ?? node.id}`);
         return null;
@@ -643,6 +651,43 @@ class SceneGraphBuilder {
     group.name = node.name ?? 'Warp Gate';
     this.applyTransform(group, node);
     this.applyVisibility(group, node);
+
+    if (Array.isArray(node.children) && node.children.length) {
+      await this.buildNodes(node.children as SceneNodeWithExtras[], group);
+    }
+
+    return group;
+  }
+
+  private async buildGuideboardNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const group = new THREE.Group();
+    group.name = node.name ?? 'Guideboard';
+    this.applyTransform(group, node);
+    this.applyVisibility(group, node);
+
+    const geometry = new THREE.SphereGeometry(
+      GUIDEBOARD_MARKER_RADIUS,
+      GUIDEBOARD_MARKER_WIDTH_SEGMENTS,
+      GUIDEBOARD_MARKER_HEIGHT_SEGMENTS,
+    );
+    const material = new THREE.MeshBasicMaterial({
+      color: GUIDEBOARD_MARKER_COLOR,
+      transparent: true,
+      opacity: GUIDEBOARD_MARKER_OPACITY,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const marker = new THREE.Mesh(geometry, material);
+    marker.name = `${group.name} Marker`;
+    marker.castShadow = false;
+    marker.receiveShadow = false;
+    marker.renderOrder = 1;
+    marker.userData = {
+      ...(marker.userData ?? {}),
+      guideboardMarker: true,
+    };
+    group.add(marker);
+    this.recordMeshStatistics(marker);
 
     if (Array.isArray(node.children) && node.children.length) {
       await this.buildNodes(node.children as SceneNodeWithExtras[], group);
