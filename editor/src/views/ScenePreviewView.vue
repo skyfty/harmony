@@ -1836,39 +1836,7 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
 	} else {
 		tempQuaternion.identity()
 	}
-	const desiredDistance = ownerObject
-		? Math.max(DEFAULT_OBJECT_RADIUS, computeObjectBoundingRadius(ownerObject))
-		: DEFAULT_OBJECT_RADIUS
 	const destination = focusPoint.clone()
-	let usedTargetOrientation = false
-	if (ownerObject) {
-		ownerObject.getWorldDirection(tempDirection)
-		tempDirection.y = 0
-		if (tempDirection.lengthSq() < 1e-6) {
-			tempDirection.set(0, 0, -1)
-			tempDirection.applyQuaternion(tempQuaternion)
-			tempDirection.y = 0
-		}
-		if (tempDirection.lengthSq() >= 1e-6) {
-			tempDirection.normalize().multiplyScalar(desiredDistance)
-			destination.sub(tempDirection)
-			usedTargetOrientation = true
-		}
-	}
-	if (!usedTargetOrientation) {
-		tempDirection.copy(activeCamera.position).sub(focusPoint)
-		tempDirection.y = 0
-		if (tempDirection.lengthSq() < 1e-6 && ownerObject) {
-			tempDirection.set(0, 0, -1)
-			tempDirection.applyQuaternion(tempQuaternion)
-			tempDirection.y = 0
-		}
-		if (tempDirection.lengthSq() < 1e-6) {
-			tempDirection.set(0, 0, 1)
-		}
-		tempDirection.normalize().multiplyScalar(desiredDistance)
-		destination.add(tempDirection)
-	}
 	destination.y = CAMERA_HEIGHT
 	const lookPoint = focusPoint.clone()
 	lookPoint.y = CAMERA_HEIGHT
