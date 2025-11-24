@@ -161,6 +161,7 @@ import {
   createGuideboardComponentState,
   clampDisplayBoardComponentProps,
   cloneDisplayBoardComponentProps,
+  createDisplayBoardComponentState,
   clampViewPointComponentProps,
   cloneViewPointComponentProps,
   createViewPointComponentState,
@@ -481,10 +482,30 @@ function cloneComponentState(state: SceneNodeComponentState<any>, typeOverride?:
   }
 }
 
+function shouldAutoAttachDisplayBoard(node: SceneNode): boolean {
+  const userData = node.userData as Record<string, unknown> | undefined
+  if (userData) {
+    const directFlag = userData['displayBoard'] === true || userData['isDisplayBoard'] === true
+    if (directFlag) {
+      return true
+    }
+  }
+  const typeName = typeof node.nodeType === 'string' ? node.nodeType.trim().toLowerCase() : ''
+  if (typeName === 'displayboard') {
+    return true
+  }
+  const nodeName = typeof node.name === 'string' ? node.name.trim() : ''
+  if (nodeName.length && DISPLAY_BOARD_NAME_PATTERN.test(nodeName)) {
+    return true
+  }
+  return false
+}
+
 function normalizeNodeComponents(
   node: SceneNode,
   components?: SceneNodeComponentMap,
   options: {
+    attachDisplayBoard?: boolean
     attachGuideboard?: boolean
     attachViewPoint?: boolean
     attachWarpGate?: boolean
@@ -541,6 +562,7 @@ function normalizeNodeComponents(
   const existingDisplayBoard = normalized[DISPLAY_BOARD_COMPONENT_TYPE] as
     | SceneNodeComponentState<DisplayBoardComponentProps>
     | undefined
+  const shouldAttachDisplayBoard = options.attachDisplayBoard ?? shouldAutoAttachDisplayBoard(node)
   if (existingDisplayBoard) {
     const nextProps = cloneDisplayBoardComponentProps(
       clampDisplayBoardComponentProps(existingDisplayBoard.props as Partial<DisplayBoardComponentProps>),
@@ -566,6 +588,10 @@ function normalizeNodeComponents(
       enabled: existingDisplayBoard.enabled ?? true,
       props: nextProps,
       metadata: clonedMetadata,
+    }
+  } else if (shouldAttachDisplayBoard) {
+    normalized[DISPLAY_BOARD_COMPONENT_TYPE] = {
+      ...createDisplayBoardComponentState(node, undefined, { id: generateUuid(), enabled: true }),
     }
   }
 
@@ -2802,6 +2828,7 @@ function viewportSettingsEqual(a: SceneViewportSettings, b: SceneViewportSetting
 }
 
 const GUIDEBOARD_NAME_PATTERN = /^Guideboard(?:\b|$)/i
+const DISPLAY_BOARD_NAME_PATTERN = /^Display\s*Board(?:\b|$)/i
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== 'object') {
@@ -2983,6 +3010,41 @@ function evaluateViewPointAttributes(
   sanitizedUserData = mutated ? (Object.keys(next).length ? next : undefined) : userData
 
   return { sanitizedUserData, shouldAttachViewPoint, componentOverrides }
+}
+
+function evaluateDisplayBoardAttributes(
+  userData: Record<string, unknown> | undefined,
+  nodeName: string | undefined,
+): { sanitizedUserData?: Record<string, unknown>; shouldAttachDisplayBoard: boolean } {
+  let shouldAttachDisplayBoard = false
+  let sanitizedUserData: Record<string, unknown> | undefined = userData
+
+  if (userData) {
+    const next: Record<string, unknown> = {}
+    let mutated = false
+
+    for (const [key, value] of Object.entries(userData)) {
+      if (key === 'displayBoard' || key === 'isDisplayBoard') {
+        mutated = true
+        if (value === true) {
+          shouldAttachDisplayBoard = true
+        }
+        continue
+      }
+      next[key] = value
+    }
+
+    sanitizedUserData = mutated ? (Object.keys(next).length ? next : undefined) : userData
+  }
+
+  if (!shouldAttachDisplayBoard) {
+    const trimmedName = typeof nodeName === 'string' ? nodeName.trim() : ''
+    if (trimmedName.length && DISPLAY_BOARD_NAME_PATTERN.test(trimmedName)) {
+      shouldAttachDisplayBoard = true
+    }
+  }
+
+  return { sanitizedUserData, shouldAttachDisplayBoard }
 }
 
 function evaluateGuideboardAttributes(
@@ -3843,7 +3905,8 @@ function cloneEditorFlags(flags?: SceneNodeEditorFlags | null): SceneNodeEditorF
 function cloneNode(node: SceneNode): SceneNode {
   const clonedUserData = clonePlainRecord(node.userData ?? undefined)
   const viewPointResult = evaluateViewPointAttributes(clonedUserData)
-  const guideboardResult = evaluateGuideboardAttributes(viewPointResult.sanitizedUserData, node.name)
+  const displayBoardResult = evaluateDisplayBoardAttributes(viewPointResult.sanitizedUserData, node.name)
+  const guideboardResult = evaluateGuideboardAttributes(displayBoardResult.sanitizedUserData, node.name)
   const warpGateResult = evaluateWarpGateAttributes(guideboardResult.sanitizedUserData)
 
   const workingNode: SceneNode = {
@@ -3855,6 +3918,7 @@ function cloneNode(node: SceneNode): SceneNode {
     workingNode,
     node.components,
     {
+      attachDisplayBoard: displayBoardResult.shouldAttachDisplayBoard,
       attachGuideboard: guideboardResult.shouldAttachGuideboard,
       attachViewPoint: viewPointResult.shouldAttachViewPoint,
       attachWarpGate: warpGateResult.shouldAttachWarpGate,
@@ -9304,10 +9368,12 @@ export const useSceneStore = defineStore('scene', {
         }
 
         const viewPointEvaluation = evaluateViewPointAttributes(undefined)
-        const guideboardEvaluation = evaluateGuideboardAttributes(viewPointEvaluation.sanitizedUserData, newNode.name)
+        const displayBoardEvaluation = evaluateDisplayBoardAttributes(viewPointEvaluation.sanitizedUserData, newNode.name)
+        const guideboardEvaluation = evaluateGuideboardAttributes(displayBoardEvaluation.sanitizedUserData, newNode.name)
         const warpGateEvaluation = evaluateWarpGateAttributes(guideboardEvaluation.sanitizedUserData)
         newNode.userData = warpGateEvaluation.sanitizedUserData
         const componentMap = normalizeNodeComponents(newNode, placeholder.components, {
+          attachDisplayBoard: displayBoardEvaluation.shouldAttachDisplayBoard,
           attachGuideboard: guideboardEvaluation.shouldAttachGuideboard,
           attachViewPoint: viewPointEvaluation.shouldAttachViewPoint,
           attachWarpGate: warpGateEvaluation.shouldAttachWarpGate,
@@ -9630,7 +9696,8 @@ export const useSceneStore = defineStore('scene', {
         (payload.userData ?? payload.object.userData) as Record<string, unknown> | undefined,
       )
       const viewPointEvaluation = evaluateViewPointAttributes(initialUserData)
-      const guideboardEvaluation = evaluateGuideboardAttributes(viewPointEvaluation.sanitizedUserData, nodeName)
+      const displayBoardEvaluation = evaluateDisplayBoardAttributes(viewPointEvaluation.sanitizedUserData, nodeName)
+      const guideboardEvaluation = evaluateGuideboardAttributes(displayBoardEvaluation.sanitizedUserData, nodeName)
       const warpGateEvaluation = evaluateWarpGateAttributes(guideboardEvaluation.sanitizedUserData)
 
       const node: SceneNode = {
@@ -9653,6 +9720,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       node.components = normalizeNodeComponents(node, payload.components, {
+        attachDisplayBoard: displayBoardEvaluation.shouldAttachDisplayBoard,
         attachGuideboard: guideboardEvaluation.shouldAttachGuideboard,
         attachViewPoint: viewPointEvaluation.shouldAttachViewPoint,
         attachWarpGate: warpGateEvaluation.shouldAttachWarpGate,
