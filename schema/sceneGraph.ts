@@ -146,6 +146,7 @@ class SceneGraphBuilder {
     this.groundTextureLoader = new THREE.TextureLoader(this.loadingManager);
     this.materialFactory = new SceneMaterialFactory({
       provider: this.resourceCache,
+      resources: document.resourceSummary?.assets ?? [],
       loadingManager: this.loadingManager,
       warn: (message) => this.warn(message),
       textureLoader: materialFactoryOverrides.textureLoader,

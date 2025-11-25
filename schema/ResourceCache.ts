@@ -1,6 +1,5 @@
 import { AssetLoader, type AssetCacheEntry, type AssetSource } from './assetCache';
 import type { SceneGraphBuildOptions } from './sceneGraph';
-import type { MaterialAssetSource, MaterialAssetProvider } from './material';
 import type { SceneJsonExportDocument } from '@harmony/schema';
 
 const NodeBuffer: { from: (data: string, encoding: string) => any } | undefined =
@@ -25,7 +24,7 @@ const defaultWarnHandler = (message: string): void => {
   }
 };
 
-export default class ResourceCache implements MaterialAssetProvider {
+export default class ResourceCache {
   private packageEntries: Map<string, { provider: string; value: string } | null> = new Map();
   private readonly assetEntryCache = new Map<string, Promise<AssetCacheEntry | null>>();
   private document: SceneJsonExportDocument;
@@ -66,7 +65,7 @@ export default class ResourceCache implements MaterialAssetProvider {
     }
   }
 
-  async acquireAssetSource(assetId: string): Promise<MaterialAssetSource | null> {
+  async acquireAssetSource(assetId: string): Promise<AssetSource | null> {
     const entry = await this.acquireAssetEntry(assetId);
     if (!entry) {
       return null;

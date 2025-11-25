@@ -18,6 +18,10 @@ import type { SceneExportOptions, GLBExportSettings } from '@/types/scene-export
 import { AssetCache, AssetLoader } from '@schema/assetCache'
 import ResourceCache from '@schema/ResourceCache'
 import { findObjectByPath, loadAssetObject } from '@schema/modelAssetLoader'
+import { getCachedModelObject, getOrLoadModelObject } from '@/stores/modelObjectCache'
+import { loadObjectFromFile } from '@/utils/assetImport'
+
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
 
 type RemovedSceneObject = {
     parent: THREE.Object3D
@@ -379,7 +383,7 @@ type OutlineCandidate = {
   sanitizedNode: SceneNode
 }
 
-export async function sanitizeSceneDocumentForJsonExport(
+async function sanitizeSceneDocumentForJsonExport(
   document: SceneJsonExportDocument,
   options: SceneExportOptions,
 ): Promise<SceneJsonExportDocument> {
@@ -390,7 +394,7 @@ export async function sanitizeSceneDocumentForJsonExport(
 
   let outlineMeshMap: SceneOutlineMeshMap | undefined
   if (options.lazyLoadMeshes) {
-    outlineMeshMap = await generateOutlineMeshesForCandidates(outlineCandidates, document, options)
+    outlineMeshMap = await generateOutlineMeshesForCandidates(outlineCandidates, options)
   }
 
   const sanitizedDocument: SceneJsonExportDocument = {
@@ -530,18 +534,13 @@ function sanitizeNodeForJsonExport(
 
 async function generateOutlineMeshesForCandidates(
   candidates: OutlineCandidate[],
-  document: SceneJsonExportDocument,
   options: SceneExportOptions,
 ): Promise<SceneOutlineMeshMap> {
   const outlineMeshMap: SceneOutlineMeshMap = {}
   if (!candidates.length || !options.lazyLoadMeshes) {
     return outlineMeshMap
   }
-
-  const assetCache = new AssetCache({ maxEntries: 4 })
-  const assetLoader = new AssetLoader(assetCache)
-  const resourceCache = new ResourceCache(document, {}, assetLoader)
-  const assetObjectCache = new Map<string, Promise<THREE.Object3D | null>>()
+  const assetCacheStore = useAssetCacheStore()
 
   for (const entry of candidates) {
     const assetId = entry.sourceNode.sourceAssetId
@@ -550,14 +549,20 @@ async function generateOutlineMeshesForCandidates(
     }
 
     if (!outlineMeshMap[assetId]) {
-      if (!assetObjectCache.has(assetId)) {
-        assetObjectCache.set(assetId, loadAssetObject(resourceCache, assetId))
-      }
-      const baseObject = await assetObjectCache.get(assetId)!
+      let baseObject = getCachedModelObject(assetId)
+      if (!baseObject) {
+        let file = assetCacheStore.createFileFromCache(assetId)
+        if (!file) {
+          await assetCacheStore.loadFromIndexedDb(assetId)
+          file = assetCacheStore.createFileFromCache(assetId)
+        }
+        if (file) {
+          baseObject = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file))
+        }
+      }      
       if (!baseObject) {
         continue
       }
-
       baseObject.updateMatrixWorld(true)
       const targetSource = findObjectByPath(baseObject, entry.sourceNode.importMetadata?.objectPath ?? null) ?? baseObject
       const targetClone = targetSource.clone(true)

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import type {
+  AssetCacheEntry,
   SceneMaterial,
   SceneMaterialProps,
   SceneMaterialTextureRef,
@@ -8,19 +9,14 @@ import type {
   SceneMaterialTextureSlotMap,
   SceneMaterialType,
   SceneNodeMaterial,
+  SceneResourceSummaryEntry,
 } from '@harmony/schema';
-
-export type MaterialAssetSource =
-  | { kind: 'arraybuffer'; data: ArrayBuffer }
-  | { kind: 'data-url'; dataUrl: string }
-  | { kind: 'remote-url'; url: string };
-
-export interface MaterialAssetProvider {
-  acquireAssetSource(assetId: string): Promise<MaterialAssetSource | null>;
-}
+import type ResourceCache from './ResourceCache';
+import { type AssetSource } from './assetCache';
 
 export interface SceneMaterialFactoryOptions {
-  provider: MaterialAssetProvider;
+  provider: ResourceCache;
+  resources: SceneResourceSummaryEntry[];
   loadingManager?: THREE.LoadingManager;
   textureLoader?: THREE.TextureLoader;
   hdrLoader?: RGBELoader;
@@ -122,17 +118,18 @@ export class SceneMaterialFactory {
   private readonly materialTemplates = new Map<string, THREE.Material>();
   private readonly textureCache = new Map<string, Promise<THREE.Texture | null>>();
   private readonly disposableUrls = new Set<string>();
-  private readonly provider: MaterialAssetProvider;
+  private readonly provider: ResourceCache;
   private readonly warn?: (message: string) => void;
   private readonly loadingManager: THREE.LoadingManager;
   private readonly textureLoader: THREE.TextureLoader;
   private readonly hdrLoader: RGBELoader | null;
-
+  private readonly resourceEntrys: SceneResourceSummaryEntry[];
   constructor(options: SceneMaterialFactoryOptions) {
     if (!options?.provider) {
       throw new Error('SceneMaterialFactory requires a material asset provider');
     }
     this.provider = options.provider;
+    this.resourceEntrys = options.resources ?? [];
     this.warn = options.warn;
     this.loadingManager = options.loadingManager ?? new THREE.LoadingManager();
     if (options.textureLoader) {
@@ -425,7 +422,7 @@ export class SceneMaterialFactory {
           return;
         }
         try {
-          const texture = await this.ensureTexture(ref.assetId, ref.name, ref.settings ?? null);
+          const texture = await this.ensureTexture(ref.assetId, ref.settings ?? null);
           if (texture) {
             const assignment = MATERIAL_TEXTURE_ASSIGNMENTS[slot];
             resolved[assignment.key] = texture;
@@ -456,7 +453,6 @@ export class SceneMaterialFactory {
 
   private async ensureTexture(
     assetId: string,
-    name: string | undefined,
     settings: Partial<SceneMaterialTextureSettings> | null,
   ): Promise<THREE.Texture | null> {
     const signature = `${assetId}::${textureSettingsSignature(settings as SceneMaterialTextureSettings | null)}`;
@@ -464,7 +460,7 @@ export class SceneMaterialFactory {
       return this.textureCache.get(signature)!;
     }
 
-    const pending = this.createTextureInstance(assetId, name, settings)
+    const pending = this.createTextureInstance(assetId, settings)
       .catch((error) => {
         console.warn('纹理加载失败', assetId, error);
         this.warn?.(`纹理 ${assetId} 加载失败`);
@@ -477,79 +473,25 @@ export class SceneMaterialFactory {
 
   private async createTextureInstance(
     assetId: string,
-    name: string | undefined,
     settings: Partial<SceneMaterialTextureSettings> | null,
   ): Promise<THREE.Texture | null> {
-    const source = await this.provider.acquireAssetSource(assetId);
-    if (!source) {
-      return null;
+    let texture: THREE.Texture | null = null;
+    const entry = await this.provider.acquireAssetEntry(assetId);
+    if (entry) {
+        const resourceEntry = this.resourceEntrys.find((entry) => entry.assetId === assetId);
+        if (resourceEntry) {
+          texture = await this.loadTexture(entry, {
+            hdr: resourceEntry?.type === 'hdri'
+          });
+        }
     }
-
-    const url = await this.createTextureUrlFromSource(assetId, source);
-    if (!url) {
-      return null;
+    if (texture !== null) {
+      applyTextureSettings(texture, settings);
     }
-
-    const texture = await this.loadTextureFromUrl(url, {
-      hdr: this.isHdrSource(assetId, name, source, url),
-    });
-    if (!texture) {
-      return null;
-    }
-
-    applyTextureSettings(texture, settings);
     return texture;
   }
 
-  private async createTextureUrlFromSource(
-    assetId: string,
-    source: MaterialAssetSource,
-  ): Promise<string | null> {
-    switch (source.kind) {
-      case 'remote-url':
-        return source.url;
-      case 'data-url':
-        return normalizeDataUrlMime(source.dataUrl, assetId);
-      case 'arraybuffer': {
-        const mime = inferMimeType(assetId) ?? 'application/octet-stream';
-        const blob = new Blob([source.data], { type: mime });
-        const url = URL.createObjectURL(blob);
-        this.disposableUrls.add(url);
-        return url;
-      }
-      default:
-        return null;
-    }
-  }
-
-  private isHdrSource(assetId: string, name: string | undefined, source: MaterialAssetSource, url: string | null): boolean {
-    const matchesHdrExtension = (value: string | null | undefined) => {
-      if (!value) {
-        return false;
-      }
-      const sanitized = value.split('?')[0]?.split('#')[0] ?? value;
-      return HDR_EXTENSION_PATTERN.test(sanitized);
-    };
-
-    if (matchesHdrExtension(assetId)) {
-      return true;
-    }
-    if (matchesHdrExtension(url)) {
-      return true;
-    }
-    if (name && matchesHdrExtension(name)) {
-      return true;
-    }
-    if (url && HDR_DATA_URL_PATTERN.test(url)) {
-      return true;
-    }
-    if (source.kind === 'data-url' && HDR_DATA_URL_PATTERN.test(source.dataUrl)) {
-      return true;
-    }
-    return false;
-  }
-
-  private async loadTextureFromUrl(url: string, options?: { hdr?: boolean }): Promise<THREE.Texture | null> {
+  private async loadTexture(asset: AssetCacheEntry, options?: { hdr?: boolean }): Promise<THREE.Texture | null> {
     if (options?.hdr && this.hdrLoader) {
       try {
         const texture = await this.hdrLoader.loadAsync(url);
@@ -622,59 +564,3 @@ function resolveWrapMode(mode: string): THREE.Wrapping {
   }
 }
 
-function normalizeDataUrlMime(dataUrl: string, assetId: string): string {
-  if (!dataUrl.startsWith('data:')) {
-    return dataUrl;
-  }
-  const commaIndex = dataUrl.indexOf(',');
-  if (commaIndex === -1) {
-    return dataUrl;
-  }
-  const header = dataUrl.slice(0, commaIndex);
-  if (header.includes(';base64')) {
-    return dataUrl;
-  }
-  const mime = inferMimeType(assetId) ?? 'application/octet-stream';
-  return `data:${mime};base64,${dataUrl.slice(commaIndex + 1)}`;
-}
-
-function inferMimeType(assetId: string): string | null {
-  const lower = assetId.toLowerCase();
-  if (lower.endsWith('.png')) {
-    return 'image/png';
-  }
-  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
-    return 'image/jpeg';
-  }
-  if (lower.endsWith('.webp')) {
-    return 'image/webp';
-  }
-  if (lower.endsWith('.ktx2')) {
-    return 'image/ktx2';
-  }
-  if (lower.endsWith('.ktx')) {
-    return 'image/ktx';
-  }
-  if (lower.endsWith('.hdr')) {
-    return 'image/vnd.radiance';
-  }
-  if (lower.endsWith('.dds')) {
-    return 'image/vnd-ms.dds';
-  }
-  if (lower.endsWith('.gif')) {
-    return 'image/gif';
-  }
-  if (lower.endsWith('.bmp')) {
-    return 'image/bmp';
-  }
-  if (lower.endsWith('.tga')) {
-    return 'image/x-tga';
-  }
-  if (lower.endsWith('.glb')) {
-    return 'model/gltf-binary';
-  }
-  if (lower.endsWith('.gltf')) {
-    return 'model/gltf+json';
-  }
-  return null;
-}

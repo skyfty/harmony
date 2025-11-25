@@ -868,6 +868,7 @@ let lastPreviewBroadcastRevision = 0
 
 async function broadcastScenePreview(document:StoredSceneDocument) {
   try {
+    
     const exportDocument = await prepareJsonSceneExport(document, SCENE_PREVIEW_EXPORT_OPTIONS)
 
     let revision = Date.now()
