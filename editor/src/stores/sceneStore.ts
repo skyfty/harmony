@@ -104,8 +104,8 @@ import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { generateUuid } from '@/utils/uuid'
 import { getCachedModelObject, getOrLoadModelObject } from './modelObjectCache'
-import { createWallGroup, updateWallGroup } from '@/utils/wallMesh'
-import { createSurfaceMesh } from '@/utils/surfaceMesh'
+import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
+import { createSurfaceMesh } from '@schema/surfaceMesh'
 import { computeBlobHash, blobToDataUrl, dataUrlToBlob, inferBlobFilename, extractExtension, ensureExtension } from '@/utils/blob'
 import {
   buildBehaviorPrefabFilename,

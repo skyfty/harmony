@@ -64,9 +64,9 @@ import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracki
 import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-viewport-transform-group'
 import type { PlaceholderOverlayState } from '@/types/scene-viewport-placeholder-overlay-state'
 import type { BuildTool } from '@/types/build-tool'
-import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache } from '@/utils/groundMesh'
-import { createWallGroup, updateWallGroup } from '@/utils/wallMesh'
-import { createSurfaceMesh, updateSurfaceMesh } from '@/utils/surfaceMesh'
+import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache } from '@schema/groundMesh'
+import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
+import { createSurfaceMesh, updateSurfaceMesh } from '@schema/surfaceMesh'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
 import {
   VIEW_POINT_COMPONENT_TYPE,
