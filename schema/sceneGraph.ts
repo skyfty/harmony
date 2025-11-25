@@ -164,22 +164,27 @@ class SceneGraphBuilder {
         if (size > 0 || !this.assetSizeMap.has(entry.assetId)) {
           this.assetSizeMap.set(entry.assetId, size);
         }
-        aggregatedTotal += size;
-        if (this.isSummaryAssetPreloaded(entry)) {
+        const normalizedType = typeof entry.type === 'string' ? entry.type.toLowerCase() : '';
+        const isMeshAsset = normalizedType === 'model' || normalizedType === 'mesh';
+        const includeAssetBytes = !(this.lazyLoadMeshes && isMeshAsset);
+        if (includeAssetBytes) {
+          aggregatedTotal += size;
+        }
+        if (includeAssetBytes && this.isSummaryAssetPreloaded(entry)) {
           this.assetLoadedMap.set(entry.assetId, size);
           aggregatedPreloaded += size;
         }
       });
 
-      const resolvedTotal = Number.isFinite(summary.totalBytes) && summary.totalBytes > 0 ? summary.totalBytes : aggregatedTotal;
-      this.progressBytesTotal = resolvedTotal;
+      this.progressBytesTotal = aggregatedTotal;
 
-      const resolvedPreloaded = Number.isFinite(summary.embeddedBytes) && summary.embeddedBytes >= 0
-        ? summary.embeddedBytes
-        : aggregatedPreloaded;
+      const fallbackEmbedded = Number.isFinite(summary.embeddedBytes) && summary.embeddedBytes >= 0
+        ? Math.min(summary.embeddedBytes, aggregatedTotal)
+        : 0;
+      const resolvedPreloaded = aggregatedPreloaded > 0 ? aggregatedPreloaded : fallbackEmbedded;
 
       if (resolvedPreloaded > 0) {
-        const cappedPreloaded = resolvedTotal > 0 ? Math.min(resolvedPreloaded, resolvedTotal) : resolvedPreloaded;
+        const cappedPreloaded = aggregatedTotal > 0 ? Math.min(resolvedPreloaded, aggregatedTotal) : resolvedPreloaded;
         this.progressBytesLoaded = cappedPreloaded;
       }
     }

@@ -95,9 +95,12 @@ type ResourceProgressItem = {
 	label: string
 	kind: SceneGraphResourceProgressInfo['kind']
 	progress: number
+	bytesTotal: number
+	bytesLoaded: number
 }
 
 const resourceProgressItems = ref<ResourceProgressItem[]>([])
+const resourceAssetInfoMap = new Map<string, { name: string; bytes: number }>()
 const RESOURCE_PROGRESS_COMPLETE_PATTERNS = ['下载完成', '加载完成'] as const
 
 const resourceProgressPercent = computed(() => {
@@ -176,23 +179,55 @@ function updateResourceProgressDetails(info: SceneGraphResourceProgressInfo): vo
 	if (!assetId) {
 		return
 	}
-	const label = info.message && info.message.trim().length ? info.message : assetId
+	const assetMeta = resourceAssetInfoMap.get(assetId)
+	const fallbackLabel = info.message && info.message.trim().length ? info.message : assetId
+	const label = assetMeta?.name ?? fallbackLabel
 	const existingIndex = resourceProgressItems.value.findIndex((item) => item.id === assetId)
 	const previousItem = existingIndex >= 0 ? resourceProgressItems.value[existingIndex] : null
 	const previous = previousItem?.progress ?? 0
 	const normalized = normalizeResourceProgressPercent(info, previous)
+	const progress = Math.max(previous, normalized)
+	const bytesTotal = assetMeta?.bytes ?? previousItem?.bytesTotal ?? 0
+	let bytesLoaded = previousItem?.bytesLoaded ?? 0
+	if (bytesTotal > 0) {
+		const computedLoaded = Math.round((bytesTotal * progress) / 100)
+		if (computedLoaded > bytesLoaded) {
+			bytesLoaded = Math.min(bytesTotal, computedLoaded)
+		}
+	}
 	const nextItem: ResourceProgressItem = {
 		id: assetId,
 		assetId,
 		label,
 		kind: info.kind,
-		progress: Math.max(previous, normalized),
+		progress,
+		bytesTotal,
+		bytesLoaded,
 	}
 	if (existingIndex >= 0) {
 		resourceProgressItems.value.splice(existingIndex, 1, nextItem)
 	} else {
 		resourceProgressItems.value.push(nextItem)
 	}
+}
+
+function refreshResourceAssetInfo(document: SceneJsonExportDocument | null | undefined): void {
+	resourceAssetInfoMap.clear()
+	if (!document?.resourceSummary || !Array.isArray(document.resourceSummary.assets)) {
+		return
+	}
+	document.resourceSummary.assets.forEach((entry) => {
+		if (!entry || typeof entry.assetId !== 'string') {
+			return
+		}
+		const assetId = entry.assetId.trim()
+		if (!assetId) {
+			return
+		}
+		const name = typeof entry.name === 'string' && entry.name.trim().length ? entry.name.trim() : assetId
+		const bytes = Number.isFinite(entry.bytes) && entry.bytes > 0 ? entry.bytes : 0
+		resourceAssetInfoMap.set(assetId, { name, bytes })
+	})
 }
 
 const previewComponentManager = new ComponentManager()
@@ -3638,6 +3673,7 @@ function refreshAnimations() {
 
 async function updateScene(document: SceneJsonExportDocument) {
 	resetAssetResolutionCaches()
+	refreshResourceAssetInfo(document)
 	const skyboxSettings = resolveDocumentSkybox(document)
 	applySkyboxSettings(skyboxSettings)
 	const environmentSettings = resolveDocumentEnvironment(document)
@@ -3917,6 +3953,12 @@ onBeforeUnmount(() => {
 							<span class="scene-preview__resource-name">{{ item.label }}</span>
 							<span class="scene-preview__resource-value">{{ item.progress }}%</span>
 						</div>
+							<div
+								v-if="item.bytesTotal > 0"
+								class="scene-preview__resource-bytes"
+							>
+								{{ formatByteSize(item.bytesLoaded) }} / {{ formatByteSize(item.bytesTotal) }}
+							</div>
 						<div class="scene-preview__progress-bar scene-preview__resource-progress-bar">
 							<div
 								class="scene-preview__progress-bar-fill"
@@ -4424,6 +4466,12 @@ onBeforeUnmount(() => {
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
+}
+
+.scene-preview__resource-bytes {
+	font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+	font-size: 0.72rem;
+	color: rgba(245, 247, 255, 0.65);
 }
 
 .scene-preview__resource-value {
