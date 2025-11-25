@@ -4506,7 +4506,7 @@ function normalizeHttpUrl(value: string | null | undefined): string | null {
 function resolveAssetDownloadUrl(
   assetId: string,
   indexEntry: AssetIndexEntry | undefined,
-  catalog: Record<string, ProjectAsset[]>,
+  asset: ProjectAsset|null,
   packageMap: Record<string, string>,
 ): string | null {
   const pickUrl = (input: unknown): string | null => {
@@ -4540,7 +4540,6 @@ function resolveAssetDownloadUrl(
     return mapUrl
   }
 
-  const asset = getAssetFromCatalog(catalog, assetId)
   if (asset) {
     const candidate = normalizeHttpUrl(asset.downloadUrl) ?? normalizeHttpUrl(asset.description)
     if (candidate) {
@@ -4718,8 +4717,15 @@ export async function calculateSceneResourceSummary(
     if (!assetId || processed.has(assetId)) {
       return
     }
+    const asset = getAssetFromCatalog(assetCatalog, assetId)
     const bytes = estimateInlineAssetByteSize(value)
-    const entry: SceneResourceSummaryEntry = { assetId, bytes, embedded: true, source: 'embedded' }
+    const entry: SceneResourceSummaryEntry = {
+       assetId, 
+       bytes,
+       type: asset?.type ?? undefined,
+      embedded: true, 
+      source: 'embedded' 
+      }
     summary.assets.push(entry)
     recordTextureAssetEntry(assetId, entry)
     summary.totalBytes += bytes
@@ -4747,7 +4753,8 @@ export async function calculateSceneResourceSummary(
     const indexEntry = assetIndex[assetId]
     const cacheEntry = assetCache.getEntry(assetId)
     let bytes = cacheEntry?.status === 'cached' && cacheEntry.size > 0 ? cacheEntry.size : 0
-    const downloadUrl = resolveAssetDownloadUrl(assetId, indexEntry, assetCatalog, packageMap)
+    const asset = getAssetFromCatalog(assetCatalog, assetId)
+    const downloadUrl = resolveAssetDownloadUrl(assetId, indexEntry, asset, packageMap)
 
     if (!bytes && options.embedResources) {
       // If resources are embedded, prefer cached array buffer size if available.
@@ -4757,6 +4764,8 @@ export async function calculateSceneResourceSummary(
     if (bytes > 0) {
       const entry: SceneResourceSummaryEntry = {
         assetId,
+        name:asset?.name ?? undefined,
+        type: asset?.type ?? undefined,
         bytes,
         embedded: false,
         source: 'remote',
