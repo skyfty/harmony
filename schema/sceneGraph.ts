@@ -38,7 +38,7 @@ import {
   cloneWarpGateComponentProps,
 } from './components/definitions/warpGateComponent';
 import { createFileFromEntry } from '@schema/modelAssetLoader'
-import { loadObjectFromFile } from '@/utils/assetImport'
+import { loadObjectFromFile } from '@schema/assetImport'
 
 type SceneNodeWithExtras = SceneNode & {
   light?: {

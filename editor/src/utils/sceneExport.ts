@@ -19,7 +19,7 @@ import { AssetCache, AssetLoader } from '@schema/assetCache'
 import ResourceCache from '@schema/ResourceCache'
 import { findObjectByPath, loadAssetObject } from '@schema/modelAssetLoader'
 import { getCachedModelObject, getOrLoadModelObject } from '@/stores/modelObjectCache'
-import { loadObjectFromFile } from '@/utils/assetImport'
+import { loadObjectFromFile } from '@schema/assetImport'
 
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 

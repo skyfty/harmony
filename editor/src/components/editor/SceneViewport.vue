@@ -43,7 +43,7 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { EditorTool } from '@/types/editor-tool'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { getCachedModelObject, getOrLoadModelObject } from '@/stores/modelObjectCache'
-import { loadObjectFromFile } from '@/utils/assetImport'
+import { loadObjectFromFile } from '@schema/assetImport'
 import { createPrimitiveMesh } from '@schema/geometry'
 import type { CameraProjection, CameraControlMode } from '@harmony/schema'
 

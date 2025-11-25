@@ -512,7 +512,7 @@ export async function fetchAssetBlob(
     throw new Error('资源下载失败（无效的下载地址）')
   }
 
-  if (typeof fetch === 'function') {  console.log('使用 fetch 下载资源：', url);
+  if (typeof fetch === 'function') {
 
     let lastNetworkError: unknown = null
     for (const candidate of candidates) {

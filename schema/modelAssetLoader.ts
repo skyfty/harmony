@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import type ResourceCache from '@schema/ResourceCache'
 import type { AssetCacheEntry } from '@schema/assetCache'
 import type { SceneNodeImportMetadata } from '@harmony/schema'
-import { loadObjectFromFile } from '@/utils/assetImport'
+import { loadObjectFromFile } from '@schema/assetImport'
 
 export function createFileFromEntry(assetId: string, entry: AssetCacheEntry): File | null {
   const filename = entry.filename && entry.filename.trim().length ? entry.filename : `${assetId}.glb`
