@@ -19,7 +19,7 @@ import { subscribeToScenePreview } from '@/utils/previewChannel'
 import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
 import ResourceCache from '@schema/ResourceCache'
 import { AssetCache, AssetLoader, type AssetCacheEntry } from '@schema/assetCache'
-import { loadNodeObject } from '@schema/utils/modelAssetLoader'
+import { loadNodeObject } from '@schema/modelAssetLoader'
 import { ComponentManager } from '@schema/components/componentManager'
 import {
 	behaviorComponentDefinition,
@@ -3967,9 +3967,6 @@ onBeforeUnmount(() => {
 							/>
 						</div>
 					</div>
-				</div>
-				<div v-if="resourceProgress.label" class="scene-preview__preload-label">
-					{{ resourceProgress.label }}
 				</div>
 			</v-card>
 		</div>

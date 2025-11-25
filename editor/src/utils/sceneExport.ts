@@ -17,7 +17,7 @@ import type {
 import type { SceneExportOptions, GLBExportSettings } from '@/types/scene-export'
 import { AssetCache, AssetLoader } from '@schema/assetCache'
 import ResourceCache from '@schema/ResourceCache'
-import { findObjectByPath, loadAssetObject } from '@schema/utils/modelAssetLoader'
+import { findObjectByPath, loadAssetObject } from '@schema/modelAssetLoader'
 
 type RemovedSceneObject = {
     parent: THREE.Object3D
@@ -389,7 +389,7 @@ export async function sanitizeSceneDocumentForJsonExport(
   const sanitizedNodes = sanitizeNodesForJsonExport(document.nodes, options, removedNodeIds, outlineCandidates)
 
   let outlineMeshMap: SceneOutlineMeshMap | undefined
-  if (options.includeOutlineMeshes !== false) {
+  if (options.lazyLoadMeshes) {
     outlineMeshMap = await generateOutlineMeshesForCandidates(outlineCandidates, document, options)
   }
 
@@ -399,7 +399,7 @@ export async function sanitizeSceneDocumentForJsonExport(
     nodes: sanitizedNodes,
   }
 
-  if (options.includeOutlineMeshes === false) {
+  if (!options.lazyLoadMeshes) {
     if ('outlineMeshMap' in sanitizedDocument) {
       delete sanitizedDocument.outlineMeshMap
     }
@@ -447,7 +447,7 @@ function shouldExcludeNodeForJsonExport(node: SceneNode, options: SceneExportOpt
 }
 
 function shouldGenerateOutlineMeshForNode(node: SceneNode, options: SceneExportOptions): boolean {
-  if (options.includeOutlineMeshes === false) {
+  if (!options.lazyLoadMeshes) {
     return false
   }
   if (!node.sourceAssetId || typeof node.sourceAssetId !== 'string') {
@@ -495,7 +495,7 @@ function sanitizeNodeForJsonExport(
     if ('components' in sanitized) {
       delete sanitized.components
     }
-    if (options.includeOutlineMeshes === false) {
+    if (!options.lazyLoadMeshes) {
       if ('importMetadata' in sanitized) {
         delete sanitized.importMetadata
       }
@@ -534,7 +534,7 @@ async function generateOutlineMeshesForCandidates(
   options: SceneExportOptions,
 ): Promise<SceneOutlineMeshMap> {
   const outlineMeshMap: SceneOutlineMeshMap = {}
-  if (!candidates.length || options.includeOutlineMeshes === false) {
+  if (!candidates.length || !options.lazyLoadMeshes) {
     return outlineMeshMap
   }
 

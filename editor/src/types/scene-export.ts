@@ -15,7 +15,6 @@ export interface SceneExportOptions {
   includeHiddenNodes: boolean
   includeSkeletons: boolean
   includeExtras: boolean
-  includeOutlineMeshes: boolean
   rotateCoordinateSystem: boolean
   lazyLoadMeshes: boolean
 }

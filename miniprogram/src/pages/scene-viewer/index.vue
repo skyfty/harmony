@@ -188,7 +188,7 @@ import { parseSceneDocument, useSceneStore } from '@/stores/sceneStore';
 import { buildSceneGraph, type SceneGraphBuildOptions, type SceneGraphResourceProgress } from '@schema/sceneGraph';
 import ResourceCache from '@schema/ResourceCache';
 import { AssetCache, AssetLoader, type AssetCacheEntry } from '@schema/assetCache';
-import { loadNodeObject } from '@schema/utils/modelAssetLoader';
+import { loadNodeObject } from '@schema/modelAssetLoader';
 import type Viewer from 'viewerjs';
 import type { ViewerOptions } from 'viewerjs';
 import type {

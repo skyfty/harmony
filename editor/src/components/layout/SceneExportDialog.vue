@@ -42,7 +42,6 @@ function getInitialFormState(): SceneExportOptions {
     includeHiddenNodes: props.initialOptions.includeHiddenNodes,
     includeSkeletons: props.initialOptions.includeSkeletons,
     includeExtras: props.initialOptions.includeExtras,
-    includeOutlineMeshes: props.initialOptions.includeOutlineMeshes ?? true,
     rotateCoordinateSystem: !!props.initialOptions.rotateCoordinateSystem,
     lazyLoadMeshes: props.initialOptions.lazyLoadMeshes ?? true,
     format: props.initialOptions.format ?? 'json',
@@ -289,13 +288,6 @@ function handlePublish() {
             v-model="form.includeExtras"
             :disabled="exporting"
             label="Additional extensions"
-            density="compact"
-            hide-details
-          />
-          <v-checkbox
-            v-model="form.includeOutlineMeshes"
-            :disabled="exporting"
-            label="Generate outline meshes"
             density="compact"
             hide-details
           />

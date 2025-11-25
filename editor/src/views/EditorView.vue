@@ -108,7 +108,6 @@ const exportPreferences = ref<SceneExportOptions>({
   includeHiddenNodes: true,
   includeSkeletons: true,
   includeExtras: true,
-  includeOutlineMeshes: true,
   rotateCoordinateSystem: true,
   lazyLoadMeshes: true,
   format: 'json',
@@ -861,7 +860,6 @@ const SCENE_PREVIEW_EXPORT_OPTIONS: SceneExportOptions = {
   includeHiddenNodes: true,
   includeSkeletons: true,
   includeExtras: true,
-  includeOutlineMeshes: true,
   rotateCoordinateSystem: false,
   lazyLoadMeshes: true,
 }

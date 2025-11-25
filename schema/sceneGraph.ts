@@ -37,6 +37,8 @@ import {
   clampWarpGateComponentProps,
   cloneWarpGateComponentProps,
 } from './components/definitions/warpGateComponent';
+import { createFileFromEntry } from '@schema/modelAssetLoader'
+import { loadObjectFromFile } from '@/utils/assetImport'
 
 type SceneNodeWithExtras = SceneNode & {
   light?: {
@@ -977,71 +979,6 @@ class SceneGraphBuilder {
     return prepared;
   }
 
-  private loadObjectFromFile(file: File): Promise<THREE.Object3D> {
-    return new Promise<THREE.Object3D>((resolve, reject) => {
-      const loader = new Loader()
-
-      const handleLoaded = (payload: LoaderLoadedPayload) => {
-        cleanup()
-        if (!payload) {
-          reject(new Error('解析资源失败'))
-          return
-        }
-        resolve(payload as THREE.Object3D)
-      }
-
-      const cleanup = () => {
-        loader.removeEventListener('loaded', handleLoaded)
-      }
-      loader.addEventListener('loaded', handleLoaded)
-
-      try {
-        loader.loadFile(file)
-      } catch (error) {
-        cleanup()
-        reject(error)
-      }
-    })
-  }
-
-  private createFileFromEntry(assetId: string, entry: AssetCacheEntry): File | null {
-    const filename = entry.filename && entry.filename.trim().length ? entry.filename : `${assetId}.glb`;
-    const mimeType = entry.mimeType ?? 'application/octet-stream';
-
-    if (entry.blob instanceof File) {
-      return entry.blob;
-    }
-
-    if (entry.blob) {
-      try {
-        return new File([entry.blob], filename, { type: mimeType });
-      } catch (_error) {
-        /* noop */
-      }
-    }
-
-    if (entry.arrayBuffer) {
-      try {
-        return new File([entry.arrayBuffer], filename, { type: mimeType });
-      } catch (_error) {
-        if (typeof Blob !== 'undefined') {
-          try {
-            const blob = new Blob([entry.arrayBuffer], { type: mimeType });
-            return new File([blob], filename, { type: mimeType });
-          } catch (_innerError) {
-            /* noop */
-          }
-        }
-      }
-    }
-
-    if (entry.blob) {
-      return null;
-    }
-
-    return null;
-  }
-
   private async fetchAndParseMesh(assetId: string): Promise<MeshTemplate | null> {
     const entry = await this.resourceCache.acquireAssetEntry(assetId);
     if (!entry) {
@@ -1050,14 +987,14 @@ class SceneGraphBuilder {
 
     this.registerAssetEntryLoad(assetId, entry);
 
-    const file = this.createFileFromEntry(assetId, entry);
+    const file = createFileFromEntry(assetId, entry);
     if (!file) {
       this.warn(`无法创建文件对象 ${assetId}`);
       return null;
     }
 
     try {
-      const parsed = await this.loadObjectFromFile(file);
+      const parsed = await loadObjectFromFile(file);
       const animations = (parsed as unknown as { animations?: THREE.AnimationClip[] }).animations ?? [];
       return { scene: parsed, animations };
     } catch (error) {

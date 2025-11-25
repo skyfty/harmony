@@ -88,6 +88,7 @@ import type {
 import { cloneTextureSettings } from '@/types/material'
 import { DEFAULT_SCENE_MATERIAL_ID, DEFAULT_SCENE_MATERIAL_TYPE } from '@/types/material'
 import { behaviorMapToList, cloneBehaviorList, createBehaviorSequenceId } from '@schema/behaviors/definitions'
+import { findObjectByPath } from '@schema/modelAssetLoader'
 
 import {
   CUSTOM_SKYBOX_PRESET_ID,
@@ -2277,21 +2278,6 @@ function prepareRuntimeObjectForNode(object: Object3D) {
       mesh.receiveShadow = true
     }
   })
-}
-
-function findObjectByPath(root: Object3D, path: number[]): Object3D | null {
-  let current: Object3D | undefined = root
-  for (const segment of path) {
-    if (!current) {
-      return null
-    }
-    const index = Number.isInteger(segment) ? segment : Number.NaN
-    if (!Number.isFinite(index) || index < 0 || index >= current.children.length) {
-      return null
-    }
-    current = current.children[index]
-  }
-  return current ?? null
 }
 
 function isPathAncestor(base: number[], candidate: number[]): boolean {

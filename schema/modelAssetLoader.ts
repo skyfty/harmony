@@ -1,36 +1,8 @@
 import * as THREE from 'three'
-import Loader from '@schema/loader'
 import type ResourceCache from '@schema/ResourceCache'
 import type { AssetCacheEntry } from '@schema/assetCache'
 import type { SceneNodeImportMetadata } from '@harmony/schema'
-
-export async function loadObjectFromFile(file: File): Promise<THREE.Object3D> {
-  return new Promise<THREE.Object3D>((resolve, reject) => {
-    const loader = new Loader()
-
-    const handleLoaded = (payload: THREE.Object3D | null) => {
-      cleanup()
-      if (!payload) {
-        reject(new Error('Failed to parse asset file'))
-        return
-      }
-      resolve(payload)
-    }
-
-    const cleanup = () => {
-      loader.removeEventListener('loaded', handleLoaded)
-    }
-
-    loader.addEventListener('loaded', handleLoaded)
-
-    try {
-      loader.loadFile(file)
-    } catch (error) {
-      cleanup()
-      reject(error as Error)
-    }
-  })
-}
+import { loadObjectFromFile } from '@/utils/assetImport'
 
 export function createFileFromEntry(assetId: string, entry: AssetCacheEntry): File | null {
   const filename = entry.filename && entry.filename.trim().length ? entry.filename : `${assetId}.glb`
