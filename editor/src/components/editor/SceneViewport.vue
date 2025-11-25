@@ -250,10 +250,7 @@ const MIN_INTERACTIVE_PIXEL_RATIO = 0.35
 const devicePixelRatio = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
 const preferredBasePixelRatio = clampToRange(devicePixelRatio, MIN_BASE_PIXEL_RATIO, MAX_BASE_PIXEL_RATIO)
 let normalPixelRatio = preferredBasePixelRatio
-let targetInteractivePixelRatio = Math.min(
-  preferredBasePixelRatio,
-  Math.max(MIN_INTERACTIVE_PIXEL_RATIO, preferredBasePixelRatio * 0.7),
-)
+let targetInteractivePixelRatio = preferredBasePixelRatio
 const INTERACTION_RESTORE_DELAY_MS = 180
 let interactionRestoreTimer: number | null = null
 let isInteractiveQuality = false
@@ -349,7 +346,7 @@ function setInteractivePixelRatio(target: number) {
 function resetDynamicQualityState() {
   const baseTarget = clampBasePixelRatio(preferredBasePixelRatio)
   setBasePixelRatio(baseTarget)
-  const interactiveTarget = clampInteractivePixelRatioValue(Math.min(baseTarget * 0.7, baseTarget), baseTarget)
+  const interactiveTarget = clampInteractivePixelRatioValue(baseTarget, baseTarget)
   setInteractivePixelRatio(interactiveTarget)
 }
 
