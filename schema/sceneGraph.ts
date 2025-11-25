@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import Loader, { type LoaderLoadedPayload } from '@schema/loader';
 import type { AssetCacheEntry } from './assetCache';
 import { SceneMaterialFactory } from './material';
 import type { SceneMaterialFactoryOptions } from './material';
@@ -17,6 +16,7 @@ import type {
   SceneOutlineMesh,
   SceneOutlineMeshMap,
   GroundDynamicMesh,
+  WallDynamicMesh,
   SceneResourceSummaryEntry,
   SceneMaterialTextureSlot,
   SurfaceDynamicMesh,
@@ -39,6 +39,9 @@ import {
 } from './components/definitions/warpGateComponent';
 import { createFileFromEntry } from '@schema/modelAssetLoader'
 import { loadObjectFromFile } from '@schema/assetImport'
+import { createGroundMesh, updateGroundMesh } from './groundMesh'
+import { createSurfaceMesh, updateSurfaceMesh } from './surfaceMesh'
+import { createWallGroup, updateWallGroup } from './wallMesh'
 
 type SceneNodeWithExtras = SceneNode & {
   light?: {
@@ -106,7 +109,6 @@ class SceneGraphBuilder {
   private readonly resourceCache: ResourceCache;
   private readonly loadingManager = new THREE.LoadingManager();
   private readonly materialFactory: SceneMaterialFactory;
-  private readonly groundTextureLoader: THREE.TextureLoader;
   private readonly meshTemplateCache = new Map<string, MeshTemplate>();
   private readonly pendingMeshLoads = new Map<string, Promise<MeshTemplate | null>>();
   private readonly document: SceneJsonExportDocument;
@@ -143,7 +145,6 @@ class SceneGraphBuilder {
       reportDownloadProgress: (payload) => this.reportAssetDownloadProgress(payload.assetId, payload.progress),
     });
     const materialFactoryOverrides = options.materialFactoryOptions ?? {};
-    this.groundTextureLoader = new THREE.TextureLoader(this.loadingManager);
     this.materialFactory = new SceneMaterialFactory({
       provider: this.resourceCache,
       resources: document.resourceSummary?.assets ?? [],
@@ -1040,18 +1041,29 @@ class SceneGraphBuilder {
   }
 
   private async buildGroundMesh(meshInfo: GroundDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
-    const geometry = this.createGroundGeometry(meshInfo);
+    const base = createGroundMesh(meshInfo);
+    const geometry = base.geometry ? base.geometry.clone() : new THREE.BufferGeometry();
+    const defaultMaterial = this.cloneMaterial(base.material) ?? new THREE.MeshStandardMaterial({
+      color: '#707070',
+      roughness: 0.85,
+      metalness: 0.05,
+    });
+    const mesh = new THREE.Mesh(geometry, defaultMaterial);
+    mesh.name = node.name ?? (base.name || 'Ground');
+    mesh.castShadow = base.castShadow;
+    mesh.receiveShadow = base.receiveShadow;
+    const userData = { ...(base.userData ?? {}) } as Record<string, unknown>;
+    delete userData.groundTexture;
+    userData.dynamicMeshType = 'Ground';
+    mesh.userData = userData;
+    updateGroundMesh(mesh, meshInfo);
     const materials = await this.resolveNodeMaterials(node);
-    const materialAssignment = materials.length > 1 ? materials : materials[0];
-    const mesh = new THREE.Mesh(geometry, materialAssignment);
-    mesh.name = node.name ?? 'Ground';
-    mesh.castShadow = false;
-    mesh.receiveShadow = true;
-    mesh.userData = {
-      ...(mesh.userData ?? {}),
-      dynamicMeshType: 'Ground',
-    };
-    this.applyGroundTexture(mesh, meshInfo);
+    const resolvedMaterial = this.pickMaterialAssignment(materials);
+    if (resolvedMaterial) {
+      mesh.material = resolvedMaterial;
+      const groundTexture = (mesh.userData as { groundTexture?: THREE.Texture | null }).groundTexture ?? null;
+      this.assignTextureToMaterial(resolvedMaterial, groundTexture);
+    }
     this.applyTransform(mesh, node);
     this.applyVisibility(mesh, node);
     this.recordMeshStatistics(mesh);
@@ -1059,242 +1071,79 @@ class SceneGraphBuilder {
   }
 
   private async buildSurfaceMesh(meshInfo: SurfaceDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
-    const geometry = this.createSurfaceGeometry(meshInfo);
+    const base = createSurfaceMesh(meshInfo);
+    const geometry = base.geometry ? base.geometry.clone() : new THREE.BufferGeometry();
+    const defaultMaterial = this.cloneMaterial(base.material);
     const materials = await this.resolveNodeMaterials(node);
-    const materialAssignment = materials.length > 1 ? materials : materials[0];
+    const materialAssignment = this.pickMaterialAssignment(materials) ?? defaultMaterial ?? new THREE.MeshStandardMaterial({
+      color: '#9ea7ad',
+      roughness: 0.85,
+      metalness: 0.05,
+      side: THREE.DoubleSide,
+    });
     const mesh = new THREE.Mesh(geometry, materialAssignment);
-    mesh.name = node.name ?? 'Surface';
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
+    mesh.name = node.name ?? (base.name || 'Surface');
+    mesh.castShadow = base.castShadow;
+    mesh.receiveShadow = base.receiveShadow;
     mesh.userData = {
-      ...(mesh.userData ?? {}),
+      ...(base.userData ?? {}),
       dynamicMeshType: 'Surface',
     };
+    updateSurfaceMesh(mesh, meshInfo);
     this.applyTransform(mesh, node);
     this.applyVisibility(mesh, node);
     this.recordMeshStatistics(mesh);
     return mesh;
   }
 
-  private async buildWallMesh(meshInfo: any, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
-    const container = new THREE.Group();
-    container.name = node.name ?? 'Wall';
+  private async buildWallMesh(meshInfo: WallDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const group = createWallGroup(meshInfo);
+    group.name = node.name ?? (group.name || 'Wall');
     const materials = await this.resolveNodeMaterials(node);
-    const material = materials.length > 1 ? materials : materials[0];
-
-    const tempStart = new THREE.Vector3();
-    const tempEnd = new THREE.Vector3();
-    const tempDirection = new THREE.Vector3();
-    const tempMidpoint = new THREE.Vector3();
-    const X_AXIS = new THREE.Vector3(1, 0, 0);
-
-    const segments = Array.isArray(meshInfo.segments) ? meshInfo.segments : [];
-    segments.forEach((segment: any, index: number) => {
-      const start = segment.start ?? { x: 0, y: 0, z: 0 };
-      const end = segment.end ?? { x: 0, y: 0, z: 0 };
-      const height = Number(segment.height) || 2.5;
-      const thickness = Number(segment.thickness) || 0.2;
-
-      tempStart.set(start.x ?? 0, start.y ?? 0, start.z ?? 0);
-      tempEnd.set(end.x ?? 0, end.y ?? 0, end.z ?? 0);
-      tempDirection.subVectors(tempEnd, tempStart);
-      const length = tempDirection.length();
-      if (length <= 1e-6) {
-        return;
-      }
-
-      const geometry = new THREE.BoxGeometry(length, height, thickness);
-      const wallSegment = new THREE.Mesh(geometry, material);
-      wallSegment.castShadow = true;
-      wallSegment.receiveShadow = true;
-      wallSegment.name = `${container.name}-${index}`;
-
-      tempMidpoint.addVectors(tempStart, tempEnd).multiplyScalar(0.5);
-      const baseY = tempMidpoint.y;
-      wallSegment.position.set(tempMidpoint.x, baseY + height * 0.5, tempMidpoint.z);
-
-      tempDirection.normalize();
-      wallSegment.quaternion.setFromUnitVectors(X_AXIS, tempDirection);
-
-      container.add(wallSegment);
-    });
-
-    this.applyTransform(container, node);
-    this.applyVisibility(container, node);
-    return container;
-  }
-
-  private createGroundGeometry(meshInfo: GroundDynamicMesh): THREE.BufferGeometry {
-  const columns = Math.max(1, Math.floor(Number(meshInfo.columns)) || 1);
-  const rows = Math.max(1, Math.floor(Number(meshInfo.rows)) || 1);
-    const vertexColumns = columns + 1;
-    const vertexRows = rows + 1;
-    const vertexCount = vertexColumns * vertexRows;
-
-    const positions = new Float32Array(vertexCount * 3);
-    const normals = new Float32Array(vertexCount * 3);
-    const uvs = new Float32Array(vertexCount * 2);
-    const indices = new Uint32Array(columns * rows * 6);
-
-    const rawCellSize = Number(meshInfo.cellSize);
-    const cellSize = Number.isFinite(rawCellSize) && rawCellSize > 0
-      ? rawCellSize
-      : (() => {
-        const rawWidth = Number(meshInfo.width);
-        if (Number.isFinite(rawWidth) && rawWidth > 0 && columns > 0) {
-          return rawWidth / columns;
+    const materialAssignment = this.pickMaterialAssignment(materials);
+    if (materialAssignment) {
+      group.traverse((child: THREE.Object3D) => {
+        const mesh = child as THREE.Mesh;
+        if ((mesh as any)?.isMesh) {
+          mesh.material = materialAssignment;
         }
-        const rawDepth = Number(meshInfo.depth);
-        if (Number.isFinite(rawDepth) && rawDepth > 0 && rows > 0) {
-          return rawDepth / rows;
-        }
-        return 1;
-      })();
-    const width = (() => {
-      const rawWidth = Number(meshInfo.width);
-      if (Number.isFinite(rawWidth) && rawWidth > 0) {
-        return rawWidth;
-      }
-      return columns * cellSize;
-    })();
-    const depth = (() => {
-      const rawDepth = Number(meshInfo.depth);
-      if (Number.isFinite(rawDepth) && rawDepth > 0) {
-        return rawDepth;
-      }
-      return rows * cellSize;
-    })();
-    const halfWidth = width * 0.5;
-    const halfDepth = depth * 0.5;
-
-    let vertexIndex = 0;
-    for (let row = 0; row <= rows; row += 1) {
-      const z = -halfDepth + row * cellSize;
-      for (let column = 0; column <= columns; column += 1) {
-        const x = -halfWidth + column * cellSize;
-        const height = this.resolveGroundHeight(meshInfo, row, column);
-
-        positions[vertexIndex * 3 + 0] = x;
-        positions[vertexIndex * 3 + 1] = height;
-        positions[vertexIndex * 3 + 2] = z;
-
-        normals[vertexIndex * 3 + 0] = 0;
-        normals[vertexIndex * 3 + 1] = 1;
-        normals[vertexIndex * 3 + 2] = 0;
-
-        uvs[vertexIndex * 2 + 0] = columns === 0 ? 0 : column / columns;
-        uvs[vertexIndex * 2 + 1] = rows === 0 ? 0 : 1 - row / rows;
-
-        vertexIndex += 1;
-      }
+      });
     }
-
-    let indexPointer = 0;
-    for (let row = 0; row < rows; row += 1) {
-      for (let column = 0; column < columns; column += 1) {
-        const a = row * vertexColumns + column;
-        const b = a + 1;
-        const c = (row + 1) * vertexColumns + column;
-        const d = c + 1;
-
-        indices[indexPointer + 0] = a;
-        indices[indexPointer + 1] = c;
-        indices[indexPointer + 2] = b;
-        indices[indexPointer + 3] = b;
-        indices[indexPointer + 4] = c;
-        indices[indexPointer + 5] = d;
-        indexPointer += 6;
-      }
-    }
-
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
-    geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
-    geometry.setIndex(new THREE.BufferAttribute(indices, 1));
-    geometry.computeVertexNormals();
-    geometry.computeBoundingBox();
-    geometry.computeBoundingSphere();
-    return geometry;
+    this.applyTransform(group, node);
+    this.applyVisibility(group, node);
+    return group;
   }
 
-  private createSurfaceGeometry(meshInfo: SurfaceDynamicMesh): THREE.BufferGeometry {
-    const footprint = Array.isArray(meshInfo.points) ? meshInfo.points : [];
-    if (footprint.length < 3) {
-      return new THREE.BufferGeometry();
+  private cloneMaterial(material: THREE.Material | THREE.Material[] | null | undefined): THREE.Material | THREE.Material[] | null {
+    if (!material) {
+      return null;
     }
-
-    const shape = new THREE.Shape();
-    const first = footprint[0]!;
-    shape.moveTo(first.x, first.z);
-    for (let index = 1; index < footprint.length; index += 1) {
-      const vertex = footprint[index]!;
-      shape.lineTo(vertex.x, vertex.z);
+    if (Array.isArray(material)) {
+      return material.map((entry) => entry.clone());
     }
-
-    const geometry = new THREE.ShapeGeometry(shape);
-    geometry.rotateX(-Math.PI / 2);
-    geometry.computeVertexNormals();
-    geometry.computeBoundingBox();
-    geometry.computeBoundingSphere();
-    return geometry;
+    return material.clone();
   }
 
-  private resolveGroundHeight(meshInfo: GroundDynamicMesh, row: number, column: number): number {
-    const key = this.getGroundHeightKey(row, column);
-    const heightMap = meshInfo.heightMap ?? {};
-    const value = heightMap[key];
-    return typeof value === 'number' && Number.isFinite(value) ? value : 0;
-  }
-
-  private getGroundHeightKey(row: number, column: number): string {
-    return `${row}:${column}`;
-  }
-
-  private applyGroundTexture(mesh: THREE.Mesh, meshInfo: GroundDynamicMesh): void {
-  const userData = (mesh.userData ?? (mesh.userData = {})) as Record<string, any>;
-    const previousTexture = userData.groundTexture as THREE.Texture | undefined;
-    if (previousTexture) {
-      previousTexture.dispose?.();
-      delete userData.groundTexture;
+  private pickMaterialAssignment(materials: THREE.Material[]): THREE.Material | THREE.Material[] | null {
+    if (!Array.isArray(materials) || materials.length === 0) {
+      return null;
     }
+    return materials.length > 1 ? materials : materials[0]!;
+  }
 
-    if (!meshInfo.textureDataUrl) {
-      this.assignGroundTexture(mesh, null);
+  private assignTextureToMaterial(
+    material: THREE.Material | THREE.Material[] | null,
+    texture: THREE.Texture | null,
+  ): void {
+    if (!material) {
       return;
     }
-
-    try {
-      const texture = this.groundTextureLoader.load(
-        meshInfo.textureDataUrl,
-        () => {
-          this.assignGroundTexture(mesh, texture);
-        },
-        undefined,
-        (error: unknown) => {
-          console.warn('Ground texture load failed', error);
-          this.assignGroundTexture(mesh, null);
-        },
-      );
-      texture.wrapS = THREE.RepeatWrapping;
-      texture.wrapT = THREE.RepeatWrapping;
-      texture.anisotropy = Math.min(16, texture.anisotropy || 8);
-      texture.name = meshInfo.textureName ?? 'GroundTexture';
-      this.assignGroundTexture(mesh, texture);
-      userData.groundTexture = texture;
-    } catch (error) {
-      console.warn('Ground texture load error', error);
-      this.assignGroundTexture(mesh, null);
-    }
-  }
-
-  private assignGroundTexture(mesh: THREE.Mesh, texture: THREE.Texture | null): void {
-    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    materials.forEach((material: THREE.Material | null | undefined) => {
-      if (!material) {
+    const targets = Array.isArray(material) ? material : [material];
+    targets.forEach((entry) => {
+      if (!entry) {
         return;
       }
-      const typed = material as THREE.Material & { map?: THREE.Texture | null };
+      const typed = entry as THREE.Material & { map?: THREE.Texture | null };
       if ('map' in typed) {
         typed.map = texture;
       }

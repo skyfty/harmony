@@ -7599,11 +7599,12 @@ function reconcileNode(node: SceneNode, parent: THREE.Object3D, encountered: Set
     if (object.parent !== parent) {
       parent.add(object)
     }
-  } else if (object.parent !== parent) {
-    parent.add(object)
+  } else{
+    if (object.parent !== parent) {
+      parent.add(object)
+    }
+    updateNodeObject(object, node)
   }
-
-  updateNodeObject(object, node)
   reconcileNodeList(node.children ?? [], object, encountered)
   return object
 }
