@@ -4927,6 +4927,31 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function sanitizeEnvironmentAssetReferences<T>(value: T): T {
+  if (!isPlainObject(value)) {
+    return value
+  }
+
+  const clone: Record<string, unknown> = { ...value }
+
+  const stripHdriAsset = (raw: unknown, key: 'background' | 'environmentMap'): void => {
+    if (!isPlainObject(raw)) {
+      return
+    }
+    const section: Record<string, unknown> = { ...raw }
+    const mode = typeof section.mode === 'string' ? section.mode.toLowerCase() : ''
+    if (mode !== 'hdri') {
+      delete section.hdriAssetId
+    }
+    clone[key] = section
+  }
+
+  stripHdriAsset(clone.background, 'background')
+  stripHdriAsset(clone.environmentMap, 'environmentMap')
+
+  return clone as T
+}
+
 const ASSET_REFERENCE_SKIP_KEYS = new Set<string>([PREFAB_SOURCE_METADATA_KEY])
 
 function isAssetReferenceKey(key: string | null | undefined): boolean {
@@ -5020,7 +5045,15 @@ function collectNodeAssetDependencies(node: SceneNode | null | undefined, bucket
     })
   }
   if (node.userData) {
-    collectAssetIdsFromUnknown(node.userData, bucket)
+    if (isEnvironmentNode(node) && isPlainObject(node.userData)) {
+      const sanitizedUserData = { ...(node.userData as Record<string, unknown>) }
+      if ('environment' in sanitizedUserData) {
+        sanitizedUserData.environment = sanitizeEnvironmentAssetReferences(sanitizedUserData.environment)
+      }
+      collectAssetIdsFromUnknown(sanitizedUserData, bucket)
+    } else {
+      collectAssetIdsFromUnknown(node.userData, bucket)
+    }
   }
   if (node.children?.length) {
     node.children.forEach((child) => collectNodeAssetDependencies(child, bucket))
@@ -5083,7 +5116,7 @@ export function collectSceneAssetReferences(scene: StoredSceneDocument): Set<str
   })
 
   collectAssetIdsFromUnknown(scene.skybox, bucket)
-  collectAssetIdsFromUnknown(scene.environment, bucket)
+  collectAssetIdsFromUnknown(sanitizeEnvironmentAssetReferences(scene.environment), bucket)
   collectAssetIdsFromUnknown(scene.groundSettings, bucket)
 
   const catalog = scene.assetCatalog ?? {}

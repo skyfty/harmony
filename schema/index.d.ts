@@ -497,6 +497,7 @@ export interface SceneResourceSummaryEntry {
   inline?: boolean;
   downloadUrl?: string | null;
   source?: 'embedded' | 'remote' | 'inline';
+  type?: string;
 }
 
 export interface SceneResourceMeshTextureUsage {
