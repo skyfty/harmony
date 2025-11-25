@@ -38,6 +38,12 @@ const MATERIAL_TEXTURE_ASSIGNMENTS: Record<
 
 const HDR_EXTENSION_PATTERN = /\.(hdr|hdri|rgbe)$/i;
 const HDR_DATA_URL_PATTERN = /^data:image\/(?:vnd\.radiance|hdr|x-rgbe)/i;
+const HDR_MIME_PATTERN = /^image\/(?:vnd\.radiance|hdr|x-rgbe)$/i;
+
+const NodeBuffer: { from(data: ArrayBuffer | Uint8Array): { toString(encoding: string): string } } | undefined =
+  typeof globalThis !== 'undefined' && (globalThis as any).Buffer
+    ? (globalThis as any).Buffer
+    : undefined;
 
 export const DEFAULT_TEXTURE_SETTINGS: SceneMaterialTextureSettings = {
   wrapS: 'ClampToEdgeWrapping',
@@ -492,29 +498,34 @@ export class SceneMaterialFactory {
   }
 
   private async loadTexture(asset: AssetCacheEntry, options?: { hdr?: boolean }): Promise<THREE.Texture | null> {
-    if (options?.hdr && this.hdrLoader) {
-      try {
-        const texture = await this.hdrLoader.loadAsync(url);
-        texture.colorSpace = THREE.LinearSRGBColorSpace;
-        texture.needsUpdate = true;
-        return texture;
-      } catch (_error) {
-        return null;
-      }
-    }
 
-    return await new Promise((resolve) => {
-      this.textureLoader.load(
-        url,
-        (texture: THREE.Texture) => {
-          resolve(texture);
-        },
-        undefined,
-        (_error: unknown) => {
-          resolve(null);
-        },
-      );
-    });
+    try {
+      if (options?.hdr && this.hdrLoader) {
+        const hdrLoader = this.hdrLoader;
+        const texture = await new Promise<THREE.Texture>((resolve, reject) => {
+          hdrLoader.load(
+            asset.blobUrl ?? asset.downloadUrl ?? '',
+            (loaded) => resolve(loaded as THREE.Texture),
+            undefined,
+            (error) => reject(error instanceof Error ? error : new Error(String(error))),
+          );
+        });
+        texture.colorSpace = THREE.LinearSRGBColorSpace;
+        return texture;
+      }
+      const texture = await new Promise<THREE.Texture>((resolve, reject) => {
+        this.textureLoader.load(
+          asset.blobUrl ?? asset.downloadUrl ?? '',
+          (loaded) => resolve(loaded),
+          undefined,
+          (error) => reject(error instanceof Error ? error : new Error(String(error))),
+        );
+      });
+      return texture;
+    } catch (error) {
+      console.warn('纹理资源加载失败', asset.assetId, error);
+      return null;
+    }
   }
 }
 
