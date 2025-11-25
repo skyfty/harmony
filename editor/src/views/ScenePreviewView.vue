@@ -5,14 +5,21 @@ import { FirstPersonControls } from 'three/examples/jsm/controls/FirstPersonCont
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { Sky } from 'three/addons/objects/Sky.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
+import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js'
 import type {
 	EnvironmentSettings,
 	LanternSlideDefinition,
 	SceneJsonExportDocument,
 	SceneNode,
 	SceneNodeComponentState,
+	SceneMaterialTextureRef,
 	SceneSkyboxSettings,
 } from '@harmony/schema'
+import {
+	applyMaterialOverrides,
+	disposeMaterialOverrides,
+	type MaterialTextureAssignmentOptions,
+} from '@schema/material'
 import type { EnvironmentBackgroundMode } from '@/types/environment'
 import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
 import { subscribeToScenePreview } from '@/utils/previewChannel'
@@ -323,6 +330,10 @@ const behaviorProximityState = new Map<string, BehaviorProximityStateEntry>()
 const behaviorProximityThresholdCache = new Map<string, BehaviorProximityThreshold>()
 
 const rgbeLoader = new RGBELoader().setDataType(THREE.FloatType)
+const exrLoader = new EXRLoader().setDataType(THREE.FloatType)
+const textureLoader = new THREE.TextureLoader()
+const materialTextureCache = new Map<string, THREE.Texture>()
+const pendingMaterialTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
 
 const MAX_CONCURRENT_LAZY_LOADS = 2
 
@@ -3151,6 +3162,93 @@ function disposeEnvironmentResources() {
 	}
 }
 
+function resolveTextureExtension(entry: AssetCacheEntry | null, ref: SceneMaterialTextureRef): string {
+	const candidates = [entry?.filename, entry?.downloadUrl, ref.assetId]
+	for (const candidate of candidates) {
+		if (!candidate) {
+			continue
+		}
+		const match = /\.([a-z0-9]+)(?:\?.*)?$/i.exec(candidate)
+		if (match && match[1]) {
+			return match[1].toLowerCase()
+		}
+	}
+	return ''
+}
+
+async function resolveMaterialTexture(ref: SceneMaterialTextureRef): Promise<THREE.Texture | null> {
+	const cacheKey = ref.assetId?.trim()
+	if (!cacheKey) {
+		return null
+	}
+	if (materialTextureCache.has(cacheKey)) {
+		return materialTextureCache.get(cacheKey) ?? null
+	}
+	if (pendingMaterialTextureRequests.has(cacheKey)) {
+		return pendingMaterialTextureRequests.get(cacheKey) ?? null
+	}
+
+	const pending = (async (): Promise<THREE.Texture | null> => {
+		if (!editorResourceCache) {
+			return null
+		}
+		const entry = await editorResourceCache.acquireAssetEntry(cacheKey)
+		if (!entry) {
+			return null
+		}
+		const source = entry.blobUrl ?? entry.downloadUrl ?? ''
+		if (!source) {
+			return null
+		}
+
+		const extension = resolveTextureExtension(entry, ref)
+		try {
+			let texture: THREE.Texture
+			if (extension === 'exr') {
+				texture = await exrLoader.loadAsync(source)
+			} else if (extension === 'hdr' || extension === 'hdri' || extension === 'rgbe') {
+				texture = await rgbeLoader.loadAsync(source)
+			} else {
+				texture = await textureLoader.loadAsync(source)
+			}
+			texture.name = ref.name ?? entry.filename ?? cacheKey
+			texture.colorSpace = THREE.LinearSRGBColorSpace
+			texture.needsUpdate = true
+			materialTextureCache.set(cacheKey, texture)
+			return texture
+		} catch (error) {
+			console.warn('[ScenePreview] Failed to load texture', cacheKey, error)
+			return null
+		}
+	})()
+
+	pendingMaterialTextureRequests.set(cacheKey, pending)
+	try {
+		const texture = await pending
+		if (!texture) {
+			materialTextureCache.delete(cacheKey)
+		}
+		return texture
+	} finally {
+		pendingMaterialTextureRequests.delete(cacheKey)
+	}
+}
+
+const materialOverrideOptions: MaterialTextureAssignmentOptions = {
+	resolveTexture: resolveMaterialTexture,
+	warn: (message) => {
+		if (message) {
+			console.warn('[ScenePreview] %s', message)
+		}
+	},
+}
+
+function disposeMaterialTextureCache() {
+	materialTextureCache.forEach((texture) => texture.dispose?.())
+	materialTextureCache.clear()
+	pendingMaterialTextureRequests.clear()
+}
+
 type MeshStandardTextureKey =
 	| 'map'
 	| 'normalMap'
@@ -3174,6 +3272,7 @@ function disposeMaterialTextures(material: THREE.Material | null | undefined) {
 	if (!material) {
 		return
 	}
+	disposeMaterialOverrides(material)
 	const standard = material as THREE.MeshStandardMaterial &
 		Partial<Record<MeshStandardTextureKey, THREE.Texture | null>>
 	const materialRecord = standard as unknown as Record<string, unknown>
@@ -3322,6 +3421,7 @@ function updateNodeProperties(object: THREE.Object3D, node: SceneNode) {
 		object.visible = true
 	}
 	updateBehaviorVisibility(node.id, object.visible)
+	applyMaterialOverrides(object, node.materials, materialOverrideOptions)
 }
 
 type LazyAssetMetadata = {
@@ -3882,6 +3982,7 @@ onBeforeUnmount(() => {
 	disposeScene()
 	disposeEnvironmentResources()
 	disposeSkyResources()
+	disposeMaterialTextureCache()
 	pmremGenerator?.dispose()
 	pmremGenerator = null
 	pendingSkyboxSettings = null
