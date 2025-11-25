@@ -178,7 +178,8 @@ function updateResourceProgressDetails(info: SceneGraphResourceProgressInfo): vo
 	}
 	const label = info.message && info.message.trim().length ? info.message : assetId
 	const existingIndex = resourceProgressItems.value.findIndex((item) => item.id === assetId)
-	const previous = existingIndex >= 0 ? resourceProgressItems.value[existingIndex].progress : 0
+	const previousItem = existingIndex >= 0 ? resourceProgressItems.value[existingIndex] : null
+	const previous = previousItem?.progress ?? 0
 	const normalized = normalizeResourceProgressPercent(info, previous)
 	const nextItem: ResourceProgressItem = {
 		id: assetId,
@@ -303,6 +304,7 @@ type LazyPlaceholderState = {
 }
 
 const lazyPlaceholderStates = new Map<string, LazyPlaceholderState>()
+let lazyLoadMeshesEnabled = true
 let activeLazyLoadCount = 0
 const tempOutlineSphere = new THREE.Sphere()
 const tempOutlineScale = new THREE.Vector3()
@@ -3322,7 +3324,7 @@ function findLazyPlaceholderForNode(root: THREE.Object3D | null | undefined, nod
 function initializeLazyPlaceholders(document: SceneJsonExportDocument | null | undefined): void {
 	lazyPlaceholderStates.clear()
 	activeLazyLoadCount = 0
-	if (!document) {
+	if (!document || !lazyLoadMeshesEnabled) {
 		return
 	}
 	nodeObjectMap.forEach((object, nodeId) => {
@@ -3359,7 +3361,7 @@ function initializeLazyPlaceholders(document: SceneJsonExportDocument | null | u
 }
 
 function updateLazyPlaceholders(_delta: number): void {
-	if (!camera || lazyPlaceholderStates.size === 0) {
+	if (!lazyLoadMeshesEnabled || !camera || lazyPlaceholderStates.size === 0) {
 		return
 	}
 	camera.updateMatrixWorld(true)
@@ -3639,6 +3641,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	const skyboxSettings = resolveDocumentSkybox(document)
 	applySkyboxSettings(skyboxSettings)
 	const environmentSettings = resolveDocumentEnvironment(document)
+	lazyLoadMeshesEnabled = document.lazyLoadMeshes !== false
 	if (!scene || !rootGroup) {
 		pendingEnvironmentSettings = cloneEnvironmentSettingsLocal(environmentSettings)
 		return
@@ -3670,7 +3673,6 @@ async function updateScene(document: SceneJsonExportDocument) {
 				const stillLoadingByBytes = resourceProgress.totalBytes > 0 && resourceProgress.loadedBytes < resourceProgress.totalBytes
 				resourceProgress.active = stillLoadingByCount || stillLoadingByBytes
 			},
-			lazyLoadMeshes: true,
 			materialFactoryOptions: {
 				hdrLoader: rgbeLoader,
 			},

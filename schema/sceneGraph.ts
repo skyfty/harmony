@@ -110,7 +110,7 @@ class SceneGraphBuilder {
   private readonly document: SceneJsonExportDocument;
   private readonly outlineMeshMap: SceneOutlineMeshMap;
   private readonly onProgress?: (progress: SceneGraphResourceProgress) => void;
-  private readonly buildOptions: SceneGraphBuildOptions;
+  private readonly lazyLoadMeshes: boolean;
   private progressTotal = 0;
   private progressLoaded = 0;
   private readonly assetSizeMap = new Map<string, number>();
@@ -126,7 +126,14 @@ class SceneGraphBuilder {
     this.root = new THREE.Group();
     this.root.name = document.name ?? 'Scene';
     this.resourceCache = resourceCache;
-    this.buildOptions = options;
+    const documentLazyLoad = document.lazyLoadMeshes;
+    if (typeof options.lazyLoadMeshes === 'boolean') {
+      this.lazyLoadMeshes = options.lazyLoadMeshes;
+    } else if (typeof documentLazyLoad === 'boolean') {
+      this.lazyLoadMeshes = documentLazyLoad;
+    } else {
+      this.lazyLoadMeshes = true;
+    }
     this.outlineMeshMap = { ...(document.outlineMeshMap ?? {}) };
     this.resourceCache.setContext(document, options);
     this.resourceCache.setHandlers({
@@ -307,7 +314,7 @@ class SceneGraphBuilder {
     nodes: SceneNodeWithExtras[],
     materials: SceneMaterial[],
   ): Promise<void> {
-    const meshAssetIds = this.buildOptions.lazyLoadMeshes ? [] : this.collectMeshAssetIds(nodes);
+    const meshAssetIds = this.lazyLoadMeshes ? [] : this.collectMeshAssetIds(nodes);
     const textureAssetIds = this.collectTextureAssetIds(nodes, materials);
     const total = meshAssetIds.length + textureAssetIds.length;
     this.beginProgress(total);
@@ -647,7 +654,7 @@ class SceneGraphBuilder {
 
     const outlineMesh = this.resolveOutlineMeshForNode(node);
 
-    if (this.buildOptions.lazyLoadMeshes && outlineMesh && node.sourceAssetId) {
+    if (this.lazyLoadMeshes && outlineMesh && node.sourceAssetId) {
       const placeholder = this.buildOutlinePlaceholder(node, outlineMesh);
       if (placeholder) {
         group.add(placeholder);
@@ -779,7 +786,7 @@ class SceneGraphBuilder {
 
     const outlineMesh = this.resolveOutlineMeshForNode(node);
 
-    if (this.buildOptions.lazyLoadMeshes && outlineMesh && node.sourceAssetId) {
+    if (this.lazyLoadMeshes && outlineMesh && node.sourceAssetId) {
       const placeholder = this.buildOutlinePlaceholder(node, outlineMesh);
       if (placeholder) {
         this.applyTransform(placeholder, node);

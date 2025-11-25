@@ -107,10 +107,10 @@ const exportPreferences = ref<SceneExportOptions>({
   includeLights: true,
   includeHiddenNodes: true,
   includeSkeletons: true,
-  includeCameras: false,
   includeExtras: true,
   includeOutlineMeshes: true,
   rotateCoordinateSystem: true,
+  lazyLoadMeshes: true,
   format: 'json',
 })
 const exportSummaryLoading = ref(false)
@@ -860,10 +860,10 @@ const SCENE_PREVIEW_EXPORT_OPTIONS: SceneExportOptions = {
   includeLights: true,
   includeHiddenNodes: true,
   includeSkeletons: true,
-  includeCameras: true,
   includeExtras: true,
   includeOutlineMeshes: true,
   rotateCoordinateSystem: false,
+  lazyLoadMeshes: true,
 }
 
 let lastPreviewBroadcastRevision = 0

@@ -224,16 +224,6 @@ function removeLights(root: THREE.Object3D) {
   collected.forEach((light) => light.parent?.remove(light))
 }
 
-function removeCameras(root: THREE.Object3D) {
-  const collected: THREE.Object3D[] = []
-  root.traverse((node) => {
-    if ((node as any)?.isCamera) {
-      collected.push(node)
-    }
-  })
-  collected.forEach((cameraObject) => cameraObject.parent?.remove(cameraObject))
-}
-
 function removeSkybox(scene: THREE.Scene) {
   const skybox = scene.getObjectByName('HarmonySky')
   if (skybox?.parent) {
@@ -332,6 +322,7 @@ export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, opti
     assetIndex: snapshot.assetIndex,
     packageAssetMap: snapshot.packageAssetMap,
     resourceSummary: snapshot.resourceSummary,
+    lazyLoadMeshes: options.lazyLoadMeshes ?? true,
   };
   return await sanitizeSceneDocumentForJsonExport(exportDocument, options)
 
@@ -346,7 +337,6 @@ export async function prepareGLBSceneExport(scene: THREE.Scene, options: SceneEx
   const includeLights = options.includeLights ?? true
   const includeHiddenNodes = options.includeHiddenNodes ?? true
   const includeSkeletons = options.includeSkeletons ?? true
-  const includeCameras = options.includeCameras ?? true
   const includeExtras = options.includeExtras ?? true
 
 
@@ -361,10 +351,6 @@ export async function prepareGLBSceneExport(scene: THREE.Scene, options: SceneEx
 
   if (!includeLights) {
     removeLights(exportScene)
-  }
-
-  if (!includeCameras) {
-    removeCameras(exportScene)
   }
 
   if (!includeSkeletons) {
@@ -449,9 +435,6 @@ function shouldExcludeNodeForJsonExport(node: SceneNode, options: SceneExportOpt
     return true
   }
   if (!options.includeLights && (node.nodeType === 'Light' || Boolean(node.light))) {
-    return true
-  }
-  if (!options.includeCameras && (node.nodeType === 'Camera' || Boolean(node.camera))) {
     return true
   }
   if (!options.includeSkybox && node.name === 'HarmonySky') {

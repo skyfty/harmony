@@ -487,6 +487,7 @@ export interface SceneJsonExportDocument {
   assetIndex?: Record<string, AssetIndexEntry>;
   packageAssetMap?: Record<string, string>;
   resourceSummary?: SceneResourceSummary;
+  lazyLoadMeshes?: boolean;
 }
 
 export interface SceneResourceSummaryEntry {

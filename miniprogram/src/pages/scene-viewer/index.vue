@@ -754,6 +754,7 @@ type LazyPlaceholderState = {
 };
 
 const lazyPlaceholderStates = new Map<string, LazyPlaceholderState>();
+let lazyLoadMeshesEnabled = true;
 let activeLazyLoadCount = 0;
 const tempOutlineSphere = new THREE.Sphere();
 const tempOutlineScale = new THREE.Vector3();
@@ -1865,7 +1866,7 @@ function findLazyPlaceholderForNode(root: THREE.Object3D | null | undefined, nod
 function initializeLazyPlaceholders(document: SceneJsonExportDocument | null | undefined): void {
   lazyPlaceholderStates.clear();
   activeLazyLoadCount = 0;
-  if (!document) {
+  if (!document || !lazyLoadMeshesEnabled) {
     return;
   }
   nodeObjectMap.forEach((object, nodeId) => {
@@ -1903,7 +1904,7 @@ function initializeLazyPlaceholders(document: SceneJsonExportDocument | null | u
 
 function updateLazyPlaceholders(_delta: number): void {
   const camera = renderContext?.camera;
-  if (!camera || lazyPlaceholderStates.size === 0) {
+  if (!lazyLoadMeshesEnabled || !camera || lazyPlaceholderStates.size === 0) {
     return;
   }
   camera.updateMatrixWorld(true);
@@ -3977,7 +3978,8 @@ function teardownWheelControls(): void {
 }
 
 function handleWheelEvent(event: WheelEvent): void {
-  if (!renderContext) {
+  const context = renderContext;
+  if (!context) {
     return;
   }
   event.preventDefault?.();
@@ -3992,7 +3994,7 @@ function handleWheelEvent(event: WheelEvent): void {
   const magnitude = Math.min(Math.abs(deltaY) / 120, 3) || 1;
   runWithProgrammaticCameraMutation(() => {
     translateCamera(direction * WHEEL_MOVE_STEP * magnitude, 0);
-    renderContext.controls.update();
+    context.controls.update();
   });
 }
 
@@ -4211,9 +4213,9 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
 
   let graph: Awaited<ReturnType<typeof buildSceneGraph>> | null = null;
   try {
+    lazyLoadMeshesEnabled = payload.document.lazyLoadMeshes !== false;
     const buildOptions: SceneGraphBuildOptions = {
       enableGround: payload.enableGround ?? true,
-      lazyLoadMeshes: true,
       materialFactoryOptions: {
         hdrLoader: rgbeLoader,
       },
