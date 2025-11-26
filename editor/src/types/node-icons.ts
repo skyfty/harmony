@@ -20,7 +20,7 @@ export const NODE_TYPE_ICONS: Record<SceneNodeType, string> = {
   Torus: 'mdi-torus',
   TorusKnot: 'mdi-torus-knot',
   Box: 'mdi-cube-outline',
-  Empty: 'mdi-vector-point',
+  Empty: 'mdi-vector-point-select',
   WarpGate: 'mdi-atom-variant',
   Guideboard: 'mdi-sign-direction',
 }

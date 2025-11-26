@@ -381,6 +381,31 @@ function findSceneNodeById(nodes: SceneNode[] | undefined, id: string | null | u
   return null
 }
 
+function findNodeWithParent(
+  nodes: SceneNode[] | undefined,
+  nodeId: string,
+  parent: SceneNode | null = null,
+): { node: SceneNode; parent: SceneNode | null } | null {
+  if (!Array.isArray(nodes) || !nodeId) {
+    return null
+  }
+  for (const node of nodes) {
+    if (!node) {
+      continue
+    }
+    if (node.id === nodeId) {
+      return { node, parent }
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      const nested = findNodeWithParent(node.children, nodeId, node)
+      if (nested) {
+        return nested
+      }
+    }
+  }
+  return null
+}
+
 function isNormalSceneNode(node: SceneNode | null): boolean {
   if (!node) {
     return false
@@ -397,19 +422,32 @@ function nodeSupportsMaterials(node: SceneNode | null): boolean {
 }
 
 function resolveModelParentNode(node: SceneNode | null): SceneNode | null {
-  if (!node || node.isPlaceholder) {
+  if (!node || (node as { isPlaceholder?: boolean }).isPlaceholder) {
     return null
   }
-  if (node.nodeType !== 'Group') {
+  if (node.nodeType === 'Group' && sceneStore.nodeAllowsChildCreation(node.id)) {
+    if (node.id === GROUND_NODE_ID || node.id === SKY_NODE_ID || node.id === ENVIRONMENT_NODE_ID) {
+      return null
+    }
+    return node
+  }
+
+  const located = findNodeWithParent(sceneStore.nodes, node.id)
+  const parentNode = located?.parent ?? null
+  if (!parentNode) {
     return null
   }
-  if (!sceneStore.nodeAllowsChildCreation(node.id)) {
+  const parentPlaceholder = (parentNode as { isPlaceholder?: boolean }).isPlaceholder
+  if (parentPlaceholder) {
     return null
   }
-  if (node.id === GROUND_NODE_ID || node.id === SKY_NODE_ID || node.id === ENVIRONMENT_NODE_ID) {
+  if (!sceneStore.nodeAllowsChildCreation(parentNode.id)) {
     return null
   }
-  return node
+  if (parentNode.id === GROUND_NODE_ID || parentNode.id === SKY_NODE_ID || parentNode.id === ENVIRONMENT_NODE_ID) {
+    return null
+  }
+  return parentNode
 }
 
 function snapNodeToParentOrigin(nodeId: string | null | undefined): void {

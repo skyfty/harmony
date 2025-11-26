@@ -574,15 +574,55 @@ function getNextGroupName(): string {
   return `Group ${candidate}`
 }
 
+function resolveEffectiveParentId(input: SceneNode | string | null | undefined): string | null {
+  if (!input) {
+    return null
+  }
+
+  let targetNode: SceneNode | null = null
+  let parentNode: SceneNode | null = null
+
+  if (typeof input === 'string') {
+    const located = findNodeWithParent(sceneStore.nodes, input)
+    targetNode = located?.node ?? null
+    parentNode = located?.parent ?? null
+  } else {
+    targetNode = input
+    const located = findNodeWithParent(sceneStore.nodes, input.id)
+    parentNode = located?.parent ?? null
+  }
+
+  if (!targetNode) {
+    return null
+  }
+
+  const isPlaceholder = (targetNode as { isPlaceholder?: boolean }).isPlaceholder
+  if (isPlaceholder) {
+    return null
+  }
+
+  if (sceneStore.nodeAllowsChildCreation(targetNode.id)) {
+    return targetNode.id
+  }
+
+  if (!parentNode) {
+    return null
+  }
+
+  const parentPlaceholder = (parentNode as { isPlaceholder?: boolean }).isPlaceholder
+  if (parentPlaceholder) {
+    return null
+  }
+
+  return sceneStore.nodeAllowsChildCreation(parentNode.id) ? parentNode.id : null
+}
+
 function handleAddGroup() {
   const groupName = getNextGroupName()
   const group = new THREE.Group()
   group.name = groupName
   const selectedNode = sceneStore.selectedNode
-  let parentId = selectedNode && !selectedNode.isPlaceholder ? selectedNode.id : null
-  if (parentId && !sceneStore.nodeAllowsChildCreation(parentId)) {
-    parentId = null
-  }
+  const parentId = resolveEffectiveParentId(selectedNode ?? null)
   const spawnPosition = computeGroupSpawnPosition(parentId)
   sceneStore.addSceneNode({
     nodeType: 'Group',
@@ -758,20 +798,17 @@ function resolveSelectedSceneNode(): SceneNode | null {
 }
 
 function resolveTargetParentNode(parentId?: string | null): SceneNode | null {
-  if (typeof parentId === 'string' && parentId.trim().length) {
-    const located = findNodeWithParent(sceneStore.nodes, parentId)
-    if (located?.node) {
-      if (sceneStore.nodeAllowsChildCreation(located.node.id)) {
-        return located.node
-      }
-      return null
-    }
-  }
-  const selected = resolveSelectedSceneNode()
-  if (selected && !sceneStore.nodeAllowsChildCreation(selected.id)) {
+  if (parentId === null) {
     return null
   }
-  return selected
+  const effectiveParentId = parentId !== undefined
+    ? resolveEffectiveParentId(parentId)
+    : resolveEffectiveParentId(sceneStore.selectedNode ?? null)
+  if (!effectiveParentId) {
+    return null
+  }
+  const located = findNodeWithParent(sceneStore.nodes, effectiveParentId)
+  return located?.node ?? null
 }
 
 const canCreateShowcaseNodes = computed(() => Boolean(resolveSelectedSceneNode()))
@@ -1299,16 +1336,12 @@ function handleCreateEmptyNode() {
   const emptyObject = new THREE.Object3D()
   const name = getNextEmptyName()
   emptyObject.name = name
-  const parentCandidate = sceneStore.selectedNode
-  let parentId = parentCandidate && !parentCandidate.isPlaceholder ? parentCandidate.id : null
-  if (parentId && !sceneStore.nodeAllowsChildCreation(parentId)) {
-    parentId = null
-  }
+  const parentId = resolveEffectiveParentId(sceneStore.selectedNode ?? null)
   sceneStore.addSceneNode({
     nodeType: 'Empty',
     object: emptyObject,
     name,
-    parentId,
+    parentId: parentId ?? undefined,
   })
 }
 
@@ -1606,14 +1639,10 @@ async function handleCreateShowcaseVisit(): Promise<void> {
 
 async function handleAddNode(geometry: GeometryType) {
   const mesh = createPrimitiveMesh(geometry)
-  const selectedNode = sceneStore.selectedNode
-  const parentIsGroup = Boolean(
-    selectedNode && !selectedNode.isPlaceholder && selectedNode.nodeType === 'Group'
-  )
-  const candidateParentId = parentIsGroup ? selectedNode?.id ?? null : null
-  const parentId = candidateParentId && sceneStore.nodeAllowsChildCreation(candidateParentId)
-    ? candidateParentId
-    : null
+  const selectedNode = sceneStore.selectedNode ?? null
+  const parentId = resolveEffectiveParentId(selectedNode)
+  const parentNode = parentId ? findNodeWithParent(sceneStore.nodes, parentId)?.node ?? null : null
+  const parentIsGroup = Boolean(parentNode && parentNode.nodeType === 'Group')
 
   let spawnY = 0
   if (!parentIsGroup) {

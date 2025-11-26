@@ -2622,6 +2622,10 @@ async function convertObjectToSceneNode(
       groupExpanded: true,
       children: childrenNodes,
     }
+    if (context.modelAssetId) {
+      node.sourceAssetId = context.modelAssetId
+    }
+    node.allowChildNodes = false
     context.converted.add(object)
     return node
   }
@@ -5965,8 +5969,10 @@ function allowsChildNodes(node: SceneNode | null | undefined): boolean {
   if (nodeId === GROUND_NODE_ID || nodeId === SKY_NODE_ID || nodeId === ENVIRONMENT_NODE_ID) {
     return false
   }
-  const nodeType = node.nodeType
-  if (nodeType === 'Sky' || nodeType === 'Environment') {
+  if (node.nodeType !== 'Group') {
+    return false
+  }
+  if (node.sourceAssetId) {
     return false
   }
   return true

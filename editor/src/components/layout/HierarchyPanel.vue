@@ -29,16 +29,23 @@ const assetCacheStore = useAssetCacheStore()
 const { hierarchyItems, selectedNodeId, selectedNodeIds, draggingAssetId } = storeToRefs(sceneStore)
 
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
+const NODE_DRAG_LIST_MIME = 'application/x-harmony-node-list'
 
 const selectionAnchorId = ref<string | null>(null)
 const suppressSelectionSync = ref(false)
-const dragState = ref<{ sourceId: string | null; targetId: string | null; position: HierarchyDropPosition | null }>(
-  {
-    sourceId: null,
-    targetId: null,
-    position: null,
-  },
-)
+type DragState = {
+  sourceIds: string[]
+  primaryId: string | null
+  targetId: string | null
+  position: HierarchyDropPosition | null
+}
+
+const dragState = ref<DragState>({
+  sourceIds: [],
+  primaryId: null,
+  targetId: null,
+  position: null,
+})
 const panelRef = ref<HTMLDivElement | null>(null)
 const materialDropTargetId = ref<string | null>(null)
 const assetDropTargetId = ref<string | null>(null)
@@ -197,7 +204,7 @@ watch(
 
 const rootDropClasses = computed(() => {
   const isNodeDragActive =
-    dragState.value.sourceId !== null &&
+    dragState.value.sourceIds.length > 0 &&
     dragState.value.targetId === null &&
     dragState.value.position !== null
   return {
@@ -216,6 +223,38 @@ function flattenHierarchyItems(items: HierarchyTreeItem[]): HierarchyTreeItem[] 
     }
   }
   return result
+}
+
+function sortNodeIdsByHierarchyOrder(ids: string[]): string[] {
+  if (!ids.length) {
+    return []
+  }
+  const orderIndex = new Map(allNodeIds.value.map((id, index) => [id, index]))
+  const uniqueIds = Array.from(new Set(ids)).filter((id) => orderIndex.has(id))
+  uniqueIds.sort((a, b) => (orderIndex.get(a) ?? 0) - (orderIndex.get(b) ?? 0))
+  return uniqueIds
+}
+
+function filterNestedNodeIds(ids: string[]): string[] {
+  if (ids.length <= 1) {
+    return [...ids]
+  }
+  const unique = Array.from(new Set(ids))
+  return unique.filter((id) => !unique.some((candidate) => candidate !== id && sceneStore.isDescendant(candidate, id)))
+}
+
+function resolveDragSources(nodeId: string): { primaryId: string | null; sourceIds: string[] } {
+  const selected = selectedNodeIds.value.includes(nodeId) ? [...selectedNodeIds.value] : [nodeId]
+  const filtered = filterNestedNodeIds(selected)
+  const sorted = sortNodeIdsByHierarchyOrder(filtered)
+  if (!sorted.length) {
+    return { primaryId: null, sourceIds: [] }
+  }
+  if (sorted.includes(nodeId)) {
+    return { primaryId: nodeId, sourceIds: sorted }
+  }
+  const ancestorMatch = sorted.find((candidate) => sceneStore.isDescendant(candidate, nodeId)) ?? sorted[0]
+  return { primaryId: ancestorMatch ?? null, sourceIds: sorted }
 }
 
 type MaterialAsset = ProjectAsset & { type: 'material' }
@@ -326,10 +365,17 @@ function wrapNodeIntoNewGroup(targetId: string, adoptNodeId?: string | null): st
   return groupNode.id
 }
 
-type NodeDropResolution = { targetId: string | null; position: HierarchyDropPosition } | 'handled' | null
+type NodeDropResolution =
+  | { targetId: string | null; position: HierarchyDropPosition }
+  | { handled: true; targetId: string | null; adoptedId: string | null }
+  | null
 
-function resolveNodeDropResolution(sourceId: string, targetId: string): NodeDropResolution {
-  if (!sourceId || !targetId) {
+function resolveNodeDropResolution(
+  sourceIds: string[],
+  primarySourceId: string | null,
+  targetId: string,
+): NodeDropResolution {
+  if (!sourceIds.length || !targetId) {
     return null
   }
   const targetNode = findSceneNodeById(sceneStore.nodes, targetId)
@@ -346,11 +392,12 @@ function resolveNodeDropResolution(sourceId: string, targetId: string): NodeDrop
   if (parentNode && parentNode.nodeType === 'Group') {
     return { targetId, position: 'after' }
   }
-  const newGroupId = wrapNodeIntoNewGroup(targetId, sourceId)
+  const activeSourceId = primarySourceId && sourceIds.includes(primarySourceId) ? primarySourceId : sourceIds[0]
+  const newGroupId = wrapNodeIntoNewGroup(targetId, activeSourceId)
   if (!newGroupId) {
     return null
   }
-  return 'handled'
+  return { handled: true, targetId: newGroupId, adoptedId: activeSourceId ?? null }
 }
 
 function resolveAssetDropParentId(targetId: string): string | null {
@@ -726,7 +773,7 @@ function handleTreeBackgroundMouseDown(event: MouseEvent) {
 }
 
 function resetDragState() {
-  dragState.value = { sourceId: null, targetId: null, position: null }
+  dragState.value = { sourceIds: [], primaryId: null, targetId: null, position: null }
   materialDropTargetId.value = null
   assetDropTargetId.value = null
   assetRootDropActive.value = false
@@ -765,9 +812,21 @@ function getNodeDropClasses(id: string) {
 
 function handleDragStart(event: DragEvent, nodeId: string) {
   materialDropTargetId.value = null
-  dragState.value = { sourceId: nodeId, targetId: null, position: null }
-  event.dataTransfer?.setData('text/plain', nodeId)
-  event.dataTransfer?.setData('application/x-harmony-node', nodeId)
+  const { primaryId, sourceIds } = resolveDragSources(nodeId)
+  if (!sourceIds.length) {
+    dragState.value = { sourceIds: [], primaryId: null, targetId: null, position: null }
+    return
+  }
+  const transferableId = primaryId ?? nodeId
+  dragState.value = {
+    sourceIds,
+    primaryId: transferableId,
+    targetId: null,
+    position: null,
+  }
+  event.dataTransfer?.setData('text/plain', transferableId)
+  event.dataTransfer?.setData('application/x-harmony-node', transferableId)
+  event.dataTransfer?.setData(NODE_DRAG_LIST_MIME, JSON.stringify(sourceIds))
   if (event.dataTransfer) {
     event.dataTransfer.effectAllowed = 'copyMove'
   }
@@ -826,12 +885,14 @@ function handleDragOver(event: DragEvent, targetId: string) {
   if (assetDropTargetId.value === targetId) {
     assetDropTargetId.value = null
   }
-  const sourceId = dragState.value.sourceId
-  if (!sourceId || targetId === sourceId) return
+  const { sourceIds, primaryId } = dragState.value
+  if (!sourceIds.length || sourceIds.includes(targetId)) {
+    return
+  }
 
-  const isInvalid = sceneStore.isDescendant(sourceId, targetId)
+  const isInvalid = sourceIds.some((id) => sceneStore.isDescendant(id, targetId))
   if (isInvalid) {
-    dragState.value = { sourceId, targetId, position: null }
+    dragState.value = { sourceIds, primaryId, targetId, position: null }
     if (event.dataTransfer) {
       event.dataTransfer.dropEffect = 'none'
     }
@@ -842,7 +903,7 @@ function handleDragOver(event: DragEvent, targetId: string) {
 
   const position = resolveDropPosition(event)
   if (position === 'inside' && !sceneStore.nodeAllowsChildCreation(targetId)) {
-    dragState.value = { sourceId, targetId, position: null }
+    dragState.value = { sourceIds, primaryId, targetId, position: null }
     if (event.dataTransfer) {
       event.dataTransfer.dropEffect = 'none'
     }
@@ -850,7 +911,7 @@ function handleDragOver(event: DragEvent, targetId: string) {
     event.stopPropagation()
     return
   }
-  dragState.value = { sourceId, targetId, position }
+  dragState.value = { sourceIds, primaryId, targetId, position }
   event.preventDefault()
   event.stopPropagation()
   if (event.dataTransfer) {
@@ -868,9 +929,14 @@ function handleDragLeave(event: DragEvent, targetId: string) {
   if (assetDropTargetId.value === targetId) {
     assetDropTargetId.value = null
   }
-  if (!dragState.value.sourceId) return
+  if (!dragState.value.sourceIds.length) return
   if (dragState.value.targetId === targetId) {
-    dragState.value = { ...dragState.value, targetId: null, position: null }
+    dragState.value = {
+      sourceIds: [...dragState.value.sourceIds],
+      primaryId: dragState.value.primaryId,
+      targetId: null,
+      position: null,
+    }
   }
 }
 
@@ -912,8 +978,8 @@ async function handleDrop(event: DragEvent, targetId: string) {
     resetDragState()
     return
   }
-  const { sourceId, position } = dragState.value
-  if (!sourceId || !position) {
+  const { sourceIds, primaryId, position } = dragState.value
+  if (!sourceIds.length || !position) {
     resetDragState()
     return
   }
@@ -922,20 +988,66 @@ async function handleDrop(event: DragEvent, targetId: string) {
   let resolvedTargetId: string | null = targetId
   let resolvedPosition = position
   if (position === 'inside') {
-    const resolution = resolveNodeDropResolution(sourceId, targetId)
+    const resolution = resolveNodeDropResolution(sourceIds, primaryId, targetId)
     if (!resolution) {
       resetDragState()
       return
     }
-    if (resolution === 'handled') {
+    if ('handled' in resolution) {
+      const remainingIds = resolution.adoptedId
+        ? sourceIds.filter((id) => id !== resolution.adoptedId)
+        : [...sourceIds]
+      let movedAny = false
+      if (resolution.targetId) {
+        for (const nodeId of remainingIds) {
+          if (nodeId === resolution.targetId) {
+            continue
+          }
+          const moved = sceneStore.moveNode({ nodeId, targetId: resolution.targetId, position: 'inside' })
+          movedAny = movedAny || moved
+        }
+        if (movedAny) {
+          sceneStore.setGroupExpanded(resolution.targetId, true, { captureHistory: false })
+        }
+      }
       resetDragState()
       return
     }
     resolvedTargetId = resolution.targetId
     resolvedPosition = resolution.position
   }
-  const moved = sceneStore.moveNode({ nodeId: sourceId, targetId: resolvedTargetId, position: resolvedPosition })
-  if (moved && resolvedPosition === 'inside' && resolvedTargetId) {
+  const moveOrder = [...sourceIds]
+  let movedAny = false
+  if (resolvedPosition === 'after') {
+    let insertionTargetId = resolvedTargetId
+    for (const nodeId of moveOrder) {
+      if (!insertionTargetId || nodeId === insertionTargetId) {
+        continue
+      }
+      const moved = sceneStore.moveNode({ nodeId, targetId: insertionTargetId, position: 'after' })
+      if (moved) {
+        insertionTargetId = nodeId
+        movedAny = true
+      }
+    }
+  } else if (resolvedPosition === 'before') {
+    for (const nodeId of moveOrder.slice().reverse()) {
+      if (!resolvedTargetId || nodeId === resolvedTargetId) {
+        continue
+      }
+      const moved = sceneStore.moveNode({ nodeId, targetId: resolvedTargetId, position: 'before' })
+      movedAny = movedAny || moved
+    }
+  } else if (resolvedPosition === 'inside' && resolvedTargetId) {
+    for (const nodeId of moveOrder) {
+      if (nodeId === resolvedTargetId) {
+        continue
+      }
+      const moved = sceneStore.moveNode({ nodeId, targetId: resolvedTargetId, position: 'inside' })
+      movedAny = movedAny || moved
+    }
+  }
+  if (movedAny && resolvedPosition === 'inside' && resolvedTargetId) {
     sceneStore.setGroupExpanded(resolvedTargetId, true, { captureHistory: false })
   }
   resetDragState()
@@ -981,14 +1093,14 @@ function handleTreeDragOver(event: DragEvent) {
     return
   }
   assetRootDropActive.value = false
-  const { sourceId } = dragState.value
-  if (!sourceId) return
+  const { sourceIds, primaryId } = dragState.value
+  if (!sourceIds.length) return
   const container = event.currentTarget as HTMLElement | null
   if (!container) return
   const rect = container.getBoundingClientRect()
   const offset = event.clientY - rect.top
   const position: HierarchyDropPosition = offset < rect.height / 2 ? 'before' : 'after'
-  dragState.value = { sourceId, targetId: null, position }
+  dragState.value = { sourceIds: [...sourceIds], primaryId, targetId: null, position }
   event.preventDefault()
   if (event.dataTransfer) {
     event.dataTransfer.dropEffect = 'move'
@@ -1017,16 +1129,16 @@ async function handleTreeDrop(event: DragEvent) {
     resetDragState()
     return
   }
-  const { sourceId, position } = dragState.value
-  if (!sourceId || !position) {
+  const { sourceIds, position } = dragState.value
+  if (!sourceIds.length || !position) {
     event.preventDefault()
     resetDragState()
     return
   }
   event.preventDefault()
-  const moved = sceneStore.moveNode({ nodeId: sourceId, targetId: null, position })
-  if (moved && position === 'inside') {
-    // treat as append; already handled by store
+  const moveOrder = position === 'before' ? [...sourceIds].reverse() : [...sourceIds]
+  for (const nodeId of moveOrder) {
+    sceneStore.moveNode({ nodeId, targetId: null, position })
   }
   resetDragState()
 }
@@ -1039,13 +1151,17 @@ function handleTreeDragLeave(event: DragEvent) {
     assetDropTargetId.value = null
   }
   assetRootDropActive.value = false
-  const { sourceId } = dragState.value
-  if (!sourceId) return
+  if (!dragState.value.sourceIds.length) return
   const container = event.currentTarget as HTMLElement | null
   const related = event.relatedTarget as Node | null
   if (container && related && container.contains(related)) return
   if (dragState.value.targetId === null) {
-    dragState.value = { sourceId, targetId: null, position: null }
+    dragState.value = {
+      sourceIds: [...dragState.value.sourceIds],
+      primaryId: dragState.value.primaryId,
+      targetId: null,
+      position: null,
+    }
   }
 }
 
