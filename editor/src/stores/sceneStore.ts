@@ -49,7 +49,6 @@ import type {
   WallDynamicMesh,
 } from '@harmony/schema'
 import { normalizeLightNodeType } from '@/types/light'
-import type { ClipboardEntry } from '@/types/clipboard-entry'
 import type { NodePrefabData } from '@/types/node-prefab'
 import type { DetachResult } from '@/types/detach-result'
 import type { DuplicateContext } from '@/types/duplicate-context'
@@ -68,6 +67,7 @@ import type { PresetSceneDocument } from '@/types/preset-scene'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SceneViewportSettings } from '@/types/scene-viewport-settings'
 import type {
+  ClipboardEntry,
   SceneSkyboxSettings,
   CameraControlMode,
   CameraProjection,
@@ -3296,7 +3296,6 @@ function collectRuntimeSnapshots(node: SceneNode, bucket: Map<string, Object3D>)
 function collectClipboardPayload(
   nodes: SceneNode[],
   ids: string[],
-  context: { assetIndex: Record<string, AssetIndexEntry>; packageAssetMap: Record<string, string> },
 ): { entries: ClipboardEntry[]; runtimeSnapshots: Map<string, Object3D> } {
   const runtimeSnapshots = new Map<string, Object3D>()
   if (!ids.length) {
@@ -3312,19 +3311,16 @@ function collectClipboardPayload(
     }
     const found = findNodeById(nodes, id)
     if (found) {
-      const payload = buildSerializedPrefabPayload(found, {
-        name: found.name ?? 'Clipboard Prefab',
-        assetIndex: context.assetIndex,
-        packageAssetMap: context.packageAssetMap,
-        resetRootTransform: true,
-      })
+      const rootNode = prepareNodePrefabRoot(found, { regenerateIds: false })
+      resetPrefabRootTransform(rootNode)
+      const serialized = JSON.stringify(rootNode, null, 2)
       entries.push({
         sourceId: id,
-        prefab: payload.prefab,
-        serialized: payload.serialized,
-        dependencyAssetIds: payload.dependencyAssetIds,
+        root: rootNode,
+        serialized: serialized
       })
       collectRuntimeSnapshots(found, runtimeSnapshots)
+
     }
   })
   return { entries, runtimeSnapshots }
@@ -4197,8 +4193,49 @@ function buildSerializedPrefabPayload(
     dependencyAssetIds,
   }
 }
+function deserializeSceneNode(raw: string, options: { resetRootTransform?: boolean } = {}): SceneNode | null {
+  if (typeof raw !== 'string') {
+    return null
+  }
+  const normalized = raw.trim()
+  if (!normalized.length) {
+    return null
+  }
 
-async function writePrefabToSystemClipboard(serialized: string): Promise<void> {
+  const resetRootTransform = options.resetRootTransform !== false
+
+  try {
+    const prefab = deserializeNodePrefab(normalized, { resetRootTransform })
+    return prefab.root
+  } catch (_prefabError) {
+    // Fall through to plain node handling.
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(normalized)
+  } catch (error) {
+    console.warn('Failed to parse scene node clipboard payload', error)
+    return null
+  }
+
+  if (!parsed || typeof parsed !== 'object') {
+    return null
+  }
+
+  try {
+    const root = prepareNodePrefabRoot(parsed as SceneNode, { regenerateIds: false })
+    if (resetRootTransform) {
+      resetPrefabRootTransform(root)
+    }
+    return root
+  } catch (error) {
+    console.warn('Failed to normalize scene node clipboard payload', error)
+    return null
+  }
+}
+
+async function writeSystemClipboard(serialized: string): Promise<void> {
   if (typeof navigator === 'undefined' || !navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
     return
   }
@@ -4209,7 +4246,7 @@ async function writePrefabToSystemClipboard(serialized: string): Promise<void> {
   }
 }
 
-async function readPrefabFromSystemClipboard(): Promise<NodePrefabData | null> {
+async function readSceneNodeFromSystemClipboard(): Promise<SceneNode | null> {
   if (typeof navigator === 'undefined' || !navigator.clipboard || typeof navigator.clipboard.readText !== 'function') {
     return null
   }
@@ -4219,7 +4256,7 @@ async function readPrefabFromSystemClipboard(): Promise<NodePrefabData | null> {
     if (!normalized) {
       return null
     }
-    return deserializeNodePrefab(normalized)
+    return deserializeSceneNode(normalized)
   } catch (error) {
     console.warn('Failed to read prefab data from clipboard', error)
     return null
@@ -10889,10 +10926,7 @@ export const useSceneStore = defineStore('scene', {
       return duplicates.map((node) => node.id)
     },
     copyNodes(nodeIds: string[]) {
-      const { entries, runtimeSnapshots } = collectClipboardPayload(this.nodes, nodeIds, {
-        assetIndex: this.assetIndex,
-        packageAssetMap: this.packageAssetMap,
-      })
+      const { entries, runtimeSnapshots } = collectClipboardPayload(this.nodes, nodeIds)
       if (!entries.length) {
         this.clipboard = null
         return false
@@ -10902,7 +10936,7 @@ export const useSceneStore = defineStore('scene', {
         runtimeSnapshots,
         cut: false,
       }
-      void writePrefabToSystemClipboard(entries[0]?.serialized ?? '')
+      void writeSystemClipboard(entries[0]?.serialized ?? '')
       return true
     },
     cutNodes(nodeIds: string[]) {
@@ -10922,108 +10956,115 @@ export const useSceneStore = defineStore('scene', {
       let runtimeSnapshots = this.clipboard?.runtimeSnapshots ?? new Map<string, Object3D>()
 
       if (!clipboardEntries.length) {
-        const systemPrefab = await readPrefabFromSystemClipboard()
-        if (!systemPrefab) {
+        const clipboardNode = await readSceneNodeFromSystemClipboard()
+        if (!clipboardNode) {
           return false
         }
-        clipboardEntries = [
-          {
-            sourceId: systemPrefab.root.id,
-            prefab: systemPrefab,
-            serialized: serializeNodePrefab(systemPrefab),
-            dependencyAssetIds: collectPrefabAssetReferences(systemPrefab.root),
-          },
-        ]
+        const serialized = JSON.stringify(clipboardNode, null, 2)
+        const entry: ClipboardEntry = {
+          sourceId: clipboardNode.id,
+          root: clipboardNode,
+          serialized,
+        }
+        clipboardEntries = [entry]
         runtimeSnapshots = new Map<string, Object3D>()
+        this.clipboard = {
+          entries: clipboardEntries,
+          runtimeSnapshots,
+          cut: false,
+        }
       }
 
       if (!clipboardEntries.length) {
         return false
       }
 
-      const resolveParentId = (): string | null => {
-        const candidateId = targetId ?? this.selectedNodeId ?? null
-        if (!candidateId) {
-          return null
+      const working = cloneSceneNodes(this.nodes)
+      const parentMap = buildParentMap(working)
+
+      let anchorId: string | null = null
+      let insertionPosition: HierarchyDropPosition = 'after'
+      let insertionParentId: string | null = null
+
+      if (targetId) {
+        const targetNode = findNodeById(working, targetId)
+        if (targetNode && allowsChildNodes(targetNode)) {
+          anchorId = targetNode.id
+          insertionPosition = 'inside'
+          insertionParentId = targetNode.id
+        } else if (targetNode) {
+          anchorId = targetNode.id
+          insertionPosition = 'after'
+          insertionParentId = parentMap.get(targetNode.id) ?? null
         }
-        if (candidateId === GROUND_NODE_ID || candidateId === SKY_NODE_ID || candidateId === ENVIRONMENT_NODE_ID) {
-          return null
-        }
-        if (this.isNodeSelectionLocked(candidateId)) {
-          return null
-        }
-        return findNodeById(this.nodes, candidateId) ? candidateId : null
       }
 
-      const parentId = resolveParentId()
-      const workingNodes = cloneSceneNodes(this.nodes)
-      const instantiated: SceneNode[] = []
+      const assetCache = useAssetCacheStore()
+      const duplicateContext: DuplicateContext = {
+        assetCache,
+        runtimeSnapshots,
+        idMap: new Map<string, string>(),
+        regenerateBehaviorIds: true,
+      }
+
+      const insertedNodes: SceneNode[] = []
+      const insertedIds: string[] = []
+      const affectedParentIds = new Set<string>()
 
       for (const entry of clipboardEntries) {
-        const instance = await this.instantiatePrefabData(entry.prefab, {
-          dependencyAssetIds: entry.dependencyAssetIds,
-          runtimeSnapshots,
-        })
-        if (parentId) {
-          const inserted = insertNodeMutable(workingNodes, parentId, instance, 'inside')
-          if (!inserted) {
-            workingNodes.push(instance)
-          } else {
-            instance.position = { x: 0, y: 0, z: 0 }
-            instance.rotation = instance.rotation ?? { x: 0, y: 0, z: 0 }
-            instance.scale = instance.scale ?? { x: 1, y: 1, z: 1 }
-            componentManager.syncNode(instance)
-          }
+        const duplicate = duplicateNodeTree(entry.root, duplicateContext)
+        let parentForInsertion: string | null = null
+        let inserted = insertNodeMutable(working, anchorId, duplicate, insertionPosition)
+        if (!inserted) {
+          inserted = insertNodeMutable(working, null, duplicate, 'after')
+          anchorId = duplicate.id
+          insertionPosition = 'after'
+          insertionParentId = null
+          parentForInsertion = null
         } else {
-          workingNodes.push(instance)
+          if (insertionPosition === 'inside') {
+            parentForInsertion = anchorId
+          } else {
+            parentForInsertion = insertionParentId ?? null
+            anchorId = duplicate.id
+          }
         }
-        instantiated.push(instance)
+
+        if (parentForInsertion) {
+          affectedParentIds.add(parentForInsertion)
+        }
+
+        insertedNodes.push(duplicate)
+        insertedIds.push(duplicate.id)
       }
 
-      if (!instantiated.length) {
+      if (!insertedNodes.length) {
         return false
       }
 
       this.captureHistorySnapshot()
-      this.nodes = workingNodes
-      await this.ensureSceneAssetsReady({ nodes: instantiated, showOverlay: false })
+      this.nodes = working
 
-      const boundingInfo = collectNodeBoundingInfo(instantiated)
-      let adjusted = false
-      instantiated.forEach((node) => {
-        const bounds = boundingInfo.get(node.id)?.bounds ?? null
-        if (!bounds) {
-          return
-        }
-        const spawnPosition = new Vector3(node.position?.x ?? 0, node.position?.y ?? 0, node.position?.z ?? 0)
-        const offsetY = spawnPosition.y - bounds.min.y
-        if (Math.abs(offsetY) > PREFAB_PLACEMENT_EPSILON) {
-          const currentPosition = node.position ?? { x: 0, y: 0, z: 0 }
-          node.position = {
-            x: currentPosition.x,
-            y: currentPosition.y + offsetY,
-            z: currentPosition.z,
-          }
-          componentManager.syncNode(node)
-          adjusted = true
+      affectedParentIds.forEach((parentId) => {
+        if (parentId && findNodeById(this.nodes, parentId)) {
+          this.recenterGroupAncestry(parentId, { captureHistory: false })
         }
       })
-      if (adjusted) {
-        this.nodes = [...this.nodes]
-      }
 
-      if (parentId) {
-        this.recenterGroupAncestry(parentId, { captureHistory: false })
-      }
+      assetCache.recalculateUsage(this.nodes)
 
-      useAssetCacheStore().recalculateUsage(this.nodes)
-      const createdIds = instantiated.map((node) => node.id)
-      this.setSelection(createdIds)
+      const primaryId = insertedIds[insertedIds.length - 1] ?? null
+      this.setSelection(insertedIds, { primaryId })
       commitSceneSnapshot(this)
 
-      if (this.clipboard?.cut) {
-        this.clipboard = null
+      if (this.clipboard) {
+        this.clipboard = {
+          entries: clipboardEntries,
+          runtimeSnapshots,
+          cut: false,
+        }
       }
+
       return true
     },
     clearClipboard() {

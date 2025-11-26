@@ -2130,6 +2130,7 @@ async function loadActualAssetForPlaceholder(state: LazyPlaceholderState): Promi
       lazyPlaceholderStates.delete(state.nodeId);
       return;
     }
+		detailed.position.set(0, 0, 0)
     prepareImportedObjectForPreview(detailed);
     const placeholder = state.placeholder;
     const container = state.container ?? nodeObjectMap.get(state.nodeId) ?? null;
@@ -2195,19 +2196,23 @@ function prepareImportedObjectForPreview(object: THREE.Object3D): void {
   });
 }
 
+function updateNodeTransfrom(object: THREE.Object3D,node: SceneNode) {
+	if (node.position) {
+		object.position.set(node.position.x, node.position.y, node.position.z)
+	}
+	if (node.rotation) {
+		object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z)
+	}
+	if (node.scale) {
+		object.scale.set(node.scale.x, node.scale.y, node.scale.z)
+	}
+}
+
 function updateNodeProperties(object: THREE.Object3D, node: SceneNode): void {
   if (node.name) {
     object.name = node.name;
   }
-  if (node.position) {
-    object.position.set(node.position.x, node.position.y, node.position.z);
-  }
-  if (node.rotation) {
-    object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z);
-  }
-  if (node.scale) {
-    object.scale.set(node.scale.x, node.scale.y, node.scale.z);
-  }
+  updateNodeTransfrom(object, node);
   const guideboardVisibility = resolveGuideboardInitialVisibility(node);
   if (guideboardVisibility !== null) {
     object.visible = guideboardVisibility;
@@ -4299,20 +4304,6 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   resourcePreload.loadedBytes = 0;
   resourcePreload.totalBytes = 0;
   resourcePreload.label = '准备加载资源...';
-  const summary = payload.document.resourceSummary;
-  if (summary) {
-    const totalBytes = typeof summary.totalBytes === 'number' && Number.isFinite(summary.totalBytes) && summary.totalBytes > 0
-      ? summary.totalBytes
-      : 0;
-    const embeddedBytes = typeof summary.embeddedBytes === 'number' && Number.isFinite(summary.embeddedBytes) && summary.embeddedBytes >= 0
-      ? summary.embeddedBytes
-      : 0;
-    resourcePreload.totalBytes = totalBytes;
-    resourcePreload.loadedBytes = totalBytes > 0 ? Math.min(embeddedBytes, totalBytes) : embeddedBytes;
-    if (Array.isArray(summary.assets)) {
-      resourcePreload.total = summary.assets.length;
-    }
-  }
 
   let graph: Awaited<ReturnType<typeof buildSceneGraph>> | null = null;
   try {

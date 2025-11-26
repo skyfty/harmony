@@ -614,3 +614,15 @@ export interface SurfaceDynamicMesh {
 }
 
 export type SceneDynamicMesh = GroundDynamicMesh | WallDynamicMesh | PlatformDynamicMesh | SurfaceDynamicMesh
+
+export interface ClipboardEntry {
+  sourceId: string
+  root: SceneNode
+  serialized: string
+}
+
+export interface SceneClipboard {
+  entries: ClipboardEntry[]
+  runtimeSnapshots: Map<string, Object3D>
+  cut: boolean
+}

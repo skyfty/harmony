@@ -164,13 +164,14 @@ class SceneGraphBuilder {
         if (!entry || typeof entry.assetId !== 'string' || !entry.assetId.length) {
           return;
         }
-        const size = Number.isFinite(entry.bytes) && entry.bytes > 0 ? entry.bytes : 0;
-        if (size > 0 || !this.assetSizeMap.has(entry.assetId)) {
-          this.assetSizeMap.set(entry.assetId, size);
-        }
         const normalizedType = typeof entry.type === 'string' ? entry.type.toLowerCase() : '';
         const isMeshAsset = normalizedType === 'model' || normalizedType === 'mesh';
         const includeAssetBytes = !(this.lazyLoadMeshes && isMeshAsset);
+
+        const size = Number.isFinite(entry.bytes) && entry.bytes > 0 ? entry.bytes : 0;
+        if (includeAssetBytes && size > 0) {
+          this.assetSizeMap.set(entry.assetId, size);
+        }
         if (includeAssetBytes) {
           aggregatedTotal += size;
         }

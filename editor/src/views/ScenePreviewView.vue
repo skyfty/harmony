@@ -3427,10 +3427,7 @@ function ensureChildOrder(parent: THREE.Object3D, child: THREE.Object3D, orderIn
 	parent.children.splice(Math.min(desiredIndex, parent.children.length), 0, child)
 }
 
-function updateNodeProperties(object: THREE.Object3D, node: SceneNode) {
-	if (node.name) {
-		object.name = node.name
-	}
+function updateNodeTransfrom(object: THREE.Object3D,node: SceneNode) {
 	if (node.position) {
 		object.position.set(node.position.x, node.position.y, node.position.z)
 	}
@@ -3439,6 +3436,13 @@ function updateNodeProperties(object: THREE.Object3D, node: SceneNode) {
 	}
 	if (node.scale) {
 		object.scale.set(node.scale.x, node.scale.y, node.scale.z)
+	}
+}
+
+
+function updateNodeProperties(object: THREE.Object3D, node: SceneNode) {
+	if (node.name) {
+		object.name = node.name
 	}
 	const guideboardVisibility = resolveGuideboardInitialVisibility(node)
 	if (guideboardVisibility !== null) {
@@ -3450,6 +3454,7 @@ function updateNodeProperties(object: THREE.Object3D, node: SceneNode) {
 	} else {
 		object.visible = true
 	}
+	updateNodeTransfrom(object, node)
 	updateBehaviorVisibility(node.id, object.visible)
 	applyMaterialOverrides(object, node.materials, materialOverrideOptions)
 }
@@ -3652,6 +3657,8 @@ async function loadActualAssetForPlaceholder(state: LazyPlaceholderState): Promi
 			lazyPlaceholderStates.delete(state.nodeId)
 			return
 		}
+		detailed.position.set(0,0,0)
+
 		prepareImportedObjectForPreview(detailed)
 		const placeholder = state.placeholder
 		const container = state.container ?? nodeObjectMap.get(state.nodeId) ?? null
@@ -3677,6 +3684,7 @@ async function loadActualAssetForPlaceholder(state: LazyPlaceholderState): Promi
 				parent.children.splice(insertIndex, 0, detailed)
 			}
 		}
+
 		if (!container || container === placeholder) {
 			updateNodeProperties(detailed, node)
 		} else {
