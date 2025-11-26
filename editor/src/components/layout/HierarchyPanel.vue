@@ -206,11 +206,9 @@ const rootDropClasses = computed(() => {
   const isNodeDragActive =
     dragState.value.sourceIds.length > 0 &&
     dragState.value.targetId === null &&
-    dragState.value.position !== null
+    dragState.value.position === 'inside'
   return {
     'root-drop-active': isNodeDragActive || assetRootDropActive.value,
-    'root-drop-before': isNodeDragActive && dragState.value.position === 'before',
-    'root-drop-after': isNodeDragActive && dragState.value.position === 'after',
   }
 })
 
@@ -363,41 +361,6 @@ function wrapNodeIntoNewGroup(targetId: string, adoptNodeId?: string | null): st
   sceneStore.setGroupExpanded(groupNode.id, true, { captureHistory: false })
   sceneStore.setSelection(previousSelectionIds, { primaryId: previousPrimaryId })
   return groupNode.id
-}
-
-type NodeDropResolution =
-  | { targetId: string | null; position: HierarchyDropPosition }
-  | { handled: true; targetId: string | null; adoptedId: string | null }
-  | null
-
-function resolveNodeDropResolution(
-  sourceIds: string[],
-  primarySourceId: string | null,
-  targetId: string,
-): NodeDropResolution {
-  if (!sourceIds.length || !targetId) {
-    return null
-  }
-  const targetNode = findSceneNodeById(sceneStore.nodes, targetId)
-  if (!targetNode) {
-    return null
-  }
-  if (!sceneStore.nodeAllowsChildCreation(targetId)) {
-    return null
-  }
-  if (targetNode.nodeType === 'Group') {
-    return { targetId, position: 'inside' }
-  }
-  const { parentNode } = findParentInfo(targetId)
-  if (parentNode && parentNode.nodeType === 'Group') {
-    return { targetId, position: 'after' }
-  }
-  const activeSourceId = primarySourceId && sourceIds.includes(primarySourceId) ? primarySourceId : sourceIds[0]
-  const newGroupId = wrapNodeIntoNewGroup(targetId, activeSourceId)
-  if (!newGroupId) {
-    return null
-  }
-  return { handled: true, targetId: newGroupId, adoptedId: activeSourceId ?? null }
 }
 
 function resolveAssetDropParentId(targetId: string): string | null {
@@ -779,18 +742,6 @@ function resetDragState() {
   assetRootDropActive.value = false
 }
 
-function resolveDropPosition(event: DragEvent): HierarchyDropPosition {
-  const target = event.currentTarget as HTMLElement | null
-  if (!target) return 'inside'
-  const rect = target.getBoundingClientRect()
-  if (rect.height === 0) return 'inside'
-  const offset = event.clientY - rect.top
-  const ratio = offset / rect.height
-  if (ratio < 0.25) return 'before'
-  if (ratio > 0.75) return 'after'
-  return 'inside'
-}
-
 function getNodeDropClasses(id: string) {
   const classes: Record<string, boolean> = {
     'material-drop-target': materialDropTargetId.value === id,
@@ -804,8 +755,6 @@ function getNodeDropClasses(id: string) {
   }
   return {
     ...classes,
-    'drop-before': dragState.value.position === 'before',
-    'drop-after': dragState.value.position === 'after',
     'drop-inside': dragState.value.position === 'inside',
   }
 }
@@ -891,7 +840,10 @@ function handleDragOver(event: DragEvent, targetId: string) {
   }
 
   const isInvalid = sourceIds.some((id) => sceneStore.isDescendant(id, targetId))
-  if (isInvalid) {
+  const targetNode = findSceneNodeById(sceneStore.nodes, targetId)
+  const supportsChildren =
+    targetNode?.nodeType === 'Group' && sceneStore.nodeAllowsChildCreation(targetId)
+  if (isInvalid || !supportsChildren) {
     dragState.value = { sourceIds, primaryId, targetId, position: null }
     if (event.dataTransfer) {
       event.dataTransfer.dropEffect = 'none'
@@ -900,18 +852,7 @@ function handleDragOver(event: DragEvent, targetId: string) {
     event.stopPropagation()
     return
   }
-
-  const position = resolveDropPosition(event)
-  if (position === 'inside' && !sceneStore.nodeAllowsChildCreation(targetId)) {
-    dragState.value = { sourceIds, primaryId, targetId, position: null }
-    if (event.dataTransfer) {
-      event.dataTransfer.dropEffect = 'none'
-    }
-    event.preventDefault()
-    event.stopPropagation()
-    return
-  }
-  dragState.value = { sourceIds, primaryId, targetId, position }
+  dragState.value = { sourceIds, primaryId, targetId, position: 'inside' }
   event.preventDefault()
   event.stopPropagation()
   if (event.dataTransfer) {
@@ -978,77 +919,34 @@ async function handleDrop(event: DragEvent, targetId: string) {
     resetDragState()
     return
   }
-  const { sourceIds, primaryId, position } = dragState.value
-  if (!sourceIds.length || !position) {
+  const { sourceIds } = dragState.value
+  if (!sourceIds.length) {
     resetDragState()
     return
   }
   event.preventDefault()
   event.stopPropagation()
-  let resolvedTargetId: string | null = targetId
-  let resolvedPosition = position
-  if (position === 'inside') {
-    const resolution = resolveNodeDropResolution(sourceIds, primaryId, targetId)
-    if (!resolution) {
-      resetDragState()
-      return
-    }
-    if ('handled' in resolution) {
-      const remainingIds = resolution.adoptedId
-        ? sourceIds.filter((id) => id !== resolution.adoptedId)
-        : [...sourceIds]
-      let movedAny = false
-      if (resolution.targetId) {
-        for (const nodeId of remainingIds) {
-          if (nodeId === resolution.targetId) {
-            continue
-          }
-          const moved = sceneStore.moveNode({ nodeId, targetId: resolution.targetId, position: 'inside' })
-          movedAny = movedAny || moved
-        }
-        if (movedAny) {
-          sceneStore.setGroupExpanded(resolution.targetId, true, { captureHistory: false })
-        }
-      }
-      resetDragState()
-      return
-    }
-    resolvedTargetId = resolution.targetId
-    resolvedPosition = resolution.position
+  const targetNode = findSceneNodeById(sceneStore.nodes, targetId)
+  const canAdopt =
+    targetNode?.nodeType === 'Group' && sceneStore.nodeAllowsChildCreation(targetId)
+  if (!canAdopt) {
+    resetDragState()
+    return
   }
-  const moveOrder = [...sourceIds]
   let movedAny = false
-  if (resolvedPosition === 'after') {
-    let insertionTargetId = resolvedTargetId
-    for (const nodeId of moveOrder) {
-      if (!insertionTargetId || nodeId === insertionTargetId) {
-        continue
-      }
-      const moved = sceneStore.moveNode({ nodeId, targetId: insertionTargetId, position: 'after' })
-      if (moved) {
-        insertionTargetId = nodeId
-        movedAny = true
-      }
+  for (const nodeId of sourceIds) {
+    if (nodeId === targetId) {
+      continue
     }
-  } else if (resolvedPosition === 'before') {
-    for (const nodeId of moveOrder.slice().reverse()) {
-      if (!resolvedTargetId || nodeId === resolvedTargetId) {
-        continue
-      }
-      const moved = sceneStore.moveNode({ nodeId, targetId: resolvedTargetId, position: 'before' })
-      movedAny = movedAny || moved
+    const { parentId } = findParentInfo(nodeId)
+    if (parentId === targetId) {
+      continue
     }
-  } else if (resolvedPosition === 'inside' && resolvedTargetId) {
-    for (const nodeId of moveOrder) {
-      if (nodeId === resolvedTargetId) {
-        continue
-      }
-      const moved = sceneStore.moveNode({ nodeId, targetId: resolvedTargetId, position: 'inside' })
-      movedAny = movedAny || moved
-    }
+    const moved = sceneStore.moveNode({ nodeId, targetId, position: 'inside' })
+    movedAny = movedAny || moved
   }
-  if (movedAny && resolvedPosition === 'inside' && resolvedTargetId) {
-    sceneStore.setGroupExpanded(resolvedTargetId, true, { captureHistory: false })
+  if (movedAny) {
+    sceneStore.setGroupExpanded(targetId, true, { captureHistory: false })
   }
   resetDragState()
 }
@@ -1095,12 +993,7 @@ function handleTreeDragOver(event: DragEvent) {
   assetRootDropActive.value = false
   const { sourceIds, primaryId } = dragState.value
   if (!sourceIds.length) return
-  const container = event.currentTarget as HTMLElement | null
-  if (!container) return
-  const rect = container.getBoundingClientRect()
-  const offset = event.clientY - rect.top
-  const position: HierarchyDropPosition = offset < rect.height / 2 ? 'before' : 'after'
-  dragState.value = { sourceIds: [...sourceIds], primaryId, targetId: null, position }
+  dragState.value = { sourceIds: [...sourceIds], primaryId, targetId: null, position: 'inside' }
   event.preventDefault()
   if (event.dataTransfer) {
     event.dataTransfer.dropEffect = 'move'
@@ -1129,16 +1022,20 @@ async function handleTreeDrop(event: DragEvent) {
     resetDragState()
     return
   }
-  const { sourceIds, position } = dragState.value
-  if (!sourceIds.length || !position) {
+  const { sourceIds } = dragState.value
+  if (!sourceIds.length) {
     event.preventDefault()
     resetDragState()
     return
   }
   event.preventDefault()
-  const moveOrder = position === 'before' ? [...sourceIds].reverse() : [...sourceIds]
-  for (const nodeId of moveOrder) {
-    sceneStore.moveNode({ nodeId, targetId: null, position })
+  event.stopPropagation()
+  for (const nodeId of sourceIds) {
+    const { parentId } = findParentInfo(nodeId)
+    if (parentId === null) {
+      continue
+    }
+    sceneStore.moveNode({ nodeId, targetId: null, position: 'inside' })
   }
   resetDragState()
 }
@@ -1450,27 +1347,6 @@ function handleTreeDragLeave(event: DragEvent) {
   padding-inline-end: 6px;
 }
 
-.tree-container.root-drop-before::before,
-.tree-container.root-drop-after::before {
-  content: '';
-  position: absolute;
-  left: 6px;
-  right: 6px;
-  height: 2px;
-  border-radius: 2px;
-  background: rgba(77, 208, 225, 0.65);
-  pointer-events: none;
-  z-index: 1;
-}
-
-.tree-container.root-drop-before::before {
-  top: 4px;
-}
-
-.tree-container.root-drop-after::before {
-  bottom: 4px;
-}
-
 .tree-container.root-drop-active {
   background: rgba(77, 208, 225, 0.08);
 }
@@ -1529,26 +1405,6 @@ function handleTreeDragLeave(event: DragEvent) {
 .node-label.asset-drop-target {
   background: rgba(77, 208, 225, 0.12);
   color: #fafafa;
-}
-
-.node-label.drop-before::before,
-.node-label.drop-after::after {
-  content: '';
-  position: absolute;
-  left: 6px;
-  right: 6px;
-  height: 2px;
-  border-radius: 2px;
-  background: rgba(77, 208, 225, 0.75);
-  pointer-events: none;
-}
-
-.node-label.drop-before::before {
-  top: 0;
-}
-
-.node-label.drop-after::after {
-  bottom: 0;
 }
 
 .node-label.drop-disabled {
