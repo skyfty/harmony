@@ -78,7 +78,6 @@ function applyDimensions() {
           @keydown.enter.prevent="applyDimensions"
         />
       </div>
-      <small class="hint-text">Updates affect new scenes and the current ground size.</small>
     </v-expansion-panel-text>
   </v-expansion-panel>
 </template>
