@@ -86,7 +86,7 @@ export default class ResourceCache {
     if (!assetId) {
       return null;
     }
-    const cached = this.assetLoader.getCache().getEntry(assetId);
+    const cached = await this.assetLoader.getCache().getEntry(assetId);
     if (cached?.status === 'cached') {
       this.assetLoader.getCache().touch(assetId);
     }

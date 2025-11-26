@@ -441,12 +441,13 @@ export const useAssetCacheStore = defineStore('assetCache', {
         mimeType?: string | null
         filename?: string | null
         downloadUrl?: string | null
+        arrayBuffer?: ArrayBuffer | null
       },
     ): Promise<AssetCacheEntry> {
       const entry = this.ensureEntry(assetId)
       invalidateModelObject(assetId)
       const filename = payload.filename ?? (payload.blob instanceof File ? payload.blob.name : null)
-      const arrayBuffer = typeof payload.blob.arrayBuffer === 'function' ? await payload.blob.arrayBuffer() : null
+      const arrayBuffer = payload.arrayBuffer ?? (typeof payload.blob.arrayBuffer === 'function' ? await payload.blob.arrayBuffer() : null)
 
       applyBlobToEntry(entry, {
         blob: payload.blob,

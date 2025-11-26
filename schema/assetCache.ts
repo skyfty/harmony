@@ -67,7 +67,7 @@ export class AssetCache {
     return entry
   }
 
-  getEntry(assetId: string): AssetCacheEntry | null {
+  async getEntry(assetId: string): Promise<AssetCacheEntry | null | undefined> {
     return this.entries.get(assetId) ?? null
   }
 
@@ -306,7 +306,7 @@ export class AssetLoader {
       throw new Error('assetId is required')
     }
     if (!options.force) {
-      const cached = this.cache.getEntry(assetId)
+      const cached = await this.cache.getEntry(assetId)
       if (cached?.status === 'cached') {
         this.cache.touch(assetId)
         return cached
@@ -336,8 +336,8 @@ export class AssetLoader {
     return promise
   }
 
-  cancel(assetId: string): void {
-    const entry = this.cache.getEntry(assetId)
+  async cancel(assetId: string): Promise<void> {
+    const entry = await this.cache.getEntry(assetId)
     if (!entry || entry.status !== 'downloading') {
       return
     }

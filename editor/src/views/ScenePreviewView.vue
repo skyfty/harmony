@@ -25,8 +25,10 @@ import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
 import { subscribeToScenePreview } from '@/utils/previewChannel'
 import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
 import ResourceCache from '@schema/ResourceCache'
-import { AssetCache, AssetLoader, type AssetCacheEntry } from '@schema/assetCache'
+import { AssetLoader, AssetCache } from '@schema/assetCache'
+import type { AssetCacheEntry } from '@schema/assetCache'
 import { loadNodeObject } from '@schema/modelAssetLoader'
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { ComponentManager } from '@schema/components/componentManager'
 import {
 	behaviorComponentDefinition,
@@ -109,6 +111,38 @@ type ResourceProgressItem = {
 const resourceProgressItems = ref<ResourceProgressItem[]>([])
 const resourceAssetInfoMap = new Map<string, { name: string; bytes: number }>()
 const RESOURCE_PROGRESS_COMPLETE_PATTERNS = ['下载完成', '加载完成'] as const
+
+const assetCacheStore = useAssetCacheStore()
+// Adapter so the preview uses the shared Pinia-backed cache without duplicating downloads.
+class StoreBackedAssetCache extends AssetCache {
+	constructor() {
+		super()
+	}
+	async getEntry(assetId: string): Promise<AssetCacheEntry | undefined |null> {
+		let storeEntry = assetCacheStore.entries[assetId]
+		if (storeEntry !== undefined && storeEntry !== null) {
+			return storeEntry
+		}
+		// fall back to parent cache (may return undefined)
+		storeEntry = await super.getEntry(assetId) ?? undefined
+		if (storeEntry === undefined) {
+			await assetCacheStore.loadFromIndexedDb(assetId)
+			storeEntry = assetCacheStore.getEntry(assetId)
+		}
+		return storeEntry
+	}
+
+	hasCache(assetId: string): boolean {
+		return assetCacheStore.hasCache(assetId) || super.hasCache(assetId)
+	}
+	createFileFromCache(assetId: string): File | null {
+		return assetCacheStore.createFileFromCache(assetId)
+	}
+}
+
+const editorAssetCache = new StoreBackedAssetCache()
+const editorAssetLoader = new AssetLoader(editorAssetCache)
+let editorResourceCache: ResourceCache | null = null
 
 const resourceProgressPercent = computed(() => {
 	if (resourceProgress.totalBytes > 0) {
@@ -297,10 +331,6 @@ const lanternViewerOptions: ViewerOptions = {
 	fullscreen: true,
 	zIndex: 2300,
 }
-
-const editorAssetCache = new AssetCache()
-const editorAssetLoader = new AssetLoader(editorAssetCache)
-let editorResourceCache: ResourceCache | null = null
 
 function ensureEditorResourceCache(
 	document: SceneJsonExportDocument,
