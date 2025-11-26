@@ -191,6 +191,8 @@ const exrLoader = new EXRLoader().setDataType(THREE.FloatType)
 const textureCache = new Map<string, THREE.Texture>()
 const pendingTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
 
+const usesRuntimeObjectTypes = new Set<string>(['Mesh', WARP_GATE_COMPONENT_TYPE, GUIDEBOARD_COMPONENT_TYPE, 'Group'])
+
 function disposeCachedTextures() {
   textureCache.forEach((texture) => texture.dispose())
   textureCache.clear()
@@ -7417,7 +7419,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   userData.dynamicMeshType = node.dynamicMesh?.type ?? null
   userData.lightType = node.light?.type ?? null
   userData.sourceAssetId = node.sourceAssetId ?? null
-  const runtimeBackedType = nodeType === 'Mesh' || nodeType === 'WarpGate' || nodeType === 'Guideboard'
+  const runtimeBackedType = usesRuntimeObjectTypes.has(nodeType)
   const hasRuntimeObject = runtimeBackedType ? sceneStore.hasRuntimeObject(node.id) : false
   userData.usesRuntimeObject = hasRuntimeObject
 
@@ -7555,10 +7557,7 @@ function shouldRecreateNode(object: THREE.Object3D, node: SceneNode): boolean {
   if ((userData.sourceAssetId ?? null) !== nextSourceAssetId) {
     return true
   }
-  const expectsRuntime =
-    nodeType === 'Mesh' || nodeType === 'WarpGate' || nodeType === 'Guideboard'
-      ? sceneStore.hasRuntimeObject(node.id)
-      : false
+  const expectsRuntime = usesRuntimeObjectTypes.has(nodeType) ? sceneStore.hasRuntimeObject(node.id)  : false
   if (Boolean(userData.usesRuntimeObject) !== expectsRuntime) {
     return true
   }
