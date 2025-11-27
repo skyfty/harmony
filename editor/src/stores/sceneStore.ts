@@ -13,7 +13,7 @@ import {
   OrthographicCamera,
   BackSide,
   DoubleSide,
-  type Object3D,
+  Object3D,
   type Texture,
   type Material,
   type Light,
@@ -3210,7 +3210,7 @@ function applyInstancedRuntimeToNode(node: SceneNode, group: ModelInstanceGroup)
   proxy.name = node.name ?? proxy.name
   prepareRuntimeObjectForNode(proxy)
   tagObjectWithNodeId(proxy, node.id)
-  releaseRuntimeObject(node.id)
+  unregisterRuntimeObject(node.id)
   registerRuntimeObject(node.id, proxy)
   componentManager.attachRuntime(node, proxy)
   componentManager.syncNode(node)
@@ -7947,7 +7947,7 @@ export const useSceneStore = defineStore('scene', {
 
           nodesForAsset.forEach((node) => {
             const metadata = node.importMetadata
-            let runtimeObject: Object3D
+            let runtimeObject: Object3D | null = null
 
             if (!runtimeObject && canUseInstancing && !metadata && modelGroup) {
               runtimeObject = createInstancedRuntimeProxy(node, modelGroup)
@@ -7963,6 +7963,10 @@ export const useSceneStore = defineStore('scene', {
               const reuseOriginal = !shouldCacheModelObject && !baseObjectAssigned
               runtimeObject = reuseOriginal ? baseObjectResolved : baseObjectResolved.clone(true)
               baseObjectAssigned = baseObjectAssigned || reuseOriginal
+            }
+
+            if (!runtimeObject) {
+              throw new Error('Failed to create runtime object')
             }
 
             runtimeObject.name = node.name ?? runtimeObject.name

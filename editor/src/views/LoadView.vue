@@ -93,8 +93,7 @@ async function bootstrap() {
 
     statusMessage.value = '同步本地存档…'
     progress.value = 28
-    const sceneStore = useSceneStore()
-    sceneStore.initialize()
+    useSceneStore()
     await waitForPiniaHydration()
 
     statusMessage.value = '检查场景数据…'

@@ -102,6 +102,7 @@ import type {
   GuideboardComponentProps,
   WarpGateComponentProps,
   WarpGateEffectInstance,
+  GuideboardEffectInstance,
 } from '@schema/components'
 import type { EnvironmentSettings } from '@/types/environment'
 

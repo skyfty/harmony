@@ -15,9 +15,7 @@ import type {
   SceneOutlineMeshMap,
 } from '@harmony/schema'
 import type { SceneExportOptions, GLBExportSettings } from '@/types/scene-export'
-import { AssetCache, AssetLoader } from '@schema/assetCache'
-import ResourceCache from '@schema/ResourceCache'
-import { findObjectByPath, loadAssetObject } from '@schema/modelAssetLoader'
+import { findObjectByPath } from '@schema/modelAssetLoader'
 import { getCachedModelObject, getOrLoadModelObject } from '@/stores/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
 

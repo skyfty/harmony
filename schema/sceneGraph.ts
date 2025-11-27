@@ -41,7 +41,7 @@ import { createFileFromEntry } from '@schema/modelAssetLoader'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { createGroundMesh, updateGroundMesh } from './groundMesh'
 import { createSurfaceMesh, updateSurfaceMesh } from './surfaceMesh'
-import { createWallGroup, updateWallGroup } from './wallMesh'
+import { createWallGroup } from './wallMesh'
 
 type SceneNodeWithExtras = SceneNode & {
   light?: {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch, type WatchStopHandle } from 'vue'
-import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
+import { useSceneStore } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import * as THREE from 'three'
 import type {
@@ -49,21 +49,10 @@ const assetCacheStore = useAssetCacheStore()
 const DISPLAY_BOARD_INITIAL_HEIGHT = 0.5
 const DISPLAY_BOARD_EPSILON = 1e-4
 
-const VIEW_POINT_RADIUS = 0.12
-const VIEW_POINT_DEFAULT_OFFSET = 0.8
-const VIEW_POINT_MIN_DISTANCE = 0.3
-const VIEW_POINT_EDGE_MARGIN = 0.05
 const VIEW_POINT_COLOR = 0xff8a65
 const VIEW_POINT_SHOW_BEHAVIOR_NAME = 'Show View Point'
 const VIEW_POINT_HIDE_BEHAVIOR_NAME = 'Hide View Point'
 
-const GUIDEBOARD_RADIUS = 0.75
-
-const tempViewPointBox = new THREE.Box3()
-const tempViewPointVecA = new THREE.Vector3()
-const tempViewPointVecB = new THREE.Vector3()
-const tempViewPointVecC = new THREE.Vector3()
-const tempViewPointQuat = new THREE.Quaternion()
 const tempGroupCameraPosition = new THREE.Vector3()
 const tempGroupCameraTarget = new THREE.Vector3()
 const tempGroupDirection = new THREE.Vector3()
@@ -831,62 +820,6 @@ function ensureBehaviorComponent(nodeId: string): SceneNodeComponentState<Behavi
     }
   }
   return behaviorComponent ?? null
-}
-
-function computeViewPointWorldPosition(parent: SceneNode, radius: number): THREE.Vector3 | null {
-  const runtime = getRuntimeObject(parent.id)
-  if (runtime) {
-    runtime.updateMatrixWorld(true)
-    tempViewPointBox.makeEmpty()
-    tempViewPointBox.setFromObject(runtime)
-
-    const center = tempViewPointBox.isEmpty()
-      ? runtime.getWorldPosition(tempViewPointVecA)
-      : tempViewPointBox.getCenter(tempViewPointVecA)
-
-    const quaternion = runtime.getWorldQuaternion(tempViewPointQuat)
-    const direction = tempViewPointVecB.set(1, 0, 0).applyQuaternion(quaternion)
-    if (direction.lengthSq() < 1e-6) {
-      direction.set(1, 0, 0)
-    }
-    direction.normalize()
-
-    let distance = VIEW_POINT_DEFAULT_OFFSET
-    if (!tempViewPointBox.isEmpty()) {
-      const farthestPoint = tempViewPointVecC.set(
-        direction.x >= 0 ? tempViewPointBox.max.x : tempViewPointBox.min.x,
-        direction.y >= 0 ? tempViewPointBox.max.y : tempViewPointBox.min.y,
-        direction.z >= 0 ? tempViewPointBox.max.z : tempViewPointBox.min.z,
-      )
-      const projectedCenter = center.dot(direction)
-      const projectedSurface = farthestPoint.dot(direction)
-      const distanceToSurface = Math.max(projectedSurface - projectedCenter, 0)
-      distance = Math.max(distanceToSurface + radius + VIEW_POINT_EDGE_MARGIN, VIEW_POINT_MIN_DISTANCE)
-    } else {
-      distance = Math.max(distance, VIEW_POINT_MIN_DISTANCE)
-    }
-
-    const spawn = center.clone().add(tempViewPointVecC.copy(direction).multiplyScalar(distance))
-    spawn.y = center.y
-    return spawn
-  }
-
-  const matrix = computeWorldMatrixForNode(sceneStore.nodes, parent.id)
-  if (!matrix) {
-    return null
-  }
-
-  const position = new THREE.Vector3().setFromMatrixPosition(matrix)
-  const quaternion = new THREE.Quaternion().setFromRotationMatrix(matrix)
-  const direction = tempViewPointVecB.set(1, 0, 0).applyQuaternion(quaternion)
-  if (direction.lengthSq() < 1e-6) {
-    direction.set(1, 0, 0)
-  }
-  direction.normalize()
-
-  const spawn = position.clone().add(tempViewPointVecC.copy(direction).multiplyScalar(VIEW_POINT_DEFAULT_OFFSET))
-  spawn.y = position.y
-  return spawn
 }
 
 function findNodeWithParent(
