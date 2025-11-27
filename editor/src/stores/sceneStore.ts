@@ -3226,7 +3226,6 @@ function applyInstancedRuntimeToNode(node: SceneNode, group: ModelInstanceGroup)
     return null
   }
   proxy.name = node.name ?? proxy.name
-  prepareRuntimeObjectForNode(proxy)
   tagObjectWithNodeId(proxy, node.id)
   registerRuntimeObject(node.id, proxy)
   componentManager.attachRuntime(node, proxy)

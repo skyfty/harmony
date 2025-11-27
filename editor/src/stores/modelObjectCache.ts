@@ -248,8 +248,7 @@ function mapEntryToGroup(entry: ModelAssetEntry): ModelInstanceGroup {
   }
 }
 
-function buildModelAssetEntry(assetId: string, object: Object3D): ModelAssetEntry {
-  const prepared = object.clone(true)
+function buildModelAssetEntry(assetId: string, prepared: Object3D): ModelAssetEntry {
   prepared.updateMatrixWorld(true)
   const boundingBox = new Box3().setFromObject(prepared)
   const radius = boundingBox.getSize(new Vector3()).length() * 0.5
