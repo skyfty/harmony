@@ -1098,17 +1098,22 @@ function resolveNodeIdFromIntersection(intersection: THREE.Intersection): string
 }
 
 function collectSceneIntersections(recursive = true): THREE.Intersection[] {
-  const baseHits = raycaster.intersectObjects(rootGroup.children, recursive)
-  const instancedHits: THREE.Intersection[] = []
+  rootGroup.updateWorldMatrix(true, true)
+  instancedMeshGroup.updateWorldMatrix(true, true)
+
+  const pickTargets: THREE.Object3D[] = [...rootGroup.children]
+
   instancedMeshes.forEach((mesh) => {
     if (!mesh.visible || mesh.count === 0) {
       return
     }
-    instancedHits.push(...raycaster.intersectObject(mesh, false))
+    mesh.updateWorldMatrix(true, false)
+    pickTargets.push(mesh)
   })
-  const combined = baseHits.concat(instancedHits)
-  combined.sort((a, b) => a.distance - b.distance)
-  return combined
+
+  const intersections = raycaster.intersectObjects(pickTargets, recursive)
+  intersections.sort((a, b) => a.distance - b.distance)
+  return intersections
 }
 
 function setBoundingBoxFromObject(object: THREE.Object3D | null, target: THREE.Box3): THREE.Box3 {
@@ -2477,15 +2482,14 @@ async function loadDragPreviewForAsset(asset: ProjectAsset): Promise<boolean> {
       assetCacheStore.releaseInMemoryBlob(asset.id)
     }
 
-    const object = baseGroup.object.clone(true)
     if (token !== dragPreviewLoadToken) {
-      disposeObjectResources(object)
+      disposeObjectResources(baseGroup.object)
       return false
     }
-    applyPreviewVisualTweaks(object)
-    dragPreviewObject = object
+    applyPreviewVisualTweaks(baseGroup.object)
+    dragPreviewObject = baseGroup.object
     dragPreviewAssetId = asset.id
-    dragPreviewGroup.add(object)
+    dragPreviewGroup.add(baseGroup.object)
     if (lastDragPoint) {
       dragPreviewGroup.position.copy(lastDragPoint)
       dragPreviewGroup.visible = true
