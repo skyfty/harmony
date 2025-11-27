@@ -3320,7 +3320,10 @@ function disposeMaterialTextures(material: THREE.Material | null | undefined) {
 function disposeObjectResources(object: THREE.Object3D) {
 	const mesh = object as THREE.Mesh
 	if ((mesh as any).isMesh) {
-		mesh.geometry?.dispose?.()
+		const sharedInstancedAsset = Boolean(mesh.userData?.__instancedAssetId)
+		if (!sharedInstancedAsset) {
+			mesh.geometry?.dispose?.()
+		}
 		const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
 		materials.forEach((material) => {
 			if (!material) {

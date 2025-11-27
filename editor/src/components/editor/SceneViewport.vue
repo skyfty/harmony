@@ -2140,10 +2140,11 @@ function disposeObjectResources(object: THREE.Object3D) {
   object.traverse((child) => {
     const meshChild = child as THREE.Mesh
     if (meshChild?.isMesh) {
+      const sharedInstancedAsset = Boolean(meshChild.userData?.__instancedAssetId)
       if (meshChild.userData?.dynamicMeshType === 'Ground') {
         return
       }
-      if (meshChild.geometry) {
+      if (!sharedInstancedAsset && meshChild.geometry) {
         meshChild.geometry.dispose()
       }
       const materials = Array.isArray(meshChild.material) ? meshChild.material : [meshChild.material]
