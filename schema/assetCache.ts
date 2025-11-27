@@ -14,7 +14,6 @@ export interface AssetCacheEntry {
   error: string | null
   blob: Blob | null
   blobUrl: string | null
-  arrayBuffer: ArrayBuffer | null
   size: number
   refCount: number
   lastUsedAt: number

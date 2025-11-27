@@ -297,7 +297,6 @@ function createDefaultEntry(assetId: string): AssetCacheEntry {
     error: null,
     blob: null,
     blobUrl: null,
-    arrayBuffer: null,
     size: 0,
     refCount: 0,
     lastUsedAt: 0,
@@ -313,7 +312,6 @@ function applyBlobToEntry(entry: AssetCacheEntry, payload: {
   mimeType: string | null
   filename: string | null
   downloadUrl: string | null
-  arrayBuffer?: ArrayBuffer | null
 }) {
   if (entry.blobUrl) {
     URL.revokeObjectURL(entry.blobUrl)
@@ -329,7 +327,6 @@ function applyBlobToEntry(entry: AssetCacheEntry, payload: {
   entry.mimeType = payload.mimeType
   entry.filename = payload.filename ?? `${entry.assetId}`
   entry.downloadUrl = payload.downloadUrl
-  entry.arrayBuffer = payload.arrayBuffer ?? null
 }
 
 export const useAssetCacheStore = defineStore('assetCache', {
@@ -421,13 +418,11 @@ export const useAssetCacheStore = defineStore('assetCache', {
         return null
       }
       const entry = this.ensureEntry(assetId)
-      const arrayBuffer = await stored.blob.arrayBuffer()
       applyBlobToEntry(entry, {
         blob: stored.blob,
         mimeType: stored.mimeType ?? stored.blob.type ?? null,
         filename: stored.filename,
         downloadUrl: stored.downloadUrl ?? null,
-        arrayBuffer,
       })
       entry.lastUsedAt = now()
       this.evictIfNeeded(assetId)
@@ -441,20 +436,17 @@ export const useAssetCacheStore = defineStore('assetCache', {
         mimeType?: string | null
         filename?: string | null
         downloadUrl?: string | null
-        arrayBuffer?: ArrayBuffer | null
       },
     ): Promise<AssetCacheEntry> {
       const entry = this.ensureEntry(assetId)
       invalidateModelObject(assetId)
       const filename = payload.filename ?? (payload.blob instanceof File ? payload.blob.name : null)
-      const arrayBuffer = payload.arrayBuffer ?? (typeof payload.blob.arrayBuffer === 'function' ? await payload.blob.arrayBuffer() : null)
 
       applyBlobToEntry(entry, {
         blob: payload.blob,
         mimeType: payload.mimeType ?? payload.blob.type ?? entry.mimeType ?? null,
         filename,
         downloadUrl: payload.downloadUrl ?? entry.downloadUrl ?? null,
-        arrayBuffer,
       })
 
       entry.size = payload.blob.size
@@ -598,7 +590,6 @@ export const useAssetCacheStore = defineStore('assetCache', {
         status: 'idle',
         blob: null,
         blobUrl: null,
-        arrayBuffer: null,
         progress: 0,
         size: 0,
         abortController: null,
@@ -633,7 +624,6 @@ export const useAssetCacheStore = defineStore('assetCache', {
 
       entry.blob = null
       entry.blobUrl = null
-      entry.arrayBuffer = null
       entry.status = 'idle'
       entry.progress = 0
       entry.size = 0

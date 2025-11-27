@@ -7881,7 +7881,6 @@ export const useSceneStore = defineStore('scene', {
             tagObjectWithNodeId(runtimeObject, node.id)
             registerRuntimeObject(node.id, runtimeObject)
             componentManager.attachRuntime(node, runtimeObject)
-            componentManager.syncNode(node)
           })
         } catch (error) {
           const message = (error as Error).message ?? 'Unknown error'

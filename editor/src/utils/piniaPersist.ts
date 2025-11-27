@@ -369,6 +369,7 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
     }
 
     const schedulePersist = (state: StateTree) => {
+      // console.log("lskdjflsjdf");
       const partialState = pickFromState(state, persistOptions.pick)
       pendingPayload = {
         version,
