@@ -187,6 +187,16 @@ export function subscribeInstancedMeshes(listener: (mesh: InstancedMesh, assetId
   }
 }
 
+export function ensureInstancedMeshesRegistered(assetId: string): void {
+  const entry = modelObjectCache.get(assetId)
+  if (!entry) {
+    return
+  }
+  entry.handles.forEach((handle) => {
+    instancedMeshListeners.forEach((listener) => listener(handle.mesh, assetId))
+  })
+}
+
 export function findNodeIdForInstance(mesh: InstancedMesh, instanceIndex: number): string | null {
   const handle = meshHandleLookup.get(mesh.userData?.instancingHandleId as string)
   if (!handle) {

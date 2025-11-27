@@ -109,6 +109,7 @@ import {
   allocateModelInstance,
   releaseModelInstance,
   updateModelInstanceMatrix,
+  ensureInstancedMeshesRegistered,
   type ModelInstanceGroup,
 } from './modelObjectCache'
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
@@ -3178,6 +3179,22 @@ function serializeBoundingBox(box: Box3): InstancedBoundsPayload {
   }
 }
 
+function createInstancedPlaceholderObject(name: string | undefined, group: ModelInstanceGroup): Object3D {
+  const placeholder = new Object3D()
+  placeholder.name = name ?? group.object.name ?? 'Instanced Model'
+  const baseUserData = clonePlainRecord(group.object.userData as Record<string, unknown> | undefined)
+  if (baseUserData) {
+    placeholder.userData = baseUserData
+  }
+  placeholder.userData = {
+    ...(placeholder.userData ?? {}),
+    instanced: true,
+    instancedAssetId: group.assetId,
+    instancedBounds: serializeBoundingBox(group.boundingBox),
+  }
+  return placeholder
+}
+
 function createInstancedRuntimeProxy(node: SceneNode, group: ModelInstanceGroup): Object3D | null {
   if (!node.sourceAssetId || node.sourceAssetId !== group.assetId) {
     return null
@@ -3185,6 +3202,7 @@ function createInstancedRuntimeProxy(node: SceneNode, group: ModelInstanceGroup)
   if (!group.meshes.length) {
     return null
   }
+  ensureInstancedMeshesRegistered(group.assetId)
   const binding = allocateModelInstance(group.assetId, node.id)
   if (!binding) {
     return null
@@ -3210,7 +3228,6 @@ function applyInstancedRuntimeToNode(node: SceneNode, group: ModelInstanceGroup)
   proxy.name = node.name ?? proxy.name
   prepareRuntimeObjectForNode(proxy)
   tagObjectWithNodeId(proxy, node.id)
-  unregisterRuntimeObject(node.id)
   registerRuntimeObject(node.id, proxy)
   componentManager.attachRuntime(node, proxy)
   componentManager.syncNode(node)
@@ -9673,12 +9690,14 @@ export const useSceneStore = defineStore('scene', {
       }
       const shouldSnapToGrid =
         payload.snapToGrid !== undefined ? payload.snapToGrid : !(payload.editorFlags?.ignoreGridSnapping)
-      let workingObject: Object3D
+      let runtimeSource: Object3D | null = payload.object ?? null
       let name = payload.name
       let sourceAssetId = payload.sourceAssetId
       let assetCache: ReturnType<typeof useAssetCacheStore> | null = null
       let registerAssetId: string | null = null
       let modelGroup: ModelInstanceGroup | null = null
+      let canUseInstancing = false
+      let metrics: ObjectMetrics | null = runtimeSource ? computeObjectMetrics(runtimeSource) : null
 
       
       if (payload.asset) {
@@ -9691,7 +9710,6 @@ export const useSceneStore = defineStore('scene', {
         const cached = getCachedModelObject(asset.id)
         if (cached) {
           modelGroup = cached
-          workingObject = cached.object.clone(true)
         } else {
           if (!assetCache.hasCache(asset.id)) {
             return null
@@ -9703,18 +9721,31 @@ export const useSceneStore = defineStore('scene', {
           const baseObject = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
           assetCache.releaseInMemoryBlob(asset.id)
           modelGroup = baseObject
-          workingObject = baseObject.object.clone(true)
+        }
+
+        canUseInstancing = Boolean(modelGroup?.meshes.length)
+
+        if (canUseInstancing && modelGroup) {
+          runtimeSource = createInstancedPlaceholderObject(name ?? payload.asset.name, modelGroup)
+          metrics = computeInstancedMetrics(modelGroup)
+        } else if (modelGroup) {
+          runtimeSource = modelGroup.object.clone(true)
+          metrics = computeObjectMetrics(runtimeSource)
         }
 
         name = name ?? asset.name
         sourceAssetId = sourceAssetId ?? asset.id
         registerAssetId = asset.id
       } else {
-        workingObject = payload.object!
-        name = name ?? workingObject.name ?? 'Imported Mesh'
+        runtimeSource = payload.object!
+        metrics = computeObjectMetrics(runtimeSource)
+        name = name ?? runtimeSource.name ?? 'Imported Mesh'
       }
 
-      const metrics = computeObjectMetrics(workingObject)
+      if (!runtimeSource || !metrics) {
+        throw new Error('Failed to prepare runtime object')
+      }
+
       const minY = metrics.bounds.min.y
       const hasExplicitPosition = Boolean(payload.position)
       let spawnVector: Vector3
@@ -9765,19 +9796,19 @@ export const useSceneStore = defineStore('scene', {
         scale = { x: scaleVec.x, y: scaleVec.y, z: scaleVec.z }
       }
 
-      const nodeType = payload.nodeType ?? resolveSceneNodeTypeFromObject(workingObject)
+      const nodeType = payload.nodeType ?? (canUseInstancing ? 'Group' : resolveSceneNodeTypeFromObject(runtimeSource))
 
       const node = this.addSceneNode({
         nodeType,
-        object: workingObject,
-        name: name ?? workingObject.name ?? 'Imported Mesh',
+        object: runtimeSource,
+        name: name ?? runtimeSource.name ?? 'Imported Mesh',
         position: toPlainVector(localPosition),
         rotation,
         scale,
         sourceAssetId: sourceAssetId ?? undefined,
         parentId: targetParentId ?? undefined,
         editorFlags: payload.editorFlags,
-        userData: clonePlainRecord(workingObject.userData as Record<string, unknown> | undefined),
+        userData: clonePlainRecord(runtimeSource.userData as Record<string, unknown> | undefined),
       })
 
       if (registerAssetId && assetCache) {
@@ -9785,7 +9816,7 @@ export const useSceneStore = defineStore('scene', {
         assetCache.touch(registerAssetId)
       }
 
-      if (node && modelGroup?.meshes.length) {
+      if (node && canUseInstancing && modelGroup) {
         applyInstancedRuntimeToNode(node, modelGroup)
       }
 

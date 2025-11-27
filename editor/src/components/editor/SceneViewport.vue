@@ -1552,6 +1552,7 @@ function updateSelectDragPosition(drag: SelectionDragState, event: PointerEvent)
 
   drag.object.position.copy(newLocalPosition)
   drag.object.updateMatrixWorld(true)
+  syncInstancedTransform(drag.object)
   drag.object.getWorldPosition(selectDragWorldPosition)
   drag.object.getWorldQuaternion(selectDragWorldQuaternion)
   selectDragDelta.copy(selectDragWorldPosition).sub(drag.initialWorldPosition)
@@ -1575,6 +1576,7 @@ function updateSelectDragPosition(drag: SelectionDragState, event: PointerEvent)
     localPosition.y = companion.initialLocalPosition.y
     companion.object.position.copy(localPosition)
     companion.object.updateMatrixWorld(true)
+    syncInstancedTransform(companion.object)
     updates.push({
       id: companion.nodeId,
       position: companion.object.position,
@@ -7342,9 +7344,7 @@ function handleTransformChange() {
   }
   faceSnapExcludedIds.clear()
 
-  if (target.userData?.instancedAssetId) {
-    syncInstancedTransform(target)
-  }
+  syncInstancedTransform(target)
 
   const updates: TransformUpdatePayload[] = []
   const primaryEntry = groupState?.entries.get(nodeId)
@@ -7368,6 +7368,7 @@ function handleTransformChange() {
           }
           entry.object.position.copy(transformLocalPositionHelper)
           entry.object.updateMatrixWorld(true)
+          syncInstancedTransform(entry.object)
         })
         if (isActiveTranslateTool) {
           transformLastWorldPosition.copy(transformCurrentWorldPosition)
@@ -7387,6 +7388,7 @@ function handleTransformChange() {
           entry.object.quaternion.copy(transformQuaternionHelper)
           entry.object.rotation.setFromQuaternion(transformQuaternionHelper)
           entry.object.updateMatrixWorld(true)
+          syncInstancedTransform(entry.object)
         })
         hasTransformLastWorldPosition = false
         break
@@ -7412,6 +7414,7 @@ function handleTransformChange() {
             entry.initialScale.z * transformScaleFactor.z,
           )
           entry.object.updateMatrixWorld(true)
+          syncInstancedTransform(entry.object)
         })
         hasTransformLastWorldPosition = false
         break
@@ -7537,9 +7540,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   object.visible = node.visible ?? true
   applyViewPointScaleConstraint(object, node)
 
-  if (object.userData?.instancedAssetId) {
-    syncInstancedTransform(object)
-  }
+  syncInstancedTransform(object)
 
   if (node.dynamicMesh?.type === 'Ground') {
     const groundMesh = userData.groundMesh as THREE.Mesh | undefined
@@ -8212,7 +8213,17 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       perspectiveCamera.userData.nodeId = node.id
       object = perspectiveCamera
     }
-  } else if (nodeType === 'Group' || nodeType === 'Sky' || nodeType === 'Environment') {
+  } else if (nodeType === 'Sky' || nodeType === 'Environment') {
+    let container = getRuntimeObject(node.id)
+    if (container !== null) {
+      container.userData.usesRuntimeObject = true
+    } else {
+      container = new THREE.Group()
+      container.name = node.name
+    }
+    container.userData.nodeId = node.id
+    object = container
+  } else if (nodeType === 'Group') {
     let container = getRuntimeObject(node.id)
     if (container !== null) {
       container.userData.usesRuntimeObject = true
@@ -8286,9 +8297,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     applyGuideboardPlaceholderState(object, node)
   }
 
-  if (object.userData?.instancedAssetId) {
-    syncInstancedTransform(object)
-  }
+  syncInstancedTransform(object)
 
   return object
 }
