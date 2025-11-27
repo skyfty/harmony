@@ -44,7 +44,13 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 
 import type { EditorTool } from '@/types/editor-tool'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import { getCachedModelObject, getOrLoadModelObject } from '@/stores/modelObjectCache'
+import {
+  getCachedModelObject,
+  getOrLoadModelObject,
+  subscribeInstancedMeshes,
+  findNodeIdForInstance,
+  updateModelInstanceMatrix,
+} from '@/stores/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { createPrimitiveMesh } from '@schema/geometry'
 import type { CameraProjection, CameraControlMode } from '@harmony/schema'
@@ -430,6 +436,17 @@ const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
 const CLICK_DRAG_THRESHOLD_PX = 5
 const rootGroup = new THREE.Group()
+const instancedMeshGroup = new THREE.Group()
+instancedMeshGroup.name = 'InstancedMeshes'
+const instancedMeshes: THREE.InstancedMesh[] = []
+let stopInstancedMeshSubscription: (() => void) | null = null
+const instancedMatrixHelper = new THREE.Matrix4()
+const instancedScaleHelper = new THREE.Vector3()
+const instancedPositionHelper = new THREE.Vector3()
+const instancedQuaternionHelper = new THREE.Quaternion()
+const instancedBoundsBox = new THREE.Box3()
+const instancedBoundsMin = new THREE.Vector3()
+const instancedBoundsMax = new THREE.Vector3()
 const objectMap = new Map<string, THREE.Object3D>()
 const renderClock = new THREE.Clock()
 let effectRuntimeTickers: Array<(delta: number) => void> = []
@@ -1068,6 +1085,80 @@ function resolveNodeIdFromObject(object: THREE.Object3D | null): string | null {
   return null
 }
 
+function resolveNodeIdFromIntersection(intersection: THREE.Intersection): string | null {
+  if (typeof intersection.instanceId === 'number' && intersection.instanceId >= 0) {
+    const mesh = intersection.object as THREE.InstancedMesh
+    const instancedNodeId = findNodeIdForInstance(mesh, intersection.instanceId)
+    if (instancedNodeId) {
+      return instancedNodeId
+    }
+  }
+  return resolveNodeIdFromObject(intersection.object)
+}
+
+function collectSceneIntersections(recursive = true): THREE.Intersection[] {
+  const baseHits = raycaster.intersectObjects(rootGroup.children, recursive)
+  const instancedHits: THREE.Intersection[] = []
+  instancedMeshes.forEach((mesh) => {
+    if (!mesh.visible || mesh.count === 0) {
+      return
+    }
+    instancedHits.push(...raycaster.intersectObject(mesh, false))
+  })
+  const combined = baseHits.concat(instancedHits)
+  combined.sort((a, b) => a.distance - b.distance)
+  return combined
+}
+
+function setBoundingBoxFromObject(object: THREE.Object3D | null, target: THREE.Box3): THREE.Box3 {
+  if (!object) {
+    return target.makeEmpty()
+  }
+  const instancedBounds = object.userData?.instancedBounds as { min?: number[]; max?: number[] } | undefined
+  if (instancedBounds?.min?.length === 3 && instancedBounds?.max?.length === 3) {
+    instancedBoundsMin.fromArray(instancedBounds.min)
+    instancedBoundsMax.fromArray(instancedBounds.max)
+    instancedBoundsBox.min.copy(instancedBoundsMin)
+    instancedBoundsBox.max.copy(instancedBoundsMax)
+    target.copy(instancedBoundsBox)
+    target.applyMatrix4(object.matrixWorld)
+    return target
+  }
+  return target.setFromObject(object)
+}
+
+function syncInstancedTransform(object: THREE.Object3D | null) {
+  if (!object?.userData?.instancedAssetId) {
+    return
+  }
+  const nodeId = object.userData.nodeId as string | undefined
+  if (!nodeId) {
+    return
+  }
+  object.updateMatrixWorld(true)
+  object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+  const isVisible = object.visible !== false
+  if (!isVisible) {
+    instancedScaleHelper.setScalar(0)
+  }
+  instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+  updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
+}
+
+function attachInstancedMesh(mesh: THREE.InstancedMesh) {
+  if (instancedMeshes.includes(mesh)) {
+    return
+  }
+  instancedMeshes.push(mesh)
+  instancedMeshGroup.add(mesh)
+}
+
+function clearInstancedMeshes() {
+  instancedMeshes.splice(0, instancedMeshes.length).forEach((mesh) => {
+    instancedMeshGroup.remove(mesh)
+  })
+}
+
 function pickNodeAtPointer(event: { clientX: number; clientY: number }): NodeHitResult | null {
   if (!canvasRef.value || !camera) {
     return null
@@ -1081,10 +1172,10 @@ function pickNodeAtPointer(event: { clientX: number; clientY: number }): NodeHit
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
   raycaster.setFromCamera(pointer, camera)
-  const intersections = raycaster.intersectObjects(rootGroup.children, true)
+  const intersections = collectSceneIntersections()
 
   for (const intersection of intersections) {
-    const nodeId = resolveNodeIdFromObject(intersection.object)
+    const nodeId = resolveNodeIdFromIntersection(intersection)
     if (!nodeId) {
       continue
     }
@@ -1137,7 +1228,7 @@ function pickActiveSelectionBoundingBoxHit(event: PointerEvent): NodeHitResult |
   }
 
   targetObject.updateMatrixWorld(true)
-  selectionDragBoundingBox.setFromObject(targetObject)
+  setBoundingBoxFromObject(targetObject, selectionDragBoundingBox)
   if (selectionDragBoundingBox.isEmpty()) {
     return null
   }
@@ -1248,7 +1339,7 @@ function dropSelectionToGround() {
     }
 
     object.updateMatrixWorld(true)
-    dropBoundingBoxHelper.setFromObject(object)
+    setBoundingBoxFromObject(object, dropBoundingBoxHelper)
     if (dropBoundingBoxHelper.isEmpty()) {
       continue
     }
@@ -2367,9 +2458,9 @@ async function loadDragPreviewForAsset(asset: ProjectAsset): Promise<boolean> {
   clearDragPreviewObject()
   const token = ++dragPreviewLoadToken
   try {
-    let baseObject = getCachedModelObject(asset.id)
+    let baseGroup = getCachedModelObject(asset.id)
 
-    if (!baseObject) {
+    if (!baseGroup) {
       let file = assetCacheStore.createFileFromCache(asset.id)
       if (!file) {
         await assetCacheStore.loadFromIndexedDb(asset.id)
@@ -2379,11 +2470,11 @@ async function loadDragPreviewForAsset(asset: ProjectAsset): Promise<boolean> {
         pendingPreviewAssetId = null
         return false
       }
-      baseObject = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
+      baseGroup = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
       assetCacheStore.releaseInMemoryBlob(asset.id)
     }
 
-    const object = baseObject.clone(true)
+    const object = baseGroup.object.clone(true)
     if (token !== dragPreviewLoadToken) {
       disposeObjectResources(object)
       return false
@@ -3159,7 +3250,7 @@ function applyFaceAlignmentSnap(
   ensureFaceSnapEffectPool()
 
   target.updateMatrixWorld(true)
-  faceSnapPrimaryBounds.setFromObject(target)
+  setBoundingBoxFromObject(target, faceSnapPrimaryBounds)
   if (faceSnapPrimaryBounds.isEmpty()) {
     hideFaceSnapEffect()
     return
@@ -3182,7 +3273,7 @@ function applyFaceAlignmentSnap(
     }
 
     candidate.updateMatrixWorld(true)
-    faceSnapCandidateBounds.setFromObject(candidate)
+    setBoundingBoxFromObject(candidate, faceSnapCandidateBounds)
     if (faceSnapCandidateBounds.isEmpty()) {
       return
     }
@@ -3454,7 +3545,7 @@ function focusCameraOnNode(nodeId: string): boolean {
   const object = objectMap.get(nodeId)
   if (object) {
     object.updateWorldMatrix(true, true)
-    const box = new THREE.Box3().setFromObject(object)
+    const box = setBoundingBoxFromObject(object, new THREE.Box3())
     if (!box.isEmpty()) {
       box.getCenter(target)
       const boxSize = new THREE.Vector3()
@@ -3695,6 +3786,7 @@ function initScene() {
 
   ensureSkyExists()
   scene.add(rootGroup)
+  scene.add(instancedMeshGroup)
   scene.add(gridGroup)
   scene.add(axesHelper)
   scene.add(groundSelectionGroup)
@@ -3707,6 +3799,10 @@ function initScene() {
   applyGridVisibility(gridVisible.value)
   applyAxesVisibility(axesVisible.value)
   ensureFallbackLighting()
+  clearInstancedMeshes()
+  stopInstancedMeshSubscription = subscribeInstancedMeshes((mesh) => {
+    attachInstancedMesh(mesh)
+  })
 
   applySkyboxSettingsToScene(skyboxSettings.value)
   if (pendingSkyboxSettings) {
@@ -4388,6 +4484,12 @@ function animate() {
 
 function disposeScene() {
   disposeStats()
+  if (stopInstancedMeshSubscription) {
+    stopInstancedMeshSubscription()
+    stopInstancedMeshSubscription = null
+  }
+  clearInstancedMeshes()
+  instancedMeshGroup.removeFromParent()
 
   resizeObserver?.disconnect()
   resizeObserver = null
@@ -4714,7 +4816,7 @@ function ensureSelectionIndicator(nodeId: string): THREE.Group | null {
 function updateSelectionIndicatorFromObject(group: THREE.Group, object: THREE.Object3D) {
   object.updateMatrixWorld(true)
   object.getWorldPosition(selectionHighlightPositionHelper)
-  selectionHighlightBoundingBox.setFromObject(object)
+  setBoundingBoxFromObject(object, selectionHighlightBoundingBox)
   if (selectionHighlightBoundingBox.isEmpty()) {
     selectionHighlightSizeHelper.setScalar(0)
   } else {
@@ -5017,7 +5119,7 @@ function updateGridHighlightFromObject(object: THREE.Object3D | null) {
 
   object.updateMatrixWorld(true)
   object.getWorldPosition(gridHighlightPositionHelper)
-  gridHighlightBoundingBox.setFromObject(object)
+  setBoundingBoxFromObject(object, gridHighlightBoundingBox)
   if (gridHighlightBoundingBox.isEmpty()) {
     gridHighlightSizeHelper.setScalar(0)
   } else {
@@ -6739,7 +6841,7 @@ function computeDropPoint(event: DragEvent): THREE.Vector3 | null {
   if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
     return snapVectorToGrid(planeHit.clone())
   }
-  const intersections = raycaster.intersectObjects(rootGroup.children, true)
+  const intersections = collectSceneIntersections()
   if (intersections.length > 0) {
     const first = intersections[0]
     const point = first?.point.clone() ?? null
@@ -6767,9 +6869,9 @@ function resolveMaterialDropTarget(event: DragEvent): { nodeId: string; object: 
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
   raycaster.setFromCamera(pointer, camera)
-  const intersections = raycaster.intersectObjects(rootGroup.children, true)
+  const intersections = collectSceneIntersections()
   for (const intersection of intersections) {
-    const nodeId = resolveNodeIdFromObject(intersection.object)
+    const nodeId = resolveNodeIdFromIntersection(intersection)
     if (!nodeId) {
       continue
     }
@@ -6800,9 +6902,9 @@ function resolveBehaviorDropTarget(event: DragEvent): { nodeId: string; object: 
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
   raycaster.setFromCamera(pointer, camera)
-  const intersections = raycaster.intersectObjects(rootGroup.children, true)
+  const intersections = collectSceneIntersections()
   for (const intersection of intersections) {
-    const nodeId = resolveNodeIdFromObject(intersection.object)
+    const nodeId = resolveNodeIdFromIntersection(intersection)
     if (!nodeId) {
       continue
     }
@@ -6861,9 +6963,9 @@ function resolveDisplayBoardDropTarget(event: DragEvent): {
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
   raycaster.setFromCamera(pointer, camera)
-  const intersections = raycaster.intersectObjects(rootGroup.children, true)
+  const intersections = collectSceneIntersections()
   for (const intersection of intersections) {
-    const nodeId = resolveNodeIdFromObject(intersection.object)
+    const nodeId = resolveNodeIdFromIntersection(intersection)
     if (!nodeId) {
       continue
     }
@@ -7239,6 +7341,10 @@ function handleTransformChange() {
   }
   faceSnapExcludedIds.clear()
 
+  if (target.userData?.instancedAssetId) {
+    syncInstancedTransform(target)
+  }
+
   const updates: TransformUpdatePayload[] = []
   const primaryEntry = groupState?.entries.get(nodeId)
 
@@ -7429,6 +7535,10 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   object.scale.set(node.scale.x, node.scale.y, node.scale.z)
   object.visible = node.visible ?? true
   applyViewPointScaleConstraint(object, node)
+
+  if (object.userData?.instancedAssetId) {
+    syncInstancedTransform(object)
+  }
 
   if (node.dynamicMesh?.type === 'Ground') {
     const groundMesh = userData.groundMesh as THREE.Mesh | undefined
@@ -8173,6 +8283,10 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     applyWarpGatePlaceholderState(object, node)
   } else if (nodeType === 'Guideboard' && !sceneStore.hasRuntimeObject(node.id)) {
     applyGuideboardPlaceholderState(object, node)
+  }
+
+  if (object.userData?.instancedAssetId) {
+    syncInstancedTransform(object)
   }
 
   return object

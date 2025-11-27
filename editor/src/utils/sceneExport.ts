@@ -549,20 +549,21 @@ async function generateOutlineMeshesForCandidates(
     }
 
     if (!outlineMeshMap[assetId]) {
-      let baseObject = getCachedModelObject(assetId)
-      if (!baseObject) {
+      let baseGroup = getCachedModelObject(assetId)
+      if (!baseGroup) {
         let file = assetCacheStore.createFileFromCache(assetId)
         if (!file) {
           await assetCacheStore.loadFromIndexedDb(assetId)
           file = assetCacheStore.createFileFromCache(assetId)
         }
         if (file) {
-          baseObject = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file))
+          baseGroup = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file))
         }
-      }      
-      if (!baseObject) {
+      }
+      if (!baseGroup) {
         continue
       }
+      const baseObject = baseGroup.object
       baseObject.updateMatrixWorld(true)
       const targetSource = findObjectByPath(baseObject, entry.sourceNode.importMetadata?.objectPath ?? null) ?? baseObject
       const targetClone = targetSource.clone(true)

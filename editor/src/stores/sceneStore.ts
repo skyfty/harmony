@@ -103,7 +103,14 @@ import { useUiStore } from './uiStore'
 import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { generateUuid } from '@/utils/uuid'
-import { getCachedModelObject, getOrLoadModelObject } from './modelObjectCache'
+import {
+  getCachedModelObject,
+  getOrLoadModelObject,
+  allocateModelInstance,
+  releaseModelInstance,
+  updateModelInstanceMatrix,
+  type ModelInstanceGroup,
+} from './modelObjectCache'
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 import { createSurfaceMesh } from '@schema/surfaceMesh'
 import { computeBlobHash, blobToDataUrl, dataUrlToBlob, inferBlobFilename, extractExtension, ensureExtension } from '@/utils/blob'
@@ -3112,6 +3119,7 @@ let runtimeRefreshInFlight: Promise<void> | null = null
 
 function clearRuntimeObjectRegistry() {
   runtimeObjectRegistry.forEach((_object, nodeId) => {
+    releaseModelInstance(nodeId)
     componentManager.detachRuntime(nodeId)
   })
   runtimeObjectRegistry.clear()
@@ -3126,6 +3134,7 @@ function registerRuntimeObject(id: string, object: Object3D) {
 }
 
 function unregisterRuntimeObject(id: string) {
+  releaseModelInstance(id)
   runtimeObjectRegistry.delete(id)
   componentManager.detachRuntime(id)
 }
@@ -3155,6 +3164,81 @@ function tagObjectWithNodeId(object: Object3D, nodeId: string) {
       nodeId,
     }
   })
+}
+
+type InstancedBoundsPayload = {
+  min: [number, number, number]
+  max: [number, number, number]
+}
+
+function serializeBoundingBox(box: Box3): InstancedBoundsPayload {
+  return {
+    min: [box.min.x, box.min.y, box.min.z],
+    max: [box.max.x, box.max.y, box.max.z],
+  }
+}
+
+function createInstancedRuntimeProxy(node: SceneNode, group: ModelInstanceGroup): Object3D | null {
+  if (!node.sourceAssetId || node.sourceAssetId !== group.assetId) {
+    return null
+  }
+  if (!group.meshes.length) {
+    return null
+  }
+  const binding = allocateModelInstance(group.assetId, node.id)
+  if (!binding) {
+    return null
+  }
+  const proxy = new Object3D()
+  proxy.name = node.name ?? group.object.name ?? 'Instanced Model'
+  proxy.visible = node.visible ?? true
+  proxy.userData = {
+    ...(proxy.userData ?? {}),
+    instanced: true,
+    instancedAssetId: group.assetId,
+    instancedBounds: serializeBoundingBox(group.boundingBox),
+  }
+  updateModelInstanceMatrix(node.id, composeNodeMatrix(node))
+  return proxy
+}
+
+function applyInstancedRuntimeToNode(node: SceneNode, group: ModelInstanceGroup): Object3D | null {
+  const proxy = createInstancedRuntimeProxy(node, group)
+  if (!proxy) {
+    return null
+  }
+  proxy.name = node.name ?? proxy.name
+  prepareRuntimeObjectForNode(proxy)
+  tagObjectWithNodeId(proxy, node.id)
+  releaseRuntimeObject(node.id)
+  registerRuntimeObject(node.id, proxy)
+  componentManager.attachRuntime(node, proxy)
+  componentManager.syncNode(node)
+  return proxy
+}
+
+function restoreRuntimeFromSnapshot(node: SceneNode, snapshot: Object3D): Object3D | null {
+  const instancedAssetId = snapshot.userData?.instancedAssetId as string | undefined
+  if (instancedAssetId) {
+    const group = getCachedModelObject(instancedAssetId)
+    if (group) {
+      const applied = applyInstancedRuntimeToNode(node, group)
+      if (applied) {
+        return applied
+      }
+    }
+  }
+  try {
+    const clonedObject = snapshot.clone(true)
+    tagObjectWithNodeId(clonedObject, node.id)
+    registerRuntimeObject(node.id, clonedObject)
+    componentManager.attachRuntime(node, clonedObject)
+    componentManager.syncNode(node)
+    return clonedObject
+  } catch (error) {
+    console.warn('Failed to clone runtime snapshot for node', node.id, error)
+    return null
+  }
 }
 
 function collectNodesByAssetId(nodes: SceneNode[]): Map<string, SceneNode[]> {
@@ -3468,17 +3552,10 @@ function duplicateNodeTree(original: SceneNode, context: DuplicateContext): Scen
 
   const runtimeObject = getRuntimeObject(original.id) ?? context.runtimeSnapshots.get(original.id) ?? null
   if (runtimeObject) {
-    try {
-      const clonedObject = runtimeObject.clone(true)
-      tagObjectWithNodeId(clonedObject, duplicated.id)
-      registerRuntimeObject(duplicated.id, clonedObject)
-      componentManager.attachRuntime(duplicated, clonedObject)
-    } catch (error) {
-      console.warn('Failed to clone runtime object while duplicating node', original.id, error)
-    }
+    restoreRuntimeFromSnapshot(duplicated, runtimeObject)
+  } else {
+    componentManager.syncNode(duplicated)
   }
-
-  componentManager.syncNode(duplicated)
 
   return duplicated
 }
@@ -3646,6 +3723,16 @@ function computeObjectMetrics(object: Object3D): ObjectMetrics {
   const size = bounds.getSize(new Vector3())
   const radius = Math.max(size.length() * 0.5, DEFAULT_SPAWN_RADIUS)
   return { bounds, center, radius }
+}
+
+function computeInstancedMetrics(group: ModelInstanceGroup): ObjectMetrics {
+  const bounds = group.boundingBox.clone()
+  const center = bounds.getCenter(new Vector3())
+  return {
+    bounds,
+    center,
+    radius: Math.max(group.radius, DEFAULT_SPAWN_RADIUS),
+  }
 }
 
 function resolveSpawnPosition(params: {
@@ -6418,17 +6505,11 @@ export const useSceneStore = defineStore('scene', {
         assetCache.recalculateUsage(this.nodes)
 
         snapshot.runtimeSnapshots.forEach((object, nodeId) => {
-          try {
-            const clonedObject = object.clone(true)
-            tagObjectWithNodeId(clonedObject, nodeId)
-            registerRuntimeObject(nodeId, clonedObject)
-            const node = findNodeById(this.nodes, nodeId)
-            if (node) {
-              componentManager.attachRuntime(node, clonedObject)
-            }
-          } catch (error) {
-            console.warn('Failed to clone stored runtime snapshot during restore', nodeId, error)
+          const node = findNodeById(this.nodes, nodeId)
+          if (!node) {
+            return
           }
+          restoreRuntimeFromSnapshot(node, object)
         })
 
         this.rebuildGeneratedMeshRuntimes()
@@ -7736,12 +7817,14 @@ export const useSceneStore = defineStore('scene', {
           }
 
           const shouldCacheModelObject = asset?.type === 'model' || asset?.type === 'mesh'
+          let modelGroup: ModelInstanceGroup | null = null
           let baseObject: Object3D | null = null
 
           if (shouldCacheModelObject) {
-            const cachedModelObject = getCachedModelObject(assetId)
-            if (cachedModelObject) {
-              baseObject = cachedModelObject
+            const cachedGroup = getCachedModelObject(assetId)
+            if (cachedGroup) {
+              modelGroup = cachedGroup
+              baseObject = cachedGroup.object
               assetCache.touch(assetId)
             }
           }
@@ -7819,19 +7902,21 @@ export const useSceneStore = defineStore('scene', {
               throw new Error('Missing asset file in cache')
             }
 
-            baseObject = shouldCacheModelObject
-              ? await getOrLoadModelObject(assetId, () => loadObjectFromFile(file))
-              : await loadObjectFromFile(file)
-
             if (shouldCacheModelObject) {
+              const loadedGroup = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file))
+              modelGroup = loadedGroup
+              baseObject = loadedGroup.object
               assetCache.releaseInMemoryBlob(assetId)
+            } else {
+              baseObject = await loadObjectFromFile(file)
             }
           }
 
           if (!baseObject) {
             throw new Error('Failed to resolve base object')
           }
-          const baseObjectResolved = baseObject
+          const baseObjectResolved = modelGroup?.object ?? baseObject
+          const canUseInstancing = Boolean(modelGroup?.meshes.length)
 
           const metadataEntries = nodesForAsset
             .map((node) => {
@@ -7864,13 +7949,17 @@ export const useSceneStore = defineStore('scene', {
             const metadata = node.importMetadata
             let runtimeObject: Object3D
 
+            if (!runtimeObject && canUseInstancing && !metadata && modelGroup) {
+              runtimeObject = createInstancedRuntimeProxy(node, modelGroup)
+            }
+
             if (metadata && Array.isArray(metadata.objectPath)) {
               const target = findObjectByPath(baseObjectResolved, metadata.objectPath) ?? baseObjectResolved
               runtimeObject = target.clone(true)
               const descendantKey = metadata.objectPath.join('.')
               const descendantPaths = descendantCache.get(descendantKey) ?? []
               pruneCloneByRelativePaths(runtimeObject, descendantPaths)
-            } else {
+            } else if (!runtimeObject) {
               const reuseOriginal = !shouldCacheModelObject && !baseObjectAssigned
               runtimeObject = reuseOriginal ? baseObjectResolved : baseObjectResolved.clone(true)
               baseObjectAssigned = baseObjectAssigned || reuseOriginal
@@ -9357,10 +9446,15 @@ export const useSceneStore = defineStore('scene', {
 
       try {
         const shouldCacheModelObject = asset.type === 'model'
+        let modelGroup: ModelInstanceGroup | null = null
         let baseObject: Object3D | null = null
 
         if (shouldCacheModelObject) {
-          baseObject = getCachedModelObject(asset.id)
+          const cachedGroup = getCachedModelObject(asset.id)
+          if (cachedGroup) {
+            modelGroup = cachedGroup
+            baseObject = cachedGroup.object
+          }
         }
 
         if (!baseObject) {
@@ -9368,11 +9462,13 @@ export const useSceneStore = defineStore('scene', {
           if (!file) {
             throw new Error('资源未缓存完成')
           }
-          baseObject = shouldCacheModelObject
-            ? await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
-            : await loadObjectFromFile(file)
           if (shouldCacheModelObject) {
+            const loadedGroup = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
+            modelGroup = loadedGroup
+            baseObject = loadedGroup.object
             assetCache.releaseInMemoryBlob(asset.id)
+          } else {
+            baseObject = await loadObjectFromFile(file)
           }
         }
 
@@ -9380,7 +9476,8 @@ export const useSceneStore = defineStore('scene', {
           throw new Error('资源加载失败')
         }
 
-        const workingObject = baseObject.clone(true)
+        const canUseInstancing = Boolean(modelGroup?.meshes.length) && !placeholder.importMetadata?.objectPath
+        const workingObject = canUseInstancing ? null : baseObject.clone(true)
         const parentMap = buildParentMap(this.nodes)
         const parentId = parentMap.get(nodeId) ?? null
         const siblingSource = parentId
@@ -9396,7 +9493,9 @@ export const useSceneStore = defineStore('scene', {
         const worldScale = new Vector3()
         worldMatrix.decompose(worldPosition, worldQuaternion, worldScale)
 
-        const metrics = computeObjectMetrics(workingObject)
+        const metrics = canUseInstancing && modelGroup
+          ? computeInstancedMetrics(modelGroup)
+          : computeObjectMetrics(workingObject!)
         const minY = metrics.bounds.min.y
         const halfHeight = Math.abs(worldScale.y) * 0.5
         const anchorWorldY = worldPosition.y - halfHeight
@@ -9466,9 +9565,22 @@ export const useSceneStore = defineStore('scene', {
           newNode.components = componentMap
         }
 
-        registerRuntimeObject(newNodeId, workingObject)
-        tagObjectWithNodeId(workingObject, newNodeId)
-        componentManager.attachRuntime(newNode, workingObject)
+        let runtimeObject: Object3D | null = null
+        if (canUseInstancing && modelGroup) {
+          runtimeObject = createInstancedRuntimeProxy(newNode, modelGroup)
+        }
+        if (!runtimeObject) {
+          runtimeObject = workingObject
+        }
+        if (!runtimeObject) {
+          throw new Error('Failed to prepare runtime object')
+        }
+
+        runtimeObject.name = newNode.name ?? runtimeObject.name
+        prepareRuntimeObjectForNode(runtimeObject)
+        tagObjectWithNodeId(runtimeObject, newNodeId)
+        registerRuntimeObject(newNodeId, runtimeObject)
+        componentManager.attachRuntime(newNode, runtimeObject)
         componentManager.syncNode(newNode)
 
         if (parentId) {
@@ -9562,6 +9674,7 @@ export const useSceneStore = defineStore('scene', {
       let sourceAssetId = payload.sourceAssetId
       let assetCache: ReturnType<typeof useAssetCacheStore> | null = null
       let registerAssetId: string | null = null
+      let modelGroup: ModelInstanceGroup | null = null
 
       
       if (payload.asset) {
@@ -9573,7 +9686,8 @@ export const useSceneStore = defineStore('scene', {
         assetCache = useAssetCacheStore()
         const cached = getCachedModelObject(asset.id)
         if (cached) {
-          workingObject = cached.clone(true)
+          modelGroup = cached
+          workingObject = cached.object.clone(true)
         } else {
           if (!assetCache.hasCache(asset.id)) {
             return null
@@ -9584,7 +9698,8 @@ export const useSceneStore = defineStore('scene', {
           }
           const baseObject = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
           assetCache.releaseInMemoryBlob(asset.id)
-          workingObject = baseObject.clone(true)
+          modelGroup = baseObject
+          workingObject = baseObject.object.clone(true)
         }
 
         name = name ?? asset.name
@@ -9664,6 +9779,10 @@ export const useSceneStore = defineStore('scene', {
       if (registerAssetId && assetCache) {
         assetCache.registerUsage(registerAssetId)
         assetCache.touch(registerAssetId)
+      }
+
+      if (node && modelGroup?.meshes.length) {
+        applyInstancedRuntimeToNode(node, modelGroup)
       }
 
       return node
