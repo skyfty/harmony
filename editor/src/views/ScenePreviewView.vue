@@ -28,6 +28,17 @@ import ResourceCache from '@schema/ResourceCache'
 import { AssetLoader, AssetCache } from '@schema/assetCache'
 import type { AssetCacheEntry } from '@schema/assetCache'
 import { loadNodeObject } from '@schema/modelAssetLoader'
+import {
+	getCachedModelObject,
+	getOrLoadModelObject,
+	subscribeInstancedMeshes,
+	ensureInstancedMeshesRegistered,
+	allocateModelInstance,
+	releaseModelInstance,
+	updateModelInstanceMatrix,
+	findNodeIdForInstance,
+	type ModelInstanceGroup,
+} from '@schema/modelObjectCache'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { ComponentManager } from '@schema/components/componentManager'
 import {
@@ -485,6 +496,14 @@ let queuedSnapshot: ScenePreviewSnapshot | null = null
 let lastSnapshotRevision = 0
 
 const clock = new THREE.Clock()
+const instancedMeshGroup = new THREE.Group()
+instancedMeshGroup.name = 'InstancedMeshes'
+const instancedMeshes: THREE.InstancedMesh[] = []
+let stopInstancedMeshSubscription: (() => void) | null = null
+const instancedMatrixHelper = new THREE.Matrix4()
+const instancedPositionHelper = new THREE.Vector3()
+const instancedQuaternionHelper = new THREE.Quaternion()
+const instancedScaleHelper = new THREE.Vector3()
 const nodeObjectMap = new Map<string, THREE.Object3D>()
 const rotationState = { q: false, e: false }
 const defaultFirstPersonState = {
@@ -619,6 +638,146 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function collectNodesByAssetId(nodes: SceneNode[] | undefined | null): Map<string, SceneNode[]> {
+	const map = new Map<string, SceneNode[]>()
+	if (!Array.isArray(nodes)) {
+		return map
+	}
+	const stack: SceneNode[] = [...nodes]
+	while (stack.length) {
+		const node = stack.pop()
+		if (!node) {
+			continue
+		}
+		if (node.sourceAssetId) {
+			if (!map.has(node.sourceAssetId)) {
+				map.set(node.sourceAssetId, [])
+			}
+			map.get(node.sourceAssetId)!.push(node)
+		}
+		if (Array.isArray(node.children) && node.children.length) {
+			stack.push(...node.children)
+		}
+	}
+	return map
+}
+
+function serializeBoundingBox(box: THREE.Box3): { min: [number, number, number]; max: [number, number, number] } {
+	return {
+		min: [box.min.x, box.min.y, box.min.z],
+		max: [box.max.x, box.max.y, box.max.z],
+	}
+}
+
+async function ensureModelInstanceGroup(
+	assetId: string,
+	sampleNode: SceneNode | null,
+	resourceCache: ResourceCache,
+): Promise<ModelInstanceGroup | null> {
+	if (!assetId) {
+		return null
+	}
+	const cached = getCachedModelObject(assetId)
+	if (cached) {
+		return cached
+	}
+	try {
+		const group = await getOrLoadModelObject(assetId, async () => {
+			const object = await loadNodeObject(resourceCache, assetId, sampleNode?.importMetadata ?? null)
+			if (!object) {
+				throw new Error('Instanced mesh loader returned empty object')
+			}
+			return object
+		})
+		return group
+	} catch (error) {
+		console.warn('[ScenePreview] Failed to prepare instanced model', assetId, error)
+		return null
+	}
+}
+
+function createInstancedPreviewProxy(node: SceneNode, group: ModelInstanceGroup): THREE.Object3D | null {
+	if (!node.sourceAssetId || node.sourceAssetId !== group.assetId) {
+		return null
+	}
+	releaseModelInstance(node.id)
+	const binding = allocateModelInstance(group.assetId, node.id)
+	if (!binding) {
+		return null
+	}
+	const proxy = new THREE.Object3D()
+	proxy.name = node.name ?? group.object.name ?? 'Instanced Model'
+	proxy.userData = {
+		...(proxy.userData ?? {}),
+		nodeId: node.id,
+		instanced: true,
+		instancedAssetId: group.assetId,
+		instancedBounds: serializeBoundingBox(group.boundingBox),
+	}
+	updateNodeTransfrom(proxy, node)
+	return proxy
+}
+
+async function prepareInstancedNodesForDocument(
+	document: SceneJsonExportDocument,
+	pending: Map<string, THREE.Object3D>,
+	resourceCache: ResourceCache,
+): Promise<void> {
+	const grouped = collectNodesByAssetId(document.nodes ?? [])
+	if (!grouped.size) {
+		return
+	}
+	const tasks: Promise<void>[] = []
+	grouped.forEach((nodes, assetId) => {
+		tasks.push((async () => {
+			if (!nodes.length) {
+				return
+			}
+			const group = await ensureModelInstanceGroup(assetId, nodes[0] ?? null, resourceCache)
+			if (!group || !group.meshes.length) {
+				return
+			}
+			ensureInstancedMeshesRegistered(assetId)
+			nodes.forEach((node) => {
+				const pendingObject = pending.get(node.id)
+				if (pendingObject) {
+					pendingObject.parent?.remove(pendingObject)
+					disposeObjectResources(pendingObject)
+					pending.delete(node.id)
+				}
+				const existingRuntime = nodeObjectMap.get(node.id) ?? null
+				if (existingRuntime) {
+					const existingAsset = existingRuntime.userData?.instancedAssetId as string | undefined
+					if (existingAsset === assetId) {
+						syncInstancedTransform(existingRuntime)
+						return
+					}
+					removeNodeSubtree(node.id)
+				}
+				const proxy = createInstancedPreviewProxy(node, group)
+				if (proxy) {
+					pending.set(node.id, proxy)
+				}
+			})
+		})())
+	})
+	await Promise.all(tasks)
+}
+
+function attachInstancedMesh(mesh: THREE.InstancedMesh) {
+	if (instancedMeshes.includes(mesh)) {
+		return
+	}
+	instancedMeshes.push(mesh)
+	instancedMeshGroup.add(mesh)
+}
+
+function clearInstancedMeshes() {
+	instancedMeshes.splice(0, instancedMeshes.length).forEach((mesh) => {
+		instancedMeshGroup.remove(mesh)
+	})
+}
+
 function extractEnvironmentSettingsFromNodes(
 	sourceNodes: SceneNode[] | null | undefined,
 ): EnvironmentSettings | null {
@@ -713,6 +872,17 @@ function resolveNodeIdFromObject(object: THREE.Object3D | null | undefined): str
 		candidate = candidate.parent
 	}
 	return null
+}
+
+function resolveNodeIdFromIntersection(intersection: THREE.Intersection): string | null {
+	if (typeof intersection.instanceId === 'number' && intersection.instanceId >= 0) {
+		const mesh = intersection.object as THREE.InstancedMesh
+		const instancedNodeId = findNodeIdForInstance(mesh, intersection.instanceId)
+		if (instancedNodeId) {
+			return instancedNodeId
+		}
+	}
+	return resolveNodeIdFromObject(intersection.object)
 }
 
 function attachRuntimeForNode(nodeId: string, object: THREE.Object3D): void {
@@ -2016,6 +2186,7 @@ function handleSetVisibilityEvent(event: Extract<BehaviorRuntimeEvent, { type: '
 	const object = nodeObjectMap.get(event.targetNodeId)
 	if (object) {
 		object.visible = event.visible
+		syncInstancedTransform(object)
 	}
 	const node = resolveNodeById(event.targetNodeId)
 	if (node) {
@@ -2343,9 +2514,10 @@ function handleBehaviorClick(event: MouseEvent) {
 	let hitObject: THREE.Object3D | null = null
 	let hitPoint: THREE.Vector3 | null = null
 	for (const intersection of intersections) {
-		nodeId = resolveNodeIdFromObject(intersection.object)
-		if (nodeId) {
-			hitObject = intersection.object
+		const resolvedId = resolveNodeIdFromIntersection(intersection)
+		if (resolvedId) {
+			nodeId = resolvedId
+			hitObject = nodeObjectMap.get(resolvedId) ?? intersection.object
 			hitPoint = intersection.point.clone()
 			break
 		}
@@ -2593,6 +2765,12 @@ function initRenderer() {
 	rootGroup = new THREE.Group()
 	rootGroup.name = 'ScenePreviewRoot'
 	scene.add(rootGroup)
+	scene.add(instancedMeshGroup)
+	clearInstancedMeshes()
+	stopInstancedMeshSubscription?.()
+	stopInstancedMeshSubscription = subscribeInstancedMeshes((mesh) => {
+		attachInstancedMesh(mesh)
+	})
 
 	applySunDirectionToSunLight()
 
@@ -2767,6 +2945,9 @@ function stopAnimationLoop() {
 }
 
 function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
+	nodeObjectMap.forEach((_object, nodeId) => {
+		releaseModelInstance(nodeId)
+	})
 	nodeObjectMap.clear()
 	if (!options.preservePreviewNodeMap) {
 		previewNodeMap.clear()
@@ -2792,6 +2973,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	})
 	disposables.forEach((object) => disposeObjectResources(object))
 	rootGroup.clear()
+	clearInstancedMeshes()
 }
 
 function disposeSkyEnvironment() {
@@ -3346,6 +3528,7 @@ function removeNodeSubtree(nodeId: string) {
 	target.traverse((child) => {
 		const id = child.userData?.nodeId as string | undefined
 		if (id) {
+			releaseModelInstance(id)
 			nodeObjectMap.delete(id)
 			previewComponentManager.removeNode(id)
 			previewNodeMap.delete(id)
@@ -3378,11 +3561,17 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 			nodeObjectMap.set(nodeId, child)
 			pending?.delete(nodeId)
 			attachRuntimeForNode(nodeId, child)
+			const instancedAssetId = child.userData?.instancedAssetId as string | undefined
+			if (instancedAssetId) {
+				ensureInstancedMeshesRegistered(instancedAssetId)
+				syncInstancedTransform(child)
+			}
 			const nodeState = resolveNodeById(nodeId)
 			const initialVisibility = resolveGuideboardInitialVisibility(nodeState)
 			if (initialVisibility !== null) {
 				child.visible = initialVisibility
 				updateBehaviorVisibility(nodeId, child.visible)
+				syncInstancedTransform(child)
 			}
 		}
 	})
@@ -3427,7 +3616,26 @@ function ensureChildOrder(parent: THREE.Object3D, child: THREE.Object3D, orderIn
 	parent.children.splice(Math.min(desiredIndex, parent.children.length), 0, child)
 }
 
-function updateNodeTransfrom(object: THREE.Object3D,node: SceneNode) {
+
+function syncInstancedTransform(object: THREE.Object3D | null) {
+	if (!object?.userData?.instancedAssetId) {
+		return
+	}
+	const nodeId = object.userData.nodeId as string | undefined
+	if (!nodeId) {
+		return
+	}
+	object.updateMatrixWorld(true)
+	object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+	const isVisible = object.visible !== false
+	if (!isVisible) {
+		instancedScaleHelper.setScalar(0)
+	}
+	instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+	updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
+}
+
+function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
 	if (node.position) {
 		object.position.set(node.position.x, node.position.y, node.position.z)
 	}
@@ -3437,6 +3645,7 @@ function updateNodeTransfrom(object: THREE.Object3D,node: SceneNode) {
 	if (node.scale) {
 		object.scale.set(node.scale.x, node.scale.y, node.scale.z)
 	}
+	syncInstancedTransform(object)
 }
 
 
@@ -3457,6 +3666,7 @@ function updateNodeProperties(object: THREE.Object3D, node: SceneNode) {
 	updateNodeTransfrom(object, node)
 	updateBehaviorVisibility(node.id, object.visible)
 	applyMaterialOverrides(object, node.materials, materialOverrideOptions)
+	syncInstancedTransform(object)
 }
 
 type LazyAssetMetadata = {
@@ -3830,6 +4040,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	resourceProgressItems.value = []
 
 	let graphResult: Awaited<ReturnType<typeof buildSceneGraph>> | null = null
+	let resourceCache: ResourceCache | null = null
 	try {
 		const buildOptions: SceneGraphBuildOptions = {
 			onProgress: (info) => {
@@ -3851,7 +4062,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 				hdrLoader: rgbeLoader,
 			},
 		}
-		const resourceCache = ensureEditorResourceCache(document, buildOptions)
+		resourceCache = ensureEditorResourceCache(document, buildOptions)
 		graphResult = await buildSceneGraph(document, resourceCache, buildOptions)
 	} finally {
 		resourceProgress.active = false
@@ -3883,6 +4094,10 @@ async function updateScene(document: SceneJsonExportDocument) {
 			pendingObjects.set(nodeId, object)
 		}
 	})
+
+	if (resourceCache) {
+		await prepareInstancedNodesForDocument(document, pendingObjects, resourceCache)
+	}
 
 	if (!currentDocument) {
 		disposeScene({ preservePreviewNodeMap: true })
@@ -4012,6 +4227,8 @@ onBeforeUnmount(() => {
 	unsubscribe?.()
 	unsubscribe = null
 	stopAnimationLoop()
+ 	stopInstancedMeshSubscription?.()
+ 	stopInstancedMeshSubscription = null
 	window.removeEventListener('resize', handleResize)
 	document.removeEventListener('fullscreenchange', handleFullscreenChange)
 	window.removeEventListener('keydown', handleKeyDown)
