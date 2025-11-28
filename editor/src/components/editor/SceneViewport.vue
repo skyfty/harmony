@@ -50,7 +50,7 @@ import {
   subscribeInstancedMeshes,
   findNodeIdForInstance,
   updateModelInstanceMatrix,
-} from '@/stores/modelObjectCache'
+} from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { createPrimitiveMesh } from '@schema/geometry'
 import type { CameraProjection, CameraControlMode } from '@harmony/schema'

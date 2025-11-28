@@ -111,7 +111,7 @@ import {
   updateModelInstanceMatrix,
   ensureInstancedMeshesRegistered,
   type ModelInstanceGroup,
-} from './modelObjectCache'
+} from '@schema/modelObjectCache'
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 import { createSurfaceMesh } from '@schema/surfaceMesh'
 import { computeBlobHash, blobToDataUrl, dataUrlToBlob, inferBlobFilename, extractExtension, ensureExtension } from '@/utils/blob'

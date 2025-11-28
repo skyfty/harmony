@@ -16,7 +16,7 @@ import type {
 } from '@harmony/schema'
 import type { SceneExportOptions, GLBExportSettings } from '@/types/scene-export'
 import { findObjectByPath } from '@schema/modelAssetLoader'
-import { getCachedModelObject, getOrLoadModelObject } from '@/stores/modelObjectCache'
+import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
 
 import { useAssetCacheStore } from '@/stores/assetCacheStore'

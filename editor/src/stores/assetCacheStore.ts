@@ -4,7 +4,7 @@ import type { SceneNode } from '@harmony/schema'
 import { fetchAssetBlob } from '@schema/assetCache'
 import type { AssetCacheEntry as SharedAssetCacheEntry, AssetCacheStatus as SharedAssetCacheStatus } from '@schema/assetCache'
 import { extractExtension } from '@/utils/blob'
-import { invalidateModelObject } from './modelObjectCache'
+import { invalidateModelObject } from '@schema/modelObjectCache'
 
 export type AssetCacheStatus = SharedAssetCacheStatus
 
