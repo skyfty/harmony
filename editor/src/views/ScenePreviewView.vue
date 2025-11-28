@@ -2809,16 +2809,6 @@ function setupStatsPanels(): void {
 	if (!container) {
 		return
 	}
-	if (!fpsStats) {
-		const instance = StatsFactory()
-		instance.showPanel(0)
-		prepareStatsDom(instance.dom, 'scene-preview__stats-panel--fps')
-		container.appendChild(instance.dom)
-		fpsStats = instance
-	}
-	if (fpsStats?.dom.parentElement !== container) {
-		container.appendChild(fpsStats!.dom)
-	}
 	if (!memoryStats) {
 		const instance = StatsFactory()
 		const hasMemoryPanel = instance.dom.children.length > 2
