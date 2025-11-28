@@ -402,6 +402,20 @@ const instancedOutlineBaseMaterial = new THREE.MeshBasicMaterial({
   depthTest: false,
 })
 instancedOutlineBaseMaterial.toneMapped = false
+const instancedPickProxyGeometry = new THREE.BoxGeometry(1, 1, 1)
+const instancedPickProxyMaterial = new THREE.MeshBasicMaterial({
+  color: 0xffffff,
+  transparent: true,
+  opacity: 0,
+  depthWrite: false,
+  depthTest: false,
+})
+instancedPickProxyMaterial.colorWrite = false
+instancedPickProxyMaterial.toneMapped = false
+const instancedPickBoundsMinHelper = new THREE.Vector3()
+const instancedPickBoundsMaxHelper = new THREE.Vector3()
+const instancedPickBoundsSizeHelper = new THREE.Vector3()
+const instancedPickBoundsCenterHelper = new THREE.Vector3()
 const objectMap = new Map<string, THREE.Object3D>()
 
 const {
@@ -3961,6 +3975,9 @@ function collectVisibleMeshesForOutline(object: THREE.Object3D, collector: Set<T
   }
 
   const meshCandidate = object as THREE.Mesh
+  if (meshCandidate?.userData?.instancedPickProxy) {
+    return
+  }
   if (meshCandidate?.isMesh || (meshCandidate as { isSkinnedMesh?: boolean }).isSkinnedMesh) {
     collector.add(meshCandidate)
   }
@@ -3968,6 +3985,82 @@ function collectVisibleMeshesForOutline(object: THREE.Object3D, collector: Set<T
   object.children.forEach((child) => {
     collectVisibleMeshesForOutline(child, collector)
   })
+}
+
+type InstancedBoundsPayload = { min: [number, number, number]; max: [number, number, number] }
+
+function isInstancedBoundsPayload(value: unknown): value is InstancedBoundsPayload {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const payload = value as Partial<InstancedBoundsPayload>
+  return Array.isArray(payload.min) && payload.min.length === 3 && Array.isArray(payload.max) && payload.max.length === 3
+}
+
+function extractInstancedBounds(node: SceneNode, object: THREE.Object3D): InstancedBoundsPayload | null {
+  const nodeUserData = node.userData as Record<string, unknown> | undefined
+  const nodeBoundsCandidate = nodeUserData?.instancedBounds
+  if (isInstancedBoundsPayload(nodeBoundsCandidate)) {
+    return nodeBoundsCandidate
+  }
+  const objectBoundsCandidate = object.userData?.instancedBounds
+  if (isInstancedBoundsPayload(objectBoundsCandidate)) {
+    return objectBoundsCandidate
+  }
+  return null
+}
+
+function ensureInstancedPickProxy(object: THREE.Object3D, node: SceneNode) {
+  const bounds = extractInstancedBounds(node, object)
+  if (!bounds) {
+    removeInstancedPickProxy(object)
+    return
+  }
+
+  let proxy = object.userData?.instancedPickProxy as THREE.Mesh | undefined
+  if (!proxy) {
+    proxy = new THREE.Mesh(instancedPickProxyGeometry, instancedPickProxyMaterial)
+    proxy.name = `${object.name ?? node.name ?? 'Instanced'}:PickProxy`
+    proxy.userData = {
+      ...(proxy.userData ?? {}),
+      nodeId: node.id,
+      instancedPickProxy: true,
+      excludeFromOutline: true,
+    }
+    proxy.renderOrder = -9999
+    proxy.frustumCulled = false
+    object.add(proxy)
+    const userData = object.userData ?? (object.userData = {})
+    userData.instancedPickProxy = proxy
+  } else {
+    proxy.userData.nodeId = node.id
+  }
+
+  instancedPickBoundsMinHelper.fromArray(bounds.min)
+  instancedPickBoundsMaxHelper.fromArray(bounds.max)
+  instancedPickBoundsSizeHelper.subVectors(instancedPickBoundsMaxHelper, instancedPickBoundsMinHelper)
+  instancedPickBoundsCenterHelper
+    .addVectors(instancedPickBoundsMinHelper, instancedPickBoundsMaxHelper)
+    .multiplyScalar(0.5)
+
+  const eps = 1e-4
+  proxy.position.copy(instancedPickBoundsCenterHelper)
+  proxy.scale.set(
+    Math.max(instancedPickBoundsSizeHelper.x, eps),
+    Math.max(instancedPickBoundsSizeHelper.y, eps),
+    Math.max(instancedPickBoundsSizeHelper.z, eps),
+  )
+  proxy.visible = true
+  proxy.updateMatrixWorld(true)
+}
+
+function removeInstancedPickProxy(object: THREE.Object3D) {
+  const proxy = object.userData?.instancedPickProxy as THREE.Mesh | undefined
+  if (!proxy) {
+    return
+  }
+  proxy.removeFromParent()
+  delete object.userData.instancedPickProxy
 }
 
 // Maintains transparent proxy meshes per instanced node so OutlinePass can highlight individual instances.
@@ -6768,6 +6861,11 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z)
   object.scale.set(node.scale.x, node.scale.y, node.scale.z)
   object.visible = node.visible ?? true
+  if (object.userData?.instancedAssetId) {
+    ensureInstancedPickProxy(object, node)
+  } else {
+    removeInstancedPickProxy(object)
+  }
   applyViewPointScaleConstraint(object, node)
 
   syncInstancedTransform(object)
@@ -7515,6 +7613,12 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
 
   const isVisible = node.visible ?? true
   object.visible = isVisible
+
+  if (object.userData?.instancedAssetId) {
+    ensureInstancedPickProxy(object, node)
+  } else {
+    removeInstancedPickProxy(object)
+  }
 
   if (node.materials && node.materials.length) {
     applyMaterialOverrides(object, node.materials, materialOverrideOptions)
