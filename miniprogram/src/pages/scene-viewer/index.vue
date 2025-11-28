@@ -187,6 +187,17 @@ import { buildSceneGraph, type SceneGraphBuildOptions, type SceneGraphResourcePr
 import ResourceCache from '@schema/ResourceCache';
 import { AssetCache, AssetLoader, type AssetCacheEntry } from '@schema/assetCache';
 import { loadNodeObject } from '@schema/modelAssetLoader';
+import {
+  getCachedModelObject,
+  getOrLoadModelObject,
+  subscribeInstancedMeshes,
+  ensureInstancedMeshesRegistered,
+  allocateModelInstance,
+  releaseModelInstance,
+  updateModelInstanceMatrix,
+  findNodeIdForInstance,
+  type ModelInstanceGroup,
+} from '@schema/modelObjectCache';
 import type Viewer from 'viewerjs';
 import type { ViewerOptions } from 'viewerjs';
 import type {
@@ -650,6 +661,17 @@ previewComponentManager.registerDefinition(effectComponentDefinition);
 previewComponentManager.registerDefinition(behaviorComponentDefinition);
 
 const previewNodeMap = new Map<string, SceneNode>();
+const instancedMeshGroup = new THREE.Group();
+instancedMeshGroup.name = 'InstancedMeshes';
+const instancedMeshes: THREE.InstancedMesh[] = [];
+let stopInstancedMeshSubscription: (() => void) | null = null;
+const instancedMatrixHelper = new THREE.Matrix4();
+const instancedPositionHelper = new THREE.Vector3();
+const instancedQuaternionHelper = new THREE.Quaternion();
+const instancedScaleHelper = new THREE.Vector3();
+const instancedBoundsBox = new THREE.Box3();
+const instancedBoundsMin = new THREE.Vector3();
+const instancedBoundsMax = new THREE.Vector3();
 const nodeObjectMap = new Map<string, THREE.Object3D>();
 
 const behaviorRaycaster = new THREE.Raycaster();
@@ -1877,6 +1899,158 @@ function resolveNodeById(nodeId: string): SceneNode | null {
   return previewNodeMap.get(nodeId) ?? null;
 }
 
+function collectNodesByAssetId(nodes: SceneNode[] | undefined | null): Map<string, SceneNode[]> {
+  const map = new Map<string, SceneNode[]>();
+  if (!Array.isArray(nodes)) {
+    return map;
+  }
+  const stack: SceneNode[] = [...nodes];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    if (node.sourceAssetId) {
+      if (!map.has(node.sourceAssetId)) {
+        map.set(node.sourceAssetId, []);
+      }
+      map.get(node.sourceAssetId)!.push(node);
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  return map;
+}
+
+function serializeBoundingBox(box: THREE.Box3): { min: [number, number, number]; max: [number, number, number] } {
+  return {
+    min: [box.min.x, box.min.y, box.min.z],
+    max: [box.max.x, box.max.y, box.max.z],
+  };
+}
+
+async function ensureModelInstanceGroup(
+  assetId: string,
+  sampleNode: SceneNode | null,
+  resourceCache: ResourceCache,
+): Promise<ModelInstanceGroup | null> {
+  if (!assetId) {
+    return null;
+  }
+  const cached = getCachedModelObject(assetId);
+  if (cached) {
+    return cached;
+  }
+  try {
+    const group = await getOrLoadModelObject(assetId, async () => {
+      const object = await loadNodeObject(resourceCache, assetId, sampleNode?.importMetadata ?? null);
+      if (!object) {
+        throw new Error('Instanced asset loader returned empty object');
+      }
+      return object;
+    });
+    return group;
+  } catch (error) {
+    console.warn('[SceneViewer] Failed to prepare instanced model', assetId, error);
+    return null;
+  }
+}
+
+function createInstancedPreviewProxy(node: SceneNode, group: ModelInstanceGroup): THREE.Object3D | null {
+  if (!node.sourceAssetId || node.sourceAssetId !== group.assetId) {
+    return null;
+  }
+  releaseModelInstance(node.id);
+  const binding = allocateModelInstance(group.assetId, node.id);
+  if (!binding) {
+    return null;
+  }
+  const proxy = new THREE.Object3D();
+  proxy.name = node.name ?? group.object.name ?? 'Instanced Model';
+  proxy.userData = {
+    ...(proxy.userData ?? {}),
+    nodeId: node.id,
+    instanced: true,
+    instancedAssetId: group.assetId,
+    instancedBounds: serializeBoundingBox(group.boundingBox),
+  };
+  updateNodeTransfrom(proxy, node);
+  return proxy;
+}
+
+async function prepareInstancedNodesForGraph(
+  root: THREE.Object3D,
+  document: SceneJsonExportDocument,
+  resourceCache: ResourceCache,
+): Promise<void> {
+  const grouped = collectNodesByAssetId(document.nodes ?? []);
+  if (!grouped.size) {
+    return;
+  }
+  type GraphEntry = { object: THREE.Object3D; parent: THREE.Object3D | null; index: number };
+  const sceneObjects = new Map<string, GraphEntry>();
+  root.traverse((object) => {
+    const nodeId = object.userData?.nodeId as string | undefined;
+    if (!nodeId) {
+      return;
+    }
+    const parent = object.parent ?? null;
+    const index = parent ? parent.children.indexOf(object) : root.children.indexOf(object);
+    sceneObjects.set(nodeId, { object, parent, index });
+  });
+
+  const tasks: Promise<void>[] = [];
+  grouped.forEach((nodes, assetId) => {
+    tasks.push((async () => {
+      if (!nodes.length) {
+        return;
+      }
+      const group = await ensureModelInstanceGroup(assetId, nodes[0] ?? null, resourceCache);
+      if (!group || !group.meshes.length) {
+        return;
+      }
+      ensureInstancedMeshesRegistered(assetId);
+      nodes.forEach((node) => {
+        const entry = sceneObjects.get(node.id);
+        if (!entry) {
+          return;
+        }
+        const { object, parent, index } = entry;
+        const targetParent = parent ?? root;
+        const proxy = createInstancedPreviewProxy(node, group);
+        if (!proxy) {
+          return;
+        }
+        targetParent.remove(object);
+        disposeObject(object);
+        targetParent.add(proxy);
+        if (index >= 0) {
+          const proxyIndex = targetParent.children.indexOf(proxy);
+          targetParent.children.splice(proxyIndex, 1);
+          targetParent.children.splice(Math.min(index, targetParent.children.length), 0, proxy);
+        }
+        sceneObjects.set(node.id, { object: proxy, parent: targetParent, index });
+      });
+    })());
+  });
+  await Promise.all(tasks);
+}
+
+function attachInstancedMesh(mesh: THREE.InstancedMesh): void {
+  if (instancedMeshes.includes(mesh)) {
+    return;
+  }
+  instancedMeshes.push(mesh);
+  instancedMeshGroup.add(mesh);
+}
+
+function clearInstancedMeshes(): void {
+  instancedMeshes.splice(0, instancedMeshes.length).forEach((mesh) => {
+    instancedMeshGroup.remove(mesh);
+  });
+}
+
 function resolveGuideboardComponent(
   node: SceneNode | null | undefined,
 ): SceneNodeComponentState<GuideboardComponentProps> | null {
@@ -1911,12 +2085,20 @@ function attachRuntimeForNode(nodeId: string, object: THREE.Object3D) {
 }
 
 function indexSceneObjects(root: THREE.Object3D) {
+  nodeObjectMap.forEach((_object, nodeId) => {
+    releaseModelInstance(nodeId);
+  });
   nodeObjectMap.clear();
   root.traverse((object) => {
     const nodeId = object.userData?.nodeId as string | undefined;
     if (nodeId) {
       nodeObjectMap.set(nodeId, object);
       attachRuntimeForNode(nodeId, object);
+      const instancedAssetId = object.userData?.instancedAssetId as string | undefined;
+      if (instancedAssetId) {
+        ensureInstancedMeshesRegistered(instancedAssetId);
+        syncInstancedTransform(object);
+      }
       const nodeState = resolveNodeById(nodeId);
       const guideboardVisibility = resolveGuideboardInitialVisibility(nodeState);
       if (guideboardVisibility !== null) {
@@ -1926,6 +2108,7 @@ function indexSceneObjects(root: THREE.Object3D) {
       if (nodeState) {
         applyMaterialOverrides(object, nodeState.materials, materialOverrideOptions);
       }
+      syncInstancedTransform(object);
     }
   });
 }
@@ -2196,16 +2379,34 @@ function prepareImportedObjectForPreview(object: THREE.Object3D): void {
   });
 }
 
-function updateNodeTransfrom(object: THREE.Object3D,node: SceneNode) {
-	if (node.position) {
-		object.position.set(node.position.x, node.position.y, node.position.z)
-	}
-	if (node.rotation) {
-		object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z)
-	}
-	if (node.scale) {
-		object.scale.set(node.scale.x, node.scale.y, node.scale.z)
-	}
+function syncInstancedTransform(object: THREE.Object3D | null): void {
+  if (!object?.userData?.instancedAssetId) {
+    return;
+  }
+  const nodeId = object.userData.nodeId as string | undefined;
+  if (!nodeId) {
+    return;
+  }
+  object.updateMatrixWorld(true);
+  object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper);
+  if (object.visible === false) {
+    instancedScaleHelper.setScalar(0);
+  }
+  instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper);
+  updateModelInstanceMatrix(nodeId, instancedMatrixHelper);
+}
+
+function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
+  if (node.position) {
+    object.position.set(node.position.x, node.position.y, node.position.z);
+  }
+  if (node.rotation) {
+    object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z);
+  }
+  if (node.scale) {
+    object.scale.set(node.scale.x, node.scale.y, node.scale.z);
+  }
+  syncInstancedTransform(object);
 }
 
 function updateNodeProperties(object: THREE.Object3D, node: SceneNode): void {
@@ -2225,6 +2426,7 @@ function updateNodeProperties(object: THREE.Object3D, node: SceneNode): void {
   }
   applyMaterialOverrides(object, node.materials, materialOverrideOptions);
   updateBehaviorVisibility(node.id, object.visible);
+  syncInstancedTransform(object);
 }
 
 function resolveNodeIdFromObject(object: THREE.Object3D | null | undefined): string | null {
@@ -2237,6 +2439,17 @@ function resolveNodeIdFromObject(object: THREE.Object3D | null | undefined): str
     current = current.parent;
   }
   return null;
+}
+
+function resolveNodeIdFromIntersection(intersection: THREE.Intersection): string | null {
+  if (typeof intersection.instanceId === 'number' && intersection.instanceId >= 0) {
+    const mesh = intersection.object as THREE.InstancedMesh;
+    const instancedNodeId = findNodeIdForInstance(mesh, intersection.instanceId);
+    if (instancedNodeId) {
+      return instancedNodeId;
+    }
+  }
+  return resolveNodeIdFromObject(intersection.object);
 }
 
 function processBehaviorEvents(events: BehaviorRuntimeEvent[] | BehaviorRuntimeEvent | null | undefined): void {
@@ -2819,6 +3032,7 @@ function handleSetVisibilityEvent(event: Extract<BehaviorRuntimeEvent, { type: '
   const object = nodeObjectMap.get(event.targetNodeId);
   if (object) {
     object.visible = event.visible;
+    syncInstancedTransform(object);
   }
   const node = resolveNodeById(event.targetNodeId);
   if (node) {
@@ -3199,13 +3413,14 @@ function ensureBehaviorTapHandler(canvas: HTMLCanvasElement, camera: THREE.Persp
       return;
     }
     for (const intersection of intersections) {
-      const nodeId = resolveNodeIdFromObject(intersection.object);
+      const nodeId = resolveNodeIdFromIntersection(intersection);
       if (!nodeId) {
         continue;
       }
+      const hitObject = nodeObjectMap.get(nodeId) ?? intersection.object;
       const results = triggerBehaviorAction(nodeId, 'click', {
         intersection: {
-          object: intersection.object,
+          object: hitObject,
           point: {
             x: intersection.point.x,
             y: intersection.point.y,
@@ -4134,6 +4349,9 @@ function teardownRenderer() {
   activeBehaviorDelayTimers.clear();
   resetAnimationControllers();
   previewNodeMap.clear();
+  nodeObjectMap.forEach((_object, nodeId) => {
+    releaseModelInstance(nodeId);
+  });
   nodeObjectMap.clear();
   lazyPlaceholderStates.clear();
   activeLazyLoadCount = 0;
@@ -4148,6 +4366,9 @@ function teardownRenderer() {
   lanternTextPromises.clear();
   Object.keys(lanternTextState).forEach((key) => delete lanternTextState[key]);
   resetAssetResolutionCaches();
+  stopInstancedMeshSubscription?.();
+  stopInstancedMeshSubscription = null;
+  clearInstancedMeshes();
   disposeObject(scene);
   disposeMaterialTextureCache();
   renderer.dispose();
@@ -4247,6 +4468,13 @@ async function ensureRendererContext(result: UseCanvasResult) {
   scene.background = new THREE.Color('#f9f9f9');
   scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY;
 
+  scene.add(instancedMeshGroup);
+  clearInstancedMeshes();
+  stopInstancedMeshSubscription?.();
+  stopInstancedMeshSubscription = subscribeInstancedMeshes((mesh) => {
+    attachInstancedMesh(mesh);
+  });
+
   renderContext = {
     renderer,
     scene,
@@ -4279,9 +4507,16 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   hidePurposeControls();
   disposeEnvironmentResources();
   pendingEnvironmentSettings = cloneEnvironmentSettingsLocal(environmentSettings);
+  nodeObjectMap.forEach((_object, nodeId) => {
+    releaseModelInstance(nodeId);
+  });
+  nodeObjectMap.clear();
+  clearInstancedMeshes();
   scene.children.forEach((child) => disposeObject(child));
   disposeMaterialTextureCache();
   scene.clear();
+  scene.add(instancedMeshGroup);
+  clearInstancedMeshes();
   sunDirectionalLight = null;
   warnings.value = [];
 
@@ -4306,6 +4541,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   resourcePreload.label = '准备加载资源...';
 
   let graph: Awaited<ReturnType<typeof buildSceneGraph>> | null = null;
+  let resourceCache: ResourceCache | null = null;
   try {
     lazyLoadMeshesEnabled = payload.document.lazyLoadMeshes !== false;
     const buildOptions: SceneGraphBuildOptions = {
@@ -4335,7 +4571,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
     if (payload.resolveAssetUrl) {
       buildOptions.resolveAssetUrl = payload.resolveAssetUrl;
     }
-  const resourceCache = ensureResourceCache(payload.document, buildOptions);
+  resourceCache = ensureResourceCache(payload.document, buildOptions);
   viewerResourceCache = resourceCache;
   graph = await buildSceneGraph(payload.document, resourceCache, buildOptions);
   } finally {
@@ -4358,6 +4594,9 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
 
   if (graph.warnings.length) {
     warnings.value = graph.warnings;
+  }
+  if (resourceCache) {
+    await prepareInstancedNodesForGraph(graph.root, payload.document, resourceCache);
   }
   scene.add(graph.root);
 
