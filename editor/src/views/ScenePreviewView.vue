@@ -6,6 +6,7 @@ import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { Sky } from 'three/addons/objects/Sky.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js'
+import Stats from 'three/examples/jsm/libs/stats.module.js'
 import type {
 	EnvironmentSettings,
 	LanternSlideDefinition,
@@ -79,6 +80,7 @@ import type { ViewerOptions } from 'viewerjs'
 type ControlMode = 'first-person' | 'third-person'
 
 const containerRef = ref<HTMLDivElement | null>(null)
+const statsContainerRef = ref<HTMLDivElement | null>(null)
 const statusMessage = ref('等待场景数据...')
 const isPlaying = ref(true)
 const controlMode = ref<ControlMode>('third-person')
@@ -89,6 +91,7 @@ const warningMessages = ref<string[]>([])
 const isFirstPersonMouseControlEnabled = ref(true)
 const isVolumeMenuOpen = ref(false)
 const isCameraCaged = ref(false)
+const memoryFallbackLabel = ref<string | null>(null)
 
 type CameraViewMode = 'level' | 'watching'
 const cameraViewState = reactive<{ mode: CameraViewMode; watchTargetId: string | null }>(
@@ -378,6 +381,19 @@ const materialTextureCache = new Map<string, THREE.Texture>()
 const pendingMaterialTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
 
 const MAX_CONCURRENT_LAZY_LOADS = 2
+
+type StatsInstance = {
+	dom: HTMLDivElement
+	showPanel: (id: number) => void
+	begin: () => void
+	end: () => number
+	update: () => void
+}
+
+const StatsFactory = Stats as unknown as () => StatsInstance
+
+let fpsStats: StatsInstance | null = null
+let memoryStats: StatsInstance | null = null
 
 type LazyPlaceholderState = {
 	nodeId: string
@@ -2735,6 +2751,12 @@ watch(isPlaying, (playing) => {
 	})
 })
 
+watch(() => statsContainerRef.value, (value) => {
+	if (value) {
+		setupStatsPanels()
+	}
+})
+
 function applyControlMode(mode: ControlMode) {
 	const activeCamera = camera
 	if (!activeCamera || !renderer) {
@@ -2758,12 +2780,117 @@ function applyControlMode(mode: ControlMode) {
 	updateCameraControlActivation()
 }
 
+function prepareStatsDom(element: HTMLDivElement, extraClass: string): void {
+	element.classList.add('scene-preview__stats-panel', extraClass)
+	element.style.position = 'relative'
+	element.style.top = '0'
+	element.style.left = '0'
+	element.style.cursor = 'default'
+	element.style.opacity = '1'
+	element.style.zIndex = 'auto'
+	element.style.pointerEvents = 'none'
+	element.style.background = 'rgba(10, 12, 24, 0.88)'
+	element.style.borderRadius = '8px'
+	element.style.padding = '4px'
+	element.style.margin = '0'
+	const canvas = element.querySelector('canvas')
+	if (canvas instanceof HTMLCanvasElement) {
+		canvas.style.display = 'block'
+		canvas.style.borderRadius = '6px'
+		canvas.style.pointerEvents = 'none'
+	}
+}
+
+function setupStatsPanels(): void {
+	if (typeof window === 'undefined') {
+		return
+	}
+	const container = statsContainerRef.value
+	if (!container) {
+		return
+	}
+	if (!fpsStats) {
+		const instance = StatsFactory()
+		instance.showPanel(0)
+		prepareStatsDom(instance.dom, 'scene-preview__stats-panel--fps')
+		container.appendChild(instance.dom)
+		fpsStats = instance
+	}
+	if (fpsStats?.dom.parentElement !== container) {
+		container.appendChild(fpsStats!.dom)
+	}
+	if (!memoryStats) {
+		const instance = StatsFactory()
+		const hasMemoryPanel = instance.dom.children.length > 2
+		if (hasMemoryPanel) {
+			instance.showPanel(2)
+			prepareStatsDom(instance.dom, 'scene-preview__stats-panel--memory')
+			container.appendChild(instance.dom)
+			memoryStats = instance
+			if (memoryFallbackLabel.value !== null) {
+				memoryFallbackLabel.value = null
+			}
+		} else {
+			memoryStats = null
+			updateMemoryFallback()
+		}
+	}
+	if (memoryStats?.dom.parentElement !== container) {
+		container.appendChild(memoryStats!.dom)
+	}
+}
+
+function teardownStatsPanels(): void {
+	if (fpsStats) {
+		const dom = fpsStats.dom
+		dom.parentElement?.removeChild(dom)
+		fpsStats = null
+	}
+	if (memoryStats) {
+		const dom = memoryStats.dom
+		dom.parentElement?.removeChild(dom)
+		memoryStats = null
+	}
+	memoryFallbackLabel.value = null
+}
+
+function updateMemoryFallback(): void {
+	if (typeof performance === 'undefined') {
+		memoryFallbackLabel.value = '内存监控不可用'
+		return
+	}
+	const perfWithMemory = performance as Performance & { memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number } }
+	const memory = perfWithMemory.memory
+	if (!memory) {
+		memoryFallbackLabel.value = '内存监控不可用'
+		return
+	}
+	const used = formatByteSize(memory.usedJSHeapSize)
+	const limit = formatByteSize(memory.jsHeapSizeLimit)
+	const nextLabel = `内存：${used} / ${limit}`
+	if (memoryFallbackLabel.value !== nextLabel) {
+		memoryFallbackLabel.value = nextLabel
+	}
+}
+
+function updateMemoryStats(): void {
+	if (memoryStats) {
+		memoryStats.update()
+		if (memoryFallbackLabel.value !== null) {
+			memoryFallbackLabel.value = null
+		}
+		return
+	}
+	updateMemoryFallback()
+}
+
 function initRenderer() {
 	const host = containerRef.value
 	if (!host) {
 		return
 	}
 	hidePurposeControls()
+	setupStatsPanels()
 	renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: false,powerPreference: 'high-performance' })
 	renderer.outputColorSpace = THREE.SRGBColorSpace
 	renderer.toneMapping = THREE.ACESFilmicToneMapping
@@ -2922,6 +3049,7 @@ function startAnimationLoop() {
 	clock.start()
 	const renderLoop = () => {
 		animationFrameHandle = requestAnimationFrame(renderLoop)
+		fpsStats?.begin()
 		const delta = clock.getDelta()
 		if (controlMode.value === 'first-person' && firstPersonControls) {
 			const rotationDirection = Number(rotationState.q) - Number(rotationState.e)
@@ -2962,6 +3090,8 @@ function startAnimationLoop() {
 		updateLazyPlaceholders(delta)
 
 		currentRenderer.render(currentScene, activeCamera)
+		fpsStats?.end()
+		updateMemoryStats()
 	}
 	renderLoop()
 }
@@ -4340,6 +4470,7 @@ onBeforeUnmount(() => {
 	unsubscribe?.()
 	unsubscribe = null
 	stopAnimationLoop()
+	teardownStatsPanels()
  	stopInstancedMeshSubscription?.()
  	stopInstancedMeshSubscription = null
 	window.removeEventListener('resize', handleResize)
@@ -4391,6 +4522,14 @@ onBeforeUnmount(() => {
 <template>
 	<div class="scene-preview">
 		<div ref="containerRef" class="scene-preview__canvas"></div>
+		<div ref="statsContainerRef" class="scene-preview__stats">
+			<div
+				v-if="memoryFallbackLabel"
+				class="scene-preview__stats-fallback"
+			>
+				{{ memoryFallbackLabel }}
+			</div>
+		</div>
 		<div
 			v-if="resourceProgress.active"
 			class="scene-preview__preload-overlay"
@@ -4791,6 +4930,37 @@ onBeforeUnmount(() => {
 	width: 100%;
 	height: 100%;
 	display: block;
+}
+
+.scene-preview__stats {
+	position: absolute;
+	top: 16px;
+	left: 16px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	z-index: 2200;
+	pointer-events: none;
+}
+
+.scene-preview__stats :deep(.scene-preview__stats-panel) {
+	display: inline-block;
+}
+
+.scene-preview__stats :deep(.scene-preview__stats-panel canvas) {
+	box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+	background: rgba(18, 20, 34, 0.92);
+	border-radius: 6px;
+}
+
+.scene-preview__stats-fallback {
+	padding: 6px 10px;
+	border-radius: 8px;
+	background: rgba(18, 20, 34, 0.92);
+	box-shadow: 0 8px 22px rgba(0, 0, 0, 0.3);
+	color: #f0f4ff;
+	font-size: 0.78rem;
+	font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
 }
 
 .scene-preview__preload-overlay {
