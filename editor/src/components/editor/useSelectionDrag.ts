@@ -4,9 +4,18 @@ import type { SceneNode } from '@harmony/schema'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SelectionDragState, SelectionDragCompanion } from '@/types/scene-viewport-selection-drag'
 import { ALIGN_MODE_AXIS, type AlignMode } from '@/types/scene-viewport-align-mode'
-import { toEulerLike, snapVectorToGrid, cloneVectorCoordinates, type VectorCoordinates, snapValueToGrid } from '../utils/transformUtils'
-import { DROP_TO_GROUND_EPSILON, ALIGN_DELTA_EPSILON, GROUND_NODE_ID } from '../constants'
-import { findSceneNode, buildParentIndex, filterTopLevelSelection, setBoundingBoxFromObject } from '../utils/sceneUtils'
+import { DROP_TO_GROUND_EPSILON, ALIGN_DELTA_EPSILON, GROUND_NODE_ID } from './constants'
+import {
+  findSceneNode,
+  buildParentIndex,
+  filterTopLevelSelection,
+  setBoundingBoxFromObject,
+  toEulerLike,
+  snapVectorToGrid,
+  cloneVectorCoordinates,
+  type VectorCoordinates,
+  snapValueToGrid
+} from './sceneUtils'
 
 export function useSelectionDrag(
   sceneNodes: SceneNode[],

@@ -104,18 +104,18 @@ import type { EnvironmentSettings } from '@/types/environment'
 import { useDynamicQualityController } from './useDynamicQualityController'
 import { createEffectPlaybackManager } from './effectPlaybackManager'
 import { usePlaceholderOverlayController } from './placeholderOverlayController'
-import { useToolbarPositioning } from './sceneViewport/composables/useToolbarPositioning'
-import { useScenePicking } from './sceneViewport/composables/useScenePicking'
+import { useToolbarPositioning } from './useToolbarPositioning'
+import { useScenePicking } from './useScenePicking'
 import {
   type VectorCoordinates,
-  cloneVectorCoordinates
-} from './sceneViewport/utils/transformUtils'
-import { setBoundingBoxFromObject } from './sceneViewport/utils/sceneUtils'
-import type { SelectionRotationOptions } from './sceneViewport/constants'
-import { useSelectionDrag } from './sceneViewport/composables/useSelectionDrag'
-import { useInstancedMeshes } from './sceneViewport/composables/useInstancedMeshes'
-import { toEulerLike } from './sceneViewport/utils/transformUtils'
-import { findSceneNode } from './sceneViewport/utils/sceneUtils'
+  cloneVectorCoordinates,
+  setBoundingBoxFromObject,
+  toEulerLike,
+  findSceneNode
+} from './sceneUtils'
+import type { SelectionRotationOptions } from './constants'
+import { useSelectionDrag } from './useSelectionDrag'
+import { useInstancedMeshes } from './useInstancedMeshes'
 
 const props = withDefaults(defineProps<{
   sceneNodes: SceneNode[]
@@ -376,7 +376,7 @@ import {
   ORTHO_FRUSTUM_SIZE,
   RIGHT_CLICK_ROTATION_STEP,
   GROUND_HEIGHT_STEP
-} from './sceneViewport/constants'
+} from './constants'
 
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
