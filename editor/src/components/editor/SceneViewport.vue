@@ -2675,12 +2675,12 @@ function updatePostProcessingCamera(target: THREE.PerspectiveCamera | THREE.Orth
 }
 
 function configureOutlinePassAppearance(pass: OutlinePass) {
-  pass.edgeStrength = 3.25
-  pass.edgeGlow = 0.45
-  pass.edgeThickness = 1.65
+  pass.edgeStrength = 5.5
+  pass.edgeGlow = 0.8
+  pass.edgeThickness = 2.75
   pass.pulsePeriod = 0
-  pass.visibleEdgeColor.setHex(0x4dd0e1)
-  pass.hiddenEdgeColor.setHex(0x123040)
+  pass.visibleEdgeColor.setHex(0xffffff)
+  pass.hiddenEdgeColor.setHex(0x66d9ff)
   pass.usePatternTexture = false
 }
 
