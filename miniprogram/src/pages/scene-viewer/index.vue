@@ -662,6 +662,7 @@ previewComponentManager.registerDefinition(effectComponentDefinition);
 previewComponentManager.registerDefinition(behaviorComponentDefinition);
 
 const previewNodeMap = new Map<string, SceneNode>();
+const assetNodeIdMap = new Map<string, Set<string>>();
 const instancedMeshGroup = new THREE.Group();
 instancedMeshGroup.name = 'InstancedMeshes';
 const instancedMeshes: THREE.InstancedMesh[] = [];
@@ -1881,6 +1882,7 @@ function resolveSceneSkybox(document: SceneJsonExportDocument | null | undefined
 
 function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null) {
   previewNodeMap.clear();
+  assetNodeIdMap.clear();
   if (!Array.isArray(nodes)) {
     return;
   }
@@ -1891,6 +1893,15 @@ function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null) {
       continue;
     }
     previewNodeMap.set(node.id, node);
+    if (typeof node.sourceAssetId === 'string' && node.sourceAssetId.trim().length) {
+      const assetId = node.sourceAssetId.trim();
+      let bucket = assetNodeIdMap.get(assetId);
+      if (!bucket) {
+        bucket = new Set<string>();
+        assetNodeIdMap.set(assetId, bucket);
+      }
+      bucket.add(node.id);
+    }
     if (Array.isArray(node.children) && node.children.length) {
       stack.push(...node.children);
     }
@@ -2170,7 +2181,21 @@ async function applyDeferredInstancingForNode(nodeId: string): Promise<boolean> 
   if (!currentDocument || !viewerResourceCache || !sceneGraphRoot) {
     return false;
   }
-  const includeNodeIds = new Set<string>([nodeId]);
+  const includeNodeIds = new Set<string>();
+  const nodeState = resolveNodeById(nodeId);
+  if (nodeState?.sourceAssetId) {
+    const related = assetNodeIdMap.get(nodeState.sourceAssetId.trim());
+    if (related && related.size) {
+      related.forEach((candidateId) => {
+        if (deferredInstancingNodeIds.has(candidateId)) {
+          includeNodeIds.add(candidateId);
+        }
+      });
+    }
+  }
+  if (!includeNodeIds.size) {
+    includeNodeIds.add(nodeId);
+  }
   try {
     await prepareInstancedNodesForGraph(sceneGraphRoot, currentDocument, viewerResourceCache, {
       includeNodeIds,
@@ -2179,23 +2204,33 @@ async function applyDeferredInstancingForNode(nodeId: string): Promise<boolean> 
     console.warn('[SceneViewer] Instanced mesh prepare failed', error);
     return false;
   }
-  let target: THREE.Object3D | null = null;
+  const updatedTargets: THREE.Object3D[] = [];
   sceneGraphRoot.traverse((object: THREE.Object3D) => {
-    if (target) {
-      return;
-    }
     const candidateId = object.userData?.nodeId as string | undefined;
-    if (candidateId === nodeId) {
-      target = object;
+    if (candidateId && includeNodeIds.has(candidateId)) {
+      updatedTargets.push(object);
     }
   });
-  if (!target) {
+  if (!updatedTargets.length) {
     return false;
   }
-  nodeObjectMap.delete(nodeId);
-  registerSceneSubtree(target);
-  deferredInstancingNodeIds.delete(nodeId);
-  return true;
+  updatedTargets.forEach((target) => {
+    const candidateId = target.userData?.nodeId as string | undefined;
+    if (!candidateId) {
+      return;
+    }
+    nodeObjectMap.delete(candidateId);
+    registerSceneSubtree(target);
+  });
+  includeNodeIds.forEach((candidateId) => {
+    deferredInstancingNodeIds.delete(candidateId);
+    const state = lazyPlaceholderStates.get(candidateId);
+    if (state) {
+      state.loaded = true;
+      lazyPlaceholderStates.delete(candidateId);
+    }
+  });
+  return includeNodeIds.has(nodeId);
 }
 
 type LazyAssetMetadata = {
