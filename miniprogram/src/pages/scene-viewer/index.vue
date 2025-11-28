@@ -4717,11 +4717,6 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   if (instancingSkipNodeIds?.size) {
     instancingSkipNodeIds.forEach((nodeId) => deferredInstancingNodeIds.add(nodeId));
   }
-  if (resourceCache) {
-    await prepareInstancedNodesForGraph(graph.root, payload.document, resourceCache, {
-      skipNodeIds: instancingSkipNodeIds ?? undefined,
-    });
-  }
   sceneGraphRoot = graph.root;
   scene.add(graph.root);
 

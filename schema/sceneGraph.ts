@@ -875,6 +875,7 @@ class SceneGraphBuilder {
     mesh.receiveShadow = false;
     mesh.userData = {
       ...mesh.userData,
+      nodeId: node.id ?? null,
       lazyAsset: {
         placeholder: true,
         assetId: node.sourceAssetId ?? null,

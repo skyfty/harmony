@@ -68,6 +68,15 @@ function notifyListeners(snapshot: ScenePreviewSnapshot) {
   })
 }
 
+function cloneSnapshotForTransport(snapshot: ScenePreviewSnapshot): ScenePreviewSnapshot | null {
+  try {
+    return JSON.parse(JSON.stringify(snapshot)) as ScenePreviewSnapshot
+  } catch (error) {
+    console.warn('[PreviewChannel] failed to serialize snapshot for broadcast', error)
+    return null
+  }
+}
+
 function safeParseSnapshot(payload: string): ScenePreviewSnapshot | null {
   try {
     const parsed = JSON.parse(payload) as ScenePreviewSnapshot | SnapshotStorageEnvelope | null
@@ -125,20 +134,21 @@ export function broadcastScenePreviewUpdate(snapshot: ScenePreviewSnapshot): voi
   if (typeof window === 'undefined') {
     return
   }
-  void persistSnapshot(snapshot)
+  const transportSnapshot = cloneSnapshotForTransport(snapshot) ?? snapshot
+  void persistSnapshot(transportSnapshot)
   const channelInstance = ensureChannel()
   if (channelInstance) {
     try {
       const message: PreviewMessageEvent = {
         type: 'scene-update',
-        payload: snapshot,
+        payload: transportSnapshot,
       }
       channelInstance.postMessage(message)
     } catch (error) {
       console.warn('[PreviewChannel] failed to post broadcast message', error)
     }
   }
-  notifyListeners(snapshot)
+  notifyListeners(transportSnapshot)
 }
 
 export function subscribeToScenePreview(listener: PreviewListener): () => void {
