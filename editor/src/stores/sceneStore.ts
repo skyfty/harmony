@@ -3565,13 +3565,7 @@ function duplicateNodeTree(original: SceneNode, context: DuplicateContext): Scen
   if (duplicated.sourceAssetId) {
     context.assetCache.registerUsage(duplicated.sourceAssetId)
   }
-
-  const runtimeObject = getRuntimeObject(original.id) ?? context.runtimeSnapshots.get(original.id) ?? null
-  if (runtimeObject) {
-    restoreRuntimeFromSnapshot(duplicated, runtimeObject)
-  } else {
-    componentManager.syncNode(duplicated)
-  }
+  componentManager.syncNode(duplicated)
 
   return duplicated
 }

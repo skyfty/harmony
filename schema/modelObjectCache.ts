@@ -57,6 +57,7 @@ const meshHandleLookup = new Map<string, InstancedMeshHandle>()
 const instancedMeshListeners = new Set<(mesh: InstancedMesh, assetId: string) => void>()
 
 const tempMatrix = new Matrix4()
+const tempInstanceMatrix = new Matrix4()
 
 export function getCachedModelObject(assetId: string): ModelInstanceGroup | null {
   const cached = modelObjectCache.get(assetId)
@@ -145,16 +146,37 @@ export function releaseModelInstance(nodeId: string): void {
     if (!handle) {
       return
     }
+    const lastVisibleIndex = handle.mesh.count - 1
     handle.nodeByIndex.delete(index)
-    handle.freeSlots.push(index)
-    if (index === handle.mesh.count - 1) {
-      // shrink visible count when releasing from the end
-      let nextCount = handle.mesh.count - 1
-      while (nextCount > 0 && !handle.nodeByIndex.has(nextCount - 1)) {
-        nextCount -= 1
+
+    let freedSlot = index
+
+    if (lastVisibleIndex >= 0 && index !== lastVisibleIndex) {
+      const movingNodeId = handle.nodeByIndex.get(lastVisibleIndex)
+      if (movingNodeId) {
+        handle.mesh.getMatrixAt(lastVisibleIndex, tempInstanceMatrix)
+        handle.mesh.setMatrixAt(index, tempInstanceMatrix)
+        handle.mesh.instanceMatrix.needsUpdate = true
+
+        handle.nodeByIndex.set(index, movingNodeId)
+        handle.nodeByIndex.delete(lastVisibleIndex)
+
+        const movingBinding = nodeBindings.get(movingNodeId)
+        if (movingBinding) {
+          const slot = movingBinding.slots.find(
+            (entry) => entry.handleId === handleId && entry.index === lastVisibleIndex,
+          )
+          if (slot) {
+            slot.index = index
+          }
+        }
+
+        freedSlot = lastVisibleIndex
       }
-      handle.mesh.count = nextCount
     }
+
+    handle.freeSlots.push(freedSlot)
+    shrinkInstancedMeshCount(handle)
   })
 }
 
@@ -353,4 +375,14 @@ function extractSubmeshes(root: Object3D): ParsedSubmesh[] {
   })
 
   return submeshes
+}
+
+function shrinkInstancedMeshCount(handle: InstancedMeshHandle): void {
+  let nextCount = handle.mesh.count
+  while (nextCount > 0 && !handle.nodeByIndex.has(nextCount - 1)) {
+    nextCount -= 1
+  }
+  if (nextCount !== handle.mesh.count) {
+    handle.mesh.count = nextCount
+  }
 }
