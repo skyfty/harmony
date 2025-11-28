@@ -1,0 +1,401 @@
+import * as THREE from 'three'
+import { useSceneStore } from '@/stores/sceneStore'
+import type { SceneNode } from '@harmony/schema'
+import type { TransformUpdatePayload } from '@/types/transform-update-payload'
+import type { SelectionDragState, SelectionDragCompanion } from '@/types/scene-viewport-selection-drag'
+import { ALIGN_MODE_AXIS, type AlignMode } from '@/types/scene-viewport-align-mode'
+import { toEulerLike, snapVectorToGrid, cloneVectorCoordinates, type VectorCoordinates, snapValueToGrid } from '../utils/transformUtils'
+import { DROP_TO_GROUND_EPSILON, ALIGN_DELTA_EPSILON, GROUND_NODE_ID } from '../constants'
+import { findSceneNode, buildParentIndex, filterTopLevelSelection, setBoundingBoxFromObject } from '../utils/sceneUtils'
+
+export function useSelectionDrag(
+  sceneNodes: SceneNode[],
+  objectMap: Map<string, THREE.Object3D>,
+  projectPointerToPlane: (event: PointerEvent, plane: THREE.Plane) => THREE.Vector3 | null,
+  emit: (event: 'updateNodeTransform', payload: TransformUpdatePayload | TransformUpdatePayload[]) => void,
+  callbacks: {
+    syncInstancedTransform: (object: THREE.Object3D | null) => void
+    updateGridHighlightFromObject: (object: THREE.Object3D | null) => void
+    updateSelectionHighlights: () => void
+    updatePlaceholderOverlayPositions: () => void
+    gizmoControlsUpdate: () => void
+  }
+) {
+  const sceneStore = useSceneStore()
+  
+  const selectDragWorldPosition = new THREE.Vector3()
+  const selectDragWorldQuaternion = new THREE.Quaternion()
+  const selectDragDelta = new THREE.Vector3()
+  const dropBoundingBoxHelper = new THREE.Box3()
+  const dropWorldPositionHelper = new THREE.Vector3()
+  const dropLocalPositionHelper = new THREE.Vector3()
+  const alignReferenceWorldPositionHelper = new THREE.Vector3()
+  const alignWorldPositionHelper = new THREE.Vector3()
+  const alignDeltaHelper = new THREE.Vector3()
+  const alignLocalPositionHelper = new THREE.Vector3()
+
+  function resolveSceneNodeById(nodeId: string | null | undefined): SceneNode | null {
+    if (!nodeId) {
+      return null
+    }
+    return findSceneNode(sceneStore.nodes, nodeId) ?? findSceneNode(sceneNodes, nodeId)
+  }
+
+  function snapVectorToGridForNode(vec: THREE.Vector3, nodeId: string | null | undefined) {
+    const node = resolveSceneNodeById(nodeId)
+    if (node?.editorFlags?.ignoreGridSnapping) {
+      return vec
+    }
+    // Assuming Wall check is not strictly needed or can be added later if critical
+    // if (node?.dynamicMesh?.type === 'Wall') { ... }
+    return snapVectorToGrid(vec)
+  }
+
+  function createSelectionDragState(nodeId: string, object: THREE.Object3D, hitPoint: THREE.Vector3, event: PointerEvent): SelectionDragState {
+    const worldPosition = new THREE.Vector3()
+    object.getWorldPosition(worldPosition)
+    const planeAnchor = worldPosition.clone()
+    planeAnchor.y = hitPoint.y
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 1, 0), planeAnchor)
+    const pointerPlanePoint = projectPointerToPlane(event, plane)
+    const pointerOffset = (pointerPlanePoint ?? hitPoint.clone().setY(planeAnchor.y))
+      .sub(worldPosition)
+      .projectOnPlane(plane.normal)
+    const companions: SelectionDragCompanion[] = []
+    const selectedIds = sceneStore.selectedNodeIds.filter((id) => id !== nodeId && !sceneStore.isNodeSelectionLocked(id))
+    selectedIds.forEach((id) => {
+      const companionObject = objectMap.get(id)
+      if (!companionObject) {
+        return
+      }
+      companionObject.updateMatrixWorld(true)
+      const companionWorldPosition = new THREE.Vector3()
+      companionObject.getWorldPosition(companionWorldPosition)
+      companions.push({
+        nodeId: id,
+        object: companionObject,
+        parent: companionObject.parent ?? null,
+        initialLocalPosition: companionObject.position.clone(),
+        initialWorldPosition: companionWorldPosition,
+      })
+    })
+    return {
+      nodeId,
+      object,
+      plane,
+      pointerOffset,
+      initialLocalPosition: object.position.clone(),
+      initialWorldPosition: worldPosition.clone(),
+      initialRotation: object.rotation.clone(),
+      parent: object.parent ?? null,
+      companions,
+      hasDragged: false,
+    }
+  }
+
+  function updateSelectDragPosition(drag: SelectionDragState, event: PointerEvent): boolean {
+    const planePoint = projectPointerToPlane(event, drag.plane)
+    if (!planePoint) {
+      return false
+    }
+
+    const worldPosition = planePoint.sub(drag.pointerOffset)
+    snapVectorToGridForNode(worldPosition, drag.nodeId)
+
+    const newLocalPosition = worldPosition.clone()
+    if (drag.parent) {
+      drag.parent.worldToLocal(newLocalPosition)
+    }
+    newLocalPosition.y = drag.initialLocalPosition.y
+
+    drag.object.position.copy(newLocalPosition)
+    drag.object.updateMatrixWorld(true)
+    callbacks.syncInstancedTransform(drag.object)
+    drag.object.getWorldPosition(selectDragWorldPosition)
+    drag.object.getWorldQuaternion(selectDragWorldQuaternion)
+    selectDragDelta.copy(selectDragWorldPosition).sub(drag.initialWorldPosition)
+
+    const updates: TransformUpdatePayload[] = [
+      {
+        id: drag.nodeId,
+        position: drag.object.position,
+        rotation: toEulerLike(drag.object.rotation),
+        scale: drag.object.scale,
+      },
+    ]
+
+    drag.companions.forEach((companion) => {
+      const companionWorldPosition = companion.initialWorldPosition.clone().add(selectDragDelta)
+      snapVectorToGridForNode(companionWorldPosition, companion.nodeId)
+      const localPosition = companionWorldPosition.clone()
+      if (companion.parent) {
+        companion.parent.worldToLocal(localPosition)
+      }
+      localPosition.y = companion.initialLocalPosition.y
+      companion.object.position.copy(localPosition)
+      companion.object.updateMatrixWorld(true)
+      callbacks.syncInstancedTransform(companion.object)
+      updates.push({
+        id: companion.nodeId,
+        position: companion.object.position,
+      })
+    })
+
+    callbacks.updateGridHighlightFromObject(drag.object)
+    callbacks.updateSelectionHighlights()
+
+    return true
+  }
+
+  function commitSelectionDragTransforms(drag: SelectionDragState) {
+    const updates: TransformUpdatePayload[] = [
+      {
+        id: drag.nodeId,
+        position: drag.object.position.clone(),
+        rotation: toEulerLike(drag.object.rotation),
+        scale: drag.object.scale.clone(),
+      },
+    ]
+
+    drag.companions.forEach((companion) => {
+      updates.push({
+        id: companion.nodeId,
+        position: companion.object.position.clone(),
+      })
+    })
+
+    const normalized = updates.map((update) => {
+      const entry: TransformUpdatePayload = { id: update.id }
+      if (update.position) {
+        entry.position = cloneVectorCoordinates(update.position as VectorCoordinates)
+      }
+      if (update.rotation) {
+        entry.rotation = cloneVectorCoordinates(update.rotation as VectorCoordinates)
+      }
+      if (update.scale) {
+        entry.scale = cloneVectorCoordinates(update.scale as VectorCoordinates)
+      }
+      return entry
+    })
+
+    emit('updateNodeTransform', normalized.length === 1 ? normalized[0]! : normalized)
+  }
+
+  function dropSelectionToGround() {
+    const unlockedSelection = sceneStore.selectedNodeIds.filter((id) => !sceneStore.isNodeSelectionLocked(id))
+    if (!unlockedSelection.length) {
+      return
+    }
+
+    const parentMap = buildParentIndex(sceneNodes, null, new Map<string, string | null>())
+    const topLevelIds = filterTopLevelSelection(unlockedSelection, parentMap)
+    if (!topLevelIds.length) {
+      return
+    }
+
+    const updates: TransformUpdatePayload[] = []
+
+    for (const nodeId of topLevelIds) {
+      const object = objectMap.get(nodeId)
+      if (!object) {
+        continue
+      }
+
+      object.updateMatrixWorld(true)
+      setBoundingBoxFromObject(object, dropBoundingBoxHelper)
+      if (dropBoundingBoxHelper.isEmpty()) {
+        continue
+      }
+
+      const deltaY = -dropBoundingBoxHelper.min.y
+      if (Math.abs(deltaY) <= DROP_TO_GROUND_EPSILON) {
+        continue
+      }
+
+      object.getWorldPosition(dropWorldPositionHelper)
+      dropWorldPositionHelper.y += deltaY
+
+      dropLocalPositionHelper.copy(dropWorldPositionHelper)
+      if (object.parent) {
+        object.parent.worldToLocal(dropLocalPositionHelper)
+      }
+
+      object.position.set(dropLocalPositionHelper.x, dropLocalPositionHelper.y, dropLocalPositionHelper.z)
+      object.updateMatrixWorld(true)
+
+      updates.push({
+        id: nodeId,
+        position: dropLocalPositionHelper,
+      })
+    }
+
+    if (!updates.length) {
+      return
+    }
+
+    if (typeof sceneStore.updateNodePropertiesBatch === 'function') {
+      sceneStore.updateNodePropertiesBatch(updates)
+    } else {
+      updates.forEach((update) => sceneStore.updateNodeProperties(update))
+    }
+
+    const primaryId = sceneStore.selectedNodeId
+    const primaryObject = primaryId ? objectMap.get(primaryId) ?? null : null
+    callbacks.updateGridHighlightFromObject(primaryObject)
+    callbacks.updatePlaceholderOverlayPositions()
+    callbacks.updateSelectionHighlights()
+  }
+
+  function alignSelection(mode: AlignMode) {
+    const axis = ALIGN_MODE_AXIS[mode]
+
+    const primaryId = sceneStore.selectedNodeId
+    if (!primaryId) {
+      return
+    }
+
+    const referenceObject = objectMap.get(primaryId)
+    if (!referenceObject) {
+      return
+    }
+
+    const unlockedSelection = sceneStore.selectedNodeIds.filter((id) => id !== primaryId && !sceneStore.isNodeSelectionLocked(id))
+    if (!unlockedSelection.length) {
+      return
+    }
+
+    const parentMap = buildParentIndex(sceneNodes, null, new Map<string, string | null>())
+    const topLevelIds = filterTopLevelSelection(unlockedSelection, parentMap)
+    if (!topLevelIds.length) {
+      return
+    }
+
+    referenceObject.updateMatrixWorld(true)
+    referenceObject.getWorldPosition(alignReferenceWorldPositionHelper)
+    const targetAxisValue = snapValueToGrid(alignReferenceWorldPositionHelper[axis])
+
+    const updates: TransformUpdatePayload[] = []
+
+    for (const nodeId of topLevelIds) {
+      const targetObject = objectMap.get(nodeId)
+      if (!targetObject) {
+        continue
+      }
+
+      targetObject.updateMatrixWorld(true)
+      targetObject.getWorldPosition(alignWorldPositionHelper)
+
+      const deltaValue = targetAxisValue - alignWorldPositionHelper[axis]
+      if (Math.abs(deltaValue) <= ALIGN_DELTA_EPSILON) {
+        continue
+      }
+
+      alignDeltaHelper.set(0, 0, 0)
+      alignDeltaHelper[axis] = deltaValue
+      alignWorldPositionHelper.add(alignDeltaHelper)
+      alignLocalPositionHelper.copy(alignWorldPositionHelper)
+      if (targetObject.parent) {
+        targetObject.parent.worldToLocal(alignLocalPositionHelper)
+      }
+
+      targetObject.position.copy(alignLocalPositionHelper)
+      targetObject.updateMatrixWorld(true)
+
+      updates.push({
+        id: nodeId,
+        position: alignLocalPositionHelper,
+      })
+    }
+
+    if (!updates.length) {
+      return
+    }
+
+    if (typeof sceneStore.updateNodePropertiesBatch === 'function') {
+      sceneStore.updateNodePropertiesBatch(updates)
+    } else {
+      updates.forEach((update) => sceneStore.updateNodeProperties(update))
+    }
+
+    const primaryObject = objectMap.get(primaryId) ?? null
+    callbacks.updateGridHighlightFromObject(primaryObject)
+    callbacks.updatePlaceholderOverlayPositions()
+    callbacks.updateSelectionHighlights()
+  }
+
+  function rotateSelection({ axis, degrees }: { axis: 'x' | 'y'; degrees: number }) {
+    if (!Number.isFinite(degrees) || degrees === 0) {
+      return
+    }
+
+    const unlockedSelection = sceneStore.selectedNodeIds.filter(
+      (id) => id !== GROUND_NODE_ID && !sceneStore.isNodeSelectionLocked(id)
+    )
+    if (!unlockedSelection.length) {
+      return
+    }
+
+    const parentMap = buildParentIndex(sceneNodes, null, new Map<string, string | null>())
+    const topLevelIds = filterTopLevelSelection(unlockedSelection, parentMap)
+    if (!topLevelIds.length) {
+      return
+    }
+
+    const delta = THREE.MathUtils.degToRad(degrees)
+    if (!Number.isFinite(delta) || delta === 0) {
+      return
+    }
+
+    const updates: TransformUpdatePayload[] = []
+
+    for (const nodeId of topLevelIds) {
+      const targetObject = objectMap.get(nodeId)
+      if (!targetObject) {
+        continue
+      }
+
+      const nextRotation = targetObject.rotation.clone()
+      if (axis === 'x') {
+        nextRotation.x += delta
+      } else if (axis === 'y') {
+        nextRotation.y += delta
+      } else {
+        continue
+      }
+
+      targetObject.rotation.copy(nextRotation)
+      targetObject.updateMatrixWorld(true)
+
+      updates.push({
+        id: nodeId,
+        rotation: toEulerLike(nextRotation),
+      })
+    }
+
+    if (!updates.length) {
+      return
+    }
+
+    if (typeof sceneStore.updateNodePropertiesBatch === 'function') {
+      sceneStore.updateNodePropertiesBatch(updates)
+    } else {
+      updates.forEach((update) => sceneStore.updateNodeProperties(update))
+    }
+
+    const primaryId = sceneStore.selectedNodeId
+    const primaryObject = primaryId ? objectMap.get(primaryId) ?? null : null
+    callbacks.updateGridHighlightFromObject(primaryObject)
+    callbacks.updatePlaceholderOverlayPositions()
+    callbacks.updateSelectionHighlights()
+    callbacks.gizmoControlsUpdate()
+  }
+
+  return {
+    createSelectionDragState,
+    updateSelectDragPosition,
+    commitSelectionDragTransforms,
+    dropSelectionToGround,
+    alignSelection,
+    rotateSelection
+  }
+}

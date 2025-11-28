@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type Ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
@@ -48,8 +48,6 @@ import {
   getCachedModelObject,
   getOrLoadModelObject,
   subscribeInstancedMeshes,
-  findNodeIdForInstance,
-  updateModelInstanceMatrix,
   getModelInstanceBinding,
 } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
@@ -64,12 +62,11 @@ import { prepareGLBSceneExport, prepareJsonSceneExport } from '@/utils/sceneExpo
 import ViewportToolbar from './ViewportToolbar.vue'
 import TransformToolbar from './TransformToolbar.vue'
 import GroundToolbar from './GroundToolbar.vue'
-import PlaceholderOverlayList from './sceneViewport/PlaceholderOverlayList.vue'
+import PlaceholderOverlayList from './PlaceholderOverlayList.vue'
 import { TRANSFORM_TOOLS } from '@/types/scene-transform-tools'
-import { ALIGN_MODE_AXIS, type AlignMode } from '@/types/scene-viewport-align-mode'
+import { type AlignMode } from '@/types/scene-viewport-align-mode'
 import { Sky } from 'three/addons/objects/Sky.js'
 import type { NodeHitResult } from '@/types/scene-viewport-node-hit-result'
-import type { SelectionDragCompanion, SelectionDragState } from '@/types/scene-viewport-selection-drag'
 import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracking-state'
 import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-viewport-transform-group'
 import type { BuildTool } from '@/types/build-tool'
@@ -104,10 +101,21 @@ import type {
   GuideboardEffectInstance,
 } from '@schema/components'
 import type { EnvironmentSettings } from '@/types/environment'
-import { clampToRange } from '../../utils/math'
 import { useDynamicQualityController } from './useDynamicQualityController'
 import { createEffectPlaybackManager } from './effectPlaybackManager'
 import { usePlaceholderOverlayController } from './placeholderOverlayController'
+import { useToolbarPositioning } from './sceneViewport/composables/useToolbarPositioning'
+import { useScenePicking } from './sceneViewport/composables/useScenePicking'
+import {
+  type VectorCoordinates,
+  cloneVectorCoordinates
+} from './sceneViewport/utils/transformUtils'
+import { setBoundingBoxFromObject } from './sceneViewport/utils/sceneUtils'
+import type { SelectionRotationOptions } from './sceneViewport/constants'
+import { useSelectionDrag } from './sceneViewport/composables/useSelectionDrag'
+import { useInstancedMeshes } from './sceneViewport/composables/useInstancedMeshes'
+import { toEulerLike } from './sceneViewport/utils/transformUtils'
+import { findSceneNode } from './sceneViewport/utils/sceneUtils'
 
 const props = withDefaults(defineProps<{
   sceneNodes: SceneNode[]
@@ -318,32 +326,65 @@ function refreshEffectRuntimeTickers(): void {
   effectPlaybackManager.refresh(selectedIds, objectMap)
   effectRuntimeTickers = effectPlaybackManager.getTickers()
 }
-const DEFAULT_BACKGROUND_COLOR = 0x516175
-const GROUND_NODE_ID = 'harmony:ground'
-const SKY_ENVIRONMENT_INTENSITY = 0.35
-const FALLBACK_AMBIENT_INTENSITY = 0.2
-const FALLBACK_DIRECTIONAL_INTENSITY = 0.65
-const FALLBACK_DIRECTIONAL_SHADOW_MAP_SIZE = 2048
-const SKY_SCALE = 2500
-const SKY_FALLBACK_LIGHT_DISTANCE = 75
-const SKY_SUN_LIGHT_DISTANCE = 150
-const SKY_SUN_LIGHT_MIN_HEIGHT = 12
+import {
+  DEFAULT_BACKGROUND_COLOR,
+  GROUND_NODE_ID,
+  SKY_ENVIRONMENT_INTENSITY,
+  FALLBACK_AMBIENT_INTENSITY,
+  FALLBACK_DIRECTIONAL_INTENSITY,
+  FALLBACK_DIRECTIONAL_SHADOW_MAP_SIZE,
+  SKY_SCALE,
+  SKY_FALLBACK_LIGHT_DISTANCE,
+  SKY_SUN_LIGHT_DISTANCE,
+  SKY_SUN_LIGHT_MIN_HEIGHT,
+  CLICK_DRAG_THRESHOLD_PX,
+  ASSET_DRAG_MIME,
+  MIN_CAMERA_HEIGHT,
+  MIN_TARGET_HEIGHT,
+  GRID_MAJOR_SPACING,
+  GRID_MINOR_SPACING,
+  GRID_SNAP_SPACING,
+  WALL_DIAGONAL_SNAP_THRESHOLD,
+  GRID_MINOR_DASH_SIZE,
+  GRID_MINOR_GAP_SIZE,
+  FACE_SNAP_PREVIEW_DISTANCE,
+  FACE_SNAP_COMMIT_DISTANCE,
+  FACE_SNAP_MIN_OVERLAP,
+  FACE_SNAP_MOVEMENT_EPSILON,
+  FACE_SNAP_EFFECT_MAX_OPACITY,
+  FACE_SNAP_EFFECT_MIN_OPACITY,
+  FACE_SNAP_EFFECT_MIN_SIZE,
+  FACE_SNAP_EFFECT_MAX_SIZE,
+  FACE_SNAP_EFFECT_SCALE_PULSE,
+  FACE_SNAP_EFFECT_PULSE_SPEED,
+  GRID_BASE_HEIGHT,
+  GRID_HIGHLIGHT_HEIGHT,
+  GRID_HIGHLIGHT_PADDING,
+  GRID_HIGHLIGHT_MIN_SIZE,
+  DEFAULT_GRID_HIGHLIGHT_SIZE,
+  DEFAULT_GRID_HIGHLIGHT_DIMENSIONS,
+  POINT_LIGHT_HELPER_SIZE,
+  DIRECTIONAL_LIGHT_HELPER_SIZE,
+  DEFAULT_CAMERA_POSITION,
+  DEFAULT_CAMERA_TARGET,
+  DEFAULT_PERSPECTIVE_FOV,
+  MIN_CAMERA_DISTANCE,
+  MAX_CAMERA_DISTANCE,
+  MIN_ORTHOGRAPHIC_ZOOM,
+  MAX_ORTHOGRAPHIC_ZOOM,
+  CAMERA_DISTANCE_EPSILON,
+  ORTHO_FRUSTUM_SIZE,
+  RIGHT_CLICK_ROTATION_STEP,
+  GROUND_HEIGHT_STEP
+} from './sceneViewport/constants'
 
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
-const CLICK_DRAG_THRESHOLD_PX = 5
 const rootGroup = new THREE.Group()
 const instancedMeshGroup = new THREE.Group()
 instancedMeshGroup.name = 'InstancedMeshes'
 const instancedMeshes: THREE.InstancedMesh[] = []
 let stopInstancedMeshSubscription: (() => void) | null = null
-const instancedMatrixHelper = new THREE.Matrix4()
-const instancedScaleHelper = new THREE.Vector3()
-const instancedPositionHelper = new THREE.Vector3()
-const instancedQuaternionHelper = new THREE.Quaternion()
-const instancedBoundsBox = new THREE.Box3()
-const instancedBoundsMin = new THREE.Vector3()
-const instancedBoundsMax = new THREE.Vector3()
 const instancedOutlineGroup = new THREE.Group()
 instancedOutlineGroup.name = 'InstancedOutlineProxies'
 type InstancedOutlineEntry = {
@@ -362,6 +403,23 @@ const instancedOutlineBaseMaterial = new THREE.MeshBasicMaterial({
 })
 instancedOutlineBaseMaterial.toneMapped = false
 const objectMap = new Map<string, THREE.Object3D>()
+
+const {
+  resolveNodeIdFromIntersection,
+  collectSceneIntersections,
+  projectPointerToPlane,
+  pickNodeAtPointer,
+  isObjectWorldVisible
+} = useScenePicking(
+  canvasRef,
+  { get value() { return camera } } as Ref<THREE.Camera | null>,
+  raycaster,
+  pointer,
+  rootGroup,
+  instancedMeshGroup,
+  instancedMeshes,
+  objectMap
+)
 const renderClock = new THREE.Clock()
 let effectRuntimeTickers: Array<(delta: number) => void> = []
 const WARP_GATE_PLACEHOLDER_KEY = '__harmonyWarpGatePlaceholder'
@@ -379,47 +437,7 @@ type LightHelperObject = THREE.Object3D & { dispose?: () => void; update?: () =>
 const lightHelpers: LightHelperObject[] = []
 const lightHelpersNeedingUpdate = new Set<LightHelperObject>()
 let isApplyingCameraState = false
-const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
-const MIN_CAMERA_HEIGHT = 0.25
-const MIN_TARGET_HEIGHT = 0
-const GRID_MAJOR_SPACING = 1
-const GRID_MINOR_SPACING = 0.5
-const GRID_SNAP_SPACING = GRID_MINOR_SPACING
-const WALL_DIAGONAL_SNAP_THRESHOLD = THREE.MathUtils.degToRad(20)
-const GRID_MINOR_DASH_SIZE = GRID_MINOR_SPACING * 0.12
-const GRID_MINOR_GAP_SIZE = GRID_MINOR_SPACING * 0.2
-const FACE_SNAP_PREVIEW_DISTANCE = 0.1
-const FACE_SNAP_COMMIT_DISTANCE = 0.04
-const FACE_SNAP_MIN_OVERLAP = 0.05
-const FACE_SNAP_MOVEMENT_EPSILON = 1e-4
-const FACE_SNAP_EFFECT_MAX_OPACITY = 0.78
-const FACE_SNAP_EFFECT_MIN_OPACITY = 0.2
-const FACE_SNAP_EFFECT_MIN_SIZE = 0.12
-const FACE_SNAP_EFFECT_MAX_SIZE = 48
-const FACE_SNAP_EFFECT_SCALE_PULSE = 0.22
-const FACE_SNAP_EFFECT_PULSE_SPEED = 140
-const GRID_BASE_HEIGHT = 0.03
-const GRID_HIGHLIGHT_HEIGHT = 0.03
-const GRID_HIGHLIGHT_PADDING = 0.1
-const GRID_HIGHLIGHT_MIN_SIZE = GRID_MAJOR_SPACING * 1.3
-const DEFAULT_GRID_HIGHLIGHT_SIZE = GRID_MAJOR_SPACING * 1.5
-const DEFAULT_GRID_HIGHLIGHT_DIMENSIONS = { width: DEFAULT_GRID_HIGHLIGHT_SIZE, depth: DEFAULT_GRID_HIGHLIGHT_SIZE } as const
-const POINT_LIGHT_HELPER_SIZE = 0.5
-const DIRECTIONAL_LIGHT_HELPER_SIZE = 5
-const DEFAULT_CAMERA_POSITION = { x: 5, y: 5, z: 5 } as const
-const DEFAULT_CAMERA_TARGET = { x: 0, y: 0, z: 0 } as const
-const DEFAULT_PERSPECTIVE_FOV = 60
-const MIN_CAMERA_DISTANCE = 2
-const MAX_CAMERA_DISTANCE = 30
-const MIN_ORTHOGRAPHIC_ZOOM = 0.25
-const MAX_ORTHOGRAPHIC_ZOOM = 8
-const CAMERA_DISTANCE_EPSILON = 1e-3
-const ORTHO_FRUSTUM_SIZE = 20
-const DROP_TO_GROUND_EPSILON = 1e-4
-const ALIGN_DELTA_EPSILON = 1e-6
-const RIGHT_CLICK_ROTATION_STEP = THREE.MathUtils.degToRad(15)
-const GROUND_HEIGHT_STEP = 0.5
 
 const cameraControlMode = computed<CameraControlMode>({
   get: () => sceneStore.viewportSettings.cameraControlMode,
@@ -502,29 +520,25 @@ const panelPlacement = computed<PanelPlacementState>(() => {
   return normalizePanelPlacementState(source)
 })
 
-const TOOLBAR_OFFSET = 12
-const TOOLBAR_MIN_MARGIN = 45
-const VIEWPORT_TOOLBAR_TOP_MARGIN = 16
+const {
+  transformToolbarStyle,
+  viewportToolbarStyle,
+  transformToolbarHostRef,
+  viewportToolbarHostRef,
+  scheduleToolbarUpdate
+} = useToolbarPositioning(
+  viewportEl,
+  panelVisibility,
+  panelPlacement,
+  () => {
+    updateGroundSelectionToolbarPosition()
+    gizmoControls?.update()
+  }
+)
 
-const transformToolbarStyle = reactive<{ top: string; left: string }>({
-  top: `${TOOLBAR_MIN_MARGIN}px`,
-  left: `${TOOLBAR_MIN_MARGIN}px`,
-})
-
-const viewportToolbarStyle = reactive<{ top: string; left: string }>({
-  top: `${VIEWPORT_TOOLBAR_TOP_MARGIN}px`,
-  left: '0px',
-})
-
-let hierarchyPanelObserver: ResizeObserver | null = null
-let inspectorPanelObserver: ResizeObserver | null = null
-let observedHierarchyElement: Element | null = null
-let observedInspectorElement: Element | null = null
 let viewportResizeObserver: ResizeObserver | null = null
 let transformToolbarResizeObserver: ResizeObserver | null = null
 let viewportToolbarResizeObserver: ResizeObserver | null = null
-const transformToolbarHostRef = ref<HTMLDivElement | null>(null)
-const viewportToolbarHostRef = ref<HTMLDivElement | null>(null)
 
 let pointerTrackingState: PointerTrackingState | null = null
 
@@ -619,16 +633,6 @@ function pointerHitsSelectableObject(event: PointerEvent): boolean {
   return !!selectionHit
 }
 
-function isObjectWorldVisible(object: THREE.Object3D | null): boolean {
-  let current: THREE.Object3D | null = object
-  while (current) {
-    if (!current.visible) {
-      return false
-    }
-    current = current.parent ?? null
-  }
-  return true
-}
 
 function normalizeWallDimensionsForViewport(values: { height?: number; width?: number; thickness?: number }): {
   height: number
@@ -656,33 +660,6 @@ let transformGroupState: TransformGroupState | null = null
 let pendingSkyboxSettings: SceneSkyboxSettings | null = null
 let pendingSceneGraphSync = false
 
-function getHierarchyPanelElement(): HTMLElement | null {
-  if (typeof document === 'undefined') {
-    return null
-  }
-  if (!panelVisibility.value.hierarchy) {
-    return null
-  }
-  const placement = panelPlacement.value.hierarchy
-  if (placement === 'floating') {
-    return document.querySelector('.floating-panel.hierarchy-floating .panel-card') as HTMLElement | null
-  }
-  return document.querySelector('.panel.hierarchy-panel .panel-card') as HTMLElement | null
-}
-
-function getInspectorPanelElement(): HTMLElement | null {
-  if (typeof document === 'undefined') {
-    return null
-  }
-  if (!panelVisibility.value.inspector) {
-    return null
-  }
-  const placement = panelPlacement.value.inspector
-  if (placement === 'floating') {
-    return document.querySelector('.floating-panel.inspector-floating .panel-card') as HTMLElement | null
-  }
-  return document.querySelector('.panel.inspector-panel .panel-card') as HTMLElement | null
-}
 
 function findGroundNodeInTree(nodes: SceneNode[]): SceneNode | null {
   for (const node of nodes) {
@@ -733,120 +710,7 @@ function getGroundMeshObject(): THREE.Mesh | null {
   return mesh
 }
 
-function updateTransformToolbarPosition() {
-  const viewport = viewportEl.value
-  if (!viewport) {
-    return
-  }
-  const viewportRect = viewport.getBoundingClientRect()
-  if (viewportRect.width <= 0 || viewportRect.height <= 0) {
-    return
-  }
 
-  const panelEl = getHierarchyPanelElement()
-  const toolbarEl = transformToolbarHostRef.value
-  const toolbarWidth = toolbarEl?.offsetWidth ?? 0
-  const toolbarHeight = toolbarEl?.offsetHeight ?? 0
-
-  if (!panelEl) {
-    const maxLeftFallback = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.width - toolbarWidth - TOOLBAR_MIN_MARGIN)
-    const fallbackLeft = clampToRange(TOOLBAR_MIN_MARGIN, TOOLBAR_MIN_MARGIN, maxLeftFallback)
-    transformToolbarStyle.left = `${fallbackLeft}px`
-    const maxTopFallback = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.height - toolbarHeight - TOOLBAR_MIN_MARGIN)
-    const fallbackTop = clampToRange(TOOLBAR_MIN_MARGIN, TOOLBAR_MIN_MARGIN, maxTopFallback)
-    transformToolbarStyle.top = `${fallbackTop}px`
-    return
-  }
-
-  const panelRect = panelEl.getBoundingClientRect()
-  const maxLeft = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.width - toolbarWidth - TOOLBAR_MIN_MARGIN)
-  const maxTop = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.height - toolbarHeight - TOOLBAR_MIN_MARGIN)
-  const candidateLeft = panelRect.right - viewportRect.left + TOOLBAR_OFFSET
-  const candidateTop = panelRect.top - viewportRect.top + TOOLBAR_OFFSET
-  const computedLeft = clampToRange(candidateLeft, TOOLBAR_MIN_MARGIN, maxLeft)
-  const computedTop = clampToRange(candidateTop, TOOLBAR_MIN_MARGIN, maxTop)
-  transformToolbarStyle.left = `${computedLeft}px`
-  transformToolbarStyle.top = `${computedTop}px`
-}
-
-function updateViewportToolbarPosition() {
-  const viewport = viewportEl.value
-  const toolbarEl = viewportToolbarHostRef.value
-  if (!viewport || !toolbarEl) {
-    return
-  }
-
-  const viewportRect = viewport.getBoundingClientRect()
-  if (viewportRect.width <= 0 || viewportRect.height <= 0) {
-    return
-  }
-
-  const toolbarWidth = toolbarEl.offsetWidth
-  const toolbarHeight = toolbarEl.offsetHeight
-
-  const centeredLeft = (viewportRect.width - toolbarWidth) / 2
-  const maxLeft = Math.max(TOOLBAR_MIN_MARGIN, viewportRect.width - toolbarWidth - TOOLBAR_MIN_MARGIN)
-  const resolvedLeft = clampToRange(centeredLeft, TOOLBAR_MIN_MARGIN, maxLeft)
-
-  const maxTop = Math.max(VIEWPORT_TOOLBAR_TOP_MARGIN, viewportRect.height - toolbarHeight - VIEWPORT_TOOLBAR_TOP_MARGIN)
-  const resolvedTop = clampToRange(VIEWPORT_TOOLBAR_TOP_MARGIN, VIEWPORT_TOOLBAR_TOP_MARGIN, maxTop)
-
-  viewportToolbarStyle.left = `${resolvedLeft}px`
-  viewportToolbarStyle.top = `${resolvedTop}px`
-}
-
-function refreshPanelObservers() {
-  if (typeof ResizeObserver === 'undefined') {
-    return
-  }
-  const hierarchyEl = getHierarchyPanelElement()
-  if (observedHierarchyElement !== hierarchyEl) {
-    if (hierarchyPanelObserver && observedHierarchyElement) {
-      hierarchyPanelObserver.unobserve(observedHierarchyElement)
-    }
-    observedHierarchyElement = hierarchyEl
-    if (hierarchyEl) {
-      if (!hierarchyPanelObserver) {
-        hierarchyPanelObserver = new ResizeObserver(() => scheduleToolbarUpdate())
-      }
-      hierarchyPanelObserver.observe(hierarchyEl)
-    }
-  }
-
-  const inspectorEl = getInspectorPanelElement()
-  if (observedInspectorElement !== inspectorEl) {
-    if (inspectorPanelObserver && observedInspectorElement) {
-      inspectorPanelObserver.unobserve(observedInspectorElement)
-    }
-    observedInspectorElement = inspectorEl
-    if (inspectorEl) {
-      if (!inspectorPanelObserver) {
-        inspectorPanelObserver = new ResizeObserver(() => scheduleToolbarUpdate())
-      }
-      inspectorPanelObserver.observe(inspectorEl)
-    }
-  }
-}
-
-function scheduleToolbarUpdate() {
-  nextTick(() => {
-    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
-      window.requestAnimationFrame(() => {
-        updateTransformToolbarPosition()
-        updateViewportToolbarPosition()
-        refreshPanelObservers()
-        updateGroundSelectionToolbarPosition()
-        gizmoControls?.update()
-      })
-    } else {
-      updateTransformToolbarPosition()
-      updateViewportToolbarPosition()
-      refreshPanelObservers()
-      updateGroundSelectionToolbarPosition()
-      gizmoControls?.update()
-    }
-  })
-}
 
 function handleViewportOverlayResize() {
   scheduleToolbarUpdate()
@@ -854,140 +718,20 @@ function handleViewportOverlayResize() {
   gizmoControls?.update()
 }
 
-function resolveNodeIdFromObject(object: THREE.Object3D | null): string | null {
-  let current: THREE.Object3D | null = object
-  while (current) {
-    const nodeId = current.userData?.nodeId as string | undefined
-    if (nodeId) {
-      return nodeId
-    }
-    current = current.parent ?? null
+
+
+const {
+  syncInstancedTransform,
+  attachInstancedMesh,
+  clearInstancedMeshes
+} = useInstancedMeshes(
+  instancedMeshGroup,
+  instancedMeshes,
+  {
+    syncInstancedOutlineEntryTransform
   }
-  return null
-}
+)
 
-function resolveNodeIdFromIntersection(intersection: THREE.Intersection): string | null {
-  if (typeof intersection.instanceId === 'number' && intersection.instanceId >= 0) {
-    const mesh = intersection.object as THREE.InstancedMesh
-    const instancedNodeId = findNodeIdForInstance(mesh, intersection.instanceId)
-    if (instancedNodeId) {
-      return instancedNodeId
-    }
-  }
-  return resolveNodeIdFromObject(intersection.object)
-}
-
-function collectSceneIntersections(recursive = true): THREE.Intersection[] {
-  rootGroup.updateWorldMatrix(true, true)
-  instancedMeshGroup.updateWorldMatrix(true, true)
-
-  const pickTargets: THREE.Object3D[] = [...rootGroup.children]
-
-  instancedMeshes.forEach((mesh) => {
-    if (!mesh.visible || mesh.count === 0) {
-      return
-    }
-    mesh.updateWorldMatrix(true, false)
-    pickTargets.push(mesh)
-  })
-
-  const intersections = raycaster.intersectObjects(pickTargets, recursive)
-  intersections.sort((a, b) => a.distance - b.distance)
-  return intersections
-}
-
-function setBoundingBoxFromObject(object: THREE.Object3D | null, target: THREE.Box3): THREE.Box3 {
-  if (!object) {
-    return target.makeEmpty()
-  }
-  const instancedBounds = object.userData?.instancedBounds as { min?: number[]; max?: number[] } | undefined
-  if (instancedBounds?.min?.length === 3 && instancedBounds?.max?.length === 3) {
-    instancedBoundsMin.fromArray(instancedBounds.min)
-    instancedBoundsMax.fromArray(instancedBounds.max)
-    instancedBoundsBox.min.copy(instancedBoundsMin)
-    instancedBoundsBox.max.copy(instancedBoundsMax)
-    target.copy(instancedBoundsBox)
-    target.applyMatrix4(object.matrixWorld)
-    return target
-  }
-  return target.setFromObject(object)
-}
-
-function syncInstancedTransform(object: THREE.Object3D | null) {
-  if (!object?.userData?.instancedAssetId) {
-    return
-  }
-  const nodeId = object.userData.nodeId as string | undefined
-  if (!nodeId) {
-    return
-  }
-  object.updateMatrixWorld(true)
-  object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-  const isVisible = object.visible !== false
-  if (!isVisible) {
-    instancedScaleHelper.setScalar(0)
-  }
-  instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-  updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
-  syncInstancedOutlineEntryTransform(nodeId)
-}
-
-function attachInstancedMesh(mesh: THREE.InstancedMesh) {
-  if (instancedMeshes.includes(mesh)) {
-    return
-  }
-  instancedMeshes.push(mesh)
-  instancedMeshGroup.add(mesh)
-}
-
-function clearInstancedMeshes() {
-  instancedMeshes.splice(0, instancedMeshes.length).forEach((mesh) => {
-    instancedMeshGroup.remove(mesh)
-  })
-}
-
-function pickNodeAtPointer(event: { clientX: number; clientY: number }): NodeHitResult | null {
-  if (!canvasRef.value || !camera) {
-    return null
-  }
-
-  const rect = canvasRef.value.getBoundingClientRect()
-  if (rect.width === 0 || rect.height === 0) {
-    return null
-  }
-
-  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
-  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
-  raycaster.setFromCamera(pointer, camera)
-  const intersections = collectSceneIntersections()
-
-  for (const intersection of intersections) {
-    const nodeId = resolveNodeIdFromIntersection(intersection)
-    if (!nodeId) {
-      continue
-    }
-    if (sceneStore.isNodeSelectionLocked(nodeId)) {
-      continue
-    }
-    const baseObject = objectMap.get(nodeId)
-    if (!baseObject) {
-      continue
-    }
-    if (!sceneStore.isNodeVisible(nodeId)) {
-      continue
-    }
-    if (!isObjectWorldVisible(baseObject)) {
-      continue
-    }
-    return {
-      nodeId,
-      object: baseObject,
-      point: intersection.point.clone(),
-    }
-  }
-
-  return null
-}
 
 function pickActiveSelectionBoundingBoxHit(event: PointerEvent): NodeHitResult | null {
   if (!canvasRef.value || !camera) {
@@ -1041,348 +785,28 @@ function pickActiveSelectionBoundingBoxHit(event: PointerEvent): NodeHitResult |
   }
 }
 
-function createSelectionDragState(nodeId: string, object: THREE.Object3D, hitPoint: THREE.Vector3, event: PointerEvent): SelectionDragState {
-  const worldPosition = new THREE.Vector3()
-  object.getWorldPosition(worldPosition)
-  // Lock the drag plane to the grab point height so pointer distance does not change drag duration.
-  const planeAnchor = worldPosition.clone()
-  planeAnchor.y = hitPoint.y
-  const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 1, 0), planeAnchor)
-  const pointerPlanePoint = projectPointerToPlane(event, plane)
-  // Capture the pointer offset on the drag plane itself so the object stays put when dragging begins.
-  const pointerOffset = (pointerPlanePoint ?? hitPoint.clone().setY(planeAnchor.y))
-    .sub(worldPosition)
-    .projectOnPlane(plane.normal)
-  const companions: SelectionDragCompanion[] = []
-  const selectedIds = sceneStore.selectedNodeIds.filter((id) => id !== nodeId && !sceneStore.isNodeSelectionLocked(id))
-  selectedIds.forEach((id) => {
-    const companionObject = objectMap.get(id)
-    if (!companionObject) {
-      return
-    }
-    companionObject.updateMatrixWorld(true)
-    const companionWorldPosition = new THREE.Vector3()
-    companionObject.getWorldPosition(companionWorldPosition)
-    companions.push({
-      nodeId: id,
-      object: companionObject,
-      parent: companionObject.parent ?? null,
-      initialLocalPosition: companionObject.position.clone(),
-      initialWorldPosition: companionWorldPosition,
-    })
-  })
-  return {
-    nodeId,
-    object,
-    plane,
-    pointerOffset,
-    initialLocalPosition: object.position.clone(),
-    initialWorldPosition: worldPosition.clone(),
-    initialRotation: object.rotation.clone(),
-    parent: object.parent ?? null,
-    companions,
-    hasDragged: false,
+const {
+  createSelectionDragState,
+  updateSelectDragPosition,
+  commitSelectionDragTransforms,
+  dropSelectionToGround,
+  alignSelection,
+  rotateSelection
+} = useSelectionDrag(
+  props.sceneNodes,
+  objectMap,
+  projectPointerToPlane,
+  emit,
+  {
+    syncInstancedTransform,
+    updateGridHighlightFromObject,
+    updateSelectionHighlights,
+    updatePlaceholderOverlayPositions,
+    gizmoControlsUpdate: () => gizmoControls?.update()
   }
-}
+)
 
-function projectPointerToPlane(event: PointerEvent, plane: THREE.Plane): THREE.Vector3 | null {
-  if (!camera || !canvasRef.value) {
-    return null
-  }
 
-  const rect = canvasRef.value.getBoundingClientRect()
-  if (rect.width === 0 || rect.height === 0) {
-    return null
-  }
-
-  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
-  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
-  raycaster.setFromCamera(pointer, camera)
-  const intersectionPoint = new THREE.Vector3()
-  if (raycaster.ray.intersectPlane(plane, intersectionPoint)) {
-    return intersectionPoint
-  }
-  return null
-}
-
-function dropSelectionToGround() {
-  const unlockedSelection = sceneStore.selectedNodeIds.filter((id) => !sceneStore.isNodeSelectionLocked(id))
-  if (!unlockedSelection.length) {
-    return
-  }
-
-  const parentMap = buildParentIndex(props.sceneNodes, null, new Map<string, string | null>())
-  const topLevelIds = filterTopLevelSelection(unlockedSelection, parentMap)
-  if (!topLevelIds.length) {
-    return
-  }
-
-  const updates: TransformUpdatePayload[] = []
-
-  for (const nodeId of topLevelIds) {
-    const object = objectMap.get(nodeId)
-    if (!object) {
-      continue
-    }
-
-    object.updateMatrixWorld(true)
-    setBoundingBoxFromObject(object, dropBoundingBoxHelper)
-    if (dropBoundingBoxHelper.isEmpty()) {
-      continue
-    }
-
-    const deltaY = -dropBoundingBoxHelper.min.y
-    if (Math.abs(deltaY) <= DROP_TO_GROUND_EPSILON) {
-      continue
-    }
-
-    object.getWorldPosition(dropWorldPositionHelper)
-    dropWorldPositionHelper.y += deltaY
-
-    dropLocalPositionHelper.copy(dropWorldPositionHelper)
-    if (object.parent) {
-      object.parent.worldToLocal(dropLocalPositionHelper)
-    }
-
-    object.position.set(dropLocalPositionHelper.x, dropLocalPositionHelper.y, dropLocalPositionHelper.z)
-    object.updateMatrixWorld(true)
-
-    updates.push({
-      id: nodeId,
-      position: dropLocalPositionHelper,
-    })
-  }
-
-  if (!updates.length) {
-    return
-  }
-
-  if (typeof sceneStore.updateNodePropertiesBatch === 'function') {
-    sceneStore.updateNodePropertiesBatch(updates)
-  } else {
-    updates.forEach((update) => sceneStore.updateNodeProperties(update))
-  }
-
-  const primaryId = sceneStore.selectedNodeId
-  const primaryObject = primaryId ? objectMap.get(primaryId) ?? null : null
-  updateGridHighlightFromObject(primaryObject)
-  updatePlaceholderOverlayPositions()
-  updateSelectionHighlights()
-}
-
-function snapValueToGrid(value: number): number {
-  // Round to the nearest snap interval so aligned nodes land on grid intersections.
-  return Math.round(value / GRID_SNAP_SPACING) * GRID_SNAP_SPACING
-}
-
-function alignSelection(mode: AlignMode) {
-  const axis = ALIGN_MODE_AXIS[mode]
-
-  const primaryId = sceneStore.selectedNodeId
-  if (!primaryId) {
-    return
-  }
-
-  const referenceObject = objectMap.get(primaryId)
-  if (!referenceObject) {
-    return
-  }
-
-  const unlockedSelection = sceneStore.selectedNodeIds.filter((id) => id !== primaryId && !sceneStore.isNodeSelectionLocked(id))
-  if (!unlockedSelection.length) {
-    return
-  }
-
-  const parentMap = buildParentIndex(props.sceneNodes, null, new Map<string, string | null>())
-  const topLevelIds = filterTopLevelSelection(unlockedSelection, parentMap)
-  if (!topLevelIds.length) {
-    return
-  }
-
-  referenceObject.updateMatrixWorld(true)
-  referenceObject.getWorldPosition(alignReferenceWorldPositionHelper)
-  const targetAxisValue = snapValueToGrid(alignReferenceWorldPositionHelper[axis])
-
-  const updates: TransformUpdatePayload[] = []
-
-  for (const nodeId of topLevelIds) {
-    const targetObject = objectMap.get(nodeId)
-    if (!targetObject) {
-      continue
-    }
-
-    targetObject.updateMatrixWorld(true)
-    targetObject.getWorldPosition(alignWorldPositionHelper)
-
-    const deltaValue = targetAxisValue - alignWorldPositionHelper[axis]
-    if (Math.abs(deltaValue) <= ALIGN_DELTA_EPSILON) {
-      continue
-    }
-
-    alignDeltaHelper.set(0, 0, 0)
-    alignDeltaHelper[axis] = deltaValue
-    alignWorldPositionHelper.add(alignDeltaHelper)
-    alignLocalPositionHelper.copy(alignWorldPositionHelper)
-    if (targetObject.parent) {
-      targetObject.parent.worldToLocal(alignLocalPositionHelper)
-    }
-
-    targetObject.position.copy(alignLocalPositionHelper)
-    targetObject.updateMatrixWorld(true)
-
-    updates.push({
-      id: nodeId,
-      position: alignLocalPositionHelper,
-    })
-  }
-
-  if (!updates.length) {
-    return
-  }
-
-  if (typeof sceneStore.updateNodePropertiesBatch === 'function') {
-    sceneStore.updateNodePropertiesBatch(updates)
-  } else {
-    updates.forEach((update) => sceneStore.updateNodeProperties(update))
-  }
-
-  const primaryObject = objectMap.get(primaryId) ?? null
-  updateGridHighlightFromObject(primaryObject)
-  updatePlaceholderOverlayPositions()
-  updateSelectionHighlights()
-}
-
-type SelectionRotationOptions = { axis: 'x' | 'y'; degrees: number }
-
-function rotateSelection({ axis, degrees }: SelectionRotationOptions) {
-  if (!Number.isFinite(degrees) || degrees === 0) {
-    return
-  }
-
-  const unlockedSelection = sceneStore.selectedNodeIds.filter(
-    (id) => id !== GROUND_NODE_ID && !sceneStore.isNodeSelectionLocked(id)
-  )
-  if (!unlockedSelection.length) {
-    return
-  }
-
-  const parentMap = buildParentIndex(props.sceneNodes, null, new Map<string, string | null>())
-  const topLevelIds = filterTopLevelSelection(unlockedSelection, parentMap)
-  if (!topLevelIds.length) {
-    return
-  }
-
-  const delta = THREE.MathUtils.degToRad(degrees)
-  if (!Number.isFinite(delta) || delta === 0) {
-    return
-  }
-
-  const updates: TransformUpdatePayload[] = []
-
-  for (const nodeId of topLevelIds) {
-    const targetObject = objectMap.get(nodeId)
-    if (!targetObject) {
-      continue
-    }
-
-    const nextRotation = targetObject.rotation.clone()
-    if (axis === 'x') {
-      nextRotation.x += delta
-    } else if (axis === 'y') {
-      nextRotation.y += delta
-    } else {
-      continue
-    }
-
-    targetObject.rotation.copy(nextRotation)
-    targetObject.updateMatrixWorld(true)
-
-    updates.push({
-      id: nodeId,
-      rotation: toEulerLike(nextRotation),
-    })
-  }
-
-  if (!updates.length) {
-    return
-  }
-
-  if (typeof sceneStore.updateNodePropertiesBatch === 'function') {
-    sceneStore.updateNodePropertiesBatch(updates)
-  } else {
-    updates.forEach((update) => sceneStore.updateNodeProperties(update))
-  }
-
-  const primaryId = sceneStore.selectedNodeId
-  const primaryObject = primaryId ? objectMap.get(primaryId) ?? null : null
-  updateGridHighlightFromObject(primaryObject)
-  updatePlaceholderOverlayPositions()
-  updateSelectionHighlights()
-  gizmoControls?.update()
-}
-
-function updateSelectDragPosition(drag: SelectionDragState, event: PointerEvent): boolean {
-  const planePoint = projectPointerToPlane(event, drag.plane)
-  if (!planePoint) {
-    return false
-  }
-
-  const worldPosition = planePoint.sub(drag.pointerOffset)
-  snapVectorToGridForNode(worldPosition, drag.nodeId)
-
-  const newLocalPosition = worldPosition.clone()
-  if (drag.parent) {
-    drag.parent.worldToLocal(newLocalPosition)
-  }
-  newLocalPosition.y = drag.initialLocalPosition.y
-
-  drag.object.position.copy(newLocalPosition)
-  drag.object.updateMatrixWorld(true)
-  syncInstancedTransform(drag.object)
-  drag.object.getWorldPosition(selectDragWorldPosition)
-  drag.object.getWorldQuaternion(selectDragWorldQuaternion)
-  selectDragDelta.copy(selectDragWorldPosition).sub(drag.initialWorldPosition)
-
-  const updates: TransformUpdatePayload[] = [
-    {
-      id: drag.nodeId,
-      position: drag.object.position,
-      rotation: toEulerLike(drag.object.rotation),
-      scale: drag.object.scale,
-    },
-  ]
-
-  drag.companions.forEach((companion) => {
-  const companionWorldPosition = companion.initialWorldPosition.clone().add(selectDragDelta)
-  snapVectorToGridForNode(companionWorldPosition, companion.nodeId)
-    const localPosition = companionWorldPosition.clone()
-    if (companion.parent) {
-      companion.parent.worldToLocal(localPosition)
-    }
-    localPosition.y = companion.initialLocalPosition.y
-    companion.object.position.copy(localPosition)
-    companion.object.updateMatrixWorld(true)
-    syncInstancedTransform(companion.object)
-    updates.push({
-      id: companion.nodeId,
-      position: companion.object.position,
-    })
-  })
-
-  updateGridHighlightFromObject(drag.object)
-  updateSelectionHighlights()
-
-  return true
-}
-
-type VectorCoordinates = Pick<THREE.Vector3, 'x' | 'y' | 'z'>
-
-function cloneVectorCoordinates(vector: VectorCoordinates): THREE.Vector3 {
-  const safeX = Number.isFinite(vector.x) ? vector.x : 0
-  const safeY = Number.isFinite(vector.y) ? vector.y : 0
-  const safeZ = Number.isFinite(vector.z) ? vector.z : 0
-  return new THREE.Vector3(safeX, safeY, safeZ)
-}
 
 function emitTransformUpdates(updates: TransformUpdatePayload[]) {
   if (!updates.length) {
@@ -1406,30 +830,6 @@ function emitTransformUpdates(updates: TransformUpdatePayload[]) {
   emit('updateNodeTransform', normalized.length === 1 ? normalized[0]! : normalized)
 }
 
-function buildSelectionDragUpdates(drag: SelectionDragState): TransformUpdatePayload[] {
-  const updates: TransformUpdatePayload[] = [
-    {
-      id: drag.nodeId,
-      position: drag.object.position.clone(),
-      rotation: toEulerLike(drag.object.rotation),
-      scale: drag.object.scale.clone(),
-    },
-  ]
-
-  drag.companions.forEach((companion) => {
-    updates.push({
-      id: companion.nodeId,
-      position: companion.object.position.clone(),
-    })
-  })
-
-  return updates
-}
-
-function commitSelectionDragTransforms(drag: SelectionDragState) {
-  const updates = buildSelectionDragUpdates(drag)
-  emitTransformUpdates(updates)
-}
 
 function buildTransformControlUpdates(): TransformUpdatePayload[] {
   const updates: TransformUpdatePayload[] = []
@@ -1697,9 +1097,6 @@ function easeInOutCubic(t: number): number {
 }
 
 const cameraOffsetHelper = new THREE.Vector3()
-const selectDragWorldPosition = new THREE.Vector3()
-const selectDragWorldQuaternion = new THREE.Quaternion()
-const selectDragDelta = new THREE.Vector3()
 const transformDeltaPosition = new THREE.Vector3()
 const transformMovementDelta = new THREE.Vector3()
 const transformWorldPositionBuffer = new THREE.Vector3()
@@ -1717,18 +1114,11 @@ let hasTransformLastWorldPosition = false
 const gridHighlightPositionHelper = new THREE.Vector3()
 const gridHighlightBoundingBox = new THREE.Box3()
 const gridHighlightSizeHelper = new THREE.Vector3()
-const dropBoundingBoxHelper = new THREE.Box3()
-const dropWorldPositionHelper = new THREE.Vector3()
-const dropLocalPositionHelper = new THREE.Vector3()
 const selectionHighlightPositionHelper = new THREE.Vector3()
 const selectionHighlightBoundingBox = new THREE.Box3()
 const selectionHighlightSizeHelper = new THREE.Vector3()
 const selectionDragBoundingBox = new THREE.Box3()
 const selectionDragIntersectionHelper = new THREE.Vector3()
-const alignReferenceWorldPositionHelper = new THREE.Vector3()
-const alignDeltaHelper = new THREE.Vector3()
-const alignWorldPositionHelper = new THREE.Vector3()
-const alignLocalPositionHelper = new THREE.Vector3()
 const viewPointScaleHelper = new THREE.Vector3()
 const viewPointParentScaleHelper = new THREE.Vector3()
 const viewPointNodeScaleHelper = new THREE.Vector3()
@@ -3193,44 +2583,6 @@ function applyCameraState(state: SceneCameraState | null | undefined) {
   isApplyingCameraState = false
 }
 
-function findSceneNode(nodes: SceneNode[], nodeId: string): SceneNode | null {
-  for (const node of nodes) {
-    if (node.id === nodeId) {
-      return node
-    }
-    if (node.children) {
-      const result = findSceneNode(node.children, nodeId)
-      if (result) {
-        return result
-      }
-    }
-  }
-  return null
-}
-
-function buildParentIndex(nodes: SceneNode[], parentId: string | null, map: Map<string, string | null>) {
-  nodes.forEach((node) => {
-    map.set(node.id, parentId)
-    if (node.children?.length) {
-      buildParentIndex(node.children, node.id, map)
-    }
-  })
-  return map
-}
-
-function filterTopLevelSelection(ids: string[], parentMap: Map<string, string | null>): string[] {
-  const idSet = new Set(ids)
-  return ids.filter((id) => {
-    let parentId = parentMap.get(id) ?? null
-    while (parentId) {
-      if (idSet.has(parentId)) {
-        return false
-      }
-      parentId = parentMap.get(parentId) ?? null
-    }
-    return true
-  })
-}
 
 function focusCameraOnNode(nodeId: string): boolean {
   if (!camera || !orbitControls) {
@@ -8244,9 +7596,6 @@ function updateToolMode(tool: EditorTool) {
   }
 }
 
-function toEulerLike(euler: THREE.Euler): THREE.Vector3 {
-  return new THREE.Vector3(euler.x, euler.y, euler.z)
-}
 
 function isEditableKeyboardTarget(target: EventTarget | null): boolean {
   const element = target as HTMLElement | null
@@ -8338,16 +7687,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('blur', handleFaceSnapCommitBlur, { capture: true })
   if (typeof window !== 'undefined') {
     window.removeEventListener('resize', handleViewportOverlayResize)
-  }
-  if (hierarchyPanelObserver) {
-    hierarchyPanelObserver.disconnect()
-    hierarchyPanelObserver = null
-    observedHierarchyElement = null
-  }
-  if (inspectorPanelObserver) {
-    inspectorPanelObserver.disconnect()
-    inspectorPanelObserver = null
-    observedInspectorElement = null
   }
   if (viewportResizeObserver) {
     viewportResizeObserver.disconnect()
