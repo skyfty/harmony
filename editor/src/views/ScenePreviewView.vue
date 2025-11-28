@@ -292,6 +292,7 @@ previewComponentManager.registerDefinition(effectComponentDefinition)
 previewComponentManager.registerDefinition(behaviorComponentDefinition)
 
 const previewNodeMap = new Map<string, SceneNode>()
+const previewParentMap = new Map<string, string | null>()
 
 const behaviorRaycaster = new THREE.Raycaster()
 const behaviorPointer = new THREE.Vector2()
@@ -391,6 +392,7 @@ type LazyPlaceholderState = {
 }
 
 const lazyPlaceholderStates = new Map<string, LazyPlaceholderState>()
+const deferredInstancingNodeIds = new Set<string>()
 let lazyLoadMeshesEnabled = true
 let activeLazyLoadCount = 0
 const tempOutlineSphere = new THREE.Sphere()
@@ -562,20 +564,32 @@ function isGuideboardEffectActive(props: Partial<GuideboardComponentProps> | nul
 
 function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null): void {
 	previewNodeMap.clear()
+	previewParentMap.clear()
 	if (!Array.isArray(nodes)) {
 		return
 	}
-	const stack: SceneNode[] = [...nodes]
+	const stack: Array<{ node: SceneNode; parentId: string | null }> = nodes.map((node) => ({
+		node,
+		parentId: null,
+	}))
 	while (stack.length) {
-		const node = stack.pop()
-		if (!node) {
+		const entry = stack.pop()
+		if (!entry) {
 			continue
 		}
+		const { node, parentId } = entry
 		previewNodeMap.set(node.id, node)
+		previewParentMap.set(node.id, parentId)
 		if (Array.isArray(node.children) && node.children.length) {
-			stack.push(...node.children)
+			node.children.forEach((child) => {
+				stack.push({ node: child, parentId: node.id })
+			})
 		}
 	}
+}
+
+function resolveParentNodeId(nodeId: string): string | null {
+	return previewParentMap.get(nodeId) ?? null
 }
 
 function resolveNodeById(nodeId: string): SceneNode | null {
@@ -722,23 +736,38 @@ async function prepareInstancedNodesForDocument(
 	document: SceneJsonExportDocument,
 	pending: Map<string, THREE.Object3D>,
 	resourceCache: ResourceCache,
+	options: { includeNodeIds?: Set<string>; skipNodeIds?: Set<string> } = {},
 ): Promise<void> {
+	const includeNodeIds = options.includeNodeIds ?? null
+	const skipNodeIds = options.skipNodeIds ?? null
 	const grouped = collectNodesByAssetId(document.nodes ?? [])
 	if (!grouped.size) {
 		return
 	}
 	const tasks: Promise<void>[] = []
 	grouped.forEach((nodes, assetId) => {
+		const filteredNodes = nodes.filter((node) => {
+			if (includeNodeIds && !includeNodeIds.has(node.id)) {
+				return false
+			}
+			if (skipNodeIds && skipNodeIds.has(node.id)) {
+				return false
+			}
+			return true
+		})
+		if (!filteredNodes.length) {
+			return
+		}
 		tasks.push((async () => {
-			if (!nodes.length) {
+			if (!filteredNodes.length) {
 				return
 			}
-			const group = await ensureModelInstanceGroup(assetId, nodes[0] ?? null, resourceCache)
+			const group = await ensureModelInstanceGroup(assetId, filteredNodes[0] ?? null, resourceCache)
 			if (!group || !group.meshes.length) {
 				return
 			}
 			ensureInstancedMeshesRegistered(assetId)
-			nodes.forEach((node) => {
+			filteredNodes.forEach((node) => {
 				const pendingObject = pending.get(node.id)
 				if (pendingObject) {
 					pendingObject.parent?.remove(pendingObject)
@@ -3859,15 +3888,26 @@ async function loadActualAssetForPlaceholder(state: LazyPlaceholderState): Promi
 	const node = resolveNodeById(state.nodeId)
 	if (!node) {
 		lazyPlaceholderStates.delete(state.nodeId)
+		deferredInstancingNodeIds.delete(state.nodeId)
 		return
+	}
+	if (deferredInstancingNodeIds.has(state.nodeId)) {
+		const instanced = await applyDeferredInstancingForNode(state.nodeId)
+		if (instanced) {
+			state.loaded = true
+			lazyPlaceholderStates.delete(state.nodeId)
+			return
+		}
+		deferredInstancingNodeIds.delete(state.nodeId)
 	}
 	try {
 		const detailed = await loadNodeObject(resourceCache, state.assetId, node.importMetadata ?? null)
 		if (!detailed) {
 			lazyPlaceholderStates.delete(state.nodeId)
+			deferredInstancingNodeIds.delete(state.nodeId)
 			return
 		}
-		detailed.position.set(0,0,0)
+		detailed.position.set(0, 0, 0)
 
 		prepareImportedObjectForPreview(detailed)
 		const placeholder = state.placeholder
@@ -3909,12 +3949,66 @@ async function loadActualAssetForPlaceholder(state: LazyPlaceholderState): Promi
 			registerSubtree(detailed)
 		}
 		state.loaded = true
+		deferredInstancingNodeIds.delete(state.nodeId)
 		lazyPlaceholderStates.delete(state.nodeId)
 		refreshAnimations()
 	} catch (error) {
 		console.warn('[ScenePreview] Deferred asset load failed', error)
 		lazyPlaceholderStates.delete(state.nodeId)
+		deferredInstancingNodeIds.delete(state.nodeId)
 	}
+}
+
+async function applyDeferredInstancingForNode(nodeId: string): Promise<boolean> {
+	if (!deferredInstancingNodeIds.has(nodeId)) {
+		return false
+	}
+	if (!currentDocument || !editorResourceCache || !rootGroup) {
+		return false
+	}
+	const includeNodeIds = new Set<string>([nodeId])
+	const pending = new Map<string, THREE.Object3D>()
+	try {
+		await prepareInstancedNodesForDocument(currentDocument, pending, editorResourceCache, {
+			includeNodeIds,
+		})
+	} catch (error) {
+		console.warn('[ScenePreview] Failed to prepare instanced node after lazy load', error)
+		return false
+	}
+	if (!pending.size) {
+		return false
+	}
+	const pendingParentIds = new Set<string>()
+	pending.forEach((_object, id) => {
+		const parentId = resolveParentNodeId(id)
+		if (parentId && pending.has(parentId)) {
+			pendingParentIds.add(id)
+		}
+	})
+	const attachmentEntries = Array.from(pending.entries()).filter(([id]) => !pendingParentIds.has(id))
+	let attached = false
+	attachmentEntries.forEach(([id, object]) => {
+		const parentId = resolveParentNodeId(id)
+		let parentObject: THREE.Object3D | null = null
+		if (parentId) {
+			parentObject = nodeObjectMap.get(parentId) ?? null
+		}
+		if (!parentObject) {
+			parentObject = rootGroup
+		}
+		if (!parentObject) {
+			return
+		}
+		parentObject.add(object)
+		registerSubtree(object, pending)
+		attached = true
+	})
+	if (!attached) {
+		return false
+	}
+	deferredInstancingNodeIds.delete(nodeId)
+	return true
 }
 
 function prepareImportedObjectForPreview(object: THREE.Object3D): void {
@@ -4026,6 +4120,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	applySkyboxSettings(skyboxSettings)
 	const environmentSettings = resolveDocumentEnvironment(document)
 	lazyLoadMeshesEnabled = document.lazyLoadMeshes !== false
+	deferredInstancingNodeIds.clear()
 	if (!scene || !rootGroup) {
 		pendingEnvironmentSettings = cloneEnvironmentSettingsLocal(environmentSettings)
 		return
@@ -4095,8 +4190,26 @@ async function updateScene(document: SceneJsonExportDocument) {
 		}
 	})
 
+	let instancingSkipNodeIds: Set<string> | null = null
+	if (lazyLoadMeshesEnabled) {
+		instancingSkipNodeIds = new Set<string>()
+		pendingObjects.forEach((object, nodeId) => {
+			const placeholderObject = findLazyPlaceholderForNode(object, nodeId)
+			const lazyData = placeholderObject?.userData?.lazyAsset as LazyAssetMetadata
+			if (lazyData?.placeholder) {
+				instancingSkipNodeIds!.add(nodeId)
+			}
+		})
+	}
+	if (instancingSkipNodeIds?.size) {
+		instancingSkipNodeIds.forEach((nodeId) => {
+			deferredInstancingNodeIds.add(nodeId)
+		})
+	}
 	if (resourceCache) {
-		await prepareInstancedNodesForDocument(document, pendingObjects, resourceCache)
+		await prepareInstancedNodesForDocument(document, pendingObjects, resourceCache, {
+			skipNodeIds: instancingSkipNodeIds ?? undefined,
+		})
 	}
 
 	if (!currentDocument) {
