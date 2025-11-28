@@ -508,6 +508,7 @@ let environmentMapLoadToken = 0;
 let pendingEnvironmentSettings: EnvironmentSettings | null = null;
 let renderContext: RenderContext | null = null;
 let currentDocument: SceneJsonExportDocument | null = null;
+let sceneGraphRoot: THREE.Object3D | null = null;
 type WindowResizeCallback = Parameters<typeof uni.onWindowResize>[0];
 let resizeListener: WindowResizeCallback | null = null;
 let canvasResult: UseCanvasResult | null = null;
@@ -872,6 +873,7 @@ type LazyPlaceholderState = {
 };
 
 const lazyPlaceholderStates = new Map<string, LazyPlaceholderState>();
+const deferredInstancingNodeIds = new Set<string>();
 let lazyLoadMeshesEnabled = true;
 let activeLazyLoadCount = 0;
 const tempOutlineSphere = new THREE.Sphere();
@@ -1983,7 +1985,10 @@ async function prepareInstancedNodesForGraph(
   root: THREE.Object3D,
   document: SceneJsonExportDocument,
   resourceCache: ResourceCache,
+  options: { includeNodeIds?: Set<string>; skipNodeIds?: Set<string> } = {},
 ): Promise<void> {
+  const includeNodeIds = options.includeNodeIds ?? null;
+  const skipNodeIds = options.skipNodeIds ?? null;
   const grouped = collectNodesByAssetId(document.nodes ?? []);
   if (!grouped.size) {
     return;
@@ -2002,16 +2007,25 @@ async function prepareInstancedNodesForGraph(
 
   const tasks: Promise<void>[] = [];
   grouped.forEach((nodes, assetId) => {
-    tasks.push((async () => {
-      if (!nodes.length) {
-        return;
+    const filteredNodes = nodes.filter((node) => {
+      if (includeNodeIds && !includeNodeIds.has(node.id)) {
+        return false;
       }
-      const group = await ensureModelInstanceGroup(assetId, nodes[0] ?? null, resourceCache);
+      if (skipNodeIds && skipNodeIds.has(node.id)) {
+        return false;
+      }
+      return true;
+    });
+    if (!filteredNodes.length) {
+      return;
+    }
+    tasks.push((async () => {
+      const group = await ensureModelInstanceGroup(assetId, filteredNodes[0] ?? null, resourceCache);
       if (!group || !group.meshes.length) {
         return;
       }
       ensureInstancedMeshesRegistered(assetId);
-      nodes.forEach((node) => {
+      filteredNodes.forEach((node) => {
         const entry = sceneObjects.get(node.id);
         if (!entry) {
           return;
@@ -2111,6 +2125,77 @@ function indexSceneObjects(root: THREE.Object3D) {
       syncInstancedTransform(object);
     }
   });
+}
+
+function registerSceneSubtree(root: THREE.Object3D): void {
+  root.traverse((object) => {
+    const nodeId = object.userData?.nodeId as string | undefined;
+    if (!nodeId) {
+      return;
+    }
+    const existing = nodeObjectMap.get(nodeId) ?? null;
+    const lazyData = object.userData?.lazyAsset as LazyAssetMetadata;
+    const existingLazyData = existing?.userData?.lazyAsset as LazyAssetMetadata;
+    const objectIsPlaceholder = lazyData?.placeholder === true;
+    const existingIsPreferred =
+      existing && existing !== object && objectIsPlaceholder && existingLazyData?.placeholder !== true;
+    if (existingIsPreferred) {
+      return;
+    }
+    nodeObjectMap.set(nodeId, object);
+    attachRuntimeForNode(nodeId, object);
+    const instancedAssetId = object.userData?.instancedAssetId as string | undefined;
+    if (instancedAssetId) {
+      ensureInstancedMeshesRegistered(instancedAssetId);
+      syncInstancedTransform(object);
+    }
+    const nodeState = resolveNodeById(nodeId);
+    const guideboardVisibility = resolveGuideboardInitialVisibility(nodeState);
+    if (guideboardVisibility !== null) {
+      object.visible = guideboardVisibility;
+      updateBehaviorVisibility(nodeId, object.visible);
+      syncInstancedTransform(object);
+    }
+    if (nodeState) {
+      applyMaterialOverrides(object, nodeState.materials, materialOverrideOptions);
+    }
+    syncInstancedTransform(object);
+  });
+}
+
+async function applyDeferredInstancingForNode(nodeId: string): Promise<boolean> {
+  if (!deferredInstancingNodeIds.has(nodeId)) {
+    return false;
+  }
+  if (!currentDocument || !viewerResourceCache || !sceneGraphRoot) {
+    return false;
+  }
+  const includeNodeIds = new Set<string>([nodeId]);
+  try {
+    await prepareInstancedNodesForGraph(sceneGraphRoot, currentDocument, viewerResourceCache, {
+      includeNodeIds,
+    });
+  } catch (error) {
+    console.warn('[SceneViewer] Instanced mesh prepare failed', error);
+    return false;
+  }
+  let target: THREE.Object3D | null = null;
+  sceneGraphRoot.traverse((object: THREE.Object3D) => {
+    if (target) {
+      return;
+    }
+    const candidateId = object.userData?.nodeId as string | undefined;
+    if (candidateId === nodeId) {
+      target = object;
+    }
+  });
+  if (!target) {
+    return false;
+  }
+  nodeObjectMap.delete(nodeId);
+  registerSceneSubtree(target);
+  deferredInstancingNodeIds.delete(nodeId);
+  return true;
 }
 
 type LazyAssetMetadata = {
@@ -2305,15 +2390,26 @@ async function loadActualAssetForPlaceholder(state: LazyPlaceholderState): Promi
   const node = resolveNodeById(state.nodeId);
   if (!node) {
     lazyPlaceholderStates.delete(state.nodeId);
+    deferredInstancingNodeIds.delete(state.nodeId);
     return;
+  }
+  if (deferredInstancingNodeIds.has(state.nodeId)) {
+    const instanced = await applyDeferredInstancingForNode(state.nodeId);
+    if (instanced) {
+      state.loaded = true;
+      lazyPlaceholderStates.delete(state.nodeId);
+      return;
+    }
+    deferredInstancingNodeIds.delete(state.nodeId);
   }
   try {
     const detailed = await loadNodeObject(resourceCache, state.assetId, node.importMetadata ?? null);
     if (!detailed) {
       lazyPlaceholderStates.delete(state.nodeId);
+      deferredInstancingNodeIds.delete(state.nodeId);
       return;
     }
-		detailed.position.set(0, 0, 0)
+    detailed.position.set(0, 0, 0);
     prepareImportedObjectForPreview(detailed);
     const placeholder = state.placeholder;
     const container = state.container ?? nodeObjectMap.get(state.nodeId) ?? null;
@@ -2347,13 +2443,16 @@ async function loadActualAssetForPlaceholder(state: LazyPlaceholderState): Promi
     detailed.updateMatrixWorld(true);
     placeholder.parent?.remove(placeholder);
     disposeObject(placeholder);
-    nodeObjectMap.set(state.nodeId, detailed);
-    attachRuntimeForNode(state.nodeId, detailed);
+    nodeObjectMap.delete(state.nodeId);
+    registerSceneSubtree(detailed);
+    state.loaded = true;
+    deferredInstancingNodeIds.delete(state.nodeId);
     lazyPlaceholderStates.delete(state.nodeId);
     refreshAnimationControllers(context.scene);
   } catch (error) {
     console.warn('[SceneViewer] 延迟资源加载失败', error);
     lazyPlaceholderStates.delete(state.nodeId);
+    deferredInstancingNodeIds.delete(state.nodeId);
   }
 }
 
@@ -4354,6 +4453,7 @@ function teardownRenderer() {
   });
   nodeObjectMap.clear();
   lazyPlaceholderStates.clear();
+  deferredInstancingNodeIds.clear();
   activeLazyLoadCount = 0;
   activeCameraWatchTween = null;
   frameDeltaMode = null;
@@ -4376,6 +4476,7 @@ function teardownRenderer() {
   renderContext = null;
   canvasResult = null;
   currentDocument = null;
+  sceneGraphRoot = null;
   viewerResourceCache = null;
 }
 
@@ -4517,6 +4618,10 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   scene.clear();
   scene.add(instancedMeshGroup);
   clearInstancedMeshes();
+  sceneGraphRoot = null;
+  deferredInstancingNodeIds.clear();
+  lazyPlaceholderStates.clear();
+  activeLazyLoadCount = 0;
   sunDirectionalLight = null;
   warnings.value = [];
 
@@ -4595,9 +4700,29 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   if (graph.warnings.length) {
     warnings.value = graph.warnings;
   }
-  if (resourceCache) {
-    await prepareInstancedNodesForGraph(graph.root, payload.document, resourceCache);
+  let instancingSkipNodeIds: Set<string> | null = null;
+  if (lazyLoadMeshesEnabled) {
+    instancingSkipNodeIds = new Set<string>();
+    graph.root.traverse((object: THREE.Object3D) => {
+      const nodeId = object.userData?.nodeId as string | undefined;
+      if (!nodeId) {
+        return;
+      }
+      const lazyData = object.userData?.lazyAsset as LazyAssetMetadata;
+      if (lazyData?.placeholder) {
+        instancingSkipNodeIds!.add(nodeId);
+      }
+    });
   }
+  if (instancingSkipNodeIds?.size) {
+    instancingSkipNodeIds.forEach((nodeId) => deferredInstancingNodeIds.add(nodeId));
+  }
+  if (resourceCache) {
+    await prepareInstancedNodesForGraph(graph.root, payload.document, resourceCache, {
+      skipNodeIds: instancingSkipNodeIds ?? undefined,
+    });
+  }
+  sceneGraphRoot = graph.root;
   scene.add(graph.root);
 
   resetBehaviorRuntime();
