@@ -64,6 +64,7 @@ import { prepareGLBSceneExport, prepareJsonSceneExport } from '@/utils/sceneExpo
 import ViewportToolbar from './ViewportToolbar.vue'
 import TransformToolbar from './TransformToolbar.vue'
 import GroundToolbar from './GroundToolbar.vue'
+import PlaceholderOverlayList from './sceneViewport/PlaceholderOverlayList.vue'
 import { TRANSFORM_TOOLS } from '@/types/scene-transform-tools'
 import { ALIGN_MODE_AXIS, type AlignMode } from '@/types/scene-viewport-align-mode'
 import { Sky } from 'three/addons/objects/Sky.js'
@@ -71,7 +72,6 @@ import type { NodeHitResult } from '@/types/scene-viewport-node-hit-result'
 import type { SelectionDragCompanion, SelectionDragState } from '@/types/scene-viewport-selection-drag'
 import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracking-state'
 import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-viewport-transform-group'
-import type { PlaceholderOverlayState } from '@/types/scene-viewport-placeholder-overlay-state'
 import type { BuildTool } from '@/types/build-tool'
 import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache } from '@schema/groundMesh'
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
@@ -80,8 +80,6 @@ import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
 import {
   VIEW_POINT_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
-  WARP_GATE_RUNTIME_REGISTRY_KEY,
-  GUIDEBOARD_RUNTIME_REGISTRY_KEY,
   WARP_GATE_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
   clampWarpGateComponentProps,
@@ -106,6 +104,10 @@ import type {
   GuideboardEffectInstance,
 } from '@schema/components'
 import type { EnvironmentSettings } from '@/types/environment'
+import { clampToRange } from '../../utils/math'
+import { useDynamicQualityController } from './useDynamicQualityController'
+import { createEffectPlaybackManager } from './effectPlaybackManager'
+import { usePlaceholderOverlayController } from './placeholderOverlayController'
 
 const props = withDefaults(defineProps<{
   sceneNodes: SceneNode[]
@@ -294,113 +296,6 @@ const materialOverrideOptions: MaterialTextureAssignmentOptions = {
   },
 }
 
-// Dynamic render quality controls
-const MIN_BASE_PIXEL_RATIO = 0.65
-const MAX_BASE_PIXEL_RATIO = 1.25
-const MIN_INTERACTIVE_PIXEL_RATIO = 0.35
-const devicePixelRatio = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
-const preferredBasePixelRatio = clampToRange(devicePixelRatio, MIN_BASE_PIXEL_RATIO, MAX_BASE_PIXEL_RATIO)
-let normalPixelRatio = preferredBasePixelRatio
-let targetInteractivePixelRatio = preferredBasePixelRatio
-const INTERACTION_RESTORE_DELAY_MS = 180
-let interactionRestoreTimer: number | null = null
-let isInteractiveQuality = false
-let savedShadowEnabled: boolean | null = null
-
-function applyPixelRatioToRenderer(value: number) {
-  try {
-    renderer?.setPixelRatio(value)
-    composer?.setPixelRatio(value)
-    const { width, height } = getViewportSize()
-    updateFxaaResolution(width, height)
-  } catch {}
-}
-
-function applyInteractiveQuality(enabled: boolean) {
-  if (!renderer) return
-  if (enabled === isInteractiveQuality) return
-  isInteractiveQuality = enabled
-  if (enabled) {
-    // Lower resolution and disable expensive features during interaction
-    applyPixelRatioToRenderer(targetInteractivePixelRatio)
-    if (savedShadowEnabled === null) {
-      savedShadowEnabled = renderer.shadowMap.enabled
-    }
-    renderer.shadowMap.enabled = false
-    if (fallbackDirectionalLight) {
-      fallbackDirectionalLight.castShadow = false
-    }
-  } else {
-    // Restore normal quality
-    applyPixelRatioToRenderer(normalPixelRatio)
-    if (savedShadowEnabled !== null) {
-      renderer.shadowMap.enabled = savedShadowEnabled
-    } else {
-      applyRendererShadowSetting()
-    }
-    if (fallbackDirectionalLight) {
-      fallbackDirectionalLight.castShadow = Boolean(shadowsEnabled.value)
-    }
-    savedShadowEnabled = null
-  }
-}
-
-function beginInteractiveQuality() {
-  if (interactionRestoreTimer !== null) {
-    window.clearTimeout(interactionRestoreTimer)
-    interactionRestoreTimer = null
-  }
-  applyInteractiveQuality(true)
-}
-
-function scheduleEndInteractiveQuality() {
-  if (interactionRestoreTimer !== null) {
-    window.clearTimeout(interactionRestoreTimer)
-  }
-  interactionRestoreTimer = window.setTimeout(() => {
-    interactionRestoreTimer = null
-    applyInteractiveQuality(false)
-  }, INTERACTION_RESTORE_DELAY_MS)
-}
-
-function clampBasePixelRatio(value: number): number {
-  return clampToRange(value, MIN_BASE_PIXEL_RATIO, preferredBasePixelRatio)
-}
-
-function clampInteractivePixelRatioValue(value: number, baseLimit = normalPixelRatio): number {
-  const effectiveMax = Math.min(baseLimit, preferredBasePixelRatio)
-  return clampToRange(value, MIN_INTERACTIVE_PIXEL_RATIO, effectiveMax)
-}
-
-function setBasePixelRatio(target: number) {
-  const clamped = clampBasePixelRatio(target)
-  if (Math.abs(clamped - normalPixelRatio) <= 0.01) {
-    return
-  }
-  normalPixelRatio = clamped
-  if (!isInteractiveQuality) {
-    applyPixelRatioToRenderer(normalPixelRatio)
-  }
-}
-
-function setInteractivePixelRatio(target: number) {
-  const clamped = clampInteractivePixelRatioValue(target, normalPixelRatio)
-  if (Math.abs(clamped - targetInteractivePixelRatio) <= 0.01) {
-    return
-  }
-  targetInteractivePixelRatio = clamped
-  if (isInteractiveQuality) {
-    applyPixelRatioToRenderer(targetInteractivePixelRatio)
-  }
-}
-
-function resetDynamicQualityState() {
-  const baseTarget = clampBasePixelRatio(preferredBasePixelRatio)
-  setBasePixelRatio(baseTarget)
-  const interactiveTarget = clampInteractivePixelRatioValue(baseTarget, baseTarget)
-  setInteractivePixelRatio(interactiveTarget)
-}
-
 
 function applyRendererShadowSetting() {
   if (!renderer) {
@@ -477,161 +372,6 @@ type WarpGatePlaceholderHandle = {
 const GUIDEBOARD_PLACEHOLDER_KEY = '__harmonyGuideboardPlaceholder'
 type GuideboardPlaceholderHandle = {
   controller: GuideboardEffectInstance | null
-}
-
-type EffectPlaybackEntry = {
-  id: string
-  tick?: (delta: number) => void
-  activate?: () => void
-  deactivate?: () => void
-}
-
-type EffectRuntimeAdapter = {
-  registryKey: string
-  collect(object: THREE.Object3D, nodeId: string): EffectPlaybackEntry[]
-  requiresSelection?: boolean
-}
-
-type WarpGateRuntimeRegistryEntry = {
-  tick?: (delta: number) => void
-  setPlaybackActive?: (active: boolean) => void
-}
-
-type GuideboardRuntimeRegistryEntry = {
-  tick?: (delta: number) => void
-  props?: Partial<GuideboardComponentProps> | null
-  setPlaybackActive?: (active: boolean) => void
-}
-
-// Collects and manages playback lifecycles for runtime effect components that need to
-// animate only while their parent node is selected. Additional adapters can be
-// registered as other effect types come online.
-function createEffectPlaybackManager(): {
-  refresh(selectedIds: readonly string[], objects: Map<string, THREE.Object3D>): void
-  reset(objects: Map<string, THREE.Object3D>): void
-  getTickers(): Array<(delta: number) => void>
-} {
-  const activeEntries = new Map<string, EffectPlaybackEntry>()
-  let currentTickers: Array<(delta: number) => void> = []
-
-  const adapters: EffectRuntimeAdapter[] = [
-    {
-      registryKey: WARP_GATE_RUNTIME_REGISTRY_KEY,
-      collect(object, nodeId) {
-        const registry = object.userData?.[WARP_GATE_RUNTIME_REGISTRY_KEY] as
-          | Record<string, WarpGateRuntimeRegistryEntry>
-          | undefined
-        if (!registry) {
-          return []
-        }
-        return Object.entries(registry).map(([componentId, entry]) => {
-          const playbackId = `${nodeId}:${WARP_GATE_RUNTIME_REGISTRY_KEY}:${componentId}`
-          return {
-            id: playbackId,
-            tick: typeof entry.tick === 'function' ? entry.tick.bind(entry) : undefined,
-            activate:
-              typeof entry.setPlaybackActive === 'function'
-                ? () => entry.setPlaybackActive?.(true)
-                : undefined,
-            deactivate:
-              typeof entry.setPlaybackActive === 'function'
-                ? () => entry.setPlaybackActive?.(false)
-                : undefined,
-          }
-        })
-      },
-    },
-    {
-      registryKey: GUIDEBOARD_RUNTIME_REGISTRY_KEY,
-      collect(object, nodeId) {
-        const registry = object.userData?.[GUIDEBOARD_RUNTIME_REGISTRY_KEY] as
-          | Record<string, GuideboardRuntimeRegistryEntry>
-          | undefined
-        if (!registry) {
-          return []
-        }
-        return Object.entries(registry).map(([componentId, entry]) => {
-          const playbackId = `${nodeId}:${GUIDEBOARD_RUNTIME_REGISTRY_KEY}:${componentId}`
-          return {
-            id: playbackId,
-            tick: typeof entry?.tick === 'function' ? entry.tick.bind(entry) : undefined,
-            activate:
-              typeof entry?.setPlaybackActive === 'function'
-                ? () => entry.setPlaybackActive?.(true)
-                : undefined,
-            deactivate:
-              typeof entry?.setPlaybackActive === 'function'
-                ? () => entry.setPlaybackActive?.(false)
-                : undefined,
-          }
-        })
-      },
-    },
-  ]
-
-  function refresh(selectedIds: readonly string[], objects: Map<string, THREE.Object3D>): void {
-    const selectedSet = new Set(selectedIds)
-    const nextActive = new Map<string, EffectPlaybackEntry>()
-    const nextTickers = new Set<(delta: number) => void>()
-    const staleEntries = new Map<string, EffectPlaybackEntry>(activeEntries)
-
-    objects.forEach((object, nodeId) => {
-      adapters.forEach((adapter) => {
-        const entries = adapter.collect(object, nodeId)
-        if (!entries.length) {
-          return
-        }
-        const isSelected = selectedSet.has(nodeId)
-        const requiresSelection = adapter.requiresSelection !== false
-        entries.forEach((entry) => {
-          staleEntries.delete(entry.id)
-          const shouldActivate = !requiresSelection || isSelected
-          if (shouldActivate) {
-            if (!activeEntries.has(entry.id)) {
-              entry.activate?.()
-            }
-            nextActive.set(entry.id, entry)
-            if (entry.tick) {
-              nextTickers.add(entry.tick)
-            }
-          } else {
-            entry.deactivate?.()
-          }
-        })
-      })
-    })
-
-    staleEntries.forEach((entry) => {
-      entry.deactivate?.()
-    })
-
-    activeEntries.clear()
-    nextActive.forEach((entry, id) => {
-      activeEntries.set(id, entry)
-    })
-    currentTickers = Array.from(nextTickers)
-  }
-
-  function reset(objects: Map<string, THREE.Object3D>): void {
-    activeEntries.forEach((entry) => {
-      entry.deactivate?.()
-    })
-    adapters.forEach((adapter) => {
-      objects.forEach((object, nodeId) => {
-        adapter.collect(object, nodeId).forEach((entry) => {
-          entry.deactivate?.()
-        })
-      })
-    })
-    activeEntries.clear()
-    currentTickers = []
-  }
-
-  function getTickers(): Array<(delta: number) => void> {
-    return currentTickers
-  }
-
-  return { refresh, reset, getTickers }
 }
 
 const effectPlaybackManager = createEffectPlaybackManager()
@@ -711,6 +451,38 @@ const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((too
 let activeCameraMode: CameraProjection = cameraProjectionMode.value
 
 const activeBuildTool = ref<BuildTool | null>(null)
+
+const dynamicQualityController = useDynamicQualityController({
+  getRenderer: () => renderer,
+  getComposer: () => composer,
+  getViewportSize,
+  updateFxaaResolution,
+  getFallbackDirectionalLight: () => fallbackDirectionalLight,
+  areShadowsEnabled: () => Boolean(shadowsEnabled.value),
+  applyRendererShadowSetting,
+})
+
+const {
+  beginInteractiveQuality,
+  scheduleEndInteractiveQuality,
+  resetDynamicQualityState,
+  applyCurrentPixelRatio,
+  getCurrentPixelRatio,
+  cancelInteractiveQualityTimer,
+  setInteractiveQualityMode,
+} = dynamicQualityController
+
+const {
+  overlayContainerRef,
+  placeholderOverlayList,
+  refreshPlaceholderOverlays,
+  clearPlaceholderOverlays,
+  updatePlaceholderOverlayPositions,
+} = usePlaceholderOverlayController({
+  getSceneNodes: () => props.sceneNodes,
+  getCamera: () => camera,
+  objectMap,
+})
 
 type PanelPlacementHolder = { panelPlacement?: PanelPlacementState | null }
 
@@ -883,16 +655,6 @@ let cameraTransitionState: CameraTransitionState | null = null
 let transformGroupState: TransformGroupState | null = null
 let pendingSkyboxSettings: SceneSkyboxSettings | null = null
 let pendingSceneGraphSync = false
-
-function clampToRange(value: number, min: number, max: number) {
-  if (Number.isNaN(value)) {
-    return min
-  }
-  if (max <= min) {
-    return min
-  }
-  return Math.min(Math.max(value, min), max)
-}
 
 function getHierarchyPanelElement(): HTMLElement | null {
   if (typeof document === 'undefined') {
@@ -1934,10 +1696,6 @@ function easeInOutCubic(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
 }
 
-const overlayContainerRef = ref<HTMLDivElement | null>(null)
-const placeholderOverlays = reactive<Record<string, PlaceholderOverlayState>>({})
-const placeholderOverlayList = computed(() => Object.values(placeholderOverlays))
-const overlayPositionHelper = new THREE.Vector3()
 const cameraOffsetHelper = new THREE.Vector3()
 const selectDragWorldPosition = new THREE.Vector3()
 const selectDragWorldQuaternion = new THREE.Quaternion()
@@ -2363,92 +2121,6 @@ function disposeDragPreview(cancelLoad = true) {
   clearDragPreviewObject()
 }
 
-function refreshPlaceholderOverlays() {
-  const activeIds = new Set<string>()
-
-  const visit = (nodes: SceneNode[]) => {
-    nodes.forEach((node) => {
-      if (node.isPlaceholder) {
-        activeIds.add(node.id)
-        const progress = Math.min(100, Math.max(0, node.downloadProgress ?? 0))
-        const error = node.downloadError ?? null
-        const existing = placeholderOverlays[node.id]
-        if (existing) {
-          existing.name = node.name
-          existing.progress = progress
-          existing.error = error
-        } else {
-          placeholderOverlays[node.id] = {
-            id: node.id,
-            name: node.name,
-            progress,
-            error,
-            visible: true,
-            x: 0,
-            y: 0,
-          }
-        }
-      }
-
-      if (node.children?.length) {
-        visit(node.children)
-      }
-    })
-  }
-
-  visit(props.sceneNodes)
-
-  Object.keys(placeholderOverlays).forEach((id) => {
-    if (!activeIds.has(id)) {
-      delete placeholderOverlays[id]
-    }
-  })
-}
-
-function clearPlaceholderOverlays() {
-  Object.keys(placeholderOverlays).forEach((id) => {
-    delete placeholderOverlays[id]
-  })
-}
-
-function updatePlaceholderOverlayPositions() {
-  const activeCamera = camera
-  if (!activeCamera || !overlayContainerRef.value) {
-    return
-  }
-
-  const bounds = overlayContainerRef.value.getBoundingClientRect()
-  const width = bounds.width
-  const height = bounds.height
-
-  if (width === 0 || height === 0) {
-    placeholderOverlayList.value.forEach((overlay) => {
-      overlay.visible = false
-    })
-    return
-  }
-
-  placeholderOverlayList.value.forEach((overlay) => {
-    const object = objectMap.get(overlay.id)
-    if (!object) {
-      overlay.visible = false
-      return
-    }
-
-    overlayPositionHelper.setFromMatrixPosition(object.matrixWorld)
-    overlayPositionHelper.project(activeCamera)
-
-    if (overlayPositionHelper.z < -1 || overlayPositionHelper.z > 1) {
-      overlay.visible = false
-      return
-    }
-
-    overlay.visible = true
-    overlay.x = (overlayPositionHelper.x * 0.5 + 0.5) * width
-    overlay.y = (-overlayPositionHelper.y * 0.5 + 0.5) * height
-  })
-}
-
 function applyPreviewVisualTweaks(object: THREE.Object3D) {
   object.traverse((child) => {
     const meshChild = child as THREE.Mesh
@@ -2719,7 +2391,7 @@ function createPostProcessingPipeline(width: number, height: number) {
   const safeHeight = Math.max(1, height)
 
   composer = new EffectComposer(renderer)
-  const currentPixelRatio = isInteractiveQuality ? targetInteractivePixelRatio : normalPixelRatio
+  const currentPixelRatio = getCurrentPixelRatio()
   composer.setPixelRatio(currentPixelRatio)
   composer.setSize(safeWidth, safeHeight)
 
@@ -3786,7 +3458,7 @@ function initScene() {
     preserveDrawingBuffer: false,
   })
   // Dynamic quality manager keeps pixel ratio capped for the current device
-  applyPixelRatioToRenderer(normalPixelRatio)
+  applyCurrentPixelRatio()
   renderer.setSize(width, height)
   renderer.shadowMap.enabled = Boolean(shadowsEnabled.value)
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
@@ -4524,11 +4196,8 @@ function disposeScene() {
   resizeObserver = null
 
   // Clear any pending interactive quality timer and restore quality
-  if (interactionRestoreTimer !== null) {
-    window.clearTimeout(interactionRestoreTimer)
-    interactionRestoreTimer = null
-  }
-  applyInteractiveQuality(false)
+  cancelInteractiveQualityTimer()
+  setInteractiveQualityMode(false)
   hideFaceSnapEffect()
   FACE_SNAP_AXES.forEach((axis) => {
     const indicator = faceSnapEffectIndicators[axis]
@@ -8924,28 +8593,7 @@ defineExpose<SceneViewportHandle>({
       @drop="handleViewportDrop"
     >
       <div ref="overlayContainerRef" class="placeholder-overlay-layer">
-        <div
-          v-for="overlay in placeholderOverlayList"
-          :key="overlay.id"
-          class="placeholder-overlay-card"
-          :class="{
-            'is-hidden': !overlay.visible,
-            'has-error': !!overlay.error,
-          }"
-          :style="{ left: `${overlay.x}px`, top: `${overlay.y}px` }"
-        >
-          <div class="placeholder-overlay-name">{{ overlay.name }}</div>
-          <div v-if="overlay.error" class="placeholder-overlay-error">{{ overlay.error }}</div>
-          <div v-else class="placeholder-overlay-progress">
-            <div class="placeholder-overlay-progress-bar">
-              <div
-                class="placeholder-overlay-progress-value"
-                :style="{ width: `${Math.min(100, Math.max(0, overlay.progress))}%` }"
-              ></div>
-            </div>
-            <div class="placeholder-overlay-percent">{{ Math.round(overlay.progress) }}%</div>
-          </div>
-        </div>
+        <PlaceholderOverlayList :overlays="placeholderOverlayList" />
       </div>
       <GroundToolbar
         v-if="groundSelection"
@@ -9045,69 +8693,6 @@ defineExpose<SceneViewportHandle>({
   pointer-events: none;
   z-index: 6;
   font-size: 12px;
-}
-
-.placeholder-overlay-card {
-  position: absolute;
-  transform: translate(-50%, -110%);
-  background-color: rgba(13, 17, 23, 0.92);
-  border: 1px solid rgba(77, 208, 225, 0.4);
-  border-radius: 8px;
-  padding: 8px 12px;
-  min-width: 140px;
-  color: #e9ecf1;
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(2px);
-  transition: opacity 120ms ease;
-  opacity: 1;
-}
-
-.placeholder-overlay-card.is-hidden {
-  opacity: 0;
-}
-
-.placeholder-overlay-card.has-error {
-  border-color: rgba(244, 67, 54, 0.8);
-}
-
-.placeholder-overlay-name {
-  font-size: 12px;
-  font-weight: 600;
-  margin-bottom: 6px;
-}
-
-.placeholder-overlay-progress {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.placeholder-overlay-progress-bar {
-  position: relative;
-  height: 6px;
-  border-radius: 999px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.15);
-}
-
-.placeholder-overlay-progress-value {
-  position: absolute;
-  inset: 0;
-  width: 0;
-  background: linear-gradient(90deg, rgba(0, 188, 212, 0.9), rgba(0, 131, 143, 0.9));
-}
-
-.placeholder-overlay-percent {
-  text-align: right;
-  font-size: 11px;
-  color: #4dd0e1;
-  font-weight: 500;
-}
-
-.placeholder-overlay-error {
-  font-size: 11px;
-  color: #ff8a80;
-  max-width: 180px;
 }
 
 .drop-overlay {
