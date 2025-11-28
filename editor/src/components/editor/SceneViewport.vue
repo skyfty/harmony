@@ -4,6 +4,12 @@ import { storeToRefs } from 'pinia'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
+import { OutlinePass } from 'three/examples/jsm/postprocessing/OutlinePass.js'
+import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js'
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js'
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 
 // @ts-ignore - local plugin has no .d.ts declaration file
 import { TransformControls } from '@/utils/transformControls.js'
@@ -43,8 +49,8 @@ import {
   getOrLoadModelObject,
   subscribeInstancedMeshes,
   findNodeIdForInstance,
-  getModelInstanceBinding,
   updateModelInstanceMatrix,
+  getModelInstanceBinding,
 } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { createPrimitiveMesh } from '@schema/geometry'
@@ -140,6 +146,11 @@ const statsHostRef = ref<HTMLDivElement | null>(null)
 const gizmoContainerRef = ref<HTMLDivElement | null>(null)
 
 let renderer: THREE.WebGLRenderer | null = null
+let composer: EffectComposer | null = null
+let renderPass: RenderPass | null = null
+let outlinePass: OutlinePass | null = null
+let fxaaPass: ShaderPass | null = null
+let outputPass: OutputPass | null = null
 let scene: THREE.Scene | null = null
 let perspectiveCamera: THREE.PerspectiveCamera | null = null
 let orthographicCamera: THREE.OrthographicCamera | null = null
@@ -151,111 +162,7 @@ let transformControlsDirty = false
 let resizeObserver: ResizeObserver | null = null
 let gridHighlight: THREE.Group | null = null
 const selectionHighlights = new Map<string, THREE.Group>()
-const outlineOverlayGroup = new THREE.Group()
-outlineOverlayGroup.name = 'SelectionOutlineOverlay'
-
-type OutlineEntry = {
-  key: string
-  type: 'mesh' | 'instance'
-  source: THREE.Mesh | THREE.SkinnedMesh | THREE.InstancedMesh
-  overlay: THREE.Mesh | THREE.SkinnedMesh
-  material: THREE.ShaderMaterial
-  instanceIndex?: number
-  boundingRadius: number
-}
-
-type OutlineInstruction = {
-  key: string
-  type: 'mesh' | 'instance'
-  source: THREE.Mesh | THREE.SkinnedMesh | THREE.InstancedMesh
-  instanceIndex?: number
-}
-
-type OutlineUniforms = {
-  outlineColor: { value: THREE.Color }
-  outlineOpacity: { value: number }
-  outlineThickness: { value: number }
-}
-
-const outlineEntries = new Map<string, OutlineEntry>()
-const outlineMatrixHelper = new THREE.Matrix4()
-const outlineInstanceMatrix = new THREE.Matrix4()
-const outlinePositionHelper = new THREE.Vector3()
-const outlineQuaternionHelper = new THREE.Quaternion()
-const outlineScaleHelper = new THREE.Vector3()
-
-const OUTLINE_COLOR = new THREE.Color(0x4dd0e1)
-const OUTLINE_OPACITY = 0.92
-const OUTLINE_RENDER_ORDER = 10_000
-const OUTLINE_THICKNESS_MIN = 0.0075
-const OUTLINE_THICKNESS_MAX = 0.11
-const OUTLINE_RADIUS_SCALE = 0.035
-
-const OUTLINE_VERTEX_SHADER = `
-  uniform float outlineThickness;
-
-  #include <common>
-  #include <uv_pars_vertex>
-  #include <uv2_pars_vertex>
-  #include <displacementmap_pars_vertex>
-  #include <morphtarget_pars_vertex>
-  #include <skinning_pars_vertex>
-  #include <instancing_pars_vertex>
-  #include <fog_pars_vertex>
-  #include <clipping_planes_pars_vertex>
-  #include <logdepthbuf_pars_vertex>
-
-  void main() {
-    #include <uv_vertex>
-    #include <uv2_vertex>
-    #include <beginnormal_vertex>
-    #include <morphnormal_vertex>
-    #include <skinbase_vertex>
-    #include <skinnormal_vertex>
-    #include <defaultnormal_vertex>
-
-    vec3 displacedNormal = normalize( transformedNormal );
-
-    #include <begin_vertex>
-    #include <morphtarget_vertex>
-    #include <skinning_vertex>
-    #include <instancing_vertex>
-    #include <displacementmap_vertex>
-
-    vec3 displacedPosition = transformed + displacedNormal * outlineThickness;
-
-    vec4 mvPosition = modelViewMatrix * vec4( displacedPosition, 1.0 );
-
-    #include <logdepthbuf_vertex>
-    gl_Position = projectionMatrix * mvPosition;
-
-    #include <worldpos_vertex>
-    #include <clipping_planes_vertex>
-    #include <fog_vertex>
-  }
-`
-
-const OUTLINE_FRAGMENT_SHADER = `
-  uniform vec3 outlineColor;
-  uniform float outlineOpacity;
-
-  #include <common>
-  #include <fog_pars_fragment>
-  #include <clipping_planes_pars_fragment>
-  #include <logdepthbuf_pars_fragment>
-  #include <tonemapping_pars_fragment>
-  #include <colorspace_pars_fragment>
-
-  void main() {
-    #include <clipping_planes_fragment>
-    vec4 color = vec4( outlineColor, outlineOpacity );
-    gl_FragColor = color;
-    #include <logdepthbuf_fragment>
-    #include <tonemapping_fragment>
-    #include <colorspace_fragment>
-    #include <fog_fragment>
-  }
-`
+const outlineSelectionTargets: THREE.Object3D[] = []
 let nodePickerHighlight: THREE.Group | null = null
 let nodeFlashHighlight: THREE.Group | null = null
 let nodeFlashIntervalHandle: number | null = null
@@ -403,6 +310,9 @@ let savedShadowEnabled: boolean | null = null
 function applyPixelRatioToRenderer(value: number) {
   try {
     renderer?.setPixelRatio(value)
+    composer?.setPixelRatio(value)
+    const { width, height } = getViewportSize()
+    updateFxaaResolution(width, height)
   } catch {}
 }
 
@@ -539,6 +449,23 @@ const instancedQuaternionHelper = new THREE.Quaternion()
 const instancedBoundsBox = new THREE.Box3()
 const instancedBoundsMin = new THREE.Vector3()
 const instancedBoundsMax = new THREE.Vector3()
+const instancedOutlineGroup = new THREE.Group()
+instancedOutlineGroup.name = 'InstancedOutlineProxies'
+type InstancedOutlineEntry = {
+  group: THREE.Group
+  proxies: Map<string, THREE.Mesh>
+}
+const instancedOutlineEntries = new Map<string, InstancedOutlineEntry>()
+const instancedOutlineMatrixHelper = new THREE.Matrix4()
+const instancedOutlineWorldMatrixHelper = new THREE.Matrix4()
+const instancedOutlineBaseMaterial = new THREE.MeshBasicMaterial({
+  color: 0xffffff,
+  transparent: true,
+  opacity: 0,
+  depthWrite: false,
+  depthTest: false,
+})
+instancedOutlineBaseMaterial.toneMapped = false
 const objectMap = new Map<string, THREE.Object3D>()
 const renderClock = new THREE.Clock()
 let effectRuntimeTickers: Array<(delta: number) => void> = []
@@ -1240,6 +1167,7 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
   }
   instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
   updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
+  syncInstancedOutlineEntryTransform(nodeId)
 }
 
 function attachInstancedMesh(mesh: THREE.InstancedMesh) {
@@ -2737,17 +2665,114 @@ function bindControlsToCamera(newCamera: THREE.PerspectiveCamera | THREE.Orthogr
   }
 }
 
+function updatePostProcessingCamera(target: THREE.PerspectiveCamera | THREE.OrthographicCamera) {
+  if (renderPass) {
+    renderPass.camera = target
+  }
+  if (outlinePass) {
+    outlinePass.renderCamera = target
+  }
+}
+
+function configureOutlinePassAppearance(pass: OutlinePass) {
+  pass.edgeStrength = 3.25
+  pass.edgeGlow = 0.45
+  pass.edgeThickness = 1.65
+  pass.pulsePeriod = 0
+  pass.visibleEdgeColor.setHex(0x4dd0e1)
+  pass.hiddenEdgeColor.setHex(0x123040)
+  pass.usePatternTexture = false
+}
+
+function updateFxaaResolution(width: number, height: number) {
+  if (!fxaaPass) {
+    return
+  }
+
+  const safeWidth = Math.max(1, width)
+  const safeHeight = Math.max(1, height)
+  const pixelRatio = renderer?.getPixelRatio?.() ?? 1
+  const uniform = fxaaPass.uniforms?.['resolution']
+  if (!uniform?.value) {
+    return
+  }
+  const inverseWidth = 1 / (safeWidth * pixelRatio)
+  const inverseHeight = 1 / (safeHeight * pixelRatio)
+
+  const value = uniform.value as THREE.Vector2 & { x: number; y: number }
+  if (typeof value.set === 'function') {
+    value.set(inverseWidth, inverseHeight)
+  } else {
+    value.x = inverseWidth
+    value.y = inverseHeight
+  }
+}
+
+function createPostProcessingPipeline(width: number, height: number) {
+  if (!renderer || !scene || !camera) {
+    return
+  }
+
+  disposePostProcessing()
+
+  const safeWidth = Math.max(1, width)
+  const safeHeight = Math.max(1, height)
+
+  composer = new EffectComposer(renderer)
+  const currentPixelRatio = isInteractiveQuality ? targetInteractivePixelRatio : normalPixelRatio
+  composer.setPixelRatio(currentPixelRatio)
+  composer.setSize(safeWidth, safeHeight)
+
+  renderPass = new RenderPass(scene, camera)
+  composer.addPass(renderPass)
+
+  outlinePass = new OutlinePass(new THREE.Vector2(safeWidth, safeHeight), scene, camera)
+  configureOutlinePassAppearance(outlinePass)
+  composer.addPass(outlinePass)
+
+  fxaaPass = new ShaderPass(FXAAShader)
+  if (fxaaPass.material) {
+    fxaaPass.material.toneMapped = true
+  }
+  composer.addPass(fxaaPass)
+
+  outputPass = new OutputPass()
+  composer.addPass(outputPass)
+
+  updateFxaaResolution(safeWidth, safeHeight)
+
+  updateOutlineSelectionTargets()
+}
+
+function disposePostProcessing() {
+  if (composer) {
+    composer.renderTarget1.dispose()
+    composer.renderTarget2.dispose()
+    composer = null
+  }
+  outlinePass?.dispose?.()
+  outlinePass = null
+  renderPass = null
+  fxaaPass = null
+  outputPass = null
+}
+
 function renderViewportFrame() {
   if (!renderer || !scene || !camera) {
     return
   }
-  renderer.render(scene, camera)
+  if (composer) {
+    composer.render()
+  } else {
+    renderer.render(scene, camera)
+  }
 }
 
 function activateCamera(newCamera: THREE.PerspectiveCamera | THREE.OrthographicCamera, mode: CameraProjection) {
   camera = newCamera
   activeCameraMode = mode
   bindControlsToCamera(newCamera)
+  updatePostProcessingCamera(newCamera)
   if (gizmoControls) {
     gizmoControls.camera = newCamera
     gizmoControls.update()
@@ -3788,10 +3813,10 @@ function initScene() {
   ensureSkyExists()
   scene.add(rootGroup)
   scene.add(instancedMeshGroup)
+  scene.add(instancedOutlineGroup)
   scene.add(gridGroup)
   scene.add(axesHelper)
   scene.add(groundSelectionGroup)
-  scene.add(outlineOverlayGroup)
   scene.add(dragPreviewGroup)
   gridHighlight = createGridHighlight()
   if (gridHighlight) {
@@ -3834,6 +3859,8 @@ function initScene() {
   transformControls.addEventListener('objectChange', handleTransformChange)
   scene.add(transformControls.getHelper())
 
+  createPostProcessingPipeline(width, height)
+
   bindControlsToCamera(camera)
   if (cameraProjectionMode.value !== activeCameraMode && (cameraProjectionMode.value === 'orthographic' || cameraProjectionMode.value === 'perspective')) {
     applyProjectionMode(cameraProjectionMode.value)
@@ -3867,6 +3894,9 @@ function initScene() {
       return
     }
     renderer.setSize(w, h)
+    composer?.setSize(w, h)
+    outlinePass?.setSize(w, h)
+    updateFxaaResolution(w, h)
     if (perspectiveCamera) {
       perspectiveCamera.aspect = h === 0 ? 1 : w / h
       perspectiveCamera.updateProjectionMatrix()
@@ -4474,7 +4504,6 @@ function animate() {
       }
     })
   }
-  updateActiveOutlineTransforms()
   renderViewportFrame()
   gizmoControls?.render()
   stats?.end()
@@ -4482,14 +4511,14 @@ function animate() {
 
 function disposeScene() {
   disposeStats()
-  clearOutlineSelectionTargets()
-  outlineOverlayGroup.removeFromParent()
   if (stopInstancedMeshSubscription) {
     stopInstancedMeshSubscription()
     stopInstancedMeshSubscription = null
   }
   clearInstancedMeshes()
   instancedMeshGroup.removeFromParent()
+  clearInstancedOutlineEntries()
+  instancedOutlineGroup.removeFromParent()
 
   resizeObserver?.disconnect()
   resizeObserver = null
@@ -4564,6 +4593,8 @@ function disposeScene() {
   orbitDisableCount = 0
   isSelectDragOrbitDisabled = false
   isGroundSelectionOrbitDisabled = false
+
+  disposePostProcessing()
   renderer?.dispose()
   renderer = null
   renderClock.stop()
@@ -4903,187 +4934,189 @@ function resolveOutlineTargetForNode(nodeId: string | null | undefined): THREE.O
   return fallback
 }
 
-function createOutlineMaterial(options: { skinning: boolean; morphTargets: boolean; morphNormals: boolean }): THREE.ShaderMaterial {
-  const material = new THREE.ShaderMaterial({
-    name: 'SelectionOutlineMaterial',
-    uniforms: {
-      outlineColor: { value: OUTLINE_COLOR.clone() },
-      outlineOpacity: { value: OUTLINE_OPACITY },
-      outlineThickness: { value: 0.02 },
-    } satisfies OutlineUniforms,
-    vertexShader: OUTLINE_VERTEX_SHADER,
-    fragmentShader: OUTLINE_FRAGMENT_SHADER,
-    side: THREE.BackSide,
-    transparent: true,
-    depthTest: true,
-    depthWrite: false,
-    fog: false,
-  })
-  material.toneMapped = false
-  const configurable = material as THREE.ShaderMaterial & {
-    skinning?: boolean
-    morphTargets?: boolean
-    morphNormals?: boolean
-  }
-  configurable.skinning = options.skinning
-  configurable.morphTargets = options.morphTargets
-  configurable.morphNormals = options.morphNormals
-  return material
-}
-
-function syncOutlineMorphTargets(entry: OutlineEntry) {
-  const source = entry.source as THREE.Mesh & {
-    morphTargetInfluences?: number[]
-    morphTargetDictionary?: Record<string, number>
-  }
-  const overlay = entry.overlay as THREE.Mesh & {
-    morphTargetInfluences?: number[]
-    morphTargetDictionary?: Record<string, number>
-  }
-  if (source.morphTargetInfluences && source.morphTargetInfluences.length) {
-    overlay.morphTargetInfluences = source.morphTargetInfluences
-  }
-  if (source.morphTargetDictionary) {
-    overlay.morphTargetDictionary = source.morphTargetDictionary
-  }
-}
-
-function createOutlineEntry(instruction: OutlineInstruction): OutlineEntry | null {
-  const geometry = (instruction.source as THREE.Mesh).geometry as THREE.BufferGeometry | undefined
-  if (!geometry) {
-    return null
-  }
-  if (!geometry.boundingSphere) {
-    geometry.computeBoundingSphere()
-  }
-  const boundingRadius = geometry.boundingSphere?.radius ?? 1
-  const source = instruction.source
-  const isSkinned = (source as THREE.SkinnedMesh).isSkinnedMesh === true
-  const hasMorphTargets = Boolean(geometry.morphAttributes?.position?.length)
-  const hasMorphNormals = Boolean(geometry.morphAttributes?.normal?.length)
-  const material = createOutlineMaterial({ skinning: isSkinned, morphTargets: hasMorphTargets, morphNormals: hasMorphNormals })
-  let overlay: THREE.Mesh | THREE.SkinnedMesh
-  if (isSkinned) {
-    const skinnedOverlay = new THREE.SkinnedMesh(geometry, material)
-    const skinnedSource = source as THREE.SkinnedMesh
-    skinnedOverlay.bind(skinnedSource.skeleton, skinnedSource.bindMatrix)
-    skinnedOverlay.bindMatrixInverse.copy(skinnedSource.bindMatrixInverse)
-    overlay = skinnedOverlay
-  } else {
-    overlay = new THREE.Mesh(geometry, material)
-  }
-  overlay.name = `SelectionOutline:${source.uuid}`
-  overlay.renderOrder = OUTLINE_RENDER_ORDER
-  overlay.frustumCulled = false
-  overlay.visible = false
-  overlay.matrixAutoUpdate = false
-  outlineOverlayGroup.add(overlay)
-  const entry: OutlineEntry = {
-    key: instruction.key,
-    type: instruction.type,
-    source,
-    overlay,
-    material,
-    instanceIndex: instruction.instanceIndex,
-    boundingRadius,
-  }
-  syncOutlineMorphTargets(entry)
-  return entry
-}
-
-function disposeOutlineEntry(entry: OutlineEntry) {
-  entry.overlay.removeFromParent()
-  entry.material.dispose()
-}
-
-function applyOutlineTransform(entry: OutlineEntry) {
-  if (!scene) {
-    return
-  }
-
-  syncOutlineMorphTargets(entry)
-
-  let visible = true
-  if (entry.type === 'mesh') {
-    visible = isObjectWorldVisible(entry.source)
-    entry.source.updateWorldMatrix(true, false)
-    outlineMatrixHelper.copy(entry.source.matrixWorld)
-  } else {
-    const instanced = entry.source as THREE.InstancedMesh
-    const hasInstance = typeof entry.instanceIndex === 'number' && entry.instanceIndex >= 0 && entry.instanceIndex < instanced.count
-    visible = hasInstance && instanced.visible && isObjectWorldVisible(instanced)
-    if (visible) {
-      instanced.updateWorldMatrix(true, false)
-      instanced.getMatrixAt(entry.instanceIndex!, outlineInstanceMatrix)
-      outlineMatrixHelper.multiplyMatrices(instanced.matrixWorld, outlineInstanceMatrix)
-    }
-  }
-
-  entry.overlay.visible = visible
-  if (!visible) {
-    return
-  }
-
-  entry.overlay.matrix.copy(outlineMatrixHelper)
-  entry.overlay.matrixWorld.copy(outlineMatrixHelper)
-  entry.overlay.updateMatrixWorld(true)
-
-  outlineMatrixHelper.decompose(outlinePositionHelper, outlineQuaternionHelper, outlineScaleHelper)
-  const largestScale = Math.max(outlineScaleHelper.x, outlineScaleHelper.y, outlineScaleHelper.z, 1e-6)
-  if (largestScale <= 1e-5) {
-    entry.overlay.visible = false
-    return
-  }
-  const worldRadius = entry.boundingRadius * largestScale
-  const thickness = THREE.MathUtils.clamp(
-    worldRadius * OUTLINE_RADIUS_SCALE,
-    OUTLINE_THICKNESS_MIN,
-    OUTLINE_THICKNESS_MAX,
-  )
-  const uniforms = entry.material.uniforms as OutlineUniforms
-  if (uniforms.outlineThickness.value !== thickness) {
-    uniforms.outlineThickness.value = thickness
-  }
-}
-
-function updateActiveOutlineTransforms() {
-  outlineEntries.forEach((entry) => {
-    applyOutlineTransform(entry)
-  })
-}
-
-function collectVisibleMeshesForOutline(
-  object: THREE.Object3D,
-  meshCollector: Set<THREE.Mesh | THREE.SkinnedMesh>,
-  instancedCollector: Set<string>,
-) {
+function collectVisibleMeshesForOutline(object: THREE.Object3D, collector: Set<THREE.Object3D>) {
   if (!object.visible) {
     return
   }
 
-  const nodeId = object.userData?.nodeId as string | undefined
-  if (object.userData?.instancedAssetId && nodeId) {
-    instancedCollector.add(nodeId)
-  }
-
   const meshCandidate = object as THREE.Mesh
-  if (meshCandidate?.isMesh || (meshCandidate as THREE.SkinnedMesh).isSkinnedMesh) {
-    meshCollector.add(meshCandidate as THREE.Mesh | THREE.SkinnedMesh)
+  if (meshCandidate?.isMesh || (meshCandidate as { isSkinnedMesh?: boolean }).isSkinnedMesh) {
+    collector.add(meshCandidate)
   }
 
   object.children.forEach((child) => {
-    collectVisibleMeshesForOutline(child, meshCollector, instancedCollector)
+    collectVisibleMeshesForOutline(child, collector)
   })
 }
 
-function collectOutlineInstructions(): OutlineInstruction[] {
-  const instructions: OutlineInstruction[] = []
-  if (!scene) {
-    return instructions
+// Maintains transparent proxy meshes per instanced node so OutlinePass can highlight individual instances.
+function getOutlineProxyMaterial(source: THREE.Material | THREE.Material[]): THREE.Material | THREE.Material[] {
+  if (Array.isArray(source)) {
+    return source.map(() => instancedOutlineBaseMaterial)
+  }
+  return instancedOutlineBaseMaterial
+}
+
+function createInstancedOutlineProxy(template: THREE.InstancedMesh): THREE.Mesh {
+  const proxyMaterial = getOutlineProxyMaterial(template.material as THREE.Material | THREE.Material[])
+  const proxy = new THREE.Mesh(template.geometry, proxyMaterial)
+  proxy.matrixAutoUpdate = false
+  proxy.visible = false
+  proxy.frustumCulled = false
+  proxy.renderOrder = 9999
+  return proxy
+}
+
+function ensureInstancedOutlineEntry(nodeId: string): InstancedOutlineEntry {
+  let entry = instancedOutlineEntries.get(nodeId)
+  if (!entry) {
+    const group = new THREE.Group()
+    group.name = `InstancedOutline:${nodeId}`
+    instancedOutlineGroup.add(group)
+    entry = {
+      group,
+      proxies: new Map<string, THREE.Mesh>(),
+    }
+    instancedOutlineEntries.set(nodeId, entry)
+  } else if (entry.group.parent !== instancedOutlineGroup) {
+    instancedOutlineGroup.add(entry.group)
+  }
+  entry.group.visible = true
+  return entry
+}
+
+function updateInstancedOutlineEntry(nodeId: string, object: THREE.Object3D | null): THREE.Mesh[] {
+  const binding = getModelInstanceBinding(nodeId)
+  if (!binding || !binding.slots.length) {
+    releaseInstancedOutlineEntry(nodeId, false)
+    return []
   }
 
-  const meshSet = new Set<THREE.Mesh | THREE.SkinnedMesh>()
-  const instancedNodeIds = new Set<string>()
+  const entry = ensureInstancedOutlineEntry(nodeId)
+  const activeHandles = new Set<string>()
+  const proxies: THREE.Mesh[] = []
+  const isVisible = object?.visible !== false
+
+  binding.slots.forEach((slot) => {
+    const { handleId, mesh, index } = slot
+    let proxy = entry.proxies.get(handleId)
+    if (!proxy) {
+      proxy = createInstancedOutlineProxy(mesh)
+      entry.proxies.set(handleId, proxy)
+      entry.group.add(proxy)
+    } else {
+      if (proxy.geometry !== mesh.geometry) {
+        proxy.geometry = mesh.geometry
+      }
+      if (Array.isArray(mesh.material)) {
+        const current = Array.isArray(proxy.material) ? proxy.material : null
+        if (!current || current.length !== mesh.material.length) {
+          proxy.material = getOutlineProxyMaterial(mesh.material)
+        }
+      } else if (Array.isArray(proxy.material)) {
+        proxy.material = instancedOutlineBaseMaterial
+      }
+      if (proxy.parent !== entry.group) {
+        entry.group.add(proxy)
+      }
+    }
+
+    mesh.updateWorldMatrix(true, false)
+    mesh.getMatrixAt(index, instancedOutlineMatrixHelper)
+    instancedOutlineWorldMatrixHelper.multiplyMatrices(mesh.matrixWorld, instancedOutlineMatrixHelper)
+    proxy.matrix.copy(instancedOutlineWorldMatrixHelper)
+    proxy.visible = isVisible && mesh.visible !== false
+    proxies.push(proxy)
+    activeHandles.add(handleId)
+  })
+
+  const unusedHandles: string[] = []
+  entry.proxies.forEach((_proxy, handleId) => {
+    if (!activeHandles.has(handleId)) {
+      unusedHandles.push(handleId)
+    }
+  })
+
+  unusedHandles.forEach((handleId) => {
+    const proxy = entry.proxies.get(handleId)
+    if (!proxy) {
+      return
+    }
+    proxy.visible = false
+    proxy.parent?.remove(proxy)
+    entry.proxies.delete(handleId)
+  })
+
+  entry.group.visible = proxies.some((proxy) => proxy.visible)
+  return proxies.filter((proxy) => proxy.visible)
+}
+
+function syncInstancedOutlineEntryTransform(nodeId: string) {
+  const entry = instancedOutlineEntries.get(nodeId)
+  if (!entry) {
+    return
+  }
+
+  const binding = getModelInstanceBinding(nodeId)
+  const object = objectMap.get(nodeId) ?? null
+  if (!binding || !binding.slots.length || !object) {
+    releaseInstancedOutlineEntry(nodeId, false)
+    updateOutlineSelectionTargets()
+    return
+  }
+
+  let needsRebuild = false
+  const isVisible = object.visible !== false
+
+  binding.slots.forEach((slot) => {
+    const proxy = entry.proxies.get(slot.handleId)
+    if (!proxy) {
+      needsRebuild = true
+      return
+    }
+    const { mesh, index } = slot
+    mesh.updateWorldMatrix(true, false)
+    mesh.getMatrixAt(index, instancedOutlineMatrixHelper)
+    instancedOutlineWorldMatrixHelper.multiplyMatrices(mesh.matrixWorld, instancedOutlineMatrixHelper)
+    proxy.matrix.copy(instancedOutlineWorldMatrixHelper)
+    proxy.visible = isVisible && mesh.visible !== false
+  })
+
+  if (needsRebuild) {
+    updateOutlineSelectionTargets()
+    return
+  }
+
+  entry.group.visible = Array.from(entry.proxies.values()).some((proxy) => proxy.visible)
+}
+
+function releaseInstancedOutlineEntry(nodeId: string, shouldUpdateOutline = true) {
+  const entry = instancedOutlineEntries.get(nodeId)
+  if (!entry) {
+    return
+  }
+  entry.proxies.forEach((proxy) => {
+    proxy.visible = false
+    proxy.parent?.remove(proxy)
+  })
+  entry.proxies.clear()
+  entry.group.clear()
+  entry.group.visible = false
+  entry.group.removeFromParent()
+  instancedOutlineEntries.delete(nodeId)
+  if (shouldUpdateOutline) {
+    updateOutlineSelectionTargets()
+  }
+}
+
+function clearInstancedOutlineEntries() {
+  const nodeIds = Array.from(instancedOutlineEntries.keys())
+  nodeIds.forEach((nodeId) => releaseInstancedOutlineEntry(nodeId, false))
+}
+
+function updateOutlineSelectionTargets() {
+  const meshSet = new Set<THREE.Object3D>()
+  const activeInstancedNodeIds = new Set<string>()
   const idSources: Array<string | null | undefined> = [
     ...sceneStore.selectedNodeIds,
     props.selectedNodeId,
@@ -5098,77 +5131,39 @@ function collectOutlineInstructions(): OutlineInstruction[] {
     if (!target) {
       return
     }
-    collectVisibleMeshesForOutline(target, meshSet, instancedNodeIds)
-  })
-
-  meshSet.forEach((mesh) => {
-    instructions.push({
-      key: `mesh:${mesh.uuid}`,
-      type: 'mesh',
-      source: mesh,
-    })
-  })
-
-  instancedNodeIds.forEach((nodeId) => {
-    const binding = getModelInstanceBinding(nodeId)
-    if (!binding) {
+    if (target.userData?.instancedAssetId) {
+      const proxies = updateInstancedOutlineEntry(id, target)
+      if (proxies.length) {
+        proxies.forEach((proxy) => meshSet.add(proxy))
+        activeInstancedNodeIds.add(id)
+      }
       return
     }
-    binding.slots.forEach(({ mesh, index }) => {
-      if (!mesh) {
-        return
-      }
-      instructions.push({
-        key: `instance:${mesh.uuid}:${index}`,
-        type: 'instance',
-        source: mesh,
-        instanceIndex: index,
-      })
-    })
+    collectVisibleMeshesForOutline(target, meshSet)
   })
 
-  return instructions
-}
+  const releaseCandidates: string[] = []
+  instancedOutlineEntries.forEach((_entry, nodeId) => {
+    if (!activeInstancedNodeIds.has(nodeId)) {
+      releaseCandidates.push(nodeId)
+    }
+  })
+  releaseCandidates.forEach((nodeId) => releaseInstancedOutlineEntry(nodeId, false))
 
-function updateOutlineSelectionTargets() {
-  if (!scene) {
-    clearOutlineSelectionTargets()
-    return
+  outlineSelectionTargets.length = 0
+  outlineSelectionTargets.push(...meshSet)
+
+  if (outlinePass) {
+    outlinePass.selectedObjects = outlineSelectionTargets.slice()
   }
-
-  const instructions = collectOutlineInstructions()
-  const activeKeys = new Set<string>()
-
-  instructions.forEach((instruction) => {
-    activeKeys.add(instruction.key)
-    let entry = outlineEntries.get(instruction.key)
-    if (!entry) {
-      const created = createOutlineEntry(instruction)
-      if (!created) {
-        return
-      }
-      outlineEntries.set(instruction.key, created)
-      entry = created
-    }
-    if (instruction.type === 'instance') {
-      entry.instanceIndex = instruction.instanceIndex
-    }
-    applyOutlineTransform(entry)
-  })
-
-  outlineEntries.forEach((entry, key) => {
-    if (!activeKeys.has(key)) {
-      disposeOutlineEntry(entry)
-      outlineEntries.delete(key)
-    }
-  })
 }
 
 function clearOutlineSelectionTargets() {
-  outlineEntries.forEach((entry) => {
-    disposeOutlineEntry(entry)
-  })
-  outlineEntries.clear()
+  outlineSelectionTargets.length = 0
+  clearInstancedOutlineEntries()
+  if (outlinePass) {
+    outlinePass.selectedObjects = []
+  }
 }
 
 function ensureNodePickerIndicator(): THREE.Group | null {
@@ -7911,6 +7906,7 @@ function disposeNodeObjectRecursive(object: THREE.Object3D) {
   const nodeId = object.userData?.nodeId as string | undefined
   if (nodeId) {
     objectMap.delete(nodeId)
+    releaseInstancedOutlineEntry(nodeId)
     unregisterLightHelpersForNode(nodeId)
   }
 
