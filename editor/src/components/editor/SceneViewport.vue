@@ -2818,8 +2818,8 @@ function initScene() {
 
   renderer = new THREE.WebGLRenderer({
     canvas: canvasRef.value,
-    antialias: true,
-    // powerPreference: 'high-performance',
+    antialias: false,
+    powerPreference: 'high-performance',
     // // Preserve buffer is expensive; keep it off for higher FPS and render before capture when needed
     // preserveDrawingBuffer: false,
   })
