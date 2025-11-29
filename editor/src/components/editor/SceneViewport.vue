@@ -418,6 +418,58 @@ const instancedPickBoundsSizeHelper = new THREE.Vector3()
 const instancedPickBoundsCenterHelper = new THREE.Vector3()
 const objectMap = new Map<string, THREE.Object3D>()
 
+const DYNAMIC_MESH_SIGNATURE_KEY = '__harmonyDynamicMeshSignature'
+
+function stableSerialize(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableSerialize(entry)).join(',')}]`
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, entryValue]) => entryValue !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    const serialized = entries.map(([key, entryValue]) => `${JSON.stringify(key)}:${stableSerialize(entryValue)}`)
+    return `{${serialized.join(',')}}`
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value.toString() : 'null'
+  }
+  if (typeof value === 'boolean') {
+    return value ? 'true' : 'false'
+  }
+  if (typeof value === 'string') {
+    return JSON.stringify(value)
+  }
+  if (value === null || value === undefined) {
+    return 'null'
+  }
+  return JSON.stringify(value)
+}
+
+function computeGroundDynamicMeshSignature(definition: GroundDynamicMesh): string {
+  return stableSerialize({
+    width: definition.width,
+    depth: definition.depth,
+    rows: definition.rows,
+    columns: definition.columns,
+    cellSize: definition.cellSize,
+    heightMap: definition.heightMap ?? {},
+    textureDataUrl: definition.textureDataUrl ?? null,
+    textureName: definition.textureName ?? null,
+  })
+}
+
+function computeWallDynamicMeshSignature(definition: WallDynamicMesh): string {
+  return stableSerialize(definition.segments ?? [])
+}
+
+function computeSurfaceDynamicMeshSignature(definition: SurfaceDynamicMesh): string {
+  return stableSerialize({
+    points: definition.points ?? [],
+    normal: definition.normal ?? null,
+  })
+}
+
 const {
   resolveNodeIdFromIntersection,
   collectSceneIntersections,
@@ -3498,8 +3550,8 @@ function animate() {
 
     if (progress >= 1) {
       cameraTransitionState = null
-  clampCameraZoom()
-  clampCameraAboveGround()
+      clampCameraZoom()
+      clampCameraAboveGround()
       if (perspectiveCamera && camera !== perspectiveCamera) {
         perspectiveCamera.position.copy(camera.position)
         perspectiveCamera.quaternion.copy(camera.quaternion)
@@ -6872,17 +6924,32 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   if (node.dynamicMesh?.type === 'Ground') {
     const groundMesh = userData.groundMesh as THREE.Mesh | undefined
     if (groundMesh) {
-      updateGroundMesh(groundMesh, node.dynamicMesh)
+      const meshData = groundMesh.userData ?? (groundMesh.userData = {})
+      const nextSignature = computeGroundDynamicMeshSignature(node.dynamicMesh)
+      if (meshData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
+        updateGroundMesh(groundMesh, node.dynamicMesh)
+        meshData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
+      }
     }
   } else if (node.dynamicMesh?.type === 'Wall') {
     const wallGroup = userData.wallGroup as THREE.Group | undefined
     if (wallGroup) {
-      updateWallGroup(wallGroup, node.dynamicMesh)
+      const groupData = wallGroup.userData ?? (wallGroup.userData = {})
+      const nextSignature = computeWallDynamicMeshSignature(node.dynamicMesh as WallDynamicMesh)
+      if (groupData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
+        updateWallGroup(wallGroup, node.dynamicMesh as WallDynamicMesh)
+        groupData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
+      }
     }
   } else if (node.dynamicMesh?.type === 'Surface') {
     const surfaceMesh = userData.surfaceMesh as THREE.Mesh | undefined
     if (surfaceMesh) {
-      updateSurfaceMesh(surfaceMesh, node.dynamicMesh as SurfaceDynamicMesh)
+      const meshData = surfaceMesh.userData ?? (surfaceMesh.userData = {})
+      const nextSignature = computeSurfaceDynamicMeshSignature(node.dynamicMesh as SurfaceDynamicMesh)
+      if (meshData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
+        updateSurfaceMesh(surfaceMesh, node.dynamicMesh as SurfaceDynamicMesh)
+        meshData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
+      }
     }
   }
 
@@ -7467,18 +7534,23 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       const groundMesh = createGroundMesh(node.dynamicMesh)
       groundMesh.removeFromParent()
       groundMesh.userData.nodeId = node.id
+      groundMesh.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeGroundDynamicMeshSignature(node.dynamicMesh)
       container.add(groundMesh)
       containerData.groundMesh = groundMesh
       containerData.dynamicMeshType = 'Ground'
     } else if (node.dynamicMesh?.type === 'Wall') {
-      const wallGroup = createWallGroup(node.dynamicMesh as WallDynamicMesh)
+      const wallDefinition = node.dynamicMesh as WallDynamicMesh
+      const wallGroup = createWallGroup(wallDefinition)
       wallGroup.userData.nodeId = node.id
+      wallGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeWallDynamicMeshSignature(wallDefinition)
       container.add(wallGroup)
       containerData.wallGroup = wallGroup
       containerData.dynamicMeshType = 'Wall'
     } else if (node.dynamicMesh?.type === 'Surface') {
-      const surfaceMesh = createSurfaceMesh(node.dynamicMesh as SurfaceDynamicMesh)
+      const surfaceDefinition = node.dynamicMesh as SurfaceDynamicMesh
+      const surfaceMesh = createSurfaceMesh(surfaceDefinition)
       surfaceMesh.userData.nodeId = node.id
+      surfaceMesh.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeSurfaceDynamicMeshSignature(surfaceDefinition)
       container.add(surfaceMesh)
       containerData.surfaceMesh = surfaceMesh
       containerData.dynamicMeshType = 'Surface'

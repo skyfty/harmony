@@ -51,6 +51,12 @@ const MATERIAL_CLONED_KEY = '__harmonyMaterialCloned';
 const MATERIAL_ORIGINAL_KEY = '__harmonyMaterialOriginal';
 const TEXTURE_SLOT_STATE_KEY = '__harmonyTextureSlots';
 const TEXTURE_SLOT_OVERRIDES_KEY = '__harmonyTextureOverrides';
+const MATERIAL_OVERRIDE_STATE_KEY = '__harmonyMaterialOverrideState';
+
+type MaterialOverrideState = {
+  signature: string;
+  materialUUIDs: string[];
+};
 
 export const DEFAULT_TEXTURE_SETTINGS: SceneMaterialTextureSettings = {
   wrapS: 'ClampToEdgeWrapping',
@@ -965,19 +971,43 @@ export function applyMaterialOverrides(
     return;
   }
 
+  const overrideSignature = materialConfigsSignature(configs);
+
   target.traverse((child) => {
     const mesh = child as THREE.Mesh & { isMesh?: boolean };
     if (!mesh?.isMesh) {
       return;
     }
 
-    ensureMeshMaterialsUnique(mesh);
     const currentMaterial = mesh.material;
     if (!currentMaterial) {
+      if (mesh.userData && MATERIAL_OVERRIDE_STATE_KEY in mesh.userData) {
+        delete mesh.userData[MATERIAL_OVERRIDE_STATE_KEY];
+      }
       return;
     }
 
-    const materials = Array.isArray(currentMaterial) ? currentMaterial : [currentMaterial];
+    const previousState = (mesh.userData?.[MATERIAL_OVERRIDE_STATE_KEY] ?? null) as MaterialOverrideState | null;
+    const currentMaterialUUIDs = collectMaterialUUIDs(currentMaterial);
+    if (
+      previousState &&
+      previousState.signature === overrideSignature &&
+      arraysShallowEqual(previousState.materialUUIDs, currentMaterialUUIDs)
+    ) {
+      return;
+    }
+
+    ensureMeshMaterialsUnique(mesh);
+    const resolvedMaterial = mesh.material;
+    if (!resolvedMaterial) {
+      if (!mesh.userData) {
+        mesh.userData = {};
+      }
+      mesh.userData[MATERIAL_OVERRIDE_STATE_KEY] = { signature: overrideSignature, materialUUIDs: [] };
+      return;
+    }
+
+    const materials = Array.isArray(resolvedMaterial) ? resolvedMaterial : [resolvedMaterial];
     const disposables: Array<(() => void) | undefined> = [];
     let replaced = false;
     materials.forEach((materialRef, index) => {
@@ -995,12 +1025,20 @@ export function applyMaterialOverrides(
       }
     });
 
-    if (!Array.isArray(currentMaterial) && replaced) {
+    if (!Array.isArray(resolvedMaterial) && replaced) {
       mesh.material = materials[0]!;
-    } else if (Array.isArray(currentMaterial) && replaced) {
+    } else if (Array.isArray(resolvedMaterial) && replaced) {
       mesh.material = materials.slice();
     }
     disposables.forEach((dispose) => dispose?.());
+
+    if (!mesh.userData) {
+      mesh.userData = {};
+    }
+    mesh.userData[MATERIAL_OVERRIDE_STATE_KEY] = {
+      signature: overrideSignature,
+      materialUUIDs: collectMaterialUUIDs(mesh.material),
+    };
   });
 }
 
@@ -1013,6 +1051,9 @@ export function resetMaterialOverrides(target: THREE.Object3D): void {
 
     const currentMaterial = mesh.material;
     if (!currentMaterial) {
+      if (mesh.userData && MATERIAL_OVERRIDE_STATE_KEY in mesh.userData) {
+        delete mesh.userData[MATERIAL_OVERRIDE_STATE_KEY];
+      }
       return;
     }
 
@@ -1020,6 +1061,9 @@ export function resetMaterialOverrides(target: THREE.Object3D): void {
     materials.forEach((material) => {
       restoreMaterialFromBaseline(material);
     });
+    if (mesh.userData && MATERIAL_OVERRIDE_STATE_KEY in mesh.userData) {
+      delete mesh.userData[MATERIAL_OVERRIDE_STATE_KEY];
+    }
   });
 }
 
@@ -1082,5 +1126,57 @@ function resolveWrapMode(mode: string): THREE.Wrapping {
     default:
       return THREE.ClampToEdgeWrapping;
   }
+}
+
+function stableSerializeValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableSerializeValue(entry)).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, entryValue]) => entryValue !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    const serialized = entries.map(([key, entryValue]) => `${JSON.stringify(key)}:${stableSerializeValue(entryValue)}`);
+    return `{${serialized.join(',')}}`;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value.toString() : 'null';
+  }
+  if (typeof value === 'boolean') {
+    return value ? 'true' : 'false';
+  }
+  if (typeof value === 'string') {
+    return JSON.stringify(value);
+  }
+  if (value === null || value === undefined) {
+    return 'null';
+  }
+  return JSON.stringify(value);
+}
+
+function materialConfigsSignature(configs: SceneNodeMaterial[]): string {
+  if (!configs.length) {
+    return '';
+  }
+  return configs.map((config) => stableSerializeValue(config)).join('||');
+}
+
+function collectMaterialUUIDs(material: THREE.Material | THREE.Material[]): string[] {
+  if (Array.isArray(material)) {
+    return material.map((entry) => (entry?.uuid ?? ''));
+  }
+  return material ? [material.uuid ?? ''] : [];
+}
+
+function arraysShallowEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) {
+      return false;
+    }
+  }
+  return true;
 }
 
