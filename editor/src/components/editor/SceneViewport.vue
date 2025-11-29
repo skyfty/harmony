@@ -5005,6 +5005,12 @@ async function handlePointerDown(event: PointerEvent) {
     const idsToDuplicate = unlockedSelection.length ? unlockedSelection : [hit.nodeId]
     const duplicateIds = sceneStore.duplicateNodes(idsToDuplicate, { select: true })
     if (duplicateIds.length) {
+      const duplicateNodes = duplicateIds
+        .map((id) => findSceneNode(sceneStore.nodes, id))
+        .filter((node): node is SceneNode => Boolean(node))
+      if (duplicateNodes.length) {
+        await sceneStore.ensureSceneAssetsReady({ nodes: duplicateNodes, showOverlay: false, refreshViewport: false })
+      }
       await nextTick()
       await nextTick()
       const updatedHit = pickNodeAtPointer(event)
