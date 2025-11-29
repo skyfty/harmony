@@ -15,7 +15,7 @@ const ASSET_DRAG_MIME = 'application/x-harmony-asset'
 
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
-const { environmentSettings: storeEnvironmentSettings } = storeToRefs(sceneStore)
+const { environmentSettings: storeEnvironmentSettings, shadowsEnabled } = storeToRefs(sceneStore)
 
 const environmentSettings = computed(() => storeEnvironmentSettings.value)
 
@@ -236,6 +236,16 @@ function handleAmbientIntensityInput(value: unknown) {
 
 function formatAmbientIntensity(): string {
   return environmentSettings.value.ambientLightIntensity.toFixed(2)
+}
+
+function handleShadowsToggle(enabled: boolean | null) {
+  if (typeof enabled !== 'boolean') {
+    return
+  }
+  if (enabled === shadowsEnabled.value) {
+    return
+  }
+  sceneStore.setShadowsEnabled(enabled)
 }
 
 function handleFogToggle(enabled: boolean | null) {
@@ -757,6 +767,21 @@ function handleEnvironmentDrop(event: DragEvent) {
               :step="0.05"
               :model-value="formatAmbientIntensity()"
               @update:model-value="handleAmbientIntensityInput"
+            />
+          </div>
+        </section>
+
+        <section class="environment-section">
+          <div class="section-title">Shadows</div>
+          <div class="toggle-row">
+            <span class="toggle-label">Enable Shadows</span>
+            <v-switch
+              :model-value="shadowsEnabled"
+              density="compact"
+              hide-details
+              color="primary"
+              size="small"
+              @update:model-value="handleShadowsToggle"
             />
           </div>
         </section>

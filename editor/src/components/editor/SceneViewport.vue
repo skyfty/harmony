@@ -2818,9 +2818,8 @@ function initScene() {
 
   renderer = new THREE.WebGLRenderer({
     canvas: canvasRef.value,
-    antialias: true,
+    antialias: false,
     powerPreference: 'high-performance',
-    // Preserve buffer is expensive; keep it off for higher FPS and render before capture when needed
     preserveDrawingBuffer: false,
   })
   // Dynamic quality manager keeps pixel ratio capped for the current device
@@ -3071,7 +3070,7 @@ function ensureSunLight(): THREE.DirectionalLight | null {
     const light = new THREE.DirectionalLight(0xffffff, 1.05)
     light.name = 'SkySunLight'
     light.castShadow = Boolean(shadowsEnabled.value)
-    light.shadow.mapSize.set(2048, 2048)
+    light.shadow.mapSize.set(512, 512)
     light.shadow.bias = -0.0001
     light.shadow.normalBias = 0.02
     light.shadow.camera.near = 1
