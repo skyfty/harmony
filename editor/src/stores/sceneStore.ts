@@ -9536,7 +9536,7 @@ export const useSceneStore = defineStore('scene', {
         const localEuler = new Euler().setFromQuaternion(localQuaternion, 'XYZ')
 
         const newNodeId = generateUuid()
-        const nodeType = resolveSceneNodeTypeFromObject(workingObject)
+        const nodeType = resolveSceneNodeTypeFromObject(baseObject)
         const positionVector = toPlainVector(localPosition)
         const scaleVector = toPlainVector(localScale)
         const rotationVector: Vector3Like = { x: localEuler.x, y: localEuler.y, z: localEuler.z }
