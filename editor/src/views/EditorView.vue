@@ -85,12 +85,12 @@ function normalizePanelPlacementState(input?: PanelPlacementState | null): Panel
   }
 }
 
-const panelPlacement = computed<PanelPlacementState>(() => {
-  const source = (sceneStore.$state as unknown as PanelPlacementHolder).panelPlacement ??
-    (sceneStore as unknown as PanelPlacementHolder).panelPlacement ??
-    null
-  return normalizePanelPlacementState(source)
-})
+// const panelPlacement = computed<PanelPlacementState>(() => {
+//   const source = (sceneStore.$state as unknown as PanelPlacementHolder).panelPlacement ??
+//     (sceneStore as unknown as PanelPlacementHolder).panelPlacement ??
+//     null
+//   return normalizePanelPlacementState(source)
+// })
 
 const isSceneManagerOpen = ref(false)
 const isExportDialogOpen = ref(false)
@@ -219,67 +219,67 @@ async function refreshExportSummary(force = false): Promise<SceneResourceSummary
   }
 }
 
-const behaviorDetailsState = reactive({
-  visible: false,
-  anchor: null as BehaviorDetailsAnchor | null,
-  source: null as BehaviorDetailsSource | null,
-  context: null as BehaviorDetailsContext | null,
-})
+// const behaviorDetailsState = reactive({
+//   visible: false,
+//   anchor: null as BehaviorDetailsAnchor | null,
+//   source: null as BehaviorDetailsSource | null,
+//   context: null as BehaviorDetailsContext | null,
+// })
 
 const behaviorScriptOptions = listBehaviorScripts()
 
 
-const hierarchyOpen = computed({
-  get: () => panelVisibility.value.hierarchy,
-  set: (visible: boolean) => sceneStore.setPanelVisibility('hierarchy', visible),
-})
+// const hierarchyOpen = computed({
+//   get: () => panelVisibility.value.hierarchy,
+//   set: (visible: boolean) => sceneStore.setPanelVisibility('hierarchy', visible),
+// })
 
-const inspectorOpen = computed({
-  get: () => panelVisibility.value.inspector,
-  set: (visible: boolean) => sceneStore.setPanelVisibility('inspector', visible),
-})
+// const inspectorOpen = computed({
+//   get: () => panelVisibility.value.inspector,
+//   set: (visible: boolean) => sceneStore.setPanelVisibility('inspector', visible),
+// })
 
-const projectOpen = computed({
-  get: () => panelVisibility.value.project,
-  set: (visible: boolean) => sceneStore.setPanelVisibility('project', visible),
-})
+// const projectOpen = computed({
+//   get: () => panelVisibility.value.project,
+//   set: (visible: boolean) => sceneStore.setPanelVisibility('project', visible),
+// })
 
-const hierarchyPlacement = computed(() => panelPlacement.value.hierarchy)
-const inspectorPlacement = computed(() => panelPlacement.value.inspector)
-const projectPlacement = computed(() => panelPlacement.value.project)
+// const hierarchyPlacement = computed(() => panelPlacement.value.hierarchy)
+// const inspectorPlacement = computed(() => panelPlacement.value.inspector)
+// const projectPlacement = computed(() => panelPlacement.value.project)
 
-const showHierarchyDocked = computed(() => hierarchyOpen.value && hierarchyPlacement.value === 'docked')
-const showInspectorDocked = computed(() => inspectorOpen.value && inspectorPlacement.value === 'docked')
-const showProjectDocked = computed(() => projectOpen.value && projectPlacement.value === 'docked')
+// const showHierarchyDocked = computed(() => hierarchyOpen.value && hierarchyPlacement.value === 'docked')
+// const showInspectorDocked = computed(() => inspectorOpen.value && inspectorPlacement.value === 'docked')
+// const showProjectDocked = computed(() => projectOpen.value && projectPlacement.value === 'docked')
 
-const showHierarchyFloating = computed(() => hierarchyOpen.value && hierarchyPlacement.value === 'floating')
-const showInspectorFloating = computed(() => inspectorOpen.value && inspectorPlacement.value === 'floating')
-const showProjectFloating = computed(() => projectOpen.value && projectPlacement.value === 'floating')
+// const showHierarchyFloating = computed(() => hierarchyOpen.value && hierarchyPlacement.value === 'floating')
+// const showInspectorFloating = computed(() => inspectorOpen.value && inspectorPlacement.value === 'floating')
+// const showProjectFloating = computed(() => projectOpen.value && projectPlacement.value === 'floating')
 
-const layoutClasses = computed(() => ({
-  'is-hierarchy-docked': showHierarchyDocked.value,
-  'is-inspector-docked': showInspectorDocked.value,
-  'is-project-docked': showProjectDocked.value,
-}))
+// const layoutClasses = computed(() => ({
+//   'is-hierarchy-docked': showHierarchyDocked.value,
+//   'is-inspector-docked': showInspectorDocked.value,
+//   'is-project-docked': showProjectDocked.value,
+// }))
 
-const layoutStyles = computed(() => ({
-  gridTemplateColumns: [
-    showHierarchyDocked.value ? 'minmax(0, 280px)' : '0',
-    'minmax(0, 1fr)',
-    showInspectorDocked.value ? 'minmax(0, 320px)' : '0',
-  ].join(' '),
-  gridTemplateRows: [
-    'auto',
-    'minmax(0, 1fr)',
-    showProjectDocked.value ? 'minmax(0, 260px)' : '0',
-  ].join(' '),
-}))
+// const layoutStyles = computed(() => ({
+//   gridTemplateColumns: [
+//     showHierarchyDocked.value ? 'minmax(0, 280px)' : '0',
+//     'minmax(0, 1fr)',
+//     showInspectorDocked.value ? 'minmax(0, 320px)' : '0',
+//   ].join(' '),
+//   gridTemplateRows: [
+//     'auto',
+//     'minmax(0, 1fr)',
+//     showProjectDocked.value ? 'minmax(0, 260px)' : '0',
+//   ].join(' '),
+// }))
 
-const reopenButtons = computed(() => ({
-  showHierarchy: !panelVisibility.value.hierarchy,
-  showInspector: !panelVisibility.value.inspector,
-  showProject: !panelVisibility.value.project,
-}))
+// const reopenButtons = computed(() => ({
+//   showHierarchy: !panelVisibility.value.hierarchy,
+//   showInspector: !panelVisibility.value.inspector,
+//   showProject: !panelVisibility.value.project,
+// }))
 
 onMounted(async () => {
 })
@@ -515,86 +515,86 @@ const handleBehaviorDetailsRelayout = () => {
   updateBehaviorDetailsAnchor()
 }
 
-watch(
-  () => materialDetailsState.visible,
-  (visible) => {
-    if (visible) {
-      updateMaterialDetailsAnchor()
-      window.addEventListener('resize', handleMaterialDetailsRelayout)
-      window.addEventListener('scroll', handleMaterialDetailsRelayout, true)
-    } else {
-      window.removeEventListener('resize', handleMaterialDetailsRelayout)
-      window.removeEventListener('scroll', handleMaterialDetailsRelayout, true)
-    }
-  },
-  { immediate: false },
-)
+// watch(
+//   () => materialDetailsState.visible,
+//   (visible) => {
+//     if (visible) {
+//       updateMaterialDetailsAnchor()
+//       window.addEventListener('resize', handleMaterialDetailsRelayout)
+//       window.addEventListener('scroll', handleMaterialDetailsRelayout, true)
+//     } else {
+//       window.removeEventListener('resize', handleMaterialDetailsRelayout)
+//       window.removeEventListener('scroll', handleMaterialDetailsRelayout, true)
+//     }
+//   },
+//   { immediate: false },
+// )
 
-watch(
-  () => behaviorDetailsState.visible,
-  (visible) => {
-    if (visible) {
-      updateBehaviorDetailsAnchor()
-      window.addEventListener('resize', handleBehaviorDetailsRelayout)
-      window.addEventListener('scroll', handleBehaviorDetailsRelayout, true)
-    } else {
-      window.removeEventListener('resize', handleBehaviorDetailsRelayout)
-      window.removeEventListener('scroll', handleBehaviorDetailsRelayout, true)
-    }
-  },
-)
+// watch(
+//   () => behaviorDetailsState.visible,
+//   (visible) => {
+//     if (visible) {
+//       updateBehaviorDetailsAnchor()
+//       window.addEventListener('resize', handleBehaviorDetailsRelayout)
+//       window.addEventListener('scroll', handleBehaviorDetailsRelayout, true)
+//     } else {
+//       window.removeEventListener('resize', handleBehaviorDetailsRelayout)
+//       window.removeEventListener('scroll', handleBehaviorDetailsRelayout, true)
+//     }
+//   },
+// )
 
-watch(showInspectorDocked, (visible) => {
-  if (materialDetailsState.source !== 'docked') {
-    return
-  }
-  if (!visible) {
-    handleInspectorMaterialDetailsClose('docked')
-    return
-  }
-  nextTick(() => {
-    updateMaterialDetailsAnchor()
-  })
-})
+// watch(showInspectorDocked, (visible) => {
+//   if (materialDetailsState.source !== 'docked') {
+//     return
+//   }
+//   if (!visible) {
+//     handleInspectorMaterialDetailsClose('docked')
+//     return
+//   }
+//   nextTick(() => {
+//     updateMaterialDetailsAnchor()
+//   })
+// })
 
-watch(showInspectorFloating, (visible) => {
-  if (materialDetailsState.source !== 'floating') {
-    return
-  }
-  if (!visible) {
-    handleInspectorMaterialDetailsClose('floating')
-    return
-  }
-  nextTick(() => {
-    updateMaterialDetailsAnchor()
-  })
-})
+// watch(showInspectorFloating, (visible) => {
+//   if (materialDetailsState.source !== 'floating') {
+//     return
+//   }
+//   if (!visible) {
+//     handleInspectorMaterialDetailsClose('floating')
+//     return
+//   }
+//   nextTick(() => {
+//     updateMaterialDetailsAnchor()
+//   })
+// })
 
-watch(showInspectorDocked, (visible) => {
-  if (behaviorDetailsState.source !== 'docked') {
-    return
-  }
-  if (!visible) {
-    handleInspectorBehaviorDetailsClose('docked')
-    return
-  }
-  nextTick(() => {
-    updateBehaviorDetailsAnchor()
-  })
-})
+// watch(showInspectorDocked, (visible) => {
+//   if (behaviorDetailsState.source !== 'docked') {
+//     return
+//   }
+//   if (!visible) {
+//     handleInspectorBehaviorDetailsClose('docked')
+//     return
+//   }
+//   nextTick(() => {
+//     updateBehaviorDetailsAnchor()
+//   })
+// })
 
-watch(showInspectorFloating, (visible) => {
-  if (behaviorDetailsState.source !== 'floating') {
-    return
-  }
-  if (!visible) {
-    handleInspectorBehaviorDetailsClose('floating')
-    return
-  }
-  nextTick(() => {
-    updateBehaviorDetailsAnchor()
-  })
-})
+// watch(showInspectorFloating, (visible) => {
+//   if (behaviorDetailsState.source !== 'floating') {
+//     return
+//   }
+//   if (!visible) {
+//     handleInspectorBehaviorDetailsClose('floating')
+//     return
+//   }
+//   nextTick(() => {
+//     updateBehaviorDetailsAnchor()
+//   })
+// })
 
 function openNewSceneDialog(source: 'menu' | 'scene-manager') {
   if (source === 'scene-manager') {
@@ -821,13 +821,13 @@ function handleExportDialogCancel() {
   exportErrorMessage.value = null
 }
 
-watch(isExportDialogOpen, (open) => {
-  if (!open && !isExporting.value) {
-    exportProgress.value = 0
-    exportProgressMessage.value = ''
-    exportErrorMessage.value = null
-  }
-})
+// watch(isExportDialogOpen, (open) => {
+//   if (!open && !isExporting.value) {
+//     exportProgress.value = 0
+//     exportProgressMessage.value = ''
+//     exportErrorMessage.value = null
+//   }
+// })
 
 function toggleStatsPanelVisibility() {
   showStatsPanel.value = !showStatsPanel.value
@@ -1424,131 +1424,118 @@ function isEditableKeyboardTarget(target: EventTarget | null): boolean {
   return element.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
 }
 
-function shouldHandleViewportShortcut(event: KeyboardEvent): boolean {
-  if (event.defaultPrevented) return false
-  if (isEditableKeyboardTarget(event.target)) return false
-  return true
-}
+// function shouldHandleViewportShortcut(event: KeyboardEvent): boolean {
+//   if (event.defaultPrevented) return false
+//   if (isEditableKeyboardTarget(event.target)) return false
+//   return true
+// }
 
-async function handleEditorViewShortcut(event: KeyboardEvent) {
-  if (!shouldHandleViewportShortcut(event)) return
-  let handled = false
+// async function handleEditorViewShortcut(event: KeyboardEvent) {
+//   if (!shouldHandleViewportShortcut(event)) return
+//   let handled = false
 
-  if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
-    switch (event.code) {
-      case 'Delete':
-        handleAction(event.code)
-        handled = true
-        break;
-      default:
-        break
-    }
-  }
+//   if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+//     switch (event.code) {
+//       case 'Delete':
+//         handleAction(event.code)
+//         handled = true
+//         break;
+//       default:
+//         break
+//     }
+//   }
 
-  console.log('Shortcut event:', event.code, {
-    ctrl: event.ctrlKey,
-    meta: event.metaKey,
-    shift: event.shiftKey,
-    alt: event.altKey,
-  })
-  if (!handled && (event.ctrlKey || event.metaKey) && !event.altKey) {
-    switch (event.code) {
-      case 'KeyZ': {
-        handled = event.shiftKey ? await sceneStore.redo() : await sceneStore.undo()
-        break
-      }
-      case 'KeyY': {
-        if (!event.shiftKey) {
-          handled = await sceneStore.redo()
-        }
-        break
-      }
-      case 'KeyS': {
-        if (!event.shiftKey) {
-          await saveCurrentScene()
-          handled = true
-        }
-        break
-      }
-      case 'KeyC': {
-        if (!event.shiftKey) {
-          handled = sceneStore.selectedNodeIds.length ? sceneStore.copyNodes(sceneStore.selectedNodeIds) : false
-        }
-        break
-      }
-      case 'KeyX': {
-        if (!event.shiftKey) {
-          handled = sceneStore.selectedNodeIds.length ? sceneStore.cutNodes(sceneStore.selectedNodeIds) : false
-        }
-        break
-      }
-      case 'KeyV': {
-        if (!event.shiftKey) {
-          handled = await sceneStore.pasteClipboard(sceneStore.selectedNodeId)
-        }
-        break
-      }
-      case 'KeyL': {
-        if (event.shiftKey) {
-          handled = sceneStore.toggleSelectionLock()
-        }
-        break
-      }
-      case 'KeyH': {
-        if (event.shiftKey) {
-          handled = sceneStore.toggleSelectionVisibility()
-        }
-        break
-      }
-      case 'KeyT': {
-        if (event.shiftKey) {
-          handled = sceneStore.toggleSelectionTransparency()
-        }
-        break
-      }
-      default:
-        break
-    }
-  }
+//   console.log('Shortcut event:', event.code, {
+//     ctrl: event.ctrlKey,
+//     meta: event.metaKey,
+//     shift: event.shiftKey,
+//     alt: event.altKey,
+//   })
+//   if (!handled && (event.ctrlKey || event.metaKey) && !event.altKey) {
+//     switch (event.code) {
+//       case 'KeyZ': {
+//         handled = event.shiftKey ? await sceneStore.redo() : await sceneStore.undo()
+//         break
+//       }
+//       case 'KeyY': {
+//         if (!event.shiftKey) {
+//           handled = await sceneStore.redo()
+//         }
+//         break
+//       }
+//       case 'KeyS': {
+//         if (!event.shiftKey) {
+//           await saveCurrentScene()
+//           handled = true
+//         }
+//         break
+//       }
+//       case 'KeyC': {
+//         if (!event.shiftKey) {
+//           handled = sceneStore.selectedNodeIds.length ? sceneStore.copyNodes(sceneStore.selectedNodeIds) : false
+//         }
+//         break
+//       }
+//       case 'KeyX': {
+//         if (!event.shiftKey) {
+//           handled = sceneStore.selectedNodeIds.length ? sceneStore.cutNodes(sceneStore.selectedNodeIds) : false
+//         }
+//         break
+//       }
+//       case 'KeyV': {
+//         if (!event.shiftKey) {
+//           handled = await sceneStore.pasteClipboard(sceneStore.selectedNodeId)
+//         }
+//         break
+//       }
+//       case 'KeyL': {
+//         if (event.shiftKey) {
+//           handled = sceneStore.toggleSelectionLock()
+//         }
+//         break
+//       }
+//       case 'KeyH': {
+//         if (event.shiftKey) {
+//           handled = sceneStore.toggleSelectionVisibility()
+//         }
+//         break
+//       }
+//       case 'KeyT': {
+//         if (event.shiftKey) {
+//           handled = sceneStore.toggleSelectionTransparency()
+//         }
+//         break
+//       }
+//       default:
+//         break
+//     }
+//   }
 
-  if (handled) {
-    event.preventDefault()
-    event.stopPropagation()
-  }
-}
+//   if (handled) {
+//     event.preventDefault()
+//     event.stopPropagation()
+//   }
+// }
 
-onMounted(() => {
-  window.addEventListener('keyup', handleEditorViewShortcut, { capture: true })
-})
+// onMounted(() => {
+//   window.addEventListener('keyup', handleEditorViewShortcut, { capture: true })
+// })
 
-onBeforeUnmount(() => {
-  window.removeEventListener('keyup', handleEditorViewShortcut, { capture: true })
-  window.removeEventListener('resize', handleMaterialDetailsRelayout)
-  window.removeEventListener('scroll', handleMaterialDetailsRelayout, true)
-  window.removeEventListener('resize', handleBehaviorDetailsRelayout)
-  window.removeEventListener('scroll', handleBehaviorDetailsRelayout, true)
-})
+// onBeforeUnmount(() => {
+//   window.removeEventListener('keyup', handleEditorViewShortcut, { capture: true })
+//   window.removeEventListener('resize', handleMaterialDetailsRelayout)
+//   window.removeEventListener('scroll', handleMaterialDetailsRelayout, true)
+//   window.removeEventListener('resize', handleBehaviorDetailsRelayout)
+//   window.removeEventListener('scroll', handleBehaviorDetailsRelayout, true)
+// })
 
 
 </script>
 
 <template>
   <div class="editor-view">
-  <div class="editor-layout" :class="layoutClasses" :style="layoutStyles">
-      <MenuBar 
-        @menu-action="handleAction"
-        :show-stats="showStatsPanel"
-        @toggle-stats="toggleStatsPanelVisibility"
-      />
-      <transition name="slide-left">
-        <section v-if="showHierarchyDocked" class="panel hierarchy-panel">
-          <HierarchyPanel
-            :floating="false"
-            @collapse="hierarchyOpen = false"
-            @toggle-placement="togglePanelPlacement('hierarchy')"
-          />
-        </section>
-      </transition>
+  <div class="editor-layout" >
+
 
       <section class="scene-panel">
         <SceneViewport
@@ -1569,171 +1556,9 @@ onBeforeUnmount(() => {
         />
       </section>
 
-      <transition name="slide-right">
-        <section v-if="showInspectorDocked" class="panel inspector-panel">
-          <InspectorPanel
-            ref="dockedInspectorRef"
-            :floating="false"
-            :capture-viewport-screenshot="captureViewportScreenshot"
-            @collapse="inspectorOpen = false"
-            @toggle-placement="togglePanelPlacement('inspector')"
-            @open-material-details="(payload) => handleInspectorMaterialDetailsOpen('docked', payload)"
-            @close-material-details="() => handleInspectorMaterialDetailsClose('docked')"
-            @open-behavior-details="(payload) => handleInspectorBehaviorDetailsOpen('docked', payload)"
-            @close-behavior-details="() => handleInspectorBehaviorDetailsClose('docked')"
-          />
-        </section>
-      </transition>
 
-      <transition name="slide-up">
-        <section v-if="showProjectDocked" class="panel project-panel">
-          <ProjectPanel
-            :floating="false"
-            :capture-viewport-screenshot="captureViewportScreenshot"
-            @collapse="projectOpen = false"
-            @toggle-placement="togglePanelPlacement('project')"
-          />
-        </section>
-      </transition>
-
-      <div class="floating-panels">
-        <transition name="fade-down">
-          <div v-if="showHierarchyFloating" class="floating-panel hierarchy-floating">
-            <HierarchyPanel
-              :floating="true"
-              @collapse="hierarchyOpen = false"
-              @toggle-placement="togglePanelPlacement('hierarchy')"
-            />
-          </div>
-        </transition>
-        <transition name="fade-down">
-          <div v-if="showInspectorFloating" class="floating-panel inspector-floating">
-            <InspectorPanel
-              ref="floatingInspectorRef"
-              :floating="true"
-              :capture-viewport-screenshot="captureViewportScreenshot"
-              @collapse="inspectorOpen = false"
-              @toggle-placement="togglePanelPlacement('inspector')"
-              @open-material-details="(payload) => handleInspectorMaterialDetailsOpen('floating', payload)"
-              @close-material-details="() => handleInspectorMaterialDetailsClose('floating')"
-              @open-behavior-details="(payload) => handleInspectorBehaviorDetailsOpen('floating', payload)"
-              @close-behavior-details="() => handleInspectorBehaviorDetailsClose('floating')"
-            />
-          </div>
-        </transition>
-        <transition name="fade-up">
-          <div v-if="showProjectFloating" class="floating-panel project-floating">
-            <ProjectPanel
-              :floating="true"
-              :capture-viewport-screenshot="captureViewportScreenshot"
-              @collapse="projectOpen = false"
-              @toggle-placement="togglePanelPlacement('project')"
-            />
-          </div>
-        </transition>
-      </div>
-
-      <v-btn
-        v-if="reopenButtons.showHierarchy"
-        class="edge-button left"
-        color="primary"
-        variant="flat"
-        rounded
-        icon="mdi-chevron-right"
-        density="comfortable"
-        @click="reopenPanel('hierarchy')"
-      />
-
-      <v-btn
-        v-if="reopenButtons.showInspector"
-        class="edge-button right"
-        color="primary"
-        variant="flat"
-        rounded
-        icon="mdi-chevron-left"
-        density="comfortable"
-        @click="reopenPanel('inspector')"
-      />
-
-      <v-btn
-        v-if="reopenButtons.showProject"
-        class="edge-button bottom"
-        color="primary"
-        variant="tonal"
-        density="comfortable"
-        @click="reopenPanel('project')"
-      >
-        <v-icon start>mdi-folder</v-icon>
-        Project
-      </v-btn>
-
-      <BehaviorDetailsPanel
-        v-if="behaviorDetailsState.visible && behaviorDetailsState.context && behaviorDetailsState.anchor"
-        :visible="behaviorDetailsState.visible"
-        :mode="behaviorDetailsState.context.mode"
-        :action="behaviorDetailsState.context.action"
-        :sequence="behaviorDetailsState.context.sequence"
-        :actions="behaviorDetailsState.context.actions"
-        :scripts="behaviorScriptOptions"
-        :anchor="behaviorDetailsState.anchor"
-        :node-id="behaviorDetailsState.context.nodeId"
-        @close="handleBehaviorDetailsOverlayClose"
-        @save="handleBehaviorDetailsSave"
-      />
-
-      <MaterialDetailsPanel
-        v-if="materialDetailsState.visible && materialDetailsState.targetId && materialDetailsState.anchor"
-        :node-material-id="materialDetailsState.targetId"
-        :visible="materialDetailsState.visible"
-        :anchor="materialDetailsState.anchor"
-        @close="handleMaterialDetailsOverlayClose"
-      />
     </div>
-    <SceneManagerDialog
-      v-model="isSceneManagerOpen"
-      :scenes="sceneSummaries"
-      :current-scene-id="currentSceneId"
-      @select="handleSelectScene"
-      @delete="handleDeleteScene"
-      @rename="handleRenameScene"
-      @request-new="handleSceneManagerCreateRequest"
-      @import-scenes="handleSceneManagerImportRequest"
-      @export-scenes="handleSceneManagerExport"
-    />
-    <input
-      ref="sceneImportInputRef"
-      type="file"
-      accept="application/json"
-      style="display: none"
-      @change="handleSceneImportFileChange"
-    />
-    <input
-      ref="externalSceneInputRef"
-      type="file"
-      accept=".glb,.gltf,.fbx"
-      style="display: none"
-      @change="handleExternalSceneFileChange"
-    />
-    <NewSceneDialog
-      v-model="isNewSceneDialogOpen"
-      :initial-ground-width="groundSettings.width"
-      :initial-ground-depth="groundSettings.depth"
-      @confirm="handleCreateScene"
-    />
-    <SceneExportDialog
-      v-model="isExportDialogOpen"
-      :default-file-name="exportDialogFileName"
-      :initial-options="exportPreferences"
-      :exporting="isExporting"
-      :progress="exportProgress"
-      :progress-message="exportProgressMessage"
-      :error-message="exportErrorMessage"
-      :resource-summary="exportResourceSummary"
-      :resource-summary-loading="exportSummaryLoading"
-      @confirm="handleExportDialogConfirm"
-      @publish="handleExportDialogPublish"
-      @cancel="handleExportDialogCancel"
-    />
+   
   </div>
 </template>
 

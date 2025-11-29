@@ -1042,32 +1042,32 @@ function deactivateAltOverride() {
   }
 }
 
-function handleAltOverrideKeyDown(event: KeyboardEvent) {
-  if (event.defaultPrevented) {
-    return
-  }
-  if (event.repeat) {
-    return
-  }
-  if (event.key !== 'Alt') {
-    return
-  }
-  if (isEditableKeyboardTarget(event.target)) {
-    return
-  }
-  activateAltOverride()
-}
+// function handleAltOverrideKeyDown(event: KeyboardEvent) {
+//   if (event.defaultPrevented) {
+//     return
+//   }
+//   if (event.repeat) {
+//     return
+//   }
+//   if (event.key !== 'Alt') {
+//     return
+//   }
+//   if (isEditableKeyboardTarget(event.target)) {
+//     return
+//   }
+//   activateAltOverride()
+// }
 
-function handleAltOverrideKeyUp(event: KeyboardEvent) {
-  if (event.key !== 'Alt') {
-    return
-  }
-  deactivateAltOverride()
-}
+// function handleAltOverrideKeyUp(event: KeyboardEvent) {
+//   if (event.key !== 'Alt') {
+//     return
+//   }
+//   deactivateAltOverride()
+// }
 
-function handleAltOverrideBlur() {
-  deactivateAltOverride()
-}
+// function handleAltOverrideBlur() {
+//   deactivateAltOverride()
+// }
 
 function updateFaceSnapCommitState(active: boolean) {
   if (isFaceSnapCommitActive === active) {
@@ -1076,39 +1076,39 @@ function updateFaceSnapCommitState(active: boolean) {
   isFaceSnapCommitActive = active
 }
 
-function handleFaceSnapCommitKeyDown(event: KeyboardEvent) {
-  if (event.key !== 'Shift') {
-    return
-  }
-  if (event.defaultPrevented) {
-    return
-  }
-  if (isEditableKeyboardTarget(event.target)) {
-    return
-  }
-  updateFaceSnapCommitState(true)
-}
+// function handleFaceSnapCommitKeyDown(event: KeyboardEvent) {
+//   if (event.key !== 'Shift') {
+//     return
+//   }
+//   if (event.defaultPrevented) {
+//     return
+//   }
+//   if (isEditableKeyboardTarget(event.target)) {
+//     return
+//   }
+//   updateFaceSnapCommitState(true)
+// }
 
-function handleFaceSnapCommitKeyUp(event: KeyboardEvent) {
-  if (event.key !== 'Shift') {
-    return
-  }
-  updateFaceSnapCommitState(event.shiftKey)
-}
+// function handleFaceSnapCommitKeyUp(event: KeyboardEvent) {
+//   if (event.key !== 'Shift') {
+//     return
+//   }
+//   updateFaceSnapCommitState(event.shiftKey)
+// }
 
-function handleFaceSnapCommitBlur() {
-  updateFaceSnapCommitState(false)
-}
+// function handleFaceSnapCommitBlur() {
+//   updateFaceSnapCommitState(false)
+// }
 
 function handleViewportContextMenu(event: MouseEvent) {
   event.preventDefault()
 }
 
-function easeInOutCubic(t: number): number {
-  if (t <= 0) return 0
-  if (t >= 1) return 1
-  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
-}
+// function easeInOutCubic(t: number): number {
+//   if (t <= 0) return 0
+//   if (t >= 1) return 1
+//   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
+// }
 
 const cameraOffsetHelper = new THREE.Vector3()
 const transformDeltaPosition = new THREE.Vector3()
@@ -1353,44 +1353,44 @@ majorMaterials.forEach((material) => {
 })
 gridGroup.add(majorGrid)
 
-const createDashedGridMaterial = () =>
-  new THREE.LineDashedMaterial({
-    color: GRID_MINOR_COLOR,
-    transparent: true,
-    opacity: 0.08,
-    dashSize: GRID_MINOR_DASH_SIZE,
-    gapSize: GRID_MINOR_GAP_SIZE,
-    toneMapped: false,
-  })
+// const createDashedGridMaterial = () =>
+//   new THREE.LineDashedMaterial({
+//     color: GRID_MINOR_COLOR,
+//     transparent: true,
+//     opacity: 0.08,
+//     dashSize: GRID_MINOR_DASH_SIZE,
+//     gapSize: GRID_MINOR_GAP_SIZE,
+//     toneMapped: false,
+//   })
 
-function createMinorGrid(): THREE.LineSegments {
-  const halfSize = GRID_EXTENT / 2
-  const positions: number[] = []
+// function createMinorGrid(): THREE.LineSegments {
+//   const halfSize = GRID_EXTENT / 2
+//   const positions: number[] = []
 
-  for (let offset = -halfSize; offset <= halfSize; offset += GRID_MINOR_SPACING) {
-    const nearestMultiple = Math.round(offset / GRID_MAJOR_SPACING) * GRID_MAJOR_SPACING
-    if (Math.abs(offset - nearestMultiple) <= 1e-6) {
-      continue
-    }
+//   for (let offset = -halfSize; offset <= halfSize; offset += GRID_MINOR_SPACING) {
+//     const nearestMultiple = Math.round(offset / GRID_MAJOR_SPACING) * GRID_MAJOR_SPACING
+//     if (Math.abs(offset - nearestMultiple) <= 1e-6) {
+//       continue
+//     }
 
-    positions.push(-halfSize, GRID_BASE_HEIGHT, offset, halfSize, GRID_BASE_HEIGHT, offset)
-    positions.push(offset, GRID_BASE_HEIGHT, -halfSize, offset, GRID_BASE_HEIGHT, halfSize)
-  }
+//     positions.push(-halfSize, GRID_BASE_HEIGHT, offset, halfSize, GRID_BASE_HEIGHT, offset)
+//     positions.push(offset, GRID_BASE_HEIGHT, -halfSize, offset, GRID_BASE_HEIGHT, halfSize)
+//   }
 
-  const geometry = new THREE.BufferGeometry()
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-  geometry.computeBoundingSphere()
+//   const geometry = new THREE.BufferGeometry()
+//   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+//   geometry.computeBoundingSphere()
 
-  const material = createDashedGridMaterial()
-  applyGridMaterialSettings(material, material.opacity, -1)
+//   const material = createDashedGridMaterial()
+//   applyGridMaterialSettings(material, material.opacity, -1)
 
-  const lines = new THREE.LineSegments(geometry, material)
-  lines.computeLineDistances()
-  return lines
-}
+//   const lines = new THREE.LineSegments(geometry, material)
+//   lines.computeLineDistances()
+//   return lines
+// }
 
-const minorGrid = createMinorGrid()
-gridGroup.add(minorGrid)
+// const minorGrid = createMinorGrid()
+// gridGroup.add(minorGrid)
 
 const axesHelper = new THREE.AxesHelper(4)
 axesHelper.visible = false
@@ -1750,15 +1750,15 @@ function updatePostProcessingCamera(target: THREE.PerspectiveCamera | THREE.Orth
   }
 }
 
-function configureOutlinePassAppearance(pass: OutlinePass) {
-  pass.edgeStrength = 5.5
-  pass.edgeGlow = 0.8
-  pass.edgeThickness = 2.75
-  pass.pulsePeriod = 0
-  pass.visibleEdgeColor.setHex(0xffffff)
-  pass.hiddenEdgeColor.setHex(0x66d9ff)
-  pass.usePatternTexture = false
-}
+// function configureOutlinePassAppearance(pass: OutlinePass) {
+//   pass.edgeStrength = 5.5
+//   pass.edgeGlow = 0.8
+//   pass.edgeThickness = 2.75
+//   pass.pulsePeriod = 0
+//   pass.visibleEdgeColor.setHex(0xffffff)
+//   pass.hiddenEdgeColor.setHex(0x66d9ff)
+//   pass.usePatternTexture = false
+// }
 
 function updateFxaaResolution(width: number, height: number) {
   if (!fxaaPass) {
@@ -1794,30 +1794,30 @@ function createPostProcessingPipeline(width: number, height: number) {
   const safeWidth = Math.max(1, width)
   const safeHeight = Math.max(1, height)
 
-  composer = new EffectComposer(renderer)
-  const currentPixelRatio = getCurrentPixelRatio()
-  composer.setPixelRatio(currentPixelRatio)
-  composer.setSize(safeWidth, safeHeight)
+  // composer = new EffectComposer(renderer)
+  // const currentPixelRatio = getCurrentPixelRatio()
+  // composer.setPixelRatio(currentPixelRatio)
+  // composer.setSize(safeWidth, safeHeight)
 
-  renderPass = new RenderPass(scene, camera)
-  composer.addPass(renderPass)
+  // renderPass = new RenderPass(scene, camera)
+  // composer.addPass(renderPass)
 
-  outlinePass = new OutlinePass(new THREE.Vector2(safeWidth, safeHeight), scene, camera)
-  configureOutlinePassAppearance(outlinePass)
-  composer.addPass(outlinePass)
+  // outlinePass = new OutlinePass(new THREE.Vector2(safeWidth, safeHeight), scene, camera)
+  // configureOutlinePassAppearance(outlinePass)
+  // composer.addPass(outlinePass)
 
-  fxaaPass = new ShaderPass(FXAAShader)
-  if (fxaaPass.material) {
-    fxaaPass.material.toneMapped = true
-  }
-  composer.addPass(fxaaPass)
+  // fxaaPass = new ShaderPass(FXAAShader)
+  // if (fxaaPass.material) {
+  //   fxaaPass.material.toneMapped = true
+  // }
+  // composer.addPass(fxaaPass)
 
-  outputPass = new OutputPass()
-  composer.addPass(outputPass)
+  // outputPass = new OutputPass()
+  // composer.addPass(outputPass)
 
-  updateFxaaResolution(safeWidth, safeHeight)
+  // updateFxaaResolution(safeWidth, safeHeight)
 
-  updateOutlineSelectionTargets()
+  // updateOutlineSelectionTargets()
 }
 
 function disposePostProcessing() {
@@ -1840,7 +1840,7 @@ function renderViewportFrame() {
   if (composer) {
     composer.render()
   } else {
-    renderer.render(scene, camera)
+     renderer.render(scene, camera)
   }
 }
 
@@ -2063,13 +2063,13 @@ function orbitCameraHorizontally(direction: number) {
   }
 }
 
-watch(gridVisible, (visible) => {
-  applyGridVisibility(visible)
-}, { immediate: true })
+// watch(gridVisible, (visible) => {
+//   applyGridVisibility(visible)
+// }, { immediate: true })
 
-watch(axesVisible, (visible) => {
-  applyAxesVisibility(visible)
-}, { immediate: true })
+// watch(axesVisible, (visible) => {
+//   applyAxesVisibility(visible)
+// }, { immediate: true })
 
 watch(cameraProjectionMode, (mode, previous) => {
   if (!scene || !renderer) {
@@ -2082,13 +2082,13 @@ watch(cameraProjectionMode, (mode, previous) => {
   applyProjectionMode(mode)
 }, { immediate: true })
 
-watch(skyboxSettings, (settings) => {
-  applySkyboxSettingsToScene(settings)
-}, { deep: true, immediate: true })
+// watch(skyboxSettings, (settings) => {
+//   applySkyboxSettingsToScene(settings)
+// }, { deep: true, immediate: true })
 
-watch(environmentSettings, (settings) => {
-  void applyEnvironmentSettingsToScene(settings)
-}, { deep: true, immediate: true })
+// watch(environmentSettings, (settings) => {
+//   void applyEnvironmentSettingsToScene(settings)
+// }, { deep: true, immediate: true })
 
 function resetCameraView() {
   if (!camera || !orbitControls) return
@@ -2819,9 +2819,9 @@ function initScene() {
   renderer = new THREE.WebGLRenderer({
     canvas: canvasRef.value,
     antialias: true,
-    powerPreference: 'high-performance',
-    // Preserve buffer is expensive; keep it off for higher FPS and render before capture when needed
-    preserveDrawingBuffer: false,
+    // powerPreference: 'high-performance',
+    // // Preserve buffer is expensive; keep it off for higher FPS and render before capture when needed
+    // preserveDrawingBuffer: false,
   })
   // Dynamic quality manager keeps pixel ratio capped for the current device
   applyCurrentPixelRatio()
@@ -2836,49 +2836,49 @@ function initScene() {
   pmremGenerator = new THREE.PMREMGenerator(renderer)
 
   scene = new THREE.Scene()
-  scene.background = new THREE.Color(DEFAULT_BACKGROUND_COLOR)
+  scene.background = new THREE.Color(0xf0f0f0)
   scene.fog = null
 
-  const initialEnvironment = environmentSettings.value
-  environmentAmbientLight = new THREE.AmbientLight(
-    initialEnvironment.ambientLightColor,
-    initialEnvironment.ambientLightIntensity,
-  )
-  scene.add(environmentAmbientLight)
+  // const initialEnvironment = environmentSettings.value
+  // environmentAmbientLight = new THREE.AmbientLight(
+  //   initialEnvironment.ambientLightColor,
+  //   initialEnvironment.ambientLightIntensity,
+  // )
+  // scene.add(environmentAmbientLight)
 
-  applySunDirectionToSunLight()
+  // applySunDirectionToSunLight()
 
-  ensureSkyExists()
+  // ensureSkyExists()
   scene.add(rootGroup)
   scene.add(instancedMeshGroup)
   scene.add(instancedOutlineGroup)
-  scene.add(gridGroup)
-  scene.add(axesHelper)
-  scene.add(groundSelectionGroup)
-  scene.add(dragPreviewGroup)
-  gridHighlight = createGridHighlight()
-  if (gridHighlight) {
-    scene.add(gridHighlight)
-  }
-  ensureFaceSnapEffectPool()
-  applyGridVisibility(gridVisible.value)
-  applyAxesVisibility(axesVisible.value)
+  // scene.add(gridGroup)
+  // scene.add(axesHelper)
+  // scene.add(groundSelectionGroup)
+  // scene.add(dragPreviewGroup)
+  // gridHighlight = createGridHighlight()
+  // if (gridHighlight) {
+  //   scene.add(gridHighlight)
+  // }
+  // ensureFaceSnapEffectPool()
+  // applyGridVisibility(gridVisible.value)
+  // applyAxesVisibility(axesVisible.value)
   ensureFallbackLighting()
   clearInstancedMeshes()
   stopInstancedMeshSubscription = subscribeInstancedMeshes((mesh) => {
     attachInstancedMesh(mesh)
   })
 
-  applySkyboxSettingsToScene(skyboxSettings.value)
-  if (pendingSkyboxSettings) {
-    applySkyboxSettingsToScene(pendingSkyboxSettings)
-  }
+  // applySkyboxSettingsToScene(skyboxSettings.value)
+  // if (pendingSkyboxSettings) {
+  //   applySkyboxSettingsToScene(pendingSkyboxSettings)
+  // }
 
-  if (pendingEnvironmentSettings) {
-    void applyEnvironmentSettingsToScene(pendingEnvironmentSettings)
-  } else {
-    void applyEnvironmentSettingsToScene(initialEnvironment)
-  }
+  // if (pendingEnvironmentSettings) {
+  //   void applyEnvironmentSettingsToScene(pendingEnvironmentSettings)
+  // } else {
+  //   void applyEnvironmentSettingsToScene(initialEnvironment)
+  // }
 
   perspectiveCamera = new THREE.PerspectiveCamera(DEFAULT_PERSPECTIVE_FOV, width / height || 1, 0.1, 500)
   perspectiveCamera.position.set(DEFAULT_CAMERA_POSITION.x, DEFAULT_CAMERA_POSITION.y, DEFAULT_CAMERA_POSITION.z)
@@ -2886,65 +2886,65 @@ function initScene() {
   camera = perspectiveCamera
   activeCameraMode = 'perspective'
 
-  orthographicCamera = ensureOrthographicCamera(width, height)
-  orthographicCamera.position.copy(perspectiveCamera.position)
-  orthographicCamera.lookAt(new THREE.Vector3(DEFAULT_CAMERA_TARGET.x, DEFAULT_CAMERA_TARGET.y, DEFAULT_CAMERA_TARGET.z))
+  // orthographicCamera = ensureOrthographicCamera(width, height)
+  // orthographicCamera.position.copy(perspectiveCamera.position)
+  // orthographicCamera.lookAt(new THREE.Vector3(DEFAULT_CAMERA_TARGET.x, DEFAULT_CAMERA_TARGET.y, DEFAULT_CAMERA_TARGET.z))
 
-  applyCameraControlMode(cameraControlMode.value)
+  // applyCameraControlMode(cameraControlMode.value)
 
-  transformControls = new TransformControls(camera, canvasRef.value)
-  transformControls.addEventListener('dragging-changed', draggingChangedHandler as any)
-  transformControls.addEventListener('objectChange', handleTransformChange)
-  scene.add(transformControls.getHelper())
+  // transformControls = new TransformControls(camera, canvasRef.value)
+  // transformControls.addEventListener('dragging-changed', draggingChangedHandler as any)
+  // transformControls.addEventListener('objectChange', handleTransformChange)
+  // scene.add(transformControls.getHelper())
 
-  createPostProcessingPipeline(width, height)
+  // createPostProcessingPipeline(width, height)
 
-  bindControlsToCamera(camera)
-  if (cameraProjectionMode.value !== activeCameraMode && (cameraProjectionMode.value === 'orthographic' || cameraProjectionMode.value === 'perspective')) {
-    applyProjectionMode(cameraProjectionMode.value)
-  }
+  // bindControlsToCamera(camera)
+  // if (cameraProjectionMode.value !== activeCameraMode && (cameraProjectionMode.value === 'orthographic' || cameraProjectionMode.value === 'perspective')) {
+  //   applyProjectionMode(cameraProjectionMode.value)
+  // }
 
-  const gizmoContainer = gizmoContainerRef.value ?? viewportEl.value ?? undefined
-  gizmoControls = new ViewportGizmo(camera, renderer, {
-    container: gizmoContainer,
-    offset: { top: 0, right: 0, bottom: 0, left: 0 },
-    size: 70,
-  })
-  if (orbitControls) {
-    gizmoControls.attachControls(orbitControls as OrbitControls)
-  }
-  gizmoControls.update()
+  // const gizmoContainer = gizmoContainerRef.value ?? viewportEl.value ?? undefined
+  // gizmoControls = new ViewportGizmo(camera, renderer, {
+  //   container: gizmoContainer,
+  //   offset: { top: 0, right: 0, bottom: 0, left: 0 },
+  //   size: 70,
+  // })
+  // if (orbitControls) {
+  //   gizmoControls.attachControls(orbitControls as OrbitControls)
+  // }
+  // gizmoControls.update()
 
-  canvasRef.value.addEventListener('pointerdown', handlePointerDown, { capture: true })
-  canvasRef.value.addEventListener('dblclick', handleCanvasDoubleClick, { capture: true })
-  canvasRef.value.addEventListener('contextmenu', handleViewportContextMenu)
-  if (typeof window !== 'undefined') {
-    window.addEventListener('pointermove', handlePointerMove)
-    window.addEventListener('pointerup', handlePointerUp)
-    window.addEventListener('pointercancel', handlePointerCancel)
-  }
+  // canvasRef.value.addEventListener('pointerdown', handlePointerDown, { capture: true })
+  // canvasRef.value.addEventListener('dblclick', handleCanvasDoubleClick, { capture: true })
+  // canvasRef.value.addEventListener('contextmenu', handleViewportContextMenu)
+  // if (typeof window !== 'undefined') {
+  //   window.addEventListener('pointermove', handlePointerMove)
+  //   window.addEventListener('pointerup', handlePointerUp)
+  //   window.addEventListener('pointercancel', handlePointerCancel)
+  // }
 
-  resizeObserver = new ResizeObserver(() => {
-    if (!renderer || !viewportEl.value) return
-    const w = viewportEl.value.clientWidth
-    const h = viewportEl.value.clientHeight
-    if (w <= 0 || h <= 0) {
-      return
-    }
-    renderer.setSize(w, h)
-    composer?.setSize(w, h)
-    outlinePass?.setSize(w, h)
-    updateFxaaResolution(w, h)
-    if (perspectiveCamera) {
-      perspectiveCamera.aspect = h === 0 ? 1 : w / h
-      perspectiveCamera.updateProjectionMatrix()
-    }
-    if (orthographicCamera) {
-      updateOrthographicFrustum(orthographicCamera, w, h)
-    }
-    gizmoControls?.update()
-  })
-  resizeObserver.observe(viewportEl.value)
+  // resizeObserver = new ResizeObserver(() => {
+  //   if (!renderer || !viewportEl.value) return
+  //   const w = viewportEl.value.clientWidth
+  //   const h = viewportEl.value.clientHeight
+  //   if (w <= 0 || h <= 0) {
+  //     return
+  //   }
+  //   renderer.setSize(w, h)
+  //   composer?.setSize(w, h)
+  //   outlinePass?.setSize(w, h)
+  //   updateFxaaResolution(w, h)
+  //   if (perspectiveCamera) {
+  //     perspectiveCamera.aspect = h === 0 ? 1 : w / h
+  //     perspectiveCamera.updateProjectionMatrix()
+  //   }
+  //   if (orthographicCamera) {
+  //     updateOrthographicFrustum(orthographicCamera, w, h)
+  //   }
+  //   gizmoControls?.update()
+  // })
+  // resizeObserver.observe(viewportEl.value)
 
   renderClock.start()
   animate()
@@ -3070,10 +3070,10 @@ function ensureSunLight(): THREE.DirectionalLight | null {
   if (!sunDirectionalLight) {
     const light = new THREE.DirectionalLight(0xffffff, 1.05)
     light.name = 'SkySunLight'
-    light.castShadow = Boolean(shadowsEnabled.value)
-    light.shadow.mapSize.set(2048, 2048)
-    light.shadow.bias = -0.0001
-    light.shadow.normalBias = 0.02
+    // light.castShadow = Boolean(shadowsEnabled.value)
+    // light.shadow.mapSize.set(2048, 2048)
+    // light.shadow.bias = -0.0001
+    // light.shadow.normalBias = 0.02
     light.shadow.camera.near = 1
     light.shadow.camera.far = 400
     light.shadow.camera.left = -200
@@ -3468,82 +3468,82 @@ function animate() {
 
   let controlsUpdated = false
 
-  if (cameraTransitionState && orbitControls) {
-    const { startTime, duration, startPosition, startTarget, endPosition, endTarget } = cameraTransitionState
-    const elapsed = Math.max(performance.now() - startTime, 0)
-    const progress = duration === 0 ? 1 : Math.min(elapsed / duration, 1)
-    const eased = easeInOutCubic(progress)
+  // if (cameraTransitionState && orbitControls) {
+  //   const { startTime, duration, startPosition, startTarget, endPosition, endTarget } = cameraTransitionState
+  //   const elapsed = Math.max(performance.now() - startTime, 0)
+  //   const progress = duration === 0 ? 1 : Math.min(elapsed / duration, 1)
+  //   const eased = easeInOutCubic(progress)
 
-    cameraTransitionCurrentPosition.copy(startPosition).lerp(endPosition, eased)
-    cameraTransitionCurrentTarget.copy(startTarget).lerp(endTarget, eased)
+  //   cameraTransitionCurrentPosition.copy(startPosition).lerp(endPosition, eased)
+  //   cameraTransitionCurrentTarget.copy(startTarget).lerp(endTarget, eased)
 
-    const previousApplying = isApplyingCameraState
-    if (!previousApplying) {
-      isApplyingCameraState = true
-    }
+  //   const previousApplying = isApplyingCameraState
+  //   if (!previousApplying) {
+  //     isApplyingCameraState = true
+  //   }
 
-    camera.position.copy(cameraTransitionCurrentPosition)
-    orbitControls.target.copy(cameraTransitionCurrentTarget)
-    orbitControls.update()
+  //   camera.position.copy(cameraTransitionCurrentPosition)
+  //   orbitControls.target.copy(cameraTransitionCurrentTarget)
+  //   orbitControls.update()
 
-    if (!previousApplying) {
-      isApplyingCameraState = false
-    }
+  //   if (!previousApplying) {
+  //     isApplyingCameraState = false
+  //   }
 
-    controlsUpdated = true
+  //   controlsUpdated = true
 
-    if (perspectiveCamera && camera !== perspectiveCamera) {
-      perspectiveCamera.position.copy(cameraTransitionCurrentPosition)
-      perspectiveCamera.quaternion.copy(camera.quaternion)
-    }
+  //   if (perspectiveCamera && camera !== perspectiveCamera) {
+  //     perspectiveCamera.position.copy(cameraTransitionCurrentPosition)
+  //     perspectiveCamera.quaternion.copy(camera.quaternion)
+  //   }
 
-    if (progress >= 1) {
-      cameraTransitionState = null
-  clampCameraZoom()
-  clampCameraAboveGround()
-      if (perspectiveCamera && camera !== perspectiveCamera) {
-        perspectiveCamera.position.copy(camera.position)
-        perspectiveCamera.quaternion.copy(camera.quaternion)
-      }
-      const finalSnapshot = buildCameraState()
-      if (finalSnapshot) {
-        emit('updateCamera', finalSnapshot)
-      }
-    }
-  }
+  //   if (progress >= 1) {
+  //     cameraTransitionState = null
+  //     clampCameraZoom()
+  //     clampCameraAboveGround()
+  //     if (perspectiveCamera && camera !== perspectiveCamera) {
+  //       perspectiveCamera.position.copy(camera.position)
+  //       perspectiveCamera.quaternion.copy(camera.quaternion)
+  //     }
+  //     const finalSnapshot = buildCameraState()
+  //     if (finalSnapshot) {
+  //       emit('updateCamera', finalSnapshot)
+  //     }
+  //   }
+  // }
 
-  if (orbitControls && !controlsUpdated) {
-    orbitControls.update()
-  }
+  // if (orbitControls && !controlsUpdated) {
+  //   orbitControls.update()
+  // }
 
-  if (lightHelpersNeedingUpdate.size > 0 && scene) {
-    scene.updateMatrixWorld(true)
-    lightHelpersNeedingUpdate.forEach((helper) => {
-      helper.update?.()
-    })
-  }
+  // if (lightHelpersNeedingUpdate.size > 0 && scene) {
+  //   scene.updateMatrixWorld(true)
+  //   lightHelpersNeedingUpdate.forEach((helper) => {
+  //     helper.update?.()
+  //   })
+  // }
 
-  if (wallPreviewNeedsSync) {
-    wallPreviewNeedsSync = false
-    syncWallPreview()
-  }
-  updatePlaceholderOverlayPositions()
-  if (sky) {
-    sky.position.copy(camera.position)
-  }
-  gizmoControls?.cameraUpdate()
-  updateFaceSnapEffectIntensity()
-  if (effectiveDelta > 0 && effectRuntimeTickers.length) {
-    effectRuntimeTickers.forEach((tick) => {
-      try {
-        tick(effectiveDelta)
-      } catch (error) {
-        console.warn('[SceneViewport] Failed to advance effect runtime', error)
-      }
-    })
-  }
+  // if (wallPreviewNeedsSync) {
+  //   wallPreviewNeedsSync = false
+  //   syncWallPreview()
+  // }
+  // updatePlaceholderOverlayPositions()
+  // if (sky) {
+  //   sky.position.copy(camera.position)
+  // }
+  // gizmoControls?.cameraUpdate()
+  // updateFaceSnapEffectIntensity()
+  // if (effectiveDelta > 0 && effectRuntimeTickers.length) {
+  //   effectRuntimeTickers.forEach((tick) => {
+  //     try {
+  //       tick(effectiveDelta)
+  //     } catch (error) {
+  //       console.warn('[SceneViewport] Failed to advance effect runtime', error)
+  //     }
+  //   })
+  // }
   renderViewportFrame()
-  gizmoControls?.render()
+  // gizmoControls?.render()
   stats?.end()
 }
 
@@ -7091,27 +7091,27 @@ function syncSceneGraph() {
   const encountered = new Set<string>()
   reconcileNodeList(props.sceneNodes, rootGroup, encountered)
 
-  const removable: string[] = []
-  objectMap.forEach((_object, id) => {
-    if (!encountered.has(id)) {
-      removable.push(id)
-    }
-  })
+  // const removable: string[] = []
+  // objectMap.forEach((_object, id) => {
+  //   if (!encountered.has(id)) {
+  //     removable.push(id)
+  //   }
+  // })
 
-  removable.forEach((id) => {
-    if (objectMap.has(id)) {
-      disposeNodeSubtree(id)
-    }
-  })
+  // removable.forEach((id) => {
+  //   if (objectMap.has(id)) {
+  //     disposeNodeSubtree(id)
+  //   }
+  // })
 
   // 重新附加选择并确保工具模式正确
-  attachSelection(props.selectedNodeId, props.activeTool)
-  updateOutlineSelectionTargets()
+  // attachSelection(props.selectedNodeId, props.activeTool)
+  // updateOutlineSelectionTargets()
 
-  refreshPlaceholderOverlays()
-  ensureFallbackLighting()
-  refreshEffectRuntimeTickers()
-  updateSelectionHighlights()
+  // refreshPlaceholderOverlays()
+  // ensureFallbackLighting()
+  // refreshEffectRuntimeTickers()
+  // updateSelectionHighlights()
 }
 
 function disposeSceneNodes() {
@@ -7247,6 +7247,14 @@ function ensureFallbackLighting() {
     return
   }
 
+//   const ambientLight = new THREE.AmbientLight(0xffffff, 0.5); // 环境光
+// scene.add(ambientLight);
+
+// const directionalLight = new THREE.DirectionalLight(0xffffff, 1); // 平行光
+// directionalLight.position.set(5, 10, 7.5);
+// scene.add(directionalLight);
+
+
   if (!fallbackLightGroup) {
     fallbackLightGroup = new THREE.Group()
     fallbackLightGroup.name = 'FallbackLights'
@@ -7257,28 +7265,28 @@ function ensureFallbackLighting() {
   fallbackDirectionalLight = null
 
   let hasLight = false
-  rootGroup.traverse((child) => {
-    const candidate = child as THREE.Light & { isLight?: boolean }
-    if (candidate?.isLight) {
-      hasLight = true
-    }
-  })
+  // rootGroup.traverse((child) => {
+  //   const candidate = child as THREE.Light & { isLight?: boolean }
+  //   if (candidate?.isLight) {
+  //     hasLight = true
+  //   }
+  // })
 
   if (!hasLight) {
     const ambient = new THREE.AmbientLight(0xffffff, FALLBACK_AMBIENT_INTENSITY)
     fallbackLightGroup.add(ambient)
     if (!sunDirectionalLight && !isSunLightSuppressed) {
       const directional = new THREE.DirectionalLight(0xffffff, FALLBACK_DIRECTIONAL_INTENSITY)
-      directional.castShadow = true
-      directional.shadow.mapSize.set(FALLBACK_DIRECTIONAL_SHADOW_MAP_SIZE, FALLBACK_DIRECTIONAL_SHADOW_MAP_SIZE)
-      directional.shadow.normalBias = 0.02
-      directional.shadow.bias = -0.0001
+      // directional.castShadow = true
+      // directional.shadow.mapSize.set(FALLBACK_DIRECTIONAL_SHADOW_MAP_SIZE, FALLBACK_DIRECTIONAL_SHADOW_MAP_SIZE)
+      // directional.shadow.normalBias = 0.02
+      // directional.shadow.bias = -0.0001
       directional.target.position.set(0, 0, 0)
       fallbackLightGroup.add(directional)
       fallbackLightGroup.add(directional.target)
       fallbackDirectionalLight = directional
     }
-    applySunDirectionToFallbackLight()
+    applySunDirectionToFallbackLight() 
   }
 }
 
@@ -7637,179 +7645,179 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
   return object
 }
 
-function applyTransformSpace(tool: EditorTool) {
-  if (!transformControls) return
+// function applyTransformSpace(tool: EditorTool) {
+//   if (!transformControls) return
 
-  if (tool === 'translate' || tool === 'scale') {
-    transformControls.setSpace('local')
-  } else {
-    transformControls.setSpace('world')
-  }
-}
+//   if (tool === 'translate' || tool === 'scale') {
+//     transformControls.setSpace('local')
+//   } else {
+//     transformControls.setSpace('world')
+//   }
+// }
 
-function attachSelection(nodeId: string | null, tool: EditorTool = props.activeTool) {
-  const locked = nodeId ? sceneStore.isNodeSelectionLocked(nodeId) : false
-  const target = !locked && nodeId ? objectMap.get(nodeId) ?? null : null
-  updateOutlineSelectionTargets()
+// function attachSelection(nodeId: string | null, tool: EditorTool = props.activeTool) {
+//   const locked = nodeId ? sceneStore.isNodeSelectionLocked(nodeId) : false
+//   const target = !locked && nodeId ? objectMap.get(nodeId) ?? null : null
+//   updateOutlineSelectionTargets()
 
-  if (!nodeId || locked || !target) {
-    updateGridHighlight(null)
-  } else {
-    updateGridHighlightFromObject(target)
-  }
+//   if (!nodeId || locked || !target) {
+//     updateGridHighlight(null)
+//   } else {
+//     updateGridHighlightFromObject(target)
+//   }
 
-  if (!transformControls) return
+//   if (!transformControls) return
 
-  if (!nodeId || locked) {
-    transformControls.detach()
-    return
-  }
+//   if (!nodeId || locked) {
+//     transformControls.detach()
+//     return
+//   }
 
-  if (!target) {
-    transformControls.detach()
-    return
-  }
-  if (tool === 'select') {
-    transformControls.detach()
-    return
-  }
+//   if (!target) {
+//     transformControls.detach()
+//     return
+//   }
+//   if (tool === 'select') {
+//     transformControls.detach()
+//     return
+//   }
 
-  // 确保在附加前设置正确的模式
-      transformControls.setSpace('local')
-  transformControls.setMode(tool)
-  transformControls.attach(target)
-}
-
-
-function updateToolMode(tool: EditorTool) {
-  if (!transformControls) return
-
-  transformControls.enabled = tool !== 'select'
-
-  if (tool === 'select') {
-    transformControls.detach()
-  } else {
-    applyTransformSpace(tool)
-    transformControls.setMode(tool)
-  }
-
-  if (props.selectedNodeId) {
-    attachSelection(props.selectedNodeId, tool)
-  } else {
-    updateGridHighlight(null)
-  }
-}
+//   // 确保在附加前设置正确的模式
+//       transformControls.setSpace('local')
+//   transformControls.setMode(tool)
+//   transformControls.attach(target)
+// }
 
 
-function isEditableKeyboardTarget(target: EventTarget | null): boolean {
-  const element = target as HTMLElement | null
-  if (!element) return false
-  const tag = element.tagName
-  return element.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
-}
+// function updateToolMode(tool: EditorTool) {
+//   if (!transformControls) return
 
-function shouldHandleViewportShortcut(event: KeyboardEvent): boolean {
-  if (event.defaultPrevented) return false
-  if (isEditableKeyboardTarget(event.target)) return false
-  if (props.previewActive) return false
-  return true
-}
+//   transformControls.enabled = tool !== 'select'
 
-function handleViewportShortcut(event: KeyboardEvent) {
-  if (!shouldHandleViewportShortcut(event)) return
-  let handled = false
+//   if (tool === 'select') {
+//     transformControls.detach()
+//   } else {
+//     applyTransformSpace(tool)
+//     transformControls.setMode(tool)
+//   }
 
-  if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
-    switch (event.code) {
-      case 'Escape':
-        if (cancelActiveBuildOperation()) {
-          handled = true
-          break
-        }
-        if (props.selectedNodeId) {
-          emitSelectionChange([])
-          handled = true
-        }
-        break
-      default: {
-        const tool = transformToolKeyMap.get(event.code)
-        if (tool) {
-          emit('changeTool', tool)
-          handled = true
-        }
-        break
-      }
-    }
-  }
+//   if (props.selectedNodeId) {
+//     attachSelection(props.selectedNodeId, tool)
+//   } else {
+//     updateGridHighlight(null)
+//   }
+// }
 
-  if (handled) {
-    event.preventDefault()
-    event.stopPropagation()
-  }
-}
+
+// function isEditableKeyboardTarget(target: EventTarget | null): boolean {
+//   const element = target as HTMLElement | null
+//   if (!element) return false
+//   const tag = element.tagName
+//   return element.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+// }
+
+// function shouldHandleViewportShortcut(event: KeyboardEvent): boolean {
+//   if (event.defaultPrevented) return false
+//   if (isEditableKeyboardTarget(event.target)) return false
+//   if (props.previewActive) return false
+//   return true
+// }
+
+// function handleViewportShortcut(event: KeyboardEvent) {
+//   if (!shouldHandleViewportShortcut(event)) return
+//   let handled = false
+
+//   if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+//     switch (event.code) {
+//       case 'Escape':
+//         if (cancelActiveBuildOperation()) {
+//           handled = true
+//           break
+//         }
+//         if (props.selectedNodeId) {
+//           emitSelectionChange([])
+//           handled = true
+//         }
+//         break
+//       default: {
+//         const tool = transformToolKeyMap.get(event.code)
+//         if (tool) {
+//           emit('changeTool', tool)
+//           handled = true
+//         }
+//         break
+//       }
+//     }
+//   }
+
+//   if (handled) {
+//     event.preventDefault()
+//     event.stopPropagation()
+//   }
+// }
 
 onMounted(() => {
   initScene()
-  updateToolMode(props.activeTool)
-  attachSelection(props.selectedNodeId)
-  updateOutlineSelectionTargets()
-  updateSelectionHighlights()
-  window.addEventListener('keyup', handleViewportShortcut, { capture: true })
-  window.addEventListener('keydown', handleAltOverrideKeyDown, { capture: true })
-  window.addEventListener('keyup', handleAltOverrideKeyUp, { capture: true })
-  window.addEventListener('blur', handleAltOverrideBlur, { capture: true })
-  window.addEventListener('keydown', handleFaceSnapCommitKeyDown, { capture: true })
-  window.addEventListener('keyup', handleFaceSnapCommitKeyUp, { capture: true })
-  window.addEventListener('blur', handleFaceSnapCommitBlur, { capture: true })
-  if (typeof window !== 'undefined') {
-    window.addEventListener('resize', handleViewportOverlayResize, { passive: true })
-  }
-  scheduleToolbarUpdate()
-  if (viewportEl.value && typeof ResizeObserver !== 'undefined') {
-    viewportResizeObserver = new ResizeObserver(() => scheduleToolbarUpdate())
-    viewportResizeObserver.observe(viewportEl.value)
-  }
+  // updateToolMode(props.activeTool)
+  // attachSelection(props.selectedNodeId)
+  // updateOutlineSelectionTargets()
+  // updateSelectionHighlights()
+  // window.addEventListener('keyup', handleViewportShortcut, { capture: true })
+  // window.addEventListener('keydown', handleAltOverrideKeyDown, { capture: true })
+  // window.addEventListener('keyup', handleAltOverrideKeyUp, { capture: true })
+  // window.addEventListener('blur', handleAltOverrideBlur, { capture: true })
+  // window.addEventListener('keydown', handleFaceSnapCommitKeyDown, { capture: true })
+  // window.addEventListener('keyup', handleFaceSnapCommitKeyUp, { capture: true })
+  // window.addEventListener('blur', handleFaceSnapCommitBlur, { capture: true })
+  // if (typeof window !== 'undefined') {
+  //   window.addEventListener('resize', handleViewportOverlayResize, { passive: true })
+  // }
+  // scheduleToolbarUpdate()
+  // if (viewportEl.value && typeof ResizeObserver !== 'undefined') {
+  //   viewportResizeObserver = new ResizeObserver(() => scheduleToolbarUpdate())
+  //   viewportResizeObserver.observe(viewportEl.value)
+  // }
 
   sceneStore.ensureCurrentSceneLoaded({ skipComponentSync: true }).then(() => {
     syncSceneGraph()
   })
 })
 
-onBeforeUnmount(() => {
-  if (nodePickerStore.isActive) {
-    nodePickerStore.cancelActivePick('user')
-  }
-  disposeSceneNodes()
-  disposeScene()
-  disposeCachedTextures()
-  window.removeEventListener('keyup', handleViewportShortcut, { capture: true })
-  window.removeEventListener('keydown', handleAltOverrideKeyDown, { capture: true })
-  window.removeEventListener('keyup', handleAltOverrideKeyUp, { capture: true })
-  window.removeEventListener('blur', handleAltOverrideBlur, { capture: true })
-  window.removeEventListener('keydown', handleFaceSnapCommitKeyDown, { capture: true })
-  window.removeEventListener('keyup', handleFaceSnapCommitKeyUp, { capture: true })
-  window.removeEventListener('blur', handleFaceSnapCommitBlur, { capture: true })
-  if (typeof window !== 'undefined') {
-    window.removeEventListener('resize', handleViewportOverlayResize)
-  }
-  if (viewportResizeObserver) {
-    viewportResizeObserver.disconnect()
-    viewportResizeObserver = null
-  }
-  if (transformToolbarResizeObserver) {
-    transformToolbarResizeObserver.disconnect()
-    transformToolbarResizeObserver = null
-  }
-  if (viewportToolbarResizeObserver) {
-    viewportToolbarResizeObserver.disconnect()
-    viewportToolbarResizeObserver = null
-  }
-  cancelSurfaceBuildSession()
-})
+// onBeforeUnmount(() => {
+//   if (nodePickerStore.isActive) {
+//     nodePickerStore.cancelActivePick('user')
+//   }
+//   disposeSceneNodes()
+//   disposeScene()
+//   disposeCachedTextures()
+//   window.removeEventListener('keyup', handleViewportShortcut, { capture: true })
+//   window.removeEventListener('keydown', handleAltOverrideKeyDown, { capture: true })
+//   window.removeEventListener('keyup', handleAltOverrideKeyUp, { capture: true })
+//   window.removeEventListener('blur', handleAltOverrideBlur, { capture: true })
+//   window.removeEventListener('keydown', handleFaceSnapCommitKeyDown, { capture: true })
+//   window.removeEventListener('keyup', handleFaceSnapCommitKeyUp, { capture: true })
+//   window.removeEventListener('blur', handleFaceSnapCommitBlur, { capture: true })
+//   if (typeof window !== 'undefined') {
+//     window.removeEventListener('resize', handleViewportOverlayResize)
+//   }
+//   if (viewportResizeObserver) {
+//     viewportResizeObserver.disconnect()
+//     viewportResizeObserver = null
+//   }
+//   if (transformToolbarResizeObserver) {
+//     transformToolbarResizeObserver.disconnect()
+//     transformToolbarResizeObserver = null
+//   }
+//   if (viewportToolbarResizeObserver) {
+//     viewportToolbarResizeObserver.disconnect()
+//     viewportToolbarResizeObserver = null
+//   }
+//   cancelSurfaceBuildSession()
+// })
 
-watch(cameraControlMode, (mode) => {
-  applyCameraControlMode(mode)
-})
+// watch(cameraControlMode, (mode) => {
+//   applyCameraControlMode(mode)
+// })
 
 watch(
   () => props.sceneNodes,
@@ -7826,13 +7834,13 @@ watch(
   }
 )
 
-watch(
-  () => props.cameraState,
-  (state) => {
-    applyCameraState(state)
-  },
-  { deep: true }
-)
+// watch(
+//   () => props.cameraState,
+//   (state) => {
+//     applyCameraState(state)
+//   },
+//   { deep: true }
+// )
 
 // watch(
 //   () => sceneStore.currentSceneId,
@@ -7842,162 +7850,162 @@ watch(
 //     })
 //   }
 // )
-watch(
-  () => [panelVisibility.value.hierarchy, panelPlacement.value.hierarchy],
-  () => {
-    scheduleToolbarUpdate()
-  }
-)
+// watch(
+//   () => [panelVisibility.value.hierarchy, panelPlacement.value.hierarchy],
+//   () => {
+//     scheduleToolbarUpdate()
+//   }
+// )
 
-watch(
-  () => [panelVisibility.value.inspector, panelPlacement.value.inspector],
-  () => {
-    scheduleToolbarUpdate()
-  }
-)
+// watch(
+//   () => [panelVisibility.value.inspector, panelPlacement.value.inspector],
+//   () => {
+//     scheduleToolbarUpdate()
+//   }
+// )
 
-watch(transformToolbarHostRef, (host) => {
-  if (transformToolbarResizeObserver) {
-    transformToolbarResizeObserver.disconnect()
-    transformToolbarResizeObserver = null
-  }
-  if (host && typeof ResizeObserver !== 'undefined') {
-    transformToolbarResizeObserver = new ResizeObserver(() => scheduleToolbarUpdate())
-    transformToolbarResizeObserver.observe(host)
-  }
-  scheduleToolbarUpdate()
-})
+// watch(transformToolbarHostRef, (host) => {
+//   if (transformToolbarResizeObserver) {
+//     transformToolbarResizeObserver.disconnect()
+//     transformToolbarResizeObserver = null
+//   }
+//   if (host && typeof ResizeObserver !== 'undefined') {
+//     transformToolbarResizeObserver = new ResizeObserver(() => scheduleToolbarUpdate())
+//     transformToolbarResizeObserver.observe(host)
+//   }
+//   scheduleToolbarUpdate()
+// })
 
-watch(
-  () => nodePickerStore.isActive,
-  (active) => {
-    if (!active) {
-      hideNodePickerHighlight()
-    }
-  },
-)
+// watch(
+//   () => nodePickerStore.isActive,
+//   (active) => {
+//     if (!active) {
+//       hideNodePickerHighlight()
+//     }
+//   },
+// )
 
-watch(viewportToolbarHostRef, (host) => {
-  if (viewportToolbarResizeObserver) {
-    viewportToolbarResizeObserver.disconnect()
-    viewportToolbarResizeObserver = null
-  }
-  if (host && typeof ResizeObserver !== 'undefined') {
-    viewportToolbarResizeObserver = new ResizeObserver(() => scheduleToolbarUpdate())
-    viewportToolbarResizeObserver.observe(host)
-  }
-  scheduleToolbarUpdate()
-})
+// watch(viewportToolbarHostRef, (host) => {
+//   if (viewportToolbarResizeObserver) {
+//     viewportToolbarResizeObserver.disconnect()
+//     viewportToolbarResizeObserver = null
+//   }
+//   if (host && typeof ResizeObserver !== 'undefined') {
+//     viewportToolbarResizeObserver = new ResizeObserver(() => scheduleToolbarUpdate())
+//     viewportToolbarResizeObserver.observe(host)
+//   }
+//   scheduleToolbarUpdate()
+// })
 
-watch(statsHostRef, () => {
-  updateStatsVisibility()
-})
+// watch(statsHostRef, () => {
+//   updateStatsVisibility()
+// })
 
-watch(
-  () => props.showStats,
-  () => {
-    updateStatsVisibility()
-  },
-)
+// watch(
+//   () => props.showStats,
+//   () => {
+//     updateStatsVisibility()
+//   },
+// )
 
-watch(shadowsEnabled, () => {
-  applyRendererShadowSetting()
-})
+// watch(shadowsEnabled, () => {
+//   applyRendererShadowSetting()
+// })
 
-watch(
-  () => props.selectedNodeId,
-  (id) => {
-    attachSelection(id)
-    updateOutlineSelectionTargets()
-    updateSelectionHighlights()
-    refreshEffectRuntimeTickers()
-  }
-)
+// watch(
+//   () => props.selectedNodeId,
+//   (id) => {
+//     attachSelection(id)
+//     updateOutlineSelectionTargets()
+//     updateSelectionHighlights()
+//     refreshEffectRuntimeTickers()
+//   }
+// )
 
-watch(
-  () => sceneStore.selectedNodeIds.slice(),
-  () => {
-    updateOutlineSelectionTargets()
-    updateSelectionHighlights()
-    refreshEffectRuntimeTickers()
-  }
-)
+// watch(
+//   () => sceneStore.selectedNodeIds.slice(),
+//   () => {
+//     updateOutlineSelectionTargets()
+//     updateSelectionHighlights()
+//     refreshEffectRuntimeTickers()
+//   }
+// )
 
-watch(
-  () => props.activeTool,
-  (tool) => {
-    updateToolMode(tool)
-  }
-)
+// watch(
+//   () => props.activeTool,
+//   (tool) => {
+//     updateToolMode(tool)
+//   }
+// )
 
-watch(activeBuildTool, (tool) => {
-  if (tool !== 'ground') {
-    groundSelectionDragState = null
-    clearGroundSelection()
-    restoreOrbitAfterGroundSelection()
-  }
-  if (tool !== 'wall') {
-    cancelWallDrag()
-    clearWallBuildSession()
-    restoreOrbitAfterWallBuild()
-  }
-  if (tool !== 'surface') {
-    cancelSurfaceBuildSession()
-  }
-})
+// watch(activeBuildTool, (tool) => {
+//   if (tool !== 'ground') {
+//     groundSelectionDragState = null
+//     clearGroundSelection()
+//     restoreOrbitAfterGroundSelection()
+//   }
+//   if (tool !== 'wall') {
+//     cancelWallDrag()
+//     clearWallBuildSession()
+//     restoreOrbitAfterWallBuild()
+//   }
+//   if (tool !== 'surface') {
+//     cancelSurfaceBuildSession()
+//   }
+// })
 
-watch(
-  () => props.focusRequestId,
-  (token, previous) => {
-    if (!props.focusNodeId) {
-      return
-    }
-    if (!token || token === previous) {
-      return
-    }
-    if (focusCameraOnNode(props.focusNodeId)) {
-      sceneStore.clearCameraFocusRequest(props.focusNodeId)
-    }
-  }
-)
+// watch(
+//   () => props.focusRequestId,
+//   (token, previous) => {
+//     if (!props.focusNodeId) {
+//       return
+//     }
+//     if (!token || token === previous) {
+//       return
+//     }
+//     if (focusCameraOnNode(props.focusNodeId)) {
+//       sceneStore.clearCameraFocusRequest(props.focusNodeId)
+//     }
+//   }
+// )
 
-watch(
-  () => props.highlightRequestId,
-  (token, previous) => {
-    if (!props.highlightNodeId) {
-      return
-    }
-    if (typeof token !== 'number' || token === 0) {
-      return
-    }
-    if (token === previous) {
-      return
-    }
-    triggerNodeFlash(props.highlightNodeId, token)
-  }
-)
+// watch(
+//   () => props.highlightRequestId,
+//   (token, previous) => {
+//     if (!props.highlightNodeId) {
+//       return
+//     }
+//     if (typeof token !== 'number' || token === 0) {
+//       return
+//     }
+//     if (token === previous) {
+//       return
+//     }
+//     triggerNodeFlash(props.highlightNodeId, token)
+//   }
+// )
 
-watch(
-  () => props.highlightNodeId,
-  (nodeId) => {
-    if (!nodeId) {
-      clearNodeFlashTimers()
-      hideNodeFlashIndicator()
-      nodeFlashActiveToken = null
-    }
-  }
-)
+// watch(
+//   () => props.highlightNodeId,
+//   (nodeId) => {
+//     if (!nodeId) {
+//       clearNodeFlashTimers()
+//       hideNodeFlashIndicator()
+//       nodeFlashActiveToken = null
+//     }
+//   }
+// )
 
-defineExpose<SceneViewportHandle>({
-  exportScene,
-  captureThumbnail,
-  captureScreenshot
-})
+// defineExpose<SceneViewportHandle>({
+//   exportScene,
+//   captureThumbnail,
+//   captureScreenshot
+// })
 </script>
 
 <template>
   <div ref="viewportEl" class="scene-viewport">
-    <div ref="transformToolbarHostRef" class="transform-toolbar-host" :style="transformToolbarStyle">
+    <!-- <div ref="transformToolbarHostRef" class="transform-toolbar-host" :style="transformToolbarStyle">
       <TransformToolbar
         :active-tool="props.activeTool"
         @change-tool="emit('changeTool', $event)"
@@ -8022,10 +8030,10 @@ defineExpose<SceneViewportHandle>({
         @toggle-camera-control="handleToggleCameraControlMode"
         @change-build-tool="handleBuildToolChange"
       />
-    </div>
-    <div ref="gizmoContainerRef" class="viewport-gizmo-container"></div>
+    </div> -->
+    <!-- <div ref="gizmoContainerRef" class="viewport-gizmo-container"></div> -->
     <div ref="statsHostRef" class="stats-host" v-show="props.showStats"></div>
-    <div
+    <!-- <div
       ref="surfaceRef"
       class="viewport-surface"
       data-scene-viewport="true"
@@ -8034,11 +8042,11 @@ defineExpose<SceneViewportHandle>({
       @dragover="handleViewportDragOver"
       @dragleave="handleViewportDragLeave"
       @drop="handleViewportDrop"
-    >
-      <div ref="overlayContainerRef" class="placeholder-overlay-layer">
+    > -->
+      <!-- <div ref="overlayContainerRef" class="placeholder-overlay-layer">
         <PlaceholderOverlayList :overlays="placeholderOverlayList" />
-      </div>
-      <GroundToolbar
+      </div> -->
+      <!-- <GroundToolbar
         v-if="groundSelection"
         :visible="isGroundToolbarVisible"
         :left="groundSelectionToolbarStyle.left"
@@ -8049,16 +8057,16 @@ defineExpose<SceneViewportHandle>({
         @lower="handleGroundLower"
         @reset="handleGroundReset"
         @texture="handleGroundTextureSelectRequest"
-      />
+      /> -->
       <canvas ref="canvasRef" class="viewport-canvas" />
-    </div>
-    <input
+    <!-- </div> -->
+    <!-- <input
       ref="groundTextureInputRef"
       class="ground-texture-input"
       type="file"
       accept="image/*"
       @change="handleGroundTextureFileChange"
-    >
+    > -->
   </div>
 </template>
 
