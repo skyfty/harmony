@@ -1445,12 +1445,6 @@ async function handleEditorViewShortcut(event: KeyboardEvent) {
     }
   }
 
-  console.log('Shortcut event:', event.code, {
-    ctrl: event.ctrlKey,
-    meta: event.metaKey,
-    shift: event.shiftKey,
-    alt: event.altKey,
-  })
   if (!handled && (event.ctrlKey || event.metaKey) && !event.altKey) {
     switch (event.code) {
       case 'KeyZ': {
