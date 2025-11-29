@@ -122,7 +122,7 @@
     "showAxes": false,
     "cameraProjection": "perspective",
     "cameraControlMode": "orbit",
-    "shadowsEnabled": true,
+    "shadowsEnabled": false,
     "skybox": {
       "presetId": "clear-day",
       "exposure": 0.6,
