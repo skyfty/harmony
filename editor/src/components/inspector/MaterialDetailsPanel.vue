@@ -8,7 +8,6 @@ import {
   type SceneMaterialProps,
   type SceneMaterialSide,
   type SceneMaterialTextureRef,
-  type SceneMaterialTextureSlot,
   type SceneMaterialTextureSettings,
   cloneTextureSettings,
   createTextureSettings,
@@ -16,7 +15,7 @@ import {
 import TexturePanel from './TexturePanel.vue'
 import AssetDialog from '@/components/common/AssetDialog.vue'
 import type { ProjectAsset } from '@/types/project-asset'
-import {type SceneMaterialType} from '@harmony/schema'
+import {type SceneMaterialType, type SceneMaterialTextureSlot} from '@harmony/schema'
 
 type TextureMapState = Record<SceneMaterialTextureSlot, SceneMaterialTextureRef | null>
 

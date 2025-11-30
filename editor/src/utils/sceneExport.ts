@@ -4,9 +4,10 @@ import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js'
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
-import type { SceneMaterial, SceneMaterialTextureSlot, SceneNodeMaterial } from '@/types/material'
+import type { SceneMaterial, SceneNodeMaterial } from '@/types/material'
 import type {
   SceneNode,
+  SceneMaterialTextureSlot,
   SceneNodeComponentState,
   SceneNodeComponentMap,
   SceneJsonExportDocument,

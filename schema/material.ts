@@ -45,7 +45,7 @@ export const MATERIAL_TEXTURE_ASSIGNMENTS: Record<
   displacement: { key: 'displacementMap' },
 };
 
-const MATERIAL_TEXTURE_SLOTS = Object.keys(MATERIAL_TEXTURE_ASSIGNMENTS) as SceneMaterialTextureSlot[];
+export const MATERIAL_TEXTURE_SLOTS = Object.keys(MATERIAL_TEXTURE_ASSIGNMENTS) as SceneMaterialTextureSlot[];
 
 const MATERIAL_CLONED_KEY = '__harmonyMaterialCloned';
 const MATERIAL_ORIGINAL_KEY = '__harmonyMaterialOriginal';

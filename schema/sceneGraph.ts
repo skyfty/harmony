@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { AssetCacheEntry } from './assetCache';
-import { SceneMaterialFactory } from './material';
+import { SceneMaterialFactory, MATERIAL_TEXTURE_SLOTS } from './material';
 import type { SceneMaterialFactoryOptions } from './material';
 import { createPrimitiveGeometry } from './geometry';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
@@ -59,16 +59,6 @@ type SceneNodeWithExtras = SceneNode & {
   components?: SceneNodeComponentMap;
   editorFlags?: SceneNodeEditorFlags;
 };
-
-const MATERIAL_TEXTURE_SLOTS: SceneMaterialTextureSlot[] = [
-  'albedo',
-  'normal',
-  'metalness',
-  'roughness',
-  'ao',
-  'emissive',
-  'displacement',
-];
 
 export interface SceneGraphBuildResult {
   root: THREE.Group;

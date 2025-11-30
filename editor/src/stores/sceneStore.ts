@@ -68,6 +68,7 @@ import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SceneViewportSettings } from '@/types/scene-viewport-settings'
 import type {
   ClipboardEntry,
+  SceneMaterialTextureSlot,
   SceneSkyboxSettings,
   CameraControlMode,
   CameraProjection,
@@ -80,13 +81,16 @@ import type {
   SceneMaterial,
   SceneMaterialProps,
   SceneMaterialTextureRef,
-  SceneMaterialTextureSlot,
   SceneMaterialType,
   SceneNodeMaterial,
 } from '@/types/material'
 
-import { cloneTextureSettings } from '@/types/material'
-import { DEFAULT_SCENE_MATERIAL_ID, DEFAULT_SCENE_MATERIAL_TYPE } from '@/types/material'
+import {
+  cloneTextureSettings,
+  DEFAULT_SCENE_MATERIAL_ID,
+  DEFAULT_SCENE_MATERIAL_TYPE,
+  MATERIAL_TEXTURE_SLOTS,
+} from '@/types/material'
 import { behaviorMapToList, cloneBehaviorList, createBehaviorSequenceId } from '@schema/behaviors/definitions'
 import { findObjectByPath } from '@schema/modelAssetLoader'
 
@@ -287,8 +291,6 @@ declare module '@/types/scene-state' {
 const OPACITY_EPSILON = 1e-3
 
 let workspaceScopeStopHandle: WatchStopHandle | null = null
-
-const MATERIAL_TEXTURE_SLOTS: SceneMaterialTextureSlot[] = ['albedo', 'normal', 'metalness', 'roughness', 'ao', 'emissive', 'displacement']
 
 type MaterialTextureMap = Partial<Record<SceneMaterialTextureSlot, SceneMaterialTextureRef | null>>
 
