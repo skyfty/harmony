@@ -1100,6 +1100,9 @@ function updateFaceSnapCommitState(active: boolean) {
 }
 
 function handleFaceSnapCommitKeyDown(event: KeyboardEvent) {
+  if (props.activeTool !== 'translate') {
+    return
+  }
   if (event.key !== 'Shift') {
     return
   }
@@ -1113,6 +1116,9 @@ function handleFaceSnapCommitKeyDown(event: KeyboardEvent) {
 }
 
 function handleFaceSnapCommitKeyUp(event: KeyboardEvent) {
+  if (props.activeTool !== 'translate') {
+    return
+  }
   if (event.key !== 'Shift') {
     return
   }
@@ -1120,6 +1126,9 @@ function handleFaceSnapCommitKeyUp(event: KeyboardEvent) {
 }
 
 function handleFaceSnapCommitBlur() {
+  if (props.activeTool !== 'translate') {
+    return
+  }
   updateFaceSnapCommitState(false)
 }
 
@@ -1173,6 +1182,21 @@ const faceSnapParentScale = new THREE.Vector3()
 const faceSnapDefaultNormal = new THREE.Vector3(0, 0, 1)
 const faceSnapExcludedIds = new Set<string>()
 let isFaceSnapCommitActive = false
+const FACE_SNAP_EARLY_PREVIEW_DISTANCE = FACE_SNAP_PREVIEW_DISTANCE * 2
+const FACE_SNAP_DISTANCE_LABEL_CANVAS_WIDTH = 256
+const FACE_SNAP_DISTANCE_LABEL_CANVAS_HEIGHT = 128
+const FACE_SNAP_DISTANCE_UNIT = 'm'
+const FACE_SNAP_COLOR_NEAR = new THREE.Color(0x32ffe0)
+const FACE_SNAP_COLOR_FAR = new THREE.Color(0xff5a36)
+const FACE_SNAP_LINE_COLOR_NEAR = new THREE.Color(0x18c9ff)
+const FACE_SNAP_LINE_COLOR_FAR = new THREE.Color(0xffa94d)
+const FACE_SNAP_GAP_UPDATE_THROTTLE_MS = 32
+const FACE_SNAP_EFFECT_POSITION_DAMPING = 18
+const FACE_SNAP_EFFECT_SCALE_DAMPING = 14
+const FACE_SNAP_EFFECT_OPACITY_DAMPING = 12
+const faceSnapColorScratch = new THREE.Color()
+const faceSnapGapStart = new THREE.Vector3()
+const faceSnapGapEnd = new THREE.Vector3()
 type AxisKey = 'x' | 'y' | 'z'
 type SnapDirection = 1 | -1
 const FACE_SNAP_AXES: AxisKey[] = ['x', 'y', 'z']
@@ -1224,11 +1248,25 @@ const faceSnapAxisResults: Record<AxisKey, FaceSnapAxisResult> = {
 type FaceSnapEffectIndicator = {
   plane: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>
   material: THREE.MeshBasicMaterial
+  border: THREE.LineLoop<THREE.BufferGeometry, THREE.LineBasicMaterial>
+  gapLine: THREE.Line<THREE.BufferGeometry, THREE.LineDashedMaterial>
+  gapLineMaterial: THREE.LineDashedMaterial
+  gapMarkers: [THREE.Mesh, THREE.Mesh]
+  label: THREE.Sprite | null
+  labelCanvas: HTMLCanvasElement | null
+  labelContext: CanvasRenderingContext2D | null
+  labelTexture: THREE.CanvasTexture | null
   targetOpacity: number
+  renderOpacity: number
   closeness: number
   baseScale: THREE.Vector2
+  renderScale: THREE.Vector2
+  targetPosition: THREE.Vector3
+  renderPosition: THREE.Vector3
   pulseSeed: number
   active: boolean
+  lastGapUpdate: number
+  lastGapValue: number
 }
 const faceSnapEffectIndicators: Record<AxisKey, FaceSnapEffectIndicator | null> = {
   x: null,
@@ -2001,23 +2039,295 @@ function ensureFaceSnapEffectIndicator(axis: AxisKey): FaceSnapEffectIndicator |
   const plane = new THREE.Mesh(geometry, material)
   plane.visible = false
   plane.renderOrder = 1024
+
+  const borderGeometry = new THREE.BufferGeometry()
+  borderGeometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute([
+      -0.5, 0, -0.5,
+      0.5, 0, -0.5,
+      0.5, 0, 0.5,
+      -0.5, 0, 0.5,
+    ], 3),
+  )
+  const borderMaterial = new THREE.LineBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    depthTest: false,
+    linewidth: 2.5,
+  })
+  borderMaterial.toneMapped = false
+  const border = new THREE.LineLoop(borderGeometry, borderMaterial)
+  border.position.z = 1e-3
+  border.renderOrder = plane.renderOrder + 1
+  plane.add(border)
+
+  const gapLineGeometry = new THREE.BufferGeometry()
+  gapLineGeometry.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(6), 3))
+  const gapLineMaterial = new THREE.LineDashedMaterial({
+    color: FACE_SNAP_LINE_COLOR_NEAR.getHex(),
+    transparent: true,
+    opacity: 0,
+    gapSize: 0.15,
+    dashSize: 0.3,
+    depthTest: false,
+    depthWrite: false,
+    linewidth: 2,
+  })
+  gapLineMaterial.toneMapped = false
+  const gapLine = new THREE.Line(gapLineGeometry, gapLineMaterial)
+  gapLine.visible = false
+  gapLine.renderOrder = plane.renderOrder + 2
+  gapLine.computeLineDistances()
+
+  const createGapMarker = () => {
+    const sphere = new THREE.Mesh(
+      new THREE.SphereGeometry(0.08, 16, 12),
+      new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        depthTest: false,
+      }),
+    )
+    sphere.renderOrder = gapLine.renderOrder + 1
+    sphere.visible = false
+    return sphere
+  }
+  const gapMarkers = [createGapMarker(), createGapMarker()] as [THREE.Mesh, THREE.Mesh]
+
+  let label: THREE.Sprite | null = null
+  let labelCanvas: HTMLCanvasElement | null = null
+  let labelContext: CanvasRenderingContext2D | null = null
+  let labelTexture: THREE.CanvasTexture | null = null
+  if (typeof document !== 'undefined') {
+    labelCanvas = document.createElement('canvas')
+    labelCanvas.width = FACE_SNAP_DISTANCE_LABEL_CANVAS_WIDTH
+    labelCanvas.height = FACE_SNAP_DISTANCE_LABEL_CANVAS_HEIGHT
+    labelContext = labelCanvas.getContext('2d')
+    if (labelContext) {
+      labelTexture = new THREE.CanvasTexture(labelCanvas)
+      labelTexture.needsUpdate = true
+      const spriteMaterial = new THREE.SpriteMaterial({
+        map: labelTexture,
+        transparent: true,
+        depthWrite: false,
+        depthTest: false,
+      })
+      spriteMaterial.toneMapped = false
+      label = new THREE.Sprite(spriteMaterial)
+      label.renderOrder = gapLine.renderOrder + 2
+      label.visible = false
+    }
+  }
+
   scene.add(plane)
+  scene.add(gapLine)
+  gapMarkers.forEach((marker) => scene.add(marker))
+  if (label) {
+    scene.add(label)
+  }
 
   indicator = {
     plane,
     material,
+    border,
+    gapLine,
+    gapLineMaterial,
+    gapMarkers,
+    label,
+    labelCanvas,
+    labelContext,
+    labelTexture,
     targetOpacity: 0,
+    renderOpacity: 0,
     closeness: 0,
     baseScale: new THREE.Vector2(1, 1),
+    renderScale: new THREE.Vector2(1, 1),
+    targetPosition: new THREE.Vector3(),
+    renderPosition: new THREE.Vector3(),
     pulseSeed: 0,
     active: false,
+    lastGapUpdate: 0,
+    lastGapValue: Number.POSITIVE_INFINITY,
   }
+  indicator.renderPosition.copy(plane.position)
+  indicator.targetPosition.copy(plane.position)
+  indicator.renderScale.set(1, 1)
   faceSnapEffectIndicators[axis] = indicator
   return indicator
 }
 
 function ensureFaceSnapEffectPool() {
   FACE_SNAP_AXES.forEach((axis) => ensureFaceSnapEffectIndicator(axis))
+}
+
+function drawRoundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
+  const r = Math.min(radius, width * 0.5, height * 0.5)
+  ctx.beginPath()
+  ctx.moveTo(x + r, y)
+  ctx.lineTo(x + width - r, y)
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r)
+  ctx.lineTo(x + width, y + height - r)
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height)
+  ctx.lineTo(x + r, y + height)
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r)
+  ctx.lineTo(x, y + r)
+  ctx.quadraticCurveTo(x, y, x + r, y)
+  ctx.closePath()
+}
+
+function updateFaceSnapDistanceLabel(indicator: FaceSnapEffectIndicator, distance: number) {
+  const canvas = indicator.labelCanvas
+  const context = indicator.labelContext
+  const texture = indicator.labelTexture
+  if (!canvas || !context || !texture) {
+    return
+  }
+  context.clearRect(0, 0, canvas.width, canvas.height)
+  const padding = 18
+  context.fillStyle = 'rgba(8, 20, 30, 0.85)'
+  drawRoundedRect(context, padding, padding, canvas.width - padding * 2, canvas.height - padding * 2, 24)
+  context.fill()
+  context.lineWidth = 3
+  context.strokeStyle = 'rgba(255, 255, 255, 0.25)'
+  context.stroke()
+  context.fillStyle = '#ffffff'
+  context.font = '600 42px Inter, sans-serif'
+  context.textAlign = 'center'
+  context.textBaseline = 'middle'
+  const label = `${distance.toFixed(2)}${FACE_SNAP_DISTANCE_UNIT}`
+  context.fillText(label, canvas.width / 2, canvas.height / 2)
+  texture.needsUpdate = true
+}
+
+function hideFaceSnapGapIndicator(indicator: FaceSnapEffectIndicator) {
+  indicator.gapLine.visible = false
+  indicator.gapLineMaterial.opacity = 0
+  indicator.gapLineMaterial.needsUpdate = true
+  indicator.gapMarkers.forEach((marker) => {
+    marker.visible = false
+  })
+  if (indicator.label) {
+    indicator.label.visible = false
+  }
+  indicator.lastGapUpdate = 0
+  indicator.lastGapValue = Number.POSITIVE_INFINITY
+}
+
+function updateFaceSnapGapIndicator(
+  indicator: FaceSnapEffectIndicator,
+  axis: AxisKey,
+  direction: SnapDirection,
+  overlapMin: THREE.Vector3,
+  overlapMax: THREE.Vector3,
+  gap: number,
+  closeness: number,
+) {
+  if (!indicator.gapLineMaterial) {
+    return
+  }
+  const now = performance.now()
+  if (
+    now - indicator.lastGapUpdate < FACE_SNAP_GAP_UPDATE_THROTTLE_MS &&
+    Math.abs(gap - indicator.lastGapValue) < FACE_SNAP_MOVEMENT_EPSILON
+  ) {
+    return
+  }
+  indicator.lastGapUpdate = now
+  indicator.lastGapValue = gap
+  const shouldRevealGap = gap > FACE_SNAP_MOVEMENT_EPSILON || closeness < 0.999
+  if (!shouldRevealGap) {
+    hideFaceSnapGapIndicator(indicator)
+    return
+  }
+
+  const axisIndex = AXIS_INDEX[axis]
+  const [firstAxis, secondAxis] = FACE_SNAP_OTHER_AXES[axis]
+  const firstIndex = AXIS_INDEX[firstAxis]
+  const secondIndex = AXIS_INDEX[secondAxis]
+  const firstCenter = (overlapMin.getComponent(firstIndex) + overlapMax.getComponent(firstIndex)) * 0.5
+  const secondCenter = (overlapMin.getComponent(secondIndex) + overlapMax.getComponent(secondIndex)) * 0.5
+  const contact = overlapMin.getComponent(axisIndex)
+  faceSnapGapEnd.copy(faceSnapPlaneCenter)
+  faceSnapGapEnd.setComponent(axisIndex, contact)
+  faceSnapGapEnd.setComponent(firstIndex, firstCenter)
+  faceSnapGapEnd.setComponent(secondIndex, secondCenter)
+  const from = contact - direction * gap
+  faceSnapGapStart.copy(faceSnapPlaneCenter)
+  faceSnapGapStart.setComponent(axisIndex, from)
+  faceSnapGapStart.setComponent(firstIndex, firstCenter)
+  faceSnapGapStart.setComponent(secondIndex, secondCenter)
+
+  const attribute = indicator.gapLine.geometry.getAttribute('position') as THREE.BufferAttribute
+  attribute.setXYZ(0, faceSnapGapStart.x, faceSnapGapStart.y, faceSnapGapStart.z)
+  attribute.setXYZ(1, faceSnapGapEnd.x, faceSnapGapEnd.y, faceSnapGapEnd.z)
+  attribute.needsUpdate = true
+  indicator.gapLine.computeLineDistances()
+  indicator.gapLine.visible = true
+
+  const colorMix = Math.pow(closeness, 1.2)
+  faceSnapColorScratch.copy(FACE_SNAP_LINE_COLOR_FAR).lerp(FACE_SNAP_LINE_COLOR_NEAR, colorMix)
+  indicator.gapLineMaterial.color.copy(faceSnapColorScratch)
+  indicator.gapLineMaterial.opacity = THREE.MathUtils.lerp(0.2, 1, colorMix)
+  indicator.gapLineMaterial.dashSize = Math.max(0.05, gap * 0.25)
+  indicator.gapLineMaterial.gapSize = indicator.gapLineMaterial.dashSize * 0.6
+  indicator.gapLineMaterial.needsUpdate = true
+
+  const markerScale = THREE.MathUtils.lerp(0.12, 0.22, colorMix)
+  indicator.gapMarkers.forEach((marker, index) => {
+    marker.position.copy(index === 0 ? faceSnapGapStart : faceSnapGapEnd)
+    marker.scale.setScalar(markerScale)
+    marker.visible = true
+    const markerMaterial = marker.material as THREE.MeshBasicMaterial
+    markerMaterial.color.copy(faceSnapColorScratch)
+    markerMaterial.opacity = indicator.gapLineMaterial.opacity
+    markerMaterial.needsUpdate = true
+  })
+
+  if (indicator.label) {
+    updateFaceSnapDistanceLabel(indicator, gap)
+    const labelScaleBase = Math.max(0.5, gap * 0.3)
+    indicator.label.scale.set(labelScaleBase, labelScaleBase * 0.5, 1)
+    indicator.label.position.copy(faceSnapGapStart).lerp(faceSnapGapEnd, 0.5)
+    indicator.label.visible = true
+  }
+}
+
+function disposeFaceSnapIndicator(indicator: FaceSnapEffectIndicator) {
+  indicator.plane.removeFromParent()
+  indicator.plane.geometry.dispose()
+  indicator.material.dispose()
+  indicator.border.geometry.dispose()
+  indicator.border.material.dispose()
+  indicator.gapLine.removeFromParent()
+  indicator.gapLine.geometry.dispose()
+  indicator.gapLineMaterial.dispose()
+  indicator.gapMarkers.forEach((marker) => {
+    marker.removeFromParent()
+    marker.geometry.dispose()
+    const markerMaterial = marker.material as THREE.Material
+    markerMaterial.dispose()
+  })
+  if (indicator.label) {
+    indicator.label.removeFromParent()
+    const spriteMaterial = indicator.label.material as THREE.Material
+    spriteMaterial.dispose()
+  }
+  indicator.labelTexture?.dispose()
+  indicator.labelTexture = null
+  indicator.labelCanvas = null
+  indicator.labelContext = null
 }
 
 function resetFaceSnapAxisResults() {
@@ -2044,7 +2354,8 @@ function triggerFaceSnapEffect(
     return
   }
 
-  const { plane, material, baseScale } = indicator
+  const { plane, material, baseScale, renderScale, border, targetPosition, renderPosition } = indicator
+  const wasActive = indicator.active
 
   faceSnapPlaneCenter.set(
     (overlapMin.x + overlapMax.x) * 0.5,
@@ -2082,26 +2393,44 @@ function triggerFaceSnapEffect(
     faceSnapPlaneCenter.setComponent(axisIndex, contactCenter - direction * offset)
   }
 
-  plane.position.copy(faceSnapPlaneCenter)
+  targetPosition.copy(faceSnapPlaneCenter)
+  if (!wasActive) {
+    renderPosition.copy(faceSnapPlaneCenter)
+    plane.position.copy(faceSnapPlaneCenter)
+  }
 
-  const closeness = THREE.MathUtils.clamp(1 - gap / FACE_SNAP_PREVIEW_DISTANCE, 0, 1)
+  const closeness = THREE.MathUtils.clamp(1 - gap / FACE_SNAP_EARLY_PREVIEW_DISTANCE, 0, 1)
   indicator.closeness = closeness
   const easedCloseness = Math.pow(closeness, 0.75)
+  const opacityRamp = Math.pow(closeness, 1.1)
   indicator.targetOpacity = THREE.MathUtils.lerp(
-    FACE_SNAP_EFFECT_MIN_OPACITY,
+    FACE_SNAP_EFFECT_MIN_OPACITY * 0.5,
     FACE_SNAP_EFFECT_MAX_OPACITY,
-    easedCloseness,
+    opacityRamp,
   )
+  faceSnapColorScratch.copy(FACE_SNAP_COLOR_FAR).lerp(FACE_SNAP_COLOR_NEAR, easedCloseness)
+  material.color.copy(faceSnapColorScratch)
+  material.needsUpdate = true
+  const borderMaterial = border.material as THREE.LineBasicMaterial
+  borderMaterial.color.copy(faceSnapColorScratch)
+  borderMaterial.opacity = THREE.MathUtils.lerp(0.35, 0.95, easedCloseness)
+  borderMaterial.needsUpdate = true
 
   const baseScaleBoost = 1 + FACE_SNAP_EFFECT_SCALE_PULSE * easedCloseness
   baseScale.set(width * baseScaleBoost, height * baseScaleBoost)
-  plane.scale.set(baseScale.x, baseScale.y, 1)
+  if (!wasActive) {
+    renderScale.copy(baseScale)
+    plane.scale.set(renderScale.x, renderScale.y, 1)
+  }
 
   indicator.pulseSeed = performance.now()
-  material.opacity = indicator.targetOpacity
-  material.needsUpdate = true
   plane.visible = true
+  if (!wasActive) {
+    indicator.renderOpacity = indicator.targetOpacity
+    material.opacity = indicator.targetOpacity
+  }
   indicator.active = true
+  updateFaceSnapGapIndicator(indicator, axis, direction, overlapMin, overlapMax, gap, closeness)
 }
 
 function hideFaceSnapEffect(axis?: AxisKey) {
@@ -2118,45 +2447,77 @@ function hideFaceSnapEffect(axis?: AxisKey) {
   indicator.active = false
   indicator.targetOpacity = 0
   indicator.closeness = 0
-  indicator.baseScale.set(1, 1)
-  indicator.material.opacity = 0
-  indicator.material.needsUpdate = true
-  indicator.plane.visible = false
+  indicator.baseScale.copy(indicator.renderScale)
+  const borderMaterial = indicator.border.material as THREE.LineBasicMaterial
+  borderMaterial.opacity = 0
+  borderMaterial.needsUpdate = true
+  hideFaceSnapGapIndicator(indicator)
 }
 
-function updateFaceSnapEffectIntensity() {
+function updateFaceSnapEffectIntensity(delta: number) {
+  const safeDelta = delta > 0 ? delta : 1 / 60
+  const positionAlpha = 1 - Math.exp(-FACE_SNAP_EFFECT_POSITION_DAMPING * safeDelta)
+  const scaleAlpha = 1 - Math.exp(-FACE_SNAP_EFFECT_SCALE_DAMPING * safeDelta)
+  const opacityAlpha = 1 - Math.exp(-FACE_SNAP_EFFECT_OPACITY_DAMPING * safeDelta)
+
   FACE_SNAP_AXES.forEach((axis) => {
     const indicator = faceSnapEffectIndicators[axis]
     if (!indicator) {
       return
     }
 
-    const { plane, material, baseScale } = indicator
-    if (!indicator.active) {
+    const { plane, material, baseScale, renderScale, targetPosition, renderPosition } = indicator
+    const desiredOpacity = indicator.active ? indicator.targetOpacity : 0
+    indicator.renderOpacity += (desiredOpacity - indicator.renderOpacity) * opacityAlpha
+
+    if (indicator.renderOpacity <= 0.001 && !indicator.active) {
       if (plane.visible) {
         plane.visible = false
         material.opacity = 0
         material.needsUpdate = true
       }
+      hideFaceSnapGapIndicator(indicator)
       return
     }
 
+    plane.visible = true
+    renderPosition.lerp(targetPosition, positionAlpha)
+    plane.position.copy(renderPosition)
+
+    renderScale.lerp(baseScale, scaleAlpha)
+
     const elapsed = performance.now() - indicator.pulseSeed
-    const pulse = Math.sin(elapsed / FACE_SNAP_EFFECT_PULSE_SPEED)
     const pulseSecondary = Math.sin(elapsed / (FACE_SNAP_EFFECT_PULSE_SPEED * 0.68))
+    plane.scale.set(renderScale.x, renderScale.y, 1)
 
     const opacityPulse = indicator.closeness * 0.18 * pulseSecondary
     const opacity = THREE.MathUtils.clamp(
-      indicator.targetOpacity + opacityPulse,
-      FACE_SNAP_EFFECT_MIN_OPACITY * 0.5,
+      indicator.renderOpacity + opacityPulse,
+      FACE_SNAP_EFFECT_MIN_OPACITY * 0.3,
       1,
     )
     material.opacity = opacity
     material.needsUpdate = true
 
-    const scalePulse = indicator.closeness * 0.3 * pulse
-    const scaleFactor = 1 + scalePulse
-    plane.scale.set(baseScale.x * scaleFactor, baseScale.y * scaleFactor, 1)
+    indicator.gapLineMaterial.dashOffset = -elapsed * 0.0015 * (1 + indicator.closeness)
+    indicator.gapLineMaterial.needsUpdate = indicator.gapLine.visible
+    indicator.gapMarkers.forEach((marker) => {
+      if (!marker.visible) {
+        return
+      }
+      const markerMaterial = marker.material as THREE.MeshBasicMaterial
+      markerMaterial.opacity = THREE.MathUtils.clamp(
+        indicator.gapLineMaterial.opacity + indicator.closeness * 0.15 * pulseSecondary,
+        0,
+        1,
+      )
+      markerMaterial.needsUpdate = true
+    })
+    if (indicator.label?.visible) {
+      const spriteMaterial = indicator.label.material as THREE.SpriteMaterial
+      spriteMaterial.opacity = THREE.MathUtils.lerp(0.4, 1, indicator.closeness)
+      spriteMaterial.needsUpdate = true
+    }
   })
 }
 
@@ -2216,7 +2577,7 @@ function applyFaceAlignmentSnap(
         ? candidateMin - primaryMax
         : primaryMin - candidateMax
 
-      if (rawGap < -FACE_SNAP_MOVEMENT_EPSILON || rawGap > FACE_SNAP_PREVIEW_DISTANCE) {
+      if (rawGap < -FACE_SNAP_MOVEMENT_EPSILON || rawGap > FACE_SNAP_EARLY_PREVIEW_DISTANCE) {
         return
       }
 
@@ -3291,7 +3652,9 @@ function animate() {
     sky.position.copy(camera.position)
   }
   gizmoControls?.cameraUpdate()
-  updateFaceSnapEffectIntensity()
+  if (props.activeTool === 'translate') {
+      updateFaceSnapEffectIntensity(effectiveDelta)
+  }
   if (effectiveDelta > 0 && effectRuntimeTickers.length) {
     effectRuntimeTickers.forEach((tick) => {
       try {
@@ -3326,9 +3689,7 @@ function disposeScene() {
     if (!indicator) {
       return
     }
-    indicator.plane.removeFromParent()
-    indicator.plane.geometry.dispose()
-    indicator.material.dispose()
+    disposeFaceSnapIndicator(indicator)
     faceSnapEffectIndicators[axis] = null
   })
   hasTransformLastWorldPosition = false
@@ -7694,6 +8055,10 @@ watch(
   () => props.activeTool,
   (tool) => {
     updateToolMode(tool)
+    if (tool !== 'translate') {
+      updateFaceSnapCommitState(false)
+      hideFaceSnapEffect()
+    }
   }
 )
 
