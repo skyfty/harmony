@@ -52,7 +52,7 @@ import {
 } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { createPrimitiveMesh } from '@schema/geometry'
-import type { CameraProjection, CameraControlMode } from '@harmony/schema'
+import type { CameraControlMode } from '@harmony/schema'
 
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import { cloneSkyboxSettings } from '@/stores/skyboxPresets'
@@ -161,8 +161,7 @@ let fxaaPass: ShaderPass | null = null
 let outputPass: OutputPass | null = null
 let scene: THREE.Scene | null = null
 let perspectiveCamera: THREE.PerspectiveCamera | null = null
-let orthographicCamera: THREE.OrthographicCamera | null = null
-let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera | null = null
+let camera: THREE.PerspectiveCamera | null = null
 let orbitControls: OrbitControls | MapControls | null = null
 let gizmoControls: ViewportGizmo | null = null
 let transformControls: TransformControls | null = null
@@ -368,10 +367,7 @@ import {
   DEFAULT_PERSPECTIVE_FOV,
   MIN_CAMERA_DISTANCE,
   MAX_CAMERA_DISTANCE,
-  MIN_ORTHOGRAPHIC_ZOOM,
-  MAX_ORTHOGRAPHIC_ZOOM,
   CAMERA_DISTANCE_EPSILON,
-  ORTHO_FRUSTUM_SIZE,
   RIGHT_CLICK_ROTATION_STEP,
   GROUND_HEIGHT_STEP
 } from './constants'
@@ -516,7 +512,6 @@ const isDragHovering = ref(false)
 const gridVisible = computed(() => sceneStore.viewportSettings.showGrid)
 const axesVisible = computed(() => sceneStore.viewportSettings.showAxes)
 const shadowsEnabled = computed(() => sceneStore.shadowsEnabled)
-const cameraProjectionMode = computed(() => sceneStore.viewportSettings.cameraProjection)
 const skyboxSettings = computed(() => sceneStore.skybox)
 const environmentSettings = computed(() => sceneStore.environmentSettings)
 const canAlignSelection = computed(() => {
@@ -530,7 +525,6 @@ const canRotateSelection = computed(() =>
   sceneStore.selectedNodeIds.some((id) => id !== GROUND_NODE_ID && !sceneStore.isNodeSelectionLocked(id))
 )
 const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((tool) => [tool.key, tool.value]))
-let activeCameraMode: CameraProjection = cameraProjectionMode.value
 
 const activeBuildTool = ref<BuildTool | null>(null)
 const {
@@ -1682,7 +1676,7 @@ function clampCameraAboveGround(forceUpdate = true) {
   return adjusted
 }
 
-function clampCameraDistance(target: THREE.Vector3, cam: THREE.PerspectiveCamera | THREE.OrthographicCamera): boolean {
+function clampCameraDistance(target: THREE.Vector3, cam: THREE.PerspectiveCamera): boolean {
   cameraOffsetHelper.copy(cam.position).sub(target)
   const distance = cameraOffsetHelper.length()
   if (distance >= MIN_CAMERA_DISTANCE && distance <= MAX_CAMERA_DISTANCE) {
@@ -1711,21 +1705,6 @@ function clampCameraZoom(forceUpdate = true) {
     adjusted = true
   }
 
-  if (camera instanceof THREE.OrthographicCamera) {
-    const clampedZoom = THREE.MathUtils.clamp(camera.zoom, MIN_ORTHOGRAPHIC_ZOOM, MAX_ORTHOGRAPHIC_ZOOM)
-    if (clampedZoom !== camera.zoom) {
-      camera.zoom = clampedZoom
-      camera.updateProjectionMatrix()
-      adjusted = true
-    }
-  }
-
-  if (perspectiveCamera && camera !== perspectiveCamera) {
-    if (clampCameraDistance(target, perspectiveCamera)) {
-      adjusted = true
-    }
-  }
-
   if (adjusted && forceUpdate) {
     const prevApplying = isApplyingCameraState
     if (!prevApplying) {
@@ -1740,41 +1719,13 @@ function clampCameraZoom(forceUpdate = true) {
   return adjusted
 }
 
-function updateOrthographicFrustum(camera: THREE.OrthographicCamera, width: number, height: number) {
-  const aspect = height === 0 ? 1 : width / height
-  const halfHeight = ORTHO_FRUSTUM_SIZE / 2
-  const halfWidth = halfHeight * aspect
-  camera.left = -halfWidth
-  camera.right = halfWidth
-  camera.top = halfHeight
-  camera.bottom = -halfHeight
-  camera.updateProjectionMatrix()
-}
-
-function ensureOrthographicCamera(width: number, height: number): THREE.OrthographicCamera {
-  if (!orthographicCamera) {
-    orthographicCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 500)
-  }
-  updateOrthographicFrustum(orthographicCamera, width, height)
-  return orthographicCamera
-}
-
-function bindControlsToCamera(newCamera: THREE.PerspectiveCamera | THREE.OrthographicCamera) {
+function bindControlsToCamera(newCamera: THREE.PerspectiveCamera) {
   if (orbitControls) {
     orbitControls.object = newCamera
     orbitControls.update()
   }
   if (transformControls) {
     transformControls.camera = newCamera
-  }
-}
-
-function updatePostProcessingCamera(target: THREE.PerspectiveCamera | THREE.OrthographicCamera) {
-  if (renderPass) {
-    renderPass.camera = target
-  }
-  if (outlinePass) {
-    outlinePass.renderCamera = target
   }
 }
 
@@ -1869,58 +1820,6 @@ function renderViewportFrame() {
   } else {
     renderer.render(scene, camera)
   }
-}
-
-function activateCamera(newCamera: THREE.PerspectiveCamera | THREE.OrthographicCamera, mode: CameraProjection) {
-  camera = newCamera
-  activeCameraMode = mode
-  bindControlsToCamera(newCamera)
-  updatePostProcessingCamera(newCamera)
-  if (gizmoControls) {
-    gizmoControls.camera = newCamera
-    gizmoControls.update()
-  }
-}
-
-function getViewportSize() {
-  if (viewportEl.value) {
-    const width = viewportEl.value.clientWidth || 1
-    const height = viewportEl.value.clientHeight || 1
-    return { width, height }
-  }
-  const width = renderer?.domElement?.clientWidth ?? 1
-  const height = renderer?.domElement?.clientHeight ?? 1
-  return { width, height }
-}
-
-function applyProjectionMode(mode: CameraProjection) {
-  const { width, height } = getViewportSize()
-  const previousCamera = camera
-
-  if (mode === 'orthographic') {
-    const newCamera = ensureOrthographicCamera(width, height)
-    if (previousCamera) {
-      newCamera.position.copy(previousCamera.position)
-      newCamera.quaternion.copy(previousCamera.quaternion)
-    }
-    activateCamera(newCamera, 'orthographic')
-  } else {
-    if (!perspectiveCamera) {
-      perspectiveCamera = new THREE.PerspectiveCamera(DEFAULT_PERSPECTIVE_FOV, width / height || 1, 0.1, 500)
-    }
-    perspectiveCamera.aspect = height === 0 ? 1 : width / height
-    perspectiveCamera.updateProjectionMatrix()
-    if (previousCamera) {
-      perspectiveCamera.position.copy(previousCamera.position)
-      perspectiveCamera.quaternion.copy(previousCamera.quaternion)
-    }
-    activateCamera(perspectiveCamera, 'perspective')
-  }
-
-  clampCameraZoom()
-  clampCameraAboveGround()
-  updatePlaceholderOverlayPositions()
-  gizmoControls?.update()
 }
 
 function applyGridVisibility(visible: boolean) {
@@ -2092,17 +1991,6 @@ watch(axesVisible, (visible) => {
   applyAxesVisibility(visible)
 }, { immediate: true })
 
-watch(cameraProjectionMode, (mode, previous) => {
-  if (!scene || !renderer) {
-    activeCameraMode = mode
-    return
-  }
-  if (previous !== undefined && mode === previous && mode === activeCameraMode) {
-    return
-  }
-  applyProjectionMode(mode)
-}, { immediate: true })
-
 watch(skyboxSettings, (settings) => {
   applySkyboxSettingsToScene(settings)
 }, { deep: true, immediate: true })
@@ -2120,19 +2008,8 @@ function resetCameraView() {
 
   isApplyingCameraState = true
   camera.position.copy(position)
-  if (camera instanceof THREE.PerspectiveCamera) {
-    camera.fov = DEFAULT_PERSPECTIVE_FOV
-    camera.updateProjectionMatrix()
-  } else if (orthographicCamera) {
-    orthographicCamera.zoom = 1
-    orthographicCamera.updateProjectionMatrix()
-  }
-
-  if (perspectiveCamera && camera !== perspectiveCamera) {
-    perspectiveCamera.position.copy(position)
-    perspectiveCamera.fov = DEFAULT_PERSPECTIVE_FOV
-    perspectiveCamera.updateProjectionMatrix()
-  }
+  camera.fov = DEFAULT_PERSPECTIVE_FOV
+  camera.updateProjectionMatrix()
 
   orbitControls.target.copy(target)
   orbitControls.update()
@@ -2684,8 +2561,6 @@ function applyCameraControlMode(mode: CameraControlMode) {
   orbitControls.dampingFactor = mode === 'orbit' ? 0.08 : 0.05
   orbitControls.minDistance = MIN_CAMERA_DISTANCE
   orbitControls.maxDistance = MAX_CAMERA_DISTANCE
-  orbitControls.minZoom = MIN_ORTHOGRAPHIC_ZOOM
-  orbitControls.maxZoom = MAX_ORTHOGRAPHIC_ZOOM
   orbitControls.screenSpacePanning = false
   if (mode === 'map') {
     orbitControls.minPolarAngle = orbitControls.maxPolarAngle = THREE.MathUtils.degToRad(50)
@@ -2856,11 +2731,6 @@ function initScene() {
   perspectiveCamera.position.set(DEFAULT_CAMERA_POSITION.x, DEFAULT_CAMERA_POSITION.y, DEFAULT_CAMERA_POSITION.z)
   perspectiveCamera.lookAt(new THREE.Vector3(DEFAULT_CAMERA_TARGET.x, DEFAULT_CAMERA_TARGET.y, DEFAULT_CAMERA_TARGET.z))
   camera = perspectiveCamera
-  activeCameraMode = 'perspective'
-
-  orthographicCamera = ensureOrthographicCamera(width, height)
-  orthographicCamera.position.copy(perspectiveCamera.position)
-  orthographicCamera.lookAt(new THREE.Vector3(DEFAULT_CAMERA_TARGET.x, DEFAULT_CAMERA_TARGET.y, DEFAULT_CAMERA_TARGET.z))
 
   applyCameraControlMode(cameraControlMode.value)
 
@@ -2872,9 +2742,6 @@ function initScene() {
   createPostProcessingPipeline(width, height)
 
   bindControlsToCamera(camera)
-  if (cameraProjectionMode.value !== activeCameraMode && (cameraProjectionMode.value === 'orthographic' || cameraProjectionMode.value === 'perspective')) {
-    applyProjectionMode(cameraProjectionMode.value)
-  }
 
   const gizmoContainer = gizmoContainerRef.value ?? viewportEl.value ?? undefined
   gizmoControls = new ViewportGizmo(camera, renderer, {
@@ -2910,9 +2777,6 @@ function initScene() {
     if (perspectiveCamera) {
       perspectiveCamera.aspect = h === 0 ? 1 : w / h
       perspectiveCamera.updateProjectionMatrix()
-    }
-    if (orthographicCamera) {
-      updateOrthographicFrustum(orthographicCamera, w, h)
     }
     gizmoControls?.update()
   })
@@ -3632,7 +3496,6 @@ function disposeScene() {
   scene = null
   camera = null
   perspectiveCamera = null
-  orthographicCamera = null
 
   clearPlaceholderOverlays()
   objectMap.clear()
@@ -7509,34 +7372,16 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     }
     object = container
   } else if (nodeType === 'Camera') {
-    if (node.camera?.kind === 'orthographic') {
-      const ortho = node.camera
-      const halfWidth = 1
-      const halfHeight = 1
-      const orthoCamera = new THREE.OrthographicCamera(
-        -halfWidth,
-        halfWidth,
-        halfHeight,
-        -halfHeight,
-        ortho?.near ?? 0.1,
-        ortho?.far ?? 2000,
-      )
-      orthoCamera.zoom = ortho?.zoom ?? 1
-      orthoCamera.name = node.name
-      orthoCamera.userData.nodeId = node.id
-      object = orthoCamera
-    } else {
-      const perspective = node.camera
-      const perspectiveCamera = new THREE.PerspectiveCamera(
-        perspective?.fov ?? 50,
-        perspective?.aspect ?? 1,
-        perspective?.near ?? 0.1,
-        perspective?.far ?? 2000,
-      )
-      perspectiveCamera.name = node.name
-      perspectiveCamera.userData.nodeId = node.id
-      object = perspectiveCamera
-    }
+    const perspective = node.camera
+    const perspectiveCamera = new THREE.PerspectiveCamera(
+      perspective?.fov ?? 50,
+      perspective?.aspect ?? 1,
+      perspective?.near ?? 0.1,
+      perspective?.far ?? 2000,
+    )
+    perspectiveCamera.name = node.name
+    perspectiveCamera.userData.nodeId = node.id
+    object = perspectiveCamera
   } else if (nodeType === 'Sky' || nodeType === 'Environment') {
     let container = getRuntimeObject(node.id)
     if (container !== null) {
