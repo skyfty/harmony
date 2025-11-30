@@ -1910,79 +1910,6 @@ function handleToggleCameraControlMode() {
   cameraControlMode.value = cameraControlMode.value === 'orbit' ? 'map' : 'orbit'
 }
 
-function handleOrbitLeft() {
-  orbitCameraHorizontally(-1)
-}
-
-function handleOrbitRight() {
-  orbitCameraHorizontally(1)
-}
-
-function calculateOptimalRotationDistance(): number {
-  if (!camera) {
-    return 10 // 默认距离
-  }
-  
-  // 基于远近裁剪面计算距离
-  const near = camera.near
-  const far = camera.far
-  
-  // 使用对数比例，因为透视投影中的深度感知是对数的
-  const logNear = Math.log(near)
-  const logFar = Math.log(far)
-  const logDistance = (logNear + logFar) / 2
-  
-  // 返回指数值
-  return Math.exp(logDistance)
-}
-function orbitCameraHorizontally(direction: number) {
- if (!camera || !orbitControls) {
-    return
-  }
-
-  const ORBIT_ANGLE = THREE.MathUtils.degToRad(2)
-  
-  // 获取相机方向
-  const cameraDirection = new THREE.Vector3()
-  camera.getWorldDirection(cameraDirection)
-  
-  // 计算合适的旋转中心距离
-  let targetDistance = calculateOptimalRotationDistance()
-  
-  // 计算旋转中心点
-  const rotationCenter = new THREE.Vector3()
-  rotationCenter.copy(camera.position)
-  rotationCenter.add(cameraDirection.multiplyScalar(targetDistance))
-  rotationCenter.y = 0 // 强制Y坐标为0
-  
-  // 计算相机到旋转中心的向量
-  const cameraToCenter = new THREE.Vector3().subVectors(camera.position, rotationCenter)
-  
-  // 转换为球坐标
-  const spherical = new THREE.Spherical()
-  spherical.setFromVector3(cameraToCenter)
-  
-  // 调整方位角（水平旋转）
-  spherical.theta += direction * ORBIT_ANGLE
-  
-  // 将球坐标转换回直角坐标
-  const newCameraToCenter = new THREE.Vector3()
-  newCameraToCenter.setFromSpherical(spherical)
-  
-  // 计算新的相机位置
-  const newCameraPosition = new THREE.Vector3().addVectors(rotationCenter, newCameraToCenter)
-  
-  // 更新相机位置
-  camera.position.copy(newCameraPosition)
-  
-  // 确保相机看向旋转中心
-  camera.lookAt(rotationCenter)
-  
-  // 更新orbitControls的目标点为旋转中心
-  orbitControls.target.copy(rotationCenter)
-  orbitControls.update()
-}
-
 watch(gridVisible, (visible) => {
   applyGridVisibility(visible)
 }, { immediate: true })
@@ -7857,8 +7784,6 @@ defineExpose<SceneViewportHandle>({
         @align-selection="handleAlignSelection"
         @rotate-selection="handleRotateSelection"
         @capture-screenshot="handleCaptureScreenshot"
-        @orbit-left="handleOrbitLeft"
-        @orbit-right="handleOrbitRight"
         @toggle-camera-control="handleToggleCameraControlMode"
         @change-build-tool="handleBuildToolChange"
       />

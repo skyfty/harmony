@@ -134,36 +134,6 @@
       />
 
       <v-btn
-        icon="mdi-rotate-left"
-        density="compact"
-        color="undefined"
-        variant="text"
-        size="small"
-        class="toolbar-button"
-        title="Orbit Left"
-        @mousedown="handleOrbitLeftStart"
-        @mouseup="handleOrbitStop"
-        @mouseleave="handleOrbitStop"
-        @touchstart="handleOrbitLeftStart"
-        @touchend="handleOrbitStop"
-        @click.prevent
-      />
-      <v-btn
-        icon="mdi-rotate-right"
-        density="compact"
-        size="small"
-        color="undefined"
-        variant="text"
-        class="toolbar-button"
-        title="Orbit Right"
-        @mousedown="handleOrbitRightStart"
-        @mouseup="handleOrbitStop"
-        @mouseleave="handleOrbitStop"
-        @touchstart="handleOrbitRightStart"
-        @touchend="handleOrbitStop"
-        @click.prevent
-      />
-      <v-btn
         :icon="cameraControlModeIcon"
  
         color="undefined"
@@ -214,8 +184,6 @@ const emit = defineEmits<{
   (event: 'align-selection', mode: AlignMode): void
   (event: 'rotate-selection', payload: { axis: RotationAxis; degrees: number }): void
   (event: 'capture-screenshot'): void
-  (event: 'orbit-left'): void
-  (event: 'orbit-right'): void
   (event: 'toggle-camera-control'): void
   (event: 'change-build-tool', tool: BuildTool | null): void
 }>()
@@ -336,10 +304,6 @@ function handleApplyTransformsToGroup() {
   sceneStore.applyTransformsToGroup(node.id)
 }
 
-let orbitIntervalId: number | null = null
-const ORBIT_INTERVAL_MS = 50
-const ORBIT_INITIAL_DELAY_MS = 300
-
 const alignButtons = [
   { mode: 'axis-x', icon: 'mdi-axis-x-arrow', title: 'Align X Axis' },
   { mode: 'axis-y', icon: 'mdi-axis-y-arrow', title: 'Align Y Axis' },
@@ -377,52 +341,6 @@ function toggleGridVisibility() {
 
 function toggleAxesVisibility() {
   sceneStore.toggleViewportAxesVisible()
-}
-
-function handleOrbitLeftStart(event: MouseEvent | TouchEvent) {
-  event.preventDefault()
-  stopOrbitRotation()
-  
-  // Immediate single rotation
-  emit('orbit-left')
-  
-  // Start continuous rotation after delay
-  const timeoutId = window.setTimeout(() => {
-    orbitIntervalId = window.setInterval(() => {
-      emit('orbit-left')
-    }, ORBIT_INTERVAL_MS)
-  }, ORBIT_INITIAL_DELAY_MS)
-  
-  orbitIntervalId = timeoutId as unknown as number
-}
-
-function handleOrbitRightStart(event: MouseEvent | TouchEvent) {
-  event.preventDefault()
-  stopOrbitRotation()
-  
-  // Immediate single rotation
-  emit('orbit-right')
-  
-  // Start continuous rotation after delay
-  const timeoutId = window.setTimeout(() => {
-    orbitIntervalId = window.setInterval(() => {
-      emit('orbit-right')
-    }, ORBIT_INTERVAL_MS)
-  }, ORBIT_INITIAL_DELAY_MS)
-  
-  orbitIntervalId = timeoutId as unknown as number
-}
-
-function handleOrbitStop() {
-  stopOrbitRotation()
-}
-
-function stopOrbitRotation() {
-  if (orbitIntervalId !== null) {
-    window.clearTimeout(orbitIntervalId)
-    window.clearInterval(orbitIntervalId)
-    orbitIntervalId = null
-  }
 }
 </script>
 
