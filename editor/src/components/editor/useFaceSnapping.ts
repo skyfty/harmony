@@ -43,6 +43,7 @@ const AXIS_INDEX: Record<AxisKey, 0 | 1 | 2> = { x: 0, y: 1, z: 2 }
 
 type AxisKey = 'x' | 'y' | 'z'
 type SnapDirection = 1 | -1
+type LineDashedMaterialWithOffset = THREE.LineDashedMaterial & { dashOffset: number }
 
 type FaceSnapAxisResult = {
   valid: boolean
@@ -57,8 +58,8 @@ type FaceSnapEffectIndicator = {
   plane: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>
   material: THREE.MeshBasicMaterial
   border: THREE.LineLoop<THREE.BufferGeometry, THREE.LineBasicMaterial>
-  gapLine: THREE.Line<THREE.BufferGeometry, THREE.LineDashedMaterial>
-  gapLineMaterial: THREE.LineDashedMaterial
+  gapLine: THREE.Line<THREE.BufferGeometry, LineDashedMaterialWithOffset>
+  gapLineMaterial: LineDashedMaterialWithOffset
   gapMarkers: [THREE.Mesh, THREE.Mesh]
   label: THREE.Sprite | null
   labelCanvas: HTMLCanvasElement | null
@@ -437,7 +438,7 @@ class FaceSnapManagerImpl implements FaceSnapManager {
 
     const gapLineGeometry = new THREE.BufferGeometry()
     gapLineGeometry.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(6), 3))
-    const gapLineMaterial = new THREE.LineDashedMaterial({
+    const gapLineMaterial: LineDashedMaterialWithOffset = new THREE.LineDashedMaterial({
       color: FACE_SNAP_LINE_COLOR_NEAR.getHex(),
       transparent: true,
       opacity: 0,
@@ -446,9 +447,12 @@ class FaceSnapManagerImpl implements FaceSnapManager {
       depthTest: false,
       depthWrite: false,
       linewidth: 2,
-    })
+    }) as LineDashedMaterialWithOffset
     gapLineMaterial.toneMapped = false
-    const gapLine = new THREE.Line(gapLineGeometry, gapLineMaterial)
+    const gapLine: THREE.Line<THREE.BufferGeometry, LineDashedMaterialWithOffset> = new THREE.Line(
+      gapLineGeometry,
+      gapLineMaterial,
+    )
     gapLine.visible = false
     gapLine.renderOrder = plane.renderOrder + 2
     gapLine.computeLineDistances()

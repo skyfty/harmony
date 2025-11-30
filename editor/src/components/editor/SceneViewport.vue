@@ -209,13 +209,6 @@ const pendingTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
 
 const usesRuntimeObjectTypes = new Set<string>(['Mesh', WARP_GATE_COMPONENT_TYPE, GUIDEBOARD_COMPONENT_TYPE, 'Group'])
 
-const faceSnapManager = createFaceSnapManager({
-  getScene: () => scene,
-  objectMap,
-  getActiveTool: () => props.activeTool,
-  isEditableKeyboardTarget,
-})
-
 function disposeCachedTextures() {
   textureCache.forEach((texture) => texture.dispose())
   textureCache.clear()
@@ -409,6 +402,13 @@ const instancedPickBoundsMaxHelper = new THREE.Vector3()
 const instancedPickBoundsSizeHelper = new THREE.Vector3()
 const instancedPickBoundsCenterHelper = new THREE.Vector3()
 const objectMap = new Map<string, THREE.Object3D>()
+
+const faceSnapManager = createFaceSnapManager({
+  getScene: () => scene,
+  objectMap,
+  getActiveTool: () => props.activeTool,
+  isEditableKeyboardTarget,
+})
 
 const DYNAMIC_MESH_SIGNATURE_KEY = '__harmonyDynamicMeshSignature'
 
