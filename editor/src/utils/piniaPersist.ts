@@ -1,4 +1,5 @@
 import type { PiniaPluginContext, StateTree } from 'pinia'
+import { watch, type WatchStopHandle } from 'vue'
 
 type MaybePromise<T> = T | Promise<T>
 
@@ -124,6 +125,7 @@ export interface StorePersistOptions<S extends StateTree = StateTree> {
   migrations?: MigrationMap<S> | ((state: Partial<S>, fromVersion: number, toVersion: number) => Partial<S>)
   serializer?: PersistSerializer<S>
   pick?: (keyof S | string)[]
+  observePaths?: (keyof S | string)[]
   debug?: boolean
   shouldPersist?: (state: Partial<S>, previousState: Partial<S> | null) => boolean
   flushDebounce?: number
@@ -203,6 +205,30 @@ function assignPath<T extends Record<string, any>>(target: T, path: string, valu
     }
     current = current[segment]
   })
+}
+
+function normalizePersistPaths(paths?: Array<string | number | symbol>): string[] {
+  if (!paths || paths.length === 0) {
+    return []
+  }
+  const unique = new Set<string>()
+  for (const entry of paths) {
+    if (entry == null) {
+      continue
+    }
+    const normalized =
+      typeof entry === 'string'
+        ? entry
+        : typeof entry === 'number'
+          ? String(entry)
+          : typeof entry === 'symbol'
+            ? entry.description ?? entry.toString()
+            : ''
+    if (normalized) {
+      unique.add(normalized)
+    }
+  }
+  return Array.from(unique)
 }
 
 function applyStatePatch<S extends StateTree>(store: PiniaPluginContext['store'], patchedState: Partial<S>) {
@@ -296,6 +322,9 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
     const shouldPersist = persistOptions.shouldPersist ?? (() => true)
     const flushDebounce = Math.max(0, persistOptions.flushDebounce ?? 250)
     const flushEvents = persistOptions.flushEvents ?? ['visibilitychange', 'pagehide', 'beforeunload']
+    const observedPaths = normalizePersistPaths(
+      (persistOptions.observePaths ?? persistOptions.pick) as Array<string | number | symbol> | undefined,
+    )
 
     let fromVersion = 0
     let lastPersistedValue: string | null = null
@@ -304,6 +333,8 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
     let debounceTimer: ReturnType<typeof setTimeout> | null = null
     let flushListenersRegistered = false
     let stopSubscription: (() => void) | null = null
+    let stopObservers: (() => void) | null = null
+    const watchStops: WatchStopHandle[] = []
     let hydrationPromise: Promise<void> = Promise.resolve()
 
     const handleFlushEvent = (event: Event) => {
@@ -438,6 +469,59 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
       }
     }
 
+    const stopWatchers = () => {
+      if (!watchStops.length) {
+        return
+      }
+      watchStops.forEach((stop) => stop())
+      watchStops.length = 0
+    }
+
+    const startPersistenceObservers = () => {
+      if (stopObservers) {
+        return
+      }
+
+      if (observedPaths.length > 0) {
+        observedPaths.forEach((path) => {
+          const stop = watch(
+            () => getPath(store.$state as StateTree, path),
+            () => {
+              schedulePersist(store.$state as StateTree)
+            },
+            { deep: true },
+          )
+          watchStops.push(stop)
+        })
+
+        if (watchStops.length > 0) {
+          stopObservers = () => {
+            stopWatchers()
+          }
+          return
+        }
+      }
+
+      stopSubscription = store.$subscribe(
+        (_mutation, state) => {
+          schedulePersist(state)
+        },
+        { detached: true },
+      )
+      stopObservers = () => {
+        stopSubscription?.()
+        stopSubscription = null
+      }
+    }
+
+    const cleanupObservers = () => {
+      if (!stopObservers) {
+        return
+      }
+      stopObservers()
+      stopObservers = null
+    }
+
     const hydrationTask = hydrate()
     const trackedHydration = hydrationTask.catch(() => undefined)
     activeHydrations.add(trackedHydration)
@@ -445,12 +529,7 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
     hydrationPromise = trackedHydration.finally(() => {
       activeHydrations.delete(trackedHydration)
       registerFlushListeners()
-      stopSubscription = store.$subscribe(
-        (_mutation, state) => {
-          schedulePersist(state)
-        },
-        { detached: true },
-      )
+      startPersistenceObservers()
     })
 
     const originalDispose = store.$dispose.bind(store)
@@ -462,7 +541,7 @@ export function createPersistedStatePlugin(options: CreatePersistPluginOptions =
 
       void flushPendingPayload()
       removeFlushListeners()
-      stopSubscription?.()
+      cleanupObservers()
       originalDispose()
     }
   }
