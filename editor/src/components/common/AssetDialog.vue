@@ -403,7 +403,7 @@ function ensureSceneAssetMapping(asset: ProjectAsset): ProjectAsset {
     return sceneStore.registerAsset(normalizedAsset, {
       categoryId: determineAssetCategoryId(normalizedAsset),
       source: { type: 'url' },
-      commitOptions: { updateNodes: false, updateCamera: false },
+      commitOptions: { updateNodes: false },
     })
   } catch (error) {
     console.warn('Failed to register selected asset for scene mapping', asset.id, error)

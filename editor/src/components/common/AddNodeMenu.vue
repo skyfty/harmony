@@ -268,7 +268,7 @@ async function importAssetFromUrl(normalizedUrl: string) {
     const registeredAsset = sceneStore.registerAsset(importedAsset, {
       categoryId,
       source: { type: 'url' },
-      commitOptions: { updateNodes: false, updateCamera: false },
+      commitOptions: { updateNodes: false },
     })
 
     const packageKey = `url::${registeredAsset.id}`
@@ -406,7 +406,7 @@ function handleMenuImportFromFile() {
           description: matchedFile.name,
           previewColor: '#26C6DA',
           gleaned: true,
-          commitOptions: { updateNodes: false, updateCamera: false },
+          commitOptions: { updateNodes: false },
         })
         registeredAsset = ensured.asset
         assetId = ensured.asset.id

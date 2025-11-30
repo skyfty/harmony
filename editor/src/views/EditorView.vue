@@ -30,7 +30,6 @@ import {
 } from '@/stores/sceneStore'
 import { useScenesStore } from '@/stores/scenesStore'
 import type { EditorTool } from '@/types/editor-tool'
-import type { SceneCameraState } from '@/types/scene-camera-state'
 import { useUiStore } from '@/stores/uiStore'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
@@ -316,10 +315,6 @@ function handleViewportTransform(payload: ViewportTransformPayload) {
   }
 
   sceneStore.updateNodeProperties(payload)
-}
-
-function updateCamera(state: SceneCameraState) {
-  sceneStore.setCameraState(state)
 }
 
 function reopenPanel(panel: EditorPanel) {
@@ -1559,7 +1554,6 @@ onBeforeUnmount(() => {
           @change-tool="setTool"
           @select-node="handleViewportSelection"
           @update-node-transform="handleViewportTransform"
-          @update-camera="updateCamera"
         />
       </section>
 

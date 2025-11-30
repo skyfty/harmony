@@ -5958,7 +5958,7 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
 
 function commitSceneSnapshot(
   store: SceneState,
-  _options: { updateNodes?: boolean; updateCamera?: boolean } = {},
+  _options: { updateNodes?: boolean; } = {},
 ) {
   if (!store.currentSceneId) {
     return
@@ -7370,7 +7370,7 @@ export const useSceneStore = defineStore('scene', {
       this.registerAsset(asset, {
         categoryId: determineAssetCategoryId(asset),
         source: { type: 'local' },
-        commitOptions: { updateNodes: true, updateCamera: false },
+        commitOptions: { updateNodes: true },
       })
 
       return material
@@ -8125,7 +8125,7 @@ export const useSceneStore = defineStore('scene', {
         description?: string
         previewColor?: string
         gleaned?: boolean
-        commitOptions?: { updateNodes?: boolean; updateCamera?: boolean }
+        commitOptions?: { updateNodes?: boolean }
       },
     ): Promise<{ asset: ProjectAsset; isNew: boolean }> {
       const assetCache = useAssetCacheStore()
@@ -8166,14 +8166,14 @@ export const useSceneStore = defineStore('scene', {
       const registered = this.registerAsset(projectAsset, {
         categoryId: determineAssetCategoryId(projectAsset),
         source: { type: 'local' },
-        commitOptions: metadata.commitOptions ?? { updateNodes: false, updateCamera: false },
+        commitOptions: metadata.commitOptions ?? { updateNodes: false },
       })
 
       return { asset: registered, isNew: true }
     },
     registerAsset(
       asset: ProjectAsset,
-      options: { categoryId?: string; source?: AssetSourceMetadata; commitOptions?: { updateNodes?: boolean; updateCamera?: boolean } } = {},
+      options: { categoryId?: string; source?: AssetSourceMetadata; commitOptions?: { updateNodes?: boolean } } = {},
     ) {
       const categoryId = options.categoryId ?? determineAssetCategoryId(asset)
       const existingEntry = this.assetIndex[asset.id]
@@ -8200,7 +8200,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
-      const commitOptions = options.commitOptions ?? { updateNodes: false, updateCamera: false }
+      const commitOptions = options.commitOptions ?? { updateNodes: false }
       commitSceneSnapshot(this, commitOptions)
       void this.syncAssetPackageMapEntry(registeredAsset, options.source)
       return registeredAsset
@@ -8269,7 +8269,7 @@ export const useSceneStore = defineStore('scene', {
         }
 
         this.packageAssetMap = nextMap
-        commitSceneSnapshot(this, { updateNodes: false, updateCamera: false })
+        commitSceneSnapshot(this, { updateNodes: false })
       } catch (error) {
         console.warn('Failed to synchronize package asset map for asset', asset.id, error)
       }
@@ -8337,7 +8337,7 @@ export const useSceneStore = defineStore('scene', {
         return this.registerAsset(updated, {
           categoryId,
           source: sourceMeta,
-          commitOptions: { updateNodes: false, updateCamera: false },
+          commitOptions: { updateNodes: false },
         })
       }
 
@@ -8355,7 +8355,7 @@ export const useSceneStore = defineStore('scene', {
       const registered = this.registerAsset(projectAsset, {
         categoryId,
         source: { type: 'local' },
-        commitOptions: { updateNodes: false, updateCamera: false },
+        commitOptions: { updateNodes: false },
       })
       if (options.select !== false) {
         this.setActiveDirectory(categoryId)
@@ -8642,7 +8642,7 @@ export const useSceneStore = defineStore('scene', {
       return this.registerAsset(projectAsset, {
         categoryId: determineAssetCategoryId(projectAsset),
         source: { type: 'local' },
-        commitOptions: { updateNodes: false, updateCamera: false },
+        commitOptions: { updateNodes: false },
       })
     },
     async loadBehaviorPrefab(assetId: string): Promise<BehaviorPrefabData> {
@@ -8865,7 +8865,7 @@ export const useSceneStore = defineStore('scene', {
       })
 
       if (deletableIds.length) {
-        commitSceneSnapshot(this, { updateNodes: false, updateCamera: false })
+        commitSceneSnapshot(this, { updateNodes: false })
       }
 
       return deletableIds
@@ -8932,7 +8932,7 @@ export const useSceneStore = defineStore('scene', {
       const assetCache = useAssetCacheStore()
       assetCache.recalculateUsage(this.nodes)
 
-      commitSceneSnapshot(this, { updateNodes: true, updateCamera: false })
+      commitSceneSnapshot(this, { updateNodes: true })
       return storedAsset
     },
     setResourceProviderId(providerId: string) {
@@ -8953,7 +8953,7 @@ export const useSceneStore = defineStore('scene', {
         return
       }
       this.viewportSettings = next
-      commitSceneSnapshot(this, { updateNodes: false, updateCamera: false })
+      commitSceneSnapshot(this, { updateNodes: false })
     },
     setViewportGridVisible(visible: boolean) {
       this.setViewportSettings({ showGrid: visible })
@@ -8973,7 +8973,7 @@ export const useSceneStore = defineStore('scene', {
         return
       }
       this.shadowsEnabled = next
-      commitSceneSnapshot(this, { updateNodes: false, updateCamera: false })
+      commitSceneSnapshot(this, { updateNodes: false })
     },
     toggleShadowsEnabled() {
       this.setShadowsEnabled(!this.shadowsEnabled)
@@ -9006,7 +9006,7 @@ export const useSceneStore = defineStore('scene', {
         return
       }
       this.skybox = next
-      commitSceneSnapshot(this, { updateNodes: false, updateCamera: false })
+      commitSceneSnapshot(this, { updateNodes: false })
     },
     applySkyboxPreset(presetId: string) {
       const preset = resolveSkyboxPreset(presetId)
@@ -9021,7 +9021,7 @@ export const useSceneStore = defineStore('scene', {
         return
       }
       this.skybox = next
-      commitSceneSnapshot(this, { updateNodes: false, updateCamera: false })
+      commitSceneSnapshot(this, { updateNodes: false })
     },
     setPanelVisibility(panel: EditorPanel, visible: boolean) {
       if (this.panelVisibility[panel] === visible) {
@@ -9838,7 +9838,7 @@ export const useSceneStore = defineStore('scene', {
             description: options.sourceFile.name ?? undefined,
             previewColor: '#ffffff',
             gleaned: true,
-            commitOptions: { updateNodes: false, updateCamera: false },
+            commitOptions: { updateNodes: false },
           })
           modelAssetId = ensured.asset.id
           assetCache.registerUsage(modelAssetId)
@@ -9852,7 +9852,7 @@ export const useSceneStore = defineStore('scene', {
         assetCache,
         registerAsset: (asset, registerOptions) => this.registerAsset(asset, {
           ...registerOptions,
-          commitOptions: { updateNodes: false, updateCamera: false },
+          commitOptions: { updateNodes: false },
         }),
         converted: new Set<Object3D>(),
         textureRefs: new Map<Texture, SceneMaterialTextureRef>(),
@@ -11661,12 +11661,8 @@ export const useSceneStore = defineStore('scene', {
       'currentSceneId',
       'currentSceneMeta',
       'nodes',
-      'selectedNodeId',
-      'selectedNodeIds',
-      'activeTool',
       'activeDirectoryId',
       'selectedAssetId',
-      'camera',
       'viewportSettings',
       'panelVisibility',
       'panelPlacement',
@@ -11675,7 +11671,6 @@ export const useSceneStore = defineStore('scene', {
       'assetCatalog',
       'assetIndex',
       'packageAssetMap',
-      'hasUnsavedChanges',
       'groundSettings',
       'skybox',
       'shadowsEnabled',

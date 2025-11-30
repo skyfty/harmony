@@ -138,7 +138,6 @@ const emit = defineEmits<{
   (event: 'changeTool', tool: EditorTool): void
   (event: 'selectNode', payload: { primaryId: string | null; selectedIds: string[] }): void
   (event: 'updateNodeTransform', payload: TransformUpdatePayload | TransformUpdatePayload[]): void
-  (event: 'updateCamera', payload: SceneCameraState): void
 }>()
 
 const sceneStore = useSceneStore()
@@ -2083,12 +2082,6 @@ function orbitCameraHorizontally(direction: number) {
   // 更新orbitControls的目标点为旋转中心
   orbitControls.target.copy(rotationCenter)
   orbitControls.update()
-  
-  // 更新相机状态
-  const snapshot = buildCameraState()
-  if (snapshot) {
-    emit('updateCamera', snapshot)
-  }
 }
 
 watch(gridVisible, (visible) => {
@@ -2147,11 +2140,6 @@ function resetCameraView() {
 
   clampCameraZoom()
   clampCameraAboveGround()
-
-  const snapshot = buildCameraState()
-  if (snapshot) {
-    emit('updateCamera', snapshot)
-  }
 }
 
 function snapVectorToGrid(vec: THREE.Vector3) {
@@ -2573,22 +2561,6 @@ async function exportScene(options: SceneExportOptions, onProgress: (progress: n
   }
 }
 
-function buildCameraState(): SceneCameraState | null {
-  if (!camera || !orbitControls) return null
-  const fov = camera instanceof THREE.PerspectiveCamera
-    ? camera.fov
-    : perspectiveCamera?.fov ?? DEFAULT_PERSPECTIVE_FOV
-  const forward = new THREE.Vector3()
-  camera.getWorldDirection(forward)
-  forward.normalize()
-  return {
-    position: camera.position,
-    target: orbitControls.target,
-    fov,
-    forward: forward,
-  }
-}
-
 function applyCameraState(state: SceneCameraState | null | undefined) {
   console.log('applyCameraState', state)
   if (!state || !orbitControls) return
@@ -2681,12 +2653,6 @@ function focusCameraOnNode(nodeId: string): boolean {
     perspectiveCamera.position.copy(camera.position)
     perspectiveCamera.quaternion.copy(camera.quaternion)
   }
-
-  const snapshot = buildCameraState()
-  if (snapshot) {
-    emit('updateCamera', snapshot)
-  }
-
   return true
 }
 
@@ -2695,10 +2661,6 @@ function handleControlsChange() {
   clampCameraZoom()
   clampCameraAboveGround()
   gizmoControls?.cameraUpdate()
-  const snapshot = buildCameraState()
-  if (snapshot) {
-    emit('updateCamera', snapshot)
-  }
 }
 
 function applyCameraControlMode(mode: CameraControlMode) {
@@ -2753,11 +2715,6 @@ function applyCameraControlMode(mode: CameraControlMode) {
   gizmoControls?.cameraUpdate()
 
   clampCameraAboveGround()
-
-  const snapshot = buildCameraState()
-  if (snapshot) {
-    emit('updateCamera', snapshot)
-  }
 }
 
 function ensureStatsPanel() {
@@ -3519,10 +3476,6 @@ function animate() {
       if (perspectiveCamera && camera !== perspectiveCamera) {
         perspectiveCamera.position.copy(camera.position)
         perspectiveCamera.quaternion.copy(camera.quaternion)
-      }
-      const finalSnapshot = buildCameraState()
-      if (finalSnapshot) {
-        emit('updateCamera', finalSnapshot)
       }
     }
   }

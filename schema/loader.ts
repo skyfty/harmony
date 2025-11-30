@@ -600,11 +600,11 @@ export interface ParsedGltfResult {
 
 const DEFAULT_DRACO_DECODER_PATH = '../examples/jsm/libs/draco/gltf/';
 const DEFAULT_KTX2_TRANSCODER_PATH = '../examples/jsm/libs/basis/';
-import { GLTFLoader } from '@three-examples/loaders/GLTFLoader.js';
-import { DRACOLoader } from '@three-examples/loaders/DRACOLoader.js';
-import { KTX2Loader } from '@three-examples/loaders/KTX2Loader.js';
 
 export async function createGltfLoader(options: GltfParseOptions = {}): Promise<any> {
+  const { GLTFLoader } = await import('@three-examples/loaders/GLTFLoader.js');
+  const { DRACOLoader } = await import('@three-examples/loaders/DRACOLoader.js');
+  const { KTX2Loader } = await import('@three-examples/loaders/KTX2Loader.js');
 
   const loader = new GLTFLoader(options.manager);
   const dracoLoader = new DRACOLoader();
