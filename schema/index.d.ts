@@ -1,6 +1,10 @@
 
 import * as THREE from 'three'
 
+export const GROUND_NODE_ID: 'harmony:ground'
+export const SKY_NODE_ID: 'harmony:sky'
+export const ENVIRONMENT_NODE_ID: 'harmony:environment'
+
 export { AssetCache, AssetLoader } from './assetCache'
 export type { AssetCacheEntry, AssetCacheStatus, AssetSource, AssetLoadOptions } from './assetCache'
 

@@ -1,8 +1,7 @@
+import { GROUND_NODE_ID, SKY_NODE_ID, ENVIRONMENT_NODE_ID } from '@harmony/schema'
 import type { PresetSceneDetail } from '@/types/presetScene'
 
 const SCENE_TIMESTAMP = '2024-01-01T00:00:00.000Z'
-const SKY_NODE_ID = 'harmony:sky'
-const ENVIRONMENT_NODE_ID = 'harmony:environment'
 
 const DEFAULT_TEXTURE_SLOTS = {
   albedo: null,
@@ -51,7 +50,7 @@ const createNodeMaterial = (
 })
 
 const createGroundNode = (width: number, depth: number, color: string) => ({
-  id: 'harmony:ground',
+  id: GROUND_NODE_ID,
   name: 'Ground',
   nodeType: 'Mesh',
   position: vec3(0, 0, 0),
@@ -153,7 +152,7 @@ const withEnvironmentNodes = (nodes?: SceneNodeDetail[] | null): SceneNodeDetail
   if (!skyNode) {
     skyNode = createSkyNode()
   }
-  const groundIndex = result.findIndex((node) => node.id === 'harmony:ground' || node.dynamicMesh?.type === 'Ground')
+  const groundIndex = result.findIndex((node) => node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'Ground')
   const skyInsertIndex = groundIndex >= 0 ? groundIndex + 1 : 0
   result.splice(skyInsertIndex, 0, skyNode)
 
@@ -416,8 +415,8 @@ const baseDocument = (overrides: Partial<PresetSceneDetail['document']>): Preset
     thumbnail: overrides.thumbnail ?? null,
     nodes: withEnvironmentNodes(overrides.nodes as SceneNodeDetail[] | undefined),
     materials: overrides.materials ?? [],
-    selectedNodeId: overrides.selectedNodeId ?? 'harmony:ground',
-    selectedNodeIds: overrides.selectedNodeIds ?? ['harmony:ground'],
+    selectedNodeId: overrides.selectedNodeId ?? GROUND_NODE_ID,
+    selectedNodeIds: overrides.selectedNodeIds ?? [GROUND_NODE_ID],
     camera: overrides.camera ?? {
       position: vec3(32, 20, 32),
       target: vec3(0, 0, 0),
@@ -490,7 +489,7 @@ export const PRESET_SCENES: PresetSceneDetail[] = [
         ]),
       ],
       materials: [],
-      selectedNodeIds: ['harmony:ground', 'room-structure'],
+      selectedNodeIds: [GROUND_NODE_ID, 'room-structure'],
       camera: {
         position: vec3(28, 18, 26),
         target: vec3(0, 1.5, 0),
@@ -570,7 +569,7 @@ export const PRESET_SCENES: PresetSceneDetail[] = [
         ]),
       ],
       materials: [],
-      selectedNodeIds: ['harmony:ground', 'exhibition-layout'],
+      selectedNodeIds: [GROUND_NODE_ID, 'exhibition-layout'],
       camera: {
         position: vec3(58, 28, 64),
         target: vec3(0, 3, 0),
@@ -620,7 +619,7 @@ export const PRESET_SCENES: PresetSceneDetail[] = [
         }),
       ],
       materials: [],
-      selectedNodeIds: ['harmony:ground', 'grass-vegetation'],
+      selectedNodeIds: [GROUND_NODE_ID, 'grass-vegetation'],
       camera: {
         position: vec3(72, 30, 92),
         target: vec3(0, 2, 0),
@@ -682,7 +681,7 @@ export const PRESET_SCENES: PresetSceneDetail[] = [
         }),
       ],
       materials: [],
-      selectedNodeIds: ['harmony:ground', 'beach-furniture'],
+      selectedNodeIds: [GROUND_NODE_ID, 'beach-furniture'],
       camera: {
         position: vec3(80, 26, 84),
         target: vec3(0, 1, 10),

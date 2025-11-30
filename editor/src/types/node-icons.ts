@@ -1,4 +1,4 @@
-import type { LightNodeType, SceneNodeType } from '@harmony/schema'
+import { GROUND_NODE_ID, type LightNodeType, type SceneNodeType } from '@harmony/schema'
 
 export const NODE_TYPE_ICONS: Record<SceneNodeType, string> = {
   Mesh: 'mdi-cube-outline',
@@ -40,7 +40,6 @@ type NodeIconParams = {
   dynamicMeshType?: string | null
 }
 
-const GROUND_NODE_ID = 'harmony:ground'
 const GROUND_ICON = 'mdi-grass'
 const WALL_ICON = 'mdi-wall'
 const SURFACE_ICON = 'mdi-vector-polygon'

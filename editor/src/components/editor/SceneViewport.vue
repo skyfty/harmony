@@ -79,6 +79,12 @@ import {
   DISPLAY_BOARD_COMPONENT_TYPE,
   WARP_GATE_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
+  WALL_DEFAULT_HEIGHT,
+  WALL_DEFAULT_WIDTH,
+  WALL_DEFAULT_THICKNESS,
+  WALL_MIN_HEIGHT,
+  WALL_MIN_WIDTH,
+  WALL_MIN_THICKNESS,
   clampWarpGateComponentProps,
   clampGuideboardComponentProps,
   computeWarpGateEffectActive,
@@ -625,12 +631,6 @@ type SurfaceBuildSession = {
   previewGroup: THREE.Group | null
 }
 
-const WALL_DEFAULT_HEIGHT = 3
-const WALL_DEFAULT_WIDTH = 0.2
-const WALL_DEFAULT_THICKNESS = 0.2
-const WALL_MIN_HEIGHT = 0.5
-const WALL_MIN_WIDTH = 0.1
-const WALL_MIN_THICKNESS = 0.05
 const THUMBNAIL_MAX_DIMENSION = 256
 const THUMBNAIL_JPEG_QUALITY = 0.85
 const thumbnailResizer = typeof window !== 'undefined' ? Pica() : null

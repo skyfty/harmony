@@ -161,12 +161,11 @@
 
 <script setup lang="ts">
 import { computed, ref, toRefs, watch } from 'vue'
+import { GROUND_NODE_ID } from '@harmony/schema'
 import type { CameraControlMode } from '@harmony/schema'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { BuildTool } from '@/types/build-tool'
-
-const GROUND_NODE_ID = 'harmony:ground'
 
 const props = defineProps<{
   showGrid: boolean

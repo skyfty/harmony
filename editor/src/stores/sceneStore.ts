@@ -25,6 +25,11 @@ import type {
   EnvironmentMapMode,
   EnvironmentFogMode,
 } from '@/types/environment'
+import {
+  GROUND_NODE_ID,
+  SKY_NODE_ID,
+  ENVIRONMENT_NODE_ID,
+} from '@harmony/schema'
 import type {
   AssetIndexEntry,
   AssetSourceMetadata,
@@ -75,6 +80,8 @@ import type {
   SceneResourceSummary,
   SceneResourceSummaryEntry,
 } from '@harmony/schema'
+
+export { GROUND_NODE_ID, SKY_NODE_ID, ENVIRONMENT_NODE_ID }
 
 import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
 import type {
@@ -252,9 +259,6 @@ const NODE_PREFAB_PREVIEW_COLOR = '#7986CB'
 const PREFAB_PLACEMENT_EPSILON = 1e-3
 
 export const PREFAB_SOURCE_METADATA_KEY = '__prefabAssetId'
-export const GROUND_NODE_ID = 'harmony:ground'
-export const SKY_NODE_ID = 'harmony:sky'
-export const ENVIRONMENT_NODE_ID = 'harmony:environment'
 
 
 const DEFAULT_WALL_HEIGHT = WALL_DEFAULT_HEIGHT

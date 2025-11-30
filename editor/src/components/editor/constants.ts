@@ -1,7 +1,7 @@
 import * as THREE from 'three'
+export { GROUND_NODE_ID } from '@harmony/schema'
 
 export const DEFAULT_BACKGROUND_COLOR = 0x516175
-export const GROUND_NODE_ID = 'harmony:ground'
 export const SKY_ENVIRONMENT_INTENSITY = 0.35
 export const FALLBACK_AMBIENT_INTENSITY = 0.2
 export const FALLBACK_DIRECTIONAL_INTENSITY = 0.65

@@ -200,14 +200,15 @@ import {
 } from '@schema/modelObjectCache';
 import type Viewer from 'viewerjs';
 import type { ViewerOptions } from 'viewerjs';
-import type {
-  EnvironmentSettings,
-  SceneNode,
-  SceneNodeComponentState,
-  SceneSkyboxSettings,
-  SceneJsonExportDocument,
-  LanternSlideDefinition,
-  SceneMaterialTextureRef,
+import {
+  ENVIRONMENT_NODE_ID,
+  type EnvironmentSettings,
+  type SceneNode,
+  type SceneNodeComponentState,
+  type SceneSkyboxSettings,
+  type SceneJsonExportDocument,
+  type LanternSlideDefinition,
+  type SceneMaterialTextureRef,
 } from '@harmony/schema';
 import { ComponentManager } from '@schema/components/componentManager';
 import {
@@ -468,7 +469,6 @@ const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
     hdriAssetId: null,
   },
 };
-const ENVIRONMENT_NODE_ID = 'harmony:environment' as const;
 const skySunPosition = new THREE.Vector3();
 const DEFAULT_SUN_DIRECTION = new THREE.Vector3(0.35, 1, -0.25).normalize();
 const tempSunDirection = new THREE.Vector3();

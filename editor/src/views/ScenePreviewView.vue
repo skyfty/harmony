@@ -7,14 +7,15 @@ import { Sky } from 'three/addons/objects/Sky.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
-import type {
-	EnvironmentSettings,
-	LanternSlideDefinition,
-	SceneJsonExportDocument,
-	SceneNode,
-	SceneNodeComponentState,
-	SceneMaterialTextureRef,
-	SceneSkyboxSettings,
+import {
+	ENVIRONMENT_NODE_ID,
+	type EnvironmentSettings,
+	type LanternSlideDefinition,
+	type SceneJsonExportDocument,
+	type SceneNode,
+	type SceneNodeComponentState,
+	type SceneMaterialTextureRef,
+	type SceneSkyboxSettings,
 } from '@harmony/schema'
 import {
 	applyMaterialOverrides,
@@ -467,7 +468,6 @@ const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
 		hdriAssetId: null,
 	},
 }
-const ENVIRONMENT_NODE_ID = 'harmony:environment' as const
 const CAMERA_WATCH_TWEEN_DURATION = 0.45
 const CAMERA_LEVEL_TWEEN_DURATION = 0.35
 type CameraLookTweenMode = 'first-person' | 'orbit'

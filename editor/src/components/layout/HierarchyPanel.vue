@@ -153,7 +153,7 @@ function isNormalNodeType(node: SceneNode | null): boolean {
   if (!node) {
     return false
   }
-  return node.id !== 'harmony:ground' && node.id !== 'harmony:sky' && node.id !== 'harmony:environment'
+  return node.id !== GROUND_NODE_ID && node.id !== SKY_NODE_ID && node.id !== ENVIRONMENT_NODE_ID
 }
 
 const canSavePrefab = computed(() => {
