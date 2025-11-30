@@ -4329,7 +4329,6 @@ async function handlePointerDown(event: PointerEvent) {
 
 function handlePointerMove(event: PointerEvent) {
   if (nodePickerStore.isActive) {
-  console.log('handlePointerMove 222222222222222', event.pointerId)
     const hit = pickNodeAtPointer(event)
     updateNodePickerHighlight(hit)
     event.preventDefault()
@@ -4343,7 +4342,6 @@ function handlePointerMove(event: PointerEvent) {
   }
 
   if (groundSelectionDragState && event.pointerId === groundSelectionDragState.pointerId) {
-  console.log('handlePointerMove 2222222222222222222', event.pointerId)
     const definition = getGroundDynamicMeshDefinition()
     if (!definition) {
       groundSelectionDragState = null
@@ -4362,7 +4360,6 @@ function handlePointerMove(event: PointerEvent) {
 
   if (activeBuildTool.value === 'wall' && wallBuildSession) {
     if (wallBuildSession.dragStart) {
-  console.log('handlePointerMove 444444444444444444', event.pointerId)
       const isRightButtonActive = (event.buttons & 2) !== 0
       if (!isRightButtonActive) {
         updateWallSegmentDrag(event)
@@ -4402,7 +4399,6 @@ function handlePointerMove(event: PointerEvent) {
       if (distance < CLICK_DRAG_THRESHOLD_PX) {
         return
       }
-  console.log('handlePointerMove 5555555555555555555555', event.pointerId)
       drag.hasDragged = true
       pointerTrackingState.moved = true
       sceneStore.beginTransformInteraction(drag.nodeId)
