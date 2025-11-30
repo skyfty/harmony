@@ -581,16 +581,25 @@ function handleAssetDragStart(event: DragEvent, asset: ProjectAsset) {
     event.dataTransfer.effectAllowed = 'copyMove'
     event.dataTransfer.setData(ASSET_DRAG_MIME, JSON.stringify({ assetId: preparedAsset.id }))
     event.dataTransfer.dropEffect = 'copy'
-    preview = createDragPreview(asset)
-    if (preview) {
-      const rect = preview.getBoundingClientRect()
-      dragImageOffset = {
-        x: rect.width / 2,
-        y: rect.height / 2,
-      }
-      event.dataTransfer.setDragImage(preview, dragImageOffset.x, dragImageOffset.y)
-    } else {
+
+    const isModelOrMesh = asset.type === 'model' || asset.type === 'mesh'
+    const isCached = assetCacheStore.hasCache(preparedAsset.id)
+
+    if (isModelOrMesh && isCached) {
+      applyHiddenDragImage(event)
       dragImageOffset = null
+    } else {
+      preview = createDragPreview(asset)
+      if (preview) {
+        const rect = preview.getBoundingClientRect()
+        dragImageOffset = {
+          x: rect.width / 2,
+          y: rect.height / 2,
+        }
+        event.dataTransfer.setDragImage(preview, dragImageOffset.x, dragImageOffset.y)
+      } else {
+        dragImageOffset = null
+      }
     }
   } else {
     dragImageOffset = null
