@@ -101,7 +101,6 @@ import type {
   GuideboardEffectInstance,
 } from '@schema/components'
 import type { EnvironmentSettings } from '@/types/environment'
-import { useDynamicQualityController } from './useDynamicQualityController'
 import { createEffectPlaybackManager } from './effectPlaybackManager'
 import { usePlaceholderOverlayController } from './placeholderOverlayController'
 import { useToolbarPositioning } from './useToolbarPositioning'
@@ -535,27 +534,6 @@ const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((too
 let activeCameraMode: CameraProjection = cameraProjectionMode.value
 
 const activeBuildTool = ref<BuildTool | null>(null)
-
-const dynamicQualityController = useDynamicQualityController({
-  getRenderer: () => renderer,
-  getComposer: () => composer,
-  getViewportSize,
-  updateFxaaResolution,
-  getFallbackDirectionalLight: () => fallbackDirectionalLight,
-  areShadowsEnabled: () => Boolean(shadowsEnabled.value),
-  applyRendererShadowSetting,
-})
-
-const {
-  beginInteractiveQuality,
-  scheduleEndInteractiveQuality,
-  resetDynamicQualityState,
-  applyCurrentPixelRatio,
-  getCurrentPixelRatio,
-  cancelInteractiveQualityTimer,
-  setInteractiveQualityMode,
-} = dynamicQualityController
-
 const {
   overlayContainerRef,
   placeholderOverlayList,
@@ -1309,6 +1287,7 @@ function buildTransformGroupState(primaryId: string | null): TransformGroupState
 }
 
 const draggingChangedHandler = (event: unknown) => {
+  console.log('draggingChangedHandler', event)
   const value = (event as { value?: boolean })?.value ?? false
   if (orbitControls) {
     orbitControls.enabled = !value
@@ -1327,7 +1306,6 @@ const draggingChangedHandler = (event: unknown) => {
     // Dragging ends
     hideFaceSnapEffect()
     hasTransformLastWorldPosition = false
-    scheduleEndInteractiveQuality()
     if (transformControlsDirty) {
       commitTransformControlUpdates()
     }
@@ -1344,7 +1322,6 @@ const draggingChangedHandler = (event: unknown) => {
     // Dragging begins
     hideFaceSnapEffect()
     hasTransformLastWorldPosition = false
-    beginInteractiveQuality()
     transformControlsDirty = false
     const nodeId = (transformControls?.object as THREE.Object3D | null)?.userData?.nodeId as string | undefined
     sceneStore.beginTransformInteraction(nodeId ?? null)
@@ -1847,8 +1824,7 @@ function createPostProcessingPipeline(width: number, height: number) {
   const safeHeight = Math.max(1, height)
 
   composer = new EffectComposer(renderer)
-  const currentPixelRatio = getCurrentPixelRatio()
-  composer.setPixelRatio(currentPixelRatio)
+  composer.setPixelRatio(renderer.getPixelRatio())
   composer.setSize(safeWidth, safeHeight)
 
   renderPass = new RenderPass(scene, camera)
@@ -2614,6 +2590,7 @@ function buildCameraState(): SceneCameraState | null {
 }
 
 function applyCameraState(state: SceneCameraState | null | undefined) {
+  console.log('applyCameraState', state)
   if (!state || !orbitControls) return
 
   cameraTransitionState = null
@@ -2735,13 +2712,6 @@ function applyCameraControlMode(mode: CameraControlMode) {
 
   if (previousControls) {
     previousControls.removeEventListener('change', handleControlsChange)
-    // Remove interaction listeners if previously attached
-    // @ts-ignore - shared event names across controls
-    previousControls.removeEventListener('start', beginInteractiveQuality)
-    // @ts-ignore
-    previousControls.removeEventListener('end', scheduleEndInteractiveQuality)
-    // @ts-ignore
-    previousControls.removeEventListener('change', scheduleEndInteractiveQuality)
     previousControls.dispose()
   }
 
@@ -2773,11 +2743,6 @@ function applyCameraControlMode(mode: CameraControlMode) {
   orbitControls.addEventListener('change', handleControlsChange)
   // Track user interaction to lower render cost while moving the camera
   // @ts-ignore - both OrbitControls and MapControls emit these events
-  orbitControls.addEventListener('start', beginInteractiveQuality)
-  // @ts-ignore
-  orbitControls.addEventListener('end', scheduleEndInteractiveQuality)
-  // @ts-ignore
-  orbitControls.addEventListener('change', scheduleEndInteractiveQuality)
   bindControlsToCamera(camera)
   if (gizmoControls && orbitControls) {
     gizmoControls.attachControls(orbitControls as OrbitControls)
@@ -2862,7 +2827,6 @@ function initScene() {
     return
   }
 
-  resetDynamicQualityState()
   const width = viewportEl.value.clientWidth
   const height = viewportEl.value.clientHeight
 
@@ -2874,8 +2838,8 @@ function initScene() {
     powerPreference: 'high-performance',
     preserveDrawingBuffer: false,
   })
-  // Dynamic quality manager keeps pixel ratio capped for the current device
-  applyCurrentPixelRatio()
+  const pixelRatio = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+  renderer.setPixelRatio(pixelRatio)
   renderer.setSize(width, height)
   renderer.shadowMap.enabled = Boolean(shadowsEnabled.value)
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
@@ -3612,9 +3576,6 @@ function disposeScene() {
   resizeObserver?.disconnect()
   resizeObserver = null
 
-  // Clear any pending interactive quality timer and restore quality
-  cancelInteractiveQualityTimer()
-  setInteractiveQualityMode(false)
   hideFaceSnapEffect()
   FACE_SNAP_AXES.forEach((axis) => {
     const indicator = faceSnapEffectIndicators[axis]
@@ -3726,7 +3687,6 @@ function disposeScene() {
   wallPreviewNeedsSync = false
   wallPreviewSignature = null
   pendingSceneGraphSync = false
-  resetDynamicQualityState()
 }
 
 async function blobToDataUrl(blob: Blob): Promise<string> {
@@ -5102,6 +5062,7 @@ async function handlePointerDown(event: PointerEvent) {
 
 function handlePointerMove(event: PointerEvent) {
   if (nodePickerStore.isActive) {
+  console.log('handlePointerMove 222222222222222', event.pointerId)
     const hit = pickNodeAtPointer(event)
     updateNodePickerHighlight(hit)
     event.preventDefault()
@@ -5115,6 +5076,7 @@ function handlePointerMove(event: PointerEvent) {
   }
 
   if (groundSelectionDragState && event.pointerId === groundSelectionDragState.pointerId) {
+  console.log('handlePointerMove 2222222222222222222', event.pointerId)
     const definition = getGroundDynamicMeshDefinition()
     if (!definition) {
       groundSelectionDragState = null
@@ -5133,6 +5095,7 @@ function handlePointerMove(event: PointerEvent) {
 
   if (activeBuildTool.value === 'wall' && wallBuildSession) {
     if (wallBuildSession.dragStart) {
+  console.log('handlePointerMove 444444444444444444', event.pointerId)
       const isRightButtonActive = (event.buttons & 2) !== 0
       if (!isRightButtonActive) {
         updateWallSegmentDrag(event)
@@ -5172,6 +5135,7 @@ function handlePointerMove(event: PointerEvent) {
       if (distance < CLICK_DRAG_THRESHOLD_PX) {
         return
       }
+  console.log('handlePointerMove 5555555555555555555555', event.pointerId)
       drag.hasDragged = true
       pointerTrackingState.moved = true
       sceneStore.beginTransformInteraction(drag.nodeId)
@@ -6680,6 +6644,7 @@ async function handleViewportDrop(event: DragEvent) {
 }
 
 function handleTransformChange() {
+  console.warn('Transform change detected')
   if (!transformControls || !isSceneReady.value) return
   const target = transformControls.object as THREE.Object3D | null
   if (!target || !target.userData?.nodeId) {
