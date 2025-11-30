@@ -1173,7 +1173,6 @@ function buildTransformGroupState(primaryId: string | null): TransformGroupState
 }
 
 const draggingChangedHandler = (event: unknown) => {
-  console.log('draggingChangedHandler', event)
   const value = (event as { value?: boolean })?.value ?? false
   if (orbitControls) {
     orbitControls.enabled = !value
