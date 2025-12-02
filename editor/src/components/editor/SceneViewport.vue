@@ -153,8 +153,76 @@ const terrainStore = useTerrainStore()
 const { brushRadius, brushStrength, brushShape, brushOperation } = storeToRefs(terrainStore)
 const isSculpting = ref(false)
 
+type TerrainBrushShape = 'circle' | 'square' | 'star'
+
+function createPolygonRingGeometry(points: THREE.Vector2[], innerScale = 0.8): THREE.BufferGeometry {
+  if (!points.length) {
+    return new THREE.BufferGeometry()
+  }
+  const shape = new THREE.Shape()
+  shape.moveTo(points[0].x, points[0].y)
+  for (let index = 1; index < points.length; index += 1) {
+    const point = points[index]
+    shape.lineTo(point.x, point.y)
+  }
+  shape.closePath()
+
+  const innerPoints = points.map((point) => point.clone().multiplyScalar(innerScale)).reverse()
+  if (innerPoints.length) {
+    const hole = new THREE.Path()
+    hole.moveTo(innerPoints[0].x, innerPoints[0].y)
+    for (let index = 1; index < innerPoints.length; index += 1) {
+      const point = innerPoints[index]
+      hole.lineTo(point.x, point.y)
+    }
+    hole.closePath()
+    shape.holes.push(hole)
+  }
+  return new THREE.ShapeGeometry(shape, 1)
+}
+
+function createStarPoints(count: number, outerRadius: number, innerRadius: number): THREE.Vector2[] {
+  const points: THREE.Vector2[] = []
+  const step = Math.PI / count
+  for (let index = 0; index < count * 2; index += 1) {
+    const radius = index % 2 === 0 ? outerRadius : innerRadius
+    const angle = index * step
+    points.push(new THREE.Vector2(Math.cos(angle) * radius, Math.sin(angle) * radius))
+  }
+  return points
+}
+
+function createBrushGeometry(shape: TerrainBrushShape): THREE.BufferGeometry {
+  switch (shape) {
+    case 'square': {
+      const size = 1
+      const points = [
+        new THREE.Vector2(-size, -size),
+        new THREE.Vector2(size, -size),
+        new THREE.Vector2(size, size),
+        new THREE.Vector2(-size, size),
+      ]
+      return createPolygonRingGeometry(points, 0.85)
+    }
+    case 'star': {
+      const points = createStarPoints(5, 1, 0.5)
+      return createPolygonRingGeometry(points, 0.55)
+    }
+    case 'circle':
+    default:
+      return new THREE.RingGeometry(0.9, 1, 64)
+  }
+}
+
+function updateBrushGeometry(shape: TerrainBrushShape) {
+  const nextGeometry = createBrushGeometry(shape)
+  const previousGeometry = brushMesh.geometry
+  brushMesh.geometry = nextGeometry
+  previousGeometry?.dispose()
+}
+
 const brushMesh = new THREE.Mesh(
-  new THREE.RingGeometry(1, 1.1, 64),
+  createBrushGeometry(brushShape.value ?? 'circle'),
   new THREE.MeshBasicMaterial({ color: 0xff3333, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthTest: false, depthWrite: false })
 )
 brushMesh.rotation.x = -Math.PI / 2
@@ -1760,6 +1828,10 @@ watch(skyboxSettings, (settings) => {
 watch(environmentSettings, (settings) => {
   void applyEnvironmentSettingsToScene(settings)
 }, { deep: true, immediate: true })
+
+watch(brushShape, (shape) => {
+  updateBrushGeometry(shape ?? 'circle')
+})
 
 function resetCameraView() {
   if (!camera || !orbitControls) return
@@ -3997,16 +4069,16 @@ function updateBrush(event: PointerEvent) {
     
     const groundNode = sceneStore.selectedNode
     if (groundNode?.dynamicMesh?.type !== 'Ground') {
-        brushMesh.visible = false
-        return
+      brushMesh.visible = false
+      return
     }
-    
-    const groundObject = getRuntimeObject(groundNode.id)
+
+    const groundObject = getGroundMeshObject()
     if (!groundObject) {
         brushMesh.visible = false
         return
     }
-    
+
     const intersects = raycaster.intersectObject(groundObject, false)
     if (intersects.length > 0) {
         const hit = intersects[0]
@@ -4026,12 +4098,12 @@ function performSculpt(event: PointerEvent) {
     
     const groundNode = sceneStore.selectedNode
     if (groundNode?.dynamicMesh?.type !== 'Ground') return
-    
+
     const definition = groundNode.dynamicMesh as GroundDynamicMesh
-    
-    const groundObject = getRuntimeObject(groundNode.id)
+
+    const groundObject = getGroundMeshObject()
     if (!groundObject) return
-    
+
     const localPoint = groundObject.worldToLocal(brushMesh.position.clone())
     localPoint.y -= 0.1
     
