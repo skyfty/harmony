@@ -1718,6 +1718,7 @@ async function handleConfirmGround() {
   })
 
   if (created) {
+    sceneStore.ensureStaticRigidbodyComponent(created.id)
     sceneStore.updateNodeDynamicMesh(created.id, definition)
     sceneStore.setNodeSelectionLock(created.id, true)
     sceneStore.selectNode(created.id)
@@ -1781,7 +1782,12 @@ function handleAddLight(type: LightNodeType) {
     </template>
     <v-list class="add-menu-list">
       <v-list-item title="Group" @click="handleAddGroup()" />
-      <v-list-item title="Create Empty" @click="handleCreateEmptyNode()" />
+      <v-list-item title="Empty" @click="handleCreateEmptyNode()" />
+            <v-list-item 
+        title="Ground" 
+        @click="handleAddGround()" 
+        :disabled="!canAddGround"
+      />
       <v-menu  transition="none" location="end" offset="8">
         <template #activator="{ props: showcaseMenuProps }">
           <v-list-item
@@ -1833,12 +1839,7 @@ function handleAddLight(type: LightNodeType) {
       <v-divider class="add-menu-divider" />
       <v-list-item title="File" @click="handleMenuImportFromFile()" />
       <v-list-item title="URL" @click="handleMenuImportFromUrl()" />
-      <v-divider class="add-menu-divider" />
-      <v-list-item 
-        title="Ground" 
-        @click="handleAddGround()" 
-        :disabled="!canAddGround"
-      />
+
     </v-list>
   </v-menu>
   <v-dialog v-model="groundDialogOpen" max-width="520">

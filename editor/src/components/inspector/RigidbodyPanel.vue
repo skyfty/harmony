@@ -140,8 +140,8 @@ function handleRemoveComponent() {
       <div class="rigidbody-panel__body">
         <v-select
           label="Body Type"
-          density="comfortable"
-          variant="outlined"
+          density="compact"
+            variant="underlined"
           :items="BODY_TYPE_OPTIONS"
           item-title="label"
           item-value="value"
@@ -152,8 +152,8 @@ function handleRemoveComponent() {
         <v-text-field
           label="Mass"
           type="number"
-          density="comfortable"
-          variant="outlined"
+          density="compact"
+          variant="underlined"
           :min="MIN_RIGIDBODY_MASS"
           :max="MAX_RIGIDBODY_MASS"
           :step="0.1"

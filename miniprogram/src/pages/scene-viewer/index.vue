@@ -175,6 +175,7 @@
 import { effectScope, watchEffect, ref, computed, onUnmounted, watch, reactive, nextTick, type ComponentPublicInstance } from 'vue';
 import { onLoad, onUnload, onReady } from '@dcloudio/uni-app';
 import * as THREE from 'three';
+import * as CANNON from 'cannon-es';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js';
@@ -209,6 +210,7 @@ import {
   type SceneJsonExportDocument,
   type LanternSlideDefinition,
   type SceneMaterialTextureRef,
+  type GroundDynamicMesh,
 } from '@harmony/schema';
 import { ComponentManager } from '@schema/components/componentManager';
 import {
@@ -219,16 +221,26 @@ import {
   viewPointComponentDefinition,
   warpGateComponentDefinition,
   effectComponentDefinition,
+  rigidbodyComponentDefinition,
   WARP_GATE_RUNTIME_REGISTRY_KEY,
   WARP_GATE_EFFECT_ACTIVE_FLAG,
   GUIDEBOARD_RUNTIME_REGISTRY_KEY,
   GUIDEBOARD_EFFECT_ACTIVE_FLAG,
   GUIDEBOARD_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
+  RIGIDBODY_COMPONENT_TYPE,
+  RIGIDBODY_METADATA_KEY,
   clampGuideboardComponentProps,
   computeGuideboardEffectActive,
 } from '@schema/components';
-import type { GuideboardComponentProps, WarpGateComponentProps } from '@schema/components';
+import type {
+  GuideboardComponentProps,
+  WarpGateComponentProps,
+  RigidbodyComponentProps,
+  RigidbodyComponentMetadata,
+  RigidbodyPhysicsShape,
+  RigidbodyVector3Tuple,
+} from '@schema/components';
 import {
   addBehaviorRuntimeListener,
   hasRegisteredBehaviors,
@@ -660,6 +672,7 @@ previewComponentManager.registerDefinition(viewPointComponentDefinition);
 previewComponentManager.registerDefinition(warpGateComponentDefinition);
 previewComponentManager.registerDefinition(effectComponentDefinition);
 previewComponentManager.registerDefinition(behaviorComponentDefinition);
+previewComponentManager.registerDefinition(rigidbodyComponentDefinition);
 
 const previewNodeMap = new Map<string, SceneNode>();
 const assetNodeIdMap = new Map<string, Set<string>>();
@@ -671,10 +684,21 @@ const instancedMatrixHelper = new THREE.Matrix4();
 const instancedPositionHelper = new THREE.Vector3();
 const instancedQuaternionHelper = new THREE.Quaternion();
 const instancedScaleHelper = new THREE.Vector3();
+const physicsPositionHelper = new THREE.Vector3();
+const physicsQuaternionHelper = new THREE.Quaternion();
+const physicsScaleHelper = new THREE.Vector3();
 const instancedBoundsBox = new THREE.Box3();
 const instancedBoundsMin = new THREE.Vector3();
 const instancedBoundsMax = new THREE.Vector3();
 const nodeObjectMap = new Map<string, THREE.Object3D>();
+type RigidbodyInstance = { nodeId: string; body: CANNON.Body; object: THREE.Object3D | null };
+let physicsWorld: CANNON.World | null = null;
+const rigidbodyInstances = new Map<string, RigidbodyInstance>();
+type GroundHeightfieldCacheEntry = { signature: string; shape: CANNON.Heightfield; offset: [number, number, number] };
+const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>();
+const physicsGravity = new CANNON.Vec3(0, -9.82, 0);
+const PHYSICS_FIXED_TIMESTEP = 1 / 60;
+const PHYSICS_MAX_SUB_STEPS = 5;
 
 const behaviorRaycaster = new THREE.Raycaster();
 const behaviorPointer = new THREE.Vector2();
@@ -2101,6 +2125,32 @@ function resolveGuideboardInitialVisibility(node: SceneNode | null | undefined):
   return props?.initiallyVisible === true;
 }
 
+function resolveRigidbodyComponent(
+  node: SceneNode | null | undefined,
+): SceneNodeComponentState<RigidbodyComponentProps> | null {
+  const component = node?.components?.[RIGIDBODY_COMPONENT_TYPE] as
+    | SceneNodeComponentState<RigidbodyComponentProps>
+    | undefined;
+  if (!component || !component.enabled) {
+    return null;
+  }
+  return component;
+}
+
+function extractRigidbodyShape(
+  component: SceneNodeComponentState<RigidbodyComponentProps> | null,
+): RigidbodyPhysicsShape | null {
+  if (!component) {
+    return null;
+  }
+  const payload = component.metadata?.[RIGIDBODY_METADATA_KEY] as RigidbodyComponentMetadata | undefined;
+  return payload?.shape ?? null;
+}
+
+function isGroundDynamicMesh(value: SceneNode['dynamicMesh'] | null | undefined): value is GroundDynamicMesh {
+  return value?.type === 'Ground';
+}
+
 function attachRuntimeForNode(nodeId: string, object: THREE.Object3D) {
   const nodeState = resolveNodeById(nodeId);
   if (!nodeState) {
@@ -2114,10 +2164,12 @@ function indexSceneObjects(root: THREE.Object3D) {
     releaseModelInstance(nodeId);
   });
   nodeObjectMap.clear();
+  resetPhysicsWorld();
   root.traverse((object) => {
     const nodeId = object.userData?.nodeId as string | undefined;
     if (nodeId) {
       nodeObjectMap.set(nodeId, object);
+      ensureRigidbodyBindingForObject(nodeId, object);
       attachRuntimeForNode(nodeId, object);
       const instancedAssetId = object.userData?.instancedAssetId as string | undefined;
       if (instancedAssetId) {
@@ -2154,6 +2206,7 @@ function registerSceneSubtree(root: THREE.Object3D): void {
       return;
     }
     nodeObjectMap.set(nodeId, object);
+    ensureRigidbodyBindingForObject(nodeId, object);
     attachRuntimeForNode(nodeId, object);
     const instancedAssetId = object.userData?.instancedAssetId as string | undefined;
     if (instancedAssetId) {
@@ -2172,6 +2225,319 @@ function registerSceneSubtree(root: THREE.Object3D): void {
     }
     syncInstancedTransform(object);
   });
+}
+
+function ensurePhysicsWorld(): CANNON.World {
+  if (physicsWorld) {
+    return physicsWorld;
+  }
+  const world = new CANNON.World();
+  world.gravity.copy(physicsGravity);
+  physicsWorld = world;
+  return world;
+}
+
+function resetPhysicsWorld(): void {
+  if (physicsWorld) {
+    rigidbodyInstances.forEach(({ body }) => {
+      try {
+        physicsWorld?.removeBody(body);
+      } catch (error) {
+        console.warn('[SceneViewer] Failed to remove rigidbody', error);
+      }
+    });
+  }
+  rigidbodyInstances.clear();
+  physicsWorld = null;
+  groundHeightfieldCache.clear();
+}
+
+type GroundHeightfieldBuildResult = {
+  matrix: number[][];
+  elementSize: number;
+  halfWidth: number;
+  halfDepth: number;
+  signature: string;
+};
+
+function buildGroundHeightfieldData(definition: GroundDynamicMesh): GroundHeightfieldBuildResult | null {
+  const rawRows = Number.isFinite(definition.rows) ? Math.floor(definition.rows) : 0;
+  const rawColumns = Number.isFinite(definition.columns) ? Math.floor(definition.columns) : 0;
+  const rows = Math.max(1, rawRows);
+  const columns = Math.max(1, rawColumns);
+  const pointsX = columns + 1;
+  const pointsZ = rows + 1;
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1;
+  if (pointsX <= 0 || pointsZ <= 0) {
+    return null;
+  }
+  const heightMap = definition.heightMap ?? {};
+  const matrix: number[][] = [];
+  let heightHash = 0;
+  for (let column = 0; column < pointsX; column += 1) {
+    const columnValues: number[] = [];
+    for (let row = 0; row < pointsZ; row += 1) {
+      const key = `${row}:${column}`;
+      const rawHeight = heightMap[key];
+      const height = typeof rawHeight === 'number' && Number.isFinite(rawHeight) ? rawHeight : 0;
+      columnValues.push(height);
+      const normalized = Math.round(height * 1000);
+      heightHash = (heightHash * 31 + normalized) >>> 0;
+    }
+    matrix.push(columnValues);
+  }
+  const derivedWidth = columns * cellSize;
+  const derivedDepth = rows * cellSize;
+  const width = Number.isFinite(definition.width) && definition.width > 0 ? definition.width : derivedWidth;
+  const depth = Number.isFinite(definition.depth) && definition.depth > 0 ? definition.depth : derivedDepth;
+  const signature = `${columns}|${rows}|${Math.round(cellSize * 1000)}|${Math.round(width * 1000)}|${Math.round(depth * 1000)}|${heightHash.toString(16)}`;
+  return {
+    matrix,
+    elementSize: cellSize,
+    halfWidth: Math.max(0, width * 0.5),
+    halfDepth: Math.max(0, depth * 0.5),
+    signature,
+  };
+}
+
+function resolveGroundHeightfieldShape(
+  nodeId: string,
+  definition: GroundDynamicMesh,
+): GroundHeightfieldCacheEntry | null {
+  const data = buildGroundHeightfieldData(definition);
+  if (!data) {
+    groundHeightfieldCache.delete(nodeId);
+    return null;
+  }
+  const cached = groundHeightfieldCache.get(nodeId);
+  if (cached && cached.signature === data.signature) {
+    return cached;
+  }
+  const shape = new CANNON.Heightfield(data.matrix, { elementSize: data.elementSize });
+  const offset: [number, number, number] = [-data.halfWidth, 0, -data.halfDepth];
+  const entry: GroundHeightfieldCacheEntry = {
+    signature: data.signature,
+    shape,
+    offset,
+  };
+  groundHeightfieldCache.set(nodeId, entry);
+  return entry;
+}
+
+function createCannonShape(definition: RigidbodyPhysicsShape): CANNON.Shape | null {
+  if (definition.kind === 'box') {
+    const [x, y, z] = definition.halfExtents;
+    if (![x, y, z].every((value) => typeof value === 'number' && Number.isFinite(value) && value > 0)) {
+      return null;
+    }
+    return new CANNON.Box(new CANNON.Vec3(x, y, z));
+  }
+  if (definition.kind === 'convex') {
+    const vertices = (definition.vertices ?? []).map(([vx, vy, vz]) => new CANNON.Vec3(vx, vy, vz));
+    const faces = (definition.faces ?? []).map((face) => face.slice());
+    if (!vertices.length || !faces.length) {
+      return null;
+    }
+    return new CANNON.ConvexPolyhedron({ vertices, faces });
+  }
+  return null;
+}
+
+function mapBodyType(type: RigidbodyComponentProps['bodyType']): CANNON.Body['type'] {
+  switch (type) {
+    case 'STATIC':
+      return CANNON.Body.STATIC;
+    case 'KINEMATIC':
+      return CANNON.Body.KINEMATIC;
+    case 'DYNAMIC':
+    default:
+      return CANNON.Body.DYNAMIC;
+  }
+}
+
+function syncBodyFromObject(body: CANNON.Body, object: THREE.Object3D): void {
+  object.updateMatrixWorld(true);
+  object.matrixWorld.decompose(physicsPositionHelper, physicsQuaternionHelper, physicsScaleHelper);
+  body.position.set(physicsPositionHelper.x, physicsPositionHelper.y, physicsPositionHelper.z);
+  body.quaternion.set(
+    physicsQuaternionHelper.x,
+    physicsQuaternionHelper.y,
+    physicsQuaternionHelper.z,
+    physicsQuaternionHelper.w,
+  );
+  body.velocity.set(0, 0, 0);
+  body.angularVelocity.set(0, 0, 0);
+}
+
+function syncObjectFromBody(entry: RigidbodyInstance): void {
+  const { object, body } = entry;
+  if (!object) {
+    return;
+  }
+  object.position.set(body.position.x, body.position.y, body.position.z);
+  object.quaternion.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w);
+  object.updateMatrixWorld();
+  syncInstancedTransform(object);
+}
+
+function createRigidbodyBody(
+  node: SceneNode,
+  component: SceneNodeComponentState<RigidbodyComponentProps>,
+  shapeDefinition: RigidbodyPhysicsShape | null,
+  object: THREE.Object3D,
+): CANNON.Body | null {
+  let offsetTuple: RigidbodyVector3Tuple | null = null;
+  let resolvedShape: CANNON.Shape | null = null;
+  if (isGroundDynamicMesh(node.dynamicMesh)) {
+    const groundEntry = resolveGroundHeightfieldShape(node.id, node.dynamicMesh);
+    if (groundEntry) {
+      resolvedShape = groundEntry.shape;
+      offsetTuple = groundEntry.offset;
+    }
+  }
+  if (!resolvedShape && shapeDefinition) {
+    resolvedShape = createCannonShape(shapeDefinition);
+    offsetTuple = shapeDefinition.offset ?? null;
+  }
+  if (!resolvedShape) {
+    return null;
+  }
+  const props = component.props as RigidbodyComponentProps;
+  const isDynamic = props.bodyType === 'DYNAMIC';
+  const mass = isDynamic ? Math.max(0, props.mass ?? 0) : 0;
+  const body = new CANNON.Body({ mass });
+  body.type = mapBodyType(props.bodyType);
+  if (offsetTuple) {
+    const [ox, oy, oz] = offsetTuple;
+    body.addShape(resolvedShape, new CANNON.Vec3(ox ?? 0, oy ?? 0, oz ?? 0));
+  } else {
+    body.addShape(resolvedShape);
+  }
+  syncBodyFromObject(body, object);
+  body.updateMassProperties();
+  body.linearDamping = 0.04;
+  body.angularDamping = 0.04;
+  return body;
+}
+
+function removeRigidbodyInstance(nodeId: string): void {
+  const entry = rigidbodyInstances.get(nodeId);
+  if (!entry) {
+    return;
+  }
+  try {
+    physicsWorld?.removeBody(entry.body);
+  } catch (error) {
+    console.warn('[SceneViewer] Failed to remove rigidbody instance', error);
+  }
+  rigidbodyInstances.delete(nodeId);
+  groundHeightfieldCache.delete(nodeId);
+}
+
+function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D): void {
+  if (!physicsWorld || !currentDocument) {
+    return;
+  }
+  const node = resolveNodeById(nodeId);
+  const component = resolveRigidbodyComponent(node);
+  const shapeDefinition = extractRigidbodyShape(component);
+  const requiresMetadata = !isGroundDynamicMesh(node?.dynamicMesh);
+  if (!node || !component || !object) {
+    return;
+  }
+  if (!shapeDefinition && requiresMetadata) {
+    return;
+  }
+  const existing = rigidbodyInstances.get(nodeId);
+  if (existing) {
+    existing.object = object;
+    syncBodyFromObject(existing.body, object);
+    return;
+  }
+  const body = createRigidbodyBody(node, component, shapeDefinition, object);
+  if (!body) {
+    return;
+  }
+  physicsWorld.addBody(body);
+  rigidbodyInstances.set(nodeId, { nodeId, body, object });
+}
+
+function collectRigidbodyNodes(nodes: SceneNode[] | undefined | null): SceneNode[] {
+  const collected: SceneNode[] = [];
+  if (!Array.isArray(nodes)) {
+    return collected;
+  }
+  const stack: SceneNode[] = [...nodes];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    if (resolveRigidbodyComponent(node)) {
+      collected.push(node);
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  return collected;
+}
+
+function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null): void {
+  if (!document) {
+    resetPhysicsWorld();
+    return;
+  }
+  const rigidbodyNodes = collectRigidbodyNodes(document.nodes);
+  if (!rigidbodyNodes.length) {
+    resetPhysicsWorld();
+    return;
+  }
+  const world = ensurePhysicsWorld();
+  const desiredIds = new Set<string>();
+  rigidbodyNodes.forEach((node) => {
+    desiredIds.add(node.id);
+    const component = resolveRigidbodyComponent(node);
+    const shapeDefinition = extractRigidbodyShape(component);
+    const object = nodeObjectMap.get(node.id) ?? null;
+    const requiresMetadata = !isGroundDynamicMesh(node.dynamicMesh);
+    if (!component || !object) {
+      return;
+    }
+    if (!shapeDefinition && requiresMetadata) {
+      return;
+    }
+    const existing = rigidbodyInstances.get(node.id);
+    if (existing) {
+      world.removeBody(existing.body);
+      rigidbodyInstances.delete(node.id);
+    }
+    const body = createRigidbodyBody(node, component, shapeDefinition, object);
+    if (!body) {
+      return;
+    }
+    world.addBody(body);
+    rigidbodyInstances.set(node.id, { nodeId: node.id, body, object });
+  });
+  rigidbodyInstances.forEach((entry, nodeId) => {
+    if (!desiredIds.has(nodeId)) {
+      world.removeBody(entry.body);
+      rigidbodyInstances.delete(nodeId);
+    }
+  });
+  groundHeightfieldCache.forEach((_entry, nodeId) => {
+    if (!desiredIds.has(nodeId)) {
+      groundHeightfieldCache.delete(nodeId);
+    }
+  });
+}
+
+function stepPhysicsWorld(delta: number): void {
+  if (!physicsWorld || !rigidbodyInstances.size) {
+    return;
+  }
+  physicsWorld.step(PHYSICS_FIXED_TIMESTEP, delta, PHYSICS_MAX_SUB_STEPS);
+  rigidbodyInstances.forEach((entry) => syncObjectFromBody(entry));
 }
 
 async function applyDeferredInstancingForNode(nodeId: string): Promise<boolean> {
@@ -2220,6 +2586,7 @@ async function applyDeferredInstancingForNode(nodeId: string): Promise<boolean> 
       return;
     }
     nodeObjectMap.delete(candidateId);
+    removeRigidbodyInstance(candidateId);
     registerSceneSubtree(target);
   });
   includeNodeIds.forEach((candidateId) => {
@@ -2479,6 +2846,7 @@ async function loadActualAssetForPlaceholder(state: LazyPlaceholderState): Promi
     placeholder.parent?.remove(placeholder);
     disposeObject(placeholder);
     nodeObjectMap.delete(state.nodeId);
+    removeRigidbodyInstance(state.nodeId);
     registerSceneSubtree(detailed);
     state.loaded = true;
     deferredInstancingNodeIds.delete(state.nodeId);
@@ -4487,6 +4855,7 @@ function teardownRenderer() {
     releaseModelInstance(nodeId);
   });
   nodeObjectMap.clear();
+  resetPhysicsWorld();
   lazyPlaceholderStates.clear();
   deferredInstancingNodeIds.clear();
   activeLazyLoadCount = 0;
@@ -4647,6 +5016,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
     releaseModelInstance(nodeId);
   });
   nodeObjectMap.clear();
+  resetPhysicsWorld();
   clearInstancedMeshes();
   scene.children.forEach((child) => disposeObject(child));
   disposeMaterialTextureCache();
@@ -4764,6 +5134,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   refreshAnimationControllers(graph.root);
   ensureBehaviorTapHandler(canvas as HTMLCanvasElement, camera);
   initializeLazyPlaceholders(payload.document);
+  syncPhysicsBodiesForDocument(payload.document);
 
 
   const skyboxSettings = resolveSceneSkybox(payload.document);
@@ -4798,6 +5169,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
               console.warn('更新特效动画失败', error);
             }
           });
+          stepPhysicsWorld(deltaSeconds);
         }
         updateBehaviorProximity();
         updateLazyPlaceholders(deltaSeconds);

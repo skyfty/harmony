@@ -14,6 +14,7 @@ import {
 	type LanternSlideDefinition,
 	type SceneJsonExportDocument,
 	type SceneNode,
+	type GroundDynamicMesh,
 	type SceneNodeComponentState,
 	type SceneMaterialTextureRef,
 	type SceneSkyboxSettings,
@@ -68,6 +69,7 @@ import type {
 	RigidbodyComponentMetadata,
 	RigidbodyComponentProps,
 	RigidbodyPhysicsShape,
+	RigidbodyVector3Tuple,
 	WarpGateComponentProps,
 } from '@schema/components'
 import {
@@ -540,6 +542,8 @@ const nodeObjectMap = new Map<string, THREE.Object3D>()
 type RigidbodyInstance = { nodeId: string; body: CANNON.Body; object: THREE.Object3D | null }
 let physicsWorld: CANNON.World | null = null
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
+type GroundHeightfieldCacheEntry = { signature: string; shape: CANNON.Heightfield; offset: [number, number, number] }
+const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>()
 const physicsGravity = new CANNON.Vec3(0, -9.82, 0)
 const PHYSICS_FIXED_TIMESTEP = 1 / 60
 const PHYSICS_MAX_SUB_STEPS = 5
@@ -661,6 +665,10 @@ function resolveRigidbodyComponent(
 		return null
 	}
 	return component
+}
+
+function isGroundDynamicMesh(value: SceneNode['dynamicMesh'] | null | undefined): value is GroundDynamicMesh {
+	return value?.type === 'Ground'
 }
 
 function extractRigidbodyShape(
@@ -3851,6 +3859,79 @@ function resetPhysicsWorld(): void {
 	}
 	rigidbodyInstances.clear()
 	physicsWorld = null
+	groundHeightfieldCache.clear()
+}
+
+type GroundHeightfieldBuildResult = {
+	matrix: number[][]
+	elementSize: number
+	halfWidth: number
+	halfDepth: number
+	signature: string
+}
+
+function buildGroundHeightfieldData(definition: GroundDynamicMesh): GroundHeightfieldBuildResult | null {
+	const rawRows = Number.isFinite(definition.rows) ? Math.floor(definition.rows) : 0
+	const rawColumns = Number.isFinite(definition.columns) ? Math.floor(definition.columns) : 0
+	const rows = Math.max(1, rawRows)
+	const columns = Math.max(1, rawColumns)
+	const pointsX = columns + 1
+	const pointsZ = rows + 1
+	const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+	if (pointsX <= 0 || pointsZ <= 0) {
+		return null
+	}
+	const heightMap = definition.heightMap ?? {}
+	const matrix: number[][] = []
+	let heightHash = 0
+	for (let column = 0; column < pointsX; column += 1) {
+		const columnValues: number[] = []
+		for (let row = 0; row < pointsZ; row += 1) {
+			const key = `${row}:${column}`
+			const rawHeight = heightMap[key]
+			const height = typeof rawHeight === 'number' && Number.isFinite(rawHeight) ? rawHeight : 0
+			columnValues.push(height)
+			const normalized = Math.round(height * 1000)
+			heightHash = (heightHash * 31 + normalized) >>> 0
+		}
+		matrix.push(columnValues)
+	}
+	const derivedWidth = columns * cellSize
+	const derivedDepth = rows * cellSize
+	const width = Number.isFinite(definition.width) && definition.width > 0 ? definition.width : derivedWidth
+	const depth = Number.isFinite(definition.depth) && definition.depth > 0 ? definition.depth : derivedDepth
+	const signature = `${columns}|${rows}|${Math.round(cellSize * 1000)}|${Math.round(width * 1000)}|${Math.round(depth * 1000)}|${heightHash.toString(16)}`
+	return {
+		matrix,
+		elementSize: cellSize,
+		halfWidth: Math.max(0, width * 0.5),
+		halfDepth: Math.max(0, depth * 0.5),
+		signature,
+	}
+}
+
+function resolveGroundHeightfieldShape(
+	nodeId: string,
+	definition: GroundDynamicMesh,
+): GroundHeightfieldCacheEntry | null {
+	const data = buildGroundHeightfieldData(definition)
+	if (!data) {
+		groundHeightfieldCache.delete(nodeId)
+		return null
+	}
+	const cached = groundHeightfieldCache.get(nodeId)
+	if (cached && cached.signature === data.signature) {
+		return cached
+	}
+	const shape = new CANNON.Heightfield(data.matrix, { elementSize: data.elementSize })
+	const offset: [number, number, number] = [-data.halfWidth, 0, -data.halfDepth]
+	const entry: GroundHeightfieldCacheEntry = {
+		signature: data.signature,
+		shape,
+		offset,
+	}
+	groundHeightfieldCache.set(nodeId, entry)
+	return entry
 }
 
 function createCannonShape(definition: RigidbodyPhysicsShape): CANNON.Shape | null {
@@ -3910,12 +3991,25 @@ function syncObjectFromBody(entry: RigidbodyInstance): void {
 }
 
 function createRigidbodyBody(
+	node: SceneNode,
 	component: SceneNodeComponentState<RigidbodyComponentProps>,
-	shapeDefinition: RigidbodyPhysicsShape,
+	shapeDefinition: RigidbodyPhysicsShape | null,
 	object: THREE.Object3D,
 ): CANNON.Body | null {
-	const shape = createCannonShape(shapeDefinition)
-	if (!shape) {
+	let offsetTuple: RigidbodyVector3Tuple | null = null
+	let resolvedShape: CANNON.Shape | null = null
+	if (isGroundDynamicMesh(node.dynamicMesh)) {
+		const groundEntry = resolveGroundHeightfieldShape(node.id, node.dynamicMesh)
+		if (groundEntry) {
+			resolvedShape = groundEntry.shape
+			offsetTuple = groundEntry.offset
+		}
+	}
+	if (!resolvedShape && shapeDefinition) {
+		resolvedShape = createCannonShape(shapeDefinition)
+		offsetTuple = shapeDefinition.offset ?? null
+	}
+	if (!resolvedShape) {
 		return null
 	}
 	const props = component.props as RigidbodyComponentProps
@@ -3923,11 +4017,11 @@ function createRigidbodyBody(
 	const mass = isDynamic ? Math.max(0, props.mass ?? 0) : 0
 	const body = new CANNON.Body({ mass })
 	body.type = mapBodyType(props.bodyType)
-	if (shapeDefinition.offset) {
-		const [ox, oy, oz] = shapeDefinition.offset
-		body.addShape(shape, new CANNON.Vec3(ox ?? 0, oy ?? 0, oz ?? 0))
+	if (offsetTuple) {
+		const [ox, oy, oz] = offsetTuple
+		body.addShape(resolvedShape, new CANNON.Vec3(ox ?? 0, oy ?? 0, oz ?? 0))
 	} else {
-		body.addShape(shape)
+		body.addShape(resolvedShape)
 	}
 	syncBodyFromObject(body, object)
 	body.updateMassProperties()
@@ -3947,6 +4041,7 @@ function removeRigidbodyInstance(nodeId: string): void {
 		console.warn('[ScenePreview] Failed to remove rigidbody instance', error)
 	}
 	rigidbodyInstances.delete(nodeId)
+	groundHeightfieldCache.delete(nodeId)
 }
 
 function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D): void {
@@ -3956,7 +4051,11 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
 	const node = resolveNodeById(nodeId)
 	const component = resolveRigidbodyComponent(node)
 	const shapeDefinition = extractRigidbodyShape(component)
-	if (!node || !component || !shapeDefinition) {
+	const requiresMetadata = !isGroundDynamicMesh(node?.dynamicMesh)
+	if (!node || !component || !object) {
+		return
+	}
+	if (!shapeDefinition && requiresMetadata) {
 		return
 	}
 	const existing = rigidbodyInstances.get(nodeId)
@@ -3965,7 +4064,7 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
 		syncBodyFromObject(existing.body, object)
 		return
 	}
-	const body = createRigidbodyBody(component, shapeDefinition, object)
+	const body = createRigidbodyBody(node, component, shapeDefinition, object)
 	if (!body) {
 		return
 	}
@@ -4011,7 +4110,11 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 		const component = resolveRigidbodyComponent(node)
 		const shapeDefinition = extractRigidbodyShape(component)
 		const object = nodeObjectMap.get(node.id) ?? null
-		if (!component || !shapeDefinition || !object) {
+		const requiresMetadata = !isGroundDynamicMesh(node.dynamicMesh)
+		if (!component || !object) {
+			return
+		}
+		if (!shapeDefinition && requiresMetadata) {
 			return
 		}
 		const existing = rigidbodyInstances.get(node.id)
@@ -4019,7 +4122,7 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 			world.removeBody(existing.body)
 			rigidbodyInstances.delete(node.id)
 		}
-		const body = createRigidbodyBody(component, shapeDefinition, object)
+		const body = createRigidbodyBody(node, component, shapeDefinition, object)
 		if (!body) {
 			return
 		}
@@ -4030,6 +4133,11 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 		if (!desiredIds.has(nodeId)) {
 			world.removeBody(entry.body)
 			rigidbodyInstances.delete(nodeId)
+		}
+	})
+	groundHeightfieldCache.forEach((_entry, nodeId) => {
+		if (!desiredIds.has(nodeId)) {
+			groundHeightfieldCache.delete(nodeId)
 		}
 	})
 }

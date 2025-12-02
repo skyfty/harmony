@@ -10202,6 +10202,40 @@ export const useSceneStore = defineStore('scene', {
       })
       return `${prefix}${nextIndex.toString().padStart(2, '0')}`
     },
+    ensureStaticRigidbodyComponent(nodeId: string): SceneNodeComponentState<RigidbodyComponentProps> | null {
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target) {
+        return null
+      }
+
+      const existing = target.components?.[RIGIDBODY_COMPONENT_TYPE] as
+        | SceneNodeComponentState<RigidbodyComponentProps>
+        | undefined
+
+      if (existing) {
+        const props = clampRigidbodyComponentProps(existing.props as RigidbodyComponentProps)
+        if (props.bodyType === 'STATIC' && Math.abs(props.mass) <= 1e-4) {
+          return existing
+        }
+        this.updateNodeComponentProps(nodeId, existing.id, {
+          bodyType: 'STATIC',
+          mass: 0,
+        })
+        return existing
+      }
+
+      const created = this.addNodeComponent(nodeId, RIGIDBODY_COMPONENT_TYPE) as
+        | SceneNodeComponentState<RigidbodyComponentProps>
+        | null
+      if (!created) {
+        return null
+      }
+      this.updateNodeComponentProps(nodeId, created.id, {
+        bodyType: 'STATIC',
+        mass: 0,
+      })
+      return created
+    },
     createWallNode(payload: {
       segments: Array<{ start: Vector3Like; end: Vector3Like }>
       dimensions?: { height?: number; width?: number; thickness?: number }
@@ -10223,6 +10257,9 @@ export const useSceneStore = defineStore('scene', {
         scale: createVector(1, 1, 1),
         dynamicMesh: build.definition,
       })
+      if (node) {
+        this.ensureStaticRigidbodyComponent(node.id)
+      }
       return node
     },
     createSurfaceNode(payload: { points: Vector3Like[]; name?: string }): SceneNode | null {
