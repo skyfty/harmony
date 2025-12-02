@@ -84,11 +84,6 @@ const localDepth = computed(() => groundDefinition.value?.depth ?? 0)
         </v-btn-toggle>
       </div>
       
-      <div class="text-caption mt-4 text-grey">
-        Hold Middle Mouse Button to sculpt.<br>
-        Hold Shift to dig.
-      </div>
-
     </v-expansion-panel-text>
   </v-expansion-panel>
 </template>

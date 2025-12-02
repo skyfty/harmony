@@ -9705,6 +9705,7 @@ export const useSceneStore = defineStore('scene', {
     async addModelNode(payload: {
       object?: Object3D
       asset?: ProjectAsset
+      nodeId?: string
       nodeType?: SceneNodeType
       position?: THREE.Vector3
       baseY?: number
@@ -9847,6 +9848,7 @@ export const useSceneStore = defineStore('scene', {
       const nodeType = payload.nodeType ?? (canUseInstancing ? 'Group' : resolveSceneNodeTypeFromObject(runtimeSource))
 
       const node = this.addSceneNode({
+        nodeId: payload.nodeId,
         nodeType,
         object: runtimeSource,
         name: name ?? runtimeSource.name ?? 'Imported Mesh',
@@ -9949,6 +9951,7 @@ export const useSceneStore = defineStore('scene', {
     },
 
     addSceneNode(payload: {
+      nodeId?: string
       nodeType: SceneNodeType
       object: Object3D
       name?: string
@@ -9963,7 +9966,7 @@ export const useSceneStore = defineStore('scene', {
       userData?: Record<string, unknown>
     }) {
       this.captureHistorySnapshot()
-      const id = generateUuid()
+      const id = payload.nodeId ?? generateUuid()
       const nodeType = normalizeSceneNodeType(payload.nodeType)
       let nodeMaterials: SceneNodeMaterial[] | undefined
 

@@ -20,7 +20,7 @@ import { useUiStore } from '@/stores/uiStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import UrlInputDialog from './UrlInputDialog.vue'
 import { generateUuid } from '@/utils/uuid'
-import { type LightNodeType, type SceneNode, type Vector3Like } from '@harmony/schema'
+import { GROUND_NODE_ID, type LightNodeType, type SceneNode, type Vector3Like } from '@harmony/schema'
 import { determineAssetCategoryId } from '@/stores/assetCatalog'
 import { blobToDataUrl } from '@/utils/blob'
 import {
@@ -1709,6 +1709,7 @@ async function handleConfirmGround() {
   mesh.name = 'Ground'
 
   const created = await sceneStore.addModelNode({
+    nodeId: GROUND_NODE_ID,
     object: mesh,
     nodeType: 'Mesh',
     name: 'Ground',
