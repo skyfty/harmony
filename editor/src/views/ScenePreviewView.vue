@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type ComponentPublicInstance } from 'vue'
 import * as THREE from 'three'
+import * as CANNON from 'cannon-es'
 import { FirstPersonControls } from 'three/examples/jsm/controls/FirstPersonControls.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { Sky } from 'three/addons/objects/Sky.js'
@@ -51,15 +52,24 @@ import {
 	viewPointComponentDefinition,
 	warpGateComponentDefinition,
 	effectComponentDefinition,
+	rigidbodyComponentDefinition,
 	GUIDEBOARD_COMPONENT_TYPE,
 	GUIDEBOARD_RUNTIME_REGISTRY_KEY,
 	GUIDEBOARD_EFFECT_ACTIVE_FLAG,
 	WARP_GATE_RUNTIME_REGISTRY_KEY,
 	WARP_GATE_EFFECT_ACTIVE_FLAG,
+	RIGIDBODY_COMPONENT_TYPE,
+	RIGIDBODY_METADATA_KEY,
 	clampGuideboardComponentProps,
 	computeGuideboardEffectActive,
 } from '@schema/components'
-import type { GuideboardComponentProps, WarpGateComponentProps } from '@schema/components'
+import type {
+	GuideboardComponentProps,
+	RigidbodyComponentMetadata,
+	RigidbodyComponentProps,
+	RigidbodyPhysicsShape,
+	WarpGateComponentProps,
+} from '@schema/components'
 import {
 	addBehaviorRuntimeListener,
 	hasRegisteredBehaviors,
@@ -293,6 +303,7 @@ previewComponentManager.registerDefinition(displayBoardComponentDefinition)
 previewComponentManager.registerDefinition(viewPointComponentDefinition)
 previewComponentManager.registerDefinition(warpGateComponentDefinition)
 previewComponentManager.registerDefinition(effectComponentDefinition)
+previewComponentManager.registerDefinition(rigidbodyComponentDefinition)
 previewComponentManager.registerDefinition(behaviorComponentDefinition)
 
 const previewNodeMap = new Map<string, SceneNode>()
@@ -522,7 +533,16 @@ const instancedMatrixHelper = new THREE.Matrix4()
 const instancedPositionHelper = new THREE.Vector3()
 const instancedQuaternionHelper = new THREE.Quaternion()
 const instancedScaleHelper = new THREE.Vector3()
+const physicsPositionHelper = new THREE.Vector3()
+const physicsQuaternionHelper = new THREE.Quaternion()
+const physicsScaleHelper = new THREE.Vector3()
 const nodeObjectMap = new Map<string, THREE.Object3D>()
+type RigidbodyInstance = { nodeId: string; body: CANNON.Body; object: THREE.Object3D | null }
+let physicsWorld: CANNON.World | null = null
+const rigidbodyInstances = new Map<string, RigidbodyInstance>()
+const physicsGravity = new CANNON.Vec3(0, -9.82, 0)
+const PHYSICS_FIXED_TIMESTEP = 1 / 60
+const PHYSICS_MAX_SUB_STEPS = 5
 const rotationState = { q: false, e: false }
 const defaultFirstPersonState = {
 	position: new THREE.Vector3(0, CAMERA_HEIGHT, 0),
@@ -630,6 +650,27 @@ function resolveGuideboardInitialVisibility(node: SceneNode | null | undefined):
 	}
 	const props = component.props as GuideboardComponentProps | undefined
 	return props?.initiallyVisible === true
+}
+
+function resolveRigidbodyComponent(
+	node: SceneNode | null | undefined,
+): SceneNodeComponentState<RigidbodyComponentProps> | null {
+	const component = node?.components?.[RIGIDBODY_COMPONENT_TYPE] as
+		SceneNodeComponentState<RigidbodyComponentProps> | undefined
+	if (!component || !component.enabled) {
+		return null
+	}
+	return component
+}
+
+function extractRigidbodyShape(
+	component: SceneNodeComponentState<RigidbodyComponentProps> | null,
+): RigidbodyPhysicsShape | null {
+	if (!component) {
+		return null
+	}
+	const payload = component.metadata?.[RIGIDBODY_METADATA_KEY] as RigidbodyComponentMetadata | undefined
+	return payload?.shape ?? null
 }
 
 function normalizeHexColor(value: unknown, fallback: string): string {
@@ -3074,6 +3115,7 @@ function startAnimationLoop() {
 					console.warn('[ScenePreview] Failed to advance effect runtime', error)
 				}
 			})
+			stepPhysicsWorld(delta)
 		}
 
 		updateBehaviorProximity()
@@ -3098,6 +3140,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 		releaseModelInstance(nodeId)
 	})
 	nodeObjectMap.clear()
+	resetPhysicsWorld()
 	if (!options.preservePreviewNodeMap) {
 		previewNodeMap.clear()
 	}
@@ -3679,6 +3722,7 @@ function removeNodeSubtree(nodeId: string) {
 		if (id) {
 			releaseModelInstance(id)
 			nodeObjectMap.delete(id)
+			removeRigidbodyInstance(id)
 			previewComponentManager.removeNode(id)
 			previewNodeMap.delete(id)
 			const controller = nodeAnimationControllers.get(id)
@@ -3708,6 +3752,7 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 				return
 			}
 			nodeObjectMap.set(nodeId, child)
+			ensureRigidbodyBindingForObject(nodeId, child)
 			pending?.delete(nodeId)
 			attachRuntimeForNode(nodeId, child)
 			const instancedAssetId = child.userData?.instancedAssetId as string | undefined
@@ -3782,6 +3827,219 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 	}
 	instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
 	updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
+}
+
+function ensurePhysicsWorld(): CANNON.World {
+	if (physicsWorld) {
+		return physicsWorld
+	}
+	const world = new CANNON.World()
+	world.gravity.copy(physicsGravity)
+	physicsWorld = world
+	return world
+}
+
+function resetPhysicsWorld(): void {
+	if (physicsWorld) {
+		rigidbodyInstances.forEach(({ body }) => {
+			try {
+				physicsWorld?.removeBody(body)
+			} catch (error) {
+				console.warn('[ScenePreview] Failed to remove rigidbody', error)
+			}
+		})
+	}
+	rigidbodyInstances.clear()
+	physicsWorld = null
+}
+
+function createCannonShape(definition: RigidbodyPhysicsShape): CANNON.Shape | null {
+	if (definition.kind === 'box') {
+		const [x, y, z] = definition.halfExtents
+		if (![x, y, z].every((value) => typeof value === 'number' && Number.isFinite(value) && value > 0)) {
+			return null
+		}
+		return new CANNON.Box(new CANNON.Vec3(x, y, z))
+	}
+	if (definition.kind === 'convex') {
+		const vertices = (definition.vertices ?? []).map(([vx, vy, vz]) => new CANNON.Vec3(vx, vy, vz))
+		const faces = (definition.faces ?? []).map((face) => face.slice())
+		if (!vertices.length || !faces.length) {
+			return null
+		}
+		return new CANNON.ConvexPolyhedron({ vertices, faces })
+	}
+	return null
+}
+
+function mapBodyType(type: RigidbodyComponentProps['bodyType']): CANNON.Body['type'] {
+	switch (type) {
+		case 'STATIC':
+			return CANNON.Body.STATIC
+		case 'KINEMATIC':
+			return CANNON.Body.KINEMATIC
+		case 'DYNAMIC':
+	default:
+			return CANNON.Body.DYNAMIC
+	}
+}
+
+function syncBodyFromObject(body: CANNON.Body, object: THREE.Object3D): void {
+	object.updateMatrixWorld(true)
+	object.matrixWorld.decompose(physicsPositionHelper, physicsQuaternionHelper, physicsScaleHelper)
+	body.position.set(physicsPositionHelper.x, physicsPositionHelper.y, physicsPositionHelper.z)
+	body.quaternion.set(
+		physicsQuaternionHelper.x,
+		physicsQuaternionHelper.y,
+		physicsQuaternionHelper.z,
+		physicsQuaternionHelper.w,
+	)
+	body.velocity.set(0, 0, 0)
+	body.angularVelocity.set(0, 0, 0)
+}
+
+function syncObjectFromBody(entry: RigidbodyInstance): void {
+	const { object, body } = entry
+	if (!object) {
+		return
+	}
+	object.position.set(body.position.x, body.position.y, body.position.z)
+	object.quaternion.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w)
+	object.updateMatrixWorld()
+	syncInstancedTransform(object)
+}
+
+function createRigidbodyBody(
+	component: SceneNodeComponentState<RigidbodyComponentProps>,
+	shapeDefinition: RigidbodyPhysicsShape,
+	object: THREE.Object3D,
+): CANNON.Body | null {
+	const shape = createCannonShape(shapeDefinition)
+	if (!shape) {
+		return null
+	}
+	const props = component.props as RigidbodyComponentProps
+	const isDynamic = props.bodyType === 'DYNAMIC'
+	const mass = isDynamic ? Math.max(0, props.mass ?? 0) : 0
+	const body = new CANNON.Body({ mass })
+	body.type = mapBodyType(props.bodyType)
+	if (shapeDefinition.offset) {
+		const [ox, oy, oz] = shapeDefinition.offset
+		body.addShape(shape, new CANNON.Vec3(ox ?? 0, oy ?? 0, oz ?? 0))
+	} else {
+		body.addShape(shape)
+	}
+	syncBodyFromObject(body, object)
+	body.updateMassProperties()
+	body.linearDamping = 0.04
+	body.angularDamping = 0.04
+	return body
+}
+
+function removeRigidbodyInstance(nodeId: string): void {
+	const entry = rigidbodyInstances.get(nodeId)
+	if (!entry) {
+		return
+	}
+	try {
+		physicsWorld?.removeBody(entry.body)
+	} catch (error) {
+		console.warn('[ScenePreview] Failed to remove rigidbody instance', error)
+	}
+	rigidbodyInstances.delete(nodeId)
+}
+
+function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D): void {
+	if (!physicsWorld || !currentDocument) {
+		return
+	}
+	const node = resolveNodeById(nodeId)
+	const component = resolveRigidbodyComponent(node)
+	const shapeDefinition = extractRigidbodyShape(component)
+	if (!node || !component || !shapeDefinition) {
+		return
+	}
+	const existing = rigidbodyInstances.get(nodeId)
+	if (existing) {
+		existing.object = object
+		syncBodyFromObject(existing.body, object)
+		return
+	}
+	const body = createRigidbodyBody(component, shapeDefinition, object)
+	if (!body) {
+		return
+	}
+	physicsWorld.addBody(body)
+	rigidbodyInstances.set(nodeId, { nodeId, body, object })
+}
+
+function collectRigidbodyNodes(nodes: SceneNode[] | undefined | null): SceneNode[] {
+	const collected: SceneNode[] = []
+	if (!Array.isArray(nodes)) {
+		return collected
+	}
+	const stack: SceneNode[] = [...nodes]
+	while (stack.length) {
+		const node = stack.pop()
+		if (!node) {
+			continue
+		}
+		if (resolveRigidbodyComponent(node)) {
+			collected.push(node)
+		}
+		if (Array.isArray(node.children) && node.children.length) {
+			stack.push(...node.children)
+		}
+	}
+	return collected
+}
+
+function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null): void {
+	if (!document) {
+		resetPhysicsWorld()
+		return
+	}
+	const rigidbodyNodes = collectRigidbodyNodes(document.nodes)
+	if (!rigidbodyNodes.length) {
+		resetPhysicsWorld()
+		return
+	}
+	const world = ensurePhysicsWorld()
+	const desiredIds = new Set<string>()
+	rigidbodyNodes.forEach((node) => {
+		desiredIds.add(node.id)
+		const component = resolveRigidbodyComponent(node)
+		const shapeDefinition = extractRigidbodyShape(component)
+		const object = nodeObjectMap.get(node.id) ?? null
+		if (!component || !shapeDefinition || !object) {
+			return
+		}
+		const existing = rigidbodyInstances.get(node.id)
+		if (existing) {
+			world.removeBody(existing.body)
+			rigidbodyInstances.delete(node.id)
+		}
+		const body = createRigidbodyBody(component, shapeDefinition, object)
+		if (!body) {
+			return
+		}
+		world.addBody(body)
+		rigidbodyInstances.set(node.id, { nodeId: node.id, body, object })
+	})
+	rigidbodyInstances.forEach((entry, nodeId) => {
+		if (!desiredIds.has(nodeId)) {
+			world.removeBody(entry.body)
+			rigidbodyInstances.delete(nodeId)
+		}
+	})
+}
+
+function stepPhysicsWorld(delta: number): void {
+	if (!physicsWorld || !rigidbodyInstances.size) {
+		return
+	}
+	physicsWorld.step(PHYSICS_FIXED_TIMESTEP, delta, PHYSICS_MAX_SUB_STEPS)
+	rigidbodyInstances.forEach((entry) => syncObjectFromBody(entry))
 }
 
 function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
@@ -4345,6 +4603,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 		currentDocument = document
 		refreshAnimations()
 		initializeLazyPlaceholders(document)
+		syncPhysicsBodiesForDocument(document)
 		void applyEnvironmentSettingsToScene(environmentSettings)
 		return
 	}
@@ -4357,6 +4616,8 @@ async function updateScene(document: SceneJsonExportDocument) {
 			registerSubtree(object, pendingObjects)
 		}
 	}
+
+	syncPhysicsBodiesForDocument(document)
 
 	currentDocument = document
 	refreshAnimations()

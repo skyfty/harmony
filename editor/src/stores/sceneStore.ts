@@ -158,6 +158,7 @@ import type {
   DisplayBoardComponentProps,
   EffectComponentProps,
   GuideboardComponentProps,
+  RigidbodyComponentProps,
   ViewPointComponentProps,
   WallComponentProps,
   WarpGateComponentProps,
@@ -170,6 +171,7 @@ import {
   DISPLAY_BOARD_COMPONENT_TYPE,
   EFFECT_COMPONENT_TYPE,
   BEHAVIOR_COMPONENT_TYPE,
+  RIGIDBODY_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_THICKNESS,
   WALL_DEFAULT_WIDTH,
@@ -192,6 +194,8 @@ import {
   createWarpGateComponentState,
   clampEffectComponentProps,
   cloneEffectComponentProps,
+  clampRigidbodyComponentProps,
+  cloneRigidbodyComponentProps,
   componentManager,
   resolveWallComponentPropsFromMesh,
 } from '@schema/components'
@@ -10488,6 +10492,7 @@ export const useSceneStore = defineStore('scene', {
         | DisplayBoardComponentProps
         | WarpGateComponentProps
         | EffectComponentProps
+        | RigidbodyComponentProps
       if (type === WALL_COMPONENT_TYPE) {
         const currentProps = component.props as WallComponentProps
         const merged = clampWallProps({
@@ -10572,6 +10577,20 @@ export const useSceneStore = defineStore('scene', {
           return false
         }
         nextProps = cloneEffectComponentProps(merged)
+      } else if (type === RIGIDBODY_COMPONENT_TYPE) {
+        const currentProps = clampRigidbodyComponentProps(component.props as RigidbodyComponentProps)
+        const typedPatch = patch as Partial<RigidbodyComponentProps>
+        const merged = clampRigidbodyComponentProps({
+          ...currentProps,
+          ...typedPatch,
+        })
+        if (
+          Math.abs(currentProps.mass - merged.mass) <= 1e-4 &&
+          currentProps.bodyType === merged.bodyType
+        ) {
+          return false
+        }
+        nextProps = cloneRigidbodyComponentProps(merged)
       } else {
         const currentProps = component.props as Record<string, unknown>
         const merged = { ...currentProps, ...patch }

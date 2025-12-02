@@ -11,6 +11,7 @@ import type {
   SceneJsonExportDocument,
   NodeComponentType,
   SceneOutlineMeshMap,
+  SceneOutlineMesh,
 } from '@harmony/schema'
 import type { SceneExportOptions, GLBExportSettings } from '@/types/scene-export'
 import { findObjectByPath } from '@schema/modelAssetLoader'
@@ -19,6 +20,17 @@ import { loadObjectFromFile } from '@schema/assetImport'
 
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { buildOutlineMeshFromObject } from '@/utils/outlineMesh'
+import { createPrimitiveGeometry } from '@schema/geometry'
+import { createGroundMesh } from '@schema/groundMesh'
+import { createSurfaceMesh } from '@schema/surfaceMesh'
+import { createWallGroup } from '@schema/wallMesh'
+import {
+  RIGIDBODY_COMPONENT_TYPE,
+  type RigidbodyComponentProps,
+  type RigidbodyComponentMetadata,
+  type RigidbodyPhysicsShape,
+  RIGIDBODY_METADATA_KEY,
+} from '@schema/components'
 
 type RemovedSceneObject = {
     parent: THREE.Object3D
@@ -372,19 +384,33 @@ type OutlineCandidate = {
   sanitizedNode: SceneNode
 }
 
+type RigidbodyExportCandidate = {
+  node: SceneNode
+  component: SceneNodeComponentState<RigidbodyComponentProps>
+}
+
 async function sanitizeSceneDocumentForJsonExport(
   document: SceneJsonExportDocument,
   options: SceneExportOptions,
 ): Promise<SceneJsonExportDocument> {
   const removedNodeIds = new Set<string>()
   const outlineCandidates: OutlineCandidate[] = []
+  const rigidbodyCandidates: RigidbodyExportCandidate[] = []
   const sanitizedMaterials = document.materials.map((material) => sanitizeSceneMaterial(material, options.includeTextures))
-  const sanitizedNodes = sanitizeNodesForJsonExport(document.nodes, options, removedNodeIds, outlineCandidates)
+  const sanitizedNodes = sanitizeNodesForJsonExport(
+    document.nodes,
+    options,
+    removedNodeIds,
+    outlineCandidates,
+    rigidbodyCandidates,
+  )
 
   let outlineMeshMap: SceneOutlineMeshMap | undefined
   if (options.lazyLoadMeshes) {
     outlineMeshMap = await generateOutlineMeshesForCandidates(outlineCandidates, options)
   }
+
+  await applyRigidbodyMetadata(rigidbodyCandidates)
 
   const sanitizedDocument: SceneJsonExportDocument = {
     ...document,
@@ -410,6 +436,7 @@ function sanitizeNodesForJsonExport(
   options: SceneExportOptions,
   removedNodeIds: Set<string>,
   outlineCandidates: OutlineCandidate[],
+  rigidbodyCandidates: RigidbodyExportCandidate[],
 ): SceneNode[] {
   const result: SceneNode[] = []
   for (const node of nodes) {
@@ -417,7 +444,13 @@ function sanitizeNodesForJsonExport(
       collectNodeTreeIds(node, removedNodeIds)
       continue
     }
-    const sanitized = sanitizeNodeForJsonExport(node, options, removedNodeIds, outlineCandidates)
+    const sanitized = sanitizeNodeForJsonExport(
+      node,
+      options,
+      removedNodeIds,
+      outlineCandidates,
+      rigidbodyCandidates,
+    )
     result.push(sanitized)
   }
   return result
@@ -460,6 +493,7 @@ function sanitizeNodeForJsonExport(
   options: SceneExportOptions,
   removedNodeIds: Set<string>,
   outlineCandidates: OutlineCandidate[],
+  rigidbodyCandidates: RigidbodyExportCandidate[],
 ): SceneNode {
   const sanitized: SceneNode = { ...node }
 
@@ -468,7 +502,13 @@ function sanitizeNodeForJsonExport(
   }
 
   if (node.children?.length) {
-    const children = sanitizeNodesForJsonExport(node.children, options, removedNodeIds, outlineCandidates)
+    const children = sanitizeNodesForJsonExport(
+      node.children,
+      options,
+      removedNodeIds,
+      outlineCandidates,
+      rigidbodyCandidates,
+    )
     if (children.length) {
       sanitized.children = children
     } else {
@@ -501,6 +541,12 @@ function sanitizeNodeForJsonExport(
     const filteredComponents = sanitizeNodeComponentsForJsonExport(clonedComponents, options)
     if (componentMapHasEntries(filteredComponents)) {
       sanitized.components = filteredComponents
+      const rigidbodyComponent = filteredComponents[RIGIDBODY_COMPONENT_TYPE] as
+        | SceneNodeComponentState<RigidbodyComponentProps>
+        | undefined
+      if (rigidbodyComponent?.enabled) {
+        rigidbodyCandidates.push({ node, component: rigidbodyComponent })
+      }
     } else {
       delete sanitized.components
     }
@@ -575,6 +621,209 @@ async function generateOutlineMeshesForCandidates(
   }
 
   return outlineMeshMap
+}
+
+async function applyRigidbodyMetadata(candidates: RigidbodyExportCandidate[]): Promise<void> {
+  if (!candidates.length) {
+    return
+  }
+  const assetCacheStore = useAssetCacheStore()
+  for (const entry of candidates) {
+    const samplingObject = await buildRigidbodySamplingObject(entry.node, assetCacheStore)
+    if (!samplingObject) {
+      continue
+    }
+    const outline = buildOutlineMeshFromObject(samplingObject)
+    let shape: RigidbodyPhysicsShape | null = null
+    if (outline) {
+      shape = buildConvexShapeFromOutline(outline)
+    }
+    if (!shape) {
+      shape = buildBoxShapeFromObject(samplingObject)
+    }
+    if (!shape) {
+      continue
+    }
+    entry.component.metadata = mergeRigidbodyMetadata(entry.component.metadata, shape)
+  }
+}
+
+function mergeRigidbodyMetadata(
+  existing: Record<string, unknown> | undefined,
+  shape: RigidbodyPhysicsShape,
+): Record<string, unknown> {
+  const nextMetadata: Record<string, unknown> = existing ? { ...existing } : {}
+  const payload: RigidbodyComponentMetadata = {
+    shape,
+    generatedAt: new Date().toISOString(),
+  }
+  nextMetadata[RIGIDBODY_METADATA_KEY] = payload
+  return nextMetadata
+}
+
+async function buildRigidbodySamplingObject(
+  node: SceneNode,
+  assetCacheStore: ReturnType<typeof useAssetCacheStore>,
+): Promise<THREE.Object3D | null> {
+  let sourceObject: THREE.Object3D | null = null
+  if (node.sourceAssetId) {
+    sourceObject = await loadAssetObjectForNode(node, assetCacheStore)
+  } else if (node.dynamicMesh?.type) {
+    sourceObject = buildDynamicMeshObject(node)
+  } else {
+    sourceObject = buildPrimitiveObject(node)
+  }
+
+  if (!sourceObject) {
+    return null
+  }
+
+  const root = new THREE.Group()
+  root.name = `RigidbodySample:${node.id}`
+  root.add(sourceObject)
+  applyScaleToObject(root, node)
+  root.updateMatrixWorld(true)
+  return root
+}
+
+async function loadAssetObjectForNode(
+  node: SceneNode,
+  assetCacheStore: ReturnType<typeof useAssetCacheStore>,
+): Promise<THREE.Object3D | null> {
+  const assetId = node.sourceAssetId
+  if (!assetId) {
+    return null
+  }
+
+  let baseGroup = getCachedModelObject(assetId)
+  if (!baseGroup) {
+    let file = assetCacheStore.createFileFromCache(assetId)
+    if (!file) {
+      await assetCacheStore.loadFromIndexedDb(assetId)
+      file = assetCacheStore.createFileFromCache(assetId)
+    }
+    if (file) {
+      baseGroup = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file!))
+    }
+  }
+
+  const baseObject = baseGroup?.object ?? null
+  if (!baseObject) {
+    return null
+  }
+  const target = findObjectByPath(baseObject, node.importMetadata?.objectPath ?? null) ?? baseObject
+  const clone = target.clone(true)
+  clone.updateMatrixWorld(true)
+  return clone
+}
+
+function buildDynamicMeshObject(node: SceneNode): THREE.Object3D | null {
+  const mesh = node.dynamicMesh
+  if (!mesh) {
+    return null
+  }
+  switch (mesh.type) {
+    case 'Ground':
+      return createGroundMesh(mesh).clone(true)
+    case 'Surface':
+      return createSurfaceMesh(mesh).clone(true)
+    case 'Wall':
+      return createWallGroup(mesh).clone(true)
+    default:
+      return null
+  }
+}
+
+function buildPrimitiveObject(node: SceneNode): THREE.Object3D | null {
+  const geometry = createPrimitiveGeometry(node.nodeType)
+  if (!geometry) {
+    return null
+  }
+  const material = new THREE.MeshBasicMaterial({ color: '#cccccc', wireframe: true })
+  const mesh = new THREE.Mesh(geometry, material)
+  mesh.updateMatrixWorld(true)
+  return mesh
+}
+
+function applyScaleToObject(object: THREE.Object3D, node: SceneNode): void {
+  const scale = node.scale
+  if (scale) {
+    object.scale.set(
+      Number.isFinite(scale.x) ? scale.x : 1,
+      Number.isFinite(scale.y) ? scale.y : 1,
+      Number.isFinite(scale.z) ? scale.z : 1,
+    )
+  } else {
+    object.scale.setScalar(1)
+  }
+}
+
+function buildConvexShapeFromOutline(outline: SceneOutlineMesh): RigidbodyPhysicsShape | null {
+  const positions = Array.isArray(outline.positions) ? outline.positions : []
+  if (positions.length < 12) {
+    return null
+  }
+  const vertices: [number, number, number][] = []
+  for (let index = 0; index < positions.length; index += 3) {
+    const vx = positions[index]
+    const vy = positions[index + 1]
+    const vz = positions[index + 2]
+    if ([vx, vy, vz].every((value) => typeof value === 'number' && Number.isFinite(value))) {
+      vertices.push([vx as number, vy as number, vz as number])
+    }
+  }
+  if (vertices.length < 4) {
+    return null
+  }
+
+  const indices = Array.isArray(outline.indices) ? outline.indices : null
+  const faces: number[][] = []
+  if (indices && indices.length >= 3) {
+    for (let index = 0; index + 2 < indices.length; index += 3) {
+      const a = indices[index]
+      const b = indices[index + 1]
+      const c = indices[index + 2]
+      if ([a, b, c].every((value) => typeof value === 'number' && Number.isInteger(value) && value >= 0)) {
+        faces.push([a as number, b as number, c as number])
+      }
+    }
+  } else {
+    for (let index = 0; index + 2 < vertices.length; index += 3) {
+      faces.push([index, index + 1, index + 2])
+    }
+  }
+
+  if (!faces.length) {
+    return null
+  }
+
+  return {
+    kind: 'convex',
+    vertices,
+    faces,
+  }
+}
+
+function buildBoxShapeFromObject(object: THREE.Object3D): RigidbodyPhysicsShape | null {
+  const box = new THREE.Box3().setFromObject(object)
+  if (!box.isEmpty()) {
+    const size = box.getSize(new THREE.Vector3())
+    if ([size.x, size.y, size.z].every((value) => Number.isFinite(value) && value > 0)) {
+      const halfExtents: [number, number, number] = [
+        Math.max(1e-4, size.x * 0.5),
+        Math.max(1e-4, size.y * 0.5),
+        Math.max(1e-4, size.z * 0.5),
+      ]
+      const center = box.getCenter(new THREE.Vector3())
+      const offset: [number, number, number] = [center.x, center.y, center.z]
+      return {
+        kind: 'box',
+        halfExtents,
+        offset,
+      }
+    }
+  }
+  return null
 }
 
 function componentMapHasEntries(components?: SceneNodeComponentMap | null): boolean {
