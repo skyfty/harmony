@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type Ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
@@ -28,7 +28,6 @@ import type {
   GroundDynamicMesh,
   WallDynamicMesh,
   SurfaceDynamicMesh,
-  GroundSculptOperation,
 } from '@harmony/schema'
 import {
   applyMaterialOverrides,
@@ -63,6 +62,7 @@ import { prepareGLBSceneExport, prepareJsonSceneExport } from '@/utils/sceneExpo
 import ViewportToolbar from './ViewportToolbar.vue'
 import TransformToolbar from './TransformToolbar.vue'
 import PlaceholderOverlayList from './PlaceholderOverlayList.vue'
+import { createGroundEditor } from './GroundEditor'
 import { TRANSFORM_TOOLS } from '@/types/scene-transform-tools'
 import { type AlignMode } from '@/types/scene-viewport-align-mode'
 import { Sky } from 'three/addons/objects/Sky.js'
@@ -70,7 +70,7 @@ import type { NodeHitResult } from '@/types/scene-viewport-node-hit-result'
 import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracking-state'
 import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-viewport-transform-group'
 import type { BuildTool } from '@/types/build-tool'
-import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache, sculptGround, updateGroundGeometry, sampleGroundHeight } from '@schema/groundMesh'
+import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache } from '@schema/groundMesh'
 import { useTerrainStore } from '@/stores/terrainStore'
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 import { createSurfaceMesh, updateSurfaceMesh } from '@schema/surfaceMesh'
@@ -122,241 +122,177 @@ import {
 import type { SelectionRotationOptions } from './constants'
 import { useSelectionDrag } from './useSelectionDrag'
 import { useInstancedMeshes } from './useInstancedMeshes'
+import {
+  DEFAULT_BACKGROUND_COLOR,
+  GROUND_NODE_ID,
+  SKY_ENVIRONMENT_INTENSITY,
+  FALLBACK_AMBIENT_INTENSITY,
+  FALLBACK_DIRECTIONAL_INTENSITY,
+  FALLBACK_DIRECTIONAL_SHADOW_MAP_SIZE,
+  SKY_SCALE,
+  SKY_FALLBACK_LIGHT_DISTANCE,
+  SKY_SUN_LIGHT_DISTANCE,
+  SKY_SUN_LIGHT_MIN_HEIGHT,
+  CLICK_DRAG_THRESHOLD_PX,
+  ASSET_DRAG_MIME,
+  MIN_CAMERA_HEIGHT,
+  MIN_TARGET_HEIGHT,
+  GRID_MAJOR_SPACING,
+  GRID_MINOR_SPACING,
+  GRID_SNAP_SPACING,
+  WALL_DIAGONAL_SNAP_THRESHOLD,
+  GRID_MINOR_DASH_SIZE,
+  GRID_MINOR_GAP_SIZE,
+  GRID_BASE_HEIGHT,
+  GRID_HIGHLIGHT_HEIGHT,
+  GRID_HIGHLIGHT_PADDING,
+  GRID_HIGHLIGHT_MIN_SIZE,
+  DEFAULT_GRID_HIGHLIGHT_SIZE,
+  DEFAULT_GRID_HIGHLIGHT_DIMENSIONS,
+  POINT_LIGHT_HELPER_SIZE,
+  DIRECTIONAL_LIGHT_HELPER_SIZE,
+  DEFAULT_CAMERA_POSITION,
+  DEFAULT_CAMERA_TARGET,
+  DEFAULT_PERSPECTIVE_FOV,
+  RIGHT_CLICK_ROTATION_STEP,
+} from './constants'
 import { createFaceSnapManager } from './useFaceSnapping'
 
-const props = withDefaults(defineProps<{
+type SceneViewportProps = {
   sceneNodes: SceneNode[]
-  activeTool: EditorTool
   selectedNodeId: string | null
-  cameraState: SceneCameraState
-  focusNodeId: string | null
-  focusRequestId: number
+  activeTool: EditorTool
+  cameraState: SceneCameraState | null
+  focusNodeId?: string | null
+  focusRequestId?: number | null
   highlightNodeId?: string | null
-  highlightRequestId?: number
-  previewActive?: boolean
+  highlightRequestId?: number | null
   showStats?: boolean
-}>(), {
-  previewActive: false,
-  showStats: true,
+  previewActive?: boolean
+}
+
+const props = withDefaults(defineProps<SceneViewportProps>(), {
+  sceneNodes: () => [],
+  selectedNodeId: null,
+  activeTool: 'select',
+  cameraState: null,
+  focusNodeId: null,
+  focusRequestId: null,
   highlightNodeId: null,
-  highlightRequestId: 0,
+  highlightRequestId: null,
+  showStats: false,
+  previewActive: false,
 })
 
 const emit = defineEmits<{
-  (event: 'changeTool', tool: EditorTool): void
-  (event: 'selectNode', payload: { primaryId: string | null; selectedIds: string[] }): void
-  (event: 'updateNodeTransform', payload: TransformUpdatePayload | TransformUpdatePayload[]): void
+  (e: 'changeTool', tool: EditorTool): void
+  (e: 'selectNode', payload: { primaryId: string | null; selectedIds: string[] }): void
+  (e: 'updateNodeTransform', payload: TransformUpdatePayload | TransformUpdatePayload[]): void
 }>()
 
 const sceneStore = useSceneStore()
-const terrainStore = useTerrainStore()
-const { brushRadius, brushStrength, brushShape, brushOperation } = storeToRefs(terrainStore)
-const isSculpting = ref(false)
-
-type TerrainBrushShape = 'circle' | 'square' | 'star'
-
-function createPolygonRingGeometry(points: THREE.Vector2[], innerScale = 0.8): THREE.BufferGeometry {
-  if (!points.length) {
-    return new THREE.BufferGeometry()
-  }
-  const shape = new THREE.Shape()
-  shape.moveTo(points[0].x, points[0].y)
-  for (let index = 1; index < points.length; index += 1) {
-    const point = points[index]
-    shape.lineTo(point.x, point.y)
-  }
-  shape.closePath()
-
-  const innerPoints = points.map((point) => point.clone().multiplyScalar(innerScale)).reverse()
-  if (innerPoints.length) {
-    const hole = new THREE.Path()
-    hole.moveTo(innerPoints[0].x, innerPoints[0].y)
-    for (let index = 1; index < innerPoints.length; index += 1) {
-      const point = innerPoints[index]
-      hole.lineTo(point.x, point.y)
-    }
-    hole.closePath()
-    shape.holes.push(hole)
-  }
-  return new THREE.ShapeGeometry(shape, 1)
-}
-
-function createStarPoints(count: number, outerRadius: number, innerRadius: number): THREE.Vector2[] {
-  const points: THREE.Vector2[] = []
-  const step = Math.PI / count
-  for (let index = 0; index < count * 2; index += 1) {
-    const radius = index % 2 === 0 ? outerRadius : innerRadius
-    const angle = index * step
-    points.push(new THREE.Vector2(Math.cos(angle) * radius, Math.sin(angle) * radius))
-  }
-  return points
-}
-
-function createBrushGeometry(shape: TerrainBrushShape): THREE.BufferGeometry {
-  switch (shape) {
-    case 'square': {
-      const size = 1
-      const points = [
-        new THREE.Vector2(-size, -size),
-        new THREE.Vector2(size, -size),
-        new THREE.Vector2(size, size),
-        new THREE.Vector2(-size, size),
-      ]
-      return createPolygonRingGeometry(points, 0.85)
-    }
-    case 'star': {
-      const points = createStarPoints(5, 1, 0.5)
-      return createPolygonRingGeometry(points, 0.55)
-    }
-    case 'circle':
-    default:
-      return new THREE.RingGeometry(0.9, 1, 64)
-  }
-}
-
-function updateBrushGeometry(shape: TerrainBrushShape) {
-  const nextGeometry = tagBrushGeometry(createBrushGeometry(shape))
-  const previousGeometry = brushMesh.geometry
-  brushMesh.geometry = nextGeometry
-  previousGeometry?.dispose()
-}
-
-const BRUSH_BASE_POSITIONS_KEY = '__harmonyBrushBasePositions'
-const BRUSH_SURFACE_OFFSET = 0.02
-
-function storeBrushBasePositions(geometry: THREE.BufferGeometry) {
-  const positionAttribute = geometry.getAttribute('position')
-  if (!positionAttribute) {
-    return
-  }
-  geometry.userData[BRUSH_BASE_POSITIONS_KEY] = Float32Array.from(positionAttribute.array as ArrayLike<number>)
-}
-
-function tagBrushGeometry(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
-  storeBrushBasePositions(geometry)
-  return geometry
-}
-
-const brushMesh = new THREE.Mesh(
-  tagBrushGeometry(createBrushGeometry(brushShape.value ?? 'circle')),
-  new THREE.MeshBasicMaterial({ color: 0xff3333, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthTest: false, depthWrite: false })
-)
-brushMesh.rotation.x = -Math.PI / 2
-brushMesh.visible = false
-brushMesh.renderOrder = 999
-
-const brushBasePositionHelper = new THREE.Vector3()
-const brushWorldVertexHelper = new THREE.Vector3()
-const groundLocalVertexHelper = new THREE.Vector3()
-const groundWorldVertexHelper = new THREE.Vector3()
-const brushResultVertexHelper = new THREE.Vector3()
-
-function conformBrushToTerrain(definition: GroundDynamicMesh, groundObject: THREE.Mesh) {
-  const geometry = brushMesh.geometry
-  const positionAttribute = geometry.getAttribute('position')
-  const basePositions = geometry.userData?.[BRUSH_BASE_POSITIONS_KEY] as Float32Array | undefined
-  if (!positionAttribute || !basePositions) {
-    return
-  }
-  const expectedLength = positionAttribute.count * 3
-  if (basePositions.length !== expectedLength) {
-    return
-  }
-
-  brushMesh.updateMatrixWorld(true)
-  groundObject.updateMatrixWorld(true)
-
-  for (let index = 0; index < positionAttribute.count; index += 1) {
-    const baseIndex = index * 3
-    brushBasePositionHelper.set(
-      basePositions[baseIndex + 0],
-      basePositions[baseIndex + 1],
-      basePositions[baseIndex + 2],
-    )
-
-    brushWorldVertexHelper.copy(brushBasePositionHelper)
-    brushMesh.localToWorld(brushWorldVertexHelper)
-
-    groundLocalVertexHelper.copy(brushWorldVertexHelper)
-    groundObject.worldToLocal(groundLocalVertexHelper)
-
-    const height = sampleGroundHeight(definition, groundLocalVertexHelper.x, groundLocalVertexHelper.z)
-    groundLocalVertexHelper.y = height
-
-    groundWorldVertexHelper.copy(groundLocalVertexHelper)
-    groundObject.localToWorld(groundWorldVertexHelper)
-
-    brushResultVertexHelper.copy(groundWorldVertexHelper)
-    brushMesh.worldToLocal(brushResultVertexHelper)
-    positionAttribute.setXYZ(
-      index,
-      brushResultVertexHelper.x,
-      brushResultVertexHelper.y + BRUSH_SURFACE_OFFSET,
-      brushResultVertexHelper.z,
-    )
-  }
-
-  positionAttribute.needsUpdate = true
-}
-
-
-const assetCacheStore = useAssetCacheStore()
 const nodePickerStore = useNodePickerStore()
-const isSceneReady = computed(() => sceneStore.isSceneReady)
-const canDropSelection = computed(() => sceneStore.selectedNodeIds.some((id) => !sceneStore.isNodeSelectionLocked(id)))
+const assetCacheStore = useAssetCacheStore()
+const terrainStore = useTerrainStore()
+
+const { panelVisibility, isSceneReady } = storeToRefs(sceneStore)
+const { brushRadius, brushStrength, brushShape, brushOperation } = storeToRefs(terrainStore)
 
 const viewportEl = ref<HTMLDivElement | null>(null)
-const canvasRef = ref<HTMLCanvasElement | null>(null)
 const surfaceRef = ref<HTMLDivElement | null>(null)
-const statsHostRef = ref<HTMLDivElement | null>(null)
+const canvasRef = ref<HTMLCanvasElement | null>(null)
 const gizmoContainerRef = ref<HTMLDivElement | null>(null)
+const statsHostRef = ref<HTMLDivElement | null>(null)
 
+const raycaster = new THREE.Raycaster()
+const pointer = new THREE.Vector2()
+const objectMap = new Map<string, THREE.Object3D>()
+const instancedMeshes: THREE.InstancedMesh[] = []
+const rootGroup = new THREE.Group()
+rootGroup.name = 'SceneRoot'
+const instancedMeshGroup = new THREE.Group()
+instancedMeshGroup.name = 'InstancedMeshGroup'
+const instancedOutlineGroup = new THREE.Group()
+instancedOutlineGroup.name = 'InstancedOutlineGroup'
+
+type InstancedOutlineEntry = {
+  group: THREE.Group
+  proxies: Map<string, THREE.Mesh>
+}
+
+const instancedOutlineEntries = new Map<string, InstancedOutlineEntry>()
+const instancedOutlineMatrixHelper = new THREE.Matrix4()
+const instancedOutlineWorldMatrixHelper = new THREE.Matrix4()
+const instancedOutlineBaseMaterial = new THREE.MeshBasicMaterial({
+  color: 0xffffff,
+  transparent: true,
+  opacity: 0,
+  depthWrite: false,
+  depthTest: false,
+})
+instancedOutlineBaseMaterial.toneMapped = false
+
+const instancedPickProxyGeometry = new THREE.BoxGeometry(1, 1, 1)
+const instancedPickProxyMaterial = new THREE.MeshBasicMaterial({
+  color: 0xffffff,
+  transparent: true,
+  opacity: 0,
+  depthWrite: false,
+  depthTest: false,
+})
+instancedPickProxyMaterial.colorWrite = false
+instancedPickProxyMaterial.toneMapped = false
+const instancedPickBoundsMinHelper = new THREE.Vector3()
+const instancedPickBoundsMaxHelper = new THREE.Vector3()
+const instancedPickBoundsSizeHelper = new THREE.Vector3()
+const instancedPickBoundsCenterHelper = new THREE.Vector3()
+
+let scene: THREE.Scene | null = null
 let renderer: THREE.WebGLRenderer | null = null
+let camera: THREE.PerspectiveCamera | null = null
+let perspectiveCamera: THREE.PerspectiveCamera | null = null
+let orbitControls: OrbitControls | MapControls | null = null
+let transformControls: TransformControls | null = null
+let transformControlsDirty = false
+let gizmoControls: ViewportGizmo | null = null
+let pmremGenerator: THREE.PMREMGenerator | null = null
+let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null
+let environmentAmbientLight: THREE.AmbientLight | null = null
+let sunDirectionalLight: THREE.DirectionalLight | null = null
+let fallbackDirectionalLight: THREE.DirectionalLight | null = null
+let stats: Stats | null = null
+let statsPointerHandler: (() => void) | null = null
+let statsPanelIndex = 0
+let stopInstancedMeshSubscription: (() => void) | null = null
+let backgroundRegisteredAssetId: string | null = null
+let environmentMapRegisteredAssetId: string | null = null
+let gridHighlight: THREE.Group | null = null
+let isSunLightSuppressed = false
+let pendingEnvironmentSettings: EnvironmentSettings | null = null
+let shouldRenderSkyBackground = true
+let sky: Sky | null = null
+let resizeObserver: ResizeObserver | null = null
 let composer: EffectComposer | null = null
 let renderPass: RenderPass | null = null
 let outlinePass: OutlinePass | null = null
 let fxaaPass: ShaderPass | null = null
 let outputPass: OutputPass | null = null
-let scene: THREE.Scene | null = null
-let perspectiveCamera: THREE.PerspectiveCamera | null = null
-let camera: THREE.PerspectiveCamera | null = null
-let orbitControls: OrbitControls | MapControls | null = null
-let gizmoControls: ViewportGizmo | null = null
-let transformControls: TransformControls | null = null
-let transformControlsDirty = false
-let resizeObserver: ResizeObserver | null = null
-let gridHighlight: THREE.Group | null = null
-const selectionHighlights = new Map<string, THREE.Group>()
-const outlineSelectionTargets: THREE.Object3D[] = []
-let nodePickerHighlight: THREE.Group | null = null
-let nodeFlashHighlight: THREE.Group | null = null
-let nodeFlashIntervalHandle: number | null = null
-let nodeFlashTimeoutHandle: number | null = null
-let nodeFlashActiveToken: number | null = null
-let sky: Sky | null = null
-let shouldRenderSkyBackground = true
-let pmremGenerator: THREE.PMREMGenerator | null = null
-let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null
-let fallbackDirectionalLight: THREE.DirectionalLight | null = null
 const skySunPosition = new THREE.Vector3()
-const DEFAULT_SUN_DIRECTION = new THREE.Vector3(0.35, 1, -0.3).normalize()
+const DEFAULT_SUN_DIRECTION = new THREE.Vector3(0.35, 1, -0.25).normalize()
 const tempSunDirection = new THREE.Vector3()
-let sunDirectionalLight: THREE.DirectionalLight | null = null
-let isSunLightSuppressed = false
-let stats: Stats | null = null
-let statsPanelIndex = 0
-let statsPointerHandler: ((event: MouseEvent) => void) | null = null
-
-let environmentAmbientLight: THREE.AmbientLight | null = null
 let backgroundTexture: THREE.Texture | null = null
 let backgroundAssetId: string | null = null
-let backgroundRegisteredAssetId: string | null = null
-let backgroundLoadToken = 0
 let customEnvironmentTarget: THREE.WebGLRenderTarget | null = null
 let environmentMapAssetId: string | null = null
-let environmentMapRegisteredAssetId: string | null = null
+let backgroundLoadToken = 0
 let environmentMapLoadToken = 0
-let pendingEnvironmentSettings: EnvironmentSettings | null = null
+
+const faceSnapManager = createFaceSnapManager({
+  getScene: () => scene,
+  objectMap,
+  getActiveTool: () => props.activeTool,
+  isEditableKeyboardTarget,
+})
 
 const textureLoader = new THREE.TextureLoader()
 const rgbeLoader = new RGBELoader().setDataType(THREE.FloatType)
@@ -459,7 +395,6 @@ const materialOverrideOptions: MaterialTextureAssignmentOptions = {
   },
 }
 
-
 function applyRendererShadowSetting() {
   if (!renderer) {
     return
@@ -481,98 +416,12 @@ function refreshEffectRuntimeTickers(): void {
   effectPlaybackManager.refresh(selectedIds, objectMap)
   effectRuntimeTickers = effectPlaybackManager.getTickers()
 }
-import {
-  DEFAULT_BACKGROUND_COLOR,
-  GROUND_NODE_ID,
-  SKY_ENVIRONMENT_INTENSITY,
-  FALLBACK_AMBIENT_INTENSITY,
-  FALLBACK_DIRECTIONAL_INTENSITY,
-  FALLBACK_DIRECTIONAL_SHADOW_MAP_SIZE,
-  SKY_SCALE,
-  SKY_FALLBACK_LIGHT_DISTANCE,
-  SKY_SUN_LIGHT_DISTANCE,
-  SKY_SUN_LIGHT_MIN_HEIGHT,
-  CLICK_DRAG_THRESHOLD_PX,
-  ASSET_DRAG_MIME,
-  MIN_CAMERA_HEIGHT,
-  MIN_TARGET_HEIGHT,
-  GRID_MAJOR_SPACING,
-  GRID_MINOR_SPACING,
-  GRID_SNAP_SPACING,
-  WALL_DIAGONAL_SNAP_THRESHOLD,
-  GRID_MINOR_DASH_SIZE,
-  GRID_MINOR_GAP_SIZE,
-  GRID_BASE_HEIGHT,
-  GRID_HIGHLIGHT_HEIGHT,
-  GRID_HIGHLIGHT_PADDING,
-  GRID_HIGHLIGHT_MIN_SIZE,
-  DEFAULT_GRID_HIGHLIGHT_SIZE,
-  DEFAULT_GRID_HIGHLIGHT_DIMENSIONS,
-  POINT_LIGHT_HELPER_SIZE,
-  DIRECTIONAL_LIGHT_HELPER_SIZE,
-  DEFAULT_CAMERA_POSITION,
-  DEFAULT_CAMERA_TARGET,
-  DEFAULT_PERSPECTIVE_FOV,
-  MIN_CAMERA_DISTANCE,
-  MAX_CAMERA_DISTANCE,
-  CAMERA_POLAR_EPSILON,
-  CAMERA_DISTANCE_EPSILON,
-  RIGHT_CLICK_ROTATION_STEP,
-  GROUND_HEIGHT_STEP
-} from './constants'
-
-const raycaster = new THREE.Raycaster()
-const pointer = new THREE.Vector2()
-const rootGroup = new THREE.Group()
-const instancedMeshGroup = new THREE.Group()
-instancedMeshGroup.name = 'InstancedMeshes'
-const instancedMeshes: THREE.InstancedMesh[] = []
-let stopInstancedMeshSubscription: (() => void) | null = null
-const instancedOutlineGroup = new THREE.Group()
-instancedOutlineGroup.name = 'InstancedOutlineProxies'
-type InstancedOutlineEntry = {
-  group: THREE.Group
-  proxies: Map<string, THREE.Mesh>
-}
-const instancedOutlineEntries = new Map<string, InstancedOutlineEntry>()
-const instancedOutlineMatrixHelper = new THREE.Matrix4()
-const instancedOutlineWorldMatrixHelper = new THREE.Matrix4()
-const instancedOutlineBaseMaterial = new THREE.MeshBasicMaterial({
-  color: 0xffffff,
-  transparent: true,
-  opacity: 0,
-  depthWrite: false,
-  depthTest: false,
-})
-instancedOutlineBaseMaterial.toneMapped = false
-const instancedPickProxyGeometry = new THREE.BoxGeometry(1, 1, 1)
-const instancedPickProxyMaterial = new THREE.MeshBasicMaterial({
-  color: 0xffffff,
-  transparent: true,
-  opacity: 0,
-  depthWrite: false,
-  depthTest: false,
-})
-instancedPickProxyMaterial.colorWrite = false
-instancedPickProxyMaterial.toneMapped = false
-const instancedPickBoundsMinHelper = new THREE.Vector3()
-const instancedPickBoundsMaxHelper = new THREE.Vector3()
-const instancedPickBoundsSizeHelper = new THREE.Vector3()
-const instancedPickBoundsCenterHelper = new THREE.Vector3()
-const objectMap = new Map<string, THREE.Object3D>()
-
-const faceSnapManager = createFaceSnapManager({
-  getScene: () => scene,
-  objectMap,
-  getActiveTool: () => props.activeTool,
-  isEditableKeyboardTarget,
-})
 
 const DYNAMIC_MESH_SIGNATURE_KEY = '__harmonyDynamicMeshSignature'
 
 function stableSerialize(value: unknown): string {
   if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableSerialize(entry)).join(',')}]`
+    return `[${value.map((item) => stableSerialize(item)).join(',')}]`
   }
   if (value && typeof value === 'object') {
     const entries = Object.entries(value as Record<string, unknown>)
@@ -680,9 +529,50 @@ const canAlignSelection = computed(() => {
 const canRotateSelection = computed(() =>
   sceneStore.selectedNodeIds.some((id) => id !== GROUND_NODE_ID && !sceneStore.isNodeSelectionLocked(id))
 )
+const canDropSelection = computed(() =>
+  sceneStore.selectedNodeIds.some((id) => !!id && !sceneStore.isNodeSelectionLocked(id))
+)
 const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((tool) => [tool.key, tool.value]))
 
 const activeBuildTool = ref<BuildTool | null>(null)
+
+const groundEditor = createGroundEditor({
+  sceneStore,
+  getSceneNodes: () => props.sceneNodes,
+  canvasRef,
+  surfaceRef,
+  raycaster,
+  pointer,
+  groundPlane,
+  objectMap,
+  getCamera: () => camera,
+  getScene: () => scene,
+  brushRadius,
+  brushStrength,
+  brushShape,
+  brushOperation,
+  activeBuildTool,
+  disableOrbitForGroundSelection,
+  restoreOrbitAfterGroundSelection,
+  isAltOverrideActive: () => isAltOverrideActive,
+})
+
+const {
+  brushMesh,
+  groundSelectionGroup,
+  groundSelection,
+  groundTextureInputRef,
+  updateGroundSelectionToolbarPosition,
+  cancelGroundSelection,
+  handlePointerDown: handleGroundEditorPointerDown,
+  handlePointerMove: handleGroundEditorPointerMove,
+  handlePointerUp: handleGroundEditorPointerUp,
+  handlePointerCancel: handleGroundEditorPointerCancel,
+  handleGroundTextureFileChange,
+  hasActiveSelection: groundEditorHasActiveSelection,
+  handleActiveBuildToolChange: handleGroundEditorBuildToolChange,
+  dispose: disposeGroundEditor,
+} = groundEditor
 const {
   overlayContainerRef,
   placeholderOverlayList,
@@ -697,7 +587,6 @@ const {
 
 type PanelPlacementHolder = { panelPlacement?: PanelPlacementState | null }
 
-const { panelVisibility } = storeToRefs(sceneStore)
 function normalizePanelPlacementState(input?: PanelPlacementState | null): PanelPlacementState {
   return {
     hierarchy: input?.hierarchy === 'floating' ? 'floating' : 'docked',
@@ -734,35 +623,6 @@ let transformToolbarResizeObserver: ResizeObserver | null = null
 let viewportToolbarResizeObserver: ResizeObserver | null = null
 
 let pointerTrackingState: PointerTrackingState | null = null
-
-type GroundSelectionPhase = 'pending' | 'sizing' | 'finalizing'
-
-type GroundSelectionDragState = {
-  pointerId: number
-  startRow: number
-  startColumn: number
-  currentRow: number
-  currentColumn: number
-  phase: GroundSelectionPhase
-}
-
-type GroundCellSelection = {
-  minRow: number
-  maxRow: number
-  minColumn: number
-  maxColumn: number
-  worldCenter: THREE.Vector3
-}
-
-let groundSelectionDragState: GroundSelectionDragState | null = null
-const groundSelection = ref<GroundCellSelection | null>(null)
-const isGroundToolbarVisible = ref(false)
-const groundSelectionToolbarStyle = reactive<{ left: string; top: string; opacity: number }>({
-  left: '0px',
-  top: '0px',
-  opacity: 0,
-})
-const groundTextureInputRef = ref<HTMLInputElement | null>(null)
 
 type WallSessionSegment = {
   start: THREE.Vector3
@@ -846,57 +706,6 @@ let cameraTransitionState: CameraTransitionState | null = null
 let transformGroupState: TransformGroupState | null = null
 let pendingSkyboxSettings: SceneSkyboxSettings | null = null
 let pendingSceneGraphSync = false
-
-
-function findGroundNodeInTree(nodes: SceneNode[]): SceneNode | null {
-  for (const node of nodes) {
-    if (node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'Ground') {
-      return node
-    }
-    if (node.children?.length) {
-      const nested = findGroundNodeInTree(node.children)
-      if (nested) {
-        return nested
-      }
-    }
-  }
-  return null
-}
-
-function getGroundNodeFromScene(): SceneNode | null {
-  return findGroundNodeInTree(sceneStore.nodes)
-}
-
-function getGroundNodeFromProps(): SceneNode | null {
-  return findGroundNodeInTree(props.sceneNodes)
-}
-
-function getGroundDynamicMeshDefinition(): GroundDynamicMesh | null {
-  const node = getGroundNodeFromScene() ?? getGroundNodeFromProps()
-  if (node?.dynamicMesh?.type === 'Ground') {
-    return node.dynamicMesh
-  }
-  return null
-}
-
-function getGroundMeshObject(): THREE.Mesh | null {
-  const container = objectMap.get(GROUND_NODE_ID)
-  if (!container) {
-    return null
-  }
-  let mesh: THREE.Mesh | null = null
-  container.traverse((child) => {
-    if (mesh) {
-      return
-    }
-    const candidate = child as THREE.Mesh
-    if (candidate?.isMesh && candidate !== container) {
-      mesh = candidate
-    }
-  })
-  return mesh
-}
-
 
 
 function handleViewportOverlayResize() {
@@ -1188,7 +997,7 @@ function activateAltOverride() {
   toolOverrideSnapshot = {
     transformTool: props.activeTool ?? null,
     wallBuildActive: Boolean(wallBuildSession),
-    groundSelectionActive: Boolean(groundSelection.value || groundSelectionDragState),
+    groundSelectionActive: groundEditorHasActiveSelection(),
   }
   if (props.activeTool !== 'select') {
     emit('changeTool', 'select')
@@ -1252,7 +1061,6 @@ function easeInOutCubic(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
 }
 
-const cameraOffsetHelper = new THREE.Vector3()
 const transformDeltaPosition = new THREE.Vector3()
 const transformMovementDelta = new THREE.Vector3()
 const transformWorldPositionBuffer = new THREE.Vector3()
@@ -1261,8 +1069,6 @@ const transformScaleFactor = new THREE.Vector3(1, 1, 1)
 const transformQuaternionDelta = new THREE.Quaternion()
 const transformQuaternionHelper = new THREE.Quaternion()
 const transformQuaternionInverseHelper = new THREE.Quaternion()
-const groundSelectionCenterHelper = new THREE.Vector3()
-const groundSelectionScreenHelper = new THREE.Vector3()
 const groundPointerHelper = new THREE.Vector3()
 const transformCurrentWorldPosition = new THREE.Vector3()
 const transformLastWorldPosition = new THREE.Vector3()
@@ -1273,6 +1079,13 @@ const gridHighlightSizeHelper = new THREE.Vector3()
 const selectionHighlightPositionHelper = new THREE.Vector3()
 const selectionHighlightBoundingBox = new THREE.Box3()
 const selectionHighlightSizeHelper = new THREE.Vector3()
+const selectionHighlights = new Map<string, THREE.Group>()
+const outlineSelectionTargets: THREE.Object3D[] = []
+let nodePickerHighlight: THREE.Group | null = null
+let nodeFlashHighlight: THREE.Group | null = null
+let nodeFlashIntervalHandle: number | null = null
+let nodeFlashTimeoutHandle: number | null = null
+let nodeFlashActiveToken: number | null = null
 const selectionDragBoundingBox = new THREE.Box3()
 const selectionDragIntersectionHelper = new THREE.Vector3()
 const viewPointScaleHelper = new THREE.Vector3()
@@ -1464,37 +1277,6 @@ axesHelper.visible = false
 const dragPreviewGroup = new THREE.Group()
 dragPreviewGroup.visible = false
 dragPreviewGroup.name = 'DragPreview'
-
-const groundSelectionGroup = new THREE.Group()
-groundSelectionGroup.visible = false
-groundSelectionGroup.name = 'GroundSelection'
-
-const groundSelectionOutlineMaterial = new THREE.LineBasicMaterial({
-  color: 0x4dd0e1,
-  linewidth: 2,
-  transparent: true,
-  opacity: 0.9,
-  depthTest: true,
-  depthWrite: false,
-})
-
-const groundSelectionOutlineGeometry = new THREE.BufferGeometry()
-groundSelectionOutlineGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(15), 3))
-const groundSelectionOutline = new THREE.LineLoop(groundSelectionOutlineGeometry, groundSelectionOutlineMaterial)
-
-const groundSelectionFillMaterial = new THREE.MeshBasicMaterial({
-  color: 0x4dd0e1,
-  transparent: true,
-  opacity: 0.2,
-  depthWrite: false,
-  side: THREE.DoubleSide,
-})
-
-const groundSelectionFill = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), groundSelectionFillMaterial)
-groundSelectionFill.rotation.x = -Math.PI / 2
-
-groundSelectionGroup.add(groundSelectionFill)
-groundSelectionGroup.add(groundSelectionOutline)
 
 let dragPreviewObject: THREE.Object3D | null = null
 let dragPreviewAssetId: string | null = null
@@ -1898,10 +1680,6 @@ watch(skyboxSettings, (settings) => {
 watch(environmentSettings, (settings) => {
   void applyEnvironmentSettingsToScene(settings)
 }, { deep: true, immediate: true })
-
-watch(brushShape, (shape) => {
-  updateBrushGeometry(shape ?? 'circle')
-})
 
 function resetCameraView() {
   if (!camera || !orbitControls) return
@@ -3902,300 +3680,6 @@ function raycastGroundPoint(event: PointerEvent, result: THREE.Vector3): boolean
   return !!raycaster.ray.intersectPlane(groundPlane, result)
 }
 
-function clampPointToGround(definition: GroundDynamicMesh, point: THREE.Vector3): THREE.Vector3 {
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
-  point.x = THREE.MathUtils.clamp(point.x, -halfWidth, halfWidth)
-  point.z = THREE.MathUtils.clamp(point.z, -halfDepth, halfDepth)
-  return point
-}
-
-function getGroundCellFromPoint(definition: GroundDynamicMesh, point: THREE.Vector3): { row: number; column: number } {
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
-  const normalizedColumn = (point.x + halfWidth) / definition.cellSize
-  const normalizedRow = (point.z + halfDepth) / definition.cellSize
-  const column = THREE.MathUtils.clamp(Math.floor(normalizedColumn), 0, Math.max(0, definition.columns - 1))
-  const row = THREE.MathUtils.clamp(Math.floor(normalizedRow), 0, Math.max(0, definition.rows - 1))
-  return { row, column }
-}
-
-function getGroundVertexHeight(definition: GroundDynamicMesh, row: number, column: number): number {
-  const key = `${row}:${column}`
-  return definition.heightMap[key] ?? 0
-}
-
-function createGroundSelectionFromCells(
-  definition: GroundDynamicMesh,
-  start: { row: number; column: number },
-  end: { row: number; column: number },
-): GroundCellSelection {
-  const minRow = Math.min(start.row, end.row)
-  const maxRow = Math.max(start.row, end.row)
-  const minColumn = Math.min(start.column, end.column)
-  const maxColumn = Math.max(start.column, end.column)
-
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
-  const cellSize = definition.cellSize
-
-  const minX = -halfWidth + minColumn * cellSize
-  const maxX = -halfWidth + (maxColumn + 1) * cellSize
-  const minZ = -halfDepth + minRow * cellSize
-  const maxZ = -halfDepth + (maxRow + 1) * cellSize
-
-  const vertexMinRow = minRow
-  const vertexMaxRow = Math.min(definition.rows, maxRow + 1)
-  const vertexMinColumn = minColumn
-  const vertexMaxColumn = Math.min(definition.columns, maxColumn + 1)
-
-  const heights = [
-    getGroundVertexHeight(definition, vertexMinRow, vertexMinColumn),
-    getGroundVertexHeight(definition, vertexMinRow, vertexMaxColumn),
-    getGroundVertexHeight(definition, vertexMaxRow, vertexMinColumn),
-    getGroundVertexHeight(definition, vertexMaxRow, vertexMaxColumn),
-  ]
-  const averageHeight = heights.reduce((sum, value) => sum + value, 0) / heights.length
-
-  const worldCenter = new THREE.Vector3(
-    (minX + maxX) * 0.5,
-    averageHeight,
-    (minZ + maxZ) * 0.5,
-  )
-
-  return {
-    minRow,
-    maxRow,
-    minColumn,
-    maxColumn,
-    worldCenter,
-  }
-}
-
-function cellSelectionToVertexBounds(selection: GroundCellSelection, definition: GroundDynamicMesh) {
-  return {
-    minRow: selection.minRow,
-    maxRow: Math.min(definition.rows, selection.maxRow + 1),
-    minColumn: selection.minColumn,
-    maxColumn: Math.min(definition.columns, selection.maxColumn + 1),
-  }
-}
-
-function applyGroundSelectionVisuals(selection: GroundCellSelection | null, definition: GroundDynamicMesh | null) {
-  if (!selection || !definition) {
-    groundSelectionGroup.visible = false
-    groundSelectionToolbarStyle.opacity = 0
-    groundSelection.value = null
-    return
-  }
-
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
-  const cellSize = definition.cellSize
-
-  const minX = -halfWidth + selection.minColumn * cellSize
-  const maxX = -halfWidth + (selection.maxColumn + 1) * cellSize
-  const minZ = -halfDepth + selection.minRow * cellSize
-  const maxZ = -halfDepth + (selection.maxRow + 1) * cellSize
-
-  const midX = (minX + maxX) * 0.5
-  const midZ = (minZ + maxZ) * 0.5
-  const averageHeight = selection.worldCenter.y
-
-  groundSelectionFill.position.set(midX, averageHeight + 0.002, midZ)
-  groundSelectionFill.scale.set(maxX - minX, maxZ - minZ, 1)
-
-  const outlinePositions = groundSelectionOutlineGeometry.getAttribute('position') as THREE.BufferAttribute
-  outlinePositions.setXYZ(0, minX, averageHeight + 0.004, minZ)
-  outlinePositions.setXYZ(1, maxX, averageHeight + 0.004, minZ)
-  outlinePositions.setXYZ(2, maxX, averageHeight + 0.004, maxZ)
-  outlinePositions.setXYZ(3, minX, averageHeight + 0.004, maxZ)
-  outlinePositions.setXYZ(4, minX, averageHeight + 0.004, minZ)
-  outlinePositions.needsUpdate = true
-
-  groundSelectionGroup.visible = true
-  groundSelection.value = selection
-  groundSelectionCenterHelper.copy(selection.worldCenter)
-  updateGroundSelectionToolbarPosition()
-}
-
-function updateGroundSelectionToolbarPosition() {
-  const selectionState = groundSelection.value
-  if (!selectionState || !camera || !surfaceRef.value) {
-    groundSelectionToolbarStyle.opacity = 0
-    return
-  }
-
-  groundSelectionScreenHelper.copy(selectionState.worldCenter)
-  groundSelectionScreenHelper.project(camera)
-  if (groundSelectionScreenHelper.z < -1 || groundSelectionScreenHelper.z > 1) {
-    groundSelectionToolbarStyle.opacity = 0
-    return
-  }
-
-  const bounds = surfaceRef.value.getBoundingClientRect()
-  const width = bounds.width
-  const height = bounds.height
-
-  groundSelectionToolbarStyle.left = `${(groundSelectionScreenHelper.x * 0.5 + 0.5) * width}px`
-  groundSelectionToolbarStyle.top = `${(-groundSelectionScreenHelper.y * 0.5 + 0.5) * height}px`
-  groundSelectionToolbarStyle.opacity = 1
-}
-
-function clearGroundSelection() {
-  if (groundSelectionDragState) {
-    if (canvasRef.value && canvasRef.value.hasPointerCapture(groundSelectionDragState.pointerId)) {
-      canvasRef.value.releasePointerCapture(groundSelectionDragState.pointerId)
-    }
-    groundSelectionDragState = null
-    restoreOrbitAfterGroundSelection()
-  }
-  groundSelectionGroup.visible = false
-  groundSelection.value = null
-  groundSelectionToolbarStyle.opacity = 0
-  isGroundToolbarVisible.value = false
-}
-
-function cancelGroundSelection(): boolean {
-  if (!groundSelection.value && !groundSelectionDragState) {
-    return false
-  }
-  clearGroundSelection()
-  return true
-}
-
-function updateGroundSelectionFromPointer(
-  event: PointerEvent,
-  definition: GroundDynamicMesh,
-  options: { forceApply?: boolean } = {},
-): boolean {
-  if (!groundSelectionDragState) {
-    return false
-  }
-  if (isAltOverrideActive) {
-    return false
-  }
-  if (!raycastGroundPoint(event, groundPointerHelper)) {
-    if (options.forceApply) {
-      const selection = createGroundSelectionFromCells(
-        definition,
-        { row: groundSelectionDragState.startRow, column: groundSelectionDragState.startColumn },
-        { row: groundSelectionDragState.currentRow, column: groundSelectionDragState.currentColumn },
-      )
-      applyGroundSelectionVisuals(selection, definition)
-      return true
-    }
-    return false
-  }
-  clampPointToGround(definition, groundPointerHelper)
-  const cell = getGroundCellFromPoint(definition, groundPointerHelper)
-  const changed = cell.row !== groundSelectionDragState.currentRow || cell.column !== groundSelectionDragState.currentColumn
-  if (changed) {
-    groundSelectionDragState.currentRow = cell.row
-    groundSelectionDragState.currentColumn = cell.column
-  }
-  if (changed || options.forceApply) {
-    const selection = createGroundSelectionFromCells(
-      definition,
-      { row: groundSelectionDragState.startRow, column: groundSelectionDragState.startColumn },
-      { row: groundSelectionDragState.currentRow, column: groundSelectionDragState.currentColumn },
-    )
-    applyGroundSelectionVisuals(selection, definition)
-  }
-  return true
-}
-
-function cancelWallSelection(): boolean {
-  if (!wallBuildSession) {
-    return false
-  }
-  cancelWallDrag()
-  clearWallBuildSession()
-  restoreOrbitAfterWallBuild()
-  return true
-}
-
-function refreshGroundMesh(definition: GroundDynamicMesh | null) {
-  if (!definition) {
-    return
-  }
-  const mesh = getGroundMeshObject()
-  if (mesh) {
-    updateGroundMesh(mesh, definition)
-  }
-}
-
-function updateBrush(event: PointerEvent) {
-  if (!scene || !camera) return
-    
-  const rect = canvasRef.value?.getBoundingClientRect()
-  if (!rect) return
-    
-  const x = ((event.clientX - rect.left) / rect.width) * 2 - 1
-  const y = -((event.clientY - rect.top) / rect.height) * 2 + 1
-    
-  const groundNode = sceneStore.selectedNode
-  if (groundNode?.dynamicMesh?.type !== 'Ground') {
-    brushMesh.visible = false
-    return
-  }
-  const definition = groundNode.dynamicMesh as GroundDynamicMesh
-
-  const groundObject = getGroundMeshObject()
-  if (!groundObject) {
-    brushMesh.visible = false
-    return
-  }
-
-  pointer.set(x, y)
-  raycaster.setFromCamera(pointer, camera)
-  const intersects = raycaster.intersectObject(groundObject, false)
-  if (intersects.length > 0) {
-    const hit = intersects[0]
-    brushMesh.position.copy(hit.point)
-    const scale = brushRadius.value
-    brushMesh.scale.set(scale, scale, 1)
-    conformBrushToTerrain(definition, groundObject)
-    brushMesh.visible = true
-  } else {
-    brushMesh.visible = false
-  }
-}
-
-function performSculpt(event: PointerEvent) {
-    if (!brushMesh.visible) return
-    
-    const groundNode = sceneStore.selectedNode
-    if (groundNode?.dynamicMesh?.type !== 'Ground') return
-
-    const definition = groundNode.dynamicMesh as GroundDynamicMesh
-
-    const groundObject = getGroundMeshObject()
-    if (!groundObject) return
-
-    const localPoint = groundObject.worldToLocal(brushMesh.position.clone())
-    localPoint.y -= 0.1
-    
-    const operation: GroundSculptOperation = event.shiftKey ? 'depress' : brushOperation.value
-    const flattenReference = operation === 'flatten'
-      ? sampleGroundHeight(definition, localPoint.x, localPoint.z)
-      : undefined
-
-    const modified = sculptGround(definition, {
-      point: localPoint,
-      radius: brushRadius.value,
-      strength: brushStrength.value,
-      shape: brushShape.value,
-      operation,
-      targetHeight: flattenReference,
-    })
-    
-    if (modified) {
-        const geometry = (groundObject as THREE.Mesh).geometry
-        updateGroundGeometry(geometry, definition)
-    }
-}
-
 async function handlePointerDown(event: PointerEvent) {
   if (!canvasRef.value || !camera || !scene) {
     pointerTrackingState = null
@@ -4212,25 +3696,12 @@ async function handlePointerDown(event: PointerEvent) {
     return
   }
 
-  const button = event.button
-
-  // Terrain Sculpting
-  if (sceneStore.selectedNode?.dynamicMesh?.type === 'Ground' && button === 1) {
-      pointerTrackingState = null
-      isSculpting.value = true
-      
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
-      
-      performSculpt(event)
-      
-      try {
-        canvasRef.value?.setPointerCapture(event.pointerId)
-      } catch (error) { /* noop */ }
-      return
+  if (handleGroundEditorPointerDown(event)) {
+    pointerTrackingState = null
+    return
   }
 
+  const button = event.button
   const isSelectionButton = button === 0 || button === 2
 
   if (nodePickerStore.isActive) {
@@ -4242,69 +3713,6 @@ async function handlePointerDown(event: PointerEvent) {
       }
     }
     hideNodePickerHighlight()
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
-    return
-  }
-
-  if (activeBuildTool.value === 'ground' && button === 0) {
-    pointerTrackingState = null
-    const definition = getGroundDynamicMeshDefinition()
-    if (!definition || !raycastGroundPoint(event, groundPointerHelper)) {
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
-      return
-    }
-    clampPointToGround(definition, groundPointerHelper)
-    const cell = getGroundCellFromPoint(definition, groundPointerHelper)
-
-    if (!groundSelectionDragState) {
-      groundSelectionDragState = {
-        pointerId: event.pointerId,
-        startRow: cell.row,
-        startColumn: cell.column,
-        currentRow: cell.row,
-        currentColumn: cell.column,
-        phase: 'pending',
-      }
-      disableOrbitForGroundSelection()
-      isGroundToolbarVisible.value = false
-      const selection = createGroundSelectionFromCells(definition, cell, cell)
-      applyGroundSelectionVisuals(selection, definition)
-    } else if (groundSelectionDragState.phase === 'sizing') {
-      groundSelectionDragState.pointerId = event.pointerId
-      groundSelectionDragState.currentRow = cell.row
-      groundSelectionDragState.currentColumn = cell.column
-      groundSelectionDragState.phase = 'finalizing'
-      updateGroundSelectionFromPointer(event, definition, { forceApply: true })
-      disableOrbitForGroundSelection()
-    } else {
-      groundSelectionDragState.pointerId = event.pointerId
-      groundSelectionDragState.currentRow = cell.row
-      groundSelectionDragState.currentColumn = cell.column
-    }
-
-    try {
-      canvasRef.value?.setPointerCapture(event.pointerId)
-    } catch (error) {
-      /* noop */
-    }
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
-    return
-  }
-
-  if (activeBuildTool.value === 'ground' && button === 2) {
-    pointerTrackingState = null
-    const hasSelection = Boolean(groundSelection.value || groundSelectionDragState)
-    if (hasSelection) {
-      cancelGroundSelection()
-    } else {
-      handleBuildToolChange(null)
-    }
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
@@ -4487,34 +3895,11 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
 
-  // Terrain Brush Update
-  if (sceneStore.selectedNode?.dynamicMesh?.type === 'Ground') {
-      updateBrush(event)
-      if (isSculpting.value) {
-          performSculpt(event)
-      }
-  } else {
-      brushMesh.visible = false
-  }
-
-  if (isAltOverrideActive) {
+  if (handleGroundEditorPointerMove(event)) {
     return
   }
 
-  if (groundSelectionDragState && event.pointerId === groundSelectionDragState.pointerId) {
-    const definition = getGroundDynamicMeshDefinition()
-    if (!definition) {
-      groundSelectionDragState = null
-      clearGroundSelection()
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
-      return
-    }
-    updateGroundSelectionFromPointer(event, definition)
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
+  if (isAltOverrideActive) {
     return
   }
 
@@ -4577,71 +3962,9 @@ function handlePointerMove(event: PointerEvent) {
 }
 
 function handlePointerUp(event: PointerEvent) {
-  if (isSculpting.value) {
-      isSculpting.value = false
-      try {
-          canvasRef.value?.releasePointerCapture(event.pointerId)
-      } catch (e) { /* noop */ }
-
-      if (sceneStore.selectedNode?.dynamicMesh?.type === 'Ground') {
-          const mesh = objectMap.get(sceneStore.selectedNode.id) as THREE.Mesh
-          if (mesh && mesh.geometry) {
-               mesh.geometry.computeVertexNormals()
-          }
-          sceneStore.updateNodeDynamicMesh(sceneStore.selectedNode.id, sceneStore.selectedNode.dynamicMesh)
-      }
-      return
-  }
-
   const overrideActive = isAltOverrideActive
 
-  if (groundSelectionDragState && event.pointerId === groundSelectionDragState.pointerId) {
-    if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
-      canvasRef.value.releasePointerCapture(event.pointerId)
-    }
-    if (overrideActive) {
-      return
-    }
-    const definition = getGroundDynamicMeshDefinition()
-    if (!definition) {
-      clearGroundSelection()
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
-      return
-    }
-
-    if (groundSelectionDragState.phase === 'pending') {
-      updateGroundSelectionFromPointer(event, definition, { forceApply: true })
-      groundSelectionDragState.phase = 'sizing'
-      restoreOrbitAfterGroundSelection()
-      isGroundToolbarVisible.value = false
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
-      return
-    }
-
-    if (groundSelectionDragState.phase === 'finalizing') {
-      updateGroundSelectionFromPointer(event, definition, { forceApply: true })
-      groundSelectionDragState = null
-      restoreOrbitAfterGroundSelection()
-      if (groundSelection.value) {
-        isGroundToolbarVisible.value = true
-        updateGroundSelectionToolbarPosition()
-      } else {
-        isGroundToolbarVisible.value = false
-      }
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
-      return
-    }
-
-    updateGroundSelectionFromPointer(event, definition, { forceApply: true })
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
+  if (handleGroundEditorPointerUp(event)) {
     return
   }
 
@@ -4668,10 +3991,6 @@ function handlePointerUp(event: PointerEvent) {
       if (hadWallSession) {
         finalizeWallBuildSession()
       } else {
-        if (groundSelection.value || groundSelectionDragState) {
-          // allow right-click through to cancel ground selection when switching tools
-          cancelGroundSelection()
-        }
         handleBuildToolChange(null)
       }
       event.preventDefault()
@@ -4764,17 +4083,7 @@ function handlePointerCancel(event: PointerEvent) {
     hideNodePickerHighlight()
   }
 
-  if (groundSelectionDragState && event.pointerId === groundSelectionDragState.pointerId) {
-    if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
-      canvasRef.value.releasePointerCapture(event.pointerId)
-    }
-    groundSelectionDragState = null
-    clearGroundSelection()
-    restoreOrbitAfterGroundSelection()
-    isGroundToolbarVisible.value = false
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
+  if (handleGroundEditorPointerCancel(event)) {
     return
   }
 
@@ -4848,71 +4157,6 @@ function handleCanvasDoubleClick(event: MouseEvent) {
   emitSelectionChange(appliedSelection)
   event.preventDefault()
   event.stopPropagation()
-}
-
-function commitGroundModification(
-  modifier: (bounds: { minRow: number; maxRow: number; minColumn: number; maxColumn: number }) => boolean,
-) {
-  const selection = groundSelection.value
-  const definition = getGroundDynamicMeshDefinition()
-  if (!selection || !definition) {
-    return
-  }
-  const bounds = cellSelectionToVertexBounds(selection, definition)
-  const changed = modifier(bounds)
-  if (!changed) {
-    return
-  }
-  refreshGroundMesh(getGroundDynamicMeshDefinition())
-  updateGroundSelectionToolbarPosition()
-}
-
-function handleGroundRaise() {
-  commitGroundModification((bounds) => sceneStore.raiseGroundRegion(bounds, GROUND_HEIGHT_STEP))
-}
-
-function handleGroundLower() {
-  commitGroundModification((bounds) => sceneStore.lowerGroundRegion(bounds, GROUND_HEIGHT_STEP))
-}
-
-function handleGroundReset() {
-  commitGroundModification((bounds) => sceneStore.resetGroundRegion(bounds))
-}
-
-function handleGroundTextureSelectRequest() {
-  if (!groundTextureInputRef.value) {
-    return
-  }
-  groundTextureInputRef.value.value = ''
-  groundTextureInputRef.value.click()
-}
-
-function handleGroundTextureFileChange(event: Event) {
-  const input = event.target as HTMLInputElement | null
-  if (!input?.files || input.files.length === 0) {
-    return
-  }
-  const file = input.files[0]
-  if (!file) {
-    return
-  }
-  const reader = new FileReader()
-  reader.onload = () => {
-    const result = typeof reader.result === 'string' ? reader.result : null
-    if (!result) {
-      return
-    }
-    const changed = sceneStore.setGroundTexture({ dataUrl: result, name: file.name ?? null })
-    if (!changed) {
-      return
-    }
-    refreshGroundMesh(getGroundDynamicMeshDefinition())
-  }
-  reader.readAsDataURL(file)
-}
-
-function handleGroundCancel() {
-  cancelGroundSelection()
 }
 
 function disposeWallPreviewGroup(group: THREE.Group) {
@@ -5530,6 +4774,16 @@ function handleWallPlacementClick(event: PointerEvent): boolean {
   return true
 }
 
+function cancelWallSelection(): boolean {
+  if (!wallBuildSession) {
+    return false
+  }
+  cancelWallDrag()
+  clearWallBuildSession()
+  restoreOrbitAfterWallBuild()
+  return true
+}
+
 function finalizeWallBuildSession() {
   if (!wallBuildSession) {
     return
@@ -5547,7 +4801,7 @@ function cancelActiveBuildOperation(): boolean {
   let handled = false
   switch (tool) {
     case 'ground':
-      if (groundSelection.value || groundSelectionDragState) {
+      if (groundEditorHasActiveSelection()) {
         cancelGroundSelection()
       } else {
         activeBuildTool.value = null
@@ -7240,6 +6494,8 @@ onBeforeUnmount(() => {
   if (nodePickerStore.isActive) {
     nodePickerStore.cancelActivePick('user')
   }
+  disposeGroundEditor()
+  groundTextureInputRef.value = null
   disposeSceneNodes()
   disposeScene()
   disposeCachedTextures()
@@ -7396,11 +6652,7 @@ watch(
 )
 
 watch(activeBuildTool, (tool) => {
-  if (tool !== 'ground') {
-    groundSelectionDragState = null
-    clearGroundSelection()
-    restoreOrbitAfterGroundSelection()
-  }
+  handleGroundEditorBuildToolChange(tool)
   if (tool !== 'wall') {
     cancelWallDrag()
     clearWallBuildSession()

@@ -307,7 +307,7 @@ function wrapNodeIntoNewGroup(targetId: string, adoptNodeId?: string | null): st
   if (!targetId) {
     return null
   }
-  const protectedIds = new Set([GROUND_NODE_ID, SKY_NODE_ID, ENVIRONMENT_NODE_ID])
+  const protectedIds = new Set<string>([GROUND_NODE_ID, SKY_NODE_ID, ENVIRONMENT_NODE_ID])
   if (protectedIds.has(targetId)) {
     return null
   }

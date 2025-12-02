@@ -19,8 +19,8 @@ function buildPermutationTable(random: () => number): number[] {
   const permutation = new Array(256).fill(0).map((_, index) => index)
   for (let i = permutation.length - 1; i > 0; i -= 1) {
     const swapIndex = Math.floor(random() * (i + 1))
-    const temp = permutation[i]
-    permutation[i] = permutation[swapIndex]
+    const temp = permutation[i]!
+    permutation[i] = permutation[swapIndex]!
     permutation[swapIndex] = temp
   }
   const table = new Array(512)
@@ -56,24 +56,24 @@ function createPerlinNoise(seed?: number) {
     const v = fade(yf)
     const w = fade(zf)
 
-    const A = P[X] + Y
-    const AA = P[A] + Z
-    const AB = P[A + 1] + Z
-    const B = P[X + 1] + Y
-    const BA = P[B] + Z
-    const BB = P[B + 1] + Z
+    const A = P[X]! + Y
+    const AA = P[A]! + Z
+    const AB = P[A + 1]! + Z
+    const B = P[X + 1]! + Y
+    const BA = P[B]! + Z
+    const BB = P[B + 1]! + Z
 
     return lerp(
       w,
       lerp(
         v,
-        lerp(u, grad(P[AA], xf, yf, zf), grad(P[BA], xf - 1, yf, zf)),
-        lerp(u, grad(P[AB], xf, yf - 1, zf), grad(P[BB], xf - 1, yf - 1, zf)),
+        lerp(u, grad(P[AA]!, xf, yf, zf), grad(P[BA]!, xf - 1, yf, zf)),
+        lerp(u, grad(P[AB]!, xf, yf - 1, zf), grad(P[BB]!, xf - 1, yf - 1, zf)),
       ),
       lerp(
         v,
-        lerp(u, grad(P[AA + 1], xf, yf, zf - 1), grad(P[BA + 1], xf - 1, yf, zf - 1)),
-        lerp(u, grad(P[AB + 1], xf, yf - 1, zf - 1), grad(P[BB + 1], xf - 1, yf - 1, zf - 1)),
+        lerp(u, grad(P[AA + 1]!, xf, yf, zf - 1), grad(P[BA + 1]!, xf - 1, yf, zf - 1)),
+        lerp(u, grad(P[AB + 1]!, xf, yf - 1, zf - 1), grad(P[BB + 1]!, xf - 1, yf - 1, zf - 1)),
       ),
     )
   }
