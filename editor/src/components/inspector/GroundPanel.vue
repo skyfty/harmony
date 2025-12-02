@@ -176,32 +176,28 @@ watch(selectedNoiseMode, (mode) => {
       </div>
 
       <div class="control-group">
-        <div class="text-caption">Brush Radius</div>
-        <v-text-field
+        <div class="text-caption">Brush Radius: {{ brushRadius }}</div>
+        <v-slider
           v-model="brushRadius"
-          min="0.1"
-          max="50"
-          step="0.1"
-          type="number"
+          :min="0.1"
+          :max="50"
+          :step="0.1"
+          color="primary"
           density="compact"
-          variant="underlined"
           hide-details
-          suffix="m"
         />
       </div>
 
       <div class="control-group ">
-        <div class="text-caption ">Brush Strength</div>
-        <v-text-field
+        <div class="text-caption ">Brush Strength: {{ brushStrength }}</div>
+        <v-slider
           v-model="brushStrength"
-          min="0.1"
-          max="10"
-          step="0.1"
-          type="number"
-          variant="underlined"
+          :min="0.1"
+          :max="10"
+          :step="0.1"
+          color="primary"
           density="compact"
           hide-details
-          suffix="m"
         />
       </div>
 
@@ -233,17 +229,14 @@ watch(selectedNoiseMode, (mode) => {
         </div>
 
         <div class="control-group">
-          <div class="text-caption">Noise Strength</div>
-        <v-text-field
+          <div class="text-caption">Noise Strength: {{ noiseStrength }}</div>
+        <v-slider
             v-model="noiseStrength"
             :min="0"
             :max="5"
             :step="0.1"
-          type="number"
-          variant="underlined"
-          density="compact"
-            thumb-label="always"
             color="primary"
+            density="compact"
             :disabled="!hasGround"
           />
         </div>

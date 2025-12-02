@@ -69,7 +69,7 @@ const isGroundNode = computed(() => selectedNode.value?.id === GROUND_NODE_ID)
 const isSkyNode = computed(() => selectedNode.value?.id === SKY_NODE_ID)
 const isEnvironmentNode = computed(() => selectedNode.value?.id === ENVIRONMENT_NODE_ID)
 const showMaterialPanel = computed(
-  () => !isLightNode.value && (selectedNode.value?.materials?.length ?? 0) > 0,
+  () =>!isGroundNode.value && !isLightNode.value && (selectedNode.value?.materials?.length ?? 0) > 0,
 )
 const showTransformPanel = computed(() => {
   return selectedNode.value?.id !== SKY_NODE_ID && selectedNode.value?.id !== GROUND_NODE_ID && selectedNode.value?.id !== ENVIRONMENT_NODE_ID;
