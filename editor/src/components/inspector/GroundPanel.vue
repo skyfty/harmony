@@ -118,7 +118,7 @@ watch(selectedNoiseMode, (mode) => {
        Terrain Tools
     </v-expansion-panel-title>
     <v-expansion-panel-text>
-      <div >
+      <div class="ground-dimensions">
         <v-text-field
           :model-value="localWidth"
           label="Width (m)"
@@ -270,6 +270,15 @@ watch(selectedNoiseMode, (mode) => {
   display: block;
   margin-top: 0.25rem;
   color: rgba(220, 225, 232, 0.65);
+}
+
+.ground-dimensions {
+  display: flex;
+  gap: 12px;
+}
+
+.ground-dimensions :deep(.v-text-field) {
+  flex: 1;
 }
 
 .ground-panel-divider {
