@@ -215,19 +215,89 @@ function createBrushGeometry(shape: TerrainBrushShape): THREE.BufferGeometry {
 }
 
 function updateBrushGeometry(shape: TerrainBrushShape) {
-  const nextGeometry = createBrushGeometry(shape)
+  const nextGeometry = tagBrushGeometry(createBrushGeometry(shape))
   const previousGeometry = brushMesh.geometry
   brushMesh.geometry = nextGeometry
   previousGeometry?.dispose()
 }
 
+const BRUSH_BASE_POSITIONS_KEY = '__harmonyBrushBasePositions'
+const BRUSH_SURFACE_OFFSET = 0.02
+
+function storeBrushBasePositions(geometry: THREE.BufferGeometry) {
+  const positionAttribute = geometry.getAttribute('position')
+  if (!positionAttribute) {
+    return
+  }
+  geometry.userData[BRUSH_BASE_POSITIONS_KEY] = Float32Array.from(positionAttribute.array as ArrayLike<number>)
+}
+
+function tagBrushGeometry(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
+  storeBrushBasePositions(geometry)
+  return geometry
+}
+
 const brushMesh = new THREE.Mesh(
-  createBrushGeometry(brushShape.value ?? 'circle'),
+  tagBrushGeometry(createBrushGeometry(brushShape.value ?? 'circle')),
   new THREE.MeshBasicMaterial({ color: 0xff3333, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthTest: false, depthWrite: false })
 )
 brushMesh.rotation.x = -Math.PI / 2
 brushMesh.visible = false
 brushMesh.renderOrder = 999
+
+const brushBasePositionHelper = new THREE.Vector3()
+const brushWorldVertexHelper = new THREE.Vector3()
+const groundLocalVertexHelper = new THREE.Vector3()
+const groundWorldVertexHelper = new THREE.Vector3()
+const brushResultVertexHelper = new THREE.Vector3()
+
+function conformBrushToTerrain(definition: GroundDynamicMesh, groundObject: THREE.Mesh) {
+  const geometry = brushMesh.geometry
+  const positionAttribute = geometry.getAttribute('position')
+  const basePositions = geometry.userData?.[BRUSH_BASE_POSITIONS_KEY] as Float32Array | undefined
+  if (!positionAttribute || !basePositions) {
+    return
+  }
+  const expectedLength = positionAttribute.count * 3
+  if (basePositions.length !== expectedLength) {
+    return
+  }
+
+  brushMesh.updateMatrixWorld(true)
+  groundObject.updateMatrixWorld(true)
+
+  for (let index = 0; index < positionAttribute.count; index += 1) {
+    const baseIndex = index * 3
+    brushBasePositionHelper.set(
+      basePositions[baseIndex + 0],
+      basePositions[baseIndex + 1],
+      basePositions[baseIndex + 2],
+    )
+
+    brushWorldVertexHelper.copy(brushBasePositionHelper)
+    brushMesh.localToWorld(brushWorldVertexHelper)
+
+    groundLocalVertexHelper.copy(brushWorldVertexHelper)
+    groundObject.worldToLocal(groundLocalVertexHelper)
+
+    const height = sampleGroundHeight(definition, groundLocalVertexHelper.x, groundLocalVertexHelper.z)
+    groundLocalVertexHelper.y = height
+
+    groundWorldVertexHelper.copy(groundLocalVertexHelper)
+    groundObject.localToWorld(groundWorldVertexHelper)
+
+    brushResultVertexHelper.copy(groundWorldVertexHelper)
+    brushMesh.worldToLocal(brushResultVertexHelper)
+    positionAttribute.setXYZ(
+      index,
+      brushResultVertexHelper.x,
+      brushResultVertexHelper.y + BRUSH_SURFACE_OFFSET,
+      brushResultVertexHelper.z,
+    )
+  }
+
+  positionAttribute.needsUpdate = true
+}
 
 
 const assetCacheStore = useAssetCacheStore()
@@ -4056,41 +4126,40 @@ function refreshGroundMesh(definition: GroundDynamicMesh | null) {
 }
 
 function updateBrush(event: PointerEvent) {
-    if (!scene || !camera) return
+  if (!scene || !camera) return
     
-    const rect = canvasRef.value?.getBoundingClientRect()
-    if (!rect) return
+  const rect = canvasRef.value?.getBoundingClientRect()
+  if (!rect) return
     
-    const x = ((event.clientX - rect.left) / rect.width) * 2 - 1
-    const y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  const x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  const y = -((event.clientY - rect.top) / rect.height) * 2 + 1
     
-    const raycaster = new THREE.Raycaster()
-    raycaster.setFromCamera(new THREE.Vector2(x, y), camera)
-    
-    const groundNode = sceneStore.selectedNode
-    if (groundNode?.dynamicMesh?.type !== 'Ground') {
-      brushMesh.visible = false
-      return
-    }
+  const groundNode = sceneStore.selectedNode
+  if (groundNode?.dynamicMesh?.type !== 'Ground') {
+    brushMesh.visible = false
+    return
+  }
+  const definition = groundNode.dynamicMesh as GroundDynamicMesh
 
-    const groundObject = getGroundMeshObject()
-    if (!groundObject) {
-        brushMesh.visible = false
-        return
-    }
+  const groundObject = getGroundMeshObject()
+  if (!groundObject) {
+    brushMesh.visible = false
+    return
+  }
 
-    const intersects = raycaster.intersectObject(groundObject, false)
-    if (intersects.length > 0) {
-        const hit = intersects[0]
-        brushMesh.position.copy(hit.point)
-        brushMesh.position.y += 0.1
-        brushMesh.visible = true
-        
-        const scale = brushRadius.value
-        brushMesh.scale.set(scale, scale, 1)
-    } else {
-        brushMesh.visible = false
-    }
+  pointer.set(x, y)
+  raycaster.setFromCamera(pointer, camera)
+  const intersects = raycaster.intersectObject(groundObject, false)
+  if (intersects.length > 0) {
+    const hit = intersects[0]
+    brushMesh.position.copy(hit.point)
+    const scale = brushRadius.value
+    brushMesh.scale.set(scale, scale, 1)
+    conformBrushToTerrain(definition, groundObject)
+    brushMesh.visible = true
+  } else {
+    brushMesh.visible = false
+  }
 }
 
 function performSculpt(event: PointerEvent) {
