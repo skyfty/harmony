@@ -28,6 +28,7 @@ import type {
   GroundDynamicMesh,
   WallDynamicMesh,
   SurfaceDynamicMesh,
+  GroundSculptOperation,
 } from '@harmony/schema'
 import {
   applyMaterialOverrides,
@@ -69,7 +70,7 @@ import type { NodeHitResult } from '@/types/scene-viewport-node-hit-result'
 import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracking-state'
 import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-viewport-transform-group'
 import type { BuildTool } from '@/types/build-tool'
-import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache, sculptGround, updateGroundGeometry } from '@schema/groundMesh'
+import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache, sculptGround, updateGroundGeometry, sampleGroundHeight } from '@schema/groundMesh'
 import { useTerrainStore } from '@/stores/terrainStore'
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 import { createSurfaceMesh, updateSurfaceMesh } from '@schema/surfaceMesh'
@@ -149,7 +150,7 @@ const emit = defineEmits<{
 
 const sceneStore = useSceneStore()
 const terrainStore = useTerrainStore()
-const { brushRadius, brushStrength, brushShape, isDigging } = storeToRefs(terrainStore)
+const { brushRadius, brushStrength, brushShape, brushOperation } = storeToRefs(terrainStore)
 const isSculpting = ref(false)
 
 const brushMesh = new THREE.Mesh(
@@ -4034,12 +4035,18 @@ function performSculpt(event: PointerEvent) {
     const localPoint = groundObject.worldToLocal(brushMesh.position.clone())
     localPoint.y -= 0.1
     
+    const operation: GroundSculptOperation = event.shiftKey ? 'depress' : brushOperation.value
+    const flattenReference = operation === 'flatten'
+      ? sampleGroundHeight(definition, localPoint.x, localPoint.z)
+      : undefined
+
     const modified = sculptGround(definition, {
-        point: localPoint,
-        radius: brushRadius.value,
-        strength: brushStrength.value,
-        shape: brushShape.value,
-        isDigging: isDigging.value || event.shiftKey
+      point: localPoint,
+      radius: brushRadius.value,
+      strength: brushStrength.value,
+      shape: brushShape.value,
+      operation,
+      targetHeight: flattenReference,
     })
     
     if (modified) {

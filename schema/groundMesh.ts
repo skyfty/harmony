@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { type GroundDynamicMesh, type GroundGenerationSettings, type GroundHeightMap } from '@harmony/schema'
+import { type GroundDynamicMesh, type GroundGenerationSettings, type GroundHeightMap, type GroundSculptOperation } from '@harmony/schema'
 
 const textureLoader = new THREE.TextureLoader()
 let cachedMesh: THREE.Mesh | null = null
@@ -79,8 +79,95 @@ function createPerlinNoise(seed?: number) {
   }
 }
 
+type VoronoiPoint = { x: number; z: number }
+
+function createVoronoiNoise(seed?: number) {
+  const random = seed === undefined ? Math.random : createSeededRandom(Math.floor(seed))
+  const cache = new Map<string, VoronoiPoint>()
+  const getPoint = (cellX: number, cellZ: number): VoronoiPoint => {
+    const key = `${cellX}:${cellZ}`
+    let point = cache.get(key)
+    if (!point) {
+      point = {
+        x: cellX + random(),
+        z: cellZ + random(),
+      }
+      cache.set(key, point)
+    }
+    return point
+  }
+
+  return (x: number, z: number) => {
+    const cellX = Math.floor(x)
+    const cellZ = Math.floor(z)
+    let minDistance = Number.POSITIVE_INFINITY
+    for (let ix = cellX - 1; ix <= cellX + 1; ix += 1) {
+      for (let iz = cellZ - 1; iz <= cellZ + 1; iz += 1) {
+        const feature = getPoint(ix, iz)
+        const dx = feature.x - x
+        const dz = feature.z - z
+        const distance = Math.sqrt(dx * dx + dz * dz)
+        if (distance < minDistance) {
+          minDistance = distance
+        }
+      }
+    }
+    if (!Number.isFinite(minDistance)) {
+      return 0
+    }
+    const normalized = Math.max(0, Math.min(1, minDistance))
+    return 1 - normalized
+  }
+}
+
 function groundVertexKey(row: number, column: number): string {
   return `${row}:${column}`
+}
+
+function clampVertexIndex(value: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return 0
+  }
+  if (value < 0) {
+    return 0
+  }
+  if (value > max) {
+    return max
+  }
+  return value
+}
+
+function getVertexHeight(definition: GroundDynamicMesh, row: number, column: number): number {
+  const key = groundVertexKey(row, column)
+  return definition.heightMap[key] ?? 0
+}
+
+function sampleNeighborAverage(
+  definition: GroundDynamicMesh,
+  row: number,
+  column: number,
+  maxRow: number,
+  maxColumn: number,
+): number {
+  let sum = 0
+  let count = 0
+  for (let r = Math.max(0, row - 1); r <= Math.min(maxRow, row + 1); r += 1) {
+    for (let c = Math.max(0, column - 1); c <= Math.min(maxColumn, column + 1); c += 1) {
+      sum += getVertexHeight(definition, r, c)
+      count += 1
+    }
+  }
+  return count > 0 ? sum / count : 0
+}
+
+export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: number): number {
+  const columns = Math.max(1, definition.columns)
+  const rows = Math.max(1, definition.rows)
+  const halfWidth = definition.width * 0.5
+  const halfDepth = definition.depth * 0.5
+  const localColumn = clampVertexIndex(Math.round((x + halfWidth) / definition.cellSize), columns)
+  const localRow = clampVertexIndex(Math.round((z + halfDepth) / definition.cellSize), rows)
+  return getVertexHeight(definition, localRow, localColumn)
 }
 
 function buildGroundGeometry(definition: GroundDynamicMesh): THREE.BufferGeometry {
@@ -156,6 +243,7 @@ function normalizeGroundGenerationSettings(settings: GroundGenerationSettings): 
   const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
   const normalizedScale = clamp(Math.abs(settings.noiseScale ?? 40), 1, 10000)
   const normalizedAmplitude = clamp(Math.abs(settings.noiseAmplitude ?? 0), 0, 500)
+  const normalizedStrength = clamp(Number.isFinite(settings.noiseStrength ?? 1) ? Math.abs(settings.noiseStrength ?? 1) : 1, 0, 10)
   const detailScale = settings.detailScale && settings.detailScale > 0 ? settings.detailScale : undefined
   const detailAmplitude = settings.detailAmplitude && settings.detailAmplitude > 0 ? settings.detailAmplitude : undefined
   const edgeFalloff = typeof settings.edgeFalloff === 'number' && Number.isFinite(settings.edgeFalloff)
@@ -167,6 +255,7 @@ function normalizeGroundGenerationSettings(settings: GroundGenerationSettings): 
       : undefined,
     noiseScale: normalizedScale,
     noiseAmplitude: normalizedAmplitude,
+    noiseStrength: normalizedStrength,
     detailScale,
     detailAmplitude,
     chunkSize: settings.chunkSize,
@@ -190,8 +279,9 @@ export function applyGroundGeneration(
   const halfWidth = definition.width * 0.5
   const halfDepth = definition.depth * 0.5
   const heightMap: GroundHeightMap = {}
+  const strength = normalized.noiseStrength ?? 1
 
-  if (normalized.mode === 'flat' || normalized.noiseAmplitude === 0) {
+  if (normalized.mode === 'flat' || normalized.noiseAmplitude === 0 || strength === 0) {
     for (let row = 0; row <= rows; row += 1) {
       for (let column = 0; column <= columns; column += 1) {
         heightMap[groundVertexKey(row, column)] = 0
@@ -208,15 +298,44 @@ export function applyGroundGeneration(
   const mainScale = Math.max(0.001, normalized.noiseScale)
   const detailScale = Math.max(0.001, normalized.detailScale ?? normalized.noiseScale * 0.5)
   const detailAmplitude = normalized.detailAmplitude ?? 0
+  const voronoiNoise = normalized.mode === 'voronoi' ? createVoronoiNoise((normalized.seed ?? 1337) + 211) : null
+  const simplePhase = (normalized.seed ?? 0) * 0.137
+
+  const sampleBaseValue = (x: number, z: number): number => {
+    const u = x / mainScale
+    const v = z / mainScale
+    switch (normalized.mode) {
+      case 'simple': {
+        const wave = Math.sin(u * 0.6 + simplePhase) * 0.65 + Math.cos(v * 0.35 + simplePhase) * 0.45
+        return Math.max(-1, Math.min(1, wave))
+      }
+      case 'ridge': {
+        const raw = baseNoise(u, v, 0.5)
+        const ridged = 1 - Math.abs(raw)
+        const shaped = ridged * ridged
+        return shaped * 2 - 1
+      }
+      case 'voronoi': {
+        const worley = voronoiNoise ? voronoiNoise(u, v) : 0
+        return worley * 2 - 1
+      }
+      case 'flat':
+        return 0
+      case 'perlin':
+      default:
+        return baseNoise(u, v, 0.5)
+    }
+  }
 
   for (let row = 0; row <= rows; row += 1) {
     const z = -halfDepth + row * cellSize
     for (let column = 0; column <= columns; column += 1) {
       const x = -halfWidth + column * cellSize
-      let height = baseNoise(x / mainScale, z / mainScale, 0.5) * normalized.noiseAmplitude
+      let height = sampleBaseValue(x, z) * normalized.noiseAmplitude
       if (useDetail && detailNoise) {
         height += detailNoise(x / detailScale, z / detailScale, 0.5) * detailAmplitude
       }
+      height *= strength
       if (normalized.edgeFalloff && normalized.edgeFalloff > 0) {
         const nx = (column / columns) * 2 - 1
         const nz = (row / rows) * 2 - 1
@@ -238,11 +357,12 @@ export interface SculptParams {
   radius: number
   strength: number
   shape: 'circle' | 'square' | 'star'
-  isDigging: boolean
+  operation: GroundSculptOperation
+  targetHeight?: number
 }
 
 export function sculptGround(definition: GroundDynamicMesh, params: SculptParams): boolean {
-  const { point, radius, strength, shape, isDigging } = params
+  const { point, radius, strength, shape, operation, targetHeight } = params
   const halfWidth = definition.width * 0.5
   const halfDepth = definition.depth * 0.5
   const cellSize = definition.cellSize
@@ -304,21 +424,32 @@ export function sculptGround(definition: GroundDynamicMesh, params: SculptParams
               }
           }
 
-          if (isInside) {
+            if (isInside) {
               let influence = Math.cos((dist / radius) * (Math.PI / 2))
-              
               const noiseVal = sculptNoise(x * 0.05, z * 0.05, 0)
-              const realismFactor = 1.0 + noiseVal * 0.1
-              influence *= realismFactor
-
-              const factor = isDigging ? -1 : 1
-              const offset = factor * strength * influence * 0.3
+              influence *= 1.0 + noiseVal * 0.1
 
               const key = groundVertexKey(row, col)
               const currentHeight = definition.heightMap[key] ?? 0
-              definition.heightMap[key] = currentHeight + offset
+              let nextHeight = currentHeight
+
+              if (operation === 'smooth') {
+                const average = sampleNeighborAverage(definition, row, col, rows, columns)
+                const smoothingFactor = Math.min(1, strength * 0.25)
+                nextHeight = currentHeight + (average - currentHeight) * smoothingFactor * influence
+              } else if (operation === 'flatten') {
+                const reference = targetHeight ?? currentHeight
+                const flattenFactor = Math.min(1, strength * 0.4)
+                nextHeight = currentHeight + (reference - currentHeight) * flattenFactor * influence
+              } else {
+                const direction = operation === 'depress' ? -1 : 1
+                const offset = direction * strength * influence * 0.3
+                nextHeight = currentHeight + offset
+              }
+
+              definition.heightMap[key] = nextHeight
               modified = true
-          }
+            }
       }
   }
   return modified

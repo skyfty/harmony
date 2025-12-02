@@ -570,7 +570,7 @@ export interface GroundHeightMap {
   [key: string]: number
 }
 
-export type GroundGenerationMode = 'perlin' | 'flat'
+export type GroundGenerationMode = 'simple' | 'perlin' | 'ridge' | 'voronoi' | 'flat'
 
 export interface GroundGenerationSettings {
   /** Optional deterministic seed for noise generation */
@@ -579,6 +579,8 @@ export interface GroundGenerationSettings {
   noiseScale: number
   /** Peak height variation in meters */
   noiseAmplitude: number
+  /** Overall multiplier applied to the generated height field */
+  noiseStrength?: number
   /** Optional secondary detail frequency multiplier */
   detailScale?: number
   /** Optional secondary amplitude multiplier for detail layer */
@@ -592,6 +594,8 @@ export interface GroundGenerationSettings {
   edgeFalloff?: number
   mode?: GroundGenerationMode
 }
+
+export type GroundSculptOperation = 'raise' | 'depress' | 'smooth' | 'flatten'
 
 export interface GroundDynamicMesh {
   type: 'Ground'
