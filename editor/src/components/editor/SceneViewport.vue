@@ -376,6 +376,7 @@ import {
   DEFAULT_PERSPECTIVE_FOV,
   MIN_CAMERA_DISTANCE,
   MAX_CAMERA_DISTANCE,
+  CAMERA_POLAR_EPSILON,
   CAMERA_DISTANCE_EPSILON,
   RIGHT_CLICK_ROTATION_STEP,
   GROUND_HEIGHT_STEP
@@ -1551,77 +1552,6 @@ function prepareDragPreview(assetId: string) {
   void loadDragPreviewForAsset(asset)
 }
 
-function clampCameraAboveGround(forceUpdate = true) {
-  if (!camera || !orbitControls) return false
-
-  let adjusted = false
-
-  if (camera.position.y < MIN_CAMERA_HEIGHT) {
-    camera.position.y = MIN_CAMERA_HEIGHT
-    adjusted = true
-  }
-
-  if (orbitControls.target.y < MIN_TARGET_HEIGHT) {
-    orbitControls.target.y = MIN_TARGET_HEIGHT
-    adjusted = true
-  }
-
-  if (adjusted && forceUpdate) {
-    const prevApplying = isApplyingCameraState
-    if (!prevApplying) {
-      isApplyingCameraState = true
-    }
-    orbitControls.update()
-    if (!prevApplying) {
-      isApplyingCameraState = false
-    }
-  }
-
-  return adjusted
-}
-
-function clampCameraDistance(target: THREE.Vector3, cam: THREE.PerspectiveCamera): boolean {
-  cameraOffsetHelper.copy(cam.position).sub(target)
-  const distance = cameraOffsetHelper.length()
-  if (distance >= MIN_CAMERA_DISTANCE && distance <= MAX_CAMERA_DISTANCE) {
-    return false
-  }
-
-  if (distance < CAMERA_DISTANCE_EPSILON) {
-    cameraOffsetHelper.set(0, 1, 0)
-  } else {
-    cameraOffsetHelper.normalize()
-  }
-
-  const desiredDistance = THREE.MathUtils.clamp(distance, MIN_CAMERA_DISTANCE, MAX_CAMERA_DISTANCE)
-  cameraOffsetHelper.multiplyScalar(desiredDistance).add(target)
-  cam.position.copy(cameraOffsetHelper)
-  return true
-}
-
-function clampCameraZoom(forceUpdate = true) {
-  if (!camera || !orbitControls) return false
-
-  let adjusted = false
-  const target = orbitControls.target
-
-  if (clampCameraDistance(target, camera)) {
-    adjusted = true
-  }
-
-  if (adjusted && forceUpdate) {
-    const prevApplying = isApplyingCameraState
-    if (!prevApplying) {
-      isApplyingCameraState = true
-    }
-    orbitControls.update()
-    if (!prevApplying) {
-      isApplyingCameraState = false
-    }
-  }
-
-  return adjusted
-}
 
 function bindControlsToCamera(newCamera: THREE.PerspectiveCamera) {
   if (orbitControls) {
@@ -1846,8 +1776,6 @@ function resetCameraView() {
   orbitControls.update()
   isApplyingCameraState = false
 
-  clampCameraZoom()
-  clampCameraAboveGround()
 }
 
 function snapVectorToGrid(vec: THREE.Vector3) {
@@ -1939,8 +1867,6 @@ function applyCameraState(state: SceneCameraState | null | undefined) {
   const clampedTargetY = Math.max(state.target.y, MIN_TARGET_HEIGHT)
   orbitControls.target.set(state.target.x, clampedTargetY, state.target.z)
   orbitControls.update()
-  clampCameraZoom()
-  clampCameraAboveGround()
   gizmoControls?.cameraUpdate()
   isApplyingCameraState = false
 }
@@ -1993,9 +1919,6 @@ function focusCameraOnNode(nodeId: string): boolean {
   orbitControls.update()
   isApplyingCameraState = false
 
-  clampCameraZoom()
-  clampCameraAboveGround()
-
   if (perspectiveCamera && camera !== perspectiveCamera) {
     perspectiveCamera.position.copy(camera.position)
     perspectiveCamera.quaternion.copy(camera.quaternion)
@@ -2005,8 +1928,7 @@ function focusCameraOnNode(nodeId: string): boolean {
 
 function handleControlsChange() {
   if (!isSceneReady.value || isApplyingCameraState) return
-  clampCameraZoom()
-  clampCameraAboveGround()
+
   gizmoControls?.cameraUpdate()
 }
 
@@ -2029,18 +1951,7 @@ function applyCameraControlMode(mode: CameraControlMode) {
   orbitControls = useMapControls ? new MapControls(camera, domElement) : new OrbitControls(camera, domElement)
   orbitControls.enableDamping = false
   orbitControls.dampingFactor = mode === 'orbit' ? 0.08 : 0.05
-  orbitControls.minDistance = MIN_CAMERA_DISTANCE
-  orbitControls.maxDistance = MAX_CAMERA_DISTANCE
   orbitControls.screenSpacePanning = false
-  if (mode === 'map') {
-    orbitControls.minPolarAngle = orbitControls.maxPolarAngle = THREE.MathUtils.degToRad(50)
-  } else if (mode === 'orbit') {
-    orbitControls.minPolarAngle = 0
-    orbitControls.maxPolarAngle = Math.PI / 2 - 0.05
-  } else {
-    orbitControls.minPolarAngle = 0
-    orbitControls.maxPolarAngle = Math.PI
-  }
   if (previousTarget) {
     orbitControls.target.copy(previousTarget)
   } else {
@@ -2048,8 +1959,6 @@ function applyCameraControlMode(mode: CameraControlMode) {
   }
   orbitControls.enabled = previousEnabled
   orbitControls.addEventListener('change', handleControlsChange)
-  // Track user interaction to lower render cost while moving the camera
-  // @ts-ignore - both OrbitControls and MapControls emit these events
   bindControlsToCamera(camera)
   if (gizmoControls && orbitControls) {
     gizmoControls.attachControls(orbitControls as OrbitControls)
@@ -2059,7 +1968,6 @@ function applyCameraControlMode(mode: CameraControlMode) {
   orbitControls.update()
   gizmoControls?.cameraUpdate()
 
-  clampCameraAboveGround()
 }
 
 function ensureStatsPanel() {
@@ -2806,8 +2714,6 @@ function animate() {
 
     if (progress >= 1) {
       cameraTransitionState = null
-      clampCameraZoom()
-      clampCameraAboveGround()
       if (perspectiveCamera && camera !== perspectiveCamera) {
         perspectiveCamera.position.copy(camera.position)
         perspectiveCamera.quaternion.copy(camera.quaternion)

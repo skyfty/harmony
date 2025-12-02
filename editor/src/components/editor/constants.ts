@@ -44,6 +44,7 @@ export const DEFAULT_CAMERA_TARGET = { x: 0, y: 0, z: 0 } as const
 export const DEFAULT_PERSPECTIVE_FOV = 60
 export const MIN_CAMERA_DISTANCE = 2
 export const MAX_CAMERA_DISTANCE = 30
+export const CAMERA_POLAR_EPSILON = 1e-3
 export const MIN_ORTHOGRAPHIC_ZOOM = 0.25
 export const MAX_ORTHOGRAPHIC_ZOOM = 8
 export const CAMERA_DISTANCE_EPSILON = 1e-3
