@@ -13,6 +13,7 @@ import type {
   ShowPurposeBehaviorParams,
   TriggerBehaviorParams,
   AnimationBehaviorParams,
+  DriveBehaviorParams,
 } from '../index'
 import { behaviorMapToList, cloneBehaviorList, ensureBehaviorParams } from './definitions'
 
@@ -144,6 +145,24 @@ export type BehaviorRuntimeEvent =
       loop: boolean
       waitForCompletion: boolean
       token?: string
+    }
+  | {
+      type: 'vehicle-drive'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+      targetNodeId: string
+      token: string
+    }
+  | {
+      type: 'vehicle-debus'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
     }
   | {
       type: 'sequence-complete'
@@ -583,6 +602,46 @@ function createAnimationEvent(
   }
 }
 
+function createDriveVehicleEvent(
+  state: BehaviorSequenceState,
+  behavior: SceneBehavior,
+): Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> {
+  const token = createToken(state.id, state.index)
+  pendingTokens.set(token, {
+    token,
+    sequenceId: state.id,
+    stepIndex: state.index,
+  })
+  state.status = 'waiting'
+  const params = behavior.script.params as DriveBehaviorParams | undefined
+  const fallbackTarget = state.nodeId
+  const targetNodeId = params?.targetNodeId && params.targetNodeId.trim().length ? params.targetNodeId : fallbackTarget
+  return {
+    type: 'vehicle-drive',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+    targetNodeId,
+    token,
+  }
+}
+
+function createDebusVehicleEvent(
+  state: BehaviorSequenceState,
+  behavior: SceneBehavior,
+): Extract<BehaviorRuntimeEvent, { type: 'vehicle-debus' }> {
+  return {
+    type: 'vehicle-debus',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+  }
+}
+
 function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
   const events: BehaviorRuntimeEvent[] = []
   while (state.status === 'running' && state.index < state.steps.length) {
@@ -653,6 +712,13 @@ function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
         state.index += 1
         continue
       }
+      case 'drive':
+        events.push(createDriveVehicleEvent(state, behavior))
+        return events
+      case 'debus':
+        events.push(createDebusVehicleEvent(state, behavior))
+        state.index += 1
+        continue
       default:
         break
     }

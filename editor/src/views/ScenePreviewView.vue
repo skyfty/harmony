@@ -106,6 +106,18 @@ const volumePercent = ref(100)
 const isFullscreen = ref(false)
 const lastUpdateTime = ref<string | null>(null)
 const warningMessages = ref<string[]>([])
+
+function appendWarningMessage(message: string): void {
+	const trimmed = typeof message === 'string' ? message.trim() : ''
+	if (!trimmed) {
+		return
+	}
+	const existing = warningMessages.value
+	if (existing.includes(trimmed)) {
+		return
+	}
+	warningMessages.value = [...existing, trimmed]
+}
 const isFirstPersonMouseControlEnabled = ref(true)
 const isVolumeMenuOpen = ref(false)
 const isCameraCaged = ref(false)
@@ -338,6 +350,59 @@ const purposeControlsVisible = ref(false)
 const purposeTargetNodeId = ref<string | null>(null)
 const purposeSourceNodeId = ref<string | null>(null)
 
+type VehicleDriveControlFlags = {
+	forward: boolean
+	backward: boolean
+	left: boolean
+	right: boolean
+	brake: boolean
+}
+
+type VehicleDriveInputState = {
+	throttle: number
+	steering: number
+	brake: number
+}
+
+const vehicleDriveState = reactive({
+	active: false,
+	nodeId: null as string | null,
+	token: null as string | null,
+	vehicle: null as CANNON.RaycastVehicle | null,
+	steerableWheelIndices: [] as number[],
+	wheelCount: 0,
+})
+
+const vehicleDriveInputFlags = reactive<VehicleDriveControlFlags>({
+	forward: false,
+	backward: false,
+	left: false,
+	right: false,
+	brake: false,
+})
+
+const vehicleDriveInput = reactive<VehicleDriveInputState>({
+	throttle: 0,
+	steering: 0,
+	brake: 0,
+})
+
+const vehicleDriveCameraRestoreState = {
+	hasSnapshot: false,
+	position: new THREE.Vector3(),
+	target: new THREE.Vector3(),
+	quaternion: new THREE.Quaternion(),
+	controlMode: controlMode.value as ControlMode,
+	isCameraCaged: false,
+}
+
+const vehicleDriveCameraFollowState = {
+	desiredPosition: new THREE.Vector3(),
+	desiredTarget: new THREE.Vector3(),
+	currentPosition: new THREE.Vector3(),
+	currentTarget: new THREE.Vector3(),
+}
+
 type LanternTextState = { text: string; loading: boolean; error: string | null }
 type LanternImageState = { url: string | null; loading: boolean; error: string | null }
 
@@ -448,6 +513,16 @@ const tempPosition = new THREE.Vector3()
 const tempVehicleSize = new THREE.Vector3()
 const tempCameraMatrix = new THREE.Matrix4()
 const cameraViewFrustum = new THREE.Frustum()
+const VEHICLE_ENGINE_FORCE = 2200
+const VEHICLE_BRAKE_FORCE = 45
+const VEHICLE_STEER_ANGLE = THREE.MathUtils.degToRad(32)
+const VEHICLE_CAMERA_SMOOTH = 0.12
+const VEHICLE_CAMERA_OFFSET = new THREE.Vector3(0, 3.5, -8)
+const VEHICLE_CAMERA_LOOK_OFFSET = new THREE.Vector3(0, 1.5, 6)
+const tempVehicleCameraOffset = new THREE.Vector3()
+const tempVehicleCameraLook = new THREE.Vector3()
+const tempVehicleQuaternionThree = new THREE.Quaternion()
+const tempVehicleCameraPosition = new THREE.Vector3()
 const skySunPosition = new THREE.Vector3()
 const DEFAULT_SUN_DIRECTION = new THREE.Vector3(0.35, 1, -0.25).normalize()
 const tempSunDirection = new THREE.Vector3()
@@ -549,7 +624,12 @@ const nodeObjectMap = new Map<string, THREE.Object3D>()
 type RigidbodyInstance = { nodeId: string; body: CANNON.Body; object: THREE.Object3D | null }
 let physicsWorld: CANNON.World | null = null
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
-type VehicleInstance = { nodeId: string; vehicle: CANNON.RaycastVehicle; wheelCount: number }
+type VehicleInstance = {
+	nodeId: string
+	vehicle: CANNON.RaycastVehicle
+	wheelCount: number
+	steerableWheelIndices: number[]
+}
 const vehicleInstances = new Map<string, VehicleInstance>()
 type GroundHeightfieldCacheEntry = { signature: string; shape: CANNON.Heightfield; offset: [number, number, number] }
 const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>()
@@ -644,6 +724,34 @@ function resolveParentNodeId(nodeId: string): string | null {
 function resolveNodeById(nodeId: string): SceneNode | null {
 	return previewNodeMap.get(nodeId) ?? null
 }
+
+const vehicleDriveUi = computed(() => {
+	if (!vehicleDriveState.active) {
+		return {
+			visible: false,
+			label: '',
+			cameraLocked: false,
+			forwardActive: false,
+			backwardActive: false,
+			leftActive: false,
+			rightActive: false,
+			brakeActive: false,
+		}
+	}
+	const nodeId = vehicleDriveState.nodeId ?? ''
+	const node = nodeId ? resolveNodeById(nodeId) : null
+	const label = (node?.name?.trim() || nodeId || 'Vehicle')
+	return {
+		visible: true,
+		label,
+		cameraLocked: true,
+		forwardActive: vehicleDriveInputFlags.forward,
+		backwardActive: vehicleDriveInputFlags.backward,
+		leftActive: vehicleDriveInputFlags.left,
+		rightActive: vehicleDriveInputFlags.right,
+		brakeActive: vehicleDriveInputFlags.brake,
+	}
+})
 
 function resolveGuideboardComponent(
 	node: SceneNode | null | undefined,
@@ -1537,10 +1645,16 @@ function setFirstPersonMouseControl(enabled: boolean) {
 }
 
 function toggleFirstPersonMouseControl() {
+	if (vehicleDriveState.active) {
+		return
+	}
 	setFirstPersonMouseControl(!isFirstPersonMouseControlEnabled.value)
 }
 
-function setCameraCaging(enabled: boolean) {
+function setCameraCaging(enabled: boolean, options: { force?: boolean } = {}) {
+	if (!options.force && vehicleDriveState.active && !enabled) {
+		return
+	}
 	if (isCameraCaged.value === enabled) {
 		return
 	}
@@ -2538,6 +2652,288 @@ function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look
 	resolveBehaviorToken(event.token, { type: 'continue' })
 }
 
+type DriveControlAction = keyof VehicleDriveControlFlags
+
+function updateVehicleDriveInputFromFlags(): void {
+	vehicleDriveInput.throttle = vehicleDriveInputFlags.forward === vehicleDriveInputFlags.backward
+		? 0
+		: vehicleDriveInputFlags.forward
+			? 1
+			: -1
+	vehicleDriveInput.steering = vehicleDriveInputFlags.left === vehicleDriveInputFlags.right
+		? 0
+		: vehicleDriveInputFlags.left
+			? 1
+			: -1
+	vehicleDriveInput.brake = vehicleDriveInputFlags.brake ? 1 : 0
+}
+
+function resetVehicleDriveInputs(): void {
+	vehicleDriveInputFlags.forward = false
+	vehicleDriveInputFlags.backward = false
+	vehicleDriveInputFlags.left = false
+	vehicleDriveInputFlags.right = false
+	vehicleDriveInputFlags.brake = false
+	updateVehicleDriveInputFromFlags()
+}
+
+function setVehicleDriveControlFlag(action: DriveControlAction, pressed: boolean): void {
+	if (!vehicleDriveState.active) {
+		return
+	}
+	if (vehicleDriveInputFlags[action] === pressed) {
+		return
+	}
+	vehicleDriveInputFlags[action] = pressed
+	updateVehicleDriveInputFromFlags()
+}
+
+function handleVehicleDriveControlPointer(
+	action: DriveControlAction,
+	pressed: boolean,
+	event?: PointerEvent | MouseEvent | TouchEvent,
+): void {
+	if (event) {
+		event.preventDefault()
+	}
+	setVehicleDriveControlFlag(action, pressed)
+}
+
+type VehicleDrivePreparationResult = { success: true; instance: VehicleInstance } | { success: false; message: string }
+
+function prepareVehicleDriveTarget(nodeId: string): VehicleDrivePreparationResult {
+	const node = resolveNodeById(nodeId)
+	if (!node) {
+		return { success: false, message: '车辆目标节点不存在。' }
+	}
+	const hasRigidbody = Boolean(resolveRigidbodyComponent(node))
+	const hasVehicle = Boolean(resolveVehicleComponent(node))
+	if (!hasRigidbody || !hasVehicle) {
+		return { success: false, message: '车辆节点需要同时启用 Rigidbody 与 Vehicle 组件。' }
+	}
+	if (!physicsWorld) {
+		ensurePhysicsWorld()
+	}
+	ensureVehicleBindingForNode(nodeId)
+	const instance = vehicleInstances.get(nodeId)
+	if (!instance) {
+		return { success: false, message: '目标节点尚未准备好 RaycastVehicle 实例。' }
+	}
+	if (!rigidbodyInstances.has(nodeId)) {
+		return { success: false, message: '车辆缺少可驱动的刚体。' }
+	}
+	const object = nodeObjectMap.get(nodeId)
+	if (!object) {
+		return { success: false, message: '车辆对象尚未出现在场景中。' }
+	}
+	return { success: true, instance }
+}
+
+function snapshotVehicleDriveCameraState(): void {
+	const activeCamera = camera
+	if (!activeCamera) {
+		vehicleDriveCameraRestoreState.hasSnapshot = false
+		return
+	}
+	vehicleDriveCameraRestoreState.position.copy(activeCamera.position)
+	vehicleDriveCameraRestoreState.quaternion.copy(activeCamera.quaternion)
+	vehicleDriveCameraRestoreState.controlMode = controlMode.value
+	vehicleDriveCameraRestoreState.isCameraCaged = isCameraCaged.value
+	if (mapControls) {
+		vehicleDriveCameraRestoreState.target.copy(mapControls.target)
+	} else {
+		activeCamera.getWorldDirection(tempDirection)
+		vehicleDriveCameraRestoreState.target.copy(activeCamera.position).add(tempDirection)
+	}
+	vehicleDriveCameraFollowState.currentPosition.copy(activeCamera.position)
+	vehicleDriveCameraFollowState.currentTarget.copy(vehicleDriveCameraRestoreState.target)
+	vehicleDriveCameraFollowState.desiredPosition.copy(activeCamera.position)
+	vehicleDriveCameraFollowState.desiredTarget.copy(vehicleDriveCameraRestoreState.target)
+	vehicleDriveCameraRestoreState.hasSnapshot = true
+}
+
+function restoreVehicleDriveCameraState(): void {
+	const activeCamera = camera
+	if (!activeCamera) {
+		vehicleDriveCameraRestoreState.hasSnapshot = false
+		setCameraCaging(false, { force: true })
+		return
+	}
+	if (vehicleDriveCameraRestoreState.hasSnapshot) {
+		activeCamera.position.copy(vehicleDriveCameraRestoreState.position)
+		activeCamera.quaternion.copy(vehicleDriveCameraRestoreState.quaternion)
+		activeCamera.updateMatrixWorld(true)
+		if (mapControls) {
+			mapControls.target.copy(vehicleDriveCameraRestoreState.target)
+			mapControls.update()
+		}
+		controlMode.value = vehicleDriveCameraRestoreState.controlMode
+		setCameraCaging(vehicleDriveCameraRestoreState.isCameraCaged, { force: true })
+	}
+	vehicleDriveCameraFollowState.currentPosition.copy(activeCamera.position)
+	vehicleDriveCameraFollowState.currentTarget.copy(vehicleDriveCameraRestoreState.target)
+	vehicleDriveCameraRestoreState.hasSnapshot = false
+}
+
+function syncVehicleDriveCameraImmediate(): void {
+	updateVehicleDriveCamera(0, { immediate: true })
+}
+
+function startVehicleDriveMode(
+	event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>,
+): { success: boolean; message?: string } {
+	const targetNodeId = event.targetNodeId ?? event.nodeId ?? null
+	if (!targetNodeId) {
+		return { success: false, message: '未提供要驾驶的节点。' }
+	}
+	if (vehicleDriveState.active) {
+		stopVehicleDriveMode({ resolution: { type: 'abort', message: '驾驶状态已被新的脚本替换。' } })
+	}
+	const readiness = prepareVehicleDriveTarget(targetNodeId)
+	if (!readiness.success) {
+		return readiness
+	}
+	snapshotVehicleDriveCameraState()
+	vehicleDriveState.active = true
+	vehicleDriveState.nodeId = targetNodeId
+	vehicleDriveState.vehicle = readiness.instance.vehicle
+	vehicleDriveState.steerableWheelIndices = [...readiness.instance.steerableWheelIndices]
+	vehicleDriveState.wheelCount = readiness.instance.wheelCount
+	vehicleDriveState.token = event.token
+	resetVehicleDriveInputs()
+	activeCameraLookTween = null
+	controlMode.value = 'third-person'
+	setCameraCaging(true, { force: true })
+	syncVehicleDriveCameraImmediate()
+	return { success: true }
+}
+
+function stopVehicleDriveMode(options: { resolution?: BehaviorEventResolution } = {}): void {
+	if (!vehicleDriveState.active) {
+		return
+	}
+	const token = vehicleDriveState.token
+	const vehicle = vehicleDriveState.vehicle
+	if (vehicle) {
+		try {
+			for (let index = 0; index < vehicle.wheelInfos.length; index += 1) {
+				vehicle.applyEngineForce(0, index)
+				vehicle.setBrake(VEHICLE_BRAKE_FORCE, index)
+				vehicle.setSteeringValue(0, index)
+			}
+		} catch (error) {
+			console.warn('[ScenePreview] Failed to reset vehicle state', error)
+		}
+	}
+	resetVehicleDriveInputs()
+	vehicleDriveState.active = false
+	vehicleDriveState.nodeId = null
+	vehicleDriveState.vehicle = null
+	vehicleDriveState.token = null
+	vehicleDriveState.steerableWheelIndices = []
+	vehicleDriveState.wheelCount = 0
+	restoreVehicleDriveCameraState()
+	if (token) {
+		resolveBehaviorToken(token, options.resolution ?? { type: 'continue' })
+	}
+}
+
+function ensureActiveVehicleDriveBinding(): VehicleInstance | null {
+	if (!vehicleDriveState.active) {
+		return null
+	}
+	const nodeId = vehicleDriveState.nodeId
+	if (!nodeId) {
+		stopVehicleDriveMode({ resolution: { type: 'abort', message: '目标节点缺失，驾驶已终止。' } })
+		return null
+	}
+	const instance = vehicleInstances.get(nodeId)
+	if (!instance || vehicleDriveState.vehicle !== instance.vehicle) {
+		stopVehicleDriveMode({ resolution: { type: 'abort', message: '车辆实例已重建，驾驶已终止。' } })
+		return null
+	}
+	const object = nodeObjectMap.get(nodeId)
+	if (!object) {
+		stopVehicleDriveMode({ resolution: { type: 'abort', message: '车辆对象不存在。' } })
+		return null
+	}
+	return instance
+}
+
+function applyVehicleDriveForces(): void {
+	if (!vehicleDriveState.active || !vehicleDriveState.vehicle) {
+		return
+	}
+	const instance = ensureActiveVehicleDriveBinding()
+	if (!instance) {
+		return
+	}
+	const vehicle = instance.vehicle
+	const engineForce = -vehicleDriveInput.throttle * VEHICLE_ENGINE_FORCE
+	const steeringValue = vehicleDriveInput.steering * VEHICLE_STEER_ANGLE
+	const brakeForce = vehicleDriveInput.brake * VEHICLE_BRAKE_FORCE
+	for (let index = 0; index < vehicle.wheelInfos.length; index += 1) {
+		vehicle.applyEngineForce(engineForce, index)
+		const steerable = instance.steerableWheelIndices.includes(index)
+		vehicle.setSteeringValue(steerable ? steeringValue : 0, index)
+		vehicle.setBrake(brakeForce, index)
+	}
+}
+
+function updateVehicleDriveCamera(delta: number, options: { immediate?: boolean } = {}): void {
+	if (!vehicleDriveState.active) {
+		return
+	}
+	const activeCamera = camera
+	if (!activeCamera) {
+		return
+	}
+	const nodeId = vehicleDriveState.nodeId
+	if (!nodeId) {
+		return
+	}
+	const object = nodeObjectMap.get(nodeId)
+	if (!object) {
+		stopVehicleDriveMode({ resolution: { type: 'abort', message: '车辆节点已被移除。' } })
+		return
+	}
+	object.updateMatrixWorld(true)
+	object.getWorldPosition(tempVehicleCameraPosition)
+	object.getWorldQuaternion(tempVehicleQuaternionThree)
+	tempVehicleCameraOffset.copy(VEHICLE_CAMERA_OFFSET).applyQuaternion(tempVehicleQuaternionThree)
+	tempVehicleCameraLook.copy(VEHICLE_CAMERA_LOOK_OFFSET).applyQuaternion(tempVehicleQuaternionThree)
+	vehicleDriveCameraFollowState.desiredPosition.copy(tempVehicleCameraPosition).add(tempVehicleCameraOffset)
+	vehicleDriveCameraFollowState.desiredTarget.copy(tempVehicleCameraPosition).add(tempVehicleCameraLook)
+	const alpha = options.immediate ? 1 : THREE.MathUtils.clamp(delta / VEHICLE_CAMERA_SMOOTH, 0, 1)
+	vehicleDriveCameraFollowState.currentPosition.lerp(vehicleDriveCameraFollowState.desiredPosition, alpha)
+	vehicleDriveCameraFollowState.currentTarget.lerp(vehicleDriveCameraFollowState.desiredTarget, alpha)
+	activeCamera.position.copy(vehicleDriveCameraFollowState.currentPosition)
+	activeCamera.lookAt(vehicleDriveCameraFollowState.currentTarget)
+	if (mapControls) {
+		mapControls.target.copy(vehicleDriveCameraFollowState.currentTarget)
+		mapControls.update()
+	}
+	syncLastFirstPersonStateFromCamera()
+}
+
+function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>): void {
+	const result = startVehicleDriveMode(event)
+	if (!result.success) {
+		appendWarningMessage(result.message ?? '无法启动驾驶脚本。')
+		resolveBehaviorToken(event.token, {
+			type: 'fail',
+			message: result.message ?? '无法启动驾驶脚本。',
+		})
+	}
+}
+
+function handleVehicleDebusEvent(): void {
+	if (!vehicleDriveState.active) {
+		return
+	}
+	stopVehicleDriveMode({ resolution: { type: 'continue' } })
+}
+
 function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 	switch (event.type) {
 		case 'delay':
@@ -2572,6 +2968,12 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 			break
 		case 'look-level':
 			handleLookLevelEvent(event)
+			break
+		case 'vehicle-drive':
+			handleVehicleDriveEvent(event)
+			break
+		case 'vehicle-debus':
+			handleVehicleDebusEvent()
 			break
 		case 'sequence-complete':
 			clearBehaviorAlert()
@@ -3063,11 +3465,18 @@ function handleKeyDown(event: KeyboardEvent) {
 	if (event.repeat) {
 		return
 	}
+	const driveLocked = vehicleDriveState.active
 	switch (event.code) {
 		case 'Digit1':
+			if (driveLocked) {
+				break
+			}
 			controlMode.value = 'first-person'
 			break
 		case 'Digit3':
+			if (driveLocked) {
+				break
+			}
 			controlMode.value = 'third-person'
 			break
 		case 'KeyP':
@@ -3075,6 +3484,9 @@ function handleKeyDown(event: KeyboardEvent) {
 			captureScreenshot()
 			break
 		case 'KeyC':
+			if (driveLocked) {
+				break
+			}
 			if (controlMode.value === 'first-person') {
 				event.preventDefault()
 				toggleFirstPersonMouseControl()
@@ -3143,9 +3555,11 @@ function startAnimationLoop() {
 					console.warn('[ScenePreview] Failed to advance effect runtime', error)
 				}
 			})
+			applyVehicleDriveForces()
 			stepPhysicsWorld(delta)
 		}
 
+		updateVehicleDriveCamera(delta)
 		updateBehaviorProximity()
 		updateLazyPlaceholders(delta)
 
@@ -3168,6 +3582,9 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 		releaseModelInstance(nodeId)
 	})
 	nodeObjectMap.clear()
+	if (vehicleDriveState.active) {
+		stopVehicleDriveMode({ resolution: { type: 'abort', message: '场景已重置，驾驶结束。' } })
+	}
 	resetPhysicsWorld()
 	if (!options.preservePreviewNodeMap) {
 		previewNodeMap.clear()
@@ -3869,6 +4286,9 @@ function ensurePhysicsWorld(): CANNON.World {
 }
 
 function resetPhysicsWorld(): void {
+	if (vehicleDriveState.active) {
+		stopVehicleDriveMode({ resolution: { type: 'abort', message: '物理环境已重置。' } })
+	}
 	const world = physicsWorld
 	if (world) {
 		vehicleInstances.forEach(({ vehicle }) => {
@@ -4155,6 +4575,8 @@ function createVehicleInstance(
 	if (!connectionPoints.length) {
 		return null
 	}
+	const wheelCount = connectionPoints.length
+	const steerableWheelIndices = wheelCount >= 2 ? [0, 1] : connectionPoints.map((_point, index) => index)
 	const vehicle = new CANNON.RaycastVehicle({
 		chassisBody: rigidbody.body,
 		indexRightAxis: rightAxis,
@@ -4178,13 +4600,16 @@ function createVehicleInstance(
 		})
 	})
 	vehicle.addToWorld(physicsWorld)
-	return { nodeId: node.id, vehicle, wheelCount: connectionPoints.length }
+	return { nodeId: node.id, vehicle, wheelCount, steerableWheelIndices }
 }
 
 function removeVehicleInstance(nodeId: string): void {
 	const entry = vehicleInstances.get(nodeId)
 	if (!entry) {
 		return
+	}
+	if (vehicleDriveState.active && vehicleDriveState.nodeId === nodeId) {
+		stopVehicleDriveMode({ resolution: { type: 'abort', message: '车辆实例已被移除。' } })
 	}
 	if (physicsWorld) {
 		try {
@@ -5232,6 +5657,86 @@ onBeforeUnmount(() => {
 				<span class="scene-preview__purpose-label">平视</span>
 			</v-btn>
 		</div>
+		<div
+			v-if="vehicleDriveUi.visible"
+			class="scene-preview__drive-panel"
+		>
+			<div class="scene-preview__drive-panel-header">
+				<div class="scene-preview__drive-title">
+					<v-icon icon="mdi-steering" size="small" />
+					<span>驾驶车辆</span>
+				</div>
+				<span class="scene-preview__drive-node">{{ vehicleDriveUi.label }}</span>
+			</div>
+			<div class="scene-preview__drive-grid">
+				<v-btn
+					class="scene-preview__drive-button scene-preview__drive-button--wide"
+					variant="tonal"
+					:class="{ 'scene-preview__drive-button--active': vehicleDriveUi.forwardActive }"
+					prepend-icon="mdi-arrow-up-bold"
+					@click.prevent
+					@pointerdown.prevent="handleVehicleDriveControlPointer('forward', true, $event)"
+					@pointerup.prevent="handleVehicleDriveControlPointer('forward', false, $event)"
+					@pointerleave="handleVehicleDriveControlPointer('forward', false)"
+					@pointercancel="handleVehicleDriveControlPointer('forward', false)"
+				>
+					前进
+				</v-btn>
+				<v-btn
+					class="scene-preview__drive-button scene-preview__drive-button--wide"
+					variant="tonal"
+					:class="{ 'scene-preview__drive-button--active': vehicleDriveUi.leftActive }"
+					prepend-icon="mdi-arrow-left-bold"
+					@click.prevent
+					@pointerdown.prevent="handleVehicleDriveControlPointer('left', true, $event)"
+					@pointerup.prevent="handleVehicleDriveControlPointer('left', false, $event)"
+					@pointerleave="handleVehicleDriveControlPointer('left', false)"
+					@pointercancel="handleVehicleDriveControlPointer('left', false)"
+				>
+					左转
+				</v-btn>
+				<v-btn
+					class="scene-preview__drive-button scene-preview__drive-button--brake"
+					variant="flat"
+					color="red"
+					:class="{ 'scene-preview__drive-button--active': vehicleDriveUi.brakeActive }"
+					prepend-icon="mdi-car-brake-alert"
+					@click.prevent
+					@pointerdown.prevent="handleVehicleDriveControlPointer('brake', true, $event)"
+					@pointerup.prevent="handleVehicleDriveControlPointer('brake', false, $event)"
+					@pointerleave="handleVehicleDriveControlPointer('brake', false)"
+					@pointercancel="handleVehicleDriveControlPointer('brake', false)"
+				>
+					刹车
+				</v-btn>
+				<v-btn
+					class="scene-preview__drive-button"
+					variant="tonal"
+					:class="{ 'scene-preview__drive-button--active': vehicleDriveUi.rightActive }"
+					prepend-icon="mdi-arrow-right-bold"
+					@click.prevent
+					@pointerdown.prevent="handleVehicleDriveControlPointer('right', true, $event)"
+					@pointerup.prevent="handleVehicleDriveControlPointer('right', false, $event)"
+					@pointerleave="handleVehicleDriveControlPointer('right', false)"
+					@pointercancel="handleVehicleDriveControlPointer('right', false)"
+				>
+					右转
+				</v-btn>
+				<v-btn
+					class="scene-preview__drive-button"
+					variant="tonal"
+					:class="{ 'scene-preview__drive-button--active': vehicleDriveUi.backwardActive }"
+					prepend-icon="mdi-arrow-down-bold"
+					@click.prevent
+					@pointerdown.prevent="handleVehicleDriveControlPointer('backward', true, $event)"
+					@pointerup.prevent="handleVehicleDriveControlPointer('backward', false, $event)"
+					@pointerleave="handleVehicleDriveControlPointer('backward', false)"
+					@pointercancel="handleVehicleDriveControlPointer('backward', false)"
+				>
+					后退
+				</v-btn>
+			</div>
+		</div>
 		<v-sheet class="scene-preview__control-bar" elevation="10">
 			<div class="scene-preview__controls">
 				<v-btn
@@ -5249,6 +5754,7 @@ onBeforeUnmount(() => {
 					v-model="controlMode"
 					mandatory
 					density="compact"
+					:disabled="vehicleDriveUi.cameraLocked"
 
 					rounded
 				>
@@ -5275,6 +5781,7 @@ onBeforeUnmount(() => {
 					variant="tonal"
 						size="small"
 					:color="isFirstPersonMouseControlEnabled ? 'info' : 'warning'"
+					:disabled="vehicleDriveUi.cameraLocked"
 					:aria-label="isFirstPersonMouseControlEnabled ? '禁用鼠标镜头' : '启用鼠标镜头'"
 
 					:title="isFirstPersonMouseControlEnabled ? '禁用鼠标镜头 (快捷键 C)' : '启用鼠标镜头 (快捷键 C)'"
@@ -5886,6 +6393,74 @@ onBeforeUnmount(() => {
 	font-weight: 600;
 	font-size: 1.05rem;
 	text-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.scene-preview__drive-panel {
+	position: absolute;
+	left: 24px;
+	bottom: 130px;
+	z-index: 2150;
+	padding: 16px;
+	border-radius: 16px;
+	background: rgba(8, 10, 18, 0.9);
+	box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+	backdrop-filter: blur(10px);
+	min-width: 240px;
+	pointer-events: auto;
+}
+
+.scene-preview__drive-panel-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin-bottom: 12px;
+}
+
+.scene-preview__drive-title {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 0.9rem;
+	font-weight: 600;
+	color: #f5f7ff;
+}
+
+.scene-preview__drive-node {
+	font-size: 0.8rem;
+	color: rgba(255, 255, 255, 0.72);
+	max-width: 160px;
+	text-overflow: ellipsis;
+	overflow: hidden;
+	white-space: nowrap;
+}
+
+.scene-preview__drive-grid {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 10px;
+	align-items: stretch;
+}
+
+.scene-preview__drive-button {
+	min-height: 44px;
+	font-size: 0.85rem;
+	text-transform: none;
+	letter-spacing: 0.02em;
+}
+
+.scene-preview__drive-button--wide {
+	grid-column: span 3;
+}
+
+.scene-preview__drive-button--brake {
+	grid-column: span 1;
+	min-height: 48px;
+}
+
+.scene-preview__drive-button--active {
+	box-shadow: 0 0 18px rgba(255, 255, 255, 0.25);
+	background: linear-gradient(135deg, rgba(124, 92, 255, 0.45), rgba(173, 134, 255, 0.35)) !important;
+	color: #fff !important;
 }
 
 .scene-preview__purpose-button :deep(.v-icon) {

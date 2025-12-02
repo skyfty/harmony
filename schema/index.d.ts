@@ -232,6 +232,8 @@ export type BehaviorScriptType =
   | 'look'
   | 'trigger'
   | 'animation'
+  | 'drive'
+  | 'debus'
 
 export interface DelayBehaviorParams {
   /** Duration to wait before continuing, measured in seconds. */
@@ -304,6 +306,15 @@ export interface TriggerBehaviorParams {
   sequenceId: string | null
 }
 
+export interface DriveBehaviorParams {
+  /** Vehicle node controlled by this behavior. Defaults to the behavior owner node. */
+  targetNodeId: string | null
+}
+
+export interface DebusBehaviorParams {
+  // no configuration required
+}
+
 export type LanternSlideLayout = 'imageTop' | 'imageLeft' | 'imageRight'
 
 export interface LanternSlideDefinition {
@@ -371,6 +382,14 @@ export type SceneBehaviorScriptBinding =
   | {
       type: 'animation'
       params: AnimationBehaviorParams
+    }
+  | {
+      type: 'drive'
+      params: DriveBehaviorParams
+    }
+  | {
+      type: 'debus'
+      params: DebusBehaviorParams
     }
 
 export interface SceneBehavior {

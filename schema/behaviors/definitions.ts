@@ -19,6 +19,8 @@ import type {
   HidePurposeBehaviorParams,
   TriggerBehaviorParams,
   AnimationBehaviorParams,
+  DriveBehaviorParams,
+  DebusBehaviorParams,
 } from '../index'
 
 export interface BehaviorActionDefinition {
@@ -112,6 +114,14 @@ function normalizeLanternSlides(slides: LanternSlideDefinition[] | null | undefi
       layout,
     }
   })
+}
+
+function normalizeTargetNodeId(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  return trimmed.length ? trimmed : null
 }
 
 const scriptDefinitions: BehaviorScriptDefinition[] = [
@@ -261,6 +271,26 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
         loop: false,
         waitForCompletion: false,
       }
+    },
+  },
+  {
+    id: 'drive',
+    label: 'Drive Vehicle',
+    description: 'Attach the camera to a vehicle and show driving controls.',
+    icon: 'mdi-steering',
+    createDefaultParams(): DriveBehaviorParams {
+      return {
+        targetNodeId: null,
+      }
+    },
+  },
+  {
+    id: 'debus',
+    label: 'Debus Vehicle',
+    description: 'Exit vehicle driving mode and restore default controls.',
+    icon: 'mdi-car-off',
+    createDefaultParams(): DebusBehaviorParams {
+      return {}
     },
   },
 ]
@@ -580,6 +610,20 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
         type: 'look',
         params: {},
       }
+    case 'drive': {
+      const params = binding.params as DriveBehaviorParams | undefined
+      return {
+        type: 'drive',
+        params: {
+          targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
+        },
+      }
+    }
+    case 'debus':
+      return {
+        type: 'debus',
+        params: {},
+      }
     case 'trigger': {
       const params = binding.params as TriggerBehaviorParams | undefined
       return {
@@ -812,6 +856,20 @@ export function ensureBehaviorParams(
       case 'look':
         return {
           type: 'look',
+          params: {},
+        }
+      case 'drive': {
+        const params = script.params as Partial<DriveBehaviorParams> | undefined
+        return {
+          type: 'drive',
+          params: {
+            targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
+          },
+        }
+      }
+      case 'debus':
+        return {
+          type: 'debus',
           params: {},
         }
       case 'trigger': {
