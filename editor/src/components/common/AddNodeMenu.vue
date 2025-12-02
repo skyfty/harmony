@@ -13,6 +13,8 @@ import type {
 
 import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from '@schema/loader'
 import { createPrimitiveMesh } from '@schema/geometry'
+import { applyGroundGeneration, createGroundMesh } from '@schema/groundMesh'
+import type { GroundDynamicMesh, GroundGenerationSettings } from '@harmony/schema'
 import { useFileDialog } from '@vueuse/core'
 import { useUiStore } from '@/stores/uiStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -1570,6 +1572,157 @@ async function handleCreateShowcaseVisit(): Promise<void> {
   }
 }
 
+const groundDialogOpen = ref(false)
+
+type GroundPreset = {
+  id: string
+  name: string
+  description: string
+  width: number
+  depth: number
+  generation: GroundGenerationSettings
+}
+
+const groundPresets: [GroundPreset, ...GroundPreset[]] = [
+  {
+    id: 'flat',
+    name: 'Empty Ground',
+    description: '平整基础场景，适合自定义雕刻',
+    width: 100,
+    depth: 100,
+    generation: {
+      mode: 'flat',
+      noiseScale: 80,
+      noiseAmplitude: 0,
+      edgeFalloff: 1,
+    },
+  },
+  {
+    id: 'rolling',
+    name: 'Rolling Hills',
+    description: '柔和起伏的丘陵，用于自然环境',
+    width: 160,
+    depth: 160,
+    generation: {
+      mode: 'perlin',
+      seed: 2401,
+      noiseScale: 120,
+      noiseAmplitude: 6,
+      detailScale: 28,
+      detailAmplitude: 2,
+      edgeFalloff: 1.4,
+    },
+  },
+  {
+    id: 'mountain',
+    name: 'Highlands',
+    description: '陡峭的山脊和峡谷，营造戏剧性景观',
+    width: 200,
+    depth: 200,
+    generation: {
+      mode: 'perlin',
+      seed: 913,
+      noiseScale: 70,
+      noiseAmplitude: 14,
+      detailScale: 18,
+      detailAmplitude: 4,
+      edgeFalloff: 2.2,
+    },
+  },
+]
+
+const DEFAULT_GROUND_PRESET_ID = groundPresets[0].id
+const selectedGroundPresetId = ref<string>(DEFAULT_GROUND_PRESET_ID)
+const groundWidth = ref(groundPresets[0].width)
+const groundDepth = ref(groundPresets[0].depth)
+
+const MIN_GROUND_SIZE = 10
+const MAX_GROUND_SIZE = 2000
+
+const selectedGroundPreset = computed(() => {
+  return groundPresets.find((preset) => preset.id === selectedGroundPresetId.value) ?? groundPresets[0]
+})
+
+watch(selectedGroundPresetId, (presetId) => {
+  const preset = groundPresets.find((entry) => entry.id === presetId)
+  if (preset) {
+    groundWidth.value = preset.width
+    groundDepth.value = preset.depth
+  }
+})
+
+function clampGroundDimension(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) {
+    return fallback
+  }
+  const rounded = Math.round(Math.abs(value))
+  return Math.min(MAX_GROUND_SIZE, Math.max(MIN_GROUND_SIZE, rounded))
+}
+
+function resetGroundDialogState() {
+  selectedGroundPresetId.value = DEFAULT_GROUND_PRESET_ID
+  groundWidth.value = groundPresets[0].width
+  groundDepth.value = groundPresets[0].depth
+}
+
+const canAddGround = computed(() => {
+  return !sceneStore.nodes.some(n => n.dynamicMesh?.type === 'Ground')
+})
+
+function handleAddGround() {
+  if (!canAddGround.value) return
+  resetGroundDialogState()
+  groundDialogOpen.value = true
+}
+
+async function handleConfirmGround() {
+  if (!canAddGround.value) {
+    groundDialogOpen.value = false
+    return
+  }
+  groundDialogOpen.value = false
+  const preset = selectedGroundPreset.value
+  const width = clampGroundDimension(groundWidth.value, preset?.width ?? 100)
+  const depth = clampGroundDimension(groundDepth.value, preset?.depth ?? 100)
+  const cellSize = 1
+  const rows = Math.max(1, Math.ceil(depth / cellSize))
+  const columns = Math.max(1, Math.ceil(width / cellSize))
+
+  const definition: GroundDynamicMesh = {
+    type: 'Ground',
+    width,
+    depth,
+    rows,
+    columns,
+    cellSize,
+    heightMap: {},
+    generation: preset?.generation ? { ...preset.generation } : { mode: 'flat', noiseScale: 80, noiseAmplitude: 0 },
+  }
+
+  if (definition.generation) {
+    definition.generation.worldWidth = width
+    definition.generation.worldDepth = depth
+    applyGroundGeneration(definition, definition.generation)
+  }
+
+  const mesh = createGroundMesh(definition)
+  mesh.name = 'Ground'
+
+  const created = await sceneStore.addModelNode({
+    object: mesh,
+    nodeType: 'Mesh',
+    name: 'Ground',
+    position: new THREE.Vector3(0, 0, 0),
+    baseY: 0
+  })
+
+  if (created) {
+    sceneStore.updateNodeDynamicMesh(created.id, definition)
+    sceneStore.setNodeSelectionLock(created.id, true)
+    sceneStore.selectNode(created.id)
+  }
+}
+
 async function handleAddNode(geometry: GeometryType) {
   const mesh = createPrimitiveMesh(geometry)
   const selectedNode = sceneStore.selectedNode ?? null
@@ -1679,8 +1832,78 @@ function handleAddLight(type: LightNodeType) {
       <v-divider class="add-menu-divider" />
       <v-list-item title="File" @click="handleMenuImportFromFile()" />
       <v-list-item title="URL" @click="handleMenuImportFromUrl()" />
+      <v-divider class="add-menu-divider" />
+      <v-list-item 
+        title="Ground" 
+        @click="handleAddGround()" 
+        :disabled="!canAddGround"
+      />
     </v-list>
   </v-menu>
+  <v-dialog v-model="groundDialogOpen" max-width="520">
+    <v-card title="Ground">
+      <v-card-text class="ground-dialog-body">
+        <div class="ground-dialog-section">
+          <div class="ground-dialog-label">选择地面预设</div>
+          <v-item-group v-model="selectedGroundPresetId" class="ground-preset-group">
+            <v-item
+              v-for="preset in groundPresets"
+              :key="preset.id"
+              :value="preset.id"
+              v-slot="{ isSelected, toggle }"
+            >
+              <v-card
+                flat
+                border
+                class="ground-preset-card"
+                :class="{ 'ground-preset-card--selected': isSelected }"
+                @click="toggle"
+              >
+                <div class="ground-preset-card__header">
+                  <span class="ground-preset-card__title">{{ preset.name }}</span>
+                  <v-icon
+                    v-if="isSelected"
+                    icon="mdi-check-circle"
+                    size="18"
+                    color="primary"
+                  />
+                </div>
+                <div class="ground-preset-card__meta">{{ preset.width }}m × {{ preset.depth }}m</div>
+                <div class="ground-preset-card__desc">{{ preset.description }}</div>
+              </v-card>
+            </v-item>
+          </v-item-group>
+        </div>
+        <v-divider class="ground-dialog-divider" />
+        <div class="ground-dialog-section">
+          <div class="ground-dialog-label">尺寸（米）</div>
+          <v-row dense>
+            <v-col cols="6">
+              <v-text-field
+                v-model.number="groundWidth"
+                label="宽度"
+                type="number"
+                min="10"
+              />
+            </v-col>
+            <v-col cols="6">
+              <v-text-field
+                v-model.number="groundDepth"
+                label="深度"
+                type="number"
+                min="10"
+              />
+            </v-col>
+          </v-row>
+        </div>
+      </v-card-text>
+      <v-card-actions>
+        <v-spacer />
+        <v-btn text="Cancel" @click="groundDialogOpen = false" />
+        <v-btn color="primary" text="Create" @click="handleConfirmGround" />
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
   <UrlInputDialog
     v-model="urlDialogOpen"
     :initial-url="urlDialogInitialValue"
@@ -1729,5 +1952,73 @@ function handleAddLight(type: LightNodeType) {
   min-height: 26px;
   border-radius: 8px;
   padding-inline: 12px;
+}
+
+.ground-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.ground-dialog-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ground-dialog-label {
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
+.ground-preset-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ground-preset-card {
+  padding: 12px 14px;
+  border-radius: 12px;
+  cursor: pointer;
+  border-color: rgba(255, 255, 255, 0.16) !important;
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+
+.ground-preset-card--selected {
+  border-color: rgb(120, 174, 255) !important;
+  background-color: rgba(112, 162, 255, 0.12);
+}
+
+.ground-preset-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.ground-preset-card__title {
+  font-weight: 600;
+}
+
+.ground-preset-card__meta {
+  font-size: 0.78rem;
+  opacity: 0.75;
+  margin-bottom: 4px;
+}
+
+.ground-preset-card__desc {
+  font-size: 0.82rem;
+  opacity: 0.85;
+}
+
+.ground-dialog-divider {
+  opacity: 0.15;
+}
+
+.ground-dialog-hint {
+  font-size: 0.78rem;
+  opacity: 0.65;
+  margin: 2px 0 0;
 }
 </style>

@@ -37,6 +37,7 @@ import type {
   BehaviorEventType,
   CameraNodeProperties,
   GroundDynamicMesh,
+  GroundGenerationSettings,
   GroundSettings,
   LightNodeProperties,
   LightNodeType,
@@ -113,6 +114,7 @@ import type { AssetCacheEntry } from './assetCacheStore'
 import { useUiStore } from './uiStore'
 import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
 import { loadObjectFromFile } from '@schema/assetImport'
+import { applyGroundGeneration } from '@schema/groundMesh'
 import { generateUuid } from '@/utils/uuid'
 import {
   getCachedModelObject,
@@ -1032,6 +1034,25 @@ function cloneDynamicMeshVector3(vec: Vector3Like): Vector3Like {
   return { x, y, z }
 }
 
+function cloneGroundGenerationSettings(settings?: GroundGenerationSettings | null): GroundGenerationSettings | undefined {
+  if (!settings) {
+    return undefined
+  }
+  return {
+    seed: settings.seed,
+    noiseScale: settings.noiseScale,
+    noiseAmplitude: settings.noiseAmplitude,
+    detailScale: settings.detailScale,
+    detailAmplitude: settings.detailAmplitude,
+    chunkSize: settings.chunkSize,
+    chunkResolution: settings.chunkResolution,
+    worldWidth: settings.worldWidth,
+    worldDepth: settings.worldDepth,
+    edgeFalloff: settings.edgeFalloff,
+    mode: settings.mode,
+  }
+}
+
 function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMesh {
   return {
     type: 'Ground',
@@ -1043,6 +1064,7 @@ function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMes
     heightMap: { ...(definition.heightMap ?? {}) },
     textureDataUrl: definition.textureDataUrl ?? null,
     textureName: definition.textureName ?? null,
+    generation: cloneGroundGenerationSettings(definition.generation) ?? null,
   }
 }
 
@@ -1611,17 +1633,27 @@ function createGroundDynamicMeshDefinition(
   const derivedRows = overrides.rows ?? Math.max(1, Math.round(normalizedDepth / Math.max(cellSize, 1e-6)))
   const width = overrides.width !== undefined ? normalizedWidth : derivedColumns * cellSize
   const depth = overrides.depth !== undefined ? normalizedDepth : derivedRows * cellSize
-  return {
+  const heightMapOverrides = overrides.heightMap ?? null
+  const hasHeightOverrides = Boolean(heightMapOverrides && Object.keys(heightMapOverrides).length > 0)
+  const initialGeneration = cloneGroundGenerationSettings(overrides.generation) ?? null
+  const definition: GroundDynamicMesh = {
     type: 'Ground',
     width,
     depth,
     rows: derivedRows,
     columns: derivedColumns,
     cellSize,
-    heightMap: { ...(overrides.heightMap ?? {}) },
+    heightMap: { ...(heightMapOverrides ?? {}) },
     textureDataUrl: overrides.textureDataUrl ?? null,
     textureName: overrides.textureName ?? null,
+    generation: initialGeneration,
   }
+
+  if (initialGeneration && !hasHeightOverrides) {
+    applyGroundGeneration(definition, initialGeneration)
+  }
+
+  return definition
 }
 
 function createGroundSceneNode(
@@ -5932,10 +5964,7 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
   const now = new Date().toISOString()
   const meta = store.currentSceneMeta!
   const environment = cloneEnvironmentSettings(store.environment)
-  const nodes = ensureEnvironmentNode(
-    ensureSkyNode(ensureGroundNode(cloneSceneNodes(store.nodes), store.groundSettings)),
-    environment,
-  )
+  const nodes = ensureEnvironmentNode(ensureSkyNode(cloneSceneNodes(store.nodes)),environment)
 
   return {
     id: store.currentSceneId,
@@ -5970,10 +5999,7 @@ function commitSceneSnapshot(
     return
   }
 
-  const normalizedNodes = ensureEnvironmentNode(
-    ensureSkyNode(ensureGroundNode(store.nodes, store.groundSettings)),
-    store.environment,
-  )
+  const normalizedNodes = ensureEnvironmentNode(ensureSkyNode(store.nodes),store.environment)
   if (normalizedNodes !== store.nodes) {
     store.nodes = normalizedNodes
   }
@@ -7032,6 +7058,26 @@ export const useSceneStore = defineStore('scene', {
       }
       commitSceneSnapshot(this)
     },
+    updateNodeDynamicMesh(nodeId: string, dynamicMesh: any) {
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target) return
+      this.captureHistorySnapshot()
+      visitNode(this.nodes, nodeId, (node) => {
+        node.dynamicMesh = JSON.parse(JSON.stringify(dynamicMesh))
+      })
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
+    },
+    setNodeLocked(nodeId: string, locked: boolean) {
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target) return
+      this.captureHistorySnapshot()
+      visitNode(this.nodes, nodeId, (node) => {
+        node.locked = locked
+      })
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
+    },
     renameNode(id: string, name: string) {
       const trimmed = name.trim()
       if (!trimmed) {
@@ -7636,7 +7682,7 @@ export const useSceneStore = defineStore('scene', {
       return node?.locked ?? false
     },
     setNodeSelectionLock(id: string, locked: boolean) {
-      if (id === GROUND_NODE_ID || id === SKY_NODE_ID || id === ENVIRONMENT_NODE_ID) {
+      if ((id === GROUND_NODE_ID || id === SKY_NODE_ID || id === ENVIRONMENT_NODE_ID) && !locked) {
         return
       }
       let updated = false
@@ -7658,6 +7704,9 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
     },
     toggleNodeSelectionLock(id: string) {
+      if (id === GROUND_NODE_ID || id === SKY_NODE_ID || id === ENVIRONMENT_NODE_ID) {
+        return
+      }
       const next = !this.isNodeSelectionLocked(id)
       this.setNodeSelectionLock(id, next)
     },
@@ -10678,7 +10727,7 @@ export const useSceneStore = defineStore('scene', {
         return
       }
       const existingIds = ids.filter(
-        (id) => id !== GROUND_NODE_ID && id !== SKY_NODE_ID && id !== ENVIRONMENT_NODE_ID && !!findNodeById(this.nodes, id),
+        (id) =>  id !== SKY_NODE_ID && id !== ENVIRONMENT_NODE_ID && !!findNodeById(this.nodes, id),
       )
       if (!existingIds.length) {
         return

@@ -1,83 +1,94 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
+import { useTerrainStore } from '@/stores/terrainStore'
+import type { GroundDynamicMesh } from '@harmony/schema'
 
 const sceneStore = useSceneStore()
-const { groundSettings } = storeToRefs(sceneStore)
+const terrainStore = useTerrainStore()
+const { selectedNode } = storeToRefs(sceneStore)
+const { brushRadius, brushStrength, brushShape } = storeToRefs(terrainStore)
 
-const localWidth = ref<number>(groundSettings.value.width)
-const localDepth = ref<number>(groundSettings.value.depth)
-
-function clampDimension(value: number, fallback: number): number {
-  if (!Number.isFinite(value)) {
-    return fallback
+const selectedGroundNode = computed(() => {
+  if (selectedNode.value?.dynamicMesh?.type === 'Ground') {
+    return selectedNode.value
   }
-  const normalized = Math.min(20000, Math.max(1, value))
-  return Math.round(normalized * 1000) / 1000
-}
+  return null
+})
 
-watch(
-  groundSettings,
-  (settings) => {
-    localWidth.value = settings.width
-    localDepth.value = settings.depth
-  },
-  { immediate: true },
-)
+const groundDefinition = computed(() => selectedGroundNode.value?.dynamicMesh as GroundDynamicMesh | undefined)
 
-function applyDimensions() {
-  const nextWidth = clampDimension(localWidth.value, groundSettings.value.width)
-  const nextDepth = clampDimension(localDepth.value, groundSettings.value.depth)
+const localWidth = computed(() => groundDefinition.value?.width ?? 0)
+const localDepth = computed(() => groundDefinition.value?.depth ?? 0)
 
-  if (Math.abs(nextWidth - groundSettings.value.width) < 1e-6 && Math.abs(nextDepth - groundSettings.value.depth) < 1e-6) {
-    localWidth.value = nextWidth
-    localDepth.value = nextDepth
-    return
-  }
-
-  localWidth.value = nextWidth
-  localDepth.value = nextDepth
-  sceneStore.setGroundDimensions({ width: nextWidth, depth: nextDepth })
-}
 </script>
 
 <template>
-  <v-expansion-panel value="ground">
+  <v-expansion-panel value="ground" v-if="selectedGroundNode">
     <v-expansion-panel-title>
-      Ground Properties
+      Terrain Tools
     </v-expansion-panel-title>
     <v-expansion-panel-text>
-      <div class="ground-grid">
+      <div class="ground-grid mb-4">
         <v-text-field
-          v-model.number="localWidth"
+          :model-value="localWidth"
           label="Width (m)"
           type="number"
           density="compact"
           variant="underlined"
-          class="slider-input"
-      inputmode="decimal"
-          step="1"
-          min="1"
+          disabled
           suffix="m"
-          @blur="applyDimensions"
-          @keydown.enter.prevent="applyDimensions"
         />
         <v-text-field
-          v-model.number="localDepth"
+          :model-value="localDepth"
           label="Depth (m)"
           type="number"
-          class="slider-input"
           density="compact"
-        inputmode="decimal"
           variant="underlined"
-          step="1"
-          min="1"
+          disabled
           suffix="m"
-          @blur="applyDimensions"
-          @keydown.enter.prevent="applyDimensions"
         />
       </div>
+
+      <div class="control-group">
+        <div class="text-caption mb-1">Brush Radius: {{ brushRadius }}</div>
+        <v-slider
+          v-model="brushRadius"
+          min="1"
+          max="50"
+          step="1"
+          density="compact"
+          hide-details
+        />
+      </div>
+
+      <div class="control-group mt-4">
+        <div class="text-caption mb-1">Brush Strength: {{ brushStrength }}</div>
+        <v-slider
+          v-model="brushStrength"
+          min="0.1"
+          max="10"
+          step="0.1"
+          density="compact"
+          hide-details
+        />
+      </div>
+
+      <div class="control-group mt-4">
+        <div class="text-caption mb-1">Brush Shape</div>
+        <v-btn-toggle v-model="brushShape" density="compact" mandatory divided variant="outlined" color="primary">
+          <v-btn value="circle" icon="mdi-circle-outline" title="Circle"></v-btn>
+          <v-btn value="square" icon="mdi-square-outline" title="Square"></v-btn>
+          <v-btn value="star" icon="mdi-star-outline" title="Star"></v-btn>
+        </v-btn-toggle>
+      </div>
+      
+      <div class="text-caption mt-4 text-grey">
+        Hold Middle Mouse Button to sculpt.<br>
+        Hold Shift to dig.
+      </div>
+
     </v-expansion-panel-text>
   </v-expansion-panel>
 </template>

@@ -570,6 +570,29 @@ export interface GroundHeightMap {
   [key: string]: number
 }
 
+export type GroundGenerationMode = 'perlin' | 'flat'
+
+export interface GroundGenerationSettings {
+  /** Optional deterministic seed for noise generation */
+  seed?: number
+  /** Controls the spatial frequency of the noise field */
+  noiseScale: number
+  /** Peak height variation in meters */
+  noiseAmplitude: number
+  /** Optional secondary detail frequency multiplier */
+  detailScale?: number
+  /** Optional secondary amplitude multiplier for detail layer */
+  detailAmplitude?: number
+  /** Optional chunk sizing hint (mirrors legacy terrain editor params) */
+  chunkSize?: number
+  chunkResolution?: number
+  worldWidth?: number
+  worldDepth?: number
+  /** Adjusts how aggressively the board edges fade toward zero */
+  edgeFalloff?: number
+  mode?: GroundGenerationMode
+}
+
 export interface GroundDynamicMesh {
   type: 'Ground'
   width: number
@@ -580,6 +603,7 @@ export interface GroundDynamicMesh {
   heightMap: GroundHeightMap
   textureDataUrl?: string | null
   textureName?: string | null
+  generation?: GroundGenerationSettings | null
 }
 
 export type WallSegment = {

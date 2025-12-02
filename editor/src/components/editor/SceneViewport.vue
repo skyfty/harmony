@@ -61,7 +61,6 @@ import type { SceneExportOptions } from '@/types/scene-export'
 import { prepareGLBSceneExport, prepareJsonSceneExport } from '@/utils/sceneExport'
 import ViewportToolbar from './ViewportToolbar.vue'
 import TransformToolbar from './TransformToolbar.vue'
-import GroundToolbar from './GroundToolbar.vue'
 import PlaceholderOverlayList from './PlaceholderOverlayList.vue'
 import { TRANSFORM_TOOLS } from '@/types/scene-transform-tools'
 import { type AlignMode } from '@/types/scene-viewport-align-mode'
@@ -70,7 +69,8 @@ import type { NodeHitResult } from '@/types/scene-viewport-node-hit-result'
 import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracking-state'
 import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-viewport-transform-group'
 import type { BuildTool } from '@/types/build-tool'
-import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache } from '@schema/groundMesh'
+import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache, sculptGround, updateGroundGeometry } from '@schema/groundMesh'
+import { useTerrainStore } from '@/stores/terrainStore'
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 import { createSurfaceMesh, updateSurfaceMesh } from '@schema/surfaceMesh'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
@@ -148,6 +148,18 @@ const emit = defineEmits<{
 }>()
 
 const sceneStore = useSceneStore()
+const terrainStore = useTerrainStore()
+const { brushRadius, brushStrength, brushShape, isDigging } = storeToRefs(terrainStore)
+const isSculpting = ref(false)
+
+const brushMesh = new THREE.Mesh(
+  new THREE.RingGeometry(1, 1.1, 64),
+  new THREE.MeshBasicMaterial({ color: 0xff3333, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthTest: false, depthWrite: false })
+)
+brushMesh.rotation.x = -Math.PI / 2
+brushMesh.visible = false
+brushMesh.renderOrder = 999
+
 
 const assetCacheStore = useAssetCacheStore()
 const nodePickerStore = useNodePickerStore()
@@ -2159,6 +2171,7 @@ function initScene() {
   scene.add(instancedOutlineGroup)
   scene.add(gridGroup)
   scene.add(axesHelper)
+  scene.add(brushMesh)
   scene.add(groundSelectionGroup)
   scene.add(dragPreviewGroup)
   gridHighlight = createGridHighlight()
@@ -4063,6 +4076,72 @@ function refreshGroundMesh(definition: GroundDynamicMesh | null) {
   }
 }
 
+function updateBrush(event: PointerEvent) {
+    if (!scene || !camera) return
+    
+    const rect = canvasRef.value?.getBoundingClientRect()
+    if (!rect) return
+    
+    const x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+    const y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+    
+    const raycaster = new THREE.Raycaster()
+    raycaster.setFromCamera(new THREE.Vector2(x, y), camera)
+    
+    const groundNode = sceneStore.selectedNode
+    if (groundNode?.dynamicMesh?.type !== 'Ground') {
+        brushMesh.visible = false
+        return
+    }
+    
+    const groundObject = getRuntimeObject(groundNode.id)
+    if (!groundObject) {
+        brushMesh.visible = false
+        return
+    }
+    
+    const intersects = raycaster.intersectObject(groundObject, false)
+    if (intersects.length > 0) {
+        const hit = intersects[0]
+        brushMesh.position.copy(hit.point)
+        brushMesh.position.y += 0.1
+        brushMesh.visible = true
+        
+        const scale = brushRadius.value
+        brushMesh.scale.set(scale, scale, 1)
+    } else {
+        brushMesh.visible = false
+    }
+}
+
+function performSculpt(event: PointerEvent) {
+    if (!brushMesh.visible) return
+    
+    const groundNode = sceneStore.selectedNode
+    if (groundNode?.dynamicMesh?.type !== 'Ground') return
+    
+    const definition = groundNode.dynamicMesh as GroundDynamicMesh
+    
+    const groundObject = getRuntimeObject(groundNode.id)
+    if (!groundObject) return
+    
+    const localPoint = groundObject.worldToLocal(brushMesh.position.clone())
+    localPoint.y -= 0.1
+    
+    const modified = sculptGround(definition, {
+        point: localPoint,
+        radius: brushRadius.value,
+        strength: brushStrength.value,
+        shape: brushShape.value,
+        isDigging: isDigging.value || event.shiftKey
+    })
+    
+    if (modified) {
+        const geometry = (groundObject as THREE.Mesh).geometry
+        updateGroundGeometry(geometry, definition)
+    }
+}
+
 async function handlePointerDown(event: PointerEvent) {
   if (!canvasRef.value || !camera || !scene) {
     pointerTrackingState = null
@@ -4080,6 +4159,24 @@ async function handlePointerDown(event: PointerEvent) {
   }
 
   const button = event.button
+
+  // Terrain Sculpting
+  if (sceneStore.selectedNode?.dynamicMesh?.type === 'Ground' && button === 1) {
+      pointerTrackingState = null
+      isSculpting.value = true
+      
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      
+      performSculpt(event)
+      
+      try {
+        canvasRef.value?.setPointerCapture(event.pointerId)
+      } catch (error) { /* noop */ }
+      return
+  }
+
   const isSelectionButton = button === 0 || button === 2
 
   if (nodePickerStore.isActive) {
@@ -4336,6 +4433,16 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
 
+  // Terrain Brush Update
+  if (sceneStore.selectedNode?.dynamicMesh?.type === 'Ground') {
+      updateBrush(event)
+      if (isSculpting.value) {
+          performSculpt(event)
+      }
+  } else {
+      brushMesh.visible = false
+  }
+
   if (isAltOverrideActive) {
     return
   }
@@ -4416,6 +4523,22 @@ function handlePointerMove(event: PointerEvent) {
 }
 
 function handlePointerUp(event: PointerEvent) {
+  if (isSculpting.value) {
+      isSculpting.value = false
+      try {
+          canvasRef.value?.releasePointerCapture(event.pointerId)
+      } catch (e) { /* noop */ }
+
+      if (sceneStore.selectedNode?.dynamicMesh?.type === 'Ground') {
+          const mesh = objectMap.get(sceneStore.selectedNode.id) as THREE.Mesh
+          if (mesh && mesh.geometry) {
+               mesh.geometry.computeVertexNormals()
+          }
+          sceneStore.updateNodeDynamicMesh(sceneStore.selectedNode.id, sceneStore.selectedNode.dynamicMesh)
+      }
+      return
+  }
+
   const overrideActive = isAltOverrideActive
 
   if (groundSelectionDragState && event.pointerId === groundSelectionDragState.pointerId) {
@@ -7324,18 +7447,6 @@ defineExpose<SceneViewportHandle>({
       <div ref="overlayContainerRef" class="placeholder-overlay-layer">
         <PlaceholderOverlayList :overlays="placeholderOverlayList" />
       </div>
-      <GroundToolbar
-        v-if="groundSelection"
-        :visible="isGroundToolbarVisible"
-        :left="groundSelectionToolbarStyle.left"
-        :top="groundSelectionToolbarStyle.top"
-        :opacity="groundSelectionToolbarStyle.opacity"
-        @cancel="handleGroundCancel"
-        @raise="handleGroundRaise"
-        @lower="handleGroundLower"
-        @reset="handleGroundReset"
-        @texture="handleGroundTextureSelectRequest"
-      />
       <canvas ref="canvasRef" class="viewport-canvas" />
     </div>
     <input
