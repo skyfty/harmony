@@ -222,6 +222,7 @@ import {
   warpGateComponentDefinition,
   effectComponentDefinition,
   rigidbodyComponentDefinition,
+  vehicleComponentDefinition,
   WARP_GATE_RUNTIME_REGISTRY_KEY,
   WARP_GATE_EFFECT_ACTIVE_FLAG,
   GUIDEBOARD_RUNTIME_REGISTRY_KEY,
@@ -230,8 +231,10 @@ import {
   DISPLAY_BOARD_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
   RIGIDBODY_METADATA_KEY,
+  VEHICLE_COMPONENT_TYPE,
   clampGuideboardComponentProps,
   computeGuideboardEffectActive,
+  clampVehicleComponentProps,
 } from '@schema/components';
 import type {
   GuideboardComponentProps,
@@ -240,6 +243,8 @@ import type {
   RigidbodyComponentMetadata,
   RigidbodyPhysicsShape,
   RigidbodyVector3Tuple,
+  VehicleComponentProps,
+  VehicleVector3Tuple,
 } from '@schema/components';
 import {
   addBehaviorRuntimeListener,
@@ -673,6 +678,7 @@ previewComponentManager.registerDefinition(warpGateComponentDefinition);
 previewComponentManager.registerDefinition(effectComponentDefinition);
 previewComponentManager.registerDefinition(behaviorComponentDefinition);
 previewComponentManager.registerDefinition(rigidbodyComponentDefinition);
+previewComponentManager.registerDefinition(vehicleComponentDefinition);
 
 const previewNodeMap = new Map<string, SceneNode>();
 const assetNodeIdMap = new Map<string, Set<string>>();
@@ -694,6 +700,8 @@ const nodeObjectMap = new Map<string, THREE.Object3D>();
 type RigidbodyInstance = { nodeId: string; body: CANNON.Body; object: THREE.Object3D | null };
 let physicsWorld: CANNON.World | null = null;
 const rigidbodyInstances = new Map<string, RigidbodyInstance>();
+type VehicleInstance = { nodeId: string; vehicle: CANNON.RaycastVehicle; wheelCount: number };
+const vehicleInstances = new Map<string, VehicleInstance>();
 type GroundHeightfieldCacheEntry = { signature: string; shape: CANNON.Heightfield; offset: [number, number, number] };
 const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>();
 const physicsGravity = new CANNON.Vec3(0, -9.82, 0);
@@ -909,6 +917,7 @@ const cameraViewFrustum = new THREE.Frustum();
 const tempBox = new THREE.Box3();
 const tempSphere = new THREE.Sphere();
 const tempVector = new THREE.Vector3();
+const tempVehicleSize = new THREE.Vector3();
 const tempQuaternion = new THREE.Quaternion();
 const tempPitchVector = new THREE.Vector3();
 const tempSpherical = new THREE.Spherical();
@@ -2137,6 +2146,18 @@ function resolveRigidbodyComponent(
   return component;
 }
 
+function resolveVehicleComponent(
+  node: SceneNode | null | undefined,
+): SceneNodeComponentState<VehicleComponentProps> | null {
+  const component = node?.components?.[VEHICLE_COMPONENT_TYPE] as
+    | SceneNodeComponentState<VehicleComponentProps>
+    | undefined;
+  if (!component || !component.enabled) {
+    return null;
+  }
+  return component;
+}
+
 function extractRigidbodyShape(
   component: SceneNodeComponentState<RigidbodyComponentProps> | null,
 ): RigidbodyPhysicsShape | null {
@@ -2238,15 +2259,24 @@ function ensurePhysicsWorld(): CANNON.World {
 }
 
 function resetPhysicsWorld(): void {
-  if (physicsWorld) {
+  const world = physicsWorld;
+  if (world) {
+    vehicleInstances.forEach(({ vehicle }) => {
+      try {
+        vehicle.removeFromWorld(world);
+      } catch (error) {
+        console.warn('[SceneViewer] Failed to remove vehicle', error);
+      }
+    });
     rigidbodyInstances.forEach(({ body }) => {
       try {
-        physicsWorld?.removeBody(body);
+        world.removeBody(body);
       } catch (error) {
         console.warn('[SceneViewer] Failed to remove rigidbody', error);
       }
     });
   }
+  vehicleInstances.clear();
   rigidbodyInstances.clear();
   physicsWorld = null;
   groundHeightfieldCache.clear();
@@ -2432,6 +2462,149 @@ function removeRigidbodyInstance(nodeId: string): void {
   }
   rigidbodyInstances.delete(nodeId);
   groundHeightfieldCache.delete(nodeId);
+  removeVehicleInstance(nodeId);
+}
+
+function clampVehicleAxisIndex(value: number): 0 | 1 | 2 {
+  if (value === 1) {
+    return 1;
+  }
+  if (value === 2) {
+    return 2;
+  }
+  return 0;
+}
+
+function tupleToVec3(tuple: VehicleVector3Tuple): CANNON.Vec3 {
+  const [x = 0, y = 0, z = 0] = tuple;
+  return new CANNON.Vec3(x, y, z);
+}
+
+function buildVehicleConnectionPoint(
+  rightAxis: number,
+  forwardAxis: number,
+  upAxis: number,
+  rightValue: number,
+  forwardValue: number,
+  upValue: number,
+): CANNON.Vec3 {
+  const components: [number, number, number] = [0, 0, 0];
+  components[rightAxis] = rightValue;
+  components[forwardAxis] = forwardValue;
+  components[upAxis] = upValue;
+  return new CANNON.Vec3(components[0], components[1], components[2]);
+}
+
+function computeVehicleWheelConnectionPoints(
+  object: THREE.Object3D,
+  props: VehicleComponentProps,
+  rightAxis: number,
+  forwardAxis: number,
+  upAxis: number,
+): CANNON.Vec3[] {
+  tempBox.makeEmpty();
+  tempBox.setFromObject(object);
+  if (tempBox.isEmpty()) {
+    tempVehicleSize.set(2, 1, 4);
+  } else {
+    tempBox.getSize(tempVehicleSize);
+  }
+  const rightExtent = Math.max(tempVehicleSize.getComponent(rightAxis) * 0.5, props.radius * 1.25);
+  const forwardExtent = Math.max(tempVehicleSize.getComponent(forwardAxis) * 0.5, props.radius * 2);
+  const upExtent = Math.max(tempVehicleSize.getComponent(upAxis) * 0.5, props.radius + props.suspensionRestLength);
+  const footprints = [
+    { right: rightExtent, forward: forwardExtent },
+    { right: -rightExtent, forward: forwardExtent },
+    { right: rightExtent, forward: -forwardExtent },
+    { right: -rightExtent, forward: -forwardExtent },
+  ];
+  return footprints.map(({ right, forward }) =>
+    buildVehicleConnectionPoint(rightAxis, forwardAxis, upAxis, right, forward, upExtent),
+  );
+}
+
+function createVehicleInstance(
+  node: SceneNode,
+  component: SceneNodeComponentState<VehicleComponentProps>,
+  rigidbody: RigidbodyInstance,
+): VehicleInstance | null {
+  if (!physicsWorld || !rigidbody.object) {
+    return null;
+  }
+  const props = clampVehicleComponentProps(component.props);
+  const rightAxis = clampVehicleAxisIndex(props.indexRightAxis);
+  const upAxis = clampVehicleAxisIndex(props.indexUpAxis);
+  const forwardAxis = clampVehicleAxisIndex(props.indexForwardAxis);
+  const connectionPoints = computeVehicleWheelConnectionPoints(
+    rigidbody.object,
+    props,
+    rightAxis,
+    forwardAxis,
+    upAxis,
+  );
+  if (!connectionPoints.length) {
+    return null;
+  }
+  const vehicle = new CANNON.RaycastVehicle({
+    chassisBody: rigidbody.body,
+    indexRightAxis: rightAxis,
+    indexUpAxis: upAxis,
+    indexForwardAxis: forwardAxis,
+  });
+  const directionVec = tupleToVec3(props.directionLocal);
+  const axleVec = tupleToVec3(props.axleLocal);
+  connectionPoints.forEach((point) => {
+    vehicle.addWheel({
+      chassisConnectionPointLocal: point,
+      directionLocal: directionVec.clone(),
+      axleLocal: axleVec.clone(),
+      suspensionRestLength: props.suspensionRestLength,
+      suspensionStiffness: props.suspensionStiffness,
+      dampingRelaxation: props.suspensionDamping,
+      dampingCompression: props.suspensionCompression,
+      frictionSlip: props.frictionSlip,
+      rollInfluence: props.rollInfluence,
+      radius: props.radius,
+    });
+  });
+  vehicle.addToWorld(physicsWorld);
+  return { nodeId: node.id, vehicle, wheelCount: connectionPoints.length };
+}
+
+function removeVehicleInstance(nodeId: string): void {
+  const entry = vehicleInstances.get(nodeId);
+  if (!entry) {
+    return;
+  }
+  if (physicsWorld) {
+    try {
+      entry.vehicle.removeFromWorld(physicsWorld);
+    } catch (error) {
+      console.warn('[SceneViewer] Failed to remove vehicle instance', error);
+    }
+  }
+  vehicleInstances.delete(nodeId);
+}
+
+function ensureVehicleBindingForNode(nodeId: string): void {
+  if (!physicsWorld) {
+    return;
+  }
+  const node = resolveNodeById(nodeId);
+  const component = resolveVehicleComponent(node);
+  if (!node || !component) {
+    removeVehicleInstance(nodeId);
+    return;
+  }
+  const rigidbody = rigidbodyInstances.get(nodeId);
+  if (!rigidbody || !rigidbody.object) {
+    return;
+  }
+  removeVehicleInstance(nodeId);
+  const instance = createVehicleInstance(node, component, rigidbody);
+  if (instance) {
+    vehicleInstances.set(nodeId, instance);
+  }
 }
 
 function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D): void {
@@ -2452,6 +2625,7 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
   if (existing) {
     existing.object = object;
     syncBodyFromObject(existing.body, object);
+    ensureVehicleBindingForNode(nodeId);
     return;
   }
   const body = createRigidbodyBody(node, component, shapeDefinition, object);
@@ -2460,6 +2634,7 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
   }
   physicsWorld.addBody(body);
   rigidbodyInstances.set(nodeId, { nodeId, body, object });
+  ensureVehicleBindingForNode(nodeId);
 }
 
 function collectRigidbodyNodes(nodes: SceneNode[] | undefined | null): SceneNode[] {
@@ -2481,6 +2656,43 @@ function collectRigidbodyNodes(nodes: SceneNode[] | undefined | null): SceneNode
     }
   }
   return collected;
+}
+
+function collectVehicleNodes(nodes: SceneNode[] | undefined | null): SceneNode[] {
+  const collected: SceneNode[] = [];
+  if (!Array.isArray(nodes)) {
+    return collected;
+  }
+  const stack: SceneNode[] = [...nodes];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    if (resolveVehicleComponent(node)) {
+      collected.push(node);
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  return collected;
+}
+
+function syncVehicleInstancesForDocument(document: SceneJsonExportDocument | null): void {
+  if (!document) {
+    vehicleInstances.forEach((_entry, nodeId) => removeVehicleInstance(nodeId));
+    vehicleInstances.clear();
+    return;
+  }
+  const vehicleNodes = collectVehicleNodes(document.nodes);
+  const desiredIds = new Set(vehicleNodes.map((node) => node.id));
+  vehicleNodes.forEach((node) => ensureVehicleBindingForNode(node.id));
+  vehicleInstances.forEach((_entry, nodeId) => {
+    if (!desiredIds.has(nodeId)) {
+      removeVehicleInstance(nodeId);
+    }
+  });
 }
 
 function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null): void {
@@ -2530,6 +2742,7 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
       groundHeightfieldCache.delete(nodeId);
     }
   });
+  syncVehicleInstancesForDocument(document);
 }
 
 function stepPhysicsWorld(delta: number): void {

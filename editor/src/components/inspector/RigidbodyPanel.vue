@@ -35,12 +35,20 @@ const normalizedProps = computed(() => {
 
 const localMass = ref(DEFAULT_RIGIDBODY_MASS)
 const localBodyType = ref<RigidbodyBodyType>('DYNAMIC')
+const MASS_LOCK_EPSILON = 1e-4
+const LOCKED_BODY_TYPES = new Set<RigidbodyBodyType>(['STATIC', 'KINEMATIC'])
+const LOCKED_BODY_TYPE_MASS = 0
+const isMassLocked = computed(() => LOCKED_BODY_TYPES.has(localBodyType.value))
 
 watch(
   () => normalizedProps.value,
   (props) => {
-    localMass.value = props.mass
     localBodyType.value = props.bodyType
+    if (LOCKED_BODY_TYPES.has(props.bodyType)) {
+      applyLockedMass(props.mass)
+    } else {
+      localMass.value = props.mass
+    }
   },
   { immediate: true, deep: true },
 )
@@ -54,7 +62,19 @@ function updateComponent(patch: Partial<RigidbodyComponentProps>): void {
   sceneStore.updateNodeComponentProps(nodeId, component.id, patch)
 }
 
+function applyLockedMass(targetMass: number) {
+  if (localMass.value !== LOCKED_BODY_TYPE_MASS) {
+    localMass.value = LOCKED_BODY_TYPE_MASS
+  }
+  if (Math.abs(targetMass - LOCKED_BODY_TYPE_MASS) > MASS_LOCK_EPSILON) {
+    updateComponent({ mass: LOCKED_BODY_TYPE_MASS })
+  }
+}
+
 function handleMassInput(value: string | number) {
+  if (isMassLocked.value) {
+    return
+  }
   const numeric = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(numeric)) {
     return
@@ -75,6 +95,9 @@ function handleBodyTypeChange(value: RigidbodyBodyType | null) {
     return
   }
   localBodyType.value = value
+  if (LOCKED_BODY_TYPES.has(value)) {
+    applyLockedMass(normalizedProps.value.mass)
+  }
   if (value === normalizedProps.value.bodyType) {
     return
   }
@@ -157,7 +180,7 @@ function handleRemoveComponent() {
           :min="MIN_RIGIDBODY_MASS"
           :max="MAX_RIGIDBODY_MASS"
           :step="0.1"
-          :disabled="!rigidbodyComponent?.enabled"
+          :disabled="!rigidbodyComponent?.enabled || isMassLocked"
           :model-value="localMass"
           @update:modelValue="handleMassInput"
         />

@@ -15,6 +15,7 @@ import EnvironmentPanel from '@/components/inspector/EnvironmentPanel.vue'
 import BehaviorPanel from '@/components/inspector/BehaviorPanel.vue'
 import DisplayBoardPanel from '@/components/inspector/DisplayBoardPanel.vue'
 import RigidbodyPanel from '@/components/inspector/RigidbodyPanel.vue'
+import VehiclePanel from '@/components/inspector/VehiclePanel.vue'
 import { useSceneStore, SKY_NODE_ID, GROUND_NODE_ID, ENVIRONMENT_NODE_ID } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 import type { BehaviorEventType, SceneBehavior, SceneNodeComponentState } from '@harmony/schema'
@@ -25,6 +26,7 @@ import {
   DISPLAY_BOARD_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
+  VEHICLE_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
   WARP_GATE_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
@@ -375,6 +377,7 @@ function handleAddComponent(type: string) {
               <WarpGatePanel v-else-if="component.type === WARP_GATE_COMPONENT_TYPE" />
               <EffectPanel v-else-if="component.type === EFFECT_COMPONENT_TYPE" />
               <RigidbodyPanel v-else-if="component.type === RIGIDBODY_COMPONENT_TYPE" />
+              <VehiclePanel v-else-if="component.type === VEHICLE_COMPONENT_TYPE" />
               <WallPanel v-else-if="component.type === WALL_COMPONENT_TYPE" />
               <BehaviorPanel
                 v-else-if="component.type === BEHAVIOR_COMPONENT_TYPE"
