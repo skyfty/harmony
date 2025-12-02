@@ -349,6 +349,7 @@ export function applyGroundGeneration(
 
   definition.heightMap = heightMap
   definition.generation = normalized
+  definition.hasManualEdits = false
   return normalized
 }
 
@@ -451,6 +452,9 @@ export function sculptGround(definition: GroundDynamicMesh, params: SculptParams
               modified = true
             }
       }
+  }
+  if (modified) {
+    definition.hasManualEdits = true
   }
   return modified
 }

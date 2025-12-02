@@ -29,18 +29,18 @@ const selectedNoiseMode = ref<GroundGenerationMode>('perlin')
 let syncingGeneration = false
 
 const terrainOperations: Array<{ value: GroundSculptOperation; label: string; icon: string }> = [
-  { value: 'depress', label: '凹陷', icon: 'mdi-tray-arrow-down' },
-  { value: 'smooth', label: '平滑', icon: 'mdi-water-percent' },
-  { value: 'flatten', label: '平整', icon: 'mdi-ruler' },
-  { value: 'raise', label: '隆起', icon: 'mdi-tray-arrow-up' },
+  { value: 'depress', label: 'Depress', icon: 'mdi-tray-arrow-down' },
+  { value: 'smooth', label: 'Smooth', icon: 'mdi-water-percent' },
+  { value: 'flatten', label: 'Flatten', icon: 'mdi-ruler' },
+  { value: 'raise', label: 'Raise', icon: 'mdi-tray-arrow-up' },
 ]
 
 const noiseModeOptions: Array<{ value: GroundGenerationMode; label: string; icon: string }> = [
-  { value: 'simple', label: '简单噪声', icon: 'mdi-wave-sine' },
-  { value: 'perlin', label: '柏林噪声', icon: 'mdi-grain' },
-  { value: 'ridge', label: '山脊噪声', icon: 'mdi-mountain' },
-  { value: 'voronoi', label: '沃罗诺伊噪声', icon: 'mdi-shape-polygon-plus' },
-  { value: 'flat', label: '平坦', icon: 'mdi-border-horizontal' },
+  { value: 'simple', label: 'Simple Noise', icon: 'mdi-wave-sine' },
+  { value: 'perlin', label: 'Perlin Noise', icon: 'mdi-grain' },
+  { value: 'ridge', label: 'Ridge Noise', icon: 'mdi-mountain' },
+  { value: 'voronoi', label: 'Voronoi Noise', icon: 'mdi-shape-polygon-plus' },
+  { value: 'flat', label: 'Flat', icon: 'mdi-border-horizontal' },
 ]
 
 function clampNoiseStrength(value: number): number {
@@ -48,6 +48,40 @@ function clampNoiseStrength(value: number): number {
     return 1
   }
   return Math.min(5, Math.max(0, Number(value)))
+}
+
+function detectManualEdits(definition: GroundDynamicMesh): boolean {
+  if (!definition) {
+    return false
+  }
+  if (typeof definition.hasManualEdits === 'boolean') {
+    return definition.hasManualEdits
+  }
+  if (!definition.generation) {
+    const hasVariation = Object.values(definition.heightMap).some((value) => Math.abs(value) > 1e-4)
+    definition.hasManualEdits = hasVariation
+    return hasVariation
+  }
+
+  const scratch = JSON.parse(JSON.stringify(definition)) as GroundDynamicMesh
+  if (!scratch.generation) {
+    definition.hasManualEdits = false
+    return false
+  }
+  applyGroundGeneration(scratch, scratch.generation)
+  const epsilon = 1e-4
+  const actualMap = definition.heightMap
+  const generatedMap = scratch.heightMap
+  const keys = new Set([...Object.keys(actualMap), ...Object.keys(generatedMap)])
+  for (const key of keys) {
+    const delta = Math.abs((actualMap[key] ?? 0) - (generatedMap[key] ?? 0))
+    if (delta > epsilon) {
+      definition.hasManualEdits = true
+      return true
+    }
+  }
+  definition.hasManualEdits = false
+  return false
 }
 
 function buildGenerationPayload(definition?: GroundDynamicMesh): GroundGenerationSettings {
@@ -78,7 +112,12 @@ function applyGenerationPatch(patch: Partial<GroundGenerationSettings>) {
   }
   nextGeneration.worldWidth = clonedDefinition.width
   nextGeneration.worldDepth = clonedDefinition.depth
-  applyGroundGeneration(clonedDefinition, nextGeneration)
+  const canRegenerate = !detectManualEdits(clonedDefinition)
+  if (canRegenerate) {
+    applyGroundGeneration(clonedDefinition, nextGeneration)
+  } else {
+    clonedDefinition.generation = nextGeneration
+  }
   sceneStore.updateNodeDynamicMesh(node.id, clonedDefinition)
 }
 
@@ -139,7 +178,6 @@ watch(selectedNoiseMode, (mode) => {
         />
       </div>
 
-      <v-divider class="ground-panel-divider" />
 
       <div class="control-group " style="    margin: 0px 0px 10px 0px;">
         <div class="text-caption mb-1">Brush Shape</div>
@@ -203,29 +241,20 @@ watch(selectedNoiseMode, (mode) => {
 
         <v-divider class="ground-panel-divider" />
 
-        <div class="control-group">
+        <div class="control-group noise-type">
           <div class="text-caption mb-1">Noise Type</div>
-          <v-btn-toggle
+          <v-select
             v-model="selectedNoiseMode"
+            :items="noiseModeOptions"
+            item-title="label"
+            item-value="value"
             density="compact"
-            mandatory
-            divided
-            variant="outlined"
-            color="primary"
-            class="icon-toggle-group"
+                variant="underlined"
+            hide-details
             :disabled="!hasGround"
+            class="noise-mode-select"
           >
-            <v-btn
-              v-for="option in noiseModeOptions"
-              :key="option.value"
-              :value="option.value"
-              icon
-              :title="option.label"
-              :aria-label="option.label"
-            >
-              <v-icon :icon="option.icon" />
-            </v-btn>
-          </v-btn-toggle>
+          </v-select>
         </div>
 
         <div class="control-group">
@@ -282,4 +311,9 @@ watch(selectedNoiseMode, (mode) => {
 .icon-toggle-group :deep(.v-btn) {
   min-width: 38px;
 }
+
+.noise-type {
+  margin-bottom: 10px;
+}
+
 </style>
