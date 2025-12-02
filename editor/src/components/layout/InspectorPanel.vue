@@ -270,6 +270,7 @@ watch(
       defaults.add('sky')
     } else if (selectedNode.value?.id === GROUND_NODE_ID) {
       defaults.add('ground')
+      defaults.add('ground-terrain')
     } else if (selectedNode.value?.nodeType === 'Light') {
       defaults.add('light')
     }

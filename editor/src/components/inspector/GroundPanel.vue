@@ -25,12 +25,12 @@ const localDepth = computed(() => groundDefinition.value?.depth ?? 0)
 </script>
 
 <template>
-  <v-expansion-panel value="ground" v-if="selectedGroundNode">
+  <v-expansion-panel value="ground">
     <v-expansion-panel-title>
-      Terrain Tools
+       Terrain Tools
     </v-expansion-panel-title>
     <v-expansion-panel-text>
-      <div class="ground-grid mb-4">
+      <div >
         <v-text-field
           :model-value="localWidth"
           label="Width (m)"
@@ -51,31 +51,7 @@ const localDepth = computed(() => groundDefinition.value?.depth ?? 0)
         />
       </div>
 
-      <div class="control-group">
-        <div class="text-caption mb-1">Brush Radius: {{ brushRadius }}</div>
-        <v-slider
-          v-model="brushRadius"
-          min="1"
-          max="50"
-          step="1"
-          density="compact"
-          hide-details
-        />
-      </div>
-
-      <div class="control-group mt-4">
-        <div class="text-caption mb-1">Brush Strength: {{ brushStrength }}</div>
-        <v-slider
-          v-model="brushStrength"
-          min="0.1"
-          max="10"
-          step="0.1"
-          density="compact"
-          hide-details
-        />
-      </div>
-
-      <div class="control-group mt-4">
+      <div class="control-group " style="    margin: 0px 0px 10px 0px;">
         <div class="text-caption mb-1">Brush Shape</div>
         <v-btn-toggle v-model="brushShape" density="compact" mandatory divided variant="outlined" color="primary">
           <v-btn value="circle" icon="mdi-circle-outline" title="Circle"></v-btn>
@@ -84,6 +60,36 @@ const localDepth = computed(() => groundDefinition.value?.depth ?? 0)
         </v-btn-toggle>
       </div>
       
+      <div class="control-group">
+        <div class="text-caption">Brush Radius: {{ brushRadius }}</div>
+        <v-text-field
+          v-model="brushRadius"
+          min="0.1"
+          max="50"
+          step="0.1"
+          type="number"
+          density="compact"
+          variant="underlined"
+          hide-details
+          suffix="m"
+        />
+      </div>
+
+      <div class="control-group ">
+        <div class="text-caption ">Brush Strength: {{ brushStrength }}</div>
+        <v-text-field
+          v-model="brushStrength"
+          min="0.1"
+          max="10"
+          step="0.1"
+          type="number"
+          variant="underlined"
+          density="compact"
+          hide-details
+          suffix="m"
+        />
+      </div>
+
     </v-expansion-panel-text>
   </v-expansion-panel>
 </template>
