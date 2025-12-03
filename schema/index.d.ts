@@ -630,6 +630,7 @@ export interface GroundDynamicMesh {
   textureName?: string | null
   generation?: GroundGenerationSettings | null
   hasManualEdits?: boolean
+  terrainScatter?: TerrainScatterStoreSnapshot | null
 }
 
 export type WallSegment = {

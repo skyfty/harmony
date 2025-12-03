@@ -170,6 +170,29 @@ export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: 
   return getVertexHeight(definition, localRow, localColumn)
 }
 
+export function sampleGroundNormal(
+  definition: GroundDynamicMesh,
+  x: number,
+  z: number,
+  target?: THREE.Vector3,
+): THREE.Vector3 {
+  const result = target ?? new THREE.Vector3()
+  const delta = Math.max(0.01, definition.cellSize * 0.5)
+  const heightL = sampleGroundHeight(definition, x - delta, z)
+  const heightR = sampleGroundHeight(definition, x + delta, z)
+  const heightF = sampleGroundHeight(definition, x, z + delta)
+  const heightB = sampleGroundHeight(definition, x, z - delta)
+  const dx = heightL - heightR
+  const dz = heightB - heightF
+  result.set(dx, delta * 2, dz)
+  if (result.lengthSq() === 0) {
+    result.set(0, 1, 0)
+  } else {
+    result.normalize()
+  }
+  return result
+}
+
 function buildGroundGeometry(definition: GroundDynamicMesh): THREE.BufferGeometry {
   const columns = Math.max(1, definition.columns)
   const rows = Math.max(1, definition.rows)
