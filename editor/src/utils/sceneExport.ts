@@ -5,7 +5,6 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { SceneMaterial, SceneNodeMaterial } from '@/types/material'
 import type {
   SceneNode,
-  GroundDynamicMesh,
   SceneMaterialTextureSlot,
   SceneNodeComponentState,
   SceneNodeComponentMap,
@@ -32,6 +31,7 @@ import {
   type RigidbodyPhysicsShape,
   RIGIDBODY_METADATA_KEY,
 } from '@schema/components'
+import { isGroundDynamicMesh } from '@schema/groundHeightfield'
 
 type RemovedSceneObject = {
     parent: THREE.Object3D
@@ -630,22 +630,20 @@ async function applyRigidbodyMetadata(candidates: RigidbodyExportCandidate[]): P
   }
   const assetCacheStore = useAssetCacheStore()
   for (const entry of candidates) {
-    let shape: RigidbodyPhysicsShape | null = null
     if (isGroundDynamicMesh(entry.node.dynamicMesh)) {
-      shape = buildHeightfieldShapeFromGroundNode(entry.node)
+      continue
+    }
+    let shape: RigidbodyPhysicsShape | null = null
+    const samplingObject = await buildRigidbodySamplingObject(entry.node, assetCacheStore)
+    if (!samplingObject) {
+      continue
+    }
+    const outline = buildOutlineMeshFromObject(samplingObject)
+    if (outline) {
+      shape = buildConvexShapeFromOutline(outline)
     }
     if (!shape) {
-      const samplingObject = await buildRigidbodySamplingObject(entry.node, assetCacheStore)
-      if (!samplingObject) {
-        continue
-      }
-      const outline = buildOutlineMeshFromObject(samplingObject)
-      if (outline) {
-        shape = buildConvexShapeFromOutline(outline)
-      }
-      if (!shape) {
-        shape = buildBoxShapeFromObject(samplingObject)
-      }
+      shape = buildBoxShapeFromObject(samplingObject)
     }
     if (!shape) {
       continue
@@ -830,84 +828,6 @@ function buildBoxShapeFromObject(object: THREE.Object3D): RigidbodyPhysicsShape 
     }
   }
   return null
-}
-
-function isGroundDynamicMesh(value: SceneNode['dynamicMesh'] | null | undefined): value is GroundDynamicMesh {
-  return Boolean(value && value.type === 'Ground')
-}
-
-function buildHeightfieldShapeFromGroundNode(node: SceneNode): RigidbodyPhysicsShape | null {
-  const dynamicMesh = node.dynamicMesh
-  if (!isGroundDynamicMesh(dynamicMesh)) {
-    return null
-  }
-  const columns = Math.max(1, Math.floor(dynamicMesh.columns))
-  const rows = Math.max(1, Math.floor(dynamicMesh.rows))
-  const pointsX = columns + 1
-  const pointsZ = rows + 1
-  if (pointsX <= 1 || pointsZ <= 1) {
-    return null
-  }
-
-  const rawCellSize = getPositiveNumber(dynamicMesh.cellSize, 1)
-  const { scaleX, scaleY, scaleZ } = resolveNodeScale(node.scale)
-  const absScaleX = Math.abs(scaleX)
-  const absScaleZ = Math.abs(scaleZ)
-  // Use the averaged horizontal scale so the heightfield grid matches the runtime physics setup.
-  const uniformHorizontalScale = Math.max(1e-4, (absScaleX + absScaleZ) * 0.5)
-  const elementSize = Math.max(1e-4, rawCellSize * uniformHorizontalScale)
-  const width = Math.max(1e-4, columns * elementSize)
-  const depth = Math.max(1e-4, rows * elementSize)
-
-  const matrix: number[][] = []
-  const heightMap = dynamicMesh.heightMap ?? {}
-  for (let column = 0; column < pointsX; column += 1) {
-    const columnValues: number[] = []
-    for (let row = 0; row < pointsZ; row += 1) {
-      const key = `${row}:${column}`
-      const rawHeight = heightMap[key]
-      const normalizedHeight = typeof rawHeight === 'number' && Number.isFinite(rawHeight) ? rawHeight : 0
-      columnValues.push(normalizedHeight * scaleY)
-    }
-    matrix.push(columnValues)
-  }
-
-  return {
-    kind: 'heightfield',
-    matrix,
-    elementSize,
-    width,
-    depth,
-    offset: [-width * 0.5, 0, -depth * 0.5],
-  }
-}
-
-function resolveNodeScale(scaleLike: SceneNode['scale'] | null | undefined): {
-  scaleX: number
-  scaleY: number
-  scaleZ: number
-} {
-  const scale = scaleLike && typeof scaleLike === 'object' ? (scaleLike as Record<'x' | 'y' | 'z', unknown>) : null
-  const scaleX = getScaleComponent(scale, 'x')
-  const scaleY = getScaleComponent(scale, 'y')
-  const scaleZ = getScaleComponent(scale, 'z')
-  return { scaleX, scaleY, scaleZ }
-}
-
-function getScaleComponent(source: Record<'x' | 'y' | 'z', unknown> | null, axis: 'x' | 'y' | 'z'): number {
-  const value = source?.[axis]
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value
-  }
-  return 1
-}
-
-function getPositiveNumber(value: unknown, fallback: number): number {
-  const numeric = typeof value === 'number' && Number.isFinite(value) ? Math.abs(value) : NaN
-  if (numeric > 0) {
-    return numeric
-  }
-  return fallback > 0 ? fallback : 1
 }
 
 function componentMapHasEntries(components?: SceneNodeComponentMap | null): boolean {

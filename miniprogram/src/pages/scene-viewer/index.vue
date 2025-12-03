@@ -187,6 +187,7 @@ import { parseSceneDocument, useSceneStore } from '@/stores/sceneStore';
 import { buildSceneGraph, type SceneGraphBuildOptions, type SceneGraphResourceProgress } from '@schema/sceneGraph';
 import ResourceCache from '@schema/ResourceCache';
 import { AssetCache, AssetLoader, type AssetCacheEntry } from '@schema/assetCache';
+import { buildGroundHeightfieldData, isGroundDynamicMesh, type GroundHeightfieldData } from '@schema/groundHeightfield';
 import { loadNodeObject } from '@schema/modelAssetLoader';
 import {
   getCachedModelObject,
@@ -2168,10 +2169,6 @@ function extractRigidbodyShape(
   return payload?.shape ?? null;
 }
 
-function isGroundDynamicMesh(value: SceneNode['dynamicMesh'] | null | undefined): value is GroundDynamicMesh {
-  return value?.type === 'Ground';
-}
-
 function resolveNodeScaleVector(node: SceneNode | null | undefined): { x: number; y: number; z: number } {
   const scale = node?.scale;
   const normalize = (value: unknown) => {
@@ -2297,65 +2294,12 @@ function resetPhysicsWorld(): void {
   groundHeightfieldCache.clear();
 }
 
-type GroundHeightfieldBuildResult = {
-  matrix: number[][];
-  elementSize: number;
-  halfWidth: number;
-  halfDepth: number;
-  signature: string;
-};
-
-function buildGroundHeightfieldData(
-  node: SceneNode,
-  definition: GroundDynamicMesh,
-): GroundHeightfieldBuildResult | null {
-  const rawRows = Number.isFinite(definition.rows) ? Math.floor(definition.rows) : 0;
-  const rawColumns = Number.isFinite(definition.columns) ? Math.floor(definition.columns) : 0;
-  const rows = Math.max(1, rawRows);
-  const columns = Math.max(1, rawColumns);
-  const pointsX = columns + 1;
-  const pointsZ = rows + 1;
-  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1;
-  const { x: scaleX, y: scaleY, z: scaleZ } = resolveNodeScaleVector(node);
-  const uniformHorizontalScale = Math.max(1e-4, (Math.abs(scaleX) + Math.abs(scaleZ)) * 0.5);
-  const scaledElementSize = Math.max(1e-4, cellSize * uniformHorizontalScale);
-  if (pointsX <= 0 || pointsZ <= 0) {
-    return null;
-  }
-  const heightMap = definition.heightMap ?? {};
-  const matrix: number[][] = [];
-  let heightHash = 0;
-  for (let column = 0; column < pointsX; column += 1) {
-    const columnValues: number[] = [];
-    for (let row = 0; row < pointsZ; row += 1) {
-      const key = `${row}:${column}`;
-      const rawHeight = heightMap[key];
-      const baseHeight = typeof rawHeight === 'number' && Number.isFinite(rawHeight) ? rawHeight : 0;
-      const height = baseHeight * scaleY;
-      columnValues.push(height);
-      const normalized = Math.round(height * 1000);
-      heightHash = (heightHash * 31 + normalized) >>> 0;
-    }
-    matrix.push(columnValues);
-  }
-  const width = columns * scaledElementSize;
-  const depth = rows * scaledElementSize;
-  const signature = `${columns}|${rows}|${Math.round(cellSize * 1000)}|${Math.round(width * 1000)}|${Math.round(depth * 1000)}|${heightHash.toString(16)}`;
-  return {
-    matrix,
-    elementSize: scaledElementSize,
-    halfWidth: Math.max(0, width * 0.5),
-    halfDepth: Math.max(0, depth * 0.5),
-    signature,
-  };
-}
-
 function resolveGroundHeightfieldShape(
   node: SceneNode,
   definition: GroundDynamicMesh,
 ): GroundHeightfieldCacheEntry | null {
   const nodeId = node.id;
-  const data = buildGroundHeightfieldData(node, definition);
+  const data: GroundHeightfieldData | null = buildGroundHeightfieldData(node, definition);
   if (!data) {
     groundHeightfieldCache.delete(nodeId);
     return null;
@@ -2365,11 +2309,10 @@ function resolveGroundHeightfieldShape(
     return cached;
   }
   const shape = new CANNON.Heightfield(data.matrix, { elementSize: data.elementSize });
-  const offset: [number, number, number] = [-data.halfWidth, 0, -data.halfDepth];
   const entry: GroundHeightfieldCacheEntry = {
     signature: data.signature,
     shape,
-    offset,
+    offset: data.offset,
   };
   groundHeightfieldCache.set(nodeId, entry);
   return entry;
