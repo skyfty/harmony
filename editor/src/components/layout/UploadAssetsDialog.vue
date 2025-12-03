@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
+import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -26,6 +27,7 @@ import {
   ASSET_THUMBNAIL_WIDTH,
   createThumbnailFromCanvas,
 } from '@/utils/assetThumbnail'
+import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 
 const TYPE_COLOR_FALLBACK: Record<ProjectAsset['type'], string> = {
   model: '#26c6da',
@@ -39,6 +41,12 @@ const TYPE_COLOR_FALLBACK: Record<ProjectAsset['type'], string> = {
   file: '#546e7a',
   behavior: '#607d8b',
 }
+
+const scatterPresetOptions = Object.entries(terrainScatterPresets).map(([value, preset]) => ({
+  value: value as TerrainScatterCategory,
+  label: preset.label,
+  icon: preset.icon,
+}))
 
 const props = defineProps<{
   modelValue: boolean
@@ -95,6 +103,7 @@ type UploadAssetEntry = {
   aiError: string | null
   aiLoading: boolean
   hasPendingChanges: boolean
+  terrainScatterPreset: TerrainScatterCategory | null
 }
 
 type DimensionKey = 'dimensionLength' | 'dimensionWidth' | 'dimensionHeight'
@@ -242,6 +251,15 @@ function handleEntryColorBlur(entry: UploadAssetEntry): void {
   }
   entry.color = normalized
   entry.colorHexInput = normalized.toUpperCase()
+  markEntryDirty(entry)
+}
+
+function handleEntryScatterPresetChange(
+  entry: UploadAssetEntry,
+  value: TerrainScatterCategory | string | null,
+): void {
+  const normalized = typeof value === 'string' && value.trim().length ? (value as TerrainScatterCategory) : null
+  entry.terrainScatterPreset = normalized
   markEntryDirty(entry)
 }
 
@@ -439,6 +457,7 @@ function createUploadEntry(asset: ProjectAsset): UploadAssetEntry {
     aiError: null,
     aiLoading: false,
     hasPendingChanges: false,
+    terrainScatterPreset: asset.terrainScatterPreset ?? null,
   }
 }
 
@@ -972,6 +991,7 @@ async function submitUpload(options: { entries?: UploadAssetEntry[] } = {}) {
           dimensionHeight,
           imageWidth,
           imageHeight,
+          terrainScatterPreset: entry.terrainScatterPreset ?? null,
         })
         const mapped = mapServerAssetToProjectAsset(serverAsset)
         const replaced = sceneStore.replaceLocalAssetWithServerAsset(entry.assetId, mapped, { source: { type: 'url' } })
@@ -1104,6 +1124,36 @@ function handleUploadAll(): void {
                         @category-selected="(payload) => handleEntryCategorySelected(entry, payload)"
                         @category-created="(category) => handleEntryCategoryCreated(entry, category)"
                       />
+                    </div>
+
+                    <div class="upload-entry__scatter-row">
+                      <v-select
+                        :model-value="entry.terrainScatterPreset"
+                        :items="scatterPresetOptions"
+                        item-title="label"
+                        item-value="value"
+                        label="Terrain Scatter Preset"
+                        density="compact"
+                        variant="underlined"
+                        clearable
+                        hide-details
+                        :disabled="uploadSubmitting || entry.status === 'uploading' || entry.status === 'success'"
+                        @update:model-value="(value) => handleEntryScatterPresetChange(entry, value as TerrainScatterCategory | null)"
+                      >
+                        <template #item="{ props, item }">
+                          <v-list-item v-bind="props">
+                            <template #prepend>
+                              <v-icon :icon="item.raw.icon" size="16" />
+                            </template>
+                          </v-list-item>
+                        </template>
+                        <template #selection="{ item }">
+                          <div class="scatter-select__selection">
+                            <v-icon :icon="item.raw.icon" size="16" class="scatter-select__icon" />
+                            <span>{{ item.title }}</span>
+                          </div>
+                        </template>
+                      </v-select>
                     </div>
 
                     <div class="upload-entry__color-row">
@@ -1369,7 +1419,7 @@ function handleUploadAll(): void {
 .material-details-panel {
   border-radius: 5px;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  background-color: rgba(18, 22, 28, 0.72);
+  background-color: rgba(18, 22, 28, 1.0);
   backdrop-filter: blur(14px);
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
 }
@@ -1496,6 +1546,10 @@ function handleUploadAll(): void {
   flex-wrap: wrap;
 }
 
+.upload-entry__scatter-row {
+  display: flex;
+}
+
 .upload-entry__color-input {
   min-width: 120px;
 }
@@ -1515,6 +1569,18 @@ function handleUploadAll(): void {
 .color-picker {
   padding: 12px;
 }
+
+.scatter-select__selection {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.scatter-select__icon {
+  margin-right: 4px;
+
+}
+
 
 .upload-preview-wrapper {
   position: relative;

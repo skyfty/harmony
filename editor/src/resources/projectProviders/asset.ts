@@ -1,3 +1,4 @@
+import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { buildServerApiUrl } from '@/api/serverApiConfig'
@@ -23,12 +24,15 @@ interface AssetManifestEntry {
   createdAt?: string
   updatedAt?: string
   size?: number
+  terrainScatterPreset?: TerrainScatterCategory | null
 }
 
 interface AssetManifest {
   generatedAt: string
   assets: AssetManifestEntry[]
 }
+
+type AssetManifestLoader = () => Promise<AssetManifest>
 
 const TYPE_LABELS: Record<string, string> = {
   model: 'Model',
@@ -71,6 +75,26 @@ async function fetchManifest(): Promise<AssetManifest> {
   return payload
 }
 
+let manifestCache: AssetManifest | null = null
+let manifestPromise: Promise<AssetManifest> | null = null
+
+async function ensureManifest(loader: AssetManifestLoader = fetchManifest): Promise<AssetManifest> {
+  if (manifestCache) {
+    return manifestCache
+  }
+  if (!manifestPromise) {
+    manifestPromise = loader()
+      .then((payload) => {
+        manifestCache = payload
+        return payload
+      })
+      .finally(() => {
+        manifestPromise = null
+      })
+  }
+  return manifestPromise
+}
+
 function mapManifestEntry(entry: AssetManifestEntry): ProjectAsset {
   return mapServerAssetToProjectAsset({
     id: entry.id,
@@ -83,6 +107,7 @@ function mapManifestEntry(entry: AssetManifestEntry): ProjectAsset {
     description: entry.description ?? undefined,
     tags: entry.tags,
     tagIds: entry.tagIds,
+    terrainScatterPreset: entry.terrainScatterPreset ?? null,
   })
 }
 
@@ -110,7 +135,62 @@ export const assetProvider: ResourceProvider = {
   url: null,
   includeInPackages: true,
   async load(): Promise<ProjectDirectory[]> {
-    const manifest = await fetchManifest()
+    const manifest = await ensureManifest()
     return buildDirectories(manifest.assets)
   },
+}
+
+export interface TerrainScatterPreset {
+  label: string
+  icon: string
+  spacing: number
+  minScale: number
+  maxScale: number
+}
+
+export const terrainScatterPresets: Record<TerrainScatterCategory, TerrainScatterPreset> = {
+  flora: {
+    label: 'Flora',
+    icon: 'mdi-flower',
+    spacing: 1.25,
+    minScale: 0.85,
+    maxScale: 1.2,
+  },
+  rocks: {
+    label: 'Rocks',
+    icon: 'mdi-terrain',
+    spacing: 2.2,
+    minScale: 0.9,
+    maxScale: 1.15,
+  },
+  trees: {
+    label: 'Trees',
+    icon: 'mdi-pine-tree',
+    spacing: 3.2,
+    minScale: 0.8,
+    maxScale: 1.35,
+  },
+  water: {
+    label: 'Water',
+    icon: 'mdi-water',
+    spacing: 2.6,
+    minScale: 0.95,
+    maxScale: 1.05,
+  },
+  ground: {
+    label: 'Ground',
+    icon: 'mdi-grass',
+    spacing: 1.4,
+    minScale: 0.9,
+    maxScale: 1.1,
+  },
+}
+
+export function invalidateAssetManifestCache(): void {
+  manifestCache = null
+}
+
+export async function loadScatterAssets(category: TerrainScatterCategory): Promise<ProjectAsset[]> {
+  const manifest = await ensureManifest()
+  return manifest.assets.filter((entry) => entry.terrainScatterPreset === category).map(mapManifestEntry)
 }

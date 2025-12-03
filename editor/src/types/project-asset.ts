@@ -1,4 +1,5 @@
 import type { AssetType } from '@harmony/schema/asset-types'
+import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 
 export type ServerAssetType = AssetType
 
@@ -24,5 +25,6 @@ export interface ProjectAsset {
   imageHeight?: number | null
   seriesId?: string | null
   seriesName?: string | null
+  terrainScatterPreset?: TerrainScatterCategory | null
   gleaned: boolean
 }
