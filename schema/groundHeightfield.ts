@@ -81,7 +81,7 @@ export function buildGroundHeightfieldData(
   const depth = Math.max(MIN_ELEMENT_SIZE, rows * elementSize)
   const halfWidth = Math.max(0, width * 0.5)
   const halfDepth = Math.max(0, depth * 0.5)
-  const offset: [number, number, number] = [-halfWidth, 0, halfDepth]
+  const offset: [number, number, number] = [-halfWidth, -halfDepth, 0]
   const signature = `${columns}|${rows}|${Math.round(rawCellSize * 1000)}|${Math.round(width * 1000)}|${Math.round(depth * 1000)}|${heightHash.toString(16)}`
 
   return {
