@@ -1,4 +1,5 @@
 import { DEFAULT_ASSET_TYPE, isAssetType } from '@harmony/schema/asset-types'
+import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { ProjectAsset, ServerAssetType } from '@/types/project-asset'
 
 export interface ServerAssetTagDto {
@@ -30,6 +31,7 @@ export interface ServerAssetDto {
   imageHeight?: number | null
   seriesId?: string | null
   seriesName?: string | null
+  terrainScatterPreset?: TerrainScatterCategory | null
 }
 
 export const SERVER_ASSET_PREVIEW_COLORS: Record<ProjectAsset['type'], string> = {
@@ -100,6 +102,10 @@ export function mapServerAssetToProjectAsset(asset: ServerAssetDto): ProjectAsse
     imageHeight: typeof asset.imageHeight === 'number' ? asset.imageHeight : undefined,
     seriesId: 'seriesId' in asset ? (typeof asset.seriesId === 'string' ? asset.seriesId : null) : undefined,
     seriesName: typeof asset.seriesName === 'string' ? asset.seriesName : undefined,
+    terrainScatterPreset:
+      'terrainScatterPreset' in asset
+        ? ((asset.terrainScatterPreset as TerrainScatterCategory | null | undefined) ?? null)
+        : undefined,
     gleaned: false,
   }
 }

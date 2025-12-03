@@ -1,8 +1,8 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import type { GroundSculptOperation } from '@harmony/schema'
+import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
-import type { TerrainScatterCategory } from '@/resources/projectProviders/asset'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 
 export type GroundPanelTab = 'terrain' | TerrainScatterCategory

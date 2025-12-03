@@ -1,16 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useTerrainStore } from '@/stores/terrainStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import {
-  assetProvider,
-  loadScatterAssets,
-  terrainScatterPresets,
-  type TerrainScatterCategory,
-} from '@/resources/projectProviders/asset'
+import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
+import { assetProvider, loadScatterAssets, terrainScatterPresets } from '@/resources/projectProviders/asset'
 
 const props = defineProps<{
   category: TerrainScatterCategory
@@ -90,7 +86,7 @@ async function handleAssetClick(asset: ProjectAsset): Promise<void> {
 }
 
 function assetThumbnail(asset: ProjectAsset): string | null {
-  return asset.thumbnail ?? asset.thumbnailUrl ?? asset.previewUrl ?? null
+  return asset.thumbnail ?? null
 }
 
 onMounted(() => {

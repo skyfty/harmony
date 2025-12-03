@@ -10,6 +10,8 @@ export type { AssetCacheEntry, AssetCacheStatus, AssetSource, AssetLoadOptions }
 
 export type { AssetType } from './asset-types'
 export { AssetTypes, DEFAULT_ASSET_TYPE, isAssetType, normalizeAssetType } from './asset-types'
+export { TerrainScatterCategories } from './terrain-scatter'
+export type { TerrainScatterCategory } from './terrain-scatter'
 export type {
   AssetCategory,
   AssetCategoryPathItem,

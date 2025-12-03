@@ -1,13 +1,13 @@
 import { reactive, ref, watch, type Ref } from 'vue'
 import * as THREE from 'three'
 import type { GroundDynamicMesh, GroundSculptOperation, SceneNode } from '@harmony/schema'
+import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import { sculptGround, updateGroundGeometry, updateGroundMesh, sampleGroundHeight } from '@schema/groundMesh'
 import { GROUND_NODE_ID, GROUND_HEIGHT_STEP } from './constants'
 import type { BuildTool } from '@/types/build-tool'
 import type { useSceneStore } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { GroundPanelTab } from '@/stores/terrainStore'
-import type { TerrainScatterCategory } from '@/resources/projectProviders/asset'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 
 export type TerrainBrushShape = 'circle' | 'square' | 'star'
@@ -75,7 +75,6 @@ const scatterPositionHelper = new THREE.Vector3()
 const scatterScaleHelper = new THREE.Vector3()
 const scatterQuaternionHelper = new THREE.Quaternion()
 const scatterEulerHelper = new THREE.Euler()
-const scatterMatrixHelper = new THREE.Matrix4()
 const scatterWorldMatrixHelper = new THREE.Matrix4()
 
 type ScatterSessionState = {

@@ -52,7 +52,8 @@ function commitClampedPatch(patch: Partial<VehicleComponentProps>): void {
       ? !nextValue.every((entry, index) => entry === (previousValue as VehicleVector3Tuple)[index])
       : nextValue !== previousValue
     if (changed) {
-      diff[key] = nextValue as VehicleComponentProps[typeof key]
+      ;(diff as Record<string, VehicleComponentProps[keyof VehicleComponentProps]>)[key as string] =
+        nextValue as VehicleComponentProps[keyof VehicleComponentProps]
     }
   })
   if (Object.keys(diff).length) {

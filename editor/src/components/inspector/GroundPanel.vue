@@ -7,7 +7,8 @@ import type { GroundDynamicMesh, GroundGenerationMode, GroundGenerationSettings,
 import { applyGroundGeneration } from '@schema/groundMesh'
 import TerrainSculptPanel from './TerrainSculptPanel.vue'
 import GroundAssetPainter from './GroundAssetPainter.vue'
-import { terrainScatterPresets, type TerrainScatterCategory } from '@/resources/projectProviders/asset'
+import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
+import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import type { GroundPanelTab } from '@/stores/terrainStore'
 
 const sceneStore = useSceneStore()
@@ -200,7 +201,7 @@ watch(selectedNoiseMode, (mode) => {
           <v-tabs
             v-model="groundPanelTabModel"
             density="compact"
-            direction="vertical"
+            :transition="false"
             class="ground-tabs"
           >
             <v-tab value="terrain" :title="'地形工具'">
@@ -215,7 +216,12 @@ watch(selectedNoiseMode, (mode) => {
               <v-icon :icon="tab.icon" size="16" />
             </v-tab>
           </v-tabs>
-          <v-window v-model="groundPanelTabModel" class="ground-tab-window" touch>
+          <v-window
+            v-model="groundPanelTabModel"
+            class="ground-tab-window"
+            touch
+            :transition="false"
+          >
             <v-window-item value="terrain">
               <TerrainSculptPanel
                 v-model:brush-radius="brushRadius"
@@ -282,6 +288,7 @@ watch(selectedNoiseMode, (mode) => {
 
 .ground-tabs-layout {
   display: flex;
+  flex-direction: column;
   gap: 12px;
 }
 
@@ -297,9 +304,9 @@ watch(selectedNoiseMode, (mode) => {
 }
 
 .v-tab.v-tab.v-btn {
-      width: 20px;
-    height: 40px;
-    min-width: 30px;
+    width: 40px;
+    height: 30px;
+    min-width: 40px;
 }
 
 </style>
