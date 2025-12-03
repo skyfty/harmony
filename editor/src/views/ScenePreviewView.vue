@@ -96,7 +96,6 @@ import type Viewer from 'viewerjs'
 import type { ViewerOptions } from 'viewerjs'
 
 type ControlMode = 'first-person' | 'third-person'
-
 const containerRef = ref<HTMLDivElement | null>(null)
 const statsContainerRef = ref<HTMLDivElement | null>(null)
 const statusMessage = ref('等待场景数据...')
@@ -106,6 +105,7 @@ const volumePercent = ref(100)
 const isFullscreen = ref(false)
 const lastUpdateTime = ref<string | null>(null)
 const warningMessages = ref<string[]>([])
+const isRigidbodyDebugVisible = ref(true)
 
 function appendWarningMessage(message: string): void {
 	const trimmed = typeof message === 'string' ? message.trim() : ''
@@ -620,10 +620,23 @@ const instancedScaleHelper = new THREE.Vector3()
 const physicsPositionHelper = new THREE.Vector3()
 const physicsQuaternionHelper = new THREE.Quaternion()
 const physicsScaleHelper = new THREE.Vector3()
+const rigidbodyDebugPositionHelper = new THREE.Vector3()
+const rigidbodyDebugQuaternionHelper = new THREE.Quaternion()
+const rigidbodyDebugScaleHelper = new THREE.Vector3()
 const nodeObjectMap = new Map<string, THREE.Object3D>()
 type RigidbodyInstance = { nodeId: string; body: CANNON.Body; object: THREE.Object3D | null }
 let physicsWorld: CANNON.World | null = null
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
+type RigidbodyDebugHelper = { group: THREE.Group; signature: string }
+const rigidbodyDebugHelpers = new Map<string, RigidbodyDebugHelper>()
+let rigidbodyDebugGroup: THREE.Group | null = null
+const rigidbodyDebugMaterial = new THREE.LineBasicMaterial({
+	color: 0xffc107,
+	transparent: true,
+	opacity: 0.9,
+})
+rigidbodyDebugMaterial.depthTest = false
+rigidbodyDebugMaterial.depthWrite = false
 type VehicleInstance = {
 	nodeId: string
 	vehicle: CANNON.RaycastVehicle
@@ -1575,6 +1588,16 @@ watch(volumePercent, (value) => {
 		return
 	}
 	listener.setMasterVolume(Math.max(0, Math.min(1, value / 100)))
+})
+
+watch(isRigidbodyDebugVisible, (enabled) => {
+	if (enabled) {
+		ensureRigidbodyDebugGroup()
+		syncRigidbodyDebugHelpers()
+		updateRigidbodyDebugTransforms()
+		return
+	}
+	disposeRigidbodyDebugHelpers()
 })
 
 watch(controlMode, (mode) => {
@@ -3562,6 +3585,7 @@ function startAnimationLoop() {
 		updateVehicleDriveCamera(delta)
 		updateBehaviorProximity()
 		updateLazyPlaceholders(delta)
+		updateRigidbodyDebugTransforms()
 
 		currentRenderer.render(currentScene, activeCamera)
 		fpsStats?.end()
@@ -3593,6 +3617,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	resetBehaviorRuntime()
 	resetBehaviorProximity()
 	resetAnimationControllers()
+	disposeRigidbodyDebugHelpers()
 	hidePurposeControls()
 	activeCameraLookTween = null
 	setCameraCaging(false)
@@ -4308,6 +4333,7 @@ function resetPhysicsWorld(): void {
 	}
 	vehicleInstances.clear()
 	rigidbodyInstances.clear()
+	clearRigidbodyDebugHelpers()
 	physicsWorld = null
 	groundHeightfieldCache.clear()
 }
@@ -4384,6 +4410,37 @@ function resolveGroundHeightfieldShape(
 	return entry
 }
 
+function normalizeHeightfieldMatrix(source: unknown): number[][] | null {
+	if (!Array.isArray(source) || source.length < 2) {
+		return null
+	}
+	let maxRows = 0
+	const normalizedColumns = source.map((column) => {
+		if (!Array.isArray(column)) {
+			return []
+		}
+		const normalized = column.map((value) => (typeof value === 'number' && Number.isFinite(value) ? value : 0))
+		if (normalized.length > maxRows) {
+			maxRows = normalized.length
+		}
+		return normalized
+	})
+	if (normalizedColumns.length < 2 || maxRows < 2) {
+		return null
+	}
+	const paddedColumns = normalizedColumns.map((column) => {
+		if (column.length === maxRows) {
+			return column
+		}
+		const padValue = column.length ? column[column.length - 1]! : 0
+		while (column.length < maxRows) {
+			column.push(padValue)
+		}
+		return column
+	})
+	return paddedColumns as number[][]
+}
+
 function createCannonShape(definition: RigidbodyPhysicsShape): CANNON.Shape | null {
 	if (definition.kind === 'box') {
 		const [x, y, z] = definition.halfExtents
@@ -4399,6 +4456,16 @@ function createCannonShape(definition: RigidbodyPhysicsShape): CANNON.Shape | nu
 			return null
 		}
 		return new CANNON.ConvexPolyhedron({ vertices, faces })
+	}
+	if (definition.kind === 'heightfield') {
+		const matrix = normalizeHeightfieldMatrix(definition.matrix)
+		const elementSize = typeof definition.elementSize === 'number' && Number.isFinite(definition.elementSize)
+			? definition.elementSize
+			: null
+		if (!matrix || !elementSize || elementSize <= 0) {
+			return null
+		}
+		return new CANNON.Heightfield(matrix, { elementSize })
 	}
 	return null
 }
@@ -4508,6 +4575,306 @@ function clampVehicleAxisIndex(value: number): 0 | 1 | 2 {
 function tupleToVec3(tuple: VehicleVector3Tuple): CANNON.Vec3 {
 	const [x = 0, y = 0, z = 0] = tuple
 	return new CANNON.Vec3(x, y, z)
+}
+
+function ensureRigidbodyDebugGroup(): THREE.Group | null {
+	if (!scene) {
+		return null
+	}
+	if (!rigidbodyDebugGroup) {
+		rigidbodyDebugGroup = new THREE.Group()
+		rigidbodyDebugGroup.name = 'RigidbodyDebugHelpers'
+	}
+	if (rigidbodyDebugGroup.parent !== scene) {
+		scene.add(rigidbodyDebugGroup)
+	}
+	return rigidbodyDebugGroup
+}
+
+function buildBoxDebugLines(shape: Extract<RigidbodyPhysicsShape, { kind: 'box' }>): THREE.LineSegments | null {
+	const [hx, hy, hz] = shape.halfExtents
+	if (![hx, hy, hz].every((value) => typeof value === 'number' && Number.isFinite(value) && value > 0)) {
+		return null
+	}
+	const boxGeometry = new THREE.BoxGeometry(hx * 2, hy * 2, hz * 2)
+	const edges = new THREE.EdgesGeometry(boxGeometry)
+	boxGeometry.dispose()
+	const lines = new THREE.LineSegments(edges, rigidbodyDebugMaterial)
+	lines.frustumCulled = false
+	return lines
+}
+
+function buildConvexDebugLines(shape: Extract<RigidbodyPhysicsShape, { kind: 'convex' }>): THREE.LineSegments | null {
+	const vertices = Array.isArray(shape.vertices) ? shape.vertices : []
+	const faces = Array.isArray(shape.faces) ? shape.faces : []
+	if (!vertices.length || !faces.length) {
+		return null
+	}
+	const positions = new Float32Array(vertices.length * 3)
+	vertices.forEach(([vx = 0, vy = 0, vz = 0], index) => {
+		const offset = index * 3
+		positions[offset] = vx
+		positions[offset + 1] = vy
+		positions[offset + 2] = vz
+	})
+	const indices: number[] = []
+	faces.forEach((face) => {
+		if (!Array.isArray(face) || face.length < 3) {
+			return
+		}
+		for (let i = 1; i < face.length - 1; i += 1) {
+			indices.push(face[0], face[i], face[i + 1])
+		}
+	})
+	if (!indices.length) {
+		return null
+	}
+	const baseGeometry = new THREE.BufferGeometry()
+	baseGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+	baseGeometry.setIndex(indices)
+	const edges = new THREE.EdgesGeometry(baseGeometry)
+	baseGeometry.dispose()
+	const lines = new THREE.LineSegments(edges, rigidbodyDebugMaterial)
+	lines.frustumCulled = false
+	return lines
+}
+
+function buildHeightfieldDebugLines(
+	shape: Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }>,
+): THREE.LineSegments | null {
+	if (!Array.isArray(shape.matrix) || shape.matrix.length < 2) {
+		return null
+	}
+	const columnCount = shape.matrix.length
+	let rowCount = 0
+	shape.matrix.forEach((column) => {
+		if (Array.isArray(column) && column.length > rowCount) {
+			rowCount = column.length
+		}
+	})
+	if (rowCount < 2) {
+		return null
+	}
+	const width = typeof shape.width === 'number' && Number.isFinite(shape.width) ? shape.width : 0
+	const depth = typeof shape.depth === 'number' && Number.isFinite(shape.depth) ? shape.depth : 0
+	if (!(width > 0 && depth > 0)) {
+		return null
+	}
+	const stepX = columnCount > 1 ? width / (columnCount - 1) : width
+	const stepZ = rowCount > 1 ? depth / (rowCount - 1) : depth
+	const originX = -width * 0.5
+	const originZ = -depth * 0.5
+	const positions: number[] = []
+	const sampleHeight = (columnIndex: number, rowIndex: number): number => {
+		const column = shape.matrix[columnIndex]
+		if (!Array.isArray(column)) {
+			return 0
+		}
+		const value = column[rowIndex]
+		if (typeof value === 'number' && Number.isFinite(value)) {
+			return value
+		}
+		return 0
+	}
+	const pushSegment = (ax: number, ay: number, az: number, bx: number, by: number, bz: number) => {
+		positions.push(ax, ay, az, bx, by, bz)
+	}
+	for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+		for (let columnIndex = 0; columnIndex < columnCount - 1; columnIndex += 1) {
+			const ax = originX + columnIndex * stepX
+			const az = originZ + rowIndex * stepZ
+			const bx = ax + stepX
+			const bz = az
+			pushSegment(ax, sampleHeight(columnIndex, rowIndex), az, bx, sampleHeight(columnIndex + 1, rowIndex), bz)
+		}
+	}
+	for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+		for (let rowIndex = 0; rowIndex < rowCount - 1; rowIndex += 1) {
+			const ax = originX + columnIndex * stepX
+			const az = originZ + rowIndex * stepZ
+			const bz = az + stepZ
+			pushSegment(ax, sampleHeight(columnIndex, rowIndex), az, ax, sampleHeight(columnIndex, rowIndex + 1), bz)
+		}
+	}
+	if (!positions.length) {
+		return null
+	}
+	const geometry = new THREE.BufferGeometry()
+	geometry.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(positions), 3))
+	const lines = new THREE.LineSegments(geometry, rigidbodyDebugMaterial)
+	lines.frustumCulled = false
+	return lines
+}
+
+function buildRigidbodyDebugLineSegments(shape: RigidbodyPhysicsShape): THREE.LineSegments | null {
+	if (shape.kind === 'box') {
+		return buildBoxDebugLines(shape)
+	}
+	if (shape.kind === 'convex') {
+		return buildConvexDebugLines(shape)
+	}
+	if (shape.kind === 'heightfield') {
+		return buildHeightfieldDebugLines(shape)
+	}
+	return null
+}
+
+function computeRigidbodyShapeSignature(shape: RigidbodyPhysicsShape): string {
+	if (shape.kind === 'heightfield') {
+		const columnCount = Array.isArray(shape.matrix) ? shape.matrix.length : 0
+		let rowCount = 0
+		let hash = 0
+		shape.matrix?.forEach((column) => {
+			if (!Array.isArray(column)) {
+				return
+			}
+			if (column.length > rowCount) {
+				rowCount = column.length
+			}
+			column.forEach((value) => {
+				const normalized = Math.round((typeof value === 'number' && Number.isFinite(value) ? value : 0) * 1000)
+				hash = (hash * 31 + normalized) >>> 0
+			})
+		})
+		const width = typeof shape.width === 'number' && Number.isFinite(shape.width) ? shape.width : 0
+		const depth = typeof shape.depth === 'number' && Number.isFinite(shape.depth) ? shape.depth : 0
+		const elementSize = typeof shape.elementSize === 'number' && Number.isFinite(shape.elementSize)
+			? shape.elementSize
+			: 0
+		return `heightfield:${columnCount}x${rowCount}:${Math.round(width * 1000)}:${Math.round(depth * 1000)}:${Math.round(elementSize * 1000)}:${hash.toString(16)}`
+	}
+	return JSON.stringify(shape)
+}
+
+function removeRigidbodyDebugHelper(nodeId: string): void {
+	const helper = rigidbodyDebugHelpers.get(nodeId)
+	if (!helper) {
+		return
+	}
+	helper.group.parent?.remove(helper.group)
+	helper.group.traverse((child) => {
+		const line = child as THREE.LineSegments
+		if ((line as any).isLineSegments) {
+			line.geometry?.dispose?.()
+		}
+	})
+	helper.group.clear()
+	rigidbodyDebugHelpers.delete(nodeId)
+}
+
+function clearRigidbodyDebugHelpers(): void {
+	rigidbodyDebugHelpers.forEach((_helper, nodeId) => removeRigidbodyDebugHelper(nodeId))
+}
+
+function disposeRigidbodyDebugHelpers(): void {
+	clearRigidbodyDebugHelpers()
+	if (rigidbodyDebugGroup) {
+		rigidbodyDebugGroup.parent?.remove(rigidbodyDebugGroup)
+		rigidbodyDebugGroup.clear()
+		rigidbodyDebugGroup = null
+	}
+}
+
+function ensureRigidbodyDebugHelperForShape(nodeId: string, shape: RigidbodyPhysicsShape): void {
+	const signature = computeRigidbodyShapeSignature(shape)
+	const existing = rigidbodyDebugHelpers.get(nodeId)
+	if (existing?.signature === signature) {
+		return
+	}
+	removeRigidbodyDebugHelper(nodeId)
+	const container = ensureRigidbodyDebugGroup()
+	if (!container) {
+		return
+	}
+	const lineSegments = buildRigidbodyDebugLineSegments(shape)
+	if (!lineSegments) {
+		return
+	}
+	const helperGroup = new THREE.Group()
+	helperGroup.name = `RigidbodyDebugHelper:${nodeId}`
+	lineSegments.name = `RigidbodyDebugLines:${nodeId}`
+	lineSegments.renderOrder = 9999
+	const [ox = 0, oy = 0, oz = 0] = shape.offset ?? [0, 0, 0]
+	lineSegments.position.set(ox, oy, oz)
+	helperGroup.add(lineSegments)
+	helperGroup.visible = false
+	container.add(helperGroup)
+	rigidbodyDebugHelpers.set(nodeId, { group: helperGroup, signature })
+}
+
+function refreshRigidbodyDebugHelper(nodeId: string): void {
+	if (!isRigidbodyDebugVisible.value) {
+		return
+	}
+	const node = resolveNodeById(nodeId)
+	const component = resolveRigidbodyComponent(node)
+	const shapeDefinition = extractRigidbodyShape(component)
+	if (!shapeDefinition) {
+		removeRigidbodyDebugHelper(nodeId)
+		return
+	}
+	ensureRigidbodyDebugHelperForShape(nodeId, shapeDefinition)
+	updateRigidbodyDebugHelperTransform(nodeId)
+}
+
+function updateRigidbodyDebugHelperTransform(nodeId: string): void {
+	if (!isRigidbodyDebugVisible.value) {
+		return
+	}
+	const helper = rigidbodyDebugHelpers.get(nodeId)
+	if (!helper) {
+		return
+	}
+	const rigidbody = rigidbodyInstances.get(nodeId)
+	let visible = true
+	if (rigidbody) {
+		helper.group.position.set(rigidbody.body.position.x, rigidbody.body.position.y, rigidbody.body.position.z)
+		helper.group.quaternion.set(
+			rigidbody.body.quaternion.x,
+			rigidbody.body.quaternion.y,
+			rigidbody.body.quaternion.z,
+			rigidbody.body.quaternion.w,
+		)
+		visible = rigidbody.object?.visible !== false
+	} else {
+		const object = nodeObjectMap.get(nodeId)
+		if (!object) {
+			helper.group.visible = false
+			return
+		}
+		object.updateMatrixWorld(true)
+		object.matrixWorld.decompose(rigidbodyDebugPositionHelper, rigidbodyDebugQuaternionHelper, rigidbodyDebugScaleHelper)
+		helper.group.position.copy(rigidbodyDebugPositionHelper)
+		helper.group.quaternion.copy(rigidbodyDebugQuaternionHelper)
+		visible = object.visible !== false
+	}
+	helper.group.visible = visible
+	helper.group.updateMatrixWorld(true)
+}
+
+function updateRigidbodyDebugTransforms(): void {
+	if (!isRigidbodyDebugVisible.value || !rigidbodyDebugHelpers.size) {
+		return
+	}
+	rigidbodyDebugHelpers.forEach((_entry, nodeId) => updateRigidbodyDebugHelperTransform(nodeId))
+}
+
+function syncRigidbodyDebugHelpers(): void {
+	if (!isRigidbodyDebugVisible.value) {
+		return
+	}
+	const nodes = currentDocument?.nodes ?? []
+	const rigidbodyNodes = collectRigidbodyNodes(nodes)
+	const desiredIds = new Set<string>()
+	rigidbodyNodes.forEach((node) => {
+		desiredIds.add(node.id)
+		refreshRigidbodyDebugHelper(node.id)
+	})
+	rigidbodyDebugHelpers.forEach((_helper, nodeId) => {
+		if (!desiredIds.has(nodeId)) {
+			removeRigidbodyDebugHelper(nodeId)
+		}
+	})
 }
 
 function buildVehicleConnectionPoint(
@@ -4677,6 +5044,7 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
 		existing.object = object
 		syncBodyFromObject(existing.body, object)
 		ensureVehicleBindingForNode(nodeId)
+		refreshRigidbodyDebugHelper(nodeId)
 		return
 	}
 	const body = createRigidbodyBody(node, component, shapeDefinition, object)
@@ -4685,6 +5053,7 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
 	}
 	physicsWorld.addBody(body)
 	rigidbodyInstances.set(nodeId, { nodeId, body, object })
+	refreshRigidbodyDebugHelper(nodeId)
 	ensureVehicleBindingForNode(nodeId)
 }
 
@@ -4765,11 +5134,13 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 		}
 		world.addBody(body)
 		rigidbodyInstances.set(node.id, { nodeId: node.id, body, object })
+		refreshRigidbodyDebugHelper(node.id)
 	})
 	rigidbodyInstances.forEach((entry, nodeId) => {
 		if (!desiredIds.has(nodeId)) {
 			world.removeBody(entry.body)
 			rigidbodyInstances.delete(nodeId)
+			removeRigidbodyDebugHelper(nodeId)
 		}
 	})
 	groundHeightfieldCache.forEach((_entry, nodeId) => {
@@ -5350,6 +5721,9 @@ async function updateScene(document: SceneJsonExportDocument) {
 		refreshAnimations()
 		initializeLazyPlaceholders(document)
 		syncPhysicsBodiesForDocument(document)
+		if (isRigidbodyDebugVisible.value) {
+			syncRigidbodyDebugHelpers()
+		}
 		void applyEnvironmentSettingsToScene(environmentSettings)
 		return
 	}
@@ -5364,6 +5738,9 @@ async function updateScene(document: SceneJsonExportDocument) {
 	}
 
 	syncPhysicsBodiesForDocument(document)
+	if (isRigidbodyDebugVisible.value) {
+		syncRigidbodyDebugHelpers()
+	}
 
 	currentDocument = document
 	refreshAnimations()
@@ -5403,6 +5780,10 @@ function applySnapshot(snapshot: ScenePreviewSnapshot) {
 
 function togglePlayback() {
 	isPlaying.value = !isPlaying.value
+}
+
+function toggleRigidbodyDebugOverlay(): void {
+	isRigidbodyDebugVisible.value = !isRigidbodyDebugVisible.value
 }
 
 function toggleFullscreen() {
@@ -5828,6 +6209,16 @@ onBeforeUnmount(() => {
 					:aria-label="'截图 (快捷键 P)'"
 					:title="'截图 (快捷键 P)'"
 					@click="captureScreenshot"
+				/>
+				<v-btn
+					class="scene-preview__control-button"
+					:icon="isRigidbodyDebugVisible ? 'mdi-cube-scan' : 'mdi-cube-outline'"
+					variant="tonal"
+					:color="isRigidbodyDebugVisible ? 'warning' : 'secondary'"
+					size="small"
+					:aria-label="isRigidbodyDebugVisible ? '隐藏刚体线框' : '显示刚体线框'"
+					:title="isRigidbodyDebugVisible ? '隐藏刚体线框' : '显示刚体线框'"
+					@click="toggleRigidbodyDebugOverlay"
 				/>
 				<v-btn
 					class="scene-preview__control-button"

@@ -24,6 +24,14 @@ export type RigidbodyPhysicsShape =
       faces: number[][]
       offset?: RigidbodyVector3Tuple
     }
+  | {
+      kind: 'heightfield'
+      matrix: number[][]
+      elementSize: number
+      width: number
+      depth: number
+      offset?: RigidbodyVector3Tuple
+    }
 
 export const RIGIDBODY_METADATA_KEY = '__harmonyRigidbody'
 

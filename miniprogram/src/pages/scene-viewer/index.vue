@@ -2354,6 +2354,37 @@ function resolveGroundHeightfieldShape(
   return entry;
 }
 
+function normalizeHeightfieldMatrix(source: unknown): number[][] | null {
+  if (!Array.isArray(source) || source.length < 2) {
+    return null;
+  }
+  let maxRows = 0;
+  const normalizedColumns = source.map((column) => {
+    if (!Array.isArray(column)) {
+      return [];
+    }
+    const normalized = column.map((value) => (typeof value === 'number' && Number.isFinite(value) ? value : 0));
+    if (normalized.length > maxRows) {
+      maxRows = normalized.length;
+    }
+    return normalized;
+  });
+  if (normalizedColumns.length < 2 || maxRows < 2) {
+    return null;
+  }
+  const paddedColumns = normalizedColumns.map((column) => {
+    if (column.length === maxRows) {
+      return column;
+    }
+    const padValue = column.length ? column[column.length - 1]! : 0;
+    while (column.length < maxRows) {
+      column.push(padValue);
+    }
+    return column;
+  });
+  return paddedColumns as number[][];
+}
+
 function createCannonShape(definition: RigidbodyPhysicsShape): CANNON.Shape | null {
   if (definition.kind === 'box') {
     const [x, y, z] = definition.halfExtents;
@@ -2369,6 +2400,16 @@ function createCannonShape(definition: RigidbodyPhysicsShape): CANNON.Shape | nu
       return null;
     }
     return new CANNON.ConvexPolyhedron({ vertices, faces });
+  }
+  if (definition.kind === 'heightfield') {
+    const matrix = normalizeHeightfieldMatrix(definition.matrix);
+    const elementSize = typeof definition.elementSize === 'number' && Number.isFinite(definition.elementSize)
+      ? definition.elementSize
+      : null;
+    if (!matrix || !elementSize || elementSize <= 0) {
+      return null;
+    }
+    return new CANNON.Heightfield(matrix, { elementSize });
   }
   return null;
 }
