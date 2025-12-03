@@ -17,6 +17,10 @@
     "./asset-api": {
       "types": "./asset-api.d.ts",
       "default": "./asset-api.js"
+    },
+    "./terrain-scatter": {
+      "types": "./terrain-scatter.d.ts",
+      "default": "./terrain-scatter.js"
     }
   }
 }

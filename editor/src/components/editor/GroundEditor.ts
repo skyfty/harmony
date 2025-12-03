@@ -1,10 +1,14 @@
 import { reactive, ref, watch, type Ref } from 'vue'
 import * as THREE from 'three'
 import type { GroundDynamicMesh, GroundSculptOperation, SceneNode } from '@harmony/schema'
+import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import { sculptGround, updateGroundGeometry, updateGroundMesh, sampleGroundHeight } from '@schema/groundMesh'
 import { GROUND_NODE_ID, GROUND_HEIGHT_STEP } from './constants'
 import type { BuildTool } from '@/types/build-tool'
 import type { useSceneStore } from '@/stores/sceneStore'
+import type { ProjectAsset } from '@/types/project-asset'
+import type { GroundPanelTab } from '@/stores/terrainStore'
+import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 
 export type TerrainBrushShape = 'circle' | 'square' | 'star'
 
@@ -42,6 +46,9 @@ export type GroundEditorOptions = {
 	brushStrength: Ref<number>
 	brushShape: Ref<TerrainBrushShape | undefined>
 	brushOperation: Ref<GroundSculptOperation>
+	groundPanelTab: Ref<GroundPanelTab>
+	scatterCategory: Ref<TerrainScatterCategory>
+	scatterAsset: Ref<ProjectAsset | null>
 	activeBuildTool: Ref<BuildTool | null>
 	disableOrbitForGroundSelection: () => void
 	restoreOrbitAfterGroundSelection: () => void
@@ -61,6 +68,29 @@ const brushResultVertexHelper = new THREE.Vector3()
 const groundSelectionCenterHelper = new THREE.Vector3()
 const groundSelectionScreenHelper = new THREE.Vector3()
 const groundPointerHelper = new THREE.Vector3()
+const scatterPointerHelper = new THREE.Vector3()
+const scatterDirectionHelper = new THREE.Vector3()
+const scatterPlacementHelper = new THREE.Vector3()
+const scatterPositionHelper = new THREE.Vector3()
+const scatterScaleHelper = new THREE.Vector3()
+const scatterQuaternionHelper = new THREE.Quaternion()
+const scatterEulerHelper = new THREE.Euler()
+const scatterWorldMatrixHelper = new THREE.Matrix4()
+
+type ScatterSessionState = {
+	pointerId: number
+	asset: ProjectAsset
+	category: TerrainScatterCategory
+	definition: GroundDynamicMesh
+	groundMesh: THREE.Mesh
+	spacing: number
+	minScale: number
+	maxScale: number
+	occupiedPositions: THREE.Vector3[]
+	lastPoint: THREE.Vector3 | null
+}
+
+let scatterSession: ScatterSessionState | null = null
 
 function createPolygonRingGeometry(points: THREE.Vector2[], innerScale = 0.8): THREE.BufferGeometry {
 	if (!points.length) {
@@ -199,6 +229,18 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		updateBrushGeometry(shape ?? 'circle')
 	})
 
+	const stopTabWatch = watch(options.groundPanelTab, (tab) => {
+		if (tab === 'terrain') {
+			cancelScatterPlacement()
+		}
+	})
+
+	const stopScatterAssetWatch = watch(options.scatterAsset, (asset) => {
+		if (!asset) {
+			cancelScatterPlacement()
+		}
+	})
+
 	function updateBrushGeometry(shape: TerrainBrushShape) {
 		const nextGeometry = tagBrushGeometry(createBrushGeometry(shape))
 		const previousGeometry = brushMesh.geometry
@@ -334,6 +376,220 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const column = THREE.MathUtils.clamp(Math.floor(normalizedColumn), 0, Math.max(0, definition.columns - 1))
 		const row = THREE.MathUtils.clamp(Math.floor(normalizedRow), 0, Math.max(0, definition.rows - 1))
 		return { row, column }
+	}
+
+	function scatterModeEnabled(): boolean {
+		if (options.groundPanelTab.value === 'terrain') {
+			return false
+		}
+		if (!options.scatterAsset.value) {
+			return false
+		}
+		const selectedNode = options.sceneStore.selectedNode
+		return selectedNode?.dynamicMesh?.type === 'Ground'
+	}
+
+	function getScatterPreset(category: TerrainScatterCategory) {
+		return terrainScatterPresets[category] ?? {
+			label: 'Scatter',
+			icon: 'mdi-cube-outline',
+			path: '',
+			spacing: 1.2,
+			minScale: 0.9,
+			maxScale: 1.1,
+		}
+	}
+
+	function composeNodeMatrix(node: SceneNode, target: THREE.Matrix4): THREE.Matrix4 {
+		scatterPositionHelper.set(node.position?.x ?? 0, node.position?.y ?? 0, node.position?.z ?? 0)
+		scatterScaleHelper.set(node.scale?.x ?? 1, node.scale?.y ?? 1, node.scale?.z ?? 1)
+		scatterEulerHelper.set(node.rotation?.x ?? 0, node.rotation?.y ?? 0, node.rotation?.z ?? 0, 'XYZ')
+		scatterQuaternionHelper.setFromEuler(scatterEulerHelper)
+		return target.compose(scatterPositionHelper.clone(), scatterQuaternionHelper.clone(), scatterScaleHelper.clone())
+	}
+
+	function collectExistingScatterPositions(assetId: string): THREE.Vector3[] {
+		const result: THREE.Vector3[] = []
+		const traverse = (nodes: SceneNode[], parentMatrix: THREE.Matrix4 | null) => {
+			nodes.forEach((node) => {
+				const localMatrix = composeNodeMatrix(node, new THREE.Matrix4())
+				const worldMatrix = parentMatrix ? scatterWorldMatrixHelper.copy(parentMatrix).multiply(localMatrix) : localMatrix
+				if (node.sourceAssetId === assetId) {
+					const position = new THREE.Vector3()
+					position.setFromMatrixPosition(worldMatrix)
+					result.push(position)
+				}
+				if (node.children?.length) {
+					traverse(node.children, worldMatrix)
+				}
+			})
+		}
+		traverse(options.sceneStore.nodes, null)
+		return result
+	}
+
+	function isScatterPlacementAvailable(point: THREE.Vector3, spacing: number, occupied: THREE.Vector3[]): boolean {
+		const threshold = spacing * spacing
+		return occupied.every((existing) => existing.distanceToSquared(point) >= threshold)
+	}
+
+	function projectScatterPoint(worldPoint: THREE.Vector3): THREE.Vector3 | null {
+		if (!scatterSession) {
+			return null
+		}
+		const { groundMesh, definition } = scatterSession
+		const localPoint = worldPoint.clone()
+		groundMesh.worldToLocal(localPoint)
+		const height = sampleGroundHeight(definition, localPoint.x, localPoint.z)
+		localPoint.y = height
+		groundMesh.localToWorld(localPoint)
+		return localPoint
+	}
+
+	function spawnScatterNode(worldPoint: THREE.Vector3) {
+		if (!scatterSession) {
+			return
+		}
+		const rotation = new THREE.Vector3(0, Math.random() * Math.PI * 2, 0)
+		const scaleFactor = THREE.MathUtils.lerp(scatterSession.minScale, scatterSession.maxScale, Math.random())
+		const scale = new THREE.Vector3(scaleFactor, scaleFactor, scaleFactor)
+		void options.sceneStore
+			.addModelNode({
+				asset: scatterSession.asset,
+				position: worldPoint.clone(),
+				rotation,
+				scale,
+				parentId: GROUND_NODE_ID,
+				snapToGrid: false,
+			})
+			.catch((error) => {
+				console.warn('Failed to add scatter object', error)
+			})
+	}
+
+	function applyScatterPlacement(worldPoint: THREE.Vector3) {
+		if (!scatterSession) {
+			return
+		}
+		const projected = projectScatterPoint(worldPoint)
+		if (!projected) {
+			return
+		}
+		if (!isScatterPlacementAvailable(projected, scatterSession.spacing, scatterSession.occupiedPositions)) {
+			return
+		}
+		scatterSession.occupiedPositions.push(projected.clone())
+		spawnScatterNode(projected)
+	}
+
+	function traceScatterPath(targetPoint: THREE.Vector3) {
+		if (!scatterSession) {
+			return
+		}
+		if (!scatterSession.lastPoint) {
+			scatterSession.lastPoint = targetPoint.clone()
+			applyScatterPlacement(targetPoint)
+			return
+		}
+		scatterDirectionHelper.copy(targetPoint).sub(scatterSession.lastPoint)
+		const distance = scatterDirectionHelper.length()
+		if (distance < scatterSession.spacing * 0.35) {
+			return
+		}
+		scatterDirectionHelper.normalize()
+		const steps = Math.floor(distance / scatterSession.spacing)
+		for (let index = 1; index <= steps; index += 1) {
+			scatterPlacementHelper
+				.copy(scatterSession.lastPoint)
+				.addScaledVector(scatterDirectionHelper, scatterSession.spacing * index)
+			applyScatterPlacement(scatterPlacementHelper)
+			scatterSession.lastPoint = scatterPlacementHelper.clone()
+		}
+		const remainder = distance - steps * scatterSession.spacing
+		if (remainder >= scatterSession.spacing * 0.4) {
+			scatterSession.lastPoint = targetPoint.clone()
+			applyScatterPlacement(targetPoint)
+		}
+	}
+
+	function beginScatterPlacement(event: PointerEvent): boolean {
+		if (!scatterModeEnabled() || event.button !== 1) {
+			return false
+		}
+		const asset = options.scatterAsset.value
+		if (!asset) {
+			return false
+		}
+		const definition = getGroundDynamicMeshDefinition()
+		const groundMesh = getGroundMeshObject()
+		if (!definition || !groundMesh) {
+			return false
+		}
+		if (!raycastGroundPoint(event, scatterPointerHelper)) {
+			return false
+		}
+		clampPointToGround(definition, scatterPointerHelper)
+		const category = options.scatterCategory.value
+		const preset = getScatterPreset(category)
+		scatterSession = {
+			pointerId: event.pointerId,
+			asset,
+			category,
+			definition,
+			groundMesh,
+			spacing: preset.spacing,
+			minScale: preset.minScale,
+			maxScale: preset.maxScale,
+			occupiedPositions: collectExistingScatterPositions(asset.id),
+			lastPoint: null,
+		}
+		traceScatterPath(scatterPointerHelper.clone())
+		try {
+			options.canvasRef.value?.setPointerCapture(event.pointerId)
+		} catch (_error) {
+			/* noop */
+		}
+		event.preventDefault()
+		event.stopPropagation()
+		event.stopImmediatePropagation()
+		return true
+	}
+
+	function updateScatterPlacement(event: PointerEvent): boolean {
+		if (!scatterSession || event.pointerId !== scatterSession.pointerId) {
+			return false
+		}
+		if (!raycastGroundPoint(event, scatterPointerHelper)) {
+			return false
+		}
+		clampPointToGround(scatterSession.definition, scatterPointerHelper)
+		traceScatterPath(scatterPointerHelper.clone())
+		event.preventDefault()
+		event.stopPropagation()
+		event.stopImmediatePropagation()
+		return true
+	}
+
+	function finalizeScatterPlacement(event: PointerEvent): boolean {
+		if (!scatterSession || event.pointerId !== scatterSession.pointerId) {
+			return false
+		}
+		if (options.canvasRef.value && options.canvasRef.value.hasPointerCapture(event.pointerId)) {
+			options.canvasRef.value.releasePointerCapture(event.pointerId)
+		}
+		scatterSession = null
+		return true
+	}
+
+	function cancelScatterPlacement(): boolean {
+		if (!scatterSession) {
+			return false
+		}
+		if (options.canvasRef.value && options.canvasRef.value.hasPointerCapture(scatterSession.pointerId)) {
+			options.canvasRef.value.releasePointerCapture(scatterSession.pointerId)
+		}
+		scatterSession = null
+		return true
 	}
 
 	function getGroundVertexHeight(definition: GroundDynamicMesh, row: number, column: number): number {
@@ -608,6 +864,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function beginSculpt(event: PointerEvent): boolean {
+		if (options.groundPanelTab.value !== 'terrain') {
+			return false
+		}
 		const groundNode = options.sceneStore.selectedNode
 		if (groundNode?.dynamicMesh?.type !== 'Ground' || event.button !== 1) {
 			return false
@@ -734,6 +993,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 
+		if (beginScatterPlacement(event)) {
+			return true
+		}
+
 		if (beginSculpt(event)) {
 			return true
 		}
@@ -743,7 +1006,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function handlePointerMove(event: PointerEvent): boolean {
 		const selectedNodeIsGround = options.sceneStore.selectedNode?.dynamicMesh?.type === 'Ground'
-		if (selectedNodeIsGround) {
+		if (selectedNodeIsGround && options.groundPanelTab.value === 'terrain') {
 			updateBrush(event)
 			if (isSculpting.value) {
 				performSculpt(event)
@@ -754,6 +1017,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		if (options.isAltOverrideActive()) {
 			return false
+		}
+
+		if (updateScatterPlacement(event)) {
+			return true
 		}
 
 		if (groundSelectionDragState && event.pointerId === groundSelectionDragState.pointerId) {
@@ -777,6 +1044,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function handlePointerUp(event: PointerEvent): boolean {
+		if (finalizeScatterPlacement(event)) {
+			return true
+		}
+		if (finalizeScatterPlacement(event)) {
+			return true
+		}
 		if (finalizeSculpt(event)) {
 			return true
 		}
@@ -942,6 +1215,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function dispose() {
 		stopBrushWatch()
+		stopTabWatch()
+		stopScatterAssetWatch()
 		brushMesh.geometry.dispose()
 		const material = brushMesh.material as THREE.Material
 		material.dispose()

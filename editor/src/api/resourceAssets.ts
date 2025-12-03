@@ -1,4 +1,5 @@
 import { buildServerApiUrl } from './serverApiConfig'
+import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ResourceCategory } from '@/types/resource-category'
 import type { AssetSeries } from '@/types/asset-series'
@@ -395,6 +396,7 @@ export interface UploadAssetOptions {
   imageWidth?: number | null
   imageHeight?: number | null
   seriesId?: string | null
+  terrainScatterPreset?: TerrainScatterCategory | null
 }
 
 export async function uploadAssetToServer(options: UploadAssetOptions): Promise<ServerAssetDto> {
@@ -433,6 +435,9 @@ export async function uploadAssetToServer(options: UploadAssetOptions): Promise<
   }
   if (typeof options.seriesId === 'string' && options.seriesId.trim().length) {
     formData.append('seriesId', options.seriesId.trim())
+  }
+  if (typeof options.terrainScatterPreset === 'string' && options.terrainScatterPreset.trim().length) {
+    formData.append('terrainScatterPreset', options.terrainScatterPreset.trim())
   }
   if (Array.isArray(options.categoryPathSegments)) {
     options.categoryPathSegments

@@ -1,4 +1,5 @@
 import { AssetTypes } from '@harmony/schema/asset-types'
+import { TerrainScatterCategories } from '@harmony/schema/terrain-scatter'
 import { Schema, model } from 'mongoose'
 import type { AssetDocument } from '@/types/models'
 
@@ -32,6 +33,7 @@ const assetSchema = new Schema<AssetDocument>(
     originalFilename: { type: String },
     mimeType: { type: String },
     metadata: { type: Schema.Types.Mixed },
+    terrainScatterPreset: { type: String, enum: TerrainScatterCategories, default: null },
   },
   {
     timestamps: true,
@@ -43,5 +45,6 @@ assetSchema.index({ categoryId: 1, createdAt: -1 })
 assetSchema.index({ type: 1, createdAt: -1 })
 assetSchema.index({ tags: 1 })
 assetSchema.index({ seriesId: 1 })
+assetSchema.index({ terrainScatterPreset: 1 })
 
 export const AssetModel = model<AssetDocument>('Asset', assetSchema)

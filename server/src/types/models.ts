@@ -1,4 +1,5 @@
 import type { AssetType as SchemaAssetType } from '@harmony/schema/asset-types'
+import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { Document, Types } from 'mongoose'
 
 export interface PermissionDocument extends Document<Types.ObjectId> {
@@ -65,6 +66,7 @@ export interface WorkDocument extends Document<Types.ObjectId> {
   commentCount: number
   shareCount: number
   metadata?: Record<string, unknown>
+  terrainScatterPreset?: TerrainScatterCategory | null
   createdAt: Date
   updatedAt: Date
 }
