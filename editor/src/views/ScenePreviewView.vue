@@ -636,11 +636,24 @@ const instancedScaleHelper = new THREE.Vector3()
 const physicsPositionHelper = new THREE.Vector3()
 const physicsQuaternionHelper = new THREE.Quaternion()
 const physicsScaleHelper = new THREE.Vector3()
+const syncBodyQuaternionHelper = new THREE.Quaternion()
+const bodyQuaternionHelper = new THREE.Quaternion()
 const rigidbodyDebugPositionHelper = new THREE.Vector3()
 const rigidbodyDebugQuaternionHelper = new THREE.Quaternion()
 const rigidbodyDebugScaleHelper = new THREE.Vector3()
 const nodeObjectMap = new Map<string, THREE.Object3D>()
-type RigidbodyInstance = { nodeId: string; body: CANNON.Body; object: THREE.Object3D | null }
+type RigidbodyOrientationAdjustment = {
+	cannon: CANNON.Quaternion
+	cannonInverse: CANNON.Quaternion
+	three: THREE.Quaternion
+	threeInverse: THREE.Quaternion
+}
+type RigidbodyInstance = {
+	nodeId: string
+	body: CANNON.Body
+	object: THREE.Object3D | null
+	orientationAdjustment: RigidbodyOrientationAdjustment | null
+}
 let physicsWorld: CANNON.World | null = null
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
 type RigidbodyDebugHelper = { group: THREE.Group; signature: string }
@@ -673,6 +686,20 @@ type GroundHeightfieldCacheEntry = { signature: string; shape: CANNON.Heightfiel
 const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>()
 const groundHeightfieldOrientation = new CANNON.Quaternion()
 groundHeightfieldOrientation.setFromEuler(-Math.PI / 2, 0, 0)
+const groundHeightfieldOrientationInverse = new CANNON.Quaternion(
+	-groundHeightfieldOrientation.x,
+	-groundHeightfieldOrientation.y,
+	-groundHeightfieldOrientation.z,
+	groundHeightfieldOrientation.w,
+)
+const groundHeightfieldOrientationThree = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0))
+const groundHeightfieldOrientationThreeInverse = groundHeightfieldOrientationThree.clone().invert()
+const groundHeightfieldOrientationAdjustment: RigidbodyOrientationAdjustment = {
+	cannon: groundHeightfieldOrientation,
+	cannonInverse: groundHeightfieldOrientationInverse,
+	three: groundHeightfieldOrientationThree,
+	threeInverse: groundHeightfieldOrientationThreeInverse,
+}
 const heightfieldShapeOffsetHelper = new CANNON.Vec3()
 const physicsGravity = new CANNON.Vec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0)
 let physicsContactRestitution = DEFAULT_ENVIRONMENT_RESTITUTION
@@ -4682,37 +4709,50 @@ function mapBodyType(type: RigidbodyComponentProps['bodyType']): CANNON.Body['ty
 	}
 }
 
-function syncBodyFromObject(body: CANNON.Body, object: THREE.Object3D): void {
+function syncBodyFromObject(
+	body: CANNON.Body,
+	object: THREE.Object3D,
+	orientationAdjustment: RigidbodyOrientationAdjustment | null = null,
+): void {
 	object.updateMatrixWorld(true)
 	object.matrixWorld.decompose(physicsPositionHelper, physicsQuaternionHelper, physicsScaleHelper)
+	syncBodyQuaternionHelper.copy(physicsQuaternionHelper)
+	if (orientationAdjustment) {
+		syncBodyQuaternionHelper.multiply(orientationAdjustment.three)
+	}
 	body.position.set(physicsPositionHelper.x, physicsPositionHelper.y, physicsPositionHelper.z)
 	body.quaternion.set(
-		physicsQuaternionHelper.x,
-		physicsQuaternionHelper.y,
-		physicsQuaternionHelper.z,
-		physicsQuaternionHelper.w,
+		syncBodyQuaternionHelper.x,
+		syncBodyQuaternionHelper.y,
+		syncBodyQuaternionHelper.z,
+		syncBodyQuaternionHelper.w,
 	)
 	body.velocity.set(0, 0, 0)
 	body.angularVelocity.set(0, 0, 0)
 }
 
 function syncObjectFromBody(entry: RigidbodyInstance): void {
-	const { object, body } = entry
+	const { object, body, orientationAdjustment } = entry
 	if (!object) {
 		return
 	}
 	object.position.set(body.position.x, body.position.y, body.position.z)
-	object.quaternion.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w)
+	bodyQuaternionHelper.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w)
+	if (orientationAdjustment) {
+		bodyQuaternionHelper.multiply(orientationAdjustment.threeInverse)
+	}
+	object.quaternion.copy(bodyQuaternionHelper)
 	object.updateMatrixWorld()
 	syncInstancedTransform(object)
 }
+
 
 function createRigidbodyBody(
 	node: SceneNode,
 	component: SceneNodeComponentState<RigidbodyComponentProps>,
 	shapeDefinition: RigidbodyPhysicsShape | null,
 	object: THREE.Object3D,
-): CANNON.Body | null {
+): { body: CANNON.Body; orientationAdjustment: RigidbodyOrientationAdjustment | null } | null {
 	let offsetTuple: RigidbodyVector3Tuple | null = null
 	let resolvedShape: CANNON.Shape | null = null
 	let needsHeightfieldOrientation = false
@@ -4739,19 +4779,22 @@ function createRigidbodyBody(
 	const mass = isDynamic ? Math.max(0, props.mass ?? 0) : 0
 	const body = new CANNON.Body({ mass })
 	body.type = mapBodyType(props.bodyType)
-	body.material = ensureRigidbodyMaterial(props.friction ?? DEFAULT_RIGIDBODY_FRICTION, props.restitution ?? DEFAULT_RIGIDBODY_RESTITUTION)
+	body.material = ensureRigidbodyMaterial(
+		props.friction ?? DEFAULT_RIGIDBODY_FRICTION,
+		props.restitution ?? DEFAULT_RIGIDBODY_RESTITUTION,
+	)
 	let shapeOffset: CANNON.Vec3 | undefined
 	if (offsetTuple) {
 		const [ox, oy, oz] = offsetTuple
 		shapeOffset = heightfieldShapeOffsetHelper.set(ox ?? 0, oy ?? 0, oz ?? 0)
 	}
-	const shapeOrientation = needsHeightfieldOrientation ? groundHeightfieldOrientation : undefined
-	body.addShape(resolvedShape, shapeOffset, shapeOrientation)
-	syncBodyFromObject(body, object)
+	const orientationAdjustment = needsHeightfieldOrientation ? groundHeightfieldOrientationAdjustment : null
+	body.addShape(resolvedShape, shapeOffset)
+	syncBodyFromObject(body, object, orientationAdjustment)
 	body.updateMassProperties()
 	body.linearDamping = props.linearDamping ?? DEFAULT_LINEAR_DAMPING
 	body.angularDamping = props.angularDamping ?? DEFAULT_ANGULAR_DAMPING
-	return body
+	return { body, orientationAdjustment }
 }
 
 function removeRigidbodyInstance(nodeId: string): void {
@@ -5045,12 +5088,16 @@ function updateRigidbodyDebugHelperTransform(nodeId: string): void {
 	let visible = true
 	if (rigidbody) {
 		helper.group.position.set(rigidbody.body.position.x, rigidbody.body.position.y, rigidbody.body.position.z)
-		helper.group.quaternion.set(
+		rigidbodyDebugQuaternionHelper.set(
 			rigidbody.body.quaternion.x,
 			rigidbody.body.quaternion.y,
 			rigidbody.body.quaternion.z,
 			rigidbody.body.quaternion.w,
 		)
+		if (rigidbody.orientationAdjustment) {
+			rigidbodyDebugQuaternionHelper.multiply(rigidbody.orientationAdjustment.threeInverse)
+		}
+		helper.group.quaternion.copy(rigidbodyDebugQuaternionHelper)
 		visible = rigidbody.object?.visible !== false
 	} else {
 		const object = nodeObjectMap.get(nodeId)
@@ -5258,17 +5305,22 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
 	const existing = rigidbodyInstances.get(nodeId)
 	if (existing) {
 		existing.object = object
-		syncBodyFromObject(existing.body, object)
+		syncBodyFromObject(existing.body, object, existing.orientationAdjustment)
 		ensureVehicleBindingForNode(nodeId)
 		refreshRigidbodyDebugHelper(nodeId)
 		return
 	}
-	const body = createRigidbodyBody(node, component, shapeDefinition, object)
-	if (!body) {
+	const bodyEntry = createRigidbodyBody(node, component, shapeDefinition, object)
+	if (!bodyEntry) {
 		return
 	}
-	physicsWorld.addBody(body)
-	rigidbodyInstances.set(nodeId, { nodeId, body, object })
+	physicsWorld.addBody(bodyEntry.body)
+	rigidbodyInstances.set(nodeId, {
+		nodeId,
+		body: bodyEntry.body,
+		object,
+		orientationAdjustment: bodyEntry.orientationAdjustment,
+	})
 	refreshRigidbodyDebugHelper(nodeId)
 	ensureVehicleBindingForNode(nodeId)
 }
@@ -5344,12 +5396,17 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 			world.removeBody(existing.body)
 			rigidbodyInstances.delete(node.id)
 		}
-		const body = createRigidbodyBody(node, component, shapeDefinition, object)
-		if (!body) {
+		const bodyEntry = createRigidbodyBody(node, component, shapeDefinition, object)
+		if (!bodyEntry) {
 			return
 		}
-		world.addBody(body)
-		rigidbodyInstances.set(node.id, { nodeId: node.id, body, object })
+		world.addBody(bodyEntry.body)
+		rigidbodyInstances.set(node.id, {
+			nodeId: node.id,
+			body: bodyEntry.body,
+			object,
+			orientationAdjustment: bodyEntry.orientationAdjustment,
+		})
 		refreshRigidbodyDebugHelper(node.id)
 	})
 	rigidbodyInstances.forEach((entry, nodeId) => {
