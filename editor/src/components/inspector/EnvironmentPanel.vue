@@ -275,6 +275,63 @@ function formatFogDensity(): string {
   return environmentSettings.value.fogDensity.toFixed(3)
 }
 
+function handleGravityStrengthInput(value: unknown) {
+  if (value === '' || value === null || value === undefined) {
+    return
+  }
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  const clamped = Math.max(0, Math.min(100, numeric))
+  if (Math.abs(clamped - environmentSettings.value.gravityStrength) < 1e-3) {
+    return
+  }
+  sceneStore.patchEnvironmentSettings({ gravityStrength: clamped })
+}
+
+function formatGravityStrength(): string {
+  return environmentSettings.value.gravityStrength.toFixed(2)
+}
+
+function handleRestitutionInput(value: unknown) {
+  if (value === '' || value === null || value === undefined) {
+    return
+  }
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  const clamped = Math.max(0, Math.min(1, numeric))
+  if (Math.abs(clamped - environmentSettings.value.collisionRestitution) < 1e-3) {
+    return
+  }
+  sceneStore.patchEnvironmentSettings({ collisionRestitution: clamped })
+}
+
+function formatRestitution(): string {
+  return environmentSettings.value.collisionRestitution.toFixed(2)
+}
+
+function handleFrictionInput(value: unknown) {
+  if (value === '' || value === null || value === undefined) {
+    return
+  }
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  const clamped = Math.max(0, Math.min(1, numeric))
+  if (Math.abs(clamped - environmentSettings.value.collisionFriction) < 1e-3) {
+    return
+  }
+  sceneStore.patchEnvironmentSettings({ collisionFriction: clamped })
+}
+
+function formatFriction(): string {
+  return environmentSettings.value.collisionFriction.toFixed(2)
+}
+
 function resolveAssetPreviewStyle(asset: ProjectAsset | null): Record<string, string> {
   const fallback = 'rgba(233, 236, 241, 0.08)'
   if (!asset) {
@@ -857,6 +914,58 @@ function handleEnvironmentDrop(event: DragEvent) {
               :model-value="formatFogDensity()"
               :disabled="!isFogEnabled"
               @update:model-value="handleFogDensityInput"
+            />
+          </div>
+        </section>
+
+        <section class="environment-section">
+          <div class="section-title">Physics</div>
+          <div class="slider-row">
+            <v-text-field
+              class="slider-input"
+              label="Gravity Strength (m/s^2)"
+              density="compact"
+              variant="underlined"
+              hide-details
+              type="number"
+              inputmode="decimal"
+              :min="0"
+              :max="100"
+              :step="0.1"
+              :model-value="formatGravityStrength()"
+              @update:model-value="handleGravityStrengthInput"
+            />
+          </div>
+          <div class="slider-row">
+            <v-text-field
+              class="slider-input"
+              label="Collision Restitution"
+              density="compact"
+              variant="underlined"
+              hide-details
+              type="number"
+              inputmode="decimal"
+              :min="0"
+              :max="1"
+              :step="0.05"
+              :model-value="formatRestitution()"
+              @update:model-value="handleRestitutionInput"
+            />
+          </div>
+          <div class="slider-row">
+            <v-text-field
+              class="slider-input"
+              label="Collision Friction"
+              density="compact"
+              variant="underlined"
+              hide-details
+              type="number"
+              inputmode="decimal"
+              :min="0"
+              :max="1"
+              :step="0.05"
+              :model-value="formatFriction()"
+              @update:model-value="handleFrictionInput"
             />
           </div>
         </section>

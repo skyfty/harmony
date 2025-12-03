@@ -1751,6 +1751,9 @@ const DEFAULT_ENVIRONMENT_AMBIENT_COLOR = '#ffffff'
 const DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY = 0.6
 const DEFAULT_ENVIRONMENT_FOG_COLOR = '#516175'
 const DEFAULT_ENVIRONMENT_FOG_DENSITY = 0.02
+const DEFAULT_ENVIRONMENT_GRAVITY = 9.81
+const DEFAULT_ENVIRONMENT_RESTITUTION = 0.2
+const DEFAULT_ENVIRONMENT_FRICTION = 0.3
 
 const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
   background: {
@@ -1767,6 +1770,9 @@ const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
     mode: 'skybox',
     hdriAssetId: null,
   },
+  gravityStrength: DEFAULT_ENVIRONMENT_GRAVITY,
+  collisionRestitution: DEFAULT_ENVIRONMENT_RESTITUTION,
+  collisionFriction: DEFAULT_ENVIRONMENT_FRICTION,
 }
 
 function normalizeHexColor(value: unknown, fallback: string): string {
@@ -1829,6 +1835,9 @@ function cloneEnvironmentSettings(source?: Partial<EnvironmentSettings> | Enviro
       mode: environmentMapMode,
       hdriAssetId: normalizeAssetId(environmentMapSource?.hdriAssetId ?? null),
     },
+    gravityStrength: clampNumber(source?.gravityStrength, 0, 100, DEFAULT_ENVIRONMENT_GRAVITY),
+    collisionRestitution: clampNumber(source?.collisionRestitution, 0, 1, DEFAULT_ENVIRONMENT_RESTITUTION),
+    collisionFriction: clampNumber(source?.collisionFriction, 0, 1, DEFAULT_ENVIRONMENT_FRICTION),
   }
 }
 
@@ -1918,7 +1927,10 @@ function environmentSettingsEqual(a: EnvironmentSettings, b: EnvironmentSettings
     a.fogColor === b.fogColor &&
     Math.abs(a.fogDensity - b.fogDensity) <= epsilon &&
     a.environmentMap.mode === b.environmentMap.mode &&
-    a.environmentMap.hdriAssetId === b.environmentMap.hdriAssetId
+    a.environmentMap.hdriAssetId === b.environmentMap.hdriAssetId &&
+    Math.abs(a.gravityStrength - b.gravityStrength) <= epsilon &&
+    Math.abs(a.collisionRestitution - b.collisionRestitution) <= epsilon &&
+    Math.abs(a.collisionFriction - b.collisionFriction) <= epsilon
   )
 }
 

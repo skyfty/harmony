@@ -11,6 +11,10 @@ import {
   DEFAULT_RIGIDBODY_MASS,
   MIN_RIGIDBODY_MASS,
   MAX_RIGIDBODY_MASS,
+  DEFAULT_LINEAR_DAMPING,
+  DEFAULT_ANGULAR_DAMPING,
+  DEFAULT_RIGIDBODY_RESTITUTION,
+  DEFAULT_RIGIDBODY_FRICTION,
 } from '@schema/components'
 import NodePicker from '@/components/common/NodePicker.vue'
 
@@ -37,6 +41,10 @@ const normalizedProps = computed(() => {
 const localMass = ref(DEFAULT_RIGIDBODY_MASS)
 const localBodyType = ref<RigidbodyBodyType>('DYNAMIC')
 const localTargetNodeId = ref<string | undefined>(undefined)
+const localLinearDamping = ref(DEFAULT_LINEAR_DAMPING)
+const localAngularDamping = ref(DEFAULT_ANGULAR_DAMPING)
+const localRestitution = ref(DEFAULT_RIGIDBODY_RESTITUTION)
+const localFriction = ref(DEFAULT_RIGIDBODY_FRICTION)
 const MASS_LOCK_EPSILON = 1e-4
 const LOCKED_BODY_TYPES = new Set<RigidbodyBodyType>(['STATIC', 'KINEMATIC'])
 const LOCKED_BODY_TYPE_MASS = 0
@@ -52,6 +60,10 @@ watch(
       localMass.value = props.mass
     }
     localTargetNodeId.value = props.targetNodeId
+    localLinearDamping.value = props.linearDamping
+    localAngularDamping.value = props.angularDamping
+    localRestitution.value = props.restitution
+    localFriction.value = props.friction
   },
   { immediate: true, deep: true },
 )
@@ -91,6 +103,66 @@ function handleMassInput(value: string | number) {
     return
   }
   updateComponent({ mass: clamped })
+}
+
+function handleLinearDampingInput(value: string | number) {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  const clamped = clampRigidbodyComponentProps({
+    linearDamping: numeric,
+  }).linearDamping
+  localLinearDamping.value = clamped
+  if (Math.abs(clamped - normalizedProps.value.linearDamping) <= 1e-4) {
+    return
+  }
+  updateComponent({ linearDamping: clamped })
+}
+
+function handleAngularDampingInput(value: string | number) {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  const clamped = clampRigidbodyComponentProps({
+    angularDamping: numeric,
+  }).angularDamping
+  localAngularDamping.value = clamped
+  if (Math.abs(clamped - normalizedProps.value.angularDamping) <= 1e-4) {
+    return
+  }
+  updateComponent({ angularDamping: clamped })
+}
+
+function handleRestitutionInput(value: string | number) {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  const clamped = clampRigidbodyComponentProps({
+    restitution: numeric,
+  }).restitution
+  localRestitution.value = clamped
+  if (Math.abs(clamped - normalizedProps.value.restitution) <= 1e-4) {
+    return
+  }
+  updateComponent({ restitution: clamped })
+}
+
+function handleFrictionInput(value: string | number) {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  const clamped = clampRigidbodyComponentProps({
+    friction: numeric,
+  }).friction
+  localFriction.value = clamped
+  if (Math.abs(clamped - normalizedProps.value.friction) <= 1e-4) {
+    return
+  }
+  updateComponent({ friction: clamped })
 }
 
 function handleBodyTypeChange(value: RigidbodyBodyType | null) {
@@ -195,6 +267,54 @@ function handleRemoveComponent() {
           :disabled="!rigidbodyComponent?.enabled || isMassLocked"
           :model-value="localMass"
           @update:modelValue="handleMassInput"
+        />
+        <v-text-field
+          label="Linear Damping"
+          type="number"
+          density="compact"
+          variant="underlined"
+          :min="0"
+          :max="1"
+          :step="0.01"
+          :disabled="!rigidbodyComponent?.enabled"
+          :model-value="localLinearDamping"
+          @update:modelValue="handleLinearDampingInput"
+        />
+        <v-text-field
+          label="Angular Damping"
+          type="number"
+          density="compact"
+          variant="underlined"
+          :min="0"
+          :max="1"
+          :step="0.01"
+          :disabled="!rigidbodyComponent?.enabled"
+          :model-value="localAngularDamping"
+          @update:modelValue="handleAngularDampingInput"
+        />
+        <v-text-field
+          label="Restitution"
+          type="number"
+          density="compact"
+          variant="underlined"
+          :min="0"
+          :max="1"
+          :step="0.01"
+          :disabled="!rigidbodyComponent?.enabled"
+          :model-value="localRestitution"
+          @update:modelValue="handleRestitutionInput"
+        />
+        <v-text-field
+          label="Friction"
+          type="number"
+          density="compact"
+          variant="underlined"
+          :min="0"
+          :max="1"
+          :step="0.01"
+          :disabled="!rigidbodyComponent?.enabled"
+          :model-value="localFriction"
+          @update:modelValue="handleFrictionInput"
         />
         <div class="target-node-picker">
           <div class="text-caption mb-1 text-medium-emphasis">Collider</div>

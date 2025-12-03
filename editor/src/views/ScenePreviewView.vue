@@ -72,6 +72,10 @@ import {
 	clampGuideboardComponentProps,
 	computeGuideboardEffectActive,
 	clampVehicleComponentProps,
+	DEFAULT_LINEAR_DAMPING,
+	DEFAULT_ANGULAR_DAMPING,
+	DEFAULT_RIGIDBODY_RESTITUTION,
+	DEFAULT_RIGIDBODY_FRICTION,
 } from '@schema/components'
 import type {
 	GuideboardComponentProps,
@@ -553,6 +557,9 @@ const DEFAULT_ENVIRONMENT_AMBIENT_COLOR = '#ffffff'
 const DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY = 0.6
 const DEFAULT_ENVIRONMENT_FOG_COLOR = '#516175'
 const DEFAULT_ENVIRONMENT_FOG_DENSITY = 0.02
+const DEFAULT_ENVIRONMENT_GRAVITY = 9.81
+const DEFAULT_ENVIRONMENT_RESTITUTION = 0.2
+const DEFAULT_ENVIRONMENT_FRICTION = 0.3
 const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
 	background: {
 		mode: 'skybox',
@@ -568,6 +575,9 @@ const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
 		mode: 'skybox',
 		hdriAssetId: null,
 	},
+	gravityStrength: DEFAULT_ENVIRONMENT_GRAVITY,
+	collisionRestitution: DEFAULT_ENVIRONMENT_RESTITUTION,
+	collisionFriction: DEFAULT_ENVIRONMENT_FRICTION,
 }
 const CAMERA_WATCH_TWEEN_DURATION = 0.45
 const CAMERA_LEVEL_TWEEN_DURATION = 0.35
@@ -643,6 +653,15 @@ const rigidbodyDebugMaterial = new THREE.LineBasicMaterial({
 })
 rigidbodyDebugMaterial.depthTest = false
 rigidbodyDebugMaterial.depthWrite = false
+
+type RigidbodyMaterialEntry = {
+	material: CANNON.Material
+	friction: number
+	restitution: number
+}
+
+const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>()
+const rigidbodyContactMaterialKeys = new Set<string>()
 type VehicleInstance = {
 	nodeId: string
 	vehicle: CANNON.RaycastVehicle
@@ -655,7 +674,9 @@ const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>()
 const groundHeightfieldOrientation = new CANNON.Quaternion()
 groundHeightfieldOrientation.setFromEuler(-Math.PI / 2, 0, 0)
 const heightfieldShapeOffsetHelper = new CANNON.Vec3()
-const physicsGravity = new CANNON.Vec3(0, -9.82, 0)
+const physicsGravity = new CANNON.Vec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0)
+let physicsContactRestitution = DEFAULT_ENVIRONMENT_RESTITUTION
+let physicsContactFriction = DEFAULT_ENVIRONMENT_FRICTION
 const PHYSICS_FIXED_TIMESTEP = 1 / 60
 const PHYSICS_MAX_SUB_STEPS = 5
 const rotationState = { q: false, e: false }
@@ -1097,6 +1118,19 @@ function cloneEnvironmentSettingsLocal(
 			mode: environmentMapMode,
 			hdriAssetId: normalizeAssetId(environmentMapSource?.hdriAssetId ?? null),
 		},
+		gravityStrength: clampNumber(source?.gravityStrength, 0, 100, DEFAULT_ENVIRONMENT_GRAVITY),
+		collisionRestitution: clampNumber(
+			source?.collisionRestitution,
+			0,
+			1,
+			DEFAULT_ENVIRONMENT_RESTITUTION,
+		),
+		collisionFriction: clampNumber(
+			source?.collisionFriction,
+			0,
+			1,
+			DEFAULT_ENVIRONMENT_FRICTION,
+		),
 	}
 }
 
@@ -3937,6 +3971,28 @@ function applyFogSettings(settings: EnvironmentSettings) {
 	}
 }
 
+function applyPhysicsEnvironmentSettings(settings: EnvironmentSettings) {
+	const gravity = clampNumber(settings.gravityStrength, 0, 100, DEFAULT_ENVIRONMENT_GRAVITY)
+	physicsGravity.set(0, -gravity, 0)
+	physicsContactRestitution = clampNumber(
+		settings.collisionRestitution,
+		0,
+		1,
+		DEFAULT_ENVIRONMENT_RESTITUTION,
+	)
+	physicsContactFriction = clampNumber(
+		settings.collisionFriction,
+		0,
+		1,
+		DEFAULT_ENVIRONMENT_FRICTION,
+	)
+	if (physicsWorld) {
+		physicsWorld.gravity.set(physicsGravity.x, physicsGravity.y, physicsGravity.z)
+		physicsWorld.defaultContactMaterial.friction = physicsContactFriction
+		physicsWorld.defaultContactMaterial.restitution = physicsContactRestitution
+	}
+}
+
 async function applyBackgroundSettings(
 	background: EnvironmentSettings['background'],
 ): Promise<boolean> {
@@ -4028,6 +4084,7 @@ async function applyEnvironmentMapSettings(
 
 async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 	const snapshot = cloneEnvironmentSettingsLocal(settings)
+	applyPhysicsEnvironmentSettings(snapshot)
 	if (!scene) {
 		pendingEnvironmentSettings = snapshot
 		return
@@ -4324,8 +4381,16 @@ function ensurePhysicsWorld(): CANNON.World {
 	if (physicsWorld) {
 		return physicsWorld
 	}
+	rigidbodyMaterialCache.clear()
+	rigidbodyContactMaterialKeys.clear()
 	const world = new CANNON.World()
 	world.gravity.copy(physicsGravity)
+	
+	// Enable sleeping to improve stability and performance
+	world.allowSleep = true
+	world.defaultContactMaterial.friction = physicsContactFriction
+	world.defaultContactMaterial.restitution = physicsContactRestitution
+
 	physicsWorld = world
 	return world
 }
@@ -4356,6 +4421,8 @@ function resetPhysicsWorld(): void {
 	clearRigidbodyDebugHelpers()
 	physicsWorld = null
 	groundHeightfieldCache.clear()
+	rigidbodyMaterialCache.clear()
+	rigidbodyContactMaterialKeys.clear()
 }
 
 function resolveGroundHeightfieldShape(
@@ -4541,6 +4608,68 @@ function createCannonShape(definition: RigidbodyPhysicsShape): CANNON.Shape | nu
 	return null
 }
 
+	function formatRigidbodyMaterialKey(friction: number, restitution: number): string {
+		return `${friction.toFixed(3)}:${restitution.toFixed(3)}`
+	}
+
+	function formatRigidbodyContactKey(materialA: CANNON.Material, materialB: CANNON.Material): string {
+		const idA = typeof materialA.id === 'number' ? materialA.id : -1
+		const idB = typeof materialB.id === 'number' ? materialB.id : -1
+		return idA <= idB ? `${idA}:${idB}` : `${idB}:${idA}`
+	}
+
+	function ensureContactMaterial(
+		world: CANNON.World,
+		materialA: CANNON.Material,
+		materialB: CANNON.Material,
+		friction: number,
+		restitution: number,
+	): void {
+		const key = formatRigidbodyContactKey(materialA, materialB)
+		if (rigidbodyContactMaterialKeys.has(key)) {
+			return
+		}
+		world.addContactMaterial(new CANNON.ContactMaterial(materialA, materialB, { friction, restitution }))
+		rigidbodyContactMaterialKeys.add(key)
+	}
+
+	function registerRigidbodyMaterialContacts(world: CANNON.World, entry: RigidbodyMaterialEntry): void {
+		ensureContactMaterial(world, entry.material, entry.material, entry.friction, entry.restitution)
+		const defaultMaterial = world.defaultMaterial
+		if (defaultMaterial) {
+			ensureContactMaterial(world, defaultMaterial, entry.material, entry.friction, entry.restitution)
+		}
+		rigidbodyMaterialCache.forEach((otherEntry) => {
+			if (otherEntry.material === entry.material) {
+				return
+			}
+			const combinedFriction = Math.sqrt(entry.friction * otherEntry.friction)
+			const combinedRestitution = Math.max(entry.restitution, otherEntry.restitution)
+			ensureContactMaterial(world, entry.material, otherEntry.material, combinedFriction, combinedRestitution)
+		})
+	}
+
+	function ensureRigidbodyMaterial(friction: number, restitution: number): CANNON.Material {
+		const world = physicsWorld ?? ensurePhysicsWorld()
+		const clampedFriction = clampNumber(friction, 0, 1, DEFAULT_RIGIDBODY_FRICTION)
+		const clampedRestitution = clampNumber(restitution, 0, 1, DEFAULT_RIGIDBODY_RESTITUTION)
+		const key = formatRigidbodyMaterialKey(clampedFriction, clampedRestitution)
+		let entry = rigidbodyMaterialCache.get(key)
+		if (!entry) {
+			const material = new CANNON.Material(`rigidbody:${key}`)
+			material.friction = clampedFriction
+			material.restitution = clampedRestitution
+			entry = {
+				material,
+				friction: clampedFriction,
+				restitution: clampedRestitution,
+			}
+			rigidbodyMaterialCache.set(key, entry)
+			registerRigidbodyMaterialContacts(world, entry)
+		}
+		return entry.material
+	}
+
 function mapBodyType(type: RigidbodyComponentProps['bodyType']): CANNON.Body['type'] {
 	switch (type) {
 		case 'STATIC':
@@ -4610,6 +4739,7 @@ function createRigidbodyBody(
 	const mass = isDynamic ? Math.max(0, props.mass ?? 0) : 0
 	const body = new CANNON.Body({ mass })
 	body.type = mapBodyType(props.bodyType)
+	body.material = ensureRigidbodyMaterial(props.friction ?? DEFAULT_RIGIDBODY_FRICTION, props.restitution ?? DEFAULT_RIGIDBODY_RESTITUTION)
 	let shapeOffset: CANNON.Vec3 | undefined
 	if (offsetTuple) {
 		const [ox, oy, oz] = offsetTuple
@@ -4619,8 +4749,8 @@ function createRigidbodyBody(
 	body.addShape(resolvedShape, shapeOffset, shapeOrientation)
 	syncBodyFromObject(body, object)
 	body.updateMassProperties()
-	body.linearDamping = 0.04
-	body.angularDamping = 0.04
+	body.linearDamping = props.linearDamping ?? DEFAULT_LINEAR_DAMPING
+	body.angularDamping = props.angularDamping ?? DEFAULT_ANGULAR_DAMPING
 	return body
 }
 
