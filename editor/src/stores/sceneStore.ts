@@ -8264,6 +8264,62 @@ export const useSceneStore = defineStore('scene', {
       void this.syncAssetPackageMapEntry(registeredAsset, options.source)
       return registeredAsset
     },
+    async cleanUnusedAssets(): Promise<{ removedAssetIds: string[] }> {
+      if (!this.currentSceneId) {
+        return { removedAssetIds: [] }
+      }
+
+      const document = buildSceneDocumentFromState(this)
+      const usedAssetIds = collectSceneAssetReferences(document)
+      const removedAssetIds: string[] = []
+      const nextCatalog: Record<string, ProjectAsset[]> = {}
+      let catalogChanged = false
+
+      Object.entries(this.assetCatalog).forEach(([categoryId, list]) => {
+        const filtered = list.filter((asset) => {
+          const keep = usedAssetIds.has(asset.id)
+          if (!keep) {
+            removedAssetIds.push(asset.id)
+          }
+          return keep
+        })
+        if (filtered.length !== list.length) {
+          catalogChanged = true
+        }
+        nextCatalog[categoryId] = filtered
+      })
+
+      const assetIndexChanged = Object.keys(this.assetIndex).some((assetId) => !usedAssetIds.has(assetId))
+      const nextAssetIndex = assetIndexChanged
+        ? filterAssetIndexByUsage(this.assetIndex, usedAssetIds)
+        : this.assetIndex
+
+      const nextPackageAssetMap = filterPackageAssetMapByUsage(this.packageAssetMap, usedAssetIds)
+      const packageMapChanged = Object.keys(this.packageAssetMap).length !== Object.keys(nextPackageAssetMap).length
+        || Object.entries(this.packageAssetMap).some(([key, value]) => nextPackageAssetMap[key] !== value)
+
+      const shouldResetSelection = this.selectedAssetId ? !usedAssetIds.has(this.selectedAssetId) : false
+
+      if (!catalogChanged && !assetIndexChanged && !packageMapChanged) {
+        return { removedAssetIds: [] }
+      }
+
+      this.assetCatalog = nextCatalog
+      this.assetIndex = nextAssetIndex
+      this.packageAssetMap = nextPackageAssetMap
+      this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
+
+      if (shouldResetSelection) {
+        this.selectedAssetId = null
+      }
+      if (this.activeDirectoryId && !findDirectory(this.projectTree, this.activeDirectoryId)) {
+        this.activeDirectoryId = defaultDirectoryId
+      }
+
+      commitSceneSnapshot(this, { updateNodes: false })
+
+      return { removedAssetIds }
+    },
     async syncAssetPackageMapEntry(asset: ProjectAsset, source?: AssetSourceMetadata) {
       if (!asset?.id) {
         return

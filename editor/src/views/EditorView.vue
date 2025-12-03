@@ -1000,6 +1000,47 @@ async function handleAction(action: string) {
       sceneStore.clearSelection()
       break
     }
+    case 'CleanUnusedAssets': {
+      const confirmMessage = '清理未使用的资产将移除当前场景中未被引用的资源，并且该操作无法撤销。是否继续？'
+      const proceed = typeof window !== 'undefined' ? window.confirm(confirmMessage) : true
+      if (!proceed) {
+        break
+      }
+
+      uiStore.showLoadingOverlay({
+        title: '清理未使用资产',
+        message: '正在扫描场景引用…',
+        mode: 'indeterminate',
+        closable: false,
+        autoClose: false,
+      })
+
+      try {
+        const { removedAssetIds } = await sceneStore.cleanUnusedAssets()
+        const message = removedAssetIds.length
+          ? `清理完成，已移除 ${removedAssetIds.length} 个资产。`
+          : '没有找到可以移除的资产。'
+        uiStore.updateLoadingOverlay({
+          mode: 'determinate',
+          progress: 100,
+          message,
+          autoClose: true,
+          autoCloseDelay: 1200,
+          closable: true,
+        })
+      } catch (error) {
+        console.error('Failed to clean unused assets', error)
+        uiStore.updateLoadingOverlay({
+          mode: 'determinate',
+          progress: 100,
+          message: '清理未使用资产失败，请稍后再试。',
+          autoClose: true,
+          autoCloseDelay: 1600,
+          closable: true,
+        })
+      }
+      break
+    }
     case 'Export':
     case 'Export:GLB': {
       openExportDialog()
