@@ -706,6 +706,12 @@ let physicsContactRestitution = DEFAULT_ENVIRONMENT_RESTITUTION
 let physicsContactFriction = DEFAULT_ENVIRONMENT_FRICTION
 const PHYSICS_FIXED_TIMESTEP = 1 / 60
 const PHYSICS_MAX_SUB_STEPS = 5
+const PHYSICS_SOLVER_ITERATIONS = 18
+const PHYSICS_SOLVER_TOLERANCE = 5e-4
+const PHYSICS_CONTACT_STIFFNESS = 1e9
+const PHYSICS_CONTACT_RELAXATION = 4
+const PHYSICS_FRICTION_STIFFNESS = 1e9
+const PHYSICS_FRICTION_RELAXATION = 4
 const rotationState = { q: false, e: false }
 const defaultFirstPersonState = {
 	position: new THREE.Vector3(0, CAMERA_HEIGHT, 0),
@@ -4412,11 +4418,20 @@ function ensurePhysicsWorld(): CANNON.World {
 	rigidbodyContactMaterialKeys.clear()
 	const world = new CANNON.World()
 	world.gravity.copy(physicsGravity)
-	
-	// Enable sleeping to improve stability and performance
+	const solver = new CANNON.GSSolver()
+	solver.iterations = PHYSICS_SOLVER_ITERATIONS
+	solver.tolerance = PHYSICS_SOLVER_TOLERANCE
+	world.solver = solver
+	world.broadphase = new CANNON.SAPBroadphase(world)
 	world.allowSleep = true
+	world.quatNormalizeFast = false
+	world.quatNormalizeSkip = 0
 	world.defaultContactMaterial.friction = physicsContactFriction
 	world.defaultContactMaterial.restitution = physicsContactRestitution
+	world.defaultContactMaterial.contactEquationStiffness = PHYSICS_CONTACT_STIFFNESS
+	world.defaultContactMaterial.contactEquationRelaxation = PHYSICS_CONTACT_RELAXATION
+	world.defaultContactMaterial.frictionEquationStiffness = PHYSICS_FRICTION_STIFFNESS
+	world.defaultContactMaterial.frictionEquationRelaxation = PHYSICS_FRICTION_RELAXATION
 
 	physicsWorld = world
 	return world
@@ -4656,7 +4671,16 @@ function createCannonShape(definition: RigidbodyPhysicsShape): CANNON.Shape | nu
 		if (rigidbodyContactMaterialKeys.has(key)) {
 			return
 		}
-		world.addContactMaterial(new CANNON.ContactMaterial(materialA, materialB, { friction, restitution }))
+		const defaultContact = world.defaultContactMaterial
+		const contactOptions = {
+			friction,
+			restitution,
+			contactEquationStiffness: defaultContact?.contactEquationStiffness ?? PHYSICS_CONTACT_STIFFNESS,
+			contactEquationRelaxation: defaultContact?.contactEquationRelaxation ?? PHYSICS_CONTACT_RELAXATION,
+			frictionEquationStiffness: defaultContact?.frictionEquationStiffness ?? PHYSICS_FRICTION_STIFFNESS,
+			frictionEquationRelaxation: defaultContact?.frictionEquationRelaxation ?? PHYSICS_FRICTION_RELAXATION,
+		}
+		world.addContactMaterial(new CANNON.ContactMaterial(materialA, materialB, contactOptions))
 		rigidbodyContactMaterialKeys.add(key)
 	}
 
