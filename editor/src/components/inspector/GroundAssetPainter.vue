@@ -97,10 +97,6 @@ onMounted(() => {
 
 <template>
   <div class="asset-painter">
-    <div class="hint-text">
-      {{ activePreset.label }} · 选择一个资源后，按住鼠标中键并在场景中拖动即可连续铺设（自动贴合地形并随机化外观）。
-    </div>
-
     <div class="thumbnail-grid" v-if="!loadingMap[props.category] && !errorMap[props.category]">
       <button
         v-for="asset in assetBuckets[props.category]"
@@ -115,7 +111,6 @@ onMounted(() => {
             <v-icon icon="mdi-cube-outline" size="20" />
           </span>
         </div>
-        <div class="name" :title="asset.name">{{ asset.name }}</div>
       </button>
       <div v-if="!assetBuckets[props.category]?.length" class="empty-placeholder">
         当前分类没有可用资源
@@ -129,17 +124,6 @@ onMounted(() => {
 
     <div v-if="selectingAssetId" class="selection-overlay">
       <v-progress-circular indeterminate size="32" color="primary" />
-    </div>
-
-    <div class="selection-status" :class="{ active: hasSelection }">
-      <v-icon :icon="hasSelection ? 'mdi-check-circle-outline' : 'mdi-information-outline'" size="18" class="mr-1" />
-      <span>
-        {{
-          hasSelection
-            ? `当前资源：${scatterSelectedAsset?.name ?? ''}`
-            : '请选择一个资源后再在场景中绘制'
-        }}
-      </span>
     </div>
   </div>
 </template>
@@ -159,43 +143,54 @@ onMounted(() => {
 
 .thumbnail-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(86px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  max-height: calc((60px * 3) + (8px * 2));
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .thumbnail-item {
   border: none;
-  background: rgba(255, 255, 255, 0.04);
-  border-radius: 10px;
-  padding: 8px;
+  background: transparent;
+  padding: 4px;
   display: flex;
   flex-direction: column;
   align-items: center;
   cursor: pointer;
-  transition: border-color 0.2s, background-color 0.2s;
-  border: 1px solid transparent;
+  transition: transform 0.15s ease;
+  overflow: visible;
 }
 
 .thumbnail-item:hover {
-  background: rgba(255, 255, 255, 0.08);
+  transform: scale(0.96);
 }
 
-.thumbnail-item.is-selected {
-  border-color: #4dd0e1;
-  background: rgba(77, 208, 225, 0.12);
+.thumbnail-item:focus-visible {
+  outline: none;
 }
 
 .thumbnail {
-  width: 56px;
-  height: 56px;
-  border-radius: 8px;
+  width: 38px;
+  height: 38px;
+  border-radius: 6px;
   background-size: cover;
   background-position: center;
   background-color: rgba(255, 255, 255, 0.08);
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 6px;
+  box-shadow: 0 0 0 1px transparent;
+  transition: box-shadow 0.2s, background-color 0.2s;
+}
+
+.thumbnail-item:hover .thumbnail {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5);
+}
+
+.thumbnail-item.is-selected .thumbnail {
+  box-shadow: 0 0 0 2px #4dd0e1;
+  background-color: rgba(77, 208, 225, 0.12);
 }
 
 .thumbnail-placeholder {

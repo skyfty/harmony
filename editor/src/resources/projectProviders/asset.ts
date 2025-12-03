@@ -80,7 +80,7 @@ let manifestPromise: Promise<AssetManifest> | null = null
 
 async function ensureManifest(loader: AssetManifestLoader = fetchManifest): Promise<AssetManifest> {
   if (manifestCache) {
-    return manifestCache
+  return manifestCache
   }
   if (!manifestPromise) {
     manifestPromise = loader()
