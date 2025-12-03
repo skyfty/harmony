@@ -265,8 +265,6 @@ let stats: Stats | null = null
 let statsPointerHandler: (() => void) | null = null
 let statsPanelIndex = 0
 let stopInstancedMeshSubscription: (() => void) | null = null
-let backgroundRegisteredAssetId: string | null = null
-let environmentMapRegisteredAssetId: string | null = null
 let gridHighlight: THREE.Group | null = null
 let isSunLightSuppressed = false
 let pendingEnvironmentSettings: EnvironmentSettings | null = null
@@ -2376,10 +2374,6 @@ function disposeBackgroundResources() {
     backgroundTexture.dispose()
     backgroundTexture = null
   }
-  if (backgroundRegisteredAssetId) {
-    assetCacheStore.unregisterUsage(backgroundRegisteredAssetId)
-    backgroundRegisteredAssetId = null
-  }
   backgroundAssetId = null
 }
 
@@ -2391,10 +2385,6 @@ function disposeCustomEnvironmentTarget() {
     }
     customEnvironmentTarget.dispose()
     customEnvironmentTarget = null
-  }
-  if (environmentMapRegisteredAssetId) {
-    assetCacheStore.unregisterUsage(environmentMapRegisteredAssetId)
-    environmentMapRegisteredAssetId = null
   }
   environmentMapAssetId = null
 }
@@ -2458,8 +2448,6 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
   disposeBackgroundResources()
   backgroundTexture = texture
   backgroundAssetId = background.hdriAssetId
-  backgroundRegisteredAssetId = background.hdriAssetId
-  assetCacheStore.registerUsage(background.hdriAssetId)
   scene.background = texture
   return true
 }
@@ -2514,8 +2502,6 @@ async function applyEnvironmentMapSettings(mapSettings: EnvironmentSettings['env
   disposeCustomEnvironmentTarget()
   customEnvironmentTarget = target
   environmentMapAssetId = mapSettings.hdriAssetId
-  environmentMapRegisteredAssetId = mapSettings.hdriAssetId
-  assetCacheStore.registerUsage(mapSettings.hdriAssetId)
   scene.environment = target.texture
   scene.environmentIntensity = 1
   return true

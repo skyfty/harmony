@@ -1,4 +1,3 @@
-import type { SceneMaterialTextureRef, SceneNode, SceneNodeMaterial, SceneMaterialTextureSlotMap } from './index.js'
 
 const NodeBuffer: { from: (data: string, encoding: string) => { buffer: ArrayBuffer; byteOffset: number; byteLength: number } } | undefined =
   typeof globalThis !== 'undefined' && (globalThis as any).Buffer
@@ -16,7 +15,6 @@ export interface AssetCacheEntry {
   blobUrl: string | null
   arrayBuffer: ArrayBuffer | null
   size: number
-  refCount: number
   lastUsedAt: number
   abortController: AbortController | null
   mimeType: string | null
@@ -80,21 +78,6 @@ export class AssetCache {
     if (!entry) {
       return
     }
-    entry.lastUsedAt = now()
-  }
-
-  registerUsage(assetId: string): void {
-    const entry = this.ensureEntry(assetId)
-    entry.refCount += 1
-    entry.lastUsedAt = now()
-  }
-
-  unregisterUsage(assetId: string): void {
-    const entry = this.entries.get(assetId)
-    if (!entry) {
-      return
-    }
-    entry.refCount = Math.max(0, entry.refCount - 1)
     entry.lastUsedAt = now()
   }
 
@@ -217,61 +200,23 @@ export class AssetCache {
       return
     }
 
-    cachedEntries.sort((a, b) => {
-      if (a.refCount !== b.refCount) {
-        return a.refCount - b.refCount
-      }
-      return a.lastUsedAt - b.lastUsedAt
-    })
+    cachedEntries.sort((a, b) => a.lastUsedAt - b.lastUsedAt)
 
-    let fallback: AssetCacheEntry | null = null
+    const removable = cachedEntries.filter((entry) => !preferredAssetId || entry.assetId !== preferredAssetId)
+    const totalToRemove = cachedEntries.length - this.maxEntries
+    let removed = 0
 
-    for (const entry of cachedEntries) {
-      if (cachedEntries.length <= this.maxEntries) {
+    for (const entry of removable) {
+      if (removed >= totalToRemove) {
         break
       }
-      if (preferredAssetId && entry.assetId === preferredAssetId) {
-        continue
-      }
-      if (entry.refCount > 0) {
-        fallback = fallback ?? entry
-        continue
-      }
       this.removeCache(entry.assetId)
-      cachedEntries.splice(cachedEntries.indexOf(entry), 1)
+      removed += 1
     }
 
-    if (cachedEntries.length > this.maxEntries && fallback) {
-      this.removeCache(fallback.assetId)
+    if (cachedEntries.length - removed > this.maxEntries && preferredAssetId) {
+      this.removeCache(preferredAssetId)
     }
-  }
-
-  recalculateUsage(nodes: SceneNode[]): void {
-    const counts = new Map<string, number>()
-    const visit = (node: SceneNode) => {
-      if (node.sourceAssetId) {
-        counts.set(node.sourceAssetId, (counts.get(node.sourceAssetId) ?? 0) + 1)
-      }
-      node.materials?.forEach((material: SceneNodeMaterial) => {
-        const textures = (material.textures as SceneMaterialTextureSlotMap | undefined) ?? null
-        if (!textures) {
-          return
-        }
-        Object.values(textures as SceneMaterialTextureSlotMap).forEach((ref: SceneMaterialTextureRef | null) => {
-          const assetId = ref?.assetId
-          if (!assetId) {
-            return
-          }
-          counts.set(assetId, (counts.get(assetId) ?? 0) + 1)
-        })
-      })
-      node.children?.forEach(visit)
-    }
-    nodes.forEach(visit)
-
-    this.entries.forEach((entry, assetId) => {
-      entry.refCount = counts.get(assetId) ?? 0
-    })
   }
 
   createFileFromCache(assetId: string): File | null {
@@ -419,7 +364,6 @@ function createEmptyEntry(assetId: string): AssetCacheEntry {
     blobUrl: null,
     arrayBuffer: null,
     size: 0,
-    refCount: 0,
     lastUsedAt: now(),
     abortController: null,
     mimeType: null,

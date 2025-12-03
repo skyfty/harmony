@@ -2288,7 +2288,7 @@ async function createTextureAssetFromTexture(texture: Texture, context: External
   }
 
   context.registerAsset(asset, { categoryId: determineAssetCategoryId(asset) })
-  context.assetCache.registerUsage(assetId)
+  context.assetCache.touch(assetId)
 
   const ref: SceneMaterialTextureRef = {
     assetId,
@@ -3605,7 +3605,7 @@ function duplicateNodeTree(original: SceneNode, context: DuplicateContext): Scen
   }
   remapNodeInternalReferences(duplicated, context)
   if (duplicated.sourceAssetId) {
-    context.assetCache.registerUsage(duplicated.sourceAssetId)
+    context.assetCache.touch(duplicated.sourceAssetId)
   }
   componentManager.syncNode(duplicated)
 
@@ -6451,7 +6451,6 @@ export const useSceneStore = defineStore('scene', {
           if (!skipComponentSync) {
             componentManager.syncScene(this.nodes)
           }
-          useAssetCacheStore().recalculateUsage(this.nodes)
           return
         }
 
@@ -6485,7 +6484,6 @@ export const useSceneStore = defineStore('scene', {
           reattachRuntimeObjectsForNodes(this.nodes)
           componentManager.syncScene(this.nodes)
         }
-        useAssetCacheStore().recalculateUsage(this.nodes)
       })()
 
       runtimeRefreshInFlight = task
@@ -6547,8 +6545,6 @@ export const useSceneStore = defineStore('scene', {
 
         componentManager.reset()
         componentManager.syncScene(this.nodes)
-
-        assetCache.recalculateUsage(this.nodes)
 
         snapshot.runtimeSnapshots.forEach((object, nodeId) => {
           const node = findNodeById(this.nodes, nodeId)
@@ -8718,7 +8714,6 @@ export const useSceneStore = defineStore('scene', {
           this.nodes = [...this.nodes]
         }
       }
-      useAssetCacheStore().recalculateUsage(this.nodes)
       if (duplicate.nodeType === 'Group') {
         duplicate.groupExpanded = false
       }
@@ -9043,9 +9038,6 @@ export const useSceneStore = defineStore('scene', {
       }
 
       this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
-
-      const assetCache = useAssetCacheStore()
-      assetCache.recalculateUsage(this.nodes)
 
       commitSceneSnapshot(this, { updateNodes: true })
       return storedAsset
@@ -9731,7 +9723,6 @@ export const useSceneStore = defineStore('scene', {
         this.nodes = tree
         this.setSelection([newNodeId])
 
-        assetCache.registerUsage(asset.id)
         assetCache.touch(asset.id)
 
         commitSceneSnapshot(this)
@@ -9922,7 +9913,6 @@ export const useSceneStore = defineStore('scene', {
       })
 
       if (registerAssetId && assetCache) {
-        assetCache.registerUsage(registerAssetId)
         assetCache.touch(registerAssetId)
       }
 
@@ -9958,7 +9948,6 @@ export const useSceneStore = defineStore('scene', {
             commitOptions: { updateNodes: false },
           })
           modelAssetId = ensured.asset.id
-          assetCache.registerUsage(modelAssetId)
           assetCache.touch(modelAssetId)
         } catch (error) {
           console.warn('缓存导入场景资源失败', error)
@@ -10006,7 +9995,6 @@ export const useSceneStore = defineStore('scene', {
       }
 
       commitSceneSnapshot(this)
-      assetCache.recalculateUsage(this.nodes)
       return importedIds
     },
 
@@ -10874,8 +10862,6 @@ export const useSceneStore = defineStore('scene', {
       const prevSelection = cloneSelection(this.selectedNodeIds)
       const nextSelection = prevSelection.filter((id) => !removed.includes(id))
       this.setSelection(nextSelection)
-      const assetCache = useAssetCacheStore()
-      assetCache.recalculateUsage(this.nodes)
       commitSceneSnapshot(this)
     },
 
@@ -11230,7 +11216,6 @@ export const useSceneStore = defineStore('scene', {
         }
         this.recenterGroupAncestry(parentId, { captureHistory: false })
       })
-      assetCache.recalculateUsage(this.nodes)
 
       if (selectDuplicates) {
         const duplicateIds = duplicates.map((node) => node.id)
@@ -11368,8 +11353,6 @@ export const useSceneStore = defineStore('scene', {
         }
       })
 
-      assetCache.recalculateUsage(this.nodes)
-
       const primaryId = insertedIds[insertedIds.length - 1] ?? null
       this.setSelection(insertedIds, { primaryId })
       commitSceneSnapshot(this)
@@ -11456,7 +11439,6 @@ export const useSceneStore = defineStore('scene', {
       this.panelVisibility = normalizePanelVisibilityState(sceneDocument.panelVisibility)
       this.panelPlacement = normalizePanelPlacementStateInput(sceneDocument.panelPlacement)
       this.resourceProviderId = sceneDocument.resourceProviderId
-      useAssetCacheStore().recalculateUsage(this.nodes)
       this.isSceneReady = true
       this.hasUnsavedChanges = false
       return sceneDocument.id
@@ -11540,7 +11522,6 @@ export const useSceneStore = defineStore('scene', {
       this.panelVisibility = normalizePanelVisibilityState(sceneDocument.panelVisibility)
       this.panelPlacement = normalizePanelPlacementStateInput(sceneDocument.panelPlacement)
       this.resourceProviderId = sceneDocument.resourceProviderId
-      useAssetCacheStore().recalculateUsage(this.nodes)
       this.isSceneReady = true
       this.hasUnsavedChanges = false
       return sceneDocument.id
@@ -11588,7 +11569,6 @@ export const useSceneStore = defineStore('scene', {
         this.panelPlacement = normalizePanelPlacementStateInput(scene.panelPlacement)
         this.groundSettings = cloneGroundSettings(scene.groundSettings)
         this.resourceProviderId = scene.resourceProviderId ?? 'builtin'
-        useAssetCacheStore().recalculateUsage(this.nodes)
         this.hasUnsavedChanges = false
       } finally {
         this.isSceneReady = true
@@ -11626,7 +11606,6 @@ export const useSceneStore = defineStore('scene', {
         this.panelPlacement = normalizePanelPlacementStateInput(fallback.panelPlacement)
         this.groundSettings = cloneGroundSettings(fallback.groundSettings)
         this.resourceProviderId = fallback.resourceProviderId
-        useAssetCacheStore().recalculateUsage(this.nodes)
         this.isSceneReady = true
         this.hasUnsavedChanges = false
         return true

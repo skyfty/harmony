@@ -252,7 +252,6 @@ async function importAssetFromUrl(normalizedUrl: string) {
 
     const object = await loadObjectFromRemoteFile(file)
     await addImportedObjectToScene(object, normalizedUrl)
-    assetCacheStore.registerUsage(normalizedUrl)
     assetCacheStore.touch(normalizedUrl)
 
     const displayName = object.name || entry.filename || fallbackName
@@ -439,7 +438,6 @@ function handleMenuImportFromFile() {
     await addImportedObjectToScene(imported, assetId ?? undefined)
 
     if (localAssetHandled && assetId) {
-      assetCacheStore.registerUsage(assetId)
       assetCacheStore.touch(assetId)
     }
 
