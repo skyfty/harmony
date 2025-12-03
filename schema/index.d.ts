@@ -579,6 +579,9 @@ export interface EnvironmentSettings {
   fogColor: string
   fogDensity: number
   environmentMap: EnvironmentMapSettings
+  gravityStrength: number
+  collisionRestitution: number
+  collisionFriction: number
 }
 
 export type EnvironmentSettingsPatch = Partial<EnvironmentSettings> & {

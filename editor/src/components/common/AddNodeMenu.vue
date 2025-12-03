@@ -25,6 +25,8 @@ import { determineAssetCategoryId } from '@/stores/assetCatalog'
 import { blobToDataUrl } from '@/utils/blob'
 import {
   BEHAVIOR_COMPONENT_TYPE,
+  DEFAULT_RIGIDBODY_FRICTION,
+  DEFAULT_RIGIDBODY_RESTITUTION,
   DISPLAY_BOARD_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
@@ -1579,6 +1581,10 @@ type GroundPreset = {
   width: number
   depth: number
   generation: GroundGenerationSettings
+  physics: {
+    friction: number
+    restitution: number
+  }
 }
 
 const groundPresets: [GroundPreset, ...GroundPreset[]] = [
@@ -1593,6 +1599,10 @@ const groundPresets: [GroundPreset, ...GroundPreset[]] = [
       noiseScale: 80,
       noiseAmplitude: 0,
       edgeFalloff: 1,
+    },
+    physics: {
+      friction: 0.65,
+      restitution: 0.05,
     },
   },
   {
@@ -1610,6 +1620,10 @@ const groundPresets: [GroundPreset, ...GroundPreset[]] = [
       detailAmplitude: 2,
       edgeFalloff: 1.4,
     },
+    physics: {
+      friction: 0.55,
+      restitution: 0.08,
+    },
   },
   {
     id: 'mountain',
@@ -1625,6 +1639,10 @@ const groundPresets: [GroundPreset, ...GroundPreset[]] = [
       detailScale: 18,
       detailAmplitude: 4,
       edgeFalloff: 2.2,
+    },
+    physics: {
+      friction: 0.45,
+      restitution: 0.12,
     },
   },
 ]
@@ -1682,6 +1700,8 @@ async function handleConfirmGround() {
   const preset = selectedGroundPreset.value
   const width = clampGroundDimension(groundWidth.value, preset?.width ?? 100)
   const depth = clampGroundDimension(groundDepth.value, preset?.depth ?? 100)
+  const targetFriction = Math.min(1, Math.max(0, preset?.physics?.friction ?? DEFAULT_RIGIDBODY_FRICTION))
+  const targetRestitution = Math.min(1, Math.max(0, preset?.physics?.restitution ?? DEFAULT_RIGIDBODY_RESTITUTION))
   const cellSize = 1
   const rows = Math.max(1, Math.ceil(depth / cellSize))
   const columns = Math.max(1, Math.ceil(width / cellSize))
@@ -1716,10 +1736,16 @@ async function handleConfirmGround() {
   })
 
   if (created) {
-    sceneStore.ensureStaticRigidbodyComponent(created.id)
+    const rigidbodyComponent = sceneStore.ensureStaticRigidbodyComponent(created.id)
     sceneStore.updateNodeDynamicMesh(created.id, definition)
     sceneStore.setNodeSelectionLock(created.id, true)
     sceneStore.selectNode(created.id)
+    if (rigidbodyComponent) {
+      sceneStore.updateNodeComponentProps(created.id, rigidbodyComponent.id, {
+        friction: targetFriction,
+        restitution: targetRestitution,
+      })
+    }
   }
 }
 
@@ -1972,9 +1998,25 @@ function handleAddLight(type: LightNodeType) {
 }
 
 .ground-preset-group {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+.ground-preset-group :deep(.v-item) {
+  height: 100%;
+}
+.ground-preset-card {
+  padding: 12px 14px;
+  border-radius: 12px;
+  cursor: pointer;
+  border-color: rgba(255, 255, 255, 0.16) !important;
+  transition: border-color 160ms ease, background-color 160ms ease;
+  height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 8px;
 }
 
 .ground-preset-card {

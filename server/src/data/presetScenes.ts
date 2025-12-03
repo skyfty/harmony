@@ -108,6 +108,9 @@ const DEFAULT_ENVIRONMENT_SETTINGS = {
     mode: 'skybox' as const,
     hdriAssetId: null,
   },
+  gravityStrength: 9.81,
+  collisionRestitution: 0.2,
+  collisionFriction: 0.3,
 }
 
 const createEnvironmentNode = (): SceneNodeDetail => ({

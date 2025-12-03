@@ -9,6 +9,10 @@ export interface RigidbodyComponentProps {
   mass: number
   bodyType: RigidbodyBodyType
   targetNodeId?: string
+  linearDamping: number
+  angularDamping: number
+  restitution: number
+  friction: number
 }
 
 export type RigidbodyVector3Tuple = [number, number, number]
@@ -45,6 +49,10 @@ export const DEFAULT_RIGIDBODY_MASS = 1
 export const DEFAULT_RIGIDBODY_BODY_TYPE: RigidbodyBodyType = 'DYNAMIC'
 export const MIN_RIGIDBODY_MASS = 0
 export const MAX_RIGIDBODY_MASS = 10_000
+export const DEFAULT_LINEAR_DAMPING = 0.04
+export const DEFAULT_ANGULAR_DAMPING = 0.04
+export const DEFAULT_RIGIDBODY_RESTITUTION = 0.2
+export const DEFAULT_RIGIDBODY_FRICTION = 0.3
 
 export function clampRigidbodyComponentProps(
   props: Partial<RigidbodyComponentProps> | null | undefined,
@@ -54,10 +62,31 @@ export function clampRigidbodyComponentProps(
   const normalizedType: RigidbodyBodyType = props?.bodyType === 'STATIC' || props?.bodyType === 'KINEMATIC'
     ? props.bodyType
     : DEFAULT_RIGIDBODY_BODY_TYPE
+  
+  const rawLinearDamping = typeof props?.linearDamping === 'number' && Number.isFinite(props.linearDamping) ? props.linearDamping : DEFAULT_LINEAR_DAMPING
+  const normalizedLinearDamping = Math.max(0, Math.min(1, rawLinearDamping))
+
+  const rawAngularDamping = typeof props?.angularDamping === 'number' && Number.isFinite(props.angularDamping) ? props.angularDamping : DEFAULT_ANGULAR_DAMPING
+  const normalizedAngularDamping = Math.max(0, Math.min(1, rawAngularDamping))
+
+  const rawRestitution = typeof props?.restitution === 'number' && Number.isFinite(props.restitution)
+    ? props.restitution
+    : DEFAULT_RIGIDBODY_RESTITUTION
+  const normalizedRestitution = Math.max(0, Math.min(1, rawRestitution))
+
+  const rawFriction = typeof props?.friction === 'number' && Number.isFinite(props.friction)
+    ? props.friction
+    : DEFAULT_RIGIDBODY_FRICTION
+  const normalizedFriction = Math.max(0, Math.min(1, rawFriction))
+
   return {
     mass: normalizedMass,
     bodyType: normalizedType,
     targetNodeId: props?.targetNodeId,
+    linearDamping: normalizedLinearDamping,
+    angularDamping: normalizedAngularDamping,
+    restitution: normalizedRestitution,
+    friction: normalizedFriction,
   }
 }
 
@@ -66,6 +95,10 @@ export function cloneRigidbodyComponentProps(props: RigidbodyComponentProps): Ri
     mass: props.mass,
     bodyType: props.bodyType,
     targetNodeId: props.targetNodeId,
+    linearDamping: props.linearDamping,
+    angularDamping: props.angularDamping,
+    restitution: props.restitution,
+    friction: props.friction,
   }
 }
 
