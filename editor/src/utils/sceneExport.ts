@@ -850,15 +850,14 @@ function buildHeightfieldShapeFromGroundNode(node: SceneNode): RigidbodyPhysicsS
   }
 
   const rawCellSize = getPositiveNumber(dynamicMesh.cellSize, 1)
-  const derivedWidth = columns * rawCellSize
-  const derivedDepth = rows * rawCellSize
-  const width = getPositiveNumber(dynamicMesh.width, derivedWidth)
-  const depth = getPositiveNumber(dynamicMesh.depth, derivedDepth)
-
   const { scaleX, scaleY, scaleZ } = resolveNodeScale(node.scale)
-  const scaledWidth = Math.max(1e-4, width * Math.abs(scaleX))
-  const scaledDepth = Math.max(1e-4, depth * Math.abs(scaleZ))
-  const elementSize = Math.max(1e-4, scaledWidth / columns)
+  const absScaleX = Math.abs(scaleX)
+  const absScaleZ = Math.abs(scaleZ)
+  // Use the averaged horizontal scale so the heightfield grid matches the runtime physics setup.
+  const uniformHorizontalScale = Math.max(1e-4, (absScaleX + absScaleZ) * 0.5)
+  const elementSize = Math.max(1e-4, rawCellSize * uniformHorizontalScale)
+  const width = Math.max(1e-4, columns * elementSize)
+  const depth = Math.max(1e-4, rows * elementSize)
 
   const matrix: number[][] = []
   const heightMap = dynamicMesh.heightMap ?? {}
@@ -877,9 +876,9 @@ function buildHeightfieldShapeFromGroundNode(node: SceneNode): RigidbodyPhysicsS
     kind: 'heightfield',
     matrix,
     elementSize,
-    width: scaledWidth,
-    depth: scaledDepth,
-    offset: [-scaledWidth * 0.5, 0, -scaledDepth * 0.5],
+    width,
+    depth,
+    offset: [-width * 0.5, 0, -depth * 0.5],
   }
 }
 
