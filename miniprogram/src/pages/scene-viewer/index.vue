@@ -705,6 +705,9 @@ type VehicleInstance = { nodeId: string; vehicle: CANNON.RaycastVehicle; wheelCo
 const vehicleInstances = new Map<string, VehicleInstance>();
 type GroundHeightfieldCacheEntry = { signature: string; shape: CANNON.Heightfield; offset: [number, number, number] };
 const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>();
+const groundHeightfieldOrientation = new CANNON.Quaternion();
+groundHeightfieldOrientation.setFromEuler(-Math.PI / 2, 0, 0);
+const heightfieldShapeOffsetHelper = new CANNON.Vec3();
 const physicsGravity = new CANNON.Vec3(0, -9.82, 0);
 const PHYSICS_FIXED_TIMESTEP = 1 / 60;
 const PHYSICS_MAX_SUB_STEPS = 5;
@@ -2423,16 +2426,21 @@ function createRigidbodyBody(
 ): CANNON.Body | null {
   let offsetTuple: RigidbodyVector3Tuple | null = null;
   let resolvedShape: CANNON.Shape | null = null;
+  let needsHeightfieldOrientation = false;
   if (isGroundDynamicMesh(node.dynamicMesh)) {
     const groundEntry = resolveGroundHeightfieldShape(node, node.dynamicMesh);
     if (groundEntry) {
       resolvedShape = groundEntry.shape;
       offsetTuple = groundEntry.offset;
+      needsHeightfieldOrientation = true;
     }
   }
   if (!resolvedShape && shapeDefinition) {
     resolvedShape = createCannonShape(shapeDefinition);
     offsetTuple = shapeDefinition.offset ?? null;
+    if (shapeDefinition.kind === 'heightfield') {
+      needsHeightfieldOrientation = true;
+    }
   }
   if (!resolvedShape) {
     return null;
@@ -2442,12 +2450,13 @@ function createRigidbodyBody(
   const mass = isDynamic ? Math.max(0, props.mass ?? 0) : 0;
   const body = new CANNON.Body({ mass });
   body.type = mapBodyType(props.bodyType);
+  let shapeOffset: CANNON.Vec3 | undefined;
   if (offsetTuple) {
     const [ox, oy, oz] = offsetTuple;
-    body.addShape(resolvedShape, new CANNON.Vec3(ox ?? 0, oy ?? 0, oz ?? 0));
-  } else {
-    body.addShape(resolvedShape);
+    shapeOffset = heightfieldShapeOffsetHelper.set(ox ?? 0, oy ?? 0, oz ?? 0);
   }
+  const shapeOrientation = needsHeightfieldOrientation ? groundHeightfieldOrientation : undefined;
+  body.addShape(resolvedShape, shapeOffset, shapeOrientation);
   syncBodyFromObject(body, object);
   body.updateMassProperties();
   body.linearDamping = 0.04;
