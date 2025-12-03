@@ -204,7 +204,7 @@ watch(selectedNoiseMode, (mode) => {
             class="ground-tabs"
           >
             <v-tab value="terrain" :title="'地形工具'">
-              <v-icon icon="mdi-image-edit-outline" size="18" />
+              <v-icon icon="mdi-image-edit-outline" size="16" />
             </v-tab>
             <v-tab
               v-for="tab in scatterTabs"
@@ -212,7 +212,7 @@ watch(selectedNoiseMode, (mode) => {
               :value="tab.key"
               :title="tab.label"
             >
-              <v-icon :icon="tab.icon" size="18" />
+              <v-icon :icon="tab.icon" size="16" />
             </v-tab>
           </v-tabs>
           <v-window v-model="groundPanelTabModel" class="ground-tab-window" touch>
@@ -286,14 +286,20 @@ watch(selectedNoiseMode, (mode) => {
 }
 
 .ground-tabs :deep(.v-tab) {
-  min-height: 30px;
-  min-width: 30px;
+  min-height: 26px;
+  min-width: 26px;
   padding: 0;
   justify-content: center;
 }
 
 .ground-tab-window {
   flex: 1;
+}
+
+.v-tab.v-tab.v-btn {
+      width: 20px;
+    height: 40px;
+    min-width: 30px;
 }
 
 </style>
