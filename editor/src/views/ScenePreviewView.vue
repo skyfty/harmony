@@ -4413,6 +4413,51 @@ function normalizeHeightfieldMatrix(source: unknown): number[][] | null {
 	return paddedColumns as number[][]
 }
 
+function sanitizeConvexFaces(
+	source: unknown,
+	vertexCount: number,
+): { faces: number[][]; invalidCount: number } {
+	const result: { faces: number[][]; invalidCount: number } = { faces: [], invalidCount: 0 }
+	if (!Array.isArray(source) || vertexCount < 4) {
+		return result
+	}
+	source.forEach((face) => {
+		if (!Array.isArray(face) || face.length < 3) {
+			result.invalidCount += 1
+			return
+		}
+		const normalized: number[] = []
+		let invalid = false
+		for (let i = 0; i < face.length; i += 1) {
+			const raw = face[i]
+			const numeric = typeof raw === 'number' ? raw : Number(raw)
+			if (!Number.isFinite(numeric)) {
+				invalid = true
+				break
+			}
+			const index = Math.trunc(numeric)
+			if (index < 0 || index >= vertexCount) {
+				invalid = true
+				break
+			}
+			if (!normalized.length || normalized[normalized.length - 1] !== index) {
+				normalized.push(index)
+			}
+		}
+		if (invalid) {
+			result.invalidCount += 1
+			return
+		}
+		const deduped = normalized.filter((value, index, array) => array.indexOf(value) === index)
+		if (deduped.length < 3) {
+			result.invalidCount += 1
+			return
+		}
+		result.faces.push(deduped)
+	})
+	return result
+}
+
 function createCannonShape(definition: RigidbodyPhysicsShape): CANNON.Shape | null {
 	if (definition.kind === 'box') {
 		const [x, y, z] = definition.halfExtents
@@ -4422,10 +4467,64 @@ function createCannonShape(definition: RigidbodyPhysicsShape): CANNON.Shape | nu
 		return new CANNON.Box(new CANNON.Vec3(x, y, z))
 	}
 	if (definition.kind === 'convex') {
-		const vertices = (definition.vertices ?? []).map(([vx, vy, vz]) => new CANNON.Vec3(vx, vy, vz))
-		const faces = (definition.faces ?? []).map((face) => face.slice())
-		if (!vertices.length || !faces.length) {
+		if (!Array.isArray(definition.vertices) || definition.vertices.length < 4) {
 			return null
+		}
+
+		// Merge duplicate vertices to avoid degenerate geometry
+		const vertices: CANNON.Vec3[] = []
+		const vertexMap = new Map<string, number>()
+		const indexMap = new Map<number, number>()
+
+		for (let i = 0; i < definition.vertices.length; i += 1) {
+			const tuple = definition.vertices[i]
+			const [vx, vy, vz] = tuple ?? []
+			if (![vx, vy, vz].every((value) => typeof value === 'number' && Number.isFinite(value))) {
+				return null
+			}
+			// Use a precision key to merge close vertices
+			const key = `${vx.toFixed(4)},${vy.toFixed(4)},${vz.toFixed(4)}`
+			if (vertexMap.has(key)) {
+				indexMap.set(i, vertexMap.get(key)!)
+			} else {
+				const newIndex = vertices.length
+				vertices.push(new CANNON.Vec3(vx, vy, vz))
+				vertexMap.set(key, newIndex)
+				indexMap.set(i, newIndex)
+			}
+		}
+
+		// Remap faces
+		const remappedFaces: number[][] = []
+		if (Array.isArray(definition.faces)) {
+			definition.faces.forEach((face) => {
+				if (Array.isArray(face)) {
+					const newFace: number[] = []
+					face.forEach((idx) => {
+						const numeric = typeof idx === 'number' ? idx : Number(idx)
+						if (Number.isFinite(numeric)) {
+							const originalIndex = Math.trunc(numeric)
+							if (indexMap.has(originalIndex)) {
+								newFace.push(indexMap.get(originalIndex)!)
+							}
+						}
+					})
+					if (newFace.length >= 3) {
+						remappedFaces.push(newFace)
+					}
+				}
+			})
+		}
+
+		const { faces, invalidCount } = sanitizeConvexFaces(remappedFaces, vertices.length)
+		if (!faces.length) {
+			return null
+		}
+		if (invalidCount) {
+			console.warn(
+				'[ScenePreview] Convex collider faces contain invalid vertex indices; skipped %d face(s).',
+				invalidCount,
+			)
 		}
 		return new CANNON.ConvexPolyhedron({ vertices, faces })
 	}
@@ -4584,22 +4683,27 @@ function buildBoxDebugLines(shape: Extract<RigidbodyPhysicsShape, { kind: 'box' 
 
 function buildConvexDebugLines(shape: Extract<RigidbodyPhysicsShape, { kind: 'convex' }>): THREE.LineSegments | null {
 	const vertices = Array.isArray(shape.vertices) ? shape.vertices : []
-	const faces = Array.isArray(shape.faces) ? shape.faces : []
-	if (!vertices.length || !faces.length) {
+	if (!vertices.length) {
 		return null
 	}
 	const positions = new Float32Array(vertices.length * 3)
-	vertices.forEach(([vx = 0, vy = 0, vz = 0], index) => {
+	for (let index = 0; index < vertices.length; index += 1) {
+		const tuple = vertices[index]
+		const [vx = 0, vy = 0, vz = 0] = tuple ?? []
+		if (![vx, vy, vz].every((value) => typeof value === 'number' && Number.isFinite(value))) {
+			return null
+		}
 		const offset = index * 3
 		positions[offset] = vx
 		positions[offset + 1] = vy
 		positions[offset + 2] = vz
-	})
+	}
+	const { faces } = sanitizeConvexFaces(shape.faces, vertices.length)
+	if (!faces.length) {
+		return null
+	}
 	const indices: number[] = []
 	faces.forEach((face) => {
-		if (!Array.isArray(face) || face.length < 3) {
-			return
-		}
 		for (let i = 1; i < face.length - 1; i += 1) {
 			indices.push(face[0], face[i], face[i + 1])
 		}
@@ -5137,7 +5241,11 @@ function stepPhysicsWorld(delta: number): void {
 	if (!physicsWorld || !rigidbodyInstances.size) {
 		return
 	}
-	physicsWorld.step(PHYSICS_FIXED_TIMESTEP, delta, PHYSICS_MAX_SUB_STEPS)
+	try {
+		physicsWorld.step(PHYSICS_FIXED_TIMESTEP, delta, PHYSICS_MAX_SUB_STEPS)
+	} catch (error) {
+		console.warn('[ScenePreview] Physics step failed', error)
+	}
 	rigidbodyInstances.forEach((entry) => syncObjectFromBody(entry))
 }
 

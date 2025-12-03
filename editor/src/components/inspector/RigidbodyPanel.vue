@@ -12,6 +12,7 @@ import {
   MIN_RIGIDBODY_MASS,
   MAX_RIGIDBODY_MASS,
 } from '@schema/components'
+import NodePicker from '@/components/common/NodePicker.vue'
 
 const BODY_TYPE_OPTIONS: Array<{ label: string; value: RigidbodyBodyType }> = [
   { label: 'Dynamic', value: 'DYNAMIC' },
@@ -35,6 +36,7 @@ const normalizedProps = computed(() => {
 
 const localMass = ref(DEFAULT_RIGIDBODY_MASS)
 const localBodyType = ref<RigidbodyBodyType>('DYNAMIC')
+const localTargetNodeId = ref<string | undefined>(undefined)
 const MASS_LOCK_EPSILON = 1e-4
 const LOCKED_BODY_TYPES = new Set<RigidbodyBodyType>(['STATIC', 'KINEMATIC'])
 const LOCKED_BODY_TYPE_MASS = 0
@@ -49,6 +51,7 @@ watch(
     } else {
       localMass.value = props.mass
     }
+    localTargetNodeId.value = props.targetNodeId
   },
   { immediate: true, deep: true },
 )
@@ -102,6 +105,15 @@ function handleBodyTypeChange(value: RigidbodyBodyType | null) {
     return
   }
   updateComponent({ bodyType: value })
+}
+
+function handleTargetNodeChange(value: string | null) {
+  const newValue = value ?? undefined
+  localTargetNodeId.value = newValue
+  if (newValue === normalizedProps.value.targetNodeId) {
+    return
+  }
+  updateComponent({ targetNodeId: newValue })
 }
 
 function handleToggleComponent() {
@@ -184,6 +196,15 @@ function handleRemoveComponent() {
           :model-value="localMass"
           @update:modelValue="handleMassInput"
         />
+        <div class="target-node-picker">
+          <div class="text-caption mb-1 text-medium-emphasis">Collider</div>
+          <NodePicker
+            :model-value="localTargetNodeId"
+            :disabled="!rigidbodyComponent?.enabled"
+            placeholder="Self (Default)"
+            @update:model-value="handleTargetNodeChange"
+          />
+        </div>
       </div>
     </v-expansion-panel-text>
   </v-expansion-panel>

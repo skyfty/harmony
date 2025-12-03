@@ -1762,7 +1762,6 @@ async function exportScene(options: SceneExportOptions, onProgress: (progress: n
 }
 
 function applyCameraState(state: SceneCameraState | null | undefined) {
-  console.log('applyCameraState', state)
   if (!state || !orbitControls) return
 
   cameraTransitionState = null
@@ -5341,7 +5340,6 @@ async function handleViewportDrop(event: DragEvent) {
 }
 
 function handleTransformChange() {
-  console.warn('Transform change detected')
   if (!transformControls || !isSceneReady.value) return
   const target = transformControls.object as THREE.Object3D | null
   if (!target || !target.userData?.nodeId) {
