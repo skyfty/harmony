@@ -2172,6 +2172,21 @@ function isGroundDynamicMesh(value: SceneNode['dynamicMesh'] | null | undefined)
   return value?.type === 'Ground';
 }
 
+function resolveNodeScaleVector(node: SceneNode | null | undefined): { x: number; y: number; z: number } {
+  const scale = node?.scale;
+  const normalize = (value: unknown) => {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+    return 1;
+  };
+  return {
+    x: normalize(scale?.x),
+    y: normalize(scale?.y),
+    z: normalize(scale?.z),
+  };
+}
+
 function attachRuntimeForNode(nodeId: string, object: THREE.Object3D) {
   const nodeState = resolveNodeById(nodeId);
   if (!nodeState) {
@@ -2290,7 +2305,10 @@ type GroundHeightfieldBuildResult = {
   signature: string;
 };
 
-function buildGroundHeightfieldData(definition: GroundDynamicMesh): GroundHeightfieldBuildResult | null {
+function buildGroundHeightfieldData(
+  node: SceneNode,
+  definition: GroundDynamicMesh,
+): GroundHeightfieldBuildResult | null {
   const rawRows = Number.isFinite(definition.rows) ? Math.floor(definition.rows) : 0;
   const rawColumns = Number.isFinite(definition.columns) ? Math.floor(definition.columns) : 0;
   const rows = Math.max(1, rawRows);
@@ -2298,6 +2316,9 @@ function buildGroundHeightfieldData(definition: GroundDynamicMesh): GroundHeight
   const pointsX = columns + 1;
   const pointsZ = rows + 1;
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1;
+  const { x: scaleX, y: scaleY, z: scaleZ } = resolveNodeScaleVector(node);
+  const uniformHorizontalScale = Math.max(1e-4, (Math.abs(scaleX) + Math.abs(scaleZ)) * 0.5);
+  const scaledElementSize = Math.max(1e-4, cellSize * uniformHorizontalScale);
   if (pointsX <= 0 || pointsZ <= 0) {
     return null;
   }
@@ -2309,21 +2330,20 @@ function buildGroundHeightfieldData(definition: GroundDynamicMesh): GroundHeight
     for (let row = 0; row < pointsZ; row += 1) {
       const key = `${row}:${column}`;
       const rawHeight = heightMap[key];
-      const height = typeof rawHeight === 'number' && Number.isFinite(rawHeight) ? rawHeight : 0;
+      const baseHeight = typeof rawHeight === 'number' && Number.isFinite(rawHeight) ? rawHeight : 0;
+      const height = baseHeight * scaleY;
       columnValues.push(height);
       const normalized = Math.round(height * 1000);
       heightHash = (heightHash * 31 + normalized) >>> 0;
     }
     matrix.push(columnValues);
   }
-  const derivedWidth = columns * cellSize;
-  const derivedDepth = rows * cellSize;
-  const width = Number.isFinite(definition.width) && definition.width > 0 ? definition.width : derivedWidth;
-  const depth = Number.isFinite(definition.depth) && definition.depth > 0 ? definition.depth : derivedDepth;
+  const width = columns * scaledElementSize;
+  const depth = rows * scaledElementSize;
   const signature = `${columns}|${rows}|${Math.round(cellSize * 1000)}|${Math.round(width * 1000)}|${Math.round(depth * 1000)}|${heightHash.toString(16)}`;
   return {
     matrix,
-    elementSize: cellSize,
+    elementSize: scaledElementSize,
     halfWidth: Math.max(0, width * 0.5),
     halfDepth: Math.max(0, depth * 0.5),
     signature,
@@ -2331,10 +2351,11 @@ function buildGroundHeightfieldData(definition: GroundDynamicMesh): GroundHeight
 }
 
 function resolveGroundHeightfieldShape(
-  nodeId: string,
+  node: SceneNode,
   definition: GroundDynamicMesh,
 ): GroundHeightfieldCacheEntry | null {
-  const data = buildGroundHeightfieldData(definition);
+  const nodeId = node.id;
+  const data = buildGroundHeightfieldData(node, definition);
   if (!data) {
     groundHeightfieldCache.delete(nodeId);
     return null;
@@ -2460,7 +2481,7 @@ function createRigidbodyBody(
   let offsetTuple: RigidbodyVector3Tuple | null = null;
   let resolvedShape: CANNON.Shape | null = null;
   if (isGroundDynamicMesh(node.dynamicMesh)) {
-    const groundEntry = resolveGroundHeightfieldShape(node.id, node.dynamicMesh);
+    const groundEntry = resolveGroundHeightfieldShape(node, node.dynamicMesh);
     if (groundEntry) {
       resolvedShape = groundEntry.shape;
       offsetTuple = groundEntry.offset;
