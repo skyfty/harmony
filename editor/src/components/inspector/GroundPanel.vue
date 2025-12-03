@@ -5,11 +5,15 @@ import { useSceneStore } from '@/stores/sceneStore'
 import { useTerrainStore } from '@/stores/terrainStore'
 import type { GroundDynamicMesh, GroundGenerationMode, GroundGenerationSettings, GroundSculptOperation } from '@harmony/schema'
 import { applyGroundGeneration } from '@schema/groundMesh'
+import TerrainSculptPanel from './TerrainSculptPanel.vue'
+import GroundAssetPainter from './GroundAssetPainter.vue'
+import { terrainScatterPresets, type TerrainScatterCategory } from '@/resources/projectProviders/asset'
+import type { GroundPanelTab } from '@/stores/terrainStore'
 
 const sceneStore = useSceneStore()
 const terrainStore = useTerrainStore()
 const { selectedNode } = storeToRefs(sceneStore)
-const { brushRadius, brushStrength, brushShape, brushOperation } = storeToRefs(terrainStore)
+const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab } = storeToRefs(terrainStore)
 
 const selectedGroundNode = computed(() => {
   if (selectedNode.value?.dynamicMesh?.type === 'Ground') {
@@ -27,6 +31,19 @@ const localDepth = computed(() => groundDefinition.value?.depth ?? 0)
 const noiseStrength = ref(1)
 const selectedNoiseMode = ref<GroundGenerationMode>('perlin')
 let syncingGeneration = false
+
+const scatterTabs = computed(() =>
+  (Object.keys(terrainScatterPresets) as TerrainScatterCategory[]).map((key) => ({
+    key,
+    label: terrainScatterPresets[key].label,
+    icon: terrainScatterPresets[key].icon,
+  })),
+)
+
+const groundPanelTabModel = computed<GroundPanelTab>({
+  get: () => groundPanelTab.value,
+  set: (value) => terrainStore.setGroundPanelTab(value),
+})
 
 const terrainOperations: Array<{ value: GroundSculptOperation; label: string; icon: string }> = [
   { value: 'depress', label: 'Depress', icon: 'mdi-tray-arrow-down' },
@@ -154,7 +171,7 @@ watch(selectedNoiseMode, (mode) => {
 <template>
   <v-expansion-panel value="ground">
     <v-expansion-panel-title>
-       Terrain Tools
+       Ground Tools
     </v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="ground-dimensions">
@@ -178,98 +195,54 @@ watch(selectedNoiseMode, (mode) => {
         />
       </div>
 
-
-      <div class="control-group " style="    margin: 0px 0px 10px 0px;">
-        <div class="text-caption mb-1">Brush Shape</div>
-        <v-btn-toggle v-model="brushShape" density="compact" mandatory divided variant="outlined" color="primary">
-          <v-btn value="circle" icon="mdi-circle-outline" title="Circle"></v-btn>
-          <v-btn value="square" icon="mdi-square-outline" title="Square"></v-btn>
-          <v-btn value="star" icon="mdi-star-outline" title="Star"></v-btn>
-        </v-btn-toggle>
-      </div>
-      
-      <div class="control-group">
-        <div class="text-caption mb-1">Operation</div>
-        <v-btn-toggle
-          v-model="brushOperation"
-          density="compact"
-          mandatory
-          divided
-          variant="outlined"
-          color="primary"
-          :disabled="!hasGround"
-          class="icon-toggle-group"
-        >
-          <v-btn
-            v-for="operation in terrainOperations"
-            :key="operation.value"
-            :value="operation.value"
-            :title="operation.label"
-            icon
-            :aria-label="operation.label"
-          >
-            <v-icon :icon="operation.icon" />
-          </v-btn>
-        </v-btn-toggle>
-      </div>
-
-      <div class="control-group">
-        <div class="text-caption">Brush Radius: {{ brushRadius }}</div>
-        <v-slider
-          v-model="brushRadius"
-          :min="0.1"
-          :max="50"
-          :step="0.1"
-          color="primary"
-          density="compact"
-          hide-details
-        />
-      </div>
-
-      <div class="control-group ">
-        <div class="text-caption ">Brush Strength: {{ brushStrength }}</div>
-        <v-slider
-          v-model="brushStrength"
-          :min="0.1"
-          :max="10"
-          :step="0.1"
-          color="primary"
-          density="compact"
-          hide-details
-        />
-      </div>
-
-        <v-divider class="ground-panel-divider" />
-
-        <div class="control-group noise-type">
-          <div class="text-caption mb-1">Noise Type</div>
-          <v-select
-            v-model="selectedNoiseMode"
-            :items="noiseModeOptions"
-            item-title="label"
-            item-value="value"
+      <div class="ground-tool-tabs">
+        <div class="ground-tabs-layout">
+          <v-tabs
+            v-model="groundPanelTabModel"
             density="compact"
-                variant="underlined"
-            hide-details
-            :disabled="!hasGround"
-            class="noise-mode-select"
+            direction="vertical"
+            class="ground-tabs"
           >
-          </v-select>
+            <v-tab value="terrain" :title="'地形工具'">
+              <v-icon icon="mdi-image-edit-outline" size="18" />
+            </v-tab>
+            <v-tab
+              v-for="tab in scatterTabs"
+              :key="tab.key"
+              :value="tab.key"
+              :title="tab.label"
+            >
+              <v-icon :icon="tab.icon" size="18" />
+            </v-tab>
+          </v-tabs>
+          <v-window v-model="groundPanelTabModel" class="ground-tab-window" touch>
+            <v-window-item value="terrain">
+              <TerrainSculptPanel
+                v-model:brush-radius="brushRadius"
+                v-model:brush-strength="brushStrength"
+                v-model:brush-shape="brushShape"
+                v-model:brush-operation="brushOperation"
+                v-model:noise-strength="noiseStrength"
+                v-model:noise-mode="selectedNoiseMode"
+                :has-ground="hasGround"
+                :terrain-operations="terrainOperations"
+                :noise-mode-options="noiseModeOptions"
+              />
+            </v-window-item>
+            <v-window-item
+              v-for="tab in scatterTabs"
+              :key="`panel-${tab.key}`"
+              :value="tab.key"
+            >
+              <GroundAssetPainter
+                v-if="groundPanelTabModel === tab.key"
+                :key="tab.key"
+                :category="tab.key"
+              />
+            </v-window-item>
+          </v-window>
         </div>
-
-        <div class="control-group">
-          <div class="text-caption">Noise Strength: {{ noiseStrength }}</div>
-        <v-slider
-            v-model="noiseStrength"
-            :min="0"
-            :max="5"
-            :step="0.1"
-            color="primary"
-            density="compact"
-            :disabled="!hasGround"
-          />
-        </div>
-
+      </div>
     </v-expansion-panel-text>
   </v-expansion-panel>
 </template>
@@ -303,17 +276,24 @@ watch(selectedNoiseMode, (mode) => {
   flex: 1;
 }
 
-.ground-panel-divider {
-  opacity: 0.15;
-  margin: 12px 0;
+.ground-tool-tabs {
+  margin-top: 12px;
 }
 
-.icon-toggle-group :deep(.v-btn) {
-  min-width: 38px;
+.ground-tabs-layout {
+  display: flex;
+  gap: 12px;
 }
 
-.noise-type {
-  margin-bottom: 10px;
+.ground-tabs :deep(.v-tab) {
+  min-height: 30px;
+  min-width: 30px;
+  padding: 0;
+  justify-content: center;
+}
+
+.ground-tab-window {
+  flex: 1;
 }
 
 </style>

@@ -30,6 +30,8 @@ interface AssetManifest {
   assets: AssetManifestEntry[]
 }
 
+type AssetManifestLoader = () => Promise<AssetManifest>
+
 const TYPE_LABELS: Record<string, string> = {
   model: 'Model',
   image: 'Image',
@@ -71,6 +73,26 @@ async function fetchManifest(): Promise<AssetManifest> {
   return payload
 }
 
+let manifestCache: AssetManifest | null = null
+let manifestPromise: Promise<AssetManifest> | null = null
+
+async function ensureManifest(loader: AssetManifestLoader = fetchManifest): Promise<AssetManifest> {
+  if (manifestCache) {
+    return manifestCache
+  }
+  if (!manifestPromise) {
+    manifestPromise = loader()
+      .then((payload) => {
+        manifestCache = payload
+        return payload
+      })
+      .finally(() => {
+        manifestPromise = null
+      })
+  }
+  return manifestPromise
+}
+
 function mapManifestEntry(entry: AssetManifestEntry): ProjectAsset {
   return mapServerAssetToProjectAsset({
     id: entry.id,
@@ -110,7 +132,100 @@ export const assetProvider: ResourceProvider = {
   url: null,
   includeInPackages: true,
   async load(): Promise<ProjectDirectory[]> {
-    const manifest = await fetchManifest()
+    const manifest = await ensureManifest()
     return buildDirectories(manifest.assets)
   },
+}
+
+export type TerrainScatterCategory = 'flora' | 'rocks' | 'trees' | 'water' | 'ground'
+
+export interface TerrainScatterPreset {
+  label: string
+  icon: string
+  path: string
+  spacing: number
+  minScale: number
+  maxScale: number
+}
+
+const SCATTER_BASE_PATH = '/resources/assets/terrain'
+
+export const terrainScatterPresets: Record<TerrainScatterCategory, TerrainScatterPreset> = {
+  flora: {
+    label: '花草',
+    icon: 'mdi-flower',
+    path: `${SCATTER_BASE_PATH}/flora`,
+    spacing: 1.25,
+    minScale: 0.85,
+    maxScale: 1.2,
+  },
+  rocks: {
+    label: '岩石',
+    icon: 'mdi-terrain',
+    path: `${SCATTER_BASE_PATH}/rocks`,
+    spacing: 2.2,
+    minScale: 0.9,
+    maxScale: 1.15,
+  },
+  trees: {
+    label: '树木',
+    icon: 'mdi-pine-tree',
+    path: `${SCATTER_BASE_PATH}/trees`,
+    spacing: 3.2,
+    minScale: 0.8,
+    maxScale: 1.35,
+  },
+  water: {
+    label: '水面',
+    icon: 'mdi-water',
+    path: `${SCATTER_BASE_PATH}/water`,
+    spacing: 2.6,
+    minScale: 0.95,
+    maxScale: 1.05,
+  },
+  ground: {
+    label: '地面',
+    icon: 'mdi-grass',
+    path: `${SCATTER_BASE_PATH}/ground`,
+    spacing: 1.4,
+    minScale: 0.9,
+    maxScale: 1.1,
+  },
+}
+
+export function invalidateAssetManifestCache(): void {
+  manifestCache = null
+}
+
+function normalizePath(path: string): string {
+  return path.replace(/\\/g, '/').toLowerCase()
+}
+
+function entryMatchesPath(entry: AssetManifestEntry, normalizedPath: string): boolean {
+  const download = entry.downloadUrl?.toLowerCase() ?? ''
+  const preview = entry.previewUrl?.toLowerCase() ?? ''
+  const thumbnail = entry.thumbnailUrl?.toLowerCase() ?? ''
+  return (
+    (download && download.includes(normalizedPath)) ||
+    (preview && preview.includes(normalizedPath)) ||
+    (thumbnail && thumbnail.includes(normalizedPath))
+  )
+}
+
+export async function loadAssetsByPath(path: string | string[]): Promise<ProjectAsset[]> {
+  const manifest = await ensureManifest()
+  const targets = (Array.isArray(path) ? path : [path]).map((entry) => normalizePath(entry)).filter(Boolean)
+  if (!targets.length) {
+    return []
+  }
+  const matches = manifest.assets.filter((entry) => targets.some((target) => entryMatchesPath(entry, target)))
+  return matches.map(mapManifestEntry)
+}
+
+export async function loadScatterAssets(category: TerrainScatterCategory): Promise<ProjectAsset[]> {
+  const preset = terrainScatterPresets[category]
+  if (!preset) {
+    return []
+  }
+  return loadAssetsByPath(preset.path)
 }
