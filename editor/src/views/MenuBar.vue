@@ -167,6 +167,9 @@ function handleToggleStats() {
                       <span class="shortcut-label">Ctrl+D</span>
                     </template>
                   </v-list-item>
+                  <v-divider />
+                  <v-list-item @click="handleMenuAction('CleanUnusedAssets')" class="menu-list-item">
+                    Clean Unused Assets    </v-list-item>
                 </v-list>
                 </v-menu>
                 <v-icon size="18" class="ml-1">mdi-menu-down</v-icon>
