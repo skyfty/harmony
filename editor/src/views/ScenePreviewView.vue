@@ -31,7 +31,12 @@ import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph
 import ResourceCache from '@schema/ResourceCache'
 import { AssetLoader, AssetCache } from '@schema/assetCache'
 import type { AssetCacheEntry } from '@schema/assetCache'
-import { buildGroundHeightfieldData, isGroundDynamicMesh, type GroundHeightfieldData } from '@schema/groundHeightfield'
+import {
+	buildGroundHeightfieldData,
+	buildHeightfieldShapeFromGroundNode,
+	isGroundDynamicMesh,
+	type GroundHeightfieldData,
+} from '@schema/groundHeightfield'
 import { loadNodeObject } from '@schema/modelAssetLoader'
 import {
 	getCachedModelObject,
@@ -4772,7 +4777,10 @@ function refreshRigidbodyDebugHelper(nodeId: string): void {
 	}
 	const node = resolveNodeById(nodeId)
 	const component = resolveRigidbodyComponent(node)
-	const shapeDefinition = extractRigidbodyShape(component)
+	let shapeDefinition = extractRigidbodyShape(component)
+	if (!shapeDefinition && node && isGroundDynamicMesh(node.dynamicMesh)) {
+		shapeDefinition = buildHeightfieldShapeFromGroundNode(node)
+	}
 	if (!shapeDefinition) {
 		removeRigidbodyDebugHelper(nodeId)
 		return
