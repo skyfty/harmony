@@ -8,6 +8,7 @@ export type RigidbodyBodyType = 'DYNAMIC' | 'STATIC' | 'KINEMATIC'
 export interface RigidbodyComponentProps {
   mass: number
   bodyType: RigidbodyBodyType
+  targetNodeId?: string
 }
 
 export type RigidbodyVector3Tuple = [number, number, number]
@@ -56,6 +57,7 @@ export function clampRigidbodyComponentProps(
   return {
     mass: normalizedMass,
     bodyType: normalizedType,
+    targetNodeId: props?.targetNodeId,
   }
 }
 
@@ -63,6 +65,7 @@ export function cloneRigidbodyComponentProps(props: RigidbodyComponentProps): Ri
   return {
     mass: props.mass,
     bodyType: props.bodyType,
+    targetNodeId: props.targetNodeId,
   }
 }
 
