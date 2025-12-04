@@ -10710,6 +10710,8 @@ export const useSceneStore = defineStore('scene', {
               numbersDiffer(wheel.suspensionDamping, nextWheel.suspensionDamping) ||
               numbersDiffer(wheel.suspensionCompression, nextWheel.suspensionCompression) ||
               numbersDiffer(wheel.frictionSlip, nextWheel.frictionSlip) ||
+              numbersDiffer(wheel.maxSuspensionTravel, nextWheel.maxSuspensionTravel) ||
+              wheel.isFrontWheel !== nextWheel.isFrontWheel ||
               numbersDiffer(wheel.rollInfluence, nextWheel.rollInfluence) ||
               tupleChanged(wheel.directionLocal, nextWheel.directionLocal) ||
               tupleChanged(wheel.axleLocal, nextWheel.axleLocal)

@@ -75,6 +75,7 @@ function handleWheelInput(
     'suspensionDamping' |
     'suspensionCompression' |
     'frictionSlip' |
+    'maxSuspensionTravel' |
     'rollInfluence'>,
   value: string | number,
 ): void {
@@ -83,6 +84,13 @@ function handleWheelInput(
     return
   }
   patchActiveWheel((wheel) => (wheel[key] === numeric ? wheel : { ...wheel, [key]: numeric }))
+}
+
+function handleWheelBooleanInput(key: 'isFrontWheel', value: boolean): void {
+  if (typeof value !== 'boolean') {
+    return
+  }
+  patchActiveWheel((wheel) => (wheel[key] === value ? wheel : { ...wheel, [key]: value }))
 }
 
 function handleVectorInput(
@@ -238,6 +246,20 @@ watch(
                 @update:modelValue="(value) => handleWheelInput('frictionSlip', value)"
               />
               <v-text-field
+                label="Max Suspension Travel (m)"
+                class="slider-input"
+                density="compact"
+                variant="underlined"
+                inputmode="decimal"
+                type="number"
+                hide-details
+                :min="0"
+                :step="0.01"
+                :model-value="activeWheel.maxSuspensionTravel"
+                :disabled="isDisabled"
+                @update:modelValue="(value) => handleWheelInput('maxSuspensionTravel', value)"
+              />
+              <v-text-field
                 label="Anti-Roll"
                 class="slider-input"
                 density="compact"
@@ -250,6 +272,14 @@ watch(
                 :model-value="activeWheel.rollInfluence"
                 :disabled="isDisabled"
                 @update:modelValue="(value) => handleWheelInput('rollInfluence', value)"
+              />
+              <v-switch
+                label="Front Wheel"
+                color="primary"
+                hide-details
+                :model-value="activeWheel.isFrontWheel"
+                :disabled="isDisabled"
+                @update:modelValue="(value) => handleWheelBooleanInput('isFrontWheel', Boolean(value))"
               />
             </div>
 

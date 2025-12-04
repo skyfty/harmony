@@ -15,6 +15,8 @@ export interface VehicleWheelProps {
   suspensionDamping: number
   suspensionCompression: number
   frictionSlip: number
+  maxSuspensionTravel: number
+  isFrontWheel: boolean
   rollInfluence: number
   directionLocal: VehicleVector3Tuple
   axleLocal: VehicleVector3Tuple
@@ -39,6 +41,8 @@ const DEFAULT_SUSPENSION_DAMPING = 2
 const DEFAULT_SUSPENSION_COMPRESSION = 4
 const DEFAULT_FRICTION_SLIP = 5
 const DEFAULT_ROLL_INFLUENCE = 0.01
+const DEFAULT_MAX_SUSPENSION_TRAVEL = 0.3
+const DEFAULT_IS_FRONT_WHEEL = true
 const DEFAULT_WHEEL_COUNT = 4
 const DEFAULT_WHEEL_TEMPLATE: Omit<VehicleWheelProps, 'id'> = {
   nodeId: null,
@@ -48,6 +52,8 @@ const DEFAULT_WHEEL_TEMPLATE: Omit<VehicleWheelProps, 'id'> = {
   suspensionDamping: DEFAULT_SUSPENSION_DAMPING,
   suspensionCompression: DEFAULT_SUSPENSION_COMPRESSION,
   frictionSlip: DEFAULT_FRICTION_SLIP,
+  maxSuspensionTravel: DEFAULT_MAX_SUSPENSION_TRAVEL,
+  isFrontWheel: DEFAULT_IS_FRONT_WHEEL,
   rollInfluence: DEFAULT_ROLL_INFLUENCE,
   directionLocal: DEFAULT_DIRECTION,
   axleLocal: DEFAULT_AXLE,
@@ -89,6 +95,22 @@ function clampVectorTuple(value: unknown, fallback: VehicleVector3Tuple): Vehicl
   return [...fallback]
 }
 
+function clampBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === 'boolean') {
+    return value
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === 'true') {
+      return true
+    }
+    if (normalized === 'false') {
+      return false
+    }
+  }
+  return fallback
+}
+
 type LegacyWheelProps = {
   radius?: unknown
   suspensionRestLength?: unknown
@@ -97,6 +119,8 @@ type LegacyWheelProps = {
   suspensionCompression?: unknown
   frictionSlip?: unknown
   rollInfluence?: unknown
+  maxSuspensionTravel?: unknown
+  isFrontWheel?: unknown
 }
 
 type LegacyComponentVectors = {
@@ -136,6 +160,8 @@ function clampWheelEntry(
     suspensionDamping: clampPositive(source.suspensionDamping, template.suspensionDamping, { min: 0 }),
     suspensionCompression: clampPositive(source.suspensionCompression, template.suspensionCompression, { min: 0 }),
     frictionSlip: clampPositive(source.frictionSlip, template.frictionSlip, { min: 0 }),
+    maxSuspensionTravel: clampPositive(source.maxSuspensionTravel, template.maxSuspensionTravel, { min: 0 }),
+    isFrontWheel: clampBoolean(source.isFrontWheel, template.isFrontWheel),
     rollInfluence: clampPositive(source.rollInfluence, template.rollInfluence, { min: 0 }),
     directionLocal: clampVectorTuple(source.directionLocal, template.directionLocal),
     axleLocal: clampVectorTuple(source.axleLocal, template.axleLocal),
@@ -169,6 +195,8 @@ function resolveLegacyWheelTemplate(
     suspensionDamping: clampPositive(props?.suspensionDamping, DEFAULT_SUSPENSION_DAMPING, { min: 0 }),
     suspensionCompression: clampPositive(props?.suspensionCompression, DEFAULT_SUSPENSION_COMPRESSION, { min: 0 }),
     frictionSlip: clampPositive(props?.frictionSlip, DEFAULT_FRICTION_SLIP, { min: 0 }),
+    maxSuspensionTravel: clampPositive(props?.maxSuspensionTravel, DEFAULT_MAX_SUSPENSION_TRAVEL, { min: 0 }),
+    isFrontWheel: clampBoolean(props?.isFrontWheel, DEFAULT_IS_FRONT_WHEEL),
     rollInfluence: clampPositive(props?.rollInfluence, DEFAULT_ROLL_INFLUENCE, { min: 0 }),
     directionLocal: vectors.directionLocal,
     axleLocal: vectors.axleLocal,
@@ -215,6 +243,8 @@ export function cloneVehicleComponentProps(props: VehicleComponentProps): Vehicl
       suspensionDamping: wheel.suspensionDamping,
       suspensionCompression: wheel.suspensionCompression,
       frictionSlip: wheel.frictionSlip,
+      maxSuspensionTravel: wheel.maxSuspensionTravel,
+      isFrontWheel: wheel.isFrontWheel,
       rollInfluence: wheel.rollInfluence,
       directionLocal: [...wheel.directionLocal] as VehicleVector3Tuple,
       axleLocal: [...wheel.axleLocal] as VehicleVector3Tuple,

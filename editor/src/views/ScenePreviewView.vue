@@ -5438,7 +5438,17 @@ function createVehicleInstance(
 		return null
 	}
 	const wheelCount = connectionPoints.length
-	const steerableWheelIndices = wheelCount >= 2 ? [0, 1] : connectionPoints.map((_point, index) => index)
+	let steerableWheelIndices = connectionPoints.reduce<number[]>((indices, entry, index) => {
+		if (entry.config.isFrontWheel) {
+			indices.push(index)
+		}
+		return indices
+	}, [])
+	if (!steerableWheelIndices.length) {
+		steerableWheelIndices = wheelCount >= 2
+			? [0, 1].filter((index) => index < wheelCount)
+			: connectionPoints.map((_point, index) => index)
+	}
 	const vehicle = new CANNON.RaycastVehicle({
 		chassisBody: rigidbody.body,
 		indexRightAxis: rightAxis,
@@ -5457,6 +5467,8 @@ function createVehicleInstance(
 			dampingRelaxation: config.suspensionDamping,
 			dampingCompression: config.suspensionCompression,
 			frictionSlip: config.frictionSlip,
+			maxSuspensionTravel: config.maxSuspensionTravel,
+			isFrontWheel: config.isFrontWheel,
 			rollInfluence: config.rollInfluence,
 			radius: config.radius,
 		})

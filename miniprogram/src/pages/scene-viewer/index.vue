@@ -2963,6 +2963,8 @@ function createVehicleInstance(
       dampingRelaxation: config.suspensionDamping,
       dampingCompression: config.suspensionCompression,
       frictionSlip: config.frictionSlip,
+      maxSuspensionTravel: config.maxSuspensionTravel,
+      isFrontWheel: config.isFrontWheel,
       rollInfluence: config.rollInfluence,
       radius: config.radius,
     });
