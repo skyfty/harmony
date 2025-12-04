@@ -364,7 +364,7 @@ function handleRemoveComponent(): void {
               :disabled="!isComponentEnabled"
               @click="handleAddWheel"
             >
-              添加车轮
+              Add Wheel
             </v-btn>
           </div>
           <div class="vehicle-wheel-list">
@@ -379,9 +379,9 @@ function handleRemoveComponent(): void {
         
                   <NodePicker
                     class="vehicle-wheel-item__picker"
-                    pick-hint="点击场景中的车轮模型"
-                    selection-hint="在场景中选择作为车轮的节点"
-                    placeholder="未绑定节点"
+                    pick-hint="Click a wheel model in the scene"
+                    selection-hint="Select the node in the scene to use as the wheel"
+                    placeholder=""
                     :model-value="wheel.nodeId ?? null"
                     :disabled="!isComponentEnabled"
                     @update:modelValue="(value) => handleWheelNodeChange(wheel.id, value as string | null)"

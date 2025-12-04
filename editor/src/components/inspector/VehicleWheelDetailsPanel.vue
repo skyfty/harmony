@@ -135,7 +135,7 @@ watch(
         <v-toolbar density="compact" class="panel-toolbar" height="40px">
           <div class="toolbar-text">
             <div class="material-title">
-              {{ activeWheel.nodeId ? `Attached Node: ${activeWheel.nodeId}` : 'No node attached yet' }}
+              Edit Wheel
             </div>
           </div>
           <v-spacer />
