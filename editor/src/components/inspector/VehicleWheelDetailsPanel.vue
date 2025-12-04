@@ -134,26 +134,127 @@ watch(
 </script>
 
 <template>
+  <Teleport to="body">
   <transition name="fade-transition">
     <div
       v-if="visible && wheelId && anchor && activeWheel"
       class="vehicle-wheel-details"
       :style="panelStyle"
     >
-      <div class="vehicle-wheel-details__header">
-        <div>
-          <div class="vehicle-wheel-details__title">{{ wheelLabel }}</div>
-          <div class="vehicle-wheel-details__subtitle">
-            {{ activeWheel.nodeId ? `绑定节点：${activeWheel.nodeId}` : '尚未绑定节点' }}
+        <v-toolbar density="compact" class="panel-toolbar" height="40px">
+        <div class="toolbar-text">
+            <div class="material-title">{{ activeWheel.nodeId ? `绑定节点：${activeWheel.nodeId}` : '尚未绑定节点' }}</div>
           </div>
+            
+          <v-spacer />
+        <v-btn class="toolbar-close" icon="mdi-close" size="small" variant="text" @click="handleClose" />
+
+        </v-toolbar>
+        <v-divider />
+      <div class="panel-content">
+        <div class="panel-content-inner">
+          
+      <div class="material-properties ">
+        <v-text-field
+          label="半径 (m)"
+                  class="slider-input"
+          density="compact"
+          variant="underlined"
+          type="number"
+          hide-details
+                  inputmode="decimal"
+          :min="0"
+          :step="0.05"
+          :model-value="activeWheel.radius"
+          :disabled="isDisabled"
+          @update:modelValue="(value) => handleWheelInput('radius', value)"
+        />
+        <v-text-field
+          label="悬挂静止长度 (m)"
+          density="compact"
+                  class="slider-input"
+          variant="underlined"
+          type="number"
+                  inputmode="decimal"
+          hide-details
+          :min="0"
+          :step="0.01"
+          :model-value="activeWheel.suspensionRestLength"
+          :disabled="isDisabled"
+          @update:modelValue="(value) => handleWheelInput('suspensionRestLength', value)"
+        />
+        <v-text-field
+          label="悬挂刚度"
+          density="compact"
+                  class="slider-input"
+          variant="underlined"
+                  inputmode="decimal"
+          type="number"
+          hide-details
+          :min="0"
+          :step="1"
+          :model-value="activeWheel.suspensionStiffness"
+          :disabled="isDisabled"
+          @update:modelValue="(value) => handleWheelInput('suspensionStiffness', value)"
+        />
+        <v-text-field
+          label="悬挂阻尼"
+          density="compact"
+          variant="underlined"
+                  inputmode="decimal"
+                  class="slider-input"
+          type="number"
+          hide-details
+          :min="0"
+          :step="0.1"
+          :model-value="activeWheel.suspensionDamping"
+          :disabled="isDisabled"
+          @update:modelValue="(value) => handleWheelInput('suspensionDamping', value)"
+        />
+        <v-text-field
+          label="压缩系数"
+          density="compact"
+                  inputmode="decimal"
+                  class="slider-input"
+          variant="underlined"
+          type="number"
+          hide-details
+          :min="0"
+          :step="0.1"
+          :model-value="activeWheel.suspensionCompression"
+          :disabled="isDisabled"
+          @update:modelValue="(value) => handleWheelInput('suspensionCompression', value)"
+        />
+        <v-text-field
+          label="摩擦系数"
+          density="compact"
+                  inputmode="decimal"
+                  class="slider-input"
+          variant="underlined"
+          type="number"
+          hide-details
+          :min="0"
+          :step="0.1"
+          :model-value="activeWheel.frictionSlip"
+          :disabled="isDisabled"
+          @update:modelValue="(value) => handleWheelInput('frictionSlip', value)"
+        />
+        <v-text-field
+          label="抗侧倾"
+          density="compact"
+                  inputmode="decimal"
+                  class="slider-input"
+          variant="underlined"
+          type="number"
+          hide-details
+          :min="0"
+          :step="0.001"
+          :model-value="activeWheel.rollInfluence"
+          :disabled="isDisabled"
+          @update:modelValue="(value) => handleWheelInput('rollInfluence', value)"
+        />
         </div>
-        <v-btn icon size="small" variant="text" @click="handleClose">
-          <v-icon size="18">mdi-close</v-icon>
-        </v-btn>
-      </div>
-      <div class="vehicle-wheel-details__vectors">
-        <div class="vehicle-wheel-details__subsection">
-          <div class="vehicle-wheel-details__subsection-title">Direction (Local)</div>
+<div class="vehicle-wheel-details__subsection-title">Direction (Local)</div>
           <div class="vehicle-wheel-details__vector-grid">
             <v-text-field
               label="X"
@@ -188,8 +289,6 @@ watch(
               :disabled="isDisabled"
               @update:modelValue="(value) => handleVectorInput('directionLocal', 2, value)"
             />
-          </div>
-        </div>
         <div class="vehicle-wheel-details__subsection">
           <div class="vehicle-wheel-details__subsection-title">Axle (Local)</div>
           <div class="vehicle-wheel-details__vector-grid">
@@ -229,107 +328,77 @@ watch(
           </div>
         </div>
       </div>
-      <div class="vehicle-wheel-details__grid">
-        <v-text-field
-          label="半径 (m)"
-          density="compact"
-          variant="solo"
-          type="number"
-          hide-details
-          :min="0"
-          :step="0.05"
-          :model-value="activeWheel.radius"
-          :disabled="isDisabled"
-          @update:modelValue="(value) => handleWheelInput('radius', value)"
-        />
-        <v-text-field
-          label="悬挂静止长度 (m)"
-          density="compact"
-          variant="solo"
-          type="number"
-          hide-details
-          :min="0"
-          :step="0.01"
-          :model-value="activeWheel.suspensionRestLength"
-          :disabled="isDisabled"
-          @update:modelValue="(value) => handleWheelInput('suspensionRestLength', value)"
-        />
-        <v-text-field
-          label="悬挂刚度"
-          density="compact"
-          variant="solo"
-          type="number"
-          hide-details
-          :min="0"
-          :step="1"
-          :model-value="activeWheel.suspensionStiffness"
-          :disabled="isDisabled"
-          @update:modelValue="(value) => handleWheelInput('suspensionStiffness', value)"
-        />
-        <v-text-field
-          label="悬挂阻尼"
-          density="compact"
-          variant="solo"
-          type="number"
-          hide-details
-          :min="0"
-          :step="0.1"
-          :model-value="activeWheel.suspensionDamping"
-          :disabled="isDisabled"
-          @update:modelValue="(value) => handleWheelInput('suspensionDamping', value)"
-        />
-        <v-text-field
-          label="压缩系数"
-          density="compact"
-          variant="solo"
-          type="number"
-          hide-details
-          :min="0"
-          :step="0.1"
-          :model-value="activeWheel.suspensionCompression"
-          :disabled="isDisabled"
-          @update:modelValue="(value) => handleWheelInput('suspensionCompression', value)"
-        />
-        <v-text-field
-          label="摩擦系数"
-          density="compact"
-          variant="solo"
-          type="number"
-          hide-details
-          :min="0"
-          :step="0.1"
-          :model-value="activeWheel.frictionSlip"
-          :disabled="isDisabled"
-          @update:modelValue="(value) => handleWheelInput('frictionSlip', value)"
-        />
-        <v-text-field
-          label="抗侧倾"
-          density="compact"
-          variant="solo"
-          type="number"
-          hide-details
-          :min="0"
-          :step="0.001"
-          :model-value="activeWheel.rollInfluence"
-          :disabled="isDisabled"
-          @update:modelValue="(value) => handleWheelInput('rollInfluence', value)"
-        />
+        </div>
       </div>
     </div>
   </transition>
+  </Teleport>
 </template>
 
 <style scoped>
+
+
+.vehicle-wheel-details-enter-active,
+.vehicle-wheel-details-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.vehicle-wheel-details-enter-from,
+.vehicle-wheel-details-leave-to {
+  opacity: 0;
+  transform: translate(-105%, 10px);
+}
+
 .vehicle-wheel-details {
   position: fixed;
-  z-index: 60;
+  top: 0;
+  left: 0;
+  transform: translateX(-100%);
+  
   min-width: 320px;
-  padding: 1rem;
-  border-radius: 12px;
+  max-height: calc(100% - 400px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 5px;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(15, 19, 26, 0.92);
-  backdrop-filter: blur(18px);
-  box-shadow: 0 22px 48px rgba(0, 0, 0, 0.45);
+  background-color: rgba(18, 22, 28, 0.72);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
+  z-index: 24;
+}
+
+.panel-toolbar {
+  background-color: transparent;
+  color: #e9ecf1;
+  min-height: 20px;
+  padding: 0 8px;
+}
+
+.toolbar-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.panel-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  
+}
+
+
+
+.panel-content-inner {
+  display: flex;
+    padding: 16px;
+border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    background-color: rgb(var(--v-theme-surface));
+  margin: 4px;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .vehicle-wheel-details__header {
@@ -370,6 +439,19 @@ watch(
   gap: 0.45rem;
 }
 
+.slider-input :deep(.v-field-label) {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.material-properties {
+  display: grid;
+  gap: 22px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.toolbar-close {
+  color: rgba(233, 236, 241, 0.72);
+}
 .vehicle-wheel-details__grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
