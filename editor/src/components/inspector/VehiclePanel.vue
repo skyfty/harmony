@@ -298,7 +298,6 @@ function handleRemoveComponent(): void {
           <div class="vehicle-panel__section-header">
             <div>
               <div class="vehicle-panel__section-title">Wheels</div>
-              <div class="vehicle-panel__section-hint">管理每个车轮的模型与参数</div>
             </div>
             <v-btn
               size="small"
@@ -317,18 +316,24 @@ function handleRemoveComponent(): void {
               class="vehicle-wheel-item"
               :class="{ 'vehicle-wheel-item--active': wheelDetailsActiveId === wheel.id }"
             >
-              <div class="vehicle-wheel-item__header">
-                <div>
-                  <div class="vehicle-wheel-item__label">车轮 {{ index + 1 }}</div>
-                  <div class="vehicle-wheel-item__hint">
-                    {{ wheel.nodeId ? '已绑定节点' : '未绑定节点' }}
-                  </div>
+              <div class="vehicle-wheel-item__content">
+                <div class="vehicle-wheel-item__details">
+        
+                  <NodePicker
+                    class="vehicle-wheel-item__picker"
+                    pick-hint="点击场景中的车轮模型"
+                    selection-hint="在场景中选择作为车轮的节点"
+                    placeholder="未绑定节点"
+                    :model-value="wheel.nodeId ?? null"
+                    :disabled="!isComponentEnabled"
+                    @update:modelValue="(value) => handleWheelNodeChange(wheel.id, value as string | null)"
+                  />
                 </div>
                 <div class="vehicle-wheel-item__actions">
                   <v-btn
                     icon
                     variant="text"
-                    size="small"
+                  density="compact"
                     class="vehicle-wheel-item__action"
                     :disabled="!isComponentEnabled"
                     @click="openWheelDetails(wheel.id)"
@@ -338,7 +343,7 @@ function handleRemoveComponent(): void {
                   <v-btn
                     icon
                     variant="text"
-                    size="small"
+                  density="compact"
                     class="vehicle-wheel-item__action"
                     :disabled="!isComponentEnabled || wheelEntries.length <= 1"
                     @click="handleRemoveWheel(wheel.id)"
@@ -347,15 +352,6 @@ function handleRemoveComponent(): void {
                   </v-btn>
                 </div>
               </div>
-              <NodePicker
-                class="vehicle-wheel-item__picker"
-                pick-hint="点击场景中的车轮模型"
-                selection-hint="在场景中选择作为车轮的节点"
-                placeholder="未绑定节点"
-                :model-value="wheel.nodeId ?? null"
-                :disabled="!isComponentEnabled"
-                @update:modelValue="(value) => handleWheelNodeChange(wheel.id, value as string | null)"
-              />
             </div>
           </div>
         </div>
@@ -385,6 +381,8 @@ function handleRemoveComponent(): void {
 }
 
 .vehicle-panel__section-title {
+  display: inline-flex;
+  align-items: center;
   font-size: 0.82rem;
   font-weight: 600;
   margin-bottom: 0.35rem;
@@ -396,6 +394,7 @@ function handleRemoveComponent(): void {
   align-items: flex-start;
   justify-content: space-between;
   gap: 0.8rem;
+  margin-bottom: 0.5rem;
 }
 
 .vehicle-panel__section-hint {
@@ -433,13 +432,9 @@ function handleRemoveComponent(): void {
 }
 
 .vehicle-wheel-item {
-  padding: 0.6rem;
   border-radius: 10px;
-  border: 1px solid rgba(233, 236, 241, 0.08);
-  background: rgba(20, 24, 31, 0.65);
-  display: flex;
-  flex-direction: column;
-  gap: 0.55rem;
+  border: 1px solid rgba(233, 236, 241, 0.28);
+  background: rgb(0 0 0);
 }
 
 .vehicle-wheel-item--active {
@@ -447,11 +442,19 @@ function handleRemoveComponent(): void {
   box-shadow: 0 0 0 1px rgba(93, 154, 255, 0.3);
 }
 
-.vehicle-wheel-item__header {
+.vehicle-wheel-item__content {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.6rem;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.vehicle-wheel-item__details {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
 }
 
 .vehicle-wheel-item__label {
@@ -466,11 +469,14 @@ function handleRemoveComponent(): void {
 
 .vehicle-wheel-item__actions {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 0.15rem;
+  gap: 0.35rem;
+  flex-shrink: 0;
 }
 
 .vehicle-wheel-item__picker {
-  width: 100%;
+  flex: 1;
+  min-width: 200px;
 }
 </style>
