@@ -74,6 +74,7 @@ import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache } from '@sch
 import { useTerrainStore } from '@/stores/terrainStore'
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 import { createSurfaceMesh, updateSurfaceMesh } from '@schema/surfaceMesh'
+import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
 import {
   VIEW_POINT_COMPONENT_TYPE,
@@ -418,54 +419,24 @@ function refreshEffectRuntimeTickers(): void {
 
 const DYNAMIC_MESH_SIGNATURE_KEY = '__harmonyDynamicMeshSignature'
 
-function stableSerialize(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableSerialize(item)).join(',')}]`
-  }
-  if (value && typeof value === 'object') {
-    const entries = Object.entries(value as Record<string, unknown>)
-      .filter(([, entryValue]) => entryValue !== undefined)
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    const serialized = entries.map(([key, entryValue]) => `${JSON.stringify(key)}:${stableSerialize(entryValue)}`)
-    return `{${serialized.join(',')}}`
-  }
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value.toString() : 'null'
-  }
-  if (typeof value === 'boolean') {
-    return value ? 'true' : 'false'
-  }
-  if (typeof value === 'string') {
-    return JSON.stringify(value)
-  }
-  if (value === null || value === undefined) {
-    return 'null'
-  }
-  return JSON.stringify(value)
-}
-
 function computeGroundDynamicMeshSignature(definition: GroundDynamicMesh): string {
-  return stableSerialize({
-    width: definition.width,
-    depth: definition.depth,
-    rows: definition.rows,
-    columns: definition.columns,
-    cellSize: definition.cellSize,
-    heightMap: definition.heightMap ?? {},
-    textureDataUrl: definition.textureDataUrl ?? null,
-    textureName: definition.textureName ?? null,
+  const serialized = stableSerialize({
+    heightMap: definition.heightMap ?? {}
   })
+  return hashString(serialized)
 }
 
 function computeWallDynamicMeshSignature(definition: WallDynamicMesh): string {
-  return stableSerialize(definition.segments ?? [])
+  const serialized = stableSerialize(definition.segments ?? [])
+  return hashString(serialized)
 }
 
 function computeSurfaceDynamicMeshSignature(definition: SurfaceDynamicMesh): string {
-  return stableSerialize({
+  const serialized = stableSerialize({
     points: definition.points ?? [],
     normal: definition.normal ?? null,
   })
+  return hashString(serialized)
 }
 
 const {

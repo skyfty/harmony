@@ -13,6 +13,7 @@ import type {
   SceneResourceSummaryEntry,
 } from '@harmony/schema';
 import type ResourceCache from './ResourceCache';
+import { hashString, stableSerialize } from './stableSerialize';
 
 export interface SceneMaterialFactoryOptions {
   provider: ResourceCache;
@@ -1128,37 +1129,12 @@ function resolveWrapMode(mode: string): THREE.Wrapping {
   }
 }
 
-function stableSerializeValue(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableSerializeValue(entry)).join(',')}]`;
-  }
-  if (value && typeof value === 'object') {
-    const entries = Object.entries(value as Record<string, unknown>)
-      .filter(([, entryValue]) => entryValue !== undefined)
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-    const serialized = entries.map(([key, entryValue]) => `${JSON.stringify(key)}:${stableSerializeValue(entryValue)}`);
-    return `{${serialized.join(',')}}`;
-  }
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value.toString() : 'null';
-  }
-  if (typeof value === 'boolean') {
-    return value ? 'true' : 'false';
-  }
-  if (typeof value === 'string') {
-    return JSON.stringify(value);
-  }
-  if (value === null || value === undefined) {
-    return 'null';
-  }
-  return JSON.stringify(value);
-}
-
 function materialConfigsSignature(configs: SceneNodeMaterial[]): string {
   if (!configs.length) {
     return '';
   }
-  return configs.map((config) => stableSerializeValue(config)).join('||');
+  const serialized = stableSerialize(configs);
+  return hashString(serialized);
 }
 
 function collectMaterialUUIDs(material: THREE.Material | THREE.Material[]): string[] {

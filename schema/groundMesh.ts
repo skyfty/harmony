@@ -412,6 +412,7 @@ export function sculptGround(definition: GroundDynamicMesh, params: SculptParams
   const maxRow = Math.ceil((localZ + radius + halfDepth) / cellSize)
 
   let modified = false
+  let heightMap = definition.heightMap
 
   for (let row = Math.max(0, minRow); row <= Math.min(rows, maxRow); row++) {
       for (let col = Math.max(0, minCol); col <= Math.min(columns, maxCol); col++) {
@@ -457,35 +458,36 @@ export function sculptGround(definition: GroundDynamicMesh, params: SculptParams
               }
           }
 
-            if (isInside) {
-              let influence = Math.cos((dist / radius) * (Math.PI / 2))
-              const noiseVal = sculptNoise(x * 0.05, z * 0.05, 0)
-              influence *= 1.0 + noiseVal * 0.1
+          if (isInside) {
+            let influence = Math.cos((dist / radius) * (Math.PI / 2))
+            const noiseVal = sculptNoise(x * 0.05, z * 0.05, 0)
+            influence *= 1.0 + noiseVal * 0.1
 
-              const key = groundVertexKey(row, col)
-              const currentHeight = definition.heightMap[key] ?? 0
-              let nextHeight = currentHeight
+            const key = groundVertexKey(row, col)
+            const currentHeight = heightMap[key] ?? 0
+            let nextHeight = currentHeight
 
-              if (operation === 'smooth') {
-                const average = sampleNeighborAverage(definition, row, col, rows, columns)
-                const smoothingFactor = Math.min(1, strength * 0.25)
-                nextHeight = currentHeight + (average - currentHeight) * smoothingFactor * influence
-              } else if (operation === 'flatten') {
-                const reference = targetHeight ?? currentHeight
-                const flattenFactor = Math.min(1, strength * 0.4)
-                nextHeight = currentHeight + (reference - currentHeight) * flattenFactor * influence
-              } else {
-                const direction = operation === 'depress' ? -1 : 1
-                const offset = direction * strength * influence * 0.3
-                nextHeight = currentHeight + offset
-              }
-
-              setHeightMapValue(definition.heightMap, key, nextHeight)
-              modified = true
+            if (operation === 'smooth') {
+              const average = sampleNeighborAverage(definition, row, col, rows, columns)
+              const smoothingFactor = Math.min(1, strength * 0.25)
+              nextHeight = currentHeight + (average - currentHeight) * smoothingFactor * influence
+            } else if (operation === 'flatten') {
+              const reference = targetHeight ?? currentHeight
+              const flattenFactor = Math.min(1, strength * 0.4)
+              nextHeight = currentHeight + (reference - currentHeight) * flattenFactor * influence
+            } else {
+              const direction = operation === 'depress' ? -1 : 1
+              const offset = direction * strength * influence * 0.3
+              nextHeight = currentHeight + offset
             }
+
+            setHeightMapValue(heightMap, key, nextHeight)
+            modified = true
+          }
       }
   }
   if (modified) {
+    definition.heightMap = heightMap
     definition.hasManualEdits = true
   }
   return modified
