@@ -16,14 +16,14 @@ export interface VehicleWheelProps {
   suspensionCompression: number
   frictionSlip: number
   rollInfluence: number
+  directionLocal: VehicleVector3Tuple
+  axleLocal: VehicleVector3Tuple
 }
 
 export interface VehicleComponentProps {
   indexRightAxis: number
   indexUpAxis: number
   indexForwardAxis: number
-  directionLocal: VehicleVector3Tuple
-  axleLocal: VehicleVector3Tuple
   wheels: VehicleWheelProps[]
 }
 
@@ -49,6 +49,8 @@ const DEFAULT_WHEEL_TEMPLATE: Omit<VehicleWheelProps, 'id'> = {
   suspensionCompression: DEFAULT_SUSPENSION_COMPRESSION,
   frictionSlip: DEFAULT_FRICTION_SLIP,
   rollInfluence: DEFAULT_ROLL_INFLUENCE,
+  directionLocal: DEFAULT_DIRECTION,
+  axleLocal: DEFAULT_AXLE,
 }
 
 function clampAxisIndex(value: unknown, fallback: number): number {
@@ -97,7 +99,12 @@ type LegacyWheelProps = {
   rollInfluence?: unknown
 }
 
-type VehicleComponentPropsInput = (Partial<VehicleComponentProps> & LegacyWheelProps) | null | undefined
+type LegacyComponentVectors = {
+  directionLocal?: unknown
+  axleLocal?: unknown
+}
+
+type VehicleComponentPropsInput = (Partial<VehicleComponentProps> & LegacyWheelProps & LegacyComponentVectors) | null | undefined
 
 function clampWheelNodeId(value: unknown): string | null {
   if (typeof value !== 'string') {
@@ -130,6 +137,8 @@ function clampWheelEntry(
     suspensionCompression: clampPositive(source.suspensionCompression, template.suspensionCompression, { min: 0 }),
     frictionSlip: clampPositive(source.frictionSlip, template.frictionSlip, { min: 0 }),
     rollInfluence: clampPositive(source.rollInfluence, template.rollInfluence, { min: 0 }),
+    directionLocal: clampVectorTuple(source.directionLocal, template.directionLocal),
+    axleLocal: clampVectorTuple(source.axleLocal, template.axleLocal),
   }
 }
 
@@ -148,7 +157,10 @@ function ensureWheelIds(wheels: VehicleWheelProps[]): VehicleWheelProps[] {
   })
 }
 
-function resolveLegacyWheelTemplate(props: LegacyWheelProps | null | undefined): Omit<VehicleWheelProps, 'id'> {
+function resolveLegacyWheelTemplate(
+  props: LegacyWheelProps | null | undefined,
+  vectors: { directionLocal: VehicleVector3Tuple; axleLocal: VehicleVector3Tuple },
+): Omit<VehicleWheelProps, 'id'> {
   return {
     ...DEFAULT_WHEEL_TEMPLATE,
     radius: clampPositive(props?.radius, DEFAULT_RADIUS, { min: 0.01 }),
@@ -158,6 +170,8 @@ function resolveLegacyWheelTemplate(props: LegacyWheelProps | null | undefined):
     suspensionCompression: clampPositive(props?.suspensionCompression, DEFAULT_SUSPENSION_COMPRESSION, { min: 0 }),
     frictionSlip: clampPositive(props?.frictionSlip, DEFAULT_FRICTION_SLIP, { min: 0 }),
     rollInfluence: clampPositive(props?.rollInfluence, DEFAULT_ROLL_INFLUENCE, { min: 0 }),
+    directionLocal: vectors.directionLocal,
+    axleLocal: vectors.axleLocal,
   }
 }
 
@@ -174,13 +188,15 @@ function clampWheelList(
 export function clampVehicleComponentProps(
   props: VehicleComponentPropsInput,
 ): VehicleComponentProps {
-  const wheelTemplate = resolveLegacyWheelTemplate(props ?? null)
+  const legacyVectors = {
+    directionLocal: clampVectorTuple(props?.directionLocal, DEFAULT_DIRECTION),
+    axleLocal: clampVectorTuple(props?.axleLocal, DEFAULT_AXLE),
+  }
+  const wheelTemplate = resolveLegacyWheelTemplate(props ?? null, legacyVectors)
   return {
     indexRightAxis: clampAxisIndex(props?.indexRightAxis, DEFAULT_RIGHT_AXIS),
     indexUpAxis: clampAxisIndex(props?.indexUpAxis, DEFAULT_UP_AXIS),
     indexForwardAxis: clampAxisIndex(props?.indexForwardAxis, DEFAULT_FORWARD_AXIS),
-    directionLocal: clampVectorTuple(props?.directionLocal, DEFAULT_DIRECTION),
-    axleLocal: clampVectorTuple(props?.axleLocal, DEFAULT_AXLE),
     wheels: clampWheelList(props?.wheels, wheelTemplate),
   }
 }
@@ -190,8 +206,6 @@ export function cloneVehicleComponentProps(props: VehicleComponentProps): Vehicl
     indexRightAxis: props.indexRightAxis,
     indexUpAxis: props.indexUpAxis,
     indexForwardAxis: props.indexForwardAxis,
-    directionLocal: [...props.directionLocal] as VehicleVector3Tuple,
-    axleLocal: [...props.axleLocal] as VehicleVector3Tuple,
     wheels: props.wheels.map((wheel) => ({
       id: wheel.id,
       nodeId: wheel.nodeId ?? null,
@@ -202,6 +216,8 @@ export function cloneVehicleComponentProps(props: VehicleComponentProps): Vehicl
       suspensionCompression: wheel.suspensionCompression,
       frictionSlip: wheel.frictionSlip,
       rollInfluence: wheel.rollInfluence,
+      directionLocal: [...wheel.directionLocal] as VehicleVector3Tuple,
+      axleLocal: [...wheel.axleLocal] as VehicleVector3Tuple,
     })),
   }
 }

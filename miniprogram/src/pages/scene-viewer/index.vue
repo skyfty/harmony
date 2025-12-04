@@ -2951,13 +2951,13 @@ function createVehicleInstance(
     indexUpAxis: upAxis,
     indexForwardAxis: forwardAxis,
   });
-  const directionVec = tupleToVec3(props.directionLocal);
-  const axleVec = tupleToVec3(props.axleLocal);
   connectionPoints.forEach(({ config, point }) => {
+    const directionVec = tupleToVec3(config.directionLocal);
+    const axleVec = tupleToVec3(config.axleLocal);
     vehicle.addWheel({
       chassisConnectionPointLocal: point,
-      directionLocal: directionVec.clone(),
-      axleLocal: axleVec.clone(),
+      directionLocal: directionVec,
+      axleLocal: axleVec,
       suspensionRestLength: config.suspensionRestLength,
       suspensionStiffness: config.suspensionStiffness,
       dampingRelaxation: config.suspensionDamping,

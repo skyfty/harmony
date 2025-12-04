@@ -10692,12 +10692,8 @@ export const useSceneStore = defineStore('scene', {
           ...typedPatch,
         })
         const numbersDiffer = (a: number, b: number, epsilon = 1e-4) => Math.abs(a - b) > epsilon
-        const directionChanged = currentProps.directionLocal.some((value, index) =>
-          numbersDiffer(value, merged.directionLocal[index] ?? value),
-        )
-        const axleChanged = currentProps.axleLocal.some((value, index) =>
-          numbersDiffer(value, merged.axleLocal[index] ?? value),
-        )
+        const tupleChanged = (current: number[], next: number[]) =>
+          current.some((value, index) => numbersDiffer(value, next[index] ?? value))
         const wheelsChanged =
           currentProps.wheels.length !== merged.wheels.length ||
           currentProps.wheels.some((wheel, index) => {
@@ -10714,15 +10710,15 @@ export const useSceneStore = defineStore('scene', {
               numbersDiffer(wheel.suspensionDamping, nextWheel.suspensionDamping) ||
               numbersDiffer(wheel.suspensionCompression, nextWheel.suspensionCompression) ||
               numbersDiffer(wheel.frictionSlip, nextWheel.frictionSlip) ||
-              numbersDiffer(wheel.rollInfluence, nextWheel.rollInfluence)
+              numbersDiffer(wheel.rollInfluence, nextWheel.rollInfluence) ||
+              tupleChanged(wheel.directionLocal, nextWheel.directionLocal) ||
+              tupleChanged(wheel.axleLocal, nextWheel.axleLocal)
             )
           })
         const hasChanges =
           currentProps.indexRightAxis !== merged.indexRightAxis ||
           currentProps.indexUpAxis !== merged.indexUpAxis ||
           currentProps.indexForwardAxis !== merged.indexForwardAxis ||
-          directionChanged ||
-          axleChanged ||
           wheelsChanged
 
         if (!hasChanges) {

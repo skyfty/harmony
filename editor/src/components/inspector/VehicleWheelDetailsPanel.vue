@@ -54,6 +54,19 @@ function handleClose(): void {
   emit('close')
 }
 
+function patchActiveWheel(mutator: (wheel: VehicleWheelProps) => VehicleWheelProps): void {
+  if (!props.wheelId || !vehicleComponent.value || !selectedNodeId.value) {
+    return
+  }
+  const current = clampVehicleComponentProps(vehicleComponent.value.props as VehicleComponentProps)
+  const nextWheels = current.wheels.map((wheel) =>
+    wheel.id === props.wheelId ? mutator(wheel) : wheel,
+  )
+  sceneStore.updateNodeComponentProps(selectedNodeId.value, vehicleComponent.value.id, {
+    wheels: nextWheels,
+  })
+}
+
 function handleWheelInput(
   key: keyof Pick<VehicleWheelProps,
     'radius' |
@@ -65,20 +78,11 @@ function handleWheelInput(
     'rollInfluence'>,
   value: string | number,
 ): void {
-  if (!props.wheelId || !vehicleComponent.value || !selectedNodeId.value) {
-    return
-  }
   const numeric = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(numeric)) {
     return
   }
-  const current = clampVehicleComponentProps(vehicleComponent.value.props as VehicleComponentProps)
-  const nextWheels = current.wheels.map((wheel) =>
-    wheel.id === props.wheelId ? { ...wheel, [key]: numeric } : wheel,
-  )
-  sceneStore.updateNodeComponentProps(selectedNodeId.value, vehicleComponent.value.id, {
-    wheels: nextWheels,
-  })
+  patchActiveWheel((wheel) => (wheel[key] === numeric ? wheel : { ...wheel, [key]: numeric }))
 }
 
 function handleVectorInput(
@@ -86,21 +90,17 @@ function handleVectorInput(
   axisIndex: 0 | 1 | 2,
   value: string | number,
 ): void {
-  if (!vehicleComponent.value || !selectedNodeId.value) {
-    return
-  }
   const numeric = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(numeric)) {
     return
   }
-  const current = clampVehicleComponentProps(vehicleComponent.value.props as VehicleComponentProps)
-  const nextTuple = [...current[key]] as VehicleVector3Tuple
-  if (nextTuple[axisIndex] === numeric) {
-    return
-  }
-  nextTuple[axisIndex] = numeric
-  sceneStore.updateNodeComponentProps(selectedNodeId.value, vehicleComponent.value.id, {
-    [key]: nextTuple,
+  patchActiveWheel((wheel) => {
+    const nextTuple = [...wheel[key]] as VehicleVector3Tuple
+    if (nextTuple[axisIndex] === numeric) {
+      return wheel
+    }
+    nextTuple[axisIndex] = numeric
+    return { ...wheel, [key]: nextTuple }
   })
 }
 
@@ -257,9 +257,9 @@ watch(
               <InspectorVectorControls
                 label="Direction (Local)"
                 :model-value="{
-                  x: normalizedProps.directionLocal[0],
-                  y: normalizedProps.directionLocal[1],
-                  z: normalizedProps.directionLocal[2],
+                  x: activeWheel.directionLocal[0],
+                  y: activeWheel.directionLocal[1],
+                  z: activeWheel.directionLocal[2],
                 }"
                 :disabled="isDisabled"
                 @update:axis="(axis, value) => handleVectorInput('directionLocal', axisToIndex(axis), value)"
@@ -270,9 +270,9 @@ watch(
               <InspectorVectorControls
                 label="Axle (Local)"
                 :model-value="{
-                  x: normalizedProps.axleLocal[0],
-                  y: normalizedProps.axleLocal[1],
-                  z: normalizedProps.axleLocal[2],
+                  x: activeWheel.axleLocal[0],
+                  y: activeWheel.axleLocal[1],
+                  z: activeWheel.axleLocal[2],
                 }"
                 :disabled="isDisabled"
                 @update:axis="(axis, value) => handleVectorInput('axleLocal', axisToIndex(axis), value)"

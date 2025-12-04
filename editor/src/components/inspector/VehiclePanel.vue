@@ -52,6 +52,8 @@ const BASE_WHEEL_TEMPLATE: VehicleWheelProps =
     suspensionCompression: 4,
     frictionSlip: 5,
     rollInfluence: 0.01,
+    directionLocal: [0, -1, 0],
+    axleLocal: [1, 0, 0],
   }
 
 const isComponentEnabled = computed(() => Boolean(vehicleComponent.value?.enabled))
@@ -85,11 +87,11 @@ function subtractTuples(a: VehicleVector3Tuple, b: VehicleVector3Tuple): Vehicle
   return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
-function ensureFiniteTuple(tuple: VehicleVector3Tuple): VehicleVector3Tuple {
+function ensureFiniteTuple(tuple: VehicleVector3Tuple | number[]): VehicleVector3Tuple {
   return tuple.map((value) => (Number.isFinite(value) ? value : 0)) as VehicleVector3Tuple
 }
 
-function autoFillWheelVectors(nodeId: string): void {
+function autoFillWheelVectors(wheelId: string, nodeId: string): void {
   const match = findNodeWithParent(nodes.value, nodeId)
   if (!match) {
     return
@@ -97,7 +99,7 @@ function autoFillWheelVectors(nodeId: string): void {
   const nodePosition = vectorLikeToTuple(match.node.position)
   const parentPosition = match.parent ? vectorLikeToTuple(match.parent.position) : [0, 0, 0]
   const relativePosition = ensureFiniteTuple(subtractTuples(nodePosition, parentPosition))
-  commitClampedPatch({
+  updateWheelEntry(wheelId, {
     directionLocal: [0, -1, 0],
     axleLocal: relativePosition,
   })
@@ -165,7 +167,7 @@ function handleWheelNodeChange(wheelId: string, value: string | null): void {
   }
   updateWheelEntry(wheelId, { nodeId: normalizedValue })
   if (normalizedValue) {
-    autoFillWheelVectors(normalizedValue)
+    autoFillWheelVectors(wheelId, normalizedValue)
   }
 }
 
@@ -181,6 +183,8 @@ function createWheelFromTemplate(source?: VehicleWheelProps): VehicleWheelProps 
     suspensionCompression: base.suspensionCompression,
     frictionSlip: base.frictionSlip,
     rollInfluence: base.rollInfluence,
+    directionLocal: [...base.directionLocal] as VehicleVector3Tuple,
+    axleLocal: [...base.axleLocal] as VehicleVector3Tuple,
   }
 }
 
@@ -369,7 +373,7 @@ function handleRemoveComponent(): void {
           </div>
           <div class="vehicle-wheel-list">
             <div
-              v-for="(wheel, index) in wheelEntries"
+              v-for="wheel in wheelEntries"
               :key="wheel.id"
               class="vehicle-wheel-item"
               :class="{ 'vehicle-wheel-item--active': wheelDetailsActiveId === wheel.id }"
@@ -467,12 +471,6 @@ function handleRemoveComponent(): void {
 
 .vehicle-panel__field-grid--two {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-}
-
-.vehicle-panel__vector-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(90px, 1fr));
-  gap: 0.5rem;
 }
 
 .component-menu-btn {
