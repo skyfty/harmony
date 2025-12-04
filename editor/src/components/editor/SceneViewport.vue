@@ -1733,7 +1733,6 @@ function snapVectorToGridForNode(vec: THREE.Vector3, nodeId: string | null | und
 
 export type SceneViewportHandle = {
   exportScene(options: SceneExportOptions, onProgress: (progress: number, message?: string) => void): Promise<Blob>
-  captureThumbnail(): void
   captureScreenshot(mimeType?: string): Promise<Blob | null>
 }
 
@@ -2782,62 +2781,6 @@ function disposeScene() {
   wallPreviewNeedsSync = false
   wallPreviewSignature = null
   pendingSceneGraphSync = false
-}
-
-async function blobToDataUrl(blob: Blob): Promise<string> {
-  return await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '')
-    reader.onerror = () => reject(reader.error ?? new Error('Failed to read blob'))
-    reader.readAsDataURL(blob)
-  })
-}
-
-async function createThumbnailDataUrl(sourceCanvas: HTMLCanvasElement): Promise<string> {
-  if (!thumbnailResizer) {
-    return sourceCanvas.toDataURL('image/jpeg', THUMBNAIL_JPEG_QUALITY)
-  }
-
-  const maxSide = Math.max(sourceCanvas.width, sourceCanvas.height)
-  const scale = maxSide > 0 ? Math.min(1, THUMBNAIL_MAX_DIMENSION / maxSide) : 1
-  let workingCanvas: HTMLCanvasElement = sourceCanvas
-
-  if (scale < 1) {
-    const targetCanvas = document.createElement('canvas')
-    targetCanvas.width = Math.max(1, Math.round(sourceCanvas.width * scale))
-    targetCanvas.height = Math.max(1, Math.round(sourceCanvas.height * scale))
-    await thumbnailResizer.resize(sourceCanvas, targetCanvas, { alpha: false })
-    workingCanvas = targetCanvas
-  }
-
-  const blob = await thumbnailResizer.toBlob(workingCanvas, 'image/jpeg', THUMBNAIL_JPEG_QUALITY)
-  return blobToDataUrl(blob)
-}
-
-function captureThumbnail() {
-  if (!renderer || !sceneStore.currentSceneId) {
-    return
-  }
-
-  const sourceCanvas = renderer.domElement
-  const sceneId = sceneStore.currentSceneId
-
-  if (!sceneId) {
-    return
-  }
-
-  void (async () => {
-    try {
-      const thumbnail = await createThumbnailDataUrl(sourceCanvas)
-      if (sceneStore.currentSceneId === sceneId) {
-        await sceneStore.updateSceneThumbnail(sceneId, thumbnail)
-      }
-    } catch (error) {
-      console.warn('Failed to capture scene thumbnail', error)
-      const fallbackThumbnail = sourceCanvas.toDataURL('image/jpeg', THUMBNAIL_JPEG_QUALITY)
-      void sceneStore.updateSceneThumbnail(sceneId, fallbackThumbnail)
-    }
-  })()
 }
 
 function createGridHighlight() {
@@ -6695,7 +6638,6 @@ watch(
 
 defineExpose<SceneViewportHandle>({
   exportScene,
-  captureThumbnail,
   captureScreenshot
 })
 </script>

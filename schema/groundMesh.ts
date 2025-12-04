@@ -126,11 +126,15 @@ function groundVertexKey(row: number, column: number): string {
 
 function setHeightMapValue(map: GroundHeightMap, key: string, value: number): void {
   // Keep the height map sparse by skipping zero-height entries.
-  if (value === 0) {
+  let rounded = Math.round(value * 100) / 100
+  if (Object.is(rounded, -0)) {
+    rounded = 0
+  }
+  if (rounded === 0) {
     delete map[key]
     return
   }
-  map[key] = value
+  map[key] = rounded
 }
 
 function clampVertexIndex(value: number, max: number): number {

@@ -894,7 +894,6 @@ async function saveCurrentScene(): Promise<boolean> {
 
   pendingSceneSave = (async () => {
     try {
-      viewportRef.value?.captureThumbnail()
       const document = await sceneStore.saveActiveScene({force: true})
       if (document) {
         const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(document,{embedResources:true})

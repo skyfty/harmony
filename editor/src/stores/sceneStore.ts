@@ -5009,7 +5009,6 @@ export async function cloneSceneDocumentForExport(
     selectedNodeId: scene.selectedNodeId,
     selectedNodeIds: scene.selectedNodeIds,
     camera: scene.camera,
-    thumbnail: scene.thumbnail ?? null,
     resourceProviderId: scene.resourceProviderId,
     createdAt: scene.createdAt,
     updatedAt: scene.updatedAt,
@@ -5853,7 +5852,6 @@ function createSceneDocument(
     selectedNodeId?: string | null
     selectedNodeIds?: string[]
     camera?: SceneCameraState
-    thumbnail?: string | null
     resourceProviderId?: string
     createdAt?: string
     updatedAt?: string
@@ -5921,7 +5919,6 @@ function createSceneDocument(
   return {
     id,
     name,
-    thumbnail: options.thumbnail ?? null,
     nodes,
     materials,
     selectedNodeId,
@@ -5949,7 +5946,6 @@ function normalizeCurrentSceneMeta(store: SceneState) {
   if (!store.currentSceneMeta) {
     store.currentSceneMeta = {
       name: 'Untitled Scene',
-      thumbnail: null,
       createdAt: now,
       updatedAt: now,
     }
@@ -5957,7 +5953,6 @@ function normalizeCurrentSceneMeta(store: SceneState) {
   }
 
   const name = typeof store.currentSceneMeta.name === 'string' ? store.currentSceneMeta.name.trim() : ''
-  const thumbnail = typeof store.currentSceneMeta.thumbnail === 'string' ? store.currentSceneMeta.thumbnail : null
   const createdAtRaw = store.currentSceneMeta.createdAt
   const updatedAtRaw = store.currentSceneMeta.updatedAt
   const createdAt = typeof createdAtRaw === 'string' && createdAtRaw ? createdAtRaw : now
@@ -5965,7 +5960,6 @@ function normalizeCurrentSceneMeta(store: SceneState) {
 
   store.currentSceneMeta = {
     name: name || 'Untitled Scene',
-    thumbnail,
     createdAt,
     updatedAt,
   }
@@ -5985,7 +5979,6 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
   return {
     id: store.currentSceneId,
     name: meta.name,
-    thumbnail: meta.thumbnail ?? null,
     nodes,
     materials: cloneSceneMaterials(store.materials),
     selectedNodeId: store.selectedNodeId,
@@ -6027,7 +6020,6 @@ function commitSceneSnapshot(
 function applyCurrentSceneMeta(store: SceneState, document: StoredSceneDocument) {
   store.currentSceneMeta = {
     name: document.name,
-    thumbnail: document.thumbnail ?? null,
     createdAt: document.createdAt,
     updatedAt: document.updatedAt,
   }
@@ -6259,7 +6251,6 @@ export const useSceneStore = defineStore('scene', {
       currentSceneId: initialSceneDocument.id,
       currentSceneMeta: {
         name: initialSceneDocument.name,
-        thumbnail: initialSceneDocument.thumbnail ?? null,
         createdAt: initialSceneDocument.createdAt,
         updatedAt: initialSceneDocument.updatedAt,
       },
@@ -11411,13 +11402,9 @@ export const useSceneStore = defineStore('scene', {
     ) {
       const scenesStore = useScenesStore()
       const displayName = name.trim() || 'Untitled Scene'
-      let resolvedThumbnail: string | null | undefined
       let resolvedGroundOptions: Partial<GroundSettings> | undefined
       if (thumbnailOrOptions && typeof thumbnailOrOptions === 'object' && !Array.isArray(thumbnailOrOptions)) {
-        resolvedThumbnail = thumbnailOrOptions.thumbnail ?? null
         resolvedGroundOptions = thumbnailOrOptions.groundSettings
-      } else {
-        resolvedThumbnail = (thumbnailOrOptions ?? null) as string | null
       }
 
       const groundSettings = cloneGroundSettings(resolvedGroundOptions ?? this.groundSettings)
@@ -11426,7 +11413,6 @@ export const useSceneStore = defineStore('scene', {
       const baseAssetIndex = cloneAssetIndex(initialAssetIndex)
 
       const sceneDocument = createSceneDocument(displayName, {
-        thumbnail: resolvedThumbnail ?? null,
         resourceProviderId: this.resourceProviderId,
         viewportSettings: this.viewportSettings,
         skybox: this.skybox,
@@ -11498,7 +11484,6 @@ export const useSceneStore = defineStore('scene', {
         selectedNodeId,
         selectedNodeIds,
         camera: cameraState,
-        thumbnail: typeof template.thumbnail === 'string' ? template.thumbnail : null,
         resourceProviderId: typeof template.resourceProviderId === 'string'
           ? template.resourceProviderId
           : this.resourceProviderId,
@@ -11662,23 +11647,6 @@ export const useSceneStore = defineStore('scene', {
       }
       return true
     },
-    async updateSceneThumbnail(sceneId: string, thumbnail: string | null) {
-      const scenesStore = useScenesStore()
-      const document = await scenesStore.loadSceneDocument(sceneId)
-      if (!document) {
-        return false
-      }
-      const updated: StoredSceneDocument = {
-        ...document,
-        thumbnail,
-        updatedAt: new Date().toISOString(),
-      }
-      await scenesStore.saveSceneDocument(updated)
-      if (this.currentSceneId === sceneId) {
-        applyCurrentSceneMeta(this, updated)
-      }
-      return true
-    },
     async exportSceneBundle(
       sceneIds: string[],
       exportOptions: SceneBundleExportOptions = { embedResources: false },
@@ -11752,7 +11720,6 @@ export const useSceneStore = defineStore('scene', {
             ? (entry.selectedNodeIds as unknown[]).filter((id): id is string => typeof id === 'string')
             : undefined,
           camera: normalizeCameraStateInput(entry.camera),
-          thumbnail: typeof entry.thumbnail === 'string' ? entry.thumbnail : null,
           resourceProviderId: typeof entry.resourceProviderId === 'string' ? entry.resourceProviderId : undefined,
           createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : undefined,
           updatedAt: typeof entry.updatedAt === 'string' ? entry.updatedAt : undefined,
