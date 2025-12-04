@@ -9,6 +9,7 @@ import {
   SKY_NODE_ID,
   ENVIRONMENT_NODE_ID,
 } from '@/stores/sceneStore'
+import { useNodePickerStore } from '@/stores/nodePickerStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -26,6 +27,7 @@ const emit = defineEmits<{
 
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
+const nodePickerStore = useNodePickerStore()
 const { hierarchyItems, selectedNodeId, selectedNodeIds, draggingAssetId } = storeToRefs(sceneStore)
 
 const ASSET_DRAG_MIME = 'application/x-harmony-asset'
@@ -663,6 +665,11 @@ function handleNodeClick(event: MouseEvent, nodeId: string) {
   event.preventDefault()
   if (event.button !== 0) return
 
+  if (nodePickerStore.isActive) {
+    nodePickerStore.completePick(nodeId)
+    return
+  }
+
   const isToggle = event.ctrlKey || event.metaKey
   const isRangeSelect = event.shiftKey && selectionAnchorId.value
   const currentlySelected = isItemSelected(nodeId)
@@ -952,6 +959,10 @@ async function handleDrop(event: DragEvent, targetId: string) {
 }
 
 function handleNodeDoubleClick(nodeId: string) {
+  if (nodePickerStore.isActive) {
+    nodePickerStore.completePick(nodeId)
+    return
+  }
   const nextSelection = sceneStore.handleNodeDoubleClick(nodeId)
   if (Array.isArray(nextSelection) && nextSelection.length) {
     suppressSelectionSync.value = true

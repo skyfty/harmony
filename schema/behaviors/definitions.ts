@@ -19,6 +19,8 @@ import type {
   HidePurposeBehaviorParams,
   TriggerBehaviorParams,
   AnimationBehaviorParams,
+  ShowCockpitBehaviorParams,
+  HideCockpitBehaviorParams,
   DriveBehaviorParams,
   DebusBehaviorParams,
 } from '../index'
@@ -274,6 +276,24 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
     },
   },
   {
+    id: 'showCockpit',
+    label: 'Show Cockpit',
+    description: 'Display the vehicle driving controls without changing drive state.',
+    icon: 'mdi-steering',
+    createDefaultParams(): ShowCockpitBehaviorParams {
+      return {}
+    },
+  },
+  {
+    id: 'hideCockpit',
+    label: 'Hide Cockpit',
+    description: 'Hide the vehicle driving controls.',
+    icon: 'mdi-steering-off',
+    createDefaultParams(): HideCockpitBehaviorParams {
+      return {}
+    },
+  },
+  {
     id: 'drive',
     label: 'Drive Vehicle',
     description: 'Attach the camera to a vehicle and show driving controls.',
@@ -281,6 +301,9 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
     createDefaultParams(): DriveBehaviorParams {
       return {
         targetNodeId: null,
+        seatNodeId: null,
+        forwardDirectionNodeId: null,
+        exitNodeId: null,
       }
     },
   },
@@ -616,6 +639,9 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
         type: 'drive',
         params: {
           targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
+          seatNodeId: normalizeTargetNodeId(params?.seatNodeId),
+          forwardDirectionNodeId: normalizeTargetNodeId(params?.forwardDirectionNodeId),
+          exitNodeId: normalizeTargetNodeId(params?.exitNodeId),
         },
       }
     }
@@ -858,12 +884,25 @@ export function ensureBehaviorParams(
           type: 'look',
           params: {},
         }
+      case 'showCockpit':
+        return {
+          type: 'showCockpit',
+          params: {},
+        }
+      case 'hideCockpit':
+        return {
+          type: 'hideCockpit',
+          params: {},
+        }
       case 'drive': {
         const params = script.params as Partial<DriveBehaviorParams> | undefined
         return {
           type: 'drive',
           params: {
             targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
+            seatNodeId: normalizeTargetNodeId(params?.seatNodeId),
+            forwardDirectionNodeId: normalizeTargetNodeId(params?.forwardDirectionNodeId),
+            exitNodeId: normalizeTargetNodeId(params?.exitNodeId),
           },
         }
       }

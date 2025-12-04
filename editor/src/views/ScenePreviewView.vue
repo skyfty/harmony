@@ -128,7 +128,6 @@ function appendWarningMessage(message: string): void {
 	}
 	warningMessages.value = [...existing, trimmed]
 }
-const isFirstPersonMouseControlEnabled = ref(true)
 const isVolumeMenuOpen = ref(false)
 const isCameraCaged = ref(false)
 const memoryFallbackLabel = ref<string | null>(null)
@@ -381,6 +380,34 @@ const vehicleDriveState = reactive({
 	vehicle: null as CANNON.RaycastVehicle | null,
 	steerableWheelIndices: [] as number[],
 	wheelCount: 0,
+	exitNodeId: null as string | null,
+	seatNodeId: null as string | null,
+	forwardNodeId: null as string | null,
+	sourceEvent: null as Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null,
+})
+
+const vehicleDriveUiOverride = ref<'auto' | 'show' | 'hide'>('auto')
+const pendingVehicleDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null)
+const vehicleDrivePromptBusy = ref(false)
+const vehicleDriveExitBusy = ref(false)
+
+const vehicleDrivePrompt = computed(() => {
+	const event = pendingVehicleDriveEvent.value
+	if (!event) {
+		return {
+			visible: false,
+			label: '',
+			busy: false,
+		}
+	}
+	const targetNodeId = event.targetNodeId ?? event.nodeId
+	const node = targetNodeId ? resolveNodeById(targetNodeId) : null
+	const label = node?.name?.trim() || targetNodeId || 'Vehicle'
+	return {
+		visible: true,
+		label,
+		busy: vehicleDrivePromptBusy.value,
+	}
 })
 
 const vehicleDriveInputFlags = reactive<VehicleDriveControlFlags>({
@@ -402,8 +429,11 @@ const vehicleDriveCameraRestoreState = {
 	position: new THREE.Vector3(),
 	target: new THREE.Vector3(),
 	quaternion: new THREE.Quaternion(),
+	up: new THREE.Vector3(),
 	controlMode: controlMode.value as ControlMode,
 	isCameraCaged: false,
+	viewMode: cameraViewState.mode as CameraViewMode,
+	viewTargetId: cameraViewState.watchTargetId as string | null,
 }
 
 const vehicleDriveCameraFollowState = {
@@ -526,13 +556,14 @@ const cameraViewFrustum = new THREE.Frustum()
 const VEHICLE_ENGINE_FORCE = 2200
 const VEHICLE_BRAKE_FORCE = 45
 const VEHICLE_STEER_ANGLE = THREE.MathUtils.degToRad(32)
-const VEHICLE_CAMERA_SMOOTH = 0.12
-const VEHICLE_CAMERA_OFFSET = new THREE.Vector3(0, 3.5, -8)
-const VEHICLE_CAMERA_LOOK_OFFSET = new THREE.Vector3(0, 1.5, 6)
 const tempVehicleCameraOffset = new THREE.Vector3()
 const tempVehicleCameraLook = new THREE.Vector3()
 const tempVehicleQuaternionThree = new THREE.Quaternion()
 const tempVehicleCameraPosition = new THREE.Vector3()
+const tempVehicleCameraUp = new THREE.Vector3()
+const tempVehicleCameraMatrix = new THREE.Matrix4()
+const tempVehicleCameraQuaternion = new THREE.Quaternion()
+const VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE = 6
 const skySunPosition = new THREE.Vector3()
 const DEFAULT_SUN_DIRECTION = new THREE.Vector3(0.35, 1, -0.25).normalize()
 const tempSunDirection = new THREE.Vector3()
@@ -729,6 +760,8 @@ const lastOrbitState = {
 	position: defaultOrbitState.position.clone(),
 	target: defaultOrbitState.target.clone(),
 }
+const defaultOrbitViewDirection = defaultOrbitState.target.clone().sub(defaultOrbitState.position).normalize()
+const defaultOrbitViewDistance = defaultOrbitState.position.distanceTo(defaultOrbitState.target)
 let animationMixers: THREE.AnimationMixer[] = []
 let effectRuntimeTickers: Array<(delta: number) => void> = []
 
@@ -802,7 +835,10 @@ function resolveNodeById(nodeId: string): SceneNode | null {
 }
 
 const vehicleDriveUi = computed(() => {
-	if (!vehicleDriveState.active) {
+	const override = vehicleDriveUiOverride.value
+	const baseActive = vehicleDriveState.active
+	const visible = override === 'show' ? true : override === 'hide' ? false : baseActive
+	if (!visible) {
 		return {
 			visible: false,
 			label: '',
@@ -816,18 +852,23 @@ const vehicleDriveUi = computed(() => {
 	}
 	const nodeId = vehicleDriveState.nodeId ?? ''
 	const node = nodeId ? resolveNodeById(nodeId) : null
-	const label = (node?.name?.trim() || nodeId || 'Vehicle')
+	const label = node?.name?.trim() || nodeId || 'Vehicle'
+	const driveActive = vehicleDriveState.active
 	return {
 		visible: true,
 		label,
-		cameraLocked: true,
-		forwardActive: vehicleDriveInputFlags.forward,
-		backwardActive: vehicleDriveInputFlags.backward,
-		leftActive: vehicleDriveInputFlags.left,
-		rightActive: vehicleDriveInputFlags.right,
-		brakeActive: vehicleDriveInputFlags.brake,
+		cameraLocked: driveActive,
+		forwardActive: driveActive && vehicleDriveInputFlags.forward,
+		backwardActive: driveActive && vehicleDriveInputFlags.backward,
+		leftActive: driveActive && vehicleDriveInputFlags.left,
+		rightActive: driveActive && vehicleDriveInputFlags.right,
+		brakeActive: driveActive && vehicleDriveInputFlags.brake,
 	}
 })
+
+function setVehicleDriveUiOverride(mode: 'auto' | 'show' | 'hide'): void {
+	vehicleDriveUiOverride.value = mode
+}
 
 function resolveGuideboardComponent(
 	node: SceneNode | null | undefined,
@@ -871,21 +912,6 @@ function resolveVehicleComponent(
 	return component
 }
 
-function resolveNodeScaleVector(node: SceneNode | null | undefined): { x: number; y: number; z: number } {
-	const scale = node?.scale
-	const normalize = (value: unknown) => {
-		if (typeof value === 'number' && Number.isFinite(value)) {
-			return value
-		}
-		return 1
-	}
-	return {
-		x: normalize(scale?.x),
-		y: normalize(scale?.y),
-		z: normalize(scale?.z),
-	}
-}
-
 function extractRigidbodyShape(
 	component: SceneNodeComponentState<RigidbodyComponentProps> | null,
 ): RigidbodyPhysicsShape | null {
@@ -921,6 +947,14 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
 }
 
 function normalizeAssetId(value: unknown): string | null {
+	if (typeof value !== 'string') {
+		return null
+	}
+	const trimmed = value.trim()
+	return trimmed.length ? trimmed : null
+}
+
+function normalizeNodeId(value: unknown): string | null {
 	if (typeof value !== 'string') {
 		return null
 	}
@@ -1691,15 +1725,14 @@ watch(controlMode, (mode) => {
 	applyControlMode(mode)
 })
 
-watch(isFirstPersonMouseControlEnabled, (enabled) => {
-	if (enabled && controlMode.value === 'first-person' && firstPersonControls && !isCameraCaged.value) {
-		resetFirstPersonPointerDelta()
-		clampFirstPersonPitch(true)
-		syncFirstPersonOrientation()
-		syncLastFirstPersonStateFromCamera()
-	}
-	updateCameraControlActivation()
-})
+watch(
+	() => vehicleDriveState.active,
+	(active) => {
+		if (active && vehicleDriveUiOverride.value === 'auto') {
+			setVehicleDriveUiOverride('show')
+		}
+	},
+)
 
 function isInputLikeElement(target: EventTarget | null): boolean {
 	const element = target as HTMLElement | null
@@ -1718,7 +1751,7 @@ function updateCameraControlActivation(): void {
 	if (firstPersonControls) {
 		const enableFirstPerson = controlMode.value === 'first-person' && !caged
 		firstPersonControls.enabled = enableFirstPerson
-		firstPersonControls.activeLook = enableFirstPerson && isFirstPersonMouseControlEnabled.value
+		firstPersonControls.activeLook = false // enforce keyboard-only control in first-person mode
 	}
 	if (mapControls) {
 		mapControls.enabled = controlMode.value === 'third-person' && !caged
@@ -1736,29 +1769,7 @@ function updateCanvasCursor() {
 		canvas.style.cursor = canOrbit ? 'grab' : 'default'
 		return
 	}
-	const allowLook = isFirstPersonMouseControlEnabled.value && !isCameraCaged.value
-	canvas.style.cursor = allowLook ? 'crosshair' : 'default'
-}
-
-function setFirstPersonMouseControl(enabled: boolean) {
-	if (isFirstPersonMouseControlEnabled.value === enabled) {
-		return
-	}
-	isFirstPersonMouseControlEnabled.value = enabled
-	if (enabled && controlMode.value === 'first-person' && firstPersonControls && !isCameraCaged.value) {
-		resetFirstPersonPointerDelta()
-		clampFirstPersonPitch(true)
-		syncFirstPersonOrientation()
-		syncLastFirstPersonStateFromCamera()
-	}
-	updateCameraControlActivation()
-}
-
-function toggleFirstPersonMouseControl() {
-	if (vehicleDriveState.active) {
-		return
-	}
-	setFirstPersonMouseControl(!isFirstPersonMouseControlEnabled.value)
+	canvas.style.cursor = 'default'
 }
 
 function setCameraCaging(enabled: boolean, options: { force?: boolean } = {}) {
@@ -1770,7 +1781,7 @@ function setCameraCaging(enabled: boolean, options: { force?: boolean } = {}) {
 	}
 	isCameraCaged.value = enabled
 	updateCameraControlActivation()
-	if (!enabled && controlMode.value === 'first-person' && firstPersonControls && isFirstPersonMouseControlEnabled.value) {
+	if (!enabled && controlMode.value === 'first-person' && firstPersonControls) {
 		resetFirstPersonPointerDelta()
 		clampFirstPersonPitch(true)
 		syncFirstPersonOrientation()
@@ -2105,9 +2116,28 @@ function processBehaviorEvents(events: BehaviorRuntimeEvent[] | BehaviorRuntimeE
 	list.forEach((entry) => handleBehaviorRuntimeEvent(entry))
 }
 
+const uiBehaviorTokenResolvers = new Map<string, (resolution: BehaviorEventResolution) => void>()
+let uiBehaviorTokenCounter = 0
+
+function waitForBehaviorToken(token: string): Promise<BehaviorEventResolution> {
+	return new Promise((resolve) => {
+		uiBehaviorTokenResolvers.set(token, resolve)
+	})
+}
+
+function createUiBehaviorToken(): string {
+	uiBehaviorTokenCounter += 1
+	return `ui-token-${Date.now().toString(16)}-${uiBehaviorTokenCounter.toString(16)}`
+}
+
 function resolveBehaviorToken(token: string, resolution: BehaviorEventResolution) {
 	const followUps = resolveBehaviorEvent(token, resolution)
 	processBehaviorEvents(followUps)
+	const resolver = uiBehaviorTokenResolvers.get(token)
+	if (resolver) {
+		uiBehaviorTokenResolvers.delete(token)
+		resolver(resolution)
+	}
 }
 
 function clearDelayTimer(token: string) {
@@ -2839,29 +2869,6 @@ function prepareVehicleDriveTarget(nodeId: string): VehicleDrivePreparationResul
 	return { success: true, instance }
 }
 
-function snapshotVehicleDriveCameraState(): void {
-	const activeCamera = camera
-	if (!activeCamera) {
-		vehicleDriveCameraRestoreState.hasSnapshot = false
-		return
-	}
-	vehicleDriveCameraRestoreState.position.copy(activeCamera.position)
-	vehicleDriveCameraRestoreState.quaternion.copy(activeCamera.quaternion)
-	vehicleDriveCameraRestoreState.controlMode = controlMode.value
-	vehicleDriveCameraRestoreState.isCameraCaged = isCameraCaged.value
-	if (mapControls) {
-		vehicleDriveCameraRestoreState.target.copy(mapControls.target)
-	} else {
-		activeCamera.getWorldDirection(tempDirection)
-		vehicleDriveCameraRestoreState.target.copy(activeCamera.position).add(tempDirection)
-	}
-	vehicleDriveCameraFollowState.currentPosition.copy(activeCamera.position)
-	vehicleDriveCameraFollowState.currentTarget.copy(vehicleDriveCameraRestoreState.target)
-	vehicleDriveCameraFollowState.desiredPosition.copy(activeCamera.position)
-	vehicleDriveCameraFollowState.desiredTarget.copy(vehicleDriveCameraRestoreState.target)
-	vehicleDriveCameraRestoreState.hasSnapshot = true
-}
-
 function restoreVehicleDriveCameraState(): void {
 	const activeCamera = camera
 	if (!activeCamera) {
@@ -2870,6 +2877,31 @@ function restoreVehicleDriveCameraState(): void {
 		return
 	}
 	if (vehicleDriveCameraRestoreState.hasSnapshot) {
+		const restoredMode = vehicleDriveCameraRestoreState.controlMode
+		if (restoredMode === 'first-person') {
+			lastFirstPersonState.position.copy(vehicleDriveCameraRestoreState.position)
+			tempDirection
+				.copy(vehicleDriveCameraRestoreState.target)
+				.sub(vehicleDriveCameraRestoreState.position)
+			if (tempDirection.lengthSq() < 1e-8) {
+				tempDirection.set(0, 0, -1)
+			} else {
+				tempDirection.normalize()
+			}
+			lastFirstPersonState.direction.copy(tempDirection)
+		} else {
+			lastOrbitState.position.copy(vehicleDriveCameraRestoreState.position)
+			lastOrbitState.target.copy(vehicleDriveCameraRestoreState.target)
+		}
+		setCameraViewState(
+			vehicleDriveCameraRestoreState.viewMode,
+			vehicleDriveCameraRestoreState.viewMode === 'watching'
+				? vehicleDriveCameraRestoreState.viewTargetId ?? null
+				: null,
+		)
+		controlMode.value = restoredMode
+		setCameraCaging(vehicleDriveCameraRestoreState.isCameraCaged, { force: true })
+		activeCamera.up.copy(vehicleDriveCameraRestoreState.up)
 		activeCamera.position.copy(vehicleDriveCameraRestoreState.position)
 		activeCamera.quaternion.copy(vehicleDriveCameraRestoreState.quaternion)
 		activeCamera.updateMatrixWorld(true)
@@ -2877,16 +2909,16 @@ function restoreVehicleDriveCameraState(): void {
 			mapControls.target.copy(vehicleDriveCameraRestoreState.target)
 			mapControls.update()
 		}
-		controlMode.value = vehicleDriveCameraRestoreState.controlMode
-		setCameraCaging(vehicleDriveCameraRestoreState.isCameraCaged, { force: true })
 	}
 	vehicleDriveCameraFollowState.currentPosition.copy(activeCamera.position)
 	vehicleDriveCameraFollowState.currentTarget.copy(vehicleDriveCameraRestoreState.target)
+	vehicleDriveCameraFollowState.desiredPosition.copy(activeCamera.position)
+	vehicleDriveCameraFollowState.desiredTarget.copy(vehicleDriveCameraRestoreState.target)
 	vehicleDriveCameraRestoreState.hasSnapshot = false
 }
 
-function syncVehicleDriveCameraImmediate(): void {
-	updateVehicleDriveCamera(0, { immediate: true })
+function syncVehicleDriveCameraImmediate(): boolean {
+	return updateVehicleDriveCamera(0, { immediate: true })
 }
 
 function startVehicleDriveMode(
@@ -2903,22 +2935,37 @@ function startVehicleDriveMode(
 	if (!readiness.success) {
 		return readiness
 	}
-	snapshotVehicleDriveCameraState()
+	const seatNodeId = normalizeNodeId(event.seatNodeId)
+	const forwardNodeId = normalizeNodeId(event.forwardDirectionNodeId)
+	const exitNodeId = normalizeNodeId(event.exitNodeId)
 	vehicleDriveState.active = true
 	vehicleDriveState.nodeId = targetNodeId
 	vehicleDriveState.vehicle = readiness.instance.vehicle
 	vehicleDriveState.steerableWheelIndices = [...readiness.instance.steerableWheelIndices]
 	vehicleDriveState.wheelCount = readiness.instance.wheelCount
 	vehicleDriveState.token = event.token
+	vehicleDriveState.exitNodeId = exitNodeId
+	vehicleDriveState.seatNodeId = seatNodeId
+	vehicleDriveState.forwardNodeId = forwardNodeId
+	vehicleDriveState.sourceEvent = { ...event }
+	vehicleDriveExitBusy.value = false
 	resetVehicleDriveInputs()
 	activeCameraLookTween = null
-	controlMode.value = 'third-person'
+	controlMode.value = 'first-person'
 	setCameraCaging(true, { force: true })
-	syncVehicleDriveCameraImmediate()
+	const cameraAligned = syncVehicleDriveCameraImmediate()
+	if (!cameraAligned) {
+		return { success: false, message: '无法定位驾驶摄像机。' }
+	}
+	syncFirstPersonOrientation()
+	resetFirstPersonPointerDelta()
+	syncLastFirstPersonStateFromCamera()
+	setCameraViewState('watching', forwardNodeId ?? targetNodeId)
+	setVehicleDriveUiOverride('show')
 	return { success: true }
 }
 
-function stopVehicleDriveMode(options: { resolution?: BehaviorEventResolution } = {}): void {
+function stopVehicleDriveMode(options: { resolution?: BehaviorEventResolution; preserveCamera?: boolean } = {}): void {
 	if (!vehicleDriveState.active) {
 		return
 	}
@@ -2942,42 +2989,37 @@ function stopVehicleDriveMode(options: { resolution?: BehaviorEventResolution } 
 	vehicleDriveState.token = null
 	vehicleDriveState.steerableWheelIndices = []
 	vehicleDriveState.wheelCount = 0
-	restoreVehicleDriveCameraState()
+	vehicleDriveState.exitNodeId = null
+	vehicleDriveState.seatNodeId = null
+	vehicleDriveState.forwardNodeId = null
+	vehicleDriveState.sourceEvent = null
+	vehicleDriveExitBusy.value = false
+	if (options.preserveCamera) {
+		if (vehicleDriveCameraRestoreState.hasSnapshot) {
+			controlMode.value = vehicleDriveCameraRestoreState.controlMode
+			setCameraCaging(vehicleDriveCameraRestoreState.isCameraCaged, { force: true })
+		} else {
+			setCameraCaging(false, { force: true })
+		}
+		vehicleDriveCameraRestoreState.hasSnapshot = false
+	} else {
+		restoreVehicleDriveCameraState()
+	}
+	setVehicleDriveUiOverride('hide')
 	if (token) {
 		resolveBehaviorToken(token, options.resolution ?? { type: 'continue' })
 	}
-}
-
-function ensureActiveVehicleDriveBinding(): VehicleInstance | null {
-	if (!vehicleDriveState.active) {
-		return null
-	}
-	const nodeId = vehicleDriveState.nodeId
-	if (!nodeId) {
-		stopVehicleDriveMode({ resolution: { type: 'abort', message: '目标节点缺失，驾驶已终止。' } })
-		return null
-	}
-	const instance = vehicleInstances.get(nodeId)
-	if (!instance || vehicleDriveState.vehicle !== instance.vehicle) {
-		stopVehicleDriveMode({ resolution: { type: 'abort', message: '车辆实例已重建，驾驶已终止。' } })
-		return null
-	}
-	const object = nodeObjectMap.get(nodeId)
-	if (!object) {
-		stopVehicleDriveMode({ resolution: { type: 'abort', message: '车辆对象不存在。' } })
-		return null
-	}
-	return instance
 }
 
 function applyVehicleDriveForces(): void {
 	if (!vehicleDriveState.active || !vehicleDriveState.vehicle) {
 		return
 	}
-	const instance = ensureActiveVehicleDriveBinding()
+	const instance = vehicleDriveState.nodeId ? vehicleInstances.get(vehicleDriveState.nodeId) : null
 	if (!instance) {
 		return
 	}
+	
 	const vehicle = instance.vehicle
 	const engineForce = -vehicleDriveInput.throttle * VEHICLE_ENGINE_FORCE
 	const steeringValue = vehicleDriveInput.steering * VEHICLE_STEER_ANGLE
@@ -2990,58 +3032,202 @@ function applyVehicleDriveForces(): void {
 	}
 }
 
-function updateVehicleDriveCamera(delta: number, options: { immediate?: boolean } = {}): void {
+function updateVehicleDriveCamera(_delta: number, _options: { immediate?: boolean } = {}): boolean {
 	if (!vehicleDriveState.active) {
-		return
+		return false
 	}
 	const activeCamera = camera
 	if (!activeCamera) {
-		return
+		return false
 	}
-	const nodeId = vehicleDriveState.nodeId
-	if (!nodeId) {
-		return
+	const seatNodeId = vehicleDriveState.seatNodeId
+	const vehicleNodeId = vehicleDriveState.nodeId
+	const seatObject = seatNodeId ? nodeObjectMap.get(seatNodeId) ?? null : null
+	const vehicleObject = vehicleNodeId ? nodeObjectMap.get(vehicleNodeId) ?? null : null
+	const referenceObject = seatObject ?? vehicleObject
+	if (!referenceObject) {
+		stopVehicleDriveMode({ resolution: { type: 'abort', message: '驾驶目标对象不存在。' } })
+		return false
 	}
-	const object = nodeObjectMap.get(nodeId)
-	if (!object) {
-		stopVehicleDriveMode({ resolution: { type: 'abort', message: '车辆节点已被移除。' } })
-		return
+	referenceObject.updateMatrixWorld(true)
+	referenceObject.getWorldPosition(tempVehicleCameraPosition)
+	const orientationObject = seatObject ?? referenceObject
+	orientationObject.updateMatrixWorld(true)
+	orientationObject.getWorldQuaternion(tempVehicleQuaternionThree)
+	tempVehicleCameraUp.set(0, 1, 0).applyQuaternion(tempVehicleQuaternionThree)
+	if (tempVehicleCameraUp.lengthSq() < 1e-8) {
+		tempVehicleCameraUp.set(0, 1, 0)
+	} else {
+		tempVehicleCameraUp.normalize()
 	}
-	object.updateMatrixWorld(true)
-	object.getWorldPosition(tempVehicleCameraPosition)
-	object.getWorldQuaternion(tempVehicleQuaternionThree)
-	tempVehicleCameraOffset.copy(VEHICLE_CAMERA_OFFSET).applyQuaternion(tempVehicleQuaternionThree)
-	tempVehicleCameraLook.copy(VEHICLE_CAMERA_LOOK_OFFSET).applyQuaternion(tempVehicleQuaternionThree)
-	vehicleDriveCameraFollowState.desiredPosition.copy(tempVehicleCameraPosition).add(tempVehicleCameraOffset)
-	vehicleDriveCameraFollowState.desiredTarget.copy(tempVehicleCameraPosition).add(tempVehicleCameraLook)
-	const alpha = options.immediate ? 1 : THREE.MathUtils.clamp(delta / VEHICLE_CAMERA_SMOOTH, 0, 1)
-	vehicleDriveCameraFollowState.currentPosition.lerp(vehicleDriveCameraFollowState.desiredPosition, alpha)
-	vehicleDriveCameraFollowState.currentTarget.lerp(vehicleDriveCameraFollowState.desiredTarget, alpha)
-	activeCamera.position.copy(vehicleDriveCameraFollowState.currentPosition)
-	activeCamera.lookAt(vehicleDriveCameraFollowState.currentTarget)
+	let lookTargetResolved = false
+	const forwardNodeId = vehicleDriveState.forwardNodeId
+	if (forwardNodeId) {
+		const forwardObject = nodeObjectMap.get(forwardNodeId) ?? null
+		if (forwardObject) {
+			forwardObject.updateMatrixWorld(true)
+			forwardObject.getWorldPosition(tempVehicleCameraLook)
+			if (tempVehicleCameraLook.distanceToSquared(tempVehicleCameraPosition) > 1e-6) {
+				lookTargetResolved = true
+			}
+		}
+	}
+	if (!lookTargetResolved) {
+		tempVehicleCameraOffset.set(0, 0, -1).applyQuaternion(tempVehicleQuaternionThree)
+		if (tempVehicleCameraOffset.lengthSq() < 1e-8) {
+			tempVehicleCameraOffset.set(0, 0, -1)
+		} else {
+			tempVehicleCameraOffset.normalize()
+		}
+		tempVehicleCameraLook
+			.copy(tempVehicleCameraPosition)
+			.add(tempVehicleCameraOffset.multiplyScalar(VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE))
+	}
+	tempVehicleCameraMatrix.lookAt(tempVehicleCameraPosition, tempVehicleCameraLook, tempVehicleCameraUp)
+	tempVehicleCameraMatrix.invert()
+	tempVehicleCameraQuaternion.setFromRotationMatrix(tempVehicleCameraMatrix)
+	vehicleDriveCameraFollowState.desiredPosition.copy(tempVehicleCameraPosition)
+	vehicleDriveCameraFollowState.desiredTarget.copy(tempVehicleCameraLook)
+	vehicleDriveCameraFollowState.currentPosition.copy(tempVehicleCameraPosition)
+	vehicleDriveCameraFollowState.currentTarget.copy(tempVehicleCameraLook)
+	activeCamera.position.copy(tempVehicleCameraPosition)
+	activeCamera.quaternion.copy(tempVehicleCameraQuaternion)
+	activeCamera.up.copy(tempVehicleCameraUp)
+	activeCamera.updateMatrixWorld(true)
 	if (mapControls) {
-		mapControls.target.copy(vehicleDriveCameraFollowState.currentTarget)
-		mapControls.update()
+		mapControls.target.copy(tempVehicleCameraLook)
 	}
 	syncLastFirstPersonStateFromCamera()
+	return true
+}
+
+function alignCameraToExitNode(exitNodeId: string | null): boolean {
+	const activeCamera = camera
+	if (!activeCamera || !exitNodeId) {
+		return false
+	}
+	const exitObject = nodeObjectMap.get(exitNodeId) ?? null
+	if (!exitObject) {
+		return false
+	}
+	exitObject.updateMatrixWorld(true)
+	exitObject.getWorldPosition(tempVehicleCameraPosition)
+	activeCamera.position.copy(tempVehicleCameraPosition)
+	const target = tempVehicleCameraLook
+	if (defaultOrbitViewDistance > 1e-6) {
+		target
+			.copy(defaultOrbitViewDirection)
+			.multiplyScalar(defaultOrbitViewDistance)
+			.add(tempVehicleCameraPosition)
+	} else {
+		target.set(0, 0, -1).add(tempVehicleCameraPosition)
+	}
+	activeCamera.lookAt(target)
+	if (mapControls) {
+		mapControls.target.copy(target)
+		mapControls.update()
+	}
+	lastOrbitState.position.copy(activeCamera.position)
+	if (mapControls) {
+		lastOrbitState.target.copy(mapControls.target)
+	} else {
+		lastOrbitState.target.copy(target)
+	}
+	syncLastFirstPersonStateFromCamera()
+	return true
 }
 
 function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>): void {
-	const result = startVehicleDriveMode(event)
-	if (!result.success) {
-		appendWarningMessage(result.message ?? '无法启动驾驶脚本。')
-		resolveBehaviorToken(event.token, {
-			type: 'fail',
-			message: result.message ?? '无法启动驾驶脚本。',
+	const targetNodeId = event.targetNodeId ?? event.nodeId ?? null
+	if (!targetNodeId) {
+		appendWarningMessage('未提供要驾驶的节点。')
+		resolveBehaviorToken(event.token, { type: 'fail', message: '未提供要驾驶的节点。' })
+		return
+	}
+	if (vehicleDriveState.active) {
+		stopVehicleDriveMode({ resolution: { type: 'abort', message: '驾驶状态已被新的脚本替换。' } })
+	}
+	if (pendingVehicleDriveEvent.value) {
+		resolveBehaviorToken(pendingVehicleDriveEvent.value.token, {
+			type: 'abort',
+			message: '新的驾驶脚本已触发，已取消之前的驾驶请求。',
 		})
 	}
+	pendingVehicleDriveEvent.value = event
+	vehicleDrivePromptBusy.value = false
+	setVehicleDriveUiOverride('hide')
+	resetVehicleDriveInputs()
 }
 
 function handleVehicleDebusEvent(): void {
+	if (pendingVehicleDriveEvent.value) {
+		resolveBehaviorToken(pendingVehicleDriveEvent.value.token, {
+			type: 'abort',
+			message: '驾驶请求已被终止。',
+		})
+		pendingVehicleDriveEvent.value = null
+		vehicleDrivePromptBusy.value = false
+		setVehicleDriveUiOverride('hide')
+	}
 	if (!vehicleDriveState.active) {
 		return
 	}
 	stopVehicleDriveMode({ resolution: { type: 'continue' } })
+}
+
+function handleShowVehicleCockpitEvent(): void {
+	setVehicleDriveUiOverride('show')
+}
+
+function handleHideVehicleCockpitEvent(): void {
+	setVehicleDriveUiOverride('hide')
+}
+
+async function handleVehicleDrivePromptConfirm(): Promise<void> {
+	const event = pendingVehicleDriveEvent.value
+	if (!event || vehicleDrivePromptBusy.value) {
+		return
+	}
+	vehicleDrivePromptBusy.value = true
+	try {
+		const result = startVehicleDriveMode(event)
+		if (!result.success) {
+			appendWarningMessage(result.message ?? '无法启动驾驶脚本。')
+			resolveBehaviorToken(event.token, {
+				type: 'fail',
+				message: result.message ?? '无法启动驾驶脚本。',
+			})
+			pendingVehicleDriveEvent.value = null
+			return
+		}
+		handleShowVehicleCockpitEvent()
+		updateVehicleDriveCamera(0, { immediate: true })
+		pendingVehicleDriveEvent.value = null
+	} finally {
+		vehicleDrivePromptBusy.value = false
+	}
+}
+
+function handleVehicleDriveExitClick(): void {
+	if (!vehicleDriveState.active || vehicleDriveExitBusy.value) {
+		return
+	}
+	vehicleDriveExitBusy.value = true
+	try {
+		const exitNodeId = vehicleDriveState.exitNodeId
+		const aligned = alignCameraToExitNode(exitNodeId)
+		if (!aligned) {
+			if (exitNodeId) {
+				appendWarningMessage('下车位置节点不存在，将恢复原有视角。')
+			} else {
+				appendWarningMessage('驾驶脚本未提供下车位置，将恢复原有视角。')
+			}
+		}
+		handleHideVehicleCockpitEvent()
+		stopVehicleDriveMode({ resolution: { type: 'continue' } })
+	} finally {
+		vehicleDriveExitBusy.value = false
+	}
 }
 
 function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
@@ -3085,14 +3271,15 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 		case 'vehicle-debus':
 			handleVehicleDebusEvent()
 			break
+		case 'vehicle-show-cockpit':
+			handleShowVehicleCockpitEvent()
+			break
+		case 'vehicle-hide-cockpit':
+			handleHideVehicleCockpitEvent()
+			break
 		case 'sequence-complete':
 			clearBehaviorAlert()
 			resetLanternOverlay()
-			if (event.status === 'failure' || event.status === 'aborted') {
-				console.warn('[ScenePreview] Behavior sequence ended', event)
-			} else {
-				console.info('[ScenePreview] Behavior sequence completed', event)
-			}
 			break
 		case 'sequence-error':
 			clearBehaviorAlert()
@@ -3593,17 +3780,6 @@ function handleKeyDown(event: KeyboardEvent) {
 			event.preventDefault()
 			captureScreenshot()
 			break
-		case 'KeyC':
-			if (driveLocked) {
-				break
-			}
-			if (controlMode.value === 'first-person') {
-				event.preventDefault()
-				toggleFirstPersonMouseControl()
-				// When toggling with C, reset to a level view for a consistent starting orientation
-				resetCameraToLevelView()
-			}
-			break
 		default:
 			break
 	}
@@ -3632,7 +3808,7 @@ function startAnimationLoop() {
 		animationFrameHandle = requestAnimationFrame(renderLoop)
 		fpsStats?.begin()
 		const delta = clock.getDelta()
-		if (controlMode.value === 'first-person' && firstPersonControls) {
+		if (controlMode.value === 'first-person' && firstPersonControls && !vehicleDriveState.active) {
 			const rotationDirection = Number(rotationState.q) - Number(rotationState.e)
 			if (rotationDirection !== 0 && activeCameraLookTween?.mode === 'first-person') {
 				activeCameraLookTween = null
@@ -5296,22 +5472,6 @@ function ensureVehicleBindingForNode(nodeId: string): void {
 	}
 }
 
-function syncVehicleInstancesForDocument(document: SceneJsonExportDocument | null): void {
-	if (!document) {
-		vehicleInstances.forEach((_entry, nodeId) => removeVehicleInstance(nodeId))
-		vehicleInstances.clear()
-		return
-	}
-	const vehicleNodes = collectVehicleNodes(document.nodes)
-	const desiredIds = new Set(vehicleNodes.map((node) => node.id))
-	vehicleNodes.forEach((node) => ensureVehicleBindingForNode(node.id))
-	vehicleInstances.forEach((_entry, nodeId) => {
-		if (!desiredIds.has(nodeId)) {
-			removeVehicleInstance(nodeId)
-		}
-	})
-}
-
 function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D): void {
 	if (!physicsWorld || !currentDocument) {
 		return
@@ -5445,7 +5605,6 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 			groundHeightfieldCache.delete(nodeId)
 		}
 	})
-	syncVehicleInstancesForDocument(document)
 }
 
 function stepPhysicsWorld(delta: number): void {
@@ -6282,19 +6441,6 @@ onBeforeUnmount(() => {
 				最近更新：{{ formattedLastUpdate }}
 			</v-chip>
 		</div>
-		<div
-			v-if="controlMode === 'first-person' && !isFirstPersonMouseControlEnabled"
-			class="scene-preview__mouse-hint"
-		>
-			<v-chip
-				color="amber-darken-2"
-				variant="elevated"
-				size="small"
-				prepend-icon="mdi-mouse-off"
-			>
-				鼠标视角已暂停（按 C 恢复）
-			</v-chip>
-		</div>
 		<v-alert
 			v-if="warningMessages.length"
 			class="scene-preview__alert"
@@ -6339,6 +6485,19 @@ onBeforeUnmount(() => {
 				<span class="scene-preview__purpose-label">平视</span>
 			</v-btn>
 		</div>
+		<v-btn
+			v-if="vehicleDrivePrompt.visible"
+			class="scene-preview__drive-start-button"
+			color="primary"
+			variant="flat"
+			size="large"
+			prepend-icon="mdi-steering"
+			:loading="vehicleDrivePrompt.busy"
+			:disabled="vehicleDrivePrompt.busy"
+			@click="handleVehicleDrivePromptConfirm"
+		>
+			驾驶 {{ vehicleDrivePrompt.label }}
+		</v-btn>
 		<div
 			v-if="vehicleDriveUi.visible"
 			class="scene-preview__drive-panel"
@@ -6418,6 +6577,17 @@ onBeforeUnmount(() => {
 					后退
 				</v-btn>
 			</div>
+			<v-btn
+				class="scene-preview__drive-exit"
+				color="secondary"
+				variant="tonal"
+				prepend-icon="mdi-exit-run"
+				:loading="vehicleDriveExitBusy"
+				:disabled="vehicleDriveExitBusy"
+				@click="handleVehicleDriveExitClick"
+			>
+				下车
+			</v-btn>
 		</div>
 		<v-sheet class="scene-preview__control-bar" elevation="10">
 			<div class="scene-preview__controls">
@@ -6456,19 +6626,6 @@ onBeforeUnmount(() => {
 						:title="'第三人称视角 (快捷键 3)'"
 					/>
 				</v-btn-toggle>
-				<v-btn
-					v-if="controlMode === 'first-person'"
-					class="scene-preview__control-button"
-					:icon="isFirstPersonMouseControlEnabled ? 'mdi-mouse' : 'mdi-mouse-off'"
-					variant="tonal"
-						size="small"
-					:color="isFirstPersonMouseControlEnabled ? 'info' : 'warning'"
-					:disabled="vehicleDriveUi.cameraLocked"
-					:aria-label="isFirstPersonMouseControlEnabled ? '禁用鼠标镜头' : '启用鼠标镜头'"
-
-					:title="isFirstPersonMouseControlEnabled ? '禁用鼠标镜头 (快捷键 C)' : '启用鼠标镜头 (快捷键 C)'"
-					@click="toggleFirstPersonMouseControl"
-				/>
 				<v-menu
 					v-model="isVolumeMenuOpen"
 					location="top"
@@ -7101,6 +7258,15 @@ onBeforeUnmount(() => {
 	pointer-events: auto;
 }
 
+.scene-preview__drive-start-button {
+	position: absolute;
+	left: 24px;
+	bottom: 220px;
+	z-index: 2150;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+}
+
 .scene-preview__drive-panel-header {
 	display: flex;
 	align-items: center;
@@ -7153,6 +7319,18 @@ onBeforeUnmount(() => {
 	box-shadow: 0 0 18px rgba(255, 255, 255, 0.25);
 	background: linear-gradient(135deg, rgba(124, 92, 255, 0.45), rgba(173, 134, 255, 0.35)) !important;
 	color: #fff !important;
+}
+
+.scene-preview__drive-exit {
+	margin-top: 12px;
+	width: 100%;
+	font-weight: 600;
+	letter-spacing: 0.03em;
+	text-transform: none;
+}
+
+.scene-preview__drive-exit :deep(.v-btn__content) {
+	gap: 6px;
 }
 
 .scene-preview__purpose-button :deep(.v-icon) {

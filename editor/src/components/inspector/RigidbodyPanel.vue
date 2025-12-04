@@ -245,6 +245,15 @@ function handleRemoveComponent() {
     </v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="rigidbody-panel__body">
+
+        <div class="target-node-picker">
+          <NodePicker
+            :model-value="localTargetNodeId"
+            :disabled="!rigidbodyComponent?.enabled"
+            placeholder="Collider target node"
+            @update:model-value="handleTargetNodeChange"
+          />
+        </div>
         <v-select
           label="Body Type"
           density="compact"
@@ -316,15 +325,6 @@ function handleRemoveComponent() {
           :model-value="localFriction"
           @update:modelValue="handleFrictionInput"
         />
-        <div class="target-node-picker">
-          <div class="text-caption mb-1 text-medium-emphasis">Collider</div>
-          <NodePicker
-            :model-value="localTargetNodeId"
-            :disabled="!rigidbodyComponent?.enabled"
-            placeholder="Self (Default)"
-            @update:model-value="handleTargetNodeChange"
-          />
-        </div>
       </div>
     </v-expansion-panel-text>
   </v-expansion-panel>
@@ -356,5 +356,8 @@ function handleRemoveComponent() {
 
 .component-menu-divider {
   margin-inline: 0.6rem;
+}
+.target-node-picker {
+  margin-bottom: 1.0rem;
 }
 </style>
