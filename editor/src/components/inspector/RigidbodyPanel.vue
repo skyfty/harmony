@@ -16,7 +16,6 @@ import {
   DEFAULT_RIGIDBODY_RESTITUTION,
   DEFAULT_RIGIDBODY_FRICTION,
 } from '@schema/components'
-import NodePicker from '@/components/common/NodePicker.vue'
 
 const BODY_TYPE_OPTIONS: Array<{ label: string; value: RigidbodyBodyType }> = [
   { label: 'Dynamic', value: 'DYNAMIC' },
@@ -40,7 +39,6 @@ const normalizedProps = computed(() => {
 
 const localMass = ref(DEFAULT_RIGIDBODY_MASS)
 const localBodyType = ref<RigidbodyBodyType>('DYNAMIC')
-const localTargetNodeId = ref<string | undefined>(undefined)
 const localLinearDamping = ref(DEFAULT_LINEAR_DAMPING)
 const localAngularDamping = ref(DEFAULT_ANGULAR_DAMPING)
 const localRestitution = ref(DEFAULT_RIGIDBODY_RESTITUTION)
@@ -59,7 +57,6 @@ watch(
     } else {
       localMass.value = props.mass
     }
-    localTargetNodeId.value = props.targetNodeId
     localLinearDamping.value = props.linearDamping
     localAngularDamping.value = props.angularDamping
     localRestitution.value = props.restitution
@@ -179,15 +176,6 @@ function handleBodyTypeChange(value: RigidbodyBodyType | null) {
   updateComponent({ bodyType: value })
 }
 
-function handleTargetNodeChange(value: string | null) {
-  const newValue = value ?? undefined
-  localTargetNodeId.value = newValue
-  if (newValue === normalizedProps.value.targetNodeId) {
-    return
-  }
-  updateComponent({ targetNodeId: newValue })
-}
-
 function handleToggleComponent() {
   const component = rigidbodyComponent.value
   const nodeId = selectedNodeId.value
@@ -246,14 +234,6 @@ function handleRemoveComponent() {
     <v-expansion-panel-text>
       <div class="rigidbody-panel__body">
 
-        <div class="target-node-picker">
-          <NodePicker
-            :model-value="localTargetNodeId"
-            :disabled="!rigidbodyComponent?.enabled"
-            placeholder="Collider target node"
-            @update:model-value="handleTargetNodeChange"
-          />
-        </div>
         <v-select
           label="Body Type"
           density="compact"
@@ -356,8 +336,5 @@ function handleRemoveComponent() {
 
 .component-menu-divider {
   margin-inline: 0.6rem;
-}
-.target-node-picker {
-  margin-bottom: 1.0rem;
 }
 </style>

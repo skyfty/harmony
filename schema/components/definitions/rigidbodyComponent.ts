@@ -8,7 +8,6 @@ export type RigidbodyBodyType = 'DYNAMIC' | 'STATIC' | 'KINEMATIC'
 export interface RigidbodyComponentProps {
   mass: number
   bodyType: RigidbodyBodyType
-  targetNodeId?: string
   linearDamping: number
   angularDamping: number
   restitution: number
@@ -82,7 +81,6 @@ export function clampRigidbodyComponentProps(
   return {
     mass: normalizedMass,
     bodyType: normalizedType,
-    targetNodeId: props?.targetNodeId,
     linearDamping: normalizedLinearDamping,
     angularDamping: normalizedAngularDamping,
     restitution: normalizedRestitution,
@@ -94,7 +92,6 @@ export function cloneRigidbodyComponentProps(props: RigidbodyComponentProps): Ri
   return {
     mass: props.mass,
     bodyType: props.bodyType,
-    targetNodeId: props.targetNodeId,
     linearDamping: props.linearDamping,
     angularDamping: props.angularDamping,
     restitution: props.restitution,
