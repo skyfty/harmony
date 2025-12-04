@@ -124,6 +124,15 @@ function groundVertexKey(row: number, column: number): string {
   return `${row}:${column}`
 }
 
+function setHeightMapValue(map: GroundHeightMap, key: string, value: number): void {
+  // Keep the height map sparse by skipping zero-height entries.
+  if (value === 0) {
+    delete map[key]
+    return
+  }
+  map[key] = value
+}
+
 function clampVertexIndex(value: number, max: number): number {
   if (!Number.isFinite(value)) {
     return 0
@@ -305,11 +314,6 @@ export function applyGroundGeneration(
   const strength = normalized.noiseStrength ?? 1
 
   if (normalized.mode === 'flat' || normalized.noiseAmplitude === 0 || strength === 0) {
-    for (let row = 0; row <= rows; row += 1) {
-      for (let column = 0; column <= columns; column += 1) {
-        heightMap[groundVertexKey(row, column)] = 0
-      }
-    }
     definition.heightMap = heightMap
     definition.generation = normalized
     return normalized
@@ -354,6 +358,7 @@ export function applyGroundGeneration(
     const z = -halfDepth + row * cellSize
     for (let column = 0; column <= columns; column += 1) {
       const x = -halfWidth + column * cellSize
+      const key = groundVertexKey(row, column)
       let height = sampleBaseValue(x, z) * normalized.noiseAmplitude
       if (useDetail && detailNoise) {
         height += detailNoise(x / detailScale, z / detailScale, 0.5) * detailAmplitude
@@ -366,7 +371,7 @@ export function applyGroundGeneration(
         const falloff = Math.pow(1 - Math.min(1, edge), normalized.edgeFalloff)
         height *= falloff
       }
-      heightMap[groundVertexKey(row, column)] = height
+      setHeightMapValue(heightMap, key, height)
     }
   }
 
@@ -471,7 +476,7 @@ export function sculptGround(definition: GroundDynamicMesh, params: SculptParams
                 nextHeight = currentHeight + offset
               }
 
-              definition.heightMap[key] = nextHeight
+              setHeightMapValue(definition.heightMap, key, nextHeight)
               modified = true
             }
       }
