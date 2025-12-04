@@ -381,9 +381,33 @@ const vehicleDriveState = reactive({
 	vehicle: null as CANNON.RaycastVehicle | null,
 	steerableWheelIndices: [] as number[],
 	wheelCount: 0,
+	exitNodeId: null as string | null,
+	sourceEvent: null as Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null,
 })
 
 const vehicleDriveUiOverride = ref<'auto' | 'show' | 'hide'>('auto')
+const pendingVehicleDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null)
+const vehicleDrivePromptBusy = ref(false)
+const vehicleDriveExitBusy = ref(false)
+
+const vehicleDrivePrompt = computed(() => {
+	const event = pendingVehicleDriveEvent.value
+	if (!event) {
+		return {
+			visible: false,
+			label: '',
+			busy: false,
+		}
+	}
+	const targetNodeId = event.targetNodeId ?? event.nodeId
+	const node = targetNodeId ? resolveNodeById(targetNodeId) : null
+	const label = node?.name?.trim() || targetNodeId || 'Vehicle'
+	return {
+		visible: true,
+		label,
+		busy: vehicleDrivePromptBusy.value,
+	}
+})
 
 const vehicleDriveInputFlags = reactive<VehicleDriveControlFlags>({
 	forward: false,
@@ -2115,9 +2139,28 @@ function processBehaviorEvents(events: BehaviorRuntimeEvent[] | BehaviorRuntimeE
 	list.forEach((entry) => handleBehaviorRuntimeEvent(entry))
 }
 
+const uiBehaviorTokenResolvers = new Map<string, (resolution: BehaviorEventResolution) => void>()
+let uiBehaviorTokenCounter = 0
+
+function waitForBehaviorToken(token: string): Promise<BehaviorEventResolution> {
+	return new Promise((resolve) => {
+		uiBehaviorTokenResolvers.set(token, resolve)
+	})
+}
+
+function createUiBehaviorToken(): string {
+	uiBehaviorTokenCounter += 1
+	return `ui-token-${Date.now().toString(16)}-${uiBehaviorTokenCounter.toString(16)}`
+}
+
 function resolveBehaviorToken(token: string, resolution: BehaviorEventResolution) {
 	const followUps = resolveBehaviorEvent(token, resolution)
 	processBehaviorEvents(followUps)
+	const resolver = uiBehaviorTokenResolvers.get(token)
+	if (resolver) {
+		uiBehaviorTokenResolvers.delete(token)
+		resolver(resolution)
+	}
 }
 
 function clearDelayTimer(token: string) {
@@ -2913,13 +2956,15 @@ function startVehicleDriveMode(
 	if (!readiness.success) {
 		return readiness
 	}
-	snapshotVehicleDriveCameraState()
 	vehicleDriveState.active = true
 	vehicleDriveState.nodeId = targetNodeId
 	vehicleDriveState.vehicle = readiness.instance.vehicle
 	vehicleDriveState.steerableWheelIndices = [...readiness.instance.steerableWheelIndices]
 	vehicleDriveState.wheelCount = readiness.instance.wheelCount
 	vehicleDriveState.token = event.token
+	vehicleDriveState.exitNodeId = event.exitNodeId ?? null
+	vehicleDriveState.sourceEvent = { ...event }
+	vehicleDriveExitBusy.value = false
 	resetVehicleDriveInputs()
 	activeCameraLookTween = null
 	controlMode.value = 'third-person'
@@ -2929,7 +2974,7 @@ function startVehicleDriveMode(
 	return { success: true }
 }
 
-function stopVehicleDriveMode(options: { resolution?: BehaviorEventResolution } = {}): void {
+function stopVehicleDriveMode(options: { resolution?: BehaviorEventResolution; preserveCamera?: boolean } = {}): void {
 	if (!vehicleDriveState.active) {
 		return
 	}
@@ -2953,7 +2998,20 @@ function stopVehicleDriveMode(options: { resolution?: BehaviorEventResolution } 
 	vehicleDriveState.token = null
 	vehicleDriveState.steerableWheelIndices = []
 	vehicleDriveState.wheelCount = 0
-	restoreVehicleDriveCameraState()
+	vehicleDriveState.exitNodeId = null
+	vehicleDriveState.sourceEvent = null
+	vehicleDriveExitBusy.value = false
+	if (options.preserveCamera) {
+		if (vehicleDriveCameraRestoreState.hasSnapshot) {
+			controlMode.value = vehicleDriveCameraRestoreState.controlMode
+			setCameraCaging(vehicleDriveCameraRestoreState.isCameraCaged, { force: true })
+		} else {
+			setCameraCaging(false, { force: true })
+		}
+		vehicleDriveCameraRestoreState.hasSnapshot = false
+	} else {
+		restoreVehicleDriveCameraState()
+	}
 	setVehicleDriveUiOverride('hide')
 	if (token) {
 		resolveBehaviorToken(token, options.resolution ?? { type: 'continue' })
@@ -3039,17 +3097,37 @@ function updateVehicleDriveCamera(delta: number, options: { immediate?: boolean 
 }
 
 function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>): void {
-	const result = startVehicleDriveMode(event)
-	if (!result.success) {
-		appendWarningMessage(result.message ?? '无法启动驾驶脚本。')
-		resolveBehaviorToken(event.token, {
-			type: 'fail',
-			message: result.message ?? '无法启动驾驶脚本。',
+	const targetNodeId = event.targetNodeId ?? event.nodeId ?? null
+	if (!targetNodeId) {
+		appendWarningMessage('未提供要驾驶的节点。')
+		resolveBehaviorToken(event.token, { type: 'fail', message: '未提供要驾驶的节点。' })
+		return
+	}
+	if (vehicleDriveState.active) {
+		stopVehicleDriveMode({ resolution: { type: 'abort', message: '驾驶状态已被新的脚本替换。' } })
+	}
+	if (pendingVehicleDriveEvent.value) {
+		resolveBehaviorToken(pendingVehicleDriveEvent.value.token, {
+			type: 'abort',
+			message: '新的驾驶脚本已触发，已取消之前的驾驶请求。',
 		})
 	}
+	pendingVehicleDriveEvent.value = event
+	vehicleDrivePromptBusy.value = false
+	setVehicleDriveUiOverride('hide')
+	resetVehicleDriveInputs()
 }
 
 function handleVehicleDebusEvent(): void {
+	if (pendingVehicleDriveEvent.value) {
+		resolveBehaviorToken(pendingVehicleDriveEvent.value.token, {
+			type: 'abort',
+			message: '驾驶请求已被终止。',
+		})
+		pendingVehicleDriveEvent.value = null
+		vehicleDrivePromptBusy.value = false
+		setVehicleDriveUiOverride('hide')
+	}
 	if (!vehicleDriveState.active) {
 		return
 	}
@@ -3062,6 +3140,145 @@ function handleShowVehicleCockpitEvent(): void {
 
 function handleHideVehicleCockpitEvent(): void {
 	setVehicleDriveUiOverride('hide')
+}
+
+async function runSyntheticMoveCameraStep(
+	source: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>,
+	targetNodeId: string,
+	durationSeconds: number,
+): Promise<BehaviorEventResolution> {
+	const token = createUiBehaviorToken()
+	const moveEvent: Extract<BehaviorRuntimeEvent, { type: 'move-camera' }> = {
+		type: 'move-camera',
+		nodeId: source.nodeId,
+		action: source.action,
+		sequenceId: source.sequenceId,
+		behaviorSequenceId: source.behaviorSequenceId,
+		behaviorId: source.behaviorId,
+		targetNodeId,
+		duration: durationSeconds,
+		token,
+	}
+	const waitResult = waitForBehaviorToken(token)
+	handleMoveCameraEvent(moveEvent)
+	return waitResult
+}
+
+async function runSyntheticWatchNodeStep(
+	source: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>,
+	targetNodeId: string,
+): Promise<BehaviorEventResolution> {
+	const token = createUiBehaviorToken()
+	const watchEvent: Extract<BehaviorRuntimeEvent, { type: 'watch-node' }> = {
+		type: 'watch-node',
+		nodeId: source.nodeId,
+		action: source.action,
+		sequenceId: source.sequenceId,
+		behaviorSequenceId: source.behaviorSequenceId,
+		behaviorId: source.behaviorId,
+		targetNodeId,
+		caging: true,
+		token,
+	}
+	const waitResult = waitForBehaviorToken(token)
+	handleWatchNodeEvent(watchEvent)
+	return waitResult
+}
+
+async function runSyntheticLookLevelStep(
+	source: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>,
+): Promise<BehaviorEventResolution> {
+	const token = createUiBehaviorToken()
+	const lookEvent: Extract<BehaviorRuntimeEvent, { type: 'look-level' }> = {
+		type: 'look-level',
+		nodeId: source.nodeId,
+		action: source.action,
+		sequenceId: source.sequenceId,
+		behaviorSequenceId: source.behaviorSequenceId,
+		behaviorId: source.behaviorId,
+		token,
+	}
+	const waitResult = waitForBehaviorToken(token)
+	handleLookLevelEvent(lookEvent)
+	return waitResult
+}
+
+async function handleVehicleDrivePromptConfirm(): Promise<void> {
+	const event = pendingVehicleDriveEvent.value
+	if (!event || vehicleDrivePromptBusy.value) {
+		return
+	}
+	vehicleDrivePromptBusy.value = true
+	try {
+		const seatNodeId = event.seatNodeId && event.seatNodeId.trim().length ? event.seatNodeId.trim() : null
+		if (seatNodeId) {
+			const moveResolution = await runSyntheticMoveCameraStep(event, seatNodeId, 0.0)
+			if (moveResolution.type !== 'continue') {
+				appendWarningMessage(moveResolution.message ?? '无法移动至驾驶位置。')
+				resolveBehaviorToken(event.token, moveResolution)
+				pendingVehicleDriveEvent.value = null
+				return
+			}
+		}
+		const forwardNodeId = event.forwardDirectionNodeId && event.forwardDirectionNodeId.trim().length
+			? event.forwardDirectionNodeId.trim()
+			: null
+		if (forwardNodeId) {
+			const watchResolution = await runSyntheticWatchNodeStep(event, forwardNodeId)
+			if (watchResolution.type !== 'continue') {
+				appendWarningMessage(watchResolution.message ?? '无法锁定驾驶视角。')
+				resolveBehaviorToken(event.token, watchResolution)
+				pendingVehicleDriveEvent.value = null
+				return
+			}
+		}
+		handleShowVehicleCockpitEvent()
+		const result = startVehicleDriveMode(event)
+		if (!result.success) {
+			appendWarningMessage(result.message ?? '无法启动驾驶脚本。')
+			resolveBehaviorToken(event.token, {
+				type: 'fail',
+				message: result.message ?? '无法启动驾驶脚本。',
+			})
+			pendingVehicleDriveEvent.value = null
+			return
+		}
+		pendingVehicleDriveEvent.value = null
+	} finally {
+		vehicleDrivePromptBusy.value = false
+	}
+}
+
+async function handleVehicleDriveExitClick(): Promise<void> {
+	if (!vehicleDriveState.active || vehicleDriveExitBusy.value) {
+		return
+	}
+	const sourceEvent = vehicleDriveState.sourceEvent
+	if (!sourceEvent) {
+		appendWarningMessage('缺少驾驶上下文，已退出驾驶。')
+		stopVehicleDriveMode({ resolution: { type: 'continue' } })
+		return
+	}
+	vehicleDriveExitBusy.value = true
+	try {
+		const exitNodeId = vehicleDriveState.exitNodeId
+		if (exitNodeId) {
+			const moveResolution = await runSyntheticMoveCameraStep(sourceEvent, exitNodeId, 1.5)
+			if (moveResolution.type !== 'continue') {
+				appendWarningMessage(moveResolution.message ?? '无法移动至下车位置。')
+				return
+			}
+		}
+		const levelResolution = await runSyntheticLookLevelStep(sourceEvent)
+		if (levelResolution.type !== 'continue') {
+			appendWarningMessage(levelResolution.message ?? '无法恢复默认视角。')
+			return
+		}
+		handleHideVehicleCockpitEvent()
+		stopVehicleDriveMode({ resolution: { type: 'continue' }, preserveCamera: true })
+	} finally {
+		vehicleDriveExitBusy.value = false
+	}
 }
 
 function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
@@ -6365,6 +6582,19 @@ onBeforeUnmount(() => {
 				<span class="scene-preview__purpose-label">平视</span>
 			</v-btn>
 		</div>
+		<v-btn
+			v-if="vehicleDrivePrompt.visible"
+			class="scene-preview__drive-start-button"
+			color="primary"
+			variant="flat"
+			size="large"
+			prepend-icon="mdi-steering"
+			:loading="vehicleDrivePrompt.busy"
+			:disabled="vehicleDrivePrompt.busy"
+			@click="handleVehicleDrivePromptConfirm"
+		>
+			驾驶 {{ vehicleDrivePrompt.label }}
+		</v-btn>
 		<div
 			v-if="vehicleDriveUi.visible"
 			class="scene-preview__drive-panel"
@@ -6444,6 +6674,17 @@ onBeforeUnmount(() => {
 					后退
 				</v-btn>
 			</div>
+			<v-btn
+				class="scene-preview__drive-exit"
+				color="secondary"
+				variant="tonal"
+				prepend-icon="mdi-exit-run"
+				:loading="vehicleDriveExitBusy"
+				:disabled="vehicleDriveExitBusy"
+				@click="handleVehicleDriveExitClick"
+			>
+				下车
+			</v-btn>
 		</div>
 		<v-sheet class="scene-preview__control-bar" elevation="10">
 			<div class="scene-preview__controls">
@@ -7127,6 +7368,15 @@ onBeforeUnmount(() => {
 	pointer-events: auto;
 }
 
+.scene-preview__drive-start-button {
+	position: absolute;
+	left: 24px;
+	bottom: 220px;
+	z-index: 2150;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+}
+
 .scene-preview__drive-panel-header {
 	display: flex;
 	align-items: center;
@@ -7179,6 +7429,18 @@ onBeforeUnmount(() => {
 	box-shadow: 0 0 18px rgba(255, 255, 255, 0.25);
 	background: linear-gradient(135deg, rgba(124, 92, 255, 0.45), rgba(173, 134, 255, 0.35)) !important;
 	color: #fff !important;
+}
+
+.scene-preview__drive-exit {
+	margin-top: 12px;
+	width: 100%;
+	font-weight: 600;
+	letter-spacing: 0.03em;
+	text-transform: none;
+}
+
+.scene-preview__drive-exit :deep(.v-btn__content) {
+	gap: 6px;
 }
 
 .scene-preview__purpose-button :deep(.v-icon) {
