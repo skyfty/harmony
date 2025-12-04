@@ -864,6 +864,8 @@ const tempDriveLookTarget = new THREE.Vector3();
 const tempDriveDirection = new THREE.Vector3();
 const tempDriveSeatQuaternion = new THREE.Quaternion();
 const tempDriveSeatUp = new THREE.Vector3();
+const tempDriveForward = new THREE.Vector3();
+const tempDriveRight = new THREE.Vector3();
 const tempDriveCameraMatrix = new THREE.Matrix4();
 const tempDriveCameraQuaternion = new THREE.Quaternion();
 const VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE = 6;
@@ -4466,12 +4468,6 @@ function computeVehicleDriveCameraTargets(
   orientationObject.updateMatrixWorld(true);
   orientationObject.getWorldQuaternion(tempQuaternion);
   tempDriveSeatQuaternion.copy(tempQuaternion);
-  tempDriveSeatUp.set(0, 1, 0).applyQuaternion(tempDriveSeatQuaternion);
-  if (tempDriveSeatUp.lengthSq() < 1e-8) {
-    tempDriveSeatUp.set(0, 1, 0);
-  } else {
-    tempDriveSeatUp.normalize();
-  }
   let lookResolved = false;
   if (forwardNodeId) {
     const forwardObject = nodeObjectMap.get(forwardNodeId) ?? null;
@@ -4504,6 +4500,30 @@ function computeVehicleDriveCameraTargets(
     tempDriveLookTarget
       .copy(tempDriveSeatPosition)
       .add(tempDriveDirection.multiplyScalar(VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE));
+  }
+  tempDriveForward
+    .copy(tempDriveLookTarget)
+    .sub(tempDriveSeatPosition);
+  if (tempDriveForward.lengthSq() < 1e-8) {
+    tempDriveForward.set(0, 0, -1).applyQuaternion(tempDriveSeatQuaternion);
+    if (tempDriveForward.lengthSq() < 1e-8) {
+      tempDriveForward.set(0, 0, -1);
+    }
+  }
+  tempDriveForward.normalize();
+  tempDriveRight.copy(tempDriveForward).cross(worldUp);
+  if (tempDriveRight.lengthSq() < 1e-8) {
+    tempDriveRight.set(1, 0, 0).applyQuaternion(tempDriveSeatQuaternion);
+    if (tempDriveRight.lengthSq() < 1e-8) {
+      tempDriveRight.set(1, 0, 0);
+    }
+  }
+  tempDriveRight.normalize();
+  tempDriveSeatUp.crossVectors(tempDriveRight, tempDriveForward);
+  if (tempDriveSeatUp.lengthSq() < 1e-8) {
+    tempDriveSeatUp.copy(worldUp);
+  } else {
+    tempDriveSeatUp.normalize();
   }
   return lookResolved;
 }

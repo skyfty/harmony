@@ -558,11 +558,14 @@ const VEHICLE_BRAKE_FORCE = 45
 const VEHICLE_STEER_ANGLE = THREE.MathUtils.degToRad(32)
 const tempVehicleCameraOffset = new THREE.Vector3()
 const tempVehicleCameraLook = new THREE.Vector3()
+const tempVehicleCameraForward = new THREE.Vector3()
+const tempVehicleCameraRight = new THREE.Vector3()
 const tempVehicleQuaternionThree = new THREE.Quaternion()
 const tempVehicleCameraPosition = new THREE.Vector3()
 const tempVehicleCameraUp = new THREE.Vector3()
 const tempVehicleCameraMatrix = new THREE.Matrix4()
 const tempVehicleCameraQuaternion = new THREE.Quaternion()
+const VEHICLE_CAMERA_WORLD_UP = new THREE.Vector3(0, 1, 0)
 const VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE = 6
 const skySunPosition = new THREE.Vector3()
 const DEFAULT_SUN_DIRECTION = new THREE.Vector3(0.35, 1, -0.25).normalize()
@@ -3031,60 +3034,35 @@ function updateVehicleDriveCamera(_delta: number, _options: { immediate?: boolea
 	if (!activeCamera) {
 		return false
 	}
+
 	const seatNodeId = vehicleDriveState.seatNodeId
-	const vehicleNodeId = vehicleDriveState.nodeId
-	const seatObject = seatNodeId ? nodeObjectMap.get(seatNodeId) ?? null : null
-	const vehicleObject = vehicleNodeId ? nodeObjectMap.get(vehicleNodeId) ?? null : null
-	const referenceObject = seatObject ?? vehicleObject
-	if (!referenceObject) {
-		stopVehicleDriveMode({ resolution: { type: 'abort', message: '驾驶目标对象不存在。' } })
+	const forwardNodeId = vehicleDriveState.forwardNodeId
+
+	if (!seatNodeId || !forwardNodeId) {
 		return false
 	}
-	referenceObject.updateMatrixWorld(true)
-	referenceObject.getWorldPosition(tempVehicleCameraPosition)
-	const orientationObject = seatObject ?? referenceObject
-	orientationObject.updateMatrixWorld(true)
-	orientationObject.getWorldQuaternion(tempVehicleQuaternionThree)
-	tempVehicleCameraUp.set(0, 1, 0).applyQuaternion(tempVehicleQuaternionThree)
-	if (tempVehicleCameraUp.lengthSq() < 1e-8) {
-		tempVehicleCameraUp.set(0, 1, 0)
-	} else {
-		tempVehicleCameraUp.normalize()
+
+	const seatObject = nodeObjectMap.get(seatNodeId)
+	const forwardObject = nodeObjectMap.get(forwardNodeId)
+
+	if (!seatObject || !forwardObject) {
+		return false
 	}
-	let lookTargetResolved = false
-	const forwardNodeId = vehicleDriveState.forwardNodeId
-	if (forwardNodeId) {
-		const forwardObject = nodeObjectMap.get(forwardNodeId) ?? null
-		if (forwardObject) {
-			forwardObject.updateMatrixWorld(true)
-			forwardObject.getWorldPosition(tempVehicleCameraLook)
-			if (tempVehicleCameraLook.distanceToSquared(tempVehicleCameraPosition) > 1e-6) {
-				lookTargetResolved = true
-			}
-		}
-	}
-	if (!lookTargetResolved) {
-		tempVehicleCameraOffset.set(0, 0, -1).applyQuaternion(tempVehicleQuaternionThree)
-		if (tempVehicleCameraOffset.lengthSq() < 1e-8) {
-			tempVehicleCameraOffset.set(0, 0, -1)
-		} else {
-			tempVehicleCameraOffset.normalize()
-		}
-		tempVehicleCameraLook
-			.copy(tempVehicleCameraPosition)
-			.add(tempVehicleCameraOffset.multiplyScalar(VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE))
-	}
-	tempVehicleCameraMatrix.lookAt(tempVehicleCameraPosition, tempVehicleCameraLook, tempVehicleCameraUp)
-	tempVehicleCameraMatrix.invert()
-	tempVehicleCameraQuaternion.setFromRotationMatrix(tempVehicleCameraMatrix)
-	vehicleDriveCameraFollowState.desiredPosition.copy(tempVehicleCameraPosition)
-	vehicleDriveCameraFollowState.desiredTarget.copy(tempVehicleCameraLook)
-	vehicleDriveCameraFollowState.currentPosition.copy(tempVehicleCameraPosition)
-	vehicleDriveCameraFollowState.currentTarget.copy(tempVehicleCameraLook)
+
+	seatObject.updateMatrixWorld(true)
+	forwardObject.updateMatrixWorld(true)
+
+	seatObject.getWorldPosition(tempVehicleCameraPosition)
 	activeCamera.position.copy(tempVehicleCameraPosition)
-	activeCamera.quaternion.copy(tempVehicleCameraQuaternion)
+
+	forwardObject.getWorldPosition(tempVehicleCameraLook)
+
+	// Align camera up vector with seat's up vector to handle vehicle roll/pitch
+	tempVehicleCameraUp.setFromMatrixColumn(seatObject.matrixWorld, 1)
 	activeCamera.up.copy(tempVehicleCameraUp)
-	activeCamera.updateMatrixWorld(true)
+
+	activeCamera.lookAt(tempVehicleCameraLook)
+
 	return true
 }
 
@@ -3188,7 +3166,6 @@ async function handleVehicleDrivePromptConfirm(): Promise<void> {
 			return
 		}
 		handleShowVehicleCockpitEvent()
-		// updateVehicleDriveCamera(0, { immediate: true })
 		pendingVehicleDriveEvent.value = null
 	} finally {
 		vehicleDrivePromptBusy.value = false
