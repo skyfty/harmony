@@ -6,19 +6,25 @@ export const VEHICLE_COMPONENT_TYPE = 'vehicle'
 
 export type VehicleVector3Tuple = [number, number, number]
 
-export interface VehicleComponentProps {
-  indexRightAxis: number
-  indexUpAxis: number
-  indexForwardAxis: number
+export interface VehicleWheelProps {
+  id: string
+  nodeId: string | null
   radius: number
-  directionLocal: VehicleVector3Tuple
-  axleLocal: VehicleVector3Tuple
   suspensionRestLength: number
   suspensionStiffness: number
   suspensionDamping: number
   suspensionCompression: number
   frictionSlip: number
   rollInfluence: number
+}
+
+export interface VehicleComponentProps {
+  indexRightAxis: number
+  indexUpAxis: number
+  indexForwardAxis: number
+  directionLocal: VehicleVector3Tuple
+  axleLocal: VehicleVector3Tuple
+  wheels: VehicleWheelProps[]
 }
 
 const DEFAULT_RIGHT_AXIS = 0
@@ -33,6 +39,17 @@ const DEFAULT_SUSPENSION_DAMPING = 2
 const DEFAULT_SUSPENSION_COMPRESSION = 4
 const DEFAULT_FRICTION_SLIP = 5
 const DEFAULT_ROLL_INFLUENCE = 0.01
+const DEFAULT_WHEEL_COUNT = 4
+const DEFAULT_WHEEL_TEMPLATE: Omit<VehicleWheelProps, 'id'> = {
+  nodeId: null,
+  radius: DEFAULT_RADIUS,
+  suspensionRestLength: DEFAULT_SUSPENSION_REST_LENGTH,
+  suspensionStiffness: DEFAULT_SUSPENSION_STIFFNESS,
+  suspensionDamping: DEFAULT_SUSPENSION_DAMPING,
+  suspensionCompression: DEFAULT_SUSPENSION_COMPRESSION,
+  frictionSlip: DEFAULT_FRICTION_SLIP,
+  rollInfluence: DEFAULT_ROLL_INFLUENCE,
+}
 
 function clampAxisIndex(value: unknown, fallback: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -70,16 +87,71 @@ function clampVectorTuple(value: unknown, fallback: VehicleVector3Tuple): Vehicl
   return [...fallback]
 }
 
-export function clampVehicleComponentProps(
-  props: Partial<VehicleComponentProps> | null | undefined,
-): VehicleComponentProps {
+type LegacyWheelProps = {
+  radius?: unknown
+  suspensionRestLength?: unknown
+  suspensionStiffness?: unknown
+  suspensionDamping?: unknown
+  suspensionCompression?: unknown
+  frictionSlip?: unknown
+  rollInfluence?: unknown
+}
+
+type VehicleComponentPropsInput = (Partial<VehicleComponentProps> & LegacyWheelProps) | null | undefined
+
+function clampWheelNodeId(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  return trimmed.length ? trimmed : null
+}
+
+function buildDefaultWheelList(template: Omit<VehicleWheelProps, 'id'>, count = DEFAULT_WHEEL_COUNT): VehicleWheelProps[] {
+  return Array.from({ length: Math.max(1, count) }, (_value, index) => ({
+    id: `wheel-${index + 1}`,
+    ...template,
+  }))
+}
+
+function clampWheelEntry(
+  entry: Partial<VehicleWheelProps> | null | undefined,
+  template: Omit<VehicleWheelProps, 'id'>,
+): VehicleWheelProps {
+  const source = entry ?? {}
+  const provisionalId = typeof source.id === 'string' ? source.id.trim() : ''
   return {
-    indexRightAxis: clampAxisIndex(props?.indexRightAxis, DEFAULT_RIGHT_AXIS),
-    indexUpAxis: clampAxisIndex(props?.indexUpAxis, DEFAULT_UP_AXIS),
-    indexForwardAxis: clampAxisIndex(props?.indexForwardAxis, DEFAULT_FORWARD_AXIS),
+    id: provisionalId,
+    nodeId: clampWheelNodeId(source.nodeId),
+    radius: clampPositive(source.radius, template.radius, { min: 0.01 }),
+    suspensionRestLength: clampPositive(source.suspensionRestLength, template.suspensionRestLength, { min: 0 }),
+    suspensionStiffness: clampPositive(source.suspensionStiffness, template.suspensionStiffness, { min: 0 }),
+    suspensionDamping: clampPositive(source.suspensionDamping, template.suspensionDamping, { min: 0 }),
+    suspensionCompression: clampPositive(source.suspensionCompression, template.suspensionCompression, { min: 0 }),
+    frictionSlip: clampPositive(source.frictionSlip, template.frictionSlip, { min: 0 }),
+    rollInfluence: clampPositive(source.rollInfluence, template.rollInfluence, { min: 0 }),
+  }
+}
+
+function ensureWheelIds(wheels: VehicleWheelProps[]): VehicleWheelProps[] {
+  const used = new Set<string>()
+  return wheels.map((wheel, index) => {
+    let baseId = wheel.id && wheel.id.trim().length ? wheel.id.trim() : `wheel-${index + 1}`
+    let candidate = baseId
+    let suffix = 1
+    while (used.has(candidate)) {
+      candidate = `${baseId}-${suffix}`
+      suffix += 1
+    }
+    used.add(candidate)
+    return { ...wheel, id: candidate }
+  })
+}
+
+function resolveLegacyWheelTemplate(props: LegacyWheelProps | null | undefined): Omit<VehicleWheelProps, 'id'> {
+  return {
+    ...DEFAULT_WHEEL_TEMPLATE,
     radius: clampPositive(props?.radius, DEFAULT_RADIUS, { min: 0.01 }),
-    directionLocal: clampVectorTuple(props?.directionLocal, DEFAULT_DIRECTION),
-    axleLocal: clampVectorTuple(props?.axleLocal, DEFAULT_AXLE),
     suspensionRestLength: clampPositive(props?.suspensionRestLength, DEFAULT_SUSPENSION_REST_LENGTH, { min: 0 }),
     suspensionStiffness: clampPositive(props?.suspensionStiffness, DEFAULT_SUSPENSION_STIFFNESS, { min: 0 }),
     suspensionDamping: clampPositive(props?.suspensionDamping, DEFAULT_SUSPENSION_DAMPING, { min: 0 }),
@@ -89,20 +161,48 @@ export function clampVehicleComponentProps(
   }
 }
 
+function clampWheelList(
+  value: unknown,
+  template: Omit<VehicleWheelProps, 'id'>,
+): VehicleWheelProps[] {
+  const entries = Array.isArray(value) ? value : []
+  const normalized = entries.map((entry) => clampWheelEntry(entry as Partial<VehicleWheelProps>, template))
+  const list = normalized.length ? normalized : buildDefaultWheelList(template)
+  return ensureWheelIds(list)
+}
+
+export function clampVehicleComponentProps(
+  props: VehicleComponentPropsInput,
+): VehicleComponentProps {
+  const wheelTemplate = resolveLegacyWheelTemplate(props ?? null)
+  return {
+    indexRightAxis: clampAxisIndex(props?.indexRightAxis, DEFAULT_RIGHT_AXIS),
+    indexUpAxis: clampAxisIndex(props?.indexUpAxis, DEFAULT_UP_AXIS),
+    indexForwardAxis: clampAxisIndex(props?.indexForwardAxis, DEFAULT_FORWARD_AXIS),
+    directionLocal: clampVectorTuple(props?.directionLocal, DEFAULT_DIRECTION),
+    axleLocal: clampVectorTuple(props?.axleLocal, DEFAULT_AXLE),
+    wheels: clampWheelList(props?.wheels, wheelTemplate),
+  }
+}
+
 export function cloneVehicleComponentProps(props: VehicleComponentProps): VehicleComponentProps {
   return {
     indexRightAxis: props.indexRightAxis,
     indexUpAxis: props.indexUpAxis,
     indexForwardAxis: props.indexForwardAxis,
-    radius: props.radius,
     directionLocal: [...props.directionLocal] as VehicleVector3Tuple,
     axleLocal: [...props.axleLocal] as VehicleVector3Tuple,
-    suspensionRestLength: props.suspensionRestLength,
-    suspensionStiffness: props.suspensionStiffness,
-    suspensionDamping: props.suspensionDamping,
-    suspensionCompression: props.suspensionCompression,
-    frictionSlip: props.frictionSlip,
-    rollInfluence: props.rollInfluence,
+    wheels: props.wheels.map((wheel) => ({
+      id: wheel.id,
+      nodeId: wheel.nodeId ?? null,
+      radius: wheel.radius,
+      suspensionRestLength: wheel.suspensionRestLength,
+      suspensionStiffness: wheel.suspensionStiffness,
+      suspensionDamping: wheel.suspensionDamping,
+      suspensionCompression: wheel.suspensionCompression,
+      frictionSlip: wheel.frictionSlip,
+      rollInfluence: wheel.rollInfluence,
+    })),
   }
 }
 
@@ -125,19 +225,6 @@ const vehicleComponentDefinition: ComponentDefinition<VehicleComponentProps> = {
         { kind: 'number', key: 'indexRightAxis', label: 'Right Axis', min: 0, max: 2, step: 1, precision: 0 },
         { kind: 'number', key: 'indexUpAxis', label: 'Up Axis', min: 0, max: 2, step: 1, precision: 0 },
         { kind: 'number', key: 'indexForwardAxis', label: 'Forward Axis', min: 0, max: 2, step: 1, precision: 0 },
-      ],
-    },
-    {
-      id: 'wheel-info',
-      label: 'Wheel Info',
-      fields: [
-        { kind: 'number', key: 'radius', label: 'Radius (m)', min: 0.01, step: 0.05 },
-        { kind: 'number', key: 'suspensionRestLength', label: 'Suspension Rest (m)', min: 0, step: 0.01 },
-        { kind: 'number', key: 'suspensionStiffness', label: 'Suspension Stiffness', min: 0, step: 1 },
-        { kind: 'number', key: 'suspensionDamping', label: 'Damping', min: 0, step: 0.1 },
-        { kind: 'number', key: 'suspensionCompression', label: 'Compression', min: 0, step: 0.1 },
-        { kind: 'number', key: 'frictionSlip', label: 'Friction Slip', min: 0, step: 0.1 },
-        { kind: 'number', key: 'rollInfluence', label: 'Roll Influence', min: 0, step: 0.001 },
       ],
     },
   ],

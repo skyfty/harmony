@@ -159,6 +159,7 @@ import type {
   EffectComponentProps,
   GuideboardComponentProps,
   RigidbodyComponentProps,
+  VehicleComponentProps,
   ViewPointComponentProps,
   WallComponentProps,
   WarpGateComponentProps,
@@ -172,6 +173,7 @@ import {
   EFFECT_COMPONENT_TYPE,
   BEHAVIOR_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
+  VEHICLE_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_THICKNESS,
   WALL_DEFAULT_WIDTH,
@@ -196,6 +198,8 @@ import {
   cloneEffectComponentProps,
   clampRigidbodyComponentProps,
   cloneRigidbodyComponentProps,
+  clampVehicleComponentProps,
+  cloneVehicleComponentProps,
   componentManager,
   resolveWallComponentPropsFromMesh,
 } from '@schema/components'
@@ -10680,6 +10684,51 @@ export const useSceneStore = defineStore('scene', {
           return false
         }
         nextProps = cloneRigidbodyComponentProps(merged)
+      } else if (type === VEHICLE_COMPONENT_TYPE) {
+        const currentProps = clampVehicleComponentProps(component.props as VehicleComponentProps)
+        const typedPatch = patch as Partial<VehicleComponentProps>
+        const merged = clampVehicleComponentProps({
+          ...currentProps,
+          ...typedPatch,
+        })
+        const numbersDiffer = (a: number, b: number, epsilon = 1e-4) => Math.abs(a - b) > epsilon
+        const directionChanged = currentProps.directionLocal.some((value, index) =>
+          numbersDiffer(value, merged.directionLocal[index] ?? value),
+        )
+        const axleChanged = currentProps.axleLocal.some((value, index) =>
+          numbersDiffer(value, merged.axleLocal[index] ?? value),
+        )
+        const wheelsChanged =
+          currentProps.wheels.length !== merged.wheels.length ||
+          currentProps.wheels.some((wheel, index) => {
+            const nextWheel = merged.wheels[index]
+            if (!nextWheel) {
+              return true
+            }
+            return (
+              wheel.id !== nextWheel.id ||
+              wheel.nodeId !== nextWheel.nodeId ||
+              numbersDiffer(wheel.radius, nextWheel.radius) ||
+              numbersDiffer(wheel.suspensionRestLength, nextWheel.suspensionRestLength) ||
+              numbersDiffer(wheel.suspensionStiffness, nextWheel.suspensionStiffness) ||
+              numbersDiffer(wheel.suspensionDamping, nextWheel.suspensionDamping) ||
+              numbersDiffer(wheel.suspensionCompression, nextWheel.suspensionCompression) ||
+              numbersDiffer(wheel.frictionSlip, nextWheel.frictionSlip) ||
+              numbersDiffer(wheel.rollInfluence, nextWheel.rollInfluence)
+            )
+          })
+        const hasChanges =
+          currentProps.indexRightAxis !== merged.indexRightAxis ||
+          currentProps.indexUpAxis !== merged.indexUpAxis ||
+          currentProps.indexForwardAxis !== merged.indexForwardAxis ||
+          directionChanged ||
+          axleChanged ||
+          wheelsChanged
+
+        if (!hasChanges) {
+          return false
+        }
+        nextProps = cloneVehicleComponentProps(merged)
       } else {
         const currentProps = component.props as Record<string, unknown>
         const merged = { ...currentProps, ...patch }
