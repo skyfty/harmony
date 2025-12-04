@@ -9,7 +9,6 @@ import {
   VEHICLE_COMPONENT_TYPE,
   clampVehicleComponentProps,
   type VehicleComponentProps,
-  type VehicleVector3Tuple,
   type VehicleWheelProps,
 } from '@schema/components'
 
@@ -199,20 +198,6 @@ function handleAxisChange(
   commitClampedPatch({ [key]: value } as Partial<VehicleComponentProps>)
 }
 
-function handleVectorInput(
-  key: 'directionLocal' | 'axleLocal',
-  axisIndex: 0 | 1 | 2,
-  value: string | number,
-): void {
-  const numeric = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(numeric)) {
-    return
-  }
-  const nextTuple = [...normalizedProps.value[key]] as VehicleVector3Tuple
-  nextTuple[axisIndex] = numeric
-  commitClampedPatch({ [key]: nextTuple } as Partial<VehicleComponentProps>)
-}
-
 function handleToggleComponent(): void {
   const component = vehicleComponent.value
   const nodeId = selectedNodeId.value
@@ -364,7 +349,6 @@ function handleRemoveComponent(): void {
               </div>
               <NodePicker
                 class="vehicle-wheel-item__picker"
-                owner="vehicle-wheel"
                 pick-hint="点击场景中的车轮模型"
                 selection-hint="在场景中选择作为车轮的节点"
                 placeholder="未绑定节点"
@@ -373,78 +357,6 @@ function handleRemoveComponent(): void {
                 @update:modelValue="(value) => handleWheelNodeChange(wheel.id, value as string | null)"
               />
             </div>
-          </div>
-        </div>
-
-        <div class="vehicle-panel__section">
-          <div class="vehicle-panel__section-title">Direction (Local)</div>
-          <div class="vehicle-panel__vector-grid">
-            <v-text-field
-              label="X"
-              type="number"
-              density="compact"
-              variant="underlined"
-              :step="0.1"
-              :model-value="normalizedProps.directionLocal[0]"
-              :disabled="!vehicleComponent?.enabled"
-              @update:modelValue="(value) => handleVectorInput('directionLocal', 0, value)"
-            />
-            <v-text-field
-              label="Y"
-              type="number"
-              density="compact"
-              variant="underlined"
-              :step="0.1"
-              :model-value="normalizedProps.directionLocal[1]"
-              :disabled="!vehicleComponent?.enabled"
-              @update:modelValue="(value) => handleVectorInput('directionLocal', 1, value)"
-            />
-            <v-text-field
-              label="Z"
-              type="number"
-              density="compact"
-              variant="underlined"
-              :step="0.1"
-              :model-value="normalizedProps.directionLocal[2]"
-              :disabled="!vehicleComponent?.enabled"
-              @update:modelValue="(value) => handleVectorInput('directionLocal', 2, value)"
-            />
-          </div>
-        </div>
-
-        <div class="vehicle-panel__section">
-          <div class="vehicle-panel__section-title">Axle (Local)</div>
-          <div class="vehicle-panel__vector-grid">
-            <v-text-field
-              label="X"
-              type="number"
-              density="compact"
-              variant="underlined"
-              :step="0.1"
-              :model-value="normalizedProps.axleLocal[0]"
-              :disabled="!vehicleComponent?.enabled"
-              @update:modelValue="(value) => handleVectorInput('axleLocal', 0, value)"
-            />
-            <v-text-field
-              label="Y"
-              type="number"
-              density="compact"
-              variant="underlined"
-              :step="0.1"
-              :model-value="normalizedProps.axleLocal[1]"
-              :disabled="!vehicleComponent?.enabled"
-              @update:modelValue="(value) => handleVectorInput('axleLocal', 1, value)"
-            />
-            <v-text-field
-              label="Z"
-              type="number"
-              density="compact"
-              variant="underlined"
-              :step="0.1"
-              :model-value="normalizedProps.axleLocal[2]"
-              :disabled="!vehicleComponent?.enabled"
-              @update:modelValue="(value) => handleVectorInput('axleLocal', 2, value)"
-            />
           </div>
         </div>
       </div>

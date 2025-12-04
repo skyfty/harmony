@@ -7,6 +7,7 @@ import {
   VEHICLE_COMPONENT_TYPE,
   clampVehicleComponentProps,
   type VehicleComponentProps,
+  type VehicleVector3Tuple,
   type VehicleWheelProps,
 } from '@schema/components'
 
@@ -93,6 +94,29 @@ function handleWheelInput(
   })
 }
 
+function handleVectorInput(
+  key: 'directionLocal' | 'axleLocal',
+  axisIndex: 0 | 1 | 2,
+  value: string | number,
+): void {
+  if (!vehicleComponent.value || !selectedNodeId.value) {
+    return
+  }
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  const current = clampVehicleComponentProps(vehicleComponent.value.props as VehicleComponentProps)
+  const nextTuple = [...current[key]] as VehicleVector3Tuple
+  if (nextTuple[axisIndex] === numeric) {
+    return
+  }
+  nextTuple[axisIndex] = numeric
+  sceneStore.updateNodeComponentProps(selectedNodeId.value, vehicleComponent.value.id, {
+    [key]: nextTuple,
+  })
+}
+
 watch(activeWheel, (wheel) => {
   if (!wheel && props.visible) {
     emit('close')
@@ -126,6 +150,84 @@ watch(
         <v-btn icon size="small" variant="text" @click="handleClose">
           <v-icon size="18">mdi-close</v-icon>
         </v-btn>
+      </div>
+      <div class="vehicle-wheel-details__vectors">
+        <div class="vehicle-wheel-details__subsection">
+          <div class="vehicle-wheel-details__subsection-title">Direction (Local)</div>
+          <div class="vehicle-wheel-details__vector-grid">
+            <v-text-field
+              label="X"
+              density="compact"
+              variant="solo"
+              type="number"
+              hide-details
+              :step="0.05"
+              :model-value="normalizedProps.directionLocal[0]"
+              :disabled="isDisabled"
+              @update:modelValue="(value) => handleVectorInput('directionLocal', 0, value)"
+            />
+            <v-text-field
+              label="Y"
+              density="compact"
+              variant="solo"
+              type="number"
+              hide-details
+              :step="0.05"
+              :model-value="normalizedProps.directionLocal[1]"
+              :disabled="isDisabled"
+              @update:modelValue="(value) => handleVectorInput('directionLocal', 1, value)"
+            />
+            <v-text-field
+              label="Z"
+              density="compact"
+              variant="solo"
+              type="number"
+              hide-details
+              :step="0.05"
+              :model-value="normalizedProps.directionLocal[2]"
+              :disabled="isDisabled"
+              @update:modelValue="(value) => handleVectorInput('directionLocal', 2, value)"
+            />
+          </div>
+        </div>
+        <div class="vehicle-wheel-details__subsection">
+          <div class="vehicle-wheel-details__subsection-title">Axle (Local)</div>
+          <div class="vehicle-wheel-details__vector-grid">
+            <v-text-field
+              label="X"
+              density="compact"
+              variant="solo"
+              type="number"
+              hide-details
+              :step="0.05"
+              :model-value="normalizedProps.axleLocal[0]"
+              :disabled="isDisabled"
+              @update:modelValue="(value) => handleVectorInput('axleLocal', 0, value)"
+            />
+            <v-text-field
+              label="Y"
+              density="compact"
+              variant="solo"
+              type="number"
+              hide-details
+              :step="0.05"
+              :model-value="normalizedProps.axleLocal[1]"
+              :disabled="isDisabled"
+              @update:modelValue="(value) => handleVectorInput('axleLocal', 1, value)"
+            />
+            <v-text-field
+              label="Z"
+              density="compact"
+              variant="solo"
+              type="number"
+              hide-details
+              :step="0.05"
+              :model-value="normalizedProps.axleLocal[2]"
+              :disabled="isDisabled"
+              @update:modelValue="(value) => handleVectorInput('axleLocal', 2, value)"
+            />
+          </div>
+        </div>
       </div>
       <div class="vehicle-wheel-details__grid">
         <v-text-field
@@ -246,6 +348,26 @@ watch(
 .vehicle-wheel-details__subtitle {
   font-size: 0.78rem;
   color: rgba(233, 236, 241, 0.65);
+}
+
+.vehicle-wheel-details__vectors {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  margin-bottom: 0.9rem;
+}
+
+.vehicle-wheel-details__subsection-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+  color: rgba(233, 236, 241, 0.82);
+}
+
+.vehicle-wheel-details__vector-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(80px, 1fr));
+  gap: 0.45rem;
 }
 
 .vehicle-wheel-details__grid {
