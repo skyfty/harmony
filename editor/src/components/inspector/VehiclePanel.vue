@@ -119,7 +119,7 @@ function handleRemoveComponent(): void {
   <v-expansion-panel value="vehicle">
     <v-expansion-panel-title>
       <div class="vehicle-panel__header">
-        <span class="vehicle-panel__title">Vehicle Component</span>
+        <span class="vehicle-panel__title">Vehicle</span>
         <v-spacer />
         <v-menu
           v-if="vehicleComponent"

@@ -199,7 +199,7 @@ function handleRemoveComponent() {
   <v-expansion-panel value="rigidbody">
     <v-expansion-panel-title>
       <div class="rigidbody-panel__header">
-        <span class="rigidbody-panel__title">Rigidbody Component</span>
+        <span class="rigidbody-panel__title">Rigidbody</span>
         <v-spacer />
         <v-menu
           v-if="rigidbodyComponent"
