@@ -154,6 +154,9 @@ export type BehaviorRuntimeEvent =
       behaviorSequenceId: string
       behaviorId: string
       targetNodeId: string
+      seatNodeId: string | null
+      forwardDirectionNodeId: string | null
+      exitNodeId: string | null
       token: string
     }
   | {
@@ -616,6 +619,11 @@ function createDriveVehicleEvent(
   const params = behavior.script.params as DriveBehaviorParams | undefined
   const fallbackTarget = state.nodeId
   const targetNodeId = params?.targetNodeId && params.targetNodeId.trim().length ? params.targetNodeId : fallbackTarget
+  const seatNodeId = params?.seatNodeId && params.seatNodeId.trim().length ? params.seatNodeId.trim() : null
+  const forwardDirectionNodeId = params?.forwardDirectionNodeId && params.forwardDirectionNodeId.trim().length
+    ? params.forwardDirectionNodeId.trim()
+    : null
+  const exitNodeId = params?.exitNodeId && params.exitNodeId.trim().length ? params.exitNodeId.trim() : null
   return {
     type: 'vehicle-drive',
     nodeId: state.nodeId,
@@ -624,6 +632,9 @@ function createDriveVehicleEvent(
     behaviorSequenceId: state.behaviorSequenceId,
     behaviorId: behavior.id,
     targetNodeId,
+    seatNodeId,
+    forwardDirectionNodeId,
+    exitNodeId,
     token,
   }
 }

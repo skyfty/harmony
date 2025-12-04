@@ -281,6 +281,9 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
     createDefaultParams(): DriveBehaviorParams {
       return {
         targetNodeId: null,
+        seatNodeId: null,
+        forwardDirectionNodeId: null,
+        exitNodeId: null,
       }
     },
   },
@@ -616,6 +619,9 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
         type: 'drive',
         params: {
           targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
+          seatNodeId: normalizeTargetNodeId(params?.seatNodeId),
+          forwardDirectionNodeId: normalizeTargetNodeId(params?.forwardDirectionNodeId),
+          exitNodeId: normalizeTargetNodeId(params?.exitNodeId),
         },
       }
     }
@@ -864,6 +870,9 @@ export function ensureBehaviorParams(
           type: 'drive',
           params: {
             targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
+            seatNodeId: normalizeTargetNodeId(params?.seatNodeId),
+            forwardDirectionNodeId: normalizeTargetNodeId(params?.forwardDirectionNodeId),
+            exitNodeId: normalizeTargetNodeId(params?.exitNodeId),
           },
         }
       }
