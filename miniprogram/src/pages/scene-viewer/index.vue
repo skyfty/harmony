@@ -161,6 +161,69 @@
           </view>
         </button>
       </view>
+      <view
+        v-if="vehicleDriveUi.visible"
+        class="viewer-drive-panel"
+      >
+        <view class="viewer-drive-header">
+          <view class="viewer-drive-title">
+            <text class="viewer-drive-title__text">驾驶车辆</text>
+          </view>
+          <text class="viewer-drive-node">{{ vehicleDriveUi.label }}</text>
+        </view>
+        <view class="viewer-drive-grid">
+          <view
+            class="viewer-drive-button viewer-drive-button--wide"
+            :class="{ 'is-active': vehicleDriveUi.forwardActive }"
+            role="button"
+            @touchstart.stop.prevent="handleVehicleDriveControlTouch('forward', true, $event)"
+            @touchend.stop.prevent="handleVehicleDriveControlTouch('forward', false, $event)"
+            @touchcancel.stop.prevent="handleVehicleDriveControlTouch('forward', false, $event)"
+          >
+            <text>前进</text>
+          </view>
+          <view
+            class="viewer-drive-button viewer-drive-button--wide"
+            :class="{ 'is-active': vehicleDriveUi.leftActive }"
+            role="button"
+            @touchstart.stop.prevent="handleVehicleDriveControlTouch('left', true, $event)"
+            @touchend.stop.prevent="handleVehicleDriveControlTouch('left', false, $event)"
+            @touchcancel.stop.prevent="handleVehicleDriveControlTouch('left', false, $event)"
+          >
+            <text>左转</text>
+          </view>
+          <view
+            class="viewer-drive-button viewer-drive-button--brake"
+            :class="{ 'is-active': vehicleDriveUi.brakeActive }"
+            role="button"
+            @touchstart.stop.prevent="handleVehicleDriveControlTouch('brake', true, $event)"
+            @touchend.stop.prevent="handleVehicleDriveControlTouch('brake', false, $event)"
+            @touchcancel.stop.prevent="handleVehicleDriveControlTouch('brake', false, $event)"
+          >
+            <text>刹车</text>
+          </view>
+          <view
+            class="viewer-drive-button"
+            :class="{ 'is-active': vehicleDriveUi.rightActive }"
+            role="button"
+            @touchstart.stop.prevent="handleVehicleDriveControlTouch('right', true, $event)"
+            @touchend.stop.prevent="handleVehicleDriveControlTouch('right', false, $event)"
+            @touchcancel.stop.prevent="handleVehicleDriveControlTouch('right', false, $event)"
+          >
+            <text>右转</text>
+          </view>
+          <view
+            class="viewer-drive-button"
+            :class="{ 'is-active': vehicleDriveUi.backwardActive }"
+            role="button"
+            @touchstart.stop.prevent="handleVehicleDriveControlTouch('backward', true, $event)"
+            @touchend.stop.prevent="handleVehicleDriveControlTouch('backward', false, $event)"
+            @touchcancel.stop.prevent="handleVehicleDriveControlTouch('backward', false, $event)"
+          >
+            <text>后退</text>
+          </view>
+        </view>
+      </view>
     </view>
     <view class="viewer-footer" v-if="warnings.length">
       <text class="footer-title">警告</text>
@@ -863,6 +926,56 @@ const purposeControlsVisible = ref(false);
 const purposeTargetNodeId = ref<string | null>(null);
 const purposeSourceNodeId = ref<string | null>(null);
 const purposeActiveMode = ref<'watch' | 'level'>('level');
+
+type VehicleDriveControlFlags = {
+  forward: boolean;
+  backward: boolean;
+  left: boolean;
+  right: boolean;
+  brake: boolean;
+};
+
+const vehicleDriveActive = ref(false);
+const vehicleDriveNodeId = ref<string | null>(null);
+const vehicleDriveUiOverride = ref<'auto' | 'show' | 'hide'>('auto');
+const vehicleDriveInputFlags = reactive<VehicleDriveControlFlags>({
+  forward: false,
+  backward: false,
+  left: false,
+  right: false,
+  brake: false,
+});
+
+const vehicleDriveUi = computed(() => {
+  const override = vehicleDriveUiOverride.value;
+  const active = vehicleDriveActive.value;
+  const visible = override === 'show' ? true : override === 'hide' ? false : active;
+  if (!visible) {
+    return {
+      visible: false,
+      label: '',
+      cameraLocked: false,
+      forwardActive: false,
+      backwardActive: false,
+      leftActive: false,
+      rightActive: false,
+      brakeActive: false,
+    } as const;
+  }
+  const nodeId = vehicleDriveNodeId.value ?? '';
+  const node = nodeId ? resolveNodeById(nodeId) : null;
+  const label = node?.name?.trim() || nodeId || 'Vehicle';
+  return {
+    visible: true,
+    label,
+    cameraLocked: active,
+    forwardActive: active && vehicleDriveInputFlags.forward,
+    backwardActive: active && vehicleDriveInputFlags.backward,
+    leftActive: active && vehicleDriveInputFlags.left,
+    rightActive: active && vehicleDriveInputFlags.right,
+    brakeActive: active && vehicleDriveInputFlags.brake,
+  } as const;
+});
 type CameraViewMode = 'level' | 'watching';
 const cameraViewState = reactive<{ mode: CameraViewMode; targetNodeId: string | null }>({
   mode: 'level',
@@ -2357,6 +2470,10 @@ function resetPhysicsWorld(): void {
   groundHeightfieldCache.clear();
   rigidbodyMaterialCache.clear();
   rigidbodyContactMaterialKeys.clear();
+  vehicleDriveActive.value = false;
+  vehicleDriveNodeId.value = null;
+  resetVehicleDriveInputFlags();
+  setVehicleDriveUiOverride('hide');
 }
 
 function resolveGroundHeightfieldShape(
@@ -4190,6 +4307,63 @@ function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look
   resolveBehaviorToken(event.token, { type: 'continue' });
 }
 
+type VehicleDriveControlKey = keyof VehicleDriveControlFlags;
+
+function setVehicleDriveUiOverride(mode: 'auto' | 'show' | 'hide'): void {
+  vehicleDriveUiOverride.value = mode;
+}
+
+function resetVehicleDriveInputFlags(): void {
+  vehicleDriveInputFlags.forward = false;
+  vehicleDriveInputFlags.backward = false;
+  vehicleDriveInputFlags.left = false;
+  vehicleDriveInputFlags.right = false;
+  vehicleDriveInputFlags.brake = false;
+}
+
+function handleVehicleDriveControlTouch(
+  key: VehicleDriveControlKey,
+  active: boolean,
+  event?: Event,
+): void {
+  if (event) {
+    if ('stopPropagation' in event && typeof event.stopPropagation === 'function') {
+      event.stopPropagation();
+    }
+    if ('preventDefault' in event && typeof event.preventDefault === 'function') {
+      event.preventDefault();
+    }
+  }
+  vehicleDriveInputFlags[key] = active;
+}
+
+function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>): void {
+  const targetNodeId = event.targetNodeId || event.nodeId || null;
+  vehicleDriveActive.value = true;
+  vehicleDriveNodeId.value = targetNodeId;
+  resetVehicleDriveInputFlags();
+  setVehicleDriveUiOverride('show');
+  resolveBehaviorToken(event.token, { type: 'continue' });
+}
+
+function handleVehicleDebusEvent(): void {
+  if (!vehicleDriveActive.value) {
+    return;
+  }
+  vehicleDriveActive.value = false;
+  vehicleDriveNodeId.value = null;
+  resetVehicleDriveInputFlags();
+  setVehicleDriveUiOverride('hide');
+}
+
+function handleShowVehicleCockpitEvent(): void {
+  setVehicleDriveUiOverride('show');
+}
+
+function handleHideVehicleCockpitEvent(): void {
+  setVehicleDriveUiOverride('hide');
+}
+
 
 function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
   switch (event.type) {
@@ -4225,6 +4399,18 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
       break;
     case 'look-level':
       handleLookLevelEvent(event);
+      break;
+    case 'vehicle-drive':
+      handleVehicleDriveEvent(event);
+      break;
+    case 'vehicle-debus':
+      handleVehicleDebusEvent();
+      break;
+    case 'vehicle-show-cockpit':
+      handleShowVehicleCockpitEvent();
+      break;
+    case 'vehicle-hide-cockpit':
+      handleHideVehicleCockpitEvent();
       break;
     case 'sequence-complete':
       resetLanternOverlay();
@@ -6096,6 +6282,98 @@ onUnmounted(() => {
   font-size: 12px;
   opacity: 0.72;
   letter-spacing: 0.5px;
+}
+
+.viewer-drive-panel {
+  position: absolute;
+  right: 16px;
+  bottom: 148px;
+  width: 220px;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(10, 15, 32, 0.88);
+  box-shadow: 0 18px 48px rgba(6, 12, 28, 0.4);
+  color: #ffffff;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  z-index: 1550;
+  backdrop-filter: blur(10px);
+}
+
+.viewer-drive-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.viewer-drive-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+}
+
+.viewer-drive-title__text {
+  color: #f4f6ff;
+}
+
+.viewer-drive-node {
+  font-size: 12px;
+  color: rgba(220, 230, 255, 0.78);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.viewer-drive-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.viewer-drive-button {
+  background: rgba(22, 32, 66, 0.9);
+  border-radius: 12px;
+  padding: 12px 10px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(238, 244, 255, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 0 0 1px rgba(124, 156, 255, 0.22);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.viewer-drive-button--wide {
+  grid-column: span 2;
+}
+
+.viewer-drive-button--brake {
+  background: rgba(120, 32, 40, 0.92);
+  box-shadow: inset 0 0 0 1px rgba(255, 132, 132, 0.38);
+}
+
+.viewer-drive-button.is-active {
+  transform: translateY(1px);
+  background: rgba(64, 110, 255, 0.95);
+  box-shadow:
+    inset 0 0 0 1px rgba(184, 214, 255, 0.65),
+    0 8px 18px rgba(54, 102, 255, 0.45);
+}
+
+.viewer-drive-button--brake.is-active {
+  background: rgba(210, 72, 70, 0.96);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 192, 192, 0.75),
+    0 10px 18px rgba(210, 72, 70, 0.4);
 }
 
 .viewer-purpose-controls {

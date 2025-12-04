@@ -383,6 +383,8 @@ const vehicleDriveState = reactive({
 	wheelCount: 0,
 })
 
+const vehicleDriveUiOverride = ref<'auto' | 'show' | 'hide'>('auto')
+
 const vehicleDriveInputFlags = reactive<VehicleDriveControlFlags>({
 	forward: false,
 	backward: false,
@@ -802,7 +804,10 @@ function resolveNodeById(nodeId: string): SceneNode | null {
 }
 
 const vehicleDriveUi = computed(() => {
-	if (!vehicleDriveState.active) {
+	const override = vehicleDriveUiOverride.value
+	const baseActive = vehicleDriveState.active
+	const visible = override === 'show' ? true : override === 'hide' ? false : baseActive
+	if (!visible) {
 		return {
 			visible: false,
 			label: '',
@@ -816,18 +821,23 @@ const vehicleDriveUi = computed(() => {
 	}
 	const nodeId = vehicleDriveState.nodeId ?? ''
 	const node = nodeId ? resolveNodeById(nodeId) : null
-	const label = (node?.name?.trim() || nodeId || 'Vehicle')
+	const label = node?.name?.trim() || nodeId || 'Vehicle'
+	const driveActive = vehicleDriveState.active
 	return {
 		visible: true,
 		label,
-		cameraLocked: true,
-		forwardActive: vehicleDriveInputFlags.forward,
-		backwardActive: vehicleDriveInputFlags.backward,
-		leftActive: vehicleDriveInputFlags.left,
-		rightActive: vehicleDriveInputFlags.right,
-		brakeActive: vehicleDriveInputFlags.brake,
+		cameraLocked: driveActive,
+		forwardActive: driveActive && vehicleDriveInputFlags.forward,
+		backwardActive: driveActive && vehicleDriveInputFlags.backward,
+		leftActive: driveActive && vehicleDriveInputFlags.left,
+		rightActive: driveActive && vehicleDriveInputFlags.right,
+		brakeActive: driveActive && vehicleDriveInputFlags.brake,
 	}
 })
+
+function setVehicleDriveUiOverride(mode: 'auto' | 'show' | 'hide'): void {
+	vehicleDriveUiOverride.value = mode
+}
 
 function resolveGuideboardComponent(
 	node: SceneNode | null | undefined,
@@ -2915,6 +2925,7 @@ function startVehicleDriveMode(
 	controlMode.value = 'third-person'
 	setCameraCaging(true, { force: true })
 	syncVehicleDriveCameraImmediate()
+	setVehicleDriveUiOverride('show')
 	return { success: true }
 }
 
@@ -2943,6 +2954,7 @@ function stopVehicleDriveMode(options: { resolution?: BehaviorEventResolution } 
 	vehicleDriveState.steerableWheelIndices = []
 	vehicleDriveState.wheelCount = 0
 	restoreVehicleDriveCameraState()
+	setVehicleDriveUiOverride('hide')
 	if (token) {
 		resolveBehaviorToken(token, options.resolution ?? { type: 'continue' })
 	}
@@ -3044,6 +3056,14 @@ function handleVehicleDebusEvent(): void {
 	stopVehicleDriveMode({ resolution: { type: 'continue' } })
 }
 
+function handleShowVehicleCockpitEvent(): void {
+	setVehicleDriveUiOverride('show')
+}
+
+function handleHideVehicleCockpitEvent(): void {
+	setVehicleDriveUiOverride('hide')
+}
+
 function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 	switch (event.type) {
 		case 'delay':
@@ -3084,6 +3104,12 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 			break
 		case 'vehicle-debus':
 			handleVehicleDebusEvent()
+			break
+		case 'vehicle-show-cockpit':
+			handleShowVehicleCockpitEvent()
+			break
+		case 'vehicle-hide-cockpit':
+			handleHideVehicleCockpitEvent()
 			break
 		case 'sequence-complete':
 			clearBehaviorAlert()

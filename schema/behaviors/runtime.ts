@@ -160,6 +160,22 @@ export type BehaviorRuntimeEvent =
       token: string
     }
   | {
+      type: 'vehicle-show-cockpit'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+    }
+  | {
+      type: 'vehicle-hide-cockpit'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+    }
+  | {
       type: 'vehicle-debus'
       nodeId: string
       action: BehaviorEventType
@@ -653,6 +669,34 @@ function createDebusVehicleEvent(
   }
 }
 
+function createShowCockpitEvent(
+  state: BehaviorSequenceState,
+  behavior: SceneBehavior,
+): Extract<BehaviorRuntimeEvent, { type: 'vehicle-show-cockpit' }> {
+  return {
+    type: 'vehicle-show-cockpit',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+  }
+}
+
+function createHideCockpitEvent(
+  state: BehaviorSequenceState,
+  behavior: SceneBehavior,
+): Extract<BehaviorRuntimeEvent, { type: 'vehicle-hide-cockpit' }> {
+  return {
+    type: 'vehicle-hide-cockpit',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+  }
+}
+
 function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
   const events: BehaviorRuntimeEvent[] = []
   while (state.status === 'running' && state.index < state.steps.length) {
@@ -723,6 +767,14 @@ function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
         state.index += 1
         continue
       }
+      case 'showCockpit':
+        events.push(createShowCockpitEvent(state, behavior))
+        state.index += 1
+        continue
+      case 'hideCockpit':
+        events.push(createHideCockpitEvent(state, behavior))
+        state.index += 1
+        continue
       case 'drive':
         events.push(createDriveVehicleEvent(state, behavior))
         return events

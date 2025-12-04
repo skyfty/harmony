@@ -234,6 +234,8 @@ export type BehaviorScriptType =
   | 'look'
   | 'trigger'
   | 'animation'
+  | 'showCockpit'
+  | 'hideCockpit'
   | 'drive'
   | 'debus'
 
@@ -306,6 +308,14 @@ export interface TriggerBehaviorParams {
   targetNodeId: string | null
   /** Optional sequence id identifying which perform behavior sequence to trigger. */
   sequenceId: string | null
+}
+
+export interface ShowCockpitBehaviorParams {
+  // no configuration required
+}
+
+export interface HideCockpitBehaviorParams {
+  // no configuration required
 }
 
 export interface DriveBehaviorParams {
@@ -390,6 +400,14 @@ export type SceneBehaviorScriptBinding =
   | {
       type: 'animation'
       params: AnimationBehaviorParams
+    }
+  | {
+      type: 'showCockpit'
+      params: ShowCockpitBehaviorParams
+    }
+  | {
+      type: 'hideCockpit'
+      params: HideCockpitBehaviorParams
     }
   | {
       type: 'drive'

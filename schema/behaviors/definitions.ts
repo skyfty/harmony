@@ -19,6 +19,8 @@ import type {
   HidePurposeBehaviorParams,
   TriggerBehaviorParams,
   AnimationBehaviorParams,
+  ShowCockpitBehaviorParams,
+  HideCockpitBehaviorParams,
   DriveBehaviorParams,
   DebusBehaviorParams,
 } from '../index'
@@ -271,6 +273,24 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
         loop: false,
         waitForCompletion: false,
       }
+    },
+  },
+  {
+    id: 'showCockpit',
+    label: 'Show Cockpit',
+    description: 'Display the vehicle driving controls without changing drive state.',
+    icon: 'mdi-steering',
+    createDefaultParams(): ShowCockpitBehaviorParams {
+      return {}
+    },
+  },
+  {
+    id: 'hideCockpit',
+    label: 'Hide Cockpit',
+    description: 'Hide the vehicle driving controls.',
+    icon: 'mdi-steering-off',
+    createDefaultParams(): HideCockpitBehaviorParams {
+      return {}
     },
   },
   {
@@ -862,6 +882,16 @@ export function ensureBehaviorParams(
       case 'look':
         return {
           type: 'look',
+          params: {},
+        }
+      case 'showCockpit':
+        return {
+          type: 'showCockpit',
+          params: {},
+        }
+      case 'hideCockpit':
+        return {
+          type: 'hideCockpit',
           params: {},
         }
       case 'drive': {
