@@ -128,7 +128,6 @@ function appendWarningMessage(message: string): void {
 	}
 	warningMessages.value = [...existing, trimmed]
 }
-const isFirstPersonMouseControlEnabled = ref(true)
 const isVolumeMenuOpen = ref(false)
 const isCameraCaged = ref(false)
 const memoryFallbackLabel = ref<string | null>(null)
@@ -1725,16 +1724,6 @@ watch(controlMode, (mode) => {
 	applyControlMode(mode)
 })
 
-watch(isFirstPersonMouseControlEnabled, (enabled) => {
-	if (enabled && controlMode.value === 'first-person' && firstPersonControls && !isCameraCaged.value) {
-		resetFirstPersonPointerDelta()
-		clampFirstPersonPitch(true)
-		syncFirstPersonOrientation()
-		syncLastFirstPersonStateFromCamera()
-	}
-	updateCameraControlActivation()
-})
-
 function isInputLikeElement(target: EventTarget | null): boolean {
 	const element = target as HTMLElement | null
 	if (!element) {
@@ -1752,7 +1741,7 @@ function updateCameraControlActivation(): void {
 	if (firstPersonControls) {
 		const enableFirstPerson = controlMode.value === 'first-person' && !caged
 		firstPersonControls.enabled = enableFirstPerson
-		firstPersonControls.activeLook = enableFirstPerson && isFirstPersonMouseControlEnabled.value
+		firstPersonControls.activeLook = false // enforce keyboard-only control in first-person mode
 	}
 	if (mapControls) {
 		mapControls.enabled = controlMode.value === 'third-person' && !caged
@@ -1770,29 +1759,7 @@ function updateCanvasCursor() {
 		canvas.style.cursor = canOrbit ? 'grab' : 'default'
 		return
 	}
-	const allowLook = isFirstPersonMouseControlEnabled.value && !isCameraCaged.value
-	canvas.style.cursor = allowLook ? 'crosshair' : 'default'
-}
-
-function setFirstPersonMouseControl(enabled: boolean) {
-	if (isFirstPersonMouseControlEnabled.value === enabled) {
-		return
-	}
-	isFirstPersonMouseControlEnabled.value = enabled
-	if (enabled && controlMode.value === 'first-person' && firstPersonControls && !isCameraCaged.value) {
-		resetFirstPersonPointerDelta()
-		clampFirstPersonPitch(true)
-		syncFirstPersonOrientation()
-		syncLastFirstPersonStateFromCamera()
-	}
-	updateCameraControlActivation()
-}
-
-function toggleFirstPersonMouseControl() {
-	if (vehicleDriveState.active) {
-		return
-	}
-	setFirstPersonMouseControl(!isFirstPersonMouseControlEnabled.value)
+	canvas.style.cursor = 'default'
 }
 
 function setCameraCaging(enabled: boolean, options: { force?: boolean } = {}) {
@@ -1804,7 +1771,7 @@ function setCameraCaging(enabled: boolean, options: { force?: boolean } = {}) {
 	}
 	isCameraCaged.value = enabled
 	updateCameraControlActivation()
-	if (!enabled && controlMode.value === 'first-person' && firstPersonControls && isFirstPersonMouseControlEnabled.value) {
+	if (!enabled && controlMode.value === 'first-person' && firstPersonControls) {
 		resetFirstPersonPointerDelta()
 		clampFirstPersonPitch(true)
 		syncFirstPersonOrientation()
@@ -3835,17 +3802,6 @@ function handleKeyDown(event: KeyboardEvent) {
 		case 'KeyP':
 			event.preventDefault()
 			captureScreenshot()
-			break
-		case 'KeyC':
-			if (driveLocked) {
-				break
-			}
-			if (controlMode.value === 'first-person') {
-				event.preventDefault()
-				toggleFirstPersonMouseControl()
-				// When toggling with C, reset to a level view for a consistent starting orientation
-				resetCameraToLevelView()
-			}
 			break
 		default:
 			break
@@ -6525,19 +6481,6 @@ onBeforeUnmount(() => {
 				最近更新：{{ formattedLastUpdate }}
 			</v-chip>
 		</div>
-		<div
-			v-if="controlMode === 'first-person' && !isFirstPersonMouseControlEnabled"
-			class="scene-preview__mouse-hint"
-		>
-			<v-chip
-				color="amber-darken-2"
-				variant="elevated"
-				size="small"
-				prepend-icon="mdi-mouse-off"
-			>
-				鼠标视角已暂停（按 C 恢复）
-			</v-chip>
-		</div>
 		<v-alert
 			v-if="warningMessages.length"
 			class="scene-preview__alert"
@@ -6723,19 +6666,6 @@ onBeforeUnmount(() => {
 						:title="'第三人称视角 (快捷键 3)'"
 					/>
 				</v-btn-toggle>
-				<v-btn
-					v-if="controlMode === 'first-person'"
-					class="scene-preview__control-button"
-					:icon="isFirstPersonMouseControlEnabled ? 'mdi-mouse' : 'mdi-mouse-off'"
-					variant="tonal"
-						size="small"
-					:color="isFirstPersonMouseControlEnabled ? 'info' : 'warning'"
-					:disabled="vehicleDriveUi.cameraLocked"
-					:aria-label="isFirstPersonMouseControlEnabled ? '禁用鼠标镜头' : '启用鼠标镜头'"
-
-					:title="isFirstPersonMouseControlEnabled ? '禁用鼠标镜头 (快捷键 C)' : '启用鼠标镜头 (快捷键 C)'"
-					@click="toggleFirstPersonMouseControl"
-				/>
 				<v-menu
 					v-model="isVolumeMenuOpen"
 					location="top"
