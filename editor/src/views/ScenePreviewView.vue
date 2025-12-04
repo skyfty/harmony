@@ -3018,6 +3018,26 @@ function applyVehicleDriveForces(): void {
 	const engineForce = -vehicleDriveInput.throttle * VEHICLE_ENGINE_FORCE
 	const steeringValue = vehicleDriveInput.steering * VEHICLE_STEER_ANGLE
 	const brakeForce = vehicleDriveInput.brake * VEHICLE_BRAKE_FORCE
+
+	if (vehicleDriveInput.throttle !== 0 || vehicleDriveInput.steering !== 0 || vehicleDriveInput.brake !== 0) {
+		console.log('[Vehicle Debug]', {
+			engineForce,
+			steeringValue,
+			brakeForce,
+			velocity: vehicle.chassisBody.velocity,
+			angularVelocity: vehicle.chassisBody.angularVelocity,
+			mass: vehicle.chassisBody.mass,
+			isSleeping: vehicle.chassisBody.sleepState === CANNON.Body.SLEEPING,
+			inWorld: physicsWorld?.bodies.includes(vehicle.chassisBody),
+			wheels: vehicle.wheelInfos.map((w, i) => ({
+				index: i,
+				isInContact: w.isInContact,
+				suspensionLength: w.suspensionLength,
+				raycastResult: w.raycastResult
+			}))
+		})
+	}
+
 	for (let index = 0; index < vehicle.wheelInfos.length; index += 1) {
 		vehicle.applyEngineForce(engineForce, index)
 		const steerable = instance.steerableWheelIndices.includes(index)
@@ -5335,7 +5355,9 @@ function computeVehicleWheelConnectionPoints(
 	}
 	const rightExtent = Math.max(tempVehicleSize.getComponent(rightAxis) * 0.5, props.radius * 1.25)
 	const forwardExtent = Math.max(tempVehicleSize.getComponent(forwardAxis) * 0.5, props.radius * 2)
-	const upExtent = Math.max(tempVehicleSize.getComponent(upAxis) * 0.5, props.radius + props.suspensionRestLength)
+	// Ensure connection points are low enough so wheels can touch the ground
+	const halfHeight = tempVehicleSize.getComponent(upAxis) * 0.5
+	const upExtent = props.radius + props.suspensionRestLength - halfHeight
 	const footprints = [
 		{ right: rightExtent, forward: forwardExtent },
 		{ right: -rightExtent, forward: forwardExtent },
