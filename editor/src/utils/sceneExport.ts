@@ -624,7 +624,7 @@ async function generateOutlineMeshesForCandidates(
   return outlineMeshMap
 }
 
-async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyExportCandidate[]): Promise<void> {
+async function applyRigidbodyMetadata(_nodes: SceneNode[], candidates: RigidbodyExportCandidate[]): Promise<void> {
   if (!candidates.length) {
     return
   }
@@ -674,6 +674,22 @@ async function buildRigidbodySamplingObject(
     sourceObject = await loadAssetObjectForNode(node, assetCacheStore)
   } else if (node.dynamicMesh?.type) {
     sourceObject = buildDynamicMeshObject(node)
+  } else if (node.nodeType === 'Group') {
+    const empty = new THREE.Object3D()
+    if (node.children && node.children.length > 0) {
+      for (const child of node.children) {
+        const childObject = await buildRigidbodySamplingObject(child, assetCacheStore)
+        if (!childObject) {
+          continue
+        }
+        applyPositionAndRotationToObject(childObject, child)
+        childObject.updateMatrixWorld(true)
+        empty.add(childObject)
+      }
+    }
+    if (empty.children.length > 0) {
+      sourceObject = empty
+    }
   } else {
     sourceObject = buildPrimitiveObject(node)
   }
@@ -683,11 +699,30 @@ async function buildRigidbodySamplingObject(
   }
 
   const root = new THREE.Group()
-  root.name = `RigidbodySample:${node.id}`
   root.add(sourceObject)
   applyScaleToObject(root, node)
   root.updateMatrixWorld(true)
   return root
+}
+
+function getFiniteComponent(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function applyPositionAndRotationToObject(object: THREE.Object3D, node: SceneNode): void {
+  const position = node.position as { x?: unknown; y?: unknown; z?: unknown } | undefined
+  object.position.set(
+    getFiniteComponent(position?.x),
+    getFiniteComponent(position?.y),
+    getFiniteComponent(position?.z),
+  )
+
+  const rotation = node.rotation as { x?: unknown; y?: unknown; z?: unknown } | undefined
+  object.rotation.set(
+    getFiniteComponent(rotation?.x),
+    getFiniteComponent(rotation?.y),
+    getFiniteComponent(rotation?.z),
+  )
 }
 
 async function loadAssetObjectForNode(

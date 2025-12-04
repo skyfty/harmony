@@ -2917,10 +2917,6 @@ function restoreVehicleDriveCameraState(): void {
 	vehicleDriveCameraRestoreState.hasSnapshot = false
 }
 
-function syncVehicleDriveCameraImmediate(): boolean {
-	return updateVehicleDriveCamera(0, { immediate: true })
-}
-
 function startVehicleDriveMode(
 	event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>,
 ): { success: boolean; message?: string } {
@@ -2953,13 +2949,8 @@ function startVehicleDriveMode(
 	activeCameraLookTween = null
 	controlMode.value = 'first-person'
 	setCameraCaging(true, { force: true })
-	const cameraAligned = syncVehicleDriveCameraImmediate()
-	if (!cameraAligned) {
-		return { success: false, message: '无法定位驾驶摄像机。' }
-	}
 	syncFirstPersonOrientation()
 	resetFirstPersonPointerDelta()
-	syncLastFirstPersonStateFromCamera()
 	setCameraViewState('watching', forwardNodeId ?? targetNodeId)
 	setVehicleDriveUiOverride('show')
 	return { success: true }
@@ -3094,10 +3085,6 @@ function updateVehicleDriveCamera(_delta: number, _options: { immediate?: boolea
 	activeCamera.quaternion.copy(tempVehicleCameraQuaternion)
 	activeCamera.up.copy(tempVehicleCameraUp)
 	activeCamera.updateMatrixWorld(true)
-	if (mapControls) {
-		mapControls.target.copy(tempVehicleCameraLook)
-	}
-	syncLastFirstPersonStateFromCamera()
 	return true
 }
 
@@ -3201,7 +3188,7 @@ async function handleVehicleDrivePromptConfirm(): Promise<void> {
 			return
 		}
 		handleShowVehicleCockpitEvent()
-		updateVehicleDriveCamera(0, { immediate: true })
+		// updateVehicleDriveCamera(0, { immediate: true })
 		pendingVehicleDriveEvent.value = null
 	} finally {
 		vehicleDrivePromptBusy.value = false
