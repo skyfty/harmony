@@ -411,7 +411,7 @@ async function sanitizeSceneDocumentForJsonExport(
     outlineMeshMap = await generateOutlineMeshesForCandidates(outlineCandidates, options)
   }
 
-  await applyRigidbodyMetadata(rigidbodyCandidates)
+  await applyRigidbodyMetadata(sanitizedNodes,rigidbodyCandidates)
 
   const sanitizedDocument: SceneJsonExportDocument = {
     ...document,
@@ -624,7 +624,7 @@ async function generateOutlineMeshesForCandidates(
   return outlineMeshMap
 }
 
-async function applyRigidbodyMetadata(candidates: RigidbodyExportCandidate[]): Promise<void> {
+async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyExportCandidate[]): Promise<void> {
   if (!candidates.length) {
     return
   }

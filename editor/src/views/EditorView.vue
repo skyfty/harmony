@@ -702,6 +702,16 @@ function resolvePublishName(fallbackFileName: string): string {
   return sanitized || 'scene'
 }
 
+async function exportScene(options: SceneExportOptions): Promise<Blob> {
+  let snapshot = sceneStore.createSceneDocumentSnapshot() as StoredSceneDocument
+  const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(snapshot, { embedResources: true })
+  snapshot.packageAssetMap = packageAssetMap
+  snapshot.assetIndex = assetIndex
+  snapshot.resourceSummary = await calculateSceneResourceSummary(snapshot, { embedResources: true })
+  const jsonDocument = await prepareJsonSceneExport(snapshot, options)
+  return new Blob([JSON.stringify(jsonDocument, null, 2)], { type: 'application/json' })
+}
+
 async function runSceneExportWorkflow(options: SceneExportOptions, config: SceneExportWorkflowConfig): Promise<boolean> {
   if (isExporting.value) {
     return false
@@ -714,19 +724,17 @@ async function runSceneExportWorkflow(options: SceneExportOptions, config: Scene
     return false
   }
 
-  if (options.format === 'json') {
-    const summary = await refreshExportSummary(true)
-    const sizeLabel = summary ? formatByteSize(summary.totalBytes) : null
-    const confirmMessage = summary
-      ? `导出该场景需要打包约 ${sizeLabel} 的资源，是否继续？`
-      : '暂时无法计算资源总大小，仍要继续导出吗？'
-    const proceed = typeof window !== 'undefined' ? window.confirm(confirmMessage) : true
-    if (!proceed) {
-      exportProgress.value = 0
-      exportProgressMessage.value = ''
-      exportErrorMessage.value = null
-      return false
-    }
+  const summary = await refreshExportSummary(true)
+  const sizeLabel = summary ? formatByteSize(summary.totalBytes) : null
+  const confirmMessage = summary
+    ? `导出该场景需要打包约 ${sizeLabel} 的资源，是否继续？`
+    : '暂时无法计算资源总大小，仍要继续导出吗？'
+  const proceed = typeof window !== 'undefined' ? window.confirm(confirmMessage) : true
+  if (!proceed) {
+    exportProgress.value = 0
+    exportProgressMessage.value = ''
+    exportErrorMessage.value = null
+    return false
   }
 
   isExporting.value = true
@@ -748,10 +756,8 @@ async function runSceneExportWorkflow(options: SceneExportOptions, config: Scene
   }
 
   try {
-    const blob = await viewport.exportScene(options, (progress, message) => {
-      const label = message ?? `${config.action === 'publish' ? 'Publish' : 'Export'} progress ${Math.round(progress)}%`
-      updateProgress(progress, label)
-    })
+    updateProgress(10, `${config.action === 'publish' ? 'Publish' : 'Export'}ing scene`)
+    const blob = await exportScene(options)
     await config.afterExport({ blob, fileName, updateProgress })
     updateProgress(100, config.successMessage)
     workflowSucceeded = true

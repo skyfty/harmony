@@ -35,12 +35,11 @@ import {
   resetMaterialOverrides,
   type MaterialTextureAssignmentOptions,
 } from '@/types/material'
-import { useSceneStore, getRuntimeObject, buildPackageAssetMapForExport, calculateSceneResourceSummary } from '@/stores/sceneStore'
+import { useSceneStore, getRuntimeObject} from '@/stores/sceneStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import type { SceneCameraState } from '@/types/scene-camera-state'
-import type { StoredSceneDocument } from '@/types/stored-scene-document'
 
 import type { EditorTool } from '@/types/editor-tool'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -57,8 +56,6 @@ import type { CameraControlMode } from '@harmony/schema'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import { cloneSkyboxSettings } from '@/stores/skyboxPresets'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
-import type { SceneExportOptions } from '@/types/scene-export'
-import { prepareGLBSceneExport, prepareJsonSceneExport } from '@/utils/sceneExport'
 import ViewportToolbar from './ViewportToolbar.vue'
 import TransformToolbar from './TransformToolbar.vue'
 import PlaceholderOverlayList from './PlaceholderOverlayList.vue'
@@ -1703,30 +1700,7 @@ function snapVectorToGridForNode(vec: THREE.Vector3, nodeId: string | null | und
 }
 
 export type SceneViewportHandle = {
-  exportScene(options: SceneExportOptions, onProgress: (progress: number, message?: string) => void): Promise<Blob>
   captureScreenshot(mimeType?: string): Promise<Blob | null>
-}
-
-async function exportScene(options: SceneExportOptions, onProgress: (progress: number, message?: string) => void): Promise<Blob> {
-  if (!scene) {
-    throw new Error('Scene not initialized')
-  }
-  onProgress(10, 'Capturing scene data...')
-  if (options.format === 'glb') {
-    return prepareGLBSceneExport(scene, options)
-  } else if (options.format === 'json') {
-    let snapshot = sceneStore.createSceneDocumentSnapshot() as StoredSceneDocument
-    const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(snapshot, { embedResources: true })
-    snapshot.packageAssetMap = packageAssetMap
-    snapshot.assetIndex = assetIndex
-    snapshot.resourceSummary = await calculateSceneResourceSummary(snapshot, { embedResources: true })
-    onProgress(35, 'Applying export preferences...')
-    const jsonDocument = await prepareJsonSceneExport(snapshot, options)
-
-    return new Blob([JSON.stringify(jsonDocument, null, 2)], { type: 'application/json' })
-  } else {
-    throw new Error(`Unsupported export format: ${options.format}`)
-  }
 }
 
 function applyCameraState(state: SceneCameraState | null | undefined) {
@@ -6608,7 +6582,6 @@ watch(
 )
 
 defineExpose<SceneViewportHandle>({
-  exportScene,
   captureScreenshot
 })
 </script>
