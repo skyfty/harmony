@@ -3,6 +3,7 @@ import { computed, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { SceneNodeComponentState } from '@harmony/schema'
 import { useSceneStore } from '@/stores/sceneStore'
+import InspectorVectorControls from '@/components/common/VectorControls.vue'
 import {
   VEHICLE_COMPONENT_TYPE,
   clampVehicleComponentProps,
@@ -37,20 +38,6 @@ const activeWheel = computed<VehicleWheelProps | null>(() => {
   }
   return normalizedProps.value.wheels.find((wheel) => wheel.id === props.wheelId) ?? null
 })
-const activeWheelIndex = computed(() => {
-  if (!props.wheelId) {
-    return -1
-  }
-  return normalizedProps.value.wheels.findIndex((wheel) => wheel.id === props.wheelId)
-})
-
-const wheelLabel = computed(() => {
-  if (activeWheelIndex.value < 0) {
-    return '车轮'
-  }
-  return `车轮 #${activeWheelIndex.value + 1}`
-})
-
 const isDisabled = computed(() => !vehicleComponent.value?.enabled)
 const panelStyle = computed(() => {
   if (!props.anchor) {
@@ -117,6 +104,10 @@ function handleVectorInput(
   })
 }
 
+function axisToIndex(axis: 'x' | 'y' | 'z'): 0 | 1 | 2 {
+  return axis === 'x' ? 0 : axis === 'y' ? 1 : 2
+}
+
 watch(activeWheel, (wheel) => {
   if (!wheel && props.visible) {
     emit('close')
@@ -135,203 +126,162 @@ watch(
 
 <template>
   <Teleport to="body">
-  <transition name="fade-transition">
-    <div
-      v-if="visible && wheelId && anchor && activeWheel"
-      class="vehicle-wheel-details"
-      :style="panelStyle"
-    >
+    <transition name="fade-transition">
+      <div
+        v-if="visible && wheelId && anchor && activeWheel"
+        class="vehicle-wheel-details"
+        :style="panelStyle"
+      >
         <v-toolbar density="compact" class="panel-toolbar" height="40px">
-        <div class="toolbar-text">
-            <div class="material-title">{{ activeWheel.nodeId ? `绑定节点：${activeWheel.nodeId}` : '尚未绑定节点' }}</div>
+          <div class="toolbar-text">
+            <div class="material-title">
+              {{ activeWheel.nodeId ? `Attached Node: ${activeWheel.nodeId}` : 'No node attached yet' }}
+            </div>
           </div>
-            
           <v-spacer />
-        <v-btn class="toolbar-close" icon="mdi-close" size="small" variant="text" @click="handleClose" />
-
+          <v-btn
+            class="toolbar-close"
+            icon="mdi-close"
+            size="small"
+            variant="text"
+            @click="handleClose"
+          />
         </v-toolbar>
+
         <v-divider />
-      <div class="panel-content">
-        <div class="panel-content-inner">
-          
-      <div class="material-properties ">
-        <v-text-field
-          label="半径 (m)"
-                  class="slider-input"
-          density="compact"
-          variant="underlined"
-          type="number"
-          hide-details
-                  inputmode="decimal"
-          :min="0"
-          :step="0.05"
-          :model-value="activeWheel.radius"
-          :disabled="isDisabled"
-          @update:modelValue="(value) => handleWheelInput('radius', value)"
-        />
-        <v-text-field
-          label="悬挂静止长度 (m)"
-          density="compact"
-                  class="slider-input"
-          variant="underlined"
-          type="number"
-                  inputmode="decimal"
-          hide-details
-          :min="0"
-          :step="0.01"
-          :model-value="activeWheel.suspensionRestLength"
-          :disabled="isDisabled"
-          @update:modelValue="(value) => handleWheelInput('suspensionRestLength', value)"
-        />
-        <v-text-field
-          label="悬挂刚度"
-          density="compact"
-                  class="slider-input"
-          variant="underlined"
-                  inputmode="decimal"
-          type="number"
-          hide-details
-          :min="0"
-          :step="1"
-          :model-value="activeWheel.suspensionStiffness"
-          :disabled="isDisabled"
-          @update:modelValue="(value) => handleWheelInput('suspensionStiffness', value)"
-        />
-        <v-text-field
-          label="悬挂阻尼"
-          density="compact"
-          variant="underlined"
-                  inputmode="decimal"
-                  class="slider-input"
-          type="number"
-          hide-details
-          :min="0"
-          :step="0.1"
-          :model-value="activeWheel.suspensionDamping"
-          :disabled="isDisabled"
-          @update:modelValue="(value) => handleWheelInput('suspensionDamping', value)"
-        />
-        <v-text-field
-          label="压缩系数"
-          density="compact"
-                  inputmode="decimal"
-                  class="slider-input"
-          variant="underlined"
-          type="number"
-          hide-details
-          :min="0"
-          :step="0.1"
-          :model-value="activeWheel.suspensionCompression"
-          :disabled="isDisabled"
-          @update:modelValue="(value) => handleWheelInput('suspensionCompression', value)"
-        />
-        <v-text-field
-          label="摩擦系数"
-          density="compact"
-                  inputmode="decimal"
-                  class="slider-input"
-          variant="underlined"
-          type="number"
-          hide-details
-          :min="0"
-          :step="0.1"
-          :model-value="activeWheel.frictionSlip"
-          :disabled="isDisabled"
-          @update:modelValue="(value) => handleWheelInput('frictionSlip', value)"
-        />
-        <v-text-field
-          label="抗侧倾"
-          density="compact"
-                  inputmode="decimal"
-                  class="slider-input"
-          variant="underlined"
-          type="number"
-          hide-details
-          :min="0"
-          :step="0.001"
-          :model-value="activeWheel.rollInfluence"
-          :disabled="isDisabled"
-          @update:modelValue="(value) => handleWheelInput('rollInfluence', value)"
-        />
-        </div>
-<div class="vehicle-wheel-details__subsection-title">Direction (Local)</div>
-          <div class="vehicle-wheel-details__vector-grid">
-            <v-text-field
-              label="X"
-              density="compact"
-              variant="solo"
-              type="number"
-              hide-details
-              :step="0.05"
-              :model-value="normalizedProps.directionLocal[0]"
-              :disabled="isDisabled"
-              @update:modelValue="(value) => handleVectorInput('directionLocal', 0, value)"
-            />
-            <v-text-field
-              label="Y"
-              density="compact"
-              variant="solo"
-              type="number"
-              hide-details
-              :step="0.05"
-              :model-value="normalizedProps.directionLocal[1]"
-              :disabled="isDisabled"
-              @update:modelValue="(value) => handleVectorInput('directionLocal', 1, value)"
-            />
-            <v-text-field
-              label="Z"
-              density="compact"
-              variant="solo"
-              type="number"
-              hide-details
-              :step="0.05"
-              :model-value="normalizedProps.directionLocal[2]"
-              :disabled="isDisabled"
-              @update:modelValue="(value) => handleVectorInput('directionLocal', 2, value)"
-            />
-        <div class="vehicle-wheel-details__subsection">
-          <div class="vehicle-wheel-details__subsection-title">Axle (Local)</div>
-          <div class="vehicle-wheel-details__vector-grid">
-            <v-text-field
-              label="X"
-              density="compact"
-              variant="solo"
-              type="number"
-              hide-details
-              :step="0.05"
-              :model-value="normalizedProps.axleLocal[0]"
-              :disabled="isDisabled"
-              @update:modelValue="(value) => handleVectorInput('axleLocal', 0, value)"
-            />
-            <v-text-field
-              label="Y"
-              density="compact"
-              variant="solo"
-              type="number"
-              hide-details
-              :step="0.05"
-              :model-value="normalizedProps.axleLocal[1]"
-              :disabled="isDisabled"
-              @update:modelValue="(value) => handleVectorInput('axleLocal', 1, value)"
-            />
-            <v-text-field
-              label="Z"
-              density="compact"
-              variant="solo"
-              type="number"
-              hide-details
-              :step="0.05"
-              :model-value="normalizedProps.axleLocal[2]"
-              :disabled="isDisabled"
-              @update:modelValue="(value) => handleVectorInput('axleLocal', 2, value)"
-            />
+
+        <div class="panel-content">
+          <div class="panel-content-inner">
+            <div class="material-properties">
+              <v-text-field
+                label="Radius (m)"
+                class="slider-input"
+                density="compact"
+                variant="underlined"
+                type="number"
+                hide-details
+                inputmode="decimal"
+                :min="0"
+                :step="0.05"
+                :model-value="activeWheel.radius"
+                :disabled="isDisabled"
+                @update:modelValue="(value) => handleWheelInput('radius', value)"
+              />
+              <v-text-field
+                label="Suspension Rest Length (m)"
+                class="slider-input"
+                density="compact"
+                variant="underlined"
+                type="number"
+                inputmode="decimal"
+                hide-details
+                :min="0"
+                :step="0.01"
+                :model-value="activeWheel.suspensionRestLength"
+                :disabled="isDisabled"
+                @update:modelValue="(value) => handleWheelInput('suspensionRestLength', value)"
+              />
+              <v-text-field
+                label="Suspension Stiffness"
+                class="slider-input"
+                density="compact"
+                variant="underlined"
+                inputmode="decimal"
+                type="number"
+                hide-details
+                :min="0"
+                :step="1"
+                :model-value="activeWheel.suspensionStiffness"
+                :disabled="isDisabled"
+                @update:modelValue="(value) => handleWheelInput('suspensionStiffness', value)"
+              />
+              <v-text-field
+                label="Suspension Damping"
+                class="slider-input"
+                density="compact"
+                variant="underlined"
+                inputmode="decimal"
+                type="number"
+                hide-details
+                :min="0"
+                :step="0.1"
+                :model-value="activeWheel.suspensionDamping"
+                :disabled="isDisabled"
+                @update:modelValue="(value) => handleWheelInput('suspensionDamping', value)"
+              />
+              <v-text-field
+                label="Compression Factor"
+                class="slider-input"
+                density="compact"
+                variant="underlined"
+                inputmode="decimal"
+                type="number"
+                hide-details
+                :min="0"
+                :step="0.1"
+                :model-value="activeWheel.suspensionCompression"
+                :disabled="isDisabled"
+                @update:modelValue="(value) => handleWheelInput('suspensionCompression', value)"
+              />
+              <v-text-field
+                label="Friction Coefficient"
+                class="slider-input"
+                density="compact"
+                variant="underlined"
+                inputmode="decimal"
+                type="number"
+                hide-details
+                :min="0"
+                :step="0.1"
+                :model-value="activeWheel.frictionSlip"
+                :disabled="isDisabled"
+                @update:modelValue="(value) => handleWheelInput('frictionSlip', value)"
+              />
+              <v-text-field
+                label="Anti-Roll"
+                class="slider-input"
+                density="compact"
+                variant="underlined"
+                inputmode="decimal"
+                type="number"
+                hide-details
+                :min="0"
+                :step="0.001"
+                :model-value="activeWheel.rollInfluence"
+                :disabled="isDisabled"
+                @update:modelValue="(value) => handleWheelInput('rollInfluence', value)"
+              />
+            </div>
+
+            <div class="vehicle-wheel-details__subsection">
+              <InspectorVectorControls
+                label="Direction (Local)"
+                :model-value="{
+                  x: normalizedProps.directionLocal[0],
+                  y: normalizedProps.directionLocal[1],
+                  z: normalizedProps.directionLocal[2],
+                }"
+                :disabled="isDisabled"
+                @update:axis="(axis, value) => handleVectorInput('directionLocal', axisToIndex(axis), value)"
+              />
+            </div>
+
+            <div class="vehicle-wheel-details__subsection">
+              <InspectorVectorControls
+                label="Axle (Local)"
+                :model-value="{
+                  x: normalizedProps.axleLocal[0],
+                  y: normalizedProps.axleLocal[1],
+                  z: normalizedProps.axleLocal[2],
+                }"
+                :disabled="isDisabled"
+                @update:axis="(axis, value) => handleVectorInput('axleLocal', axisToIndex(axis), value)"
+              />
+            </div>
           </div>
         </div>
       </div>
-        </div>
-      </div>
-    </div>
-  </transition>
+    </transition>
   </Teleport>
 </template>
 
@@ -426,17 +376,8 @@ border-radius: 6px;
   margin-bottom: 0.9rem;
 }
 
-.vehicle-wheel-details__subsection-title {
-  font-size: 0.78rem;
-  font-weight: 600;
-  margin-bottom: 0.35rem;
-  color: rgba(233, 236, 241, 0.82);
-}
-
-.vehicle-wheel-details__vector-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(80px, 1fr));
-  gap: 0.45rem;
+.vehicle-wheel-details__subsection {
+  margin-top: 0.85rem;
 }
 
 .slider-input :deep(.v-field-label) {

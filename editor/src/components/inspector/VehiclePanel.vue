@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNodeComponentState } from '@harmony/schema'
+import type { SceneNode, SceneNodeComponentState, Vector3Like } from '@harmony/schema'
 import { useSceneStore } from '@/stores/sceneStore'
 import NodePicker from '@/components/common/NodePicker.vue'
 import { generateUuid } from '@/utils/uuid'
@@ -9,6 +9,7 @@ import {
   VEHICLE_COMPONENT_TYPE,
   clampVehicleComponentProps,
   type VehicleComponentProps,
+  type VehicleVector3Tuple,
   type VehicleWheelProps,
 } from '@schema/components'
 
@@ -24,7 +25,7 @@ const AXIS_OPTIONS: Array<{ label: string; value: 0 | 1 | 2 }> = [
 ]
 
 const sceneStore = useSceneStore()
-const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
+const { selectedNode, selectedNodeId, nodes } = storeToRefs(sceneStore)
 
 const vehicleComponent = computed(() =>
   selectedNode.value?.components?.[VEHICLE_COMPONENT_TYPE] as
@@ -54,6 +55,57 @@ const BASE_WHEEL_TEMPLATE: VehicleWheelProps =
   }
 
 const isComponentEnabled = computed(() => Boolean(vehicleComponent.value?.enabled))
+
+function vectorLikeToTuple(value?: Vector3Like | null): VehicleVector3Tuple {
+  const x = typeof value?.x === 'number' && Number.isFinite(value.x) ? value.x : 0
+  const y = typeof value?.y === 'number' && Number.isFinite(value.y) ? value.y : 0
+  const z = typeof value?.z === 'number' && Number.isFinite(value.z) ? value.z : 0
+  return [x, y, z]
+}
+
+type NodeSearchResult = { node: SceneNode; parent: SceneNode | null }
+
+function findNodeWithParent(tree: SceneNode[] | undefined, targetId: string, parent: SceneNode | null = null): NodeSearchResult | null {
+  if (!tree) {
+    return null
+  }
+  for (const node of tree) {
+    if (node.id === targetId) {
+      return { node, parent }
+    }
+    const childResult = findNodeWithParent(node.children, targetId, node)
+    if (childResult) {
+      return childResult
+    }
+  }
+  return null
+}
+
+function subtractTuples(a: VehicleVector3Tuple, b: VehicleVector3Tuple): VehicleVector3Tuple {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+function ensureFiniteTuple(tuple: VehicleVector3Tuple): VehicleVector3Tuple {
+  return tuple.map((value) => (Number.isFinite(value) ? value : 0)) as VehicleVector3Tuple
+}
+
+function autoFillWheelVectors(nodeId: string): void {
+  const match = findNodeWithParent(nodes.value, nodeId)
+  if (!match) {
+    return
+  }
+  const nodePosition = vectorLikeToTuple(match.node.position)
+  const parentPosition = match.parent ? vectorLikeToTuple(match.parent.position) : [0, 0, 0]
+  const relativePosition = ensureFiniteTuple(subtractTuples(nodePosition, parentPosition))
+  commitClampedPatch({
+    directionLocal: [0, -1, 0],
+    axleLocal: relativePosition,
+  })
+}
+
+function isWheelNodeAlreadyUsed(wheelId: string, candidateNodeId: string): boolean {
+  return wheelEntries.value.some((wheel) => wheel.id !== wheelId && wheel.nodeId === candidateNodeId)
+}
 
 function updateComponent(patch: Partial<VehicleComponentProps>): void {
   const component = vehicleComponent.value
@@ -107,8 +159,14 @@ function handleWheelNodeChange(wheelId: string, value: string | null): void {
   if (!isComponentEnabled.value) {
     return
   }
-  const normalizedValue = typeof value === 'string' && value.trim().length ? value : null
+  const normalizedValue = typeof value === 'string' && value.trim().length ? value.trim() : null
+  if (normalizedValue && isWheelNodeAlreadyUsed(wheelId, normalizedValue)) {
+    return
+  }
   updateWheelEntry(wheelId, { nodeId: normalizedValue })
+  if (normalizedValue) {
+    autoFillWheelVectors(normalizedValue)
+  }
 }
 
 function createWheelFromTemplate(source?: VehicleWheelProps): VehicleWheelProps {
