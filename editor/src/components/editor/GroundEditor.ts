@@ -10,19 +10,17 @@ import {
 	type TerrainScatterLayer,
 	type TerrainScatterStore,
 } from '@harmony/schema/terrain-scatter'
-import { sculptGround, updateGroundGeometry, updateGroundMesh, sampleGroundHeight, sampleGroundNormal } from '@schema/groundMesh'
+import { sculptGround, updateGroundGeometry, updateGroundMesh, sampleGroundHeight } from '@schema/groundMesh'
 import { getCachedModelObject, getOrLoadModelObject, type ModelInstanceGroup } from '@schema/modelObjectCache'
 import {
 	bindScatterInstance,
 	composeScatterMatrix,
 	getScatterInstanceWorldPosition,
 	releaseScatterInstance,
-	resetScatterInstanceBinding,
-	updateScatterInstanceMatrix,
 } from '@/utils/terrainScatterRuntime'
 import { GROUND_NODE_ID, GROUND_HEIGHT_STEP } from './constants'
 import type { BuildTool } from '@/types/build-tool'
-import type { useSceneStore } from '@/stores/sceneStore'
+import { useSceneStore } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { GroundPanelTab } from '@/stores/terrainStore'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
@@ -117,6 +115,15 @@ type ScatterEraseState = {
 }
 
 let scatterEraseState: ScatterEraseState | null = null
+
+type SculptSessionState = {
+	nodeId: string
+	definition: GroundDynamicMesh
+	heightMap: GroundDynamicMesh['heightMap']
+	dirty: boolean
+}
+
+let sculptSessionState: SculptSessionState | null = null
 
 function createPolygonRingGeometry(points: THREE.Vector2[], innerScale = 0.8): THREE.BufferGeometry {
 	if (!points.length) {
@@ -451,13 +458,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return findGroundNodeInTree(options.sceneStore.nodes)
 	}
 
-	function getGroundNodeFromProps(): SceneNode | null {
-		return findGroundNodeInTree(options.getSceneNodes())
-	}
-
 	function getGroundDynamicMeshDefinition(): GroundDynamicMesh | null {
-		const node = getGroundNodeFromScene() ?? getGroundNodeFromProps()
+		const node = getGroundNodeFromScene()
 		if (node?.dynamicMesh?.type === 'Ground') {
+			if (sculptSessionState && sculptSessionState.nodeId === node.id) {
+				return sculptSessionState.definition
+			}
 			return node.dynamicMesh
 		}
 		return null
@@ -479,6 +485,52 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 		})
 		return mesh
+	}
+
+	function cloneHeightMap(heightMap: GroundDynamicMesh['heightMap']): GroundDynamicMesh['heightMap'] {
+		return { ...heightMap }
+	}
+
+	function ensureSculptSession(definition: GroundDynamicMesh, nodeId: string): GroundDynamicMesh {
+		if (sculptSessionState && sculptSessionState.nodeId === nodeId) {
+			return sculptSessionState.definition
+		}
+		const clonedHeightMap = cloneHeightMap(definition.heightMap)
+		const sessionDefinition: GroundDynamicMesh = {
+			...definition,
+			heightMap: clonedHeightMap,
+		}
+		sculptSessionState = {
+			nodeId,
+			definition: sessionDefinition,
+			heightMap: clonedHeightMap,
+			dirty: false,
+		}
+		return sessionDefinition
+	}
+
+	function commitSculptSession(selectedNode: SceneNode | null): boolean {
+		if (!sculptSessionState || !sculptSessionState.dirty) {
+			sculptSessionState = null
+			return false
+		}
+		let targetNode = selectedNode
+		if (!targetNode || targetNode.id !== sculptSessionState.nodeId) {
+			const sceneNode = getGroundNodeFromScene()
+			targetNode = sceneNode && sceneNode.id === sculptSessionState.nodeId ? sceneNode : null
+		}
+		if (!targetNode || targetNode.dynamicMesh?.type !== 'Ground') {
+			sculptSessionState = null
+			return false
+		}
+		const nextDynamicMesh: GroundDynamicMesh = {
+			...(targetNode.dynamicMesh as GroundDynamicMesh),
+			heightMap: sculptSessionState.heightMap,
+		}
+		targetNode.dynamicMesh = nextDynamicMesh
+		options.sceneStore.updateNodeDynamicMesh(targetNode.id, nextDynamicMesh)
+		sculptSessionState = null
+		return true
 	}
 
 	function raycastGroundPoint(event: PointerEvent, result: THREE.Vector3): boolean {
@@ -1043,7 +1095,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			brushMesh.visible = false
 			return
 		}
-		const definition = groundNode.dynamicMesh as GroundDynamicMesh
+		const definition = getGroundDynamicMeshDefinition()
+		if (!definition) {
+			brushMesh.visible = false
+			return
+		}
 
 		const groundObject = getGroundMeshObject()
 		if (!groundObject) {
@@ -1071,8 +1127,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		const groundNode = options.sceneStore.selectedNode
 		if (groundNode?.dynamicMesh?.type !== 'Ground') return
+		if (!sculptSessionState || sculptSessionState.nodeId !== groundNode.id) {
+			ensureSculptSession(groundNode.dynamicMesh as GroundDynamicMesh, groundNode.id)
+		}
 
-		const definition = groundNode.dynamicMesh as GroundDynamicMesh
+		const definition = getGroundDynamicMeshDefinition()
+		if (!definition) return
 
 		const groundObject = getGroundMeshObject()
 		if (!groundObject) return
@@ -1095,6 +1155,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		})
 
 		if (modified) {
+			if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
+				sculptSessionState.dirty = true
+			}
 			const geometry = (groundObject as THREE.Mesh).geometry
 			updateGroundGeometry(geometry, definition)
 		}
@@ -1118,6 +1181,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (groundNode?.dynamicMesh?.type !== 'Ground' || event.button !== 1) {
 			return false
 		}
+
+		const definition = groundNode.dynamicMesh as GroundDynamicMesh
+		ensureSculptSession(definition, groundNode.id)
 
 		isSculpting.value = true
 		event.preventDefault()
@@ -1150,7 +1216,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (mesh?.geometry) {
 				mesh.geometry.computeVertexNormals()
 			}
-			options.sceneStore.updateNodeDynamicMesh(selectedNode.id, selectedNode.dynamicMesh)
+			commitSculptSession(selectedNode)
+		} else {
+			sculptSessionState = null
 		}
 		return true
 	}
@@ -1374,12 +1442,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return true
 		}
 		if (isSculpting.value) {
-			isSculpting.value = false
-			try {
-				options.canvasRef.value?.releasePointerCapture(event.pointerId)
-			} catch (error) {
-				/* noop */
-			}
+			finalizeSculpt(event)
 		}
 
 		if (groundSelectionDragState && event.pointerId === groundSelectionDragState.pointerId) {
@@ -1473,6 +1536,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			groundSelectionDragState = null
 			clearGroundSelection()
 			options.restoreOrbitAfterGroundSelection()
+			if (sculptSessionState) {
+				commitSculptSession(options.sceneStore.selectedNode ?? null)
+			}
 		}
 	}
 
@@ -1486,6 +1552,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const material = brushMesh.material as THREE.Material
 		material.dispose()
 		groundSelectionGroup.clear()
+		sculptSessionState = null
 	}
 
 	return {
