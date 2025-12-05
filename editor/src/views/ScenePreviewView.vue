@@ -749,6 +749,14 @@ type VehicleInstance = {
 	steerableWheelIndices: number[]
 }
 const vehicleInstances = new Map<string, VehicleInstance>()
+type WheelContactDebugSnapshot = {
+	inContact: boolean
+	contactBodyId: number | null
+	compression: number
+	lastLoggedAt: number
+}
+const vehicleWheelContactDebugState = new Map<string, WheelContactDebugSnapshot[]>()
+const VEHICLE_CONTACT_LOG_INTERVAL_MS = 250
 type GroundHeightfieldCacheEntry = { signature: string; shape: CANNON.Heightfield; offset: [number, number, number] }
 const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>()
 const groundHeightfieldOrientation = new CANNON.Quaternion()
@@ -6025,6 +6033,115 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 	syncVehicleBindingsForDocument(document)
 }
 
+function resolveNodeIdForBody(body: CANNON.Body | null | undefined): string | null {
+	if (!body) {
+		return null
+	}
+	for (const entry of rigidbodyInstances.values()) {
+		if (entry.body === body) {
+			return entry.nodeId
+		}
+	}
+	return null
+}
+
+function formatVec3Debug(vector?: { x: number; y: number; z: number } | null): { x: number; y: number; z: number } | null {
+	if (!vector) {
+		return null
+	}
+	const formatComponent = (value: number | undefined): number => {
+		if (typeof value !== 'number' || !Number.isFinite(value)) {
+			return 0
+		}
+		return Number(value.toFixed(4))
+	}
+	return {
+		x: formatComponent(vector.x),
+		y: formatComponent(vector.y),
+		z: formatComponent(vector.z),
+	}
+}
+
+function captureVehicleWheelContacts(): void {
+	if (!vehicleInstances.size) {
+		return
+	}
+	const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+	vehicleInstances.forEach((instance) => {
+		const wheelStates = vehicleWheelContactDebugState.get(instance.nodeId) ?? []
+		const { vehicle } = instance
+		const gravityMagnitude = Math.abs(physicsGravity.y)
+		const weightPerWheel = vehicle.wheelInfos.length > 0
+			? (vehicle.chassisBody.mass * gravityMagnitude) / vehicle.wheelInfos.length
+			: 0
+		for (let index = 0; index < vehicle.wheelInfos.length; index += 1) {
+			const wheel = vehicle.wheelInfos[index]
+			const contactBody = wheel.raycastResult?.body ?? null
+			const contactBodyId = contactBody?.id ?? null
+			const restLength = Number.isFinite(wheel.suspensionRestLength) ? wheel.suspensionRestLength : 0
+			const currentLength = Number.isFinite(wheel.suspensionLength) ? wheel.suspensionLength : 0
+			const compression = restLength > 0 ? Math.max(0, restLength - currentLength) / restLength : 0
+			const relativeVelocity = Number.isFinite(wheel.suspensionRelativeVelocity)
+				? wheel.suspensionRelativeVelocity
+				: 0
+			const previous = wheelStates[index]
+			const contactChanged = !previous
+				|| previous.inContact !== wheel.isInContact
+				|| previous.contactBodyId !== contactBodyId
+			const compressionJump = previous
+				? Math.abs(previous.compression - compression) >= 0.25
+				: compression > 0.25
+			const bounceDetected = wheel.isInContact && compression > 0.85 && Math.abs(relativeVelocity) > 0.2
+			const elapsed = now - (previous?.lastLoggedAt ?? 0)
+			const shouldLog = (contactChanged || compressionJump || bounceDetected)
+				&& elapsed >= VEHICLE_CONTACT_LOG_INTERVAL_MS
+			wheelStates[index] = {
+				inContact: wheel.isInContact,
+				contactBodyId,
+				compression,
+				lastLoggedAt: shouldLog ? now : previous?.lastLoggedAt ?? 0,
+			}
+			if (!shouldLog) {
+				continue
+			}
+			const contactNodeId = resolveNodeIdForBody(contactBody)
+			const contactNode = contactNodeId ? resolveNodeById(contactNodeId) : null
+			const raycastResult = wheel.raycastResult
+			const reason = contactChanged
+				? 'contact-changed'
+				: bounceDetected
+					? 'suspension-bounce'
+					: 'compression-spike'
+			const suspensionForce = Number((wheel.suspensionForce ?? 0).toFixed(2))
+			const supportRatio = weightPerWheel > 0 ? Number((suspensionForce / weightPerWheel).toFixed(3)) : 0
+			console.log('[VehicleWheelContact]', {
+				reason,
+				vehicleNodeId: instance.nodeId,
+				wheelIndex: index,
+				inContact: wheel.isInContact,
+				contactBodyId,
+				contactNodeId,
+				contactNodeName: contactNode?.name ?? null,
+				contactNodeType: contactNode?.nodeType ?? null,
+				contactMaterial: contactBody?.material?.name ?? null,
+				compressionRatio: Number(compression.toFixed(3)),
+				suspensionLength: Number(currentLength.toFixed(4)),
+				restLength,
+				maxSuspensionTravel: wheel.maxSuspensionTravel,
+				suspensionForce,
+				weightPerWheel: Number(weightPerWheel.toFixed(2)),
+				supportRatio,
+				suspensionRelativeVelocity: Number(relativeVelocity.toFixed(4)),
+				hitPointWorld: formatVec3Debug(raycastResult?.hitPointWorld ?? null),
+				hitNormalWorld: formatVec3Debug(raycastResult?.hitNormalWorld ?? null),
+				chassisVelocity: formatVec3Debug(vehicle.chassisBody.velocity),
+				contactBodyVelocity: formatVec3Debug(contactBody?.velocity ?? null),
+			})
+		}
+		vehicleWheelContactDebugState.set(instance.nodeId, wheelStates)
+	})
+}
+
 function stepPhysicsWorld(delta: number): void {
 	if (!physicsWorld || !rigidbodyInstances.size) {
 		return
@@ -6033,6 +6150,9 @@ function stepPhysicsWorld(delta: number): void {
 		physicsWorld.step(PHYSICS_FIXED_TIMESTEP, delta, PHYSICS_MAX_SUB_STEPS)
 	} catch (error) {
 		console.warn('[ScenePreview] Physics step failed', error)
+	}
+	if (vehicleInstances.size) {
+		captureVehicleWheelContacts()
 	}
 	rigidbodyInstances.forEach((entry) => syncObjectFromBody(entry))
 }
