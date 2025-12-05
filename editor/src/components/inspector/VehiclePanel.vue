@@ -49,33 +49,12 @@ const vehicleComponent = computed(() =>
     | undefined,
 )
 
-type Vector3Input = Vector3Like | number[] | null | undefined
-const ZERO_VECTOR: Vector3Like = { x: 0, y: 0, z: 0 }
-
-function clampVectorComponent(value: unknown, fallback: number): number {
-  const numeric = typeof value === 'number' ? value : Number(value)
-  return Number.isFinite(numeric) ? numeric : fallback
+function cloneVector(vector: Vector3Like): Vector3Like {
+  return {x: vector.x, y: vector.y, z: vector.z}
 }
 
-function cloneVector(vector: Vector3Input, fallback: Vector3Like = ZERO_VECTOR): Vector3Like {
-  if (Array.isArray(vector) && vector.length === 3) {
-    const [x, y, z] = vector
-    return {
-      x: clampVectorComponent(x, fallback.x),
-      y: clampVectorComponent(y, fallback.y),
-      z: clampVectorComponent(z, fallback.z),
-    }
-  }
-  const source = vector as Partial<Vector3Like> | null | undefined
-  return {
-    x: clampVectorComponent(source?.x, fallback.x),
-    y: clampVectorComponent(source?.y, fallback.y),
-    z: clampVectorComponent(source?.z, fallback.z),
-  }
-}
-
-function ensureFiniteVector(vector: Vector3Input): Vector3Like {
-  return cloneVector(vector, ZERO_VECTOR)
+function ensureFiniteVector(vector: Vector3Like): Vector3Like {
+  return cloneVector(vector)
 }
 
 const normalizedProps = computed(() => {
@@ -142,7 +121,7 @@ function extractNodeBoundingSize(node: SceneNode): Vector3Like | null {
     const bounds = setBoundingBoxFromObject(runtime, tempBoundingBox.makeEmpty())
     if (!bounds.isEmpty()) {
       const size = bounds.getSize(tempBoundingSize)
-      return ensureFiniteVector([size.x, size.y, size.z])
+      return { x: size.x, y: size.y,  z: size.z }
     }
   }
 
@@ -163,7 +142,7 @@ function extractNodeBoundingSize(node: SceneNode): Vector3Like | null {
       y: Math.abs(maxY - minY),
       z: Math.abs(maxZ - minZ),
     }
-    return ensureFiniteVector(size)
+    return size
   }
 
   return null
@@ -173,8 +152,7 @@ function extractNodeRadius(boundsSize: Vector3Like | null): number | null {
   if (!boundsSize) {
     return null
   }
-  const safeVector = ensureFiniteVector(boundsSize)
-  const maxAxis = Math.max(Math.abs(safeVector.x), Math.abs(safeVector.y), Math.abs(safeVector.z))
+  const maxAxis = Math.max(Math.abs(boundsSize.x), Math.abs(boundsSize.y), Math.abs(boundsSize.z))
   if (!Number.isFinite(maxAxis) || maxAxis <= 0) {
     return null
   }
@@ -189,19 +167,7 @@ function computeWheelLocalPosition(wheelNodeId: string | null): Vector3Like | nu
   if (!wheelObject) {
     return null
   }
-  tempWheelWorldPosition.copy(wheelObject.position)
-  if (
-    !Number.isFinite(tempWheelWorldPosition.x) ||
-    !Number.isFinite(tempWheelWorldPosition.y) ||
-    !Number.isFinite(tempWheelWorldPosition.z)
-  ) {
-    return null
-  }
-  return ensureFiniteVector({
-    x: tempWheelWorldPosition.x,
-    y: tempWheelWorldPosition.y,
-    z: tempWheelWorldPosition.z,
-  })
+  return wheelObject.position
 }
 
 function autoPopulateWheelConnectionPoint(wheelId: string, wheelNodeId: string): void {
