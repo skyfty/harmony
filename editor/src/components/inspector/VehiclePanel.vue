@@ -85,8 +85,10 @@ function findNodeWithParent(tree: SceneNode[] | undefined, targetId: string, par
   return null
 }
 
-function subtractTuples(a: VehicleVector3Tuple, b: VehicleVector3Tuple): VehicleVector3Tuple {
-  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+function subtractTuples(a: VehicleVector3Tuple | number[], b: VehicleVector3Tuple | number[]): VehicleVector3Tuple {
+  const [ax = 0, ay = 0, az = 0] = a
+  const [bx = 0, by = 0, bz = 0] = b
+  return [ax - bx, ay - by, az - bz]
 }
 
 function ensureFiniteTuple(tuple: VehicleVector3Tuple | number[]): VehicleVector3Tuple {

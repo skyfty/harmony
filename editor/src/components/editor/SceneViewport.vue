@@ -16,7 +16,6 @@ import { TransformControls } from '@/utils/transformControls.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js'
-import Pica from 'pica'
 
 import type {
   SceneNode,
@@ -612,10 +611,6 @@ type SurfaceBuildSession = {
   points: THREE.Vector3[]
   previewGroup: THREE.Group | null
 }
-
-const THUMBNAIL_MAX_DIMENSION = 256
-const THUMBNAIL_JPEG_QUALITY = 0.85
-const thumbnailResizer = typeof window !== 'undefined' ? Pica() : null
 
 let wallBuildSession: WallBuildSession | null = null
 let wallPreviewNeedsSync = false

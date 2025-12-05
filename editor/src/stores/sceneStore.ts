@@ -6531,7 +6531,6 @@ export const useSceneStore = defineStore('scene', {
         : nextRedoStack
     },
     async restoreFromHistory(snapshot: SceneHistoryEntry) {
-      const assetCache = useAssetCacheStore()
       this.isRestoringHistory = true
       this.activeTransformNodeId = null
       this.transformSnapshotCaptured = false
@@ -10581,6 +10580,7 @@ export const useSceneStore = defineStore('scene', {
         | WarpGateComponentProps
         | EffectComponentProps
         | RigidbodyComponentProps
+        | VehicleComponentProps
       if (type === WALL_COMPONENT_TYPE) {
         const currentProps = component.props as WallComponentProps
         const merged = clampWallProps({

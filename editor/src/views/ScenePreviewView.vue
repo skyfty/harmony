@@ -102,7 +102,12 @@ import {
 	type BehaviorEventResolution,
 	type BehaviorRuntimeListener,
 } from '@schema/behaviors/runtime'
-import { PROXIMITY_EXIT_PADDING, DEFAULT_OBJECT_RADIUS, PROXIMITY_MIN_DISTANCE, PROXIMITY_RADIUS_SCALE } from '@schema/behaviors/runtime'
+import {
+	PROXIMITY_EXIT_PADDING,
+	DEFAULT_OBJECT_RADIUS,
+	PROXIMITY_MIN_DISTANCE,
+	PROXIMITY_RADIUS_SCALE,
+} from '@schema/behaviors/runtime'
 import type Viewer from 'viewerjs'
 import type { ViewerOptions } from 'viewerjs'
 
@@ -565,8 +570,6 @@ const tempVehicleCameraRight = new THREE.Vector3()
 const tempVehicleQuaternionThree = new THREE.Quaternion()
 const tempVehicleCameraPosition = new THREE.Vector3()
 const tempVehicleCameraUp = new THREE.Vector3()
-const tempVehicleCameraMatrix = new THREE.Matrix4()
-const tempVehicleCameraQuaternion = new THREE.Quaternion()
 const tempVehicleWheelWorld = new THREE.Vector3()
 const tempVehicleWheelLocal = new THREE.Vector3()
 const tempVehicleChassisInverse = new THREE.Matrix4()
@@ -903,6 +906,15 @@ const vehicleDriveUi = computed(() => {
 		leftActive: driveActive && vehicleDriveInputFlags.left,
 		rightActive: driveActive && vehicleDriveInputFlags.right,
 		brakeActive: driveActive && vehicleDriveInputFlags.brake,
+	}
+})
+
+const vehicleDriveJoystickHandleStyle = computed(() => {
+	const clamp = (value: number) => Math.max(-1, Math.min(1, value))
+	const range = 22
+	return {
+		'--joystick-offset-x': `${clamp(vehicleDriveInput.steering) * range}px`,
+		'--joystick-offset-y': `${-clamp(vehicleDriveInput.throttle) * range}px`,
 	}
 })
 
@@ -1844,7 +1856,7 @@ function setCameraCaging(enabled: boolean, options: { force?: boolean } = {}) {
 	}
 }
 
-function syncVehicleDriveCameraMode(options: { immediate?: boolean } = {}) {
+function syncVehicleDriveCameraMode(): void {
 	if (!vehicleDriveState.active) {
 		if (vehicleDriveCameraMode.value !== 'first-person') {
 			vehicleDriveCameraMode.value = 'first-person'
@@ -2203,28 +2215,9 @@ function processBehaviorEvents(events: BehaviorRuntimeEvent[] | BehaviorRuntimeE
 	list.forEach((entry) => handleBehaviorRuntimeEvent(entry))
 }
 
-const uiBehaviorTokenResolvers = new Map<string, (resolution: BehaviorEventResolution) => void>()
-let uiBehaviorTokenCounter = 0
-
-function waitForBehaviorToken(token: string): Promise<BehaviorEventResolution> {
-	return new Promise((resolve) => {
-		uiBehaviorTokenResolvers.set(token, resolve)
-	})
-}
-
-function createUiBehaviorToken(): string {
-	uiBehaviorTokenCounter += 1
-	return `ui-token-${Date.now().toString(16)}-${uiBehaviorTokenCounter.toString(16)}`
-}
-
 function resolveBehaviorToken(token: string, resolution: BehaviorEventResolution) {
 	const followUps = resolveBehaviorEvent(token, resolution)
 	processBehaviorEvents(followUps)
-	const resolver = uiBehaviorTokenResolvers.get(token)
-	if (resolver) {
-		uiBehaviorTokenResolvers.delete(token)
-		resolver(resolution)
-	}
 }
 
 function clearDelayTimer(token: string) {
@@ -3060,7 +3053,7 @@ function startVehicleDriveMode(
 	}
 	setCameraViewState('watching', targetNodeId)
 	setVehicleDriveUiOverride('show')
-	syncVehicleDriveCameraMode({ immediate: true })
+	syncVehicleDriveCameraMode()
 	return { success: true }
 }
 
@@ -3834,7 +3827,7 @@ function applyControlMode(mode: ControlMode) {
 	}
 	activeCameraLookTween = null
 	if (vehicleDriveState.active) {
-		syncVehicleDriveCameraMode({ immediate: true })
+		syncVehicleDriveCameraMode()
 		return
 	}
 	if (mode === 'first-person') {
@@ -5078,8 +5071,10 @@ function createCannonShape(definition: RigidbodyPhysicsShape): CANNON.Shape | nu
 
 		for (let i = 0; i < definition.vertices.length; i += 1) {
 			const tuple = definition.vertices[i]
-			const [vx, vy, vz] = tuple ?? []
-			if (![vx, vy, vz].every((value) => typeof value === 'number' && Number.isFinite(value))) {
+			const vx = Number(tuple?.[0])
+			const vy = Number(tuple?.[1])
+			const vz = Number(tuple?.[2])
+			if (![vx, vy, vz].every((value) => Number.isFinite(value))) {
 				return null
 			}
 			// Use a precision key to merge close vertices
@@ -5392,8 +5387,16 @@ function buildConvexDebugLines(shape: Extract<RigidbodyPhysicsShape, { kind: 'co
 	}
 	const indices: number[] = []
 	faces.forEach((face) => {
+		if (face.length < 3) {
+			return
+		}
 		for (let i = 1; i < face.length - 1; i += 1) {
-			indices.push(face[0], face[i], face[i + 1])
+			const a = Number(face[0])
+			const b = Number(face[i])
+			const c = Number(face[i + 1])
+			if ([a, b, c].every((value) => Number.isFinite(value))) {
+				indices.push(a, b, c)
+			}
 		}
 	})
 	if (!indices.length) {
@@ -5736,9 +5739,11 @@ function buildFallbackWheelPoints(
 		{ right: -rightExtent, forward: -forwardExtent },
 	]
 	return wheels.map((wheel, index) => {
-		const footprint = footprints[index % footprints.length]
+		const footprint = footprints[index % footprints.length] ?? footprints[0]
+		const right = footprint?.right ?? 0
+		const forward = footprint?.forward ?? 0
 		const upExtent = wheel.radius + wheel.suspensionRestLength - halfHeight
-		return buildVehicleConnectionPoint(rightAxis, forwardAxis, upAxis, footprint.right, footprint.forward, upExtent)
+		return buildVehicleConnectionPoint(rightAxis, forwardAxis, upAxis, right, forward, upExtent)
 	})
 }
 
@@ -5892,27 +5897,6 @@ function collectRigidbodyNodes(nodes: SceneNode[] | undefined | null): SceneNode
 			continue
 		}
 		if (resolveRigidbodyComponent(node)) {
-			collected.push(node)
-		}
-		if (Array.isArray(node.children) && node.children.length) {
-			stack.push(...node.children)
-		}
-	}
-	return collected
-}
-
-function collectVehicleNodes(nodes: SceneNode[] | undefined | null): SceneNode[] {
-	const collected: SceneNode[] = []
-	if (!Array.isArray(nodes)) {
-		return collected
-	}
-	const stack: SceneNode[] = [...nodes]
-	while (stack.length) {
-		const node = stack.pop()
-		if (!node) {
-			continue
-		}
-		if (resolveVehicleComponent(node)) {
 			collected.push(node)
 		}
 		if (Array.isArray(node.children) && node.children.length) {
@@ -6875,97 +6859,98 @@ onBeforeUnmount(() => {
 			class="scene-preview__drive-panel"
 		>
 			<div class="scene-preview__drive-panel-inner">
-				<div class="scene-preview__drive-status">
-					<div class="scene-preview__drive-title">
-						<v-icon icon="mdi-steering" size="small" />
-						<div class="scene-preview__drive-node">
-							<div class="scene-preview__drive-label">{{ vehicleDriveUi.label }}</div>
-							<div class="scene-preview__drive-subtitle">W/A/S/D 驾驶 · Space 刹车</div>
-						</div>
+				<div class="scene-preview__drive-heading">
+					<v-icon icon="mdi-steering" size="18" />
+					<div class="scene-preview__drive-heading-text">
+						<span class="scene-preview__drive-heading-label">{{ vehicleDriveUi.label }}</span>
+						<span class="scene-preview__drive-heading-hint">操纵杆 · WASD / 空格</span>
 					</div>
 					<v-btn
 						class="scene-preview__drive-exit"
+						icon="mdi-exit-run"
 						variant="text"
-						color="secondary"
 						size="small"
-						prepend-icon="mdi-exit-run"
+						color="secondary"
 						:loading="vehicleDriveExitBusy"
 						:disabled="vehicleDriveExitBusy"
 						@click="handleVehicleDriveExitClick"
-					>
-						下车
-					</v-btn>
+					/>
 				</div>
-				<div class="scene-preview__drive-pad">
+				<div class="scene-preview__drive-controls">
+					<div class="scene-preview__drive-joystick" aria-label="车辆操纵杆">
+						<div class="scene-preview__drive-joystick-base">
+							<button
+								type="button"
+								class="scene-preview__drive-joystick-control scene-preview__drive-joystick-control--north"
+								:class="{ 'scene-preview__drive-joystick-control--active': vehicleDriveUi.forwardActive }"
+								aria-label="前进"
+								@click.prevent
+								@pointerdown.prevent="handleVehicleDriveControlPointer('forward', true, $event)"
+								@pointerup.prevent="handleVehicleDriveControlPointer('forward', false, $event)"
+								@pointerleave="handleVehicleDriveControlPointer('forward', false)"
+								@pointercancel="handleVehicleDriveControlPointer('forward', false)"
+							>
+								<v-icon icon="mdi-arrow-up-bold" size="14" />
+							</button>
+							<button
+								type="button"
+								class="scene-preview__drive-joystick-control scene-preview__drive-joystick-control--west"
+								:class="{ 'scene-preview__drive-joystick-control--active': vehicleDriveUi.leftActive }"
+								aria-label="左转"
+								@click.prevent
+								@pointerdown.prevent="handleVehicleDriveControlPointer('left', true, $event)"
+								@pointerup.prevent="handleVehicleDriveControlPointer('left', false, $event)"
+								@pointerleave="handleVehicleDriveControlPointer('left', false)"
+								@pointercancel="handleVehicleDriveControlPointer('left', false)"
+							>
+								<v-icon icon="mdi-arrow-left-bold" size="14" />
+							</button>
+							<button
+								type="button"
+								class="scene-preview__drive-joystick-control scene-preview__drive-joystick-control--east"
+								:class="{ 'scene-preview__drive-joystick-control--active': vehicleDriveUi.rightActive }"
+								aria-label="右转"
+								@click.prevent
+								@pointerdown.prevent="handleVehicleDriveControlPointer('right', true, $event)"
+								@pointerup.prevent="handleVehicleDriveControlPointer('right', false, $event)"
+								@pointerleave="handleVehicleDriveControlPointer('right', false)"
+								@pointercancel="handleVehicleDriveControlPointer('right', false)"
+							>
+								<v-icon icon="mdi-arrow-right-bold" size="14" />
+							</button>
+							<button
+								type="button"
+								class="scene-preview__drive-joystick-control scene-preview__drive-joystick-control--south"
+								:class="{ 'scene-preview__drive-joystick-control--active': vehicleDriveUi.backwardActive }"
+								aria-label="后退"
+								@click.prevent
+								@pointerdown.prevent="handleVehicleDriveControlPointer('backward', true, $event)"
+								@pointerup.prevent="handleVehicleDriveControlPointer('backward', false, $event)"
+								@pointerleave="handleVehicleDriveControlPointer('backward', false)"
+								@pointercancel="handleVehicleDriveControlPointer('backward', false)"
+							>
+								<v-icon icon="mdi-arrow-down-bold" size="14" />
+							</button>
+							<div class="scene-preview__drive-joystick-ring"></div>
+							<div
+								class="scene-preview__drive-joystick-handle"
+								:style="vehicleDriveJoystickHandleStyle"
+							></div>
+						</div>
+					</div>
 					<v-btn
-						class="scene-preview__drive-key scene-preview__drive-key--forward"
-						variant="outlined"
-						color="primary"
-						:class="{ 'scene-preview__drive-key--active': vehicleDriveUi.forwardActive }"
-						@click.prevent
-						@pointerdown.prevent="handleVehicleDriveControlPointer('forward', true, $event)"
-						@pointerup.prevent="handleVehicleDriveControlPointer('forward', false, $event)"
-						@pointerleave="handleVehicleDriveControlPointer('forward', false)"
-						@pointercancel="handleVehicleDriveControlPointer('forward', false)"
-					>
-						<span class="scene-preview__drive-keycap">W</span>
-						<span class="scene-preview__drive-keylabel">前进</span>
-					</v-btn>
-					<v-btn
-						class="scene-preview__drive-key scene-preview__drive-key--left"
-						variant="outlined"
-						color="primary"
-						:class="{ 'scene-preview__drive-key--active': vehicleDriveUi.leftActive }"
-						@click.prevent
-						@pointerdown.prevent="handleVehicleDriveControlPointer('left', true, $event)"
-						@pointerup.prevent="handleVehicleDriveControlPointer('left', false, $event)"
-						@pointerleave="handleVehicleDriveControlPointer('left', false)"
-						@pointercancel="handleVehicleDriveControlPointer('left', false)"
-					>
-						<span class="scene-preview__drive-keycap">A</span>
-						<span class="scene-preview__drive-keylabel">左转</span>
-					</v-btn>
-					<v-btn
-						class="scene-preview__drive-key scene-preview__drive-key--right"
-						variant="outlined"
-						color="primary"
-						:class="{ 'scene-preview__drive-key--active': vehicleDriveUi.rightActive }"
-						@click.prevent
-						@pointerdown.prevent="handleVehicleDriveControlPointer('right', true, $event)"
-						@pointerup.prevent="handleVehicleDriveControlPointer('right', false, $event)"
-						@pointerleave="handleVehicleDriveControlPointer('right', false)"
-						@pointercancel="handleVehicleDriveControlPointer('right', false)"
-					>
-						<span class="scene-preview__drive-keycap">D</span>
-						<span class="scene-preview__drive-keylabel">右转</span>
-					</v-btn>
-					<v-btn
-						class="scene-preview__drive-key scene-preview__drive-key--backward"
-						variant="outlined"
-						color="primary"
-						:class="{ 'scene-preview__drive-key--active': vehicleDriveUi.backwardActive }"
-						@click.prevent
-						@pointerdown.prevent="handleVehicleDriveControlPointer('backward', true, $event)"
-						@pointerup.prevent="handleVehicleDriveControlPointer('backward', false, $event)"
-						@pointerleave="handleVehicleDriveControlPointer('backward', false)"
-						@pointercancel="handleVehicleDriveControlPointer('backward', false)"
-					>
-						<span class="scene-preview__drive-keycap">S</span>
-						<span class="scene-preview__drive-keylabel">后退</span>
-					</v-btn>
-					<v-btn
-						class="scene-preview__drive-key scene-preview__drive-key--brake"
+						class="scene-preview__drive-brake"
 						variant="flat"
 						color="red"
-						:class="{ 'scene-preview__drive-key--active': vehicleDriveUi.brakeActive }"
+						:class="{ 'scene-preview__drive-brake--active': vehicleDriveUi.brakeActive }"
 						@click.prevent
 						@pointerdown.prevent="handleVehicleDriveControlPointer('brake', true, $event)"
 						@pointerup.prevent="handleVehicleDriveControlPointer('brake', false, $event)"
 						@pointerleave="handleVehicleDriveControlPointer('brake', false)"
 						@pointercancel="handleVehicleDriveControlPointer('brake', false)"
 					>
-						<span class="scene-preview__drive-keycap">SPACE</span>
-						<span class="scene-preview__drive-keylabel">刹车</span>
+						<v-icon icon="mdi-car-brake-alert" size="16" />
+						<span>刹车</span>
 					</v-btn>
 				</div>
 			</div>
@@ -7627,11 +7612,10 @@ onBeforeUnmount(() => {
 
 .scene-preview__drive-panel {
 	position: absolute;
-	left: 50%;
-	bottom: clamp(32px, 5vh, 84px);
-	transform: translateX(-50%);
-	width: min(440px, 92vw);
+	left: 20px;
+	bottom: 20px;
 	z-index: 2150;
+	width: 220px;
 	pointer-events: none;
 }
 
@@ -7645,140 +7629,171 @@ onBeforeUnmount(() => {
 }
 
 .scene-preview__drive-panel-inner {
-	padding: 18px 22px 22px;
-	background: radial-gradient(140% 160% at 50% 0%, rgba(33, 38, 65, 0.95), rgba(8, 10, 20, 0.92));
-	border-radius: 22px;
-	box-shadow: 0 26px 70px rgba(5, 8, 18, 0.55);
+	padding: 12px 14px 14px;
+	border-radius: 18px;
+	background: rgba(9, 12, 20, 0.92);
 	border: 1px solid rgba(255, 255, 255, 0.08);
-	backdrop-filter: blur(18px);
+	box-shadow: 0 18px 45px rgba(4, 6, 12, 0.55);
+	backdrop-filter: blur(14px);
 	color: #f5f7ff;
 	pointer-events: auto;
 }
 
-.scene-preview__drive-status {
-	display: flex;
-	align-items: flex-start;
-	justify-content: space-between;
-	gap: 12px;
-}
-
-.scene-preview__drive-title {
+.scene-preview__drive-heading {
 	display: flex;
 	align-items: center;
-	gap: 12px;
+	gap: 10px;
 }
 
-.scene-preview__drive-node {
+.scene-preview__drive-heading-text {
+	flex: 1 1 auto;
+	min-width: 0;
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
-	max-width: 220px;
 }
 
-.scene-preview__drive-label {
+.scene-preview__drive-heading-label {
+	font-size: 0.9rem;
 	font-weight: 600;
-	font-size: 0.95rem;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
 
-.scene-preview__drive-subtitle {
-	font-size: 0.72rem;
+.scene-preview__drive-heading-hint {
+	font-size: 0.68rem;
 	letter-spacing: 0.08em;
 	text-transform: uppercase;
-	color: rgba(245, 247, 255, 0.65);
-}
-
-.scene-preview__drive-pad {
-	margin-top: 16px;
-	display: grid;
-	grid-template-columns: repeat(3, minmax(68px, 1fr));
-	grid-auto-rows: 64px;
-	gap: 10px;
-	justify-items: stretch;
-}
-
-.scene-preview__drive-key {
-	border-radius: 16px;
-	text-transform: none;
-	background: rgba(255, 255, 255, 0.05) !important;
-	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
-	color: #f5f7ff !important;
-	min-height: 0;
-	padding: 0;
-	backdrop-filter: blur(8px);
-}
-
-.scene-preview__drive-key :deep(.v-btn__content) {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	justify-content: center;
-	gap: 4px;
-	font-weight: 600;
-	letter-spacing: 0.04em;
-}
-
-.scene-preview__drive-keycap {
-	font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
-	font-size: 0.9rem;
-	padding: 2px 10px;
-	border-radius: 8px;
-	background: rgba(255, 255, 255, 0.12);
-	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
-}
-
-.scene-preview__drive-keylabel {
-	font-size: 0.75rem;
-	color: rgba(245, 247, 255, 0.75);
-}
-
-.scene-preview__drive-key--active {
-	background: linear-gradient(135deg, rgba(91, 132, 255, 0.65), rgba(86, 236, 255, 0.4)) !important;
-	box-shadow: 0 14px 32px rgba(34, 118, 255, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.35);
-}
-
-.scene-preview__drive-key--forward {
-	grid-column: 2;
-	grid-row: 1;
-}
-
-.scene-preview__drive-key--left {
-	grid-column: 1;
-	grid-row: 2;
-}
-
-.scene-preview__drive-key--right {
-	grid-column: 3;
-	grid-row: 2;
-}
-
-.scene-preview__drive-key--backward {
-	grid-column: 2;
-	grid-row: 3;
-}
-
-.scene-preview__drive-key--brake {
-	grid-column: 1 / span 3;
-	grid-row: 4;
-	min-height: 58px;
-	background: rgba(255, 76, 76, 0.18) !important;
-	box-shadow: inset 0 0 0 1px rgba(255, 99, 99, 0.2);
-}
-
-.scene-preview__drive-key--brake.scene-preview__drive-key--active {
-	background: linear-gradient(135deg, rgba(255, 94, 94, 0.8), rgba(255, 154, 94, 0.65)) !important;
-	box-shadow: 0 12px 32px rgba(255, 120, 120, 0.4), inset 0 0 0 1px rgba(255, 255, 255, 0.4);
+	color: rgba(245, 247, 255, 0.55);
 }
 
 .scene-preview__drive-exit {
+	min-width: 0;
 	text-transform: none;
 	font-weight: 600;
 	letter-spacing: 0.04em;
 }
 
 .scene-preview__drive-exit :deep(.v-btn__content) {
+	gap: 4px;
+}
+
+.scene-preview__drive-controls {
+	margin-top: 12px;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
+.scene-preview__drive-joystick {
+	flex: 0 0 auto;
+}
+
+.scene-preview__drive-joystick-base {
+	position: relative;
+	width: 108px;
+	height: 108px;
+	border-radius: 50%;
+	background: radial-gradient(circle, rgba(255, 255, 255, 0.08), rgba(10, 14, 24, 0.95));
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), inset 0 12px 40px rgba(0, 0, 0, 0.55);
+	border: none;
+}
+
+.scene-preview__drive-joystick-ring {
+	position: absolute;
+	inset: 12px;
+	border-radius: 50%;
+	border: 1px dashed rgba(255, 255, 255, 0.18);
+}
+
+.scene-preview__drive-joystick-handle {
+	position: absolute;
+	left: 50%;
+	top: 50%;
+	width: 32px;
+	height: 32px;
+	border-radius: 50%;
+	background: linear-gradient(145deg, rgba(90, 123, 255, 0.95), rgba(72, 222, 255, 0.7));
+	box-shadow:
+		0 8px 18px rgba(20, 40, 120, 0.55),
+		inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+	transform: translate(
+		calc(-50% + var(--joystick-offset-x, 0px)),
+		calc(-50% + var(--joystick-offset-y, 0px))
+	);
+	transition: transform 160ms ease;
+}
+
+.scene-preview__drive-joystick-control {
+	position: absolute;
+	width: 36px;
+	height: 36px;
+	border-radius: 50%;
+	border: none;
+	background: rgba(255, 255, 255, 0.08);
+	color: #f5f7ff;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+	transition: background 120ms ease, box-shadow 120ms ease;
+}
+
+.scene-preview__drive-joystick-control:focus-visible {
+	outline: 2px solid rgba(90, 153, 255, 0.9);
+	outline-offset: 2px;
+}
+
+.scene-preview__drive-joystick-control--north {
+	top: 4px;
+	left: 50%;
+	transform: translate(-50%, -50%);
+}
+
+.scene-preview__drive-joystick-control--south {
+	bottom: 4px;
+	left: 50%;
+	transform: translate(-50%, 50%);
+}
+
+.scene-preview__drive-joystick-control--west {
+	left: 4px;
+	top: 50%;
+	transform: translate(-50%, -50%);
+}
+
+.scene-preview__drive-joystick-control--east {
+	right: 4px;
+	top: 50%;
+	transform: translate(50%, -50%);
+}
+
+.scene-preview__drive-joystick-control--active,
+.scene-preview__drive-joystick-control:active {
+	background: linear-gradient(135deg, rgba(91, 132, 255, 0.8), rgba(86, 236, 255, 0.55));
+	box-shadow: 0 8px 18px rgba(44, 108, 255, 0.45);
+}
+
+.scene-preview__drive-brake {
+	flex: 0 0 auto;
+	min-width: 0;
+	height: 72px;
+	border-radius: 18px;
+	text-transform: none;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	background: rgba(255, 76, 76, 0.16) !important;
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.scene-preview__drive-brake--active {
+	background: linear-gradient(135deg, rgba(255, 98, 98, 0.92), rgba(255, 154, 98, 0.7)) !important;
+	box-shadow: 0 12px 28px rgba(255, 120, 120, 0.4);
+}
+
+.scene-preview__drive-brake :deep(.v-btn__content) {
+	display: flex;
+	flex-direction: column;
 	gap: 4px;
 }
 
