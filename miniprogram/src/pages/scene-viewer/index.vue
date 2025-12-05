@@ -1167,9 +1167,6 @@ const tempBox = new THREE.Box3();
 const tempSphere = new THREE.Sphere();
 const tempVector = new THREE.Vector3();
 const tempVehicleSize = new THREE.Vector3();
-const tempVehicleWheelWorld = new THREE.Vector3();
-const tempVehicleWheelLocal = new THREE.Vector3();
-const tempVehicleChassisInverse = new THREE.Matrix4();
 const tempQuaternion = new THREE.Quaternion();
 const tempPitchVector = new THREE.Vector3();
 const tempSpherical = new THREE.Spherical();
@@ -2842,93 +2839,6 @@ function tupleToVec3(tuple: VehicleVector3Tuple): CANNON.Vec3 {
   return new CANNON.Vec3(x, y, z);
 }
 
-function buildVehicleConnectionPoint(
-  rightAxis: number,
-  forwardAxis: number,
-  upAxis: number,
-  rightValue: number,
-  forwardValue: number,
-  upValue: number,
-): CANNON.Vec3 {
-  const components: [number, number, number] = [0, 0, 0];
-  components[rightAxis] = rightValue;
-  components[forwardAxis] = forwardValue;
-  components[upAxis] = upValue;
-  return new CANNON.Vec3(components[0], components[1], components[2]);
-}
-
-function computeVehicleWheelConnectionPoints(
-  object: THREE.Object3D,
-  props: VehicleComponentProps,
-  rightAxis: number,
-  forwardAxis: number,
-  upAxis: number,
-): Array<{ config: VehicleWheelProps; point: CANNON.Vec3 }> {
-  const wheels = props.wheels ?? [];
-  if (!wheels.length) {
-    return [];
-  }
-  object.updateMatrixWorld(true);
-  tempVehicleChassisInverse.copy(object.matrixWorld).invert();
-  const fallbackPoints = buildFallbackWheelPoints(object, props, rightAxis, forwardAxis, upAxis);
-  return wheels
-    .map((wheel, index) => {
-      let connectionPoint: CANNON.Vec3 | null = null;
-      const target = wheel.nodeId ? nodeObjectMap.get(wheel.nodeId) ?? null : null;
-      if (target) {
-        target.updateMatrixWorld(true);
-        target.getWorldPosition(tempVehicleWheelWorld);
-        tempVehicleWheelLocal.copy(tempVehicleWheelWorld).applyMatrix4(tempVehicleChassisInverse);
-        connectionPoint = new CANNON.Vec3(
-          tempVehicleWheelLocal.x,
-          tempVehicleWheelLocal.y,
-          tempVehicleWheelLocal.z,
-        );
-      }
-      if (!connectionPoint) {
-        const fallback = fallbackPoints[index] ?? fallbackPoints[fallbackPoints.length - 1] ?? null;
-        connectionPoint = fallback ?? null;
-      }
-      if (!connectionPoint) {
-        return null;
-      }
-      return { config: wheel, point: connectionPoint };
-    })
-    .filter((entry): entry is { config: VehicleWheelProps; point: CANNON.Vec3 } => Boolean(entry));
-}
-
-function buildFallbackWheelPoints(
-  object: THREE.Object3D,
-  props: VehicleComponentProps,
-  rightAxis: number,
-  forwardAxis: number,
-  upAxis: number,
-): CANNON.Vec3[] {
-  tempBox.makeEmpty();
-  tempBox.setFromObject(object);
-  if (tempBox.isEmpty()) {
-    tempVehicleSize.set(2, 1, 4);
-  } else {
-    tempBox.getSize(tempVehicleSize);
-  }
-  const wheels = props.wheels ?? [];
-  const maxRadius = wheels.reduce((max, wheel) => Math.max(max, wheel.radius), 0.5);
-  const rightExtent = Math.max(tempVehicleSize.getComponent(rightAxis) * 0.5, maxRadius * 1.25);
-  const forwardExtent = Math.max(tempVehicleSize.getComponent(forwardAxis) * 0.5, maxRadius * 2);
-  const halfHeight = tempVehicleSize.getComponent(upAxis) * 0.5;
-  const footprints = [
-    { right: rightExtent, forward: forwardExtent },
-    { right: -rightExtent, forward: forwardExtent },
-    { right: rightExtent, forward: -forwardExtent },
-    { right: -rightExtent, forward: -forwardExtent },
-  ];
-  return wheels.map((wheel, index) => {
-    const footprint = footprints[index % footprints.length];
-    const upExtent = wheel.radius + wheel.suspensionRestLength - halfHeight;
-    return buildVehicleConnectionPoint(rightAxis, forwardAxis, upAxis, footprint.right, footprint.forward, upExtent);
-  });
-}
-
 function createVehicleInstance(
   node: SceneNode,
   component: SceneNodeComponentState<VehicleComponentProps>,
@@ -2941,24 +2851,26 @@ function createVehicleInstance(
   const rightAxis = clampVehicleAxisIndex(props.indexRightAxis);
   const upAxis = clampVehicleAxisIndex(props.indexUpAxis);
   const forwardAxis = clampVehicleAxisIndex(props.indexForwardAxis);
-  const connectionPoints = computeVehicleWheelConnectionPoints(
-    rigidbody.object,
-    props,
-    rightAxis,
-    forwardAxis,
-    upAxis,
-  );
-  if (!connectionPoints.length) {
+  const wheelEntries = (props.wheels ?? [])
+    .map((wheel) => {
+      const tuple = wheel.chassisConnectionPointLocal;
+      if (!Array.isArray(tuple) || tuple.length !== 3) {
+        return null;
+      }
+      return { config: wheel, point: tupleToVec3(tuple) };
+    })
+    .filter((entry): entry is { config: VehicleWheelProps; point: CANNON.Vec3 } => Boolean(entry));
+  if (!wheelEntries.length) {
     return null;
   }
-  const wheelCount = connectionPoints.length;
+  const wheelCount = wheelEntries.length;
   const vehicle = new CANNON.RaycastVehicle({
     chassisBody: rigidbody.body,
     indexRightAxis: rightAxis,
     indexUpAxis: upAxis,
     indexForwardAxis: forwardAxis,
   });
-  connectionPoints.forEach(({ config, point }) => {
+  wheelEntries.forEach(({ config, point }) => {
     const directionVec = tupleToVec3(config.directionLocal);
     const axleVec = tupleToVec3(config.axleLocal);
     vehicle.addWheel({

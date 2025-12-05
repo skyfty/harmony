@@ -9,6 +9,7 @@ export type VehicleVector3Tuple = [number, number, number]
 export interface VehicleWheelProps {
   id: string
   nodeId: string | null
+  chassisConnectionPointLocal: VehicleVector3Tuple
   radius: number
   suspensionRestLength: number
   suspensionStiffness: number
@@ -38,6 +39,7 @@ export const DEFAULT_FORWARD_AXIS = 2
 export const DEFAULT_RADIUS = 0.5
 export const DEFAULT_DIRECTION: VehicleVector3Tuple = [0, -1, 0]
 export const DEFAULT_AXLE: VehicleVector3Tuple = [-1, 0, 0]
+export const DEFAULT_CHASSIS_CONNECTION_POINT: VehicleVector3Tuple = [0, 0, 0]
 export const DEFAULT_SUSPENSION_REST_LENGTH = 0.3
 export const DEFAULT_SUSPENSION_STIFFNESS = 25000
 export const DEFAULT_DAMPING_RELAXATION = 2.3
@@ -51,6 +53,7 @@ export const DEFAULT_CUSTOM_SLIDING_ROTATIONAL_SPEED = -30
 export const DEFAULT_IS_FRONT_WHEEL = true
 export const DEFAULT_WHEEL_TEMPLATE: Omit<VehicleWheelProps, 'id'> = {
   nodeId: null,
+  chassisConnectionPointLocal: DEFAULT_CHASSIS_CONNECTION_POINT,
   radius: DEFAULT_RADIUS,
   suspensionRestLength: DEFAULT_SUSPENSION_REST_LENGTH,
   suspensionStiffness: DEFAULT_SUSPENSION_STIFFNESS,
@@ -142,6 +145,7 @@ type LegacyWheelProps = {
   useCustomSlidingRotationalSpeed?: unknown
   customSlidingRotationalSpeed?: unknown
   isFrontWheel?: unknown
+  chassisConnectionPointLocal?: unknown
 }
 
 type LegacyComponentVectors = {
@@ -192,6 +196,7 @@ function clampWheelEntry(
     rollInfluence: clampPositive(source.rollInfluence, template.rollInfluence, { min: 0 }),
     directionLocal: clampVectorTuple(source.directionLocal, template.directionLocal),
     axleLocal: clampVectorTuple(source.axleLocal, template.axleLocal),
+    chassisConnectionPointLocal: clampVectorTuple(source.chassisConnectionPointLocal, template.chassisConnectionPointLocal),
   }
 }
 
@@ -244,6 +249,7 @@ function resolveLegacyWheelTemplate(
     rollInfluence: clampPositive(props?.rollInfluence, DEFAULT_ROLL_INFLUENCE, { min: 0 }),
     directionLocal: vectors.directionLocal,
     axleLocal: vectors.axleLocal,
+    chassisConnectionPointLocal: clampVectorTuple(props?.chassisConnectionPointLocal, DEFAULT_CHASSIS_CONNECTION_POINT),
   }
 }
 
@@ -294,6 +300,7 @@ export function cloneVehicleComponentProps(props: VehicleComponentProps): Vehicl
       rollInfluence: wheel.rollInfluence,
       directionLocal: [...wheel.directionLocal] as VehicleVector3Tuple,
       axleLocal: [...wheel.axleLocal] as VehicleVector3Tuple,
+      chassisConnectionPointLocal: [...wheel.chassisConnectionPointLocal] as VehicleVector3Tuple,
     })),
   }
 }

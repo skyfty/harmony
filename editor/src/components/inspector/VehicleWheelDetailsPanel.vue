@@ -123,7 +123,7 @@ function handleWheelBooleanInput(key: 'isFrontWheel' | 'useCustomSlidingRotation
 }
 
 function handleVectorInput(
-  key: 'directionLocal' | 'axleLocal',
+  key: 'directionLocal' | 'axleLocal' | 'chassisConnectionPointLocal',
   axisIndex: 0 | 1 | 2,
   value: string | number,
 ): void {
@@ -370,6 +370,19 @@ watch(
                 }"
                 :disabled="isDisabled"
                 @update:axis="(axis, value) => handleVectorInput('axleLocal', axisToIndex(axis), value)"
+              />
+            </div>
+
+            <div class="vehicle-wheel-details__subsection">
+              <InspectorVectorControls
+                label="Connection Point (Local)"
+                :model-value="{
+                  x: activeWheel.chassisConnectionPointLocal[0],
+                  y: activeWheel.chassisConnectionPointLocal[1],
+                  z: activeWheel.chassisConnectionPointLocal[2],
+                }"
+                :disabled="isDisabled"
+                @update:axis="(axis, value) => handleVectorInput('chassisConnectionPointLocal', axisToIndex(axis), value)"
               />
             </div>
           </div>
