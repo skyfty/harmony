@@ -16,6 +16,7 @@ import {
   DEFAULT_RIGIDBODY_RESTITUTION,
   DEFAULT_RIGIDBODY_FRICTION,
 } from '@schema/components'
+import NodePicker from '@/components/common/NodePicker.vue'
 
 const BODY_TYPE_OPTIONS: Array<{ label: string; value: RigidbodyBodyType }> = [
   { label: 'Dynamic', value: 'DYNAMIC' },
@@ -193,6 +194,16 @@ function handleRemoveComponent() {
   }
   sceneStore.removeNodeComponent(nodeId, component.id)
 }
+
+function handleTargetNodeChange(nodeId: string | null) {
+  const normalized = typeof nodeId === 'string' ? nodeId.trim() : null
+  const current = rigidbodyComponent.value?.props.targetNodeId ?? null
+  const next = normalized && normalized.length ? normalized : null
+  if (next === current) {
+    return
+  }
+  updateComponent({ targetNodeId: next })
+}
 </script>
 
 <template>
@@ -234,6 +245,17 @@ function handleRemoveComponent() {
     <v-expansion-panel-text>
       <div class="rigidbody-panel__body">
 
+        <div class="rigidbody-panel__picker">
+          <NodePicker
+            :model-value="rigidbodyComponent?.props.targetNodeId ?? null"
+            owner="rigidbody-target"
+            pick-hint="Select a node whose mesh should define this rigidbody"
+            selection-hint="Click any scene node to reuse its geometry when baking the collider."
+            placeholder="Collision Node"
+            :disabled="!rigidbodyComponent?.enabled"
+            @update:model-value="handleTargetNodeChange"
+          />
+        </div>
         <v-select
           label="Body Type"
           density="compact"
@@ -328,6 +350,25 @@ function handleRemoveComponent() {
   flex-direction: column;
   gap: 0.75rem;
   padding-inline: 0.4rem;
+}
+
+.rigidbody-panel__picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+
+.rigidbody-panel__picker-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: rgba(233, 236, 241, 0.82);
+}
+
+.rigidbody-panel__picker-hint {
+  margin: 0;
+  font-size: 0.75rem;
+  color: rgba(233, 236, 241, 0.55);
 }
 
 .component-menu-btn {

@@ -12,6 +12,7 @@ export interface RigidbodyComponentProps {
   angularDamping: number
   restitution: number
   friction: number
+  targetNodeId: string | null
 }
 
 export type RigidbodyVector3Tuple = [number, number, number]
@@ -78,6 +79,14 @@ export function clampRigidbodyComponentProps(
     : DEFAULT_RIGIDBODY_FRICTION
   const normalizedFriction = Math.max(0, Math.min(1, rawFriction))
 
+  let normalizedTargetNodeId: string | null = null
+  if (typeof props?.targetNodeId === 'string') {
+    const trimmed = props.targetNodeId.trim()
+    normalizedTargetNodeId = trimmed.length ? trimmed : null
+  } else if (props?.targetNodeId === null) {
+    normalizedTargetNodeId = null
+  }
+
   return {
     mass: normalizedMass,
     bodyType: normalizedType,
@@ -85,6 +94,7 @@ export function clampRigidbodyComponentProps(
     angularDamping: normalizedAngularDamping,
     restitution: normalizedRestitution,
     friction: normalizedFriction,
+    targetNodeId: normalizedTargetNodeId,
   }
 }
 
@@ -96,6 +106,7 @@ export function cloneRigidbodyComponentProps(props: RigidbodyComponentProps): Ri
     angularDamping: props.angularDamping,
     restitution: props.restitution,
     friction: props.friction,
+    targetNodeId: props.targetNodeId ?? null,
   }
 }
 
@@ -118,8 +129,10 @@ const rigidbodyComponentDefinition: ComponentDefinition<RigidbodyComponentProps>
     }
     return true
   },
-  createDefaultProps(_node: SceneNode) {
-    return clampRigidbodyComponentProps(null)
+  createDefaultProps(node: SceneNode) {
+    return clampRigidbodyComponentProps({
+      targetNodeId: node.id ?? null,
+    })
   },
   createInstance(context) {
     return new RigidbodyComponent(context)

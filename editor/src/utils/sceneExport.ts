@@ -624,17 +624,19 @@ async function generateOutlineMeshesForCandidates(
   return outlineMeshMap
 }
 
-async function applyRigidbodyMetadata(_nodes: SceneNode[], candidates: RigidbodyExportCandidate[]): Promise<void> {
+async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyExportCandidate[]): Promise<void> {
   if (!candidates.length) {
     return
   }
+  const nodeLookup = buildSceneNodeLookup(nodes)
   const assetCacheStore = useAssetCacheStore()
   for (const entry of candidates) {
-    if (isGroundDynamicMesh(entry.node.dynamicMesh)) {
+    const samplingNode = resolveRigidbodySamplingNode(entry, nodeLookup)
+    if (!samplingNode || isGroundDynamicMesh(samplingNode.dynamicMesh)) {
       continue
     }
     let shape: RigidbodyPhysicsShape | null = null
-    const samplingObject = await buildRigidbodySamplingObject(entry.node, assetCacheStore)
+    const samplingObject = await buildRigidbodySamplingObject(samplingNode, assetCacheStore)
     if (!samplingObject) {
       continue
     }
@@ -650,6 +652,41 @@ async function applyRigidbodyMetadata(_nodes: SceneNode[], candidates: Rigidbody
     }
     entry.component.metadata = mergeRigidbodyMetadata(entry.component.metadata, shape)
   }
+}
+
+function buildSceneNodeLookup(nodes: SceneNode[]): Map<string, SceneNode> {
+  const lookup = new Map<string, SceneNode>()
+  const stack: SceneNode[] = [...nodes]
+  while (stack.length) {
+    const current = stack.pop()
+    if (!current?.id) {
+      continue
+    }
+    if (!lookup.has(current.id)) {
+      lookup.set(current.id, current)
+    }
+    if (Array.isArray(current.children) && current.children.length) {
+      for (const child of current.children) {
+        stack.push(child)
+      }
+    }
+  }
+  return lookup
+}
+
+function resolveRigidbodySamplingNode(
+  entry: RigidbodyExportCandidate,
+  lookup: Map<string, SceneNode>,
+): SceneNode | null {
+  const rawTargetId = entry.component.props?.targetNodeId
+  const targetNodeId = typeof rawTargetId === 'string' ? rawTargetId.trim() : null
+  if (targetNodeId) {
+    const resolved = lookup.get(targetNodeId)
+    if (resolved) {
+      return resolved
+    }
+  }
+  return entry.node
 }
 
 function mergeRigidbodyMetadata(

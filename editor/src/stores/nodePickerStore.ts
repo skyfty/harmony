@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 
-export type NodePickerOwner = 'behavior-target'
+export type NodePickerOwner = 'behavior-target' | 'rigidbody-target'
 
 type NodePickerHandlers = {
   onPick: (nodeId: string) => void
