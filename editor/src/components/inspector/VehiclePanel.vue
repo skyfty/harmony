@@ -13,11 +13,14 @@ import {
   DEFAULT_AXLE,
   DEFAULT_SUSPENSION_REST_LENGTH,
   DEFAULT_SUSPENSION_STIFFNESS,
-  DEFAULT_SUSPENSION_DAMPING,
-  DEFAULT_SUSPENSION_COMPRESSION,
+  DEFAULT_DAMPING_RELAXATION,
+  DEFAULT_DAMPING_COMPRESSION,
   DEFAULT_FRICTION_SLIP,
   DEFAULT_ROLL_INFLUENCE,
   DEFAULT_MAX_SUSPENSION_TRAVEL,
+  DEFAULT_MAX_SUSPENSION_FORCE,
+  DEFAULT_USE_CUSTOM_SLIDING_ROTATIONAL_SPEED,
+  DEFAULT_CUSTOM_SLIDING_ROTATIONAL_SPEED,
   DEFAULT_IS_FRONT_WHEEL,
   VEHICLE_COMPONENT_TYPE,
   clampVehicleComponentProps,
@@ -61,10 +64,13 @@ const BASE_WHEEL_TEMPLATE: VehicleWheelProps =
     radius: DEFAULT_RADIUS,
     suspensionRestLength: DEFAULT_SUSPENSION_REST_LENGTH,
     suspensionStiffness: DEFAULT_SUSPENSION_STIFFNESS,
-    suspensionDamping: DEFAULT_SUSPENSION_DAMPING,
-    suspensionCompression: DEFAULT_SUSPENSION_COMPRESSION,
+    dampingRelaxation: DEFAULT_DAMPING_RELAXATION,
+    dampingCompression: DEFAULT_DAMPING_COMPRESSION,
     frictionSlip: DEFAULT_FRICTION_SLIP,
     maxSuspensionTravel: DEFAULT_MAX_SUSPENSION_TRAVEL,
+    maxSuspensionForce: DEFAULT_MAX_SUSPENSION_FORCE,
+    useCustomSlidingRotationalSpeed: DEFAULT_USE_CUSTOM_SLIDING_ROTATIONAL_SPEED,
+    customSlidingRotationalSpeed: DEFAULT_CUSTOM_SLIDING_ROTATIONAL_SPEED,
     isFrontWheel: DEFAULT_IS_FRONT_WHEEL,
     rollInfluence: DEFAULT_ROLL_INFLUENCE,
     directionLocal: DEFAULT_DIRECTION,
@@ -124,8 +130,8 @@ function extractNodeBoundingSize(node: SceneNode): VehicleVector3Tuple | null {
     Array.isArray(instancedBounds.max) &&
     instancedBounds.max.length === 3
   ) {
-    const [minX, minY, minZ] = instancedBounds.min
-    const [maxX, maxY, maxZ] = instancedBounds.max
+    const [minX = 0, minY = 0, minZ = 0] = instancedBounds.min
+    const [maxX = 0, maxY = 0, maxZ = 0] = instancedBounds.max
     const size: VehicleVector3Tuple = [
       Math.abs(maxX - minX),
       Math.abs(maxY - minY),
@@ -161,10 +167,27 @@ function autoPopulateWheelParametersFromNode(wheelId: string, node: SceneNode): 
   } else if (safeHeight !== null) {
     patch.radius = safeHeight * 0.5
   }
-  if (safeHeight !== null) {
-    patch.suspensionRestLength = safeHeight
-  }
   updateWheelEntry(wheelId, patch)
+}
+
+function resetWheelParameters(wheelId: string): void {
+  const defaults: Partial<VehicleWheelProps> = {
+    nodeId: null,
+    radius: BASE_WHEEL_TEMPLATE.radius,
+    suspensionRestLength: BASE_WHEEL_TEMPLATE.suspensionRestLength,
+    suspensionStiffness: BASE_WHEEL_TEMPLATE.suspensionStiffness,
+    dampingRelaxation: BASE_WHEEL_TEMPLATE.dampingRelaxation,
+    dampingCompression: BASE_WHEEL_TEMPLATE.dampingCompression,
+    frictionSlip: BASE_WHEEL_TEMPLATE.frictionSlip,
+    maxSuspensionTravel: BASE_WHEEL_TEMPLATE.maxSuspensionTravel,
+    maxSuspensionForce: BASE_WHEEL_TEMPLATE.maxSuspensionForce,
+    useCustomSlidingRotationalSpeed: BASE_WHEEL_TEMPLATE.useCustomSlidingRotationalSpeed,
+    customSlidingRotationalSpeed: BASE_WHEEL_TEMPLATE.customSlidingRotationalSpeed,
+    rollInfluence: BASE_WHEEL_TEMPLATE.rollInfluence,
+    directionLocal: [...BASE_WHEEL_TEMPLATE.directionLocal] as VehicleVector3Tuple,
+    axleLocal: [...BASE_WHEEL_TEMPLATE.axleLocal] as VehicleVector3Tuple,
+  }
+  updateWheelEntry(wheelId, defaults)
 }
 
 function isWheelNodeAlreadyUsed(wheelId: string, candidateNodeId: string): boolean {
@@ -224,14 +247,18 @@ function handleWheelNodeChange(wheelId: string, value: string | null): void {
     return
   }
   const normalizedValue = typeof value === 'string' && value.trim().length ? value.trim() : null
-  if (normalizedValue && isWheelNodeAlreadyUsed(wheelId, normalizedValue)) {
+  if (normalizedValue) {
+    if (isWheelNodeAlreadyUsed(wheelId, normalizedValue)) {
+      return
+    }
+    const nodeMatch = findNodeWithParent(nodes.value, normalizedValue)
+    updateWheelEntry(wheelId, { nodeId: normalizedValue })
+    if (nodeMatch) {
+      autoPopulateWheelParametersFromNode(wheelId, nodeMatch.node)
+    }
     return
   }
-  const nodeMatch = normalizedValue ? findNodeWithParent(nodes.value, normalizedValue) : null
-  updateWheelEntry(wheelId, { nodeId: normalizedValue })
-  if (nodeMatch) {
-    autoPopulateWheelParametersFromNode(wheelId, nodeMatch.node)
-  }
+  resetWheelParameters(wheelId)
 }
 
 function createWheelFromTemplate(source?: VehicleWheelProps): VehicleWheelProps {
@@ -242,10 +269,13 @@ function createWheelFromTemplate(source?: VehicleWheelProps): VehicleWheelProps 
     radius: base.radius,
     suspensionRestLength: base.suspensionRestLength,
     suspensionStiffness: base.suspensionStiffness,
-    suspensionDamping: base.suspensionDamping,
-    suspensionCompression: base.suspensionCompression,
+    dampingRelaxation: base.dampingRelaxation,
+    dampingCompression: base.dampingCompression,
     frictionSlip: base.frictionSlip,
     maxSuspensionTravel: base.maxSuspensionTravel,
+    maxSuspensionForce: base.maxSuspensionForce,
+    useCustomSlidingRotationalSpeed: base.useCustomSlidingRotationalSpeed,
+    customSlidingRotationalSpeed: base.customSlidingRotationalSpeed,
     isFrontWheel: base.isFrontWheel,
     rollInfluence: base.rollInfluence,
     directionLocal: [...base.directionLocal] as VehicleVector3Tuple,
@@ -263,7 +293,7 @@ function handleAddWheel(): void {
 }
 
 function handleRemoveWheel(wheelId: string): void {
-  if (!isComponentEnabled.value || wheelEntries.value.length <= 1) {
+  if (!isComponentEnabled.value) {
     return
   }
   const nextList = wheelEntries.value.filter((wheel) => wheel.id !== wheelId)
@@ -476,7 +506,7 @@ function handleRemoveComponent(): void {
                     variant="text"
                   density="compact"
                     class="vehicle-wheel-item__action"
-                    :disabled="!isComponentEnabled || wheelEntries.length <= 1"
+                    :disabled="!isComponentEnabled"
                     @click="handleRemoveWheel(wheel.id)"
                   >
                     <v-icon size="18">mdi-delete</v-icon>

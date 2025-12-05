@@ -12,10 +12,13 @@ export interface VehicleWheelProps {
   radius: number
   suspensionRestLength: number
   suspensionStiffness: number
-  suspensionDamping: number
-  suspensionCompression: number
+  dampingRelaxation: number
+  dampingCompression: number
   frictionSlip: number
   maxSuspensionTravel: number
+  maxSuspensionForce: number
+  useCustomSlidingRotationalSpeed: boolean
+  customSlidingRotationalSpeed: number
   isFrontWheel: boolean
   rollInfluence: number
   directionLocal: VehicleVector3Tuple
@@ -37,22 +40,27 @@ export const DEFAULT_DIRECTION: VehicleVector3Tuple = [0, -1, 0]
 export const DEFAULT_AXLE: VehicleVector3Tuple = [-1, 0, 0]
 export const DEFAULT_SUSPENSION_REST_LENGTH = 0.3
 export const DEFAULT_SUSPENSION_STIFFNESS = 25000
-export const DEFAULT_SUSPENSION_DAMPING = 2.3
-export const DEFAULT_SUSPENSION_COMPRESSION = 4.5
+export const DEFAULT_DAMPING_RELAXATION = 2.3
+export const DEFAULT_DAMPING_COMPRESSION = 4.5
 export const DEFAULT_FRICTION_SLIP = 3.0
 export const DEFAULT_ROLL_INFLUENCE = 0.01
 export const DEFAULT_MAX_SUSPENSION_TRAVEL = 0.4
+export const DEFAULT_MAX_SUSPENSION_FORCE = 150000
+export const DEFAULT_USE_CUSTOM_SLIDING_ROTATIONAL_SPEED = false
+export const DEFAULT_CUSTOM_SLIDING_ROTATIONAL_SPEED = -0.1
 export const DEFAULT_IS_FRONT_WHEEL = true
-export const DEFAULT_WHEEL_COUNT = 4
 export const DEFAULT_WHEEL_TEMPLATE: Omit<VehicleWheelProps, 'id'> = {
   nodeId: null,
   radius: DEFAULT_RADIUS,
   suspensionRestLength: DEFAULT_SUSPENSION_REST_LENGTH,
   suspensionStiffness: DEFAULT_SUSPENSION_STIFFNESS,
-  suspensionDamping: DEFAULT_SUSPENSION_DAMPING,
-  suspensionCompression: DEFAULT_SUSPENSION_COMPRESSION,
+  dampingRelaxation: DEFAULT_DAMPING_RELAXATION,
+  dampingCompression: DEFAULT_DAMPING_COMPRESSION,
   frictionSlip: DEFAULT_FRICTION_SLIP,
   maxSuspensionTravel: DEFAULT_MAX_SUSPENSION_TRAVEL,
+  maxSuspensionForce: DEFAULT_MAX_SUSPENSION_FORCE,
+  useCustomSlidingRotationalSpeed: DEFAULT_USE_CUSTOM_SLIDING_ROTATIONAL_SPEED,
+  customSlidingRotationalSpeed: DEFAULT_CUSTOM_SLIDING_ROTATIONAL_SPEED,
   isFrontWheel: DEFAULT_IS_FRONT_WHEEL,
   rollInfluence: DEFAULT_ROLL_INFLUENCE,
   directionLocal: DEFAULT_DIRECTION,
@@ -78,6 +86,14 @@ function clampPositive(value: unknown, fallback: number, options: { min?: number
   const { min = 0 } = options
   if (numeric < min) {
     return min
+  }
+  return numeric
+}
+
+function clampNumber(value: unknown, fallback: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return fallback
   }
   return numeric
 }
@@ -117,9 +133,14 @@ type LegacyWheelProps = {
   suspensionStiffness?: unknown
   suspensionDamping?: unknown
   suspensionCompression?: unknown
+  dampingRelaxation?: unknown
+  dampingCompression?: unknown
   frictionSlip?: unknown
   rollInfluence?: unknown
   maxSuspensionTravel?: unknown
+  maxSuspensionForce?: unknown
+  useCustomSlidingRotationalSpeed?: unknown
+  customSlidingRotationalSpeed?: unknown
   isFrontWheel?: unknown
 }
 
@@ -130,6 +151,8 @@ type LegacyComponentVectors = {
 
 type VehicleComponentPropsInput = (Partial<VehicleComponentProps> & LegacyWheelProps & LegacyComponentVectors) | null | undefined
 
+type VehicleWheelEntryInput = (Partial<VehicleWheelProps> & LegacyWheelProps) | null | undefined
+
 function clampWheelNodeId(value: unknown): string | null {
   if (typeof value !== 'string') {
     return null
@@ -138,29 +161,33 @@ function clampWheelNodeId(value: unknown): string | null {
   return trimmed.length ? trimmed : null
 }
 
-function buildDefaultWheelList(template: Omit<VehicleWheelProps, 'id'>, count = DEFAULT_WHEEL_COUNT): VehicleWheelProps[] {
-  return Array.from({ length: Math.max(1, count) }, (_value, index) => ({
-    id: `wheel-${index + 1}`,
-    ...template,
-  }))
-}
-
 function clampWheelEntry(
-  entry: Partial<VehicleWheelProps> | null | undefined,
+  entry: VehicleWheelEntryInput,
   template: Omit<VehicleWheelProps, 'id'>,
 ): VehicleWheelProps {
-  const source = entry ?? {}
+  const source = (entry ?? {}) as VehicleWheelEntryInput & LegacyWheelProps
   const provisionalId = typeof source.id === 'string' ? source.id.trim() : ''
+  const dampingRelaxationSource = source.dampingRelaxation ?? source.suspensionDamping
+  const dampingCompressionSource = source.dampingCompression ?? source.suspensionCompression
   return {
     id: provisionalId,
     nodeId: clampWheelNodeId(source.nodeId),
     radius: clampPositive(source.radius, template.radius, { min: 0.01 }),
     suspensionRestLength: clampPositive(source.suspensionRestLength, template.suspensionRestLength, { min: 0 }),
     suspensionStiffness: clampPositive(source.suspensionStiffness, template.suspensionStiffness, { min: 0 }),
-    suspensionDamping: clampPositive(source.suspensionDamping, template.suspensionDamping, { min: 0 }),
-    suspensionCompression: clampPositive(source.suspensionCompression, template.suspensionCompression, { min: 0 }),
+    dampingRelaxation: clampPositive(dampingRelaxationSource, template.dampingRelaxation, { min: 0 }),
+    dampingCompression: clampPositive(dampingCompressionSource, template.dampingCompression, { min: 0 }),
     frictionSlip: clampPositive(source.frictionSlip, template.frictionSlip, { min: 0 }),
     maxSuspensionTravel: clampPositive(source.maxSuspensionTravel, template.maxSuspensionTravel, { min: 0 }),
+    maxSuspensionForce: clampPositive(source.maxSuspensionForce, template.maxSuspensionForce, { min: 0 }),
+    useCustomSlidingRotationalSpeed: clampBoolean(
+      source.useCustomSlidingRotationalSpeed,
+      template.useCustomSlidingRotationalSpeed,
+    ),
+    customSlidingRotationalSpeed: clampNumber(
+      source.customSlidingRotationalSpeed,
+      template.customSlidingRotationalSpeed,
+    ),
     isFrontWheel: clampBoolean(source.isFrontWheel, template.isFrontWheel),
     rollInfluence: clampPositive(source.rollInfluence, template.rollInfluence, { min: 0 }),
     directionLocal: clampVectorTuple(source.directionLocal, template.directionLocal),
@@ -192,10 +219,27 @@ function resolveLegacyWheelTemplate(
     radius: clampPositive(props?.radius, DEFAULT_RADIUS, { min: 0.01 }),
     suspensionRestLength: clampPositive(props?.suspensionRestLength, DEFAULT_SUSPENSION_REST_LENGTH, { min: 0 }),
     suspensionStiffness: clampPositive(props?.suspensionStiffness, DEFAULT_SUSPENSION_STIFFNESS, { min: 0 }),
-    suspensionDamping: clampPositive(props?.suspensionDamping, DEFAULT_SUSPENSION_DAMPING, { min: 0 }),
-    suspensionCompression: clampPositive(props?.suspensionCompression, DEFAULT_SUSPENSION_COMPRESSION, { min: 0 }),
+    dampingRelaxation: clampPositive(
+      props?.dampingRelaxation ?? props?.suspensionDamping,
+      DEFAULT_DAMPING_RELAXATION,
+      { min: 0 },
+    ),
+    dampingCompression: clampPositive(
+      props?.dampingCompression ?? props?.suspensionCompression,
+      DEFAULT_DAMPING_COMPRESSION,
+      { min: 0 },
+    ),
     frictionSlip: clampPositive(props?.frictionSlip, DEFAULT_FRICTION_SLIP, { min: 0 }),
     maxSuspensionTravel: clampPositive(props?.maxSuspensionTravel, DEFAULT_MAX_SUSPENSION_TRAVEL, { min: 0 }),
+    maxSuspensionForce: clampPositive(props?.maxSuspensionForce, DEFAULT_MAX_SUSPENSION_FORCE, { min: 0 }),
+    useCustomSlidingRotationalSpeed: clampBoolean(
+      props?.useCustomSlidingRotationalSpeed,
+      DEFAULT_USE_CUSTOM_SLIDING_ROTATIONAL_SPEED,
+    ),
+    customSlidingRotationalSpeed: clampNumber(
+      props?.customSlidingRotationalSpeed,
+      DEFAULT_CUSTOM_SLIDING_ROTATIONAL_SPEED,
+    ),
     isFrontWheel: clampBoolean(props?.isFrontWheel, DEFAULT_IS_FRONT_WHEEL),
     rollInfluence: clampPositive(props?.rollInfluence, DEFAULT_ROLL_INFLUENCE, { min: 0 }),
     directionLocal: vectors.directionLocal,
@@ -208,9 +252,8 @@ function clampWheelList(
   template: Omit<VehicleWheelProps, 'id'>,
 ): VehicleWheelProps[] {
   const entries = Array.isArray(value) ? value : []
-  const normalized = entries.map((entry) => clampWheelEntry(entry as Partial<VehicleWheelProps>, template))
-  const list = normalized.length ? normalized : buildDefaultWheelList(template)
-  return ensureWheelIds(list)
+  const normalized = entries.map((entry) => clampWheelEntry(entry as VehicleWheelEntryInput, template))
+  return ensureWheelIds(normalized)
 }
 
 export function clampVehicleComponentProps(
@@ -240,10 +283,13 @@ export function cloneVehicleComponentProps(props: VehicleComponentProps): Vehicl
       radius: wheel.radius,
       suspensionRestLength: wheel.suspensionRestLength,
       suspensionStiffness: wheel.suspensionStiffness,
-      suspensionDamping: wheel.suspensionDamping,
-      suspensionCompression: wheel.suspensionCompression,
+      dampingRelaxation: wheel.dampingRelaxation,
+      dampingCompression: wheel.dampingCompression,
       frictionSlip: wheel.frictionSlip,
       maxSuspensionTravel: wheel.maxSuspensionTravel,
+      maxSuspensionForce: wheel.maxSuspensionForce,
+      useCustomSlidingRotationalSpeed: wheel.useCustomSlidingRotationalSpeed,
+      customSlidingRotationalSpeed: wheel.customSlidingRotationalSpeed,
       isFrontWheel: wheel.isFrontWheel,
       rollInfluence: wheel.rollInfluence,
       directionLocal: [...wheel.directionLocal] as VehicleVector3Tuple,

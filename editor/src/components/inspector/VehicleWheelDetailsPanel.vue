@@ -67,26 +67,55 @@ function patchActiveWheel(mutator: (wheel: VehicleWheelProps) => VehicleWheelPro
   })
 }
 
+type WheelNumericKey = keyof Pick<VehicleWheelProps,
+  'radius' |
+  'suspensionRestLength' |
+  'suspensionStiffness' |
+  'dampingRelaxation' |
+  'dampingCompression' |
+  'frictionSlip' |
+  'maxSuspensionTravel' |
+  'maxSuspensionForce' |
+  'rollInfluence' |
+  'customSlidingRotationalSpeed'
+>
+
+const DECIMAL_PRECISION: Partial<Record<WheelNumericKey, number>> = {
+  radius: 2,
+  suspensionRestLength: 2,
+  dampingRelaxation: 2,
+  dampingCompression: 2,
+  frictionSlip: 2,
+  maxSuspensionTravel: 2,
+  rollInfluence: 2,
+  customSlidingRotationalSpeed: 2,
+}
+
+function normalizeNumericValue(key: WheelNumericKey, numeric: number): number {
+  const decimals = DECIMAL_PRECISION[key]
+  if (typeof decimals !== 'number') {
+    return numeric
+  }
+  return Number(numeric.toFixed(decimals))
+}
+
+function formatWheelValue(key: WheelNumericKey, numeric: number): number {
+  return normalizeNumericValue(key, numeric)
+}
+
 function handleWheelInput(
-  key: keyof Pick<VehicleWheelProps,
-    'radius' |
-    'suspensionRestLength' |
-    'suspensionStiffness' |
-    'suspensionDamping' |
-    'suspensionCompression' |
-    'frictionSlip' |
-    'maxSuspensionTravel' |
-    'rollInfluence'>,
+  key: WheelNumericKey,
   value: string | number,
 ): void {
   const numeric = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(numeric)) {
     return
   }
-  patchActiveWheel((wheel) => (wheel[key] === numeric ? wheel : { ...wheel, [key]: numeric }))
+  const normalizedValue = normalizeNumericValue(key, numeric)
+  patchActiveWheel((wheel) => (wheel[key] === normalizedValue ? wheel : { ...wheel, [key]: normalizedValue }))
 }
 
-function handleWheelBooleanInput(key: 'isFrontWheel', value: boolean): void {
+function handleWheelBooleanInput(key: 'isFrontWheel' | 'useCustomSlidingRotationalSpeed', value: boolean): void {
   if (typeof value !== 'boolean') {
     return
   }
@@ -171,7 +200,7 @@ watch(
                 inputmode="decimal"
                 :min="0"
                 :step="0.05"
-                :model-value="activeWheel.radius"
+                :model-value="formatWheelValue('radius', activeWheel.radius)"
                 :disabled="isDisabled"
                 @update:modelValue="(value) => handleWheelInput('radius', value)"
               />
@@ -185,7 +214,7 @@ watch(
                 hide-details
                 :min="0"
                 :step="0.01"
-                :model-value="activeWheel.suspensionRestLength"
+                :model-value="formatWheelValue('suspensionRestLength', activeWheel.suspensionRestLength)"
                 :disabled="isDisabled"
                 @update:modelValue="(value) => handleWheelInput('suspensionRestLength', value)"
               />
@@ -199,12 +228,12 @@ watch(
                 hide-details
                 :min="0"
                 :step="1"
-                :model-value="activeWheel.suspensionStiffness"
+                :model-value="formatWheelValue('suspensionStiffness', activeWheel.suspensionStiffness)"
                 :disabled="isDisabled"
                 @update:modelValue="(value) => handleWheelInput('suspensionStiffness', value)"
               />
               <v-text-field
-                label="Suspension Damping"
+                label="Damping Relaxation"
                 class="slider-input"
                 density="compact"
                 variant="underlined"
@@ -213,12 +242,12 @@ watch(
                 hide-details
                 :min="0"
                 :step="0.1"
-                :model-value="activeWheel.suspensionDamping"
+                :model-value="formatWheelValue('dampingRelaxation', activeWheel.dampingRelaxation)"
                 :disabled="isDisabled"
-                @update:modelValue="(value) => handleWheelInput('suspensionDamping', value)"
+                @update:modelValue="(value) => handleWheelInput('dampingRelaxation', value)"
               />
               <v-text-field
-                label="Compression Factor"
+                label="Damping Compression"
                 class="slider-input"
                 density="compact"
                 variant="underlined"
@@ -227,9 +256,9 @@ watch(
                 hide-details
                 :min="0"
                 :step="0.1"
-                :model-value="activeWheel.suspensionCompression"
+                :model-value="formatWheelValue('dampingCompression', activeWheel.dampingCompression)"
                 :disabled="isDisabled"
-                @update:modelValue="(value) => handleWheelInput('suspensionCompression', value)"
+                @update:modelValue="(value) => handleWheelInput('dampingCompression', value)"
               />
               <v-text-field
                 label="Friction Coefficient"
@@ -241,7 +270,7 @@ watch(
                 hide-details
                 :min="0"
                 :step="0.1"
-                :model-value="activeWheel.frictionSlip"
+                :model-value="formatWheelValue('frictionSlip', activeWheel.frictionSlip)"
                 :disabled="isDisabled"
                 @update:modelValue="(value) => handleWheelInput('frictionSlip', value)"
               />
@@ -255,9 +284,23 @@ watch(
                 hide-details
                 :min="0"
                 :step="0.01"
-                :model-value="activeWheel.maxSuspensionTravel"
+                :model-value="formatWheelValue('maxSuspensionTravel', activeWheel.maxSuspensionTravel)"
                 :disabled="isDisabled"
                 @update:modelValue="(value) => handleWheelInput('maxSuspensionTravel', value)"
+              />
+              <v-text-field
+                label="Max Suspension Force"
+                class="slider-input"
+                density="compact"
+                variant="underlined"
+                type="number"
+                inputmode="decimal"
+                hide-details
+                :min="0"
+                :step="100"
+                :model-value="formatWheelValue('maxSuspensionForce', activeWheel.maxSuspensionForce)"
+                :disabled="isDisabled"
+                @update:modelValue="(value) => handleWheelInput('maxSuspensionForce', value)"
               />
               <v-text-field
                 label="Anti-Roll"
@@ -269,9 +312,22 @@ watch(
                 hide-details
                 :min="0"
                 :step="0.001"
-                :model-value="activeWheel.rollInfluence"
+                :model-value="formatWheelValue('rollInfluence', activeWheel.rollInfluence)"
                 :disabled="isDisabled"
                 @update:modelValue="(value) => handleWheelInput('rollInfluence', value)"
+              />
+              <v-text-field
+                label="Custom Sliding Rot. Speed"
+                class="slider-input"
+                density="compact"
+                variant="underlined"
+                inputmode="decimal"
+                type="number"
+                hide-details
+                :step="0.01"
+                :model-value="formatWheelValue('customSlidingRotationalSpeed', activeWheel.customSlidingRotationalSpeed)"
+                :disabled="isDisabled || !activeWheel.useCustomSlidingRotationalSpeed"
+                @update:modelValue="(value) => handleWheelInput('customSlidingRotationalSpeed', value)"
               />
               <v-switch
                 label="Front Wheel"
@@ -280,6 +336,14 @@ watch(
                 :model-value="activeWheel.isFrontWheel"
                 :disabled="isDisabled"
                 @update:modelValue="(value) => handleWheelBooleanInput('isFrontWheel', Boolean(value))"
+              />
+              <v-switch
+                label="Use Custom Sliding Speed"
+                color="primary"
+                hide-details
+                :model-value="activeWheel.useCustomSlidingRotationalSpeed"
+                :disabled="isDisabled"
+                @update:modelValue="(value) => handleWheelBooleanInput('useCustomSlidingRotationalSpeed', Boolean(value))"
               />
             </div>
 
