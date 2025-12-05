@@ -563,7 +563,6 @@ const cameraViewFrustum = new THREE.Frustum()
 const VEHICLE_ENGINE_FORCE = 2200
 const VEHICLE_BRAKE_FORCE = 45
 const VEHICLE_STEER_ANGLE = THREE.MathUtils.degToRad(32)
-const tempVehicleCameraOffset = new THREE.Vector3()
 const tempVehicleCameraLook = new THREE.Vector3()
 const tempVehicleCameraForward = new THREE.Vector3()
 const tempVehicleCameraRear = new THREE.Vector3()
@@ -595,6 +594,8 @@ const VEHICLE_FOLLOW_DISTANCE_WIDTH_RATIO = 0.35
 const VEHICLE_FOLLOW_DISTANCE_DIAGONAL_RATIO = 0.2
 const VEHICLE_FOLLOW_TARGET_LIFT_RATIO = 0.3
 const VEHICLE_FOLLOW_TARGET_LIFT_MIN = 0.6
+const VEHICLE_FOLLOW_POSITION_LERP_SPEED = 8
+const VEHICLE_FOLLOW_TARGET_LERP_SPEED = 10
 const skySunPosition = new THREE.Vector3()
 const DEFAULT_SUN_DIRECTION = new THREE.Vector3(0.35, 1, -0.25).normalize()
 const tempSunDirection = new THREE.Vector3()
@@ -3300,17 +3301,22 @@ function computeVehicleFollowPlacement(dimensions: { width: number; height: numb
 	return { distance, heightOffset, targetLift }
 }
 
-function alignVehicleDriveFollowCamera(placement: VehicleFollowPlacement): void {
-	if (!camera || !mapControls) {
-		return
-	}
+function updateVehicleFollowDesiredPosition(placement: VehicleFollowPlacement): void {
 	const anchor = vehicleDriveCameraFollowState.desiredTarget
 	vehicleDriveCameraFollowState.desiredPosition
 		.copy(anchor)
 		.addScaledVector(tempVehicleCameraRear, placement.distance)
 		.addScaledVector(tempVehicleCameraUp, placement.heightOffset)
-	camera.position.copy(vehicleDriveCameraFollowState.desiredPosition)
-	mapControls.target.copy(anchor)
+}
+
+function computeVehicleFollowLerpAlpha(delta: number, speed: number): number {
+	if (!Number.isFinite(delta) || delta <= 0) {
+		return 0
+	}
+	if (speed <= 0) {
+		return 1
+	}
+	return 1 - Math.exp(-speed * delta)
 }
 
 function updateVehicleDriveFollowCamera(
@@ -3332,17 +3338,26 @@ function updateVehicleDriveFollowCamera(
 	vehicleDriveCameraFollowState.desiredTarget
 		.copy(followAnchor)
 		.addScaledVector(tempVehicleCameraUp, followPlacement.targetLift)
+	updateVehicleFollowDesiredPosition(followPlacement)
 	const needsReset = Boolean(options.immediate) || !vehicleDriveCameraFollowState.initialized
 	if (needsReset) {
-		alignVehicleDriveFollowCamera(followPlacement)
-	} else {
-		tempVehicleCameraOffset
-			.copy(vehicleDriveCameraFollowState.desiredTarget)
-			.sub(vehicleDriveCameraFollowState.currentTarget)
-		if (tempVehicleCameraOffset.lengthSq() > 0) {
-			camera.position.add(tempVehicleCameraOffset)
-		}
+		camera.position.copy(vehicleDriveCameraFollowState.desiredPosition)
 		mapControls.target.copy(vehicleDriveCameraFollowState.desiredTarget)
+	} else {
+		const positionAlpha = computeVehicleFollowLerpAlpha(delta, VEHICLE_FOLLOW_POSITION_LERP_SPEED)
+		const targetAlpha = computeVehicleFollowLerpAlpha(delta, VEHICLE_FOLLOW_TARGET_LERP_SPEED)
+		tempVehicleCameraPosition.lerpVectors(
+			vehicleDriveCameraFollowState.currentPosition,
+			vehicleDriveCameraFollowState.desiredPosition,
+			positionAlpha,
+		)
+		tempVehicleCameraLook.lerpVectors(
+			vehicleDriveCameraFollowState.currentTarget,
+			vehicleDriveCameraFollowState.desiredTarget,
+			targetAlpha,
+		)
+		camera.position.copy(tempVehicleCameraPosition)
+		mapControls.target.copy(tempVehicleCameraLook)
 	}
 	if (options.applyOrbitTween) {
 		updateOrbitCameraLookTween(delta)
