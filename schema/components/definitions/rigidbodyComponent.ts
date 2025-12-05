@@ -45,14 +45,14 @@ export interface RigidbodyComponentMetadata {
   generatedAt?: string
 }
 
-export const DEFAULT_RIGIDBODY_MASS = 1
+export const DEFAULT_RIGIDBODY_MASS = 10000
 export const DEFAULT_RIGIDBODY_BODY_TYPE: RigidbodyBodyType = 'DYNAMIC'
 export const MIN_RIGIDBODY_MASS = 0
-export const MAX_RIGIDBODY_MASS = 10_000
-export const DEFAULT_LINEAR_DAMPING = 0.04
-export const DEFAULT_ANGULAR_DAMPING = 0.04
+export const MAX_RIGIDBODY_MASS = 100000
+export const DEFAULT_LINEAR_DAMPING = 0.01
+export const DEFAULT_ANGULAR_DAMPING = 0.4
 export const DEFAULT_RIGIDBODY_RESTITUTION = 0.2
-export const DEFAULT_RIGIDBODY_FRICTION = 0.3
+export const DEFAULT_RIGIDBODY_FRICTION = 0.5
 
 export function clampRigidbodyComponentProps(
   props: Partial<RigidbodyComponentProps> | null | undefined,

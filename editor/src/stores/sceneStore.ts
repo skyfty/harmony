@@ -3176,7 +3176,7 @@ const initialSceneDocument = createSceneDocument('Sample Scene', {
 const runtimeObjectRegistry = new Map<string, Object3D>()
 let runtimeRefreshInFlight: Promise<void> | null = null
 
-function clearRuntimeObjectRegistry() {
+export function clearRuntimeObjectRegistry() {
   runtimeObjectRegistry.forEach((_object, nodeId) => {
     releaseModelInstance(nodeId)
     componentManager.detachRuntime(nodeId)
@@ -3184,7 +3184,7 @@ function clearRuntimeObjectRegistry() {
   runtimeObjectRegistry.clear()
 }
 
-function registerRuntimeObject(id: string, object: Object3D) {
+export function registerRuntimeObject(id: string, object: Object3D) {
   const existing = runtimeObjectRegistry.get(id)
   if (existing && existing !== object) {
     componentManager.detachRuntime(id)
@@ -3192,7 +3192,7 @@ function registerRuntimeObject(id: string, object: Object3D) {
   runtimeObjectRegistry.set(id, object)
 }
 
-function unregisterRuntimeObject(id: string) {
+export function unregisterRuntimeObject(id: string) {
   releaseModelInstance(id)
   runtimeObjectRegistry.delete(id)
   componentManager.detachRuntime(id)

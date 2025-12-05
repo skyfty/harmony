@@ -29,22 +29,22 @@ export interface VehicleComponentProps {
   wheels: VehicleWheelProps[]
 }
 
-const DEFAULT_RIGHT_AXIS = 0
-const DEFAULT_UP_AXIS = 1
-const DEFAULT_FORWARD_AXIS = 2
-const DEFAULT_RADIUS = 0.5
-const DEFAULT_DIRECTION: VehicleVector3Tuple = [0, -1, 0]
-const DEFAULT_AXLE: VehicleVector3Tuple = [1, 0, 0]
-const DEFAULT_SUSPENSION_REST_LENGTH = 0.3
-const DEFAULT_SUSPENSION_STIFFNESS = 20
-const DEFAULT_SUSPENSION_DAMPING = 2
-const DEFAULT_SUSPENSION_COMPRESSION = 4
-const DEFAULT_FRICTION_SLIP = 5
-const DEFAULT_ROLL_INFLUENCE = 0.01
-const DEFAULT_MAX_SUSPENSION_TRAVEL = 0.3
-const DEFAULT_IS_FRONT_WHEEL = true
-const DEFAULT_WHEEL_COUNT = 4
-const DEFAULT_WHEEL_TEMPLATE: Omit<VehicleWheelProps, 'id'> = {
+export const DEFAULT_RIGHT_AXIS = 0
+export const DEFAULT_UP_AXIS = 1
+export const DEFAULT_FORWARD_AXIS = 2
+export const DEFAULT_RADIUS = 0.5
+export const DEFAULT_DIRECTION: VehicleVector3Tuple = [0, -1, 0]
+export const DEFAULT_AXLE: VehicleVector3Tuple = [-1, 0, 0]
+export const DEFAULT_SUSPENSION_REST_LENGTH = 0.3
+export const DEFAULT_SUSPENSION_STIFFNESS = 25000
+export const DEFAULT_SUSPENSION_DAMPING = 2.3
+export const DEFAULT_SUSPENSION_COMPRESSION = 4.5
+export const DEFAULT_FRICTION_SLIP = 3.0
+export const DEFAULT_ROLL_INFLUENCE = 0.01
+export const DEFAULT_MAX_SUSPENSION_TRAVEL = 0.4
+export const DEFAULT_IS_FRONT_WHEEL = true
+export const DEFAULT_WHEEL_COUNT = 4
+export const DEFAULT_WHEEL_TEMPLATE: Omit<VehicleWheelProps, 'id'> = {
   nodeId: null,
   radius: DEFAULT_RADIUS,
   suspensionRestLength: DEFAULT_SUSPENSION_REST_LENGTH,

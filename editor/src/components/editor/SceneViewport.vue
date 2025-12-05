@@ -34,7 +34,7 @@ import {
   resetMaterialOverrides,
   type MaterialTextureAssignmentOptions,
 } from '@/types/material'
-import { useSceneStore, getRuntimeObject} from '@/stores/sceneStore'
+import { useSceneStore, getRuntimeObject,registerRuntimeObject} from '@/stores/sceneStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
@@ -6117,6 +6117,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       containerData.dynamicMeshType = node.dynamicMesh?.type ?? null
     }
     object = container
+    registerRuntimeObject(node.id, container)
   } else if (nodeType === 'Camera') {
     const perspective = node.camera
     const perspectiveCamera = new THREE.PerspectiveCamera(
@@ -6138,6 +6139,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     }
     container.userData.nodeId = node.id
     object = container
+    registerRuntimeObject(node.id, container)
   } else if (nodeType === 'Group') {
     let container = getRuntimeObject(node.id)
     if (container !== null) {
@@ -6148,6 +6150,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     }
     container.userData.nodeId = node.id
     object = container
+    registerRuntimeObject(node.id, container)
   } else if (nodeType === 'WarpGate') {
     const runtimeObject = getRuntimeObject(node.id)
     if (runtimeObject) {
@@ -6155,6 +6158,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       object = runtimeObject
     } else {
       object = createWarpGatePlaceholderObject(node)
+      registerRuntimeObject(node.id, object)
     }
   } else if (nodeType === 'Guideboard') {
     const runtimeObject = getRuntimeObject(node.id)
@@ -6163,6 +6167,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       object = runtimeObject
     } else {
       object = createGuideboardPlaceholderObject(node)
+      registerRuntimeObject(node.id, object)
     }
   } else {
     let container = getRuntimeObject(node.id)
@@ -6171,9 +6176,11 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     } else {
       container = createPrimitiveMesh(nodeType)
       container.name = node.name
+      registerRuntimeObject(node.id, container)
     }
     container.userData.nodeId = node.id
     object = container
+
   }
 
   object.position.set(node.position.x, node.position.y, node.position.z)

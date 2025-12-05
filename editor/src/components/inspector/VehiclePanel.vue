@@ -2,12 +2,23 @@
 import { Box3, Vector3 } from 'three'
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNode, SceneNodeComponentState, Vector3Like } from '@harmony/schema'
+import type { SceneNode, SceneNodeComponentState } from '@harmony/schema'
 import { getRuntimeObject, useSceneStore } from '@/stores/sceneStore'
 import NodePicker from '@/components/common/NodePicker.vue'
 import { generateUuid } from '@/utils/uuid'
 import { setBoundingBoxFromObject } from '@/components/editor/sceneUtils'
 import {
+  DEFAULT_RADIUS,
+  DEFAULT_DIRECTION,
+  DEFAULT_AXLE,
+  DEFAULT_SUSPENSION_REST_LENGTH,
+  DEFAULT_SUSPENSION_STIFFNESS,
+  DEFAULT_SUSPENSION_DAMPING,
+  DEFAULT_SUSPENSION_COMPRESSION,
+  DEFAULT_FRICTION_SLIP,
+  DEFAULT_ROLL_INFLUENCE,
+  DEFAULT_MAX_SUSPENSION_TRAVEL,
+  DEFAULT_IS_FRONT_WHEEL,
   VEHICLE_COMPONENT_TYPE,
   clampVehicleComponentProps,
   type VehicleComponentProps,
@@ -47,30 +58,23 @@ const BASE_WHEEL_TEMPLATE: VehicleWheelProps =
   DEFAULT_VEHICLE_PROPS.wheels[0] ?? {
     id: 'wheel-template',
     nodeId: null,
-    radius: 0.5,
-    suspensionRestLength: 0.3,
-    suspensionStiffness: 20,
-    suspensionDamping: 2,
-    suspensionCompression: 4,
-    frictionSlip: 5,
-    maxSuspensionTravel: 0.3,
-    isFrontWheel: true,
-    rollInfluence: 0.01,
-    directionLocal: [0, -1, 0],
-    axleLocal: [1, 0, 0],
+    radius: DEFAULT_RADIUS,
+    suspensionRestLength: DEFAULT_SUSPENSION_REST_LENGTH,
+    suspensionStiffness: DEFAULT_SUSPENSION_STIFFNESS,
+    suspensionDamping: DEFAULT_SUSPENSION_DAMPING,
+    suspensionCompression: DEFAULT_SUSPENSION_COMPRESSION,
+    frictionSlip: DEFAULT_FRICTION_SLIP,
+    maxSuspensionTravel: DEFAULT_MAX_SUSPENSION_TRAVEL,
+    isFrontWheel: DEFAULT_IS_FRONT_WHEEL,
+    rollInfluence: DEFAULT_ROLL_INFLUENCE,
+    directionLocal: DEFAULT_DIRECTION,
+    axleLocal: DEFAULT_AXLE,
   }
 
 const tempBoundingBox = new Box3()
 const tempBoundingSize = new Vector3()
 
 const isComponentEnabled = computed(() => Boolean(vehicleComponent.value?.enabled))
-
-function vectorLikeToTuple(value?: Vector3Like | null): VehicleVector3Tuple {
-  const x = typeof value?.x === 'number' && Number.isFinite(value.x) ? value.x : 0
-  const y = typeof value?.y === 'number' && Number.isFinite(value.y) ? value.y : 0
-  const z = typeof value?.z === 'number' && Number.isFinite(value.z) ? value.z : 0
-  return [x, y, z]
-}
 
 type NodeSearchResult = { node: SceneNode; parent: SceneNode | null }
 
@@ -88,12 +92,6 @@ function findNodeWithParent(tree: SceneNode[] | undefined, targetId: string, par
     }
   }
   return null
-}
-
-function subtractTuples(a: VehicleVector3Tuple | number[], b: VehicleVector3Tuple | number[]): VehicleVector3Tuple {
-  const [ax = 0, ay = 0, az = 0] = a
-  const [bx = 0, by = 0, bz = 0] = b
-  return [ax - bx, ay - by, az - bz]
 }
 
 function ensureFiniteTuple(tuple: VehicleVector3Tuple | number[]): VehicleVector3Tuple {
@@ -157,7 +155,6 @@ function autoPopulateWheelParametersFromNode(wheelId: string, node: SceneNode): 
   const safeHeight = typeof height === 'number' && Number.isFinite(height) && height > 0 ? height : null
   const radiusFromNode = extractNodeRadius(boundsSize)
   const patch: Partial<VehicleWheelProps> = {
-    suspensionStiffness: 20,
   }
   if (radiusFromNode !== null) {
     patch.radius = radiusFromNode
@@ -168,16 +165,6 @@ function autoPopulateWheelParametersFromNode(wheelId: string, node: SceneNode): 
     patch.suspensionRestLength = safeHeight
   }
   updateWheelEntry(wheelId, patch)
-}
-
-function autoFillWheelVectorsFromMatch(wheelId: string, match: NodeSearchResult): void {
-  const nodePosition = vectorLikeToTuple(match.node.position)
-  const parentPosition = match.parent ? vectorLikeToTuple(match.parent.position) : [0, 0, 0]
-  const relativePosition = ensureFiniteTuple(subtractTuples(nodePosition, parentPosition))
-  updateWheelEntry(wheelId, {
-    directionLocal: [0, -1, 0],
-    axleLocal: relativePosition,
-  })
 }
 
 function isWheelNodeAlreadyUsed(wheelId: string, candidateNodeId: string): boolean {
@@ -243,7 +230,6 @@ function handleWheelNodeChange(wheelId: string, value: string | null): void {
   const nodeMatch = normalizedValue ? findNodeWithParent(nodes.value, normalizedValue) : null
   updateWheelEntry(wheelId, { nodeId: normalizedValue })
   if (nodeMatch) {
-    autoFillWheelVectorsFromMatch(wheelId, nodeMatch)
     autoPopulateWheelParametersFromNode(wheelId, nodeMatch.node)
   }
 }
