@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import { Box3, Vector3 } from 'three'
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { SceneNode, SceneNodeComponentState, Vector3Like } from '@harmony/schema'
-import { useSceneStore } from '@/stores/sceneStore'
+import { getRuntimeObject, useSceneStore } from '@/stores/sceneStore'
 import NodePicker from '@/components/common/NodePicker.vue'
 import { generateUuid } from '@/utils/uuid'
+import { setBoundingBoxFromObject } from '@/components/editor/sceneUtils'
 import {
   VEHICLE_COMPONENT_TYPE,
   clampVehicleComponentProps,
@@ -58,6 +60,9 @@ const BASE_WHEEL_TEMPLATE: VehicleWheelProps =
     axleLocal: [1, 0, 0],
   }
 
+const tempBoundingBox = new Box3()
+const tempBoundingSize = new Vector3()
+
 const isComponentEnabled = computed(() => Boolean(vehicleComponent.value?.enabled))
 
 function vectorLikeToTuple(value?: Vector3Like | null): VehicleVector3Tuple {
@@ -95,166 +100,62 @@ function ensureFiniteTuple(tuple: VehicleVector3Tuple | number[]): VehicleVector
   return tuple.map((value) => (Number.isFinite(value) ? value : 0)) as VehicleVector3Tuple
 }
 
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value)
-}
-
-function tupleFromUnknown(value: unknown): VehicleVector3Tuple | null {
-  if (Array.isArray(value) && value.length >= 3) {
-    const [x, y, z] = value
-    if (isFiniteNumber(x) && isFiniteNumber(y) && isFiniteNumber(z)) {
-      return [x, y, z]
-    }
-    return null
-  }
-  if (value && typeof value === 'object') {
-    const record = value as Record<string, unknown>
-    const { x, y, z } = record as { x?: unknown; y?: unknown; z?: unknown }
-    if (isFiniteNumber(x) && isFiniteNumber(y) && isFiniteNumber(z)) {
-      return [x, y, z]
-    }
-  }
-  return null
-}
-
-function extractBoundsSizeFromPayload(payload: unknown): VehicleVector3Tuple | null {
-  if (!payload) {
-    return null
-  }
-  if (Array.isArray(payload) && payload.length >= 3) {
-    const tuple = payload.slice(0, 3)
-    if (tuple.every(isFiniteNumber)) {
-      return tuple.map((value) => Math.abs(value)) as VehicleVector3Tuple
-    }
-    return null
-  }
-  if (typeof payload === 'object') {
-    const record = payload as Record<string, unknown>
-    const sizeKeys = ['size', 'dimensions', 'boundsSize', 'boundingSize'] as const
-    for (const key of sizeKeys) {
-      const tuple = tupleFromUnknown(record[key])
-      if (tuple) {
-        return tuple.map((value) => Math.abs(value)) as VehicleVector3Tuple
-      }
-    }
-    const extentKeys = ['extent', 'extents', 'halfExtents'] as const
-    for (const key of extentKeys) {
-      const tuple = tupleFromUnknown(record[key])
-      if (tuple) {
-        const multiplier = key === 'halfExtents' ? 2 : 1
-        return tuple.map((value) => Math.abs(value) * multiplier) as VehicleVector3Tuple
-      }
-    }
-    const min = tupleFromUnknown(record.min ?? record.minimum ?? record.minCorner ?? record.minPoint)
-    const max = tupleFromUnknown(record.max ?? record.maximum ?? record.maxCorner ?? record.maxPoint)
-    if (min && max) {
-      return [
-        Math.abs(max[0] - min[0]),
-        Math.abs(max[1] - min[1]),
-        Math.abs(max[2] - min[2]),
-      ] as VehicleVector3Tuple
-    }
-  }
-  return null
-}
 
 function extractNodeBoundingSize(node: SceneNode): VehicleVector3Tuple | null {
-  const candidatePayloads: unknown[] = []
-  const nodeRecord = node as SceneNode & Record<string, unknown>
-  const userData = (node.userData ?? undefined) as Record<string, unknown> | undefined
-  const userDataKeys = ['instancedBounds', 'bounds', 'boundingBox', 'bbox', 'aabb', 'dimensions'] as const
-  userDataKeys.forEach((key) => {
-    const payload = userData?.[key]
-    if (payload) {
-      candidatePayloads.push(payload)
-    }
-  })
-  const nodeKeys = ['bounds', 'boundingBox', 'dimensions'] as const
-  nodeKeys.forEach((key) => {
-    const payload = nodeRecord[key]
-    if (payload) {
-      candidatePayloads.push(payload)
-    }
-  })
-  if (node.importMetadata && typeof node.importMetadata === 'object') {
-    const importRecord = node.importMetadata as Record<string, unknown>
-    if (importRecord.bounds) {
-      candidatePayloads.push(importRecord.bounds)
-    }
-  }
-  if (node.dynamicMesh && typeof node.dynamicMesh === 'object') {
-    const meshRecord = node.dynamicMesh as Record<string, unknown>
-    if (meshRecord.bounds) {
-      candidatePayloads.push(meshRecord.bounds)
-    }
-  }
-  Object.values(node.components ?? {}).forEach((component) => {
-    const propsRecord = component?.props as Record<string, unknown> | undefined
-    if (propsRecord?.bounds) {
-      candidatePayloads.push(propsRecord.bounds)
-    }
-    if (component?.metadata && typeof component.metadata === 'object') {
-      const metadataRecord = component.metadata as Record<string, unknown>
-      if (metadataRecord.bounds) {
-        candidatePayloads.push(metadataRecord.bounds)
-      }
-    }
-  })
-  for (const payload of candidatePayloads) {
-    const size = extractBoundsSizeFromPayload(payload)
-    if (size) {
-      return size
-    }
-  }
-  const scaleTuple = vectorLikeToTuple(node.scale)
-  if (scaleTuple.some((value) => Math.abs(value) > 0)) {
-    return scaleTuple.map((value) => Math.abs(value)) as VehicleVector3Tuple
-  }
-  return null
-}
-
-function getRadiusFromUnknown(payload: unknown): number | null {
-  if (!payload || typeof payload !== 'object') {
+  if (!node) {
     return null
   }
-  const candidate = (payload as Record<string, unknown>).radius
-  if (isFiniteNumber(candidate) && candidate > 0) {
-    return candidate
+
+  const runtime = getRuntimeObject(node.id)
+  if (runtime) {
+    runtime.updateMatrixWorld(true)
+    const bounds = setBoundingBoxFromObject(runtime, tempBoundingBox.makeEmpty())
+    if (!bounds.isEmpty()) {
+      const size = bounds.getSize(tempBoundingSize)
+      return ensureFiniteTuple([size.x, size.y, size.z])
+    }
   }
+
+  const instancedBounds = (node.userData as Record<string, unknown> | undefined)?.instancedBounds as
+    | { min?: number[]; max?: number[] }
+    | undefined
+  if (
+    instancedBounds &&
+    Array.isArray(instancedBounds.min) &&
+    instancedBounds.min.length === 3 &&
+    Array.isArray(instancedBounds.max) &&
+    instancedBounds.max.length === 3
+  ) {
+    const [minX, minY, minZ] = instancedBounds.min
+    const [maxX, maxY, maxZ] = instancedBounds.max
+    const size: VehicleVector3Tuple = [
+      Math.abs(maxX - minX),
+      Math.abs(maxY - minY),
+      Math.abs(maxZ - minZ),
+    ]
+    return ensureFiniteTuple(size)
+  }
+
   return null
 }
 
-function extractNodeRadius(node: SceneNode): number | null {
-  const directRadius = getRadiusFromUnknown(node)
-  if (directRadius !== null) {
-    return directRadius
+function extractNodeRadius(boundsSize: VehicleVector3Tuple | null): number | null {
+  if (!boundsSize) {
+    return null
   }
-  const userDataRadius = getRadiusFromUnknown(node.userData ?? undefined)
-  if (userDataRadius !== null) {
-    return userDataRadius
+  const [x = 0, y = 0, z = 0] = boundsSize
+  const maxAxis = Math.max(Math.abs(x), Math.abs(y), Math.abs(z))
+  if (!Number.isFinite(maxAxis) || maxAxis <= 0) {
+    return null
   }
-  const dynamicMeshRadius = getRadiusFromUnknown(node.dynamicMesh ?? undefined)
-  if (dynamicMeshRadius !== null) {
-    return dynamicMeshRadius
-  }
-  for (const component of Object.values(node.components ?? {})) {
-    const propsRadius = getRadiusFromUnknown(component?.props)
-    if (propsRadius !== null) {
-      return propsRadius
-    }
-    const metadataRadius = getRadiusFromUnknown(component?.metadata)
-    if (metadataRadius !== null) {
-      return metadataRadius
-    }
-  }
-  return null
+  return maxAxis * 0.5
 }
 
 function autoPopulateWheelParametersFromNode(wheelId: string, node: SceneNode): void {
   const boundsSize = extractNodeBoundingSize(node)
   const height = boundsSize ? Math.abs(boundsSize[1]) : null
   const safeHeight = typeof height === 'number' && Number.isFinite(height) && height > 0 ? height : null
-  const radiusFromNode = extractNodeRadius(node)
+  const radiusFromNode = extractNodeRadius(boundsSize)
   const patch: Partial<VehicleWheelProps> = {
     suspensionStiffness: 20,
   }
@@ -277,14 +178,6 @@ function autoFillWheelVectorsFromMatch(wheelId: string, match: NodeSearchResult)
     directionLocal: [0, -1, 0],
     axleLocal: relativePosition,
   })
-}
-
-function autoFillWheelVectors(wheelId: string, nodeId: string): void {
-  const match = findNodeWithParent(nodes.value, nodeId)
-  if (!match) {
-    return
-  }
-  autoFillWheelVectorsFromMatch(wheelId, match)
 }
 
 function isWheelNodeAlreadyUsed(wheelId: string, candidateNodeId: string): boolean {

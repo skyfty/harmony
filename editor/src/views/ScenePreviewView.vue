@@ -2965,7 +2965,9 @@ function prepareVehicleDriveTarget(nodeId: string): VehicleDrivePreparationResul
 	if (!physicsWorld) {
 		ensurePhysicsWorld()
 	}
-	ensureVehicleBindingForNode(nodeId)
+	if (!vehicleInstances.has(nodeId)) {
+		ensureVehicleBindingForNode(nodeId)
+	}
 	const instance = vehicleInstances.get(nodeId)
 	if (!instance) {
 		return { success: false, message: '目标节点尚未准备好 RaycastVehicle 实例。' }
@@ -5966,14 +5968,60 @@ function collectRigidbodyNodes(nodes: SceneNode[] | undefined | null): SceneNode
 	return collected
 }
 
+function collectVehicleNodes(nodes: SceneNode[] | undefined | null): SceneNode[] {
+	const collected: SceneNode[] = []
+	if (!Array.isArray(nodes)) {
+		return collected
+	}
+	const stack: SceneNode[] = [...nodes]
+	while (stack.length) {
+		const node = stack.pop()
+		if (!node) {
+			continue
+		}
+		if (resolveVehicleComponent(node)) {
+			collected.push(node)
+		}
+		if (Array.isArray(node.children) && node.children.length) {
+			stack.push(...node.children)
+		}
+	}
+	return collected
+}
+
+function syncVehicleBindingsForDocument(document: SceneJsonExportDocument | null): void {
+	if (!document || !physicsWorld) {
+		if (!vehicleInstances.size) {
+			return
+		}
+		Array.from(vehicleInstances.keys()).forEach((nodeId) => removeVehicleInstance(nodeId))
+		return
+	}
+	const vehicleNodes = collectVehicleNodes(document.nodes)
+	const desiredIds = new Set<string>()
+	vehicleNodes.forEach((node) => desiredIds.add(node.id))
+	vehicleInstances.forEach((_entry, nodeId) => {
+		if (!desiredIds.has(nodeId)) {
+			removeVehicleInstance(nodeId)
+		}
+	})
+	vehicleNodes.forEach((node) => {
+		if (!vehicleInstances.has(node.id)) {
+			ensureVehicleBindingForNode(node.id)
+		}
+	})
+}
+
 function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null): void {
 	if (!document) {
 		resetPhysicsWorld()
+		syncVehicleBindingsForDocument(null)
 		return
 	}
 	const rigidbodyNodes = collectRigidbodyNodes(document.nodes)
 	if (!rigidbodyNodes.length) {
 		resetPhysicsWorld()
+		syncVehicleBindingsForDocument(null)
 		return
 	}
 	const world = ensurePhysicsWorld()
@@ -6020,6 +6068,8 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 			groundHeightfieldCache.delete(nodeId)
 		}
 	})
+
+	syncVehicleBindingsForDocument(document)
 }
 
 function stepPhysicsWorld(delta: number): void {
