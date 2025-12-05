@@ -10692,35 +10692,7 @@ export const useSceneStore = defineStore('scene', {
           ...currentProps,
           ...typedPatch,
         })
-        const numbersDiffer = (a: number, b: number, epsilon = 1e-4) => Math.abs(a - b) > epsilon
-        const tupleChanged = (current: number[], next: number[]) =>
-          current.some((value, index) => numbersDiffer(value, next[index] ?? value))
-        const wheelsChanged =
-          currentProps.wheels.length !== merged.wheels.length ||
-          currentProps.wheels.some((wheel, index) => {
-            const nextWheel = merged.wheels[index]
-            if (!nextWheel) {
-              return true
-            }
-            return (
-              wheel.id !== nextWheel.id ||
-              wheel.nodeId !== nextWheel.nodeId ||
-              numbersDiffer(wheel.radius, nextWheel.radius) ||
-              numbersDiffer(wheel.suspensionRestLength, nextWheel.suspensionRestLength) ||
-              numbersDiffer(wheel.suspensionStiffness, nextWheel.suspensionStiffness) ||
-              numbersDiffer(wheel.dampingRelaxation, nextWheel.dampingRelaxation) ||
-              numbersDiffer(wheel.dampingCompression, nextWheel.dampingCompression) ||
-              numbersDiffer(wheel.frictionSlip, nextWheel.frictionSlip) ||
-              numbersDiffer(wheel.maxSuspensionTravel, nextWheel.maxSuspensionTravel) ||
-              numbersDiffer(wheel.maxSuspensionForce, nextWheel.maxSuspensionForce) ||
-              wheel.useCustomSlidingRotationalSpeed !== nextWheel.useCustomSlidingRotationalSpeed ||
-              numbersDiffer(wheel.customSlidingRotationalSpeed, nextWheel.customSlidingRotationalSpeed) ||
-              wheel.isFrontWheel !== nextWheel.isFrontWheel ||
-              numbersDiffer(wheel.rollInfluence, nextWheel.rollInfluence) ||
-              tupleChanged(wheel.directionLocal, nextWheel.directionLocal) ||
-              tupleChanged(wheel.axleLocal, nextWheel.axleLocal)
-            )
-          })
+        const wheelsChanged = JSON.stringify(currentProps.wheels) !== JSON.stringify(merged.wheels)
         const hasChanges =
           currentProps.indexRightAxis !== merged.indexRightAxis ||
           currentProps.indexUpAxis !== merged.indexUpAxis ||

@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNodeComponentState } from '@harmony/schema'
+import type { SceneNodeComponentState, Vector3Like } from '@harmony/schema'
 import { useSceneStore } from '@/stores/sceneStore'
 import InspectorVectorControls from '@/components/common/VectorControls.vue'
 import {
   VEHICLE_COMPONENT_TYPE,
   clampVehicleComponentProps,
   type VehicleComponentProps,
-  type VehicleVector3Tuple,
   type VehicleWheelProps,
 } from '@schema/components'
 
@@ -49,6 +48,21 @@ const panelStyle = computed(() => {
     left: `${props.anchor.left}px`,
   }
 })
+
+const ZERO_VECTOR: Vector3Like = { x: 0, y: 0, z: 0 }
+
+function clampVectorComponent(value: unknown, fallback: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(numeric) ? numeric : fallback
+}
+
+function cloneVector(vector: Vector3Like | null | undefined): Vector3Like {
+  return {
+    x: clampVectorComponent(vector?.x, ZERO_VECTOR.x),
+    y: clampVectorComponent(vector?.y, ZERO_VECTOR.y),
+    z: clampVectorComponent(vector?.z, ZERO_VECTOR.z),
+  }
+}
 
 function handleClose(): void {
   emit('close')
@@ -124,7 +138,7 @@ function handleWheelBooleanInput(key: 'isFrontWheel' | 'useCustomSlidingRotation
 
 function handleVectorInput(
   key: 'directionLocal' | 'axleLocal' | 'chassisConnectionPointLocal',
-  axisIndex: 0 | 1 | 2,
+  axis: 'x' | 'y' | 'z',
   value: string | number,
 ): void {
   const numeric = typeof value === 'number' ? value : Number(value)
@@ -132,17 +146,13 @@ function handleVectorInput(
     return
   }
   patchActiveWheel((wheel) => {
-    const nextTuple = [...wheel[key]] as VehicleVector3Tuple
-    if (nextTuple[axisIndex] === numeric) {
+    const nextVector = cloneVector(wheel[key])
+    if (nextVector[axis] === numeric) {
       return wheel
     }
-    nextTuple[axisIndex] = numeric
-    return { ...wheel, [key]: nextTuple }
+    nextVector[axis] = numeric
+    return { ...wheel, [key]: nextVector }
   })
-}
-
-function axisToIndex(axis: 'x' | 'y' | 'z'): 0 | 1 | 2 {
-  return axis === 'x' ? 0 : axis === 'y' ? 1 : 2
 }
 
 watch(activeWheel, (wheel) => {
@@ -350,39 +360,27 @@ watch(
             <div class="vehicle-wheel-details__subsection">
               <InspectorVectorControls
                 label="Direction (Local)"
-                :model-value="{
-                  x: activeWheel.directionLocal[0],
-                  y: activeWheel.directionLocal[1],
-                  z: activeWheel.directionLocal[2],
-                }"
+                :model-value="activeWheel.directionLocal"
                 :disabled="isDisabled"
-                @update:axis="(axis, value) => handleVectorInput('directionLocal', axisToIndex(axis), value)"
+                @update:axis="(axis, value) => handleVectorInput('directionLocal', axis, value)"
               />
             </div>
 
             <div class="vehicle-wheel-details__subsection">
               <InspectorVectorControls
                 label="Axle (Local)"
-                :model-value="{
-                  x: activeWheel.axleLocal[0],
-                  y: activeWheel.axleLocal[1],
-                  z: activeWheel.axleLocal[2],
-                }"
+                :model-value="activeWheel.axleLocal"
                 :disabled="isDisabled"
-                @update:axis="(axis, value) => handleVectorInput('axleLocal', axisToIndex(axis), value)"
+                @update:axis="(axis, value) => handleVectorInput('axleLocal', axis, value)"
               />
             </div>
 
             <div class="vehicle-wheel-details__subsection">
               <InspectorVectorControls
                 label="Connection Point (Local)"
-                :model-value="{
-                  x: activeWheel.chassisConnectionPointLocal[0],
-                  y: activeWheel.chassisConnectionPointLocal[1],
-                  z: activeWheel.chassisConnectionPointLocal[2],
-                }"
+                :model-value="activeWheel.chassisConnectionPointLocal"
                 :disabled="isDisabled"
-                @update:axis="(axis, value) => handleVectorInput('chassisConnectionPointLocal', axisToIndex(axis), value)"
+                @update:axis="(axis, value) => handleVectorInput('chassisConnectionPointLocal', axis, value)"
               />
             </div>
           </div>

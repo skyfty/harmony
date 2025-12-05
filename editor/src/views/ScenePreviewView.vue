@@ -18,6 +18,7 @@ import {
 	type SceneNodeComponentState,
 	type SceneMaterialTextureRef,
 	type SceneSkyboxSettings,
+	type Vector3Like,
 } from '@harmony/schema'
 import {
 	applyMaterialOverrides,
@@ -76,6 +77,8 @@ import {
 	DEFAULT_ANGULAR_DAMPING,
 	DEFAULT_RIGIDBODY_RESTITUTION,
 	DEFAULT_RIGIDBODY_FRICTION,
+	DEFAULT_DIRECTION,
+	DEFAULT_AXLE,
 } from '@schema/components'
 import type {
 	GuideboardComponentProps,
@@ -85,7 +88,6 @@ import type {
 	RigidbodyVector3Tuple,
 	VehicleComponentProps,
 	VehicleWheelProps,
-	VehicleVector3Tuple,
 	WarpGateComponentProps,
 } from '@schema/components'
 import {
@@ -5391,8 +5393,43 @@ function clampVehicleAxisIndex(value: number): 0 | 1 | 2 {
 	return 0
 }
 
-function tupleToVec3(tuple: VehicleVector3Tuple): CANNON.Vec3 {
-	const [x = 0, y = 0, z = 0] = tuple
+type VehicleVectorValue = Vector3Like | number[] | null | undefined
+
+function toFiniteVectorComponent(value: unknown): number | null {
+	const numeric = typeof value === 'number' ? value : Number(value)
+	return Number.isFinite(numeric) ? numeric : null
+}
+
+function normalizeVehicleVector(value: VehicleVectorValue): [number, number, number] | null {
+	if (Array.isArray(value) && value.length === 3) {
+		const [xRaw, yRaw, zRaw] = value
+		const x = toFiniteVectorComponent(xRaw)
+		const y = toFiniteVectorComponent(yRaw)
+		const z = toFiniteVectorComponent(zRaw)
+		if (x === null || y === null || z === null) {
+			return null
+		}
+		return [x, y, z]
+	}
+	if (value && typeof value === 'object') {
+		const record = value as Partial<Vector3Like>
+		const x = toFiniteVectorComponent(record.x)
+		const y = toFiniteVectorComponent(record.y)
+		const z = toFiniteVectorComponent(record.z)
+		if (x === null || y === null || z === null) {
+			return null
+		}
+		return [x, y, z]
+	}
+	return null
+}
+
+function tupleToVec3(tuple: VehicleVectorValue, fallback?: Vector3Like): CANNON.Vec3 | null {
+	const normalized = normalizeVehicleVector(tuple) ?? (fallback ? normalizeVehicleVector(fallback) : null)
+	if (!normalized) {
+		return null
+	}
+	const [x, y, z] = normalized
 	return new CANNON.Vec3(x, y, z)
 }
 
@@ -5731,11 +5768,11 @@ function createVehicleInstance(
 	const forwardAxis = clampVehicleAxisIndex(props.indexForwardAxis)
 	const wheelEntries = (props.wheels ?? [])
 		.map((wheel) => {
-			const tuple = wheel.chassisConnectionPointLocal
-			if (!Array.isArray(tuple) || tuple.length !== 3) {
+			const point = tupleToVec3(wheel.chassisConnectionPointLocal)
+			if (!point) {
 				return null
 			}
-			return { config: wheel, point: tupleToVec3(tuple) }
+			return { config: wheel, point }
 		})
 		.filter((entry): entry is { config: VehicleWheelProps; point: CANNON.Vec3 } => Boolean(entry))
 	if (!wheelEntries.length) {
@@ -5751,7 +5788,7 @@ function createVehicleInstance(
 	if (!steerableWheelIndices.length) {
 		steerableWheelIndices = wheelCount >= 2
 			? [0, 1].filter((index) => index < wheelCount)
-			: connectionPoints.map((_point, index) => index)
+			: Array.from({ length: wheelCount }, (_unused, index) => index)
 	}
 	const vehicle = new CANNON.RaycastVehicle({
 		chassisBody: rigidbody.body,
@@ -5760,8 +5797,11 @@ function createVehicleInstance(
 		indexForwardAxis: forwardAxis,
 	})
 	wheelEntries.forEach(({ config, point }) => {
-		const directionVec = tupleToVec3(config.directionLocal)
-		const axleVec = tupleToVec3(config.axleLocal)
+		const directionVec = tupleToVec3(config.directionLocal, DEFAULT_DIRECTION)
+		const axleVec = tupleToVec3(config.axleLocal, DEFAULT_AXLE)
+		if (!directionVec || !axleVec) {
+			return
+		}
 		vehicle.addWheel({
 			chassisConnectionPointLocal: point,
 			directionLocal: directionVec,

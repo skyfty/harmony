@@ -1,15 +1,13 @@
 import { Component, type ComponentRuntimeContext } from '../Component'
 import { componentManager, type ComponentDefinition } from '../componentManager'
-import type { SceneNode, SceneNodeComponentState } from '../../index'
+import type { SceneNode, SceneNodeComponentState, Vector3Like } from '../../index'
 
 export const VEHICLE_COMPONENT_TYPE = 'vehicle'
-
-export type VehicleVector3Tuple = [number, number, number]
 
 export interface VehicleWheelProps {
   id: string
   nodeId: string | null
-  chassisConnectionPointLocal: VehicleVector3Tuple
+  chassisConnectionPointLocal: Vector3Like
   radius: number
   suspensionRestLength: number
   suspensionStiffness: number
@@ -22,8 +20,8 @@ export interface VehicleWheelProps {
   customSlidingRotationalSpeed: number
   isFrontWheel: boolean
   rollInfluence: number
-  directionLocal: VehicleVector3Tuple
-  axleLocal: VehicleVector3Tuple
+  directionLocal: Vector3Like
+  axleLocal: Vector3Like
 }
 
 export interface VehicleComponentProps {
@@ -33,13 +31,55 @@ export interface VehicleComponentProps {
   wheels: VehicleWheelProps[]
 }
 
+function createVector(x: number, y: number, z: number): Vector3Like {
+  return { x, y, z }
+}
+
+function sanitizeVectorComponent(value: unknown, fallback: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(numeric) ? numeric : fallback
+}
+
+function normalizeVectorComponents(vector: Vector3Like): [number, number, number] {
+  return [
+    sanitizeVectorComponent(vector.x, 0),
+    sanitizeVectorComponent(vector.y, 0),
+    sanitizeVectorComponent(vector.z, 0),
+  ]
+}
+
+function cloneVectorLike(vector: Vector3Like): Vector3Like {
+  const [x, y, z] = normalizeVectorComponents(vector)
+  return { x, y, z }
+}
+
+function clampVectorLike(value: unknown, fallback: Vector3Like): Vector3Like {
+  const [fx, fy, fz] = normalizeVectorComponents(fallback)
+  if (Array.isArray(value) && value.length === 3) {
+    return createVector(
+      sanitizeVectorComponent(value[0], fx),
+      sanitizeVectorComponent(value[1], fy),
+      sanitizeVectorComponent(value[2], fz),
+    )
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    return createVector(
+      sanitizeVectorComponent(record.x, fx),
+      sanitizeVectorComponent(record.y, fy),
+      sanitizeVectorComponent(record.z, fz),
+    )
+  }
+  return createVector(fx, fy, fz)
+}
+
 export const DEFAULT_RIGHT_AXIS = 0
 export const DEFAULT_UP_AXIS = 1
 export const DEFAULT_FORWARD_AXIS = 2
 export const DEFAULT_RADIUS = 0.5
-export const DEFAULT_DIRECTION: VehicleVector3Tuple = [0, -1, 0]
-export const DEFAULT_AXLE: VehicleVector3Tuple = [-1, 0, 0]
-export const DEFAULT_CHASSIS_CONNECTION_POINT: VehicleVector3Tuple = [0, 0, 0]
+export const DEFAULT_DIRECTION: Vector3Like = createVector(0, -1, 0)
+export const DEFAULT_AXLE: Vector3Like = createVector(-1, 0, 0)
+export const DEFAULT_CHASSIS_CONNECTION_POINT: Vector3Like = createVector(0, 0, 0)
 export const DEFAULT_SUSPENSION_REST_LENGTH = 0.3
 export const DEFAULT_SUSPENSION_STIFFNESS = 25000
 export const DEFAULT_DAMPING_RELAXATION = 2.3
@@ -53,7 +93,7 @@ export const DEFAULT_CUSTOM_SLIDING_ROTATIONAL_SPEED = -30
 export const DEFAULT_IS_FRONT_WHEEL = true
 export const DEFAULT_WHEEL_TEMPLATE: Omit<VehicleWheelProps, 'id'> = {
   nodeId: null,
-  chassisConnectionPointLocal: DEFAULT_CHASSIS_CONNECTION_POINT,
+  chassisConnectionPointLocal: cloneVectorLike(DEFAULT_CHASSIS_CONNECTION_POINT),
   radius: DEFAULT_RADIUS,
   suspensionRestLength: DEFAULT_SUSPENSION_REST_LENGTH,
   suspensionStiffness: DEFAULT_SUSPENSION_STIFFNESS,
@@ -66,8 +106,8 @@ export const DEFAULT_WHEEL_TEMPLATE: Omit<VehicleWheelProps, 'id'> = {
   customSlidingRotationalSpeed: DEFAULT_CUSTOM_SLIDING_ROTATIONAL_SPEED,
   isFrontWheel: DEFAULT_IS_FRONT_WHEEL,
   rollInfluence: DEFAULT_ROLL_INFLUENCE,
-  directionLocal: DEFAULT_DIRECTION,
-  axleLocal: DEFAULT_AXLE,
+  directionLocal: cloneVectorLike(DEFAULT_DIRECTION),
+  axleLocal: cloneVectorLike(DEFAULT_AXLE),
 }
 
 function clampAxisIndex(value: unknown, fallback: number): number {
@@ -99,19 +139,6 @@ function clampNumber(value: unknown, fallback: number): number {
     return fallback
   }
   return numeric
-}
-
-function clampVectorTuple(value: unknown, fallback: VehicleVector3Tuple): VehicleVector3Tuple {
-  if (Array.isArray(value) && value.length === 3) {
-    return value.map((entry, index) => (typeof entry === 'number' && Number.isFinite(entry) ? entry : fallback[index])) as VehicleVector3Tuple
-  }
-  if (value && typeof value === 'object') {
-    const record = value as Record<string, unknown>
-    return [record.x, record.y, record.z].map((entry, index) => (
-      typeof entry === 'number' && Number.isFinite(entry) ? entry : fallback[index]
-    )) as VehicleVector3Tuple
-  }
-  return [...fallback]
 }
 
 function clampBoolean(value: unknown, fallback: boolean): boolean {
@@ -194,9 +221,12 @@ function clampWheelEntry(
     ),
     isFrontWheel: clampBoolean(source.isFrontWheel, template.isFrontWheel),
     rollInfluence: clampPositive(source.rollInfluence, template.rollInfluence, { min: 0 }),
-    directionLocal: clampVectorTuple(source.directionLocal, template.directionLocal),
-    axleLocal: clampVectorTuple(source.axleLocal, template.axleLocal),
-    chassisConnectionPointLocal: clampVectorTuple(source.chassisConnectionPointLocal, template.chassisConnectionPointLocal),
+    directionLocal: clampVectorLike(source.directionLocal, template.directionLocal),
+    axleLocal: clampVectorLike(source.axleLocal, template.axleLocal),
+    chassisConnectionPointLocal: clampVectorLike(
+      source.chassisConnectionPointLocal,
+      template.chassisConnectionPointLocal,
+    ),
   }
 }
 
@@ -217,7 +247,7 @@ function ensureWheelIds(wheels: VehicleWheelProps[]): VehicleWheelProps[] {
 
 function resolveLegacyWheelTemplate(
   props: LegacyWheelProps | null | undefined,
-  vectors: { directionLocal: VehicleVector3Tuple; axleLocal: VehicleVector3Tuple },
+  vectors: { directionLocal: Vector3Like; axleLocal: Vector3Like },
 ): Omit<VehicleWheelProps, 'id'> {
   return {
     ...DEFAULT_WHEEL_TEMPLATE,
@@ -247,9 +277,9 @@ function resolveLegacyWheelTemplate(
     ),
     isFrontWheel: clampBoolean(props?.isFrontWheel, DEFAULT_IS_FRONT_WHEEL),
     rollInfluence: clampPositive(props?.rollInfluence, DEFAULT_ROLL_INFLUENCE, { min: 0 }),
-    directionLocal: vectors.directionLocal,
-    axleLocal: vectors.axleLocal,
-    chassisConnectionPointLocal: clampVectorTuple(props?.chassisConnectionPointLocal, DEFAULT_CHASSIS_CONNECTION_POINT),
+    directionLocal: cloneVectorLike(vectors.directionLocal),
+    axleLocal: cloneVectorLike(vectors.axleLocal),
+    chassisConnectionPointLocal: clampVectorLike(props?.chassisConnectionPointLocal, DEFAULT_CHASSIS_CONNECTION_POINT),
   }
 }
 
@@ -266,8 +296,8 @@ export function clampVehicleComponentProps(
   props: VehicleComponentPropsInput,
 ): VehicleComponentProps {
   const legacyVectors = {
-    directionLocal: clampVectorTuple(props?.directionLocal, DEFAULT_DIRECTION),
-    axleLocal: clampVectorTuple(props?.axleLocal, DEFAULT_AXLE),
+    directionLocal: clampVectorLike(props?.directionLocal, DEFAULT_DIRECTION),
+    axleLocal: clampVectorLike(props?.axleLocal, DEFAULT_AXLE),
   }
   const wheelTemplate = resolveLegacyWheelTemplate(props ?? null, legacyVectors)
   return {
@@ -298,9 +328,9 @@ export function cloneVehicleComponentProps(props: VehicleComponentProps): Vehicl
       customSlidingRotationalSpeed: wheel.customSlidingRotationalSpeed,
       isFrontWheel: wheel.isFrontWheel,
       rollInfluence: wheel.rollInfluence,
-      directionLocal: [...wheel.directionLocal] as VehicleVector3Tuple,
-      axleLocal: [...wheel.axleLocal] as VehicleVector3Tuple,
-      chassisConnectionPointLocal: [...wheel.chassisConnectionPointLocal] as VehicleVector3Tuple,
+      directionLocal: cloneVectorLike(wheel.directionLocal),
+      axleLocal: cloneVectorLike(wheel.axleLocal),
+      chassisConnectionPointLocal: cloneVectorLike(wheel.chassisConnectionPointLocal),
     })),
   }
 }

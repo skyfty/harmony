@@ -2,7 +2,7 @@
 import { Box3, Vector3 } from 'three'
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNode, SceneNodeComponentState } from '@harmony/schema'
+import type { SceneNode, SceneNodeComponentState, Vector3Like } from '@harmony/schema'
 import { getRuntimeObject, useSceneStore } from '@/stores/sceneStore'
 import NodePicker from '@/components/common/NodePicker.vue'
 import { generateUuid } from '@/utils/uuid'
@@ -26,7 +26,6 @@ import {
   VEHICLE_COMPONENT_TYPE,
   clampVehicleComponentProps,
   type VehicleComponentProps,
-  type VehicleVector3Tuple,
   type VehicleWheelProps,
 } from '@schema/components'
 
@@ -49,6 +48,35 @@ const vehicleComponent = computed(() =>
     | SceneNodeComponentState<VehicleComponentProps>
     | undefined,
 )
+
+type Vector3Input = Vector3Like | number[] | null | undefined
+const ZERO_VECTOR: Vector3Like = { x: 0, y: 0, z: 0 }
+
+function clampVectorComponent(value: unknown, fallback: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(numeric) ? numeric : fallback
+}
+
+function cloneVector(vector: Vector3Input, fallback: Vector3Like = ZERO_VECTOR): Vector3Like {
+  if (Array.isArray(vector) && vector.length === 3) {
+    const [x, y, z] = vector
+    return {
+      x: clampVectorComponent(x, fallback.x),
+      y: clampVectorComponent(y, fallback.y),
+      z: clampVectorComponent(z, fallback.z),
+    }
+  }
+  const source = vector as Partial<Vector3Like> | null | undefined
+  return {
+    x: clampVectorComponent(source?.x, fallback.x),
+    y: clampVectorComponent(source?.y, fallback.y),
+    z: clampVectorComponent(source?.z, fallback.z),
+  }
+}
+
+function ensureFiniteVector(vector: Vector3Input): Vector3Like {
+  return cloneVector(vector, ZERO_VECTOR)
+}
 
 const normalizedProps = computed(() => {
   const props = vehicleComponent.value?.props as Partial<VehicleComponentProps> | undefined
@@ -74,13 +102,14 @@ const BASE_WHEEL_TEMPLATE: VehicleWheelProps =
     customSlidingRotationalSpeed: DEFAULT_CUSTOM_SLIDING_ROTATIONAL_SPEED,
     isFrontWheel: DEFAULT_IS_FRONT_WHEEL,
     rollInfluence: DEFAULT_ROLL_INFLUENCE,
-    directionLocal: DEFAULT_DIRECTION,
-    axleLocal: DEFAULT_AXLE,
-    chassisConnectionPointLocal:DEFAULT_CHASSIS_CONNECTION_POINT
+    directionLocal: cloneVector(DEFAULT_DIRECTION),
+    axleLocal: cloneVector(DEFAULT_AXLE),
+    chassisConnectionPointLocal: cloneVector(DEFAULT_CHASSIS_CONNECTION_POINT),
   }
 
 const tempBoundingBox = new Box3()
 const tempBoundingSize = new Vector3()
+const tempWheelWorldPosition = new Vector3()
 
 const isComponentEnabled = computed(() => Boolean(vehicleComponent.value?.enabled))
 
@@ -102,12 +131,7 @@ function findNodeWithParent(tree: SceneNode[] | undefined, targetId: string, par
   return null
 }
 
-function ensureFiniteTuple(tuple: VehicleVector3Tuple | number[]): VehicleVector3Tuple {
-  return tuple.map((value) => (Number.isFinite(value) ? value : 0)) as VehicleVector3Tuple
-}
-
-
-function extractNodeBoundingSize(node: SceneNode): VehicleVector3Tuple | null {
+function extractNodeBoundingSize(node: SceneNode): Vector3Like | null {
   if (!node) {
     return null
   }
@@ -118,7 +142,7 @@ function extractNodeBoundingSize(node: SceneNode): VehicleVector3Tuple | null {
     const bounds = setBoundingBoxFromObject(runtime, tempBoundingBox.makeEmpty())
     if (!bounds.isEmpty()) {
       const size = bounds.getSize(tempBoundingSize)
-      return ensureFiniteTuple([size.x, size.y, size.z])
+      return ensureFiniteVector([size.x, size.y, size.z])
     }
   }
 
@@ -134,32 +158,70 @@ function extractNodeBoundingSize(node: SceneNode): VehicleVector3Tuple | null {
   ) {
     const [minX = 0, minY = 0, minZ = 0] = instancedBounds.min
     const [maxX = 0, maxY = 0, maxZ = 0] = instancedBounds.max
-    const size: VehicleVector3Tuple = [
-      Math.abs(maxX - minX),
-      Math.abs(maxY - minY),
-      Math.abs(maxZ - minZ),
-    ]
-    return ensureFiniteTuple(size)
+    const size = {
+      x: Math.abs(maxX - minX),
+      y: Math.abs(maxY - minY),
+      z: Math.abs(maxZ - minZ),
+    }
+    return ensureFiniteVector(size)
   }
 
   return null
 }
 
-function extractNodeRadius(boundsSize: VehicleVector3Tuple | null): number | null {
+function extractNodeRadius(boundsSize: Vector3Like | null): number | null {
   if (!boundsSize) {
     return null
   }
-  const [x = 0, y = 0, z = 0] = boundsSize
-  const maxAxis = Math.max(Math.abs(x), Math.abs(y), Math.abs(z))
+  const safeVector = ensureFiniteVector(boundsSize)
+  const maxAxis = Math.max(Math.abs(safeVector.x), Math.abs(safeVector.y), Math.abs(safeVector.z))
   if (!Number.isFinite(maxAxis) || maxAxis <= 0) {
     return null
   }
   return maxAxis * 0.5
 }
 
+function computeWheelLocalPosition(wheelNodeId: string | null): Vector3Like | null {
+  if (!wheelNodeId) {
+    return null
+  }
+  const wheelObject = getRuntimeObject(wheelNodeId)
+  if (!wheelObject) {
+    return null
+  }
+  tempWheelWorldPosition.copy(wheelObject.position)
+  if (
+    !Number.isFinite(tempWheelWorldPosition.x) ||
+    !Number.isFinite(tempWheelWorldPosition.y) ||
+    !Number.isFinite(tempWheelWorldPosition.z)
+  ) {
+    return null
+  }
+  return ensureFiniteVector({
+    x: tempWheelWorldPosition.x,
+    y: tempWheelWorldPosition.y,
+    z: tempWheelWorldPosition.z,
+  })
+}
+
+function autoPopulateWheelConnectionPoint(wheelId: string, wheelNodeId: string): void {
+  const localPosition = computeWheelLocalPosition(wheelNodeId)
+  if (!localPosition) {
+    return
+  }
+  const existingWheel = wheelEntries.value.find((wheel) => wheel.id === wheelId)
+  const suspensionRestLength = existingWheel?.suspensionRestLength ?? BASE_WHEEL_TEMPLATE.suspensionRestLength
+  const connectionPoint: Vector3Like = {
+    x: localPosition.x,
+    y: localPosition.y + suspensionRestLength,
+    z: localPosition.z,
+  }
+  updateWheelEntry(wheelId, { chassisConnectionPointLocal: connectionPoint })
+}
+
 function autoPopulateWheelParametersFromNode(wheelId: string, node: SceneNode): void {
   const boundsSize = extractNodeBoundingSize(node)
-  const height = boundsSize ? Math.abs(boundsSize[1]) : null
+  const height = boundsSize ? Math.abs(boundsSize.y) : null
   const safeHeight = typeof height === 'number' && Number.isFinite(height) && height > 0 ? height : null
   const radiusFromNode = extractNodeRadius(boundsSize)
   const patch: Partial<VehicleWheelProps> = {
@@ -186,8 +248,9 @@ function resetWheelParameters(wheelId: string): void {
     useCustomSlidingRotationalSpeed: BASE_WHEEL_TEMPLATE.useCustomSlidingRotationalSpeed,
     customSlidingRotationalSpeed: BASE_WHEEL_TEMPLATE.customSlidingRotationalSpeed,
     rollInfluence: BASE_WHEEL_TEMPLATE.rollInfluence,
-    directionLocal: [...BASE_WHEEL_TEMPLATE.directionLocal] as VehicleVector3Tuple,
-    axleLocal: [...BASE_WHEEL_TEMPLATE.axleLocal] as VehicleVector3Tuple,
+    directionLocal: cloneVector(BASE_WHEEL_TEMPLATE.directionLocal),
+    axleLocal: cloneVector(BASE_WHEEL_TEMPLATE.axleLocal),
+    chassisConnectionPointLocal: cloneVector(BASE_WHEEL_TEMPLATE.chassisConnectionPointLocal),
   }
   updateWheelEntry(wheelId, defaults)
 }
@@ -257,6 +320,7 @@ function handleWheelNodeChange(wheelId: string, value: string | null): void {
     updateWheelEntry(wheelId, { nodeId: normalizedValue })
     if (nodeMatch) {
       autoPopulateWheelParametersFromNode(wheelId, nodeMatch.node)
+      autoPopulateWheelConnectionPoint(wheelId, nodeMatch.node.id)
     }
     return
   }
@@ -280,8 +344,9 @@ function createWheelFromTemplate(source?: VehicleWheelProps): VehicleWheelProps 
     customSlidingRotationalSpeed: base.customSlidingRotationalSpeed,
     isFrontWheel: base.isFrontWheel,
     rollInfluence: base.rollInfluence,
-    directionLocal: [...base.directionLocal] as VehicleVector3Tuple,
-    axleLocal: [...base.axleLocal] as VehicleVector3Tuple,
+    directionLocal: cloneVector(base.directionLocal),
+    axleLocal: cloneVector(base.axleLocal),
+    chassisConnectionPointLocal: cloneVector(base.chassisConnectionPointLocal),
   }
 }
 
