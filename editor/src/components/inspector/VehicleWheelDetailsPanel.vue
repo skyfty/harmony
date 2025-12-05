@@ -359,7 +359,7 @@ watch(
 
             <div class="vehicle-wheel-details__subsection">
               <InspectorVectorControls
-                label="Direction (Local)"
+                label="Direction"
                 :model-value="activeWheel.directionLocal"
                 :disabled="isDisabled"
                 @update:axis="(axis, value) => handleVectorInput('directionLocal', axis, value)"
@@ -368,7 +368,7 @@ watch(
 
             <div class="vehicle-wheel-details__subsection">
               <InspectorVectorControls
-                label="Axle (Local)"
+                label="Axle"
                 :model-value="activeWheel.axleLocal"
                 :disabled="isDisabled"
                 @update:axis="(axis, value) => handleVectorInput('axleLocal', axis, value)"
@@ -377,7 +377,7 @@ watch(
 
             <div class="vehicle-wheel-details__subsection">
               <InspectorVectorControls
-                label="Connection Point (Local)"
+                label="Connection Point"
                 :model-value="activeWheel.chassisConnectionPointLocal"
                 :disabled="isDisabled"
                 @update:axis="(axis, value) => handleVectorInput('chassisConnectionPointLocal', axis, value)"
