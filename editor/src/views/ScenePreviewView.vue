@@ -381,9 +381,7 @@ const vehicleDriveState = reactive({
 	vehicle: null as CANNON.RaycastVehicle | null,
 	steerableWheelIndices: [] as number[],
 	wheelCount: 0,
-	exitNodeId: null as string | null,
 	seatNodeId: null as string | null,
-	forwardNodeId: null as string | null,
 	sourceEvent: null as Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null,
 })
 
@@ -571,6 +569,15 @@ const tempVehicleWheelLocal = new THREE.Vector3()
 const tempVehicleChassisInverse = new THREE.Matrix4()
 const VEHICLE_CAMERA_WORLD_UP = new THREE.Vector3(0, 1, 0)
 const VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE = 6
+const VEHICLE_CAMERA_FALLBACK_HEIGHT = 1.35
+const VEHICLE_CAMERA_FALLBACK_HEIGHT_RATIO = 0.45
+const VEHICLE_EXIT_LATERAL_RATIO = 0.6
+const VEHICLE_EXIT_FORWARD_RATIO = 0.35
+const VEHICLE_EXIT_VERTICAL_RATIO = 0.25
+const VEHICLE_EXIT_LATERAL_MIN = 1.25
+const VEHICLE_EXIT_FORWARD_MIN = 1.25
+const VEHICLE_EXIT_VERTICAL_MIN = 0.6
+const VEHICLE_SIZE_FALLBACK = { width: 2.4, height: 1.4, length: 4.2 }
 const skySunPosition = new THREE.Vector3()
 const DEFAULT_SUN_DIRECTION = new THREE.Vector3(0.35, 1, -0.25).normalize()
 const tempSunDirection = new THREE.Vector3()
@@ -767,8 +774,6 @@ const lastOrbitState = {
 	position: defaultOrbitState.position.clone(),
 	target: defaultOrbitState.target.clone(),
 }
-const defaultOrbitViewDirection = defaultOrbitState.target.clone().sub(defaultOrbitState.position).normalize()
-const defaultOrbitViewDistance = defaultOrbitState.position.distanceTo(defaultOrbitState.target)
 let animationMixers: THREE.AnimationMixer[] = []
 let effectRuntimeTickers: Array<(delta: number) => void> = []
 
@@ -2939,17 +2944,13 @@ function startVehicleDriveMode(
 		return readiness
 	}
 	const seatNodeId = normalizeNodeId(event.seatNodeId)
-	const forwardNodeId = normalizeNodeId(event.forwardDirectionNodeId)
-	const exitNodeId = normalizeNodeId(event.exitNodeId)
 	vehicleDriveState.active = true
 	vehicleDriveState.nodeId = targetNodeId
 	vehicleDriveState.vehicle = readiness.instance.vehicle
 	vehicleDriveState.steerableWheelIndices = [...readiness.instance.steerableWheelIndices]
 	vehicleDriveState.wheelCount = readiness.instance.wheelCount
 	vehicleDriveState.token = event.token
-	vehicleDriveState.exitNodeId = exitNodeId
 	vehicleDriveState.seatNodeId = seatNodeId
-	vehicleDriveState.forwardNodeId = forwardNodeId
 	vehicleDriveState.sourceEvent = { ...event }
 	vehicleDriveExitBusy.value = false
 	resetVehicleDriveInputs()
@@ -2958,7 +2959,7 @@ function startVehicleDriveMode(
 	setCameraCaging(true, { force: true })
 	syncFirstPersonOrientation()
 	resetFirstPersonPointerDelta()
-	setCameraViewState('watching', forwardNodeId ?? targetNodeId)
+	setCameraViewState('watching', targetNodeId)
 	setVehicleDriveUiOverride('show')
 	return { success: true }
 }
@@ -2987,9 +2988,7 @@ function stopVehicleDriveMode(options: { resolution?: BehaviorEventResolution; p
 	vehicleDriveState.token = null
 	vehicleDriveState.steerableWheelIndices = []
 	vehicleDriveState.wheelCount = 0
-	vehicleDriveState.exitNodeId = null
 	vehicleDriveState.seatNodeId = null
-	vehicleDriveState.forwardNodeId = null
 	vehicleDriveState.sourceEvent = null
 	vehicleDriveExitBusy.value = false
 	if (options.preserveCamera) {
@@ -3060,67 +3059,140 @@ function updateVehicleDriveCamera(_delta: number, _options: { immediate?: boolea
 	}
 
 	const seatNodeId = vehicleDriveState.seatNodeId
-	const forwardNodeId = vehicleDriveState.forwardNodeId
-
-	if (!seatNodeId || !forwardNodeId) {
+	const vehicleNodeId = vehicleDriveState.nodeId
+	const seatObject = seatNodeId ? nodeObjectMap.get(seatNodeId) ?? null : null
+	const vehicleObject = vehicleNodeId ? nodeObjectMap.get(vehicleNodeId) ?? null : null
+	if (!buildVehicleCameraBasis(seatObject, vehicleObject)) {
 		return false
 	}
-
-	const seatObject = nodeObjectMap.get(seatNodeId)
-	const forwardObject = nodeObjectMap.get(forwardNodeId)
-
-	if (!seatObject || !forwardObject) {
-		return false
-	}
-
-	seatObject.updateMatrixWorld(true)
-	forwardObject.updateMatrixWorld(true)
-
-	seatObject.getWorldPosition(tempVehicleCameraPosition)
+	tempVehicleCameraLook
+		.copy(tempVehicleCameraPosition)
+		.addScaledVector(tempVehicleCameraForward, VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE)
 	activeCamera.position.copy(tempVehicleCameraPosition)
-
-	forwardObject.getWorldPosition(tempVehicleCameraLook)
-
-	// Align camera up vector with seat's up vector to handle vehicle roll/pitch
-	tempVehicleCameraUp.setFromMatrixColumn(seatObject.matrixWorld, 1)
 	activeCamera.up.copy(tempVehicleCameraUp)
-
 	activeCamera.lookAt(tempVehicleCameraLook)
 
 	return true
 }
 
-function alignCameraToExitNode(exitNodeId: string | null): boolean {
-	const activeCamera = camera
-	if (!activeCamera || !exitNodeId) {
+function buildVehicleCameraBasis(
+	seatObject: THREE.Object3D | null,
+	vehicleObject: THREE.Object3D | null,
+): boolean {
+	const referenceObject = seatObject ?? vehicleObject
+	if (!referenceObject) {
 		return false
 	}
-	const exitObject = nodeObjectMap.get(exitNodeId) ?? null
-	if (!exitObject) {
-		return false
-	}
-	exitObject.updateMatrixWorld(true)
-	exitObject.getWorldPosition(tempVehicleCameraPosition)
-	activeCamera.position.copy(tempVehicleCameraPosition)
-	const target = tempVehicleCameraLook
-	if (defaultOrbitViewDistance > 1e-6) {
-		target
-			.copy(defaultOrbitViewDirection)
-			.multiplyScalar(defaultOrbitViewDistance)
-			.add(tempVehicleCameraPosition)
+	referenceObject.updateMatrixWorld(true)
+	referenceObject.getWorldQuaternion(tempVehicleQuaternionThree)
+	if (seatObject) {
+		seatObject.updateMatrixWorld(true)
+		seatObject.getWorldPosition(tempVehicleCameraPosition)
 	} else {
-		target.set(0, 0, -1).add(tempVehicleCameraPosition)
+		computeVehicleFallbackSeatPosition(vehicleObject ?? referenceObject, tempVehicleCameraPosition)
 	}
-	activeCamera.lookAt(target)
+	buildVehicleCameraOrientation()
+	return true
+}
+
+function computeVehicleFallbackSeatPosition(object: THREE.Object3D | null, target: THREE.Vector3): void {
+	if (!object) {
+		target.set(0, VEHICLE_CAMERA_FALLBACK_HEIGHT, 0)
+		return
+	}
+	tempBox.makeEmpty()
+	tempBox.setFromObject(object)
+	if (tempBox.isEmpty()) {
+		object.getWorldPosition(target)
+		target.addScaledVector(VEHICLE_CAMERA_WORLD_UP, VEHICLE_CAMERA_FALLBACK_HEIGHT)
+		return
+	}
+	tempBox.getCenter(target)
+	tempBox.getSize(tempVehicleSize)
+	const upOffset = Math.max(tempVehicleSize.y * VEHICLE_CAMERA_FALLBACK_HEIGHT_RATIO, VEHICLE_CAMERA_FALLBACK_HEIGHT)
+	target.addScaledVector(VEHICLE_CAMERA_WORLD_UP, upOffset)
+}
+
+function buildVehicleCameraOrientation(): void {
+	tempVehicleCameraForward.set(0, 0, -1).applyQuaternion(tempVehicleQuaternionThree)
+	if (tempVehicleCameraForward.lengthSq() < 1e-8) {
+		tempVehicleCameraForward.set(0, 0, -1)
+	} else {
+		tempVehicleCameraForward.normalize()
+	}
+	tempVehicleCameraRight.copy(tempVehicleCameraForward).cross(VEHICLE_CAMERA_WORLD_UP)
+	if (tempVehicleCameraRight.lengthSq() < 1e-8) {
+		tempVehicleCameraRight.set(1, 0, 0).applyQuaternion(tempVehicleQuaternionThree)
+		if (tempVehicleCameraRight.lengthSq() < 1e-8) {
+			tempVehicleCameraRight.set(1, 0, 0)
+		} else {
+			tempVehicleCameraRight.normalize()
+		}
+	} else {
+		tempVehicleCameraRight.normalize()
+	}
+	tempVehicleCameraUp.crossVectors(tempVehicleCameraRight, tempVehicleCameraForward)
+	if (tempVehicleCameraUp.lengthSq() < 1e-8) {
+		tempVehicleCameraUp.copy(VEHICLE_CAMERA_WORLD_UP)
+	} else {
+		tempVehicleCameraUp.normalize()
+	}
+}
+
+function getVehicleApproxDimensions(object: THREE.Object3D | null): { width: number; height: number; length: number } {
+	if (!object) {
+		return { ...VEHICLE_SIZE_FALLBACK }
+	}
+	tempBox.makeEmpty()
+	tempBox.setFromObject(object)
+	if (tempBox.isEmpty()) {
+		return { ...VEHICLE_SIZE_FALLBACK }
+	}
+	tempBox.getSize(tempVehicleSize)
+	return {
+		width: Math.max(tempVehicleSize.x, VEHICLE_SIZE_FALLBACK.width),
+		height: Math.max(tempVehicleSize.y, VEHICLE_SIZE_FALLBACK.height),
+		length: Math.max(tempVehicleSize.z, VEHICLE_SIZE_FALLBACK.length),
+	}
+}
+
+function alignCameraToVehicleExit(): boolean {
+	const activeCamera = camera
+	if (!activeCamera) {
+		return false
+	}
+	const vehicleNodeId = vehicleDriveState.nodeId
+	if (!vehicleNodeId) {
+		return false
+	}
+	const seatNodeId = vehicleDriveState.seatNodeId
+	const seatObject = seatNodeId ? nodeObjectMap.get(seatNodeId) ?? null : null
+	const vehicleObject = nodeObjectMap.get(vehicleNodeId) ?? null
+	if (!buildVehicleCameraBasis(seatObject, vehicleObject)) {
+		return false
+	}
+	const dimensions = getVehicleApproxDimensions(vehicleObject)
+	const lateralOffset = Math.max(dimensions.width * VEHICLE_EXIT_LATERAL_RATIO, VEHICLE_EXIT_LATERAL_MIN)
+	const verticalOffset = Math.max(dimensions.height * VEHICLE_EXIT_VERTICAL_RATIO, VEHICLE_EXIT_VERTICAL_MIN)
+	const forwardOffset = Math.max(dimensions.length * VEHICLE_EXIT_FORWARD_RATIO, VEHICLE_EXIT_FORWARD_MIN)
+
+	tempVehicleCameraPosition.addScaledVector(tempVehicleCameraRight, -lateralOffset)
+	tempVehicleCameraPosition.addScaledVector(tempVehicleCameraUp, verticalOffset)
+	tempVehicleCameraLook
+		.copy(tempVehicleCameraPosition)
+		.addScaledVector(tempVehicleCameraForward, forwardOffset)
+	activeCamera.position.copy(tempVehicleCameraPosition)
+	activeCamera.up.copy(tempVehicleCameraUp)
+	activeCamera.lookAt(tempVehicleCameraLook)
 	if (mapControls) {
-		mapControls.target.copy(target)
+		mapControls.target.copy(tempVehicleCameraLook)
 		mapControls.update()
 	}
 	lastOrbitState.position.copy(activeCamera.position)
 	if (mapControls) {
 		lastOrbitState.target.copy(mapControls.target)
 	} else {
-		lastOrbitState.target.copy(target)
+		lastOrbitState.target.copy(tempVehicleCameraLook)
 	}
 	syncLastFirstPersonStateFromCamera()
 	return true
@@ -3202,14 +3274,9 @@ function handleVehicleDriveExitClick(): void {
 	}
 	vehicleDriveExitBusy.value = true
 	try {
-		const exitNodeId = vehicleDriveState.exitNodeId
-		const aligned = alignCameraToExitNode(exitNodeId)
+		const aligned = alignCameraToVehicleExit()
 		if (!aligned) {
-			if (exitNodeId) {
-				appendWarningMessage('下车位置节点不存在，将恢复原有视角。')
-			} else {
-				appendWarningMessage('驾驶脚本未提供下车位置，将恢复原有视角。')
-			}
+			appendWarningMessage('无法定位默认下车位置，将恢复原有视角。')
 		}
 		handleHideVehicleCockpitEvent()
 		stopVehicleDriveMode({ resolution: { type: 'continue' } })

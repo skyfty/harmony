@@ -20,8 +20,6 @@ const activePickerKeys = new Set<string>()
 const params = computed<DriveBehaviorParams>(() => ({
   targetNodeId: props.modelValue?.targetNodeId ?? null,
   seatNodeId: props.modelValue?.seatNodeId ?? null,
-  forwardDirectionNodeId: props.modelValue?.forwardDirectionNodeId ?? null,
-  exitNodeId: props.modelValue?.exitNodeId ?? null,
 }))
 
 function emitUpdate(patch: Partial<DriveBehaviorParams>) {
@@ -37,14 +35,6 @@ function updateTarget(nodeId: string | null) {
 
 function updateSeat(nodeId: string | null) {
   emitUpdate({ seatNodeId: nodeId })
-}
-
-function updateForwardDirection(nodeId: string | null) {
-  emitUpdate({ forwardDirectionNodeId: nodeId })
-}
-
-function updateExit(nodeId: string | null) {
-  emitUpdate({ exitNodeId: nodeId })
 }
 
 function registerPicker(key: string) {
@@ -107,26 +97,6 @@ onBeforeUnmount(() => {
       selection-hint="Click a node that marks where the driver should sit."
       @update:model-value="updateSeat"
       @pick-state-change="(active) => handlePickStateChange('seat', active)"
-    />
-    <NodePicker
-      :ref="registerPicker('forward')"
-      :model-value="params.forwardDirectionNodeId"
-      label="Forward direction node"
-      pick-hint="Choose a node that indicates the vehicle's forward direction"
-      placeholder="Forward orientation node"
-      selection-hint="Click a node that defines forward orientation for the vehicle."
-      @update:model-value="updateForwardDirection"
-      @pick-state-change="(active) => handlePickStateChange('forward', active)"
-    />
-    <NodePicker
-      :ref="registerPicker('exit')"
-      :model-value="params.exitNodeId"
-      label="Exit position node"
-      pick-hint="Choose a node representing where passengers exit the vehicle"
-      placeholder="Exit position node"
-      selection-hint="Click a node that marks the disembark location."
-      @update:model-value="updateExit"
-      @pick-state-change="(active) => handlePickStateChange('exit', active)"
     />
   </div>
 </template>

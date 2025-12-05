@@ -323,10 +323,6 @@ export interface DriveBehaviorParams {
   targetNodeId: string | null
   /** Optional node used to attach the camera or player to the vehicle seat. */
   seatNodeId?: string | null
-  /** Optional node indicating the vehicle's forward direction or viewpoint. */
-  forwardDirectionNodeId?: string | null
-  /** Optional node representing where the player should exit the vehicle. */
-  exitNodeId?: string | null
 }
 
 export interface DebusBehaviorParams {
