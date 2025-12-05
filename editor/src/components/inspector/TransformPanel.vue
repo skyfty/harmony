@@ -11,6 +11,11 @@ const { selectedNode } = storeToRefs(sceneStore)
 const props = defineProps<{ disabled?: boolean }>()
 
 type VectorDisplay = { x: string; y: string; z: string }
+type VectorAxis = keyof VectorDisplay
+type TransformField = 'position' | 'rotation' | 'scale'
+type NumericVector = { x: number; y: number; z: number }
+
+const MIN_SCALE = 0.01
 
 const transformForm = reactive({
   position: createZeroVector(),
@@ -70,8 +75,49 @@ watch(
   { immediate: true, deep: true }
 )
 
+function handleVectorChange(field: TransformField, axis: VectorAxis, rawValue: string) {
+  transformForm[field] = {
+    ...transformForm[field],
+    [axis]: rawValue,
+  }
+
+  if (props.disabled) {
+    return
+  }
+
+  const node = selectedNode.value
+  if (!node) {
+    return
+  }
+
+  const numericValue = parseFloat(rawValue)
+  if (!Number.isFinite(numericValue)) {
+    return
+  }
+
+  const payload: Partial<Pick<TransformUpdatePayload, TransformField>> & { id: string } = {
+    id: node.id,
+  }
+  const baseVector = cloneVector(field, node[field] as NumericVector | undefined)
+
+  if (field === 'rotation') {
+    baseVector[axis] = degToRad(numericValue)
+  } else if (field === 'scale') {
+    baseVector[axis] = Math.max(MIN_SCALE, numericValue)
+  } else {
+    baseVector[axis] = numericValue
+  }
+
+  payload[field] = baseVector
+  sceneStore.updateNodeProperties(payload)
+}
+
 function radToDeg(value: number) {
   return formatNumeric(value * (180 / Math.PI))
+}
+
+function degToRad(value: number) {
+  return value * (Math.PI / 180)
 }
 
 function resetTransformForm() {
@@ -96,6 +142,13 @@ function createNumericVector(x: number, y: number, z: number) {
   return { x, y, z }
 }
 
+function cloneVector(field: TransformField, source?: NumericVector): NumericVector {
+  if (!source) {
+    return field === 'scale' ? createNumericVector(1, 1, 1) : createNumericVector(0, 0, 0)
+  }
+  return createNumericVector(source.x, source.y, source.z)
+}
+
 </script>
 
 <template>
@@ -108,7 +161,7 @@ function createNumericVector(x: number, y: number, z: number) {
           label="Position"
           :model-value="transformForm.position"
           :disabled="props.disabled"
-          :readonly="true"
+          @update:axis="(axis, value) => handleVectorChange('position', axis, value)"
         />
       </div>
       <div class="section-block" @dblclick.stop="resetRotation">
@@ -116,7 +169,7 @@ function createNumericVector(x: number, y: number, z: number) {
           label="Rotation"
           :model-value="transformForm.rotation"
           :disabled="props.disabled"
-          :readonly="true"
+          @update:axis="(axis, value) => handleVectorChange('rotation', axis, value)"
         />
       </div>
       <div class="section-block" @dblclick.stop="resetScale">
@@ -125,7 +178,7 @@ function createNumericVector(x: number, y: number, z: number) {
           :model-value="transformForm.scale"
           min="0.01"
           :disabled="props.disabled"
-          :readonly="true"
+          @update:axis="(axis, value) => handleVectorChange('scale', axis, value)"
         />
       </div>
       </div>

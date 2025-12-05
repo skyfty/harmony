@@ -566,10 +566,12 @@ const VEHICLE_STEER_ANGLE = THREE.MathUtils.degToRad(32)
 const tempVehicleCameraOffset = new THREE.Vector3()
 const tempVehicleCameraLook = new THREE.Vector3()
 const tempVehicleCameraForward = new THREE.Vector3()
+const tempVehicleCameraRear = new THREE.Vector3()
 const tempVehicleCameraRight = new THREE.Vector3()
 const tempVehicleQuaternionThree = new THREE.Quaternion()
 const tempVehicleCameraPosition = new THREE.Vector3()
 const tempVehicleCameraUp = new THREE.Vector3()
+const tempVehicleFollowAnchor = new THREE.Vector3()
 const tempVehicleWheelWorld = new THREE.Vector3()
 const tempVehicleWheelLocal = new THREE.Vector3()
 const tempVehicleChassisInverse = new THREE.Matrix4()
@@ -584,11 +586,15 @@ const VEHICLE_EXIT_LATERAL_MIN = 1.25
 const VEHICLE_EXIT_FORWARD_MIN = 1.25
 const VEHICLE_EXIT_VERTICAL_MIN = 0.6
 const VEHICLE_SIZE_FALLBACK = { width: 2.4, height: 1.4, length: 4.2 }
-const VEHICLE_FOLLOW_DISTANCE_DEFAULT = 8
 const VEHICLE_FOLLOW_DISTANCE_MIN = 4
 const VEHICLE_FOLLOW_DISTANCE_MAX = 26
 const VEHICLE_FOLLOW_HEIGHT_RATIO = 0.4
 const VEHICLE_FOLLOW_HEIGHT_MIN = 1.5
+const VEHICLE_FOLLOW_DISTANCE_LENGTH_RATIO = 1.25
+const VEHICLE_FOLLOW_DISTANCE_WIDTH_RATIO = 0.35
+const VEHICLE_FOLLOW_DISTANCE_DIAGONAL_RATIO = 0.2
+const VEHICLE_FOLLOW_TARGET_LIFT_RATIO = 0.3
+const VEHICLE_FOLLOW_TARGET_LIFT_MIN = 0.6
 const skySunPosition = new THREE.Vector3()
 const DEFAULT_SUN_DIRECTION = new THREE.Vector3(0.35, 1, -0.25).normalize()
 const tempSunDirection = new THREE.Vector3()
@@ -3147,6 +3153,7 @@ function applyVehicleDriveForces(): void {
 
 
 type VehicleDriveCameraOptions = { immediate?: boolean; applyOrbitTween?: boolean }
+type VehicleFollowPlacement = { distance: number; heightOffset: number; targetLift: number }
 
 function updateVehicleDriveCamera(delta: number, options: VehicleDriveCameraOptions = {}): boolean {
 	if (!vehicleDriveState.active) {
@@ -3181,17 +3188,17 @@ function buildVehicleCameraBasis(
 	seatObject: THREE.Object3D | null,
 	vehicleObject: THREE.Object3D | null,
 ): boolean {
-	const referenceObject = seatObject ?? vehicleObject
-	if (!referenceObject) {
+	const orientationObject = vehicleObject ?? seatObject
+	if (!orientationObject) {
 		return false
 	}
-	referenceObject.updateMatrixWorld(true)
-	referenceObject.getWorldQuaternion(tempVehicleQuaternionThree)
+	orientationObject.updateMatrixWorld(true)
+	orientationObject.getWorldQuaternion(tempVehicleQuaternionThree)
 	if (seatObject) {
 		seatObject.updateMatrixWorld(true)
 		seatObject.getWorldPosition(tempVehicleCameraPosition)
 	} else {
-		computeVehicleFallbackSeatPosition(vehicleObject ?? referenceObject, tempVehicleCameraPosition)
+		computeVehicleFallbackSeatPosition(vehicleObject ?? orientationObject, tempVehicleCameraPosition)
 	}
 	buildVehicleCameraOrientation()
 	return true
@@ -3215,12 +3222,36 @@ function computeVehicleFallbackSeatPosition(object: THREE.Object3D | null, targe
 	target.addScaledVector(VEHICLE_CAMERA_WORLD_UP, upOffset)
 }
 
+function computeVehicleFollowAnchor(
+	vehicleObject: THREE.Object3D | null,
+	seatPosition: THREE.Vector3,
+	target: THREE.Vector3,
+): void {
+	if (!vehicleObject) {
+		target.copy(seatPosition)
+		return
+	}
+	tempBox.makeEmpty()
+	tempBox.setFromObject(vehicleObject)
+	if (tempBox.isEmpty()) {
+		target.copy(seatPosition)
+		return
+	}
+	tempBox.getCenter(target)
+}
+
 function buildVehicleCameraOrientation(): void {
 	tempVehicleCameraForward.set(0, 0, -1).applyQuaternion(tempVehicleQuaternionThree)
 	if (tempVehicleCameraForward.lengthSq() < 1e-8) {
 		tempVehicleCameraForward.set(0, 0, -1)
 	} else {
 		tempVehicleCameraForward.normalize()
+	}
+	tempVehicleCameraRear.set(0, 0, 1).applyQuaternion(tempVehicleQuaternionThree)
+	if (tempVehicleCameraRear.lengthSq() < 1e-8) {
+		tempVehicleCameraRear.copy(tempVehicleCameraForward).multiplyScalar(-1)
+	} else {
+		tempVehicleCameraRear.normalize()
 	}
 	tempVehicleCameraRight.copy(tempVehicleCameraForward).cross(VEHICLE_CAMERA_WORLD_UP)
 	if (tempVehicleCameraRight.lengthSq() < 1e-8) {
@@ -3258,18 +3289,26 @@ function getVehicleApproxDimensions(object: THREE.Object3D | null): { width: num
 	}
 }
 
-function alignVehicleDriveFollowCamera(vehicleObject: THREE.Object3D | null): void {
+function computeVehicleFollowPlacement(dimensions: { width: number; height: number; length: number }): VehicleFollowPlacement {
+	const lengthComponent = dimensions.length * VEHICLE_FOLLOW_DISTANCE_LENGTH_RATIO
+	const widthComponent = dimensions.width * VEHICLE_FOLLOW_DISTANCE_WIDTH_RATIO
+	const diagonalComponent = Math.hypot(dimensions.length, dimensions.height) * VEHICLE_FOLLOW_DISTANCE_DIAGONAL_RATIO
+	const unclampedDistance = Math.max(VEHICLE_FOLLOW_DISTANCE_MIN, lengthComponent + widthComponent + diagonalComponent)
+	const distance = Math.min(unclampedDistance, VEHICLE_FOLLOW_DISTANCE_MAX)
+	const heightOffset = Math.max(dimensions.height * VEHICLE_FOLLOW_HEIGHT_RATIO, VEHICLE_FOLLOW_HEIGHT_MIN)
+	const targetLift = Math.max(dimensions.height * VEHICLE_FOLLOW_TARGET_LIFT_RATIO, VEHICLE_FOLLOW_TARGET_LIFT_MIN)
+	return { distance, heightOffset, targetLift }
+}
+
+function alignVehicleDriveFollowCamera(placement: VehicleFollowPlacement): void {
 	if (!camera || !mapControls) {
 		return
 	}
 	const anchor = vehicleDriveCameraFollowState.desiredTarget
-	const dimensions = getVehicleApproxDimensions(vehicleObject)
-	const distance = Math.max(dimensions.length, VEHICLE_FOLLOW_DISTANCE_DEFAULT)
-	const heightOffset = Math.max(dimensions.height * VEHICLE_FOLLOW_HEIGHT_RATIO, VEHICLE_FOLLOW_HEIGHT_MIN)
 	vehicleDriveCameraFollowState.desiredPosition
 		.copy(anchor)
-		.addScaledVector(tempVehicleCameraForward, -distance)
-		.addScaledVector(tempVehicleCameraUp, heightOffset)
+		.addScaledVector(tempVehicleCameraRear, placement.distance)
+		.addScaledVector(tempVehicleCameraUp, placement.heightOffset)
 	camera.position.copy(vehicleDriveCameraFollowState.desiredPosition)
 	mapControls.target.copy(anchor)
 }
@@ -3286,10 +3325,16 @@ function updateVehicleDriveFollowCamera(
 	if (!buildVehicleCameraBasis(seatObject, vehicleObject)) {
 		return false
 	}
-	vehicleDriveCameraFollowState.desiredTarget.copy(tempVehicleCameraPosition)
+	const vehicleDimensions = getVehicleApproxDimensions(vehicleObject)
+	const followPlacement = computeVehicleFollowPlacement(vehicleDimensions)
+	const followAnchor = tempVehicleFollowAnchor
+	computeVehicleFollowAnchor(vehicleObject, tempVehicleCameraPosition, followAnchor)
+	vehicleDriveCameraFollowState.desiredTarget
+		.copy(followAnchor)
+		.addScaledVector(tempVehicleCameraUp, followPlacement.targetLift)
 	const needsReset = Boolean(options.immediate) || !vehicleDriveCameraFollowState.initialized
 	if (needsReset) {
-		alignVehicleDriveFollowCamera(vehicleObject)
+		alignVehicleDriveFollowCamera(followPlacement)
 	} else {
 		tempVehicleCameraOffset
 			.copy(vehicleDriveCameraFollowState.desiredTarget)
@@ -6863,7 +6908,6 @@ onBeforeUnmount(() => {
 					<v-icon icon="mdi-steering" size="18" />
 					<div class="scene-preview__drive-heading-text">
 						<span class="scene-preview__drive-heading-label">{{ vehicleDriveUi.label }}</span>
-						<span class="scene-preview__drive-heading-hint">操纵杆 · WASD / 空格</span>
 					</div>
 					<v-btn
 						class="scene-preview__drive-exit"

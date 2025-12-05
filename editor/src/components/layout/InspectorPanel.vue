@@ -60,7 +60,7 @@ const emit = defineEmits<{
 }>()
 
 const sceneStore = useSceneStore()
-const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
+const { selectedNode, selectedNodeId, activeTool } = storeToRefs(sceneStore)
 
 const nodeName = ref('')
 const materialDetailsTargetId = ref<string | null>(null)
@@ -338,6 +338,33 @@ function handleAddComponent(type: string) {
   }
   sceneStore.addNodeComponent(selectedNode.value.id, type)
 }
+
+function ensureTransformPanelExpanded() {
+  if (expandedPanels.value.includes('transform')) {
+    return
+  }
+  expandedPanels.value = [...expandedPanels.value, 'transform']
+}
+
+watch(
+  activeTool,
+  (tool) => {
+    if (tool !== 'select') {
+      ensureTransformPanelExpanded()
+    }
+  },
+  { immediate: true }
+)
+
+watch(
+  expandedPanels,
+  () => {
+    if (activeTool.value !== 'select') {
+      ensureTransformPanelExpanded()
+    }
+  },
+  { deep: true }
+)
 
 </script>
 
