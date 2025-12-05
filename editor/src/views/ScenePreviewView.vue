@@ -859,6 +859,21 @@ function resolveNodeById(nodeId: string): SceneNode | null {
 	return previewNodeMap.get(nodeId) ?? null
 }
 
+function resolveVehicleAncestorNodeId(nodeId: string | null): string | null {
+	let currentId: string | null = nodeId
+	while (currentId) {
+		const node = resolveNodeById(currentId)
+		if (!node) {
+			break
+		}
+		if (resolveVehicleComponent(node)) {
+			return currentId
+		}
+		currentId = resolveParentNodeId(currentId)
+	}
+	return null
+}
+
 const vehicleDriveUi = computed(() => {
 	const override = vehicleDriveUiOverride.value
 	const baseActive = vehicleDriveState.active
@@ -3597,8 +3612,9 @@ function pickVehicleNodeIdFromPointer(event: MouseEvent): string | null {
 	const intersections = behaviorRaycaster.intersectObjects(pickableObjects, true)
 	for (const intersection of intersections) {
 		const nodeId = resolveNodeIdFromIntersection(intersection)
-		if (nodeId) {
-			return nodeId
+		const vehicleNodeId = resolveVehicleAncestorNodeId(nodeId)
+		if (vehicleNodeId) {
+			return vehicleNodeId
 		}
 	}
 	return null
@@ -3606,9 +3622,6 @@ function pickVehicleNodeIdFromPointer(event: MouseEvent): string | null {
 
 function handleVehicleFollowDriveClick(event: MouseEvent) {
 	if (vehicleDriveState.active) {
-		return
-	}
-	if (controlMode.value !== 'third-person') {
 		return
 	}
 	const nodeId = pickVehicleNodeIdFromPointer(event)
@@ -3622,6 +3635,10 @@ function handleVehicleFollowDriveClick(event: MouseEvent) {
 	const actions = listRegisteredBehaviorActions(nodeId)
 	if (actions.includes('click')) {
 		return
+	}
+	const previousControlMode = controlMode.value
+	if (previousControlMode !== 'third-person') {
+		controlMode.value = 'third-person'
 	}
 	pendingVehicleDriveEvent.value = null
 	const manualEvent: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> = {
@@ -3638,6 +3655,9 @@ function handleVehicleFollowDriveClick(event: MouseEvent) {
 	const result = startVehicleDriveMode(manualEvent)
 	if (!result.success) {
 		appendWarningMessage(result.message ?? '无法进入驾驶模式。')
+		if (previousControlMode !== 'third-person') {
+			controlMode.value = previousControlMode
+		}
 		return
 	}
 	handleShowVehicleCockpitEvent()
