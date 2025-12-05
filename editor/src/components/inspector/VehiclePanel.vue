@@ -95,11 +95,181 @@ function ensureFiniteTuple(tuple: VehicleVector3Tuple | number[]): VehicleVector
   return tuple.map((value) => (Number.isFinite(value) ? value : 0)) as VehicleVector3Tuple
 }
 
-function autoFillWheelVectors(wheelId: string, nodeId: string): void {
-  const match = findNodeWithParent(nodes.value, nodeId)
-  if (!match) {
-    return
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function tupleFromUnknown(value: unknown): VehicleVector3Tuple | null {
+  if (Array.isArray(value) && value.length >= 3) {
+    const [x, y, z] = value
+    if (isFiniteNumber(x) && isFiniteNumber(y) && isFiniteNumber(z)) {
+      return [x, y, z]
+    }
+    return null
   }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    const { x, y, z } = record as { x?: unknown; y?: unknown; z?: unknown }
+    if (isFiniteNumber(x) && isFiniteNumber(y) && isFiniteNumber(z)) {
+      return [x, y, z]
+    }
+  }
+  return null
+}
+
+function extractBoundsSizeFromPayload(payload: unknown): VehicleVector3Tuple | null {
+  if (!payload) {
+    return null
+  }
+  if (Array.isArray(payload) && payload.length >= 3) {
+    const tuple = payload.slice(0, 3)
+    if (tuple.every(isFiniteNumber)) {
+      return tuple.map((value) => Math.abs(value)) as VehicleVector3Tuple
+    }
+    return null
+  }
+  if (typeof payload === 'object') {
+    const record = payload as Record<string, unknown>
+    const sizeKeys = ['size', 'dimensions', 'boundsSize', 'boundingSize'] as const
+    for (const key of sizeKeys) {
+      const tuple = tupleFromUnknown(record[key])
+      if (tuple) {
+        return tuple.map((value) => Math.abs(value)) as VehicleVector3Tuple
+      }
+    }
+    const extentKeys = ['extent', 'extents', 'halfExtents'] as const
+    for (const key of extentKeys) {
+      const tuple = tupleFromUnknown(record[key])
+      if (tuple) {
+        const multiplier = key === 'halfExtents' ? 2 : 1
+        return tuple.map((value) => Math.abs(value) * multiplier) as VehicleVector3Tuple
+      }
+    }
+    const min = tupleFromUnknown(record.min ?? record.minimum ?? record.minCorner ?? record.minPoint)
+    const max = tupleFromUnknown(record.max ?? record.maximum ?? record.maxCorner ?? record.maxPoint)
+    if (min && max) {
+      return [
+        Math.abs(max[0] - min[0]),
+        Math.abs(max[1] - min[1]),
+        Math.abs(max[2] - min[2]),
+      ] as VehicleVector3Tuple
+    }
+  }
+  return null
+}
+
+function extractNodeBoundingSize(node: SceneNode): VehicleVector3Tuple | null {
+  const candidatePayloads: unknown[] = []
+  const nodeRecord = node as SceneNode & Record<string, unknown>
+  const userData = (node.userData ?? undefined) as Record<string, unknown> | undefined
+  const userDataKeys = ['instancedBounds', 'bounds', 'boundingBox', 'bbox', 'aabb', 'dimensions'] as const
+  userDataKeys.forEach((key) => {
+    const payload = userData?.[key]
+    if (payload) {
+      candidatePayloads.push(payload)
+    }
+  })
+  const nodeKeys = ['bounds', 'boundingBox', 'dimensions'] as const
+  nodeKeys.forEach((key) => {
+    const payload = nodeRecord[key]
+    if (payload) {
+      candidatePayloads.push(payload)
+    }
+  })
+  if (node.importMetadata && typeof node.importMetadata === 'object') {
+    const importRecord = node.importMetadata as Record<string, unknown>
+    if (importRecord.bounds) {
+      candidatePayloads.push(importRecord.bounds)
+    }
+  }
+  if (node.dynamicMesh && typeof node.dynamicMesh === 'object') {
+    const meshRecord = node.dynamicMesh as Record<string, unknown>
+    if (meshRecord.bounds) {
+      candidatePayloads.push(meshRecord.bounds)
+    }
+  }
+  Object.values(node.components ?? {}).forEach((component) => {
+    const propsRecord = component?.props as Record<string, unknown> | undefined
+    if (propsRecord?.bounds) {
+      candidatePayloads.push(propsRecord.bounds)
+    }
+    if (component?.metadata && typeof component.metadata === 'object') {
+      const metadataRecord = component.metadata as Record<string, unknown>
+      if (metadataRecord.bounds) {
+        candidatePayloads.push(metadataRecord.bounds)
+      }
+    }
+  })
+  for (const payload of candidatePayloads) {
+    const size = extractBoundsSizeFromPayload(payload)
+    if (size) {
+      return size
+    }
+  }
+  const scaleTuple = vectorLikeToTuple(node.scale)
+  if (scaleTuple.some((value) => Math.abs(value) > 0)) {
+    return scaleTuple.map((value) => Math.abs(value)) as VehicleVector3Tuple
+  }
+  return null
+}
+
+function getRadiusFromUnknown(payload: unknown): number | null {
+  if (!payload || typeof payload !== 'object') {
+    return null
+  }
+  const candidate = (payload as Record<string, unknown>).radius
+  if (isFiniteNumber(candidate) && candidate > 0) {
+    return candidate
+  }
+  return null
+}
+
+function extractNodeRadius(node: SceneNode): number | null {
+  const directRadius = getRadiusFromUnknown(node)
+  if (directRadius !== null) {
+    return directRadius
+  }
+  const userDataRadius = getRadiusFromUnknown(node.userData ?? undefined)
+  if (userDataRadius !== null) {
+    return userDataRadius
+  }
+  const dynamicMeshRadius = getRadiusFromUnknown(node.dynamicMesh ?? undefined)
+  if (dynamicMeshRadius !== null) {
+    return dynamicMeshRadius
+  }
+  for (const component of Object.values(node.components ?? {})) {
+    const propsRadius = getRadiusFromUnknown(component?.props)
+    if (propsRadius !== null) {
+      return propsRadius
+    }
+    const metadataRadius = getRadiusFromUnknown(component?.metadata)
+    if (metadataRadius !== null) {
+      return metadataRadius
+    }
+  }
+  return null
+}
+
+function autoPopulateWheelParametersFromNode(wheelId: string, node: SceneNode): void {
+  const boundsSize = extractNodeBoundingSize(node)
+  const height = boundsSize ? Math.abs(boundsSize[1]) : null
+  const safeHeight = typeof height === 'number' && Number.isFinite(height) && height > 0 ? height : null
+  const radiusFromNode = extractNodeRadius(node)
+  const patch: Partial<VehicleWheelProps> = {
+    suspensionStiffness: 20,
+  }
+  if (radiusFromNode !== null) {
+    patch.radius = radiusFromNode
+  } else if (safeHeight !== null) {
+    patch.radius = safeHeight * 0.5
+  }
+  if (safeHeight !== null) {
+    patch.suspensionRestLength = safeHeight
+  }
+  updateWheelEntry(wheelId, patch)
+}
+
+function autoFillWheelVectorsFromMatch(wheelId: string, match: NodeSearchResult): void {
   const nodePosition = vectorLikeToTuple(match.node.position)
   const parentPosition = match.parent ? vectorLikeToTuple(match.parent.position) : [0, 0, 0]
   const relativePosition = ensureFiniteTuple(subtractTuples(nodePosition, parentPosition))
@@ -107,6 +277,14 @@ function autoFillWheelVectors(wheelId: string, nodeId: string): void {
     directionLocal: [0, -1, 0],
     axleLocal: relativePosition,
   })
+}
+
+function autoFillWheelVectors(wheelId: string, nodeId: string): void {
+  const match = findNodeWithParent(nodes.value, nodeId)
+  if (!match) {
+    return
+  }
+  autoFillWheelVectorsFromMatch(wheelId, match)
 }
 
 function isWheelNodeAlreadyUsed(wheelId: string, candidateNodeId: string): boolean {
@@ -169,9 +347,11 @@ function handleWheelNodeChange(wheelId: string, value: string | null): void {
   if (normalizedValue && isWheelNodeAlreadyUsed(wheelId, normalizedValue)) {
     return
   }
+  const nodeMatch = normalizedValue ? findNodeWithParent(nodes.value, normalizedValue) : null
   updateWheelEntry(wheelId, { nodeId: normalizedValue })
-  if (normalizedValue) {
-    autoFillWheelVectors(wheelId, normalizedValue)
+  if (nodeMatch) {
+    autoFillWheelVectorsFromMatch(wheelId, nodeMatch)
+    autoPopulateWheelParametersFromNode(wheelId, nodeMatch.node)
   }
 }
 
@@ -382,7 +562,11 @@ function handleRemoveComponent(): void {
               v-for="wheel in wheelEntries"
               :key="wheel.id"
               class="vehicle-wheel-item"
-              :class="{ 'vehicle-wheel-item--active': wheelDetailsActiveId === wheel.id }"
+              :class="{
+                'vehicle-wheel-item--active': wheelDetailsActiveId === wheel.id,
+                'vehicle-wheel-item--front': wheel.isFrontWheel,
+                'vehicle-wheel-item--rear': !wheel.isFrontWheel,
+              }"
             >
               <div class="vehicle-wheel-item__content">
                 <div class="vehicle-wheel-item__details">
@@ -391,7 +575,7 @@ function handleRemoveComponent(): void {
                     class="vehicle-wheel-item__picker"
                     pick-hint="Click a wheel model in the scene"
                     selection-hint="Select the node in the scene to use as the wheel"
-                    placeholder=""
+                    placeholder="Wheel Node"
                     :model-value="wheel.nodeId ?? null"
                     :disabled="!isComponentEnabled"
                     @update:modelValue="(value) => handleWheelNodeChange(wheel.id, value as string | null)"
@@ -494,14 +678,24 @@ function handleRemoveComponent(): void {
 }
 
 .vehicle-wheel-item {
+  --wheel-accent-color: rgba(233, 236, 241, 0.28);
   border-radius: 10px;
-  border: 1px solid rgba(233, 236, 241, 0.28);
+  border: 1px solid var(--wheel-accent-color);
   background: rgb(0 0 0);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.vehicle-wheel-item--front {
+  --wheel-accent-color: rgba(93, 154, 255, 0.75);
+}
+
+.vehicle-wheel-item--rear {
+  --wheel-accent-color: rgba(78, 201, 142, 0.75);
 }
 
 .vehicle-wheel-item--active {
-  border-color: rgba(93, 154, 255, 0.7);
-  box-shadow: 0 0 0 1px rgba(93, 154, 255, 0.3);
+  border-color: var(--wheel-accent-color);
+  box-shadow: 0 0 0 1px var(--wheel-accent-color);
 }
 
 .vehicle-wheel-item__content {
