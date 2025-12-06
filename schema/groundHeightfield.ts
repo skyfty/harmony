@@ -65,7 +65,11 @@ export function buildGroundHeightfieldData(
 
   for (let column = 0; column < pointsX; column += 1) {
     const columnValues: number[] = []
-    for (let row = 0; row < pointsZ; row += 1) {
+
+    // Cannon heightfields use the first index for the X axis and the second for Y.
+    // Our ground grid increases Z when row increases, so we need to flip the row
+    // order to keep the physics heightfield aligned with the rendered geometry.
+    for (let row = pointsZ - 1; row >= 0; row -= 1) {
       const key = `${row}:${column}`
       const rawHeight = heightMap[key]
       const baseHeight = typeof rawHeight === 'number' && Number.isFinite(rawHeight) ? rawHeight : 0
@@ -74,6 +78,7 @@ export function buildGroundHeightfieldData(
       const normalized = Math.round(height * 1000)
       heightHash = (heightHash * 31 + normalized) >>> 0
     }
+
     matrix.push(columnValues)
   }
 

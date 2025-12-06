@@ -5799,9 +5799,11 @@ function buildHeightfieldDebugLines(
 		return null
 	}
 	const stepX = columnCount > 1 ? width / (columnCount - 1) : width
-	const stepZ = rowCount > 1 ? depth / (rowCount - 1) : depth
+	// The physics heightfield is rotated -90° around X, which flips the Z direction.
+	// Mirror that here so the debug lines line up with the rendered ground.
+	const stepZ = rowCount > 1 ? -depth / (rowCount - 1) : -depth
 	const originX = -width * 0.5
-	const originZ = -depth * 0.5
+	const originZ = depth * 0.5
 	const positions: number[] = []
 	const sampleHeight = (columnIndex: number, rowIndex: number): number => {
 		const column = shape.matrix[columnIndex]
