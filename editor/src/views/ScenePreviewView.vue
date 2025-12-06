@@ -564,7 +564,7 @@ const tempPosition = new THREE.Vector3()
 const tempVehicleSize = new THREE.Vector3()
 const tempCameraMatrix = new THREE.Matrix4()
 const cameraViewFrustum = new THREE.Frustum()
-const VEHICLE_ENGINE_FORCE = 1000
+const VEHICLE_ENGINE_FORCE = 500
 const VEHICLE_BRAKE_FORCE = 45
 const VEHICLE_STEER_ANGLE = THREE.MathUtils.degToRad(32)
 const tempVehicleCameraLook = new THREE.Vector3()
@@ -780,12 +780,6 @@ type VehicleInstance = {
 	hasChassisPositionSample: boolean
 }
 const vehicleInstances = new Map<string, VehicleInstance>()
-type WheelContactDebugSnapshot = {
-	inContact: boolean
-	contactBodyId: number | null
-	compression: number
-	lastLoggedAt: number
-}
 type GroundHeightfieldCacheEntry = { signature: string; shape: CANNON.Heightfield; offset: [number, number, number] }
 const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>()
 const groundHeightfieldOrientation = new CANNON.Quaternion()
@@ -3269,18 +3263,20 @@ function applyVehicleDriveForces(): void {
 	const engineForce = -vehicleDriveInput.throttle * VEHICLE_ENGINE_FORCE
 	const steeringValue = vehicleDriveInput.steering * VEHICLE_STEER_ANGLE
 	const brakeForce = vehicleDriveInput.brake * VEHICLE_BRAKE_FORCE
-	console.log('Applying vehicle drive forces:', {
-		engineForce,
-		steeringValue,
-		brakeForce,
-	})
+
 
 	for (let index = 0; index < vehicle.wheelInfos.length; index += 1) {
-		vehicle.applyEngineForce(engineForce, index)
-		const steerable = instance.steerableWheelIndices.includes(index)
-		vehicle.setSteeringValue(steerable ? steeringValue : 0, index)
 		vehicle.setBrake(brakeForce, index)
 	}
+	
+	for (let index = 0; index < vehicle.wheelInfos.length; index += 1) {
+		const steerable = instance.steerableWheelIndices.includes(index)
+		if (steerable) {
+			vehicle.setSteeringValue(steeringValue, index)
+			vehicle.applyEngineForce(engineForce, index)
+		}
+	}
+	
 }
 
 
@@ -6190,18 +6186,6 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 	})
 
 	syncVehicleBindingsForDocument(document)
-}
-
-function resolveNodeIdForBody(body: CANNON.Body | null | undefined): string | null {
-	if (!body) {
-		return null
-	}
-	for (const entry of rigidbodyInstances.values()) {
-		if (entry.body === body) {
-			return entry.nodeId
-		}
-	}
-	return null
 }
 
 function stepPhysicsWorld(delta: number): void {
