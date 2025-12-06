@@ -273,7 +273,6 @@
             <svg class="viewer-drive-pedal-icon" viewBox="0 0 32 32" role="img" aria-hidden="true">
               <path d="M16 6l10 10h-6v10h-8V16H6z" />
             </svg>
-            <text class="viewer-drive-pedal-label" aria-hidden="true">加速</text>
           </button>
           <button
             class="viewer-drive-pedal-button viewer-drive-pedal-button--brake"
@@ -288,7 +287,6 @@
             <svg class="viewer-drive-pedal-icon" viewBox="0 0 32 32" role="img" aria-hidden="true">
               <rect x="8" y="8" width="16" height="16" rx="4" ry="4" />
             </svg>
-            <text class="viewer-drive-pedal-label" aria-hidden="true">刹车</text>
           </button>
         </view>
       </view>
@@ -7533,15 +7531,6 @@ onUnmounted(() => {
   box-shadow:
     inset 0 0 18px rgba(18, 26, 58, 0.95),
     0 10px 22px rgba(18, 22, 44, 0.6);
-}
-
-.viewer-drive-pedal-label {
-  margin-top: 6px;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  color: rgba(244, 246, 255, 0.86);
-  text-transform: uppercase;
 }
 
 .viewer-drive-pedal-icon {
