@@ -23,6 +23,10 @@
     },
     {
       "path": "pages/about/index"
+    },
+
+    {
+      "path": "pages/test"
     }
   ],
   "subPackages": [

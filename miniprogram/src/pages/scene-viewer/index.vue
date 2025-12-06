@@ -417,6 +417,7 @@ import {
   disposeMaterialOverrides,
   type MaterialTextureAssignmentOptions,
 } from '@schema/material';
+
 type ResolvedAssetUrl = { url: string; mimeType?: string | null; dispose?: () => void }
 
 interface ScenePreviewPayload {
@@ -914,6 +915,12 @@ let physicsContactRestitution = DEFAULT_ENVIRONMENT_RESTITUTION;
 let physicsContactFriction = DEFAULT_ENVIRONMENT_FRICTION;
 const PHYSICS_FIXED_TIMESTEP = 1 / 60;
 const PHYSICS_MAX_SUB_STEPS = 5;
+const PHYSICS_SOLVER_ITERATIONS = 18
+const PHYSICS_SOLVER_TOLERANCE = 5e-4
+const PHYSICS_CONTACT_STIFFNESS = 1e9
+const PHYSICS_CONTACT_RELAXATION = 4
+const PHYSICS_FRICTION_STIFFNESS = 1e9
+const PHYSICS_FRICTION_RELAXATION = 4
 
 const behaviorRaycaster = new THREE.Raycaster();
 const behaviorPointer = new THREE.Vector2();
@@ -2741,21 +2748,6 @@ function extractRigidbodyShape(
   return payload?.shape ?? null;
 }
 
-function resolveNodeScaleVector(node: SceneNode | null | undefined): { x: number; y: number; z: number } {
-  const scale = node?.scale;
-  const normalize = (value: unknown) => {
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      return value;
-    }
-    return 1;
-  };
-  return {
-    x: normalize(scale?.x),
-    y: normalize(scale?.y),
-    z: normalize(scale?.z),
-  };
-}
-
 function attachRuntimeForNode(nodeId: string, object: THREE.Object3D) {
   const nodeState = resolveNodeById(nodeId);
   if (!nodeState) {
@@ -2765,16 +2757,10 @@ function attachRuntimeForNode(nodeId: string, object: THREE.Object3D) {
 }
 
 function indexSceneObjects(root: THREE.Object3D) {
-  nodeObjectMap.forEach((_object, nodeId) => {
-    releaseModelInstance(nodeId);
-  });
-  nodeObjectMap.clear();
-  resetPhysicsWorld();
   root.traverse((object) => {
     const nodeId = object.userData?.nodeId as string | undefined;
     if (nodeId) {
       nodeObjectMap.set(nodeId, object);
-      ensureRigidbodyBindingForObject(nodeId, object);
       attachRuntimeForNode(nodeId, object);
       const instancedAssetId = object.userData?.instancedAssetId as string | undefined;
       if (instancedAssetId) {
@@ -2840,9 +2826,23 @@ function ensurePhysicsWorld(): CANNON.World {
   rigidbodyContactMaterialKeys.clear();
   const world = new CANNON.World();
   world.gravity.copy(physicsGravity);
+
+	const solver = new CANNON.GSSolver()
+	solver.iterations = PHYSICS_SOLVER_ITERATIONS
+	solver.tolerance = PHYSICS_SOLVER_TOLERANCE
+	world.solver = solver
+	world.broadphase = new CANNON.SAPBroadphase(world)
+	world.allowSleep = true
+	world.quatNormalizeFast = false
+	world.quatNormalizeSkip = 0
+	world.defaultContactMaterial.friction = physicsContactFriction
+	world.defaultContactMaterial.restitution = physicsContactRestitution
+	world.defaultContactMaterial.contactEquationStiffness = PHYSICS_CONTACT_STIFFNESS
+	world.defaultContactMaterial.contactEquationRelaxation = PHYSICS_CONTACT_RELAXATION
+	world.defaultContactMaterial.frictionEquationStiffness = PHYSICS_FRICTION_STIFFNESS
+	world.defaultContactMaterial.frictionEquationRelaxation = PHYSICS_FRICTION_RELAXATION
+
   world.allowSleep = true;
-  world.defaultContactMaterial.friction = physicsContactFriction;
-  world.defaultContactMaterial.restitution = physicsContactRestitution;
   physicsWorld = world;
   return world;
 }
@@ -2941,35 +2941,135 @@ function normalizeHeightfieldMatrix(source: unknown): number[][] | null {
   return paddedColumns as number[][];
 }
 
-function createCannonShape(definition: RigidbodyPhysicsShape): CANNON.Shape | null {
-  if (definition.kind === 'box') {
-    const [x, y, z] = definition.halfExtents;
-    if (![x, y, z].every((value) => typeof value === 'number' && Number.isFinite(value) && value > 0)) {
-      return null;
-    }
-    return new CANNON.Box(new CANNON.Vec3(x, y, z));
+function sanitizeConvexFaces(
+  source: unknown,
+  vertexCount: number,
+): { faces: number[][]; invalidCount: number } {
+  const result: { faces: number[][]; invalidCount: number } = { faces: [], invalidCount: 0 }
+  if (!Array.isArray(source) || vertexCount < 4) {
+    return result
   }
-  if (definition.kind === 'convex') {
-    const vertices = (definition.vertices ?? []).map(([vx, vy, vz]) => new CANNON.Vec3(vx, vy, vz));
-    const faces = (definition.faces ?? []).map((face) => face.slice());
-    if (!vertices.length || !faces.length) {
-      return null;
+  source.forEach((face) => {
+    if (!Array.isArray(face) || face.length < 3) {
+      result.invalidCount += 1
+      return
     }
-    return new CANNON.ConvexPolyhedron({ vertices, faces });
-  }
-  if (definition.kind === 'heightfield') {
-    const matrix = normalizeHeightfieldMatrix(definition.matrix);
-    const elementSize = typeof definition.elementSize === 'number' && Number.isFinite(definition.elementSize)
-      ? definition.elementSize
-      : null;
-    if (!matrix || !elementSize || elementSize <= 0) {
-      return null;
+    const normalized: number[] = []
+    let invalid = false
+    for (let i = 0; i < face.length; i += 1) {
+      const raw = face[i]
+      const numeric = typeof raw === 'number' ? raw : Number(raw)
+      if (!Number.isFinite(numeric)) {
+        invalid = true
+        break
+      }
+      const index = Math.trunc(numeric)
+      if (index < 0 || index >= vertexCount) {
+        invalid = true
+        break
+      }
+      if (!normalized.length || normalized[normalized.length - 1] !== index) {
+        normalized.push(index)
+      }
     }
-    return new CANNON.Heightfield(matrix, { elementSize });
-  }
-  return null;
+    if (invalid) {
+      result.invalidCount += 1
+      return
+    }
+    const deduped = normalized.filter((value, index, array) => array.indexOf(value) === index)
+    if (deduped.length < 3) {
+      result.invalidCount += 1
+      return
+    }
+    result.faces.push(deduped)
+  })
+  return result
 }
 
+function createCannonShape(definition: RigidbodyPhysicsShape): CANNON.Shape | null {
+	if (definition.kind === 'box') {
+		const [x, y, z] = definition.halfExtents
+		if (![x, y, z].every((value) => typeof value === 'number' && Number.isFinite(value) && value > 0)) {
+			return null
+		}
+		return new CANNON.Box(new CANNON.Vec3(x, y, z))
+	}
+	if (definition.kind === 'convex') {
+		if (!Array.isArray(definition.vertices) || definition.vertices.length < 4) {
+			return null
+		}
+
+		// Merge duplicate vertices to avoid degenerate geometry
+		const vertices: CANNON.Vec3[] = []
+		const vertexMap = new Map<string, number>()
+		const indexMap = new Map<number, number>()
+
+		for (let i = 0; i < definition.vertices.length; i += 1) {
+			const tuple = definition.vertices[i]
+			const vx = Number(tuple?.[0])
+			const vy = Number(tuple?.[1])
+			const vz = Number(tuple?.[2])
+			if (![vx, vy, vz].every((value) => Number.isFinite(value))) {
+				return null
+			}
+			// Use a precision key to merge close vertices
+			const key = `${vx.toFixed(4)},${vy.toFixed(4)},${vz.toFixed(4)}`
+			if (vertexMap.has(key)) {
+				indexMap.set(i, vertexMap.get(key)!)
+			} else {
+				const newIndex = vertices.length
+				vertices.push(new CANNON.Vec3(vx, vy, vz))
+				vertexMap.set(key, newIndex)
+				indexMap.set(i, newIndex)
+			}
+		}
+
+		// Remap faces
+		const remappedFaces: number[][] = []
+		if (Array.isArray(definition.faces)) {
+			definition.faces.forEach((face) => {
+				if (Array.isArray(face)) {
+					const newFace: number[] = []
+					face.forEach((idx) => {
+						const numeric = typeof idx === 'number' ? idx : Number(idx)
+						if (Number.isFinite(numeric)) {
+							const originalIndex = Math.trunc(numeric)
+							if (indexMap.has(originalIndex)) {
+								newFace.push(indexMap.get(originalIndex)!)
+							}
+						}
+					})
+					if (newFace.length >= 3) {
+						remappedFaces.push(newFace)
+					}
+				}
+			})
+		}
+
+		const { faces, invalidCount } = sanitizeConvexFaces(remappedFaces, vertices.length)
+		if (!faces.length) {
+			return null
+		}
+		if (invalidCount) {
+			console.warn(
+				'[ScenePreview] Convex collider faces contain invalid vertex indices; skipped %d face(s).',
+				invalidCount,
+			)
+		}
+		return new CANNON.ConvexPolyhedron({ vertices, faces })
+	}
+	if (definition.kind === 'heightfield') {
+		const matrix = normalizeHeightfieldMatrix(definition.matrix)
+		const elementSize = typeof definition.elementSize === 'number' && Number.isFinite(definition.elementSize)
+			? definition.elementSize
+			: null
+		if (!matrix || !elementSize || elementSize <= 0) {
+			return null
+		}
+		return new CANNON.Heightfield(matrix, { elementSize })
+	}
+	return null
+}
 function formatRigidbodyMaterialKey(friction: number, restitution: number): string {
   return `${friction.toFixed(3)}:${restitution.toFixed(3)}`;
 }
@@ -3410,15 +3510,7 @@ function syncVehicleInstancesForDocument(document: SceneJsonExportDocument | nul
 }
 
 function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null): void {
-  if (!document) {
-    resetPhysicsWorld();
-    return;
-  }
   const rigidbodyNodes = collectRigidbodyNodes(document.nodes);
-  if (!rigidbodyNodes.length) {
-    resetPhysicsWorld();
-    return;
-  }
   const world = ensurePhysicsWorld();
   const desiredIds = new Set<string>();
   rigidbodyNodes.forEach((node) => {
@@ -4131,7 +4223,6 @@ function syncBehaviorProximityCandidate(nodeId: string): void {
 }
 
 function refreshBehaviorProximityCandidates(): void {
-  resetBehaviorProximity();
   previewNodeMap.forEach((_node, nodeId) => {
     syncBehaviorProximityCandidate(nodeId);
   });
@@ -5012,30 +5103,6 @@ function handleVehicleDriveControlTouch(
 type VehicleDrivePreparationResult =
   | { success: true; instance: VehicleInstance }
   | { success: false; message: string };
-
-function prepareVehicleDriveTarget(nodeId: string): VehicleDrivePreparationResult {
-  const node = resolveNodeById(nodeId);
-  if (!node) {
-    return { success: false, message: '车辆节点不存在' };
-  }
-  const hasRigidbody = Boolean(resolveRigidbodyComponent(node));
-  const hasVehicle = Boolean(resolveVehicleComponent(node));
-  if (!hasRigidbody || !hasVehicle) {
-    return { success: false, message: '目标缺少车辆或刚体组件' };
-  }
-  if (!physicsWorld) {
-    ensurePhysicsWorld();
-  }
-  ensureVehicleBindingForNode(nodeId);
-  const instance = vehicleInstances.get(nodeId);
-  if (!instance) {
-    return { success: false, message: '车辆实例尚未准备好' };
-  }
-  if (!rigidbodyInstances.has(nodeId)) {
-    return { success: false, message: '车辆缺少可驱动的刚体' };
-  }
-  return { success: true, instance };
-}
 
 
 function handleVehicleDriveCameraToggle(): void {
@@ -6663,7 +6730,6 @@ async function ensureRendererContext(result: UseCanvasResult) {
   scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY;
 
   scene.add(instancedMeshGroup);
-  clearInstancedMeshes();
   stopInstancedMeshSubscription?.();
   stopInstancedMeshSubscription = subscribeInstancedMeshes((mesh) => {
     attachInstancedMesh(mesh);
@@ -6685,7 +6751,6 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   activeCameraWatchTween = null;
   const { canvas } = result;
   currentDocument = payload.document;
-  resetAssetResolutionCaches();
   const environmentSettings = resolveDocumentEnvironment(payload.document);
   if (behaviorAlertToken.value) {
     resolveBehaviorToken(behaviorAlertToken.value, {
@@ -6693,39 +6758,11 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
       message: '场景重新初始化',
     });
   }
-  if (lanternEventToken.value) {
-    closeLanternOverlay({ type: 'abort', message: '场景重新初始化' });
-  } else {
-    resetLanternOverlay();
-  }
-  hidePurposeControls();
-  disposeEnvironmentResources();
-  pendingEnvironmentSettings = cloneEnvironmentSettingsLocal(environmentSettings);
-  releaseTerrainScatterInstances();
-  nodeObjectMap.forEach((_object, nodeId) => {
-    releaseModelInstance(nodeId);
-  });
-  nodeObjectMap.clear();
-  resetPhysicsWorld();
-  clearInstancedMeshes();
-  scene.children.forEach((child) => disposeObject(child));
-  disposeMaterialTextureCache();
-  scene.clear();
-  scene.add(instancedMeshGroup);
-  clearInstancedMeshes();
-  sceneGraphRoot = null;
-  deferredInstancingNodeIds.clear();
-  lazyPlaceholderStates.clear();
-  activeLazyLoadCount = 0;
-  sunDirectionalLight = null;
-  warnings.value = [];
-
   const ambientLight = ensureEnvironmentAmbientLight();
   if (ambientLight) {
     ambientLight.color.set(DEFAULT_ENVIRONMENT_AMBIENT_COLOR);
     ambientLight.intensity = DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY;
   }
-
   applySunDirectionToSunLight();
 
   const hemisphericLight = new THREE.HemisphereLight('#d4d8ff', '#f5f2ef', 0.3);
@@ -6814,9 +6851,6 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   }
   sceneGraphRoot = graph.root;
   scene.add(graph.root);
-
-  resetBehaviorRuntime();
-  previewComponentManager.reset();
   rebuildPreviewNodeMap(payload.document.nodes);
   previewComponentManager.syncScene(payload.document.nodes ?? []);
   indexSceneObjects(graph.root);
@@ -6826,7 +6860,6 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   initializeLazyPlaceholders(payload.document);
   syncPhysicsBodiesForDocument(payload.document);
   await syncTerrainScatterInstances(payload.document, resourceCache);
-
 
   const skyboxSettings = resolveSceneSkybox(payload.document);
   applySkyboxSettings(skyboxSettings);
