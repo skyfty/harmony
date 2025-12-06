@@ -193,56 +193,100 @@
           </view>
           <text class="viewer-drive-node">{{ vehicleDriveUi.label }}</text>
         </view>
-        <view class="viewer-drive-grid">
-          <view
-            class="viewer-drive-button viewer-drive-button--wide"
-            :class="{ 'is-active': vehicleDriveUi.forwardActive }"
-            role="button"
-            @touchstart.stop.prevent="handleVehicleDriveControlTouch('forward', true, $event)"
-            @touchend.stop.prevent="handleVehicleDriveControlTouch('forward', false, $event)"
-            @touchcancel.stop.prevent="handleVehicleDriveControlTouch('forward', false, $event)"
-          >
-            <text>前进</text>
+        <view class="viewer-drive-controls">
+          <view class="viewer-drive-steering-column">
+            <view
+              id="viewer-steering-wheel"
+              ref="steeringWheelRef"
+              class="viewer-drive-steering-wheel"
+              :style="vehicleSteeringWheelStyle"
+              role="slider"
+              aria-label="方向盘"
+              aria-valuemin="-135"
+              aria-valuemax="135"
+              :aria-valuenow="Math.round(vehicleDriveInput.steering * 135)"
+              @touchstart.stop.prevent="handleSteeringWheelTouchStart"
+              @touchmove.stop.prevent="handleSteeringWheelTouchMove"
+              @touchend.stop.prevent="handleSteeringWheelTouchEnd"
+              @touchcancel.stop.prevent="handleSteeringWheelTouchEnd"
+            >
+              <view class="viewer-drive-steering-spokes"></view>
+              <view class="viewer-drive-steering-hub">
+                <text>{{ vehicleSteeringAngleLabel }}</text>
+              </view>
+            </view>
+            <button
+              class="viewer-drive-camera-toggle"
+              type="default"
+              hover-class="none"
+              @tap="handleVehicleDriveCameraToggle"
+            >
+              <text>{{ vehicleDriveCameraToggleLabel }}</text>
+            </button>
           </view>
-          <view
-            class="viewer-drive-button viewer-drive-button--wide"
-            :class="{ 'is-active': vehicleDriveUi.leftActive }"
-            role="button"
-            @touchstart.stop.prevent="handleVehicleDriveControlTouch('left', true, $event)"
-            @touchend.stop.prevent="handleVehicleDriveControlTouch('left', false, $event)"
-            @touchcancel.stop.prevent="handleVehicleDriveControlTouch('left', false, $event)"
-          >
-            <text>左转</text>
-          </view>
-          <view
-            class="viewer-drive-button viewer-drive-button--brake"
-            :class="{ 'is-active': vehicleDriveUi.brakeActive }"
-            role="button"
-            @touchstart.stop.prevent="handleVehicleDriveControlTouch('brake', true, $event)"
-            @touchend.stop.prevent="handleVehicleDriveControlTouch('brake', false, $event)"
-            @touchcancel.stop.prevent="handleVehicleDriveControlTouch('brake', false, $event)"
-          >
-            <text>刹车</text>
-          </view>
-          <view
-            class="viewer-drive-button"
-            :class="{ 'is-active': vehicleDriveUi.rightActive }"
-            role="button"
-            @touchstart.stop.prevent="handleVehicleDriveControlTouch('right', true, $event)"
-            @touchend.stop.prevent="handleVehicleDriveControlTouch('right', false, $event)"
-            @touchcancel.stop.prevent="handleVehicleDriveControlTouch('right', false, $event)"
-          >
-            <text>右转</text>
-          </view>
-          <view
-            class="viewer-drive-button"
-            :class="{ 'is-active': vehicleDriveUi.backwardActive }"
-            role="button"
-            @touchstart.stop.prevent="handleVehicleDriveControlTouch('backward', true, $event)"
-            @touchend.stop.prevent="handleVehicleDriveControlTouch('backward', false, $event)"
-            @touchcancel.stop.prevent="handleVehicleDriveControlTouch('backward', false, $event)"
-          >
-            <text>后退</text>
+          <view class="viewer-drive-grid-column">
+            <view class="viewer-drive-grid">
+              <view
+                class="viewer-drive-button viewer-drive-button--wide"
+                :class="{ 'is-active': vehicleDriveUi.forwardActive }"
+                role="button"
+                @touchstart.stop.prevent="handleVehicleDriveControlTouch('forward', true, $event)"
+                @touchend.stop.prevent="handleVehicleDriveControlTouch('forward', false, $event)"
+                @touchcancel.stop.prevent="handleVehicleDriveControlTouch('forward', false, $event)"
+              >
+                <text>前进</text>
+              </view>
+              <view
+                class="viewer-drive-button viewer-drive-button--wide"
+                :class="{ 'is-active': vehicleDriveUi.leftActive }"
+                role="button"
+                @touchstart.stop.prevent="handleVehicleDriveControlTouch('left', true, $event)"
+                @touchend.stop.prevent="handleVehicleDriveControlTouch('left', false, $event)"
+                @touchcancel.stop.prevent="handleVehicleDriveControlTouch('left', false, $event)"
+              >
+                <text>左转</text>
+              </view>
+              <view
+                class="viewer-drive-button viewer-drive-button--brake"
+                :class="{ 'is-active': vehicleDriveUi.brakeActive }"
+                role="button"
+                @touchstart.stop.prevent="handleVehicleDriveControlTouch('brake', true, $event)"
+                @touchend.stop.prevent="handleVehicleDriveControlTouch('brake', false, $event)"
+                @touchcancel.stop.prevent="handleVehicleDriveControlTouch('brake', false, $event)"
+              >
+                <text>刹车</text>
+              </view>
+              <view
+                class="viewer-drive-button"
+                :class="{ 'is-active': vehicleDriveUi.rightActive }"
+                role="button"
+                @touchstart.stop.prevent="handleVehicleDriveControlTouch('right', true, $event)"
+                @touchend.stop.prevent="handleVehicleDriveControlTouch('right', false, $event)"
+                @touchcancel.stop.prevent="handleVehicleDriveControlTouch('right', false, $event)"
+              >
+                <text>右转</text>
+              </view>
+              <view
+                class="viewer-drive-button"
+                :class="{ 'is-active': vehicleDriveUi.backwardActive }"
+                role="button"
+                @touchstart.stop.prevent="handleVehicleDriveControlTouch('backward', true, $event)"
+                @touchend.stop.prevent="handleVehicleDriveControlTouch('backward', false, $event)"
+                @touchcancel.stop.prevent="handleVehicleDriveControlTouch('backward', false, $event)"
+              >
+                <text>后退</text>
+              </view>
+            </view>
+            <button
+              class="viewer-drive-reset"
+              :class="{ 'is-busy': vehicleDriveResetBusy }"
+              type="default"
+              hover-class="none"
+              :disabled="vehicleDriveResetBusy"
+              @tap="handleVehicleDriveResetTap"
+            >
+              <text>{{ vehicleDriveResetBusy ? '重置中…' : '重置车辆' }}</text>
+            </button>
           </view>
         </view>
         <button
@@ -267,7 +311,7 @@
 </template>
 
 <script setup lang="ts">
-import { effectScope, watchEffect, ref, computed, onUnmounted, watch, reactive, nextTick, type ComponentPublicInstance } from 'vue';
+import { effectScope, watchEffect, ref, computed, onUnmounted, watch, reactive, nextTick, getCurrentInstance, type ComponentPublicInstance } from 'vue';
 import { onLoad, onUnload, onReady } from '@dcloudio/uni-app';
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
@@ -833,7 +877,18 @@ const rigidbodyInstances = new Map<string, RigidbodyInstance>();
 type RigidbodyMaterialEntry = { material: CANNON.Material; friction: number; restitution: number };
 const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>();
 const rigidbodyContactMaterialKeys = new Set<string>();
-type VehicleInstance = { nodeId: string; vehicle: CANNON.RaycastVehicle; wheelCount: number };
+type VehicleInstance = {
+  nodeId: string;
+  vehicle: CANNON.RaycastVehicle;
+  wheelCount: number;
+  steerableWheelIndices: number[];
+  axisRightIndex: 0 | 1 | 2;
+  axisUpIndex: 0 | 1 | 2;
+  axisForwardIndex: 0 | 1 | 2;
+  axisRight: THREE.Vector3;
+  axisUp: THREE.Vector3;
+  axisForward: THREE.Vector3;
+};
 const vehicleInstances = new Map<string, VehicleInstance>();
 type GroundHeightfieldCacheEntry = { signature: string; shape: CANNON.Heightfield; offset: [number, number, number] };
 const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>();
@@ -879,6 +934,16 @@ const tempDriveForward = new THREE.Vector3();
 const tempDriveRight = new THREE.Vector3();
 const tempDriveCameraMatrix = new THREE.Matrix4();
 const tempDriveCameraQuaternion = new THREE.Quaternion();
+const tempVehicleFollowAnchor = new THREE.Vector3();
+const tempVehicleFollowPosition = new THREE.Vector3();
+const tempVehicleFollowTarget = new THREE.Vector3();
+const tempVehicleFollowOffset = new THREE.Vector3();
+const tempVehicleResetPosition = new THREE.Vector3();
+const tempVehicleResetQuaternion = new THREE.Quaternion();
+const tempVehicleResetMatrix = new THREE.Matrix4();
+const tempVehicleAxisRight = new THREE.Vector3();
+const tempVehicleAxisUp = new THREE.Vector3();
+const tempVehicleAxisForward = new THREE.Vector3();
 const VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE = 6;
 const VEHICLE_CAMERA_FALLBACK_HEIGHT = 1.35;
 const VEHICLE_CAMERA_FALLBACK_HEIGHT_RATIO = 0.45;
@@ -889,6 +954,27 @@ const VEHICLE_EXIT_LATERAL_MIN = 1.25;
 const VEHICLE_EXIT_FORWARD_MIN = 1.25;
 const VEHICLE_EXIT_VERTICAL_MIN = 0.6;
 const VEHICLE_SIZE_FALLBACK = { width: 2.4, height: 1.4, length: 4.2 };
+const VEHICLE_ENGINE_FORCE = 500;
+const VEHICLE_BRAKE_FORCE = 45;
+const VEHICLE_STEER_ANGLE = THREE.MathUtils.degToRad(32);
+const VEHICLE_FOLLOW_DISTANCE_MIN = 4;
+const VEHICLE_FOLLOW_DISTANCE_MAX = 26;
+const VEHICLE_FOLLOW_HEIGHT_RATIO = 0.4;
+const VEHICLE_FOLLOW_HEIGHT_MIN = 1.5;
+const VEHICLE_FOLLOW_DISTANCE_LENGTH_RATIO = 1.25;
+const VEHICLE_FOLLOW_DISTANCE_WIDTH_RATIO = 0.35;
+const VEHICLE_FOLLOW_DISTANCE_DIAGONAL_RATIO = 0.2;
+const VEHICLE_FOLLOW_TARGET_LIFT_RATIO = 0.3;
+const VEHICLE_FOLLOW_TARGET_LIFT_MIN = 0.6;
+const VEHICLE_FOLLOW_TARGET_FORWARD_RATIO = 0.35;
+const VEHICLE_FOLLOW_TARGET_FORWARD_MIN = 1.2;
+const VEHICLE_FOLLOW_POSITION_LERP_SPEED = 8;
+const VEHICLE_FOLLOW_TARGET_LERP_SPEED = 10;
+const STEERING_WHEEL_MAX_DEGREES = 135;
+const STEERING_WHEEL_RETURN_SPEED = 4;
+const STEERING_KEYBOARD_RETURN_SPEED = 7;
+const STEERING_KEYBOARD_CATCH_SPEED = 18;
+const VEHICLE_RESET_LIFT = 0.75;
 const cameraRotationAnchor = new THREE.Vector3();
 let programmaticCameraMutationDepth = 0;
 let suppressSelfYawRecenter = false;
@@ -997,6 +1083,23 @@ type VehicleDriveControlFlags = {
   brake: boolean;
 };
 
+type VehicleDriveInputState = {
+  throttle: number;
+  steering: number;
+  brake: number;
+};
+
+type VehicleDriveCameraMode = 'first-person' | 'follow';
+type VehicleDriveCameraFollowState = {
+  desiredPosition: THREE.Vector3;
+  currentPosition: THREE.Vector3;
+  desiredTarget: THREE.Vector3;
+  currentTarget: THREE.Vector3;
+  initialized: boolean;
+};
+
+const pageInstance = getCurrentInstance();
+
 const vehicleDriveActive = ref(false);
 const vehicleDriveNodeId = ref<string | null>(null);
 const vehicleDriveToken = ref<string | null>(null);
@@ -1010,6 +1113,48 @@ const vehicleDriveInputFlags = reactive<VehicleDriveControlFlags>({
   left: false,
   right: false,
   brake: false,
+});
+const vehicleDriveInput = reactive<VehicleDriveInputState>({
+  throttle: 0,
+  steering: 0,
+  brake: 0,
+});
+const vehicleDriveCameraMode = ref<VehicleDriveCameraMode>('follow');
+const vehicleDriveCameraFollowState = reactive<VehicleDriveCameraFollowState>({
+  desiredPosition: new THREE.Vector3(),
+  currentPosition: new THREE.Vector3(),
+  desiredTarget: new THREE.Vector3(),
+  currentTarget: new THREE.Vector3(),
+  initialized: false,
+});
+const steeringWheelRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
+const steeringWheelValue = ref(0);
+const steeringKeyboardValue = ref(0);
+const steeringKeyboardTarget = ref(0);
+const steeringWheelState = reactive({
+  dragging: false,
+  pointerId: -1,
+  startPointerAngle: 0,
+  startWheelAngle: 0,
+});
+const steeringWheelMetrics = reactive({
+  ready: false,
+  centerX: 0,
+  centerY: 0,
+});
+const vehicleSteeringWheelStyle = computed(() => ({
+  transform: `rotate(${vehicleDriveInput.steering * STEERING_WHEEL_MAX_DEGREES}deg)`,
+}));
+const vehicleSteeringAngleLabel = computed(() => `${Math.round(vehicleDriveInput.steering * STEERING_WHEEL_MAX_DEGREES)}°`);
+const vehicleDriveCameraToggleLabel = computed(() =>
+  vehicleDriveCameraMode.value === 'follow' ? '座舱视角' : '跟随视角',
+);
+const vehicleDriveResetBusy = ref(false);
+
+type CameraViewMode = 'level' | 'watching';
+const cameraViewState = reactive<{ mode: CameraViewMode; targetNodeId: string | null }>({
+  mode: 'level',
+  targetNodeId: null,
 });
 
 const vehicleDriveCameraRestoreState = {
@@ -1076,10 +1221,27 @@ const vehicleDrivePrompt = computed(() => {
     busy: vehicleDrivePromptBusy.value,
   } as const;
 });
-type CameraViewMode = 'level' | 'watching';
-const cameraViewState = reactive<{ mode: CameraViewMode; targetNodeId: string | null }>({
-  mode: 'level',
-  targetNodeId: null,
+
+watch(
+  () => vehicleDriveUi.value.visible,
+  (visible) => {
+    if (visible) {
+      refreshSteeringWheelMetrics();
+    } else {
+      setSteeringWheelDragActive(false);
+    }
+  },
+);
+
+watch(vehicleDriveCameraMode, () => {
+  vehicleDriveCameraFollowState.initialized = false;
+});
+
+watch(vehicleDriveActive, (active) => {
+  if (!active) {
+    vehicleDriveCameraMode.value = 'follow';
+    vehicleDriveCameraFollowState.initialized = false;
+  }
 });
 const isCameraCaged = ref(false);
 
@@ -2716,7 +2878,11 @@ function resetPhysicsWorld(): void {
   pendingVehicleDriveEvent.value = null;
   vehicleDrivePromptBusy.value = false;
   vehicleDriveExitBusy.value = false;
-  resetVehicleDriveInputFlags();
+  vehicleDriveResetBusy.value = false;
+  resetVehicleDriveInputs();
+  vehicleDriveCameraMode.value = 'follow';
+  vehicleDriveCameraFollowState.initialized = false;
+  setSteeringWheelDragActive(false);
   setVehicleDriveUiOverride('hide');
 }
 
@@ -2983,6 +3149,16 @@ function clampVehicleAxisIndex(value: number): 0 | 1 | 2 {
   return 0;
 }
 
+const VEHICLE_AXIS_VECTORS: readonly [THREE.Vector3, THREE.Vector3, THREE.Vector3] = [
+  new THREE.Vector3(1, 0, 0),
+  new THREE.Vector3(0, 1, 0),
+  new THREE.Vector3(0, 0, 1),
+];
+
+function resolveVehicleAxisVector(index: 0 | 1 | 2): THREE.Vector3 {
+  return VEHICLE_AXIS_VECTORS[index];
+}
+
 type VehicleVectorValue = Vector3Like | number[] | null | undefined;
 
 function toFiniteVectorComponent(value: unknown): number | null {
@@ -3035,35 +3211,46 @@ function createVehicleInstance(
   const rightAxis = clampVehicleAxisIndex(props.indexRightAxis);
   const upAxis = clampVehicleAxisIndex(props.indexUpAxis);
   const forwardAxis = clampVehicleAxisIndex(props.indexForwardAxis);
+  const axisRightVector = resolveVehicleAxisVector(rightAxis).clone();
+  const axisUpVector = resolveVehicleAxisVector(upAxis).clone();
+  const axisForwardVector = resolveVehicleAxisVector(forwardAxis).clone();
   const wheelEntries = (props.wheels ?? [])
     .map((wheel) => {
       const point = tupleToVec3(wheel.chassisConnectionPointLocal);
-      if (!point) {
+      const direction = tupleToVec3(wheel.directionLocal, DEFAULT_DIRECTION);
+      const axle = tupleToVec3(wheel.axleLocal, DEFAULT_AXLE);
+      if (!point || !direction || !axle) {
         return null;
       }
-      return { config: wheel, point };
+      return { config: wheel, point, direction, axle };
     })
-    .filter((entry): entry is { config: VehicleWheelProps; point: CANNON.Vec3 } => Boolean(entry));
+    .filter((entry): entry is { config: VehicleWheelProps; point: CANNON.Vec3; direction: CANNON.Vec3; axle: CANNON.Vec3 } => Boolean(entry));
   if (!wheelEntries.length) {
     return null;
   }
   const wheelCount = wheelEntries.length;
+  let steerableWheelIndices = wheelEntries.reduce<number[]>((indices, entry, index) => {
+    if (entry.config.isFrontWheel) {
+      indices.push(index);
+    }
+    return indices;
+  }, []);
+  if (!steerableWheelIndices.length) {
+    steerableWheelIndices = wheelCount >= 2
+      ? [0, 1].filter((index) => index < wheelCount)
+      : Array.from({ length: wheelCount }, (_unused, index) => index);
+  }
   const vehicle = new CANNON.RaycastVehicle({
     chassisBody: rigidbody.body,
     indexRightAxis: rightAxis,
     indexUpAxis: upAxis,
     indexForwardAxis: forwardAxis,
   });
-  wheelEntries.forEach(({ config, point }) => {
-    const directionVec = tupleToVec3(config.directionLocal, DEFAULT_DIRECTION);
-    const axleVec = tupleToVec3(config.axleLocal, DEFAULT_AXLE);
-    if (!directionVec || !axleVec) {
-      return;
-    }
+  wheelEntries.forEach(({ config, point, direction, axle }) => {
     vehicle.addWheel({
       chassisConnectionPointLocal: point,
-      directionLocal: directionVec,
-      axleLocal: axleVec,
+      directionLocal: direction,
+      axleLocal: axle,
       suspensionRestLength: config.suspensionRestLength,
       suspensionStiffness: config.suspensionStiffness,
       dampingRelaxation: config.dampingRelaxation,
@@ -3079,7 +3266,18 @@ function createVehicleInstance(
     });
   });
   vehicle.addToWorld(physicsWorld);
-  return { nodeId: node.id, vehicle, wheelCount };
+  return {
+    nodeId: node.id,
+    vehicle,
+    wheelCount,
+    steerableWheelIndices,
+    axisRightIndex: rightAxis,
+    axisUpIndex: upAxis,
+    axisForwardIndex: forwardAxis,
+    axisRight: axisRightVector,
+    axisUp: axisUpVector,
+    axisForward: axisForwardVector,
+  };
 }
 
 function removeVehicleInstance(nodeId: string): void {
@@ -4587,12 +4785,211 @@ function setVehicleDriveUiOverride(mode: 'auto' | 'show' | 'hide'): void {
   vehicleDriveUiOverride.value = mode;
 }
 
-function resetVehicleDriveInputFlags(): void {
+function clampSteeringScalar(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(-1, Math.min(1, value));
+}
+
+function syncVehicleSteeringValue(): void {
+  if (steeringKeyboardValue.value !== 0) {
+    vehicleDriveInput.steering = clampSteeringScalar(steeringKeyboardValue.value);
+    return;
+  }
+  vehicleDriveInput.steering = clampSteeringScalar(steeringWheelValue.value);
+}
+
+function updateSteeringKeyboardValue(): void {
+  let target = 0;
+  if (vehicleDriveInputFlags.left !== vehicleDriveInputFlags.right) {
+    target = vehicleDriveInputFlags.left ? 1 : -1;
+  }
+  steeringKeyboardTarget.value = target;
+  if (target !== 0) {
+    steeringKeyboardValue.value = target;
+  }
+}
+
+function resetSteeringWheelValue(): void {
+  steeringWheelValue.value = 0;
+  if (!steeringWheelState.dragging) {
+    syncVehicleSteeringValue();
+  }
+}
+
+function setSteeringWheelDragActive(active: boolean): void {
+  steeringWheelState.dragging = active;
+  if (!active) {
+    steeringWheelState.pointerId = -1;
+  }
+}
+
+function refreshSteeringWheelMetrics(): void {
+  nextTick(() => {
+    const query = uni.createSelectorQuery();
+    if (typeof query.in === 'function') {
+      query.in((pageInstance?.proxy as unknown) ?? null);
+    }
+    query
+      .select('#viewer-steering-wheel')
+      .boundingClientRect((rect) => {
+        if (!rect) {
+          steeringWheelMetrics.ready = false;
+          return;
+        }
+        steeringWheelMetrics.centerX = rect.left + rect.width / 2;
+        steeringWheelMetrics.centerY = rect.top + rect.height / 2;
+        steeringWheelMetrics.ready = true;
+      })
+      .exec();
+  });
+}
+
+function computeSteeringWheelPointerAngle(touch: Touch | null): number | null {
+  if (!touch || !steeringWheelMetrics.ready) {
+    return null;
+  }
+  const clientX = 'clientX' in touch ? touch.clientX : (touch as unknown as { x?: number }).x || 0;
+  const clientY = 'clientY' in touch ? touch.clientY : (touch as unknown as { y?: number }).y || 0;
+  const dx = clientX - steeringWheelMetrics.centerX;
+  const dy = clientY - steeringWheelMetrics.centerY;
+  return Math.atan2(dy, dx);
+}
+
+function approachSteeringValue(current: number, target: number, rate: number, delta: number): number {
+  if (!Number.isFinite(current) || !Number.isFinite(target) || !Number.isFinite(delta) || rate <= 0 || delta <= 0) {
+    return target;
+  }
+  const difference = target - current;
+  if (Math.abs(difference) <= 1e-4) {
+    return target;
+  }
+  const maxStep = rate * delta;
+  if (Math.abs(difference) <= maxStep) {
+    return target;
+  }
+  return current + Math.sign(difference) * maxStep;
+}
+
+function updateSteeringAutoCenter(delta: number): void {
+  if (!Number.isFinite(delta) || delta <= 0) {
+    return;
+  }
+  let dirty = false;
+  if (!steeringWheelState.dragging) {
+    const nextWheel = approachSteeringValue(steeringWheelValue.value, 0, STEERING_WHEEL_RETURN_SPEED, delta);
+    if (nextWheel !== steeringWheelValue.value) {
+      steeringWheelValue.value = nextWheel;
+      dirty = true;
+    }
+  }
+  const target = steeringKeyboardTarget.value;
+  const keyboardRate = target === 0 ? STEERING_KEYBOARD_RETURN_SPEED : STEERING_KEYBOARD_CATCH_SPEED;
+  const nextKeyboard = approachSteeringValue(steeringKeyboardValue.value, target, keyboardRate, delta);
+  if (nextKeyboard !== steeringKeyboardValue.value) {
+    steeringKeyboardValue.value = clampSteeringScalar(nextKeyboard);
+    dirty = true;
+  }
+  if (dirty) {
+    syncVehicleSteeringValue();
+  }
+}
+
+function extractTouchById(event: TouchEvent, identifier: number): Touch | null {
+  const touches: readonly Touch[] = [...Array.from(event.changedTouches || [])];
+  for (const touch of touches) {
+    if (touch.identifier === identifier) {
+      return touch;
+    }
+  }
+  const activeTouches: readonly Touch[] = [...Array.from(event.touches || [])];
+  for (const touch of activeTouches) {
+    if (touch.identifier === identifier) {
+      return touch;
+    }
+  }
+  return null;
+}
+
+function handleSteeringWheelTouchStart(event: TouchEvent): void {
+  if (!vehicleDriveActive.value) {
+    return;
+  }
+  const touch = event.changedTouches?.[0] ?? null;
+  if (!touch) {
+    return;
+  }
+  if (!steeringWheelMetrics.ready) {
+    refreshSteeringWheelMetrics();
+  }
+  const pointerAngle = computeSteeringWheelPointerAngle(touch);
+  if (pointerAngle === null) {
+    return;
+  }
+  steeringWheelState.startPointerAngle = pointerAngle;
+  steeringWheelState.startWheelAngle = steeringWheelValue.value * THREE.MathUtils.degToRad(STEERING_WHEEL_MAX_DEGREES);
+  steeringWheelState.pointerId = touch.identifier;
+  setSteeringWheelDragActive(true);
+}
+
+function handleSteeringWheelTouchMove(event: TouchEvent): void {
+  if (!steeringWheelState.dragging || steeringWheelState.pointerId === -1) {
+    return;
+  }
+  const touch = extractTouchById(event, steeringWheelState.pointerId);
+  if (!touch) {
+    return;
+  }
+  const angle = computeSteeringWheelPointerAngle(touch);
+  if (angle === null) {
+    return;
+  }
+  const delta = angle - steeringWheelState.startPointerAngle;
+  const nextAngle = steeringWheelState.startWheelAngle + delta;
+  const clampedAngle = Math.max(
+    THREE.MathUtils.degToRad(-STEERING_WHEEL_MAX_DEGREES),
+    Math.min(THREE.MathUtils.degToRad(STEERING_WHEEL_MAX_DEGREES), nextAngle),
+  );
+  steeringWheelValue.value = clampSteeringScalar(clampedAngle / THREE.MathUtils.degToRad(STEERING_WHEEL_MAX_DEGREES));
+  syncVehicleSteeringValue();
+}
+
+function handleSteeringWheelTouchEnd(event: TouchEvent): void {
+  if (steeringWheelState.pointerId === -1) {
+    return;
+  }
+  const touch = extractTouchById(event, steeringWheelState.pointerId);
+  if (!touch) {
+    return;
+  }
+  setSteeringWheelDragActive(false);
+}
+
+function updateVehicleDriveInputFromFlags(): void {
+  vehicleDriveInput.throttle = vehicleDriveInputFlags.forward === vehicleDriveInputFlags.backward
+    ? 0
+    : vehicleDriveInputFlags.forward
+      ? 1
+      : -1;
+  vehicleDriveInput.brake = vehicleDriveInputFlags.brake ? 1 : 0;
+  updateSteeringKeyboardValue();
+  syncVehicleSteeringValue();
+}
+
+function resetVehicleDriveInputs(): void {
   vehicleDriveInputFlags.forward = false;
   vehicleDriveInputFlags.backward = false;
   vehicleDriveInputFlags.left = false;
   vehicleDriveInputFlags.right = false;
   vehicleDriveInputFlags.brake = false;
+  steeringKeyboardValue.value = 0;
+  steeringKeyboardTarget.value = 0;
+  resetSteeringWheelValue();
+  vehicleDriveInput.throttle = 0;
+  vehicleDriveInput.brake = 0;
+  vehicleDriveInput.steering = 0;
+  updateVehicleDriveInputFromFlags();
 }
 
 function handleVehicleDriveControlTouch(
@@ -4609,6 +5006,123 @@ function handleVehicleDriveControlTouch(
     }
   }
   vehicleDriveInputFlags[key] = active;
+  updateVehicleDriveInputFromFlags();
+}
+
+type VehicleDrivePreparationResult =
+  | { success: true; instance: VehicleInstance }
+  | { success: false; message: string };
+
+function prepareVehicleDriveTarget(nodeId: string): VehicleDrivePreparationResult {
+  const node = resolveNodeById(nodeId);
+  if (!node) {
+    return { success: false, message: '车辆节点不存在' };
+  }
+  const hasRigidbody = Boolean(resolveRigidbodyComponent(node));
+  const hasVehicle = Boolean(resolveVehicleComponent(node));
+  if (!hasRigidbody || !hasVehicle) {
+    return { success: false, message: '目标缺少车辆或刚体组件' };
+  }
+  if (!physicsWorld) {
+    ensurePhysicsWorld();
+  }
+  ensureVehicleBindingForNode(nodeId);
+  const instance = vehicleInstances.get(nodeId);
+  if (!instance) {
+    return { success: false, message: '车辆实例尚未准备好' };
+  }
+  if (!rigidbodyInstances.has(nodeId)) {
+    return { success: false, message: '车辆缺少可驱动的刚体' };
+  }
+  return { success: true, instance };
+}
+
+
+function handleVehicleDriveCameraToggle(): void {
+  if (!vehicleDriveActive.value) {
+    return;
+  }
+  vehicleDriveCameraMode.value = vehicleDriveCameraMode.value === 'follow' ? 'first-person' : 'follow';
+  vehicleDriveCameraFollowState.initialized = false;
+  updateVehicleDriveCamera(0, { immediate: true });
+}
+
+function handleVehicleDriveResetTap(): void {
+  if (!vehicleDriveActive.value || vehicleDriveResetBusy.value) {
+    return;
+  }
+  vehicleDriveResetBusy.value = true;
+  try {
+    const success = resetActiveVehiclePose();
+    if (!success) {
+      uni.showToast({ title: '无法重置车辆', icon: 'none' });
+      return;
+    }
+    updateVehicleDriveCamera(0, { immediate: true });
+  } finally {
+    vehicleDriveResetBusy.value = false;
+  }
+}
+
+function resetActiveVehiclePose(): boolean {
+  const nodeId = normalizeNodeId(vehicleDriveNodeId.value);
+  if (!nodeId) {
+    return false;
+  }
+  const rigidbody = rigidbodyInstances.get(nodeId);
+  const instance = vehicleInstances.get(nodeId);
+  if (!rigidbody || !instance || !rigidbody.body || !rigidbody.object) {
+    return false;
+  }
+  rigidbody.object.updateMatrixWorld(true);
+  rigidbody.object.getWorldPosition(tempVehicleResetPosition);
+  rigidbody.object.getWorldQuaternion(tempVehicleResetQuaternion);
+  const worldForward = tempVehicleAxisForward.copy(instance.axisForward).applyQuaternion(tempVehicleResetQuaternion);
+  if (worldForward.lengthSq() < 1e-6) {
+    worldForward.set(0, 0, 1);
+  }
+  worldForward.y = 0;
+  if (worldForward.lengthSq() < 1e-6) {
+    worldForward.set(0, 0, 1);
+  } else {
+    worldForward.normalize();
+  }
+  const worldUp = tempVehicleAxisUp.copy(instance.axisUp).applyQuaternion(tempVehicleResetQuaternion);
+  if (worldUp.lengthSq() < 1e-6) {
+    worldUp.set(0, 1, 0);
+  } else {
+    worldUp.normalize();
+  }
+  const worldRight = tempVehicleAxisRight.copy(worldUp).cross(worldForward);
+  if (worldRight.lengthSq() < 1e-6) {
+    worldRight.set(1, 0, 0);
+  } else {
+    worldRight.normalize();
+  }
+  const correctedForward = tempVehicleAxisForward.copy(worldRight).cross(worldUp);
+  if (correctedForward.lengthSq() < 1e-6) {
+    correctedForward.set(0, 0, 1);
+  } else {
+    correctedForward.normalize();
+  }
+  tempVehicleResetMatrix.makeBasis(worldRight, worldUp, correctedForward);
+  tempVehicleResetQuaternion.setFromRotationMatrix(tempVehicleResetMatrix);
+  const resetPosition = tempVehicleResetPosition;
+  resetPosition.y += VEHICLE_RESET_LIFT;
+  rigidbody.body.position.set(resetPosition.x, resetPosition.y, resetPosition.z);
+  rigidbody.body.velocity.set(0, 0, 0);
+  rigidbody.body.angularVelocity.set(0, 0, 0);
+  rigidbody.body.quaternion.set(
+    tempVehicleResetQuaternion.x,
+    tempVehicleResetQuaternion.y,
+    tempVehicleResetQuaternion.z,
+    tempVehicleResetQuaternion.w,
+  );
+  rigidbody.object.position.copy(resetPosition);
+  rigidbody.object.quaternion.copy(tempVehicleResetQuaternion);
+  rigidbody.object.updateMatrixWorld(true);
+  vehicleDriveCameraFollowState.initialized = false;
+  return true;
 }
 
 function computeVehicleFallbackSeatPosition(object: THREE.Object3D | null, target: THREE.Vector3): void {
@@ -4854,7 +5368,7 @@ async function handleVehicleDrivePromptTap(): Promise<void> {
     activeVehicleDriveEvent.value = { ...event };
     vehicleDriveSeatNodeId.value = seatNodeId;
     vehicleDriveExitBusy.value = false;
-    resetVehicleDriveInputFlags();
+    resetVehicleDriveInputs();
     setCameraCaging(true);
     purposeActiveMode.value = 'watch';
     setCameraViewState('watching', resolvedTargetNodeId);
@@ -4899,7 +5413,7 @@ function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'v
     vehicleDriveActive.value = false;
     vehicleDriveNodeId.value = null;
     vehicleDriveSeatNodeId.value = null;
-    resetVehicleDriveInputFlags();
+    resetVehicleDriveInputs();
     setVehicleDriveUiOverride('hide');
     activeVehicleDriveEvent.value = null;
     vehicleDriveExitBusy.value = false;
@@ -4918,7 +5432,7 @@ function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'v
   pendingVehicleDriveEvent.value = event;
   vehicleDrivePromptBusy.value = false;
   setVehicleDriveUiOverride('hide');
-  resetVehicleDriveInputFlags();
+  resetVehicleDriveInputs();
   vehicleDriveExitBusy.value = false;
 }
 
@@ -4940,7 +5454,7 @@ function handleVehicleDebusEvent(): void {
   vehicleDriveActive.value = false;
   vehicleDriveNodeId.value = null;
   vehicleDriveSeatNodeId.value = null;
-  resetVehicleDriveInputFlags();
+  resetVehicleDriveInputs();
   setVehicleDriveUiOverride('hide');
   activeVehicleDriveEvent.value = null;
   vehicleDriveExitBusy.value = false;
@@ -6991,6 +7505,98 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.viewer-drive-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.viewer-drive-steering-column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.viewer-drive-steering-wheel {
+  width: 110px;
+  height: 110px;
+  border-radius: 999px;
+  border: 3px solid rgba(124, 156, 255, 0.4);
+  background: rgba(16, 24, 52, 0.9);
+  box-shadow: inset 0 0 12px rgba(4, 8, 20, 0.8);
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.12s ease;
+}
+
+.viewer-drive-steering-spokes {
+  position: absolute;
+  width: 68px;
+  height: 68px;
+  background:
+    linear-gradient(
+      0deg,
+      transparent 45%,
+      rgba(180, 198, 255, 0.4) 45%,
+      rgba(180, 198, 255, 0.4) 55%,
+      transparent 55%
+    ),
+    linear-gradient(
+      90deg,
+      transparent 45%,
+      rgba(180, 198, 255, 0.4) 45%,
+      rgba(180, 198, 255, 0.4) 55%,
+      transparent 55%
+    );
+  pointer-events: none;
+}
+
+.viewer-drive-steering-hub {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: rgba(40, 58, 108, 0.95);
+  border: 2px solid rgba(142, 168, 255, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.viewer-drive-steering-hub text {
+  font-size: 12px;
+  color: rgba(236, 242, 255, 0.9);
+}
+
+.viewer-drive-grid-column {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.viewer-drive-camera-toggle,
+.viewer-drive-reset {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: none;
+  outline: none;
+  background: rgba(26, 40, 82, 0.92);
+  color: rgba(222, 232, 255, 0.94);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  box-shadow: inset 0 0 0 1px rgba(120, 150, 255, 0.24);
+}
+
+.viewer-drive-reset.is-busy,
+.viewer-drive-camera-toggle:disabled,
+.viewer-drive-reset:disabled {
+  opacity: 0.78;
 }
 
 .viewer-drive-exit {
