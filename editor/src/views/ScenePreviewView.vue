@@ -116,13 +116,15 @@ import type { ViewerOptions } from 'viewerjs'
 import { buildScatterNodeId, composeScatterMatrix } from '@/utils/terrainScatterRuntime'
 
 type ControlMode = 'first-person' | 'third-person'
-type VehicleDriveCameraMode = 'first-person' | 'follow'
+type VehicleDriveCameraMode = 'first-person' | 'follow' | 'free'
+type VehicleDriveOrbitMode = 'follow' | 'free'
 const containerRef = ref<HTMLDivElement | null>(null)
 const statsContainerRef = ref<HTMLDivElement | null>(null)
 const statusMessage = ref('等待场景数据...')
 const isPlaying = ref(true)
 const controlMode = ref<ControlMode>('third-person')
 const vehicleDriveCameraMode = ref<VehicleDriveCameraMode>('first-person')
+const vehicleDriveOrbitMode = ref<VehicleDriveOrbitMode>('follow')
 const volumePercent = ref(100)
 const isFullscreen = ref(false)
 const lastUpdateTime = ref<string | null>(null)
@@ -452,6 +454,8 @@ const vehicleDriveCameraFollowState = {
 	currentPosition: new THREE.Vector3(),
 	currentTarget: new THREE.Vector3(),
 	initialized: false,
+	localOffset: new THREE.Vector3(),
+	hasLocalOffset: false,
 }
 
 type LanternTextState = { text: string; loading: boolean; error: string | null }
@@ -575,6 +579,12 @@ const tempVehicleQuaternionThree = new THREE.Quaternion()
 const tempVehicleCameraPosition = new THREE.Vector3()
 const tempVehicleCameraUp = new THREE.Vector3()
 const tempVehicleFollowAnchor = new THREE.Vector3()
+const tempVehicleCameraLocalOffset = new THREE.Vector3()
+const tempVehicleCameraWorldOffset = new THREE.Vector3()
+const tempVehicleCameraTargetOffset = new THREE.Vector3()
+const tempVehicleCameraQuaternionInverse = new THREE.Quaternion()
+const tempVehicleResetQuaternion = new THREE.Quaternion()
+const tempVehicleResetEuler = new THREE.Euler()
 const VEHICLE_CAMERA_WORLD_UP = new THREE.Vector3(0, 1, 0)
 const VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE = 6
 const VEHICLE_CAMERA_FALLBACK_HEIGHT = 1.35
@@ -597,6 +607,8 @@ const VEHICLE_FOLLOW_TARGET_LIFT_RATIO = 0.3
 const VEHICLE_FOLLOW_TARGET_LIFT_MIN = 0.6
 const VEHICLE_FOLLOW_POSITION_LERP_SPEED = 8
 const VEHICLE_FOLLOW_TARGET_LERP_SPEED = 10
+const VEHICLE_FOLLOW_TARGET_FORWARD_RATIO = 0.35
+const VEHICLE_FOLLOW_TARGET_FORWARD_MIN = 1.2
 const skySunPosition = new THREE.Vector3()
 const DEFAULT_SUN_DIRECTION = new THREE.Vector3(0.35, 1, -0.25).normalize()
 const tempSunDirection = new THREE.Vector3()
@@ -681,6 +693,8 @@ let environmentMapLoadToken = 0
 let pendingEnvironmentSettings: EnvironmentSettings | null = null
 let firstPersonControls: FirstPersonControls | null = null
 let mapControls: MapControls | null = null
+let followCameraControlActive = false
+let followCameraControlDirty = false
 const MAP_CONTROL_DEFAULTS = {
 	minDistance: 1,
 	maxDistance: 200,
@@ -720,6 +734,9 @@ const VEHICLE_WHEEL_MIN_RADIUS = 0.01
 const VEHICLE_SPEED_EPSILON = 1e-3
 const VEHICLE_WHEEL_SPIN_EPSILON = 1e-4
 const VEHICLE_TRAVEL_EPSILON = 1e-5
+const STEERING_WHEEL_MAX_DEGREES = 135
+const STEERING_WHEEL_MAX_RADIANS = THREE.MathUtils.degToRad(STEERING_WHEEL_MAX_DEGREES)
+const VEHICLE_RESET_LIFT = 0.75
 const nodeObjectMap = new Map<string, THREE.Object3D>()
 const scatterInstanceNodeIds = new Set<string>()
 const scatterMatrixHelper = new THREE.Matrix4()
@@ -769,6 +786,12 @@ type VehicleWheelSetupEntry = {
 	direction: CANNON.Vec3
 	axle: CANNON.Vec3
 }
+type VehicleAxisBasis = { right: THREE.Vector3; up: THREE.Vector3; forward: THREE.Vector3 }
+const DEFAULT_VEHICLE_AXIS_BASIS: VehicleAxisBasis = {
+	right: new THREE.Vector3(1, 0, 0),
+	up: new THREE.Vector3(0, 1, 0),
+	forward: new THREE.Vector3(0, 0, 1),
+}
 type VehicleInstance = {
 	nodeId: string
 	vehicle: CANNON.RaycastVehicle
@@ -776,6 +799,12 @@ type VehicleInstance = {
 	steerableWheelIndices: number[]
 	wheelBindings: VehicleWheelBinding[]
 	forwardAxis: THREE.Vector3
+	axisRight: THREE.Vector3
+	axisUp: THREE.Vector3
+	axisForward: THREE.Vector3
+	axisRightIndex: 0 | 1 | 2
+	axisUpIndex: 0 | 1 | 2
+	axisForwardIndex: 0 | 1 | 2
 	lastChassisPosition: THREE.Vector3
 	hasChassisPositionSample: boolean
 }
@@ -925,8 +954,6 @@ const vehicleDriveUi = computed(() => {
 			cameraLocked: false,
 			forwardActive: false,
 			backwardActive: false,
-			leftActive: false,
-			rightActive: false,
 			brakeActive: false,
 		}
 	}
@@ -940,23 +967,163 @@ const vehicleDriveUi = computed(() => {
 		cameraLocked: driveActive,
 		forwardActive: driveActive && vehicleDriveInputFlags.forward,
 		backwardActive: driveActive && vehicleDriveInputFlags.backward,
-		leftActive: driveActive && vehicleDriveInputFlags.left,
-		rightActive: driveActive && vehicleDriveInputFlags.right,
 		brakeActive: driveActive && vehicleDriveInputFlags.brake,
 	}
 })
 
-const vehicleDriveJoystickHandleStyle = computed(() => {
-	const clamp = (value: number) => Math.max(-1, Math.min(1, value))
-	const range = 22
-	return {
-		'--joystick-offset-x': `${clamp(vehicleDriveInput.steering) * range}px`,
-		'--joystick-offset-y': `${-clamp(vehicleDriveInput.throttle) * range}px`,
+const steeringWheelRef = ref<HTMLDivElement | null>(null)
+const steeringWheelValue = ref(0)
+const steeringKeyboardValue = ref(0)
+const steeringWheelState = reactive({
+	dragging: false,
+	pointerId: -1,
+	startPointerAngle: 0,
+	startWheelAngle: 0,
+})
+const vehicleSteeringWheelStyle = computed(() => ({
+	'--steering-rotation': `${vehicleDriveInput.steering * STEERING_WHEEL_MAX_DEGREES}deg`,
+}))
+const vehicleSteeringAngleLabel = computed(() => `${Math.round(vehicleDriveInput.steering * STEERING_WHEEL_MAX_DEGREES)}°`)
+
+function clampSteeringScalar(value: number): number {
+	return THREE.MathUtils.clamp(value, -1, 1)
+}
+
+function syncVehicleSteeringValue(): void {
+	const keyboardValue = steeringKeyboardValue.value
+	if (keyboardValue !== 0) {
+		vehicleDriveInput.steering = keyboardValue
+		return
 	}
+	vehicleDriveInput.steering = clampSteeringScalar(steeringWheelValue.value)
+}
+
+function updateSteeringKeyboardValue(): void {
+	if (vehicleDriveInputFlags.left === vehicleDriveInputFlags.right) {
+		steeringKeyboardValue.value = 0
+	} else if (vehicleDriveInputFlags.left) {
+		steeringKeyboardValue.value = 1
+	} else {
+		steeringKeyboardValue.value = -1
+	}
+}
+
+function resetSteeringWheelValue(): void {
+	steeringWheelValue.value = 0
+	if (!steeringWheelState.dragging) {
+		syncVehicleSteeringValue()
+	}
+}
+
+function computeSteeringWheelPointerAngle(event: PointerEvent, target: HTMLElement): number {
+	const bounds = target.getBoundingClientRect()
+	const centerX = bounds.left + bounds.width / 2
+	const centerY = bounds.top + bounds.height / 2
+	const deltaX = event.clientX - centerX
+	const deltaY = event.clientY - centerY
+	return Math.atan2(deltaY, deltaX)
+}
+
+function setSteeringWheelDragActive(active: boolean): void {
+	steeringWheelState.dragging = active
+	if (!active) {
+		steeringWheelState.pointerId = -1
+	}
+}
+
+function handleSteeringWheelPointerDown(event: PointerEvent): void {
+	if (!vehicleDriveState.active) {
+		return
+	}
+	const wheel = steeringWheelRef.value
+	if (!wheel) {
+		return
+	}
+	const pointerAngle = computeSteeringWheelPointerAngle(event, wheel)
+	steeringWheelState.startPointerAngle = pointerAngle
+	steeringWheelState.startWheelAngle = steeringWheelValue.value * STEERING_WHEEL_MAX_RADIANS
+	steeringWheelState.pointerId = event.pointerId
+	setSteeringWheelDragActive(true)
+	try {
+		wheel.setPointerCapture(event.pointerId)
+	} catch (_error) {
+		/* noop */
+	}
+	event.preventDefault()
+}
+
+function applySteeringWheelAngle(angle: number): void {
+	const clampedAngle = THREE.MathUtils.clamp(angle, -STEERING_WHEEL_MAX_RADIANS, STEERING_WHEEL_MAX_RADIANS)
+	steeringWheelValue.value = clampSteeringScalar(clampedAngle / STEERING_WHEEL_MAX_RADIANS)
+	syncVehicleSteeringValue()
+}
+
+function handleSteeringWheelPointerMove(event: PointerEvent): void {
+	if (!steeringWheelState.dragging || event.pointerId !== steeringWheelState.pointerId) {
+		return
+	}
+	const wheel = steeringWheelRef.value
+	if (!wheel) {
+		return
+	}
+	const currentAngle = computeSteeringWheelPointerAngle(event, wheel)
+	const delta = currentAngle - steeringWheelState.startPointerAngle
+	const nextAngle = steeringWheelState.startWheelAngle + delta
+	applySteeringWheelAngle(nextAngle)
+	if (event.cancelable) {
+		event.preventDefault()
+	}
+}
+
+function releaseSteeringWheelPointer(event?: PointerEvent): void {
+	const wheel = steeringWheelRef.value
+	if (wheel && steeringWheelState.pointerId !== -1) {
+		try {
+			wheel.releasePointerCapture(steeringWheelState.pointerId)
+		} catch (_error) {
+			/* noop */
+		}
+	}
+	if (event?.cancelable) {
+		event.preventDefault()
+	}
+	setSteeringWheelDragActive(false)
+}
+
+function handleSteeringWheelPointerUp(event: PointerEvent): void {
+	if (event.pointerId !== steeringWheelState.pointerId) {
+		return
+	}
+	releaseSteeringWheelPointer(event)
+}
+
+const vehicleDriveCameraToggleConfig = computed(() => {
+	const followActive = vehicleDriveCameraMode.value === 'follow'
+	return followActive
+		? { icon: 'mdi-crosshairs-off', label: '取消跟随' }
+		: { icon: 'mdi-crosshairs-gps', label: '跟随驾驶' }
 })
 
 function setVehicleDriveUiOverride(mode: 'auto' | 'show' | 'hide'): void {
 	vehicleDriveUiOverride.value = mode
+}
+
+function setVehicleDriveOrbitMode(mode: VehicleDriveOrbitMode): void {
+	if (vehicleDriveOrbitMode.value === mode) {
+		return
+	}
+	vehicleDriveOrbitMode.value = mode
+	if (vehicleDriveState.active && controlMode.value === 'third-person') {
+		syncVehicleDriveCameraMode()
+	}
+}
+
+function toggleVehicleDriveOrbitMode(): void {
+	const nextMode: VehicleDriveOrbitMode = vehicleDriveOrbitMode.value === 'follow' ? 'free' : 'follow'
+	if (nextMode === 'follow') {
+		resetVehicleFollowLocalOffset()
+	}
+	setVehicleDriveOrbitMode(nextMode)
 }
 
 function resolveGuideboardComponent(
@@ -2006,10 +2173,27 @@ function syncVehicleDriveCameraMode(): void {
 			vehicleDriveCameraMode.value = 'first-person'
 		}
 		vehicleDriveCameraFollowState.initialized = false
+		resetVehicleFollowLocalOffset()
+		followCameraControlActive = false
+		followCameraControlDirty = false
 		applyMapControlFollowSettings(false)
 		return
 	}
-	const desiredMode: VehicleDriveCameraMode = controlMode.value === 'third-person' ? 'follow' : 'first-person'
+	if (controlMode.value === 'first-person') {
+		if (vehicleDriveCameraMode.value !== 'first-person') {
+			vehicleDriveCameraMode.value = 'first-person'
+		}
+		vehicleDriveCameraFollowState.initialized = false
+		followCameraControlActive = false
+		followCameraControlDirty = false
+		applyMapControlFollowSettings(false)
+		setCameraCaging(true, { force: true })
+		if (camera && renderer) {
+			updateVehicleDriveCamera(0, { immediate: true })
+		}
+		return
+	}
+	const desiredMode: VehicleDriveCameraMode = vehicleDriveOrbitMode.value
 	const modeChanged = vehicleDriveCameraMode.value !== desiredMode
 	vehicleDriveCameraMode.value = desiredMode
 	if (desiredMode === 'follow') {
@@ -2017,12 +2201,13 @@ function syncVehicleDriveCameraMode(): void {
 			vehicleDriveCameraFollowState.initialized = false
 		}
 		applyMapControlFollowSettings(true)
-		setCameraCaging(false, { force: true })
 	} else {
 		vehicleDriveCameraFollowState.initialized = false
+		followCameraControlActive = false
+		followCameraControlDirty = false
 		applyMapControlFollowSettings(false)
-		setCameraCaging(true, { force: true })
 	}
+	setCameraCaging(false, { force: true })
 	if (!camera || !renderer) {
 		return
 	}
@@ -3032,12 +3217,9 @@ function updateVehicleDriveInputFromFlags(): void {
 		: vehicleDriveInputFlags.forward
 			? 1
 			: -1
-	vehicleDriveInput.steering = vehicleDriveInputFlags.left === vehicleDriveInputFlags.right
-		? 0
-		: vehicleDriveInputFlags.left
-			? 1
-			: -1
 	vehicleDriveInput.brake = vehicleDriveInputFlags.brake ? 1 : 0
+	updateSteeringKeyboardValue()
+	syncVehicleSteeringValue()
 }
 
 function resetVehicleDriveInputs(): void {
@@ -3046,6 +3228,8 @@ function resetVehicleDriveInputs(): void {
 	vehicleDriveInputFlags.left = false
 	vehicleDriveInputFlags.right = false
 	vehicleDriveInputFlags.brake = false
+	steeringKeyboardValue.value = 0
+	resetSteeringWheelValue()
 	updateVehicleDriveInputFromFlags()
 }
 
@@ -3075,7 +3259,7 @@ function handleVehicleDriveKeyboardInput(event: KeyboardEvent, pressed: boolean)
 	if (!vehicleDriveState.active) {
 		return false
 	}
-	if (controlMode.value !== 'third-person' || vehicleDriveCameraMode.value !== 'follow') {
+	if (controlMode.value !== 'third-person' || vehicleDriveCameraMode.value === 'first-person') {
 		return false
 	}
 	const action = vehicleDriveKeyboardMap[event.code]
@@ -3190,6 +3374,7 @@ function startVehicleDriveMode(
 	vehicleDriveState.token = event.token
 	vehicleDriveState.seatNodeId = seatNodeId
 	vehicleDriveState.sourceEvent = { ...event }
+	resetVehicleFollowLocalOffset()
 	vehicleDriveExitBusy.value = false
 	resetVehicleDriveInputs()
 	activeCameraLookTween = null
@@ -3230,6 +3415,9 @@ function stopVehicleDriveMode(options: { resolution?: BehaviorEventResolution; p
 	vehicleDriveState.seatNodeId = null
 	vehicleDriveState.sourceEvent = null
 	vehicleDriveCameraFollowState.initialized = false
+	resetVehicleFollowLocalOffset()
+	followCameraControlActive = false
+	followCameraControlDirty = false
 	vehicleDriveCameraMode.value = 'first-person'
 	applyMapControlFollowSettings(false)
 	vehicleDriveExitBusy.value = false
@@ -3279,9 +3467,74 @@ function applyVehicleDriveForces(): void {
 	
 }
 
+function resetActiveVehiclePose(): boolean {
+	const nodeId = vehicleDriveState.nodeId
+	if (!nodeId) {
+		return false
+	}
+	const rigidbody = rigidbodyInstances.get(nodeId)
+	const instance = vehicleInstances.get(nodeId)
+	if (!rigidbody || !instance || !rigidbody.body || !rigidbody.object) {
+		return false
+	}
+	rigidbody.object.updateMatrixWorld(true)
+	rigidbody.object.getWorldPosition(tempVehicleCameraPosition)
+	rigidbody.object.getWorldQuaternion(tempVehicleQuaternionThree)
+	const resetForward = tempVehicleCameraForward.copy(instance.axisForward).applyQuaternion(tempVehicleQuaternionThree)
+	if (resetForward.lengthSq() < 1e-6) {
+		resetForward.set(0, 0, 1)
+	}
+	resetForward.y = 0
+	if (resetForward.lengthSq() < 1e-6) {
+		resetForward.set(0, 0, 1)
+	} else {
+		resetForward.normalize()
+	}
+	const resetUp = tempVehicleCameraUp.set(0, 1, 0)
+	const resetRight = tempVehicleCameraRight.copy(resetUp).cross(resetForward)
+	if (resetRight.lengthSq() < 1e-6) {
+		resetRight.set(1, 0, 0)
+	} else {
+		resetRight.normalize()
+	}
+	const correctedForward = tempVehicleCameraTargetOffset.crossVectors(resetRight, resetUp)
+	if (correctedForward.lengthSq() < 1e-6) {
+		correctedForward.set(0, 0, 1)
+	} else {
+		correctedForward.normalize()
+	}
+	const axisWorldVectors: Array<THREE.Vector3> = []
+	axisWorldVectors[instance.axisRightIndex] = resetRight.clone()
+	axisWorldVectors[instance.axisUpIndex] = resetUp.clone()
+	axisWorldVectors[instance.axisForwardIndex] = correctedForward.clone()
+	tempCameraMatrix.makeBasis(
+		axisWorldVectors[0] ?? resetRight,
+		axisWorldVectors[1] ?? resetUp,
+		axisWorldVectors[2] ?? correctedForward,
+	)
+	tempVehicleResetQuaternion.setFromRotationMatrix(tempCameraMatrix)
+	const resetPosition = tempVehicleCameraPosition
+	resetPosition.y += VEHICLE_RESET_LIFT
+	rigidbody.body.position.set(resetPosition.x, resetPosition.y, resetPosition.z)
+	rigidbody.body.velocity.set(0, 0, 0)
+	rigidbody.body.angularVelocity.set(0, 0, 0)
+	rigidbody.body.quaternion.set(
+		tempVehicleResetQuaternion.x,
+		tempVehicleResetQuaternion.y,
+		tempVehicleResetQuaternion.z,
+		tempVehicleResetQuaternion.w,
+	)
+	rigidbody.object.position.copy(resetPosition)
+	rigidbody.object.quaternion.copy(tempVehicleResetQuaternion)
+	rigidbody.object.updateMatrixWorld(true)
+	vehicleDriveCameraFollowState.initialized = false
+	followCameraControlDirty = true
+	return true
+}
+
 
 type VehicleDriveCameraOptions = { immediate?: boolean; applyOrbitTween?: boolean }
-type VehicleFollowPlacement = { distance: number; heightOffset: number; targetLift: number }
+type VehicleFollowPlacement = { distance: number; heightOffset: number; targetLift: number; targetForward: number }
 
 function updateVehicleDriveCamera(delta: number, options: VehicleDriveCameraOptions = {}): boolean {
 	if (!vehicleDriveState.active) {
@@ -3298,6 +3551,9 @@ function updateVehicleDriveCamera(delta: number, options: VehicleDriveCameraOpti
 	const vehicleObject = vehicleNodeId ? nodeObjectMap.get(vehicleNodeId) ?? null : null
 	if (vehicleDriveCameraMode.value === 'follow') {
 		return updateVehicleDriveFollowCamera(seatObject, vehicleObject, delta, options)
+	}
+	if (vehicleDriveCameraMode.value === 'free') {
+		return false
 	}
 	if (!buildVehicleCameraBasis(seatObject, vehicleObject)) {
 		return false
@@ -3328,7 +3584,8 @@ function buildVehicleCameraBasis(
 	} else {
 		computeVehicleFallbackSeatPosition(vehicleObject ?? orientationObject, tempVehicleCameraPosition)
 	}
-	buildVehicleCameraOrientation()
+	const axisBasis = resolveVehicleAxisBasis(vehicleDriveState.nodeId)
+	buildVehicleCameraOrientation(axisBasis)
 	return true
 }
 
@@ -3368,22 +3625,127 @@ function computeVehicleFollowAnchor(
 	tempBox.getCenter(target)
 }
 
-function buildVehicleCameraOrientation(): void {
-	tempVehicleCameraForward.set(0, 0, -1).applyQuaternion(tempVehicleQuaternionThree)
+function resolveVehicleAxisBasis(nodeId: string | null): VehicleAxisBasis {
+	if (!nodeId) {
+		return DEFAULT_VEHICLE_AXIS_BASIS
+	}
+	const instance = vehicleInstances.get(nodeId)
+	if (!instance) {
+		return DEFAULT_VEHICLE_AXIS_BASIS
+	}
+	return {
+		right: instance.axisRight,
+		up: instance.axisUp,
+		forward: instance.axisForward,
+	}
+}
+
+function composeVehicleLocalVector(
+	local: THREE.Vector3,
+	basis: VehicleAxisBasis,
+	target: THREE.Vector3,
+): THREE.Vector3 {
+	target
+		.set(0, 0, 0)
+		.addScaledVector(basis.right, local.x)
+		.addScaledVector(basis.up, local.y)
+		.addScaledVector(basis.forward, local.z)
+	return target
+}
+
+function projectVehicleVectorToBasis(
+	vector: THREE.Vector3,
+	basis: VehicleAxisBasis,
+	target: THREE.Vector3,
+): THREE.Vector3 {
+	target.set(
+		vector.dot(basis.right),
+		vector.dot(basis.up),
+		vector.dot(basis.forward),
+	)
+	return target
+}
+
+
+function ensureVehicleFollowLocalOffset(placement: VehicleFollowPlacement): void {
+	if (!vehicleDriveCameraFollowState.hasLocalOffset) {
+		vehicleDriveCameraFollowState.localOffset.set(0, placement.heightOffset, -placement.distance)
+		vehicleDriveCameraFollowState.hasLocalOffset = true
+		return
+	}
+	clampVehicleFollowLocalOffset(placement)
+}
+
+function resetVehicleFollowLocalOffset(): void {
+	vehicleDriveCameraFollowState.hasLocalOffset = false
+	vehicleDriveCameraFollowState.localOffset.set(0, 0, 0)
+}
+
+function clampVehicleFollowLocalOffset(placement?: VehicleFollowPlacement): void {
+	const local = vehicleDriveCameraFollowState.localOffset
+	const length = local.length()
+	const minDistance = VEHICLE_FOLLOW_DISTANCE_MIN
+	const maxDistance = VEHICLE_FOLLOW_DISTANCE_MAX
+	const fallbackHeight = placement ? Math.max(placement.heightOffset, VEHICLE_FOLLOW_HEIGHT_MIN) : VEHICLE_FOLLOW_HEIGHT_MIN
+	const fallbackDistance = placement ? Math.max(placement.distance, VEHICLE_FOLLOW_DISTANCE_MIN) : VEHICLE_FOLLOW_DISTANCE_MIN
+	if (!Number.isFinite(length) || length < 1e-3) {
+		local.set(0, fallbackHeight, -Math.max(minDistance, fallbackDistance))
+		return
+	}
+	const clamped = Math.min(maxDistance, Math.max(minDistance, length))
+	if (Math.abs(clamped - length) > 1e-4) {
+		local.multiplyScalar(clamped / length)
+	}
+}
+
+function updateVehicleFollowLocalOffsetFromCamera(
+	anchor: THREE.Vector3,
+	basis: VehicleAxisBasis,
+	quaternion: THREE.Quaternion,
+): void {
+	if (!camera) {
+		return
+	}
+	tempVehicleCameraWorldOffset.copy(camera.position).sub(anchor)
+	tempVehicleCameraQuaternionInverse.copy(quaternion).invert()
+	tempVehicleCameraLocalOffset.copy(tempVehicleCameraWorldOffset).applyQuaternion(tempVehicleCameraQuaternionInverse)
+	projectVehicleVectorToBasis(
+		tempVehicleCameraLocalOffset,
+		basis,
+		vehicleDriveCameraFollowState.localOffset,
+	)
+	vehicleDriveCameraFollowState.hasLocalOffset = true
+}
+
+function resolveVehicleFollowWorldOffset(
+	local: THREE.Vector3,
+	basis: VehicleAxisBasis,
+	quaternion: THREE.Quaternion,
+	target: THREE.Vector3,
+): THREE.Vector3 {
+	composeVehicleLocalVector(local, basis, target)
+	return target.applyQuaternion(quaternion)
+}
+
+function buildVehicleCameraOrientation(axisBasis: VehicleAxisBasis): void {
+	tempVehicleCameraForward.copy(axisBasis.forward).applyQuaternion(tempVehicleQuaternionThree)
 	if (tempVehicleCameraForward.lengthSq() < 1e-8) {
-		tempVehicleCameraForward.set(0, 0, -1)
+		tempVehicleCameraForward.copy(VEHICLE_CAMERA_WORLD_UP)
+		if (Math.abs(tempVehicleCameraForward.y) > 0.9) {
+			tempVehicleCameraForward.set(0, 0, -1)
+		}
 	} else {
 		tempVehicleCameraForward.normalize()
 	}
-	tempVehicleCameraRear.set(0, 0, 1).applyQuaternion(tempVehicleQuaternionThree)
+	tempVehicleCameraRear.copy(axisBasis.forward).negate().applyQuaternion(tempVehicleQuaternionThree)
 	if (tempVehicleCameraRear.lengthSq() < 1e-8) {
 		tempVehicleCameraRear.copy(tempVehicleCameraForward).multiplyScalar(-1)
 	} else {
 		tempVehicleCameraRear.normalize()
 	}
-	tempVehicleCameraRight.copy(tempVehicleCameraForward).cross(VEHICLE_CAMERA_WORLD_UP)
+	tempVehicleCameraRight.copy(axisBasis.right).applyQuaternion(tempVehicleQuaternionThree)
 	if (tempVehicleCameraRight.lengthSq() < 1e-8) {
-		tempVehicleCameraRight.set(1, 0, 0).applyQuaternion(tempVehicleQuaternionThree)
+		tempVehicleCameraRight.copy(tempVehicleCameraForward).cross(VEHICLE_CAMERA_WORLD_UP)
 		if (tempVehicleCameraRight.lengthSq() < 1e-8) {
 			tempVehicleCameraRight.set(1, 0, 0)
 		} else {
@@ -3392,9 +3754,14 @@ function buildVehicleCameraOrientation(): void {
 	} else {
 		tempVehicleCameraRight.normalize()
 	}
-	tempVehicleCameraUp.crossVectors(tempVehicleCameraRight, tempVehicleCameraForward)
+	tempVehicleCameraUp.copy(axisBasis.up).applyQuaternion(tempVehicleQuaternionThree)
 	if (tempVehicleCameraUp.lengthSq() < 1e-8) {
-		tempVehicleCameraUp.copy(VEHICLE_CAMERA_WORLD_UP)
+		tempVehicleCameraUp.crossVectors(tempVehicleCameraRight, tempVehicleCameraForward)
+		if (tempVehicleCameraUp.lengthSq() < 1e-8) {
+			tempVehicleCameraUp.copy(VEHICLE_CAMERA_WORLD_UP)
+		} else {
+			tempVehicleCameraUp.normalize()
+		}
 	} else {
 		tempVehicleCameraUp.normalize()
 	}
@@ -3425,15 +3792,8 @@ function computeVehicleFollowPlacement(dimensions: { width: number; height: numb
 	const distance = Math.min(unclampedDistance, VEHICLE_FOLLOW_DISTANCE_MAX)
 	const heightOffset = Math.max(dimensions.height * VEHICLE_FOLLOW_HEIGHT_RATIO, VEHICLE_FOLLOW_HEIGHT_MIN)
 	const targetLift = Math.max(dimensions.height * VEHICLE_FOLLOW_TARGET_LIFT_RATIO, VEHICLE_FOLLOW_TARGET_LIFT_MIN)
-	return { distance, heightOffset, targetLift }
-}
-
-function updateVehicleFollowDesiredPosition(placement: VehicleFollowPlacement): void {
-	const anchor = vehicleDriveCameraFollowState.desiredTarget
-	vehicleDriveCameraFollowState.desiredPosition
-		.copy(anchor)
-		.addScaledVector(tempVehicleCameraRear, placement.distance)
-		.addScaledVector(tempVehicleCameraUp, placement.heightOffset)
+	const targetForward = Math.max(dimensions.length * VEHICLE_FOLLOW_TARGET_FORWARD_RATIO, VEHICLE_FOLLOW_TARGET_FORWARD_MIN)
+	return { distance, heightOffset, targetLift, targetForward }
 }
 
 function computeVehicleFollowLerpAlpha(delta: number, speed: number): number {
@@ -3458,15 +3818,43 @@ function updateVehicleDriveFollowCamera(
 	if (!buildVehicleCameraBasis(seatObject, vehicleObject)) {
 		return false
 	}
+	const axisBasis = resolveVehicleAxisBasis(vehicleDriveState.nodeId)
 	const vehicleDimensions = getVehicleApproxDimensions(vehicleObject)
 	const followPlacement = computeVehicleFollowPlacement(vehicleDimensions)
 	const followAnchor = tempVehicleFollowAnchor
 	computeVehicleFollowAnchor(vehicleObject, tempVehicleCameraPosition, followAnchor)
-	vehicleDriveCameraFollowState.desiredTarget
-		.copy(followAnchor)
-		.addScaledVector(tempVehicleCameraUp, followPlacement.targetLift)
-	updateVehicleFollowDesiredPosition(followPlacement)
-	const needsReset = Boolean(options.immediate) || !vehicleDriveCameraFollowState.initialized
+	ensureVehicleFollowLocalOffset(followPlacement)
+	tempVehicleCameraLocalOffset.set(0, followPlacement.targetLift, followPlacement.targetForward)
+	const targetFocusWorld = resolveVehicleFollowWorldOffset(
+		tempVehicleCameraLocalOffset,
+		axisBasis,
+		tempVehicleQuaternionThree,
+		tempVehicleCameraTargetOffset,
+	)
+	vehicleDriveCameraFollowState.desiredTarget.copy(followAnchor).add(targetFocusWorld)
+	mapControls.target.copy(vehicleDriveCameraFollowState.desiredTarget)
+	if (options.applyOrbitTween) {
+		updateOrbitCameraLookTween(delta)
+	}
+	mapControls.update()
+	let userAdjusted = followCameraControlDirty
+	followCameraControlDirty = false
+	if (!userAdjusted && vehicleDriveCameraFollowState.initialized) {
+		const deltaPosition = camera.position.distanceTo(vehicleDriveCameraFollowState.currentPosition)
+		userAdjusted = deltaPosition > 1e-3
+	}
+	if (userAdjusted) {
+		updateVehicleFollowLocalOffsetFromCamera(followAnchor, axisBasis, tempVehicleQuaternionThree)
+		clampVehicleFollowLocalOffset(followPlacement)
+	}
+	const desiredWorldOffset = resolveVehicleFollowWorldOffset(
+		vehicleDriveCameraFollowState.localOffset,
+		axisBasis,
+		tempVehicleQuaternionThree,
+		tempVehicleCameraWorldOffset,
+	)
+	vehicleDriveCameraFollowState.desiredPosition.copy(followAnchor).add(desiredWorldOffset)
+	const needsReset = Boolean(options.immediate) || !vehicleDriveCameraFollowState.initialized || userAdjusted
 	if (needsReset) {
 		camera.position.copy(vehicleDriveCameraFollowState.desiredPosition)
 		mapControls.target.copy(vehicleDriveCameraFollowState.desiredTarget)
@@ -3486,10 +3874,6 @@ function updateVehicleDriveFollowCamera(
 		camera.position.copy(tempVehicleCameraPosition)
 		mapControls.target.copy(tempVehicleCameraLook)
 	}
-	if (options.applyOrbitTween) {
-		updateOrbitCameraLookTween(delta)
-	}
-	mapControls.update()
 	vehicleDriveCameraFollowState.currentTarget.copy(mapControls.target)
 	vehicleDriveCameraFollowState.currentPosition.copy(camera.position)
 	vehicleDriveCameraFollowState.initialized = true
@@ -3623,6 +4007,28 @@ function handleVehicleDriveExitClick(): void {
 	} finally {
 		vehicleDriveExitBusy.value = false
 	}
+}
+
+function handleVehicleDriveCameraToggle(): void {
+	if (!vehicleDriveState.active) {
+		return
+	}
+	if (controlMode.value !== 'third-person') {
+		controlMode.value = 'third-person'
+	}
+	toggleVehicleDriveOrbitMode()
+}
+
+function handleVehicleDriveResetClick(): void {
+	if (!vehicleDriveState.active) {
+		return
+	}
+	const resetSuccess = resetActiveVehiclePose()
+	if (!resetSuccess) {
+		appendWarningMessage('无法重置车辆，请稍后再试。')
+		return
+	}
+	updateVehicleDriveCamera(0, { immediate: true })
 }
 
 function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
@@ -4215,6 +4621,17 @@ function initControls() {
 	mapControls.target.copy(lastOrbitState.target)
 	mapControls.addEventListener('start', () => {
 		activeCameraLookTween = null
+		if (vehicleDriveState.active && vehicleDriveCameraMode.value === 'follow') {
+			followCameraControlActive = true
+		}
+	})
+	mapControls.addEventListener('end', () => {
+		followCameraControlActive = false
+	})
+	mapControls.addEventListener('change', () => {
+		if (followCameraControlActive) {
+			followCameraControlDirty = true
+		}
 	})
 	applyControlMode(controlMode.value)
 }
@@ -5905,6 +6322,9 @@ function createVehicleInstance(
 	const rightAxis = clampVehicleAxisIndex(props.indexRightAxis)
 	const upAxis = clampVehicleAxisIndex(props.indexUpAxis)
 	const forwardAxis = clampVehicleAxisIndex(props.indexForwardAxis)
+	const axisRightVector = resolveVehicleAxisVector(rightAxis)
+	const axisUpVector = resolveVehicleAxisVector(upAxis)
+	const axisForwardVector = resolveVehicleAxisVector(forwardAxis)
 	const wheelEntries = (props.wheels ?? [])
 		.map((wheel) => {
 			const point = tupleToVec3(wheel.chassisConnectionPointLocal)
@@ -5981,7 +6401,13 @@ function createVehicleInstance(
 		wheelCount,
 		steerableWheelIndices,
 		wheelBindings,
-		forwardAxis: resolveVehicleAxisVector(forwardAxis),
+		forwardAxis: axisForwardVector.clone(),
+		axisRight: axisRightVector,
+		axisUp: axisUpVector,
+		axisForward: axisForwardVector,
+		axisRightIndex: rightAxis,
+		axisUpIndex: upAxis,
+		axisForwardIndex: forwardAxis,
 		lastChassisPosition: initialChassisPosition,
 		hasChassisPositionSample: false,
 	}
@@ -6952,6 +7378,9 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+	if (steeringWheelState.dragging) {
+		releaseSteeringWheelPointer()
+	}
 	removeBehaviorRuntimeListener(behaviorRuntimeListener)
 	activeBehaviorDelayTimers.forEach((handle) => window.clearTimeout(handle))
 	activeBehaviorDelayTimers.clear()
@@ -7179,81 +7608,96 @@ onBeforeUnmount(() => {
 					/>
 				</div>
 				<div class="scene-preview__drive-controls">
-					<div class="scene-preview__drive-joystick" aria-label="车辆操纵杆">
-						<div class="scene-preview__drive-joystick-base">
-							<button
-								type="button"
-								class="scene-preview__drive-joystick-control scene-preview__drive-joystick-control--north"
-								:class="{ 'scene-preview__drive-joystick-control--active': vehicleDriveUi.forwardActive }"
-								aria-label="前进"
-								@click.prevent
-								@pointerdown.prevent="handleVehicleDriveControlPointer('forward', true, $event)"
-								@pointerup.prevent="handleVehicleDriveControlPointer('forward', false, $event)"
-								@pointerleave="handleVehicleDriveControlPointer('forward', false)"
-								@pointercancel="handleVehicleDriveControlPointer('forward', false)"
-							>
-								<v-icon icon="mdi-arrow-up-bold" size="14" />
-							</button>
-							<button
-								type="button"
-								class="scene-preview__drive-joystick-control scene-preview__drive-joystick-control--west"
-								:class="{ 'scene-preview__drive-joystick-control--active': vehicleDriveUi.leftActive }"
-								aria-label="左转"
-								@click.prevent
-								@pointerdown.prevent="handleVehicleDriveControlPointer('left', true, $event)"
-								@pointerup.prevent="handleVehicleDriveControlPointer('left', false, $event)"
-								@pointerleave="handleVehicleDriveControlPointer('left', false)"
-								@pointercancel="handleVehicleDriveControlPointer('left', false)"
-							>
-								<v-icon icon="mdi-arrow-left-bold" size="14" />
-							</button>
-							<button
-								type="button"
-								class="scene-preview__drive-joystick-control scene-preview__drive-joystick-control--east"
-								:class="{ 'scene-preview__drive-joystick-control--active': vehicleDriveUi.rightActive }"
-								aria-label="右转"
-								@click.prevent
-								@pointerdown.prevent="handleVehicleDriveControlPointer('right', true, $event)"
-								@pointerup.prevent="handleVehicleDriveControlPointer('right', false, $event)"
-								@pointerleave="handleVehicleDriveControlPointer('right', false)"
-								@pointercancel="handleVehicleDriveControlPointer('right', false)"
-							>
-								<v-icon icon="mdi-arrow-right-bold" size="14" />
-							</button>
-							<button
-								type="button"
-								class="scene-preview__drive-joystick-control scene-preview__drive-joystick-control--south"
-								:class="{ 'scene-preview__drive-joystick-control--active': vehicleDriveUi.backwardActive }"
-								aria-label="后退"
-								@click.prevent
-								@pointerdown.prevent="handleVehicleDriveControlPointer('backward', true, $event)"
-								@pointerup.prevent="handleVehicleDriveControlPointer('backward', false, $event)"
-								@pointerleave="handleVehicleDriveControlPointer('backward', false)"
-								@pointercancel="handleVehicleDriveControlPointer('backward', false)"
-							>
-								<v-icon icon="mdi-arrow-down-bold" size="14" />
-							</button>
-							<div class="scene-preview__drive-joystick-ring"></div>
-							<div
-								class="scene-preview__drive-joystick-handle"
-								:style="vehicleDriveJoystickHandleStyle"
-							></div>
+					<div class="scene-preview__steering-column">
+						<div
+							ref="steeringWheelRef"
+							class="scene-preview__steering-wheel"
+							:style="vehicleSteeringWheelStyle"
+							role="slider"
+							aria-label="方向盘"
+							aria-valuemin="-135"
+							aria-valuemax="135"
+							:aria-valuenow="Math.round(vehicleDriveInput.steering * 135)"
+							@pointerdown.prevent="handleSteeringWheelPointerDown"
+							@pointermove.prevent="handleSteeringWheelPointerMove"
+							@pointerup.prevent="handleSteeringWheelPointerUp"
+							@pointercancel.prevent="handleSteeringWheelPointerUp"
+						>
+							<div class="scene-preview__steering-wheel-spokes"></div>
+							<div class="scene-preview__steering-wheel-hub">
+								<span>{{ vehicleSteeringAngleLabel }}</span>
+							</div>
 						</div>
+						<v-btn
+							v-if="vehicleDriveState.active"
+							class="scene-preview__drive-camera-toggle"
+							variant="tonal"
+							size="small"
+							color="secondary"
+							:prepend-icon="vehicleDriveCameraToggleConfig.icon"
+							:title="vehicleDriveCameraToggleConfig.label"
+							@click="handleVehicleDriveCameraToggle"
+						>
+							{{ vehicleDriveCameraToggleConfig.label }}
+						</v-btn>
 					</div>
-					<v-btn
-						class="scene-preview__drive-brake"
-						variant="flat"
-						color="red"
-						:class="{ 'scene-preview__drive-brake--active': vehicleDriveUi.brakeActive }"
-						@click.prevent
-						@pointerdown.prevent="handleVehicleDriveControlPointer('brake', true, $event)"
-						@pointerup.prevent="handleVehicleDriveControlPointer('brake', false, $event)"
-						@pointerleave="handleVehicleDriveControlPointer('brake', false)"
-						@pointercancel="handleVehicleDriveControlPointer('brake', false)"
-					>
-						<v-icon icon="mdi-car-brake-alert" size="16" />
-						<span>刹车</span>
-					</v-btn>
+					<div class="scene-preview__pedal-row">
+						<v-btn
+							class="scene-preview__pedal-button"
+							:class="{ 'scene-preview__pedal-button--active': vehicleDriveUi.forwardActive }"
+							variant="tonal"
+							color="primary"
+							size="small"
+							icon="mdi-arrow-up-bold"
+							title="前进 (W)"
+							aria-label="前进"
+							@click.prevent
+							@pointerdown.prevent="handleVehicleDriveControlPointer('forward', true, $event)"
+							@pointerup.prevent="handleVehicleDriveControlPointer('forward', false, $event)"
+							@pointerleave="handleVehicleDriveControlPointer('forward', false)"
+							@pointercancel="handleVehicleDriveControlPointer('forward', false)"
+						/>
+						<v-btn
+							class="scene-preview__pedal-button"
+							:class="{ 'scene-preview__pedal-button--active': vehicleDriveUi.backwardActive }"
+							variant="tonal"
+							color="secondary"
+							size="small"
+							icon="mdi-arrow-down-bold"
+							title="后退 (S)"
+							aria-label="后退"
+							@click.prevent
+							@pointerdown.prevent="handleVehicleDriveControlPointer('backward', true, $event)"
+							@pointerup.prevent="handleVehicleDriveControlPointer('backward', false, $event)"
+							@pointerleave="handleVehicleDriveControlPointer('backward', false)"
+							@pointercancel="handleVehicleDriveControlPointer('backward', false)"
+						/>
+						<v-btn
+							class="scene-preview__pedal-button"
+							:class="{ 'scene-preview__pedal-button--active': vehicleDriveUi.brakeActive }"
+							variant="tonal"
+							color="error"
+							size="small"
+							icon="mdi-car-brake-alert"
+							title="刹车 (Space)"
+							aria-label="刹车"
+							@click.prevent
+							@pointerdown.prevent="handleVehicleDriveControlPointer('brake', true, $event)"
+							@pointerup.prevent="handleVehicleDriveControlPointer('brake', false, $event)"
+							@pointerleave="handleVehicleDriveControlPointer('brake', false)"
+							@pointercancel="handleVehicleDriveControlPointer('brake', false)"
+						/>
+						<v-btn
+							class="scene-preview__pedal-button scene-preview__pedal-button--reset"
+							variant="tonal"
+							color="info"
+							size="small"
+							icon="mdi-backup-restore"
+							title="车辆重置"
+							aria-label="车辆重置"
+							@click="handleVehicleDriveResetClick"
+						/>
+					</div>
 				</div>
 			</div>
 		</div>
@@ -7917,7 +8361,7 @@ onBeforeUnmount(() => {
 	left: 20px;
 	bottom: 20px;
 	z-index: 2150;
-	width: 220px;
+	width: 240px;
 	pointer-events: none;
 }
 
@@ -7931,12 +8375,12 @@ onBeforeUnmount(() => {
 }
 
 .scene-preview__drive-panel-inner {
-	padding: 12px 14px 14px;
+	padding: 12px 14px;
 	border-radius: 18px;
-	background: rgba(9, 12, 20, 0.92);
-	border: 1px solid rgba(255, 255, 255, 0.08);
-	box-shadow: 0 18px 45px rgba(4, 6, 12, 0.55);
-	backdrop-filter: blur(14px);
+	background: rgba(6, 10, 18, 0.78);
+	border: 1px solid rgba(255, 255, 255, 0.1);
+	box-shadow: 0 18px 38px rgba(4, 6, 12, 0.5);
+	backdrop-filter: blur(16px);
 	color: #f5f7ff;
 	pointer-events: auto;
 }
@@ -7945,6 +8389,7 @@ onBeforeUnmount(() => {
 	display: flex;
 	align-items: center;
 	gap: 10px;
+	justify-content: space-between;
 }
 
 .scene-preview__drive-heading-text {
@@ -7969,6 +8414,18 @@ onBeforeUnmount(() => {
 	color: rgba(245, 247, 255, 0.55);
 }
 
+.scene-preview__drive-camera-toggle {
+	text-transform: none;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	min-width: 0;
+	width: 100%;
+}
+
+.scene-preview__drive-camera-toggle :deep(.v-btn__content) {
+	gap: 4px;
+}
+
 .scene-preview__drive-exit {
 	min-width: 0;
 	text-transform: none;
@@ -7983,120 +8440,93 @@ onBeforeUnmount(() => {
 .scene-preview__drive-controls {
 	margin-top: 12px;
 	display: flex;
-	align-items: center;
+	flex-direction: column;
 	gap: 12px;
 }
 
-.scene-preview__drive-joystick {
-	flex: 0 0 auto;
+.scene-preview__steering-column {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 10px;
 }
 
-.scene-preview__drive-joystick-base {
+.scene-preview__steering-wheel {
 	position: relative;
-	width: 108px;
-	height: 108px;
+	width: 120px;
+	height: 120px;
 	border-radius: 50%;
-	background: radial-gradient(circle, rgba(255, 255, 255, 0.08), rgba(10, 14, 24, 0.95));
-	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), inset 0 12px 40px rgba(0, 0, 0, 0.55);
-	border: none;
+	background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.08), rgba(7, 10, 18, 0.95));
+	border: 1px solid rgba(255, 255, 255, 0.12);
+	box-shadow:
+		inset 0 12px 30px rgba(0, 0, 0, 0.45),
+		0 12px 22px rgba(0, 0, 0, 0.4);
+	transform: rotate(var(--steering-rotation, 0deg));
+	transition: transform 120ms ease;
+	cursor: grab;
 }
 
-.scene-preview__drive-joystick-ring {
+.scene-preview__steering-wheel:active {
+	cursor: grabbing;
+}
+
+.scene-preview__steering-wheel::after {
+	content: '';
 	position: absolute;
-	inset: 12px;
+	inset: 6px;
 	border-radius: 50%;
 	border: 1px dashed rgba(255, 255, 255, 0.18);
 }
 
-.scene-preview__drive-joystick-handle {
+.scene-preview__steering-wheel-spokes {
+	position: absolute;
+	inset: 22px;
+	border-radius: 50%;
+	border: 1px solid rgba(255, 255, 255, 0.15);
+	box-shadow: inset 0 0 20px rgba(255, 255, 255, 0.05);
+}
+
+.scene-preview__steering-wheel-hub {
 	position: absolute;
 	left: 50%;
 	top: 50%;
-	width: 32px;
-	height: 32px;
+	width: 54px;
+	height: 54px;
 	border-radius: 50%;
-	background: linear-gradient(145deg, rgba(90, 123, 255, 0.95), rgba(72, 222, 255, 0.7));
-	box-shadow:
-		0 8px 18px rgba(20, 40, 120, 0.55),
-		inset 0 0 0 1px rgba(255, 255, 255, 0.25);
-	transform: translate(
-		calc(-50% + var(--joystick-offset-x, 0px)),
-		calc(-50% + var(--joystick-offset-y, 0px))
-	);
-	transition: transform 160ms ease;
-}
-
-.scene-preview__drive-joystick-control {
-	position: absolute;
-	width: 36px;
-	height: 36px;
-	border-radius: 50%;
-	border: none;
-	background: rgba(255, 255, 255, 0.08);
-	color: #f5f7ff;
+	background: rgba(15, 20, 32, 0.92);
+	border: 1px solid rgba(255, 255, 255, 0.12);
+	transform: translate(-50%, -50%);
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	cursor: pointer;
-	transition: background 120ms ease, box-shadow 120ms ease;
-}
-
-.scene-preview__drive-joystick-control:focus-visible {
-	outline: 2px solid rgba(90, 153, 255, 0.9);
-	outline-offset: 2px;
-}
-
-.scene-preview__drive-joystick-control--north {
-	top: 4px;
-	left: 50%;
-	transform: translate(-50%, -50%);
-}
-
-.scene-preview__drive-joystick-control--south {
-	bottom: 4px;
-	left: 50%;
-	transform: translate(-50%, 50%);
-}
-
-.scene-preview__drive-joystick-control--west {
-	left: 4px;
-	top: 50%;
-	transform: translate(-50%, -50%);
-}
-
-.scene-preview__drive-joystick-control--east {
-	right: 4px;
-	top: 50%;
-	transform: translate(50%, -50%);
-}
-
-.scene-preview__drive-joystick-control--active,
-.scene-preview__drive-joystick-control:active {
-	background: linear-gradient(135deg, rgba(91, 132, 255, 0.8), rgba(86, 236, 255, 0.55));
-	box-shadow: 0 8px 18px rgba(44, 108, 255, 0.45);
-}
-
-.scene-preview__drive-brake {
-	flex: 0 0 auto;
-	min-width: 0;
-	height: 72px;
-	border-radius: 18px;
-	text-transform: none;
+	font-size: 0.8rem;
 	font-weight: 600;
-	letter-spacing: 0.04em;
-	background: rgba(255, 76, 76, 0.16) !important;
+}
+
+.scene-preview__steering-wheel-hub span {
+	color: #9fd6ff;
+}
+
+.scene-preview__pedal-row {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 8px;
+}
+
+.scene-preview__pedal-button {
+	min-height: 38px;
+	border-radius: 50%;
+	aspect-ratio: 1 / 1;
 	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
 }
 
-.scene-preview__drive-brake--active {
-	background: linear-gradient(135deg, rgba(255, 98, 98, 0.92), rgba(255, 154, 98, 0.7)) !important;
-	box-shadow: 0 12px 28px rgba(255, 120, 120, 0.4);
+.scene-preview__pedal-button--active {
+	box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35), 0 8px 14px rgba(0, 0, 0, 0.35);
 }
 
-.scene-preview__drive-brake :deep(.v-btn__content) {
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
+.scene-preview__pedal-button--reset {
+	background: rgba(63, 201, 255, 0.2) !important;
+	box-shadow: inset 0 0 0 1px rgba(63, 201, 255, 0.35);
 }
 
 .scene-preview__purpose-button :deep(.v-icon) {
