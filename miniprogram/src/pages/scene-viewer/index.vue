@@ -4186,39 +4186,7 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
   } else {
     tempQuaternion.identity();
   }
-  // const desiredDistance = ownerObject
-  //   ? Math.max(DEFAULT_OBJECT_RADIUS, computeObjectBoundingRadius(ownerObject))
-  //   : DEFAULT_OBJECT_RADIUS;
   const destination = focusPoint.clone();
-  // let usedTargetOrientation = false;
-  // if (ownerObject) {
-  //   ownerObject.getWorldDirection(tempVector);
-  //   tempVector.y = 0;
-  //   if (tempVector.lengthSq() < 1e-6) {
-  //     tempVector.set(0, 0, -1);
-  //     tempVector.applyQuaternion(tempQuaternion);
-  //     tempVector.y = 0;
-  //   }
-  //   if (tempVector.lengthSq() >= 1e-6) {
-  //     tempVector.normalize().multiplyScalar(desiredDistance);
-  //     destination.sub(tempVector);
-  //     usedTargetOrientation = true;
-  //   }
-  // }
-  // if (!usedTargetOrientation) {
-  //   tempVector.copy(camera.position).sub(focusPoint);
-  //   tempVector.y = 0;
-  //   if (tempVector.lengthSq() < 1e-6 && ownerObject) {
-  //     tempVector.set(0, 0, -1);
-  //     tempVector.applyQuaternion(tempQuaternion);
-  //     tempVector.y = 0;
-  //   }
-  //   if (tempVector.lengthSq() < 1e-6) {
-  //     tempVector.set(0, 0, 1);
-  //   }
-  //   tempVector.normalize().multiplyScalar(desiredDistance);
-  //   destination.add(tempVector);
-  // }
   destination.y = HUMAN_EYE_HEIGHT;
   const lookTarget = new THREE.Vector3(focusPoint.x, HUMAN_EYE_HEIGHT, focusPoint.z);
 
@@ -4231,7 +4199,6 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
       withControlsVerticalFreedom(controls, () => {
         camera.position.lerpVectors(startPosition, destination, alpha);
         controls.target.lerpVectors(startTarget, lookTarget, alpha);
-        camera.lookAt(controls.target);
         controls.update();
       });
     });
@@ -4241,8 +4208,6 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
     runWithProgrammaticCameraMutation(() => {
       withControlsVerticalFreedom(controls, () => {
         camera.position.copy(destination);
-        controls.target.copy(lookTarget);
-        camera.lookAt(controls.target);
         controls.update();
       });
     });
