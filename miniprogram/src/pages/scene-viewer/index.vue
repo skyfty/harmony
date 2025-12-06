@@ -171,15 +171,18 @@
           :disabled="vehicleDrivePrompt.busy"
           type="default"
           hover-class="none"
+          aria-label="进入驾驶模式"
           @tap="handleVehicleDrivePromptTap"
         >
-          <view class="viewer-drive-start__label">
-            <text class="viewer-drive-start__title">驾驶车辆</text>
-            <text class="viewer-drive-start__subtitle">{{ vehicleDrivePrompt.label }}</text>
-          </view>
-          <view class="viewer-drive-start__status">
-            <text v-if="vehicleDrivePrompt.busy">准备中…</text>
-            <text v-else>点击开始</text>
+          <view class="viewer-drive-start__glow" aria-hidden="true"></view>
+          <svg class="viewer-drive-start__icon" viewBox="0 0 24 24" aria-hidden="true" role="img">
+            <path
+              d="M12,2C6.5,2 2,6.5 2,12C2,17.5 6.5,22 12,22C17.5,22 22,17.5 22,12C22,6.5 17.5,2 12,2M12,4C14.08,4 15.79,4.87 17,6H7C8.21,4.87 9.92,4 12,4M18.83,7C19.9,8.26 20.6,9.99 20.82,12H17.09C17.03,11.68 16.95,11.37 16.85,11.07L18.83,7M5.17,7L7.15,11.07C7.05,11.37 6.97,11.68 6.91,12H3.18C3.4,9.99 4.1,8.26 5.17,7M4,13H6.54L7.03,15H5.58C4.7,14.04 4.14,13 4,13M18.42,15H16.97L17.46,13H20C19.86,13.94 19.3,15 18.42,15M8,13H16L15.5,15.5C14.6,16.1 13.36,16.5 12,16.5C10.64,16.5 9.4,16.1 8.5,15.5L8,13M8.23,17H15.77C14.54,17.63 13.32,18 12,18C10.68,18 9.46,17.63 8.23,17Z"
+            />
+          </svg>
+          <view class="viewer-drive-start__sparkline" aria-hidden="true"></view>
+          <view v-if="vehicleDrivePrompt.busy" class="viewer-drive-start__busy" aria-hidden="true">
+            <view class="viewer-drive-start__busy-dot"></view>
           </view>
         </button>
       </view>
@@ -4931,33 +4934,6 @@ function computeVehicleDriveCameraTargets(
   return true;
 }
 
-function alignVehicleDriveCameraImmediate(
-  seatNodeId: string | null,
-  fallbackNodeId: string | null,
-): { success: boolean; message?: string } {
-  const context = renderContext;
-  if (!context) {
-    return { success: false, message: '相机不可用' };
-  }
-  if (!computeVehicleDriveCameraTargets(seatNodeId, fallbackNodeId)) {
-    return { success: false, message: '无法定位驾驶摄像机' };
-  }
-  const { camera, controls } = context;
-  runWithProgrammaticCameraMutation(() => {
-    camera.position.copy(tempDriveSeatPosition);
-    camera.up.copy(tempDriveSeatUp);
-    controls.target.copy(tempDriveLookTarget);
-    controls.update();
-    camera.position.copy(tempDriveSeatPosition);
-    tempDriveCameraMatrix.lookAt(tempDriveSeatPosition, tempDriveLookTarget, tempDriveSeatUp);
-    tempDriveCameraMatrix.invert();
-    tempDriveCameraQuaternion.setFromRotationMatrix(tempDriveCameraMatrix);
-    camera.quaternion.copy(tempDriveCameraQuaternion);
-    camera.updateMatrixWorld(true);
-  });
-  return { success: true };
-}
-
 function updateVehicleDriveCamera(): void {
   if (!vehicleDriveActive.value || !renderContext) {
     return;
@@ -7089,82 +7065,137 @@ onUnmounted(() => {
 }
 
 .viewer-drive-start__button {
-  width: 220px;
-  padding: 16px 18px;
-  border-radius: 18px;
-  background: rgba(14, 20, 42, 0.9);
-  box-shadow: 0 16px 42px rgba(4, 10, 24, 0.38);
-  color: #f4f6ff;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  align-items: flex-start;
+  width: 124px;
+  height: 124px;
+  border-radius: 50%;
   border: none;
   outline: none;
-  font-size: 14px;
-  letter-spacing: 0.4px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 12, 26, 0.85);
+  box-shadow:
+    0 24px 40px rgba(2, 8, 20, 0.65),
+    inset 0 0 0 1px rgba(120, 160, 255, 0.4);
+  position: relative;
+  overflow: visible;
+  backdrop-filter: blur(16px);
 }
 
 .viewer-drive-start__button:disabled {
-  opacity: 0.78;
+  opacity: 0.92;
 }
 
 .viewer-drive-start__button.is-busy {
-  background: rgba(20, 30, 58, 0.9);
+  box-shadow:
+    0 18px 32px rgba(2, 8, 20, 0.55),
+    inset 0 0 0 1px rgba(214, 195, 255, 0.55);
 }
 
-.viewer-drive-start__label {
+.viewer-drive-start__glow {
+  position: absolute;
+  inset: -40%;
+  background:
+    radial-gradient(circle at 40% 40%, rgba(120, 210, 255, 0.55), transparent 70%),
+    radial-gradient(circle at 70% 70%, rgba(255, 120, 200, 0.4), transparent 80%);
+  filter: blur(18px);
+  animation: viewer-drive-icon-glow 3.2s ease-in-out infinite;
+}
+
+.viewer-drive-start__icon {
+  width: 90px;
+  height: 90px;
+  color: rgba(236, 244, 255, 0.96);
+  filter:
+    drop-shadow(0 0 12px rgba(120, 190, 255, 0.8))
+    drop-shadow(0 8px 18px rgba(0, 6, 16, 0.6));
+  animation: viewer-drive-icon-flicker 2.4s ease-in-out infinite;
+  z-index: 1;
+}
+
+.viewer-drive-start__icon path {
+  fill: currentColor;
+}
+
+.viewer-drive-start__sparkline {
+  position: absolute;
+  width: 112px;
+  height: 112px;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0.05));
+  opacity: 0.6;
+  animation: viewer-drive-icon-spark 2s linear infinite;
+  filter: blur(1px);
+  z-index: 0;
+}
+
+.viewer-drive-start__busy {
+  position: absolute;
+  inset: 0;
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(6, 10, 24, 0.45);
 }
 
-.viewer-drive-start__title {
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.viewer-drive-start__subtitle {
-  font-size: 13px;
-  color: rgba(214, 224, 255, 0.86);
-}
-
-.viewer-drive-start__status {
-  font-size: 12px;
-  color: rgba(188, 204, 255, 0.76);
+.viewer-drive-start__busy-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 3px solid rgba(214, 228, 255, 0.85);
+  border-top-color: transparent;
+  animation: viewer-drive-busy-spin 0.9s linear infinite;
 }
 
 .viewer-drive-panel {
   position: absolute;
   right: 16px;
   bottom: 148px;
-  width: 220px;
-  padding: 16px;
-  border-radius: 18px;
-  background: rgba(10, 15, 32, 0.88);
-  box-shadow: 0 18px 48px rgba(6, 12, 28, 0.4);
+  width: min(360px, calc(100vw - 32px));
+  padding: 20px 22px;
+  border-radius: 26px;
+  background:
+    linear-gradient(135deg, rgba(22, 32, 64, 0.95), rgba(12, 16, 32, 0.92)),
+    rgba(10, 15, 32, 0.88);
+  border: 1px solid rgba(124, 156, 255, 0.35);
+  box-shadow:
+    0 22px 60px rgba(6, 12, 28, 0.55),
+    inset 0 0 0 1px rgba(72, 96, 184, 0.35);
   color: #ffffff;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 18px;
   z-index: 1550;
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(16px);
 }
 
 .viewer-drive-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(140, 168, 255, 0.2);
 }
 
 .viewer-drive-title {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 16px;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 18px;
   font-weight: 600;
-  letter-spacing: 0.6px;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+
+.viewer-drive-title::before {
+  content: 'Drive Mode';
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1.6px;
+  color: rgba(144, 176, 255, 0.85);
 }
 
 .viewer-drive-title__text {
@@ -7173,40 +7204,46 @@ onUnmounted(() => {
 
 .viewer-drive-node {
   font-size: 12px;
-  color: rgba(220, 230, 255, 0.78);
-  max-width: 120px;
+  color: rgba(220, 230, 255, 0.86);
+  max-width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: right;
-}
-
-.viewer-drive-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(40, 60, 120, 0.55);
+  border: 1px solid rgba(118, 146, 255, 0.35);
 }
 
 .viewer-drive-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr);
+  gap: 18px;
 }
 
 .viewer-drive-steering-column {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: 16px;
+  padding: 18px;
+  border-radius: 18px;
+  background: rgba(16, 22, 44, 0.7);
+  box-shadow: inset 0 0 0 1px rgba(118, 146, 255, 0.25);
 }
 
 .viewer-drive-steering-wheel {
-  width: 110px;
-  height: 110px;
-  border-radius: 999px;
-  border: 3px solid rgba(124, 156, 255, 0.4);
-  background: rgba(16, 24, 52, 0.9);
-  box-shadow: inset 0 0 12px rgba(4, 8, 20, 0.8);
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  border: 3px solid rgba(124, 156, 255, 0.45);
+  background:
+    radial-gradient(circle at 30% 30%, rgba(76, 120, 255, 0.15), transparent 60%),
+    rgba(14, 24, 52, 0.95);
+  box-shadow:
+    inset 0 0 24px rgba(4, 8, 20, 0.85),
+    0 0 32px rgba(34, 96, 255, 0.25);
   position: relative;
   display: flex;
   align-items: center;
@@ -7216,95 +7253,100 @@ onUnmounted(() => {
 
 .viewer-drive-steering-spokes {
   position: absolute;
-  width: 68px;
-  height: 68px;
+  width: 90px;
+  height: 90px;
   background:
-    linear-gradient(
-      0deg,
-      transparent 45%,
-      rgba(180, 198, 255, 0.4) 45%,
-      rgba(180, 198, 255, 0.4) 55%,
-      transparent 55%
-    ),
-    linear-gradient(
-      90deg,
-      transparent 45%,
-      rgba(180, 198, 255, 0.4) 45%,
-      rgba(180, 198, 255, 0.4) 55%,
-      transparent 55%
-    );
+    radial-gradient(circle, transparent 42%, rgba(180, 198, 255, 0.25) 43%, rgba(180, 198, 255, 0.25) 57%, transparent 58%),
+    linear-gradient(0deg, transparent 46%, rgba(180, 198, 255, 0.35) 46%, rgba(180, 198, 255, 0.35) 54%, transparent 54%),
+    linear-gradient(90deg, transparent 46%, rgba(180, 198, 255, 0.35) 46%, rgba(180, 198, 255, 0.35) 54%, transparent 54%);
   pointer-events: none;
 }
 
 .viewer-drive-steering-hub {
-  width: 38px;
-  height: 38px;
+  width: 46px;
+  height: 46px;
   border-radius: 50%;
-  background: rgba(40, 58, 108, 0.95);
-  border: 2px solid rgba(142, 168, 255, 0.5);
+  background: rgba(32, 52, 108, 0.95);
+  border: 2px solid rgba(142, 168, 255, 0.6);
   display: flex;
   align-items: center;
   justify-content: center;
+  box-shadow: inset 0 0 12px rgba(8, 12, 28, 0.8);
 }
 
 .viewer-drive-steering-hub text {
-  font-size: 12px;
-  color: rgba(236, 242, 255, 0.9);
+  font-size: 13px;
+  color: rgba(236, 242, 255, 0.95);
 }
 
 .viewer-drive-grid-column {
   display: flex;
   flex-direction: column;
+  gap: 16px;
+}
+
+.viewer-drive-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 
 .viewer-drive-camera-toggle,
 .viewer-drive-reset {
   width: 100%;
-  padding: 12px 14px;
-  border-radius: 14px;
+  padding: 14px 16px;
+  border-radius: 16px;
   border: none;
   outline: none;
-  background: rgba(26, 40, 82, 0.92);
-  color: rgba(222, 232, 255, 0.94);
+  background: rgba(30, 42, 90, 0.92);
+  color: rgba(222, 232, 255, 0.96);
   font-size: 14px;
   font-weight: 600;
-  letter-spacing: 0.4px;
-  box-shadow: inset 0 0 0 1px rgba(120, 150, 255, 0.24);
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  box-shadow:
+    inset 0 0 0 1px rgba(120, 150, 255, 0.32),
+    0 10px 24px rgba(8, 12, 32, 0.65);
 }
 
 .viewer-drive-reset.is-busy,
 .viewer-drive-camera-toggle:disabled,
 .viewer-drive-reset:disabled {
-  opacity: 0.78;
+  opacity: 0.8;
 }
 
 .viewer-drive-exit {
-  margin-top: 14px;
+  margin-top: 2px;
   width: 100%;
-  padding: 14px 16px;
-  border-radius: 16px;
-  background: rgba(20, 32, 68, 0.92);
-  color: rgba(234, 240, 255, 0.92);
+  padding: 16px 18px;
+  border-radius: 18px;
+  background:
+    linear-gradient(120deg, rgba(255, 86, 110, 0.25), rgba(34, 52, 120, 0.92));
+  color: rgba(234, 240, 255, 0.94);
   border: none;
   outline: none;
   font-size: 15px;
   font-weight: 600;
-  letter-spacing: 0.4px;
+  letter-spacing: 0.6px;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: inset 0 0 0 1px rgba(118, 146, 255, 0.24);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 126, 140, 0.38),
+    0 14px 32px rgba(12, 16, 32, 0.65);
   transition: background 0.18s ease, box-shadow 0.18s ease;
+  text-transform: uppercase;
 }
 
 .viewer-drive-exit.is-busy {
-  background: rgba(28, 44, 80, 0.92);
-  box-shadow: inset 0 0 0 1px rgba(118, 146, 255, 0.3);
+  background: rgba(32, 46, 92, 0.94);
+  box-shadow:
+    inset 0 0 0 1px rgba(118, 146, 255, 0.4),
+    0 12px 28px rgba(12, 16, 32, 0.6);
 }
 
 .viewer-drive-exit:disabled {
-  opacity: 0.78;
+  opacity: 0.8;
 }
 
 .viewer-drive-exit__text {
@@ -7312,18 +7354,22 @@ onUnmounted(() => {
 }
 
 .viewer-drive-button {
-  background: rgba(22, 32, 66, 0.9);
-  border-radius: 12px;
-  padding: 12px 10px;
+  background: rgba(22, 32, 72, 0.95);
+  border-radius: 14px;
+  padding: 14px 12px;
   text-align: center;
   font-size: 14px;
   font-weight: 600;
-  color: rgba(238, 244, 255, 0.92);
+  color: rgba(238, 244, 255, 0.94);
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: inset 0 0 0 1px rgba(124, 156, 255, 0.22);
+  box-shadow:
+    inset 0 0 0 1px rgba(124, 156, 255, 0.32),
+    0 8px 16px rgba(6, 10, 30, 0.6);
   transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
 }
 
 .viewer-drive-button--wide {
@@ -7331,23 +7377,82 @@ onUnmounted(() => {
 }
 
 .viewer-drive-button--brake {
-  background: rgba(120, 32, 40, 0.92);
-  box-shadow: inset 0 0 0 1px rgba(255, 132, 132, 0.38);
+  background: rgba(140, 36, 46, 0.92);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 132, 132, 0.4),
+    0 8px 18px rgba(100, 24, 30, 0.6);
 }
 
 .viewer-drive-button.is-active {
-  transform: translateY(1px);
-  background: rgba(64, 110, 255, 0.95);
+  transform: translateY(2px);
+  background: rgba(64, 110, 255, 0.98);
   box-shadow:
-    inset 0 0 0 1px rgba(184, 214, 255, 0.65),
-    0 8px 18px rgba(54, 102, 255, 0.45);
+    inset 0 0 0 1px rgba(184, 214, 255, 0.75),
+    0 12px 22px rgba(54, 102, 255, 0.45);
 }
 
 .viewer-drive-button--brake.is-active {
-  background: rgba(210, 72, 70, 0.96);
+  background: rgba(220, 82, 80, 0.98);
   box-shadow:
-    inset 0 0 0 1px rgba(255, 192, 192, 0.75),
-    0 10px 18px rgba(210, 72, 70, 0.4);
+    inset 0 0 0 1px rgba(255, 192, 192, 0.85),
+    0 14px 24px rgba(210, 72, 70, 0.5);
+}
+
+@keyframes viewer-drive-icon-glow {
+  0% {
+    opacity: 0.6;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+  100% {
+    opacity: 0.6;
+    transform: scale(0.92);
+  }
+}
+
+@keyframes viewer-drive-icon-spark {
+  0% {
+    transform: rotate(0deg) scale(0.95);
+  }
+  50% {
+    transform: rotate(180deg) scale(1.05);
+  }
+  100% {
+    transform: rotate(360deg) scale(0.95);
+  }
+}
+
+@keyframes viewer-drive-icon-flicker {
+  0% {
+    opacity: 0.85;
+    filter:
+      drop-shadow(0 0 10px rgba(120, 190, 255, 0.55))
+      drop-shadow(0 8px 18px rgba(0, 6, 16, 0.45));
+  }
+  60% {
+    opacity: 1;
+    filter:
+      drop-shadow(0 0 18px rgba(180, 220, 255, 0.95))
+      drop-shadow(0 10px 22px rgba(0, 6, 16, 0.65));
+  }
+  100% {
+    opacity: 0.9;
+    filter:
+      drop-shadow(0 0 12px rgba(140, 200, 255, 0.7))
+      drop-shadow(0 8px 18px rgba(0, 6, 16, 0.5));
+  }
+}
+
+@keyframes viewer-drive-busy-spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 .viewer-purpose-controls {
