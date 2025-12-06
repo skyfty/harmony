@@ -736,6 +736,9 @@ const VEHICLE_WHEEL_SPIN_EPSILON = 1e-4
 const VEHICLE_TRAVEL_EPSILON = 1e-5
 const STEERING_WHEEL_MAX_DEGREES = 135
 const STEERING_WHEEL_MAX_RADIANS = THREE.MathUtils.degToRad(STEERING_WHEEL_MAX_DEGREES)
+const STEERING_WHEEL_RETURN_SPEED = 4
+const STEERING_KEYBOARD_RETURN_SPEED = 7
+const STEERING_KEYBOARD_CATCH_SPEED = 18
 const VEHICLE_RESET_LIFT = 0.75
 const nodeObjectMap = new Map<string, THREE.Object3D>()
 const scatterInstanceNodeIds = new Set<string>()
@@ -974,6 +977,7 @@ const vehicleDriveUi = computed(() => {
 const steeringWheelRef = ref<HTMLDivElement | null>(null)
 const steeringWheelValue = ref(0)
 const steeringKeyboardValue = ref(0)
+const steeringKeyboardTarget = ref(0)
 const steeringWheelState = reactive({
 	dragging: false,
 	pointerId: -1,
@@ -999,12 +1003,13 @@ function syncVehicleSteeringValue(): void {
 }
 
 function updateSteeringKeyboardValue(): void {
-	if (vehicleDriveInputFlags.left === vehicleDriveInputFlags.right) {
-		steeringKeyboardValue.value = 0
-	} else if (vehicleDriveInputFlags.left) {
-		steeringKeyboardValue.value = 1
-	} else {
-		steeringKeyboardValue.value = -1
+	let nextTarget = 0
+	if (vehicleDriveInputFlags.left !== vehicleDriveInputFlags.right) {
+		nextTarget = vehicleDriveInputFlags.left ? 1 : -1
+	}
+	steeringKeyboardTarget.value = nextTarget
+	if (nextTarget !== 0) {
+		steeringKeyboardValue.value = nextTarget
 	}
 }
 
@@ -1095,6 +1100,45 @@ function handleSteeringWheelPointerUp(event: PointerEvent): void {
 		return
 	}
 	releaseSteeringWheelPointer(event)
+}
+
+function approachSteeringValue(current: number, target: number, rate: number, delta: number): number {
+	if (!Number.isFinite(current) || !Number.isFinite(target) || !Number.isFinite(delta) || rate <= 0 || delta <= 0) {
+		return target
+	}
+	const difference = target - current
+	if (Math.abs(difference) <= 1e-4) {
+		return target
+	}
+	const maxStep = rate * delta
+	if (Math.abs(difference) <= maxStep) {
+		return target
+	}
+	return current + Math.sign(difference) * maxStep
+}
+
+function updateSteeringAutoCenter(delta: number): void {
+	if (!Number.isFinite(delta) || delta <= 0) {
+		return
+	}
+	let steeringChanged = false
+	if (!steeringWheelState.dragging) {
+		const nextWheel = approachSteeringValue(steeringWheelValue.value, 0, STEERING_WHEEL_RETURN_SPEED, delta)
+		if (nextWheel !== steeringWheelValue.value) {
+			steeringWheelValue.value = nextWheel
+			steeringChanged = true
+		}
+	}
+	const target = steeringKeyboardTarget.value
+	const keyboardRate = target === 0 ? STEERING_KEYBOARD_RETURN_SPEED : STEERING_KEYBOARD_CATCH_SPEED
+	const nextKeyboard = approachSteeringValue(steeringKeyboardValue.value, target, keyboardRate, delta)
+	if (nextKeyboard !== steeringKeyboardValue.value) {
+		steeringKeyboardValue.value = clampSteeringScalar(nextKeyboard)
+		steeringChanged = true
+	}
+	if (steeringChanged) {
+		syncVehicleSteeringValue()
+	}
 }
 
 const vehicleDriveCameraToggleConfig = computed(() => {
@@ -4715,6 +4759,7 @@ function startAnimationLoop() {
 		animationFrameHandle = requestAnimationFrame(renderLoop)
 		fpsStats?.begin()
 		const delta = clock.getDelta()
+		updateSteeringAutoCenter(delta)
 		const followCameraActive = vehicleDriveState.active && vehicleDriveCameraMode.value === 'follow'
 		if (controlMode.value === 'first-person' && firstPersonControls && !vehicleDriveState.active) {
 			const rotationDirection = Number(rotationState.q) - Number(rotationState.e)
@@ -8377,7 +8422,7 @@ onBeforeUnmount(() => {
 .scene-preview__drive-panel-inner {
 	padding: 12px 14px;
 	border-radius: 18px;
-	background: rgba(6, 10, 18, 0.78);
+	background: rgba(6, 10, 18, 0.52);
 	border: 1px solid rgba(255, 255, 255, 0.1);
 	box-shadow: 0 18px 38px rgba(4, 6, 12, 0.5);
 	backdrop-filter: blur(16px);
