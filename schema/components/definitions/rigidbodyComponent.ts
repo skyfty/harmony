@@ -8,11 +8,11 @@ export type RigidbodyBodyType = 'DYNAMIC' | 'STATIC' | 'KINEMATIC'
 export interface RigidbodyComponentProps {
   mass: number
   bodyType: RigidbodyBodyType
-  targetNodeId?: string
   linearDamping: number
   angularDamping: number
   restitution: number
   friction: number
+  targetNodeId: string | null
 }
 
 export type RigidbodyVector3Tuple = [number, number, number]
@@ -45,14 +45,14 @@ export interface RigidbodyComponentMetadata {
   generatedAt?: string
 }
 
-export const DEFAULT_RIGIDBODY_MASS = 1
+export const DEFAULT_RIGIDBODY_MASS = 10000
 export const DEFAULT_RIGIDBODY_BODY_TYPE: RigidbodyBodyType = 'DYNAMIC'
 export const MIN_RIGIDBODY_MASS = 0
-export const MAX_RIGIDBODY_MASS = 10_000
-export const DEFAULT_LINEAR_DAMPING = 0.04
-export const DEFAULT_ANGULAR_DAMPING = 0.04
+export const MAX_RIGIDBODY_MASS = 100000
+export const DEFAULT_LINEAR_DAMPING = 0.01
+export const DEFAULT_ANGULAR_DAMPING = 0.4
 export const DEFAULT_RIGIDBODY_RESTITUTION = 0.2
-export const DEFAULT_RIGIDBODY_FRICTION = 0.3
+export const DEFAULT_RIGIDBODY_FRICTION = 0.5
 
 export function clampRigidbodyComponentProps(
   props: Partial<RigidbodyComponentProps> | null | undefined,
@@ -79,14 +79,22 @@ export function clampRigidbodyComponentProps(
     : DEFAULT_RIGIDBODY_FRICTION
   const normalizedFriction = Math.max(0, Math.min(1, rawFriction))
 
+  let normalizedTargetNodeId: string | null = null
+  if (typeof props?.targetNodeId === 'string') {
+    const trimmed = props.targetNodeId.trim()
+    normalizedTargetNodeId = trimmed.length ? trimmed : null
+  } else if (props?.targetNodeId === null) {
+    normalizedTargetNodeId = null
+  }
+
   return {
     mass: normalizedMass,
     bodyType: normalizedType,
-    targetNodeId: props?.targetNodeId,
     linearDamping: normalizedLinearDamping,
     angularDamping: normalizedAngularDamping,
     restitution: normalizedRestitution,
     friction: normalizedFriction,
+    targetNodeId: normalizedTargetNodeId,
   }
 }
 
@@ -94,11 +102,11 @@ export function cloneRigidbodyComponentProps(props: RigidbodyComponentProps): Ri
   return {
     mass: props.mass,
     bodyType: props.bodyType,
-    targetNodeId: props.targetNodeId,
     linearDamping: props.linearDamping,
     angularDamping: props.angularDamping,
     restitution: props.restitution,
     friction: props.friction,
+    targetNodeId: props.targetNodeId ?? null,
   }
 }
 
@@ -121,8 +129,10 @@ const rigidbodyComponentDefinition: ComponentDefinition<RigidbodyComponentProps>
     }
     return true
   },
-  createDefaultProps(_node: SceneNode) {
-    return clampRigidbodyComponentProps(null)
+  createDefaultProps(node: SceneNode) {
+    return clampRigidbodyComponentProps({
+      targetNodeId: node.id ?? null,
+    })
   },
   createInstance(context) {
     return new RigidbodyComponent(context)

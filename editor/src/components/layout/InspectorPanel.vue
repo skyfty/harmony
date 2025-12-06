@@ -53,15 +53,18 @@ const emit = defineEmits<{
   (event: 'toggle-placement'): void
   (event: 'open-material-details', payload: { id: string }): void
   (event: 'close-material-details'): void
+  (event: 'open-vehicle-wheel-details', payload: { id: string }): void
+  (event: 'close-vehicle-wheel-details'): void
   (event: 'open-behavior-details', payload: BehaviorDetailsPayload): void
   (event: 'close-behavior-details'): void
 }>()
 
 const sceneStore = useSceneStore()
-const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
+const { selectedNode, selectedNodeId, activeTool } = storeToRefs(sceneStore)
 
 const nodeName = ref('')
 const materialDetailsTargetId = ref<string | null>(null)
+const vehicleWheelDetailsTargetId = ref<string | null>(null)
 const behaviorDetailsActive = ref(false)
 const panelCardRef = ref<HTMLElement | { $el: HTMLElement } | null>(null)
 const floating = computed(() => props.floating ?? false)
@@ -190,6 +193,23 @@ function handleMaterialPanelRequestCloseDetails() {
   closeMaterialDetails({ force: true })
 }
 
+function handleOpenVehicleWheelDetails(payload: { id: string }) {
+  vehicleWheelDetailsTargetId.value = payload.id
+  emit('open-vehicle-wheel-details', payload)
+}
+
+function closeVehicleWheelDetails(options: { silent?: boolean; force?: boolean } = {}) {
+  const hadTarget = vehicleWheelDetailsTargetId.value !== null
+  vehicleWheelDetailsTargetId.value = null
+  if ((hadTarget || options.force) && !options.silent) {
+    emit('close-vehicle-wheel-details')
+  }
+}
+
+function handleVehiclePanelRequestCloseWheelDetails() {
+  closeVehicleWheelDetails({ force: true })
+}
+
 function handleOpenBehaviorDetails(payload: BehaviorDetailsPayload) {
   behaviorDetailsActive.value = true
   emit('open-behavior-details', payload)
@@ -228,12 +248,14 @@ watch(hasBehaviorComponent, (present) => {
 
 watch(selectedNodeId, () => {
   closeMaterialDetails()
+  closeVehicleWheelDetails()
   closeBehaviorDetails()
 })
 
 defineExpose({
   getPanelRect,
   closeMaterialDetails,
+  closeVehicleWheelDetails,
   closeBehaviorDetails,
 })
 
@@ -317,6 +339,33 @@ function handleAddComponent(type: string) {
   sceneStore.addNodeComponent(selectedNode.value.id, type)
 }
 
+function ensureTransformPanelExpanded() {
+  if (expandedPanels.value.includes('transform')) {
+    return
+  }
+  expandedPanels.value = [...expandedPanels.value, 'transform']
+}
+
+watch(
+  activeTool,
+  (tool) => {
+    if (tool !== 'select') {
+      ensureTransformPanelExpanded()
+    }
+  },
+  { immediate: true }
+)
+
+watch(
+  expandedPanels,
+  () => {
+    if (activeTool.value !== 'select') {
+      ensureTransformPanelExpanded()
+    }
+  },
+  { deep: true }
+)
+
 </script>
 
 <template>
@@ -377,7 +426,11 @@ function handleAddComponent(type: string) {
               <WarpGatePanel v-else-if="component.type === WARP_GATE_COMPONENT_TYPE" />
               <EffectPanel v-else-if="component.type === EFFECT_COMPONENT_TYPE" />
               <RigidbodyPanel v-else-if="component.type === RIGIDBODY_COMPONENT_TYPE" />
-              <VehiclePanel v-else-if="component.type === VEHICLE_COMPONENT_TYPE" />
+              <VehiclePanel
+                v-else-if="component.type === VEHICLE_COMPONENT_TYPE"
+                @open-wheel-details="handleOpenVehicleWheelDetails"
+                @close-wheel-details="handleVehiclePanelRequestCloseWheelDetails"
+              />
               <WallPanel v-else-if="component.type === WALL_COMPONENT_TYPE" />
               <BehaviorPanel
                 v-else-if="component.type === BEHAVIOR_COMPONENT_TYPE"

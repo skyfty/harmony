@@ -1,14 +1,38 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { Box3, Vector3 } from 'three'
+import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNodeComponentState } from '@harmony/schema'
-import { useSceneStore } from '@/stores/sceneStore'
+import type { SceneNode, SceneNodeComponentState, Vector3Like } from '@harmony/schema'
+import { getRuntimeObject, useSceneStore } from '@/stores/sceneStore'
+import NodePicker from '@/components/common/NodePicker.vue'
+import { generateUuid } from '@/utils/uuid'
+import { setBoundingBoxFromObject } from '@/components/editor/sceneUtils'
 import {
+  DEFAULT_RADIUS,
+  DEFAULT_DIRECTION,
+  DEFAULT_AXLE,
+  DEFAULT_SUSPENSION_REST_LENGTH,
+  DEFAULT_SUSPENSION_STIFFNESS,
+  DEFAULT_DAMPING_RELAXATION,
+  DEFAULT_DAMPING_COMPRESSION,
+  DEFAULT_CHASSIS_CONNECTION_POINT,
+  DEFAULT_FRICTION_SLIP,
+  DEFAULT_ROLL_INFLUENCE,
+  DEFAULT_MAX_SUSPENSION_TRAVEL,
+  DEFAULT_MAX_SUSPENSION_FORCE,
+  DEFAULT_USE_CUSTOM_SLIDING_ROTATIONAL_SPEED,
+  DEFAULT_CUSTOM_SLIDING_ROTATIONAL_SPEED,
+  DEFAULT_IS_FRONT_WHEEL,
   VEHICLE_COMPONENT_TYPE,
   clampVehicleComponentProps,
   type VehicleComponentProps,
-  type VehicleVector3Tuple,
+  type VehicleWheelProps,
 } from '@schema/components'
+
+const emit = defineEmits<{
+  (event: 'open-wheel-details', payload: { id: string }): void
+  (event: 'close-wheel-details'): void
+}>()
 
 const AXIS_OPTIONS: Array<{ label: string; value: 0 | 1 | 2 }> = [
   { label: 'X (0)', value: 0 },
@@ -17,7 +41,7 @@ const AXIS_OPTIONS: Array<{ label: string; value: 0 | 1 | 2 }> = [
 ]
 
 const sceneStore = useSceneStore()
-const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
+const { selectedNode, selectedNodeId, nodes } = storeToRefs(sceneStore)
 
 const vehicleComponent = computed(() =>
   selectedNode.value?.components?.[VEHICLE_COMPONENT_TYPE] as
@@ -25,10 +49,181 @@ const vehicleComponent = computed(() =>
     | undefined,
 )
 
+function cloneVector(vector: Vector3Like): Vector3Like {
+  return {x: vector.x, y: vector.y, z: vector.z}
+}
+
+function ensureFiniteVector(vector: Vector3Like): Vector3Like {
+  return cloneVector(vector)
+}
+
 const normalizedProps = computed(() => {
   const props = vehicleComponent.value?.props as Partial<VehicleComponentProps> | undefined
   return clampVehicleComponentProps(props ?? null)
 })
+
+const wheelEntries = computed(() => normalizedProps.value.wheels ?? [])
+const wheelDetailsActiveId = ref<string | null>(null)
+const DEFAULT_VEHICLE_PROPS = clampVehicleComponentProps(null)
+const BASE_WHEEL_TEMPLATE: VehicleWheelProps =
+  DEFAULT_VEHICLE_PROPS.wheels[0] ?? {
+    id: 'wheel-template',
+    nodeId: null,
+    radius: DEFAULT_RADIUS,
+    suspensionRestLength: DEFAULT_SUSPENSION_REST_LENGTH,
+    suspensionStiffness: DEFAULT_SUSPENSION_STIFFNESS,
+    dampingRelaxation: DEFAULT_DAMPING_RELAXATION,
+    dampingCompression: DEFAULT_DAMPING_COMPRESSION,
+    frictionSlip: DEFAULT_FRICTION_SLIP,
+    maxSuspensionTravel: DEFAULT_MAX_SUSPENSION_TRAVEL,
+    maxSuspensionForce: DEFAULT_MAX_SUSPENSION_FORCE,
+    useCustomSlidingRotationalSpeed: DEFAULT_USE_CUSTOM_SLIDING_ROTATIONAL_SPEED,
+    customSlidingRotationalSpeed: DEFAULT_CUSTOM_SLIDING_ROTATIONAL_SPEED,
+    isFrontWheel: DEFAULT_IS_FRONT_WHEEL,
+    rollInfluence: DEFAULT_ROLL_INFLUENCE,
+    directionLocal: cloneVector(DEFAULT_DIRECTION),
+    axleLocal: cloneVector(DEFAULT_AXLE),
+    chassisConnectionPointLocal: cloneVector(DEFAULT_CHASSIS_CONNECTION_POINT),
+  }
+
+const tempBoundingBox = new Box3()
+const tempBoundingSize = new Vector3()
+const tempWheelWorldPosition = new Vector3()
+
+const isComponentEnabled = computed(() => Boolean(vehicleComponent.value?.enabled))
+
+type NodeSearchResult = { node: SceneNode; parent: SceneNode | null }
+
+function findNodeWithParent(tree: SceneNode[] | undefined, targetId: string, parent: SceneNode | null = null): NodeSearchResult | null {
+  if (!tree) {
+    return null
+  }
+  for (const node of tree) {
+    if (node.id === targetId) {
+      return { node, parent }
+    }
+    const childResult = findNodeWithParent(node.children, targetId, node)
+    if (childResult) {
+      return childResult
+    }
+  }
+  return null
+}
+
+function extractNodeBoundingSize(node: SceneNode): Vector3Like | null {
+  if (!node) {
+    return null
+  }
+
+  const runtime = getRuntimeObject(node.id)
+  if (runtime) {
+    runtime.updateMatrixWorld(true)
+    const bounds = setBoundingBoxFromObject(runtime, tempBoundingBox.makeEmpty())
+    if (!bounds.isEmpty()) {
+      const size = bounds.getSize(tempBoundingSize)
+      return { x: size.x, y: size.y,  z: size.z }
+    }
+  }
+
+  const instancedBounds = (node.userData as Record<string, unknown> | undefined)?.instancedBounds as
+    | { min?: number[]; max?: number[] }
+    | undefined
+  if (
+    instancedBounds &&
+    Array.isArray(instancedBounds.min) &&
+    instancedBounds.min.length === 3 &&
+    Array.isArray(instancedBounds.max) &&
+    instancedBounds.max.length === 3
+  ) {
+    const [minX = 0, minY = 0, minZ = 0] = instancedBounds.min
+    const [maxX = 0, maxY = 0, maxZ = 0] = instancedBounds.max
+    const size = {
+      x: Math.abs(maxX - minX),
+      y: Math.abs(maxY - minY),
+      z: Math.abs(maxZ - minZ),
+    }
+    return size
+  }
+
+  return null
+}
+
+function extractNodeRadius(boundsSize: Vector3Like | null): number | null {
+  if (!boundsSize) {
+    return null
+  }
+  const maxAxis = Math.max(Math.abs(boundsSize.x), Math.abs(boundsSize.y), Math.abs(boundsSize.z))
+  if (!Number.isFinite(maxAxis) || maxAxis <= 0) {
+    return null
+  }
+  return maxAxis * 0.5
+}
+
+function computeWheelLocalPosition(wheelNodeId: string | null): Vector3Like | null {
+  if (!wheelNodeId) {
+    return null
+  }
+  const wheelObject = getRuntimeObject(wheelNodeId)
+  if (!wheelObject) {
+    return null
+  }
+  return wheelObject.position
+}
+
+function autoPopulateWheelConnectionPoint(wheelId: string, wheelNodeId: string): void {
+  const localPosition = computeWheelLocalPosition(wheelNodeId)
+  if (!localPosition) {
+    return
+  }
+  const existingWheel = wheelEntries.value.find((wheel) => wheel.id === wheelId)
+  const suspensionRestLength = existingWheel?.suspensionRestLength ?? BASE_WHEEL_TEMPLATE.suspensionRestLength
+  const connectionPoint: Vector3Like = {
+    x: localPosition.x,
+    y: localPosition.y + suspensionRestLength,
+    z: localPosition.z,
+  }
+  updateWheelEntry(wheelId, { chassisConnectionPointLocal: connectionPoint })
+}
+
+function autoPopulateWheelParametersFromNode(wheelId: string, node: SceneNode): void {
+  const boundsSize = extractNodeBoundingSize(node)
+  const height = boundsSize ? Math.abs(boundsSize.y) : null
+  const safeHeight = typeof height === 'number' && Number.isFinite(height) && height > 0 ? height : null
+  const radiusFromNode = extractNodeRadius(boundsSize)
+  const patch: Partial<VehicleWheelProps> = {
+  }
+  if (radiusFromNode !== null) {
+    patch.radius = radiusFromNode
+  } else if (safeHeight !== null) {
+    patch.radius = safeHeight * 0.5
+  }
+  updateWheelEntry(wheelId, patch)
+}
+
+function resetWheelParameters(wheelId: string): void {
+  const defaults: Partial<VehicleWheelProps> = {
+    nodeId: null,
+    radius: BASE_WHEEL_TEMPLATE.radius,
+    suspensionRestLength: BASE_WHEEL_TEMPLATE.suspensionRestLength,
+    suspensionStiffness: BASE_WHEEL_TEMPLATE.suspensionStiffness,
+    dampingRelaxation: BASE_WHEEL_TEMPLATE.dampingRelaxation,
+    dampingCompression: BASE_WHEEL_TEMPLATE.dampingCompression,
+    frictionSlip: BASE_WHEEL_TEMPLATE.frictionSlip,
+    maxSuspensionTravel: BASE_WHEEL_TEMPLATE.maxSuspensionTravel,
+    maxSuspensionForce: BASE_WHEEL_TEMPLATE.maxSuspensionForce,
+    useCustomSlidingRotationalSpeed: BASE_WHEEL_TEMPLATE.useCustomSlidingRotationalSpeed,
+    customSlidingRotationalSpeed: BASE_WHEEL_TEMPLATE.customSlidingRotationalSpeed,
+    rollInfluence: BASE_WHEEL_TEMPLATE.rollInfluence,
+    directionLocal: cloneVector(BASE_WHEEL_TEMPLATE.directionLocal),
+    axleLocal: cloneVector(BASE_WHEEL_TEMPLATE.axleLocal),
+    chassisConnectionPointLocal: cloneVector(BASE_WHEEL_TEMPLATE.chassisConnectionPointLocal),
+  }
+  updateWheelEntry(wheelId, defaults)
+}
+
+function isWheelNodeAlreadyUsed(wheelId: string, candidateNodeId: string): boolean {
+  return wheelEntries.value.some((wheel) => wheel.id !== wheelId && wheel.nodeId === candidateNodeId)
+}
 
 function updateComponent(patch: Partial<VehicleComponentProps>): void {
   const component = vehicleComponent.value
@@ -48,8 +243,8 @@ function commitClampedPatch(patch: Partial<VehicleComponentProps>): void {
   ;(Object.keys(patch) as (keyof VehicleComponentProps)[]).forEach((key) => {
     const nextValue = clamped[key]
     const previousValue = normalizedProps.value[key]
-    const changed = Array.isArray(nextValue)
-      ? !nextValue.every((entry, index) => entry === (previousValue as VehicleVector3Tuple)[index])
+    const changed = Array.isArray(nextValue) && Array.isArray(previousValue)
+      ? !arraysEqual(nextValue as unknown[], previousValue as unknown[])
       : nextValue !== previousValue
     if (changed) {
       ;(diff as Record<string, VehicleComponentProps[keyof VehicleComponentProps]>)[key as string] =
@@ -61,6 +256,128 @@ function commitClampedPatch(patch: Partial<VehicleComponentProps>): void {
   }
 }
 
+function arraysEqual(nextValue: unknown[], previousValue: unknown[]): boolean {
+  if (nextValue.length !== previousValue.length) {
+    return false
+  }
+  const numericVector =
+    nextValue.every((entry) => typeof entry === 'number') && previousValue.every((entry) => typeof entry === 'number')
+  if (numericVector) {
+    return nextValue.every((entry, index) => entry === previousValue[index])
+  }
+  return JSON.stringify(nextValue) === JSON.stringify(previousValue)
+}
+
+function updateWheelEntry(wheelId: string, patch: Partial<VehicleWheelProps>): void {
+  const nextList = wheelEntries.value.map((wheel) => (wheel.id === wheelId ? { ...wheel, ...patch } : wheel))
+  commitClampedPatch({ wheels: nextList })
+}
+
+function handleWheelNodeChange(wheelId: string, value: string | null): void {
+  if (!isComponentEnabled.value) {
+    return
+  }
+  const normalizedValue = typeof value === 'string' && value.trim().length ? value.trim() : null
+  if (normalizedValue) {
+    if (isWheelNodeAlreadyUsed(wheelId, normalizedValue)) {
+      return
+    }
+    const nodeMatch = findNodeWithParent(nodes.value, normalizedValue)
+    updateWheelEntry(wheelId, { nodeId: normalizedValue })
+    if (nodeMatch) {
+      autoPopulateWheelParametersFromNode(wheelId, nodeMatch.node)
+      autoPopulateWheelConnectionPoint(wheelId, nodeMatch.node.id)
+    }
+    return
+  }
+  resetWheelParameters(wheelId)
+}
+
+function createWheelFromTemplate(source?: VehicleWheelProps): VehicleWheelProps {
+  const base = source ?? BASE_WHEEL_TEMPLATE
+  return {
+    id: generateUuid(),
+    nodeId: null,
+    radius: base.radius,
+    suspensionRestLength: base.suspensionRestLength,
+    suspensionStiffness: base.suspensionStiffness,
+    dampingRelaxation: base.dampingRelaxation,
+    dampingCompression: base.dampingCompression,
+    frictionSlip: base.frictionSlip,
+    maxSuspensionTravel: base.maxSuspensionTravel,
+    maxSuspensionForce: base.maxSuspensionForce,
+    useCustomSlidingRotationalSpeed: base.useCustomSlidingRotationalSpeed,
+    customSlidingRotationalSpeed: base.customSlidingRotationalSpeed,
+    isFrontWheel: base.isFrontWheel,
+    rollInfluence: base.rollInfluence,
+    directionLocal: cloneVector(base.directionLocal),
+    axleLocal: cloneVector(base.axleLocal),
+    chassisConnectionPointLocal: cloneVector(base.chassisConnectionPointLocal),
+  }
+}
+
+function handleAddWheel(): void {
+  if (!isComponentEnabled.value) {
+    return
+  }
+  const template = wheelEntries.value[wheelEntries.value.length - 1]
+  const nextWheel = createWheelFromTemplate(template)
+  commitClampedPatch({ wheels: [...wheelEntries.value, nextWheel] })
+}
+
+function handleRemoveWheel(wheelId: string): void {
+  if (!isComponentEnabled.value) {
+    return
+  }
+  const nextList = wheelEntries.value.filter((wheel) => wheel.id !== wheelId)
+  commitClampedPatch({ wheels: nextList })
+  if (wheelDetailsActiveId.value === wheelId) {
+    requestCloseWheelDetails()
+  }
+}
+
+function openWheelDetails(wheelId: string): void {
+  if (!isComponentEnabled.value) {
+    return
+  }
+  wheelDetailsActiveId.value = wheelId
+  emit('open-wheel-details', { id: wheelId })
+}
+
+function requestCloseWheelDetails(): void {
+  if (!wheelDetailsActiveId.value) {
+    return
+  }
+  wheelDetailsActiveId.value = null
+  emit('close-wheel-details')
+}
+
+watch(wheelEntries, (list) => {
+  if (!wheelDetailsActiveId.value) {
+    return
+  }
+  const exists = list.some((wheel) => wheel.id === wheelDetailsActiveId.value)
+  if (!exists) {
+    requestCloseWheelDetails()
+  }
+})
+
+watch(
+  () => vehicleComponent.value?.enabled,
+  (enabled) => {
+    if (!enabled) {
+      requestCloseWheelDetails()
+    }
+  },
+  { immediate: true },
+)
+
+watch(vehicleComponent, (component) => {
+  if (!component) {
+    requestCloseWheelDetails()
+  }
+})
+
 function handleAxisChange(
   key: 'indexRightAxis' | 'indexUpAxis' | 'indexForwardAxis',
   value: number | null,
@@ -69,31 +386,6 @@ function handleAxisChange(
     return
   }
   commitClampedPatch({ [key]: value } as Partial<VehicleComponentProps>)
-}
-
-function handleNumberInput(
-  key: Exclude<keyof VehicleComponentProps, 'directionLocal' | 'axleLocal' | 'indexRightAxis' | 'indexUpAxis' | 'indexForwardAxis'>,
-  value: string | number,
-): void {
-  const numeric = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(numeric)) {
-    return
-  }
-  commitClampedPatch({ [key]: numeric } as Partial<VehicleComponentProps>)
-}
-
-function handleVectorInput(
-  key: 'directionLocal' | 'axleLocal',
-  axisIndex: 0 | 1 | 2,
-  value: string | number,
-): void {
-  const numeric = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(numeric)) {
-    return
-  }
-  const nextTuple = [...normalizedProps.value[key]] as VehicleVector3Tuple
-  nextTuple[axisIndex] = numeric
-  commitClampedPatch({ [key]: nextTuple } as Partial<VehicleComponentProps>)
 }
 
 function handleToggleComponent(): void {
@@ -119,7 +411,7 @@ function handleRemoveComponent(): void {
   <v-expansion-panel value="vehicle">
     <v-expansion-panel-title>
       <div class="vehicle-panel__header">
-        <span class="vehicle-panel__title">Vehicle Component</span>
+        <span class="vehicle-panel__title">Vehicle</span>
         <v-spacer />
         <v-menu
           v-if="vehicleComponent"
@@ -193,157 +485,68 @@ function handleRemoveComponent(): void {
         </div>
 
         <div class="vehicle-panel__section">
-          <div class="vehicle-panel__section-title">Wheel & Suspension</div>
-          <div class="vehicle-panel__field-grid vehicle-panel__field-grid--two">
-            <v-text-field
-              label="Radius (m)"
-              type="number"
-              density="compact"
-              variant="underlined"
-              :step="0.05"
-              :min="0"
-              :model-value="normalizedProps.radius"
-              :disabled="!vehicleComponent?.enabled"
-              @update:modelValue="(value) => handleNumberInput('radius', value)"
-            />
-            <v-text-field
-              label="Suspension Rest (m)"
-              type="number"
-              density="compact"
-              variant="underlined"
-              :step="0.01"
-              :min="0"
-              :model-value="normalizedProps.suspensionRestLength"
-              :disabled="!vehicleComponent?.enabled"
-              @update:modelValue="(value) => handleNumberInput('suspensionRestLength', value)"
-            />
-            <v-text-field
-              label="Suspension Stiffness"
-              type="number"
-              density="compact"
-              variant="underlined"
-              :step="1"
-              :min="0"
-              :model-value="normalizedProps.suspensionStiffness"
-              :disabled="!vehicleComponent?.enabled"
-              @update:modelValue="(value) => handleNumberInput('suspensionStiffness', value)"
-            />
-            <v-text-field
-              label="Suspension Damping"
-              type="number"
-              density="compact"
-              variant="underlined"
-              :step="0.1"
-              :min="0"
-              :model-value="normalizedProps.suspensionDamping"
-              :disabled="!vehicleComponent?.enabled"
-              @update:modelValue="(value) => handleNumberInput('suspensionDamping', value)"
-            />
-            <v-text-field
-              label="Suspension Compression"
-              type="number"
-              density="compact"
-              variant="underlined"
-              :step="0.1"
-              :min="0"
-              :model-value="normalizedProps.suspensionCompression"
-              :disabled="!vehicleComponent?.enabled"
-              @update:modelValue="(value) => handleNumberInput('suspensionCompression', value)"
-            />
-            <v-text-field
-              label="Friction Slip"
-              type="number"
-              density="compact"
-              variant="underlined"
-              :step="0.1"
-              :min="0"
-              :model-value="normalizedProps.frictionSlip"
-              :disabled="!vehicleComponent?.enabled"
-              @update:modelValue="(value) => handleNumberInput('frictionSlip', value)"
-            />
-            <v-text-field
-              label="Roll Influence"
-              type="number"
-              density="compact"
-              variant="underlined"
-              :step="0.001"
-              :min="0"
-              :model-value="normalizedProps.rollInfluence"
-              :disabled="!vehicleComponent?.enabled"
-              @update:modelValue="(value) => handleNumberInput('rollInfluence', value)"
-            />
+          <div class="vehicle-panel__section-header">
+            <div>
+              <div class="vehicle-panel__section-title">Wheels</div>
+            </div>
+            <v-btn
+              size="small"
+              variant="tonal"
+              prepend-icon="mdi-plus"
+              :disabled="!isComponentEnabled"
+              @click="handleAddWheel"
+            >
+              Add Wheel
+            </v-btn>
           </div>
-        </div>
-
-        <div class="vehicle-panel__section">
-          <div class="vehicle-panel__section-title">Direction (Local)</div>
-          <div class="vehicle-panel__vector-grid">
-            <v-text-field
-              label="X"
-              type="number"
-              density="compact"
-              variant="underlined"
-              :step="0.1"
-              :model-value="normalizedProps.directionLocal[0]"
-              :disabled="!vehicleComponent?.enabled"
-              @update:modelValue="(value) => handleVectorInput('directionLocal', 0, value)"
-            />
-            <v-text-field
-              label="Y"
-              type="number"
-              density="compact"
-              variant="underlined"
-              :step="0.1"
-              :model-value="normalizedProps.directionLocal[1]"
-              :disabled="!vehicleComponent?.enabled"
-              @update:modelValue="(value) => handleVectorInput('directionLocal', 1, value)"
-            />
-            <v-text-field
-              label="Z"
-              type="number"
-              density="compact"
-              variant="underlined"
-              :step="0.1"
-              :model-value="normalizedProps.directionLocal[2]"
-              :disabled="!vehicleComponent?.enabled"
-              @update:modelValue="(value) => handleVectorInput('directionLocal', 2, value)"
-            />
-          </div>
-        </div>
-
-        <div class="vehicle-panel__section">
-          <div class="vehicle-panel__section-title">Axle (Local)</div>
-          <div class="vehicle-panel__vector-grid">
-            <v-text-field
-              label="X"
-              type="number"
-              density="compact"
-              variant="underlined"
-              :step="0.1"
-              :model-value="normalizedProps.axleLocal[0]"
-              :disabled="!vehicleComponent?.enabled"
-              @update:modelValue="(value) => handleVectorInput('axleLocal', 0, value)"
-            />
-            <v-text-field
-              label="Y"
-              type="number"
-              density="compact"
-              variant="underlined"
-              :step="0.1"
-              :model-value="normalizedProps.axleLocal[1]"
-              :disabled="!vehicleComponent?.enabled"
-              @update:modelValue="(value) => handleVectorInput('axleLocal', 1, value)"
-            />
-            <v-text-field
-              label="Z"
-              type="number"
-              density="compact"
-              variant="underlined"
-              :step="0.1"
-              :model-value="normalizedProps.axleLocal[2]"
-              :disabled="!vehicleComponent?.enabled"
-              @update:modelValue="(value) => handleVectorInput('axleLocal', 2, value)"
-            />
+          <div class="vehicle-wheel-list">
+            <div
+              v-for="wheel in wheelEntries"
+              :key="wheel.id"
+              class="vehicle-wheel-item"
+              :class="{
+                'vehicle-wheel-item--active': wheelDetailsActiveId === wheel.id,
+                'vehicle-wheel-item--front': wheel.isFrontWheel,
+                'vehicle-wheel-item--rear': !wheel.isFrontWheel,
+              }"
+            >
+              <div class="vehicle-wheel-item__content">
+                <div class="vehicle-wheel-item__details">
+        
+                  <NodePicker
+                    class="vehicle-wheel-item__picker"
+                    pick-hint="Click a wheel model in the scene"
+                    selection-hint="Select the node in the scene to use as the wheel"
+                    placeholder="Wheel Node"
+                    :model-value="wheel.nodeId ?? null"
+                    :disabled="!isComponentEnabled"
+                    @update:modelValue="(value) => handleWheelNodeChange(wheel.id, value as string | null)"
+                  />
+                </div>
+                <div class="vehicle-wheel-item__actions">
+                  <v-btn
+                    icon
+                    variant="text"
+                  density="compact"
+                    class="vehicle-wheel-item__action"
+                    :disabled="!isComponentEnabled"
+                    @click="openWheelDetails(wheel.id)"
+                  >
+                    <v-icon size="18">mdi-tune</v-icon>
+                  </v-btn>
+                  <v-btn
+                    icon
+                    variant="text"
+                  density="compact"
+                    class="vehicle-wheel-item__action"
+                    :disabled="!isComponentEnabled"
+                    @click="handleRemoveWheel(wheel.id)"
+                  >
+                    <v-icon size="18">mdi-delete</v-icon>
+                  </v-btn>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -372,10 +575,25 @@ function handleRemoveComponent(): void {
 }
 
 .vehicle-panel__section-title {
+  display: inline-flex;
+  align-items: center;
   font-size: 0.82rem;
   font-weight: 600;
   margin-bottom: 0.35rem;
   color: rgba(235, 238, 245, 0.92);
+}
+
+.vehicle-panel__section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-bottom: 0.5rem;
+}
+
+.vehicle-panel__section-hint {
+  font-size: 0.74rem;
+  color: rgba(233, 236, 241, 0.52);
 }
 
 .vehicle-panel__field-grid {
@@ -387,17 +605,76 @@ function handleRemoveComponent(): void {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
-.vehicle-panel__vector-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(90px, 1fr));
-  gap: 0.5rem;
-}
-
 .component-menu-btn {
   color: rgba(233, 236, 241, 0.82);
 }
 
 .component-menu-divider {
   margin-inline: 0.6rem;
+}
+
+.vehicle-wheel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.vehicle-wheel-item {
+  --wheel-accent-color: rgba(233, 236, 241, 0.28);
+  border-radius: 10px;
+  border: 1px solid var(--wheel-accent-color);
+  background: rgb(0 0 0);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.vehicle-wheel-item--front {
+  --wheel-accent-color: rgba(93, 154, 255, 0.75);
+}
+
+.vehicle-wheel-item--rear {
+  --wheel-accent-color: rgba(78, 201, 142, 0.75);
+}
+
+.vehicle-wheel-item--active {
+  border-color: var(--wheel-accent-color);
+  box-shadow: 0 0 0 1px var(--wheel-accent-color);
+}
+
+.vehicle-wheel-item__content {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.vehicle-wheel-item__details {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.vehicle-wheel-item__label {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.vehicle-wheel-item__hint {
+  font-size: 0.72rem;
+  color: rgba(233, 236, 241, 0.55);
+}
+
+.vehicle-wheel-item__actions {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.vehicle-wheel-item__picker {
+  flex: 1;
+  min-width: 200px;
 }
 </style>

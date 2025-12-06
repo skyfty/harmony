@@ -411,7 +411,7 @@ async function sanitizeSceneDocumentForJsonExport(
     outlineMeshMap = await generateOutlineMeshesForCandidates(outlineCandidates, options)
   }
 
-  await applyRigidbodyMetadata(rigidbodyCandidates)
+  await applyRigidbodyMetadata(sanitizedNodes,rigidbodyCandidates)
 
   const sanitizedDocument: SceneJsonExportDocument = {
     ...document,
@@ -624,17 +624,19 @@ async function generateOutlineMeshesForCandidates(
   return outlineMeshMap
 }
 
-async function applyRigidbodyMetadata(candidates: RigidbodyExportCandidate[]): Promise<void> {
+async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyExportCandidate[]): Promise<void> {
   if (!candidates.length) {
     return
   }
+  const nodeLookup = buildSceneNodeLookup(nodes)
   const assetCacheStore = useAssetCacheStore()
   for (const entry of candidates) {
-    if (isGroundDynamicMesh(entry.node.dynamicMesh)) {
+    const samplingNode = resolveRigidbodySamplingNode(entry, nodeLookup)
+    if (!samplingNode || isGroundDynamicMesh(samplingNode.dynamicMesh)) {
       continue
     }
     let shape: RigidbodyPhysicsShape | null = null
-    const samplingObject = await buildRigidbodySamplingObject(entry.node, assetCacheStore)
+    const samplingObject = await buildRigidbodySamplingObject(samplingNode, assetCacheStore)
     if (!samplingObject) {
       continue
     }
@@ -650,6 +652,41 @@ async function applyRigidbodyMetadata(candidates: RigidbodyExportCandidate[]): P
     }
     entry.component.metadata = mergeRigidbodyMetadata(entry.component.metadata, shape)
   }
+}
+
+function buildSceneNodeLookup(nodes: SceneNode[]): Map<string, SceneNode> {
+  const lookup = new Map<string, SceneNode>()
+  const stack: SceneNode[] = [...nodes]
+  while (stack.length) {
+    const current = stack.pop()
+    if (!current?.id) {
+      continue
+    }
+    if (!lookup.has(current.id)) {
+      lookup.set(current.id, current)
+    }
+    if (Array.isArray(current.children) && current.children.length) {
+      for (const child of current.children) {
+        stack.push(child)
+      }
+    }
+  }
+  return lookup
+}
+
+function resolveRigidbodySamplingNode(
+  entry: RigidbodyExportCandidate,
+  lookup: Map<string, SceneNode>,
+): SceneNode | null {
+  const rawTargetId = entry.component.props?.targetNodeId
+  const targetNodeId = typeof rawTargetId === 'string' ? rawTargetId.trim() : null
+  if (targetNodeId) {
+    const resolved = lookup.get(targetNodeId)
+    if (resolved) {
+      return resolved
+    }
+  }
+  return entry.node
 }
 
 function mergeRigidbodyMetadata(
@@ -674,6 +711,22 @@ async function buildRigidbodySamplingObject(
     sourceObject = await loadAssetObjectForNode(node, assetCacheStore)
   } else if (node.dynamicMesh?.type) {
     sourceObject = buildDynamicMeshObject(node)
+  } else if (node.nodeType === 'Group') {
+    const empty = new THREE.Object3D()
+    if (node.children && node.children.length > 0) {
+      for (const child of node.children) {
+        const childObject = await buildRigidbodySamplingObject(child, assetCacheStore)
+        if (!childObject) {
+          continue
+        }
+        applyPositionAndRotationToObject(childObject, child)
+        childObject.updateMatrixWorld(true)
+        empty.add(childObject)
+      }
+    }
+    if (empty.children.length > 0) {
+      sourceObject = empty
+    }
   } else {
     sourceObject = buildPrimitiveObject(node)
   }
@@ -683,11 +736,30 @@ async function buildRigidbodySamplingObject(
   }
 
   const root = new THREE.Group()
-  root.name = `RigidbodySample:${node.id}`
   root.add(sourceObject)
   applyScaleToObject(root, node)
   root.updateMatrixWorld(true)
   return root
+}
+
+function getFiniteComponent(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function applyPositionAndRotationToObject(object: THREE.Object3D, node: SceneNode): void {
+  const position = node.position as { x?: unknown; y?: unknown; z?: unknown } | undefined
+  object.position.set(
+    getFiniteComponent(position?.x),
+    getFiniteComponent(position?.y),
+    getFiniteComponent(position?.z),
+  )
+
+  const rotation = node.rotation as { x?: unknown; y?: unknown; z?: unknown } | undefined
+  object.rotation.set(
+    getFiniteComponent(rotation?.x),
+    getFiniteComponent(rotation?.y),
+    getFiniteComponent(rotation?.z),
+  )
 }
 
 async function loadAssetObjectForNode(

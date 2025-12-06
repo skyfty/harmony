@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia'
 import HierarchyPanel from '@/components/layout/HierarchyPanel.vue'
 import InspectorPanel from '@/components/layout/InspectorPanel.vue'
 import MaterialDetailsPanel from '@/components/inspector/MaterialDetailsPanel.vue'
+import VehicleWheelDetailsPanel from '@/components/inspector/VehicleWheelDetailsPanel.vue'
 import BehaviorDetailsPanel from '@/components/inspector/BehaviorDetailsPanel.vue'
 import ProjectPanel from '@/components/layout/ProjectPanel.vue'
 import SceneViewport, { type SceneViewportHandle } from '@/components/editor/SceneViewport.vue'
@@ -126,6 +127,7 @@ const isImportingExternalScene = ref(false)
 type InspectorPanelPublicInstance = InstanceType<typeof InspectorPanel> & {
   getPanelRect: () => DOMRect | null
   closeMaterialDetails: (options?: { silent?: boolean }) => void
+  closeVehicleWheelDetails: (options?: { silent?: boolean }) => void
   closeBehaviorDetails: (options?: { silent?: boolean }) => void
 }
 
@@ -147,6 +149,20 @@ const materialDetailsState = reactive({
   targetId: null as string | null,
   anchor: null as MaterialDetailsAnchor | null,
   source: null as MaterialDetailsSource | null,
+})
+
+type VehicleWheelDetailsAnchor = {
+  top: number
+  left: number
+}
+
+type VehicleWheelDetailsSource = InspectorPanelSource
+
+const vehicleWheelDetailsState = reactive({
+  visible: false,
+  wheelId: null as string | null,
+  anchor: null as VehicleWheelDetailsAnchor | null,
+  source: null as VehicleWheelDetailsSource | null,
 })
 
 type BehaviorDetailsAnchor = {
@@ -386,6 +402,53 @@ function handleMaterialDetailsOverlayClose() {
   }
 }
 
+function updateVehicleWheelDetailsAnchor() {
+  if (!vehicleWheelDetailsState.visible || !vehicleWheelDetailsState.source) {
+    vehicleWheelDetailsState.anchor = null
+    return
+  }
+  const inspector = getInspectorRef(vehicleWheelDetailsState.source)
+  const rect = inspector?.getPanelRect?.() ?? null
+  vehicleWheelDetailsState.anchor = rect ? { top: rect.top, left: rect.left } : null
+}
+
+function handleInspectorVehicleWheelDetailsOpen(source: VehicleWheelDetailsSource, payload: { id: string }) {
+  if (materialDetailsState.visible) {
+    handleMaterialDetailsOverlayClose()
+  }
+  if (behaviorDetailsState.visible) {
+    handleBehaviorDetailsOverlayClose()
+  }
+  vehicleWheelDetailsState.source = source
+  vehicleWheelDetailsState.wheelId = payload.id
+  vehicleWheelDetailsState.visible = true
+  nextTick(() => {
+    updateVehicleWheelDetailsAnchor()
+  })
+}
+
+function handleInspectorVehicleWheelDetailsClose(source: VehicleWheelDetailsSource) {
+  if (vehicleWheelDetailsState.source !== source) {
+    return
+  }
+  vehicleWheelDetailsState.visible = false
+  vehicleWheelDetailsState.wheelId = null
+  vehicleWheelDetailsState.anchor = null
+  vehicleWheelDetailsState.source = null
+}
+
+function handleVehicleWheelDetailsOverlayClose() {
+  const source = vehicleWheelDetailsState.source
+  vehicleWheelDetailsState.visible = false
+  vehicleWheelDetailsState.wheelId = null
+  vehicleWheelDetailsState.anchor = null
+  vehicleWheelDetailsState.source = null
+  if (source) {
+    const inspector = getInspectorRef(source)
+    inspector?.closeVehicleWheelDetails?.({ silent: true })
+  }
+}
+
 function getBehaviorComponent(): SceneNodeComponentState<BehaviorComponentProps> | null {
   const node = selectedNode.value
   if (!node) {
@@ -510,6 +573,10 @@ const handleBehaviorDetailsRelayout = () => {
   updateBehaviorDetailsAnchor()
 }
 
+const handleVehicleWheelDetailsRelayout = () => {
+  updateVehicleWheelDetailsAnchor()
+}
+
 watch(
   () => materialDetailsState.visible,
   (visible) => {
@@ -539,6 +606,20 @@ watch(
   },
 )
 
+watch(
+  () => vehicleWheelDetailsState.visible,
+  (visible) => {
+    if (visible) {
+      updateVehicleWheelDetailsAnchor()
+      window.addEventListener('resize', handleVehicleWheelDetailsRelayout)
+      window.addEventListener('scroll', handleVehicleWheelDetailsRelayout, true)
+    } else {
+      window.removeEventListener('resize', handleVehicleWheelDetailsRelayout)
+      window.removeEventListener('scroll', handleVehicleWheelDetailsRelayout, true)
+    }
+  },
+)
+
 watch(showInspectorDocked, (visible) => {
   if (materialDetailsState.source !== 'docked') {
     return
@@ -562,6 +643,32 @@ watch(showInspectorFloating, (visible) => {
   }
   nextTick(() => {
     updateMaterialDetailsAnchor()
+  })
+})
+
+watch(showInspectorDocked, (visible) => {
+  if (vehicleWheelDetailsState.source !== 'docked') {
+    return
+  }
+  if (!visible) {
+    handleInspectorVehicleWheelDetailsClose('docked')
+    return
+  }
+  nextTick(() => {
+    updateVehicleWheelDetailsAnchor()
+  })
+})
+
+watch(showInspectorFloating, (visible) => {
+  if (vehicleWheelDetailsState.source !== 'floating') {
+    return
+  }
+  if (!visible) {
+    handleInspectorVehicleWheelDetailsClose('floating')
+    return
+  }
+  nextTick(() => {
+    updateVehicleWheelDetailsAnchor()
   })
 })
 
@@ -702,6 +809,16 @@ function resolvePublishName(fallbackFileName: string): string {
   return sanitized || 'scene'
 }
 
+async function exportScene(options: SceneExportOptions): Promise<Blob> {
+  let snapshot = sceneStore.createSceneDocumentSnapshot() as StoredSceneDocument
+  const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(snapshot, { embedResources: true })
+  snapshot.packageAssetMap = packageAssetMap
+  snapshot.assetIndex = assetIndex
+  snapshot.resourceSummary = await calculateSceneResourceSummary(snapshot, { embedResources: true })
+  const jsonDocument = await prepareJsonSceneExport(snapshot, options)
+  return new Blob([JSON.stringify(jsonDocument, null, 2)], { type: 'application/json' })
+}
+
 async function runSceneExportWorkflow(options: SceneExportOptions, config: SceneExportWorkflowConfig): Promise<boolean> {
   if (isExporting.value) {
     return false
@@ -714,19 +831,17 @@ async function runSceneExportWorkflow(options: SceneExportOptions, config: Scene
     return false
   }
 
-  if (options.format === 'json') {
-    const summary = await refreshExportSummary(true)
-    const sizeLabel = summary ? formatByteSize(summary.totalBytes) : null
-    const confirmMessage = summary
-      ? `导出该场景需要打包约 ${sizeLabel} 的资源，是否继续？`
-      : '暂时无法计算资源总大小，仍要继续导出吗？'
-    const proceed = typeof window !== 'undefined' ? window.confirm(confirmMessage) : true
-    if (!proceed) {
-      exportProgress.value = 0
-      exportProgressMessage.value = ''
-      exportErrorMessage.value = null
-      return false
-    }
+  const summary = await refreshExportSummary(true)
+  const sizeLabel = summary ? formatByteSize(summary.totalBytes) : null
+  const confirmMessage = summary
+    ? `导出该场景需要打包约 ${sizeLabel} 的资源，是否继续？`
+    : '暂时无法计算资源总大小，仍要继续导出吗？'
+  const proceed = typeof window !== 'undefined' ? window.confirm(confirmMessage) : true
+  if (!proceed) {
+    exportProgress.value = 0
+    exportProgressMessage.value = ''
+    exportErrorMessage.value = null
+    return false
   }
 
   isExporting.value = true
@@ -748,10 +863,8 @@ async function runSceneExportWorkflow(options: SceneExportOptions, config: Scene
   }
 
   try {
-    const blob = await viewport.exportScene(options, (progress, message) => {
-      const label = message ?? `${config.action === 'publish' ? 'Publish' : 'Export'} progress ${Math.round(progress)}%`
-      updateProgress(progress, label)
-    })
+    updateProgress(10, `${config.action === 'publish' ? 'Publish' : 'Export'}ing scene`)
+    const blob = await exportScene(options)
     await config.afterExport({ blob, fileName, updateProgress })
     updateProgress(100, config.successMessage)
     workflowSucceeded = true
@@ -1556,6 +1669,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('scroll', handleMaterialDetailsRelayout, true)
   window.removeEventListener('resize', handleBehaviorDetailsRelayout)
   window.removeEventListener('scroll', handleBehaviorDetailsRelayout, true)
+  window.removeEventListener('resize', handleVehicleWheelDetailsRelayout)
+  window.removeEventListener('scroll', handleVehicleWheelDetailsRelayout, true)
 })
 
 
@@ -1607,6 +1722,8 @@ onBeforeUnmount(() => {
             @toggle-placement="togglePanelPlacement('inspector')"
             @open-material-details="(payload) => handleInspectorMaterialDetailsOpen('docked', payload)"
             @close-material-details="() => handleInspectorMaterialDetailsClose('docked')"
+            @open-vehicle-wheel-details="(payload) => handleInspectorVehicleWheelDetailsOpen('docked', payload)"
+            @close-vehicle-wheel-details="() => handleInspectorVehicleWheelDetailsClose('docked')"
             @open-behavior-details="(payload) => handleInspectorBehaviorDetailsOpen('docked', payload)"
             @close-behavior-details="() => handleInspectorBehaviorDetailsClose('docked')"
           />
@@ -1644,6 +1761,8 @@ onBeforeUnmount(() => {
               @toggle-placement="togglePanelPlacement('inspector')"
               @open-material-details="(payload) => handleInspectorMaterialDetailsOpen('floating', payload)"
               @close-material-details="() => handleInspectorMaterialDetailsClose('floating')"
+              @open-vehicle-wheel-details="(payload) => handleInspectorVehicleWheelDetailsOpen('floating', payload)"
+              @close-vehicle-wheel-details="() => handleInspectorVehicleWheelDetailsClose('floating')"
               @open-behavior-details="(payload) => handleInspectorBehaviorDetailsOpen('floating', payload)"
               @close-behavior-details="() => handleInspectorBehaviorDetailsClose('floating')"
             />
@@ -1715,6 +1834,14 @@ onBeforeUnmount(() => {
         :visible="materialDetailsState.visible"
         :anchor="materialDetailsState.anchor"
         @close="handleMaterialDetailsOverlayClose"
+      />
+
+      <VehicleWheelDetailsPanel
+        v-if="vehicleWheelDetailsState.visible && vehicleWheelDetailsState.wheelId && vehicleWheelDetailsState.anchor"
+        :wheel-id="vehicleWheelDetailsState.wheelId"
+        :visible="vehicleWheelDetailsState.visible"
+        :anchor="vehicleWheelDetailsState.anchor"
+        @close="handleVehicleWheelDetailsOverlayClose"
       />
     </div>
     <SceneManagerDialog

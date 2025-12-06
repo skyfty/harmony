@@ -40,7 +40,6 @@ const normalizedProps = computed(() => {
 
 const localMass = ref(DEFAULT_RIGIDBODY_MASS)
 const localBodyType = ref<RigidbodyBodyType>('DYNAMIC')
-const localTargetNodeId = ref<string | undefined>(undefined)
 const localLinearDamping = ref(DEFAULT_LINEAR_DAMPING)
 const localAngularDamping = ref(DEFAULT_ANGULAR_DAMPING)
 const localRestitution = ref(DEFAULT_RIGIDBODY_RESTITUTION)
@@ -59,7 +58,6 @@ watch(
     } else {
       localMass.value = props.mass
     }
-    localTargetNodeId.value = props.targetNodeId
     localLinearDamping.value = props.linearDamping
     localAngularDamping.value = props.angularDamping
     localRestitution.value = props.restitution
@@ -179,15 +177,6 @@ function handleBodyTypeChange(value: RigidbodyBodyType | null) {
   updateComponent({ bodyType: value })
 }
 
-function handleTargetNodeChange(value: string | null) {
-  const newValue = value ?? undefined
-  localTargetNodeId.value = newValue
-  if (newValue === normalizedProps.value.targetNodeId) {
-    return
-  }
-  updateComponent({ targetNodeId: newValue })
-}
-
 function handleToggleComponent() {
   const component = rigidbodyComponent.value
   const nodeId = selectedNodeId.value
@@ -205,13 +194,23 @@ function handleRemoveComponent() {
   }
   sceneStore.removeNodeComponent(nodeId, component.id)
 }
+
+function handleTargetNodeChange(nodeId: string | null) {
+  const normalized = typeof nodeId === 'string' ? nodeId.trim() : null
+  const current = rigidbodyComponent.value?.props.targetNodeId ?? null
+  const next = normalized && normalized.length ? normalized : null
+  if (next === current) {
+    return
+  }
+  updateComponent({ targetNodeId: next })
+}
 </script>
 
 <template>
   <v-expansion-panel value="rigidbody">
     <v-expansion-panel-title>
       <div class="rigidbody-panel__header">
-        <span class="rigidbody-panel__title">Rigidbody Component</span>
+        <span class="rigidbody-panel__title">Rigidbody</span>
         <v-spacer />
         <v-menu
           v-if="rigidbodyComponent"
@@ -246,11 +245,14 @@ function handleRemoveComponent() {
     <v-expansion-panel-text>
       <div class="rigidbody-panel__body">
 
-        <div class="target-node-picker">
+        <div class="rigidbody-panel__picker">
           <NodePicker
-            :model-value="localTargetNodeId"
+            :model-value="rigidbodyComponent?.props.targetNodeId ?? null"
+            owner="rigidbody-target"
+            pick-hint="Select a node whose mesh should define this rigidbody"
+            selection-hint="Click any scene node to reuse its geometry when baking the collider."
+            placeholder="Collision Node"
             :disabled="!rigidbodyComponent?.enabled"
-            placeholder="Collider target node"
             @update:model-value="handleTargetNodeChange"
           />
         </div>
@@ -350,14 +352,30 @@ function handleRemoveComponent() {
   padding-inline: 0.4rem;
 }
 
+.rigidbody-panel__picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+
+.rigidbody-panel__picker-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: rgba(233, 236, 241, 0.82);
+}
+
+.rigidbody-panel__picker-hint {
+  margin: 0;
+  font-size: 0.75rem;
+  color: rgba(233, 236, 241, 0.55);
+}
+
 .component-menu-btn {
   color: rgba(233, 236, 241, 0.82);
 }
 
 .component-menu-divider {
   margin-inline: 0.6rem;
-}
-.target-node-picker {
-  margin-bottom: 1.0rem;
 }
 </style>

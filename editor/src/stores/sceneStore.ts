@@ -160,6 +160,7 @@ import type {
   EffectComponentProps,
   GuideboardComponentProps,
   RigidbodyComponentProps,
+  VehicleComponentProps,
   ViewPointComponentProps,
   WallComponentProps,
   WarpGateComponentProps,
@@ -173,6 +174,7 @@ import {
   EFFECT_COMPONENT_TYPE,
   BEHAVIOR_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
+  VEHICLE_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_THICKNESS,
   WALL_DEFAULT_WIDTH,
@@ -197,6 +199,8 @@ import {
   cloneEffectComponentProps,
   clampRigidbodyComponentProps,
   cloneRigidbodyComponentProps,
+  clampVehicleComponentProps,
+  cloneVehicleComponentProps,
   componentManager,
   resolveWallComponentPropsFromMesh,
 } from '@schema/components'
@@ -3173,7 +3177,7 @@ const initialSceneDocument = createSceneDocument('Sample Scene', {
 const runtimeObjectRegistry = new Map<string, Object3D>()
 let runtimeRefreshInFlight: Promise<void> | null = null
 
-function clearRuntimeObjectRegistry() {
+export function clearRuntimeObjectRegistry() {
   runtimeObjectRegistry.forEach((_object, nodeId) => {
     releaseModelInstance(nodeId)
     componentManager.detachRuntime(nodeId)
@@ -3181,7 +3185,7 @@ function clearRuntimeObjectRegistry() {
   runtimeObjectRegistry.clear()
 }
 
-function registerRuntimeObject(id: string, object: Object3D) {
+export function registerRuntimeObject(id: string, object: Object3D) {
   const existing = runtimeObjectRegistry.get(id)
   if (existing && existing !== object) {
     componentManager.detachRuntime(id)
@@ -3189,7 +3193,7 @@ function registerRuntimeObject(id: string, object: Object3D) {
   runtimeObjectRegistry.set(id, object)
 }
 
-function unregisterRuntimeObject(id: string) {
+export function unregisterRuntimeObject(id: string) {
   releaseModelInstance(id)
   runtimeObjectRegistry.delete(id)
   componentManager.detachRuntime(id)
@@ -6560,7 +6564,6 @@ export const useSceneStore = defineStore('scene', {
         : nextRedoStack
     },
     async restoreFromHistory(snapshot: SceneHistoryEntry) {
-      const assetCache = useAssetCacheStore()
       this.isRestoringHistory = true
       this.activeTransformNodeId = null
       this.transformSnapshotCaptured = false
@@ -10610,6 +10613,7 @@ export const useSceneStore = defineStore('scene', {
         | WarpGateComponentProps
         | EffectComponentProps
         | RigidbodyComponentProps
+        | VehicleComponentProps
       if (type === WALL_COMPONENT_TYPE) {
         const currentProps = component.props as WallComponentProps
         const merged = clampWallProps({
@@ -10704,16 +10708,34 @@ export const useSceneStore = defineStore('scene', {
         const hasChanges =
           Math.abs(currentProps.mass - merged.mass) > 1e-4 ||
           currentProps.bodyType !== merged.bodyType ||
-          (currentProps.targetNodeId ?? null) !== (merged.targetNodeId ?? null) ||
           Math.abs(currentProps.linearDamping - merged.linearDamping) > 1e-4 ||
           Math.abs(currentProps.angularDamping - merged.angularDamping) > 1e-4 ||
           Math.abs(currentProps.restitution - merged.restitution) > 1e-4 ||
-          Math.abs(currentProps.friction - merged.friction) > 1e-4;
+          Math.abs(currentProps.friction - merged.friction) > 1e-4 || 
+          currentProps.targetNodeId !== merged.targetNodeId;
 
         if (!hasChanges) {
           return false
         }
         nextProps = cloneRigidbodyComponentProps(merged)
+      } else if (type === VEHICLE_COMPONENT_TYPE) {
+        const currentProps = clampVehicleComponentProps(component.props as VehicleComponentProps)
+        const typedPatch = patch as Partial<VehicleComponentProps>
+        const merged = clampVehicleComponentProps({
+          ...currentProps,
+          ...typedPatch,
+        })
+        const wheelsChanged = JSON.stringify(currentProps.wheels) !== JSON.stringify(merged.wheels)
+        const hasChanges =
+          currentProps.indexRightAxis !== merged.indexRightAxis ||
+          currentProps.indexUpAxis !== merged.indexUpAxis ||
+          currentProps.indexForwardAxis !== merged.indexForwardAxis ||
+          wheelsChanged
+
+        if (!hasChanges) {
+          return false
+        }
+        nextProps = cloneVehicleComponentProps(merged)
       } else {
         const currentProps = component.props as Record<string, unknown>
         const merged = { ...currentProps, ...patch }

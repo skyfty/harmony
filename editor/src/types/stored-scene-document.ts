@@ -16,6 +16,7 @@ import type { SceneMaterial } from '@/types/material'
 export interface StoredSceneDocument {
   id: string
   name: string
+  thumbnail?: string | null
   nodes: SceneNode[]
   materials: SceneMaterial[]
   selectedNodeId: string | null

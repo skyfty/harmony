@@ -302,8 +302,6 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
       return {
         targetNodeId: null,
         seatNodeId: null,
-        forwardDirectionNodeId: null,
-        exitNodeId: null,
       }
     },
   },
@@ -640,8 +638,6 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
         params: {
           targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
           seatNodeId: normalizeTargetNodeId(params?.seatNodeId),
-          forwardDirectionNodeId: normalizeTargetNodeId(params?.forwardDirectionNodeId),
-          exitNodeId: normalizeTargetNodeId(params?.exitNodeId),
         },
       }
     }
@@ -901,8 +897,6 @@ export function ensureBehaviorParams(
           params: {
             targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
             seatNodeId: normalizeTargetNodeId(params?.seatNodeId),
-            forwardDirectionNodeId: normalizeTargetNodeId(params?.forwardDirectionNodeId),
-            exitNodeId: normalizeTargetNodeId(params?.exitNodeId),
           },
         }
       }

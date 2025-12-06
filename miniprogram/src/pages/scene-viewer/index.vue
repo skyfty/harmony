@@ -307,6 +307,7 @@ import {
   type LanternSlideDefinition,
   type SceneMaterialTextureRef,
   type GroundDynamicMesh,
+  type Vector3Like,
 } from '@harmony/schema';
 import type { TerrainScatterStoreSnapshot, TerrainScatterInstance } from '@harmony/schema/terrain-scatter';
 import { ComponentManager } from '@schema/components/componentManager';
@@ -336,6 +337,8 @@ import {
   DEFAULT_ANGULAR_DAMPING,
   DEFAULT_RIGIDBODY_RESTITUTION,
   DEFAULT_RIGIDBODY_FRICTION,
+  DEFAULT_DIRECTION,
+  DEFAULT_AXLE,
 } from '@schema/components';
 import type {
   GuideboardComponentProps,
@@ -345,7 +348,7 @@ import type {
   RigidbodyPhysicsShape,
   RigidbodyVector3Tuple,
   VehicleComponentProps,
-  VehicleVector3Tuple,
+  VehicleWheelProps,
 } from '@schema/components';
 import {
   addBehaviorRuntimeListener,
@@ -872,9 +875,20 @@ const tempDriveLookTarget = new THREE.Vector3();
 const tempDriveDirection = new THREE.Vector3();
 const tempDriveSeatQuaternion = new THREE.Quaternion();
 const tempDriveSeatUp = new THREE.Vector3();
+const tempDriveForward = new THREE.Vector3();
+const tempDriveRight = new THREE.Vector3();
 const tempDriveCameraMatrix = new THREE.Matrix4();
 const tempDriveCameraQuaternion = new THREE.Quaternion();
 const VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE = 6;
+const VEHICLE_CAMERA_FALLBACK_HEIGHT = 1.35;
+const VEHICLE_CAMERA_FALLBACK_HEIGHT_RATIO = 0.45;
+const VEHICLE_EXIT_LATERAL_RATIO = 0.6;
+const VEHICLE_EXIT_FORWARD_RATIO = 0.35;
+const VEHICLE_EXIT_VERTICAL_RATIO = 0.25;
+const VEHICLE_EXIT_LATERAL_MIN = 1.25;
+const VEHICLE_EXIT_FORWARD_MIN = 1.25;
+const VEHICLE_EXIT_VERTICAL_MIN = 0.6;
+const VEHICLE_SIZE_FALLBACK = { width: 2.4, height: 1.4, length: 4.2 };
 const cameraRotationAnchor = new THREE.Vector3();
 let programmaticCameraMutationDepth = 0;
 let suppressSelfYawRecenter = false;
@@ -988,8 +1002,6 @@ const vehicleDriveNodeId = ref<string | null>(null);
 const vehicleDriveToken = ref<string | null>(null);
 const activeVehicleDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null);
 const vehicleDriveSeatNodeId = ref<string | null>(null);
-const vehicleDriveForwardNodeId = ref<string | null>(null);
-const vehicleDriveExitNodeId = ref<string | null>(null);
 const vehicleDriveUiOverride = ref<'auto' | 'show' | 'hide'>('auto');
 const vehicleDriveExitBusy = ref(false);
 const vehicleDriveInputFlags = reactive<VehicleDriveControlFlags>({
@@ -2971,52 +2983,44 @@ function clampVehicleAxisIndex(value: number): 0 | 1 | 2 {
   return 0;
 }
 
-function tupleToVec3(tuple: VehicleVector3Tuple): CANNON.Vec3 {
-  const [x = 0, y = 0, z = 0] = tuple;
-  return new CANNON.Vec3(x, y, z);
+type VehicleVectorValue = Vector3Like | number[] | null | undefined;
+
+function toFiniteVectorComponent(value: unknown): number | null {
+  const numeric = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
 }
 
-function buildVehicleConnectionPoint(
-  rightAxis: number,
-  forwardAxis: number,
-  upAxis: number,
-  rightValue: number,
-  forwardValue: number,
-  upValue: number,
-): CANNON.Vec3 {
-  const components: [number, number, number] = [0, 0, 0];
-  components[rightAxis] = rightValue;
-  components[forwardAxis] = forwardValue;
-  components[upAxis] = upValue;
-  return new CANNON.Vec3(components[0], components[1], components[2]);
-}
-
-function computeVehicleWheelConnectionPoints(
-  object: THREE.Object3D,
-  props: VehicleComponentProps,
-  rightAxis: number,
-  forwardAxis: number,
-  upAxis: number,
-): CANNON.Vec3[] {
-  tempBox.makeEmpty();
-  tempBox.setFromObject(object);
-  if (tempBox.isEmpty()) {
-    tempVehicleSize.set(2, 1, 4);
-  } else {
-    tempBox.getSize(tempVehicleSize);
+function normalizeVehicleVector(value: VehicleVectorValue): [number, number, number] | null {
+  if (Array.isArray(value) && value.length === 3) {
+    const [xRaw, yRaw, zRaw] = value;
+    const x = toFiniteVectorComponent(xRaw);
+    const y = toFiniteVectorComponent(yRaw);
+    const z = toFiniteVectorComponent(zRaw);
+    if (x === null || y === null || z === null) {
+      return null;
+    }
+    return [x, y, z];
   }
-  const rightExtent = Math.max(tempVehicleSize.getComponent(rightAxis) * 0.5, props.radius * 1.25);
-  const forwardExtent = Math.max(tempVehicleSize.getComponent(forwardAxis) * 0.5, props.radius * 2);
-  const upExtent = Math.max(tempVehicleSize.getComponent(upAxis) * 0.5, props.radius + props.suspensionRestLength);
-  const footprints = [
-    { right: rightExtent, forward: forwardExtent },
-    { right: -rightExtent, forward: forwardExtent },
-    { right: rightExtent, forward: -forwardExtent },
-    { right: -rightExtent, forward: -forwardExtent },
-  ];
-  return footprints.map(({ right, forward }) =>
-    buildVehicleConnectionPoint(rightAxis, forwardAxis, upAxis, right, forward, upExtent),
-  );
+  if (value && typeof value === 'object') {
+    const record = value as Partial<Vector3Like>;
+    const x = toFiniteVectorComponent(record.x);
+    const y = toFiniteVectorComponent(record.y);
+    const z = toFiniteVectorComponent(record.z);
+    if (x === null || y === null || z === null) {
+      return null;
+    }
+    return [x, y, z];
+  }
+  return null;
+}
+
+function tupleToVec3(tuple: VehicleVectorValue, fallback?: Vector3Like): CANNON.Vec3 | null {
+  const normalized = normalizeVehicleVector(tuple) ?? (fallback ? normalizeVehicleVector(fallback) : null);
+  if (!normalized) {
+    return null;
+  }
+  const [x, y, z] = normalized;
+  return new CANNON.Vec3(x, y, z);
 }
 
 function createVehicleInstance(
@@ -3031,40 +3035,51 @@ function createVehicleInstance(
   const rightAxis = clampVehicleAxisIndex(props.indexRightAxis);
   const upAxis = clampVehicleAxisIndex(props.indexUpAxis);
   const forwardAxis = clampVehicleAxisIndex(props.indexForwardAxis);
-  const connectionPoints = computeVehicleWheelConnectionPoints(
-    rigidbody.object,
-    props,
-    rightAxis,
-    forwardAxis,
-    upAxis,
-  );
-  if (!connectionPoints.length) {
+  const wheelEntries = (props.wheels ?? [])
+    .map((wheel) => {
+      const point = tupleToVec3(wheel.chassisConnectionPointLocal);
+      if (!point) {
+        return null;
+      }
+      return { config: wheel, point };
+    })
+    .filter((entry): entry is { config: VehicleWheelProps; point: CANNON.Vec3 } => Boolean(entry));
+  if (!wheelEntries.length) {
     return null;
   }
+  const wheelCount = wheelEntries.length;
   const vehicle = new CANNON.RaycastVehicle({
     chassisBody: rigidbody.body,
     indexRightAxis: rightAxis,
     indexUpAxis: upAxis,
     indexForwardAxis: forwardAxis,
   });
-  const directionVec = tupleToVec3(props.directionLocal);
-  const axleVec = tupleToVec3(props.axleLocal);
-  connectionPoints.forEach((point) => {
+  wheelEntries.forEach(({ config, point }) => {
+    const directionVec = tupleToVec3(config.directionLocal, DEFAULT_DIRECTION);
+    const axleVec = tupleToVec3(config.axleLocal, DEFAULT_AXLE);
+    if (!directionVec || !axleVec) {
+      return;
+    }
     vehicle.addWheel({
       chassisConnectionPointLocal: point,
-      directionLocal: directionVec.clone(),
-      axleLocal: axleVec.clone(),
-      suspensionRestLength: props.suspensionRestLength,
-      suspensionStiffness: props.suspensionStiffness,
-      dampingRelaxation: props.suspensionDamping,
-      dampingCompression: props.suspensionCompression,
-      frictionSlip: props.frictionSlip,
-      rollInfluence: props.rollInfluence,
-      radius: props.radius,
+      directionLocal: directionVec,
+      axleLocal: axleVec,
+      suspensionRestLength: config.suspensionRestLength,
+      suspensionStiffness: config.suspensionStiffness,
+      dampingRelaxation: config.dampingRelaxation,
+      dampingCompression: config.dampingCompression,
+      frictionSlip: config.frictionSlip,
+      maxSuspensionTravel: config.maxSuspensionTravel,
+      maxSuspensionForce: config.maxSuspensionForce,
+      useCustomSlidingRotationalSpeed: config.useCustomSlidingRotationalSpeed,
+      customSlidingRotationalSpeed: config.customSlidingRotationalSpeed,
+      isFrontWheel: config.isFrontWheel,
+      rollInfluence: config.rollInfluence,
+      radius: config.radius,
     });
   });
   vehicle.addToWorld(physicsWorld);
-  return { nodeId: node.id, vehicle, wheelCount: connectionPoints.length };
+  return { nodeId: node.id, vehicle, wheelCount };
 }
 
 function removeVehicleInstance(nodeId: string): void {
@@ -4596,75 +4611,107 @@ function handleVehicleDriveControlTouch(
   vehicleDriveInputFlags[key] = active;
 }
 
-function computeVehicleDriveCameraTargets(
-  seatNodeId: string | null,
-  forwardNodeId: string | null,
-  fallbackNodeId: string | null,
+function computeVehicleFallbackSeatPosition(object: THREE.Object3D | null, target: THREE.Vector3): void {
+  if (!object) {
+    target.set(0, VEHICLE_CAMERA_FALLBACK_HEIGHT, 0);
+    return;
+  }
+  tempBox.makeEmpty();
+  tempBox.setFromObject(object);
+  if (tempBox.isEmpty()) {
+    object.getWorldPosition(target);
+    target.addScaledVector(worldUp, VEHICLE_CAMERA_FALLBACK_HEIGHT);
+    return;
+  }
+  tempBox.getCenter(target);
+  tempBox.getSize(tempVehicleSize);
+  const upOffset = Math.max(tempVehicleSize.y * VEHICLE_CAMERA_FALLBACK_HEIGHT_RATIO, VEHICLE_CAMERA_FALLBACK_HEIGHT);
+  target.addScaledVector(worldUp, upOffset);
+}
+
+function getVehicleApproxDimensions(object: THREE.Object3D | null): { width: number; height: number; length: number } {
+  if (!object) {
+    return { ...VEHICLE_SIZE_FALLBACK };
+  }
+  tempBox.makeEmpty();
+  tempBox.setFromObject(object);
+  if (tempBox.isEmpty()) {
+    return { ...VEHICLE_SIZE_FALLBACK };
+  }
+  tempBox.getSize(tempVehicleSize);
+  return {
+    width: Math.max(tempVehicleSize.x, VEHICLE_SIZE_FALLBACK.width),
+    height: Math.max(tempVehicleSize.y, VEHICLE_SIZE_FALLBACK.height),
+    length: Math.max(tempVehicleSize.z, VEHICLE_SIZE_FALLBACK.length),
+  };
+}
+
+function buildVehicleDriveCameraBasis(
+  seatObject: THREE.Object3D | null,
+  vehicleObject: THREE.Object3D | null,
 ): boolean {
-  const seatObject = seatNodeId ? nodeObjectMap.get(seatNodeId) ?? null : null;
-  const fallbackObject = fallbackNodeId ? nodeObjectMap.get(fallbackNodeId) ?? null : null;
-  const referenceObject = seatObject ?? fallbackObject;
+  const referenceObject = seatObject ?? vehicleObject;
   if (!referenceObject) {
     return false;
   }
   referenceObject.updateMatrixWorld(true);
-  referenceObject.getWorldPosition(tempDriveSeatPosition);
-  const orientationObject = seatObject ?? referenceObject;
-  orientationObject.updateMatrixWorld(true);
-  orientationObject.getWorldQuaternion(tempQuaternion);
-  tempDriveSeatQuaternion.copy(tempQuaternion);
-  tempDriveSeatUp.set(0, 1, 0).applyQuaternion(tempDriveSeatQuaternion);
+  referenceObject.getWorldQuaternion(tempDriveSeatQuaternion);
+  if (seatObject) {
+    seatObject.updateMatrixWorld(true);
+    seatObject.getWorldPosition(tempDriveSeatPosition);
+  } else {
+    computeVehicleFallbackSeatPosition(vehicleObject ?? referenceObject, tempDriveSeatPosition);
+  }
+  tempDriveForward.set(0, 0, -1).applyQuaternion(tempDriveSeatQuaternion);
+  if (tempDriveForward.lengthSq() < 1e-8) {
+    tempDriveForward.set(0, 0, -1);
+  } else {
+    tempDriveForward.normalize();
+  }
+  tempDriveRight.copy(tempDriveForward).cross(worldUp);
+  if (tempDriveRight.lengthSq() < 1e-8) {
+    tempDriveRight.set(1, 0, 0).applyQuaternion(tempDriveSeatQuaternion);
+    if (tempDriveRight.lengthSq() < 1e-8) {
+      tempDriveRight.set(1, 0, 0);
+    } else {
+      tempDriveRight.normalize();
+    }
+  } else {
+    tempDriveRight.normalize();
+  }
+  tempDriveSeatUp.crossVectors(tempDriveRight, tempDriveForward);
   if (tempDriveSeatUp.lengthSq() < 1e-8) {
-    tempDriveSeatUp.set(0, 1, 0);
+    tempDriveSeatUp.copy(worldUp);
   } else {
     tempDriveSeatUp.normalize();
   }
-  let lookResolved = false;
-  if (forwardNodeId) {
-    const forwardObject = nodeObjectMap.get(forwardNodeId) ?? null;
-    if (forwardObject) {
-      forwardObject.updateMatrixWorld(true);
-      forwardObject.getWorldPosition(tempDriveLookTarget);
-      if (tempDriveLookTarget.distanceToSquared(tempDriveSeatPosition) > 1e-6) {
-        lookResolved = true;
-      }
-    }
+  return true;
+}
+
+function computeVehicleDriveCameraTargets(
+  seatNodeId: string | null,
+  fallbackNodeId: string | null,
+): boolean {
+  const seatObject = seatNodeId ? nodeObjectMap.get(seatNodeId) ?? null : null;
+  const vehicleObject = fallbackNodeId ? nodeObjectMap.get(fallbackNodeId) ?? null : null;
+  if (!buildVehicleDriveCameraBasis(seatObject, vehicleObject)) {
+    return false;
   }
-  if (!lookResolved) {
-    tempDriveDirection.set(0, 0, -1).applyQuaternion(tempDriveSeatQuaternion);
-    if (tempDriveDirection.lengthSq() < 1e-8) {
-      tempDriveDirection.set(0, 0, -1);
-    } else {
-      tempDriveDirection.normalize();
-    }
-    tempDriveLookTarget
-      .copy(tempDriveSeatPosition)
-      .add(tempDriveDirection.multiplyScalar(VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE));
-    lookResolved = true;
-  } else if (tempDriveLookTarget.distanceToSquared(tempDriveSeatPosition) <= 1e-6) {
-    tempDriveDirection.set(0, 0, -1).applyQuaternion(tempDriveSeatQuaternion);
-    if (tempDriveDirection.lengthSq() < 1e-8) {
-      tempDriveDirection.set(0, 0, -1);
-    } else {
-      tempDriveDirection.normalize();
-    }
-    tempDriveLookTarget
-      .copy(tempDriveSeatPosition)
-      .add(tempDriveDirection.multiplyScalar(VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE));
-  }
-  return lookResolved;
+  tempDriveLookTarget
+    .copy(tempDriveSeatPosition)
+    .addScaledVector(tempDriveForward, VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE);
+  return true;
 }
 
 function alignVehicleDriveCameraImmediate(
   seatNodeId: string | null,
-  forwardNodeId: string | null,
   fallbackNodeId: string | null,
 ): { success: boolean; message?: string } {
   const context = renderContext;
   if (!context) {
     return { success: false, message: '相机不可用' };
   }
-  if (!computeVehicleDriveCameraTargets(seatNodeId, forwardNodeId, fallbackNodeId)) {
+  if (!computeVehicleDriveCameraTargets(seatNodeId, fallbackNodeId)) {
     return { success: false, message: '无法定位驾驶摄像机' };
   }
   const { camera, controls } = context;
@@ -4688,9 +4735,8 @@ function updateVehicleDriveCamera(): void {
     return;
   }
   const seatNodeId = vehicleDriveSeatNodeId.value;
-  const forwardNodeId = vehicleDriveForwardNodeId.value;
   const fallbackNodeId = normalizeNodeId(vehicleDriveNodeId.value);
-  if (!computeVehicleDriveCameraTargets(seatNodeId, forwardNodeId, fallbackNodeId)) {
+  if (!computeVehicleDriveCameraTargets(seatNodeId, fallbackNodeId)) {
     return;
   }
   const { camera, controls } = renderContext;
@@ -4759,25 +4805,33 @@ function restoreVehicleDriveCameraState(): void {
   vehicleDriveCameraRestoreState.hasSnapshot = false;
 }
 
-function alignVehicleDriveExitCamera(exitNodeId: string | null): boolean {
+function alignVehicleDriveExitCamera(): boolean {
   const context = renderContext;
-  if (!context || !exitNodeId) {
+  if (!context) {
     return false;
   }
-  const exitObject = nodeObjectMap.get(exitNodeId) ?? null;
-  if (!exitObject) {
+  const vehicleNodeId = normalizeNodeId(vehicleDriveNodeId.value);
+  if (!vehicleNodeId) {
     return false;
   }
-  exitObject.updateMatrixWorld(true);
-  exitObject.getWorldPosition(tempDriveSeatPosition);
+  const seatNodeId = vehicleDriveSeatNodeId.value;
+  const seatObject = seatNodeId ? nodeObjectMap.get(seatNodeId) ?? null : null;
+  const vehicleObject = nodeObjectMap.get(vehicleNodeId) ?? null;
+  if (!buildVehicleDriveCameraBasis(seatObject, vehicleObject)) {
+    return false;
+  }
+  const dimensions = getVehicleApproxDimensions(vehicleObject);
+  const lateralOffset = Math.max(dimensions.width * VEHICLE_EXIT_LATERAL_RATIO, VEHICLE_EXIT_LATERAL_MIN);
+  const verticalOffset = Math.max(dimensions.height * VEHICLE_EXIT_VERTICAL_RATIO, VEHICLE_EXIT_VERTICAL_MIN);
+  const forwardOffset = Math.max(dimensions.length * VEHICLE_EXIT_FORWARD_RATIO, VEHICLE_EXIT_FORWARD_MIN);
+  tempDriveSeatPosition.addScaledVector(tempDriveRight, -lateralOffset);
+  tempDriveSeatPosition.addScaledVector(tempDriveSeatUp, verticalOffset);
+  tempDriveLookTarget
+    .copy(tempDriveSeatPosition)
+    .addScaledVector(tempDriveForward, forwardOffset);
   runWithProgrammaticCameraMutation(() => {
     const { camera, controls } = context;
     camera.position.copy(tempDriveSeatPosition);
-    tempDriveLookTarget.set(
-      tempDriveSeatPosition.x,
-      tempDriveSeatPosition.y,
-      tempDriveSeatPosition.z - CAMERA_FORWARD_OFFSET,
-    );
     withControlsVerticalFreedom(controls, () => {
       controls.target.copy(tempDriveLookTarget);
       camera.lookAt(tempDriveLookTarget);
@@ -4796,45 +4850,14 @@ async function handleVehicleDrivePromptTap(): Promise<void> {
   }
   vehicleDrivePromptBusy.value = true;
   try {
-    const resolvedTargetNodeId =
-      normalizeNodeId(event.targetNodeId) ?? normalizeNodeId(event.nodeId);
-    if (!resolvedTargetNodeId) {
-      uni.showToast({ title: '缺少驾驶目标', icon: 'none' });
-      resolveBehaviorToken(event.token, { type: 'fail', message: '缺少驾驶目标' });
-      pendingVehicleDriveEvent.value = null;
-      setVehicleDriveUiOverride('hide');
-      return;
-    }
-    snapshotVehicleDriveCameraState();
-    const seatNodeId = normalizeNodeId(event.seatNodeId);
-    const forwardNodeId = normalizeNodeId(event.forwardDirectionNodeId);
-    const cameraResult = alignVehicleDriveCameraImmediate(seatNodeId, forwardNodeId, resolvedTargetNodeId);
-    if (!cameraResult.success) {
-      vehicleDriveCameraRestoreState.hasSnapshot = false;
-      if (cameraResult.message) {
-        uni.showToast({ title: cameraResult.message, icon: 'none' });
-      }
-      resolveBehaviorToken(event.token, {
-        type: 'fail',
-        message: cameraResult.message || '无法进入驾驶视角',
-      });
-      pendingVehicleDriveEvent.value = null;
-      setVehicleDriveUiOverride('hide');
-      return;
-    }
-    handleShowVehicleCockpitEvent();
-    vehicleDriveActive.value = true;
-    vehicleDriveNodeId.value = resolvedTargetNodeId;
     vehicleDriveToken.value = event.token;
     activeVehicleDriveEvent.value = { ...event };
     vehicleDriveSeatNodeId.value = seatNodeId;
-    vehicleDriveForwardNodeId.value = forwardNodeId;
-    vehicleDriveExitNodeId.value = normalizeNodeId(event.exitNodeId);
     vehicleDriveExitBusy.value = false;
     resetVehicleDriveInputFlags();
     setCameraCaging(true);
     purposeActiveMode.value = 'watch';
-    setCameraViewState('watching', forwardNodeId ?? resolvedTargetNodeId);
+    setCameraViewState('watching', resolvedTargetNodeId);
     pendingVehicleDriveEvent.value = null;
   } finally {
     vehicleDrivePromptBusy.value = false;
@@ -4853,14 +4876,9 @@ function handleVehicleDriveExitTap(): void {
   }
   vehicleDriveExitBusy.value = true;
   try {
-    const exitNodeId = vehicleDriveExitNodeId.value ?? normalizeNodeId(event.exitNodeId);
-    const aligned = alignVehicleDriveExitCamera(exitNodeId);
+    const aligned = alignVehicleDriveExitCamera();
     if (!aligned) {
-      if (exitNodeId) {
-        uni.showToast({ title: '下车位置节点不存在，已恢复默认视角', icon: 'none' });
-      } else {
-        uni.showToast({ title: '缺少下车位置，已恢复默认视角', icon: 'none' });
-      }
+      uni.showToast({ title: '无法定位默认下车位置，已恢复默认视角', icon: 'none' });
     }
     handleHideVehicleCockpitEvent();
     handleVehicleDebusEvent();
@@ -4881,8 +4899,6 @@ function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'v
     vehicleDriveActive.value = false;
     vehicleDriveNodeId.value = null;
     vehicleDriveSeatNodeId.value = null;
-    vehicleDriveForwardNodeId.value = null;
-    vehicleDriveExitNodeId.value = null;
     resetVehicleDriveInputFlags();
     setVehicleDriveUiOverride('hide');
     activeVehicleDriveEvent.value = null;
@@ -4924,8 +4940,6 @@ function handleVehicleDebusEvent(): void {
   vehicleDriveActive.value = false;
   vehicleDriveNodeId.value = null;
   vehicleDriveSeatNodeId.value = null;
-  vehicleDriveForwardNodeId.value = null;
-  vehicleDriveExitNodeId.value = null;
   resetVehicleDriveInputFlags();
   setVehicleDriveUiOverride('hide');
   activeVehicleDriveEvent.value = null;

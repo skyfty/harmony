@@ -16,7 +16,6 @@ import { TransformControls } from '@/utils/transformControls.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js'
-import Pica from 'pica'
 
 import type {
   SceneNode,
@@ -35,12 +34,11 @@ import {
   resetMaterialOverrides,
   type MaterialTextureAssignmentOptions,
 } from '@/types/material'
-import { useSceneStore, getRuntimeObject, buildPackageAssetMapForExport, calculateSceneResourceSummary } from '@/stores/sceneStore'
+import { useSceneStore, getRuntimeObject,registerRuntimeObject} from '@/stores/sceneStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import type { SceneCameraState } from '@/types/scene-camera-state'
-import type { StoredSceneDocument } from '@/types/stored-scene-document'
 
 import type { EditorTool } from '@/types/editor-tool'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -57,8 +55,6 @@ import type { CameraControlMode } from '@harmony/schema'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import { cloneSkyboxSettings } from '@/stores/skyboxPresets'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
-import type { SceneExportOptions } from '@/types/scene-export'
-import { prepareGLBSceneExport, prepareJsonSceneExport } from '@/utils/sceneExport'
 import ViewportToolbar from './ViewportToolbar.vue'
 import TransformToolbar from './TransformToolbar.vue'
 import PlaceholderOverlayList from './PlaceholderOverlayList.vue'
@@ -615,10 +611,6 @@ type SurfaceBuildSession = {
   points: THREE.Vector3[]
   previewGroup: THREE.Group | null
 }
-
-const THUMBNAIL_MAX_DIMENSION = 256
-const THUMBNAIL_JPEG_QUALITY = 0.85
-const thumbnailResizer = typeof window !== 'undefined' ? Pica() : null
 
 let wallBuildSession: WallBuildSession | null = null
 let wallPreviewNeedsSync = false
@@ -1703,30 +1695,7 @@ function snapVectorToGridForNode(vec: THREE.Vector3, nodeId: string | null | und
 }
 
 export type SceneViewportHandle = {
-  exportScene(options: SceneExportOptions, onProgress: (progress: number, message?: string) => void): Promise<Blob>
   captureScreenshot(mimeType?: string): Promise<Blob | null>
-}
-
-async function exportScene(options: SceneExportOptions, onProgress: (progress: number, message?: string) => void): Promise<Blob> {
-  if (!scene) {
-    throw new Error('Scene not initialized')
-  }
-  onProgress(10, 'Capturing scene data...')
-  if (options.format === 'glb') {
-    return prepareGLBSceneExport(scene, options)
-  } else if (options.format === 'json') {
-    let snapshot = sceneStore.createSceneDocumentSnapshot() as StoredSceneDocument
-    const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(snapshot, { embedResources: true })
-    snapshot.packageAssetMap = packageAssetMap
-    snapshot.assetIndex = assetIndex
-    snapshot.resourceSummary = await calculateSceneResourceSummary(snapshot, { embedResources: true })
-    onProgress(35, 'Applying export preferences...')
-    const jsonDocument = await prepareJsonSceneExport(snapshot, options)
-
-    return new Blob([JSON.stringify(jsonDocument, null, 2)], { type: 'application/json' })
-  } else {
-    throw new Error(`Unsupported export format: ${options.format}`)
-  }
 }
 
 function applyCameraState(state: SceneCameraState | null | undefined) {
@@ -6148,6 +6117,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       containerData.dynamicMeshType = node.dynamicMesh?.type ?? null
     }
     object = container
+    registerRuntimeObject(node.id, container)
   } else if (nodeType === 'Camera') {
     const perspective = node.camera
     const perspectiveCamera = new THREE.PerspectiveCamera(
@@ -6169,6 +6139,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     }
     container.userData.nodeId = node.id
     object = container
+    registerRuntimeObject(node.id, container)
   } else if (nodeType === 'Group') {
     let container = getRuntimeObject(node.id)
     if (container !== null) {
@@ -6179,6 +6150,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     }
     container.userData.nodeId = node.id
     object = container
+    registerRuntimeObject(node.id, container)
   } else if (nodeType === 'WarpGate') {
     const runtimeObject = getRuntimeObject(node.id)
     if (runtimeObject) {
@@ -6186,6 +6158,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       object = runtimeObject
     } else {
       object = createWarpGatePlaceholderObject(node)
+      registerRuntimeObject(node.id, object)
     }
   } else if (nodeType === 'Guideboard') {
     const runtimeObject = getRuntimeObject(node.id)
@@ -6194,6 +6167,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       object = runtimeObject
     } else {
       object = createGuideboardPlaceholderObject(node)
+      registerRuntimeObject(node.id, object)
     }
   } else {
     let container = getRuntimeObject(node.id)
@@ -6202,9 +6176,11 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     } else {
       container = createPrimitiveMesh(nodeType)
       container.name = node.name
+      registerRuntimeObject(node.id, container)
     }
     container.userData.nodeId = node.id
     object = container
+
   }
 
   object.position.set(node.position.x, node.position.y, node.position.z)
@@ -6608,7 +6584,6 @@ watch(
 )
 
 defineExpose<SceneViewportHandle>({
-  exportScene,
   captureScreenshot
 })
 </script>

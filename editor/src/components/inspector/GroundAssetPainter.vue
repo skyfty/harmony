@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -16,7 +16,7 @@ const terrainStore = useTerrainStore()
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
 
-const { scatterProviderAssetId, scatterSelectedAsset } = storeToRefs(terrainStore)
+const { scatterProviderAssetId } = storeToRefs(terrainStore)
 
 const categoryKeys = Object.keys(terrainScatterPresets) as TerrainScatterCategory[]
 const assetBuckets = reactive<Record<TerrainScatterCategory, ProjectAsset[]>>(
@@ -39,9 +39,6 @@ const errorMap = reactive<Record<TerrainScatterCategory, string | null>>(
 )
 
 const selectingAssetId = ref<string | null>(null)
-
-const hasSelection = computed(() => Boolean(scatterSelectedAsset.value))
-const activePreset = computed(() => terrainScatterPresets[props.category])
 
 async function ensureAssetsLoaded(category: TerrainScatterCategory): Promise<void> {
   if (loadingMap[category]) {
