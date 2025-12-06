@@ -5,10 +5,13 @@ import {
 	ensureTerrainScatterStore,
 	upsertTerrainScatterLayer,
 	replaceTerrainScatterInstances,
+	loadTerrainScatterSnapshot,
+	serializeTerrainScatterStore,
 	type TerrainScatterCategory,
 	type TerrainScatterInstance,
 	type TerrainScatterLayer,
 	type TerrainScatterStore,
+	type TerrainScatterStoreSnapshot,
 } from '@harmony/schema/terrain-scatter'
 import { sculptGround, updateGroundGeometry, updateGroundMesh, sampleGroundHeight } from '@schema/groundMesh'
 import { getCachedModelObject, getOrLoadModelObject, type ModelInstanceGroup } from '@schema/modelObjectCache'
@@ -262,6 +265,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	let scatterLayer: TerrainScatterLayer | null = null
 	let scatterModelGroup: ModelInstanceGroup | null = null
 	let scatterAssetLoadToken = 0
+	let scatterSnapshotUpdatedAt: number | null = null
 
 	const stopBrushWatch = watch(options.brushShape, (shape) => {
 		updateBrushGeometry(shape ?? 'circle')
@@ -294,6 +298,18 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	)
 
 	function ensureScatterStoreRef(): TerrainScatterStore {
+		const snapshot = getGroundTerrainScatterSnapshot()
+		const snapshotUpdatedAt = getScatterSnapshotTimestamp(snapshot)
+		const shouldHydrate = snapshot && (!scatterStore || snapshotUpdatedAt !== scatterSnapshotUpdatedAt)
+		if (shouldHydrate && snapshot) {
+			try {
+				scatterStore = loadTerrainScatterSnapshot(GROUND_NODE_ID, snapshot)
+				scatterSnapshotUpdatedAt = snapshotUpdatedAt
+			} catch (error) {
+				console.warn('载入地面散布快照失败', error)
+				scatterStore = ensureTerrainScatterStore(GROUND_NODE_ID)
+			}
+		}
 		if (!scatterStore) {
 			scatterStore = ensureTerrainScatterStore(GROUND_NODE_ID)
 		}
@@ -320,12 +336,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		const store = ensureScatterStoreRef()
 		const preset = getScatterPreset(category)
-		return upsertTerrainScatterLayer(store, {
+		const layer = upsertTerrainScatterLayer(store, {
 			assetId: asset.id,
 			label: `${asset.name} ${preset.label}`.trim(),
 			category,
 			profileId: asset.id,
 		})
+		syncTerrainScatterSnapshotToScene(store)
+		return layer
 	}
 
 	async function loadScatterModelGroup(asset: ProjectAsset): Promise<ModelInstanceGroup | null> {
@@ -374,6 +392,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const result = replaceTerrainScatterInstances(store, layer.id, instances)
 		if (result && scatterLayer && scatterLayer.id === layer.id) {
 			scatterLayer = result
+		}
+		if (result) {
+			syncTerrainScatterSnapshotToScene(store)
 		}
 		return result
 	}
@@ -456,6 +477,42 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function getGroundNodeFromScene(): SceneNode | null {
 		return findGroundNodeInTree(options.sceneStore.nodes)
+	}
+
+	function getGroundTerrainScatterSnapshot(): TerrainScatterStoreSnapshot | null {
+		const node = getGroundNodeFromScene()
+		if (node?.dynamicMesh?.type !== 'Ground') {
+			return null
+		}
+		const definition = node.dynamicMesh as GroundDynamicMesh & { terrainScatter?: TerrainScatterStoreSnapshot | null }
+		return definition.terrainScatter ?? null
+	}
+
+	function getScatterSnapshotTimestamp(snapshot: TerrainScatterStoreSnapshot | null | undefined): number | null {
+		if (!snapshot) {
+			return null
+		}
+		const updated = snapshot.metadata?.updatedAt
+		return Number.isFinite(updated) ? Number(updated) : null
+	}
+
+	function syncTerrainScatterSnapshotToScene(storeOverride?: TerrainScatterStore | null): void {
+		const store = storeOverride ?? scatterStore
+		if (!store) {
+			return
+		}
+		const snapshot = serializeTerrainScatterStore(store)
+		const groundNode = getGroundNodeFromScene()
+		if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+			return
+		}
+		const nextMesh: GroundDynamicMesh = {
+			...(groundNode.dynamicMesh as GroundDynamicMesh),
+			terrainScatter: snapshot,
+		}
+		groundNode.dynamicMesh = nextMesh
+		options.sceneStore.updateNodeDynamicMesh(groundNode.id, nextMesh)
+		scatterSnapshotUpdatedAt = getScatterSnapshotTimestamp(snapshot)
 	}
 
 	function getGroundDynamicMeshDefinition(): GroundDynamicMesh | null {
@@ -1553,6 +1610,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		material.dispose()
 		groundSelectionGroup.clear()
 		sculptSessionState = null
+		scatterStore = null
+		scatterLayer = null
+		scatterSnapshotUpdatedAt = null
 	}
 
 	return {

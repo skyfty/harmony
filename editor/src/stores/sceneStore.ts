@@ -81,6 +81,7 @@ import type {
   SceneResourceSummary,
   SceneResourceSummaryEntry,
 } from '@harmony/schema'
+import type { TerrainScatterStoreSnapshot } from '@harmony/schema/terrain-scatter'
 
 export { GROUND_NODE_ID, SKY_NODE_ID, ENVIRONMENT_NODE_ID }
 
@@ -4797,6 +4798,37 @@ export async function calculateSceneResourceSummary(
     usage.assetIds.add(normalizedId)
   }
 
+  const registerScatterAssetId = (assetId: string | null | undefined): void => {
+    const normalizedId = typeof assetId === 'string' ? assetId.trim() : ''
+    if (!normalizedId) {
+      return
+    }
+    assetIds.add(normalizedId)
+  }
+
+  const collectScatterAssetRefs = (node: SceneNode): void => {
+    if (node.dynamicMesh?.type !== 'Ground') {
+      return
+    }
+    const definition = node.dynamicMesh as GroundDynamicMesh & {
+      terrainScatter?: TerrainScatterStoreSnapshot | null
+    }
+    const snapshot = definition.terrainScatter
+    if (!snapshot || !Array.isArray(snapshot.layers) || !snapshot.layers.length) {
+      return
+    }
+    snapshot.layers.forEach((layer) => {
+      registerScatterAssetId(layer?.assetId)
+      registerScatterAssetId(layer?.profileId)
+      if (Array.isArray(layer?.instances)) {
+        layer.instances.forEach((instance) => {
+          registerScatterAssetId(instance?.assetId)
+          registerScatterAssetId(instance?.profileId)
+        })
+      }
+    })
+  }
+
   const collectMaterialTextureRefs = (
     material: SceneMaterial | SceneNodeMaterial | null | undefined,
     node: SceneNode,
@@ -4862,6 +4894,7 @@ export async function calculateSceneResourceSummary(
           }
         })
       }
+      collectScatterAssetRefs(node)
       if (Array.isArray(node.children) && node.children.length) {
         stack.push(...(node.children as SceneNode[]))
       }

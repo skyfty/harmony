@@ -19,6 +19,7 @@ import {
 	type SceneMaterialTextureRef,
 	type SceneSkyboxSettings,
 } from '@harmony/schema'
+import type { TerrainScatterStoreSnapshot, TerrainScatterInstance } from '@harmony/schema/terrain-scatter'
 import {
 	applyMaterialOverrides,
 	disposeMaterialOverrides,
@@ -104,6 +105,7 @@ import {
 import { PROXIMITY_EXIT_PADDING, DEFAULT_OBJECT_RADIUS, PROXIMITY_MIN_DISTANCE, PROXIMITY_RADIUS_SCALE } from '@schema/behaviors/runtime'
 import type Viewer from 'viewerjs'
 import type { ViewerOptions } from 'viewerjs'
+import { buildScatterNodeId, composeScatterMatrix } from '@/utils/terrainScatterRuntime'
 
 type ControlMode = 'first-person' | 'third-person'
 const containerRef = ref<HTMLDivElement | null>(null)
@@ -673,6 +675,8 @@ const rigidbodyDebugPositionHelper = new THREE.Vector3()
 const rigidbodyDebugQuaternionHelper = new THREE.Quaternion()
 const rigidbodyDebugScaleHelper = new THREE.Vector3()
 const nodeObjectMap = new Map<string, THREE.Object3D>()
+const scatterInstanceNodeIds = new Set<string>()
+const scatterMatrixHelper = new THREE.Matrix4()
 type RigidbodyOrientationAdjustment = {
 	cannon: CANNON.Quaternion
 	cannonInverse: CANNON.Quaternion
@@ -1105,6 +1109,113 @@ async function prepareInstancedNodesForDocument(
 		})())
 	})
 	await Promise.all(tasks)
+}
+
+type GroundScatterEntry = {
+	nodeId: string
+	snapshot: TerrainScatterStoreSnapshot
+}
+
+function collectGroundScatterEntries(nodes: SceneNode[] | null | undefined): GroundScatterEntry[] {
+	if (!Array.isArray(nodes) || !nodes.length) {
+		return []
+	}
+	const stack: SceneNode[] = [...nodes]
+	const entries: GroundScatterEntry[] = []
+	while (stack.length) {
+		const node = stack.pop()
+		if (!node) {
+			continue
+		}
+		if (node.dynamicMesh?.type === 'Ground') {
+			const definition = node.dynamicMesh as GroundDynamicMesh & {
+				terrainScatter?: TerrainScatterStoreSnapshot | null
+			}
+			const snapshot = definition.terrainScatter
+			if (snapshot && Array.isArray(snapshot.layers) && snapshot.layers.length) {
+				entries.push({ nodeId: node.id, snapshot })
+			}
+		}
+		if (Array.isArray(node.children) && node.children.length) {
+			stack.push(...node.children)
+		}
+	}
+	return entries
+}
+
+function resolveGroundMeshObject(nodeId: string): THREE.Mesh | null {
+	const container = nodeObjectMap.get(nodeId)
+	if (!container) {
+		return null
+	}
+	const directMesh = container as THREE.Mesh
+	if (directMesh.isMesh) {
+		return directMesh
+	}
+	let found: THREE.Mesh | null = null
+	container.traverse((child) => {
+		if (found) {
+			return
+		}
+		const mesh = child as THREE.Mesh
+		if (mesh?.isMesh) {
+			found = mesh
+		}
+	})
+	return found
+}
+
+function releaseTerrainScatterInstances(): void {
+	if (!scatterInstanceNodeIds.size) {
+		return
+	}
+	scatterInstanceNodeIds.forEach((nodeId) => releaseModelInstance(nodeId))
+	scatterInstanceNodeIds.clear()
+}
+
+async function syncTerrainScatterInstances(
+	document: SceneJsonExportDocument,
+	resourceCache: ResourceCache | null,
+): Promise<void> {
+	releaseTerrainScatterInstances()
+	if (!resourceCache) {
+		return
+	}
+	const entries = collectGroundScatterEntries(document.nodes)
+	if (!entries.length) {
+		return
+	}
+	for (const entry of entries) {
+		const groundMesh = resolveGroundMeshObject(entry.nodeId)
+		if (!groundMesh) {
+			continue
+		}
+		groundMesh.updateMatrixWorld(true)
+		for (const layer of entry.snapshot.layers ?? []) {
+			const layerAssetId = typeof layer?.assetId === 'string' ? layer.assetId.trim() : ''
+			const profileAssetId = typeof layer?.profileId === 'string' ? layer.profileId.trim() : ''
+			const assetId = layerAssetId || profileAssetId
+			if (!assetId) {
+				continue
+			}
+			const group = await ensureModelInstanceGroup(assetId, null, resourceCache)
+			if (!group || !group.meshes.length) {
+				continue
+			}
+			ensureInstancedMeshesRegistered(assetId)
+			const instances = Array.isArray(layer.instances) ? (layer.instances as TerrainScatterInstance[]) : []
+			for (const instance of instances) {
+				const nodeId = buildScatterNodeId(layer?.id ?? null, instance.id)
+				const binding = allocateModelInstance(assetId, nodeId)
+				if (!binding) {
+					continue
+				}
+				const matrix = composeScatterMatrix(instance, groundMesh, scatterMatrixHelper)
+				updateModelInstanceMatrix(nodeId, matrix)
+				scatterInstanceNodeIds.add(nodeId)
+			}
+		}
+	}
 }
 
 function attachInstancedMesh(mesh: THREE.InstancedMesh) {
@@ -3865,6 +3976,7 @@ function stopAnimationLoop() {
 }
 
 function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
+	releaseTerrainScatterInstances()
 	nodeObjectMap.forEach((_object, nodeId) => {
 		releaseModelInstance(nodeId)
 	})
@@ -6070,6 +6182,7 @@ function refreshAnimations() {
 
 async function updateScene(document: SceneJsonExportDocument) {
 	resetAssetResolutionCaches()
+	releaseTerrainScatterInstances()
 	refreshResourceAssetInfo(document)
 	const skyboxSettings = resolveDocumentSkybox(document)
 	applySkyboxSettings(skyboxSettings)
@@ -6178,6 +6291,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 			registerSubtree(child, pendingObjects)
 		}
 		currentDocument = document
+		await syncTerrainScatterInstances(document, resourceCache)
 		refreshAnimations()
 		initializeLazyPlaceholders(document)
 		syncPhysicsBodiesForDocument(document)
@@ -6198,6 +6312,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	}
 
 	syncPhysicsBodiesForDocument(document)
+	await syncTerrainScatterInstances(document, resourceCache)
 	if (isRigidbodyDebugVisible.value) {
 		syncRigidbodyDebugHelpers()
 	}
