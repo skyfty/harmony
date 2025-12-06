@@ -270,7 +270,10 @@
             @touchend.stop.prevent="handleVehicleDriveControlTouch('forward', false, $event)"
             @touchcancel.stop.prevent="handleVehicleDriveControlTouch('forward', false, $event)"
           >
-            <text class="viewer-drive-pedal-label">加速</text>
+            <svg class="viewer-drive-pedal-icon" viewBox="0 0 32 32" role="img" aria-hidden="true">
+              <path d="M16 6l10 10h-6v10h-8V16H6z" />
+            </svg>
+            <text class="viewer-drive-pedal-label" aria-hidden="true">加速</text>
           </button>
           <button
             class="viewer-drive-pedal-button viewer-drive-pedal-button--brake"
@@ -282,7 +285,10 @@
             @touchend.stop.prevent="handleVehicleDriveControlTouch('brake', false, $event)"
             @touchcancel.stop.prevent="handleVehicleDriveControlTouch('brake', false, $event)"
           >
-            <text class="viewer-drive-pedal-label">刹车</text>
+            <svg class="viewer-drive-pedal-icon" viewBox="0 0 32 32" role="img" aria-hidden="true">
+              <rect x="8" y="8" width="16" height="16" rx="4" ry="4" />
+            </svg>
+            <text class="viewer-drive-pedal-label" aria-hidden="true">刹车</text>
           </button>
         </view>
       </view>
@@ -1108,9 +1114,12 @@ const joystickState = reactive({
 });
 const steeringKeyboardValue = ref(0);
 const steeringKeyboardTarget = ref(0);
-const joystickKnobStyle = computed(() => ({
-  transform: `translate(calc(-50% + ${joystickOffset.x}px), calc(-50% + ${joystickOffset.y}px))`,
-}));
+const joystickKnobStyle = computed(() => {
+  const scale = joystickState.active ? 0.88 : 1;
+  return {
+    transform: `translate(calc(-50% + ${joystickOffset.x}px), calc(-50% + ${joystickOffset.y}px)) scale(${scale})`,
+  };
+});
 const vehicleDriveCameraToggleLabel = computed(() =>
   vehicleDriveCameraMode.value === 'follow' ? '座舱视角' : '跟随视角',
 );
@@ -7427,33 +7436,44 @@ onUnmounted(() => {
 }
 
 .viewer-drive-pedal-button {
-  width: 60px;
-  height: 60px;
+  width: 68px;
+  height: 68px;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
-  border: none;
+  border-radius: 22px;
+  border: 2px solid rgba(164, 188, 255, 0.28);
   color: #f4f6ff;
-  box-shadow: 0 10px 18px rgba(8, 10, 26, 0.55);
-  transition: transform 0.12s ease, box-shadow 0.12s ease;
+  background-color: rgba(26, 38, 82, 0.38);
+  box-shadow: 0 12px 22px rgba(6, 10, 28, 0.48);
+  backdrop-filter: blur(12px);
+  transition: transform 0.16s ease, box-shadow 0.16s ease, background-color 0.16s ease, border-color 0.16s ease;
 }
 
 .viewer-drive-pedal-button--forward {
-  background: linear-gradient(140deg, #38d3ff, #0b5b96);
+  background-color: rgba(62, 174, 255, 0.26);
+  border-color: rgba(118, 206, 255, 0.45);
 }
 
 .viewer-drive-pedal-button--brake {
-  background: linear-gradient(140deg, #ff7a63, #591420);
-}
-
-.viewer-drive-pedal-button--backward {
-  background: linear-gradient(140deg, #ab9aff, #2b1e63);
+  background-color: rgba(255, 112, 130, 0.24);
+  border-color: rgba(255, 150, 160, 0.45);
 }
 
 .viewer-drive-pedal-button.is-active {
-  transform: scale(0.97);
-  box-shadow: 0 6px 14px rgba(4, 6, 18, 0.5);
+  transform: scale(0.92);
+  box-shadow: 0 6px 16px rgba(4, 6, 18, 0.55);
+}
+
+.viewer-drive-pedal-button--forward.is-active {
+  background-color: rgba(62, 174, 255, 0.42);
+  border-color: rgba(138, 214, 255, 0.6);
+}
+
+.viewer-drive-pedal-button--brake.is-active {
+  background-color: rgba(255, 112, 130, 0.4);
+  border-color: rgba(255, 168, 178, 0.6);
 }
 
 .viewer-drive-joystick {
@@ -7462,6 +7482,7 @@ onUnmounted(() => {
   border-radius: 50%;
   position: relative;
   pointer-events: auto;
+  transition: transform 0.18s ease;
 }
 
 .viewer-drive-joystick::before {
@@ -7471,8 +7492,8 @@ onUnmounted(() => {
   border-radius: 50%;
   background:
     radial-gradient(circle at 50% 50%, rgba(77, 113, 255, 0.2), transparent 62%),
-    rgba(18, 28, 64, 0.92);
-  border: 3px solid rgba(124, 156, 255, 0.35);
+    rgba(18, 28, 64, 0.85);
+  border: 2px solid rgba(124, 156, 255, 0.3);
   box-shadow:
     inset 0 0 22px rgba(10, 18, 48, 0.85),
     0 0 28px rgba(32, 80, 220, 0.32);
@@ -7495,13 +7516,17 @@ onUnmounted(() => {
   border-radius: 50%;
   background:
     radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.25), transparent 58%),
-    linear-gradient(140deg, rgba(92, 140, 255, 0.95), rgba(38, 64, 162, 0.95));
-  border: 2px solid rgba(170, 200, 255, 0.6);
+    rgba(78, 118, 230, 0.95);
+  border: 2px solid rgba(150, 188, 255, 0.55);
   box-shadow:
     inset 0 0 14px rgba(18, 26, 58, 0.9),
     0 8px 18px rgba(10, 12, 28, 0.6);
   transform: translate(-50%, -50%);
-  transition: transform 0.08s ease;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.viewer-drive-joystick.is-active {
+  transform: scale(0.97);
 }
 
 .viewer-drive-joystick.is-active .viewer-drive-joystick__stick {
@@ -7511,10 +7536,25 @@ onUnmounted(() => {
 }
 
 .viewer-drive-pedal-label {
-  font-size: 16px;
+  margin-top: 6px;
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.05em;
-  color: #f4f6ff;
+  letter-spacing: 0.08em;
+  color: rgba(244, 246, 255, 0.86);
+  text-transform: uppercase;
+}
+
+.viewer-drive-pedal-icon {
+  width: 28px;
+  height: 28px;
+  fill: currentColor;
+  opacity: 0.92;
+  transition: transform 0.16s ease, opacity 0.16s ease;
+}
+
+.viewer-drive-pedal-button.is-active .viewer-drive-pedal-icon {
+  transform: scale(1.1);
+  opacity: 1;
 }
 
 @keyframes viewer-drive-icon-glow {
