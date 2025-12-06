@@ -188,100 +188,122 @@
       </view>
       <view
         v-if="vehicleDriveUi.visible"
-        class="viewer-drive-panel viewer-drive-panel--mobile"
+        class="viewer-drive-console viewer-drive-console--mobile"
       >
-        <view class="viewer-drive-header viewer-drive-header--compact">
-          <view class="viewer-drive-title">
-            <text class="viewer-drive-title__text">驾驶车辆</text>
-          </view>
-          <view class="viewer-drive-status">
-            <text class="viewer-drive-node">{{ vehicleDriveUi.label }}</text>
-            <button
-              class="viewer-drive-camera-toggle viewer-drive-camera-toggle--inline"
-              type="default"
-              hover-class="none"
-              @tap="handleVehicleDriveCameraToggle"
-            >
-              <text>{{ vehicleDriveCameraToggleLabel }}</text>
-            </button>
-          </view>
+        <view class="viewer-drive-cluster viewer-drive-cluster--actions">
+          <button
+            class="viewer-drive-icon-button"
+            type="default"
+            hover-class="none"
+            aria-label="切换座舱视角"
+            @tap="handleVehicleDriveCameraToggle"
+          >
+            <svg class="viewer-drive-icon" viewBox="0 0 32 32" role="img" aria-hidden="true">
+              <path
+                d="M6 10h20c1.1 0 2 0.9 2 2v10c0 1.1-0.9 2-2 2H6c-1.1 0-2-0.9-2-2V12c0-1.1 0.9-2 2-2zm10 5a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm9-6l-2.5-3.5H9.5L7 9h18z"
+              />
+            </svg>
+          </button>
+          <button
+            class="viewer-drive-icon-button"
+            :class="{ 'is-busy': vehicleDriveResetBusy }"
+            type="default"
+            hover-class="none"
+            :disabled="vehicleDriveResetBusy"
+            aria-label="重置车辆"
+            @tap="handleVehicleDriveResetTap"
+          >
+            <svg class="viewer-drive-icon" viewBox="0 0 32 32" role="img" aria-hidden="true">
+              <path
+                d="M24 11V5l-4 4a9 9 0 1 0 3 4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+          <button
+            class="viewer-drive-icon-button viewer-drive-icon-button--danger"
+            :class="{ 'is-busy': vehicleDriveExitBusy }"
+            :disabled="vehicleDriveExitBusy"
+            type="default"
+            hover-class="none"
+            aria-label="下车"
+            @tap="handleVehicleDriveExitTap"
+          >
+            <svg class="viewer-drive-icon" viewBox="0 0 32 32" role="img" aria-hidden="true">
+              <path d="M8 6h10v4H8v12h10v4H8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z" />
+              <path d="M18 12l8 4-8 4v-3h-6v-2h6v-3z" />
+            </svg>
+          </button>
         </view>
-        <view class="viewer-drive-mobile">
-          <view class="viewer-drive-mobile__wheel">
-            <view
-              id="viewer-steering-wheel"
-              ref="steeringWheelRef"
-              class="viewer-drive-steering-wheel"
-              :style="vehicleSteeringWheelStyle"
-              role="slider"
-              aria-label="方向盘"
-              aria-valuemin="-135"
-              aria-valuemax="135"
-              :aria-valuenow="Math.round(vehicleDriveInput.steering * 135)"
-              @touchstart.stop.prevent="handleSteeringWheelTouchStart"
-              @touchmove.stop.prevent="handleSteeringWheelTouchMove"
-              @touchend.stop.prevent="handleSteeringWheelTouchEnd"
-              @touchcancel.stop.prevent="handleSteeringWheelTouchEnd"
-            >
-              <view class="viewer-drive-steering-spokes"></view>
-              <view class="viewer-drive-steering-hub">
-                <text>{{ vehicleSteeringAngleLabel }}</text>
-              </view>
+        <view class="viewer-drive-cluster viewer-drive-cluster--steering">
+          <view
+            id="viewer-steering-wheel"
+            ref="steeringWheelRef"
+            class="viewer-drive-steering-wheel"
+            :style="vehicleSteeringWheelStyle"
+            role="slider"
+            aria-label="方向盘"
+            aria-valuemin="-135"
+            aria-valuemax="135"
+            :aria-valuenow="Math.round(vehicleDriveInput.steering * 135)"
+            @touchstart.stop.prevent="handleSteeringWheelTouchStart"
+            @touchmove.stop.prevent="handleSteeringWheelTouchMove"
+            @touchend.stop.prevent="handleSteeringWheelTouchEnd"
+            @touchcancel.stop.prevent="handleSteeringWheelTouchEnd"
+          >
+            <view class="viewer-drive-steering-spokes"></view>
+            <view class="viewer-drive-steering-hub">
+              <text>{{ vehicleSteeringAngleLabel }}</text>
             </view>
           </view>
-          <view class="viewer-drive-mobile__actions">
+        </view>
+        <view class="viewer-drive-cluster viewer-drive-cluster--pedals">
+          <view class="viewer-drive-pedal-grid">
             <view
-              class="viewer-drive-mobile__pedal viewer-drive-mobile__pedal--forward"
+              class="viewer-drive-pedal-button viewer-drive-pedal-button--forward"
               :class="{ 'is-active': vehicleDriveUi.forwardActive }"
               role="button"
+              aria-label="前进"
               @touchstart.stop.prevent="handleVehicleDriveControlTouch('forward', true, $event)"
               @touchend.stop.prevent="handleVehicleDriveControlTouch('forward', false, $event)"
               @touchcancel.stop.prevent="handleVehicleDriveControlTouch('forward', false, $event)"
             >
-              <text>前进</text>
+              <svg class="viewer-drive-icon" viewBox="0 0 32 32" role="img" aria-hidden="true">
+                <path d="M16 6l9 9h-6v11h-6V15H7l9-9z" />
+              </svg>
             </view>
             <view
-              class="viewer-drive-mobile__pedal viewer-drive-mobile__pedal--brake"
+              class="viewer-drive-pedal-button viewer-drive-pedal-button--brake"
               :class="{ 'is-active': vehicleDriveUi.brakeActive }"
               role="button"
+              aria-label="刹车"
               @touchstart.stop.prevent="handleVehicleDriveControlTouch('brake', true, $event)"
               @touchend.stop.prevent="handleVehicleDriveControlTouch('brake', false, $event)"
               @touchcancel.stop.prevent="handleVehicleDriveControlTouch('brake', false, $event)"
             >
-              <text>刹车</text>
+              <svg class="viewer-drive-icon" viewBox="0 0 32 32" role="img" aria-hidden="true">
+                <path d="M8 8h16v16H8z" />
+              </svg>
             </view>
             <view
-              class="viewer-drive-mobile__pedal viewer-drive-mobile__pedal--backward"
+              class="viewer-drive-pedal-button viewer-drive-pedal-button--backward"
               :class="{ 'is-active': vehicleDriveUi.backwardActive }"
               role="button"
+              aria-label="后退"
               @touchstart.stop.prevent="handleVehicleDriveControlTouch('backward', true, $event)"
               @touchend.stop.prevent="handleVehicleDriveControlTouch('backward', false, $event)"
               @touchcancel.stop.prevent="handleVehicleDriveControlTouch('backward', false, $event)"
             >
-              <text>后退</text>
+              <svg class="viewer-drive-icon" viewBox="0 0 32 32" role="img" aria-hidden="true">
+                <path d="M16 26l-9-9h6V6h6v11h6l-9 9z" />
+              </svg>
             </view>
-            <button
-              class="viewer-drive-reset viewer-drive-mobile__reset"
-              :class="{ 'is-busy': vehicleDriveResetBusy }"
-              type="default"
-              hover-class="none"
-              :disabled="vehicleDriveResetBusy"
-              @tap="handleVehicleDriveResetTap"
-            >
-              <text>{{ vehicleDriveResetBusy ? '重置中…' : '重置车辆' }}</text>
-            </button>
           </view>
         </view>
-        <button
-          class="viewer-drive-exit viewer-drive-exit--compact"
-          :class="{ 'is-busy': vehicleDriveExitBusy }"
-          :disabled="vehicleDriveExitBusy"
-          type="default"
-          hover-class="none"
-          @tap="handleVehicleDriveExitTap"
-        >
-          <text class="viewer-drive-exit__text">{{ vehicleDriveExitBusy ? '请稍候…' : '下车' }}</text>
-        </button>
       </view>
     </view>
     <view class="viewer-footer" v-if="warnings.length">
@@ -7352,109 +7374,116 @@ onUnmounted(() => {
   animation: viewer-drive-busy-spin 0.9s linear infinite;
 }
 
-.viewer-drive-panel {
+
+.viewer-drive-console {
   position: absolute;
-  left: 16px;
-  bottom: 24px;
-  width: auto;
-  max-width: min(420px, calc(100vw - 32px));
-  padding: 16px;
-  border-radius: 22px;
-  background: rgba(5, 8, 20, 0.68);
-  border: 1px solid rgba(160, 188, 255, 0.28);
-  box-shadow: 0 18px 42px rgba(2, 6, 18, 0.55);
-  color: #ffffff;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  inset: 0;
+  pointer-events: none;
   z-index: 1550;
-  backdrop-filter: blur(18px);
 }
 
-.viewer-drive-panel--mobile {
-  right: auto;
-  border-radius: 20px;
-}
-
-.viewer-drive-header {
+.viewer-drive-cluster {
+  position: absolute;
+  padding: 0;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
   gap: 12px;
+  pointer-events: auto;
 }
 
-.viewer-drive-header--compact {
-  padding-bottom: 10px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+.viewer-drive-console--mobile .viewer-drive-cluster {
+  max-width: none;
 }
 
-.viewer-drive-title {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 18px;
-  font-weight: 600;
-  letter-spacing: 0.8px;
-  text-transform: uppercase;
-}
-
-.viewer-drive-title::before {
-  content: 'Drive Mode';
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 1.6px;
-  color: rgba(144, 176, 255, 0.85);
-}
-
-.viewer-drive-title__text {
-  color: #f4f6ff;
-}
-
-.viewer-drive-status {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  align-items: flex-end;
-}
-
-.viewer-drive-node {
-  font-size: 12px;
-  color: rgba(220, 230, 255, 0.92);
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: right;
-  padding: 5px 12px;
-  border-radius: 999px;
-  background: rgba(18, 30, 70, 0.6);
-  border: 1px solid rgba(118, 146, 255, 0.4);
-}
-
-.viewer-drive-mobile {
-  display: flex;
-  align-items: flex-end;
-  gap: 18px;
-}
-
-.viewer-drive-mobile__wheel {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
+.viewer-drive-cluster--steering {
+  left: 16px;
+  bottom: 16px;
   align-items: center;
-  gap: 10px;
 }
 
-.viewer-drive-mobile__actions {
-  flex: 1;
+.viewer-drive-cluster--pedals {
+  right: 16px;
+  bottom: 16px;
+  align-items: flex-end;
+  flex-direction: row;
+}
+
+.viewer-drive-cluster--actions {
+  right: 16px;
+  top: 16px;
+  align-items: center;
+  flex-direction: row;
+  gap: 14px;
+}
+
+.viewer-drive-icon-button {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: none;
   display: flex;
-  flex-direction: column;
-  gap: 10px;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #5367ff, #2431af);
+  color: #f4f6ff;
+  box-shadow: 0 10px 20px rgba(10, 11, 36, 0.55);
+}
+
+.viewer-drive-icon-button--danger {
+  background: linear-gradient(135deg, #ff6f7b, #b11a36);
+}
+
+.viewer-drive-icon-button.is-busy,
+.viewer-drive-icon-button:disabled {
+  opacity: 0.7;
+}
+
+.viewer-drive-icon {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  color: currentColor;
+}
+
+.viewer-drive-pedal-grid {
+  display: flex;
+  flex-direction: row;
+  gap: 14px;
+}
+
+.viewer-drive-pedal-button {
+  width: 60px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: none;
+  color: #f4f6ff;
+  box-shadow: 0 10px 18px rgba(8, 10, 26, 0.55);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.viewer-drive-pedal-button--forward {
+  background: linear-gradient(140deg, #38d3ff, #0b5b96);
+}
+
+.viewer-drive-pedal-button--brake {
+  background: linear-gradient(140deg, #ff7a63, #591420);
+}
+
+.viewer-drive-pedal-button--backward {
+  background: linear-gradient(140deg, #ab9aff, #2b1e63);
+}
+
+.viewer-drive-pedal-button.is-active {
+  transform: scale(0.97);
+  box-shadow: 0 6px 14px rgba(4, 6, 18, 0.5);
 }
 
 .viewer-drive-steering-wheel {
-  width: 128px;
-  height: 128px;
+  width: 120px;
+  height: 120px;
   border-radius: 50%;
   border: 3px solid rgba(124, 156, 255, 0.45);
   background:
@@ -7472,8 +7501,8 @@ onUnmounted(() => {
 
 .viewer-drive-steering-spokes {
   position: absolute;
-  width: 90px;
-  height: 90px;
+  width: 86px;
+  height: 86px;
   background:
     radial-gradient(circle, transparent 42%, rgba(180, 198, 255, 0.25) 43%, rgba(180, 198, 255, 0.25) 57%, transparent 58%),
     linear-gradient(0deg, transparent 46%, rgba(180, 198, 255, 0.35) 46%, rgba(180, 198, 255, 0.35) 54%, transparent 54%),
@@ -7482,8 +7511,8 @@ onUnmounted(() => {
 }
 
 .viewer-drive-steering-hub {
-  width: 46px;
-  height: 46px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   background: rgba(32, 52, 108, 0.95);
   border: 2px solid rgba(142, 168, 255, 0.6);
@@ -7496,130 +7525,6 @@ onUnmounted(() => {
 .viewer-drive-steering-hub text {
   font-size: 13px;
   color: rgba(236, 242, 255, 0.95);
-}
-
-.viewer-drive-mobile__pedal {
-  border-radius: 18px;
-  padding: 14px 18px;
-  text-align: center;
-  font-size: 16px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  color: rgba(238, 244, 255, 0.95);
-  background: rgba(20, 30, 70, 0.75);
-  border: 1px solid rgba(124, 156, 255, 0.3);
-  box-shadow: 0 10px 20px rgba(4, 6, 18, 0.55);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: transform 0.12s ease, background 0.12s ease;
-}
-
-.viewer-drive-mobile__pedal text {
-  color: inherit;
-}
-
-.viewer-drive-mobile__pedal--forward {
-  background: linear-gradient(120deg, rgba(64, 201, 255, 0.4), rgba(8, 16, 38, 0.85));
-}
-
-.viewer-drive-mobile__pedal--brake {
-  background: linear-gradient(120deg, rgba(255, 136, 120, 0.4), rgba(24, 20, 32, 0.85));
-}
-
-.viewer-drive-mobile__pedal--backward {
-  background: linear-gradient(120deg, rgba(148, 140, 255, 0.35), rgba(12, 16, 36, 0.85));
-}
-
-.viewer-drive-mobile__pedal.is-active {
-  transform: scale(0.98);
-  box-shadow: 0 6px 14px rgba(4, 6, 18, 0.5);
-}
-
-.viewer-drive-camera-toggle,
-.viewer-drive-reset {
-  border: none;
-  outline: none;
-  background: rgba(30, 42, 90, 0.82);
-  color: rgba(222, 232, 255, 0.96);
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
-  box-shadow:
-    inset 0 0 0 1px rgba(120, 150, 255, 0.32),
-    0 8px 18px rgba(8, 12, 32, 0.55);
-}
-
-.viewer-drive-camera-toggle {
-  width: 100%;
-  padding: 10px 14px;
-  border-radius: 14px;
-}
-
-.viewer-drive-camera-toggle--inline {
-  width: auto;
-  padding: 8px 18px;
-  border-radius: 999px;
-  font-size: 12px;
-}
-
-.viewer-drive-reset {
-  width: 100%;
-  padding: 12px 16px;
-  border-radius: 16px;
-}
-
-.viewer-drive-mobile__reset {
-  margin-top: 4px;
-}
-
-.viewer-drive-reset.is-busy,
-.viewer-drive-camera-toggle:disabled,
-.viewer-drive-reset:disabled {
-  opacity: 0.8;
-}
-
-.viewer-drive-exit {
-  width: 100%;
-  padding: 14px 16px;
-  border-radius: 18px;
-  background:
-    linear-gradient(120deg, rgba(255, 86, 110, 0.25), rgba(34, 52, 120, 0.92));
-  color: rgba(234, 240, 255, 0.94);
-  border: none;
-  outline: none;
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 0.6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 126, 140, 0.38),
-    0 14px 32px rgba(12, 16, 32, 0.65);
-  transition: background 0.18s ease, box-shadow 0.18s ease;
-  text-transform: uppercase;
-}
-
-.viewer-drive-exit--compact {
-  margin-top: 2px;
-}
-
-.viewer-drive-exit.is-busy {
-  background: rgba(32, 46, 92, 0.94);
-  box-shadow:
-    inset 0 0 0 1px rgba(118, 146, 255, 0.4),
-    0 12px 28px rgba(12, 16, 32, 0.6);
-}
-
-.viewer-drive-exit:disabled {
-  opacity: 0.8;
-}
-
-.viewer-drive-exit__text {
-  color: inherit;
 }
 
 @keyframes viewer-drive-icon-glow {
