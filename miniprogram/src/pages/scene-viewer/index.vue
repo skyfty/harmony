@@ -1222,16 +1222,21 @@ watch(
 
 watch(vehicleDriveCameraMode, (mode) => {
   vehicleDriveCameraFollowState.initialized = false;
-  if (mode !== 'follow' || !vehicleDriveActive.value) {
+  if (!vehicleDriveActive.value) {
     return;
   }
-  const nodeId = normalizeNodeId(vehicleDriveNodeId.value);
-  if (nodeId) {
-    setCameraViewState('watching', nodeId);
-    setCameraCaging(true);
+  if (mode === 'follow') {
+    const nodeId = normalizeNodeId(vehicleDriveNodeId.value);
+    if (nodeId) {
+      setCameraViewState('watching', nodeId);
+      setCameraCaging(true);
+    }
+    setVehicleDriveUiOverride('show');
+    updateVehicleDriveCamera(0, { immediate: true });
+  } else {
+    setVehicleDriveUiOverride('hide');
+    updateVehicleDriveCamera(0, { immediate: true });
   }
-  setVehicleDriveUiOverride('show');
-  updateVehicleDriveCamera(0, { immediate: true });
 });
 
 watch(vehicleDriveActive, (active) => {
@@ -4867,8 +4872,6 @@ function handleVehicleDriveCameraToggle(): void {
     return;
   }
   vehicleDriveCameraMode.value = vehicleDriveCameraMode.value === 'follow' ? 'first-person' : 'follow';
-  vehicleDriveCameraFollowState.initialized = false;
-  updateVehicleDriveCamera(0, { immediate: true });
 }
 
 function handleVehicleDriveResetTap(): void {
