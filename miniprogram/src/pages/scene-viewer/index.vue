@@ -169,7 +169,7 @@
           class="viewer-drive-start__button"
           :class="{ 'is-busy': vehicleDrivePrompt.busy }"
           :disabled="vehicleDrivePrompt.busy"
-          type="default"
+          type="button"
           hover-class="none"
           aria-label="进入驾驶模式"
           @tap="handleVehicleDrivePromptTap"
@@ -193,7 +193,7 @@
         <view class="viewer-drive-cluster viewer-drive-cluster--actions">
           <button
             class="viewer-drive-icon-button"
-            type="default"
+            type="button"
             hover-class="none"
             aria-label="切换座舱视角"
             @tap="handleVehicleDriveCameraToggle"
@@ -207,7 +207,7 @@
           <button
             class="viewer-drive-icon-button"
             :class="{ 'is-busy': vehicleDriveResetBusy }"
-            type="default"
+            type="button"
             hover-class="none"
             :disabled="vehicleDriveResetBusy"
             aria-label="重置车辆"
@@ -228,7 +228,7 @@
             class="viewer-drive-icon-button viewer-drive-icon-button--danger"
             :class="{ 'is-busy': vehicleDriveExitBusy }"
             :disabled="vehicleDriveExitBusy"
-            type="default"
+            type="button"
             hover-class="none"
             aria-label="下车"
             @tap="handleVehicleDriveExitTap"
@@ -239,70 +239,51 @@
             </svg>
           </button>
         </view>
-        <view class="viewer-drive-cluster viewer-drive-cluster--steering">
+        <view class="viewer-drive-cluster viewer-drive-cluster--joystick">
           <view
-            id="viewer-steering-wheel"
-            ref="steeringWheelRef"
-            class="viewer-drive-steering-wheel"
-            :style="vehicleSteeringWheelStyle"
+            id="viewer-drive-joystick"
+            ref="joystickRef"
+            class="viewer-drive-joystick"
+            :class="{ 'is-active': vehicleDriveUi.joystickActive }"
             role="slider"
-            aria-label="方向盘"
-            aria-valuemin="-135"
-            aria-valuemax="135"
-            :aria-valuenow="Math.round(vehicleDriveInput.steering * 135)"
-            @touchstart.stop.prevent="handleSteeringWheelTouchStart"
-            @touchmove.stop.prevent="handleSteeringWheelTouchMove"
-            @touchend.stop.prevent="handleSteeringWheelTouchEnd"
-            @touchcancel.stop.prevent="handleSteeringWheelTouchEnd"
+            aria-label="驾驶摇杆"
+            aria-valuemin="-100"
+            aria-valuemax="100"
+            :aria-valuenow="Math.round(vehicleDriveInput.throttle * 100)"
+            @touchstart.stop.prevent="handleJoystickTouchStart"
+            @touchmove.stop.prevent="handleJoystickTouchMove"
+            @touchend.stop.prevent="handleJoystickTouchEnd"
+            @touchcancel.stop.prevent="handleJoystickTouchEnd"
           >
-            <view class="viewer-drive-steering-spokes"></view>
-            <view class="viewer-drive-steering-hub">
-              <text>{{ vehicleSteeringAngleLabel }}</text>
-            </view>
+            <view class="viewer-drive-joystick__base"></view>
+            <view class="viewer-drive-joystick__stick" :style="joystickKnobStyle"></view>
           </view>
         </view>
-        <view class="viewer-drive-cluster viewer-drive-cluster--pedals">
-          <view class="viewer-drive-pedal-grid">
-            <view
-              class="viewer-drive-pedal-button viewer-drive-pedal-button--forward"
-              :class="{ 'is-active': vehicleDriveUi.forwardActive }"
-              role="button"
-              aria-label="前进"
-              @touchstart.stop.prevent="handleVehicleDriveControlTouch('forward', true, $event)"
-              @touchend.stop.prevent="handleVehicleDriveControlTouch('forward', false, $event)"
-              @touchcancel.stop.prevent="handleVehicleDriveControlTouch('forward', false, $event)"
-            >
-              <svg class="viewer-drive-icon" viewBox="0 0 32 32" role="img" aria-hidden="true">
-                <path d="M16 6l9 9h-6v11h-6V15H7l9-9z" />
-              </svg>
-            </view>
-            <view
-              class="viewer-drive-pedal-button viewer-drive-pedal-button--brake"
-              :class="{ 'is-active': vehicleDriveUi.brakeActive }"
-              role="button"
-              aria-label="刹车"
-              @touchstart.stop.prevent="handleVehicleDriveControlTouch('brake', true, $event)"
-              @touchend.stop.prevent="handleVehicleDriveControlTouch('brake', false, $event)"
-              @touchcancel.stop.prevent="handleVehicleDriveControlTouch('brake', false, $event)"
-            >
-              <svg class="viewer-drive-icon" viewBox="0 0 32 32" role="img" aria-hidden="true">
-                <path d="M8 8h16v16H8z" />
-              </svg>
-            </view>
-            <view
-              class="viewer-drive-pedal-button viewer-drive-pedal-button--backward"
-              :class="{ 'is-active': vehicleDriveUi.backwardActive }"
-              role="button"
-              aria-label="后退"
-              @touchstart.stop.prevent="handleVehicleDriveControlTouch('backward', true, $event)"
-              @touchend.stop.prevent="handleVehicleDriveControlTouch('backward', false, $event)"
-              @touchcancel.stop.prevent="handleVehicleDriveControlTouch('backward', false, $event)"
-            >
-              <svg class="viewer-drive-icon" viewBox="0 0 32 32" role="img" aria-hidden="true">
-                <path d="M16 26l-9-9h6V6h6v11h6l-9 9z" />
-              </svg>
-            </view>
-          </view>
+        <view class="viewer-drive-cluster viewer-drive-cluster--throttle">
+          <button
+            class="viewer-drive-pedal-button viewer-drive-pedal-button--forward"
+            :class="{ 'is-active': vehicleDriveUi.accelerating }"
+            type="button"
+            hover-class="none"
+            aria-label="加速"
+            @touchstart.stop.prevent="handleVehicleDriveControlTouch('forward', true, $event)"
+            @touchend.stop.prevent="handleVehicleDriveControlTouch('forward', false, $event)"
+            @touchcancel.stop.prevent="handleVehicleDriveControlTouch('forward', false, $event)"
+          >
+            <text class="viewer-drive-pedal-label">加速</text>
+          </button>
+          <button
+            class="viewer-drive-pedal-button viewer-drive-pedal-button--brake"
+            :class="{ 'is-active': vehicleDriveUi.braking }"
+            type="button"
+            hover-class="none"
+            aria-label="刹车"
+            @touchstart.stop.prevent="handleVehicleDriveControlTouch('brake', true, $event)"
+            @touchend.stop.prevent="handleVehicleDriveControlTouch('brake', false, $event)"
+            @touchcancel.stop.prevent="handleVehicleDriveControlTouch('brake', false, $event)"
+          >
+            <text class="viewer-drive-pedal-label">刹车</text>
+          </button>
         </view>
       </view>
     </view>
@@ -950,14 +931,15 @@ const VEHICLE_FOLLOW_TARGET_FORWARD_RATIO = 0.35;
 const VEHICLE_FOLLOW_TARGET_FORWARD_MIN = 1.2;
 const VEHICLE_FOLLOW_POSITION_LERP_SPEED = 8;
 const VEHICLE_FOLLOW_TARGET_LERP_SPEED = 10;
-const STEERING_WHEEL_MAX_DEGREES = 135;
-const STEERING_WHEEL_RETURN_SPEED = 4;
 const STEERING_KEYBOARD_RETURN_SPEED = 7;
 const STEERING_KEYBOARD_CATCH_SPEED = 18;
 const VEHICLE_RESET_LIFT = 0.75;
 const cameraRotationAnchor = new THREE.Vector3();
 let programmaticCameraMutationDepth = 0;
 let suppressSelfYawRecenter = false;
+
+const JOYSTICK_INPUT_RADIUS = 64;
+const JOYSTICK_VISUAL_RANGE = 44;
 
 function runWithProgrammaticCameraMutation<T>(callback: () => T): T {
   programmaticCameraMutationDepth += 1;
@@ -1114,25 +1096,21 @@ const vehicleDriveCameraFollowState = reactive<VehicleDriveCameraFollowState>({
   currentTarget: new THREE.Vector3(),
   initialized: false,
 });
-const steeringWheelRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
-const steeringWheelValue = ref(0);
-const steeringKeyboardValue = ref(0);
-const steeringKeyboardTarget = ref(0);
-const steeringWheelState = reactive({
-  dragging: false,
+const joystickRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
+const joystickVector = reactive({ x: 0, y: 0 });
+const joystickOffset = reactive({ x: 0, y: 0 });
+const joystickState = reactive({
+  active: false,
   pointerId: -1,
-  startPointerAngle: 0,
-  startWheelAngle: 0,
-});
-const steeringWheelMetrics = reactive({
-  ready: false,
   centerX: 0,
   centerY: 0,
+  ready: false,
 });
-const vehicleSteeringWheelStyle = computed(() => ({
-  transform: `rotate(${vehicleDriveInput.steering * STEERING_WHEEL_MAX_DEGREES}deg)`,
+const steeringKeyboardValue = ref(0);
+const steeringKeyboardTarget = ref(0);
+const joystickKnobStyle = computed(() => ({
+  transform: `translate(calc(-50% + ${joystickOffset.x}px), calc(-50% + ${joystickOffset.y}px))`,
 }));
-const vehicleSteeringAngleLabel = computed(() => `${Math.round(vehicleDriveInput.steering * STEERING_WHEEL_MAX_DEGREES)}°`);
 const vehicleDriveCameraToggleLabel = computed(() =>
   vehicleDriveCameraMode.value === 'follow' ? '座舱视角' : '跟随视角',
 );
@@ -1165,11 +1143,9 @@ const vehicleDriveUi = computed(() => {
       visible: false,
       label: '',
       cameraLocked: false,
-      forwardActive: false,
-      backwardActive: false,
-      leftActive: false,
-      rightActive: false,
-      brakeActive: false,
+      joystickActive: false,
+      accelerating: false,
+      braking: false,
     } as const;
   }
   const nodeId = vehicleDriveNodeId.value ?? '';
@@ -1179,11 +1155,9 @@ const vehicleDriveUi = computed(() => {
     visible: true,
     label,
     cameraLocked: active,
-    forwardActive: active && vehicleDriveInputFlags.forward,
-    backwardActive: active && vehicleDriveInputFlags.backward,
-    leftActive: active && vehicleDriveInputFlags.left,
-    rightActive: active && vehicleDriveInputFlags.right,
-    brakeActive: active && vehicleDriveInputFlags.brake,
+    joystickActive: active && joystickState.active,
+    accelerating: active && (vehicleDriveInputFlags.forward || vehicleDriveInput.throttle > 0.1),
+    braking: active && vehicleDriveInputFlags.brake,
   } as const;
 });
 
@@ -1213,9 +1187,9 @@ watch(
   () => vehicleDriveUi.value.visible,
   (visible) => {
     if (visible) {
-      refreshSteeringWheelMetrics();
+      refreshJoystickMetrics();
     } else {
-      setSteeringWheelDragActive(false);
+      deactivateJoystick(true);
     }
   },
 );
@@ -2872,7 +2846,7 @@ function resetPhysicsWorld(): void {
   resetVehicleDriveInputs();
   vehicleDriveCameraMode.value = 'follow';
   vehicleDriveCameraFollowState.initialized = false;
-  setSteeringWheelDragActive(false);
+  deactivateJoystick(true);
   setVehicleDriveUiOverride('hide');
 }
 
@@ -4513,79 +4487,111 @@ function setVehicleDriveUiOverride(mode: 'auto' | 'show' | 'hide'): void {
   vehicleDriveUiOverride.value = mode;
 }
 
-function clampSteeringScalar(value: number): number {
+function clampAxisScalar(value: number): number {
   if (!Number.isFinite(value)) {
     return 0;
   }
   return Math.max(-1, Math.min(1, value));
 }
 
-function syncVehicleSteeringValue(): void {
-  if (steeringKeyboardValue.value !== 0) {
-    vehicleDriveInput.steering = clampSteeringScalar(steeringKeyboardValue.value);
-    return;
-  }
-  vehicleDriveInput.steering = clampSteeringScalar(steeringWheelValue.value);
-}
-
 function updateSteeringKeyboardValue(): void {
   let target = 0;
   if (vehicleDriveInputFlags.left !== vehicleDriveInputFlags.right) {
-    target = vehicleDriveInputFlags.left ? 1 : -1;
+    target = vehicleDriveInputFlags.left ? -1 : 1;
   }
   steeringKeyboardTarget.value = target;
   if (target !== 0) {
     steeringKeyboardValue.value = target;
   }
+  recomputeVehicleDriveInputs();
 }
 
-function resetSteeringWheelValue(): void {
-  steeringWheelValue.value = 0;
-  if (!steeringWheelState.dragging) {
-    syncVehicleSteeringValue();
-  }
-}
-
-function setSteeringWheelDragActive(active: boolean): void {
-  steeringWheelState.dragging = active;
-  if (!active) {
-    steeringWheelState.pointerId = -1;
-  }
-}
-
-function refreshSteeringWheelMetrics(): void {
+function refreshJoystickMetrics(): void {
   nextTick(() => {
     const query = uni.createSelectorQuery();
     if (typeof query.in === 'function') {
       query.in((pageInstance?.proxy as unknown) ?? null);
     }
     query
-      .select('#viewer-steering-wheel')
+      .select('#viewer-drive-joystick')
       .boundingClientRect((rect) => {
-        if (!rect) {
-          steeringWheelMetrics.ready = false;
+        const info = (rect || null) as UniApp.NodeInfo | null;
+        if (!info) {
+          joystickState.ready = false;
           return;
         }
-        steeringWheelMetrics.centerX = rect.left + rect.width / 2;
-        steeringWheelMetrics.centerY = rect.top + rect.height / 2;
-        steeringWheelMetrics.ready = true;
+        const left = info.left ?? 0;
+        const top = info.top ?? 0;
+        const width = info.width ?? 0;
+        const height = info.height ?? 0;
+        joystickState.centerX = left + width / 2;
+        joystickState.centerY = top + height / 2;
+        joystickState.ready = true;
       })
       .exec();
   });
 }
 
-function computeSteeringWheelPointerAngle(touch: Touch | null): number | null {
-  if (!touch || !steeringWheelMetrics.ready) {
+function getTouchCoordinates(touch: Touch | null): { x: number; y: number } | null {
+  if (!touch) {
     return null;
   }
-  const clientX = 'clientX' in touch ? touch.clientX : (touch as unknown as { x?: number }).x || 0;
-  const clientY = 'clientY' in touch ? touch.clientY : (touch as unknown as { y?: number }).y || 0;
-  const dx = clientX - steeringWheelMetrics.centerX;
-  const dy = clientY - steeringWheelMetrics.centerY;
-  return Math.atan2(dy, dx);
+  const clientX = 'clientX' in touch ? touch.clientX : (touch as unknown as { x?: number }).x ?? 0;
+  const clientY = 'clientY' in touch ? touch.clientY : (touch as unknown as { y?: number }).y ?? 0;
+  if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) {
+    return null;
+  }
+  return { x: clientX, y: clientY };
 }
 
-function approachSteeringValue(current: number, target: number, rate: number, delta: number): number {
+function setJoystickVector(x: number, y: number): void {
+  let nextX = clampAxisScalar(x);
+  let nextY = clampAxisScalar(y);
+  const length = Math.hypot(nextX, nextY);
+  if (length > 1) {
+    const scale = 1 / length;
+    nextX *= scale;
+    nextY *= scale;
+  }
+  joystickVector.x = nextX;
+  joystickVector.y = nextY;
+  joystickOffset.x = joystickVector.x * JOYSTICK_VISUAL_RANGE;
+  joystickOffset.y = -joystickVector.y * JOYSTICK_VISUAL_RANGE;
+  recomputeVehicleDriveInputs();
+}
+
+function deactivateJoystick(reset: boolean): void {
+  joystickState.active = false;
+  joystickState.pointerId = -1;
+  if (reset) {
+    setJoystickVector(0, 0);
+  }
+}
+
+function applyJoystickFromPoint(x: number, y: number): void {
+  if (!joystickState.ready) {
+    joystickState.centerX = x;
+    joystickState.centerY = y;
+    joystickState.ready = true;
+    refreshJoystickMetrics();
+  }
+  const dx = x - joystickState.centerX;
+  const dy = y - joystickState.centerY;
+  if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
+    return;
+  }
+  const normalizedX = clampAxisScalar(dx / JOYSTICK_INPUT_RADIUS);
+  const normalizedY = clampAxisScalar(-dy / JOYSTICK_INPUT_RADIUS);
+  let length = Math.hypot(normalizedX, normalizedY);
+  if (length > 1) {
+    const inv = 1 / length;
+    setJoystickVector(normalizedX * inv, normalizedY * inv);
+    return;
+  }
+  setJoystickVector(normalizedX, normalizedY);
+}
+
+function approachAxisValue(current: number, target: number, rate: number, delta: number): number {
   if (!Number.isFinite(current) || !Number.isFinite(target) || !Number.isFinite(delta) || rate <= 0 || delta <= 0) {
     return target;
   }
@@ -4600,27 +4606,16 @@ function approachSteeringValue(current: number, target: number, rate: number, de
   return current + Math.sign(difference) * maxStep;
 }
 
-function updateSteeringAutoCenter(delta: number): void {
+function updateDriveInputRelaxation(delta: number): void {
   if (!Number.isFinite(delta) || delta <= 0) {
     return;
   }
-  let dirty = false;
-  if (!steeringWheelState.dragging) {
-    const nextWheel = approachSteeringValue(steeringWheelValue.value, 0, STEERING_WHEEL_RETURN_SPEED, delta);
-    if (nextWheel !== steeringWheelValue.value) {
-      steeringWheelValue.value = nextWheel;
-      dirty = true;
-    }
-  }
   const target = steeringKeyboardTarget.value;
   const keyboardRate = target === 0 ? STEERING_KEYBOARD_RETURN_SPEED : STEERING_KEYBOARD_CATCH_SPEED;
-  const nextKeyboard = approachSteeringValue(steeringKeyboardValue.value, target, keyboardRate, delta);
+  const nextKeyboard = approachAxisValue(steeringKeyboardValue.value, target, keyboardRate, delta);
   if (nextKeyboard !== steeringKeyboardValue.value) {
-    steeringKeyboardValue.value = clampSteeringScalar(nextKeyboard);
-    dirty = true;
-  }
-  if (dirty) {
-    syncVehicleSteeringValue();
+    steeringKeyboardValue.value = clampAxisScalar(nextKeyboard);
+    recomputeVehicleDriveInputs();
   }
 }
 
@@ -4640,7 +4635,7 @@ function extractTouchById(event: TouchEvent, identifier: number): Touch | null {
   return null;
 }
 
-function handleSteeringWheelTouchStart(event: TouchEvent): void {
+function handleJoystickTouchStart(event: TouchEvent): void {
   if (!vehicleDriveActive.value) {
     return;
   }
@@ -4648,61 +4643,62 @@ function handleSteeringWheelTouchStart(event: TouchEvent): void {
   if (!touch) {
     return;
   }
-  if (!steeringWheelMetrics.ready) {
-    refreshSteeringWheelMetrics();
+  if (!joystickState.ready) {
+    refreshJoystickMetrics();
   }
-  const pointerAngle = computeSteeringWheelPointerAngle(touch);
-  if (pointerAngle === null) {
+  const coords = getTouchCoordinates(touch);
+  if (!coords) {
     return;
   }
-  steeringWheelState.startPointerAngle = pointerAngle;
-  steeringWheelState.startWheelAngle = steeringWheelValue.value * THREE.MathUtils.degToRad(STEERING_WHEEL_MAX_DEGREES);
-  steeringWheelState.pointerId = touch.identifier;
-  setSteeringWheelDragActive(true);
+  joystickState.pointerId = touch.identifier;
+  joystickState.active = true;
+  applyJoystickFromPoint(coords.x, coords.y);
 }
 
-function handleSteeringWheelTouchMove(event: TouchEvent): void {
-  if (!steeringWheelState.dragging || steeringWheelState.pointerId === -1) {
+function handleJoystickTouchMove(event: TouchEvent): void {
+  if (!joystickState.active || joystickState.pointerId === -1) {
     return;
   }
-  const touch = extractTouchById(event, steeringWheelState.pointerId);
+  const touch = extractTouchById(event, joystickState.pointerId);
   if (!touch) {
     return;
   }
-  const angle = computeSteeringWheelPointerAngle(touch);
-  if (angle === null) {
+  const coords = getTouchCoordinates(touch);
+  if (!coords) {
     return;
   }
-  const delta = angle - steeringWheelState.startPointerAngle;
-  const nextAngle = steeringWheelState.startWheelAngle + delta;
-  const clampedAngle = Math.max(
-    THREE.MathUtils.degToRad(-STEERING_WHEEL_MAX_DEGREES),
-    Math.min(THREE.MathUtils.degToRad(STEERING_WHEEL_MAX_DEGREES), nextAngle),
-  );
-  steeringWheelValue.value = clampSteeringScalar(clampedAngle / THREE.MathUtils.degToRad(STEERING_WHEEL_MAX_DEGREES));
-  syncVehicleSteeringValue();
+  applyJoystickFromPoint(coords.x, coords.y);
 }
 
-function handleSteeringWheelTouchEnd(event: TouchEvent): void {
-  if (steeringWheelState.pointerId === -1) {
+function handleJoystickTouchEnd(event: TouchEvent): void {
+  if (joystickState.pointerId === -1) {
     return;
   }
-  const touch = extractTouchById(event, steeringWheelState.pointerId);
+  const touch = extractTouchById(event, joystickState.pointerId);
   if (!touch) {
     return;
   }
-  setSteeringWheelDragActive(false);
+  deactivateJoystick(true);
 }
 
-function updateVehicleDriveInputFromFlags(): void {
-  vehicleDriveInput.throttle = vehicleDriveInputFlags.forward === vehicleDriveInputFlags.backward
-    ? 0
-    : vehicleDriveInputFlags.forward
-      ? 1
-      : -1;
+function recomputeVehicleDriveInputs(): void {
+  const throttleFromJoystick = clampAxisScalar(joystickVector.y);
+  const steeringFromJoystick = clampAxisScalar(joystickVector.x);
+  let throttle = throttleFromJoystick;
+  if (vehicleDriveInputFlags.forward && !vehicleDriveInputFlags.backward) {
+    throttle = 1;
+  } else if (vehicleDriveInputFlags.backward && !vehicleDriveInputFlags.forward) {
+    throttle = -1;
+  }
+  let steering = steeringFromJoystick;
+  if (vehicleDriveInputFlags.left !== vehicleDriveInputFlags.right) {
+    steering = vehicleDriveInputFlags.right ? 1 : -1;
+  } else if (steeringKeyboardValue.value !== 0) {
+    steering = clampAxisScalar(steeringKeyboardValue.value);
+  }
+  vehicleDriveInput.throttle = throttle;
+  vehicleDriveInput.steering = clampAxisScalar(steering);
   vehicleDriveInput.brake = vehicleDriveInputFlags.brake ? 1 : 0;
-  updateSteeringKeyboardValue();
-  syncVehicleSteeringValue();
 }
 
 function resetVehicleDriveInputs(): void {
@@ -4713,11 +4709,11 @@ function resetVehicleDriveInputs(): void {
   vehicleDriveInputFlags.brake = false;
   steeringKeyboardValue.value = 0;
   steeringKeyboardTarget.value = 0;
-  resetSteeringWheelValue();
+  deactivateJoystick(true);
   vehicleDriveInput.throttle = 0;
   vehicleDriveInput.brake = 0;
   vehicleDriveInput.steering = 0;
-  updateVehicleDriveInputFromFlags();
+  recomputeVehicleDriveInputs();
 }
 
 function handleVehicleDriveControlTouch(
@@ -4734,7 +4730,14 @@ function handleVehicleDriveControlTouch(
     }
   }
   vehicleDriveInputFlags[key] = active;
-  updateVehicleDriveInputFromFlags();
+  if (key === 'forward' && active) {
+    vehicleDriveInputFlags.backward = false;
+  }
+  if (key === 'backward' && active) {
+    vehicleDriveInputFlags.forward = false;
+  }
+  updateSteeringKeyboardValue();
+  recomputeVehicleDriveInputs();
 }
 
 type VehicleDrivePreparationResult =
@@ -6699,7 +6702,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
       const { cancel } = result.useFrame((delta) => {
         const deltaSeconds = normalizeFrameDelta(delta);
         if (deltaSeconds > 0) {
-          updateSteeringAutoCenter(deltaSeconds);
+          updateDriveInputRelaxation(deltaSeconds);
         }
         if (activeCameraWatchTween && deltaSeconds > 0) {
           applyCameraWatchTween(deltaSeconds);
@@ -7373,17 +7376,17 @@ onUnmounted(() => {
   max-width: none;
 }
 
-.viewer-drive-cluster--steering {
+.viewer-drive-cluster--joystick {
   left: 16px;
   bottom: 16px;
   align-items: center;
 }
 
-.viewer-drive-cluster--pedals {
+.viewer-drive-cluster--throttle {
   right: 16px;
   bottom: 16px;
   align-items: flex-end;
-  flex-direction: row;
+  gap: 14px;
 }
 
 .viewer-drive-cluster--actions {
@@ -7423,12 +7426,6 @@ onUnmounted(() => {
   color: currentColor;
 }
 
-.viewer-drive-pedal-grid {
-  display: flex;
-  flex-direction: row;
-  gap: 14px;
-}
-
 .viewer-drive-pedal-button {
   width: 60px;
   height: 60px;
@@ -7459,50 +7456,65 @@ onUnmounted(() => {
   box-shadow: 0 6px 14px rgba(4, 6, 18, 0.5);
 }
 
-.viewer-drive-steering-wheel {
-  width: 120px;
-  height: 120px;
+.viewer-drive-joystick {
+  width: 140px;
+  height: 140px;
   border-radius: 50%;
-  border: 3px solid rgba(124, 156, 255, 0.45);
-  background:
-    radial-gradient(circle at 30% 30%, rgba(76, 120, 255, 0.15), transparent 60%),
-    rgba(14, 24, 52, 0.95);
-  box-shadow:
-    inset 0 0 24px rgba(4, 8, 20, 0.85),
-    0 0 32px rgba(34, 96, 255, 0.25);
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: transform 0.12s ease;
+  pointer-events: auto;
 }
 
-.viewer-drive-steering-spokes {
+.viewer-drive-joystick::before {
+  content: '';
   position: absolute;
-  width: 86px;
-  height: 86px;
-  background:
-    radial-gradient(circle, transparent 42%, rgba(180, 198, 255, 0.25) 43%, rgba(180, 198, 255, 0.25) 57%, transparent 58%),
-    linear-gradient(0deg, transparent 46%, rgba(180, 198, 255, 0.35) 46%, rgba(180, 198, 255, 0.35) 54%, transparent 54%),
-    linear-gradient(90deg, transparent 46%, rgba(180, 198, 255, 0.35) 46%, rgba(180, 198, 255, 0.35) 54%, transparent 54%);
-  pointer-events: none;
-}
-
-.viewer-drive-steering-hub {
-  width: 44px;
-  height: 44px;
+  inset: 0;
   border-radius: 50%;
-  background: rgba(32, 52, 108, 0.95);
-  border: 2px solid rgba(142, 168, 255, 0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: inset 0 0 12px rgba(8, 12, 28, 0.8);
+  background:
+    radial-gradient(circle at 50% 50%, rgba(77, 113, 255, 0.2), transparent 62%),
+    rgba(18, 28, 64, 0.92);
+  border: 3px solid rgba(124, 156, 255, 0.35);
+  box-shadow:
+    inset 0 0 22px rgba(10, 18, 48, 0.85),
+    0 0 28px rgba(32, 80, 220, 0.32);
 }
 
-.viewer-drive-steering-hub text {
-  font-size: 13px;
-  color: rgba(236, 242, 255, 0.95);
+.viewer-drive-joystick__base {
+  position: absolute;
+  inset: 18px;
+  border-radius: 50%;
+  background: rgba(50, 72, 148, 0.35);
+  box-shadow: inset 0 0 18px rgba(12, 18, 42, 0.8);
+}
+
+.viewer-drive-joystick__stick {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.25), transparent 58%),
+    linear-gradient(140deg, rgba(92, 140, 255, 0.95), rgba(38, 64, 162, 0.95));
+  border: 2px solid rgba(170, 200, 255, 0.6);
+  box-shadow:
+    inset 0 0 14px rgba(18, 26, 58, 0.9),
+    0 8px 18px rgba(10, 12, 28, 0.6);
+  transform: translate(-50%, -50%);
+  transition: transform 0.08s ease;
+}
+
+.viewer-drive-joystick.is-active .viewer-drive-joystick__stick {
+  box-shadow:
+    inset 0 0 18px rgba(18, 26, 58, 0.95),
+    0 10px 22px rgba(18, 22, 44, 0.6);
+}
+
+.viewer-drive-pedal-label {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: #f4f6ff;
 }
 
 @keyframes viewer-drive-icon-glow {

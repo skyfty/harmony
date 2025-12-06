@@ -2,31 +2,6 @@
   "pages": [
     {
       "path": "pages/index/index"
-    },
-    {
-      "path": "pages/home/index"
-    },
-    {
-      "path": "pages/search/index"
-    },
-    {
-      "path": "pages/profile/index"
-    },
-    {
-      "path": "pages/profile/edit"
-    },
-    {
-      "path": "pages/settings/index"
-    },
-    {
-      "path": "pages/help/index"
-    },
-    {
-      "path": "pages/about/index"
-    },
-
-    {
-      "path": "pages/test"
     }
   ],
   "subPackages": [
