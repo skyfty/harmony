@@ -562,7 +562,7 @@ const tempPosition = new THREE.Vector3()
 const tempVehicleSize = new THREE.Vector3()
 const tempCameraMatrix = new THREE.Matrix4()
 const cameraViewFrustum = new THREE.Frustum()
-const VEHICLE_ENGINE_FORCE = 2200
+const VEHICLE_ENGINE_FORCE = 1000
 const VEHICLE_BRAKE_FORCE = 45
 const VEHICLE_STEER_ANGLE = THREE.MathUtils.degToRad(32)
 const tempVehicleCameraLook = new THREE.Vector3()
@@ -708,6 +708,16 @@ const bodyQuaternionHelper = new THREE.Quaternion()
 const rigidbodyDebugPositionHelper = new THREE.Vector3()
 const rigidbodyDebugQuaternionHelper = new THREE.Quaternion()
 const rigidbodyDebugScaleHelper = new THREE.Vector3()
+const wheelForwardHelper = new THREE.Vector3()
+const wheelAxisHelper = new THREE.Vector3()
+const wheelQuaternionHelper = new THREE.Quaternion()
+const wheelChassisPositionHelper = new THREE.Vector3()
+const wheelChassisDisplacementHelper = new THREE.Vector3()
+const defaultWheelAxisVector = new THREE.Vector3(DEFAULT_AXLE.x, DEFAULT_AXLE.y, DEFAULT_AXLE.z).normalize()
+const VEHICLE_WHEEL_MIN_RADIUS = 0.01
+const VEHICLE_SPEED_EPSILON = 1e-3
+const VEHICLE_WHEEL_SPIN_EPSILON = 1e-4
+const VEHICLE_TRAVEL_EPSILON = 1e-5
 const nodeObjectMap = new Map<string, THREE.Object3D>()
 type RigidbodyOrientationAdjustment = {
 	cannon: CANNON.Quaternion
@@ -742,11 +752,28 @@ type RigidbodyMaterialEntry = {
 
 const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>()
 const rigidbodyContactMaterialKeys = new Set<string>()
+type VehicleWheelBinding = {
+	nodeId: string | null
+	object: THREE.Object3D | null
+	radius: number
+	axleAxis: THREE.Vector3
+	isFrontWheel: boolean
+}
+type VehicleWheelSetupEntry = {
+	config: VehicleWheelProps
+	point: CANNON.Vec3
+	direction: CANNON.Vec3
+	axle: CANNON.Vec3
+}
 type VehicleInstance = {
 	nodeId: string
 	vehicle: CANNON.RaycastVehicle
 	wheelCount: number
 	steerableWheelIndices: number[]
+	wheelBindings: VehicleWheelBinding[]
+	forwardAxis: THREE.Vector3
+	lastChassisPosition: THREE.Vector3
+	hasChassisPositionSample: boolean
 }
 const vehicleInstances = new Map<string, VehicleInstance>()
 type WheelContactDebugSnapshot = {
@@ -755,8 +782,6 @@ type WheelContactDebugSnapshot = {
 	compression: number
 	lastLoggedAt: number
 }
-const vehicleWheelContactDebugState = new Map<string, WheelContactDebugSnapshot[]>()
-const VEHICLE_CONTACT_LOG_INTERVAL_MS = 250
 type GroundHeightfieldCacheEntry = { signature: string; shape: CANNON.Heightfield; offset: [number, number, number] }
 const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>()
 const groundHeightfieldOrientation = new CANNON.Quaternion()
@@ -3133,25 +3158,11 @@ function applyVehicleDriveForces(): void {
 	const engineForce = -vehicleDriveInput.throttle * VEHICLE_ENGINE_FORCE
 	const steeringValue = vehicleDriveInput.steering * VEHICLE_STEER_ANGLE
 	const brakeForce = vehicleDriveInput.brake * VEHICLE_BRAKE_FORCE
-
-	if (vehicleDriveInput.throttle !== 0 || vehicleDriveInput.steering !== 0 || vehicleDriveInput.brake !== 0) {
-		console.log('[Vehicle Debug]', {
-			engineForce,
-			steeringValue,
-			brakeForce,
-			velocity: vehicle.chassisBody.velocity,
-			angularVelocity: vehicle.chassisBody.angularVelocity,
-			mass: vehicle.chassisBody.mass,
-			isSleeping: vehicle.chassisBody.sleepState === CANNON.Body.SLEEPING,
-			inWorld: physicsWorld?.bodies.includes(vehicle.chassisBody),
-			wheels: vehicle.wheelInfos.map((w, i) => ({
-				index: i,
-				isInContact: w.isInContact,
-				suspensionLength: w.suspensionLength,
-				raycastResult: w.raycastResult
-			}))
-		})
-	}
+	console.log('Applying vehicle drive forces:', {
+		engineForce,
+		steeringValue,
+		brakeForce,
+	})
 
 	for (let index = 0; index < vehicle.wheelInfos.length; index += 1) {
 		vehicle.applyEngineForce(engineForce, index)
@@ -4576,6 +4587,7 @@ function applyPhysicsEnvironmentSettings(settings: EnvironmentSettings) {
 		physicsWorld.gravity.set(physicsGravity.x, physicsGravity.y, physicsGravity.z)
 		physicsWorld.defaultContactMaterial.friction = physicsContactFriction
 		physicsWorld.defaultContactMaterial.restitution = physicsContactRestitution
+		physicsWorld.defaultContactMaterial.contactEquationStiffness = 1000
 	}
 }
 
@@ -5401,6 +5413,17 @@ function clampVehicleAxisIndex(value: number): 0 | 1 | 2 {
 	return 0
 }
 
+function resolveVehicleAxisVector(index: number): THREE.Vector3 {
+	switch (index) {
+		case 1:
+			return new THREE.Vector3(0, 1, 0)
+		case 2:
+			return new THREE.Vector3(0, 0, 1)
+		default:
+			return new THREE.Vector3(1, 0, 0)
+	}
+}
+
 type VehicleVectorValue = Vector3Like | number[] | null | undefined
 
 function toFiniteVectorComponent(value: unknown): number | null {
@@ -5777,12 +5800,14 @@ function createVehicleInstance(
 	const wheelEntries = (props.wheels ?? [])
 		.map((wheel) => {
 			const point = tupleToVec3(wheel.chassisConnectionPointLocal)
-			if (!point) {
+			const direction = tupleToVec3(wheel.directionLocal, DEFAULT_DIRECTION)
+			const axle = tupleToVec3(wheel.axleLocal, DEFAULT_AXLE)
+			if (!point || !direction || !axle) {
 				return null
 			}
-			return { config: wheel, point }
+			return { config: wheel, point, direction, axle }
 		})
-		.filter((entry): entry is { config: VehicleWheelProps; point: CANNON.Vec3 } => Boolean(entry))
+		.filter((entry): entry is VehicleWheelSetupEntry => Boolean(entry))
 	if (!wheelEntries.length) {
 		return null
 	}
@@ -5804,16 +5829,12 @@ function createVehicleInstance(
 		indexUpAxis: upAxis,
 		indexForwardAxis: forwardAxis,
 	})
-	wheelEntries.forEach(({ config, point }) => {
-		const directionVec = tupleToVec3(config.directionLocal, DEFAULT_DIRECTION)
-		const axleVec = tupleToVec3(config.axleLocal, DEFAULT_AXLE)
-		if (!directionVec || !axleVec) {
-			return
-		}
+	const wheelBindings: VehicleWheelBinding[] = []
+	wheelEntries.forEach(({ config, point, direction, axle }) => {
 		vehicle.addWheel({
 			chassisConnectionPointLocal: point,
-			directionLocal: directionVec,
-			axleLocal: axleVec,
+			directionLocal: direction,
+			axleLocal: axle,
 			suspensionRestLength: config.suspensionRestLength,
 			suspensionStiffness: config.suspensionStiffness,
 			dampingRelaxation: config.dampingRelaxation,
@@ -5827,9 +5848,35 @@ function createVehicleInstance(
 			rollInfluence: config.rollInfluence,
 			radius: config.radius,
 		})
+		const axis = new THREE.Vector3(axle.x, axle.y, axle.z)
+		if (axis.lengthSq() < 1e-6) {
+			axis.copy(defaultWheelAxisVector)
+		}
+		axis.normalize()
+		wheelBindings.push({
+			nodeId: config.nodeId ?? null,
+			object: config.nodeId ? nodeObjectMap.get(config.nodeId) ?? null : null,
+			radius: Math.max(config.radius, VEHICLE_WHEEL_MIN_RADIUS),
+			axleAxis: axis,
+			isFrontWheel: config.isFrontWheel === true,
+		})
 	})
 	vehicle.addToWorld(physicsWorld)
-	return { nodeId: node.id, vehicle, wheelCount, steerableWheelIndices }
+	const initialChassisPosition = new THREE.Vector3(
+		rigidbody.body.position.x,
+		rigidbody.body.position.y,
+		rigidbody.body.position.z,
+	)
+	return {
+		nodeId: node.id,
+		vehicle,
+		wheelCount,
+		steerableWheelIndices,
+		wheelBindings,
+		forwardAxis: resolveVehicleAxisVector(forwardAxis),
+		lastChassisPosition: initialChassisPosition,
+		hasChassisPositionSample: false,
+	}
 }
 
 function removeVehicleInstance(nodeId: string): void {
@@ -6045,103 +6092,6 @@ function resolveNodeIdForBody(body: CANNON.Body | null | undefined): string | nu
 	return null
 }
 
-function formatVec3Debug(vector?: { x: number; y: number; z: number } | null): { x: number; y: number; z: number } | null {
-	if (!vector) {
-		return null
-	}
-	const formatComponent = (value: number | undefined): number => {
-		if (typeof value !== 'number' || !Number.isFinite(value)) {
-			return 0
-		}
-		return Number(value.toFixed(4))
-	}
-	return {
-		x: formatComponent(vector.x),
-		y: formatComponent(vector.y),
-		z: formatComponent(vector.z),
-	}
-}
-
-function captureVehicleWheelContacts(): void {
-	if (!vehicleInstances.size) {
-		return
-	}
-	const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
-	vehicleInstances.forEach((instance) => {
-		const wheelStates = vehicleWheelContactDebugState.get(instance.nodeId) ?? []
-		const { vehicle } = instance
-		const gravityMagnitude = Math.abs(physicsGravity.y)
-		const weightPerWheel = vehicle.wheelInfos.length > 0
-			? (vehicle.chassisBody.mass * gravityMagnitude) / vehicle.wheelInfos.length
-			: 0
-		for (let index = 0; index < vehicle.wheelInfos.length; index += 1) {
-			const wheel = vehicle.wheelInfos[index]
-			const contactBody = wheel.raycastResult?.body ?? null
-			const contactBodyId = contactBody?.id ?? null
-			const restLength = Number.isFinite(wheel.suspensionRestLength) ? wheel.suspensionRestLength : 0
-			const currentLength = Number.isFinite(wheel.suspensionLength) ? wheel.suspensionLength : 0
-			const compression = restLength > 0 ? Math.max(0, restLength - currentLength) / restLength : 0
-			const relativeVelocity = Number.isFinite(wheel.suspensionRelativeVelocity)
-				? wheel.suspensionRelativeVelocity
-				: 0
-			const previous = wheelStates[index]
-			const contactChanged = !previous
-				|| previous.inContact !== wheel.isInContact
-				|| previous.contactBodyId !== contactBodyId
-			const compressionJump = previous
-				? Math.abs(previous.compression - compression) >= 0.25
-				: compression > 0.25
-			const bounceDetected = wheel.isInContact && compression > 0.85 && Math.abs(relativeVelocity) > 0.2
-			const elapsed = now - (previous?.lastLoggedAt ?? 0)
-			const shouldLog = (contactChanged || compressionJump || bounceDetected)
-				&& elapsed >= VEHICLE_CONTACT_LOG_INTERVAL_MS
-			wheelStates[index] = {
-				inContact: wheel.isInContact,
-				contactBodyId,
-				compression,
-				lastLoggedAt: shouldLog ? now : previous?.lastLoggedAt ?? 0,
-			}
-			if (!shouldLog) {
-				continue
-			}
-			const contactNodeId = resolveNodeIdForBody(contactBody)
-			const contactNode = contactNodeId ? resolveNodeById(contactNodeId) : null
-			const raycastResult = wheel.raycastResult
-			const reason = contactChanged
-				? 'contact-changed'
-				: bounceDetected
-					? 'suspension-bounce'
-					: 'compression-spike'
-			const suspensionForce = Number((wheel.suspensionForce ?? 0).toFixed(2))
-			const supportRatio = weightPerWheel > 0 ? Number((suspensionForce / weightPerWheel).toFixed(3)) : 0
-			console.log('[VehicleWheelContact]', {
-				reason,
-				vehicleNodeId: instance.nodeId,
-				wheelIndex: index,
-				inContact: wheel.isInContact,
-				contactBodyId,
-				contactNodeId,
-				contactNodeName: contactNode?.name ?? null,
-				contactNodeType: contactNode?.nodeType ?? null,
-				contactMaterial: contactBody?.material?.name ?? null,
-				compressionRatio: Number(compression.toFixed(3)),
-				suspensionLength: Number(currentLength.toFixed(4)),
-				restLength,
-				maxSuspensionTravel: wheel.maxSuspensionTravel,
-				suspensionForce,
-				weightPerWheel: Number(weightPerWheel.toFixed(2)),
-				supportRatio,
-				suspensionRelativeVelocity: Number(relativeVelocity.toFixed(4)),
-				hitPointWorld: formatVec3Debug(raycastResult?.hitPointWorld ?? null),
-				hitNormalWorld: formatVec3Debug(raycastResult?.hitNormalWorld ?? null),
-				chassisVelocity: formatVec3Debug(vehicle.chassisBody.velocity),
-				contactBodyVelocity: formatVec3Debug(contactBody?.velocity ?? null),
-			})
-		}
-		vehicleWheelContactDebugState.set(instance.nodeId, wheelStates)
-	})
-}
-
 function stepPhysicsWorld(delta: number): void {
 	if (!physicsWorld || !rigidbodyInstances.size) {
 		return
@@ -6151,10 +6101,81 @@ function stepPhysicsWorld(delta: number): void {
 	} catch (error) {
 		console.warn('[ScenePreview] Physics step failed', error)
 	}
-	if (vehicleInstances.size) {
-		captureVehicleWheelContacts()
-	}
 	rigidbodyInstances.forEach((entry) => syncObjectFromBody(entry))
+	updateVehicleWheelVisuals(delta)
+}
+
+function updateVehicleWheelVisuals(delta: number): void {
+	if (delta <= 0 || !vehicleInstances.size) {
+		return
+	}
+	const safeDelta = Math.max(delta, 1e-6)
+	vehicleInstances.forEach((instance) => {
+		const { vehicle, wheelBindings, forwardAxis } = instance
+		if (!wheelBindings.length) {
+			return
+		}
+		const hasFrontWheel = wheelBindings.some((binding) => binding.isFrontWheel && binding.nodeId)
+		if (!hasFrontWheel) {
+			return
+		}
+		const chassisBody = vehicle.chassisBody
+		if (!chassisBody) {
+			return
+		}
+		wheelChassisPositionHelper.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
+		wheelQuaternionHelper.set(
+			chassisBody.quaternion.x,
+			chassisBody.quaternion.y,
+			chassisBody.quaternion.z,
+			chassisBody.quaternion.w,
+		)
+		wheelForwardHelper.copy(forwardAxis).applyQuaternion(wheelQuaternionHelper)
+		if (wheelForwardHelper.lengthSq() < 1e-6) {
+			wheelForwardHelper.set(0, 0, 1)
+		} else {
+			wheelForwardHelper.normalize()
+		}
+		if (!instance.hasChassisPositionSample) {
+			instance.lastChassisPosition.copy(wheelChassisPositionHelper)
+			instance.hasChassisPositionSample = true
+			return
+		}
+		wheelChassisDisplacementHelper
+			.copy(wheelChassisPositionHelper)
+			.sub(instance.lastChassisPosition)
+		instance.lastChassisPosition.copy(wheelChassisPositionHelper)
+		const signedDistance = wheelChassisDisplacementHelper.dot(wheelForwardHelper)
+		const signedSpeed = signedDistance / safeDelta
+		if (Math.abs(signedSpeed) < VEHICLE_SPEED_EPSILON || Math.abs(signedDistance) < VEHICLE_TRAVEL_EPSILON) {
+			return
+		}
+		wheelBindings.forEach((binding) => {
+			if (!binding.isFrontWheel || !binding.nodeId) {
+				return
+			}
+			const wheelObject = nodeObjectMap.get(binding.nodeId) ?? null
+			if (!wheelObject) {
+				binding.object = null
+				return
+			}
+			if (binding.object !== wheelObject) {
+				binding.object = wheelObject
+			}
+			const radius = Math.max(binding.radius, VEHICLE_WHEEL_MIN_RADIUS)
+			const angleDelta = signedDistance / radius
+			if (Math.abs(angleDelta) < VEHICLE_WHEEL_SPIN_EPSILON) {
+				return
+			}
+			wheelAxisHelper.copy(binding.axleAxis)
+			if (wheelAxisHelper.lengthSq() < 1e-6) {
+				wheelAxisHelper.copy(defaultWheelAxisVector)
+			}
+			wheelObject.rotateOnAxis(wheelAxisHelper, angleDelta)
+			wheelObject.updateMatrixWorld(true)
+			syncInstancedTransform(wheelObject)
+		})
+	})
 }
 
 function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
