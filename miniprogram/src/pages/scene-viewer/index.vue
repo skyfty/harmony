@@ -1220,8 +1220,18 @@ watch(
   },
 );
 
-watch(vehicleDriveCameraMode, () => {
+watch(vehicleDriveCameraMode, (mode) => {
   vehicleDriveCameraFollowState.initialized = false;
+  if (mode !== 'follow' || !vehicleDriveActive.value) {
+    return;
+  }
+  const nodeId = normalizeNodeId(vehicleDriveNodeId.value);
+  if (nodeId) {
+    setCameraViewState('watching', nodeId);
+    setCameraCaging(true);
+  }
+  setVehicleDriveUiOverride('show');
+  updateVehicleDriveCamera(0, { immediate: true });
 });
 
 watch(vehicleDriveActive, (active) => {
