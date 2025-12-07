@@ -6074,15 +6074,6 @@ async function ensureRendererContext(result: UseCanvasResult) {
   controls.enableDamping = true;
   controls.dampingFactor = 0.1;
   controls.target.set(0, HUMAN_EYE_HEIGHT, -CAMERA_FORWARD_OFFSET);
-  controls.enableZoom = false;
-  controls.enablePan = false;
-  controls.screenSpacePanning = false;
-  controls.minAzimuthAngle = -Infinity;
-  controls.maxAzimuthAngle = Infinity;
-  controls.minPolarAngle = CAMERA_HORIZONTAL_POLAR_ANGLE;
-  controls.maxPolarAngle = CAMERA_HORIZONTAL_POLAR_ANGLE;
-  controls.minDistance = CAMERA_FORWARD_OFFSET;
-  controls.maxDistance = CAMERA_FORWARD_OFFSET;
   controls.enabled = !isCameraCaged.value;
 
   controls.addEventListener('start', () => {

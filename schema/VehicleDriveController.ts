@@ -101,7 +101,6 @@ export type VehicleDriveControllerDeps = {
   setCameraViewState?: (mode: unknown, targetId?: string | null) => void
   setCameraCaging?: (enabled: boolean, options?: { force?: boolean }) => void
   runWithProgrammaticCameraMutation?: (fn: () => void) => void
-  withControlsVerticalFreedom?: <T>(controls: any, fn: () => T) => T
   lockControlsPitchToCurrent?: (controls: any, camera: THREE.PerspectiveCamera) => void
   syncLastFirstPersonStateFromCamera?: () => void
   updateOrbitLookTween?: (delta: number) => void
@@ -145,8 +144,8 @@ const VEHICLE_EXIT_LATERAL_MIN = 1.25
 const VEHICLE_EXIT_FORWARD_MIN = 1.25
 const VEHICLE_EXIT_VERTICAL_MIN = 0.6
 const VEHICLE_SIZE_FALLBACK = { width: 2.4, height: 1.4, length: 4.2 }
-const VEHICLE_FOLLOW_DISTANCE_MIN = 4
-const VEHICLE_FOLLOW_DISTANCE_MAX = 26
+const VEHICLE_FOLLOW_DISTANCE_MIN = 1
+const VEHICLE_FOLLOW_DISTANCE_MAX = 5
 const VEHICLE_FOLLOW_HEIGHT_RATIO = 0.4
 const VEHICLE_FOLLOW_HEIGHT_MIN = 1.5
 const VEHICLE_FOLLOW_DISTANCE_LENGTH_RATIO = 1.25
@@ -815,18 +814,15 @@ export class VehicleDriveController {
 
     const run = this.deps.runWithProgrammaticCameraMutation ?? ((fn: () => void) => fn())
     run(() => {
-      // ctx.camera!.position.copy(follow.currentPosition)
-      // ctx.camera!.up.copy(temp.seatUp)
-      // if (mapControls) {
-      //   const liftControls = this.deps.withControlsVerticalFreedom ?? ((_controls, fn) => fn())
-      //   liftControls(mapControls as any, () => {
-      //     mapControls.target.copy(follow.currentTarget)
-      //     ctx.camera!.lookAt(follow.currentTarget)
-      //     mapControls.update?.()
-      //   })
-      // } else {
-      //   ctx.camera!.lookAt(follow.currentTarget)
-      // }
+      ctx.camera!.position.copy(follow.currentPosition)
+      ctx.camera!.up.copy(temp.seatUp)
+      if (mapControls) {
+          mapControls.target.copy(follow.currentTarget)
+          ctx.camera!.lookAt(follow.currentTarget)
+          mapControls.update?.()
+      } else {
+        ctx.camera!.lookAt(follow.currentTarget)
+      }
     })
     follow.initialized = true
     return true
@@ -843,11 +839,8 @@ export class VehicleDriveController {
       ctx.camera.up.copy(temp.seatUp)
       ctx.camera.lookAt(temp.cameraLook.copy(temp.seatPosition).addScaledVector(temp.seatForward, VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE))
       if (ctx.mapControls) {
-        const liftControls = this.deps.withControlsVerticalFreedom ?? ((_controls, fn) => fn())
-        liftControls(ctx.mapControls as any, () => {
-          ctx.mapControls!.target.copy(temp.cameraLook)
-          ctx.mapControls!.update?.()
-        })
+        ctx.mapControls!.target.copy(temp.cameraLook)
+        ctx.mapControls!.update?.()
       }
     })
     this.deps.syncLastFirstPersonStateFromCamera?.()
