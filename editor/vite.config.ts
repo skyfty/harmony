@@ -20,6 +20,10 @@ export default defineConfig({
         replacement: resolveDir('../schema'),
       },
       {
+        find: 'cannon-es',
+        replacement: resolveDir('./node_modules/cannon-es'),
+      },
+      {
         find: '@three-examples',
         replacement: withTrailingSlash(resolveDir('./node_modules/three/examples/jsm/')),
       },

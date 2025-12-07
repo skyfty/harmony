@@ -4821,11 +4821,11 @@ export async function calculateSceneResourceSummary(
     if (!snapshot || !Array.isArray(snapshot.layers) || !snapshot.layers.length) {
       return
     }
-    snapshot.layers.forEach((layer) => {
+    snapshot.layers.forEach((layer: any) => {
       registerScatterAssetId(layer?.assetId)
       registerScatterAssetId(layer?.profileId)
       if (Array.isArray(layer?.instances)) {
-        layer.instances.forEach((instance) => {
+        layer.instances.forEach((instance: any) => {
           registerScatterAssetId(instance?.assetId)
           registerScatterAssetId(instance?.profileId)
         })

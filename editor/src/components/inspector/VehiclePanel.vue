@@ -53,10 +53,6 @@ function cloneVector(vector: Vector3Like): Vector3Like {
   return {x: vector.x, y: vector.y, z: vector.z}
 }
 
-function ensureFiniteVector(vector: Vector3Like): Vector3Like {
-  return cloneVector(vector)
-}
-
 const normalizedProps = computed(() => {
   const props = vehicleComponent.value?.props as Partial<VehicleComponentProps> | undefined
   return clampVehicleComponentProps(props ?? null)
@@ -88,7 +84,6 @@ const BASE_WHEEL_TEMPLATE: VehicleWheelProps =
 
 const tempBoundingBox = new Box3()
 const tempBoundingSize = new Vector3()
-const tempWheelWorldPosition = new Vector3()
 
 const isComponentEnabled = computed(() => Boolean(vehicleComponent.value?.enabled))
 
