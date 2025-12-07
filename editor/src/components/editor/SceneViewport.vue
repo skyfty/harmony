@@ -6233,11 +6233,11 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
 function applyTransformSpace(tool: EditorTool) {
   if (!transformControls) return
 
-  if (tool === 'translate' || tool === 'scale') {
-    transformControls.setSpace('local')
-  } else {
-    transformControls.setSpace('world')
-  }
+  // if (tool === 'translate' || tool === 'scale') {
+  //   transformControls.setSpace('local')
+  // } else {
+  //   transformControls.setSpace('world')
+  // }
 }
 
 function attachSelection(nodeId: string | null, tool: EditorTool = props.activeTool) {
@@ -6266,9 +6266,8 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
     transformControls.detach()
     return
   }
-
-  // 确保在附加前设置正确的模式
-      transformControls.setSpace('local')
+  // 根据当前工具选择合适的变换坐标系
+  applyTransformSpace(tool)
   transformControls.setMode(tool)
   transformControls.attach(target)
 }
