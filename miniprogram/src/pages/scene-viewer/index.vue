@@ -381,7 +381,16 @@ import {
   DEFAULT_DIRECTION,
   DEFAULT_AXLE,
 } from '@schema/components';
-import { VehicleDriveController } from '@schema/VehicleDriveController';
+import {
+  VehicleDriveController,
+  type VehicleDriveCameraFollowState,
+  type VehicleDriveCameraMode,
+  type VehicleDriveCameraRestoreState,
+  type VehicleDriveControlFlags,
+  type VehicleDriveInputState,
+  type VehicleDriveOrbitMode,
+  type VehicleInstance,
+} from '@schema/VehicleDriveController';
 import type {
   GuideboardComponentProps,
   WarpGateComponentProps,
@@ -854,18 +863,6 @@ let physicsWorld: CANNON.World | null = null;
 const rigidbodyInstances = new Map<string, RigidbodyInstance>();
 const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>();
 const rigidbodyContactMaterialKeys = new Set<string>();
-type VehicleInstance = {
-  nodeId: string;
-  vehicle: CANNON.RaycastVehicle;
-  wheelCount: number;
-  steerableWheelIndices: number[];
-  axisRightIndex: 0 | 1 | 2;
-  axisUpIndex: 0 | 1 | 2;
-  axisForwardIndex: 0 | 1 | 2;
-  axisRight: THREE.Vector3;
-  axisUp: THREE.Vector3;
-  axisForward: THREE.Vector3;
-};
 const vehicleInstances = new Map<string, VehicleInstance>();
 const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>();
 const physicsGravity = new CANNON.Vec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0);
@@ -1000,38 +997,6 @@ const purposeTargetNodeId = ref<string | null>(null);
 const purposeSourceNodeId = ref<string | null>(null);
 const purposeActiveMode = ref<'watch' | 'level'>('level');
 
-type VehicleDriveControlFlags = {
-  forward: boolean;
-  backward: boolean;
-  left: boolean;
-  right: boolean;
-  brake: boolean;
-};
-
-type VehicleDriveInputState = {
-  throttle: number;
-  steering: number;
-  brake: number;
-};
-
-type VehicleDriveCameraMode = 'first-person' | 'follow';
-type VehicleDriveCameraFollowState = {
-  desiredPosition: THREE.Vector3;
-  currentPosition: THREE.Vector3;
-  desiredTarget: THREE.Vector3;
-  currentTarget: THREE.Vector3;
-  initialized: boolean;
-  localOffset: THREE.Vector3;
-  hasLocalOffset: boolean;
-};
-
-type VehicleFollowPlacement = {
-  distance: number;
-  heightOffset: number;
-  targetLift: number;
-  targetForward: number;
-};
-
 const pageInstance = getCurrentInstance();
 
 const vehicleDriveActive = ref(false);
@@ -1057,7 +1022,7 @@ const vehicleDriveInput = reactive<VehicleDriveInputState>({
   brake: 0,
 });
 const vehicleDriveCameraMode = ref<VehicleDriveCameraMode>('follow');
-const vehicleDriveOrbitMode = ref<'follow' | 'free'>('follow');
+const vehicleDriveOrbitMode = ref<VehicleDriveOrbitMode>('follow');
 const vehicleDriveCameraFollowState = reactive<VehicleDriveCameraFollowState>({
   desiredPosition: new THREE.Vector3(),
   currentPosition: new THREE.Vector3(),
@@ -1085,9 +1050,6 @@ const joystickKnobStyle = computed(() => {
     transform: `translate(calc(-50% + ${joystickOffset.x}px), calc(-50% + ${joystickOffset.y}px)) scale(${scale})`,
   };
 });
-const vehicleDriveCameraToggleLabel = computed(() =>
-  vehicleDriveCameraMode.value === 'follow' ? '座舱视角' : '跟随视角',
-);
 const vehicleDriveResetBusy = ref(false);
 
 type CameraViewMode = 'level' | 'watching';
@@ -1096,12 +1058,13 @@ const cameraViewState = reactive<{ mode: CameraViewMode; targetNodeId: string | 
   targetNodeId: null,
 });
 
-const vehicleDriveCameraRestoreState = {
+const vehicleDriveCameraRestoreState: VehicleDriveCameraRestoreState = {
   hasSnapshot: false,
   position: new THREE.Vector3(),
   target: new THREE.Vector3(),
   quaternion: new THREE.Quaternion(),
   up: new THREE.Vector3(),
+  controlMode: null,
   viewMode: cameraViewState.mode as CameraViewMode,
   viewTargetId: cameraViewState.targetNodeId as string | null,
   isCameraCaged: false,

@@ -107,6 +107,7 @@ export type VehicleDriveControllerDeps = {
   updateOrbitLookTween?: (delta: number) => void
   onToast?: (message: string) => void
   onResolveBehaviorToken?: (token: string, resolution: BehaviorEventResolution | { type: string; message?: string }) => void
+  followCameraDistanceScale?: number | (() => number)
 }
 
 export type VehicleDriveControllerBindings = {
@@ -270,6 +271,16 @@ export class VehicleDriveController {
 
   resetFollowCameraOffset(): void {
     this.resetVehicleFollowLocalOffset()
+  }
+
+  private getFollowDistanceScale(): number {
+    const raw = this.deps.followCameraDistanceScale
+    const resolved = typeof raw === 'function' ? raw() : raw
+    if (!Number.isFinite(resolved)) {
+      return 1
+    }
+    // Clamp to a safe range to avoid extreme jumps
+    return Math.max(0.5, Math.min(3, resolved))
   }
 
   get orbitMode(): VehicleDriveOrbitMode {
@@ -503,7 +514,6 @@ export class VehicleDriveController {
     const engineForce = throttle * VEHICLE_ENGINE_FORCE
     const steeringValue = steeringInput * VEHICLE_STEER_ANGLE
     const brakeForce = brakeInput * VEHICLE_BRAKE_FORCE
-    console.log('Applying vehicle forces:', { engineForce, steeringValue, brakeForce })
     for (let index = 0; index < vehicle.wheelInfos.length; index += 1) {
       vehicle.setBrake(brakeForce, index)
     }
@@ -663,6 +673,22 @@ export class VehicleDriveController {
     follow.hasLocalOffset = false
   }
 
+  private enforceVehicleFollowBehind(placement: VehicleFollowPlacement): void {
+    const follow = this.bindings.cameraFollowState
+    const local = follow.localOffset
+    const minBack = Math.max(placement.distance, VEHICLE_FOLLOW_DISTANCE_MIN)
+    const forwardComponent = local.z
+    if (!Number.isFinite(forwardComponent)) {
+      local.set(0, placement.heightOffset, -minBack)
+      follow.hasLocalOffset = true
+      return
+    }
+    if (forwardComponent > -minBack) {
+      local.z = -minBack
+      follow.hasLocalOffset = true
+    }
+  }
+
   private clampVehicleFollowLocalOffset(placement?: VehicleFollowPlacement): void {
     const follow = this.bindings.cameraFollowState
     const local = follow.localOffset
@@ -731,11 +757,17 @@ export class VehicleDriveController {
     const follow = this.bindings.cameraFollowState
     const temp = this.temp
     const placement = computeVehicleFollowPlacement(getVehicleApproxDimensions(vehicleObject))
+    const distanceScale = this.getFollowDistanceScale()
+    placement.distance = Math.min(
+      VEHICLE_FOLLOW_DISTANCE_MAX,
+      Math.max(VEHICLE_FOLLOW_DISTANCE_MIN, placement.distance * distanceScale),
+    )
     this.computeVehicleFollowAnchor(vehicleObject, temp.seatPosition, temp.followAnchor)
     const axisBasis = this.resolveVehicleAxisBasis(instance)
     const vehicleQuaternion = vehicleObject?.getWorldQuaternion(temp.tempQuaternion) ?? temp.tempQuaternion.identity()
 
     this.ensureVehicleFollowLocalOffset(placement)
+    this.enforceVehicleFollowBehind(placement)
 
     const targetOffsetLocal = temp.followOffset.set(0, placement.targetLift, placement.targetForward)
     const targetWorldOffset = this.resolveVehicleFollowWorldOffset(targetOffsetLocal, axisBasis, vehicleQuaternion, temp.followTarget)
@@ -757,6 +789,7 @@ export class VehicleDriveController {
     }
     if (userAdjusted && ctx.camera) {
       this.updateVehicleFollowLocalOffsetFromCamera(temp.followAnchor, axisBasis, vehicleQuaternion, ctx.camera.position)
+      this.enforceVehicleFollowBehind(placement)
       this.clampVehicleFollowLocalOffset(placement)
     }
 
@@ -782,18 +815,18 @@ export class VehicleDriveController {
 
     const run = this.deps.runWithProgrammaticCameraMutation ?? ((fn: () => void) => fn())
     run(() => {
-      ctx.camera!.position.copy(follow.currentPosition)
-      ctx.camera!.up.copy(temp.seatUp)
-      if (mapControls) {
-        const liftControls = this.deps.withControlsVerticalFreedom ?? ((_controls, fn) => fn())
-        liftControls(mapControls as any, () => {
-          mapControls.target.copy(follow.currentTarget)
-          ctx.camera!.lookAt(follow.currentTarget)
-          mapControls.update?.()
-        })
-      } else {
-        ctx.camera!.lookAt(follow.currentTarget)
-      }
+      // ctx.camera!.position.copy(follow.currentPosition)
+      // ctx.camera!.up.copy(temp.seatUp)
+      // if (mapControls) {
+      //   const liftControls = this.deps.withControlsVerticalFreedom ?? ((_controls, fn) => fn())
+      //   liftControls(mapControls as any, () => {
+      //     mapControls.target.copy(follow.currentTarget)
+      //     ctx.camera!.lookAt(follow.currentTarget)
+      //     mapControls.update?.()
+      //   })
+      // } else {
+      //   ctx.camera!.lookAt(follow.currentTarget)
+      // }
     })
     follow.initialized = true
     return true
