@@ -50,7 +50,7 @@
           @touchcancel="handleLanternTouchCancel"
         >
           <button class="viewer-lantern-close" aria-label="关闭幻灯片" @tap="cancelLanternOverlay">
-            <image :src="lanternCloseIcon" mode="aspectFit" class="viewer-lantern-close-icon" />
+            <text class="viewer-lantern-close-icon">{{ lanternCloseIcon }}</text>
           </button>
           <!-- #ifdef H5 -->
           <view
@@ -134,7 +134,7 @@
           <view class="viewer-purpose-chip__content">
             <view class="viewer-purpose-chip__icon-wrap">
               <view class="viewer-purpose-chip__icon-pulse"></view>
-              <image :src="purposeWatchIcon" mode="aspectFit" class="viewer-purpose-chip__icon" />
+              <text class="viewer-purpose-chip__icon">{{ purposeWatchIcon }}</text>
             </view>
             <view class="viewer-purpose-chip__texts">
               <text class="viewer-purpose-chip__title">观察</text>
@@ -152,7 +152,7 @@
           <view class="viewer-purpose-chip__content">
             <view class="viewer-purpose-chip__icon-wrap">
               <view class="viewer-purpose-chip__icon-pulse"></view>
-              <image :src="purposeResetIcon" mode="aspectFit" class="viewer-purpose-chip__icon" />
+              <text class="viewer-purpose-chip__icon">{{ purposeResetIcon }}</text>
             </view>
             <view class="viewer-purpose-chip__texts">
               <text class="viewer-purpose-chip__title">平视</text>
@@ -175,11 +175,9 @@
           @tap="handleVehicleDrivePromptTap"
         >
           <view class="viewer-drive-start__glow" aria-hidden="true"></view>
-          <svg class="viewer-drive-start__icon" viewBox="0 0 24 24" aria-hidden="true" role="img">
-            <path
-              d="M12,2C6.5,2 2,6.5 2,12C2,17.5 6.5,22 12,22C17.5,22 22,17.5 22,12C22,6.5 17.5,2 12,2M12,4C14.08,4 15.79,4.87 17,6H7C8.21,4.87 9.92,4 12,4M18.83,7C19.9,8.26 20.6,9.99 20.82,12H17.09C17.03,11.68 16.95,11.37 16.85,11.07L18.83,7M5.17,7L7.15,11.07C7.05,11.37 6.97,11.68 6.91,12H3.18C3.4,9.99 4.1,8.26 5.17,7M4,13H6.54L7.03,15H5.58C4.7,14.04 4.14,13 4,13M18.42,15H16.97L17.46,13H20C19.86,13.94 19.3,15 18.42,15M8,13H16L15.5,15.5C14.6,16.1 13.36,16.5 12,16.5C10.64,16.5 9.4,16.1 8.5,15.5L8,13M8.23,17H15.77C14.54,17.63 13.32,18 12,18C10.68,18 9.46,17.63 8.23,17Z"
-            />
-          </svg>
+          <view class="viewer-drive-start__icon" aria-hidden="true">
+            <v-icon icon="mdi-steering" size="18" />
+          </view>
           <view class="viewer-drive-start__sparkline" aria-hidden="true"></view>
           <view v-if="vehicleDrivePrompt.busy" class="viewer-drive-start__busy" aria-hidden="true">
             <view class="viewer-drive-start__busy-dot"></view>
@@ -198,11 +196,9 @@
             aria-label="切换座舱视角"
             @tap="handleVehicleDriveCameraToggle"
           >
-            <svg class="viewer-drive-icon" viewBox="0 0 32 32" role="img" aria-hidden="true">
-              <path
-                d="M6 10h20c1.1 0 2 0.9 2 2v10c0 1.1-0.9 2-2 2H6c-1.1 0-2-0.9-2-2V12c0-1.1 0.9-2 2-2zm10 5a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm9-6l-2.5-3.5H9.5L7 9h18z"
-              />
-            </svg>
+            <view class="viewer-drive-icon" aria-hidden="true">
+              <text class="viewer-drive-icon-text">📷</text>
+            </view>
           </button>
           <button
             class="viewer-drive-icon-button"
@@ -213,16 +209,9 @@
             aria-label="重置车辆"
             @tap="handleVehicleDriveResetTap"
           >
-            <svg class="viewer-drive-icon" viewBox="0 0 32 32" role="img" aria-hidden="true">
-              <path
-                d="M24 11V5l-4 4a9 9 0 1 0 3 4"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-            </svg>
+            <view class="viewer-drive-icon" aria-hidden="true">
+              <text class="viewer-drive-icon-text">🔄</text>
+            </view>
           </button>
           <button
             class="viewer-drive-icon-button viewer-drive-icon-button--danger"
@@ -233,10 +222,9 @@
             aria-label="下车"
             @tap="handleVehicleDriveExitTap"
           >
-            <svg class="viewer-drive-icon" viewBox="0 0 32 32" role="img" aria-hidden="true">
-              <path d="M8 6h10v4H8v12h10v4H8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z" />
-              <path d="M18 12l8 4-8 4v-3h-6v-2h6v-3z" />
-            </svg>
+            <view class="viewer-drive-icon" aria-hidden="true">
+              <text class="viewer-drive-icon-text">🚪</text>
+            </view>
           </button>
         </view>
         <view class="viewer-drive-cluster viewer-drive-cluster--joystick">
@@ -270,9 +258,9 @@
             @touchend.stop.prevent="handleVehicleDriveControlTouch('forward', false, $event)"
             @touchcancel.stop.prevent="handleVehicleDriveControlTouch('forward', false, $event)"
           >
-            <svg class="viewer-drive-pedal-icon" viewBox="0 0 32 32" role="img" aria-hidden="true">
-              <path d="M16 6l10 10h-6v10h-8V16H6z" />
-            </svg>
+            <view class="viewer-drive-pedal-icon" aria-hidden="true">
+              <text class="viewer-drive-pedal-icon-text">⬆️</text>
+            </view>
           </button>
           <button
             class="viewer-drive-pedal-button viewer-drive-pedal-button--brake"
@@ -284,9 +272,9 @@
             @touchend.stop.prevent="handleVehicleDriveControlTouch('brake', false, $event)"
             @touchcancel.stop.prevent="handleVehicleDriveControlTouch('brake', false, $event)"
           >
-            <svg class="viewer-drive-pedal-icon" viewBox="0 0 32 32" role="img" aria-hidden="true">
-              <rect x="8" y="8" width="16" height="16" rx="4" ry="4" />
-            </svg>
+            <view class="viewer-drive-pedal-icon" aria-hidden="true">
+              <text class="viewer-drive-pedal-icon-text">⏹️</text>
+            </view>
           </button>
         </view>
       </view>
@@ -653,21 +641,9 @@ const tempSunDirection = new THREE.Vector3();
 const SKY_SUN_LIGHT_DISTANCE = 150;
 const SKY_SUN_LIGHT_MIN_HEIGHT = 12;
 
-const purposeWatchIcon =
-  'data:image/svg+xml;utf8,' +
-  encodeURIComponent(
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12C3.5 7.2 7.5 4 12 4s8.5 3.2 11 8c-2.5 4.8-6.5 8-11 8S3.5 16.8 1 12z"/><circle cx="12" cy="12" r="3"/></svg>'
-  );
-const purposeResetIcon =
-  'data:image/svg+xml;utf8,' +
-  encodeURIComponent(
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16"/><path d="M9 7l3-3 3 3"/><path d="M9 17l3 3 3-3"/></svg>'
-  );
-const lanternCloseIcon =
-  'data:image/svg+xml;utf8,' +
-  encodeURIComponent(
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>'
-  );
+const purposeWatchIcon = '👁️';
+const purposeResetIcon = '↕️';
+const lanternCloseIcon = '✖️';
 
 let sky: Sky | null = null;
 let sunDirectionalLight: THREE.DirectionalLight | null = null;
@@ -6769,6 +6745,12 @@ onUnmounted(() => {
 .viewer-lantern-close-icon {
   width: 18px;
   height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+  color: #FFFFFF;
 }
 
 .viewer-lantern-image-wrapper {
@@ -6874,6 +6856,9 @@ onUnmounted(() => {
 .viewer-drive-start__icon {
   width: 90px;
   height: 90px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: rgba(236, 244, 255, 0.96);
   filter:
     drop-shadow(0 0 12px rgba(120, 190, 255, 0.8))
@@ -6882,8 +6867,9 @@ onUnmounted(() => {
   z-index: 1;
 }
 
-.viewer-drive-start__icon path {
-  fill: currentColor;
+.viewer-drive-start__icon-text {
+  font-size: 64px;
+  line-height: 1;
 }
 
 .viewer-drive-start__sparkline {
@@ -6984,8 +6970,16 @@ onUnmounted(() => {
 .viewer-drive-icon {
   width: 24px;
   height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 auto;
   color: currentColor;
+}
+
+.viewer-drive-icon-text {
+  font-size: 20px;
+  line-height: 1;
 }
 
 .viewer-drive-pedal-button {
@@ -7091,9 +7085,17 @@ onUnmounted(() => {
 .viewer-drive-pedal-icon {
   width: 28px;
   height: 28px;
-  fill: currentColor;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   opacity: 0.92;
   transition: transform 0.16s ease, opacity 0.16s ease;
+}
+
+.viewer-drive-pedal-icon-text {
+  font-size: 24px;
+  line-height: 1;
+  color: currentColor;
 }
 
 .viewer-drive-pedal-button.is-active .viewer-drive-pedal-icon {
@@ -7247,6 +7249,11 @@ onUnmounted(() => {
 .viewer-purpose-chip__icon {
   width: 22px;
   height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 1;
   z-index: 1;
 }
 

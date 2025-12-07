@@ -55,6 +55,7 @@
     "@dcloudio/uni-quickapp-webview": "3.0.0-alpha-4050320250224001",
     "@minisheep/mini-program-polyfill-core": "^1.1.4",
     "@minisheep/three-platform-adapter": "^2.0.1",
+    "@mdi/font": "^7.4.47",
     "cannon-es": "^0.20.0",
     "pinia": "^2.2.6",
     "three": "^0.172.0",
