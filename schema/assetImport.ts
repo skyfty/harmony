@@ -8,7 +8,7 @@ export interface LoadObjectOptions {
 export function prepareImportedObject(object: THREE.Object3D) {
   object.removeFromParent()
 
-  object.traverse((child) => {
+  object.traverse((child: THREE.Object3D) => {
     const mesh = child as THREE.Mesh
     if (mesh?.isMesh) {
       mesh.castShadow = true

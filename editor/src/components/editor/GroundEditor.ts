@@ -1,10 +1,34 @@
 import { reactive, ref, watch, type Ref } from 'vue'
 import * as THREE from 'three'
 import type { GroundDynamicMesh, GroundSculptOperation, SceneNode } from '@harmony/schema'
+import {
+	ensureTerrainScatterStore,
+	upsertTerrainScatterLayer,
+	replaceTerrainScatterInstances,
+	loadTerrainScatterSnapshot,
+	serializeTerrainScatterStore,
+	type TerrainScatterCategory,
+	type TerrainScatterInstance,
+	type TerrainScatterLayer,
+	type TerrainScatterStore,
+	type TerrainScatterStoreSnapshot,
+} from '@harmony/schema/terrain-scatter'
 import { sculptGround, updateGroundGeometry, updateGroundMesh, sampleGroundHeight } from '@schema/groundMesh'
+import { getCachedModelObject, getOrLoadModelObject, type ModelInstanceGroup } from '@schema/modelObjectCache'
+import {
+	bindScatterInstance,
+	composeScatterMatrix,
+	getScatterInstanceWorldPosition,
+	releaseScatterInstance,
+} from '@/utils/terrainScatterRuntime'
 import { GROUND_NODE_ID, GROUND_HEIGHT_STEP } from './constants'
 import type { BuildTool } from '@/types/build-tool'
-import type { useSceneStore } from '@/stores/sceneStore'
+import { useSceneStore } from '@/stores/sceneStore'
+import type { ProjectAsset } from '@/types/project-asset'
+import type { GroundPanelTab } from '@/stores/terrainStore'
+import { terrainScatterPresets } from '@/resources/projectProviders/asset'
+import { loadObjectFromFile } from '@schema/assetImport'
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
 
 export type TerrainBrushShape = 'circle' | 'square' | 'star'
 
@@ -42,6 +66,9 @@ export type GroundEditorOptions = {
 	brushStrength: Ref<number>
 	brushShape: Ref<TerrainBrushShape | undefined>
 	brushOperation: Ref<GroundSculptOperation>
+	groundPanelTab: Ref<GroundPanelTab>
+	scatterCategory: Ref<TerrainScatterCategory>
+	scatterAsset: Ref<ProjectAsset | null>
 	activeBuildTool: Ref<BuildTool | null>
 	disableOrbitForGroundSelection: () => void
 	restoreOrbitAfterGroundSelection: () => void
@@ -61,6 +88,45 @@ const brushResultVertexHelper = new THREE.Vector3()
 const groundSelectionCenterHelper = new THREE.Vector3()
 const groundSelectionScreenHelper = new THREE.Vector3()
 const groundPointerHelper = new THREE.Vector3()
+const scatterPointerHelper = new THREE.Vector3()
+const scatterDirectionHelper = new THREE.Vector3()
+const scatterPlacementHelper = new THREE.Vector3()
+const scatterWorldMatrixHelper = new THREE.Matrix4()
+const scatterInstanceWorldPositionHelper = new THREE.Vector3()
+
+type ScatterSessionState = {
+	pointerId: number
+	asset: ProjectAsset
+	category: TerrainScatterCategory
+	definition: GroundDynamicMesh
+	groundMesh: THREE.Mesh
+	spacing: number
+	minScale: number
+	maxScale: number
+	store: TerrainScatterStore
+	layer: TerrainScatterLayer
+	modelGroup: ModelInstanceGroup
+	lastPoint: THREE.Vector3 | null
+}
+
+let scatterSession: ScatterSessionState | null = null
+type ScatterEraseState = {
+	pointerId: number
+	definition: GroundDynamicMesh
+	groundMesh: THREE.Mesh
+	radius: number
+}
+
+let scatterEraseState: ScatterEraseState | null = null
+
+type SculptSessionState = {
+	nodeId: string
+	definition: GroundDynamicMesh
+	heightMap: GroundDynamicMesh['heightMap']
+	dirty: boolean
+}
+
+let sculptSessionState: SculptSessionState | null = null
 
 function createPolygonRingGeometry(points: THREE.Vector2[], innerScale = 0.8): THREE.BufferGeometry {
 	if (!points.length) {
@@ -139,6 +205,7 @@ function tagBrushGeometry(geometry: THREE.BufferGeometry): THREE.BufferGeometry 
 }
 
 export function createGroundEditor(options: GroundEditorOptions) {
+	const assetCacheStore = useAssetCacheStore()
 	const brushMesh = new THREE.Mesh(
 		tagBrushGeometry(createBrushGeometry(options.brushShape.value ?? 'circle')),
 		new THREE.MeshBasicMaterial({
@@ -194,10 +261,149 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	const isSculpting = ref(false)
 
 	let groundSelectionDragState: GroundSelectionDragState | null = null
+	let scatterStore: TerrainScatterStore | null = null
+	let scatterLayer: TerrainScatterLayer | null = null
+	let scatterModelGroup: ModelInstanceGroup | null = null
+	let scatterAssetLoadToken = 0
+	let scatterSnapshotUpdatedAt: number | null = null
 
 	const stopBrushWatch = watch(options.brushShape, (shape) => {
 		updateBrushGeometry(shape ?? 'circle')
 	})
+
+	const stopTabWatch = watch(options.groundPanelTab, (tab) => {
+		if (tab === 'terrain') {
+			cancelScatterPlacement()
+		}
+	})
+
+	const stopScatterSelectionWatch = watch(
+		() => ({ asset: options.scatterAsset.value, category: options.scatterCategory.value }),
+		({ asset, category }) => {
+			cancelScatterPlacement()
+			cancelScatterErase()
+			scatterLayer = null
+			if (!category) {
+				return
+			}
+			if (!asset) {
+				scatterModelGroup = null
+				scatterStore = ensureScatterStoreRef()
+				scatterLayer = findScatterLayerByAsset(null, category)
+				return
+			}
+			void prepareScatterRuntime(asset, category)
+		},
+		{ immediate: true },
+	)
+
+	function ensureScatterStoreRef(): TerrainScatterStore {
+		const snapshot = getGroundTerrainScatterSnapshot()
+		const snapshotUpdatedAt = getScatterSnapshotTimestamp(snapshot)
+		const shouldHydrate = snapshot && (!scatterStore || snapshotUpdatedAt !== scatterSnapshotUpdatedAt)
+		if (shouldHydrate && snapshot) {
+			try {
+				scatterStore = loadTerrainScatterSnapshot(GROUND_NODE_ID, snapshot)
+				scatterSnapshotUpdatedAt = snapshotUpdatedAt
+			} catch (error) {
+				console.warn('载入地面散布快照失败', error)
+				scatterStore = ensureTerrainScatterStore(GROUND_NODE_ID)
+			}
+		}
+		if (!scatterStore) {
+			scatterStore = ensureTerrainScatterStore(GROUND_NODE_ID)
+		}
+		return scatterStore
+	}
+
+	function listScatterLayersForCategory(category: TerrainScatterCategory): TerrainScatterLayer[] {
+		const store = ensureScatterStoreRef()
+		return Array.from(store.layers.values()).filter((layer) => layer.category === category)
+	}
+
+	function findScatterLayerByAsset(assetId: string | null, category: TerrainScatterCategory): TerrainScatterLayer | null {
+		const candidates = listScatterLayersForCategory(category)
+		if (assetId) {
+			return candidates.find((layer) => layer.assetId === assetId) ?? null
+		}
+		return candidates[0] ?? null
+	}
+
+	function ensureScatterLayerForAsset(asset: ProjectAsset, category: TerrainScatterCategory): TerrainScatterLayer {
+		const existing = findScatterLayerByAsset(asset.id, category)
+		if (existing) {
+			return existing
+		}
+		const store = ensureScatterStoreRef()
+		const preset = getScatterPreset(category)
+		const layer = upsertTerrainScatterLayer(store, {
+			assetId: asset.id,
+			label: `${asset.name} ${preset.label}`.trim(),
+			category,
+			profileId: asset.id,
+		})
+		syncTerrainScatterSnapshotToScene(store)
+		return layer
+	}
+
+	async function loadScatterModelGroup(asset: ProjectAsset): Promise<ModelInstanceGroup | null> {
+		let group = getCachedModelObject(asset.id)
+		if (group) {
+			return group
+		}
+		if (!assetCacheStore.hasCache(asset.id)) {
+			console.warn('Scatter asset未缓存，无法加载', asset.id)
+			return null
+		}
+		const file = assetCacheStore.createFileFromCache(asset.id)
+		if (!file) {
+			console.warn('无法读取散布资源文件', asset.id)
+			return null
+		}
+		try {
+			group = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
+		} catch (error) {
+			console.warn('加载散布资源失败', asset.id, error)
+			return null
+		} finally {
+			assetCacheStore.releaseInMemoryBlob(asset.id)
+		}
+		return group
+	}
+
+	async function prepareScatterRuntime(asset: ProjectAsset, category: TerrainScatterCategory): Promise<void> {
+		ensureScatterStoreRef()
+		scatterLayer = ensureScatterLayerForAsset(asset, category)
+		scatterAssetLoadToken += 1
+		const token = scatterAssetLoadToken
+		scatterModelGroup = null
+		const group = await loadScatterModelGroup(asset)
+		if (token !== scatterAssetLoadToken) {
+			return
+		}
+		scatterModelGroup = group
+	}
+
+	function persistScatterInstances(
+		layer: TerrainScatterLayer,
+		instances: TerrainScatterInstance[],
+	): TerrainScatterLayer | null {
+		const store = ensureScatterStoreRef()
+		const result = replaceTerrainScatterInstances(store, layer.id, instances)
+		if (result && scatterLayer && scatterLayer.id === layer.id) {
+			scatterLayer = result
+		}
+		if (result) {
+			syncTerrainScatterSnapshotToScene(store)
+		}
+		return result
+	}
+
+	function generateScatterInstanceId(): string {
+		return `scatter_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
+	}
+
+	// scatter helpers now sourced from terrainScatterRuntime
 
 	function updateBrushGeometry(shape: TerrainBrushShape) {
 		const nextGeometry = tagBrushGeometry(createBrushGeometry(shape))
@@ -273,13 +479,48 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return findGroundNodeInTree(options.sceneStore.nodes)
 	}
 
-	function getGroundNodeFromProps(): SceneNode | null {
-		return findGroundNodeInTree(options.getSceneNodes())
+	function getGroundTerrainScatterSnapshot(): TerrainScatterStoreSnapshot | null {
+		const node = getGroundNodeFromScene()
+		if (node?.dynamicMesh?.type !== 'Ground') {
+			return null
+		}
+		const definition = node.dynamicMesh as GroundDynamicMesh & { terrainScatter?: TerrainScatterStoreSnapshot | null }
+		return definition.terrainScatter ?? null
+	}
+
+	function getScatterSnapshotTimestamp(snapshot: TerrainScatterStoreSnapshot | null | undefined): number | null {
+		if (!snapshot) {
+			return null
+		}
+		const updated = snapshot.metadata?.updatedAt
+		return Number.isFinite(updated) ? Number(updated) : null
+	}
+
+	function syncTerrainScatterSnapshotToScene(storeOverride?: TerrainScatterStore | null): void {
+		const store = storeOverride ?? scatterStore
+		if (!store) {
+			return
+		}
+		const snapshot = serializeTerrainScatterStore(store)
+		const groundNode = getGroundNodeFromScene()
+		if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+			return
+		}
+		const nextMesh: GroundDynamicMesh = {
+			...(groundNode.dynamicMesh as GroundDynamicMesh),
+			terrainScatter: snapshot,
+		}
+		groundNode.dynamicMesh = nextMesh
+		options.sceneStore.updateNodeDynamicMesh(groundNode.id, nextMesh)
+		scatterSnapshotUpdatedAt = getScatterSnapshotTimestamp(snapshot)
 	}
 
 	function getGroundDynamicMeshDefinition(): GroundDynamicMesh | null {
-		const node = getGroundNodeFromScene() ?? getGroundNodeFromProps()
+		const node = getGroundNodeFromScene()
 		if (node?.dynamicMesh?.type === 'Ground') {
+			if (sculptSessionState && sculptSessionState.nodeId === node.id) {
+				return sculptSessionState.definition
+			}
 			return node.dynamicMesh
 		}
 		return null
@@ -301,6 +542,52 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 		})
 		return mesh
+	}
+
+	function cloneHeightMap(heightMap: GroundDynamicMesh['heightMap']): GroundDynamicMesh['heightMap'] {
+		return { ...heightMap }
+	}
+
+	function ensureSculptSession(definition: GroundDynamicMesh, nodeId: string): GroundDynamicMesh {
+		if (sculptSessionState && sculptSessionState.nodeId === nodeId) {
+			return sculptSessionState.definition
+		}
+		const clonedHeightMap = cloneHeightMap(definition.heightMap)
+		const sessionDefinition: GroundDynamicMesh = {
+			...definition,
+			heightMap: clonedHeightMap,
+		}
+		sculptSessionState = {
+			nodeId,
+			definition: sessionDefinition,
+			heightMap: clonedHeightMap,
+			dirty: false,
+		}
+		return sessionDefinition
+	}
+
+	function commitSculptSession(selectedNode: SceneNode | null): boolean {
+		if (!sculptSessionState || !sculptSessionState.dirty) {
+			sculptSessionState = null
+			return false
+		}
+		let targetNode = selectedNode
+		if (!targetNode || targetNode.id !== sculptSessionState.nodeId) {
+			const sceneNode = getGroundNodeFromScene()
+			targetNode = sceneNode && sceneNode.id === sculptSessionState.nodeId ? sceneNode : null
+		}
+		if (!targetNode || targetNode.dynamicMesh?.type !== 'Ground') {
+			sculptSessionState = null
+			return false
+		}
+		const nextDynamicMesh: GroundDynamicMesh = {
+			...(targetNode.dynamicMesh as GroundDynamicMesh),
+			heightMap: sculptSessionState.heightMap,
+		}
+		targetNode.dynamicMesh = nextDynamicMesh
+		options.sceneStore.updateNodeDynamicMesh(targetNode.id, nextDynamicMesh)
+		sculptSessionState = null
+		return true
 	}
 
 	function raycastGroundPoint(event: PointerEvent, result: THREE.Vector3): boolean {
@@ -334,6 +621,331 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const column = THREE.MathUtils.clamp(Math.floor(normalizedColumn), 0, Math.max(0, definition.columns - 1))
 		const row = THREE.MathUtils.clamp(Math.floor(normalizedRow), 0, Math.max(0, definition.rows - 1))
 		return { row, column }
+	}
+
+	function scatterModeEnabled(): boolean {
+		if (options.groundPanelTab.value === 'terrain') {
+			return false
+		}
+		if (!options.scatterAsset.value) {
+			return false
+		}
+		const selectedNode = options.sceneStore.selectedNode
+		return selectedNode?.dynamicMesh?.type === 'Ground'
+	}
+
+	function getScatterPreset(category: TerrainScatterCategory) {
+		return terrainScatterPresets[category] ?? {
+			label: 'Scatter',
+			icon: 'mdi-cube-outline',
+			path: '',
+			spacing: 1.2,
+			minScale: 0.9,
+			maxScale: 1.1,
+		}
+	}
+
+	function isScatterPlacementAvailable(point: THREE.Vector3, spacing: number, session: ScatterSessionState): boolean {
+		const layer = session.layer
+		if (!layer) {
+			return false
+		}
+		const threshold = spacing * spacing
+		const mesh = session.groundMesh
+		mesh.updateMatrixWorld(true)
+		for (const instance of layer.instances) {
+			const position = getScatterInstanceWorldPosition(instance, mesh, scatterInstanceWorldPositionHelper)
+			if (position.distanceToSquared(point) < threshold) {
+				return false
+			}
+		}
+		return true
+	}
+
+	function projectScatterPoint(worldPoint: THREE.Vector3): THREE.Vector3 | null {
+		if (!scatterSession) {
+			return null
+		}
+		const { groundMesh, definition } = scatterSession
+		const localPoint = worldPoint.clone()
+		groundMesh.worldToLocal(localPoint)
+		const height = sampleGroundHeight(definition, localPoint.x, localPoint.z)
+		localPoint.y = height
+		groundMesh.localToWorld(localPoint)
+		return localPoint
+	}
+
+	function applyScatterPlacement(worldPoint: THREE.Vector3): boolean {
+		if (!scatterSession || !scatterSession.layer || !scatterSession.modelGroup) {
+			return false
+		}
+		const projected = projectScatterPoint(worldPoint)
+		if (!projected) {
+			return false
+		}
+		if (!isScatterPlacementAvailable(projected, scatterSession.spacing, scatterSession)) {
+			return false
+		}
+		const localPoint = projected.clone()
+		scatterSession.groundMesh.worldToLocal(localPoint)
+		const scaleFactor = THREE.MathUtils.lerp(scatterSession.minScale, scatterSession.maxScale, Math.random())
+		const rotation = new THREE.Vector3(0, Math.random() * Math.PI * 2, 0)
+		const scale = new THREE.Vector3(scaleFactor, scaleFactor, scaleFactor)
+		const draft: TerrainScatterInstance = {
+			id: generateScatterInstanceId(),
+			assetId: scatterSession.asset.id,
+			layerId: scatterSession.layer.id,
+			profileId: scatterSession.layer.profileId ?? scatterSession.asset.id,
+			seed: Math.floor(Math.random() * Number.MAX_SAFE_INTEGER),
+			localPosition: { x: localPoint.x, y: localPoint.y, z: localPoint.z },
+			localRotation: { x: rotation.x, y: rotation.y, z: rotation.z },
+			localScale: { x: scale.x, y: scale.y, z: scale.z },
+			groundCoords: {
+				x: localPoint.x,
+				z: localPoint.z,
+				height: localPoint.y,
+				normal: null,
+			},
+			binding: null,
+			metadata: null,
+		}
+		const nextLayer = persistScatterInstances(scatterSession.layer, [...scatterSession.layer.instances, draft])
+		if (!nextLayer) {
+			return false
+		}
+		scatterSession.layer = nextLayer
+		const stored = nextLayer.instances.find((entry) => entry.id === draft.id)
+		if (!stored) {
+			return false
+		}
+		const matrix = composeScatterMatrix(stored, scatterSession.groundMesh, scatterWorldMatrixHelper)
+		const bound = bindScatterInstance(stored, matrix, scatterSession.asset.id)
+		if (!bound) {
+			persistScatterInstances(nextLayer, nextLayer.instances.filter((entry) => entry.id !== stored.id))
+			return false
+		}
+		return true
+	}
+
+	function traceScatterPath(targetPoint: THREE.Vector3) {
+		if (!scatterSession) {
+			return
+		}
+		if (!scatterSession.lastPoint) {
+			if (applyScatterPlacement(targetPoint)) {
+				scatterSession.lastPoint = targetPoint.clone()
+			}
+			return
+		}
+		scatterDirectionHelper.copy(targetPoint).sub(scatterSession.lastPoint)
+		const distance = scatterDirectionHelper.length()
+		if (distance < scatterSession.spacing * 0.35) {
+			return
+		}
+		scatterDirectionHelper.normalize()
+		const steps = Math.floor(distance / scatterSession.spacing)
+		for (let index = 1; index <= steps; index += 1) {
+			scatterPlacementHelper
+				.copy(scatterSession.lastPoint)
+				.addScaledVector(scatterDirectionHelper, scatterSession.spacing * index)
+			if (applyScatterPlacement(scatterPlacementHelper)) {
+				scatterSession.lastPoint = scatterPlacementHelper.clone()
+			}
+		}
+		const remainder = distance - steps * scatterSession.spacing
+		if (remainder >= scatterSession.spacing * 0.4) {
+			if (applyScatterPlacement(targetPoint)) {
+				scatterSession.lastPoint = targetPoint.clone()
+			}
+		}
+	}
+
+	function beginScatterPlacement(event: PointerEvent): boolean {
+		if (!scatterModeEnabled() || event.button !== 1 || event.shiftKey) {
+			return false
+		}
+		const asset = options.scatterAsset.value
+		if (!asset) {
+			return false
+		}
+		const definition = getGroundDynamicMeshDefinition()
+		const groundMesh = getGroundMeshObject()
+		if (!definition || !groundMesh) {
+			return false
+		}
+		if (!raycastGroundPoint(event, scatterPointerHelper)) {
+			return false
+		}
+		clampPointToGround(definition, scatterPointerHelper)
+		const category = options.scatterCategory.value
+		const preset = getScatterPreset(category)
+		const layer = ensureScatterLayerForAsset(asset, category)
+		if (!scatterModelGroup) {
+			console.warn('散布资源仍在加载，请稍后重试')
+			return false
+		}
+		scatterSession = {
+			pointerId: event.pointerId,
+			asset,
+			category,
+			definition,
+			groundMesh,
+			spacing: preset.spacing,
+			minScale: preset.minScale,
+			maxScale: preset.maxScale,
+			store: ensureScatterStoreRef(),
+			layer,
+			modelGroup: scatterModelGroup,
+			lastPoint: null,
+		}
+		traceScatterPath(scatterPointerHelper.clone())
+		try {
+			options.canvasRef.value?.setPointerCapture(event.pointerId)
+		} catch (_error) {
+			/* noop */
+		}
+		event.preventDefault()
+		event.stopPropagation()
+		event.stopImmediatePropagation()
+		return true
+	}
+
+	function updateScatterPlacement(event: PointerEvent): boolean {
+		if (!scatterSession || event.pointerId !== scatterSession.pointerId) {
+			return false
+		}
+		if (!raycastGroundPoint(event, scatterPointerHelper)) {
+			return false
+		}
+		clampPointToGround(scatterSession.definition, scatterPointerHelper)
+		traceScatterPath(scatterPointerHelper.clone())
+		event.preventDefault()
+		event.stopPropagation()
+		event.stopImmediatePropagation()
+		return true
+	}
+
+	function finalizeScatterPlacement(event: PointerEvent): boolean {
+		if (!scatterSession || event.pointerId !== scatterSession.pointerId) {
+			return false
+		}
+		if (options.canvasRef.value && options.canvasRef.value.hasPointerCapture(event.pointerId)) {
+			options.canvasRef.value.releasePointerCapture(event.pointerId)
+		}
+		scatterSession = null
+		return true
+	}
+
+	function cancelScatterPlacement(): boolean {
+		if (!scatterSession) {
+			return false
+		}
+		if (options.canvasRef.value && options.canvasRef.value.hasPointerCapture(scatterSession.pointerId)) {
+			options.canvasRef.value.releasePointerCapture(scatterSession.pointerId)
+		}
+		scatterSession = null
+		return true
+	}
+
+	function eraseScatterInstances(worldPoint: THREE.Vector3, radius: number, groundMesh: THREE.Mesh): boolean {
+		const layers = listScatterLayersForCategory(options.scatterCategory.value)
+		if (!layers.length) {
+			return false
+		}
+		const radiusSq = radius * radius
+		let removed = false
+		groundMesh.updateMatrixWorld(true)
+		for (const layer of layers) {
+			if (!layer.instances.length) {
+				continue
+			}
+			const survivors: TerrainScatterInstance[] = []
+			const removedInstances: TerrainScatterInstance[] = []
+			for (const instance of layer.instances) {
+				const position = getScatterInstanceWorldPosition(instance, groundMesh, scatterInstanceWorldPositionHelper)
+				if (position.distanceToSquared(worldPoint) <= radiusSq) {
+					removedInstances.push(instance)
+				} else {
+					survivors.push(instance)
+				}
+			}
+			if (!removedInstances.length) {
+				continue
+			}
+			removed = true
+			removedInstances.forEach((instance) => releaseScatterInstance(instance))
+			persistScatterInstances(layer, survivors)
+		}
+		return removed
+	}
+
+	function beginScatterErase(event: PointerEvent): boolean {
+		if (!scatterModeEnabled() || event.button !== 1 || !event.shiftKey) {
+			return false
+		}
+		const definition = getGroundDynamicMeshDefinition()
+		const groundMesh = getGroundMeshObject()
+		if (!definition || !groundMesh) {
+			return false
+		}
+		if (!raycastGroundPoint(event, scatterPointerHelper)) {
+			return false
+		}
+		clampPointToGround(definition, scatterPointerHelper)
+		eraseScatterInstances(scatterPointerHelper.clone(), options.brushRadius.value, groundMesh)
+		scatterEraseState = {
+			pointerId: event.pointerId,
+			definition,
+			groundMesh,
+			radius: options.brushRadius.value,
+		}
+		try {
+			options.canvasRef.value?.setPointerCapture(event.pointerId)
+		} catch (_error) {
+			/* noop */
+		}
+		event.preventDefault()
+		event.stopPropagation()
+		event.stopImmediatePropagation()
+		return true
+	}
+
+	function updateScatterErase(event: PointerEvent): boolean {
+		if (!scatterEraseState || event.pointerId !== scatterEraseState.pointerId) {
+			return false
+		}
+		if (!raycastGroundPoint(event, scatterPointerHelper)) {
+			return false
+		}
+		clampPointToGround(scatterEraseState.definition, scatterPointerHelper)
+		scatterEraseState.radius = options.brushRadius.value
+		eraseScatterInstances(scatterPointerHelper.clone(), scatterEraseState.radius, scatterEraseState.groundMesh)
+		event.preventDefault()
+		event.stopPropagation()
+		event.stopImmediatePropagation()
+		return true
+	}
+
+	function finalizeScatterErase(event: PointerEvent): boolean {
+		if (!scatterEraseState || event.pointerId !== scatterEraseState.pointerId) {
+			return false
+		}
+		if (options.canvasRef.value && options.canvasRef.value.hasPointerCapture(event.pointerId)) {
+			options.canvasRef.value.releasePointerCapture(event.pointerId)
+		}
+		scatterEraseState = null
+		return true
+	}
+
+	function cancelScatterErase(): boolean {
+		if (!scatterEraseState) {
+			return false
+		}
+		if (options.canvasRef.value && options.canvasRef.value.hasPointerCapture(scatterEraseState.pointerId)) {
+			options.canvasRef.value.releasePointerCapture(scatterEraseState.pointerId)
+		}
+		scatterEraseState = null
+		return true
 	}
 
 	function getGroundVertexHeight(definition: GroundDynamicMesh, row: number, column: number): number {
@@ -540,7 +1152,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			brushMesh.visible = false
 			return
 		}
-		const definition = groundNode.dynamicMesh as GroundDynamicMesh
+		const definition = getGroundDynamicMeshDefinition()
+		if (!definition) {
+			brushMesh.visible = false
+			return
+		}
 
 		const groundObject = getGroundMeshObject()
 		if (!groundObject) {
@@ -568,8 +1184,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		const groundNode = options.sceneStore.selectedNode
 		if (groundNode?.dynamicMesh?.type !== 'Ground') return
+		if (!sculptSessionState || sculptSessionState.nodeId !== groundNode.id) {
+			ensureSculptSession(groundNode.dynamicMesh as GroundDynamicMesh, groundNode.id)
+		}
 
-		const definition = groundNode.dynamicMesh as GroundDynamicMesh
+		const definition = getGroundDynamicMeshDefinition()
+		if (!definition) return
 
 		const groundObject = getGroundMeshObject()
 		if (!groundObject) return
@@ -592,6 +1212,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		})
 
 		if (modified) {
+			if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
+				sculptSessionState.dirty = true
+			}
 			const geometry = (groundObject as THREE.Mesh).geometry
 			updateGroundGeometry(geometry, definition)
 		}
@@ -608,10 +1231,16 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function beginSculpt(event: PointerEvent): boolean {
+		if (options.groundPanelTab.value !== 'terrain') {
+			return false
+		}
 		const groundNode = options.sceneStore.selectedNode
 		if (groundNode?.dynamicMesh?.type !== 'Ground' || event.button !== 1) {
 			return false
 		}
+
+		const definition = groundNode.dynamicMesh as GroundDynamicMesh
+		ensureSculptSession(definition, groundNode.id)
 
 		isSculpting.value = true
 		event.preventDefault()
@@ -644,7 +1273,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (mesh?.geometry) {
 				mesh.geometry.computeVertexNormals()
 			}
-			options.sceneStore.updateNodeDynamicMesh(selectedNode.id, selectedNode.dynamicMesh)
+			commitSculptSession(selectedNode)
+		} else {
+			sculptSessionState = null
 		}
 		return true
 	}
@@ -734,6 +1365,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 
+		if (beginScatterErase(event)) {
+			return true
+		}
+
+		if (beginScatterPlacement(event)) {
+			return true
+		}
+
 		if (beginSculpt(event)) {
 			return true
 		}
@@ -743,7 +1382,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function handlePointerMove(event: PointerEvent): boolean {
 		const selectedNodeIsGround = options.sceneStore.selectedNode?.dynamicMesh?.type === 'Ground'
-		if (selectedNodeIsGround) {
+		if (selectedNodeIsGround && options.groundPanelTab.value === 'terrain') {
 			updateBrush(event)
 			if (isSculpting.value) {
 				performSculpt(event)
@@ -754,6 +1393,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		if (options.isAltOverrideActive()) {
 			return false
+		}
+
+		if (updateScatterErase(event)) {
+			return true
+		}
+
+		if (updateScatterPlacement(event)) {
+			return true
 		}
 
 		if (groundSelectionDragState && event.pointerId === groundSelectionDragState.pointerId) {
@@ -777,6 +1424,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function handlePointerUp(event: PointerEvent): boolean {
+		if (finalizeScatterPlacement(event)) {
+			return true
+		}
+		if (finalizeScatterErase(event)) {
+			return true
+		}
 		if (finalizeSculpt(event)) {
 			return true
 		}
@@ -837,13 +1490,16 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function handlePointerCancel(event: PointerEvent): boolean {
+		if (scatterSession && event.pointerId === scatterSession.pointerId) {
+			cancelScatterPlacement()
+			return true
+		}
+		if (scatterEraseState && event.pointerId === scatterEraseState.pointerId) {
+			cancelScatterErase()
+			return true
+		}
 		if (isSculpting.value) {
-			isSculpting.value = false
-			try {
-				options.canvasRef.value?.releasePointerCapture(event.pointerId)
-			} catch (error) {
-				/* noop */
-			}
+			finalizeSculpt(event)
 		}
 
 		if (groundSelectionDragState && event.pointerId === groundSelectionDragState.pointerId) {
@@ -937,15 +1593,26 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			groundSelectionDragState = null
 			clearGroundSelection()
 			options.restoreOrbitAfterGroundSelection()
+			if (sculptSessionState) {
+				commitSculptSession(options.sceneStore.selectedNode ?? null)
+			}
 		}
 	}
 
 	function dispose() {
 		stopBrushWatch()
+		stopTabWatch()
+		stopScatterSelectionWatch()
+		cancelScatterPlacement()
+		cancelScatterErase()
 		brushMesh.geometry.dispose()
 		const material = brushMesh.material as THREE.Material
 		material.dispose()
 		groundSelectionGroup.clear()
+		sculptSessionState = null
+		scatterStore = null
+		scatterLayer = null
+		scatterSnapshotUpdatedAt = null
 	}
 
 	return {

@@ -16,7 +16,6 @@ import { TransformControls } from '@/utils/transformControls.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js'
-import Pica from 'pica'
 
 import type {
   SceneNode,
@@ -35,12 +34,11 @@ import {
   resetMaterialOverrides,
   type MaterialTextureAssignmentOptions,
 } from '@/types/material'
-import { useSceneStore, getRuntimeObject, buildPackageAssetMapForExport, calculateSceneResourceSummary } from '@/stores/sceneStore'
+import { useSceneStore, getRuntimeObject,registerRuntimeObject} from '@/stores/sceneStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import type { SceneCameraState } from '@/types/scene-camera-state'
-import type { StoredSceneDocument } from '@/types/stored-scene-document'
 
 import type { EditorTool } from '@/types/editor-tool'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -57,8 +55,6 @@ import type { CameraControlMode } from '@harmony/schema'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import { cloneSkyboxSettings } from '@/stores/skyboxPresets'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
-import type { SceneExportOptions } from '@/types/scene-export'
-import { prepareGLBSceneExport, prepareJsonSceneExport } from '@/utils/sceneExport'
 import ViewportToolbar from './ViewportToolbar.vue'
 import TransformToolbar from './TransformToolbar.vue'
 import PlaceholderOverlayList from './PlaceholderOverlayList.vue'
@@ -74,6 +70,7 @@ import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache } from '@sch
 import { useTerrainStore } from '@/stores/terrainStore'
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 import { createSurfaceMesh, updateSurfaceMesh } from '@schema/surfaceMesh'
+import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
 import {
   VIEW_POINT_COMPONENT_TYPE,
@@ -196,7 +193,8 @@ const assetCacheStore = useAssetCacheStore()
 const terrainStore = useTerrainStore()
 
 const { panelVisibility, isSceneReady } = storeToRefs(sceneStore)
-const { brushRadius, brushStrength, brushShape, brushOperation } = storeToRefs(terrainStore)
+const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterCategory, scatterSelectedAsset } =
+  storeToRefs(terrainStore)
 
 const viewportEl = ref<HTMLDivElement | null>(null)
 const surfaceRef = ref<HTMLDivElement | null>(null)
@@ -264,8 +262,6 @@ let stats: Stats | null = null
 let statsPointerHandler: (() => void) | null = null
 let statsPanelIndex = 0
 let stopInstancedMeshSubscription: (() => void) | null = null
-let backgroundRegisteredAssetId: string | null = null
-let environmentMapRegisteredAssetId: string | null = null
 let gridHighlight: THREE.Group | null = null
 let isSunLightSuppressed = false
 let pendingEnvironmentSettings: EnvironmentSettings | null = null
@@ -419,54 +415,24 @@ function refreshEffectRuntimeTickers(): void {
 
 const DYNAMIC_MESH_SIGNATURE_KEY = '__harmonyDynamicMeshSignature'
 
-function stableSerialize(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableSerialize(item)).join(',')}]`
-  }
-  if (value && typeof value === 'object') {
-    const entries = Object.entries(value as Record<string, unknown>)
-      .filter(([, entryValue]) => entryValue !== undefined)
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    const serialized = entries.map(([key, entryValue]) => `${JSON.stringify(key)}:${stableSerialize(entryValue)}`)
-    return `{${serialized.join(',')}}`
-  }
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value.toString() : 'null'
-  }
-  if (typeof value === 'boolean') {
-    return value ? 'true' : 'false'
-  }
-  if (typeof value === 'string') {
-    return JSON.stringify(value)
-  }
-  if (value === null || value === undefined) {
-    return 'null'
-  }
-  return JSON.stringify(value)
-}
-
 function computeGroundDynamicMeshSignature(definition: GroundDynamicMesh): string {
-  return stableSerialize({
-    width: definition.width,
-    depth: definition.depth,
-    rows: definition.rows,
-    columns: definition.columns,
-    cellSize: definition.cellSize,
-    heightMap: definition.heightMap ?? {},
-    textureDataUrl: definition.textureDataUrl ?? null,
-    textureName: definition.textureName ?? null,
+  const serialized = stableSerialize({
+    heightMap: definition.heightMap ?? {}
   })
+  return hashString(serialized)
 }
 
 function computeWallDynamicMeshSignature(definition: WallDynamicMesh): string {
-  return stableSerialize(definition.segments ?? [])
+  const serialized = stableSerialize(definition.segments ?? [])
+  return hashString(serialized)
 }
 
 function computeSurfaceDynamicMeshSignature(definition: SurfaceDynamicMesh): string {
-  return stableSerialize({
+  const serialized = stableSerialize({
     points: definition.points ?? [],
     normal: definition.normal ?? null,
   })
+  return hashString(serialized)
 }
 
 const {
@@ -551,6 +517,9 @@ const groundEditor = createGroundEditor({
   brushStrength,
   brushShape,
   brushOperation,
+  groundPanelTab,
+  scatterCategory,
+  scatterAsset: scatterSelectedAsset,
   activeBuildTool,
   disableOrbitForGroundSelection,
   restoreOrbitAfterGroundSelection,
@@ -642,10 +611,6 @@ type SurfaceBuildSession = {
   points: THREE.Vector3[]
   previewGroup: THREE.Group | null
 }
-
-const THUMBNAIL_MAX_DIMENSION = 256
-const THUMBNAIL_JPEG_QUALITY = 0.85
-const thumbnailResizer = typeof window !== 'undefined' ? Pica() : null
 
 let wallBuildSession: WallBuildSession | null = null
 let wallPreviewNeedsSync = false
@@ -1730,35 +1695,10 @@ function snapVectorToGridForNode(vec: THREE.Vector3, nodeId: string | null | und
 }
 
 export type SceneViewportHandle = {
-  exportScene(options: SceneExportOptions, onProgress: (progress: number, message?: string) => void): Promise<Blob>
-  captureThumbnail(): void
   captureScreenshot(mimeType?: string): Promise<Blob | null>
 }
 
-async function exportScene(options: SceneExportOptions, onProgress: (progress: number, message?: string) => void): Promise<Blob> {
-  if (!scene) {
-    throw new Error('Scene not initialized')
-  }
-  onProgress(10, 'Capturing scene data...')
-  if (options.format === 'glb') {
-    return prepareGLBSceneExport(scene, options)
-  } else if (options.format === 'json') {
-    let snapshot = sceneStore.createSceneDocumentSnapshot() as StoredSceneDocument
-    const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(snapshot, { embedResources: true })
-    snapshot.packageAssetMap = packageAssetMap
-    snapshot.assetIndex = assetIndex
-    snapshot.resourceSummary = await calculateSceneResourceSummary(snapshot, { embedResources: true })
-    onProgress(35, 'Applying export preferences...')
-    const jsonDocument = await prepareJsonSceneExport(snapshot, options)
-
-    return new Blob([JSON.stringify(jsonDocument, null, 2)], { type: 'application/json' })
-  } else {
-    throw new Error(`Unsupported export format: ${options.format}`)
-  }
-}
-
 function applyCameraState(state: SceneCameraState | null | undefined) {
-  console.log('applyCameraState', state)
   if (!state || !orbitControls) return
 
   cameraTransitionState = null
@@ -2372,10 +2312,6 @@ function disposeBackgroundResources() {
     backgroundTexture.dispose()
     backgroundTexture = null
   }
-  if (backgroundRegisteredAssetId) {
-    assetCacheStore.unregisterUsage(backgroundRegisteredAssetId)
-    backgroundRegisteredAssetId = null
-  }
   backgroundAssetId = null
 }
 
@@ -2387,10 +2323,6 @@ function disposeCustomEnvironmentTarget() {
     }
     customEnvironmentTarget.dispose()
     customEnvironmentTarget = null
-  }
-  if (environmentMapRegisteredAssetId) {
-    assetCacheStore.unregisterUsage(environmentMapRegisteredAssetId)
-    environmentMapRegisteredAssetId = null
   }
   environmentMapAssetId = null
 }
@@ -2454,8 +2386,6 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
   disposeBackgroundResources()
   backgroundTexture = texture
   backgroundAssetId = background.hdriAssetId
-  backgroundRegisteredAssetId = background.hdriAssetId
-  assetCacheStore.registerUsage(background.hdriAssetId)
   scene.background = texture
   return true
 }
@@ -2510,8 +2440,6 @@ async function applyEnvironmentMapSettings(mapSettings: EnvironmentSettings['env
   disposeCustomEnvironmentTarget()
   customEnvironmentTarget = target
   environmentMapAssetId = mapSettings.hdriAssetId
-  environmentMapRegisteredAssetId = mapSettings.hdriAssetId
-  assetCacheStore.registerUsage(mapSettings.hdriAssetId)
   scene.environment = target.texture
   scene.environmentIntensity = 1
   return true
@@ -2793,62 +2721,6 @@ function disposeScene() {
   wallPreviewNeedsSync = false
   wallPreviewSignature = null
   pendingSceneGraphSync = false
-}
-
-async function blobToDataUrl(blob: Blob): Promise<string> {
-  return await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '')
-    reader.onerror = () => reject(reader.error ?? new Error('Failed to read blob'))
-    reader.readAsDataURL(blob)
-  })
-}
-
-async function createThumbnailDataUrl(sourceCanvas: HTMLCanvasElement): Promise<string> {
-  if (!thumbnailResizer) {
-    return sourceCanvas.toDataURL('image/jpeg', THUMBNAIL_JPEG_QUALITY)
-  }
-
-  const maxSide = Math.max(sourceCanvas.width, sourceCanvas.height)
-  const scale = maxSide > 0 ? Math.min(1, THUMBNAIL_MAX_DIMENSION / maxSide) : 1
-  let workingCanvas: HTMLCanvasElement = sourceCanvas
-
-  if (scale < 1) {
-    const targetCanvas = document.createElement('canvas')
-    targetCanvas.width = Math.max(1, Math.round(sourceCanvas.width * scale))
-    targetCanvas.height = Math.max(1, Math.round(sourceCanvas.height * scale))
-    await thumbnailResizer.resize(sourceCanvas, targetCanvas, { alpha: false })
-    workingCanvas = targetCanvas
-  }
-
-  const blob = await thumbnailResizer.toBlob(workingCanvas, 'image/jpeg', THUMBNAIL_JPEG_QUALITY)
-  return blobToDataUrl(blob)
-}
-
-function captureThumbnail() {
-  if (!renderer || !sceneStore.currentSceneId) {
-    return
-  }
-
-  const sourceCanvas = renderer.domElement
-  const sceneId = sceneStore.currentSceneId
-
-  if (!sceneId) {
-    return
-  }
-
-  void (async () => {
-    try {
-      const thumbnail = await createThumbnailDataUrl(sourceCanvas)
-      if (sceneStore.currentSceneId === sceneId) {
-        await sceneStore.updateSceneThumbnail(sceneId, thumbnail)
-      }
-    } catch (error) {
-      console.warn('Failed to capture scene thumbnail', error)
-      const fallbackThumbnail = sourceCanvas.toDataURL('image/jpeg', THUMBNAIL_JPEG_QUALITY)
-      void sceneStore.updateSceneThumbnail(sceneId, fallbackThumbnail)
-    }
-  })()
 }
 
 function createGridHighlight() {
@@ -5337,7 +5209,6 @@ async function handleViewportDrop(event: DragEvent) {
 }
 
 function handleTransformChange() {
-  console.warn('Transform change detected')
   if (!transformControls || !isSceneReady.value) return
   const target = transformControls.object as THREE.Object3D | null
   if (!target || !target.userData?.nodeId) {
@@ -6246,6 +6117,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       containerData.dynamicMeshType = node.dynamicMesh?.type ?? null
     }
     object = container
+    registerRuntimeObject(node.id, container)
   } else if (nodeType === 'Camera') {
     const perspective = node.camera
     const perspectiveCamera = new THREE.PerspectiveCamera(
@@ -6267,6 +6139,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     }
     container.userData.nodeId = node.id
     object = container
+    registerRuntimeObject(node.id, container)
   } else if (nodeType === 'Group') {
     let container = getRuntimeObject(node.id)
     if (container !== null) {
@@ -6277,6 +6150,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     }
     container.userData.nodeId = node.id
     object = container
+    registerRuntimeObject(node.id, container)
   } else if (nodeType === 'WarpGate') {
     const runtimeObject = getRuntimeObject(node.id)
     if (runtimeObject) {
@@ -6284,6 +6158,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       object = runtimeObject
     } else {
       object = createWarpGatePlaceholderObject(node)
+      registerRuntimeObject(node.id, object)
     }
   } else if (nodeType === 'Guideboard') {
     const runtimeObject = getRuntimeObject(node.id)
@@ -6292,6 +6167,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       object = runtimeObject
     } else {
       object = createGuideboardPlaceholderObject(node)
+      registerRuntimeObject(node.id, object)
     }
   } else {
     let container = getRuntimeObject(node.id)
@@ -6300,9 +6176,11 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     } else {
       container = createPrimitiveMesh(nodeType)
       container.name = node.name
+      registerRuntimeObject(node.id, container)
     }
     container.userData.nodeId = node.id
     object = container
+
   }
 
   object.position.set(node.position.x, node.position.y, node.position.z)
@@ -6706,8 +6584,6 @@ watch(
 )
 
 defineExpose<SceneViewportHandle>({
-  exportScene,
-  captureThumbnail,
   captureScreenshot
 })
 </script>

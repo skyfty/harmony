@@ -111,7 +111,7 @@ export default class ResourceCache {
               });
             },
           });
-          this.assetLoader.getCache().registerUsage(assetId);
+          this.assetLoader.getCache().touch(assetId);
           return entry;
         } catch (error) {
           console.warn('资源加载失败', assetId, error);

@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { SceneNode } from '@harmony/schema'
+import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { NodePickerOwner } from '@/stores/nodePickerStore'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
@@ -34,7 +35,7 @@ const emit = defineEmits<{
 }>()
 
 const sceneStore = useSceneStore()
-const { nodes } = storeToRefs(sceneStore)
+const { nodes, hierarchyItems } = storeToRefs(sceneStore)
 const nodePickerStore = useNodePickerStore()
 
 const isPicking = ref(false)
@@ -58,13 +59,51 @@ function findNodeName(tree: SceneNode[] | undefined, id: string | null | undefin
   return null
 }
 
+function buildHierarchyNameMap(items: HierarchyTreeItem[] | undefined): Map<string, string> {
+  const map = new Map<string, string>()
+  if (!items?.length) {
+    return map
+  }
+  const stack: HierarchyTreeItem[] = [...items]
+  while (stack.length) {
+    const item = stack.pop()
+    if (!item) {
+      continue
+    }
+    const trimmedName = typeof item.name === 'string' ? item.name.trim() : ''
+    if (trimmedName.length) {
+      map.set(item.id, trimmedName)
+    }
+    if (item.children?.length) {
+      stack.push(...item.children)
+    }
+  }
+  return map
+}
+
+const hierarchyNameMap = computed(() => buildHierarchyNameMap(hierarchyItems.value))
+
+function resolveNodeName(id: string | null | undefined): string | null {
+  if (!id) {
+    return null
+  }
+  const hierarchyName = hierarchyNameMap.value.get(id)
+  if (hierarchyName && hierarchyName.trim().length) {
+    return hierarchyName
+  }
+  return findNodeName(nodes.value, id)
+}
+
 const hasSelection = computed(() => props.modelValue !== null && props.modelValue !== undefined)
 
-const selectedNodeName = computed(() => findNodeName(nodes.value, props.modelValue ?? null))
+const selectedNodeName = computed(() => resolveNodeName(props.modelValue ?? null))
 
 const selectionHintText = computed(() => props.selectionHint?.trim() ?? '')
 
-const placeholderText = computed(() => props.placeholder)
+const placeholderText = computed(() => {
+  const text = props.placeholder?.trim()
+  return text && text.length ? text : '未选择节点'
+})
 const isDisabled = computed(() => props.disabled)
 
 const displayValue = computed(() => selectedNodeName.value ?? props.modelValue ?? null)
@@ -74,12 +113,27 @@ function extractDraggedNodeId(event: DragEvent): string | null {
   if (!transfer) {
     return null
   }
-  const candidateTypes: string[] = ['application/x-harmony-node', 'text/plain']
+  const candidateTypes: string[] = ['application/x-harmony-node', 'application/x-harmony-node-list', 'text/plain']
   for (const type of candidateTypes) {
     const value = transfer.getData(type)
-    if (typeof value === 'string' && value.trim().length) {
-      return value.trim()
+    if (typeof value !== 'string' || !value.trim().length) {
+      continue
     }
+    if (type === 'application/x-harmony-node-list') {
+      try {
+        const parsed = JSON.parse(value)
+        if (Array.isArray(parsed)) {
+          const firstId = parsed.find((entry) => typeof entry === 'string' && entry.trim().length)
+          if (typeof firstId === 'string') {
+            return firstId.trim()
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to parse node drag payload', error)
+      }
+      continue
+    }
+    return value.trim()
   }
   return null
 }
@@ -90,6 +144,9 @@ function canAcceptNodeDrag(event: DragEvent): boolean {
   }
   const types = Array.from(event.dataTransfer.types ?? [])
   if (types.includes('application/x-harmony-node')) {
+    return true
+  }
+  if (types.includes('application/x-harmony-node-list')) {
     return true
   }
   if (types.includes('text/plain')) {
@@ -228,7 +285,7 @@ function handleDrop(event: DragEvent) {
   if (!nodeId) {
     return
   }
-  const nodeExists = Boolean(findNodeName(nodes.value, nodeId))
+  const nodeExists = hierarchyNameMap.value.has(nodeId) || Boolean(findNodeName(nodes.value, nodeId))
   if (!nodeExists) {
     return
   }
@@ -294,7 +351,14 @@ onBeforeUnmount(() => {
       >
         {{ displayValue }}
       </span>
+      <span
+        v-if="hasSelection"
+        class="node-picker__placeholder node-picker__placeholder--suffix"
+      >
+        {{ placeholderText }}
+      </span>
       <span v-else class="node-picker__placeholder">{{ placeholderText }}</span>
+      <span v-if="!hasSelection" class="node-picker__spacer" />
       <v-btn
         class="node-picker__icon-button node-picker__icon-button--clear"
         size="small"
@@ -338,7 +402,7 @@ onBeforeUnmount(() => {
 }
 
 .node-picker__icon-button--clear {
-  margin-left: auto;
+  margin-left: 0.3rem;
 }
 
 .node-picker__value {
@@ -358,6 +422,17 @@ onBeforeUnmount(() => {
 .node-picker__placeholder {
   font-size: 0.9rem;
   color: rgba(233, 236, 241, 0.5);
+}
+
+.node-picker__placeholder--suffix {
+  font-size: 0.85rem;
+  color: rgba(233, 236, 241, 0.35);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.node-picker__spacer {
+  flex: 1 1 auto;
 }
 
 .node-picker__hint {

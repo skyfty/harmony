@@ -1,5 +1,7 @@
 import { AssetTypes, DEFAULT_ASSET_TYPE, isAssetType } from '@harmony/schema/asset-types'
 import type { AssetType } from '@harmony/schema/asset-types'
+import { TerrainScatterCategories } from '@harmony/schema/terrain-scatter'
+import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type {
   AssetCategory as AssetCategoryDto,
   AssetDirectory,
@@ -97,6 +99,7 @@ type AssetData = {
   originalFilename?: string | null
   mimeType?: string | null
   metadata?: Record<string, unknown>
+  terrainScatterPreset?: TerrainScatterCategory | null
   createdAt: Date
   updatedAt: Date
 }
@@ -129,6 +132,7 @@ type AssetMutationPayload = {
   dimensionHeight?: number | null
   imageWidth?: number | null
   imageHeight?: number | null
+  terrainScatterPreset?: TerrainScatterCategory | null
 }
 
 type ProjectDirectoryAsset = {
@@ -147,6 +151,7 @@ type ProjectDirectoryAsset = {
   sizeCategory?: string | null
   imageWidth?: number | null
   imageHeight?: number | null
+  terrainScatterPreset?: TerrainScatterCategory | null
 }
 
 type ProjectDirectory = AssetDirectory<ProjectDirectoryAsset> & {
@@ -342,6 +347,21 @@ function sanitizeNonNegativeInteger(value: unknown): number | null {
   }
   const rounded = Math.round(parsed)
   return rounded >= 0 ? rounded : null
+}
+
+const TERRAIN_SCATTER_PRESET_SET = new Set<TerrainScatterCategory>(TerrainScatterCategories)
+
+function sanitizeTerrainScatterPreset(value: unknown): TerrainScatterCategory | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const normalized = value.trim().toLowerCase()
+  if (!normalized.length) {
+    return null
+  }
+  return TERRAIN_SCATTER_PRESET_SET.has(normalized as TerrainScatterCategory)
+    ? (normalized as TerrainScatterCategory)
+    : null
 }
 
 function determineSizeCategory(
@@ -608,6 +628,7 @@ function mapAssetDocument(asset: AssetSource, categoryLookup?: Map<string, Categ
   const sizeCategory = sanitizeString(asset.sizeCategory)
   const imageWidth = typeof asset.imageWidth === 'number' ? Math.round(asset.imageWidth) : null
   const imageHeight = typeof asset.imageHeight === 'number' ? Math.round(asset.imageHeight) : null
+  const terrainScatterPreset = sanitizeTerrainScatterPreset((asset as AssetDocument).terrainScatterPreset)
 
   const description = sanitizeString(asset.description) ?? null
   const originalFilename = sanitizeString(asset.originalFilename)
@@ -630,6 +651,7 @@ function mapAssetDocument(asset: AssetSource, categoryLookup?: Map<string, Categ
   seriesId,
   seriesName,
   series: seriesPayload,
+  terrainScatterPreset: terrainScatterPreset ?? null,
     color,
     dimensionLength,
     dimensionWidth,
@@ -680,6 +702,7 @@ function mapManifestEntry(asset: AssetSource, categoryLookup?: Map<string, Categ
     seriesId: response.seriesId ?? null,
     seriesName: response.seriesName ?? null,
     series: response.series ?? null,
+    terrainScatterPreset: response.terrainScatterPreset ?? null,
     color: response.color ?? null,
     dimensionLength: response.dimensionLength ?? null,
     dimensionWidth: response.dimensionWidth ?? null,
@@ -912,6 +935,22 @@ function extractMutationPayload(ctx: Context): AssetMutationPayload {
     payload.imageHeight = sanitizeNonNegativeInteger(rawBody.imageHeight)
   }
 
+  if (hasOwn('terrainScatterPreset')) {
+    const preset = sanitizeTerrainScatterPreset(rawBody.terrainScatterPreset)
+    if (preset) {
+      payload.terrainScatterPreset = preset
+    } else if (
+      rawBody.terrainScatterPreset === null ||
+      (typeof rawBody.terrainScatterPreset === 'string' &&
+        (rawBody.terrainScatterPreset.trim().length === 0 ||
+          ['none', 'null', 'unset'].includes(rawBody.terrainScatterPreset.trim().toLowerCase())))
+    ) {
+      payload.terrainScatterPreset = null
+    } else {
+      payload.terrainScatterPreset = null
+    }
+  }
+
   return payload
 }
 
@@ -985,6 +1024,7 @@ function mapDirectory(categories: AssetCategoryData[], assets: AssetData[]): Pro
           sizeCategory: sanitizeString(asset.sizeCategory) ?? null,
           imageWidth: typeof asset.imageWidth === 'number' ? Math.round(asset.imageWidth) : null,
           imageHeight: typeof asset.imageHeight === 'number' ? Math.round(asset.imageHeight) : null,
+          terrainScatterPreset: sanitizeTerrainScatterPreset(asset.terrainScatterPreset) ?? null,
         }
       })
 
@@ -1329,6 +1369,7 @@ export async function uploadAsset(ctx: Context): Promise<void> {
   const imageWidth = payload.imageWidth ?? null
   const imageHeight = payload.imageHeight ?? null
   const color = payload.color ?? null
+  const terrainScatterPreset = payload.terrainScatterPreset ?? null
 
   const asset = await AssetModel.create({
     name: payload.name ?? fileInfo.originalFilename ?? fileInfo.fileKey,
@@ -1351,6 +1392,7 @@ export async function uploadAsset(ctx: Context): Promise<void> {
     description: payload.description ?? null,
     originalFilename: fileInfo.originalFilename,
     mimeType: fileInfo.mimeType,
+    terrainScatterPreset,
   })
 
   const populated = (await asset.populate([
@@ -1390,6 +1432,9 @@ export async function updateAsset(ctx: Context): Promise<void> {
   }
   if (payload.color !== undefined) {
     updates.color = payload.color ?? null
+  }
+  if (payload.terrainScatterPreset !== undefined) {
+    updates.terrainScatterPreset = payload.terrainScatterPreset ?? null
   }
   if (payload.tagIds) {
     const tagIds = payload.tagIds.filter((tagId) => Types.ObjectId.isValid(tagId))

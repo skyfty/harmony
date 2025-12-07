@@ -8,6 +8,7 @@ export type RigidbodyBodyType = 'DYNAMIC' | 'STATIC' | 'KINEMATIC'
 export interface RigidbodyComponentProps {
   mass: number
   bodyType: RigidbodyBodyType
+  targetNodeId: string | null
 }
 
 export type RigidbodyVector3Tuple = [number, number, number]
@@ -22,6 +23,14 @@ export type RigidbodyPhysicsShape =
       kind: 'convex'
       vertices: RigidbodyVector3Tuple[]
       faces: number[][]
+      offset?: RigidbodyVector3Tuple
+    }
+  | {
+      kind: 'heightfield'
+      matrix: number[][]
+      elementSize: number
+      width: number
+      depth: number
       offset?: RigidbodyVector3Tuple
     }
 
@@ -45,9 +54,17 @@ export function clampRigidbodyComponentProps(
   const normalizedType: RigidbodyBodyType = props?.bodyType === 'STATIC' || props?.bodyType === 'KINEMATIC'
     ? props.bodyType
     : DEFAULT_RIGIDBODY_BODY_TYPE
+  let normalizedTargetNodeId: string | null = null
+  if (typeof props?.targetNodeId === 'string') {
+    const trimmed = props.targetNodeId.trim()
+    normalizedTargetNodeId = trimmed.length ? trimmed : null
+  } else if (props?.targetNodeId === null) {
+    normalizedTargetNodeId = null
+  }
   return {
     mass: normalizedMass,
     bodyType: normalizedType,
+    targetNodeId: normalizedTargetNodeId,
   }
 }
 
@@ -55,6 +72,7 @@ export function cloneRigidbodyComponentProps(props: RigidbodyComponentProps): Ri
   return {
     mass: props.mass,
     bodyType: props.bodyType,
+    targetNodeId: props.targetNodeId ?? null,
   }
 }
 
@@ -77,8 +95,10 @@ const rigidbodyComponentDefinition: ComponentDefinition<RigidbodyComponentProps>
     }
     return true
   },
-  createDefaultProps(_node: SceneNode) {
-    return clampRigidbodyComponentProps(null)
+  createDefaultProps(node: SceneNode) {
+    return clampRigidbodyComponentProps({
+      targetNodeId: node.id ?? null,
+    })
   },
   createInstance(context) {
     return new RigidbodyComponent(context)

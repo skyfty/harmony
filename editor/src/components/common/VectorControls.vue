@@ -15,7 +15,7 @@
       :disabled="props.disabled"
       :readonly="props.readonly || props.disabled"
       inputmode="decimal"
-      @change="onChange(axis, $event)"
+      @update:modelValue="(value) => onInput(axis, value)"
     />
   </div>
 </template>
@@ -39,11 +39,11 @@ const emit = defineEmits<{
 
 const axes: VectorAxis[] = ['x', 'y', 'z']
 
-function onChange(axis: VectorAxis, event: Event) {
+function onInput(axis: VectorAxis, value: string | number) {
   if (props.disabled || props.readonly) {
     return
   }
-  emit('update:axis', axis, (event.target as HTMLInputElement).value)
+  emit('update:axis', axis, typeof value === 'number' ? value.toString() : value)
 }
 
 function formatValue(value: VectorValue): string {

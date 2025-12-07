@@ -12,6 +12,7 @@ import {
   MIN_RIGIDBODY_MASS,
   MAX_RIGIDBODY_MASS,
 } from '@schema/components'
+import NodePicker from '@/components/common/NodePicker.vue'
 
 const BODY_TYPE_OPTIONS: Array<{ label: string; value: RigidbodyBodyType }> = [
   { label: 'Dynamic', value: 'DYNAMIC' },
@@ -35,6 +36,7 @@ const normalizedProps = computed(() => {
 
 const localMass = ref(DEFAULT_RIGIDBODY_MASS)
 const localBodyType = ref<RigidbodyBodyType>('DYNAMIC')
+const isMassLocked = computed(() => LOCKED_BODY_TYPES.has(localBodyType.value))
 
 watch(
   () => normalizedProps.value,

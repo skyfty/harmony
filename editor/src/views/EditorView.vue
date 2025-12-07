@@ -702,6 +702,16 @@ function resolvePublishName(fallbackFileName: string): string {
   return sanitized || 'scene'
 }
 
+async function exportScene(options: SceneExportOptions): Promise<Blob> {
+  let snapshot = sceneStore.createSceneDocumentSnapshot() as StoredSceneDocument
+  const { packageAssetMap, assetIndex } = await buildPackageAssetMapForExport(snapshot, { embedResources: true })
+  snapshot.packageAssetMap = packageAssetMap
+  snapshot.assetIndex = assetIndex
+  snapshot.resourceSummary = await calculateSceneResourceSummary(snapshot, { embedResources: true })
+  const jsonDocument = await prepareJsonSceneExport(snapshot, options)
+  return new Blob([JSON.stringify(jsonDocument, null, 2)], { type: 'application/json' })
+}
+
 async function runSceneExportWorkflow(options: SceneExportOptions, config: SceneExportWorkflowConfig): Promise<boolean> {
   if (isExporting.value) {
     return false
@@ -714,19 +724,17 @@ async function runSceneExportWorkflow(options: SceneExportOptions, config: Scene
     return false
   }
 
-  if (options.format === 'json') {
-    const summary = await refreshExportSummary(true)
-    const sizeLabel = summary ? formatByteSize(summary.totalBytes) : null
-    const confirmMessage = summary
-      ? `导出该场景需要打包约 ${sizeLabel} 的资源，是否继续？`
-      : '暂时无法计算资源总大小，仍要继续导出吗？'
-    const proceed = typeof window !== 'undefined' ? window.confirm(confirmMessage) : true
-    if (!proceed) {
-      exportProgress.value = 0
-      exportProgressMessage.value = ''
-      exportErrorMessage.value = null
-      return false
-    }
+  const summary = await refreshExportSummary(true)
+  const sizeLabel = summary ? formatByteSize(summary.totalBytes) : null
+  const confirmMessage = summary
+    ? `导出该场景需要打包约 ${sizeLabel} 的资源，是否继续？`
+    : '暂时无法计算资源总大小，仍要继续导出吗？'
+  const proceed = typeof window !== 'undefined' ? window.confirm(confirmMessage) : true
+  if (!proceed) {
+    exportProgress.value = 0
+    exportProgressMessage.value = ''
+    exportErrorMessage.value = null
+    return false
   }
 
   isExporting.value = true
@@ -748,10 +756,8 @@ async function runSceneExportWorkflow(options: SceneExportOptions, config: Scene
   }
 
   try {
-    const blob = await viewport.exportScene(options, (progress, message) => {
-      const label = message ?? `${config.action === 'publish' ? 'Publish' : 'Export'} progress ${Math.round(progress)}%`
-      updateProgress(progress, label)
-    })
+    updateProgress(10, `${config.action === 'publish' ? 'Publish' : 'Export'}ing scene`)
+    const blob = await exportScene(options)
     await config.afterExport({ blob, fileName, updateProgress })
     updateProgress(100, config.successMessage)
     workflowSucceeded = true
@@ -894,7 +900,6 @@ async function saveCurrentScene(): Promise<boolean> {
 
   pendingSceneSave = (async () => {
     try {
-      viewportRef.value?.captureThumbnail()
       const document = await sceneStore.saveActiveScene({force: true})
       if (document) {
         const {packageAssetMap, assetIndex} = await buildPackageAssetMapForExport(document,{embedResources:true})
@@ -998,6 +1003,47 @@ async function handleAction(action: string) {
     }
     case 'Deselect All': {
       sceneStore.clearSelection()
+      break
+    }
+    case 'CleanUnusedAssets': {
+      const confirmMessage = '清理未使用的资产将移除当前场景中未被引用的资源，并且该操作无法撤销。是否继续？'
+      const proceed = typeof window !== 'undefined' ? window.confirm(confirmMessage) : true
+      if (!proceed) {
+        break
+      }
+
+      uiStore.showLoadingOverlay({
+        title: '清理未使用资产',
+        message: '正在扫描场景引用…',
+        mode: 'indeterminate',
+        closable: false,
+        autoClose: false,
+      })
+
+      try {
+        const { removedAssetIds } = await sceneStore.cleanUnusedAssets()
+        const message = removedAssetIds.length
+          ? `清理完成，已移除 ${removedAssetIds.length} 个资产。`
+          : '没有找到可以移除的资产。'
+        uiStore.updateLoadingOverlay({
+          mode: 'determinate',
+          progress: 100,
+          message,
+          autoClose: true,
+          autoCloseDelay: 1200,
+          closable: true,
+        })
+      } catch (error) {
+        console.error('Failed to clean unused assets', error)
+        uiStore.updateLoadingOverlay({
+          mode: 'determinate',
+          progress: 100,
+          message: '清理未使用资产失败，请稍后再试。',
+          autoClose: true,
+          autoCloseDelay: 1600,
+          closable: true,
+        })
+      }
       break
     }
     case 'Export':
@@ -1516,6 +1562,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('scroll', handleMaterialDetailsRelayout, true)
   window.removeEventListener('resize', handleBehaviorDetailsRelayout)
   window.removeEventListener('scroll', handleBehaviorDetailsRelayout, true)
+  window.removeEventListener('resize', handleVehicleWheelDetailsRelayout)
+  window.removeEventListener('scroll', handleVehicleWheelDetailsRelayout, true)
 })
 
 

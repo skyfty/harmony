@@ -31,6 +31,7 @@ import {
   type RigidbodyPhysicsShape,
   RIGIDBODY_METADATA_KEY,
 } from '@schema/components'
+import { isGroundDynamicMesh } from '@schema/groundHeightfield'
 
 type RemovedSceneObject = {
     parent: THREE.Object3D
@@ -410,8 +411,6 @@ async function sanitizeSceneDocumentForJsonExport(
     outlineMeshMap = await generateOutlineMeshesForCandidates(outlineCandidates, options)
   }
 
-  await applyRigidbodyMetadata(rigidbodyCandidates)
-
   const sanitizedDocument: SceneJsonExportDocument = {
     ...document,
     materials: sanitizedMaterials,
@@ -623,68 +622,6 @@ async function generateOutlineMeshesForCandidates(
   return outlineMeshMap
 }
 
-async function applyRigidbodyMetadata(candidates: RigidbodyExportCandidate[]): Promise<void> {
-  if (!candidates.length) {
-    return
-  }
-  const assetCacheStore = useAssetCacheStore()
-  for (const entry of candidates) {
-    const samplingObject = await buildRigidbodySamplingObject(entry.node, assetCacheStore)
-    if (!samplingObject) {
-      continue
-    }
-    const outline = buildOutlineMeshFromObject(samplingObject)
-    let shape: RigidbodyPhysicsShape | null = null
-    if (outline) {
-      shape = buildConvexShapeFromOutline(outline)
-    }
-    if (!shape) {
-      shape = buildBoxShapeFromObject(samplingObject)
-    }
-    if (!shape) {
-      continue
-    }
-    entry.component.metadata = mergeRigidbodyMetadata(entry.component.metadata, shape)
-  }
-}
-
-function mergeRigidbodyMetadata(
-  existing: Record<string, unknown> | undefined,
-  shape: RigidbodyPhysicsShape,
-): Record<string, unknown> {
-  const nextMetadata: Record<string, unknown> = existing ? { ...existing } : {}
-  const payload: RigidbodyComponentMetadata = {
-    shape,
-    generatedAt: new Date().toISOString(),
-  }
-  nextMetadata[RIGIDBODY_METADATA_KEY] = payload
-  return nextMetadata
-}
-
-async function buildRigidbodySamplingObject(
-  node: SceneNode,
-  assetCacheStore: ReturnType<typeof useAssetCacheStore>,
-): Promise<THREE.Object3D | null> {
-  let sourceObject: THREE.Object3D | null = null
-  if (node.sourceAssetId) {
-    sourceObject = await loadAssetObjectForNode(node, assetCacheStore)
-  } else if (node.dynamicMesh?.type) {
-    sourceObject = buildDynamicMeshObject(node)
-  } else {
-    sourceObject = buildPrimitiveObject(node)
-  }
-
-  if (!sourceObject) {
-    return null
-  }
-
-  const root = new THREE.Group()
-  root.name = `RigidbodySample:${node.id}`
-  root.add(sourceObject)
-  applyScaleToObject(root, node)
-  root.updateMatrixWorld(true)
-  return root
-}
 
 async function loadAssetObjectForNode(
   node: SceneNode,

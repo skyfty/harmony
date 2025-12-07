@@ -1,4 +1,5 @@
 import type { AssetType } from './asset-types'
+import type { TerrainScatterCategory } from './terrain-scatter'
 
 export interface AssetTagSummary {
   id: string
@@ -50,6 +51,7 @@ export interface AssetSummary {
   seriesId?: string | null
   seriesName?: string | null
   series?: AssetSeries | null
+  terrainScatterPreset?: TerrainScatterCategory | null
   color?: string | null
   dimensionLength?: number | null
   dimensionWidth?: number | null
@@ -82,6 +84,7 @@ export interface AssetManifestEntry {
   seriesId?: string | null
   seriesName?: string | null
   series?: AssetSeries | null
+  terrainScatterPreset?: TerrainScatterCategory | null
   color?: string | null
   dimensionLength?: number | null
   dimensionWidth?: number | null

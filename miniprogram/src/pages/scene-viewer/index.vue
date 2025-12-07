@@ -172,7 +172,7 @@
 </template>
 
 <script setup lang="ts">
-import { effectScope, watchEffect, ref, computed, onUnmounted, watch, reactive, nextTick, type ComponentPublicInstance } from 'vue';
+import { effectScope, watchEffect, ref, computed, onUnmounted, watch, reactive, nextTick, getCurrentInstance, type ComponentPublicInstance } from 'vue';
 import { onLoad, onUnload, onReady } from '@dcloudio/uni-app';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -186,6 +186,7 @@ import { parseSceneDocument, useSceneStore } from '@/stores/sceneStore';
 import { buildSceneGraph, type SceneGraphBuildOptions, type SceneGraphResourceProgress } from '@schema/sceneGraph';
 import ResourceCache from '@schema/ResourceCache';
 import { AssetCache, AssetLoader, type AssetCacheEntry } from '@schema/assetCache';
+import { isGroundDynamicMesh } from '@schema/groundHeightfield';
 import { loadNodeObject } from '@schema/modelAssetLoader';
 import {
   getCachedModelObject,
@@ -209,7 +210,10 @@ import {
   type SceneJsonExportDocument,
   type LanternSlideDefinition,
   type SceneMaterialTextureRef,
+  type GroundDynamicMesh,
+  type Vector3Like,
 } from '@harmony/schema';
+import type { TerrainScatterStoreSnapshot, TerrainScatterInstance } from '@harmony/schema/terrain-scatter';
 import { ComponentManager } from '@schema/components/componentManager';
 import {
   behaviorComponentDefinition,
@@ -252,6 +256,7 @@ import {
   disposeMaterialOverrides,
   type MaterialTextureAssignmentOptions,
 } from '@schema/material';
+
 type ResolvedAssetUrl = { url: string; mimeType?: string | null; dispose?: () => void }
 
 interface ScenePreviewPayload {
@@ -671,10 +676,14 @@ const instancedMatrixHelper = new THREE.Matrix4();
 const instancedPositionHelper = new THREE.Vector3();
 const instancedQuaternionHelper = new THREE.Quaternion();
 const instancedScaleHelper = new THREE.Vector3();
-const instancedBoundsBox = new THREE.Box3();
-const instancedBoundsMin = new THREE.Vector3();
-const instancedBoundsMax = new THREE.Vector3();
 const nodeObjectMap = new Map<string, THREE.Object3D>();
+const scatterInstanceNodeIds = new Set<string>();
+const scatterLocalPositionHelper = new THREE.Vector3();
+const scatterLocalRotationHelper = new THREE.Euler();
+const scatterLocalScaleHelper = new THREE.Vector3();
+const scatterQuaternionHelper = new THREE.Quaternion();
+const scatterInstanceMatrixHelper = new THREE.Matrix4();
+const scatterMatrixHelper = new THREE.Matrix4();
 
 const behaviorRaycaster = new THREE.Raycaster();
 const behaviorPointer = new THREE.Vector2();
@@ -704,6 +713,11 @@ function runWithProgrammaticCameraMutation<T>(callback: () => T): T {
 
 function isProgrammaticCameraMutationActive(): boolean {
   return programmaticCameraMutationDepth > 0;
+}
+
+// Placeholder to satisfy controller dependency; first-person state persistence is editor-only.
+function syncLastFirstPersonStateFromCamera(): void {
+  // no-op for miniprogram
 }
 
 let wheelListenerCleanup: (() => void) | null = null;
@@ -785,6 +799,8 @@ const purposeControlsVisible = ref(false);
 const purposeTargetNodeId = ref<string | null>(null);
 const purposeSourceNodeId = ref<string | null>(null);
 const purposeActiveMode = ref<'watch' | 'level'>('level');
+
+const pageInstance = getCurrentInstance();
 type CameraViewMode = 'level' | 'watching';
 const cameraViewState = reactive<{ mode: CameraViewMode; targetNodeId: string | null }>({
   mode: 'level',
@@ -2076,6 +2092,145 @@ function clearInstancedMeshes(): void {
   });
 }
 
+function buildScatterNodeId(layerId: string | null | undefined, instanceId: string): string {
+  const normalizedLayer = typeof layerId === 'string' && layerId.trim().length ? layerId.trim() : 'layer';
+  return `scatter:${normalizedLayer}:${instanceId}`;
+}
+
+function composeScatterMatrix(
+  instance: TerrainScatterInstance,
+  groundMesh: THREE.Mesh,
+  target?: THREE.Matrix4,
+): THREE.Matrix4 {
+  groundMesh.updateMatrixWorld(true);
+  scatterLocalPositionHelper.set(
+    instance.localPosition?.x ?? 0,
+    instance.localPosition?.y ?? 0,
+    instance.localPosition?.z ?? 0,
+  );
+  scatterLocalRotationHelper.set(
+    instance.localRotation?.x ?? 0,
+    instance.localRotation?.y ?? 0,
+    instance.localRotation?.z ?? 0,
+    'XYZ',
+  );
+  scatterQuaternionHelper.setFromEuler(scatterLocalRotationHelper);
+  scatterLocalScaleHelper.set(
+    instance.localScale?.x ?? 1,
+    instance.localScale?.y ?? 1,
+    instance.localScale?.z ?? 1,
+  );
+  scatterInstanceMatrixHelper.compose(scatterLocalPositionHelper, scatterQuaternionHelper, scatterLocalScaleHelper);
+  const output = target ?? new THREE.Matrix4();
+  return output.copy(groundMesh.matrixWorld).multiply(scatterInstanceMatrixHelper);
+}
+
+type GroundScatterEntry = {
+  nodeId: string;
+  snapshot: TerrainScatterStoreSnapshot;
+};
+
+function collectGroundScatterEntries(nodes: SceneNode[] | null | undefined): GroundScatterEntry[] {
+  if (!Array.isArray(nodes) || !nodes.length) {
+    return [];
+  }
+  const stack: SceneNode[] = [...nodes];
+  const entries: GroundScatterEntry[] = [];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    if (node.dynamicMesh?.type === 'Ground') {
+      const definition = node.dynamicMesh as GroundDynamicMesh & {
+        terrainScatter?: TerrainScatterStoreSnapshot | null;
+      };
+      const snapshot = definition.terrainScatter;
+      if (snapshot && Array.isArray(snapshot.layers) && snapshot.layers.length) {
+        entries.push({ nodeId: node.id, snapshot });
+      }
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  return entries;
+}
+
+function resolveGroundMeshObject(nodeId: string): THREE.Mesh | null {
+  const container = nodeObjectMap.get(nodeId);
+  if (!container) {
+    return null;
+  }
+  const directMesh = container as THREE.Mesh;
+  if (directMesh.isMesh) {
+    return directMesh;
+  }
+  let found: THREE.Mesh | null = null;
+  container.traverse((child) => {
+    if (found) {
+      return;
+    }
+    const mesh = child as THREE.Mesh;
+    if (mesh?.isMesh) {
+      found = mesh;
+    }
+  });
+  return found;
+}
+
+function releaseTerrainScatterInstances(): void {
+  if (!scatterInstanceNodeIds.size) {
+    return;
+  }
+  scatterInstanceNodeIds.forEach((nodeId) => releaseModelInstance(nodeId));
+  scatterInstanceNodeIds.clear();
+}
+
+async function syncTerrainScatterInstances(
+  document: SceneJsonExportDocument,
+  resourceCache: ResourceCache | null,
+): Promise<void> {
+  releaseTerrainScatterInstances();
+  if (!resourceCache) {
+    return;
+  }
+  const entries = collectGroundScatterEntries(document.nodes);
+  if (!entries.length) {
+    return;
+  }
+  for (const entry of entries) {
+    const groundMesh = resolveGroundMeshObject(entry.nodeId);
+    if (!groundMesh) {
+      continue;
+    }
+    for (const layer of entry.snapshot.layers ?? []) {
+      const layerAssetId = typeof layer?.assetId === 'string' ? layer.assetId.trim() : '';
+      const profileAssetId = typeof layer?.profileId === 'string' ? layer.profileId.trim() : '';
+      const assetId = layerAssetId || profileAssetId;
+      if (!assetId) {
+        continue;
+      }
+      const group = await ensureModelInstanceGroup(assetId, null, resourceCache);
+      if (!group || !group.meshes.length) {
+        continue;
+      }
+      ensureInstancedMeshesRegistered(assetId);
+      const instances = Array.isArray(layer.instances) ? (layer.instances as TerrainScatterInstance[]) : [];
+      for (const instance of instances) {
+        const nodeId = buildScatterNodeId(layer?.id ?? null, instance.id);
+        const binding = allocateModelInstance(assetId, nodeId);
+        if (!binding) {
+          continue;
+        }
+        const matrix = composeScatterMatrix(instance, groundMesh, scatterMatrixHelper);
+        updateModelInstanceMatrix(nodeId, matrix);
+        scatterInstanceNodeIds.add(nodeId);
+      }
+    }
+  }
+}
+
 function resolveGuideboardComponent(
   node: SceneNode | null | undefined,
 ): SceneNodeComponentState<GuideboardComponentProps> | null {
@@ -2110,10 +2265,6 @@ function attachRuntimeForNode(nodeId: string, object: THREE.Object3D) {
 }
 
 function indexSceneObjects(root: THREE.Object3D) {
-  nodeObjectMap.forEach((_object, nodeId) => {
-    releaseModelInstance(nodeId);
-  });
-  nodeObjectMap.clear();
   root.traverse((object) => {
     const nodeId = object.userData?.nodeId as string | undefined;
     if (nodeId) {
@@ -2594,11 +2745,30 @@ function processBehaviorEvents(events: BehaviorRuntimeEvent[] | BehaviorRuntimeE
   list.forEach((entry) => handleBehaviorRuntimeEvent(entry));
 }
 
+const uiBehaviorTokenResolvers = new Map<string, (resolution: BehaviorEventResolution) => void>();
+let uiBehaviorTokenCounter = 0;
+
+function waitForBehaviorToken(token: string): Promise<BehaviorEventResolution> {
+  return new Promise((resolve) => {
+    uiBehaviorTokenResolvers.set(token, resolve);
+  });
+}
+
+function createUiBehaviorToken(): string {
+  uiBehaviorTokenCounter += 1;
+  return `ui-token-${Date.now().toString(16)}-${uiBehaviorTokenCounter.toString(16)}`;
+}
+
 function resolveBehaviorToken(token: string, resolution: BehaviorEventResolution): void {
   clearDelayTimer(token);
   stopBehaviorAnimation(token);
   const followUps = resolveBehaviorEvent(token, resolution);
   processBehaviorEvents(followUps);
+  const resolver = uiBehaviorTokenResolvers.get(token);
+  if (resolver) {
+    uiBehaviorTokenResolvers.delete(token);
+    resolver(resolution);
+  }
 }
 
 function clearDelayTimer(token: string): void {
@@ -2687,6 +2857,14 @@ function resolveNodeFocusPoint(nodeId: string | null | undefined): THREE.Vector3
     return tempVector.clone();
   }
   return tempSphere.center.clone();
+}
+
+function normalizeNodeId(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
 }
 
 function withControlsVerticalFreedom<T>(controls: OrbitControls, callback: () => T): T {
@@ -2804,7 +2982,6 @@ function syncBehaviorProximityCandidate(nodeId: string): void {
 }
 
 function refreshBehaviorProximityCandidates(): void {
-  resetBehaviorProximity();
   previewNodeMap.forEach((_node, nodeId) => {
     syncBehaviorProximityCandidate(nodeId);
   });
@@ -3096,39 +3273,7 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
   } else {
     tempQuaternion.identity();
   }
-  // const desiredDistance = ownerObject
-  //   ? Math.max(DEFAULT_OBJECT_RADIUS, computeObjectBoundingRadius(ownerObject))
-  //   : DEFAULT_OBJECT_RADIUS;
   const destination = focusPoint.clone();
-  // let usedTargetOrientation = false;
-  // if (ownerObject) {
-  //   ownerObject.getWorldDirection(tempVector);
-  //   tempVector.y = 0;
-  //   if (tempVector.lengthSq() < 1e-6) {
-  //     tempVector.set(0, 0, -1);
-  //     tempVector.applyQuaternion(tempQuaternion);
-  //     tempVector.y = 0;
-  //   }
-  //   if (tempVector.lengthSq() >= 1e-6) {
-  //     tempVector.normalize().multiplyScalar(desiredDistance);
-  //     destination.sub(tempVector);
-  //     usedTargetOrientation = true;
-  //   }
-  // }
-  // if (!usedTargetOrientation) {
-  //   tempVector.copy(camera.position).sub(focusPoint);
-  //   tempVector.y = 0;
-  //   if (tempVector.lengthSq() < 1e-6 && ownerObject) {
-  //     tempVector.set(0, 0, -1);
-  //     tempVector.applyQuaternion(tempQuaternion);
-  //     tempVector.y = 0;
-  //   }
-  //   if (tempVector.lengthSq() < 1e-6) {
-  //     tempVector.set(0, 0, 1);
-  //   }
-  //   tempVector.normalize().multiplyScalar(desiredDistance);
-  //   destination.add(tempVector);
-  // }
   destination.y = HUMAN_EYE_HEIGHT;
   const lookTarget = new THREE.Vector3(focusPoint.x, HUMAN_EYE_HEIGHT, focusPoint.z);
 
@@ -3141,7 +3286,6 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
       withControlsVerticalFreedom(controls, () => {
         camera.position.lerpVectors(startPosition, destination, alpha);
         controls.target.lerpVectors(startTarget, lookTarget, alpha);
-        camera.lookAt(controls.target);
         controls.update();
       });
     });
@@ -3151,8 +3295,6 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
     runWithProgrammaticCameraMutation(() => {
       withControlsVerticalFreedom(controls, () => {
         camera.position.copy(destination);
-        controls.target.copy(lookTarget);
-        camera.lookAt(controls.target);
         controls.update();
       });
     });
@@ -4459,6 +4601,7 @@ function teardownRenderer() {
     return;
   }
   const { renderer, scene, controls } = renderContext;
+  releaseTerrainScatterInstances();
   if (canvasResult?.canvas && handleBehaviorClick) {
     canvasResult.canvas.removeEventListener('touchend', handleBehaviorClick);
         handleBehaviorClick = null;
@@ -4555,15 +4698,6 @@ async function ensureRendererContext(result: UseCanvasResult) {
   controls.enableDamping = true;
   controls.dampingFactor = 0.1;
   controls.target.set(0, HUMAN_EYE_HEIGHT, -CAMERA_FORWARD_OFFSET);
-  controls.enableZoom = false;
-  controls.enablePan = false;
-  controls.screenSpacePanning = false;
-  controls.minAzimuthAngle = -Infinity;
-  controls.maxAzimuthAngle = Infinity;
-  controls.minPolarAngle = CAMERA_HORIZONTAL_POLAR_ANGLE;
-  controls.maxPolarAngle = CAMERA_HORIZONTAL_POLAR_ANGLE;
-  controls.minDistance = CAMERA_FORWARD_OFFSET;
-  controls.maxDistance = CAMERA_FORWARD_OFFSET;
   controls.enabled = !isCameraCaged.value;
 
   controls.addEventListener('start', () => {
@@ -4605,7 +4739,6 @@ async function ensureRendererContext(result: UseCanvasResult) {
   scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY;
 
   scene.add(instancedMeshGroup);
-  clearInstancedMeshes();
   stopInstancedMeshSubscription?.();
   stopInstancedMeshSubscription = subscribeInstancedMeshes((mesh) => {
     attachInstancedMesh(mesh);
@@ -4627,7 +4760,6 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   activeCameraWatchTween = null;
   const { canvas } = result;
   currentDocument = payload.document;
-  resetAssetResolutionCaches();
   const environmentSettings = resolveDocumentEnvironment(payload.document);
   if (behaviorAlertToken.value) {
     resolveBehaviorToken(behaviorAlertToken.value, {
@@ -4635,37 +4767,11 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
       message: '场景重新初始化',
     });
   }
-  if (lanternEventToken.value) {
-    closeLanternOverlay({ type: 'abort', message: '场景重新初始化' });
-  } else {
-    resetLanternOverlay();
-  }
-  hidePurposeControls();
-  disposeEnvironmentResources();
-  pendingEnvironmentSettings = cloneEnvironmentSettingsLocal(environmentSettings);
-  nodeObjectMap.forEach((_object, nodeId) => {
-    releaseModelInstance(nodeId);
-  });
-  nodeObjectMap.clear();
-  clearInstancedMeshes();
-  scene.children.forEach((child) => disposeObject(child));
-  disposeMaterialTextureCache();
-  scene.clear();
-  scene.add(instancedMeshGroup);
-  clearInstancedMeshes();
-  sceneGraphRoot = null;
-  deferredInstancingNodeIds.clear();
-  lazyPlaceholderStates.clear();
-  activeLazyLoadCount = 0;
-  sunDirectionalLight = null;
-  warnings.value = [];
-
   const ambientLight = ensureEnvironmentAmbientLight();
   if (ambientLight) {
     ambientLight.color.set(DEFAULT_ENVIRONMENT_AMBIENT_COLOR);
     ambientLight.intensity = DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY;
   }
-
   applySunDirectionToSunLight();
 
   const hemisphericLight = new THREE.HemisphereLight('#d4d8ff', '#f5f2ef', 0.3);
@@ -4754,9 +4860,6 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   }
   sceneGraphRoot = graph.root;
   scene.add(graph.root);
-
-  resetBehaviorRuntime();
-  previewComponentManager.reset();
   rebuildPreviewNodeMap(payload.document.nodes);
   previewComponentManager.syncScene(payload.document.nodes ?? []);
   indexSceneObjects(graph.root);
@@ -4765,6 +4868,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   ensureBehaviorTapHandler(canvas as HTMLCanvasElement, camera);
   initializeLazyPlaceholders(payload.document);
 
+  await syncTerrainScatterInstances(payload.document, resourceCache);
 
   const skyboxSettings = resolveSceneSkybox(payload.document);
   applySkyboxSettings(skyboxSettings);

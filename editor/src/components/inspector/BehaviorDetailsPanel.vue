@@ -25,6 +25,10 @@ import HideParams from '@/components/inspector/behavior/HideParams.vue'
 import LanternParams from '@/components/inspector/behavior/LanternParams.vue'
 import TriggerParams from '@/components/inspector/behavior/TriggerParams.vue'
 import AnimationParams from '@/components/inspector/behavior/AnimationParams.vue'
+import DriveParams from '@/components/inspector/behavior/DriveParams.vue'
+import DebusParams from '@/components/inspector/behavior/DebusParams.vue'
+import ShowCockpitParams from '@/components/inspector/behavior/ShowCockpitParams.vue'
+import HideCockpitParams from '@/components/inspector/behavior/HideCockpitParams.vue'
 
 type PanelMode = 'create' | 'edit'
 type DragSource = 'palette' | 'sequence' | null
@@ -88,6 +92,10 @@ const PARAMETER_COMPONENTS: Partial<Record<BehaviorScriptType, unknown>> = {
   lantern: LanternParams,
   trigger: TriggerParams,
   animation: AnimationParams,
+  showCockpit: ShowCockpitParams,
+  hideCockpit: HideCockpitParams,
+  drive: DriveParams,
+  debus: DebusParams,
 }
 
 function isBehaviorAssetDrag(event: DragEvent): boolean {

@@ -4,7 +4,7 @@ import  {type WallDynamicMesh } from '@harmony/schema'
 const DEFAULT_COLOR = 0xcfd2d6
 
 function disposeObject3D(object: THREE.Object3D) {
-  object.traverse((child) => {
+  object.traverse((child: THREE.Object3D) => {
     const mesh = child as THREE.Mesh
     if (mesh.isMesh) {
       const geometry = mesh.geometry
@@ -13,7 +13,7 @@ function disposeObject3D(object: THREE.Object3D) {
       }
       const material = mesh.material
       if (Array.isArray(material)) {
-        material.forEach((entry) => entry.dispose())
+        material.forEach((entry: THREE.Material) => entry.dispose())
       } else if (material) {
         material.dispose()
       }

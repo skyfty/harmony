@@ -13,7 +13,6 @@ export interface SceneState {
   currentSceneId: string | null
   currentSceneMeta: {
     name: string
-    thumbnail: string | null
     createdAt: string
     updatedAt: string
   } | null

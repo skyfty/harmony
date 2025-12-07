@@ -14,10 +14,13 @@ import {
 	type LanternSlideDefinition,
 	type SceneJsonExportDocument,
 	type SceneNode,
+	type GroundDynamicMesh,
 	type SceneNodeComponentState,
 	type SceneMaterialTextureRef,
 	type SceneSkyboxSettings,
+	type Vector3Like,
 } from '@harmony/schema'
+import type { TerrainScatterStoreSnapshot, TerrainScatterInstance } from '@harmony/schema/terrain-scatter'
 import {
 	applyMaterialOverrides,
 	disposeMaterialOverrides,
@@ -30,6 +33,10 @@ import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph
 import ResourceCache from '@schema/ResourceCache'
 import { AssetLoader, AssetCache } from '@schema/assetCache'
 import type { AssetCacheEntry } from '@schema/assetCache'
+import {
+	buildHeightfieldShapeFromGroundNode,
+	isGroundDynamicMesh,
+} from '@schema/groundHeightfield'
 import { loadNodeObject } from '@schema/modelAssetLoader'
 import {
 	getCachedModelObject,
@@ -87,6 +94,7 @@ import {
 import { PROXIMITY_EXIT_PADDING, DEFAULT_OBJECT_RADIUS, PROXIMITY_MIN_DISTANCE, PROXIMITY_RADIUS_SCALE } from '@schema/behaviors/runtime'
 import type Viewer from 'viewerjs'
 import type { ViewerOptions } from 'viewerjs'
+import { buildScatterNodeId, composeScatterMatrix } from '@/utils/terrainScatterRuntime'
 
 type ControlMode = 'first-person' | 'third-person'
 
@@ -537,9 +545,11 @@ const physicsPositionHelper = new THREE.Vector3()
 const physicsQuaternionHelper = new THREE.Quaternion()
 const physicsScaleHelper = new THREE.Vector3()
 const nodeObjectMap = new Map<string, THREE.Object3D>()
-type RigidbodyInstance = { nodeId: string; body: CANNON.Body; object: THREE.Object3D | null }
+const scatterInstanceNodeIds = new Set<string>()
+const scatterMatrixHelper = new THREE.Matrix4()
 let physicsWorld: CANNON.World | null = null
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
+const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>()
 const physicsGravity = new CANNON.Vec3(0, -9.82, 0)
 const PHYSICS_FIXED_TIMESTEP = 1 / 60
 const PHYSICS_MAX_SUB_STEPS = 5
@@ -705,6 +715,14 @@ function normalizeAssetId(value: unknown): string | null {
 	return trimmed.length ? trimmed : null
 }
 
+function normalizeNodeId(value: unknown): string | null {
+	if (typeof value !== 'string') {
+		return null
+	}
+	const trimmed = value.trim()
+	return trimmed.length ? trimmed : null
+}
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -848,6 +866,113 @@ async function prepareInstancedNodesForDocument(
 		})())
 	})
 	await Promise.all(tasks)
+}
+
+type GroundScatterEntry = {
+	nodeId: string
+	snapshot: TerrainScatterStoreSnapshot
+}
+
+function collectGroundScatterEntries(nodes: SceneNode[] | null | undefined): GroundScatterEntry[] {
+	if (!Array.isArray(nodes) || !nodes.length) {
+		return []
+	}
+	const stack: SceneNode[] = [...nodes]
+	const entries: GroundScatterEntry[] = []
+	while (stack.length) {
+		const node = stack.pop()
+		if (!node) {
+			continue
+		}
+		if (node.dynamicMesh?.type === 'Ground') {
+			const definition = node.dynamicMesh as GroundDynamicMesh & {
+				terrainScatter?: TerrainScatterStoreSnapshot | null
+			}
+			const snapshot = definition.terrainScatter
+			if (snapshot && Array.isArray(snapshot.layers) && snapshot.layers.length) {
+				entries.push({ nodeId: node.id, snapshot })
+			}
+		}
+		if (Array.isArray(node.children) && node.children.length) {
+			stack.push(...node.children)
+		}
+	}
+	return entries
+}
+
+function resolveGroundMeshObject(nodeId: string): THREE.Mesh | null {
+	const container = nodeObjectMap.get(nodeId)
+	if (!container) {
+		return null
+	}
+	const directMesh = container as THREE.Mesh
+	if (directMesh.isMesh) {
+		return directMesh
+	}
+	let found: THREE.Mesh | null = null
+	container.traverse((child) => {
+		if (found) {
+			return
+		}
+		const mesh = child as THREE.Mesh
+		if (mesh?.isMesh) {
+			found = mesh
+		}
+	})
+	return found
+}
+
+function releaseTerrainScatterInstances(): void {
+	if (!scatterInstanceNodeIds.size) {
+		return
+	}
+	scatterInstanceNodeIds.forEach((nodeId) => releaseModelInstance(nodeId))
+	scatterInstanceNodeIds.clear()
+}
+
+async function syncTerrainScatterInstances(
+	document: SceneJsonExportDocument,
+	resourceCache: ResourceCache | null,
+): Promise<void> {
+	releaseTerrainScatterInstances()
+	if (!resourceCache) {
+		return
+	}
+	const entries = collectGroundScatterEntries(document.nodes)
+	if (!entries.length) {
+		return
+	}
+	for (const entry of entries) {
+		const groundMesh = resolveGroundMeshObject(entry.nodeId)
+		if (!groundMesh) {
+			continue
+		}
+		groundMesh.updateMatrixWorld(true)
+		for (const layer of entry.snapshot.layers ?? []) {
+			const layerAssetId = typeof layer?.assetId === 'string' ? layer.assetId.trim() : ''
+			const profileAssetId = typeof layer?.profileId === 'string' ? layer.profileId.trim() : ''
+			const assetId = layerAssetId || profileAssetId
+			if (!assetId) {
+				continue
+			}
+			const group = await ensureModelInstanceGroup(assetId, null, resourceCache)
+			if (!group || !group.meshes.length) {
+				continue
+			}
+			ensureInstancedMeshesRegistered(assetId)
+			const instances = Array.isArray(layer.instances) ? (layer.instances as TerrainScatterInstance[]) : []
+			for (const instance of instances) {
+				const nodeId = buildScatterNodeId(layer?.id ?? null, instance.id)
+				const binding = allocateModelInstance(assetId, nodeId)
+				if (!binding) {
+					continue
+				}
+				const matrix = composeScatterMatrix(instance, groundMesh, scatterMatrixHelper)
+				updateModelInstanceMatrix(nodeId, matrix)
+				scatterInstanceNodeIds.add(nodeId)
+			}
+		}
+	}
 }
 
 function attachInstancedMesh(mesh: THREE.InstancedMesh) {
@@ -2548,11 +2673,6 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 		case 'sequence-complete':
 			clearBehaviorAlert()
 			resetLanternOverlay()
-			if (event.status === 'failure' || event.status === 'aborted') {
-				console.warn('[ScenePreview] Behavior sequence ended', event)
-			} else {
-				console.info('[ScenePreview] Behavior sequence completed', event)
-			}
 			break
 		case 'sequence-error':
 			clearBehaviorAlert()
@@ -3046,14 +3166,6 @@ function handleKeyDown(event: KeyboardEvent) {
 			event.preventDefault()
 			captureScreenshot()
 			break
-		case 'KeyC':
-			if (controlMode.value === 'first-person') {
-				event.preventDefault()
-				toggleFirstPersonMouseControl()
-				// When toggling with C, reset to a level view for a consistent starting orientation
-				resetCameraToLevelView()
-			}
-			break
 		default:
 			break
 	}
@@ -3136,6 +3248,7 @@ function stopAnimationLoop() {
 }
 
 function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
+	releaseTerrainScatterInstances()
 	nodeObjectMap.forEach((_object, nodeId) => {
 		releaseModelInstance(nodeId)
 	})
@@ -3820,6 +3933,7 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 		return
 	}
 	object.updateMatrixWorld(true)
+				removeVehicleInstance(nodeId)
 	object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
 	const isVisible = object.visible !== false
 	if (!isVisible) {
@@ -3829,218 +3943,7 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 	updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
 }
 
-function ensurePhysicsWorld(): CANNON.World {
-	if (physicsWorld) {
-		return physicsWorld
-	}
-	const world = new CANNON.World()
-	world.gravity.copy(physicsGravity)
-	physicsWorld = world
-	return world
-}
 
-function resetPhysicsWorld(): void {
-	if (physicsWorld) {
-		rigidbodyInstances.forEach(({ body }) => {
-			try {
-				physicsWorld?.removeBody(body)
-			} catch (error) {
-				console.warn('[ScenePreview] Failed to remove rigidbody', error)
-			}
-		})
-	}
-	rigidbodyInstances.clear()
-	physicsWorld = null
-}
-
-function createCannonShape(definition: RigidbodyPhysicsShape): CANNON.Shape | null {
-	if (definition.kind === 'box') {
-		const [x, y, z] = definition.halfExtents
-		if (![x, y, z].every((value) => typeof value === 'number' && Number.isFinite(value) && value > 0)) {
-			return null
-		}
-		return new CANNON.Box(new CANNON.Vec3(x, y, z))
-	}
-	if (definition.kind === 'convex') {
-		const vertices = (definition.vertices ?? []).map(([vx, vy, vz]) => new CANNON.Vec3(vx, vy, vz))
-		const faces = (definition.faces ?? []).map((face) => face.slice())
-		if (!vertices.length || !faces.length) {
-			return null
-		}
-		return new CANNON.ConvexPolyhedron({ vertices, faces })
-	}
-	return null
-}
-
-function mapBodyType(type: RigidbodyComponentProps['bodyType']): CANNON.Body['type'] {
-	switch (type) {
-		case 'STATIC':
-			return CANNON.Body.STATIC
-		case 'KINEMATIC':
-			return CANNON.Body.KINEMATIC
-		case 'DYNAMIC':
-	default:
-			return CANNON.Body.DYNAMIC
-	}
-}
-
-function syncBodyFromObject(body: CANNON.Body, object: THREE.Object3D): void {
-	object.updateMatrixWorld(true)
-	object.matrixWorld.decompose(physicsPositionHelper, physicsQuaternionHelper, physicsScaleHelper)
-	body.position.set(physicsPositionHelper.x, physicsPositionHelper.y, physicsPositionHelper.z)
-	body.quaternion.set(
-		physicsQuaternionHelper.x,
-		physicsQuaternionHelper.y,
-		physicsQuaternionHelper.z,
-		physicsQuaternionHelper.w,
-	)
-	body.velocity.set(0, 0, 0)
-	body.angularVelocity.set(0, 0, 0)
-}
-
-function syncObjectFromBody(entry: RigidbodyInstance): void {
-	const { object, body } = entry
-	if (!object) {
-		return
-	}
-	object.position.set(body.position.x, body.position.y, body.position.z)
-	object.quaternion.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w)
-	object.updateMatrixWorld()
-	syncInstancedTransform(object)
-}
-
-function createRigidbodyBody(
-	component: SceneNodeComponentState<RigidbodyComponentProps>,
-	shapeDefinition: RigidbodyPhysicsShape,
-	object: THREE.Object3D,
-): CANNON.Body | null {
-	const shape = createCannonShape(shapeDefinition)
-	if (!shape) {
-		return null
-	}
-	const props = component.props as RigidbodyComponentProps
-	const isDynamic = props.bodyType === 'DYNAMIC'
-	const mass = isDynamic ? Math.max(0, props.mass ?? 0) : 0
-	const body = new CANNON.Body({ mass })
-	body.type = mapBodyType(props.bodyType)
-	if (shapeDefinition.offset) {
-		const [ox, oy, oz] = shapeDefinition.offset
-		body.addShape(shape, new CANNON.Vec3(ox ?? 0, oy ?? 0, oz ?? 0))
-	} else {
-		body.addShape(shape)
-	}
-	syncBodyFromObject(body, object)
-	body.updateMassProperties()
-	body.linearDamping = 0.04
-	body.angularDamping = 0.04
-	return body
-}
-
-function removeRigidbodyInstance(nodeId: string): void {
-	const entry = rigidbodyInstances.get(nodeId)
-	if (!entry) {
-		return
-	}
-	try {
-		physicsWorld?.removeBody(entry.body)
-	} catch (error) {
-		console.warn('[ScenePreview] Failed to remove rigidbody instance', error)
-	}
-	rigidbodyInstances.delete(nodeId)
-}
-
-function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D): void {
-	if (!physicsWorld || !currentDocument) {
-		return
-	}
-	const node = resolveNodeById(nodeId)
-	const component = resolveRigidbodyComponent(node)
-	const shapeDefinition = extractRigidbodyShape(component)
-	if (!node || !component || !shapeDefinition) {
-		return
-	}
-	const existing = rigidbodyInstances.get(nodeId)
-	if (existing) {
-		existing.object = object
-		syncBodyFromObject(existing.body, object)
-		return
-	}
-	const body = createRigidbodyBody(component, shapeDefinition, object)
-	if (!body) {
-		return
-	}
-	physicsWorld.addBody(body)
-	rigidbodyInstances.set(nodeId, { nodeId, body, object })
-}
-
-function collectRigidbodyNodes(nodes: SceneNode[] | undefined | null): SceneNode[] {
-	const collected: SceneNode[] = []
-	if (!Array.isArray(nodes)) {
-		return collected
-	}
-	const stack: SceneNode[] = [...nodes]
-	while (stack.length) {
-		const node = stack.pop()
-		if (!node) {
-			continue
-		}
-		if (resolveRigidbodyComponent(node)) {
-			collected.push(node)
-		}
-		if (Array.isArray(node.children) && node.children.length) {
-			stack.push(...node.children)
-		}
-	}
-	return collected
-}
-
-function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null): void {
-	if (!document) {
-		resetPhysicsWorld()
-		return
-	}
-	const rigidbodyNodes = collectRigidbodyNodes(document.nodes)
-	if (!rigidbodyNodes.length) {
-		resetPhysicsWorld()
-		return
-	}
-	const world = ensurePhysicsWorld()
-	const desiredIds = new Set<string>()
-	rigidbodyNodes.forEach((node) => {
-		desiredIds.add(node.id)
-		const component = resolveRigidbodyComponent(node)
-		const shapeDefinition = extractRigidbodyShape(component)
-		const object = nodeObjectMap.get(node.id) ?? null
-		if (!component || !shapeDefinition || !object) {
-			return
-		}
-		const existing = rigidbodyInstances.get(node.id)
-		if (existing) {
-			world.removeBody(existing.body)
-			rigidbodyInstances.delete(node.id)
-		}
-		const body = createRigidbodyBody(component, shapeDefinition, object)
-		if (!body) {
-			return
-		}
-		world.addBody(body)
-		rigidbodyInstances.set(node.id, { nodeId: node.id, body, object })
-	})
-	rigidbodyInstances.forEach((entry, nodeId) => {
-		if (!desiredIds.has(nodeId)) {
-			world.removeBody(entry.body)
-			rigidbodyInstances.delete(nodeId)
-		}
-	})
-}
-
-function stepPhysicsWorld(delta: number): void {
-	if (!physicsWorld || !rigidbodyInstances.size) {
-		return
-	}
-	physicsWorld.step(PHYSICS_FIXED_TIMESTEP, delta, PHYSICS_MAX_SUB_STEPS)
-	rigidbodyInstances.forEach((entry) => syncObjectFromBody(entry))
-}
 
 function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
 	if (node.position) {
@@ -4493,6 +4396,7 @@ function refreshAnimations() {
 
 async function updateScene(document: SceneJsonExportDocument) {
 	resetAssetResolutionCaches()
+	releaseTerrainScatterInstances()
 	refreshResourceAssetInfo(document)
 	const skyboxSettings = resolveDocumentSkybox(document)
 	applySkyboxSettings(skyboxSettings)
@@ -4601,6 +4505,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 			registerSubtree(child, pendingObjects)
 		}
 		currentDocument = document
+		await syncTerrainScatterInstances(document, resourceCache)
 		refreshAnimations()
 		initializeLazyPlaceholders(document)
 		syncPhysicsBodiesForDocument(document)
@@ -4618,6 +4523,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	}
 
 	syncPhysicsBodiesForDocument(document)
+	await syncTerrainScatterInstances(document, resourceCache)
 
 	currentDocument = document
 	refreshAnimations()

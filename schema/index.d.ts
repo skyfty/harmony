@@ -10,6 +10,8 @@ export type { AssetCacheEntry, AssetCacheStatus, AssetSource, AssetLoadOptions }
 
 export type { AssetType } from './asset-types'
 export { AssetTypes, DEFAULT_ASSET_TYPE, isAssetType, normalizeAssetType } from './asset-types'
+export { TerrainScatterCategories } from './terrain-scatter'
+export type { TerrainScatterCategory } from './terrain-scatter'
 export type {
   AssetCategory,
   AssetCategoryPathItem,
@@ -232,6 +234,10 @@ export type BehaviorScriptType =
   | 'look'
   | 'trigger'
   | 'animation'
+  | 'showCockpit'
+  | 'hideCockpit'
+  | 'drive'
+  | 'debus'
 
 export interface DelayBehaviorParams {
   /** Duration to wait before continuing, measured in seconds. */
@@ -304,6 +310,25 @@ export interface TriggerBehaviorParams {
   sequenceId: string | null
 }
 
+export interface ShowCockpitBehaviorParams {
+  // no configuration required
+}
+
+export interface HideCockpitBehaviorParams {
+  // no configuration required
+}
+
+export interface DriveBehaviorParams {
+  /** Vehicle node controlled by this behavior. Defaults to the behavior owner node. */
+  targetNodeId: string | null
+  /** Optional node used to attach the camera or player to the vehicle seat. */
+  seatNodeId?: string | null
+}
+
+export interface DebusBehaviorParams {
+  // no configuration required
+}
+
 export type LanternSlideLayout = 'imageTop' | 'imageLeft' | 'imageRight'
 
 export interface LanternSlideDefinition {
@@ -371,6 +396,22 @@ export type SceneBehaviorScriptBinding =
   | {
       type: 'animation'
       params: AnimationBehaviorParams
+    }
+  | {
+      type: 'showCockpit'
+      params: ShowCockpitBehaviorParams
+    }
+  | {
+      type: 'hideCockpit'
+      params: HideCockpitBehaviorParams
+    }
+  | {
+      type: 'drive'
+      params: DriveBehaviorParams
+    }
+  | {
+      type: 'debus'
+      params: DebusBehaviorParams
     }
 
 export interface SceneBehavior {
@@ -609,6 +650,7 @@ export interface GroundDynamicMesh {
   textureName?: string | null
   generation?: GroundGenerationSettings | null
   hasManualEdits?: boolean
+  terrainScatter?: TerrainScatterStoreSnapshot | null
 }
 
 export type WallSegment = {

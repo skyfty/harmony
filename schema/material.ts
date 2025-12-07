@@ -13,6 +13,7 @@ import type {
   SceneResourceSummaryEntry,
 } from '@harmony/schema';
 import type ResourceCache from './ResourceCache';
+import { hashString, stableSerialize } from './stableSerialize';
 
 export interface SceneMaterialFactoryOptions {
   provider: ResourceCache;
@@ -574,9 +575,9 @@ export class SceneMaterialFactory {
         const texture = await new Promise<THREE.Texture>((resolve, reject) => {
           hdrLoader.load(
             asset.blobUrl ?? asset.downloadUrl ?? '',
-            (loaded) => resolve(loaded as THREE.Texture),
+            (loaded: unknown) => resolve(loaded as THREE.Texture),
             undefined,
-            (error) => reject(error instanceof Error ? error : new Error(String(error))),
+            (error: unknown) => reject(error instanceof Error ? error : new Error(String(error))),
           );
         });
         return texture;
@@ -584,9 +585,9 @@ export class SceneMaterialFactory {
       const texture = await new Promise<THREE.Texture>((resolve, reject) => {
         this.textureLoader.load(
           asset.blobUrl ?? asset.downloadUrl ?? '',
-          (loaded) => resolve(loaded),
+          (loaded: THREE.Texture) => resolve(loaded),
           undefined,
-          (error) => reject(error instanceof Error ? error : new Error(String(error))),
+          (error: unknown) => reject(error instanceof Error ? error : new Error(String(error))),
         );
       });
       return texture;
@@ -609,7 +610,9 @@ export function ensureMeshMaterialsUnique(mesh: THREE.Mesh): void {
   }
 
   if (Array.isArray(mesh.material)) {
-    mesh.material = mesh.material.map((material) => (material ? material.clone() : material));
+    mesh.material = mesh.material.map((material: THREE.Material | null) =>
+      material ? material.clone() : new THREE.MeshBasicMaterial(),
+    );
   } else if (mesh.material) {
     mesh.material = mesh.material.clone();
   }
@@ -973,7 +976,7 @@ export function applyMaterialOverrides(
 
   const overrideSignature = materialConfigsSignature(configs);
 
-  target.traverse((child) => {
+  target.traverse((child: THREE.Object3D) => {
     const mesh = child as THREE.Mesh & { isMesh?: boolean };
     if (!mesh?.isMesh) {
       return;
@@ -1043,7 +1046,7 @@ export function applyMaterialOverrides(
 }
 
 export function resetMaterialOverrides(target: THREE.Object3D): void {
-  target.traverse((child) => {
+  target.traverse((child: THREE.Object3D) => {
     const mesh = child as THREE.Mesh & { isMesh?: boolean };
     if (!mesh?.isMesh) {
       return;
@@ -1058,7 +1061,7 @@ export function resetMaterialOverrides(target: THREE.Object3D): void {
     }
 
     const materials = Array.isArray(currentMaterial) ? currentMaterial : [currentMaterial];
-    materials.forEach((material) => {
+    materials.forEach((material: THREE.Material) => {
       restoreMaterialFromBaseline(material);
     });
     if (mesh.userData && MATERIAL_OVERRIDE_STATE_KEY in mesh.userData) {
@@ -1128,37 +1131,12 @@ function resolveWrapMode(mode: string): THREE.Wrapping {
   }
 }
 
-function stableSerializeValue(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableSerializeValue(entry)).join(',')}]`;
-  }
-  if (value && typeof value === 'object') {
-    const entries = Object.entries(value as Record<string, unknown>)
-      .filter(([, entryValue]) => entryValue !== undefined)
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-    const serialized = entries.map(([key, entryValue]) => `${JSON.stringify(key)}:${stableSerializeValue(entryValue)}`);
-    return `{${serialized.join(',')}}`;
-  }
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value.toString() : 'null';
-  }
-  if (typeof value === 'boolean') {
-    return value ? 'true' : 'false';
-  }
-  if (typeof value === 'string') {
-    return JSON.stringify(value);
-  }
-  if (value === null || value === undefined) {
-    return 'null';
-  }
-  return JSON.stringify(value);
-}
-
 function materialConfigsSignature(configs: SceneNodeMaterial[]): string {
   if (!configs.length) {
     return '';
   }
-  return configs.map((config) => stableSerializeValue(config)).join('||');
+  const serialized = stableSerialize(configs);
+  return hashString(serialized);
 }
 
 function collectMaterialUUIDs(material: THREE.Material | THREE.Material[]): string[] {

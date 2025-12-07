@@ -124,6 +124,19 @@ function groundVertexKey(row: number, column: number): string {
   return `${row}:${column}`
 }
 
+function setHeightMapValue(map: GroundHeightMap, key: string, value: number): void {
+  // Keep the height map sparse by skipping zero-height entries.
+  let rounded = Math.round(value * 100) / 100
+  if (Object.is(rounded, -0)) {
+    rounded = 0
+  }
+  if (rounded === 0) {
+    delete map[key]
+    return
+  }
+  map[key] = rounded
+}
+
 function clampVertexIndex(value: number, max: number): number {
   if (!Number.isFinite(value)) {
     return 0
@@ -168,6 +181,29 @@ export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: 
   const localColumn = clampVertexIndex(Math.round((x + halfWidth) / definition.cellSize), columns)
   const localRow = clampVertexIndex(Math.round((z + halfDepth) / definition.cellSize), rows)
   return getVertexHeight(definition, localRow, localColumn)
+}
+
+export function sampleGroundNormal(
+  definition: GroundDynamicMesh,
+  x: number,
+  z: number,
+  target?: THREE.Vector3,
+): THREE.Vector3 {
+  const result = target ?? new THREE.Vector3()
+  const delta = Math.max(0.01, definition.cellSize * 0.5)
+  const heightL = sampleGroundHeight(definition, x - delta, z)
+  const heightR = sampleGroundHeight(definition, x + delta, z)
+  const heightF = sampleGroundHeight(definition, x, z + delta)
+  const heightB = sampleGroundHeight(definition, x, z - delta)
+  const dx = heightL - heightR
+  const dz = heightB - heightF
+  result.set(dx, delta * 2, dz)
+  if (result.lengthSq() === 0) {
+    result.set(0, 1, 0)
+  } else {
+    result.normalize()
+  }
+  return result
 }
 
 function buildGroundGeometry(definition: GroundDynamicMesh): THREE.BufferGeometry {
@@ -282,11 +318,6 @@ export function applyGroundGeneration(
   const strength = normalized.noiseStrength ?? 1
 
   if (normalized.mode === 'flat' || normalized.noiseAmplitude === 0 || strength === 0) {
-    for (let row = 0; row <= rows; row += 1) {
-      for (let column = 0; column <= columns; column += 1) {
-        heightMap[groundVertexKey(row, column)] = 0
-      }
-    }
     definition.heightMap = heightMap
     definition.generation = normalized
     return normalized
@@ -331,6 +362,7 @@ export function applyGroundGeneration(
     const z = -halfDepth + row * cellSize
     for (let column = 0; column <= columns; column += 1) {
       const x = -halfWidth + column * cellSize
+      const key = groundVertexKey(row, column)
       let height = sampleBaseValue(x, z) * normalized.noiseAmplitude
       if (useDetail && detailNoise) {
         height += detailNoise(x / detailScale, z / detailScale, 0.5) * detailAmplitude
@@ -343,7 +375,7 @@ export function applyGroundGeneration(
         const falloff = Math.pow(1 - Math.min(1, edge), normalized.edgeFalloff)
         height *= falloff
       }
-      heightMap[groundVertexKey(row, column)] = height
+      setHeightMapValue(heightMap, key, height)
     }
   }
 
@@ -380,6 +412,7 @@ export function sculptGround(definition: GroundDynamicMesh, params: SculptParams
   const maxRow = Math.ceil((localZ + radius + halfDepth) / cellSize)
 
   let modified = false
+  let heightMap = definition.heightMap
 
   for (let row = Math.max(0, minRow); row <= Math.min(rows, maxRow); row++) {
       for (let col = Math.max(0, minCol); col <= Math.min(columns, maxCol); col++) {
@@ -425,35 +458,36 @@ export function sculptGround(definition: GroundDynamicMesh, params: SculptParams
               }
           }
 
-            if (isInside) {
-              let influence = Math.cos((dist / radius) * (Math.PI / 2))
-              const noiseVal = sculptNoise(x * 0.05, z * 0.05, 0)
-              influence *= 1.0 + noiseVal * 0.1
+          if (isInside) {
+            let influence = Math.cos((dist / radius) * (Math.PI / 2))
+            const noiseVal = sculptNoise(x * 0.05, z * 0.05, 0)
+            influence *= 1.0 + noiseVal * 0.1
 
-              const key = groundVertexKey(row, col)
-              const currentHeight = definition.heightMap[key] ?? 0
-              let nextHeight = currentHeight
+            const key = groundVertexKey(row, col)
+            const currentHeight = heightMap[key] ?? 0
+            let nextHeight = currentHeight
 
-              if (operation === 'smooth') {
-                const average = sampleNeighborAverage(definition, row, col, rows, columns)
-                const smoothingFactor = Math.min(1, strength * 0.25)
-                nextHeight = currentHeight + (average - currentHeight) * smoothingFactor * influence
-              } else if (operation === 'flatten') {
-                const reference = targetHeight ?? currentHeight
-                const flattenFactor = Math.min(1, strength * 0.4)
-                nextHeight = currentHeight + (reference - currentHeight) * flattenFactor * influence
-              } else {
-                const direction = operation === 'depress' ? -1 : 1
-                const offset = direction * strength * influence * 0.3
-                nextHeight = currentHeight + offset
-              }
-
-              definition.heightMap[key] = nextHeight
-              modified = true
+            if (operation === 'smooth') {
+              const average = sampleNeighborAverage(definition, row, col, rows, columns)
+              const smoothingFactor = Math.min(1, strength * 0.25)
+              nextHeight = currentHeight + (average - currentHeight) * smoothingFactor * influence
+            } else if (operation === 'flatten') {
+              const reference = targetHeight ?? currentHeight
+              const flattenFactor = Math.min(1, strength * 0.4)
+              nextHeight = currentHeight + (reference - currentHeight) * flattenFactor * influence
+            } else {
+              const direction = operation === 'depress' ? -1 : 1
+              const offset = direction * strength * influence * 0.3
+              nextHeight = currentHeight + offset
             }
+
+            setHeightMapValue(heightMap, key, nextHeight)
+            modified = true
+          }
       }
   }
   if (modified) {
+    definition.heightMap = heightMap
     definition.hasManualEdits = true
   }
   return modified

@@ -252,7 +252,6 @@ async function importAssetFromUrl(normalizedUrl: string) {
 
     const object = await loadObjectFromRemoteFile(file)
     await addImportedObjectToScene(object, normalizedUrl)
-    assetCacheStore.registerUsage(normalizedUrl)
     assetCacheStore.touch(normalizedUrl)
 
     const displayName = object.name || entry.filename || fallbackName
@@ -439,7 +438,6 @@ function handleMenuImportFromFile() {
     await addImportedObjectToScene(imported, assetId ?? undefined)
 
     if (localAssetHandled && assetId) {
-      assetCacheStore.registerUsage(assetId)
       assetCacheStore.touch(assetId)
     }
 
@@ -1781,7 +1779,12 @@ function handleAddLight(type: LightNodeType) {
     </template>
     <v-list class="add-menu-list">
       <v-list-item title="Group" @click="handleAddGroup()" />
-      <v-list-item title="Create Empty" @click="handleCreateEmptyNode()" />
+      <v-list-item title="Empty" @click="handleCreateEmptyNode()" />
+            <v-list-item 
+        title="Ground" 
+        @click="handleAddGround()" 
+        :disabled="!canAddGround"
+      />
       <v-menu  transition="none" location="end" offset="8">
         <template #activator="{ props: showcaseMenuProps }">
           <v-list-item
@@ -1833,12 +1836,7 @@ function handleAddLight(type: LightNodeType) {
       <v-divider class="add-menu-divider" />
       <v-list-item title="File" @click="handleMenuImportFromFile()" />
       <v-list-item title="URL" @click="handleMenuImportFromUrl()" />
-      <v-divider class="add-menu-divider" />
-      <v-list-item 
-        title="Ground" 
-        @click="handleAddGround()" 
-        :disabled="!canAddGround"
-      />
+
     </v-list>
   </v-menu>
   <v-dialog v-model="groundDialogOpen" max-width="520">
@@ -1973,9 +1971,25 @@ function handleAddLight(type: LightNodeType) {
 }
 
 .ground-preset-group {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+.ground-preset-group :deep(.v-item) {
+  height: 100%;
+}
+.ground-preset-card {
+  padding: 12px 14px;
+  border-radius: 12px;
+  cursor: pointer;
+  border-color: rgba(255, 255, 255, 0.16) !important;
+  transition: border-color 160ms ease, background-color 160ms ease;
+  height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 8px;
 }
 
 .ground-preset-card {

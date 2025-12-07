@@ -1,6 +1,5 @@
 import { defineStore } from 'pinia'
 import type { ProjectAsset } from '@/types/project-asset'
-import type { SceneNode } from '@harmony/schema'
 import { fetchAssetBlob } from '@schema/assetCache'
 import type { AssetCacheEntry as SharedAssetCacheEntry, AssetCacheStatus as SharedAssetCacheStatus } from '@schema/assetCache'
 import { extractExtension } from '@/utils/blob'
@@ -299,7 +298,6 @@ function createDefaultEntry(assetId: string): AssetCacheEntry {
     blobUrl: null,
     arrayBuffer: null,
     size: 0,
-    refCount: 0,
     lastUsedAt: 0,
     abortController: null,
     mimeType: null,
@@ -611,16 +609,6 @@ export const useAssetCacheStore = defineStore('assetCache', {
       const entry = this.ensureEntry(assetId)
       entry.lastUsedAt = now()
     },
-    registerUsage(assetId: string) {
-      const entry = this.ensureEntry(assetId)
-      entry.refCount += 1
-      entry.lastUsedAt = now()
-    },
-    unregisterUsage(assetId: string) {
-      const entry = this.ensureEntry(assetId)
-      entry.refCount = Math.max(0, entry.refCount - 1)
-      entry.lastUsedAt = now()
-    },
     releaseInMemoryBlob(assetId: string) {
       const entry = this.entries[assetId]
       if (!entry || entry.status !== 'cached' || !entry.blob) {
@@ -641,36 +629,6 @@ export const useAssetCacheStore = defineStore('assetCache', {
       entry.error = null
       entry.lastUsedAt = now()
     },
-    recalculateUsage(nodes: SceneNode[]) {
-      const counts = new Map<string, number>()
-      const visit = (node: SceneNode) => {
-        if (node.sourceAssetId) {
-          counts.set(node.sourceAssetId, (counts.get(node.sourceAssetId) ?? 0) + 1)
-        }
-        if (node.materials?.length) {
-          node.materials.forEach((material) => {
-            const textures = material.textures ?? null
-            if (!textures) {
-              return
-            }
-            Object.values(textures).forEach((ref) => {
-              const assetId = ref?.assetId
-              if (!assetId) {
-                return
-              }
-              counts.set(assetId, (counts.get(assetId) ?? 0) + 1)
-            })
-          })
-        }
-        node.children?.forEach(visit)
-      }
-      nodes.forEach(visit)
-
-      Object.keys(this.entries).forEach((assetId) => {
-        const entry = this.ensureEntry(assetId)
-        entry.refCount = counts.get(assetId) ?? 0
-      })
-    },
     evictIfNeeded(preferredAssetId?: string) {
       const maxEntries = this.maxEntries
       if (maxEntries <= 0) {
@@ -681,35 +639,22 @@ export const useAssetCacheStore = defineStore('assetCache', {
       if (cached.length <= maxEntries) {
         return
       }
+      cached.sort((a, b) => a.lastUsedAt - b.lastUsedAt)
 
-      const sorted = cached.sort((a, b) => {
-        if (a.refCount !== b.refCount) {
-          return a.refCount - b.refCount
-        }
-        return a.lastUsedAt - b.lastUsedAt
-      })
+      const removable = cached.filter((entry) => !preferredAssetId || entry.assetId !== preferredAssetId)
+      const totalToRemove = cached.length - maxEntries
+      let removed = 0
 
-      let fallbackWithUsage: AssetCacheEntry | null = null
-
-      for (const entry of sorted) {
-        if (cached.length <= maxEntries) {
+      for (const entry of removable) {
+        if (removed >= totalToRemove) {
           break
         }
-        if (preferredAssetId && entry.assetId === preferredAssetId) {
-          continue
-        }
-        if (entry.refCount > 0) {
-          if (!fallbackWithUsage) {
-            fallbackWithUsage = entry
-          }
-          continue
-        }
         this.removeCache(entry.assetId)
-        cached.splice(cached.indexOf(entry), 1)
+        removed += 1
       }
 
-      if (cached.length > maxEntries && fallbackWithUsage) {
-        this.removeCache(fallbackWithUsage.assetId)
+      if (cached.length - removed > maxEntries && preferredAssetId) {
+        this.removeCache(preferredAssetId)
       }
     },
     setMaxEntries(count: number) {

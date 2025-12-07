@@ -81,6 +81,7 @@ import type {
   SceneResourceSummary,
   SceneResourceSummaryEntry,
 } from '@harmony/schema'
+import type { TerrainScatterStoreSnapshot } from '@harmony/schema/terrain-scatter'
 
 export { GROUND_NODE_ID, SKY_NODE_ID, ENVIRONMENT_NODE_ID }
 
@@ -2288,7 +2289,7 @@ async function createTextureAssetFromTexture(texture: Texture, context: External
   }
 
   context.registerAsset(asset, { categoryId: determineAssetCategoryId(asset) })
-  context.assetCache.registerUsage(assetId)
+  context.assetCache.touch(assetId)
 
   const ref: SceneMaterialTextureRef = {
     assetId,
@@ -3160,7 +3161,7 @@ const initialSceneDocument = createSceneDocument('Sample Scene', {
 const runtimeObjectRegistry = new Map<string, Object3D>()
 let runtimeRefreshInFlight: Promise<void> | null = null
 
-function clearRuntimeObjectRegistry() {
+export function clearRuntimeObjectRegistry() {
   runtimeObjectRegistry.forEach((_object, nodeId) => {
     releaseModelInstance(nodeId)
     componentManager.detachRuntime(nodeId)
@@ -3168,7 +3169,7 @@ function clearRuntimeObjectRegistry() {
   runtimeObjectRegistry.clear()
 }
 
-function registerRuntimeObject(id: string, object: Object3D) {
+export function registerRuntimeObject(id: string, object: Object3D) {
   const existing = runtimeObjectRegistry.get(id)
   if (existing && existing !== object) {
     componentManager.detachRuntime(id)
@@ -3176,7 +3177,7 @@ function registerRuntimeObject(id: string, object: Object3D) {
   runtimeObjectRegistry.set(id, object)
 }
 
-function unregisterRuntimeObject(id: string) {
+export function unregisterRuntimeObject(id: string) {
   releaseModelInstance(id)
   runtimeObjectRegistry.delete(id)
   componentManager.detachRuntime(id)
@@ -3605,7 +3606,7 @@ function duplicateNodeTree(original: SceneNode, context: DuplicateContext): Scen
   }
   remapNodeInternalReferences(duplicated, context)
   if (duplicated.sourceAssetId) {
-    context.assetCache.registerUsage(duplicated.sourceAssetId)
+    context.assetCache.touch(duplicated.sourceAssetId)
   }
   componentManager.syncNode(duplicated)
 
@@ -4785,6 +4786,37 @@ export async function calculateSceneResourceSummary(
     usage.assetIds.add(normalizedId)
   }
 
+  const registerScatterAssetId = (assetId: string | null | undefined): void => {
+    const normalizedId = typeof assetId === 'string' ? assetId.trim() : ''
+    if (!normalizedId) {
+      return
+    }
+    assetIds.add(normalizedId)
+  }
+
+  const collectScatterAssetRefs = (node: SceneNode): void => {
+    if (node.dynamicMesh?.type !== 'Ground') {
+      return
+    }
+    const definition = node.dynamicMesh as GroundDynamicMesh & {
+      terrainScatter?: TerrainScatterStoreSnapshot | null
+    }
+    const snapshot = definition.terrainScatter
+    if (!snapshot || !Array.isArray(snapshot.layers) || !snapshot.layers.length) {
+      return
+    }
+    snapshot.layers.forEach((layer: any) => {
+      registerScatterAssetId(layer?.assetId)
+      registerScatterAssetId(layer?.profileId)
+      if (Array.isArray(layer?.instances)) {
+        layer.instances.forEach((instance: any) => {
+          registerScatterAssetId(instance?.assetId)
+          registerScatterAssetId(instance?.profileId)
+        })
+      }
+    })
+  }
+
   const collectMaterialTextureRefs = (
     material: SceneMaterial | SceneNodeMaterial | null | undefined,
     node: SceneNode,
@@ -4850,6 +4882,7 @@ export async function calculateSceneResourceSummary(
           }
         })
       }
+      collectScatterAssetRefs(node)
       if (Array.isArray(node.children) && node.children.length) {
         stack.push(...(node.children as SceneNode[]))
       }
@@ -4997,7 +5030,6 @@ export async function cloneSceneDocumentForExport(
     selectedNodeId: scene.selectedNodeId,
     selectedNodeIds: scene.selectedNodeIds,
     camera: scene.camera,
-    thumbnail: scene.thumbnail ?? null,
     resourceProviderId: scene.resourceProviderId,
     createdAt: scene.createdAt,
     updatedAt: scene.updatedAt,
@@ -5841,7 +5873,6 @@ function createSceneDocument(
     selectedNodeId?: string | null
     selectedNodeIds?: string[]
     camera?: SceneCameraState
-    thumbnail?: string | null
     resourceProviderId?: string
     createdAt?: string
     updatedAt?: string
@@ -5909,7 +5940,6 @@ function createSceneDocument(
   return {
     id,
     name,
-    thumbnail: options.thumbnail ?? null,
     nodes,
     materials,
     selectedNodeId,
@@ -5937,7 +5967,6 @@ function normalizeCurrentSceneMeta(store: SceneState) {
   if (!store.currentSceneMeta) {
     store.currentSceneMeta = {
       name: 'Untitled Scene',
-      thumbnail: null,
       createdAt: now,
       updatedAt: now,
     }
@@ -5945,7 +5974,6 @@ function normalizeCurrentSceneMeta(store: SceneState) {
   }
 
   const name = typeof store.currentSceneMeta.name === 'string' ? store.currentSceneMeta.name.trim() : ''
-  const thumbnail = typeof store.currentSceneMeta.thumbnail === 'string' ? store.currentSceneMeta.thumbnail : null
   const createdAtRaw = store.currentSceneMeta.createdAt
   const updatedAtRaw = store.currentSceneMeta.updatedAt
   const createdAt = typeof createdAtRaw === 'string' && createdAtRaw ? createdAtRaw : now
@@ -5953,7 +5981,6 @@ function normalizeCurrentSceneMeta(store: SceneState) {
 
   store.currentSceneMeta = {
     name: name || 'Untitled Scene',
-    thumbnail,
     createdAt,
     updatedAt,
   }
@@ -5973,7 +6000,6 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
   return {
     id: store.currentSceneId,
     name: meta.name,
-    thumbnail: meta.thumbnail ?? null,
     nodes,
     materials: cloneSceneMaterials(store.materials),
     selectedNodeId: store.selectedNodeId,
@@ -6015,7 +6041,6 @@ function commitSceneSnapshot(
 function applyCurrentSceneMeta(store: SceneState, document: StoredSceneDocument) {
   store.currentSceneMeta = {
     name: document.name,
-    thumbnail: document.thumbnail ?? null,
     createdAt: document.createdAt,
     updatedAt: document.updatedAt,
   }
@@ -6247,7 +6272,6 @@ export const useSceneStore = defineStore('scene', {
       currentSceneId: initialSceneDocument.id,
       currentSceneMeta: {
         name: initialSceneDocument.name,
-        thumbnail: initialSceneDocument.thumbnail ?? null,
         createdAt: initialSceneDocument.createdAt,
         updatedAt: initialSceneDocument.updatedAt,
       },
@@ -6451,7 +6475,6 @@ export const useSceneStore = defineStore('scene', {
           if (!skipComponentSync) {
             componentManager.syncScene(this.nodes)
           }
-          useAssetCacheStore().recalculateUsage(this.nodes)
           return
         }
 
@@ -6485,7 +6508,6 @@ export const useSceneStore = defineStore('scene', {
           reattachRuntimeObjectsForNodes(this.nodes)
           componentManager.syncScene(this.nodes)
         }
-        useAssetCacheStore().recalculateUsage(this.nodes)
       })()
 
       runtimeRefreshInFlight = task
@@ -6526,7 +6548,6 @@ export const useSceneStore = defineStore('scene', {
         : nextRedoStack
     },
     async restoreFromHistory(snapshot: SceneHistoryEntry) {
-      const assetCache = useAssetCacheStore()
       this.isRestoringHistory = true
       this.activeTransformNodeId = null
       this.transformSnapshotCaptured = false
@@ -6547,8 +6568,6 @@ export const useSceneStore = defineStore('scene', {
 
         componentManager.reset()
         componentManager.syncScene(this.nodes)
-
-        assetCache.recalculateUsage(this.nodes)
 
         snapshot.runtimeSnapshots.forEach((object, nodeId) => {
           const node = findNodeById(this.nodes, nodeId)
@@ -8264,6 +8283,62 @@ export const useSceneStore = defineStore('scene', {
       void this.syncAssetPackageMapEntry(registeredAsset, options.source)
       return registeredAsset
     },
+    async cleanUnusedAssets(): Promise<{ removedAssetIds: string[] }> {
+      if (!this.currentSceneId) {
+        return { removedAssetIds: [] }
+      }
+
+      const document = buildSceneDocumentFromState(this)
+      const usedAssetIds = collectSceneAssetReferences(document)
+      const removedAssetIds: string[] = []
+      const nextCatalog: Record<string, ProjectAsset[]> = {}
+      let catalogChanged = false
+
+      Object.entries(this.assetCatalog).forEach(([categoryId, list]) => {
+        const filtered = list.filter((asset) => {
+          const keep = usedAssetIds.has(asset.id)
+          if (!keep) {
+            removedAssetIds.push(asset.id)
+          }
+          return keep
+        })
+        if (filtered.length !== list.length) {
+          catalogChanged = true
+        }
+        nextCatalog[categoryId] = filtered
+      })
+
+      const assetIndexChanged = Object.keys(this.assetIndex).some((assetId) => !usedAssetIds.has(assetId))
+      const nextAssetIndex = assetIndexChanged
+        ? filterAssetIndexByUsage(this.assetIndex, usedAssetIds)
+        : this.assetIndex
+
+      const nextPackageAssetMap = filterPackageAssetMapByUsage(this.packageAssetMap, usedAssetIds)
+      const packageMapChanged = Object.keys(this.packageAssetMap).length !== Object.keys(nextPackageAssetMap).length
+        || Object.entries(this.packageAssetMap).some(([key, value]) => nextPackageAssetMap[key] !== value)
+
+      const shouldResetSelection = this.selectedAssetId ? !usedAssetIds.has(this.selectedAssetId) : false
+
+      if (!catalogChanged && !assetIndexChanged && !packageMapChanged) {
+        return { removedAssetIds: [] }
+      }
+
+      this.assetCatalog = nextCatalog
+      this.assetIndex = nextAssetIndex
+      this.packageAssetMap = nextPackageAssetMap
+      this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
+
+      if (shouldResetSelection) {
+        this.selectedAssetId = null
+      }
+      if (this.activeDirectoryId && !findDirectory(this.projectTree, this.activeDirectoryId)) {
+        this.activeDirectoryId = defaultDirectoryId
+      }
+
+      commitSceneSnapshot(this, { updateNodes: false })
+
+      return { removedAssetIds }
+    },
     async syncAssetPackageMapEntry(asset: ProjectAsset, source?: AssetSourceMetadata) {
       if (!asset?.id) {
         return
@@ -8662,7 +8737,6 @@ export const useSceneStore = defineStore('scene', {
           this.nodes = [...this.nodes]
         }
       }
-      useAssetCacheStore().recalculateUsage(this.nodes)
       if (duplicate.nodeType === 'Group') {
         duplicate.groupExpanded = false
       }
@@ -8987,9 +9061,6 @@ export const useSceneStore = defineStore('scene', {
       }
 
       this.projectTree = createProjectTreeFromCache(this.assetCatalog, this.packageDirectoryCache)
-
-      const assetCache = useAssetCacheStore()
-      assetCache.recalculateUsage(this.nodes)
 
       commitSceneSnapshot(this, { updateNodes: true })
       return storedAsset
@@ -9675,7 +9746,6 @@ export const useSceneStore = defineStore('scene', {
         this.nodes = tree
         this.setSelection([newNodeId])
 
-        assetCache.registerUsage(asset.id)
         assetCache.touch(asset.id)
 
         commitSceneSnapshot(this)
@@ -9866,7 +9936,6 @@ export const useSceneStore = defineStore('scene', {
       })
 
       if (registerAssetId && assetCache) {
-        assetCache.registerUsage(registerAssetId)
         assetCache.touch(registerAssetId)
       }
 
@@ -9902,7 +9971,6 @@ export const useSceneStore = defineStore('scene', {
             commitOptions: { updateNodes: false },
           })
           modelAssetId = ensured.asset.id
-          assetCache.registerUsage(modelAssetId)
           assetCache.touch(modelAssetId)
         } catch (error) {
           console.warn('缓存导入场景资源失败', error)
@@ -9950,7 +10018,6 @@ export const useSceneStore = defineStore('scene', {
       }
 
       commitSceneSnapshot(this)
-      assetCache.recalculateUsage(this.nodes)
       return importedIds
     },
 
@@ -10781,8 +10848,6 @@ export const useSceneStore = defineStore('scene', {
       const prevSelection = cloneSelection(this.selectedNodeIds)
       const nextSelection = prevSelection.filter((id) => !removed.includes(id))
       this.setSelection(nextSelection)
-      const assetCache = useAssetCacheStore()
-      assetCache.recalculateUsage(this.nodes)
       commitSceneSnapshot(this)
     },
 
@@ -11137,7 +11202,6 @@ export const useSceneStore = defineStore('scene', {
         }
         this.recenterGroupAncestry(parentId, { captureHistory: false })
       })
-      assetCache.recalculateUsage(this.nodes)
 
       if (selectDuplicates) {
         const duplicateIds = duplicates.map((node) => node.id)
@@ -11275,8 +11339,6 @@ export const useSceneStore = defineStore('scene', {
         }
       })
 
-      assetCache.recalculateUsage(this.nodes)
-
       const primaryId = insertedIds[insertedIds.length - 1] ?? null
       this.setSelection(insertedIds, { primaryId })
       commitSceneSnapshot(this)
@@ -11317,13 +11379,9 @@ export const useSceneStore = defineStore('scene', {
     ) {
       const scenesStore = useScenesStore()
       const displayName = name.trim() || 'Untitled Scene'
-      let resolvedThumbnail: string | null | undefined
       let resolvedGroundOptions: Partial<GroundSettings> | undefined
       if (thumbnailOrOptions && typeof thumbnailOrOptions === 'object' && !Array.isArray(thumbnailOrOptions)) {
-        resolvedThumbnail = thumbnailOrOptions.thumbnail ?? null
         resolvedGroundOptions = thumbnailOrOptions.groundSettings
-      } else {
-        resolvedThumbnail = (thumbnailOrOptions ?? null) as string | null
       }
 
       const groundSettings = cloneGroundSettings(resolvedGroundOptions ?? this.groundSettings)
@@ -11332,7 +11390,6 @@ export const useSceneStore = defineStore('scene', {
       const baseAssetIndex = cloneAssetIndex(initialAssetIndex)
 
       const sceneDocument = createSceneDocument(displayName, {
-        thumbnail: resolvedThumbnail ?? null,
         resourceProviderId: this.resourceProviderId,
         viewportSettings: this.viewportSettings,
         skybox: this.skybox,
@@ -11363,7 +11420,6 @@ export const useSceneStore = defineStore('scene', {
       this.panelVisibility = normalizePanelVisibilityState(sceneDocument.panelVisibility)
       this.panelPlacement = normalizePanelPlacementStateInput(sceneDocument.panelPlacement)
       this.resourceProviderId = sceneDocument.resourceProviderId
-      useAssetCacheStore().recalculateUsage(this.nodes)
       this.isSceneReady = true
       this.hasUnsavedChanges = false
       return sceneDocument.id
@@ -11405,7 +11461,6 @@ export const useSceneStore = defineStore('scene', {
         selectedNodeId,
         selectedNodeIds,
         camera: cameraState,
-        thumbnail: typeof template.thumbnail === 'string' ? template.thumbnail : null,
         resourceProviderId: typeof template.resourceProviderId === 'string'
           ? template.resourceProviderId
           : this.resourceProviderId,
@@ -11447,7 +11502,6 @@ export const useSceneStore = defineStore('scene', {
       this.panelVisibility = normalizePanelVisibilityState(sceneDocument.panelVisibility)
       this.panelPlacement = normalizePanelPlacementStateInput(sceneDocument.panelPlacement)
       this.resourceProviderId = sceneDocument.resourceProviderId
-      useAssetCacheStore().recalculateUsage(this.nodes)
       this.isSceneReady = true
       this.hasUnsavedChanges = false
       return sceneDocument.id
@@ -11495,7 +11549,6 @@ export const useSceneStore = defineStore('scene', {
         this.panelPlacement = normalizePanelPlacementStateInput(scene.panelPlacement)
         this.groundSettings = cloneGroundSettings(scene.groundSettings)
         this.resourceProviderId = scene.resourceProviderId ?? 'builtin'
-        useAssetCacheStore().recalculateUsage(this.nodes)
         this.hasUnsavedChanges = false
       } finally {
         this.isSceneReady = true
@@ -11533,7 +11586,6 @@ export const useSceneStore = defineStore('scene', {
         this.panelPlacement = normalizePanelPlacementStateInput(fallback.panelPlacement)
         this.groundSettings = cloneGroundSettings(fallback.groundSettings)
         this.resourceProviderId = fallback.resourceProviderId
-        useAssetCacheStore().recalculateUsage(this.nodes)
         this.isSceneReady = true
         this.hasUnsavedChanges = false
         return true
@@ -11564,23 +11616,6 @@ export const useSceneStore = defineStore('scene', {
       const updated: StoredSceneDocument = {
         ...document,
         name: trimmed,
-        updatedAt: new Date().toISOString(),
-      }
-      await scenesStore.saveSceneDocument(updated)
-      if (this.currentSceneId === sceneId) {
-        applyCurrentSceneMeta(this, updated)
-      }
-      return true
-    },
-    async updateSceneThumbnail(sceneId: string, thumbnail: string | null) {
-      const scenesStore = useScenesStore()
-      const document = await scenesStore.loadSceneDocument(sceneId)
-      if (!document) {
-        return false
-      }
-      const updated: StoredSceneDocument = {
-        ...document,
-        thumbnail,
         updatedAt: new Date().toISOString(),
       }
       await scenesStore.saveSceneDocument(updated)
@@ -11662,7 +11697,6 @@ export const useSceneStore = defineStore('scene', {
             ? (entry.selectedNodeIds as unknown[]).filter((id): id is string => typeof id === 'string')
             : undefined,
           camera: normalizeCameraStateInput(entry.camera),
-          thumbnail: typeof entry.thumbnail === 'string' ? entry.thumbnail : null,
           resourceProviderId: typeof entry.resourceProviderId === 'string' ? entry.resourceProviderId : undefined,
           createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : undefined,
           updatedAt: typeof entry.updatedAt === 'string' ? entry.updatedAt : undefined,
