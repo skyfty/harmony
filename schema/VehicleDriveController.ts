@@ -319,22 +319,31 @@ export class VehicleDriveController {
 
   recomputeInputs(): void {
     const { input, inputFlags, bindings } = this
-    let throttle = 0
-    let steering = 0
+    // Start with any analog inputs (e.g., joystick) then override with digital flags/keyboard when present.
+    let throttle = clampAxisScalar(input.throttle)
+    let steering = clampAxisScalar(input.steering)
+    let brake = clampAxisScalar(input.brake)
+
     if (inputFlags.forward && !inputFlags.backward) {
       throttle = 1
     } else if (inputFlags.backward && !inputFlags.forward) {
       throttle = -1
     }
+
     if (bindings.steeringKeyboardValue && bindings.steeringKeyboardValue.value !== 0) {
       steering = clampAxisScalar(bindings.steeringKeyboardValue.value)
     }
     if (inputFlags.left !== inputFlags.right) {
       steering = inputFlags.right ? 1 : -1
     }
+
+    if (inputFlags.brake) {
+      brake = 1
+    }
+
     input.throttle = throttle
     input.steering = clampAxisScalar(steering)
-    input.brake = inputFlags.brake ? 1 : 0
+    input.brake = clampAxisScalar(brake)
   }
 
   prepareTarget(nodeId: string | null | undefined): { success: true; instance: VehicleInstance } | { success: false; message: string } {
@@ -492,6 +501,7 @@ export class VehicleDriveController {
     const engineForce = throttle * VEHICLE_ENGINE_FORCE
     const steeringValue = steeringInput * VEHICLE_STEER_ANGLE
     const brakeForce = brakeInput * VEHICLE_BRAKE_FORCE
+    console.log('Applying vehicle forces:', { engineForce, steeringValue, brakeForce })
     for (let index = 0; index < vehicle.wheelInfos.length; index += 1) {
       vehicle.setBrake(brakeForce, index)
     }
