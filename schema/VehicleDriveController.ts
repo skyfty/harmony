@@ -145,18 +145,18 @@ const VEHICLE_EXIT_FORWARD_MIN = 1.25
 const VEHICLE_EXIT_VERTICAL_MIN = 0.6
 const VEHICLE_SIZE_FALLBACK = { width: 2.4, height: 1.4, length: 4.2 }
 const VEHICLE_FOLLOW_DISTANCE_MIN = 1
-const VEHICLE_FOLLOW_DISTANCE_MAX = 5
-const VEHICLE_FOLLOW_HEIGHT_RATIO = 0.4
-const VEHICLE_FOLLOW_HEIGHT_MIN = 1.5
-const VEHICLE_FOLLOW_DISTANCE_LENGTH_RATIO = 1.25
-const VEHICLE_FOLLOW_DISTANCE_WIDTH_RATIO = 0.35
-const VEHICLE_FOLLOW_DISTANCE_DIAGONAL_RATIO = 0.2
-const VEHICLE_FOLLOW_TARGET_LIFT_RATIO = 0.3
-const VEHICLE_FOLLOW_TARGET_LIFT_MIN = 0.6
+const VEHICLE_FOLLOW_DISTANCE_MAX = 10
+const VEHICLE_FOLLOW_HEIGHT_RATIO = 1.2
+const VEHICLE_FOLLOW_HEIGHT_MIN = 4
+const VEHICLE_FOLLOW_DISTANCE_LENGTH_RATIO = 1.8
+const VEHICLE_FOLLOW_DISTANCE_WIDTH_RATIO = 0.4
+const VEHICLE_FOLLOW_DISTANCE_DIAGONAL_RATIO = 0.35
+const VEHICLE_FOLLOW_TARGET_LIFT_RATIO = 0.8
+const VEHICLE_FOLLOW_TARGET_LIFT_MIN = 2.5
 const VEHICLE_FOLLOW_POSITION_LERP_SPEED = 8
 const VEHICLE_FOLLOW_TARGET_LERP_SPEED = 10
-const VEHICLE_FOLLOW_TARGET_FORWARD_RATIO = 0.35
-const VEHICLE_FOLLOW_TARGET_FORWARD_MIN = 1.2
+const VEHICLE_FOLLOW_TARGET_FORWARD_RATIO = 0.55
+const VEHICLE_FOLLOW_TARGET_FORWARD_MIN = 1.8
 const VEHICLE_RESET_LIFT = 0.75
 
 function clampAxisScalar(value: number): number {
@@ -275,7 +275,7 @@ export class VehicleDriveController {
   private getFollowDistanceScale(): number {
     const raw = this.deps.followCameraDistanceScale
     const resolved = typeof raw === 'function' ? raw() : raw
-    if (!Number.isFinite(resolved)) {
+    if (typeof resolved !== 'number' || !Number.isFinite(resolved)) {
       return 1
     }
     // Clamp to a safe range to avoid extreme jumps

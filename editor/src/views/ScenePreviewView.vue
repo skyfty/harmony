@@ -134,7 +134,7 @@ const volumePercent = ref(100)
 const isFullscreen = ref(false)
 const lastUpdateTime = ref<string | null>(null)
 const warningMessages = ref<string[]>([])
-const isRigidbodyDebugVisible = ref(true)
+const isRigidbodyDebugVisible = ref(false)
 
 function appendWarningMessage(message: string): void {
 	const trimmed = typeof message === 'string' ? message.trim() : ''
