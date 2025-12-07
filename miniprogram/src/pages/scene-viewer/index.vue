@@ -4699,7 +4699,7 @@ function recomputeVehicleDriveInputs(): void {
   } else if (vehicleDriveInputFlags.backward && !vehicleDriveInputFlags.forward) {
     throttle = -1;
   }
-  let steering = steeringFromJoystick;
+  let steering = -steeringFromJoystick;
   if (vehicleDriveInputFlags.left !== vehicleDriveInputFlags.right) {
     steering = vehicleDriveInputFlags.right ? 1 : -1;
   } else if (steeringKeyboardValue.value !== 0) {
@@ -4828,19 +4828,24 @@ function applyVehicleDriveForces(): void {
   if (!vehicle) {
     return;
   }
-  const engineForce = -vehicleDriveInput.throttle * VEHICLE_ENGINE_FORCE;
-  const steeringValue = vehicleDriveInput.steering * VEHICLE_STEER_ANGLE;
-  const brakeForce = vehicleDriveInput.brake * VEHICLE_BRAKE_FORCE;
-  for (let index = 0; index < instance.wheelCount; index += 1) {
-    vehicle.setBrake(brakeForce, index);
-  }
-  for (let index = 0; index < instance.wheelCount; index += 1) {
-    const steerable = instance.steerableWheelIndices.includes(index);
-    if (steerable) {
-      vehicle.setSteeringValue(steeringValue, index);
-      vehicle.applyEngineForce(engineForce, index);
-    }
-  }
+
+	const throttle = vehicleDriveInput.throttle
+	const steeringInput = vehicleDriveInput.steering
+	const brakeInput = vehicleDriveInput.brake
+	const engineForce = throttle * VEHICLE_ENGINE_FORCE
+	const steeringValue = steeringInput * VEHICLE_STEER_ANGLE
+	const brakeForce = brakeInput * VEHICLE_BRAKE_FORCE
+
+	for (let index = 0; index < vehicle.wheelInfos.length; index += 1) {
+		vehicle.setBrake(brakeForce, index)
+	}
+	for (let index = 0; index < vehicle.wheelInfos.length; index += 1) {
+		const steerable = instance.steerableWheelIndices.includes(index)
+		if (steerable) {
+			vehicle.setSteeringValue(steeringValue, index)
+			vehicle.applyEngineForce(engineForce, index)
+		}
+	}
 }
 
 

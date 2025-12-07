@@ -3461,6 +3461,11 @@ function applyVehicleDriveForces(): void {
 	const steeringValue = steeringInput * VEHICLE_STEER_ANGLE
 	const brakeForce = brakeInput * VEHICLE_BRAKE_FORCE
 
+	console.log('Applying vehicle forces:', {
+		engineForce,
+		steeringValue,
+	})
+
 
 	for (let index = 0; index < vehicle.wheelInfos.length; index += 1) {
 		vehicle.setBrake(brakeForce, index)
