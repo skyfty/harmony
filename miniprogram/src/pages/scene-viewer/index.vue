@@ -962,6 +962,11 @@ function isProgrammaticCameraMutationActive(): boolean {
   return programmaticCameraMutationDepth > 0;
 }
 
+// Placeholder to satisfy controller dependency; first-person state persistence is editor-only.
+function syncLastFirstPersonStateFromCamera(): void {
+  // no-op for miniprogram
+}
+
 let wheelListenerCleanup: (() => void) | null = null;
 
 const behaviorAlertVisible = ref(false);
@@ -1202,6 +1207,36 @@ const vehicleDriveStateBridge = {
   },
 } as const;
 
+const vehicleDriveUi = computed(() => {
+  const override = vehicleDriveUiOverride.value;
+  const active = vehicleDriveActive.value;
+  const visible = override === 'show' ? true : override === 'hide' ? false : active;
+  if (!visible) {
+    return {
+      visible: false,
+      label: '',
+      cameraLocked: false,
+      joystickActive: false,
+      accelerating: false,
+      braking: false,
+    } as const;
+  }
+  const nodeId = vehicleDriveNodeId.value ?? '';
+  const node = nodeId ? resolveNodeById(nodeId) : null;
+  const label = node?.name?.trim() || nodeId || 'Vehicle';
+  return {
+    visible: true,
+    label,
+    cameraLocked: active,
+    joystickActive: active && joystickState.active,
+    accelerating: active && (vehicleDriveInputFlags.forward || vehicleDriveInput.throttle > 0.1),
+    braking: active && vehicleDriveInputFlags.brake,
+  } as const;
+});
+
+const pendingVehicleDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null);
+const vehicleDrivePromptBusy = ref(false);
+
 const vehicleDriveController = new VehicleDriveController(
   {
     vehicleInstances,
@@ -1236,36 +1271,6 @@ const vehicleDriveController = new VehicleDriveController(
     steeringKeyboardValue,
   },
 );
-
-const vehicleDriveUi = computed(() => {
-  const override = vehicleDriveUiOverride.value;
-  const active = vehicleDriveActive.value;
-  const visible = override === 'show' ? true : override === 'hide' ? false : active;
-  if (!visible) {
-    return {
-      visible: false,
-      label: '',
-      cameraLocked: false,
-      joystickActive: false,
-      accelerating: false,
-      braking: false,
-    } as const;
-  }
-  const nodeId = vehicleDriveNodeId.value ?? '';
-  const node = nodeId ? resolveNodeById(nodeId) : null;
-  const label = node?.name?.trim() || nodeId || 'Vehicle';
-  return {
-    visible: true,
-    label,
-    cameraLocked: active,
-    joystickActive: active && joystickState.active,
-    accelerating: active && (vehicleDriveInputFlags.forward || vehicleDriveInput.throttle > 0.1),
-    braking: active && vehicleDriveInputFlags.brake,
-  } as const;
-});
-
-const pendingVehicleDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null);
-const vehicleDrivePromptBusy = ref(false);
 
 const vehicleDrivePrompt = computed(() => {
   const event = pendingVehicleDriveEvent.value;
