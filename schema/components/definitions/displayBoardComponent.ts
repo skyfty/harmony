@@ -271,7 +271,7 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
 
   private assignTexture(mesh: PlaneMesh, texture: THREE.Texture | null): void {
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-    materials.forEach((material) => {
+    materials.forEach((material: THREE.Material | null) => {
       if (!material) {
         return
       }
@@ -539,6 +539,6 @@ export { displayBoardComponentDefinition }
 declare global {
   // eslint-disable-next-line @typescript-eslint/consistent-type-definitions
   interface GlobalThis {
-    [DISPLAY_BOARD_RESOLVER_KEY]?: DisplayBoardMediaResolver | null
+    [DISPLAY_BOARD_RESOLVER_KEY]?: DisplayBoardMediaResolver
   }
 }

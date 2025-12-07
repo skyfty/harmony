@@ -317,7 +317,7 @@ function extractSubmeshes(root: Object3D): ParsedSubmesh[] {
 
   const rootInverse = new Matrix4().copy(root.matrixWorld).invert()
 
-  root.traverse((child) => {
+  root.traverse((child: Object3D) => {
     const mesh = child as Mesh
     if (!(mesh as any)?.isMesh) {
       return

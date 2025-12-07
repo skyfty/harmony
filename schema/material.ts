@@ -575,9 +575,9 @@ export class SceneMaterialFactory {
         const texture = await new Promise<THREE.Texture>((resolve, reject) => {
           hdrLoader.load(
             asset.blobUrl ?? asset.downloadUrl ?? '',
-            (loaded) => resolve(loaded as THREE.Texture),
+            (loaded: unknown) => resolve(loaded as THREE.Texture),
             undefined,
-            (error) => reject(error instanceof Error ? error : new Error(String(error))),
+            (error: unknown) => reject(error instanceof Error ? error : new Error(String(error))),
           );
         });
         return texture;
@@ -585,9 +585,9 @@ export class SceneMaterialFactory {
       const texture = await new Promise<THREE.Texture>((resolve, reject) => {
         this.textureLoader.load(
           asset.blobUrl ?? asset.downloadUrl ?? '',
-          (loaded) => resolve(loaded),
+          (loaded: THREE.Texture) => resolve(loaded),
           undefined,
-          (error) => reject(error instanceof Error ? error : new Error(String(error))),
+          (error: unknown) => reject(error instanceof Error ? error : new Error(String(error))),
         );
       });
       return texture;
@@ -610,7 +610,9 @@ export function ensureMeshMaterialsUnique(mesh: THREE.Mesh): void {
   }
 
   if (Array.isArray(mesh.material)) {
-    mesh.material = mesh.material.map((material) => (material ? material.clone() : material));
+    mesh.material = mesh.material.map((material: THREE.Material | null) =>
+      material ? material.clone() : new THREE.MeshBasicMaterial(),
+    );
   } else if (mesh.material) {
     mesh.material = mesh.material.clone();
   }
@@ -974,7 +976,7 @@ export function applyMaterialOverrides(
 
   const overrideSignature = materialConfigsSignature(configs);
 
-  target.traverse((child) => {
+  target.traverse((child: THREE.Object3D) => {
     const mesh = child as THREE.Mesh & { isMesh?: boolean };
     if (!mesh?.isMesh) {
       return;
@@ -1044,7 +1046,7 @@ export function applyMaterialOverrides(
 }
 
 export function resetMaterialOverrides(target: THREE.Object3D): void {
-  target.traverse((child) => {
+  target.traverse((child: THREE.Object3D) => {
     const mesh = child as THREE.Mesh & { isMesh?: boolean };
     if (!mesh?.isMesh) {
       return;
@@ -1059,7 +1061,7 @@ export function resetMaterialOverrides(target: THREE.Object3D): void {
     }
 
     const materials = Array.isArray(currentMaterial) ? currentMaterial : [currentMaterial];
-    materials.forEach((material) => {
+    materials.forEach((material: THREE.Material) => {
       restoreMaterialFromBaseline(material);
     });
     if (mesh.userData && MATERIAL_OVERRIDE_STATE_KEY in mesh.userData) {

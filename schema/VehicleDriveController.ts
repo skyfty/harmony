@@ -1,9 +1,11 @@
 import * as THREE from 'three'
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import * as CANNON from 'cannon-es'
 // Local structural types to avoid tight coupling with component module exports
 type SceneNode = any
 type SceneNodeComponentState<T> = { props: T } | null | undefined
 import type { VehicleComponentProps, RigidbodyComponentProps } from './components'
+import type { BehaviorEventResolution } from './behaviors/runtime'
 
 export type RefLike<T> = { value: T }
 
@@ -96,15 +98,15 @@ export type VehicleDriveControllerDeps = {
   ensurePhysicsWorld: () => void
   ensureVehicleBindingForNode: (nodeId: string) => void
   normalizeNodeId: (id: string | null | undefined) => string | null
-  setCameraViewState?: (mode: string, targetId?: string | null) => void
+  setCameraViewState?: (mode: unknown, targetId?: string | null) => void
   setCameraCaging?: (enabled: boolean, options?: { force?: boolean }) => void
   runWithProgrammaticCameraMutation?: (fn: () => void) => void
-  withControlsVerticalFreedom?: (controls: { target: THREE.Vector3; update: () => void }, fn: () => void) => void
-  lockControlsPitchToCurrent?: (controls: { target: THREE.Vector3 }, camera: THREE.PerspectiveCamera) => void
+  withControlsVerticalFreedom?: <T>(controls: any, fn: () => T) => T
+  lockControlsPitchToCurrent?: (controls: any, camera: THREE.PerspectiveCamera) => void
   syncLastFirstPersonStateFromCamera?: () => void
   updateOrbitLookTween?: (delta: number) => void
   onToast?: (message: string) => void
-  onResolveBehaviorToken?: (token: string, resolution: { type: string; message?: string }) => void
+  onResolveBehaviorToken?: (token: string, resolution: BehaviorEventResolution | { type: string; message?: string }) => void
 }
 
 export type VehicleDriveControllerBindings = {

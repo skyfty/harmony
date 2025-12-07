@@ -4784,9 +4784,6 @@ type VehicleDriveStartResult =
   | { success: true }
   | { success: false; message: string };
 
-function prepareVehicleDriveTarget(nodeId: string | null | undefined): VehicleDrivePreparationResult {
-  return vehicleDriveController.prepareTarget(nodeId);
-}
 
 function startVehicleDriveMode(
   event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>,
@@ -4842,23 +4839,6 @@ type VehicleDriveCameraUpdateOptions = {
   immediate?: boolean;
 };
 
-function updateVehicleDriveFollowCamera(
-  vehicleObject: THREE.Object3D | null,
-  deltaSeconds: number,
-  options: VehicleDriveCameraUpdateOptions,
-): boolean {
-  const ctx = renderContext
-    ? { camera: renderContext.camera, mapControls: renderContext.controls }
-    : { camera: null as THREE.PerspectiveCamera | null };
-  return vehicleDriveController.updateCamera(deltaSeconds, ctx, options);
-}
-
-function updateVehicleDriveFirstPersonCamera(): boolean {
-  const ctx = renderContext
-    ? { camera: renderContext.camera, mapControls: renderContext.controls }
-    : { camera: null as THREE.PerspectiveCamera | null };
-  return vehicleDriveController.updateCamera(0, ctx, { immediate: true });
-}
 
 function updateVehicleDriveCamera(
   deltaSeconds = 0,
@@ -4870,16 +4850,6 @@ function updateVehicleDriveCamera(
   return vehicleDriveController.updateCamera(deltaSeconds, ctx, options);
 }
 
-function snapshotVehicleDriveCameraState(): void {
-  const ctx = renderContext
-    ? { camera: renderContext.camera, mapControls: renderContext.controls }
-    : { camera: null as THREE.PerspectiveCamera | null };
-  vehicleDriveCameraRestoreState.viewMode = cameraViewState.mode;
-  vehicleDriveCameraRestoreState.viewTargetId = cameraViewState.targetNodeId;
-  vehicleDriveCameraRestoreState.isCameraCaged = isCameraCaged.value;
-  vehicleDriveCameraRestoreState.purposeMode = purposeActiveMode.value;
-  vehicleDriveController.snapshotCamera(ctx);
-}
 
 function restoreVehicleDriveCameraState(): void {
   const ctx = renderContext
