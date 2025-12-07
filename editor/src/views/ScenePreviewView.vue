@@ -3454,15 +3454,17 @@ function applyVehicleDriveForces(): void {
 	}
 	
 	const vehicle = instance.vehicle
-	const engineForce = -vehicleDriveInput.throttle * VEHICLE_ENGINE_FORCE
-	const steeringValue = vehicleDriveInput.steering * VEHICLE_STEER_ANGLE
-	const brakeForce = vehicleDriveInput.brake * VEHICLE_BRAKE_FORCE
+	const throttle = vehicleDriveInput.throttle
+	const steeringInput = vehicleDriveInput.steering
+	const brakeInput = vehicleDriveInput.brake
+	const engineForce = throttle * VEHICLE_ENGINE_FORCE
+	const steeringValue = steeringInput * VEHICLE_STEER_ANGLE
+	const brakeForce = brakeInput * VEHICLE_BRAKE_FORCE
 
 
 	for (let index = 0; index < vehicle.wheelInfos.length; index += 1) {
 		vehicle.setBrake(brakeForce, index)
 	}
-	
 	for (let index = 0; index < vehicle.wheelInfos.length; index += 1) {
 		const steerable = instance.steerableWheelIndices.includes(index)
 		if (steerable) {
@@ -3470,7 +3472,6 @@ function applyVehicleDriveForces(): void {
 			vehicle.applyEngineForce(engineForce, index)
 		}
 	}
-	
 }
 
 function resetActiveVehiclePose(): boolean {

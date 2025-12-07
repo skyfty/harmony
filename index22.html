@@ -41,6 +41,7 @@
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.target.set(0, 1, 0);
         controls.enableDamping = true;
+        controls.enabled = false;
 
         const hemiLight = new THREE.HemisphereLight(0xbbe6ff, 0x0f1b28, 0.6);
         scene.add(hemiLight);
@@ -198,6 +199,16 @@
         const BRAKE_RESPONSE = 9;
         const DOWNFORCE_COEFF = 55;
         const PITCH_STABILIZER = 55;
+        const CAMERA_BACK_DISTANCE = 7;
+        const CAMERA_UP_DISTANCE = 2.6;
+        const CAMERA_SMOOTHNESS = 6;
+        const axisVectors = [
+            new THREE.Vector3(1, 0, 0),
+            new THREE.Vector3(0, 1, 0),
+            new THREE.Vector3(0, 0, 1),
+        ];
+        const cameraDesired = new THREE.Vector3();
+        const cameraLookTarget = new THREE.Vector3();
         const downforceForce = new CANNON.Vec3();
         const downforcePoint = new CANNON.Vec3(0, 0, bodySize.length * 0.25);
         const MAX_STEER_ANGLE = THREE.MathUtils.degToRad(28);
@@ -315,6 +326,25 @@
             chassisBody.torque.x -= pitchVelocity * PITCH_STABILIZER;
         }
 
+        function getWorldAxis(axisIndex) {
+            const base = axisVectors[axisIndex] || axisVectors[2];
+            return base.clone().applyQuaternion(carGroup.quaternion).normalize();
+        }
+
+        function updateChaseCamera(delta) {
+            const forwardWorld = getWorldAxis(raycastVehicle.indexForwardAxis ?? 2);
+            const upWorld = getWorldAxis(raycastVehicle.indexUpAxis ?? 1);
+            cameraDesired
+                .copy(carGroup.position)
+                .addScaledVector(forwardWorld, -CAMERA_BACK_DISTANCE)
+                .addScaledVector(upWorld, CAMERA_UP_DISTANCE);
+            const smooth = 1 - Math.exp(-CAMERA_SMOOTHNESS * delta);
+            camera.position.lerp(cameraDesired, smooth);
+            camera.up.copy(upWorld);
+            cameraLookTarget.copy(carGroup.position).addScaledVector(forwardWorld, 2);
+            camera.lookAt(cameraLookTarget);
+        }
+
         function syncVisuals() {
             carGroup.position.copy(chassisBody.position);
             carGroup.quaternion.copy(chassisBody.quaternion);
@@ -337,13 +367,13 @@
 
         function animate() {
             const delta = clock.getDelta();
-            controls.update();
             applyControls(delta);
             applyDownforce();
             applyPitchStabilizer();
             world.step(1 / 60, delta, 3);
             syncVisuals();
             updateWheelVisuals();
+            updateChaseCamera(delta);
             renderer.render(scene, camera);
             stats.update();
             requestAnimationFrame(animate);
