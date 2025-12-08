@@ -33,7 +33,8 @@ const assetSchema = new Schema<AssetDocument>(
     originalFilename: { type: String },
     mimeType: { type: String },
     metadata: { type: Schema.Types.Mixed },
-    terrainScatterPreset: { type: String, enum: TerrainScatterCategories, default: null },
+    // Allow clearing the preset back to null while keeping valid enum values enforced
+    terrainScatterPreset: { type: String, enum: [...TerrainScatterCategories, null], default: null },
   },
   {
     timestamps: true,
