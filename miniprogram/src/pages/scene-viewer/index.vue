@@ -178,8 +178,6 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js';
-// @ts-expect-error Ammo wasm module ships without type definitions
-import AmmoModule from 'three/examples/jsm/libs/ammo.wasm.js';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from '@/components/PlatformCanvas.vue';
@@ -707,8 +705,6 @@ const scatterMatrixHelper = new THREE.Matrix4();
 const rigidbodyInstances = new Map<string, RigidbodyInstance>();
 const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>();
 const physicsContactSettings: PhysicsContactSettings = { gravity: [0, -9.81, 0] };
-const ammoModuleFactory = AmmoModule;
-void ammoModuleFactory;
 
 const behaviorRaycaster = new THREE.Raycaster();
 const behaviorPointer = new THREE.Vector2();

@@ -36,7 +36,16 @@ export default defineConfig({
     threePlatformAdapter(),
     createMpChunkSplitterPlugin({
       singleChunkMode: true,
-      packageSizeLimit: 1.8 * 1024 * 1024
+      packageSizeLimit: 1.8 * 1024 * 1024,
+      // Keep heavy dependencies such as three.js inside their respective independent sub-packages
+      subpackages: [
+        "pages/works",
+        "pages/exhibition",
+        "pages/collections",
+        "pages/orders",
+        "pages/optimize",
+        "pages/scene-viewer",
+      ],
     }),
 
 

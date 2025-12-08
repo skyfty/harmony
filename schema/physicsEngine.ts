@@ -1,10 +1,10 @@
 import * as THREE from 'three'
-// @ts-expect-error Ammo wasm module ships without type definitions
-import AmmoFactory from 'three/examples/jsm/libs/ammo.wasm.js'
 import type { SceneNode } from '@harmony/schema'
 import type { RigidbodyPhysicsShape, RigidbodyVector3Tuple } from './components/definitions/rigidbodyComponent'
 
-type AmmoModule = Awaited<ReturnType<typeof AmmoFactory>>
+// type AmmoFactoryModule = typeof import('three/examples/jsm/libs/ammo.wasm.js')
+type AmmoFactoryFn = any
+type AmmoModule = Awaited<ReturnType<AmmoFactoryFn>>
 
 export type PhysicsContactSettings = {
   gravity?: RigidbodyVector3Tuple
@@ -49,13 +49,24 @@ const MIN_HALF_EXTENT = 1e-3
 const FIXED_TIME_STEP = 1 / 60
 const MAX_SUB_STEPS = 5
 
+let ammoFactoryPromise: Promise<AmmoFactoryFn> | null = null
 let ammoPromise: Promise<AmmoModule> | null = null
 let physicsContext: PhysicsWorldContext | null = null
 const heightfieldCache = new Map<string, GroundHeightfieldCacheEntry>()
 
+async function loadAmmoFactory(): Promise<AmmoFactoryFn> {
+  if (!ammoFactoryPromise) {
+    // ammoFactoryPromise = import('three/examples/jsm/libs/ammo.wasm.js').then((module) => {
+    //   const resolved = (module as AmmoFactoryModule).default ?? (module as unknown as AmmoFactoryFn)
+    //   return resolved as AmmoFactoryFn
+    // })
+  }
+  return ammoFactoryPromise
+}
+
 function ensureAmmo(): Promise<AmmoModule> {
   if (!ammoPromise) {
-    ammoPromise = AmmoFactory() as Promise<AmmoModule>
+    ammoPromise = loadAmmoFactory().then((factory) => factory() as Promise<AmmoModule>)
   }
   return ammoPromise
 }

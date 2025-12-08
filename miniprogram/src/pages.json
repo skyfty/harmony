@@ -111,7 +111,9 @@
         {
           "path": "index"
         }
-      ]
+      ],
+      "independent": true
+
     }
   ],
   "globalStyle": {
