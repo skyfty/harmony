@@ -2509,6 +2509,8 @@ function attachInstancedMesh(mesh: THREE.InstancedMesh): void {
   if (instancedMeshes.includes(mesh)) {
     return;
   }
+  // 禁用 InstancedMesh 的视锥裁剪，避免共享包围体过小导致实例在特定角度被裁掉
+  mesh.frustumCulled = false;
   instancedMeshes.push(mesh);
   instancedMeshGroup.add(mesh);
 }
@@ -3552,20 +3554,32 @@ function prepareImportedObjectForPreview(object: THREE.Object3D): void {
 }
 
 function syncInstancedTransform(object: THREE.Object3D | null): void {
-  if (!object?.userData?.instancedAssetId) {
-    return;
-  }
-  const nodeId = object.userData.nodeId as string | undefined;
-  if (!nodeId) {
+  if (!object) {
     return;
   }
   object.updateMatrixWorld(true);
-  object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper);
-  if (object.visible === false) {
-    instancedScaleHelper.setScalar(0);
+  const targets: THREE.Object3D[] = [];
+  object.traverse((child) => {
+    if (child.userData?.instancedAssetId) {
+      targets.push(child);
+    }
+  });
+  if (!targets.length) {
+    return;
   }
-  instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper);
-  updateModelInstanceMatrix(nodeId, instancedMatrixHelper);
+  targets.forEach((target) => {
+    const nodeId = target.userData?.nodeId as string | undefined;
+    if (!nodeId) {
+      return;
+    }
+    removeVehicleInstance(nodeId);
+    target.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper);
+    if (target.visible === false) {
+      instancedScaleHelper.setScalar(0);
+    }
+    instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper);
+    updateModelInstanceMatrix(nodeId, instancedMatrixHelper);
+  });
 }
 
 function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {

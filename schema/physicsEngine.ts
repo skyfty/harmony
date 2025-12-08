@@ -515,7 +515,7 @@ export function syncObjectFromBody(
 		bodyQuaternionHelper.multiply(orientationAdjustment.threeInverse)
 	}
 	object.quaternion.copy(bodyQuaternionHelper)
-	object.updateMatrixWorld()
+	object.updateMatrixWorld(true)
 	afterSync?.(object)
 }
 

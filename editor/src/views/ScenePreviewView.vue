@@ -1469,6 +1469,8 @@ function attachInstancedMesh(mesh: THREE.InstancedMesh) {
 	if (instancedMeshes.includes(mesh)) {
 		return
 	}
+	// 共享几何体的 InstancedMesh 默认包围体过小，视锥裁剪会误删远离原点的实例
+	mesh.frustumCulled = false
 	instancedMeshes.push(mesh)
 	instancedMeshGroup.add(mesh)
 }
@@ -5006,22 +5008,33 @@ function ensureChildOrder(parent: THREE.Object3D, child: THREE.Object3D, orderIn
 
 
 function syncInstancedTransform(object: THREE.Object3D | null) {
-	if (!object?.userData?.instancedAssetId) {
-		return
-	}
-	const nodeId = object.userData.nodeId as string | undefined
-	if (!nodeId) {
+	if (!object) {
 		return
 	}
 	object.updateMatrixWorld(true)
-				removeVehicleInstance(nodeId)
-	object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-	const isVisible = object.visible !== false
-	if (!isVisible) {
-		instancedScaleHelper.setScalar(0)
+	const targets: THREE.Object3D[] = []
+	object.traverse((child) => {
+		if (child.userData?.instancedAssetId) {
+			targets.push(child)
+		}
+	})
+	if (!targets.length) {
+		return
 	}
-	instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-	updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
+	targets.forEach((target) => {
+		const nodeId = target.userData?.nodeId as string | undefined
+		if (!nodeId) {
+			return
+		}
+		removeVehicleInstance(nodeId)
+		target.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+		const isVisible = target.visible !== false
+		if (!isVisible) {
+			instancedScaleHelper.setScalar(0)
+		}
+		instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+		updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
+	})
 }
 
 function resetPhysicsWorld(): void {
