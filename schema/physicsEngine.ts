@@ -111,6 +111,17 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
 	return numeric
 }
 
+function normalizeScaleVector(scaleLike: THREE.Vector3 | null | undefined): { x: number; y: number; z: number } {
+	const sx = typeof scaleLike?.x === 'number' && Number.isFinite(scaleLike.x) ? Math.abs(scaleLike.x) : 1
+	const sy = typeof scaleLike?.y === 'number' && Number.isFinite(scaleLike.y) ? Math.abs(scaleLike.y) : 1
+	const sz = typeof scaleLike?.z === 'number' && Number.isFinite(scaleLike.z) ? Math.abs(scaleLike.z) : 1
+	return {
+		x: sx > 0 ? sx : 1,
+		y: sy > 0 ? sy : 1,
+		z: sz > 0 ? sz : 1,
+	}
+}
+
 function formatRigidbodyMaterialKey(friction: number, restitution: number): string {
 	return `${friction.toFixed(3)}:${restitution.toFixed(3)}`
 }
@@ -339,13 +350,19 @@ function orientConvexFaces(faces: number[][], vertices: CANNON.Vec3[]): number[]
 	})
 }
 
-function createCannonShape(definition: RigidbodyPhysicsShape, loggerTag: LoggerTag): CANNON.Shape | null {
+
+function createCannonShape(
+	definition: RigidbodyPhysicsShape,
+	loggerTag: LoggerTag,
+	scale: { x: number; y: number; z: number } = { x: 1, y: 1, z: 1 },
+): CANNON.Shape | null {
+	const safeScale = normalizeScaleVector(scale)
 	if (definition.kind === 'box') {
 		const [x, y, z] = definition.halfExtents
 		if (![x, y, z].every((value) => typeof value === 'number' && Number.isFinite(value) && value > 0)) {
 			return null
 		}
-		return new CANNON.Box(new CANNON.Vec3(x, y, z))
+		return new CANNON.Box(new CANNON.Vec3(x * safeScale.x, y * safeScale.y, z * safeScale.z))
 	}
 	if (definition.kind === 'convex') {
 		if (!Array.isArray(definition.vertices) || definition.vertices.length < 4) {
@@ -362,12 +379,15 @@ function createCannonShape(definition: RigidbodyPhysicsShape, loggerTag: LoggerT
 			if (![vx, vy, vz].every((value) => Number.isFinite(value))) {
 				return null
 			}
-			const key = `${vx.toFixed(4)},${vy.toFixed(4)},${vz.toFixed(4)}`
+			const scaledX = vx * safeScale.x
+			const scaledY = vy * safeScale.y
+			const scaledZ = vz * safeScale.z
+			const key = `${scaledX.toFixed(4)},${scaledY.toFixed(4)},${scaledZ.toFixed(4)}`
 			if (vertexMap.has(key)) {
 				indexMap.set(i, vertexMap.get(key)!)
 			} else {
 				const newIndex = vertices.length
-				vertices.push(new CANNON.Vec3(vx, vy, vz))
+				vertices.push(new CANNON.Vec3(scaledX, scaledY, scaledZ))
 				vertexMap.set(key, newIndex)
 				indexMap.set(i, newIndex)
 			}
@@ -470,6 +490,9 @@ export function createRigidbodyBody(
 		contactSettings,
 		loggerTag,
 	} = options
+	object.updateMatrixWorld(true)
+	object.getWorldScale(physicsScaleHelper)
+	const shapeScale = normalizeScaleVector(physicsScaleHelper)
 	let offsetTuple: RigidbodyVector3Tuple | null = null
 	let resolvedShape: CANNON.Shape | null = null
 	let needsHeightfieldOrientation = false
@@ -482,7 +505,7 @@ export function createRigidbodyBody(
 		}
 	}
 	if (!resolvedShape && shapeDefinition) {
-		resolvedShape = createCannonShape(shapeDefinition, loggerTag)
+		resolvedShape = createCannonShape(shapeDefinition, loggerTag, shapeScale)
 		offsetTuple = shapeDefinition.offset ?? null
 		if (shapeDefinition.kind === 'heightfield') {
 			needsHeightfieldOrientation = true
@@ -507,7 +530,11 @@ export function createRigidbodyBody(
 	let shapeOffset: CANNON.Vec3 | undefined
 	if (offsetTuple) {
 		const [ox, oy, oz] = offsetTuple
-		shapeOffset = heightfieldShapeOffsetHelper.set(ox ?? 0, oy ?? 0, oz ?? 0)
+		shapeOffset = heightfieldShapeOffsetHelper.set(
+			(ox ?? 0) * shapeScale.x,
+			(oy ?? 0) * shapeScale.y,
+			(oz ?? 0) * shapeScale.z,
+		)
 	}
 	const orientationAdjustment = needsHeightfieldOrientation ? groundHeightfieldOrientationAdjustment : null
 	body.addShape(resolvedShape, shapeOffset)
