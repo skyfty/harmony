@@ -5887,7 +5887,7 @@ function stepPhysicsWorld(delta: number): void {
 		console.warn('[ScenePreview] Physics step failed', error)
 	}
 	rigidbodyInstances.forEach((entry) => syncSharedObjectFromBody(entry, syncInstancedTransform))
-	updateVehicleWheelVisuals(delta)
+	// updateVehicleWheelVisuals(delta)
 }
 
 function updateVehicleWheelVisuals(delta: number): void {
@@ -5908,10 +5908,9 @@ function updateVehicleWheelVisuals(delta: number): void {
 			return
 		}
 		const chassisBody = vehicle.chassisBody
-		if (!chassisBody) {
+		if (!chassisBody || !forwardAxis) {
 			return
 		}
-		// 记录车身位姿以计算运动方向与距离
 		wheelChassisPositionHelper.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
 		wheelQuaternionHelper.set(
 			chassisBody.quaternion.x,
@@ -5919,29 +5918,24 @@ function updateVehicleWheelVisuals(delta: number): void {
 			chassisBody.quaternion.z,
 			chassisBody.quaternion.w,
 		)
-		// 由车身旋转推导世界坐标系下的前进向量
 		wheelForwardHelper.copy(forwardAxis).applyQuaternion(wheelQuaternionHelper)
 		if (wheelForwardHelper.lengthSq() < 1e-6) {
 			wheelForwardHelper.set(0, 0, 1)
 		} else {
 			wheelForwardHelper.normalize()
 		}
-		// 首帧仅记录位置用于位移基准，不触发旋转
 		if (!instance.hasChassisPositionSample) {
 			instance.lastChassisPosition.copy(wheelChassisPositionHelper)
 			instance.hasChassisPositionSample = true
 			return
 		}
-		// 计算自上一帧以来沿前进方向的有符号位移
-		wheelChassisDisplacementHelper
-			.copy(wheelChassisPositionHelper)
-			.sub(instance.lastChassisPosition)
+		wheelChassisDisplacementHelper.copy(wheelChassisPositionHelper).sub(instance.lastChassisPosition)
 		instance.lastChassisPosition.copy(wheelChassisPositionHelper)
 		const signedDistance = wheelChassisDisplacementHelper.dot(wheelForwardHelper)
 		const signedSpeed = signedDistance / safeDelta
 		const canSpin = Math.abs(signedSpeed) >= VEHICLE_SPEED_EPSILON && Math.abs(signedDistance) >= VEHICLE_TRAVEL_EPSILON
+
 		wheelBindings.forEach((binding) => {
-			// 仅更新场景中存在的前轮
 			if (!binding.isFrontWheel || !binding.nodeId) {
 				return
 			}
@@ -5952,6 +5946,9 @@ function updateVehicleWheelVisuals(delta: number): void {
 			}
 			if (binding.object !== wheelObject) {
 				binding.object = wheelObject
+				binding.baseQuaternion = wheelObject.quaternion.clone()
+				binding.basePosition = wheelObject.position.clone()
+				binding.baseScale = wheelObject.scale.clone()
 			}
 			const wheelInfo = vehicle.wheelInfos[binding.wheelIndex]
 			const steeringAngle = wheelInfo?.steering ?? 0
@@ -5961,23 +5958,14 @@ function updateVehicleWheelVisuals(delta: number): void {
 				binding.spinAngle += angleDelta
 			}
 			binding.lastSteeringAngle = steeringAngle
-			// 先以车身姿态为基，再叠加转向、滚动，最后应用模型原始朝向，保持水平/垂直轴一致
+
 			wheelObject.position.copy(binding.basePosition)
 			wheelObject.scale.copy(binding.baseScale)
 			wheelObject.quaternion.copy(wheelQuaternionHelper)
-			wheelSteeringAxisHelper.copy(axisUp)
-			if (wheelSteeringAxisHelper.lengthSq() < 1e-6) {
-				wheelSteeringAxisHelper.set(0, 1, 0)
-			}
-			wheelSteeringAxisHelper.applyQuaternion(wheelQuaternionHelper)
-			if (wheelSteeringAxisHelper.lengthSq() < 1e-6) {
-				wheelSteeringAxisHelper.set(0, 1, 0)
-			} else {
-				wheelSteeringAxisHelper.normalize()
-			}
-			wheelSteeringQuaternionHelper.setFromAxisAngle(wheelSteeringAxisHelper, steeringAngle)
+
+			wheelSteeringQuaternionHelper.setFromAxisAngle(axisUp, steeringAngle)
 			wheelObject.quaternion.multiply(wheelSteeringQuaternionHelper)
-			// 滚动轴仅受车身与转向影响，避免因模型偏转改变轴向
+
 			wheelAxisHelper.copy(binding.axleAxis)
 			if (wheelAxisHelper.lengthSq() < 1e-6) {
 				wheelAxisHelper.copy(defaultWheelAxisVector)
