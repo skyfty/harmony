@@ -3,11 +3,9 @@ import { componentManager, type ComponentDefinition } from '../componentManager'
 import type { SceneNode, SceneNodeComponentState } from '../../index'
 
 export const RIGIDBODY_COMPONENT_TYPE = 'rigidbody'
-export type RigidbodyBodyType = 'DYNAMIC' | 'STATIC' | 'KINEMATIC'
 
 export interface RigidbodyComponentProps {
   mass: number
-  bodyType: RigidbodyBodyType
   targetNodeId: string | null
 }
 
@@ -42,7 +40,6 @@ export interface RigidbodyComponentMetadata {
 }
 
 export const DEFAULT_RIGIDBODY_MASS = 1
-export const DEFAULT_RIGIDBODY_BODY_TYPE: RigidbodyBodyType = 'DYNAMIC'
 export const MIN_RIGIDBODY_MASS = 0
 export const MAX_RIGIDBODY_MASS = 10_000
 
@@ -51,9 +48,6 @@ export function clampRigidbodyComponentProps(
 ): RigidbodyComponentProps {
   const rawMass = typeof props?.mass === 'number' && Number.isFinite(props.mass) ? props.mass : DEFAULT_RIGIDBODY_MASS
   const normalizedMass = Math.min(MAX_RIGIDBODY_MASS, Math.max(MIN_RIGIDBODY_MASS, rawMass))
-  const normalizedType: RigidbodyBodyType = props?.bodyType === 'STATIC' || props?.bodyType === 'KINEMATIC'
-    ? props.bodyType
-    : DEFAULT_RIGIDBODY_BODY_TYPE
   let normalizedTargetNodeId: string | null = null
   if (typeof props?.targetNodeId === 'string') {
     const trimmed = props.targetNodeId.trim()
@@ -63,7 +57,6 @@ export function clampRigidbodyComponentProps(
   }
   return {
     mass: normalizedMass,
-    bodyType: normalizedType,
     targetNodeId: normalizedTargetNodeId,
   }
 }
@@ -71,7 +64,6 @@ export function clampRigidbodyComponentProps(
 export function cloneRigidbodyComponentProps(props: RigidbodyComponentProps): RigidbodyComponentProps {
   return {
     mass: props.mass,
-    bodyType: props.bodyType,
     targetNodeId: props.targetNodeId ?? null,
   }
 }

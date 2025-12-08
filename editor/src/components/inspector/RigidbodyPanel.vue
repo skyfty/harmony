@@ -6,19 +6,12 @@ import { useSceneStore } from '@/stores/sceneStore'
 import {
   RIGIDBODY_COMPONENT_TYPE,
   type RigidbodyComponentProps,
-  type RigidbodyBodyType,
   clampRigidbodyComponentProps,
   DEFAULT_RIGIDBODY_MASS,
   MIN_RIGIDBODY_MASS,
   MAX_RIGIDBODY_MASS,
 } from '@schema/components'
 import NodePicker from '@/components/common/NodePicker.vue'
-
-const BODY_TYPE_OPTIONS: Array<{ label: string; value: RigidbodyBodyType }> = [
-  { label: 'Dynamic', value: 'DYNAMIC' },
-  { label: 'Kinematic', value: 'KINEMATIC' },
-  { label: 'Static', value: 'STATIC' },
-]
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
@@ -35,13 +28,11 @@ const normalizedProps = computed(() => {
 })
 
 const localMass = ref(DEFAULT_RIGIDBODY_MASS)
-const localBodyType = ref<RigidbodyBodyType>('DYNAMIC')
 
 watch(
   () => normalizedProps.value,
   (props) => {
     localMass.value = props.mass
-    localBodyType.value = props.bodyType
   },
   { immediate: true, deep: true },
 )
@@ -62,7 +53,6 @@ function handleMassInput(value: string | number) {
   }
   const clamped = clampRigidbodyComponentProps({
     mass: numeric,
-    bodyType: localBodyType.value,
   }).mass
   localMass.value = clamped
   if (Math.abs(clamped - normalizedProps.value.mass) <= 1e-4) {
@@ -71,16 +61,6 @@ function handleMassInput(value: string | number) {
   updateComponent({ mass: clamped })
 }
 
-function handleBodyTypeChange(value: RigidbodyBodyType | null) {
-  if (!value) {
-    return
-  }
-  localBodyType.value = value
-  if (value === normalizedProps.value.bodyType) {
-    return
-  }
-  updateComponent({ bodyType: value })
-}
 
 function handleToggleComponent() {
   const component = rigidbodyComponent.value
@@ -139,17 +119,7 @@ function handleRemoveComponent() {
     </v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="rigidbody-panel__body">
-        <v-select
-          label="Body Type"
-          density="comfortable"
-          variant="outlined"
-          :items="BODY_TYPE_OPTIONS"
-          item-title="label"
-          item-value="value"
-          :model-value="localBodyType"
-          :disabled="!rigidbodyComponent?.enabled"
-          @update:modelValue="handleBodyTypeChange"
-        />
+
         <v-text-field
           label="Mass"
           type="number"

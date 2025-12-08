@@ -10652,8 +10652,7 @@ export const useSceneStore = defineStore('scene', {
           ...typedPatch,
         })
         if (
-          Math.abs(currentProps.mass - merged.mass) <= 1e-4 &&
-          currentProps.bodyType === merged.bodyType
+          Math.abs(currentProps.mass - merged.mass) <= 1e-4 
         ) {
           return false
         }

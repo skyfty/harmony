@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type ComponentPublicInstance } from 'vue'
 import * as THREE from 'three'
-import * as CANNON from 'cannon-es'
 import { FirstPersonControls } from 'three/examples/jsm/controls/FirstPersonControls.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { Sky } from 'three/addons/objects/Sky.js'
@@ -18,7 +17,6 @@ import {
 	type SceneNodeComponentState,
 	type SceneMaterialTextureRef,
 	type SceneSkyboxSettings,
-	type Vector3Like,
 } from '@harmony/schema'
 import type { TerrainScatterStoreSnapshot, TerrainScatterInstance } from '@harmony/schema/terrain-scatter'
 import {
@@ -37,6 +35,17 @@ import {
 	buildHeightfieldShapeFromGroundNode,
 	isGroundDynamicMesh,
 } from '@schema/groundHeightfield'
+import {
+	ensurePhysicsWorld as ensureSharedPhysicsWorld,
+	createRigidbodyBody as createSharedRigidbodyBody,
+	syncBodyFromObject as syncSharedBodyFromObject,
+	syncObjectFromBody as syncSharedObjectFromBody,
+	type GroundHeightfieldCacheEntry,
+	type PhysicsContactSettings,
+	type RigidbodyInstance,
+	type RigidbodyMaterialEntry,
+	type RigidbodyOrientationAdjustment,
+} from '@schema/physicsEngine'
 import { loadNodeObject } from '@schema/modelAssetLoader'
 import {
 	getCachedModelObject,
@@ -544,6 +553,8 @@ const instancedScaleHelper = new THREE.Vector3()
 const nodeObjectMap = new Map<string, THREE.Object3D>()
 const scatterInstanceNodeIds = new Set<string>()
 const scatterMatrixHelper = new THREE.Matrix4()
+const rigidbodyInstances = new Map<string, RigidbodyInstance>()
+const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>()
 // const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>()
 const rotationState = { q: false, e: false }
 const defaultFirstPersonState = {
@@ -3219,6 +3230,7 @@ function startAnimationLoop() {
 					console.warn('[ScenePreview] Failed to advance effect runtime', error)
 				}
 			})
+			stepPhysicsWorld(delta)
 		}
 
 		updateBehaviorProximity()
@@ -3244,6 +3256,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 		releaseModelInstance(nodeId)
 	})
 	nodeObjectMap.clear()
+	resetPhysicsWorld()
 	if (!options.preservePreviewNodeMap) {
 		previewNodeMap.clear()
 	}
@@ -3550,6 +3563,10 @@ function applyFogSettings(settings: EnvironmentSettings) {
 	}
 }
 
+function applyPhysicsEnvironmentSettings(settings: EnvironmentSettings) {
+
+}
+
 async function applyBackgroundSettings(
 	background: EnvironmentSettings['background'],
 ): Promise<boolean> {
@@ -3641,6 +3658,7 @@ async function applyEnvironmentMapSettings(
 
 async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 	const snapshot = cloneEnvironmentSettingsLocal(settings)
+	applyPhysicsEnvironmentSettings(snapshot)
 	if (!scene) {
 		pendingEnvironmentSettings = snapshot
 		return
@@ -3825,6 +3843,7 @@ function removeNodeSubtree(nodeId: string) {
 		if (id) {
 			releaseModelInstance(id)
 			nodeObjectMap.delete(id)
+			removeRigidbodyInstance(id)
 			previewComponentManager.removeNode(id)
 			previewNodeMap.delete(id)
 			const controller = nodeAnimationControllers.get(id)
@@ -3854,6 +3873,7 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 				return
 			}
 			nodeObjectMap.set(nodeId, child)
+			ensureRigidbodyBindingForObject(nodeId, child)
 			pending?.delete(nodeId)
 			attachRuntimeForNode(nodeId, child)
 			const instancedAssetId = child.userData?.instancedAssetId as string | undefined
@@ -3930,6 +3950,15 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 	updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
 }
 
+function resetPhysicsWorld(): void {
+
+
+	rigidbodyInstances.clear()
+	physicsWorld = null
+	groundHeightfieldCache.clear()
+	rigidbodyMaterialCache.clear()
+	rigidbodyContactMaterialKeys.clear()
+}
 
 
 function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
