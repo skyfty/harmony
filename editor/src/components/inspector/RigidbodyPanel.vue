@@ -11,7 +11,6 @@ import {
   MIN_RIGIDBODY_MASS,
   MAX_RIGIDBODY_MASS,
 } from '@schema/components'
-import NodePicker from '@/components/common/NodePicker.vue'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)

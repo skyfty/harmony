@@ -7,6 +7,8 @@ import { Sky } from 'three/addons/objects/Sky.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
+// @ts-expect-error Ammo wasm module ships without type definitions
+import AmmoModule from 'three/examples/jsm/libs/ammo.wasm.js'
 import {
 	ENVIRONMENT_NODE_ID,
 	type EnvironmentSettings,
@@ -33,18 +35,18 @@ import { AssetLoader, AssetCache } from '@schema/assetCache'
 import type { AssetCacheEntry } from '@schema/assetCache'
 import {
 	buildHeightfieldShapeFromGroundNode,
-	isGroundDynamicMesh,
 } from '@schema/groundHeightfield'
 import {
 	ensurePhysicsWorld as ensureSharedPhysicsWorld,
 	createRigidbodyBody as createSharedRigidbodyBody,
 	syncBodyFromObject as syncSharedBodyFromObject,
 	syncObjectFromBody as syncSharedObjectFromBody,
-	type GroundHeightfieldCacheEntry,
+	resetPhysicsWorld as resetSharedPhysicsWorld,
+	stepPhysicsWorld as stepSharedPhysicsWorld,
+	destroyRigidbodyInstance as destroySharedRigidbodyInstance,
 	type PhysicsContactSettings,
 	type RigidbodyInstance,
 	type RigidbodyMaterialEntry,
-	type RigidbodyOrientationAdjustment,
 } from '@schema/physicsEngine'
 import { loadNodeObject } from '@schema/modelAssetLoader'
 import {
@@ -69,6 +71,7 @@ import {
 	warpGateComponentDefinition,
 	effectComponentDefinition,
 	rigidbodyComponentDefinition,
+	DEFAULT_RIGIDBODY_MASS,
 	GUIDEBOARD_COMPONENT_TYPE,
 	GUIDEBOARD_RUNTIME_REGISTRY_KEY,
 	GUIDEBOARD_EFFECT_ACTIVE_FLAG,
@@ -78,6 +81,7 @@ import {
 	RIGIDBODY_METADATA_KEY,
 	clampGuideboardComponentProps,
 	computeGuideboardEffectActive,
+	clampRigidbodyComponentProps,
 } from '@schema/components'
 import type {
 	GuideboardComponentProps,
@@ -555,7 +559,9 @@ const scatterInstanceNodeIds = new Set<string>()
 const scatterMatrixHelper = new THREE.Matrix4()
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
 const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>()
-// const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>()
+const physicsContactSettings: PhysicsContactSettings = { gravity: [0, -9.81, 0] }
+const ammoModuleFactory = AmmoModule
+void ammoModuleFactory
 const rotationState = { q: false, e: false }
 const defaultFirstPersonState = {
 	position: new THREE.Vector3(0, CAMERA_HEIGHT, 0),
@@ -686,6 +692,114 @@ function extractRigidbodyShape(
 	return payload?.shape ?? null
 }
 
+function getRigidbodyMaterial(nodeId: string): RigidbodyMaterialEntry {
+	const existing = rigidbodyMaterialCache.get(nodeId)
+	if (existing) {
+		return existing
+	}
+	const entry: RigidbodyMaterialEntry = { friction: 0.8, restitution: 0.05 }
+	rigidbodyMaterialCache.set(nodeId, entry)
+	return entry
+}
+
+function getShapeSignature(shape: RigidbodyPhysicsShape | null): string {
+	return shape ? JSON.stringify(shape) : 'none'
+}
+
+function removeRigidbodyInstance(nodeId: string): void {
+	const existing = rigidbodyInstances.get(nodeId)
+	if (!existing) {
+		return
+	}
+	destroySharedRigidbodyInstance(existing)
+	rigidbodyInstances.delete(nodeId)
+}
+
+async function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D): Promise<void> {
+	const node = resolveNodeById(nodeId)
+	const component = resolveRigidbodyComponent(node)
+	if (!component) {
+		removeRigidbodyInstance(nodeId)
+		return
+	}
+	const props = clampRigidbodyComponentProps(component.props)
+	const baseShape = extractRigidbodyShape(component)
+	const groundShape = node ? buildHeightfieldShapeFromGroundNode(node) : null
+	const shape = baseShape ?? groundShape ?? null
+	const desiredSignature = getShapeSignature(shape)
+	const existing = rigidbodyInstances.get(nodeId)
+	if (existing) {
+		const existingSignature = getShapeSignature(existing.shapeDefinition ?? null)
+		if (existingSignature === desiredSignature) {
+			syncSharedBodyFromObject(existing)
+			return
+		}
+		removeRigidbodyInstance(nodeId)
+	}
+	try {
+		await ensureSharedPhysicsWorld(physicsContactSettings)
+		const instance = await createSharedRigidbodyBody({
+			nodeId,
+			object,
+			shape,
+			mass: props.mass ?? DEFAULT_RIGIDBODY_MASS,
+			material: getRigidbodyMaterial(nodeId),
+			contactSettings: physicsContactSettings,
+		})
+		if (instance) {
+			rigidbodyInstances.set(nodeId, instance)
+			syncSharedBodyFromObject(instance)
+		}
+	} catch (error) {
+		console.warn('[ScenePreview] Failed to bind rigidbody', nodeId, error)
+	}
+}
+
+async function refreshRigidbodyBindingsForDocument(
+	document: SceneJsonExportDocument | null | undefined,
+): Promise<void> {
+	if (!document) {
+		rigidbodyInstances.forEach((_entry, id) => removeRigidbodyInstance(id))
+		return
+	}
+	const desiredIds = new Set<string>()
+	const stack = Array.isArray(document.nodes) ? [...document.nodes] : []
+	while (stack.length) {
+		const node = stack.pop()
+		if (!node) {
+			continue
+		}
+		const component = resolveRigidbodyComponent(node)
+		if (component) {
+			desiredIds.add(node.id)
+		}
+		if (Array.isArray(node.children) && node.children.length) {
+			stack.push(...node.children)
+		}
+	}
+	const tasks: Promise<void>[] = []
+	desiredIds.forEach((id) => {
+		const object = nodeObjectMap.get(id)
+		if (object) {
+			tasks.push(ensureRigidbodyBindingForObject(id, object))
+		}
+	})
+	rigidbodyInstances.forEach((_entry, id) => {
+		if (!desiredIds.has(id)) {
+			removeRigidbodyInstance(id)
+		}
+	})
+	await Promise.all(tasks)
+}
+
+function stepPhysicsWorld(delta: number): void {
+	if (!rigidbodyInstances.size) {
+		return
+	}
+	stepSharedPhysicsWorld(delta)
+	rigidbodyInstances.forEach((entry) => syncSharedObjectFromBody(entry, syncInstancedTransform))
+}
+
 function normalizeHexColor(value: unknown, fallback: string): string {
 	if (typeof value === 'string') {
 		const sanitized = value.trim()
@@ -711,14 +825,6 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
 }
 
 function normalizeAssetId(value: unknown): string | null {
-	if (typeof value !== 'string') {
-		return null
-	}
-	const trimmed = value.trim()
-	return trimmed.length ? trimmed : null
-}
-
-function normalizeNodeId(value: unknown): string | null {
 	if (typeof value !== 'string') {
 		return null
 	}
@@ -3564,7 +3670,17 @@ function applyFogSettings(settings: EnvironmentSettings) {
 }
 
 function applyPhysicsEnvironmentSettings(settings: EnvironmentSettings) {
-
+	const gravityLike = (settings as unknown as { gravity?: [number, number, number] | null })?.gravity
+	if (
+		Array.isArray(gravityLike) &&
+		gravityLike.length === 3 &&
+		gravityLike.every((value) => typeof value === 'number' && Number.isFinite(value))
+	) {
+		physicsContactSettings.gravity = gravityLike as [number, number, number]
+	} else {
+		physicsContactSettings.gravity = [0, -9.81, 0]
+	}
+	void ensureSharedPhysicsWorld(physicsContactSettings)
 }
 
 async function applyBackgroundSettings(
@@ -3951,13 +4067,10 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 }
 
 function resetPhysicsWorld(): void {
-
-
+	rigidbodyInstances.forEach((entry) => destroySharedRigidbodyInstance(entry))
 	rigidbodyInstances.clear()
-	physicsWorld = null
-	groundHeightfieldCache.clear()
 	rigidbodyMaterialCache.clear()
-	rigidbodyContactMaterialKeys.clear()
+	resetSharedPhysicsWorld()
 }
 
 
@@ -4522,6 +4635,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 		}
 		currentDocument = document
 		await syncTerrainScatterInstances(document, resourceCache)
+		await refreshRigidbodyBindingsForDocument(document)
 		refreshAnimations()
 		initializeLazyPlaceholders(document)
 		void applyEnvironmentSettingsToScene(environmentSettings)
@@ -4538,6 +4652,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	}
 
 	await syncTerrainScatterInstances(document, resourceCache)
+	await refreshRigidbodyBindingsForDocument(document)
 
 	currentDocument = document
 	refreshAnimations()

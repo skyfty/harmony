@@ -178,6 +178,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js';
+// @ts-expect-error Ammo wasm module ships without type definitions
+import AmmoModule from 'three/examples/jsm/libs/ammo.wasm.js';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from '@/components/PlatformCanvas.vue';
@@ -186,7 +188,7 @@ import { parseSceneDocument, useSceneStore } from '@/stores/sceneStore';
 import { buildSceneGraph, type SceneGraphBuildOptions, type SceneGraphResourceProgress } from '@schema/sceneGraph';
 import ResourceCache from '@schema/ResourceCache';
 import { AssetCache, AssetLoader, type AssetCacheEntry } from '@schema/assetCache';
-import { isGroundDynamicMesh } from '@schema/groundHeightfield';
+import { buildHeightfieldShapeFromGroundNode } from '@schema/groundHeightfield';
 import { loadNodeObject } from '@schema/modelAssetLoader';
 import {
   getCachedModelObject,
@@ -223,16 +225,21 @@ import {
   viewPointComponentDefinition,
   warpGateComponentDefinition,
   effectComponentDefinition,
+  rigidbodyComponentDefinition,
+  DEFAULT_RIGIDBODY_MASS,
   WARP_GATE_RUNTIME_REGISTRY_KEY,
   WARP_GATE_EFFECT_ACTIVE_FLAG,
   GUIDEBOARD_RUNTIME_REGISTRY_KEY,
   GUIDEBOARD_EFFECT_ACTIVE_FLAG,
   GUIDEBOARD_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
+  RIGIDBODY_COMPONENT_TYPE,
+  RIGIDBODY_METADATA_KEY,
   clampGuideboardComponentProps,
   computeGuideboardEffectActive,
+  clampRigidbodyComponentProps,
 } from '@schema/components';
-import type { GuideboardComponentProps, WarpGateComponentProps } from '@schema/components';
+import type { GuideboardComponentProps, WarpGateComponentProps, RigidbodyComponentProps, RigidbodyComponentMetadata, RigidbodyPhysicsShape } from '@schema/components';
 import {
   addBehaviorRuntimeListener,
   hasRegisteredBehaviors,
@@ -256,6 +263,18 @@ import {
   disposeMaterialOverrides,
   type MaterialTextureAssignmentOptions,
 } from '@schema/material';
+import {
+  ensurePhysicsWorld as ensureSharedPhysicsWorld,
+  createRigidbodyBody as createSharedRigidbodyBody,
+  syncBodyFromObject as syncSharedBodyFromObject,
+  syncObjectFromBody as syncSharedObjectFromBody,
+  stepPhysicsWorld as stepSharedPhysicsWorld,
+  destroyRigidbodyInstance as destroySharedRigidbodyInstance,
+  resetPhysicsWorld as resetSharedPhysicsWorld,
+  type PhysicsContactSettings,
+  type RigidbodyInstance,
+  type RigidbodyMaterialEntry,
+} from '@schema/physicsEngine';
 
 type ResolvedAssetUrl = { url: string; mimeType?: string | null; dispose?: () => void }
 
@@ -664,6 +683,7 @@ previewComponentManager.registerDefinition(displayBoardComponentDefinition);
 previewComponentManager.registerDefinition(viewPointComponentDefinition);
 previewComponentManager.registerDefinition(warpGateComponentDefinition);
 previewComponentManager.registerDefinition(effectComponentDefinition);
+previewComponentManager.registerDefinition(rigidbodyComponentDefinition);
 previewComponentManager.registerDefinition(behaviorComponentDefinition);
 
 const previewNodeMap = new Map<string, SceneNode>();
@@ -684,6 +704,11 @@ const scatterLocalScaleHelper = new THREE.Vector3();
 const scatterQuaternionHelper = new THREE.Quaternion();
 const scatterInstanceMatrixHelper = new THREE.Matrix4();
 const scatterMatrixHelper = new THREE.Matrix4();
+const rigidbodyInstances = new Map<string, RigidbodyInstance>();
+const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>();
+const physicsContactSettings: PhysicsContactSettings = { gravity: [0, -9.81, 0] };
+const ammoModuleFactory = AmmoModule;
+void ammoModuleFactory;
 
 const behaviorRaycaster = new THREE.Raycaster();
 const behaviorPointer = new THREE.Vector2();
@@ -2256,6 +2281,28 @@ function resolveGuideboardInitialVisibility(node: SceneNode | null | undefined):
   return props?.initiallyVisible === true;
 }
 
+function resolveRigidbodyComponent(
+  node: SceneNode | null | undefined,
+): SceneNodeComponentState<RigidbodyComponentProps> | null {
+  const component = node?.components?.[RIGIDBODY_COMPONENT_TYPE] as
+    | SceneNodeComponentState<RigidbodyComponentProps>
+    | undefined;
+  if (!component || !component.enabled) {
+    return null;
+  }
+  return component;
+}
+
+function extractRigidbodyShape(
+  component: SceneNodeComponentState<RigidbodyComponentProps> | null,
+): RigidbodyPhysicsShape | null {
+  if (!component) {
+    return null;
+  }
+  const payload = component.metadata?.[RIGIDBODY_METADATA_KEY] as RigidbodyComponentMetadata | undefined;
+  return payload?.shape ?? null;
+}
+
 function attachRuntimeForNode(nodeId: string, object: THREE.Object3D) {
   const nodeState = resolveNodeById(nodeId);
   if (!nodeState) {
@@ -2284,6 +2331,7 @@ function indexSceneObjects(root: THREE.Object3D) {
       if (nodeState) {
         applyMaterialOverrides(object, nodeState.materials, materialOverrideOptions);
       }
+      void ensureRigidbodyBindingForObject(nodeId, object);
       syncInstancedTransform(object);
     }
   });
@@ -2321,8 +2369,117 @@ function registerSceneSubtree(root: THREE.Object3D): void {
     if (nodeState) {
       applyMaterialOverrides(object, nodeState.materials, materialOverrideOptions);
     }
+    void ensureRigidbodyBindingForObject(nodeId, object);
     syncInstancedTransform(object);
   });
+}
+
+function getRigidbodyMaterial(nodeId: string): RigidbodyMaterialEntry {
+  const existing = rigidbodyMaterialCache.get(nodeId);
+  if (existing) {
+    return existing;
+  }
+  const material: RigidbodyMaterialEntry = { friction: 0.8, restitution: 0.05 };
+  rigidbodyMaterialCache.set(nodeId, material);
+  return material;
+}
+
+function getShapeSignature(shape: RigidbodyPhysicsShape | null): string {
+  return shape ? JSON.stringify(shape) : 'none';
+}
+
+function removeRigidbodyInstance(nodeId: string): void {
+  const existing = rigidbodyInstances.get(nodeId);
+  if (!existing) {
+    return;
+  }
+  destroySharedRigidbodyInstance(existing);
+  rigidbodyInstances.delete(nodeId);
+}
+
+async function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D): Promise<void> {
+  const node = previewNodeMap.get(nodeId) ?? null;
+  const component = resolveRigidbodyComponent(node);
+  if (!component) {
+    removeRigidbodyInstance(nodeId);
+    return;
+  }
+  const props = clampRigidbodyComponentProps(component.props);
+  const baseShape = extractRigidbodyShape(component);
+  const groundShape = node ? buildHeightfieldShapeFromGroundNode(node) : null;
+  const shape = baseShape ?? groundShape ?? null;
+  const desiredSignature = getShapeSignature(shape);
+  const existing = rigidbodyInstances.get(nodeId);
+  if (existing) {
+    const existingSignature = getShapeSignature(existing.shapeDefinition ?? null);
+    if (existingSignature === desiredSignature) {
+      syncSharedBodyFromObject(existing);
+      return;
+    }
+    removeRigidbodyInstance(nodeId);
+  }
+  try {
+    await ensureSharedPhysicsWorld(physicsContactSettings);
+    const instance = await createSharedRigidbodyBody({
+      nodeId,
+      object,
+      shape,
+      mass: props.mass ?? DEFAULT_RIGIDBODY_MASS,
+      material: getRigidbodyMaterial(nodeId),
+      contactSettings: physicsContactSettings,
+    });
+    if (instance) {
+      rigidbodyInstances.set(nodeId, instance);
+      syncSharedBodyFromObject(instance);
+    }
+  } catch (error) {
+    console.warn('[SceneViewer] Failed to bind rigidbody', nodeId, error);
+  }
+}
+
+async function refreshRigidbodyBindingsForDocument(
+  document: SceneJsonExportDocument | null | undefined,
+): Promise<void> {
+  if (!document) {
+    rigidbodyInstances.forEach((_entry, id) => removeRigidbodyInstance(id));
+    return;
+  }
+  const desiredIds = new Set<string>();
+  const stack = Array.isArray(document.nodes) ? [...document.nodes] : [];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    const component = resolveRigidbodyComponent(node);
+    if (component) {
+      desiredIds.add(node.id);
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  const tasks: Promise<void>[] = [];
+  desiredIds.forEach((id) => {
+    const object = nodeObjectMap.get(id);
+    if (object) {
+      tasks.push(ensureRigidbodyBindingForObject(id, object));
+    }
+  });
+  rigidbodyInstances.forEach((_entry, id) => {
+    if (!desiredIds.has(id)) {
+      removeRigidbodyInstance(id);
+    }
+  });
+  await Promise.all(tasks);
+}
+
+function stepPhysicsWorld(delta: number): void {
+  if (!rigidbodyInstances.size) {
+    return;
+  }
+  stepSharedPhysicsWorld(delta);
+  rigidbodyInstances.forEach((entry) => syncSharedObjectFromBody(entry, syncInstancedTransform));
 }
 
 async function applyDeferredInstancingForNode(nodeId: string): Promise<boolean> {
@@ -4602,6 +4759,10 @@ function teardownRenderer() {
   }
   const { renderer, scene, controls } = renderContext;
   releaseTerrainScatterInstances();
+  rigidbodyInstances.forEach((entry) => destroySharedRigidbodyInstance(entry));
+  rigidbodyInstances.clear();
+  rigidbodyMaterialCache.clear();
+  resetSharedPhysicsWorld();
   if (canvasResult?.canvas && handleBehaviorClick) {
     canvasResult.canvas.removeEventListener('touchend', handleBehaviorClick);
         handleBehaviorClick = null;
@@ -4863,6 +5024,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   rebuildPreviewNodeMap(payload.document.nodes);
   previewComponentManager.syncScene(payload.document.nodes ?? []);
   indexSceneObjects(graph.root);
+  await refreshRigidbodyBindingsForDocument(payload.document);
   refreshBehaviorProximityCandidates();
   refreshAnimationControllers(graph.root);
   ensureBehaviorTapHandler(canvas as HTMLCanvasElement, camera);
@@ -4902,6 +5064,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
               console.warn('更新特效动画失败', error);
             }
           });
+          stepPhysicsWorld(deltaSeconds);
         }
         updateBehaviorProximity();
         updateLazyPlaceholders(deltaSeconds);
