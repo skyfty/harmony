@@ -695,6 +695,8 @@ type VehicleWheelBinding = {
 	spinAngle: number
 	lastSteeringAngle: number
 	baseQuaternion: THREE.Quaternion
+	basePosition: THREE.Vector3
+	baseScale: THREE.Vector3
 }
 type VehicleWheelSetupEntry = {
 	config: VehicleWheelProps
@@ -5633,6 +5635,8 @@ function createVehicleInstance(
 		}
 		axis.normalize()
 		const wheelObject = config.nodeId ? nodeObjectMap.get(config.nodeId) ?? null : null
+		const basePosition = wheelObject ? wheelObject.position.clone() : new THREE.Vector3()
+		const baseScale = wheelObject ? wheelObject.scale.clone() : new THREE.Vector3(1, 1, 1)
 		wheelBindings.push({
 			nodeId: config.nodeId ?? null,
 			object: wheelObject,
@@ -5643,6 +5647,8 @@ function createVehicleInstance(
 			spinAngle: 0,
 			lastSteeringAngle: 0,
 			baseQuaternion: wheelObject ? wheelObject.quaternion.clone() : new THREE.Quaternion(),
+			basePosition,
+			baseScale,
 		})
 	})
 	vehicle.addToWorld(physicsWorld)
@@ -5954,17 +5960,28 @@ function updateVehicleWheelVisuals(delta: number): void {
 				binding.spinAngle += angleDelta
 			}
 			binding.lastSteeringAngle = steeringAngle
-			// 先以车身姿态为基，再叠加转向、模型原始朝向与滚动
+			// 先以车身姿态为基，再叠加转向、滚动，最后应用模型原始朝向，保持水平/垂直轴一致
+			wheelObject.position.copy(binding.basePosition)
+			wheelObject.scale.copy(binding.baseScale)
 			wheelObject.quaternion.copy(wheelQuaternionHelper)
 			wheelSteeringQuaternionHelper.setFromAxisAngle(axisUp, steeringAngle)
 			wheelObject.quaternion.multiply(wheelSteeringQuaternionHelper)
-			wheelObject.quaternion.multiply(binding.baseQuaternion)
+			// 滚动轴仅受车身与转向影响，避免因模型偏转改变轴向
 			wheelAxisHelper.copy(binding.axleAxis)
 			if (wheelAxisHelper.lengthSq() < 1e-6) {
 				wheelAxisHelper.copy(defaultWheelAxisVector)
 			}
+			wheelAxisHelper.applyQuaternion(wheelQuaternionHelper)
+			wheelAxisHelper.applyQuaternion(wheelSteeringQuaternionHelper)
+			if (wheelAxisHelper.lengthSq() < 1e-6) {
+				wheelAxisHelper.copy(defaultWheelAxisVector)
+				wheelAxisHelper.applyQuaternion(wheelQuaternionHelper)
+				wheelAxisHelper.applyQuaternion(wheelSteeringQuaternionHelper)
+			}
+			wheelAxisHelper.normalize()
 			wheelSpinQuaternionHelper.setFromAxisAngle(wheelAxisHelper, binding.spinAngle)
 			wheelObject.quaternion.multiply(wheelSpinQuaternionHelper)
+			wheelObject.quaternion.multiply(binding.baseQuaternion)
 			wheelObject.updateMatrixWorld(true)
 			syncInstancedTransform(wheelObject)
 		})

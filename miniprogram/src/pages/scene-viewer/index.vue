@@ -839,7 +839,7 @@ let physicsWorld: CANNON.World | null = null;
 const rigidbodyInstances = new Map<string, RigidbodyInstance>();
 const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>();
 const rigidbodyContactMaterialKeys = new Set<string>();
-const vehicleInstances = new Map<string, VehicleInstance>();
+const vehicleInstances = new Map<string, VehicleInstanceWithWheels>();
 const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>();
 const physicsGravity = new CANNON.Vec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0);
 let physicsContactRestitution = DEFAULT_ENVIRONMENT_RESTITUTION;
@@ -852,6 +852,19 @@ const PHYSICS_CONTACT_STIFFNESS = 1e9
 const PHYSICS_CONTACT_RELAXATION = 4
 const PHYSICS_FRICTION_STIFFNESS = 1e9
 const PHYSICS_FRICTION_RELAXATION = 4
+
+const wheelForwardHelper = new THREE.Vector3();
+const wheelAxisHelper = new THREE.Vector3();
+const wheelQuaternionHelper = new THREE.Quaternion();
+const wheelSteeringQuaternionHelper = new THREE.Quaternion();
+const wheelSpinQuaternionHelper = new THREE.Quaternion();
+const wheelChassisPositionHelper = new THREE.Vector3();
+const wheelChassisDisplacementHelper = new THREE.Vector3();
+const defaultWheelAxisVector = new THREE.Vector3(DEFAULT_AXLE.x, DEFAULT_AXLE.y, DEFAULT_AXLE.z).normalize();
+const VEHICLE_WHEEL_MIN_RADIUS = 0.01;
+const VEHICLE_SPEED_EPSILON = 1e-3;
+const VEHICLE_WHEEL_SPIN_EPSILON = 1e-4;
+const VEHICLE_TRAVEL_EPSILON = 1e-5;
 
 const behaviorRaycaster = new THREE.Raycaster();
 const behaviorPointer = new THREE.Vector2();
@@ -871,6 +884,27 @@ let suppressSelfYawRecenter = false;
 
 const JOYSTICK_INPUT_RADIUS = 64;
 const JOYSTICK_VISUAL_RANGE = 44;
+
+type VehicleWheelBinding = {
+  nodeId: string | null;
+  object: THREE.Object3D | null;
+  radius: number;
+  axleAxis: THREE.Vector3;
+  isFrontWheel: boolean;
+  wheelIndex: number;
+  spinAngle: number;
+  lastSteeringAngle: number;
+  baseQuaternion: THREE.Quaternion;
+  basePosition: THREE.Vector3;
+  baseScale: THREE.Vector3;
+};
+
+type VehicleInstanceWithWheels = VehicleInstance & {
+  wheelBindings: VehicleWheelBinding[];
+  forwardAxis: THREE.Vector3;
+  lastChassisPosition: THREE.Vector3;
+  hasChassisPositionSample: boolean;
+};
 
 function runWithProgrammaticCameraMutation<T>(callback: () => T): T {
   programmaticCameraMutationDepth += 1;
@@ -2951,7 +2985,7 @@ function createVehicleInstance(
   node: SceneNode,
   component: SceneNodeComponentState<VehicleComponentProps>,
   rigidbody: RigidbodyInstance,
-): VehicleInstance | null {
+): VehicleInstanceWithWheels | null {
   if (!physicsWorld || !rigidbody.object) {
     return null;
   }
@@ -2994,7 +3028,8 @@ function createVehicleInstance(
     indexUpAxis: upAxis,
     indexForwardAxis: forwardAxis,
   });
-  wheelEntries.forEach(({ config, point, direction, axle }) => {
+  const wheelBindings: VehicleWheelBinding[] = [];
+  wheelEntries.forEach(({ config, point, direction, axle }, index) => {
     vehicle.addWheel({
       chassisConnectionPointLocal: point,
       directionLocal: direction,
@@ -3012,19 +3047,49 @@ function createVehicleInstance(
       rollInfluence: config.rollInfluence,
       radius: config.radius,
     });
+    const axis = new THREE.Vector3(axle.x, axle.y, axle.z);
+    if (axis.lengthSq() < 1e-6) {
+      axis.copy(defaultWheelAxisVector);
+    }
+    axis.normalize();
+    const wheelObject = config.nodeId ? nodeObjectMap.get(config.nodeId) ?? null : null;
+    const basePosition = wheelObject ? wheelObject.position.clone() : new THREE.Vector3();
+    const baseScale = wheelObject ? wheelObject.scale.clone() : new THREE.Vector3(1, 1, 1);
+    wheelBindings.push({
+      nodeId: config.nodeId ?? null,
+      object: wheelObject,
+      radius: Math.max(config.radius, VEHICLE_WHEEL_MIN_RADIUS),
+      axleAxis: axis,
+      isFrontWheel: config.isFrontWheel === true,
+      wheelIndex: index,
+      spinAngle: 0,
+      lastSteeringAngle: 0,
+      baseQuaternion: wheelObject ? wheelObject.quaternion.clone() : new THREE.Quaternion(),
+      basePosition,
+      baseScale,
+    });
   });
   vehicle.addToWorld(physicsWorld);
+  const initialChassisPosition = new THREE.Vector3(
+    rigidbody.body.position.x,
+    rigidbody.body.position.y,
+    rigidbody.body.position.z,
+  );
   return {
     nodeId: node.id,
     vehicle,
     wheelCount,
     steerableWheelIndices,
+    wheelBindings,
+    forwardAxis: axisForwardVector.clone(),
     axisRightIndex: rightAxis,
     axisUpIndex: upAxis,
     axisForwardIndex: forwardAxis,
     axisRight: axisRightVector,
     axisUp: axisUpVector,
     axisForward: axisForwardVector,
+    lastChassisPosition: initialChassisPosition,
+    hasChassisPositionSample: false,
   };
 }
 
@@ -3158,7 +3223,17 @@ function syncVehicleInstancesForDocument(document: SceneJsonExportDocument | nul
 }
 
 function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null): void {
+  if (!document) {
+    resetPhysicsWorld();
+    syncVehicleInstancesForDocument(null);
+    return;
+  }
   const rigidbodyNodes = collectRigidbodyNodes(document.nodes);
+  if (!rigidbodyNodes.length) {
+    resetPhysicsWorld();
+    syncVehicleInstancesForDocument(null);
+    return;
+  }
   const world = ensurePhysicsWorld();
   const desiredIds = new Set<string>();
   rigidbodyNodes.forEach((node) => {
@@ -3208,8 +3283,107 @@ function stepPhysicsWorld(delta: number): void {
   if (!physicsWorld || !rigidbodyInstances.size) {
     return;
   }
-  physicsWorld.step(PHYSICS_FIXED_TIMESTEP, delta, PHYSICS_MAX_SUB_STEPS);
+  try {
+    physicsWorld.step(PHYSICS_FIXED_TIMESTEP, delta, PHYSICS_MAX_SUB_STEPS);
+  } catch (error) {
+    console.warn('[SceneViewer] Physics step failed', error);
+  }
   rigidbodyInstances.forEach((entry) => syncSharedObjectFromBody(entry, syncInstancedTransform));
+  updateVehicleWheelVisuals(delta);
+}
+
+function updateVehicleWheelVisuals(delta: number): void {
+  if (delta <= 0 || !vehicleInstances.size) {
+    return;
+  }
+  const safeDelta = Math.max(delta, 1e-6);
+  vehicleInstances.forEach((instanceRaw) => {
+    const instance = instanceRaw as VehicleInstanceWithWheels;
+    const { vehicle, wheelBindings, forwardAxis, axisUp } = instance;
+    if (!wheelBindings?.length) {
+      return;
+    }
+    const hasFrontWheel = wheelBindings.some((binding) => binding.isFrontWheel && binding.nodeId);
+    if (!hasFrontWheel) {
+      return;
+    }
+    const chassisBody = vehicle.chassisBody;
+    if (!chassisBody || !forwardAxis) {
+      return;
+    }
+    wheelChassisPositionHelper.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z);
+    wheelQuaternionHelper.set(
+      chassisBody.quaternion.x,
+      chassisBody.quaternion.y,
+      chassisBody.quaternion.z,
+      chassisBody.quaternion.w,
+    );
+    wheelForwardHelper.copy(forwardAxis).applyQuaternion(wheelQuaternionHelper);
+    if (wheelForwardHelper.lengthSq() < 1e-6) {
+      wheelForwardHelper.set(0, 0, 1);
+    } else {
+      wheelForwardHelper.normalize();
+    }
+    if (!instance.hasChassisPositionSample) {
+      instance.lastChassisPosition.copy(wheelChassisPositionHelper);
+      instance.hasChassisPositionSample = true;
+      return;
+    }
+    wheelChassisDisplacementHelper.copy(wheelChassisPositionHelper).sub(instance.lastChassisPosition);
+    instance.lastChassisPosition.copy(wheelChassisPositionHelper);
+    const signedDistance = wheelChassisDisplacementHelper.dot(wheelForwardHelper);
+    const signedSpeed = signedDistance / safeDelta;
+    const canSpin = Math.abs(signedSpeed) >= VEHICLE_SPEED_EPSILON && Math.abs(signedDistance) >= VEHICLE_TRAVEL_EPSILON;
+
+    wheelBindings.forEach((binding) => {
+      if (!binding.isFrontWheel || !binding.nodeId) {
+        return;
+      }
+      const wheelObject = nodeObjectMap.get(binding.nodeId) ?? null;
+      if (!wheelObject) {
+        binding.object = null;
+        return;
+      }
+      if (binding.object !== wheelObject) {
+        binding.object = wheelObject;
+        binding.baseQuaternion = wheelObject.quaternion.clone();
+        binding.basePosition = wheelObject.position.clone();
+        binding.baseScale = wheelObject.scale.clone();
+      }
+      const wheelInfo = vehicle.wheelInfos[binding.wheelIndex];
+      const steeringAngle = wheelInfo?.steering ?? 0;
+      const radius = Math.max(binding.radius, VEHICLE_WHEEL_MIN_RADIUS);
+      const angleDelta = canSpin ? signedDistance / radius : 0;
+      if (Math.abs(angleDelta) >= VEHICLE_WHEEL_SPIN_EPSILON) {
+        binding.spinAngle += angleDelta;
+      }
+      binding.lastSteeringAngle = steeringAngle;
+
+      wheelObject.position.copy(binding.basePosition);
+      wheelObject.scale.copy(binding.baseScale);
+      wheelObject.quaternion.copy(wheelQuaternionHelper);
+      wheelSteeringQuaternionHelper.setFromAxisAngle(axisUp, steeringAngle);
+      wheelObject.quaternion.multiply(wheelSteeringQuaternionHelper);
+
+      wheelAxisHelper.copy(binding.axleAxis);
+      if (wheelAxisHelper.lengthSq() < 1e-6) {
+        wheelAxisHelper.copy(defaultWheelAxisVector);
+      }
+      wheelAxisHelper.applyQuaternion(wheelQuaternionHelper);
+      wheelAxisHelper.applyQuaternion(wheelSteeringQuaternionHelper);
+      if (wheelAxisHelper.lengthSq() < 1e-6) {
+        wheelAxisHelper.copy(defaultWheelAxisVector);
+        wheelAxisHelper.applyQuaternion(wheelQuaternionHelper);
+        wheelAxisHelper.applyQuaternion(wheelSteeringQuaternionHelper);
+      }
+      wheelAxisHelper.normalize();
+      wheelSpinQuaternionHelper.setFromAxisAngle(wheelAxisHelper, binding.spinAngle);
+      wheelObject.quaternion.multiply(wheelSpinQuaternionHelper);
+      wheelObject.quaternion.multiply(binding.baseQuaternion);
+      wheelObject.updateMatrixWorld(true);
+      syncInstancedTransform(wheelObject);
+    });
+  });
 }
 
 async function applyDeferredInstancingForNode(nodeId: string): Promise<boolean> {
