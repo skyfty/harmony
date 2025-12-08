@@ -4,10 +4,12 @@ import type { SceneNode, SceneNodeComponentState } from '../../index'
 
 export const RIGIDBODY_COMPONENT_TYPE = 'rigidbody'
 export type RigidbodyBodyType = 'DYNAMIC' | 'STATIC' | 'KINEMATIC'
+export type RigidbodyColliderType = 'box' | 'convex'
 
 export interface RigidbodyComponentProps {
   mass: number
   bodyType: RigidbodyBodyType
+  colliderType: RigidbodyColliderType
   linearDamping: number
   angularDamping: number
   restitution: number
@@ -47,6 +49,7 @@ export interface RigidbodyComponentMetadata {
 
 export const DEFAULT_RIGIDBODY_MASS = 10000
 export const DEFAULT_RIGIDBODY_BODY_TYPE: RigidbodyBodyType = 'DYNAMIC'
+export const DEFAULT_RIGIDBODY_COLLIDER_TYPE: RigidbodyColliderType = 'convex'
 export const MIN_RIGIDBODY_MASS = 0
 export const MAX_RIGIDBODY_MASS = 100000
 export const DEFAULT_LINEAR_DAMPING = 0.01
@@ -62,6 +65,9 @@ export function clampRigidbodyComponentProps(
   const normalizedType: RigidbodyBodyType = props?.bodyType === 'STATIC' || props?.bodyType === 'KINEMATIC'
     ? props.bodyType
     : DEFAULT_RIGIDBODY_BODY_TYPE
+  const normalizedColliderType: RigidbodyColliderType = props?.colliderType === 'box' || props?.colliderType === 'convex'
+    ? props.colliderType
+    : DEFAULT_RIGIDBODY_COLLIDER_TYPE
   
   const rawLinearDamping = typeof props?.linearDamping === 'number' && Number.isFinite(props.linearDamping) ? props.linearDamping : DEFAULT_LINEAR_DAMPING
   const normalizedLinearDamping = Math.max(0, Math.min(1, rawLinearDamping))
@@ -90,6 +96,7 @@ export function clampRigidbodyComponentProps(
   return {
     mass: normalizedMass,
     bodyType: normalizedType,
+    colliderType: normalizedColliderType,
     linearDamping: normalizedLinearDamping,
     angularDamping: normalizedAngularDamping,
     restitution: normalizedRestitution,
@@ -102,6 +109,7 @@ export function cloneRigidbodyComponentProps(props: RigidbodyComponentProps): Ri
   return {
     mass: props.mass,
     bodyType: props.bodyType,
+    colliderType: props.colliderType,
     linearDamping: props.linearDamping,
     angularDamping: props.angularDamping,
     restitution: props.restitution,

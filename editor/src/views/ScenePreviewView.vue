@@ -652,6 +652,7 @@ const rigidbodyDebugQuaternionHelper = new THREE.Quaternion()
 const rigidbodyDebugScaleHelper = new THREE.Vector3()
 const wheelForwardHelper = new THREE.Vector3()
 const wheelAxisHelper = new THREE.Vector3()
+const wheelSteeringAxisHelper = new THREE.Vector3()
 const wheelQuaternionHelper = new THREE.Quaternion()
 const wheelSteeringQuaternionHelper = new THREE.Quaternion()
 const wheelSpinQuaternionHelper = new THREE.Quaternion()
@@ -5886,7 +5887,7 @@ function stepPhysicsWorld(delta: number): void {
 		console.warn('[ScenePreview] Physics step failed', error)
 	}
 	rigidbodyInstances.forEach((entry) => syncSharedObjectFromBody(entry, syncInstancedTransform))
-	updateVehicleWheelVisuals(delta)
+	// updateVehicleWheelVisuals(delta)
 }
 
 function updateVehicleWheelVisuals(delta: number): void {
@@ -5964,7 +5965,17 @@ function updateVehicleWheelVisuals(delta: number): void {
 			wheelObject.position.copy(binding.basePosition)
 			wheelObject.scale.copy(binding.baseScale)
 			wheelObject.quaternion.copy(wheelQuaternionHelper)
-			wheelSteeringQuaternionHelper.setFromAxisAngle(axisUp, steeringAngle)
+			wheelSteeringAxisHelper.copy(axisUp)
+			if (wheelSteeringAxisHelper.lengthSq() < 1e-6) {
+				wheelSteeringAxisHelper.set(0, 1, 0)
+			}
+			wheelSteeringAxisHelper.applyQuaternion(wheelQuaternionHelper)
+			if (wheelSteeringAxisHelper.lengthSq() < 1e-6) {
+				wheelSteeringAxisHelper.set(0, 1, 0)
+			} else {
+				wheelSteeringAxisHelper.normalize()
+			}
+			wheelSteeringQuaternionHelper.setFromAxisAngle(wheelSteeringAxisHelper, steeringAngle)
 			wheelObject.quaternion.multiply(wheelSteeringQuaternionHelper)
 			// 滚动轴仅受车身与转向影响，避免因模型偏转改变轴向
 			wheelAxisHelper.copy(binding.axleAxis)

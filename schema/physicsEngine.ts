@@ -301,6 +301,44 @@ function sanitizeConvexFaces(source: unknown, vertexCount: number): SanitizedFac
 	return result
 }
 
+function orientConvexFaces(faces: number[][], vertices: CANNON.Vec3[]): number[][] {
+	if (!faces.length || !vertices.length) {
+		return faces
+	}
+	const centroid = new CANNON.Vec3()
+	vertices.forEach((vertex) => {
+		centroid.vadd(vertex, centroid)
+	})
+	centroid.scale(1 / vertices.length, centroid)
+	const ab = new CANNON.Vec3()
+	const ac = new CANNON.Vec3()
+	const normal = new CANNON.Vec3()
+	const toCentroid = new CANNON.Vec3()
+	return faces.map((face) => {
+		if (face.length < 3) {
+			return face
+		}
+		const [i0, i1, i2] = face
+		if (i0 === undefined || i1 === undefined || i2 === undefined) {
+			return face
+		}
+		const a = vertices[i0]
+		const b = vertices[i1]
+		const c = vertices[i2]
+		if (!a || !b || !c) {
+			return face
+		}
+		ab.set(b.x, b.y, b.z).vsub(a, ab)
+		ac.set(c.x, c.y, c.z).vsub(a, ac)
+		ab.cross(ac, normal)
+		if (normal.lengthSquared() < 1e-12) {
+			return face
+		}
+		toCentroid.set(a.x, a.y, a.z).vsub(centroid, toCentroid)
+		return normal.dot(toCentroid) >= 0 ? face : [...face].reverse()
+	})
+}
+
 function createCannonShape(definition: RigidbodyPhysicsShape, loggerTag: LoggerTag): CANNON.Shape | null {
 	if (definition.kind === 'box') {
 		const [x, y, z] = definition.halfExtents
@@ -362,7 +400,8 @@ function createCannonShape(definition: RigidbodyPhysicsShape, loggerTag: LoggerT
 		if (invalidCount) {
 			warn(loggerTag, 'Convex collider faces contain invalid vertex indices; skipped %d face(s).', invalidCount)
 		}
-		return new CANNON.ConvexPolyhedron({ vertices, faces })
+		const orientedFaces = orientConvexFaces(faces, vertices)
+		return new CANNON.ConvexPolyhedron({ vertices, faces: orientedFaces })
 	}
 	if (definition.kind === 'heightfield') {
 		const matrix = normalizeHeightfieldMatrix(definition.matrix)

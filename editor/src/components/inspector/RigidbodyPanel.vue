@@ -6,8 +6,10 @@ import { useSceneStore } from '@/stores/sceneStore'
 import {
   RIGIDBODY_COMPONENT_TYPE,
   type RigidbodyComponentProps,
+  type RigidbodyColliderType,
   type RigidbodyBodyType,
   clampRigidbodyComponentProps,
+  DEFAULT_RIGIDBODY_COLLIDER_TYPE,
   DEFAULT_RIGIDBODY_MASS,
   MIN_RIGIDBODY_MASS,
   MAX_RIGIDBODY_MASS,
@@ -22,6 +24,11 @@ const BODY_TYPE_OPTIONS: Array<{ label: string; value: RigidbodyBodyType }> = [
   { label: 'Dynamic', value: 'DYNAMIC' },
   { label: 'Kinematic', value: 'KINEMATIC' },
   { label: 'Static', value: 'STATIC' },
+]
+
+const COLLIDER_TYPE_OPTIONS: Array<{ label: string; value: RigidbodyColliderType }> = [
+  { label: 'Convex (Mesh)', value: 'convex' },
+  { label: 'Box', value: 'box' },
 ]
 
 const sceneStore = useSceneStore()
@@ -40,6 +47,7 @@ const normalizedProps = computed(() => {
 
 const localMass = ref(DEFAULT_RIGIDBODY_MASS)
 const localBodyType = ref<RigidbodyBodyType>('DYNAMIC')
+const localColliderType = ref<RigidbodyColliderType>(DEFAULT_RIGIDBODY_COLLIDER_TYPE)
 const localLinearDamping = ref(DEFAULT_LINEAR_DAMPING)
 const localAngularDamping = ref(DEFAULT_ANGULAR_DAMPING)
 const localRestitution = ref(DEFAULT_RIGIDBODY_RESTITUTION)
@@ -58,6 +66,7 @@ watch(
     } else {
       localMass.value = props.mass
     }
+    localColliderType.value = props.colliderType
     localLinearDamping.value = props.linearDamping
     localAngularDamping.value = props.angularDamping
     localRestitution.value = props.restitution
@@ -177,6 +186,17 @@ function handleBodyTypeChange(value: RigidbodyBodyType | null) {
   updateComponent({ bodyType: value })
 }
 
+function handleColliderTypeChange(value: RigidbodyColliderType | null) {
+  if (!value) {
+    return
+  }
+  localColliderType.value = value
+  if (value === normalizedProps.value.colliderType) {
+    return
+  }
+  updateComponent({ colliderType: value })
+}
+
 function handleToggleComponent() {
   const component = rigidbodyComponent.value
   const nodeId = selectedNodeId.value
@@ -266,6 +286,17 @@ function handleTargetNodeChange(nodeId: string | null) {
           :model-value="localBodyType"
           :disabled="!rigidbodyComponent?.enabled"
           @update:modelValue="handleBodyTypeChange"
+        />
+        <v-select
+          label="Collider Type"
+          density="compact"
+          variant="underlined"
+          :items="COLLIDER_TYPE_OPTIONS"
+          item-title="label"
+          item-value="value"
+          :model-value="localColliderType"
+          :disabled="!rigidbodyComponent?.enabled"
+          @update:modelValue="handleColliderTypeChange"
         />
         <v-text-field
           label="Mass"

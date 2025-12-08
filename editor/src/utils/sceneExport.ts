@@ -29,6 +29,7 @@ import {
   type RigidbodyComponentProps,
   type RigidbodyComponentMetadata,
   type RigidbodyPhysicsShape,
+  clampRigidbodyComponentProps,
   RIGIDBODY_METADATA_KEY,
 } from '@schema/components'
 import { isGroundDynamicMesh } from '@schema/groundHeightfield'
@@ -640,12 +641,14 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
     if (!samplingObject) {
       continue
     }
+    const props = clampRigidbodyComponentProps(entry.component.props as Partial<RigidbodyComponentProps>)
     const outline = buildOutlineMeshFromObject(samplingObject)
-    if (outline) {
-      shape = buildConvexShapeFromOutline(outline)
-    }
-    if (!shape) {
-      shape = buildBoxShapeFromObject(samplingObject)
+    const buildConvex = () => (outline ? buildConvexShapeFromOutline(outline) : null)
+    const buildBox = () => buildBoxShapeFromObject(samplingObject)
+    if (props.colliderType === 'box') {
+      shape = buildBox() ?? buildConvex()
+    } else {
+      shape = buildConvex() ?? buildBox()
     }
     if (!shape) {
       continue

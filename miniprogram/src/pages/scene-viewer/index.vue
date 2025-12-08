@@ -3289,7 +3289,7 @@ function stepPhysicsWorld(delta: number): void {
     console.warn('[SceneViewer] Physics step failed', error);
   }
   rigidbodyInstances.forEach((entry) => syncSharedObjectFromBody(entry, syncInstancedTransform));
-  updateVehicleWheelVisuals(delta);
+  // updateVehicleWheelVisuals(delta);
 }
 
 function updateVehicleWheelVisuals(delta: number): void {
