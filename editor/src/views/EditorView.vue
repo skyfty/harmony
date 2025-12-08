@@ -1562,8 +1562,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('scroll', handleMaterialDetailsRelayout, true)
   window.removeEventListener('resize', handleBehaviorDetailsRelayout)
   window.removeEventListener('scroll', handleBehaviorDetailsRelayout, true)
-  window.removeEventListener('resize', handleVehicleWheelDetailsRelayout)
-  window.removeEventListener('scroll', handleVehicleWheelDetailsRelayout, true)
 })
 
 

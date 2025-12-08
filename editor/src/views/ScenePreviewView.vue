@@ -541,18 +541,10 @@ const instancedMatrixHelper = new THREE.Matrix4()
 const instancedPositionHelper = new THREE.Vector3()
 const instancedQuaternionHelper = new THREE.Quaternion()
 const instancedScaleHelper = new THREE.Vector3()
-const physicsPositionHelper = new THREE.Vector3()
-const physicsQuaternionHelper = new THREE.Quaternion()
-const physicsScaleHelper = new THREE.Vector3()
 const nodeObjectMap = new Map<string, THREE.Object3D>()
 const scatterInstanceNodeIds = new Set<string>()
 const scatterMatrixHelper = new THREE.Matrix4()
-let physicsWorld: CANNON.World | null = null
-const rigidbodyInstances = new Map<string, RigidbodyInstance>()
-const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>()
-const physicsGravity = new CANNON.Vec3(0, -9.82, 0)
-const PHYSICS_FIXED_TIMESTEP = 1 / 60
-const PHYSICS_MAX_SUB_STEPS = 5
+// const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>()
 const rotationState = { q: false, e: false }
 const defaultFirstPersonState = {
 	position: new THREE.Vector3(0, CAMERA_HEIGHT, 0),
@@ -3227,7 +3219,6 @@ function startAnimationLoop() {
 					console.warn('[ScenePreview] Failed to advance effect runtime', error)
 				}
 			})
-			stepPhysicsWorld(delta)
 		}
 
 		updateBehaviorProximity()
@@ -3253,7 +3244,6 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 		releaseModelInstance(nodeId)
 	})
 	nodeObjectMap.clear()
-	resetPhysicsWorld()
 	if (!options.preservePreviewNodeMap) {
 		previewNodeMap.clear()
 	}
@@ -3835,7 +3825,6 @@ function removeNodeSubtree(nodeId: string) {
 		if (id) {
 			releaseModelInstance(id)
 			nodeObjectMap.delete(id)
-			removeRigidbodyInstance(id)
 			previewComponentManager.removeNode(id)
 			previewNodeMap.delete(id)
 			const controller = nodeAnimationControllers.get(id)
@@ -3865,7 +3854,6 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 				return
 			}
 			nodeObjectMap.set(nodeId, child)
-			ensureRigidbodyBindingForObject(nodeId, child)
 			pending?.delete(nodeId)
 			attachRuntimeForNode(nodeId, child)
 			const instancedAssetId = child.userData?.instancedAssetId as string | undefined
@@ -3933,7 +3921,6 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 		return
 	}
 	object.updateMatrixWorld(true)
-				removeVehicleInstance(nodeId)
 	object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
 	const isVisible = object.visible !== false
 	if (!isVisible) {
@@ -4508,7 +4495,6 @@ async function updateScene(document: SceneJsonExportDocument) {
 		await syncTerrainScatterInstances(document, resourceCache)
 		refreshAnimations()
 		initializeLazyPlaceholders(document)
-		syncPhysicsBodiesForDocument(document)
 		void applyEnvironmentSettingsToScene(environmentSettings)
 		return
 	}
@@ -4522,7 +4508,6 @@ async function updateScene(document: SceneJsonExportDocument) {
 		}
 	}
 
-	syncPhysicsBodiesForDocument(document)
 	await syncTerrainScatterInstances(document, resourceCache)
 
 	currentDocument = document

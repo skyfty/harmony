@@ -36,7 +36,6 @@ const normalizedProps = computed(() => {
 
 const localMass = ref(DEFAULT_RIGIDBODY_MASS)
 const localBodyType = ref<RigidbodyBodyType>('DYNAMIC')
-const isMassLocked = computed(() => LOCKED_BODY_TYPES.has(localBodyType.value))
 
 watch(
   () => normalizedProps.value,

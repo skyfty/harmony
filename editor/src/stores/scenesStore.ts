@@ -299,7 +299,6 @@ async function readAllMetadata(workspaceId: string): Promise<SceneSummary[]> {
       records.push({
         id: doc.id,
         name: doc.name,
-        thumbnail: doc.thumbnail ?? null,
         createdAt: doc.createdAt,
         updatedAt: doc.updatedAt,
       })
@@ -328,7 +327,6 @@ function toMetadata(document: StoredSceneDocument): SceneSummary {
   return {
     id: document.id,
     name: document.name,
-    thumbnail: document.thumbnail ?? null,
     createdAt: document.createdAt,
     updatedAt: document.updatedAt,
   }

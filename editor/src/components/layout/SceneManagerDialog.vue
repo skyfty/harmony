@@ -322,18 +322,6 @@ function formatDateTime(value: string) {
                 <div class="scene-preview-meta-label">Last updated</div>
                 <div class="scene-preview-meta-value">{{ formatDateTime(previewScene.updatedAt) }}</div>
               </div>
-              <div class="scene-preview-media">
-                <v-img
-                  v-if="previewScene.thumbnail"
-                  :src="previewScene.thumbnail"
-                  contain
-                  class="scene-preview-image"
-                />
-                <div v-else class="scene-preview-placeholder">
-                  <v-icon size="72">mdi-image-outline</v-icon>
-                    <p>No thumbnail available</p>
-                </div>
-              </div>
             </div>
             <div v-else class="scene-preview-empty">
               <v-icon size="48">mdi-cube-outline</v-icon>
