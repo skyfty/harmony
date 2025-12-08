@@ -653,6 +653,8 @@ const rigidbodyDebugScaleHelper = new THREE.Vector3()
 const wheelForwardHelper = new THREE.Vector3()
 const wheelAxisHelper = new THREE.Vector3()
 const wheelQuaternionHelper = new THREE.Quaternion()
+const wheelSteeringQuaternionHelper = new THREE.Quaternion()
+const wheelSpinQuaternionHelper = new THREE.Quaternion()
 const wheelChassisPositionHelper = new THREE.Vector3()
 const wheelChassisDisplacementHelper = new THREE.Vector3()
 const defaultWheelAxisVector = new THREE.Vector3(DEFAULT_AXLE.x, DEFAULT_AXLE.y, DEFAULT_AXLE.z).normalize()
@@ -689,6 +691,10 @@ type VehicleWheelBinding = {
 	radius: number
 	axleAxis: THREE.Vector3
 	isFrontWheel: boolean
+	wheelIndex: number
+	spinAngle: number
+	lastSteeringAngle: number
+	baseQuaternion: THREE.Quaternion
 }
 type VehicleWheelSetupEntry = {
 	config: VehicleWheelProps
@@ -5603,7 +5609,7 @@ function createVehicleInstance(
 		indexForwardAxis: forwardAxis,
 	})
 	const wheelBindings: VehicleWheelBinding[] = []
-	wheelEntries.forEach(({ config, point, direction, axle }) => {
+	wheelEntries.forEach(({ config, point, direction, axle }, index) => {
 		vehicle.addWheel({
 			chassisConnectionPointLocal: point,
 			directionLocal: direction,
@@ -5626,12 +5632,17 @@ function createVehicleInstance(
 			axis.copy(defaultWheelAxisVector)
 		}
 		axis.normalize()
+		const wheelObject = config.nodeId ? nodeObjectMap.get(config.nodeId) ?? null : null
 		wheelBindings.push({
 			nodeId: config.nodeId ?? null,
-			object: config.nodeId ? nodeObjectMap.get(config.nodeId) ?? null : null,
+			object: wheelObject,
 			radius: Math.max(config.radius, VEHICLE_WHEEL_MIN_RADIUS),
 			axleAxis: axis,
 			isFrontWheel: config.isFrontWheel === true,
+			wheelIndex: index,
+			spinAngle: 0,
+			lastSteeringAngle: 0,
+			baseQuaternion: wheelObject ? wheelObject.quaternion.clone() : new THREE.Quaternion(),
 		})
 	})
 	vehicle.addToWorld(physicsWorld)
@@ -5873,15 +5884,18 @@ function stepPhysicsWorld(delta: number): void {
 }
 
 function updateVehicleWheelVisuals(delta: number): void {
+	// 仅在时间推进且存在车辆实例时更新
 	if (delta <= 0 || !vehicleInstances.size) {
 		return
 	}
 	const safeDelta = Math.max(delta, 1e-6)
 	vehicleInstances.forEach((instance) => {
-		const { vehicle, wheelBindings, forwardAxis } = instance
+		const { vehicle, wheelBindings, forwardAxis, axisUp } = instance
+		// 没有轮胎绑定则无需处理
 		if (!wheelBindings.length) {
 			return
 		}
+		// 只处理有前轮绑定的车辆以更新转向视觉
 		const hasFrontWheel = wheelBindings.some((binding) => binding.isFrontWheel && binding.nodeId)
 		if (!hasFrontWheel) {
 			return
@@ -5890,6 +5904,7 @@ function updateVehicleWheelVisuals(delta: number): void {
 		if (!chassisBody) {
 			return
 		}
+		// 记录车身位姿以计算运动方向与距离
 		wheelChassisPositionHelper.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
 		wheelQuaternionHelper.set(
 			chassisBody.quaternion.x,
@@ -5897,27 +5912,29 @@ function updateVehicleWheelVisuals(delta: number): void {
 			chassisBody.quaternion.z,
 			chassisBody.quaternion.w,
 		)
+		// 由车身旋转推导世界坐标系下的前进向量
 		wheelForwardHelper.copy(forwardAxis).applyQuaternion(wheelQuaternionHelper)
 		if (wheelForwardHelper.lengthSq() < 1e-6) {
 			wheelForwardHelper.set(0, 0, 1)
 		} else {
 			wheelForwardHelper.normalize()
 		}
+		// 首帧仅记录位置用于位移基准，不触发旋转
 		if (!instance.hasChassisPositionSample) {
 			instance.lastChassisPosition.copy(wheelChassisPositionHelper)
 			instance.hasChassisPositionSample = true
 			return
 		}
+		// 计算自上一帧以来沿前进方向的有符号位移
 		wheelChassisDisplacementHelper
 			.copy(wheelChassisPositionHelper)
 			.sub(instance.lastChassisPosition)
 		instance.lastChassisPosition.copy(wheelChassisPositionHelper)
 		const signedDistance = wheelChassisDisplacementHelper.dot(wheelForwardHelper)
 		const signedSpeed = signedDistance / safeDelta
-		if (Math.abs(signedSpeed) < VEHICLE_SPEED_EPSILON || Math.abs(signedDistance) < VEHICLE_TRAVEL_EPSILON) {
-			return
-		}
+		const canSpin = Math.abs(signedSpeed) >= VEHICLE_SPEED_EPSILON && Math.abs(signedDistance) >= VEHICLE_TRAVEL_EPSILON
 		wheelBindings.forEach((binding) => {
+			// 仅更新场景中存在的前轮
 			if (!binding.isFrontWheel || !binding.nodeId) {
 				return
 			}
@@ -5929,16 +5946,25 @@ function updateVehicleWheelVisuals(delta: number): void {
 			if (binding.object !== wheelObject) {
 				binding.object = wheelObject
 			}
+			const wheelInfo = vehicle.wheelInfos[binding.wheelIndex]
+			const steeringAngle = wheelInfo?.steering ?? 0
 			const radius = Math.max(binding.radius, VEHICLE_WHEEL_MIN_RADIUS)
-			const angleDelta = signedDistance / radius
-			if (Math.abs(angleDelta) < VEHICLE_WHEEL_SPIN_EPSILON) {
-				return
+			const angleDelta = canSpin ? signedDistance / radius : 0
+			if (Math.abs(angleDelta) >= VEHICLE_WHEEL_SPIN_EPSILON) {
+				binding.spinAngle += angleDelta
 			}
+			binding.lastSteeringAngle = steeringAngle
+			// 先以车身姿态为基，再叠加转向、模型原始朝向与滚动
+			wheelObject.quaternion.copy(wheelQuaternionHelper)
+			wheelSteeringQuaternionHelper.setFromAxisAngle(axisUp, steeringAngle)
+			wheelObject.quaternion.multiply(wheelSteeringQuaternionHelper)
+			wheelObject.quaternion.multiply(binding.baseQuaternion)
 			wheelAxisHelper.copy(binding.axleAxis)
 			if (wheelAxisHelper.lengthSq() < 1e-6) {
 				wheelAxisHelper.copy(defaultWheelAxisVector)
 			}
-			wheelObject.rotateOnAxis(wheelAxisHelper, angleDelta)
+			wheelSpinQuaternionHelper.setFromAxisAngle(wheelAxisHelper, binding.spinAngle)
+			wheelObject.quaternion.multiply(wheelSpinQuaternionHelper)
 			wheelObject.updateMatrixWorld(true)
 			syncInstancedTransform(wheelObject)
 		})
