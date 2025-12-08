@@ -55,7 +55,15 @@ const heightfieldCache = new Map<string, GroundHeightfieldCacheEntry>()
 
 function ensureAmmo(): Promise<AmmoModule> {
   if (!ammoPromise) {
-    ammoPromise = AmmoFactory() as Promise<AmmoModule>
+    const wasmUrl = new URL('three/examples/jsm/libs/ammo.wasm.wasm', import.meta.url).href
+    ammoPromise = AmmoFactory({
+      locateFile(path: string) {
+        if (path.endsWith('.wasm')) {
+          return wasmUrl
+        }
+        return new URL(`three/examples/jsm/libs/${path}`, import.meta.url).href
+      },
+    }) as Promise<AmmoModule>
   }
   return ammoPromise
 }

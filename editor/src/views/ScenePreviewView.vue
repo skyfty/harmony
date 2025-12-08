@@ -737,7 +737,6 @@ async function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Obj
 		removeRigidbodyInstance(nodeId)
 	}
 	try {
-		await ensureSharedPhysicsWorld(physicsContactSettings)
 		const instance = await createSharedRigidbodyBody({
 			nodeId,
 			object,
@@ -4622,6 +4621,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 			skipNodeIds: instancingSkipNodeIds ?? undefined,
 		})
 	}
+	await ensureSharedPhysicsWorld(physicsContactSettings)
 
 	if (!currentDocument) {
 		disposeScene({ preservePreviewNodeMap: true })

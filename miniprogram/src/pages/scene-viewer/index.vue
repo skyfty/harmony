@@ -2419,7 +2419,6 @@ async function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Obj
     removeRigidbodyInstance(nodeId);
   }
   try {
-    await ensureSharedPhysicsWorld(physicsContactSettings);
     const instance = await createSharedRigidbodyBody({
       nodeId,
       object,
@@ -5024,6 +5023,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   rebuildPreviewNodeMap(payload.document.nodes);
   previewComponentManager.syncScene(payload.document.nodes ?? []);
   indexSceneObjects(graph.root);
+  await ensureSharedPhysicsWorld(physicsContactSettings);
   await refreshRigidbodyBindingsForDocument(payload.document);
   refreshBehaviorProximityCandidates();
   refreshAnimationControllers(graph.root);
