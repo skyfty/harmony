@@ -48,6 +48,11 @@ export interface AssetBlobPayload {
   url: string
 }
 
+interface UniRequestTask {
+  abort?: () => void
+  onProgressUpdate?: (callback: (event: { progress: number; totalBytesWritten?: number; totalBytesExpectedToWrite?: number }) => void) => void
+}
+
 export class AssetCache {
   private readonly entries = new Map<string, AssetCacheEntry>()
   private maxEntries: number
@@ -455,9 +460,12 @@ export async function fetchAssetBlob(
   if (!candidates.length) {
     throw new Error('资源下载失败（无效的下载地址）')
   }
+  const fallbackUrl = candidates[0] ?? url
 
-  if (typeof fetch === 'function') {
-
+  const uniGlobal = typeof uni !== 'undefined' ? uni : undefined
+  const streamingFetchSupported = typeof fetch === 'function' && supportsResponseBodyStream()
+  const isBrowserEnvironment = typeof window !== 'undefined' && typeof document !== 'undefined'
+  if (streamingFetchSupported) {
     let lastNetworkError: unknown = null
     for (const candidate of candidates) {
       try {
@@ -481,14 +489,35 @@ export async function fetchAssetBlob(
       throw lastNetworkError instanceof Error ? lastNetworkError : new Error(String(lastNetworkError))
     }
   }
+  
+  if (isBrowserEnvironment && typeof XMLHttpRequest !== 'undefined') {
+    return await fetchViaXmlHttp(fallbackUrl, controller, onProgress)
+  }
 
-  const fallbackUrl = candidates[0] ?? url
-  const uniGlobal = typeof uni !== 'undefined' ? uni : undefined
   if (uniGlobal && typeof uniGlobal.request === 'function') {
     return await fetchViaUni(fallbackUrl, controller, onProgress)
   }
 
-  return await fetchViaXmlHttp(fallbackUrl, controller, onProgress)
+  if (typeof fetch === 'function') {
+    let lastFallbackError: unknown = null
+    for (const candidate of candidates) {
+      try {
+        const response = await fetch(candidate, { signal: controller.signal })
+        if (!response.ok) {
+          throw new Error(`资源下载失败（${response.status}）`)
+        }
+        return await readBlobWithProgress(response, onProgress, candidate)
+      } catch (error) {
+        lastFallbackError = error
+        continue
+      }
+    }
+    if (lastFallbackError) {
+      throw lastFallbackError instanceof Error ? lastFallbackError : new Error(String(lastFallbackError))
+    }
+  }
+
+  throw new Error('资源下载失败（当前环境不支持下载）')
 }
 
 async function readBlobWithProgress(
@@ -496,7 +525,9 @@ async function readBlobWithProgress(
   onProgress: (value: number) => void,
   requestUrl: string,
 ): Promise<AssetBlobPayload> {
+  
   if (!response.body) {
+    
     const blob = await response.blob()
     onProgress(100)
     return {
@@ -512,7 +543,7 @@ async function readBlobWithProgress(
   let received = 0
   const total = Number.parseInt(response.headers.get('content-length') ?? '0', 10)
 
-  while (true) {
+  while (true) {    
     const { done, value } = await reader.read()
     if (done) {
       break
@@ -551,28 +582,66 @@ async function fetchViaUni(
   }
   const requestFn = uniGlobal.request.bind(uniGlobal) as typeof uniGlobal.request
   return await new Promise((resolve, reject) => {
-    requestFn({
+    let settled = false
+    let requestTask: UniRequestTask | undefined
+    const cleanup = (listener: () => void) => {
+      controller.signal.removeEventListener('abort', listener)
+    }
+    const handleAbort = () => {
+      if (settled) {
+        return
+      }
+      settled = true
+      requestTask?.abort?.()
+      cleanup(handleAbort)
+      reject(createAbortError())
+    }
+    controller.signal.addEventListener('abort', handleAbort)
+    if (controller.signal.aborted) {
+      handleAbort()
+      return
+    }
+    requestTask = requestFn({
       url,
       method: 'GET',
       responseType: 'arraybuffer',
       success: (res) => {
+        if (settled) {
+          return
+        }
         if ((res.statusCode === 200 || res.statusCode === undefined) && res.data) {
+          settled = true
+          cleanup(handleAbort)
           const arrayBuffer = res.data as ArrayBuffer
           onProgress(100)
           const blob = new Blob([arrayBuffer])
           resolve({ blob, mimeType: null, filename: null, url })
           return
         }
+        settled = true
+        cleanup(handleAbort)
         reject(new Error(`资源下载失败（${res.statusCode ?? 'unknown'}）`))
       },
       fail: (error: unknown) => {
+        if (settled) {
+          return
+        }
+        settled = true
+        cleanup(handleAbort)
         reject(error instanceof Error ? error : new Error(String(error)))
       },
-    })
+    }) as unknown as UniRequestTask | undefined
 
-    controller.signal.addEventListener('abort', () => {
-      reject(createAbortError())
-    })
+    if (requestTask && typeof requestTask.onProgressUpdate === 'function') {
+      requestTask.onProgressUpdate((event: { progress: number }) => {
+        if (settled) {
+          return
+        }
+        const value = Number.isFinite(event.progress) ? event.progress : 0
+        const normalized = Math.max(0, Math.min(99, Math.round(value)))
+        onProgress(normalized)
+      })
+    }
   })
 }
 
@@ -654,6 +723,23 @@ function createAbortError(): Error {
   const error = new Error('Aborted')
   ;(error as { name?: string }).name = 'AbortError'
   return error
+}
+
+function supportsResponseBodyStream(): boolean {
+  if (typeof Response === 'undefined' || typeof ReadableStream === 'undefined') {
+    return false
+  }
+  try {
+    const response = new Response()
+    return !!response.body && typeof response.body.getReader === 'function'
+  } catch (_error) {
+    try {
+      const response = new Response(new Blob())
+      return !!response.body && typeof response.body.getReader === 'function'
+    } catch (_innerError) {
+      return false
+    }
+  }
 }
 
 function createDownloadUrlCandidates(url: string): string[] {

@@ -670,12 +670,10 @@ const DEFAULT_DRACO_DECODER_PATH = '../examples/jsm/libs/draco/gltf/';
 const DEFAULT_KTX2_TRANSCODER_PATH = '../examples/jsm/libs/basis/';
 
 export async function createGltfLoader(options: GltfParseOptions = {}): Promise<any> {
-  console.log('createGltfLoader called with options: 111111111111111', options);
   const { GLTFLoader } = await safeImport(
     '@three-examples/loaders/GLTFLoader.js',
     () => import('@three-examples/loaders/GLTFLoader.js'),
   );
-  console.log('createGltfLoader called with options: 22222222222222222', GLTFLoader);
   const { DRACOLoader } = await safeImport(
     '@three-examples/loaders/DRACOLoader.js',
     () => import('@three-examples/loaders/DRACOLoader.js'),
@@ -685,9 +683,7 @@ export async function createGltfLoader(options: GltfParseOptions = {}): Promise<
     () => import('@three-examples/loaders/KTX2Loader.js'),
   );
 
-  console.log('createGltfLoader called with options: 22222222222222222', GLTFLoader);
   const loader = new GLTFLoader(options.manager);
-  console.log('createGltfLoader called with options: 22222222222222222', options);
   const dracoLoader = new DRACOLoader();
   dracoLoader.setDecoderPath(options.dracoDecoderPath ?? DEFAULT_DRACO_DECODER_PATH);
   loader.setDRACOLoader(dracoLoader);
