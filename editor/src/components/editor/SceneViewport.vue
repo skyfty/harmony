@@ -5214,14 +5214,65 @@ function resolveSelectedGroupDropParent(): string | null {
   if (!selectedId) {
     return null
   }
+
   if (sceneStore.isNodeSelectionLocked(selectedId)) {
     return null
   }
-  const selectedNode = findSceneNode(sceneStore.nodes, selectedId)
-  if (!selectedNode || selectedNode.nodeType !== 'Group') {
+
+  const { nodeMap, parentMap } = buildHierarchyMaps()
+  const selectedNode = nodeMap.get(selectedId)
+  if (!selectedNode) {
     return null
   }
-  return sceneStore.nodeAllowsChildCreation(selectedId) ? selectedId : null
+
+  const candidateOrder: string[] = []
+  if (selectedNode.nodeType === 'Group') {
+    candidateOrder.push(selectedId)
+  }
+
+  let currentParentId = parentMap.get(selectedId) ?? null
+  while (currentParentId) {
+    candidateOrder.push(currentParentId)
+    currentParentId = parentMap.get(currentParentId) ?? null
+  }
+
+  for (const candidateId of candidateOrder) {
+    const candidateNode = nodeMap.get(candidateId)
+    if (!candidateNode || candidateNode.nodeType !== 'Group') {
+      continue
+    }
+    if (sceneStore.isNodeSelectionLocked(candidateId)) {
+      continue
+    }
+    if (!sceneStore.nodeAllowsChildCreation(candidateId)) {
+      continue
+    }
+    return candidateId
+  }
+
+  return null
+}
+
+function buildHierarchyMaps(): { nodeMap: Map<string, SceneNode>; parentMap: Map<string, string | null> } {
+  const nodeMap = new Map<string, SceneNode>()
+  const parentMap = new Map<string, string | null>()
+
+  const traverse = (nodes: SceneNode[] | undefined, parentId: string | null) => {
+    if (!nodes?.length) {
+      return
+    }
+    nodes.forEach((node) => {
+      nodeMap.set(node.id, node)
+      parentMap.set(node.id, parentId)
+      if (node.children?.length) {
+        traverse(node.children, node.id)
+      }
+    })
+  }
+
+  traverse(sceneStore.nodes, null)
+
+  return { nodeMap, parentMap }
 }
 
 function handleTransformChange() {
