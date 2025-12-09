@@ -5197,8 +5197,9 @@ async function handleViewportDrop(event: DragEvent) {
   const point = computeDropPoint(event)
   const spawnPoint = point ? point.clone() : new THREE.Vector3(0, 0, 0)
   snapVectorToGrid(spawnPoint)
+  const parentGroupId = resolveSelectedGroupDropParent()
   try {
-    await sceneStore.spawnAssetAtPosition(assetId, spawnPoint)
+    await sceneStore.spawnAssetAtPosition(assetId, spawnPoint, { parentId: parentGroupId })
   } catch (error) {
     console.warn('Failed to spawn asset for drag payload', assetId, error)
   } finally {
@@ -5206,6 +5207,21 @@ async function handleViewportDrop(event: DragEvent) {
   }
   updateGridHighlight(null)
   restoreGridHighlightForSelection()
+}
+
+function resolveSelectedGroupDropParent(): string | null {
+  const selectedId = props.selectedNodeId
+  if (!selectedId) {
+    return null
+  }
+  if (sceneStore.isNodeSelectionLocked(selectedId)) {
+    return null
+  }
+  const selectedNode = findSceneNode(sceneStore.nodes, selectedId)
+  if (!selectedNode || selectedNode.nodeType !== 'Group') {
+    return null
+  }
+  return sceneStore.nodeAllowsChildCreation(selectedId) ? selectedId : null
 }
 
 function handleTransformChange() {
