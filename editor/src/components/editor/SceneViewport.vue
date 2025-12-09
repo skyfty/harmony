@@ -5199,7 +5199,10 @@ async function handleViewportDrop(event: DragEvent) {
   snapVectorToGrid(spawnPoint)
   const parentGroupId = resolveSelectedGroupDropParent()
   try {
-    await sceneStore.spawnAssetAtPosition(assetId, spawnPoint, { parentId: parentGroupId })
+    await sceneStore.spawnAssetAtPosition(assetId, spawnPoint, {
+      parentId: parentGroupId,
+      recenterParent: false,
+    })
   } catch (error) {
     console.warn('Failed to spawn asset for drag payload', assetId, error)
   } finally {
