@@ -111,7 +111,7 @@ function resolveNodeScaleFactors(node: SceneNode | null | undefined): ColliderSc
 }
 
 function computeColliderLocalBoundingBox(object: THREE.Object3D): THREE.Box3 | null {
-  object.updateMatrixWorld(true)
+  object.updateWorldMatrix(true, true);
   const result = new THREE.Box3()
   colliderBoxInverseHelper.copy(object.matrixWorld).invert()
   let hasBox = false
