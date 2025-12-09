@@ -2958,22 +2958,45 @@ function resolveOutlineTargetForNode(nodeId: string | null | undefined): THREE.O
   return fallback
 }
 
-function collectVisibleMeshesForOutline(object: THREE.Object3D, collector: Set<THREE.Object3D>) {
+function collectVisibleMeshesForOutline(
+  object: THREE.Object3D,
+  collector: Set<THREE.Object3D>,
+  activeInstancedNodeIds: Set<string>,
+) {
   if (!object.visible) {
     return
+  }
+
+  const nodeId = object.userData?.nodeId as string | undefined
+  const isInstancedNode = Boolean(object.userData?.instancedAssetId) && Boolean(nodeId)
+
+  let shouldSkipMeshCandidate = false
+
+  if (isInstancedNode && nodeId) {
+    const proxies = updateInstancedOutlineEntry(nodeId, object)
+    if (proxies.length) {
+      proxies.forEach((proxy) => collector.add(proxy))
+      activeInstancedNodeIds.add(nodeId)
+      shouldSkipMeshCandidate = true
+    }
   }
 
   const meshCandidate = object as THREE.Mesh
   if (meshCandidate?.userData?.instancedPickProxy) {
     return
   }
-  if (meshCandidate?.isMesh || (meshCandidate as { isSkinnedMesh?: boolean }).isSkinnedMesh) {
+
+  if (!shouldSkipMeshCandidate && (meshCandidate?.isMesh || (meshCandidate as { isSkinnedMesh?: boolean }).isSkinnedMesh)) {
     collector.add(meshCandidate)
   }
 
-  object.children.forEach((child) => {
-    collectVisibleMeshesForOutline(child, collector)
-  })
+  const childCount = object.children.length
+  if (childCount > 0) {
+    for (let index = 0; index < childCount; index += 1) {
+      const child = object.children[index]
+      collectVisibleMeshesForOutline(child, collector, activeInstancedNodeIds)
+    }
+  }
 }
 
 type InstancedBoundsPayload = { min: [number, number, number]; max: [number, number, number] }
@@ -3234,15 +3257,7 @@ function updateOutlineSelectionTargets() {
     if (!target) {
       return
     }
-    if (target.userData?.instancedAssetId) {
-      const proxies = updateInstancedOutlineEntry(id, target)
-      if (proxies.length) {
-        proxies.forEach((proxy) => meshSet.add(proxy))
-        activeInstancedNodeIds.add(id)
-      }
-      return
-    }
-    collectVisibleMeshesForOutline(target, meshSet)
+    collectVisibleMeshesForOutline(target, meshSet, activeInstancedNodeIds)
   })
 
   const releaseCandidates: string[] = []
