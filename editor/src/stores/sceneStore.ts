@@ -8122,25 +8122,39 @@ export const useSceneStore = defineStore('scene', {
         this.nodes = [...this.nodes]
       }
     },
-    async spawnAssetAtPosition(assetId: string, position: THREE.Vector3): Promise<{ asset: ProjectAsset; node: SceneNode }> {
+    async spawnAssetAtPosition(
+      assetId: string,
+      position: THREE.Vector3,
+      options: { parentId?: string | null } = {},
+    ): Promise<{ asset: ProjectAsset; node: SceneNode }> {
       const asset = findAssetInTree(this.projectTree, assetId)
       if (!asset) {
         throw new Error('Unable to find the requested asset')
       }
 
+      const targetParentId = options.parentId ?? null
+
       if (asset.type === 'prefab') {
-        const node = await this.instantiateNodePrefabAsset(asset.id, position)
+        const node = await this.instantiateNodePrefabAsset(asset.id, position, {
+          parentId: targetParentId,
+        })
         return { asset, node }
       }
 
-      const node = await this.addModelNode({ asset, position })
+      const node = await this.addModelNode({
+        asset,
+        position,
+        parentId: targetParentId ?? undefined,
+      })
       if (node) {
         return { asset, node }
       }
 
       const assetCache = useAssetCacheStore()
       const transform = computeAssetSpawnTransform(asset, position)
-      const placeholder = this.addPlaceholderNode(asset, transform)
+      const placeholder = this.addPlaceholderNode(asset, transform, {
+        parentId: targetParentId,
+      })
       this.observeAssetDownloadForNode(placeholder.id, asset)
       assetCache.setError(asset.id, null)
       void assetCache.downloaProjectAsset(asset).catch((error) => {
@@ -8712,7 +8726,11 @@ export const useSceneStore = defineStore('scene', {
       componentManager.syncNode(duplicate)
       return duplicate
     },
-    async instantiateNodePrefabAsset(assetId: string, position?: THREE.Vector3): Promise<SceneNode> {
+    async instantiateNodePrefabAsset(
+      assetId: string,
+      position?: THREE.Vector3,
+      options: { parentId?: string | null } = {},
+    ): Promise<SceneNode> {
       const asset = this.getAsset(assetId)
       if (!asset) {
         throw new Error('节点预制件资源不存在')
@@ -8730,17 +8748,16 @@ export const useSceneStore = defineStore('scene', {
         providerId: dependencyProviderId,
       })
 
-      this.captureHistorySnapshot()
-      const nextNodes = [...this.nodes, duplicate]
-      this.nodes = nextNodes
-      await this.ensureSceneAssetsReady({ nodes: [duplicate], showOverlay: false })
-
+      const spawnPositionVector = new Vector3(
+        duplicate.position?.x ?? 0,
+        duplicate.position?.y ?? 0,
+        duplicate.position?.z ?? 0,
+      )
       const boundingInfo = collectNodeBoundingInfo([duplicate])
       const duplicateBounds = boundingInfo.get(duplicate.id)?.bounds ?? null
-      const spawnPosition = new Vector3(duplicate.position?.x ?? 0, duplicate.position?.y ?? 0, duplicate.position?.z ?? 0)
       if (duplicateBounds) {
         const currentMinY = duplicateBounds.min.y
-        const desiredMinY = spawnPosition.y
+        const desiredMinY = spawnPositionVector.y
         const offsetY = desiredMinY - currentMinY
         if (Math.abs(offsetY) > PREFAB_PLACEMENT_EPSILON) {
           const currentPosition = duplicate.position ?? { x: 0, y: 0, z: 0 }
@@ -8750,9 +8767,56 @@ export const useSceneStore = defineStore('scene', {
             z: currentPosition.z,
           }
           componentManager.syncNode(duplicate)
-          this.nodes = [...this.nodes]
         }
       }
+
+      let parentId = options.parentId ?? null
+      if (parentId === SKY_NODE_ID || parentId === ENVIRONMENT_NODE_ID) {
+        parentId = null
+      }
+      if (parentId) {
+        const parentNode = findNodeById(this.nodes, parentId)
+        if (!allowsChildNodes(parentNode)) {
+          parentId = null
+        }
+      }
+      if (parentId) {
+        const parentMatrix = computeWorldMatrixForNode(this.nodes, parentId)
+        if (parentMatrix) {
+          const worldMatrix = composeNodeMatrix(duplicate)
+          const parentInverse = parentMatrix.clone().invert()
+          const localMatrix = new Matrix4().multiplyMatrices(parentInverse, worldMatrix)
+          const localPosition = new Vector3()
+          const localQuaternion = new Quaternion()
+          const localScale = new Vector3()
+          localMatrix.decompose(localPosition, localQuaternion, localScale)
+          const localEuler = new Euler().setFromQuaternion(localQuaternion, 'XYZ')
+          duplicate.position = createVector(localPosition.x, localPosition.y, localPosition.z)
+          duplicate.rotation = createVector(localEuler.x, localEuler.y, localEuler.z)
+          duplicate.scale = createVector(localScale.x, localScale.y, localScale.z)
+          componentManager.syncNode(duplicate)
+        } else {
+          parentId = null
+        }
+      }
+
+      this.captureHistorySnapshot()
+      let insertedParentId: string | null = null
+      let nextNodes: SceneNode[]
+      if (parentId) {
+        const workingTree = [...this.nodes]
+        const inserted = insertNodeMutable(workingTree, parentId, duplicate, 'inside')
+        if (inserted) {
+          nextNodes = workingTree
+          insertedParentId = parentId
+        } else {
+          nextNodes = [...this.nodes, duplicate]
+        }
+      } else {
+        nextNodes = [...this.nodes, duplicate]
+      }
+      this.nodes = nextNodes
+      await this.ensureSceneAssetsReady({ nodes: [duplicate], showOverlay: false })
       if (duplicate.nodeType === 'Group') {
         duplicate.groupExpanded = false
       }
@@ -9376,6 +9440,23 @@ export const useSceneStore = defineStore('scene', {
       return true
     },
 
+    recenterGroupOrigin(groupId: string) {
+      if (!groupId) {
+        return false
+      }
+      const group = findNodeById(this.nodes, groupId)
+      if (!isGroupNode(group) || !group.children?.length) {
+        return false
+      }
+      const parentMap = buildParentMap(this.nodes)
+      const recentered = this.recenterGroupNode(groupId, {
+        captureHistory: true,
+        commit: true,
+        parentMap,
+      })
+      return Boolean(recentered)
+    },
+
     isDescendant(ancestorId: string, maybeChildId: string) {
       if (!ancestorId || !maybeChildId) return false
       if (ancestorId === maybeChildId) return true
@@ -9492,8 +9573,51 @@ export const useSceneStore = defineStore('scene', {
       return true
     },
 
-  addPlaceholderNode(asset: ProjectAsset, transform: { position: Vector3Like; rotation: Vector3Like; scale: Vector3Like }) {
+  addPlaceholderNode(
+    asset: ProjectAsset,
+    transform: { position: Vector3Like; rotation: Vector3Like; scale: Vector3Like },
+    options: { parentId?: string | null } = {},
+  ) {
       const id = generateUuid()
+      let parentId = options.parentId ?? null
+      if (parentId === SKY_NODE_ID || parentId === ENVIRONMENT_NODE_ID) {
+        parentId = null
+      }
+      if (parentId) {
+        const parentNode = findNodeById(this.nodes, parentId)
+        if (!allowsChildNodes(parentNode)) {
+          parentId = null
+        }
+      }
+
+      let position = cloneVector(transform.position)
+      let rotation = cloneVector(transform.rotation)
+      let scale = cloneVector(transform.scale)
+
+      if (parentId) {
+        const parentMatrix = computeWorldMatrixForNode(this.nodes, parentId)
+        if (parentMatrix) {
+          const worldPosition = new Vector3(transform.position.x, transform.position.y, transform.position.z)
+          const worldScale = new Vector3(transform.scale.x, transform.scale.y, transform.scale.z)
+          const worldQuaternion = new Quaternion().setFromEuler(
+            new Euler(transform.rotation.x, transform.rotation.y, transform.rotation.z, 'XYZ'),
+          )
+          const worldMatrix = new Matrix4().compose(worldPosition, worldQuaternion, worldScale)
+          const parentInverse = parentMatrix.clone().invert()
+          const localMatrix = new Matrix4().multiplyMatrices(parentInverse, worldMatrix)
+          const localPosition = new Vector3()
+          const localQuaternion = new Quaternion()
+          const localScale = new Vector3()
+          localMatrix.decompose(localPosition, localQuaternion, localScale)
+          const localEuler = new Euler().setFromQuaternion(localQuaternion, 'XYZ')
+          position = cloneVector(localPosition)
+          rotation = { x: localEuler.x, y: localEuler.y, z: localEuler.z }
+          scale = cloneVector(localScale)
+        } else {
+          parentId = null
+        }
+      }
+
       const node: SceneNode = {
         id,
         name: asset.name,
@@ -9505,9 +9629,9 @@ export const useSceneStore = defineStore('scene', {
             transparent: true,
           }))
         ],
-        position: cloneVector(transform.position),
-        rotation: cloneVector(transform.rotation),
-        scale: cloneVector(transform.scale),
+        position,
+        rotation,
+        scale,
         visible: true,
         sourceAssetId: asset.id,
         isPlaceholder: true,
@@ -9516,7 +9640,17 @@ export const useSceneStore = defineStore('scene', {
         downloadError: null,
       }
 
-      this.nodes = [node, ...this.nodes]
+      if (parentId) {
+        const workingTree = [...this.nodes]
+        const inserted = insertNodeMutable(workingTree, parentId, node, 'inside')
+        if (inserted) {
+          this.nodes = workingTree
+        } else {
+          this.nodes = [node, ...this.nodes]
+        }
+      } else {
+        this.nodes = [node, ...this.nodes]
+      }
       this.setSelection([id])
 
       return node
@@ -10125,10 +10259,6 @@ export const useSceneStore = defineStore('scene', {
         nextTree = [node, ...this.nodes]
       }
       this.nodes = nextTree
-      if (parentId) {
-        const parentMap = buildParentMap(this.nodes)
-        this.recenterGroupAncestry(parentId, { captureHistory: false, parentMap })
-      }
       this.setSelection([id], { primaryId: id })
       commitSceneSnapshot(this)
 

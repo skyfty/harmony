@@ -2958,22 +2958,45 @@ function resolveOutlineTargetForNode(nodeId: string | null | undefined): THREE.O
   return fallback
 }
 
-function collectVisibleMeshesForOutline(object: THREE.Object3D, collector: Set<THREE.Object3D>) {
+function collectVisibleMeshesForOutline(
+  object: THREE.Object3D,
+  collector: Set<THREE.Object3D>,
+  activeInstancedNodeIds: Set<string>,
+) {
   if (!object.visible) {
     return
+  }
+
+  const nodeId = object.userData?.nodeId as string | undefined
+  const isInstancedNode = Boolean(object.userData?.instancedAssetId) && Boolean(nodeId)
+
+  let shouldSkipMeshCandidate = false
+
+  if (isInstancedNode && nodeId) {
+    const proxies = updateInstancedOutlineEntry(nodeId, object)
+    if (proxies.length) {
+      proxies.forEach((proxy) => collector.add(proxy))
+      activeInstancedNodeIds.add(nodeId)
+      shouldSkipMeshCandidate = true
+    }
   }
 
   const meshCandidate = object as THREE.Mesh
   if (meshCandidate?.userData?.instancedPickProxy) {
     return
   }
-  if (meshCandidate?.isMesh || (meshCandidate as { isSkinnedMesh?: boolean }).isSkinnedMesh) {
+
+  if (!shouldSkipMeshCandidate && (meshCandidate?.isMesh || (meshCandidate as { isSkinnedMesh?: boolean }).isSkinnedMesh)) {
     collector.add(meshCandidate)
   }
 
-  object.children.forEach((child) => {
-    collectVisibleMeshesForOutline(child, collector)
-  })
+  const childCount = object.children.length
+  if (childCount > 0) {
+    for (let index = 0; index < childCount; index += 1) {
+      const child = object.children[index]
+      collectVisibleMeshesForOutline(child, collector, activeInstancedNodeIds)
+    }
+  }
 }
 
 type InstancedBoundsPayload = { min: [number, number, number]; max: [number, number, number] }
@@ -3234,15 +3257,7 @@ function updateOutlineSelectionTargets() {
     if (!target) {
       return
     }
-    if (target.userData?.instancedAssetId) {
-      const proxies = updateInstancedOutlineEntry(id, target)
-      if (proxies.length) {
-        proxies.forEach((proxy) => meshSet.add(proxy))
-        activeInstancedNodeIds.add(id)
-      }
-      return
-    }
-    collectVisibleMeshesForOutline(target, meshSet)
+    collectVisibleMeshesForOutline(target, meshSet, activeInstancedNodeIds)
   })
 
   const releaseCandidates: string[] = []
@@ -5197,8 +5212,11 @@ async function handleViewportDrop(event: DragEvent) {
   const point = computeDropPoint(event)
   const spawnPoint = point ? point.clone() : new THREE.Vector3(0, 0, 0)
   snapVectorToGrid(spawnPoint)
+  const parentGroupId = resolveSelectedGroupDropParent()
   try {
-    await sceneStore.spawnAssetAtPosition(assetId, spawnPoint)
+    await sceneStore.spawnAssetAtPosition(assetId, spawnPoint, {
+      parentId: parentGroupId,
+    })
   } catch (error) {
     console.warn('Failed to spawn asset for drag payload', assetId, error)
   } finally {
@@ -5206,6 +5224,72 @@ async function handleViewportDrop(event: DragEvent) {
   }
   updateGridHighlight(null)
   restoreGridHighlightForSelection()
+}
+
+function resolveSelectedGroupDropParent(): string | null {
+  const selectedId = props.selectedNodeId
+  if (!selectedId) {
+    return null
+  }
+
+  if (sceneStore.isNodeSelectionLocked(selectedId)) {
+    return null
+  }
+
+  const { nodeMap, parentMap } = buildHierarchyMaps()
+  const selectedNode = nodeMap.get(selectedId)
+  if (!selectedNode) {
+    return null
+  }
+
+  const candidateOrder: string[] = []
+  if (selectedNode.nodeType === 'Group') {
+    candidateOrder.push(selectedId)
+  }
+
+  let currentParentId = parentMap.get(selectedId) ?? null
+  while (currentParentId) {
+    candidateOrder.push(currentParentId)
+    currentParentId = parentMap.get(currentParentId) ?? null
+  }
+
+  for (const candidateId of candidateOrder) {
+    const candidateNode = nodeMap.get(candidateId)
+    if (!candidateNode || candidateNode.nodeType !== 'Group') {
+      continue
+    }
+    if (sceneStore.isNodeSelectionLocked(candidateId)) {
+      continue
+    }
+    if (!sceneStore.nodeAllowsChildCreation(candidateId)) {
+      continue
+    }
+    return candidateId
+  }
+
+  return null
+}
+
+function buildHierarchyMaps(): { nodeMap: Map<string, SceneNode>; parentMap: Map<string, string | null> } {
+  const nodeMap = new Map<string, SceneNode>()
+  const parentMap = new Map<string, string | null>()
+
+  const traverse = (nodes: SceneNode[] | undefined, parentId: string | null) => {
+    if (!nodes?.length) {
+      return
+    }
+    nodes.forEach((node) => {
+      nodeMap.set(node.id, node)
+      parentMap.set(node.id, parentId)
+      if (node.children?.length) {
+        traverse(node.children, node.id)
+      }
+    })
+  }
+
+  traverse(sceneStore.nodes, null)
+
+  return { nodeMap, parentMap }
 }
 
 function handleTransformChange() {
@@ -5251,7 +5335,7 @@ function handleTransformChange() {
     hasTransformLastWorldPosition = false
   }
 
-  syncInstancedTransform(target)
+  syncInstancedTransform(target, true)
 
   const updates: TransformUpdatePayload[] = []
   const primaryEntry = groupState?.entries.get(nodeId)
@@ -5275,7 +5359,7 @@ function handleTransformChange() {
           }
           entry.object.position.copy(transformLocalPositionHelper)
           entry.object.updateMatrixWorld(true)
-          syncInstancedTransform(entry.object)
+          syncInstancedTransform(entry.object, true)
         })
         if (isActiveTranslateTool) {
           transformLastWorldPosition.copy(transformCurrentWorldPosition)
@@ -5295,7 +5379,7 @@ function handleTransformChange() {
           entry.object.quaternion.copy(transformQuaternionHelper)
           entry.object.rotation.setFromQuaternion(transformQuaternionHelper)
           entry.object.updateMatrixWorld(true)
-          syncInstancedTransform(entry.object)
+          syncInstancedTransform(entry.object, true)
         })
         hasTransformLastWorldPosition = false
         break
@@ -5321,7 +5405,7 @@ function handleTransformChange() {
             entry.initialScale.z * transformScaleFactor.z,
           )
           entry.object.updateMatrixWorld(true)
-          syncInstancedTransform(entry.object)
+          syncInstancedTransform(entry.object, true)
         })
         hasTransformLastWorldPosition = false
         break
@@ -5452,7 +5536,8 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   }
   applyViewPointScaleConstraint(object, node)
 
-  syncInstancedTransform(object)
+  const hasChildNodes = Array.isArray(node.children) && node.children.length > 0
+  syncInstancedTransform(object, hasChildNodes)
 
   if (node.dynamicMesh?.type === 'Ground') {
     const groundMesh = userData.groundMesh as THREE.Mesh | undefined
