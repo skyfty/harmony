@@ -494,6 +494,7 @@ export async function fetchAssetBlob(
     return await fetchViaXmlHttp(fallbackUrl, controller, onProgress)
   }
 
+  
   if (uniGlobal && typeof uniGlobal.request === 'function') {
     return await fetchViaUni(fallbackUrl, controller, onProgress)
   }
@@ -636,6 +637,11 @@ async function fetchViaUni(
       requestTask.onProgressUpdate((event: { progress: number }) => {
         if (settled) {
           return
+        }
+        if (event.progress === undefined || event.progress === null) {
+          event.progress = event.totalBytesExpectedToWrite && event.totalBytesWritten
+            ? (event.totalBytesWritten / event.totalBytesExpectedToWrite) * 100
+            : 0
         }
         const value = Number.isFinite(event.progress) ? event.progress : 0
         const normalized = Math.max(0, Math.min(99, Math.round(value)))
