@@ -115,7 +115,6 @@ export default class ResourceCache {
           return entry;
         } catch (error) {
           console.warn('资源加载失败', assetId, error);
-          this.warn(`无法加载资源 ${assetId}`);
           return null;
         }
       })
@@ -127,7 +126,6 @@ export default class ResourceCache {
       })
       .catch((error) => {
         console.warn('获取资源来源失败', assetId, error);
-        this.warn(`无法解析资源 ${assetId}`);
         this.assetEntryCache.delete(assetId);
         return null;
       });
