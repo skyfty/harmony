@@ -134,7 +134,11 @@ const volumePercent = ref(100)
 const isFullscreen = ref(false)
 const lastUpdateTime = ref<string | null>(null)
 const warningMessages = ref<string[]>([])
-const isRigidbodyDebugVisible = ref(false)
+const isGroundWireframeVisible = ref(false)
+const isOtherRigidbodyWireframeVisible = ref(false)
+const isRigidbodyDebugVisible = computed(
+	() => isGroundWireframeVisible.value || isOtherRigidbodyWireframeVisible.value,
+)
 
 function appendWarningMessage(message: string): void {
 	const trimmed = typeof message === 'string' ? message.trim() : ''
@@ -673,7 +677,8 @@ const scatterInstanceNodeIds = new Set<string>()
 const scatterMatrixHelper = new THREE.Matrix4()
 let physicsWorld: CANNON.World | null = null
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
-type RigidbodyDebugHelper = { group: THREE.Group; signature: string }
+type RigidbodyDebugHelperCategory = 'ground' | 'rigidbody'
+type RigidbodyDebugHelper = { group: THREE.Group; signature: string; category: RigidbodyDebugHelperCategory }
 const rigidbodyDebugHelpers = new Map<string, RigidbodyDebugHelper>()
 let rigidbodyDebugGroup: THREE.Group | null = null
 const rigidbodyDebugMaterial = new THREE.LineBasicMaterial({
@@ -2080,7 +2085,8 @@ watch(volumePercent, (value) => {
 	listener.setMasterVolume(Math.max(0, Math.min(1, value / 100)))
 })
 
-watch(isRigidbodyDebugVisible, (enabled) => {
+watch([isGroundWireframeVisible, isOtherRigidbodyWireframeVisible], ([groundEnabled, otherEnabled]) => {
+	const enabled = groundEnabled || otherEnabled
 	if (enabled) {
 		ensureRigidbodyDebugGroup()
 		syncRigidbodyDebugHelpers()
@@ -5196,6 +5202,10 @@ function tupleToVec3(tuple: VehicleVectorValue, fallback?: Vector3Like): CANNON.
 	return new CANNON.Vec3(x, y, z)
 }
 
+function isRigidbodyDebugCategoryVisible(category: RigidbodyDebugHelperCategory): boolean {
+	return category === 'ground' ? isGroundWireframeVisible.value : isOtherRigidbodyWireframeVisible.value
+}
+
 function ensureRigidbodyDebugGroup(): THREE.Group | null {
 	if (!scene) {
 		return null
@@ -5218,6 +5228,35 @@ function buildBoxDebugLines(shape: Extract<RigidbodyPhysicsShape, { kind: 'box' 
 	const boxGeometry = new THREE.BoxGeometry(hx * 2, hy * 2, hz * 2)
 	const edges = new THREE.EdgesGeometry(boxGeometry)
 	boxGeometry.dispose()
+	const lines = new THREE.LineSegments(edges, rigidbodyDebugMaterial)
+	lines.frustumCulled = false
+	return lines
+}
+
+function buildSphereDebugLines(shape: Extract<RigidbodyPhysicsShape, { kind: 'sphere' }>): THREE.LineSegments | null {
+	const radius = Number(shape.radius)
+	if (!Number.isFinite(radius) || radius <= 0) {
+		return null
+	}
+	const sphereGeometry = new THREE.SphereGeometry(radius, 16, 12)
+	const edges = new THREE.EdgesGeometry(sphereGeometry)
+	sphereGeometry.dispose()
+	const lines = new THREE.LineSegments(edges, rigidbodyDebugMaterial)
+	lines.frustumCulled = false
+	return lines
+}
+
+function buildCylinderDebugLines(shape: Extract<RigidbodyPhysicsShape, { kind: 'cylinder' }>): THREE.LineSegments | null {
+	const radiusTop = Number(shape.radiusTop)
+	const radiusBottom = Number(shape.radiusBottom)
+	const height = Number(shape.height)
+	if (![radiusTop, radiusBottom, height].every((value) => Number.isFinite(value) && value > 0)) {
+		return null
+	}
+	const segments = Number.isFinite(shape.segments) ? Math.max(4, Math.min(48, Math.trunc(shape.segments ?? 16))) : 16
+	const cylinderGeometry = new THREE.CylinderGeometry(radiusTop, radiusBottom, height, segments, 1, true)
+	const edges = new THREE.EdgesGeometry(cylinderGeometry)
+	cylinderGeometry.dispose()
 	const lines = new THREE.LineSegments(edges, rigidbodyDebugMaterial)
 	lines.frustumCulled = false
 	return lines
@@ -5392,6 +5431,12 @@ function buildRigidbodyDebugLineSegments(shape: RigidbodyPhysicsShape): THREE.Li
 	if (shape.kind === 'convex') {
 		return buildConvexDebugLines(shape)
 	}
+	if (shape.kind === 'sphere') {
+		return buildSphereDebugLines(shape)
+	}
+	if (shape.kind === 'cylinder') {
+		return buildCylinderDebugLines(shape)
+	}
 	if (shape.kind === 'heightfield') {
 		return buildHeightfieldDebugLines(shape)
 	}
@@ -5454,7 +5499,11 @@ function disposeRigidbodyDebugHelpers(): void {
 	}
 }
 
-function ensureRigidbodyDebugHelperForShape(nodeId: string, shape: RigidbodyPhysicsShape): void {
+function ensureRigidbodyDebugHelperForShape(
+	nodeId: string,
+	shape: RigidbodyPhysicsShape,
+	category: RigidbodyDebugHelperCategory,
+): void {
 	const signature = computeRigidbodyShapeSignature(shape)
 	const existing = rigidbodyDebugHelpers.get(nodeId)
 	if (existing?.signature === signature) {
@@ -5479,7 +5528,7 @@ function ensureRigidbodyDebugHelperForShape(nodeId: string, shape: RigidbodyPhys
 	helperGroup.add(lineSegments)
 	helperGroup.visible = false
 	container.add(helperGroup)
-	rigidbodyDebugHelpers.set(nodeId, { group: helperGroup, signature })
+	rigidbodyDebugHelpers.set(nodeId, { group: helperGroup, signature, category })
 }
 
 function refreshRigidbodyDebugHelper(nodeId: string): void {
@@ -5488,15 +5537,21 @@ function refreshRigidbodyDebugHelper(nodeId: string): void {
 	}
 	const node = resolveNodeById(nodeId)
 	const component = resolveRigidbodyComponent(node)
+	const isGroundNode = Boolean(node && isGroundDynamicMesh(node.dynamicMesh))
 	let shapeDefinition = extractRigidbodyShape(component)
-	if (!shapeDefinition && node && isGroundDynamicMesh(node.dynamicMesh)) {
+	if (!shapeDefinition && isGroundNode && node) {
 		shapeDefinition = buildHeightfieldShapeFromGroundNode(node)
 	}
 	if (!shapeDefinition) {
 		removeRigidbodyDebugHelper(nodeId)
 		return
 	}
-	ensureRigidbodyDebugHelperForShape(nodeId, shapeDefinition)
+	const category: RigidbodyDebugHelperCategory = isGroundNode ? 'ground' : 'rigidbody'
+	if (!isRigidbodyDebugCategoryVisible(category)) {
+		removeRigidbodyDebugHelper(nodeId)
+		return
+	}
+	ensureRigidbodyDebugHelperForShape(nodeId, shapeDefinition, category)
 	updateRigidbodyDebugHelperTransform(nodeId)
 }
 
@@ -5508,6 +5563,7 @@ function updateRigidbodyDebugHelperTransform(nodeId: string): void {
 	if (!helper) {
 		return
 	}
+	const categoryEnabled = isRigidbodyDebugCategoryVisible(helper.category)
 	const rigidbody = rigidbodyInstances.get(nodeId)
 	let visible = true
 	if (rigidbody) {
@@ -5535,7 +5591,7 @@ function updateRigidbodyDebugHelperTransform(nodeId: string): void {
 		helper.group.quaternion.copy(rigidbodyDebugQuaternionHelper)
 		visible = object.visible !== false
 	}
-	helper.group.visible = visible
+	helper.group.visible = visible && categoryEnabled
 	helper.group.updateMatrixWorld(true)
 }
 
@@ -6613,8 +6669,12 @@ function togglePlayback() {
 	isPlaying.value = !isPlaying.value
 }
 
-function toggleRigidbodyDebugOverlay(): void {
-	isRigidbodyDebugVisible.value = !isRigidbodyDebugVisible.value
+function toggleGroundWireframeDebug(): void {
+	isGroundWireframeVisible.value = !isGroundWireframeVisible.value
+}
+
+function toggleOtherRigidbodyWireframeDebug(): void {
+	isOtherRigidbodyWireframeVisible.value = !isOtherRigidbodyWireframeVisible.value
 }
 
 function toggleFullscreen() {
@@ -7069,13 +7129,23 @@ onBeforeUnmount(() => {
 				/>
 				<v-btn
 					class="scene-preview__control-button"
-					:icon="isRigidbodyDebugVisible ? 'mdi-cube-scan' : 'mdi-cube-outline'"
+					:icon="isGroundWireframeVisible ? 'mdi-grid' : 'mdi-grid-off'"
 					variant="tonal"
-					:color="isRigidbodyDebugVisible ? 'warning' : 'secondary'"
+					:color="isGroundWireframeVisible ? 'warning' : 'secondary'"
 					size="small"
-					:aria-label="isRigidbodyDebugVisible ? '隐藏刚体线框' : '显示刚体线框'"
-					:title="isRigidbodyDebugVisible ? '隐藏刚体线框' : '显示刚体线框'"
-					@click="toggleRigidbodyDebugOverlay"
+					:aria-label="isGroundWireframeVisible ? '隐藏地面线框' : '显示地面线框'"
+					:title="isGroundWireframeVisible ? '隐藏地面线框' : '显示地面线框'"
+					@click="toggleGroundWireframeDebug"
+				/>
+				<v-btn
+					class="scene-preview__control-button"
+					:icon="isOtherRigidbodyWireframeVisible ? 'mdi-cube-scan' : 'mdi-cube-outline'"
+					variant="tonal"
+					:color="isOtherRigidbodyWireframeVisible ? 'warning' : 'secondary'"
+					size="small"
+					:aria-label="isOtherRigidbodyWireframeVisible ? '隐藏其他刚体线框' : '显示其他刚体线框'"
+					:title="isOtherRigidbodyWireframeVisible ? '隐藏其他刚体线框' : '显示其他刚体线框'"
+					@click="toggleOtherRigidbodyWireframeDebug"
 				/>
 				<v-btn
 					class="scene-preview__control-button"

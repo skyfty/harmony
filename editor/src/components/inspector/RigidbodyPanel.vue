@@ -29,6 +29,8 @@ const BODY_TYPE_OPTIONS: Array<{ label: string; value: RigidbodyBodyType }> = [
 const COLLIDER_TYPE_OPTIONS: Array<{ label: string; value: RigidbodyColliderType }> = [
   { label: 'Convex (Mesh)', value: 'convex' },
   { label: 'Box', value: 'box' },
+  { label: 'Sphere', value: 'sphere' },
+  { label: 'Cylinder', value: 'cylinder' },
 ]
 
 const sceneStore = useSceneStore()

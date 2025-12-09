@@ -4,7 +4,18 @@ import type { SceneNode, SceneNodeComponentState } from '../../index'
 
 export const RIGIDBODY_COMPONENT_TYPE = 'rigidbody'
 export type RigidbodyBodyType = 'DYNAMIC' | 'STATIC' | 'KINEMATIC'
-export type RigidbodyColliderType = 'box' | 'convex'
+export type RigidbodyColliderType = 'box' | 'convex' | 'sphere' | 'cylinder'
+
+const VALID_RIGIDBODY_COLLIDER_TYPES: readonly RigidbodyColliderType[] = [
+  'box',
+  'convex',
+  'sphere',
+  'cylinder',
+] as const
+
+function isRigidbodyColliderType(value: unknown): value is RigidbodyColliderType {
+  return typeof value === 'string' && (VALID_RIGIDBODY_COLLIDER_TYPES as readonly string[]).includes(value)
+}
 
 export interface RigidbodyComponentProps {
   mass: number
@@ -19,26 +30,39 @@ export interface RigidbodyComponentProps {
 
 export type RigidbodyVector3Tuple = [number, number, number]
 
+type RigidbodyPhysicsShapeBase = {
+  offset?: RigidbodyVector3Tuple
+  scaleNormalized?: boolean
+}
+
 export type RigidbodyPhysicsShape =
-  | {
+  | ({
       kind: 'box'
       halfExtents: RigidbodyVector3Tuple
-      offset?: RigidbodyVector3Tuple
-    }
-  | {
+    } & RigidbodyPhysicsShapeBase)
+  | ({
       kind: 'convex'
       vertices: RigidbodyVector3Tuple[]
       faces: number[][]
-      offset?: RigidbodyVector3Tuple
-    }
-  | {
+    } & RigidbodyPhysicsShapeBase)
+  | ({
       kind: 'heightfield'
       matrix: number[][]
       elementSize: number
       width: number
       depth: number
-      offset?: RigidbodyVector3Tuple
-    }
+    } & RigidbodyPhysicsShapeBase)
+  | ({
+      kind: 'sphere'
+      radius: number
+    } & RigidbodyPhysicsShapeBase)
+  | ({
+      kind: 'cylinder'
+      radiusTop: number
+      radiusBottom: number
+      height: number
+      segments?: number
+    } & RigidbodyPhysicsShapeBase)
 
 export const RIGIDBODY_METADATA_KEY = '__harmonyRigidbody'
 
@@ -65,7 +89,7 @@ export function clampRigidbodyComponentProps(
   const normalizedType: RigidbodyBodyType = props?.bodyType === 'STATIC' || props?.bodyType === 'KINEMATIC'
     ? props.bodyType
     : DEFAULT_RIGIDBODY_BODY_TYPE
-  const normalizedColliderType: RigidbodyColliderType = props?.colliderType === 'box' || props?.colliderType === 'convex'
+  const normalizedColliderType: RigidbodyColliderType = isRigidbodyColliderType(props?.colliderType)
     ? props.colliderType
     : DEFAULT_RIGIDBODY_COLLIDER_TYPE
   

@@ -89,6 +89,9 @@ const physicsQuaternionHelper = new THREE.Quaternion()
 const physicsScaleHelper = new THREE.Vector3()
 const syncBodyQuaternionHelper = new THREE.Quaternion()
 const bodyQuaternionHelper = new THREE.Quaternion()
+const cylinderShapeRotationHelper = new CANNON.Quaternion()
+cylinderShapeRotationHelper.setFromEuler(Math.PI / 2, 0, 0)
+const cylinderShapeOffsetHelper = new CANNON.Vec3()
 
 type LoggerTag = string | undefined
 
@@ -357,12 +360,16 @@ function createCannonShape(
 	scale: { x: number; y: number; z: number } = { x: 1, y: 1, z: 1 },
 ): CANNON.Shape | null {
 	const safeScale = normalizeScaleVector(scale)
+	const scaleNormalized = definition.scaleNormalized === true
+	const scaleX = scaleNormalized ? safeScale.x : 1
+	const scaleY = scaleNormalized ? safeScale.y : 1
+	const scaleZ = scaleNormalized ? safeScale.z : 1
 	if (definition.kind === 'box') {
 		const [x, y, z] = definition.halfExtents
 		if (![x, y, z].every((value) => typeof value === 'number' && Number.isFinite(value) && value > 0)) {
 			return null
 		}
-		return new CANNON.Box(new CANNON.Vec3(x * safeScale.x, y * safeScale.y, z * safeScale.z))
+		return new CANNON.Box(new CANNON.Vec3(x * scaleX, y * scaleY, z * scaleZ))
 	}
 	if (definition.kind === 'convex') {
 		if (!Array.isArray(definition.vertices) || definition.vertices.length < 4) {
@@ -379,9 +386,9 @@ function createCannonShape(
 			if (![vx, vy, vz].every((value) => Number.isFinite(value))) {
 				return null
 			}
-			const scaledX = vx * safeScale.x
-			const scaledY = vy * safeScale.y
-			const scaledZ = vz * safeScale.z
+			const scaledX = vx * scaleX
+			const scaledY = vy * scaleY
+			const scaledZ = vz * scaleZ
 			const key = `${scaledX.toFixed(4)},${scaledY.toFixed(4)},${scaledZ.toFixed(4)}`
 			if (vertexMap.has(key)) {
 				indexMap.set(i, vertexMap.get(key)!)
@@ -432,6 +439,35 @@ function createCannonShape(
 			return null
 		}
 		return new CANNON.Heightfield(matrix, { elementSize })
+	}
+	if (definition.kind === 'sphere') {
+		const radius = Number(definition.radius)
+		if (!Number.isFinite(radius) || radius <= 0) {
+			return null
+		}
+		const scaleFactor = Math.max(scaleX, scaleY, scaleZ)
+		return new CANNON.Sphere(radius * scaleFactor)
+	}
+	if (definition.kind === 'cylinder') {
+		const radiusTop = Number(definition.radiusTop)
+		const radiusBottom = Number(definition.radiusBottom)
+		const height = Number(definition.height)
+		if (![radiusTop, radiusBottom, height].every((value) => Number.isFinite(value) && value > 0)) {
+			return null
+		}
+		const segmentCount = Number.isFinite(definition.segments)
+			? Math.max(3, Math.min(48, Math.trunc(definition.segments ?? 16)))
+			: 16
+		const radiusScale = Math.max(scaleX, scaleZ)
+		const heightScale = scaleY
+		const cylinder = new CANNON.Cylinder(
+			radiusTop * radiusScale,
+			radiusBottom * radiusScale,
+			height * heightScale,
+			segmentCount,
+		)
+		cylinder.transformAllPoints(cylinderShapeOffsetHelper.set(0, 0, 0), cylinderShapeRotationHelper)
+		return cylinder
 	}
 	return null
 }
