@@ -11,7 +11,6 @@ import '@minisheep/three-platform-adapter/wechat';
 // #ifdef H5
 import Viewer from 'v-viewer';
 import 'viewerjs/dist/viewer.css';
-import '@mdi/font/css/materialdesignicons.css';
 // #endif
 
 export function createApp() {

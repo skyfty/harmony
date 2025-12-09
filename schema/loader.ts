@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { STATIC_LOADER_MODULES } from './loaderStaticImports';
 // import { TGALoader } from 'three/examples/jsm/loaders/TGALoader.js';
 
 export type LoaderProgressPayload = {
@@ -35,6 +36,19 @@ type DataTransferItemWithEntry = DataTransferItem & {
 };
 
 type FilesMap = Record<string, File>;
+
+const MINI_PROGRAM_ENV = typeof globalThis !== 'undefined' && typeof (globalThis as any).wx !== 'undefined';
+
+async function safeImport<T>(moduleId: string, importer: () => Promise<T>): Promise<T> {
+  if (MINI_PROGRAM_ENV && moduleId in STATIC_LOADER_MODULES) {
+    const staticModule = STATIC_LOADER_MODULES[moduleId as keyof typeof STATIC_LOADER_MODULES];
+    if (staticModule) {
+      return staticModule as T;
+    }
+  }
+
+  return importer();
+}
 
 export default class Loader {
   public texturePath = '';
@@ -157,7 +171,10 @@ export default class Loader {
     switch (extension) {
       case '3ds': {
         reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-          const { TDSLoader } = await import('@three-examples/loaders/TDSLoader.js');
+          const { TDSLoader } = await safeImport(
+            '@three-examples/loaders/TDSLoader.js',
+            () => import('@three-examples/loaders/TDSLoader.js'),
+          );
 
           const loader = new TDSLoader();
           const object = loader.parse(event.target?.result as ArrayBuffer, '');
@@ -170,7 +187,10 @@ export default class Loader {
 
       case '3mf': {
         reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-          const { ThreeMFLoader } = await import('@three-examples/loaders/3MFLoader.js');
+          const { ThreeMFLoader } = await safeImport(
+            '@three-examples/loaders/3MFLoader.js',
+            () => import('@three-examples/loaders/3MFLoader.js'),
+          );
 
           const loader = new ThreeMFLoader() as any;
           const object = loader.parse(event.target?.result as ArrayBuffer, '');
@@ -184,7 +204,10 @@ export default class Loader {
 
       case 'amf': {
         reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-          const { AMFLoader } = await import('@three-examples/loaders/AMFLoader.js');
+          const { AMFLoader } = await safeImport(
+            '@three-examples/loaders/AMFLoader.js',
+            () => import('@three-examples/loaders/AMFLoader.js'),
+          );
 
           const loader = new AMFLoader();
           const amfobject = loader.parse(event.target?.result as ArrayBuffer);
@@ -199,7 +222,10 @@ export default class Loader {
           const contents = event.target?.result as string;
           if (!contents) return;
 
-          const { ColladaLoader } = await import('@three-examples/loaders/ColladaLoader.js');
+          const { ColladaLoader } = await safeImport(
+            '@three-examples/loaders/ColladaLoader.js',
+            () => import('@three-examples/loaders/ColladaLoader.js'),
+          );
 
           const loader = new ColladaLoader(manager);
           const collada = loader.parse(contents, '');
@@ -216,7 +242,10 @@ export default class Loader {
           const contents = event.target?.result as ArrayBuffer;
           if (!contents) return;
 
-          const { DRACOLoader } = await import('@three-examples/loaders/DRACOLoader.js');
+          const { DRACOLoader } = await safeImport(
+            '@three-examples/loaders/DRACOLoader.js',
+            () => import('@three-examples/loaders/DRACOLoader.js'),
+          );
 
           const loader = new DRACOLoader();
           loader.setDecoderPath('three/examples/jsm/libs/draco/');
@@ -247,7 +276,10 @@ export default class Loader {
           const contents = event.target?.result as ArrayBuffer;
           if (!contents) return;
 
-          const { FBXLoader } = await import('@three-examples/loaders/FBXLoader.js');
+          const { FBXLoader } = await safeImport(
+            '@three-examples/loaders/FBXLoader.js',
+            () => import('@three-examples/loaders/FBXLoader.js'),
+          );
 
           const loader = new FBXLoader(manager);
           const object = loader.parse(contents, '');
@@ -306,7 +338,10 @@ export default class Loader {
 
       case 'kmz': {
         reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-          const { KMZLoader } = await import('@three-examples/loaders/KMZLoader.js');
+          const { KMZLoader } = await safeImport(
+            '@three-examples/loaders/KMZLoader.js',
+            () => import('@three-examples/loaders/KMZLoader.js'),
+          );
 
           const loader = new KMZLoader() as any;
           const collada = loader.parse(event.target?.result as ArrayBuffer, '');
@@ -321,7 +356,10 @@ export default class Loader {
       case 'ldr':
       case 'mpd': {
         reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-          const { LDrawLoader } = await import('@three-examples/loaders/LDrawLoader.js');
+          const { LDrawLoader } = await safeImport(
+            '@three-examples/loaders/LDrawLoader.js',
+            () => import('@three-examples/loaders/LDrawLoader.js'),
+          );
 
           const loader = new LDrawLoader();
           loader.setPath('../../examples/models/ldraw/officialLibrary/');
@@ -340,7 +378,10 @@ export default class Loader {
           const contents = event.target?.result as ArrayBuffer;
           if (!contents) return;
 
-          const { MD2Loader } = await import('@three-examples/loaders/MD2Loader.js');
+          const { MD2Loader } = await safeImport(
+            '@three-examples/loaders/MD2Loader.js',
+            () => import('@three-examples/loaders/MD2Loader.js'),
+          );
 
           const geometry = new MD2Loader().parse(contents) as any;
           const material = new THREE.MeshStandardMaterial();
@@ -361,7 +402,10 @@ export default class Loader {
           const contents = event.target?.result as string;
           if (!contents) return;
 
-          const { OBJLoader } = await import('@three-examples/loaders/OBJLoader.js');
+          const { OBJLoader } = await safeImport(
+            '@three-examples/loaders/OBJLoader.js',
+            () => import('@three-examples/loaders/OBJLoader.js'),
+          );
 
           const object = new OBJLoader().parse(contents);
           object.name = filename;
@@ -376,7 +420,10 @@ export default class Loader {
           const contents = event.target?.result as ArrayBuffer;
           if (!contents) return;
 
-          const { PCDLoader } = await import('@three-examples/loaders/PCDLoader.js');
+          const { PCDLoader } = await safeImport(
+            '@three-examples/loaders/PCDLoader.js',
+            () => import('@three-examples/loaders/PCDLoader.js'),
+          );
 
           const points = new PCDLoader().parse(contents);
           points.name = filename;
@@ -391,7 +438,10 @@ export default class Loader {
           const contents = event.target?.result as ArrayBuffer;
           if (!contents) return;
 
-          const { PLYLoader } = await import('@three-examples/loaders/PLYLoader.js');
+          const { PLYLoader } = await safeImport(
+            '@three-examples/loaders/PLYLoader.js',
+            () => import('@three-examples/loaders/PLYLoader.js'),
+          );
 
           const geometry = new PLYLoader().parse(contents);
           let object: LoaderLoadedPayload;
@@ -419,7 +469,10 @@ export default class Loader {
           const contents = event.target?.result as ArrayBuffer;
           if (!contents) return;
 
-          const { STLLoader } = await import('@three-examples/loaders/STLLoader.js');
+          const { STLLoader } = await safeImport(
+            '@three-examples/loaders/STLLoader.js',
+            () => import('@three-examples/loaders/STLLoader.js'),
+          );
 
           const geometry = new STLLoader().parse(contents);
           const material = new THREE.MeshStandardMaterial();
@@ -443,7 +496,10 @@ export default class Loader {
           const contents = event.target?.result as string;
           if (!contents) return;
 
-          const { SVGLoader } = await import('@three-examples/loaders/SVGLoader.js');
+          const { SVGLoader } = await safeImport(
+            '@three-examples/loaders/SVGLoader.js',
+            () => import('@three-examples/loaders/SVGLoader.js'),
+          );
 
           const loader = new SVGLoader();
           const paths = loader.parse(contents).paths;
@@ -485,7 +541,10 @@ export default class Loader {
           const contents = event.target?.result as ArrayBuffer;
           if (!contents) return;
 
-          const { VOXLoader, VOXMesh } = await import('@three-examples/loaders/VOXLoader.js');
+          const { VOXLoader, VOXMesh } = await safeImport(
+            '@three-examples/loaders/VOXLoader.js',
+            () => import('@three-examples/loaders/VOXLoader.js'),
+          );
 
           const chunks = new VOXLoader().parse(contents);
 
@@ -512,7 +571,10 @@ export default class Loader {
           const contents = event.target?.result as ArrayBuffer;
           if (!contents) return;
 
-          const { VTKLoader } = await import('@three-examples/loaders/VTKLoader.js');
+          const { VTKLoader } = await safeImport(
+            '@three-examples/loaders/VTKLoader.js',
+            () => import('@three-examples/loaders/VTKLoader.js'),
+          );
 
           const geometry = (new VTKLoader() as any).parse(contents, '');
           const material = new THREE.MeshStandardMaterial();
@@ -530,7 +592,10 @@ export default class Loader {
           const contents = event.target?.result as string;
           if (!contents) return;
 
-          const { VRMLLoader } = await import('@three-examples/loaders/VRMLLoader.js');
+          const { VRMLLoader } = await safeImport(
+            '@three-examples/loaders/VRMLLoader.js',
+            () => import('@three-examples/loaders/VRMLLoader.js'),
+          );
 
           const result = (new VRMLLoader() as any).parse(contents, '');
           this.emit('loaded', result);
@@ -544,7 +609,10 @@ export default class Loader {
           const contents = event.target?.result as string;
           if (!contents) return;
 
-          const { XYZLoader } = await import('@three-examples/loaders/XYZLoader.js');
+          const { XYZLoader } = await safeImport(
+            '@three-examples/loaders/XYZLoader.js',
+            () => import('@three-examples/loaders/XYZLoader.js'),
+          );
 
           const geometry = (new XYZLoader() as any).parse(contents) as THREE.BufferGeometry;
 
@@ -602,11 +670,24 @@ const DEFAULT_DRACO_DECODER_PATH = '../examples/jsm/libs/draco/gltf/';
 const DEFAULT_KTX2_TRANSCODER_PATH = '../examples/jsm/libs/basis/';
 
 export async function createGltfLoader(options: GltfParseOptions = {}): Promise<any> {
-  const { GLTFLoader } = await import('@three-examples/loaders/GLTFLoader.js');
-  const { DRACOLoader } = await import('@three-examples/loaders/DRACOLoader.js');
-  const { KTX2Loader } = await import('@three-examples/loaders/KTX2Loader.js');
+  console.log('createGltfLoader called with options: 111111111111111', options);
+  const { GLTFLoader } = await safeImport(
+    '@three-examples/loaders/GLTFLoader.js',
+    () => import('@three-examples/loaders/GLTFLoader.js'),
+  );
+  console.log('createGltfLoader called with options: 22222222222222222', GLTFLoader);
+  const { DRACOLoader } = await safeImport(
+    '@three-examples/loaders/DRACOLoader.js',
+    () => import('@three-examples/loaders/DRACOLoader.js'),
+  );
+  const { KTX2Loader } = await safeImport(
+    '@three-examples/loaders/KTX2Loader.js',
+    () => import('@three-examples/loaders/KTX2Loader.js'),
+  );
 
+  console.log('createGltfLoader called with options: 22222222222222222', GLTFLoader);
   const loader = new GLTFLoader(options.manager);
+  console.log('createGltfLoader called with options: 22222222222222222', options);
   const dracoLoader = new DRACOLoader();
   dracoLoader.setDecoderPath(options.dracoDecoderPath ?? DEFAULT_DRACO_DECODER_PATH);
   loader.setDRACOLoader(dracoLoader);
