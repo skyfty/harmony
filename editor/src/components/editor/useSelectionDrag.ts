@@ -23,7 +23,7 @@ export function useSelectionDrag(
   projectPointerToPlane: (event: PointerEvent, plane: THREE.Plane) => THREE.Vector3 | null,
   emit: (event: 'updateNodeTransform', payload: TransformUpdatePayload | TransformUpdatePayload[]) => void,
   callbacks: {
-    syncInstancedTransform: (object: THREE.Object3D | null) => void
+    syncInstancedTransform: (object: THREE.Object3D | null, includeChildren?: boolean) => void
     updateGridHighlightFromObject: (object: THREE.Object3D | null) => void
     updateSelectionHighlights: () => void
     updatePlaceholderOverlayPositions: () => void
@@ -119,7 +119,7 @@ export function useSelectionDrag(
 
     drag.object.position.copy(newLocalPosition)
     drag.object.updateMatrixWorld(true)
-    callbacks.syncInstancedTransform(drag.object)
+    callbacks.syncInstancedTransform(drag.object, true)
     drag.object.getWorldPosition(selectDragWorldPosition)
     drag.object.getWorldQuaternion(selectDragWorldQuaternion)
     selectDragDelta.copy(selectDragWorldPosition).sub(drag.initialWorldPosition)
@@ -143,7 +143,7 @@ export function useSelectionDrag(
       localPosition.y = companion.initialLocalPosition.y
       companion.object.position.copy(localPosition)
       companion.object.updateMatrixWorld(true)
-      callbacks.syncInstancedTransform(companion.object)
+      callbacks.syncInstancedTransform(companion.object, true)
       updates.push({
         id: companion.nodeId,
         position: companion.object.position,

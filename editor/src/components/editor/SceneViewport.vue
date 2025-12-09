@@ -5321,7 +5321,7 @@ function handleTransformChange() {
     hasTransformLastWorldPosition = false
   }
 
-  syncInstancedTransform(target)
+  syncInstancedTransform(target, true)
 
   const updates: TransformUpdatePayload[] = []
   const primaryEntry = groupState?.entries.get(nodeId)
@@ -5345,7 +5345,7 @@ function handleTransformChange() {
           }
           entry.object.position.copy(transformLocalPositionHelper)
           entry.object.updateMatrixWorld(true)
-          syncInstancedTransform(entry.object)
+          syncInstancedTransform(entry.object, true)
         })
         if (isActiveTranslateTool) {
           transformLastWorldPosition.copy(transformCurrentWorldPosition)
@@ -5365,7 +5365,7 @@ function handleTransformChange() {
           entry.object.quaternion.copy(transformQuaternionHelper)
           entry.object.rotation.setFromQuaternion(transformQuaternionHelper)
           entry.object.updateMatrixWorld(true)
-          syncInstancedTransform(entry.object)
+          syncInstancedTransform(entry.object, true)
         })
         hasTransformLastWorldPosition = false
         break
@@ -5391,7 +5391,7 @@ function handleTransformChange() {
             entry.initialScale.z * transformScaleFactor.z,
           )
           entry.object.updateMatrixWorld(true)
-          syncInstancedTransform(entry.object)
+          syncInstancedTransform(entry.object, true)
         })
         hasTransformLastWorldPosition = false
         break
@@ -5522,7 +5522,8 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   }
   applyViewPointScaleConstraint(object, node)
 
-  syncInstancedTransform(object)
+  const hasChildNodes = Array.isArray(node.children) && node.children.length > 0
+  syncInstancedTransform(object, hasChildNodes)
 
   if (node.dynamicMesh?.type === 'Ground') {
     const groundMesh = userData.groundMesh as THREE.Mesh | undefined

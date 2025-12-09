@@ -13,23 +13,62 @@ export function useInstancedMeshes(
   const instancedPositionHelper = new THREE.Vector3()
   const instancedQuaternionHelper = new THREE.Quaternion()
 
-  function syncInstancedTransform(object: THREE.Object3D | null) {
-    if (!object?.userData?.instancedAssetId) {
+  function syncInstancedTransform(object: THREE.Object3D | null, includeChildren = false) {
+    if (!object) {
       return
     }
-    const nodeId = object.userData.nodeId as string | undefined
-    if (!nodeId) {
-      return
-    }
+
     object.updateMatrixWorld(true)
-    object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-    const isVisible = object.visible !== false
-    if (!isVisible) {
-      instancedScaleHelper.setScalar(0)
+
+    if (object.userData?.instancedAssetId) {
+      const nodeId = object.userData.nodeId as string | undefined
+      if (nodeId) {
+        object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+        const isVisible = object.visible !== false
+        if (!isVisible) {
+          instancedScaleHelper.setScalar(0)
+        }
+        instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+        updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
+        callbacks.syncInstancedOutlineEntryTransform(nodeId)
+      }
     }
-    instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-    updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
-    callbacks.syncInstancedOutlineEntryTransform(nodeId)
+
+    if (!includeChildren) {
+      return
+    }
+
+    const stack = [...object.children]
+    while (stack.length > 0) {
+      const current = stack.pop()
+      if (!current) {
+        continue
+      }
+
+      if (current.userData?.instancedAssetId) {
+        const nodeId = current.userData.nodeId as string | undefined
+        if (nodeId) {
+          current.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+          const isVisible = current.visible !== false
+          if (!isVisible) {
+            instancedScaleHelper.setScalar(0)
+          }
+          instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+          updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
+          callbacks.syncInstancedOutlineEntryTransform(nodeId)
+        }
+      }
+
+      const childCount = current.children?.length ?? 0
+      if (childCount > 0) {
+        for (let index = 0; index < childCount; index += 1) {
+          const child = current.children[index]
+          if (child) {
+            stack.push(child)
+          }
+        }
+      }
+    }
   }
 
   function attachInstancedMesh(mesh: THREE.InstancedMesh) {
