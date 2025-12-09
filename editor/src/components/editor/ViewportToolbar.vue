@@ -49,6 +49,17 @@
         @click="handleApplyTransformsToGroup"
       />
       <v-btn
+        icon="mdi-crosshairs-gps"
+        density="compact"
+        size="small"
+        color="undefined"
+        variant="text"
+        class="toolbar-button"
+        title="重算组原点"
+        :disabled="!canRecenterGroupOrigin"
+        @click="handleRecenterGroupOrigin"
+      />
+      <v-btn
         icon="mdi-content-save-cog-outline"
         density="compact"
         size="small"
@@ -267,6 +278,14 @@ const canApplyTransformsToGroup = computed(() => {
   return Array.isArray(node.children) && node.children.length > 0
 })
 
+const canRecenterGroupOrigin = computed(() => {
+  const node = activeNode.value
+  if (!node || node.nodeType !== 'Group') {
+    return false
+  }
+  return Array.isArray(node.children) && node.children.length > 0
+})
+
 function handleGroupSelection() {
   if ((selectionCount.value ?? 0) < 2) return
   // call the store action to group selected nodes
@@ -301,6 +320,14 @@ function handleApplyTransformsToGroup() {
     return
   }
   sceneStore.applyTransformsToGroup(node.id)
+}
+
+function handleRecenterGroupOrigin() {
+  const node = activeNode.value
+  if (!node || node.nodeType !== 'Group') {
+    return
+  }
+  sceneStore.recenterGroupOrigin(node.id)
 }
 
 const alignButtons = [

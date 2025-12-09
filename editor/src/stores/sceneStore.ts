@@ -8125,7 +8125,7 @@ export const useSceneStore = defineStore('scene', {
     async spawnAssetAtPosition(
       assetId: string,
       position: THREE.Vector3,
-      options: { parentId?: string | null; recenterParent?: boolean } = {},
+      options: { parentId?: string | null } = {},
     ): Promise<{ asset: ProjectAsset; node: SceneNode }> {
       const asset = findAssetInTree(this.projectTree, assetId)
       if (!asset) {
@@ -8133,12 +8133,10 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const targetParentId = options.parentId ?? null
-      const shouldRecenterParent = options.recenterParent !== false
 
       if (asset.type === 'prefab') {
         const node = await this.instantiateNodePrefabAsset(asset.id, position, {
           parentId: targetParentId,
-          recenterParent: shouldRecenterParent,
         })
         return { asset, node }
       }
@@ -8147,7 +8145,6 @@ export const useSceneStore = defineStore('scene', {
         asset,
         position,
         parentId: targetParentId ?? undefined,
-        preserveParentTransform: !shouldRecenterParent,
       })
       if (node) {
         return { asset, node }
@@ -8157,7 +8154,6 @@ export const useSceneStore = defineStore('scene', {
       const transform = computeAssetSpawnTransform(asset, position)
       const placeholder = this.addPlaceholderNode(asset, transform, {
         parentId: targetParentId,
-        recenterParent: shouldRecenterParent,
       })
       this.observeAssetDownloadForNode(placeholder.id, asset)
       assetCache.setError(asset.id, null)
@@ -8733,7 +8729,7 @@ export const useSceneStore = defineStore('scene', {
     async instantiateNodePrefabAsset(
       assetId: string,
       position?: THREE.Vector3,
-      options: { parentId?: string | null; recenterParent?: boolean } = {},
+      options: { parentId?: string | null } = {},
     ): Promise<SceneNode> {
       const asset = this.getAsset(assetId)
       if (!asset) {
@@ -8823,10 +8819,6 @@ export const useSceneStore = defineStore('scene', {
       await this.ensureSceneAssetsReady({ nodes: [duplicate], showOverlay: false })
       if (duplicate.nodeType === 'Group') {
         duplicate.groupExpanded = false
-      }
-      if (insertedParentId && options.recenterParent !== false) {
-        const parentMap = buildParentMap(this.nodes)
-        this.recenterGroupAncestry(insertedParentId, { captureHistory: false, parentMap })
       }
       this.setSelection([duplicate.id], { primaryId: duplicate.id })
       commitSceneSnapshot(this)
@@ -9448,6 +9440,23 @@ export const useSceneStore = defineStore('scene', {
       return true
     },
 
+    recenterGroupOrigin(groupId: string) {
+      if (!groupId) {
+        return false
+      }
+      const group = findNodeById(this.nodes, groupId)
+      if (!isGroupNode(group) || !group.children?.length) {
+        return false
+      }
+      const parentMap = buildParentMap(this.nodes)
+      const recentered = this.recenterGroupNode(groupId, {
+        captureHistory: true,
+        commit: true,
+        parentMap,
+      })
+      return Boolean(recentered)
+    },
+
     isDescendant(ancestorId: string, maybeChildId: string) {
       if (!ancestorId || !maybeChildId) return false
       if (ancestorId === maybeChildId) return true
@@ -9567,7 +9576,7 @@ export const useSceneStore = defineStore('scene', {
   addPlaceholderNode(
     asset: ProjectAsset,
     transform: { position: Vector3Like; rotation: Vector3Like; scale: Vector3Like },
-    options: { parentId?: string | null; recenterParent?: boolean } = {},
+    options: { parentId?: string | null } = {},
   ) {
       const id = generateUuid()
       let parentId = options.parentId ?? null
@@ -9636,10 +9645,6 @@ export const useSceneStore = defineStore('scene', {
         const inserted = insertNodeMutable(workingTree, parentId, node, 'inside')
         if (inserted) {
           this.nodes = workingTree
-          if (options.recenterParent !== false) {
-            const parentMap = buildParentMap(this.nodes)
-            this.recenterGroupAncestry(parentId, { captureHistory: false, parentMap })
-          }
         } else {
           this.nodes = [node, ...this.nodes]
         }
@@ -9935,7 +9940,6 @@ export const useSceneStore = defineStore('scene', {
       parentId?: string | null
       snapToGrid?: boolean
       editorFlags?: SceneNodeEditorFlags
-      preserveParentTransform?: boolean
     }): Promise<SceneNode | null> {
       if (!payload.object && !payload.asset) {
         throw new Error('addModelNode requires either an object or an asset')
@@ -10079,7 +10083,6 @@ export const useSceneStore = defineStore('scene', {
         parentId: targetParentId ?? undefined,
         editorFlags: payload.editorFlags,
         userData: clonePlainRecord(runtimeSource.userData as Record<string, unknown> | undefined),
-        preserveParentTransform: payload.preserveParentTransform === true,
       })
 
       if (registerAssetId && assetCache) {
@@ -10182,7 +10185,6 @@ export const useSceneStore = defineStore('scene', {
       parentId?: string | null
       editorFlags?: SceneNodeEditorFlags
       userData?: Record<string, unknown>
-      preserveParentTransform?: boolean
     }) {
       this.captureHistorySnapshot()
       const id = payload.nodeId ?? generateUuid()
@@ -10257,11 +10259,6 @@ export const useSceneStore = defineStore('scene', {
         nextTree = [node, ...this.nodes]
       }
       this.nodes = nextTree
-      const shouldRecenterParent = Boolean(parentId) && payload.preserveParentTransform !== true
-      if (shouldRecenterParent && parentId) {
-        const parentMap = buildParentMap(this.nodes)
-        this.recenterGroupAncestry(parentId, { captureHistory: false, parentMap })
-      }
       this.setSelection([id], { primaryId: id })
       commitSceneSnapshot(this)
 

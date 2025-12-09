@@ -5201,7 +5201,6 @@ async function handleViewportDrop(event: DragEvent) {
   try {
     await sceneStore.spawnAssetAtPosition(assetId, spawnPoint, {
       parentId: parentGroupId,
-      recenterParent: false,
     })
   } catch (error) {
     console.warn('Failed to spawn asset for drag payload', assetId, error)
