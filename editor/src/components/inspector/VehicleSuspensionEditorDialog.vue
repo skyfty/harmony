@@ -66,7 +66,6 @@ const previewContainerRef = ref<HTMLDivElement | null>(null)
 const isReady = ref(false)
 const loadError = ref<string | null>(null)
 const activeHandle = ref<'front' | 'rear'>('front')
-const transformMode = ref<'translate' | 'scale'>('translate')
 const uiState = reactive({
   frontSpacing: 0,
   rearSpacing: 0,
@@ -532,7 +531,6 @@ watch(
 )
 
 watch(activeHandle, () => attachActiveHandle())
-watch(transformMode, (mode) => transformControls?.setMode(mode))
 
 onUnmounted(() => {
   disposePreview()
@@ -572,15 +570,15 @@ onUnmounted(() => {
                 <v-btn value="front" size="small">Front Group</v-btn>
                 <v-btn value="rear" size="small">Rear Group</v-btn>
               </v-btn-toggle>
-              <v-btn-toggle
-                v-model="transformMode"
-                mandatory
-                density="compact"
-                class="suspension-editor__toggle"
+              <v-btn
+                size="small"
+                prepend-icon="mdi-axis-arrow"
+                variant="tonal"
+                color="primary"
+                disabled
               >
-                <v-btn value="translate" size="small" prepend-icon="mdi-axis-arrow">Move</v-btn>
-                <v-btn value="scale" size="small" prepend-icon="mdi-crop">Scale</v-btn>
-              </v-btn-toggle>
+                Move
+              </v-btn>
             </div>
             <div class="suspension-editor__canvas" ref="previewContainerRef">
               <div v-if="!isReady" class="suspension-editor__empty">Preparing preview…</div>
@@ -593,7 +591,7 @@ onUnmounted(() => {
 
           <div class="suspension-editor__controls">
             <div class="suspension-editor__section">
-              <div class="suspension-editor__section-title">Track &amp; Spacing</div>
+              <div class="suspension-editor__section-title">Front Wheels</div>
               <v-slider
                 label="Front spacing (|X| m)"
                 density="compact"
@@ -605,21 +603,6 @@ onUnmounted(() => {
                 :disabled="isDisabled"
                 @update:modelValue="(value) => handleSpacingChange(true, Number(value))"
               />
-              <v-slider
-                label="Rear spacing (|X| m)"
-                density="compact"
-                hide-details
-                :min="0"
-                :max="5"
-                :step="0.01"
-                :model-value="uiState.rearSpacing"
-                :disabled="isDisabled"
-                @update:modelValue="(value) => handleSpacingChange(false, Number(value))"
-              />
-            </div>
-
-            <div class="suspension-editor__section">
-              <div class="suspension-editor__section-title">Front Wheels</div>
               <div class="suspension-editor__grid">
                 <v-slider
                   v-for="control in numericControls"
@@ -640,6 +623,17 @@ onUnmounted(() => {
 
             <div class="suspension-editor__section">
               <div class="suspension-editor__section-title">Rear Wheels</div>
+              <v-slider
+                label="Rear spacing (|X| m)"
+                density="compact"
+                hide-details
+                :min="0"
+                :max="5"
+                :step="0.01"
+                :model-value="uiState.rearSpacing"
+                :disabled="isDisabled"
+                @update:modelValue="(value) => handleSpacingChange(false, Number(value))"
+              />
               <div class="suspension-editor__grid">
                 <v-slider
                   v-for="control in numericControls"
