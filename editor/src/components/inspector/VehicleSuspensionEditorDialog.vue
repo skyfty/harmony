@@ -2,13 +2,16 @@
 import {
   AmbientLight,
   Box3,
+  BoxGeometry,
   Clock,
   Color,
   DirectionalLight,
+  HemisphereLight,
   Group,
   Mesh,
   MeshStandardMaterial,
   Object3D,
+  PlaneGeometry,
   PerspectiveCamera,
   Scene,
   SphereGeometry,
@@ -80,6 +83,8 @@ let previewModelGroup: Object3D | null = null
 let chassisGroup: Group | null = null
 let frontGroup: Group | null = null
 let rearGroup: Group | null = null
+let groundMesh: Mesh | null = null
+let chassisBodyMesh: Mesh | null = null
 let connectionPointMeshes: Mesh[] = []
 let resizeObserver: ResizeObserver | null = null
 let physicsWorld: CANNON.World | null = null
@@ -149,6 +154,7 @@ function disposePreview() {
   orbitControls?.dispose()
   orbitControls = null
   if (transformControls) {
+    previewScene?.remove(transformControls.getHelper())
     transformControls.detach()
     transformControls.dispose?.()
   }
@@ -159,6 +165,14 @@ function disposePreview() {
   chassisGroup = null
   frontGroup = null
   rearGroup = null
+  if (groundMesh) {
+    previewScene?.remove(groundMesh)
+  }
+  groundMesh = null
+  if (chassisBodyMesh) {
+    previewScene?.remove(chassisBodyMesh)
+  }
+  chassisBodyMesh = null
   connectionPointMeshes = []
   wheelPreviewMeshes = []
   disposePhysics()
@@ -184,7 +198,7 @@ function initPreview() {
   renderer = new WebGLRenderer({ antialias: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.6))
   renderer.setSize(container.clientWidth, container.clientHeight)
-  renderer.setClearColor(new Color('#080b12'))
+  renderer.setClearColor(new Color('#dfe5ee'))
   container.appendChild(renderer.domElement)
 
   previewScene = new Scene()
@@ -192,15 +206,24 @@ function initPreview() {
   camera.position.set(6, 4, 6)
   previewScene.add(camera)
 
-  const ambient = new AmbientLight(0xffffff, 0.6)
-  const dir = new DirectionalLight(0xffffff, 0.8)
-  dir.position.set(4, 8, 6)
+  const ambient = new AmbientLight(0xffffff, 1.0)
+  const hemi = new HemisphereLight(0xbfd4ff, 0xdde3ed, 0.55)
+  const dir = new DirectionalLight(0xffffff, 1.15)
+  dir.position.set(6, 9, 7)
+  dir.castShadow = false
   previewScene.add(ambient)
+  previewScene.add(hemi)
   previewScene.add(dir)
+
+  const groundMaterial = new MeshStandardMaterial({ color: '#cdd6e5', roughness: 0.9, metalness: 0 })
+  groundMesh = new Mesh(new PlaneGeometry(60, 60), groundMaterial)
+  groundMesh.rotation.x = -Math.PI / 2
+  groundMesh.position.y = 0
+  previewScene.add(groundMesh)
 
   orbitControls = new OrbitControls(camera, renderer.domElement)
   orbitControls.target.set(0, 1, 0)
-  orbitControls.enableDamping = true
+  orbitControls.enableDamping = false
 
   transformControls = new TransformControls(camera, renderer.domElement)
   transformControls.setMode('translate')
@@ -209,8 +232,8 @@ function initPreview() {
       orbitControls.enabled = !event.value
     }
   })
-  transformControls.addEventListener('objectChange', handleHandleMove)
-  previewScene.add(transformControls)
+  transformControls.addEventListener('mouseUp', handleHandleCommit)
+  previewScene.add(transformControls.getHelper())
 
   rebuildModel()
   rebuildHandles()
@@ -357,6 +380,11 @@ function handleHandleMove() {
   applyHandleDelta(isFront)
 }
 
+function handleHandleCommit() {
+  // Only commit wheel positions after releasing the mouse to avoid mid-drag writes.
+  handleHandleMove()
+}
+
 function applyHandleDelta(isFront: boolean) {
   const group = isFront ? frontGroup : rearGroup
   if (!group || !chassisGroup) return
@@ -443,6 +471,14 @@ function rebuildPhysics() {
   const size = bounds && !bounds.isEmpty() ? bounds.getSize(tempSize) : new Vector3(2, 1, 4)
   const halfExtents = new CANNON.Vec3(Math.max(0.1, size.x * 0.5), Math.max(0.1, size.y * 0.5), Math.max(0.1, size.z * 0.5))
 
+  if (chassisBodyMesh) {
+    previewScene?.remove(chassisBodyMesh)
+  }
+  const bodyVisualMaterial = new MeshStandardMaterial({ color: '#4c7dff', transparent: true, opacity: 0.16, roughness: 0.6, metalness: 0 })
+  chassisBodyMesh = new Mesh(new BoxGeometry(halfExtents.x * 2, halfExtents.y * 2, halfExtents.z * 2), bodyVisualMaterial)
+  chassisBodyMesh.position.set(0, halfExtents.y + 0.3, 0)
+  previewScene?.add(chassisBodyMesh)
+
   chassisBody = new CANNON.Body({ mass: 600 })
   chassisBody.addShape(new CANNON.Box(halfExtents))
   chassisBody.position.set(0, halfExtents.y + 0.3, 0)
@@ -491,6 +527,10 @@ function updateVisualsFromPhysics(deltaTime: number) {
 
   chassisGroup.position.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
   chassisGroup.quaternion.set(chassisBody.quaternion.x, chassisBody.quaternion.y, chassisBody.quaternion.z, chassisBody.quaternion.w)
+  if (chassisBodyMesh) {
+    chassisBodyMesh.position.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
+    chassisBodyMesh.quaternion.set(chassisBody.quaternion.x, chassisBody.quaternion.y, chassisBody.quaternion.z, chassisBody.quaternion.w)
+  }
 }
 
 function startRenderLoop() {
