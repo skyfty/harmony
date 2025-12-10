@@ -144,6 +144,10 @@ const VEHICLE_SPEED_SOFT_CAP_SQ = VEHICLE_SPEED_SOFT_CAP * VEHICLE_SPEED_SOFT_CA
 const VEHICLE_SPEED_HARD_CAP_SQ = VEHICLE_SPEED_HARD_CAP * VEHICLE_SPEED_HARD_CAP
 const VEHICLE_SPEED_LIMIT_DAMPING = 0.08
 const VEHICLE_COASTING_DAMPING = 0.04
+const VEHICLE_SMOOTH_STOP_DEFAULT_DAMPING = 0.28
+const VEHICLE_SMOOTH_STOP_MAX_DAMPING = 0.6
+const VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD = 0.18
+const VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD_SQ = VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD * VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD
 const VEHICLE_STEER_ANGLE = THREE.MathUtils.degToRad(26)
 const VEHICLE_STEER_SOFT_CAP = 4.2 // m/s speed where steering starts damping
 const VEHICLE_STEER_HARD_CAP = 10 // m/s speed where steering is strongly limited
@@ -271,6 +275,11 @@ export class VehicleDriveController {
     tempQuaternion: new THREE.Quaternion(),
     tempVector: new THREE.Vector3(),
   }
+  private readonly smoothStopState = {
+    active: false,
+    damping: VEHICLE_SMOOTH_STOP_DEFAULT_DAMPING,
+    stopSpeedSq: VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD_SQ,
+  }
 
   constructor(deps: VehicleDriveControllerDeps, bindings: VehicleDriveControllerBindings) {
     this.deps = deps
@@ -323,6 +332,24 @@ export class VehicleDriveController {
     this.bindings.uiOverride.value = mode
   }
 
+  requestSmoothStop(options: { damping?: number; stopSpeed?: number } = {}): void {
+    if (!this.state.active) {
+      return
+    }
+    const damping = typeof options.damping === 'number' ? options.damping : VEHICLE_SMOOTH_STOP_DEFAULT_DAMPING
+    const stopSpeed = typeof options.stopSpeed === 'number' ? options.stopSpeed : VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD
+    this.smoothStopState.active = true
+    this.smoothStopState.damping = Math.max(
+      VEHICLE_COASTING_DAMPING,
+      Math.min(VEHICLE_SMOOTH_STOP_MAX_DAMPING, damping),
+    )
+    this.smoothStopState.stopSpeedSq = Math.max(1e-4, stopSpeed * stopSpeed)
+  }
+
+  clearSmoothStop(): void {
+    this.smoothStopState.active = false
+  }
+
   resetInputs(): void {
     const flags = this.inputFlags
     flags.forward = false
@@ -337,6 +364,7 @@ export class VehicleDriveController {
     input.throttle = 0
     input.brake = 0
     input.steering = 0
+    this.clearSmoothStop()
     this.recomputeInputs()
   }
 
@@ -512,6 +540,7 @@ export class VehicleDriveController {
     state.sourceEvent = null
     this.bindings.cameraFollowState.initialized = false
     this.resetFollowCameraOffset()
+    this.clearSmoothStop()
     this.bindings.exitBusy.value = false
     this.cameraMode = 'first-person'
     if (this.deps.setCameraCaging) {
@@ -541,6 +570,10 @@ export class VehicleDriveController {
     const throttle = this.input.throttle
     const steeringInput = this.input.steering
     const brakeInput = this.input.brake
+    const smoothStop = this.smoothStopState
+    if (Math.abs(throttle) > 0.05) {
+      smoothStop.active = false
+    }
     let engineForce = throttle * VEHICLE_ENGINE_FORCE
     let speedSq = 0
     if (velocity && chassisBody && instance.axisForward) {
@@ -575,7 +608,19 @@ export class VehicleDriveController {
       if (speedSq >= VEHICLE_SPEED_HARD_CAP_SQ) {
         velocity.scale(1 - VEHICLE_SPEED_LIMIT_DAMPING, velocity)
       } else if (Math.abs(throttle) < 0.05) {
-        velocity.scale(1 - VEHICLE_COASTING_DAMPING, velocity)
+        const baseDamping = smoothStop.active ? smoothStop.damping : VEHICLE_COASTING_DAMPING
+        const damping = Math.min(0.95, Math.max(0, baseDamping))
+        velocity.scale(1 - damping, velocity)
+        if (smoothStop.active) {
+          const nextSpeedSq = velocity.lengthSquared()
+          if (nextSpeedSq <= smoothStop.stopSpeedSq) {
+            velocity.set(0, 0, 0)
+            smoothStop.active = false
+            speedSq = 0
+          } else {
+            speedSq = nextSpeedSq
+          }
+        }
       }
     }
     let steeringValue = steeringInput * VEHICLE_STEER_ANGLE
