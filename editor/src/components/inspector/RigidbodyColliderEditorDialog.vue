@@ -113,6 +113,69 @@ let resizeObserver: ResizeObserver | null = null
 let previewRefreshToken = 0
 const previewOriginShift = new THREE.Vector3()
 
+function collectNodeAndDescendants(node: SceneNode | null): SceneNode[] {
+  if (!node) {
+    return []
+  }
+  const list: SceneNode[] = [node]
+  const stack = [...(node.children ?? [])]
+  while (stack.length) {
+    const current = stack.pop()
+    if (!current) {
+      continue
+    }
+    list.push(current)
+    if (current.children?.length) {
+      stack.push(...current.children)
+    }
+  }
+  return list
+}
+
+function cloneRuntimeObject(runtimeObject: THREE.Object3D): THREE.Object3D | null {
+  const instancedAssetId = runtimeObject.userData?.instancedAssetId as string | undefined
+  if (instancedAssetId) {
+    const cached = getCachedModelObject(instancedAssetId)
+    if (!cached) {
+      return null
+    }
+    return cached.object.clone(true)
+  }
+  return runtimeObject.clone(true)
+}
+
+function cloneNodeForPreview(node: SceneNode): THREE.Object3D | null {
+  const runtimeObject = getRuntimeObject(node.id)
+  let clone: THREE.Object3D | null = null
+
+  if (runtimeObject) {
+    clone = cloneRuntimeObject(runtimeObject)
+  } else if (node.nodeType === 'Group') {
+    clone = new THREE.Group()
+  }
+
+  if (!clone) {
+    return null
+  }
+
+  clone.name = node.name ?? clone.name
+  clone.userData = {
+    ...(clone.userData ?? {}),
+    nodeId: node.id,
+  }
+
+  if (Array.isArray(node.children) && node.children.length) {
+    node.children.forEach((child) => {
+      const childClone = cloneNodeForPreview(child)
+      if (childClone) {
+        clone.add(childClone)
+      }
+    })
+  }
+
+  return clone
+}
+
 function disposePreview() {
   resizeObserver?.disconnect()
   resizeObserver = null
@@ -396,10 +459,22 @@ async function initializePreview(requestToken: number) {
     loadError.value = 'No node available for collider editing.'
     return
   }
+  const nodesToPrepare = collectNodeAndDescendants(node)
   let runtimeObject = getRuntimeObject(targetId)
-  if (!runtimeObject) {
+
+  if (node.nodeType === 'Group') {
     try {
-      await sceneStore.ensureSceneAssetsReady({ nodes: [node], showOverlay: false, refreshViewport: false })
+      await sceneStore.ensureSceneAssetsReady({ nodes: nodesToPrepare, showOverlay: false, refreshViewport: false })
+    } catch (error) {
+      console.warn('[RigidbodyColliderEditor] Failed to prepare assets for group preview', error)
+    }
+    if (!props.visible || requestToken !== previewRefreshToken) {
+      return
+    }
+    runtimeObject = getRuntimeObject(targetId)
+  } else if (!runtimeObject) {
+    try {
+      await sceneStore.ensureSceneAssetsReady({ nodes: nodesToPrepare, showOverlay: false, refreshViewport: false })
     } catch (error) {
       console.warn('[RigidbodyColliderEditor] Failed to prepare assets for preview', error)
     }
@@ -408,7 +483,8 @@ async function initializePreview(requestToken: number) {
     }
     runtimeObject = getRuntimeObject(targetId)
   }
-  if (!runtimeObject) {
+
+  if (node.nodeType !== 'Group' && !runtimeObject) {
     loadError.value = 'Unable to load the target mesh into the preview.'
     return
   }
@@ -439,19 +515,27 @@ async function initializePreview(requestToken: number) {
   previewScene.add(grid)
 
   let clone: THREE.Object3D | null = null
-  const instancedAssetId = runtimeObject.userData?.instancedAssetId as string | undefined
-  if (instancedAssetId) {
-    const cached = getCachedModelObject(instancedAssetId)
-    if (!cached) {
+
+  if (node.nodeType === 'Group') {
+    clone = cloneNodeForPreview(node)
+    if (!clone) {
+      loadError.value = 'Unable to assemble the selected group for preview.'
+      disposePreview()
+      return
+    }
+  } else if (runtimeObject) {
+    clone = cloneRuntimeObject(runtimeObject)
+    if (!clone) {
       loadError.value = 'The instanced model is not available for preview.'
       disposePreview()
       return
     }
-    clone = cached.object.clone(true)
   }
 
   if (!clone) {
-    clone = runtimeObject.clone(true)
+    loadError.value = 'No preview mesh is available.'
+    disposePreview()
+    return
   }
 
   clone.updateMatrixWorld(true)
