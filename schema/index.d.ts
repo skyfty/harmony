@@ -508,6 +508,8 @@ export interface SceneNode {
 export interface GroundSettings {
   width: number;
   depth: number;
+  /** When true, build static air-wall colliders around the ground perimeter. */
+  enableAirWall?: boolean;
 }
 
 export interface SceneViewportSettings {

@@ -1099,6 +1099,8 @@ function normalizeGroundSettings(settings?: Partial<GroundSettings> | null): Gro
   return {
     width: normalizeGroundDimension(settings?.width, DEFAULT_GROUND_EXTENT),
     depth: normalizeGroundDimension(settings?.depth, DEFAULT_GROUND_EXTENT),
+    // Default to true unless explicitly disabled
+    enableAirWall: settings?.enableAirWall !== false,
   }
 }
 
@@ -6681,6 +6683,19 @@ export const useSceneStore = defineStore('scene', {
     },
     resetGroundRegion(bounds: GroundRegionBounds) {
       return this.modifyGroundRegion(bounds, () => 0)
+    },
+    setGroundAirWallEnabled(enabled: boolean) {
+      const next = enabled === true
+      if (this.groundSettings.enableAirWall === next) {
+        return false
+      }
+      this.captureHistorySnapshot()
+      this.groundSettings = {
+        ...this.groundSettings,
+        enableAirWall: next,
+      }
+      commitSceneSnapshot(this)
+      return true
     },
     setGroundDimensions(payload: { width?: number; depth?: number }) {
       const requested = {
