@@ -193,6 +193,10 @@ function disposePreview() {
   orbitControls = null
 
   if (transformControls) {
+    const helper = transformControls.getHelper?.()
+    if (helper && previewScene) {
+      previewScene.remove(helper)
+    }
     transformControls.detach()
     transformControls.dispose?.()
   }
@@ -544,7 +548,7 @@ async function initializePreview(requestToken: number) {
     constrainColliderTransform()
     updateColliderStateFromGroup()
   })
-  previewScene.add(transformControls)
+  previewScene.add(transformControls.getHelper())
 
   const desiredKind = normalizeColliderKind(rigidbodyComponent.value?.props.colliderType)
   const shape = resolveInitialShape(desiredKind) ?? resolveInitialShape('box') ?? {
