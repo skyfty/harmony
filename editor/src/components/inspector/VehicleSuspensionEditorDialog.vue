@@ -14,6 +14,7 @@ import {
   PlaneGeometry,
   PerspectiveCamera,
   Scene,
+  CylinderGeometry,
   SphereGeometry,
   Vector3,
   WebGLRenderer,
@@ -31,7 +32,13 @@ import {
   clampVehicleComponentProps,
   type VehicleComponentProps,
   type VehicleWheelProps,
+  RIGIDBODY_COMPONENT_TYPE,
+  RIGIDBODY_METADATA_KEY,
+  type RigidbodyComponentProps,
+  type RigidbodyComponentMetadata,
+  type RigidbodyPhysicsShape,
 } from '@schema/components'
+import { resolveNodeScaleFactors } from '@/utils/rigidbodyCollider'
 import type { SceneNode, SceneNodeComponentState } from '@harmony/schema'
 
 const props = defineProps<{
@@ -85,6 +92,7 @@ let frontGroup: Group | null = null
 let rearGroup: Group | null = null
 let groundMesh: Mesh | null = null
 let chassisBodyMesh: Mesh | null = null
+let chassisShapeOffset: CANNON.Vec3 | null = null
 let connectionPointMeshes: Mesh[] = []
 let resizeObserver: ResizeObserver | null = null
 let physicsWorld: CANNON.World | null = null
@@ -173,6 +181,7 @@ function disposePreview() {
     previewScene?.remove(chassisBodyMesh)
   }
   chassisBodyMesh = null
+  chassisShapeOffset = null
   connectionPointMeshes = []
   wheelPreviewMeshes = []
   disposePhysics()
@@ -467,21 +476,22 @@ function rebuildPhysics() {
   groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0)
   physicsWorld.addBody(groundBody)
 
-  const bounds = previewModelGroup ? setBoundingBoxFromObject(previewModelGroup, tempBox.makeEmpty()) : null
-  const size = bounds && !bounds.isEmpty() ? bounds.getSize(tempSize) : new Vector3(2, 1, 4)
-  const halfExtents = new CANNON.Vec3(Math.max(0.1, size.x * 0.5), Math.max(0.1, size.y * 0.5), Math.max(0.1, size.z * 0.5))
+  const collider = resolveChassisColliderShape()
+  const baseY = Math.max(0.05, collider.halfHeight - collider.offset.y) + 0.3
 
   if (chassisBodyMesh) {
     previewScene?.remove(chassisBodyMesh)
   }
   const bodyVisualMaterial = new MeshStandardMaterial({ color: '#4c7dff', transparent: true, opacity: 0.16, roughness: 0.6, metalness: 0 })
-  chassisBodyMesh = new Mesh(new BoxGeometry(halfExtents.x * 2, halfExtents.y * 2, halfExtents.z * 2), bodyVisualMaterial)
-  chassisBodyMesh.position.set(0, halfExtents.y + 0.3, 0)
-  previewScene?.add(chassisBodyMesh)
+  chassisBodyMesh = buildChassisVisualMesh(collider, bodyVisualMaterial)
+  chassisShapeOffset = collider.offset
+  if (chassisBodyMesh) {
+    previewScene?.add(chassisBodyMesh)
+  }
 
   chassisBody = new CANNON.Body({ mass: 600 })
-  chassisBody.addShape(new CANNON.Box(halfExtents))
-  chassisBody.position.set(0, halfExtents.y + 0.3, 0)
+  chassisBody.addShape(collider.shape, collider.offset)
+  chassisBody.position.set(0, baseY, 0)
   physicsWorld.addBody(chassisBody)
 
   vehicle = new CANNON.RaycastVehicle({
@@ -528,8 +538,186 @@ function updateVisualsFromPhysics(deltaTime: number) {
   chassisGroup.position.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
   chassisGroup.quaternion.set(chassisBody.quaternion.x, chassisBody.quaternion.y, chassisBody.quaternion.z, chassisBody.quaternion.w)
   if (chassisBodyMesh) {
-    chassisBodyMesh.position.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
+    const offset = chassisShapeOffset
+    if (offset) {
+      const rotated = new CANNON.Vec3()
+      chassisBody.quaternion.vmult(offset, rotated)
+      chassisBodyMesh.position.set(
+        chassisBody.position.x + rotated.x,
+        chassisBody.position.y + rotated.y,
+        chassisBody.position.z + rotated.z,
+      )
+    } else {
+      chassisBodyMesh.position.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
+    }
     chassisBodyMesh.quaternion.set(chassisBody.quaternion.x, chassisBody.quaternion.y, chassisBody.quaternion.z, chassisBody.quaternion.w)
+  }
+}
+
+type ChassisColliderInfo = {
+  shape: CANNON.Shape
+  halfHeight: number
+  offset: CANNON.Vec3
+  visual: { kind: 'box'; halfExtents: CANNON.Vec3 } | { kind: 'sphere'; radius: number } | { kind: 'cylinder'; radiusTop: number; radiusBottom: number; height: number } | { kind: 'convex'; size: Vector3; center: Vector3 }
+}
+
+function resolveChassisColliderShape(): ChassisColliderInfo {
+  const node = selectedNode.value
+  const defaultCollider = buildFallbackCollider()
+  if (!node || !node.components) return defaultCollider
+
+  const rigidbodyComponent = node.components[RIGIDBODY_COMPONENT_TYPE] as SceneNodeComponentState<RigidbodyComponentProps> | undefined
+  const metadataShape = (rigidbodyComponent?.metadata?.[RIGIDBODY_METADATA_KEY] as RigidbodyComponentMetadata | undefined)?.shape
+  if (!metadataShape) {
+    return defaultCollider
+  }
+
+  const scale = resolveNodeScaleFactors(node)
+  const makeOffset = (raw?: [number, number, number] | null) => {
+    const nx = raw?.[0] ?? 0
+    const ny = raw?.[1] ?? 0
+    const nz = raw?.[2] ?? 0
+    if (metadataShape.scaleNormalized) {
+      return new CANNON.Vec3(nx * scale.x, ny * scale.y, nz * scale.z)
+    }
+    return new CANNON.Vec3(nx, ny, nz)
+  }
+
+  const offset = makeOffset((metadataShape as any).offset)
+
+  const resolveBox = (shape: Extract<RigidbodyPhysicsShape, { kind: 'box' }>): ChassisColliderInfo => {
+    const hx = shape.scaleNormalized ? shape.halfExtents[0] * scale.x : shape.halfExtents[0]
+    const hy = shape.scaleNormalized ? shape.halfExtents[1] * scale.y : shape.halfExtents[1]
+    const hz = shape.scaleNormalized ? shape.halfExtents[2] * scale.z : shape.halfExtents[2]
+    const halfExtents = new CANNON.Vec3(Math.max(1e-4, hx), Math.max(1e-4, hy), Math.max(1e-4, hz))
+    return {
+      shape: new CANNON.Box(halfExtents),
+      halfHeight: halfExtents.y,
+      offset,
+      visual: { kind: 'box', halfExtents },
+    }
+  }
+
+  const resolveSphere = (shape: Extract<RigidbodyPhysicsShape, { kind: 'sphere' }>): ChassisColliderInfo => {
+    const dominantScale = Math.max(scale.x, scale.y, scale.z)
+    const radius = shape.scaleNormalized ? shape.radius * dominantScale : shape.radius
+    const safeRadius = Math.max(1e-4, radius)
+    return {
+      shape: new CANNON.Sphere(safeRadius),
+      halfHeight: safeRadius,
+      offset,
+      visual: { kind: 'sphere', radius: safeRadius },
+    }
+  }
+
+  const resolveCylinder = (shape: Extract<RigidbodyPhysicsShape, { kind: 'cylinder' }>): ChassisColliderInfo => {
+    const horizontalScale = Math.max(scale.x, scale.z)
+    const radiusTop = shape.scaleNormalized ? shape.radiusTop * horizontalScale : shape.radiusTop
+    const radiusBottom = shape.scaleNormalized ? shape.radiusBottom * horizontalScale : shape.radiusBottom
+    const height = shape.scaleNormalized ? shape.height * scale.y : shape.height
+    const segments = Math.max(4, shape.segments ?? 16)
+    const safeTop = Math.max(1e-4, radiusTop)
+    const safeBottom = Math.max(1e-4, radiusBottom)
+    const safeHeight = Math.max(1e-4, height)
+    return {
+      shape: new CANNON.Cylinder(safeTop, safeBottom, safeHeight, segments),
+      halfHeight: safeHeight * 0.5,
+      offset,
+      visual: { kind: 'cylinder', radiusTop: safeTop, radiusBottom: safeBottom, height: safeHeight },
+    }
+  }
+
+  const resolveConvex = (shape: Extract<RigidbodyPhysicsShape, { kind: 'convex' }>): ChassisColliderInfo => {
+    const vertices = (shape.vertices ?? []).map((vertex) => {
+      const [x, y, z] = vertex
+      const vx = metadataShape.scaleNormalized ? x * scale.x : x
+      const vy = metadataShape.scaleNormalized ? y * scale.y : y
+      const vz = metadataShape.scaleNormalized ? z * scale.z : z
+      return new CANNON.Vec3(vx, vy, vz)
+    })
+    const faces = (shape.faces ?? []).map((face) => face.slice())
+    if (!vertices.length || !faces.length) {
+      return defaultCollider
+    }
+
+    const bounds = vertices.reduce(
+      (acc, v) => {
+        acc.min.x = Math.min(acc.min.x, v.x)
+        acc.min.y = Math.min(acc.min.y, v.y)
+        acc.min.z = Math.min(acc.min.z, v.z)
+        acc.max.x = Math.max(acc.max.x, v.x)
+        acc.max.y = Math.max(acc.max.y, v.y)
+        acc.max.z = Math.max(acc.max.z, v.z)
+        return acc
+      },
+      { min: new CANNON.Vec3(Infinity, Infinity, Infinity), max: new CANNON.Vec3(-Infinity, -Infinity, -Infinity) },
+    )
+    const center = bounds.min.vadd(bounds.max).scale(0.5)
+    const adjustedVertices = vertices.map((v) => v.vsub(center))
+    const halfHeight = Math.max(1e-4, (bounds.max.y - bounds.min.y) * 0.5)
+    const visualSize = new Vector3(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z)
+
+    return {
+      shape: new CANNON.ConvexPolyhedron({ vertices: adjustedVertices, faces }),
+      halfHeight,
+      offset: offset.vadd(center),
+      visual: { kind: 'convex', size: visualSize, center: new Vector3(center.x, center.y, center.z) },
+    }
+  }
+
+  switch (metadataShape.kind) {
+    case 'box':
+      return resolveBox(metadataShape)
+    case 'sphere':
+      return resolveSphere(metadataShape)
+    case 'cylinder':
+      return resolveCylinder(metadataShape)
+    case 'convex':
+      return resolveConvex(metadataShape)
+    default:
+      return defaultCollider
+  }
+}
+
+function buildFallbackCollider(): ChassisColliderInfo {
+  const bounds = previewModelGroup ? setBoundingBoxFromObject(previewModelGroup, tempBox.makeEmpty()) : null
+  const size = bounds && !bounds.isEmpty() ? bounds.getSize(tempSize) : new Vector3(2, 1, 4)
+  const halfExtents = new CANNON.Vec3(Math.max(0.1, size.x * 0.5), Math.max(0.1, size.y * 0.5), Math.max(0.1, size.z * 0.5))
+  return {
+    shape: new CANNON.Box(halfExtents),
+    halfHeight: halfExtents.y,
+    offset: new CANNON.Vec3(0, 0, 0),
+    visual: { kind: 'box', halfExtents },
+  }
+}
+
+function buildChassisVisualMesh(collider: ChassisColliderInfo, material: MeshStandardMaterial): Mesh | null {
+  switch (collider.visual.kind) {
+    case 'box': {
+      const halfExtents = collider.visual.halfExtents
+      const mesh = new Mesh(new BoxGeometry(halfExtents.x * 2, halfExtents.y * 2, halfExtents.z * 2), material)
+      mesh.position.set(collider.offset.x, collider.offset.y, collider.offset.z)
+      return mesh
+    }
+    case 'sphere': {
+      const mesh = new Mesh(new SphereGeometry(collider.visual.radius, 24, 16), material)
+      mesh.position.set(collider.offset.x, collider.offset.y, collider.offset.z)
+      return mesh
+    }
+    case 'cylinder': {
+      const { radiusTop, radiusBottom, height } = collider.visual
+      const mesh = new Mesh(new CylinderGeometry(radiusTop, radiusBottom, height, 24), material)
+      mesh.position.set(collider.offset.x, collider.offset.y, collider.offset.z)
+      return mesh
+    }
+    case 'convex': {
+      const size = collider.visual.size
+      const mesh = new Mesh(new BoxGeometry(Math.max(1e-4, size.x), Math.max(1e-4, size.y), Math.max(1e-4, size.z)), material)
+      mesh.position.set(collider.offset.x, collider.offset.y, collider.offset.z)
+      return mesh
+    }
+    default:
+      return null
   }
 }
 
