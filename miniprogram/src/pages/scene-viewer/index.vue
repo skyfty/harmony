@@ -288,23 +288,6 @@
           <text class="viewer-drive-speed-gauge__unit">km/h</text>
         </view>
       </view>
-      <view
-        v-if="vehicleDriveUi.visible"
-        class="viewer-drive-brake"
-      >
-        <button
-          class="viewer-drive-brake-button"
-          :class="{ 'is-active': vehicleDriveInputFlags.brake }"
-          type="button"
-          hover-class="none"
-          aria-label="刹车"
-          @touchstart.stop.prevent="handleBrakeButtonPress"
-          @touchend.stop.prevent="handleBrakeButtonRelease"
-          @touchcancel.stop.prevent="handleBrakeButtonRelease"
-        >
-          <text>刹车</text>
-        </button>
-      </view>
     </view>
     <view class="viewer-footer" v-if="warnings.length">
       <text class="footer-title">警告</text>
