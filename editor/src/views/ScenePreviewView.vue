@@ -678,7 +678,7 @@ const scatterMatrixHelper = new THREE.Matrix4()
 let physicsWorld: CANNON.World | null = null
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
 type RigidbodyDebugHelperCategory = 'ground' | 'rigidbody'
-type RigidbodyDebugHelper = { group: THREE.Group; signature: string; category: RigidbodyDebugHelperCategory }
+type RigidbodyDebugHelper = { group: THREE.Group; signature: string; category: RigidbodyDebugHelperCategory; scale: THREE.Vector3 }
 const rigidbodyDebugHelpers = new Map<string, RigidbodyDebugHelper>()
 let rigidbodyDebugGroup: THREE.Group | null = null
 const rigidbodyDebugMaterial = new THREE.LineBasicMaterial({
@@ -5500,9 +5500,10 @@ function disposeRigidbodyDebugHelpers(): void {
 }
 
 function ensureRigidbodyDebugHelperForShape(
-	nodeId: string,
-	shape: RigidbodyPhysicsShape,
-	category: RigidbodyDebugHelperCategory,
+  nodeId: string,
+  shape: RigidbodyPhysicsShape,
+  category: RigidbodyDebugHelperCategory,
+  worldScale: THREE.Vector3,
 ): void {
 	const signature = computeRigidbodyShapeSignature(shape)
 	const existing = rigidbodyDebugHelpers.get(nodeId)
@@ -5524,11 +5525,13 @@ function ensureRigidbodyDebugHelperForShape(
 	lineSegments.renderOrder = 9999
 	const offsetTuple = shape.kind === 'heightfield' ? [0, 0, 0] : shape.offset ?? [0, 0, 0]
 	const [ox = 0, oy = 0, oz = 0] = offsetTuple
-	lineSegments.position.set(ox, oy, oz)
+	const offsetScale = shape.scaleNormalized === false ? new THREE.Vector3(1, 1, 1) : worldScale
+	lineSegments.position.set(ox * offsetScale.x, oy * offsetScale.y, oz * offsetScale.z)
 	helperGroup.add(lineSegments)
 	helperGroup.visible = false
+	helperGroup.scale.copy(shape.scaleNormalized === false ? new THREE.Vector3(1, 1, 1) : worldScale)
 	container.add(helperGroup)
-	rigidbodyDebugHelpers.set(nodeId, { group: helperGroup, signature, category })
+	rigidbodyDebugHelpers.set(nodeId, { group: helperGroup, signature, category, scale: helperGroup.scale.clone() })
 }
 
 function refreshRigidbodyDebugHelper(nodeId: string): void {
@@ -5551,7 +5554,15 @@ function refreshRigidbodyDebugHelper(nodeId: string): void {
 		removeRigidbodyDebugHelper(nodeId)
 		return
 	}
-	ensureRigidbodyDebugHelperForShape(nodeId, shapeDefinition, category)
+	const scale = new THREE.Vector3(1, 1, 1)
+	if (shapeDefinition.scaleNormalized !== false) {
+		const object = node ? nodeObjectMap.get(node.id) ?? null : null
+		if (object) {
+			object.updateMatrixWorld(true)
+			object.getWorldScale(scale)
+		}
+	}
+	ensureRigidbodyDebugHelperForShape(nodeId, shapeDefinition, category, scale)
 	updateRigidbodyDebugHelperTransform(nodeId)
 }
 
@@ -5591,6 +5602,7 @@ function updateRigidbodyDebugHelperTransform(nodeId: string): void {
 		helper.group.quaternion.copy(rigidbodyDebugQuaternionHelper)
 		visible = object.visible !== false
 	}
+	helper.group.scale.copy(helper.scale)
 	helper.group.visible = visible && categoryEnabled
 	helper.group.updateMatrixWorld(true)
 }

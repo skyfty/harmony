@@ -8125,7 +8125,7 @@ export const useSceneStore = defineStore('scene', {
     async spawnAssetAtPosition(
       assetId: string,
       position: THREE.Vector3,
-      options: { parentId?: string | null } = {},
+      options: { parentId?: string | null; preserveWorldPosition?: boolean } = {},
     ): Promise<{ asset: ProjectAsset; node: SceneNode }> {
       const asset = findAssetInTree(this.projectTree, assetId)
       if (!asset) {
@@ -8134,10 +8134,54 @@ export const useSceneStore = defineStore('scene', {
 
       const targetParentId = options.parentId ?? null
 
+      const adjustNodeWorldPosition = (nodeId: string | null, desiredWorldPosition: THREE.Vector3 | null) => {
+        if (!nodeId || !desiredWorldPosition || !targetParentId) {
+          return
+        }
+        const parentMatrix = computeWorldMatrixForNode(this.nodes, targetParentId)
+        if (!parentMatrix) {
+          return
+        }
+
+        const parentInverse = parentMatrix.clone().invert()
+        const currentWorldMatrix = computeWorldMatrixForNode(this.nodes, nodeId)
+        if (!currentWorldMatrix) {
+          return
+        }
+
+        const currentWorldPosition = new Vector3()
+        const currentWorldQuaternion = new Quaternion()
+        const currentWorldScale = new Vector3()
+        currentWorldMatrix.decompose(currentWorldPosition, currentWorldQuaternion, currentWorldScale)
+
+        const desiredWorldMatrix = new Matrix4().compose(
+          desiredWorldPosition.clone(),
+          currentWorldQuaternion,
+          currentWorldScale,
+        )
+
+        const localMatrix = new Matrix4().multiplyMatrices(parentInverse, desiredWorldMatrix)
+        const localPosition = new Vector3()
+        const localQuaternion = new Quaternion()
+        const localScale = new Vector3()
+        localMatrix.decompose(localPosition, localQuaternion, localScale)
+        const localEuler = new Euler().setFromQuaternion(localQuaternion, 'XYZ')
+
+        this.updateNodeTransform({
+          id: nodeId,
+          position: toPlainVector(localPosition),
+          rotation: toPlainVector(localEuler),
+          scale: toPlainVector(localScale),
+        })
+      }
+
       if (asset.type === 'prefab') {
         const node = await this.instantiateNodePrefabAsset(asset.id, position, {
           parentId: targetParentId,
         })
+        if (options.preserveWorldPosition) {
+          adjustNodeWorldPosition(node?.id ?? null, position)
+        }
         return { asset, node }
       }
 
@@ -8147,6 +8191,9 @@ export const useSceneStore = defineStore('scene', {
         parentId: targetParentId ?? undefined,
       })
       if (node) {
+        if (options.preserveWorldPosition) {
+          adjustNodeWorldPosition(node.id, position)
+        }
         return { asset, node }
       }
 
@@ -8155,6 +8202,9 @@ export const useSceneStore = defineStore('scene', {
       const placeholder = this.addPlaceholderNode(asset, transform, {
         parentId: targetParentId,
       })
+      if (options.preserveWorldPosition) {
+        adjustNodeWorldPosition(placeholder.id, position)
+      }
       this.observeAssetDownloadForNode(placeholder.id, asset)
       assetCache.setError(asset.id, null)
       void assetCache.downloaProjectAsset(asset).catch((error) => {

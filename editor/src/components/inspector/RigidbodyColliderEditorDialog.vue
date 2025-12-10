@@ -14,6 +14,7 @@ import {
   type RigidbodyComponentProps,
   type RigidbodyPhysicsShape,
 } from '@schema/components'
+import { buildOutlineMeshFromObject } from '@/utils/outlineMesh'
 import type { SceneNode, SceneNodeComponentState } from '@harmony/schema'
 import { resolveNodeScaleFactors } from '@/utils/rigidbodyCollider'
 
@@ -26,7 +27,7 @@ const emit = defineEmits<{
   (event: 'close'): void
 }>()
 
-type ColliderShapeKind = 'box' | 'sphere' | 'cylinder'
+type ColliderShapeKind = 'box' | 'sphere' | 'convex'
 
 type EditableShape = {
   kind: ColliderShapeKind
@@ -35,9 +36,9 @@ type EditableShape = {
 }
 
 const COLLIDER_SHAPE_OPTIONS: Array<{ label: string; value: ColliderShapeKind }> = [
+  { label: 'Convex (Mesh)', value: 'convex' },
   { label: 'Box', value: 'box' },
   { label: 'Sphere', value: 'sphere' },
-  { label: 'Cylinder', value: 'cylinder' },
 ]
 
 const sceneStore = useSceneStore()
@@ -80,7 +81,7 @@ const panelStyle = computed(() => {
   }
 })
 
-const colliderKind = ref<ColliderShapeKind>('box')
+const colliderKind = ref<ColliderShapeKind>('convex')
 const transformMode = ref<'translate' | 'scale'>('translate')
 const colliderDimensions = reactive({ x: 1, y: 1, z: 1 })
 const colliderOffset = reactive({ x: 0, y: 0, z: 0 })
@@ -109,6 +110,7 @@ let colliderMesh: THREE.Mesh | null = null
 let colliderEdges: THREE.LineSegments | null = null
 let previewModelGroup: THREE.Group | null = null
 let previewBounds: THREE.Box3 | null = null
+let previewConvexGeometry: THREE.BufferGeometry | null = null
 let resizeObserver: ResizeObserver | null = null
 let previewRefreshToken = 0
 const previewOriginShift = new THREE.Vector3()
@@ -219,18 +221,23 @@ function disposePreview() {
   camera = null
   previewModelGroup = null
   previewBounds = null
+  previewConvexGeometry?.dispose()
+  previewConvexGeometry = null
   previewOriginShift.set(0, 0, 0)
   isReady.value = false
 }
 
 function normalizeColliderKind(type: string | null | undefined): ColliderShapeKind {
+  if (type === 'convex') {
+    return 'convex'
+  }
   if (type === 'sphere') {
     return 'sphere'
   }
-  if (type === 'cylinder') {
-    return 'cylinder'
+  if (type === 'box') {
+    return 'box'
   }
-  return 'box'
+  return 'convex'
 }
 
 function updateColliderStateFromGroup() {
@@ -240,9 +247,16 @@ function updateColliderStateFromGroup() {
   colliderOffset.x = colliderGroup.position.x
   colliderOffset.y = colliderGroup.position.y
   colliderOffset.z = colliderGroup.position.z
-  colliderDimensions.x = colliderGroup.scale.x
-  colliderDimensions.y = colliderGroup.scale.y
-  colliderDimensions.z = colliderGroup.scale.z
+  if (colliderKind.value === 'convex' && colliderMesh?.geometry?.boundingBox) {
+    const size = colliderMesh.geometry.boundingBox.getSize(new THREE.Vector3())
+    colliderDimensions.x = size.x * colliderGroup.scale.x
+    colliderDimensions.y = size.y * colliderGroup.scale.y
+    colliderDimensions.z = size.z * colliderGroup.scale.z
+  } else {
+    colliderDimensions.x = colliderGroup.scale.x
+    colliderDimensions.y = colliderGroup.scale.y
+    colliderDimensions.z = colliderGroup.scale.z
+  }
 }
 
 function constrainColliderTransform() {
@@ -253,10 +267,6 @@ function constrainColliderTransform() {
     const average = (colliderGroup.scale.x + colliderGroup.scale.y + colliderGroup.scale.z) / 3
     const safe = Math.max(0.05, average)
     colliderGroup.scale.set(safe, safe, safe)
-  } else if (colliderKind.value === 'cylinder') {
-    const radius = Math.max(0.05, (colliderGroup.scale.x + colliderGroup.scale.z) * 0.5)
-    const height = Math.max(0.05, colliderGroup.scale.y)
-    colliderGroup.scale.set(radius, height, radius)
   } else {
     colliderGroup.scale.set(
       Math.max(0.05, colliderGroup.scale.x),
@@ -266,15 +276,90 @@ function constrainColliderTransform() {
   }
 }
 
+function buildConvexGeometryFromPreview(): THREE.BufferGeometry | null {
+  if (!previewModelGroup) {
+    return null
+  }
+  const outline = buildOutlineMeshFromObject(previewModelGroup, { pointTarget: 320 })
+  if (!outline || !outline.positions || outline.positions.length < 12) {
+    return null
+  }
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(outline.positions, 3))
+  if (Array.isArray(outline.indices) && outline.indices.length >= 3) {
+    geometry.setIndex(outline.indices)
+  } else {
+    const fallback: number[] = []
+    for (let index = 0; index + 2 < outline.positions.length / 3; index += 3) {
+      fallback.push(index, index + 1, index + 2)
+    }
+    geometry.setIndex(fallback)
+  }
+  geometry.computeVertexNormals()
+  geometry.computeBoundingBox()
+  geometry.computeBoundingSphere()
+  return geometry
+}
+
+function buildConvexGeometryFromDefinition(definition: Extract<RigidbodyPhysicsShape, { kind: 'convex' }>, scale: THREE.Vector3): THREE.BufferGeometry | null {
+  const vertices = Array.isArray(definition.vertices) ? definition.vertices : []
+  if (vertices.length < 4) {
+    return null
+  }
+  const positions: number[] = []
+  vertices.forEach((tuple) => {
+    const vx = Number(tuple?.[0])
+    const vy = Number(tuple?.[1])
+    const vz = Number(tuple?.[2])
+    if ([vx, vy, vz].every((value) => Number.isFinite(value))) {
+      positions.push(vx * scale.x, vy * scale.y, vz * scale.z)
+    }
+  })
+  if (positions.length < 12) {
+    return null
+  }
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  const faces = Array.isArray(definition.faces) ? definition.faces : []
+  const index: number[] = []
+  faces.forEach((face) => {
+    if (Array.isArray(face) && face.length >= 3) {
+      for (let i = 0; i + 2 < face.length; i += 1) {
+        const a = Number(face[0])
+        const b = Number(face[i + 1])
+        const c = Number(face[i + 2])
+        if ([a, b, c].every((value) => Number.isInteger(value) && value >= 0)) {
+          index.push(a, b, c)
+        }
+      }
+    }
+  })
+  if (index.length) {
+    geometry.setIndex(index)
+  }
+  geometry.computeVertexNormals()
+  geometry.computeBoundingBox()
+  geometry.computeBoundingSphere()
+  return geometry
+}
+
 function rebuildColliderGeometry(kind: ColliderShapeKind) {
   if (!previewScene) {
     return
   }
-  const geometry = kind === 'sphere'
-    ? new THREE.SphereGeometry(0.5, 36, 24)
-    : kind === 'cylinder'
-      ? new THREE.CylinderGeometry(0.5, 0.5, 1, 32, 1)
-      : new THREE.BoxGeometry(1, 1, 1)
+  let geometry: THREE.BufferGeometry | null = null
+  if (kind === 'convex') {
+    previewConvexGeometry?.dispose()
+    previewConvexGeometry = buildConvexGeometryFromPreview()
+    geometry = previewConvexGeometry
+  } else if (kind === 'sphere') {
+    geometry = new THREE.SphereGeometry(0.5, 36, 24)
+  } else if (kind === 'box') {
+    geometry = new THREE.BoxGeometry(1, 1, 1)
+  }
+  if (!geometry) {
+    return
+  }
 
   if (!colliderGroup) {
     colliderGroup = new THREE.Group()
@@ -292,6 +377,7 @@ function rebuildColliderGeometry(kind: ColliderShapeKind) {
     opacity: 0.2,
     transparent: true,
     depthWrite: false,
+    side: THREE.DoubleSide,
   })
   colliderMesh = new THREE.Mesh(geometry, fillMaterial)
   colliderGroup.add(colliderMesh)
@@ -316,6 +402,27 @@ function buildDefaultShapeFromModel(kind: ColliderShapeKind): EditableShape | nu
   const size = previewBounds.getSize(new THREE.Vector3())
   const center = previewBounds.getCenter(new THREE.Vector3())
   const minSize = 0.25
+  if (kind === 'convex') {
+    if (!previewConvexGeometry) {
+      previewConvexGeometry = buildConvexGeometryFromPreview()
+    }
+    if (!previewConvexGeometry) {
+      return null
+    }
+    previewConvexGeometry.computeBoundingBox()
+    const box = previewConvexGeometry.boundingBox ?? new THREE.Box3().setFromObject(previewModelGroup ?? new THREE.Group())
+    const convexSize = box.getSize(new THREE.Vector3())
+    const convexCenter = box.getCenter(new THREE.Vector3())
+    return {
+      kind,
+      dimensions: new THREE.Vector3(
+        Math.max(minSize, convexSize.x || minSize),
+        Math.max(minSize, convexSize.y || minSize),
+        Math.max(minSize, convexSize.z || minSize),
+      ),
+      offset: convexCenter,
+    }
+  }
   if (kind === 'box') {
     return {
       kind,
@@ -379,12 +486,25 @@ function convertMetadataShape(shape: RigidbodyPhysicsShape, kind: ColliderShapeK
       offset: actualOffset,
     }
   }
-  if (shape.kind === 'cylinder' && kind === 'cylinder') {
-    const diameter = Math.max(0.05, shape.radiusTop * 2 * Math.max(scaleX, scaleZ))
-    const height = Math.max(0.05, shape.height * scaleY)
+  if (shape.kind === 'convex' && kind === 'convex') {
+    const geometry = buildConvexGeometryFromDefinition(shape, new THREE.Vector3(scaleX, scaleY, scaleZ))
+    if (!geometry) {
+      return null
+    }
+    previewConvexGeometry?.dispose()
+    previewConvexGeometry = geometry
+    geometry.computeBoundingBox()
+    const box = geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(
+      geometry.getAttribute('position'),
+    )
+    const size = box.getSize(new THREE.Vector3())
     return {
-      kind: 'cylinder',
-      dimensions: new THREE.Vector3(diameter, height, diameter),
+      kind: 'convex',
+      dimensions: new THREE.Vector3(
+        Math.max(0.05, size.x),
+        Math.max(0.05, size.y),
+        Math.max(0.05, size.z),
+      ),
       offset: actualOffset,
     }
   }
@@ -398,7 +518,11 @@ function applyEditableShape(shape: EditableShape) {
     return
   }
   colliderGroup.position.copy(shape.offset)
-  colliderGroup.scale.set(shape.dimensions.x, shape.dimensions.y, shape.dimensions.z)
+  if (shape.kind === 'convex') {
+    colliderGroup.scale.set(1, 1, 1)
+  } else {
+    colliderGroup.scale.set(shape.dimensions.x, shape.dimensions.y, shape.dimensions.z)
+  }
   constrainColliderTransform()
   updateColliderStateFromGroup()
   transformControls?.setMode(transformMode.value)
@@ -551,7 +675,7 @@ async function initializePreview(requestToken: number) {
   previewScene.add(transformControls.getHelper())
 
   const desiredKind = normalizeColliderKind(rigidbodyComponent.value?.props.colliderType)
-  const shape = resolveInitialShape(desiredKind) ?? resolveInitialShape('box') ?? {
+  const shape = resolveInitialShape(desiredKind) ?? resolveInitialShape('convex') ?? {
     kind: 'box',
     dimensions: new THREE.Vector3(1, 1, 1),
     offset: new THREE.Vector3(),
@@ -573,6 +697,13 @@ function handleShapeKindChange(kind: ColliderShapeKind | null) {
     return
   }
   const shape = resolveInitialShape(kind)
+  if (shape) {
+    applyEditableShape(shape)
+  }
+}
+
+function handleAutoFit() {
+  const shape = buildDefaultShapeFromModel(colliderKind.value)
   if (shape) {
     applyEditableShape(shape)
   }
@@ -607,17 +738,46 @@ function buildMetadataShape(): RigidbodyPhysicsShape | null {
       scaleNormalized: true,
     }
   }
-  const radius = colliderGroup.scale.x * 0.5
-  const horizontalScale = Math.max(scale.x, scale.z)
-  return {
-    kind: 'cylinder',
-    radiusTop: Math.max(1e-4, radius / horizontalScale),
-    radiusBottom: Math.max(1e-4, radius / horizontalScale),
-    height: Math.max(1e-4, colliderGroup.scale.y / scale.y),
-    segments: 16,
-    offset: [offset.x / scale.x, offset.y / scale.y, offset.z / scale.z],
-    scaleNormalized: true,
+  if (colliderKind.value === 'convex') {
+    if (!previewConvexGeometry) {
+      previewConvexGeometry = buildConvexGeometryFromPreview()
+    }
+    const positions = (previewConvexGeometry?.getAttribute('position') as THREE.BufferAttribute | undefined)
+    if (!positions) {
+      return null
+    }
+    const vertices: [number, number, number][] = []
+    const scratch = new THREE.Vector3()
+    for (let i = 0; i < positions.count; i += 1) {
+      scratch.fromBufferAttribute(positions, i)
+      scratch.multiply(colliderGroup.scale)
+      scratch.add(offset)
+      vertices.push([scratch.x / scale.x, scratch.y / scale.y, scratch.z / scale.z])
+    }
+    const faces: number[][] = []
+    const index = previewConvexGeometry?.getIndex()
+    if (index && index.count >= 3) {
+      for (let i = 0; i + 2 < index.count; i += 3) {
+        faces.push([index.getX(i), index.getX(i + 1), index.getX(i + 2)])
+      }
+    } else {
+      for (let i = 0; i + 2 < positions.count; i += 3) {
+        faces.push([i, i + 1, i + 2])
+      }
+    }
+    if (!vertices.length || !faces.length) {
+      return null
+    }
+    return {
+      kind: 'convex',
+      vertices,
+      faces,
+      offset: [offset.x / scale.x, offset.y / scale.y, offset.z / scale.z],
+      scaleNormalized: true,
+    }
   }
+
+  return null
 }
 
 function handleConfirm() {
@@ -734,23 +894,38 @@ onUnmounted(() => {
               <div class="collider-editor__overlay-actions">
                 <v-btn
                   size="small"
+                  icon
                   variant="tonal"
-                  prepend-icon="mdi-axis-arrow"
                   :color="transformMode === 'translate' ? 'primary' : undefined"
                   :disabled="!isReady"
+                  title="Move"
+                  aria-label="Move"
                   @click="transformMode = 'translate'"
                 >
-                  Move
+                  <v-icon icon="mdi-axis-arrow" />
                 </v-btn>
                 <v-btn
                   size="small"
+                  icon
                   variant="tonal"
-                  prepend-icon="mdi-crop"
                   :color="transformMode === 'scale' ? 'primary' : undefined"
                   :disabled="!isReady"
+                  title="Scale"
+                  aria-label="Scale"
                   @click="transformMode = 'scale'"
                 >
-                  Scale
+                  <v-icon icon="mdi-crop" />
+                </v-btn>
+                <v-btn
+                  size="small"
+                  icon
+                  variant="tonal"
+                  :disabled="!isReady"
+                  title="Auto-fit"
+                  aria-label="Auto-fit"
+                  @click="handleAutoFit"
+                >
+                  <v-icon icon="mdi-aspect-ratio" />
                 </v-btn>
               </div>
             </div>
