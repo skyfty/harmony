@@ -174,6 +174,7 @@ const VEHICLE_FOLLOW_COLLISION_LOCK_SPEED_SQ = 1.21
 const VEHICLE_FOLLOW_COLLISION_DIRECTION_DOT_THRESHOLD = -0.35
 const VEHICLE_FOLLOW_COLLISION_HOLD_TIME = 0.8
 const VEHICLE_RESET_LIFT = 0.75
+const VEHICLE_CAMERA_MOVING_SPEED_SQ = 0.04
 
 function clampAxisScalar(value: number): number {
   if (!Number.isFinite(value)) {
@@ -843,13 +844,16 @@ export class VehicleDriveController {
     }
 
     const speedSq = vehicleVelocity ? vehicleVelocity.lengthSquared() : 0
+    const isVehicleMoving = speedSq > VEHICLE_CAMERA_MOVING_SPEED_SQ
     const desiredHeading = temp.cameraForward
-    if (vehicleVelocity && speedSq > VEHICLE_FOLLOW_HEADING_VELOCITY_EPS) {
-      desiredHeading.set(vehicleVelocity.x, 0, vehicleVelocity.z)
+    if (temp.seatForward.lengthSq() > 1e-6) {
+      desiredHeading.copy(temp.seatForward)
+    } else if (follow.heading.lengthSq() > 1e-6) {
+      desiredHeading.copy(follow.heading)
     } else {
-      desiredHeading.copy(follow.heading.lengthSq() > 1e-6 ? follow.heading : temp.seatForward)
-      desiredHeading.y = 0
+      desiredHeading.set(0, 0, 1)
     }
+    desiredHeading.y = 0
     if (desiredHeading.lengthSq() < 1e-6) {
       desiredHeading.set(0, 0, 1)
     } else {
@@ -909,12 +913,13 @@ export class VehicleDriveController {
       mapControls.update?.()
     }
 
-    let userAdjusted = Boolean(options.followControlsDirty)
-    if (!userAdjusted && follow.initialized && ctx.camera) {
+    const allowCameraAdjustments = !isVehicleMoving
+    let userAdjusted = allowCameraAdjustments && Boolean(options.followControlsDirty)
+    if (allowCameraAdjustments && !userAdjusted && follow.initialized && ctx.camera) {
       const deltaPosition = ctx.camera.position.distanceTo(follow.currentPosition)
       userAdjusted = deltaPosition > 1e-3
     }
-    if (userAdjusted && ctx.camera) {
+    if (allowCameraAdjustments && userAdjusted && ctx.camera) {
       temp.followWorldOffset.copy(ctx.camera.position).sub(anchorForCamera)
       follow.localOffset.set(
         temp.followWorldOffset.dot(headingRight),
