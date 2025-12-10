@@ -166,6 +166,7 @@ function disposePreview() {
     transformControls.dispose?.()
   }
   transformControls = null
+  const scene = previewScene
   previewScene = null
   camera = null
   previewModelGroup = null
@@ -173,11 +174,11 @@ function disposePreview() {
   frontGroup = null
   rearGroup = null
   if (groundMesh) {
-    previewScene?.remove(groundMesh)
+    scene?.remove(groundMesh)
   }
   groundMesh = null
   if (chassisBodyMesh) {
-    previewScene?.remove(chassisBodyMesh)
+    scene?.remove(chassisBodyMesh)
   }
   chassisBodyMesh = null
   chassisShapeOffset = null
@@ -306,7 +307,6 @@ function rebuildHandles() {
   chassisGroup.add(frontGroup, rearGroup)
 
   const sphereGeo = new SphereGeometry(0.08, 14, 10)
-  const wheelGeo = new SphereGeometry(0.12, 18, 12)
   const frontColor = new Color('#4cc9f0')
   const rearColor = new Color('#5ad29c')
 
@@ -524,6 +524,12 @@ function handleNumericChange(key: keyof VehicleWheelProps, value: number) {
   patchAllWheels((wheel) => ({ ...wheel, [key]: value }))
 }
 
+function handleNumericTextChange(key: keyof VehicleWheelProps, value: string | number) {
+  const parsed = typeof value === 'number' ? value : Number.parseFloat(value)
+  if (!Number.isFinite(parsed)) return
+  handleNumericChange(key, parsed)
+}
+
 function handleSpacingChange(value: number) {
   if (!Number.isFinite(value)) return
   const spacing = Math.max(0, value)
@@ -538,6 +544,12 @@ function handleSpacingChange(value: number) {
     }
   })
   uiState.spacing = spacing
+}
+
+function handleSpacingInputChange(value: string | number) {
+  const parsed = typeof value === 'number' ? value : Number.parseFloat(value)
+  if (!Number.isFinite(parsed)) return
+  handleSpacingChange(parsed)
 }
 
 function rebuildPhysics() {
@@ -908,32 +920,66 @@ onUnmounted(() => {
           <div class="suspension-editor__controls">
             <div class="suspension-editor__section">
               <div class="suspension-editor__section-title">Wheel Settings</div>
-              <v-slider
-                label="Wheel spacing (|X| m)"
-                density="compact"
-                hide-details
-                :min="0"
-                :max="5"
-                :step="0.01"
-                :model-value="uiState.spacing"
-                :disabled="isDisabled"
-                @update:modelValue="(value) => handleSpacingChange(Number(value))"
-              />
-              <div class="suspension-editor__grid">
+              <div class="suspension-editor__control-row">
                 <v-slider
-                  v-for="control in numericControls"
-                  :key="`wheel-${control.key}`"
-                  :label="control.label"
+                  class="suspension-editor__slider"
+                  label="Wheel spacing (|X| m)"
                   density="compact"
                   hide-details
-                  thumb-label
-                  :min="control.min"
-                  :max="control.max"
-                  :step="control.step"
-                  :model-value="getWheelValue(control.key)"
+                  :min="0"
+                  :max="5"
+                  :step="0.01"
+                  :model-value="uiState.spacing"
                   :disabled="isDisabled"
-                  @update:modelValue="(value) => handleNumericChange(control.key, Number(value))"
+                  @update:modelValue="(value) => handleSpacingChange(Number(value))"
                 />
+                <v-text-field
+                  class="suspension-editor__input"
+                  density="compact"
+                  hide-details
+                  variant="underlined"
+                  type="number"
+                  :step="0.01"
+                  :min="0"
+                  :max="5"
+                  :model-value="uiState.spacing"
+                  :disabled="isDisabled"
+                  @update:modelValue="handleSpacingInputChange"
+                />
+              </div>
+              <div class="suspension-editor__grid">
+                <div
+                  v-for="control in numericControls"
+                  :key="`wheel-${control.key}`"
+                  class="suspension-editor__control-row"
+                >
+                  <v-slider
+                    class="suspension-editor__slider"
+                    :label="control.label"
+                    density="compact"
+                    hide-details
+                    thumb-label
+                    :min="control.min"
+                    :max="control.max"
+                    :step="control.step"
+                    :model-value="getWheelValue(control.key)"
+                    :disabled="isDisabled"
+                    @update:modelValue="(value) => handleNumericChange(control.key, Number(value))"
+                  />
+                  <v-text-field
+                    class="suspension-editor__input"
+                    density="compact"
+                    hide-details
+                    variant="underlined"
+                    type="number"
+                    :step="control.step"
+                    :min="control.min"
+                    :max="control.max"
+                    :model-value="getWheelValue(control.key)"
+                    :disabled="isDisabled"
+                    @update:modelValue="(value) => handleNumericTextChange(control.key, value)"
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -1069,9 +1115,24 @@ onUnmounted(() => {
 }
 
 .suspension-editor__grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 10px;
+}
+
+.suspension-editor__control-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.suspension-editor__slider {
+  flex: 1 1 auto;
+}
+
+.suspension-editor__input {
+  width: 80px;
+  max-width: 80px;
 }
 
 .suspension-editor__empty {
