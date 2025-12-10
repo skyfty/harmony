@@ -639,6 +639,11 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
   const nodeLookup = buildSceneNodeLookup(nodes)
   const assetCacheStore = useAssetCacheStore()
   for (const entry of candidates) {
+    const existingShape = (entry.component.metadata?.[RIGIDBODY_METADATA_KEY] as RigidbodyComponentMetadata | undefined)?.shape
+    if (existingShape) {
+      entry.component.metadata = mergeRigidbodyMetadata(entry.component.metadata, existingShape)
+      continue
+    }
     const samplingNode = resolveRigidbodySamplingNode(entry, nodeLookup)
     if (!samplingNode || isGroundDynamicMesh(samplingNode.dynamicMesh)) {
       continue
