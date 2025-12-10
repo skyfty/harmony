@@ -381,13 +381,13 @@ function computeGroupSpacing(isFront: boolean): number {
   const group = wheelEntries.value.filter((wheel) => wheel.isFrontWheel === isFront)
   if (!group.length) return 0
   const maxAbs = Math.max(...group.map((wheel) => Math.abs(wheel.chassisConnectionPointLocal.x)))
-  return Number(maxAbs.toFixed(3))
+  return Number((maxAbs * 2).toFixed(3))
 }
 
 function computeUniformSpacing(): number {
   if (!wheelEntries.value.length) return 0
   const maxAbs = Math.max(...wheelEntries.value.map((wheel) => Math.abs(wheel.chassisConnectionPointLocal.x)))
-  return Number(maxAbs.toFixed(3))
+  return Number((maxAbs * 2).toFixed(3))
 }
 
 function attachActiveHandle() {
@@ -500,16 +500,16 @@ function patchAllWheels(mutator: (wheel: VehicleWheelProps) => VehicleWheelProps
 }
 
 const numericControls: Array<{ key: keyof VehicleWheelProps; label: string; min: number; max: number; step: number }> = [
-  { key: 'radius', label: 'Radius', min: 0, max: 5, step: 0.01 },
-  { key: 'suspensionRestLength', label: 'Rest Length', min: 0, max: 2, step: 0.01 },
-  { key: 'suspensionStiffness', label: 'Stiffness', min: 0, max: 200, step: 0.5 },
-  { key: 'dampingRelaxation', label: 'Damping Relax', min: 0, max: 50, step: 0.1 },
-  { key: 'dampingCompression', label: 'Damping Compress', min: 0, max: 50, step: 0.1 },
-  { key: 'frictionSlip', label: 'Friction', min: 0, max: 20, step: 0.05 },
-  { key: 'maxSuspensionTravel', label: 'Travel', min: 0, max: 2, step: 0.01 },
-  { key: 'maxSuspensionForce', label: 'Max Force', min: 0, max: 200000, step: 100 },
-  { key: 'rollInfluence', label: 'Roll Influence', min: 0, max: 5, step: 0.01 },
-  { key: 'customSlidingRotationalSpeed', label: 'Custom Rot Speed', min: -50, max: 50, step: 0.1 },
+  { key: 'radius', label: 'Radius (m)', min: 0, max: 5, step: 0.01 },
+  { key: 'suspensionRestLength', label: 'Rest Length (m)', min: 0, max: 2, step: 0.01 },
+  { key: 'suspensionStiffness', label: 'Stiffness (N/m)', min: 0, max: 200, step: 0.5 },
+  { key: 'dampingRelaxation', label: 'Damping Relax (ratio)', min: 0, max: 50, step: 0.1 },
+  { key: 'dampingCompression', label: 'Damping Compress (ratio)', min: 0, max: 50, step: 0.1 },
+  { key: 'frictionSlip', label: 'Friction (ratio)', min: 0, max: 20, step: 0.05 },
+  { key: 'maxSuspensionTravel', label: 'Travel (m)', min: 0, max: 2, step: 0.01 },
+  { key: 'maxSuspensionForce', label: 'Max Force (N)', min: 0, max: 200000, step: 100 },
+  { key: 'rollInfluence', label: 'Roll Influence (ratio)', min: 0, max: 5, step: 0.01 },
+  { key: 'customSlidingRotationalSpeed', label: 'Custom Rot Speed (rad/s)', min: -50, max: 50, step: 0.1 },
 ]
 
 function getWheelValue(key: keyof VehicleWheelProps): number {
@@ -532,18 +532,19 @@ function handleNumericTextChange(key: keyof VehicleWheelProps, value: string | n
 
 function handleSpacingChange(value: number) {
   if (!Number.isFinite(value)) return
-  const spacing = Math.max(0, value)
+  const width = Math.max(0, value)
+  const halfSpacing = width * 0.5
   patchAllWheels((wheel) => {
     const sign = Math.sign(wheel.chassisConnectionPointLocal.x) || 1
     return {
       ...wheel,
       chassisConnectionPointLocal: {
         ...wheel.chassisConnectionPointLocal,
-        x: sign * spacing,
+        x: sign * halfSpacing,
       },
     }
   })
-  uiState.spacing = spacing
+  uiState.spacing = width
 }
 
 function handleSpacingInputChange(value: string | number) {
@@ -923,7 +924,7 @@ onUnmounted(() => {
               <div class="suspension-editor__control-row">
                 <v-slider
                   class="suspension-editor__slider"
-                  label="Wheel spacing (|X| m)"
+                  label="Wheel spacing (m)"
                   density="compact"
                   hide-details
                   :min="0"
