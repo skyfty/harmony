@@ -87,28 +87,37 @@
           <!-- #endif -->
           <view class="viewer-lantern-body">
             <text class="viewer-lantern-title">{{ lanternCurrentTitle }}</text>
-            <scroll-view
-              v-if="lanternCurrentSlideDescription"
-              scroll-y
-              class="viewer-lantern-text"
-            >
-              <text>{{ lanternCurrentSlideDescription }}</text>
-            </scroll-view>
-          </view>
-          <view v-if="lanternHasMultipleSlides" class="viewer-lantern-indicator">
-            <text class="viewer-lantern-counter">{{ lanternActiveSlideIndex + 1 }} / {{ lanternTotalSlides }}</text>
-          </view>
-        </view>
-      </view>
-      <view v-if="overlayActive" class="viewer-overlay">
-        <view class="viewer-overlay__content viewer-overlay__card">
-          <text v-if="overlayTitle" class="viewer-overlay__title">{{ overlayTitle }}</text>
-          <view class="viewer-progress">
-            <view class="viewer-progress__bar">
-              <view
-                class="viewer-progress__bar-fill"
-                :style="{ width: overlayPercent + '%' }"
-              />
+            <view
+              class="viewer-drive-cluster viewer-drive-cluster--joystick">
+              <view class="viewer-drive-joystick-layout">
+                <view
+                  id="viewer-drive-joystick"
+                  ref="joystickRef"
+                  class="viewer-drive-joystick"
+                  :class="{ 'is-active': vehicleDriveUi.joystickActive }"
+                  role="slider"
+                  aria-label="驾驶摇杆"
+                  aria-valuemin="-100"
+                  aria-valuemax="100"
+                  :aria-valuenow="Math.round(vehicleDriveInput.throttle * 100)"
+                  @touchstart.stop.prevent="handleJoystickTouchStart"
+                  @touchmove.stop.prevent="handleJoystickTouchMove"
+                  @touchend.stop.prevent="handleJoystickTouchEnd"
+                  @touchcancel.stop.prevent="handleJoystickTouchEnd"
+                >
+                  <view class="viewer-drive-joystick__base"></view>
+                  <view class="viewer-drive-joystick__stick" :style="joystickKnobStyle"></view>
+                </view>
+                <view class="viewer-drive-speed-gauge" aria-hidden="true">
+                  <view class="viewer-drive-speed-gauge__dial" :style="vehicleSpeedGaugeStyle">
+                    <view class="viewer-drive-speed-gauge__needle"></view>
+                  </view>
+                  <view class="viewer-drive-speed-gauge__values">
+                    <text class="viewer-drive-speed-gauge__value">{{ vehicleSpeedKmh }}</text>
+                    <text class="viewer-drive-speed-gauge__unit">km/h</text>
+                  </view>
+                </view>
+              </view>
             </view>
             <view class="viewer-progress__stats">
               <text class="viewer-progress__percent">{{ overlayPercent }}%</text>
@@ -227,7 +236,9 @@
             </view>
           </button>
         </view>
-        <view class="viewer-drive-cluster viewer-drive-cluster--joystick">
+        <view
+          class="viewer-drive-cluster viewer-drive-cluster--joystick"
+        >
           <view
             id="viewer-drive-joystick"
             ref="joystickRef"
@@ -246,6 +257,19 @@
             <view class="viewer-drive-joystick__base"></view>
             <view class="viewer-drive-joystick__stick" :style="joystickKnobStyle"></view>
           </view>
+        </view>
+      </view>
+      <view
+        v-if="vehicleDriveUi.visible"
+        class="viewer-drive-speed-floating"
+        aria-hidden="true"
+      >
+        <view class="viewer-drive-speed-gauge" :style="vehicleSpeedGaugeStyle">
+          <view class="viewer-drive-speed-gauge__needle"></view>
+        </view>
+        <view class="viewer-drive-speed-gauge__values">
+          <text class="viewer-drive-speed-gauge__value">{{ vehicleSpeedKmh }}</text>
+          <text class="viewer-drive-speed-gauge__unit">km/h</text>
         </view>
       </view>
       <view
@@ -870,6 +894,7 @@ let programmaticCameraMutationDepth = 0;
 let suppressSelfYawRecenter = false;
 
 const JOYSTICK_INPUT_RADIUS = 64;
+const VEHICLE_SPEED_GAUGE_MAX_MPS = 32;
 const JOYSTICK_VISUAL_RANGE = 44;
 const JOYSTICK_DEADZONE = 0.25;
 
@@ -1075,6 +1100,13 @@ const vehicleDriveCameraRestoreState: VehicleDriveCameraRestoreState = {
   purposeMode: purposeActiveMode.value,
 };
 
+const vehicleSpeed = ref(0);
+const vehicleSpeedPercent = computed(() => Math.min(1, vehicleSpeed.value / VEHICLE_SPEED_GAUGE_MAX_MPS));
+const vehicleSpeedKmh = computed(() => Math.round(vehicleSpeed.value * 3.6));
+const vehicleSpeedGaugeStyle = computed(() => ({
+  '--speed-angle': `${vehicleSpeedPercent.value * 360}deg`,
+}));
+
 // Bridge object so the shared VehicleDriveController can mutate existing refs while keeping reactivity intact.
 const vehicleDriveStateBridge = {
   get active() {
@@ -1245,6 +1277,7 @@ watch(vehicleDriveActive, (active) => {
   if (!active) {
     vehicleDriveCameraMode.value = 'follow';
     vehicleDriveCameraFollowState.initialized = false;
+    vehicleSpeed.value = 0;
   }
 });
 const isCameraCaged = ref(false);
@@ -4977,6 +5010,17 @@ function applyVehicleDriveForces(): void {
   vehicleDriveController.applyForces();
 }
 
+function updateVehicleSpeedFromVehicle(): void {
+  const vehicle = vehicleDriveVehicle;
+  const velocity = vehicle?.chassisBody?.velocity ?? null;
+  if (!velocity) {
+    vehicleSpeed.value = 0;
+    return;
+  }
+  const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
+  vehicleSpeed.value = Number.isFinite(speed) ? speed : 0;
+}
+
 
 function handleVehicleDriveCameraToggle(): void {
   if (!vehicleDriveActive.value) {
@@ -6496,6 +6540,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
             applyVehicleDriveForces();
           }
           stepPhysicsWorld(deltaSeconds);
+          updateVehicleSpeedFromVehicle();
         }
         if (vehicleDriveActive.value) {
           updateVehicleDriveCamera(deltaSeconds);
@@ -7198,6 +7243,75 @@ onUnmounted(() => {
 .viewer-drive-icon-button.is-busy,
 .viewer-drive-icon-button:disabled {
   opacity: 0.7;
+}
+
+.viewer-drive-speed-floating {
+  position: absolute;
+  left: 24px;
+  bottom: 190px;
+  z-index: 1580;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  pointer-events: none;
+}
+
+.viewer-drive-speed-gauge {
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: conic-gradient(from -90deg, rgba(102, 210, 255, 0.95) var(--speed-angle, 0deg), rgba(255, 255, 255, 0.08) var(--speed-angle, 0deg));
+  position: relative;
+  box-shadow:
+    inset 0 0 14px rgba(0, 0, 0, 0.45),
+    0 14px 28px rgba(3, 6, 18, 0.65);
+}
+
+.viewer-drive-speed-gauge::after {
+  content: '';
+  position: absolute;
+  inset: 14%;
+  border-radius: 50%;
+  background: rgba(4, 6, 18, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  pointer-events: none;
+}
+
+.viewer-drive-speed-gauge__needle {
+  position: absolute;
+  bottom: 12%;
+  left: 50%;
+  width: 2px;
+  height: 38px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(67, 221, 255, 0.95));
+  border-radius: 1px;
+  transform-origin: center bottom;
+  transform: rotate(calc(var(--speed-angle, 0deg) - 90deg));
+  box-shadow: 0 0 10px rgba(78, 227, 255, 0.9);
+}
+
+.viewer-drive-speed-gauge__values {
+  color: #f7fbff;
+  font-weight: 700;
+  text-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  font-size: 0.8rem;
+}
+
+.viewer-drive-speed-gauge__value {
+  font-size: 1.3rem;
+}
+
+.viewer-drive-speed-gauge__unit {
+  font-size: 0.65rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.8;
 }
 
 .viewer-drive-brake {
