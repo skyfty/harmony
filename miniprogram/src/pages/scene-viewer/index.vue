@@ -6909,6 +6909,22 @@ onUnmounted(() => {
 </script>
 
 <style lang="scss">
+:root {
+  --viewer-safe-area-top: 0px;
+}
+
+@supports (padding: env(safe-area-inset-top)) {
+  :root {
+    --viewer-safe-area-top: env(safe-area-inset-top);
+  }
+}
+
+@supports (padding: constant(safe-area-inset-top)) {
+  :root {
+    --viewer-safe-area-top: constant(safe-area-inset-top);
+  }
+}
+
 .viewer-page {
   display: flex;
   flex-direction: column;
@@ -7432,7 +7448,7 @@ onUnmounted(() => {
 
 .viewer-drive-cluster--actions {
   right: 16px;
-  top: 16px;
+  top: calc(var(--viewer-safe-area-top, 0px) + 62px);
   align-items: center;
   flex-direction: row;
   gap: 14px;

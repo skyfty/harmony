@@ -183,6 +183,9 @@ const VEHICLE_FOLLOW_TARGET_FORWARD_MIN = 1.8
 const VEHICLE_FOLLOW_LOOKAHEAD_TIME = 0.18
 const VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX = 3
 const VEHICLE_FOLLOW_LOOKAHEAD_MIN_SPEED_SQ = 0.9
+const VEHICLE_FOLLOW_LOOKAHEAD_BLEND_START = 0.25
+const VEHICLE_FOLLOW_LOOKAHEAD_FULL_SPEED = Math.sqrt(VEHICLE_FOLLOW_LOOKAHEAD_MIN_SPEED_SQ)
+const VEHICLE_FOLLOW_LOOKAHEAD_BLEND_RANGE = Math.max(1e-3, VEHICLE_FOLLOW_LOOKAHEAD_FULL_SPEED - VEHICLE_FOLLOW_LOOKAHEAD_BLEND_START)
 const VEHICLE_FOLLOW_ANCHOR_LERP_SPEED = 4.5
 const VEHICLE_FOLLOW_BACKWARD_DOT_THRESHOLD = -0.25
 const VEHICLE_FOLLOW_FORWARD_RELEASE_DOT = 0.25
@@ -910,14 +913,24 @@ export class VehicleDriveController {
     if (vehicleVelocity) {
       temp.planarVelocity.set(vehicleVelocity.x, 0, vehicleVelocity.z)
       const planarSpeedSq = temp.planarVelocity.lengthSq()
-      if (planarSpeedSq > VEHICLE_FOLLOW_LOOKAHEAD_MIN_SPEED_SQ) {
+      const planarSpeed = Math.sqrt(planarSpeedSq)
+      const lookaheadBlend = planarSpeed > VEHICLE_FOLLOW_LOOKAHEAD_BLEND_START
+        ? Math.min(
+            1,
+            (planarSpeed - VEHICLE_FOLLOW_LOOKAHEAD_BLEND_START) / VEHICLE_FOLLOW_LOOKAHEAD_BLEND_RANGE,
+          )
+        : 0
+      if (lookaheadBlend > 0) {
         temp.predictionOffset.copy(temp.planarVelocity)
-        temp.predictionOffset.multiplyScalar(VEHICLE_FOLLOW_LOOKAHEAD_TIME)
+        temp.predictionOffset.multiplyScalar(VEHICLE_FOLLOW_LOOKAHEAD_TIME * lookaheadBlend)
         const offsetLength = temp.predictionOffset.length()
-        if (offsetLength > VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX) {
-          temp.predictionOffset.multiplyScalar(VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX / offsetLength)
+        const maxLookahead = Math.max(0, VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX * lookaheadBlend)
+        if (maxLookahead > 1e-4 && offsetLength > maxLookahead) {
+          temp.predictionOffset.multiplyScalar(maxLookahead / offsetLength)
         }
-        lookaheadActive = true
+        lookaheadActive = maxLookahead > 1e-4 && temp.predictionOffset.lengthSq() > 1e-8
+      } else {
+        temp.predictionOffset.set(0, 0, 0)
       }
       if (planarSpeedSq > VEHICLE_FOLLOW_COLLISION_LOCK_SPEED_SQ) {
         const normalizedDir = temp.tempVector.copy(temp.planarVelocity)
