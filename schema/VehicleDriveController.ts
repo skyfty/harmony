@@ -54,6 +54,7 @@ export type VehicleDriveCameraFollowState = {
   desiredTarget: THREE.Vector3
   currentPosition: THREE.Vector3
   currentTarget: THREE.Vector3
+  anchor: THREE.Vector3
   heading: THREE.Vector3
   initialized: boolean
   localOffset: THREE.Vector3
@@ -157,6 +158,9 @@ const VEHICLE_FOLLOW_POSITION_LERP_SPEED = 8
 const VEHICLE_FOLLOW_TARGET_LERP_SPEED = 10
 const VEHICLE_FOLLOW_HEADING_LERP_SPEED = 5.5
 const VEHICLE_FOLLOW_HEADING_VELOCITY_EPS = 0.15 * 0.15
+const VEHICLE_FOLLOW_JITTER_DISTANCE = 0.08
+const VEHICLE_FOLLOW_JITTER_SPEED = 0.35
+const VEHICLE_FOLLOW_JITTER_ANCHOR_LERP_SPEED = 3
 const VEHICLE_FOLLOW_TARGET_FORWARD_RATIO = 0.55
 const VEHICLE_FOLLOW_TARGET_FORWARD_MIN = 1.8
 const VEHICLE_RESET_LIFT = 0.75
@@ -764,7 +768,19 @@ export class VehicleDriveController {
       VEHICLE_FOLLOW_DISTANCE_MAX,
       Math.max(VEHICLE_FOLLOW_DISTANCE_MIN, placement.distance * distanceScale),
     )
+    const vehicleVelocity = instance?.vehicle?.chassisBody?.velocity ?? null
+    const speedSq = vehicleVelocity ? vehicleVelocity.lengthSquared() : 0
+
     this.computeVehicleFollowAnchor(vehicleObject, temp.seatPosition, temp.followAnchor)
+
+    const anchorDeltaSq = temp.followAnchor.distanceToSquared(follow.anchor)
+    const lowSpeed = speedSq < VEHICLE_FOLLOW_JITTER_SPEED * VEHICLE_FOLLOW_JITTER_SPEED
+    const tinyAnchorDelta = anchorDeltaSq < VEHICLE_FOLLOW_JITTER_DISTANCE * VEHICLE_FOLLOW_JITTER_DISTANCE
+    if (follow.initialized && lowSpeed && tinyAnchorDelta) {
+      const jitterAlpha = computeVehicleFollowLerpAlpha(deltaSeconds, VEHICLE_FOLLOW_JITTER_ANCHOR_LERP_SPEED)
+      temp.followAnchor.lerp(follow.anchor, 1 - jitterAlpha)
+    }
+    follow.anchor.copy(temp.followAnchor)
 
     if (!follow.initialized) {
       follow.heading.copy(temp.seatForward)
@@ -776,8 +792,6 @@ export class VehicleDriveController {
       }
     }
 
-    const vehicleVelocity = instance?.vehicle?.chassisBody?.velocity ?? null
-    const speedSq = vehicleVelocity ? vehicleVelocity.lengthSquared() : 0
     const desiredHeading = temp.cameraForward
     if (vehicleVelocity && speedSq > VEHICLE_FOLLOW_HEADING_VELOCITY_EPS) {
       desiredHeading.set(vehicleVelocity.x, 0, vehicleVelocity.z)
@@ -856,6 +870,7 @@ export class VehicleDriveController {
     if (immediate) {
       follow.currentPosition.copy(follow.desiredPosition)
       follow.currentTarget.copy(follow.desiredTarget)
+      follow.anchor.copy(temp.followAnchor)
       follow.initialized = true
     } else {
       const positionAlpha = computeVehicleFollowLerpAlpha(deltaSeconds, VEHICLE_FOLLOW_POSITION_LERP_SPEED)

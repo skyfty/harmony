@@ -189,17 +189,7 @@
         class="viewer-drive-console viewer-drive-console--mobile"
       >
         <view class="viewer-drive-cluster viewer-drive-cluster--actions">
-          <button
-            class="viewer-drive-icon-button"
-            type="button"
-            hover-class="none"
-            aria-label="切换座舱视角"
-            @tap="handleVehicleDriveCameraToggle"
-          >
-            <view class="viewer-drive-icon" aria-hidden="true">
-              <text class="viewer-drive-icon-text">📷</text>
-            </view>
-          </button>
+   
           <button
             class="viewer-drive-icon-button"
             :class="{ 'is-busy': vehicleDriveResetBusy }"
@@ -1009,6 +999,7 @@ const vehicleDriveCameraFollowState = reactive<VehicleDriveCameraFollowState>({
   currentPosition: new THREE.Vector3(),
   desiredTarget: new THREE.Vector3(),
   currentTarget: new THREE.Vector3(),
+  anchor: new THREE.Vector3(),
   heading: new THREE.Vector3(0, 0, 1),
   initialized: false,
   localOffset: new THREE.Vector3(),
@@ -4929,14 +4920,6 @@ function startVehicleDriveMode(
 function applyVehicleDriveForces(): void {
 
   vehicleDriveController.applyForces();
-}
-
-
-function handleVehicleDriveCameraToggle(): void {
-  if (!vehicleDriveActive.value) {
-    return;
-  }
-  vehicleDriveController.toggleCameraMode();
 }
 
 function handleVehicleDriveResetTap(): void {
