@@ -6,6 +6,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from '@/utils/transformControls.js'
 import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
 import { findSceneNode } from '@/components/editor/sceneUtils'
+import { getCachedModelObject } from '@schema/modelObjectCache'
 import {
   RIGIDBODY_COMPONENT_TYPE,
   RIGIDBODY_METADATA_KEY,
@@ -109,6 +110,7 @@ let colliderEdges: THREE.LineSegments | null = null
 let previewModelGroup: THREE.Group | null = null
 let previewBounds: THREE.Box3 | null = null
 let resizeObserver: ResizeObserver | null = null
+let previewRefreshToken = 0
 const previewOriginShift = new THREE.Vector3()
 
 function disposePreview() {
@@ -346,11 +348,19 @@ function resolveInitialShape(desiredKind: ColliderShapeKind): EditableShape | nu
 }
 
 function schedulePreviewRefresh() {
-  nextTick(() => {
-    if (!props.visible) {
+  const token = ++previewRefreshToken
+  nextTick(async () => {
+    if (!props.visible || token !== previewRefreshToken) {
       return
     }
-    initializePreview()
+    try {
+      await initializePreview(token)
+    } catch (error) {
+      console.warn('[RigidbodyColliderEditor] Failed to initialize preview', error)
+      if (token === previewRefreshToken) {
+        loadError.value = 'Unable to initialize the collider preview.'
+      }
+    }
   })
 }
 
@@ -369,22 +379,35 @@ function handleResize() {
   renderer.setSize(width, height)
 }
 
-function initializePreview() {
+async function initializePreview(requestToken: number) {
   disposePreview()
   loadError.value = null
-  if (!props.visible) {
+  if (!props.visible || requestToken !== previewRefreshToken) {
     return
   }
   const container = previewContainerRef.value
   if (!container) {
+    loadError.value = 'Preview container is unavailable.'
     return
   }
   const targetId = targetNodeId.value
-  if (!targetId) {
+  const node = targetNode.value
+  if (!targetId || !node) {
     loadError.value = 'No node available for collider editing.'
     return
   }
-  const runtimeObject = getRuntimeObject(targetId)
+  let runtimeObject = getRuntimeObject(targetId)
+  if (!runtimeObject) {
+    try {
+      await sceneStore.ensureSceneAssetsReady({ nodes: [node], showOverlay: false, refreshViewport: false })
+    } catch (error) {
+      console.warn('[RigidbodyColliderEditor] Failed to prepare assets for preview', error)
+    }
+    if (!props.visible || requestToken !== previewRefreshToken) {
+      return
+    }
+    runtimeObject = getRuntimeObject(targetId)
+  }
   if (!runtimeObject) {
     loadError.value = 'Unable to load the target mesh into the preview.'
     return
@@ -402,7 +425,7 @@ function initializePreview() {
   camera.position.set(6, 4, 6)
 
   orbitControls = new OrbitControls(camera, renderer.domElement)
-  orbitControls.enableDamping = true
+  orbitControls.enableDamping = false
   orbitControls.dampingFactor = 0.06
   orbitControls.target.set(0, 0, 0)
 
@@ -415,7 +438,22 @@ function initializePreview() {
   grid.position.y = -2
   previewScene.add(grid)
 
-  const clone = runtimeObject.clone(true)
+  let clone: THREE.Object3D | null = null
+  const instancedAssetId = runtimeObject.userData?.instancedAssetId as string | undefined
+  if (instancedAssetId) {
+    const cached = getCachedModelObject(instancedAssetId)
+    if (!cached) {
+      loadError.value = 'The instanced model is not available for preview.'
+      disposePreview()
+      return
+    }
+    clone = cached.object.clone(true)
+  }
+
+  if (!clone) {
+    clone = runtimeObject.clone(true)
+  }
+
   clone.updateMatrixWorld(true)
   previewModelGroup = new THREE.Group()
   previewModelGroup.add(clone)
@@ -559,7 +597,7 @@ watch(() => props.visible, (visible) => {
   } else {
     disposePreview()
   }
-})
+}, { immediate: true })
 
 watch(targetNodeId, () => {
   if (props.visible) {
@@ -691,19 +729,40 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+
+
+.collider-editor-enter-active,
+.collider-editor-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.collider-editor-enter-from,
+.collider-editor-leave-to {
+  opacity: 0;
+  transform: translate(-105%, 10px);
+}
+
+
+
 .collider-editor {
-  position: absolute;
+  position: fixed;
+  top: 0;
+  left: 0;
+  transform: translateX(-100%);
+  
+
   width: min(860px, 70vw);
   max-height: 70vh;
   display: flex;
   flex-direction: column;
-  background: rgba(14, 17, 24, 0.95);
+  border-radius: 5px;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 14px;
-  backdrop-filter: blur(16px);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.4);
-  color: #e9ecf1;
+  background-color: rgba(18, 22, 28, 0.72);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
+  z-index: 24;
 }
+
 
 .collider-editor__toolbar {
   background: transparent;
