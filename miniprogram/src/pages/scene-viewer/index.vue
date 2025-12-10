@@ -247,36 +247,6 @@
             <view class="viewer-drive-joystick__stick" :style="joystickKnobStyle"></view>
           </view>
         </view>
-        <view class="viewer-drive-cluster viewer-drive-cluster--throttle">
-          <button
-            class="viewer-drive-pedal-button viewer-drive-pedal-button--forward"
-            :class="{ 'is-active': vehicleDriveUi.accelerating }"
-            type="button"
-            hover-class="none"
-            aria-label="加速"
-            @touchstart.stop.prevent="handleVehicleDriveControlTouch('forward', true, $event)"
-            @touchend.stop.prevent="handleVehicleDriveControlTouch('forward', false, $event)"
-            @touchcancel.stop.prevent="handleVehicleDriveControlTouch('forward', false, $event)"
-          >
-            <view class="viewer-drive-pedal-icon" aria-hidden="true">
-              <text class="viewer-drive-pedal-icon-text">⬆️</text>
-            </view>
-          </button>
-          <button
-            class="viewer-drive-pedal-button viewer-drive-pedal-button--brake"
-            :class="{ 'is-active': vehicleDriveUi.braking }"
-            type="button"
-            hover-class="none"
-            aria-label="刹车"
-            @touchstart.stop.prevent="handleVehicleDriveControlTouch('brake', true, $event)"
-            @touchend.stop.prevent="handleVehicleDriveControlTouch('brake', false, $event)"
-            @touchcancel.stop.prevent="handleVehicleDriveControlTouch('brake', false, $event)"
-          >
-            <view class="viewer-drive-pedal-icon" aria-hidden="true">
-              <text class="viewer-drive-pedal-icon-text">⏹️</text>
-            </view>
-          </button>
-        </view>
       </view>
     </view>
     <view class="viewer-footer" v-if="warnings.length">
@@ -884,6 +854,7 @@ let suppressSelfYawRecenter = false;
 
 const JOYSTICK_INPUT_RADIUS = 64;
 const JOYSTICK_VISUAL_RANGE = 44;
+const JOYSTICK_BRAKE_RELEASE_THRESHOLD = 0.3;
 
 type VehicleWheelBinding = {
   nodeId: string | null;
@@ -1051,6 +1022,7 @@ const joystickState = reactive({
   centerX: 0,
   centerY: 0,
   ready: false,
+  brakeEngaged: false,
 });
 const steeringKeyboardValue = ref(0);
 const steeringKeyboardTarget = ref(0);
@@ -4694,6 +4666,24 @@ function updateSteeringKeyboardValue(): void {
   recomputeVehicleDriveInputs();
 }
 
+function setVehicleDriveBrake(active: boolean): void {
+  if (vehicleDriveInputFlags.brake === active) {
+    return;
+  }
+  vehicleDriveController.setControlFlag('brake', active);
+  recomputeVehicleDriveInputs();
+}
+
+function updateJoystickBrakeStateFromVector(): void {
+  if (!joystickState.active || !joystickState.brakeEngaged) {
+    return;
+  }
+  if (Math.abs(joystickVector.y) > JOYSTICK_BRAKE_RELEASE_THRESHOLD) {
+    joystickState.brakeEngaged = false;
+    setVehicleDriveBrake(false);
+  }
+}
+
 function refreshJoystickMetrics(): void {
   nextTick(() => {
     const query = uni.createSelectorQuery();
@@ -4746,11 +4736,17 @@ function setJoystickVector(x: number, y: number): void {
   joystickOffset.x = joystickVector.x * JOYSTICK_VISUAL_RANGE;
   joystickOffset.y = -joystickVector.y * JOYSTICK_VISUAL_RANGE;
   recomputeVehicleDriveInputs();
+  updateJoystickBrakeStateFromVector();
 }
 
 function deactivateJoystick(reset: boolean): void {
   joystickState.active = false;
   joystickState.pointerId = -1;
+  const brakeWasEngaged = joystickState.brakeEngaged;
+  joystickState.brakeEngaged = false;
+  if (brakeWasEngaged) {
+    setVehicleDriveBrake(false);
+  }
   if (reset) {
     setJoystickVector(0, 0);
   }
@@ -4840,6 +4836,8 @@ function handleJoystickTouchStart(event: TouchEvent): void {
   }
   joystickState.pointerId = touch.identifier;
   joystickState.active = true;
+  joystickState.brakeEngaged = true;
+  setVehicleDriveBrake(true);
   applyJoystickFromPoint(coords.x, coords.y);
 }
 
