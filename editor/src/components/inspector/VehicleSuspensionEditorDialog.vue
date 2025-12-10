@@ -103,6 +103,26 @@ let wheelPreviewMeshes: Mesh[] = []
 const tempBox = new Box3()
 const tempSize = new Vector3()
 
+type AxisIndex = 0 | 1 | 2
+
+function normalizeAxisIndex(axis: number | undefined): AxisIndex {
+  if (axis === 1) return 1
+  if (axis === 2) return 2
+  return 0
+}
+
+function getAxisValue(vector: { x: number; y: number; z: number }, axis: AxisIndex): number {
+  return axis === 0 ? vector.x : axis === 1 ? vector.y : vector.z
+}
+
+function setAxisValue(vector: { x: number; y: number; z: number }, axis: AxisIndex, value: number) {
+  if (axis === 0) return { ...vector, x: value }
+  if (axis === 1) return { ...vector, y: value }
+  return { ...vector, z: value }
+}
+
+const rightAxisIndex = computed<AxisIndex>(() => normalizeAxisIndex(normalizedProps.value.indexRightAxis))
+
 function handleClose() {
   emit('close')
 }
@@ -380,13 +400,15 @@ function computeGroupCenter(isFront: boolean): Vector3 {
 function computeGroupSpacing(isFront: boolean): number {
   const group = wheelEntries.value.filter((wheel) => wheel.isFrontWheel === isFront)
   if (!group.length) return 0
-  const maxAbs = Math.max(...group.map((wheel) => Math.abs(wheel.chassisConnectionPointLocal.x)))
+  const axis = rightAxisIndex.value
+  const maxAbs = Math.max(...group.map((wheel) => Math.abs(getAxisValue(wheel.chassisConnectionPointLocal, axis))))
   return Number((maxAbs * 2).toFixed(3))
 }
 
 function computeUniformSpacing(): number {
   if (!wheelEntries.value.length) return 0
-  const maxAbs = Math.max(...wheelEntries.value.map((wheel) => Math.abs(wheel.chassisConnectionPointLocal.x)))
+  const axis = rightAxisIndex.value
+  const maxAbs = Math.max(...wheelEntries.value.map((wheel) => Math.abs(getAxisValue(wheel.chassisConnectionPointLocal, axis))))
   return Number((maxAbs * 2).toFixed(3))
 }
 
@@ -531,17 +553,44 @@ function handleNumericTextChange(key: keyof VehicleWheelProps, value: string | n
 }
 
 function handleSpacingChange(value: number) {
-  if (!Number.isFinite(value)) return
+  if (!Number.isFinite(value) || isDisabled.value) return
   const width = Math.max(0, value)
   const halfSpacing = width * 0.5
+  const axis = rightAxisIndex.value
+  const updates = new Map<string, number>()
+
+  const captureGroupSpacing = (isFront: boolean) => {
+    const group = wheelEntries.value.filter((wheel) => wheel.isFrontWheel === isFront)
+    if (!group.length) return
+    const centerAxis = group.reduce((sum, wheel) => sum + getAxisValue(wheel.chassisConnectionPointLocal, axis), 0) / group.length
+    const sorted = [...group].sort(
+      (a, b) => getAxisValue(a.chassisConnectionPointLocal, axis) - getAxisValue(b.chassisConnectionPointLocal, axis),
+    )
+    sorted.forEach((wheel, index) => {
+      const current = getAxisValue(wheel.chassisConnectionPointLocal, axis)
+      let sign = Math.sign(current - centerAxis)
+      if (sign === 0) {
+        if (sorted.length <= 1) {
+          sign = 0
+        } else if (sorted.length === 2) {
+          sign = index === 0 ? -1 : 1
+        } else {
+          sign = index < sorted.length / 2 ? -1 : 1
+        }
+      }
+      updates.set(wheel.id, centerAxis + sign * halfSpacing)
+    })
+  }
+
+  captureGroupSpacing(true)
+  captureGroupSpacing(false)
+
   patchAllWheels((wheel) => {
-    const sign = Math.sign(wheel.chassisConnectionPointLocal.x) || 1
+    const nextAxis = updates.get(wheel.id)
+    if (nextAxis === undefined) return wheel
     return {
       ...wheel,
-      chassisConnectionPointLocal: {
-        ...wheel.chassisConnectionPointLocal,
-        x: sign * halfSpacing,
-      },
+      chassisConnectionPointLocal: setAxisValue(wheel.chassisConnectionPointLocal, axis, nextAxis),
     }
   })
   uiState.spacing = width
