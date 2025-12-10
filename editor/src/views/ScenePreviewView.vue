@@ -37,6 +37,7 @@ import {
 	buildHeightfieldShapeFromGroundNode,
 	isGroundDynamicMesh,
 } from '@schema/groundHeightfield'
+import { buildGroundAirWallDefinitions } from '@schema/airWall'
 import {
 	ensurePhysicsWorld as ensureSharedPhysicsWorld,
 	createRigidbodyBody as createSharedRigidbodyBody,
@@ -679,10 +680,12 @@ const scatterMatrixHelper = new THREE.Matrix4()
 let physicsWorld: CANNON.World | null = null
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
 const airWallBodies = new Map<string, CANNON.Body>()
+const airWallDebugMeshes = new Map<string, THREE.Mesh>()
 type RigidbodyDebugHelperCategory = 'ground' | 'rigidbody'
 type RigidbodyDebugHelper = { group: THREE.Group; signature: string; category: RigidbodyDebugHelperCategory; scale: THREE.Vector3 }
 const rigidbodyDebugHelpers = new Map<string, RigidbodyDebugHelper>()
 let rigidbodyDebugGroup: THREE.Group | null = null
+let airWallDebugGroup: THREE.Group | null = null
 const rigidbodyDebugMaterial = new THREE.LineBasicMaterial({
 	color: 0xffc107,
 	transparent: true,
@@ -690,6 +693,14 @@ const rigidbodyDebugMaterial = new THREE.LineBasicMaterial({
 })
 rigidbodyDebugMaterial.depthTest = false
 rigidbodyDebugMaterial.depthWrite = false
+const airWallDebugMaterial = new THREE.MeshBasicMaterial({
+	color: 0x80c7ff,
+	transparent: true,
+	opacity: 0.28,
+	side: THREE.DoubleSide,
+	depthWrite: false,
+	depthTest: false,
+})
 
 const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>()
 const rigidbodyContactMaterialKeys = new Set<string>()
@@ -742,8 +753,6 @@ const PHYSICS_CONTACT_STIFFNESS = 1e9
 const PHYSICS_CONTACT_RELAXATION = 4
 const PHYSICS_FRICTION_STIFFNESS = 1e9
 const PHYSICS_FRICTION_RELAXATION = 4
-const AIR_WALL_HEIGHT = 8
-const AIR_WALL_THICKNESS = 0.6
 const rotationState = { q: false, e: false }
 const defaultFirstPersonState = {
 	position: new THREE.Vector3(0, CAMERA_HEIGHT, 0),
@@ -2129,9 +2138,11 @@ watch([isGroundWireframeVisible, isOtherRigidbodyWireframeVisible], ([groundEnab
 		ensureRigidbodyDebugGroup()
 		syncRigidbodyDebugHelpers()
 		updateRigidbodyDebugTransforms()
+		setAirWallDebugVisibility(groundEnabled)
 		return
 	}
 	disposeRigidbodyDebugHelpers()
+	setAirWallDebugVisibility(false)
 })
 
 watch(controlMode, (mode) => {
@@ -5135,7 +5146,9 @@ function resetPhysicsWorld(): void {
 	vehicleInstances.clear()
 	rigidbodyInstances.clear()
 	airWallBodies.clear()
+	clearAirWallDebugMeshes()
 	clearRigidbodyDebugHelpers()
+	disposeAirWallDebugGroup()
 	physicsWorld = null
 	groundHeightfieldCache.clear()
 	rigidbodyMaterialCache.clear()
@@ -5170,6 +5183,7 @@ function removeAirWalls(): void {
 	const world = physicsWorld
 	if (!world) {
 		airWallBodies.clear()
+		clearAirWallDebugMeshes()
 		return
 	}
 	airWallBodies.forEach((body) => {
@@ -5180,74 +5194,57 @@ function removeAirWalls(): void {
 		}
 	})
 	airWallBodies.clear()
+	clearAirWallDebugMeshes()
 }
 
-function syncAirWallsForDocument(document: SceneJsonExportDocument | null): void {
+function syncAirWallsForDocument(sceneDocument: SceneJsonExportDocument | null): void {
 	removeAirWalls()
-	const airWallEnabled = document?.groundSettings?.enableAirWall !== false
-	if (!physicsWorld || !airWallEnabled) {
+	if (!sceneDocument) {
 		return
 	}
-	const groundNode = findGroundNode(document.nodes)
+	const airWallEnabled = sceneDocument.groundSettings?.enableAirWall !== false
+	const world = physicsWorld
+	if (!world || !airWallEnabled) {
+		return
+	}
+	const groundNode = findGroundNode(sceneDocument.nodes)
 	if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
 		return
 	}
-	const { width, depth } = groundNode.dynamicMesh
-	if (!Number.isFinite(width) || !Number.isFinite(depth) || width <= 0 || depth <= 0) {
+	const groundObject = nodeObjectMap.get(groundNode.id) ?? null
+	const definitions = buildGroundAirWallDefinitions({ groundNode, groundObject })
+	if (!definitions.length) {
 		return
 	}
-	const groundObject = nodeObjectMap.get(groundNode.id) ?? null
-	const groundScale = new THREE.Vector3(1, 1, 1)
-	const groundPosition = new THREE.Vector3(0, 0, 0)
-	if (groundObject) {
-		groundObject.updateMatrixWorld(true)
-		groundObject.getWorldScale(groundScale)
-		groundObject.getWorldPosition(groundPosition)
-	}
-	const worldWidth = Math.max(1e-4, width * Math.abs(groundScale.x))
-	const worldDepth = Math.max(1e-4, depth * Math.abs(groundScale.z))
-	const halfWidth = worldWidth * 0.5
-	const halfDepth = worldDepth * 0.5
-	const wallHeight = AIR_WALL_HEIGHT
-	const wallThickness = AIR_WALL_THICKNESS
-	const wallY = groundPosition.y + wallHeight * 0.5
-	const depthWithMargin = worldDepth + wallThickness * 2
-	const widthWithMargin = worldWidth + wallThickness * 2
-
-	const walls: Array<{ key: string; halfExtents: [number, number, number]; position: CANNON.Vec3 }> = [
-		{
-			key: 'airwall:+x',
-			halfExtents: [wallThickness * 0.5, wallHeight * 0.5, depthWithMargin * 0.5],
-			position: new CANNON.Vec3(groundPosition.x + halfWidth + wallThickness * 0.5, wallY, groundPosition.z),
-		},
-		{
-			key: 'airwall:-x',
-			halfExtents: [wallThickness * 0.5, wallHeight * 0.5, depthWithMargin * 0.5],
-			position: new CANNON.Vec3(groundPosition.x - halfWidth - wallThickness * 0.5, wallY, groundPosition.z),
-		},
-		{
-			key: 'airwall:+z',
-			halfExtents: [widthWithMargin * 0.5, wallHeight * 0.5, wallThickness * 0.5],
-			position: new CANNON.Vec3(groundPosition.x, wallY, groundPosition.z + halfDepth + wallThickness * 0.5),
-		},
-		{
-			key: 'airwall:-z',
-			halfExtents: [widthWithMargin * 0.5, wallHeight * 0.5, wallThickness * 0.5],
-			position: new CANNON.Vec3(groundPosition.x, wallY, groundPosition.z - halfDepth - wallThickness * 0.5),
-		},
-	]
-
-	walls.forEach((wall) => {
-		const [hx, hy, hz] = wall.halfExtents
+	definitions.forEach((definition) => {
+		const [hx, hy, hz] = definition.halfExtents
 		if (![hx, hy, hz].every((value) => Number.isFinite(value) && value > 0)) {
 			return
 		}
 		const shape = new CANNON.Box(new CANNON.Vec3(hx, hy, hz))
 		const body = new CANNON.Body({ mass: 0 })
+		body.type = CANNON.Body.STATIC
+		if (world.defaultMaterial) {
+			body.material = world.defaultMaterial
+		}
 		body.addShape(shape)
-		body.position.copy(wall.position)
-		physicsWorld.addBody(body)
-		airWallBodies.set(wall.key, body)
+		body.position.copy(definition.bodyPosition)
+		body.quaternion.set(
+			definition.bodyQuaternion.x,
+			definition.bodyQuaternion.y,
+			definition.bodyQuaternion.z,
+			definition.bodyQuaternion.w,
+		)
+		body.updateMassProperties()
+		body.aabbNeedsUpdate = true
+		world.addBody(body)
+		airWallBodies.set(definition.key, body)
+		createAirWallDebugMesh({
+			key: definition.key,
+			halfExtents: definition.halfExtents,
+			position: definition.debugPosition,
+			quaternion: definition.debugQuaternion,
+		})
 	})
 }
 
@@ -5363,6 +5360,95 @@ function ensureRigidbodyDebugGroup(): THREE.Group | null {
 		scene.add(rigidbodyDebugGroup)
 	}
 	return rigidbodyDebugGroup
+}
+
+function ensureAirWallDebugGroup(): THREE.Group | null {
+	if (!scene) {
+		return null
+	}
+	if (!airWallDebugGroup) {
+		airWallDebugGroup = new THREE.Group()
+		airWallDebugGroup.name = 'AirWallDebug'
+	}
+	if (airWallDebugGroup.parent !== scene) {
+		scene.add(airWallDebugGroup)
+	}
+	airWallDebugGroup.visible = isGroundWireframeVisible.value
+	return airWallDebugGroup
+}
+
+function clearAirWallDebugMeshes(): void {
+	airWallDebugMeshes.forEach((mesh) => {
+		mesh.parent?.remove(mesh)
+		mesh.geometry?.dispose?.()
+	})
+	airWallDebugMeshes.clear()
+	if (airWallDebugGroup) {
+		airWallDebugGroup.clear()
+	}
+}
+
+function disposeAirWallDebugGroup(): void {
+	clearAirWallDebugMeshes()
+	if (airWallDebugGroup) {
+		airWallDebugGroup.parent?.remove(airWallDebugGroup)
+		airWallDebugGroup.clear()
+		airWallDebugGroup = null
+	}
+}
+
+function setAirWallDebugVisibility(visible: boolean): void {
+	const group = airWallDebugGroup ?? null
+	if (!visible) {
+		if (group) {
+			group.visible = false
+		}
+		airWallDebugMeshes.forEach((mesh) => {
+			mesh.visible = false
+		})
+		return
+	}
+	const ensured = ensureAirWallDebugGroup()
+	if (ensured) {
+		ensured.visible = true
+	}
+	airWallDebugMeshes.forEach((mesh) => {
+		mesh.visible = true
+	})
+}
+
+type AirWallDebugEntry = {
+	key: string
+	halfExtents: [number, number, number]
+	position: THREE.Vector3
+	quaternion: THREE.Quaternion
+}
+
+function createAirWallDebugMesh(entry: AirWallDebugEntry): void {
+	const group = ensureAirWallDebugGroup()
+	if (!group) {
+		return
+	}
+	const existing = airWallDebugMeshes.get(entry.key)
+	if (existing) {
+		existing.parent?.remove(existing)
+		existing.geometry?.dispose?.()
+	}
+	const [hx, hy, hz] = entry.halfExtents
+	const height = hy * 2
+	const width = entry.key.endsWith('x') ? hz * 2 : hx * 2
+	if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+		return
+	}
+	const geometry = new THREE.PlaneGeometry(width, height)
+	const mesh = new THREE.Mesh(geometry, airWallDebugMaterial)
+	mesh.name = `AirWallDebug:${entry.key}`
+	mesh.renderOrder = 9999
+	mesh.position.copy(entry.position)
+	mesh.quaternion.copy(entry.quaternion)
+	mesh.visible = isGroundWireframeVisible.value
+	group.add(mesh)
+	airWallDebugMeshes.set(entry.key, mesh)
 }
 
 function buildBoxDebugLines(shape: Extract<RigidbodyPhysicsShape, { kind: 'box' }>): THREE.LineSegments | null {
@@ -6044,14 +6130,8 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 		syncAirWallsForDocument(null)
 		return
 	}
-	const rigidbodyNodes = collectRigidbodyNodes(document.nodes)
-	if (!rigidbodyNodes.length) {
-		resetPhysicsWorld()
-		syncVehicleBindingsForDocument(null)
-		syncAirWallsForDocument(null)
-		return
-	}
 	const world = ensurePhysicsWorld()
+	const rigidbodyNodes = collectRigidbodyNodes(document.nodes)
 	const desiredIds = new Set<string>()
 	rigidbodyNodes.forEach((node) => {
 		desiredIds.add(node.id)
