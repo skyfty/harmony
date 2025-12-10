@@ -785,7 +785,7 @@ export class VehicleDriveController {
     const vehicleVelocity = instance?.vehicle?.chassisBody?.velocity ?? null
     this.computeVehicleFollowAnchor(vehicleObject, instance, temp.seatPosition, temp.followAnchor)
     const predictedAnchor = temp.followPredicted.copy(temp.followAnchor)
-    const allowUserReverse = this.inputFlags.backward || this.input.throttle < -0.1
+    let lookaheadActive = false
     if (vehicleVelocity) {
       temp.planarVelocity.set(vehicleVelocity.x, 0, vehicleVelocity.z)
       const planarSpeedSq = temp.planarVelocity.lengthSq()
@@ -796,7 +796,7 @@ export class VehicleDriveController {
         if (offsetLength > VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX) {
           temp.predictionOffset.multiplyScalar(VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX / offsetLength)
         }
-        predictedAnchor.add(temp.predictionOffset)
+        lookaheadActive = true
       }
       if (planarSpeedSq > VEHICLE_FOLLOW_COLLISION_LOCK_SPEED_SQ) {
         const normalizedDir = temp.tempVector.copy(temp.planarVelocity)
@@ -805,9 +805,7 @@ export class VehicleDriveController {
           normalizedDir.multiplyScalar(1 / dirLength)
           if (normalizedDir.dot(follow.lastVelocityDirection) < VEHICLE_FOLLOW_COLLISION_DIRECTION_DOT_THRESHOLD) {
             follow.anchorHoldSeconds = VEHICLE_FOLLOW_COLLISION_HOLD_TIME
-            if (!allowUserReverse) {
-              follow.shouldHoldAnchorForReverse = true
-            }
+            follow.shouldHoldAnchorForReverse = true
           }
         }
       }
@@ -825,9 +823,6 @@ export class VehicleDriveController {
     }
     if (follow.anchorHoldSeconds > 0) {
       follow.anchorHoldSeconds = Math.max(0, follow.anchorHoldSeconds - deltaSeconds)
-    }
-    if (allowUserReverse) {
-      follow.shouldHoldAnchorForReverse = false
     }
 
     if (!follow.initialized) {
@@ -879,13 +874,32 @@ export class VehicleDriveController {
     const movingBackward = vehicleVelocity
       ? temp.planarVelocity.dot(follow.heading) < VEHICLE_FOLLOW_BACKWARD_DOT_THRESHOLD
       : false
+    const reversing = movingBackward
+    follow.shouldHoldAnchorForReverse = reversing
+    if (lookaheadActive) {
+      if (reversing) {
+        const lookaheadLength = temp.predictionOffset.length()
+        if (lookaheadLength > 1e-6) {
+          temp.tempVector.copy(follow.heading)
+          if (temp.tempVector.lengthSq() < 1e-6) {
+            temp.tempVector.copy(temp.planarVelocity)
+          }
+          if (temp.tempVector.lengthSq() < 1e-6) {
+            temp.tempVector.set(0, 0, 1)
+          }
+          temp.tempVector.normalize().multiplyScalar(-lookaheadLength)
+          predictedAnchor.add(temp.tempVector)
+        }
+      } else {
+        predictedAnchor.add(temp.predictionOffset)
+      }
+    }
     follow.desiredAnchor.copy(predictedAnchor)
     const anchorHoldActive = follow.anchorHoldSeconds > 0
-    const backwardHoldActive = movingBackward && !allowUserReverse
     const baseAnchorAlpha = options.immediate || !follow.initialized
       ? 1
       : computeVehicleFollowLerpAlpha(deltaSeconds, VEHICLE_FOLLOW_ANCHOR_LERP_SPEED)
-    const anchorAlpha = anchorHoldActive || backwardHoldActive ? 0 : baseAnchorAlpha
+    const anchorAlpha = anchorHoldActive ? 0 : baseAnchorAlpha
     if (anchorAlpha >= 1) {
       follow.currentAnchor.copy(follow.desiredAnchor)
     } else if (anchorAlpha > 0) {
