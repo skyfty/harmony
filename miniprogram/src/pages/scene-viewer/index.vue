@@ -3124,6 +3124,12 @@ function createVehicleInstance(
     rigidbody.body.position.y,
     rigidbody.body.position.z,
   );
+  const initialChassisQuaternion = new THREE.Quaternion(
+    rigidbody.body.quaternion.x,
+    rigidbody.body.quaternion.y,
+    rigidbody.body.quaternion.z,
+    rigidbody.body.quaternion.w,
+  ).normalize();
   return {
     nodeId: node.id,
     vehicle,
@@ -3139,6 +3145,7 @@ function createVehicleInstance(
     axisForward: axisForwardVector,
     lastChassisPosition: initialChassisPosition,
     hasChassisPositionSample: false,
+    initialChassisQuaternion,
   };
 }
 
@@ -7445,12 +7452,15 @@ onUnmounted(() => {
   width: 76px;
   height: 76px;
   border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  background: conic-gradient(from -90deg, rgba(102, 210, 255, 0.95) var(--speed-angle, 0deg), rgba(255, 255, 255, 0.08) var(--speed-angle, 0deg));
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background:
+    conic-gradient(from -90deg, rgba(102, 210, 255, 0.65) var(--speed-angle, 0deg), rgba(255, 255, 255, 0.04) var(--speed-angle, 0deg));
+  background-color: rgba(6, 10, 24, 0.28);
   position: relative;
   box-shadow:
-    inset 0 0 14px rgba(0, 0, 0, 0.45),
-    0 14px 28px rgba(3, 6, 18, 0.65);
+    inset 0 0 14px rgba(0, 0, 0, 0.32),
+    0 14px 28px rgba(3, 6, 18, 0.35);
+  backdrop-filter: blur(8px);
 }
 
 .viewer-drive-speed-gauge::after {
@@ -7458,8 +7468,8 @@ onUnmounted(() => {
   position: absolute;
   inset: 14%;
   border-radius: 50%;
-  background: rgba(4, 6, 18, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(4, 6, 18, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   pointer-events: none;
   z-index: 0;
 }
@@ -7470,11 +7480,11 @@ onUnmounted(() => {
   left: 50%;
   width: 2px;
   height: 36px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(67, 221, 255, 0.95));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(67, 221, 255, 0.8));
   border-radius: 1px;
   transform-origin: center bottom;
   transform: translateX(-50%) rotate(calc(var(--speed-angle, 0deg) - 90deg));
-  box-shadow: 0 0 10px rgba(78, 227, 255, 0.9);
+  box-shadow: 0 0 10px rgba(78, 227, 255, 0.5);
   z-index: 2;
 }
 
@@ -7586,8 +7596,8 @@ onUnmounted(() => {
 }
 
 .viewer-drive-joystick {
-  width: 140px;
-  height: 140px;
+  width: 120px;
+  height: 120px;
   border-radius: 50%;
   position: relative;
   pointer-events: auto;
@@ -7600,19 +7610,20 @@ onUnmounted(() => {
   inset: 0;
   border-radius: 50%;
   background:
-    radial-gradient(circle at 50% 50%, rgba(77, 113, 255, 0.2), transparent 62%),
-    rgba(18, 28, 64, 0.85);
+    radial-gradient(circle at 50% 50%, rgba(77, 113, 255, 0.12), transparent 62%),
+    rgba(18, 28, 64, 0.45);
   border: 2px solid rgba(124, 156, 255, 0.3);
   box-shadow:
     inset 0 0 22px rgba(10, 18, 48, 0.85),
     0 0 28px rgba(32, 80, 220, 0.32);
+  backdrop-filter: blur(6px);
 }
 
 .viewer-drive-joystick__base {
   position: absolute;
-  inset: 18px;
+  inset: 16px;
   border-radius: 50%;
-  background: rgba(50, 72, 148, 0.35);
+  background: rgba(50, 72, 148, 0.18);
   box-shadow: inset 0 0 18px rgba(12, 18, 42, 0.8);
 }
 
@@ -7620,16 +7631,16 @@ onUnmounted(() => {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 54px;
-  height: 54px;
+  width: 48px;
+  height: 48px;
   border-radius: 50%;
   background:
-    radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.25), transparent 58%),
-    rgba(78, 118, 230, 0.95);
-  border: 2px solid rgba(150, 188, 255, 0.55);
+    radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.2), transparent 58%),
+    rgba(78, 118, 230, 0.75);
+  border: 2px solid rgba(150, 188, 255, 0.4);
   box-shadow:
-    inset 0 0 14px rgba(18, 26, 58, 0.9),
-    0 8px 18px rgba(10, 12, 28, 0.6);
+    inset 0 0 14px rgba(18, 26, 58, 0.8),
+    0 8px 18px rgba(10, 12, 28, 0.45);
   transform: translate(-50%, -50%);
   transition: transform 0.12s ease, box-shadow 0.12s ease;
 }

@@ -726,6 +726,7 @@ type VehicleInstance = {
 	axisForwardIndex: 0 | 1 | 2
 	lastChassisPosition: THREE.Vector3
 	hasChassisPositionSample: boolean
+	initialChassisQuaternion: THREE.Quaternion
 }
 const vehicleInstances = new Map<string, VehicleInstance>()
 const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>()
@@ -5754,6 +5755,12 @@ function createVehicleInstance(
 		rigidbody.body.position.y,
 		rigidbody.body.position.z,
 	)
+	const initialChassisQuaternion = new THREE.Quaternion(
+		rigidbody.body.quaternion.x,
+		rigidbody.body.quaternion.y,
+		rigidbody.body.quaternion.z,
+		rigidbody.body.quaternion.w,
+	).normalize()
 	return {
 		nodeId: node.id,
 		vehicle,
@@ -5769,6 +5776,7 @@ function createVehicleInstance(
 		axisForwardIndex: forwardAxis,
 		lastChassisPosition: initialChassisPosition,
 		hasChassisPositionSample: false,
+		initialChassisQuaternion,
 	}
 }
 
