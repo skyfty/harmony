@@ -10670,27 +10670,45 @@ export const useSceneStore = defineStore('scene', {
         return null
       }
 
-      const props = definition.createDefaultProps(target)
-      const state: SceneNodeComponentState<any> = {
+      const requestedState: SceneNodeComponentState<any> = {
         id: generateUuid(),
         type,
         enabled: true,
-        props,
+        props: definition.createDefaultProps(target),
+      }
+
+      const statesToAdd: SceneNodeComponentState<any>[] = [requestedState]
+
+      if (type === VEHICLE_COMPONENT_TYPE && !target.components?.[RIGIDBODY_COMPONENT_TYPE]) {
+        const rigidbodyDefinition = componentManager.getDefinition(RIGIDBODY_COMPONENT_TYPE)
+        if (rigidbodyDefinition?.canAttach(target)) {
+          statesToAdd.unshift({
+            id: generateUuid(),
+            type: RIGIDBODY_COMPONENT_TYPE,
+            enabled: true,
+            props: rigidbodyDefinition.createDefaultProps(target),
+          })
+        }
       }
 
       this.captureHistorySnapshot()
 
       visitNode(this.nodes, nodeId, (node) => {
         const nextComponents: SceneNodeComponentMap = { ...(node.components ?? {}) }
-        nextComponents[type] = {
-          ...state,
-        }
+        statesToAdd.forEach((componentState) => {
+          nextComponents[componentState.type] = {
+            ...componentState,
+          }
+          if (componentState.type === WALL_COMPONENT_TYPE) {
+            applyWallComponentPropsToNode(node, componentState.props as unknown as WallComponentProps)
+          } else if (componentState.type === DISPLAY_BOARD_COMPONENT_TYPE) {
+            applyDisplayBoardComponentPropsToNode(
+              node,
+              componentState.props as unknown as DisplayBoardComponentProps,
+            )
+          }
+        })
         node.components = nextComponents
-        if (type === WALL_COMPONENT_TYPE) {
-          applyWallComponentPropsToNode(node, props as unknown as WallComponentProps)
-        } else if (type === DISPLAY_BOARD_COMPONENT_TYPE) {
-          applyDisplayBoardComponentPropsToNode(node, props as unknown as DisplayBoardComponentProps)
-        }
       })
 
       this.nodes = [...this.nodes]
@@ -10699,7 +10717,7 @@ export const useSceneStore = defineStore('scene', {
         componentManager.syncNode(updatedNode)
       }
       commitSceneSnapshot(this)
-      return state
+      return requestedState
     },
     removeNodeComponent(nodeId: string, componentId: string): boolean {
       const target = findNodeById(this.nodes, nodeId)
