@@ -7277,19 +7277,21 @@ onUnmounted(() => {
   background: rgba(4, 6, 18, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.18);
   pointer-events: none;
+  z-index: 0;
 }
 
 .viewer-drive-speed-gauge__needle {
   position: absolute;
-  bottom: 12%;
+  bottom: 50%;
   left: 50%;
   width: 2px;
-  height: 38px;
+  height: 36px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(67, 221, 255, 0.95));
   border-radius: 1px;
   transform-origin: center bottom;
-  transform: rotate(calc(var(--speed-angle, 0deg) - 90deg));
+  transform: translateX(-50%) rotate(calc(var(--speed-angle, 0deg) - 90deg));
   box-shadow: 0 0 10px rgba(78, 227, 255, 0.9);
+  z-index: 2;
 }
 
 .viewer-drive-speed-gauge__values {
