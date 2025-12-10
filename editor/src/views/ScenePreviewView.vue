@@ -921,6 +921,7 @@ const vehicleDriveCameraFollowState = {
 	currentAnchor: new THREE.Vector3(),
 	anchorHoldSeconds: 0,
 	lastVelocityDirection: new THREE.Vector3(0, 0, 1),
+	shouldHoldAnchorForReverse: false,
 	heading: new THREE.Vector3(0, 0, 1),
 	initialized: false,
 	localOffset: new THREE.Vector3(),

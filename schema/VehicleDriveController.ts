@@ -62,6 +62,7 @@ export type VehicleDriveCameraFollowState = {
   initialized: boolean
   localOffset: THREE.Vector3
   hasLocalOffset: boolean
+  shouldHoldAnchorForReverse: boolean
 }
 
 export type VehicleFollowPlacement = {
@@ -168,6 +169,7 @@ const VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX = 3
 const VEHICLE_FOLLOW_LOOKAHEAD_MIN_SPEED_SQ = 0.9
 const VEHICLE_FOLLOW_ANCHOR_LERP_SPEED = 4.5
 const VEHICLE_FOLLOW_BACKWARD_DOT_THRESHOLD = -0.25
+const VEHICLE_FOLLOW_FORWARD_RELEASE_DOT = 0.25
 const VEHICLE_FOLLOW_COLLISION_LOCK_SPEED_SQ = 1.21
 const VEHICLE_FOLLOW_COLLISION_DIRECTION_DOT_THRESHOLD = -0.35
 const VEHICLE_FOLLOW_COLLISION_HOLD_TIME = 0.8
@@ -782,6 +784,7 @@ export class VehicleDriveController {
     const vehicleVelocity = instance?.vehicle?.chassisBody?.velocity ?? null
     this.computeVehicleFollowAnchor(vehicleObject, instance, temp.seatPosition, temp.followAnchor)
     const predictedAnchor = temp.followPredicted.copy(temp.followAnchor)
+    const allowUserReverse = this.inputFlags.backward || this.input.throttle < -0.1
     if (vehicleVelocity) {
       temp.planarVelocity.set(vehicleVelocity.x, 0, vehicleVelocity.z)
       const planarSpeedSq = temp.planarVelocity.lengthSq()
@@ -801,18 +804,29 @@ export class VehicleDriveController {
           normalizedDir.multiplyScalar(1 / dirLength)
           if (normalizedDir.dot(follow.lastVelocityDirection) < VEHICLE_FOLLOW_COLLISION_DIRECTION_DOT_THRESHOLD) {
             follow.anchorHoldSeconds = VEHICLE_FOLLOW_COLLISION_HOLD_TIME
+            if (!allowUserReverse) {
+              follow.shouldHoldAnchorForReverse = true
+            }
           }
         }
       }
+      const movementDot = temp.planarVelocity.dot(follow.heading)
       if (planarSpeedSq > 1e-6) {
         temp.tempVector.copy(temp.planarVelocity).normalize()
         follow.lastVelocityDirection.copy(temp.tempVector)
+        if (movementDot > VEHICLE_FOLLOW_FORWARD_RELEASE_DOT) {
+          follow.shouldHoldAnchorForReverse = false
+        }
       }
     } else {
+      temp.planarVelocity.set(0, 0, 0)
       follow.lastVelocityDirection.set(0, 0, 0)
     }
     if (follow.anchorHoldSeconds > 0) {
       follow.anchorHoldSeconds = Math.max(0, follow.anchorHoldSeconds - deltaSeconds)
+    }
+    if (allowUserReverse) {
+      follow.shouldHoldAnchorForReverse = false
     }
 
     if (!follow.initialized) {
@@ -825,6 +839,7 @@ export class VehicleDriveController {
       }
       follow.anchorHoldSeconds = 0
       follow.lastVelocityDirection.set(0, 0, 0)
+      follow.shouldHoldAnchorForReverse = false
     }
 
     const speedSq = vehicleVelocity ? vehicleVelocity.lengthSquared() : 0
@@ -857,8 +872,6 @@ export class VehicleDriveController {
       headingRight.normalize()
     }
     const headingUp = temp.cameraUp.copy(worldUp)
-
-    const allowUserReverse = this.inputFlags.backward || this.input.throttle < -0.1
     const movingBackward = vehicleVelocity
       ? temp.planarVelocity.dot(follow.heading) < VEHICLE_FOLLOW_BACKWARD_DOT_THRESHOLD
       : false
