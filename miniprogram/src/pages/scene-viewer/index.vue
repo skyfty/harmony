@@ -126,6 +126,32 @@
           </view>
         </view>
       </view>
+      <view v-if="overlayActive" class="viewer-overlay">
+        <view class="viewer-overlay__content viewer-overlay__card">
+          <text v-if="overlayTitle" class="viewer-overlay__title">{{ overlayTitle }}</text>
+          <view class="viewer-progress">
+            <view class="viewer-progress__bar">
+              <view
+                class="viewer-progress__bar-fill"
+                :style="{ width: overlayPercent + '%' }"
+              />
+
+
+
+
+
+
+
+
+
+            </view>
+            <view class="viewer-progress__stats">
+              <text class="viewer-progress__percent">{{ overlayPercent }}%</text>
+              <text v-if="overlayBytesLabel" class="viewer-progress__bytes">{{ overlayBytesLabel }}</text>
+            </view>
+          </view>
+        </view>
+      </view>
       <view v-if="error" class="viewer-overlay error">
         <text>{{ error }}</text>
       </view>
@@ -4686,7 +4712,6 @@ function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look
   resolveBehaviorToken(event.token, { type: 'continue' });
 }
 
-type VehicleDriveControlKey = keyof VehicleDriveControlFlags;
 
 function setVehicleDriveUiOverride(mode: 'auto' | 'show' | 'hide'): void {
   vehicleDriveUiOverride.value = mode;
@@ -4953,28 +4978,6 @@ function resetVehicleDriveInputs(): void {
   vehicleDriveController.resetInputs();
 }
 
-function handleVehicleDriveControlTouch(
-  key: VehicleDriveControlKey,
-  active: boolean,
-  event?: Event,
-): void {
-  if (event) {
-    if ('stopPropagation' in event && typeof event.stopPropagation === 'function') {
-      event.stopPropagation();
-    }
-    if ('preventDefault' in event && typeof event.preventDefault === 'function') {
-      event.preventDefault();
-    }
-  }
-  vehicleDriveController.setControlFlag(key, active);
-  updateSteeringKeyboardValue();
-  recomputeVehicleDriveInputs();
-}
-
-type VehicleDrivePreparationResult =
-  | { success: true; instance: VehicleInstance }
-  | { success: false; message: string };
-
 type VehicleDriveStartResult =
   | { success: true }
   | { success: false; message: string };
@@ -5009,14 +5012,6 @@ function updateVehicleSpeedFromVehicle(): void {
   }
   const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
   vehicleSpeed.value = Number.isFinite(speed) ? speed : 0;
-}
-
-
-function handleVehicleDriveCameraToggle(): void {
-  if (!vehicleDriveActive.value) {
-    return;
-  }
-  vehicleDriveController.toggleCameraMode();
 }
 
 function handleVehicleDriveResetTap(): void {
