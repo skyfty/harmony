@@ -54,11 +54,15 @@ export type VehicleDriveCameraFollowState = {
   desiredTarget: THREE.Vector3
   currentPosition: THREE.Vector3
   currentTarget: THREE.Vector3
-  anchor: THREE.Vector3
+  desiredAnchor: THREE.Vector3
+  currentAnchor: THREE.Vector3
+  anchorHoldSeconds: number
+  lastVelocityDirection: THREE.Vector3
   heading: THREE.Vector3
   initialized: boolean
   localOffset: THREE.Vector3
   hasLocalOffset: boolean
+  shouldHoldAnchorForReverse: boolean
 }
 
 export type VehicleFollowPlacement = {
@@ -168,7 +172,17 @@ const VEHICLE_FOLLOW_JITTER_SPEED = 0.35
 const VEHICLE_FOLLOW_JITTER_ANCHOR_LERP_SPEED = 3
 const VEHICLE_FOLLOW_TARGET_FORWARD_RATIO = 0.55
 const VEHICLE_FOLLOW_TARGET_FORWARD_MIN = 1.8
+const VEHICLE_FOLLOW_LOOKAHEAD_TIME = 0.18
+const VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX = 3
+const VEHICLE_FOLLOW_LOOKAHEAD_MIN_SPEED_SQ = 0.9
+const VEHICLE_FOLLOW_ANCHOR_LERP_SPEED = 4.5
+const VEHICLE_FOLLOW_BACKWARD_DOT_THRESHOLD = -0.25
+const VEHICLE_FOLLOW_FORWARD_RELEASE_DOT = 0.25
+const VEHICLE_FOLLOW_COLLISION_LOCK_SPEED_SQ = 1.21
+const VEHICLE_FOLLOW_COLLISION_DIRECTION_DOT_THRESHOLD = -0.35
+const VEHICLE_FOLLOW_COLLISION_HOLD_TIME = 0.8
 const VEHICLE_RESET_LIFT = 0.75
+const VEHICLE_CAMERA_MOVING_SPEED_SQ = 0.04
 
 function clampAxisScalar(value: number): number {
   if (!Number.isFinite(value)) {
@@ -246,6 +260,9 @@ export class VehicleDriveController {
     followOffset: new THREE.Vector3(),
     followTarget: new THREE.Vector3(),
     followWorldOffset: new THREE.Vector3(),
+    followPredicted: new THREE.Vector3(),
+    predictionOffset: new THREE.Vector3(),
+    planarVelocity: new THREE.Vector3(),
     cameraQuaternionInverse: new THREE.Quaternion(),
     resetQuaternion: new THREE.Quaternion(),
     cameraMatrix: new THREE.Matrix4(),
@@ -774,9 +791,47 @@ export class VehicleDriveController {
       Math.max(VEHICLE_FOLLOW_DISTANCE_MIN, placement.distance * distanceScale),
     )
     const vehicleVelocity = instance?.vehicle?.chassisBody?.velocity ?? null
-    const speedSq = vehicleVelocity ? vehicleVelocity.lengthSquared() : 0
-
-    this.computeVehicleFollowAnchor(vehicleObject, temp.seatPosition, temp.followAnchor)
+    this.computeVehicleFollowAnchor(vehicleObject, instance, temp.seatPosition, temp.followAnchor)
+    const predictedAnchor = temp.followPredicted.copy(temp.followAnchor)
+    let lookaheadActive = false
+    if (vehicleVelocity) {
+      temp.planarVelocity.set(vehicleVelocity.x, 0, vehicleVelocity.z)
+      const planarSpeedSq = temp.planarVelocity.lengthSq()
+      if (planarSpeedSq > VEHICLE_FOLLOW_LOOKAHEAD_MIN_SPEED_SQ) {
+        temp.predictionOffset.copy(temp.planarVelocity)
+        temp.predictionOffset.multiplyScalar(VEHICLE_FOLLOW_LOOKAHEAD_TIME)
+        const offsetLength = temp.predictionOffset.length()
+        if (offsetLength > VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX) {
+          temp.predictionOffset.multiplyScalar(VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX / offsetLength)
+        }
+        lookaheadActive = true
+      }
+      if (planarSpeedSq > VEHICLE_FOLLOW_COLLISION_LOCK_SPEED_SQ) {
+        const normalizedDir = temp.tempVector.copy(temp.planarVelocity)
+        const dirLength = normalizedDir.length()
+        if (dirLength > 1e-6 && follow.lastVelocityDirection.lengthSq() > 1e-6) {
+          normalizedDir.multiplyScalar(1 / dirLength)
+          if (normalizedDir.dot(follow.lastVelocityDirection) < VEHICLE_FOLLOW_COLLISION_DIRECTION_DOT_THRESHOLD) {
+            follow.anchorHoldSeconds = VEHICLE_FOLLOW_COLLISION_HOLD_TIME
+            follow.shouldHoldAnchorForReverse = true
+          }
+        }
+      }
+      const movementDot = temp.planarVelocity.dot(follow.heading)
+      if (planarSpeedSq > 1e-6) {
+        temp.tempVector.copy(temp.planarVelocity).normalize()
+        follow.lastVelocityDirection.copy(temp.tempVector)
+        if (movementDot > VEHICLE_FOLLOW_FORWARD_RELEASE_DOT) {
+          follow.shouldHoldAnchorForReverse = false
+        }
+      }
+    } else {
+      temp.planarVelocity.set(0, 0, 0)
+      follow.lastVelocityDirection.set(0, 0, 0)
+    }
+    if (follow.anchorHoldSeconds > 0) {
+      follow.anchorHoldSeconds = Math.max(0, follow.anchorHoldSeconds - deltaSeconds)
+    }
 
     const anchorDeltaSq = temp.followAnchor.distanceToSquared(follow.anchor)
     const lowSpeed = speedSq < VEHICLE_FOLLOW_JITTER_SPEED * VEHICLE_FOLLOW_JITTER_SPEED
@@ -795,15 +850,22 @@ export class VehicleDriveController {
       } else {
         follow.heading.normalize()
       }
+      follow.anchorHoldSeconds = 0
+      follow.lastVelocityDirection.set(0, 0, 0)
+      follow.shouldHoldAnchorForReverse = false
     }
 
+    const speedSq = vehicleVelocity ? vehicleVelocity.lengthSquared() : 0
+    const isVehicleMoving = speedSq > VEHICLE_CAMERA_MOVING_SPEED_SQ
     const desiredHeading = temp.cameraForward
-    if (vehicleVelocity && speedSq > VEHICLE_FOLLOW_HEADING_VELOCITY_EPS) {
-      desiredHeading.set(vehicleVelocity.x, 0, vehicleVelocity.z)
+    if (temp.seatForward.lengthSq() > 1e-6) {
+      desiredHeading.copy(temp.seatForward)
+    } else if (follow.heading.lengthSq() > 1e-6) {
+      desiredHeading.copy(follow.heading)
     } else {
-      desiredHeading.copy(follow.heading.lengthSq() > 1e-6 ? follow.heading : temp.seatForward)
-      desiredHeading.y = 0
+      desiredHeading.set(0, 0, 1)
     }
+    desiredHeading.y = 0
     if (desiredHeading.lengthSq() < 1e-6) {
       desiredHeading.set(0, 0, 1)
     } else {
@@ -826,6 +888,41 @@ export class VehicleDriveController {
       headingRight.normalize()
     }
     const headingUp = temp.cameraUp.copy(worldUp)
+    const movingBackward = vehicleVelocity
+      ? temp.planarVelocity.dot(follow.heading) < VEHICLE_FOLLOW_BACKWARD_DOT_THRESHOLD
+      : false
+    const reversing = movingBackward
+    follow.shouldHoldAnchorForReverse = reversing
+    if (lookaheadActive) {
+      if (reversing) {
+        const lookaheadLength = temp.predictionOffset.length()
+        if (lookaheadLength > 1e-6) {
+          temp.tempVector.copy(follow.heading)
+          if (temp.tempVector.lengthSq() < 1e-6) {
+            temp.tempVector.copy(temp.planarVelocity)
+          }
+          if (temp.tempVector.lengthSq() < 1e-6) {
+            temp.tempVector.set(0, 0, 1)
+          }
+          temp.tempVector.normalize().multiplyScalar(-lookaheadLength)
+          predictedAnchor.add(temp.tempVector)
+        }
+      } else {
+        predictedAnchor.add(temp.predictionOffset)
+      }
+    }
+    follow.desiredAnchor.copy(predictedAnchor)
+    const anchorHoldActive = follow.anchorHoldSeconds > 0
+    const baseAnchorAlpha = options.immediate || !follow.initialized
+      ? 1
+      : computeVehicleFollowLerpAlpha(deltaSeconds, VEHICLE_FOLLOW_ANCHOR_LERP_SPEED)
+    const anchorAlpha = anchorHoldActive ? 0 : baseAnchorAlpha
+    if (anchorAlpha >= 1) {
+      follow.currentAnchor.copy(follow.desiredAnchor)
+    } else if (anchorAlpha > 0) {
+      follow.currentAnchor.lerp(follow.desiredAnchor, anchorAlpha)
+    }
+    const anchorForCamera = follow.currentAnchor
 
     this.ensureVehicleFollowLocalOffset(placement)
     this.enforceVehicleFollowBehind(placement)
@@ -836,7 +933,7 @@ export class VehicleDriveController {
       .multiplyScalar(targetOffsetLocal.x)
       .addScaledVector(headingUp, targetOffsetLocal.y)
       .addScaledVector(headingForward, targetOffsetLocal.z)
-    follow.desiredTarget.copy(temp.followAnchor).add(targetWorldOffset)
+    follow.desiredTarget.copy(anchorForCamera).add(targetWorldOffset)
 
     const mapControls = ctx.mapControls
     if (mapControls) {
@@ -847,13 +944,14 @@ export class VehicleDriveController {
       mapControls.update?.()
     }
 
-    let userAdjusted = Boolean(options.followControlsDirty)
-    if (!userAdjusted && follow.initialized && ctx.camera) {
+    const allowCameraAdjustments = !isVehicleMoving
+    let userAdjusted = allowCameraAdjustments && Boolean(options.followControlsDirty)
+    if (allowCameraAdjustments && !userAdjusted && follow.initialized && ctx.camera) {
       const deltaPosition = ctx.camera.position.distanceTo(follow.currentPosition)
       userAdjusted = deltaPosition > 1e-3
     }
-    if (userAdjusted && ctx.camera) {
-      temp.followWorldOffset.copy(ctx.camera.position).sub(temp.followAnchor)
+    if (allowCameraAdjustments && userAdjusted && ctx.camera) {
+      temp.followWorldOffset.copy(ctx.camera.position).sub(anchorForCamera)
       follow.localOffset.set(
         temp.followWorldOffset.dot(headingRight),
         temp.followWorldOffset.dot(headingUp),
@@ -869,7 +967,7 @@ export class VehicleDriveController {
       .multiplyScalar(follow.localOffset.x)
       .addScaledVector(headingUp, follow.localOffset.y)
       .addScaledVector(headingForward, follow.localOffset.z)
-    follow.desiredPosition.copy(temp.followAnchor).add(desiredWorldOffset)
+    follow.desiredPosition.copy(anchorForCamera).add(desiredWorldOffset)
 
     const immediate = Boolean(options.immediate) || !follow.initialized
     if (immediate) {
@@ -926,7 +1024,17 @@ export class VehicleDriveController {
     return true
   }
 
-  private computeVehicleFollowAnchor(vehicleObject: THREE.Object3D | null, fallbackPosition: THREE.Vector3, target: THREE.Vector3): void {
+  private computeVehicleFollowAnchor(
+    vehicleObject: THREE.Object3D | null,
+    instance: VehicleInstance | null,
+    fallbackPosition: THREE.Vector3,
+    target: THREE.Vector3,
+  ): void {
+    const bodyPosition = instance?.vehicle?.chassisBody?.position
+    if (bodyPosition) {
+      target.set(bodyPosition.x, bodyPosition.y, bodyPosition.z)
+      return
+    }
     if (!vehicleObject) {
       target.copy(fallbackPosition)
       return
