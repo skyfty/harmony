@@ -248,6 +248,23 @@
           </view>
         </view>
       </view>
+      <view
+        v-if="vehicleDriveUi.visible"
+        class="viewer-drive-brake"
+      >
+        <button
+          class="viewer-drive-brake-button"
+          :class="{ 'is-active': vehicleDriveInputFlags.brake }"
+          type="button"
+          hover-class="none"
+          aria-label="刹车"
+          @touchstart.stop.prevent="handleBrakeButtonPress"
+          @touchend.stop.prevent="handleBrakeButtonRelease"
+          @touchcancel.stop.prevent="handleBrakeButtonRelease"
+        >
+          <text>刹车</text>
+        </button>
+      </view>
     </view>
     <view class="viewer-footer" v-if="warnings.length">
       <text class="footer-title">警告</text>
@@ -854,7 +871,6 @@ let suppressSelfYawRecenter = false;
 
 const JOYSTICK_INPUT_RADIUS = 64;
 const JOYSTICK_VISUAL_RANGE = 44;
-const JOYSTICK_BRAKE_RELEASE_THRESHOLD = 0.3;
 
 type VehicleWheelBinding = {
   nodeId: string | null;
@@ -1028,7 +1044,6 @@ const joystickState = reactive({
   centerX: 0,
   centerY: 0,
   ready: false,
-  brakeEngaged: false,
 });
 const steeringKeyboardValue = ref(0);
 const steeringKeyboardTarget = ref(0);
@@ -4680,14 +4695,31 @@ function setVehicleDriveBrake(active: boolean): void {
   recomputeVehicleDriveInputs();
 }
 
-function updateJoystickBrakeStateFromVector(): void {
-  if (!joystickState.active || !joystickState.brakeEngaged) {
+function handleBrakeButtonPress(event?: Event): void {
+  if (event) {
+    if ('preventDefault' in event && typeof event.preventDefault === 'function') {
+      event.preventDefault();
+    }
+    if ('stopPropagation' in event && typeof event.stopPropagation === 'function') {
+      event.stopPropagation();
+    }
+  }
+  if (!vehicleDriveActive.value) {
     return;
   }
-  if (Math.abs(joystickVector.y) > JOYSTICK_BRAKE_RELEASE_THRESHOLD) {
-    joystickState.brakeEngaged = false;
-    setVehicleDriveBrake(false);
+  setVehicleDriveBrake(true);
+}
+
+function handleBrakeButtonRelease(event?: Event): void {
+  if (event) {
+    if ('preventDefault' in event && typeof event.preventDefault === 'function') {
+      event.preventDefault();
+    }
+    if ('stopPropagation' in event && typeof event.stopPropagation === 'function') {
+      event.stopPropagation();
+    }
   }
+  setVehicleDriveBrake(false);
 }
 
 function refreshJoystickMetrics(): void {
@@ -4742,17 +4774,11 @@ function setJoystickVector(x: number, y: number): void {
   joystickOffset.x = joystickVector.x * JOYSTICK_VISUAL_RANGE;
   joystickOffset.y = -joystickVector.y * JOYSTICK_VISUAL_RANGE;
   recomputeVehicleDriveInputs();
-  updateJoystickBrakeStateFromVector();
 }
 
 function deactivateJoystick(reset: boolean): void {
   joystickState.active = false;
   joystickState.pointerId = -1;
-  const brakeWasEngaged = joystickState.brakeEngaged;
-  joystickState.brakeEngaged = false;
-  if (brakeWasEngaged) {
-    setVehicleDriveBrake(false);
-  }
   if (reset) {
     setJoystickVector(0, 0);
   }
@@ -4842,8 +4868,6 @@ function handleJoystickTouchStart(event: TouchEvent): void {
   }
   joystickState.pointerId = touch.identifier;
   joystickState.active = true;
-  joystickState.brakeEngaged = true;
-  setVehicleDriveBrake(true);
   applyJoystickFromPoint(coords.x, coords.y);
 }
 
@@ -7157,6 +7181,35 @@ onUnmounted(() => {
 .viewer-drive-icon-button.is-busy,
 .viewer-drive-icon-button:disabled {
   opacity: 0.7;
+}
+
+.viewer-drive-brake {
+  position: absolute;
+  right: 16px;
+  bottom: 18px;
+  z-index: 1550;
+  pointer-events: auto;
+}
+
+.viewer-drive-brake-button {
+  width: 94px;
+  height: 94px;
+  border-radius: 999px;
+  border: none;
+  outline: none;
+  background: linear-gradient(135deg, #ff6f7b, #c81e46);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  box-shadow: 0 18px 36px rgba(200, 30, 70, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.viewer-drive-brake-button.is-active {
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(255, 255, 255, 0.35);
 }
 
 .viewer-drive-icon {
