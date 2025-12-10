@@ -113,33 +113,22 @@ let resizeObserver: ResizeObserver | null = null
 let previewRefreshToken = 0
 const previewOriginShift = new THREE.Vector3()
 
-function collectNodeAndDescendants(node: SceneNode | null): SceneNode[] {
-  if (!node) {
-    return []
-  }
-  const list: SceneNode[] = [node]
-  const stack = [...(node.children ?? [])]
-  while (stack.length) {
-    const current = stack.pop()
-    if (!current) {
-      continue
-    }
-    list.push(current)
-    if (current.children?.length) {
-      stack.push(...current.children)
-    }
-  }
-  return list
+function applyNodeTransformFromState(target: THREE.Object3D, node: SceneNode) {
+  target.position.set(node.position.x, node.position.y, node.position.z)
+  target.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z)
+  target.scale.set(node.scale.x, node.scale.y, node.scale.z)
 }
 
-function cloneRuntimeObject(runtimeObject: THREE.Object3D): THREE.Object3D | null {
+function cloneRuntimeObject(runtimeObject: THREE.Object3D, node: SceneNode): THREE.Object3D | null {
   const instancedAssetId = runtimeObject.userData?.instancedAssetId as string | undefined
   if (instancedAssetId) {
     const cached = getCachedModelObject(instancedAssetId)
     if (!cached) {
       return null
     }
-    return cached.object.clone(true)
+    const instancedClone = cached.object.clone(true)
+    applyNodeTransformFromState(instancedClone, node)
+    return instancedClone
   }
   return runtimeObject.clone(true)
 }
@@ -149,7 +138,7 @@ function cloneNodeForPreview(node: SceneNode): THREE.Object3D | null {
   let clone: THREE.Object3D | null = null
 
   if (runtimeObject) {
-    clone = cloneRuntimeObject(runtimeObject)
+    clone = cloneRuntimeObject(runtimeObject, node)
   } else if (node.nodeType === 'Group') {
     clone = new THREE.Group()
   }
@@ -163,6 +152,8 @@ function cloneNodeForPreview(node: SceneNode): THREE.Object3D | null {
     ...(clone.userData ?? {}),
     nodeId: node.id,
   }
+
+  applyNodeTransformFromState(clone, node)
 
   if (Array.isArray(node.children) && node.children.length) {
     node.children.forEach((child) => {
@@ -459,36 +450,11 @@ async function initializePreview(requestToken: number) {
     loadError.value = 'No node available for collider editing.'
     return
   }
-  const nodesToPrepare = collectNodeAndDescendants(node)
-  let runtimeObject = getRuntimeObject(targetId)
-
-  if (node.nodeType === 'Group') {
-    try {
-      await sceneStore.ensureSceneAssetsReady({ nodes: nodesToPrepare, showOverlay: false, refreshViewport: false })
-    } catch (error) {
-      console.warn('[RigidbodyColliderEditor] Failed to prepare assets for group preview', error)
-    }
-    if (!props.visible || requestToken !== previewRefreshToken) {
-      return
-    }
-    runtimeObject = getRuntimeObject(targetId)
-  } else if (!runtimeObject) {
-    try {
-      await sceneStore.ensureSceneAssetsReady({ nodes: nodesToPrepare, showOverlay: false, refreshViewport: false })
-    } catch (error) {
-      console.warn('[RigidbodyColliderEditor] Failed to prepare assets for preview', error)
-    }
-    if (!props.visible || requestToken !== previewRefreshToken) {
-      return
-    }
-    runtimeObject = getRuntimeObject(targetId)
-  }
-
-  if (node.nodeType !== 'Group' && !runtimeObject) {
-    loadError.value = 'Unable to load the target mesh into the preview.'
+  const runtimeObject = getRuntimeObject(targetId)
+  if (!runtimeObject && node.nodeType !== 'Group') {
+    loadError.value = 'No runtime object available for collider editing.'
     return
   }
-
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
   renderer.shadowMap.enabled = false
   renderer.setPixelRatio(window.devicePixelRatio)
@@ -510,30 +476,20 @@ async function initializePreview(requestToken: number) {
   const directional = new THREE.DirectionalLight(0xffffff, 0.8)
   directional.position.set(8, 12, 6)
   previewScene.add(directional)
-  const grid = new THREE.GridHelper(40, 20, 0x242832, 0x181c24)
-  grid.position.y = -2
-  previewScene.add(grid)
 
   let clone: THREE.Object3D | null = null
 
   if (node.nodeType === 'Group') {
+    // For groups, recreate the full hierarchy so child meshes (including instanced ones) appear in the preview
     clone = cloneNodeForPreview(node)
-    if (!clone) {
-      loadError.value = 'Unable to assemble the selected group for preview.'
-      disposePreview()
-      return
+    if (!clone && runtimeObject) {
+      clone = cloneRuntimeObject(runtimeObject, node)
     }
   } else if (runtimeObject) {
-    clone = cloneRuntimeObject(runtimeObject)
-    if (!clone) {
-      loadError.value = 'The instanced model is not available for preview.'
-      disposePreview()
-      return
-    }
+    clone = cloneRuntimeObject(runtimeObject, node)
   }
-
   if (!clone) {
-    loadError.value = 'No preview mesh is available.'
+    loadError.value = 'The instanced model is not available for preview.'
     disposePreview()
     return
   }
@@ -833,10 +789,9 @@ onUnmounted(() => {
   top: 0;
   left: 0;
   transform: translateX(-100%);
-  
 
-  width: min(860px, 70vw);
-  max-height: 70vh;
+  width: min(1100px, 85vw);
+  max-height: 120vh;
   display: flex;
   flex-direction: column;
   border-radius: 5px;
