@@ -32,6 +32,7 @@ import {
 const emit = defineEmits<{
   (event: 'open-wheel-details', payload: { id: string }): void
   (event: 'close-wheel-details'): void
+  (event: 'open-suspension-editor'): void
 }>()
 
 const AXIS_OPTIONS: Array<{ label: string; value: 0 | 1 | 2 }> = [
@@ -400,6 +401,13 @@ function handleRemoveComponent(): void {
   }
   sceneStore.removeNodeComponent(nodeId, component.id)
 }
+
+function handleOpenSuspensionEditor(): void {
+  if (!vehicleComponent.value?.enabled) {
+    return
+  }
+  emit('open-suspension-editor')
+}
 </script>
 
 <template>
@@ -408,6 +416,18 @@ function handleRemoveComponent(): void {
       <div class="vehicle-panel__header">
         <span class="vehicle-panel__title">Vehicle</span>
         <v-spacer />
+        <v-btn
+          v-if="vehicleComponent"
+          icon
+          variant="text"
+          size="small"
+          class="component-menu-btn"
+          :disabled="!vehicleComponent?.enabled"
+          title="Open suspension editor"
+          @click.stop="handleOpenSuspensionEditor"
+        >
+          <v-icon size="18">mdi-steering</v-icon>
+        </v-btn>
         <v-menu
           v-if="vehicleComponent"
           location="bottom end"
