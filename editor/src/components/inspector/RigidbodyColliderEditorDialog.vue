@@ -713,6 +713,44 @@ onUnmounted(() => {
 
         <div class="collider-editor__body">
           <div class="collider-editor__preview">
+            <div class="collider-editor__overlay">
+              <v-select
+                class="collider-editor__shape-select"
+                label="Collider Shape"
+                density="compact"
+                variant="outlined"
+                hide-details
+                :items="COLLIDER_SHAPE_OPTIONS"
+                item-title="label"
+                item-value="value"
+                :model-value="colliderKind"
+                :disabled="!isReady"
+                @update:modelValue="handleShapeKindChange"
+              />
+              <div class="collider-editor__overlay-actions">
+                <v-btn
+                  size="small"
+                  variant="tonal"
+                  prepend-icon="mdi-axis-arrow"
+                  :color="transformMode === 'translate' ? 'primary' : undefined"
+                  :disabled="!isReady"
+                  @click="transformMode = 'translate'"
+                >
+                  Move
+                </v-btn>
+                <v-btn
+                  size="small"
+                  variant="tonal"
+                  prepend-icon="mdi-crop"
+                  :color="transformMode === 'scale' ? 'primary' : undefined"
+                  :disabled="!isReady"
+                  @click="transformMode = 'scale'"
+                >
+                  Scale
+                </v-btn>
+              </div>
+            </div>
+
             <div v-if="loadError" class="collider-editor__empty">
               {{ loadError }}
             </div>
@@ -721,32 +759,7 @@ onUnmounted(() => {
                 Preparing preview…
               </div>
             </div>
-          </div>
-          <div class="collider-editor__controls">
-            <v-select
-              label="Collider Shape"
-              density="compact"
-              variant="underlined"
-              :items="COLLIDER_SHAPE_OPTIONS"
-              item-title="label"
-              item-value="value"
-              :model-value="colliderKind"
-              :disabled="!isReady"
-              @update:modelValue="handleShapeKindChange"
-            />
-            <v-btn-toggle
-              v-model="transformMode"
-              density="comfortable"
-              class="collider-editor__mode-toggle"
-              :disabled="!isReady"
-            >
-              <v-btn value="translate" prepend-icon="mdi-axis-arrow">
-                Move
-              </v-btn>
-              <v-btn value="scale" prepend-icon="mdi-crop">
-                Scale
-              </v-btn>
-            </v-btn-toggle>
+
             <div class="collider-editor__stats" v-if="isReady">
               <div class="collider-editor__stats-row">
                 Size
@@ -757,8 +770,9 @@ onUnmounted(() => {
                 <span>{{ colliderOffset.x.toFixed(2) }}, {{ colliderOffset.y.toFixed(2) }}, {{ colliderOffset.z.toFixed(2) }} m</span>
               </div>
             </div>
+
             <div class="collider-editor__hint">
-              Drag the gizmo in the preview to reposition or resize the collider mesh. Use the mode toggle to switch between translation and scaling.
+              Drag the gizmo to move or scale the collider. Use the buttons above to switch modes or change the mesh shape on the left.
             </div>
           </div>
         </div>
@@ -824,15 +838,15 @@ onUnmounted(() => {
 }
 
 .collider-editor__body {
-  display: grid;
-  grid-template-columns: 3fr 2fr;
-  gap: 1rem;
-  padding: 1rem;
-  min-height: 360px;
+  display: flex;
+  flex-direction: column;
+  padding: 0.75rem;
+  min-height: 520px;
 }
 
 .collider-editor__preview {
   position: relative;
+  flex: 1;
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 10px;
   background: #06070b;
@@ -843,6 +857,7 @@ onUnmounted(() => {
   width: 100%;
   height: 100%;
   position: relative;
+  min-height: 520px;
 }
 
 .collider-editor__canvas canvas {
@@ -851,21 +866,46 @@ onUnmounted(() => {
   display: block;
 }
 
-.collider-editor__controls {
+.collider-editor__overlay {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  z-index: 2;
   display: flex;
-  flex-direction: column;
-  gap: 0.9rem;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.55rem;
+  border-radius: 10px;
+  background: rgba(12, 14, 19, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(10px);
 }
 
-.collider-editor__mode-toggle {
-  align-self: flex-start;
+.collider-editor__shape-select {
+  max-width: 240px;
+}
+
+.collider-editor__overlay-actions {
+  display: flex;
+  gap: 0.4rem;
 }
 
 .collider-editor__stats {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 2;
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: 8px;
+  background: rgba(12, 14, 19, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   font-size: 0.88rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
 }
 
 .collider-editor__stats-row {
@@ -875,8 +915,18 @@ onUnmounted(() => {
 }
 
 .collider-editor__hint {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 2;
+  max-width: 320px;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  background: rgba(12, 14, 19, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   font-size: 0.8rem;
-  color: rgba(233, 236, 241, 0.62);
+  color: rgba(233, 236, 241, 0.72);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
 }
 
 .collider-editor__empty {
