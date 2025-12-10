@@ -426,7 +426,7 @@ function handleOpenSuspensionEditor(): void {
           title="Open suspension editor"
           @click.stop="handleOpenSuspensionEditor"
         >
-          <v-icon size="18">mdi-shock-absorber</v-icon>
+          <v-icon size="18">mdi-steering</v-icon>
         </v-btn>
         <v-menu
           v-if="vehicleComponent"

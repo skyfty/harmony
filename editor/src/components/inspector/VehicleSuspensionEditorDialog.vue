@@ -876,31 +876,18 @@ onUnmounted(() => {
                 />
                 <v-btn
                   size="small"
-                  prepend-icon="mdi-arrow-expand-horizontal"
+                  icon="mdi-arrow-expand-horizontal"
                   variant="tonal"
                   color="primary"
                   :disabled="isDisabled"
                   @click="equalizeTrackWidth"
                 >
-                  Equal Width
                 </v-btn>
               </div>
-              <v-btn
-                size="small"
-                prepend-icon="mdi-axis-arrow"
-                variant="tonal"
-                color="primary"
-                disabled
-              >
-                Move
-              </v-btn>
             </div>
             <div class="suspension-editor__canvas" ref="previewContainerRef">
               <div v-if="!isReady" class="suspension-editor__empty">Preparing preview…</div>
               <div v-if="loadError" class="suspension-editor__empty">{{ loadError }}</div>
-            </div>
-            <div class="suspension-editor__hint">
-              Drag gizmo handles to move group connection points. Sliders adjust shared wheel properties.
             </div>
           </div>
 
