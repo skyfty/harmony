@@ -89,6 +89,7 @@ export type VehicleInstance = {
   axisForwardIndex: 0 | 1 | 2
   lastChassisPosition?: THREE.Vector3
   hasChassisPositionSample?: boolean
+  initialChassisQuaternion?: THREE.Quaternion
 }
 
 export type VehicleDriveCameraOptions = { immediate?: boolean; applyOrbitTween?: boolean; followControlsDirty?: boolean }
@@ -135,9 +136,25 @@ export type VehicleDriveCameraContext = {
   desiredOrbitTarget?: THREE.Vector3
 }
 
-const VEHICLE_ENGINE_FORCE = 500
-const VEHICLE_BRAKE_FORCE = 45
-const VEHICLE_STEER_ANGLE = THREE.MathUtils.degToRad(32)
+const VEHICLE_ENGINE_FORCE = 320
+const VEHICLE_BRAKE_FORCE = 42
+const VEHICLE_SPEED_SOFT_CAP = 8.5 // m/s (~30 km/h) before gentle limiting
+const VEHICLE_SPEED_HARD_CAP = 12.5 // m/s (~45 km/h) absolute upper bound
+const VEHICLE_SPEED_SOFT_CAP_SQ = VEHICLE_SPEED_SOFT_CAP * VEHICLE_SPEED_SOFT_CAP
+const VEHICLE_SPEED_HARD_CAP_SQ = VEHICLE_SPEED_HARD_CAP * VEHICLE_SPEED_HARD_CAP
+const VEHICLE_SPEED_LIMIT_DAMPING = 0.08
+const VEHICLE_COASTING_DAMPING = 0.04
+const VEHICLE_SMOOTH_STOP_DEFAULT_DAMPING = 0.18
+const VEHICLE_SMOOTH_STOP_MAX_DAMPING = 0.45
+const VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD = 0.14
+const VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD_SQ = VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD * VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD
+const VEHICLE_SMOOTH_STOP_FINAL_SPEED = 0.05
+const VEHICLE_SMOOTH_STOP_FINAL_SPEED_SQ = VEHICLE_SMOOTH_STOP_FINAL_SPEED * VEHICLE_SMOOTH_STOP_FINAL_SPEED
+const VEHICLE_SMOOTH_STOP_MIN_BLEND = 0.25
+const VEHICLE_STEER_ANGLE = THREE.MathUtils.degToRad(26)
+const VEHICLE_STEER_SOFT_CAP = 4.2 // m/s speed where steering starts damping
+const VEHICLE_STEER_HARD_CAP = 10 // m/s speed where steering is strongly limited
+const VEHICLE_STEER_SOFT_CAP_SQ = VEHICLE_STEER_SOFT_CAP * VEHICLE_STEER_SOFT_CAP
 const VEHICLE_CAMERA_WORLD_UP = new THREE.Vector3(0, 1, 0)
 const VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE = 6
 const VEHICLE_CAMERA_FALLBACK_HEIGHT = 1.35
@@ -151,21 +168,24 @@ const VEHICLE_EXIT_VERTICAL_MIN = 0.6
 const VEHICLE_SIZE_FALLBACK = { width: 2.4, height: 1.4, length: 4.2 }
 const VEHICLE_FOLLOW_DISTANCE_MIN = 1
 const VEHICLE_FOLLOW_DISTANCE_MAX = 10
-const VEHICLE_FOLLOW_HEIGHT_RATIO = 1.35
-const VEHICLE_FOLLOW_HEIGHT_MIN = 4.8
-const VEHICLE_FOLLOW_DISTANCE_LENGTH_RATIO = 1.8
+const VEHICLE_FOLLOW_HEIGHT_RATIO = 2.15
+const VEHICLE_FOLLOW_HEIGHT_MIN = 6.8
+const VEHICLE_FOLLOW_DISTANCE_LENGTH_RATIO = 2.05
 const VEHICLE_FOLLOW_DISTANCE_WIDTH_RATIO = 0.4
-const VEHICLE_FOLLOW_DISTANCE_DIAGONAL_RATIO = 0.35
-const VEHICLE_FOLLOW_TARGET_LIFT_RATIO = 0.9
-const VEHICLE_FOLLOW_TARGET_LIFT_MIN = 3
+const VEHICLE_FOLLOW_DISTANCE_DIAGONAL_RATIO = 0.4
+const VEHICLE_FOLLOW_TARGET_LIFT_RATIO = 0.82
+const VEHICLE_FOLLOW_TARGET_LIFT_MIN = 3.2
 const VEHICLE_FOLLOW_POSITION_LERP_SPEED = 8
 const VEHICLE_FOLLOW_TARGET_LERP_SPEED = 10
 const VEHICLE_FOLLOW_HEADING_LERP_SPEED = 5.5
-const VEHICLE_FOLLOW_TARGET_FORWARD_RATIO = 0.55
-const VEHICLE_FOLLOW_TARGET_FORWARD_MIN = 1.8
+const VEHICLE_FOLLOW_TARGET_FORWARD_RATIO = 0.68
+const VEHICLE_FOLLOW_TARGET_FORWARD_MIN = 2.5
 const VEHICLE_FOLLOW_LOOKAHEAD_TIME = 0.18
 const VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX = 3
 const VEHICLE_FOLLOW_LOOKAHEAD_MIN_SPEED_SQ = 0.9
+const VEHICLE_FOLLOW_LOOKAHEAD_BLEND_START = 0.25
+const VEHICLE_FOLLOW_LOOKAHEAD_FULL_SPEED = Math.sqrt(VEHICLE_FOLLOW_LOOKAHEAD_MIN_SPEED_SQ)
+const VEHICLE_FOLLOW_LOOKAHEAD_BLEND_RANGE = Math.max(1e-3, VEHICLE_FOLLOW_LOOKAHEAD_FULL_SPEED - VEHICLE_FOLLOW_LOOKAHEAD_BLEND_START)
 const VEHICLE_FOLLOW_ANCHOR_LERP_SPEED = 4.5
 const VEHICLE_FOLLOW_BACKWARD_DOT_THRESHOLD = -0.25
 const VEHICLE_FOLLOW_FORWARD_RELEASE_DOT = 0.25
@@ -261,6 +281,12 @@ export class VehicleDriveController {
     tempQuaternion: new THREE.Quaternion(),
     tempVector: new THREE.Vector3(),
   }
+  private readonly smoothStopState = {
+    active: false,
+    damping: VEHICLE_SMOOTH_STOP_DEFAULT_DAMPING,
+    stopSpeedSq: VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD_SQ,
+    initialSpeedSq: VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD_SQ,
+  }
 
   constructor(deps: VehicleDriveControllerDeps, bindings: VehicleDriveControllerBindings) {
     this.deps = deps
@@ -313,6 +339,29 @@ export class VehicleDriveController {
     this.bindings.uiOverride.value = mode
   }
 
+  requestSmoothStop(options: { damping?: number; stopSpeed?: number; initialSpeed?: number } = {}): void {
+    if (!this.state.active) {
+      return
+    }
+    const damping = typeof options.damping === 'number' ? options.damping : VEHICLE_SMOOTH_STOP_DEFAULT_DAMPING
+    const stopSpeed = typeof options.stopSpeed === 'number' ? options.stopSpeed : VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD
+    const initialSpeed = typeof options.initialSpeed === 'number' && Number.isFinite(options.initialSpeed)
+      ? Math.max(options.initialSpeed, stopSpeed)
+      : Math.sqrt(this.smoothStopState.stopSpeedSq)
+    this.smoothStopState.active = true
+    this.smoothStopState.damping = Math.max(
+      VEHICLE_COASTING_DAMPING,
+      Math.min(VEHICLE_SMOOTH_STOP_MAX_DAMPING, damping),
+    )
+    this.smoothStopState.stopSpeedSq = Math.max(1e-4, stopSpeed * stopSpeed)
+    this.smoothStopState.initialSpeedSq = Math.max(this.smoothStopState.stopSpeedSq, initialSpeed * initialSpeed, 1e-4)
+  }
+
+  clearSmoothStop(): void {
+    this.smoothStopState.active = false
+    this.smoothStopState.initialSpeedSq = VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD_SQ
+  }
+
   resetInputs(): void {
     const flags = this.inputFlags
     flags.forward = false
@@ -327,6 +376,7 @@ export class VehicleDriveController {
     input.throttle = 0
     input.brake = 0
     input.steering = 0
+    this.clearSmoothStop()
     this.recomputeInputs()
   }
 
@@ -502,6 +552,7 @@ export class VehicleDriveController {
     state.sourceEvent = null
     this.bindings.cameraFollowState.initialized = false
     this.resetFollowCameraOffset()
+    this.clearSmoothStop()
     this.bindings.exitBusy.value = false
     this.cameraMode = 'first-person'
     if (this.deps.setCameraCaging) {
@@ -526,11 +577,82 @@ export class VehicleDriveController {
       return
     }
     const vehicle = instance.vehicle
+    const chassisBody = vehicle.chassisBody ?? null
+    const velocity = chassisBody?.velocity ?? null
     const throttle = this.input.throttle
     const steeringInput = this.input.steering
     const brakeInput = this.input.brake
-    const engineForce = throttle * VEHICLE_ENGINE_FORCE
-    const steeringValue = steeringInput * VEHICLE_STEER_ANGLE
+    const smoothStop = this.smoothStopState
+    if (Math.abs(throttle) > 0.05) {
+      smoothStop.active = false
+    }
+    let engineForce = throttle * VEHICLE_ENGINE_FORCE
+    let speedSq = 0
+    if (velocity && chassisBody && instance.axisForward) {
+      speedSq = velocity.lengthSquared()
+      const throttleSign = Math.sign(throttle)
+      if (throttleSign !== 0 && speedSq > VEHICLE_SPEED_SOFT_CAP_SQ) {
+        const speed = Math.sqrt(speedSq)
+        const range = Math.max(0.1, VEHICLE_SPEED_HARD_CAP - VEHICLE_SPEED_SOFT_CAP)
+        const excess = Math.min(Math.max(0, speed - VEHICLE_SPEED_SOFT_CAP), range)
+        const slowRatio = Math.min(1, excess / range)
+        this.temp.tempQuaternion.set(
+          chassisBody.quaternion.x,
+          chassisBody.quaternion.y,
+          chassisBody.quaternion.z,
+          chassisBody.quaternion.w,
+        )
+        const forwardWorld = this.temp.cameraForward
+        forwardWorld.copy(instance.axisForward).normalize()
+        if (forwardWorld.lengthSq() < 1e-6) {
+          forwardWorld.set(0, 0, 1)
+        }
+        forwardWorld.applyQuaternion(this.temp.tempQuaternion).normalize()
+        const forwardVelocity = velocity.x * forwardWorld.x + velocity.y * forwardWorld.y + velocity.z * forwardWorld.z
+        const sameDirection = Math.sign(forwardVelocity) === throttleSign
+        if (sameDirection) {
+          engineForce *= 1 - 0.7 * slowRatio
+          if (speedSq >= VEHICLE_SPEED_HARD_CAP_SQ && throttleSign > 0) {
+            engineForce = 0
+          }
+        }
+      }
+      if (speedSq >= VEHICLE_SPEED_HARD_CAP_SQ) {
+        velocity.scale(1 - VEHICLE_SPEED_LIMIT_DAMPING, velocity)
+      } else if (Math.abs(throttle) < 0.05) {
+        let damping = VEHICLE_COASTING_DAMPING
+        if (smoothStop.active) {
+          const startSpeedSq = Math.max(1e-4, smoothStop.initialSpeedSq)
+          const progress = startSpeedSq > 0 ? 1 - Math.min(1, speedSq / startSpeedSq) : 1
+          const eased = progress > 0 ? progress * progress : 0
+          const blend = Math.max(VEHICLE_SMOOTH_STOP_MIN_BLEND, Math.min(1, eased))
+          const targetDamping = Math.min(smoothStop.damping, VEHICLE_SMOOTH_STOP_MAX_DAMPING)
+          damping = THREE.MathUtils.lerp(VEHICLE_COASTING_DAMPING, targetDamping, blend)
+        }
+        const clampedDamping = Math.min(0.95, Math.max(0, damping))
+        velocity.scale(1 - clampedDamping, velocity)
+        if (smoothStop.active) {
+          const nextSpeedSq = velocity.lengthSquared()
+          if (nextSpeedSq <= VEHICLE_SMOOTH_STOP_FINAL_SPEED_SQ) {
+            velocity.set(0, 0, 0)
+            smoothStop.active = false
+            speedSq = 0
+          } else {
+            speedSq = nextSpeedSq
+          }
+        } else {
+          speedSq = velocity.lengthSquared()
+        }
+      }
+    }
+    let steeringValue = steeringInput * VEHICLE_STEER_ANGLE
+    if (speedSq > VEHICLE_STEER_SOFT_CAP_SQ) {
+      const speed = Math.sqrt(speedSq)
+      const range = Math.max(0.1, VEHICLE_STEER_HARD_CAP - VEHICLE_STEER_SOFT_CAP)
+      const excess = Math.min(Math.max(0, speed - VEHICLE_STEER_SOFT_CAP), range)
+      const slowRatio = Math.min(1, excess / range)
+      steeringValue *= 1 - 0.65 * slowRatio
+    }
     const brakeForce = brakeInput * VEHICLE_BRAKE_FORCE
     for (let index = 0; index < vehicle.wheelInfos.length; index += 1) {
       vehicle.setBrake(brakeForce, index)
@@ -555,10 +677,20 @@ export class VehicleDriveController {
       return false
     }
     const temp = this.temp
-    rigidbody.object.updateMatrixWorld(true)
-    rigidbody.object.getWorldPosition(temp.seatPosition)
-    rigidbody.object.getWorldQuaternion(temp.resetQuaternion)
-    const worldForward = temp.seatForward.copy(instance.axisForward).applyQuaternion(temp.resetQuaternion)
+    const chassisPosition = temp.seatPosition.set(
+      rigidbody.body.position.x,
+      rigidbody.body.position.y,
+      rigidbody.body.position.z,
+    )
+    chassisPosition.y += VEHICLE_RESET_LIFT
+    const sourceQuaternion = temp.tempQuaternion
+    if (instance.initialChassisQuaternion) {
+      sourceQuaternion.copy(instance.initialChassisQuaternion)
+    } else {
+      rigidbody.object.updateMatrixWorld(true)
+      rigidbody.object.getWorldQuaternion(sourceQuaternion)
+    }
+    const worldForward = temp.seatForward.copy(instance.axisForward).applyQuaternion(sourceQuaternion)
     if (worldForward.lengthSq() < 1e-6) {
       worldForward.set(0, 0, 1)
     }
@@ -568,19 +700,14 @@ export class VehicleDriveController {
     } else {
       worldForward.normalize()
     }
-    const worldUp = temp.seatUp.copy(instance.axisUp).applyQuaternion(temp.resetQuaternion)
-    if (worldUp.lengthSq() < 1e-6) {
-      worldUp.set(0, 1, 0)
-    } else {
-      worldUp.normalize()
-    }
+    const worldUp = temp.seatUp.set(0, 1, 0)
     const worldRight = temp.seatRight.copy(worldUp).cross(worldForward)
     if (worldRight.lengthSq() < 1e-6) {
       worldRight.set(1, 0, 0)
     } else {
       worldRight.normalize()
     }
-    const correctedForward = temp.seatForward.copy(worldRight).cross(worldUp)
+    const correctedForward = temp.cameraForward.copy(worldRight).cross(worldUp)
     if (correctedForward.lengthSq() < 1e-6) {
       correctedForward.set(0, 0, 1)
     } else {
@@ -588,9 +715,7 @@ export class VehicleDriveController {
     }
     temp.cameraMatrix.makeBasis(worldRight, worldUp, correctedForward)
     temp.resetQuaternion.setFromRotationMatrix(temp.cameraMatrix)
-    const resetPosition = temp.seatPosition
-    resetPosition.y += VEHICLE_RESET_LIFT
-    rigidbody.body.position.set(resetPosition.x, resetPosition.y, resetPosition.z)
+    rigidbody.body.position.set(chassisPosition.x, chassisPosition.y, chassisPosition.z)
     rigidbody.body.velocity.set(0, 0, 0)
     rigidbody.body.angularVelocity.set(0, 0, 0)
     rigidbody.body.quaternion.set(
@@ -599,7 +724,7 @@ export class VehicleDriveController {
       temp.resetQuaternion.z,
       temp.resetQuaternion.w,
     )
-    rigidbody.object.position.copy(resetPosition)
+    rigidbody.object.position.copy(chassisPosition)
     rigidbody.object.quaternion.copy(temp.resetQuaternion)
     rigidbody.object.updateMatrixWorld(true)
     this.bindings.cameraFollowState.initialized = false
@@ -695,14 +820,26 @@ export class VehicleDriveController {
     const follow = this.bindings.cameraFollowState
     const local = follow.localOffset
     const minBack = Math.max(placement.distance, VEHICLE_FOLLOW_DISTANCE_MIN)
-    const forwardComponent = local.z
-    if (!Number.isFinite(forwardComponent)) {
-      local.set(0, placement.heightOffset, -minBack)
+    const minHeight = Math.max(placement.heightOffset, VEHICLE_FOLLOW_HEIGHT_MIN)
+    if (!Number.isFinite(local.x) || !Number.isFinite(local.y) || !Number.isFinite(local.z)) {
+      local.set(0, minHeight, -minBack)
       follow.hasLocalOffset = true
       return
     }
-    if (forwardComponent > -minBack) {
+    let adjusted = false
+    if (local.z > -minBack) {
       local.z = -minBack
+      adjusted = true
+    }
+    if (local.y < minHeight) {
+      local.y = minHeight
+      adjusted = true
+    }
+    if (Math.abs(local.x) > 1e-4) {
+      local.x = 0
+      adjusted = true
+    }
+    if (adjusted) {
       follow.hasLocalOffset = true
     }
   }
@@ -788,14 +925,24 @@ export class VehicleDriveController {
     if (vehicleVelocity) {
       temp.planarVelocity.set(vehicleVelocity.x, 0, vehicleVelocity.z)
       const planarSpeedSq = temp.planarVelocity.lengthSq()
-      if (planarSpeedSq > VEHICLE_FOLLOW_LOOKAHEAD_MIN_SPEED_SQ) {
+      const planarSpeed = Math.sqrt(planarSpeedSq)
+      const lookaheadBlend = planarSpeed > VEHICLE_FOLLOW_LOOKAHEAD_BLEND_START
+        ? Math.min(
+            1,
+            (planarSpeed - VEHICLE_FOLLOW_LOOKAHEAD_BLEND_START) / VEHICLE_FOLLOW_LOOKAHEAD_BLEND_RANGE,
+          )
+        : 0
+      if (lookaheadBlend > 0) {
         temp.predictionOffset.copy(temp.planarVelocity)
-        temp.predictionOffset.multiplyScalar(VEHICLE_FOLLOW_LOOKAHEAD_TIME)
+        temp.predictionOffset.multiplyScalar(VEHICLE_FOLLOW_LOOKAHEAD_TIME * lookaheadBlend)
         const offsetLength = temp.predictionOffset.length()
-        if (offsetLength > VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX) {
-          temp.predictionOffset.multiplyScalar(VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX / offsetLength)
+        const maxLookahead = Math.max(0, VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX * lookaheadBlend)
+        if (maxLookahead > 1e-4 && offsetLength > maxLookahead) {
+          temp.predictionOffset.multiplyScalar(maxLookahead / offsetLength)
         }
-        lookaheadActive = true
+        lookaheadActive = maxLookahead > 1e-4 && temp.predictionOffset.lengthSq() > 1e-8
+      } else {
+        temp.predictionOffset.set(0, 0, 0)
       }
       if (planarSpeedSq > VEHICLE_FOLLOW_COLLISION_LOCK_SPEED_SQ) {
         const normalizedDir = temp.tempVector.copy(temp.planarVelocity)

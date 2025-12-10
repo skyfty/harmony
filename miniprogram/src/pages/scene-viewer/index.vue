@@ -1,6 +1,13 @@
 <template>
   <view class="viewer-page">
-    <view class="viewer-canvas-wrapper">
+    <view
+      class="viewer-canvas-wrapper"
+      @touchstart.capture="handleDrivePadTouchStart"
+      @touchmove.capture="handleDrivePadTouchMove"
+      @touchend.capture="handleDrivePadTouchEnd"
+      @touchcancel.capture="handleDrivePadTouchEnd"
+      @mousedown.capture="handleDrivePadMouseDown"
+    >
       <PlatformCanvas
         v-if="!error"
         :canvas-id="canvasId"
@@ -126,6 +133,32 @@
           </view>
         </view>
       </view>
+      <view v-if="overlayActive" class="viewer-overlay">
+        <view class="viewer-overlay__content viewer-overlay__card">
+          <text v-if="overlayTitle" class="viewer-overlay__title">{{ overlayTitle }}</text>
+          <view class="viewer-progress">
+            <view class="viewer-progress__bar">
+              <view
+                class="viewer-progress__bar-fill"
+                :style="{ width: overlayPercent + '%' }"
+              />
+
+
+
+
+
+
+
+
+
+            </view>
+            <view class="viewer-progress__stats">
+              <text class="viewer-progress__percent">{{ overlayPercent }}%</text>
+              <text v-if="overlayBytesLabel" class="viewer-progress__bytes">{{ overlayBytesLabel }}</text>
+            </view>
+          </view>
+        </view>
+      </view>
       <view v-if="error" class="viewer-overlay error">
         <text>{{ error }}</text>
       </view>
@@ -227,7 +260,10 @@
           </button>
         </view>
         <view
-          class="viewer-drive-cluster viewer-drive-cluster--joystick"
+          v-show="drivePadState.visible"
+          class="viewer-drive-cluster viewer-drive-cluster--joystick viewer-drive-cluster--floating"
+          :class="{ 'is-fading': drivePadState.fading }"
+          :style="drivePadStyle"
         >
           <view
             id="viewer-drive-joystick"
@@ -261,23 +297,6 @@
           <text class="viewer-drive-speed-gauge__value">{{ vehicleSpeedKmh }}</text>
           <text class="viewer-drive-speed-gauge__unit">km/h</text>
         </view>
-      </view>
-      <view
-        v-if="vehicleDriveUi.visible"
-        class="viewer-drive-brake"
-      >
-        <button
-          class="viewer-drive-brake-button"
-          :class="{ 'is-active': vehicleDriveInputFlags.brake }"
-          type="button"
-          hover-class="none"
-          aria-label="刹车"
-          @touchstart.stop.prevent="handleBrakeButtonPress"
-          @touchend.stop.prevent="handleBrakeButtonRelease"
-          @touchcancel.stop.prevent="handleBrakeButtonRelease"
-        >
-          <text>刹车</text>
-        </button>
       </view>
     </view>
     <view class="viewer-footer" v-if="warnings.length">
@@ -889,6 +908,8 @@ const JOYSTICK_INPUT_RADIUS = 64;
 const VEHICLE_SPEED_GAUGE_MAX_MPS = 32;
 const JOYSTICK_VISUAL_RANGE = 44;
 const JOYSTICK_DEADZONE = 0.25;
+const VEHICLE_SMOOTH_STOP_TRIGGER_SPEED = 0.6;
+const VEHICLE_SMOOTH_STOP_MIN_THROTTLE = 0.05;
 
 type VehicleWheelBinding = {
   nodeId: string | null;
@@ -1063,6 +1084,17 @@ const joystickState = reactive({
   centerY: 0,
   ready: false,
 });
+const DRIVE_PAD_MOUSE_POINTER_ID = -2;
+const DRIVE_PAD_FADE_MS = 220;
+const drivePadState = reactive({ visible: false, fading: false, x: 0, y: 0 });
+const drivePadStyle = computed(() => ({
+  left: `${drivePadState.x}px`,
+  top: `${drivePadState.y}px`,
+}));
+let drivePadFadeTimer: ReturnType<typeof setTimeout> | null = null;
+let drivePadMouseTracking = false;
+const isBrowserEnvironment = typeof window !== 'undefined';
+const drivePadViewportRect = { top: 0, left: 0, height: getViewportHeight() };
 const steeringKeyboardValue = ref(0);
 const steeringKeyboardTarget = ref(0);
 const joystickKnobStyle = computed(() => {
@@ -1241,6 +1273,8 @@ watch(
     if (visible) {
       refreshJoystickMetrics();
     } else {
+      detachDrivePadMouseListeners();
+      hideDrivePadImmediate();
       deactivateJoystick(true);
     }
   },
@@ -3183,6 +3217,12 @@ function createVehicleInstance(
     rigidbody.body.position.y,
     rigidbody.body.position.z,
   );
+  const initialChassisQuaternion = new THREE.Quaternion(
+    rigidbody.body.quaternion.x,
+    rigidbody.body.quaternion.y,
+    rigidbody.body.quaternion.z,
+    rigidbody.body.quaternion.w,
+  ).normalize();
   return {
     nodeId: node.id,
     vehicle,
@@ -3198,6 +3238,7 @@ function createVehicleInstance(
     axisForward: axisForwardVector,
     lastChassisPosition: initialChassisPosition,
     hasChassisPositionSample: false,
+    initialChassisQuaternion,
   };
 }
 
@@ -4774,7 +4815,6 @@ function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look
   resolveBehaviorToken(event.token, { type: 'continue' });
 }
 
-type VehicleDriveControlKey = keyof VehicleDriveControlFlags;
 
 function setVehicleDriveUiOverride(mode: 'auto' | 'show' | 'hide'): void {
   vehicleDriveUiOverride.value = mode;
@@ -4891,6 +4931,7 @@ function setJoystickVector(x: number, y: number): void {
 function deactivateJoystick(reset: boolean): void {
   joystickState.active = false;
   joystickState.pointerId = -1;
+  joystickState.ready = false;
   if (reset) {
     setJoystickVector(0, 0);
   }
@@ -4978,6 +5019,203 @@ function extractTouchById(event: TouchEvent, identifier: number): Touch | null {
   return null;
 }
 
+function getViewportHeight(): number {
+  if (typeof window !== 'undefined' && Number.isFinite(window.innerHeight)) {
+    return window.innerHeight;
+  }
+  return initialSystemInfo?.windowHeight ?? initialSystemInfo?.screenHeight ?? 0;
+}
+
+function shouldActivateDrivePad(clientY: number): boolean {
+  const height = drivePadViewportRect.height > 0 ? drivePadViewportRect.height : getViewportHeight();
+  if (height <= 0) {
+    return true;
+  }
+  return clientY >= drivePadViewportRect.top + height / 2;
+}
+
+function updateDrivePadViewportRect(target: EventTarget | null): void {
+  const element = target as { getBoundingClientRect?: () => DOMRect | ClientRect } | null;
+  if (element && typeof element.getBoundingClientRect === 'function') {
+    const rect = element.getBoundingClientRect();
+    if (rect) {
+      drivePadViewportRect.top = rect.top ?? 0;
+      drivePadViewportRect.left = rect.left ?? 0;
+      drivePadViewportRect.height = rect.height ?? getViewportHeight();
+      return;
+    }
+  }
+  drivePadViewportRect.top = 0;
+  drivePadViewportRect.left = 0;
+  drivePadViewportRect.height = getViewportHeight();
+}
+
+function toDrivePadLocalCoords(x: number, y: number): { x: number; y: number } {
+  return {
+    x: x - drivePadViewportRect.left,
+    y: y - drivePadViewportRect.top,
+  };
+}
+
+function cancelDrivePadFade(): void {
+  if (drivePadFadeTimer) {
+    clearTimeout(drivePadFadeTimer);
+    drivePadFadeTimer = null;
+  }
+}
+
+function summonDrivePadAt(x: number, y: number): void {
+  cancelDrivePadFade();
+  drivePadState.x = x;
+  drivePadState.y = y;
+  drivePadState.visible = true;
+  drivePadState.fading = false;
+}
+
+function scheduleDrivePadFade(): void {
+  if (!drivePadState.visible) {
+    return;
+  }
+  drivePadState.fading = true;
+  cancelDrivePadFade();
+  drivePadFadeTimer = setTimeout(() => {
+    drivePadState.visible = false;
+    drivePadState.fading = false;
+    drivePadFadeTimer = null;
+  }, DRIVE_PAD_FADE_MS);
+}
+
+function hideDrivePadImmediate(): void {
+  if (!drivePadState.visible && !drivePadState.fading) {
+    return;
+  }
+  cancelDrivePadFade();
+  drivePadState.visible = false;
+  drivePadState.fading = false;
+}
+
+function cancelVehicleSmoothStop(): void {
+  vehicleDriveController.clearSmoothStop();
+}
+
+function requestVehicleSmoothStop(): void {
+  if (!vehicleDriveActive.value) {
+    return;
+  }
+  if (Math.abs(vehicleDriveInput.throttle) > VEHICLE_SMOOTH_STOP_MIN_THROTTLE) {
+    return;
+  }
+  if (vehicleSpeed.value <= VEHICLE_SMOOTH_STOP_TRIGGER_SPEED) {
+    return;
+  }
+  vehicleDriveController.requestSmoothStop({ initialSpeed: vehicleSpeed.value });
+}
+
+function handleDrivePadTouchStart(event: TouchEvent): void {
+  if (!vehicleDriveUi.value.visible) {
+    return;
+  }
+  updateDrivePadViewportRect(event.currentTarget);
+  const touch = event.changedTouches?.[0] ?? null;
+  const coords = getTouchCoordinates(touch);
+  if (!coords || !shouldActivateDrivePad(coords.y)) {
+    return;
+  }
+  event.stopPropagation();
+  event.preventDefault();
+  const localCoords = toDrivePadLocalCoords(coords.x, coords.y);
+  cancelVehicleSmoothStop();
+  summonDrivePadAt(localCoords.x, localCoords.y);
+  handleJoystickTouchStart(event);
+}
+
+function handleDrivePadTouchMove(event: TouchEvent): void {
+  if (joystickState.pointerId === -1) {
+    return;
+  }
+  const touch = extractTouchById(event, joystickState.pointerId);
+  if (!touch) {
+    return;
+  }
+  event.stopPropagation();
+  event.preventDefault();
+  handleJoystickTouchMove(event);
+}
+
+function handleDrivePadTouchEnd(event: TouchEvent): void {
+  if (joystickState.pointerId === -1) {
+    return;
+  }
+  const touch = extractTouchById(event, joystickState.pointerId);
+  if (!touch) {
+    return;
+  }
+  event.stopPropagation();
+  event.preventDefault();
+  handleJoystickTouchEnd(event);
+  scheduleDrivePadFade();
+}
+
+function attachDrivePadMouseListeners(): void {
+  if (!isBrowserEnvironment || drivePadMouseTracking) {
+    return;
+  }
+  drivePadMouseTracking = true;
+  window.addEventListener('mousemove', handleDrivePadMouseMove);
+  window.addEventListener('mouseup', handleDrivePadMouseUp);
+  window.addEventListener('blur', handleDrivePadMouseUp);
+}
+
+function detachDrivePadMouseListeners(): void {
+  if (!isBrowserEnvironment || !drivePadMouseTracking) {
+    return;
+  }
+  drivePadMouseTracking = false;
+  window.removeEventListener('mousemove', handleDrivePadMouseMove);
+  window.removeEventListener('mouseup', handleDrivePadMouseUp);
+  window.removeEventListener('blur', handleDrivePadMouseUp);
+}
+
+function handleDrivePadMouseDown(event: MouseEvent): void {
+  if (!vehicleDriveUi.value.visible || event.button !== 0) {
+    return;
+  }
+  updateDrivePadViewportRect(event.currentTarget);
+  const coords = { x: event.clientX, y: event.clientY };
+  if (!shouldActivateDrivePad(coords.y)) {
+    return;
+  }
+  event.stopPropagation();
+  event.preventDefault();
+  const localCoords = toDrivePadLocalCoords(coords.x, coords.y);
+  cancelVehicleSmoothStop();
+  summonDrivePadAt(localCoords.x, localCoords.y);
+  joystickState.pointerId = DRIVE_PAD_MOUSE_POINTER_ID;
+  joystickState.active = true;
+  joystickState.ready = false;
+  setJoystickVector(0, 0);
+  applyJoystickFromPoint(coords.x, coords.y);
+  attachDrivePadMouseListeners();
+}
+
+function handleDrivePadMouseMove(event: MouseEvent): void {
+  if (joystickState.pointerId !== DRIVE_PAD_MOUSE_POINTER_ID) {
+    return;
+  }
+  event.preventDefault();
+  applyJoystickFromPoint(event.clientX, event.clientY);
+}
+
+function handleDrivePadMouseUp(): void {
+  if (joystickState.pointerId === DRIVE_PAD_MOUSE_POINTER_ID) {
+    deactivateJoystick(true);
+    requestVehicleSmoothStop();
+    scheduleDrivePadFade();
+  }
+  detachDrivePadMouseListeners();
+  hideDrivePadImmediate();
+}
+
 function handleJoystickTouchStart(event: TouchEvent): void {
   if (!vehicleDriveActive.value) {
     return;
@@ -4995,6 +5233,7 @@ function handleJoystickTouchStart(event: TouchEvent): void {
   }
   joystickState.pointerId = touch.identifier;
   joystickState.active = true;
+  cancelVehicleSmoothStop();
   applyJoystickFromPoint(coords.x, coords.y);
 }
 
@@ -5022,6 +5261,7 @@ function handleJoystickTouchEnd(event: TouchEvent): void {
     return;
   }
   deactivateJoystick(true);
+  requestVehicleSmoothStop();
 }
 
 function recomputeVehicleDriveInputs(): void {
@@ -5040,28 +5280,6 @@ function resetVehicleDriveInputs(): void {
   deactivateJoystick(true);
   vehicleDriveController.resetInputs();
 }
-
-function handleVehicleDriveControlTouch(
-  key: VehicleDriveControlKey,
-  active: boolean,
-  event?: Event,
-): void {
-  if (event) {
-    if ('stopPropagation' in event && typeof event.stopPropagation === 'function') {
-      event.stopPropagation();
-    }
-    if ('preventDefault' in event && typeof event.preventDefault === 'function') {
-      event.preventDefault();
-    }
-  }
-  vehicleDriveController.setControlFlag(key, active);
-  updateSteeringKeyboardValue();
-  recomputeVehicleDriveInputs();
-}
-
-type VehicleDrivePreparationResult =
-  | { success: true; instance: VehicleInstance }
-  | { success: false; message: string };
 
 type VehicleDriveStartResult =
   | { success: true }
@@ -5097,14 +5315,6 @@ function updateVehicleSpeedFromVehicle(): void {
   }
   const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
   vehicleSpeed.value = Number.isFinite(speed) ? speed : 0;
-}
-
-
-function handleVehicleDriveCameraToggle(): void {
-  if (!vehicleDriveActive.value) {
-    return;
-  }
-  vehicleDriveController.toggleCameraMode();
 }
 
 function handleVehicleDriveResetTap(): void {
@@ -6751,6 +6961,8 @@ onUnload(() => {
     uni.offWindowResize(handleResize);
     resizeListener = null;
   }
+  detachDrivePadMouseListeners();
+  hideDrivePadImmediate();
   if (sceneDownloadTask) {
     sceneDownloadTask.abort();
     sceneDownloadTask = null;
@@ -6770,6 +6982,7 @@ onUnmounted(() => {
     uni.offWindowResize(handleResize);
     resizeListener = null;
   }
+  detachDrivePadMouseListeners();
   if (sceneDownloadTask) {
     sceneDownloadTask.abort();
     sceneDownloadTask = null;
@@ -6784,6 +6997,22 @@ onUnmounted(() => {
 </script>
 
 <style lang="scss">
+:root {
+  --viewer-safe-area-top: 0px;
+}
+
+@supports (padding: env(safe-area-inset-top)) {
+  :root {
+    --viewer-safe-area-top: env(safe-area-inset-top);
+  }
+}
+
+@supports (padding: constant(safe-area-inset-top)) {
+  :root {
+    --viewer-safe-area-top: constant(safe-area-inset-top);
+  }
+}
+
 .viewer-page {
   display: flex;
   flex-direction: column;
@@ -7286,6 +7515,18 @@ onUnmounted(() => {
   align-items: center;
 }
 
+.viewer-drive-cluster--floating {
+  left: 0;
+  top: 0;
+  bottom: auto;
+  transform: translate(-50%, -50%);
+  transition: opacity 0.24s ease;
+}
+
+.viewer-drive-cluster--floating.is-fading {
+  opacity: 0;
+}
+
 .viewer-drive-cluster--throttle {
   right: 16px;
   bottom: 16px;
@@ -7295,7 +7536,7 @@ onUnmounted(() => {
 
 .viewer-drive-cluster--actions {
   right: 16px;
-  top: 16px;
+  top: calc(var(--viewer-safe-area-top, 0px) + 62px);
   align-items: center;
   flex-direction: row;
   gap: 14px;
@@ -7339,12 +7580,15 @@ onUnmounted(() => {
   width: 76px;
   height: 76px;
   border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  background: conic-gradient(from -90deg, rgba(102, 210, 255, 0.95) var(--speed-angle, 0deg), rgba(255, 255, 255, 0.08) var(--speed-angle, 0deg));
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background:
+    conic-gradient(from -90deg, rgba(102, 210, 255, 0.65) var(--speed-angle, 0deg), rgba(255, 255, 255, 0.04) var(--speed-angle, 0deg));
+  background-color: rgba(6, 10, 24, 0.28);
   position: relative;
   box-shadow:
-    inset 0 0 14px rgba(0, 0, 0, 0.45),
-    0 14px 28px rgba(3, 6, 18, 0.65);
+    inset 0 0 14px rgba(0, 0, 0, 0.32),
+    0 14px 28px rgba(3, 6, 18, 0.35);
+  backdrop-filter: blur(8px);
 }
 
 .viewer-drive-speed-gauge::after {
@@ -7352,8 +7596,8 @@ onUnmounted(() => {
   position: absolute;
   inset: 14%;
   border-radius: 50%;
-  background: rgba(4, 6, 18, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(4, 6, 18, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   pointer-events: none;
   z-index: 0;
 }
@@ -7364,11 +7608,11 @@ onUnmounted(() => {
   left: 50%;
   width: 2px;
   height: 36px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(67, 221, 255, 0.95));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(67, 221, 255, 0.8));
   border-radius: 1px;
   transform-origin: center bottom;
   transform: translateX(-50%) rotate(calc(var(--speed-angle, 0deg) - 90deg));
-  box-shadow: 0 0 10px rgba(78, 227, 255, 0.9);
+  box-shadow: 0 0 10px rgba(78, 227, 255, 0.5);
   z-index: 2;
 }
 
@@ -7480,8 +7724,8 @@ onUnmounted(() => {
 }
 
 .viewer-drive-joystick {
-  width: 140px;
-  height: 140px;
+  width: 120px;
+  height: 120px;
   border-radius: 50%;
   position: relative;
   pointer-events: auto;
@@ -7494,19 +7738,20 @@ onUnmounted(() => {
   inset: 0;
   border-radius: 50%;
   background:
-    radial-gradient(circle at 50% 50%, rgba(77, 113, 255, 0.2), transparent 62%),
-    rgba(18, 28, 64, 0.85);
+    radial-gradient(circle at 50% 50%, rgba(77, 113, 255, 0.12), transparent 62%),
+    rgba(18, 28, 64, 0.45);
   border: 2px solid rgba(124, 156, 255, 0.3);
   box-shadow:
     inset 0 0 22px rgba(10, 18, 48, 0.85),
     0 0 28px rgba(32, 80, 220, 0.32);
+  backdrop-filter: blur(6px);
 }
 
 .viewer-drive-joystick__base {
   position: absolute;
-  inset: 18px;
+  inset: 16px;
   border-radius: 50%;
-  background: rgba(50, 72, 148, 0.35);
+  background: rgba(50, 72, 148, 0.18);
   box-shadow: inset 0 0 18px rgba(12, 18, 42, 0.8);
 }
 
@@ -7514,16 +7759,16 @@ onUnmounted(() => {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 54px;
-  height: 54px;
+  width: 48px;
+  height: 48px;
   border-radius: 50%;
   background:
-    radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.25), transparent 58%),
-    rgba(78, 118, 230, 0.95);
-  border: 2px solid rgba(150, 188, 255, 0.55);
+    radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.2), transparent 58%),
+    rgba(78, 118, 230, 0.75);
+  border: 2px solid rgba(150, 188, 255, 0.4);
   box-shadow:
-    inset 0 0 14px rgba(18, 26, 58, 0.9),
-    0 8px 18px rgba(10, 12, 28, 0.6);
+    inset 0 0 14px rgba(18, 26, 58, 0.8),
+    0 8px 18px rgba(10, 12, 28, 0.45);
   transform: translate(-50%, -50%);
   transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
