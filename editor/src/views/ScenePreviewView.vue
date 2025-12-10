@@ -661,6 +661,7 @@ const wheelSteeringQuaternionHelper = new THREE.Quaternion()
 const wheelSpinQuaternionHelper = new THREE.Quaternion()
 const wheelChassisPositionHelper = new THREE.Vector3()
 const wheelChassisDisplacementHelper = new THREE.Vector3()
+const groundBoundsHelper = new THREE.Box3()
 const defaultWheelAxisVector = new THREE.Vector3(DEFAULT_AXLE.x, DEFAULT_AXLE.y, DEFAULT_AXLE.z).normalize()
 const VEHICLE_WHEEL_MIN_RADIUS = 0.01
 const VEHICLE_SPEED_EPSILON = 1e-3
@@ -679,10 +680,12 @@ const scatterMatrixHelper = new THREE.Matrix4()
 let physicsWorld: CANNON.World | null = null
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
 const airWallBodies = new Map<string, CANNON.Body>()
+const airWallDebugMeshes = new Map<string, THREE.Mesh>()
 type RigidbodyDebugHelperCategory = 'ground' | 'rigidbody'
 type RigidbodyDebugHelper = { group: THREE.Group; signature: string; category: RigidbodyDebugHelperCategory; scale: THREE.Vector3 }
 const rigidbodyDebugHelpers = new Map<string, RigidbodyDebugHelper>()
 let rigidbodyDebugGroup: THREE.Group | null = null
+let airWallDebugGroup: THREE.Group | null = null
 const rigidbodyDebugMaterial = new THREE.LineBasicMaterial({
 	color: 0xffc107,
 	transparent: true,
@@ -690,6 +693,14 @@ const rigidbodyDebugMaterial = new THREE.LineBasicMaterial({
 })
 rigidbodyDebugMaterial.depthTest = false
 rigidbodyDebugMaterial.depthWrite = false
+const airWallDebugMaterial = new THREE.MeshBasicMaterial({
+	color: 0x80c7ff,
+	transparent: true,
+	opacity: 0.28,
+	side: THREE.DoubleSide,
+	depthWrite: false,
+	depthTest: false,
+})
 
 const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>()
 const rigidbodyContactMaterialKeys = new Set<string>()
@@ -743,6 +754,7 @@ const PHYSICS_FRICTION_STIFFNESS = 1e9
 const PHYSICS_FRICTION_RELAXATION = 4
 const AIR_WALL_HEIGHT = 8
 const AIR_WALL_THICKNESS = 0.6
+const AIR_WALL_VERTICAL_PADDING = 0.5
 const rotationState = { q: false, e: false }
 const defaultFirstPersonState = {
 	position: new THREE.Vector3(0, CAMERA_HEIGHT, 0),
@@ -2128,9 +2140,11 @@ watch([isGroundWireframeVisible, isOtherRigidbodyWireframeVisible], ([groundEnab
 		ensureRigidbodyDebugGroup()
 		syncRigidbodyDebugHelpers()
 		updateRigidbodyDebugTransforms()
+		setAirWallDebugVisibility(groundEnabled)
 		return
 	}
 	disposeRigidbodyDebugHelpers()
+	setAirWallDebugVisibility(false)
 })
 
 watch(controlMode, (mode) => {
@@ -5134,7 +5148,9 @@ function resetPhysicsWorld(): void {
 	vehicleInstances.clear()
 	rigidbodyInstances.clear()
 	airWallBodies.clear()
+	clearAirWallDebugMeshes()
 	clearRigidbodyDebugHelpers()
+	disposeAirWallDebugGroup()
 	physicsWorld = null
 	groundHeightfieldCache.clear()
 	rigidbodyMaterialCache.clear()
@@ -5169,6 +5185,7 @@ function removeAirWalls(): void {
 	const world = physicsWorld
 	if (!world) {
 		airWallBodies.clear()
+		clearAirWallDebugMeshes()
 		return
 	}
 	airWallBodies.forEach((body) => {
@@ -5179,15 +5196,20 @@ function removeAirWalls(): void {
 		}
 	})
 	airWallBodies.clear()
+	clearAirWallDebugMeshes()
 }
 
-function syncAirWallsForDocument(document: SceneJsonExportDocument | null): void {
+function syncAirWallsForDocument(sceneDocument: SceneJsonExportDocument | null): void {
 	removeAirWalls()
-	const airWallEnabled = document?.groundSettings?.enableAirWall !== false
-	if (!physicsWorld || !airWallEnabled) {
+	if (!sceneDocument) {
 		return
 	}
-	const groundNode = findGroundNode(document.nodes)
+	const airWallEnabled = sceneDocument.groundSettings?.enableAirWall !== false
+	const world = physicsWorld
+	if (!world || !airWallEnabled) {
+		return
+	}
+	const groundNode = findGroundNode(sceneDocument.nodes)
 	if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
 		return
 	}
@@ -5198,43 +5220,125 @@ function syncAirWallsForDocument(document: SceneJsonExportDocument | null): void
 	const groundObject = nodeObjectMap.get(groundNode.id) ?? null
 	const groundScale = new THREE.Vector3(1, 1, 1)
 	const groundPosition = new THREE.Vector3(0, 0, 0)
+	const groundQuaternion = new THREE.Quaternion()
+	groundBoundsHelper.makeEmpty()
 	if (groundObject) {
 		groundObject.updateMatrixWorld(true)
 		groundObject.getWorldScale(groundScale)
 		groundObject.getWorldPosition(groundPosition)
+		groundObject.getWorldQuaternion(groundQuaternion)
+		try {
+			groundBoundsHelper.setFromObject(groundObject)
+		} catch (error) {
+			console.warn('[ScenePreview] Failed to compute ground bounds for air wall', error)
+		}
+	} else {
+		const position = groundNode.position
+		if (position && typeof position === 'object') {
+			const px = typeof (position as Vector3Like).x === 'number' ? (position as Vector3Like).x : 0
+			const py = typeof (position as Vector3Like).y === 'number' ? (position as Vector3Like).y : 0
+			const pz = typeof (position as Vector3Like).z === 'number' ? (position as Vector3Like).z : 0
+			groundPosition.set(px, py, pz)
+		}
+		const scale = groundNode.scale
+		if (scale && typeof scale === 'object') {
+			const sx = typeof (scale as Vector3Like).x === 'number' && (scale as Vector3Like).x !== 0 ? (scale as Vector3Like).x : 1
+			const sy = typeof (scale as Vector3Like).y === 'number' && (scale as Vector3Like).y !== 0 ? (scale as Vector3Like).y : 1
+			const sz = typeof (scale as Vector3Like).z === 'number' && (scale as Vector3Like).z !== 0 ? (scale as Vector3Like).z : 1
+			groundScale.set(Math.abs(sx), Math.abs(sy), Math.abs(sz))
+		}
+		const rotation = groundNode.rotation
+		if (rotation && typeof rotation === 'object') {
+			const rx = typeof (rotation as Vector3Like).x === 'number' ? (rotation as Vector3Like).x : 0
+			const ry = typeof (rotation as Vector3Like).y === 'number' ? (rotation as Vector3Like).y : 0
+			const rz = typeof (rotation as Vector3Like).z === 'number' ? (rotation as Vector3Like).z : 0
+			groundQuaternion.setFromEuler(new THREE.Euler(rx, ry, rz, 'XYZ'))
+		}
 	}
 	const worldWidth = Math.max(1e-4, width * Math.abs(groundScale.x))
 	const worldDepth = Math.max(1e-4, depth * Math.abs(groundScale.z))
 	const halfWidth = worldWidth * 0.5
 	const halfDepth = worldDepth * 0.5
-	const wallHeight = AIR_WALL_HEIGHT
 	const wallThickness = AIR_WALL_THICKNESS
-	const wallY = groundPosition.y + wallHeight * 0.5
+	let wallHeight = AIR_WALL_HEIGHT
+	let wallBaseY: number
+	if (groundBoundsHelper.isEmpty()) {
+		wallBaseY = groundPosition.y - AIR_WALL_VERTICAL_PADDING
+	} else {
+		const boundsHeight = Math.max(0, groundBoundsHelper.max.y - groundBoundsHelper.min.y)
+		const paddedHeight = boundsHeight + AIR_WALL_VERTICAL_PADDING * 2
+		wallHeight = Math.max(AIR_WALL_HEIGHT, paddedHeight)
+		wallBaseY = groundBoundsHelper.min.y - AIR_WALL_VERTICAL_PADDING
+	}
+	const wallHalfHeight = wallHeight * 0.5
+	const wallY = wallBaseY + wallHalfHeight
 	const depthWithMargin = worldDepth + wallThickness * 2
 	const widthWithMargin = worldWidth + wallThickness * 2
 
-	const walls: Array<{ key: string; halfExtents: [number, number, number]; position: CANNON.Vec3 }> = [
-		{
-			key: 'airwall:+x',
-			halfExtents: [wallThickness * 0.5, wallHeight * 0.5, depthWithMargin * 0.5],
-			position: new CANNON.Vec3(groundPosition.x + halfWidth + wallThickness * 0.5, wallY, groundPosition.z),
-		},
-		{
-			key: 'airwall:-x',
-			halfExtents: [wallThickness * 0.5, wallHeight * 0.5, depthWithMargin * 0.5],
-			position: new CANNON.Vec3(groundPosition.x - halfWidth - wallThickness * 0.5, wallY, groundPosition.z),
-		},
-		{
-			key: 'airwall:+z',
-			halfExtents: [widthWithMargin * 0.5, wallHeight * 0.5, wallThickness * 0.5],
-			position: new CANNON.Vec3(groundPosition.x, wallY, groundPosition.z + halfDepth + wallThickness * 0.5),
-		},
-		{
-			key: 'airwall:-z',
-			halfExtents: [widthWithMargin * 0.5, wallHeight * 0.5, wallThickness * 0.5],
-			position: new CANNON.Vec3(groundPosition.x, wallY, groundPosition.z - halfDepth - wallThickness * 0.5),
-		},
-	]
+	const rightAxis = new THREE.Vector3(1, 0, 0).applyQuaternion(groundQuaternion).normalize()
+	const forwardAxis = new THREE.Vector3(0, 0, 1).applyQuaternion(groundQuaternion).normalize()
+	const upAxis = new THREE.Vector3(0, 1, 0).applyQuaternion(groundQuaternion).normalize()
+
+	const walls: Array<{
+		key: string
+		halfExtents: [number, number, number]
+		bodyPosition: CANNON.Vec3
+		bodyQuaternion: THREE.Quaternion
+		debugPosition: THREE.Vector3
+		debugQuaternion: THREE.Quaternion
+	}> = []
+
+	const yawHelper = new THREE.Quaternion()
+
+	const addWall = (
+		key: string,
+		halfExtents: [number, number, number],
+		offsetAxis: THREE.Vector3,
+		offsetDistance: number,
+		debugYaw: number,
+	) => {
+		const center = groundPosition.clone().add(offsetAxis.clone().multiplyScalar(offsetDistance))
+		const bodyPosition = new CANNON.Vec3(center.x, wallY, center.z)
+		const bodyQuaternion = groundQuaternion.clone()
+		const debugQuaternion = groundQuaternion.clone().multiply(yawHelper.setFromAxisAngle(upAxis, debugYaw))
+		walls.push({
+			key,
+			halfExtents,
+			bodyPosition,
+			bodyQuaternion,
+			debugPosition: center.setY(wallY),
+			debugQuaternion,
+		})
+	}
+
+	addWall(
+		'airwall:+x',
+		[wallThickness * 0.5, wallHalfHeight, depthWithMargin * 0.5],
+		rightAxis,
+		halfWidth + wallThickness * 0.5,
+		-Math.PI / 2,
+	)
+	addWall(
+		'airwall:-x',
+		[wallThickness * 0.5, wallHalfHeight, depthWithMargin * 0.5],
+		rightAxis,
+		-(halfWidth + wallThickness * 0.5),
+		Math.PI / 2,
+	)
+	addWall(
+		'airwall:+z',
+		[widthWithMargin * 0.5, wallHalfHeight, wallThickness * 0.5],
+		forwardAxis,
+		halfDepth + wallThickness * 0.5,
+		0,
+	)
+	addWall(
+		'airwall:-z',
+		[widthWithMargin * 0.5, wallHalfHeight, wallThickness * 0.5],
+		forwardAxis,
+		-(halfDepth + wallThickness * 0.5),
+		Math.PI,
+	)
 
 	walls.forEach((wall) => {
 		const [hx, hy, hz] = wall.halfExtents
@@ -5243,10 +5347,23 @@ function syncAirWallsForDocument(document: SceneJsonExportDocument | null): void
 		}
 		const shape = new CANNON.Box(new CANNON.Vec3(hx, hy, hz))
 		const body = new CANNON.Body({ mass: 0 })
+		body.type = CANNON.Body.STATIC
+		if (world.defaultMaterial) {
+			body.material = world.defaultMaterial
+		}
 		body.addShape(shape)
-		body.position.copy(wall.position)
-		physicsWorld.addBody(body)
+		body.position.copy(wall.bodyPosition)
+		body.quaternion.set(wall.bodyQuaternion.x, wall.bodyQuaternion.y, wall.bodyQuaternion.z, wall.bodyQuaternion.w)
+		body.updateMassProperties()
+		body.aabbNeedsUpdate = true
+		world.addBody(body)
 		airWallBodies.set(wall.key, body)
+		createAirWallDebugMesh({
+			key: wall.key,
+			halfExtents: wall.halfExtents,
+			position: wall.debugPosition,
+			quaternion: wall.debugQuaternion,
+		})
 	})
 }
 
@@ -5362,6 +5479,95 @@ function ensureRigidbodyDebugGroup(): THREE.Group | null {
 		scene.add(rigidbodyDebugGroup)
 	}
 	return rigidbodyDebugGroup
+}
+
+function ensureAirWallDebugGroup(): THREE.Group | null {
+	if (!scene) {
+		return null
+	}
+	if (!airWallDebugGroup) {
+		airWallDebugGroup = new THREE.Group()
+		airWallDebugGroup.name = 'AirWallDebug'
+	}
+	if (airWallDebugGroup.parent !== scene) {
+		scene.add(airWallDebugGroup)
+	}
+	airWallDebugGroup.visible = isGroundWireframeVisible.value
+	return airWallDebugGroup
+}
+
+function clearAirWallDebugMeshes(): void {
+	airWallDebugMeshes.forEach((mesh) => {
+		mesh.parent?.remove(mesh)
+		mesh.geometry?.dispose?.()
+	})
+	airWallDebugMeshes.clear()
+	if (airWallDebugGroup) {
+		airWallDebugGroup.clear()
+	}
+}
+
+function disposeAirWallDebugGroup(): void {
+	clearAirWallDebugMeshes()
+	if (airWallDebugGroup) {
+		airWallDebugGroup.parent?.remove(airWallDebugGroup)
+		airWallDebugGroup.clear()
+		airWallDebugGroup = null
+	}
+}
+
+function setAirWallDebugVisibility(visible: boolean): void {
+	const group = airWallDebugGroup ?? null
+	if (!visible) {
+		if (group) {
+			group.visible = false
+		}
+		airWallDebugMeshes.forEach((mesh) => {
+			mesh.visible = false
+		})
+		return
+	}
+	const ensured = ensureAirWallDebugGroup()
+	if (ensured) {
+		ensured.visible = true
+	}
+	airWallDebugMeshes.forEach((mesh) => {
+		mesh.visible = true
+	})
+}
+
+type AirWallDebugEntry = {
+	key: string
+	halfExtents: [number, number, number]
+	position: THREE.Vector3
+	quaternion: THREE.Quaternion
+}
+
+function createAirWallDebugMesh(entry: AirWallDebugEntry): void {
+	const group = ensureAirWallDebugGroup()
+	if (!group) {
+		return
+	}
+	const existing = airWallDebugMeshes.get(entry.key)
+	if (existing) {
+		existing.parent?.remove(existing)
+		existing.geometry?.dispose?.()
+	}
+	const [hx, hy, hz] = entry.halfExtents
+	const height = hy * 2
+	const width = entry.key.includes(':x') ? hz * 2 : hx * 2
+	if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+		return
+	}
+	const geometry = new THREE.PlaneGeometry(width, height)
+	const mesh = new THREE.Mesh(geometry, airWallDebugMaterial)
+	mesh.name = `AirWallDebug:${entry.key}`
+	mesh.renderOrder = 9999
+	mesh.position.copy(entry.position)
+	mesh.quaternion.copy(entry.quaternion)
+	mesh.visible = isGroundWireframeVisible.value
+	group.add(mesh)
+	airWallDebugMeshes.set(entry.key, mesh)
 }
 
 function buildBoxDebugLines(shape: Extract<RigidbodyPhysicsShape, { kind: 'box' }>): THREE.LineSegments | null {
@@ -6036,14 +6242,8 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 		syncAirWallsForDocument(null)
 		return
 	}
-	const rigidbodyNodes = collectRigidbodyNodes(document.nodes)
-	if (!rigidbodyNodes.length) {
-		resetPhysicsWorld()
-		syncVehicleBindingsForDocument(null)
-		syncAirWallsForDocument(null)
-		return
-	}
 	const world = ensurePhysicsWorld()
+	const rigidbodyNodes = collectRigidbodyNodes(document.nodes)
 	const desiredIds = new Set<string>()
 	rigidbodyNodes.forEach((node) => {
 		desiredIds.add(node.id)
