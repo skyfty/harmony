@@ -1,6 +1,13 @@
 <template>
   <view class="viewer-page">
-    <view class="viewer-canvas-wrapper">
+    <view
+      class="viewer-canvas-wrapper"
+      @touchstart.capture="handleDrivePadTouchStart"
+      @touchmove.capture="handleDrivePadTouchMove"
+      @touchend.capture="handleDrivePadTouchEnd"
+      @touchcancel.capture="handleDrivePadTouchEnd"
+      @mousedown.capture="handleDrivePadMouseDown"
+    >
       <PlatformCanvas
         v-if="!error"
         :canvas-id="canvasId"
@@ -253,7 +260,10 @@
           </button>
         </view>
         <view
-          class="viewer-drive-cluster viewer-drive-cluster--joystick"
+          v-show="drivePadState.visible"
+          class="viewer-drive-cluster viewer-drive-cluster--joystick viewer-drive-cluster--floating"
+          :class="{ 'is-fading': drivePadState.fading }"
+          :style="drivePadStyle"
         >
           <view
             id="viewer-drive-joystick"
@@ -1070,6 +1080,17 @@ const joystickState = reactive({
   centerY: 0,
   ready: false,
 });
+const DRIVE_PAD_MOUSE_POINTER_ID = -2;
+const DRIVE_PAD_FADE_MS = 220;
+const drivePadState = reactive({ visible: false, fading: false, x: 0, y: 0 });
+const drivePadStyle = computed(() => ({
+  left: `${drivePadState.x}px`,
+  top: `${drivePadState.y}px`,
+}));
+let drivePadFadeTimer: ReturnType<typeof setTimeout> | null = null;
+let drivePadMouseTracking = false;
+const isBrowserEnvironment = typeof window !== 'undefined';
+const drivePadViewportRect = { top: 0, left: 0, height: getViewportHeight() };
 const steeringKeyboardValue = ref(0);
 const steeringKeyboardTarget = ref(0);
 const joystickKnobStyle = computed(() => {
@@ -1248,6 +1269,8 @@ watch(
     if (visible) {
       refreshJoystickMetrics();
     } else {
+      detachDrivePadMouseListeners();
+      hideDrivePadImmediate();
       deactivateJoystick(true);
     }
   },
@@ -4811,6 +4834,7 @@ function setJoystickVector(x: number, y: number): void {
 function deactivateJoystick(reset: boolean): void {
   joystickState.active = false;
   joystickState.pointerId = -1;
+  joystickState.ready = false;
   if (reset) {
     setJoystickVector(0, 0);
   }
@@ -4896,6 +4920,183 @@ function extractTouchById(event: TouchEvent, identifier: number): Touch | null {
     }
   }
   return null;
+}
+
+function getViewportHeight(): number {
+  if (typeof window !== 'undefined' && Number.isFinite(window.innerHeight)) {
+    return window.innerHeight;
+  }
+  return initialSystemInfo?.windowHeight ?? initialSystemInfo?.screenHeight ?? 0;
+}
+
+function shouldActivateDrivePad(clientY: number): boolean {
+  const height = drivePadViewportRect.height > 0 ? drivePadViewportRect.height : getViewportHeight();
+  if (height <= 0) {
+    return true;
+  }
+  return clientY >= drivePadViewportRect.top + height / 2;
+}
+
+function updateDrivePadViewportRect(target: EventTarget | null): void {
+  const element = target as { getBoundingClientRect?: () => DOMRect | ClientRect } | null;
+  if (element && typeof element.getBoundingClientRect === 'function') {
+    const rect = element.getBoundingClientRect();
+    if (rect) {
+      drivePadViewportRect.top = rect.top ?? 0;
+      drivePadViewportRect.left = rect.left ?? 0;
+      drivePadViewportRect.height = rect.height ?? getViewportHeight();
+      return;
+    }
+  }
+  drivePadViewportRect.top = 0;
+  drivePadViewportRect.left = 0;
+  drivePadViewportRect.height = getViewportHeight();
+}
+
+function toDrivePadLocalCoords(x: number, y: number): { x: number; y: number } {
+  return {
+    x: x - drivePadViewportRect.left,
+    y: y - drivePadViewportRect.top,
+  };
+}
+
+function cancelDrivePadFade(): void {
+  if (drivePadFadeTimer) {
+    clearTimeout(drivePadFadeTimer);
+    drivePadFadeTimer = null;
+  }
+}
+
+function summonDrivePadAt(x: number, y: number): void {
+  cancelDrivePadFade();
+  drivePadState.x = x;
+  drivePadState.y = y;
+  drivePadState.visible = true;
+  drivePadState.fading = false;
+}
+
+function scheduleDrivePadFade(): void {
+  if (!drivePadState.visible) {
+    return;
+  }
+  drivePadState.fading = true;
+  cancelDrivePadFade();
+  drivePadFadeTimer = setTimeout(() => {
+    drivePadState.visible = false;
+    drivePadState.fading = false;
+    drivePadFadeTimer = null;
+  }, DRIVE_PAD_FADE_MS);
+}
+
+function hideDrivePadImmediate(): void {
+  if (!drivePadState.visible && !drivePadState.fading) {
+    return;
+  }
+  cancelDrivePadFade();
+  drivePadState.visible = false;
+  drivePadState.fading = false;
+}
+
+function handleDrivePadTouchStart(event: TouchEvent): void {
+  if (!vehicleDriveUi.value.visible) {
+    return;
+  }
+  updateDrivePadViewportRect(event.currentTarget);
+  const touch = event.changedTouches?.[0] ?? null;
+  const coords = getTouchCoordinates(touch);
+  if (!coords || !shouldActivateDrivePad(coords.y)) {
+    return;
+  }
+  event.stopPropagation();
+  event.preventDefault();
+  const localCoords = toDrivePadLocalCoords(coords.x, coords.y);
+  summonDrivePadAt(localCoords.x, localCoords.y);
+  handleJoystickTouchStart(event);
+}
+
+function handleDrivePadTouchMove(event: TouchEvent): void {
+  if (joystickState.pointerId === -1) {
+    return;
+  }
+  const touch = extractTouchById(event, joystickState.pointerId);
+  if (!touch) {
+    return;
+  }
+  event.stopPropagation();
+  event.preventDefault();
+  handleJoystickTouchMove(event);
+}
+
+function handleDrivePadTouchEnd(event: TouchEvent): void {
+  if (joystickState.pointerId === -1) {
+    return;
+  }
+  const touch = extractTouchById(event, joystickState.pointerId);
+  if (!touch) {
+    return;
+  }
+  event.stopPropagation();
+  event.preventDefault();
+  handleJoystickTouchEnd(event);
+  scheduleDrivePadFade();
+}
+
+function attachDrivePadMouseListeners(): void {
+  if (!isBrowserEnvironment || drivePadMouseTracking) {
+    return;
+  }
+  drivePadMouseTracking = true;
+  window.addEventListener('mousemove', handleDrivePadMouseMove);
+  window.addEventListener('mouseup', handleDrivePadMouseUp);
+  window.addEventListener('blur', handleDrivePadMouseUp);
+}
+
+function detachDrivePadMouseListeners(): void {
+  if (!isBrowserEnvironment || !drivePadMouseTracking) {
+    return;
+  }
+  drivePadMouseTracking = false;
+  window.removeEventListener('mousemove', handleDrivePadMouseMove);
+  window.removeEventListener('mouseup', handleDrivePadMouseUp);
+  window.removeEventListener('blur', handleDrivePadMouseUp);
+}
+
+function handleDrivePadMouseDown(event: MouseEvent): void {
+  if (!vehicleDriveUi.value.visible || event.button !== 0) {
+    return;
+  }
+  updateDrivePadViewportRect(event.currentTarget);
+  const coords = { x: event.clientX, y: event.clientY };
+  if (!shouldActivateDrivePad(coords.y)) {
+    return;
+  }
+  event.stopPropagation();
+  event.preventDefault();
+  const localCoords = toDrivePadLocalCoords(coords.x, coords.y);
+  summonDrivePadAt(localCoords.x, localCoords.y);
+  joystickState.pointerId = DRIVE_PAD_MOUSE_POINTER_ID;
+  joystickState.active = true;
+  joystickState.ready = false;
+  setJoystickVector(0, 0);
+  applyJoystickFromPoint(coords.x, coords.y);
+  attachDrivePadMouseListeners();
+}
+
+function handleDrivePadMouseMove(event: MouseEvent): void {
+  if (joystickState.pointerId !== DRIVE_PAD_MOUSE_POINTER_ID) {
+    return;
+  }
+  event.preventDefault();
+  applyJoystickFromPoint(event.clientX, event.clientY);
+}
+
+function handleDrivePadMouseUp(): void {
+  if (joystickState.pointerId === DRIVE_PAD_MOUSE_POINTER_ID) {
+    deactivateJoystick(true);
+    scheduleDrivePadFade();
+  }
+  detachDrivePadMouseListeners();
+  hideDrivePadImmediate();
 }
 
 function handleJoystickTouchStart(event: TouchEvent): void {
@@ -6641,6 +6842,8 @@ onUnload(() => {
     uni.offWindowResize(handleResize);
     resizeListener = null;
   }
+  detachDrivePadMouseListeners();
+  hideDrivePadImmediate();
   if (sceneDownloadTask) {
     sceneDownloadTask.abort();
     sceneDownloadTask = null;
@@ -6660,6 +6863,7 @@ onUnmounted(() => {
     uni.offWindowResize(handleResize);
     resizeListener = null;
   }
+  detachDrivePadMouseListeners();
   if (sceneDownloadTask) {
     sceneDownloadTask.abort();
     sceneDownloadTask = null;
@@ -7174,6 +7378,18 @@ onUnmounted(() => {
   left: 16px;
   bottom: 16px;
   align-items: center;
+}
+
+.viewer-drive-cluster--floating {
+  left: 0;
+  top: 0;
+  bottom: auto;
+  transform: translate(-50%, -50%);
+  transition: opacity 0.24s ease;
+}
+
+.viewer-drive-cluster--floating.is-fading {
+  opacity: 0;
 }
 
 .viewer-drive-cluster--throttle {
