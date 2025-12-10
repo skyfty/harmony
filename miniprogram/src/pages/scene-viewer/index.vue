@@ -279,6 +279,35 @@
         </view>
       </view>
     </view>
+    <view class="viewer-log-panel">
+      <view class="viewer-log-header">
+        <text class="viewer-log-title">日志输出</text>
+        <button
+          class="viewer-log-clear"
+          type="default"
+          hover-class="none"
+          :disabled="!latestLogs.length"
+          @tap="clearLogs"
+        >
+          清空
+        </button>
+      </view>
+      <scroll-view scroll-y class="viewer-log-scroll">
+        <view v-if="latestLogs.length" class="viewer-log-list">
+          <view
+            v-for="item in latestLogs"
+            :key="item.id"
+            :class="['viewer-log-entry', `is-${item.level}`]"
+          >
+            <text class="viewer-log-entry-label">{{ item.label }}</text>
+            <text class="viewer-log-entry-text">{{ item.text }}</text>
+          </view>
+        </view>
+        <view v-else class="viewer-log-empty">
+          <text>暂无日志</text>
+        </view>
+      </scroll-view>
+    </view>
     <view class="viewer-footer" v-if="warnings.length">
       <text class="footer-title">警告</text>
       <view class="footer-warnings">
@@ -464,6 +493,83 @@ const loading = ref(true);
 const error = ref<string | null>(null);
 const warnings = ref<string[]>([]);
 
+type LogLevel = 'log' | 'info' | 'warn' | 'error';
+
+interface LogEntry {
+  id: number;
+  text: string;
+  level: LogLevel;
+  label: string;
+}
+
+type ConsoleLogListener = (level: LogLevel, args: unknown[]) => void;
+
+interface ConsoleHookState {
+  original: {
+    log: (...args: any[]) => void;
+    info?: (...args: any[]) => void;
+    warn?: (...args: any[]) => void;
+    error?: (...args: any[]) => void;
+  };
+  listeners: Set<ConsoleLogListener>;
+}
+
+const MAX_LOG_ENTRIES = 100;
+
+const logEntries = ref<LogEntry[]>([]);
+const latestLogs = computed(() => [...logEntries.value].reverse());
+
+const LOG_LEVEL_LABELS: Record<LogLevel, string> = {
+  log: '[LOG]',
+  info: '[INFO]',
+  warn: '[WARN]',
+  error: '[ERROR]',
+};
+
+function stringifyValue(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (
+    typeof value === 'number' ||
+    typeof value === 'boolean' ||
+    typeof value === 'bigint' ||
+    value === null ||
+    typeof value === 'undefined'
+  ) {
+    return String(value);
+  }
+  if (value instanceof Error) {
+    return value.stack ?? `${value.name}: ${value.message}`;
+  }
+  if (typeof value === 'function') {
+    return value.name ? `[Function ${value.name}]` : '[Function]';
+  }
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value, (_key, nestedValue) => (typeof nestedValue === 'bigint' ? `${nestedValue}n` : nestedValue));
+    } catch (serializationError) {
+      return `[Unserializable Object: ${serializationError instanceof Error ? serializationError.message : 'unknown error'}]`;
+    }
+  }
+  return String(value);
+}
+
+let logEntryId = 0;
+
+function appendLogEntry(level: LogLevel, args: unknown[]): void {
+  const message = args.length ? args.map((item) => stringifyValue(item)).join(' ') : '';
+  logEntries.value.push({
+    id: ++logEntryId,
+    text: message,
+    level,
+    label: LOG_LEVEL_LABELS[level] ?? '[LOG]',
+  });
+  if (logEntries.value.length > MAX_LOG_ENTRIES) {
+    logEntries.value.splice(0, logEntries.value.length - MAX_LOG_ENTRIES);
+  }
+}
+
 const resourcePreload = reactive({
   active: false,
   loaded: 0,
@@ -512,7 +618,11 @@ const sceneAssetLoader = new AssetLoader(sceneAssetCache);
 let sharedResourceCache: ResourceCache | null = null;
 let viewerResourceCache: ResourceCache | null = null;
 let sceneDownloadTask: SceneRequestTask | null = null;
-const globalApp = globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } };
+type SceneViewerGlobal = typeof globalThis & {
+  wx?: { getSystemInfoSync?: () => unknown };
+  __sceneViewerConsoleHookState__?: ConsoleHookState;
+};
+const globalApp = globalThis as SceneViewerGlobal;
 const isWeChatMiniProgram = Boolean(globalApp.wx && typeof globalApp.wx.getSystemInfoSync === 'function');
 const DEFAULT_RGBE_DATA_TYPE = isWeChatMiniProgram ? THREE.UnsignedByteType : THREE.FloatType;
 
@@ -521,6 +631,101 @@ const exrLoader = new EXRLoader().setDataType(DEFAULT_RGBE_DATA_TYPE);
 const textureLoader = new THREE.TextureLoader();
 const materialTextureCache = new Map<string, THREE.Texture>();
 const pendingMaterialTextureRequests = new Map<string, Promise<THREE.Texture | null>>();
+
+function registerConsoleListener(listener: ConsoleLogListener): () => void {
+  if (typeof console === 'undefined') {
+    return () => undefined;
+  }
+
+  let state = globalApp.__sceneViewerConsoleHookState__ ?? null;
+  if (!state) {
+    const listeners = new Set<ConsoleLogListener>();
+    const original = {
+      log: typeof console.log === 'function' ? console.log.bind(console) : () => undefined,
+      info: typeof console.info === 'function' ? console.info.bind(console) : undefined,
+      warn: typeof console.warn === 'function' ? console.warn.bind(console) : undefined,
+      error: typeof console.error === 'function' ? console.error.bind(console) : undefined,
+    };
+
+    const notifyListeners = (level: LogLevel, args: any[]): void => {
+      const snapshot = Array.from(listeners);
+      snapshot.forEach((callback) => {
+        try {
+          callback(level, args as unknown[]);
+        } catch (error) {
+          original.log('[SceneViewer] Console hook listener error', error);
+        }
+      });
+    };
+
+    function wrapConsoleMethod(level: LogLevel, fn: ((...args: any[]) => void) | undefined): (...args: any[]) => void {
+      const fallback = fn ?? original.log;
+      return (...args: any[]) => {
+        try {
+          fallback(...args);
+        } catch (error) {
+          original.log('[SceneViewer] Console output error', error);
+        }
+        notifyListeners(level, args);
+      };
+    }
+
+    console.log = wrapConsoleMethod('log', original.log);
+    console.info = wrapConsoleMethod('info', original.info);
+    console.warn = wrapConsoleMethod('warn', original.warn);
+    console.error = wrapConsoleMethod('error', original.error);
+
+    state = {
+      original,
+      listeners,
+    };
+    globalApp.__sceneViewerConsoleHookState__ = state;
+  }
+
+  state.listeners.add(listener);
+
+  return () => {
+    const currentState = globalApp.__sceneViewerConsoleHookState__;
+    if (!currentState) {
+      return;
+    }
+    currentState.listeners.delete(listener);
+    if (!currentState.listeners.size) {
+      console.log = currentState.original.log;
+      if (currentState.original.info) {
+        console.info = currentState.original.info;
+      } else if (typeof console.info === 'function') {
+        console.info = currentState.original.log;
+      }
+      if (currentState.original.warn) {
+        console.warn = currentState.original.warn;
+      } else if (typeof console.warn === 'function') {
+        console.warn = currentState.original.log;
+      }
+      if (currentState.original.error) {
+        console.error = currentState.original.error;
+      } else if (typeof console.error === 'function') {
+        console.error = currentState.original.log;
+      }
+      delete globalApp.__sceneViewerConsoleHookState__;
+    }
+  };
+}
+
+let unregisterConsoleHook: (() => void) | null = registerConsoleListener(appendLogEntry);
+
+function cleanupConsoleHook(): void {
+  if (unregisterConsoleHook) {
+    unregisterConsoleHook();
+    unregisterConsoleHook = null;
+  }
+}
+
+const clearLogs = (): void => {
+  if (logEntries.value.length) {
+    logEntries.value = [];
+  }
+};
 
 function ensureResourceCache(
   document: SceneJsonExportDocument,
@@ -6579,6 +6784,7 @@ onReady(() => {
 onUnload(() => {
   removeBehaviorRuntimeListener(behaviorRuntimeListener);
   teardownRenderer();
+  cleanupConsoleHook();
   if (resizeListener) {
     uni.offWindowResize(handleResize);
     resizeListener = null;
@@ -6598,6 +6804,7 @@ onUnload(() => {
 onUnmounted(() => {
   removeBehaviorRuntimeListener(behaviorRuntimeListener);
   teardownRenderer();
+  cleanupConsoleHook();
   if (resizeListener) {
     uni.offWindowResize(handleResize);
     resizeListener = null;
@@ -7616,5 +7823,137 @@ onUnmounted(() => {
     opacity: 0.65;
     transform: scale(0.94);
   }
+}
+
+.viewer-log-panel {
+  margin: 16px;
+  margin-top: 0;
+  padding: 12px 12px 8px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(205, 212, 232, 0.9);
+  color: #111111;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 12px 28px rgba(16, 27, 71, 0.08);
+}
+
+.viewer-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.viewer-log-title {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: #0b1320;
+}
+
+.viewer-log-clear {
+  margin: 0;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(102, 126, 234, 0.5);
+  background-color: rgba(238, 242, 255, 0.95);
+  color: #1a237e;
+  font-size: 12px;
+  line-height: 1.4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 56px;
+}
+
+.viewer-log-clear:active {
+  background-color: rgba(208, 218, 254, 0.95);
+}
+
+.viewer-log-clear:disabled {
+  opacity: 0.45;
+  border-color: rgba(160, 174, 192, 0.45);
+  color: rgba(45, 55, 72, 0.55);
+  background-color: rgba(237, 242, 255, 0.8);
+}
+
+.viewer-log-clear::after {
+  border: none;
+}
+
+.viewer-log-scroll {
+  width: 100%;
+  max-height: 220px;
+  min-height: 140px;
+  border-radius: 8px;
+  background: rgba(244, 247, 255, 0.9);
+  padding: 8px;
+  box-sizing: border-box;
+}
+
+.viewer-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.viewer-log-entry {
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #ffffff;
+  border-left: 3px solid transparent;
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
+  color: #111111;
+  box-shadow: 0 4px 12px rgba(17, 24, 39, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.viewer-log-entry-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.viewer-log-entry-text {
+  display: block;
+  white-space: pre-wrap;
+}
+
+.viewer-log-entry.is-log {
+  border-left-color: #1f2937;
+  color: #000000;
+}
+
+.viewer-log-entry.is-info {
+  border-left-color: #1e88e5;
+  color: #1e88e5;
+}
+
+.viewer-log-entry.is-warn {
+  border-left-color: #fb8c00;
+  color: #fb8c00;
+}
+
+.viewer-log-entry.is-error {
+  border-left-color: #e53935;
+  color: #e53935;
+}
+
+.viewer-log-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 100px;
+  font-size: 12px;
+  color: rgba(45, 55, 72, 0.6);
 }
 </style>

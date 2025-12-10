@@ -255,6 +255,7 @@ export class AssetLoader {
     if (!assetId) {
       throw new Error('assetId is required')
     }
+
     if (!options.force) {
       const cached = await this.cache.getEntry(assetId)
       if (cached?.status === 'cached') {
@@ -267,7 +268,6 @@ export class AssetLoader {
     if (existing) {
       return existing
     }
-
     const promise = this.resolveLoad(assetId, source, options)
       .catch((error) => {
         const entry = this.cache.ensureEntry(assetId)
@@ -338,6 +338,7 @@ export class AssetLoader {
     if (!source.url) {
       throw new Error('该资源没有可用的下载地址')
     }
+
     const entry = this.cache.ensureEntry(assetId)
     const controller = new AbortController()
     entry.abortController = controller
@@ -346,10 +347,15 @@ export class AssetLoader {
     entry.error = null
     entry.lastUsedAt = now()
 
-    const { blob, mimeType, filename, url: resolvedUrl } = await fetchAssetBlob(source.url, controller, (progress) => {
+
+    console.log("dddddddddddddddddaaaaaaaaaaaaaaaaaaaaaaaabbbb 111111111111 ")
+    await fetchAssetBlob(source.url, controller, (progress) => {
       entry.progress = progress
       options.onProgress?.(progress)
     })
+
+
+    console.log("dddddddddddddddddaaaaaaaaaaaaaaaaaaaaaaaabbbb2             2222222222222")
 
     return this.cache.storeBlob(assetId, blob, {
       mimeType: source.mimeType ?? mimeType ?? null,
@@ -494,11 +500,10 @@ export async function fetchAssetBlob(
     return await fetchViaXmlHttp(fallbackUrl, controller, onProgress)
   }
 
-  
+    console.log("bbbbbbbbbbbbbbbbbbbbbbbbbbb")
   if (uniGlobal && typeof uniGlobal.request === 'function') {
     return await fetchViaUni(fallbackUrl, controller, onProgress)
   }
-
   if (typeof fetch === 'function') {
     let lastFallbackError: unknown = null
     for (const candidate of candidates) {
@@ -581,14 +586,19 @@ async function fetchViaUni(
   if (!uniGlobal || typeof uniGlobal.request !== 'function') {
     throw new Error('uni.request 不可用')
   }
+  
+    console.log("ffffffffffffffffff")
   const requestFn = uniGlobal.request.bind(uniGlobal) as typeof uniGlobal.request
   return await new Promise((resolve, reject) => {
     let settled = false
+    console.log("gggggg")
     let requestTask: UniRequestTask | undefined
     const cleanup = (listener: () => void) => {
+    console.log("cleanupcleanupcleanupcleanupcleanup")
       controller.signal.removeEventListener('abort', listener)
     }
     const handleAbort = () => {
+    console.log("handleAborthandleAborthandleAborthandleAborthandleAborthandleAbort")
       if (settled) {
         return
       }
@@ -602,11 +612,13 @@ async function fetchViaUni(
       handleAbort()
       return
     }
+    console.log("hhhhhhhhhhhhhhhhhhhh")
     requestTask = requestFn({
       url,
       method: 'GET',
       responseType: 'arraybuffer',
       success: (res) => {
+    console.log("successsuccesssuccesssuccesssuccess")
         if (settled) {
           return
         }
@@ -624,6 +636,8 @@ async function fetchViaUni(
         reject(new Error(`资源下载失败（${res.statusCode ?? 'unknown'}）`))
       },
       fail: (error: unknown) => {
+    console.log("failfailfailfailfailfail")
+    console.log(error)
         if (settled) {
           return
         }
@@ -634,10 +648,12 @@ async function fetchViaUni(
     }) as unknown as UniRequestTask | undefined
 
     if (requestTask && typeof requestTask.onProgressUpdate === 'function') {
+    console.log("eeeeeeeeeeeeeeeee")
       requestTask.onProgressUpdate((event: { progress: number }) => {
         if (settled) {
           return
         }
+    console.log("mmmmmmmmmmmmmmmmmmmmmm")
         if (event.progress === undefined || event.progress === null) {
           event.progress = event.totalBytesExpectedToWrite && event.totalBytesWritten
             ? (event.totalBytesWritten / event.totalBytesExpectedToWrite) * 100
@@ -648,6 +664,7 @@ async function fetchViaUni(
         onProgress(normalized)
       })
     }
+    console.log("kkkkkkkkkkkkk")
   })
 }
 
@@ -656,7 +673,9 @@ async function fetchViaXmlHttp(
   controller: AbortController,
   onProgress: (value: number) => void,
 ): Promise<AssetBlobPayload> {
+    console.log("ccccccccccccccccccccccc")
   return await new Promise((resolve, reject) => {
+    console.log("ddddddddddddddddddd")
     const request = new XMLHttpRequest()
     request.open('GET', url, true)
     request.responseType = 'arraybuffer'
@@ -667,6 +686,7 @@ async function fetchViaXmlHttp(
       const progress = Math.min(99, Math.round((event.loaded / event.total) * 100))
       onProgress(progress)
     }
+    console.log("eeeeeeeeeeeeeeeeeeeeee")
     request.onload = () => {
       if (request.status >= 200 && request.status < 300) {
         onProgress(100)
