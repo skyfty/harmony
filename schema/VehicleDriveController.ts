@@ -160,16 +160,7 @@ const VEHICLE_FOLLOW_TARGET_LIFT_RATIO = 0.9
 const VEHICLE_FOLLOW_TARGET_LIFT_MIN = 3
 const VEHICLE_FOLLOW_POSITION_LERP_SPEED = 8
 const VEHICLE_FOLLOW_TARGET_LERP_SPEED = 10
-const VEHICLE_FOLLOW_POSITION_LERP_SPEED_MIN_SCALE = 0.35
-const VEHICLE_FOLLOW_POSITION_LERP_SPEED_MAX_SCALE = 2.5
-const VEHICLE_FOLLOW_POSITION_DISTANCE_MIN = 0.15
-const VEHICLE_FOLLOW_POSITION_DISTANCE_MAX = 8
-const VEHICLE_FOLLOW_DEADBAND = 0.2
 const VEHICLE_FOLLOW_HEADING_LERP_SPEED = 5.5
-const VEHICLE_FOLLOW_HEADING_VELOCITY_EPS = 0.15 * 0.15
-const VEHICLE_FOLLOW_JITTER_DISTANCE = 0.08
-const VEHICLE_FOLLOW_JITTER_SPEED = 0.35
-const VEHICLE_FOLLOW_JITTER_ANCHOR_LERP_SPEED = 3
 const VEHICLE_FOLLOW_TARGET_FORWARD_RATIO = 0.55
 const VEHICLE_FOLLOW_TARGET_FORWARD_MIN = 1.8
 const VEHICLE_FOLLOW_LOOKAHEAD_TIME = 0.18
@@ -833,15 +824,6 @@ export class VehicleDriveController {
       follow.anchorHoldSeconds = Math.max(0, follow.anchorHoldSeconds - deltaSeconds)
     }
 
-    const anchorDeltaSq = temp.followAnchor.distanceToSquared(follow.anchor)
-    const lowSpeed = speedSq < VEHICLE_FOLLOW_JITTER_SPEED * VEHICLE_FOLLOW_JITTER_SPEED
-    const tinyAnchorDelta = anchorDeltaSq < VEHICLE_FOLLOW_JITTER_DISTANCE * VEHICLE_FOLLOW_JITTER_DISTANCE
-    if (follow.initialized && lowSpeed && tinyAnchorDelta) {
-      const jitterAlpha = computeVehicleFollowLerpAlpha(deltaSeconds, VEHICLE_FOLLOW_JITTER_ANCHOR_LERP_SPEED)
-      temp.followAnchor.lerp(follow.anchor, 1 - jitterAlpha)
-    }
-    follow.anchor.copy(temp.followAnchor)
-
     if (!follow.initialized) {
       follow.heading.copy(temp.seatForward)
       follow.heading.y = 0
@@ -973,20 +955,12 @@ export class VehicleDriveController {
     if (immediate) {
       follow.currentPosition.copy(follow.desiredPosition)
       follow.currentTarget.copy(follow.desiredTarget)
-      follow.anchor.copy(temp.followAnchor)
       follow.initialized = true
     } else {
-      const distanceToTarget = follow.currentPosition.distanceTo(follow.desiredPosition)
-      const distanceToLook = follow.currentTarget.distanceTo(follow.desiredTarget)
-      const withinDeadband = distanceToTarget < VEHICLE_FOLLOW_DEADBAND && distanceToLook < VEHICLE_FOLLOW_DEADBAND
-      if (!withinDeadband) {
-        const distanceT = Math.min(1, Math.max(0, (distanceToTarget - VEHICLE_FOLLOW_POSITION_DISTANCE_MIN) / (VEHICLE_FOLLOW_POSITION_DISTANCE_MAX - VEHICLE_FOLLOW_POSITION_DISTANCE_MIN)))
-        const speedScale = VEHICLE_FOLLOW_POSITION_LERP_SPEED_MIN_SCALE + (VEHICLE_FOLLOW_POSITION_LERP_SPEED_MAX_SCALE - VEHICLE_FOLLOW_POSITION_LERP_SPEED_MIN_SCALE) * distanceT
-        const positionAlpha = computeVehicleFollowLerpAlpha(deltaSeconds, VEHICLE_FOLLOW_POSITION_LERP_SPEED * speedScale)
-        const targetAlpha = computeVehicleFollowLerpAlpha(deltaSeconds, VEHICLE_FOLLOW_TARGET_LERP_SPEED)
-        follow.currentPosition.lerp(follow.desiredPosition, positionAlpha)
-        follow.currentTarget.lerp(follow.desiredTarget, targetAlpha)
-      }
+      const positionAlpha = computeVehicleFollowLerpAlpha(deltaSeconds, VEHICLE_FOLLOW_POSITION_LERP_SPEED)
+      const targetAlpha = computeVehicleFollowLerpAlpha(deltaSeconds, VEHICLE_FOLLOW_TARGET_LERP_SPEED)
+      follow.currentPosition.lerp(follow.desiredPosition, positionAlpha)
+      follow.currentTarget.lerp(follow.desiredTarget, targetAlpha)
     }
 
     const run = this.deps.runWithProgrammaticCameraMutation ?? ((fn: () => void) => fn())
