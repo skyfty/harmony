@@ -55,6 +55,8 @@ const emit = defineEmits<{
   (event: 'close-material-details'): void
   (event: 'open-vehicle-wheel-details', payload: { id: string }): void
   (event: 'close-vehicle-wheel-details'): void
+  (event: 'open-suspension-editor'): void
+  (event: 'close-suspension-editor'): void
   (event: 'open-rigidbody-collider-editor'): void
   (event: 'close-rigidbody-collider-editor'): void
   (event: 'open-behavior-details', payload: BehaviorDetailsPayload): void
@@ -68,6 +70,7 @@ const nodeName = ref('')
 const materialDetailsTargetId = ref<string | null>(null)
 const vehicleWheelDetailsTargetId = ref<string | null>(null)
 const colliderEditorActive = ref(false)
+const suspensionEditorActive = ref(false)
 const behaviorDetailsActive = ref(false)
 const panelCardRef = ref<HTMLElement | { $el: HTMLElement } | null>(null)
 const floating = computed(() => props.floating ?? false)
@@ -209,9 +212,23 @@ function closeVehicleWheelDetails(options: { silent?: boolean; force?: boolean }
   }
 }
 
+function handleOpenVehicleSuspensionEditor() {
+  suspensionEditorActive.value = true
+  emit('open-suspension-editor')
+}
+
+function closeVehicleSuspensionEditor(options: { silent?: boolean; force?: boolean } = {}) {
+  const wasActive = suspensionEditorActive.value
+  suspensionEditorActive.value = false
+  if ((wasActive || options.force) && !options.silent) {
+    emit('close-suspension-editor')
+  }
+}
+
 function handleVehiclePanelRequestCloseWheelDetails() {
   closeVehicleWheelDetails({ force: true })
 }
+
 
 function handleOpenRigidbodyColliderEditor() {
   colliderEditorActive.value = true
@@ -265,6 +282,7 @@ watch(hasBehaviorComponent, (present) => {
 watch(selectedNodeId, () => {
   closeMaterialDetails()
   closeVehicleWheelDetails()
+  closeVehicleSuspensionEditor({ force: true })
   closeRigidbodyColliderEditor({ force: true })
   closeBehaviorDetails()
 })
@@ -273,6 +291,7 @@ defineExpose({
   getPanelRect,
   closeMaterialDetails,
   closeVehicleWheelDetails,
+  closeVehicleSuspensionEditor,
   closeRigidbodyColliderEditor,
   closeBehaviorDetails,
 })
@@ -452,6 +471,7 @@ watch(
                 v-else-if="component.type === VEHICLE_COMPONENT_TYPE"
                 @open-wheel-details="handleOpenVehicleWheelDetails"
                 @close-wheel-details="handleVehiclePanelRequestCloseWheelDetails"
+                @open-suspension-editor="handleOpenVehicleSuspensionEditor"
               />
               <WallPanel v-else-if="component.type === WALL_COMPONENT_TYPE" />
               <BehaviorPanel

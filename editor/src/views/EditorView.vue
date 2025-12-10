@@ -5,6 +5,7 @@ import HierarchyPanel from '@/components/layout/HierarchyPanel.vue'
 import InspectorPanel from '@/components/layout/InspectorPanel.vue'
 import MaterialDetailsPanel from '@/components/inspector/MaterialDetailsPanel.vue'
 import VehicleWheelDetailsPanel from '@/components/inspector/VehicleWheelDetailsPanel.vue'
+import VehicleSuspensionEditorDialog from '@/components/inspector/VehicleSuspensionEditorDialog.vue'
 import RigidbodyColliderEditorDialog from '@/components/inspector/RigidbodyColliderEditorDialog.vue'
 import BehaviorDetailsPanel from '@/components/inspector/BehaviorDetailsPanel.vue'
 import ProjectPanel from '@/components/layout/ProjectPanel.vue'
@@ -129,6 +130,7 @@ type InspectorPanelPublicInstance = InstanceType<typeof InspectorPanel> & {
   getPanelRect: () => DOMRect | null
   closeMaterialDetails: (options?: { silent?: boolean }) => void
   closeVehicleWheelDetails: (options?: { silent?: boolean }) => void
+  closeVehicleSuspensionEditor: (options?: { silent?: boolean; force?: boolean }) => void
   closeRigidbodyColliderEditor: (options?: { silent?: boolean; force?: boolean }) => void
   closeBehaviorDetails: (options?: { silent?: boolean }) => void
 }
@@ -165,6 +167,19 @@ const vehicleWheelDetailsState = reactive({
   wheelId: null as string | null,
   anchor: null as VehicleWheelDetailsAnchor | null,
   source: null as VehicleWheelDetailsSource | null,
+})
+
+type VehicleSuspensionEditorAnchor = {
+  top: number
+  left: number
+}
+
+type VehicleSuspensionEditorSource = InspectorPanelSource
+
+const vehicleSuspensionEditorState = reactive({
+  visible: false,
+  anchor: null as VehicleSuspensionEditorAnchor | null,
+  source: null as VehicleSuspensionEditorSource | null,
 })
 
 type RigidbodyColliderEditorAnchor = {
@@ -390,6 +405,12 @@ function handleInspectorMaterialDetailsOpen(source: MaterialDetailsSource, paylo
   if (rigidbodyColliderEditorState.visible) {
     handleRigidbodyColliderEditorOverlayClose()
   }
+  if (vehicleWheelDetailsState.visible) {
+    handleVehicleWheelDetailsOverlayClose()
+  }
+  if (vehicleSuspensionEditorState.visible) {
+    handleVehicleSuspensionEditorOverlayClose()
+  }
   materialDetailsState.source = source
   materialDetailsState.targetId = payload.id
   materialDetailsState.visible = true
@@ -430,6 +451,16 @@ function updateVehicleWheelDetailsAnchor() {
   vehicleWheelDetailsState.anchor = rect ? { top: rect.top, left: rect.left } : null
 }
 
+function updateVehicleSuspensionEditorAnchor() {
+  if (!vehicleSuspensionEditorState.visible || !vehicleSuspensionEditorState.source) {
+    vehicleSuspensionEditorState.anchor = null
+    return
+  }
+  const inspector = getInspectorRef(vehicleSuspensionEditorState.source)
+  const rect = inspector?.getPanelRect?.() ?? null
+  vehicleSuspensionEditorState.anchor = rect ? { top: rect.top, left: rect.left } : null
+}
+
 function handleInspectorVehicleWheelDetailsOpen(source: VehicleWheelDetailsSource, payload: { id: string }) {
   if (materialDetailsState.visible) {
     handleMaterialDetailsOverlayClose()
@@ -440,11 +471,34 @@ function handleInspectorVehicleWheelDetailsOpen(source: VehicleWheelDetailsSourc
   if (rigidbodyColliderEditorState.visible) {
     handleRigidbodyColliderEditorOverlayClose()
   }
+  if (vehicleSuspensionEditorState.visible) {
+    handleVehicleSuspensionEditorOverlayClose()
+  }
   vehicleWheelDetailsState.source = source
   vehicleWheelDetailsState.wheelId = payload.id
   vehicleWheelDetailsState.visible = true
   nextTick(() => {
     updateVehicleWheelDetailsAnchor()
+  })
+}
+
+function handleInspectorVehicleSuspensionEditorOpen(source: VehicleSuspensionEditorSource) {
+  if (materialDetailsState.visible) {
+    handleMaterialDetailsOverlayClose()
+  }
+  if (vehicleWheelDetailsState.visible) {
+    handleVehicleWheelDetailsOverlayClose()
+  }
+  if (behaviorDetailsState.visible) {
+    handleBehaviorDetailsOverlayClose()
+  }
+  if (rigidbodyColliderEditorState.visible) {
+    handleRigidbodyColliderEditorOverlayClose()
+  }
+  vehicleSuspensionEditorState.source = source
+  vehicleSuspensionEditorState.visible = true
+  nextTick(() => {
+    updateVehicleSuspensionEditorAnchor()
   })
 }
 
@@ -470,6 +524,26 @@ function handleVehicleWheelDetailsOverlayClose() {
   }
 }
 
+function handleInspectorVehicleSuspensionEditorClose(source: VehicleSuspensionEditorSource) {
+  if (vehicleSuspensionEditorState.source !== source) {
+    return
+  }
+  vehicleSuspensionEditorState.visible = false
+  vehicleSuspensionEditorState.anchor = null
+  vehicleSuspensionEditorState.source = null
+}
+
+function handleVehicleSuspensionEditorOverlayClose() {
+  const source = vehicleSuspensionEditorState.source
+  vehicleSuspensionEditorState.visible = false
+  vehicleSuspensionEditorState.anchor = null
+  vehicleSuspensionEditorState.source = null
+  if (source) {
+    const inspector = getInspectorRef(source)
+    inspector?.closeVehicleSuspensionEditor?.({ silent: true, force: true })
+  }
+}
+
 function updateRigidbodyColliderEditorAnchor() {
   if (!rigidbodyColliderEditorState.visible || !rigidbodyColliderEditorState.source) {
     rigidbodyColliderEditorState.anchor = null
@@ -486,6 +560,9 @@ function handleInspectorRigidbodyColliderEditorOpen(source: RigidbodyColliderEdi
   }
   if (vehicleWheelDetailsState.visible) {
     handleVehicleWheelDetailsOverlayClose()
+  }
+  if (vehicleSuspensionEditorState.visible) {
+    handleVehicleSuspensionEditorOverlayClose()
   }
   if (behaviorDetailsState.visible) {
     handleBehaviorDetailsOverlayClose()
@@ -542,6 +619,12 @@ function handleInspectorBehaviorDetailsOpen(source: BehaviorDetailsSource, paylo
   }
   if (rigidbodyColliderEditorState.visible) {
     handleRigidbodyColliderEditorOverlayClose()
+  }
+  if (vehicleWheelDetailsState.visible) {
+    handleVehicleWheelDetailsOverlayClose()
+  }
+  if (vehicleSuspensionEditorState.visible) {
+    handleVehicleSuspensionEditorOverlayClose()
   }
   behaviorDetailsState.source = source
   behaviorDetailsState.context = {
@@ -648,6 +731,10 @@ const handleVehicleWheelDetailsRelayout = () => {
   updateVehicleWheelDetailsAnchor()
 }
 
+const handleVehicleSuspensionEditorRelayout = () => {
+  updateVehicleSuspensionEditorAnchor()
+}
+
 const handleRigidbodyColliderEditorRelayout = () => {
   updateRigidbodyColliderEditorAnchor()
 }
@@ -691,6 +778,20 @@ watch(
     } else {
       window.removeEventListener('resize', handleVehicleWheelDetailsRelayout)
       window.removeEventListener('scroll', handleVehicleWheelDetailsRelayout, true)
+    }
+  },
+)
+
+watch(
+  () => vehicleSuspensionEditorState.visible,
+  (visible) => {
+    if (visible) {
+      updateVehicleSuspensionEditorAnchor()
+      window.addEventListener('resize', handleVehicleSuspensionEditorRelayout)
+      window.addEventListener('scroll', handleVehicleSuspensionEditorRelayout, true)
+    } else {
+      window.removeEventListener('resize', handleVehicleSuspensionEditorRelayout)
+      window.removeEventListener('scroll', handleVehicleSuspensionEditorRelayout, true)
     }
   },
 )
@@ -758,6 +859,32 @@ watch(showInspectorFloating, (visible) => {
   }
   nextTick(() => {
     updateVehicleWheelDetailsAnchor()
+  })
+})
+
+watch(showInspectorDocked, (visible) => {
+  if (vehicleSuspensionEditorState.source !== 'docked') {
+    return
+  }
+  if (!visible) {
+    handleInspectorVehicleSuspensionEditorClose('docked')
+    return
+  }
+  nextTick(() => {
+    updateVehicleSuspensionEditorAnchor()
+  })
+})
+
+watch(showInspectorFloating, (visible) => {
+  if (vehicleSuspensionEditorState.source !== 'floating') {
+    return
+  }
+  if (!visible) {
+    handleInspectorVehicleSuspensionEditorClose('floating')
+    return
+  }
+  nextTick(() => {
+    updateVehicleSuspensionEditorAnchor()
   })
 })
 
@@ -1786,6 +1913,10 @@ onBeforeUnmount(() => {
   window.removeEventListener('scroll', handleBehaviorDetailsRelayout, true)
   window.removeEventListener('resize', handleVehicleWheelDetailsRelayout)
   window.removeEventListener('scroll', handleVehicleWheelDetailsRelayout, true)
+  window.removeEventListener('resize', handleVehicleSuspensionEditorRelayout)
+  window.removeEventListener('scroll', handleVehicleSuspensionEditorRelayout, true)
+  window.removeEventListener('resize', handleRigidbodyColliderEditorRelayout)
+  window.removeEventListener('scroll', handleRigidbodyColliderEditorRelayout, true)
 })
 
 
@@ -1839,6 +1970,8 @@ onBeforeUnmount(() => {
             @close-material-details="() => handleInspectorMaterialDetailsClose('docked')"
             @open-vehicle-wheel-details="(payload) => handleInspectorVehicleWheelDetailsOpen('docked', payload)"
             @close-vehicle-wheel-details="() => handleInspectorVehicleWheelDetailsClose('docked')"
+            @open-suspension-editor="() => handleInspectorVehicleSuspensionEditorOpen('docked')"
+            @close-suspension-editor="() => handleInspectorVehicleSuspensionEditorClose('docked')"
             @open-rigidbody-collider-editor="() => handleInspectorRigidbodyColliderEditorOpen('docked')"
             @close-rigidbody-collider-editor="() => handleInspectorRigidbodyColliderEditorClose('docked')"
             @open-behavior-details="(payload) => handleInspectorBehaviorDetailsOpen('docked', payload)"
@@ -1880,6 +2013,8 @@ onBeforeUnmount(() => {
               @close-material-details="() => handleInspectorMaterialDetailsClose('floating')"
               @open-vehicle-wheel-details="(payload) => handleInspectorVehicleWheelDetailsOpen('floating', payload)"
               @close-vehicle-wheel-details="() => handleInspectorVehicleWheelDetailsClose('floating')"
+              @open-suspension-editor="() => handleInspectorVehicleSuspensionEditorOpen('floating')"
+              @close-suspension-editor="() => handleInspectorVehicleSuspensionEditorClose('floating')"
               @open-rigidbody-collider-editor="() => handleInspectorRigidbodyColliderEditorOpen('floating')"
               @close-rigidbody-collider-editor="() => handleInspectorRigidbodyColliderEditorClose('floating')"
               @open-behavior-details="(payload) => handleInspectorBehaviorDetailsOpen('floating', payload)"
@@ -1961,6 +2096,13 @@ onBeforeUnmount(() => {
         :visible="vehicleWheelDetailsState.visible"
         :anchor="vehicleWheelDetailsState.anchor"
         @close="handleVehicleWheelDetailsOverlayClose"
+      />
+
+      <VehicleSuspensionEditorDialog
+        v-if="vehicleSuspensionEditorState.visible && vehicleSuspensionEditorState.anchor"
+        :visible="vehicleSuspensionEditorState.visible"
+        :anchor="vehicleSuspensionEditorState.anchor"
+        @close="handleVehicleSuspensionEditorOverlayClose"
       />
 
       <RigidbodyColliderEditorDialog
