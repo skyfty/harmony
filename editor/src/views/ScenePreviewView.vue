@@ -37,6 +37,7 @@ import {
 	buildHeightfieldShapeFromGroundNode,
 	isGroundDynamicMesh,
 } from '@schema/groundHeightfield'
+import { buildGroundAirWallDefinitions } from '@schema/airWall'
 import {
 	ensurePhysicsWorld as ensureSharedPhysicsWorld,
 	createRigidbodyBody as createSharedRigidbodyBody,
@@ -661,7 +662,6 @@ const wheelSteeringQuaternionHelper = new THREE.Quaternion()
 const wheelSpinQuaternionHelper = new THREE.Quaternion()
 const wheelChassisPositionHelper = new THREE.Vector3()
 const wheelChassisDisplacementHelper = new THREE.Vector3()
-const groundBoundsHelper = new THREE.Box3()
 const defaultWheelAxisVector = new THREE.Vector3(DEFAULT_AXLE.x, DEFAULT_AXLE.y, DEFAULT_AXLE.z).normalize()
 const VEHICLE_WHEEL_MIN_RADIUS = 0.01
 const VEHICLE_SPEED_EPSILON = 1e-3
@@ -752,9 +752,6 @@ const PHYSICS_CONTACT_STIFFNESS = 1e9
 const PHYSICS_CONTACT_RELAXATION = 4
 const PHYSICS_FRICTION_STIFFNESS = 1e9
 const PHYSICS_FRICTION_RELAXATION = 4
-const AIR_WALL_HEIGHT = 8
-const AIR_WALL_THICKNESS = 0.6
-const AIR_WALL_VERTICAL_PADDING = 0.5
 const rotationState = { q: false, e: false }
 const defaultFirstPersonState = {
 	position: new THREE.Vector3(0, CAMERA_HEIGHT, 0),
@@ -5213,135 +5210,13 @@ function syncAirWallsForDocument(sceneDocument: SceneJsonExportDocument | null):
 	if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
 		return
 	}
-	const { width, depth } = groundNode.dynamicMesh
-	if (!Number.isFinite(width) || !Number.isFinite(depth) || width <= 0 || depth <= 0) {
+	const groundObject = nodeObjectMap.get(groundNode.id) ?? null
+	const definitions = buildGroundAirWallDefinitions({ groundNode, groundObject })
+	if (!definitions.length) {
 		return
 	}
-	const groundObject = nodeObjectMap.get(groundNode.id) ?? null
-	const groundScale = new THREE.Vector3(1, 1, 1)
-	const groundPosition = new THREE.Vector3(0, 0, 0)
-	const groundQuaternion = new THREE.Quaternion()
-	groundBoundsHelper.makeEmpty()
-	if (groundObject) {
-		groundObject.updateMatrixWorld(true)
-		groundObject.getWorldScale(groundScale)
-		groundObject.getWorldPosition(groundPosition)
-		groundObject.getWorldQuaternion(groundQuaternion)
-		try {
-			groundBoundsHelper.setFromObject(groundObject)
-		} catch (error) {
-			console.warn('[ScenePreview] Failed to compute ground bounds for air wall', error)
-		}
-	} else {
-		const position = groundNode.position
-		if (position && typeof position === 'object') {
-			const px = typeof (position as Vector3Like).x === 'number' ? (position as Vector3Like).x : 0
-			const py = typeof (position as Vector3Like).y === 'number' ? (position as Vector3Like).y : 0
-			const pz = typeof (position as Vector3Like).z === 'number' ? (position as Vector3Like).z : 0
-			groundPosition.set(px, py, pz)
-		}
-		const scale = groundNode.scale
-		if (scale && typeof scale === 'object') {
-			const sx = typeof (scale as Vector3Like).x === 'number' && (scale as Vector3Like).x !== 0 ? (scale as Vector3Like).x : 1
-			const sy = typeof (scale as Vector3Like).y === 'number' && (scale as Vector3Like).y !== 0 ? (scale as Vector3Like).y : 1
-			const sz = typeof (scale as Vector3Like).z === 'number' && (scale as Vector3Like).z !== 0 ? (scale as Vector3Like).z : 1
-			groundScale.set(Math.abs(sx), Math.abs(sy), Math.abs(sz))
-		}
-		const rotation = groundNode.rotation
-		if (rotation && typeof rotation === 'object') {
-			const rx = typeof (rotation as Vector3Like).x === 'number' ? (rotation as Vector3Like).x : 0
-			const ry = typeof (rotation as Vector3Like).y === 'number' ? (rotation as Vector3Like).y : 0
-			const rz = typeof (rotation as Vector3Like).z === 'number' ? (rotation as Vector3Like).z : 0
-			groundQuaternion.setFromEuler(new THREE.Euler(rx, ry, rz, 'XYZ'))
-		}
-	}
-	const worldWidth = Math.max(1e-4, width * Math.abs(groundScale.x))
-	const worldDepth = Math.max(1e-4, depth * Math.abs(groundScale.z))
-	const halfWidth = worldWidth * 0.5
-	const halfDepth = worldDepth * 0.5
-	const wallThickness = AIR_WALL_THICKNESS
-	let wallHeight = AIR_WALL_HEIGHT
-	let wallBaseY: number
-	if (groundBoundsHelper.isEmpty()) {
-		wallBaseY = groundPosition.y - AIR_WALL_VERTICAL_PADDING
-	} else {
-		const boundsHeight = Math.max(0, groundBoundsHelper.max.y - groundBoundsHelper.min.y)
-		const paddedHeight = boundsHeight + AIR_WALL_VERTICAL_PADDING * 2
-		wallHeight = Math.max(AIR_WALL_HEIGHT, paddedHeight)
-		wallBaseY = groundBoundsHelper.min.y - AIR_WALL_VERTICAL_PADDING
-	}
-	const wallHalfHeight = wallHeight * 0.5
-	const wallY = wallBaseY + wallHalfHeight
-	const depthWithMargin = worldDepth + wallThickness * 2
-	const widthWithMargin = worldWidth + wallThickness * 2
-
-	const rightAxis = new THREE.Vector3(1, 0, 0).applyQuaternion(groundQuaternion).normalize()
-	const forwardAxis = new THREE.Vector3(0, 0, 1).applyQuaternion(groundQuaternion).normalize()
-	const upAxis = new THREE.Vector3(0, 1, 0).applyQuaternion(groundQuaternion).normalize()
-
-	const walls: Array<{
-		key: string
-		halfExtents: [number, number, number]
-		bodyPosition: CANNON.Vec3
-		bodyQuaternion: THREE.Quaternion
-		debugPosition: THREE.Vector3
-		debugQuaternion: THREE.Quaternion
-	}> = []
-
-	const yawHelper = new THREE.Quaternion()
-
-	const addWall = (
-		key: string,
-		halfExtents: [number, number, number],
-		offsetAxis: THREE.Vector3,
-		offsetDistance: number,
-		debugYaw: number,
-	) => {
-		const center = groundPosition.clone().add(offsetAxis.clone().multiplyScalar(offsetDistance))
-		const bodyPosition = new CANNON.Vec3(center.x, wallY, center.z)
-		const bodyQuaternion = groundQuaternion.clone()
-		const debugQuaternion = groundQuaternion.clone().multiply(yawHelper.setFromAxisAngle(upAxis, debugYaw))
-		walls.push({
-			key,
-			halfExtents,
-			bodyPosition,
-			bodyQuaternion,
-			debugPosition: center.setY(wallY),
-			debugQuaternion,
-		})
-	}
-
-	addWall(
-		'airwall:+x',
-		[wallThickness * 0.5, wallHalfHeight, depthWithMargin * 0.5],
-		rightAxis,
-		halfWidth + wallThickness * 0.5,
-		-Math.PI / 2,
-	)
-	addWall(
-		'airwall:-x',
-		[wallThickness * 0.5, wallHalfHeight, depthWithMargin * 0.5],
-		rightAxis,
-		-(halfWidth + wallThickness * 0.5),
-		Math.PI / 2,
-	)
-	addWall(
-		'airwall:+z',
-		[widthWithMargin * 0.5, wallHalfHeight, wallThickness * 0.5],
-		forwardAxis,
-		halfDepth + wallThickness * 0.5,
-		0,
-	)
-	addWall(
-		'airwall:-z',
-		[widthWithMargin * 0.5, wallHalfHeight, wallThickness * 0.5],
-		forwardAxis,
-		-(halfDepth + wallThickness * 0.5),
-		Math.PI,
-	)
-
-	walls.forEach((wall) => {
-		const [hx, hy, hz] = wall.halfExtents
+	definitions.forEach((definition) => {
+		const [hx, hy, hz] = definition.halfExtents
 		if (![hx, hy, hz].every((value) => Number.isFinite(value) && value > 0)) {
 			return
 		}
@@ -5352,17 +5227,22 @@ function syncAirWallsForDocument(sceneDocument: SceneJsonExportDocument | null):
 			body.material = world.defaultMaterial
 		}
 		body.addShape(shape)
-		body.position.copy(wall.bodyPosition)
-		body.quaternion.set(wall.bodyQuaternion.x, wall.bodyQuaternion.y, wall.bodyQuaternion.z, wall.bodyQuaternion.w)
+		body.position.copy(definition.bodyPosition)
+		body.quaternion.set(
+			definition.bodyQuaternion.x,
+			definition.bodyQuaternion.y,
+			definition.bodyQuaternion.z,
+			definition.bodyQuaternion.w,
+		)
 		body.updateMassProperties()
 		body.aabbNeedsUpdate = true
 		world.addBody(body)
-		airWallBodies.set(wall.key, body)
+		airWallBodies.set(definition.key, body)
 		createAirWallDebugMesh({
-			key: wall.key,
-			halfExtents: wall.halfExtents,
-			position: wall.debugPosition,
-			quaternion: wall.debugQuaternion,
+			key: definition.key,
+			halfExtents: definition.halfExtents,
+			position: definition.debugPosition,
+			quaternion: definition.debugQuaternion,
 		})
 	})
 }
@@ -5555,7 +5435,7 @@ function createAirWallDebugMesh(entry: AirWallDebugEntry): void {
 	}
 	const [hx, hy, hz] = entry.halfExtents
 	const height = hy * 2
-	const width = entry.key.includes(':x') ? hz * 2 : hx * 2
+	const width = entry.key.endsWith('x') ? hz * 2 : hx * 2
 	if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
 		return
 	}
