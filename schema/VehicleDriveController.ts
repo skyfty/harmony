@@ -54,6 +54,8 @@ export type VehicleDriveCameraFollowState = {
   desiredTarget: THREE.Vector3
   currentPosition: THREE.Vector3
   currentTarget: THREE.Vector3
+  desiredAnchor: THREE.Vector3
+  currentAnchor: THREE.Vector3
   heading: THREE.Vector3
   initialized: boolean
   localOffset: THREE.Vector3
@@ -153,12 +155,16 @@ const VEHICLE_FOLLOW_DISTANCE_WIDTH_RATIO = 0.4
 const VEHICLE_FOLLOW_DISTANCE_DIAGONAL_RATIO = 0.35
 const VEHICLE_FOLLOW_TARGET_LIFT_RATIO = 0.9
 const VEHICLE_FOLLOW_TARGET_LIFT_MIN = 3
-const VEHICLE_FOLLOW_POSITION_LERP_SPEED = 8
-const VEHICLE_FOLLOW_TARGET_LERP_SPEED = 10
-const VEHICLE_FOLLOW_HEADING_LERP_SPEED = 5.5
+const VEHICLE_FOLLOW_POSITION_LERP_SPEED = 4
+const VEHICLE_FOLLOW_TARGET_LERP_SPEED = 5
+const VEHICLE_FOLLOW_HEADING_LERP_SPEED = 3.5
 const VEHICLE_FOLLOW_HEADING_VELOCITY_EPS = 0.15 * 0.15
 const VEHICLE_FOLLOW_TARGET_FORWARD_RATIO = 0.55
 const VEHICLE_FOLLOW_TARGET_FORWARD_MIN = 1.8
+const VEHICLE_FOLLOW_LOOKAHEAD_TIME = 0.18
+const VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX = 3
+const VEHICLE_FOLLOW_LOOKAHEAD_MIN_SPEED_SQ = 0.9
+const VEHICLE_FOLLOW_ANCHOR_LERP_SPEED = 4.5
 const VEHICLE_RESET_LIFT = 0.75
 
 function clampAxisScalar(value: number): number {
@@ -237,6 +243,8 @@ export class VehicleDriveController {
     followOffset: new THREE.Vector3(),
     followTarget: new THREE.Vector3(),
     followWorldOffset: new THREE.Vector3(),
+    followPredicted: new THREE.Vector3(),
+    predictionOffset: new THREE.Vector3(),
     cameraQuaternionInverse: new THREE.Quaternion(),
     resetQuaternion: new THREE.Quaternion(),
     cameraMatrix: new THREE.Matrix4(),
@@ -764,7 +772,33 @@ export class VehicleDriveController {
       VEHICLE_FOLLOW_DISTANCE_MAX,
       Math.max(VEHICLE_FOLLOW_DISTANCE_MIN, placement.distance * distanceScale),
     )
-    this.computeVehicleFollowAnchor(vehicleObject, temp.seatPosition, temp.followAnchor)
+    const vehicleVelocity = instance?.vehicle?.chassisBody?.velocity ?? null
+    this.computeVehicleFollowAnchor(vehicleObject, instance, temp.seatPosition, temp.followAnchor)
+    const predictedAnchor = temp.followPredicted.copy(temp.followAnchor)
+    if (vehicleVelocity) {
+      // Predict short-term motion so the camera looks ahead and reduces jitter.
+      temp.predictionOffset.set(vehicleVelocity.x, 0, vehicleVelocity.z)
+      const planarSpeedSq = temp.predictionOffset.lengthSq()
+      if (planarSpeedSq > VEHICLE_FOLLOW_LOOKAHEAD_MIN_SPEED_SQ) {
+        temp.predictionOffset.multiplyScalar(VEHICLE_FOLLOW_LOOKAHEAD_TIME)
+        const offsetLength = temp.predictionOffset.length()
+        if (offsetLength > VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX) {
+          temp.predictionOffset.multiplyScalar(VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX / offsetLength)
+        }
+        predictedAnchor.add(temp.predictionOffset)
+      }
+    }
+
+    follow.desiredAnchor.copy(predictedAnchor)
+    const anchorAlpha = options.immediate || !follow.initialized
+      ? 1
+      : computeVehicleFollowLerpAlpha(deltaSeconds, VEHICLE_FOLLOW_ANCHOR_LERP_SPEED)
+    if (anchorAlpha >= 1) {
+      follow.currentAnchor.copy(follow.desiredAnchor)
+    } else {
+      follow.currentAnchor.lerp(follow.desiredAnchor, anchorAlpha)
+    }
+    const anchorForCamera = follow.currentAnchor
 
     if (!follow.initialized) {
       follow.heading.copy(temp.seatForward)
@@ -776,7 +810,6 @@ export class VehicleDriveController {
       }
     }
 
-    const vehicleVelocity = instance?.vehicle?.chassisBody?.velocity ?? null
     const speedSq = vehicleVelocity ? vehicleVelocity.lengthSquared() : 0
     const desiredHeading = temp.cameraForward
     if (vehicleVelocity && speedSq > VEHICLE_FOLLOW_HEADING_VELOCITY_EPS) {
@@ -817,7 +850,7 @@ export class VehicleDriveController {
       .multiplyScalar(targetOffsetLocal.x)
       .addScaledVector(headingUp, targetOffsetLocal.y)
       .addScaledVector(headingForward, targetOffsetLocal.z)
-    follow.desiredTarget.copy(temp.followAnchor).add(targetWorldOffset)
+    follow.desiredTarget.copy(anchorForCamera).add(targetWorldOffset)
 
     const mapControls = ctx.mapControls
     if (mapControls) {
@@ -834,7 +867,7 @@ export class VehicleDriveController {
       userAdjusted = deltaPosition > 1e-3
     }
     if (userAdjusted && ctx.camera) {
-      temp.followWorldOffset.copy(ctx.camera.position).sub(temp.followAnchor)
+      temp.followWorldOffset.copy(ctx.camera.position).sub(anchorForCamera)
       follow.localOffset.set(
         temp.followWorldOffset.dot(headingRight),
         temp.followWorldOffset.dot(headingUp),
@@ -850,7 +883,7 @@ export class VehicleDriveController {
       .multiplyScalar(follow.localOffset.x)
       .addScaledVector(headingUp, follow.localOffset.y)
       .addScaledVector(headingForward, follow.localOffset.z)
-    follow.desiredPosition.copy(temp.followAnchor).add(desiredWorldOffset)
+    follow.desiredPosition.copy(anchorForCamera).add(desiredWorldOffset)
 
     const immediate = Boolean(options.immediate) || !follow.initialized
     if (immediate) {
@@ -899,7 +932,17 @@ export class VehicleDriveController {
     return true
   }
 
-  private computeVehicleFollowAnchor(vehicleObject: THREE.Object3D | null, fallbackPosition: THREE.Vector3, target: THREE.Vector3): void {
+  private computeVehicleFollowAnchor(
+    vehicleObject: THREE.Object3D | null,
+    instance: VehicleInstance | null,
+    fallbackPosition: THREE.Vector3,
+    target: THREE.Vector3,
+  ): void {
+    const bodyPosition = instance?.vehicle?.chassisBody?.position
+    if (bodyPosition) {
+      target.set(bodyPosition.x, bodyPosition.y, bodyPosition.z)
+      return
+    }
     if (!vehicleObject) {
       target.copy(fallbackPosition)
       return

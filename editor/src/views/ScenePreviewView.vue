@@ -917,6 +917,8 @@ const vehicleDriveCameraFollowState = {
 	desiredTarget: new THREE.Vector3(),
 	currentPosition: new THREE.Vector3(),
 	currentTarget: new THREE.Vector3(),
+	desiredAnchor: new THREE.Vector3(),
+	currentAnchor: new THREE.Vector3(),
 	heading: new THREE.Vector3(0, 0, 1),
 	initialized: false,
 	localOffset: new THREE.Vector3(),
@@ -3324,6 +3326,8 @@ function restoreVehicleDriveCameraState(): void {
 	vehicleDriveCameraFollowState.currentTarget.copy(vehicleDriveCameraRestoreState.target)
 	vehicleDriveCameraFollowState.desiredPosition.copy(activeCamera.position)
 	vehicleDriveCameraFollowState.desiredTarget.copy(vehicleDriveCameraRestoreState.target)
+	vehicleDriveCameraFollowState.currentAnchor.copy(activeCamera.position)
+	vehicleDriveCameraFollowState.desiredAnchor.copy(activeCamera.position)
 	vehicleDriveCameraRestoreState.hasSnapshot = false
 }
 
