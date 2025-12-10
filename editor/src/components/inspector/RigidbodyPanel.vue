@@ -20,6 +20,11 @@ import {
 } from '@schema/components'
 import NodePicker from '@/components/common/NodePicker.vue'
 
+const emit = defineEmits<{
+  (event: 'open-collider-editor'): void
+  (event: 'close-collider-editor'): void
+}>()
+
 const BODY_TYPE_OPTIONS: Array<{ label: string; value: RigidbodyBodyType }> = [
   { label: 'Dynamic', value: 'DYNAMIC' },
   { label: 'Kinematic', value: 'KINEMATIC' },
@@ -54,6 +59,7 @@ const localLinearDamping = ref(DEFAULT_LINEAR_DAMPING)
 const localAngularDamping = ref(DEFAULT_ANGULAR_DAMPING)
 const localRestitution = ref(DEFAULT_RIGIDBODY_RESTITUTION)
 const localFriction = ref(DEFAULT_RIGIDBODY_FRICTION)
+const colliderEditorActive = ref(false)
 const MASS_LOCK_EPSILON = 1e-4
 const LOCKED_BODY_TYPES = new Set<RigidbodyBodyType>(['STATIC', 'KINEMATIC'])
 const LOCKED_BODY_TYPE_MASS = 0
@@ -199,6 +205,22 @@ function handleColliderTypeChange(value: RigidbodyColliderType | null) {
   updateComponent({ colliderType: value })
 }
 
+function handleOpenColliderEditor() {
+  if (!rigidbodyComponent.value?.enabled) {
+    return
+  }
+  colliderEditorActive.value = true
+  emit('open-collider-editor')
+}
+
+function requestCloseColliderEditor(options: { silent?: boolean; force?: boolean } = {}) {
+  const hadActive = colliderEditorActive.value
+  colliderEditorActive.value = false
+  if ((hadActive || options.force) && !options.silent) {
+    emit('close-collider-editor')
+  }
+}
+
 function handleToggleComponent() {
   const component = rigidbodyComponent.value
   const nodeId = selectedNodeId.value
@@ -226,6 +248,26 @@ function handleTargetNodeChange(nodeId: string | null) {
   }
   updateComponent({ targetNodeId: next })
 }
+
+watch(
+  () => rigidbodyComponent.value?.enabled,
+  (enabled) => {
+    if (enabled === false) {
+      requestCloseColliderEditor({ force: true })
+    }
+  },
+  { immediate: true },
+)
+
+watch(rigidbodyComponent, (component) => {
+  if (!component) {
+    requestCloseColliderEditor({ force: true })
+  }
+})
+
+watch(selectedNodeId, () => {
+  requestCloseColliderEditor({ force: true })
+})
 </script>
 
 <template>
@@ -289,17 +331,35 @@ function handleTargetNodeChange(nodeId: string | null) {
           :disabled="!rigidbodyComponent?.enabled"
           @update:modelValue="handleBodyTypeChange"
         />
-        <v-select
-          label="Collider Type"
-          density="compact"
-          variant="underlined"
-          :items="COLLIDER_TYPE_OPTIONS"
-          item-title="label"
-          item-value="value"
-          :model-value="localColliderType"
-          :disabled="!rigidbodyComponent?.enabled"
-          @update:modelValue="handleColliderTypeChange"
-        />
+        <div class="rigidbody-panel__collider-row">
+          <v-select
+            class="rigidbody-panel__collider-select"
+            label="Collider Type"
+            density="compact"
+            variant="underlined"
+            :items="COLLIDER_TYPE_OPTIONS"
+            item-title="label"
+            item-value="value"
+            :model-value="localColliderType"
+            :disabled="!rigidbodyComponent?.enabled"
+            @update:modelValue="handleColliderTypeChange"
+          />
+          <v-tooltip text="Manual collider editor" location="top">
+            <template #activator="{ props }">
+              <v-btn
+                v-bind="props"
+                icon
+                size="small"
+                variant="tonal"
+                class="rigidbody-panel__collider-btn"
+                :disabled="!rigidbodyComponent?.enabled"
+                @click="handleOpenColliderEditor"
+              >
+                <v-icon size="18">mdi-cube-scan</v-icon>
+              </v-btn>
+            </template>
+          </v-tooltip>
+        </div>
         <v-text-field
           label="Mass"
           type="number"
@@ -390,6 +450,21 @@ function handleTargetNodeChange(nodeId: string | null) {
   flex-direction: column;
   gap: 0.4rem;
   margin-bottom: 0.6rem;
+}
+
+.rigidbody-panel__collider-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.4rem;
+}
+
+.rigidbody-panel__collider-select {
+  flex: 1;
+}
+
+.rigidbody-panel__collider-btn {
+  align-self: flex-end;
+  margin-bottom: 0.15rem;
 }
 
 .rigidbody-panel__picker-label {

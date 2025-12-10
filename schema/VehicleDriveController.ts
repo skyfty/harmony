@@ -1,5 +1,4 @@
 import * as THREE from 'three'
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import * as CANNON from 'cannon-es'
 // Local structural types to avoid tight coupling with component module exports
 type SceneNode = any

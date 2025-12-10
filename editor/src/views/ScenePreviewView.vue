@@ -656,7 +656,6 @@ const rigidbodyDebugQuaternionHelper = new THREE.Quaternion()
 const rigidbodyDebugScaleHelper = new THREE.Vector3()
 const wheelForwardHelper = new THREE.Vector3()
 const wheelAxisHelper = new THREE.Vector3()
-const wheelSteeringAxisHelper = new THREE.Vector3()
 const wheelQuaternionHelper = new THREE.Quaternion()
 const wheelSteeringQuaternionHelper = new THREE.Quaternion()
 const wheelSpinQuaternionHelper = new THREE.Quaternion()
@@ -667,6 +666,7 @@ const VEHICLE_WHEEL_MIN_RADIUS = 0.01
 const VEHICLE_SPEED_EPSILON = 1e-3
 const VEHICLE_WHEEL_SPIN_EPSILON = 1e-4
 const VEHICLE_TRAVEL_EPSILON = 1e-5
+const ENABLE_VEHICLE_WHEEL_VISUALS = false
 const STEERING_WHEEL_MAX_DEGREES = 135
 const STEERING_WHEEL_MAX_RADIANS = THREE.MathUtils.degToRad(STEERING_WHEEL_MAX_DEGREES)
 const STEERING_WHEEL_RETURN_SPEED = 4
@@ -5943,7 +5943,9 @@ function stepPhysicsWorld(delta: number): void {
 		console.warn('[ScenePreview] Physics step failed', error)
 	}
 	rigidbodyInstances.forEach((entry) => syncSharedObjectFromBody(entry, syncInstancedTransform))
-	// updateVehicleWheelVisuals(delta)
+	if (ENABLE_VEHICLE_WHEEL_VISUALS) {
+		updateVehicleWheelVisuals(delta)
+	}
 }
 
 function updateVehicleWheelVisuals(delta: number): void {

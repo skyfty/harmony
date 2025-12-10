@@ -5,6 +5,7 @@ import HierarchyPanel from '@/components/layout/HierarchyPanel.vue'
 import InspectorPanel from '@/components/layout/InspectorPanel.vue'
 import MaterialDetailsPanel from '@/components/inspector/MaterialDetailsPanel.vue'
 import VehicleWheelDetailsPanel from '@/components/inspector/VehicleWheelDetailsPanel.vue'
+import RigidbodyColliderEditorDialog from '@/components/inspector/RigidbodyColliderEditorDialog.vue'
 import BehaviorDetailsPanel from '@/components/inspector/BehaviorDetailsPanel.vue'
 import ProjectPanel from '@/components/layout/ProjectPanel.vue'
 import SceneViewport, { type SceneViewportHandle } from '@/components/editor/SceneViewport.vue'
@@ -128,6 +129,7 @@ type InspectorPanelPublicInstance = InstanceType<typeof InspectorPanel> & {
   getPanelRect: () => DOMRect | null
   closeMaterialDetails: (options?: { silent?: boolean }) => void
   closeVehicleWheelDetails: (options?: { silent?: boolean }) => void
+  closeRigidbodyColliderEditor: (options?: { silent?: boolean; force?: boolean }) => void
   closeBehaviorDetails: (options?: { silent?: boolean }) => void
 }
 
@@ -163,6 +165,19 @@ const vehicleWheelDetailsState = reactive({
   wheelId: null as string | null,
   anchor: null as VehicleWheelDetailsAnchor | null,
   source: null as VehicleWheelDetailsSource | null,
+})
+
+type RigidbodyColliderEditorAnchor = {
+  top: number
+  left: number
+}
+
+type RigidbodyColliderEditorSource = InspectorPanelSource
+
+const rigidbodyColliderEditorState = reactive({
+  visible: false,
+  anchor: null as RigidbodyColliderEditorAnchor | null,
+  source: null as RigidbodyColliderEditorSource | null,
 })
 
 type BehaviorDetailsAnchor = {
@@ -372,6 +387,9 @@ function handleInspectorMaterialDetailsOpen(source: MaterialDetailsSource, paylo
   if (behaviorDetailsState.visible) {
     handleBehaviorDetailsOverlayClose()
   }
+  if (rigidbodyColliderEditorState.visible) {
+    handleRigidbodyColliderEditorOverlayClose()
+  }
   materialDetailsState.source = source
   materialDetailsState.targetId = payload.id
   materialDetailsState.visible = true
@@ -419,6 +437,9 @@ function handleInspectorVehicleWheelDetailsOpen(source: VehicleWheelDetailsSourc
   if (behaviorDetailsState.visible) {
     handleBehaviorDetailsOverlayClose()
   }
+  if (rigidbodyColliderEditorState.visible) {
+    handleRigidbodyColliderEditorOverlayClose()
+  }
   vehicleWheelDetailsState.source = source
   vehicleWheelDetailsState.wheelId = payload.id
   vehicleWheelDetailsState.visible = true
@@ -449,6 +470,53 @@ function handleVehicleWheelDetailsOverlayClose() {
   }
 }
 
+function updateRigidbodyColliderEditorAnchor() {
+  if (!rigidbodyColliderEditorState.visible || !rigidbodyColliderEditorState.source) {
+    rigidbodyColliderEditorState.anchor = null
+    return
+  }
+  const inspector = getInspectorRef(rigidbodyColliderEditorState.source)
+  const rect = inspector?.getPanelRect?.() ?? null
+  rigidbodyColliderEditorState.anchor = rect ? { top: rect.top, left: rect.left } : null
+}
+
+function handleInspectorRigidbodyColliderEditorOpen(source: RigidbodyColliderEditorSource) {
+  if (materialDetailsState.visible) {
+    handleMaterialDetailsOverlayClose()
+  }
+  if (vehicleWheelDetailsState.visible) {
+    handleVehicleWheelDetailsOverlayClose()
+  }
+  if (behaviorDetailsState.visible) {
+    handleBehaviorDetailsOverlayClose()
+  }
+  rigidbodyColliderEditorState.source = source
+  rigidbodyColliderEditorState.visible = true
+  nextTick(() => {
+    updateRigidbodyColliderEditorAnchor()
+  })
+}
+
+function handleInspectorRigidbodyColliderEditorClose(source: RigidbodyColliderEditorSource) {
+  if (rigidbodyColliderEditorState.source !== source) {
+    return
+  }
+  rigidbodyColliderEditorState.visible = false
+  rigidbodyColliderEditorState.anchor = null
+  rigidbodyColliderEditorState.source = null
+}
+
+function handleRigidbodyColliderEditorOverlayClose() {
+  const source = rigidbodyColliderEditorState.source
+  rigidbodyColliderEditorState.visible = false
+  rigidbodyColliderEditorState.anchor = null
+  rigidbodyColliderEditorState.source = null
+  if (source) {
+    const inspector = getInspectorRef(source)
+    inspector?.closeRigidbodyColliderEditor?.({ silent: true, force: true })
+  }
+}
+
 function getBehaviorComponent(): SceneNodeComponentState<BehaviorComponentProps> | null {
   const node = selectedNode.value
   if (!node) {
@@ -471,6 +539,9 @@ function updateBehaviorDetailsAnchor() {
 function handleInspectorBehaviorDetailsOpen(source: BehaviorDetailsSource, payload: BehaviorDetailsContext) {
   if (materialDetailsState.visible) {
     handleMaterialDetailsOverlayClose()
+  }
+  if (rigidbodyColliderEditorState.visible) {
+    handleRigidbodyColliderEditorOverlayClose()
   }
   behaviorDetailsState.source = source
   behaviorDetailsState.context = {
@@ -577,6 +648,10 @@ const handleVehicleWheelDetailsRelayout = () => {
   updateVehicleWheelDetailsAnchor()
 }
 
+const handleRigidbodyColliderEditorRelayout = () => {
+  updateRigidbodyColliderEditorAnchor()
+}
+
 watch(
   () => materialDetailsState.visible,
   (visible) => {
@@ -616,6 +691,20 @@ watch(
     } else {
       window.removeEventListener('resize', handleVehicleWheelDetailsRelayout)
       window.removeEventListener('scroll', handleVehicleWheelDetailsRelayout, true)
+    }
+  },
+)
+
+watch(
+  () => rigidbodyColliderEditorState.visible,
+  (visible) => {
+    if (visible) {
+      updateRigidbodyColliderEditorAnchor()
+      window.addEventListener('resize', handleRigidbodyColliderEditorRelayout)
+      window.addEventListener('scroll', handleRigidbodyColliderEditorRelayout, true)
+    } else {
+      window.removeEventListener('resize', handleRigidbodyColliderEditorRelayout)
+      window.removeEventListener('scroll', handleRigidbodyColliderEditorRelayout, true)
     }
   },
 )
@@ -669,6 +758,32 @@ watch(showInspectorFloating, (visible) => {
   }
   nextTick(() => {
     updateVehicleWheelDetailsAnchor()
+  })
+})
+
+watch(showInspectorDocked, (visible) => {
+  if (rigidbodyColliderEditorState.source !== 'docked') {
+    return
+  }
+  if (!visible) {
+    handleInspectorRigidbodyColliderEditorClose('docked')
+    return
+  }
+  nextTick(() => {
+    updateRigidbodyColliderEditorAnchor()
+  })
+})
+
+watch(showInspectorFloating, (visible) => {
+  if (rigidbodyColliderEditorState.source !== 'floating') {
+    return
+  }
+  if (!visible) {
+    handleInspectorRigidbodyColliderEditorClose('floating')
+    return
+  }
+  nextTick(() => {
+    updateRigidbodyColliderEditorAnchor()
   })
 })
 
@@ -1724,6 +1839,8 @@ onBeforeUnmount(() => {
             @close-material-details="() => handleInspectorMaterialDetailsClose('docked')"
             @open-vehicle-wheel-details="(payload) => handleInspectorVehicleWheelDetailsOpen('docked', payload)"
             @close-vehicle-wheel-details="() => handleInspectorVehicleWheelDetailsClose('docked')"
+            @open-rigidbody-collider-editor="() => handleInspectorRigidbodyColliderEditorOpen('docked')"
+            @close-rigidbody-collider-editor="() => handleInspectorRigidbodyColliderEditorClose('docked')"
             @open-behavior-details="(payload) => handleInspectorBehaviorDetailsOpen('docked', payload)"
             @close-behavior-details="() => handleInspectorBehaviorDetailsClose('docked')"
           />
@@ -1763,6 +1880,8 @@ onBeforeUnmount(() => {
               @close-material-details="() => handleInspectorMaterialDetailsClose('floating')"
               @open-vehicle-wheel-details="(payload) => handleInspectorVehicleWheelDetailsOpen('floating', payload)"
               @close-vehicle-wheel-details="() => handleInspectorVehicleWheelDetailsClose('floating')"
+              @open-rigidbody-collider-editor="() => handleInspectorRigidbodyColliderEditorOpen('floating')"
+              @close-rigidbody-collider-editor="() => handleInspectorRigidbodyColliderEditorClose('floating')"
               @open-behavior-details="(payload) => handleInspectorBehaviorDetailsOpen('floating', payload)"
               @close-behavior-details="() => handleInspectorBehaviorDetailsClose('floating')"
             />
@@ -1842,6 +1961,13 @@ onBeforeUnmount(() => {
         :visible="vehicleWheelDetailsState.visible"
         :anchor="vehicleWheelDetailsState.anchor"
         @close="handleVehicleWheelDetailsOverlayClose"
+      />
+
+      <RigidbodyColliderEditorDialog
+        v-if="rigidbodyColliderEditorState.visible && rigidbodyColliderEditorState.anchor"
+        :visible="rigidbodyColliderEditorState.visible"
+        :anchor="rigidbodyColliderEditorState.anchor"
+        @close="handleRigidbodyColliderEditorOverlayClose"
       />
     </div>
     <SceneManagerDialog

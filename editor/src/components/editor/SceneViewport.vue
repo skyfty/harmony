@@ -2994,6 +2994,9 @@ function collectVisibleMeshesForOutline(
   if (childCount > 0) {
     for (let index = 0; index < childCount; index += 1) {
       const child = object.children[index]
+      if (!child) {
+        continue
+      }
       collectVisibleMeshesForOutline(child, collector, activeInstancedNodeIds)
     }
   }
@@ -6316,13 +6319,11 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
 }
 
 function applyTransformSpace(tool: EditorTool) {
-  if (!transformControls) return
-
-  // if (tool === 'translate' || tool === 'scale') {
-  //   transformControls.setSpace('local')
-  // } else {
-  //   transformControls.setSpace('world')
-  // }
+  if (!transformControls) {
+    return
+  }
+  const nextSpace = tool === 'rotate' ? 'world' : 'local'
+  transformControls.setSpace(nextSpace)
 }
 
 function attachSelection(nodeId: string | null, tool: EditorTool = props.activeTool) {

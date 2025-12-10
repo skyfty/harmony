@@ -8801,14 +8801,12 @@ export const useSceneStore = defineStore('scene', {
       }
 
       this.captureHistorySnapshot()
-      let insertedParentId: string | null = null
       let nextNodes: SceneNode[]
       if (parentId) {
         const workingTree = [...this.nodes]
         const inserted = insertNodeMutable(workingTree, parentId, duplicate, 'inside')
         if (inserted) {
           nextNodes = workingTree
-          insertedParentId = parentId
         } else {
           nextNodes = [...this.nodes, duplicate]
         }

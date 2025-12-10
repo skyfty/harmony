@@ -114,7 +114,9 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
 	return numeric
 }
 
-function normalizeScaleVector(scaleLike: THREE.Vector3 | null | undefined): { x: number; y: number; z: number } {
+function normalizeScaleVector(
+	scaleLike: THREE.Vector3 | { x?: number; y?: number; z?: number } | null | undefined,
+): { x: number; y: number; z: number } {
 	const sx = typeof scaleLike?.x === 'number' && Number.isFinite(scaleLike.x) ? Math.abs(scaleLike.x) : 1
 	const sy = typeof scaleLike?.y === 'number' && Number.isFinite(scaleLike.y) ? Math.abs(scaleLike.y) : 1
 	const sz = typeof scaleLike?.z === 'number' && Number.isFinite(scaleLike.z) ? Math.abs(scaleLike.z) : 1

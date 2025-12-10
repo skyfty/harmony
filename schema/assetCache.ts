@@ -634,13 +634,19 @@ async function fetchViaUni(
     }) as unknown as UniRequestTask | undefined
 
     if (requestTask && typeof requestTask.onProgressUpdate === 'function') {
-      requestTask.onProgressUpdate((event: { progress: number }) => {
+      requestTask.onProgressUpdate((event: {
+        progress?: number | null
+        totalBytesExpectedToWrite?: number
+        totalBytesWritten?: number
+      }) => {
         if (settled) {
           return
         }
         if (event.progress === undefined || event.progress === null) {
-          event.progress = event.totalBytesExpectedToWrite && event.totalBytesWritten
-            ? (event.totalBytesWritten / event.totalBytesExpectedToWrite) * 100
+          const totalBytesExpected = event.totalBytesExpectedToWrite ?? 0
+          const totalBytesWritten = event.totalBytesWritten ?? 0
+          event.progress = totalBytesExpected > 0 && totalBytesWritten >= 0
+            ? (totalBytesWritten / totalBytesExpected) * 100
             : 0
         }
         const value = Number.isFinite(event.progress) ? event.progress : 0
