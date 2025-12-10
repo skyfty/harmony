@@ -333,12 +333,25 @@ function rebuildHandles() {
     connectionPointMeshes.push(marker)
     targetGroup.add(marker)
 
+    const dir = new Vector3(wheel.directionLocal.x, wheel.directionLocal.y, wheel.directionLocal.z)
+    if (dir.lengthSq() < 1e-6) {
+      dir.set(0, -1, 0)
+    } else {
+      dir.normalize()
+    }
+    const centerPos = localPos.clone().addScaledVector(dir, wheel.suspensionRestLength)
+
     const wheelMesh = new Mesh(
-      wheelGeo,
-      new MeshStandardMaterial({ color: 0xffffff, opacity: 0.32, transparent: true })
+      new SphereGeometry(Math.max(1e-3, wheel.radius), 18, 12),
+      new MeshStandardMaterial({
+        color: isFront ? frontColor : rearColor,
+        wireframe: true,
+        opacity: 0.7,
+        transparent: true,
+      })
     )
-    wheelMesh.position.set(localPos.x, localPos.y - wheel.suspensionRestLength, localPos.z)
-    wheelMesh.scale.setScalar(Math.max(0.5, wheel.radius))
+    wheelMesh.position.copy(centerPos)
+    wheelMesh.userData.wheelId = wheel.id
     wheelPreviewMeshes.push(wheelMesh)
     targetGroup.add(wheelMesh)
   }
@@ -380,6 +393,52 @@ function attachActiveHandle() {
   if (target) {
     transformControls.attach(target)
   }
+}
+
+function alignAxlesVertical() {
+  const frontCenter = computeGroupCenter(true)
+  const rearCenter = computeGroupCenter(false)
+  const targetY = (frontCenter.y + rearCenter.y) * 0.5
+
+  const shiftGroupY = (isFront: boolean, center: Vector3) => {
+    const delta = targetY - center.y
+    patchGroupWheels(isFront, (wheel) => ({
+      ...wheel,
+      chassisConnectionPointLocal: {
+        ...wheel.chassisConnectionPointLocal,
+        y: wheel.chassisConnectionPointLocal.y + delta,
+      },
+    }))
+  }
+
+  shiftGroupY(true, frontCenter)
+  shiftGroupY(false, rearCenter)
+}
+
+function alignAxlesHorizontal() {
+  const frontCenter = computeGroupCenter(true)
+  const rearCenter = computeGroupCenter(false)
+  const targetZ = (frontCenter.z + rearCenter.z) * 0.5
+
+  const shiftGroupZ = (isFront: boolean, center: Vector3) => {
+    const delta = targetZ - center.z
+    patchGroupWheels(isFront, (wheel) => ({
+      ...wheel,
+      chassisConnectionPointLocal: {
+        ...wheel.chassisConnectionPointLocal,
+        z: wheel.chassisConnectionPointLocal.z + delta,
+      },
+    }))
+  }
+
+  shiftGroupZ(true, frontCenter)
+  shiftGroupZ(false, rearCenter)
+}
+
+function equalizeTrackWidth() {
+  const target = Math.max(uiState.frontSpacing, uiState.rearSpacing)
+  handleSpacingChange(true, target)
+  handleSpacingChange(false, target)
 }
 
 function handleHandleMove() {
@@ -798,6 +857,34 @@ onUnmounted(() => {
                 <v-btn value="front" size="small">Front Group</v-btn>
                 <v-btn value="rear" size="small">Rear Group</v-btn>
               </v-btn-toggle>
+              <div class="suspension-editor__overlay-actions">
+                <v-btn
+                  size="small"
+                  icon="mdi-align-vertical-center"
+                  variant="tonal"
+                  color="primary"
+                  :disabled="isDisabled"
+                  @click="alignAxlesVertical"
+                />
+                <v-btn
+                  size="small"
+                  icon="mdi-align-horizontal-center"
+                  variant="tonal"
+                  color="primary"
+                  :disabled="isDisabled"
+                  @click="alignAxlesHorizontal"
+                />
+                <v-btn
+                  size="small"
+                  prepend-icon="mdi-arrow-expand-horizontal"
+                  variant="tonal"
+                  color="primary"
+                  :disabled="isDisabled"
+                  @click="equalizeTrackWidth"
+                >
+                  Equal Width
+                </v-btn>
+              </div>
               <v-btn
                 size="small"
                 prepend-icon="mdi-axis-arrow"
@@ -965,6 +1052,12 @@ onUnmounted(() => {
 
 .suspension-editor__toggle {
   background: rgba(255, 255, 255, 0.02);
+}
+
+.suspension-editor__overlay-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 
 .suspension-editor__hint {
