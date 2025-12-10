@@ -168,18 +168,18 @@ const VEHICLE_EXIT_VERTICAL_MIN = 0.6
 const VEHICLE_SIZE_FALLBACK = { width: 2.4, height: 1.4, length: 4.2 }
 const VEHICLE_FOLLOW_DISTANCE_MIN = 1
 const VEHICLE_FOLLOW_DISTANCE_MAX = 10
-const VEHICLE_FOLLOW_HEIGHT_RATIO = 1.35
-const VEHICLE_FOLLOW_HEIGHT_MIN = 4.8
+const VEHICLE_FOLLOW_HEIGHT_RATIO = 1.75
+const VEHICLE_FOLLOW_HEIGHT_MIN = 5.6
 const VEHICLE_FOLLOW_DISTANCE_LENGTH_RATIO = 1.8
 const VEHICLE_FOLLOW_DISTANCE_WIDTH_RATIO = 0.4
 const VEHICLE_FOLLOW_DISTANCE_DIAGONAL_RATIO = 0.35
-const VEHICLE_FOLLOW_TARGET_LIFT_RATIO = 0.9
-const VEHICLE_FOLLOW_TARGET_LIFT_MIN = 3
+const VEHICLE_FOLLOW_TARGET_LIFT_RATIO = 1.1
+const VEHICLE_FOLLOW_TARGET_LIFT_MIN = 4
 const VEHICLE_FOLLOW_POSITION_LERP_SPEED = 8
 const VEHICLE_FOLLOW_TARGET_LERP_SPEED = 10
 const VEHICLE_FOLLOW_HEADING_LERP_SPEED = 5.5
-const VEHICLE_FOLLOW_TARGET_FORWARD_RATIO = 0.55
-const VEHICLE_FOLLOW_TARGET_FORWARD_MIN = 1.8
+const VEHICLE_FOLLOW_TARGET_FORWARD_RATIO = 0.75
+const VEHICLE_FOLLOW_TARGET_FORWARD_MIN = 2.6
 const VEHICLE_FOLLOW_LOOKAHEAD_TIME = 0.18
 const VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX = 3
 const VEHICLE_FOLLOW_LOOKAHEAD_MIN_SPEED_SQ = 0.9
@@ -820,14 +820,26 @@ export class VehicleDriveController {
     const follow = this.bindings.cameraFollowState
     const local = follow.localOffset
     const minBack = Math.max(placement.distance, VEHICLE_FOLLOW_DISTANCE_MIN)
-    const forwardComponent = local.z
-    if (!Number.isFinite(forwardComponent)) {
-      local.set(0, placement.heightOffset, -minBack)
+    const minHeight = Math.max(placement.heightOffset, VEHICLE_FOLLOW_HEIGHT_MIN)
+    if (!Number.isFinite(local.x) || !Number.isFinite(local.y) || !Number.isFinite(local.z)) {
+      local.set(0, minHeight, -minBack)
       follow.hasLocalOffset = true
       return
     }
-    if (forwardComponent > -minBack) {
+    let adjusted = false
+    if (local.z > -minBack) {
       local.z = -minBack
+      adjusted = true
+    }
+    if (local.y < minHeight) {
+      local.y = minHeight
+      adjusted = true
+    }
+    if (Math.abs(local.x) > 1e-4) {
+      local.x = 0
+      adjusted = true
+    }
+    if (adjusted) {
       follow.hasLocalOffset = true
     }
   }
