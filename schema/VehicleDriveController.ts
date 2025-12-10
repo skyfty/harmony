@@ -54,6 +54,7 @@ export type VehicleDriveCameraFollowState = {
   desiredTarget: THREE.Vector3
   currentPosition: THREE.Vector3
   currentTarget: THREE.Vector3
+  heading: THREE.Vector3
   initialized: boolean
   localOffset: THREE.Vector3
   hasLocalOffset: boolean
@@ -154,6 +155,8 @@ const VEHICLE_FOLLOW_TARGET_LIFT_RATIO = 0.9
 const VEHICLE_FOLLOW_TARGET_LIFT_MIN = 3
 const VEHICLE_FOLLOW_POSITION_LERP_SPEED = 8
 const VEHICLE_FOLLOW_TARGET_LERP_SPEED = 10
+const VEHICLE_FOLLOW_HEADING_LERP_SPEED = 5.5
+const VEHICLE_FOLLOW_HEADING_VELOCITY_EPS = 0.15 * 0.15
 const VEHICLE_FOLLOW_TARGET_FORWARD_RATIO = 0.55
 const VEHICLE_FOLLOW_TARGET_FORWARD_MIN = 1.8
 const VEHICLE_RESET_LIFT = 0.75
@@ -754,6 +757,7 @@ export class VehicleDriveController {
   ): boolean {
     const follow = this.bindings.cameraFollowState
     const temp = this.temp
+    const worldUp = VEHICLE_CAMERA_WORLD_UP
     const placement = computeVehicleFollowPlacement(getVehicleApproxDimensions(vehicleObject))
     const distanceScale = this.getFollowDistanceScale()
     placement.distance = Math.min(
@@ -761,14 +765,58 @@ export class VehicleDriveController {
       Math.max(VEHICLE_FOLLOW_DISTANCE_MIN, placement.distance * distanceScale),
     )
     this.computeVehicleFollowAnchor(vehicleObject, temp.seatPosition, temp.followAnchor)
-    const axisBasis = this.resolveVehicleAxisBasis(instance)
-    const vehicleQuaternion = vehicleObject?.getWorldQuaternion(temp.tempQuaternion) ?? temp.tempQuaternion.identity()
+
+    if (!follow.initialized) {
+      follow.heading.copy(temp.seatForward)
+      follow.heading.y = 0
+      if (follow.heading.lengthSq() < 1e-6) {
+        follow.heading.set(0, 0, 1)
+      } else {
+        follow.heading.normalize()
+      }
+    }
+
+    const vehicleVelocity = instance?.vehicle?.chassisBody?.velocity ?? null
+    const speedSq = vehicleVelocity ? vehicleVelocity.lengthSquared() : 0
+    const desiredHeading = temp.cameraForward
+    if (vehicleVelocity && speedSq > VEHICLE_FOLLOW_HEADING_VELOCITY_EPS) {
+      desiredHeading.set(vehicleVelocity.x, 0, vehicleVelocity.z)
+    } else {
+      desiredHeading.copy(follow.heading.lengthSq() > 1e-6 ? follow.heading : temp.seatForward)
+      desiredHeading.y = 0
+    }
+    if (desiredHeading.lengthSq() < 1e-6) {
+      desiredHeading.set(0, 0, 1)
+    } else {
+      desiredHeading.normalize()
+    }
+
+    const headingLerp = follow.initialized ? computeVehicleFollowLerpAlpha(deltaSeconds, VEHICLE_FOLLOW_HEADING_LERP_SPEED) : 1
+    follow.heading.lerp(desiredHeading, headingLerp)
+    if (follow.heading.lengthSq() < 1e-6) {
+      follow.heading.copy(desiredHeading)
+    } else {
+      follow.heading.normalize()
+    }
+
+    const headingForward = temp.cameraForward.copy(follow.heading)
+    const headingRight = temp.cameraRight.crossVectors(worldUp, headingForward)
+    if (headingRight.lengthSq() < 1e-6) {
+      headingRight.set(1, 0, 0)
+    } else {
+      headingRight.normalize()
+    }
+    const headingUp = temp.cameraUp.copy(worldUp)
 
     this.ensureVehicleFollowLocalOffset(placement)
     this.enforceVehicleFollowBehind(placement)
 
     const targetOffsetLocal = temp.followOffset.set(0, placement.targetLift, placement.targetForward)
-    const targetWorldOffset = this.resolveVehicleFollowWorldOffset(targetOffsetLocal, axisBasis, vehicleQuaternion, temp.followTarget)
+    const targetWorldOffset = temp.followTarget
+      .copy(headingRight)
+      .multiplyScalar(targetOffsetLocal.x)
+      .addScaledVector(headingUp, targetOffsetLocal.y)
+      .addScaledVector(headingForward, targetOffsetLocal.z)
     follow.desiredTarget.copy(temp.followAnchor).add(targetWorldOffset)
 
     const mapControls = ctx.mapControls
@@ -786,17 +834,22 @@ export class VehicleDriveController {
       userAdjusted = deltaPosition > 1e-3
     }
     if (userAdjusted && ctx.camera) {
-      this.updateVehicleFollowLocalOffsetFromCamera(temp.followAnchor, axisBasis, vehicleQuaternion, ctx.camera.position)
+      temp.followWorldOffset.copy(ctx.camera.position).sub(temp.followAnchor)
+      follow.localOffset.set(
+        temp.followWorldOffset.dot(headingRight),
+        temp.followWorldOffset.dot(headingUp),
+        temp.followWorldOffset.dot(headingForward),
+      )
+      follow.hasLocalOffset = true
       this.enforceVehicleFollowBehind(placement)
       this.clampVehicleFollowLocalOffset(placement)
     }
 
-    const desiredWorldOffset = this.resolveVehicleFollowWorldOffset(
-      follow.localOffset,
-      axisBasis,
-      vehicleQuaternion,
-      temp.followWorldOffset,
-    )
+    const desiredWorldOffset = temp.followWorldOffset
+      .copy(headingRight)
+      .multiplyScalar(follow.localOffset.x)
+      .addScaledVector(headingUp, follow.localOffset.y)
+      .addScaledVector(headingForward, follow.localOffset.z)
     follow.desiredPosition.copy(temp.followAnchor).add(desiredWorldOffset)
 
     const immediate = Boolean(options.immediate) || !follow.initialized
@@ -814,7 +867,7 @@ export class VehicleDriveController {
     const run = this.deps.runWithProgrammaticCameraMutation ?? ((fn: () => void) => fn())
     run(() => {
       ctx.camera!.position.copy(follow.currentPosition)
-      ctx.camera!.up.copy(temp.seatUp)
+      ctx.camera!.up.copy(headingUp)
       if (mapControls) {
           mapControls.target.copy(follow.currentTarget)
           ctx.camera!.lookAt(follow.currentTarget)
