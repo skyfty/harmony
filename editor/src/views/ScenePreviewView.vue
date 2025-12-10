@@ -665,7 +665,6 @@ const wheelChassisDisplacementHelper = new THREE.Vector3()
 const defaultWheelAxisVector = new THREE.Vector3(DEFAULT_AXLE.x, DEFAULT_AXLE.y, DEFAULT_AXLE.z).normalize()
 const VEHICLE_WHEEL_MIN_RADIUS = 0.01
 const VEHICLE_SPEED_EPSILON = 1e-3
-const VEHICLE_SPEED_GAUGE_MAX_MPS = 32
 const VEHICLE_WHEEL_SPIN_EPSILON = 1e-4
 const VEHICLE_TRAVEL_EPSILON = 1e-5
 const ENABLE_VEHICLE_WHEEL_VISUALS = false
@@ -935,11 +934,7 @@ const vehicleDriveInput = reactive<VehicleDriveInputState>({
 })
 
 const vehicleSpeed = ref(0)
-const vehicleSpeedPercent = computed(() => Math.min(1, vehicleSpeed.value / VEHICLE_SPEED_GAUGE_MAX_MPS))
 const vehicleSpeedKmh = computed(() => Math.round(vehicleSpeed.value * 3.6))
-const vehicleSpeedGaugeStyle = computed(() => ({
-	'--speed-angle': `${vehicleSpeedPercent.value * 360}deg`,
-}))
 
 const vehicleDriveCameraRestoreState = {
 	hasSnapshot: false,
@@ -7205,6 +7200,10 @@ onBeforeUnmount(() => {
 				</div>
 				<div class="scene-preview__drive-controls">
 					<div class="scene-preview__steering-column">
+						<div class="scene-preview__speed-display" aria-live="polite">
+							<span class="scene-preview__speed-display-value">{{ vehicleSpeedKmh }}</span>
+							<span class="scene-preview__speed-display-unit">km/h</span>
+						</div>
 						<div
 							ref="steeringWheelRef"
 							class="scene-preview__steering-wheel"
@@ -7236,19 +7235,6 @@ onBeforeUnmount(() => {
 						>
 							{{ vehicleDriveCameraToggleConfig.label }}
 						</v-btn>
-					</div>
-					<div
-						v-if="vehicleDriveUi.visible"
-						class="scene-preview__speed-gauge"
-						aria-hidden="true"
-					>
-						<div class="scene-preview__speed-gauge__dial" :style="vehicleSpeedGaugeStyle">
-							<div class="scene-preview__speed-gauge__needle"></div>
-						</div>
-						<div class="scene-preview__speed-gauge__values">
-							<span class="scene-preview__speed-gauge__value">{{ vehicleSpeedKmh }}</span>
-							<span class="scene-preview__speed-gauge__unit">km/h</span>
-						</div>
 					</div>
 					<div class="scene-preview__pedal-row">
 						<v-btn
@@ -8070,6 +8056,27 @@ onBeforeUnmount(() => {
 	gap: 10px;
 }
 
+.scene-preview__speed-display {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 2px;
+	color: #f5f7ff;
+	text-align: center;
+}
+
+.scene-preview__speed-display-value {
+	font-size: 1.4rem;
+	font-weight: 600;
+	color: #9fd6ff;
+}
+
+.scene-preview__speed-display-unit {
+	font-size: 0.75rem;
+	letter-spacing: 0.12em;
+	opacity: 0.8;
+}
+
 .scene-preview__steering-wheel {
 	position: relative;
 	width: 120px;
@@ -8148,74 +8155,6 @@ onBeforeUnmount(() => {
 	box-shadow: inset 0 0 0 1px rgba(63, 201, 255, 0.35);
 }
 
-.scene-preview__speed-gauge {
-	width: 110px;
-	height: 110px;
-	border-radius: 50%;
-	background: conic-gradient(from -90deg, rgba(94, 214, 255, 0.95) var(--speed-angle, 0deg), rgba(255, 255, 255, 0.06) var(--speed-angle, 0deg));
-	border: 1px solid rgba(255, 255, 255, 0.2);
-	box-shadow:
-		0 12px 26px rgba(1, 6, 18, 0.7),
-		inset 0 0 18px rgba(0, 0, 0, 0.5);
-	position: relative;
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	justify-content: center;
-	gap: 6px;
-	pointer-events: none;
-	margin: 0 6px;
-}
-
-.scene-preview__speed-gauge::after {
-	content: '';
-	position: absolute;
-	inset: 16%;
-	border-radius: 50%;
-	background: rgba(5, 8, 20, 0.92);
-	border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.scene-preview__speed-gauge__dial {
-	width: 100%;
-	height: 100%;
-	position: relative;
-	border-radius: 50%;
-}
-
-.scene-preview__speed-gauge__needle {
-	position: absolute;
-	left: 50%;
-	bottom: 16%;
-	width: 2px;
-	height: 48%;
-	background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(83, 220, 255, 0.95));
-	transform-origin: center bottom;
-	transform: rotate(calc(var(--speed-angle, 0deg) - 90deg));
-	box-shadow: 0 0 12px rgba(80, 214, 255, 0.9);
-}
-
-.scene-preview__speed-gauge__values {
-	position: relative;
-	z-index: 1;
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	gap: 2px;
-	color: #f5f7ff;
-	text-align: center;
-}
-
-.scene-preview__speed-gauge__value {
-	font-size: 1.3rem;
-	font-weight: 600;
-}
-
-.scene-preview__speed-gauge__unit {
-	font-size: 0.75rem;
-	letter-spacing: 0.15em;
-	opacity: 0.8;
-}
 
 .scene-preview__purpose-button :deep(.v-icon) {
 	font-size: 22px;
