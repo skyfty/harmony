@@ -56,6 +56,8 @@ export type VehicleDriveCameraFollowState = {
   currentTarget: THREE.Vector3
   desiredAnchor: THREE.Vector3
   currentAnchor: THREE.Vector3
+  anchorHoldSeconds: number
+  lastVelocityDirection: THREE.Vector3
   heading: THREE.Vector3
   initialized: boolean
   localOffset: THREE.Vector3
@@ -165,6 +167,9 @@ const VEHICLE_FOLLOW_LOOKAHEAD_TIME = 0.18
 const VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX = 3
 const VEHICLE_FOLLOW_LOOKAHEAD_MIN_SPEED_SQ = 0.9
 const VEHICLE_FOLLOW_ANCHOR_LERP_SPEED = 4.5
+const VEHICLE_FOLLOW_COLLISION_LOCK_SPEED_SQ = 1.21
+const VEHICLE_FOLLOW_COLLISION_DIRECTION_DOT_THRESHOLD = -0.35
+const VEHICLE_FOLLOW_COLLISION_HOLD_TIME = 0.8
 const VEHICLE_RESET_LIFT = 0.75
 
 function clampAxisScalar(value: number): number {
@@ -245,6 +250,7 @@ export class VehicleDriveController {
     followWorldOffset: new THREE.Vector3(),
     followPredicted: new THREE.Vector3(),
     predictionOffset: new THREE.Vector3(),
+    planarVelocity: new THREE.Vector3(),
     cameraQuaternionInverse: new THREE.Quaternion(),
     resetQuaternion: new THREE.Quaternion(),
     cameraMatrix: new THREE.Matrix4(),
@@ -776,10 +782,10 @@ export class VehicleDriveController {
     this.computeVehicleFollowAnchor(vehicleObject, instance, temp.seatPosition, temp.followAnchor)
     const predictedAnchor = temp.followPredicted.copy(temp.followAnchor)
     if (vehicleVelocity) {
-      // Predict short-term motion so the camera looks ahead and reduces jitter.
-      temp.predictionOffset.set(vehicleVelocity.x, 0, vehicleVelocity.z)
-      const planarSpeedSq = temp.predictionOffset.lengthSq()
+      temp.planarVelocity.set(vehicleVelocity.x, 0, vehicleVelocity.z)
+      const planarSpeedSq = temp.planarVelocity.lengthSq()
       if (planarSpeedSq > VEHICLE_FOLLOW_LOOKAHEAD_MIN_SPEED_SQ) {
+        temp.predictionOffset.copy(temp.planarVelocity)
         temp.predictionOffset.multiplyScalar(VEHICLE_FOLLOW_LOOKAHEAD_TIME)
         const offsetLength = temp.predictionOffset.length()
         if (offsetLength > VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX) {
@@ -787,15 +793,37 @@ export class VehicleDriveController {
         }
         predictedAnchor.add(temp.predictionOffset)
       }
+      if (planarSpeedSq > VEHICLE_FOLLOW_COLLISION_LOCK_SPEED_SQ) {
+        const normalizedDir = temp.tempVector.copy(temp.planarVelocity)
+        const dirLength = normalizedDir.length()
+        if (dirLength > 1e-6 && follow.lastVelocityDirection.lengthSq() > 1e-6) {
+          normalizedDir.multiplyScalar(1 / dirLength)
+          if (normalizedDir.dot(follow.lastVelocityDirection) < VEHICLE_FOLLOW_COLLISION_DIRECTION_DOT_THRESHOLD) {
+            follow.anchorHoldSeconds = VEHICLE_FOLLOW_COLLISION_HOLD_TIME
+          }
+        }
+      }
+      if (planarSpeedSq > 1e-6) {
+        temp.tempVector.copy(temp.planarVelocity).normalize()
+        follow.lastVelocityDirection.copy(temp.tempVector)
+      }
+    } else {
+      follow.lastVelocityDirection.set(0, 0, 0)
+    }
+    if (follow.anchorHoldSeconds > 0) {
+      follow.anchorHoldSeconds = Math.max(0, follow.anchorHoldSeconds - deltaSeconds)
     }
 
     follow.desiredAnchor.copy(predictedAnchor)
-    const anchorAlpha = options.immediate || !follow.initialized
-      ? 1
-      : computeVehicleFollowLerpAlpha(deltaSeconds, VEHICLE_FOLLOW_ANCHOR_LERP_SPEED)
+    const anchorHoldActive = follow.anchorHoldSeconds > 0
+    const anchorAlpha = anchorHoldActive
+      ? 0
+      : options.immediate || !follow.initialized
+        ? 1
+        : computeVehicleFollowLerpAlpha(deltaSeconds, VEHICLE_FOLLOW_ANCHOR_LERP_SPEED)
     if (anchorAlpha >= 1) {
       follow.currentAnchor.copy(follow.desiredAnchor)
-    } else {
+    } else if (anchorAlpha > 0) {
       follow.currentAnchor.lerp(follow.desiredAnchor, anchorAlpha)
     }
     const anchorForCamera = follow.currentAnchor
@@ -808,6 +836,8 @@ export class VehicleDriveController {
       } else {
         follow.heading.normalize()
       }
+      follow.anchorHoldSeconds = 0
+      follow.lastVelocityDirection.set(0, 0, 0)
     }
 
     const speedSq = vehicleVelocity ? vehicleVelocity.lengthSquared() : 0
