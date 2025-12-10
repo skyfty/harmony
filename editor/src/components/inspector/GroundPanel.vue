@@ -28,6 +28,12 @@ const hasGround = computed(() => Boolean(groundDefinition.value))
 
 const localWidth = computed(() => groundDefinition.value?.width ?? 0)
 const localDepth = computed(() => groundDefinition.value?.depth ?? 0)
+const enableAirWall = computed({
+  get: () => sceneStore.groundSettings.enableAirWall === true,
+  set: (value: boolean) => {
+    sceneStore.setGroundAirWallEnabled(value)
+  },
+})
 
 const noiseStrength = ref(1)
 const selectedNoiseMode = ref<GroundGenerationMode>('perlin')
@@ -195,6 +201,14 @@ watch(selectedNoiseMode, (mode) => {
           suffix="m"
         />
       </div>
+
+      <v-switch
+        v-model="enableAirWall"
+        density="compact"
+        hide-details
+        color="primary"
+        label="Enable Air Wall"
+      />
 
       <div class="ground-tool-tabs">
         <div class="ground-tabs-layout">

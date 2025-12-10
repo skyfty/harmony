@@ -857,6 +857,7 @@ const scatterInstanceMatrixHelper = new THREE.Matrix4();
 const scatterMatrixHelper = new THREE.Matrix4();
 let physicsWorld: CANNON.World | null = null;
 const rigidbodyInstances = new Map<string, RigidbodyInstance>();
+const airWallBodies = new Map<string, CANNON.Body>();
 const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>();
 const rigidbodyContactMaterialKeys = new Set<string>();
 const vehicleInstances = new Map<string, VehicleInstanceWithWheels>();
@@ -872,6 +873,8 @@ const PHYSICS_CONTACT_STIFFNESS = 1e9
 const PHYSICS_CONTACT_RELAXATION = 4
 const PHYSICS_FRICTION_STIFFNESS = 1e9
 const PHYSICS_FRICTION_RELAXATION = 4
+const AIR_WALL_HEIGHT = 8
+const AIR_WALL_THICKNESS = 0.6
 
 const wheelForwardHelper = new THREE.Vector3();
 const wheelAxisHelper = new THREE.Vector3();
@@ -2440,6 +2443,26 @@ function resolveNodeById(nodeId: string): SceneNode | null {
   return previewNodeMap.get(nodeId) ?? null;
 }
 
+function findGroundNode(nodes: SceneNode[] | undefined | null): SceneNode | null {
+  if (!Array.isArray(nodes)) {
+    return null;
+  }
+  const stack: SceneNode[] = [...nodes];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    if (isGroundDynamicMesh(node.dynamicMesh)) {
+      return node;
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  return null;
+}
+
 function collectNodesByAssetId(nodes: SceneNode[] | undefined | null): Map<string, SceneNode[]> {
   const map = new Map<string, SceneNode[]>();
   if (!Array.isArray(nodes)) {
@@ -2898,6 +2921,91 @@ function ensurePhysicsWorld(): CANNON.World {
   });
 }
 
+function removeAirWalls(): void {
+  const world = physicsWorld;
+  if (!world) {
+    airWallBodies.clear();
+    return;
+  }
+  airWallBodies.forEach((body) => {
+    try {
+      world.removeBody(body);
+    } catch (error) {
+      console.warn('[SceneViewer] Failed to remove air wall body', error);
+    }
+  });
+  airWallBodies.clear();
+}
+
+function syncAirWallsForDocument(document: SceneJsonExportDocument | null): void {
+  removeAirWalls();
+  const airWallEnabled = document?.groundSettings?.enableAirWall !== false;
+  if (!physicsWorld || !airWallEnabled) {
+    return;
+  }
+  const groundNode = findGroundNode(document.nodes);
+  if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
+    return;
+  }
+  const { width, depth } = groundNode.dynamicMesh;
+  if (!Number.isFinite(width) || !Number.isFinite(depth) || width <= 0 || depth <= 0) {
+    return;
+  }
+  const groundObject = nodeObjectMap.get(groundNode.id) ?? null;
+  const groundScale = new THREE.Vector3(1, 1, 1);
+  const groundPosition = new THREE.Vector3(0, 0, 0);
+  if (groundObject) {
+    groundObject.updateMatrixWorld(true);
+    groundObject.getWorldScale(groundScale);
+    groundObject.getWorldPosition(groundPosition);
+  }
+  const worldWidth = Math.max(1e-4, width * Math.abs(groundScale.x));
+  const worldDepth = Math.max(1e-4, depth * Math.abs(groundScale.z));
+  const halfWidth = worldWidth * 0.5;
+  const halfDepth = worldDepth * 0.5;
+  const wallHeight = AIR_WALL_HEIGHT;
+  const wallThickness = AIR_WALL_THICKNESS;
+  const wallY = groundPosition.y + wallHeight * 0.5;
+  const depthWithMargin = worldDepth + wallThickness * 2;
+  const widthWithMargin = worldWidth + wallThickness * 2;
+
+  const walls: Array<{ key: string; halfExtents: [number, number, number]; position: CANNON.Vec3 }> = [
+    {
+      key: 'airwall:+x',
+      halfExtents: [wallThickness * 0.5, wallHeight * 0.5, depthWithMargin * 0.5],
+      position: new CANNON.Vec3(groundPosition.x + halfWidth + wallThickness * 0.5, wallY, groundPosition.z),
+    },
+    {
+      key: 'airwall:-x',
+      halfExtents: [wallThickness * 0.5, wallHeight * 0.5, depthWithMargin * 0.5],
+      position: new CANNON.Vec3(groundPosition.x - halfWidth - wallThickness * 0.5, wallY, groundPosition.z),
+    },
+    {
+      key: 'airwall:+z',
+      halfExtents: [widthWithMargin * 0.5, wallHeight * 0.5, wallThickness * 0.5],
+      position: new CANNON.Vec3(groundPosition.x, wallY, groundPosition.z + halfDepth + wallThickness * 0.5),
+    },
+    {
+      key: 'airwall:-z',
+      halfExtents: [widthWithMargin * 0.5, wallHeight * 0.5, wallThickness * 0.5],
+      position: new CANNON.Vec3(groundPosition.x, wallY, groundPosition.z - halfDepth - wallThickness * 0.5),
+    },
+  ];
+
+  walls.forEach((wall) => {
+    const [hx, hy, hz] = wall.halfExtents;
+    if (![hx, hy, hz].every((value) => Number.isFinite(value) && value > 0)) {
+      return;
+    }
+    const shape = new CANNON.Box(new CANNON.Vec3(hx, hy, hz));
+    const body = new CANNON.Body({ mass: 0 });
+    body.addShape(shape);
+    body.position.copy(wall.position);
+    physicsWorld.addBody(body);
+    airWallBodies.set(wall.key, body);
+  });
+}
+
 function resetPhysicsWorld(): void {
   const world = physicsWorld;
   if (world) {
@@ -2915,9 +3023,17 @@ function resetPhysicsWorld(): void {
         console.warn('[SceneViewer] Failed to remove rigidbody', error);
       }
     });
+    airWallBodies.forEach((body) => {
+      try {
+        world.removeBody(body);
+      } catch (error) {
+        console.warn('[SceneViewer] Failed to remove air wall body', error);
+      }
+    });
   }
   vehicleInstances.clear();
   rigidbodyInstances.clear();
+  airWallBodies.clear();
   physicsWorld = null;
   groundHeightfieldCache.clear();
   rigidbodyMaterialCache.clear();
@@ -3284,12 +3400,14 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
   if (!document) {
     resetPhysicsWorld();
     syncVehicleInstancesForDocument(null);
+    syncAirWallsForDocument(null);
     return;
   }
   const rigidbodyNodes = collectRigidbodyNodes(document.nodes);
   if (!rigidbodyNodes.length) {
     resetPhysicsWorld();
     syncVehicleInstancesForDocument(null);
+    syncAirWallsForDocument(null);
     return;
   }
   const world = ensurePhysicsWorld();
@@ -3335,6 +3453,7 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
     }
   });
   syncVehicleInstancesForDocument(document);
+  syncAirWallsForDocument(document);
 }
 
 function stepPhysicsWorld(delta: number): void {
