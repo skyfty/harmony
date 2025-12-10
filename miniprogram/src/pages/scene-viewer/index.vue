@@ -5020,7 +5020,7 @@ function requestVehicleSmoothStop(): void {
   if (vehicleSpeed.value <= VEHICLE_SMOOTH_STOP_TRIGGER_SPEED) {
     return;
   }
-  vehicleDriveController.requestSmoothStop();
+  vehicleDriveController.requestSmoothStop({ initialSpeed: vehicleSpeed.value });
 }
 
 function handleDrivePadTouchStart(event: TouchEvent): void {

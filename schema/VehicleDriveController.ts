@@ -144,10 +144,13 @@ const VEHICLE_SPEED_SOFT_CAP_SQ = VEHICLE_SPEED_SOFT_CAP * VEHICLE_SPEED_SOFT_CA
 const VEHICLE_SPEED_HARD_CAP_SQ = VEHICLE_SPEED_HARD_CAP * VEHICLE_SPEED_HARD_CAP
 const VEHICLE_SPEED_LIMIT_DAMPING = 0.08
 const VEHICLE_COASTING_DAMPING = 0.04
-const VEHICLE_SMOOTH_STOP_DEFAULT_DAMPING = 0.28
-const VEHICLE_SMOOTH_STOP_MAX_DAMPING = 0.6
-const VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD = 0.18
+const VEHICLE_SMOOTH_STOP_DEFAULT_DAMPING = 0.18
+const VEHICLE_SMOOTH_STOP_MAX_DAMPING = 0.45
+const VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD = 0.14
 const VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD_SQ = VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD * VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD
+const VEHICLE_SMOOTH_STOP_FINAL_SPEED = 0.05
+const VEHICLE_SMOOTH_STOP_FINAL_SPEED_SQ = VEHICLE_SMOOTH_STOP_FINAL_SPEED * VEHICLE_SMOOTH_STOP_FINAL_SPEED
+const VEHICLE_SMOOTH_STOP_MIN_BLEND = 0.25
 const VEHICLE_STEER_ANGLE = THREE.MathUtils.degToRad(26)
 const VEHICLE_STEER_SOFT_CAP = 4.2 // m/s speed where steering starts damping
 const VEHICLE_STEER_HARD_CAP = 10 // m/s speed where steering is strongly limited
@@ -279,6 +282,7 @@ export class VehicleDriveController {
     active: false,
     damping: VEHICLE_SMOOTH_STOP_DEFAULT_DAMPING,
     stopSpeedSq: VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD_SQ,
+    initialSpeedSq: VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD_SQ,
   }
 
   constructor(deps: VehicleDriveControllerDeps, bindings: VehicleDriveControllerBindings) {
@@ -332,22 +336,27 @@ export class VehicleDriveController {
     this.bindings.uiOverride.value = mode
   }
 
-  requestSmoothStop(options: { damping?: number; stopSpeed?: number } = {}): void {
+  requestSmoothStop(options: { damping?: number; stopSpeed?: number; initialSpeed?: number } = {}): void {
     if (!this.state.active) {
       return
     }
     const damping = typeof options.damping === 'number' ? options.damping : VEHICLE_SMOOTH_STOP_DEFAULT_DAMPING
     const stopSpeed = typeof options.stopSpeed === 'number' ? options.stopSpeed : VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD
+    const initialSpeed = typeof options.initialSpeed === 'number' && Number.isFinite(options.initialSpeed)
+      ? Math.max(options.initialSpeed, stopSpeed)
+      : Math.sqrt(this.smoothStopState.stopSpeedSq)
     this.smoothStopState.active = true
     this.smoothStopState.damping = Math.max(
       VEHICLE_COASTING_DAMPING,
       Math.min(VEHICLE_SMOOTH_STOP_MAX_DAMPING, damping),
     )
     this.smoothStopState.stopSpeedSq = Math.max(1e-4, stopSpeed * stopSpeed)
+    this.smoothStopState.initialSpeedSq = Math.max(this.smoothStopState.stopSpeedSq, initialSpeed * initialSpeed, 1e-4)
   }
 
   clearSmoothStop(): void {
     this.smoothStopState.active = false
+    this.smoothStopState.initialSpeedSq = VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD_SQ
   }
 
   resetInputs(): void {
@@ -608,18 +617,28 @@ export class VehicleDriveController {
       if (speedSq >= VEHICLE_SPEED_HARD_CAP_SQ) {
         velocity.scale(1 - VEHICLE_SPEED_LIMIT_DAMPING, velocity)
       } else if (Math.abs(throttle) < 0.05) {
-        const baseDamping = smoothStop.active ? smoothStop.damping : VEHICLE_COASTING_DAMPING
-        const damping = Math.min(0.95, Math.max(0, baseDamping))
-        velocity.scale(1 - damping, velocity)
+        let damping = VEHICLE_COASTING_DAMPING
+        if (smoothStop.active) {
+          const startSpeedSq = Math.max(1e-4, smoothStop.initialSpeedSq)
+          const progress = startSpeedSq > 0 ? 1 - Math.min(1, speedSq / startSpeedSq) : 1
+          const eased = progress > 0 ? progress * progress : 0
+          const blend = Math.max(VEHICLE_SMOOTH_STOP_MIN_BLEND, Math.min(1, eased))
+          const targetDamping = Math.min(smoothStop.damping, VEHICLE_SMOOTH_STOP_MAX_DAMPING)
+          damping = THREE.MathUtils.lerp(VEHICLE_COASTING_DAMPING, targetDamping, blend)
+        }
+        const clampedDamping = Math.min(0.95, Math.max(0, damping))
+        velocity.scale(1 - clampedDamping, velocity)
         if (smoothStop.active) {
           const nextSpeedSq = velocity.lengthSquared()
-          if (nextSpeedSq <= smoothStop.stopSpeedSq) {
+          if (nextSpeedSq <= VEHICLE_SMOOTH_STOP_FINAL_SPEED_SQ) {
             velocity.set(0, 0, 0)
             smoothStop.active = false
             speedSq = 0
           } else {
             speedSq = nextSpeedSq
           }
+        } else {
+          speedSq = velocity.lengthSquared()
         }
       }
     }
