@@ -967,6 +967,8 @@ const vehicleDriveCameraFollowState = {
 	initialized: false,
 	localOffset: new THREE.Vector3(),
 	hasLocalOffset: false,
+	motionDistanceBlend: 0,
+	lookaheadOffset: new THREE.Vector3(),
 }
 
 const vehicleDriveController = new VehicleDriveController(

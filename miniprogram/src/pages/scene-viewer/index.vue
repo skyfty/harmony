@@ -1073,6 +1073,8 @@ const vehicleDriveCameraFollowState = reactive<VehicleDriveCameraFollowState>({
   initialized: false,
   localOffset: new THREE.Vector3(),
   hasLocalOffset: false,
+  motionDistanceBlend: 0,
+  lookaheadOffset: new THREE.Vector3(),
 });
 const joystickRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
 const joystickVector = reactive({ x: 0, y: 0 });
@@ -1224,14 +1226,14 @@ const vehicleDriveController = new VehicleDriveController(
     ensurePhysicsWorld,
     ensureVehicleBindingForNode,
     normalizeNodeId,
-    setCameraViewState,
+    setCameraViewState: (mode, targetId) => setCameraViewState(mode as CameraViewMode, targetId ?? null),
     setCameraCaging,
     runWithProgrammaticCameraMutation,
     withControlsVerticalFreedom,
     lockControlsPitchToCurrent,
     syncLastFirstPersonStateFromCamera,
     onToast: (message) => uni.showToast({ title: message, icon: 'none' }),
-    onResolveBehaviorToken: resolveBehaviorToken,
+    onResolveBehaviorToken: (token, resolution) => resolveBehaviorToken(token, resolution as any),
   },
   {
     state: vehicleDriveStateBridge as any,
@@ -3449,7 +3451,7 @@ function updateVehicleWheelVisuals(delta: number): void {
     if (!wheelBindings?.length) {
       return;
     }
-    const hasFrontWheel = wheelBindings.some((binding) => binding.isFrontWheel && binding.nodeId);
+    const hasFrontWheel = wheelBindings.some((binding: VehicleWheelBinding) => binding.isFrontWheel && binding.nodeId);
     if (!hasFrontWheel) {
       return;
     }
@@ -3481,7 +3483,7 @@ function updateVehicleWheelVisuals(delta: number): void {
     const signedSpeed = signedDistance / safeDelta;
     const canSpin = Math.abs(signedSpeed) >= VEHICLE_SPEED_EPSILON && Math.abs(signedDistance) >= VEHICLE_TRAVEL_EPSILON;
 
-    wheelBindings.forEach((binding) => {
+    wheelBindings.forEach((binding: VehicleWheelBinding) => {
       if (!binding.isFrontWheel || !binding.nodeId) {
         return;
       }
