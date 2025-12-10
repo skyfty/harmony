@@ -7188,6 +7188,17 @@ onBeforeUnmount(() => {
 						<span class="scene-preview__drive-heading-label">{{ vehicleDriveUi.label }}</span>
 					</div>
 					<v-btn
+						v-if="vehicleDriveState.active"
+						class="scene-preview__drive-camera-toggle"
+						variant="text"
+						size="small"
+						color="secondary"
+						:icon="vehicleDriveCameraToggleConfig.icon"
+						:title="vehicleDriveCameraToggleConfig.label"
+						:aria-label="vehicleDriveCameraToggleConfig.label"
+						@click="handleVehicleDriveCameraToggle"
+					/>
+					<v-btn
 						class="scene-preview__drive-exit"
 						icon="mdi-exit-run"
 						variant="text"
@@ -7223,18 +7234,6 @@ onBeforeUnmount(() => {
 								<span>{{ vehicleSteeringAngleLabel }}</span>
 							</div>
 						</div>
-						<v-btn
-							v-if="vehicleDriveState.active"
-							class="scene-preview__drive-camera-toggle"
-							variant="tonal"
-							size="small"
-							color="secondary"
-							:prepend-icon="vehicleDriveCameraToggleConfig.icon"
-							:title="vehicleDriveCameraToggleConfig.label"
-							@click="handleVehicleDriveCameraToggle"
-						>
-							{{ vehicleDriveCameraToggleConfig.label }}
-						</v-btn>
 					</div>
 					<div class="scene-preview__pedal-row">
 						<v-btn
@@ -7994,7 +7993,6 @@ onBeforeUnmount(() => {
 	display: flex;
 	align-items: center;
 	gap: 10px;
-	justify-content: space-between;
 }
 
 .scene-preview__drive-heading-text {
@@ -8020,15 +8018,11 @@ onBeforeUnmount(() => {
 }
 
 .scene-preview__drive-camera-toggle {
-	text-transform: none;
-	font-weight: 600;
-	letter-spacing: 0.04em;
 	min-width: 0;
-	width: 100%;
 }
 
-.scene-preview__drive-camera-toggle :deep(.v-btn__content) {
-	gap: 4px;
+.scene-preview__drive-camera-toggle :deep(.v-btn__overlay) {
+	opacity: 0;
 }
 
 .scene-preview__drive-exit {
@@ -8131,6 +8125,8 @@ onBeforeUnmount(() => {
 
 .scene-preview__steering-wheel-hub span {
 	color: #9fd6ff;
+	display: inline-block;
+	transform: rotate(calc(-1 * var(--steering-rotation, 0deg)));
 }
 
 .scene-preview__pedal-row {
