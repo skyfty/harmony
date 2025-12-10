@@ -77,8 +77,7 @@ const isReady = ref(false)
 const loadError = ref<string | null>(null)
 const activeHandle = ref<'front' | 'rear'>('front')
 const uiState = reactive({
-  frontSpacing: 0,
-  rearSpacing: 0,
+  spacing: 0,
 })
 
 let renderer: WebGLRenderer | null = null
@@ -103,6 +102,26 @@ let animationFrame: number | null = null
 let wheelPreviewMeshes: Mesh[] = []
 const tempBox = new Box3()
 const tempSize = new Vector3()
+
+type AxisIndex = 0 | 1 | 2
+
+function normalizeAxisIndex(axis: number | undefined): AxisIndex {
+  if (axis === 1) return 1
+  if (axis === 2) return 2
+  return 0
+}
+
+function getAxisValue(vector: { x: number; y: number; z: number }, axis: AxisIndex): number {
+  return axis === 0 ? vector.x : axis === 1 ? vector.y : vector.z
+}
+
+function setAxisValue(vector: { x: number; y: number; z: number }, axis: AxisIndex, value: number) {
+  if (axis === 0) return { ...vector, x: value }
+  if (axis === 1) return { ...vector, y: value }
+  return { ...vector, z: value }
+}
+
+const rightAxisIndex = computed<AxisIndex>(() => normalizeAxisIndex(normalizedProps.value.indexRightAxis))
 
 function handleClose() {
   emit('close')
@@ -167,6 +186,7 @@ function disposePreview() {
     transformControls.dispose?.()
   }
   transformControls = null
+  const scene = previewScene
   previewScene = null
   camera = null
   previewModelGroup = null
@@ -174,11 +194,11 @@ function disposePreview() {
   frontGroup = null
   rearGroup = null
   if (groundMesh) {
-    previewScene?.remove(groundMesh)
+    scene?.remove(groundMesh)
   }
   groundMesh = null
   if (chassisBodyMesh) {
-    previewScene?.remove(chassisBodyMesh)
+    scene?.remove(chassisBodyMesh)
   }
   chassisBodyMesh = null
   chassisShapeOffset = null
@@ -307,7 +327,6 @@ function rebuildHandles() {
   chassisGroup.add(frontGroup, rearGroup)
 
   const sphereGeo = new SphereGeometry(0.08, 14, 10)
-  const wheelGeo = new SphereGeometry(0.12, 18, 12)
   const frontColor = new Color('#4cc9f0')
   const rearColor = new Color('#5ad29c')
 
@@ -361,8 +380,7 @@ function rebuildHandles() {
     placeWheelMesh(wheel, isFront ? frontCenter : rearCenter, isFront ? frontGroup : rearGroup, isFront)
   })
 
-  uiState.frontSpacing = computeGroupSpacing(true)
-  uiState.rearSpacing = computeGroupSpacing(false)
+  uiState.spacing = computeUniformSpacing()
   attachActiveHandle()
 }
 
@@ -382,8 +400,16 @@ function computeGroupCenter(isFront: boolean): Vector3 {
 function computeGroupSpacing(isFront: boolean): number {
   const group = wheelEntries.value.filter((wheel) => wheel.isFrontWheel === isFront)
   if (!group.length) return 0
-  const maxAbs = Math.max(...group.map((wheel) => Math.abs(wheel.chassisConnectionPointLocal.x)))
-  return Number(maxAbs.toFixed(3))
+  const axis = rightAxisIndex.value
+  const maxAbs = Math.max(...group.map((wheel) => Math.abs(getAxisValue(wheel.chassisConnectionPointLocal, axis))))
+  return Number((maxAbs * 2).toFixed(3))
+}
+
+function computeUniformSpacing(): number {
+  if (!wheelEntries.value.length) return 0
+  const axis = rightAxisIndex.value
+  const maxAbs = Math.max(...wheelEntries.value.map((wheel) => Math.abs(getAxisValue(wheel.chassisConnectionPointLocal, axis))))
+  return Number((maxAbs * 2).toFixed(3))
 }
 
 function attachActiveHandle() {
@@ -436,9 +462,10 @@ function alignAxlesHorizontal() {
 }
 
 function equalizeTrackWidth() {
-  const target = Math.max(uiState.frontSpacing, uiState.rearSpacing)
-  handleSpacingChange(true, target)
-  handleSpacingChange(false, target)
+  const front = computeGroupSpacing(true)
+  const rear = computeGroupSpacing(false)
+  const target = Math.max(front, rear)
+  handleSpacingChange(target)
 }
 
 function handleHandleMove() {
@@ -485,45 +512,94 @@ function patchGroupWheels(isFront: boolean, mutator: (wheel: VehicleWheelProps) 
   sceneStore.updateNodeComponentProps(nodeId, component.id, { wheels: next })
 }
 
+function patchAllWheels(mutator: (wheel: VehicleWheelProps) => VehicleWheelProps) {
+  const component = vehicleComponent.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId) return
+  const current = clampVehicleComponentProps(component.props as VehicleComponentProps)
+  const next = current.wheels.map((wheel) => mutator(wheel))
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { wheels: next })
+}
+
 const numericControls: Array<{ key: keyof VehicleWheelProps; label: string; min: number; max: number; step: number }> = [
-  { key: 'radius', label: 'Radius', min: 0, max: 5, step: 0.01 },
-  { key: 'suspensionRestLength', label: 'Rest Length', min: 0, max: 2, step: 0.01 },
-  { key: 'suspensionStiffness', label: 'Stiffness', min: 0, max: 200, step: 0.5 },
-  { key: 'dampingRelaxation', label: 'Damping Relax', min: 0, max: 50, step: 0.1 },
-  { key: 'dampingCompression', label: 'Damping Compress', min: 0, max: 50, step: 0.1 },
-  { key: 'frictionSlip', label: 'Friction', min: 0, max: 20, step: 0.05 },
-  { key: 'maxSuspensionTravel', label: 'Travel', min: 0, max: 2, step: 0.01 },
-  { key: 'maxSuspensionForce', label: 'Max Force', min: 0, max: 200000, step: 100 },
-  { key: 'rollInfluence', label: 'Roll Influence', min: 0, max: 5, step: 0.01 },
-  { key: 'customSlidingRotationalSpeed', label: 'Custom Rot Speed', min: -50, max: 50, step: 0.1 },
+  { key: 'radius', label: 'Radius (m)', min: 0, max: 5, step: 0.01 },
+  { key: 'suspensionRestLength', label: 'Rest Length (m)', min: 0, max: 2, step: 0.01 },
+  { key: 'suspensionStiffness', label: 'Stiffness (N/m)', min: 0, max: 200, step: 0.5 },
+  { key: 'dampingRelaxation', label: 'Damping Relax (ratio)', min: 0, max: 50, step: 0.1 },
+  { key: 'dampingCompression', label: 'Damping Compress (ratio)', min: 0, max: 50, step: 0.1 },
+  { key: 'frictionSlip', label: 'Friction (ratio)', min: 0, max: 20, step: 0.05 },
+  { key: 'maxSuspensionTravel', label: 'Travel (m)', min: 0, max: 2, step: 0.01 },
+  { key: 'maxSuspensionForce', label: 'Max Force (N)', min: 0, max: 200000, step: 100 },
+  { key: 'rollInfluence', label: 'Roll Influence (ratio)', min: 0, max: 5, step: 0.01 },
+  { key: 'customSlidingRotationalSpeed', label: 'Custom Rot Speed (rad/s)', min: -50, max: 50, step: 0.1 },
 ]
 
-function getGroupValue(isFront: boolean, key: keyof VehicleWheelProps): number {
-  const group = wheelEntries.value.filter((wheel) => wheel.isFrontWheel === isFront)
-  if (!group.length) return 0
-  const first = group[0]!
-  const value = first[key]
+function getWheelValue(key: keyof VehicleWheelProps): number {
+  const wheels = wheelEntries.value
+  if (!wheels.length) return 0
+  const value = wheels[0]![key]
   return typeof value === 'number' ? value : 0
 }
 
-function handleNumericChange(isFront: boolean, key: keyof VehicleWheelProps, value: number) {
+function handleNumericChange(key: keyof VehicleWheelProps, value: number) {
   if (!Number.isFinite(value)) return
-  patchGroupWheels(isFront, (wheel) => ({ ...wheel, [key]: value }))
+  patchAllWheels((wheel) => ({ ...wheel, [key]: value }))
 }
 
-function handleSpacingChange(isFront: boolean, value: number) {
-  if (!Number.isFinite(value)) return
-  const spacing = Math.max(0, value)
-  patchGroupWheels(isFront, (wheel) => {
-    const sign = Math.sign(wheel.chassisConnectionPointLocal.x) || 1
+function handleNumericTextChange(key: keyof VehicleWheelProps, value: string | number) {
+  const parsed = typeof value === 'number' ? value : Number.parseFloat(value)
+  if (!Number.isFinite(parsed)) return
+  handleNumericChange(key, parsed)
+}
+
+function handleSpacingChange(value: number) {
+  if (!Number.isFinite(value) || isDisabled.value) return
+  const width = Math.max(0, value)
+  const halfSpacing = width * 0.5
+  const axis = rightAxisIndex.value
+  const updates = new Map<string, number>()
+
+  const captureGroupSpacing = (isFront: boolean) => {
+    const group = wheelEntries.value.filter((wheel) => wheel.isFrontWheel === isFront)
+    if (!group.length) return
+    const centerAxis = group.reduce((sum, wheel) => sum + getAxisValue(wheel.chassisConnectionPointLocal, axis), 0) / group.length
+    const sorted = [...group].sort(
+      (a, b) => getAxisValue(a.chassisConnectionPointLocal, axis) - getAxisValue(b.chassisConnectionPointLocal, axis),
+    )
+    sorted.forEach((wheel, index) => {
+      const current = getAxisValue(wheel.chassisConnectionPointLocal, axis)
+      let sign = Math.sign(current - centerAxis)
+      if (sign === 0) {
+        if (sorted.length <= 1) {
+          sign = 0
+        } else if (sorted.length === 2) {
+          sign = index === 0 ? -1 : 1
+        } else {
+          sign = index < sorted.length / 2 ? -1 : 1
+        }
+      }
+      updates.set(wheel.id, centerAxis + sign * halfSpacing)
+    })
+  }
+
+  captureGroupSpacing(true)
+  captureGroupSpacing(false)
+
+  patchAllWheels((wheel) => {
+    const nextAxis = updates.get(wheel.id)
+    if (nextAxis === undefined) return wheel
     return {
       ...wheel,
-      chassisConnectionPointLocal: {
-        ...wheel.chassisConnectionPointLocal,
-        x: sign * spacing,
-      },
+      chassisConnectionPointLocal: setAxisValue(wheel.chassisConnectionPointLocal, axis, nextAxis),
     }
   })
+  uiState.spacing = width
+}
+
+function handleSpacingInputChange(value: string | number) {
+  const parsed = typeof value === 'number' ? value : Number.parseFloat(value)
+  if (!Number.isFinite(parsed)) return
+  handleSpacingChange(parsed)
 }
 
 function rebuildPhysics() {
@@ -893,64 +969,67 @@ onUnmounted(() => {
 
           <div class="suspension-editor__controls">
             <div class="suspension-editor__section">
-              <div class="suspension-editor__section-title">Front Wheels</div>
-              <v-slider
-                label="Front spacing (|X| m)"
-                density="compact"
-                hide-details
-                :min="0"
-                :max="5"
-                :step="0.01"
-                :model-value="uiState.frontSpacing"
-                :disabled="isDisabled"
-                @update:modelValue="(value) => handleSpacingChange(true, Number(value))"
-              />
-              <div class="suspension-editor__grid">
+              <div class="suspension-editor__section-title">Wheel Settings</div>
+              <div class="suspension-editor__control-row">
                 <v-slider
-                  v-for="control in numericControls"
-                  :key="`front-${control.key}`"
-                  :label="control.label"
+                  class="suspension-editor__slider"
+                  label="Wheel spacing (m)"
                   density="compact"
                   hide-details
-                  thumb-label
-                  :min="control.min"
-                  :max="control.max"
-                  :step="control.step"
-                  :model-value="getGroupValue(true, control.key)"
+                  :min="0"
+                  :max="5"
+                  :step="0.01"
+                  :model-value="uiState.spacing"
                   :disabled="isDisabled"
-                  @update:modelValue="(value) => handleNumericChange(true, control.key, Number(value))"
+                  @update:modelValue="(value) => handleSpacingChange(Number(value))"
+                />
+                <v-text-field
+                  class="suspension-editor__input"
+                  density="compact"
+                  hide-details
+                  variant="underlined"
+                  type="number"
+                  :step="0.01"
+                  :min="0"
+                  :max="5"
+                  :model-value="uiState.spacing"
+                  :disabled="isDisabled"
+                  @update:modelValue="handleSpacingInputChange"
                 />
               </div>
-            </div>
-
-            <div class="suspension-editor__section">
-              <div class="suspension-editor__section-title">Rear Wheels</div>
-              <v-slider
-                label="Rear spacing (|X| m)"
-                density="compact"
-                hide-details
-                :min="0"
-                :max="5"
-                :step="0.01"
-                :model-value="uiState.rearSpacing"
-                :disabled="isDisabled"
-                @update:modelValue="(value) => handleSpacingChange(false, Number(value))"
-              />
               <div class="suspension-editor__grid">
-                <v-slider
+                <div
                   v-for="control in numericControls"
-                  :key="`rear-${control.key}`"
-                  :label="control.label"
-                  density="compact"
-                  hide-details
-                  thumb-label
-                  :min="control.min"
-                  :max="control.max"
-                  :step="control.step"
-                  :model-value="getGroupValue(false, control.key)"
-                  :disabled="isDisabled"
-                  @update:modelValue="(value) => handleNumericChange(false, control.key, Number(value))"
-                />
+                  :key="`wheel-${control.key}`"
+                  class="suspension-editor__control-row"
+                >
+                  <v-slider
+                    class="suspension-editor__slider"
+                    :label="control.label"
+                    density="compact"
+                    hide-details
+                    thumb-label
+                    :min="control.min"
+                    :max="control.max"
+                    :step="control.step"
+                    :model-value="getWheelValue(control.key)"
+                    :disabled="isDisabled"
+                    @update:modelValue="(value) => handleNumericChange(control.key, Number(value))"
+                  />
+                  <v-text-field
+                    class="suspension-editor__input"
+                    density="compact"
+                    hide-details
+                    variant="underlined"
+                    type="number"
+                    :step="control.step"
+                    :min="control.min"
+                    :max="control.max"
+                    :model-value="getWheelValue(control.key)"
+                    :disabled="isDisabled"
+                    @update:modelValue="(value) => handleNumericTextChange(control.key, value)"
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -1086,9 +1165,24 @@ onUnmounted(() => {
 }
 
 .suspension-editor__grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 10px;
+}
+
+.suspension-editor__control-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.suspension-editor__slider {
+  flex: 1 1 auto;
+}
+
+.suspension-editor__input {
+  width: 80px;
+  max-width: 80px;
 }
 
 .suspension-editor__empty {
