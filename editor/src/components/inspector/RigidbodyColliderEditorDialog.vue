@@ -113,13 +113,23 @@ let resizeObserver: ResizeObserver | null = null
 let previewRefreshToken = 0
 const previewOriginShift = new THREE.Vector3()
 
-function applyNodeTransformFromState(target: THREE.Object3D, node: SceneNode) {
-  target.position.set(node.position.x, node.position.y, node.position.z)
-  target.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z)
+function applyNodeTransformFromState(
+  target: THREE.Object3D,
+  node: SceneNode,
+  options: { applyPositionRotation?: boolean } = {},
+) {
+  const { applyPositionRotation = true } = options
+  if (applyPositionRotation) {
+    target.position.set(node.position.x, node.position.y, node.position.z)
+    target.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z)
+  } else {
+    target.position.set(0, 0, 0)
+    target.rotation.set(0, 0, 0)
+  }
   target.scale.set(node.scale.x, node.scale.y, node.scale.z)
 }
 
-function cloneRuntimeObject(runtimeObject: THREE.Object3D, node: SceneNode): THREE.Object3D | null {
+function cloneRuntimeObject(runtimeObject: THREE.Object3D, node: SceneNode, applyPositionRotation: boolean): THREE.Object3D | null {
   const instancedAssetId = runtimeObject.userData?.instancedAssetId as string | undefined
   if (instancedAssetId) {
     const cached = getCachedModelObject(instancedAssetId)
@@ -127,18 +137,18 @@ function cloneRuntimeObject(runtimeObject: THREE.Object3D, node: SceneNode): THR
       return null
     }
     const instancedClone = cached.object.clone(true)
-    applyNodeTransformFromState(instancedClone, node)
+    applyNodeTransformFromState(instancedClone, node, { applyPositionRotation })
     return instancedClone
   }
   return runtimeObject.clone(true)
 }
 
-function cloneNodeForPreview(node: SceneNode): THREE.Object3D | null {
+function cloneNodeForPreview(node: SceneNode, isRoot = false): THREE.Object3D | null {
   const runtimeObject = getRuntimeObject(node.id)
   let clone: THREE.Object3D | null = null
 
   if (runtimeObject) {
-    clone = cloneRuntimeObject(runtimeObject, node)
+    clone = cloneRuntimeObject(runtimeObject, node, !isRoot)
   } else if (node.nodeType === 'Group') {
     clone = new THREE.Group()
   }
@@ -153,11 +163,11 @@ function cloneNodeForPreview(node: SceneNode): THREE.Object3D | null {
     nodeId: node.id,
   }
 
-  applyNodeTransformFromState(clone, node)
+  applyNodeTransformFromState(clone, node, { applyPositionRotation: !isRoot })
 
   if (Array.isArray(node.children) && node.children.length) {
     node.children.forEach((child) => {
-      const childClone = cloneNodeForPreview(child)
+      const childClone = cloneNodeForPreview(child, false)
       if (childClone) {
         clone.add(childClone)
       }
@@ -481,12 +491,12 @@ async function initializePreview(requestToken: number) {
 
   if (node.nodeType === 'Group') {
     // For groups, recreate the full hierarchy so child meshes (including instanced ones) appear in the preview
-    clone = cloneNodeForPreview(node)
+    clone = cloneNodeForPreview(node, true)
     if (!clone && runtimeObject) {
-      clone = cloneRuntimeObject(runtimeObject, node)
+      clone = cloneRuntimeObject(runtimeObject, node, false)
     }
   } else if (runtimeObject) {
-    clone = cloneRuntimeObject(runtimeObject, node)
+    clone = cloneRuntimeObject(runtimeObject, node, false)
   }
   if (!clone) {
     loadError.value = 'The instanced model is not available for preview.'
