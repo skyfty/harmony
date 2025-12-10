@@ -871,6 +871,7 @@ let suppressSelfYawRecenter = false;
 
 const JOYSTICK_INPUT_RADIUS = 64;
 const JOYSTICK_VISUAL_RANGE = 44;
+const JOYSTICK_DEADZONE = 0.25;
 
 type VehicleWheelBinding = {
   nodeId: string | null;
@@ -4784,6 +4785,21 @@ function deactivateJoystick(reset: boolean): void {
   }
 }
 
+function resolveJoystickDriveInput(): { throttle: number; steering: number } {
+  const x = joystickVector.x;
+  const y = joystickVector.y;
+  const length = Math.hypot(x, y);
+  if (length <= JOYSTICK_DEADZONE) {
+    return { throttle: 0, steering: 0 };
+  }
+  const effectiveLength = (length - JOYSTICK_DEADZONE) / (1 - JOYSTICK_DEADZONE);
+  const scale = length > 0 ? effectiveLength / length : 0;
+  return {
+    throttle: y * scale,
+    steering: x * scale,
+  };
+}
+
 function applyJoystickFromPoint(x: number, y: number): void {
   if (!joystickState.ready) {
     joystickState.centerX = x;
@@ -4898,8 +4914,9 @@ function handleJoystickTouchEnd(event: TouchEvent): void {
 }
 
 function recomputeVehicleDriveInputs(): void {
-  const throttleFromJoystick = clampAxisScalar(joystickVector.y);
-  const steeringFromJoystick = clampAxisScalar(joystickVector.x);
+  const joystickInput = resolveJoystickDriveInput();
+  const throttleFromJoystick = clampAxisScalar(joystickInput.throttle);
+  const steeringFromJoystick = clampAxisScalar(joystickInput.steering);
   // Keep joystick contribution, then let controller clamp and merge with flags/keyboard.
   vehicleDriveInput.throttle = throttleFromJoystick;
   vehicleDriveInput.steering = -steeringFromJoystick;
