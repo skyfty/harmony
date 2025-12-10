@@ -167,6 +167,7 @@ const VEHICLE_FOLLOW_LOOKAHEAD_TIME = 0.18
 const VEHICLE_FOLLOW_LOOKAHEAD_DISTANCE_MAX = 3
 const VEHICLE_FOLLOW_LOOKAHEAD_MIN_SPEED_SQ = 0.9
 const VEHICLE_FOLLOW_ANCHOR_LERP_SPEED = 4.5
+const VEHICLE_FOLLOW_BACKWARD_DOT_THRESHOLD = -0.25
 const VEHICLE_FOLLOW_COLLISION_LOCK_SPEED_SQ = 1.21
 const VEHICLE_FOLLOW_COLLISION_DIRECTION_DOT_THRESHOLD = -0.35
 const VEHICLE_FOLLOW_COLLISION_HOLD_TIME = 0.8
@@ -814,20 +815,6 @@ export class VehicleDriveController {
       follow.anchorHoldSeconds = Math.max(0, follow.anchorHoldSeconds - deltaSeconds)
     }
 
-    follow.desiredAnchor.copy(predictedAnchor)
-    const anchorHoldActive = follow.anchorHoldSeconds > 0
-    const anchorAlpha = anchorHoldActive
-      ? 0
-      : options.immediate || !follow.initialized
-        ? 1
-        : computeVehicleFollowLerpAlpha(deltaSeconds, VEHICLE_FOLLOW_ANCHOR_LERP_SPEED)
-    if (anchorAlpha >= 1) {
-      follow.currentAnchor.copy(follow.desiredAnchor)
-    } else if (anchorAlpha > 0) {
-      follow.currentAnchor.lerp(follow.desiredAnchor, anchorAlpha)
-    }
-    const anchorForCamera = follow.currentAnchor
-
     if (!follow.initialized) {
       follow.heading.copy(temp.seatForward)
       follow.heading.y = 0
@@ -870,6 +857,24 @@ export class VehicleDriveController {
       headingRight.normalize()
     }
     const headingUp = temp.cameraUp.copy(worldUp)
+
+    const allowUserReverse = this.inputFlags.backward || this.input.throttle < -0.1
+    const movingBackward = vehicleVelocity
+      ? temp.planarVelocity.dot(follow.heading) < VEHICLE_FOLLOW_BACKWARD_DOT_THRESHOLD
+      : false
+    follow.desiredAnchor.copy(predictedAnchor)
+    const anchorHoldActive = follow.anchorHoldSeconds > 0
+    const backwardHoldActive = movingBackward && !allowUserReverse
+    const baseAnchorAlpha = options.immediate || !follow.initialized
+      ? 1
+      : computeVehicleFollowLerpAlpha(deltaSeconds, VEHICLE_FOLLOW_ANCHOR_LERP_SPEED)
+    const anchorAlpha = anchorHoldActive || backwardHoldActive ? 0 : baseAnchorAlpha
+    if (anchorAlpha >= 1) {
+      follow.currentAnchor.copy(follow.desiredAnchor)
+    } else if (anchorAlpha > 0) {
+      follow.currentAnchor.lerp(follow.desiredAnchor, anchorAlpha)
+    }
+    const anchorForCamera = follow.currentAnchor
 
     this.ensureVehicleFollowLocalOffset(placement)
     this.enforceVehicleFollowBehind(placement)
