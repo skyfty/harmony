@@ -555,6 +555,8 @@ export class SceneCloudRenderer {
     const planeSize = VOLUMETRIC_TEST_PRESET.size
     const geometry = new THREE.PlaneGeometry(planeSize, planeSize, 1, 1)
     const edgeSoftness = THREE.MathUtils.clamp(550 / Math.max(1, planeSize), 0.08, 0.36)
+    // Apply a stronger fade near the mesh borders to mask the rectangular outline
+    const edgeFadeDistance = THREE.MathUtils.clamp(800 / Math.max(1, planeSize), edgeSoftness * 0.8, 0.35)
     const uniforms = {
       uTime: { value: 0 },
       uDensity: { value: VOLUMETRIC_TEST_PRESET.density },
@@ -562,6 +564,7 @@ export class SceneCloudRenderer {
       uDetail: { value: VOLUMETRIC_TEST_PRESET.detail },
       uColor: { value: new THREE.Color(VOLUMETRIC_TEST_PRESET.color) },
       uEdgeSoftness: { value: edgeSoftness },
+      uEdgeFadeDistance: { value: edgeFadeDistance },
     }
     const material = new THREE.ShaderMaterial({
       uniforms,
@@ -576,6 +579,7 @@ export class SceneCloudRenderer {
         uniform float uDetail;
         uniform vec3 uColor;
         uniform float uEdgeSoftness;
+        uniform float uEdgeFadeDistance;
 
         float hash(vec2 p) {
           return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
@@ -612,15 +616,15 @@ export class SceneCloudRenderer {
           float coverage = smoothstep(coverageThreshold, 1.0, n);
           vec2 centeredUv = vUv - 0.5;
           float edgeDistanceBox = max(abs(centeredUv.x), abs(centeredUv.y));
-          float edgeStartBox = max(0.0, 0.5 - uEdgeSoftness);
-          float edgeFadeBox = 1.0 - smoothstep(edgeStartBox, 0.5, edgeDistanceBox);
+          float edgeInner = max(0.0, 0.5 - uEdgeFadeDistance);
+          float edgeFadeBox = 1.0 - smoothstep(edgeInner, 0.5, edgeDistanceBox);
           float edgeDistanceRadial = length(centeredUv);
           float radialEnd = 0.70710678;
-          float radialStart = clamp(radialEnd - (uEdgeSoftness * 1.5), 0.0, radialEnd - 0.0001);
-          float edgeFadeRadial = 1.0 - smoothstep(radialStart, radialEnd, edgeDistanceRadial);
+          float radialInner = clamp(radialEnd - (uEdgeFadeDistance * 1.7), 0.0, radialEnd - 0.0001);
+          float edgeFadeRadial = 1.0 - smoothstep(radialInner, radialEnd, edgeDistanceRadial);
           float edgeFade = clamp(edgeFadeBox * edgeFadeRadial, 0.0, 1.0);
-          edgeFade = pow(edgeFade, 0.8);
-          edgeFade = mix(0.5, edgeFade, 0.7);
+          edgeFade = pow(edgeFade, 1.0 + (uEdgeSoftness * 0.5));
+          edgeFade = mix(0.45, edgeFade, 0.75);
           float horizonNorm = clamp(edgeDistanceRadial / radialEnd, 0.0, 1.0);
           float horizonBoost = smoothstep(0.4, 0.95, horizonNorm);
           coverage = clamp(coverage + horizonBoost * 0.12, 0.0, 1.0);
