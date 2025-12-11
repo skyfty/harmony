@@ -39,6 +39,7 @@ export interface SceneState {
   panelVisibility: PanelVisibilityState
   projectPanelTreeSize: number
   resourceProviderId: string
+  cloudPreviewEnabled: boolean
   cameraFocusNodeId: string | null
   cameraFocusRequestId: number
   nodeHighlightTargetId: string | null

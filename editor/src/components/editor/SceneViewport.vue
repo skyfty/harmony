@@ -154,6 +154,7 @@ import {
   RIGHT_CLICK_ROTATION_STEP,
 } from './constants'
 import { createFaceSnapManager } from './useFaceSnapping'
+import { SceneCloudRenderer } from '@schema/cloudRenderer'
 
 type SceneViewportProps = {
   sceneNodes: SceneNode[]
@@ -282,6 +283,7 @@ let customEnvironmentTarget: THREE.WebGLRenderTarget | null = null
 let environmentMapAssetId: string | null = null
 let backgroundLoadToken = 0
 let environmentMapLoadToken = 0
+let cloudRenderer: SceneCloudRenderer | null = null
 
 const faceSnapManager = createFaceSnapManager({
   getScene: () => scene,
@@ -291,6 +293,7 @@ const faceSnapManager = createFaceSnapManager({
 })
 
 const textureLoader = new THREE.TextureLoader()
+const cubeTextureLoader = new THREE.CubeTextureLoader()
 const rgbeLoader = new RGBELoader().setDataType(THREE.FloatType)
 const exrLoader = new EXRLoader().setDataType(THREE.FloatType)
 const textureCache = new Map<string, THREE.Texture>()
@@ -485,6 +488,7 @@ const axesVisible = computed(() => sceneStore.viewportSettings.showAxes)
 const shadowsEnabled = computed(() => sceneStore.shadowsEnabled)
 const skyboxSettings = computed(() => sceneStore.skybox)
 const environmentSettings = computed(() => sceneStore.environmentSettings)
+const cloudPreviewEnabled = computed(() => sceneStore.cloudPreviewEnabled)
 const canAlignSelection = computed(() => {
   const primaryId = sceneStore.selectedNodeId
   if (!primaryId) {
@@ -1640,7 +1644,12 @@ watch(axesVisible, (visible) => {
 
 watch(skyboxSettings, (settings) => {
   applySkyboxSettingsToScene(settings)
+  syncCloudRendererSettings()
 }, { deep: true, immediate: true })
+
+watch(cloudPreviewEnabled, () => {
+  syncCloudRendererSettings()
+}, { immediate: true })
 
 watch(environmentSettings, (settings) => {
   void applyEnvironmentSettingsToScene(settings)
@@ -2026,6 +2035,7 @@ function initScene() {
   animate()
   
   applyCameraState(props.cameraState)
+  syncCloudRendererSettings()
 }
 
 function syncSkyVisibility() {
@@ -2236,6 +2246,37 @@ function cloneEnvironmentSettingsLocal(settings: EnvironmentSettings): Environme
     return structuredClone(settings)
   } catch (_error) {
     return JSON.parse(JSON.stringify(settings)) as EnvironmentSettings
+  }
+}
+
+function normalizeCloudAssetReference(value: string | null | undefined): string {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  if (!trimmed.length) {
+    return ''
+  }
+  return trimmed.startsWith('asset://') ? trimmed.slice('asset://'.length) : trimmed
+}
+
+async function resolveCloudAssetUrl(source: string): Promise<{ url: string; dispose?: () => void } | null> {
+  const normalized = normalizeCloudAssetReference(source)
+  if (!normalized) {
+    return null
+  }
+  const asset = sceneStore.getAsset(normalized)
+  if (!asset) {
+    return { url: normalized }
+  }
+  try {
+    const entry = await assetCacheStore.downloaProjectAsset(asset)
+    const url = entry.blobUrl ?? asset.downloadUrl ?? asset.description ?? null
+    if (!url) {
+      return null
+    }
+    assetCacheStore.touch(asset.id)
+    return { url }
+  } catch (error) {
+    console.warn('[SceneViewport] Failed to resolve cloud asset', normalized, error)
+    return null
   }
 }
 
@@ -2492,6 +2533,42 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   }
 }
 
+function ensureCloudRenderer(): SceneCloudRenderer | null {
+  if (!scene) {
+    return null
+  }
+  if (cloudRenderer) {
+    return cloudRenderer
+  }
+  cloudRenderer = new SceneCloudRenderer({
+    scene,
+    assetResolver: resolveCloudAssetUrl,
+    textureLoader,
+    cubeTextureLoader,
+  })
+  return cloudRenderer
+}
+
+function disposeCloudRenderer() {
+  if (!cloudRenderer) {
+    return
+  }
+  cloudRenderer.dispose()
+  cloudRenderer = null
+}
+
+function syncCloudRendererSettings() {
+  if (!cloudPreviewEnabled.value) {
+    disposeCloudRenderer()
+    return
+  }
+  if (!scene) {
+    return
+  }
+  const rendererInstance = ensureCloudRenderer()
+  rendererInstance?.setSkyboxSettings(skyboxSettings.value)
+}
+
 function disposeSkyResources() {
   if (skyEnvironmentTarget) {
     skyEnvironmentTarget.dispose()
@@ -2602,6 +2679,9 @@ function animate() {
       }
     })
   }
+  if (effectiveDelta > 0 && cloudRenderer) {
+    cloudRenderer.update(effectiveDelta)
+  }
   renderViewportFrame()
   gizmoControls?.render()
   stats?.end()
@@ -2609,6 +2689,7 @@ function animate() {
 
 function disposeScene() {
   disposeStats()
+  disposeCloudRenderer()
   if (stopInstancedMeshSubscription) {
     stopInstancedMeshSubscription()
     stopInstancedMeshSubscription = null

@@ -6318,6 +6318,7 @@ export const useSceneStore = defineStore('scene', {
       panelPlacement: { ...defaultPanelPlacement },
       projectPanelTreeSize: DEFAULT_PROJECT_PANEL_TREE_SIZE,
       resourceProviderId: initialSceneDocument.resourceProviderId,
+      cloudPreviewEnabled: false,
       cameraFocusNodeId: null,
       cameraFocusRequestId: 0,
     nodeHighlightTargetId: null,
@@ -9297,6 +9298,12 @@ export const useSceneStore = defineStore('scene', {
       }
       this.skybox = next
       commitSceneSnapshot(this, { updateNodes: false })
+    },
+    setCloudPreviewEnabled(enabled: boolean) {
+      if (this.cloudPreviewEnabled === enabled) {
+        return
+      }
+      this.cloudPreviewEnabled = enabled
     },
     setPanelVisibility(panel: EditorPanel, visible: boolean) {
       if (this.panelVisibility[panel] === visible) {

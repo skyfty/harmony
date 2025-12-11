@@ -267,7 +267,8 @@ function handleVolumetricNumberInput(key: 'density' | 'speed' | 'detail' | 'cove
   if (!current) {
     return
   }
-  const parsed = toNumber(value)
+  console.log(value)
+  const parsed =    toNumber(value)
   if (parsed === null) {
     return
   }

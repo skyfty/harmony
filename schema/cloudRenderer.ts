@@ -128,7 +128,7 @@ function sanitizeCubeSettings(input: SceneCubeTextureCloudSettings | null | unde
     negativeY: ensureString(input?.negativeY).trim(),
     positiveZ: ensureString(input?.positiveZ).trim(),
     negativeZ: ensureString(input?.negativeZ).trim(),
-    intensity: clampNumber(ensureNumber(input?.intensity, fallback.intensity), 0, 1),
+    intensity: ensureNumber(input?.intensity, fallback.intensity),
   }
 }
 
@@ -137,11 +137,11 @@ function sanitizeSphericalSettings(input: SceneSphericalCloudSettings | null | u
   return {
     mode: 'spherical',
     textureAssetId: ensureString(input?.textureAssetId ?? '').trim() || null,
-    radius: clampNumber(ensureNumber(input?.radius, fallback.radius), 50, 10000),
-    opacity: clampNumber(ensureNumber(input?.opacity, fallback.opacity), 0, 1),
+    radius: ensureNumber(input?.radius, fallback.radius),
+    opacity: ensureNumber(input?.opacity, fallback.opacity),
     rotationSpeed: ensureNumber(input?.rotationSpeed, fallback.rotationSpeed),
     color: ensureString(input?.color).trim() || fallback.color,
-    height: clampNumber(ensureNumber(input?.height, fallback.height), 0, 5000),
+    height: ensureNumber(input?.height, fallback.height),
   }
 }
 
@@ -150,12 +150,12 @@ function sanitizeVolumetricSettings(input: SceneVolumetricCloudSettings | null |
   return {
     mode: 'volumetric',
     color: ensureString(input?.color).trim() || fallback.color,
-    density: clampNumber(ensureNumber(input?.density, fallback.density), 0, 1.5),
-    speed: clampNumber(ensureNumber(input?.speed, fallback.speed), -5, 5),
-    detail: clampNumber(ensureNumber(input?.detail, fallback.detail), 1, 12),
-    coverage: clampNumber(ensureNumber(input?.coverage, fallback.coverage), 0, 1),
-    height: clampNumber(ensureNumber(input?.height, fallback.height), 0, 5000),
-    size: clampNumber(ensureNumber(input?.size, fallback.size), 100, 10000),
+    density: ensureNumber(input?.density, fallback.density),
+    speed: ensureNumber(input?.speed, fallback.speed),
+    detail: ensureNumber(input?.detail, fallback.detail),
+    coverage: ensureNumber(input?.coverage, fallback.coverage),
+    height: ensureNumber(input?.height, fallback.height),
+    size: ensureNumber(input?.size, fallback.size),
   }
 }
 
@@ -555,14 +555,12 @@ export class SceneCloudRenderer {
       return
     }
     const geometry = new THREE.PlaneGeometry(settings.size, settings.size, 1, 1)
-    const tintColor = new THREE.Color(settings.color)
-    tintColor.convertSRGBToLinear()
     const uniforms = {
       uTime: { value: 0 },
       uDensity: { value: settings.density },
       uCoverage: { value: settings.coverage },
       uDetail: { value: settings.detail },
-      uColor: { value: tintColor },
+      uColor: { value: new THREE.Color(settings.color) },
     }
     const material = new THREE.ShaderMaterial({
       uniforms,
@@ -609,10 +607,6 @@ export class SceneCloudRenderer {
           float timeFactor = uTime * 0.05;
           float n = fbm(uv + vec2(timeFactor, timeFactor));
           float coverage = smoothstep(uCoverage, 1.0, n);
-          vec2 centered = vUv - 0.5;
-          float dist = length(centered);
-          float edgeFade = 1.0 - smoothstep(0.35, 0.5, dist);
-          coverage *= edgeFade;
           float alpha = clamp(coverage * uDensity, 0.0, 1.0);
           gl_FragColor = vec4(uColor * coverage, alpha);
         }
