@@ -613,6 +613,7 @@ export class SceneCloudRenderer {
           float timeFactor = uTime * 0.05;
           float n = fbm(uv + vec2(timeFactor, timeFactor));
           float coverageThreshold = max(0.0, uCoverage * 0.85);
+          float baseCoverage = smoothstep(max(coverageThreshold - 0.2, 0.0), 1.0, n);
           float coverage = smoothstep(coverageThreshold, 1.0, n);
           vec2 centeredUv = vUv - 0.5;
           float edgeDistanceBox = max(abs(centeredUv.x), abs(centeredUv.y));
@@ -622,12 +623,16 @@ export class SceneCloudRenderer {
           float radialEnd = 0.70710678;
           float radialInner = clamp(radialEnd - (uEdgeFadeDistance * 1.7), 0.0, radialEnd - 0.0001);
           float edgeFadeRadial = 1.0 - smoothstep(radialInner, radialEnd, edgeDistanceRadial);
+          float centralRadius = radialInner * 0.9;
+          float centerProximity = 1.0 - smoothstep(0.0, centralRadius, edgeDistanceRadial);
           float edgeFade = clamp(edgeFadeBox * edgeFadeRadial, 0.0, 1.0);
           edgeFade = pow(edgeFade, 1.0 + (uEdgeSoftness * 0.5));
           edgeFade = mix(0.45, edgeFade, 0.75);
           float horizonNorm = clamp(edgeDistanceRadial / radialEnd, 0.0, 1.0);
           float horizonBoost = smoothstep(0.4, 0.95, horizonNorm);
-          coverage = clamp(coverage + horizonBoost * 0.12, 0.0, 1.0);
+          float centerFill = clamp(centerProximity * (0.3 + uCoverage * 0.7), 0.0, 1.0);
+          coverage = mix(baseCoverage, coverage, 0.65);
+          coverage = clamp(max(coverage + horizonBoost * 0.12, centerFill), 0.0, 1.0);
           float coverageMask = coverage * edgeFade;
           coverageMask = pow(coverageMask, 0.96);
           float alpha = clamp(coverageMask * uDensity, 0.0, 1.0);
