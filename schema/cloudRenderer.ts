@@ -40,27 +40,18 @@ const DEFAULT_SPHERICAL_SETTINGS: SceneSphericalCloudSettings = {
 const DEFAULT_VOLUMETRIC_SETTINGS: SceneVolumetricCloudSettings = {
   mode: 'volumetric',
   color: '#ffffff',
-  density: 0.45,
+  density: 0.68,
   speed: 0.25,
-  detail: 4,
-  coverage: 0.55,
+  detail: 5,
+  coverage: 0.26,
   height: 500,
-  size: 2400,
+  size: 8400,
 }
 
 const DEFAULT_SETTINGS: Record<SceneCloudImplementation, SceneCloudSettings> = {
   cubeTexture: DEFAULT_CUBE_TEXTURE_SETTINGS,
   spherical: DEFAULT_SPHERICAL_SETTINGS,
   volumetric: DEFAULT_VOLUMETRIC_SETTINGS,
-}
-
-const VOLUMETRIC_TEST_PRESET = {
-  density: 0.68,
-  coverage: 0.26,
-  detail: 5,
-  speed: 0.2,
-  color: '#ffffff',
-  size: 8400,
 }
 
 function ensureNumber(candidate: unknown, fallback: number): number {
@@ -330,22 +321,23 @@ export class SceneCloudRenderer {
         this.sphericalMesh.rotation.y += rotationSpeed * deltaSeconds
       }
     } else if (this.currentSettings.mode === 'volumetric' && this.volumetricMaterial) {
+      const volumetricSettings = this.currentSettings as SceneVolumetricCloudSettings
       const uniforms = this.volumetricMaterial.uniforms
       if (uniforms?.uTime) {
-        uniforms.uTime.value = this.accumulatedTime * VOLUMETRIC_TEST_PRESET.speed
+        uniforms.uTime.value = this.accumulatedTime * volumetricSettings.speed
       }
       if (uniforms?.uDensity) {
-        uniforms.uDensity.value = VOLUMETRIC_TEST_PRESET.density
+        uniforms.uDensity.value = volumetricSettings.density
       }
       if (uniforms?.uCoverage) {
-        uniforms.uCoverage.value = VOLUMETRIC_TEST_PRESET.coverage
+        uniforms.uCoverage.value = volumetricSettings.coverage
       }
       if (uniforms?.uDetail) {
-        uniforms.uDetail.value = VOLUMETRIC_TEST_PRESET.detail
+        uniforms.uDetail.value = volumetricSettings.detail
       }
       if (uniforms?.uColor) {
         const color = uniforms.uColor.value as THREE.Color
-        color.set(VOLUMETRIC_TEST_PRESET.color)
+        color.set(volumetricSettings.color)
         color.convertSRGBToLinear()
       }
     }
@@ -552,7 +544,7 @@ export class SceneCloudRenderer {
     if (token !== this.updateToken) {
       return
     }
-    const baseSize = Math.max(settings.size, VOLUMETRIC_TEST_PRESET.size)
+    const baseSize = Math.max(settings.size, DEFAULT_VOLUMETRIC_SETTINGS.size)
     // Expand the plane so the layer reaches the visual horizon without exposing straight edges
     const planeSize = baseSize * 1.35
     const geometry = new THREE.PlaneGeometry(planeSize, planeSize, 1, 1)
@@ -561,10 +553,10 @@ export class SceneCloudRenderer {
     const edgeFadeDistance = THREE.MathUtils.clamp(800 / Math.max(1, planeSize), edgeSoftness * 0.8, 0.35)
     const uniforms = {
       uTime: { value: 0 },
-      uDensity: { value: VOLUMETRIC_TEST_PRESET.density },
-      uCoverage: { value: VOLUMETRIC_TEST_PRESET.coverage },
-      uDetail: { value: VOLUMETRIC_TEST_PRESET.detail },
-      uColor: { value: new THREE.Color(VOLUMETRIC_TEST_PRESET.color) },
+      uDensity: { value: settings.density },
+      uCoverage: { value: settings.coverage },
+      uDetail: { value: settings.detail },
+      uColor: { value: new THREE.Color(settings.color) },
       uEdgeSoftness: { value: edgeSoftness },
       uEdgeFadeDistance: { value: edgeFadeDistance },
     }
