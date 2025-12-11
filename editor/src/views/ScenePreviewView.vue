@@ -4974,11 +4974,6 @@ function disposeObjectResources(object: THREE.Object3D) {
 			disposeMaterialTextures(material)
 			material.dispose?.()
 		})
-		const groundTexture = (mesh.userData?.groundTexture as THREE.Texture | undefined) ?? null
-		if (groundTexture) {
-			groundTexture.dispose?.()
-			delete mesh.userData.groundTexture
-		}
 	}
 }
 

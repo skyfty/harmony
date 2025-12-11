@@ -533,10 +533,37 @@ export function updateGroundGeometry(geometry: THREE.BufferGeometry, definition:
   return true
 }
 
-function disposeGroundTexture(texture: THREE.Texture | undefined) {
-  if (texture) {
-    texture.dispose()
+type GroundTextureMetadata = { groundDynamic?: boolean }
+
+function isDynamicGroundTexture(texture: THREE.Texture | null | undefined): boolean {
+  if (!texture) {
+    return false
   }
+  const userData = texture.userData as GroundTextureMetadata | undefined
+  return Boolean(userData?.groundDynamic)
+}
+
+function markDynamicGroundTexture(texture: THREE.Texture): void {
+  const userData = (texture.userData ??= {}) as GroundTextureMetadata
+  userData.groundDynamic = true
+}
+
+function clearDynamicGroundFlag(texture: THREE.Texture | null | undefined): void {
+  if (!texture) {
+    return
+  }
+  const userData = texture.userData as GroundTextureMetadata | undefined
+  if (userData && 'groundDynamic' in userData) {
+    delete userData.groundDynamic
+  }
+}
+
+function disposeGroundTexture(texture: THREE.Texture | null | undefined) {
+  if (!texture) {
+    return
+  }
+  texture.dispose()
+  clearDynamicGroundFlag(texture)
 }
 
 function applyGroundTexture(mesh: THREE.Mesh, definition: GroundDynamicMesh) {
@@ -545,15 +572,15 @@ function applyGroundTexture(mesh: THREE.Mesh, definition: GroundDynamicMesh) {
     return
   }
 
-  const previousTexture = mesh.userData.groundTexture as THREE.Texture | undefined
-  const wasDynamicTextureApplied = Boolean(previousTexture && material.map === previousTexture)
-  if (previousTexture) {
+  const previousTexture = material.map ?? null
+  const wasDynamicTextureApplied = isDynamicGroundTexture(previousTexture)
+  if (definition.textureDataUrl && wasDynamicTextureApplied) {
     disposeGroundTexture(previousTexture)
-    delete mesh.userData.groundTexture
   }
 
   if (!definition.textureDataUrl) {
     if (wasDynamicTextureApplied) {
+      disposeGroundTexture(previousTexture)
       material.map = null
       material.needsUpdate = true
     }
@@ -567,9 +594,9 @@ function applyGroundTexture(mesh: THREE.Mesh, definition: GroundDynamicMesh) {
   texture.wrapT = THREE.RepeatWrapping
   texture.anisotropy = Math.min(16, texture.anisotropy || 8)
   texture.name = definition.textureName ?? 'GroundTexture'
+  markDynamicGroundTexture(texture)
   material.map = texture
   material.needsUpdate = true
-  mesh.userData.groundTexture = texture
 }
 
 export function createGroundMesh(definition: GroundDynamicMesh): THREE.Mesh {
@@ -624,12 +651,25 @@ export function releaseGroundMeshCache(disposeResources = true) {
     }
     const material = cachedMesh.material
     if (Array.isArray(material)) {
-      material.forEach((entry) => entry.dispose())
+      material.forEach((entry) => {
+        if (!entry) {
+          return
+        }
+        const typed = entry as THREE.MeshStandardMaterial
+        if (typed.map && isDynamicGroundTexture(typed.map)) {
+          disposeGroundTexture(typed.map)
+          typed.map = null
+        }
+        entry.dispose()
+      })
     } else if (material) {
+      const typed = material as THREE.MeshStandardMaterial
+      if (typed.map && isDynamicGroundTexture(typed.map)) {
+        disposeGroundTexture(typed.map)
+        typed.map = null
+      }
       material.dispose()
     }
-    disposeGroundTexture(cachedMesh.userData.groundTexture as THREE.Texture | undefined)
-    delete cachedMesh.userData.groundTexture
   }
 
   cachedMesh = null
