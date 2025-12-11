@@ -39,13 +39,12 @@ const DEFAULT_SPHERICAL_SETTINGS: SceneSphericalCloudSettings = {
 
 const DEFAULT_VOLUMETRIC_SETTINGS: SceneVolumetricCloudSettings = {
   mode: 'volumetric',
-  color: '#ffffff',
   density: 0.68,
-  speed: 0.25,
-  detail: 5,
   coverage: 0.26,
-  height: 500,
-  size: 8400,
+  detail: 5,
+  speed: 0.2,
+  color: '#ffffff',
+  size: 4400,
 }
 
 const DEFAULT_SETTINGS: Record<SceneCloudImplementation, SceneCloudSettings> = {
@@ -321,23 +320,22 @@ export class SceneCloudRenderer {
         this.sphericalMesh.rotation.y += rotationSpeed * deltaSeconds
       }
     } else if (this.currentSettings.mode === 'volumetric' && this.volumetricMaterial) {
-      const volumetricSettings = this.currentSettings as SceneVolumetricCloudSettings
       const uniforms = this.volumetricMaterial.uniforms
       if (uniforms?.uTime) {
-        uniforms.uTime.value = this.accumulatedTime * volumetricSettings.speed
+        uniforms.uTime.value = this.accumulatedTime * this.currentSettings.speed
       }
       if (uniforms?.uDensity) {
-        uniforms.uDensity.value = volumetricSettings.density
+        uniforms.uDensity.value = this.currentSettings.density
       }
       if (uniforms?.uCoverage) {
-        uniforms.uCoverage.value = volumetricSettings.coverage
+        uniforms.uCoverage.value = this.currentSettings.coverage
       }
       if (uniforms?.uDetail) {
-        uniforms.uDetail.value = volumetricSettings.detail
+        uniforms.uDetail.value = this.currentSettings.detail
       }
       if (uniforms?.uColor) {
         const color = uniforms.uColor.value as THREE.Color
-        color.set(volumetricSettings.color)
+        color.set(this.currentSettings.color)
         color.convertSRGBToLinear()
       }
     }
@@ -544,9 +542,7 @@ export class SceneCloudRenderer {
     if (token !== this.updateToken) {
       return
     }
-    const baseSize = Math.max(settings.size, DEFAULT_VOLUMETRIC_SETTINGS.size)
-    // Expand the plane so the layer reaches the visual horizon without exposing straight edges
-    const planeSize = baseSize * 1.35
+    const planeSize = settings.size
     const geometry = new THREE.PlaneGeometry(planeSize, planeSize, 1, 1)
     const edgeSoftness = THREE.MathUtils.clamp(550 / Math.max(1, planeSize), 0.08, 0.36)
     // Apply a stronger fade near the mesh borders to mask the rectangular outline
@@ -603,29 +599,20 @@ export class SceneCloudRenderer {
         }
 
         void main() {
+          vec2 uv = vUv * uDetail;
+          float timeFactor = uTime * 0.05;
+          float n = fbm(uv + vec2(timeFactor, timeFactor));
+          float coverageThreshold = max(0.0, uCoverage * 0.85);
+          float baseCoverage = smoothstep(max(coverageThreshold - 0.2, 0.0), 1.0, n);
+          float wideCoverage = smoothstep(coverageThreshold * 0.75, 1.0, n + 0.12);
+          float coverage = mix(baseCoverage, wideCoverage, 0.55);
           vec2 centeredUv = vUv - 0.5;
           float edgeDistanceBox = max(abs(centeredUv.x), abs(centeredUv.y));
+          float edgeInner = max(0.0, 0.5 - uEdgeFadeDistance);
+          float edgeFadeBox = 1.0 - smoothstep(edgeInner, 0.5, edgeDistanceBox);
           float edgeDistanceRadial = length(centeredUv);
           float radialEnd = 0.70710678;
           float radialInner = clamp(radialEnd - (uEdgeFadeDistance * 1.7), 0.0, radialEnd - 0.0001);
-          float edgeInner = max(0.0, 0.5 - uEdgeFadeDistance);
-          float edgeProximity = smoothstep(0.32, 0.5, edgeDistanceBox);
-          float radialProximity = smoothstep(radialInner * 0.85, radialEnd, edgeDistanceRadial);
-          float interiorFocus = clamp(max(edgeProximity, radialProximity), 0.0, 1.0);
-          float warpFactor = mix(1.0, 0.55 + uEdgeSoftness * 0.25, interiorFocus);
-          vec2 warpedCenter = centeredUv * warpFactor;
-          vec2 warpedUv = clamp(warpedCenter + 0.5, 0.0, 1.0);
-          vec2 uv = warpedUv * uDetail;
-          float timeFactor = uTime * 0.05;
-          float n = fbm(uv + vec2(timeFactor, timeFactor));
-          vec2 uvSecondary = uv * 0.67 + vec2(17.0, -11.0);
-          float n2 = fbm(uvSecondary + vec2(timeFactor * 0.045, -timeFactor * 0.035));
-          float blendedNoise = clamp(mix(n, n2, 0.45) + 0.06, 0.0, 1.0);
-          float coverageThreshold = max(0.0, uCoverage * 0.75);
-          float baseCoverage = smoothstep(max(coverageThreshold - 0.25, 0.0), 1.05, blendedNoise);
-          float wideCoverage = smoothstep(coverageThreshold * 0.6, 1.0, blendedNoise + 0.16);
-          float coverage = mix(baseCoverage, wideCoverage, 0.65);
-          float edgeFadeBox = 1.0 - smoothstep(edgeInner, 0.5, edgeDistanceBox);
           float edgeFadeRadial = 1.0 - smoothstep(radialInner, radialEnd, edgeDistanceRadial);
           float centralRadius = radialInner * 0.9;
           float centerProximity = 1.0 - smoothstep(0.0, centralRadius, edgeDistanceRadial);
@@ -634,11 +621,11 @@ export class SceneCloudRenderer {
           edgeFade = mix(0.45, edgeFade, 0.75);
           float horizonNorm = clamp(edgeDistanceRadial / radialEnd, 0.0, 1.0);
           float horizonBoost = smoothstep(0.35, 0.92, horizonNorm);
-          float uniformLift = smoothstep(0.2, 0.92, baseCoverage) * 0.44;
-          float centerFill = clamp(centerProximity * (0.32 + uCoverage * 0.55), 0.0, 1.0);
+          float uniformLift = smoothstep(0.25, 0.85, baseCoverage) * 0.32;
+          float centerFill = clamp(centerProximity * (0.35 + uCoverage * 0.65), 0.0, 1.0);
           coverage = clamp(max(coverage + horizonBoost * 0.1 + uniformLift, centerFill), 0.0, 1.0);
           float coverageMask = coverage * edgeFade;
-          coverageMask = pow(coverageMask, 0.92);
+          coverageMask = pow(coverageMask, 0.96);
           float alpha = clamp(coverageMask * uDensity, 0.0, 1.0);
           float brightness = mix(0.7, 1.08, coverageMask);
           vec3 cloudRgb = uColor * brightness;
