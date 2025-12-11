@@ -32,7 +32,9 @@ import {
   WALL_COMPONENT_TYPE,
   EFFECT_COMPONENT_TYPE,
   componentManager,
+  type RigidbodyColliderType,
 } from '@schema/components'
+import { isGeometryType } from '@schema/geometry'
 
 type BehaviorDetailsPayload = {
   mode: 'create' | 'edit'
@@ -373,7 +375,31 @@ function handleAddComponent(type: string) {
   if (!selectedNode.value) {
     return
   }
-  sceneStore.addNodeComponent(selectedNode.value.id, type)
+  const created = sceneStore.addNodeComponent(selectedNode.value.id, type)
+  if (!created) {
+    return
+  }
+  if (type !== RIGIDBODY_COMPONENT_TYPE) {
+    return
+  }
+  const preferredColliderType = resolvePreferredRigidbodyColliderType(selectedNode.value.nodeType)
+  if (!preferredColliderType || (created.props as { colliderType?: RigidbodyColliderType })?.colliderType === preferredColliderType) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(selectedNode.value.id, created.id, { colliderType: preferredColliderType })
+}
+
+function resolvePreferredRigidbodyColliderType(nodeType: string | null | undefined): RigidbodyColliderType | null {
+  if (!nodeType) {
+    return null
+  }
+  if (nodeType === 'Sphere') {
+    return 'sphere'
+  }
+  if (isGeometryType(nodeType)) {
+    return 'convex'
+  }
+  return null
 }
 
 function ensureTransformPanelExpanded() {
