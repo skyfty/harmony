@@ -4181,33 +4181,6 @@ function initRenderer() {
 	stopInstancedMeshSubscription = subscribeInstancedMeshes((mesh) => {
 		attachInstancedMesh(mesh)
 	})
-
-	applySunDirectionToSunLight()
-
-	ensureSkyExists()
-	cloudRenderer?.dispose()
-	if (scene) {
-		cloudRenderer = new SceneCloudRenderer({
-			scene,
-			assetResolver: async (source) => {
-				const resolved = await resolveAssetUrlReference(source)
-				if (!resolved) {
-					return null
-				}
-				return {
-					url: resolved.url,
-					dispose: resolved.dispose,
-				}
-			},
-		})
-	}
-	if (pendingSkyboxSettings) {
-		applySkyboxSettings(pendingSkyboxSettings)
-	}
-	if (pendingEnvironmentSettings) {
-		void applyEnvironmentSettingsToScene(pendingEnvironmentSettings)
-	}
-
 	initControls()
 	updateCanvasCursor()
 	renderer.domElement.addEventListener('click', handleVehicleFollowDriveClick)
@@ -4425,8 +4398,6 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	resetAssetResolutionCaches()
 	lazyPlaceholderStates.clear()
 	activeLazyLoadCount = 0
-	cloudRenderer?.dispose()
-	cloudRenderer = null
 	pendingSkyboxSettings = null
 	if (!rootGroup) {
 		return
@@ -4645,6 +4616,22 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
 	sky.visible = previousVisibility
 	syncSkyVisibility()
 	applySkyEnvironmentToScene()
+
+	cloudRenderer?.dispose()
+	cloudRenderer = null
+	cloudRenderer = new SceneCloudRenderer({
+		scene,
+		assetResolver: async (source) => {
+			const resolved = await resolveAssetUrlReference(source)
+			if (!resolved) {
+				return null
+			}
+			return {
+				url: resolved.url,
+				dispose: resolved.dispose,
+			}
+		},
+	})
 	cloudRenderer?.setSkyboxSettings(settings)
 	pendingSkyboxSettings = null
 }

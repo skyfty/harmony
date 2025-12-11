@@ -346,7 +346,9 @@ export class SceneCloudRenderer {
         uniforms.uCoverage.value = volumetric.coverage
       }
       if (uniforms?.uColor) {
-        (uniforms.uColor.value as THREE.Color).set(volumetric.color)
+        const color = uniforms.uColor.value as THREE.Color
+        color.set(volumetric.color)
+        color.convertSRGBToLinear()
       }
     }
   }
@@ -553,12 +555,14 @@ export class SceneCloudRenderer {
       return
     }
     const geometry = new THREE.PlaneGeometry(settings.size, settings.size, 1, 1)
+    const tintColor = new THREE.Color(settings.color)
+    tintColor.convertSRGBToLinear()
     const uniforms = {
       uTime: { value: 0 },
       uDensity: { value: settings.density },
       uCoverage: { value: settings.coverage },
       uDetail: { value: settings.detail },
-      uColor: { value: new THREE.Color(settings.color) },
+      uColor: { value: tintColor },
     }
     const material = new THREE.ShaderMaterial({
       uniforms,
@@ -605,6 +609,10 @@ export class SceneCloudRenderer {
           float timeFactor = uTime * 0.05;
           float n = fbm(uv + vec2(timeFactor, timeFactor));
           float coverage = smoothstep(uCoverage, 1.0, n);
+          vec2 centered = vUv - 0.5;
+          float dist = length(centered);
+          float edgeFade = 1.0 - smoothstep(0.35, 0.5, dist);
+          coverage *= edgeFade;
           float alpha = clamp(coverage * uDensity, 0.0, 1.0);
           gl_FragColor = vec4(uColor * coverage, alpha);
         }
