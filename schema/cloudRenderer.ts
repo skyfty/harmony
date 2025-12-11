@@ -55,12 +55,12 @@ const DEFAULT_SETTINGS: Record<SceneCloudImplementation, SceneCloudSettings> = {
 }
 
 const VOLUMETRIC_TEST_PRESET = {
-  density: 0.95,
-  coverage: 0.35,
+  density: 0.68,
+  coverage: 0.26,
   detail: 5,
-  speed: 0.22,
+  speed: 0.2,
   color: '#ffffff',
-  size: 3200,
+  size: 4400,
 }
 
 function ensureNumber(candidate: unknown, fallback: number): number {
@@ -554,7 +554,7 @@ export class SceneCloudRenderer {
     }
     const planeSize = VOLUMETRIC_TEST_PRESET.size
     const geometry = new THREE.PlaneGeometry(planeSize, planeSize, 1, 1)
-    const edgeSoftness = THREE.MathUtils.clamp(600 / Math.max(1, planeSize), 0.12, 0.42)
+    const edgeSoftness = THREE.MathUtils.clamp(550 / Math.max(1, planeSize), 0.08, 0.36)
     const uniforms = {
       uTime: { value: 0 },
       uDensity: { value: VOLUMETRIC_TEST_PRESET.density },
@@ -608,7 +608,7 @@ export class SceneCloudRenderer {
           vec2 uv = vUv * uDetail;
           float timeFactor = uTime * 0.05;
           float n = fbm(uv + vec2(timeFactor, timeFactor));
-          float coverageThreshold = max(0.0, uCoverage * 0.65);
+          float coverageThreshold = max(0.0, uCoverage * 0.85);
           float coverage = smoothstep(coverageThreshold, 1.0, n);
           vec2 centeredUv = vUv - 0.5;
           float edgeDistanceBox = max(abs(centeredUv.x), abs(centeredUv.y));
@@ -619,11 +619,17 @@ export class SceneCloudRenderer {
           float radialStart = clamp(radialEnd - (uEdgeSoftness * 1.5), 0.0, radialEnd - 0.0001);
           float edgeFadeRadial = 1.0 - smoothstep(radialStart, radialEnd, edgeDistanceRadial);
           float edgeFade = clamp(edgeFadeBox * edgeFadeRadial, 0.0, 1.0);
-          edgeFade = pow(edgeFade, 0.9);
+          edgeFade = pow(edgeFade, 0.8);
+          edgeFade = mix(0.5, edgeFade, 0.7);
+          float horizonNorm = clamp(edgeDistanceRadial / radialEnd, 0.0, 1.0);
+          float horizonBoost = smoothstep(0.4, 0.95, horizonNorm);
+          coverage = clamp(coverage + horizonBoost * 0.12, 0.0, 1.0);
           float coverageMask = coverage * edgeFade;
-          coverageMask = pow(coverageMask, 0.85);
+          coverageMask = pow(coverageMask, 0.96);
           float alpha = clamp(coverageMask * uDensity, 0.0, 1.0);
-          gl_FragColor = vec4(uColor * coverageMask, alpha);
+          float brightness = mix(0.7, 1.08, coverageMask);
+          vec3 cloudRgb = uColor * brightness;
+          gl_FragColor = vec4(cloudRgb, alpha);
         }
       `,
       vertexShader: `
