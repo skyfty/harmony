@@ -142,15 +142,6 @@
                 class="viewer-progress__bar-fill"
                 :style="{ width: overlayPercent + '%' }"
               />
-
-
-
-
-
-
-
-
-
             </view>
             <view class="viewer-progress__stats">
               <text class="viewer-progress__percent">{{ overlayPercent }}%</text>
@@ -584,7 +575,8 @@ const overlayPercent = computed(() => {
     return resourcePreloadPercent.value;
   }
   if (loading.value) {
-    return 0;
+    const hasPreloadHistory = resourcePreload.total > 0 || resourcePreload.totalBytes > 0;
+    return hasPreloadHistory ? resourcePreloadPercent.value : 0;
   }
   return resourcePreloadPercent.value;
 });
