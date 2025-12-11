@@ -965,6 +965,8 @@ const vehicleDriveCameraFollowState = {
 	initialized: false,
 	localOffset: new THREE.Vector3(),
 	hasLocalOffset: false,
+	motionDistanceBlend: 0,
+	lookaheadOffset: new THREE.Vector3(),
 }
 
 const vehicleDriveController = new VehicleDriveController(
@@ -4999,11 +5001,6 @@ function disposeObjectResources(object: THREE.Object3D) {
 			disposeMaterialTextures(material)
 			material.dispose?.()
 		})
-		const groundTexture = (mesh.userData?.groundTexture as THREE.Texture | undefined) ?? null
-		if (groundTexture) {
-			groundTexture.dispose?.()
-			delete mesh.userData.groundTexture
-		}
 	}
 }
 

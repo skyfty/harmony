@@ -63,6 +63,8 @@ export type VehicleDriveCameraFollowState = {
   localOffset: THREE.Vector3
   hasLocalOffset: boolean
   shouldHoldAnchorForReverse: boolean
+  motionDistanceBlend: number
+  lookaheadOffset: THREE.Vector3
 }
 
 export type VehicleFollowPlacement = {
@@ -107,6 +109,7 @@ export type VehicleDriveControllerDeps = {
   setCameraViewState?: (mode: unknown, targetId?: string | null) => void
   setCameraCaging?: (enabled: boolean, options?: { force?: boolean }) => void
   runWithProgrammaticCameraMutation?: (fn: () => void) => void
+  withControlsVerticalFreedom?: <T>(controls: any, callback: () => T) => T
   lockControlsPitchToCurrent?: (controls: any, camera: THREE.PerspectiveCamera) => void
   syncLastFirstPersonStateFromCamera?: () => void
   updateOrbitLookTween?: (delta: number) => void
@@ -192,6 +195,13 @@ const VEHICLE_FOLLOW_FORWARD_RELEASE_DOT = 0.25
 const VEHICLE_FOLLOW_COLLISION_LOCK_SPEED_SQ = 1.21
 const VEHICLE_FOLLOW_COLLISION_DIRECTION_DOT_THRESHOLD = -0.35
 const VEHICLE_FOLLOW_COLLISION_HOLD_TIME = 0.8
+const VEHICLE_FOLLOW_LOOKAHEAD_BLEND_SPEED = 4
+const VEHICLE_FOLLOW_MOTION_SPEED_THRESHOLD = 0.7
+const VEHICLE_FOLLOW_MOTION_SPEED_FULL = 6
+const VEHICLE_FOLLOW_MOTION_BLEND_SPEED = 3.2
+const VEHICLE_FOLLOW_MOTION_DISTANCE_BOOST = 0.28
+const VEHICLE_FOLLOW_MOTION_HEIGHT_BOOST = 0.22
+const VEHICLE_FOLLOW_MOTION_SPEED_RANGE = Math.max(1e-3, VEHICLE_FOLLOW_MOTION_SPEED_FULL - VEHICLE_FOLLOW_MOTION_SPEED_THRESHOLD)
 const VEHICLE_RESET_LIFT = 0.75
 const VEHICLE_CAMERA_MOVING_SPEED_SQ = 0.04
 
@@ -913,19 +923,16 @@ export class VehicleDriveController {
     const temp = this.temp
     const worldUp = VEHICLE_CAMERA_WORLD_UP
     const placement = computeVehicleFollowPlacement(getVehicleApproxDimensions(vehicleObject))
-    const distanceScale = this.getFollowDistanceScale()
-    placement.distance = Math.min(
-      VEHICLE_FOLLOW_DISTANCE_MAX,
-      Math.max(VEHICLE_FOLLOW_DISTANCE_MIN, placement.distance * distanceScale),
-    )
     const vehicleVelocity = instance?.vehicle?.chassisBody?.velocity ?? null
+    let planarSpeedSq = 0
+    let planarSpeed = 0
     this.computeVehicleFollowAnchor(vehicleObject, instance, temp.seatPosition, temp.followAnchor)
     const predictedAnchor = temp.followPredicted.copy(temp.followAnchor)
     let lookaheadActive = false
     if (vehicleVelocity) {
       temp.planarVelocity.set(vehicleVelocity.x, 0, vehicleVelocity.z)
-      const planarSpeedSq = temp.planarVelocity.lengthSq()
-      const planarSpeed = Math.sqrt(planarSpeedSq)
+      planarSpeedSq = temp.planarVelocity.lengthSq()
+      planarSpeed = Math.sqrt(planarSpeedSq)
       const lookaheadBlend = planarSpeed > VEHICLE_FOLLOW_LOOKAHEAD_BLEND_START
         ? Math.min(
             1,
@@ -967,6 +974,27 @@ export class VehicleDriveController {
       temp.planarVelocity.set(0, 0, 0)
       follow.lastVelocityDirection.set(0, 0, 0)
     }
+    const motionBlendTarget = planarSpeed <= VEHICLE_FOLLOW_MOTION_SPEED_THRESHOLD
+      ? 0
+      : Math.min(1, (planarSpeed - VEHICLE_FOLLOW_MOTION_SPEED_THRESHOLD) / VEHICLE_FOLLOW_MOTION_SPEED_RANGE)
+    const motionBlendAlpha = options.immediate || !follow.initialized
+      ? 1
+      : computeVehicleFollowLerpAlpha(deltaSeconds, VEHICLE_FOLLOW_MOTION_BLEND_SPEED)
+    if (motionBlendAlpha >= 1) {
+      follow.motionDistanceBlend = motionBlendTarget
+    } else {
+      follow.motionDistanceBlend += (motionBlendTarget - follow.motionDistanceBlend) * motionBlendAlpha
+    }
+    const baseDistanceScale = this.getFollowDistanceScale()
+    const motionDistanceScale = 1 + follow.motionDistanceBlend * VEHICLE_FOLLOW_MOTION_DISTANCE_BOOST
+    placement.distance = Math.min(
+      VEHICLE_FOLLOW_DISTANCE_MAX,
+      Math.max(VEHICLE_FOLLOW_DISTANCE_MIN, placement.distance * baseDistanceScale * motionDistanceScale),
+    )
+    const motionHeightScale = 1 + follow.motionDistanceBlend * VEHICLE_FOLLOW_MOTION_HEIGHT_BOOST
+    placement.heightOffset *= motionHeightScale
+    placement.targetLift *= motionHeightScale
+    placement.targetForward *= motionDistanceScale
     if (follow.anchorHoldSeconds > 0) {
       follow.anchorHoldSeconds = Math.max(0, follow.anchorHoldSeconds - deltaSeconds)
     }
@@ -982,6 +1010,8 @@ export class VehicleDriveController {
       follow.anchorHoldSeconds = 0
       follow.lastVelocityDirection.set(0, 0, 0)
       follow.shouldHoldAnchorForReverse = false
+      follow.motionDistanceBlend = 0
+      follow.lookaheadOffset.set(0, 0, 0)
     }
 
     const speedSq = vehicleVelocity ? vehicleVelocity.lengthSquared() : 0
@@ -1034,12 +1064,23 @@ export class VehicleDriveController {
             temp.tempVector.set(0, 0, 1)
           }
           temp.tempVector.normalize().multiplyScalar(-lookaheadLength)
-          predictedAnchor.add(temp.tempVector)
+          temp.predictionOffset.copy(temp.tempVector)
+        } else {
+          temp.predictionOffset.set(0, 0, 0)
         }
-      } else {
-        predictedAnchor.add(temp.predictionOffset)
       }
+    } else {
+      temp.predictionOffset.set(0, 0, 0)
     }
+    const lookaheadAlpha = options.immediate || !follow.initialized
+      ? 1
+      : computeVehicleFollowLerpAlpha(deltaSeconds, VEHICLE_FOLLOW_LOOKAHEAD_BLEND_SPEED)
+    if (lookaheadAlpha >= 1) {
+      follow.lookaheadOffset.copy(temp.predictionOffset)
+    } else {
+      follow.lookaheadOffset.lerp(temp.predictionOffset, lookaheadAlpha)
+    }
+    predictedAnchor.add(follow.lookaheadOffset)
     follow.desiredAnchor.copy(predictedAnchor)
     const anchorHoldActive = follow.anchorHoldSeconds > 0
     const baseAnchorAlpha = options.immediate || !follow.initialized

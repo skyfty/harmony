@@ -1045,16 +1045,17 @@ class SceneGraphBuilder {
     mesh.castShadow = base.castShadow;
     mesh.receiveShadow = base.receiveShadow;
     const userData = { ...(base.userData ?? {}) } as Record<string, unknown>;
-    delete userData.groundTexture;
     userData.dynamicMeshType = 'Ground';
     mesh.userData = userData;
     updateGroundMesh(mesh, meshInfo);
+    const groundTexture = this.extractGroundTextureFromMaterial(mesh.material);
     const materials = await this.resolveNodeMaterials(node);
     const resolvedMaterial = this.pickMaterialAssignment(materials);
     if (resolvedMaterial) {
       mesh.material = resolvedMaterial;
-      const groundTexture = (mesh.userData as { groundTexture?: THREE.Texture | null }).groundTexture ?? null;
-      this.assignTextureToMaterial(resolvedMaterial, groundTexture);
+      if (groundTexture) {
+        this.assignTextureToMaterial(resolvedMaterial, groundTexture);
+      }
     }
     this.applyTransform(mesh, node);
     this.applyVisibility(mesh, node);
@@ -1141,6 +1142,21 @@ class SceneGraphBuilder {
       }
       typed.needsUpdate = true;
     });
+  }
+
+  private extractGroundTextureFromMaterial(
+    material: THREE.Material | THREE.Material[] | null,
+  ): THREE.Texture | null {
+    if (!material || Array.isArray(material)) {
+      return null;
+    }
+    const typed = material as THREE.MeshStandardMaterial & { map?: THREE.Texture | null };
+    const candidate = typed.map ?? null;
+    if (!candidate) {
+      return null;
+    }
+    const userData = candidate.userData as { groundDynamic?: boolean } | undefined;
+    return userData?.groundDynamic ? candidate : null;
   }
 
   private recordMeshStatistics(object: THREE.Object3D): void {
