@@ -39,12 +39,13 @@ const DEFAULT_SPHERICAL_SETTINGS: SceneSphericalCloudSettings = {
 
 const DEFAULT_VOLUMETRIC_SETTINGS: SceneVolumetricCloudSettings = {
   mode: 'volumetric',
-  density: 0.68,
+  density: 0.38,
   coverage: 0.26,
   detail: 5,
   speed: 0.2,
   color: '#ffffff',
-  size: 4400,
+  size: 4000,
+  height: 400,
 }
 
 const DEFAULT_SETTINGS: Record<SceneCloudImplementation, SceneCloudSettings> = {
@@ -599,26 +600,35 @@ export class SceneCloudRenderer {
         }
 
         void main() {
-          vec2 uv = vUv * uDetail;
+          vec2 centeredUv = vUv - 0.5;
+          float edgeDistanceBox = max(abs(centeredUv.x), abs(centeredUv.y));
+          float edgeDistanceRadial = length(centeredUv);
+          float radialEnd = 0.70710678;
+          float edgeInner = max(0.0, 0.5 - uEdgeFadeDistance);
+          float radialInner = clamp(radialEnd - (uEdgeFadeDistance * 1.7), 0.0, radialEnd - 0.0001);
+          float interiorBox = smoothstep(edgeInner * 0.6, 0.5, edgeDistanceBox);
+          float interiorRadial = smoothstep(radialInner * 0.85, radialEnd, edgeDistanceRadial);
+          float interiorFocus = clamp(max(interiorBox, interiorRadial), 0.0, 1.0);
+          // Push the sampling coordinates toward the interior when near the borders so clouds do not form exactly on the plane edges
+          float inwardAmount = mix(0.0, 0.22 + uEdgeFadeDistance * 0.55, interiorFocus);
+          float radialLength = max(edgeDistanceRadial, 1e-4);
+          vec2 inwardDir = interiorFocus > 0.0 ? (-centeredUv / radialLength) : vec2(0.0);
+          vec2 focusUv = vUv + inwardDir * inwardAmount;
+          focusUv = clamp(focusUv, vec2(0.08), vec2(0.92));
+          vec2 uv = focusUv * uDetail;
           float timeFactor = uTime * 0.05;
           float n = fbm(uv + vec2(timeFactor, timeFactor));
           float coverageThreshold = max(0.0, uCoverage * 0.85);
           float baseCoverage = smoothstep(max(coverageThreshold - 0.2, 0.0), 1.0, n);
           float wideCoverage = smoothstep(coverageThreshold * 0.75, 1.0, n + 0.12);
           float coverage = mix(baseCoverage, wideCoverage, 0.55);
-          vec2 centeredUv = vUv - 0.5;
-          float edgeDistanceBox = max(abs(centeredUv.x), abs(centeredUv.y));
-          float edgeInner = max(0.0, 0.5 - uEdgeFadeDistance);
           float edgeFadeBox = 1.0 - smoothstep(edgeInner, 0.5, edgeDistanceBox);
-          float edgeDistanceRadial = length(centeredUv);
-          float radialEnd = 0.70710678;
-          float radialInner = clamp(radialEnd - (uEdgeFadeDistance * 1.7), 0.0, radialEnd - 0.0001);
           float edgeFadeRadial = 1.0 - smoothstep(radialInner, radialEnd, edgeDistanceRadial);
+          float edgeCornerFade = 1.0 - smoothstep(0.42, 0.5, edgeDistanceBox);
           float centralRadius = radialInner * 0.9;
           float centerProximity = 1.0 - smoothstep(0.0, centralRadius, edgeDistanceRadial);
-          float edgeFade = clamp(edgeFadeBox * edgeFadeRadial, 0.0, 1.0);
-          edgeFade = pow(edgeFade, 1.0 + (uEdgeSoftness * 0.5));
-          edgeFade = mix(0.45, edgeFade, 0.75);
+          float edgeFade = clamp(edgeFadeBox * edgeFadeRadial * edgeCornerFade, 0.0, 1.0);
+          edgeFade = pow(edgeFade, 1.15 + (uEdgeSoftness * 0.65));
           float horizonNorm = clamp(edgeDistanceRadial / radialEnd, 0.0, 1.0);
           float horizonBoost = smoothstep(0.35, 0.92, horizonNorm);
           float uniformLift = smoothstep(0.25, 0.85, baseCoverage) * 0.32;
