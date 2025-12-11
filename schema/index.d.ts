@@ -607,19 +607,19 @@ export interface SceneSphericalCloudSettings {
 
 export interface SceneVolumetricCloudSettings {
   mode: 'volumetric';
-  /** Tint color for the volumetric cloud shader. */
+  /** 体积云着色器的色调颜色。 */
   color: string;
-  /** Controls overall density/opacity of the volume. */
+  /** 控制体积云的整体密度/不透明度。 */
   density: number;
-  /** Scroll speed for the procedural noise field. */
+  /** 程序化噪声场的滚动速度。 */
   speed: number;
-  /** Noise detail scale factor. */
+  /** 噪声细节缩放因子。 */
   detail: number;
-  /** Coverage threshold controlling how much of the sky is filled. */
+  /** 覆盖率阈值,控制天空被填充的程度。 */
   coverage: number;
-  /** World-space height at which the volumetric layer is rendered. */
+  /** 渲染体积云层的世界空间高度。 */
   height: number;
-  /** Width/length of the quad used for the volumetric projection. */
+  /** 用于体积投影的四边形的宽度/长度。 */
   size: number;
 }
 

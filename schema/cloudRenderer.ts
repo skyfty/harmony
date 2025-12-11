@@ -54,6 +54,15 @@ const DEFAULT_SETTINGS: Record<SceneCloudImplementation, SceneCloudSettings> = {
   volumetric: DEFAULT_VOLUMETRIC_SETTINGS,
 }
 
+const VOLUMETRIC_TEST_PRESET = {
+  density: 0.95,
+  coverage: 0.35,
+  detail: 5,
+  speed: 0.22,
+  color: '#ffffff',
+  size: 3200,
+}
+
 function ensureNumber(candidate: unknown, fallback: number): number {
   const value = typeof candidate === 'number' && Number.isFinite(candidate) ? candidate : fallback
   return value
@@ -61,19 +70,6 @@ function ensureNumber(candidate: unknown, fallback: number): number {
 
 function ensureString(candidate: unknown): string {
   return typeof candidate === 'string' ? candidate : ''
-}
-
-function clampNumber(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) {
-    return min
-  }
-  if (value < min) {
-    return min
-  }
-  if (value > max) {
-    return max
-  }
-  return value
 }
 
 function approxEqual(a: number, b: number, epsilon = 1e-4): boolean {
@@ -334,20 +330,22 @@ export class SceneCloudRenderer {
         this.sphericalMesh.rotation.y += rotationSpeed * deltaSeconds
       }
     } else if (this.currentSettings.mode === 'volumetric' && this.volumetricMaterial) {
-      const volumetric = this.currentSettings as SceneVolumetricCloudSettings
       const uniforms = this.volumetricMaterial.uniforms
       if (uniforms?.uTime) {
-        uniforms.uTime.value = this.accumulatedTime * volumetric.speed
+        uniforms.uTime.value = this.accumulatedTime * VOLUMETRIC_TEST_PRESET.speed
       }
       if (uniforms?.uDensity) {
-        uniforms.uDensity.value = volumetric.density
+        uniforms.uDensity.value = VOLUMETRIC_TEST_PRESET.density
       }
       if (uniforms?.uCoverage) {
-        uniforms.uCoverage.value = volumetric.coverage
+        uniforms.uCoverage.value = VOLUMETRIC_TEST_PRESET.coverage
+      }
+      if (uniforms?.uDetail) {
+        uniforms.uDetail.value = VOLUMETRIC_TEST_PRESET.detail
       }
       if (uniforms?.uColor) {
         const color = uniforms.uColor.value as THREE.Color
-        color.set(volumetric.color)
+        color.set(VOLUMETRIC_TEST_PRESET.color)
         color.convertSRGBToLinear()
       }
     }
@@ -554,13 +552,16 @@ export class SceneCloudRenderer {
     if (token !== this.updateToken) {
       return
     }
-    const geometry = new THREE.PlaneGeometry(settings.size, settings.size, 1, 1)
+    const planeSize = VOLUMETRIC_TEST_PRESET.size
+    const geometry = new THREE.PlaneGeometry(planeSize, planeSize, 1, 1)
+    const edgeSoftness = THREE.MathUtils.clamp(600 / Math.max(1, planeSize), 0.12, 0.42)
     const uniforms = {
       uTime: { value: 0 },
-      uDensity: { value: settings.density },
-      uCoverage: { value: settings.coverage },
-      uDetail: { value: settings.detail },
-      uColor: { value: new THREE.Color(settings.color) },
+      uDensity: { value: VOLUMETRIC_TEST_PRESET.density },
+      uCoverage: { value: VOLUMETRIC_TEST_PRESET.coverage },
+      uDetail: { value: VOLUMETRIC_TEST_PRESET.detail },
+      uColor: { value: new THREE.Color(VOLUMETRIC_TEST_PRESET.color) },
+      uEdgeSoftness: { value: edgeSoftness },
     }
     const material = new THREE.ShaderMaterial({
       uniforms,
@@ -574,6 +575,7 @@ export class SceneCloudRenderer {
         uniform float uCoverage;
         uniform float uDetail;
         uniform vec3 uColor;
+        uniform float uEdgeSoftness;
 
         float hash(vec2 p) {
           return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
@@ -606,9 +608,22 @@ export class SceneCloudRenderer {
           vec2 uv = vUv * uDetail;
           float timeFactor = uTime * 0.05;
           float n = fbm(uv + vec2(timeFactor, timeFactor));
-          float coverage = smoothstep(uCoverage, 1.0, n);
-          float alpha = clamp(coverage * uDensity, 0.0, 1.0);
-          gl_FragColor = vec4(uColor * coverage, alpha);
+          float coverageThreshold = max(0.0, uCoverage * 0.65);
+          float coverage = smoothstep(coverageThreshold, 1.0, n);
+          vec2 centeredUv = vUv - 0.5;
+          float edgeDistanceBox = max(abs(centeredUv.x), abs(centeredUv.y));
+          float edgeStartBox = max(0.0, 0.5 - uEdgeSoftness);
+          float edgeFadeBox = 1.0 - smoothstep(edgeStartBox, 0.5, edgeDistanceBox);
+          float edgeDistanceRadial = length(centeredUv);
+          float radialEnd = 0.70710678;
+          float radialStart = clamp(radialEnd - (uEdgeSoftness * 1.5), 0.0, radialEnd - 0.0001);
+          float edgeFadeRadial = 1.0 - smoothstep(radialStart, radialEnd, edgeDistanceRadial);
+          float edgeFade = clamp(edgeFadeBox * edgeFadeRadial, 0.0, 1.0);
+          edgeFade = pow(edgeFade, 0.9);
+          float coverageMask = coverage * edgeFade;
+          coverageMask = pow(coverageMask, 0.85);
+          float alpha = clamp(coverageMask * uDensity, 0.0, 1.0);
+          gl_FragColor = vec4(uColor * coverageMask, alpha);
         }
       `,
       vertexShader: `
@@ -619,6 +634,8 @@ export class SceneCloudRenderer {
         }
       `,
     })
+    const colorUniform = uniforms.uColor.value as THREE.Color
+    colorUniform.convertSRGBToLinear()
     const mesh = new THREE.Mesh(geometry, material)
     mesh.name = 'SceneCloudVolumetric'
     mesh.position.set(0, settings.height, 0)
