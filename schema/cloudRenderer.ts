@@ -60,7 +60,7 @@ const VOLUMETRIC_TEST_PRESET = {
   detail: 5,
   speed: 0.2,
   color: '#ffffff',
-  size: 4400,
+  size: 8400,
 }
 
 function ensureNumber(candidate: unknown, fallback: number): number {
@@ -552,7 +552,9 @@ export class SceneCloudRenderer {
     if (token !== this.updateToken) {
       return
     }
-    const planeSize = VOLUMETRIC_TEST_PRESET.size
+    const baseSize = Math.max(settings.size, VOLUMETRIC_TEST_PRESET.size)
+    // Expand the plane so the layer reaches the visual horizon without exposing straight edges
+    const planeSize = baseSize * 1.35
     const geometry = new THREE.PlaneGeometry(planeSize, planeSize, 1, 1)
     const edgeSoftness = THREE.MathUtils.clamp(550 / Math.max(1, planeSize), 0.08, 0.36)
     // Apply a stronger fade near the mesh borders to mask the rectangular outline
@@ -609,20 +611,26 @@ export class SceneCloudRenderer {
         }
 
         void main() {
-          vec2 uv = vUv * uDetail;
+          vec2 centeredUv = vUv - 0.5;
+          float edgeDistanceBox = max(abs(centeredUv.x), abs(centeredUv.y));
+          float edgeDistanceRadial = length(centeredUv);
+          float radialEnd = 0.70710678;
+          float radialInner = clamp(radialEnd - (uEdgeFadeDistance * 1.7), 0.0, radialEnd - 0.0001);
+          float edgeInner = max(0.0, 0.5 - uEdgeFadeDistance);
+          float edgeProximity = smoothstep(0.32, 0.5, edgeDistanceBox);
+          float radialProximity = smoothstep(radialInner * 0.85, radialEnd, edgeDistanceRadial);
+          float interiorFocus = clamp(max(edgeProximity, radialProximity), 0.0, 1.0);
+          float warpFactor = mix(1.0, 0.55 + uEdgeSoftness * 0.25, interiorFocus);
+          vec2 warpedCenter = centeredUv * warpFactor;
+          vec2 warpedUv = clamp(warpedCenter + 0.5, 0.0, 1.0);
+          vec2 uv = warpedUv * uDetail;
           float timeFactor = uTime * 0.05;
           float n = fbm(uv + vec2(timeFactor, timeFactor));
           float coverageThreshold = max(0.0, uCoverage * 0.85);
           float baseCoverage = smoothstep(max(coverageThreshold - 0.2, 0.0), 1.0, n);
           float wideCoverage = smoothstep(coverageThreshold * 0.75, 1.0, n + 0.12);
           float coverage = mix(baseCoverage, wideCoverage, 0.55);
-          vec2 centeredUv = vUv - 0.5;
-          float edgeDistanceBox = max(abs(centeredUv.x), abs(centeredUv.y));
-          float edgeInner = max(0.0, 0.5 - uEdgeFadeDistance);
           float edgeFadeBox = 1.0 - smoothstep(edgeInner, 0.5, edgeDistanceBox);
-          float edgeDistanceRadial = length(centeredUv);
-          float radialEnd = 0.70710678;
-          float radialInner = clamp(radialEnd - (uEdgeFadeDistance * 1.7), 0.0, radialEnd - 0.0001);
           float edgeFadeRadial = 1.0 - smoothstep(radialInner, radialEnd, edgeDistanceRadial);
           float centralRadius = radialInner * 0.9;
           float centerProximity = 1.0 - smoothstep(0.0, centralRadius, edgeDistanceRadial);
