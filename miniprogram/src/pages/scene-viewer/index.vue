@@ -317,6 +317,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
+import { SceneCloudRenderer, sanitizeCloudSettings } from '@schema/cloudRenderer';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from '@/components/PlatformCanvas.vue';
 import type { StoredSceneEntry } from '@/stores/sceneStore';
@@ -627,6 +628,7 @@ const DEFAULT_SKYBOX_SETTINGS: SceneSkyboxSettings = {
   mieDirectionalG: 0.75,
   elevation: 22,
   azimuth: 145,
+  clouds: null,
 };
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const DEFAULT_ENVIRONMENT_BACKGROUND_COLOR = '#516175';
@@ -671,6 +673,7 @@ let sunDirectionalLight: THREE.DirectionalLight | null = null;
 let pmremGenerator: THREE.PMREMGenerator | null = null;
 let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null;
 let pendingSkyboxSettings: SceneSkyboxSettings | null = null;
+let cloudRenderer: SceneCloudRenderer | null = null;
 let shouldRenderSkyBackground = true;
 let environmentAmbientLight: THREE.AmbientLight | null = null;
 let backgroundTexture: THREE.Texture | null = null;
@@ -2391,6 +2394,7 @@ function sanitizeSkyboxSettings(input: SceneSkyboxSettings): SceneSkyboxSettings
   const ensureNumber = (candidate: unknown, fallback: number) => {
     return typeof candidate === 'number' && Number.isFinite(candidate) ? candidate : fallback;
   };
+  const sanitizedClouds = sanitizeCloudSettings(input.clouds);
   return {
     presetId: input.presetId ?? DEFAULT_SKYBOX_SETTINGS.presetId,
     exposure: ensureNumber(input.exposure, DEFAULT_SKYBOX_SETTINGS.exposure),
@@ -2400,6 +2404,7 @@ function sanitizeSkyboxSettings(input: SceneSkyboxSettings): SceneSkyboxSettings
     mieDirectionalG: ensureNumber(input.mieDirectionalG, DEFAULT_SKYBOX_SETTINGS.mieDirectionalG),
     elevation: ensureNumber(input.elevation, DEFAULT_SKYBOX_SETTINGS.elevation),
     azimuth: ensureNumber(input.azimuth, DEFAULT_SKYBOX_SETTINGS.azimuth),
+    clouds: sanitizedClouds ?? null,
   };
 }
 
@@ -6025,6 +6030,7 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
     disposeSkyEnvironment();
     applySkyEnvironmentToScene();
     renderer.toneMappingExposure = DEFAULT_SKYBOX_SETTINGS.exposure;
+    cloudRenderer?.setSkyboxSettings(null);
     pendingSkyboxSettings = null;
     return;
   }
@@ -6068,6 +6074,7 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
     syncSkyVisibility();
   }
   applySkyEnvironmentToScene();
+  cloudRenderer?.setSkyboxSettings(settings);
   pendingSkyboxSettings = null;
 }
 
@@ -6555,6 +6562,8 @@ function teardownRenderer() {
   controls.dispose();
   disposeEnvironmentResources();
   disposeSkyResources();
+  cloudRenderer?.dispose();
+  cloudRenderer = null;
   pmremGenerator?.dispose();
   pmremGenerator = null;
   pendingSkyboxSettings = null;
@@ -6660,6 +6669,24 @@ async function ensureRendererContext(result: UseCanvasResult) {
   stopInstancedMeshSubscription = subscribeInstancedMeshes((mesh) => {
     attachInstancedMesh(mesh);
   });
+
+  cloudRenderer?.dispose();
+  cloudRenderer = new SceneCloudRenderer({
+    scene,
+    assetResolver: async (source) => {
+      const resolved = await resolveAssetUrlReference(source);
+      if (!resolved) {
+        return null;
+      }
+      return {
+        url: resolved.url,
+        dispose: resolved.dispose,
+      };
+    },
+  });
+  if (pendingSkyboxSettings) {
+    cloudRenderer.setSkyboxSettings(pendingSkyboxSettings);
+  }
 
   renderContext = {
     renderer,
@@ -6835,6 +6862,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
         }
         updateBehaviorProximity();
         updateLazyPlaceholders(deltaSeconds);
+        cloudRenderer?.update(deltaSeconds);
         renderer.render(scene, camera);
       });
       onCleanup(() => {

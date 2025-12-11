@@ -1,5 +1,6 @@
 import type { SkyboxPresetDefinition } from '@/types/skybox'
-import type {SceneSkyboxSettings } from '@harmony/schema'
+import type { SceneSkyboxSettings } from '@harmony/schema'
+import { sanitizeCloudSettings } from '@schema/cloudRenderer'
 
 export const SKYBOX_PRESETS: SkyboxPresetDefinition[] = [
   {
@@ -76,6 +77,7 @@ export function normalizeSkyboxSettings(settings?: Partial<SceneSkyboxSettings> 
     ? requestedPresetId
     : DEFAULT_SKYBOX_PRESET_ID
   const basePreset = SKYBOX_PRESET_MAP.get(basePresetId) ?? SKYBOX_PRESETS[0]!
+  const clouds = sanitizeCloudSettings(settings?.clouds)
 
   return {
     presetId: requestedPresetId,
@@ -86,6 +88,7 @@ export function normalizeSkyboxSettings(settings?: Partial<SceneSkyboxSettings> 
     mieDirectionalG: settings?.mieDirectionalG ?? basePreset.settings.mieDirectionalG,
     elevation: settings?.elevation ?? basePreset.settings.elevation,
     azimuth: settings?.azimuth ?? basePreset.settings.azimuth,
+    clouds: clouds ?? null,
   }
 }
 

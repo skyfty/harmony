@@ -1,5 +1,7 @@
 
 import * as THREE from 'three'
+import type { AssetType } from './asset-types'
+import type { TerrainScatterStoreSnapshot } from './terrain-scatter'
 
 export const GROUND_NODE_ID: 'harmony:ground'
 export const SKY_NODE_ID: 'harmony:sky'
@@ -567,6 +569,65 @@ export interface SceneResourceSummary {
   meshTextureUsage?: SceneResourceMeshTextureUsage[];
 }
 
+export type SceneCloudImplementation = 'cubeTexture' | 'spherical' | 'volumetric';
+
+export interface SceneCubeTextureCloudSettings {
+  mode: 'cubeTexture';
+  /** Cube map face on the +X axis. */
+  positiveX: string;
+  /** Cube map face on the -X axis. */
+  negativeX: string;
+  /** Cube map face on the +Y axis. */
+  positiveY: string;
+  /** Cube map face on the -Y axis. */
+  negativeY: string;
+  /** Cube map face on the +Z axis. */
+  positiveZ: string;
+  /** Cube map face on the -Z axis. */
+  negativeZ: string;
+  /** Blends the cubemap clouds with the analytic sky. */
+  intensity: number;
+}
+
+export interface SceneSphericalCloudSettings {
+  mode: 'spherical';
+  /** Optional texture asset applied to the spherical cloud layer. */
+  textureAssetId: string | null;
+  /** Radius of the spherical cloud dome. */
+  radius: number;
+  /** Cloud layer opacity between 0 and 1. */
+  opacity: number;
+  /** Angular rotation speed in radians per second. */
+  rotationSpeed: number;
+  /** Tint color for the cloud material. */
+  color: string;
+  /** Height offset for positioning the cloud dome. */
+  height: number;
+}
+
+export interface SceneVolumetricCloudSettings {
+  mode: 'volumetric';
+  /** Tint color for the volumetric cloud shader. */
+  color: string;
+  /** Controls overall density/opacity of the volume. */
+  density: number;
+  /** Scroll speed for the procedural noise field. */
+  speed: number;
+  /** Noise detail scale factor. */
+  detail: number;
+  /** Coverage threshold controlling how much of the sky is filled. */
+  coverage: number;
+  /** World-space height at which the volumetric layer is rendered. */
+  height: number;
+  /** Width/length of the quad used for the volumetric projection. */
+  size: number;
+}
+
+export type SceneCloudSettings =
+  | SceneCubeTextureCloudSettings
+  | SceneSphericalCloudSettings
+  | SceneVolumetricCloudSettings;
+
 export interface SceneSkyboxSettings {
   presetId: string
   exposure: number
@@ -576,6 +637,7 @@ export interface SceneSkyboxSettings {
   mieDirectionalG: number
   elevation: number
   azimuth: number
+  clouds?: SceneCloudSettings | null
 }
 
 export type EnvironmentBackgroundMode = 'skybox' | 'solidColor' | 'hdri'
@@ -703,6 +765,6 @@ export interface ClipboardEntry {
 
 export interface SceneClipboard {
   entries: ClipboardEntry[]
-  runtimeSnapshots: Map<string, Object3D>
+  runtimeSnapshots: Map<string, THREE.Object3D>
   cut: boolean
 }

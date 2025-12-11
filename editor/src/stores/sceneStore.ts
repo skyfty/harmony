@@ -110,6 +110,7 @@ import {
   normalizeSkyboxSettings,
   resolveSkyboxPreset,
 } from '@/stores/skyboxPresets'
+import { cloudSettingsEqual } from '@schema/cloudRenderer'
 import { useAssetCacheStore } from './assetCacheStore'
 import type { AssetCacheEntry } from './assetCacheStore'
 import { useUiStore } from './uiStore'
@@ -2873,7 +2874,8 @@ function skyboxSettingsEqual(a: SceneSkyboxSettings, b: SceneSkyboxSettings): bo
     a.mieCoefficient === b.mieCoefficient &&
     a.mieDirectionalG === b.mieDirectionalG &&
     a.elevation === b.elevation &&
-    a.azimuth === b.azimuth
+    a.azimuth === b.azimuth &&
+    cloudSettingsEqual(a.clouds ?? null, b.clouds ?? null)
   )
 }
 

@@ -11,6 +11,7 @@ import WarpGatePanel from '@/components/inspector/WarpGatePanel.vue'
 import EffectPanel from '@/components/inspector/EffectPanel.vue'
 import GroundPanel from '@/components/inspector/GroundPanel.vue'
 import SkyPanel from '@/components/inspector/SkyPanel.vue'
+import CloudPanel from '@/components/inspector/CloudPanel.vue'
 import EnvironmentPanel from '@/components/inspector/EnvironmentPanel.vue'
 import BehaviorPanel from '@/components/inspector/BehaviorPanel.vue'
 import DisplayBoardPanel from '@/components/inspector/DisplayBoardPanel.vue'
@@ -452,6 +453,7 @@ watch(
             @close-details="handleMaterialPanelRequestCloseDetails"
           />
           <SkyPanel v-if="isSkyNode" />
+          <CloudPanel v-if="isSkyNode" />
           <GroundPanel v-if="isGroundNode" />
           <EnvironmentPanel v-if="isEnvironmentNode" />
 
