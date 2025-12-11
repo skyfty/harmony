@@ -7538,32 +7538,42 @@ onUnmounted(() => {
 
 .viewer-drive-cluster--actions {
   right: 16px;
-  top: calc(var(--viewer-safe-area-top, 0px) + 62px);
-  align-items: center;
-  flex-direction: row;
-  gap: 14px;
+  top: calc(50% + var(--viewer-safe-area-top, 0px));
+  transform: translateY(-50%);
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .viewer-drive-icon-button {
-  width: 52px;
-  height: 52px;
-  border-radius: 50%;
-  border: none;
+  min-width: 48px;
+  min-height: 48px;
+  padding: 6px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #5367ff, #2431af);
+  background-color: rgba(8, 12, 28, 0.48);
   color: #f4f6ff;
-  box-shadow: 0 10px 20px rgba(10, 11, 36, 0.55);
+  box-shadow: 0 10px 24px rgba(4, 6, 18, 0.45);
+  backdrop-filter: blur(12px);
+  transition: background-color 0.2s ease, transform 0.2s ease, opacity 0.2s ease;
 }
 
 .viewer-drive-icon-button--danger {
-  background: linear-gradient(135deg, #ff6f7b, #b11a36);
+  background-color: rgba(74, 6, 24, 0.6);
+  border-color: rgba(255, 143, 167, 0.45);
+  color: #ffe5ea;
 }
 
 .viewer-drive-icon-button.is-busy,
 .viewer-drive-icon-button:disabled {
   opacity: 0.7;
+}
+
+.viewer-drive-icon-button:active {
+  transform: scale(0.95);
 }
 
 .viewer-drive-speed-floating {
