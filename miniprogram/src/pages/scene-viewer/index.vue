@@ -2842,7 +2842,6 @@ function indexSceneObjects(root: THREE.Object3D) {
       const instancedAssetId = object.userData?.instancedAssetId as string | undefined;
       if (instancedAssetId) {
         ensureInstancedMeshesRegistered(instancedAssetId);
-        syncInstancedTransform(object);
       }
       const nodeState = resolveNodeById(nodeId);
       const guideboardVisibility = resolveGuideboardInitialVisibility(nodeState);
@@ -2879,14 +2878,12 @@ function registerSceneSubtree(root: THREE.Object3D): void {
     const instancedAssetId = object.userData?.instancedAssetId as string | undefined;
     if (instancedAssetId) {
       ensureInstancedMeshesRegistered(instancedAssetId);
-      syncInstancedTransform(object);
     }
     const nodeState = resolveNodeById(nodeId);
     const guideboardVisibility = resolveGuideboardInitialVisibility(nodeState);
     if (guideboardVisibility !== null) {
       object.visible = guideboardVisibility;
       updateBehaviorVisibility(nodeId, object.visible);
-      syncInstancedTransform(object);
     }
     if (nodeState) {
       applyMaterialOverrides(object, nodeState.materials, materialOverrideOptions);
@@ -3876,6 +3873,9 @@ function syncInstancedTransform(object: THREE.Object3D | null): void {
   if (!object) {
     return;
   }
+  // 注意：父层级存在旋转 + 非等比缩放时会产生 shear。
+  // InstancedMesh 支持完整矩阵，但 decompose/compose 会丢失 shear，导致实例位置/朝向偏差。
+  // 因此这里优先直接写入 matrixWorld，仅在需要“隐藏”(scale=0) 时才做分解。
   object.updateMatrixWorld(true);
   const targets: THREE.Object3D[] = [];
   object.traverse((child) => {
@@ -3892,11 +3892,13 @@ function syncInstancedTransform(object: THREE.Object3D | null): void {
       return;
     }
     removeVehicleInstance(nodeId);
-    target.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper);
     if (target.visible === false) {
+      target.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper);
       instancedScaleHelper.setScalar(0);
+      instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper);
+    } else {
+      instancedMatrixHelper.copy(target.matrixWorld);
     }
-    instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper);
     updateModelInstanceMatrix(nodeId, instancedMatrixHelper);
   });
 }
@@ -6795,6 +6797,16 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   }
   if (instancingSkipNodeIds?.size) {
     instancingSkipNodeIds.forEach((nodeId) => deferredInstancingNodeIds.add(nodeId));
+  }
+
+  if (resourceCache) {
+    try {
+      await prepareInstancedNodesForGraph(graph.root, payload.document, resourceCache, {
+        skipNodeIds: instancingSkipNodeIds ?? undefined,
+      });
+    } catch (error) {
+      console.warn('[SceneViewer] Failed to prepare instanced nodes', error);
+    }
   }
   sceneGraphRoot = graph.root;
   scene.add(graph.root);
