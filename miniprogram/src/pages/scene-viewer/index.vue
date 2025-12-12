@@ -2778,9 +2778,6 @@ function resolveGuideboardComponent(
   return component;
 }
 
-function isGuideboardSceneNode(node: SceneNode | null | undefined): boolean {
-  return resolveGuideboardComponent(node) !== null;
-}
 
 function resolveGuideboardInitialVisibility(node: SceneNode | null | undefined): boolean | null {
   const component = resolveGuideboardComponent(node);
@@ -2839,20 +2836,12 @@ function indexSceneObjects(root: THREE.Object3D) {
     if (nodeId) {
       nodeObjectMap.set(nodeId, object);
       attachRuntimeForNode(nodeId, object);
-      const instancedAssetId = object.userData?.instancedAssetId as string | undefined;
-      if (instancedAssetId) {
-        ensureInstancedMeshesRegistered(instancedAssetId);
-      }
       const nodeState = resolveNodeById(nodeId);
       const guideboardVisibility = resolveGuideboardInitialVisibility(nodeState);
       if (guideboardVisibility !== null) {
         object.visible = guideboardVisibility;
         updateBehaviorVisibility(nodeId, object.visible);
       }
-      if (nodeState) {
-        applyMaterialOverrides(object, nodeState.materials, materialOverrideOptions);
-      }
-      syncInstancedTransform(object);
     }
   });
 }
@@ -2864,17 +2853,19 @@ function registerSceneSubtree(root: THREE.Object3D): void {
       return;
     }
     const existing = nodeObjectMap.get(nodeId) ?? null;
-    const lazyData = object.userData?.lazyAsset as LazyAssetMetadata;
+    const objectLazyData = object.userData?.lazyAsset as LazyAssetMetadata;
     const existingLazyData = existing?.userData?.lazyAsset as LazyAssetMetadata;
-    const objectIsPlaceholder = lazyData?.placeholder === true;
-    const existingIsPreferred =
+    const objectIsPlaceholder = objectLazyData?.placeholder === true;
+    const shouldKeepExisting =
       existing && existing !== object && objectIsPlaceholder && existingLazyData?.placeholder !== true;
-    if (existingIsPreferred) {
+    if (shouldKeepExisting) {
       return;
     }
+
     nodeObjectMap.set(nodeId, object);
     ensureRigidbodyBindingForObject(nodeId, object);
     attachRuntimeForNode(nodeId, object);
+
     const instancedAssetId = object.userData?.instancedAssetId as string | undefined;
     if (instancedAssetId) {
       ensureInstancedMeshesRegistered(instancedAssetId);
@@ -3528,14 +3519,42 @@ function updateVehicleWheelVisuals(delta: number): void {
   });
 }
 
+/**
+ * 将“延迟做 Instancing”的节点，真正转换为 InstancedMesh 相关结构。
+ *
+ * 背景（简化理解）：
+ * - 场景里某些节点一开始可能以“普通对象/占位对象”的形式存在；
+ * - 为了节省 draw call，同一模型（同一 assetId）出现多次时，最终希望用 InstancedMesh 承载；
+ * - 但 Instancing 的准备（分组、替换节点、创建/更新 InstancedMesh）可能较重，因此选择“延迟”到合适时机再执行。
+ *
+ * 本函数做的事：
+ * 1) 决定本次要处理哪些节点（includeNodeIds）：不仅是传入 nodeId，还会尽量把“同 assetId 且也标记了延迟 instancing”的兄弟节点一起处理。
+ *    这样做可以一次性完成同资产的实例化合并，避免多次重复构建。
+ * 2) 调用 prepareInstancedNodesForGraph：在 sceneGraphRoot 下生成/更新 instanced 结构，并把对应节点替换为 instanced proxy/目标对象。
+ * 3) 重新注册这些节点的 runtime/物理绑定：更新 nodeObjectMap、移除旧刚体实例、再 registerSceneSubtree 让新对象进入索引与绑定系统。
+ * 4) 清理延迟状态与 lazy placeholder 状态，标记为已完成。
+ *
+ * @returns 是否成功处理了传入的 nodeId（通常等价于 includeNodeIds 里包含 nodeId 且替换生效）。
+ */
 async function applyDeferredInstancingForNode(nodeId: string): Promise<boolean> {
+  // 只有被标记为“需要延迟 instancing”的节点才会进入处理流程。
   if (!deferredInstancingNodeIds.has(nodeId)) {
     return false;
   }
+
+  // Instancing 的准备依赖当前场景文档、资源缓存、以及已构建的场景图根节点。
+  // 任一缺失都无法进行。
   if (!currentDocument || !viewerResourceCache || !sceneGraphRoot) {
     return false;
   }
+
+  // 本次准备要“纳入 instancing”的节点集合。
+  // 关键点：Instancing 的收益通常来自“同一 sourceAssetId 的多个节点”合并。
   const includeNodeIds = new Set<string>();
+
+  // 尝试把“同一个 assetId 的相关节点”一起做 instancing：
+  // - assetNodeIdMap 维护了 assetId -> nodeId 的集合；
+  // - 我们只挑选那些也在 deferredInstancingNodeIds 里的节点，避免无关节点被提前改写。
   const nodeState = resolveNodeById(nodeId);
   if (nodeState?.sourceAssetId) {
     const related = assetNodeIdMap.get(nodeState.sourceAssetId.trim());
@@ -3547,45 +3566,57 @@ async function applyDeferredInstancingForNode(nodeId: string): Promise<boolean> 
       });
     }
   }
+
+  // 若没有找到“同资产的兄弟节点”，至少保证处理当前 nodeId。
   if (!includeNodeIds.size) {
     includeNodeIds.add(nodeId);
   }
+
   try {
     await prepareInstancedNodesForGraph(sceneGraphRoot, currentDocument, viewerResourceCache, {
       includeNodeIds,
     });
   } catch (error) {
-    console.warn('[SceneViewer] Instanced mesh prepare failed', error);
+    console.warn('[SceneViewer] Failed to apply deferred instancing', error);
     return false;
   }
-  const updatedTargets: THREE.Object3D[] = [];
-  sceneGraphRoot.traverse((object: THREE.Object3D) => {
-    const candidateId = object.userData?.nodeId as string | undefined;
-    if (candidateId && includeNodeIds.has(candidateId)) {
-      updatedTargets.push(object);
-    }
-  });
-  if (!updatedTargets.length) {
-    return false;
-  }
-  updatedTargets.forEach((target) => {
-    const candidateId = target.userData?.nodeId as string | undefined;
-    if (!candidateId) {
+
+  // 识别哪些节点在 prepareInstancedNodesForGraph 后真正变成了 instanced proxy。
+  const instancedObjectsByNodeId = new Map<string, THREE.Object3D>();
+  sceneGraphRoot.traverse((object) => {
+    const id = object.userData?.nodeId as string | undefined;
+    if (!id || !includeNodeIds.has(id)) {
       return;
     }
-    nodeObjectMap.delete(candidateId);
-    removeRigidbodyInstance(candidateId);
-    registerSceneSubtree(target);
-  });
-  includeNodeIds.forEach((candidateId) => {
-    deferredInstancingNodeIds.delete(candidateId);
-    const state = lazyPlaceholderStates.get(candidateId);
-    if (state) {
-      state.loaded = true;
-      lazyPlaceholderStates.delete(candidateId);
+    const instancedAssetId = object.userData?.instancedAssetId as string | undefined;
+    if (instancedAssetId && instancedAssetId.trim().length) {
+      instancedObjectsByNodeId.set(id, object);
     }
   });
-  return includeNodeIds.has(nodeId);
+
+  // 对“真正 instanced 成功”的节点：
+  // - 移除旧物理实例（如果旧对象已经被替换，这里确保不会残留）
+  // - 重新注册到 nodeObjectMap / runtime / physics
+  // - 清理 lazy placeholder 与 deferred 状态
+  instancedObjectsByNodeId.forEach((object, id) => {
+    removeRigidbodyInstance(id);
+    registerSceneSubtree(object);
+    deferredInstancingNodeIds.delete(id);
+    lazyPlaceholderStates.delete(id);
+  });
+
+  // 对“尝试 instancing 但仍未成功”的节点，清除 deferred 标记，允许后续走详细模型加载兜底。
+  includeNodeIds.forEach((id) => {
+    if (!instancedObjectsByNodeId.has(id)) {
+      deferredInstancingNodeIds.delete(id);
+    }
+  });
+
+  if (renderContext?.scene) {
+    refreshAnimationControllers(renderContext.scene);
+  }
+
+  return instancedObjectsByNodeId.has(nodeId);
 }
 
 type LazyAssetMetadata = {
@@ -3777,33 +3808,41 @@ async function loadActualAssetForPlaceholder(state: LazyPlaceholderState): Promi
   if (!resourceCache || !context) {
     return;
   }
-  const node = resolveNodeById(state.nodeId);
+  const nodeId = state.nodeId;
+  const cleanupState = () => {
+    lazyPlaceholderStates.delete(nodeId);
+    deferredInstancingNodeIds.delete(nodeId);
+  };
+  const markLoadedAndCleanup = () => {
+    state.loaded = true;
+    cleanupState();
+  };
+
+  const node = resolveNodeById(nodeId);
   if (!node) {
-    lazyPlaceholderStates.delete(state.nodeId);
-    deferredInstancingNodeIds.delete(state.nodeId);
+    cleanupState();
     return;
   }
-  if (deferredInstancingNodeIds.has(state.nodeId)) {
-    const instanced = await applyDeferredInstancingForNode(state.nodeId);
+  if (deferredInstancingNodeIds.has(nodeId)) {
+    const instanced = await applyDeferredInstancingForNode(nodeId);
     if (instanced) {
       state.loaded = true;
-      lazyPlaceholderStates.delete(state.nodeId);
+      lazyPlaceholderStates.delete(nodeId);
       return;
     }
-    deferredInstancingNodeIds.delete(state.nodeId);
+    deferredInstancingNodeIds.delete(nodeId);
   }
   try {
     const detailed = await loadNodeObject(resourceCache, state.assetId, node.importMetadata ?? null);
     if (!detailed) {
-      lazyPlaceholderStates.delete(state.nodeId);
-      deferredInstancingNodeIds.delete(state.nodeId);
+      cleanupState();
       return;
     }
     detailed.position.set(0, 0, 0);
     prepareImportedObjectForPreview(detailed);
     const placeholder = state.placeholder;
-    const container = state.container ?? nodeObjectMap.get(state.nodeId) ?? null;
-    const metadata = { ...(placeholder.userData ?? {}), nodeId: state.nodeId } as Record<string, unknown>;
+    const container = state.container ?? nodeObjectMap.get(nodeId) ?? null;
+    const metadata = { ...(placeholder.userData ?? {}), nodeId } as Record<string, unknown>;
     const lazyMetadata = { ...((metadata.lazyAsset as Record<string, unknown> | undefined) ?? {}) };
     detailed.userData = {
       ...detailed.userData,
@@ -3833,17 +3872,14 @@ async function loadActualAssetForPlaceholder(state: LazyPlaceholderState): Promi
     detailed.updateMatrixWorld(true);
     placeholder.parent?.remove(placeholder);
     disposeObject(placeholder);
-    nodeObjectMap.delete(state.nodeId);
-    removeRigidbodyInstance(state.nodeId);
+    nodeObjectMap.delete(nodeId);
+    removeRigidbodyInstance(nodeId);
     registerSceneSubtree(detailed);
-    state.loaded = true;
-    deferredInstancingNodeIds.delete(state.nodeId);
-    lazyPlaceholderStates.delete(state.nodeId);
+    markLoadedAndCleanup();
     refreshAnimationControllers(context.scene);
   } catch (error) {
     console.warn('[SceneViewer] 延迟资源加载失败', error);
-    lazyPlaceholderStates.delete(state.nodeId);
-    deferredInstancingNodeIds.delete(state.nodeId);
+    cleanupState();
   }
 }
 
