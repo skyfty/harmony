@@ -11676,6 +11676,7 @@ export const useSceneStore = defineStore('scene', {
       name = 'Untitled Scene',
       thumbnailOrOptions?: string | null | { thumbnail?: string | null; groundSettings?: Partial<GroundSettings> },
     ) {
+      this.isSceneReady = false
       const scenesStore = useScenesStore()
       const displayName = name.trim() || 'Untitled Scene'
       let resolvedGroundOptions: Partial<GroundSettings> | undefined

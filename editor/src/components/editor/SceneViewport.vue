@@ -535,6 +535,7 @@ const {
   groundSelectionGroup,
   groundSelection,
   groundTextureInputRef,
+  restoreGroupdScatter,
   updateGroundSelectionToolbarPosition,
   cancelGroundSelection,
   handlePointerDown: handleGroundEditorPointerDown,
@@ -1633,6 +1634,13 @@ async function captureScreenshot(mimeType: string = 'image/png'): Promise<Blob |
 function handleToggleCameraControlMode() {
   cameraControlMode.value = cameraControlMode.value === 'orbit' ? 'map' : 'orbit'
 }
+
+watch(isSceneReady,(ready) => {
+  if (ready) {
+    syncSceneGraph()
+    restoreGroupdScatter()
+  }
+})
 
 watch(gridVisible, (visible) => {
   applyGridVisibility(visible)
@@ -6529,10 +6537,7 @@ onMounted(() => {
     viewportResizeObserver = new ResizeObserver(() => scheduleToolbarUpdate())
     viewportResizeObserver.observe(viewportEl.value)
   }
-
-  sceneStore.ensureCurrentSceneLoaded({ skipComponentSync: true }).then(() => {
-    syncSceneGraph()
-  })
+  sceneStore.ensureCurrentSceneLoaded({ skipComponentSync: true });
 })
 
 onBeforeUnmount(() => {

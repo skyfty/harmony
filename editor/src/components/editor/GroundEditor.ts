@@ -20,6 +20,7 @@ import {
 	composeScatterMatrix,
 	getScatterInstanceWorldPosition,
 	releaseScatterInstance,
+	resetScatterInstanceBinding,
 } from '@/utils/terrainScatterRuntime'
 import { GROUND_NODE_ID, GROUND_HEIGHT_STEP } from './constants'
 import type { BuildTool } from '@/types/build-tool'
@@ -296,6 +297,92 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		},
 		{ immediate: true },
 	)
+
+	async function restoreGroupdScatter(): Promise<void> {
+		const store = ensureScatterStoreRef()
+		const groundMesh = getGroundMeshObject()
+		if (!groundMesh || store.layers.size === 0) {
+			return
+		}
+
+		const resolveAssetId = (instance: TerrainScatterInstance, layer: TerrainScatterLayer): string | null => {
+			const candidates = [instance.assetId, layer.assetId, instance.profileId, layer.profileId]
+			for (const candidate of candidates) {
+				if (typeof candidate === 'string') {
+					const trimmed = candidate.trim()
+					if (trimmed.length) {
+						return trimmed
+					}
+				}
+			}
+			return null
+		}
+
+		const groupPromises = new Map<string, Promise<ModelInstanceGroup | null>>()
+		const ensureModelGroup = (assetId: string): Promise<ModelInstanceGroup | null> => {
+			if (!groupPromises.has(assetId)) {
+				const promise = (async () => {
+					const asset = options.sceneStore.getAsset(assetId)
+					if (!asset) {
+						console.warn('地面散布资源缺失，跳过恢复', assetId)
+						return null
+					}
+					try {
+						if (!assetCacheStore.hasCache(assetId)) {
+							await assetCacheStore.loadFromIndexedDb(assetId)
+						}
+						if (!assetCacheStore.hasCache(assetId)) {
+							await assetCacheStore.downloaProjectAsset(asset)
+						}
+					} catch (error) {
+						console.warn('缓存地面散布资源失败', assetId, error)
+					}
+					try {
+						return await loadScatterModelGroup(asset)
+					} catch (error) {
+						console.warn('载入地面散布资源失败', assetId, error)
+						return null
+					}
+				})()
+					.catch((error) => {
+						console.warn('恢复地面散布实例时发生错误', assetId, error)
+						return null
+					})
+				groupPromises.set(assetId, promise)
+			}
+			return groupPromises.get(assetId) as Promise<ModelInstanceGroup | null>
+		}
+
+		for (const layer of store.layers.values()) {
+			if (!layer.instances?.length) {
+				continue
+			}
+			for (const instance of layer.instances) {
+				const assetId = resolveAssetId(instance, layer)
+				if (!assetId) {
+					continue
+				}
+				instance.assetId = instance.assetId ?? assetId
+				instance.layerId = instance.layerId ?? layer.id
+				if (!instance.profileId) {
+					instance.profileId = layer.profileId ?? assetId
+				}
+				resetScatterInstanceBinding(instance)
+				const group = await ensureModelGroup(assetId)
+				if (!group) {
+					continue
+				}
+				const matrix = composeScatterMatrix(instance, groundMesh, scatterWorldMatrixHelper)
+				if (!bindScatterInstance(instance, matrix, group.assetId)) {
+					console.warn('绑定地面散布实例失败', {
+						layerId: layer.id,
+						instanceId: instance.id,
+						assetId,
+					})
+				}
+			}
+		}
+	}
 
 	function ensureScatterStoreRef(): TerrainScatterStore {
 		const snapshot = getGroundTerrainScatterSnapshot()
@@ -1623,6 +1710,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		groundSelectionToolbarStyle,
 		groundTextureInputRef,
 		isSculpting,
+		restoreGroupdScatter,
 		updateGroundSelectionToolbarPosition,
 		clearGroundSelection,
 		cancelGroundSelection,
