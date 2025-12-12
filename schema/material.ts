@@ -574,7 +574,7 @@ export class SceneMaterialFactory {
         const hdrLoader = this.hdrLoader;
         const texture = await new Promise<THREE.Texture>((resolve, reject) => {
           hdrLoader.load(
-            asset.blobUrl ?? asset.downloadUrl ?? '',
+            asset.downloadUrl ?? asset.blobUrl ?? '',
             (loaded: unknown) => resolve(loaded as THREE.Texture),
             undefined,
             (error: unknown) => reject(error instanceof Error ? error : new Error(String(error))),
@@ -584,7 +584,7 @@ export class SceneMaterialFactory {
       }
       const texture = await new Promise<THREE.Texture>((resolve, reject) => {
         this.textureLoader.load(
-          asset.blobUrl ?? asset.downloadUrl ?? '',
+            asset.downloadUrl ?? asset.blobUrl ?? '',
           (loaded: THREE.Texture) => resolve(loaded),
           undefined,
           (error: unknown) => reject(error instanceof Error ? error : new Error(String(error))),
