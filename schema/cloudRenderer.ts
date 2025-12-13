@@ -278,6 +278,73 @@ export interface SceneCloudRendererOptions {
   cubeTextureLoader?: THREE.CubeTextureLoader
 }
 
+// --- Noise Generation for Cloud Baking ---
+const PERM = new Uint8Array([151,160,137,91,90,15,131,13,201,95,96,53,194,233,7,225,140,36,103,30,69,142,8,99,37,240,21,10,23,190,6,148,247,120,234,75,0,26,197,62,94,252,219,203,117,35,11,32,57,177,33,88,237,149,56,87,174,20,125,136,171,168,68,175,74,165,71,134,139,48,27,166,77,146,158,231,83,111,229,122,60,211,133,230,220,105,92,41,55,46,245,40,244,102,143,54,65,25,63,161,1,216,80,73,209,76,132,187,208,89,18,169,200,196,135,130,116,188,159,86,164,100,109,198,173,186,3,64,52,217,226,250,124,123,5,202,38,147,118,126,255,82,85,212,207,206,59,227,47,16,58,17,182,189,28,42,223,183,170,213,119,248,152,2,44,154,163,70,221,153,101,155,167,43,172,9,129,22,39,253,19,98,108,110,79,113,224,232,178,185,112,104,218,246,97,228,251,34,242,193,238,210,144,12,191,179,162,241,81,51,145,235,249,14,239,107,49,192,214,31,181,199,106,157,184,84,204,176,115,121,50,45,127,4,150,254,138,236,205,93,222,114,67,29,24,72,243,141,128,195,78,66,215,61,156,180]);
+const P = new Uint8Array(512);
+for(let i=0; i<256; i++) P[i] = P[i+256] = PERM[i];
+
+function fade(t: number) { return t * t * t * (t * (t * 6 - 15) + 10); }
+function lerp(t: number, a: number, b: number) { return a + t * (b - a); }
+function grad(hash: number, x: number, y: number, z: number) {
+  const h = hash & 15;
+  const u = h < 8 ? x : y, v = h < 4 ? y : h === 12 || h === 14 ? x : z;
+  return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v);
+}
+
+function noise3D(x: number, y: number, z: number) {
+  const X = Math.floor(x) & 255, Y = Math.floor(y) & 255, Z = Math.floor(z) & 255;
+  x -= Math.floor(x); y -= Math.floor(y); z -= Math.floor(z);
+  const u = fade(x), v = fade(y), w = fade(z);
+  const A = P[X] + Y, AA = P[A] + Z, AB = P[A + 1] + Z, B = P[X + 1] + Y, BA = P[B] + Z, BB = P[B + 1] + Z;
+  return lerp(w, lerp(v, lerp(u, grad(P[AA], x, y, z), grad(P[BA], x - 1, y, z)),
+    lerp(u, grad(P[AB], x, y - 1, z), grad(P[BB], x - 1, y - 1, z))),
+    lerp(v, lerp(u, grad(P[AA + 1], x, y, z - 1), grad(P[BA + 1], x - 1, y, z - 1)),
+      lerp(u, grad(P[AB + 1], x, y - 1, z - 1), grad(P[BB + 1], x - 1, y - 1, z - 1))));
+}
+
+function fbm(x: number, y: number, z: number, octaves: number) {
+  let total = 0, amp = 0.5, freq = 1.0;
+  for(let i=0; i<octaves; i++) {
+    total += noise3D(x * freq, y * freq, z * freq) * amp;
+    amp *= 0.5; freq *= 2.0;
+  }
+  return total;
+}
+
+function generateCloudTexture(size: number): THREE.DataTexture {
+  const data = new Uint8Array(size * size * 4);
+  // Use 3D noise sampled on a cylinder surface to make it seamless horizontally
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const angle = (x / size) * Math.PI * 2;
+      const radius = 2.0; 
+      const nx = Math.cos(angle) * radius;
+      const nz = Math.sin(angle) * radius;
+      const ny = (y / size) * 4.0; 
+
+      // R: Base
+      const n1 = fbm(nx, ny, nz, 4);
+      // G: Detail
+      const n2 = fbm(nx + 10, ny + 10, nz + 10, 6);
+      // B: Warp
+      const n3 = fbm(nx + 20, ny + 20, nz + 20, 2);
+
+      const i = (y * size + x) * 4;
+      data[i] = Math.floor((n1 * 0.5 + 0.5) * 255);
+      data[i + 1] = Math.floor((n2 * 0.5 + 0.5) * 255);
+      data[i + 2] = Math.floor((n3 * 0.5 + 0.5) * 255);
+      data[i + 3] = 255;
+    }
+  }
+  const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.magFilter = THREE.LinearFilter;
+  texture.minFilter = THREE.LinearFilter;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 export class SceneCloudRenderer {
   private scene: THREE.Scene
   private assetResolver?: CloudAssetResolver
@@ -292,6 +359,7 @@ export class SceneCloudRenderer {
   private volumetricMesh: THREE.Mesh<THREE.BufferGeometry, THREE.Material> | null = null
   private cubeMesh: THREE.Mesh<THREE.BoxGeometry, THREE.ShaderMaterial> | null = null
   private accumulatedTime = 0
+  private cloudTexture: THREE.Texture | null = null
 
   constructor(options: SceneCloudRendererOptions) {
     this.scene = options.scene
@@ -338,6 +406,8 @@ export class SceneCloudRenderer {
     this.resources.forEach((entry) => entry.dispose())
     this.resources = []
     this.currentSettings = null
+    this.cloudTexture?.dispose()
+    this.cloudTexture = null
   }
 
   private async applySettingsAsync(settings: SceneCloudSettings | null, token: number): Promise<void> {
@@ -532,26 +602,28 @@ export class SceneCloudRenderer {
       return
     }
 
+    if (!this.cloudTexture) {
+      this.cloudTexture = generateCloudTexture(512)
+    }
+
     // Volumetric clouds are approximated using a custom shader on a sky-sized sphere.
     // Volumetric clouds rendered as a large inverted sphere that encloses the camera.
     const radius = 500
     // 仅构建上半球几何体，避免对地面以下区域进行不必要的片元着色
     const geometry = new THREE.SphereGeometry(radius, 64, 32, 0, Math.PI * 2, 0, Math.PI * 0.5)
 
-    const detailNormalized = THREE.MathUtils.clamp(settings.detail ?? 0, 0, 10) / 10
-    const downsampleStep = THREE.MathUtils.lerp(0.012, 0.004, detailNormalized)
-
     const uniforms = {
       uTime: { value: 0 },
       uSunPos: { value: new THREE.Vector3(100, 200, -100) }, // Initial sun direction in world space
-      uDownsampleStep: { value: downsampleStep },
+      uCloudTexture: { value: this.cloudTexture },
+      uCloudColor: { value: new THREE.Color(settings.color) },
+      uCloudParams: { value: new THREE.Vector4(settings.density, settings.coverage, settings.detail, settings.speed) }
     }
 
     const material = new THREE.ShaderMaterial({
       uniforms,
       vertexShader: `
             varying vec3 vWorldPosition;
-            varying vec3 vSunDirection;
             varying vec2 vUv;
 
             void main() {
@@ -565,226 +637,70 @@ export class SceneCloudRenderer {
       `,
       fragmentShader: `
         uniform float uTime;
-          uniform vec3 uSunPos; // 太阳在世界坐标中的位置
-          uniform float uDownsampleStep; // 控制采样分辨率，越大越模糊但更省
+        uniform vec3 uSunPos; // 太阳在世界坐标中的位置
+        uniform sampler2D uCloudTexture;
+        uniform vec3 uCloudColor;
+        uniform vec4 uCloudParams; // x: density, y: coverage, z: detail, w: speed
 
-            varying vec3 vWorldPosition;
-            varying vec2 vUv;
+        varying vec3 vWorldPosition;
+        varying vec2 vUv;
 
-            // --- 噪声函数库 (Simplex Noise 3D) ---
-            vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
-            vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
-            vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
-            vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+        void main() {
+            // 归一化的视线方向
+            vec3 viewDir = normalize(vWorldPosition);
+            vec3 sunDir = normalize(uSunPos);
 
-            float snoise(vec3 v) {
-                const vec2  C = vec2(1.0/6.0, 1.0/3.0) ;
-                const vec4  D = vec4(0.0, 0.5, 1.0, 2.0);
-
-                // First corner
-                vec3 i  = floor(v + dot(v, C.yyy) );
-                vec3 x0 = v - i + dot(i, C.xxx) ;
-
-                // Other corners
-                vec3 g = step(x0.yzx, x0.xyz);
-                vec3 l = 1.0 - g;
-                vec3 i1 = min( g.xyz, l.zxy );
-                vec3 i2 = max( g.xyz, l.zxy );
-
-                vec3 x1 = x0 - i1 + C.xxx;
-                vec3 x2 = x0 - i2 + C.yyy;
-                vec3 x3 = x0 - D.yyy;
-
-                i = mod289(i);
-                vec4 p = permute( permute( permute(
-                            i.z + vec4(0.0, i1.z, i2.z, 1.0 ))
-                        + i.y + vec4(0.0, i1.y, i2.y, 1.0 ))
-                        + i.x + vec4(0.0, i1.x, i2.x, 1.0 ));
-
-                float n_ = 0.142857142857;
-                vec3  ns = n_ * D.wyz - D.xzx;
-
-                vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
-
-                vec4 x_ = floor(j * ns.z);
-                vec4 y_ = floor(j - 7.0 * x_ );
-
-                vec4 x = x_ *ns.x + ns.yyyy;
-                vec4 y = y_ *ns.x + ns.yyyy;
-                vec4 h = 1.0 - abs(x) - abs(y);
-
-                vec4 b0 = vec4( x.xy, y.xy );
-                vec4 b1 = vec4( x.zw, y.zw );
-
-                vec4 s0 = floor(b0)*2.0 + 1.0;
-                vec4 s1 = floor(b1)*2.0 + 1.0;
-                vec4 sh = -step(h, vec4(0.0));
-
-                vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy ;
-                vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww ;
-
-                vec3 p0 = vec3(a0.xy,h.x);
-                vec3 p1 = vec3(a0.zw,h.y);
-                vec3 p2 = vec3(a1.xy,h.z);
-                vec3 p3 = vec3(a1.zw,h.w);
-
-                vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2, p2), dot(p3,p3)));
-                p0 *= norm.x;
-                p1 *= norm.y;
-                p2 *= norm.z;
-                p3 *= norm.w;
-
-                vec4 m = max(0.5 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
-                m = m * m;
-                return 105.0 * dot( m*m, vec4( dot(p0,x0), dot(p1,x1),
-                                            dot(p2,x2), dot(p3,x3) ) );
-            }
-
-            // --- FBM: 生成云的细节 ---
-            float fbm4(vec3 p) {
-              float sum = 0.0;
-              float amp = 0.5;
-              float freq = 1.0;
-              // 4层倍频，减少每个片元的指令数量
-              for (int i = 0; i < 4; i++) {
-                sum += snoise(p * freq) * amp;
-                freq *= 1.95;
-                amp *= 0.5;
-              }
-              return sum;
-            }
-
-            float fbm3Fast(vec3 p) {
-              float sum = 0.0;
-              float amp = 0.5;
-              float freq = 1.0;
-              // 3层倍频用于细节和高度扰动，成本更低
-              for (int i = 0; i < 3; i++) {
-                sum += snoise(p * freq) * amp;
-                freq *= 2.1;
-                amp *= 0.52;
-              }
-              return sum;
-            }
-
-            // fbmWarp: 复合的三通道 FBM，用作采样空间扭曲
-            vec3 fbmWarp(vec3 p) {
-              return vec3(
-                fbm3Fast(p + vec3(5.2, 1.3, 2.1)),
-                fbm3Fast(p + vec3(9.1, 7.4, 3.2)),
-                fbm3Fast(p + vec3(2.7, 8.5, 12.3))
-              );
-            }
-
-            void main() {
-                // 归一化的视线方向
-                vec3 viewDir = normalize(vWorldPosition);
-                vec3 sunDir = normalize(uSunPos);
-
-              // 下半球直接丢弃，避免对地面以下像素做噪声和光照计算
-              if (vWorldPosition.y < 0.0) {
+            // 下半球直接丢弃，避免对地面以下像素做噪声和光照计算
+            if (vWorldPosition.y < 0.0) {
                 discard;
-              }
-
-                // --- 1. 绘制天空背景 (透明背景，方便透视到天空盒) ---
-                vec3 skyColor = vec3(0.0);
-
-                // --- 2. 与太阳方向的夹角，用于后续云光照 ---
-                float sunDot = dot(viewDir, sunDir);
-
-                // --- 3. 生成云层 ---
-                float safeDownsample = max(uDownsampleStep, 1e-4);
-                // 主噪声控制体积轮廓，辅以噪声扰动让云更蓬松
-                float baseScale = 0.0044; // Controls large scale cloud coverage
-                vec3 basePos = vWorldPosition * baseScale;
-                basePos.x += uTime * 0.012;
-                basePos.z -= uTime * 0.01;
-
-                // Position warping creates organic, billowy silhouettes instead of grid-like repetition
-                vec3 baseQuant = floor(basePos / safeDownsample) * safeDownsample;
-                vec3 warp = fbmWarp(baseQuant * 1.1 + vec3(0.0, uTime * 0.008, 0.0)) * 0.28;
-                float shapeNoise = fbm4(baseQuant + warp * 0.9);
-                shapeNoise = shapeNoise * 0.5 + 0.5;
-
-                float detailNoise = shapeNoise;
-                if (shapeNoise > 0.32) {
-                  vec3 detailPos = vWorldPosition * 0.0095 + warp * 1.65;
-                  detailPos.x += uTime * 0.024;
-                  detailPos.z += uTime * 0.02;
-                  float detailStep = safeDownsample * 0.75;
-                  vec3 detailQuant = floor(detailPos / detailStep) * detailStep;
-                  detailNoise = fbm3Fast(detailQuant * 1.8);
-                  detailNoise = detailNoise * 0.5 + 0.5;
-                }
-
-                // --- 云层形状控制 ---
-                float horizonFade = smoothstep(0.0, 0.42, viewDir.y);
-
-                float primary = smoothstep(0.46, 0.76, shapeNoise);
-                float fluff = smoothstep(0.38, 0.88, detailNoise);
-                float cloudAlpha = primary * mix(0.5, 1.0, fluff);
-
-                // 竖直方向分层：不同高度的云具有不同密度
-                float heightNorm = clamp((vWorldPosition.y + 200.0) / 1100.0, 0.0, 1.0);
-                // Layer masks carve out distinct strata so we do not fill the entire sky with uniform density
-                float layerLow = smoothstep(0.05, 0.3, heightNorm) * (1.0 - smoothstep(0.38, 0.5, heightNorm));
-                float layerMid = smoothstep(0.28, 0.6, heightNorm) * (1.0 - smoothstep(0.65, 0.8, heightNorm));
-                float layerHigh = smoothstep(0.55, 0.92, heightNorm);
-
-                // Additional FBM per height ensures layers ebb and flow instead of forming perfect bands
-                vec2 quantXZ = floor(baseQuant.xz / (safeDownsample * 1.2)) * (safeDownsample * 1.2);
-                float quantHeight = floor(heightNorm / (safeDownsample * 0.6 + 1e-4)) * (safeDownsample * 0.6 + 1e-4);
-                float heightVariation = fbm3Fast(vec3(quantXZ * 2.4, quantHeight * 3.3));
-                heightVariation = heightVariation * 0.5 + 0.5;
-
-                float layerMask = layerLow * 0.85 + layerMid + layerHigh * 0.65;
-                float heightMod = clamp(layerMask * mix(0.65, 1.25, heightVariation), 0.0, 1.0);
-
-                cloudAlpha *= heightMod * horizonFade * 1.08;
-                cloudAlpha = pow(cloudAlpha, 1.05);
-
-                // --- 云层颜色与光照 ---
-                vec3 cloudBaseColor = vec3(1.0);
-                vec3 cloudShadowColor = vec3(0.93, 0.95, 0.99);
-
-                // 太阳高度用于调节整体光照颜色
-                float sunAltitude = clamp(sunDir.y * 0.5 + 0.5, 0.0, 1.0);
-                vec3 sunLightColor = mix(vec3(1.0, 0.82, 0.7), vec3(1.0), sunAltitude);
-                vec3 ambientSkyColor = mix(vec3(0.82, 0.88, 0.95), vec3(0.95, 0.97, 1.0), sunAltitude);
-
-                float lightIntensity = clamp(sunDot * 0.35 + 0.68, 0.55, 1.0);
-                vec3 directLighting = mix(cloudShadowColor, cloudBaseColor, lightIntensity) * sunLightColor;
-
-                // Henyey-Greenstein inspired terms: bright highlights when looking toward the sun and softer back scatter
-                float forwardScattering = pow(max(sunDot, 0.0), 8.0);
-                float backScattering = pow(max(-sunDot, 0.0), 3.0) * 0.25;
-                float anisotropic = forwardScattering * 1.6 + backScattering;
-
-                float ambientLift = mix(0.32, 0.12, cloudAlpha);
-                vec3 ambientLighting = ambientSkyColor * ambientLift;
-
-                vec3 finalCloudColor = directLighting + ambientLighting;
-                finalCloudColor += sunLightColor * anisotropic;
-
-                float silverLining = smoothstep(0.7, 1.0, sunDot) * (1.0 - cloudAlpha);
-                finalCloudColor += sunLightColor * silverLining * 1.1;
-
-                float edgeBrighten = smoothstep(0.05, 0.35, cloudAlpha);
-                finalCloudColor = mix(vec3(1.0), finalCloudColor, edgeBrighten * 0.55 + 0.3);
-                float softnessWhiten = mix(0.58, 0.2, cloudAlpha);
-                finalCloudColor = mix(finalCloudColor, vec3(1.0), softnessWhiten);
-                finalCloudColor += (1.0 - fluff) * 0.1;
-                // Subtle tint shifts depending on altitude keep lower and higher decks visually distinct
-                vec3 heightTint = mix(vec3(0.97, 0.98, 1.02), vec3(1.0, 1.0, 0.96), heightNorm);
-                finalCloudColor *= heightTint;
-                finalCloudColor += vec3(0.05) * heightNorm;
-                finalCloudColor = clamp(finalCloudColor, 0.0, 1.0);
-
-                // --- 最终混合 ---
-                vec3 finalColor = finalCloudColor;
-
-                gl_FragColor = vec4(finalColor, cloudAlpha);
             }
+
+            // --- 2. 与太阳方向的夹角，用于后续云光照 ---
+            float sunDot = dot(viewDir, sunDir);
+
+            // --- 3. 生成云层 (使用烘培纹理) ---
+            float speed = uCloudParams.w * 0.01;
+            // 简单的UV动画模拟云层移动
+            vec2 uv = vUv * 3.0 + vec2(uTime * speed, 0.0);
+            
+            vec4 noiseVal = texture2D(uCloudTexture, uv);
+            float baseNoise = noiseVal.r;
+            float detailNoise = noiseVal.g;
+            // float warp = noiseVal.b; // 可以用于扭曲UV
+
+            float coverage = uCloudParams.y;
+            float density = uCloudParams.x;
+            
+            // Mix noise
+            float noise = baseNoise;
+            // Add detail based on detail param
+            noise = mix(noise, detailNoise, 0.5 * uCloudParams.z);
+            
+            // Thresholding for cloud shape
+            float cloudVal = smoothstep(1.0 - coverage, 1.0 - coverage + 0.2, noise);
+            
+            // Density
+            float alpha = cloudVal * density;
+            
+            // Horizon fade
+            float horizonFade = smoothstep(0.0, 0.2, viewDir.y);
+            alpha *= horizonFade;
+
+            if (alpha < 0.01) discard;
+
+            // --- 云层颜色与光照 ---
+            vec3 cloudBaseColor = uCloudColor;
+            vec3 cloudShadowColor = uCloudColor * 0.85;
+            
+            float lightIntensity = clamp(sunDot * 0.5 + 0.5, 0.0, 1.0);
+            vec3 finalColor = mix(cloudShadowColor, cloudBaseColor, lightIntensity);
+            
+            // Silver lining
+            float silverLining = smoothstep(0.8, 1.0, sunDot) * (1.0 - alpha);
+            finalColor += vec3(1.0) * silverLining * 0.4;
+
+            gl_FragColor = vec4(finalColor, alpha);
+        }
       `,
       side: THREE.BackSide,
       transparent: true,
