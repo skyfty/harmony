@@ -646,6 +646,14 @@ export class SceneCloudRenderer {
                 return sum;
             }
 
+            vec3 fbmVec3(vec3 p) {
+              return vec3(
+                fbm(p + vec3(5.2, 1.3, 2.1)),
+                fbm(p + vec3(9.1, 7.4, 3.2)),
+                fbm(p + vec3(2.7, 8.5, 12.3))
+              );
+            }
+
             void main() {
                 // 归一化的视线方向
                 vec3 viewDir = normalize(vWorldPosition);
@@ -658,53 +666,50 @@ export class SceneCloudRenderer {
                 float sunDot = dot(viewDir, sunDir);
 
                 // --- 3. 生成云层 ---
-                // 采样坐标缩放：除以半径，或者直接缩放。
-                // 加上时间偏移让云移动
-                float cloudScale = 0.008;
-                vec3 cloudPos = vWorldPosition * cloudScale;
-                cloudPos.x += uTime * 0.02; // 风吹动
+                // 主噪声控制体积轮廓，辅以噪声扰动让云更蓬松
+                float baseScale = 0.0038;
+                vec3 basePos = vWorldPosition * baseScale;
+                basePos.x += uTime * 0.012;
+                basePos.z -= uTime * 0.01;
 
-                float baseNoise = fbm(cloudPos);
-                float detailNoise = fbm(cloudPos * 2.7 + vec3(0.0, 0.0, uTime * 0.03));
+                vec3 warp = fbmVec3(basePos * 1.1 + vec3(0.0, uTime * 0.008, 0.0)) * 0.35;
+                float shapeNoise = fbm(basePos + warp * 1.0);
+                shapeNoise = shapeNoise * 0.5 + 0.5;
 
-                // 将噪声映射到 [0, 1]
-                baseNoise = baseNoise * 0.5 + 0.5;
+                vec3 detailPos = vWorldPosition * 0.0085 + warp * 1.4;
+                detailPos.x += uTime * 0.024;
+                detailPos.z += uTime * 0.02;
+                float detailNoise = fbm(detailPos * 1.6);
                 detailNoise = detailNoise * 0.5 + 0.5;
 
                 // --- 云层形状控制 ---
-                // 越靠近地平线(viewDir.y 越小)，云层越应该变淡或者消失
-                // 否则地平线会看起来像是一堵墙
-                float horizonFade = smoothstep(0.0, 0.35, viewDir.y);
+                float horizonFade = smoothstep(0.0, 0.42, viewDir.y);
 
-                // 阈值与软化：先决定主体覆盖度，再用细节噪声做侵蚀，减少「一块一块」感觉
-                float cloudCoverage = 0.5;
-                float coverageSoftness = 0.2;
-                float primary = smoothstep(cloudCoverage, cloudCoverage + coverageSoftness, baseNoise);
-                float erosion = mix(0.65, 1.0, detailNoise);
-                float cloudAlpha = primary * erosion;
+                float primary = smoothstep(0.56, 0.82, shapeNoise);
+                float fluff = smoothstep(0.48, 0.9, detailNoise);
+                float cloudAlpha = primary * mix(0.35, 0.85, fluff);
 
-                // 结合地平线淡出，并做额外软边
-                cloudAlpha *= horizonFade;
-                cloudAlpha = pow(cloudAlpha, 1.2);
+                // 竖直方向衰减：顶部更轻盈
+                float vertical = clamp(vWorldPosition.y / 1000.0, -1.0, 1.0);
+                float heightFade = smoothstep(-0.6, 0.8, vertical);
+                cloudAlpha *= heightFade * horizonFade * 0.85;
+                cloudAlpha = pow(cloudAlpha, 1.05);
 
                 // --- 云层颜色与光照 ---
                 vec3 cloudBaseColor = vec3(1.0);
-                vec3 cloudShadowColor = vec3(0.82, 0.86, 0.9); // 稍浅的阴影，避免暗边
+                vec3 cloudShadowColor = vec3(0.85, 0.88, 0.92);
 
-                // 让光照更柔：背光也保持一定亮度
-                float lightIntensity = clamp(sunDot * 0.45 + 0.55, 0.35, 1.0);
+                float lightIntensity = clamp(sunDot * 0.45 + 0.6, 0.4, 1.0);
                 vec3 finalCloudColor = mix(cloudShadowColor, cloudBaseColor, lightIntensity);
 
-                // 银边效应：保持白色渐隐
-                float silverLining = smoothstep(0.75, 1.0, sunDot) * (1.0 - cloudAlpha);
-                finalCloudColor += vec3(1.0) * silverLining * 1.6;
+                float silverLining = smoothstep(0.72, 1.0, sunDot) * (1.0 - cloudAlpha);
+                finalCloudColor += vec3(1.0) * silverLining * 1.4;
 
-                // 低密度区域进一步提亮，避免黑色边缘
-                float edgeBrighten = smoothstep(0.0, 0.25, cloudAlpha);
+                float edgeBrighten = smoothstep(0.05, 0.3, cloudAlpha);
                 finalCloudColor = mix(vec3(1.0), finalCloudColor, edgeBrighten);
+                finalCloudColor += (1.0 - fluff) * 0.07;
 
                 // --- 最终混合 ---
-                // 透明背景：颜色和透明度都用 cloudAlpha 作为权重
                 vec3 finalColor = mix(skyColor, finalCloudColor, cloudAlpha);
 
                 gl_FragColor = vec4(finalColor, cloudAlpha);
