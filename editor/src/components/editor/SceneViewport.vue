@@ -1623,8 +1623,12 @@ function syncProtagonistPreviewCamera(): boolean {
 }
 
 function renderProtagonistPreview() {
-  if (!showProtagonistPreview.value || !syncProtagonistPreviewCamera()) {
+  if (!scene || !renderer || !showProtagonistPreview.value || !syncProtagonistPreviewCamera() || !protagonistPreviewCamera) {
     return
+  }
+  const previousTransformVisible = transformControls?.visible ?? false
+  if (transformControls) {
+    transformControls.visible = false
   }
   renderer.getSize(previewRenderSize)
   const previewWidth = Math.round(Math.min(PROTAGONIST_PREVIEW_WIDTH, previewRenderSize.x))
@@ -1647,6 +1651,9 @@ function renderProtagonistPreview() {
   renderer.setScissor(previewScissorState)
   renderer.setScissorTest(previousScissorTest)
   renderer.autoClear = previousAutoClear
+  if (transformControls) {
+    transformControls.visible = previousTransformVisible
+  }
 }
 
 function applyGridVisibility(visible: boolean) {
