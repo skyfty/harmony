@@ -262,7 +262,7 @@ function handleVolumetricStringInput(value: unknown) {
   commitSettings({ ...current, color: normalized })
 }
 
-function handleVolumetricNumberInput(key: 'density' | 'speed' | 'detail' | 'coverage' | 'height' | 'size', value: unknown) {
+function handleVolumetricNumberInput(key: 'density' | 'speed' | 'detail' | 'coverage' | 'height' | 'size' | 'shadowOpacity' | 'sunIntensity' | 'ambientIntensity', value: unknown) {
   const current = volumetricSettings.value
   if (!current) {
     return
@@ -852,6 +852,42 @@ function handleSphericalTextureClear() {
               density="compact"
               hide-details
               @update:model-value="(value) => handleVolumetricNumberInput('size', value)"
+            />
+            <v-text-field
+              label="Shadow Opacity"
+              :model-value="volumetricSettings.shadowOpacity ?? 0.5"
+              type="number"
+              :step="0.05"
+              :min="0"
+              :max="1"
+              variant="underlined"
+              density="compact"
+              hide-details
+              @update:model-value="(value) => handleVolumetricNumberInput('shadowOpacity', value)"
+            />
+            <v-text-field
+              label="Sun Intensity"
+              :model-value="volumetricSettings.sunIntensity ?? 0.7"
+              type="number"
+              :step="0.05"
+              :min="0"
+              :max="1"
+              variant="underlined"
+              density="compact"
+              hide-details
+              @update:model-value="(value) => handleVolumetricNumberInput('sunIntensity', value)"
+            />
+            <v-text-field
+              label="Ambient Intensity"
+              :model-value="volumetricSettings.ambientIntensity ?? 0.3"
+              type="number"
+              :step="0.05"
+              :min="0"
+              :max="1"
+              variant="underlined"
+              density="compact"
+              hide-details
+              @update:model-value="(value) => handleVolumetricNumberInput('ambientIntensity', value)"
             />
           </div>
           <div class="cloud-input">

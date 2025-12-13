@@ -607,20 +607,26 @@ export interface SceneSphericalCloudSettings {
 
 export interface SceneVolumetricCloudSettings {
   mode: 'volumetric';
-  /** 体积云着色器的色调颜色。 */
+  /** Tint color for the cloud material. */
   color: string;
-  /** 控制体积云的整体密度/不透明度。 */
+  /** Cloud density multiplier. */
   density: number;
-  /** 程序化噪声场的滚动速度。 */
+  /** Cloud movement speed. */
   speed: number;
-  /** 噪声细节缩放因子。 */
+  /** Cloud detail level (0-10). */
   detail: number;
-  /** 覆盖率阈值,控制天空被填充的程度。 */
+  /** Cloud coverage (0-1). */
   coverage: number;
-  /** 渲染体积云层的世界空间高度。 */
+  /** Height offset. */
   height: number;
-  /** 用于体积投影的四边形的宽度/长度。 */
+  /** Cloud scale/size. */
   size: number;
+  /** Shadow opacity (0-1). Higher is darker shadows. */
+  shadowOpacity?: number;
+  /** Sun light intensity (0-1). */
+  sunIntensity?: number;
+  /** Ambient light intensity (0-1). */
+  ambientIntensity?: number;
 }
 
 export type SceneCloudSettings =

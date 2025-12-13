@@ -46,6 +46,9 @@ const DEFAULT_VOLUMETRIC_SETTINGS: SceneVolumetricCloudSettings = {
   color: '#ffffff',
   size: 4000,
   height: 400,
+  shadowOpacity: 0.5,
+  sunIntensity: 0.7,
+  ambientIntensity: 0.3,
 }
 
 const DEFAULT_SETTINGS: Record<SceneCloudImplementation, SceneCloudSettings> = {
@@ -102,6 +105,9 @@ function cloneVolumetricSettings(settings: SceneVolumetricCloudSettings): SceneV
     coverage: settings.coverage,
     height: settings.height,
     size: settings.size,
+    shadowOpacity: settings.shadowOpacity,
+    sunIntensity: settings.sunIntensity,
+    ambientIntensity: settings.ambientIntensity,
   }
 }
 
@@ -143,6 +149,9 @@ function sanitizeVolumetricSettings(input: SceneVolumetricCloudSettings | null |
     coverage: ensureNumber(input?.coverage, fallback.coverage),
     height: ensureNumber(input?.height, fallback.height),
     size: ensureNumber(input?.size, fallback.size),
+    shadowOpacity: ensureNumber(input?.shadowOpacity, fallback.shadowOpacity!),
+    sunIntensity: ensureNumber(input?.sunIntensity, fallback.sunIntensity!),
+    ambientIntensity: ensureNumber(input?.ambientIntensity, fallback.ambientIntensity!),
   }
 }
 
@@ -229,7 +238,10 @@ export function cloudSettingsEqual(a: SceneCloudSettings | null | undefined, b: 
         approxEqual(a.detail, other.detail) &&
         approxEqual(a.coverage, other.coverage) &&
         approxEqual(a.height, other.height) &&
-        approxEqual(a.size, other.size)
+        approxEqual(a.size, other.size) &&
+        approxEqual(a.shadowOpacity ?? 0.5, other.shadowOpacity ?? 0.5) &&
+        approxEqual(a.sunIntensity ?? 0.7, other.sunIntensity ?? 0.7) &&
+        approxEqual(a.ambientIntensity ?? 0.3, other.ambientIntensity ?? 0.3)
       )
     }
     default:
@@ -640,7 +652,7 @@ export class SceneCloudRenderer {
     }
 
     if (!this.cloudTexture) {
-      this.cloudTexture = generateCloudTexture(512)
+      this.cloudTexture = generateCloudTexture(256)
     }
 
     // Volumetric clouds are approximated using a custom shader on a sky-sized sphere.
@@ -659,7 +671,8 @@ export class SceneCloudRenderer {
       uCloudTexture: { value: this.cloudTexture },
       uCloudScale: { value: cloudScale },
       uCloudColor: { value: new THREE.Color(settings.color) },
-      uCloudParams: { value: new THREE.Vector4(settings.density, settings.coverage, detail, settings.speed) }
+      uCloudParams: { value: new THREE.Vector4(settings.density, settings.coverage, detail, settings.speed) },
+      uCloudLighting: { value: new THREE.Vector3(settings.shadowOpacity ?? 0.5, settings.sunIntensity ?? 0.7, settings.ambientIntensity ?? 0.3) }
     }
 
     const material = new THREE.ShaderMaterial({
@@ -684,6 +697,7 @@ export class SceneCloudRenderer {
         uniform float uCloudScale;
         uniform vec3 uCloudColor;
         uniform vec4 uCloudParams; // x: density, y: coverage, z: detail, w: speed
+        uniform vec3 uCloudLighting; // x: shadowOpacity, y: sunIntensity, z: ambientIntensity
 
         varying vec3 vWorldPosition;
         varying vec2 vUv;
@@ -738,13 +752,17 @@ export class SceneCloudRenderer {
             vec3 cloudBaseColor = uCloudColor;
             // Simulate thickness: denser parts absorb more light (darker shadows)
             // Brightened shadows to avoid too dark clouds away from sun
-            vec3 cloudShadowColor = uCloudColor * mix(0.8, 0.5, cloudVal);
+            // uCloudLighting.x is shadowOpacity. 1.0 = dark shadows, 0.0 = no shadows.
+            // We map it so that max shadow darkness is controlled by this parameter.
+            float shadowDarkness = 1.0 - clamp(uCloudLighting.x, 0.0, 0.9);
+            vec3 cloudShadowColor = uCloudColor * mix(0.9, shadowDarkness, cloudVal);
             
             float lightIntensity = clamp(sunDot * 0.5 + 0.5, 0.0, 1.0);
             lightIntensity = smoothstep(0.2, 0.8, lightIntensity); // Enhance contrast
             
             // Mix: ensure even darkest parts get some light (ambient)
-            vec3 finalColor = mix(cloudShadowColor, cloudBaseColor, lightIntensity * 0.7 + 0.3);
+            // uCloudLighting.y = sunIntensity, uCloudLighting.z = ambientIntensity
+            vec3 finalColor = mix(cloudShadowColor, cloudBaseColor, lightIntensity * uCloudLighting.y + uCloudLighting.z);
             
             // Silver lining
             float silverLining = smoothstep(0.8, 1.0, sunDot) * (1.0 - alpha);
