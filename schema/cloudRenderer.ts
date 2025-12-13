@@ -311,28 +311,49 @@ function fbm(x: number, y: number, z: number, octaves: number) {
   return total;
 }
 
+function turbulence(x: number, y: number, z: number, octaves: number) {
+  let total = 0, amp = 0.5, freq = 1.0;
+  for(let i=0; i<octaves; i++) {
+    total += Math.abs(noise3D(x * freq, y * freq, z * freq)) * amp;
+    amp *= 0.5; freq *= 2.0;
+  }
+  return total;
+}
+
 function generateCloudTexture(size: number): THREE.DataTexture {
   const data = new Uint8Array(size * size * 4);
   // Use 3D noise sampled on a cylinder surface to make it seamless horizontally
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const angle = (x / size) * Math.PI * 2;
-      const radius = 2.0; 
+      const radius = 3.0; 
       const nx = Math.cos(angle) * radius;
       const nz = Math.sin(angle) * radius;
-      const ny = (y / size) * 4.0; 
+      const ny = (y / size) * 6.0; 
 
-      // R: Base
-      const n1 = fbm(nx, ny, nz, 4);
-      // G: Detail
-      const n2 = fbm(nx + 10, ny + 10, nz + 10, 6);
+      // R: Base - FBM
+      let n1 = fbm(nx, ny, nz, 6);
+      n1 = n1 * 0.5 + 0.5; // 0..1
+      // Smoothstep-like contrast
+      const min = 0.2, max = 0.8;
+      let t = (n1 - min) / (max - min);
+      t = t < 0 ? 0 : (t > 1 ? 1 : t);
+      n1 = t * t * (3 - 2 * t);
+
+      // G: Detail - Turbulence for fluffiness
+      let n2 = turbulence(nx + 10, ny + 10, nz + 10, 6);
+      // Enhance detail contrast
+      n2 = Math.pow(n2, 1.2);
+      n2 = n2 < 0 ? 0 : (n2 > 1 ? 1 : n2);
+
       // B: Warp
-      const n3 = fbm(nx + 20, ny + 20, nz + 20, 2);
+      let n3 = fbm(nx + 20, ny + 20, nz + 20, 3);
+      n3 = n3 * 0.5 + 0.5;
 
       const i = (y * size + x) * 4;
-      data[i] = Math.floor((n1 * 0.5 + 0.5) * 255);
-      data[i + 1] = Math.floor((n2 * 0.5 + 0.5) * 255);
-      data[i + 2] = Math.floor((n3 * 0.5 + 0.5) * 255);
+      data[i] = Math.floor(n1 * 255);
+      data[i + 1] = Math.floor(n2 * 255);
+      data[i + 2] = Math.floor(n3 * 255);
       data[i + 3] = 255;
     }
   }
