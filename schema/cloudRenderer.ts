@@ -538,9 +538,13 @@ export class SceneCloudRenderer {
     // 仅构建上半球几何体，避免对地面以下区域进行不必要的片元着色
     const geometry = new THREE.SphereGeometry(radius, 64, 32, 0, Math.PI * 2, 0, Math.PI * 0.5)
 
+    const detailNormalized = THREE.MathUtils.clamp(settings.detail ?? 0, 0, 10) / 10
+    const downsampleStep = THREE.MathUtils.lerp(0.012, 0.004, detailNormalized)
+
     const uniforms = {
       uTime: { value: 0 },
       uSunPos: { value: new THREE.Vector3(100, 200, -100) }, // Initial sun direction in world space
+      uDownsampleStep: { value: downsampleStep },
     }
 
     const material = new THREE.ShaderMaterial({
@@ -561,7 +565,8 @@ export class SceneCloudRenderer {
       `,
       fragmentShader: `
         uniform float uTime;
-            uniform vec3 uSunPos; // 太阳在世界坐标中的位置
+          uniform vec3 uSunPos; // 太阳在世界坐标中的位置
+          uniform float uDownsampleStep; // 控制采样分辨率，越大越模糊但更省
 
             varying vec3 vWorldPosition;
             varying vec2 vUv;
@@ -688,6 +693,7 @@ export class SceneCloudRenderer {
                 float sunDot = dot(viewDir, sunDir);
 
                 // --- 3. 生成云层 ---
+                float safeDownsample = max(uDownsampleStep, 1e-4);
                 // 主噪声控制体积轮廓，辅以噪声扰动让云更蓬松
                 float baseScale = 0.0044; // Controls large scale cloud coverage
                 vec3 basePos = vWorldPosition * baseScale;
@@ -695,8 +701,9 @@ export class SceneCloudRenderer {
                 basePos.z -= uTime * 0.01;
 
                 // Position warping creates organic, billowy silhouettes instead of grid-like repetition
-                vec3 warp = fbmWarp(basePos * 1.1 + vec3(0.0, uTime * 0.008, 0.0)) * 0.28;
-                float shapeNoise = fbm4(basePos + warp * 0.9);
+                vec3 baseQuant = floor(basePos / safeDownsample) * safeDownsample;
+                vec3 warp = fbmWarp(baseQuant * 1.1 + vec3(0.0, uTime * 0.008, 0.0)) * 0.28;
+                float shapeNoise = fbm4(baseQuant + warp * 0.9);
                 shapeNoise = shapeNoise * 0.5 + 0.5;
 
                 float detailNoise = shapeNoise;
@@ -704,7 +711,9 @@ export class SceneCloudRenderer {
                   vec3 detailPos = vWorldPosition * 0.0095 + warp * 1.65;
                   detailPos.x += uTime * 0.024;
                   detailPos.z += uTime * 0.02;
-                  detailNoise = fbm3Fast(detailPos * 1.8);
+                  float detailStep = safeDownsample * 0.75;
+                  vec3 detailQuant = floor(detailPos / detailStep) * detailStep;
+                  detailNoise = fbm3Fast(detailQuant * 1.8);
                   detailNoise = detailNoise * 0.5 + 0.5;
                 }
 
@@ -723,7 +732,9 @@ export class SceneCloudRenderer {
                 float layerHigh = smoothstep(0.55, 0.92, heightNorm);
 
                 // Additional FBM per height ensures layers ebb and flow instead of forming perfect bands
-                float heightVariation = fbm3Fast(vec3(basePos.xz * 2.4, heightNorm * 3.3));
+                vec2 quantXZ = floor(baseQuant.xz / (safeDownsample * 1.2)) * (safeDownsample * 1.2);
+                float quantHeight = floor(heightNorm / (safeDownsample * 0.6 + 1e-4)) * (safeDownsample * 0.6 + 1e-4);
+                float heightVariation = fbm3Fast(vec3(quantXZ * 2.4, quantHeight * 3.3));
                 heightVariation = heightVariation * 0.5 + 0.5;
 
                 float layerMask = layerLow * 0.85 + layerMid + layerHigh * 0.65;
