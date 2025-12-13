@@ -29,11 +29,13 @@ import {
   DEFAULT_RIGIDBODY_RESTITUTION,
   DISPLAY_BOARD_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
+  PROTAGONIST_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
   WARP_GATE_COMPONENT_TYPE,
 } from '@schema/components'
 import type {
   GuideboardComponentProps,
+  ProtagonistComponentProps,
   ViewPointComponentProps,
   WarpGateComponentProps,
 } from '@schema/components'
@@ -1685,6 +1687,90 @@ const canAddGround = computed(() => {
   return !sceneStore.nodes.some(n => n.dynamicMesh?.type === 'Ground')
 })
 
+function hasProtagonistNode(nodes: SceneNode[] | null | undefined): boolean {
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    return false
+  }
+  const stack: SceneNode[] = [...nodes]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    const component = node.components?.[PROTAGONIST_COMPONENT_TYPE] as
+      | SceneNodeComponentState<ProtagonistComponentProps>
+      | undefined
+    if (component) {
+      return true
+    }
+    if (node.children?.length) {
+      stack.push(...node.children)
+    }
+  }
+  return false
+}
+
+const canAddProtagonist = computed(() => !hasProtagonistNode(sceneStore.nodes))
+
+async function handleCreateProtagonistNode(): Promise<void> {
+  if (!canAddProtagonist.value) {
+    return
+  }
+
+  const name = 'Protagonist'
+  const capsuleMesh = createPrimitiveMesh('Capsule', { color: 0xffffff, doubleSided: true })
+  capsuleMesh.name = `${name} Visual`
+  capsuleMesh.castShadow = true
+  capsuleMesh.receiveShadow = true
+  capsuleMesh.userData = {
+    ...(capsuleMesh.userData ?? {}),
+    editorOnly: true,
+    protagonist: true,
+  }
+
+  const root = new THREE.Object3D()
+  root.name = name
+  root.add(capsuleMesh)
+  root.userData = {
+    ...(root.userData ?? {}),
+    editorOnly: true,
+    protagonist: true,
+  }
+
+  const created = await sceneStore.addModelNode({
+    object: root,
+    nodeType: 'Capsule',
+    name,
+    baseY: 0,
+    position: new THREE.Vector3(0, 1, 0),
+    snapToGrid: false,
+    editorFlags: {
+      editorOnly: true,
+      ignoreGridSnapping: true,
+    },
+  })
+
+  if (!created) {
+    return
+  }
+
+  let protagonistComponent = created.components?.[PROTAGONIST_COMPONENT_TYPE] as
+    | SceneNodeComponentState<ProtagonistComponentProps>
+    | undefined
+  if (!protagonistComponent) {
+    const added = sceneStore.addNodeComponent(created.id, PROTAGONIST_COMPONENT_TYPE)
+    if (added) {
+      protagonistComponent = added as unknown as SceneNodeComponentState<ProtagonistComponentProps>
+    }
+  }
+
+  if (protagonistComponent && (protagonistComponent.props as ProtagonistComponentProps | undefined)?.name !== name) {
+    sceneStore.updateNodeComponentProps(created.id, protagonistComponent.id, { name })
+  }
+
+  sceneStore.selectNode(created.id)
+}
+
 function handleAddGround() {
   if (!canAddGround.value) return
   resetGroundDialogState()
@@ -1807,6 +1893,7 @@ function handleAddLight(type: LightNodeType) {
     <v-list class="add-menu-list">
       <v-list-item title="Group" @click="handleAddGroup()" />
       <v-list-item title="Empty" @click="handleCreateEmptyNode()" />
+      <v-list-item title="Protagonist" @click="handleCreateProtagonistNode()" :disabled="!canAddProtagonist" />
             <v-list-item 
         title="Ground" 
         @click="handleAddGround()" 

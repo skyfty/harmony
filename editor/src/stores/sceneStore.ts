@@ -160,6 +160,7 @@ import type {
   DisplayBoardComponentProps,
   EffectComponentProps,
   GuideboardComponentProps,
+  ProtagonistComponentProps,
   RigidbodyComponentProps,
   VehicleComponentProps,
   ViewPointComponentProps,
@@ -173,6 +174,7 @@ import {
   WARP_GATE_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
   EFFECT_COMPONENT_TYPE,
+  PROTAGONIST_COMPONENT_TYPE,
   BEHAVIOR_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
   VEHICLE_COMPONENT_TYPE,
@@ -449,6 +451,9 @@ async function measureAssetImageDimensions(assetId: string, asset: ProjectAsset 
 
 function nodeSupportsMaterials(node: SceneNode | null | undefined): boolean {
   if (!node) {
+    return false
+  }
+  if (isProtagonistNode(node)) {
     return false
   }
   const type = node.nodeType ?? (node.light ? 'Light' : 'Mesh')
@@ -6173,9 +6178,23 @@ function isDescendantNode(nodes: SceneNode[], ancestorId: string, childId: strin
   return nodeContainsId(ancestor, childId)
 }
 
+function isProtagonistNode(node: SceneNode | null | undefined): boolean {
+  const components = node?.components
+  if (!components) {
+    return false
+  }
+  const protagonist = components[PROTAGONIST_COMPONENT_TYPE] as
+    | SceneNodeComponentState<ProtagonistComponentProps>
+    | undefined
+  return Boolean(protagonist)
+}
+
 function allowsChildNodes(node: SceneNode | null | undefined): boolean {
   if (!node) {
     return true
+  }
+  if (isProtagonistNode(node)) {
+    return false
   }
   if (node.allowChildNodes === false) {
     return false
@@ -9550,6 +9569,11 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
+      const movingNode = findNodeById(this.nodes, nodeId)
+      if (!movingNode) {
+        return false
+      }
+
       if (targetId && isDescendantNode(this.nodes, nodeId, targetId)) {
         return false
       }
@@ -9577,6 +9601,10 @@ export const useSceneStore = defineStore('scene', {
       }
 
       if (newParentId === SKY_NODE_ID || newParentId === ENVIRONMENT_NODE_ID) {
+        return false
+      }
+
+      if (isProtagonistNode(movingNode) && newParentId !== null) {
         return false
       }
 

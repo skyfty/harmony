@@ -23,6 +23,7 @@ import { loadProviderCatalog, storeProviderCatalog } from '@/stores/providerCata
 import { getCachedModelObject } from '@schema/modelObjectCache'
 import { dataUrlToBlob, extractExtension } from '@/utils/blob'
 import type { SceneNode } from '@harmony/schema'
+import { PROTAGONIST_COMPONENT_TYPE } from '@schema/components'
 import type { SceneMaterialTextureRef } from '@/types/material'
 
 import UploadAssetsDialog from './UploadAssetsDialog.vue'
@@ -415,6 +416,9 @@ function isNormalSceneNode(node: SceneNode | null): boolean {
 
 function nodeSupportsMaterials(node: SceneNode | null): boolean {
   if (!node || !isNormalSceneNode(node)) {
+    return false
+  }
+  if (node.components?.[PROTAGONIST_COMPONENT_TYPE]) {
     return false
   }
   const type = node.nodeType ?? 'Mesh'

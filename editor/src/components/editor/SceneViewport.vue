@@ -95,6 +95,7 @@ import {
   cloneGuideboardComponentProps,
   createWarpGateEffectInstance,
   createGuideboardEffectInstance,
+  PROTAGONIST_COMPONENT_TYPE,
 } from '@schema/components'
 import type {
   ViewPointComponentProps,
@@ -189,6 +190,21 @@ const emit = defineEmits<{
 }>()
 
 const sceneStore = useSceneStore()
+const protagonistPreviewNodeId = computed(() => {
+  const selectedId = sceneStore.selectedNodeId
+  if (!selectedId) {
+    return null
+  }
+  const node = findSceneNode(sceneStore.nodes, selectedId)
+  if (!node) {
+    return null
+  }
+  if (!node.components?.[PROTAGONIST_COMPONENT_TYPE]) {
+    return null
+  }
+  return selectedId
+})
+const showProtagonistPreview = computed(() => Boolean(protagonistPreviewNodeId.value))
 const nodePickerStore = useNodePickerStore()
 const assetCacheStore = useAssetCacheStore()
 const terrainStore = useTerrainStore()
@@ -285,12 +301,25 @@ let backgroundLoadToken = 0
 let environmentMapLoadToken = 0
 let cloudRenderer: SceneCloudRenderer | null = null
 
+const PROTAGONIST_PREVIEW_WIDTH = 240
+const PROTAGONIST_PREVIEW_HEIGHT = 140
+const PROTAGONIST_PREVIEW_MARGIN = 16
+
 const faceSnapManager = createFaceSnapManager({
   getScene: () => scene,
   objectMap,
   getActiveTool: () => props.activeTool,
   isEditableKeyboardTarget,
 })
+const protagonistPreviewCameraOffset = new THREE.Vector3(0, 0.35, 0)
+const protagonistPreviewDirection = new THREE.Vector3(0, 0, -1)
+const protagonistPreviewWorldPosition = new THREE.Vector3()
+const protagonistPreviewTarget = new THREE.Vector3()
+const protagonistPreviewOffsetTarget = new THREE.Vector3()
+const previewViewportState = new THREE.Vector4()
+const previewScissorState = new THREE.Vector4()
+const previewRenderSize = new THREE.Vector2()
+let protagonistPreviewCamera: THREE.PerspectiveCamera | null = null
 
 const textureLoader = new THREE.TextureLoader()
 const cubeTextureLoader = new THREE.CubeTextureLoader()
@@ -1545,6 +1574,82 @@ function renderViewportFrame() {
   } else {
     renderer.render(scene, camera)
   }
+  renderProtagonistPreview()
+}
+
+function ensureProtagonistPreviewCamera() {
+  if (protagonistPreviewCamera) {
+    return
+  }
+  protagonistPreviewCamera = new THREE.PerspectiveCamera(
+    55,
+    PROTAGONIST_PREVIEW_WIDTH / PROTAGONIST_PREVIEW_HEIGHT,
+    0.1,
+    2000,
+  )
+  protagonistPreviewCamera.name = 'ProtagonistPreviewCamera'
+}
+
+function syncProtagonistPreviewCamera(): boolean {
+  if (!scene || !renderer) {
+    return false
+  }
+  const nodeId = protagonistPreviewNodeId.value
+  if (!nodeId) {
+    return false
+  }
+  const nodeObject = objectMap.get(nodeId)
+  if (!nodeObject) {
+    return false
+  }
+  ensureProtagonistPreviewCamera()
+  if (!protagonistPreviewCamera) {
+    return false
+  }
+  nodeObject.updateWorldMatrix(true, false)
+  nodeObject.getWorldPosition(protagonistPreviewWorldPosition)
+  const cameraQuaternion = protagonistPreviewCamera.quaternion
+  nodeObject.getWorldQuaternion(cameraQuaternion)
+  protagonistPreviewOffsetTarget.copy(protagonistPreviewCameraOffset).applyQuaternion(cameraQuaternion)
+  protagonistPreviewCamera.position.copy(protagonistPreviewWorldPosition).add(protagonistPreviewOffsetTarget)
+  protagonistPreviewTarget.copy(protagonistPreviewWorldPosition)
+  protagonistPreviewDirection.set(0, 0, -1).applyQuaternion(cameraQuaternion)
+  protagonistPreviewTarget.add(protagonistPreviewDirection)
+  protagonistPreviewCamera.lookAt(protagonistPreviewTarget)
+  protagonistPreviewCamera.near = 0.1
+  protagonistPreviewCamera.far = 2000
+  protagonistPreviewCamera.updateMatrixWorld()
+  return true
+}
+
+function renderProtagonistPreview() {
+  if (!renderer || !scene || !protagonistPreviewCamera || !showProtagonistPreview.value) {
+    return
+  }
+  if (!syncProtagonistPreviewCamera()) {
+    return
+  }
+  renderer.getSize(previewRenderSize)
+  const previewWidth = Math.round(Math.min(PROTAGONIST_PREVIEW_WIDTH, previewRenderSize.x))
+  const previewHeight = Math.round(Math.min(PROTAGONIST_PREVIEW_HEIGHT, previewRenderSize.y))
+  const previewX = Math.round(Math.max(0, previewRenderSize.x - previewWidth - PROTAGONIST_PREVIEW_MARGIN))
+  const previewY = Math.round(PROTAGONIST_PREVIEW_MARGIN)
+  renderer.getViewport(previewViewportState)
+  renderer.getScissor(previewScissorState)
+  const previousScissorTest = renderer.getScissorTest()
+  const previousAutoClear = renderer.autoClear
+  renderer.clearDepth()
+  renderer.setViewport(previewX, previewY, previewWidth, previewHeight)
+  renderer.setScissor(previewX, previewY, previewWidth, previewHeight)
+  renderer.setScissorTest(true)
+  renderer.autoClear = false
+  protagonistPreviewCamera.aspect = previewWidth / previewHeight
+  protagonistPreviewCamera.updateProjectionMatrix()
+  renderer.render(scene, protagonistPreviewCamera)
+  renderer.setViewport(previewViewportState)
+  renderer.setScissor(previewScissorState)
+  renderer.setScissorTest(previousScissorTest)
+  renderer.autoClear = previousAutoClear
 }
 
 function applyGridVisibility(visible: boolean) {
@@ -4873,6 +4978,9 @@ function nodeSupportsMaterials(node: SceneNode | null): boolean {
   if (!node) {
     return false
   }
+  if (node.components?.[PROTAGONIST_COMPONENT_TYPE]) {
+    return false
+  }
   const type = node.nodeType ?? (node.light ? 'Light' : 'Mesh')
   return type !== 'Light' && type !== 'Group'
 }
@@ -6801,6 +6909,9 @@ defineExpose<SceneViewportHandle>({
       <div ref="overlayContainerRef" class="placeholder-overlay-layer">
         <PlaceholderOverlayList :overlays="placeholderOverlayList" />
       </div>
+        <div v-show="showProtagonistPreview" class="protagonist-preview">
+          <span class="protagonist-preview__label">主角视野</span>
+        </div>
       <canvas ref="canvasRef" class="viewport-canvas" />
     </div>
     <input
@@ -6913,6 +7024,34 @@ defineExpose<SceneViewportHandle>({
 
 .viewport-canvas:active {
   cursor: grabbing;
+}
+
+.protagonist-preview {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  width: 240px;
+  height: 140px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 9;
+}
+
+.protagonist-preview__label {
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  padding: 2px 8px;
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 4px;
+  text-transform: uppercase;
+  pointer-events: none;
 }
 
 .ground-texture-input {
