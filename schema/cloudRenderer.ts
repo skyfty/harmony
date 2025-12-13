@@ -345,9 +345,10 @@ function generateCloudTexture(size: number): THREE.DataTexture {
       n1 = t * t * (3 - 2 * t);
 
       // G: Detail - Turbulence for fluffiness
-      let n2 = turbulence(nx + 10, ny + 10, nz + 10, 6);
+      // Higher frequency (x3.5) for finer details
+      let n2 = turbulence((nx + 10) * 3.5, (ny + 10) * 3.5, (nz + 10) * 3.5, 7);
       // Enhance detail contrast
-      n2 = Math.pow(n2, 1.2);
+      n2 = Math.pow(n2, 1.3);
       n2 = n2 < 0 ? 0 : (n2 > 1 ? 1 : n2);
 
       // B: Warp
