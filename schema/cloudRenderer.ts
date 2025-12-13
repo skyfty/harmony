@@ -667,7 +667,7 @@ export class SceneCloudRenderer {
 
                 // --- 3. 生成云层 ---
                 // 主噪声控制体积轮廓，辅以噪声扰动让云更蓬松
-                float baseScale = 0.0038;
+                float baseScale = 0.0044;
                 vec3 basePos = vWorldPosition * baseScale;
                 basePos.x += uTime * 0.012;
                 basePos.z -= uTime * 0.01;
@@ -676,24 +676,24 @@ export class SceneCloudRenderer {
                 float shapeNoise = fbm(basePos + warp * 1.0);
                 shapeNoise = shapeNoise * 0.5 + 0.5;
 
-                vec3 detailPos = vWorldPosition * 0.0085 + warp * 1.4;
+                vec3 detailPos = vWorldPosition * 0.0095 + warp * 1.65;
                 detailPos.x += uTime * 0.024;
                 detailPos.z += uTime * 0.02;
-                float detailNoise = fbm(detailPos * 1.6);
+                float detailNoise = fbm(detailPos * 1.8);
                 detailNoise = detailNoise * 0.5 + 0.5;
 
                 // --- 云层形状控制 ---
                 float horizonFade = smoothstep(0.0, 0.42, viewDir.y);
 
-                float primary = smoothstep(0.56, 0.82, shapeNoise);
-                float fluff = smoothstep(0.48, 0.9, detailNoise);
-                float cloudAlpha = primary * mix(0.35, 0.85, fluff);
+                float primary = smoothstep(0.5, 0.78, shapeNoise);
+                float fluff = smoothstep(0.42, 0.9, detailNoise);
+                float cloudAlpha = primary * mix(0.4, 0.95, fluff);
 
                 // 竖直方向衰减：顶部更轻盈
                 float vertical = clamp(vWorldPosition.y / 1000.0, -1.0, 1.0);
                 float heightFade = smoothstep(-0.6, 0.8, vertical);
-                cloudAlpha *= heightFade * horizonFade * 0.85;
-                cloudAlpha = pow(cloudAlpha, 1.05);
+                cloudAlpha *= heightFade * horizonFade * 0.95;
+                cloudAlpha = pow(cloudAlpha, 1.1);
 
                 // --- 云层颜色与光照 ---
                 vec3 cloudBaseColor = vec3(1.0);
