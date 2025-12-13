@@ -535,7 +535,8 @@ export class SceneCloudRenderer {
     // Volumetric clouds are approximated using a custom shader on a sky-sized sphere.
     // Volumetric clouds rendered as a large inverted sphere that encloses the camera.
     const radius = 1000
-    const geometry = new THREE.SphereGeometry(radius, 64, 32)
+    // 仅构建上半球几何体，避免对地面以下区域进行不必要的片元着色
+    const geometry = new THREE.SphereGeometry(radius, 64, 32, 0, Math.PI * 2, 0, Math.PI * 0.5)
 
     const uniforms = {
       uTime: { value: 0 },
@@ -661,6 +662,11 @@ export class SceneCloudRenderer {
                 // 归一化的视线方向
                 vec3 viewDir = normalize(vWorldPosition);
                 vec3 sunDir = normalize(uSunPos);
+
+              // 下半球直接丢弃，避免对地面以下像素做噪声和光照计算
+              if (vWorldPosition.y < 0.0) {
+                discard;
+              }
 
                 // --- 1. 绘制天空背景 (透明背景，方便透视到天空盒) ---
                 vec3 skyColor = vec3(0.0);
