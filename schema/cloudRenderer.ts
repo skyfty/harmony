@@ -689,10 +689,19 @@ export class SceneCloudRenderer {
                 float fluff = smoothstep(0.38, 0.88, detailNoise);
                 float cloudAlpha = primary * mix(0.5, 1.0, fluff);
 
-                // 竖直方向衰减：顶部更轻盈
-                float vertical = clamp(vWorldPosition.y / 1000.0, -1.0, 1.0);
-                float heightFade = smoothstep(-0.6, 0.8, vertical);
-                cloudAlpha *= heightFade * horizonFade * 1.05;
+                // 竖直方向分层：不同高度的云具有不同密度
+                float heightNorm = clamp((vWorldPosition.y + 200.0) / 1100.0, 0.0, 1.0);
+                float layerLow = smoothstep(0.05, 0.3, heightNorm) * (1.0 - smoothstep(0.38, 0.5, heightNorm));
+                float layerMid = smoothstep(0.28, 0.6, heightNorm) * (1.0 - smoothstep(0.65, 0.8, heightNorm));
+                float layerHigh = smoothstep(0.55, 0.92, heightNorm);
+
+                float heightVariation = fbm(vec3(basePos.xz * 2.4, heightNorm * 3.3));
+                heightVariation = heightVariation * 0.5 + 0.5;
+
+                float layerMask = layerLow * 0.85 + layerMid + layerHigh * 0.65;
+                float heightMod = clamp(layerMask * mix(0.65, 1.25, heightVariation), 0.0, 1.0);
+
+                cloudAlpha *= heightMod * horizonFade * 1.08;
                 cloudAlpha = pow(cloudAlpha, 1.05);
 
                 // --- 云层颜色与光照 ---
@@ -725,6 +734,9 @@ export class SceneCloudRenderer {
                 float softnessWhiten = mix(0.58, 0.2, cloudAlpha);
                 finalCloudColor = mix(finalCloudColor, vec3(1.0), softnessWhiten);
                 finalCloudColor += (1.0 - fluff) * 0.1;
+                vec3 heightTint = mix(vec3(0.97, 0.98, 1.02), vec3(1.0, 1.0, 0.96), heightNorm);
+                finalCloudColor *= heightTint;
+                finalCloudColor += vec3(0.05) * heightNorm;
                 finalCloudColor = clamp(finalCloudColor, 0.0, 1.0);
 
                 // --- 最终混合 ---
