@@ -335,10 +335,11 @@ function generateCloudTexture(size: number): THREE.DataTexture {
       let n1 = fbm(nx, ny, nz, 6);
       n1 = n1 * 0.5 + 0.5; // 0..1
       
-      // Remap to make clouds denser and more visible
-      // Lowering max pushes mid-tones to white, ensuring they pass the shader threshold
-      const min = 0.15; 
-      const max = 0.55; // Significantly lowered to boost brightness/density
+      // Remap to make clouds denser but with more gaps
+      // min: threshold for "0" (sky) - Higher value = more gaps
+      // max: threshold for "1" (dense cloud) - Lower value = denser/brighter clouds
+      const min = 0.25; 
+      const max = 0.6; 
       let t = (n1 - min) / (max - min);
       t = t < 0 ? 0 : (t > 1 ? 1 : t);
       n1 = t * t * (3 - 2 * t);
