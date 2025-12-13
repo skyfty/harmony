@@ -534,7 +534,7 @@ export class SceneCloudRenderer {
 
     // Volumetric clouds are approximated using a custom shader on a sky-sized sphere.
     // Volumetric clouds rendered as a large inverted sphere that encloses the camera.
-    const radius = 1000
+    const radius = 500
     // 仅构建上半球几何体，避免对地面以下区域进行不必要的片元着色
     const geometry = new THREE.SphereGeometry(radius, 64, 32, 0, Math.PI * 2, 0, Math.PI * 0.5)
 
@@ -636,25 +636,38 @@ export class SceneCloudRenderer {
             }
 
             // --- FBM: 生成云的细节 ---
-            float fbm(vec3 p) {
-                float sum = 0.0;
-                float amp = 0.5;
-                float freq = 1.0;
-                // 5层倍频
-                for(int i = 0; i < 5; i++) {
-                    sum += snoise(p * freq) * amp;
-                    freq *= 2.02; // 稍微不是2.0，避免网格伪影
-                    amp *= 0.5;
-                }
-                return sum;
+            float fbm4(vec3 p) {
+              float sum = 0.0;
+              float amp = 0.5;
+              float freq = 1.0;
+              // 4层倍频，减少每个片元的指令数量
+              for (int i = 0; i < 4; i++) {
+                sum += snoise(p * freq) * amp;
+                freq *= 1.95;
+                amp *= 0.5;
+              }
+              return sum;
             }
 
-            // fbmVec3: 3-channel FBM used to warp sampling space and break up repetition
-            vec3 fbmVec3(vec3 p) {
+            float fbm3Fast(vec3 p) {
+              float sum = 0.0;
+              float amp = 0.5;
+              float freq = 1.0;
+              // 3层倍频用于细节和高度扰动，成本更低
+              for (int i = 0; i < 3; i++) {
+                sum += snoise(p * freq) * amp;
+                freq *= 2.1;
+                amp *= 0.52;
+              }
+              return sum;
+            }
+
+            // fbmWarp: 复合的三通道 FBM，用作采样空间扭曲
+            vec3 fbmWarp(vec3 p) {
               return vec3(
-                fbm(p + vec3(5.2, 1.3, 2.1)),
-                fbm(p + vec3(9.1, 7.4, 3.2)),
-                fbm(p + vec3(2.7, 8.5, 12.3))
+                fbm3Fast(p + vec3(5.2, 1.3, 2.1)),
+                fbm3Fast(p + vec3(9.1, 7.4, 3.2)),
+                fbm3Fast(p + vec3(2.7, 8.5, 12.3))
               );
             }
 
@@ -682,15 +695,18 @@ export class SceneCloudRenderer {
                 basePos.z -= uTime * 0.01;
 
                 // Position warping creates organic, billowy silhouettes instead of grid-like repetition
-                vec3 warp = fbmVec3(basePos * 1.1 + vec3(0.0, uTime * 0.008, 0.0)) * 0.35;
-                float shapeNoise = fbm(basePos + warp * 1.0);
+                vec3 warp = fbmWarp(basePos * 1.1 + vec3(0.0, uTime * 0.008, 0.0)) * 0.28;
+                float shapeNoise = fbm4(basePos + warp * 0.9);
                 shapeNoise = shapeNoise * 0.5 + 0.5;
 
-                vec3 detailPos = vWorldPosition * 0.0095 + warp * 1.65;
-                detailPos.x += uTime * 0.024;
-                detailPos.z += uTime * 0.02;
-                float detailNoise = fbm(detailPos * 1.8);
-                detailNoise = detailNoise * 0.5 + 0.5;
+                float detailNoise = shapeNoise;
+                if (shapeNoise > 0.32) {
+                  vec3 detailPos = vWorldPosition * 0.0095 + warp * 1.65;
+                  detailPos.x += uTime * 0.024;
+                  detailPos.z += uTime * 0.02;
+                  detailNoise = fbm3Fast(detailPos * 1.8);
+                  detailNoise = detailNoise * 0.5 + 0.5;
+                }
 
                 // --- 云层形状控制 ---
                 float horizonFade = smoothstep(0.0, 0.42, viewDir.y);
@@ -707,7 +723,7 @@ export class SceneCloudRenderer {
                 float layerHigh = smoothstep(0.55, 0.92, heightNorm);
 
                 // Additional FBM per height ensures layers ebb and flow instead of forming perfect bands
-                float heightVariation = fbm(vec3(basePos.xz * 2.4, heightNorm * 3.3));
+                float heightVariation = fbm3Fast(vec3(basePos.xz * 2.4, heightNorm * 3.3));
                 heightVariation = heightVariation * 0.5 + 0.5;
 
                 float layerMask = layerLow * 0.85 + layerMid + layerHigh * 0.65;
