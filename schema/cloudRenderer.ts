@@ -660,41 +660,48 @@ export class SceneCloudRenderer {
                 // --- 3. 生成云层 ---
                 // 采样坐标缩放：除以半径，或者直接缩放。
                 // 加上时间偏移让云移动
-                float cloudScale = 0.008; 
+                float cloudScale = 0.008;
                 vec3 cloudPos = vWorldPosition * cloudScale;
                 cloudPos.x += uTime * 0.02; // 风吹动
 
-                float noiseVal = fbm(cloudPos);
+                float baseNoise = fbm(cloudPos);
+                float detailNoise = fbm(cloudPos * 2.7 + vec3(0.0, 0.0, uTime * 0.03));
 
                 // 将噪声映射到 [0, 1]
-                noiseVal = noiseVal * 0.5 + 0.5;
+                baseNoise = baseNoise * 0.5 + 0.5;
+                detailNoise = detailNoise * 0.5 + 0.5;
 
                 // --- 云层形状控制 ---
                 // 越靠近地平线(viewDir.y 越小)，云层越应该变淡或者消失
                 // 否则地平线会看起来像是一堵墙
-                float horizonFade = smoothstep(0.0, 0.3, viewDir.y);
-                
-                // 阈值切割：决定云的多少
-                float cloudCoverage = 0.55; 
-                float cloudAlpha = smoothstep(cloudCoverage, cloudCoverage + 0.15, noiseVal);
-                
-                // 结合地平线淡出
+                float horizonFade = smoothstep(0.0, 0.35, viewDir.y);
+
+                // 阈值与软化：先决定主体覆盖度，再用细节噪声做侵蚀，减少「一块一块」感觉
+                float cloudCoverage = 0.5;
+                float coverageSoftness = 0.2;
+                float primary = smoothstep(cloudCoverage, cloudCoverage + coverageSoftness, baseNoise);
+                float erosion = mix(0.65, 1.0, detailNoise);
+                float cloudAlpha = primary * erosion;
+
+                // 结合地平线淡出，并做额外软边
                 cloudAlpha *= horizonFade;
+                cloudAlpha = pow(cloudAlpha, 1.2);
 
                 // --- 云层颜色与光照 ---
-                // 简单的光照模拟：如果是背光(对着太阳)，云中间黑边缘亮（银边效应）
-                // 这里做一个简化版：
-                vec3 cloudBaseColor = vec3(1.0); // 白云
-                vec3 cloudShadowColor = vec3(0.7, 0.75, 0.8); // 阴影色
+                vec3 cloudBaseColor = vec3(1.0);
+                vec3 cloudShadowColor = vec3(0.82, 0.86, 0.9); // 稍浅的阴影，避免暗边
 
-                // 根据太阳距离混合云的明暗
-                // 靠近太阳的地方，云反而可能比较暗（因为厚），除非是边缘
-                float lightIntensity = sunDot * 0.5 + 0.5; 
+                // 让光照更柔：背光也保持一定亮度
+                float lightIntensity = clamp(sunDot * 0.45 + 0.55, 0.35, 1.0);
                 vec3 finalCloudColor = mix(cloudShadowColor, cloudBaseColor, lightIntensity);
-                
-                // 银边效应 (Silver Lining) - 稍微复杂一点，增强靠近太阳边缘的云
-                float silverLining = smoothstep(0.8, 1.0, sunDot) * (1.0 - cloudAlpha);
-                finalCloudColor += vec3(1.0) * silverLining * 2.0;
+
+                // 银边效应：保持白色渐隐
+                float silverLining = smoothstep(0.75, 1.0, sunDot) * (1.0 - cloudAlpha);
+                finalCloudColor += vec3(1.0) * silverLining * 1.6;
+
+                // 低密度区域进一步提亮，避免黑色边缘
+                float edgeBrighten = smoothstep(0.0, 0.25, cloudAlpha);
+                finalCloudColor = mix(vec3(1.0), finalCloudColor, edgeBrighten);
 
                 // --- 最终混合 ---
                 // 透明背景：颜色和透明度都用 cloudAlpha 作为权重
