@@ -697,17 +697,24 @@ export class SceneCloudRenderer {
 
                 // --- 云层颜色与光照 ---
                 vec3 cloudBaseColor = vec3(1.0);
-                vec3 cloudShadowColor = vec3(0.85, 0.88, 0.92);
+                vec3 cloudShadowColor = vec3(0.93, 0.95, 0.99);
 
-                float lightIntensity = clamp(sunDot * 0.45 + 0.6, 0.4, 1.0);
+                float lightIntensity = clamp(sunDot * 0.3 + 0.7, 0.6, 1.0);
                 vec3 finalCloudColor = mix(cloudShadowColor, cloudBaseColor, lightIntensity);
 
+                float ambientLift = mix(0.22, 0.08, cloudAlpha);
+                finalCloudColor += vec3(ambientLift);
+                finalCloudColor = min(finalCloudColor, vec3(1.0));
+
                 float silverLining = smoothstep(0.72, 1.0, sunDot) * (1.0 - cloudAlpha);
-                finalCloudColor += vec3(1.0) * silverLining * 1.4;
+                finalCloudColor += vec3(1.0) * silverLining * 1.2;
 
                 float edgeBrighten = smoothstep(0.05, 0.3, cloudAlpha);
-                finalCloudColor = mix(vec3(1.0), finalCloudColor, edgeBrighten);
-                finalCloudColor += (1.0 - fluff) * 0.07;
+                finalCloudColor = mix(vec3(1.0), finalCloudColor, edgeBrighten * 0.65 + 0.25);
+                float softnessWhiten = mix(0.55, 0.2, cloudAlpha);
+                finalCloudColor = mix(finalCloudColor, vec3(1.0), softnessWhiten);
+                finalCloudColor += (1.0 - fluff) * 0.1;
+                finalCloudColor = clamp(finalCloudColor, 0.0, 1.0);
 
                 // --- 最终混合 ---
                 vec3 finalColor = mix(skyColor, finalCloudColor, cloudAlpha);
