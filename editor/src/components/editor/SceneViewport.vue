@@ -1623,10 +1623,7 @@ function syncProtagonistPreviewCamera(): boolean {
 }
 
 function renderProtagonistPreview() {
-  if (!renderer || !scene || !protagonistPreviewCamera || !showProtagonistPreview.value) {
-    return
-  }
-  if (!syncProtagonistPreviewCamera()) {
+  if (!showProtagonistPreview.value || !syncProtagonistPreviewCamera()) {
     return
   }
   renderer.getSize(previewRenderSize)
