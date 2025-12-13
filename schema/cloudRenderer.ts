@@ -730,11 +730,14 @@ export class SceneCloudRenderer {
             // --- 云层颜色与光照 ---
             vec3 cloudBaseColor = uCloudColor;
             // Simulate thickness: denser parts absorb more light (darker shadows)
-            vec3 cloudShadowColor = uCloudColor * mix(0.65, 0.35, cloudVal);
+            // Brightened shadows to avoid too dark clouds away from sun
+            vec3 cloudShadowColor = uCloudColor * mix(0.8, 0.5, cloudVal);
             
             float lightIntensity = clamp(sunDot * 0.5 + 0.5, 0.0, 1.0);
             lightIntensity = smoothstep(0.2, 0.8, lightIntensity); // Enhance contrast
-            vec3 finalColor = mix(cloudShadowColor, cloudBaseColor, lightIntensity);
+            
+            // Mix: ensure even darkest parts get some light (ambient)
+            vec3 finalColor = mix(cloudShadowColor, cloudBaseColor, lightIntensity * 0.7 + 0.3);
             
             // Silver lining
             float silverLining = smoothstep(0.8, 1.0, sunDot) * (1.0 - alpha);
