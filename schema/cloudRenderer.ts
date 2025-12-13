@@ -532,7 +532,7 @@ export class SceneCloudRenderer {
       return
     }
 
-    const radius = Math.max(10, settings.size * 0.5)
+    const radius = 1000
     const geometry = new THREE.SphereGeometry(radius, 64, 32)
 
     const uniforms = {
@@ -651,26 +651,11 @@ export class SceneCloudRenderer {
                 vec3 viewDir = normalize(vWorldPosition);
                 vec3 sunDir = normalize(uSunPos);
 
-                // --- 1. 绘制天空背景 (大气散射简化版) ---
-                // 基于 viewDir.y (高度) 来决定颜色
-                // 顶部深蓝 (0.0, 0.4, 0.8)，地平线浅白 (0.6, 0.8, 1.0)
-                vec3 topColor = vec3(0.1, 0.4, 0.8);
-                vec3 bottomColor = vec3(0.7, 0.8, 0.95);
-                
-                // 平滑过渡
-                float skyMix = smoothstep(-0.2, 0.5, viewDir.y);
-                vec3 skyColor = mix(bottomColor, topColor, skyMix);
+                // --- 1. 绘制天空背景 (透明背景，方便透视到天空盒) ---
+                vec3 skyColor = vec3(0.0);
 
-                // --- 2. 绘制太阳光晕 ---
+                // --- 2. 与太阳方向的夹角，用于后续云光照 ---
                 float sunDot = dot(viewDir, sunDir);
-                // 太阳核心极亮
-                float sunCore = smoothstep(0.998, 0.999, sunDot); 
-                // 太阳外围光晕
-                float sunGlow = smoothstep(0.9, 1.0, sunDot) * 0.5;
-                
-                // 将太阳叠加到天空
-                skyColor += vec3(1.0, 0.9, 0.7) * sunCore * 5.0; // 核心超亮
-                skyColor += vec3(1.0, 0.8, 0.6) * sunGlow;
 
                 // --- 3. 生成云层 ---
                 // 采样坐标缩放：除以半径，或者直接缩放。
@@ -712,14 +697,14 @@ export class SceneCloudRenderer {
                 finalCloudColor += vec3(1.0) * silverLining * 2.0;
 
                 // --- 最终混合 ---
-                // 使用 cloudAlpha 将云叠加到天空上
+                // 透明背景：颜色和透明度都用 cloudAlpha 作为权重
                 vec3 finalColor = mix(skyColor, finalCloudColor, cloudAlpha);
 
-                gl_FragColor = vec4(finalColor, 1.0);
+                gl_FragColor = vec4(finalColor, cloudAlpha);
             }
       `,
       side: THREE.BackSide,
-      transparent: false,
+      transparent: true,
       depthWrite: false,
       depthTest: false,
     })
