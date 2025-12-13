@@ -4617,23 +4617,26 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
 	syncSkyVisibility()
 	applySkyEnvironmentToScene()
 
-	cloudRenderer?.dispose()
-	cloudRenderer = null
-	cloudRenderer = new SceneCloudRenderer({
-		scene,
-		assetResolver: async (source) => {
-			const resolved = await resolveAssetUrlReference(source)
-			if (!resolved) {
-				return null
-			}
-			return {
-				url: resolved.url,
-				dispose: resolved.dispose,
-			}
-		},
-		sunPosition: skySunPosition,
-	})
-	cloudRenderer?.setSkyboxSettings(settings)
+	if (cloudRenderer) {
+		cloudRenderer.setSunPosition(skySunPosition)
+		cloudRenderer.setSkyboxSettings(settings)
+	} else {
+		cloudRenderer = new SceneCloudRenderer({
+			scene,
+			assetResolver: async (source) => {
+				const resolved = await resolveAssetUrlReference(source)
+				if (!resolved) {
+					return null
+				}
+				return {
+					url: resolved.url,
+					dispose: resolved.dispose,
+				}
+			},
+			sunPosition: skySunPosition,
+		})
+		cloudRenderer.setSkyboxSettings(settings)
+	}
 	pendingSkyboxSettings = null
 }
 
