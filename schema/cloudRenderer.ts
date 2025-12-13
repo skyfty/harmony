@@ -705,7 +705,9 @@ export class SceneCloudRenderer {
             float cloudVal = smoothstep(1.0 - coverage, 1.0 - coverage + 0.2, noise);
             
             // Density
-            float alpha = cloudVal * density;
+            // Boost density to make clouds appear thicker and more solid
+            float alpha = cloudVal * density * 2.5;
+            alpha = clamp(alpha, 0.0, 1.0);
             
             // Horizon fade
             float horizonFade = smoothstep(0.0, 0.2, viewDir.y);
@@ -715,9 +717,11 @@ export class SceneCloudRenderer {
 
             // --- 云层颜色与光照 ---
             vec3 cloudBaseColor = uCloudColor;
-            vec3 cloudShadowColor = uCloudColor * 0.85;
+            // Simulate thickness: denser parts absorb more light (darker shadows)
+            vec3 cloudShadowColor = uCloudColor * mix(0.65, 0.35, cloudVal);
             
             float lightIntensity = clamp(sunDot * 0.5 + 0.5, 0.0, 1.0);
+            lightIntensity = smoothstep(0.2, 0.8, lightIntensity); // Enhance contrast
             vec3 finalColor = mix(cloudShadowColor, cloudBaseColor, lightIntensity);
             
             // Silver lining
