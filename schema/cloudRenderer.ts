@@ -699,20 +699,32 @@ export class SceneCloudRenderer {
                 vec3 cloudBaseColor = vec3(1.0);
                 vec3 cloudShadowColor = vec3(0.93, 0.95, 0.99);
 
-                float lightIntensity = clamp(sunDot * 0.28 + 0.72, 0.65, 1.0);
-                vec3 finalCloudColor = mix(cloudShadowColor, cloudBaseColor, lightIntensity);
+                // 太阳高度用于调节整体光照颜色
+                float sunAltitude = clamp(sunDir.y * 0.5 + 0.5, 0.0, 1.0);
+                vec3 sunLightColor = mix(vec3(1.0, 0.82, 0.7), vec3(1.0), sunAltitude);
+                vec3 ambientSkyColor = mix(vec3(0.82, 0.88, 0.95), vec3(0.95, 0.97, 1.0), sunAltitude);
 
-                float ambientLift = mix(0.28, 0.1, cloudAlpha);
-                finalCloudColor += vec3(ambientLift);
+                float lightIntensity = clamp(sunDot * 0.35 + 0.68, 0.55, 1.0);
+                vec3 directLighting = mix(cloudShadowColor, cloudBaseColor, lightIntensity) * sunLightColor;
 
-                float silverLining = smoothstep(0.72, 1.0, sunDot) * (1.0 - cloudAlpha);
-                finalCloudColor += vec3(1.0) * silverLining * 1.15;
+                float forwardScattering = pow(max(sunDot, 0.0), 8.0);
+                float backScattering = pow(max(-sunDot, 0.0), 3.0) * 0.25;
+                float anisotropic = forwardScattering * 1.6 + backScattering;
+
+                float ambientLift = mix(0.32, 0.12, cloudAlpha);
+                vec3 ambientLighting = ambientSkyColor * ambientLift;
+
+                vec3 finalCloudColor = directLighting + ambientLighting;
+                finalCloudColor += sunLightColor * anisotropic;
+
+                float silverLining = smoothstep(0.7, 1.0, sunDot) * (1.0 - cloudAlpha);
+                finalCloudColor += sunLightColor * silverLining * 1.1;
 
                 float edgeBrighten = smoothstep(0.05, 0.35, cloudAlpha);
                 finalCloudColor = mix(vec3(1.0), finalCloudColor, edgeBrighten * 0.55 + 0.3);
-                float softnessWhiten = mix(0.6, 0.18, cloudAlpha);
+                float softnessWhiten = mix(0.58, 0.2, cloudAlpha);
                 finalCloudColor = mix(finalCloudColor, vec3(1.0), softnessWhiten);
-                finalCloudColor += (1.0 - fluff) * 0.12;
+                finalCloudColor += (1.0 - fluff) * 0.1;
                 finalCloudColor = clamp(finalCloudColor, 0.0, 1.0);
 
                 // --- 最终混合 ---
