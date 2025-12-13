@@ -323,23 +323,9 @@ export class SceneCloudRenderer {
         this.sphericalMesh.rotation.y += rotationSpeed * deltaSeconds
       }
     } else if (this.currentSettings.mode === 'volumetric' && this.volumetricMaterial) {
-      const uniforms = this.volumetricMaterial.uniforms
+      const uniforms = (this.volumetricMaterial as THREE.ShaderMaterial).uniforms
       if (uniforms?.uTime) {
-        uniforms.uTime.value = this.accumulatedTime * this.currentSettings.speed
-      }
-      if (uniforms?.uDensity) {
-        uniforms.uDensity.value = this.currentSettings.density
-      }
-      if (uniforms?.uCoverage) {
-        uniforms.uCoverage.value = this.currentSettings.coverage
-      }
-      if (uniforms?.uDetail) {
-        uniforms.uDetail.value = this.currentSettings.detail
-      }
-      if (uniforms?.uColor) {
-        const color = uniforms.uColor.value as THREE.Color
-        color.set(this.currentSettings.color)
-        color.convertSRGBToLinear()
+        uniforms.uTime.value = this.accumulatedTime * 0.2 // fixed speed for debugging visibility
       }
     }
   }
@@ -532,7 +518,7 @@ export class SceneCloudRenderer {
     material.needsUpdate = true
     const mesh = new THREE.Mesh(geometry, material)
     mesh.name = 'SceneCloudSphere'
-    mesh.position.set(0, settings.height, 0)
+    mesh.position.set(0, 0, 0)
     mesh.frustumCulled = false
     this.sphericalMesh = mesh
     this.group.add(mesh)
@@ -546,24 +532,37 @@ export class SceneCloudRenderer {
       return
     }
 
-      const geometry = new THREE.SphereGeometry(Math.max(1, settings.size), 64, 32)
+    const radius = 20
+    const geometry = new THREE.SphereGeometry(radius, 64, 32)
+
     const uniforms = {
       uTime: { value: 0 },
-      uDensity: { value: 0.3 },
-      uCoverage: { value: 0.5 },
-      uDetail: { value: 1.0 },
-      uColor: { value: new THREE.Color('#88ccff').convertSRGBToLinear() },
+      uDensity: { value: 0.35 },
+      uCoverage: { value: 0.4 },
+      uDetail: { value: 4.0 },
+      uColor: { value: new THREE.Color('#cfe8ff').convertSRGBToLinear() },
+      uCenter: { value: new THREE.Vector3(0, 0, 0) },
+      uBoundsRadius: { value: radius },
     }
+
     const material = new THREE.ShaderMaterial({
       uniforms,
       vertexShader: `
+        varying vec3 vWorldPos;
+
         void main() {
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          vec4 worldPos = modelMatrix * vec4(position, 1.0);
+          vWorldPos = worldPos.xyz;
+          gl_Position = projectionMatrix * viewMatrix * worldPos;
         }
       `,
       fragmentShader: `
+        varying vec3 vWorldPos;
         uniform vec3 uColor;
+        uniform float uTime;
+
         void main() {
+          // For visibility debug: render solid color, no discard
           gl_FragColor = vec4(uColor, 1.0);
         }
       `,
@@ -572,11 +571,12 @@ export class SceneCloudRenderer {
       depthWrite: true,
       depthTest: true,
     })
+
     this.volumetricMaterial = material
 
     const mesh = new THREE.Mesh(geometry, material)
     mesh.name = 'SceneCloudVolumetric'
-      mesh.position.set(0,0, 0)
+    mesh.position.set(0, 0, 0)
     mesh.frustumCulled = false
     mesh.renderOrder = 1000
 
