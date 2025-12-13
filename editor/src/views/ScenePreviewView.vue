@@ -4631,6 +4631,7 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
 				dispose: resolved.dispose,
 			}
 		},
+		sunPosition: skySunPosition,
 	})
 	cloudRenderer?.setSkyboxSettings(settings)
 	pendingSkyboxSettings = null

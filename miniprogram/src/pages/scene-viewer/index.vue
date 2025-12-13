@@ -6178,6 +6178,7 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
     syncSkyVisibility();
   }
   applySkyEnvironmentToScene();
+  cloudRenderer?.setSunPosition(skySunPosition);
   cloudRenderer?.setSkyboxSettings(settings);
   pendingSkyboxSettings = null;
 }
@@ -6787,6 +6788,7 @@ async function ensureRendererContext(result: UseCanvasResult) {
         dispose: resolved.dispose,
       };
     },
+    sunPosition: skySunPosition,
   });
   if (pendingSkyboxSettings) {
     cloudRenderer.setSkyboxSettings(pendingSkyboxSettings);

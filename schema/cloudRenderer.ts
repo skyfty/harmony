@@ -284,10 +284,11 @@ function disposeObjectRecursive(object: THREE.Object3D | undefined | null) {
 }
 
 export interface SceneCloudRendererOptions {
-    scene: THREE.Scene
-    assetResolver?: CloudAssetResolver
+  scene: THREE.Scene
+  assetResolver?: CloudAssetResolver
   textureLoader?: THREE.TextureLoader
   cubeTextureLoader?: THREE.CubeTextureLoader
+  sunPosition?: THREE.Vector3
 }
 
 // --- Noise Generation for Cloud Baking ---
@@ -409,14 +410,25 @@ export class SceneCloudRenderer {
   private cubeMesh: THREE.Mesh<THREE.BoxGeometry, THREE.ShaderMaterial> | null = null
   private accumulatedTime = 0
   private cloudTexture: THREE.Texture | null = null
+  private sunPosition: THREE.Vector3 = new THREE.Vector3(100, 200, -100)
 
   constructor(options: SceneCloudRendererOptions) {
     this.scene = options.scene
     this.assetResolver = options.assetResolver
     this.textureLoader = options.textureLoader ?? new THREE.TextureLoader()
     this.cubeTextureLoader = options.cubeTextureLoader ?? new THREE.CubeTextureLoader()
+    if (options.sunPosition) {
+      this.sunPosition.copy(options.sunPosition)
+    }
     this.group = new THREE.Group()
     this.group.name = 'SceneCloudLayer'
+  }
+
+  setSunPosition(position: THREE.Vector3): void {
+    this.sunPosition.copy(position)
+    if (this.volumetricMaterial) {
+      this.volumetricMaterial.uniforms.uSunPos.value.copy(this.sunPosition)
+    }
   }
 
   setSkyboxSettings(settings: SceneSkyboxSettings | null): void {
@@ -667,7 +679,7 @@ export class SceneCloudRenderer {
     
     const uniforms = {
       uTime: { value: 0 },
-      uSunPos: { value: new THREE.Vector3(100, 200, -100) }, // Initial sun direction in world space
+      uSunPos: { value: this.sunPosition.clone() }, // Initial sun direction in world space
       uCloudTexture: { value: this.cloudTexture },
       uCloudScale: { value: cloudScale },
       uCloudColor: { value: new THREE.Color(settings.color) },
