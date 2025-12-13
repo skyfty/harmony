@@ -2560,8 +2560,29 @@ async function prepareInstancedNodesForGraph(
     if (!nodeId) {
       return;
     }
+    const lazyData = object.userData?.lazyAsset as LazyAssetMetadata;
+    const objectIsPlaceholder = lazyData?.placeholder === true;
     const parent = object.parent ?? null;
     const index = parent ? parent.children.indexOf(object) : root.children.indexOf(object);
+
+    const existing = sceneObjects.get(nodeId) ?? null;
+    if (existing) {
+      const existingLazyData = existing.object.userData?.lazyAsset as LazyAssetMetadata;
+      const existingIsPlaceholder = existingLazyData?.placeholder === true;
+      // 关键：lazyLoadMeshes=true 时，某些节点会同时在“容器(Group)”和“占位 Mesh”上携带相同 nodeId。
+      // 若错误地把占位 Mesh 当成节点本体进行替换，会导致 proxy 的 transform 在父容器 transform 基础上再次应用（坐标被叠加）。
+      // 因此这里优先保留非-placeholder 的对象。
+      if (objectIsPlaceholder && !existingIsPlaceholder) {
+        return;
+      }
+      if (!objectIsPlaceholder && existingIsPlaceholder) {
+        sceneObjects.set(nodeId, { object, parent, index });
+        return;
+      }
+      // 同类（都 placeholder 或都非 placeholder）时，保留先遍历到的（通常层级更靠上）。
+      return;
+    }
+
     sceneObjects.set(nodeId, { object, parent, index });
   });
 
@@ -3531,7 +3552,7 @@ function updateVehicleWheelVisuals(delta: number): void {
  * 1) 决定本次要处理哪些节点（includeNodeIds）：不仅是传入 nodeId，还会尽量把“同 assetId 且也标记了延迟 instancing”的兄弟节点一起处理。
  *    这样做可以一次性完成同资产的实例化合并，避免多次重复构建。
  * 2) 调用 prepareInstancedNodesForGraph：在 sceneGraphRoot 下生成/更新 instanced 结构，并把对应节点替换为 instanced proxy/目标对象。
- * 3) 重新注册这些节点的 runtime/物理绑定：更新 nodeObjectMap、移除旧刚体实例、再 registerSceneSubtree 让新对象进入索引与绑定系统。
+ * 3) 重新注册这些节点的 runtime/物理绑定：更新 nodeObjectMap、并将现有物理/运行时绑定重定向到新对象（避免重建导致的坐标/物理状态重置），再 registerSceneSubtree 让新对象进入索引与绑定系统。
  * 4) 清理延迟状态与 lazy placeholder 状态，标记为已完成。
  *
  * @returns 是否成功处理了传入的 nodeId（通常等价于 includeNodeIds 里包含 nodeId 且替换生效）。
@@ -3572,6 +3593,45 @@ async function applyDeferredInstancingForNode(nodeId: string): Promise<boolean> 
     includeNodeIds.add(nodeId);
   }
 
+  // 关键：延时 instancing 发生时，节点可能已经被物理/运行时逻辑更新过 transform。
+  // 如果直接用文档里的初始 transform 替换，会导致实例显示位置发生偏差。
+  // 因此这里先缓存“当前对象的 local 变换”，在 proxy 创建后恢复。
+  const transformSnapshots = new Map<string, { position: THREE.Vector3; quaternion: THREE.Quaternion; scale: THREE.Vector3 }>();
+
+  // 同 nodeId 的对象可能同时出现在“容器节点”和“placeholder 子节点”上；
+  // 这里优先选非-placeholder 的对象作为坐标系来源，避免取到子节点(局部原点)导致恢复错误。
+  const preferredObjects = new Map<string, THREE.Object3D>();
+  sceneGraphRoot.traverse((object) => {
+    const id = object.userData?.nodeId as string | undefined;
+    if (!id || !includeNodeIds.has(id)) {
+      return;
+    }
+    const lazyData = object.userData?.lazyAsset as LazyAssetMetadata;
+    const objectIsPlaceholder = lazyData?.placeholder === true;
+    const existing = preferredObjects.get(id) ?? null;
+    if (!existing) {
+      preferredObjects.set(id, object);
+      return;
+    }
+    const existingLazyData = existing.userData?.lazyAsset as LazyAssetMetadata;
+    const existingIsPlaceholder = existingLazyData?.placeholder === true;
+    if (existingIsPlaceholder && !objectIsPlaceholder) {
+      preferredObjects.set(id, object);
+    }
+  });
+
+  includeNodeIds.forEach((id) => {
+    const object = preferredObjects.get(id) ?? nodeObjectMap.get(id) ?? null;
+    if (!object) {
+      return;
+    }
+    transformSnapshots.set(id, {
+      position: object.position.clone(),
+      quaternion: object.quaternion.clone(),
+      scale: object.scale.clone(),
+    });
+  });
+
   try {
     await prepareInstancedNodesForGraph(sceneGraphRoot, currentDocument, viewerResourceCache, {
       includeNodeIds,
@@ -3595,11 +3655,23 @@ async function applyDeferredInstancingForNode(nodeId: string): Promise<boolean> 
   });
 
   // 对“真正 instanced 成功”的节点：
-  // - 移除旧物理实例（如果旧对象已经被替换，这里确保不会残留）
+  // - 恢复替换前的 transform（对齐物理/运行时更新后的坐标）
+  // - 将现有物理绑定重定向到新对象（避免销毁刚体导致状态与坐标被重置）
   // - 重新注册到 nodeObjectMap / runtime / physics
   // - 清理 lazy placeholder 与 deferred 状态
   instancedObjectsByNodeId.forEach((object, id) => {
-    removeRigidbodyInstance(id);
+    const snapshot = transformSnapshots.get(id) ?? null;
+    if (snapshot) {
+      object.position.copy(snapshot.position);
+      object.quaternion.copy(snapshot.quaternion);
+      object.scale.copy(snapshot.scale);
+      object.updateMatrixWorld(true);
+    }
+
+    const rigidbody = rigidbodyInstances.get(id);
+    if (rigidbody) {
+      rigidbody.object = object;
+    }
     registerSceneSubtree(object);
     deferredInstancingNodeIds.delete(id);
     lazyPlaceholderStates.delete(id);
