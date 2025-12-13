@@ -532,12 +532,14 @@ export class SceneCloudRenderer {
       return
     }
 
+    // Volumetric clouds are approximated using a custom shader on a sky-sized sphere.
+    // Volumetric clouds rendered as a large inverted sphere that encloses the camera.
     const radius = 1000
     const geometry = new THREE.SphereGeometry(radius, 64, 32)
 
     const uniforms = {
       uTime: { value: 0 },
-                uSunPos: { value: new THREE.Vector3(100, 200, -100) } // 太阳位置
+      uSunPos: { value: new THREE.Vector3(100, 200, -100) }, // Initial sun direction in world space
     }
 
     const material = new THREE.ShaderMaterial({
@@ -646,6 +648,7 @@ export class SceneCloudRenderer {
                 return sum;
             }
 
+            // fbmVec3: 3-channel FBM used to warp sampling space and break up repetition
             vec3 fbmVec3(vec3 p) {
               return vec3(
                 fbm(p + vec3(5.2, 1.3, 2.1)),
@@ -667,11 +670,12 @@ export class SceneCloudRenderer {
 
                 // --- 3. 生成云层 ---
                 // 主噪声控制体积轮廓，辅以噪声扰动让云更蓬松
-                float baseScale = 0.0044;
+                float baseScale = 0.0044; // Controls large scale cloud coverage
                 vec3 basePos = vWorldPosition * baseScale;
                 basePos.x += uTime * 0.012;
                 basePos.z -= uTime * 0.01;
 
+                // Position warping creates organic, billowy silhouettes instead of grid-like repetition
                 vec3 warp = fbmVec3(basePos * 1.1 + vec3(0.0, uTime * 0.008, 0.0)) * 0.35;
                 float shapeNoise = fbm(basePos + warp * 1.0);
                 shapeNoise = shapeNoise * 0.5 + 0.5;
@@ -691,10 +695,12 @@ export class SceneCloudRenderer {
 
                 // 竖直方向分层：不同高度的云具有不同密度
                 float heightNorm = clamp((vWorldPosition.y + 200.0) / 1100.0, 0.0, 1.0);
+                // Layer masks carve out distinct strata so we do not fill the entire sky with uniform density
                 float layerLow = smoothstep(0.05, 0.3, heightNorm) * (1.0 - smoothstep(0.38, 0.5, heightNorm));
                 float layerMid = smoothstep(0.28, 0.6, heightNorm) * (1.0 - smoothstep(0.65, 0.8, heightNorm));
                 float layerHigh = smoothstep(0.55, 0.92, heightNorm);
 
+                // Additional FBM per height ensures layers ebb and flow instead of forming perfect bands
                 float heightVariation = fbm(vec3(basePos.xz * 2.4, heightNorm * 3.3));
                 heightVariation = heightVariation * 0.5 + 0.5;
 
@@ -716,6 +722,7 @@ export class SceneCloudRenderer {
                 float lightIntensity = clamp(sunDot * 0.35 + 0.68, 0.55, 1.0);
                 vec3 directLighting = mix(cloudShadowColor, cloudBaseColor, lightIntensity) * sunLightColor;
 
+                // Henyey-Greenstein inspired terms: bright highlights when looking toward the sun and softer back scatter
                 float forwardScattering = pow(max(sunDot, 0.0), 8.0);
                 float backScattering = pow(max(-sunDot, 0.0), 3.0) * 0.25;
                 float anisotropic = forwardScattering * 1.6 + backScattering;
@@ -734,6 +741,7 @@ export class SceneCloudRenderer {
                 float softnessWhiten = mix(0.58, 0.2, cloudAlpha);
                 finalCloudColor = mix(finalCloudColor, vec3(1.0), softnessWhiten);
                 finalCloudColor += (1.0 - fluff) * 0.1;
+                // Subtle tint shifts depending on altitude keep lower and higher decks visually distinct
                 vec3 heightTint = mix(vec3(0.97, 0.98, 1.02), vec3(1.0, 1.0, 0.96), heightNorm);
                 finalCloudColor *= heightTint;
                 finalCloudColor += vec3(0.05) * heightNorm;
