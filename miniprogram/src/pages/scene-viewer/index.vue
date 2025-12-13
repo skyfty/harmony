@@ -897,6 +897,7 @@ const tempMovementVec = new THREE.Vector3();
 const tempYawForwardVec = new THREE.Vector3();
 const protagonistPosePosition = new THREE.Vector3();
 const protagonistPoseDirection = new THREE.Vector3();
+const protagonistPoseQuaternion = new THREE.Quaternion();
 const protagonistPoseTarget = new THREE.Vector3();
 const STEERING_KEYBOARD_RETURN_SPEED = 7;
 const STEERING_KEYBOARD_CATCH_SPEED = 18;
@@ -4275,9 +4276,10 @@ function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolea
     return false;
   }
   protagonistObject.getWorldPosition(protagonistPosePosition);
-  protagonistObject.getWorldDirection(protagonistPoseDirection);
+  protagonistObject.getWorldQuaternion(protagonistPoseQuaternion);
+  protagonistPoseDirection.set(1, 0, 0).applyQuaternion(protagonistPoseQuaternion);
   if (protagonistPoseDirection.lengthSq() < 1e-8) {
-    protagonistPoseDirection.set(0, 0, -1);
+    protagonistPoseDirection.set(1, 0, 0);
   } else {
     protagonistPoseDirection.normalize();
   }

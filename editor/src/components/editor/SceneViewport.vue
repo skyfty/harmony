@@ -1613,7 +1613,7 @@ function syncProtagonistPreviewCamera(): boolean {
   protagonistPreviewOffsetTarget.copy(protagonistPreviewCameraOffset).applyQuaternion(cameraQuaternion)
   protagonistPreviewCamera.position.copy(protagonistPreviewWorldPosition).add(protagonistPreviewOffsetTarget)
   protagonistPreviewTarget.copy(protagonistPreviewWorldPosition)
-  protagonistPreviewDirection.set(0, 0, -1).applyQuaternion(cameraQuaternion)
+  protagonistPreviewDirection.set(1, 0, 0).applyQuaternion(cameraQuaternion)
   protagonistPreviewTarget.add(protagonistPreviewDirection)
   protagonistPreviewCamera.lookAt(protagonistPreviewTarget)
   protagonistPreviewCamera.near = 0.1
