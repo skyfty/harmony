@@ -326,16 +326,19 @@ function generateCloudTexture(size: number): THREE.DataTexture {
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const angle = (x / size) * Math.PI * 2;
-      const radius = 3.0; 
+      const radius = 1.2; // Slightly smaller radius for larger cloud features
       const nx = Math.cos(angle) * radius;
       const nz = Math.sin(angle) * radius;
-      const ny = (y / size) * 6.0; 
+      const ny = (y / size) * 3.0; 
 
       // R: Base - FBM
       let n1 = fbm(nx, ny, nz, 6);
       n1 = n1 * 0.5 + 0.5; // 0..1
-      // Smoothstep-like contrast
-      const min = 0.2, max = 0.8;
+      
+      // Remap to make clouds denser and more visible
+      // Lowering max pushes mid-tones to white, ensuring they pass the shader threshold
+      const min = 0.15; 
+      const max = 0.55; // Significantly lowered to boost brightness/density
       let t = (n1 - min) / (max - min);
       t = t < 0 ? 0 : (t > 1 ? 1 : t);
       n1 = t * t * (3 - 2 * t);
@@ -633,12 +636,13 @@ export class SceneCloudRenderer {
     // 仅构建上半球几何体，避免对地面以下区域进行不必要的片元着色
     const geometry = new THREE.SphereGeometry(radius, 64, 32, 0, Math.PI * 2, 0, Math.PI * 0.5)
 
+    const detail = THREE.MathUtils.clamp(settings.detail ?? 5, 0, 10) / 10.0
     const uniforms = {
       uTime: { value: 0 },
       uSunPos: { value: new THREE.Vector3(100, 200, -100) }, // Initial sun direction in world space
       uCloudTexture: { value: this.cloudTexture },
       uCloudColor: { value: new THREE.Color(settings.color) },
-      uCloudParams: { value: new THREE.Vector4(settings.density, settings.coverage, settings.detail, settings.speed) }
+      uCloudParams: { value: new THREE.Vector4(settings.density, settings.coverage, detail, settings.speed) }
     }
 
     const material = new THREE.ShaderMaterial({
@@ -695,7 +699,7 @@ export class SceneCloudRenderer {
             // Mix noise
             float noise = baseNoise;
             // Add detail based on detail param
-            noise = mix(noise, detailNoise, 0.5 * uCloudParams.z);
+            noise = mix(noise, detailNoise, uCloudParams.z * 0.5);
             
             // Thresholding for cloud shape
             float cloudVal = smoothstep(1.0 - coverage, 1.0 - coverage + 0.2, noise);
