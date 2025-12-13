@@ -685,15 +685,15 @@ export class SceneCloudRenderer {
                 // --- 云层形状控制 ---
                 float horizonFade = smoothstep(0.0, 0.42, viewDir.y);
 
-                float primary = smoothstep(0.5, 0.78, shapeNoise);
-                float fluff = smoothstep(0.42, 0.9, detailNoise);
-                float cloudAlpha = primary * mix(0.4, 0.95, fluff);
+                float primary = smoothstep(0.46, 0.76, shapeNoise);
+                float fluff = smoothstep(0.38, 0.88, detailNoise);
+                float cloudAlpha = primary * mix(0.5, 1.0, fluff);
 
                 // 竖直方向衰减：顶部更轻盈
                 float vertical = clamp(vWorldPosition.y / 1000.0, -1.0, 1.0);
                 float heightFade = smoothstep(-0.6, 0.8, vertical);
-                cloudAlpha *= heightFade * horizonFade * 0.95;
-                cloudAlpha = pow(cloudAlpha, 1.1);
+                cloudAlpha *= heightFade * horizonFade * 1.05;
+                cloudAlpha = pow(cloudAlpha, 1.05);
 
                 // --- 云层颜色与光照 ---
                 vec3 cloudBaseColor = vec3(1.0);
