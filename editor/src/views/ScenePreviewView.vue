@@ -4356,7 +4356,7 @@ function startAnimationLoop() {
 		updateBehaviorProximity()
 		updateLazyPlaceholders(delta)
 		updateRigidbodyDebugTransforms()
-		cloudRenderer?.update(delta)
+		// cloudRenderer?.update(delta)
 
 		currentRenderer.render(currentScene, activeCamera)
 		fpsStats?.end()

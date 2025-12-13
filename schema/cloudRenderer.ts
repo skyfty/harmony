@@ -261,16 +261,19 @@ function disposeObjectRecursive(object: THREE.Object3D | undefined | null) {
     return
   }
   object.traverse((child) => {
-    if (child instanceof THREE.Mesh) {
-      disposeMaterial(child.material)
-      disposeGeometry(child.geometry)
+    const anyChild = child as unknown as { material?: THREE.Material | THREE.Material[]; geometry?: THREE.BufferGeometry }
+    if (anyChild.material) {
+      disposeMaterial(anyChild.material)
+    }
+    if (anyChild.geometry) {
+      disposeGeometry(anyChild.geometry)
     }
   })
 }
 
 export interface SceneCloudRendererOptions {
-  scene: THREE.Scene
-  assetResolver?: CloudAssetResolver
+    scene: THREE.Scene
+    assetResolver?: CloudAssetResolver
   textureLoader?: THREE.TextureLoader
   cubeTextureLoader?: THREE.CubeTextureLoader
 }
@@ -286,7 +289,7 @@ export class SceneCloudRenderer {
   private updateToken = 0
   private volumetricMaterial: THREE.ShaderMaterial | null = null
   private sphericalMesh: THREE.Mesh<THREE.SphereGeometry, THREE.MeshPhongMaterial> | null = null
-  private volumetricMesh: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial> | null = null
+  private volumetricMesh: THREE.Mesh<THREE.BufferGeometry, THREE.Material> | null = null
   private cubeMesh: THREE.Mesh<THREE.BoxGeometry, THREE.ShaderMaterial> | null = null
   private accumulatedTime = 0
 
@@ -297,7 +300,6 @@ export class SceneCloudRenderer {
     this.cubeTextureLoader = options.cubeTextureLoader ?? new THREE.CubeTextureLoader()
     this.group = new THREE.Group()
     this.group.name = 'SceneCloudLayer'
-    this.group.renderOrder = -1
   }
 
   setSkyboxSettings(settings: SceneSkyboxSettings | null): void {
@@ -543,121 +545,41 @@ export class SceneCloudRenderer {
     if (token !== this.updateToken) {
       return
     }
-    const planeSize = settings.size
-    const geometry = new THREE.PlaneGeometry(planeSize, planeSize, 1, 1)
-    const edgeSoftness = THREE.MathUtils.clamp(550 / Math.max(1, planeSize), 0.08, 0.36)
-    // Apply a stronger fade near the mesh borders to mask the rectangular outline
-    const edgeFadeDistance = THREE.MathUtils.clamp(800 / Math.max(1, planeSize), edgeSoftness * 0.8, 0.35)
+
+      const geometry = new THREE.SphereGeometry(Math.max(1, settings.size), 64, 32)
     const uniforms = {
       uTime: { value: 0 },
-      uDensity: { value: settings.density },
-      uCoverage: { value: settings.coverage },
-      uDetail: { value: settings.detail },
-      uColor: { value: new THREE.Color(settings.color) },
-      uEdgeSoftness: { value: edgeSoftness },
-      uEdgeFadeDistance: { value: edgeFadeDistance },
+      uDensity: { value: 0.3 },
+      uCoverage: { value: 0.5 },
+      uDetail: { value: 1.0 },
+      uColor: { value: new THREE.Color('#88ccff').convertSRGBToLinear() },
     }
     const material = new THREE.ShaderMaterial({
       uniforms,
-      transparent: true,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-      fragmentShader: `
-        varying vec2 vUv;
-        uniform float uTime;
-        uniform float uDensity;
-        uniform float uCoverage;
-        uniform float uDetail;
-        uniform vec3 uColor;
-        uniform float uEdgeSoftness;
-        uniform float uEdgeFadeDistance;
-
-        float hash(vec2 p) {
-          return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-        }
-
-        float noise(vec2 p) {
-          vec2 i = floor(p);
-          vec2 f = fract(p);
-          float a = hash(i);
-          float b = hash(i + vec2(1.0, 0.0));
-          float c = hash(i + vec2(0.0, 1.0));
-          float d = hash(i + vec2(1.0, 1.0));
-          vec2 u = f * f * (3.0 - 2.0 * f);
-          return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
-        }
-
-        float fbm(vec2 p) {
-          float total = 0.0;
-          float amplitude = 0.5;
-          float frequency = 1.0;
-          for (int i = 0; i < 5; i++) {
-            total += noise(p * frequency) * amplitude;
-            frequency *= 2.0;
-            amplitude *= 0.5;
-          }
-          return total;
-        }
-
-        void main() {
-          vec2 centeredUv = vUv - 0.5;
-          float edgeDistanceBox = max(abs(centeredUv.x), abs(centeredUv.y));
-          float edgeDistanceRadial = length(centeredUv);
-          float radialEnd = 0.70710678;
-          float edgeInner = max(0.0, 0.5 - uEdgeFadeDistance);
-          float radialInner = clamp(radialEnd - (uEdgeFadeDistance * 1.7), 0.0, radialEnd - 0.0001);
-          float interiorBox = smoothstep(edgeInner * 0.6, 0.5, edgeDistanceBox);
-          float interiorRadial = smoothstep(radialInner * 0.85, radialEnd, edgeDistanceRadial);
-          float interiorFocus = clamp(max(interiorBox, interiorRadial), 0.0, 1.0);
-          // Push the sampling coordinates toward the interior when near the borders so clouds do not form exactly on the plane edges
-          float inwardAmount = mix(0.0, 0.22 + uEdgeFadeDistance * 0.55, interiorFocus);
-          float radialLength = max(edgeDistanceRadial, 1e-4);
-          vec2 inwardDir = interiorFocus > 0.0 ? (-centeredUv / radialLength) : vec2(0.0);
-          vec2 focusUv = vUv + inwardDir * inwardAmount;
-          focusUv = clamp(focusUv, vec2(0.08), vec2(0.92));
-          vec2 uv = focusUv * uDetail;
-          float timeFactor = uTime * 0.05;
-          float n = fbm(uv + vec2(timeFactor, timeFactor));
-          float coverageThreshold = max(0.0, uCoverage * 0.85);
-          float baseCoverage = smoothstep(max(coverageThreshold - 0.2, 0.0), 1.0, n);
-          float wideCoverage = smoothstep(coverageThreshold * 0.75, 1.0, n + 0.12);
-          float coverage = mix(baseCoverage, wideCoverage, 0.55);
-          float edgeFadeBox = 1.0 - smoothstep(edgeInner, 0.5, edgeDistanceBox);
-          float edgeFadeRadial = 1.0 - smoothstep(radialInner, radialEnd, edgeDistanceRadial);
-          float edgeCornerFade = 1.0 - smoothstep(0.42, 0.5, edgeDistanceBox);
-          float centralRadius = radialInner * 0.9;
-          float centerProximity = 1.0 - smoothstep(0.0, centralRadius, edgeDistanceRadial);
-          float edgeFade = clamp(edgeFadeBox * edgeFadeRadial * edgeCornerFade, 0.0, 1.0);
-          edgeFade = pow(edgeFade, 1.15 + (uEdgeSoftness * 0.65));
-          float horizonNorm = clamp(edgeDistanceRadial / radialEnd, 0.0, 1.0);
-          float horizonBoost = smoothstep(0.35, 0.92, horizonNorm);
-          float uniformLift = smoothstep(0.25, 0.85, baseCoverage) * 0.32;
-          float centerFill = clamp(centerProximity * (0.35 + uCoverage * 0.65), 0.0, 1.0);
-          coverage = clamp(max(coverage + horizonBoost * 0.1 + uniformLift, centerFill), 0.0, 1.0);
-          float coverageMask = coverage * edgeFade;
-          coverageMask = pow(coverageMask, 0.96);
-          float alpha = clamp(coverageMask * uDensity, 0.0, 1.0);
-          float brightness = mix(0.7, 1.08, coverageMask);
-          vec3 cloudRgb = uColor * brightness;
-          gl_FragColor = vec4(cloudRgb, alpha);
-        }
-      `,
       vertexShader: `
-        varying vec2 vUv;
         void main() {
-          vUv = uv;
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }
       `,
+      fragmentShader: `
+        uniform vec3 uColor;
+        void main() {
+          gl_FragColor = vec4(uColor, 1.0);
+        }
+      `,
+      side: THREE.DoubleSide,
+      transparent: false,
+      depthWrite: true,
+      depthTest: true,
     })
-    const colorUniform = uniforms.uColor.value as THREE.Color
-    colorUniform.convertSRGBToLinear()
+    this.volumetricMaterial = material
+
     const mesh = new THREE.Mesh(geometry, material)
     mesh.name = 'SceneCloudVolumetric'
-    mesh.position.set(0, settings.height, 0)
-    mesh.rotation.x = -Math.PI * 0.5
+      mesh.position.set(0,0, 0)
     mesh.frustumCulled = false
-    this.volumetricMaterial = material
+    mesh.renderOrder = 1000
+
     this.volumetricMesh = mesh
     this.group.add(mesh)
   }
