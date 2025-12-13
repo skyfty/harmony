@@ -321,15 +321,25 @@ function turbulence(x: number, y: number, z: number, octaves: number) {
 }
 
 function generateCloudTexture(size: number): THREE.DataTexture {
+  // Randomize noise permutation for unique clouds each time
+  const p = new Uint8Array(256);
+  for(let i=0; i<256; i++) p[i] = i;
+  for(let i=255; i>0; i--) {
+    const r = Math.floor(Math.random() * (i+1));
+    const t = p[i]; p[i] = p[r]; p[r] = t;
+  }
+  for(let i=0; i<256; i++) P[i] = P[i+256] = p[i];
+
   const data = new Uint8Array(size * size * 4);
   // Use 3D noise sampled on a cylinder surface to make it seamless horizontally
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const angle = (x / size) * Math.PI * 2;
-      const radius = 1.2; // Slightly smaller radius for larger cloud features
+      // Lower radius/scale = Larger cloud features
+      const radius = 0.8; 
       const nx = Math.cos(angle) * radius;
       const nz = Math.sin(angle) * radius;
-      const ny = (y / size) * 3.0; 
+      const ny = (y / size) * 2.0; 
 
       // R: Base - FBM
       let n1 = fbm(nx, ny, nz, 6);
