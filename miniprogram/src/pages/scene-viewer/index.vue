@@ -367,6 +367,7 @@ import {
   effectComponentDefinition,
   rigidbodyComponentDefinition,
   vehicleComponentDefinition,
+  protagonistComponentDefinition,
   WARP_GATE_RUNTIME_REGISTRY_KEY,
   WARP_GATE_EFFECT_ACTIVE_FLAG,
   GUIDEBOARD_RUNTIME_REGISTRY_KEY,
@@ -832,6 +833,7 @@ previewComponentManager.registerDefinition(effectComponentDefinition);
 previewComponentManager.registerDefinition(behaviorComponentDefinition);
 previewComponentManager.registerDefinition(rigidbodyComponentDefinition);
 previewComponentManager.registerDefinition(vehicleComponentDefinition);
+previewComponentManager.registerDefinition(protagonistComponentDefinition);
 
 const previewNodeMap = new Map<string, SceneNode>();
 const assetNodeIdMap = new Map<string, Set<string>>();
@@ -893,11 +895,16 @@ const tempForwardVec = new THREE.Vector3();
 const tempRightVec = new THREE.Vector3();
 const tempMovementVec = new THREE.Vector3();
 const tempYawForwardVec = new THREE.Vector3();
+const protagonistPosePosition = new THREE.Vector3();
+const protagonistPoseDirection = new THREE.Vector3();
+const protagonistPoseQuaternion = new THREE.Quaternion();
+const protagonistPoseTarget = new THREE.Vector3();
 const STEERING_KEYBOARD_RETURN_SPEED = 7;
 const STEERING_KEYBOARD_CATCH_SPEED = 18;
 const cameraRotationAnchor = new THREE.Vector3();
 let programmaticCameraMutationDepth = 0;
 let suppressSelfYawRecenter = false;
+let protagonistPoseSynced = false;
 
 const JOYSTICK_INPUT_RADIUS = 64;
 const VEHICLE_SPEED_GAUGE_MAX_MPS = 32;
@@ -2901,6 +2908,13 @@ function registerSceneSubtree(root: THREE.Object3D): void {
       applyMaterialOverrides(object, nodeState.materials, materialOverrideOptions);
     }
     syncInstancedTransform(object);
+    if (object.userData?.protagonist) {
+      syncProtagonistCameraPose({
+        force: true,
+        object,
+        applyToCamera: purposeActiveMode.value === 'level' && !vehicleDriveActive.value,
+      });
+    }
   });
 }
 
@@ -4234,6 +4248,58 @@ function setCameraCaging(enabled: boolean): void {
   }
 }
 
+function resetProtagonistPoseState(): void {
+  protagonistPoseSynced = false;
+}
+
+function findProtagonistObject(): THREE.Object3D | null {
+  for (const object of nodeObjectMap.values()) {
+    if (object.userData?.protagonist) {
+      return object;
+    }
+  }
+  return null;
+}
+
+type ProtagonistPoseOptions = {
+  force?: boolean;
+  applyToCamera?: boolean;
+  object?: THREE.Object3D | null;
+};
+
+function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolean {
+  if (!options.force && protagonistPoseSynced) {
+    return false;
+  }
+  const protagonistObject = options.object ?? findProtagonistObject();
+  if (!protagonistObject) {
+    return false;
+  }
+  protagonistObject.getWorldPosition(protagonistPosePosition);
+  protagonistObject.getWorldQuaternion(protagonistPoseQuaternion);
+  protagonistPoseDirection.set(1, 0, 0).applyQuaternion(protagonistPoseQuaternion);
+  if (protagonistPoseDirection.lengthSq() < 1e-8) {
+    protagonistPoseDirection.set(1, 0, 0);
+  } else {
+    protagonistPoseDirection.normalize();
+  }
+  protagonistPosePosition.y = HUMAN_EYE_HEIGHT;
+  protagonistPoseTarget.copy(protagonistPosePosition).addScaledVector(protagonistPoseDirection, CAMERA_FORWARD_OFFSET);
+  protagonistPoseSynced = true;
+  if (options.applyToCamera && renderContext) {
+    runWithProgrammaticCameraMutation(() => {
+      withControlsVerticalFreedom(renderContext.controls, () => {
+        renderContext.camera.position.copy(protagonistPosePosition);
+        renderContext.controls.target.copy(protagonistPoseTarget);
+        renderContext.camera.lookAt(protagonistPoseTarget);
+        renderContext.controls.update();
+      });
+    });
+    lockControlsPitchToCurrent(renderContext.controls, renderContext.camera);
+  }
+  return true;
+}
+
 function easeInOutCubic(t: number): number {
   if (t <= 0) {
     return 0;
@@ -4890,6 +4956,7 @@ function resetCameraToLevelView(): { success: boolean; message?: string } {
   const finishSuccess = () => {
     purposeActiveMode.value = 'level';
     setCameraViewState('level');
+    syncProtagonistCameraPose({ force: true, applyToCamera: true });
     return { success: true };
   };
   if (startTarget.distanceToSquared(levelTarget) < 1e-6) {
@@ -6628,6 +6695,7 @@ function teardownRenderer() {
   if (!renderContext) {
     return;
   }
+  resetProtagonistPoseState();
   const { renderer, scene, controls } = renderContext;
   releaseTerrainScatterInstances();
   if (canvasResult?.canvas && handleBehaviorClick) {
@@ -6810,6 +6878,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   activeCameraWatchTween = null;
   const { canvas } = result;
   currentDocument = payload.document;
+  resetProtagonistPoseState();
   const environmentSettings = resolveDocumentEnvironment(payload.document);
   if (behaviorAlertToken.value) {
     resolveBehaviorToken(behaviorAlertToken.value, {
@@ -6929,6 +6998,9 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   initializeLazyPlaceholders(payload.document);
   syncPhysicsBodiesForDocument(payload.document);
   await syncTerrainScatterInstances(payload.document, resourceCache);
+
+  const shouldAlignToProtagonist = purposeActiveMode.value === 'level' && !vehicleDriveActive.value;
+  syncProtagonistCameraPose({ force: true, applyToCamera: shouldAlignToProtagonist });
 
   const skyboxSettings = resolveSceneSkybox(payload.document);
   applySkyboxSettings(skyboxSettings);

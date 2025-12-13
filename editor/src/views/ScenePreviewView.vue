@@ -74,6 +74,7 @@ import {
 	effectComponentDefinition,
 	rigidbodyComponentDefinition,
 	vehicleComponentDefinition,
+	protagonistComponentDefinition,
 	GUIDEBOARD_COMPONENT_TYPE,
 	GUIDEBOARD_RUNTIME_REGISTRY_KEY,
 	GUIDEBOARD_EFFECT_ACTIVE_FLAG,
@@ -359,6 +360,7 @@ previewComponentManager.registerDefinition(effectComponentDefinition)
 previewComponentManager.registerDefinition(rigidbodyComponentDefinition)
 previewComponentManager.registerDefinition(vehicleComponentDefinition)
 previewComponentManager.registerDefinition(behaviorComponentDefinition)
+previewComponentManager.registerDefinition(protagonistComponentDefinition)
 
 const previewNodeMap = new Map<string, SceneNode>()
 const previewParentMap = new Map<string, string | null>()
@@ -537,6 +539,9 @@ const FIRST_PERSON_PITCH_LIMIT = THREE.MathUtils.degToRad(75)
 const tempDirection = new THREE.Vector3()
 const tempTarget = new THREE.Vector3()
 const tempQuaternion = new THREE.Quaternion()
+const protagonistPosePosition = new THREE.Vector3()
+const protagonistPoseDirection = new THREE.Vector3()
+const protagonistPoseTarget = new THREE.Vector3()
 const tempBox = new THREE.Box3()
 const tempSphere = new THREE.Sphere()
 const tempPosition = new THREE.Vector3()
@@ -645,6 +650,7 @@ let unsubscribe: (() => void) | null = null
 let isApplyingSnapshot = false
 let queuedSnapshot: ScenePreviewSnapshot | null = null
 let lastSnapshotRevision = 0
+let protagonistPoseSynced = false
 
 const clock = new THREE.Clock()
 const instancedMeshGroup = new THREE.Group()
@@ -2832,6 +2838,63 @@ function resolveNodeFocusPoint(nodeId: string | null, fallback: THREE.Vector3): 
 	return fallback
 }
 
+function resetProtagonistPoseState() {
+	protagonistPoseSynced = false
+}
+
+function findProtagonistObject(): THREE.Object3D | null {
+	for (const object of nodeObjectMap.values()) {
+		if (object.userData?.protagonist) {
+			return object
+		}
+	}
+	return null
+}
+
+type ProtagonistPoseOptions = {
+	force?: boolean
+	applyToCamera?: boolean
+	object?: THREE.Object3D | null
+}
+
+function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolean {
+	if (!options.force && protagonistPoseSynced) {
+		return false
+	}
+	const protagonistObject = options.object ?? findProtagonistObject()
+	if (!protagonistObject) {
+		return false
+	}
+	protagonistObject.getWorldPosition(protagonistPosePosition)
+	protagonistObject.getWorldDirection(protagonistPoseDirection)
+	if (protagonistPoseDirection.lengthSq() < 1e-8) {
+		protagonistPoseDirection.set(0, 0, -1)
+	} else {
+		protagonistPoseDirection.normalize()
+	}
+	protagonistPosePosition.y = CAMERA_HEIGHT
+	lastFirstPersonState.position.copy(protagonistPosePosition)
+	lastFirstPersonState.direction.copy(protagonistPoseDirection)
+	protagonistPoseSynced = true
+	if (
+		options.applyToCamera &&
+		controlMode.value === 'first-person' &&
+		!vehicleDriveState.active &&
+		camera &&
+		firstPersonControls
+	) {
+		camera.position.copy(lastFirstPersonState.position)
+		camera.position.y = CAMERA_HEIGHT
+		protagonistPoseTarget.copy(camera.position).add(lastFirstPersonState.direction)
+		firstPersonControls.lookAt(protagonistPoseTarget.x, protagonistPoseTarget.y, protagonistPoseTarget.z)
+		clampFirstPersonPitch(true)
+		syncFirstPersonOrientation()
+		resetFirstPersonPointerDelta()
+		syncLastFirstPersonStateFromCamera()
+	}
+	return true
+}
+
 function resetBehaviorProximity(): void {
 	behaviorProximityCandidates.clear()
 	behaviorProximityState.clear()
@@ -4374,6 +4437,7 @@ function stopAnimationLoop() {
 
 function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	releaseTerrainScatterInstances()
+	resetProtagonistPoseState()
 	nodeObjectMap.forEach((_object, nodeId) => {
 		releaseModelInstance(nodeId)
 	})
@@ -5051,6 +5115,12 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 				updateBehaviorVisibility(nodeId, child.visible)
 				syncInstancedTransform(child)
 			}
+				if (child.userData?.protagonist) {
+					syncProtagonistCameraPose({
+						object: child,
+						applyToCamera: controlMode.value === 'first-person' && !vehicleDriveState.active,
+					})
+				}
 		}
 	})
 }
@@ -6754,6 +6824,7 @@ function refreshAnimations() {
 async function updateScene(document: SceneJsonExportDocument) {
 	resetAssetResolutionCaches()
 	releaseTerrainScatterInstances()
+	resetProtagonistPoseState()
 	refreshResourceAssetInfo(document)
 	const skyboxSettings = resolveDocumentSkybox(document)
 	applySkyboxSettings(skyboxSettings)
@@ -6866,6 +6937,8 @@ async function updateScene(document: SceneJsonExportDocument) {
 		refreshAnimations()
 		initializeLazyPlaceholders(document)
 		syncPhysicsBodiesForDocument(document)
+		const protagonistCameraActive = controlMode.value === 'first-person' && !vehicleDriveState.active
+		syncProtagonistCameraPose({ force: true, applyToCamera: protagonistCameraActive })
 		if (isRigidbodyDebugVisible.value) {
 			syncRigidbodyDebugHelpers()
 		}
@@ -6884,6 +6957,8 @@ async function updateScene(document: SceneJsonExportDocument) {
 
 	syncPhysicsBodiesForDocument(document)
 	await syncTerrainScatterInstances(document, resourceCache)
+	const protagonistCameraActive = controlMode.value === 'first-person' && !vehicleDriveState.active
+	syncProtagonistCameraPose({ force: true, applyToCamera: protagonistCameraActive })
 	if (isRigidbodyDebugVisible.value) {
 		syncRigidbodyDebugHelpers()
 	}

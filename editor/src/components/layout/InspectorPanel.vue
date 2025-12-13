@@ -7,6 +7,7 @@ import TransformPanel from '@/components/inspector/TransformPanel.vue'
 import WallPanel from '@/components/inspector/WallPanel.vue'
 import GuideboardPanel from '@/components/inspector/GuideboardPanel.vue'
 import ViewPointPanel from '@/components/inspector/ViewPointPanel.vue'
+import ProtagonistPanel from '@/components/inspector/ProtagonistPanel.vue'
 import WarpGatePanel from '@/components/inspector/WarpGatePanel.vue'
 import EffectPanel from '@/components/inspector/EffectPanel.vue'
 import GroundPanel from '@/components/inspector/GroundPanel.vue'
@@ -26,6 +27,7 @@ import {
   BEHAVIOR_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
+  PROTAGONIST_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
   VEHICLE_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
@@ -84,8 +86,11 @@ const isLightNode = computed(() => selectedNode.value?.nodeType === 'Light')
 const isGroundNode = computed(() => selectedNode.value?.id === GROUND_NODE_ID)
 const isSkyNode = computed(() => selectedNode.value?.id === SKY_NODE_ID)
 const isEnvironmentNode = computed(() => selectedNode.value?.id === ENVIRONMENT_NODE_ID)
+const isProtagonistNode = computed(() =>
+  Boolean(selectedNode.value?.components?.[PROTAGONIST_COMPONENT_TYPE]),
+)
 const showMaterialPanel = computed(
-  () =>!isLightNode.value && (selectedNode.value?.materials?.length ?? 0) > 0,
+  () => !isLightNode.value && !isProtagonistNode.value && (selectedNode.value?.materials?.length ?? 0) > 0,
 )
 const showTransformPanel = computed(() => {
   return selectedNode.value?.id !== SKY_NODE_ID && selectedNode.value?.id !== GROUND_NODE_ID && selectedNode.value?.id !== ENVIRONMENT_NODE_ID;
@@ -133,7 +138,9 @@ function computeDefaultExpandedPanels() {
     panels.push('components')
   }
 
-  const shouldShowMaterial = !node?.nodeType || (node?.nodeType !== 'Light' && (node?.materials?.length ?? 0) > 0)
+  const shouldShowMaterial =
+    (!node?.nodeType || (node?.nodeType !== 'Light' && (node?.materials?.length ?? 0) > 0)) &&
+    !Boolean(node?.components?.[PROTAGONIST_COMPONENT_TYPE])
   if (shouldShowMaterial) {
     panels.push('material')
   }
@@ -352,7 +359,8 @@ watch(
     } else if (selectedNode.value?.nodeType === 'Light') {
       defaults.add('light')
     }
-    const materialVisible = !isLightNode.value && (selectedNode.value?.materials?.length ?? 0) > 0
+    const materialVisible =
+      !isLightNode.value && !isProtagonistNode.value && (selectedNode.value?.materials?.length ?? 0) > 0
     if (materialVisible) {
       defaults.add('material')
     }
@@ -500,6 +508,7 @@ watch(
               <DisplayBoardPanel v-if="component.type === DISPLAY_BOARD_COMPONENT_TYPE" />
               <GuideboardPanel v-else-if="component.type === GUIDEBOARD_COMPONENT_TYPE" />
               <ViewPointPanel v-else-if="component.type === VIEW_POINT_COMPONENT_TYPE" />
+              <ProtagonistPanel v-else-if="component.type === PROTAGONIST_COMPONENT_TYPE" />
               <WarpGatePanel v-else-if="component.type === WARP_GATE_COMPONENT_TYPE" />
               <EffectPanel v-else-if="component.type === EFFECT_COMPONENT_TYPE" />
               <RigidbodyPanel

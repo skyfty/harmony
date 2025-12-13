@@ -14,6 +14,7 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneNode } from '@harmony/schema'
+import { PROTAGONIST_COMPONENT_TYPE } from '@schema/components'
 import { getNodeIcon } from '@/types/node-icons'
 import AddNodeMenu from '../common/AddNodeMenu.vue'
 import { Group, Vector3 } from 'three'
@@ -388,6 +389,9 @@ function resolveAssetDropParentId(targetId: string): string | null {
 
 function nodeSupportsMaterials(node: SceneNode | null | undefined): boolean {
   if (!node) {
+    return false
+  }
+  if (node.components?.[PROTAGONIST_COMPONENT_TYPE]) {
     return false
   }
   const type = node.nodeType ?? 'Mesh'
