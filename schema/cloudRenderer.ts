@@ -336,10 +336,11 @@ function generateCloudTexture(size: number): THREE.DataTexture {
     for (let x = 0; x < size; x++) {
       const angle = (x / size) * Math.PI * 2;
       // Lower radius/scale = Larger cloud features
-      const radius = 0.8; 
+      // Adjusted for even larger clouds
+      const radius = 0.5; 
       const nx = Math.cos(angle) * radius;
       const nz = Math.sin(angle) * radius;
-      const ny = (y / size) * 2.0; 
+      const ny = (y / size) * 1.5; 
 
       // R: Base - FBM
       let n1 = fbm(nx, ny, nz, 6);
@@ -649,10 +650,14 @@ export class SceneCloudRenderer {
     const geometry = new THREE.SphereGeometry(radius, 64, 32, 0, Math.PI * 2, 0, Math.PI * 0.5)
 
     const detail = THREE.MathUtils.clamp(settings.detail ?? 5, 0, 10) / 10.0
+    // Calculate scale based on settings.size (default 4000). Larger size = smaller UV scale = larger clouds.
+    const cloudScale = 3.0 * (4000.0 / Math.max(settings.size ?? 4000, 100));
+    
     const uniforms = {
       uTime: { value: 0 },
       uSunPos: { value: new THREE.Vector3(100, 200, -100) }, // Initial sun direction in world space
       uCloudTexture: { value: this.cloudTexture },
+      uCloudScale: { value: cloudScale },
       uCloudColor: { value: new THREE.Color(settings.color) },
       uCloudParams: { value: new THREE.Vector4(settings.density, settings.coverage, detail, settings.speed) }
     }
@@ -676,6 +681,7 @@ export class SceneCloudRenderer {
         uniform float uTime;
         uniform vec3 uSunPos; // 太阳在世界坐标中的位置
         uniform sampler2D uCloudTexture;
+        uniform float uCloudScale;
         uniform vec3 uCloudColor;
         uniform vec4 uCloudParams; // x: density, y: coverage, z: detail, w: speed
 
@@ -696,9 +702,10 @@ export class SceneCloudRenderer {
             float sunDot = dot(viewDir, sunDir);
 
             // --- 3. 生成云层 (使用烘培纹理) ---
-            float speed = uCloudParams.w * 0.01;
+            // Increase speed multiplier to make movement visible but slow
+            float speed = uCloudParams.w * 0.04; 
             // 简单的UV动画模拟云层移动
-            vec2 uv = vUv * 3.0 + vec2(uTime * speed, 0.0);
+            vec2 uv = vUv * uCloudScale + vec2(uTime * speed, uTime * speed * 0.15);
             
             vec4 noiseVal = texture2D(uCloudTexture, uv);
             float baseNoise = noiseVal.r;
