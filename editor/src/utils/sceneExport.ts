@@ -487,14 +487,6 @@ function sanitizeNodeForJsonExport(
     }
   }
 
-  if (sanitized.dynamicMesh?.type === 'Ground') {
-    sanitized.dynamicMesh = {
-      ...sanitized.dynamicMesh,
-      textureDataUrl: null,
-      textureName: null,
-    }
-  }
-
   if (shouldGenerateOutlineMeshForNode(node, options)) {
     outlineCandidates.push({ sourceNode: node, sanitizedNode: sanitized })
   }

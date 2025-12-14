@@ -209,16 +209,10 @@ function toSerializableInstance(instance) {
 		layerId: instance.layerId,
 		profileId: instance.profileId,
 		seed: instance.seed,
-		localPosition: cloneVector3(instance.localPosition, ZERO_VECTOR),
-		localRotation: cloneVector3(instance.localRotation, ZERO_VECTOR),
-		localScale: cloneVector3(instance.localScale, UNIT_VECTOR),
-		groundCoords: cloneGroundCoords(instance.groundCoords),
-		binding: instance.binding
-			? {
-				nodeId: instance.binding.nodeId,
-				slots: instance.binding.slots.map((slot) => ({ handleId: slot.handleId, instanceIndex: slot.instanceIndex })),
-			}
-			: null,
+			localPosition: roundVector3(cloneVector3(instance.localPosition, ZERO_VECTOR)),
+			localRotation: roundVector3(cloneVector3(instance.localRotation, ZERO_VECTOR)),
+			localScale: roundVector3(cloneVector3(instance.localScale, UNIT_VECTOR)),
+			groundCoords: roundGroundCoords(cloneGroundCoords(instance.groundCoords)),
 		metadata: instance.metadata ? { ...instance.metadata } : null,
 	}
 }
@@ -341,6 +335,33 @@ function normalizeGroundCoords(value) {
 		height: toFiniteNumber(value.height, null),
 		normal: normalizeOptionalVector3(value.normal),
 	}
+}
+
+function roundGroundCoords(value) {
+	if (!value) {
+		return null
+	}
+	return {
+		x: roundToTwoDecimals(value.x),
+		z: roundToTwoDecimals(value.z),
+		height: value.height == null ? null : roundToTwoDecimals(value.height),
+		normal: value.normal ? roundVector3(value.normal) : null,
+	}
+}
+
+function roundVector3(value) {
+	return {
+		x: roundToTwoDecimals(value?.x),
+		y: roundToTwoDecimals(value?.y),
+		z: roundToTwoDecimals(value?.z),
+	}
+}
+
+function roundToTwoDecimals(value) {
+	if (typeof value !== 'number' || !Number.isFinite(value)) {
+		return value
+	}
+	return Math.round(value * 100) / 100
 }
 
 function normalizeOptionalVector3(value) {

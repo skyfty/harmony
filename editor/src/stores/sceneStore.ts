@@ -1068,8 +1068,48 @@ function cloneGroundGenerationSettings(settings?: GroundGenerationSettings | nul
   }
 }
 
+function cloneTerrainScatterSnapshot(
+  snapshot?: TerrainScatterStoreSnapshot | null,
+): TerrainScatterStoreSnapshot | null | undefined {
+  if (snapshot === undefined) {
+    return undefined
+  }
+  if (snapshot === null) {
+    return null
+  }
+  const structuredCloneFn = (globalThis as typeof globalThis & {
+    structuredClone?: (value: unknown) => unknown
+  }).structuredClone
+  if (typeof structuredCloneFn === 'function') {
+    try {
+      return structuredCloneFn(snapshot) as TerrainScatterStoreSnapshot
+    } catch (error) {
+      console.warn('Structured clone failed for terrain scatter snapshot, falling back to manual clone', error)
+    }
+  }
+  return manualDeepClone(snapshot)
+}
+
+function manualDeepClone<T>(source: T): T {
+  if (Array.isArray(source)) {
+    return source.map((entry) => manualDeepClone(entry)) as unknown as T
+  }
+  if (source && typeof source === 'object') {
+    const target: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(source as Record<string, unknown>)) {
+      if (typeof value === 'function' || key === 'binding') {
+        continue
+      }
+      target[key] = manualDeepClone(value as unknown)
+    }
+    return target as T
+  }
+  return source
+}
+
 function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMesh {
-  return {
+  const terrainScatter = cloneTerrainScatterSnapshot(definition.terrainScatter)
+  const result: GroundDynamicMesh = {
     type: 'Ground',
     width: definition.width,
     depth: definition.depth,
@@ -1081,6 +1121,13 @@ function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMes
     textureName: definition.textureName ?? null,
     generation: cloneGroundGenerationSettings(definition.generation) ?? null,
   }
+  if (definition.hasManualEdits !== undefined) {
+    result.hasManualEdits = definition.hasManualEdits
+  }
+  if (terrainScatter !== undefined) {
+    result.terrainScatter = terrainScatter
+  }
+  return result
 }
 
 function normalizeGroundDimension(value: unknown, fallback: number): number {
@@ -5258,6 +5305,25 @@ function collectAssetIdsFromUnknown(value: unknown, bucket: Set<string>) {
   })
 }
 
+function collectTerrainScatterAssetDependencies(
+  snapshot: TerrainScatterStoreSnapshot | null | undefined,
+  bucket: Set<string>,
+) {
+  if (!snapshot || !Array.isArray(snapshot.layers) || !snapshot.layers.length) {
+    return
+  }
+  snapshot.layers.forEach((layer) => {
+    collectAssetIdCandidate(bucket, layer.assetId)
+    collectAssetIdCandidate(bucket, layer.profileId)
+    if (Array.isArray(layer.instances)) {
+      layer.instances.forEach((instance) => {
+        collectAssetIdCandidate(bucket, instance.assetId)
+        collectAssetIdCandidate(bucket, instance.profileId)
+      })
+    }
+  })
+}
+
 function collectNodeAssetDependencies(node: SceneNode | null | undefined, bucket: Set<string>) {
   if (!node) {
     return
@@ -5286,6 +5352,12 @@ function collectNodeAssetDependencies(node: SceneNode | null | undefined, bucket
     } else {
       collectAssetIdsFromUnknown(node.userData, bucket)
     }
+  }
+  if (node.dynamicMesh?.type === 'Ground') {
+    const definition = node.dynamicMesh as GroundDynamicMesh & {
+      terrainScatter?: TerrainScatterStoreSnapshot | null
+    }
+    collectTerrainScatterAssetDependencies(definition.terrainScatter, bucket)
   }
   if (node.children?.length) {
     node.children.forEach((child) => collectNodeAssetDependencies(child, bucket))

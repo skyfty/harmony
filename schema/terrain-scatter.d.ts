@@ -58,7 +58,7 @@ export interface TerrainScatterInstance {
 	localRotation: TerrainScatterVector3
 	localScale: TerrainScatterVector3
 	groundCoords: TerrainScatterGroundCoords | null
-	binding: TerrainScatterInstanceBinding | null
+	binding?: TerrainScatterInstanceBinding | null
 	metadata: Record<string, unknown> | null
 }
 
