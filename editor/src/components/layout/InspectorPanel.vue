@@ -16,6 +16,7 @@ import CloudPanel from '@/components/inspector/CloudPanel.vue'
 import EnvironmentPanel from '@/components/inspector/EnvironmentPanel.vue'
 import BehaviorPanel from '@/components/inspector/BehaviorPanel.vue'
 import DisplayBoardPanel from '@/components/inspector/DisplayBoardPanel.vue'
+import OnlinePanel from '@/components/inspector/OnlinePanel.vue'
 import RigidbodyPanel from '@/components/inspector/RigidbodyPanel.vue'
 import VehiclePanel from '@/components/inspector/VehiclePanel.vue'
 import { useSceneStore, SKY_NODE_ID, GROUND_NODE_ID, ENVIRONMENT_NODE_ID } from '@/stores/sceneStore'
@@ -28,6 +29,7 @@ import {
   DISPLAY_BOARD_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
   PROTAGONIST_COMPONENT_TYPE,
+  ONLINE_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
   VEHICLE_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
@@ -511,6 +513,7 @@ watch(
               <DisplayBoardPanel v-if="component.type === DISPLAY_BOARD_COMPONENT_TYPE" />
               <GuideboardPanel v-else-if="component.type === GUIDEBOARD_COMPONENT_TYPE" />
               <ViewPointPanel v-else-if="component.type === VIEW_POINT_COMPONENT_TYPE" />
+              <OnlinePanel v-else-if="component.type === ONLINE_COMPONENT_TYPE" />
               <ProtagonistPanel v-else-if="component.type === PROTAGONIST_COMPONENT_TYPE" />
               <WarpGatePanel v-else-if="component.type === WARP_GATE_COMPONENT_TYPE" />
               <EffectPanel v-else-if="component.type === EFFECT_COMPONENT_TYPE" />

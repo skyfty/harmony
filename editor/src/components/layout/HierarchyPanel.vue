@@ -13,8 +13,9 @@ import { useNodePickerStore } from '@/stores/nodePickerStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
+import { MULTIUSER_NODE_ID } from '@harmony/schema'
 import type { SceneNode } from '@harmony/schema'
-import { PROTAGONIST_COMPONENT_TYPE } from '@schema/components'
+import { PROTAGONIST_COMPONENT_TYPE, ONLINE_COMPONENT_TYPE } from '@schema/components'
 import { getNodeIcon } from '@/types/node-icons'
 import AddNodeMenu from '../common/AddNodeMenu.vue'
 import { Group, Vector3 } from 'three'
@@ -277,6 +278,27 @@ function findSceneNodeById(nodes: SceneNode[] | undefined, id: string): SceneNod
     }
   }
   return null
+}
+
+function isMultiuserSceneNode(node: SceneNode | null | undefined): boolean {
+  if (!node) {
+    return false
+  }
+  if (node.id === MULTIUSER_NODE_ID) {
+    return true
+  }
+  const userData = node.userData as Record<string, unknown> | undefined
+  if (userData?.multiuser) {
+    return true
+  }
+  return Boolean(node.components?.[ONLINE_COMPONENT_TYPE])
+}
+
+function isMultiuserNodeId(nodeId: string | null | undefined): boolean {
+  if (!nodeId) {
+    return false
+  }
+  return isMultiuserSceneNode(findSceneNodeById(sceneStore.nodes, nodeId))
 }
 
 type ParentInfo = { parentId: string | null; parentNode: SceneNode | null }
@@ -850,6 +872,17 @@ function handleDragOver(event: DragEvent, targetId: string) {
     return
   }
 
+  const draggingMultiuserNode = sourceIds.some((id) => isMultiuserNodeId(id))
+  if (draggingMultiuserNode) {
+    dragState.value = { sourceIds, primaryId, targetId, position: null }
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'none'
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    return
+  }
+
   const isInvalid = sourceIds.some((id) => sceneStore.isDescendant(id, targetId))
   const targetNode = findSceneNodeById(sceneStore.nodes, targetId)
   const supportsChildren =
@@ -932,6 +965,13 @@ async function handleDrop(event: DragEvent, targetId: string) {
   }
   const { sourceIds } = dragState.value
   if (!sourceIds.length) {
+    resetDragState()
+    return
+  }
+  const draggingMultiuserNode = sourceIds.some((id) => isMultiuserNodeId(id))
+  if (draggingMultiuserNode) {
+    event.preventDefault()
+    event.stopPropagation()
     resetDragState()
     return
   }

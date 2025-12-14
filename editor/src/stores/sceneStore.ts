@@ -29,6 +29,7 @@ import {
   GROUND_NODE_ID,
   SKY_NODE_ID,
   ENVIRONMENT_NODE_ID,
+  MULTIUSER_NODE_ID,
 } from '@harmony/schema'
 import type {
   AssetIndexEntry,
@@ -83,7 +84,7 @@ import type {
 } from '@harmony/schema'
 import type { TerrainScatterStoreSnapshot } from '@harmony/schema/terrain-scatter'
 
-export { GROUND_NODE_ID, SKY_NODE_ID, ENVIRONMENT_NODE_ID }
+export { GROUND_NODE_ID, SKY_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID }
 
 import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
 import type {
@@ -175,6 +176,7 @@ import {
   DISPLAY_BOARD_COMPONENT_TYPE,
   EFFECT_COMPONENT_TYPE,
   PROTAGONIST_COMPONENT_TYPE,
+  ONLINE_COMPONENT_TYPE,
   BEHAVIOR_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
   VEHICLE_COMPONENT_TYPE,
@@ -6261,9 +6263,26 @@ function isProtagonistNode(node: SceneNode | null | undefined): boolean {
   return Boolean(protagonist)
 }
 
+function isMultiuserNode(node: SceneNode | null | undefined): boolean {
+  if (!node) {
+    return false
+  }
+  if (node.id === MULTIUSER_NODE_ID) {
+    return true
+  }
+  const userData = node.userData as Record<string, unknown> | undefined
+  if (userData?.multiuser) {
+    return true
+  }
+  return Boolean(node.components?.[ONLINE_COMPONENT_TYPE])
+}
+
 function allowsChildNodes(node: SceneNode | null | undefined): boolean {
   if (!node) {
     return true
+  }
+  if (isMultiuserNode(node)) {
+    return false
   }
   if (isProtagonistNode(node)) {
     return false
@@ -6319,6 +6338,9 @@ function insertNodeMutable(
   node: SceneNode,
   position: HierarchyDropPosition,
 ): boolean {
+  if (position === 'inside' && isMultiuserNode(node)) {
+    return false
+  }
   if (targetId === null) {
     if (position === 'before') {
       nodes.unshift(node)
@@ -9649,6 +9671,9 @@ export const useSceneStore = defineStore('scene', {
       if (targetId && isDescendantNode(this.nodes, nodeId, targetId)) {
         return false
       }
+      if (isMultiuserNode(movingNode) && targetId !== null && position === 'inside') {
+        return false
+      }
 
       if ((targetId === SKY_NODE_ID || targetId === ENVIRONMENT_NODE_ID) && position === 'inside') {
         return false
@@ -10415,6 +10440,9 @@ export const useSceneStore = defineStore('scene', {
       let nextTree: SceneNode[]
       let parentId = payload.parentId ?? null
       if (parentId === SKY_NODE_ID || parentId === ENVIRONMENT_NODE_ID) {
+        parentId = null
+      }
+      if (isMultiuserNode(node)) {
         parentId = null
       }
       if (parentId) {

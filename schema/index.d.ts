@@ -6,6 +6,7 @@ import type { TerrainScatterStoreSnapshot } from './terrain-scatter'
 export const GROUND_NODE_ID: 'harmony:ground'
 export const SKY_NODE_ID: 'harmony:sky'
 export const ENVIRONMENT_NODE_ID: 'harmony:environment'
+export const MULTIUSER_NODE_ID: 'harmony:multiuser'
 
 export { AssetCache, AssetLoader } from './assetCache'
 export type { AssetCacheEntry, AssetCacheStatus, AssetSource, AssetLoadOptions } from './assetCache'

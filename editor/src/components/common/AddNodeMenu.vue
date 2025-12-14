@@ -20,7 +20,13 @@ import { useUiStore } from '@/stores/uiStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import UrlInputDialog from './UrlInputDialog.vue'
 import { generateUuid } from '@/utils/uuid'
-import { GROUND_NODE_ID, type LightNodeType, type SceneNode, type Vector3Like } from '@harmony/schema'
+import {
+  GROUND_NODE_ID,
+  MULTIUSER_NODE_ID,
+  type LightNodeType,
+  type SceneNode,
+  type Vector3Like,
+} from '@harmony/schema'
 import { determineAssetCategoryId } from '@/stores/assetCatalog'
 import { blobToDataUrl } from '@/utils/blob'
 import {
@@ -1733,7 +1739,30 @@ function hasOnlineComponentNode(nodes: SceneNode[] | null | undefined): boolean 
   return false
 }
 
-const canAddMultiuser = computed(() => !hasOnlineComponentNode(sceneStore.nodes))
+function findSceneNodeById(nodes: SceneNode[] | null | undefined, targetId: string): SceneNode | null {
+  if (!Array.isArray(nodes) || !nodes.length || !targetId.length) {
+    return null
+  }
+  const stack: SceneNode[] = [...nodes]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    if (node.id === targetId) {
+      return node
+    }
+    if (node.children?.length) {
+      stack.push(...node.children)
+    }
+  }
+  return null
+}
+
+const hasMultiuserNode = computed(() => Boolean(findSceneNodeById(sceneStore.nodes, MULTIUSER_NODE_ID)))
+const canAddMultiuser = computed(
+  () => !hasOnlineComponentNode(sceneStore.nodes) && !hasMultiuserNode.value,
+)
 
 async function handleCreateProtagonistNode(): Promise<void> {
   if (!canAddProtagonist.value) {
@@ -1809,6 +1838,7 @@ async function handleCreateMultiuserNode(): Promise<void> {
   }
 
   const created = await sceneStore.addModelNode({
+    nodeId: MULTIUSER_NODE_ID,
     object: helperObject,
     nodeType: 'Empty',
     name,
