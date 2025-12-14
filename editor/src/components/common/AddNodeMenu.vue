@@ -10,9 +10,9 @@ import type {
   SceneBehaviorScriptBinding,
   SceneNodeComponentState,
 } from '@harmony/schema'
+import {createPrimitiveMesh}  from '@harmony/schema'
 
 import Loader, { type LoaderLoadedPayload, type LoaderProgressPayload } from '@schema/loader'
-import { createPrimitiveMesh } from '@schema/geometry'
 import { applyGroundGeneration, createGroundMesh } from '@schema/groundMesh'
 import type { GroundDynamicMesh, GroundGenerationSettings } from '@harmony/schema'
 import { useFileDialog } from '@vueuse/core'

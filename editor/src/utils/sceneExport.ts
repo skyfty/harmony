@@ -14,6 +14,7 @@ import type {
   NodeComponentType,
   SceneOutlineMeshMap,
   SceneOutlineMesh,
+  createPrimitiveGeometry,
 } from '@harmony/schema'
 import type { TerrainScatterStoreSnapshot } from '@harmony/schema/terrain-scatter'
 import type { SceneExportOptions, GLBExportSettings } from '@/types/scene-export'
@@ -29,7 +30,6 @@ import {
   buildSphereShapeFromObject,
   buildCylinderShapeFromObject,
 } from '@/utils/rigidbodyCollider'
-import { createPrimitiveGeometry } from '@schema/geometry'
 import { createGroundMesh } from '@schema/groundMesh'
 import { createSurfaceMesh } from '@schema/surfaceMesh'
 import { createWallGroup } from '@schema/wallMesh'

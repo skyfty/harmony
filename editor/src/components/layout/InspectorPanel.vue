@@ -21,7 +21,7 @@ import RigidbodyPanel from '@/components/inspector/RigidbodyPanel.vue'
 import VehiclePanel from '@/components/inspector/VehiclePanel.vue'
 import { useSceneStore, SKY_NODE_ID, GROUND_NODE_ID, ENVIRONMENT_NODE_ID,MULTIUSER_NODE_ID,PROTAGONIST_NODE_ID } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
-import type { BehaviorEventType, SceneBehavior, SceneNodeComponentState } from '@harmony/schema'
+import type { BehaviorEventType, SceneBehavior, SceneNodeComponentState, isGeometryType } from '@harmony/schema'
 import type { BehaviorActionDefinition } from '@schema/behaviors/definitions'
 
 import {
@@ -39,7 +39,6 @@ import {
   componentManager,
   type RigidbodyColliderType,
 } from '@schema/components'
-import { isGeometryType } from '@schema/geometry'
 
 type BehaviorDetailsPayload = {
   mode: 'create' | 'edit'

@@ -26,7 +26,8 @@ import type {
   SceneSkyboxSettings,
   GroundDynamicMesh,
   WallDynamicMesh,
-  SurfaceDynamicMesh,
+  SurfaceDynamicMesh
+  
 } from '@harmony/schema'
 import {
   applyMaterialOverrides,
@@ -49,8 +50,8 @@ import {
   getModelInstanceBinding,
 } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
-import { createPrimitiveMesh } from '@schema/geometry'
 import type { CameraControlMode } from '@harmony/schema'
+import {createPrimitiveMesh}  from '@harmony/schema'
 
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import { cloneSkyboxSettings } from '@/stores/skyboxPresets'

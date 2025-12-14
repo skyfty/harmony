@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import type { AssetCacheEntry } from './assetCache';
 import { SceneMaterialFactory, MATERIAL_TEXTURE_SLOTS } from './material';
 import type { SceneMaterialFactoryOptions } from './material';
-import { createPrimitiveGeometry } from './geometry';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import ResourceCache from './ResourceCache';
 import type {
@@ -20,6 +19,7 @@ import type {
   SceneResourceSummaryEntry,
   SceneMaterialTextureSlot,
   SurfaceDynamicMesh,
+  createPrimitiveGeometry,
 } from '@harmony/schema';
 import type { GuideboardComponentProps } from './components/definitions/guideboardComponent';
 import {
