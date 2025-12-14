@@ -129,7 +129,6 @@
                 :max="5"
                 :step="0.1"
                 density="compact"
-                thumb-label="always"
                 track-color="rgba(255,255,255,0.25)"
                 color="primary"
               />

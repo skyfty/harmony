@@ -141,12 +141,15 @@ function computeDefaultExpandedPanels() {
   const shouldShowMaterial =
     (!node?.nodeType || (node?.nodeType !== 'Light' && (node?.materials?.length ?? 0) > 0)) &&
     !Boolean(node?.components?.[PROTAGONIST_COMPONENT_TYPE])
-  if (shouldShowMaterial) {
+  if (shouldShowMaterial && node?.id !== GROUND_NODE_ID) {
     panels.push('material')
   }
 
   Object.values(node?.components ?? {}).forEach((component) => {
     if (component?.type) {
+      if (component.type === RIGIDBODY_COMPONENT_TYPE && node?.id === GROUND_NODE_ID) {
+        return
+      }
       panels.push(component.type)
     }
   })
