@@ -73,6 +73,7 @@ import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 import { createSurfaceMesh, updateSurfaceMesh } from '@schema/surfaceMesh'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
+import { TerrainGridHelper } from './TerrainGridHelper'
 import {
   VIEW_POINT_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
@@ -140,9 +141,6 @@ import {
   GRID_MINOR_SPACING,
   GRID_SNAP_SPACING,
   WALL_DIAGONAL_SNAP_THRESHOLD,
-  GRID_MINOR_DASH_SIZE,
-  GRID_MINOR_GAP_SIZE,
-  GRID_BASE_HEIGHT,
   GRID_HIGHLIGHT_HEIGHT,
   GRID_HIGHLIGHT_PADDING,
   GRID_HIGHLIGHT_MIN_SIZE,
@@ -1249,83 +1247,40 @@ function shouldDeferSceneGraphSync(): boolean {
   return false
 }
 
-const GRID_EXTENT = 500
-const GRID_MAJOR_COLOR = 0x1f6f8a
-const GRID_MINOR_COLOR = 0x9dddf0
-
-const gridGroup = new THREE.Group()
-gridGroup.name = 'GridHelper'
-
-function applyGridMaterialSettings(materials: THREE.Material | THREE.Material[], opacity: number, polygonOffsetUnits = -2) {
-  const list = Array.isArray(materials) ? materials : [materials]
-  list.forEach((material) => {
-    const lineMaterial = material as THREE.LineBasicMaterial
-    lineMaterial.depthWrite = false
-    lineMaterial.transparent = true
-    lineMaterial.opacity = opacity
-    lineMaterial.toneMapped = false
-    lineMaterial.polygonOffset = true
-    lineMaterial.polygonOffsetFactor = -2
-    lineMaterial.polygonOffsetUnits = polygonOffsetUnits
-  })
-}
-
-const majorGrid = new THREE.GridHelper(
-  GRID_EXTENT,
-  GRID_EXTENT / GRID_MAJOR_SPACING,
-  GRID_MAJOR_COLOR,
-  GRID_MAJOR_COLOR,
-)
-majorGrid.position.y = GRID_BASE_HEIGHT
-applyGridMaterialSettings(majorGrid.material, 0.25)
-const majorMaterials = Array.isArray(majorGrid.material) ? majorGrid.material : [majorGrid.material]
-majorMaterials.forEach((material) => {
-  const lineMaterial = material as THREE.LineBasicMaterial
-  lineMaterial.linewidth = 1.5
-})
-gridGroup.add(majorGrid)
-
-const createDashedGridMaterial = () =>
-  new THREE.LineDashedMaterial({
-    color: GRID_MINOR_COLOR,
-    transparent: true,
-    opacity: 0.08,
-    dashSize: GRID_MINOR_DASH_SIZE,
-    gapSize: GRID_MINOR_GAP_SIZE,
-    toneMapped: false,
-  })
-
-function createMinorGrid(): THREE.LineSegments {
-  const halfSize = GRID_EXTENT / 2
-  const positions: number[] = []
-
-  for (let offset = -halfSize; offset <= halfSize; offset += GRID_MINOR_SPACING) {
-    const nearestMultiple = Math.round(offset / GRID_MAJOR_SPACING) * GRID_MAJOR_SPACING
-    if (Math.abs(offset - nearestMultiple) <= 1e-6) {
-      continue
-    }
-
-    positions.push(-halfSize, GRID_BASE_HEIGHT, offset, halfSize, GRID_BASE_HEIGHT, offset)
-    positions.push(offset, GRID_BASE_HEIGHT, -halfSize, offset, GRID_BASE_HEIGHT, halfSize)
-  }
-
-  const geometry = new THREE.BufferGeometry()
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-  geometry.computeBoundingSphere()
-
-  const material = createDashedGridMaterial()
-  applyGridMaterialSettings(material, material.opacity, -1)
-
-  const lines = new THREE.LineSegments(geometry, material)
-  lines.computeLineDistances()
-  return lines
-}
-
-const minorGrid = createMinorGrid()
-gridGroup.add(minorGrid)
+const terrainGridHelper = new TerrainGridHelper()
+terrainGridHelper.name = 'TerrainGridHelper'
 
 const axesHelper = new THREE.AxesHelper(4)
 axesHelper.visible = false
+
+function findGroundNodeInTree(nodes: SceneNode[]): SceneNode | null {
+  for (const node of nodes) {
+    if (node.id === GROUND_NODE_ID || node.dynamicMesh?.type === 'Ground') {
+      return node
+    }
+    if (node.children && node.children.length > 0) {
+      const nested = findGroundNodeInTree(node.children)
+      if (nested) {
+        return nested
+      }
+    }
+  }
+  return null
+}
+
+function resolveGroundDynamicMeshDefinition(): GroundDynamicMesh | null {
+  const node = findGroundNodeInTree(sceneStore.nodes)
+  if (node?.dynamicMesh?.type === 'Ground') {
+    return node.dynamicMesh
+  }
+  return null
+}
+
+function refreshTerrainGridHelper() {
+  const definition = resolveGroundDynamicMeshDefinition()
+  const signature = definition ? computeGroundDynamicMeshSignature(definition) : null
+  terrainGridHelper.update(definition, signature)
+}
 
 const dragPreviewGroup = new THREE.Group()
 dragPreviewGroup.visible = false
@@ -1711,7 +1666,7 @@ function renderProtagonistPreview() {
 }
 
 function applyGridVisibility(visible: boolean) {
-  gridGroup.visible = visible
+  terrainGridHelper.visible = visible
   if (!visible) {
     updateGridHighlight(null)
     return
@@ -2124,7 +2079,7 @@ function initScene() {
   scene.add(rootGroup)
   scene.add(instancedMeshGroup)
   scene.add(instancedOutlineGroup)
-  scene.add(gridGroup)
+  scene.add(terrainGridHelper)
   scene.add(axesHelper)
   scene.add(brushMesh)
   scene.add(groundSelectionGroup)
@@ -2977,6 +2932,9 @@ function disposeScene() {
     })
     gridHighlight = null
   }
+
+  terrainGridHelper.update(null, null)
+  terrainGridHelper.removeFromParent()
 
   clearOutlineSelectionTargets()
   disposeDragPreview()
@@ -6084,6 +6042,7 @@ function syncSceneGraph() {
   updateOutlineSelectionTargets()
 
   refreshPlaceholderOverlays()
+  refreshTerrainGridHelper()
   ensureFallbackLighting()
   refreshEffectRuntimeTickers()
   updateSelectionHighlights()
