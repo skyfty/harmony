@@ -210,7 +210,7 @@ const assetCacheStore = useAssetCacheStore()
 const terrainStore = useTerrainStore()
 
 const { panelVisibility, isSceneReady } = storeToRefs(sceneStore)
-const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterCategory, scatterSelectedAsset } =
+const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterCategory, scatterSelectedAsset, scatterSpacing } =
   storeToRefs(terrainStore)
 
 const viewportEl = ref<HTMLDivElement | null>(null)
@@ -555,6 +555,7 @@ const groundEditor = createGroundEditor({
   groundPanelTab,
   scatterCategory,
   scatterAsset: scatterSelectedAsset,
+  scatterSpacing,
   activeBuildTool,
   scatterEraseModeActive,
   disableOrbitForGroundSelection,

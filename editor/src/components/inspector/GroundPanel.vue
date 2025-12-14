@@ -14,7 +14,7 @@ import type { GroundPanelTab } from '@/stores/terrainStore'
 const sceneStore = useSceneStore()
 const terrainStore = useTerrainStore()
 const { selectedNode } = storeToRefs(sceneStore)
-const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab } = storeToRefs(terrainStore)
+const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterSpacing } = storeToRefs(terrainStore)
 
 const selectedGroundNode = computed(() => {
   if (selectedNode.value?.dynamicMesh?.type === 'Ground') {
@@ -51,6 +51,13 @@ const groundPanelTabModel = computed<GroundPanelTab>({
   get: () => groundPanelTab.value,
   set: (value) => terrainStore.setGroundPanelTab(value),
 })
+
+const scatterSpacingModel = computed({
+  get: () => scatterSpacing.value,
+  set: (value: number) => terrainStore.setScatterSpacing(Number(value)),
+})
+
+const scatterSpacingDisplay = computed(() => scatterSpacing.value.toFixed(2))
 
 const terrainOperations: Array<{ value: GroundSculptOperation; label: string; icon: string }> = [
   { value: 'depress', label: 'Depress', icon: 'mdi-tray-arrow-down' },
@@ -261,6 +268,25 @@ watch(selectedNoiseMode, (mode) => {
               />
             </v-window-item>
           </v-window>
+          <div
+            v-if="groundPanelTabModel !== 'terrain'"
+            class="scatter-spacing-panel"
+          >
+            <div class="scatter-spacing-labels">
+              <span>Scatter Spacing</span>
+              <span>{{ scatterSpacingDisplay }} m</span>
+            </div>
+            <v-slider
+              v-model="scatterSpacingModel"
+              :min="0.1"
+              :max="2"
+              :step="0.05"
+              density="compact"
+              thumb-label="always"
+              track-color="rgba(77, 208, 225, 0.4)"
+              color="primary"
+            />
+          </div>
         </div>
       </div>
     </v-expansion-panel-text>
@@ -321,6 +347,21 @@ watch(selectedNoiseMode, (mode) => {
     width: 40px;
     height: 30px;
     min-width: 40px;
+}
+
+.scatter-spacing-panel {
+  margin-top: 8px;
+  padding: 6px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.scatter-spacing-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
 }
 
 </style>

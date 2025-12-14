@@ -70,6 +70,7 @@ export type GroundEditorOptions = {
 	groundPanelTab: Ref<GroundPanelTab>
 	scatterCategory: Ref<TerrainScatterCategory>
 	scatterAsset: Ref<ProjectAsset | null>
+	scatterSpacing: Ref<number>
 	activeBuildTool: Ref<BuildTool | null>
 	scatterEraseModeActive: Ref<boolean>
 	disableOrbitForGroundSelection: () => void
@@ -847,13 +848,17 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			console.warn('散布资源仍在加载，请稍后重试')
 			return false
 		}
+		const customSpacing = Number.isFinite(options.scatterSpacing.value)
+			? options.scatterSpacing.value
+			: preset.spacing
+		const effectiveSpacing = Math.min(2, Math.max(0.1, customSpacing))
 		scatterSession = {
 			pointerId: event.pointerId,
 			asset,
 			category,
 			definition,
 			groundMesh,
-			spacing: preset.spacing,
+			spacing: effectiveSpacing,
 			minScale: preset.minScale,
 			maxScale: preset.maxScale,
 			store: ensureScatterStoreRef(),
