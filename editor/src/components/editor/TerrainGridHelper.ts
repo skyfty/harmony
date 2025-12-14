@@ -1,16 +1,30 @@
 import * as THREE from 'three'
 import type { GroundDynamicMesh } from '@harmony/schema'
-import { GRID_MAJOR_SPACING, GRID_MINOR_SPACING } from './constants'
+import { GRID_MAJOR_SPACING } from './constants'
 
-const MIN_LINE_WIDTH = 0.005
-const MAJOR_LINE_WIDTH = 0.008
-const MINOR_LINE_FEATHER = 0.002
-const MAJOR_LINE_FEATHER = 0.0035
-const MIN_LINE_COLOR = new THREE.Color(0x74c5ff)
-const MAJOR_LINE_COLOR = new THREE.Color(0x1f4f91)
-const BASE_LINE_OPACITY = 0.88
+const MINOR_COLOR = new THREE.Color(0x80c7ff)
+const MAJOR_COLOR = new THREE.Color(0xffc107)
+const LINE_OPACITY = 0.65
+const LINE_OFFSET = 0.002
+const MINOR_LINE_WIDTH = 1.2
+const MAJOR_LINE_WIDTH = 2.0
 
-function buildTerrainGeometry(definition: GroundDynamicMesh): THREE.BufferGeometry {
+function sampleHeight(definition: GroundDynamicMesh, row: number, column: number): number {
+  const key = `${row}:${column}`
+  const value = definition.heightMap?.[key]
+  return typeof value === 'number' ? value : 0
+}
+
+function isAligned(coord: number, spacing: number): boolean {
+  if (spacing <= 0) {
+    return false
+  }
+  const mod = Math.abs(coord) % spacing
+  const distance = Math.min(mod, spacing - mod)
+  return distance < Math.max(spacing * 0.01, 1e-3)
+}
+
+function buildGridSegments(definition: GroundDynamicMesh): { minor: number[]; major: number[] } {
   const columns = Math.max(1, Math.floor(definition.columns))
   const rows = Math.max(1, Math.floor(definition.rows))
   const cellSize = Math.max(1e-4, definition.cellSize)
@@ -18,204 +32,162 @@ function buildTerrainGeometry(definition: GroundDynamicMesh): THREE.BufferGeomet
   const depth = Math.max(Math.abs(definition.depth), rows * cellSize)
   const halfWidth = width * 0.5
   const halfDepth = depth * 0.5
-  const heightMap = definition.heightMap ?? {}
+  const stepX = columns > 0 ? width / columns : 0
+  const stepZ = rows > 0 ? depth / rows : 0
 
-  const vertexColumns = columns + 1
-  const vertexRows = rows + 1
-  const vertexCount = vertexColumns * vertexRows
+  const minorSegments: number[] = []
+  const majorSegments: number[] = []
 
-  const positions = new Float32Array(vertexCount * 3)
-  const uvs = new Float32Array(vertexCount * 2)
-  let positionOffset = 0
-  let uvOffset = 0
+  const pushSegment = (target: number[], ax: number, ay: number, az: number, bx: number, by: number, bz: number) => {
+    target.push(ax, ay, az, bx, by, bz)
+  }
 
-  for (let row = 0; row <= rows; row += 1) {
-    const z = -halfDepth + row * cellSize
-    for (let column = 0; column <= columns; column += 1) {
-      const x = -halfWidth + column * cellSize
-      const key = `${row}:${column}`
-      const height = heightMap[key] ?? 0
-      positions[positionOffset + 0] = x
-      positions[positionOffset + 1] = height
-      positions[positionOffset + 2] = z
-      positionOffset += 3
+  const classifyLine = (coord: number) => {
+    if (isAligned(coord, GRID_MAJOR_SPACING)) {
+      return majorSegments
+    }
+    if (isAligned(coord, GRID_MINOR_SPACING)) {
+      return minorSegments
+    }
+    return null
+  }
 
-      uvs[uvOffset + 0] = columns === 0 ? 0 : column / columns
-      uvs[uvOffset + 1] = rows === 0 ? 0 : 1 - row / rows
-      uvOffset += 2
+  for (let rowIndex = 0; rowIndex <= rows; rowIndex += 1) {
+    const z = -halfDepth + rowIndex * stepZ
+    const target = classifyLine(z)
+    if (!target) {
+      continue
+    }
+    for (let columnIndex = 0; columnIndex < columns; columnIndex += 1) {
+      const ax = -halfWidth + columnIndex * stepX
+      const bx = ax + stepX
+          const ay = sampleHeight(definition, rowIndex, columnIndex) + LINE_OFFSET
+          const by = sampleHeight(definition, rowIndex, columnIndex + 1) + LINE_OFFSET
+      pushSegment(target, ax, ay, z, bx, by, z)
     }
   }
 
-  const indices = new Uint32Array(columns * rows * 6)
-  let indexOffset = 0
-
-  for (let row = 0; row < rows; row += 1) {
-    for (let column = 0; column < columns; column += 1) {
-      const a = row * vertexColumns + column
-      const b = a + 1
-      const c = (row + 1) * vertexColumns + column
-      const d = c + 1
-      indices[indexOffset + 0] = a
-      indices[indexOffset + 1] = c
-      indices[indexOffset + 2] = b
-      indices[indexOffset + 3] = b
-      indices[indexOffset + 4] = c
-      indices[indexOffset + 5] = d
-      indexOffset += 6
+  for (let columnIndex = 0; columnIndex <= columns; columnIndex += 1) {
+    const x = -halfWidth + columnIndex * stepX
+    const target = classifyLine(x)
+    if (!target) {
+      continue
+    }
+    for (let rowIndex = 0; rowIndex < rows; rowIndex += 1) {
+      const az = -halfDepth + rowIndex * stepZ
+      const bz = az + stepZ
+      const ay = sampleHeight(definition, rowIndex, columnIndex) + LINE_OFFSET
+      const by = sampleHeight(definition, rowIndex + 1, columnIndex) + LINE_OFFSET
+      pushSegment(target, x, ay, az, x, by, bz)
     }
   }
 
-  const geometry = new THREE.BufferGeometry()
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-  geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
-  geometry.setIndex(new THREE.BufferAttribute(indices, 1))
-  geometry.computeBoundingBox()
-  geometry.computeBoundingSphere()
-  return geometry
+  return { minor: minorSegments, major: majorSegments }
 }
 
-function createShaderMaterial(): THREE.ShaderMaterial {
-  const vertexShader = `
-    varying vec3 vWorldPosition;
-
-    void main() {
-      vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-      vWorldPosition = worldPosition.xyz;
-      gl_Position = projectionMatrix * viewMatrix * worldPosition;
-    }
-  `
-
-  const fragmentShader = `
-    precision highp float;
-    uniform float minorSpacing;
-    uniform float majorSpacing;
-    uniform float minorWidth;
-    uniform float majorWidth;
-    uniform float minorFeather;
-    uniform float majorFeather;
-    uniform vec3 minorColor;
-    uniform vec3 majorColor;
-    uniform float opacity;
-
-    varying vec3 vWorldPosition;
-
-    float distanceToLine(float value, float spacing) {
-      if (spacing <= 0.0) {
-        return 1.0;
-      }
-      float wrapped = mod(abs(value), spacing);
-      float dist = min(wrapped, spacing - wrapped);
-      return dist;
-    }
-
-    float computeScreenScale(float axisX, float axisZ) {
-      float derivative = max(fwidth(axisX), fwidth(axisZ));
-      float invDerivative = 1.0 / max(derivative, 0.0001);
-      float dynamicScale = clamp(invDerivative, 0.7, 1.25);
-      float fade = smoothstep(0.0005, 0.002, derivative);
-      return mix(1.0, dynamicScale, fade);
-    }
-
-    float gridMask(float spacing, float baseWidth, float baseFeather, float axisX, float axisZ) {
-      if (spacing <= 0.0) {
-        return 0.0;
-      }
-      float scale = computeScreenScale(axisX, axisZ);
-      float width = baseWidth * scale;
-      float feather = baseFeather * scale;
-      float distX = distanceToLine(axisX, spacing);
-      float distZ = distanceToLine(axisZ, spacing);
-      float dist = min(distX, distZ);
-      return 1.0 - smoothstep(width, width + feather, dist);
-    }
-
-    void main() {
-      float minorMask = gridMask(minorSpacing, minorWidth, minorFeather, vWorldPosition.x, vWorldPosition.z);
-      float majorMask = gridMask(majorSpacing, majorWidth, majorFeather, vWorldPosition.x, vWorldPosition.z);
-      float finalMask = max(minorMask * 0.84, majorMask);
-      if (finalMask <= 0.0) {
-        discard;
-      }
-      vec3 color = minorColor;
-      if (majorMask > minorMask) {
-        color = majorColor;
-      }
-      gl_FragColor = vec4(color, finalMask * opacity);
-    }
-  `
-
-  return new THREE.ShaderMaterial({
-    vertexShader,
-    fragmentShader,
-      uniforms: {
-        minorSpacing: { value: GRID_MINOR_SPACING },
-        majorSpacing: { value: GRID_MAJOR_SPACING },
-        minorWidth: { value: MIN_LINE_WIDTH },
-        majorWidth: { value: MAJOR_LINE_WIDTH },
-        minorFeather: { value: MINOR_LINE_FEATHER },
-        majorFeather: { value: MAJOR_LINE_FEATHER },
-        minorColor: { value: MIN_LINE_COLOR },
-        majorColor: { value: MAJOR_LINE_COLOR },
-        opacity: { value: BASE_LINE_OPACITY },
-      },
+function createLineMaterial(color: THREE.Color, linewidth: number): THREE.LineBasicMaterial {
+  return new THREE.LineBasicMaterial({
+    color,
+    linewidth,
     transparent: true,
+    opacity: LINE_OPACITY,
     depthWrite: false,
-    depthTest: true,
     toneMapped: false,
-    side: THREE.DoubleSide,
-      polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: 1,
   })
 }
 
+function createLineSegments(positions: Float32Array, material: THREE.LineBasicMaterial): THREE.LineSegments {
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  const lines = new THREE.LineSegments(geometry, material)
+  lines.frustumCulled = false
+  lines.renderOrder = 100
+  return lines
+}
+
 export class TerrainGridHelper extends THREE.Object3D {
-  private mesh: THREE.Mesh | null = null
-  private material: THREE.ShaderMaterial
+  private minorLines: THREE.LineSegments | null = null
+  private majorLines: THREE.LineSegments | null = null
+  private minorMaterial = createLineMaterial(MINOR_COLOR, MINOR_LINE_WIDTH)
+  private majorMaterial = createLineMaterial(MAJOR_COLOR, MAJOR_LINE_WIDTH)
   private signature: string | null = null
 
   constructor() {
     super()
-    this.material = createShaderMaterial()
     this.name = 'TerrainGridHelper'
   }
 
   update(definition: GroundDynamicMesh | null, nextSignature: string | null) {
     if (!definition) {
       this.signature = null
-      if (this.mesh) {
-        this.mesh.visible = false
-      }
+      this.setVisible(false)
       return
     }
 
     if (nextSignature && nextSignature === this.signature) {
-      if (this.mesh) {
-        this.mesh.visible = true
-      }
+      this.setVisible(true)
       return
     }
 
     this.signature = nextSignature
-    const geometry = buildTerrainGeometry(definition)
-    if (!this.mesh) {
-      this.mesh = new THREE.Mesh(geometry, this.material)
-      this.mesh.frustumCulled = false
-      this.mesh.name = 'TerrainGridMesh'
-      this.add(this.mesh)
-    } else {
-      this.mesh.geometry?.dispose()
-      this.mesh.geometry = geometry
-      this.mesh.visible = true
-    }
+    const { minor, major } = buildGridSegments(definition)
+    this.replaceLines(minor, this.minorLines, this.minorMaterial, (instance) => {
+      this.minorLines = instance
+    })
+    this.replaceLines(major, this.majorLines, this.majorMaterial, (instance) => {
+      this.majorLines = instance
+    })
   }
 
   dispose() {
-    if (this.mesh) {
-      this.mesh.geometry?.dispose()
-      this.mesh.removeFromParent()
-      this.mesh = null
+    this.minorLines?.geometry.dispose()
+    this.majorLines?.geometry.dispose()
+    this.minorLines?.removeFromParent()
+    this.majorLines?.removeFromParent()
+    this.minorMaterial.dispose()
+    this.majorMaterial.dispose()
+  }
+
+  private setVisible(visible: boolean) {
+    if (this.minorLines) {
+      this.minorLines.visible = visible
     }
-    this.material.dispose()
+    if (this.majorLines) {
+      this.majorLines.visible = visible
+    }
+  }
+
+  private replaceLines(
+    data: number[],
+    existing: THREE.LineSegments | null,
+    material: THREE.LineBasicMaterial,
+    assign: (instance: THREE.LineSegments | null) => void,
+  ) {
+    if (!data.length) {
+      if (existing) {
+        existing.geometry.dispose()
+        existing.removeFromParent()
+        assign(null)
+      }
+      return
+    }
+
+    const positions = new Float32Array(data)
+
+    if (existing) {
+      existing.geometry.dispose()
+      existing.geometry = new THREE.BufferGeometry()
+      existing.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+      existing.geometry.computeBoundingBox()
+      existing.geometry.computeBoundingSphere()
+      existing.visible = true
+      assign(existing)
+      return
+    }
+
+    const lines = createLineSegments(positions, material)
+    lines.name = material === this.minorMaterial ? 'TerrainGridMinorLines' : 'TerrainGridMajorLines'
+    assign(lines)
+    this.add(lines)
   }
 }

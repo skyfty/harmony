@@ -19,6 +19,8 @@ import type {
   SceneResourceSummaryEntry,
   SceneMaterialTextureSlot,
   SurfaceDynamicMesh,
+} from '@harmony/schema';
+import {
   createPrimitiveGeometry,
 } from '@harmony/schema';
 import type { GuideboardComponentProps } from './components/definitions/guideboardComponent';

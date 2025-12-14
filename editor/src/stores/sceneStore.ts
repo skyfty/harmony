@@ -2861,7 +2861,7 @@ const defaultSkyboxSettings = cloneSkyboxSettings(DEFAULT_SKYBOX_SETTINGS)
 const defaultShadowsEnabled = true
 
 const defaultViewportSettings: SceneViewportSettings = {
-  showGrid: true,
+  showGrid: false,
   showAxes: false,
   cameraProjection: 'perspective',
   cameraControlMode: 'orbit',
