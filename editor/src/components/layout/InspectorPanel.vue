@@ -19,7 +19,7 @@ import DisplayBoardPanel from '@/components/inspector/DisplayBoardPanel.vue'
 import OnlinePanel from '@/components/inspector/OnlinePanel.vue'
 import RigidbodyPanel from '@/components/inspector/RigidbodyPanel.vue'
 import VehiclePanel from '@/components/inspector/VehiclePanel.vue'
-import { useSceneStore, SKY_NODE_ID, GROUND_NODE_ID, ENVIRONMENT_NODE_ID } from '@/stores/sceneStore'
+import { useSceneStore, SKY_NODE_ID, GROUND_NODE_ID, ENVIRONMENT_NODE_ID,MULTIUSER_NODE_ID,PROTAGONIST_NODE_ID } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 import type { BehaviorEventType, SceneBehavior, SceneNodeComponentState } from '@harmony/schema'
 import type { BehaviorActionDefinition } from '@schema/behaviors/definitions'
@@ -88,18 +88,25 @@ const isLightNode = computed(() => selectedNode.value?.nodeType === 'Light')
 const isGroundNode = computed(() => selectedNode.value?.id === GROUND_NODE_ID)
 const isSkyNode = computed(() => selectedNode.value?.id === SKY_NODE_ID)
 const isEnvironmentNode = computed(() => selectedNode.value?.id === ENVIRONMENT_NODE_ID)
+const isMultiuserNode = computed(() => selectedNode.value?.id === MULTIUSER_NODE_ID)
 const isProtagonistNode = computed(() =>
   Boolean(selectedNode.value?.components?.[PROTAGONIST_COMPONENT_TYPE]),
 )
 const showMaterialPanel = computed(
-  () => !isLightNode.value && !isProtagonistNode.value && (selectedNode.value?.materials?.length ?? 0) > 0,
+  () => !isLightNode.value && !isProtagonistNode.value && !isMultiuserNode.value && (selectedNode.value?.materials?.length ?? 0) > 0,
 )
 const showTransformPanel = computed(() => {
-  return selectedNode.value?.id !== SKY_NODE_ID && selectedNode.value?.id !== GROUND_NODE_ID && selectedNode.value?.id !== ENVIRONMENT_NODE_ID;
+  return selectedNode.value?.id !== SKY_NODE_ID && 
+  selectedNode.value?.id !== GROUND_NODE_ID && 
+  selectedNode.value?.id !== MULTIUSER_NODE_ID &&
+  selectedNode.value?.id !== ENVIRONMENT_NODE_ID;
 })
 
 const showAddComponentButton = computed(() => {
-  return selectedNode.value?.id !== SKY_NODE_ID && selectedNode.value?.id !== ENVIRONMENT_NODE_ID;
+  return selectedNode.value?.id !== SKY_NODE_ID && 
+  selectedNode.value?.id !== ENVIRONMENT_NODE_ID && 
+  selectedNode.value?.id !== MULTIUSER_NODE_ID && 
+  selectedNode.value?.id !== PROTAGONIST_NODE_ID;
 
 })
 

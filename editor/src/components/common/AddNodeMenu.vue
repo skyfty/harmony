@@ -23,6 +23,7 @@ import { generateUuid } from '@/utils/uuid'
 import {
   GROUND_NODE_ID,
   MULTIUSER_NODE_ID,
+  PROTAGONIST_NODE_ID,
   type LightNodeType,
   type SceneNode,
   type Vector3Like,
@@ -1790,6 +1791,7 @@ async function handleCreateProtagonistNode(): Promise<void> {
   }
 
   const created = await sceneStore.addModelNode({
+    nodeId: PROTAGONIST_NODE_ID,
     object: root,
     nodeType: 'Capsule',
     name,

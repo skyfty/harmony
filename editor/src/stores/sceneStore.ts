@@ -30,6 +30,7 @@ import {
   SKY_NODE_ID,
   ENVIRONMENT_NODE_ID,
   MULTIUSER_NODE_ID,
+  PROTAGONIST_NODE_ID,
 } from '@harmony/schema'
 import type {
   AssetIndexEntry,
@@ -84,7 +85,7 @@ import type {
 } from '@harmony/schema'
 import type { TerrainScatterStoreSnapshot } from '@harmony/schema/terrain-scatter'
 
-export { GROUND_NODE_ID, SKY_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID }
+export { GROUND_NODE_ID, SKY_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID, PROTAGONIST_NODE_ID }
 
 import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
 import type {
@@ -6256,6 +6257,9 @@ function isProtagonistNode(node: SceneNode | null | undefined): boolean {
   const components = node?.components
   if (!components) {
     return false
+  }
+  if (node?.id === PROTAGONIST_NODE_ID) {
+    return true
   }
   const protagonist = components[PROTAGONIST_COMPONENT_TYPE] as
     | SceneNodeComponentState<ProtagonistComponentProps>
