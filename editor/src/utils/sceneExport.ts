@@ -5,14 +5,17 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { SceneMaterial, SceneNodeMaterial } from '@/types/material'
 import type {
   SceneNode,
+  GroundDynamicMesh,
   SceneMaterialTextureSlot,
   SceneNodeComponentState,
   SceneNodeComponentMap,
   SceneJsonExportDocument,
+  SceneAssetPreloadInfo,
   NodeComponentType,
   SceneOutlineMeshMap,
   SceneOutlineMesh,
 } from '@harmony/schema'
+import type { TerrainScatterStoreSnapshot } from '@harmony/schema/terrain-scatter'
 import type { SceneExportOptions, GLBExportSettings } from '@/types/scene-export'
 import { findObjectByPath } from '@schema/modelAssetLoader'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
@@ -355,7 +358,10 @@ async function sanitizeSceneDocumentForJsonExport(
     materials: sanitizedMaterials,
     nodes: sanitizedNodes,
   }
-
+  const assetPreload = buildSceneAssetPreloadInfo(sanitizedNodes, options)
+  if (assetPreload) {
+    sanitizedDocument.assetPreload = assetPreload
+  }
   if (!options.lazyLoadMeshes) {
     if ('outlineMeshMap' in sanitizedDocument) {
       delete sanitizedDocument.outlineMeshMap
@@ -903,5 +909,93 @@ function sanitizeSceneNodeMaterial(material: SceneNodeMaterial): SceneNodeMateri
   return {
     ...material,
     textures: { ...existingTextures },
+  }
+}
+
+function buildSceneAssetPreloadInfo(
+  nodes: SceneNode[] | null | undefined,
+  options: SceneExportOptions,
+): SceneAssetPreloadInfo | undefined {
+  const nodeList: SceneNode[] = Array.isArray(nodes) ? [...nodes] : []
+  const meshAssetIds = collectSourceAssetIds(nodeList)
+  const scatterAssetIds = collectScatterAssetIds(nodeList)
+  scatterAssetIds.forEach((assetId) => meshAssetIds.add(assetId))
+  if (!meshAssetIds.size) {
+    return undefined
+  }
+  const lazyLoad = options.lazyLoadMeshes ?? true
+  const essentialSet = new Set<string>()
+  if (lazyLoad) {
+    scatterAssetIds.forEach((assetId) => essentialSet.add(assetId))
+  } else {
+    meshAssetIds.forEach((assetId) => essentialSet.add(assetId))
+  }
+
+  const meshInfo: SceneAssetPreloadInfo['mesh'] = {
+    all: Array.from(meshAssetIds).sort(),
+  }
+  if (essentialSet.size) {
+    meshInfo.essential = Array.from(essentialSet).sort()
+  }
+
+  return { mesh: meshInfo }
+}
+
+function collectSourceAssetIds(nodes: SceneNode[]): Set<string> {
+  const ids = new Set<string>()
+  const stack: SceneNode[] = [...nodes]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : ''
+    if (assetId) {
+      ids.add(assetId)
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children)
+    }
+  }
+  return ids
+}
+
+function collectScatterAssetIds(nodes: SceneNode[]): Set<string> {
+  const ids = new Set<string>()
+  const stack: SceneNode[] = [...nodes]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    if (node.dynamicMesh?.type === 'Ground') {
+      const definition = node.dynamicMesh as GroundDynamicMesh & {
+        terrainScatter?: TerrainScatterStoreSnapshot | null
+      }
+      const snapshot = definition.terrainScatter
+      if (snapshot && Array.isArray(snapshot.layers) && snapshot.layers.length) {
+        snapshot.layers.forEach((layer) => {
+          addAssetIdToSet(ids, layer?.assetId)
+          addAssetIdToSet(ids, layer?.profileId)
+          if (Array.isArray(layer?.instances)) {
+            layer.instances.forEach((instance) => {
+              addAssetIdToSet(ids, instance?.assetId)
+              addAssetIdToSet(ids, instance?.profileId)
+            })
+          }
+        })
+      }
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children)
+    }
+  }
+  return ids
+}
+
+function addAssetIdToSet(bucket: Set<string>, assetId: string | null | undefined): void {
+  const normalized = typeof assetId === 'string' ? assetId.trim() : ''
+  if (normalized) {
+    bucket.add(normalized)
   }
 }

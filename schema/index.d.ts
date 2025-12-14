@@ -537,6 +537,16 @@ export interface SceneJsonExportDocument {
   packageAssetMap?: Record<string, string>;
   resourceSummary?: SceneResourceSummary;
   lazyLoadMeshes?: boolean;
+  assetPreload?: SceneAssetPreloadInfo;
+}
+
+export interface SceneAssetPreloadMeshInfo {
+  all: string[];
+  essential?: string[];
+}
+
+export interface SceneAssetPreloadInfo {
+  mesh: SceneAssetPreloadMeshInfo;
 }
 
 export interface SceneResourceSummaryEntry {

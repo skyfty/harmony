@@ -154,18 +154,13 @@ class SceneGraphBuilder {
         if (!entry || typeof entry.assetId !== 'string' || !entry.assetId.length) {
           return;
         }
-        const normalizedType = typeof entry.type === 'string' ? entry.type.toLowerCase() : '';
-        const isMeshAsset = normalizedType === 'model' || normalizedType === 'mesh';
-        const includeAssetBytes = !(this.lazyLoadMeshes && isMeshAsset);
-
         const size = Number.isFinite(entry.bytes) && entry.bytes > 0 ? entry.bytes : 0;
-        if (includeAssetBytes && size > 0) {
+        if (size > 0) {
           this.assetSizeMap.set(entry.assetId, size);
         }
-        if (includeAssetBytes) {
-          aggregatedTotal += size;
-        }
-        if (includeAssetBytes && this.isSummaryAssetPreloaded(entry)) {
+        aggregatedTotal += size;
+        
+        if (this.isSummaryAssetPreloaded(entry)) {
           this.assetLoadedMap.set(entry.assetId, size);
           aggregatedPreloaded += size;
         }
@@ -314,7 +309,7 @@ class SceneGraphBuilder {
     nodes: SceneNodeWithExtras[],
     materials: SceneMaterial[],
   ): Promise<void> {
-    const meshAssetIds = this.lazyLoadMeshes ? [] : this.collectMeshAssetIds(nodes);
+    const meshAssetIds = this.getMeshPreloadIds(nodes);
     const textureAssetIds = this.collectTextureAssetIds(nodes, materials);
     const total = meshAssetIds.length + textureAssetIds.length;
     this.beginProgress(total);
@@ -343,6 +338,34 @@ class SceneGraphBuilder {
 
     await Promise.all(tasks);
     this.finalizeProgress();
+  }
+
+  private getMeshPreloadIds(nodes: SceneNodeWithExtras[]): string[] {
+    const meshInfo = this.document.assetPreload?.mesh;
+    if (this.lazyLoadMeshes) {
+      if (Array.isArray(meshInfo?.essential) && meshInfo.essential.length) {
+        return this.normalizeAssetIdList(meshInfo.essential);
+      }
+      return [];
+    }
+    if (Array.isArray(meshInfo?.all) && meshInfo.all.length) {
+      return this.normalizeAssetIdList(meshInfo.all);
+    }
+    return this.collectMeshAssetIds(nodes);
+  }
+
+  private normalizeAssetIdList(list: string[]): string[] {
+    const uniqueIds = new Set<string>();
+    for (const entry of list) {
+      if (typeof entry !== 'string') {
+        continue;
+      }
+      const trimmed = entry.trim();
+      if (trimmed) {
+        uniqueIds.add(trimmed);
+      }
+    }
+    return Array.from(uniqueIds);
   }
 
 
