@@ -2,12 +2,12 @@ import * as THREE from 'three'
 import type { GroundDynamicMesh } from '@harmony/schema'
 import { GRID_MAJOR_SPACING, GRID_MINOR_SPACING } from './constants'
 
-const MIN_LINE_WIDTH = 0.008
-const MAJOR_LINE_WIDTH = 0.011
-const MINOR_LINE_FEATHER = 0.003
-const MAJOR_LINE_FEATHER = 0.0045
-const MIN_LINE_COLOR = new THREE.Color(0x7dd8ff)
-const MAJOR_LINE_COLOR = new THREE.Color(0x1c5ba1)
+const MIN_LINE_WIDTH = 0.005
+const MAJOR_LINE_WIDTH = 0.008
+const MINOR_LINE_FEATHER = 0.002
+const MAJOR_LINE_FEATHER = 0.0035
+const MIN_LINE_COLOR = new THREE.Color(0x74c5ff)
+const MAJOR_LINE_COLOR = new THREE.Color(0x1f4f91)
 const BASE_LINE_OPACITY = 0.88
 
 function buildTerrainGeometry(definition: GroundDynamicMesh): THREE.BufferGeometry {
@@ -111,7 +111,9 @@ function createShaderMaterial(): THREE.ShaderMaterial {
     float computeScreenScale(float axisX, float axisZ) {
       float derivative = max(fwidth(axisX), fwidth(axisZ));
       float invDerivative = 1.0 / max(derivative, 0.0001);
-      return clamp(invDerivative, 0.7, 2.5);
+      float dynamicScale = clamp(invDerivative, 0.7, 1.25);
+      float fade = smoothstep(0.0005, 0.002, derivative);
+      return mix(1.0, dynamicScale, fade);
     }
 
     float gridMask(float spacing, float baseWidth, float baseFeather, float axisX, float axisZ) {
