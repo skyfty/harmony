@@ -1,4 +1,4 @@
-import type { AssetType } from '@harmony/schema/asset-types'
+import type { AssetType } from '@harmony/schema'
 import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 
 export type ServerAssetType = AssetType

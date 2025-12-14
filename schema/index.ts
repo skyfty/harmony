@@ -1,6 +1,5 @@
 
 import * as THREE from 'three'
-import type { AssetType } from './asset-types'
 import type { TerrainScatterStoreSnapshot } from './terrain-scatter'
 
 export const GROUND_NODE_ID = 'harmony:ground'
@@ -12,8 +11,6 @@ export const PROTAGONIST_NODE_ID = 'harmony:protagonist'
 export { AssetCache, AssetLoader } from './assetCache'
 export type { AssetCacheEntry, AssetCacheStatus, AssetSource, AssetLoadOptions } from './assetCache'
 
-export type { AssetType } from './asset-types'
-export { AssetTypes, DEFAULT_ASSET_TYPE, isAssetType, normalizeAssetType } from './asset-types'
 export { TerrainScatterCategories } from './terrain-scatter'
 export type { TerrainScatterCategory } from './terrain-scatter'
 export type {
@@ -789,3 +786,32 @@ export interface SceneClipboard {
 
 export function setActiveMultiuserSceneId(sceneId: string | null): void
 export function getActiveMultiuserSceneId(): string | null
+
+const AssetTypesList = [
+  'model',
+  'image',
+  'texture',
+  'hdri',
+  'material',
+  'file',
+  'prefab',
+  'video',
+  'mesh',
+] as const
+
+export type AssetType = (typeof AssetTypesList)[number]
+
+export const AssetTypes: readonly AssetType[] = AssetTypesList
+export const DEFAULT_ASSET_TYPE: AssetType = 'file'
+
+export function isAssetType(value: unknown): value is AssetType {
+  return typeof value === 'string' && AssetTypes.includes(value as AssetType)
+}
+
+export function normalizeAssetType(value: unknown, fallback: AssetType = DEFAULT_ASSET_TYPE): AssetType {
+  if (typeof value !== 'string') {
+    return fallback
+  }
+  const normalized = value.trim().toLowerCase() as AssetType
+  return AssetTypes.includes(normalized) ? normalized : fallback
+}

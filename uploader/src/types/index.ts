@@ -1,4 +1,4 @@
-import type { AssetType as SchemaAssetType } from '@harmony/schema/asset-types'
+import type { AssetType as SchemaAssetType } from '@harmony/schema'
 import type {
   AssetCategory as SchemaAssetCategory,
   AssetCategoryPathItem as SchemaAssetCategoryPathItem,

@@ -1,4 +1,4 @@
-import { DEFAULT_ASSET_TYPE, isAssetType } from '@harmony/schema/asset-types'
+import { DEFAULT_ASSET_TYPE, isAssetType } from '@harmony/schema'
 import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { ProjectAsset, ServerAssetType } from '@/types/project-asset'
 

@@ -1,6 +1,6 @@
 import { ref, computed, reactive } from 'vue'
 import { defineStore } from 'pinia'
-import { AssetTypes, DEFAULT_ASSET_TYPE, normalizeAssetType } from '@harmony/schema/asset-types'
+import { AssetTypes, DEFAULT_ASSET_TYPE, normalizeAssetType } from '@harmony/schema'
 import type { AssetSeries, AssetTag, AssetType, ManagedAsset, ResourceCategory } from '@/types'
 import {
   createAssetTags,

@@ -1,4 +1,4 @@
-import { AssetTypes } from '@harmony/schema/asset-types'
+import { AssetTypes } from '@harmony/schema'
 import { TerrainScatterCategories } from '@harmony/schema/terrain-scatter'
 import { Schema, model } from 'mongoose'
 import type { AssetDocument } from '@/types/models'

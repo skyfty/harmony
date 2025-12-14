@@ -5,14 +5,13 @@
   "type": "module",
   "private": true,
   "sideEffects": false,
+  "scripts": {
+    "build:asset-types": "tsc -p tsconfig.asset-types.json"
+  },
   "exports": {
     ".": {
       "types": "./index.d.ts",
       "default": "./index.js"
-    },
-    "./asset-types": {
-      "types": "./asset-types.d.ts",
-      "default": "./asset-types.js"
     },
     "./asset-api": {
       "types": "./asset-api.d.ts",
@@ -26,5 +25,8 @@
   "dependencies": {
     "cannon-es": "^0.20.0",
     "three": "^0.172.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
   }
 }

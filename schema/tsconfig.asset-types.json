@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "lib": ["ES2022"],
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": false,
+    "declaration": true,
+    "emitDeclarationOnly": false,
+    "outDir": "./",
+    "allowSyntheticDefaultImports": true,
+    "importsNotUsedAsValues": "remove",
+    "resolveJsonModule": true,
+    "types": []
+  },
+  "include": ["asset-types.ts"],
+  "exclude": ["node_modules"]
+}

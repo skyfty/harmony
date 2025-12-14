@@ -1,4 +1,4 @@
-import type { AssetType as SchemaAssetType } from '@harmony/schema/asset-types'
+import type { AssetType as SchemaAssetType } from '@harmony/schema'
 import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { Document, Types } from 'mongoose'
 

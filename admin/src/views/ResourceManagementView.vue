@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { AssetTypes } from '@harmony/schema/asset-types'
+import { AssetTypes } from '@harmony/schema'
 import AssetFormDialog from '@/components/AssetFormDialog.vue'
 import AssetTagManagerDialog from '@/components/AssetTagManagerDialog.vue'
 import {

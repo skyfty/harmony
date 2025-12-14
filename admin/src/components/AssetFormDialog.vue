@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { AssetTypes } from '@harmony/schema/asset-types'
+import { AssetTypes } from '@harmony/schema'
 import CategoryPathSelector from '@/components/CategoryPathSelector.vue'
 import type { AssetTag, AssetType, ManagedAsset, ResourceCategory } from '@/types'
 
