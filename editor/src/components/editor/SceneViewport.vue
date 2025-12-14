@@ -428,7 +428,7 @@ function applyRendererShadowSetting() {
   if (!renderer) {
     return
   }
-  const castShadows = Boolean(shadowsEnabled.value)
+  const castShadows = Boolean(shadowsActiveInViewport.value)
   renderer.shadowMap.enabled = castShadows
   if (sunDirectionalLight) {
     sunDirectionalLight.castShadow = castShadows
@@ -519,6 +519,8 @@ const shadowsEnabled = computed(() => sceneStore.shadowsEnabled)
 const skyboxSettings = computed(() => sceneStore.skybox)
 const environmentSettings = computed(() => sceneStore.environmentSettings)
 const cloudPreviewEnabled = computed(() => sceneStore.cloudPreviewEnabled)
+const isEnvironmentNodeSelected = computed(() => sceneStore.selectedNodeId === ENVIRONMENT_NODE_ID)
+const shadowsActiveInViewport = computed(() => shadowsEnabled.value && isEnvironmentNodeSelected.value)
 const canAlignSelection = computed(() => {
   const primaryId = sceneStore.selectedNodeId
   if (!primaryId) {
@@ -532,7 +534,6 @@ const canRotateSelection = computed(() =>
 const canDropSelection = computed(() =>
   sceneStore.selectedNodeIds.some((id) => !!id && !sceneStore.isNodeSelectionLocked(id))
 )
-const isEnvironmentNodeSelected = computed(() => sceneStore.selectedNodeId === ENVIRONMENT_NODE_ID)
 const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((tool) => [tool.key, tool.value]))
 
 const activeBuildTool = ref<BuildTool | null>(null)
@@ -1827,6 +1828,7 @@ watch(environmentSettings, (settings) => {
 
 watch(isEnvironmentNodeSelected, () => {
   updateFogForSelection()
+  applyRendererShadowSetting()
 }, { immediate: true })
 
 function resetCameraView() {
@@ -2095,7 +2097,7 @@ function initScene() {
   const pixelRatio = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
   renderer.setPixelRatio(pixelRatio)
   renderer.setSize(width, height)
-  renderer.shadowMap.enabled = Boolean(shadowsEnabled.value)
+  renderer.shadowMap.enabled = Boolean(shadowsActiveInViewport.value)
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
   renderer.toneMapping = THREE.ACESFilmicToneMapping
   renderer.toneMappingExposure = skyboxSettings.value.exposure
@@ -2330,7 +2332,7 @@ function ensureSunLight(): THREE.DirectionalLight | null {
   if (!sunDirectionalLight) {
     const light = new THREE.DirectionalLight(0xffffff, 1.05)
     light.name = 'SkySunLight'
-    light.castShadow = Boolean(shadowsEnabled.value)
+    light.castShadow = Boolean(shadowsActiveInViewport.value)
     light.shadow.mapSize.set(512, 512)
     light.shadow.bias = -0.0001
     light.shadow.normalBias = 0.02
@@ -2352,7 +2354,7 @@ function ensureSunLight(): THREE.DirectionalLight | null {
     }
   }
 
-  sunDirectionalLight.castShadow = Boolean(shadowsEnabled.value)
+  sunDirectionalLight.castShadow = Boolean(shadowsActiveInViewport.value)
   return sunDirectionalLight
 }
 
