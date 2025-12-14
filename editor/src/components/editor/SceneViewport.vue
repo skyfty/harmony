@@ -601,7 +601,6 @@ function toggleScatterEraseMode() {
     return
   }
   handleBuildToolChange(null)
-  terrainStore.setGroundPanelTab('terrain')
   cancelGroundEditorScatterPlacement()
   scatterEraseModeActive.value = true
 }

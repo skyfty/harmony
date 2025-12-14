@@ -16,7 +16,7 @@ const terrainStore = useTerrainStore()
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
 
-const { scatterProviderAssetId } = storeToRefs(terrainStore)
+const { scatterSelectedAsset } = storeToRefs(terrainStore)
 
 const categoryKeys = Object.keys(terrainScatterPresets) as TerrainScatterCategory[]
 const assetBuckets = reactive<Record<TerrainScatterCategory, ProjectAsset[]>>(
@@ -100,7 +100,7 @@ onMounted(() => {
         :key="asset.id"
         class="thumbnail-item"
         type="button"
-        :class="{ 'is-selected': scatterProviderAssetId === asset.id }"
+        :class="{ 'is-selected': scatterSelectedAsset?.id === asset.id }"
         @click="handleAssetClick(asset)"
       >
         <div class="thumbnail" :style="{ backgroundImage: assetThumbnail(asset) ? `url(${assetThumbnail(asset)})` : undefined }">
@@ -140,9 +140,9 @@ onMounted(() => {
 
 .thumbnail-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
-  max-height: calc((60px * 3) + (8px * 2));
+  grid-template-columns: repeat(4, minmax(58px, 1fr));
+  gap: 6px;
+  max-height: calc((74px * 3) + (6px * 2));
   overflow-y: auto;
   padding-right: 4px;
 }
@@ -150,7 +150,7 @@ onMounted(() => {
 .thumbnail-item {
   border: none;
   background: transparent;
-  padding: 4px;
+  padding: 1px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -168,9 +168,9 @@ onMounted(() => {
 }
 
 .thumbnail {
-  width: 38px;
-  height: 38px;
-  border-radius: 6px;
+  width: 58px;
+  height: 58px;
+  border-radius: 8px;
   background-size: cover;
   background-position: center;
   background-color: rgba(255, 255, 255, 0.08);
