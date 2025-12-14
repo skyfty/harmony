@@ -71,7 +71,9 @@ export type GroundEditorOptions = {
 	scatterCategory: Ref<TerrainScatterCategory>
 	scatterAsset: Ref<ProjectAsset | null>
 	scatterSpacing: Ref<number>
+	scatterEraseRadius: Ref<number>
 	activeBuildTool: Ref<BuildTool | null>
+	onScatterEraseStart?: () => void
 	scatterEraseModeActive: Ref<boolean>
 	disableOrbitForGroundSelection: () => void
 	restoreOrbitAfterGroundSelection: () => void
@@ -947,6 +949,27 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return removed
 	}
 
+	function resolveScatterEraseRadius(): number {
+		const candidate = Number.isFinite(options.scatterEraseRadius.value)
+			? options.scatterEraseRadius.value
+			: options.brushRadius.value
+		return Math.min(5, Math.max(0.1, candidate))
+	}
+
+	function clearScatterInstances(): boolean {
+		const store = ensureScatterStoreRef()
+		let removed = false
+		for (const layer of Array.from(store.layers.values())) {
+			if (!layer.instances.length) {
+				continue
+			}
+			layer.instances.forEach((instance) => releaseScatterInstance(instance))
+			persistScatterInstances(layer, [])
+			removed = true
+		}
+		return removed
+	}
+
 	function beginScatterErase(event: PointerEvent): boolean {
 		const eraseModeActive = options.scatterEraseModeActive.value
 		if (!eraseModeActive && !scatterModeEnabled()) {
@@ -968,13 +991,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 		clampPointToGround(definition, scatterPointerHelper)
-		eraseScatterInstances(scatterPointerHelper.clone(), options.brushRadius.value, groundMesh)
+		const eraseRadius = resolveScatterEraseRadius()
+		eraseScatterInstances(scatterPointerHelper.clone(), eraseRadius, groundMesh)
 		scatterEraseState = {
 			pointerId: event.pointerId,
 			definition,
 			groundMesh,
-			radius: options.brushRadius.value,
+			radius: eraseRadius,
 		}
+		options.onScatterEraseStart?.()
 		try {
 			options.canvasRef.value?.setPointerCapture(event.pointerId)
 		} catch (_error) {
@@ -994,7 +1019,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 		clampPointToGround(scatterEraseState.definition, scatterPointerHelper)
-		scatterEraseState.radius = options.brushRadius.value
+		scatterEraseState.radius = resolveScatterEraseRadius()
 		eraseScatterInstances(scatterPointerHelper.clone(), scatterEraseState.radius, scatterEraseState.groundMesh)
 		event.preventDefault()
 		event.stopPropagation()
@@ -1708,6 +1733,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		cancelGroundSelection,
 		cancelScatterPlacement,
 		cancelScatterErase,
+		clearScatterInstances,
 		handlePointerDown,
 		handlePointerMove,
 		handlePointerUp,

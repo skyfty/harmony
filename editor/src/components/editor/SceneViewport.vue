@@ -210,7 +210,7 @@ const assetCacheStore = useAssetCacheStore()
 const terrainStore = useTerrainStore()
 
 const { panelVisibility, isSceneReady } = storeToRefs(sceneStore)
-const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterCategory, scatterSelectedAsset, scatterSpacing } =
+const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterCategory, scatterSelectedAsset, scatterSpacing, scatterEraseRadius } =
   storeToRefs(terrainStore)
 
 const viewportEl = ref<HTMLDivElement | null>(null)
@@ -535,6 +535,7 @@ const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((too
 
 const activeBuildTool = ref<BuildTool | null>(null)
 const scatterEraseModeActive = ref(false)
+const scatterEraseMenuOpen = ref(false)
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
 
 const groundEditor = createGroundEditor({
@@ -556,11 +557,15 @@ const groundEditor = createGroundEditor({
   scatterCategory,
   scatterAsset: scatterSelectedAsset,
   scatterSpacing,
+  scatterEraseRadius,
   activeBuildTool,
   scatterEraseModeActive,
   disableOrbitForGroundSelection,
   restoreOrbitAfterGroundSelection,
   isAltOverrideActive: () => isAltOverrideActive,
+  onScatterEraseStart: () => {
+    scatterEraseMenuOpen.value = false
+  },
 })
 
 const {
@@ -581,6 +586,7 @@ const {
   cancelScatterErase: cancelGroundEditorScatterErase,
   cancelScatterPlacement: cancelGroundEditorScatterPlacement,
   dispose: disposeGroundEditor,
+  clearScatterInstances,
 } = groundEditor
 
 function exitScatterEraseMode() {
@@ -590,6 +596,7 @@ function exitScatterEraseMode() {
   scatterEraseModeActive.value = false
   cancelGroundEditorScatterErase()
   cancelGroundEditorScatterPlacement()
+  scatterEraseMenuOpen.value = false
 }
 
 function toggleScatterEraseMode() {
@@ -604,6 +611,20 @@ function toggleScatterEraseMode() {
   handleBuildToolChange(null)
   cancelGroundEditorScatterPlacement()
   scatterEraseModeActive.value = true
+}
+
+function handleScatterEraseMenuOpen(value: boolean) {
+  scatterEraseMenuOpen.value = value
+}
+
+function handleClearAllScatterInstances() {
+  if (!selectedNodeIsGround.value) {
+    return
+  }
+  cancelGroundEditorScatterPlacement()
+  cancelGroundEditorScatterErase()
+  clearScatterInstances()
+  scatterEraseMenuOpen.value = false
 }
 const {
   overlayContainerRef,
@@ -6949,6 +6970,8 @@ defineExpose<SceneViewportHandle>({
         :can-rotate-selection="canRotateSelection"
         :can-erase-scatter="selectedNodeIsGround"
         :scatter-erase-mode-active="scatterEraseModeActive"
+          :scatter-erase-radius="scatterEraseRadius"
+          :scatter-erase-menu-open="scatterEraseMenuOpen"
         :active-build-tool="activeBuildTool"
         @reset-camera="resetCameraView"
         @drop-to-ground="dropSelectionToGround"
@@ -6958,6 +6981,9 @@ defineExpose<SceneViewportHandle>({
         @toggle-camera-control="handleToggleCameraControlMode"
         @change-build-tool="handleBuildToolChange"
         @toggle-scatter-erase="toggleScatterEraseMode"
+          @clear-all-scatter-instances="handleClearAllScatterInstances"
+          @update-scatter-erase-radius="terrainStore.setScatterEraseRadius"
+          @update:scatter-erase-menu-open="handleScatterEraseMenuOpen"
       />
     </div>
     <div ref="gizmoContainerRef" class="viewport-gizmo-container"></div>

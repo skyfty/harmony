@@ -95,17 +95,60 @@
         :title="button.title"
         @click="emitAlign(button.mode)"
       />
-      <v-btn
-        icon="mdi-broom"
-        density="compact"
-        size="small"
-        class="toolbar-button"
-        :color="scatterEraseModeActive ? 'primary' : undefined"
-        :variant="scatterEraseModeActive ? 'flat' : 'text'"
-        :disabled="!canEraseScatter"
-        title="Scatter 擦除"
-        @click="emit('toggle-scatter-erase')"
-      />
+      <v-menu
+        :model-value="scatterEraseMenuOpen"
+        location="bottom"
+        :offset="6"
+        open-on-click="false"
+        @update:modelValue="(value) => emit('update:scatter-erase-menu-open', value)"
+      >
+        <template #activator="{ props: menuProps }">
+          <v-btn
+            v-bind="menuProps"
+            icon="mdi-broom"
+            density="compact"
+            size="small"
+            class="toolbar-button"
+            :color="scatterEraseModeActive ? 'primary' : undefined"
+            :variant="scatterEraseModeActive ? 'flat' : 'text'"
+            :disabled="!canEraseScatter"
+            title="Scatter 擦除"
+            @click="handleScatterEraseButtonClick"
+          />
+        </template>
+        <v-list density="compact" class="scatter-erase-menu">
+          <div class="scatter-erase-menu__card">
+            <div class="scatter-erase-menu__slider">
+              <div class="scatter-erase-menu__slider-labels">
+                <span>擦除半径</span>
+                <span>{{ scatterEraseRadiusLabel }}</span>
+              </div>
+              <v-slider
+                v-model="scatterEraseRadiusModel"
+                :min="0.1"
+                :max="5"
+                :step="0.1"
+                density="compact"
+                thumb-label="always"
+                track-color="rgba(255,255,255,0.25)"
+                color="primary"
+              />
+            </div>
+            <v-divider class="scatter-erase-menu__divider" />
+            <v-list-item class="scatter-erase-menu__action">
+              <v-btn
+                density="compact"
+                variant="text"
+                color="primary"
+                class="scatter-erase-menu__clear"
+                @click="handleClearScatterMenuAction"
+              >
+                清除所有Scatter实例
+              </v-btn>
+            </v-list-item>
+          </div>
+        </v-list>
+      </v-menu>
       <v-menu v-model="rotationMenuOpen" location="bottom" :offset="8">
         <template #activator="{ props: menuProps }">
           <v-btn
@@ -199,6 +242,8 @@ const props = defineProps<{
   cameraControlMode: CameraControlMode
   activeBuildTool: BuildTool | null
   scatterEraseModeActive: boolean
+  scatterEraseRadius: number
+  scatterEraseMenuOpen: boolean
 }>()
 
 const emit = defineEmits<{
@@ -210,6 +255,9 @@ const emit = defineEmits<{
   (event: 'toggle-camera-control'): void
   (event: 'change-build-tool', tool: BuildTool | null): void
   (event: 'toggle-scatter-erase'): void
+  (event: 'update-scatter-erase-radius', value: number): void
+  (event: 'clear-all-scatter-instances'): void
+  (event: 'update:scatter-erase-menu-open', value: boolean): void
 }>()
 
 const {
@@ -222,6 +270,8 @@ const {
   scatterEraseModeActive,
   cameraControlMode,
   activeBuildTool,
+  scatterEraseRadius,
+  scatterEraseMenuOpen,
 } = toRefs(props)
 const sceneStore = useSceneStore()
 
@@ -229,6 +279,13 @@ const selectionCount = computed(() => (sceneStore.selectedNodeIds ? sceneStore.s
 const activeNode = computed(() => sceneStore.selectedNode)
 const isSavingPrefab = ref(false)
 const rotationMenuOpen = ref(false)
+
+const scatterEraseRadiusModel = computed({
+  get: () => scatterEraseRadius.value,
+  set: (value: number) => emit('update-scatter-erase-radius', Number(value)),
+})
+
+const scatterEraseRadiusLabel = computed(() => `${scatterEraseRadius.value.toFixed(2)} m`)
 
 type RotationAxis = 'x' | 'y'
 
@@ -263,6 +320,12 @@ const rotationSections = [
 watch(canRotateSelection, (enabled) => {
   if (!enabled && rotationMenuOpen.value) {
     rotationMenuOpen.value = false
+  }
+})
+
+watch(canEraseScatter, (enabled) => {
+  if (!enabled) {
+    emit('update:scatter-erase-menu-open', false)
   }
 })
 
@@ -376,12 +439,23 @@ function handleBuildToolToggle(tool: BuildTool) {
   emit('change-build-tool', next)
 }
 
+function handleScatterEraseButtonClick() {
+  const willActivate = !scatterEraseModeActive.value
+  emit('toggle-scatter-erase')
+  emit('update:scatter-erase-menu-open', willActivate)
+}
+
 function toggleGridVisibility() {
   sceneStore.toggleViewportGridVisible()
 }
 
 function toggleAxesVisibility() {
   sceneStore.toggleViewportAxesVisible()
+}
+
+function handleClearScatterMenuAction() {
+  emit('clear-all-scatter-instances')
+  emit('update:scatter-erase-menu-open', false)
 }
 </script>
 
@@ -406,6 +480,50 @@ function toggleAxesVisibility() {
   border-radius: 3px;
   min-width: 22px;
   height: 22px;
+}
+
+.scatter-erase-menu {
+  min-width: 220px;
+  padding: 6px;
+}
+
+.scatter-erase-menu__card {
+  border-radius: 14px;
+  padding: 10px;
+  background: rgba(20, 24, 32, 0.75);
+  backdrop-filter: blur(18px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.25);
+}
+
+.scatter-erase-menu__slider {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.scatter-erase-menu__slider-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.scatter-erase-menu__action {
+  padding: 0;
+}
+
+.scatter-erase-menu__clear {
+  justify-content: flex-start;
+  width: 100%;
+  font-size: 13px;
+  border-radius: 8px;
+  padding-left: 8px;
+}
+
+.scatter-erase-menu__divider {
+  margin: 12px 0;
+  border-color: rgba(255, 255, 255, 0.1);
 }
 
 </style>

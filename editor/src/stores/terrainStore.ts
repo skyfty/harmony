@@ -17,6 +17,7 @@ export const useTerrainStore = defineStore('terrain', () => {
   const scatterSelectedAsset = ref<ProjectAsset | null>(null)
   const scatterProviderAssetId = ref<string | null>(null)
   const scatterSpacing = ref(0.5)
+  const scatterEraseRadius = ref(1)
   const isDigging = computed(() => brushOperation.value === 'depress')
   const scatterPreset = computed(() => terrainScatterPresets[scatterCategory.value])
   const scatterModeActive = computed(() => groundPanelTab.value !== 'terrain' && !!scatterSelectedAsset.value)
@@ -41,6 +42,10 @@ export const useTerrainStore = defineStore('terrain', () => {
   function setScatterSpacing(value: number) {
     scatterSpacing.value = Math.min(2, Math.max(0.1, value))
   }
+
+  function setScatterEraseRadius(value: number) {
+    scatterEraseRadius.value = Math.min(5, Math.max(0.1, value))
+  }
   
   return {
     brushRadius,
@@ -55,9 +60,11 @@ export const useTerrainStore = defineStore('terrain', () => {
     scatterPreset,
     scatterModeActive,
     scatterSpacing,
+    scatterEraseRadius,
     setGroundPanelTab,
     setScatterCategory,
     setScatterSelection,
     setScatterSpacing,
+    setScatterEraseRadius,
   }
 })
