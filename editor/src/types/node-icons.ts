@@ -1,4 +1,4 @@
-import { GROUND_NODE_ID, type LightNodeType, type SceneNodeType } from '@harmony/schema'
+import { GROUND_NODE_ID, MULTIUSER_NODE_ID, type LightNodeType, type SceneNodeType } from '@harmony/schema'
 
 export const NODE_TYPE_ICONS: Record<SceneNodeType, string> = {
   Mesh: 'mdi-cube-outline',
@@ -43,8 +43,13 @@ type NodeIconParams = {
 const GROUND_ICON = 'mdi-grass'
 const WALL_ICON = 'mdi-wall'
 const SURFACE_ICON = 'mdi-vector-polygon'
+const MULTIUSER_ICON = 'mdi-network'
 
 export function getNodeIcon({ nodeType, lightType, hasChildren, nodeId, dynamicMeshType }: NodeIconParams): string {
+  if (nodeId === MULTIUSER_NODE_ID) {
+    return MULTIUSER_ICON
+  }
+
   if (nodeId === GROUND_NODE_ID) {
     return GROUND_ICON
   }
