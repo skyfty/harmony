@@ -166,7 +166,7 @@ export const terrainScatterPresets: Record<TerrainScatterCategory, TerrainScatte
   trees: {
     label: 'Trees',
     icon: 'mdi-pine-tree',
-    spacing: 3.2,
+    spacing: 0.5,
     minScale: 0.8,
     maxScale: 1.35,
   },

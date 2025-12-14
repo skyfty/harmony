@@ -95,7 +95,18 @@
         :title="button.title"
         @click="emitAlign(button.mode)"
       />
-  <v-menu v-model="rotationMenuOpen" location="bottom" :offset="8">
+      <v-btn
+        icon="mdi-broom"
+        density="compact"
+        size="small"
+        class="toolbar-button"
+        :color="scatterEraseModeActive ? 'primary' : undefined"
+        :variant="scatterEraseModeActive ? 'flat' : 'text'"
+        :disabled="!canEraseScatter"
+        title="Scatter 擦除"
+        @click="emit('toggle-scatter-erase')"
+      />
+      <v-menu v-model="rotationMenuOpen" location="bottom" :offset="8">
         <template #activator="{ props: menuProps }">
           <v-btn
             v-bind="menuProps"
@@ -184,8 +195,10 @@ const props = defineProps<{
   canDropSelection: boolean
   canAlignSelection: boolean
   canRotateSelection: boolean
+  canEraseScatter: boolean
   cameraControlMode: CameraControlMode
   activeBuildTool: BuildTool | null
+  scatterEraseModeActive: boolean
 }>()
 
 const emit = defineEmits<{
@@ -196,6 +209,7 @@ const emit = defineEmits<{
   (event: 'capture-screenshot'): void
   (event: 'toggle-camera-control'): void
   (event: 'change-build-tool', tool: BuildTool | null): void
+  (event: 'toggle-scatter-erase'): void
 }>()
 
 const {
@@ -204,6 +218,8 @@ const {
   canDropSelection,
   canAlignSelection,
   canRotateSelection,
+  canEraseScatter,
+  scatterEraseModeActive,
   cameraControlMode,
   activeBuildTool,
 } = toRefs(props)

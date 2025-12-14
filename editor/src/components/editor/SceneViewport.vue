@@ -534,6 +534,8 @@ const canDropSelection = computed(() =>
 const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((tool) => [tool.key, tool.value]))
 
 const activeBuildTool = ref<BuildTool | null>(null)
+const scatterEraseModeActive = ref(false)
+const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
 
 const groundEditor = createGroundEditor({
   sceneStore,
@@ -554,6 +556,7 @@ const groundEditor = createGroundEditor({
   scatterCategory,
   scatterAsset: scatterSelectedAsset,
   activeBuildTool,
+  scatterEraseModeActive,
   disableOrbitForGroundSelection,
   restoreOrbitAfterGroundSelection,
   isAltOverrideActive: () => isAltOverrideActive,
@@ -574,8 +577,34 @@ const {
   handleGroundTextureFileChange,
   hasActiveSelection: groundEditorHasActiveSelection,
   handleActiveBuildToolChange: handleGroundEditorBuildToolChange,
+  cancelScatterErase: cancelGroundEditorScatterErase,
+  cancelScatterPlacement: cancelGroundEditorScatterPlacement,
   dispose: disposeGroundEditor,
 } = groundEditor
+
+function exitScatterEraseMode() {
+  if (!scatterEraseModeActive.value) {
+    return
+  }
+  scatterEraseModeActive.value = false
+  cancelGroundEditorScatterErase()
+  cancelGroundEditorScatterPlacement()
+}
+
+function toggleScatterEraseMode() {
+  if (!selectedNodeIsGround.value) {
+    exitScatterEraseMode()
+    return
+  }
+  if (scatterEraseModeActive.value) {
+    exitScatterEraseMode()
+    return
+  }
+  handleBuildToolChange(null)
+  terrainStore.setGroundPanelTab('terrain')
+  cancelGroundEditorScatterPlacement()
+  scatterEraseModeActive.value = true
+}
 const {
   overlayContainerRef,
   placeholderOverlayList,
@@ -4882,6 +4911,7 @@ function finalizeWallBuildSession() {
 }
 
 function cancelActiveBuildOperation(): boolean {
+  exitScatterEraseMode()
   const tool = activeBuildTool.value
   if (!tool) {
     return false
@@ -4929,6 +4959,11 @@ function cancelActiveBuildOperation(): boolean {
 }
 
 function handleBuildToolChange(tool: BuildTool | null) {
+  if (tool === 'ground') {
+    exitScatterEraseMode()
+    cancelGroundEditorScatterPlacement()
+    terrainStore.setGroundPanelTab('terrain')
+  }
   activeBuildTool.value = tool
 }
 
@@ -6602,6 +6637,11 @@ function handleViewportShortcut(event: KeyboardEvent) {
   if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
     switch (event.code) {
       case 'Escape':
+        if (scatterEraseModeActive.value) {
+          exitScatterEraseMode()
+          handled = true
+          break
+        }
         if (cancelActiveBuildOperation()) {
           handled = true
           break
@@ -6802,6 +6842,25 @@ watch(
   }
 )
 
+watch(selectedNodeIsGround, (isGround) => {
+  if (!isGround) {
+    exitScatterEraseMode()
+  }
+})
+
+watch(
+  () => groundPanelTab.value,
+  (tab) => {
+    if (tab !== 'terrain') {
+      exitScatterEraseMode()
+      cancelGroundEditorScatterPlacement()
+      handleBuildToolChange(null)
+      return
+    }
+    cancelGroundEditorScatterPlacement()
+  },
+)
+
 watch(
   () => props.activeTool,
   (tool) => {
@@ -6888,6 +6947,8 @@ defineExpose<SceneViewportHandle>({
         :can-drop-selection="canDropSelection"
         :can-align-selection="canAlignSelection"
         :can-rotate-selection="canRotateSelection"
+        :can-erase-scatter="selectedNodeIsGround"
+        :scatter-erase-mode-active="scatterEraseModeActive"
         :active-build-tool="activeBuildTool"
         @reset-camera="resetCameraView"
         @drop-to-ground="dropSelectionToGround"
@@ -6896,6 +6957,7 @@ defineExpose<SceneViewportHandle>({
         @capture-screenshot="handleCaptureScreenshot"
         @toggle-camera-control="handleToggleCameraControlMode"
         @change-build-tool="handleBuildToolChange"
+        @toggle-scatter-erase="toggleScatterEraseMode"
       />
     </div>
     <div ref="gizmoContainerRef" class="viewport-gizmo-container"></div>

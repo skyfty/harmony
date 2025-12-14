@@ -71,6 +71,7 @@ export type GroundEditorOptions = {
 	scatterCategory: Ref<TerrainScatterCategory>
 	scatterAsset: Ref<ProjectAsset | null>
 	activeBuildTool: Ref<BuildTool | null>
+	scatterEraseModeActive: Ref<boolean>
 	disableOrbitForGroundSelection: () => void
 	restoreOrbitAfterGroundSelection: () => void
 	isAltOverrideActive: () => boolean
@@ -129,67 +130,8 @@ type SculptSessionState = {
 
 let sculptSessionState: SculptSessionState | null = null
 
-function createPolygonRingGeometry(points: THREE.Vector2[], innerScale = 0.8): THREE.BufferGeometry {
-	if (!points.length) {
-		return new THREE.BufferGeometry()
-	}
-	const shape = new THREE.Shape()
-	points.forEach((point, index) => {
-		if (index === 0) {
-			shape.moveTo(point.x, point.y)
-		} else {
-			shape.lineTo(point.x, point.y)
-		}
-	})
-	shape.closePath()
-
-	const innerPoints = points.map((point) => point.clone().multiplyScalar(innerScale)).reverse()
-	if (innerPoints.length) {
-		const hole = new THREE.Path()
-		innerPoints.forEach((point, index) => {
-			if (index === 0) {
-				hole.moveTo(point.x, point.y)
-			} else {
-				hole.lineTo(point.x, point.y)
-			}
-		})
-		hole.closePath()
-		shape.holes.push(hole)
-	}
-	return new THREE.ShapeGeometry(shape, 1)
-}
-
-function createStarPoints(count: number, outerRadius: number, innerRadius: number): THREE.Vector2[] {
-	const points: THREE.Vector2[] = []
-	const step = Math.PI / count
-	for (let index = 0; index < count * 2; index += 1) {
-		const radius = index % 2 === 0 ? outerRadius : innerRadius
-		const angle = index * step
-		points.push(new THREE.Vector2(Math.cos(angle) * radius, Math.sin(angle) * radius))
-	}
-	return points
-}
-
-function createBrushGeometry(shape: TerrainBrushShape): THREE.BufferGeometry {
-	switch (shape) {
-		case 'square': {
-			const size = 1
-			const points = [
-				new THREE.Vector2(-size, -size),
-				new THREE.Vector2(size, -size),
-				new THREE.Vector2(size, size),
-				new THREE.Vector2(-size, size),
-			]
-			return createPolygonRingGeometry(points, 0.85)
-		}
-		case 'star': {
-			const points = createStarPoints(5, 1, 0.5)
-			return createPolygonRingGeometry(points, 0.55)
-		}
-		case 'circle':
-		default:
-			return new THREE.RingGeometry(0.9, 1, 64)
-	}
+function createBrushGeometry(): THREE.BufferGeometry {
+	return new THREE.CircleGeometry(1, 64)
 }
 
 function storeBrushBasePositions(geometry: THREE.BufferGeometry) {
@@ -207,16 +149,17 @@ function tagBrushGeometry(geometry: THREE.BufferGeometry): THREE.BufferGeometry 
 
 export function createGroundEditor(options: GroundEditorOptions) {
 	const assetCacheStore = useAssetCacheStore()
+	const brushMaterial = new THREE.MeshBasicMaterial({
+		color: 0x5fb0ff,
+		transparent: true,
+		opacity: 0.35,
+		side: THREE.DoubleSide,
+		depthTest: false,
+		depthWrite: false,
+	})
 	const brushMesh = new THREE.Mesh(
-		tagBrushGeometry(createBrushGeometry(options.brushShape.value ?? 'circle')),
-		new THREE.MeshBasicMaterial({
-			color: 0xff3333,
-			transparent: true,
-			opacity: 0.8,
-			side: THREE.DoubleSide,
-			depthTest: false,
-			depthWrite: false,
-		}),
+		tagBrushGeometry(createBrushGeometry()),
+		brushMaterial,
 	)
 	brushMesh.rotation.x = -Math.PI / 2
 	brushMesh.visible = false
@@ -268,14 +211,41 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	let scatterAssetLoadToken = 0
 	let scatterSnapshotUpdatedAt: number | null = null
 
-	const stopBrushWatch = watch(options.brushShape, (shape) => {
-		updateBrushGeometry(shape ?? 'circle')
+	function getActiveBrushShape(): TerrainBrushShape {
+		return options.brushShape.value ?? 'circle'
+	}
+
+	function getBrushColor(): number {
+		if (options.scatterEraseModeActive.value) {
+			return 0xffb347
+		}
+		if (options.groundPanelTab.value === 'terrain') {
+			return 0x5fb0ff
+		}
+		if (scatterModeEnabled()) {
+			return 0x4dd0e1
+		}
+		return 0x5fb0ff
+	}
+
+	function refreshBrushAppearance() {
+		brushMaterial.color.setHex(getBrushColor())
+		updateBrushGeometry(getActiveBrushShape())
+	}
+
+	const stopBrushShapeWatch = watch(options.brushShape, () => {
+		refreshBrushAppearance()
 	})
+	const stopScatterEraseModeWatch = watch(options.scatterEraseModeActive, () => {
+		refreshBrushAppearance()
+	})
+	refreshBrushAppearance()
 
 	const stopTabWatch = watch(options.groundPanelTab, (tab) => {
 		if (tab === 'terrain') {
 			cancelScatterPlacement()
 		}
+		refreshBrushAppearance()
 	})
 
 	const stopScatterSelectionWatch = watch(
@@ -285,15 +255,18 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			cancelScatterErase()
 			scatterLayer = null
 			if (!category) {
+				refreshBrushAppearance()
 				return
 			}
 			if (!asset) {
 				scatterModelGroup = null
 				scatterStore = ensureScatterStoreRef()
 				scatterLayer = findScatterLayerByAsset(null, category)
+				refreshBrushAppearance()
 				return
 			}
 			void prepareScatterRuntime(asset, category)
+			refreshBrushAppearance()
 		},
 		{ immediate: true },
 	)
@@ -492,8 +465,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	// scatter helpers now sourced from terrainScatterRuntime
 
-	function updateBrushGeometry(shape: TerrainBrushShape) {
-		const nextGeometry = tagBrushGeometry(createBrushGeometry(shape))
+	function updateBrushGeometry(_shape: TerrainBrushShape) {
+		const nextGeometry = tagBrushGeometry(createBrushGeometry())
 		const previousGeometry = brushMesh.geometry
 		brushMesh.geometry = nextGeometry
 		previousGeometry?.dispose()
@@ -711,6 +684,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function scatterModeEnabled(): boolean {
+		if (options.scatterEraseModeActive.value) {
+			return false
+		}
 		if (options.groundPanelTab.value === 'terrain') {
 			return false
 		}
@@ -967,7 +943,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function beginScatterErase(event: PointerEvent): boolean {
-		if (!scatterModeEnabled() || event.button !== 1 || !event.shiftKey) {
+		const eraseModeActive = options.scatterEraseModeActive.value
+		if (!eraseModeActive && !scatterModeEnabled()) {
+			return false
+		}
+		const allowedButton = eraseModeActive ? (event.button === 0 || event.button === 1) : event.button === 1
+		if (!allowedButton) {
+			return false
+		}
+		if (!eraseModeActive && !event.shiftKey) {
 			return false
 		}
 		const definition = getGroundDynamicMeshDefinition()
@@ -1469,9 +1453,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function handlePointerMove(event: PointerEvent): boolean {
 		const selectedNodeIsGround = options.sceneStore.selectedNode?.dynamicMesh?.type === 'Ground'
-		if (selectedNodeIsGround && options.groundPanelTab.value === 'terrain') {
+		const showBrush = selectedNodeIsGround &&
+			(options.groundPanelTab.value === 'terrain' || options.scatterEraseModeActive.value || scatterModeEnabled())
+		if (showBrush) {
 			updateBrush(event)
-			if (isSculpting.value) {
+			if (options.groundPanelTab.value === 'terrain' && !options.scatterEraseModeActive.value && isSculpting.value) {
 				performSculpt(event)
 			}
 		} else {
@@ -1687,7 +1673,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function dispose() {
-		stopBrushWatch()
+		stopBrushShapeWatch()
+		stopScatterEraseModeWatch()
 		stopTabWatch()
 		stopScatterSelectionWatch()
 		cancelScatterPlacement()
@@ -1714,6 +1701,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		updateGroundSelectionToolbarPosition,
 		clearGroundSelection,
 		cancelGroundSelection,
+		cancelScatterPlacement,
+		cancelScatterErase,
 		handlePointerDown,
 		handlePointerMove,
 		handlePointerUp,

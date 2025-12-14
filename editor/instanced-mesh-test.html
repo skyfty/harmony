@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0"
+    />
+    <title>InstancedMesh 性能测试</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+        background-color: #111;
+        color: #f3f4f6;
+        overflow: hidden;
+      }
+
+      #canvas-wrap {
+        position: fixed;
+        inset: 0;
+      }
+
+      #info {
+        position: fixed;
+        left: 1rem;
+        top: 1rem;
+        background: rgba(0, 0, 0, 0.45);
+        padding: 0.75rem 1rem;
+        border-radius: 0.75rem;
+        backdrop-filter: blur(6px);
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.55);
+      }
+
+      #info h1 {
+        font-size: 1rem;
+        margin-bottom: 0.35rem;
+      }
+
+      #info p {
+        font-size: 0.85rem;
+        line-height: 1.4;
+      }
+
+      #stats-wrapper {
+        position: fixed;
+        right: 0.65rem;
+        top: 0.65rem;
+        z-index: 9;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="canvas-wrap"></div>
+    <div id="info">
+      <h1>InstancedMesh 测试</h1>
+      <p>加载模型：<br />https://cdn.touchmagic.cn/harmony/7yKWiuDRChqTo0Tt.glb</p>
+      <p>渲染实例数量与旋转状态可动态观察</p>
+    </div>
+    <div id="stats-wrapper"></div>
+    <script type="module">
+      import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.171.0/build/three.module.js";
+      import { GLTFLoader } from "https://cdn.jsdelivr.net/npm/three@0.171.0/examples/jsm/loaders/GLTFLoader.js";
+      import Stats from "https://cdn.jsdelivr.net/npm/three@0.171.0/examples/jsm/libs/stats.module.js";
+
+      const wrapper = document.getElementById("canvas-wrap");
+      const statsContainer = document.getElementById("stats-wrapper");
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setClearColor(0x050508);
+      renderer.shadowMap.enabled = true;
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      wrapper.appendChild(renderer.domElement);
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x050508);
+
+      const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 300);
+      camera.position.set(0, 1.8, 10);
+
+      const hemi = new THREE.HemisphereLight(0x9eb1f4, 0x080820, 0.75);
+      scene.add(hemi);
+
+      const dirLight = new THREE.DirectionalLight(0xf6f0d8, 1);
+      dirLight.position.set(5, 15, 10);
+      dirLight.castShadow = true;
+      dirLight.shadow.mapSize.set(2048, 2048);
+      scene.add(dirLight);
+
+      const axes = new THREE.AxesHelper(4);
+      scene.add(axes);
+
+      const loader = new GLTFLoader();
+      const gltfUrl = "https://cdn.touchmagic.cn/harmony/7yKWiuDRChqTo0Tt.glb";
+      const instancesPerSide = 16;
+      const instanceCount = instancesPerSide ** 2;
+      const dummy = new THREE.Object3D();
+      let instancedMesh = null;
+
+      const floor = new THREE.Mesh(
+        new THREE.PlaneGeometry(120, 120),
+        new THREE.MeshStandardMaterial({ color: 0x0a0b12, roughness: 1, metalness: 0 })
+      );
+      floor.rotation.x = -Math.PI / 2;
+      floor.receiveShadow = true;
+      floor.position.y = -1;
+      scene.add(floor);
+
+      loader.load(
+        gltfUrl,
+        (gltf) => {
+          const mesh = gltf.scene.children.find((child) => child.isMesh === true);
+          if (!mesh) {
+            console.error("GLTF 中没有可用的 Mesh");
+            return;
+          }
+          const geometry = mesh.geometry;
+          const baseMaterial = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+          if (!baseMaterial) {
+            console.error("GLTF Mesh 缺少材质");
+            return;
+          }
+          const material = baseMaterial.clone();
+          material.roughness = 0.6;
+          material.metalness = 0.1;
+          material.needsUpdate = true;
+
+          instancedMesh = new THREE.InstancedMesh(geometry, material, instanceCount);
+          instancedMesh.castShadow = true;
+          instancedMesh.receiveShadow = true;
+          instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+
+          const spacing = 1.25;
+          const offset = (instancesPerSide - 1) * spacing * 0.5;
+          for (let x = 0; x < instancesPerSide; x += 1) {
+            for (let z = 0; z < instancesPerSide; z += 1) {
+              const index = x * instancesPerSide + z;
+              dummy.position.set((x * spacing) - offset, 0, (z * spacing) - offset);
+              dummy.rotation.y = Math.random() * Math.PI;
+              const scale = 0.55 + Math.random() * 0.45;
+              dummy.scale.setScalar(scale);
+              dummy.updateMatrix();
+              instancedMesh.setMatrixAt(index, dummy.matrix);
+            }
+          }
+          scene.add(instancedMesh);
+        },
+        undefined,
+        (error) => {
+          console.error("GLTF 加载失败", error);
+        }
+      );
+
+      const stats = Stats();
+      statsContainer.appendChild(stats.dom);
+
+      const clock = new THREE.Clock();
+
+      function animate() {
+        stats.begin();
+        const delta = clock.getDelta();
+        if (instancedMesh) {
+          instancedMesh.rotation.y += delta * 0.2;
+          const time = clock.getElapsedTime();
+          for (let i = 0; i < instanceCount; i += 1) {
+            instancedMesh.getMatrixAt(i, dummy.matrix);
+            dummy.rotation.x = Math.sin(time + i) * 0.1;
+            dummy.rotation.z = Math.cos(time + i * 0.5) * 0.06;
+            dummy.updateMatrix();
+            instancedMesh.setMatrixAt(i, dummy.matrix);
+          }
+          instancedMesh.instanceMatrix.needsUpdate = true;
+        }
+        renderer.render(scene, camera);
+        stats.end();
+        requestAnimationFrame(animate);
+      }
+
+      animate();
+
+      function resize() {
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        renderer.setSize(width, height);
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+      }
+
+      window.addEventListener("resize", resize);
+    </script>
+  </body>
+</html>
