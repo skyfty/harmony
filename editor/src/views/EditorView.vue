@@ -103,9 +103,6 @@ const exportErrorMessage = ref<string | null>(null)
 const exportDialogFileName = ref('scene')
 const exportPreferences = ref<SceneExportOptions>({
   fileName: 'scene',
-  includeTextures: true,
-  includeAnimations: true,
-  includeSkybox: true,
   includeLights: true,
   includeHiddenNodes: true,
   includeSkeletons: true,
@@ -1203,9 +1200,6 @@ let pendingSceneSave: Promise<boolean> | null = null
 const SCENE_PREVIEW_EXPORT_OPTIONS: SceneExportOptions = {
   format: 'json',
   fileName: 'preview',
-  includeTextures: true,
-  includeAnimations: true,
-  includeSkybox: true,
   includeLights: true,
   includeHiddenNodes: true,
   includeSkeletons: true,

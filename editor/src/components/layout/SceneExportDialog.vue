@@ -35,9 +35,6 @@ function getInitialFormState(): SceneExportOptions {
   const sanitizedName = sanitizeInputName(props.defaultFileName || 'scene')
   return {
     fileName: sanitizedName || 'scene',
-    includeTextures: props.initialOptions.includeTextures,
-    includeAnimations: props.initialOptions.includeAnimations,
-    includeSkybox: props.initialOptions.includeSkybox,
     includeLights: props.initialOptions.includeLights,
     includeHiddenNodes: props.initialOptions.includeHiddenNodes,
     includeSkeletons: props.initialOptions.includeSkeletons,
@@ -242,27 +239,6 @@ function handlePublish() {
         </div>
 
         <div class="options-grid">
-          <v-checkbox
-            v-model="form.includeTextures"
-            :disabled="exporting"
-            label="Include textures"
-            density="compact"
-            hide-details
-          />
-          <v-checkbox
-            v-model="form.includeAnimations"
-            :disabled="exporting"
-            label="Include animations"
-            density="compact"
-            hide-details
-          />
-          <v-checkbox
-            v-model="form.includeSkybox"
-            :disabled="exporting"
-            label="Skybox parameters"
-            density="compact"
-            hide-details
-          />
           <v-checkbox
             v-model="form.includeLights"
             :disabled="exporting"

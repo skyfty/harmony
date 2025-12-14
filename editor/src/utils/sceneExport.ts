@@ -47,29 +47,6 @@ type RemovedSceneObject = {
     index: number
 }
 
-const MATERIAL_TEXTURE_KEYS = [
-  'map',
-  'normalMap',
-  'metalnessMap',
-  'roughnessMap',
-  'emissiveMap',
-  'aoMap',
-  'alphaMap',
-  'lightMap',
-  'specularMap',
-  'envMap',
-  'clearcoatMap',
-  'clearcoatNormalMap',
-  'clearcoatRoughnessMap',
-  'sheenColorMap',
-  'sheenRoughnessMap',
-  'transmissionMap',
-  'thicknessMap',
-  'displacementMap',
-  'bumpMap',
-  'gradientMap',
-] as const
-
 const EDITOR_HELPER_TYPES = new Set<string>([
     'GridHelper',
     'AxesHelper',
@@ -172,23 +149,20 @@ function removeEditorHelpers(scene: THREE.Scene) {
 }
 
 async function exportGLB(scene: THREE.Scene, settings?: GLBExportSettings) {
-    const includeAnimations = settings?.includeAnimations !== false
-    const animations = includeAnimations ? getAnimations(scene) : []
-    const optimizedAnimations = []
-    if (includeAnimations) {
-        for ( const animation of animations ) {
-            optimizedAnimations.push( animation.clone().optimize() );
-        }
-    }
-    const exporter = new GLTFExporter()
-    const result = await exporter.parseAsync( scene,{
-        binary: true,
-        animations: optimizedAnimations,
-        onlyVisible: settings?.onlyVisible ?? true,
-        includeCustomExtensions: settings?.includeCustomExtensions ?? true,
-    });
-    const blob = new Blob([result as ArrayBuffer], { type: 'model/gltf-binary' })
-    return blob;
+  const animations = getAnimations(scene)
+  const optimizedAnimations: THREE.AnimationClip[] = []
+  for (const animation of animations) {
+    optimizedAnimations.push(animation.clone().optimize())
+  }
+  const exporter = new GLTFExporter()
+  const result = await exporter.parseAsync(scene, {
+    binary: true,
+    animations: optimizedAnimations,
+    onlyVisible: settings?.onlyVisible ?? true,
+    includeCustomExtensions: settings?.includeCustomExtensions ?? true,
+  })
+  const blob = new Blob([result as ArrayBuffer], { type: 'model/gltf-binary' })
+  return blob
 }
 
 function cloneMeshMaterials(root: THREE.Object3D) {
@@ -206,28 +180,6 @@ function cloneMeshMaterials(root: THREE.Object3D) {
   })
 }
 
-function stripMaterialTextures(root: THREE.Object3D) {
-  root.traverse((node) => {
-    const mesh = node as THREE.Mesh
-    if (!(mesh as any)?.isMesh) {
-      return
-    }
-    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-    materials.forEach((material) => {
-      if (!material) {
-        return
-      }
-  const matAny = material as unknown as Record<string, unknown>
-      for (const key of MATERIAL_TEXTURE_KEYS) {
-        if (matAny[key]) {
-          matAny[key] = null
-        }
-      }
-      material.needsUpdate = true
-    })
-  })
-}
-
 function removeLights(root: THREE.Object3D) {
   const collected: THREE.Object3D[] = []
   root.traverse((node) => {
@@ -236,15 +188,6 @@ function removeLights(root: THREE.Object3D) {
     }
   })
   collected.forEach((light) => light.parent?.remove(light))
-}
-
-function removeSkybox(scene: THREE.Scene) {
-  const skybox = scene.getObjectByName('HarmonySky')
-  if (skybox?.parent) {
-    skybox.parent.remove(skybox)
-  }
-  scene.environment = null
-  scene.background = null
 }
 
 function stripSkeletonData(root: THREE.Object3D) {
@@ -337,31 +280,22 @@ export async function prepareJsonSceneExport(snapshot: StoredSceneDocument, opti
     packageAssetMap: snapshot.packageAssetMap,
     resourceSummary: snapshot.resourceSummary,
     lazyLoadMeshes: options.lazyLoadMeshes ?? true,
-  };
+  }
   return await sanitizeSceneDocumentForJsonExport(exportDocument, options)
-
 }
 export async function prepareGLBSceneExport(scene: THREE.Scene, options: SceneExportOptions): Promise<Blob> {
   if (!scene) {
     throw new Error('Scene not initialized')
   }
-  const includeTextures = options.includeTextures ?? true
-  const includeAnimations = options.includeAnimations ?? true
-  const includeSkybox = options.includeSkybox ?? true
   const includeLights = options.includeLights ?? true
   const includeHiddenNodes = options.includeHiddenNodes ?? true
   const includeSkeletons = options.includeSkeletons ?? true
   const includeExtras = options.includeExtras ?? true
 
-
   const exportScene = clone(scene) as THREE.Scene
   removeEditorHelpers(exportScene)
 
   cloneMeshMaterials(exportScene)
-
-  if (!includeSkybox) {
-    removeSkybox(exportScene)
-  }
 
   if (!includeLights) {
     removeLights(exportScene)
@@ -371,16 +305,11 @@ export async function prepareGLBSceneExport(scene: THREE.Scene, options: SceneEx
     stripSkeletonData(exportScene)
   }
 
-  if (!includeTextures) {
-    stripMaterialTextures(exportScene)
-  }
-
   if (options.rotateCoordinateSystem) {
     rotateSceneForCoordinateSystem(exportScene)
   }
 
   const blob = await exportGLB(exportScene, {
-    includeAnimations,
     onlyVisible: includeHiddenNodes ? false : true,
     includeCustomExtensions: includeExtras,
   })
@@ -405,7 +334,7 @@ async function sanitizeSceneDocumentForJsonExport(
   const removedNodeIds = new Set<string>()
   const outlineCandidates: OutlineCandidate[] = []
   const rigidbodyCandidates: RigidbodyExportCandidate[] = []
-  const sanitizedMaterials = document.materials.map((material) => sanitizeSceneMaterial(material, options.includeTextures))
+  const sanitizedMaterials = document.materials.map((material) => sanitizeSceneMaterial(material))
   const sanitizedNodes = sanitizeNodesForJsonExport(
     document.nodes,
     options,
@@ -419,7 +348,7 @@ async function sanitizeSceneDocumentForJsonExport(
     outlineMeshMap = await generateOutlineMeshesForCandidates(outlineCandidates, options)
   }
 
-  await applyRigidbodyMetadata(sanitizedNodes,rigidbodyCandidates)
+  await applyRigidbodyMetadata(sanitizedNodes, rigidbodyCandidates)
 
   const sanitizedDocument: SceneJsonExportDocument = {
     ...document,
@@ -470,9 +399,6 @@ function shouldExcludeNodeForJsonExport(node: SceneNode, options: SceneExportOpt
     return true
   }
   if (!options.includeLights && (node.nodeType === 'Light' || Boolean(node.light))) {
-    return true
-  }
-  if (!options.includeSkybox && node.name === 'HarmonySky') {
     return true
   }
   if (node.nodeType === 'Sky' || node.nodeType === 'Environment') {
@@ -528,7 +454,7 @@ function sanitizeNodeForJsonExport(
   }
 
   if (node.materials?.length) {
-    sanitized.materials = node.materials.map((material) => sanitizeSceneNodeMaterial(material, options.includeTextures))
+    sanitized.materials = node.materials.map((material) => sanitizeSceneNodeMaterial(material))
   } else if ('materials' in sanitized) {
     delete sanitized.materials
   }
@@ -561,7 +487,7 @@ function sanitizeNodeForJsonExport(
     }
   }
 
-  if (!options.includeTextures && sanitized.dynamicMesh?.type === 'Ground') {
+  if (sanitized.dynamicMesh?.type === 'Ground') {
     sanitized.dynamicMesh = {
       ...sanitized.dynamicMesh,
       textureDataUrl: null,
@@ -955,9 +881,6 @@ function sanitizeNodeComponentsForJsonExport(
     if (!component) {
       return
     }
-    if (!options.includeAnimations && /animation/i.test(component.type)) {
-      return
-    }
     if (!options.includeSkeletons && /skeleton/i.test(component.type)) {
       return
     }
@@ -975,28 +898,18 @@ function collectNodeTreeIds(node: SceneNode, bucket: Set<string>) {
   }
 }
 
-function sanitizeSceneMaterial(material: SceneMaterial, includeTextures: boolean): SceneMaterial {
+function sanitizeSceneMaterial(material: SceneMaterial): SceneMaterial {
   const existingTextures = material.textures ?? {}
   return {
     ...material,
-    textures: includeTextures ? { ...existingTextures } : reduceTexturesToNull(existingTextures),
+    textures: { ...existingTextures },
   }
 }
 
-function sanitizeSceneNodeMaterial(material: SceneNodeMaterial, includeTextures: boolean): SceneNodeMaterial {
+function sanitizeSceneNodeMaterial(material: SceneNodeMaterial): SceneNodeMaterial {
   const existingTextures = material.textures ?? {}
   return {
     ...material,
-    textures: includeTextures ? { ...existingTextures } : reduceTexturesToNull(existingTextures),
+    textures: { ...existingTextures },
   }
-}
-
-function reduceTexturesToNull(
-  textures: Partial<Record<SceneMaterialTextureSlot, unknown>>,
-): Partial<Record<SceneMaterialTextureSlot, null>> {
-  const stripped: Partial<Record<SceneMaterialTextureSlot, null>> = {}
-  for (const key of Object.keys(textures) as SceneMaterialTextureSlot[]) {
-    stripped[key] = null
-  }
-  return stripped
 }

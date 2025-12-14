@@ -8,9 +8,6 @@ export type SceneExportFormat =  'glb' | 'json'
 export interface SceneExportOptions {
   format: SceneExportFormat
   fileName: string
-  includeTextures: boolean
-  includeAnimations: boolean
-  includeSkybox: boolean
   includeLights: boolean
   includeHiddenNodes: boolean
   includeSkeletons: boolean
@@ -20,7 +17,6 @@ export interface SceneExportOptions {
 }
 
 export interface GLBExportSettings {
-    includeAnimations?: boolean
     onlyVisible?: boolean
     includeCustomExtensions?: boolean
 }
