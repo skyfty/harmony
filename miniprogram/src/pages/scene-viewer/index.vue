@@ -357,6 +357,7 @@ import {
 } from '@harmony/schema';
 import type { TerrainScatterStoreSnapshot, TerrainScatterInstance } from '@harmony/schema/terrain-scatter';
 import { ComponentManager } from '@schema/components/componentManager';
+import { setActiveMultiuserSceneId } from '@schema/multiuserContext';
 import {
   behaviorComponentDefinition,
   guideboardComponentDefinition,
@@ -368,6 +369,7 @@ import {
   rigidbodyComponentDefinition,
   vehicleComponentDefinition,
   protagonistComponentDefinition,
+  onlineComponentDefinition,
   WARP_GATE_RUNTIME_REGISTRY_KEY,
   WARP_GATE_EFFECT_ACTIVE_FLAG,
   GUIDEBOARD_RUNTIME_REGISTRY_KEY,
@@ -377,6 +379,7 @@ import {
   RIGIDBODY_COMPONENT_TYPE,
   RIGIDBODY_METADATA_KEY,
   VEHICLE_COMPONENT_TYPE,
+  ONLINE_COMPONENT_TYPE,
   clampGuideboardComponentProps,
   computeGuideboardEffectActive,
   clampVehicleComponentProps,
@@ -834,9 +837,12 @@ previewComponentManager.registerDefinition(behaviorComponentDefinition);
 previewComponentManager.registerDefinition(rigidbodyComponentDefinition);
 previewComponentManager.registerDefinition(vehicleComponentDefinition);
 previewComponentManager.registerDefinition(protagonistComponentDefinition);
+previewComponentManager.registerDefinition(onlineComponentDefinition);
 
 const previewNodeMap = new Map<string, SceneNode>();
 const assetNodeIdMap = new Map<string, Set<string>>();
+const multiuserNodeIds = new Set<string>();
+const multiuserNodeObjects = new Map<string, THREE.Object3D>();
 const instancedMeshGroup = new THREE.Group();
 instancedMeshGroup.name = 'InstancedMeshes';
 const instancedMeshes: THREE.InstancedMesh[] = [];
@@ -2442,6 +2448,40 @@ function rebuildPreviewNodeMap(nodes: SceneNode[] | undefined | null) {
       stack.push(...node.children);
     }
   }
+}
+
+function collectMultiuserNodeIds(nodes: SceneNode[] | undefined | null, collector: Set<string>): void {
+  if (!Array.isArray(nodes)) {
+    return;
+  }
+  const stack: SceneNode[] = [...nodes];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    if (node.components?.[ONLINE_COMPONENT_TYPE]) {
+      collector.add(node.id);
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+}
+
+function refreshMultiuserNodeReferences(document: SceneJsonExportDocument | null): void {
+  multiuserNodeIds.clear();
+  multiuserNodeObjects.clear();
+  if (!document) {
+    return;
+  }
+  collectMultiuserNodeIds(document.nodes, multiuserNodeIds);
+  multiuserNodeIds.forEach((nodeId) => {
+    const object = nodeObjectMap.get(nodeId);
+    if (object) {
+      multiuserNodeObjects.set(nodeId, object);
+    }
+  });
 }
 
 function resolveNodeById(nodeId: string): SceneNode | null {
@@ -6727,6 +6767,8 @@ function teardownRenderer() {
     releaseModelInstance(nodeId);
   });
   nodeObjectMap.clear();
+  multiuserNodeIds.clear();
+  multiuserNodeObjects.clear();
   resetPhysicsWorld();
   lazyPlaceholderStates.clear();
   deferredInstancingNodeIds.clear();
@@ -6753,6 +6795,7 @@ function teardownRenderer() {
   sunDirectionalLight = null;
   renderContext = null;
   canvasResult = null;
+  setActiveMultiuserSceneId(null);
   currentDocument = null;
   sceneGraphRoot = null;
   viewerResourceCache = null;
@@ -6879,6 +6922,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   activeCameraWatchTween = null;
   const { canvas } = result;
   currentDocument = payload.document;
+  setActiveMultiuserSceneId(payload.document.id ?? null);
   resetProtagonistPoseState();
   const environmentSettings = resolveDocumentEnvironment(payload.document);
   if (behaviorAlertToken.value) {
@@ -6993,6 +7037,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   rebuildPreviewNodeMap(payload.document.nodes);
   previewComponentManager.syncScene(payload.document.nodes ?? []);
   indexSceneObjects(graph.root);
+  refreshMultiuserNodeReferences(payload.document);
   refreshBehaviorProximityCandidates();
   refreshAnimationControllers(graph.root);
   ensureBehaviorTapHandler(canvas as HTMLCanvasElement, camera);
@@ -7020,6 +7065,14 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
     watchEffect((onCleanup) => {
       const { cancel } = result.useFrame((delta) => {
         const deltaSeconds = normalizeFrameDelta(delta);
+        if (renderContext && multiuserNodeObjects.size) {
+          const cameraObj = renderContext.camera;
+          multiuserNodeObjects.forEach((object) => {
+            object.position.copy(cameraObj.position);
+            object.quaternion.copy(cameraObj.quaternion);
+            object.updateMatrixWorld(true);
+          });
+        }
         if (deltaSeconds > 0) {
           updateDriveInputRelaxation(deltaSeconds);
         }

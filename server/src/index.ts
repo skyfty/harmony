@@ -14,6 +14,7 @@ import { errorHandler } from '@/middleware/errorHandler'
 import routes from '@/routes'
 import { createInitialAdmin, ensureUploaderUser, ensureMiniProgramTestUser } from '@/services/authService'
 import { koaBody } from '@/utils/bodyParser'
+import { MultiuserService } from '@/services/multiuserService'
 
 type HarmonyKoa = Koa<DefaultState, DefaultContext>
 
@@ -117,6 +118,9 @@ async function bootstrap(): Promise<void> {
 
   registerRoutes(app)
 
+  const multiuserService = new MultiuserService(appConfig.multiuserPort)
+  multiuserService.start()
+
   const server = app.listen(appConfig.port, () => {
     console.log(`Server listening on http://localhost:${appConfig.port}`)
   })
@@ -124,6 +128,7 @@ async function bootstrap(): Promise<void> {
   const shutdown = async () => {
     server.close()
     await disconnectDatabase().catch(() => undefined)
+    await multiuserService.stop().catch(() => undefined)
     process.exit(0)
   }
 

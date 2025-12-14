@@ -29,6 +29,7 @@ import {
   DEFAULT_RIGIDBODY_RESTITUTION,
   DISPLAY_BOARD_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
+  ONLINE_COMPONENT_TYPE,
   PROTAGONIST_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
   WARP_GATE_COMPONENT_TYPE,
@@ -1712,6 +1713,28 @@ function hasProtagonistNode(nodes: SceneNode[] | null | undefined): boolean {
 
 const canAddProtagonist = computed(() => !hasProtagonistNode(sceneStore.nodes))
 
+function hasOnlineComponentNode(nodes: SceneNode[] | null | undefined): boolean {
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    return false
+  }
+  const stack: SceneNode[] = [...nodes]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    if (node.components?.[ONLINE_COMPONENT_TYPE]) {
+      return true
+    }
+    if (node.children?.length) {
+      stack.push(...node.children)
+    }
+  }
+  return false
+}
+
+const canAddMultiuser = computed(() => !hasOnlineComponentNode(sceneStore.nodes))
+
 async function handleCreateProtagonistNode(): Promise<void> {
   if (!canAddProtagonist.value) {
     return
@@ -1766,6 +1789,52 @@ async function handleCreateProtagonistNode(): Promise<void> {
 
   if (protagonistComponent && (protagonistComponent.props as ProtagonistComponentProps | undefined)?.name !== name) {
     sceneStore.updateNodeComponentProps(created.id, protagonistComponent.id, { name })
+  }
+
+  sceneStore.selectNode(created.id)
+}
+
+async function handleCreateMultiuserNode(): Promise<void> {
+  if (!canAddMultiuser.value) {
+    return
+  }
+  const name = 'Multiuser'
+  const helperObject = new THREE.Object3D()
+  helperObject.name = name
+  helperObject.userData = {
+    ...(helperObject.userData ?? {}),
+    editorOnly: true,
+    ignoreGridSnapping: true,
+    multiuser: true,
+  }
+
+  const created = await sceneStore.addModelNode({
+    object: helperObject,
+    nodeType: 'Empty',
+    name,
+    baseY: 0,
+    position: new THREE.Vector3(0, 0, 0),
+    parentId: undefined,
+    snapToGrid: false,
+    editorFlags: {
+      editorOnly: true,
+      ignoreGridSnapping: true,
+    },
+  })
+
+  if (!created) {
+    return
+  }
+
+  const component = sceneStore.addNodeComponent(created.id, ONLINE_COMPONENT_TYPE)
+  if (component) {
+    sceneStore.updateNodeComponentProps(created.id, component.id, {
+      enabled: true,
+      maxUsers: 10,
+      syncInterval: 100,
+      server: 'ws://localhost',
+      port: 7645,
+    })
   }
 
   sceneStore.selectNode(created.id)
@@ -1894,9 +1963,10 @@ function handleAddLight(type: LightNodeType) {
       <v-list-item title="Group" @click="handleAddGroup()" />
       <v-list-item title="Empty" @click="handleCreateEmptyNode()" />
       <v-list-item title="Protagonist" @click="handleCreateProtagonistNode()" :disabled="!canAddProtagonist" />
-            <v-list-item 
-        title="Ground" 
-        @click="handleAddGround()" 
+      <v-list-item title="Multiuser" @click="handleCreateMultiuserNode()" :disabled="!canAddMultiuser" />
+      <v-list-item
+        title="Ground"
+        @click="handleAddGround()"
         :disabled="!canAddGround"
       />
       <v-menu  transition="none" location="end" offset="8">

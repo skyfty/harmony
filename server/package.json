@@ -26,21 +26,22 @@
     "mongoose": "^7.7.0",
     "nanoid": "^4.0.2",
     "openai": "^4.56.1",
-    "tsx": "^4.15.7"
+    "tsx": "^4.15.7",
+    "ws": "^8.18.3"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
+    "@types/fs-extra": "^11.0.4",
     "@types/jsonwebtoken": "^9.0.6",
     "@types/koa": "^2.13.10",
     "@types/koa__cors": "^4.0.3",
     "@types/koa-logger": "^3.1.4",
     "@types/koa-router": "^7.4.8",
     "@types/koa-static": "^4.0.4",
-    "@types/fs-extra": "^11.0.4",
     "@types/node": "^20.16.5",
+    "ts-node": "^10.9.2",
     "tsc-alias": "^1.8.10",
     "tslib": "^2.7.0",
-    "ts-node": "^10.9.2",
     "typescript": "~5.9.3"
   }
 }

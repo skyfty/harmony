@@ -784,3 +784,6 @@ export interface SceneClipboard {
   runtimeSnapshots: Map<string, THREE.Object3D>
   cut: boolean
 }
+
+export function setActiveMultiuserSceneId(sceneId: string | null): void
+export function getActiveMultiuserSceneId(): string | null

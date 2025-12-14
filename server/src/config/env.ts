@@ -29,6 +29,7 @@ export const appConfig = {
     password: process.env.MINIPROGRAM_TEST_USER_PASSWORD ?? 'test1234',
     displayName: process.env.MINIPROGRAM_TEST_USER_DISPLAY_NAME ?? 'Test Account',
   },
+  multiuserPort: Number(process.env.MULTIUSER_PORT ?? 7645),
   openAi: {
     apiKey: process.env.OPENAI_API_KEY ?? '',
     model: process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
