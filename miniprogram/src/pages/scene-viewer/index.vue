@@ -2774,22 +2774,23 @@ async function syncTerrainScatterInstances(
       if (!assetId) {
         continue;
       }
-      const group = await ensureModelInstanceGroup(assetId, null, resourceCache);
-      if (!group || !group.meshes.length) {
-        continue;
-      }
-      ensureInstancedMeshesRegistered(assetId);
-      const instances = Array.isArray(layer.instances) ? (layer.instances as TerrainScatterInstance[]) : [];
-      for (const instance of instances) {
-        const nodeId = buildScatterNodeId(layer?.id ?? null, instance.id);
-        const binding = allocateModelInstance(assetId, nodeId);
-        if (!binding) {
-          continue;
+      ensureModelInstanceGroup(assetId, null, resourceCache).then((group) => {
+        if (!group || !group.meshes.length) {
+          return;
         }
-        const matrix = composeScatterMatrix(instance, groundMesh, scatterMatrixHelper);
-        updateModelInstanceMatrix(nodeId, matrix);
-        scatterInstanceNodeIds.add(nodeId);
-      }
+        ensureInstancedMeshesRegistered(assetId);
+        const instances = Array.isArray(layer.instances) ? (layer.instances as TerrainScatterInstance[]) : [];
+        for (const instance of instances) {
+          const nodeId = buildScatterNodeId(layer?.id ?? null, instance.id);
+          const binding = allocateModelInstance(assetId, nodeId);
+          if (!binding) {
+            continue;
+          }
+          const matrix = composeScatterMatrix(instance, groundMesh, scatterMatrixHelper);
+          updateModelInstanceMatrix(nodeId, matrix);
+          scatterInstanceNodeIds.add(nodeId);
+        }
+      });
     }
   }
 }
@@ -6997,7 +6998,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   ensureBehaviorTapHandler(canvas as HTMLCanvasElement, camera);
   initializeLazyPlaceholders(payload.document);
   syncPhysicsBodiesForDocument(payload.document);
-  await syncTerrainScatterInstances(payload.document, resourceCache);
+  syncTerrainScatterInstances(payload.document, resourceCache);
 
   const shouldAlignToProtagonist = purposeActiveMode.value === 'level' && !vehicleDriveActive.value;
   syncProtagonistCameraPose({ force: true, applyToCamera: shouldAlignToProtagonist });
