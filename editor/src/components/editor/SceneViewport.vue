@@ -2661,24 +2661,6 @@ function applyAmbientLightSettings(settings: EnvironmentSettings) {
   environmentAmbientLight.intensity = settings.ambientLightIntensity
 }
 
-function applyFogSettings(settings: EnvironmentSettings) {
-  if (!scene) {
-    return
-  }
-  if (settings.fogMode === 'none') {
-    scene.fog = null
-    return
-  }
-  const fogColor = new THREE.Color(settings.fogColor)
-  const density = Math.max(0, settings.fogDensity)
-  if (scene.fog instanceof THREE.FogExp2) {
-    scene.fog.color.copy(fogColor)
-    scene.fog.density = density
-  } else {
-    scene.fog = new THREE.FogExp2(fogColor, density)
-  }
-}
-
 async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   const snapshot = cloneEnvironmentSettingsLocal(settings)
 
@@ -2688,7 +2670,6 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   }
 
   applyAmbientLightSettings(snapshot)
-  applyFogSettings(snapshot)
 
   const backgroundApplied = await applyBackgroundSettings(snapshot.background)
   const environmentApplied = await applyEnvironmentMapSettings(snapshot.environmentMap)
