@@ -34,7 +34,7 @@ import {
   resetMaterialOverrides,
   type MaterialTextureAssignmentOptions,
 } from '@/types/material'
-import { useSceneStore, getRuntimeObject,registerRuntimeObject} from '@/stores/sceneStore'
+import { useSceneStore, getRuntimeObject, registerRuntimeObject, ENVIRONMENT_NODE_ID } from '@/stores/sceneStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
@@ -282,6 +282,7 @@ let stopInstancedMeshSubscription: (() => void) | null = null
 let gridHighlight: THREE.Group | null = null
 let isSunLightSuppressed = false
 let pendingEnvironmentSettings: EnvironmentSettings | null = null
+let latestFogSettings: EnvironmentSettings | null = null
 let shouldRenderSkyBackground = true
 let sky: Sky | null = null
 let resizeObserver: ResizeObserver | null = null
@@ -531,6 +532,7 @@ const canRotateSelection = computed(() =>
 const canDropSelection = computed(() =>
   sceneStore.selectedNodeIds.some((id) => !!id && !sceneStore.isNodeSelectionLocked(id))
 )
+const isEnvironmentNodeSelected = computed(() => sceneStore.selectedNodeId === ENVIRONMENT_NODE_ID)
 const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((tool) => [tool.key, tool.value]))
 
 const activeBuildTool = ref<BuildTool | null>(null)
@@ -1820,7 +1822,12 @@ watch(cloudPreviewEnabled, () => {
 
 watch(environmentSettings, (settings) => {
   void applyEnvironmentSettingsToScene(settings)
+  updateFogForSelection()
 }, { deep: true, immediate: true })
+
+watch(isEnvironmentNodeSelected, () => {
+  updateFogForSelection()
+}, { immediate: true })
 
 function resetCameraView() {
   if (!camera || !orbitControls) return
@@ -2661,8 +2668,46 @@ function applyAmbientLightSettings(settings: EnvironmentSettings) {
   environmentAmbientLight.intensity = settings.ambientLightIntensity
 }
 
+function applyFogSettings(settings: EnvironmentSettings) {
+  if (!scene) {
+    return
+  }
+  if (settings.fogMode === 'none') {
+    scene.fog = null
+    return
+  }
+  const fogColor = new THREE.Color(settings.fogColor)
+  const density = Math.max(0, settings.fogDensity)
+  if (scene.fog instanceof THREE.FogExp2) {
+    scene.fog.color.copy(fogColor)
+    scene.fog.density = density
+  } else {
+    scene.fog = new THREE.FogExp2(fogColor, density)
+  }
+}
+
+function disableFog() {
+  if (!scene) {
+    return
+  }
+  scene.fog = null
+}
+
+function updateFogForSelection() {
+  if (!scene) {
+    return
+  }
+  if (isEnvironmentNodeSelected.value) {
+    const settings = latestFogSettings ?? environmentSettings.value
+    applyFogSettings(settings)
+    return
+  }
+  disableFog()
+}
+
 async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   const snapshot = cloneEnvironmentSettingsLocal(settings)
+  latestFogSettings = snapshot
 
   if (!scene) {
     pendingEnvironmentSettings = snapshot
@@ -2679,6 +2724,7 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   } else {
     pendingEnvironmentSettings = snapshot
   }
+  updateFogForSelection()
 }
 
 function ensureCloudRenderer(): SceneCloudRenderer | null {
