@@ -24,6 +24,7 @@ export interface ModelInstanceGroup {
 export interface ModelInstanceBinding {
   assetId: string
   nodeId: string
+  bindingId: string
   slots: Array<{ mesh: InstancedMesh; handleId: string; index: number }>
 }
 
@@ -43,7 +44,7 @@ interface InstancedMeshHandle {
   capacity: number
   nextIndex: number
   freeSlots: number[]
-  nodeByIndex: Map<number, string>
+  bindingByIndex: Map<number, string>
 }
 
 interface ModelAssetEntry extends ModelInstanceGroup {
@@ -52,7 +53,9 @@ interface ModelAssetEntry extends ModelInstanceGroup {
 
 const modelObjectCache = new Map<string, ModelAssetEntry>()
 const pendingLoads = new Map<string, Promise<ModelAssetEntry>>()
-const nodeBindings = new Map<string, ModelInstanceBinding>()
+const bindingsById = new Map<string, ModelInstanceBinding>()
+const bindingIdsByNodeId = new Map<string, Set<string>>()
+const nodeIdByBindingId = new Map<string, string>()
 const meshHandleLookup = new Map<string, InstancedMeshHandle>()
 const instancedMeshListeners = new Set<(mesh: InstancedMesh, assetId: string) => void>()
 
@@ -92,6 +95,22 @@ export function getOrLoadModelObject(assetId: string, loader: LoaderFn): Promise
 }
 
 export function allocateModelInstance(assetId: string, nodeId: string): ModelInstanceBinding | null {
+  return allocateModelInstanceBinding(assetId, nodeId, nodeId)
+}
+
+export function allocateModelInstanceBinding(assetId: string, bindingId: string, nodeId: string): ModelInstanceBinding | null {
+  if (!bindingId || !nodeId) {
+    return null
+  }
+
+  const existing = bindingsById.get(bindingId)
+  if (existing) {
+    if (existing.assetId === assetId && existing.nodeId === nodeId) {
+      return existing
+    }
+    releaseModelInstanceBinding(bindingId)
+  }
+
   const entry = modelObjectCache.get(assetId)
   if (!entry || !entry.handles.length) {
     return null
@@ -109,11 +128,11 @@ export function allocateModelInstance(assetId: string, nodeId: string): ModelIns
           if (!allocatedHandle) {
             return
           }
-          allocatedHandle.nodeByIndex.delete(allocatedIndex)
+          allocatedHandle.bindingByIndex.delete(allocatedIndex)
           allocatedHandle.freeSlots.push(allocatedIndex)
           if (allocatedIndex === allocatedHandle.mesh.count - 1) {
             let nextCount = allocatedHandle.mesh.count - 1
-            while (nextCount > 0 && !allocatedHandle.nodeByIndex.has(nextCount - 1)) {
+            while (nextCount > 0 && !allocatedHandle.bindingByIndex.has(nextCount - 1)) {
               nextCount -= 1
             }
             allocatedHandle.mesh.count = nextCount
@@ -124,22 +143,64 @@ export function allocateModelInstance(assetId: string, nodeId: string): ModelIns
       index = handle.nextIndex
       handle.nextIndex += 1
     }
-    handle.nodeByIndex.set(index, nodeId)
+    handle.bindingByIndex.set(index, bindingId)
     handle.mesh.count = Math.max(handle.mesh.count, index + 1)
     slots.push({ mesh: handle.mesh, handleId: handle.id, index })
   }
 
-  const binding: ModelInstanceBinding = { assetId, nodeId, slots }
-  nodeBindings.set(nodeId, binding)
+  const binding: ModelInstanceBinding = { assetId, nodeId, bindingId, slots }
+  bindingsById.set(bindingId, binding)
+  nodeIdByBindingId.set(bindingId, nodeId)
+  const bucket = bindingIdsByNodeId.get(nodeId) ?? new Set<string>()
+  bucket.add(bindingId)
+  bindingIdsByNodeId.set(nodeId, bucket)
   return binding
 }
 
+export function getModelInstanceBindingsForNode(nodeId: string): ModelInstanceBinding[] {
+  const bucket = bindingIdsByNodeId.get(nodeId)
+  if (!bucket || bucket.size === 0) {
+    return []
+  }
+  const result: ModelInstanceBinding[] = []
+  bucket.forEach((bindingId) => {
+    const binding = bindingsById.get(bindingId)
+    if (binding) {
+      result.push(binding)
+    }
+  })
+  return result
+}
+
 export function releaseModelInstance(nodeId: string): void {
-  const binding = nodeBindings.get(nodeId)
+  releaseModelInstancesForNode(nodeId)
+}
+
+export function releaseModelInstancesForNode(nodeId: string): void {
+  const bucket = bindingIdsByNodeId.get(nodeId)
+  if (!bucket || bucket.size === 0) {
+    return
+  }
+  Array.from(bucket.values()).forEach((bindingId) => {
+    releaseModelInstanceBinding(bindingId)
+  })
+}
+
+export function releaseModelInstanceBinding(bindingId: string): void {
+  const binding = bindingsById.get(bindingId)
   if (!binding) {
     return
   }
-  nodeBindings.delete(nodeId)
+  bindingsById.delete(bindingId)
+  nodeIdByBindingId.delete(bindingId)
+
+  const nodeBucket = bindingIdsByNodeId.get(binding.nodeId)
+  if (nodeBucket) {
+    nodeBucket.delete(bindingId)
+    if (nodeBucket.size === 0) {
+      bindingIdsByNodeId.delete(binding.nodeId)
+    }
+  }
 
   binding.slots.forEach(({ handleId, index }) => {
     const handle = meshHandleLookup.get(handleId)
@@ -147,21 +208,21 @@ export function releaseModelInstance(nodeId: string): void {
       return
     }
     const lastVisibleIndex = handle.mesh.count - 1
-    handle.nodeByIndex.delete(index)
+    handle.bindingByIndex.delete(index)
 
     let freedSlot = index
 
     if (lastVisibleIndex >= 0 && index !== lastVisibleIndex) {
-      const movingNodeId = handle.nodeByIndex.get(lastVisibleIndex)
-      if (movingNodeId) {
+      const movingBindingId = handle.bindingByIndex.get(lastVisibleIndex)
+      if (movingBindingId) {
         handle.mesh.getMatrixAt(lastVisibleIndex, tempInstanceMatrix)
         handle.mesh.setMatrixAt(index, tempInstanceMatrix)
         handle.mesh.instanceMatrix.needsUpdate = true
 
-        handle.nodeByIndex.set(index, movingNodeId)
-        handle.nodeByIndex.delete(lastVisibleIndex)
+        handle.bindingByIndex.set(index, movingBindingId)
+        handle.bindingByIndex.delete(lastVisibleIndex)
 
-        const movingBinding = nodeBindings.get(movingNodeId)
+        const movingBinding = bindingsById.get(movingBindingId)
         if (movingBinding) {
           const slot = movingBinding.slots.find(
             (entry) => entry.handleId === handleId && entry.index === lastVisibleIndex,
@@ -181,11 +242,22 @@ export function releaseModelInstance(nodeId: string): void {
 }
 
 export function getModelInstanceBinding(nodeId: string): ModelInstanceBinding | null {
-  return nodeBindings.get(nodeId) ?? null
+  return bindingsById.get(nodeId) ?? null
 }
 
 export function updateModelInstanceMatrix(nodeId: string, matrix: Matrix4): void {
-  const binding = nodeBindings.get(nodeId)
+  const binding = bindingsById.get(nodeId)
+  if (!binding) {
+    return
+  }
+  binding.slots.forEach(({ mesh, index }) => {
+    mesh.setMatrixAt(index, matrix)
+    mesh.instanceMatrix.needsUpdate = true
+  })
+}
+
+export function updateModelInstanceBindingMatrix(bindingId: string, matrix: Matrix4): void {
+  const binding = bindingsById.get(bindingId)
   if (!binding) {
     return
   }
@@ -224,7 +296,11 @@ export function findNodeIdForInstance(mesh: InstancedMesh, instanceIndex: number
   if (!handle) {
     return null
   }
-  return handle.nodeByIndex.get(instanceIndex) ?? null
+  const bindingId = handle.bindingByIndex.get(instanceIndex) ?? null
+  if (!bindingId) {
+    return null
+  }
+  return nodeIdByBindingId.get(bindingId) ?? null
 }
 
 export function invalidateModelObject(assetId: string): void {
@@ -241,10 +317,10 @@ export function invalidateModelObject(assetId: string): void {
   modelObjectCache.delete(assetId)
   pendingLoads.delete(assetId)
 
-  Array.from(nodeBindings.values())
+  Array.from(bindingsById.values())
     .filter((binding) => binding.assetId === assetId)
     .forEach((binding) => {
-      nodeBindings.delete(binding.nodeId)
+      releaseModelInstanceBinding(binding.bindingId)
     })
 }
 
@@ -256,7 +332,9 @@ export function clearModelObjectCache(): void {
   })
   modelObjectCache.clear()
   pendingLoads.clear()
-  nodeBindings.clear()
+  bindingsById.clear()
+  bindingIdsByNodeId.clear()
+  nodeIdByBindingId.clear()
   meshHandleLookup.clear()
 }
 
@@ -293,7 +371,7 @@ function buildModelAssetEntry(assetId: string, prepared: Object3D): ModelAssetEn
       capacity: DEFAULT_INSTANCE_CAPACITY,
       nextIndex: 0,
       freeSlots: [],
-      nodeByIndex: new Map(),
+      bindingByIndex: new Map(),
     }
     meshHandleLookup.set(handle.id, handle)
     instancedMeshListeners.forEach((listener) => listener(mesh, assetId))
@@ -379,7 +457,7 @@ function extractSubmeshes(root: Object3D): ParsedSubmesh[] {
 
 function shrinkInstancedMeshCount(handle: InstancedMeshHandle): void {
   let nextCount = handle.mesh.count
-  while (nextCount > 0 && !handle.nodeByIndex.has(nextCount - 1)) {
+  while (nextCount > 0 && !handle.bindingByIndex.has(nextCount - 1)) {
     nextCount -= 1
   }
   if (nextCount !== handle.mesh.count) {

@@ -47,8 +47,15 @@ import {
   getCachedModelObject,
   getOrLoadModelObject,
   subscribeInstancedMeshes,
-  getModelInstanceBinding,
+  getModelInstanceBindingsForNode,
 } from '@schema/modelObjectCache'
+import {
+  buildContinuousInstancedModelUserDataPatch,
+  clearContinuousInstancedModelPreview,
+  computeDefaultInstancedSpacing,
+  getContinuousInstancedModelUserData,
+  syncContinuousInstancedModelPreviewRange,
+} from '@schema/continuousInstancedModel'
 import { loadObjectFromFile } from '@schema/assetImport'
 import type { CameraControlMode } from '@harmony/schema'
 import {createPrimitiveMesh}  from '@harmony/schema'
@@ -138,7 +145,6 @@ import {
   MIN_CAMERA_HEIGHT,
   MIN_TARGET_HEIGHT,
   GRID_MAJOR_SPACING,
-  GRID_MINOR_SPACING,
   GRID_SNAP_SPACING,
   WALL_DIAGONAL_SNAP_THRESHOLD,
   GRID_HIGHLIGHT_HEIGHT,
@@ -679,6 +685,179 @@ let viewportToolbarResizeObserver: ResizeObserver | null = null
 
 let pointerTrackingState: PointerTrackingState | null = null
 
+type ContinuousInstancedCreateState = {
+  pointerId: number
+  nodeId: string
+  assetId: string
+  object: THREE.Object3D
+  startWorldPoint: THREE.Vector3
+  spacing: number
+  existingCount: number
+  previewEndIndexExclusive: number
+  initialRotation: THREE.Euler
+}
+
+let continuousInstancedCreateState: ContinuousInstancedCreateState | null = null
+
+const continuousPointerWorldHelper = new THREE.Vector3()
+const continuousDragDirHelper = new THREE.Vector3()
+const continuousYAxisHelper = new THREE.Vector3(0, 1, 0)
+const continuousParentWorldQuaternion = new THREE.Quaternion()
+const continuousDesiredWorldQuaternion = new THREE.Quaternion()
+const continuousLocalQuaternion = new THREE.Quaternion()
+
+function beginContinuousInstancedCreate(event: PointerEvent, node: SceneNode, object: THREE.Object3D): boolean {
+  if (!canvasRef.value || !camera || !scene) {
+    return false
+  }
+  if (event.button !== 0 || !event.shiftKey) {
+    return false
+  }
+  if (props.activeTool !== 'select') {
+    return false
+  }
+  if (!object.userData?.instancedAssetId) {
+    return false
+  }
+
+  if (!raycastGroundPoint(event, continuousPointerWorldHelper)) {
+    return false
+  }
+
+  const assetId = object.userData.instancedAssetId as string
+  const definition = getContinuousInstancedModelUserData(node)
+  const existingCount = definition?.count ?? 1
+  const spacing = definition?.spacing ?? computeDefaultInstancedSpacing(object.userData?.instancedBounds)
+
+  continuousInstancedCreateState = {
+    pointerId: event.pointerId,
+    nodeId: node.id,
+    assetId,
+    object,
+    startWorldPoint: continuousPointerWorldHelper.clone(),
+    spacing: Math.max(1e-4, spacing),
+    existingCount: Math.max(1, existingCount),
+    previewEndIndexExclusive: Math.max(1, existingCount),
+    initialRotation: object.rotation.clone(),
+  }
+
+  disableOrbitForSelectDrag()
+  try {
+    canvasRef.value.setPointerCapture(event.pointerId)
+  } catch (_error) {
+    /* noop */
+  }
+
+  event.preventDefault()
+  event.stopPropagation()
+  event.stopImmediatePropagation()
+  return true
+}
+
+function updateContinuousInstancedCreate(event: PointerEvent): boolean {
+  const state = continuousInstancedCreateState
+  if (!state || event.pointerId !== state.pointerId) {
+    return false
+  }
+  if (!raycastGroundPoint(event, continuousPointerWorldHelper)) {
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return true
+  }
+
+  continuousDragDirHelper.copy(continuousPointerWorldHelper).sub(state.startWorldPoint)
+  continuousDragDirHelper.y = 0
+  const distance = continuousDragDirHelper.length()
+
+  // Update node facing direction from drag.
+  if (distance > 1e-4) {
+    const yaw = Math.atan2(continuousDragDirHelper.x, continuousDragDirHelper.z)
+    continuousDesiredWorldQuaternion.setFromAxisAngle(continuousYAxisHelper, yaw)
+    if (state.object.parent) {
+      state.object.parent.getWorldQuaternion(continuousParentWorldQuaternion)
+    } else {
+      continuousParentWorldQuaternion.identity()
+    }
+    continuousLocalQuaternion.copy(continuousParentWorldQuaternion).invert().multiply(continuousDesiredWorldQuaternion)
+    state.object.quaternion.copy(continuousLocalQuaternion)
+    state.object.rotation.setFromQuaternion(continuousLocalQuaternion)
+  }
+
+  // Sync committed instances (including rotation changes)
+  syncInstancedTransform(state.object, false)
+
+  const spacing = state.spacing
+  const desiredTotal = Math.max(state.existingCount, Math.floor(distance / spacing) + 1)
+  const previousEnd = state.previewEndIndexExclusive
+  const nextEnd = Math.max(state.existingCount, desiredTotal)
+
+  syncContinuousInstancedModelPreviewRange({
+    nodeId: state.nodeId,
+    assetId: state.assetId,
+    object: state.object,
+    spacing,
+    startIndex: state.existingCount,
+    endIndexExclusive: nextEnd,
+    previousEndIndexExclusive: previousEnd,
+  })
+
+  state.previewEndIndexExclusive = nextEnd
+
+  event.preventDefault()
+  event.stopPropagation()
+  event.stopImmediatePropagation()
+  return true
+}
+
+function finalizeContinuousInstancedCreate(event: PointerEvent, cancel = false): boolean {
+  const state = continuousInstancedCreateState
+  if (!state || event.pointerId !== state.pointerId) {
+    return false
+  }
+  continuousInstancedCreateState = null
+
+  if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
+    canvasRef.value.releasePointerCapture(event.pointerId)
+  }
+
+  restoreOrbitAfterSelectDrag()
+
+  clearContinuousInstancedModelPreview(state.nodeId, state.existingCount, state.previewEndIndexExclusive)
+
+  if (cancel) {
+    state.object.rotation.copy(state.initialRotation)
+    state.object.updateMatrixWorld(true)
+    syncInstancedTransform(state.object, false)
+    updateSelectionHighlights()
+    return true
+  }
+
+  const nextCount = Math.max(state.existingCount, state.previewEndIndexExclusive)
+  if (nextCount > state.existingCount) {
+    const node = findSceneNode(sceneStore.nodes, state.nodeId)
+    if (node) {
+      const nextUserData = buildContinuousInstancedModelUserDataPatch({
+        previousUserData: node.userData,
+        spacing: state.spacing,
+        count: nextCount,
+      })
+      sceneStore.updateNodeUserData(state.nodeId, nextUserData as Record<string, unknown>)
+    }
+  }
+
+  // Commit facing direction (rotation)
+  emitTransformUpdates([
+    {
+      id: state.nodeId,
+      rotation: toEulerLike(state.object.rotation),
+    },
+  ])
+
+  updateSelectionHighlights()
+  return true
+}
+
 type WallSessionSegment = {
   start: THREE.Vector3
   end: THREE.Vector3
@@ -775,7 +954,8 @@ const {
   instancedMeshGroup,
   instancedMeshes,
   {
-    syncInstancedOutlineEntryTransform
+    syncInstancedOutlineEntryTransform,
+    resolveSceneNodeById: (nodeId: string) => findSceneNode(sceneStore.nodes, nodeId)
   }
 )
 
@@ -3351,8 +3531,8 @@ function ensureInstancedOutlineEntry(nodeId: string): InstancedOutlineEntry {
 }
 
 function updateInstancedOutlineEntry(nodeId: string, object: THREE.Object3D | null): THREE.Mesh[] {
-  const binding = getModelInstanceBinding(nodeId)
-  if (!binding || !binding.slots.length) {
+  const bindings = getModelInstanceBindingsForNode(nodeId)
+  if (!bindings.length) {
     releaseInstancedOutlineEntry(nodeId, false)
     return []
   }
@@ -3362,54 +3542,57 @@ function updateInstancedOutlineEntry(nodeId: string, object: THREE.Object3D | nu
   const proxies: THREE.Mesh[] = []
   const isVisible = object?.visible !== false
 
-  binding.slots.forEach((slot) => {
-    const { handleId, mesh, index } = slot
-    let proxy = entry.proxies.get(handleId)
-    if (!proxy) {
-      proxy = createInstancedOutlineProxy(mesh)
-      entry.proxies.set(handleId, proxy)
-      entry.group.add(proxy)
-    } else {
-      if (proxy.geometry !== mesh.geometry) {
-        proxy.geometry = mesh.geometry
-      }
-      if (Array.isArray(mesh.material)) {
-        const current = Array.isArray(proxy.material) ? proxy.material : null
-        if (!current || current.length !== mesh.material.length) {
-          proxy.material = getOutlineProxyMaterial(mesh.material)
-        }
-      } else if (Array.isArray(proxy.material)) {
-        proxy.material = instancedOutlineBaseMaterial
-      }
-      if (proxy.parent !== entry.group) {
+  bindings.forEach((binding) => {
+    binding.slots.forEach((slot) => {
+      const { handleId, mesh, index } = slot
+      const proxyKey = `${binding.bindingId}:${handleId}`
+      let proxy = entry.proxies.get(proxyKey)
+      if (!proxy) {
+        proxy = createInstancedOutlineProxy(mesh)
+        entry.proxies.set(proxyKey, proxy)
         entry.group.add(proxy)
+      } else {
+        if (proxy.geometry !== mesh.geometry) {
+          proxy.geometry = mesh.geometry
+        }
+        if (Array.isArray(mesh.material)) {
+          const current = Array.isArray(proxy.material) ? proxy.material : null
+          if (!current || current.length !== mesh.material.length) {
+            proxy.material = getOutlineProxyMaterial(mesh.material)
+          }
+        } else if (Array.isArray(proxy.material)) {
+          proxy.material = instancedOutlineBaseMaterial
+        }
+        if (proxy.parent !== entry.group) {
+          entry.group.add(proxy)
+        }
       }
-    }
 
-    mesh.updateWorldMatrix(true, false)
-    mesh.getMatrixAt(index, instancedOutlineMatrixHelper)
-    instancedOutlineWorldMatrixHelper.multiplyMatrices(mesh.matrixWorld, instancedOutlineMatrixHelper)
-    proxy.matrix.copy(instancedOutlineWorldMatrixHelper)
-    proxy.visible = isVisible && mesh.visible !== false
-    proxies.push(proxy)
-    activeHandles.add(handleId)
+      mesh.updateWorldMatrix(true, false)
+      mesh.getMatrixAt(index, instancedOutlineMatrixHelper)
+      instancedOutlineWorldMatrixHelper.multiplyMatrices(mesh.matrixWorld, instancedOutlineMatrixHelper)
+      proxy.matrix.copy(instancedOutlineWorldMatrixHelper)
+      proxy.visible = isVisible && mesh.visible !== false
+      proxies.push(proxy)
+      activeHandles.add(proxyKey)
+    })
   })
 
   const unusedHandles: string[] = []
-  entry.proxies.forEach((_proxy, handleId) => {
-    if (!activeHandles.has(handleId)) {
-      unusedHandles.push(handleId)
+  entry.proxies.forEach((_proxy, proxyKey) => {
+    if (!activeHandles.has(proxyKey)) {
+      unusedHandles.push(proxyKey)
     }
   })
 
-  unusedHandles.forEach((handleId) => {
-    const proxy = entry.proxies.get(handleId)
+  unusedHandles.forEach((proxyKey) => {
+    const proxy = entry.proxies.get(proxyKey)
     if (!proxy) {
       return
     }
     proxy.visible = false
     proxy.parent?.remove(proxy)
-    entry.proxies.delete(handleId)
+    entry.proxies.delete(proxyKey)
   })
 
   entry.group.visible = proxies.some((proxy) => proxy.visible)
@@ -3422,9 +3605,9 @@ function syncInstancedOutlineEntryTransform(nodeId: string) {
     return
   }
 
-  const binding = getModelInstanceBinding(nodeId)
+  const bindings = getModelInstanceBindingsForNode(nodeId)
   const object = objectMap.get(nodeId) ?? null
-  if (!binding || !binding.slots.length || !object) {
+  if (!bindings.length || !object) {
     releaseInstancedOutlineEntry(nodeId, false)
     updateOutlineSelectionTargets()
     return
@@ -3433,18 +3616,21 @@ function syncInstancedOutlineEntryTransform(nodeId: string) {
   let needsRebuild = false
   const isVisible = object.visible !== false
 
-  binding.slots.forEach((slot) => {
-    const proxy = entry.proxies.get(slot.handleId)
-    if (!proxy) {
-      needsRebuild = true
-      return
-    }
-    const { mesh, index } = slot
-    mesh.updateWorldMatrix(true, false)
-    mesh.getMatrixAt(index, instancedOutlineMatrixHelper)
-    instancedOutlineWorldMatrixHelper.multiplyMatrices(mesh.matrixWorld, instancedOutlineMatrixHelper)
-    proxy.matrix.copy(instancedOutlineWorldMatrixHelper)
-    proxy.visible = isVisible && mesh.visible !== false
+  bindings.forEach((binding) => {
+    binding.slots.forEach((slot) => {
+      const proxyKey = `${binding.bindingId}:${slot.handleId}`
+      const proxy = entry.proxies.get(proxyKey)
+      if (!proxy) {
+        needsRebuild = true
+        return
+      }
+      const { mesh, index } = slot
+      mesh.updateWorldMatrix(true, false)
+      mesh.getMatrixAt(index, instancedOutlineMatrixHelper)
+      instancedOutlineWorldMatrixHelper.multiplyMatrices(mesh.matrixWorld, instancedOutlineMatrixHelper)
+      proxy.matrix.copy(instancedOutlineWorldMatrixHelper)
+      proxy.visible = isVisible && mesh.visible !== false
+    })
   })
 
   if (needsRebuild) {
@@ -3827,6 +4013,21 @@ async function handlePointerDown(event: PointerEvent) {
     return
   }
 
+  if (event.button === 0 && event.shiftKey && props.activeTool === 'select') {
+    const nodeId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+    if (nodeId && !sceneStore.isNodeSelectionLocked(nodeId)) {
+      const node = findSceneNode(sceneStore.nodes, nodeId)
+      const object = objectMap.get(nodeId) ?? null
+      if (node && object) {
+        const handled = beginContinuousInstancedCreate(event, node, object)
+        if (handled) {
+          pointerTrackingState = null
+          return
+        }
+      }
+    }
+  }
+
   const button = event.button
   const isSelectionButton = button === 0 || button === 2
 
@@ -4012,6 +4213,10 @@ async function handlePointerDown(event: PointerEvent) {
 }
 
 function handlePointerMove(event: PointerEvent) {
+  if (updateContinuousInstancedCreate(event)) {
+    return
+  }
+
   if (nodePickerStore.isActive) {
     const hit = pickNodeAtPointer(event)
     updateNodePickerHighlight(hit)
@@ -4088,6 +4293,13 @@ function handlePointerMove(event: PointerEvent) {
 }
 
 function handlePointerUp(event: PointerEvent) {
+  if (finalizeContinuousInstancedCreate(event, false)) {
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
   const overrideActive = isAltOverrideActive
 
   if (handleGroundEditorPointerUp(event)) {
@@ -4205,6 +4417,13 @@ function handlePointerUp(event: PointerEvent) {
 }
 
 function handlePointerCancel(event: PointerEvent) {
+  if (finalizeContinuousInstancedCreate(event, true)) {
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
   if (nodePickerStore.isActive) {
     hideNodePickerHighlight()
   }

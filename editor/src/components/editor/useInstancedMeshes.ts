@@ -1,11 +1,14 @@
 import * as THREE from 'three'
 import { updateModelInstanceMatrix } from '@schema/modelObjectCache'
+import type { SceneNode } from '@harmony/schema'
+import { syncContinuousInstancedModelCommitted } from '@schema/continuousInstancedModel'
 
 export function useInstancedMeshes(
   instancedMeshGroup: THREE.Group,
   instancedMeshes: THREE.InstancedMesh[],
   callbacks: {
     syncInstancedOutlineEntryTransform: (nodeId: string) => void
+    resolveSceneNodeById?: (nodeId: string) => SceneNode | null
   }
 ) {
   const instancedMatrixHelper = new THREE.Matrix4()
@@ -23,13 +26,19 @@ export function useInstancedMeshes(
     if (object.userData?.instancedAssetId) {
       const nodeId = object.userData.nodeId as string | undefined
       if (nodeId) {
-        object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-        const isVisible = object.visible !== false
-        if (!isVisible) {
-          instancedScaleHelper.setScalar(0)
+        const assetId = object.userData.instancedAssetId as string | undefined
+        const node = callbacks.resolveSceneNodeById ? callbacks.resolveSceneNodeById(nodeId) : null
+        if (assetId && node) {
+          syncContinuousInstancedModelCommitted({ node, object, assetId })
+        } else {
+          object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+          const isVisible = object.visible !== false
+          if (!isVisible) {
+            instancedScaleHelper.setScalar(0)
+          }
+          instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+          updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
         }
-        instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-        updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
         callbacks.syncInstancedOutlineEntryTransform(nodeId)
       }
     }
@@ -48,13 +57,19 @@ export function useInstancedMeshes(
       if (current.userData?.instancedAssetId) {
         const nodeId = current.userData.nodeId as string | undefined
         if (nodeId) {
-          current.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-          const isVisible = current.visible !== false
-          if (!isVisible) {
-            instancedScaleHelper.setScalar(0)
+          const assetId = current.userData.instancedAssetId as string | undefined
+          const node = callbacks.resolveSceneNodeById ? callbacks.resolveSceneNodeById(nodeId) : null
+          if (assetId && node) {
+            syncContinuousInstancedModelCommitted({ node, object: current, assetId })
+          } else {
+            current.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+            const isVisible = current.visible !== false
+            if (!isVisible) {
+              instancedScaleHelper.setScalar(0)
+            }
+            instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+            updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
           }
-          instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-          updateModelInstanceMatrix(nodeId, instancedMatrixHelper)
           callbacks.syncInstancedOutlineEntryTransform(nodeId)
         }
       }

@@ -7153,6 +7153,27 @@ export const useSceneStore = defineStore('scene', {
       }
       commitSceneSnapshot(this)
     },
+    updateNodeUserData(nodeId: string, userData: Record<string, unknown> | null) {
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target) {
+        return
+      }
+
+      this.captureHistorySnapshot()
+
+      const sanitized = userData && isPlainRecord(userData) ? (clonePlainRecord(userData) ?? null) : null
+
+      visitNode(this.nodes, nodeId, (node) => {
+        if (sanitized) {
+          node.userData = sanitized
+        } else if ('userData' in node) {
+          node.userData = null
+        }
+      })
+
+      this.nodes = [...this.nodes]
+      commitSceneSnapshot(this)
+    },
     updateNodePropertiesBatch(payloads: TransformUpdatePayload[]) {
       if (!Array.isArray(payloads) || payloads.length === 0) {
         return

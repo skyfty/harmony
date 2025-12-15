@@ -341,6 +341,7 @@ import {
   findNodeIdForInstance,
   type ModelInstanceGroup,
 } from '@schema/modelObjectCache';
+import { syncContinuousInstancedModelCommitted } from '@schema/continuousInstancedModel';
 import type Viewer from 'viewerjs';
 import type { ViewerOptions } from 'viewerjs';
 import {
@@ -4076,6 +4077,14 @@ function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
   if (node.scale) {
     object.scale.set(node.scale.x, node.scale.y, node.scale.z);
   }
+  if (object.userData?.instancedAssetId) {
+    syncContinuousInstancedModelCommitted({
+      node,
+      object,
+      assetId: object.userData.instancedAssetId as string,
+    });
+    return;
+  }
   syncInstancedTransform(object);
 }
 
@@ -4096,7 +4105,6 @@ function updateNodeProperties(object: THREE.Object3D, node: SceneNode): void {
   }
   applyMaterialOverrides(object, node.materials, materialOverrideOptions);
   updateBehaviorVisibility(node.id, object.visible);
-  syncInstancedTransform(object);
 }
 
 function resolveNodeIdFromObject(object: THREE.Object3D | null | undefined): string | null {

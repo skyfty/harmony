@@ -62,6 +62,7 @@ import {
 	findNodeIdForInstance,
 	type ModelInstanceGroup,
 } from '@schema/modelObjectCache'
+import { syncContinuousInstancedModelCommitted } from '@schema/continuousInstancedModel'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { ComponentManager } from '@schema/components/componentManager'
 import {
@@ -624,7 +625,6 @@ let sky: Sky | null = null
 let shouldRenderSkyBackground = true
 let pmremGenerator: THREE.PMREMGenerator | null = null
 let skyEnvironmentTarget: THREE.WebGLRenderTarget | null = null
-let pendingSkyboxSettings: SceneSkyboxSettings | null = null
 let cloudRenderer: SceneCloudRenderer | null = null
 let environmentAmbientLight: THREE.AmbientLight | null = null
 let backgroundTexture: THREE.Texture | null = null
@@ -634,7 +634,6 @@ let backgroundLoadToken = 0
 let environmentMapTarget: THREE.WebGLRenderTarget | null = null
 let environmentMapAssetId: string | null = null
 let environmentMapLoadToken = 0
-let pendingEnvironmentSettings: EnvironmentSettings | null = null
 let firstPersonControls: FirstPersonControls | null = null
 let mapControls: MapControls | null = null
 let followCameraControlActive = false
@@ -1674,10 +1673,6 @@ function attachRuntimeForNode(nodeId: string, object: THREE.Object3D): void {
 		return
 	}
 	previewComponentManager.attachRuntime(nodeState, object)
-}
-
-function cloneSkyboxSettings(settings: SceneSkyboxSettings): SceneSkyboxSettings {
-	return { ...settings }
 }
 
 function sanitizeSkyboxSettings(input: SceneSkyboxSettings): SceneSkyboxSettings {
@@ -4462,7 +4457,6 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	resetAssetResolutionCaches()
 	lazyPlaceholderStates.clear()
 	activeLazyLoadCount = 0
-	pendingSkyboxSettings = null
 	if (!rootGroup) {
 		return
 	}
@@ -4631,7 +4625,6 @@ function applySkyEnvironmentToScene() {
 
 function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
 	if (!renderer || !scene) {
-		pendingSkyboxSettings = settings ? cloneSkyboxSettings(settings) : null
 		return
 	}
 	if (!settings) {
@@ -4639,12 +4632,10 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
 		scene.environment = null
 		renderer.toneMappingExposure = DEFAULT_SKYBOX_SETTINGS.exposure
 		cloudRenderer?.setSkyboxSettings(null)
-		pendingSkyboxSettings = null
 		return
 	}
 	ensureSkyExists()
 	if (!sky) {
-		pendingSkyboxSettings = cloneSkyboxSettings(settings)
 		return
 	}
 	const skyMaterial = sky.material as THREE.ShaderMaterial
@@ -4701,7 +4692,6 @@ function applySkyboxSettings(settings: SceneSkyboxSettings | null) {
 		})
 		cloudRenderer.setSkyboxSettings(settings)
 	}
-	pendingSkyboxSettings = null
 }
 
 function disposeBackgroundResources() {
@@ -4892,18 +4882,14 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 	const snapshot = cloneEnvironmentSettingsLocal(settings)
 	applyPhysicsEnvironmentSettings(snapshot)
 	if (!scene) {
-		pendingEnvironmentSettings = snapshot
 		return
 	}
 	applyAmbientLightSettings(snapshot)
 	applyFogSettings(snapshot)
 	const backgroundApplied = await applyBackgroundSettings(snapshot.background)
 	const environmentApplied = await applyEnvironmentMapSettings(snapshot.environmentMap)
-	if (backgroundApplied && environmentApplied) {
-		pendingEnvironmentSettings = null
-	} else {
-		pendingEnvironmentSettings = snapshot
-	}
+	void backgroundApplied
+	void environmentApplied
 }
 
 function disposeEnvironmentResources() {
@@ -4911,7 +4897,6 @@ function disposeEnvironmentResources() {
 	disposeEnvironmentTarget()
 	backgroundLoadToken += 1
 	environmentMapLoadToken += 1
-	pendingEnvironmentSettings = null
 	if (environmentAmbientLight) {
 		environmentAmbientLight.parent?.remove(environmentAmbientLight)
 		environmentAmbientLight.dispose?.()
@@ -6382,6 +6367,14 @@ function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
 	if (node.scale) {
 		object.scale.set(node.scale.x, node.scale.y, node.scale.z)
 	}
+	if (object.userData?.instancedAssetId) {
+		syncContinuousInstancedModelCommitted({
+			node,
+			object,
+			assetId: object.userData.instancedAssetId as string,
+		})
+		return
+	}
 	syncInstancedTransform(object)
 }
 
@@ -6403,7 +6396,6 @@ function updateNodeProperties(object: THREE.Object3D, node: SceneNode) {
 	updateNodeTransfrom(object, node)
 	updateBehaviorVisibility(node.id, object.visible)
 	applyMaterialOverrides(object, node.materials, materialOverrideOptions)
-	syncInstancedTransform(object)
 }
 
 type LazyAssetMetadata = {
@@ -6832,7 +6824,6 @@ async function updateScene(document: SceneJsonExportDocument) {
 	lazyLoadMeshesEnabled = document.lazyLoadMeshes !== false
 	deferredInstancingNodeIds.clear()
 	if (!scene || !rootGroup) {
-		pendingEnvironmentSettings = cloneEnvironmentSettingsLocal(environmentSettings)
 		return
 	}
 	const previewRoot = rootGroup
@@ -7090,7 +7081,6 @@ onBeforeUnmount(() => {
 	disposeMaterialTextureCache()
 	pmremGenerator?.dispose()
 	pmremGenerator = null
-	pendingSkyboxSettings = null
 	lanternViewerInstance = null
 	animationMixers.forEach((mixer) => mixer.stopAllAction())
 	animationMixers = []
