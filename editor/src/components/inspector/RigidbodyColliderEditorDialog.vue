@@ -494,9 +494,7 @@ function convertMetadataShape(shape: RigidbodyPhysicsShape, kind: ColliderShapeK
     previewConvexGeometry?.dispose()
     previewConvexGeometry = geometry
     geometry.computeBoundingBox()
-    const box = geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(
-      geometry.getAttribute('position'),
-    )
+    const box = geometry.boundingBox ?? new THREE.Box3()
     const size = box.getSize(new THREE.Vector3())
     return {
       kind: 'convex',

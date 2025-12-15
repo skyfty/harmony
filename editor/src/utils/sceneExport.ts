@@ -3,19 +3,7 @@ import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { SceneMaterial, SceneNodeMaterial } from '@/types/material'
-import type {
-  SceneNode,
-  GroundDynamicMesh,
-  SceneMaterialTextureSlot,
-  SceneNodeComponentState,
-  SceneNodeComponentMap,
-  SceneJsonExportDocument,
-  SceneAssetPreloadInfo,
-  NodeComponentType,
-  SceneOutlineMeshMap,
-  SceneOutlineMesh,
-  createPrimitiveGeometry,
-} from '@harmony/schema'
+import { createPrimitiveGeometry, type GroundDynamicMesh, type NodeComponentType, type SceneAssetPreloadInfo, type SceneJsonExportDocument, type SceneNode, type SceneNodeComponentMap, type SceneNodeComponentState, type SceneOutlineMesh, type SceneOutlineMeshMap } from '@harmony/schema'
 import type { TerrainScatterStoreSnapshot } from '@harmony/schema/terrain-scatter'
 import type { SceneExportOptions, GLBExportSettings } from '@/types/scene-export'
 import { findObjectByPath } from '@schema/modelAssetLoader'

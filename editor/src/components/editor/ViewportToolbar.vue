@@ -99,7 +99,7 @@
         :model-value="scatterEraseMenuOpen"
         location="bottom"
         :offset="6"
-        open-on-click="false"
+        :open-on-click="false"
         @update:modelValue="(value) => emit('update:scatter-erase-menu-open', value)"
       >
         <template #activator="{ props: menuProps }">

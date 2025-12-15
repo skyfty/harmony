@@ -250,19 +250,6 @@ function computeVehicleFollowPlacement(dimensions: { width: number; height: numb
   return { distance, heightOffset, targetLift, targetForward }
 }
 
-function composeVehicleLocalVector(local: THREE.Vector3, basis: VehicleAxisBasis, target: THREE.Vector3): THREE.Vector3 {
-  return target
-    .set(0, 0, 0)
-    .addScaledVector(basis.right, local.x)
-    .addScaledVector(basis.up, local.y)
-    .addScaledVector(basis.forward, local.z)
-}
-
-function projectVehicleVectorToBasis(vector: THREE.Vector3, basis: VehicleAxisBasis, target: THREE.Vector3): THREE.Vector3 {
-  target.set(vector.dot(basis.right), vector.dot(basis.up), vector.dot(basis.forward))
-  return target
-}
-
 export class VehicleDriveController {
   private readonly deps: VehicleDriveControllerDeps
   private readonly bindings: VehicleDriveControllerBindings
@@ -872,21 +859,6 @@ export class VehicleDriveController {
     }
   }
 
-  private updateVehicleFollowLocalOffsetFromCamera(
-    anchor: THREE.Vector3,
-    basis: VehicleAxisBasis,
-    quaternion: THREE.Quaternion,
-    cameraPosition: THREE.Vector3,
-  ): void {
-    const follow = this.bindings.cameraFollowState
-    const temp = this.temp
-    temp.followWorldOffset.copy(cameraPosition).sub(anchor)
-    temp.cameraQuaternionInverse.copy(quaternion).invert()
-    temp.followOffset.copy(temp.followWorldOffset).applyQuaternion(temp.cameraQuaternionInverse)
-    projectVehicleVectorToBasis(temp.followOffset, basis, follow.localOffset)
-    follow.hasLocalOffset = true
-  }
-
   updateCamera(delta: number, ctx: VehicleDriveCameraContext, options: VehicleDriveCameraOptions = {}): boolean {
     const state = this.state
     if (!state.active || !ctx.camera) {
@@ -1209,18 +1181,6 @@ export class VehicleDriveController {
       return
     }
     temp.box.getCenter(target)
-  }
-
-  private resolveVehicleAxisBasis(instance: VehicleInstance | null): VehicleAxisBasis {
-    if (!instance) {
-      return { right: new THREE.Vector3(1, 0, 0), up: new THREE.Vector3(0, 1, 0), forward: new THREE.Vector3(0, 0, 1) }
-    }
-    return { right: instance.axisRight, up: instance.axisUp, forward: instance.axisForward }
-  }
-
-  private resolveVehicleFollowWorldOffset(local: THREE.Vector3, basis: VehicleAxisBasis, quaternion: THREE.Quaternion, target: THREE.Vector3): THREE.Vector3 {
-    composeVehicleLocalVector(local, basis, target)
-    return target.applyQuaternion(quaternion)
   }
 
   alignExitCamera(ctx: VehicleDriveCameraContext): boolean {

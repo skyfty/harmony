@@ -1,6 +1,7 @@
 
 import * as THREE from 'three'
 import type { TerrainScatterStoreSnapshot } from './terrain-scatter'
+import type { AssetType } from './asset-types'
 
 export const GROUND_NODE_ID = 'harmony:ground'
 export const SKY_NODE_ID = 'harmony:sky'
@@ -27,6 +28,16 @@ export type {
   PagedRequest,
   PagedResponse,
 } from './asset-api'
+
+export { getActiveMultiuserSceneId, setActiveMultiuserSceneId } from './multiuserContext'
+
+export {
+  AssetTypes,
+  DEFAULT_ASSET_TYPE,
+  isAssetType,
+  normalizeAssetType,
+  type AssetType,
+} from './asset-types'
 
 export type Vector2Like = THREE.Vector2 | { x: number; y: number }
 export type Vector3Like = THREE.Vector3 | { x: number; y: number; z: number }
@@ -227,37 +238,6 @@ export type AssetSourceMetadata =
 export interface AssetIndexEntry {
   categoryId: string
   source?: AssetSourceMetadata
-}
-
-
-export interface CameraNodeProperties {
-  kind: CameraProjection
-  fov?: number
-  near: number
-  far: number
-  aspect?: number
-  zoom?: number
-}
-
-export interface SceneNodeImportMetadata {
-  assetId: string
-  objectPath: number[]
-}
-export type NodeComponentType = string
-
-export interface SceneNodeComponentState<TProps = Record<string, unknown>> {
-  id: string
-  type: NodeComponentType
-  enabled: boolean
-  props: TProps
-  metadata?: Record<string, unknown>
-}
-
-export type SceneNodeComponentMap = Partial<Record<NodeComponentType, SceneNodeComponentState<any>>>
-
-export interface SceneNodeEditorFlags {
-  editorOnly?: boolean
-  ignoreGridSnapping?: boolean
 }
 
 export interface SceneOutlineMesh {
@@ -521,6 +501,40 @@ export interface ComponentInspectorSection<TProps = Record<string, unknown>> {
   label: string
   fields: Array<ComponentInspectorField<TProps>>
 }
+
+export type NodeComponentType = string
+
+export type SceneNodeComponentState<TProps = Record<string, unknown>, TMetadata = Record<string, unknown>> = {
+  id: string
+  type: NodeComponentType
+  enabled: boolean
+  props: TProps
+  metadata?: TMetadata
+}
+
+export type SceneNodeComponentMap = Record<string, SceneNodeComponentState<any> | undefined>
+
+export interface SceneNodeEditorFlags {
+  ignoreGridSnapping?: boolean
+  ignoreDropToGround?: boolean
+  editorOnly?: boolean
+  ignoreSelection?: boolean
+}
+
+export interface CameraNodeProperties {
+  kind: 'perspective' | 'orthographic'
+  near: number
+  far: number
+  fov?: number
+  aspect?: number
+  zoom?: number
+}
+
+export interface SceneNodeImportMetadata {
+  assetId: string
+  objectPath?: number[] | null
+}
+
 export type LightNodeType = 'Directional' | 'Point' | 'Spot' | 'Ambient'
 export type CameraControlMode = 'orbit' | 'map'
 export type CameraProjection = 'perspective' | 'orthographic'
@@ -560,6 +574,7 @@ export interface SceneNode {
   downloadError?: string | null;
   userData?: Record<string, unknown> | null;
   groupExpanded?: boolean;
+  allowChildNodes?: boolean;
 }
 
 export interface GroundSettings {
@@ -838,36 +853,4 @@ export interface SceneClipboard {
   entries: ClipboardEntry[]
   runtimeSnapshots: Map<string, THREE.Object3D>
   cut: boolean
-}
-
-export function setActiveMultiuserSceneId(sceneId: string | null): void
-export function getActiveMultiuserSceneId(): string | null
-
-const AssetTypesList = [
-  'model',
-  'image',
-  'texture',
-  'hdri',
-  'material',
-  'file',
-  'prefab',
-  'video',
-  'mesh',
-] as const
-
-export type AssetType = (typeof AssetTypesList)[number]
-
-export const AssetTypes: readonly AssetType[] = AssetTypesList
-export const DEFAULT_ASSET_TYPE: AssetType = 'file'
-
-export function isAssetType(value: unknown): value is AssetType {
-  return typeof value === 'string' && AssetTypes.includes(value as AssetType)
-}
-
-export function normalizeAssetType(value: unknown, fallback: AssetType = DEFAULT_ASSET_TYPE): AssetType {
-  if (typeof value !== 'string') {
-    return fallback
-  }
-  const normalized = value.trim().toLowerCase() as AssetType
-  return AssetTypes.includes(normalized) ? normalized : fallback
 }

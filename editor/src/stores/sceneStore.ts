@@ -8326,7 +8326,7 @@ export const useSceneStore = defineStore('scene', {
         this.updateNodeTransform({
           id: nodeId,
           position: toPlainVector(localPosition),
-          rotation: toPlainVector(localEuler),
+          rotation: { x: localEuler.x, y: localEuler.y, z: localEuler.z } as Vector3Like,
           scale: toPlainVector(localScale),
         })
       }

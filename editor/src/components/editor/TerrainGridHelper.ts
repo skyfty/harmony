@@ -39,7 +39,7 @@ function buildGridSegments(definition: GroundDynamicMesh): { minor: number[]; ma
   const heightBuffer: Float32Array[] = Array.from({ length: rows + 2 }, () => new Float32Array(columns + 2))
   const mapped = definition.heightMap ?? {}
   for (let rowIndex = 0; rowIndex <= rows; rowIndex += 1) {
-    const rowBuffer = heightBuffer[rowIndex]
+    const rowBuffer = heightBuffer[rowIndex]!
     for (let columnIndex = 0; columnIndex <= columns; columnIndex += 1) {
       const key = `${rowIndex}:${columnIndex}`
       const value = mapped[key]
@@ -69,12 +69,12 @@ function buildGridSegments(definition: GroundDynamicMesh): { minor: number[]; ma
     if (!target) {
       continue
     }
-    const rowHeights = heightBuffer[rowIndex]
+    const rowHeights = heightBuffer[rowIndex]!
     for (let columnIndex = 0; columnIndex < columns; columnIndex += 1) {
       const ax = -halfWidth + columnIndex * stepX
       const bx = ax + stepX
-      const ay = rowHeights[columnIndex] + LINE_OFFSET
-      const by = rowHeights[columnIndex + 1] + LINE_OFFSET
+      const ay = rowHeights[columnIndex]! + LINE_OFFSET
+      const by = rowHeights[columnIndex + 1]! + LINE_OFFSET
       pushSegment(target, ax, ay, z, bx, by, z)
     }
   }
@@ -88,10 +88,10 @@ function buildGridSegments(definition: GroundDynamicMesh): { minor: number[]; ma
     for (let rowIndex = 0; rowIndex < rows; rowIndex += 1) {
       const az = -halfDepth + rowIndex * stepZ
       const bz = az + stepZ
-      const currentHeights = heightBuffer[rowIndex]
-      const nextHeights = heightBuffer[rowIndex + 1]
-      const ay = currentHeights[columnIndex] + LINE_OFFSET
-      const by = nextHeights[columnIndex] + LINE_OFFSET
+      const currentHeights = heightBuffer[rowIndex]!
+      const nextHeights = heightBuffer[rowIndex + 1]!
+      const ay = currentHeights[columnIndex]! + LINE_OFFSET
+      const by = nextHeights[columnIndex]! + LINE_OFFSET
       pushSegment(target, x, ay, az, x, by, bz)
     }
   }

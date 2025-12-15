@@ -120,6 +120,10 @@ class OnlineComponent extends Component<OnlineComponentProps> {
   private lastSyncTimestamp = 0
   private readonly displayName = `Viewer-${Math.random().toString(36).slice(2, 8)}`
 
+  constructor(context: ComponentRuntimeContext<OnlineComponentProps>) {
+    super(context)
+  }
+
   onInit(): void {
     this.ensureConnected()
   }
@@ -270,12 +274,10 @@ class OnlineComponent extends Component<OnlineComponentProps> {
     this.socket.send(JSON.stringify(message))
   }
 
-  private handleSocketMessage(raw: WebSocket.Data): void {
-    if (typeof raw !== 'string') {
-      raw = raw.toString()
-    }
+  private handleSocketMessage(raw: unknown): void {
+    const payloadText = typeof raw === 'string' ? raw : String(raw)
     try {
-      const parsed = JSON.parse(raw as string)
+      const parsed = JSON.parse(payloadText)
       this.processServerMessage(parsed)
     } catch (error) {
       console.warn('解析多人在线消息失败', error)
@@ -336,7 +338,12 @@ class OnlineComponent extends Component<OnlineComponentProps> {
       return
     }
     entry.mesh.parent?.remove(entry.mesh)
-    entry.mesh.material.dispose()
+    const material = entry.mesh.material
+    if (Array.isArray(material)) {
+      material.forEach((m) => m.dispose())
+    } else {
+      material.dispose()
+    }
     this.peers.delete(userId)
   }
 
