@@ -10,12 +10,6 @@ const LINE_OFFSET = 0.002
 const MINOR_LINE_WIDTH = 1.2
 const MAJOR_LINE_WIDTH = 1.5
 
-function sampleHeight(definition: GroundDynamicMesh, row: number, column: number): number {
-  const key = `${row}:${column}`
-  const value = definition.heightMap?.[key]
-  return typeof value === 'number' ? value : 0
-}
-
 // 判断世界坐标是否靠近某个网格间隔，从而决定是否绘制该线。
 function isAligned(coord: number, spacing: number): boolean {
   if (spacing <= 0) {
@@ -41,6 +35,18 @@ function buildGridSegments(definition: GroundDynamicMesh): { minor: number[]; ma
   const minorSegments: number[] = []
   const majorSegments: number[] = []
 
+  // 将 heightMap 转成固定大小的二维缓冲，避免在热循环内构建字符串键。
+  const heightBuffer: Float32Array[] = Array.from({ length: rows + 2 }, () => new Float32Array(columns + 2))
+  const mapped = definition.heightMap ?? {}
+  for (let rowIndex = 0; rowIndex <= rows; rowIndex += 1) {
+    const rowBuffer = heightBuffer[rowIndex]
+    for (let columnIndex = 0; columnIndex <= columns; columnIndex += 1) {
+      const key = `${rowIndex}:${columnIndex}`
+      const value = mapped[key]
+      rowBuffer[columnIndex] = typeof value === 'number' ? value : 0
+    }
+  }
+
   // 将一条线段的两端坐标追加到指定的数组中。
   const pushSegment = (target: number[], ax: number, ay: number, az: number, bx: number, by: number, bz: number) => {
     target.push(ax, ay, az, bx, by, bz)
@@ -63,11 +69,12 @@ function buildGridSegments(definition: GroundDynamicMesh): { minor: number[]; ma
     if (!target) {
       continue
     }
+    const rowHeights = heightBuffer[rowIndex]
     for (let columnIndex = 0; columnIndex < columns; columnIndex += 1) {
       const ax = -halfWidth + columnIndex * stepX
       const bx = ax + stepX
-      const ay = sampleHeight(definition, rowIndex, columnIndex) + LINE_OFFSET
-      const by = sampleHeight(definition, rowIndex, columnIndex + 1) + LINE_OFFSET
+      const ay = rowHeights[columnIndex] + LINE_OFFSET
+      const by = rowHeights[columnIndex + 1] + LINE_OFFSET
       pushSegment(target, ax, ay, z, bx, by, z)
     }
   }
@@ -81,8 +88,10 @@ function buildGridSegments(definition: GroundDynamicMesh): { minor: number[]; ma
     for (let rowIndex = 0; rowIndex < rows; rowIndex += 1) {
       const az = -halfDepth + rowIndex * stepZ
       const bz = az + stepZ
-      const ay = sampleHeight(definition, rowIndex, columnIndex) + LINE_OFFSET
-      const by = sampleHeight(definition, rowIndex + 1, columnIndex) + LINE_OFFSET
+      const currentHeights = heightBuffer[rowIndex]
+      const nextHeights = heightBuffer[rowIndex + 1]
+      const ay = currentHeights[columnIndex] + LINE_OFFSET
+      const by = nextHeights[columnIndex] + LINE_OFFSET
       pushSegment(target, x, ay, az, x, by, bz)
     }
   }
@@ -112,12 +121,15 @@ function createLineSegments(positions: Float32Array, material: THREE.LineBasicMa
   return lines
 }
 
+type SegmentBuffers = { minor: Float32Array; major: Float32Array }
+
 export class TerrainGridHelper extends THREE.Object3D {
   private minorLines: THREE.LineSegments | null = null
   private majorLines: THREE.LineSegments | null = null
   private minorMaterial = createLineMaterial(MINOR_COLOR, MINOR_LINE_WIDTH)
   private majorMaterial = createLineMaterial(MAJOR_COLOR, MAJOR_LINE_WIDTH)
   private signature: string | null = null
+  private segmentCache = new Map<string, SegmentBuffers>()
 
   constructor() {
     super()
@@ -137,12 +149,31 @@ export class TerrainGridHelper extends THREE.Object3D {
       return
     }
 
-    this.signature = nextSignature
+    const cacheKey = nextSignature ?? null
+    const cached = cacheKey ? this.segmentCache.get(cacheKey) : null
+    if (cached) {
+      this.signature = cacheKey
+      this.replaceLines(cached.minor, this.minorLines, this.minorMaterial, (instance) => {
+        this.minorLines = instance
+      })
+      this.replaceLines(cached.major, this.majorLines, this.majorMaterial, (instance) => {
+        this.majorLines = instance
+      })
+      this.setVisible(true)
+      return
+    }
+
+    this.signature = cacheKey
     const { minor, major } = buildGridSegments(definition)
-    this.replaceLines(minor, this.minorLines, this.minorMaterial, (instance) => {
+    const minorBuffer = new Float32Array(minor)
+    const majorBuffer = new Float32Array(major)
+    if (cacheKey) {
+      this.segmentCache.set(cacheKey, { minor: minorBuffer, major: majorBuffer })
+    }
+    this.replaceLines(minorBuffer, this.minorLines, this.minorMaterial, (instance) => {
       this.minorLines = instance
     })
-    this.replaceLines(major, this.majorLines, this.majorMaterial, (instance) => {
+    this.replaceLines(majorBuffer, this.majorLines, this.majorMaterial, (instance) => {
       this.majorLines = instance
     })
   }
@@ -155,6 +186,7 @@ export class TerrainGridHelper extends THREE.Object3D {
     this.majorLines?.removeFromParent()
     this.minorMaterial.dispose()
     this.majorMaterial.dispose()
+    this.segmentCache.clear()
   }
 
   // 控制两层网格的显示状态，保持一致性。
@@ -169,7 +201,7 @@ export class TerrainGridHelper extends THREE.Object3D {
 
   // 重建或复用现有的线段对象，确保最大程度减少几何重建开销。
   private replaceLines(
-    data: number[],
+    data: Float32Array,
     existing: THREE.LineSegments | null,
     material: THREE.LineBasicMaterial,
     assign: (instance: THREE.LineSegments | null) => void,
@@ -183,8 +215,7 @@ export class TerrainGridHelper extends THREE.Object3D {
       return
     }
 
-    const positions = new Float32Array(data)
-
+    const positions = data
     if (existing) {
       existing.geometry.dispose()
       // 复用现有对象，只替换其几何数据以保持引用不变。
