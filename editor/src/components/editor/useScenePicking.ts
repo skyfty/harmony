@@ -44,13 +44,32 @@ export function useScenePicking(
     instancedMeshGroup.updateWorldMatrix(true, true)
 
     const pickTargets: THREE.Object3D[] = [...rootGroup.children]
+    const seen = new Set<THREE.Object3D>(pickTargets)
 
-    instancedMeshes.forEach((mesh) => {
+    const addInstancedPickTarget = (candidate: THREE.Object3D) => {
+      if (seen.has(candidate)) {
+        return
+      }
+      const mesh = candidate as THREE.InstancedMesh
+      if (!(mesh as unknown as { isInstancedMesh?: boolean }).isInstancedMesh) {
+        return
+      }
       if (!mesh.visible || mesh.count === 0) {
         return
       }
       mesh.updateWorldMatrix(true, false)
       pickTargets.push(mesh)
+      seen.add(mesh)
+    }
+
+    instancedMeshGroup.children.forEach((child) => {
+      if (child) {
+        addInstancedPickTarget(child)
+      }
+    })
+
+    instancedMeshes.forEach((mesh) => {
+      addInstancedPickTarget(mesh)
     })
 
     const intersections = raycaster.intersectObjects(pickTargets, recursive)
