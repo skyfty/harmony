@@ -54,6 +54,7 @@ import {
   clearContinuousInstancedModelPreview,
   computeDefaultInstancedSpacing,
   getContinuousInstancedModelUserData,
+  syncContinuousInstancedModelCommitted,
   syncContinuousInstancedModelPreviewRange,
 } from '@schema/continuousInstancedModel'
 import { loadObjectFromFile } from '@schema/assetImport'
@@ -646,6 +647,8 @@ const {
   objectMap,
 })
 
+void overlayContainerRef
+
 type PanelPlacementHolder = { panelPlacement?: PanelPlacementState | null }
 
 function normalizePanelPlacementState(input?: PanelPlacementState | null): PanelPlacementState {
@@ -843,6 +846,13 @@ function finalizeContinuousInstancedCreate(event: PointerEvent, cancel = false):
         count: nextCount,
       })
       sceneStore.updateNodeUserData(state.nodeId, nextUserData as Record<string, unknown>)
+
+      // Ensure new committed instances are allocated + mapped immediately so they are pickable.
+      syncContinuousInstancedModelCommitted({
+        node: { ...node, userData: nextUserData } as SceneNode,
+        object: state.object,
+        assetId: state.assetId,
+      })
     }
   }
 
