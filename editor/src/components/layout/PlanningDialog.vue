@@ -111,6 +111,8 @@ const layerPresets: PlanningLayer[] = [
   { id: 'wall-layer', name: '墙体层', kind: 'wall', visible: true, color: '#29b6f6' },
 ]
 
+const imageAccentPalette = layerPresets.map((layer) => layer.color)
+
 const layers = ref<PlanningLayer[]>(layerPresets.map((layer) => ({ ...layer })))
 const activeLayerId = ref(layers.value[0]?.id ?? 'terrain-layer')
 const polygons = ref<PlanningPolygon[]>([])
@@ -331,6 +333,12 @@ function setAlignMarkerAtWorld(image: PlanningImage, world: PlanningPoint) {
   }
 }
 
+function getImageAccentColor(imageId: string): string {
+  const index = planningImages.value.findIndex((img) => img.id === imageId)
+  const paletteIndex = (index >= 0 ? index : 0) % imageAccentPalette.length
+  return (imageAccentPalette[paletteIndex] ?? imageAccentPalette[0])!
+}
+
 function getAlignMarkerStyle(image: PlanningImage): CSSProperties {
   if (!image.visible) {
     return { display: 'none' }
@@ -339,14 +347,18 @@ function getAlignMarkerStyle(image: PlanningImage): CSSProperties {
   if (!world) {
     return { display: 'none' }
   }
+  const accent = getImageAccentColor(image.id)
   return {
     left: `${world.x}px`,
     top: `${world.y}px`,
     zIndex: 10000,
+    background: accent,
+    boxShadow: `0 0 0 3px ${hexToRgba(accent, 0.22)}`,
   }
 }
 
 function getImageLayerStyle(image: PlanningImage, zIndex: number): CSSProperties {
+  const accent = getImageAccentColor(image.id)
   return {
     transform: `translate(${image.position.x}px, ${image.position.y}px) scale(${image.scale})`,
     transformOrigin: 'top left',
@@ -356,6 +368,15 @@ function getImageLayerStyle(image: PlanningImage, zIndex: number): CSSProperties
     zIndex: zIndex + 1,
     pointerEvents: 'auto',
     willChange: 'transform',
+    backgroundColor: hexToRgba(accent, 0.06),
+  }
+}
+
+function getImageLayerListItemStyle(imageId: string): CSSProperties {
+  const accent = getImageAccentColor(imageId)
+  return {
+    backgroundColor: hexToRgba(accent, 0.06),
+    borderLeft: `4px solid ${hexToRgba(accent, 0.9)}`,
   }
 }
 
@@ -1389,7 +1410,6 @@ onBeforeUnmount(() => {
           <section class="layer-panel">
             <header>
               <h3>图层管理</h3>
-              <span>预置常用层，可控制可见性与编辑目标</span>
             </header>
             <v-list density="compact" class="layer-list">
               <v-list-item
@@ -1432,6 +1452,7 @@ onBeforeUnmount(() => {
                 v-for="image in planningImages"
                 :key="image.id"
                 :class="['image-layer-item', { active: activeImageId === image.id }]"
+                :style="getImageLayerListItemStyle(image.id)"
                 @click="handleImageLayerSelect(image.id)"
               >
                 <div class="image-layer-content">
@@ -1478,7 +1499,6 @@ onBeforeUnmount(() => {
                       </v-btn>
                     </div>
                   </div>
-                  <div class="image-layer-meta">{{ image.sizeLabel }}</div>
                   <div class="image-layer-controls">
                     <div class="control-row">
                       <span class="control-label">透明度</span>
@@ -1500,7 +1520,7 @@ onBeforeUnmount(() => {
                         type="number"
                         placeholder="1:1000"
                         density="compact"
-                        variant="outlined"
+                        variant="underlined"
                         hide-details
                         @update:model-value="(v) => handleImageLayerScaleRatioChange(image.id, v ? Number(v) : undefined)"
                       />
@@ -1927,13 +1947,11 @@ onBeforeUnmount(() => {
 
 .align-marker {
   position: absolute;
-  width: 14px;
-  height: 14px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   transform: translate(-50%, -50%);
-  background: rgba(98, 179, 255, 0.85);
   border: 2px solid rgba(255, 255, 255, 0.9);
-  box-shadow: 0 0 0 2px rgba(98, 179, 255, 0.2);
   cursor: grab;
   pointer-events: auto;
 }
@@ -1943,7 +1961,7 @@ onBeforeUnmount(() => {
 }
 
 .align-marker.active {
-  background: rgba(98, 179, 255, 1);
+  border-color: rgba(255, 255, 255, 1);
 }
 
 .resize-handle {
