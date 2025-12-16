@@ -303,6 +303,18 @@ export function findNodeIdForInstance(mesh: InstancedMesh, instanceIndex: number
   return nodeIdByBindingId.get(bindingId) ?? null
 }
 
+export function findBindingIdForInstance(mesh: InstancedMesh, instanceIndex: number): string | null {
+  const handle = meshHandleLookup.get(mesh.userData?.instancingHandleId as string)
+  if (!handle) {
+    return null
+  }
+  return handle.bindingByIndex.get(instanceIndex) ?? null
+}
+
+export function getModelInstanceBindingById(bindingId: string): ModelInstanceBinding | null {
+  return bindingsById.get(bindingId) ?? null
+}
+
 export function invalidateModelObject(assetId: string): void {
   const entry = modelObjectCache.get(assetId)
   if (!entry) {

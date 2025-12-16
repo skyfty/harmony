@@ -49,9 +49,14 @@ import {
   getOrLoadModelObject,
   subscribeInstancedMeshes,
   getModelInstanceBindingsForNode,
+  getModelInstanceBindingById,
+  findBindingIdForInstance,
+  findNodeIdForInstance,
 } from '@schema/modelObjectCache'
 import {
   buildContinuousInstancedModelUserDataPatch,
+  buildContinuousInstancedModelUserDataPatchV2,
+  buildLinearLocalPositions,
   clearContinuousInstancedModelPreview,
   computeDefaultInstancedSpacing,
   getContinuousInstancedModelUserData,
@@ -553,7 +558,16 @@ const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((too
 const activeBuildTool = ref<BuildTool | null>(null)
 const scatterEraseModeActive = ref(false)
 const scatterEraseMenuOpen = ref(false)
+const repairModeActive = ref(false)
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
+const canRepairInstanced = computed(() => instancedMeshes.length > 0)
+
+const repairHoverGroup = new THREE.Group()
+repairHoverGroup.name = 'RepairHover'
+repairHoverGroup.visible = false
+const repairHoverProxies = new Map<string, THREE.Mesh>()
+let repairHoverBindingId: string | null = null
+let repairHoverNodeId: string | null = null
 
 const groundEditor = createGroundEditor({
   sceneStore,
@@ -617,6 +631,7 @@ function exitScatterEraseMode() {
 }
 
 function toggleScatterEraseMode() {
+  exitRepairMode()
   if (!selectedNodeIsGround.value) {
     exitScatterEraseMode()
     return
@@ -642,6 +657,297 @@ function handleClearAllScatterInstances() {
   cancelGroundEditorScatterErase()
   clearScatterInstances()
   scatterEraseMenuOpen.value = false
+}
+
+function clearRepairHoverHighlight(updateOutline = true) {
+  const wasVisible = repairHoverGroup.visible
+  repairHoverGroup.visible = false
+  repairHoverBindingId = null
+  repairHoverNodeId = null
+  repairHoverProxies.forEach((proxy) => {
+    proxy.visible = false
+  })
+  if (updateOutline && wasVisible) {
+    updateOutlineSelectionTargets()
+  }
+}
+
+function exitRepairMode() {
+  if (!repairModeActive.value) {
+    return
+  }
+  repairModeActive.value = false
+  clearRepairHoverHighlight(true)
+}
+
+function toggleRepairMode() {
+  if (repairModeActive.value) {
+    exitRepairMode()
+    return
+  }
+  exitScatterEraseMode()
+  handleBuildToolChange(null)
+  cancelGroundEditorScatterPlacement()
+  repairModeActive.value = true
+  if (props.activeTool !== 'select') {
+    emit('changeTool', 'select')
+  }
+  updateOutlineSelectionTargets()
+}
+
+function updateRepairHoverHighlight(event: PointerEvent): boolean {
+  if (!repairModeActive.value) {
+    if (repairHoverGroup.visible) {
+      clearRepairHoverHighlight(true)
+    }
+    return false
+  }
+
+  if (!canvasRef.value || !camera) {
+    clearRepairHoverHighlight(false)
+    return false
+  }
+
+  const rect = canvasRef.value.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) {
+    clearRepairHoverHighlight(false)
+    return false
+  }
+
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  raycaster.setFromCamera(pointer, camera)
+
+  const pickTargets: THREE.Object3D[] = []
+  const seen = new Set<THREE.Object3D>()
+
+  const addInstancedPickTarget = (candidate: THREE.Object3D) => {
+    if (seen.has(candidate)) {
+      return
+    }
+    const mesh = candidate as THREE.InstancedMesh
+    if (!(mesh as unknown as { isInstancedMesh?: boolean }).isInstancedMesh) {
+      return
+    }
+    if (!mesh.visible || mesh.count === 0) {
+      return
+    }
+    pickTargets.push(mesh)
+    seen.add(mesh)
+  }
+
+  instancedMeshGroup.children.forEach((child) => {
+    if (child) {
+      addInstancedPickTarget(child)
+    }
+  })
+  instancedMeshes.forEach((mesh) => addInstancedPickTarget(mesh))
+
+  const intersections = raycaster.intersectObjects(pickTargets, false)
+  intersections.sort((a, b) => a.distance - b.distance)
+
+  for (const intersection of intersections) {
+    if (typeof intersection.instanceId !== 'number' || intersection.instanceId < 0) {
+      continue
+    }
+    const mesh = intersection.object as THREE.InstancedMesh
+    const bindingId = findBindingIdForInstance(mesh, intersection.instanceId)
+    if (!bindingId || bindingId.startsWith('inst-preview:')) {
+      continue
+    }
+    const nodeId = findNodeIdForInstance(mesh, intersection.instanceId)
+    if (!nodeId) {
+      continue
+    }
+    const node = findSceneNode(sceneStore.nodes, nodeId)
+    if (!node) {
+      continue
+    }
+    const definition = getContinuousInstancedModelUserData(node)
+    if (!definition) {
+      continue
+    }
+
+    const binding = getModelInstanceBindingById(bindingId)
+    if (!binding) {
+      continue
+    }
+
+    const activeHandles = new Set<string>()
+    binding.slots.forEach((slot) => {
+      const proxyKey = slot.handleId
+      activeHandles.add(proxyKey)
+      let proxy = repairHoverProxies.get(proxyKey)
+      if (!proxy) {
+        proxy = createInstancedOutlineProxy(slot.mesh)
+        repairHoverProxies.set(proxyKey, proxy)
+        repairHoverGroup.add(proxy)
+      } else {
+        if (proxy.geometry !== slot.mesh.geometry) {
+          proxy.geometry = slot.mesh.geometry
+        }
+        if (Array.isArray(slot.mesh.material)) {
+          const current = Array.isArray(proxy.material) ? proxy.material : null
+          if (!current || current.length !== slot.mesh.material.length) {
+            proxy.material = getOutlineProxyMaterial(slot.mesh.material)
+          }
+        } else if (Array.isArray(proxy.material)) {
+          proxy.material = instancedOutlineBaseMaterial
+        }
+        if (proxy.parent !== repairHoverGroup) {
+          repairHoverGroup.add(proxy)
+        }
+      }
+
+      slot.mesh.updateWorldMatrix(true, false)
+      slot.mesh.getMatrixAt(slot.index, instancedOutlineMatrixHelper)
+      instancedOutlineWorldMatrixHelper.multiplyMatrices(slot.mesh.matrixWorld, instancedOutlineMatrixHelper)
+      proxy.matrix.copy(instancedOutlineWorldMatrixHelper)
+      proxy.visible = true
+    })
+
+    repairHoverProxies.forEach((proxy, key) => {
+      if (!activeHandles.has(key)) {
+        proxy.visible = false
+      }
+    })
+
+    const changed = bindingId !== repairHoverBindingId || nodeId !== repairHoverNodeId || !repairHoverGroup.visible
+    repairHoverBindingId = bindingId
+    repairHoverNodeId = nodeId
+    repairHoverGroup.visible = true
+
+    if (changed) {
+      updateOutlineSelectionTargets()
+    }
+
+    return true
+  }
+
+  if (repairHoverGroup.visible) {
+    clearRepairHoverHighlight(true)
+  }
+  return false
+}
+
+function continuousIndexFromBindingId(nodeId: string, bindingId: string): number | null {
+  if (bindingId === nodeId) {
+    return 0
+  }
+  const prefix = `inst:${nodeId}:`
+  if (!bindingId.startsWith(prefix)) {
+    return null
+  }
+  const raw = bindingId.slice(prefix.length)
+  const index = Number.parseInt(raw, 10)
+  if (!Number.isFinite(index) || index < 1) {
+    return null
+  }
+  return index
+}
+
+function eraseContinuousInstance(nodeId: string, bindingId: string): boolean {
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  const object = objectMap.get(nodeId) ?? null
+  if (!node || !object) {
+    return false
+  }
+  const assetId = object.userData?.instancedAssetId as string | undefined
+  if (!assetId) {
+    return false
+  }
+
+  const definition = getContinuousInstancedModelUserData(node)
+  if (!definition) {
+    return false
+  }
+
+  const index = continuousIndexFromBindingId(nodeId, bindingId)
+  if (index === null) {
+    return false
+  }
+
+  const spacing = definition.spacing
+  const basePositions = 'positions' in definition
+    ? definition.positions.map((p) => ({ x: p.x, y: p.y, z: p.z }))
+    : buildLinearLocalPositions(definition.count, spacing)
+
+  if (index < 0 || index >= basePositions.length) {
+    return false
+  }
+
+  basePositions.splice(index, 1)
+
+  if (basePositions.length === 0) {
+    sceneStore.removeSceneNodes([nodeId])
+    clearRepairHoverHighlight(true)
+    return true
+  }
+
+  const nextUserData = buildContinuousInstancedModelUserDataPatchV2({
+    previousUserData: node.userData,
+    spacing,
+    positions: basePositions,
+  })
+
+  sceneStore.updateNodeUserData(nodeId, nextUserData as Record<string, unknown>)
+
+  // Keep runtime instance allocation in sync immediately.
+  syncContinuousInstancedModelCommitted({
+    node: { ...node, userData: nextUserData } as SceneNode,
+    object,
+    assetId,
+  })
+
+  ensureInstancedPickProxy(object, { ...node, userData: nextUserData } as SceneNode)
+  syncInstancedOutlineEntryTransform(nodeId)
+  updateOutlineSelectionTargets()
+  updateSelectionHighlights()
+  updatePlaceholderOverlayPositions()
+  return true
+}
+
+function handleRepairPointerDown(event: PointerEvent): boolean {
+  if (!repairModeActive.value) {
+    return false
+  }
+  if (!canvasRef.value || !camera) {
+    return false
+  }
+  if (!event.isPrimary || event.button !== 0) {
+    return true
+  }
+
+  const rect = canvasRef.value.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) {
+    return true
+  }
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  raycaster.setFromCamera(pointer, camera)
+
+  const intersections = raycaster.intersectObjects(instancedMeshes, false)
+  intersections.sort((a, b) => a.distance - b.distance)
+
+  for (const intersection of intersections) {
+    if (typeof intersection.instanceId !== 'number' || intersection.instanceId < 0) {
+      continue
+    }
+    const mesh = intersection.object as THREE.InstancedMesh
+    const bindingId = findBindingIdForInstance(mesh, intersection.instanceId)
+    if (!bindingId || bindingId.startsWith('inst-preview:')) {
+      continue
+    }
+    const nodeId = findNodeIdForInstance(mesh, intersection.instanceId)
+    if (!nodeId) {
+      continue
+    }
+    const handled = eraseContinuousInstance(nodeId, bindingId)
+    clearRepairHoverHighlight(true)
+    return handled
+  }
+
+  return true
 }
 const {
   overlayContainerRef,
@@ -737,7 +1043,9 @@ function beginContinuousInstancedCreate(event: PointerEvent, node: SceneNode, ob
 
   const assetId = object.userData.instancedAssetId as string
   const definition = getContinuousInstancedModelUserData(node)
-  const existingCount = definition?.count ?? 1
+  const existingCount = definition
+    ? ('positions' in definition ? definition.positions.length : definition.count)
+    : 1
   const spacing = definition?.spacing ?? computeDefaultInstancedSpacing(object.userData?.instancedBounds)
 
   continuousInstancedCreateState = {
@@ -2298,6 +2606,9 @@ function initScene() {
   scene.add(rootGroup)
   scene.add(instancedMeshGroup)
   scene.add(instancedOutlineGroup)
+  if (repairHoverGroup.parent !== instancedOutlineGroup) {
+    instancedOutlineGroup.add(repairHoverGroup)
+  }
   scene.add(terrainGridHelper)
   scene.add(axesHelper)
   scene.add(brushMesh)
@@ -3866,6 +4177,14 @@ function updateOutlineSelectionTargets() {
   })
   releaseCandidates.forEach((nodeId) => releaseInstancedOutlineEntry(nodeId, false))
 
+  if (repairModeActive.value && repairHoverGroup.visible && repairHoverGroup.children.length) {
+    repairHoverGroup.children.forEach((child) => {
+      if (child.visible) {
+        meshSet.add(child)
+      }
+    })
+  }
+
   outlineSelectionTargets.length = 0
   outlineSelectionTargets.push(...meshSet)
 
@@ -4186,6 +4505,14 @@ async function handlePointerDown(event: PointerEvent) {
     return
   }
 
+  if (handleRepairPointerDown(event)) {
+    pointerTrackingState = null
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
   if (event.button === 0 && event.shiftKey && props.activeTool === 'select') {
     const nodeId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
     if (nodeId && !sceneStore.isNodeSelectionLocked(nodeId)) {
@@ -4388,6 +4715,16 @@ async function handlePointerDown(event: PointerEvent) {
 function handlePointerMove(event: PointerEvent) {
   if (updateContinuousInstancedCreate(event)) {
     return
+  }
+
+  if (repairModeActive.value) {
+    updateRepairHoverHighlight(event)
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  } else {
+    updateRepairHoverHighlight(event)
   }
 
   if (nodePickerStore.isActive) {
@@ -5360,6 +5697,7 @@ function cancelActiveBuildOperation(): boolean {
 }
 
 function handleBuildToolChange(tool: BuildTool | null) {
+  exitRepairMode()
   if (tool === 'ground') {
     exitScatterEraseMode()
     cancelGroundEditorScatterPlacement()
@@ -7098,6 +7436,11 @@ function handleViewportShortcut(event: KeyboardEvent) {
           handled = true
           break
         }
+        if (repairModeActive.value) {
+          exitRepairMode()
+          handled = true
+          break
+        }
         if (cancelActiveBuildOperation()) {
           handled = true
           break
@@ -7404,7 +7747,9 @@ defineExpose<SceneViewportHandle>({
         :can-align-selection="canAlignSelection"
         :can-rotate-selection="canRotateSelection"
         :can-erase-scatter="selectedNodeIsGround"
+        :can-repair-instanced="canRepairInstanced"
         :scatter-erase-mode-active="scatterEraseModeActive"
+        :repair-mode-active="repairModeActive"
           :scatter-erase-radius="scatterEraseRadius"
           :scatter-erase-menu-open="scatterEraseMenuOpen"
         :active-build-tool="activeBuildTool"
@@ -7416,6 +7761,7 @@ defineExpose<SceneViewportHandle>({
         @toggle-camera-control="handleToggleCameraControlMode"
         @change-build-tool="handleBuildToolChange"
         @toggle-scatter-erase="toggleScatterEraseMode"
+        @toggle-repair="toggleRepairMode"
           @clear-all-scatter-instances="handleClearAllScatterInstances"
           @update-scatter-erase-radius="terrainStore.setScatterEraseRadius"
           @update:scatter-erase-menu-open="handleScatterEraseMenuOpen"

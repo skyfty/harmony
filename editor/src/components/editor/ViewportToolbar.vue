@@ -148,6 +148,18 @@
           </div>
         </v-list>
       </v-menu>
+
+      <v-btn
+        icon="mdi-hammer"
+        density="compact"
+        size="small"
+        class="toolbar-button"
+        :color="repairModeActive ? 'primary' : undefined"
+        :variant="repairModeActive ? 'flat' : 'text'"
+        :disabled="!canRepairInstanced"
+        title="修理工具（擦除连续实例）"
+        @click="emit('toggle-repair')"
+      />
       <v-menu v-model="rotationMenuOpen" location="bottom" :offset="8">
         <template #activator="{ props: menuProps }">
           <v-btn
@@ -238,9 +250,11 @@ const props = defineProps<{
   canAlignSelection: boolean
   canRotateSelection: boolean
   canEraseScatter: boolean
+  canRepairInstanced: boolean
   cameraControlMode: CameraControlMode
   activeBuildTool: BuildTool | null
   scatterEraseModeActive: boolean
+  repairModeActive: boolean
   scatterEraseRadius: number
   scatterEraseMenuOpen: boolean
 }>()
@@ -254,6 +268,7 @@ const emit = defineEmits<{
   (event: 'toggle-camera-control'): void
   (event: 'change-build-tool', tool: BuildTool | null): void
   (event: 'toggle-scatter-erase'): void
+  (event: 'toggle-repair'): void
   (event: 'update-scatter-erase-radius', value: number): void
   (event: 'clear-all-scatter-instances'): void
   (event: 'update:scatter-erase-menu-open', value: boolean): void
@@ -266,7 +281,9 @@ const {
   canAlignSelection,
   canRotateSelection,
   canEraseScatter,
+  canRepairInstanced,
   scatterEraseModeActive,
+  repairModeActive,
   cameraControlMode,
   activeBuildTool,
   scatterEraseRadius,
