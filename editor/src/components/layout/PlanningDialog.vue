@@ -10,7 +10,7 @@ const dialogOpen = computed({
   set: (value: boolean) => emit('update:modelValue', value),
 })
 
-type PlanningTool = 'select' | 'pan' | 'rectangle' | 'lasso' | 'line'
+type PlanningTool = 'select' | 'pan' | 'rectangle' | 'lasso' | 'line' | 'align-marker'
 type LayerKind = 'terrain' | 'building' | 'road' | 'green' | 'wall'
 
 interface PlanningLayer {
@@ -52,6 +52,8 @@ interface PlanningImage {
   position: { x: number; y: number }
   scale: number
   scaleRatio?: number
+  // 对齐标记（存储在图片自身坐标系：原始像素坐标）
+  alignMarker?: { x: number; y: number }
 }
 
 type SelectedFeature =
@@ -66,7 +68,15 @@ type DragState =
   | { type: 'pan'; pointerId: number; origin: { x: number; y: number }; offset: { x: number; y: number } }
   | { type: 'move-polygon'; pointerId: number; polygonId: string; anchor: PlanningPoint; startPoints: PlanningPoint[] }
   | { type: 'move-polyline'; pointerId: number; lineId: string; anchor: PlanningPoint; startPoints: PlanningPoint[] }
-  | { type: 'move-image-layer'; pointerId: number; imageId: string; startPos: { x: number; y: number }; anchor: { x: number; y: number } }
+  | {
+    type: 'move-image-layer'
+    pointerId: number
+    imageId: string
+    startPos: { x: number; y: number }
+    anchor: { x: number; y: number }
+    // 对齐模式下，记录参与对齐的图层拖拽起始位置；无对齐标记的图层不在此列表中。
+    groupStartPos?: Record<string, { x: number; y: number }>
+  }
   | {
     type: 'resize-image-layer'
     pointerId: number
@@ -81,6 +91,7 @@ type DragState =
     targetId: string
     vertexIndex: number
   }
+  | { type: 'move-align-marker'; pointerId: number; imageId: string }
 
 interface LineDraft {
   layerId: string
@@ -114,6 +125,8 @@ const dragState = ref<DragState>({ type: 'idle' })
 const viewTransform = reactive({ scale: 1, offset: { x: 0, y: 0 } })
 const planningImages = ref<PlanningImage[]>([])
 const activeImageId = ref<string | null>(null)
+const alignModeActive = ref(false)
+const hasAlignMarkerCandidates = computed(() => planningImages.value.some((img) => img.visible && !!img.alignMarker))
 const uploadZoneActive = ref(false)
 const uploadError = ref<string | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
@@ -147,7 +160,8 @@ const effectiveCanvasSize = computed(() => frozenCanvasSize.value ?? canvasSize.
 // 性能优化：合并高频 pointermove 更新，避免每次事件都触发响应式链路与样式计算。
 let rafScheduled = false
 let pendingPan: { x: number; y: number } | null = null
-let pendingImageMove: { imageId: string; x: number; y: number } | null = null
+let pendingImageMoves: Array<{ imageId: string; x: number; y: number }> | null = null
+let pendingMarkerMove: { imageId: string; localX: number; localY: number } | null = null
 
 function scheduleRafFlush() {
   if (rafScheduled) {
@@ -161,13 +175,22 @@ function scheduleRafFlush() {
       viewTransform.offset.y = pendingPan.y
       pendingPan = null
     }
-    if (pendingImageMove) {
-      const image = planningImages.value.find((img) => img.id === pendingImageMove?.imageId)
+    if (pendingImageMoves?.length) {
+      pendingImageMoves.forEach((move) => {
+        const image = planningImages.value.find((img) => img.id === move.imageId)
+        if (image) {
+          image.position.x = move.x
+          image.position.y = move.y
+        }
+      })
+      pendingImageMoves = null
+    }
+    if (pendingMarkerMove) {
+      const image = planningImages.value.find((img) => img.id === pendingMarkerMove?.imageId)
       if (image) {
-        image.position.x = pendingImageMove.x
-        image.position.y = pendingImageMove.y
+        image.alignMarker = { x: pendingMarkerMove.localX, y: pendingMarkerMove.localY }
       }
-      pendingImageMove = null
+      pendingMarkerMove = null
     }
   })
 }
@@ -291,6 +314,38 @@ function getImageRect(image: PlanningImage) {
   }
 }
 
+function getAlignMarkerWorld(image: PlanningImage) {
+  if (!image.alignMarker) {
+    return null
+  }
+  return {
+    x: image.position.x + image.alignMarker.x * image.scale,
+    y: image.position.y + image.alignMarker.y * image.scale,
+  }
+}
+
+function setAlignMarkerAtWorld(image: PlanningImage, world: PlanningPoint) {
+  image.alignMarker = {
+    x: (world.x - image.position.x) / image.scale,
+    y: (world.y - image.position.y) / image.scale,
+  }
+}
+
+function getAlignMarkerStyle(image: PlanningImage): CSSProperties {
+  if (!image.visible) {
+    return { display: 'none' }
+  }
+  const world = getAlignMarkerWorld(image)
+  if (!world) {
+    return { display: 'none' }
+  }
+  return {
+    left: `${world.x}px`,
+    top: `${world.y}px`,
+    zIndex: 10000,
+  }
+}
+
 function getImageLayerStyle(image: PlanningImage, zIndex: number): CSSProperties {
   return {
     transform: `translate(${image.position.x}px, ${image.position.y}px) scale(${image.scale})`,
@@ -348,6 +403,55 @@ function hitTestImage(point: PlanningPoint) {
     }
   }
   return null
+}
+
+function alignImageLayersByMarkers() {
+  const candidates = planningImages.value.filter((img) => img.visible && img.alignMarker)
+  if (!candidates.length) {
+    return
+  }
+  const active = activeImageId.value
+    ? candidates.find((img) => img.id === activeImageId.value)
+    : null
+  const reference = active ?? candidates[0]
+  if (!reference) {
+    return
+  }
+  const refWorld = getAlignMarkerWorld(reference)
+  if (!refWorld) {
+    return
+  }
+  candidates.forEach((img) => {
+    if (img.id === reference.id) {
+      return
+    }
+    const world = getAlignMarkerWorld(img)
+    if (!world) {
+      return
+    }
+    img.position.x += refWorld.x - world.x
+    img.position.y += refWorld.y - world.y
+  })
+}
+
+function toggleAlignMode() {
+  alignModeActive.value = !alignModeActive.value
+  if (alignModeActive.value) {
+    alignImageLayersByMarkers()
+  }
+}
+
+function handleAlignMarkerPointerDown(imageId: string, event: PointerEvent) {
+  event.stopPropagation()
+  event.preventDefault()
+  activeImageId.value = imageId
+  frozenCanvasSize.value = { ...canvasSize.value }
+  dragState.value = {
+    type: 'move-align-marker',
+    pointerId: event.pointerId,
+    imageId,
+  }
+  event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
 }
 
 function startRectangleDrag(worldPoint: PlanningPoint, event: PointerEvent) {
@@ -516,14 +620,37 @@ function handleEditorPointerDown(event: PointerEvent) {
   frozenCanvasSize.value = { ...canvasSize.value }
   const world = screenToWorld(event)
   const hitImage = hitTestImage(world)
+
+  if (currentTool.value === 'align-marker') {
+    const targetImage = hitImage
+      ?? (activeImageId.value ? planningImages.value.find((img) => img.id === activeImageId.value) : null)
+    if (!targetImage) {
+      return
+    }
+    activeImageId.value = targetImage.id
+    setAlignMarkerAtWorld(targetImage, world)
+    return
+  }
+
   if (hitImage) {
     activeImageId.value = hitImage.id
+
+    const groupStartPos =
+      alignModeActive.value && hitImage.alignMarker
+        ? Object.fromEntries(
+          planningImages.value
+            .filter((img) => img.alignMarker)
+            .map((img) => [img.id, { x: img.position.x, y: img.position.y }]),
+        )
+        : undefined
+
     dragState.value = {
       type: 'move-image-layer',
       pointerId: event.pointerId,
       imageId: hitImage.id,
       startPos: { ...hitImage.position },
       anchor: world,
+      groupStartPos,
     }
     event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
     return
@@ -620,10 +747,34 @@ function handlePointerMove(event: PointerEvent) {
     const world = screenToWorld(event)
     const dx = world.x - state.anchor.x
     const dy = world.y - state.anchor.y
-    pendingImageMove = {
-      imageId: state.imageId,
-      x: state.startPos.x + dx,
-      y: state.startPos.y + dy,
+    if (state.groupStartPos && alignModeActive.value) {
+      pendingImageMoves = Object.entries(state.groupStartPos).map(([imageId, startPos]) => ({
+        imageId,
+        x: startPos.x + dx,
+        y: startPos.y + dy,
+      }))
+    } else {
+      pendingImageMoves = [
+        {
+          imageId: state.imageId,
+          x: state.startPos.x + dx,
+          y: state.startPos.y + dy,
+        },
+      ]
+    }
+    scheduleRafFlush()
+    return
+  }
+  if (state.type === 'move-align-marker') {
+    const image = planningImages.value.find((img) => img.id === state.imageId)
+    if (!image) {
+      return
+    }
+    const world = screenToWorld(event)
+    pendingMarkerMove = {
+      imageId: image.id,
+      localX: (world.x - image.position.x) / image.scale,
+      localY: (world.y - image.position.y) / image.scale,
     }
     scheduleRafFlush()
     return
@@ -1015,12 +1166,33 @@ function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
     return
   }
   const world = screenToWorld(event)
+  if (currentTool.value === 'align-marker') {
+    setAlignMarkerAtWorld(image, world)
+    dragState.value = {
+      type: 'move-align-marker',
+      pointerId: event.pointerId,
+      imageId,
+    }
+    event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
+    return
+  }
+
+  const groupStartPos =
+    alignModeActive.value && image.alignMarker
+      ? Object.fromEntries(
+        planningImages.value
+          .filter((img) => img.visible && img.alignMarker)
+          .map((img) => [img.id, { x: img.position.x, y: img.position.y }]),
+      )
+      : undefined
+
   dragState.value = {
     type: 'move-image-layer',
     pointerId: event.pointerId,
     imageId,
     startPos: { ...image.position },
     anchor: world,
+    groupStartPos,
   }
   event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
 }
@@ -1117,6 +1289,7 @@ const toolbarButtons: Array<{ tool: PlanningTool; icon: string; label: string }>
   { tool: 'rectangle', icon: 'mdi-rectangle-outline', label: '矩形选择' },
   { tool: 'lasso', icon: 'mdi-shape-polygon-plus', label: '自由选择' },
   { tool: 'line', icon: 'mdi-vector-line', label: '直线段' },
+  { tool: 'align-marker', icon: 'mdi-crosshairs-gps', label: '对齐标记' },
 ]
 
 const resizeDirections = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const
@@ -1355,6 +1528,18 @@ onBeforeUnmount(() => {
                 <v-icon start>{{ button.icon }}</v-icon>
                 {{ button.label }}
               </v-btn>
+
+              <v-btn
+                :color="alignModeActive ? 'primary' : undefined"
+                variant="tonal"
+                density="comfortable"
+                class="tool-button"
+                :disabled="!alignModeActive && !hasAlignMarkerCandidates"
+                @click="toggleAlignMode"
+              >
+                <v-icon start>mdi-align-horizontal-center</v-icon>
+                对齐规划图层
+              </v-btn>
             </div>
           </div>
 
@@ -1382,6 +1567,15 @@ onBeforeUnmount(() => {
                     draggable="false"
                   >
                 </div>
+
+                <div
+                  v-for="image in planningImages"
+                  :key="`${image.id}-align-marker`"
+                  class="align-marker"
+                  :class="{ active: activeImageId === image.id }"
+                  :style="getAlignMarkerStyle(image)"
+                  @pointerdown="handleAlignMarkerPointerDown(image.id, $event)"
+                />
               </div>
               <div v-if="!planningImages.length" class="canvas-empty">
                 <v-icon size="32">mdi-image-off-outline</v-icon>
@@ -1729,6 +1923,27 @@ onBeforeUnmount(() => {
   object-fit: contain;
   user-select: none;
   pointer-events: none;
+}
+
+.align-marker {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(98, 179, 255, 0.85);
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 0 2px rgba(98, 179, 255, 0.2);
+  cursor: grab;
+  pointer-events: auto;
+}
+
+.align-marker:active {
+  cursor: grabbing;
+}
+
+.align-marker.active {
+  background: rgba(98, 179, 255, 1);
 }
 
 .resize-handle {
