@@ -144,6 +144,31 @@ const lineVertexClickState = ref<{ lineId: string; vertexIndex: number; pointerI
 const spacePanning = ref(false)
 
 const activeLayer = computed(() => layers.value.find((layer) => layer.id === activeLayerId.value) ?? layers.value[0])
+const visibleLayerIds = computed(() => new Set(layers.value.filter((layer) => layer.visible).map((layer) => layer.id)))
+const visiblePolygons = computed(() => polygons.value.filter((poly) => visibleLayerIds.value.has(poly.layerId)))
+const visiblePolylines = computed(() => polylines.value.filter((line) => visibleLayerIds.value.has(line.layerId)))
+
+const selectedPolygon = computed(() => {
+  const feature = selectedFeature.value
+  if (!feature || feature.type !== 'polygon') {
+    return null
+  }
+  return polygons.value.find((item) => item.id === feature.id) ?? null
+})
+
+const selectedPolyline = computed(() => {
+  const feature = selectedFeature.value
+  if (!feature) {
+    return null
+  }
+  if (feature.type === 'polyline') {
+    return polylines.value.find((item) => item.id === feature.id) ?? null
+  }
+  if (feature.type === 'segment') {
+    return polylines.value.find((item) => item.id === feature.lineId) ?? null
+  }
+  return null
+})
 const canvasSize = computed(() => {
   if (!planningImages.value.length) {
     return { width: 2048, height: 2048 }
@@ -420,6 +445,14 @@ function createRectanglePoints(start: PlanningPoint, end: PlanningPoint) {
   ]
 }
 
+function getPolylinePath(points: PlanningPoint[]) {
+  if (!points.length) {
+    return ''
+  }
+  const segments = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`)
+  return segments.join(' ')
+}
+
 function screenToWorld(event: MouseEvent | PointerEvent): PlanningPoint {
   const rect = editorRect.value ?? editorRef.value?.getBoundingClientRect()
   if (!rect) {
@@ -670,54 +703,47 @@ function handleEditorPointerDown(event: PointerEvent) {
   event.preventDefault()
   frozenCanvasSize.value = { ...canvasSize.value }
   const world = screenToWorld(event)
-  const hitImage = hitTestImage(world)
 
   if (currentTool.value === 'align-marker') {
-    const targetImage = hitImage
-      ?? (activeImageId.value ? planningImages.value.find((img) => img.id === activeImageId.value) : null)
-    if (!targetImage) {
+    const targetImage = activeImageId.value ? planningImages.value.find((img) => img.id === activeImageId.value) : null
+    if (!targetImage || !targetImage.visible || targetImage.locked) {
       return
     }
-    activeImageId.value = targetImage.id
     setAlignMarkerAtWorld(targetImage, world)
     return
   }
 
-  if (hitImage) {
-    activeImageId.value = hitImage.id
+  if (currentTool.value === 'rectangle') {
+    startRectangleDrag(world, event)
+    return
+  }
 
-    if (hitImage.locked) {
-      return
-    }
+  if (currentTool.value === 'lasso') {
+    addPolygonDraftPoint(world)
+    return
+  }
 
-    const groupStartPos =
-      alignModeActive.value && hitImage.alignMarker
-      && !hitImage.locked
-        ? Object.fromEntries(
-          planningImages.value
-            .filter((img) => img.visible && img.alignMarker && !img.locked)
-            .map((img) => [img.id, { x: img.position.x, y: img.position.y }]),
-        )
-        : undefined
+  if (currentTool.value === 'line') {
+    startLineDraft(world)
+    return
+  }
 
+  // 平移视图：平移工具或按住 Space
+  if (currentTool.value === 'pan' || spacePanning.value) {
     dragState.value = {
-      type: 'move-image-layer',
+      type: 'pan',
       pointerId: event.pointerId,
-      imageId: hitImage.id,
-      startPos: { ...hitImage.position },
-      anchor: world,
-      groupStartPos,
+      origin: { x: event.clientX, y: event.clientY },
+      offset: { ...viewTransform.offset },
     }
     event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
     return
   }
-  dragState.value = {
-    type: 'pan',
-    pointerId: event.pointerId,
-    origin: { x: event.clientX, y: event.clientY },
-    offset: { ...viewTransform.offset },
+
+  // 选择工具点空白处，清空当前选择
+  if (currentTool.value === 'select') {
+    selectedFeature.value = null
   }
-  event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
 }
 
 function handleEditorDoubleClick(event: MouseEvent) {
@@ -1002,6 +1028,9 @@ function handlePolygonVertexPointerDown(polygonId: string, vertexIndex: number, 
   event.stopPropagation()
   event.preventDefault()
   selectFeature({ type: 'polygon', id: polygonId })
+  if (currentTool.value !== 'select') {
+    return
+  }
   dragState.value = {
     type: 'drag-vertex',
     pointerId: event.pointerId,
@@ -1033,6 +1062,9 @@ function handleLineVertexPointerDown(lineId: string, vertexIndex: number, event:
   event.stopPropagation()
   event.preventDefault()
   selectFeature({ type: 'polyline', id: lineId })
+  if (currentTool.value !== 'select') {
+    return
+  }
   dragState.value = {
     type: 'drag-vertex',
     pointerId: event.pointerId,
@@ -1052,6 +1084,9 @@ function handleLineVertexPointerDown(lineId: string, vertexIndex: number, event:
 function handleLineSegmentPointerDown(lineId: string, segmentIndex: number, event: PointerEvent) {
   event.stopPropagation()
   event.preventDefault()
+  if (currentTool.value !== 'select') {
+    return
+  }
   const skipSplit = event.ctrlKey || event.metaKey
   const world = screenToWorld(event)
   splitSegmentAt(lineId, segmentIndex, world, skipSplit)
@@ -1803,6 +1838,139 @@ onBeforeUnmount(() => {
                   >
                 </div>
 
+                <svg
+                  class="vector-overlay"
+                  :width="effectiveCanvasSize.width"
+                  :height="effectiveCanvasSize.height"
+                  :viewBox="`0 0 ${effectiveCanvasSize.width} ${effectiveCanvasSize.height}`"
+                >
+                  <!-- 已绘制多边形区域 -->
+                  <path
+                    v-for="poly in visiblePolygons"
+                    :key="poly.id"
+                    class="planning-polygon"
+                    :class="{ selected: selectedFeature?.type === 'polygon' && selectedFeature.id === poly.id }"
+                    :d="getPolygonPath(poly.points)"
+                    :fill="getLayerColor(poly.layerId, 0.22)"
+                    :stroke="getLayerColor(poly.layerId, 0.95)"
+                    @pointerdown="handlePolygonPointerDown(poly.id, $event as PointerEvent)"
+                  />
+
+                  <!-- 已绘制线段（以 polyline 表示） -->
+                  <g v-for="line in visiblePolylines" :key="line.id">
+                    <path
+                      class="planning-line"
+                      :class="{
+                        selected:
+                          (selectedFeature?.type === 'polyline' && selectedFeature.id === line.id)
+                          || (selectedFeature?.type === 'segment' && selectedFeature.lineId === line.id),
+                      }"
+                      :d="getPolylinePath(line.points)"
+                      :stroke="getLayerColor(line.layerId, 0.95)"
+                      fill="none"
+                      @pointerdown="handlePolylinePointerDown(line.id, $event as PointerEvent)"
+                    />
+
+                    <line
+                      v-for="(seg, segIndex) in getLineSegments(line)"
+                      :key="`${line.id}-seg-${segIndex}`"
+                      class="planning-line-segment"
+                      :x1="seg.start.x"
+                      :y1="seg.start.y"
+                      :x2="seg.end.x"
+                      :y2="seg.end.y"
+                      stroke="transparent"
+                      stroke-width="14"
+                      stroke-linecap="round"
+                      @pointerdown="handleLineSegmentPointerDown(line.id, segIndex, $event as PointerEvent)"
+                    />
+
+                    <!-- 端点命中区：允许直接点击端点继续绘制/拖动端点 -->
+                    <circle
+                      v-if="line.points.length"
+                      class="line-endpoint-hit"
+                      :cx="line.points[0]!.x"
+                      :cy="line.points[0]!.y"
+                      r="10"
+                      fill="transparent"
+                      @pointerdown="handleLineVertexPointerDown(line.id, 0, $event as PointerEvent)"
+                    />
+                    <circle
+                      v-if="line.points.length >= 2"
+                      class="line-endpoint-hit"
+                      :cx="line.points[line.points.length - 1]!.x"
+                      :cy="line.points[line.points.length - 1]!.y"
+                      r="10"
+                      fill="transparent"
+                      @pointerdown="handleLineVertexPointerDown(line.id, line.points.length - 1, $event as PointerEvent)"
+                    />
+                  </g>
+
+                  <!-- 矩形选择拖拽预览 -->
+                  <path
+                    v-if="dragState.type === 'rectangle'"
+                    class="planning-rectangle-preview"
+                    :d="getPolygonPath(createRectanglePoints(dragState.start, dragState.current))"
+                    fill="rgba(98, 179, 255, 0.12)"
+                    stroke="rgba(98, 179, 255, 0.9)"
+                    stroke-width="2"
+                  />
+
+                  <!-- 自由选择绘制预览（点击加点，双击结束） -->
+                  <path
+                    v-if="polygonDraftPoints.length >= 2"
+                    class="planning-polygon-draft"
+                    :d="getPolygonPath(polygonDraftPoints)"
+                    :fill="polygonDraftPoints.length >= 3 ? 'rgba(98, 179, 255, 0.10)' : 'transparent'"
+                    stroke="rgba(98, 179, 255, 0.9)"
+                    stroke-width="2"
+                    stroke-dasharray="6 4"
+                  />
+
+                  <!-- 线段绘制预览 -->
+                  <path
+                    v-if="lineDraft?.points?.length"
+                    class="planning-line-draft"
+                    :d="getPolylinePath(lineDraft.points)"
+                    stroke="rgba(98, 179, 255, 0.9)"
+                    stroke-width="2.5"
+                    stroke-dasharray="6 4"
+                    fill="none"
+                  />
+
+                  <!-- 选中多边形顶点 -->
+                  <g v-if="selectedPolygon">
+                    <circle
+                      v-for="(p, idx) in selectedPolygon.points"
+                      :key="`${selectedPolygon.id}-v-${idx}`"
+                      class="vertex-handle"
+                      :cx="p.x"
+                      :cy="p.y"
+                      r="6"
+                      :fill="getLayerColor(selectedPolygon.layerId, 0.95)"
+                      stroke="rgba(255,255,255,0.9)"
+                      stroke-width="2"
+                      @pointerdown="handlePolygonVertexPointerDown(selectedPolygon.id, idx, $event as PointerEvent)"
+                    />
+                  </g>
+
+                  <!-- 选中线段顶点 -->
+                  <g v-if="selectedPolyline">
+                    <circle
+                      v-for="(p, idx) in selectedPolyline.points"
+                      :key="`${selectedPolyline.id}-v-${idx}`"
+                      class="vertex-handle"
+                      :cx="p.x"
+                      :cy="p.y"
+                      r="6"
+                      :fill="getLayerColor(selectedPolyline.layerId, 0.95)"
+                      stroke="rgba(255,255,255,0.9)"
+                      stroke-width="2"
+                      @pointerdown="handleLineVertexPointerDown(selectedPolyline.id, idx, $event as PointerEvent)"
+                    />
+                  </g>
+                </svg>
+
                 <div
                   v-for="image in planningImages"
                   :key="`${image.id}-align-marker`"
@@ -2155,6 +2323,47 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
+.vector-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 5000;
+  pointer-events: none;
+}
+
+.planning-polygon,
+.planning-line,
+.planning-line-segment,
+.vertex-handle,
+.line-endpoint-hit {
+  pointer-events: auto;
+}
+
+.planning-line {
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  cursor: pointer;
+}
+
+.planning-line.selected {
+  stroke-width: 4;
+}
+
+.planning-line-segment {
+  cursor: cell;
+}
+
+.planning-rectangle-preview,
+.planning-polygon-draft,
+.planning-line-draft {
+  pointer-events: none;
+}
+
+.vertex-handle {
+  cursor: grab;
+}
+
 .align-marker {
   position: absolute;
   width: 22px;
@@ -2231,17 +2440,6 @@ onBeforeUnmount(() => {
 .planning-line {
   stroke-linecap: round;
   stroke-linejoin: round;
-  pointer-events: none;
-}
-
-.planning-line.selected {
-  stroke-width: 4;
-}
-
-.line-hit-area,
-.segment-hit {
-  cursor: pointer;
-  pointer-events: stroke;
 }
 
 .planning-line.draft {
