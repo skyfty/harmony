@@ -1229,9 +1229,24 @@ function handleImageLayerOpacityChange(imageId: string, opacity: number) {
 
 function handleImageLayerScaleRatioChange(imageId: string, scaleRatio: number | undefined) {
   const image = planningImages.value.find((img) => img.id === imageId)
-  if (image) {
-    image.scaleRatio = scaleRatio
+  if (!image) {
+    return
   }
+  // 比例尺：1像素 = N米（metersPerPixel）。改变时需实时更新图层显示大小。
+  // 锁定或隐藏时，禁止缩放/比例尺调整。
+  if (!image.visible || image.locked) {
+    return
+  }
+  if (scaleRatio === undefined) {
+    image.scaleRatio = undefined
+    return
+  }
+  const next = Number(scaleRatio)
+  if (!Number.isFinite(next) || next <= 0) {
+    return
+  }
+  image.scaleRatio = next
+  image.scale = next
 }
 
 function handleImageLayerDelete(imageId: string) {
@@ -1513,16 +1528,8 @@ onBeforeUnmount(() => {
   >
     <v-card class="planning-dialog" elevation="12">
       <header class="planning-dialog__header">
-        <div>
-          <div class="title">规划图转换</div>
-          <div class="subtitle">
-            上传2D平面规划图，勾勒图层并生成可用于3D场景重建的数据结构。
-          </div>
-        </div>
+        <div class="title">规划图转换</div>
         <div class="header-actions">
-          <v-btn icon variant="text" density="comfortable" @click="handleResetView">
-            <v-icon>mdi-crosshairs-gps</v-icon>
-          </v-btn>
           <v-btn icon variant="text" density="comfortable" @click="closeDialog">
             <v-icon>mdi-close</v-icon>
           </v-btn>
@@ -1635,15 +1642,19 @@ onBeforeUnmount(() => {
                       <span class="control-value">{{ Math.round(image.opacity * 100) }}%</span>
                     </div>
                     <div class="control-row">
-                      <span class="control-label">比例尺</span>
+                      <span class="control-label">米/像素</span>
                       <v-text-field
                         :model-value="image.scaleRatio ?? ''"
                         type="number"
-                        placeholder="1:1000"
+                        min="0"
+                        step="any"
+                        placeholder="例如 0.5"
+                        suffix="m/px"
                         density="compact"
                         variant="underlined"
                         hide-details
-                        @update:model-value="(v) => handleImageLayerScaleRatioChange(image.id, v ? Number(v) : undefined)"
+                        :disabled="!image.visible || image.locked"
+                        @update:model-value="(v) => handleImageLayerScaleRatioChange(image.id, v === '' || v === null || v === undefined ? undefined : Number(v))"
                       />
                     </div>
                   </div>
@@ -1783,7 +1794,23 @@ onBeforeUnmount(() => {
 }
 
 .planning-dialog__header {
-  display: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.planning-dialog__header .title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.planning-dialog__header .header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .planning-dialog__content {
