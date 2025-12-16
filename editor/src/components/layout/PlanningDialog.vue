@@ -40,11 +40,17 @@ interface PlanningPolyline {
 }
 
 interface PlanningImage {
+  id: string
   name: string
   url: string
   sizeLabel: string
   width: number
   height: number
+  visible: boolean
+  opacity: number
+  position: { x: number; y: number }
+  scale: number
+  scaleRatio?: number
 }
 
 type SelectedFeature =
@@ -59,6 +65,14 @@ type DragState =
   | { type: 'pan'; pointerId: number; origin: { x: number; y: number }; offset: { x: number; y: number } }
   | { type: 'move-polygon'; pointerId: number; polygonId: string; anchor: PlanningPoint; startPoints: PlanningPoint[] }
   | { type: 'move-polyline'; pointerId: number; lineId: string; anchor: PlanningPoint; startPoints: PlanningPoint[] }
+  | { type: 'move-image-layer'; pointerId: number; imageId: string; startPos: { x: number; y: number }; anchor: { x: number; y: number } }
+  | {
+    type: 'resize-image-layer'
+    pointerId: number
+    imageId: string
+    direction: 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
+    startRect: { x: number; y: number; w: number; h: number }
+  }
   | {
     type: 'drag-vertex'
     pointerId: number
@@ -86,7 +100,7 @@ const layerPresets: PlanningLayer[] = [
 ]
 
 const layers = ref<PlanningLayer[]>(layerPresets.map((layer) => ({ ...layer })))
-const activeLayerId = ref(layers.value[0].id)
+const activeLayerId = ref(layers.value[0]?.id ?? 'terrain-layer')
 const polygons = ref<PlanningPolygon[]>([])
 const polylines = ref<PlanningPolyline[]>([])
 const polygonCounter = ref(1)
@@ -97,7 +111,8 @@ const polygonDraftPoints = ref<PlanningPoint[]>([])
 const lineDraft = ref<LineDraft | null>(null)
 const dragState = ref<DragState>({ type: 'idle' })
 const viewTransform = reactive({ scale: 1, offset: { x: 0, y: 0 } })
-const planningImage = ref<PlanningImage | null>(null)
+const planningImages = ref<PlanningImage[]>([])
+const activeImageId = ref<string | null>(null)
 const uploadZoneActive = ref(false)
 const uploadError = ref<string | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
@@ -105,29 +120,26 @@ const editorRef = ref<HTMLDivElement | null>(null)
 const editorRect = ref<DOMRect | null>(null)
 const currentTool = ref<PlanningTool>('select')
 const lineVertexClickState = ref<{ lineId: string; vertexIndex: number; pointerId: number; moved: boolean } | null>(null)
+const spacePanning = ref(false)
 
 const activeLayer = computed(() => layers.value.find((layer) => layer.id === activeLayerId.value) ?? layers.value[0])
-const canvasSize = computed(() => ({
-  width: planningImage.value?.width ?? 2048,
-  height: planningImage.value?.height ?? 2048,
-}))
+const canvasSize = computed(() => {
+  if (!planningImages.value.length) {
+    return { width: 2048, height: 2048 }
+  }
+  let maxWidth = 0
+  let maxHeight = 0
+  planningImages.value.forEach(img => {
+    const w = img.position.x + img.width * img.scale
+    const h = img.position.y + img.height * img.scale
+    if (w > maxWidth) maxWidth = w
+    if (h > maxHeight) maxHeight = h
+  })
+  return { width: Math.max(maxWidth, 2048), height: Math.max(maxHeight, 2048) }
+})
 const canUseLineTool = computed(() => {
   const kind = activeLayer.value?.kind
   return kind === 'road' || kind === 'wall'
-})
-
-const selectionLayerId = computed<string | null>(() => {
-  const feature = selectedFeature.value
-  if (!feature) {
-    return null
-  }
-  if (feature.type === 'polygon') {
-    return polygons.value.find((item) => item.id === feature.id)?.layerId ?? null
-  }
-  if (feature.type === 'polyline') {
-    return polylines.value.find((item) => item.id === feature.id)?.layerId ?? null
-  }
-  return polylines.value.find((item) => item.id === feature.lineId)?.layerId ?? null
 })
 
 const layerFeatureTotals = computed(() =>
@@ -138,54 +150,7 @@ const layerFeatureTotals = computed(() =>
   }),
 )
 
-const selectionSummary = computed(() => {
-  const feature = selectedFeature.value
-  if (!feature) {
-    return null
-  }
-  if (feature.type === 'polygon') {
-    const polygon = polygons.value.find((item) => item.id === feature.id)
-    if (!polygon) {
-      return null
-    }
-    return {
-      layerName: getLayerName(polygon.layerId),
-      vertices: polygon.points.length,
-      type: '区域',
-    }
-  }
-  if (feature.type === 'polyline') {
-    const line = polylines.value.find((item) => item.id === feature.id)
-    if (!line) {
-      return null
-    }
-    return {
-      layerName: getLayerName(line.layerId),
-      vertices: line.points.length,
-      type: '线段组',
-    }
-  }
-  const line = polylines.value.find((item) => item.id === feature.lineId)
-  if (!line) {
-    return null
-  }
-  return {
-    layerName: getLayerName(line.layerId),
-    vertices: 2,
-    type: '单线段',
-  }
-})
-
 const editorBackgroundStyle = computed(() => {
-  const image = planningImage.value?.url
-  if (image) {
-    return {
-      backgroundImage: `url(${image})`,
-      backgroundSize: 'contain',
-      backgroundRepeat: 'no-repeat',
-      backgroundPosition: 'center',
-    }
-  }
   return {
     backgroundImage:
       'linear-gradient(90deg, rgba(255,255,255,0.04) 25%, transparent 25%, transparent 75%, rgba(255,255,255,0.04) 75%), linear-gradient(180deg, rgba(255,255,255,0.04) 25%, transparent 25%, transparent 75%, rgba(255,255,255,0.04) 75%)',
@@ -272,6 +237,15 @@ function clonePoint(point: PlanningPoint): PlanningPoint {
   return { x: Number(point.x.toFixed(2)), y: Number(point.y.toFixed(2)) }
 }
 
+function getImageRect(image: PlanningImage) {
+  return {
+    x: image.position.x,
+    y: image.position.y,
+    w: image.width * image.scale,
+    h: image.height * image.scale,
+  }
+}
+
 function clonePoints(points: PlanningPoint[]) {
   return points.map((point) => clonePoint(point))
 }
@@ -305,7 +279,7 @@ function startRectangleDrag(worldPoint: PlanningPoint, event: PointerEvent) {
     pointerId: event.pointerId,
     start: worldPoint,
     current: worldPoint,
-    layerId: activeLayer.value?.id ?? layers.value[0].id,
+    layerId: activeLayer.value?.id ?? layers.value[0]?.id ?? 'terrain-layer',
   }
   event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
 }
@@ -329,7 +303,7 @@ function addPolygon(points: PlanningPoint[], layerId?: string, labelPrefix?: str
   if (points.length < 3) {
     return
   }
-  const targetLayerId = layerId ?? activeLayer.value?.id ?? layers.value[0].id
+  const targetLayerId = layerId ?? activeLayer.value?.id ?? layers.value[0]?.id ?? 'terrain-layer'
   polygons.value.push({
     id: createId('poly'),
     name: `${labelPrefix ?? getLayerName(targetLayerId)} ${polygonCounter.value++}`,
@@ -357,7 +331,7 @@ function startLineDraft(point: PlanningPoint) {
   }
   if (!lineDraft.value) {
     lineDraft.value = {
-      layerId: activeLayer.value?.id ?? layers.value[0].id,
+      layerId: activeLayer.value?.id ?? layers.value[0]?.id ?? 'terrain-layer',
       points: [point],
     }
     return
@@ -436,54 +410,6 @@ function deleteSelectedFeature() {
   selectedFeature.value = null
 }
 
-function assignSelectionToLayer(layerId?: string | null) {
-  if (!layerId || !selectedFeature.value) {
-    return
-  }
-  if (selectedFeature.value.type === 'polygon') {
-    const polygon = polygons.value.find((item) => item.id === selectedFeature.value?.id)
-    if (polygon) {
-      polygon.layerId = layerId
-    }
-    return
-  }
-  if (selectedFeature.value.type === 'polyline') {
-    const line = polylines.value.find((item) => item.id === selectedFeature.value?.id)
-    if (line) {
-      line.layerId = layerId
-    }
-    return
-  }
-  const line = polylines.value.find((item) => item.id === selectedFeature.value?.lineId)
-  if (line) {
-    line.layerId = layerId
-  }
-}
-
-function applySelectedName() {
-  const feature = selectedFeature.value
-  if (!feature) {
-    return
-  }
-  const trimmed = selectedName.value.trim()
-  if (!trimmed.length) {
-    return
-  }
-  if (feature.type === 'polygon') {
-    const polygon = polygons.value.find((item) => item.id === feature.id)
-    if (polygon) {
-      polygon.name = trimmed
-    }
-    return
-  }
-  if (feature.type === 'polyline') {
-    const line = polylines.value.find((item) => item.id === feature.id)
-    if (line) {
-      line.name = trimmed
-    }
-  }
-}
-
 function handleToolSelect(tool: PlanningTool) {
   if (tool === 'line' && !canUseLineTool.value) {
     return
@@ -511,6 +437,29 @@ function handleEditorPointerDown(event: PointerEvent) {
   }
   event.preventDefault()
   const world = screenToWorld(event)
+  if (spacePanning.value) {
+    const image = activeImageId.value
+      ? planningImages.value.find((img) => img.id === activeImageId.value)
+      : null
+    if (image) {
+      dragState.value = {
+        type: 'move-image-layer',
+        pointerId: event.pointerId,
+        imageId: image.id,
+        startPos: { ...image.position },
+        anchor: world,
+      }
+    } else {
+      dragState.value = {
+        type: 'pan',
+        pointerId: event.pointerId,
+        origin: { x: event.clientX, y: event.clientY },
+        offset: { ...viewTransform.offset },
+      }
+    }
+    event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
+    return
+  }
   if (currentTool.value === 'rectangle') {
     startRectangleDrag(world, event)
     return
@@ -613,6 +562,47 @@ function handlePointerMove(event: PointerEvent) {
         lineVertexClickState.value = { ...lineVertexClickState.value, moved: true }
       }
     }
+    return
+  }
+  if (state.type === 'move-image-layer') {
+    const world = screenToWorld(event)
+    const dx = world.x - state.anchor.x
+    const dy = world.y - state.anchor.y
+    const image = planningImages.value.find((img) => img.id === state.imageId)
+    if (image) {
+      image.position.x = state.startPos.x + dx
+      image.position.y = state.startPos.y + dy
+    }
+    return
+  }
+  if (state.type === 'resize-image-layer') {
+    const image = planningImages.value.find((img) => img.id === state.imageId)
+    if (!image) {
+      return
+    }
+    const world = screenToWorld(event)
+    const minSize = 32
+    let { x, y, w, h } = state.startRect
+    if (state.direction.includes('e')) {
+      w = Math.max(minSize, world.x - x)
+    }
+    if (state.direction.includes('s')) {
+      h = Math.max(minSize, world.y - y)
+    }
+    if (state.direction.includes('w')) {
+      const newX = Math.min(world.x, x + state.startRect.w - minSize)
+      w = Math.max(minSize, x + state.startRect.w - newX)
+      x = newX
+    }
+    if (state.direction.includes('n')) {
+      const newY = Math.min(world.y, y + state.startRect.h - minSize)
+      h = Math.max(minSize, y + state.startRect.h - newY)
+      y = newY
+    }
+    const scale = Math.max(w / image.width, h / image.height, 0.05)
+    image.position.x = x
+    image.position.y = y
+    image.scale = scale
   }
 }
 
@@ -639,6 +629,9 @@ function handleWheel(event: WheelEvent) {
     return
   }
   event.preventDefault()
+  if (zoomActiveImage(event)) {
+    return
+  }
   const delta = event.deltaY > 0 ? -0.1 : 0.1
   const newScale = Math.min(8, Math.max(0.1, viewTransform.scale + delta * viewTransform.scale))
   const worldBefore = screenToWorld(event)
@@ -652,6 +645,24 @@ function handleWheel(event: WheelEvent) {
   }
 }
 
+function zoomActiveImage(event: WheelEvent) {
+  const image = activeImageId.value
+    ? planningImages.value.find((img) => img.id === activeImageId.value)
+    : null
+  if (!image) {
+    return false
+  }
+  const factor = event.deltaY > 0 ? 0.9 : 1.1
+  const nextScale = Math.min(20, Math.max(0.05, image.scale * factor))
+  const worldPoint = screenToWorld(event)
+  const localX = (worldPoint.x - image.position.x) / image.scale
+  const localY = (worldPoint.y - image.position.y) / image.scale
+  image.scale = nextScale
+  image.position.x = worldPoint.x - localX * nextScale
+  image.position.y = worldPoint.y - localY * nextScale
+  return true
+}
+
 function cancelActiveDrafts() {
   polygonDraftPoints.value = []
   lineDraft.value = null
@@ -660,6 +671,11 @@ function cancelActiveDrafts() {
 
 function handleKeydown(event: KeyboardEvent) {
   if (!dialogOpen.value) {
+    return
+  }
+  if (event.code === 'Space') {
+    event.preventDefault()
+    spacePanning.value = true
     return
   }
   if (event.key === 'Escape') {
@@ -681,6 +697,16 @@ function handleKeydown(event: KeyboardEvent) {
       event.preventDefault()
       finalizeLineDraft()
     }
+  }
+}
+
+function handleKeyup(event: KeyboardEvent) {
+  if (!dialogOpen.value) {
+    return
+  }
+  if (event.code === 'Space') {
+    event.preventDefault()
+    spacePanning.value = false
   }
 }
 
@@ -784,11 +810,15 @@ function startLineContinuation(lineId: string, vertexIndex: number) {
   if (vertexIndex !== 0 && vertexIndex !== line.points.length - 1) {
     return
   }
+  const point = line.points[vertexIndex]
+  if (!point) {
+    return
+  }
   currentTool.value = 'line'
   activeLayerId.value = line.layerId
   lineDraft.value = {
     layerId: line.layerId,
-    points: [clonePoint(line.points[vertexIndex])],
+    points: [clonePoint(point)],
     continuation: {
       lineId,
       anchorIndex: vertexIndex,
@@ -806,16 +836,16 @@ function handleFileChange(event: Event) {
   if (!input?.files?.length) {
     return
   }
-  loadPlanningImage(input.files[0])
+  Array.from(input.files).forEach(file => loadPlanningImage(file))
   input.value = ''
 }
 
 function handleDrop(event: DragEvent) {
   event.preventDefault()
   uploadZoneActive.value = false
-  const file = event.dataTransfer?.files?.[0]
-  if (file) {
-    loadPlanningImage(file)
+  const files = event.dataTransfer?.files
+  if (files?.length) {
+    Array.from(files).forEach(file => loadPlanningImage(file))
   }
 }
 
@@ -838,17 +868,25 @@ function loadPlanningImage(file: File) {
   const url = URL.createObjectURL(file)
   const image = new Image()
   image.onload = () => {
-    planningImage.value = {
+    const newImage: PlanningImage = {
+      id: createId('img'),
       name: file.name,
       url,
       sizeLabel: `${image.naturalWidth} x ${image.naturalHeight}`,
       width: image.naturalWidth,
       height: image.naturalHeight,
+      visible: true,
+      opacity: 1,
+      position: { x: 0, y: 0 },
+      scale: 1,
+      scaleRatio: undefined,
     }
-    const containerWidth = editorRef.value?.clientWidth ?? 1
-    const autoScale = containerWidth ? containerWidth / image.naturalWidth : 1
-    viewTransform.scale = Math.min(1.4, Math.max(0.3, autoScale))
-    viewTransform.offset = { x: 0, y: 0 }
+    planningImages.value.push(newImage)
+    activeImageId.value = newImage.id
+
+    nextTick(() => {
+      fitViewToImage(newImage)
+    })
   }
   image.onerror = () => {
     uploadError.value = '无法读取该图片，请重试或更换文件。'
@@ -857,9 +895,122 @@ function loadPlanningImage(file: File) {
   image.src = url
 }
 
+function fitViewToImage(image: PlanningImage) {
+  const container = editorRef.value
+  if (!container) {
+    return
+  }
+  const worldWidth = image.width * image.scale
+  const worldHeight = image.height * image.scale
+  const containerWidth = Math.max(container.clientWidth, 1)
+  const containerHeight = Math.max(container.clientHeight, 1)
+  const scale = Math.min(
+    Math.max(Math.min(containerWidth / worldWidth, containerHeight / worldHeight), 0.2),
+    1.4,
+  )
+  viewTransform.scale = scale
+  viewTransform.offset.x = (containerWidth / scale - worldWidth) / 2 - image.position.x
+  viewTransform.offset.y = (containerHeight / scale - worldHeight) / 2 - image.position.y
+  updateEditorRect()
+}
+
 function handleResetView() {
   viewTransform.scale = 1
   viewTransform.offset = { x: 0, y: 0 }
+}
+
+function handleImageLayerToggle(imageId: string) {
+  const image = planningImages.value.find((img) => img.id === imageId)
+  if (image) {
+    image.visible = !image.visible
+  }
+}
+
+function handleImageLayerSelect(imageId: string) {
+  activeImageId.value = imageId
+}
+
+function handleImageLayerOpacityChange(imageId: string, opacity: number) {
+  const image = planningImages.value.find((img) => img.id === imageId)
+  if (image) {
+    image.opacity = opacity
+  }
+}
+
+function handleImageLayerScaleRatioChange(imageId: string, scaleRatio: number | undefined) {
+  const image = planningImages.value.find((img) => img.id === imageId)
+  if (image) {
+    image.scaleRatio = scaleRatio
+  }
+}
+
+function handleImageLayerDelete(imageId: string) {
+  planningImages.value = planningImages.value.filter((img) => img.id !== imageId)
+  if (activeImageId.value === imageId) {
+    activeImageId.value = planningImages.value[0]?.id ?? null
+  }
+}
+
+function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
+  if (!spacePanning.value && currentTool.value !== 'select' && currentTool.value !== 'pan') {
+    return
+  }
+  event.stopPropagation()
+  event.preventDefault()
+  activeImageId.value = imageId
+  const image = planningImages.value.find((img) => img.id === imageId)
+  if (!image) {
+    return
+  }
+  const world = screenToWorld(event)
+  dragState.value = {
+    type: 'move-image-layer',
+    pointerId: event.pointerId,
+    imageId,
+    startPos: { ...image.position },
+    anchor: world,
+  }
+  event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
+}
+
+function handleImageLayerMove(imageId: string, direction: 'up' | 'down') {
+  const index = planningImages.value.findIndex((img) => img.id === imageId)
+  if (index === -1) {
+    return
+  }
+  const targetIndex = direction === 'up' ? index + 1 : index - 1
+  if (targetIndex < 0 || targetIndex >= planningImages.value.length) {
+    return
+  }
+  const list = [...planningImages.value]
+  const [item] = list.splice(index, 1)
+  list.splice(targetIndex, 0, item)
+  planningImages.value = list
+}
+
+function handleImageResizePointerDown(
+  imageId: string,
+  direction: 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw',
+  event: PointerEvent,
+) {
+  if (currentTool.value !== 'select' && currentTool.value !== 'pan') {
+    return
+  }
+  event.stopPropagation()
+  event.preventDefault()
+  const image = planningImages.value.find((img) => img.id === imageId)
+  if (!image) {
+    return
+  }
+  const rect = getImageRect(image)
+  dragState.value = {
+    type: 'resize-image-layer',
+    pointerId: event.pointerId,
+    imageId,
+    direction,
+    startRect: rect,
+  }
+  event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
 }
 
 function getPolygonPath(points: PlanningPoint[]) {
@@ -873,9 +1024,32 @@ function getPolygonPath(points: PlanningPoint[]) {
 function getLineSegments(line: PlanningPolyline) {
   const segments: Array<{ start: PlanningPoint; end: PlanningPoint }> = []
   for (let i = 0; i < line.points.length - 1; i += 1) {
-    segments.push({ start: line.points[i], end: line.points[i + 1] })
+    const start = line.points[i]
+    const end = line.points[i + 1]
+    if (start && end) {
+      segments.push({ start, end })
+    }
   }
   return segments
+}
+
+function resizeCursor(direction: 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw') {
+  switch (direction) {
+    case 'n':
+    case 's':
+      return 'ns-resize'
+    case 'e':
+    case 'w':
+      return 'ew-resize'
+    case 'ne':
+    case 'sw':
+      return 'nesw-resize'
+    case 'nw':
+    case 'se':
+      return 'nwse-resize'
+    default:
+      return 'pointer'
+  }
 }
 
 function closeDialog() {
@@ -890,12 +1064,15 @@ const toolbarButtons: Array<{ tool: PlanningTool; icon: string; label: string }>
   { tool: 'line', icon: 'mdi-vector-line', label: '直线段' },
 ]
 
+const resizeDirections = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const
+
 onMounted(() => {
   window.addEventListener('pointermove', handlePointerMove, { passive: false })
   window.addEventListener('pointerup', handlePointerUp)
   window.addEventListener('pointercancel', handlePointerUp)
   window.addEventListener('resize', updateEditorRect)
   window.addEventListener('keydown', handleKeydown)
+  window.addEventListener('keyup', handleKeyup)
 })
 
 onBeforeUnmount(() => {
@@ -904,6 +1081,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('pointercancel', handlePointerUp)
   window.removeEventListener('resize', updateEditorRect)
   window.removeEventListener('keydown', handleKeydown)
+  window.removeEventListener('keyup', handleKeyup)
 })
 </script>
 
@@ -945,10 +1123,10 @@ onBeforeUnmount(() => {
           >
             <v-icon size="36">mdi-cloud-upload-outline</v-icon>
             <p class="upload-title">上传规划底图</p>
-            <p class="upload-hint">支持 PNG / JPG，可直接拖拽到此区域</p>
-            <div v-if="planningImage" class="upload-meta">
+            <p class="upload-hint">支持 PNG / JPG，可选择多个文件一次上传</p>
+            <div v-if="planningImages.length" class="upload-meta">
               <v-chip size="small" color="primary" variant="tonal">
-                {{ planningImage.name }} · {{ planningImage.sizeLabel }}
+                已上传 {{ planningImages.length }} 个图层
               </v-chip>
             </div>
             <div v-if="uploadError" class="upload-error">{{ uploadError }}</div>
@@ -956,6 +1134,7 @@ onBeforeUnmount(() => {
               ref="fileInputRef"
               type="file"
               accept=".png,.jpg,.jpeg"
+              multiple
               class="sr-only"
               @change="handleFileChange"
             >
@@ -997,6 +1176,94 @@ onBeforeUnmount(() => {
               </v-list-item>
             </v-list>
           </section>
+
+          <section v-if="planningImages.length" class="image-layer-panel">
+            <header>
+              <h3>规划图层</h3>
+            </header>
+            <v-list density="compact" class="image-layer-list">
+              <v-list-item
+                v-for="image in planningImages"
+                :key="image.id"
+                :class="['image-layer-item', { active: activeImageId === image.id }]"
+                @click="handleImageLayerSelect(image.id)"
+              >
+                <div class="image-layer-content">
+                  <div class="image-layer-header">
+                    <div class="image-layer-name">{{ image.name }}</div>
+                    <div class="image-layer-actions">
+                      <v-btn
+                        icon
+                        size="x-small"
+                        variant="text"
+                        color="grey"
+                        :disabled="planningImages.length === 1 || planningImages[planningImages.length - 1]?.id === image.id"
+                        @click.stop="handleImageLayerMove(image.id, 'up')"
+                      >
+                        <v-icon size="18">mdi-arrow-up-bold</v-icon>
+                      </v-btn>
+                      <v-btn
+                        icon
+                        size="x-small"
+                        variant="text"
+                        color="grey"
+                        :disabled="planningImages.length === 1 || planningImages[0]?.id === image.id"
+                        @click.stop="handleImageLayerMove(image.id, 'down')"
+                      >
+                        <v-icon size="18">mdi-arrow-down-bold</v-icon>
+                      </v-btn>
+                      <v-btn
+                        icon
+                        size="x-small"
+                        variant="text"
+                        :color="image.visible ? 'primary' : 'grey'"
+                        @click.stop="handleImageLayerToggle(image.id)"
+                      >
+                        <v-icon size="18">{{ image.visible ? 'mdi-eye-outline' : 'mdi-eye-off-outline' }}</v-icon>
+                      </v-btn>
+                      <v-btn
+                        icon
+                        size="x-small"
+                        variant="text"
+                        color="error"
+                        @click.stop="handleImageLayerDelete(image.id)"
+                      >
+                        <v-icon size="18">mdi-delete-outline</v-icon>
+                      </v-btn>
+                    </div>
+                  </div>
+                  <div class="image-layer-meta">{{ image.sizeLabel }}</div>
+                  <div class="image-layer-controls">
+                    <div class="control-row">
+                      <span class="control-label">透明度</span>
+                      <v-slider
+                        :model-value="image.opacity"
+                        min="0"
+                        max="1"
+                        step="0.1"
+                        density="compact"
+                        hide-details
+                        @update:model-value="(v) => handleImageLayerOpacityChange(image.id, v)"
+                      />
+                      <span class="control-value">{{ Math.round(image.opacity * 100) }}%</span>
+                    </div>
+                    <div class="control-row">
+                      <span class="control-label">比例尺</span>
+                      <v-text-field
+                        :model-value="image.scaleRatio ?? ''"
+                        type="number"
+                        placeholder="1:1000"
+                        density="compact"
+                        variant="outlined"
+                        hide-details
+                        @update:model-value="(v) => handleImageLayerScaleRatioChange(image.id, v ? Number(v) : undefined)"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </v-list-item>
+            </v-list>
+          </section>
         </aside>
 
         <main class="editor-panel">
@@ -1016,13 +1283,6 @@ onBeforeUnmount(() => {
                 {{ button.label }}
               </v-btn>
             </div>
-            <div class="tool-info">
-              <span v-if="currentTool === 'lasso'">双击结束绘制，多边形将自动闭合。</span>
-              <span v-else-if="currentTool === 'line' && !lineDraft">点击道路/墙体层的端点可继续延伸线段。</span>
-              <span v-else-if="currentTool === 'rectangle'">按住并拖拽以创建矩形区域。</span>
-              <span v-else-if="currentTool === 'pan'">拖拽以平移画布，滚轮可缩放。</span>
-              <span v-else>点击空白区域取消选中；拖动已选中元素以微调。</span>
-            </div>
           </div>
 
           <div
@@ -1033,177 +1293,10 @@ onBeforeUnmount(() => {
             @dblclick="handleEditorDoubleClick"
             @wheel.prevent="handleWheel"
           >
-            <svg
-              class="planning-svg"
-              :viewBox="`0 0 ${canvasSize.width} ${canvasSize.height}`"
-              preserveAspectRatio="xMidYMid meet"
-            >
-              <g :transform="`translate(${viewTransform.offset.x}, ${viewTransform.offset.y}) scale(${viewTransform.scale})`">
-                <template v-for="polygon in polygons" :key="polygon.id">
-                  <path
-                    v-if="layers.find((layer) => layer.id === polygon.layerId)?.visible"
-                    :d="getPolygonPath(polygon.points)"
-                    class="planning-polygon"
-                    :style="{
-                      fill: getLayerColor(
-                        polygon.layerId,
-                        selectedFeature && selectedFeature.type === 'polygon' && selectedFeature.id === polygon.id ? 0.45 : 0.28,
-                      ),
-                      stroke: getLayerColor(polygon.layerId, 0.9),
-                    }"
-                    :class="{ selected: selectedFeature && selectedFeature.type === 'polygon' && selectedFeature.id === polygon.id }"
-                    @pointerdown="handlePolygonPointerDown(polygon.id, $event)"
-                  />
-                  <circle
-                    v-for="(point, index) in polygon.points"
-                    v-if="selectedFeature && selectedFeature.type === 'polygon' && selectedFeature.id === polygon.id"
-                    :key="`${polygon.id}-${index}`"
-                    class="vertex-handle"
-                    :cx="point.x"
-                    :cy="point.y"
-                    r="6"
-                    :style="{ fill: getLayerColor(polygon.layerId, 0.95) }"
-                    @pointerdown="handlePolygonVertexPointerDown(polygon.id, index, $event)"
-                  />
-                </template>
-
-                <template v-for="line in polylines" :key="line.id">
-                  <g v-if="layers.find((layer) => layer.id === line.layerId)?.visible">
-                    <polyline
-                      class="planning-line"
-                      fill="none"
-                      :points="line.points.map((point) => `${point.x},${point.y}`).join(' ')"
-                      stroke-width="2"
-                      :style="{ stroke: getLayerColor(line.layerId, 1) }"
-                      :class="{
-                        selected:
-                          (selectedFeature && selectedFeature.type === 'polyline' && selectedFeature.id === line.id) ||
-                          (selectedFeature && selectedFeature.type === 'segment' && selectedFeature.lineId === line.id),
-                      }"
-                    />
-                    <polyline
-                      class="line-hit-area"
-                      fill="none"
-                      :points="line.points.map((point) => `${point.x},${point.y}`).join(' ')"
-                      stroke-width="18"
-                      stroke="transparent"
-                      @pointerdown="handlePolylinePointerDown(line.id, $event)"
-                    />
-                    <g v-for="(segment, segmentIndex) in getLineSegments(line)" :key="`${line.id}-${segmentIndex}`">
-                      <line
-                        class="segment-hit"
-                        stroke-width="22"
-                        stroke="transparent"
-                        :x1="segment.start.x"
-                        :y1="segment.start.y"
-                        :x2="segment.end.x"
-                        :y2="segment.end.y"
-                        @pointerdown="handleLineSegmentPointerDown(line.id, segmentIndex, $event)"
-                      />
-                    </g>
-                    <circle
-                      v-for="(point, index) in line.points"
-                      :key="`${line.id}-vertex-${index}`"
-                      class="vertex-handle line"
-                      :cx="point.x"
-                      :cy="point.y"
-                      r="6"
-                      :style="{ fill: getLayerColor(line.layerId, 0.95) }"
-                      @pointerdown="handleLineVertexPointerDown(line.id, index, $event)"
-                    />
-                  </g>
-                </template>
-
-                <path
-                  v-if="polygonDraftPoints.length > 1"
-                  class="planning-polygon draft"
-                  :d="getPolygonPath(polygonDraftPoints)"
-                />
-
-                <polyline
-                  v-if="lineDraft && lineDraft.points.length"
-                  class="planning-line draft"
-                  fill="none"
-                  stroke-width="2"
-                  :style="{ stroke: getLayerColor(lineDraft.layerId, 0.85) }"
-                  :points="lineDraft.points.map((point) => `${point.x},${point.y}`).join(' ')"
-                />
-
-                <path
-                  v-if="dragState.type === 'rectangle'"
-                  class="planning-polygon draft"
-                  :d="getPolygonPath(createRectanglePoints(dragState.start, dragState.current))"
-                />
-              </g>
-            </svg>
+            
           </div>
         </main>
 
-        <aside class="right-panel">
-          <section class="inspector">
-            <header>
-              <h3>元素属性</h3>
-              <span>选中区域或线段后即可编辑属性</span>
-            </header>
-            <div v-if="!selectedFeature" class="inspector-empty">
-              <v-icon size="42">mdi-select-search</v-icon>
-              <p>暂无选中元素</p>
-              <small>选择区域或线段以查看详细信息</small>
-            </div>
-            <div v-else class="inspector-body">
-              <v-text-field
-                v-model="selectedName"
-                label="名称"
-                variant="outlined"
-                density="comfortable"
-                hide-details
-                @blur="applySelectedName"
-                @keydown.enter.prevent="applySelectedName"
-              />
-              <v-select
-                :model-value="selectionLayerId ?? undefined"
-                :items="layers.map((layer) => ({ title: layer.name, value: layer.id }))"
-                label="所属图层"
-                density="comfortable"
-                variant="outlined"
-                hide-details
-                @update:model-value="assignSelectionToLayer"
-              />
-              <div class="inspector-summary" v-if="selectionSummary">
-                <div>类型：{{ selectionSummary.type }}</div>
-                <div>图层：{{ selectionSummary.layerName }}</div>
-                <div>节点数：{{ selectionSummary.vertices }}</div>
-              </div>
-              <div class="inspector-actions">
-                <v-btn
-                  color="primary"
-                  variant="tonal"
-                  prepend-icon="mdi-vector-arrange-below"
-                  @click="assignSelectionToLayer(activeLayerId)"
-                >
-                  关联到当前图层
-                </v-btn>
-                <v-btn
-                  color="error"
-                  variant="text"
-                  prepend-icon="mdi-delete-outline"
-                  @click="deleteSelectedFeature"
-                >
-                  删除
-                </v-btn>
-              </div>
-              <v-alert
-                v-if="selectedFeature && selectedFeature.type === 'segment'"
-                type="info"
-                variant="tonal"
-                density="comfortable"
-              >
-                点击线段中部可直接分割，删除后将自动连接相邻段落。
-              </v-alert>
-            </div>
-          </section>
-
-        </aside>
       </section>
     </v-card>
   </v-dialog>
@@ -1216,8 +1309,13 @@ onBeforeUnmount(() => {
   max-height: 96vh;
   display: flex;
   flex-direction: column;
-  background: rgba(10, 12, 18, 0.94);
+  background: #0c111a;
   color: #f4f6fb;
+  border: 1px solid rgba(98, 179, 255, 0.5);
+  box-shadow:
+    0 0 0 2px rgba(98, 179, 255, 0.3),
+    0 0 32px rgba(98, 179, 255, 0.35),
+    0 18px 60px rgba(0, 0, 0, 0.55);
 }
 
 .planning-dialog__header {
@@ -1246,14 +1344,16 @@ onBeforeUnmount(() => {
 .planning-dialog__content {
   flex: 1;
   display: grid;
-  grid-template-columns: 320px 1fr 360px;
+  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-rows: 1fr;
+  align-items: stretch;
   gap: 12px;
   padding: 20px 28px 28px;
   overflow: hidden;
+  min-height: 0;
 }
 
-.left-panel,
-.right-panel {
+.left-panel {
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -1350,6 +1450,98 @@ onBeforeUnmount(() => {
   gap: 12px;
 }
 
+.image-layer-panel {
+  padding: 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.image-layer-panel header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.image-layer-panel header span {
+  font-size: 0.8rem;
+  opacity: 0.6;
+}
+
+.image-layer-list {
+  margin-top: 12px;
+  background: transparent;
+}
+
+.image-layer-item {
+  border-radius: 10px;
+  margin-bottom: 8px;
+  transition: background-color 0.2s ease;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.image-layer-item.active {
+  background: rgba(100, 181, 246, 0.18);
+  border-color: rgba(100, 181, 246, 0.3);
+}
+
+.image-layer-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.image-layer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.image-layer-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.image-layer-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.image-layer-meta {
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+.image-layer-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.control-row {
+  display: grid;
+  grid-template-columns: 60px 1fr 45px;
+  align-items: center;
+  gap: 8px;
+}
+
+.control-label {
+  font-size: 0.75rem;
+  opacity: 0.8;
+}
+
+.control-value {
+  font-size: 0.75rem;
+  opacity: 0.7;
+  text-align: right;
+}
+
 .editor-panel {
   display: flex;
   flex-direction: column;
@@ -1357,6 +1549,8 @@ onBeforeUnmount(() => {
   background: rgba(8, 10, 16, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.05);
   min-height: 0;
+  height: 100%;
+  width: 100%;
 }
 
 .toolbar {
@@ -1386,7 +1580,7 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   border-radius: 0 0 16px 16px;
-  overflow: hidden;
+  overflow: auto;
   position: relative;
   background-color: rgba(16, 19, 28, 0.85);
   border-top: 1px solid rgba(255, 255, 255, 0.03);
@@ -1396,6 +1590,28 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   cursor: crosshair;
+}
+
+.planning-image {
+  pointer-events: all;
+}
+
+.planning-image.active {
+  filter: brightness(1.1);
+}
+
+.planning-image-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  pointer-events: none;
+}
+
+.resize-handle {
+  fill: transparent;
+  stroke: none;
+  pointer-events: all;
 }
 
 .planning-polygon {
@@ -1443,65 +1659,6 @@ onBeforeUnmount(() => {
 
 .vertex-handle.line {
   r: 5;
-}
-
-.right-panel section {
-  border-radius: 14px;
-  padding: 16px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.inspector header h3,
-.guide header h3 {
-  margin: 0;
-  font-size: 1rem;
-}
-
-.inspector header span {
-  font-size: 0.8rem;
-  opacity: 0.65;
-}
-
-.inspector-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 24px 0;
-  opacity: 0.7;
-}
-
-.inspector-body {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin-top: 12px;
-}
-
-.inspector-summary {
-  font-size: 0.85rem;
-  opacity: 0.85;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-}
-
-.inspector-actions {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.guide ul {
-  list-style: disc;
-  margin: 12px 0 0 18px;
-  padding: 0;
-  font-size: 0.85rem;
-  opacity: 0.78;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
 }
 
 .sr-only {
