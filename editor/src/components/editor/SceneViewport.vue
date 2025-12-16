@@ -1006,6 +1006,7 @@ type ContinuousInstancedCreateState = {
   startWorldPoint: THREE.Vector3
   spacing: number
   existingCount: number
+  anchorIndex: number
   previewEndIndexExclusive: number
   initialRotation: THREE.Euler
 }
@@ -1018,22 +1019,21 @@ const continuousYAxisHelper = new THREE.Vector3(0, 1, 0)
 const continuousParentWorldQuaternion = new THREE.Quaternion()
 const continuousDesiredWorldQuaternion = new THREE.Quaternion()
 const continuousLocalQuaternion = new THREE.Quaternion()
+const continuousAnchorWorldHelper = new THREE.Vector3()
+const continuousAnchorMatrixHelper = new THREE.Matrix4()
+const continuousAnchorWorldMatrixHelper = new THREE.Matrix4()
 
 function beginContinuousInstancedCreate(event: PointerEvent, node: SceneNode, object: THREE.Object3D): boolean {
   if (!canvasRef.value || !camera || !scene) {
     return false
   }
-  if (event.button !== 0 || !event.shiftKey) {
+  if (event.button !== 1) {
     return false
   }
   if (props.activeTool !== 'select') {
     return false
   }
   if (!object.userData?.instancedAssetId) {
-    return false
-  }
-
-  if (!raycastGroundPoint(event, continuousPointerWorldHelper)) {
     return false
   }
 
@@ -1044,14 +1044,66 @@ function beginContinuousInstancedCreate(event: PointerEvent, node: SceneNode, ob
     : 1
   const spacing = definition?.spacing ?? computeDefaultInstancedSpacing(object.userData?.instancedBounds)
 
+  let anchorIndex = 0
+  let hasAnchorPoint = false
+
+  // If the pointer is on one of this node's committed instanced instances, use that instance as the anchor.
+  {
+    const rect = canvasRef.value.getBoundingClientRect()
+    if (rect.width > 0 && rect.height > 0) {
+      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+      raycaster.setFromCamera(pointer, camera)
+
+      const intersections = raycaster.intersectObjects(instancedMeshes, false)
+      intersections.sort((a, b) => a.distance - b.distance)
+      for (const intersection of intersections) {
+        if (typeof intersection.instanceId !== 'number' || intersection.instanceId < 0) {
+          continue
+        }
+        const mesh = intersection.object as THREE.InstancedMesh
+        const bindingId = findBindingIdForInstance(mesh, intersection.instanceId)
+        if (!bindingId || bindingId.startsWith('inst-preview:')) {
+          continue
+        }
+        const hitNodeId = findNodeIdForInstance(mesh, intersection.instanceId)
+        if (hitNodeId !== node.id) {
+          continue
+        }
+        const resolvedIndex = continuousIndexFromBindingId(node.id, bindingId)
+        if (resolvedIndex === null) {
+          continue
+        }
+
+        mesh.updateMatrixWorld(true)
+        mesh.getMatrixAt(intersection.instanceId, continuousAnchorMatrixHelper)
+        continuousAnchorWorldMatrixHelper.multiplyMatrices(mesh.matrixWorld, continuousAnchorMatrixHelper)
+        continuousAnchorWorldHelper.setFromMatrixPosition(continuousAnchorWorldMatrixHelper)
+
+        anchorIndex = resolvedIndex
+        hasAnchorPoint = true
+        break
+      }
+    }
+  }
+
+  if (!hasAnchorPoint) {
+    if (!raycastGroundPoint(event, continuousPointerWorldHelper)) {
+      return false
+    }
+    continuousAnchorWorldHelper.copy(continuousPointerWorldHelper)
+    anchorIndex = 0
+  }
+
   continuousInstancedCreateState = {
     pointerId: event.pointerId,
     nodeId: node.id,
     assetId,
     object,
-    startWorldPoint: continuousPointerWorldHelper.clone(),
+    startWorldPoint: continuousAnchorWorldHelper.clone(),
     spacing: Math.max(1e-4, spacing),
     existingCount: Math.max(1, existingCount),
+    anchorIndex: Math.max(0, Math.min(Math.max(1, existingCount) - 1, anchorIndex)),
     previewEndIndexExclusive: Math.max(1, existingCount),
     initialRotation: object.rotation.clone(),
   }
@@ -1103,7 +1155,10 @@ function updateContinuousInstancedCreate(event: PointerEvent): boolean {
   syncInstancedTransform(state.object, false)
 
   const spacing = state.spacing
-  const desiredTotal = Math.max(state.existingCount, Math.floor(distance / spacing) + 1)
+  const desiredFromAnchor = Math.floor(distance / spacing) + 1
+  const remainingFromAnchor = Math.max(1, state.existingCount - state.anchorIndex)
+  const neededBeyondEnd = Math.max(0, desiredFromAnchor - remainingFromAnchor)
+  const desiredTotal = state.existingCount + neededBeyondEnd
   const previousEnd = state.previewEndIndexExclusive
   const nextEnd = Math.max(state.existingCount, desiredTotal)
 
@@ -4518,7 +4573,7 @@ async function handlePointerDown(event: PointerEvent) {
     return
   }
 
-  if (event.button === 0 && event.shiftKey && props.activeTool === 'select') {
+  if (event.button === 1 && props.activeTool === 'select') {
     const nodeId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
     if (nodeId && !sceneStore.isNodeSelectionLocked(nodeId)) {
       const node = findSceneNode(sceneStore.nodes, nodeId)
