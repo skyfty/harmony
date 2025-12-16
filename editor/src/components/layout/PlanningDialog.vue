@@ -127,6 +127,9 @@ const lineDraft = ref<LineDraft | null>(null)
 const dragState = ref<DragState>({ type: 'idle' })
 const viewTransform = reactive({ scale: 1, offset: { x: 0, y: 0 } })
 const planningImages = ref<PlanningImage[]>([])
+// 列表显示顺序与画布遮挡顺序保持一致：上层在列表更靠前。
+// 画布采用 DOM 顺序叠放（数组越靠后越上层），因此列表需要反向展示。
+const planningImagesForList = computed(() => [...planningImages.value].reverse())
 const activeImageId = ref<string | null>(null)
 const draggingImageId = ref<string | null>(null)
 const dragOverImageId = ref<string | null>(null)
@@ -1123,7 +1126,7 @@ function handleImageLayerPanelDrop(event: DragEvent) {
 
   const reorderId = event.dataTransfer?.getData('text/x-harmony-planning-image-id')
   if (reorderId) {
-    movePlanningImageToEnd(reorderId)
+    movePlanningImageToListEnd(reorderId)
     draggingImageId.value = null
     dragOverImageId.value = null
     return
@@ -1271,6 +1274,22 @@ function reorderPlanningImages(fromId: string, toId: string) {
   planningImages.value = list
 }
 
+function reorderPlanningImagesByListOrder(fromId: string, toId: string) {
+  const listOrder = planningImagesForList.value
+  const fromIndex = listOrder.findIndex((img) => img.id === fromId)
+  const toIndex = listOrder.findIndex((img) => img.id === toId)
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
+    return
+  }
+  const nextList = [...listOrder]
+  const [item] = nextList.splice(fromIndex, 1)
+  if (!item) {
+    return
+  }
+  nextList.splice(toIndex, 0, item)
+  planningImages.value = nextList.reverse()
+}
+
 function movePlanningImageToEnd(imageId: string) {
   const fromIndex = planningImages.value.findIndex((img) => img.id === imageId)
   if (fromIndex < 0 || fromIndex === planningImages.value.length - 1) {
@@ -1283,6 +1302,22 @@ function movePlanningImageToEnd(imageId: string) {
   }
   list.push(item)
   planningImages.value = list
+}
+
+function movePlanningImageToListEnd(imageId: string) {
+  // 列表末尾 = 画布最底层
+  const listOrder = planningImagesForList.value
+  const fromIndex = listOrder.findIndex((img) => img.id === imageId)
+  if (fromIndex < 0 || fromIndex === listOrder.length - 1) {
+    return
+  }
+  const nextList = [...listOrder]
+  const [item] = nextList.splice(fromIndex, 1)
+  if (!item) {
+    return
+  }
+  nextList.push(item)
+  planningImages.value = nextList.reverse()
 }
 
 function handleImageLayerItemDragStart(imageId: string, event: DragEvent) {
@@ -1314,7 +1349,7 @@ function handleImageLayerItemDrop(targetImageId: string, event: DragEvent) {
   const draggedId = event.dataTransfer?.getData('text/x-harmony-planning-image-id')
   if (draggedId) {
     event.stopPropagation()
-    reorderPlanningImages(draggedId, targetImageId)
+    reorderPlanningImagesByListOrder(draggedId, targetImageId)
     draggingImageId.value = null
     dragOverImageId.value = null
     return
@@ -1497,6 +1532,7 @@ void zoomImageLayer
 void handleResetView
 void closeDialog
 void handleImageLayerMove
+void reorderPlanningImages
 
 onMounted(() => {
   window.addEventListener('pointermove', handlePointerMove, { passive: false })
@@ -1538,7 +1574,7 @@ onBeforeUnmount(() => {
 
       <section class="planning-dialog__content">
         <aside class="left-panel">
-<section class="image-layer-panel">
+          <section class="image-layer-panel">
             <header>
               <div class="panel-header">
                 <h3>规划图层</h3>
@@ -1576,7 +1612,7 @@ onBeforeUnmount(() => {
                 <div class="image-layer-empty__text">拖拽规划图文件到此，或点击右侧上传</div>
               </v-list-item>
               <v-list-item
-                v-for="image in planningImages"
+                v-for="image in planningImagesForList"
                 :key="image.id"
                 :class="[
                   'image-layer-item',
