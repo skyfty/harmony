@@ -10,6 +10,7 @@ import { OutlinePass } from 'three/examples/jsm/postprocessing/OutlinePass.js'
 import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js'
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
+import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js'
 
 // @ts-ignore - local plugin has no .d.ts declaration file
 import { TransformControls } from '@/utils/transformControls.js'
@@ -267,6 +268,13 @@ const instancedPickBoundsMinHelper = new THREE.Vector3()
 const instancedPickBoundsMaxHelper = new THREE.Vector3()
 const instancedPickBoundsSizeHelper = new THREE.Vector3()
 const instancedPickBoundsCenterHelper = new THREE.Vector3()
+const instancedPickProxyWorldInverseHelper = new THREE.Matrix4()
+const instancedPickProxyInstanceMatrixHelper = new THREE.Matrix4()
+const instancedPickProxyWorldMatrixHelper = new THREE.Matrix4()
+const instancedPickProxyLocalMatrixHelper = new THREE.Matrix4()
+const instancedPickProxyAssetBoundsHelper = new THREE.Box3()
+const instancedPickProxyPointsBoundsHelper = new THREE.Box3()
+const instancedPickProxyCornerHelpers = Array.from({ length: 8 }, () => new THREE.Vector3())
 
 let scene: THREE.Scene | null = null
 let renderer: THREE.WebGLRenderer | null = null
@@ -1310,6 +1318,8 @@ const transformScaleFactor = new THREE.Vector3(1, 1, 1)
 const transformQuaternionDelta = new THREE.Quaternion()
 const transformQuaternionHelper = new THREE.Quaternion()
 const transformQuaternionInverseHelper = new THREE.Quaternion()
+const instancedPivotCenterLocalHelper = new THREE.Vector3()
+const instancedPivotWorldHelper = new THREE.Vector3()
 const groundPointerHelper = new THREE.Vector3()
 const transformCurrentWorldPosition = new THREE.Vector3()
 const transformLastWorldPosition = new THREE.Vector3()
@@ -1352,6 +1362,24 @@ function buildTransformGroupState(primaryId: string | null): TransformGroupState
       return
     }
     object.updateMatrixWorld(true)
+
+    const proxy = object.userData?.instancedPickProxy as THREE.Mesh | undefined
+    if (proxy?.geometry) {
+      if (!proxy.geometry.boundingBox) {
+        proxy.geometry.computeBoundingBox()
+      }
+    }
+
+    const pivotWorld = new THREE.Vector3()
+    if (proxy?.geometry?.boundingBox) {
+      instancedPivotCenterLocalHelper.copy(proxy.geometry.boundingBox.getCenter(instancedPivotCenterLocalHelper))
+      proxy.updateMatrixWorld(true)
+      pivotWorld.copy(instancedPivotCenterLocalHelper)
+      proxy.localToWorld(pivotWorld)
+    } else {
+      object.getWorldPosition(pivotWorld)
+    }
+
     const worldPosition = new THREE.Vector3()
     object.getWorldPosition(worldPosition)
     const worldQuaternion = new THREE.Quaternion()
@@ -1365,6 +1393,7 @@ function buildTransformGroupState(primaryId: string | null): TransformGroupState
       initialScale: object.scale.clone(),
       initialWorldPosition: worldPosition,
       initialWorldQuaternion: worldQuaternion,
+      initialPivotWorldPosition: pivotWorld,
     })
   })
 
@@ -3452,12 +3481,6 @@ function extractInstancedBounds(node: SceneNode, object: THREE.Object3D): Instan
 }
 
 function ensureInstancedPickProxy(object: THREE.Object3D, node: SceneNode) {
-  const bounds = extractInstancedBounds(node, object)
-  if (!bounds) {
-    removeInstancedPickProxy(object)
-    return
-  }
-
   let proxy = object.userData?.instancedPickProxy as THREE.Mesh | undefined
   if (!proxy) {
     proxy = new THREE.Mesh(instancedPickProxyGeometry, instancedPickProxyMaterial)
@@ -3477,22 +3500,162 @@ function ensureInstancedPickProxy(object: THREE.Object3D, node: SceneNode) {
     proxy.userData.nodeId = node.id
   }
 
-  instancedPickBoundsMinHelper.fromArray(bounds.min)
-  instancedPickBoundsMaxHelper.fromArray(bounds.max)
-  instancedPickBoundsSizeHelper.subVectors(instancedPickBoundsMaxHelper, instancedPickBoundsMinHelper)
-  instancedPickBoundsCenterHelper
-    .addVectors(instancedPickBoundsMinHelper, instancedPickBoundsMaxHelper)
-    .multiplyScalar(0.5)
+  // Build a pick volume that covers *all* instanced bindings of this node.
+  // This makes clicking/dragging any instance select & transform around the correct center.
+  const bindings = getModelInstanceBindingsForNode(node.id)
 
-  const eps = 1e-4
-  proxy.position.copy(instancedPickBoundsCenterHelper)
-  proxy.scale.set(
-    Math.max(instancedPickBoundsSizeHelper.x, eps),
-    Math.max(instancedPickBoundsSizeHelper.y, eps),
-    Math.max(instancedPickBoundsSizeHelper.z, eps),
-  )
-  proxy.visible = true
-  proxy.updateMatrixWorld(true)
+  const restoreProxyToUnitBox = (center: THREE.Vector3, size: THREE.Vector3) => {
+    if (proxy!.geometry !== instancedPickProxyGeometry) {
+      proxy!.geometry.dispose()
+      proxy!.geometry = instancedPickProxyGeometry
+    }
+    const eps = 1e-4
+    proxy!.position.copy(center)
+    proxy!.scale.set(
+      Math.max(size.x, eps),
+      Math.max(size.y, eps),
+      Math.max(size.z, eps),
+    )
+    proxy!.visible = true
+    proxy!.updateMatrixWorld(true)
+  }
+
+  // If we can't see any bindings, fall back to serialized bounds if available.
+  if (!bindings.length) {
+    const fallback = extractInstancedBounds(node, object)
+    if (!fallback) {
+      removeInstancedPickProxy(object)
+      return
+    }
+    instancedPickBoundsMinHelper.fromArray(fallback.min)
+    instancedPickBoundsMaxHelper.fromArray(fallback.max)
+    instancedPickBoundsSizeHelper.subVectors(instancedPickBoundsMaxHelper, instancedPickBoundsMinHelper)
+    instancedPickBoundsCenterHelper
+      .addVectors(instancedPickBoundsMinHelper, instancedPickBoundsMaxHelper)
+      .multiplyScalar(0.5)
+    restoreProxyToUnitBox(instancedPickBoundsCenterHelper, instancedPickBoundsSizeHelper)
+    return
+  }
+
+  // Determine the asset-local bounds (single instance) from the binding's submesh geometries.
+  instancedPickProxyAssetBoundsHelper.makeEmpty()
+  const firstBinding = bindings[0]
+  if (firstBinding) {
+    firstBinding.slots.forEach(({ mesh }) => {
+    const geometry = mesh.geometry as THREE.BufferGeometry
+    if (!geometry.boundingBox) {
+      geometry.computeBoundingBox()
+    }
+    if (geometry.boundingBox) {
+      instancedPickProxyAssetBoundsHelper.union(geometry.boundingBox)
+    }
+    })
+  }
+
+  if (instancedPickProxyAssetBoundsHelper.isEmpty()) {
+    const bounds = extractInstancedBounds(node, object)
+    if (bounds) {
+      instancedPickProxyAssetBoundsHelper.min.fromArray(bounds.min)
+      instancedPickProxyAssetBoundsHelper.max.fromArray(bounds.max)
+    }
+  }
+
+  if (instancedPickProxyAssetBoundsHelper.isEmpty()) {
+    removeInstancedPickProxy(object)
+    return
+  }
+
+  // Precompute the 8 corners of the asset bounds.
+  const min = instancedPickProxyAssetBoundsHelper.min
+  const max = instancedPickProxyAssetBoundsHelper.max
+  instancedPickProxyCornerHelpers[0]!.set(min.x, min.y, min.z)
+  instancedPickProxyCornerHelpers[1]!.set(max.x, min.y, min.z)
+  instancedPickProxyCornerHelpers[2]!.set(min.x, max.y, min.z)
+  instancedPickProxyCornerHelpers[3]!.set(max.x, max.y, min.z)
+  instancedPickProxyCornerHelpers[4]!.set(min.x, min.y, max.z)
+  instancedPickProxyCornerHelpers[5]!.set(max.x, min.y, max.z)
+  instancedPickProxyCornerHelpers[6]!.set(min.x, max.y, max.z)
+  instancedPickProxyCornerHelpers[7]!.set(max.x, max.y, max.z)
+
+  object.updateMatrixWorld(true)
+  instancedPickProxyWorldInverseHelper.copy(object.matrixWorld).invert()
+
+  const points: THREE.Vector3[] = []
+  const MAX_PICK_POINTS = 4096
+
+  for (const binding of bindings) {
+    const slot = binding.slots[0]
+    if (!slot) {
+      continue
+    }
+    const mesh = slot.mesh
+    mesh.updateMatrixWorld(true)
+
+    mesh.getMatrixAt(slot.index, instancedPickProxyInstanceMatrixHelper)
+    instancedPickProxyWorldMatrixHelper.multiplyMatrices(mesh.matrixWorld, instancedPickProxyInstanceMatrixHelper)
+    instancedPickProxyLocalMatrixHelper.multiplyMatrices(
+      instancedPickProxyWorldInverseHelper,
+      instancedPickProxyWorldMatrixHelper,
+    )
+
+    for (let i = 0; i < 8; i += 1) {
+      const corner = instancedPickProxyCornerHelpers[i]
+      if (!corner) {
+        continue
+      }
+      points.push(corner.clone().applyMatrix4(instancedPickProxyLocalMatrixHelper))
+      if (points.length >= MAX_PICK_POINTS) {
+        break
+      }
+    }
+    if (points.length >= MAX_PICK_POINTS) {
+      break
+    }
+  }
+
+  if (points.length < 4) {
+    instancedPickProxyPointsBoundsHelper.makeEmpty().setFromPoints(points)
+    if (instancedPickProxyPointsBoundsHelper.isEmpty()) {
+      removeInstancedPickProxy(object)
+      return
+    }
+    instancedPickProxyPointsBoundsHelper.getCenter(instancedPickBoundsCenterHelper)
+    instancedPickProxyPointsBoundsHelper.getSize(instancedPickBoundsSizeHelper)
+    restoreProxyToUnitBox(instancedPickBoundsCenterHelper, instancedPickBoundsSizeHelper)
+    return
+  }
+
+  // If the point cloud is large, prefer a fast bounds proxy over an expensive hull.
+  if (points.length >= MAX_PICK_POINTS) {
+    instancedPickProxyPointsBoundsHelper.makeEmpty().setFromPoints(points)
+    instancedPickProxyPointsBoundsHelper.getCenter(instancedPickBoundsCenterHelper)
+    instancedPickProxyPointsBoundsHelper.getSize(instancedPickBoundsSizeHelper)
+    restoreProxyToUnitBox(instancedPickBoundsCenterHelper, instancedPickBoundsSizeHelper)
+    return
+  }
+
+  try {
+    const geometry = new ConvexGeometry(points)
+    geometry.computeBoundingBox()
+
+    if (proxy.geometry !== instancedPickProxyGeometry) {
+      proxy.geometry.dispose()
+    }
+    proxy.geometry = geometry
+    proxy.position.set(0, 0, 0)
+    proxy.scale.set(1, 1, 1)
+    proxy.visible = true
+    proxy.updateMatrixWorld(true)
+  } catch {
+    instancedPickProxyPointsBoundsHelper.makeEmpty().setFromPoints(points)
+    if (instancedPickProxyPointsBoundsHelper.isEmpty()) {
+      removeInstancedPickProxy(object)
+      return
+    }
+    instancedPickProxyPointsBoundsHelper.getCenter(instancedPickBoundsCenterHelper)
+    instancedPickProxyPointsBoundsHelper.getSize(instancedPickBoundsSizeHelper)
+    restoreProxyToUnitBox(instancedPickBoundsCenterHelper, instancedPickBoundsSizeHelper)
+  }
 }
 
 function removeInstancedPickProxy(object: THREE.Object3D) {
@@ -5859,6 +6022,33 @@ function handleTransformChange() {
           entry.object.updateMatrixWorld(true)
           syncInstancedTransform(entry.object, true)
         })
+
+        // For instanced nodes, rotate around the pick-proxy center (not the node origin).
+        const proxy = target.userData?.instancedPickProxy as THREE.Mesh | undefined
+        if (proxy?.geometry) {
+          if (!proxy.geometry.boundingBox) {
+            proxy.geometry.computeBoundingBox()
+          }
+          if (proxy.geometry.boundingBox) {
+            instancedPivotCenterLocalHelper.copy(proxy.geometry.boundingBox.getCenter(instancedPivotCenterLocalHelper))
+            proxy.updateMatrixWorld(true)
+            instancedPivotWorldHelper.copy(instancedPivotCenterLocalHelper)
+            proxy.localToWorld(instancedPivotWorldHelper)
+
+            transformDeltaPosition.copy(primaryEntry.initialPivotWorldPosition).sub(instancedPivotWorldHelper)
+            if (transformDeltaPosition.lengthSq() > 1e-12) {
+              target.getWorldPosition(transformWorldPositionBuffer)
+              transformWorldPositionBuffer.add(transformDeltaPosition)
+              if (target.parent) {
+                target.parent.worldToLocal(transformWorldPositionBuffer)
+              }
+              target.position.copy(transformWorldPositionBuffer)
+              target.updateMatrixWorld(true)
+              syncInstancedTransform(target, true)
+            }
+          }
+        }
+
         hasTransformLastWorldPosition = false
         break
       }
@@ -5885,6 +6075,33 @@ function handleTransformChange() {
           entry.object.updateMatrixWorld(true)
           syncInstancedTransform(entry.object, true)
         })
+
+        // For instanced nodes, keep the pick-proxy center fixed while scaling.
+        const proxy = target.userData?.instancedPickProxy as THREE.Mesh | undefined
+        if (proxy?.geometry) {
+          if (!proxy.geometry.boundingBox) {
+            proxy.geometry.computeBoundingBox()
+          }
+          if (proxy.geometry.boundingBox) {
+            instancedPivotCenterLocalHelper.copy(proxy.geometry.boundingBox.getCenter(instancedPivotCenterLocalHelper))
+            proxy.updateMatrixWorld(true)
+            instancedPivotWorldHelper.copy(instancedPivotCenterLocalHelper)
+            proxy.localToWorld(instancedPivotWorldHelper)
+
+            transformDeltaPosition.copy(primaryEntry.initialPivotWorldPosition).sub(instancedPivotWorldHelper)
+            if (transformDeltaPosition.lengthSq() > 1e-12) {
+              target.getWorldPosition(transformWorldPositionBuffer)
+              transformWorldPositionBuffer.add(transformDeltaPosition)
+              if (target.parent) {
+                target.parent.worldToLocal(transformWorldPositionBuffer)
+              }
+              target.position.copy(transformWorldPositionBuffer)
+              target.updateMatrixWorld(true)
+              syncInstancedTransform(target, true)
+            }
+          }
+        }
+
         hasTransformLastWorldPosition = false
         break
       }

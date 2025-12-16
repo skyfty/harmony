@@ -9,6 +9,7 @@ export interface TransformGroupEntry {
   initialScale: Vector3
   initialWorldPosition: Vector3
   initialWorldQuaternion: Quaternion
+  initialPivotWorldPosition: Vector3
 }
 
 export interface TransformGroupState {
