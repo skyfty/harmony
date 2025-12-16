@@ -339,8 +339,13 @@ function setAlignMarkerAtWorld(image: PlanningImage, world: PlanningPoint) {
 }
 
 function getImageAccentColor(imageId: string): string {
-  const index = planningImages.value.findIndex((img) => img.id === imageId)
-  const paletteIndex = (index >= 0 ? index : 0) % imageAccentPalette.length
+  // 颜色需在图层创建后保持稳定，不随列表排序/置顶而改变。
+  // 因此这里使用 imageId 的稳定哈希来选取调色板颜色。
+  let hash = 0
+  for (let i = 0; i < imageId.length; i += 1) {
+    hash = (hash * 31 + imageId.charCodeAt(i)) | 0
+  }
+  const paletteIndex = Math.abs(hash) % imageAccentPalette.length
   return (imageAccentPalette[paletteIndex] ?? imageAccentPalette[0])!
 }
 
@@ -359,6 +364,7 @@ function getAlignMarkerStyle(image: PlanningImage): CSSProperties {
     zIndex: 10000,
     background: accent,
     boxShadow: `0 0 0 3px ${hexToRgba(accent, 0.22)}`,
+    ...( { '--marker-accent': accent } as unknown as Record<string, string> ),
   }
 }
 
@@ -2150,6 +2156,44 @@ onBeforeUnmount(() => {
   border: 2px solid rgba(255, 255, 255, 0.9);
   cursor: grab;
   pointer-events: auto;
+  will-change: transform;
+}
+
+.align-marker::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  transform: translate(-50%, -50%) scale(1);
+  background: var(--marker-accent, rgba(255, 255, 255, 0.85));
+  opacity: 0.42;
+  filter: blur(0.2px);
+  box-shadow: 0 0 0 0 var(--marker-accent, rgba(255, 255, 255, 0.6));
+  animation: align-marker-pulse 1.6s ease-out infinite;
+  pointer-events: none;
+}
+
+.align-marker.active::after {
+  animation-duration: 1.2s;
+  opacity: 0.55;
+}
+
+@keyframes align-marker-pulse {
+  0% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0.5;
+  }
+  65% {
+    transform: translate(-50%, -50%) scale(2.4);
+    opacity: 0;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(2.4);
+    opacity: 0;
+  }
 }
 
 .align-marker:active {
