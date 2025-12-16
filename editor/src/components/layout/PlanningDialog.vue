@@ -684,24 +684,26 @@ function handleWheel(event: WheelEvent) {
     return
   }
   event.preventDefault()
-  const activeImage = activeImageId.value
-    ? planningImages.value.find((img) => img.id === activeImageId.value)
-    : null
-  if (activeImage) {
-    zoomImageLayer(activeImage, event)
+  const rect = editorRect.value ?? editorRef.value?.getBoundingClientRect()
+  if (!rect) {
     return
   }
   const delta = event.deltaY > 0 ? -0.1 : 0.1
-  const newScale = Math.min(8, Math.max(0.1, viewTransform.scale + delta * viewTransform.scale))
-  const worldBefore = screenToWorld(event)
   const previousScale = viewTransform.scale
-  viewTransform.scale = newScale
-  const worldAfter = screenToWorld(event)
-  viewTransform.offset.x += worldBefore.x - worldAfter.x
-  viewTransform.offset.y += worldBefore.y - worldAfter.y
-  if (previousScale !== newScale) {
-    updateEditorRect()
+  const nextScale = Math.min(8, Math.max(0.1, previousScale + delta * previousScale))
+  if (nextScale === previousScale) {
+    return
   }
+
+  // 以鼠标指针为中心缩放：保持“指针下的世界坐标点”在缩放前后不变。
+  const sx = event.clientX - rect.left
+  const sy = event.clientY - rect.top
+  const worldX = sx / previousScale - viewTransform.offset.x
+  const worldY = sy / previousScale - viewTransform.offset.y
+
+  viewTransform.scale = nextScale
+  viewTransform.offset.x = sx / nextScale - worldX
+  viewTransform.offset.y = sy / nextScale - worldY
 }
 
 function cancelActiveDrafts() {
@@ -1135,6 +1137,7 @@ void getPolygonPath
 void getLineSegments
 void resizeCursor
 void resizeDirections
+void zoomImageLayer
 
 onMounted(() => {
   window.addEventListener('pointermove', handlePointerMove, { passive: false })
