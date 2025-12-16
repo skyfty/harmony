@@ -1047,7 +1047,7 @@ function beginContinuousInstancedCreate(event: PointerEvent, node: SceneNode, ob
   let anchorIndex = 0
   let hasAnchorPoint = false
 
-  // Only allow starting from the first committed instance (index 0 / bindingId === nodeId).
+  // If the pointer is on one of this node's committed instanced instances, use that instance as the anchor.
   {
     const rect = canvasRef.value.getBoundingClientRect()
     if (rect.width > 0 && rect.height > 0) {
@@ -1091,7 +1091,7 @@ function beginContinuousInstancedCreate(event: PointerEvent, node: SceneNode, ob
           continue
         }
         const resolvedIndex = continuousIndexFromBindingId(node.id, bindingId)
-        if (resolvedIndex === null || resolvedIndex !== 0) {
+        if (resolvedIndex === null) {
           continue
         }
 
@@ -1107,9 +1107,12 @@ function beginContinuousInstancedCreate(event: PointerEvent, node: SceneNode, ob
     }
   }
 
-  // Must click the first instance; otherwise do not enter continuous create.
   if (!hasAnchorPoint) {
-    return false
+    if (!raycastGroundPoint(event, continuousPointerWorldHelper)) {
+      return false
+    }
+    continuousAnchorWorldHelper.copy(continuousPointerWorldHelper)
+    anchorIndex = 0
   }
 
   continuousInstancedCreateState = {
