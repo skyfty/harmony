@@ -562,6 +562,9 @@ const repairModeActive = ref(false)
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
 const canRepairInstanced = computed(() => props.sceneNodes.some((node) => Boolean(getContinuousInstancedModelUserData(node))))
 
+type RepairClickState = { pointerId: number; startX: number; startY: number; moved: boolean }
+let repairClickState: RepairClickState | null = null
+
 const repairHoverGroup = new THREE.Group()
 repairHoverGroup.name = 'RepairHover'
 repairHoverGroup.visible = false
@@ -907,20 +910,13 @@ function eraseContinuousInstance(nodeId: string, bindingId: string): boolean {
   return true
 }
 
-function handleRepairPointerDown(event: PointerEvent): boolean {
-  if (!repairModeActive.value) {
-    return false
-  }
+function tryEraseRepairTargetAtPointer(event: PointerEvent): boolean {
   if (!canvasRef.value || !camera) {
     return false
   }
-  if (!event.isPrimary || event.button !== 0) {
-    return true
-  }
-
   const rect = canvasRef.value.getBoundingClientRect()
   if (rect.width === 0 || rect.height === 0) {
-    return true
+    return false
   }
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
@@ -947,7 +943,7 @@ function handleRepairPointerDown(event: PointerEvent): boolean {
     return handled
   }
 
-  return true
+  return false
 }
 const {
   overlayContainerRef,
@@ -4500,16 +4496,25 @@ async function handlePointerDown(event: PointerEvent) {
     return
   }
 
-  if (handleGroundEditorPointerDown(event)) {
+  // Repair mode: allow camera controls (zoom/pan/rotate). We only treat a left-click
+  // with minimal movement as an erase action, handled on pointerup.
+  if (repairModeActive.value) {
     pointerTrackingState = null
+    if (event.button === 0) {
+      repairClickState = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        moved: false,
+      }
+    } else {
+      repairClickState = null
+    }
     return
   }
 
-  if (handleRepairPointerDown(event)) {
+  if (handleGroundEditorPointerDown(event)) {
     pointerTrackingState = null
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
     return
   }
 
@@ -4719,9 +4724,13 @@ function handlePointerMove(event: PointerEvent) {
 
   if (repairModeActive.value) {
     updateRepairHoverHighlight(event)
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
+    if (repairClickState && repairClickState.pointerId === event.pointerId && !repairClickState.moved) {
+      const dx = event.clientX - repairClickState.startX
+      const dy = event.clientY - repairClickState.startY
+      if (Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
+        repairClickState.moved = true
+      }
+    }
     return
   } else {
     updateRepairHoverHighlight(event)
@@ -4807,6 +4816,22 @@ function handlePointerUp(event: PointerEvent) {
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
+    return
+  }
+
+  if (repairModeActive.value && repairClickState && event.pointerId === repairClickState.pointerId && event.button === 0) {
+    const dx = event.clientX - repairClickState.startX
+    const dy = event.clientY - repairClickState.startY
+    const moved = repairClickState.moved || Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX
+    repairClickState = null
+    if (!moved) {
+      const handled = tryEraseRepairTargetAtPointer(event)
+      if (handled) {
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+      }
+    }
     return
   }
 
@@ -4932,6 +4957,10 @@ function handlePointerCancel(event: PointerEvent) {
     event.stopPropagation()
     event.stopImmediatePropagation()
     return
+  }
+
+  if (repairClickState && repairClickState.pointerId === event.pointerId) {
+    repairClickState = null
   }
 
   if (nodePickerStore.isActive) {
