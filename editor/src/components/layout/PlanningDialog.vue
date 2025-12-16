@@ -912,8 +912,8 @@ onBeforeUnmount(() => {
     v-model="dialogOpen"
     transition="dialog-bottom-transition"
     scrim="rgba(6, 8, 12, 0.8)"
-    width="96vw"
-    max-width="1600"
+    width="98vw"
+    max-width="1920"
     persistent
   >
     <v-card class="planning-dialog" elevation="12">
@@ -1203,18 +1203,6 @@ onBeforeUnmount(() => {
             </div>
           </section>
 
-          <section class="guide">
-            <header>
-              <h3>操作提示</h3>
-            </header>
-            <ul>
-              <li>矩形选择：快速框选规则区域。</li>
-              <li>自由选择：逐点点击，双击结束并闭合多边形。</li>
-              <li>道路/墙体：在相应图层中使用直线段模式，支持连续绘制与端点续接。</li>
-              <li>端点续接：点击线段端点即可继续绘制，点击中部自动生成新端点。</li>
-              <li>缩放/平移：滚轮缩放，平移工具可快速调整视角。</li>
-            </ul>
-          </section>
         </aside>
       </section>
     </v-card>
@@ -1224,7 +1212,8 @@ onBeforeUnmount(() => {
 <style scoped>
 .planning-dialog {
   width: 100%;
-  max-height: 92vh;
+  min-height: 88vh;
+  max-height: 96vh;
   display: flex;
   flex-direction: column;
   background: rgba(10, 12, 18, 0.94);
@@ -1257,9 +1246,9 @@ onBeforeUnmount(() => {
 .planning-dialog__content {
   flex: 1;
   display: grid;
-  grid-template-columns: 280px 1fr 320px;
+  grid-template-columns: 320px 1fr 360px;
   gap: 12px;
-  padding: 16px 24px 24px;
+  padding: 20px 28px 28px;
   overflow: hidden;
 }
 
@@ -1268,6 +1257,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-height: 0;
 }
 
 .upload-area {
@@ -1366,6 +1356,7 @@ onBeforeUnmount(() => {
   border-radius: 16px;
   background: rgba(8, 10, 16, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.05);
+  min-height: 0;
 }
 
 .toolbar {
@@ -1393,6 +1384,7 @@ onBeforeUnmount(() => {
 
 .editor-canvas {
   flex: 1;
+  min-height: 0;
   border-radius: 0 0 16px 16px;
   overflow: hidden;
   position: relative;
