@@ -127,6 +127,8 @@ const dragState = ref<DragState>({ type: 'idle' })
 const viewTransform = reactive({ scale: 1, offset: { x: 0, y: 0 } })
 const planningImages = ref<PlanningImage[]>([])
 const activeImageId = ref<string | null>(null)
+const draggingImageId = ref<string | null>(null)
+const dragOverImageId = ref<string | null>(null)
 const alignModeActive = ref(false)
 const hasAlignMarkerCandidates = computed(() => planningImages.value.some((img) => img.visible && !!img.alignMarker))
 const uploadError = ref<string | null>(null)
@@ -1096,6 +1098,14 @@ function handleImageLayerPanelDrop(event: DragEvent) {
   event.preventDefault()
   event.stopPropagation()
 
+  const reorderId = event.dataTransfer?.getData('text/x-harmony-planning-image-id')
+  if (reorderId) {
+    movePlanningImageToEnd(reorderId)
+    draggingImageId.value = null
+    dragOverImageId.value = null
+    return
+  }
+
   const files = event.dataTransfer?.files
   if (files?.length) {
     Array.from(files).forEach((file) => loadPlanningImage(file))
@@ -1198,6 +1208,78 @@ function handleImageLayerDelete(imageId: string) {
   if (activeImageId.value === imageId) {
     activeImageId.value = planningImages.value[0]?.id ?? null
   }
+}
+
+function reorderPlanningImages(fromId: string, toId: string) {
+  const fromIndex = planningImages.value.findIndex((img) => img.id === fromId)
+  const toIndex = planningImages.value.findIndex((img) => img.id === toId)
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
+    return
+  }
+  const list = [...planningImages.value]
+  const [item] = list.splice(fromIndex, 1)
+  if (!item) {
+    return
+  }
+  list.splice(toIndex, 0, item)
+  planningImages.value = list
+}
+
+function movePlanningImageToEnd(imageId: string) {
+  const fromIndex = planningImages.value.findIndex((img) => img.id === imageId)
+  if (fromIndex < 0 || fromIndex === planningImages.value.length - 1) {
+    return
+  }
+  const list = [...planningImages.value]
+  const [item] = list.splice(fromIndex, 1)
+  if (!item) {
+    return
+  }
+  list.push(item)
+  planningImages.value = list
+}
+
+function handleImageLayerItemDragStart(imageId: string, event: DragEvent) {
+  event.stopPropagation()
+  if (!event.dataTransfer) {
+    return
+  }
+  draggingImageId.value = imageId
+  dragOverImageId.value = null
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/x-harmony-planning-image-id', imageId)
+}
+
+function handleImageLayerItemDragOver(overImageId: string, event: DragEvent) {
+  event.preventDefault()
+  const draggedId = event.dataTransfer?.getData('text/x-harmony-planning-image-id')
+  if (!draggedId || draggedId === overImageId) {
+    dragOverImageId.value = null
+    return
+  }
+  dragOverImageId.value = overImageId
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'move'
+  }
+}
+
+function handleImageLayerItemDrop(targetImageId: string, event: DragEvent) {
+  event.preventDefault()
+  const draggedId = event.dataTransfer?.getData('text/x-harmony-planning-image-id')
+  if (draggedId) {
+    event.stopPropagation()
+    reorderPlanningImages(draggedId, targetImageId)
+    draggingImageId.value = null
+    dragOverImageId.value = null
+    return
+  }
+  // 非排序拖拽（文件/上传图标）交给列表级 drop 逻辑处理。
+  handleImageLayerPanelDrop(event)
+}
+
+function handleImageLayerItemDragEnd() {
+  draggingImageId.value = null
+  dragOverImageId.value = null
 }
 
 function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
@@ -1357,6 +1439,7 @@ void resizeDirections
 void zoomImageLayer
 void handleResetView
 void closeDialog
+void handleImageLayerMove
 
 onMounted(() => {
   window.addEventListener('pointermove', handlePointerMove, { passive: false })
@@ -1446,34 +1529,26 @@ onBeforeUnmount(() => {
               <v-list-item
                 v-for="image in planningImages"
                 :key="image.id"
-                :class="['image-layer-item', { active: activeImageId === image.id }]"
+                :class="[
+                  'image-layer-item',
+                  {
+                    active: activeImageId === image.id,
+                    dragging: draggingImageId === image.id,
+                    'drag-over': dragOverImageId === image.id,
+                  },
+                ]"
                 :style="getImageLayerListItemStyle(image.id)"
+                draggable="true"
+                @dragstart="handleImageLayerItemDragStart(image.id, $event)"
+                @dragover="handleImageLayerItemDragOver(image.id, $event)"
+                @drop="handleImageLayerItemDrop(image.id, $event)"
+                @dragend="handleImageLayerItemDragEnd"
                 @click="handleImageLayerSelect(image.id)"
               >
                 <div class="image-layer-content">
                   <div class="image-layer-header">
                     <div class="image-layer-name">{{ image.name }}</div>
                     <div class="image-layer-actions">
-                      <v-btn
-                        icon
-                        size="x-small"
-                        variant="text"
-                        color="grey"
-                        :disabled="planningImages.length === 1 || planningImages[planningImages.length - 1]?.id === image.id"
-                        @click.stop="handleImageLayerMove(image.id, 'up')"
-                      >
-                        <v-icon size="18">mdi-arrow-up-bold</v-icon>
-                      </v-btn>
-                      <v-btn
-                        icon
-                        size="x-small"
-                        variant="text"
-                        color="grey"
-                        :disabled="planningImages.length === 1 || planningImages[0]?.id === image.id"
-                        @click.stop="handleImageLayerMove(image.id, 'down')"
-                      >
-                        <v-icon size="18">mdi-arrow-down-bold</v-icon>
-                      </v-btn>
                       <v-btn
                         icon
                         size="x-small"
@@ -1776,6 +1851,15 @@ onBeforeUnmount(() => {
 .image-layer-item.active {
   background: rgba(100, 181, 246, 0.18);
   border-color: rgba(100, 181, 246, 0.3);
+}
+
+.image-layer-item.dragging {
+  opacity: 0.65;
+}
+
+.image-layer-item.drag-over {
+  outline: 1px dashed rgba(255, 255, 255, 0.35);
+  outline-offset: 2px;
 }
 
 .image-layer-empty {
