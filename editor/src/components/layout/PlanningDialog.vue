@@ -1670,7 +1670,7 @@ onBeforeUnmount(() => {
 .editor-canvas {
   flex: 1;
   min-height: 0;
-  border-radius: 0 0 16px 16px;
+  border-radius: 16px;
   overflow: hidden;
   position: relative;
   background-color: rgba(16, 19, 28, 0.85);
