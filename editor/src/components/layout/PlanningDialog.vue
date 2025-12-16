@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import type { CSSProperties } from 'vue'
 import { generateUuid } from '@/utils/uuid'
 
 const props = defineProps<{ modelValue: boolean }>()
@@ -137,6 +138,39 @@ const canvasSize = computed(() => {
   })
   return { width: Math.max(maxWidth, 2048), height: Math.max(maxHeight, 2048) }
 })
+
+// 性能优化：拖拽过程中如果动态改变舞台宽高，浏览器会频繁触发布局计算，拖到一定距离时容易出现明显卡顿。
+// 因此拖拽期间冻结舞台尺寸，仅通过 transform 更新位置。
+const frozenCanvasSize = ref<{ width: number; height: number } | null>(null)
+const effectiveCanvasSize = computed(() => frozenCanvasSize.value ?? canvasSize.value)
+
+// 性能优化：合并高频 pointermove 更新，避免每次事件都触发响应式链路与样式计算。
+let rafScheduled = false
+let pendingPan: { x: number; y: number } | null = null
+let pendingImageMove: { imageId: string; x: number; y: number } | null = null
+
+function scheduleRafFlush() {
+  if (rafScheduled) {
+    return
+  }
+  rafScheduled = true
+  requestAnimationFrame(() => {
+    rafScheduled = false
+    if (pendingPan) {
+      viewTransform.offset.x = pendingPan.x
+      viewTransform.offset.y = pendingPan.y
+      pendingPan = null
+    }
+    if (pendingImageMove) {
+      const image = planningImages.value.find((img) => img.id === pendingImageMove?.imageId)
+      if (image) {
+        image.position.x = pendingImageMove.x
+        image.position.y = pendingImageMove.y
+      }
+      pendingImageMove = null
+    }
+  })
+}
 const canUseLineTool = computed(() => {
   const kind = activeLayer.value?.kind
   return kind === 'road' || kind === 'wall'
@@ -158,13 +192,14 @@ const editorBackgroundStyle = computed(() => {
   }
 })
 
-const stageStyle = computed(() => {
+const stageStyle = computed<CSSProperties>(() => {
   const scale = viewTransform.scale
   return {
-    width: `${canvasSize.value.width}px`,
-    height: `${canvasSize.value.height}px`,
+    width: `${effectiveCanvasSize.value.width}px`,
+    height: `${effectiveCanvasSize.value.height}px`,
     transform: `translate(${viewTransform.offset.x * scale}px, ${viewTransform.offset.y * scale}px) scale(${scale})`,
     transformOrigin: 'top left',
+    willChange: 'transform',
   }
 })
 
@@ -256,7 +291,7 @@ function getImageRect(image: PlanningImage) {
   }
 }
 
-function getImageLayerStyle(image: PlanningImage, zIndex: number) {
+function getImageLayerStyle(image: PlanningImage, zIndex: number): CSSProperties {
   return {
     transform: `translate(${image.position.x}px, ${image.position.y}px) scale(${image.scale})`,
     transformOrigin: 'top left',
@@ -265,6 +300,7 @@ function getImageLayerStyle(image: PlanningImage, zIndex: number) {
     opacity: image.visible ? image.opacity : 0,
     zIndex: zIndex + 1,
     pointerEvents: 'auto',
+    willChange: 'transform',
   }
 }
 
@@ -298,6 +334,9 @@ function screenToWorld(event: MouseEvent | PointerEvent): PlanningPoint {
 function hitTestImage(point: PlanningPoint) {
   for (let i = planningImages.value.length - 1; i >= 0; i -= 1) {
     const image = planningImages.value[i]
+    if (!image) {
+      continue
+    }
     if (!image.visible) {
       continue
     }
@@ -474,6 +513,7 @@ function handleEditorPointerDown(event: PointerEvent) {
     return
   }
   event.preventDefault()
+  frozenCanvasSize.value = { ...canvasSize.value }
   const world = screenToWorld(event)
   const hitImage = hitTestImage(world)
   if (hitImage) {
@@ -524,8 +564,8 @@ function handlePointerMove(event: PointerEvent) {
   if (state.type === 'pan') {
     const dx = (event.clientX - state.origin.x) / viewTransform.scale
     const dy = (event.clientY - state.origin.y) / viewTransform.scale
-    viewTransform.offset.x = state.offset.x + dx
-    viewTransform.offset.y = state.offset.y + dy
+    pendingPan = { x: state.offset.x + dx, y: state.offset.y + dy }
+    scheduleRafFlush()
     return
   }
   if (state.type === 'move-polygon') {
@@ -580,11 +620,12 @@ function handlePointerMove(event: PointerEvent) {
     const world = screenToWorld(event)
     const dx = world.x - state.anchor.x
     const dy = world.y - state.anchor.y
-    const image = planningImages.value.find((img) => img.id === state.imageId)
-    if (image) {
-      image.position.x = state.startPos.x + dx
-      image.position.y = state.startPos.y + dy
+    pendingImageMove = {
+      imageId: state.imageId,
+      x: state.startPos.x + dx,
+      y: state.startPos.y + dy,
     }
+    scheduleRafFlush()
     return
   }
   if (state.type === 'resize-image-layer') {
@@ -625,6 +666,8 @@ function handlePointerUp(event: PointerEvent) {
       finalizeRectangleDrag()
     }
     dragState.value = { type: 'idle' }
+    // 释放冻结的舞台尺寸，让画布在操作结束后再统一更新。
+    frozenCanvasSize.value = null
   }
   if (
     lineVertexClickState.value &&
@@ -963,6 +1006,7 @@ function handleImageLayerDelete(imageId: string) {
 function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
   event.stopPropagation()
   event.preventDefault()
+  frozenCanvasSize.value = { ...canvasSize.value }
   activeImageId.value = imageId
   const image = planningImages.value.find((img) => img.id === imageId)
   if (!image) {
@@ -990,6 +1034,9 @@ function handleImageLayerMove(imageId: string, direction: 'up' | 'down') {
   }
   const list = [...planningImages.value]
   const [item] = list.splice(index, 1)
+  if (!item) {
+    return
+  }
   list.splice(targetIndex, 0, item)
   planningImages.value = list
 }
@@ -1071,6 +1118,23 @@ const toolbarButtons: Array<{ tool: PlanningTool; icon: string; label: string }>
 ]
 
 const resizeDirections = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const
+
+// 这些符号用于规划图转换的后续能力扩展（区域/线段绘制、几何编辑等）。
+// 当前画布实现以图片参考层为主，部分函数暂未在模板中引用；为避免 noUnusedLocals 报错，这里显式引用一次。
+void getLayerColor
+void startRectangleDrag
+void addPolygonDraftPoint
+void startLineDraft
+void handlePolygonPointerDown
+void handlePolygonVertexPointerDown
+void handlePolylinePointerDown
+void handleLineVertexPointerDown
+void handleLineSegmentPointerDown
+void handleImageResizePointerDown
+void getPolygonPath
+void getLineSegments
+void resizeCursor
+void resizeDirections
 
 onMounted(() => {
   window.addEventListener('pointermove', handlePointerMove, { passive: false })
@@ -1611,6 +1675,7 @@ onBeforeUnmount(() => {
   position: relative;
   background-color: rgba(16, 19, 28, 0.85);
   border-top: 1px solid rgba(255, 255, 255, 0.03);
+  touch-action: none;
 }
 
 .canvas-viewport {
@@ -1623,6 +1688,7 @@ onBeforeUnmount(() => {
 .canvas-stage {
   position: relative;
   transform-origin: top left;
+  will-change: transform;
 }
 
 .canvas-empty {
