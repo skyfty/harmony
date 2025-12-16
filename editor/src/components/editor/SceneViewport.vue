@@ -560,7 +560,7 @@ const scatterEraseModeActive = ref(false)
 const scatterEraseMenuOpen = ref(false)
 const repairModeActive = ref(false)
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
-const canRepairInstanced = computed(() => instancedMeshes.length > 0)
+const canRepairInstanced = computed(() => props.sceneNodes.some((node) => Boolean(getContinuousInstancedModelUserData(node))))
 
 const repairHoverGroup = new THREE.Group()
 repairHoverGroup.name = 'RepairHover'
