@@ -129,7 +129,6 @@ const planningImages = ref<PlanningImage[]>([])
 const activeImageId = ref<string | null>(null)
 const alignModeActive = ref(false)
 const hasAlignMarkerCandidates = computed(() => planningImages.value.some((img) => img.visible && !!img.alignMarker))
-const uploadZoneActive = ref(false)
 const uploadError = ref<string | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const editorRef = ref<HTMLDivElement | null>(null)
@@ -377,6 +376,17 @@ function getImageLayerListItemStyle(imageId: string): CSSProperties {
   return {
     backgroundColor: hexToRgba(accent, 0.06),
     borderLeft: `4px solid ${hexToRgba(accent, 0.9)}`,
+  }
+}
+
+function getLayerListItemStyle(layer: PlanningLayer): CSSProperties {
+  const isActive = activeLayerId.value === layer.id
+  const bgAlpha = isActive ? 0.14 : 0.06
+  const borderAlpha = isActive ? 0.95 : 0.9
+  return {
+    backgroundColor: hexToRgba(layer.color, bgAlpha),
+    borderLeft: `4px solid ${hexToRgba(layer.color, borderAlpha)}`,
+    borderColor: hexToRgba(layer.color, isActive ? 0.35 : 0.12),
   }
 }
 
@@ -1066,23 +1076,36 @@ function handleFileChange(event: Event) {
   input.value = ''
 }
 
-function handleDrop(event: DragEvent) {
+function handleUploadIconDragStart(event: DragEvent) {
+  if (!event.dataTransfer) {
+    return
+  }
+  event.dataTransfer.setData('text/x-harmony-planning-upload', '1')
+  event.dataTransfer.effectAllowed = 'copy'
+}
+
+function handleImageLayerPanelDragOver(event: DragEvent) {
   event.preventDefault()
-  uploadZoneActive.value = false
+}
+
+function handleImageLayerPanelDragLeave(event: DragEvent) {
+  event.preventDefault()
+}
+
+function handleImageLayerPanelDrop(event: DragEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+
   const files = event.dataTransfer?.files
   if (files?.length) {
-    Array.from(files).forEach(file => loadPlanningImage(file))
+    Array.from(files).forEach((file) => loadPlanningImage(file))
+    return
   }
-}
 
-function handleDragOver(event: DragEvent) {
-  event.preventDefault()
-  uploadZoneActive.value = true
-}
-
-function handleDragLeave(event: DragEvent) {
-  event.preventDefault()
-  uploadZoneActive.value = false
+  const token = event.dataTransfer?.getData('text/x-harmony-planning-upload')
+  if (token === '1') {
+    handleUploadClick()
+  }
 }
 
 function loadPlanningImage(file: File) {
@@ -1332,6 +1355,8 @@ void getLineSegments
 void resizeCursor
 void resizeDirections
 void zoomImageLayer
+void handleResetView
+void closeDialog
 
 onMounted(() => {
   window.addEventListener('pointermove', handlePointerMove, { passive: false })
@@ -1380,74 +1405,44 @@ onBeforeUnmount(() => {
       </header>
 
       <section class="planning-dialog__content">
-        <aside class="left-panel" @dragover.prevent="handleDragOver" @dragleave="handleDragLeave" @drop="handleDrop">
-          <div
-            class="upload-area"
-            :class="{ active: uploadZoneActive }"
-            role="button"
-            tabindex="0"
-            @click="handleUploadClick"
-          >
-            <v-icon size="36">mdi-cloud-upload-outline</v-icon>
-            <p class="upload-title">上传规划底图</p>
-            <p class="upload-hint">支持 PNG / JPG，可选择多个文件一次上传</p>
-            <div v-if="planningImages.length" class="upload-meta">
-              <v-chip size="small" color="primary" variant="tonal">
-                已上传 {{ planningImages.length }} 个图层
-              </v-chip>
-            </div>
-            <div v-if="uploadError" class="upload-error">{{ uploadError }}</div>
-            <input
-              ref="fileInputRef"
-              type="file"
-              accept=".png,.jpg,.jpeg"
-              multiple
-              class="sr-only"
-              @change="handleFileChange"
-            >
-          </div>
-
-          <section class="layer-panel">
+        <aside class="left-panel">
+<section class="image-layer-panel">
             <header>
-              <h3>图层管理</h3>
-            </header>
-            <v-list density="compact" class="layer-list">
-              <v-list-item
-                v-for="layer in layers"
-                :key="layer.id"
-                :class="['layer-item', { active: activeLayerId === layer.id }]"
-                @click="handleLayerSelection(layer.id)"
+              <div class="panel-header">
+                <h3>规划图层</h3>
+                <v-btn
+                  icon
+                  size="small"
+                  variant="text"
+                  color="primary"
+                  draggable="true"
+                  title="上传规划图"
+                  @click.stop="handleUploadClick"
+                  @dragstart="handleUploadIconDragStart"
+                >
+                  <v-icon>mdi-cloud-upload-outline</v-icon>
+                </v-btn>
+              </div>
+              <div v-if="uploadError" class="upload-error">{{ uploadError }}</div>
+              <input
+                ref="fileInputRef"
+                type="file"
+                accept=".png,.jpg,.jpeg"
+                multiple
+                class="sr-only"
+                @change="handleFileChange"
               >
-                <template #prepend>
-                  <span class="layer-color" :style="{ backgroundColor: layer.color }" />
-                </template>
-                <div class="layer-content">
-                  <div class="layer-name">{{ layer.name }}</div>
-                  <div class="layer-meta">
-                    <span>区域 {{ layerFeatureTotals.find((item) => item.id === layer.id)?.polygons ?? 0 }}</span>
-                    <span>线段 {{ layerFeatureTotals.find((item) => item.id === layer.id)?.lines ?? 0 }}</span>
-                  </div>
-                </div>
-                <template #append>
-                  <v-btn
-                    icon
-                    size="small"
-                    variant="text"
-                    :color="layer.visible ? 'primary' : 'grey'"
-                    @click.stop="handleLayerToggle(layer.id)"
-                  >
-                    <v-icon>{{ layer.visible ? 'mdi-eye-outline' : 'mdi-eye-off-outline' }}</v-icon>
-                  </v-btn>
-                </template>
-              </v-list-item>
-            </v-list>
-          </section>
-
-          <section v-if="planningImages.length" class="image-layer-panel">
-            <header>
-              <h3>规划图层</h3>
             </header>
-            <v-list density="compact" class="image-layer-list">
+            <v-list
+              density="compact"
+              class="image-layer-list"
+              @dragover="handleImageLayerPanelDragOver"
+              @dragleave="handleImageLayerPanelDragLeave"
+              @drop="handleImageLayerPanelDrop"
+            >
+              <v-list-item v-if="!planningImages.length" class="image-layer-empty">
+                <div class="image-layer-empty__text">拖拽规划图文件到此，或点击右侧上传</div>
+              </v-list-item>
               <v-list-item
                 v-for="image in planningImages"
                 :key="image.id"
@@ -1530,6 +1525,41 @@ onBeforeUnmount(() => {
               </v-list-item>
             </v-list>
           </section>
+          <section class="layer-panel">
+            <header>
+              <h3>图层管理</h3>
+            </header>
+            <v-list density="compact" class="layer-list">
+              <v-list-item
+                v-for="layer in layers"
+                :key="layer.id"
+                :class="['layer-item', { active: activeLayerId === layer.id }]"
+                :style="getLayerListItemStyle(layer)"
+                @click="handleLayerSelection(layer.id)"
+              >
+                <div class="layer-content">
+                  <div class="layer-name">{{ layer.name }}</div>
+                  <div class="layer-meta">
+                    <span>区域 {{ layerFeatureTotals.find((item) => item.id === layer.id)?.polygons ?? 0 }}</span>
+                    <span>线段 {{ layerFeatureTotals.find((item) => item.id === layer.id)?.lines ?? 0 }}</span>
+                  </div>
+                </div>
+                <template #append>
+                  <v-btn
+                    icon
+                    size="small"
+                    variant="text"
+                    :color="layer.visible ? 'primary' : 'grey'"
+                    @click.stop="handleLayerToggle(layer.id)"
+                  >
+                    <v-icon>{{ layer.visible ? 'mdi-eye-outline' : 'mdi-eye-off-outline' }}</v-icon>
+                  </v-btn>
+                </template>
+              </v-list-item>
+            </v-list>
+          </section>
+
+          
         </aside>
 
         <main class="editor-panel">
@@ -1627,26 +1657,7 @@ onBeforeUnmount(() => {
 }
 
 .planning-dialog__header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 18px 24px 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.planning-dialog__header .title {
-  font-size: 1.25rem;
-  font-weight: 600;
-}
-
-.planning-dialog__header .subtitle {
-  font-size: 0.9rem;
-  opacity: 0.75;
-}
-
-.header-actions {
-  display: flex;
-  gap: 4px;
+  display: none;
 }
 
 .planning-dialog__content {
@@ -1666,35 +1677,6 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 16px;
   min-height: 0;
-}
-
-.upload-area {
-  border: 1px dashed rgba(255, 255, 255, 0.2);
-  border-radius: 14px;
-  padding: 20px;
-  text-align: center;
-  background: rgba(255, 255, 255, 0.02);
-  cursor: pointer;
-  transition: border-color 0.2s ease, background-color 0.2s ease;
-}
-
-.upload-area.active {
-  border-color: rgba(98, 179, 255, 0.8);
-  background: rgba(33, 150, 243, 0.08);
-}
-
-.upload-title {
-  margin: 12px 0 4px;
-  font-weight: 600;
-}
-
-.upload-hint {
-  font-size: 0.85rem;
-  opacity: 0.6;
-}
-
-.upload-meta {
-  margin-top: 12px;
 }
 
 .upload-error {
@@ -1727,18 +1709,14 @@ onBeforeUnmount(() => {
 
 .layer-item {
   border-radius: 10px;
+  margin-bottom: 8px;
   transition: background-color 0.2s ease;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .layer-item.active {
-  background: rgba(100, 181, 246, 0.18);
-}
-
-.layer-color {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  display: inline-block;
+  border-color: rgba(255, 255, 255, 0.18);
 }
 
 .layer-content {
@@ -1770,6 +1748,13 @@ onBeforeUnmount(() => {
   font-size: 1rem;
 }
 
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .image-layer-panel header span {
   font-size: 0.8rem;
   opacity: 0.6;
@@ -1791,6 +1776,19 @@ onBeforeUnmount(() => {
 .image-layer-item.active {
   background: rgba(100, 181, 246, 0.18);
   border-color: rgba(100, 181, 246, 0.3);
+}
+
+.image-layer-empty {
+  border-radius: 10px;
+  margin-bottom: 8px;
+  padding: 12px 8px;
+  border: 1px dashed rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.image-layer-empty__text {
+  font-size: 0.85rem;
+  opacity: 0.65;
 }
 
 .image-layer-content {
