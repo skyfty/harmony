@@ -380,6 +380,7 @@ function getImageLayerStyle(image: PlanningImage, zIndex: number): CSSProperties
     pointerEvents: image.visible ? 'auto' : 'none',
     willChange: 'transform',
     backgroundColor: hexToRgba(accent, 0.06),
+    cursor: image.visible && !image.locked && currentTool.value === 'pan' ? 'grab' : 'default',
   }
 }
 
@@ -1393,6 +1394,11 @@ function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
     return
   }
 
+  // 为防误操作：只有在选择“平移”工具时才允许拖动规划图层。
+  if (currentTool.value !== 'pan') {
+    return
+  }
+
   if (image.locked) {
     return
   }
@@ -1564,8 +1570,8 @@ onBeforeUnmount(() => {
     v-model="dialogOpen"
     transition="dialog-bottom-transition"
     scrim="rgba(6, 8, 12, 0.8)"
-    width="98vw"
-    max-width="1920"
+    width="100vw"
+    max-width="100vw"
     persistent
   >
     <v-card class="planning-dialog" elevation="12">
@@ -1821,9 +1827,11 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .planning-dialog {
-  width: 100%;
-  min-height: 88vh;
-  max-height: 96vh;
+  width: calc(100vw - 48px);
+  height: calc(100vh - 48px);
+  max-width: 100%;
+  max-height: calc(100vh - 48px);
+  margin: 24px;
   display: flex;
   flex-direction: column;
   background: #0c111a;
