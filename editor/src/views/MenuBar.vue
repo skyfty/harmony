@@ -1,11 +1,12 @@
 
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore, type EditorPanel } from '@/stores/sceneStore'
 import AddNodeMenu from '@/components/common/AddNodeMenu.vue'
 import UserAccountControls from '@/components/layout/UserAccountControls.vue'
+import PlanningDialog from '@/components/layout/PlanningDialog.vue'
 
 type QuickAction = {
   icon: string
@@ -28,6 +29,9 @@ const emit = defineEmits<{
   (event: 'menu-action', action: string): void
   (event: 'toggle-stats'): void
 }>()
+
+const isPlanningDialogOpen = ref(false)
+
 function handleMenuAction(action: string) {
   if ((action === 'Undo' && !canUndo.value) || (action === 'Redo' && !canRedo.value)) {
     return
@@ -41,6 +45,10 @@ function handleTogglePanel(panel: EditorPanel) {
 
 function handleToggleStats() {
   emit('toggle-stats')
+}
+
+function openPlanningDialog() {
+  isPlanningDialogOpen.value = true
 }
 
 </script>
@@ -90,6 +98,10 @@ function handleToggleStats() {
                   </v-list-item>
                   <v-list-item @click="handleMenuAction('Export')" class="menu-list-item">
                     Export
+                  </v-list-item>
+                  <v-divider />
+                  <v-list-item @click="openPlanningDialog" class="menu-list-item">
+                    Planning
                   </v-list-item>
        
                 </v-list>
@@ -309,6 +321,7 @@ function handleToggleStats() {
         <UserAccountControls />
       </div>
     </section>
+    <PlanningDialog v-model="isPlanningDialogOpen" />
 
 </template>
 
