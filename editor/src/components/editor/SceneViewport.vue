@@ -1055,7 +1055,27 @@ function beginContinuousInstancedCreate(event: PointerEvent, node: SceneNode, ob
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
       raycaster.setFromCamera(pointer, camera)
 
-      const intersections = raycaster.intersectObjects(instancedMeshes, false)
+      const pickTargets: THREE.Object3D[] = []
+      const seen = new Set<THREE.Object3D>()
+      const addPickTarget = (candidate: THREE.Object3D | undefined | null) => {
+        if (!candidate || seen.has(candidate)) {
+          return
+        }
+        const mesh = candidate as THREE.InstancedMesh
+        if (!(mesh as unknown as { isInstancedMesh?: boolean }).isInstancedMesh) {
+          return
+        }
+        if (!mesh.visible || mesh.count === 0) {
+          return
+        }
+        pickTargets.push(mesh)
+        seen.add(mesh)
+      }
+
+      instancedMeshGroup.children.forEach((child) => addPickTarget(child))
+      instancedMeshes.forEach((mesh) => addPickTarget(mesh))
+
+      const intersections = raycaster.intersectObjects(pickTargets, false)
       intersections.sort((a, b) => a.distance - b.distance)
       for (const intersection of intersections) {
         if (typeof intersection.instanceId !== 'number' || intersection.instanceId < 0) {
@@ -4551,6 +4571,22 @@ async function handlePointerDown(event: PointerEvent) {
     return
   }
 
+  // Middle mouse triggers continuous instanced creation (allows left/right for camera pan/rotate).
+  if (event.button === 1 && props.activeTool === 'select') {
+    const nodeId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+    if (nodeId && !sceneStore.isNodeSelectionLocked(nodeId)) {
+      const node = findSceneNode(sceneStore.nodes, nodeId)
+      const object = objectMap.get(nodeId) ?? null
+      if (node && object) {
+        const handled = beginContinuousInstancedCreate(event, node, object)
+        if (handled) {
+          pointerTrackingState = null
+          return
+        }
+      }
+    }
+  }
+
   // Repair mode: allow camera controls (zoom/pan/rotate). We only treat a left-click
   // with minimal movement as an erase action, handled on pointerup.
   if (repairModeActive.value) {
@@ -4571,21 +4607,6 @@ async function handlePointerDown(event: PointerEvent) {
   if (handleGroundEditorPointerDown(event)) {
     pointerTrackingState = null
     return
-  }
-
-  if (event.button === 1 && props.activeTool === 'select') {
-    const nodeId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-    if (nodeId && !sceneStore.isNodeSelectionLocked(nodeId)) {
-      const node = findSceneNode(sceneStore.nodes, nodeId)
-      const object = objectMap.get(nodeId) ?? null
-      if (node && object) {
-        const handled = beginContinuousInstancedCreate(event, node, object)
-        if (handled) {
-          pointerTrackingState = null
-          return
-        }
-      }
-    }
   }
 
   const button = event.button
