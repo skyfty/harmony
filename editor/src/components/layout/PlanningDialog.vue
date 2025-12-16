@@ -158,6 +158,16 @@ const editorBackgroundStyle = computed(() => {
   }
 })
 
+const stageStyle = computed(() => {
+  const scale = viewTransform.scale
+  return {
+    width: `${canvasSize.value.width}px`,
+    height: `${canvasSize.value.height}px`,
+    transform: `translate(${viewTransform.offset.x * scale}px, ${viewTransform.offset.y * scale}px) scale(${scale})`,
+    transformOrigin: 'top left',
+  }
+})
+
 watch(dialogOpen, (open) => {
   if (open) {
     nextTick(() => {
@@ -246,6 +256,18 @@ function getImageRect(image: PlanningImage) {
   }
 }
 
+function getImageLayerStyle(image: PlanningImage, zIndex: number) {
+  return {
+    transform: `translate(${image.position.x}px, ${image.position.y}px) scale(${image.scale})`,
+    transformOrigin: 'top left',
+    width: `${image.width}px`,
+    height: `${image.height}px`,
+    opacity: image.visible ? image.opacity : 0,
+    zIndex: zIndex + 1,
+    pointerEvents: 'auto',
+  }
+}
+
 function clonePoints(points: PlanningPoint[]) {
   return points.map((point) => clonePoint(point))
 }
@@ -271,6 +293,22 @@ function screenToWorld(event: MouseEvent | PointerEvent): PlanningPoint {
   const x = (event.clientX - rect.left) / viewTransform.scale - viewTransform.offset.x
   const y = (event.clientY - rect.top) / viewTransform.scale - viewTransform.offset.y
   return { x, y }
+}
+
+function hitTestImage(point: PlanningPoint) {
+  for (let i = planningImages.value.length - 1; i >= 0; i -= 1) {
+    const image = planningImages.value[i]
+    if (!image.visible) {
+      continue
+    }
+    const rect = getImageRect(image)
+    const insideX = point.x >= rect.x && point.x <= rect.x + rect.w
+    const insideY = point.y >= rect.y && point.y <= rect.y + rect.h
+    if (insideX && insideY) {
+      return image
+    }
+  }
+  return null
 }
 
 function startRectangleDrag(worldPoint: PlanningPoint, event: PointerEvent) {
@@ -437,52 +475,26 @@ function handleEditorPointerDown(event: PointerEvent) {
   }
   event.preventDefault()
   const world = screenToWorld(event)
-  if (spacePanning.value) {
-    const image = activeImageId.value
-      ? planningImages.value.find((img) => img.id === activeImageId.value)
-      : null
-    if (image) {
-      dragState.value = {
-        type: 'move-image-layer',
-        pointerId: event.pointerId,
-        imageId: image.id,
-        startPos: { ...image.position },
-        anchor: world,
-      }
-    } else {
-      dragState.value = {
-        type: 'pan',
-        pointerId: event.pointerId,
-        origin: { x: event.clientX, y: event.clientY },
-        offset: { ...viewTransform.offset },
-      }
-    }
-    event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
-    return
-  }
-  if (currentTool.value === 'rectangle') {
-    startRectangleDrag(world, event)
-    return
-  }
-  if (currentTool.value === 'lasso') {
-    addPolygonDraftPoint(world)
-    return
-  }
-  if (currentTool.value === 'line') {
-    startLineDraft(world)
-    return
-  }
-  if (currentTool.value === 'pan') {
+  const hitImage = hitTestImage(world)
+  if (hitImage) {
+    activeImageId.value = hitImage.id
     dragState.value = {
-      type: 'pan',
+      type: 'move-image-layer',
       pointerId: event.pointerId,
-      origin: { x: event.clientX, y: event.clientY },
-      offset: { ...viewTransform.offset },
+      imageId: hitImage.id,
+      startPos: { ...hitImage.position },
+      anchor: world,
     }
     event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
     return
   }
-  selectFeature(null)
+  dragState.value = {
+    type: 'pan',
+    pointerId: event.pointerId,
+    origin: { x: event.clientX, y: event.clientY },
+    offset: { ...viewTransform.offset },
+  }
+  event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
 }
 
 function handleEditorDoubleClick(event: MouseEvent) {
@@ -629,7 +641,11 @@ function handleWheel(event: WheelEvent) {
     return
   }
   event.preventDefault()
-  if (zoomActiveImage(event)) {
+  const activeImage = activeImageId.value
+    ? planningImages.value.find((img) => img.id === activeImageId.value)
+    : null
+  if (activeImage) {
+    zoomImageLayer(activeImage, event)
     return
   }
   const delta = event.deltaY > 0 ? -0.1 : 0.1
@@ -645,13 +661,13 @@ function handleWheel(event: WheelEvent) {
   }
 }
 
-function zoomActiveImage(event: WheelEvent) {
-  const image = activeImageId.value
-    ? planningImages.value.find((img) => img.id === activeImageId.value)
-    : null
-  if (!image) {
-    return false
-  }
+function cancelActiveDrafts() {
+  polygonDraftPoints.value = []
+  lineDraft.value = null
+  dragState.value = { type: 'idle' }
+}
+
+function zoomImageLayer(image: PlanningImage, event: WheelEvent) {
   const factor = event.deltaY > 0 ? 0.9 : 1.1
   const nextScale = Math.min(20, Math.max(0.05, image.scale * factor))
   const worldPoint = screenToWorld(event)
@@ -660,13 +676,6 @@ function zoomActiveImage(event: WheelEvent) {
   image.scale = nextScale
   image.position.x = worldPoint.x - localX * nextScale
   image.position.y = worldPoint.y - localY * nextScale
-  return true
-}
-
-function cancelActiveDrafts() {
-  polygonDraftPoints.value = []
-  lineDraft.value = null
-  dragState.value = { type: 'idle' }
 }
 
 function handleKeydown(event: KeyboardEvent) {
@@ -952,9 +961,6 @@ function handleImageLayerDelete(imageId: string) {
 }
 
 function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
-  if (!spacePanning.value && currentTool.value !== 'select' && currentTool.value !== 'pan') {
-    return
-  }
   event.stopPropagation()
   event.preventDefault()
   activeImageId.value = imageId
@@ -1293,7 +1299,28 @@ onBeforeUnmount(() => {
             @dblclick="handleEditorDoubleClick"
             @wheel.prevent="handleWheel"
           >
-            
+            <div class="canvas-viewport">
+              <div class="canvas-stage" :style="stageStyle">
+                <div
+                  v-for="(image, index) in planningImages"
+                  :key="image.id"
+                  :class="['planning-image', { active: activeImageId === image.id }]"
+                  :style="getImageLayerStyle(image, index)"
+                  @pointerdown.stop="handleImageLayerPointerDown(image.id, $event)"
+                >
+                  <img
+                    class="planning-image-img"
+                    :src="image.url"
+                    :alt="image.name"
+                    draggable="false"
+                  >
+                </div>
+              </div>
+              <div v-if="!planningImages.length" class="canvas-empty">
+                <v-icon size="32">mdi-image-off-outline</v-icon>
+                <p>上传规划图后在此预览</p>
+              </div>
+            </div>
           </div>
         </main>
 
@@ -1580,10 +1607,34 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   border-radius: 0 0 16px 16px;
-  overflow: auto;
+  overflow: hidden;
   position: relative;
   background-color: rgba(16, 19, 28, 0.85);
   border-top: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.canvas-viewport {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.canvas-stage {
+  position: relative;
+  transform-origin: top left;
+}
+
+.canvas-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: rgba(255, 255, 255, 0.6);
+  pointer-events: none;
 }
 
 .planning-svg {
@@ -1593,7 +1644,10 @@ onBeforeUnmount(() => {
 }
 
 .planning-image {
-  pointer-events: all;
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: auto;
 }
 
 .planning-image.active {
