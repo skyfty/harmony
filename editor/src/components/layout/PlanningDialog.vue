@@ -48,6 +48,7 @@ interface PlanningImage {
   width: number
   height: number
   visible: boolean
+  locked: boolean
   opacity: number
   position: { x: number; y: number }
   scale: number
@@ -367,7 +368,7 @@ function getImageLayerStyle(image: PlanningImage, zIndex: number): CSSProperties
     height: `${image.height}px`,
     opacity: image.visible ? image.opacity : 0,
     zIndex: zIndex + 1,
-    pointerEvents: 'auto',
+    pointerEvents: image.visible ? 'auto' : 'none',
     willChange: 'transform',
     backgroundColor: hexToRgba(accent, 0.06),
   }
@@ -439,14 +440,14 @@ function hitTestImage(point: PlanningPoint) {
 }
 
 function alignImageLayersByMarkers() {
-  const candidates = planningImages.value.filter((img) => img.visible && img.alignMarker)
-  if (!candidates.length) {
+  const markedVisible = planningImages.value.filter((img) => img.visible && img.alignMarker)
+  if (!markedVisible.length) {
     return
   }
   const active = activeImageId.value
-    ? candidates.find((img) => img.id === activeImageId.value)
+    ? markedVisible.find((img) => img.id === activeImageId.value)
     : null
-  const reference = active ?? candidates[0]
+  const reference = active ?? markedVisible[0]
   if (!reference) {
     return
   }
@@ -454,8 +455,11 @@ function alignImageLayersByMarkers() {
   if (!refWorld) {
     return
   }
-  candidates.forEach((img) => {
+  markedVisible.forEach((img) => {
     if (img.id === reference.id) {
+      return
+    }
+    if (img.locked) {
       return
     }
     const world = getAlignMarkerWorld(img)
@@ -477,6 +481,10 @@ function toggleAlignMode() {
 function handleAlignMarkerPointerDown(imageId: string, event: PointerEvent) {
   event.stopPropagation()
   event.preventDefault()
+  const image = planningImages.value.find((img) => img.id === imageId)
+  if (!image || !image.visible) {
+    return
+  }
   activeImageId.value = imageId
   frozenCanvasSize.value = { ...canvasSize.value }
   dragState.value = {
@@ -668,11 +676,16 @@ function handleEditorPointerDown(event: PointerEvent) {
   if (hitImage) {
     activeImageId.value = hitImage.id
 
+    if (hitImage.locked) {
+      return
+    }
+
     const groupStartPos =
       alignModeActive.value && hitImage.alignMarker
+      && !hitImage.locked
         ? Object.fromEntries(
           planningImages.value
-            .filter((img) => img.alignMarker)
+            .filter((img) => img.visible && img.alignMarker && !img.locked)
             .map((img) => [img.id, { x: img.position.x, y: img.position.y }]),
         )
         : undefined
@@ -709,6 +722,16 @@ function handleEditorDoubleClick(event: MouseEvent) {
   if (currentTool.value === 'line') {
     event.preventDefault()
     finalizeLineDraft()
+    return
+  }
+
+  const world = screenToWorld(event)
+  const hitImage = hitTestImage(world)
+  if (hitImage) {
+    event.preventDefault()
+    activeImageId.value = hitImage.id
+    movePlanningImageToEnd(hitImage.id)
+    return
   }
 }
 
@@ -1135,6 +1158,7 @@ function loadPlanningImage(file: File) {
       width: image.naturalWidth,
       height: image.naturalHeight,
       visible: true,
+      locked: false,
       opacity: 1,
       position: { x: 0, y: 0 },
       scale: 1,
@@ -1182,6 +1206,13 @@ function handleImageLayerToggle(imageId: string) {
   const image = planningImages.value.find((img) => img.id === imageId)
   if (image) {
     image.visible = !image.visible
+  }
+}
+
+function handleImageLayerLockToggle(imageId: string) {
+  const image = planningImages.value.find((img) => img.id === imageId)
+  if (image) {
+    image.locked = !image.locked
   }
 }
 
@@ -1291,6 +1322,9 @@ function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
   if (!image) {
     return
   }
+  if (!image.visible) {
+    return
+  }
   const world = screenToWorld(event)
   if (currentTool.value === 'align-marker') {
     setAlignMarkerAtWorld(image, world)
@@ -1303,11 +1337,16 @@ function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
     return
   }
 
+  if (image.locked) {
+    return
+  }
+
   const groupStartPos =
     alignModeActive.value && image.alignMarker
+    && !image.locked
       ? Object.fromEntries(
         planningImages.value
-          .filter((img) => img.visible && img.alignMarker)
+          .filter((img) => img.visible && img.alignMarker && !img.locked)
           .map((img) => [img.id, { x: img.position.x, y: img.position.y }]),
       )
       : undefined
@@ -1353,6 +1392,9 @@ function handleImageResizePointerDown(
   event.preventDefault()
   const image = planningImages.value.find((img) => img.id === imageId)
   if (!image) {
+    return
+  }
+  if (!image.visible || image.locked) {
     return
   }
   const rect = getImageRect(image)
@@ -1539,9 +1581,9 @@ onBeforeUnmount(() => {
                 ]"
                 :style="getImageLayerListItemStyle(image.id)"
                 draggable="true"
-                @dragstart="handleImageLayerItemDragStart(image.id, $event)"
-                @dragover="handleImageLayerItemDragOver(image.id, $event)"
-                @drop="handleImageLayerItemDrop(image.id, $event)"
+                @dragstart="handleImageLayerItemDragStart(image.id, $event as DragEvent)"
+                @dragover="handleImageLayerItemDragOver(image.id, $event as DragEvent)"
+                @drop="handleImageLayerItemDrop(image.id, $event as DragEvent)"
                 @dragend="handleImageLayerItemDragEnd"
                 @click="handleImageLayerSelect(image.id)"
               >
@@ -1549,6 +1591,15 @@ onBeforeUnmount(() => {
                   <div class="image-layer-header">
                     <div class="image-layer-name">{{ image.name }}</div>
                     <div class="image-layer-actions">
+                      <v-btn
+                        icon
+                        size="x-small"
+                        variant="text"
+                        :color="image.locked ? 'primary' : 'grey'"
+                        @click.stop="handleImageLayerLockToggle(image.id)"
+                      >
+                        <v-icon size="18">{{ image.locked ? 'mdi-lock-outline' : 'mdi-lock-open-outline' }}</v-icon>
+                      </v-btn>
                       <v-btn
                         icon
                         size="x-small"
@@ -1683,7 +1734,7 @@ onBeforeUnmount(() => {
                   :key="image.id"
                   :class="['planning-image', { active: activeImageId === image.id }]"
                   :style="getImageLayerStyle(image, index)"
-                  @pointerdown.stop="handleImageLayerPointerDown(image.id, $event)"
+                  @pointerdown.stop="handleImageLayerPointerDown(image.id, $event as PointerEvent)"
                 >
                   <img
                     class="planning-image-img"
@@ -1699,7 +1750,7 @@ onBeforeUnmount(() => {
                   class="align-marker"
                   :class="{ active: activeImageId === image.id }"
                   :style="getAlignMarkerStyle(image)"
-                  @pointerdown="handleAlignMarkerPointerDown(image.id, $event)"
+                  @pointerdown="handleAlignMarkerPointerDown(image.id, $event as PointerEvent)"
                 />
               </div>
               <div v-if="!planningImages.length" class="canvas-empty">
@@ -2016,7 +2067,7 @@ onBeforeUnmount(() => {
 }
 
 .planning-image.active {
-  filter: brightness(1.1);
+  filter: none;
 }
 
 .planning-image-img {
