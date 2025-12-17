@@ -1389,7 +1389,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const modified = sculptGround(definition, {
 			point: localPoint,
 			radius: options.brushRadius.value,
-			strength: options.brushStrength.value,
+			// Damp sculpt speed so height grows more gradually for finer control.
+			strength: options.brushStrength.value * 0.4,
 			shape,
 			operation,
 			targetHeight: flattenReference,
