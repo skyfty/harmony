@@ -149,7 +149,8 @@ const currentTool = ref<PlanningTool>('select')
 const lineVertexClickState = ref<{ lineId: string; vertexIndex: number; pointerId: number; moved: boolean } | null>(null)
 const spacePanning = ref(false)
 const altPanning = ref(false)
-const temporaryPanActive = computed(() => spacePanning.value || altPanning.value)
+const middlePanning = ref(false)
+const temporaryPanActive = computed(() => spacePanning.value || altPanning.value || middlePanning.value)
 const activeToolbarTool = computed<PlanningTool>(() => (temporaryPanActive.value ? 'pan' : currentTool.value))
 
 const activeLayer = computed(() => layers.value.find((layer) => layer.id === activeLayerId.value) ?? layers.value[0])
@@ -481,6 +482,31 @@ function scheduleRafFlush() {
     }
   })
 }
+
+function beginPanDrag(event: PointerEvent) {
+  frozenCanvasSize.value = { ...canvasSize.value }
+  dragState.value = {
+    type: 'pan',
+    pointerId: event.pointerId,
+    origin: { x: event.clientX, y: event.clientY },
+    offset: { ...viewTransform.offset },
+  }
+  event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
+}
+
+function tryBeginMiddlePan(event: PointerEvent) {
+  if (event.button !== 1) {
+    return false
+  }
+  if (dragState.value.type !== 'idle') {
+    return false
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  middlePanning.value = true
+  beginPanDrag(event)
+  return true
+}
 const canUseLineTool = computed(() => {
   const kind = activeLayer.value?.kind
   return kind === 'road' || kind === 'wall'
@@ -558,6 +584,7 @@ watch(dialogOpen, (open) => {
     selectedFeature.value = null
     spacePanning.value = false
     altPanning.value = false
+    middlePanning.value = false
     persistPlanningToSceneIfDirty()
   }
 })
@@ -1004,6 +1031,12 @@ function toggleAlignMode() {
 }
 
 function handleAlignMarkerPointerDown(imageId: string, event: PointerEvent) {
+  if (tryBeginMiddlePan(event)) {
+    return
+  }
+  if (event.button !== 0) {
+    return
+  }
   event.stopPropagation()
   event.preventDefault()
   const image = planningImages.value.find((img) => img.id === imageId)
@@ -1259,9 +1292,18 @@ function handleLayerSelection(layerId: string) {
 }
 
 function handleEditorPointerDown(event: PointerEvent) {
-  if (!dialogOpen.value || event.button !== 0) {
+  if (!dialogOpen.value) {
     return
   }
+
+  if (tryBeginMiddlePan(event)) {
+    return
+  }
+
+  if (event.button !== 0) {
+    return
+  }
+
   event.preventDefault()
   frozenCanvasSize.value = { ...canvasSize.value }
   const tool = getEffectiveTool()
@@ -1296,13 +1338,7 @@ function handleEditorPointerDown(event: PointerEvent) {
 
   // 平移视图：平移工具、按住 Space/Alt，或选择工具在空白处拖拽时
   if (tool === 'pan' || tool === 'select') {
-    dragState.value = {
-      type: 'pan',
-      pointerId: event.pointerId,
-      origin: { x: event.clientX, y: event.clientY },
-      offset: { ...viewTransform.offset },
-    }
-    event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
+    beginPanDrag(event)
     return
   }
 }
@@ -1344,6 +1380,21 @@ function handleEditorDoubleClick(event: MouseEvent) {
     movePlanningImageToEnd(hitImage.id)
     return
   }
+}
+
+function handleEditorContextMenu(event: MouseEvent) {
+  if (!dialogOpen.value) {
+    return
+  }
+  const rectangleActive = dragState.value.type === 'rectangle'
+  const polygonDraftActive = polygonDraftPoints.value.length > 0
+  const lineDraftActive = !!(lineDraft.value && lineDraft.value.points.length > 0)
+  if (!rectangleActive && !polygonDraftActive && !lineDraftActive) {
+    return
+  }
+  event.preventDefault()
+  cancelActiveDrafts()
+  frozenCanvasSize.value = null
 }
 
 function handlePointerMove(event: PointerEvent) {
@@ -1531,6 +1582,10 @@ function handlePointerUp(event: PointerEvent) {
     startLineContinuation(lineVertexClickState.value.lineId, lineVertexClickState.value.vertexIndex)
   }
   lineVertexClickState.value = null
+
+  if (event.button === 1 || event.type === 'pointercancel') {
+    middlePanning.value = false
+  }
 }
 
 function handleWheel(event: WheelEvent) {
@@ -1572,6 +1627,7 @@ function cancelActiveDrafts() {
   polygonDraftPoints.value = []
   polygonDraftHoverPoint.value = null
   lineDraft.value = null
+  lineDraftHoverPoint.value = null
   dragState.value = { type: 'idle' }
 }
 
@@ -1639,6 +1695,12 @@ function handleKeyup(event: KeyboardEvent) {
 }
 
 function handlePolygonPointerDown(polygonId: string, event: PointerEvent) {
+  if (tryBeginMiddlePan(event)) {
+    return
+  }
+  if (event.button !== 0) {
+    return
+  }
   const world = screenToWorld(event)
   const candidate = pickTopmostActivePolygon(world) ?? polygons.value.find((item) => item.id === polygonId)
   if (!candidate || !isActiveLayer(candidate.layerId)) {
@@ -1662,6 +1724,12 @@ function handlePolygonPointerDown(polygonId: string, event: PointerEvent) {
 }
 
 function handlePolygonVertexPointerDown(polygonId: string, vertexIndex: number, event: PointerEvent) {
+  if (tryBeginMiddlePan(event)) {
+    return
+  }
+  if (event.button !== 0) {
+    return
+  }
   const polygon = polygons.value.find((item) => item.id === polygonId)
   if (!polygon || !isActiveLayer(polygon.layerId)) {
     return
@@ -1684,6 +1752,12 @@ function handlePolygonVertexPointerDown(polygonId: string, vertexIndex: number, 
 }
 
 function handlePolylinePointerDown(lineId: string, event: PointerEvent) {
+  if (tryBeginMiddlePan(event)) {
+    return
+  }
+  if (event.button !== 0) {
+    return
+  }
   const world = screenToWorld(event)
   const picked = pickTopmostActivePolyline(world)
   const line = picked?.line ?? polylines.value.find((item) => item.id === lineId)
@@ -1708,6 +1782,12 @@ function handlePolylinePointerDown(lineId: string, event: PointerEvent) {
 }
 
 function handleLineVertexPointerDown(lineId: string, vertexIndex: number, event: PointerEvent) {
+  if (tryBeginMiddlePan(event)) {
+    return
+  }
+  if (event.button !== 0) {
+    return
+  }
   const line = polylines.value.find((item) => item.id === lineId)
   if (!line || !isActiveLayer(line.layerId)) {
     return
@@ -1736,6 +1816,12 @@ function handleLineVertexPointerDown(lineId: string, vertexIndex: number, event:
 }
 
 function handleLineSegmentPointerDown(lineId: string, segmentIndex: number, event: PointerEvent) {
+  if (tryBeginMiddlePan(event)) {
+    return
+  }
+  if (event.button !== 0) {
+    return
+  }
   const world = screenToWorld(event)
   const picked = pickTopmostActivePolyline(world)
   const line = picked?.line ?? polylines.value.find((item) => item.id === lineId)
@@ -2080,6 +2166,12 @@ function handleImageLayerItemDragEnd() {
 }
 
 function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
+  if (tryBeginMiddlePan(event)) {
+    return
+  }
+  if (event.button !== 0) {
+    return
+  }
   // 规划图层作为“底图”，应允许在其上方进行区域选择/标注。
   // 因此仅在需要直接操作底图的工具下拦截事件。
   const tool = getEffectiveTool()
@@ -2148,6 +2240,12 @@ function handleImageResizePointerDown(
   direction: 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw',
   event: PointerEvent,
 ) {
+  if (tryBeginMiddlePan(event)) {
+    return
+  }
+  if (event.button !== 0) {
+    return
+  }
   const tool = getEffectiveTool()
   if (tool !== 'select' && tool !== 'pan') {
     return
@@ -2485,6 +2583,7 @@ onBeforeUnmount(() => {
             @pointerdown="handleEditorPointerDown"
             @dblclick="handleEditorDoubleClick"
             @wheel.prevent="handleWheel"
+            @contextmenu="handleEditorContextMenu"
           >
             <div class="canvas-viewport">
               <div class="canvas-stage" :style="stageStyle">
@@ -3016,10 +3115,11 @@ onBeforeUnmount(() => {
   top: 0;
   left: 0;
   z-index: 6000;
-  border: 1px solid rgba(98, 179, 255, 0.32);
+  border: 2px solid rgba(0, 229, 255, 0.75);
   box-shadow:
-    0 0 4px rgba(98, 179, 255, 0.22),
-    0 0 10px rgba(98, 179, 255, 0.12);
+    0 0 6px rgba(0, 229, 255, 0.6),
+    0 0 14px rgba(0, 229, 255, 0.45),
+    0 0 24px rgba(0, 229, 255, 0.35);
   pointer-events: none;
 }
 
