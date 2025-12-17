@@ -148,6 +148,9 @@ const editorRect = ref<DOMRect | null>(null)
 const currentTool = ref<PlanningTool>('select')
 const lineVertexClickState = ref<{ lineId: string; vertexIndex: number; pointerId: number; moved: boolean } | null>(null)
 const spacePanning = ref(false)
+const altPanning = ref(false)
+const temporaryPanActive = computed(() => spacePanning.value || altPanning.value)
+const activeToolbarTool = computed<PlanningTool>(() => (temporaryPanActive.value ? 'pan' : currentTool.value))
 
 const activeLayer = computed(() => layers.value.find((layer) => layer.id === activeLayerId.value) ?? layers.value[0])
 
@@ -388,6 +391,10 @@ function loadPlanningFromScene() {
   planningDirty = false
 }
 
+function getEffectiveTool(): PlanningTool {
+  return temporaryPanActive.value ? 'pan' : currentTool.value
+}
+
 // 性能优化：合并高频 pointermove 更新，避免每次事件都触发响应式链路与样式计算。
 let rafScheduled = false
 let pendingPan: { x: number; y: number } | null = null
@@ -548,6 +555,8 @@ watch(dialogOpen, (open) => {
   } else {
     cancelActiveDrafts()
     selectedFeature.value = null
+    spacePanning.value = false
+    altPanning.value = false
     persistPlanningToSceneIfDirty()
   }
 })
@@ -761,7 +770,10 @@ function getImageLayerStyle(image: PlanningImage, zIndex: number): CSSProperties
     pointerEvents: image.visible ? 'auto' : 'none',
     willChange: 'transform',
     backgroundColor: hexToRgba(accent, 0.06),
-    cursor: image.visible && !image.locked && currentTool.value === 'pan' ? 'grab' : 'default',
+    cursor:
+      image.visible && !image.locked && (currentTool.value === 'pan' || temporaryPanActive.value)
+        ? 'grab'
+        : 'default',
   }
 }
 
@@ -1209,12 +1221,13 @@ function handleEditorPointerDown(event: PointerEvent) {
   }
   event.preventDefault()
   frozenCanvasSize.value = { ...canvasSize.value }
+  const tool = getEffectiveTool()
   const world = screenToWorld(event)
 
   // 点击画布空白处时，直接清空当前选择（所有工具通用）。
   selectedFeature.value = null
 
-  if (currentTool.value === 'align-marker') {
+  if (tool === 'align-marker') {
     const targetImage = activeImageId.value ? planningImages.value.find((img) => img.id === activeImageId.value) : null
     if (!targetImage || !targetImage.visible || targetImage.locked) {
       return
@@ -1223,23 +1236,23 @@ function handleEditorPointerDown(event: PointerEvent) {
     return
   }
 
-  if (currentTool.value === 'rectangle') {
+  if (tool === 'rectangle') {
     startRectangleDrag(world, event)
     return
   }
 
-  if (currentTool.value === 'lasso') {
+  if (tool === 'lasso') {
     addPolygonDraftPoint(world)
     return
   }
 
-  if (currentTool.value === 'line') {
+  if (tool === 'line') {
     startLineDraft(world)
     return
   }
 
-  // 平移视图：平移工具、按住 Space，或选择工具在空白处拖拽时
-  if (currentTool.value === 'pan' || spacePanning.value || currentTool.value === 'select') {
+  // 平移视图：平移工具、按住 Space/Alt，或选择工具在空白处拖拽时
+  if (tool === 'pan' || tool === 'select') {
     dragState.value = {
       type: 'pan',
       pointerId: event.pointerId,
@@ -1534,6 +1547,13 @@ function handleKeydown(event: KeyboardEvent) {
   if (!dialogOpen.value) {
     return
   }
+  if (event.key === 'Alt' || event.code === 'AltLeft' || event.code === 'AltRight') {
+    event.preventDefault()
+    if (!altPanning.value) {
+      altPanning.value = true
+    }
+    return
+  }
   if (event.code === 'Space') {
     event.preventDefault()
     spacePanning.value = true
@@ -1568,6 +1588,10 @@ function handleKeyup(event: KeyboardEvent) {
   if (event.code === 'Space') {
     event.preventDefault()
     spacePanning.value = false
+  }
+  if (event.key === 'Alt' || event.code === 'AltLeft' || event.code === 'AltRight') {
+    event.preventDefault()
+    altPanning.value = false
   }
 }
 
@@ -2010,7 +2034,7 @@ function handleImageLayerItemDragEnd() {
 function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
   // 规划图层作为“底图”，应允许在其上方进行区域选择/标注。
   // 因此仅在需要直接操作底图的工具下拦截事件。
-  const tool = currentTool.value
+  const tool = getEffectiveTool()
   if (tool !== 'select' && tool !== 'pan' && tool !== 'align-marker') {
     return
   }
@@ -2076,7 +2100,8 @@ function handleImageResizePointerDown(
   direction: 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw',
   event: PointerEvent,
 ) {
-  if (currentTool.value !== 'select' && currentTool.value !== 'pan') {
+  const tool = getEffectiveTool()
+  if (tool !== 'select' && tool !== 'pan') {
     return
   }
   event.stopPropagation()
@@ -2381,7 +2406,7 @@ onBeforeUnmount(() => {
               <v-btn
                 v-for="button in toolbarButtons"
                 :key="button.tool"
-                :color="currentTool === button.tool ? 'primary' : undefined"
+                :color="activeToolbarTool === button.tool ? 'primary' : undefined"
                 variant="tonal"
                 density="comfortable"
                 class="tool-button"
