@@ -110,11 +110,11 @@ interface LineDraft {
 }
 
 const layerPresets: PlanningLayer[] = [
-  { id: 'terrain-layer', name: '地形层', kind: 'terrain', visible: true, color: '#4caf50' },
-  { id: 'building-layer', name: '建筑物层', kind: 'building', visible: true, color: '#ff7043' },
-  { id: 'road-layer', name: '道路层', kind: 'road', visible: true, color: '#ffa726' },
-  { id: 'green-layer', name: '绿化层', kind: 'green', visible: true, color: '#66bb6a' },
-  { id: 'wall-layer', name: '墙体层', kind: 'wall', visible: true, color: '#29b6f6' },
+  { id: 'terrain-layer', name: '地形层', kind: 'terrain', visible: true, color: '#2E7D32' },
+  { id: 'building-layer', name: '建筑物层', kind: 'building', visible: true, color: '#C62828' },
+  { id: 'road-layer', name: '道路层', kind: 'road', visible: true, color: '#F9A825' },
+  { id: 'green-layer', name: '绿化层', kind: 'green', visible: true, color: '#00897B' },
+  { id: 'wall-layer', name: '墙体层', kind: 'wall', visible: true, color: '#5E35B1' },
 ]
 
 const imageAccentPalette = layerPresets.map((layer) => layer.color)
@@ -188,6 +188,7 @@ const selectedPolyline = computed(() => {
   return null
 })
 const BASE_PIXELS_PER_METER = 10
+const POLYLINE_HIT_RADIUS_SQ = 1.5 * 1.5
 
 const canvasSize = computed(() => {
   const base = sceneGroundSize.value
@@ -869,7 +870,6 @@ function hitTestPolygon(point: PlanningPoint): PlanningPolygon | null {
 }
 
 function hitTestPolyline(point: PlanningPoint): PlanningPolyline | null {
-  const hitRadiusSquared = 1.5 * 1.5
   for (let i = polylines.value.length - 1; i >= 0; i -= 1) {
     const line = polylines.value[i]
     if (!line) {
@@ -881,8 +881,51 @@ function hitTestPolyline(point: PlanningPoint): PlanningPolyline | null {
     const segments = getLineSegments(line)
     for (const segment of segments) {
       const distSq = distancePointToSegmentSquared(point, segment.start, segment.end)
-      if (distSq <= hitRadiusSquared) {
+      if (distSq <= POLYLINE_HIT_RADIUS_SQ) {
         return line
+      }
+    }
+  }
+  return null
+}
+
+function pickTopmostActivePolygon(point: PlanningPoint): PlanningPolygon | null {
+  for (let i = polygons.value.length - 1; i >= 0; i -= 1) {
+    const polygon = polygons.value[i]
+    if (!polygon) {
+      continue
+    }
+    if (!visibleLayerIds.value.has(polygon.layerId)) {
+      continue
+    }
+    if (!isActiveLayer(polygon.layerId)) {
+      continue
+    }
+    if (isPointInPolygon(point, polygon.points)) {
+      return polygon
+    }
+  }
+  return null
+}
+
+function pickTopmostActivePolyline(point: PlanningPoint): { line: PlanningPolyline; segmentIndex: number } | null {
+  for (let i = polylines.value.length - 1; i >= 0; i -= 1) {
+    const line = polylines.value[i]
+    if (!line) {
+      continue
+    }
+    if (!visibleLayerIds.value.has(line.layerId)) {
+      continue
+    }
+    if (!isActiveLayer(line.layerId)) {
+      continue
+    }
+    const segments = getLineSegments(line)
+    for (let index = 0; index < segments.length; index += 1) {
+      const segment = segments[index]
+      const distSq = distancePointToSegmentSquared(point, segment.start, segment.end)
+      if (distSq <= POLYLINE_HIT_RADIUS_SQ) {
+        return { line, segmentIndex: index }
       }
     }
   }
@@ -1596,23 +1639,24 @@ function handleKeyup(event: KeyboardEvent) {
 }
 
 function handlePolygonPointerDown(polygonId: string, event: PointerEvent) {
-  const polygon = polygons.value.find((item) => item.id === polygonId)
-  if (!polygon || !isActiveLayer(polygon.layerId)) {
+  const world = screenToWorld(event)
+  const candidate = pickTopmostActivePolygon(world) ?? polygons.value.find((item) => item.id === polygonId)
+  if (!candidate || !isActiveLayer(candidate.layerId)) {
     return
   }
   const effectiveTool = currentTool.value === 'rectangle' || currentTool.value === 'lasso' || currentTool.value === 'line' ? 'select' : currentTool.value
   event.stopPropagation()
   event.preventDefault()
-  selectFeature({ type: 'polygon', id: polygonId })
+  selectFeature({ type: 'polygon', id: candidate.id })
   if (effectiveTool !== 'select') {
     return
   }
   dragState.value = {
     type: 'move-polygon',
     pointerId: event.pointerId,
-    polygonId,
-    anchor: screenToWorld(event),
-    startPoints: clonePoints(polygon.points),
+    polygonId: candidate.id,
+    anchor: world,
+    startPoints: clonePoints(candidate.points),
   }
   event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
 }
@@ -1640,22 +1684,24 @@ function handlePolygonVertexPointerDown(polygonId: string, vertexIndex: number, 
 }
 
 function handlePolylinePointerDown(lineId: string, event: PointerEvent) {
-  const line = polylines.value.find((item) => item.id === lineId)
+  const world = screenToWorld(event)
+  const picked = pickTopmostActivePolyline(world)
+  const line = picked?.line ?? polylines.value.find((item) => item.id === lineId)
   if (!line || !isActiveLayer(line.layerId)) {
     return
   }
   const effectiveTool = currentTool.value === 'rectangle' || currentTool.value === 'lasso' || currentTool.value === 'line' ? 'select' : currentTool.value
   event.stopPropagation()
   event.preventDefault()
-  selectFeature({ type: 'polyline', id: lineId })
+  selectFeature({ type: 'polyline', id: line.id })
   if (effectiveTool !== 'select') {
     return
   }
   dragState.value = {
     type: 'move-polyline',
     pointerId: event.pointerId,
-    lineId,
-    anchor: screenToWorld(event),
+    lineId: line.id,
+    anchor: world,
     startPoints: clonePoints(line.points),
   }
   event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
@@ -1690,7 +1736,9 @@ function handleLineVertexPointerDown(lineId: string, vertexIndex: number, event:
 }
 
 function handleLineSegmentPointerDown(lineId: string, segmentIndex: number, event: PointerEvent) {
-  const line = polylines.value.find((item) => item.id === lineId)
+  const world = screenToWorld(event)
+  const picked = pickTopmostActivePolyline(world)
+  const line = picked?.line ?? polylines.value.find((item) => item.id === lineId)
   if (!line || !isActiveLayer(line.layerId)) {
     return
   }
@@ -1701,8 +1749,8 @@ function handleLineSegmentPointerDown(lineId: string, segmentIndex: number, even
     return
   }
   const skipSplit = event.ctrlKey || event.metaKey
-  const world = screenToWorld(event)
-  splitSegmentAt(lineId, segmentIndex, world, skipSplit)
+  const targetSegmentIndex = picked?.segmentIndex ?? segmentIndex
+  splitSegmentAt(line.id, targetSegmentIndex, world, skipSplit)
 }
 
 function splitSegmentAt(lineId: string, segmentIndex: number, point: PlanningPoint, skipSplit = false) {
