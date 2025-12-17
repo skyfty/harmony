@@ -1268,6 +1268,23 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return true
 	}
 
+	function resolveScatterPaintRadius(): number {
+		const candidate = Number.isFinite(options.scatterRadius.value)
+			? options.scatterRadius.value
+			: 0.5
+		return Math.min(2, Math.max(0.1, candidate))
+	}
+
+	function resolveActiveBrushRadius(): number {
+		if (options.scatterEraseModeActive.value) {
+			return resolveScatterEraseRadius()
+		}
+		if (scatterModeEnabled()) {
+			return resolveScatterPaintRadius()
+		}
+		return options.brushRadius.value
+	}
+
 	function updateBrush(event: PointerEvent) {
 		const scene = options.getScene()
 		const camera = options.getCamera()
@@ -1308,7 +1325,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const hit = intersects[0]
 		if (hit) {
 			brushMesh.position.copy(hit.point)
-			const scale = options.brushRadius.value
+			const scale = resolveActiveBrushRadius()
 			brushMesh.scale.set(scale, scale, 1)
 			conformBrushToTerrain(definition, groundObject)
 			brushMesh.visible = true

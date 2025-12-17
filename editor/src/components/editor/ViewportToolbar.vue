@@ -114,6 +114,7 @@
             :disabled="!canEraseScatter"
             title="Scatter 擦除"
             @click="handleScatterEraseButtonClick"
+            @contextmenu.prevent.stop="handleScatterEraseContextMenu"
           />
         </template>
         <v-list density="compact" class="scatter-erase-menu">
@@ -459,6 +460,15 @@ function handleScatterEraseButtonClick() {
   const willActivate = !scatterEraseModeActive.value
   emit('toggle-scatter-erase')
   emit('update:scatter-erase-menu-open', willActivate)
+}
+
+function handleScatterEraseContextMenu(event: MouseEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+  if (!canEraseScatter.value || !scatterEraseModeActive.value) {
+    return
+  }
+  emit('update:scatter-erase-menu-open', true)
 }
 
 function toggleGridVisibility() {
