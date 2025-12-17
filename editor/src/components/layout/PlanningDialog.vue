@@ -2628,9 +2628,12 @@ onBeforeUnmount(() => {
 
 .canvas-boundary {
   fill: none;
-  stroke: rgba(255, 255, 255, 0.25);
-  stroke-width: 2;
-  stroke-dasharray: 8 6;
+  stroke: rgba(98, 179, 255, 0.32);
+  stroke-width: 1.0;
+  stroke-linejoin: round;
+  filter:
+    drop-shadow(0 0 4px rgba(98, 179, 255, 0.22))
+    drop-shadow(0 0 10px rgba(98, 179, 255, 0.12));
   pointer-events: none;
 }
 
