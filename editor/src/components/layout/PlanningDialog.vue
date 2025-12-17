@@ -191,21 +191,10 @@ const selectedPolyline = computed(() => {
 const BASE_PIXELS_PER_METER = 10
 const POLYLINE_HIT_RADIUS_SQ = 1.5 * 1.5
 
-const canvasSize = computed(() => {
-  const base = sceneGroundSize.value
-  if (!planningImages.value.length) {
-    return { width: base.width, height: base.height }
-  }
-  let maxWidth = 0
-  let maxHeight = 0
-  planningImages.value.forEach(img => {
-    const w = img.position.x + img.width * img.scale
-    const h = img.position.y + img.height * img.scale
-    if (w > maxWidth) maxWidth = w
-    if (h > maxHeight) maxHeight = h
-  })
-  return { width: Math.max(maxWidth, base.width), height: Math.max(maxHeight, base.height) }
-})
+const canvasSize = computed(() => ({
+  width: sceneGroundSize.value.width,
+  height: sceneGroundSize.value.height,
+}))
 
 // 性能优化：拖拽过程中如果动态改变舞台宽高，浏览器会频繁触发布局计算，拖到一定距离时容易出现明显卡顿。
 // 因此拖拽期间冻结舞台尺寸，仅通过 transform 更新位置。
@@ -1961,6 +1950,9 @@ function loadPlanningImage(file: File) {
   const url = URL.createObjectURL(file)
   const image = new Image()
   image.onload = () => {
+    const stage = canvasSize.value
+    const centerX = stage.width / 2
+    const centerY = stage.height / 2
     const newImage: PlanningImage = {
       id: createId('img'),
       name: file.name,
@@ -1971,7 +1963,10 @@ function loadPlanningImage(file: File) {
       visible: true,
       locked: false,
       opacity: 1,
-      position: { x: 0, y: 0 },
+      position: {
+        x: centerX - image.naturalWidth / 2,
+        y: centerY - image.naturalHeight / 2,
+      },
       scale: 1,
       scaleRatio: undefined,
     }
