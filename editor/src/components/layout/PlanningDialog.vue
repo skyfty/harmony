@@ -524,6 +524,20 @@ const stageStyle = computed<CSSProperties>(() => {
   }
 })
 
+const canvasBoundaryStyle = computed<CSSProperties>(() => {
+  const scale = renderScale.value
+  const center = stageCenterOffset.value
+  const left = center.x + viewTransform.offset.x * scale
+  const top = center.y + viewTransform.offset.y * scale
+  return {
+    width: `${effectiveCanvasSize.value.width * scale}px`,
+    height: `${effectiveCanvasSize.value.height * scale}px`,
+    transform: `translate(${left}px, ${top}px)`,
+    transformOrigin: 'top left',
+    pointerEvents: 'none',
+  }
+})
+
 watch(dialogOpen, (open) => {
   if (open) {
     nextTick(() => {
@@ -2285,15 +2299,6 @@ onBeforeUnmount(() => {
                   :height="effectiveCanvasSize.height"
                   :viewBox="`0 0 ${effectiveCanvasSize.width} ${effectiveCanvasSize.height}`"
                 >
-                  <!-- 画布边界虚线框 -->
-                  <rect
-                    class="canvas-boundary"
-                    x="0"
-                    y="0"
-                    :width="effectiveCanvasSize.width"
-                    :height="effectiveCanvasSize.height"
-                  />
-
                   <!-- 已绘制多边形区域 -->
                   <path
                     v-for="poly in visiblePolygons"
@@ -2303,9 +2308,11 @@ onBeforeUnmount(() => {
                     :d="getPolygonPath(poly.points)"
                     :fill="getLayerColor(poly.layerId, 0.22)"
                     :stroke="getLayerColor(poly.layerId, 0.95)"
+                    stroke-width="0.1"
                     @pointerdown="handlePolygonPointerDown(poly.id, $event as PointerEvent)"
                   />
 
+                  
                   <!-- 已绘制线段（以 polyline 表示） -->
                   <g v-for="line in visiblePolylines" :key="line.id">
                     <path
@@ -2318,6 +2325,8 @@ onBeforeUnmount(() => {
                       :d="getPolylinePath(line.points)"
                       :stroke="getPolylineStroke(line.layerId)"
                       :stroke-dasharray="getPolylineStrokeDasharray(line.layerId)"
+                      vector-effect="non-scaling-stroke"
+                      stroke-width="1.05"
                       fill="none"
                       @pointerdown="handlePolylinePointerDown(line.id, $event as PointerEvent)"
                     />
@@ -2364,7 +2373,7 @@ onBeforeUnmount(() => {
                     :d="getPolygonPath(createRectanglePoints(dragState.start, dragState.current))"
                     fill="rgba(98, 179, 255, 0.12)"
                     stroke="rgba(98, 179, 255, 0.45)"
-                    stroke-width="0.9"
+                    stroke-width="0.1"
                   />
 
                   <!-- 自由选择绘制预览（点击加点，双击结束） -->
@@ -2374,7 +2383,7 @@ onBeforeUnmount(() => {
                     :d="polygonDraftPreview.d"
                     :fill="polygonDraftPreview.fill"
                     stroke="rgba(98, 179, 255, 0.45)"
-                    stroke-width="0.9"
+                    stroke-width="0.1"
                   />
 
                   <!-- 线段绘制预览 -->
@@ -2383,8 +2392,9 @@ onBeforeUnmount(() => {
                     class="planning-line-draft"
                     :d="lineDraftPreviewPath"
                     :stroke="lineDraftPreviewStroke"
-                    stroke-width="0.9"
+                    stroke-width="1.5"
                     :stroke-dasharray="lineDraftPreviewDasharray"
+                    vector-effect="non-scaling-stroke"
                     fill="none"
                   />
 
@@ -2396,7 +2406,7 @@ onBeforeUnmount(() => {
                       class="vertex-handle"
                       :cx="p.x"
                       :cy="p.y"
-                      r="4"
+                      r="1"
                       :fill="getLayerColor(selectedPolygon.layerId, 0.95)"
                       stroke="rgba(255,255,255,0.9)"
                       stroke-width="1"
@@ -2412,7 +2422,7 @@ onBeforeUnmount(() => {
                       class="vertex-handle"
                       :cx="p.x"
                       :cy="p.y"
-                      r="4"
+                      r="1"
                       :fill="getLayerColor(selectedPolyline.layerId, 0.95)"
                       stroke="rgba(255,255,255,0.9)"
                       stroke-width="1"
@@ -2430,6 +2440,8 @@ onBeforeUnmount(() => {
                   @pointerdown="handleAlignMarkerPointerDown(image.id, $event as PointerEvent)"
                 />
               </div>
+
+              <div class="canvas-boundary-overlay" :style="canvasBoundaryStyle" />
             </div>
           </div>
         </main>
@@ -2778,14 +2790,15 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
-.canvas-boundary {
-  fill: none;
-  stroke: rgba(98, 179, 255, 0.32);
-  stroke-width: 1.0;
-  stroke-linejoin: round;
-  filter:
-    drop-shadow(0 0 4px rgba(98, 179, 255, 0.22))
-    drop-shadow(0 0 10px rgba(98, 179, 255, 0.12));
+.canvas-boundary-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 6000;
+  border: 1px solid rgba(98, 179, 255, 0.32);
+  box-shadow:
+    0 0 4px rgba(98, 179, 255, 0.22),
+    0 0 10px rgba(98, 179, 255, 0.12);
   pointer-events: none;
 }
 
@@ -2798,14 +2811,13 @@ onBeforeUnmount(() => {
 }
 
 .planning-line {
-  stroke-width: 3;
   stroke-linecap: round;
   stroke-linejoin: round;
   cursor: pointer;
 }
 
 .planning-line.selected {
-  stroke-width: 4;
+  stroke-width: 0.5;
 }
 
 .planning-line-segment {
@@ -2886,13 +2898,12 @@ onBeforeUnmount(() => {
 }
 
 .planning-polygon {
-  stroke-width: 2;
   fill-opacity: 0.32;
   cursor: pointer;
 }
 
 .planning-polygon.selected {
-  stroke-width: 3;
+  stroke-width: 0.5;
 }
 
 .planning-line {
@@ -2913,12 +2924,12 @@ onBeforeUnmount(() => {
 
 .vertex-handle {
   cursor: pointer;
-  stroke: #04070d;
-  stroke-width: 1;
+  stroke: #ffffff;
+  stroke-width: 0.2;
 }
 
 .vertex-handle.line {
-  r: 5;
+  r: 1.5;
 }
 
 .sr-only {
