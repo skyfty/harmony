@@ -1974,35 +1974,12 @@ function loadPlanningImage(file: File) {
     activeImageId.value = newImage.id
 
     markPlanningDirty()
-
-    nextTick(() => {
-      fitViewToImage(newImage)
-    })
   }
   image.onerror = () => {
     uploadError.value = '无法读取该图片，请重试或更换文件。'
     URL.revokeObjectURL(url)
   }
   image.src = url
-}
-
-function fitViewToImage(image: PlanningImage) {
-  const container = editorRef.value
-  if (!container) {
-    return
-  }
-  const worldWidth = image.width * image.scale
-  const worldHeight = image.height * image.scale
-  const containerWidth = Math.max(container.clientWidth, 1)
-  const containerHeight = Math.max(container.clientHeight, 1)
-  const scale = Math.min(
-    Math.max(Math.min(containerWidth / worldWidth, containerHeight / worldHeight), 0.2),
-    1.4,
-  )
-  viewTransform.scale = scale
-  viewTransform.offset.x = (containerWidth / scale - worldWidth) / 2 - image.position.x
-  viewTransform.offset.y = (containerHeight / scale - worldHeight) / 2 - image.position.y
-  updateEditorRect()
 }
 
 function handleResetView() {
