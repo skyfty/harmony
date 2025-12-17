@@ -71,6 +71,7 @@ import type { SceneCameraState } from '@/types/scene-camera-state'
 import type { SceneHistoryEntry } from '@/types/scene-history-entry'
 import type { SceneState } from '@/types/scene-state'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
+import type { PlanningSceneData } from '@/types/planning-scene-data'
 import type { PresetSceneDocument } from '@/types/preset-scene'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SceneViewportSettings } from '@/types/scene-viewport-settings'
@@ -6097,6 +6098,9 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
   const environment = cloneEnvironmentSettings(store.environment)
   const nodes = ensureEnvironmentNode(ensureSkyNode(cloneSceneNodes(store.nodes)),environment)
 
+  const planningData = store.planningData
+  const normalizedPlanningData = planningData && isPlanningDataEmpty(planningData) ? null : planningData
+
   return {
     id: store.currentSceneId,
     name: meta.name,
@@ -6118,7 +6122,23 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
     assetCatalog: cloneAssetCatalog(store.assetCatalog),
     assetIndex: cloneAssetIndex(store.assetIndex),
     packageAssetMap: clonePackageAssetMap(store.packageAssetMap),
+    planningData: normalizedPlanningData ?? undefined,
   }
+}
+
+function isPlanningDataEmpty(data: PlanningSceneData): boolean {
+  return (
+    (!data.images || data.images.length === 0)
+    && (!data.polygons || data.polygons.length === 0)
+    && (!data.polylines || data.polylines.length === 0)
+  )
+}
+
+function clonePlanningData(data: PlanningSceneData | null | undefined): PlanningSceneData | null {
+  if (!data) {
+    return null
+  }
+  return manualDeepClone(data)
 }
 
 function commitSceneSnapshot(
@@ -6431,6 +6451,7 @@ export const useSceneStore = defineStore('scene', {
       shadowsEnabled: initialShadowsEnabled,
       environment: initialEnvironment,
       groundSettings: cloneGroundSettings(initialSceneDocument.groundSettings),
+      planningData: clonePlanningData((initialSceneDocument as StoredSceneDocument).planningData),
       panelVisibility: { ...defaultPanelVisibility },
       panelPlacement: { ...defaultPanelPlacement },
       projectPanelTreeSize: DEFAULT_PROJECT_PANEL_TREE_SIZE,
@@ -11844,6 +11865,7 @@ export const useSceneStore = defineStore('scene', {
       this.environment = resolveSceneDocumentEnvironment(sceneDocument)
       this.rebuildGeneratedMeshRuntimes()
       this.groundSettings = cloneGroundSettings(sceneDocument.groundSettings)
+      this.planningData = clonePlanningData(sceneDocument.planningData)
       this.setSelection(sceneDocument.selectedNodeIds ?? (sceneDocument.selectedNodeId ? [sceneDocument.selectedNodeId] : []))
       this.camera = cloneCameraState(sceneDocument.camera)
       this.viewportSettings = cloneViewportSettings(sceneDocument.viewportSettings)
@@ -11926,6 +11948,7 @@ export const useSceneStore = defineStore('scene', {
       this.nodes = cloneSceneNodes(sceneDocument.nodes)
       this.environment = resolveSceneDocumentEnvironment(sceneDocument)
       this.groundSettings = cloneGroundSettings(sceneDocument.groundSettings)
+      this.planningData = clonePlanningData(sceneDocument.planningData)
       this.setSelection(sceneDocument.selectedNodeIds ?? (sceneDocument.selectedNodeId ? [sceneDocument.selectedNodeId] : []))
       this.camera = cloneCameraState(sceneDocument.camera)
       this.viewportSettings = cloneViewportSettings(sceneDocument.viewportSettings)
@@ -11972,6 +11995,7 @@ export const useSceneStore = defineStore('scene', {
         this.nodes = cloneSceneNodes(scene.nodes)
         this.environment = resolveSceneDocumentEnvironment(scene)
         this.rebuildGeneratedMeshRuntimes()
+        this.planningData = clonePlanningData(scene.planningData)
         this.setSelection(scene.selectedNodeIds ?? (scene.selectedNodeId ? [scene.selectedNodeId] : []))
         this.camera = cloneCameraState(scene.camera)
         this.viewportSettings = cloneViewportSettings(scene.viewportSettings)
@@ -12012,6 +12036,7 @@ export const useSceneStore = defineStore('scene', {
         this.nodes = cloneSceneNodes(fallback.nodes)
         this.environment = resolveSceneDocumentEnvironment(fallback)
         this.rebuildGeneratedMeshRuntimes()
+        this.planningData = clonePlanningData(fallback.planningData)
         this.setSelection(fallback.selectedNodeIds ?? (fallback.selectedNodeId ? [fallback.selectedNodeId] : []))
         this.camera = cloneCameraState(fallback.camera)
         this.panelVisibility = normalizePanelVisibilityState(fallback.panelVisibility)

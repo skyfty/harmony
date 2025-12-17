@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { CSSProperties } from 'vue'
+import { storeToRefs } from 'pinia'
 import { generateUuid } from '@/utils/uuid'
+import { useSceneStore } from '@/stores/sceneStore'
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ (event: 'update:modelValue', value: boolean): void }>()
@@ -9,6 +11,9 @@ const dialogOpen = computed({
   get: () => props.modelValue,
   set: (value: boolean) => emit('update:modelValue', value),
 })
+
+const sceneStore = useSceneStore()
+const { currentSceneId } = storeToRefs(sceneStore)
 
 type PlanningTool = 'select' | 'pan' | 'rectangle' | 'lasso' | 'line' | 'align-marker'
 type LayerKind = 'terrain' | 'building' | 'road' | 'green' | 'wall'
@@ -144,6 +149,15 @@ const lineVertexClickState = ref<{ lineId: string; vertexIndex: number; pointerI
 const spacePanning = ref(false)
 
 const activeLayer = computed(() => layers.value.find((layer) => layer.id === activeLayerId.value) ?? layers.value[0])
+
+const sceneGroundSize = computed(() => {
+  const width = Number(sceneStore.groundSettings?.width ?? 100)
+  const height = Number(sceneStore.groundSettings?.depth ?? 100)
+  return {
+    width: Number.isFinite(width) ? width : 100,
+    height: Number.isFinite(height) ? height : 100,
+  }
+})
 const visibleLayerIds = computed(() => new Set(layers.value.filter((layer) => layer.visible).map((layer) => layer.id)))
 const visiblePolygons = computed(() => polygons.value.filter((poly) => visibleLayerIds.value.has(poly.layerId)))
 const visiblePolylines = computed(() => polylines.value.filter((line) => visibleLayerIds.value.has(line.layerId)))
@@ -170,8 +184,9 @@ const selectedPolyline = computed(() => {
   return null
 })
 const canvasSize = computed(() => {
+  const base = sceneGroundSize.value
   if (!planningImages.value.length) {
-    return { width: 2048, height: 2048 }
+    return { width: base.width, height: base.height }
   }
   let maxWidth = 0
   let maxHeight = 0
@@ -181,13 +196,192 @@ const canvasSize = computed(() => {
     if (w > maxWidth) maxWidth = w
     if (h > maxHeight) maxHeight = h
   })
-  return { width: Math.max(maxWidth, 2048), height: Math.max(maxHeight, 2048) }
+  return { width: Math.max(maxWidth, base.width), height: Math.max(maxHeight, base.height) }
 })
 
 // 性能优化：拖拽过程中如果动态改变舞台宽高，浏览器会频繁触发布局计算，拖到一定距离时容易出现明显卡顿。
 // 因此拖拽期间冻结舞台尺寸，仅通过 transform 更新位置。
 const frozenCanvasSize = ref<{ width: number; height: number } | null>(null)
 const effectiveCanvasSize = computed(() => frozenCanvasSize.value ?? canvasSize.value)
+
+let planningDirty = false
+function markPlanningDirty() {
+  planningDirty = true
+}
+
+function buildPlanningSnapshot() {
+  return {
+    version: 1 as const,
+    activeLayerId: activeLayerId.value,
+    layers: layers.value.map((layer) => ({ id: layer.id, visible: layer.visible })),
+    viewTransform: {
+      scale: viewTransform.scale,
+      offset: { x: viewTransform.offset.x, y: viewTransform.offset.y },
+    },
+    polygons: polygons.value.map((poly) => ({
+      id: poly.id,
+      name: poly.name,
+      layerId: poly.layerId,
+      points: poly.points.map((p) => ({ x: p.x, y: p.y })),
+    })),
+    polylines: polylines.value.map((line) => ({
+      id: line.id,
+      name: line.name,
+      layerId: line.layerId,
+      points: line.points.map((p) => ({ x: p.x, y: p.y })),
+    })),
+    images: planningImages.value.map((img) => ({
+      id: img.id,
+      name: img.name,
+      url: img.url,
+      sizeLabel: img.sizeLabel,
+      width: img.width,
+      height: img.height,
+      visible: img.visible,
+      locked: img.locked,
+      opacity: img.opacity,
+      position: { x: img.position.x, y: img.position.y },
+      scale: img.scale,
+      scaleRatio: img.scaleRatio,
+      alignMarker: img.alignMarker ? { x: img.alignMarker.x, y: img.alignMarker.y } : undefined,
+    })),
+  }
+}
+
+function isPlanningSnapshotEmpty(snapshot: ReturnType<typeof buildPlanningSnapshot>) {
+  return snapshot.images.length === 0 && snapshot.polygons.length === 0 && snapshot.polylines.length === 0
+}
+
+function persistPlanningToSceneIfDirty() {
+  if (!planningDirty) {
+    return
+  }
+
+  // 确保把 RAF 合并的最后一帧更新也落到状态里，再生成快照。
+  if (pendingPan) {
+    viewTransform.offset.x = pendingPan.x
+    viewTransform.offset.y = pendingPan.y
+    pendingPan = null
+  }
+  if (pendingImageMoves?.length) {
+    pendingImageMoves.forEach((move) => {
+      const image = planningImages.value.find((img) => img.id === move.imageId)
+      if (image) {
+        image.position.x = move.x
+        image.position.y = move.y
+      }
+    })
+    pendingImageMoves = null
+  }
+  if (pendingMarkerMove) {
+    const image = planningImages.value.find((img) => img.id === pendingMarkerMove?.imageId)
+    if (image) {
+      image.alignMarker = { x: pendingMarkerMove.localX, y: pendingMarkerMove.localY }
+    }
+    pendingMarkerMove = null
+  }
+
+  const snapshot = buildPlanningSnapshot()
+  const nextData = isPlanningSnapshotEmpty(snapshot) ? null : snapshot
+  // 空场景默认不落盘，且不要因为“仅视图操作”造成未保存提示。
+  if (nextData === null && sceneStore.planningData === null) {
+    planningDirty = false
+    return
+  }
+  sceneStore.planningData = nextData
+  sceneStore.hasUnsavedChanges = true
+  planningDirty = false
+}
+
+function resetPlanningState() {
+  planningImages.value = []
+  polygons.value = []
+  polylines.value = []
+  polygonDraftPoints.value = []
+  lineDraft.value = null
+  selectedFeature.value = null
+  activeImageId.value = null
+  layers.value = layerPresets.map((layer) => ({ ...layer }))
+  activeLayerId.value = layers.value[0]?.id ?? 'terrain-layer'
+  viewTransform.scale = 1
+  viewTransform.offset.x = 0
+  viewTransform.offset.y = 0
+}
+
+function loadPlanningFromScene() {
+  const data = sceneStore.planningData
+  resetPlanningState()
+  if (!data) {
+    planningDirty = false
+    return
+  }
+
+  if (data.activeLayerId) {
+    activeLayerId.value = data.activeLayerId
+  }
+  if (Array.isArray(data.layers)) {
+    const visibleMap = new Map(data.layers.map((item) => [item.id, item.visible]))
+    layers.value.forEach((layer) => {
+      const nextVisible = visibleMap.get(layer.id)
+      if (typeof nextVisible === 'boolean') {
+        layer.visible = nextVisible
+      }
+    })
+  }
+  if (data.viewTransform) {
+    const s = Number(data.viewTransform.scale)
+    const ox = Number(data.viewTransform.offset?.x)
+    const oy = Number(data.viewTransform.offset?.y)
+    if (Number.isFinite(s) && s > 0) {
+      viewTransform.scale = s
+    }
+    if (Number.isFinite(ox)) {
+      viewTransform.offset.x = ox
+    }
+    if (Number.isFinite(oy)) {
+      viewTransform.offset.y = oy
+    }
+  }
+
+  polygons.value = Array.isArray(data.polygons)
+    ? data.polygons.map((poly) => ({
+      id: poly.id,
+      name: poly.name,
+      layerId: poly.layerId,
+      points: poly.points.map((p) => ({ x: p.x, y: p.y })),
+    }))
+    : []
+
+  polylines.value = Array.isArray(data.polylines)
+    ? data.polylines.map((line) => ({
+      id: line.id,
+      name: line.name,
+      layerId: line.layerId,
+      points: line.points.map((p) => ({ x: p.x, y: p.y })),
+    }))
+    : []
+
+  planningImages.value = Array.isArray(data.images)
+    ? data.images.map((img) => ({
+      id: img.id,
+      name: img.name,
+      url: img.url,
+      sizeLabel: img.sizeLabel,
+      width: img.width,
+      height: img.height,
+      visible: img.visible,
+      locked: img.locked,
+      opacity: img.opacity,
+      position: { x: img.position.x, y: img.position.y },
+      scale: img.scale,
+      scaleRatio: img.scaleRatio,
+      alignMarker: img.alignMarker ? { x: img.alignMarker.x, y: img.alignMarker.y } : undefined,
+    }))
+    : []
+
+  activeImageId.value = planningImages.value[0]?.id ?? null
+  planningDirty = false
+}
 
 // 性能优化：合并高频 pointermove 更新，避免每次事件都触发响应式链路与样式计算。
 let rafScheduled = false
@@ -267,6 +461,7 @@ watch(dialogOpen, (open) => {
   } else {
     cancelActiveDrafts()
     selectedFeature.value = null
+    persistPlanningToSceneIfDirty()
   }
 })
 
@@ -300,6 +495,21 @@ watch(
       lineDraft.value = null
     }
   },
+)
+
+watch(
+  [dialogOpen, currentSceneId],
+  ([open, sceneId], [prevOpen, prevSceneId]) => {
+    if (!open) {
+      return
+    }
+    // 在对话框打开期间切换场景：先把旧场景的规划数据写回，再加载新场景。
+    if (prevOpen && prevSceneId && sceneId && prevSceneId !== sceneId) {
+      persistPlanningToSceneIfDirty()
+    }
+    loadPlanningFromScene()
+  },
+  { immediate: true },
 )
 
 function updateEditorRect() {
@@ -361,6 +571,7 @@ function setAlignMarkerAtWorld(image: PlanningImage, world: PlanningPoint) {
     x: (world.x - image.position.x) / image.scale,
     y: (world.y - image.position.y) / image.scale,
   }
+  markPlanningDirty()
 }
 
 function getImageAccentColor(imageId: string): string {
@@ -562,6 +773,7 @@ function finalizeRectangleDrag() {
   }
   const points = createRectanglePoints(start, current)
   addPolygon(points, layerId, '矩形区域')
+  markPlanningDirty()
 }
 
 function addPolygon(points: PlanningPoint[], layerId?: string, labelPrefix?: string) {
@@ -588,6 +800,7 @@ function finalizePolygonDraft() {
   }
   addPolygon(polygonDraftPoints.value, undefined, '规划区域')
   polygonDraftPoints.value = []
+  markPlanningDirty()
 }
 
 function startLineDraft(point: PlanningPoint) {
@@ -628,6 +841,7 @@ function finalizeLineDraft() {
       }
     }
     lineDraft.value = null
+    markPlanningDirty()
     return
   }
   const newLine: PlanningPolyline = {
@@ -639,6 +853,7 @@ function finalizeLineDraft() {
   polylines.value = [...polylines.value, newLine]
   selectedFeature.value = { type: 'polyline', id: newLine.id }
   lineDraft.value = null
+  markPlanningDirty()
 }
 
 function selectFeature(feature: SelectedFeature) {
@@ -653,11 +868,13 @@ function deleteSelectedFeature() {
   if (feature.type === 'polygon') {
     polygons.value = polygons.value.filter((item) => item.id !== feature.id)
     selectedFeature.value = null
+    markPlanningDirty()
     return
   }
   if (feature.type === 'polyline') {
     polylines.value = polylines.value.filter((item) => item.id !== feature.id)
     selectedFeature.value = null
+    markPlanningDirty()
     return
   }
   const line = polylines.value.find((item) => item.id === feature.lineId)
@@ -668,11 +885,13 @@ function deleteSelectedFeature() {
   if (line.points.length <= 2) {
     polylines.value = polylines.value.filter((item) => item.id !== feature.lineId)
     selectedFeature.value = null
+    markPlanningDirty()
     return
   }
   const removeIndex = Math.min(feature.segmentIndex + 1, line.points.length - 1)
   line.points.splice(removeIndex, 1)
   selectedFeature.value = null
+  markPlanningDirty()
 }
 
 function handleToolSelect(tool: PlanningTool) {
@@ -686,6 +905,7 @@ function handleLayerToggle(layerId: string) {
   const layer = layers.value.find((item) => item.id === layerId)
   if (layer) {
     layer.visible = !layer.visible
+    markPlanningDirty()
   }
 }
 
@@ -905,12 +1125,25 @@ function handlePointerMove(event: PointerEvent) {
 function handlePointerUp(event: PointerEvent) {
   const state = dragState.value
   if (state.type !== 'idle' && state.pointerId === event.pointerId) {
+    const shouldDirty =
+      state.type === 'pan'
+      || state.type === 'move-polygon'
+      || state.type === 'move-polyline'
+      || state.type === 'drag-vertex'
+      || state.type === 'move-image-layer'
+      || state.type === 'move-align-marker'
+      || state.type === 'resize-image-layer'
+
     if (state.type === 'rectangle') {
       finalizeRectangleDrag()
     }
     dragState.value = { type: 'idle' }
     // 释放冻结的舞台尺寸，让画布在操作结束后再统一更新。
     frozenCanvasSize.value = null
+
+    if (shouldDirty) {
+      markPlanningDirty()
+    }
   }
   if (
     lineVertexClickState.value &&
@@ -947,6 +1180,7 @@ function handleWheel(event: WheelEvent) {
   viewTransform.scale = nextScale
   viewTransform.offset.x = sx / nextScale - worldX
   viewTransform.offset.y = sy / nextScale - worldY
+  markPlanningDirty()
 }
 
 function cancelActiveDrafts() {
@@ -1106,6 +1340,7 @@ function splitSegmentAt(lineId: string, segmentIndex: number, point: PlanningPoi
   }
   line.points.splice(segmentIndex + 1, 0, clonePoint(point))
   selectFeature({ type: 'segment', lineId, segmentIndex })
+  markPlanningDirty()
 }
 
 function startLineContinuation(lineId: string, vertexIndex: number) {
@@ -1212,6 +1447,8 @@ function loadPlanningImage(file: File) {
     planningImages.value.push(newImage)
     activeImageId.value = newImage.id
 
+    markPlanningDirty()
+
     nextTick(() => {
       fitViewToImage(newImage)
     })
@@ -1245,12 +1482,14 @@ function fitViewToImage(image: PlanningImage) {
 function handleResetView() {
   viewTransform.scale = 1
   viewTransform.offset = { x: 0, y: 0 }
+  markPlanningDirty()
 }
 
 function handleImageLayerToggle(imageId: string) {
   const image = planningImages.value.find((img) => img.id === imageId)
   if (image) {
     image.visible = !image.visible
+    markPlanningDirty()
   }
 }
 
@@ -1258,6 +1497,7 @@ function handleImageLayerLockToggle(imageId: string) {
   const image = planningImages.value.find((img) => img.id === imageId)
   if (image) {
     image.locked = !image.locked
+    markPlanningDirty()
   }
 }
 
@@ -1269,6 +1509,7 @@ function handleImageLayerOpacityChange(imageId: string, opacity: number) {
   const image = planningImages.value.find((img) => img.id === imageId)
   if (image) {
     image.opacity = opacity
+    markPlanningDirty()
   }
 }
 
@@ -1284,6 +1525,7 @@ function handleImageLayerScaleRatioChange(imageId: string, scaleRatio: number | 
   }
   if (scaleRatio === undefined) {
     image.scaleRatio = undefined
+    markPlanningDirty()
     return
   }
   const next = Number(scaleRatio)
@@ -1292,6 +1534,7 @@ function handleImageLayerScaleRatioChange(imageId: string, scaleRatio: number | 
   }
   image.scaleRatio = next
   image.scale = next
+  markPlanningDirty()
 }
 
 function handleImageLayerDelete(imageId: string) {
@@ -1299,6 +1542,7 @@ function handleImageLayerDelete(imageId: string) {
   if (activeImageId.value === imageId) {
     activeImageId.value = planningImages.value[0]?.id ?? null
   }
+  markPlanningDirty()
 }
 
 function reorderPlanningImages(fromId: string, toId: string) {
@@ -1330,6 +1574,7 @@ function reorderPlanningImagesByListOrder(fromId: string, toId: string) {
   }
   nextList.splice(toIndex, 0, item)
   planningImages.value = nextList.reverse()
+  markPlanningDirty()
 }
 
 function movePlanningImageToEnd(imageId: string) {
@@ -1344,6 +1589,7 @@ function movePlanningImageToEnd(imageId: string) {
   }
   list.push(item)
   planningImages.value = list
+  markPlanningDirty()
 }
 
 function movePlanningImageToListEnd(imageId: string) {
@@ -1360,6 +1606,7 @@ function movePlanningImageToListEnd(imageId: string) {
   }
   nextList.push(item)
   planningImages.value = nextList.reverse()
+  markPlanningDirty()
 }
 
 function handleImageLayerItemDragStart(imageId: string, event: DragEvent) {
@@ -1406,6 +1653,13 @@ function handleImageLayerItemDragEnd() {
 }
 
 function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
+  // 规划图层作为“底图”，应允许在其上方进行区域选择/标注。
+  // 因此仅在需要直接操作底图的工具下拦截事件。
+  const tool = currentTool.value
+  if (tool !== 'select' && tool !== 'pan' && tool !== 'align-marker') {
+    return
+  }
+
   event.stopPropagation()
   event.preventDefault()
   frozenCanvasSize.value = { ...canvasSize.value }
@@ -1417,8 +1671,11 @@ function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
   if (!image.visible) {
     return
   }
+  if (tool === 'select') {
+    return
+  }
   const world = screenToWorld(event)
-  if (currentTool.value === 'align-marker') {
+  if (tool === 'align-marker') {
     setAlignMarkerAtWorld(image, world)
     dragState.value = {
       type: 'move-align-marker',
@@ -1430,7 +1687,7 @@ function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
   }
 
   // 为防误操作：只有在选择“平移”工具时才允许拖动规划图层。
-  if (currentTool.value !== 'pan') {
+  if (tool !== 'pan') {
     return
   }
 
@@ -1475,6 +1732,7 @@ function handleImageLayerMove(imageId: string, direction: 'up' | 'down') {
   }
   list.splice(targetIndex, 0, item)
   planningImages.value = list
+  markPlanningDirty()
 }
 
 function handleImageResizePointerDown(
@@ -1603,10 +1861,9 @@ onBeforeUnmount(() => {
 <template>
   <v-dialog
     v-model="dialogOpen"
+    fullscreen
     transition="dialog-bottom-transition"
     scrim="rgba(6, 8, 12, 0.8)"
-    width="100vw"
-    max-width="100vw"
     persistent
   >
     <v-card class="planning-dialog" elevation="12">
@@ -1828,7 +2085,7 @@ onBeforeUnmount(() => {
                   :key="image.id"
                   :class="['planning-image', { active: activeImageId === image.id }]"
                   :style="getImageLayerStyle(image, index)"
-                  @pointerdown.stop="handleImageLayerPointerDown(image.id, $event as PointerEvent)"
+                  @pointerdown="handleImageLayerPointerDown(image.id, $event as PointerEvent)"
                 >
                   <img
                     class="planning-image-img"
@@ -1995,11 +2252,12 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .planning-dialog {
-  width: calc(100vw - 48px);
-  height: calc(100vh - 48px);
+  width: 100vw;
+  height: 100vh;
   max-width: 100%;
-  max-height: calc(100vh - 48px);
-  margin: 24px;
+  max-height: 100vh;
+  margin: 0;
+  border-radius: 0;
   display: flex;
   flex-direction: column;
   background: #0c111a;
