@@ -128,6 +128,7 @@ const lineCounter = ref(1)
 const selectedFeature = ref<SelectedFeature>(null)
 const selectedName = ref('')
 const polygonDraftPoints = ref<PlanningPoint[]>([])
+const polygonDraftHoverPoint = ref<PlanningPoint | null>(null)
 const lineDraft = ref<LineDraft | null>(null)
 const dragState = ref<DragState>({ type: 'idle' })
 const viewTransform = reactive({ scale: 1, offset: { x: 0, y: 0 } })
@@ -815,18 +816,38 @@ function addPolygon(points: PlanningPoint[], layerId?: string, labelPrefix?: str
 }
 
 function addPolygonDraftPoint(point: PlanningPoint) {
-  polygonDraftPoints.value = [...polygonDraftPoints.value, point]
+  const next = clonePoint(point)
+  const last = polygonDraftPoints.value.length
+    ? polygonDraftPoints.value[polygonDraftPoints.value.length - 1]
+    : undefined
+  if (last && last.x === next.x && last.y === next.y) {
+    return
+  }
+  polygonDraftPoints.value = [...polygonDraftPoints.value, next]
+  polygonDraftHoverPoint.value = next
 }
 
 function finalizePolygonDraft() {
   if (polygonDraftPoints.value.length < 3) {
     polygonDraftPoints.value = []
+    polygonDraftHoverPoint.value = null
     return
   }
   addPolygon(polygonDraftPoints.value, undefined, '规划区域')
   polygonDraftPoints.value = []
+  polygonDraftHoverPoint.value = null
   markPlanningDirty()
 }
+
+const polygonDraftPreviewPath = computed(() => {
+  const pts = polygonDraftPoints.value
+  if (!pts.length) {
+    return ''
+  }
+  const hover = polygonDraftHoverPoint.value
+  const previewPoints = hover ? [...pts, hover] : pts
+  return getPolylinePath(previewPoints)
+})
 
 function startLineDraft(point: PlanningPoint) {
   if (!canUseLineTool.value) {
@@ -1017,6 +1038,16 @@ function handleEditorDoubleClick(event: MouseEvent) {
 }
 
 function handlePointerMove(event: PointerEvent) {
+  // 自由绘制预览：拖拽状态为空时，跟随鼠标更新预览线条
+  if (
+    dialogOpen.value
+    && dragState.value.type === 'idle'
+    && currentTool.value === 'lasso'
+    && polygonDraftPoints.value.length
+  ) {
+    polygonDraftHoverPoint.value = clonePoint(screenToWorld(event))
+  }
+
   const state = dragState.value
   if (state.type === 'idle' || state.pointerId !== event.pointerId) {
     return
@@ -1218,6 +1249,7 @@ function handleWheel(event: WheelEvent) {
 
 function cancelActiveDrafts() {
   polygonDraftPoints.value = []
+  polygonDraftHoverPoint.value = null
   lineDraft.value = null
   dragState.value = { type: 'idle' }
 }
@@ -1871,6 +1903,7 @@ void handleResetView
 void closeDialog
 void handleImageLayerMove
 void reorderPlanningImages
+void polygonDraftPreviewPath
 
 onMounted(() => {
   window.addEventListener('pointermove', handlePointerMove, { passive: false })
@@ -2219,8 +2252,8 @@ onBeforeUnmount(() => {
                   <path
                     v-if="polygonDraftPoints.length >= 2"
                     class="planning-polygon-draft"
-                    :d="getPolygonPath(polygonDraftPoints)"
-                    :fill="polygonDraftPoints.length >= 3 ? 'rgba(98, 179, 255, 0.10)' : 'transparent'"
+                    :d="polygonDraftPreviewPath"
+                    fill="transparent"
                     stroke="rgba(98, 179, 255, 0.9)"
                     stroke-width="2"
                     stroke-dasharray="6 4"
