@@ -839,14 +839,20 @@ function finalizePolygonDraft() {
   markPlanningDirty()
 }
 
-const polygonDraftPreviewPath = computed(() => {
+const polygonDraftPreview = computed(() => {
   const pts = polygonDraftPoints.value
-  if (!pts.length) {
-    return ''
+  if (pts.length < 1) {
+    return { d: '', fill: 'transparent' }
   }
   const hover = polygonDraftHoverPoint.value
-  const previewPoints = hover ? [...pts, hover] : pts
-  return getPolylinePath(previewPoints)
+  if (!hover) {
+    return { d: '', fill: 'transparent' }
+  }
+
+  // 第一次点击后即显示预览：使用 [首点, 鼠标点] 形成可见闭合线段。
+  const previewPoints = pts.length === 1 ? [pts[0]!, hover] : [...pts, hover]
+  const fill = previewPoints.length >= 3 ? 'rgba(98, 179, 255, 0.12)' : 'transparent'
+  return { d: getPolygonPath(previewPoints), fill }
 })
 
 function startLineDraft(point: PlanningPoint) {
@@ -1903,7 +1909,7 @@ void handleResetView
 void closeDialog
 void handleImageLayerMove
 void reorderPlanningImages
-void polygonDraftPreviewPath
+void polygonDraftPreview
 
 onMounted(() => {
   window.addEventListener('pointermove', handlePointerMove, { passive: false })
@@ -2245,18 +2251,17 @@ onBeforeUnmount(() => {
                     :d="getPolygonPath(createRectanglePoints(dragState.start, dragState.current))"
                     fill="rgba(98, 179, 255, 0.12)"
                     stroke="rgba(98, 179, 255, 0.9)"
-                    stroke-width="2"
+                    stroke-width="1.25"
                   />
 
                   <!-- 自由选择绘制预览（点击加点，双击结束） -->
                   <path
-                    v-if="polygonDraftPoints.length >= 2"
+                    v-if="polygonDraftPoints.length >= 1"
                     class="planning-polygon-draft"
-                    :d="polygonDraftPreviewPath"
-                    fill="transparent"
+                    :d="polygonDraftPreview.d"
+                    :fill="polygonDraftPreview.fill"
                     stroke="rgba(98, 179, 255, 0.9)"
-                    stroke-width="2"
-                    stroke-dasharray="6 4"
+                    stroke-width="1.25"
                   />
 
                   <!-- 线段绘制预览 -->
@@ -2278,10 +2283,10 @@ onBeforeUnmount(() => {
                       class="vertex-handle"
                       :cx="p.x"
                       :cy="p.y"
-                      r="6"
+                      r="4"
                       :fill="getLayerColor(selectedPolygon.layerId, 0.95)"
                       stroke="rgba(255,255,255,0.9)"
-                      stroke-width="2"
+                      stroke-width="1"
                       @pointerdown="handlePolygonVertexPointerDown(selectedPolygon.id, idx, $event as PointerEvent)"
                     />
                   </g>
@@ -2294,10 +2299,10 @@ onBeforeUnmount(() => {
                       class="vertex-handle"
                       :cx="p.x"
                       :cy="p.y"
-                      r="6"
+                      r="4"
                       :fill="getLayerColor(selectedPolyline.layerId, 0.95)"
                       stroke="rgba(255,255,255,0.9)"
-                      stroke-width="2"
+                      stroke-width="1"
                       @pointerdown="handleLineVertexPointerDown(selectedPolyline.id, idx, $event as PointerEvent)"
                     />
                   </g>
@@ -2796,7 +2801,7 @@ onBeforeUnmount(() => {
 .vertex-handle {
   cursor: pointer;
   stroke: #04070d;
-  stroke-width: 2;
+  stroke-width: 1;
 }
 
 .vertex-handle.line {
