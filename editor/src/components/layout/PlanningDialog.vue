@@ -2577,20 +2577,6 @@ onBeforeUnmount(() => {
           >
             <div class="canvas-viewport">
               <div class="canvas-stage" :style="stageStyle">
-                <div
-                  v-for="(image, index) in planningImages"
-                  :key="image.id"
-                  :class="['planning-image', { active: activeImageId === image.id }]"
-                  :style="getImageLayerStyle(image, index)"
-                  @pointerdown="handleImageLayerPointerDown(image.id, $event as PointerEvent)"
-                >
-                  <img
-                    class="planning-image-img"
-                    :src="image.url"
-                    :alt="image.name"
-                    draggable="false"
-                  >
-                </div>
 
                 <svg
                   class="vector-overlay"
@@ -2733,6 +2719,19 @@ onBeforeUnmount(() => {
                     />
                   </g>
                 </svg>
+                <div
+                  v-for="(image, index) in planningImages"
+                  :key="image.id"
+                  :class="['planning-image', { active: activeImageId === image.id }]"
+                  :style="getImageLayerStyle(image, index)"
+                >
+                  <img
+                    class="planning-image-img"
+                    :src="image.url"
+                    :alt="image.name"
+                    draggable="false"
+                  >
+                </div>
 
                 <div
                   v-for="image in planningImages"
