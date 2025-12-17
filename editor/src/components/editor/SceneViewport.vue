@@ -558,9 +558,9 @@ const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((too
 const activeBuildTool = ref<BuildTool | null>(null)
 const scatterEraseModeActive = ref(false)
 const scatterEraseMenuOpen = ref(false)
-const repairModeActive = ref(false)
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
 const canRepairInstanced = computed(() => props.sceneNodes.some((node) => Boolean(getContinuousInstancedModelUserData(node))))
+const canUseScatterEraseTool = computed(() => selectedNodeIsGround.value || canRepairInstanced.value)
 
 type RepairClickState = { pointerId: number; startX: number; startY: number; moved: boolean }
 let repairClickState: RepairClickState | null = null
@@ -629,14 +629,15 @@ function exitScatterEraseMode() {
     return
   }
   scatterEraseModeActive.value = false
+  repairClickState = null
+  clearRepairHoverHighlight(true)
   cancelGroundEditorScatterErase()
   cancelGroundEditorScatterPlacement()
   scatterEraseMenuOpen.value = false
 }
 
 function toggleScatterEraseMode() {
-  exitRepairMode()
-  if (!selectedNodeIsGround.value) {
+  if (!canUseScatterEraseTool.value) {
     exitScatterEraseMode()
     return
   }
@@ -650,6 +651,10 @@ function toggleScatterEraseMode() {
   handleBuildToolChange(null)
   cancelGroundEditorScatterPlacement()
   scatterEraseModeActive.value = true
+  if (props.activeTool !== 'select') {
+    emit('changeTool', 'select')
+  }
+  updateOutlineSelectionTargets()
 }
 
 watch(scatterSelectedAsset, (asset) => {
@@ -691,31 +696,8 @@ function clearRepairHoverHighlight(updateOutline = true) {
   }
 }
 
-function exitRepairMode() {
-  if (!repairModeActive.value) {
-    return
-  }
-  repairModeActive.value = false
-  clearRepairHoverHighlight(true)
-}
-
-function toggleRepairMode() {
-  if (repairModeActive.value) {
-    exitRepairMode()
-    return
-  }
-  exitScatterEraseMode()
-  handleBuildToolChange(null)
-  cancelGroundEditorScatterPlacement()
-  repairModeActive.value = true
-  if (props.activeTool !== 'select') {
-    emit('changeTool', 'select')
-  }
-  updateOutlineSelectionTargets()
-}
-
 function updateRepairHoverHighlight(event: PointerEvent): boolean {
-  if (!repairModeActive.value) {
+  if (!scatterEraseModeActive.value || !canRepairInstanced.value) {
     if (repairHoverGroup.visible) {
       clearRepairHoverHighlight(true)
     }
@@ -4264,7 +4246,7 @@ function updateOutlineSelectionTargets() {
   })
   releaseCandidates.forEach((nodeId) => releaseInstancedOutlineEntry(nodeId, false))
 
-  if (repairModeActive.value && repairHoverGroup.visible && repairHoverGroup.children.length) {
+  if (scatterEraseModeActive.value && repairHoverGroup.visible && repairHoverGroup.children.length) {
     repairHoverGroup.children.forEach((child) => {
       if (child.visible) {
         meshSet.add(child)
@@ -4603,19 +4585,15 @@ async function handlePointerDown(event: PointerEvent) {
     }
   }
 
-  // Repair mode: allow camera controls (zoom/pan/rotate). We only treat a left-click
-  // with minimal movement as an erase action, handled on pointerup.
-  if (repairModeActive.value) {
+  // Scatter erase mode: if continuous instanced models exist, allow camera controls.
+  // We only treat a left-click with minimal movement as an erase action, handled on pointerup.
+  if (scatterEraseModeActive.value && canRepairInstanced.value && event.button === 0) {
     pointerTrackingState = null
-    if (event.button === 0) {
-      repairClickState = {
-        pointerId: event.pointerId,
-        startX: event.clientX,
-        startY: event.clientY,
-        moved: false,
-      }
-    } else {
-      repairClickState = null
+    repairClickState = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
     }
     return
   }
@@ -4814,7 +4792,7 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
 
-  if (repairModeActive.value) {
+  if (scatterEraseModeActive.value && canRepairInstanced.value) {
     updateRepairHoverHighlight(event)
     if (repairClickState && repairClickState.pointerId === event.pointerId && !repairClickState.moved) {
       const dx = event.clientX - repairClickState.startX
@@ -4823,7 +4801,6 @@ function handlePointerMove(event: PointerEvent) {
         repairClickState.moved = true
       }
     }
-    return
   } else {
     updateRepairHoverHighlight(event)
   }
@@ -4911,7 +4888,7 @@ function handlePointerUp(event: PointerEvent) {
     return
   }
 
-  if (repairModeActive.value && repairClickState && event.pointerId === repairClickState.pointerId && event.button === 0) {
+  if (scatterEraseModeActive.value && repairClickState && event.pointerId === repairClickState.pointerId && event.button === 0) {
     const dx = event.clientX - repairClickState.startX
     const dy = event.clientY - repairClickState.startY
     const moved = repairClickState.moved || Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX
@@ -5818,7 +5795,6 @@ function cancelActiveBuildOperation(): boolean {
 }
 
 function handleBuildToolChange(tool: BuildTool | null) {
-  exitRepairMode()
   if (tool === 'ground') {
     exitScatterEraseMode()
     cancelGroundEditorScatterPlacement()
@@ -7557,11 +7533,6 @@ function handleViewportShortcut(event: KeyboardEvent) {
           handled = true
           break
         }
-        if (repairModeActive.value) {
-          exitRepairMode()
-          handled = true
-          break
-        }
         if (cancelActiveBuildOperation()) {
           handled = true
           break
@@ -7867,10 +7838,8 @@ defineExpose<SceneViewportHandle>({
         :can-drop-selection="canDropSelection"
         :can-align-selection="canAlignSelection"
         :can-rotate-selection="canRotateSelection"
-        :can-erase-scatter="selectedNodeIsGround"
-        :can-repair-instanced="canRepairInstanced"
+        :can-erase-scatter="canUseScatterEraseTool"
         :scatter-erase-mode-active="scatterEraseModeActive"
-        :repair-mode-active="repairModeActive"
           :scatter-erase-radius="scatterEraseRadius"
           :scatter-erase-menu-open="scatterEraseMenuOpen"
         :active-build-tool="activeBuildTool"
@@ -7882,7 +7851,6 @@ defineExpose<SceneViewportHandle>({
         @toggle-camera-control="handleToggleCameraControlMode"
         @change-build-tool="handleBuildToolChange"
         @toggle-scatter-erase="toggleScatterEraseMode"
-        @toggle-repair="toggleRepairMode"
           @clear-all-scatter-instances="handleClearAllScatterInstances"
           @update-scatter-erase-radius="terrainStore.setScatterEraseRadius"
           @update:scatter-erase-menu-open="handleScatterEraseMenuOpen"
