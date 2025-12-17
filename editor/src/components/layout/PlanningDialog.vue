@@ -141,7 +141,6 @@ const activeImageId = ref<string | null>(null)
 const draggingImageId = ref<string | null>(null)
 const dragOverImageId = ref<string | null>(null)
 const alignModeActive = ref(false)
-const hasAlignMarkerCandidates = computed(() => planningImages.value.some((img) => img.visible && !!img.alignMarker))
 const uploadError = ref<string | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const editorRef = ref<HTMLDivElement | null>(null)
@@ -567,6 +566,10 @@ watch(selectedFeature, (feature) => {
   selectedName.value = `Segment ${feature.segmentIndex + 1}`
 })
 
+watch(activeLayerId, () => {
+  ensureSelectionWithinActiveLayer()
+})
+
 watch(
   currentTool,
   (tool, previous) => {
@@ -637,6 +640,37 @@ function getPolylineStroke(layerId: string) {
   const kind = getLayerKind(layerId)
   const alpha = kind === 'road' ? 0.85 : 0.95
   return getLayerColor(layerId, alpha)
+}
+
+function isActiveLayer(layerId: string | null | undefined) {
+  return !!layerId && layerId === activeLayerId.value
+}
+
+function getFeatureLayerId(feature: SelectedFeature | null): string | null {
+  if (!feature) {
+    return null
+  }
+  if (feature.type === 'polygon') {
+    return polygons.value.find((item) => item.id === feature.id)?.layerId ?? null
+  }
+  if (feature.type === 'polyline') {
+    return polylines.value.find((item) => item.id === feature.id)?.layerId ?? null
+  }
+  if (feature.type === 'segment') {
+    return polylines.value.find((item) => item.id === feature.lineId)?.layerId ?? null
+  }
+  return null
+}
+
+function ensureSelectionWithinActiveLayer() {
+  const feature = selectedFeature.value
+  if (!feature) {
+    return
+  }
+  const layerId = getFeatureLayerId(feature)
+  if (!layerId || !isActiveLayer(layerId)) {
+    selectedFeature.value = null
+  }
 }
 
 function hexToRgba(hex: string, alpha: number) {
@@ -976,7 +1010,7 @@ function finalizeLineDraft() {
           newPoints.reverse()
           line.points.unshift(...newPoints)
         }
-        selectedFeature.value = { type: 'polyline', id: line.id }
+        selectFeature({ type: 'polyline', id: line.id })
       }
     }
     lineDraft.value = null
@@ -991,7 +1025,7 @@ function finalizeLineDraft() {
     points: clonePoints(draft.points),
   }
   polylines.value = [...polylines.value, newLine]
-  selectedFeature.value = { type: 'polyline', id: newLine.id }
+  selectFeature({ type: 'polyline', id: newLine.id })
   lineDraft.value = null
   lineDraftHoverPoint.value = null
   markPlanningDirty()
@@ -1023,6 +1057,15 @@ const lineDraftPreviewDasharray = computed(() => {
 })
 
 function selectFeature(feature: SelectedFeature) {
+  if (!feature) {
+    selectedFeature.value = null
+    return
+  }
+  const layerId = getFeatureLayerId(feature)
+  if (!layerId || !isActiveLayer(layerId)) {
+    selectedFeature.value = null
+    return
+  }
   selectedFeature.value = feature
 }
 
@@ -1080,6 +1123,7 @@ function handleLayerSelection(layerId: string) {
   if (currentTool.value === 'line' && !canUseLineTool.value) {
     currentTool.value = 'select'
   }
+  ensureSelectionWithinActiveLayer()
 }
 
 function handleEditorPointerDown(event: PointerEvent) {
@@ -1439,6 +1483,10 @@ function handleKeyup(event: KeyboardEvent) {
 }
 
 function handlePolygonPointerDown(polygonId: string, event: PointerEvent) {
+  const polygon = polygons.value.find((item) => item.id === polygonId)
+  if (!polygon || !isActiveLayer(polygon.layerId)) {
+    return
+  }
   event.stopPropagation()
   event.preventDefault()
   selectFeature({ type: 'polygon', id: polygonId })
@@ -1450,12 +1498,16 @@ function handlePolygonPointerDown(polygonId: string, event: PointerEvent) {
     pointerId: event.pointerId,
     polygonId,
     anchor: screenToWorld(event),
-    startPoints: clonePoints(polygons.value.find((item) => item.id === polygonId)?.points ?? []),
+    startPoints: clonePoints(polygon.points),
   }
   event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
 }
 
 function handlePolygonVertexPointerDown(polygonId: string, vertexIndex: number, event: PointerEvent) {
+  const polygon = polygons.value.find((item) => item.id === polygonId)
+  if (!polygon || !isActiveLayer(polygon.layerId)) {
+    return
+  }
   event.stopPropagation()
   event.preventDefault()
   selectFeature({ type: 'polygon', id: polygonId })
@@ -1473,6 +1525,10 @@ function handlePolygonVertexPointerDown(polygonId: string, vertexIndex: number, 
 }
 
 function handlePolylinePointerDown(lineId: string, event: PointerEvent) {
+  const line = polylines.value.find((item) => item.id === lineId)
+  if (!line || !isActiveLayer(line.layerId)) {
+    return
+  }
   event.stopPropagation()
   event.preventDefault()
   selectFeature({ type: 'polyline', id: lineId })
@@ -1484,12 +1540,16 @@ function handlePolylinePointerDown(lineId: string, event: PointerEvent) {
     pointerId: event.pointerId,
     lineId,
     anchor: screenToWorld(event),
-    startPoints: clonePoints(polylines.value.find((item) => item.id === lineId)?.points ?? []),
+    startPoints: clonePoints(line.points),
   }
   event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
 }
 
 function handleLineVertexPointerDown(lineId: string, vertexIndex: number, event: PointerEvent) {
+  const line = polylines.value.find((item) => item.id === lineId)
+  if (!line || !isActiveLayer(line.layerId)) {
+    return
+  }
   event.stopPropagation()
   event.preventDefault()
   selectFeature({ type: 'polyline', id: lineId })
@@ -1513,6 +1573,10 @@ function handleLineVertexPointerDown(lineId: string, vertexIndex: number, event:
 }
 
 function handleLineSegmentPointerDown(lineId: string, segmentIndex: number, event: PointerEvent) {
+  const line = polylines.value.find((item) => item.id === lineId)
+  if (!line || !isActiveLayer(line.layerId)) {
+    return
+  }
   event.stopPropagation()
   event.preventDefault()
   if (currentTool.value !== 'select') {
@@ -2003,13 +2067,12 @@ function closeDialog() {
   dialogOpen.value = false
 }
 
-const toolbarButtons: Array<{ tool: PlanningTool; icon: string; label: string }> = [
-  { tool: 'select', icon: 'mdi-cursor-default-outline', label: '选择' },
-  { tool: 'pan', icon: 'mdi-hand-back-left', label: '平移' },
-  { tool: 'rectangle', icon: 'mdi-rectangle-outline', label: '矩形选择' },
-  { tool: 'lasso', icon: 'mdi-shape-polygon-plus', label: '自由选择' },
-  { tool: 'line', icon: 'mdi-vector-line', label: '直线段' },
-  { tool: 'align-marker', icon: 'mdi-crosshairs-gps', label: '对齐标记' },
+const toolbarButtons: Array<{ tool: PlanningTool; icon: string }> = [
+  { tool: 'select', icon: 'mdi-cursor-default-outline' },
+  { tool: 'rectangle', icon: 'mdi-rectangle-outline' },
+  { tool: 'lasso', icon: 'mdi-shape-polygon-plus' },
+  { tool: 'line', icon: 'mdi-vector-line' },
+  { tool: 'align-marker', icon: 'mdi-crosshairs-gps' },
 ]
 
 const resizeDirections = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const
@@ -2033,6 +2096,7 @@ void resizeDirections
 void zoomImageLayer
 void handleResetView
 void closeDialog
+void toggleAlignMode
 void handleImageLayerMove
 void reorderPlanningImages
 void polygonDraftPreview
@@ -2250,21 +2314,9 @@ onBeforeUnmount(() => {
                 :disabled="button.tool === 'line' && !canUseLineTool"
                 @click="handleToolSelect(button.tool)"
               >
-                <v-icon start>{{ button.icon }}</v-icon>
-                {{ button.label }}
+                <v-icon>{{ button.icon }}</v-icon>
               </v-btn>
 
-              <v-btn
-                :color="alignModeActive ? 'primary' : undefined"
-                variant="tonal"
-                density="comfortable"
-                class="tool-button"
-                :disabled="!alignModeActive && !hasAlignMarkerCandidates"
-                @click="toggleAlignMode"
-              >
-                <v-icon start>mdi-align-horizontal-center</v-icon>
-                对齐规划图层
-              </v-btn>
             </div>
           </div>
 
@@ -2304,7 +2356,10 @@ onBeforeUnmount(() => {
                     v-for="poly in visiblePolygons"
                     :key="poly.id"
                     class="planning-polygon"
-                    :class="{ selected: selectedFeature?.type === 'polygon' && selectedFeature.id === poly.id }"
+                    :class="{
+                      selected: selectedFeature?.type === 'polygon' && selectedFeature.id === poly.id,
+                      'inactive-layer-feature': !isActiveLayer(poly.layerId),
+                    }"
                     :d="getPolygonPath(poly.points)"
                     :fill="getLayerColor(poly.layerId, 0.22)"
                     :stroke="getLayerColor(poly.layerId, 0.95)"
@@ -2321,6 +2376,7 @@ onBeforeUnmount(() => {
                         selected:
                           (selectedFeature?.type === 'polyline' && selectedFeature.id === line.id)
                           || (selectedFeature?.type === 'segment' && selectedFeature.lineId === line.id),
+                        'inactive-layer-feature': !isActiveLayer(line.layerId),
                       }"
                       :d="getPolylinePath(line.points)"
                       :stroke="getPolylineStroke(line.layerId)"
@@ -2713,7 +2769,14 @@ onBeforeUnmount(() => {
 }
 
 .tool-button {
-  text-transform: none;
+  min-width: 44px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .tool-info {
@@ -2811,13 +2874,14 @@ onBeforeUnmount(() => {
 }
 
 .planning-line {
+  stroke-width: 1.05;
   stroke-linecap: round;
   stroke-linejoin: round;
   cursor: pointer;
 }
 
 .planning-line.selected {
-  stroke-width: 0.5;
+  stroke-width: 1.6;
 }
 
 .planning-line-segment {
@@ -2914,6 +2978,10 @@ onBeforeUnmount(() => {
 .planning-line.draft {
   stroke: rgba(255, 255, 255, 0.75);
   stroke-dasharray: 6 4;
+}
+
+.inactive-layer-feature {
+  opacity: 0.28;
 }
 
 .planning-polygon.draft {
