@@ -135,7 +135,28 @@ type SculptSessionState = {
 
 let sculptSessionState: SculptSessionState | null = null
 
-function createBrushGeometry(): THREE.BufferGeometry {
+function createStarShape(points = 5, outerRadius = 1, innerRadius = 0.5): THREE.Shape {
+	const shape = new THREE.Shape()
+	const step = Math.PI / points
+	let angle = -Math.PI / 2
+	shape.moveTo(Math.cos(angle) * outerRadius, Math.sin(angle) * outerRadius)
+	for (let i = 0; i < points * 2; i += 1) {
+		const radius = i % 2 === 0 ? innerRadius : outerRadius
+		const x = Math.cos(angle + step * (i + 1)) * radius
+		const y = Math.sin(angle + step * (i + 1)) * radius
+		shape.lineTo(x, y)
+	}
+	shape.closePath()
+	return shape
+}
+
+function createBrushGeometry(shape: TerrainBrushShape): THREE.BufferGeometry {
+	if (shape === 'square') {
+		return new THREE.PlaneGeometry(2, 2)
+	}
+	if (shape === 'star') {
+		return new THREE.ShapeGeometry(createStarShape())
+	}
 	return new THREE.CircleGeometry(1, 64)
 }
 
@@ -163,7 +184,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		depthWrite: false,
 	})
 	const brushMesh = new THREE.Mesh(
-		tagBrushGeometry(createBrushGeometry()),
+		tagBrushGeometry(createBrushGeometry('circle')),
 		brushMaterial,
 	)
 	brushMesh.rotation.x = -Math.PI / 2
@@ -470,8 +491,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	// scatter helpers now sourced from terrainScatterRuntime
 
-	function updateBrushGeometry(_shape: TerrainBrushShape) {
-		const nextGeometry = tagBrushGeometry(createBrushGeometry())
+	function updateBrushGeometry(shape: TerrainBrushShape) {
+		const nextGeometry = tagBrushGeometry(createBrushGeometry(shape))
 		const previousGeometry = brushMesh.geometry
 		brushMesh.geometry = nextGeometry
 		previousGeometry?.dispose()
