@@ -130,6 +130,7 @@ const selectedName = ref('')
 const polygonDraftPoints = ref<PlanningPoint[]>([])
 const polygonDraftHoverPoint = ref<PlanningPoint | null>(null)
 const lineDraft = ref<LineDraft | null>(null)
+const lineDraftHoverPoint = ref<PlanningPoint | null>(null)
 const dragState = ref<DragState>({ type: 'idle' })
 const viewTransform = reactive({ scale: 1, offset: { x: 0, y: 0 } })
 const planningImages = ref<PlanningImage[]>([])
@@ -393,6 +394,8 @@ let rafScheduled = false
 let pendingPan: { x: number; y: number } | null = null
 let pendingImageMoves: Array<{ imageId: string; x: number; y: number }> | null = null
 let pendingMarkerMove: { imageId: string; localX: number; localY: number } | null = null
+let pendingLassoHoverClient: { x: number; y: number } | null = null
+let pendingLineHoverClient: { x: number; y: number } | null = null
 
 function scheduleRafFlush() {
   if (rafScheduled) {
@@ -422,6 +425,52 @@ function scheduleRafFlush() {
         image.alignMarker = { x: pendingMarkerMove.localX, y: pendingMarkerMove.localY }
       }
       pendingMarkerMove = null
+    }
+
+    if (pendingLassoHoverClient) {
+      if (
+        dialogOpen.value
+        && dragState.value.type === 'idle'
+        && currentTool.value === 'lasso'
+        && polygonDraftPoints.value.length
+      ) {
+        const nextHover = screenToWorld({
+          clientX: pendingLassoHoverClient.x,
+          clientY: pendingLassoHoverClient.y,
+        } as MouseEvent)
+        const previousHover = polygonDraftHoverPoint.value
+        if (
+          !previousHover
+          || Math.abs(previousHover.x - nextHover.x) > 0.0001
+          || Math.abs(previousHover.y - nextHover.y) > 0.0001
+        ) {
+          polygonDraftHoverPoint.value = nextHover
+        }
+      }
+      pendingLassoHoverClient = null
+    }
+
+    if (pendingLineHoverClient) {
+      if (
+        dialogOpen.value
+        && dragState.value.type === 'idle'
+        && currentTool.value === 'line'
+        && lineDraft.value?.points.length
+      ) {
+        const nextHover = screenToWorld({
+          clientX: pendingLineHoverClient.x,
+          clientY: pendingLineHoverClient.y,
+        } as MouseEvent)
+        const previousHover = lineDraftHoverPoint.value
+        if (
+          !previousHover
+          || Math.abs(previousHover.x - nextHover.x) > 0.0001
+          || Math.abs(previousHover.y - nextHover.y) > 0.0001
+        ) {
+          lineDraftHoverPoint.value = nextHover
+        }
+      }
+      pendingLineHoverClient = null
     }
   })
 }
@@ -513,9 +562,13 @@ watch(
     }
     if (previous === 'lasso' && tool !== 'lasso' && polygonDraftPoints.value.length) {
       polygonDraftPoints.value = []
+      polygonDraftHoverPoint.value = null
+      pendingLassoHoverClient = null
     }
     if (previous === 'line' && tool !== 'line' && lineDraft.value) {
       lineDraft.value = null
+      lineDraftHoverPoint.value = null
+      pendingLineHoverClient = null
     }
   },
 )
@@ -551,6 +604,25 @@ function getLayerColor(layerId: string, alpha = 1) {
     return `rgba(255, 255, 255, ${alpha})`
   }
   return hexToRgba(layer.color, alpha)
+}
+
+function getLayerKind(layerId: string) {
+  return layers.value.find((layer) => layer.id === layerId)?.kind ?? null
+}
+
+function getPolylineStrokeDasharray(layerId: string) {
+  const kind = getLayerKind(layerId)
+  // 道路：虚线（更易与墙体区分），墙体：实线。
+  if (kind === 'road') {
+    return '10 7'
+  }
+  return undefined
+}
+
+function getPolylineStroke(layerId: string) {
+  const kind = getLayerKind(layerId)
+  const alpha = kind === 'road' ? 0.85 : 0.95
+  return getLayerColor(layerId, alpha)
 }
 
 function hexToRgba(hex: string, alpha: number) {
@@ -851,7 +923,7 @@ const polygonDraftPreview = computed(() => {
 
   // 第一次点击后即显示预览：使用 [首点, 鼠标点] 形成可见闭合线段。
   const previewPoints = pts.length === 1 ? [pts[0]!, hover] : [...pts, hover]
-  const fill = previewPoints.length >= 3 ? 'rgba(98, 179, 255, 0.12)' : 'transparent'
+  const fill = previewPoints.length >= 3 ? 'rgba(98, 179, 255, 0.08)' : 'transparent'
   return { d: getPolygonPath(previewPoints), fill }
 })
 
@@ -876,6 +948,7 @@ function finalizeLineDraft() {
   const draft = lineDraft.value
   if (!draft || draft.points.length < 2) {
     lineDraft.value = null
+    lineDraftHoverPoint.value = null
     return
   }
   if (draft.continuation) {
@@ -893,6 +966,7 @@ function finalizeLineDraft() {
       }
     }
     lineDraft.value = null
+    lineDraftHoverPoint.value = null
     markPlanningDirty()
     return
   }
@@ -905,8 +979,34 @@ function finalizeLineDraft() {
   polylines.value = [...polylines.value, newLine]
   selectedFeature.value = { type: 'polyline', id: newLine.id }
   lineDraft.value = null
+  lineDraftHoverPoint.value = null
   markPlanningDirty()
 }
+
+const lineDraftPreviewPath = computed(() => {
+  const draft = lineDraft.value
+  if (!draft || !draft.points.length) {
+    return ''
+  }
+  const hover = lineDraftHoverPoint.value
+  if (!hover) {
+    return getPolylinePath(draft.points)
+  }
+  const previewPoints = draft.points.length === 1 ? [draft.points[0]!, hover] : [...draft.points, hover]
+  return getPolylinePath(previewPoints)
+})
+
+const lineDraftPreviewStroke = computed(() => {
+  const layerId = lineDraft.value?.layerId ?? activeLayerId.value
+  const kind = getLayerKind(layerId)
+  const alpha = kind === 'road' ? 0.45 : 0.55
+  return getLayerColor(layerId, alpha)
+})
+
+const lineDraftPreviewDasharray = computed(() => {
+  const layerId = lineDraft.value?.layerId ?? activeLayerId.value
+  return getPolylineStrokeDasharray(layerId)
+})
 
 function selectFeature(feature: SelectedFeature) {
   selectedFeature.value = feature
@@ -1051,7 +1151,19 @@ function handlePointerMove(event: PointerEvent) {
     && currentTool.value === 'lasso'
     && polygonDraftPoints.value.length
   ) {
-    polygonDraftHoverPoint.value = clonePoint(screenToWorld(event))
+    pendingLassoHoverClient = { x: event.clientX, y: event.clientY }
+    scheduleRafFlush()
+  }
+
+  // 线段绘制预览：拖拽状态为空时，跟随鼠标显示“最后一点 -> 鼠标”的预览线条
+  if (
+    dialogOpen.value
+    && dragState.value.type === 'idle'
+    && currentTool.value === 'line'
+    && lineDraft.value?.points.length
+  ) {
+    pendingLineHoverClient = { x: event.clientX, y: event.clientY }
+    scheduleRafFlush()
   }
 
   const state = dragState.value
@@ -2204,7 +2316,8 @@ onBeforeUnmount(() => {
                           || (selectedFeature?.type === 'segment' && selectedFeature.lineId === line.id),
                       }"
                       :d="getPolylinePath(line.points)"
-                      :stroke="getLayerColor(line.layerId, 0.95)"
+                      :stroke="getPolylineStroke(line.layerId)"
+                      :stroke-dasharray="getPolylineStrokeDasharray(line.layerId)"
                       fill="none"
                       @pointerdown="handlePolylinePointerDown(line.id, $event as PointerEvent)"
                     />
@@ -2250,8 +2363,8 @@ onBeforeUnmount(() => {
                     class="planning-rectangle-preview"
                     :d="getPolygonPath(createRectanglePoints(dragState.start, dragState.current))"
                     fill="rgba(98, 179, 255, 0.12)"
-                    stroke="rgba(98, 179, 255, 0.9)"
-                    stroke-width="1.25"
+                    stroke="rgba(98, 179, 255, 0.45)"
+                    stroke-width="0.9"
                   />
 
                   <!-- 自由选择绘制预览（点击加点，双击结束） -->
@@ -2260,18 +2373,18 @@ onBeforeUnmount(() => {
                     class="planning-polygon-draft"
                     :d="polygonDraftPreview.d"
                     :fill="polygonDraftPreview.fill"
-                    stroke="rgba(98, 179, 255, 0.9)"
-                    stroke-width="1.25"
+                    stroke="rgba(98, 179, 255, 0.45)"
+                    stroke-width="0.9"
                   />
 
                   <!-- 线段绘制预览 -->
                   <path
                     v-if="lineDraft?.points?.length"
                     class="planning-line-draft"
-                    :d="getPolylinePath(lineDraft.points)"
-                    stroke="rgba(98, 179, 255, 0.9)"
-                    stroke-width="2.5"
-                    stroke-dasharray="6 4"
+                    :d="lineDraftPreviewPath"
+                    :stroke="lineDraftPreviewStroke"
+                    stroke-width="0.9"
+                    :stroke-dasharray="lineDraftPreviewDasharray"
                     fill="none"
                   />
 
