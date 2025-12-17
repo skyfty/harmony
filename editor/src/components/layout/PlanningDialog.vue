@@ -687,12 +687,13 @@ function getPolylinePath(points: PlanningPoint[]) {
 }
 
 function screenToWorld(event: MouseEvent | PointerEvent): PlanningPoint {
-  const rect = editorRect.value ?? editorRef.value?.getBoundingClientRect()
+  // 使用实时的 DOMRect，避免 rect 缓存滞后导致绘制/选择坐标错位。
+  const rect = editorRef.value?.getBoundingClientRect()
   if (!rect) {
     return { x: 0, y: 0 }
   }
-  const center = stageCenterOffset.value
   const scale = renderScale.value
+  const center = computeStageCenterOffset(rect, scale)
   const x = (event.clientX - rect.left - center.x) / scale - viewTransform.offset.x
   const y = (event.clientY - rect.top - center.y) / scale - viewTransform.offset.y
   return { x, y }
