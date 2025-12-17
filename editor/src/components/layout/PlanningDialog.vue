@@ -183,6 +183,8 @@ const selectedPolyline = computed(() => {
   }
   return null
 })
+const BASE_PIXELS_PER_METER = 10
+
 const canvasSize = computed(() => {
   const base = sceneGroundSize.value
   if (!planningImages.value.length) {
@@ -203,6 +205,8 @@ const canvasSize = computed(() => {
 // 因此拖拽期间冻结舞台尺寸，仅通过 transform 更新位置。
 const frozenCanvasSize = ref<{ width: number; height: number } | null>(null)
 const effectiveCanvasSize = computed(() => frozenCanvasSize.value ?? canvasSize.value)
+
+const renderScale = computed(() => viewTransform.scale * BASE_PIXELS_PER_METER)
 
 let planningDirty = false
 function markPlanningDirty() {
@@ -441,12 +445,30 @@ const editorBackgroundStyle = computed(() => {
   }
 })
 
+function computeStageCenterOffset(rect: Pick<DOMRect, 'width' | 'height'>, renderScaleValue: number) {
+  const width = effectiveCanvasSize.value.width * renderScaleValue
+  const height = effectiveCanvasSize.value.height * renderScaleValue
+  return {
+    x: Math.max((rect.width - width) / 2, 0),
+    y: Math.max((rect.height - height) / 2, 0),
+  }
+}
+
+const stageCenterOffset = computed(() => {
+  const rect = editorRect.value ?? editorRef.value?.getBoundingClientRect()
+  if (!rect) {
+    return { x: 0, y: 0 }
+  }
+  return computeStageCenterOffset(rect, renderScale.value)
+})
+
 const stageStyle = computed<CSSProperties>(() => {
-  const scale = viewTransform.scale
+  const scale = renderScale.value
+  const center = stageCenterOffset.value
   return {
     width: `${effectiveCanvasSize.value.width}px`,
     height: `${effectiveCanvasSize.value.height}px`,
-    transform: `translate(${viewTransform.offset.x * scale}px, ${viewTransform.offset.y * scale}px) scale(${scale})`,
+    transform: `translate(${center.x + viewTransform.offset.x * scale}px, ${center.y + viewTransform.offset.y * scale}px) scale(${scale})`,
     transformOrigin: 'top left',
     willChange: 'transform',
   }
@@ -669,8 +691,10 @@ function screenToWorld(event: MouseEvent | PointerEvent): PlanningPoint {
   if (!rect) {
     return { x: 0, y: 0 }
   }
-  const x = (event.clientX - rect.left) / viewTransform.scale - viewTransform.offset.x
-  const y = (event.clientY - rect.top) / viewTransform.scale - viewTransform.offset.y
+  const center = stageCenterOffset.value
+  const scale = renderScale.value
+  const x = (event.clientX - rect.left - center.x) / scale - viewTransform.offset.x
+  const y = (event.clientY - rect.top - center.y) / scale - viewTransform.offset.y
   return { x, y }
 }
 
@@ -1001,8 +1025,9 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
   if (state.type === 'pan') {
-    const dx = (event.clientX - state.origin.x) / viewTransform.scale
-    const dy = (event.clientY - state.origin.y) / viewTransform.scale
+    const scale = renderScale.value
+    const dx = (event.clientX - state.origin.x) / scale
+    const dy = (event.clientY - state.origin.y) / scale
     pendingPan = { x: state.offset.x + dx, y: state.offset.y + dy }
     scheduleRafFlush()
     return
@@ -1160,26 +1185,33 @@ function handleWheel(event: WheelEvent) {
     return
   }
   event.preventDefault()
-  const rect = editorRect.value ?? editorRef.value?.getBoundingClientRect()
+  // 使用实时的 DOMRect，避免 editorRect 缓存滞后导致缩放中心漂移。
+  const rect = editorRef.value?.getBoundingClientRect()
   if (!rect) {
     return
   }
   const delta = event.deltaY > 0 ? -0.1 : 0.1
-  const previousScale = viewTransform.scale
-  const nextScale = Math.min(8, Math.max(0.1, previousScale + delta * previousScale))
-  if (nextScale === previousScale) {
+  const previousViewScale = viewTransform.scale
+  const nextViewScale = Math.min(8, Math.max(0.1, previousViewScale + delta * previousViewScale))
+  if (nextViewScale === previousViewScale) {
     return
   }
 
   // 以鼠标指针为中心缩放：保持“指针下的世界坐标点”在缩放前后不变。
+  const previousRenderScale = previousViewScale * BASE_PIXELS_PER_METER
+  const centerBefore = computeStageCenterOffset(rect, previousRenderScale)
   const sx = event.clientX - rect.left
   const sy = event.clientY - rect.top
-  const worldX = sx / previousScale - viewTransform.offset.x
-  const worldY = sy / previousScale - viewTransform.offset.y
+  const worldX = (sx - centerBefore.x) / previousRenderScale - viewTransform.offset.x
+  const worldY = (sy - centerBefore.y) / previousRenderScale - viewTransform.offset.y
 
-  viewTransform.scale = nextScale
-  viewTransform.offset.x = sx / nextScale - worldX
-  viewTransform.offset.y = sy / nextScale - worldY
+  // 预计算缩放后的居中偏移（使用 nextScale），保持指针所指世界坐标不变。
+  const nextRenderScale = nextViewScale * BASE_PIXELS_PER_METER
+  const nextCenter = computeStageCenterOffset(rect, nextRenderScale)
+
+  viewTransform.scale = nextViewScale
+  viewTransform.offset.x = (sx - nextCenter.x) / nextRenderScale - worldX
+  viewTransform.offset.y = (sy - nextCenter.y) / nextRenderScale - worldY
   markPlanningDirty()
 }
 
@@ -2101,6 +2133,15 @@ onBeforeUnmount(() => {
                   :height="effectiveCanvasSize.height"
                   :viewBox="`0 0 ${effectiveCanvasSize.width} ${effectiveCanvasSize.height}`"
                 >
+                  <!-- 画布边界虚线框 -->
+                  <rect
+                    class="canvas-boundary"
+                    x="0"
+                    y="0"
+                    :width="effectiveCanvasSize.width"
+                    :height="effectiveCanvasSize.height"
+                  />
+
                   <!-- 已绘制多边形区域 -->
                   <path
                     v-for="poly in visiblePolygons"
@@ -2236,10 +2277,6 @@ onBeforeUnmount(() => {
                   :style="getAlignMarkerStyle(image)"
                   @pointerdown="handleAlignMarkerPointerDown(image.id, $event as PointerEvent)"
                 />
-              </div>
-              <div v-if="!planningImages.length" class="canvas-empty">
-                <v-icon size="32">mdi-image-off-outline</v-icon>
-                <p>上传规划图后在此预览</p>
               </div>
             </div>
           </div>
@@ -2586,6 +2623,14 @@ onBeforeUnmount(() => {
   top: 0;
   left: 0;
   z-index: 5000;
+  pointer-events: none;
+}
+
+.canvas-boundary {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.25);
+  stroke-width: 2;
+  stroke-dasharray: 8 6;
   pointer-events: none;
 }
 
