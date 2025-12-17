@@ -1158,8 +1158,8 @@ function handleEditorPointerDown(event: PointerEvent) {
     return
   }
 
-  // 平移视图：平移工具或按住 Space
-  if (currentTool.value === 'pan' || spacePanning.value) {
+  // 平移视图：平移工具、按住 Space，或选择工具在空白处拖拽时
+  if (currentTool.value === 'pan' || spacePanning.value || currentTool.value === 'select') {
     dragState.value = {
       type: 'pan',
       pointerId: event.pointerId,
@@ -1487,10 +1487,11 @@ function handlePolygonPointerDown(polygonId: string, event: PointerEvent) {
   if (!polygon || !isActiveLayer(polygon.layerId)) {
     return
   }
+  const effectiveTool = currentTool.value === 'rectangle' || currentTool.value === 'lasso' || currentTool.value === 'line' ? 'select' : currentTool.value
   event.stopPropagation()
   event.preventDefault()
   selectFeature({ type: 'polygon', id: polygonId })
-  if (currentTool.value !== 'select') {
+  if (effectiveTool !== 'select') {
     return
   }
   dragState.value = {
@@ -1508,10 +1509,11 @@ function handlePolygonVertexPointerDown(polygonId: string, vertexIndex: number, 
   if (!polygon || !isActiveLayer(polygon.layerId)) {
     return
   }
+  const effectiveTool = currentTool.value === 'rectangle' || currentTool.value === 'lasso' || currentTool.value === 'line' ? 'select' : currentTool.value
   event.stopPropagation()
   event.preventDefault()
   selectFeature({ type: 'polygon', id: polygonId })
-  if (currentTool.value !== 'select') {
+  if (effectiveTool !== 'select') {
     return
   }
   dragState.value = {
@@ -1529,10 +1531,11 @@ function handlePolylinePointerDown(lineId: string, event: PointerEvent) {
   if (!line || !isActiveLayer(line.layerId)) {
     return
   }
+  const effectiveTool = currentTool.value === 'rectangle' || currentTool.value === 'lasso' || currentTool.value === 'line' ? 'select' : currentTool.value
   event.stopPropagation()
   event.preventDefault()
   selectFeature({ type: 'polyline', id: lineId })
-  if (currentTool.value !== 'select') {
+  if (effectiveTool !== 'select') {
     return
   }
   dragState.value = {
@@ -1550,10 +1553,11 @@ function handleLineVertexPointerDown(lineId: string, vertexIndex: number, event:
   if (!line || !isActiveLayer(line.layerId)) {
     return
   }
+  const effectiveTool = currentTool.value === 'rectangle' || currentTool.value === 'lasso' || currentTool.value === 'line' ? 'select' : currentTool.value
   event.stopPropagation()
   event.preventDefault()
   selectFeature({ type: 'polyline', id: lineId })
-  if (currentTool.value !== 'select') {
+  if (effectiveTool !== 'select') {
     return
   }
   dragState.value = {
@@ -1577,9 +1581,10 @@ function handleLineSegmentPointerDown(lineId: string, segmentIndex: number, even
   if (!line || !isActiveLayer(line.layerId)) {
     return
   }
+  const effectiveTool = currentTool.value === 'rectangle' || currentTool.value === 'lasso' || currentTool.value === 'line' ? 'select' : currentTool.value
   event.stopPropagation()
   event.preventDefault()
-  if (currentTool.value !== 'select') {
+  if (effectiveTool !== 'select') {
     return
   }
   const skipSplit = event.ctrlKey || event.metaKey
