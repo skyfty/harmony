@@ -14,7 +14,7 @@ import type { GroundPanelTab } from '@/stores/terrainStore'
 const sceneStore = useSceneStore()
 const terrainStore = useTerrainStore()
 const { selectedNode } = storeToRefs(sceneStore)
-const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterSpacing } = storeToRefs(terrainStore)
+const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterSpacing, scatterRadius } = storeToRefs(terrainStore)
 
 const selectedGroundNode = computed(() => {
   if (selectedNode.value?.dynamicMesh?.type === 'Ground') {
@@ -58,6 +58,13 @@ const scatterSpacingModel = computed({
 })
 
 const scatterSpacingDisplay = computed(() => scatterSpacing.value.toFixed(2))
+
+const scatterRadiusModel = computed({
+  get: () => scatterRadius.value,
+  set: (value: number) => terrainStore.setScatterRadius(Number(value)),
+})
+
+const scatterRadiusDisplay = computed(() => scatterRadius.value.toFixed(2))
 
 const terrainOperations: Array<{ value: GroundSculptOperation; label: string; icon: string }> = [
   { value: 'depress', label: 'Depress', icon: 'mdi-tray-arrow-down' },
@@ -282,7 +289,19 @@ watch(selectedNoiseMode, (mode) => {
               :max="2"
               :step="0.05"
               density="compact"
-              thumb-label="always"
+              track-color="rgba(77, 208, 225, 0.4)"
+              color="primary"
+            />
+            <div class="scatter-spacing-labels">
+              <span>Scatter Radius</span>
+              <span>{{ scatterRadiusDisplay }} m</span>
+            </div>
+            <v-slider
+              v-model="scatterRadiusModel"
+              :min="0.1"
+              :max="2"
+              :step="0.05"
+              density="compact"
               track-color="rgba(77, 208, 225, 0.4)"
               color="primary"
             />

@@ -71,6 +71,7 @@ export type GroundEditorOptions = {
 	scatterCategory: Ref<TerrainScatterCategory>
 	scatterAsset: Ref<ProjectAsset | null>
 	scatterSpacing: Ref<number>
+	scatterRadius: Ref<number>
 	scatterEraseRadius: Ref<number>
 	activeBuildTool: Ref<BuildTool | null>
 	onScatterEraseStart?: () => void
@@ -106,6 +107,7 @@ type ScatterSessionState = {
 	definition: GroundDynamicMesh
 	groundMesh: THREE.Mesh
 	spacing: number
+	radius: number
 	minScale: number
 	maxScale: number
 	store: TerrainScatterStore
@@ -793,12 +795,42 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return true
 	}
 
+	function generateScatterClusterPoints(center: THREE.Vector3, radius: number, spacing: number): THREE.Vector3[] {
+		if (radius <= spacing * 0.25) {
+			return [center.clone()]
+		}
+		const maxPoints = Math.min(12, Math.max(2, Math.round((Math.PI * radius * radius) / Math.max(spacing * spacing, 0.01))))
+		const points: THREE.Vector3[] = [center.clone()]
+		const maxAttempts = maxPoints * 4
+		for (let attempt = 0; attempt < maxAttempts && points.length < maxPoints; attempt += 1) {
+			const distance = Math.random() * radius
+			const angle = Math.random() * Math.PI * 2
+			const candidate = center.clone().add(new THREE.Vector3(Math.cos(angle) * distance, 0, Math.sin(angle) * distance))
+			if (points.every((point) => point.distanceToSquared(candidate) >= spacing * spacing * 0.5)) {
+				points.push(candidate)
+			}
+		}
+		return points
+	}
+
+	function applyScatterPlacementCluster(center: THREE.Vector3): boolean {
+		if (!scatterSession) {
+			return false
+		}
+		const points = generateScatterClusterPoints(center, scatterSession.radius, scatterSession.spacing)
+		let placed = false
+		for (const point of points) {
+			placed = applyScatterPlacement(point) || placed
+		}
+		return placed
+	}
+
 	function traceScatterPath(targetPoint: THREE.Vector3) {
 		if (!scatterSession) {
 			return
 		}
 		if (!scatterSession.lastPoint) {
-			if (applyScatterPlacement(targetPoint)) {
+			if (applyScatterPlacementCluster(targetPoint)) {
 				scatterSession.lastPoint = targetPoint.clone()
 			}
 			return
@@ -814,13 +846,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			scatterPlacementHelper
 				.copy(scatterSession.lastPoint)
 				.addScaledVector(scatterDirectionHelper, scatterSession.spacing * index)
-			if (applyScatterPlacement(scatterPlacementHelper)) {
+			if (applyScatterPlacementCluster(scatterPlacementHelper)) {
 				scatterSession.lastPoint = scatterPlacementHelper.clone()
 			}
 		}
 		const remainder = distance - steps * scatterSession.spacing
 		if (remainder >= scatterSession.spacing * 0.4) {
-			if (applyScatterPlacement(targetPoint)) {
+			if (applyScatterPlacementCluster(targetPoint)) {
 				scatterSession.lastPoint = targetPoint.clone()
 			}
 		}
@@ -854,6 +886,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			? options.scatterSpacing.value
 			: preset.spacing
 		const effectiveSpacing = Math.min(2, Math.max(0.1, customSpacing))
+		const customRadius = Number.isFinite(options.scatterRadius.value)
+			? options.scatterRadius.value
+			: 0.5
+		const effectiveRadius = Math.min(2, Math.max(0.1, customRadius))
 		scatterSession = {
 			pointerId: event.pointerId,
 			asset,
@@ -861,6 +897,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			definition,
 			groundMesh,
 			spacing: effectiveSpacing,
+			radius: effectiveRadius,
 			minScale: preset.minScale,
 			maxScale: preset.maxScale,
 			store: ensureScatterStoreRef(),
