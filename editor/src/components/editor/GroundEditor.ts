@@ -245,6 +245,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return 'circle'
 	}
 
+	function getIndicatorBrushShape(): TerrainBrushShape {
+		// Scatter paint/erase use a consistent circle indicator for clarity.
+		if (options.scatterEraseModeActive.value || scatterModeEnabled()) {
+			return 'circle'
+		}
+		return getActiveBrushShape()
+	}
+
 	function getBrushColor(): number {
 		if (options.scatterEraseModeActive.value) {
 			return 0xffb347
@@ -260,7 +268,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function refreshBrushAppearance() {
 		brushMaterial.color.setHex(getBrushColor())
-		updateBrushGeometry(getActiveBrushShape())
+		updateBrushGeometry(getIndicatorBrushShape())
 	}
 
 	const stopBrushShapeWatch = watch(options.brushShape, () => {
@@ -1037,7 +1045,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!eraseModeActive && !scatterModeEnabled()) {
 			return false
 		}
-		const allowedButton = eraseModeActive ? (event.button === 0 || event.button === 1) : event.button === 1
+		// Only allow middle mouse for scatter erase so left/right remain available for pan/rotate.
+		const allowedButton = event.button === 1
 		if (!allowedButton) {
 			return false
 		}
