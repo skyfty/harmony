@@ -478,6 +478,8 @@ const canUseLineTool = computed(() => {
   return kind === 'road' || kind === 'wall'
 })
 
+const canDeleteSelection = computed(() => !!selectedFeature.value)
+
 const layerFeatureTotals = computed(() =>
   layers.value.map((layer) => {
     const polygonCount = polygons.value.filter((item) => item.layerId === layer.id).length
@@ -807,6 +809,74 @@ function getPolylinePath(points: PlanningPoint[]) {
   return segments.join(' ')
 }
 
+function isPointInPolygon(point: PlanningPoint, polygonPoints: PlanningPoint[]) {
+  let inside = false
+  for (let i = 0, j = polygonPoints.length - 1; i < polygonPoints.length; j = i++) {
+    const pi = polygonPoints[i]
+    const pj = polygonPoints[j]
+    const intersects = pj && pi && ((pi.y > point.y) !== (pj.y > point.y))
+      && point.x < ((pj.x - pi.x) * (point.y - pi.y)) / ((pj.y - pi.y) || 1e-9) + pi.x
+    if (intersects) {
+      inside = !inside
+    }
+  }
+  return inside
+}
+
+function distancePointToSegmentSquared(point: PlanningPoint, start: PlanningPoint, end: PlanningPoint) {
+  const dx = end.x - start.x
+  const dy = end.y - start.y
+  if (dx === 0 && dy === 0) {
+    const distX = point.x - start.x
+    const distY = point.y - start.y
+    return distX * distX + distY * distY
+  }
+  const t = ((point.x - start.x) * dx + (point.y - start.y) * dy) / (dx * dx + dy * dy)
+  const clampedT = Math.max(0, Math.min(1, t))
+  const projX = start.x + clampedT * dx
+  const projY = start.y + clampedT * dy
+  const distX = point.x - projX
+  const distY = point.y - projY
+  return distX * distX + distY * distY
+}
+
+function hitTestPolygon(point: PlanningPoint): PlanningPolygon | null {
+  for (let i = polygons.value.length - 1; i >= 0; i -= 1) {
+    const polygon = polygons.value[i]
+    if (!polygon) {
+      continue
+    }
+    if (!visibleLayerIds.value.has(polygon.layerId)) {
+      continue
+    }
+    if (isPointInPolygon(point, polygon.points)) {
+      return polygon
+    }
+  }
+  return null
+}
+
+function hitTestPolyline(point: PlanningPoint): PlanningPolyline | null {
+  const hitRadiusSquared = 1.5 * 1.5
+  for (let i = polylines.value.length - 1; i >= 0; i -= 1) {
+    const line = polylines.value[i]
+    if (!line) {
+      continue
+    }
+    if (!visibleLayerIds.value.has(line.layerId)) {
+      continue
+    }
+    const segments = getLineSegments(line)
+    for (const segment of segments) {
+      const distSq = distancePointToSegmentSquared(point, segment.start, segment.end)
+      if (distSq <= hitRadiusSquared) {
+        return line
+      }
+    }
+  }
+  return null
+}
+
 function screenToWorld(event: MouseEvent | PointerEvent): PlanningPoint {
   // 使用实时的 DOMRect，避免 rect 缓存滞后导致绘制/选择坐标错位。
   const rect = editorRef.value?.getBoundingClientRect()
@@ -1103,6 +1173,13 @@ function deleteSelectedFeature() {
   markPlanningDirty()
 }
 
+function handleDeleteButtonClick() {
+  if (!selectedFeature.value) {
+    return
+  }
+  deleteSelectedFeature()
+}
+
 function handleToolSelect(tool: PlanningTool) {
   if (tool === 'line' && !canUseLineTool.value) {
     return
@@ -1133,6 +1210,9 @@ function handleEditorPointerDown(event: PointerEvent) {
   event.preventDefault()
   frozenCanvasSize.value = { ...canvasSize.value }
   const world = screenToWorld(event)
+
+  // 点击画布空白处时，直接清空当前选择（所有工具通用）。
+  selectedFeature.value = null
 
   if (currentTool.value === 'align-marker') {
     const targetImage = activeImageId.value ? planningImages.value.find((img) => img.id === activeImageId.value) : null
@@ -1169,11 +1249,6 @@ function handleEditorPointerDown(event: PointerEvent) {
     event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
     return
   }
-
-  // 选择工具点空白处，清空当前选择
-  if (currentTool.value === 'select') {
-    selectedFeature.value = null
-  }
 }
 
 function handleEditorDoubleClick(event: MouseEvent) {
@@ -1192,6 +1267,20 @@ function handleEditorDoubleClick(event: MouseEvent) {
   }
 
   const world = screenToWorld(event)
+  const hitPolygon = hitTestPolygon(world)
+  if (hitPolygon) {
+    event.preventDefault()
+    activeLayerId.value = hitPolygon.layerId
+    selectFeature({ type: 'polygon', id: hitPolygon.id })
+    return
+  }
+  const hitPolyline = hitTestPolyline(world)
+  if (hitPolyline) {
+    event.preventDefault()
+    activeLayerId.value = hitPolyline.layerId
+    selectFeature({ type: 'polyline', id: hitPolyline.id })
+    return
+  }
   const hitImage = hitTestImage(world)
   if (hitImage) {
     event.preventDefault()
@@ -1982,25 +2071,6 @@ function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
   event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
 }
 
-function handleImageLayerMove(imageId: string, direction: 'up' | 'down') {
-  const index = planningImages.value.findIndex((img) => img.id === imageId)
-  if (index === -1) {
-    return
-  }
-  const targetIndex = direction === 'up' ? index + 1 : index - 1
-  if (targetIndex < 0 || targetIndex >= planningImages.value.length) {
-    return
-  }
-  const list = [...planningImages.value]
-  const [item] = list.splice(index, 1)
-  if (!item) {
-    return
-  }
-  list.splice(targetIndex, 0, item)
-  planningImages.value = list
-  markPlanningDirty()
-}
-
 function handleImageResizePointerDown(
   imageId: string,
   direction: 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw',
@@ -2102,9 +2172,8 @@ void zoomImageLayer
 void handleResetView
 void closeDialog
 void toggleAlignMode
-void handleImageLayerMove
+void handleDeleteButtonClick
 void reorderPlanningImages
-void polygonDraftPreview
 
 onMounted(() => {
   window.addEventListener('pointermove', handlePointerMove, { passive: false })
@@ -2320,6 +2389,17 @@ onBeforeUnmount(() => {
                 @click="handleToolSelect(button.tool)"
               >
                 <v-icon>{{ button.icon }}</v-icon>
+              </v-btn>
+
+              <v-btn
+                :color="canDeleteSelection ? 'error' : undefined"
+                variant="tonal"
+                density="comfortable"
+                class="tool-button"
+                :disabled="!canDeleteSelection"
+                @click="handleDeleteButtonClick"
+              >
+                <v-icon>mdi-delete-outline</v-icon>
               </v-btn>
 
             </div>
