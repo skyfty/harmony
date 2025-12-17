@@ -991,6 +991,11 @@ function hitTestImage(point: PlanningPoint) {
   return null
 }
 
+function isPointInsideCanvas(point: PlanningPoint) {
+  const size = effectiveCanvasSize.value
+  return point.x >= 0 && point.x <= size.width && point.y >= 0 && point.y <= size.height
+}
+
 function alignImageLayersByMarkers() {
   const markedVisible = planningImages.value.filter((img) => img.visible && img.alignMarker)
   if (!markedVisible.length) {
@@ -1308,6 +1313,7 @@ function handleEditorPointerDown(event: PointerEvent) {
   frozenCanvasSize.value = { ...canvasSize.value }
   const tool = getEffectiveTool()
   const world = screenToWorld(event)
+  const insideCanvas = isPointInsideCanvas(world)
 
   // 点击画布空白处时，直接清空当前选择（所有工具通用）。
   selectedFeature.value = null
@@ -1322,16 +1328,28 @@ function handleEditorPointerDown(event: PointerEvent) {
   }
 
   if (tool === 'rectangle') {
+    if (!insideCanvas) {
+      frozenCanvasSize.value = null
+      return
+    }
     startRectangleDrag(world, event)
     return
   }
 
   if (tool === 'lasso') {
+    if (!insideCanvas) {
+      frozenCanvasSize.value = null
+      return
+    }
     addPolygonDraftPoint(world)
     return
   }
 
   if (tool === 'line') {
+    if (!insideCanvas) {
+      frozenCanvasSize.value = null
+      return
+    }
     startLineDraft(world)
     return
   }
