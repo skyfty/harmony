@@ -66,7 +66,7 @@ export type GroundEditorOptions = {
 	brushRadius: Ref<number>
 	brushStrength: Ref<number>
 	brushShape: Ref<TerrainBrushShape | undefined>
-	brushOperation: Ref<GroundSculptOperation>
+	brushOperation: Ref<GroundSculptOperation | null>
 	groundPanelTab: Ref<GroundPanelTab>
 	scatterCategory: Ref<TerrainScatterCategory>
 	scatterAsset: Ref<ProjectAsset | null>
@@ -1352,7 +1352,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const localPoint = groundObject.worldToLocal(brushMesh.position.clone())
 		localPoint.y -= 0.1
 
-		const operation: GroundSculptOperation = event.shiftKey ? 'depress' : options.brushOperation.value
+		const operation: GroundSculptOperation | null = event.shiftKey ? 'depress' : options.brushOperation.value
+		if (!operation) {
+			return
+		}
 		const flattenReference = operation === 'flatten'
 			? sampleGroundHeight(definition, localPoint.x, localPoint.z)
 			: undefined

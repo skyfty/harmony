@@ -11,7 +11,7 @@ export const useTerrainStore = defineStore('terrain', () => {
   const brushRadius = ref(3)
   const brushStrength = ref(1.5)
   const brushShape = ref<'circle' | 'square' | 'star'>('circle')
-  const brushOperation = ref<GroundSculptOperation>('raise')
+  const brushOperation = ref<GroundSculptOperation | null>(null)
   const groundPanelTab = ref<GroundPanelTab>('terrain')
   const scatterCategory = ref<TerrainScatterCategory>('flora')
   const scatterSelectedAsset = ref<ProjectAsset | null>(null)
@@ -33,6 +33,10 @@ export const useTerrainStore = defineStore('terrain', () => {
   function setScatterCategory(category: TerrainScatterCategory) {
     scatterCategory.value = category
     groundPanelTab.value = category
+  }
+
+  function setBrushOperation(operation: GroundSculptOperation | null) {
+    brushOperation.value = operation
   }
 
   function setScatterSelection(payload: { asset: ProjectAsset | null; providerAssetId?: string | null }) {
@@ -67,6 +71,7 @@ export const useTerrainStore = defineStore('terrain', () => {
     scatterSpacing,
     scatterRadius,
     scatterEraseRadius,
+    setBrushOperation,
     setGroundPanelTab,
     setScatterCategory,
     setScatterSelection,

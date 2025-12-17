@@ -646,6 +646,7 @@ function toggleScatterEraseMode() {
   }
   // Scatter erase and scatter painting are mutually exclusive; clear any scatter asset selection when enabling erase mode.
   terrainStore.setScatterSelection({ asset: null, providerAssetId: null })
+  terrainStore.setBrushOperation(null)
   handleBuildToolChange(null)
   cancelGroundEditorScatterPlacement()
   scatterEraseModeActive.value = true
@@ -653,6 +654,12 @@ function toggleScatterEraseMode() {
 
 watch(scatterSelectedAsset, (asset) => {
   if (asset && scatterEraseModeActive.value) {
+    exitScatterEraseMode()
+  }
+})
+
+watch(brushOperation, (operation) => {
+  if (operation && scatterEraseModeActive.value) {
     exitScatterEraseMode()
   }
 })

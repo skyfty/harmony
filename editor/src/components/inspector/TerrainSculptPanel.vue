@@ -10,7 +10,7 @@ const props = defineProps<{
   brushRadius: number
   brushStrength: number
   brushShape: 'circle' | 'square' | 'star'
-  brushOperation: GroundSculptOperation
+  brushOperation: GroundSculptOperation | null
   terrainOperations: TerrainOperationOption[]
   noiseStrength: number
   noiseMode: GroundGenerationMode
@@ -21,7 +21,7 @@ const emit = defineEmits<{
   (event: 'update:brushRadius', value: number): void
   (event: 'update:brushStrength', value: number): void
   (event: 'update:brushShape', value: 'circle' | 'square' | 'star'): void
-  (event: 'update:brushOperation', value: GroundSculptOperation): void
+  (event: 'update:brushOperation', value: GroundSculptOperation | null): void
   (event: 'update:noiseStrength', value: number): void
   (event: 'update:noiseMode', value: GroundGenerationMode): void
 }>()
@@ -33,7 +33,7 @@ const brushShapeModel = computed({
 
 const brushOperationModel = computed({
   get: () => props.brushOperation,
-  set: (value: GroundSculptOperation) => emit('update:brushOperation', value),
+  set: (value: GroundSculptOperation | null) => emit('update:brushOperation', value),
 })
 
 const brushRadiusModel = computed({
@@ -77,7 +77,6 @@ function formatSliderValue(value: number): string {
       <v-btn-toggle
         v-model="brushOperationModel"
         density="compact"
-        mandatory
         divided
         variant="outlined"
         color="primary"
