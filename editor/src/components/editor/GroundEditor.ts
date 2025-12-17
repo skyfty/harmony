@@ -238,7 +238,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	let scatterSnapshotUpdatedAt: number | null = null
 
 	function getActiveBrushShape(): TerrainBrushShape {
-		return options.brushShape.value ?? 'circle'
+		const value = options.brushShape.value
+		if (value === 'square' || value === 'star') {
+			return value
+		}
+		return 'circle'
 	}
 
 	function getBrushColor(): number {
@@ -1377,6 +1381,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!operation) {
 			return
 		}
+		const shape = getActiveBrushShape()
 		const flattenReference = operation === 'flatten'
 			? sampleGroundHeight(definition, localPoint.x, localPoint.z)
 			: undefined
@@ -1385,7 +1390,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			point: localPoint,
 			radius: options.brushRadius.value,
 			strength: options.brushStrength.value,
-			shape: options.brushShape.value ?? 'circle',
+			shape,
 			operation,
 			targetHeight: flattenReference,
 		})
