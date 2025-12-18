@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { SceneNode } from '@harmony/schema'
+import type { GroundDynamicMesh, SceneNode } from '@harmony/schema'
 import {
   ensureTerrainScatterStore,
   loadTerrainScatterSnapshot,
@@ -11,6 +11,8 @@ import {
   type TerrainScatterInstance,
   type TerrainScatterStore,
 } from '@harmony/schema/terrain-scatter'
+import { sampleGroundHeight, sampleGroundNormal } from '@schema/groundMesh'
+import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { generateUuid } from '@/utils/uuid'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 
@@ -52,6 +54,9 @@ export type ConvertPlanningToSceneOptions = {
 
 const PLANNING_CONVERSION_ROOT_TAG = 'planningConversionRoot'
 const PLANNING_CONVERSION_SOURCE = 'planning-conversion'
+
+const MAX_SCATTER_INSTANCES_PER_POLYGON = 1500
+const POISSON_CANDIDATES_PER_ACTIVE = 24
 
 type LayerKind = 'terrain' | 'building' | 'road' | 'green' | 'wall'
 
@@ -172,6 +177,16 @@ function normalizeScatter(raw: unknown): ScatterAssignment | null {
   return { assetId, category, name }
 }
 
+function hashSeedFromString(value: string): number {
+  // FNV-1a 32bit
+  let hash = 2166136261
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return hash >>> 0
+}
+
 function polygonArea2D(points: PlanningPoint[]): number {
   if (points.length < 3) return 0
   let sum = 0
@@ -273,12 +288,6 @@ function removePlanningScatterLayers(store: TerrainScatterStore) {
   idsToRemove.forEach((id) => removeTerrainScatterLayer(store, id))
 }
 
-function estimateScatterCount(area: number): number {
-  // Simple heuristic; keeps UI snappy.
-  if (!Number.isFinite(area) || area <= 0) return 0
-  return Math.min(200, Math.max(5, Math.round(area * 0.15)))
-}
-
 function buildRandom(seed: number) {
   // LCG
   let s = seed % 2147483647
@@ -311,8 +320,122 @@ function samplePointInPolygon(polygon: PlanningPoint[], random: () => number): P
   return null
 }
 
-function upsertPlanningScatterLayer(store: TerrainScatterStore, payload: { category: TerrainScatterCategory; assetId: string; label?: string }) {
+function computeBoundingBox(points: PlanningPoint[]): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  if (!Array.isArray(points) || points.length === 0) return null
+  let minX = Number.POSITIVE_INFINITY
+  let minY = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
+  for (const p of points) {
+    minX = Math.min(minX, p.x)
+    minY = Math.min(minY, p.y)
+    maxX = Math.max(maxX, p.x)
+    maxY = Math.max(maxY, p.y)
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) return null
+  return { minX, minY, maxX, maxY }
+}
+
+function poissonSampleInPolygon(
+  polygon: PlanningPoint[],
+  minDistance: number,
+  random: () => number,
+  maxPoints: number,
+): PlanningPoint[] {
+  if (!Array.isArray(polygon) || polygon.length < 3) return []
+  if (!Number.isFinite(minDistance) || minDistance <= 0) return []
+  if (!Number.isFinite(maxPoints) || maxPoints <= 0) return []
+
+  const bbox = computeBoundingBox(polygon)
+  if (!bbox) return []
+
+  const cellSize = minDistance / Math.SQRT2
+  const gridWidth = Math.max(1, Math.ceil((bbox.maxX - bbox.minX) / cellSize))
+  const gridHeight = Math.max(1, Math.ceil((bbox.maxY - bbox.minY) / cellSize))
+  const grid = new Int32Array(gridWidth * gridHeight)
+  grid.fill(-1)
+
+  const points: PlanningPoint[] = []
+  const active: number[] = []
+
+  const toGridX = (x: number) => Math.floor((x - bbox.minX) / cellSize)
+  const toGridY = (y: number) => Math.floor((y - bbox.minY) / cellSize)
+  const gridIndex = (gx: number, gy: number) => gy * gridWidth + gx
+
+  const insertPoint = (p: PlanningPoint) => {
+    points.push(p)
+    const index = points.length - 1
+    active.push(index)
+    const gx = THREE.MathUtils.clamp(toGridX(p.x), 0, gridWidth - 1)
+    const gy = THREE.MathUtils.clamp(toGridY(p.y), 0, gridHeight - 1)
+    grid[gridIndex(gx, gy)] = index
+  }
+
+  const hasNeighborWithin = (p: PlanningPoint): boolean => {
+    const gx = toGridX(p.x)
+    const gy = toGridY(p.y)
+    const radius = 2
+    const minSq = minDistance * minDistance
+    for (let y = Math.max(0, gy - radius); y <= Math.min(gridHeight - 1, gy + radius); y += 1) {
+      for (let x = Math.max(0, gx - radius); x <= Math.min(gridWidth - 1, gx + radius); x += 1) {
+        const storedIndex = grid[gridIndex(x, y)]
+        if (storedIndex == null || storedIndex === -1) continue
+        const other = points[storedIndex]
+        if (!other) continue
+        const dx = other.x - p.x
+        const dy = other.y - p.y
+        if (dx * dx + dy * dy < minSq) return true
+      }
+    }
+    return false
+  }
+
+  const start = samplePointInPolygon(polygon, random)
+  if (!start) return []
+  insertPoint(start)
+
+  while (active.length && points.length < maxPoints) {
+    const activeIndex = Math.floor(random() * active.length)
+    const baseIndex = active[activeIndex]!
+    const base = points[baseIndex]!
+
+    let found = false
+    for (let attempt = 0; attempt < POISSON_CANDIDATES_PER_ACTIVE; attempt += 1) {
+      const angle = random() * Math.PI * 2
+      const radius = minDistance * (1 + random())
+      const candidate: PlanningPoint = {
+        x: base.x + Math.cos(angle) * radius,
+        y: base.y + Math.sin(angle) * radius,
+      }
+      if (candidate.x < bbox.minX || candidate.x > bbox.maxX || candidate.y < bbox.minY || candidate.y > bbox.maxY) {
+        continue
+      }
+      if (!pointInPolygon(candidate, polygon)) {
+        continue
+      }
+      if (hasNeighborWithin(candidate)) {
+        continue
+      }
+      insertPoint(candidate)
+      found = true
+      break
+    }
+
+    if (!found) {
+      active[activeIndex] = active[active.length - 1]!
+      active.pop()
+    }
+  }
+
+  return points
+}
+
+function upsertPlanningScatterLayer(
+  store: TerrainScatterStore,
+  payload: { category: TerrainScatterCategory; assetId: string; label?: string },
+) {
   const layerId = `planning:${payload.category}:${payload.assetId}`
+  const preset = terrainScatterPresets[payload.category]
   return upsertTerrainScatterLayer(store, {
     id: layerId,
     label: payload.label ?? 'Planning Scatter',
@@ -326,8 +449,8 @@ function upsertPlanningScatterLayer(store: TerrainScatterStore, payload: { categ
       maxSlope: 90,
       minHeight: -10000,
       maxHeight: 10000,
-      minScale: 0.85,
-      maxScale: 1.15,
+      minScale: preset?.minScale ?? 0.85,
+      maxScale: preset?.maxScale ?? 1.15,
       density: 1,
       seed: null,
       jitter: {
@@ -396,6 +519,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   const groundNode = findGroundNode(sceneStore.nodes)
   const groundNodeId = groundNode?.id ?? 'ground'
   const groundDynamicMesh = groundNode?.dynamicMesh
+  const groundDefinition: GroundDynamicMesh | null = groundDynamicMesh?.type === 'Ground' ? (groundDynamicMesh as GroundDynamicMesh) : null
   const store = ensureScatterStore(groundNodeId, (groundDynamicMesh as any)?.terrainScatter)
   if (options.overwriteExisting) {
     removePlanningScatterLayers(store)
@@ -451,50 +575,107 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         updateProgressForUnit(`Converting road: ${line.name?.trim() || line.id}`)
       }
     } else if (kind === 'green') {
-      for (const poly of group.polygons) {
-        const points = poly.points.map((p) => toWorldPoint(p, groundWidth, groundDepth, 0.008))
-        const green = sceneStore.createSurfaceNode({ points, name: poly.name?.trim() || 'Greenery' })
-        if (green) {
-          sceneStore.moveNode({ nodeId: green.id, targetId: root.id, position: 'inside' })
-        }
-
+      for (const poly of group.polygons) { 
         const scatter = normalizeScatter(poly.scatter)
         if (scatter) {
+          const preset = terrainScatterPresets[scatter.category] ?? {
+            label: 'Scatter',
+            icon: 'mdi-cube-outline',
+            spacing: 1.2,
+            minScale: 0.9,
+            maxScale: 1.1,
+          }
           const layer = upsertPlanningScatterLayer(store, {
             category: scatter.category,
             assetId: scatter.assetId,
             label: scatter.name ?? 'Planning Scatter',
           })
-          const area = polygonArea2D(poly.points)
-          const targetCount = estimateScatterCount(area)
-          const random = buildRandom(Math.floor(Date.now() % 2147483647))
 
-          const existing = Array.isArray(layer.instances) ? [...layer.instances] : []
-          const additions: TerrainScatterInstance[] = []
-          for (let i = 0; i < targetCount; i += 1) {
-            const sample = samplePointInPolygon(poly.points, random)
-            if (!sample) continue
-            const local = toWorldPoint(sample, groundWidth, groundDepth, 0)
-            const yaw = (random() * Math.PI * 2)
-            const scale = 0.85 + random() * 0.4
-            additions.push({
-              id: generateUuid(),
-              assetId: scatter.assetId,
-              layerId: layer.id,
-              profileId: null,
-              seed: null,
-              localPosition: { x: local.x, y: 0, z: local.z },
-              localRotation: { x: 0, y: yaw, z: 0 },
-              localScale: { x: scale, y: scale, z: scale },
-              groundCoords: null,
-              binding: null,
-              metadata: {
-                source: PLANNING_CONVERSION_SOURCE,
-                featureId: poly.id,
-              },
-            })
+          const layerParams = layer.params as {
+            alignToNormal?: boolean
+            randomYaw?: boolean
+            minSlope?: number
+            maxSlope?: number
+            minHeight?: number
+            maxHeight?: number
+            minScale?: number
+            maxScale?: number
+            density?: number
+            seed?: number | null
           }
-          replaceTerrainScatterInstances(store, layer.id, [...existing, ...additions])
+          const density = Number.isFinite(layerParams.density) ? Math.max(0.05, Number(layerParams.density)) : 1
+          const baseSpacing = Number.isFinite(preset.spacing) ? preset.spacing : 1.2
+          const minDistance = THREE.MathUtils.clamp(baseSpacing / Math.sqrt(density), 0.15, 8)
+
+          const area = polygonArea2D(poly.points)
+          const estimated = area > 0 ? Math.round((area / (minDistance * minDistance)) * 0.7) : 0
+          const minPoints = area >= minDistance * minDistance * 0.35 ? 1 : 0
+          const maxPoints = Math.min(MAX_SCATTER_INSTANCES_PER_POLYGON, Math.max(minPoints, estimated))
+          if (maxPoints > 0) {
+            const seedBase = layerParams.seed != null
+              ? Math.floor(Number(layerParams.seed))
+              : hashSeedFromString(`${PLANNING_CONVERSION_SOURCE}:${layer.id}:${poly.id}`)
+            const random = buildRandom(seedBase)
+
+            const candidates = poissonSampleInPolygon(poly.points, minDistance, random, Math.min(MAX_SCATTER_INSTANCES_PER_POLYGON, Math.max(1, Math.ceil(maxPoints * 1.25))))
+
+            const minScale = Number.isFinite(layerParams.minScale) ? Number(layerParams.minScale) : preset.minScale
+            const maxScale = Number.isFinite(layerParams.maxScale) ? Number(layerParams.maxScale) : preset.maxScale
+            const minHeight = Number.isFinite(layerParams.minHeight) ? Number(layerParams.minHeight) : -10000
+            const maxHeight = Number.isFinite(layerParams.maxHeight) ? Number(layerParams.maxHeight) : 10000
+            const minSlope = Number.isFinite(layerParams.minSlope) ? Number(layerParams.minSlope) : 0
+            const maxSlope = Number.isFinite(layerParams.maxSlope) ? Number(layerParams.maxSlope) : 90
+            const randomYawEnabled = layerParams.randomYaw !== false
+
+            const existingRaw = Array.isArray(layer.instances) ? (layer.instances as TerrainScatterInstance[]) : []
+            // Keep conversion idempotent per feature even when overwriteExisting=false.
+            const existing = existingRaw.filter((instance) => {
+              const meta = instance.metadata as Record<string, unknown> | null | undefined
+              if (!meta) return true
+              return !(meta.source === PLANNING_CONVERSION_SOURCE && meta.featureId === poly.id)
+            })
+
+            const additions: TerrainScatterInstance[] = []
+            for (const sample of candidates) {
+              if (additions.length >= maxPoints) break
+              const localXZ = toWorldPoint(sample, groundWidth, groundDepth, 0)
+              const height = groundDefinition ? sampleGroundHeight(groundDefinition, localXZ.x, localXZ.z) : 0
+              if (height < minHeight || height > maxHeight) {
+                continue
+              }
+              const normal = groundDefinition ? sampleGroundNormal(groundDefinition, localXZ.x, localXZ.z) : null
+              const slopeDeg = normal ? (Math.acos(THREE.MathUtils.clamp(normal.y, -1, 1)) * (180 / Math.PI)) : 0
+              if (slopeDeg < minSlope || slopeDeg > maxSlope) {
+                continue
+              }
+
+              const yaw = randomYawEnabled ? (random() * Math.PI * 2) : 0
+              const scaleFactor = THREE.MathUtils.lerp(minScale, maxScale, random())
+              additions.push({
+                id: generateUuid(),
+                assetId: scatter.assetId,
+                layerId: layer.id,
+                profileId: layer.profileId ?? scatter.assetId,
+                seed: Math.floor(random() * Number.MAX_SAFE_INTEGER),
+                localPosition: { x: localXZ.x, y: height, z: localXZ.z },
+                localRotation: { x: 0, y: yaw, z: 0 },
+                localScale: { x: scaleFactor, y: scaleFactor, z: scaleFactor },
+                groundCoords: {
+                  x: localXZ.x,
+                  z: localXZ.z,
+                  height,
+                  normal: normal ? { x: normal.x, y: normal.y, z: normal.z } : null,
+                },
+                binding: null,
+                metadata: {
+                  source: PLANNING_CONVERSION_SOURCE,
+                  featureId: poly.id,
+                },
+              })
+            }
+
+            replaceTerrainScatterInstances(store, layer.id, [...existing, ...additions])
+          }
         }
 
         updateProgressForUnit(`Converting greenery: ${poly.name?.trim() || poly.id}`)
