@@ -15,7 +15,8 @@ import type { ProjectAsset } from '@/types/project-asset'
 const sceneStore = useSceneStore()
 const terrainStore = useTerrainStore()
 const { selectedNode } = storeToRefs(sceneStore)
-const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterSpacing } = storeToRefs(terrainStore)
+const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterSpacing, scatterEraseRadius } =
+  storeToRefs(terrainStore)
 
 const selectedGroundNode = computed(() => {
   if (selectedNode.value?.dynamicMesh?.type === 'Ground') {
@@ -58,7 +59,13 @@ const scatterSpacingModel = computed({
   set: (value: number) => terrainStore.setScatterSpacing(Number(value)),
 })
 
+const scatterEraseRadiusModel = computed({
+  get: () => scatterEraseRadius.value,
+  set: (value: number) => terrainStore.setScatterEraseRadius(Number(value)),
+})
+
 const scatterSpacingDisplay = computed(() => scatterSpacing.value.toFixed(2))
+const scatterEraseRadiusDisplay = computed(() => scatterEraseRadius.value.toFixed(2))
 
 const terrainOperations: Array<{ value: GroundSculptOperation; label: string; icon: string }> = [
   { value: 'depress', label: 'Depress', icon: 'mdi-tray-arrow-down' },
@@ -262,6 +269,20 @@ function handleScatterAssetSelect(
               :min="0.1"
               :max="2"
               :step="0.05"
+              density="compact"
+              track-color="rgba(77, 208, 225, 0.4)"
+              color="primary"
+            />
+
+            <div class="scatter-spacing-labels">
+              <span>Erase Brush Radius</span>
+              <span>{{ scatterEraseRadiusDisplay }} m</span>
+            </div>
+            <v-slider
+              v-model="scatterEraseRadiusModel"
+              :min="0.1"
+              :max="10"
+              :step="0.1"
               density="compact"
               track-color="rgba(77, 208, 225, 0.4)"
               color="primary"

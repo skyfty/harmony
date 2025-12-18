@@ -71,6 +71,7 @@ export type GroundEditorOptions = {
 	scatterCategory: Ref<TerrainScatterCategory>
 	scatterAsset: Ref<ProjectAsset | null>
 	scatterSpacing: Ref<number>
+	scatterBrushRadius: Ref<number>
 	scatterEraseRadius: Ref<number>
 	activeBuildTool: Ref<BuildTool | null>
 	onScatterEraseStart?: () => void
@@ -977,10 +978,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function resolveScatterEraseRadius(): number {
-		const candidate = Number.isFinite(options.scatterEraseRadius.value)
-			? options.scatterEraseRadius.value
-			: options.brushRadius.value
-		return Math.min(5, Math.max(0.1, candidate))
+		const candidate = Number(options.scatterEraseRadius.value)
+		return Math.min(5, Math.max(0.1, Number.isFinite(candidate) ? candidate : 1))
+	}
+
+	function resolveScatterBrushRadius(): number {
+		const candidate = Number(options.scatterBrushRadius.value)
+		return Math.min(5, Math.max(0.1, Number.isFinite(candidate) ? candidate : 1))
 	}
 
 	function clearScatterInstances(): boolean {
@@ -1298,7 +1302,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const hit = intersects[0]
 		if (hit) {
 			brushMesh.position.copy(hit.point)
-			const scale = options.brushRadius.value
+			const scale = options.scatterEraseModeActive.value
+				? resolveScatterEraseRadius()
+				: scatterModeEnabled()
+					? resolveScatterBrushRadius()
+					: options.brushRadius.value
 			brushMesh.scale.set(scale, scale, 1)
 			conformBrushToTerrain(definition, groundObject)
 			brushMesh.visible = true
