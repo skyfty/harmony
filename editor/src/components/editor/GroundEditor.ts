@@ -2,6 +2,7 @@ import { reactive, ref, watch, type Ref } from 'vue'
 import * as THREE from 'three'
 import type { GroundDynamicMesh, GroundSculptOperation, SceneNode } from '@harmony/schema'
 import {
+	deleteTerrainScatterStore,
 	ensureTerrainScatterStore,
 	upsertTerrainScatterLayer,
 	replaceTerrainScatterInstances,
@@ -279,6 +280,46 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		{ immediate: true },
 	)
 
+	function resetScatterStoreState(reason: string) {
+		try {
+			cancelScatterPlacement()
+			cancelScatterErase()
+		} catch {
+			// ignore
+		}
+
+		if (scatterStore) {
+			try {
+				for (const layer of Array.from(scatterStore.layers.values())) {
+					for (const instance of layer.instances ?? []) {
+						releaseScatterInstance(instance)
+					}
+				}
+			} catch (error) {
+				console.warn('释放地面散布实例失败', reason, error)
+			}
+		}
+
+		scatterStore = null
+		scatterLayer = null
+		scatterModelGroup = null
+		scatterSnapshotUpdatedAt = null
+		try {
+			deleteTerrainScatterStore(GROUND_NODE_ID)
+		} catch (error) {
+			console.warn('重置地面散布存储失败', reason, error)
+		}
+	}
+
+	const stopSceneIdWatch = watch(
+		() => options.sceneStore.currentSceneId,
+		(next, previous) => {
+			if (next !== previous) {
+				resetScatterStoreState('scene-changed')
+			}
+		},
+	)
+
 	async function restoreGroupdScatter(): Promise<void> {
 		const store = ensureScatterStoreRef()
 		const groundMesh = getGroundMeshObject()
@@ -368,7 +409,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	function ensureScatterStoreRef(): TerrainScatterStore {
 		const snapshot = getGroundTerrainScatterSnapshot()
 		const snapshotUpdatedAt = getScatterSnapshotTimestamp(snapshot)
-		const shouldHydrate = snapshot && (!scatterStore || snapshotUpdatedAt !== scatterSnapshotUpdatedAt)
+		const hasSnapshot = Boolean(snapshot)
+		const hasSnapshotChanged = snapshotUpdatedAt !== scatterSnapshotUpdatedAt
+		const shouldHydrate = hasSnapshot && (!scatterStore || hasSnapshotChanged)
+		if (!hasSnapshot && (scatterStore || scatterSnapshotUpdatedAt !== null)) {
+			// New scenes may not contain a terrainScatter snapshot. Since scatter stores are keyed by
+			// the constant ground node id, we must reset the store; otherwise previous scene scatter
+			// will leak into the new scene.
+			resetScatterStoreState('missing-snapshot')
+		}
 		if (shouldHydrate && snapshot) {
 			// When the snapshot changes (e.g. planning->3D conversion), previously bound instances
 			// may remain allocated in the instancing cache. Release old bindings before rehydrating.
@@ -1798,6 +1847,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		stopScatterEraseModeWatch()
 		stopTabWatch()
 		stopScatterSelectionWatch()
+		stopSceneIdWatch()
 		cancelScatterPlacement()
 		cancelScatterErase()
 		brushMesh.geometry.dispose()
@@ -1805,9 +1855,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		material.dispose()
 		groundSelectionGroup.clear()
 		sculptSessionState = null
-		scatterStore = null
-		scatterLayer = null
-		scatterSnapshotUpdatedAt = null
+		resetScatterStoreState('dispose')
 	}
 
 	return {
