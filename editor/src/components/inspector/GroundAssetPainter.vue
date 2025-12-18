@@ -218,29 +218,33 @@ watch(
   color: rgba(255, 255, 255, 0.65);
 }
 
+
 .thumbnail-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(58px, 1fr));
-  gap: 6px;
-  max-height: calc((74px * 3) + (6px * 2));
+  grid-template-columns: repeat(auto-fill, 60px);
+  gap: 2px;
+  max-height: calc((62px * 4) + (2px * 3));
   overflow-y: auto;
-  padding-right: 4px;
+  padding-right: 2px;
+  justify-content: flex-start;
 }
 
 .thumbnail-item {
   border: none;
   background: transparent;
-  padding: 1px;
+  padding: 0;
+  width: 60px;
+  height: 60px;
   display: flex;
-  flex-direction: column;
   align-items: center;
+  justify-content: center;
   cursor: pointer;
   transition: transform 0.15s ease;
   overflow: visible;
 }
 
 .thumbnail-item:hover {
-  transform: scale(0.96);
+  transform: scale(0.94);
 }
 
 .thumbnail-item:focus-visible {
@@ -248,8 +252,8 @@ watch(
 }
 
 .thumbnail {
-  width: 58px;
-  height: 58px;
+  width: 56px;
+  height: 56px;
   border-radius: 8px;
   background-size: cover;
   background-position: center;

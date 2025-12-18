@@ -3223,6 +3223,13 @@ onBeforeUnmount(() => {
 .property-panel__window :deep(.thumbnail-grid) {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 2px;
+  padding-right: 2px;
 }
 
 .property-panel__scatter-preview {
