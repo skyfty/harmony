@@ -440,15 +440,15 @@ function handleBuildToolToggle(tool: BuildTool) {
 }
 
 function handleScatterEraseButtonClick() {
-  const willActivate = !scatterEraseModeActive.value
   emit('toggle-scatter-erase')
-  emit('update:scatter-erase-menu-open', willActivate)
+  // Left click only toggles the tool; do not auto-open the settings menu.
+  emit('update:scatter-erase-menu-open', false)
 }
 
 function handleScatterEraseContextMenu(event: MouseEvent) {
   event.preventDefault()
   event.stopPropagation()
-  if (!canEraseScatter.value || !scatterEraseModeActive.value) {
+  if (!canEraseScatter.value) {
     return
   }
   emit('update:scatter-erase-menu-open', true)
