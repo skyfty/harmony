@@ -161,7 +161,6 @@ const computedSubtitle = computed(() => {
           <div class="asset-text">
             <div class="asset-name">{{ currentAsset.name }}</div>
             <div class="asset-subtitle">{{ computedSubtitle }}</div>
-            <div class="asset-id">{{ currentAsset.id }}</div>
           </div>
         </div>
         <div v-else class="asset-summary empty">
