@@ -559,8 +559,14 @@ const activeBuildTool = ref<BuildTool | null>(null)
 const scatterEraseModeActive = ref(false)
 const scatterEraseMenuOpen = ref(false)
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
-const canRepairInstanced = computed(() => props.sceneNodes.some((node) => Boolean(getContinuousInstancedModelUserData(node))))
-const canUseScatterEraseTool = computed(() => selectedNodeIsGround.value || canRepairInstanced.value)
+
+const instancedMeshRevision = ref(0)
+const hasInstancedMeshes = computed(() => {
+  void instancedMeshRevision.value
+  return instancedMeshes.some((mesh) => mesh.visible && mesh.count > 0)
+})
+
+const canUseScatterEraseTool = computed(() => selectedNodeIsGround.value || hasInstancedMeshes.value)
 
 type RepairClickState = { pointerId: number; startX: number; startY: number; moved: boolean }
 let repairClickState: RepairClickState | null = null
@@ -706,7 +712,7 @@ function clearRepairHoverHighlight(updateOutline = true) {
 }
 
 function updateRepairHoverHighlight(event: PointerEvent): boolean {
-  if (!scatterEraseModeActive.value || !canRepairInstanced.value) {
+  if (!scatterEraseModeActive.value || !hasInstancedMeshes.value) {
     if (repairHoverGroup.visible) {
       clearRepairHoverHighlight(true)
     }
@@ -771,10 +777,6 @@ function updateRepairHoverHighlight(event: PointerEvent): boolean {
     }
     const node = findSceneNode(sceneStore.nodes, nodeId)
     if (!node) {
-      continue
-    }
-    const definition = getContinuousInstancedModelUserData(node)
-    if (!definition) {
       continue
     }
 
@@ -920,7 +922,34 @@ function eraseContinuousInstance(nodeId: string, bindingId: string): boolean {
   return true
 }
 
-function pickContinuousInstancedTargetAtPointer(event: PointerEvent): { nodeId: string; bindingId: string } | null {
+function eraseInstancedBinding(nodeId: string, bindingId: string): boolean {
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (!node) {
+    return false
+  }
+
+  const continuous = getContinuousInstancedModelUserData(node)
+  if (continuous) {
+    return eraseContinuousInstance(nodeId, bindingId)
+  }
+
+  // Non-continuous instanced scene nodes represent a single instanced binding.
+  // Removing the node is the correct erase operation.
+  sceneStore.removeSceneNodes([nodeId])
+  clearRepairHoverHighlight(true)
+  updateOutlineSelectionTargets()
+  updateSelectionHighlights()
+  updatePlaceholderOverlayPositions()
+
+  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  if (selectedId === nodeId && scatterEraseModeActive.value) {
+    exitScatterEraseMode()
+  }
+
+  return true
+}
+
+function pickSceneInstancedTargetAtPointer(event: PointerEvent): { nodeId: string; bindingId: string } | null {
   if (!canvasRef.value || !camera) {
     return null
   }
@@ -947,6 +976,10 @@ function pickContinuousInstancedTargetAtPointer(event: PointerEvent): { nodeId: 
     }
     const nodeId = findNodeIdForInstance(mesh, intersection.instanceId)
     if (!nodeId) {
+      continue
+    }
+    // Ignore instanced bindings that don't correspond to a SceneNode (e.g. ground scatter bindings).
+    if (!findSceneNode(sceneStore.nodes, nodeId)) {
       continue
     }
     return { nodeId, bindingId }
@@ -983,11 +1016,15 @@ function tryEraseRepairTargetAtPointer(event: PointerEvent, options?: { skipKey?
     if (!nodeId) {
       continue
     }
+    // Ignore instanced bindings that don't correspond to a SceneNode (e.g. ground scatter bindings).
+    if (!findSceneNode(sceneStore.nodes, nodeId)) {
+      continue
+    }
     const key = `${nodeId}:${bindingId}`
     if (options?.skipKey && key === options.skipKey) {
       return { handled: false, erasedKey: null }
     }
-    const handled = eraseContinuousInstance(nodeId, bindingId)
+    const handled = eraseInstancedBinding(nodeId, bindingId)
     clearRepairHoverHighlight(true)
     return { handled, erasedKey: key }
   }
@@ -2745,8 +2782,10 @@ function initScene() {
   applyAxesVisibility(axesVisible.value)
   ensureFallbackLighting()
   clearInstancedMeshes()
+  instancedMeshRevision.value += 1
   stopInstancedMeshSubscription = subscribeInstancedMeshes((mesh) => {
     attachInstancedMesh(mesh)
+    instancedMeshRevision.value += 1
   })
 
   applySkyboxSettingsToScene(skyboxSettings.value)
@@ -3499,6 +3538,7 @@ function disposeScene() {
     stopInstancedMeshSubscription = null
   }
   clearInstancedMeshes()
+  instancedMeshRevision.value += 1
   instancedMeshGroup.removeFromParent()
   clearInstancedOutlineEntries()
   instancedOutlineGroup.removeFromParent()
@@ -4624,8 +4664,8 @@ async function handlePointerDown(event: PointerEvent) {
 
   // Scatter erase mode: middle click (and drag) erases continuous instanced instances.
   // - If Ground is selected and we're not hovering an instanced target, allow ground-scatter erase to handle middle click.
-  if (scatterEraseModeActive.value && canRepairInstanced.value && event.button === 1) {
-    const hit = pickContinuousInstancedTargetAtPointer(event)
+  if (scatterEraseModeActive.value && hasInstancedMeshes.value && event.button === 1) {
+    const hit = pickSceneInstancedTargetAtPointer(event)
     if (hit || !selectedNodeIsGround.value) {
       pointerTrackingState = null
       instancedEraseDragState = {
@@ -4670,7 +4710,7 @@ async function handlePointerDown(event: PointerEvent) {
 
   // Scatter erase mode: if continuous instanced models exist, allow camera controls.
   // We only treat a left-click with minimal movement as an erase action, handled on pointerup.
-  if (scatterEraseModeActive.value && canRepairInstanced.value && event.button === 0) {
+  if (scatterEraseModeActive.value && hasInstancedMeshes.value && event.button === 0) {
     pointerTrackingState = null
     repairClickState = {
       pointerId: event.pointerId,
@@ -4875,7 +4915,7 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
 
-  if (scatterEraseModeActive.value && canRepairInstanced.value) {
+  if (scatterEraseModeActive.value && hasInstancedMeshes.value) {
     updateRepairHoverHighlight(event)
 
     if (instancedEraseDragState && instancedEraseDragState.pointerId === event.pointerId) {
