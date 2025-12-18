@@ -603,6 +603,20 @@ const selectedScatterTarget = computed<ScatterTarget | null>(() => {
 
 const selectedScatterAssignment = computed(() => selectedScatterTarget.value?.shape.scatter ?? null)
 
+const selectedScatterPreview = computed(() => {
+  const assignment = selectedScatterAssignment.value
+  if (!assignment) {
+    return null
+  }
+  const preset = terrainScatterPresets[assignment.category]
+  return {
+    name: assignment.name ?? preset?.label ?? 'Scatter 预设',
+    thumbnail: assignment.thumbnail ?? null,
+    categoryLabel: preset?.label ?? assignment.category,
+    categoryIcon: preset?.icon ?? 'mdi-sprout',
+  }
+})
+
 const propertyPanelDisabledReason = computed(() => {
   const target = selectedScatterTarget.value
   if (!target) {
@@ -951,71 +965,6 @@ function getPolylinePath(points: PlanningPoint[]) {
   }
   const segments = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`)
   return segments.join(' ')
-}
-
-function getPointsBoundingCenter(points: PlanningPoint[]): PlanningPoint {
-  if (!points.length) {
-    return { x: 0, y: 0 }
-  }
-  let minX = points[0]!.x
-  let maxX = points[0]!.x
-  let minY = points[0]!.y
-  let maxY = points[0]!.y
-  for (let i = 1; i < points.length; i += 1) {
-    const point = points[i]!
-    minX = Math.min(minX, point.x)
-    maxX = Math.max(maxX, point.x)
-    minY = Math.min(minY, point.y)
-    maxY = Math.max(maxY, point.y)
-  }
-  return {
-    x: (minX + maxX) / 2,
-    y: (minY + maxY) / 2,
-  }
-}
-
-interface ScatterOverlayEntry {
-  id: string
-  position: PlanningPoint
-  thumbnail: string | null
-  name: string
-}
-
-const scatterOverlays = computed<ScatterOverlayEntry[]>(() => {
-  const overlays: ScatterOverlayEntry[] = []
-  const visible = visibleLayerIds.value
-  polygons.value.forEach((poly) => {
-    if (!poly.scatter || !visible.has(poly.layerId)) {
-      return
-    }
-    overlays.push({
-      id: `polygon-${poly.id}`,
-      position: getPointsBoundingCenter(poly.points),
-      thumbnail: poly.scatter.thumbnail,
-      name: poly.scatter.name,
-    })
-  })
-  polylines.value.forEach((line) => {
-    if (!line.scatter || !visible.has(line.layerId)) {
-      return
-    }
-    overlays.push({
-      id: `polyline-${line.id}`,
-      position: getPointsBoundingCenter(line.points),
-      thumbnail: line.scatter.thumbnail,
-      name: line.scatter.name,
-    })
-  })
-  return overlays
-})
-
-function getScatterOverlayStyle(entry: ScatterOverlayEntry): CSSProperties {
-  return {
-    left: `${entry.position.x}px`,
-    top: `${entry.position.y}px`,
-    transform: 'translate(-50%, -50%)',
-    zIndex: 12000,
-  }
 }
 
 function isPointInPolygon(point: PlanningPoint, polygonPoints: PlanningPoint[]) {
@@ -2968,23 +2917,6 @@ onBeforeUnmount(() => {
                   </g>
                 </svg>
                 <div
-                  v-for="overlay in scatterOverlays"
-                  :key="overlay.id"
-                  class="scatter-overlay"
-                  :style="getScatterOverlayStyle(overlay)"
-                >
-                  <img
-                    v-if="overlay.thumbnail"
-                    class="scatter-overlay__thumbnail"
-                    :src="overlay.thumbnail"
-                    :alt="overlay.name"
-                    draggable="false"
-                  >
-                  <div v-else class="scatter-overlay__placeholder">
-                    <v-icon icon="mdi-image-off-outline" size="18" />
-                  </div>
-                </div>
-                <div
                   v-for="(image, index) in planningImages"
                   :key="image.id"
                   :class="['planning-image', { active: activeImageId === image.id }]"
@@ -3044,6 +2976,35 @@ onBeforeUnmount(() => {
             <span>{{ propertyPanelDisabledReason }}</span>
           </div>
           <template v-else>
+            <div class="property-panel__scatter-preview">
+              <div class="scatter-preview__thumbnail">
+                <img
+                  v-if="selectedScatterPreview && selectedScatterPreview.thumbnail"
+                  :src="selectedScatterPreview.thumbnail"
+                  :alt="selectedScatterPreview.name"
+                  loading="lazy"
+                  draggable="false"
+                >
+                <div v-else class="scatter-preview__placeholder">
+                  <v-icon icon="mdi-image-outline" size="20" />
+                </div>
+              </div>
+              <div class="scatter-preview__meta">
+                <div class="scatter-preview__name">
+                  {{ selectedScatterPreview ? selectedScatterPreview.name : '未设置 Scatter 预设' }}
+                </div>
+                <div class="scatter-preview__category" :class="{ 'scatter-preview__category--empty': !selectedScatterPreview }">
+                  <template v-if="selectedScatterPreview">
+                    <v-icon :icon="selectedScatterPreview.categoryIcon" size="16" />
+                    <span>{{ selectedScatterPreview.categoryLabel }}</span>
+                  </template>
+                  <template v-else>
+                    <span>在下方选择预设以应用当前图形</span>
+                  </template>
+                </div>
+              </div>
+            </div>
+
             <v-tabs
               v-model="propertyScatterTab"
               density="compact"
@@ -3147,36 +3108,6 @@ onBeforeUnmount(() => {
   font-size: 0.85rem;
 }
 
-.layer-panel {
-  padding: 16px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.layer-panel header h3 {
-  margin: 0;
-  font-size: 1rem;
-}
-
-.layer-panel header span {
-  font-size: 0.8rem;
-  opacity: 0.6;
-}
-
-.layer-list {
-  margin-top: 12px;
-  background: transparent;
-}
-
-.layer-item {
-  border-radius: 10px;
-  margin-bottom: 8px;
-  transition: background-color 0.2s ease;
-  padding: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-}
-
 .layer-item.active {
   border-color: rgba(255, 255, 255, 0.18);
 }
@@ -3251,15 +3182,15 @@ onBeforeUnmount(() => {
   text-align: center;
 }
 
-.property-panel__tabs {
-  margin-bottom: 8px;
-}
-
 .property-panel__tabs :deep(.v-tab) {
   min-height: 26px;
   min-width: 26px;
   padding: 0;
   justify-content: center;
+}
+
+.property-panel__tabs {
+  margin-bottom: 8px;
 }
 
 .property-panel__tabs :deep(.v-tab.v-tab.v-btn) {
@@ -3292,6 +3223,71 @@ onBeforeUnmount(() => {
 .property-panel__window :deep(.thumbnail-grid) {
   flex: 1;
   min-height: 0;
+}
+
+.property-panel__scatter-preview {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.scatter-preview__thumbnail {
+  width: 68px;
+  height: 68px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.04);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scatter-preview__thumbnail img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.scatter-preview__placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.scatter-preview__meta {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.scatter-preview__name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scatter-preview__category {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.scatter-preview__category--empty {
+  color: rgba(255, 255, 255, 0.45);
 }
 
 .image-layer-panel {
