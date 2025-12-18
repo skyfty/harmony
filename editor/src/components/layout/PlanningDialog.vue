@@ -9,7 +9,7 @@ import GroundAssetPainter from '@/components/inspector/GroundAssetPainter.vue'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
-import { convertPlanningTo3DScene, findPlanningConversionRootIds } from '@/utils/planningToScene'
+import { clearPlanningGeneratedContent, convertPlanningTo3DScene } from '@/utils/planningToScene'
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ (event: 'update:modelValue', value: boolean): void }>()
@@ -47,6 +47,10 @@ interface PlanningScatterAssignment {
   thumbnail: string | null
   /** 0-100, default 50. Used to scale generated scatter count. */
   densityPercent: number
+  /** 0-10 meters, default 1. Used as a minimum distance between instances. */
+  minSpacingMeters: number
+  /** Model bounding-box footprint area (m^2), used for capacity estimation. */
+  footprintAreaM2: number
 }
 
 interface PlanningPolygon {
@@ -134,10 +138,10 @@ interface LineDraft {
 }
 
 const layerPresets: PlanningLayer[] = [
+  { id: 'green-layer', name: 'Greenery Layer', kind: 'green', visible: true, color: '#00897B', locked: false },
   { id: 'terrain-layer', name: 'Terrain Layer', kind: 'terrain', visible: true, color: '#2E7D32', locked: false },
   { id: 'building-layer', name: 'Building Layer', kind: 'building', visible: true, color: '#C62828', locked: false },
   { id: 'road-layer', name: 'Road Layer', kind: 'road', visible: true, color: '#F9A825', locked: false },
-  { id: 'green-layer', name: 'Greenery Layer', kind: 'green', visible: true, color: '#00897B', locked: false },
   { id: 'wall-layer', name: 'Wall Layer', kind: 'wall', visible: true, color: '#5E35B1', locked: false },
 ]
 
@@ -209,6 +213,26 @@ function clampDensityPercent(value: unknown): number {
   const num = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(num)) return 50
   return Math.round(clampNumber(num, 0, 100))
+}
+
+function clampMinSpacingMeters(value: unknown): number {
+  const num = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(num)) return 1
+  return Math.round(clampNumber(num, 0, 10) * 10) / 10
+}
+
+function defaultFootprintAreaM2(category: TerrainScatterCategory): number {
+  const preset = terrainScatterPresets[category]
+  const spacing = Number.isFinite(preset?.spacing) ? Number(preset.spacing) : 1
+  return Math.max(0.01, spacing * spacing)
+}
+
+function clampFootprintAreaM2(category: TerrainScatterCategory, value: unknown): number {
+  const num = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(num) || num <= 0) {
+    return defaultFootprintAreaM2(category)
+  }
+  return Math.min(1e6, Math.max(0.0001, num))
 }
 
 function hashSeedFromString(value: string): number {
@@ -417,6 +441,15 @@ const polygonScatterDensityDots = computed<Record<string, PlanningPoint[]>>(() =
     if (densityPercent <= 0) {
       continue
     }
+
+    const minSpacingMeters = clampMinSpacingMeters(poly.scatter.minSpacingMeters)
+    const footprintAreaM2 = clampFootprintAreaM2(poly.scatter.category, poly.scatter.footprintAreaM2)
+    const preset = terrainScatterPresets[poly.scatter.category]
+    const avgScale = preset ? (preset.minScale + preset.maxScale) * 0.5 : 1
+    const effectiveFootprintAreaM2 = footprintAreaM2 * avgScale * avgScale
+
+    const minDistance = Math.max(minSpacingMeters, Math.sqrt(effectiveFootprintAreaM2))
+    const minDistSq = minDistance > 0 ? minDistance * minDistance : 0
     const bounds = getPointsBounds(poly.points)
     if (!bounds) {
       continue
@@ -426,24 +459,60 @@ const polygonScatterDensityDots = computed<Record<string, PlanningPoint[]>>(() =
       continue
     }
 
-    // Keep preview cheap but responsive:
-    // - scale with *polygon* area (not bounding box) so thin/concave shapes still get enough points
-    // - allow noticeably denser preview at 100%
-    const baseDotsAt100 = clampNumber(Math.floor(area / 800), 12, 800)
-    const targetDots = Math.round((baseDotsAt100 * densityPercent) / 100)
+    // Capacity model (same idea as conversion):
+    // max = floor(polygonArea / max(modelFootprintArea, spacing^2))
+    // target = round(max * densityPercent/100)
+    const perInstanceArea = Math.max(effectiveFootprintAreaM2, minSpacingMeters * minSpacingMeters)
+    const maxByArea = perInstanceArea > 1e-6 ? Math.floor(area / perInstanceArea) : 0
+    const targetDots = Math.round((maxByArea * densityPercent) / 100)
     if (targetDots <= 0) {
       continue
     }
-    const random = buildRandom(hashSeedFromString(`${poly.id}:${densityPercent}`))
+
+    // Preview should stay responsive.
+    const cappedTarget = Math.min(800, targetDots)
+    const random = buildRandom(hashSeedFromString(`${poly.id}:${densityPercent}:${minSpacingMeters}:${Math.round(footprintAreaM2 * 1000)}`))
     const dots: PlanningPoint[] = []
-    const maxAttempts = Math.min(60000, targetDots * 80)
-    for (let attempt = 0; attempt < maxAttempts && dots.length < targetDots; attempt += 1) {
+
+    const gridCellSize = minDistance > 0 ? minDistance : 1
+    const grid = new Map<string, PlanningPoint[]>()
+    const gridKey = (x: number, y: number) => `${x},${y}`
+    const tryInsert = (candidate: PlanningPoint) => {
+      if (!minDistSq) {
+        dots.push(candidate)
+        return true
+      }
+      const cx = Math.floor(candidate.x / gridCellSize)
+      const cy = Math.floor(candidate.y / gridCellSize)
+      for (let gy = cy - 1; gy <= cy + 1; gy += 1) {
+        for (let gx = cx - 1; gx <= cx + 1; gx += 1) {
+          const bucket = grid.get(gridKey(gx, gy))
+          if (!bucket) continue
+          for (const p of bucket) {
+            const dx = p.x - candidate.x
+            const dy = p.y - candidate.y
+            if (dx * dx + dy * dy < minDistSq) {
+              return false
+            }
+          }
+        }
+      }
+      dots.push(candidate)
+      const key = gridKey(cx, cy)
+      const bucket = grid.get(key)
+      if (bucket) bucket.push(candidate)
+      else grid.set(key, [candidate])
+      return true
+    }
+
+    const maxAttempts = Math.min(60000, cappedTarget * 140)
+    for (let attempt = 0; attempt < maxAttempts && dots.length < cappedTarget; attempt += 1) {
       const candidate = {
         x: bounds.minX + bounds.width * random(),
         y: bounds.minY + bounds.height * random(),
       }
       if (isPointInPolygon(candidate, poly.points)) {
-        dots.push(candidate)
+        tryInsert(candidate)
       }
     }
     if (dots.length) {
@@ -516,6 +585,8 @@ function buildPlanningSnapshot() {
           name: poly.scatter.name,
           thumbnail: poly.scatter.thumbnail,
           densityPercent: clampDensityPercent(poly.scatter.densityPercent),
+          minSpacingMeters: clampMinSpacingMeters(poly.scatter.minSpacingMeters),
+          footprintAreaM2: clampFootprintAreaM2(poly.scatter.category, poly.scatter.footprintAreaM2),
         }
         : undefined,
     })),
@@ -532,6 +603,8 @@ function buildPlanningSnapshot() {
           name: line.scatter.name,
           thumbnail: line.scatter.thumbnail,
           densityPercent: clampDensityPercent(line.scatter.densityPercent),
+          minSpacingMeters: clampMinSpacingMeters(line.scatter.minSpacingMeters),
+          footprintAreaM2: clampFootprintAreaM2(line.scatter.category, line.scatter.footprintAreaM2),
         }
         : undefined,
     })),
@@ -632,16 +705,9 @@ async function handleConvertTo3DScene() {
     return
   }
 
-  const existingRoots = findPlanningConversionRootIds(sceneStore.nodes)
-  let overwriteExisting = false
-  if (existingRoots.length) {
-    overwriteExisting = typeof window !== 'undefined'
-      ? window.confirm('场景中已存在由规划转换的 3D 内容，是否覆盖？')
-      : true
-    if (!overwriteExisting) {
-      return
-    }
-  }
+  // Always clear previously generated conversion output to avoid duplicates.
+  await clearPlanningGeneratedContent(sceneStore)
+  const overwriteExisting = true
 
   // Close dialog first, then start conversion.
   dialogOpen.value = false
@@ -725,6 +791,8 @@ function normalizeScatterAssignment(raw: unknown): PlanningScatterAssignment | u
   const name = typeof payload.name === 'string' ? payload.name : 'Scatter 预设'
   const thumb = typeof payload.thumbnail === 'string' ? payload.thumbnail : null
   const densityPercent = clampDensityPercent(payload.densityPercent)
+  const minSpacingMeters = clampMinSpacingMeters(payload.minSpacingMeters)
+  const footprintAreaM2 = clampFootprintAreaM2(category, payload.footprintAreaM2)
   return {
     providerAssetId,
     assetId,
@@ -732,6 +800,8 @@ function normalizeScatterAssignment(raw: unknown): PlanningScatterAssignment | u
     name,
     thumbnail: thumb,
     densityPercent,
+    minSpacingMeters,
+    footprintAreaM2,
   }
 }
 
@@ -1830,6 +1900,15 @@ function handleScatterAssetSelect(payload: { asset: ProjectAsset; providerAssetI
   }
   const thumbnail = payload.asset.thumbnail ?? null
   const existingDensity = target.shape.scatter?.densityPercent
+  const existingMinSpacing = target.shape.scatter?.minSpacingMeters
+
+  const length = payload.asset.dimensionLength ?? null
+  const width = payload.asset.dimensionWidth ?? null
+  const rawArea = (typeof length === 'number' && typeof width === 'number' && Number.isFinite(length) && Number.isFinite(width) && length > 0 && width > 0)
+    ? length * width
+    : undefined
+  const footprintAreaM2 = clampFootprintAreaM2(category, rawArea)
+
   target.shape.scatter = {
     providerAssetId: payload.providerAssetId,
     assetId: payload.asset.id,
@@ -1837,6 +1916,8 @@ function handleScatterAssetSelect(payload: { asset: ProjectAsset; providerAssetI
     name: payload.asset.name,
     thumbnail,
     densityPercent: clampDensityPercent(existingDensity),
+    minSpacingMeters: clampMinSpacingMeters(existingMinSpacing),
+    footprintAreaM2,
   }
   markPlanningDirty()
 }
@@ -1868,6 +1949,27 @@ const scatterDensityEnabled = computed(() => {
     && target.layer?.kind === 'green'
     && !!target.shape.scatter
 })
+
+const scatterMinSpacingMetersModel = computed<number>({
+  get: () => clampMinSpacingMeters(selectedScatterAssignment.value?.minSpacingMeters),
+  set: (value) => {
+    if (propertyPanelDisabled.value) {
+      return
+    }
+    const target = selectedScatterTarget.value
+    if (!target?.shape.scatter) {
+      return
+    }
+    // Only meaningful for green polygons (planning -> terrain scatter).
+    if (target.type !== 'polygon' || target.layer?.kind !== 'green') {
+      return
+    }
+    target.shape.scatter.minSpacingMeters = clampMinSpacingMeters(value)
+    markPlanningDirty()
+  },
+})
+
+const scatterMinSpacingEnabled = computed(() => scatterDensityEnabled.value)
 
 function clearSelectedScatterAssignment() {
   if (propertyPanelDisabled.value) {
@@ -3500,6 +3602,20 @@ onBeforeUnmount(() => {
                 />
                 <div class="property-panel__density-value">{{ scatterDensityPercentModel }}%</div>
               </div>
+
+              <div class="property-panel__spacing-title">分布间隔</div>
+              <div class="property-panel__density-row">
+                <v-slider
+                  v-model="scatterMinSpacingMetersModel"
+                  min="0"
+                  max="10"
+                  step="0.1"
+                  density="compact"
+                  hide-details
+                  :disabled="!scatterMinSpacingEnabled"
+                />
+                <div class="property-panel__density-value">{{ scatterMinSpacingMetersModel }}m</div>
+              </div>
             </div>
 
             <v-tabs
@@ -3625,6 +3741,13 @@ onBeforeUnmount(() => {
 .property-panel__density-title {
   font-size: 0.9rem;
   font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.property-panel__spacing-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-top: 10px;
   margin-bottom: 6px;
 }
 

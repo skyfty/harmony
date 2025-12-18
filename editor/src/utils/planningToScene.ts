@@ -84,6 +84,28 @@ type ScatterAssignment = {
   category: TerrainScatterCategory
   name?: string
   densityPercent?: number
+  minSpacingMeters?: number
+  footprintAreaM2?: number
+}
+
+function clampMinSpacingMeters(value: unknown): number {
+  const num = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(num)) return 1
+  return Math.round(THREE.MathUtils.clamp(num, 0, 10) * 10) / 10
+}
+
+function defaultFootprintAreaM2(category: TerrainScatterCategory): number {
+  const preset = terrainScatterPresets[category]
+  const spacing = Number.isFinite(preset?.spacing) ? Number(preset.spacing) : 1
+  return Math.max(0.01, spacing * spacing)
+}
+
+function clampFootprintAreaM2(category: TerrainScatterCategory, value: unknown): number {
+  const num = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(num) || num <= 0) {
+    return defaultFootprintAreaM2(category)
+  }
+  return Math.min(1e6, Math.max(0.0001, num))
 }
 
 function emitProgress(options: ConvertPlanningToSceneOptions, step: string, progress: number) {
@@ -110,6 +132,30 @@ export function findPlanningConversionRootIds(nodes: SceneNode[]): string[] {
   }
   visit(nodes)
   return ids
+}
+
+export async function clearPlanningGeneratedContent(sceneStore: ConvertPlanningToSceneOptions['sceneStore']) {
+  // 1) Remove previously converted scene nodes (walls/roads/buildings/etc.).
+  const existingRoots = findPlanningConversionRootIds(sceneStore.nodes)
+  if (existingRoots.length) {
+    sceneStore.removeSceneNodes(existingRoots)
+  }
+
+  // 2) Remove previously generated terrain scatter (managed by ground node).
+  const groundNode = findGroundNode(sceneStore.nodes)
+  if (groundNode?.dynamicMesh?.type === 'Ground') {
+    const store = ensureScatterStore(groundNode.id, (groundNode.dynamicMesh as any)?.terrainScatter)
+    removePlanningScatterLayers(store)
+    const snapshot = serializeTerrainScatterStore(store)
+    const next = {
+      ...(groundNode.dynamicMesh as any),
+      terrainScatter: snapshot,
+    }
+    sceneStore.updateNodeDynamicMesh(groundNode.id, next)
+  }
+
+  // 3) Sync runtime so the viewport reflects the removals immediately.
+  await sceneStore.refreshRuntimeState({ showOverlay: false, refreshViewport: true })
 }
 
 function layerKindFromId(layerId: string): LayerKind | null {
@@ -181,7 +227,9 @@ function normalizeScatter(raw: unknown): ScatterAssignment | null {
   const normalizedDensity = Number.isFinite(densityPercent)
     ? THREE.MathUtils.clamp(Math.round(densityPercent), 0, 100)
     : 50
-  return { assetId, category, name, densityPercent: normalizedDensity }
+  const minSpacingMeters = clampMinSpacingMeters(payload.minSpacingMeters)
+  const footprintAreaM2 = clampFootprintAreaM2(category, payload.footprintAreaM2)
+  return { assetId, category, name, densityPercent: normalizedDensity, minSpacingMeters, footprintAreaM2 }
 }
 
 function hashSeedFromString(value: string): number {
@@ -607,15 +655,35 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             maxHeight?: number
             minScale?: number
             maxScale?: number
-            density?: number
             seed?: number | null
           }
-          const baseDensity = Number.isFinite(layerParams.density) ? Math.max(0.05, Number(layerParams.density)) : 1
-          // densityPercent=50 means baseline (x1). 0 -> none. 100 -> x2.
+
           const densityPercent = Number.isFinite(scatter.densityPercent) ? Number(scatter.densityPercent) : 50
-          const densityScale = THREE.MathUtils.clamp(densityPercent, 0, 100) / 50
-          const effectiveDensity = baseDensity * densityScale
-          if (effectiveDensity <= 1e-6) {
+          const userMinSpacing = clampMinSpacingMeters(scatter.minSpacingMeters)
+
+          // Estimate capacity from:
+          // - polygon area
+          // - model footprint (bounding-box base area)
+          // - user minimum spacing
+          const presetMinScale = Number.isFinite(preset.minScale) ? Number(preset.minScale) : 1
+          const presetMaxScale = Number.isFinite(preset.maxScale) ? Number(preset.maxScale) : 1
+          const minScaleForCapacity = Number.isFinite(layerParams.minScale) ? Number(layerParams.minScale) : presetMinScale
+          const maxScaleForCapacity = Number.isFinite(layerParams.maxScale) ? Number(layerParams.maxScale) : presetMaxScale
+          const avgScale = (minScaleForCapacity + maxScaleForCapacity) * 0.5
+          const baseFootprintAreaM2 = clampFootprintAreaM2(scatter.category, scatter.footprintAreaM2)
+          const effectiveFootprintAreaM2 = baseFootprintAreaM2 * avgScale * avgScale
+
+          const area = polygonArea2D(poly.points)
+          const perInstanceArea = Math.max(effectiveFootprintAreaM2, userMinSpacing * userMinSpacing)
+          const maxByArea = (Number.isFinite(area) && area > 0 && perInstanceArea > 1e-6)
+            ? Math.floor(area / perInstanceArea)
+            : 0
+          const targetCount = Math.min(
+            MAX_SCATTER_INSTANCES_PER_POLYGON,
+            Math.max(0, Math.round((maxByArea * THREE.MathUtils.clamp(densityPercent, 0, 100)) / 100)),
+          )
+
+          if (targetCount <= 0) {
             // Still remove previously generated instances for this feature to stay idempotent.
             const existingRaw = Array.isArray(layer.instances) ? (layer.instances as TerrainScatterInstance[]) : []
             const existing = existingRaw.filter((instance) => {
@@ -627,23 +695,23 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             updateProgressForUnit(`Converting greenery: ${poly.name?.trim() || poly.id}`)
             continue
           }
-          const baseSpacing = Number.isFinite(preset.spacing) ? preset.spacing : 1.2
-          const minDistance = THREE.MathUtils.clamp(baseSpacing / Math.sqrt(effectiveDensity), 0.15, 8)
 
-          const area = polygonArea2D(poly.points)
-          const estimated = area > 0 ? Math.round((area / (minDistance * minDistance)) * 0.7) : 0
-          const minPoints = area >= minDistance * minDistance * 0.35 ? 1 : 0
-          const maxPoints = Math.min(MAX_SCATTER_INSTANCES_PER_POLYGON, Math.max(minPoints, estimated))
-          if (maxPoints > 0) {
+          const minDistance = Math.max(userMinSpacing, Math.sqrt(effectiveFootprintAreaM2), 0.05)
+          if (targetCount > 0) {
             const seedBase = layerParams.seed != null
               ? Math.floor(Number(layerParams.seed))
               : hashSeedFromString(`${PLANNING_CONVERSION_SOURCE}:${layer.id}:${poly.id}`)
             const random = buildRandom(seedBase)
 
-            const candidates = poissonSampleInPolygon(poly.points, minDistance, random, Math.min(MAX_SCATTER_INSTANCES_PER_POLYGON, Math.max(1, Math.ceil(maxPoints * 1.25))))
+            const candidates = poissonSampleInPolygon(
+              poly.points,
+              minDistance,
+              random,
+              Math.min(MAX_SCATTER_INSTANCES_PER_POLYGON, Math.max(1, Math.ceil(targetCount * 1.6))),
+            )
 
-            const minScale = Number.isFinite(layerParams.minScale) ? Number(layerParams.minScale) : preset.minScale
-            const maxScale = Number.isFinite(layerParams.maxScale) ? Number(layerParams.maxScale) : preset.maxScale
+            const minScale = minScaleForCapacity
+            const maxScale = maxScaleForCapacity
             const minHeight = Number.isFinite(layerParams.minHeight) ? Number(layerParams.minHeight) : -10000
             const maxHeight = Number.isFinite(layerParams.maxHeight) ? Number(layerParams.maxHeight) : 10000
             const minSlope = Number.isFinite(layerParams.minSlope) ? Number(layerParams.minSlope) : 0
@@ -660,7 +728,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
             const additions: TerrainScatterInstance[] = []
             for (const sample of candidates) {
-              if (additions.length >= maxPoints) break
+              if (additions.length >= targetCount) break
               const localXZ = toWorldPoint(sample, groundWidth, groundDepth, 0)
               const height = groundDefinition ? sampleGroundHeight(groundDefinition, localXZ.x, localXZ.z) : 0
               if (height < minHeight || height > maxHeight) {
