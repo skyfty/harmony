@@ -183,11 +183,6 @@ const activeToolbarTool = computed<PlanningTool>(() => (temporaryPanActive.value
 
 const convertingTo3DScene = ref(false)
 
-const canConvertTo3DScene = computed(() => {
-  if (convertingTo3DScene.value) return false
-  return polygons.value.length > 0 || polylines.value.length > 0
-})
-
 const activeLayer = computed(() => layers.value.find((layer) => layer.id === activeLayerId.value) ?? layers.value[0])
 
 const sceneGroundSize = computed(() => {
@@ -693,37 +688,45 @@ function persistPlanningToSceneIfDirty(options?: { force?: boolean }) {
 }
 
 async function handleConvertTo3DScene() {
-  if (!canConvertTo3DScene.value) {
-    return
-  }
+  if (convertingTo3DScene.value) return
 
   // Ensure latest edits are persisted before conversion.
   persistPlanningToSceneIfDirty({ force: true })
 
   const planningData = sceneStore.planningData
-  if (!planningData) {
-    return
-  }
-
-  // Always clear previously generated conversion output to avoid duplicates.
-  await clearPlanningGeneratedContent(sceneStore)
-  const overwriteExisting = true
-
-  // Close dialog first, then start conversion.
-  dialogOpen.value = false
-  await nextTick()
-
   convertingTo3DScene.value = true
   uiStore.showLoadingOverlay({
     title: 'Convert to 3D Scene',
-    message: 'Preparing…',
-    mode: 'determinate',
-    progress: 0,
+    message: planningData ? 'Preparing…' : 'Clearing…',
+    mode: planningData ? 'determinate' : 'indeterminate',
+    progress: planningData ? 0 : undefined,
     closable: false,
     autoClose: false,
   })
 
   try {
+    // Always clear previously generated conversion output so users can clean the scene
+    // even when the current planning snapshot is empty.
+    await clearPlanningGeneratedContent(sceneStore)
+
+    if (!planningData) {
+      uiStore.updateLoadingOverlay({
+        mode: 'determinate',
+        progress: 100,
+        message: 'Cleared.',
+        closable: true,
+        autoClose: true,
+        autoCloseDelay: 800,
+      })
+      return
+    }
+
+    const overwriteExisting = true
+
+    // Close dialog first, then start conversion.
+    dialogOpen.value = false
+    await nextTick()
+
     await convertPlanningTo3DScene({
       sceneStore,
       planningData,
@@ -3294,7 +3297,7 @@ onBeforeUnmount(() => {
                     variant="tonal"
                     density="comfortable"
                     class="tool-button"
-                    :disabled="!canConvertTo3DScene"
+                    :disabled="convertingTo3DScene"
                     @click="handleConvertTo3DScene"
                   >
                     <v-icon>mdi-cube-outline</v-icon>
