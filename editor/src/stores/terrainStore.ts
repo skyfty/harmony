@@ -18,7 +18,7 @@ export const useTerrainStore = defineStore('terrain', () => {
   const scatterProviderAssetId = ref<string | null>(null)
   const scatterSpacing = ref(0.5)
   // Scatter placement brush radius (visual only). Kept independent from terrain sculpt brush and erase radius.
-  const scatterBrushRadius = ref(1)
+  const scatterBrushRadius = ref(0.5)
   const scatterEraseRadius = ref(1)
   const isDigging = computed(() => brushOperation.value === 'depress')
   const scatterPreset = computed(() => terrainScatterPresets[scatterCategory.value])

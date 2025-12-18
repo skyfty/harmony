@@ -97,6 +97,9 @@ const groundPointerHelper = new THREE.Vector3()
 const scatterPointerHelper = new THREE.Vector3()
 const scatterDirectionHelper = new THREE.Vector3()
 const scatterPlacementHelper = new THREE.Vector3()
+const scatterPlacementCenterLocalHelper = new THREE.Vector3()
+const scatterPlacementCandidateLocalHelper = new THREE.Vector3()
+const scatterPlacementCandidateWorldHelper = new THREE.Vector3()
 const scatterWorldMatrixHelper = new THREE.Matrix4()
 const scatterInstanceWorldPositionHelper = new THREE.Vector3()
 const scatterEraseLocalPointHelper = new THREE.Vector3()
@@ -808,37 +811,90 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return true
 	}
 
+	function paintScatterStamp(worldCenterPoint: THREE.Vector3): void {
+		if (!scatterSession || !scatterSession.layer || !scatterSession.modelGroup) {
+			return
+		}
+		const radius = resolveScatterBrushRadius()
+		const spacing = scatterSession.spacing
+
+		// Estimate how many instances to try to place per stamp.
+		// Brush radius controls the area; spacing controls density.
+		const area = Math.PI * radius * radius
+		const attemptsTarget = Math.min(25, Math.max(1, Math.floor((area / (spacing * spacing)) * 0.25)))
+		const maxAttempts = Math.min(150, Math.max(20, attemptsTarget * 8))
+
+		let placed = applyScatterPlacement(worldCenterPoint) ? 1 : 0
+		if (placed >= attemptsTarget) {
+			return
+		}
+
+		const { groundMesh, definition } = scatterSession
+		groundMesh.updateMatrixWorld(true)
+		scatterPlacementCenterLocalHelper.copy(worldCenterPoint)
+		groundMesh.worldToLocal(scatterPlacementCenterLocalHelper)
+
+		for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+			if (!scatterSession) {
+				return
+			}
+			const u = Math.random()
+			const v = Math.random()
+			const r = Math.sqrt(u) * radius
+			const theta = v * Math.PI * 2
+			const dx = Math.cos(theta) * r
+			const dz = Math.sin(theta) * r
+
+			scatterPlacementCandidateLocalHelper.set(
+				scatterPlacementCenterLocalHelper.x + dx,
+				0,
+				scatterPlacementCenterLocalHelper.z + dz,
+			)
+			scatterPlacementCandidateLocalHelper.y = sampleGroundHeight(
+				definition,
+				scatterPlacementCandidateLocalHelper.x,
+				scatterPlacementCandidateLocalHelper.z,
+			)
+
+			scatterPlacementCandidateWorldHelper.copy(scatterPlacementCandidateLocalHelper)
+			groundMesh.localToWorld(scatterPlacementCandidateWorldHelper)
+			if (applyScatterPlacement(scatterPlacementCandidateWorldHelper)) {
+				placed += 1
+				if (placed >= attemptsTarget) {
+					return
+				}
+			}
+		}
+	}
+
 	function traceScatterPath(targetPoint: THREE.Vector3) {
 		if (!scatterSession) {
 			return
 		}
 		if (!scatterSession.lastPoint) {
-			if (applyScatterPlacement(targetPoint)) {
-				scatterSession.lastPoint = targetPoint.clone()
-			}
+			scatterSession.lastPoint = targetPoint.clone()
+			paintScatterStamp(targetPoint)
 			return
 		}
 		scatterDirectionHelper.copy(targetPoint).sub(scatterSession.lastPoint)
 		const distance = scatterDirectionHelper.length()
-		if (distance < scatterSession.spacing * 0.35) {
+		const stepDistance = Math.max(scatterSession.spacing, resolveScatterBrushRadius() * 0.5)
+		if (distance < stepDistance * 0.35) {
 			return
 		}
 		scatterDirectionHelper.normalize()
-		const steps = Math.floor(distance / scatterSession.spacing)
+		const steps = Math.floor(distance / stepDistance)
 		for (let index = 1; index <= steps; index += 1) {
 			scatterPlacementHelper
 				.copy(scatterSession.lastPoint)
-				.addScaledVector(scatterDirectionHelper, scatterSession.spacing * index)
-			if (applyScatterPlacement(scatterPlacementHelper)) {
-				scatterSession.lastPoint = scatterPlacementHelper.clone()
-			}
+				.addScaledVector(scatterDirectionHelper, stepDistance * index)
+			paintScatterStamp(scatterPlacementHelper)
 		}
-		const remainder = distance - steps * scatterSession.spacing
-		if (remainder >= scatterSession.spacing * 0.4) {
-			if (applyScatterPlacement(targetPoint)) {
-				scatterSession.lastPoint = targetPoint.clone()
-			}
+		const remainder = distance - steps * stepDistance
+		if (remainder >= stepDistance * 0.4) {
+			paintScatterStamp(targetPoint)
 		}
+		scatterSession.lastPoint = targetPoint.clone()
 	}
 
 	function beginScatterPlacement(event: PointerEvent): boolean {

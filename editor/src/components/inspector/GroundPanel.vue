@@ -15,7 +15,7 @@ import type { ProjectAsset } from '@/types/project-asset'
 const sceneStore = useSceneStore()
 const terrainStore = useTerrainStore()
 const { selectedNode } = storeToRefs(sceneStore)
-const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterSpacing, scatterEraseRadius } =
+const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterSpacing, scatterBrushRadius } =
   storeToRefs(terrainStore)
 
 const selectedGroundNode = computed(() => {
@@ -59,13 +59,13 @@ const scatterSpacingModel = computed({
   set: (value: number) => terrainStore.setScatterSpacing(Number(value)),
 })
 
-const scatterEraseRadiusModel = computed({
-  get: () => scatterEraseRadius.value,
-  set: (value: number) => terrainStore.setScatterEraseRadius(Number(value)),
+const scatterBrushRadiusModel = computed({
+  get: () => scatterBrushRadius.value,
+  set: (value: number) => terrainStore.setScatterBrushRadius(Number(value)),
 })
 
 const scatterSpacingDisplay = computed(() => scatterSpacing.value.toFixed(2))
-const scatterEraseRadiusDisplay = computed(() => scatterEraseRadius.value.toFixed(2))
+const scatterBrushRadiusDisplay = computed(() => scatterBrushRadius.value.toFixed(2))
 
 const terrainOperations: Array<{ value: GroundSculptOperation; label: string; icon: string }> = [
   { value: 'depress', label: 'Depress', icon: 'mdi-tray-arrow-down' },
@@ -275,13 +275,13 @@ function handleScatterAssetSelect(
             />
 
             <div class="scatter-spacing-labels">
-              <span>Erase Brush Radius</span>
-              <span>{{ scatterEraseRadiusDisplay }} m</span>
+              <span>Brush Radius</span>
+              <span>{{ scatterBrushRadiusDisplay }} m</span>
             </div>
             <v-slider
-              v-model="scatterEraseRadiusModel"
+              v-model="scatterBrushRadiusModel"
               :min="0.1"
-              :max="10"
+              :max="5"
               :step="0.1"
               density="compact"
               track-color="rgba(77, 208, 225, 0.4)"
