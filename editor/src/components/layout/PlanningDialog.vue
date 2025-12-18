@@ -3110,7 +3110,7 @@ onBeforeUnmount(() => {
 .planning-dialog__content {
   flex: 1;
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr) 250px;
+  grid-template-columns: 320px minmax(0, 1fr) 380px;
   grid-template-rows: 1fr;
   align-items: stretch;
   gap: 12px;
@@ -3238,6 +3238,19 @@ onBeforeUnmount(() => {
 
 .property-panel__tabs {
   margin-bottom: 8px;
+}
+
+.property-panel__tabs :deep(.v-tab) {
+  min-height: 26px;
+  min-width: 26px;
+  padding: 0;
+  justify-content: center;
+}
+
+.property-panel__tabs :deep(.v-tab.v-tab.v-btn) {
+  width: 40px;
+  height: 30px;
+  min-width: 40px;
 }
 
 .property-panel__window {
