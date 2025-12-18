@@ -734,31 +734,7 @@ function updateRepairHoverHighlight(event: PointerEvent): boolean {
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
   raycaster.setFromCamera(pointer, camera)
 
-  const pickTargets: THREE.Object3D[] = []
-  const seen = new Set<THREE.Object3D>()
-
-  const addInstancedPickTarget = (candidate: THREE.Object3D) => {
-    if (seen.has(candidate)) {
-      return
-    }
-    const mesh = candidate as THREE.InstancedMesh
-    if (!(mesh as unknown as { isInstancedMesh?: boolean }).isInstancedMesh) {
-      return
-    }
-    if (!mesh.visible || mesh.count === 0) {
-      return
-    }
-    pickTargets.push(mesh)
-    seen.add(mesh)
-  }
-
-  instancedMeshGroup.children.forEach((child) => {
-    if (child) {
-      addInstancedPickTarget(child)
-    }
-  })
-  instancedMeshes.forEach((mesh) => addInstancedPickTarget(mesh))
-
+  const pickTargets = collectInstancedPickTargets()
   const intersections = raycaster.intersectObjects(pickTargets, false)
   intersections.sort((a, b) => a.distance - b.distance)
 
@@ -840,6 +816,38 @@ function updateRepairHoverHighlight(event: PointerEvent): boolean {
     clearRepairHoverHighlight(true)
   }
   return false
+}
+
+function collectInstancedPickTargets(): THREE.InstancedMesh[] {
+  // Ensure the instanced meshes' world matrices are up-to-date for raycasting.
+  instancedMeshGroup.updateWorldMatrix(true, true)
+
+  const pickTargets: THREE.InstancedMesh[] = []
+  const seen = new Set<THREE.InstancedMesh>()
+
+  const add = (candidate: THREE.Object3D | null | undefined) => {
+    if (!candidate) {
+      return
+    }
+    const mesh = candidate as THREE.InstancedMesh
+    if (!(mesh as unknown as { isInstancedMesh?: boolean }).isInstancedMesh) {
+      return
+    }
+    if (seen.has(mesh)) {
+      return
+    }
+    if (!mesh.visible || mesh.count === 0) {
+      return
+    }
+    mesh.updateWorldMatrix(true, false)
+    pickTargets.push(mesh)
+    seen.add(mesh)
+  }
+
+  // Some instanced meshes are attached to `instancedMeshGroup`, but keep the list as well.
+  instancedMeshGroup.children.forEach((child) => add(child))
+  instancedMeshes.forEach((mesh) => add(mesh))
+  return pickTargets
 }
 
 function continuousIndexFromBindingId(nodeId: string, bindingId: string): number | null {
@@ -962,7 +970,8 @@ function pickSceneInstancedTargetAtPointer(event: PointerEvent): { nodeId: strin
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
   raycaster.setFromCamera(pointer, camera)
 
-  const intersections = raycaster.intersectObjects(instancedMeshes, false)
+  const pickTargets = collectInstancedPickTargets()
+  const intersections = raycaster.intersectObjects(pickTargets, false)
   intersections.sort((a, b) => a.distance - b.distance)
 
   for (const intersection of intersections) {
@@ -1000,7 +1009,8 @@ function tryEraseRepairTargetAtPointer(event: PointerEvent, options?: { skipKey?
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
   raycaster.setFromCamera(pointer, camera)
 
-  const intersections = raycaster.intersectObjects(instancedMeshes, false)
+  const pickTargets = collectInstancedPickTargets()
+  const intersections = raycaster.intersectObjects(pickTargets, false)
   intersections.sort((a, b) => a.distance - b.distance)
 
   for (const intersection of intersections) {
