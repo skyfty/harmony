@@ -56,6 +56,18 @@ export type ConvertPlanningToSceneOptions = {
 const PLANNING_CONVERSION_ROOT_TAG = 'planningConversionRoot'
 const PLANNING_CONVERSION_SOURCE = 'planning-conversion'
 
+function monotonicUpdatedAt(previousSnapshot: any | null | undefined, nextUpdatedAt: unknown): number {
+  const prev = Number(previousSnapshot?.metadata?.updatedAt)
+  const next = Number(nextUpdatedAt)
+  if (!Number.isFinite(prev)) {
+    return Number.isFinite(next) ? next : Date.now()
+  }
+  if (!Number.isFinite(next)) {
+    return prev + 1
+  }
+  return next <= prev ? prev + 1 : next
+}
+
 const MAX_SCATTER_INSTANCES_PER_POLYGON = 1500
 const POISSON_CANDIDATES_PER_ACTIVE = 24
 
@@ -144,9 +156,11 @@ export async function clearPlanningGeneratedContent(sceneStore: ConvertPlanningT
   // 2) Remove previously generated terrain scatter (managed by ground node).
   const groundNode = findGroundNode(sceneStore.nodes)
   if (groundNode?.dynamicMesh?.type === 'Ground') {
+    const previousSnapshot = (groundNode.dynamicMesh as any)?.terrainScatter
     const store = ensureScatterStore(groundNode.id, (groundNode.dynamicMesh as any)?.terrainScatter)
     removePlanningScatterLayers(store)
     const snapshot = serializeTerrainScatterStore(store)
+    snapshot.metadata.updatedAt = monotonicUpdatedAt(previousSnapshot, snapshot.metadata.updatedAt)
     const next = {
       ...(groundNode.dynamicMesh as any),
       terrainScatter: snapshot,
@@ -826,7 +840,9 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   const finalGround = findGroundNode(sceneStore.nodes)
   if (finalGround?.dynamicMesh?.type === 'Ground') {
     emitProgress(options, 'Applying scatter…', 96)
+    const previousSnapshot = (finalGround.dynamicMesh as any)?.terrainScatter
     const snapshot = serializeTerrainScatterStore(store)
+    snapshot.metadata.updatedAt = monotonicUpdatedAt(previousSnapshot, snapshot.metadata.updatedAt)
     const next = {
       ...(finalGround.dynamicMesh as any),
       terrainScatter: snapshot,
@@ -837,6 +853,8 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   // Ensure runtime objects/components are synced so the converted content shows up immediately.
   // Conversion creates/moves many nodes; some runtime consumers require an explicit refresh.
   emitProgress(options, 'Refreshing scene…', 98)
+
+  await sceneStore.refreshRuntimeState({ showOverlay: false, refreshViewport: true })
 
   emitProgress(options, 'Done', 100)
   return { rootNodeId: root.id }
