@@ -10129,6 +10129,98 @@ export const useSceneStore = defineStore('scene', {
       }
     },
 
+    async replaceNodeModelAsset(nodeId: string, assetId: string): Promise<boolean> {
+      const node = findNodeById(this.nodes, nodeId)
+      if (!node) {
+        return false
+      }
+      const asset = this.getAsset(assetId)
+      if (!asset || (asset.type !== 'model' && asset.type !== 'mesh')) {
+        return false
+      }
+
+      const assetCache = useAssetCacheStore()
+      if (!assetCache.hasCache(asset.id)) {
+        await assetCache.downloaProjectAsset(asset)
+        if (!assetCache.hasCache(asset.id)) {
+          throw new Error('模型资源尚未准备就绪')
+        }
+      }
+
+      const file = assetCache.createFileFromCache(asset.id)
+      if (!file) {
+        throw new Error('模型资源文件不可用')
+      }
+
+      const shouldCacheModelObject = asset.type === 'model' || asset.type === 'mesh'
+      let modelGroup: ModelInstanceGroup | null = null
+      let baseObject: Object3D | null = null
+
+      if (shouldCacheModelObject) {
+        const cached = getCachedModelObject(asset.id)
+        if (cached) {
+          modelGroup = cached
+          baseObject = cached.object
+        }
+      }
+
+      if (!baseObject) {
+        if (shouldCacheModelObject) {
+          const loaded = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file))
+          modelGroup = loaded
+          baseObject = loaded.object
+          assetCache.releaseInMemoryBlob(asset.id)
+        } else {
+          baseObject = await loadObjectFromFile(file)
+        }
+      }
+
+      if (!baseObject) {
+        throw new Error('无法加载模型资源')
+      }
+
+      const canUseInstancing = Boolean(modelGroup?.meshes.length)
+      const runtimeClone = canUseInstancing ? null : baseObject.clone(true)
+      const nodeType = canUseInstancing ? 'Group' : resolveSceneNodeTypeFromObject(baseObject)
+
+      let runtimeObject: Object3D | null = null
+      if (canUseInstancing && modelGroup) {
+        runtimeObject = createInstancedRuntimeProxy(node, modelGroup)
+      }
+      runtimeObject = runtimeObject ?? runtimeClone
+
+      if (!runtimeObject) {
+        throw new Error('模型资源无法应用到节点')
+      }
+
+      runtimeObject.name = asset.name ?? runtimeObject.name
+      prepareRuntimeObjectForNode(runtimeObject)
+
+      this.captureHistorySnapshot()
+      node.name = asset.name
+      node.nodeType = nodeType
+      node.sourceAssetId = asset.id
+      node.dynamicMesh = undefined
+      delete node.isPlaceholder
+      delete node.downloadStatus
+      delete node.downloadProgress
+      delete node.downloadError
+      delete node.importMetadata
+
+      this.nodes = [...this.nodes]
+
+      unregisterRuntimeObject(node.id)
+
+      tagObjectWithNodeId(runtimeObject, node.id)
+      registerRuntimeObject(node.id, runtimeObject)
+      componentManager.attachRuntime(node, runtimeObject)
+      componentManager.syncNode(node)
+
+      assetCache.touch(asset.id)
+      commitSceneSnapshot(this)
+      return true
+    },
+
     addLightNode(type: LightNodeType, options: { position?: THREE.Vector3; name?: string } = {}) {
       const preset = getLightPreset(type)
       const node = createLightNode({

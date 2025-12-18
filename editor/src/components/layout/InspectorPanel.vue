@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia'
 import MaterialPanel from '@/components/inspector/MaterialPanel.vue'
 import LightPanel from '@/components/inspector/LightPanel.vue'
 import TransformPanel from '@/components/inspector/TransformPanel.vue'
+import AssetModelPanel from '@/components/inspector/AssetModelPanel.vue'
 import WallPanel from '@/components/inspector/WallPanel.vue'
 import GuideboardPanel from '@/components/inspector/GuideboardPanel.vue'
 import ViewPointPanel from '@/components/inspector/ViewPointPanel.vue'
@@ -99,6 +100,15 @@ const showTransformPanel = computed(() => {
   selectedNode.value?.id !== GROUND_NODE_ID && 
   selectedNode.value?.id !== MULTIUSER_NODE_ID &&
   selectedNode.value?.id !== ENVIRONMENT_NODE_ID;
+})
+
+const showAssetModelPanel = computed(() => {
+  const assetId = selectedNode.value?.sourceAssetId
+  if (!assetId) {
+    return false
+  }
+  const asset = sceneStore.getAsset(assetId)
+  return Boolean(asset && (asset.type === 'model' || asset.type === 'mesh'))
 })
 
 const showAddComponentButton = computed(() => {
@@ -502,6 +512,7 @@ watch(
             class="inspector-panels"
           >
           <TransformPanel v-if="showTransformPanel"/>
+          <AssetModelPanel v-if="showAssetModelPanel" />
           <LightPanel v-if="isLightNode"/>
           <MaterialPanel
             v-else-if="showMaterialPanel"
