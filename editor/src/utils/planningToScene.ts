@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { GroundDynamicMesh, SceneNode } from '@harmony/schema'
 import {
   ensureTerrainScatterStore,
+  getTerrainScatterStore,
   loadTerrainScatterSnapshot,
   removeTerrainScatterLayer,
   replaceTerrainScatterInstances,
@@ -13,6 +14,7 @@ import {
 } from '@harmony/schema/terrain-scatter'
 import { sampleGroundHeight, sampleGroundNormal } from '@schema/groundMesh'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
+import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
 import { generateUuid } from '@/utils/uuid'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 
@@ -335,26 +337,53 @@ function polylineToStripPolygon(points: PlanningPoint[], width: number): Plannin
 }
 
 function ensureScatterStore(groundNodeId: string, snapshot: any | null | undefined): TerrainScatterStore {
-  const store = ensureTerrainScatterStore(groundNodeId)
+  let store = getTerrainScatterStore(groundNodeId) ?? ensureTerrainScatterStore(groundNodeId)
   if (snapshot && typeof snapshot === 'object') {
-    try {
-      loadTerrainScatterSnapshot(groundNodeId, snapshot)
-    } catch (_error) {
-      // ignore invalid snapshot
+    const snapshotUpdatedAt = Number((snapshot as any)?.metadata?.updatedAt)
+    const storeUpdatedAt = Number((store as any)?.metadata?.updatedAt)
+    const hasSnapshotUpdatedAt = Number.isFinite(snapshotUpdatedAt)
+    const hasStoreUpdatedAt = Number.isFinite(storeUpdatedAt)
+    const shouldHydrate = hasSnapshotUpdatedAt
+      ? (!hasStoreUpdatedAt || snapshotUpdatedAt !== storeUpdatedAt)
+      : true
+
+    if (shouldHydrate) {
+      // IMPORTANT: release existing runtime bindings BEFORE rehydrating the store.
+      // Otherwise we'd overwrite in-memory instances (with binding info) and leak instanced slots.
+      try {
+        for (const layer of Array.from(store.layers.values())) {
+          for (const instance of layer.instances ?? []) {
+            releaseScatterInstance(instance)
+          }
+        }
+      } catch {
+        // ignore
+      }
+
+      try {
+        store = loadTerrainScatterSnapshot(groundNodeId, snapshot)
+      } catch (_error) {
+        // ignore invalid snapshot
+        store = ensureTerrainScatterStore(groundNodeId)
+      }
     }
   }
   return store
 }
 
 function removePlanningScatterLayers(store: TerrainScatterStore) {
-  const idsToRemove: string[] = []
+  const layersToRemove: string[] = []
   store.layers.forEach((layer) => {
     const payload = layer.params?.payload as Record<string, unknown> | null | undefined
     if (payload?.source === PLANNING_CONVERSION_SOURCE) {
-      idsToRemove.push(layer.id)
+      layersToRemove.push(layer.id)
+      // Release runtime bindings immediately so instancing cache count updates now.
+      for (const instance of layer.instances ?? []) {
+        releaseScatterInstance(instance)
+      }
     }
   })
-  idsToRemove.forEach((id) => removeTerrainScatterLayer(store, id))
+  layersToRemove.forEach((id) => removeTerrainScatterLayer(store, id))
 }
 
 function buildRandom(seed: number) {
@@ -700,6 +729,12 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           if (targetCount <= 0) {
             // Still remove previously generated instances for this feature to stay idempotent.
             const existingRaw = Array.isArray(layer.instances) ? (layer.instances as TerrainScatterInstance[]) : []
+            const removed = existingRaw.filter((instance) => {
+              const meta = instance.metadata as Record<string, unknown> | null | undefined
+              if (!meta) return false
+              return meta.source === PLANNING_CONVERSION_SOURCE && meta.featureId === poly.id
+            })
+            removed.forEach((instance) => releaseScatterInstance(instance))
             const existing = existingRaw.filter((instance) => {
               const meta = instance.metadata as Record<string, unknown> | null | undefined
               if (!meta) return true
@@ -734,6 +769,12 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
             const existingRaw = Array.isArray(layer.instances) ? (layer.instances as TerrainScatterInstance[]) : []
             // Keep conversion idempotent per feature even when overwriteExisting=false.
+            const removed = existingRaw.filter((instance) => {
+              const meta = instance.metadata as Record<string, unknown> | null | undefined
+              if (!meta) return false
+              return meta.source === PLANNING_CONVERSION_SOURCE && meta.featureId === poly.id
+            })
+            removed.forEach((instance) => releaseScatterInstance(instance))
             const existing = existingRaw.filter((instance) => {
               const meta = instance.metadata as Record<string, unknown> | null | undefined
               if (!meta) return true
