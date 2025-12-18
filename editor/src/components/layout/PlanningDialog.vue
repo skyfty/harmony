@@ -286,6 +286,17 @@ function polygonCentroid(points: PlanningPoint[]) {
   return { x: cxTimes6 * factor, y: cyTimes6 * factor }
 }
 
+function polygonArea(points: PlanningPoint[]) {
+  if (points.length < 3) return 0
+  let areaTimes2 = 0
+  for (let i = 0; i < points.length; i += 1) {
+    const a = points[i]!
+    const b = points[(i + 1) % points.length]!
+    areaTimes2 += a.x * b.y - b.x * a.y
+  }
+  return Math.abs(areaTimes2) * 0.5
+}
+
 function polylineLength(points: PlanningPoint[]) {
   if (points.length < 2) return 0
   let total = 0
@@ -410,19 +421,22 @@ const polygonScatterDensityDots = computed<Record<string, PlanningPoint[]>>(() =
     if (!bounds) {
       continue
     }
-    const boundsArea = bounds.width * bounds.height
-    if (!Number.isFinite(boundsArea) || boundsArea < 60) {
+    const area = polygonArea(poly.points)
+    if (!Number.isFinite(area) || area < 60) {
       continue
     }
-    // Keep preview cheap: dots scale with polygon size + user density.
-    const maxDotsBySize = clampNumber(Math.floor(boundsArea / 800), 6, 60)
-    const targetDots = Math.round((maxDotsBySize * densityPercent) / 100)
+
+    // Keep preview cheap but responsive:
+    // - scale with *polygon* area (not bounding box) so thin/concave shapes still get enough points
+    // - allow noticeably denser preview at 100%
+    const baseDotsAt100 = clampNumber(Math.floor(area / 800), 12, 800)
+    const targetDots = Math.round((baseDotsAt100 * densityPercent) / 100)
     if (targetDots <= 0) {
       continue
     }
     const random = buildRandom(hashSeedFromString(`${poly.id}:${densityPercent}`))
     const dots: PlanningPoint[] = []
-    const maxAttempts = Math.min(4000, targetDots * 60)
+    const maxAttempts = Math.min(60000, targetDots * 80)
     for (let attempt = 0; attempt < maxAttempts && dots.length < targetDots; attempt += 1) {
       const candidate = {
         x: bounds.minX + bounds.width * random(),
@@ -1306,17 +1320,34 @@ function getPolylinePath(points: PlanningPoint[]) {
 }
 
 function isPointInPolygon(point: PlanningPoint, polygonPoints: PlanningPoint[]) {
-  let inside = false
-  for (let i = 0, j = polygonPoints.length - 1; i < polygonPoints.length; j = i++) {
-    const pi = polygonPoints[i]
-    const pj = polygonPoints[j]
-    const intersects = pj && pi && ((pi.y > point.y) !== (pj.y > point.y))
-      && point.x < ((pj.x - pi.x) * (point.y - pi.y)) / ((pj.y - pi.y) || 1e-9) + pi.x
-    if (intersects) {
-      inside = !inside
+  // Use nonzero winding rule to match SVG's default fill-rule.
+  // This avoids preview dots showing up in visually "unfilled" regions for self-intersecting/mixed-winding polygons.
+  let windingNumber = 0
+  const n = polygonPoints.length
+  if (n < 3) {
+    return false
+  }
+
+  for (let i = 0; i < n; i += 1) {
+    const a = polygonPoints[i]
+    const b = polygonPoints[(i + 1) % n]
+    if (!a || !b) {
+      continue
+    }
+
+    const isLeft = (b.x - a.x) * (point.y - a.y) - (point.x - a.x) * (b.y - a.y)
+    if (a.y <= point.y) {
+      if (b.y > point.y && isLeft > 0) {
+        windingNumber += 1
+      }
+    } else {
+      if (b.y <= point.y && isLeft < 0) {
+        windingNumber -= 1
+      }
     }
   }
-  return inside
+
+  return windingNumber !== 0
 }
 
 function distancePointToSegmentSquared(point: PlanningPoint, start: PlanningPoint, end: PlanningPoint) {
@@ -3192,7 +3223,7 @@ onBeforeUnmount(() => {
                         :key="`${poly.id}-density-dot-${idx}`"
                         :cx="p.x"
                         :cy="p.y"
-                        r="0.6"
+                        r="0.25"
                         :fill="getLayerColor(poly.layerId, 0.18)"
                       />
                     </g>

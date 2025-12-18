@@ -46,6 +46,7 @@ export type ConvertPlanningToSceneOptions = {
     moveNode: (payload: { nodeId: string; targetId: string | null; position: 'before' | 'after' | 'inside' }) => boolean
     removeSceneNodes: (ids: string[]) => void
     updateNodeDynamicMesh: (nodeId: string, dynamicMesh: any) => void
+    refreshRuntimeState: (options?: { showOverlay?: boolean; refreshViewport?: boolean; skipComponentSync?: boolean }) => Promise<void>
   }
   planningData: PlanningSceneData
   overwriteExisting: boolean
@@ -763,6 +764,16 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       terrainScatter: snapshot,
     }
     sceneStore.updateNodeDynamicMesh(finalGround.id, next)
+  }
+
+  // Ensure runtime objects/components are synced so the converted content shows up immediately.
+  // Conversion creates/moves many nodes; some runtime consumers require an explicit refresh.
+  emitProgress(options, 'Refreshing scene…', 98)
+  const refreshRuntimeState = (sceneStore as unknown as {
+    refreshRuntimeState?: (options?: { showOverlay?: boolean; refreshViewport?: boolean; skipComponentSync?: boolean }) => Promise<void>
+  }).refreshRuntimeState
+  if (refreshRuntimeState) {
+    await refreshRuntimeState({ showOverlay: false, refreshViewport: false })
   }
 
   emitProgress(options, 'Done', 100)
