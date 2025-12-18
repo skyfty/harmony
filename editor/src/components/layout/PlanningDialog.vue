@@ -196,6 +196,174 @@ const visibleLayerIds = computed(() => new Set(layers.value.filter((layer) => la
 const visiblePolygons = computed(() => polygons.value.filter((poly) => visibleLayerIds.value.has(poly.layerId)))
 const visiblePolylines = computed(() => polylines.value.filter((line) => visibleLayerIds.value.has(line.layerId)))
 
+type ScatterThumbPlacement = { x: number; y: number; size: number }
+
+function clampNumber(value: number, min: number, max: number) {
+  if (!Number.isFinite(value)) return min
+  return Math.min(max, Math.max(min, value))
+}
+
+function getPointsBounds(points: PlanningPoint[]) {
+  if (!points.length) {
+    return null
+  }
+  let minX = Number.POSITIVE_INFINITY
+  let minY = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
+  for (const p of points) {
+    if (!p) continue
+    minX = Math.min(minX, p.x)
+    minY = Math.min(minY, p.y)
+    maxX = Math.max(maxX, p.x)
+    maxY = Math.max(maxY, p.y)
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+    return null
+  }
+  return {
+    minX,
+    minY,
+    maxX,
+    maxY,
+    width: maxX - minX,
+    height: maxY - minY,
+  }
+}
+
+function polygonCentroid(points: PlanningPoint[]) {
+  if (points.length < 3) {
+    const bounds = getPointsBounds(points)
+    if (!bounds) return null
+    return { x: bounds.minX + bounds.width * 0.5, y: bounds.minY + bounds.height * 0.5 }
+  }
+  // Area-weighted centroid (shoelace)
+  let areaTimes2 = 0
+  let cxTimes6 = 0
+  let cyTimes6 = 0
+  for (let i = 0; i < points.length; i += 1) {
+    const a = points[i]!
+    const b = points[(i + 1) % points.length]!
+    const cross = a.x * b.y - b.x * a.y
+    areaTimes2 += cross
+    cxTimes6 += (a.x + b.x) * cross
+    cyTimes6 += (a.y + b.y) * cross
+  }
+  if (Math.abs(areaTimes2) < 1e-9) {
+    const bounds = getPointsBounds(points)
+    if (!bounds) return null
+    return { x: bounds.minX + bounds.width * 0.5, y: bounds.minY + bounds.height * 0.5 }
+  }
+  const factor = 1 / (3 * areaTimes2)
+  return { x: cxTimes6 * factor, y: cyTimes6 * factor }
+}
+
+function polylineLength(points: PlanningPoint[]) {
+  if (points.length < 2) return 0
+  let total = 0
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const a = points[i]!
+    const b = points[i + 1]!
+    total += Math.hypot(b.x - a.x, b.y - a.y)
+  }
+  return total
+}
+
+function polylinePointAtDistance(points: PlanningPoint[], distance: number): PlanningPoint | null {
+  if (points.length < 2) return null
+  const total = polylineLength(points)
+  if (total <= 1e-9) return null
+  const target = clampNumber(distance, 0, total)
+  let traveled = 0
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const a = points[i]!
+    const b = points[i + 1]!
+    const seg = Math.hypot(b.x - a.x, b.y - a.y)
+    if (traveled + seg >= target) {
+      const t = seg > 1e-9 ? (target - traveled) / seg : 0
+      return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }
+    }
+    traveled += seg
+  }
+  return points[points.length - 1] ?? null
+}
+
+function computePolygonScatterThumbPlacement(poly: PlanningPolygon): ScatterThumbPlacement | null {
+  const thumb = poly.scatter?.thumbnail
+  if (!thumb) return null
+  const bounds = getPointsBounds(poly.points)
+  if (!bounds) return null
+  const minSide = Math.min(bounds.width, bounds.height)
+
+  // Too small -> hide to avoid visual clutter.
+  if (minSide < 8) return null
+
+  const centroid = polygonCentroid(poly.points)
+  if (!centroid) return null
+
+  const size = clampNumber(minSide * 0.38, 7, 26)
+  const padding = Math.max(0.5, size * 0.12)
+
+  if (bounds.width < size + padding * 2 || bounds.height < size + padding * 2) {
+    return null
+  }
+
+  const x = clampNumber(centroid.x - size * 0.5, bounds.minX + padding, bounds.maxX - size - padding)
+  const y = clampNumber(centroid.y - size * 0.5, bounds.minY + padding, bounds.maxY - size - padding)
+  return { x, y, size }
+}
+
+function computePolylineScatterThumbPlacement(line: PlanningPolyline): ScatterThumbPlacement | null {
+  const thumb = line.scatter?.thumbnail
+  if (!thumb) return null
+  if (line.points.length < 2) return null
+
+  const total = polylineLength(line.points)
+  // Too short -> hide.
+  if (total < 12) return null
+
+  const mid = polylinePointAtDistance(line.points, total * 0.5)
+  if (!mid) return null
+
+  const bounds = getPointsBounds(line.points)
+  const fallbackSize = clampNumber(total * 0.06, 7, 20)
+  const size = bounds ? clampNumber(Math.min(fallbackSize, Math.max(bounds.width, bounds.height) * 0.35), 7, 20) : fallbackSize
+
+  // Keep inside the canvas (lines are 1D so we clamp to stage bounds rather than the polyline bounds).
+  const canvas = effectiveCanvasSize.value
+  const padding = Math.max(0.5, size * 0.12)
+  if (canvas.width < size + padding * 2 || canvas.height < size + padding * 2) {
+    return null
+  }
+  const x = clampNumber(mid.x - size * 0.5, padding, canvas.width - size - padding)
+  const y = clampNumber(mid.y - size * 0.5, padding, canvas.height - size - padding)
+  return { x, y, size }
+}
+
+const polygonScatterThumbPlacements = computed<Record<string, ScatterThumbPlacement>>(() => {
+  const result: Record<string, ScatterThumbPlacement> = {}
+  for (const poly of visiblePolygons.value) {
+    if (!poly.scatter?.thumbnail) continue
+    const placement = computePolygonScatterThumbPlacement(poly)
+    if (placement) {
+      result[poly.id] = placement
+    }
+  }
+  return result
+})
+
+const polylineScatterThumbPlacements = computed<Record<string, ScatterThumbPlacement>>(() => {
+  const result: Record<string, ScatterThumbPlacement> = {}
+  for (const line of visiblePolylines.value) {
+    if (!line.scatter?.thumbnail) continue
+    const placement = computePolylineScatterThumbPlacement(line)
+    if (placement) {
+      result[line.id] = placement
+    }
+  }
+  return result
+})
+
 const selectedPolygon = computed(() => {
   const feature = selectedFeature.value
   if (!feature || feature.type !== 'polygon') {
@@ -2886,20 +3054,31 @@ onBeforeUnmount(() => {
                   :viewBox="`0 0 ${effectiveCanvasSize.width} ${effectiveCanvasSize.height}`"
                 >
                   <!-- 已绘制多边形区域 -->
-                  <path
-                    v-for="poly in visiblePolygons"
-                    :key="poly.id"
-                    class="planning-polygon"
-                    :class="{
-                      selected: selectedFeature?.type === 'polygon' && selectedFeature.id === poly.id,
-                      'inactive-layer-feature': !isActiveLayer(poly.layerId),
-                    }"
-                    :d="getPolygonPath(poly.points)"
-                    :fill="getLayerColor(poly.layerId, 0.22)"
-                    :stroke="getLayerColor(poly.layerId, 0.95)"
-                    stroke-width="0.1"
-                    @pointerdown="handlePolygonPointerDown(poly.id, $event as PointerEvent)"
-                  />
+                  <g v-for="poly in visiblePolygons" :key="poly.id">
+                    <path
+                      class="planning-polygon"
+                      :class="{
+                        selected: selectedFeature?.type === 'polygon' && selectedFeature.id === poly.id,
+                        'inactive-layer-feature': !isActiveLayer(poly.layerId),
+                      }"
+                      :d="getPolygonPath(poly.points)"
+                      :fill="getLayerColor(poly.layerId, 0.22)"
+                      :stroke="getLayerColor(poly.layerId, 0.95)"
+                      stroke-width="0.1"
+                      @pointerdown="handlePolygonPointerDown(poly.id, $event as PointerEvent)"
+                    />
+
+                    <image
+                      v-if="poly.scatter?.thumbnail && polygonScatterThumbPlacements[poly.id]"
+                      class="scatter-thumb"
+                      :href="poly.scatter.thumbnail"
+                      :x="polygonScatterThumbPlacements[poly.id]!.x"
+                      :y="polygonScatterThumbPlacements[poly.id]!.y"
+                      :width="polygonScatterThumbPlacements[poly.id]!.size"
+                      :height="polygonScatterThumbPlacements[poly.id]!.size"
+                      preserveAspectRatio="xMidYMid meet"
+                    />
+                  </g>
 
                   
                   <!-- 已绘制线段（以 polyline 表示） -->
@@ -2933,6 +3112,17 @@ onBeforeUnmount(() => {
                       stroke-width="14"
                       stroke-linecap="round"
                       @pointerdown="handleLineSegmentPointerDown(line.id, segIndex, $event as PointerEvent)"
+                    />
+
+                    <image
+                      v-if="line.scatter?.thumbnail && polylineScatterThumbPlacements[line.id]"
+                      class="scatter-thumb"
+                      :href="line.scatter.thumbnail"
+                      :x="polylineScatterThumbPlacements[line.id]!.x"
+                      :y="polylineScatterThumbPlacements[line.id]!.y"
+                      :width="polylineScatterThumbPlacements[line.id]!.size"
+                      :height="polylineScatterThumbPlacements[line.id]!.size"
+                      preserveAspectRatio="xMidYMid meet"
                     />
 
                     <!-- 端点命中区：允许直接点击端点继续绘制/拖动端点 -->
@@ -3623,6 +3813,11 @@ onBeforeUnmount(() => {
   object-fit: contain;
   user-select: none;
   pointer-events: none;
+}
+
+.scatter-thumb {
+  pointer-events: none;
+  opacity: 0.95;
 }
 
 .scatter-overlay {
