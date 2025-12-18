@@ -237,6 +237,24 @@ watch(selectedNoiseMode, (mode) => {
               <v-icon :icon="tab.icon" size="16" />
             </v-tab>
           </v-tabs>
+          <div
+            v-if="groundPanelTabModel !== 'terrain'"
+            class="scatter-spacing-panel"
+          >
+            <div class="scatter-spacing-labels">
+              <span>Scatter Spacing</span>
+              <span>{{ scatterSpacingDisplay }} m</span>
+            </div>
+            <v-slider
+              v-model="scatterSpacingModel"
+              :min="0.1"
+              :max="2"
+              :step="0.05"
+              density="compact"
+              track-color="rgba(77, 208, 225, 0.4)"
+              color="primary"
+            />
+          </div>
           <v-window
             v-model="groundPanelTabModel"
             class="ground-tab-window"
@@ -268,25 +286,6 @@ watch(selectedNoiseMode, (mode) => {
               />
             </v-window-item>
           </v-window>
-          <div
-            v-if="groundPanelTabModel !== 'terrain'"
-            class="scatter-spacing-panel"
-          >
-            <div class="scatter-spacing-labels">
-              <span>Scatter Spacing</span>
-              <span>{{ scatterSpacingDisplay }} m</span>
-            </div>
-            <v-slider
-              v-model="scatterSpacingModel"
-              :min="0.1"
-              :max="2"
-              :step="0.05"
-              density="compact"
-              thumb-label="always"
-              track-color="rgba(77, 208, 225, 0.4)"
-              color="primary"
-            />
-          </div>
         </div>
       </div>
     </v-expansion-panel-text>
