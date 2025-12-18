@@ -2527,13 +2527,15 @@ function closeDialog() {
   dialogOpen.value = false
 }
 
-const toolbarButtons: Array<{ tool: PlanningTool; icon: string }> = [
-  { tool: 'select', icon: 'mdi-cursor-default-outline' },
-  { tool: 'rectangle', icon: 'mdi-rectangle-outline' },
-  { tool: 'lasso', icon: 'mdi-shape-polygon-plus' },
-  { tool: 'line', icon: 'mdi-vector-line' },
-  { tool: 'align-marker', icon: 'mdi-crosshairs-gps' },
+const toolbarButtons: Array<{ tool: PlanningTool; icon: string; tooltip: string }> = [
+  { tool: 'select', icon: 'mdi-cursor-default-outline', tooltip: '选择工具' },
+  { tool: 'rectangle', icon: 'mdi-rectangle-outline', tooltip: '绘制矩形区域' },
+  { tool: 'lasso', icon: 'mdi-shape-polygon-plus', tooltip: '自由绘制区域' },
+  { tool: 'line', icon: 'mdi-vector-line', tooltip: '绘制线段' },
+  { tool: 'align-marker', icon: 'mdi-crosshairs-gps', tooltip: '对齐参考点' },
 ]
+
+const deleteButtonTooltip = '删除选中的对象'
 
 const resizeDirections = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const
 
@@ -2772,29 +2774,42 @@ onBeforeUnmount(() => {
         <main class="editor-panel">
           <div class="toolbar">
             <div class="tool-buttons">
-              <v-btn
+              <v-tooltip
                 v-for="button in toolbarButtons"
                 :key="button.tool"
-                :color="activeToolbarTool === button.tool ? 'primary' : undefined"
-                variant="tonal"
-                density="comfortable"
-                class="tool-button"
-                :disabled="button.tool === 'line' && !canUseLineTool"
-                @click="handleToolSelect(button.tool)"
+                :text="button.tooltip"
+                location="bottom"
               >
-                <v-icon>{{ button.icon }}</v-icon>
-              </v-btn>
+                <template #activator="{ props }">
+                  <v-btn
+                    v-bind="props"
+                    :color="activeToolbarTool === button.tool ? 'primary' : undefined"
+                    variant="tonal"
+                    density="comfortable"
+                    class="tool-button"
+                    :disabled="button.tool === 'line' && !canUseLineTool"
+                    @click="handleToolSelect(button.tool)"
+                  >
+                    <v-icon>{{ button.icon }}</v-icon>
+                  </v-btn>
+                </template>
+              </v-tooltip>
 
-              <v-btn
-                :color="canDeleteSelection ? 'error' : undefined"
-                variant="tonal"
-                density="comfortable"
-                class="tool-button"
-                :disabled="!canDeleteSelection"
-                @click="handleDeleteButtonClick"
-              >
-                <v-icon>mdi-delete-outline</v-icon>
-              </v-btn>
+              <v-tooltip :text="deleteButtonTooltip" location="bottom">
+                <template #activator="{ props }">
+                  <v-btn
+                    v-bind="props"
+                    :color="canDeleteSelection ? 'error' : undefined"
+                    variant="tonal"
+                    density="comfortable"
+                    class="tool-button"
+                    :disabled="!canDeleteSelection"
+                    @click="handleDeleteButtonClick"
+                  >
+                    <v-icon>mdi-delete-outline</v-icon>
+                  </v-btn>
+                </template>
+              </v-tooltip>
 
             </div>
           </div>
