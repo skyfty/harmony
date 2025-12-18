@@ -4,6 +4,10 @@ import type { CSSProperties } from 'vue'
 import { storeToRefs } from 'pinia'
 import { generateUuid } from '@/utils/uuid'
 import { useSceneStore } from '@/stores/sceneStore'
+import GroundAssetPainter from '@/components/inspector/GroundAssetPainter.vue'
+import { terrainScatterPresets } from '@/resources/projectProviders/asset'
+import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
+import type { ProjectAsset } from '@/types/project-asset'
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ (event: 'update:modelValue', value: boolean): void }>()
@@ -24,6 +28,7 @@ interface PlanningLayer {
   kind: LayerKind
   visible: boolean
   color: string
+  locked: boolean
 }
 
 interface PlanningPoint {
@@ -31,11 +36,20 @@ interface PlanningPoint {
   y: number
 }
 
+interface PlanningScatterAssignment {
+  providerAssetId: string
+  assetId: string
+  category: TerrainScatterCategory
+  name: string
+  thumbnail: string | null
+}
+
 interface PlanningPolygon {
   id: string
   name: string
   layerId: string
   points: PlanningPoint[]
+  scatter?: PlanningScatterAssignment
 }
 
 interface PlanningPolyline {
@@ -43,7 +57,12 @@ interface PlanningPolyline {
   name: string
   layerId: string
   points: PlanningPoint[]
+  scatter?: PlanningScatterAssignment
 }
+
+type ScatterTarget =
+  | { type: 'polygon'; shape: PlanningPolygon; layer: PlanningLayer | undefined }
+  | { type: 'polyline'; shape: PlanningPolyline; layer: PlanningLayer | undefined }
 
 interface PlanningImage {
   id: string
@@ -110,11 +129,11 @@ interface LineDraft {
 }
 
 const layerPresets: PlanningLayer[] = [
-  { id: 'terrain-layer', name: '地形层', kind: 'terrain', visible: true, color: '#2E7D32' },
-  { id: 'building-layer', name: '建筑物层', kind: 'building', visible: true, color: '#C62828' },
-  { id: 'road-layer', name: '道路层', kind: 'road', visible: true, color: '#F9A825' },
-  { id: 'green-layer', name: '绿化层', kind: 'green', visible: true, color: '#00897B' },
-  { id: 'wall-layer', name: '墙体层', kind: 'wall', visible: true, color: '#5E35B1' },
+  { id: 'terrain-layer', name: '地形层', kind: 'terrain', visible: true, color: '#2E7D32', locked: false },
+  { id: 'building-layer', name: '建筑物层', kind: 'building', visible: true, color: '#C62828', locked: false },
+  { id: 'road-layer', name: '道路层', kind: 'road', visible: true, color: '#F9A825', locked: false },
+  { id: 'green-layer', name: '绿化层', kind: 'green', visible: true, color: '#00897B', locked: false },
+  { id: 'wall-layer', name: '墙体层', kind: 'wall', visible: true, color: '#5E35B1', locked: false },
 ]
 
 const imageAccentPalette = layerPresets.map((layer) => layer.color)
@@ -212,7 +231,7 @@ function buildPlanningSnapshot() {
   return {
     version: 1 as const,
     activeLayerId: activeLayerId.value,
-    layers: layers.value.map((layer) => ({ id: layer.id, visible: layer.visible })),
+    layers: layers.value.map((layer) => ({ id: layer.id, visible: layer.visible, locked: layer.locked })),
     viewTransform: {
       scale: viewTransform.scale,
       offset: { x: viewTransform.offset.x, y: viewTransform.offset.y },
@@ -222,12 +241,30 @@ function buildPlanningSnapshot() {
       name: poly.name,
       layerId: poly.layerId,
       points: poly.points.map((p) => ({ x: p.x, y: p.y })),
+      scatter: poly.scatter
+        ? {
+          providerAssetId: poly.scatter.providerAssetId,
+          assetId: poly.scatter.assetId,
+          category: poly.scatter.category,
+          name: poly.scatter.name,
+          thumbnail: poly.scatter.thumbnail,
+        }
+        : undefined,
     })),
     polylines: polylines.value.map((line) => ({
       id: line.id,
       name: line.name,
       layerId: line.layerId,
       points: line.points.map((p) => ({ x: p.x, y: p.y })),
+      scatter: line.scatter
+        ? {
+          providerAssetId: line.scatter.providerAssetId,
+          assetId: line.scatter.assetId,
+          category: line.scatter.category,
+          name: line.scatter.name,
+          thumbnail: line.scatter.thumbnail,
+        }
+        : undefined,
     })),
     images: planningImages.value.map((img) => ({
       id: img.id,
@@ -307,6 +344,28 @@ function resetPlanningState() {
   viewTransform.offset.y = 0
 }
 
+function normalizeScatterAssignment(raw: unknown): PlanningScatterAssignment | undefined {
+  if (!raw || typeof raw !== 'object') {
+    return undefined
+  }
+  const payload = raw as Record<string, unknown>
+  const providerAssetId = typeof payload.providerAssetId === 'string' ? payload.providerAssetId : null
+  const assetId = typeof payload.assetId === 'string' ? payload.assetId : null
+  const category = typeof payload.category === 'string' ? (payload.category as TerrainScatterCategory) : null
+  if (!providerAssetId || !assetId || !category || !(category in terrainScatterPresets)) {
+    return undefined
+  }
+  const name = typeof payload.name === 'string' ? payload.name : 'Scatter 预设'
+  const thumb = typeof payload.thumbnail === 'string' ? payload.thumbnail : null
+  return {
+    providerAssetId,
+    assetId,
+    category,
+    name,
+    thumbnail: thumb,
+  }
+}
+
 function loadPlanningFromScene() {
   const data = sceneStore.planningData
   resetPlanningState()
@@ -319,11 +378,16 @@ function loadPlanningFromScene() {
     activeLayerId.value = data.activeLayerId
   }
   if (Array.isArray(data.layers)) {
-    const visibleMap = new Map(data.layers.map((item) => [item.id, item.visible]))
+    const layerMap = new Map(data.layers.map((item) => [item.id, item]))
     layers.value.forEach((layer) => {
-      const nextVisible = visibleMap.get(layer.id)
-      if (typeof nextVisible === 'boolean') {
-        layer.visible = nextVisible
+      const raw = layerMap.get(layer.id) as { visible?: boolean; locked?: boolean } | undefined
+      if (raw) {
+        if (typeof raw.visible === 'boolean') {
+          layer.visible = raw.visible
+        }
+        if (typeof raw.locked === 'boolean') {
+          layer.locked = raw.locked
+        }
       }
     })
   }
@@ -348,6 +412,7 @@ function loadPlanningFromScene() {
       name: poly.name,
       layerId: poly.layerId,
       points: poly.points.map((p) => ({ x: p.x, y: p.y })),
+      scatter: normalizeScatterAssignment((poly as Record<string, unknown>).scatter),
     }))
     : []
 
@@ -357,6 +422,7 @@ function loadPlanningFromScene() {
       name: line.name,
       layerId: line.layerId,
       points: line.points.map((p) => ({ x: p.x, y: p.y })),
+      scatter: normalizeScatterAssignment((line as Record<string, unknown>).scatter),
     }))
     : []
 
@@ -511,6 +577,45 @@ const layerFeatureTotals = computed(() =>
   }),
 )
 
+const scatterTabs = computed(() =>
+  (Object.keys(terrainScatterPresets) as TerrainScatterCategory[]).map((key) => ({
+    key,
+    label: terrainScatterPresets[key].label,
+    icon: terrainScatterPresets[key].icon,
+  })),
+)
+
+const propertyScatterTab = ref<TerrainScatterCategory>('flora')
+
+const selectedScatterTarget = computed<ScatterTarget | null>(() => {
+  const polygon = selectedPolygon.value
+  if (polygon) {
+    const layer = layers.value.find((item) => item.id === polygon.layerId)
+    return { type: 'polygon', shape: polygon, layer }
+  }
+  const polyline = selectedPolyline.value
+  if (polyline) {
+    const layer = layers.value.find((item) => item.id === polyline.layerId)
+    return { type: 'polyline', shape: polyline, layer }
+  }
+  return null
+})
+
+const selectedScatterAssignment = computed(() => selectedScatterTarget.value?.shape.scatter ?? null)
+
+const propertyPanelDisabledReason = computed(() => {
+  const target = selectedScatterTarget.value
+  if (!target) {
+    return '未选中任何图形'
+  }
+  if (target.layer?.locked) {
+    return '所属图层已锁定'
+  }
+  return null
+})
+
+const propertyPanelDisabled = computed(() => propertyPanelDisabledReason.value !== null)
+
 const editorBackgroundStyle = computed(() => {
   return {
     backgroundImage:
@@ -561,6 +666,16 @@ const canvasBoundaryStyle = computed<CSSProperties>(() => {
     pointerEvents: 'none',
   }
 })
+
+watch(
+  selectedScatterAssignment,
+  (assignment) => {
+    if (assignment && assignment.category in terrainScatterPresets) {
+      propertyScatterTab.value = assignment.category
+    }
+  },
+  { immediate: true },
+)
 
 watch(dialogOpen, (open) => {
   if (open) {
@@ -836,6 +951,71 @@ function getPolylinePath(points: PlanningPoint[]) {
   }
   const segments = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`)
   return segments.join(' ')
+}
+
+function getPointsBoundingCenter(points: PlanningPoint[]): PlanningPoint {
+  if (!points.length) {
+    return { x: 0, y: 0 }
+  }
+  let minX = points[0]!.x
+  let maxX = points[0]!.x
+  let minY = points[0]!.y
+  let maxY = points[0]!.y
+  for (let i = 1; i < points.length; i += 1) {
+    const point = points[i]!
+    minX = Math.min(minX, point.x)
+    maxX = Math.max(maxX, point.x)
+    minY = Math.min(minY, point.y)
+    maxY = Math.max(maxY, point.y)
+  }
+  return {
+    x: (minX + maxX) / 2,
+    y: (minY + maxY) / 2,
+  }
+}
+
+interface ScatterOverlayEntry {
+  id: string
+  position: PlanningPoint
+  thumbnail: string | null
+  name: string
+}
+
+const scatterOverlays = computed<ScatterOverlayEntry[]>(() => {
+  const overlays: ScatterOverlayEntry[] = []
+  const visible = visibleLayerIds.value
+  polygons.value.forEach((poly) => {
+    if (!poly.scatter || !visible.has(poly.layerId)) {
+      return
+    }
+    overlays.push({
+      id: `polygon-${poly.id}`,
+      position: getPointsBoundingCenter(poly.points),
+      thumbnail: poly.scatter.thumbnail,
+      name: poly.scatter.name,
+    })
+  })
+  polylines.value.forEach((line) => {
+    if (!line.scatter || !visible.has(line.layerId)) {
+      return
+    }
+    overlays.push({
+      id: `polyline-${line.id}`,
+      position: getPointsBoundingCenter(line.points),
+      thumbnail: line.scatter.thumbnail,
+      name: line.scatter.name,
+    })
+  })
+  return overlays
+})
+
+function getScatterOverlayStyle(entry: ScatterOverlayEntry): CSSProperties {
+  return {
+    left: `${entry.position.x}px`,
+    top: `${entry.position.y}px`,
+    transform: 'translate(-50%, -50%)',
+    zIndex: 12000,
+  }
 }
 
 function isPointInPolygon(point: PlanningPoint, polygonPoints: PlanningPoint[]) {
@@ -1277,12 +1457,56 @@ function handleLayerToggle(layerId: string) {
   }
 }
 
+function handleLayerLockToggle(layerId: string) {
+  const layer = layers.value.find((item) => item.id === layerId)
+  if (!layer) {
+    return
+  }
+  layer.locked = !layer.locked
+  markPlanningDirty()
+}
+
 function handleLayerSelection(layerId: string) {
   activeLayerId.value = layerId
   if (currentTool.value === 'line' && !canUseLineTool.value) {
     currentTool.value = 'select'
   }
   ensureSelectionWithinActiveLayer()
+}
+
+function handleScatterAssetSelect(payload: { asset: ProjectAsset; providerAssetId: string }) {
+  if (propertyPanelDisabled.value) {
+    return
+  }
+  const target = selectedScatterTarget.value
+  if (!target) {
+    return
+  }
+  const category = propertyScatterTab.value
+  if (!(category in terrainScatterPresets)) {
+    return
+  }
+  const thumbnail = payload.asset.thumbnail ?? null
+  target.shape.scatter = {
+    providerAssetId: payload.providerAssetId,
+    assetId: payload.asset.id,
+    category,
+    name: payload.asset.name,
+    thumbnail,
+  }
+  markPlanningDirty()
+}
+
+function clearSelectedScatterAssignment() {
+  if (propertyPanelDisabled.value) {
+    return
+  }
+  const target = selectedScatterTarget.value
+  if (!target || !target.shape.scatter) {
+    return
+  }
+  target.shape.scatter = undefined
+  markPlanningDirty()
 }
 
 function handleEditorPointerDown(event: PointerEvent) {
@@ -2523,6 +2747,15 @@ onBeforeUnmount(() => {
                     icon
                     size="small"
                     variant="text"
+                    :color="layer.locked ? 'primary' : 'grey'"
+                    @click.stop="handleLayerLockToggle(layer.id)"
+                  >
+                    <v-icon>{{ layer.locked ? 'mdi-lock-outline' : 'mdi-lock-open-variant-outline' }}</v-icon>
+                  </v-btn>
+                  <v-btn
+                    icon
+                    size="small"
+                    variant="text"
                     :color="layer.visible ? 'primary' : 'grey'"
                     @click.stop="handleLayerToggle(layer.id)"
                   >
@@ -2720,6 +2953,23 @@ onBeforeUnmount(() => {
                   </g>
                 </svg>
                 <div
+                  v-for="overlay in scatterOverlays"
+                  :key="overlay.id"
+                  class="scatter-overlay"
+                  :style="getScatterOverlayStyle(overlay)"
+                >
+                  <img
+                    v-if="overlay.thumbnail"
+                    class="scatter-overlay__thumbnail"
+                    :src="overlay.thumbnail"
+                    :alt="overlay.name"
+                    draggable="false"
+                  >
+                  <div v-else class="scatter-overlay__placeholder">
+                    <v-icon icon="mdi-image-off-outline" size="18" />
+                  </div>
+                </div>
+                <div
                   v-for="(image, index) in planningImages"
                   :key="image.id"
                   :class="['planning-image', { active: activeImageId === image.id }]"
@@ -2747,6 +2997,71 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </main>
+
+        <aside
+          class="property-panel"
+          :class="{
+            'property-panel--disabled': propertyPanelDisabled,
+          }"
+        >
+          <header class="property-panel__header">
+            <div class="property-panel__title">
+              <h3>图形属性</h3>
+              <span v-if="selectedScatterTarget" class="property-panel__subtitle">
+                {{ selectedScatterTarget.shape.name }} ·
+                {{ getLayerName(selectedScatterTarget.layer ? selectedScatterTarget.layer.id : '') }}
+              </span>
+            </div>
+            <v-btn
+              v-if="!propertyPanelDisabled && selectedScatterTarget && selectedScatterTarget.shape.scatter"
+              icon
+              size="small"
+              variant="text"
+              color="grey"
+              @click="clearSelectedScatterAssignment"
+            >
+              <v-icon size="18">mdi-close-circle-outline</v-icon>
+            </v-btn>
+          </header>
+
+          <div v-if="propertyPanelDisabled" class="property-panel__placeholder">
+            <v-icon icon="mdi-shape-outline" size="28" />
+            <span>{{ propertyPanelDisabledReason }}</span>
+          </div>
+          <template v-else>
+            <v-tabs
+              v-model="propertyScatterTab"
+              density="compact"
+              :transition="false"
+              class="property-panel__tabs"
+            >
+              <v-tab
+                v-for="tab in scatterTabs"
+                :key="tab.key"
+                :value="tab.key"
+                :title="tab.label"
+              >
+                <v-icon :icon="tab.icon" size="16" />
+              </v-tab>
+            </v-tabs>
+
+            <v-window v-model="propertyScatterTab" :transition="false" class="property-panel__window">
+              <v-window-item
+                v-for="tab in scatterTabs"
+                :key="`scatter-panel-${tab.key}`"
+                :value="tab.key"
+              >
+                <GroundAssetPainter
+                  v-if="propertyScatterTab === tab.key"
+                  :category="tab.key"
+                  :update-terrain-selection="false"
+                  :selected-provider-asset-id="selectedScatterAssignment ? selectedScatterAssignment.providerAssetId : null"
+                  @asset-select="handleScatterAssetSelect"
+                />
+              </v-window-item>
+            </v-window>
+          </template>
+        </aside>
 
       </section>
     </v-card>
@@ -2795,7 +3110,7 @@ onBeforeUnmount(() => {
 .planning-dialog__content {
   flex: 1;
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: 320px minmax(0, 1fr) 250px;
   grid-template-rows: 1fr;
   align-items: stretch;
   gap: 12px;
@@ -2866,6 +3181,89 @@ onBeforeUnmount(() => {
   opacity: 0.7;
   display: flex;
   gap: 12px;
+}
+
+.property-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.property-panel--disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.property-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.property-panel__title {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.property-panel__title h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.property-panel__subtitle {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.property-panel__placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.52);
+  text-align: center;
+}
+
+.property-panel__tabs {
+  margin-bottom: 8px;
+}
+
+.property-panel__window {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.property-panel__window :deep(.v-window-item) {
+  flex: 1;
+  display: flex;
+}
+
+.property-panel__window :deep(.v-window-item > *) {
+  flex: 1;
+  display: flex;
+}
+
+.property-panel__window :deep(.asset-painter) {
+  flex: 1;
+  overflow: hidden;
+}
+
+.property-panel__window :deep(.thumbnail-grid) {
+  flex: 1;
+  min-height: 0;
 }
 
 .image-layer-panel {
@@ -3088,6 +3486,40 @@ onBeforeUnmount(() => {
   height: 100%;
   object-fit: contain;
   user-select: none;
+  pointer-events: none;
+}
+
+.scatter-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(18, 22, 30, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  backdrop-filter: blur(2px);
+}
+
+.scatter-overlay__thumbnail {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
+
+.scatter-overlay__placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.65);
   pointer-events: none;
 }
 

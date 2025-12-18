@@ -1,22 +1,25 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { ProjectAsset } from '@/types/project-asset'
-import { useSceneStore } from '@/stores/sceneStore'
 import { useTerrainStore } from '@/stores/terrainStore'
-import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
-import { assetProvider, loadScatterAssets, terrainScatterPresets } from '@/resources/projectProviders/asset'
+import { loadScatterAssets, terrainScatterPresets } from '@/resources/projectProviders/asset'
+import { useScatterAssetSelection } from '@/composables/useScatterAssetSelection'
 
 const props = defineProps<{
   category: TerrainScatterCategory
+  updateTerrainSelection?: boolean
+  selectedProviderAssetId?: string | null
+}>()
+
+const emit = defineEmits<{
+  (event: 'asset-select', payload: { asset: ProjectAsset; providerAssetId: string }): void
 }>()
 
 const terrainStore = useTerrainStore()
-const sceneStore = useSceneStore()
-const assetCacheStore = useAssetCacheStore()
 
-const { scatterSelectedAsset } = storeToRefs(terrainStore)
+const { scatterSelectedAsset, scatterProviderAssetId } = storeToRefs(terrainStore)
 
 const categoryKeys = Object.keys(terrainScatterPresets) as TerrainScatterCategory[]
 const assetBuckets = reactive<Record<TerrainScatterCategory, ProjectAsset[]>>(
@@ -38,7 +41,12 @@ const errorMap = reactive<Record<TerrainScatterCategory, string | null>>(
   }, {} as Record<TerrainScatterCategory, string | null>),
 )
 
-const selectingAssetId = ref<string | null>(null)
+const { selectingAssetId, selectScatterAsset } = useScatterAssetSelection({
+  updateTerrainSelection: props.updateTerrainSelection !== false,
+  onSelected(asset, providerAssetId) {
+    emit('asset-select', { asset, providerAssetId })
+  },
+})
 
 async function ensureAssetsLoaded(category: TerrainScatterCategory): Promise<void> {
   if (loadingMap[category]) {
@@ -59,37 +67,40 @@ async function ensureAssetsLoaded(category: TerrainScatterCategory): Promise<voi
   }
 }
 
-async function ensureAssetCached(asset: ProjectAsset): Promise<void> {
-  if (assetCacheStore.hasCache(asset.id)) {
-    return
-  }
-  await assetCacheStore.downloaProjectAsset(asset)
-}
-
 async function handleAssetClick(asset: ProjectAsset): Promise<void> {
-  if (selectingAssetId.value) {
-    return
-  }
-  selectingAssetId.value = asset.id
-  try {
-    const registered = sceneStore.copyPackageAssetToAssets(assetProvider.id, asset)
-    await ensureAssetCached(registered)
-    terrainStore.setScatterSelection({ asset: registered, providerAssetId: asset.id })
-  } catch (error) {
-    console.warn('Failed to prepare scatter asset', error)
-  } finally {
-    selectingAssetId.value = null
-  }
+  await selectScatterAsset(asset)
 }
 
 function assetThumbnail(asset: ProjectAsset): string | null {
   return asset.thumbnail ?? null
 }
 
+function isAssetActive(assetId: string): boolean {
+  if (props.selectedProviderAssetId != null) {
+    return props.selectedProviderAssetId === assetId
+  }
+  if (scatterProviderAssetId.value) {
+    return scatterProviderAssetId.value === assetId
+  }
+  return scatterSelectedAsset.value?.id === assetId
+}
+
 onMounted(() => {
-  terrainStore.setScatterCategory(props.category)
+  if (props.updateTerrainSelection !== false) {
+    terrainStore.setScatterCategory(props.category)
+  }
   void ensureAssetsLoaded(props.category)
 })
+
+watch(
+  () => props.category,
+  (category) => {
+    if (props.updateTerrainSelection !== false) {
+      terrainStore.setScatterCategory(category)
+    }
+    void ensureAssetsLoaded(category)
+  },
+)
 </script>
 
 <template>
@@ -100,7 +111,7 @@ onMounted(() => {
         :key="asset.id"
         class="thumbnail-item"
         type="button"
-        :class="{ 'is-selected': scatterSelectedAsset?.id === asset.id }"
+        :class="{ 'is-selected': isAssetActive(asset.id) }"
         @click="handleAssetClick(asset)"
       >
         <div class="thumbnail" :style="{ backgroundImage: assetThumbnail(asset) ? `url(${assetThumbnail(asset)})` : undefined }">
