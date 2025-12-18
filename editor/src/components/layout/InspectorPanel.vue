@@ -511,8 +511,8 @@ watch(
             variant="accordion"
             class="inspector-panels"
           >
-          <TransformPanel v-if="showTransformPanel"/>
           <AssetModelPanel v-if="showAssetModelPanel" />
+          <TransformPanel v-if="showTransformPanel"/>
           <LightPanel v-if="isLightNode"/>
           <MaterialPanel
             v-else-if="showMaterialPanel"

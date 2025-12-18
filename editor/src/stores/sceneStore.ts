@@ -390,6 +390,18 @@ async function ensureAssetFileForMeasurement(assetId: string, asset: ProjectAsse
   return assetCache.createFileFromCache(assetId)
 }
 
+async function ensureModelAssetCached(assetCache: ReturnType<typeof useAssetCacheStore>, asset: ProjectAsset): Promise<void> {
+  await assetCache.loadFromIndexedDb(asset.id)
+  if (assetCache.hasCache(asset.id)) {
+    return
+  }
+  await assetCache.downloaProjectAsset(asset)
+  await assetCache.loadFromIndexedDb(asset.id)
+  if (!assetCache.hasCache(asset.id)) {
+    throw new Error('模型资源尚未准备就绪')
+  }
+}
+
 function isImageLikeAsset(asset: ProjectAsset | null, file: File | null): boolean {
   if (file?.type?.startsWith('image/')) {
     return true
@@ -3313,8 +3325,13 @@ function createInstancedPlaceholderObject(name: string | undefined, group: Model
   return placeholder
 }
 
-function createInstancedRuntimeProxy(node: SceneNode, group: ModelInstanceGroup): Object3D | null {
-  if (!node.sourceAssetId || node.sourceAssetId !== group.assetId) {
+function createInstancedRuntimeProxy(
+  node: SceneNode,
+  group: ModelInstanceGroup,
+  sourceAssetId?: string,
+): Object3D | null {
+  const effectiveAssetId = sourceAssetId ?? node.sourceAssetId
+  if (!effectiveAssetId || effectiveAssetId !== group.assetId) {
     return null
   }
   if (!group.meshes.length) {
@@ -10140,12 +10157,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const assetCache = useAssetCacheStore()
-      if (!assetCache.hasCache(asset.id)) {
-        await assetCache.downloaProjectAsset(asset)
-        if (!assetCache.hasCache(asset.id)) {
-          throw new Error('模型资源尚未准备就绪')
-        }
-      }
+      await ensureModelAssetCached(assetCache, asset)
 
       const file = assetCache.createFileFromCache(asset.id)
       if (!file) {
@@ -10185,7 +10197,7 @@ export const useSceneStore = defineStore('scene', {
 
       let runtimeObject: Object3D | null = null
       if (canUseInstancing && modelGroup) {
-        runtimeObject = createInstancedRuntimeProxy(node, modelGroup)
+        runtimeObject = createInstancedRuntimeProxy(node, modelGroup, asset.id)
       }
       runtimeObject = runtimeObject ?? runtimeClone
 
@@ -10197,7 +10209,6 @@ export const useSceneStore = defineStore('scene', {
       prepareRuntimeObjectForNode(runtimeObject)
 
       this.captureHistorySnapshot()
-      node.name = asset.name
       node.nodeType = nodeType
       node.sourceAssetId = asset.id
       node.dynamicMesh = undefined
