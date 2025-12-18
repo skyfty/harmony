@@ -98,6 +98,7 @@ const scatterDirectionHelper = new THREE.Vector3()
 const scatterPlacementHelper = new THREE.Vector3()
 const scatterWorldMatrixHelper = new THREE.Matrix4()
 const scatterInstanceWorldPositionHelper = new THREE.Vector3()
+const scatterEraseLocalPointHelper = new THREE.Vector3()
 
 type ScatterSessionState = {
 	pointerId: number
@@ -945,7 +946,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		const radiusSq = radius * radius
 		let removed = false
+		// Compute distance on ground-local XZ plane so the brush radius works regardless of terrain height.
+		scatterEraseLocalPointHelper.copy(worldPoint)
 		groundMesh.updateMatrixWorld(true)
+		groundMesh.worldToLocal(scatterEraseLocalPointHelper)
 		for (const layer of layers) {
 			if (!layer.instances.length) {
 				continue
@@ -953,8 +957,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			const survivors: TerrainScatterInstance[] = []
 			const removedInstances: TerrainScatterInstance[] = []
 			for (const instance of layer.instances) {
-				const position = getScatterInstanceWorldPosition(instance, groundMesh, scatterInstanceWorldPositionHelper)
-				if (position.distanceToSquared(worldPoint) <= radiusSq) {
+				const local = instance.localPosition
+				const dx = (local?.x ?? 0) - scatterEraseLocalPointHelper.x
+				const dz = (local?.z ?? 0) - scatterEraseLocalPointHelper.z
+				if (dx * dx + dz * dz <= radiusSq) {
 					removedInstances.push(instance)
 				} else {
 					survivors.push(instance)
