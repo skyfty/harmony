@@ -10,6 +10,7 @@ import GroundAssetPainter from './GroundAssetPainter.vue'
 import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import type { GroundPanelTab } from '@/stores/terrainStore'
+import type { ProjectAsset } from '@/types/project-asset'
 
 const sceneStore = useSceneStore()
 const terrainStore = useTerrainStore()
@@ -180,6 +181,17 @@ watch(selectedNoiseMode, (mode) => {
   applyGenerationPatch({ mode })
 })
 
+function handleScatterAssetSelect(
+  category: TerrainScatterCategory,
+  payload: { asset: ProjectAsset; providerAssetId: string },
+): void {
+  if (!hasGround.value) {
+    return
+  }
+  terrainStore.setScatterCategory(category)
+  terrainStore.setScatterSelection(payload)
+}
+
 </script>
 
 <template>
@@ -283,6 +295,7 @@ watch(selectedNoiseMode, (mode) => {
                 v-if="groundPanelTabModel === tab.key"
                 :key="tab.key"
                 :category="tab.key"
+                @asset-select="(payload) => handleScatterAssetSelect(tab.key, payload)"
               />
             </v-window-item>
           </v-window>

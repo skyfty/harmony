@@ -769,12 +769,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   // Ensure runtime objects/components are synced so the converted content shows up immediately.
   // Conversion creates/moves many nodes; some runtime consumers require an explicit refresh.
   emitProgress(options, 'Refreshing scene…', 98)
-  const refreshRuntimeState = (sceneStore as unknown as {
-    refreshRuntimeState?: (options?: { showOverlay?: boolean; refreshViewport?: boolean; skipComponentSync?: boolean }) => Promise<void>
-  }).refreshRuntimeState
-  if (refreshRuntimeState) {
-    await refreshRuntimeState({ showOverlay: false, refreshViewport: false })
-  }
 
   emitProgress(options, 'Done', 100)
   return { rootNodeId: root.id }

@@ -138,7 +138,6 @@ import {
   MIN_CAMERA_HEIGHT,
   MIN_TARGET_HEIGHT,
   GRID_MAJOR_SPACING,
-  GRID_MINOR_SPACING,
   GRID_SNAP_SPACING,
   WALL_DIAGONAL_SNAP_THRESHOLD,
   GRID_HIGHLIGHT_HEIGHT,
@@ -211,6 +210,17 @@ const terrainStore = useTerrainStore()
 const { panelVisibility, isSceneReady } = storeToRefs(sceneStore)
 const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterCategory, scatterSelectedAsset, scatterSpacing, scatterEraseRadius } =
   storeToRefs(terrainStore)
+
+const groundTerrainScatterUpdatedAt = computed(() => {
+  const ground = findSceneNode(sceneStore.nodes, GROUND_NODE_ID)
+  if (!ground || ground.dynamicMesh?.type !== 'Ground') {
+    return null
+  }
+  const snapshot = (ground.dynamicMesh as any).terrainScatter as { metadata?: { updatedAt?: unknown } } | null | undefined
+  const updatedAt = snapshot?.metadata?.updatedAt
+  const value = typeof updatedAt === 'number' ? updatedAt : Number(updatedAt)
+  return Number.isFinite(value) ? value : null
+})
 
 const viewportEl = ref<HTMLDivElement | null>(null)
 const surfaceRef = ref<HTMLDivElement | null>(null)
@@ -639,6 +649,9 @@ const {
   getCamera: () => camera,
   objectMap,
 })
+
+// Some TS configs don't count template refs as usage.
+void overlayContainerRef
 
 type PanelPlacementHolder = { panelPlacement?: PanelPlacementState | null }
 
@@ -1770,6 +1783,23 @@ watch(isSceneReady, (ready) => {
   syncSceneGraph()
   restoreGroupdScatter()
 })
+
+// Rebind scatter instances when terrainScatter snapshot changes (e.g. planning->3D conversion).
+watch(
+  [isSceneReady, groundTerrainScatterUpdatedAt],
+  ([ready, updatedAt], [prevReady, prevUpdatedAt]) => {
+    if (!ready) {
+      return
+    }
+    if (updatedAt == null) {
+      return
+    }
+    if (prevReady && prevUpdatedAt === updatedAt) {
+      return
+    }
+    void restoreGroupdScatter()
+  },
+)
 
 watch(gridVisible, (visible) => {
   applyGridVisibility(visible)

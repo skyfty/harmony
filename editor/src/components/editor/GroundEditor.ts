@@ -365,6 +365,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const snapshotUpdatedAt = getScatterSnapshotTimestamp(snapshot)
 		const shouldHydrate = snapshot && (!scatterStore || snapshotUpdatedAt !== scatterSnapshotUpdatedAt)
 		if (shouldHydrate && snapshot) {
+			// When the snapshot changes (e.g. planning->3D conversion), previously bound instances
+			// may remain allocated in the instancing cache. Release old bindings before rehydrating.
+			if (scatterStore) {
+				try {
+					for (const layer of Array.from(scatterStore.layers.values())) {
+						for (const instance of layer.instances ?? []) {
+							releaseScatterInstance(instance)
+						}
+					}
+				} catch (error) {
+					console.warn('释放旧的地面散布实例失败', error)
+				}
+			}
 			try {
 				scatterStore = loadTerrainScatterSnapshot(GROUND_NODE_ID, snapshot)
 				scatterSnapshotUpdatedAt = snapshotUpdatedAt
@@ -918,7 +931,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function eraseScatterInstances(worldPoint: THREE.Vector3, radius: number, groundMesh: THREE.Mesh): boolean {
-		const layers = listScatterLayersForCategory(options.scatterCategory.value)
+		const store = ensureScatterStoreRef()
+		const selectedCategory = options.scatterCategory.value
+		let layers = Array.from(store.layers.values()).filter((layer) => layer.category === selectedCategory)
+		// After planning->3D conversion, scatter may be generated across different categories
+		// than the user's currently selected category. In that case, allow erasing across all
+		// scatter layers so the erase tool works immediately without requiring category toggles.
+		if (!layers.length) {
+			layers = Array.from(store.layers.values())
+		}
 		if (!layers.length) {
 			return false
 		}
