@@ -10218,14 +10218,14 @@ export const useSceneStore = defineStore('scene', {
       delete node.downloadError
       delete node.importMetadata
 
-      this.nodes = [...this.nodes]
-
       unregisterRuntimeObject(node.id)
 
       tagObjectWithNodeId(runtimeObject, node.id)
       registerRuntimeObject(node.id, runtimeObject)
       componentManager.attachRuntime(node, runtimeObject)
       componentManager.syncNode(node)
+
+      this.nodes = [...this.nodes]
 
       assetCache.touch(asset.id)
       commitSceneSnapshot(this)
