@@ -557,8 +557,17 @@ function isPlanningSnapshotEmpty(snapshot: ReturnType<typeof buildPlanningSnapsh
   return snapshot.images.length === 0 && snapshot.polygons.length === 0 && snapshot.polylines.length === 0
 }
 
-function persistPlanningToSceneIfDirty() {
-  if (!planningDirty) {
+function safeJsonStringify(value: unknown): string | null {
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return null
+  }
+}
+
+function persistPlanningToSceneIfDirty(options?: { force?: boolean }) {
+  const force = options?.force ?? false
+  if (!planningDirty && !force) {
     return
   }
 
@@ -588,11 +597,23 @@ function persistPlanningToSceneIfDirty() {
 
   const snapshot = buildPlanningSnapshot()
   const nextData = isPlanningSnapshotEmpty(snapshot) ? null : snapshot
+  const currentData = sceneStore.planningData ?? null
+
   // 空场景默认不落盘，且不要因为“仅视图操作”造成未保存提示。
-  if (nextData === null && sceneStore.planningData === null) {
+  if (nextData === null && currentData === null) {
     planningDirty = false
     return
   }
+
+  // Avoid dirtying the scene when nothing actually changed.
+  const nextJson = safeJsonStringify(nextData)
+  const currentJson = safeJsonStringify(currentData)
+  const unchanged = nextJson !== null && currentJson !== null ? nextJson === currentJson : nextData === currentData
+  if (unchanged) {
+    planningDirty = false
+    return
+  }
+
   sceneStore.planningData = nextData
   sceneStore.hasUnsavedChanges = true
   planningDirty = false
@@ -604,7 +625,7 @@ async function handleConvertTo3DScene() {
   }
 
   // Ensure latest edits are persisted before conversion.
-  persistPlanningToSceneIfDirty()
+  persistPlanningToSceneIfDirty({ force: true })
 
   const planningData = sceneStore.planningData
   if (!planningData) {
@@ -1051,7 +1072,8 @@ watch(dialogOpen, (open) => {
     spacePanning.value = false
     altPanning.value = false
     middlePanning.value = false
-    persistPlanningToSceneIfDirty()
+    // Persist on close even if some edits forgot to mark dirty.
+    persistPlanningToSceneIfDirty({ force: true })
   }
 })
 
@@ -1103,7 +1125,7 @@ watch(
     }
     // 在对话框打开期间切换场景：先把旧场景的规划数据写回，再加载新场景。
     if (prevOpen && prevSceneId && sceneId && prevSceneId !== sceneId) {
-      persistPlanningToSceneIfDirty()
+      persistPlanningToSceneIfDirty({ force: true })
     }
     loadPlanningFromScene()
   },
@@ -2922,6 +2944,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  // Make sure edits are not lost if the component is destroyed.
+  persistPlanningToSceneIfDirty({ force: true })
   window.removeEventListener('pointermove', handlePointerMove)
   window.removeEventListener('pointerup', handlePointerUp)
   window.removeEventListener('pointercancel', handlePointerUp)
