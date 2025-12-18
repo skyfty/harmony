@@ -45,6 +45,8 @@ interface PlanningScatterAssignment {
   category: TerrainScatterCategory
   name: string
   thumbnail: string | null
+  /** 0-100, default 50. Used to scale generated scatter count. */
+  densityPercent: number
 }
 
 interface PlanningPolygon {
@@ -201,6 +203,32 @@ type ScatterThumbPlacement = { x: number; y: number; size: number }
 function clampNumber(value: number, min: number, max: number) {
   if (!Number.isFinite(value)) return min
   return Math.min(max, Math.max(min, value))
+}
+
+function clampDensityPercent(value: unknown): number {
+  const num = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(num)) return 50
+  return Math.round(clampNumber(num, 0, 100))
+}
+
+function hashSeedFromString(value: string): number {
+  // FNV-1a 32bit
+  let hash = 2166136261
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return hash >>> 0
+}
+
+function buildRandom(seed: number) {
+  // LCG
+  let s = seed % 2147483647
+  if (s <= 0) s += 2147483646
+  return () => {
+    s = (s * 16807) % 2147483647
+    return (s - 1) / 2147483646
+  }
 }
 
 function getPointsBounds(points: PlanningPoint[]) {
@@ -364,6 +392,53 @@ const polylineScatterThumbPlacements = computed<Record<string, ScatterThumbPlace
   return result
 })
 
+const polygonScatterDensityDots = computed<Record<string, PlanningPoint[]>>(() => {
+  const result: Record<string, PlanningPoint[]> = {}
+  for (const poly of visiblePolygons.value) {
+    if (!poly.scatter) {
+      continue
+    }
+    const layerKind = getLayerKind(poly.layerId)
+    if (layerKind !== 'green') {
+      continue
+    }
+    const densityPercent = clampDensityPercent(poly.scatter.densityPercent)
+    if (densityPercent <= 0) {
+      continue
+    }
+    const bounds = getPointsBounds(poly.points)
+    if (!bounds) {
+      continue
+    }
+    const boundsArea = bounds.width * bounds.height
+    if (!Number.isFinite(boundsArea) || boundsArea < 60) {
+      continue
+    }
+    // Keep preview cheap: dots scale with polygon size + user density.
+    const maxDotsBySize = clampNumber(Math.floor(boundsArea / 800), 6, 60)
+    const targetDots = Math.round((maxDotsBySize * densityPercent) / 100)
+    if (targetDots <= 0) {
+      continue
+    }
+    const random = buildRandom(hashSeedFromString(`${poly.id}:${densityPercent}`))
+    const dots: PlanningPoint[] = []
+    const maxAttempts = Math.min(4000, targetDots * 60)
+    for (let attempt = 0; attempt < maxAttempts && dots.length < targetDots; attempt += 1) {
+      const candidate = {
+        x: bounds.minX + bounds.width * random(),
+        y: bounds.minY + bounds.height * random(),
+      }
+      if (isPointInPolygon(candidate, poly.points)) {
+        dots.push(candidate)
+      }
+    }
+    if (dots.length) {
+      result[poly.id] = dots
+    }
+  }
+  return result
+})
+
 const selectedPolygon = computed(() => {
   const feature = selectedFeature.value
   if (!feature || feature.type !== 'polygon') {
@@ -426,6 +501,7 @@ function buildPlanningSnapshot() {
           category: poly.scatter.category,
           name: poly.scatter.name,
           thumbnail: poly.scatter.thumbnail,
+          densityPercent: clampDensityPercent(poly.scatter.densityPercent),
         }
         : undefined,
     })),
@@ -441,6 +517,7 @@ function buildPlanningSnapshot() {
           category: line.scatter.category,
           name: line.scatter.name,
           thumbnail: line.scatter.thumbnail,
+          densityPercent: clampDensityPercent(line.scatter.densityPercent),
         }
         : undefined,
     })),
@@ -612,12 +689,14 @@ function normalizeScatterAssignment(raw: unknown): PlanningScatterAssignment | u
   }
   const name = typeof payload.name === 'string' ? payload.name : 'Scatter 预设'
   const thumb = typeof payload.thumbnail === 'string' ? payload.thumbnail : null
+  const densityPercent = clampDensityPercent(payload.densityPercent)
   return {
     providerAssetId,
     assetId,
     category,
     name,
     thumbnail: thumb,
+    densityPercent,
   }
 }
 
@@ -1697,15 +1776,45 @@ function handleScatterAssetSelect(payload: { asset: ProjectAsset; providerAssetI
     return
   }
   const thumbnail = payload.asset.thumbnail ?? null
+  const existingDensity = target.shape.scatter?.densityPercent
   target.shape.scatter = {
     providerAssetId: payload.providerAssetId,
     assetId: payload.asset.id,
     category,
     name: payload.asset.name,
     thumbnail,
+    densityPercent: clampDensityPercent(existingDensity),
   }
   markPlanningDirty()
 }
+
+const scatterDensityPercentModel = computed<number>({
+  get: () => clampDensityPercent(selectedScatterAssignment.value?.densityPercent),
+  set: (value) => {
+    if (propertyPanelDisabled.value) {
+      return
+    }
+    const target = selectedScatterTarget.value
+    if (!target?.shape.scatter) {
+      return
+    }
+    // Only meaningful for green polygons (planning -> terrain scatter).
+    if (target.type !== 'polygon' || target.layer?.kind !== 'green') {
+      return
+    }
+    target.shape.scatter.densityPercent = clampDensityPercent(value)
+    markPlanningDirty()
+  },
+})
+
+const scatterDensityEnabled = computed(() => {
+  const target = selectedScatterTarget.value
+  return !propertyPanelDisabled.value
+    && !!target
+    && target.type === 'polygon'
+    && target.layer?.kind === 'green'
+    && !!target.shape.scatter
+})
 
 function clearSelectedScatterAssignment() {
   if (propertyPanelDisabled.value) {
@@ -3072,6 +3181,22 @@ onBeforeUnmount(() => {
                       @pointerdown="handlePolygonPointerDown(poly.id, $event as PointerEvent)"
                     />
 
+                    <!-- 绿化散布密度预览（淡色点状） -->
+                    <g
+                      v-if="polygonScatterDensityDots[poly.id]?.length"
+                      class="scatter-density-dots"
+                      pointer-events="none"
+                    >
+                      <circle
+                        v-for="(p, idx) in polygonScatterDensityDots[poly.id]"
+                        :key="`${poly.id}-density-dot-${idx}`"
+                        :cx="p.x"
+                        :cy="p.y"
+                        r="0.6"
+                        :fill="getLayerColor(poly.layerId, 0.18)"
+                      />
+                    </g>
+
                     <image
                       v-if="poly.scatter?.thumbnail && polygonScatterThumbPlacements[poly.id]"
                       class="scatter-thumb"
@@ -3306,6 +3431,22 @@ onBeforeUnmount(() => {
               </div>
             </div>
 
+            <div class="property-panel__density">
+              <div class="property-panel__density-title">密集度</div>
+              <div class="property-panel__density-row">
+                <v-slider
+                  v-model="scatterDensityPercentModel"
+                  min="0"
+                  max="100"
+                  step="1"
+                  density="compact"
+                  hide-details
+                  :disabled="!scatterDensityEnabled"
+                />
+                <div class="property-panel__density-value">{{ scatterDensityPercentModel }}%</div>
+              </div>
+            </div>
+
             <v-tabs
               v-model="propertyScatterTab"
               density="compact"
@@ -3416,6 +3557,40 @@ onBeforeUnmount(() => {
 
 .layer-item.active .layer-name {
   font-weight: 700;
+}
+
+.property-panel__density {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.property-panel__density-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.property-panel__density-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.property-panel__density-value {
+  min-width: 52px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: rgba(244, 246, 251, 0.92);
+}
+
+.property-panel__density-hint {
+  margin-top: 4px;
+  font-size: 0.78rem;
+  color: rgba(244, 246, 251, 0.75);
 }
 
 .layer-item.active .layer-meta {

@@ -82,6 +82,7 @@ type ScatterAssignment = {
   assetId: string
   category: TerrainScatterCategory
   name?: string
+  densityPercent?: number
 }
 
 function emitProgress(options: ConvertPlanningToSceneOptions, step: string, progress: number) {
@@ -174,7 +175,12 @@ function normalizeScatter(raw: unknown): ScatterAssignment | null {
   const category = typeof payload.category === 'string' ? (payload.category as TerrainScatterCategory) : null
   if (!assetId || !category) return null
   const name = typeof payload.name === 'string' ? payload.name : undefined
-  return { assetId, category, name }
+  const densityRaw = payload.densityPercent
+  const densityPercent = typeof densityRaw === 'number' ? densityRaw : Number(densityRaw)
+  const normalizedDensity = Number.isFinite(densityPercent)
+    ? THREE.MathUtils.clamp(Math.round(densityPercent), 0, 100)
+    : 50
+  return { assetId, category, name, densityPercent: normalizedDensity }
 }
 
 function hashSeedFromString(value: string): number {
@@ -603,9 +609,25 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             density?: number
             seed?: number | null
           }
-          const density = Number.isFinite(layerParams.density) ? Math.max(0.05, Number(layerParams.density)) : 1
+          const baseDensity = Number.isFinite(layerParams.density) ? Math.max(0.05, Number(layerParams.density)) : 1
+          // densityPercent=50 means baseline (x1). 0 -> none. 100 -> x2.
+          const densityPercent = Number.isFinite(scatter.densityPercent) ? Number(scatter.densityPercent) : 50
+          const densityScale = THREE.MathUtils.clamp(densityPercent, 0, 100) / 50
+          const effectiveDensity = baseDensity * densityScale
+          if (effectiveDensity <= 1e-6) {
+            // Still remove previously generated instances for this feature to stay idempotent.
+            const existingRaw = Array.isArray(layer.instances) ? (layer.instances as TerrainScatterInstance[]) : []
+            const existing = existingRaw.filter((instance) => {
+              const meta = instance.metadata as Record<string, unknown> | null | undefined
+              if (!meta) return true
+              return !(meta.source === PLANNING_CONVERSION_SOURCE && meta.featureId === poly.id)
+            })
+            replaceTerrainScatterInstances(store, layer.id, existing)
+            updateProgressForUnit(`Converting greenery: ${poly.name?.trim() || poly.id}`)
+            continue
+          }
           const baseSpacing = Number.isFinite(preset.spacing) ? preset.spacing : 1.2
-          const minDistance = THREE.MathUtils.clamp(baseSpacing / Math.sqrt(density), 0.15, 8)
+          const minDistance = THREE.MathUtils.clamp(baseSpacing / Math.sqrt(effectiveDensity), 0.15, 8)
 
           const area = polygonArea2D(poly.points)
           const estimated = area > 0 ? Math.round((area / (minDistance * minDistance)) * 0.7) : 0
