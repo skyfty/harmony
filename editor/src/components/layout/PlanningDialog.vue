@@ -129,11 +129,11 @@ interface LineDraft {
 }
 
 const layerPresets: PlanningLayer[] = [
-  { id: 'terrain-layer', name: '地形层', kind: 'terrain', visible: true, color: '#2E7D32', locked: false },
-  { id: 'building-layer', name: '建筑物层', kind: 'building', visible: true, color: '#C62828', locked: false },
-  { id: 'road-layer', name: '道路层', kind: 'road', visible: true, color: '#F9A825', locked: false },
-  { id: 'green-layer', name: '绿化层', kind: 'green', visible: true, color: '#00897B', locked: false },
-  { id: 'wall-layer', name: '墙体层', kind: 'wall', visible: true, color: '#5E35B1', locked: false },
+  { id: 'terrain-layer', name: 'Terrain Layer', kind: 'terrain', visible: true, color: '#2E7D32', locked: false },
+  { id: 'building-layer', name: 'Building Layer', kind: 'building', visible: true, color: '#C62828', locked: false },
+  { id: 'road-layer', name: 'Road Layer', kind: 'road', visible: true, color: '#F9A825', locked: false },
+  { id: 'green-layer', name: 'Greenery Layer', kind: 'green', visible: true, color: '#00897B', locked: false },
+  { id: 'wall-layer', name: 'Wall Layer', kind: 'wall', visible: true, color: '#5E35B1', locked: false },
 ]
 
 const imageAccentPalette = layerPresets.map((layer) => layer.color)
@@ -620,10 +620,10 @@ const selectedScatterPreview = computed(() => {
 const propertyPanelDisabledReason = computed(() => {
   const target = selectedScatterTarget.value
   if (!target) {
-    return '未选中任何图形'
+    return 'No shape selected'
   }
   if (target.layer?.locked) {
-    return '所属图层已锁定'
+    return 'Layer is locked'
   }
   return null
 })
@@ -1186,7 +1186,6 @@ function startRectangleDrag(worldPoint: PlanningPoint, event: PointerEvent) {
   }
   event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
 }
-
 function finalizeRectangleDrag() {
   if (dragState.value.type !== 'rectangle') {
     return
@@ -1199,7 +1198,7 @@ function finalizeRectangleDrag() {
     return
   }
   const points = createRectanglePoints(start, current)
-  addPolygon(points, layerId, '矩形区域')
+  addPolygon(points, layerId, 'Rectangular Area')
   markPlanningDirty()
 }
 
@@ -1234,7 +1233,7 @@ function finalizePolygonDraft() {
     polygonDraftHoverPoint.value = null
     return
   }
-  addPolygon(polygonDraftPoints.value, undefined, '规划区域')
+  addPolygon(polygonDraftPoints.value, undefined, 'Planned Area')
   polygonDraftPoints.value = []
   polygonDraftHoverPoint.value = null
   markPlanningDirty()
@@ -2117,7 +2116,7 @@ function handleImageLayerPanelDrop(event: DragEvent) {
 function loadPlanningImage(file: File) {
   uploadError.value = null
   if (!file.type.includes('png') && !file.type.includes('jpeg') && !file.type.includes('jpg')) {
-    uploadError.value = '仅支持 PNG 或 JPG 格式的平面规划图。'
+    uploadError.value = 'Only PNG or JPG formats are supported for planning images.'
     return
   }
   const url = URL.createObjectURL(file)
@@ -2477,14 +2476,14 @@ function closeDialog() {
 }
 
 const toolbarButtons: Array<{ tool: PlanningTool; icon: string; tooltip: string }> = [
-  { tool: 'select', icon: 'mdi-cursor-default-outline', tooltip: '选择工具' },
-  { tool: 'rectangle', icon: 'mdi-rectangle-outline', tooltip: '绘制矩形区域' },
-  { tool: 'lasso', icon: 'mdi-shape-polygon-plus', tooltip: '自由绘制区域' },
-  { tool: 'line', icon: 'mdi-vector-line', tooltip: '绘制线段' },
-  { tool: 'align-marker', icon: 'mdi-crosshairs-gps', tooltip: '对齐参考点' },
+  { tool: 'select', icon: 'mdi-cursor-default-outline', tooltip: 'Select' },
+  { tool: 'rectangle', icon: 'mdi-rectangle-outline', tooltip: 'Draw rectangular area' },
+  { tool: 'lasso', icon: 'mdi-shape-polygon-plus', tooltip: 'Draw freehand area' },
+  { tool: 'line', icon: 'mdi-vector-line', tooltip: 'Draw line' },
+  { tool: 'align-marker', icon: 'mdi-crosshairs-gps', tooltip: 'Align marker' },
 ]
 
-const deleteButtonTooltip = '删除选中的对象'
+const deleteButtonTooltip = ' Delete selected objects (Del)'
 
 const resizeDirections = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const
 
@@ -2540,7 +2539,7 @@ onBeforeUnmount(() => {
   >
     <v-card class="planning-dialog" elevation="12">
       <header class="planning-dialog__header">
-        <div class="title">规划图转换</div>
+        <div class="title">Planning Diagram Conversion</div>
         <div class="header-actions">
           <v-btn icon variant="text" density="comfortable" @click="closeDialog">
             <v-icon>mdi-close</v-icon>
@@ -2553,7 +2552,7 @@ onBeforeUnmount(() => {
           <section class="image-layer-panel">
             <header>
               <div class="panel-header">
-                <h3>规划图层</h3>
+                <h3>Planning Layers</h3>
                 <v-btn
                   icon
                   size="small"
@@ -2585,7 +2584,7 @@ onBeforeUnmount(() => {
               @drop="handleImageLayerPanelDrop"
             >
               <v-list-item v-if="!planningImages.length" class="image-layer-empty">
-                <div class="image-layer-empty__text">拖拽规划图文件到此，或点击右侧上传</div>
+                <div class="image-layer-empty__text">Drag planning image files here, or click upload on the right</div>
               </v-list-item>
               <v-list-item
                 v-for="image in planningImagesForList"
@@ -2641,7 +2640,7 @@ onBeforeUnmount(() => {
                   </div>
                   <div class="image-layer-controls">
                     <div class="control-row">
-                      <span class="control-label">透明度</span>
+                      <span class="control-label">Opacity</span>
                       <v-slider
                         :model-value="image.opacity"
                         min="0"
@@ -2654,7 +2653,7 @@ onBeforeUnmount(() => {
                       <span class="control-value">{{ Math.round(image.opacity * 100) }}%</span>
                     </div>
                     <div class="control-row">
-                      <span class="control-label">米/像素</span>
+                      <span class="control-label">m/px</span>
                       <v-text-field
                         :model-value="image.scaleRatio ?? ''"
                         type="number"
@@ -2676,7 +2675,7 @@ onBeforeUnmount(() => {
           </section>
           <section class="layer-panel">
             <header>
-              <h3>图层管理</h3>
+              <h3>Layer Management</h3>
             </header>
             <v-list density="compact" class="layer-list">
               <v-list-item
@@ -2689,8 +2688,8 @@ onBeforeUnmount(() => {
                 <div class="layer-content">
                   <div class="layer-name">{{ layer.name }}</div>
                   <div class="layer-meta">
-                    <span>区域 {{ layerFeatureTotals.find((item) => item.id === layer.id)?.polygons ?? 0 }}</span>
-                    <span>线段 {{ layerFeatureTotals.find((item) => item.id === layer.id)?.lines ?? 0 }}</span>
+                    <span>Areas {{ layerFeatureTotals.find((item) => item.id === layer.id)?.polygons ?? 0 }}</span>
+                    <span>Lines {{ layerFeatureTotals.find((item) => item.id === layer.id)?.lines ?? 0 }}</span>
                   </div>
                 </div>
                 <template #append>
@@ -2953,7 +2952,7 @@ onBeforeUnmount(() => {
         >
           <header class="property-panel__header">
             <div class="property-panel__title">
-              <h3>图形属性</h3>
+              <h3>Shape Properties</h3>
               <span v-if="selectedScatterTarget" class="property-panel__subtitle">
                 {{ selectedScatterTarget.shape.name }} ·
                 {{ getLayerName(selectedScatterTarget.layer ? selectedScatterTarget.layer.id : '') }}
@@ -2999,7 +2998,7 @@ onBeforeUnmount(() => {
                     <span>{{ selectedScatterPreview.categoryLabel }}</span>
                   </template>
                   <template v-else>
-                    <span>在下方选择预设以应用当前图形</span>
+                    <span>Select a preset below to apply to the current shape</span>
                   </template>
                 </div>
               </div>
