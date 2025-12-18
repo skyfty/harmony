@@ -4,10 +4,12 @@ import type { CSSProperties } from 'vue'
 import { storeToRefs } from 'pinia'
 import { generateUuid } from '@/utils/uuid'
 import { useSceneStore } from '@/stores/sceneStore'
+import { useUiStore } from '@/stores/uiStore'
 import GroundAssetPainter from '@/components/inspector/GroundAssetPainter.vue'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
+import { convertPlanningTo3DScene, findPlanningConversionRootIds } from '@/utils/planningToScene'
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ (event: 'update:modelValue', value: boolean): void }>()
@@ -18,6 +20,7 @@ const dialogOpen = computed({
 
 const sceneStore = useSceneStore()
 const { currentSceneId } = storeToRefs(sceneStore)
+const uiStore = useUiStore()
 
 type PlanningTool = 'select' | 'pan' | 'rectangle' | 'lasso' | 'line' | 'align-marker'
 type LayerKind = 'terrain' | 'building' | 'road' | 'green' | 'wall'
@@ -171,6 +174,13 @@ const altPanning = ref(false)
 const middlePanning = ref(false)
 const temporaryPanActive = computed(() => spacePanning.value || altPanning.value || middlePanning.value)
 const activeToolbarTool = computed<PlanningTool>(() => (temporaryPanActive.value ? 'pan' : currentTool.value))
+
+const convertingTo3DScene = ref(false)
+
+const canConvertTo3DScene = computed(() => {
+  if (convertingTo3DScene.value) return false
+  return polygons.value.length > 0 || polylines.value.length > 0
+})
 
 const activeLayer = computed(() => layers.value.find((layer) => layer.id === activeLayerId.value) ?? layers.value[0])
 
@@ -327,6 +337,83 @@ function persistPlanningToSceneIfDirty() {
   sceneStore.planningData = nextData
   sceneStore.hasUnsavedChanges = true
   planningDirty = false
+}
+
+async function handleConvertTo3DScene() {
+  if (!canConvertTo3DScene.value) {
+    return
+  }
+
+  // Ensure latest edits are persisted before conversion.
+  persistPlanningToSceneIfDirty()
+
+  const planningData = sceneStore.planningData
+  if (!planningData) {
+    return
+  }
+
+  const existingRoots = findPlanningConversionRootIds(sceneStore.nodes)
+  let overwriteExisting = false
+  if (existingRoots.length) {
+    overwriteExisting = typeof window !== 'undefined'
+      ? window.confirm('场景中已存在由规划转换的 3D 内容，是否覆盖？')
+      : true
+    if (!overwriteExisting) {
+      return
+    }
+  }
+
+  // Close dialog first, then start conversion.
+  dialogOpen.value = false
+  await nextTick()
+
+  convertingTo3DScene.value = true
+  uiStore.showLoadingOverlay({
+    title: 'Convert to 3D Scene',
+    message: 'Preparing…',
+    mode: 'determinate',
+    progress: 0,
+    closable: false,
+    autoClose: false,
+  })
+
+  try {
+    await convertPlanningTo3DScene({
+      sceneStore,
+      planningData,
+      overwriteExisting,
+      onProgress: ({ step, progress }) => {
+        uiStore.updateLoadingOverlay({
+          mode: 'determinate',
+          progress,
+          message: step,
+          closable: false,
+          autoClose: false,
+        })
+      },
+    })
+
+    uiStore.updateLoadingOverlay({
+      mode: 'determinate',
+      progress: 100,
+      message: 'Conversion complete.',
+      closable: true,
+      autoClose: true,
+      autoCloseDelay: 1200,
+    })
+  } catch (error) {
+    console.error('Failed to convert planning to 3D scene', error)
+    const message = error instanceof Error ? error.message : 'Conversion failed.'
+    uiStore.updateLoadingOverlay({
+      mode: 'determinate',
+      progress: 100,
+      message,
+      closable: true,
+      autoClose: false,
+    })
+  } finally {
+    convertingTo3DScene.value = false
+  }
 }
 
 function resetPlanningState() {
@@ -1068,6 +1155,9 @@ function pickTopmostActivePolyline(point: PlanningPoint): { line: PlanningPolyli
     const segments = getLineSegments(line)
     for (let index = 0; index < segments.length; index += 1) {
       const segment = segments[index]
+      if (!segment) {
+        continue
+      }
       const distSq = distancePointToSegmentSquared(point, segment.start, segment.end)
       if (distSq <= POLYLINE_HIT_RADIUS_SQ) {
         return { line, segmentIndex: index }
@@ -2759,6 +2849,21 @@ onBeforeUnmount(() => {
                 </template>
               </v-tooltip>
 
+              <v-tooltip text="Convert to 3D Scene" location="bottom">
+                <template #activator="{ props }">
+                  <v-btn
+                    v-bind="props"
+                    variant="tonal"
+                    density="comfortable"
+                    class="tool-button"
+                    :disabled="!canConvertTo3DScene"
+                    @click="handleConvertTo3DScene"
+                  >
+                    <v-icon>mdi-cube-outline</v-icon>
+                  </v-btn>
+                </template>
+              </v-tooltip>
+
             </div>
           </div>
 
@@ -2920,6 +3025,7 @@ onBeforeUnmount(() => {
                   :key="image.id"
                   :class="['planning-image', { active: activeImageId === image.id }]"
                   :style="getImageLayerStyle(image, index)"
+                  @pointerdown="handleImageLayerPointerDown(image.id, $event as PointerEvent)"
                 >
                   <img
                     class="planning-image-img"
