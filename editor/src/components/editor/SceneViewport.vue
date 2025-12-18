@@ -565,6 +565,14 @@ const canUseScatterEraseTool = computed(() => selectedNodeIsGround.value || canR
 type RepairClickState = { pointerId: number; startX: number; startY: number; moved: boolean }
 let repairClickState: RepairClickState | null = null
 
+type InstancedEraseDragState = {
+  pointerId: number
+  lastKey: string | null
+  lastAtMs: number
+}
+
+let instancedEraseDragState: InstancedEraseDragState | null = null
+
 const repairHoverGroup = new THREE.Group()
 repairHoverGroup.name = 'RepairHover'
 repairHoverGroup.visible = false
@@ -630,6 +638,7 @@ function exitScatterEraseMode() {
   }
   scatterEraseModeActive.value = false
   repairClickState = null
+  instancedEraseDragState = null
   clearRepairHoverHighlight(true)
   cancelGroundEditorScatterErase()
   cancelGroundEditorScatterPlacement()
@@ -882,6 +891,9 @@ function eraseContinuousInstance(nodeId: string, bindingId: string): boolean {
   if (basePositions.length === 0) {
     sceneStore.removeSceneNodes([nodeId])
     clearRepairHoverHighlight(true)
+    if (scatterEraseModeActive.value) {
+      exitScatterEraseMode()
+    }
     return true
   }
 
@@ -908,13 +920,48 @@ function eraseContinuousInstance(nodeId: string, bindingId: string): boolean {
   return true
 }
 
-function tryEraseRepairTargetAtPointer(event: PointerEvent): boolean {
+function pickContinuousInstancedTargetAtPointer(event: PointerEvent): { nodeId: string; bindingId: string } | null {
   if (!canvasRef.value || !camera) {
-    return false
+    return null
   }
   const rect = canvasRef.value.getBoundingClientRect()
   if (rect.width === 0 || rect.height === 0) {
-    return false
+    return null
+  }
+
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  raycaster.setFromCamera(pointer, camera)
+
+  const intersections = raycaster.intersectObjects(instancedMeshes, false)
+  intersections.sort((a, b) => a.distance - b.distance)
+
+  for (const intersection of intersections) {
+    if (typeof intersection.instanceId !== 'number' || intersection.instanceId < 0) {
+      continue
+    }
+    const mesh = intersection.object as THREE.InstancedMesh
+    const bindingId = findBindingIdForInstance(mesh, intersection.instanceId)
+    if (!bindingId || bindingId.startsWith('inst-preview:')) {
+      continue
+    }
+    const nodeId = findNodeIdForInstance(mesh, intersection.instanceId)
+    if (!nodeId) {
+      continue
+    }
+    return { nodeId, bindingId }
+  }
+
+  return null
+}
+
+function tryEraseRepairTargetAtPointer(event: PointerEvent, options?: { skipKey?: string | null }): { handled: boolean; erasedKey: string | null } {
+  if (!canvasRef.value || !camera) {
+    return { handled: false, erasedKey: null }
+  }
+  const rect = canvasRef.value.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) {
+    return { handled: false, erasedKey: null }
   }
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
@@ -936,13 +983,19 @@ function tryEraseRepairTargetAtPointer(event: PointerEvent): boolean {
     if (!nodeId) {
       continue
     }
+    const key = `${nodeId}:${bindingId}`
+    if (options?.skipKey && key === options.skipKey) {
+      return { handled: false, erasedKey: null }
+    }
     const handled = eraseContinuousInstance(nodeId, bindingId)
     clearRepairHoverHighlight(true)
-    return handled
+    return { handled, erasedKey: key }
   }
 
-  return false
+  return { handled: false, erasedKey: null }
 }
+
+// (legacy) removed: tryEraseRepairTargetAtPointer(event): boolean
 const {
   overlayContainerRef,
   placeholderOverlayList,
@@ -4569,8 +4622,38 @@ async function handlePointerDown(event: PointerEvent) {
     return
   }
 
+  // Scatter erase mode: middle click (and drag) erases continuous instanced instances.
+  // - If Ground is selected and we're not hovering an instanced target, allow ground-scatter erase to handle middle click.
+  if (scatterEraseModeActive.value && canRepairInstanced.value && event.button === 1) {
+    const hit = pickContinuousInstancedTargetAtPointer(event)
+    if (hit || !selectedNodeIsGround.value) {
+      pointerTrackingState = null
+      instancedEraseDragState = {
+        pointerId: event.pointerId,
+        lastKey: null,
+        lastAtMs: 0,
+      }
+      const result = tryEraseRepairTargetAtPointer(event)
+      if (result.handled && result.erasedKey) {
+        instancedEraseDragState.lastKey = result.erasedKey
+        instancedEraseDragState.lastAtMs = typeof performance !== 'undefined' ? performance.now() : Date.now()
+      }
+      try {
+        canvasRef.value.setPointerCapture(event.pointerId)
+      } catch {
+        /* noop */
+      }
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+    // If Ground is selected and no instanced target is under the cursor, fall through
+    // so the ground-scatter erase can handle middle click.
+  }
+
   // Middle mouse triggers continuous instanced creation (allows left/right for camera pan/rotate).
-  if (event.button === 1 && props.activeTool === 'select') {
+  if (!scatterEraseModeActive.value && event.button === 1 && props.activeTool === 'select') {
     const nodeId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
     if (nodeId && !sceneStore.isNodeSelectionLocked(nodeId)) {
       const node = findSceneNode(sceneStore.nodes, nodeId)
@@ -4794,6 +4877,22 @@ function handlePointerMove(event: PointerEvent) {
 
   if (scatterEraseModeActive.value && canRepairInstanced.value) {
     updateRepairHoverHighlight(event)
+
+    if (instancedEraseDragState && instancedEraseDragState.pointerId === event.pointerId) {
+      const isMiddleDown = (event.buttons & 4) !== 0
+      if (isMiddleDown) {
+        const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+        // Throttle erase attempts slightly to avoid excessive updates.
+        if (now - instancedEraseDragState.lastAtMs >= 24) {
+          const result = tryEraseRepairTargetAtPointer(event, { skipKey: instancedEraseDragState.lastKey })
+          instancedEraseDragState.lastAtMs = now
+          if (result.handled && result.erasedKey) {
+            instancedEraseDragState.lastKey = result.erasedKey
+          }
+        }
+      }
+    }
+
     if (repairClickState && repairClickState.pointerId === event.pointerId && !repairClickState.moved) {
       const dx = event.clientX - repairClickState.startX
       const dy = event.clientY - repairClickState.startY
@@ -4888,14 +4987,25 @@ function handlePointerUp(event: PointerEvent) {
     return
   }
 
+  if (instancedEraseDragState && event.pointerId === instancedEraseDragState.pointerId && event.button === 1) {
+    instancedEraseDragState = null
+    if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
+      canvasRef.value.releasePointerCapture(event.pointerId)
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
   if (scatterEraseModeActive.value && repairClickState && event.pointerId === repairClickState.pointerId && event.button === 0) {
     const dx = event.clientX - repairClickState.startX
     const dy = event.clientY - repairClickState.startY
     const moved = repairClickState.moved || Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX
     repairClickState = null
     if (!moved) {
-      const handled = tryEraseRepairTargetAtPointer(event)
-      if (handled) {
+      const result = tryEraseRepairTargetAtPointer(event)
+      if (result.handled) {
         event.preventDefault()
         event.stopPropagation()
         event.stopImmediatePropagation()
@@ -5073,6 +5183,10 @@ function handlePointerCancel(event: PointerEvent) {
 
   updateSelectionHighlights()
   pointerTrackingState = null
+
+  if (instancedEraseDragState && event.pointerId === instancedEraseDragState.pointerId) {
+    instancedEraseDragState = null
+  }
 }
 
 function handleCanvasDoubleClick(event: MouseEvent) {
