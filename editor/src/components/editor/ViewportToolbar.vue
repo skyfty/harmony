@@ -141,6 +141,7 @@
                 variant="text"
                 color="primary"
                 class="scatter-erase-menu__clear"
+                :disabled="!canClearAllScatterInstances"
                 @click="handleClearScatterMenuAction"
               >
                 清除所有Scatter实例
@@ -239,6 +240,7 @@ const props = defineProps<{
   canAlignSelection: boolean
   canRotateSelection: boolean
   canEraseScatter: boolean
+  canClearAllScatterInstances: boolean
   cameraControlMode: CameraControlMode
   activeBuildTool: BuildTool | null
   scatterEraseModeActive: boolean
@@ -267,6 +269,7 @@ const {
   canAlignSelection,
   canRotateSelection,
   canEraseScatter,
+  canClearAllScatterInstances,
   scatterEraseModeActive,
   cameraControlMode,
   activeBuildTool,
@@ -463,6 +466,9 @@ function toggleAxesVisibility() {
 }
 
 function handleClearScatterMenuAction() {
+  if (!canClearAllScatterInstances.value) {
+    return
+  }
   emit('clear-all-scatter-instances')
   emit('update:scatter-erase-menu-open', false)
 }

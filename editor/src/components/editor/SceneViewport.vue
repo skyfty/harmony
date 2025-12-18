@@ -7839,6 +7839,7 @@ defineExpose<SceneViewportHandle>({
         :can-align-selection="canAlignSelection"
         :can-rotate-selection="canRotateSelection"
         :can-erase-scatter="canUseScatterEraseTool"
+        :canClearAllScatterInstances="selectedNodeIsGround"
         :scatter-erase-mode-active="scatterEraseModeActive"
           :scatter-erase-radius="scatterEraseRadius"
           :scatter-erase-menu-open="scatterEraseMenuOpen"
