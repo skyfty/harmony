@@ -8,6 +8,7 @@ import type { PanelVisibilityState } from './panel-visibility-state'
 import type { SceneHistoryEntry } from './scene-history-entry'
 import type { SceneViewportSettings } from './scene-viewport-settings'
 import type { SceneMaterial } from '@/types/material'
+import type { PlanningSceneData } from '@/types/planning-scene-data'
 
 export interface SceneState {
   currentSceneId: string | null
@@ -36,6 +37,7 @@ export interface SceneState {
   
   environment: EnvironmentSettings
   groundSettings: GroundSettings
+  planningData: PlanningSceneData | null
   panelVisibility: PanelVisibilityState
   projectPanelTreeSize: number
   resourceProviderId: string

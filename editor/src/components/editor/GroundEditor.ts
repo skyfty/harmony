@@ -2,6 +2,7 @@ import { reactive, ref, watch, type Ref } from 'vue'
 import * as THREE from 'three'
 import type { GroundDynamicMesh, GroundSculptOperation, SceneNode } from '@harmony/schema'
 import {
+	deleteTerrainScatterStore,
 	ensureTerrainScatterStore,
 	upsertTerrainScatterLayer,
 	replaceTerrainScatterInstances,
@@ -71,7 +72,7 @@ export type GroundEditorOptions = {
 	scatterCategory: Ref<TerrainScatterCategory>
 	scatterAsset: Ref<ProjectAsset | null>
 	scatterSpacing: Ref<number>
-	scatterRadius: Ref<number>
+	scatterBrushRadius: Ref<number>
 	scatterEraseRadius: Ref<number>
 	activeBuildTool: Ref<BuildTool | null>
 	onScatterEraseStart?: () => void
@@ -97,8 +98,12 @@ const groundPointerHelper = new THREE.Vector3()
 const scatterPointerHelper = new THREE.Vector3()
 const scatterDirectionHelper = new THREE.Vector3()
 const scatterPlacementHelper = new THREE.Vector3()
+const scatterPlacementCenterLocalHelper = new THREE.Vector3()
+const scatterPlacementCandidateLocalHelper = new THREE.Vector3()
+const scatterPlacementCandidateWorldHelper = new THREE.Vector3()
 const scatterWorldMatrixHelper = new THREE.Matrix4()
 const scatterInstanceWorldPositionHelper = new THREE.Vector3()
+const scatterEraseLocalPointHelper = new THREE.Vector3()
 
 type ScatterSessionState = {
 	pointerId: number
@@ -309,6 +314,46 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		{ immediate: true },
 	)
 
+	function resetScatterStoreState(reason: string) {
+		try {
+			cancelScatterPlacement()
+			cancelScatterErase()
+		} catch {
+			// ignore
+		}
+
+		if (scatterStore) {
+			try {
+				for (const layer of Array.from(scatterStore.layers.values())) {
+					for (const instance of layer.instances ?? []) {
+						releaseScatterInstance(instance)
+					}
+				}
+			} catch (error) {
+				console.warn('释放地面散布实例失败', reason, error)
+			}
+		}
+
+		scatterStore = null
+		scatterLayer = null
+		scatterModelGroup = null
+		scatterSnapshotUpdatedAt = null
+		try {
+			deleteTerrainScatterStore(GROUND_NODE_ID)
+		} catch (error) {
+			console.warn('重置地面散布存储失败', reason, error)
+		}
+	}
+
+	const stopSceneIdWatch = watch(
+		() => options.sceneStore.currentSceneId,
+		(next, previous) => {
+			if (next !== previous) {
+				resetScatterStoreState('scene-changed')
+			}
+		},
+	)
+
 	async function restoreGroupdScatter(): Promise<void> {
 		const store = ensureScatterStoreRef()
 		const groundMesh = getGroundMeshObject()
@@ -398,8 +443,29 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	function ensureScatterStoreRef(): TerrainScatterStore {
 		const snapshot = getGroundTerrainScatterSnapshot()
 		const snapshotUpdatedAt = getScatterSnapshotTimestamp(snapshot)
-		const shouldHydrate = snapshot && (!scatterStore || snapshotUpdatedAt !== scatterSnapshotUpdatedAt)
+		const hasSnapshot = Boolean(snapshot)
+		const hasSnapshotChanged = snapshotUpdatedAt !== scatterSnapshotUpdatedAt
+		const shouldHydrate = hasSnapshot && (!scatterStore || hasSnapshotChanged)
+		if (!hasSnapshot && (scatterStore || scatterSnapshotUpdatedAt !== null)) {
+			// New scenes may not contain a terrainScatter snapshot. Since scatter stores are keyed by
+			// the constant ground node id, we must reset the store; otherwise previous scene scatter
+			// will leak into the new scene.
+			resetScatterStoreState('missing-snapshot')
+		}
 		if (shouldHydrate && snapshot) {
+			// When the snapshot changes (e.g. planning->3D conversion), previously bound instances
+			// may remain allocated in the instancing cache. Release old bindings before rehydrating.
+			if (scatterStore) {
+				try {
+					for (const layer of Array.from(scatterStore.layers.values())) {
+						for (const instance of layer.instances ?? []) {
+							releaseScatterInstance(instance)
+						}
+					}
+				} catch (error) {
+					console.warn('释放旧的地面散布实例失败', error)
+				}
+			}
 			try {
 				scatterStore = loadTerrainScatterSnapshot(GROUND_NODE_ID, snapshot)
 				scatterSnapshotUpdatedAt = snapshotUpdatedAt
@@ -856,6 +922,60 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			placed = applyScatterPlacement(point) || placed
 		}
 		return placed
+	function paintScatterStamp(worldCenterPoint: THREE.Vector3): void {
+		if (!scatterSession || !scatterSession.layer || !scatterSession.modelGroup) {
+			return
+		}
+		const radius = resolveScatterBrushRadius()
+		const spacing = scatterSession.spacing
+
+		// Estimate how many instances to try to place per stamp.
+		// Brush radius controls the area; spacing controls density.
+		const area = Math.PI * radius * radius
+		const attemptsTarget = Math.min(25, Math.max(1, Math.floor((area / (spacing * spacing)) * 0.25)))
+		const maxAttempts = Math.min(150, Math.max(20, attemptsTarget * 8))
+
+		let placed = applyScatterPlacement(worldCenterPoint) ? 1 : 0
+		if (placed >= attemptsTarget) {
+			return
+		}
+
+		const { groundMesh, definition } = scatterSession
+		groundMesh.updateMatrixWorld(true)
+		scatterPlacementCenterLocalHelper.copy(worldCenterPoint)
+		groundMesh.worldToLocal(scatterPlacementCenterLocalHelper)
+
+		for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+			if (!scatterSession) {
+				return
+			}
+			const u = Math.random()
+			const v = Math.random()
+			const r = Math.sqrt(u) * radius
+			const theta = v * Math.PI * 2
+			const dx = Math.cos(theta) * r
+			const dz = Math.sin(theta) * r
+
+			scatterPlacementCandidateLocalHelper.set(
+				scatterPlacementCenterLocalHelper.x + dx,
+				0,
+				scatterPlacementCenterLocalHelper.z + dz,
+			)
+			scatterPlacementCandidateLocalHelper.y = sampleGroundHeight(
+				definition,
+				scatterPlacementCandidateLocalHelper.x,
+				scatterPlacementCandidateLocalHelper.z,
+			)
+
+			scatterPlacementCandidateWorldHelper.copy(scatterPlacementCandidateLocalHelper)
+			groundMesh.localToWorld(scatterPlacementCandidateWorldHelper)
+			if (applyScatterPlacement(scatterPlacementCandidateWorldHelper)) {
+				placed += 1
+				if (placed >= attemptsTarget) {
+					return
+				}
+			}
+		}
 	}
 
 	function traceScatterPath(targetPoint: THREE.Vector3) {
@@ -866,15 +986,18 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (applyScatterPlacementCluster(targetPoint)) {
 				scatterSession.lastPoint = targetPoint.clone()
 			}
+			scatterSession.lastPoint = targetPoint.clone()
+			paintScatterStamp(targetPoint)
 			return
 		}
 		scatterDirectionHelper.copy(targetPoint).sub(scatterSession.lastPoint)
 		const distance = scatterDirectionHelper.length()
-		if (distance < scatterSession.spacing * 0.35) {
+		const stepDistance = Math.max(scatterSession.spacing, resolveScatterBrushRadius() * 0.5)
+		if (distance < stepDistance * 0.35) {
 			return
 		}
 		scatterDirectionHelper.normalize()
-		const steps = Math.floor(distance / scatterSession.spacing)
+		const steps = Math.floor(distance / stepDistance)
 		for (let index = 1; index <= steps; index += 1) {
 			scatterPlacementHelper
 				.copy(scatterSession.lastPoint)
@@ -888,7 +1011,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (applyScatterPlacementCluster(targetPoint)) {
 				scatterSession.lastPoint = targetPoint.clone()
 			}
+				.addScaledVector(scatterDirectionHelper, stepDistance * index)
+			paintScatterStamp(scatterPlacementHelper)
 		}
+		const remainder = distance - steps * stepDistance
+		if (remainder >= stepDistance * 0.4) {
+			paintScatterStamp(targetPoint)
+		}
+		scatterSession.lastPoint = targetPoint.clone()
 	}
 
 	function beginScatterPlacement(event: PointerEvent): boolean {
@@ -988,13 +1118,24 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function eraseScatterInstances(worldPoint: THREE.Vector3, radius: number, groundMesh: THREE.Mesh): boolean {
-		const layers = listScatterLayersForCategory(options.scatterCategory.value)
+		const store = ensureScatterStoreRef()
+		const selectedCategory = options.scatterCategory.value
+		let layers = Array.from(store.layers.values()).filter((layer) => layer.category === selectedCategory)
+		// After planning->3D conversion, scatter may be generated across different categories
+		// than the user's currently selected category. In that case, allow erasing across all
+		// scatter layers so the erase tool works immediately without requiring category toggles.
+		if (!layers.length) {
+			layers = Array.from(store.layers.values())
+		}
 		if (!layers.length) {
 			return false
 		}
 		const radiusSq = radius * radius
 		let removed = false
+		// Compute distance on ground-local XZ plane so the brush radius works regardless of terrain height.
+		scatterEraseLocalPointHelper.copy(worldPoint)
 		groundMesh.updateMatrixWorld(true)
+		groundMesh.worldToLocal(scatterEraseLocalPointHelper)
 		for (const layer of layers) {
 			if (!layer.instances.length) {
 				continue
@@ -1002,8 +1143,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			const survivors: TerrainScatterInstance[] = []
 			const removedInstances: TerrainScatterInstance[] = []
 			for (const instance of layer.instances) {
-				const position = getScatterInstanceWorldPosition(instance, groundMesh, scatterInstanceWorldPositionHelper)
-				if (position.distanceToSquared(worldPoint) <= radiusSq) {
+				const local = instance.localPosition
+				const dx = (local?.x ?? 0) - scatterEraseLocalPointHelper.x
+				const dz = (local?.z ?? 0) - scatterEraseLocalPointHelper.z
+				if (dx * dx + dz * dz <= radiusSq) {
 					removedInstances.push(instance)
 				} else {
 					survivors.push(instance)
@@ -1020,10 +1163,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function resolveScatterEraseRadius(): number {
-		const candidate = Number.isFinite(options.scatterEraseRadius.value)
-			? options.scatterEraseRadius.value
-			: options.brushRadius.value
-		return Math.min(5, Math.max(0.1, candidate))
+		const candidate = Number(options.scatterEraseRadius.value)
+		return Math.min(5, Math.max(0.1, Number.isFinite(candidate) ? candidate : 1))
+	}
+
+	function resolveScatterBrushRadius(): number {
+		const candidate = Number(options.scatterBrushRadius.value)
+		return Math.min(5, Math.max(0.1, Number.isFinite(candidate) ? candidate : 1))
 	}
 
 	function clearScatterInstances(): boolean {
@@ -1359,7 +1505,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const hit = intersects[0]
 		if (hit) {
 			brushMesh.position.copy(hit.point)
-			const scale = resolveActiveBrushRadius()
+			const scale = options.scatterEraseModeActive.value
+				? resolveScatterEraseRadius()
+				: scatterModeEnabled()
+					? resolveScatterBrushRadius()
+					: options.brushRadius.value
 			brushMesh.scale.set(scale, scale, 1)
 			conformBrushToTerrain(definition, groundObject)
 			brushMesh.visible = true
@@ -1800,6 +1950,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		stopScatterEraseModeWatch()
 		stopTabWatch()
 		stopScatterSelectionWatch()
+		stopSceneIdWatch()
 		cancelScatterPlacement()
 		cancelScatterErase()
 		brushMesh.geometry.dispose()
@@ -1807,9 +1958,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		material.dispose()
 		groundSelectionGroup.clear()
 		sculptSessionState = null
-		scatterStore = null
-		scatterLayer = null
-		scatterSnapshotUpdatedAt = null
+		resetScatterStoreState('dispose')
 	}
 
 	return {

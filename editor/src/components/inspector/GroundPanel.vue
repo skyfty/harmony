@@ -10,11 +10,13 @@ import GroundAssetPainter from './GroundAssetPainter.vue'
 import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import type { GroundPanelTab } from '@/stores/terrainStore'
+import type { ProjectAsset } from '@/types/project-asset'
 
 const sceneStore = useSceneStore()
 const terrainStore = useTerrainStore()
 const { selectedNode } = storeToRefs(sceneStore)
-const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterSpacing, scatterRadius } = storeToRefs(terrainStore)
+const { brushRadius, brushStrength, brushShape, brushOperation, groundPanelTab, scatterSpacing, scatterBrushRadius } =
+  storeToRefs(terrainStore)
 
 const selectedGroundNode = computed(() => {
   if (selectedNode.value?.dynamicMesh?.type === 'Ground') {
@@ -57,7 +59,13 @@ const scatterSpacingModel = computed({
   set: (value: number) => terrainStore.setScatterSpacing(Number(value)),
 })
 
+const scatterBrushRadiusModel = computed({
+  get: () => scatterBrushRadius.value,
+  set: (value: number) => terrainStore.setScatterBrushRadius(Number(value)),
+})
+
 const scatterSpacingDisplay = computed(() => scatterSpacing.value.toFixed(2))
+const scatterBrushRadiusDisplay = computed(() => scatterBrushRadius.value.toFixed(2))
 
 const scatterRadiusModel = computed({
   get: () => scatterRadius.value,
@@ -187,6 +195,17 @@ watch(selectedNoiseMode, (mode) => {
   applyGenerationPatch({ mode })
 })
 
+function handleScatterAssetSelect(
+  category: TerrainScatterCategory,
+  payload: { asset: ProjectAsset; providerAssetId: string },
+): void {
+  if (!hasGround.value) {
+    return
+  }
+  terrainStore.setScatterCategory(category)
+  terrainStore.setScatterSelection(payload)
+}
+
 </script>
 
 <template>
@@ -244,6 +263,38 @@ watch(selectedNoiseMode, (mode) => {
               <v-icon :icon="tab.icon" size="16" />
             </v-tab>
           </v-tabs>
+          <div
+            v-if="groundPanelTabModel !== 'terrain'"
+            class="scatter-spacing-panel"
+          >
+            <div class="scatter-spacing-labels">
+              <span>Scatter Spacing</span>
+              <span>{{ scatterSpacingDisplay }} m</span>
+            </div>
+            <v-slider
+              v-model="scatterSpacingModel"
+              :min="0.1"
+              :max="2"
+              :step="0.05"
+              density="compact"
+              track-color="rgba(77, 208, 225, 0.4)"
+              color="primary"
+            />
+
+            <div class="scatter-spacing-labels">
+              <span>Brush Radius</span>
+              <span>{{ scatterBrushRadiusDisplay }} m</span>
+            </div>
+            <v-slider
+              v-model="scatterBrushRadiusModel"
+              :min="0.1"
+              :max="5"
+              :step="0.1"
+              density="compact"
+              track-color="rgba(77, 208, 225, 0.4)"
+              color="primary"
+            />
+          </div>
           <v-window
             v-model="groundPanelTabModel"
             class="ground-tab-window"
@@ -272,40 +323,10 @@ watch(selectedNoiseMode, (mode) => {
                 v-if="groundPanelTabModel === tab.key"
                 :key="tab.key"
                 :category="tab.key"
+                @asset-select="(payload) => handleScatterAssetSelect(tab.key, payload)"
               />
             </v-window-item>
           </v-window>
-          <div
-            v-if="groundPanelTabModel !== 'terrain'"
-            class="scatter-spacing-panel"
-          >
-            <div class="scatter-spacing-labels">
-              <span>Scatter Spacing</span>
-              <span>{{ scatterSpacingDisplay }} m</span>
-            </div>
-            <v-slider
-              v-model="scatterSpacingModel"
-              :min="0.1"
-              :max="2"
-              :step="0.05"
-              density="compact"
-              track-color="rgba(77, 208, 225, 0.4)"
-              color="primary"
-            />
-            <div class="scatter-spacing-labels">
-              <span>Scatter Radius</span>
-              <span>{{ scatterRadiusDisplay }} m</span>
-            </div>
-            <v-slider
-              v-model="scatterRadiusModel"
-              :min="0.1"
-              :max="2"
-              :step="0.05"
-              density="compact"
-              track-color="rgba(77, 208, 225, 0.4)"
-              color="primary"
-            />
-          </div>
         </div>
       </div>
     </v-expansion-panel-text>

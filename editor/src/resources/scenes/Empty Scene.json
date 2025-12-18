@@ -118,7 +118,7 @@
     }
   },
   "viewportSettings": {
-    "showGrid": true,
+    "showGrid": false,
     "showAxes": false,
     "cameraProjection": "perspective",
     "cameraControlMode": "orbit",

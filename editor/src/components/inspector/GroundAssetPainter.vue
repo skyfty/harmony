@@ -1,22 +1,28 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { ProjectAsset } from '@/types/project-asset'
-import { useSceneStore } from '@/stores/sceneStore'
 import { useTerrainStore } from '@/stores/terrainStore'
-import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
-import { assetProvider, loadScatterAssets, terrainScatterPresets } from '@/resources/projectProviders/asset'
+import { loadScatterAssets, terrainScatterPresets } from '@/resources/projectProviders/asset'
+import { useScatterAssetSelection } from '@/stores/useScatterAssetSelection'
 
 const props = defineProps<{
   category: TerrainScatterCategory
+  updateTerrainSelection?: boolean
+  selectedProviderAssetId?: string | null
+  search?: string
+  showSearch?: boolean
+}>()
+
+const emit = defineEmits<{
+  (event: 'asset-select', payload: { asset: ProjectAsset; providerAssetId: string }): void
+  (event: 'update:search', value: string): void
 }>()
 
 const terrainStore = useTerrainStore()
-const sceneStore = useSceneStore()
-const assetCacheStore = useAssetCacheStore()
 
-const { scatterSelectedAsset } = storeToRefs(terrainStore)
+const { scatterSelectedAsset, scatterProviderAssetId } = storeToRefs(terrainStore)
 
 const categoryKeys = Object.keys(terrainScatterPresets) as TerrainScatterCategory[]
 const assetBuckets = reactive<Record<TerrainScatterCategory, ProjectAsset[]>>(
@@ -38,7 +44,51 @@ const errorMap = reactive<Record<TerrainScatterCategory, string | null>>(
   }, {} as Record<TerrainScatterCategory, string | null>),
 )
 
-const selectingAssetId = ref<string | null>(null)
+const { selectingAssetId, selectScatterAsset } = useScatterAssetSelection({
+  updateTerrainSelection: props.updateTerrainSelection !== false,
+  onSelected(asset, providerAssetId) {
+    emit('asset-select', { asset, providerAssetId })
+  },
+})
+
+const searchQuery = ref(props.search ?? '')
+
+watch(
+  () => props.search,
+  (value) => {
+    if (value === undefined) {
+      return
+    }
+    const next = value ?? ''
+    if (next !== searchQuery.value) {
+      searchQuery.value = next
+    }
+  },
+  { immediate: true },
+)
+
+const normalizedSearch = computed(() => searchQuery.value.trim().toLowerCase())
+const isFiltering = computed(() => normalizedSearch.value.length > 0)
+
+const filteredAssets = computed(() => {
+  const list = assetBuckets[props.category] ?? []
+  if (!normalizedSearch.value) {
+    return list
+  }
+  return list.filter((asset) => asset.name.toLowerCase().includes(normalizedSearch.value))
+})
+
+const hasAnyAssets = computed(() => (assetBuckets[props.category]?.length ?? 0) > 0)
+
+function handleSearchInput(value: string | null) {
+  const next = value ?? ''
+  if (next === searchQuery.value) {
+    emit('update:search', searchQuery.value)
+    return
+  }
+  searchQuery.value = next
+  emit('update:search', searchQuery.value)
+}
 
 async function ensureAssetsLoaded(category: TerrainScatterCategory): Promise<void> {
   if (loadingMap[category]) {
@@ -59,65 +109,87 @@ async function ensureAssetsLoaded(category: TerrainScatterCategory): Promise<voi
   }
 }
 
-async function ensureAssetCached(asset: ProjectAsset): Promise<void> {
-  if (assetCacheStore.hasCache(asset.id)) {
-    return
-  }
-  await assetCacheStore.downloaProjectAsset(asset)
-}
-
 async function handleAssetClick(asset: ProjectAsset): Promise<void> {
-  if (selectingAssetId.value) {
-    return
-  }
-  selectingAssetId.value = asset.id
-  try {
-    const registered = sceneStore.copyPackageAssetToAssets(assetProvider.id, asset)
-    await ensureAssetCached(registered)
-    terrainStore.setScatterSelection({ asset: registered, providerAssetId: asset.id })
-  } catch (error) {
-    console.warn('Failed to prepare scatter asset', error)
-  } finally {
-    selectingAssetId.value = null
-  }
+  await selectScatterAsset(asset)
 }
 
 function assetThumbnail(asset: ProjectAsset): string | null {
   return asset.thumbnail ?? null
 }
 
+function isAssetActive(assetId: string): boolean {
+  if (props.selectedProviderAssetId != null) {
+    return props.selectedProviderAssetId === assetId
+  }
+  if (scatterProviderAssetId.value) {
+    return scatterProviderAssetId.value === assetId
+  }
+  return scatterSelectedAsset.value?.id === assetId
+}
+
 onMounted(() => {
-  terrainStore.setScatterCategory(props.category)
+  if (props.updateTerrainSelection !== false) {
+    terrainStore.setScatterCategory(props.category)
+  }
   void ensureAssetsLoaded(props.category)
 })
+
+watch(
+  () => props.category,
+  (category) => {
+    if (props.updateTerrainSelection !== false) {
+      terrainStore.setScatterCategory(category)
+    }
+    void ensureAssetsLoaded(category)
+  },
+)
 </script>
 
 <template>
   <div class="asset-painter">
-    <div class="thumbnail-grid" v-if="!loadingMap[props.category] && !errorMap[props.category]">
-      <button
-        v-for="asset in assetBuckets[props.category]"
-        :key="asset.id"
-        class="thumbnail-item"
-        type="button"
-        :class="{ 'is-selected': scatterSelectedAsset?.id === asset.id }"
-        @click="handleAssetClick(asset)"
-      >
-        <div class="thumbnail" :style="{ backgroundImage: assetThumbnail(asset) ? `url(${assetThumbnail(asset)})` : undefined }">
-          <span v-if="!assetThumbnail(asset)" class="thumbnail-placeholder">
-            <v-icon icon="mdi-cube-outline" size="20" />
-          </span>
-        </div>
-      </button>
-      <div v-if="!assetBuckets[props.category]?.length" class="empty-placeholder">
-        当前分类没有可用资源
-      </div>
+    <div v-if="props.showSearch !== false" class="asset-toolbar">
+      <v-text-field
+        :model-value="searchQuery"
+        density="compact"
+        variant="outlined"
+        hide-details
+        clearable
+        class="asset-search"
+        prepend-inner-icon="mdi-magnify"
+        placeholder="搜索撒件预设"
+        :disabled="loadingMap[props.category]"
+        @update:model-value="handleSearchInput"
+      />
     </div>
 
-    <div v-else class="state-card">
-      <v-progress-circular v-if="loadingMap[props.category]" indeterminate size="28" color="primary" />
-      <span v-else>{{ errorMap[props.category] }}</span>
+    <div v-if="loadingMap[props.category]" class="state-card">
+      <v-progress-circular indeterminate size="28" color="primary" />
     </div>
+    <div v-else-if="errorMap[props.category]" class="state-card">
+      <span>{{ errorMap[props.category] }}</span>
+    </div>
+    <template v-else>
+      <div v-if="filteredAssets.length" class="thumbnail-grid">
+        <button
+          v-for="asset in filteredAssets"
+          :key="asset.id"
+          class="thumbnail-item"
+          type="button"
+          :class="{ 'is-selected': isAssetActive(asset.id) }"
+          @click="handleAssetClick(asset)"
+        >
+          <div class="thumbnail" :style="{ backgroundImage: assetThumbnail(asset) ? `url(${assetThumbnail(asset)})` : undefined }">
+            <span v-if="!assetThumbnail(asset)" class="thumbnail-placeholder">
+              <v-icon icon="mdi-cube-outline" size="20" />
+            </span>
+          </div>
+        </button>
+      </div>
+      <div v-else class="empty-placeholder">
+        <span v-if="isFiltering && hasAnyAssets">未找到匹配的预设</span>
+        <span v-else>当前分类没有可用资源</span>
+      </div>
+    </template>
 
     <div v-if="selectingAssetId" class="selection-overlay">
       <v-progress-circular indeterminate size="32" color="primary" />
@@ -133,34 +205,46 @@ onMounted(() => {
   gap: 12px;
 }
 
+.asset-toolbar {
+  display: flex;
+}
+
+.asset-search {
+  flex: 1;
+}
+
 .hint-text {
   font-size: 12px;
   color: rgba(255, 255, 255, 0.65);
 }
 
+
 .thumbnail-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(58px, 1fr));
-  gap: 6px;
-  max-height: calc((74px * 3) + (6px * 2));
+  grid-template-columns: repeat(auto-fill, 60px);
+  gap: 2px;
+  max-height: calc((62px * 4) + (2px * 3));
   overflow-y: auto;
-  padding-right: 4px;
+  padding-right: 2px;
+  justify-content: flex-start;
 }
 
 .thumbnail-item {
   border: none;
   background: transparent;
-  padding: 1px;
+  padding: 0;
+  width: 60px;
+  height: 60px;
   display: flex;
-  flex-direction: column;
   align-items: center;
+  justify-content: center;
   cursor: pointer;
   transition: transform 0.15s ease;
   overflow: visible;
 }
 
 .thumbnail-item:hover {
-  transform: scale(0.96);
+  transform: scale(0.94);
 }
 
 .thumbnail-item:focus-visible {
@@ -168,8 +252,8 @@ onMounted(() => {
 }
 
 .thumbnail {
-  width: 58px;
-  height: 58px;
+  width: 56px;
+  height: 56px;
   border-radius: 8px;
   background-size: cover;
   background-position: center;
