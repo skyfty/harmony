@@ -1188,12 +1188,16 @@ function getImageLayerListItemStyle(imageId: string): CSSProperties {
 
 function getLayerListItemStyle(layer: PlanningLayer): CSSProperties {
   const isActive = activeLayerId.value === layer.id
-  const bgAlpha = isActive ? 0.14 : 0.06
-  const borderAlpha = isActive ? 0.95 : 0.9
+  const bgAlpha = isActive ? 0.32 : 0.06
+  const borderAlpha = isActive ? 1 : 0.9
+  const accentWidth = isActive ? 8 : 4
   return {
     backgroundColor: hexToRgba(layer.color, bgAlpha),
-    borderLeft: `4px solid ${hexToRgba(layer.color, borderAlpha)}`,
-    borderColor: hexToRgba(layer.color, isActive ? 0.35 : 0.12),
+    borderLeft: `${accentWidth}px solid ${hexToRgba(layer.color, borderAlpha)}`,
+    borderColor: hexToRgba(layer.color, isActive ? 0.85 : 0.12),
+    boxShadow: isActive
+      ? `0 0 0 2px ${hexToRgba(layer.color, 0.35)}, 0 0 18px ${hexToRgba(layer.color, 0.22)}`
+      : 'none',
   }
 }
 
@@ -3071,6 +3075,7 @@ onBeforeUnmount(() => {
                     <image
                       v-if="poly.scatter?.thumbnail && polygonScatterThumbPlacements[poly.id]"
                       class="scatter-thumb"
+                      :class="{ 'inactive-layer-feature': !isActiveLayer(poly.layerId) }"
                       :href="poly.scatter.thumbnail"
                       :x="polygonScatterThumbPlacements[poly.id]!.x"
                       :y="polygonScatterThumbPlacements[poly.id]!.y"
@@ -3117,6 +3122,7 @@ onBeforeUnmount(() => {
                     <image
                       v-if="line.scatter?.thumbnail && polylineScatterThumbPlacements[line.id]"
                       class="scatter-thumb"
+                      :class="{ 'inactive-layer-feature': !isActiveLayer(line.layerId) }"
                       :href="line.scatter.thumbnail"
                       :x="polylineScatterThumbPlacements[line.id]!.x"
                       :y="polylineScatterThumbPlacements[line.id]!.y"
@@ -3381,7 +3387,7 @@ onBeforeUnmount(() => {
 .planning-dialog__content {
   flex: 1;
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr) 380px;
+  grid-template-columns: 260px minmax(0, 1fr) 380px;
   grid-template-rows: 1fr;
   align-items: stretch;
   gap: 12px;
@@ -3404,7 +3410,16 @@ onBeforeUnmount(() => {
 }
 
 .layer-item.active {
-  border-color: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.26);
+  filter: saturate(1.2) brightness(1.08);
+}
+
+.layer-item.active .layer-name {
+  font-weight: 700;
+}
+
+.layer-item.active .layer-meta {
+  opacity: 0.9;
 }
 
 .layer-content {
