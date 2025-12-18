@@ -259,6 +259,15 @@ const instancedOutlineBaseMaterial = new THREE.MeshBasicMaterial({
 })
 instancedOutlineBaseMaterial.toneMapped = false
 
+const instancedHoverMaterial = new THREE.MeshBasicMaterial({
+  color: 0x4dd0e1,
+  transparent: true,
+  opacity: 0.85,
+  depthWrite: false,
+  depthTest: false,
+})
+instancedHoverMaterial.toneMapped = false
+
 const instancedPickProxyGeometry = new THREE.BoxGeometry(1, 1, 1)
 const instancedPickProxyMaterial = new THREE.MeshBasicMaterial({
   color: 0xffffff,
@@ -583,8 +592,6 @@ const repairHoverGroup = new THREE.Group()
 repairHoverGroup.name = 'RepairHover'
 repairHoverGroup.visible = false
 const repairHoverProxies = new Map<string, THREE.Mesh>()
-let repairHoverBindingId: string | null = null
-let repairHoverNodeId: string | null = null
 
 const groundEditor = createGroundEditor({
   sceneStore,
@@ -701,8 +708,6 @@ function handleClearAllScatterInstances() {
 function clearRepairHoverHighlight(updateOutline = true) {
   const wasVisible = repairHoverGroup.visible
   repairHoverGroup.visible = false
-  repairHoverBindingId = null
-  repairHoverNodeId = null
   repairHoverProxies.forEach((proxy) => {
     proxy.visible = false
   })
@@ -767,21 +772,20 @@ function updateRepairHoverHighlight(event: PointerEvent): boolean {
       activeHandles.add(proxyKey)
       let proxy = repairHoverProxies.get(proxyKey)
       if (!proxy) {
-        proxy = createInstancedOutlineProxy(slot.mesh)
-        repairHoverProxies.set(proxyKey, proxy)
-        repairHoverGroup.add(proxy)
+        const created = createInstancedOutlineProxy(slot.mesh)
+        created.material = instancedHoverMaterial
+        created.renderOrder = 1000
+        repairHoverProxies.set(proxyKey, created)
+        repairHoverGroup.add(created)
+        proxy = created
       } else {
         if (proxy.geometry !== slot.mesh.geometry) {
           proxy.geometry = slot.mesh.geometry
         }
-        if (Array.isArray(slot.mesh.material)) {
-          const current = Array.isArray(proxy.material) ? proxy.material : null
-          if (!current || current.length !== slot.mesh.material.length) {
-            proxy.material = getOutlineProxyMaterial(slot.mesh.material)
-          }
-        } else if (Array.isArray(proxy.material)) {
-          proxy.material = instancedOutlineBaseMaterial
+        if (proxy.material !== instancedHoverMaterial) {
+          proxy.material = instancedHoverMaterial
         }
+        proxy.renderOrder = 1000
         if (proxy.parent !== repairHoverGroup) {
           repairHoverGroup.add(proxy)
         }
@@ -800,14 +804,9 @@ function updateRepairHoverHighlight(event: PointerEvent): boolean {
       }
     })
 
-    const changed = bindingId !== repairHoverBindingId || nodeId !== repairHoverNodeId || !repairHoverGroup.visible
-    repairHoverBindingId = bindingId
-    repairHoverNodeId = nodeId
     repairHoverGroup.visible = true
 
-    if (changed) {
-      updateOutlineSelectionTargets()
-    }
+    // Hover visuals are rendered directly; no need to feed outline selection targets.
 
     return true
   }
@@ -936,11 +935,10 @@ function eraseInstancedBinding(nodeId: string, bindingId: string): boolean {
     return false
   }
 
-  const continuous = getContinuousInstancedModelUserData(node)
+  const continuous = Boolean(getContinuousInstancedModelUserData(node))
   if (continuous) {
     return eraseContinuousInstance(nodeId, bindingId)
   }
-
   // Non-continuous instanced scene nodes represent a single instanced binding.
   // Removing the node is the correct erase operation.
   sceneStore.removeSceneNodes([nodeId])
@@ -4348,14 +4346,6 @@ function updateOutlineSelectionTargets() {
     }
   })
   releaseCandidates.forEach((nodeId) => releaseInstancedOutlineEntry(nodeId, false))
-
-  if (scatterEraseModeActive.value && repairHoverGroup.visible && repairHoverGroup.children.length) {
-    repairHoverGroup.children.forEach((child) => {
-      if (child.visible) {
-        meshSet.add(child)
-      }
-    })
-  }
 
   outlineSelectionTargets.length = 0
   outlineSelectionTargets.push(...meshSet)
