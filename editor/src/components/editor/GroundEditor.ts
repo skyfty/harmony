@@ -675,7 +675,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			terrainScatter: snapshot,
 		}
 		groundNode.dynamicMesh = nextMesh
-		options.sceneStore.updateNodeDynamicMesh(groundNode.id, nextMesh)
+		// options.sceneStore.updateNodeDynamicMesh(groundNode.id, nextMesh)
 		scatterSnapshotUpdatedAt = getScatterSnapshotTimestamp(snapshot)
 	}
 
