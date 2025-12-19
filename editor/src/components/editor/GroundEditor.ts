@@ -67,7 +67,7 @@ export type GroundEditorOptions = {
 	brushRadius: Ref<number>
 	brushStrength: Ref<number>
 	brushShape: Ref<TerrainBrushShape | undefined>
-	brushOperation: Ref<GroundSculptOperation>
+	brushOperation: Ref<GroundSculptOperation | null>
 	groundPanelTab: Ref<GroundPanelTab>
 	scatterCategory: Ref<TerrainScatterCategory>
 	scatterAsset: Ref<ProjectAsset | null>
@@ -1441,23 +1441,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			applyGroundSelectionVisuals(selection, definition)
 		}
 		return true
-	}
-
-	function resolveScatterPaintRadius(): number {
-		const candidate = Number.isFinite(options.scatterBrushRadius.value)
-			? options.scatterBrushRadius.value
-			: 0.5
-		return Math.min(2, Math.max(0.1, candidate))
-	}
-
-	function resolveActiveBrushRadius(): number {
-		if (options.scatterEraseModeActive.value) {
-			return resolveScatterEraseRadius()
-		}
-		if (scatterModeEnabled()) {
-			return resolveScatterPaintRadius()
-		}
-		return options.brushRadius.value
 	}
 
 	function updateBrush(event: PointerEvent) {

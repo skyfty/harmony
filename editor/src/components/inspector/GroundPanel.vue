@@ -67,13 +67,6 @@ const scatterBrushRadiusModel = computed({
 const scatterSpacingDisplay = computed(() => scatterSpacing.value.toFixed(2))
 const scatterBrushRadiusDisplay = computed(() => scatterBrushRadius.value.toFixed(2))
 
-const scatterRadiusModel = computed({
-  get: () => scatterRadius.value,
-  set: (value: number) => terrainStore.setScatterRadius(Number(value)),
-})
-
-const scatterRadiusDisplay = computed(() => scatterRadius.value.toFixed(2))
-
 const terrainOperations: Array<{ value: GroundSculptOperation; label: string; icon: string }> = [
   { value: 'depress', label: 'Depress', icon: 'mdi-tray-arrow-down' },
   { value: 'smooth', label: 'Smooth', icon: 'mdi-water-percent' },

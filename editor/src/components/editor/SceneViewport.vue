@@ -27,7 +27,6 @@ import type {
   SceneSkyboxSettings,
   GroundDynamicMesh,
   WallDynamicMesh,
-  SurfaceDynamicMesh
   
 } from '@harmony/schema'
 import {
@@ -84,7 +83,6 @@ import type { BuildTool } from '@/types/build-tool'
 import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache } from '@schema/groundMesh'
 import { useTerrainStore } from '@/stores/terrainStore'
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
-import { createSurfaceMesh, updateSurfaceMesh } from '@schema/surfaceMesh'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
 import { TerrainGridHelper } from './TerrainGridHelper'
@@ -496,14 +494,6 @@ function computeGroundDynamicMeshSignature(definition: GroundDynamicMesh): strin
 
 function computeWallDynamicMeshSignature(definition: WallDynamicMesh): string {
   const serialized = stableSerialize(definition.segments ?? [])
-  return hashString(serialized)
-}
-
-function computeSurfaceDynamicMeshSignature(definition: SurfaceDynamicMesh): string {
-  const serialized = stableSerialize({
-    points: definition.points ?? [],
-    normal: definition.normal ?? null,
-  })
   return hashString(serialized)
 }
 
@@ -1376,44 +1366,9 @@ type WallBuildSession = {
   nodeId: string | null
   dimensions: { height: number; width: number; thickness: number }
 }
-
-type SurfaceBuildSession = {
-  points: THREE.Vector3[]
-  previewGroup: THREE.Group | null
-}
-
 let wallBuildSession: WallBuildSession | null = null
 let wallPreviewNeedsSync = false
 let wallPreviewSignature: string | null = null
-let wallPlacementSuppressedPointerId: number | null = null
-
-const surfacePreviewLineMaterial = new THREE.LineBasicMaterial({
-  color: 0x45aaf2,
-  transparent: true,
-  opacity: 0.9,
-  depthTest: false,
-  depthWrite: false,
-})
-
-const surfacePreviewFillMaterial = new THREE.MeshBasicMaterial({
-  color: 0x45aaf2,
-  transparent: true,
-  opacity: 0.2,
-  depthTest: false,
-  depthWrite: false,
-  side: THREE.DoubleSide,
-})
-
-let surfaceBuildSession: SurfaceBuildSession | null = null
-
-function pointerHitsSelectableObject(event: PointerEvent): boolean {
-  const nodeHit = pickNodeAtPointer(event)
-  if (nodeHit) {
-    return true
-  }
-  const selectionHit = pickActiveSelectionBoundingBoxHit(event)
-  return !!selectionHit
-}
 
 
 function normalizeWallDimensionsForViewport(values: { height?: number; width?: number; thickness?: number }): {
@@ -3638,7 +3593,6 @@ function disposeScene() {
   }
 
   groundSelectionGroup.removeFromParent()
-  cancelSurfaceBuildSession()
 
   if (orbitControls) {
     orbitControls.removeEventListener('change', handleControlsChange)
@@ -4733,7 +4687,7 @@ async function handlePointerDown(event: PointerEvent) {
   }
 
   // Middle mouse triggers continuous instanced creation (allows left/right for camera pan/rotate).
-  if (!scatterEraseModeActive.value && event.button === 1 && props.activeTool === 'select') {
+  if (!scatterEraseModeActive.value && event.button === 1 && props.activeTool === 'select' && activeBuildTool.value !== 'wall') {
     const nodeId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
     if (nodeId && !sceneStore.isNodeSelectionLocked(nodeId)) {
       const node = findSceneNode(sceneStore.nodes, nodeId)
@@ -4786,18 +4740,12 @@ async function handlePointerDown(event: PointerEvent) {
 
 
   if (activeBuildTool.value === 'wall') {
-    if (button === 0) {
-      const hitsSelectable = pointerHitsSelectableObject(event)
-      if (hitsSelectable) {
-        wallPlacementSuppressedPointerId = event.pointerId
-      } else {
-        wallPlacementSuppressedPointerId = null
-        pointerTrackingState = null
-        event.preventDefault()
-        event.stopPropagation()
-        event.stopImmediatePropagation()
-        return
-      }
+    if (button === 1 && !isAltOverrideActive) {
+      pointerTrackingState = null
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
     }
     if (button === 2) {
       pointerTrackingState = null
@@ -5083,21 +5031,18 @@ function handlePointerUp(event: PointerEvent) {
   }
 
   if (activeBuildTool.value === 'wall') {
-    if (event.button === 0) {
-      const suppressed = wallPlacementSuppressedPointerId === event.pointerId
-      if (!suppressed && !overrideActive) {
-        const handled = handleWallPlacementClick(event)
-        wallPlacementSuppressedPointerId = null
-        if (handled) {
-          event.preventDefault()
-          event.stopPropagation()
-          event.stopImmediatePropagation()
-        }
+    if (event.button === 1) {
+      if (overrideActive) {
         return
       }
-      wallPlacementSuppressedPointerId = null
+      const handled = handleWallPlacementClick(event)
+      if (handled) {
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+      }
+      return
     } else if (event.button === 2) {
-      wallPlacementSuppressedPointerId = null
       if (overrideActive) {
         return
       }
@@ -5213,9 +5158,6 @@ function handlePointerCancel(event: PointerEvent) {
   }
 
   if (activeBuildTool.value === 'wall') {
-    if (wallPlacementSuppressedPointerId === event.pointerId) {
-      wallPlacementSuppressedPointerId = null
-    }
     if (wallBuildSession) {
       cancelWallDrag()
       event.preventDefault()
@@ -5499,7 +5441,6 @@ function clearWallBuildSession(options: { disposePreview?: boolean } = {}) {
   }
   wallBuildSession = null
   wallPreviewSignature = null
-  wallPlacementSuppressedPointerId = null
 }
 
 function ensureWallBuildSession(): WallBuildSession {
@@ -5641,7 +5582,6 @@ function cancelWallDrag() {
   wallBuildSession.dragEnd = null
   resetWallDragState()
   updateWallPreview()
-  wallPlacementSuppressedPointerId = null
 }
 
 function commitWallSegmentDrag(): boolean {
@@ -6686,17 +6626,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
         groupData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
       }
     }
-  } else if (node.dynamicMesh?.type === 'Surface') {
-    const surfaceMesh = userData.surfaceMesh as THREE.Mesh | undefined
-    if (surfaceMesh) {
-      const meshData = surfaceMesh.userData ?? (surfaceMesh.userData = {})
-      const nextSignature = computeSurfaceDynamicMeshSignature(node.dynamicMesh as SurfaceDynamicMesh)
-      if (meshData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
-        updateSurfaceMesh(surfaceMesh, node.dynamicMesh as SurfaceDynamicMesh)
-        meshData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
-      }
-    }
-  }
+  } 
 
   if (node.materials && node.materials.length) {
     applyMaterialOverrides(object, node.materials, materialOverrideOptions)
@@ -7292,14 +7222,6 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       container.add(wallGroup)
       containerData.wallGroup = wallGroup
       containerData.dynamicMeshType = 'Wall'
-    } else if (node.dynamicMesh?.type === 'Surface') {
-      const surfaceDefinition = node.dynamicMesh as SurfaceDynamicMesh
-      const surfaceMesh = createSurfaceMesh(surfaceDefinition)
-      surfaceMesh.userData.nodeId = node.id
-      surfaceMesh.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeSurfaceDynamicMeshSignature(surfaceDefinition)
-      container.add(surfaceMesh)
-      containerData.surfaceMesh = surfaceMesh
-      containerData.dynamicMeshType = 'Surface'
     } else {
       const runtimeObject = getRuntimeObject(node.id)
       if (runtimeObject) {
@@ -7611,7 +7533,6 @@ onBeforeUnmount(() => {
     viewportToolbarResizeObserver.disconnect()
     viewportToolbarResizeObserver = null
   }
-  cancelSurfaceBuildSession()
 })
 
 watch(cameraControlMode, (mode) => {

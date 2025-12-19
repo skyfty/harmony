@@ -45,7 +45,6 @@ import type {
   LightNodeType,
   NodeComponentType,
   PlatformDynamicMesh,
-  SurfaceDynamicMesh,
   SceneBehavior,
   SceneDynamicMesh,
   SceneNode,

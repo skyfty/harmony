@@ -2,7 +2,6 @@
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
-import type { DragEventHandler } from 'vue'
 
 const sceneStore = useSceneStore()
 const { selectedNode, draggingAssetId } = storeToRefs(sceneStore)
@@ -21,15 +20,6 @@ const currentAsset = computed(() => {
   }
   return sceneStore.getAsset(node.sourceAssetId)
 })
-
-const dropInstruction = computed(() => {
-  if (dropProcessing.value) {
-    return 'Updating the model asset…'
-  }
-  return 'Drag a model asset here to replace the current resource.'
-})
-
-const dropHint = computed(() => (dropProcessing.value ? 'Applying changes…' : 'Transforms remain untouched.'))
 
 watch(selectedNode, () => {
   dropActive.value = false
@@ -80,7 +70,7 @@ function handleDragLeave(event: DragEvent) {
   dropActive.value = false
 }
 
-const handleDrop: DragEventHandler = async (event) => {
+const handleDrop = async (event: DragEvent) => {
   event.preventDefault()
   dropActive.value = false
   feedbackMessage.value = null
