@@ -16,7 +16,7 @@ import {
 } from '@schema/components'
 
 const sceneStore = useSceneStore()
-const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
+const { selectedNode, selectedNodeId, draggingAssetId } = storeToRefs(sceneStore)
 
 const localHeight = ref<number>(WALL_DEFAULT_HEIGHT)
 const localWidth = ref<number>(WALL_DEFAULT_WIDTH)
@@ -28,6 +28,33 @@ const isApplyingDimensions = ref(false)
 const wallComponent = computed(
   () => selectedNode.value?.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined,
 )
+
+const ASSET_DRAG_MIME = 'application/x-harmony-asset'
+
+const bodyDropAreaRef = ref<HTMLElement | null>(null)
+const jointDropAreaRef = ref<HTMLElement | null>(null)
+const bodyDropActive = ref(false)
+const jointDropActive = ref(false)
+const bodyDropProcessing = ref(false)
+const jointDropProcessing = ref(false)
+const bodyFeedbackMessage = ref<string | null>(null)
+const jointFeedbackMessage = ref<string | null>(null)
+
+const bodyAsset = computed(() => {
+  const assetId = wallComponent.value?.props?.bodyAssetId
+  if (!assetId) {
+    return null
+  }
+  return sceneStore.getAsset(assetId) ?? null
+})
+
+const jointAsset = computed(() => {
+  const assetId = wallComponent.value?.props?.jointAssetId
+  if (!assetId) {
+    return null
+  }
+  return sceneStore.getAsset(assetId) ?? null
+})
 
 watch(
   () => wallComponent.value?.props,
@@ -45,6 +72,140 @@ watch(
   },
   { immediate: true, deep: true },
 )
+
+watch(selectedNode, () => {
+  bodyDropActive.value = false
+  jointDropActive.value = false
+  bodyDropProcessing.value = false
+  jointDropProcessing.value = false
+  bodyFeedbackMessage.value = null
+  jointFeedbackMessage.value = null
+})
+
+function serializeAssetDragPayload(raw: string | null): string | null {
+  if (!raw) {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(raw) as { assetId?: string }
+    if (parsed?.assetId) {
+      return parsed.assetId
+    }
+  } catch (error) {
+    console.warn('Unable to parse asset drag payload', error)
+  }
+  return null
+}
+
+function resolveDragAssetId(event: DragEvent): string | null {
+  if (event.dataTransfer) {
+    const payload = serializeAssetDragPayload(event.dataTransfer.getData(ASSET_DRAG_MIME))
+    if (payload) {
+      return payload
+    }
+  }
+  return draggingAssetId.value ?? null
+}
+
+function shouldDeactivateDropArea(target: HTMLElement | null, event: DragEvent): boolean {
+  const related = event.relatedTarget as Node | null
+  if (!target || (related && target.contains(related))) {
+    return false
+  }
+  return true
+}
+
+function validateWallAssetId(assetId: string): string | null {
+  const asset = sceneStore.getAsset(assetId)
+  if (!asset || (asset.type !== 'model' && asset.type !== 'mesh')) {
+    return 'Only model assets can be assigned here.'
+  }
+  return null
+}
+
+async function assignWallBodyAsset(event: DragEvent) {
+  event.preventDefault()
+  bodyDropActive.value = false
+  bodyFeedbackMessage.value = null
+
+  const nodeId = selectedNodeId.value
+  const component = wallComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  if (bodyDropProcessing.value) {
+    return
+  }
+
+  const assetId = resolveDragAssetId(event)
+  if (!assetId) {
+    bodyFeedbackMessage.value = 'Drag a model asset from the Asset Panel.'
+    return
+  }
+
+  const invalid = validateWallAssetId(assetId)
+  if (invalid) {
+    bodyFeedbackMessage.value = invalid
+    return
+  }
+
+  if (assetId === wallComponent.value?.props?.bodyAssetId) {
+    bodyFeedbackMessage.value = 'This model is already assigned.'
+    return
+  }
+
+  bodyDropProcessing.value = true
+  try {
+    sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyAssetId: assetId })
+  } catch (error) {
+    console.error('Failed to assign wall body asset model', error)
+    bodyFeedbackMessage.value = (error as Error).message ?? 'Failed to assign the model asset.'
+  } finally {
+    bodyDropProcessing.value = false
+  }
+}
+
+async function assignWallJointAsset(event: DragEvent) {
+  event.preventDefault()
+  jointDropActive.value = false
+  jointFeedbackMessage.value = null
+
+  const nodeId = selectedNodeId.value
+  const component = wallComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  if (jointDropProcessing.value) {
+    return
+  }
+
+  const assetId = resolveDragAssetId(event)
+  if (!assetId) {
+    jointFeedbackMessage.value = 'Drag a model asset from the Asset Panel.'
+    return
+  }
+
+  const invalid = validateWallAssetId(assetId)
+  if (invalid) {
+    jointFeedbackMessage.value = invalid
+    return
+  }
+
+  if (assetId === wallComponent.value?.props?.jointAssetId) {
+    jointFeedbackMessage.value = 'This model is already assigned.'
+    return
+  }
+
+  jointDropProcessing.value = true
+  try {
+    sceneStore.updateNodeComponentProps(nodeId, component.id, { jointAssetId: assetId })
+  } catch (error) {
+    console.error('Failed to assign wall joint asset model', error)
+    jointFeedbackMessage.value = (error as Error).message ?? 'Failed to assign the model asset.'
+  } finally {
+    jointDropProcessing.value = false
+  }
+}
 
 watch([
   localHeight,
@@ -226,6 +387,66 @@ function applyDimensions() {
           @keydown.enter.prevent="applyDimensions"
         />
       </div>
+
+      <div class="wall-asset-section">
+        <div
+          class="asset-model-panel"
+          ref="bodyDropAreaRef"
+          :class="{ 'is-active': bodyDropActive, 'is-processing': bodyDropProcessing }"
+          @dragenter.prevent="bodyDropActive = true"
+          @dragover.prevent="bodyDropActive = true"
+          @dragleave="(e) => { if (shouldDeactivateDropArea(bodyDropAreaRef, e)) bodyDropActive = false }"
+          @drop="assignWallBodyAsset"
+        >
+          <div v-if="bodyAsset" class="asset-summary">
+            <div
+              class="asset-thumbnail"
+              :style="bodyAsset.thumbnail?.trim() ? { backgroundImage: `url(${bodyAsset.thumbnail})` } : (bodyAsset.previewColor ? { backgroundColor: bodyAsset.previewColor } : undefined)"
+            />
+            <div class="asset-text">
+              <div class="asset-name">{{ bodyAsset.name }}</div>
+              <div class="asset-subtitle">Wall body model · {{ bodyAsset.id.slice(0, 8) }}</div>
+            </div>
+          </div>
+          <div v-else class="asset-summary empty">
+            <div class="asset-thumbnail placeholder" />
+            <div class="asset-text">
+              <div class="asset-name">No wall body model assigned</div>
+              <div class="asset-subtitle">Drag a model from the Asset Panel to bind it.</div>
+            </div>
+          </div>
+          <p v-if="bodyFeedbackMessage" class="asset-feedback">{{ bodyFeedbackMessage }}</p>
+        </div>
+
+        <div
+          class="asset-model-panel"
+          ref="jointDropAreaRef"
+          :class="{ 'is-active': jointDropActive, 'is-processing': jointDropProcessing }"
+          @dragenter.prevent="jointDropActive = true"
+          @dragover.prevent="jointDropActive = true"
+          @dragleave="(e) => { if (shouldDeactivateDropArea(jointDropAreaRef, e)) jointDropActive = false }"
+          @drop="assignWallJointAsset"
+        >
+          <div v-if="jointAsset" class="asset-summary">
+            <div
+              class="asset-thumbnail"
+              :style="jointAsset.thumbnail?.trim() ? { backgroundImage: `url(${jointAsset.thumbnail})` } : (jointAsset.previewColor ? { backgroundColor: jointAsset.previewColor } : undefined)"
+            />
+            <div class="asset-text">
+              <div class="asset-name">{{ jointAsset.name }}</div>
+              <div class="asset-subtitle">Wall joint model · {{ jointAsset.id.slice(0, 8) }}</div>
+            </div>
+          </div>
+          <div v-else class="asset-summary empty">
+            <div class="asset-thumbnail placeholder" />
+            <div class="asset-text">
+              <div class="asset-name">No wall joint model assigned</div>
+              <div class="asset-subtitle">Drag a model from the Asset Panel to bind it.</div>
+            </div>
+          </div>
+          <p v-if="jointFeedbackMessage" class="asset-feedback">{{ jointFeedbackMessage }}</p>
+        </div>
+      </div>
     </v-expansion-panel-text>
   </v-expansion-panel>
 </template>
@@ -274,5 +495,75 @@ function applyDimensions() {
 
 .component-menu-divider {
   margin-inline: 0.6rem;
+}
+
+.wall-asset-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 0.75rem 5px 0;
+}
+
+.asset-model-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 0.75rem;
+  transition: border-color 0.2s, background-color 0.2s;
+}
+
+.asset-model-panel.is-active {
+  border-color: rgba(110, 231, 183, 0.8);
+  background-color: rgba(110, 231, 183, 0.08);
+}
+
+.asset-model-panel.is-processing {
+  border-color: rgba(59, 130, 246, 0.9);
+  background-color: rgba(59, 130, 246, 0.08);
+}
+
+.asset-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.asset-summary.empty .asset-text .asset-name {
+  font-size: 0.85rem;
+}
+
+.asset-thumbnail {
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
+  background-size: cover;
+  background-position: center;
+}
+
+.asset-thumbnail.placeholder {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
+}
+
+.asset-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.asset-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.asset-subtitle {
+  font-size: 0.75rem;
+  color: rgba(233, 236, 241, 0.7);
+}
+
+.asset-feedback {
+  font-size: 0.75rem;
+  color: #f97316;
 }
 </style>

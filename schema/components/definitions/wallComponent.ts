@@ -15,6 +15,8 @@ export interface WallComponentProps {
   height: number
   width: number
   thickness: number
+  bodyAssetId?: string | null
+  jointAssetId?: string | null
 }
 
 export function clampWallProps(props: Partial<WallComponentProps> | null | undefined): WallComponentProps {
@@ -27,7 +29,18 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
   const thickness = Number.isFinite(props?.thickness)
     ? Math.max(WALL_MIN_THICKNESS, props!.thickness!)
     : WALL_DEFAULT_THICKNESS
-  return { height, width, thickness }
+
+  const normalizeAssetId = (value: unknown): string | null => {
+    return typeof value === 'string' && value.trim().length ? value : null
+  }
+
+  return {
+    height,
+    width,
+    thickness,
+    bodyAssetId: normalizeAssetId((props as WallComponentProps | undefined)?.bodyAssetId),
+    jointAssetId: normalizeAssetId((props as WallComponentProps | undefined)?.jointAssetId),
+  }
 }
 
 export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefined | null): WallComponentProps {
@@ -36,6 +49,8 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       height: WALL_DEFAULT_HEIGHT,
       width: WALL_DEFAULT_WIDTH,
       thickness: WALL_DEFAULT_THICKNESS,
+      bodyAssetId: null,
+      jointAssetId: null,
     }
   }
   const base = mesh.segments[0]
@@ -51,6 +66,8 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
     height: props.height,
     width: props.width,
     thickness: props.thickness,
+    bodyAssetId: props.bodyAssetId ?? null,
+    jointAssetId: props.jointAssetId ?? null,
   }
 }
 
@@ -107,6 +124,8 @@ export function createWallComponentState(
     height: overrides?.height ?? defaults.height,
     width: overrides?.width ?? defaults.width,
     thickness: overrides?.thickness ?? defaults.thickness,
+    bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,
+    jointAssetId: overrides?.jointAssetId ?? defaults.jointAssetId,
   })
   return {
     id: options.id ?? '',

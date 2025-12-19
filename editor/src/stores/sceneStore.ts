@@ -575,11 +575,14 @@ function normalizeNodeComponents(
   if (node.dynamicMesh?.type === 'Wall') {
     const baseProps = resolveWallComponentPropsFromMesh(node.dynamicMesh as WallDynamicMesh)
     const existing = normalized[WALL_COMPONENT_TYPE]
+    const existingProps = (existing?.props ?? {}) as Partial<WallComponentProps>
     const nextProps = cloneWallComponentProps(
       clampWallProps({
         height: (existing?.props as { height?: number })?.height ?? baseProps.height,
         width: (existing?.props as { width?: number })?.width ?? baseProps.width,
         thickness: (existing?.props as { thickness?: number })?.thickness ?? baseProps.thickness,
+        bodyAssetId: (existingProps as { bodyAssetId?: string | null }).bodyAssetId ?? baseProps.bodyAssetId,
+        jointAssetId: (existingProps as { jointAssetId?: string | null }).jointAssetId ?? baseProps.jointAssetId,
       }),
     )
 
@@ -10805,6 +10808,8 @@ export const useSceneStore = defineStore('scene', {
       segments: Array<{ start: Vector3Like; end: Vector3Like }>
       dimensions?: { height?: number; width?: number; thickness?: number }
       name?: string
+      bodyAssetId?: string | null
+      jointAssetId?: string | null
     }): SceneNode | null {
       const build = buildWallDynamicMeshFromWorldSegments(payload.segments, payload.dimensions)
       if (!build) {
@@ -10824,6 +10829,25 @@ export const useSceneStore = defineStore('scene', {
       })
       if (node) {
         this.ensureStaticRigidbodyComponent(node.id)
+
+        const bodyAssetId = typeof payload.bodyAssetId === 'string' && payload.bodyAssetId.trim().length
+          ? payload.bodyAssetId
+          : null
+        const jointAssetId = typeof payload.jointAssetId === 'string' && payload.jointAssetId.trim().length
+          ? payload.jointAssetId
+          : null
+
+        if (bodyAssetId || jointAssetId) {
+          const component = node.components?.[WALL_COMPONENT_TYPE] as
+            | SceneNodeComponentState<WallComponentProps>
+            | undefined
+          if (component) {
+            this.updateNodeComponentProps(node.id, component.id, {
+              bodyAssetId,
+              jointAssetId,
+            })
+          }
+        }
       }
       return node
     },
@@ -11115,19 +11139,33 @@ export const useSceneStore = defineStore('scene', {
         | RigidbodyComponentProps
         | VehicleComponentProps
       if (type === WALL_COMPONENT_TYPE) {
-        const currentProps = component.props as WallComponentProps
+        const currentProps = clampWallProps(component.props as WallComponentProps)
+        const typedPatch = patch as Partial<WallComponentProps>
+        const hasBodyAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyAssetId')
+        const hasJointAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'jointAssetId')
+
         const merged = clampWallProps({
-          height: (patch.height as number | undefined) ?? currentProps.height,
-          width: (patch.width as number | undefined) ?? currentProps.width,
-          thickness: (patch.thickness as number | undefined) ?? currentProps.thickness,
+          height: (typedPatch.height as number | undefined) ?? currentProps.height,
+          width: (typedPatch.width as number | undefined) ?? currentProps.width,
+          thickness: (typedPatch.thickness as number | undefined) ?? currentProps.thickness,
+          bodyAssetId: hasBodyAssetId
+            ? (typedPatch.bodyAssetId as string | null | undefined)
+            : currentProps.bodyAssetId,
+          jointAssetId: hasJointAssetId
+            ? (typedPatch.jointAssetId as string | null | undefined)
+            : currentProps.jointAssetId,
         })
-        if (
-          Math.abs(currentProps.height - merged.height) <= WALL_DIMENSION_EPSILON &&
-          Math.abs(currentProps.width - merged.width) <= WALL_DIMENSION_EPSILON &&
-          Math.abs(currentProps.thickness - merged.thickness) <= WALL_DIMENSION_EPSILON
-        ) {
+
+        const unchanged =
+          Math.abs(currentProps.height - merged.height) <= 1e-4 &&
+          Math.abs(currentProps.width - merged.width) <= 1e-4 &&
+          Math.abs(currentProps.thickness - merged.thickness) <= 1e-4 &&
+          (currentProps.bodyAssetId ?? null) === (merged.bodyAssetId ?? null) &&
+          (currentProps.jointAssetId ?? null) === (merged.jointAssetId ?? null)
+        if (unchanged) {
           return false
         }
+
         nextProps = cloneWallComponentProps(merged)
       } else if (type === DISPLAY_BOARD_COMPONENT_TYPE) {
         const currentProps = component.props as DisplayBoardComponentProps
