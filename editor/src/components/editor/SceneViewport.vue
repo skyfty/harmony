@@ -26,7 +26,6 @@ import type {
   SceneNodeMaterial,
   SceneSkyboxSettings,
   GroundDynamicMesh,
-  WallDynamicMesh,
   
 } from '@harmony/schema'
 import {
@@ -82,10 +81,10 @@ import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-vie
 import type { BuildTool } from '@/types/build-tool'
 import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache } from '@schema/groundMesh'
 import { useTerrainStore } from '@/stores/terrainStore'
-import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
 import { TerrainGridHelper } from './TerrainGridHelper'
+import { createWallPreviewRenderer } from './WallPreviewRenderer'
 import {
   VIEW_POINT_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
@@ -1377,8 +1376,11 @@ type WallBuildSession = {
   jointAssetId: string | null
 }
 let wallBuildSession: WallBuildSession | null = null
-let wallPreviewNeedsSync = false
-let wallPreviewSignature: string | null = null
+
+const wallPreviewRenderer = createWallPreviewRenderer({
+  rootGroup,
+  normalizeWallDimensionsForViewport,
+})
 
 
 function normalizeWallDimensionsForViewport(values: { height?: number; width?: number; thickness?: number }): {
@@ -3514,10 +3516,7 @@ function animate() {
     })
   }
 
-  if (wallPreviewNeedsSync) {
-    wallPreviewNeedsSync = false
-    syncWallPreview()
-  }
+  wallPreviewRenderer.flushIfNeeded(scene, wallBuildSession)
   updatePlaceholderOverlayPositions()
   if (sky) {
     sky.position.copy(camera.position)
@@ -3658,8 +3657,7 @@ function disposeScene() {
   clearPlaceholderOverlays()
   objectMap.clear()
   resetEffectRuntimeTickers()
-  wallPreviewNeedsSync = false
-  wallPreviewSignature = null
+  wallPreviewRenderer.dispose(wallBuildSession)
   pendingSceneGraphSync = false
 }
 
@@ -5227,114 +5225,6 @@ function handleCanvasDoubleClick(event: MouseEvent) {
   event.stopPropagation()
 }
 
-function disposeWallPreviewGroup(group: THREE.Group) {
-  group.traverse((child) => {
-    const mesh = child as THREE.Mesh
-    if (mesh?.isMesh) {
-      const geometry = mesh.geometry
-      if (geometry) {
-        geometry.dispose()
-      }
-      const material = mesh.material
-      if (Array.isArray(material)) {
-        material.forEach((entry) => entry.dispose())
-      } else if (material) {
-        material.dispose()
-      }
-    }
-  })
-}
-
-function applyWallPreviewStyling(group: THREE.Group) {
-  group.traverse((child) => {
-    const mesh = child as THREE.Mesh
-    if (!mesh?.isMesh) {
-      return
-    }
-    const material = mesh.material as THREE.Material & { opacity?: number; transparent?: boolean }
-    if ('opacity' in material) {
-      material.opacity = 0.45
-      material.transparent = true
-    }
-    mesh.layers.enableAll()
-    mesh.renderOrder = 999
-  })
-}
-
-const WALL_PREVIEW_SIGNATURE_PRECISION = 1000
-
-function encodeWallPreviewNumber(value: number): string {
-  return `${Math.round(value * WALL_PREVIEW_SIGNATURE_PRECISION)}`
-}
-
-function computeWallPreviewSignature(
-  segments: WallSessionSegment[],
-  dimensions: { height: number; width: number; thickness: number },
-): string {
-  if (!segments.length) {
-    return 'empty'
-  }
-
-  const dimensionSignature = [
-    encodeWallPreviewNumber(dimensions.height),
-    encodeWallPreviewNumber(dimensions.width),
-    encodeWallPreviewNumber(dimensions.thickness),
-  ].join('|')
-
-  const segmentSignature = segments
-    .map(({ start, end }) => [
-      encodeWallPreviewNumber(start.x),
-      encodeWallPreviewNumber(start.y),
-      encodeWallPreviewNumber(start.z),
-      encodeWallPreviewNumber(end.x),
-      encodeWallPreviewNumber(end.y),
-      encodeWallPreviewNumber(end.z),
-    ].join(','))
-    .join(';')
-
-  return `${dimensionSignature}|${segmentSignature}`
-}
-
-function buildWallPreviewDefinition(segments: WallSessionSegment[], dimensions: { height: number; width: number; thickness: number }): { center: THREE.Vector3; definition: WallDynamicMesh } | null {
-  if (!segments.length) {
-    return null
-  }
-
-  const min = new THREE.Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY)
-  const max = new THREE.Vector3(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY)
-
-  segments.forEach(({ start, end }) => {
-    min.min(start)
-    min.min(end)
-    max.max(start)
-    max.max(end)
-  })
-
-  if (!Number.isFinite(min.x) || !Number.isFinite(max.x)) {
-    return null
-  }
-
-  const center = new THREE.Vector3(
-    (min.x + max.x) * 0.5,
-    (min.y + max.y) * 0.5,
-    (min.z + max.z) * 0.5,
-  )
-
-  const normalized = normalizeWallDimensionsForViewport(dimensions)
-
-  const definition: WallDynamicMesh = {
-    type: 'Wall',
-    segments: segments.map(({ start, end }) => ({
-      start: { x: start.x - center.x, y: start.y - center.y, z: start.z - center.z },
-      end: { x: end.x - center.x, y: end.y - center.y, z: end.z - center.z },
-      height: normalized.height,
-      width: normalized.width,
-      thickness: normalized.thickness,
-    })),
-  }
-
-  return { center, definition }
-}
 
 function getWallNodeDimensions(node: SceneNode): { height: number; width: number; thickness: number } {
   if (node.dynamicMesh?.type !== 'Wall' || node.dynamicMesh.segments.length === 0) {
@@ -5364,86 +5254,15 @@ function expandWallSegmentsToWorld(node: SceneNode): WallSessionSegment[] {
 }
 
 function clearWallPreview() {
-  if (wallBuildSession?.previewGroup) {
-    const preview = wallBuildSession.previewGroup
-    preview.removeFromParent()
-    disposeWallPreviewGroup(preview)
-    wallBuildSession.previewGroup = null
-  }
-  wallPreviewSignature = null
+  wallPreviewRenderer.clear(wallBuildSession)
 }
 
 function updateWallPreview(options?: { immediate?: boolean }) {
   if (options?.immediate) {
-    wallPreviewNeedsSync = false
-    syncWallPreview()
+    wallPreviewRenderer.flush(scene, wallBuildSession)
     return
   }
-  wallPreviewNeedsSync = true
-}
-
-function syncWallPreview() {
-  if (!scene || !wallBuildSession) {
-    if (wallPreviewSignature !== null) {
-      clearWallPreview()
-      wallPreviewSignature = null
-    }
-    return
-  }
-
-  const segments: WallSessionSegment[] = [...wallBuildSession.segments]
-  if (wallBuildSession.dragStart && wallBuildSession.dragEnd) {
-    segments.push({ start: wallBuildSession.dragStart.clone(), end: wallBuildSession.dragEnd.clone() })
-  }
-
-  const hasCommittedNode = !!wallBuildSession.nodeId
-  const hasActiveDrag = !!wallBuildSession.dragStart && !!wallBuildSession.dragEnd
-  if (hasCommittedNode && !hasActiveDrag) {
-    if (wallBuildSession.previewGroup) {
-      clearWallPreview()
-    }
-    wallPreviewSignature = null
-    return
-  }
-
-  if (!segments.length) {
-    if (wallBuildSession.previewGroup) {
-      clearWallPreview()
-    }
-    wallPreviewSignature = null
-    return
-  }
-
-  const build = buildWallPreviewDefinition(segments, wallBuildSession.dimensions)
-  if (!build) {
-    if (wallBuildSession.previewGroup) {
-      clearWallPreview()
-    }
-    wallPreviewSignature = null
-    return
-  }
-
-  const signature = computeWallPreviewSignature(segments, wallBuildSession.dimensions)
-  if (signature === wallPreviewSignature) {
-    return
-  }
-  wallPreviewSignature = signature
-
-  if (!wallBuildSession.previewGroup) {
-    const preview = createWallGroup(build.definition)
-    applyWallPreviewStyling(preview)
-    preview.userData.isWallPreview = true
-    wallBuildSession.previewGroup = preview
-    rootGroup.add(preview)
-  } else {
-    updateWallGroup(wallBuildSession.previewGroup, build.definition)
-    applyWallPreviewStyling(wallBuildSession.previewGroup)
-    if (!rootGroup.children.includes(wallBuildSession.previewGroup)) {
-      rootGroup.add(wallBuildSession.previewGroup)
-    }
-  }
-
-  wallBuildSession.previewGroup!.position.copy(build.center)
+  wallPreviewRenderer.markDirty()
 }
 
 function clearWallBuildSession(options: { disposePreview?: boolean } = {}) {
@@ -5453,7 +5272,7 @@ function clearWallBuildSession(options: { disposePreview?: boolean } = {}) {
     wallBuildSession.previewGroup.removeFromParent()
   }
   wallBuildSession = null
-  wallPreviewSignature = null
+  wallPreviewRenderer.reset()
 }
 
 function ensureWallBuildSession(): WallBuildSession {
