@@ -3240,7 +3240,8 @@ function evaluateWarpGateAttributes(
 const initialSceneDocument = createSceneDocument('Sample Scene', {
   nodes: initialNodes,
   materials: initialMaterials,
-  selectedNodeId: GROUND_NODE_ID,
+  selectedNodeId: null,
+  selectedNodeIds: [],
   resourceProviderId: 'builtin',
   assetCatalog: initialAssetCatalog,
   assetIndex: initialAssetIndex,
@@ -6025,7 +6026,9 @@ function createSceneDocument(
   const nodes = ensureEnvironmentNode(ensureSkyNode(ensureGroundNode(clonedNodes, groundSettings)), environmentSettings)
   const camera = options.camera ? cloneCameraState(options.camera) : cloneCameraState(defaultCameraState)
   const findDefaultSelectableNode = () => nodes.find((node) => !isGroundNode(node) && !isSkyNode(node))?.id ?? null
-  let selectedNodeId = options.selectedNodeId ?? findDefaultSelectableNode()
+  let selectedNodeId = options.selectedNodeId !== undefined
+    ? options.selectedNodeId
+    : findDefaultSelectableNode()
   if (selectedNodeId && !nodes.some((node) => node.id === selectedNodeId)) {
     selectedNodeId = findDefaultSelectableNode()
   }
@@ -11973,6 +11976,8 @@ export const useSceneStore = defineStore('scene', {
         shadowsEnabled: this.shadowsEnabled,
         nodes: baseNodes,
         materials: this.materials,
+        selectedNodeId: null,
+        selectedNodeIds: [],
         groundSettings,
         assetCatalog: baseAssetCatalog,
         assetIndex: baseAssetIndex,
