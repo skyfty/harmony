@@ -70,6 +70,7 @@ import {
 	guideboardComponentDefinition,
 	displayBoardComponentDefinition,
 	wallComponentDefinition,
+	roadComponentDefinition,
 	viewPointComponentDefinition,
 	warpGateComponentDefinition,
 	effectComponentDefinition,
@@ -353,6 +354,7 @@ function refreshResourceAssetInfo(document: SceneJsonExportDocument | null | und
 
 const previewComponentManager = new ComponentManager()
 previewComponentManager.registerDefinition(wallComponentDefinition)
+previewComponentManager.registerDefinition(roadComponentDefinition)
 previewComponentManager.registerDefinition(guideboardComponentDefinition)
 previewComponentManager.registerDefinition(displayBoardComponentDefinition)
 previewComponentManager.registerDefinition(viewPointComponentDefinition)

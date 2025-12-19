@@ -20,6 +20,7 @@ import {
 } from '@/utils/rigidbodyCollider'
 import { createGroundMesh } from '@schema/groundMesh'
 import { createWallGroup } from '@schema/wallMesh'
+import { createRoadGroup } from '@schema/roadMesh'
 import {
   RIGIDBODY_COMPONENT_TYPE,
   type RigidbodyComponentProps,
@@ -740,6 +741,8 @@ function buildDynamicMeshObject(node: SceneNode): THREE.Object3D | null {
       return createGroundMesh(mesh).clone(true)
     case 'Wall':
       return createWallGroup(mesh).clone(true)
+    case 'Road':
+      return createRoadGroup(mesh).clone(true)
     default:
       return null
   }

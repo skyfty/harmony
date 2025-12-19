@@ -83,6 +83,7 @@ import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
 import { TerrainGridHelper } from './TerrainGridHelper'
 import { createWallPreviewRenderer } from './WallPreviewRenderer'
+import { createRoadPreviewRenderer } from './RoadPreviewRenderer'
 import {
   VIEW_POINT_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
@@ -95,6 +96,7 @@ import {
   WALL_MIN_HEIGHT,
   WALL_MIN_WIDTH,
   WALL_MIN_THICKNESS,
+  ROAD_DEFAULT_WIDTH,
   clampWarpGateComponentProps,
   clampGuideboardComponentProps,
   computeWarpGateEffectActive,
@@ -1358,9 +1360,30 @@ type WallBuildSession = {
 }
 let wallBuildSession: WallBuildSession | null = null
 
+type RoadBuildSession = {
+  points: THREE.Vector3[]
+  previewEnd: THREE.Vector3 | null
+  previewGroup: THREE.Group | null
+  width: number
+  snapVertices: THREE.Vector3[]
+}
+
+let roadBuildSession: RoadBuildSession | null = null
+
+let roadRightClickState: {
+  pointerId: number
+  startX: number
+  startY: number
+  moved: boolean
+} | null = null
+
 const wallPreviewRenderer = createWallPreviewRenderer({
   rootGroup,
   normalizeWallDimensionsForViewport,
+})
+
+const roadPreviewRenderer = createRoadPreviewRenderer({
+  rootGroup,
 })
 
 
@@ -3498,6 +3521,7 @@ function animate() {
   }
 
   wallPreviewRenderer.flushIfNeeded(scene, wallBuildSession)
+  roadPreviewRenderer.flushIfNeeded(scene, roadBuildSession)
   updatePlaceholderOverlayPositions()
   if (sky) {
     sky.position.copy(camera.position)
@@ -3639,6 +3663,7 @@ function disposeScene() {
   objectMap.clear()
   resetEffectRuntimeTickers()
   wallPreviewRenderer.dispose(wallBuildSession)
+  roadPreviewRenderer.dispose(roadBuildSession)
   pendingSceneGraphSync = false
 }
 
@@ -4295,7 +4320,13 @@ async function handlePointerDown(event: PointerEvent) {
   }
 
   // Middle mouse triggers continuous instanced creation (allows left/right for camera pan/rotate).
-  if (!scatterEraseModeActive.value && event.button === 1 && props.activeTool === 'select' && activeBuildTool.value !== 'wall') {
+  if (
+    !scatterEraseModeActive.value &&
+    event.button === 1 &&
+    props.activeTool === 'select' &&
+    activeBuildTool.value !== 'wall' &&
+    activeBuildTool.value !== 'road'
+  ) {
     const nodeId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
     if (nodeId && !sceneStore.isNodeSelectionLocked(nodeId)) {
       const node = findSceneNode(sceneStore.nodes, nodeId)
@@ -4356,6 +4387,33 @@ async function handlePointerDown(event: PointerEvent) {
       return
     }
     // Wall build uses middle click for placement; keep left/right available for camera controls.
+    if (button === 0) {
+      pointerTrackingState = null
+      return
+    }
+    if (button === 2) {
+      pointerTrackingState = null
+      return
+    }
+  }
+
+  if (activeBuildTool.value === 'road') {
+    if (button === 1 && !isAltOverrideActive) {
+      pointerTrackingState = null
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+    // Road build uses middle click for placement; keep left/right available for camera controls.
+    if (button === 2 && roadBuildSession) {
+      roadRightClickState = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        moved: false,
+      }
+    }
     if (button === 0) {
       pointerTrackingState = null
       return
@@ -4540,6 +4598,14 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
 
+  if (roadRightClickState && event.pointerId === roadRightClickState.pointerId && !roadRightClickState.moved) {
+    const dx = event.clientX - roadRightClickState.startX
+    const dy = event.clientY - roadRightClickState.startY
+    if (Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
+      roadRightClickState.moved = true
+    }
+  }
+
   if (isAltOverrideActive) {
     return
   }
@@ -4549,6 +4615,16 @@ function handlePointerMove(event: PointerEvent) {
       const isRightButtonActive = (event.buttons & 2) !== 0
       if (!isRightButtonActive) {
         updateWallSegmentDrag(event)
+        return
+      }
+    }
+  }
+
+  if (activeBuildTool.value === 'road' && roadBuildSession) {
+    if (roadBuildSession.points.length > 0) {
+      const isRightButtonActive = (event.buttons & 2) !== 0
+      if (!isRightButtonActive) {
+        updateRoadCursorPreview(event)
         return
       }
     }
@@ -4672,6 +4748,35 @@ function handlePointerUp(event: PointerEvent) {
     }
   }
 
+  if (activeBuildTool.value === 'road') {
+    if (event.button === 1) {
+      if (overrideActive) {
+        return
+      }
+      const handled = handleRoadPlacementClick(event)
+      if (handled) {
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+      }
+      return
+    } else if (event.button === 2) {
+      if (overrideActive) {
+        return
+      }
+      if (roadRightClickState && roadRightClickState.pointerId === event.pointerId) {
+        const clickWasDrag = roadRightClickState.moved
+        roadRightClickState = null
+        if (!clickWasDrag && roadBuildSession) {
+          finalizeRoadBuildSession()
+        }
+      }
+      return
+    } else {
+      return
+    }
+  }
+
   if (!pointerTrackingState || event.pointerId !== pointerTrackingState.pointerId) {
     return
   }
@@ -4776,6 +4881,10 @@ function handlePointerCancel(event: PointerEvent) {
       event.stopImmediatePropagation()
       return
     }
+  }
+
+  if (roadRightClickState && roadRightClickState.pointerId === event.pointerId) {
+    roadRightClickState = null
   }
 
   if (!pointerTrackingState || event.pointerId !== pointerTrackingState.pointerId) {
@@ -5137,6 +5246,184 @@ function finalizeWallBuildSession() {
   restoreOrbitAfterWallBuild()
 }
 
+const ROAD_VERTEX_SNAP_DISTANCE = GRID_MAJOR_SPACING * 0.5
+
+function collectRoadSnapVertices(): THREE.Vector3[] {
+  const vertices: THREE.Vector3[] = []
+  const visit = (nodes: SceneNode[]) => {
+    nodes.forEach((node) => {
+      if (node.dynamicMesh?.type === 'Road') {
+        const originX = node.position?.x ?? 0
+        const originZ = node.position?.z ?? 0
+        const points = Array.isArray(node.dynamicMesh.points) ? node.dynamicMesh.points : []
+        points.forEach((p) => {
+          if (!Array.isArray(p) || p.length < 2) {
+            return
+          }
+          const x = Number(p[0])
+          const z = Number(p[1])
+          if (!Number.isFinite(x) || !Number.isFinite(z)) {
+            return
+          }
+          vertices.push(new THREE.Vector3(originX + x, 0, originZ + z))
+        })
+      }
+      if (node.children?.length) {
+        visit(node.children)
+      }
+    })
+  }
+  visit(sceneStore.nodes)
+  return vertices
+}
+
+function snapRoadPointToVertices(point: THREE.Vector3, vertices: THREE.Vector3[]): THREE.Vector3 {
+  let best: THREE.Vector3 | null = null
+  let bestDist2 = Number.POSITIVE_INFINITY
+  for (let i = 0; i < vertices.length; i += 1) {
+    const candidate = vertices[i]!
+    const dx = candidate.x - point.x
+    const dz = candidate.z - point.z
+    const dist2 = dx * dx + dz * dz
+    if (dist2 < bestDist2) {
+      bestDist2 = dist2
+      best = candidate
+    }
+  }
+  if (best && bestDist2 <= ROAD_VERTEX_SNAP_DISTANCE * ROAD_VERTEX_SNAP_DISTANCE) {
+    return best.clone()
+  }
+  return point
+}
+
+function clearRoadPreview() {
+  roadPreviewRenderer.clear(roadBuildSession)
+}
+
+function updateRoadPreview(options?: { immediate?: boolean }) {
+  if (options?.immediate) {
+    roadPreviewRenderer.flush(scene, roadBuildSession)
+    return
+  }
+  roadPreviewRenderer.markDirty()
+}
+
+function clearRoadBuildSession(options: { disposePreview?: boolean } = {}) {
+  if (options.disposePreview ?? true) {
+    clearRoadPreview()
+  } else if (roadBuildSession?.previewGroup) {
+    roadBuildSession.previewGroup.removeFromParent()
+  }
+  roadBuildSession = null
+  roadRightClickState = null
+  roadPreviewRenderer.reset()
+}
+
+function ensureRoadBuildSession(): RoadBuildSession {
+  if (roadBuildSession) {
+    return roadBuildSession
+  }
+  roadBuildSession = {
+    points: [],
+    previewEnd: null,
+    previewGroup: null,
+    width: ROAD_DEFAULT_WIDTH,
+    snapVertices: collectRoadSnapVertices(),
+  }
+  return roadBuildSession
+}
+
+function updateRoadCursorPreview(event: PointerEvent) {
+  if (isAltOverrideActive) {
+    return
+  }
+  if (!roadBuildSession || roadBuildSession.points.length === 0) {
+    return
+  }
+  if (!raycastGroundPoint(event, groundPointerHelper)) {
+    return
+  }
+
+  const rawPointer = groundPointerHelper.clone()
+  const snapped = snapVectorToMajorGrid(rawPointer.clone())
+  snapped.y = 0
+  const next = snapRoadPointToVertices(snapped, roadBuildSession.snapVertices)
+
+  const previous = roadBuildSession.previewEnd
+  if (previous && previous.equals(next)) {
+    return
+  }
+
+  roadBuildSession.previewEnd = next
+  updateRoadPreview()
+}
+
+function handleRoadPlacementClick(event: PointerEvent): boolean {
+  if (!activeBuildTool.value || activeBuildTool.value !== 'road') {
+    return false
+  }
+  if (isAltOverrideActive) {
+    return false
+  }
+  if (!raycastGroundPoint(event, groundPointerHelper)) {
+    return false
+  }
+
+  const rawPointer = groundPointerHelper.clone()
+  const snapped = snapVectorToMajorGrid(rawPointer.clone())
+  snapped.y = 0
+
+  const session = ensureRoadBuildSession()
+  const point = snapRoadPointToVertices(snapped, session.snapVertices)
+
+  if (session.points.length === 0) {
+    session.points.push(point.clone())
+    session.previewEnd = point.clone()
+    updateRoadPreview()
+    return true
+  }
+
+  const last = session.points[session.points.length - 1]!
+  if (last.distanceToSquared(point) <= 1e-8) {
+    session.previewEnd = point.clone()
+    updateRoadPreview()
+    return true
+  }
+
+  session.points.push(point.clone())
+  session.previewEnd = point.clone()
+  updateRoadPreview()
+  return true
+}
+
+function cancelRoadBuildSession(): boolean {
+  if (!roadBuildSession) {
+    return false
+  }
+  clearRoadBuildSession()
+  return true
+}
+
+function finalizeRoadBuildSession() {
+  if (!roadBuildSession) {
+    return
+  }
+
+  const session = roadBuildSession
+  const committed = session.points
+  if (committed.length < 2) {
+    clearRoadBuildSession()
+    return
+  }
+
+  sceneStore.createRoadNode({
+    points: committed.map((p) => ({ x: p.x, y: 0, z: p.z })),
+    width: session.width,
+  })
+
+  clearRoadBuildSession()
+}
+
 function cancelActiveBuildOperation(): boolean {
   exitScatterEraseMode()
   const tool = activeBuildTool.value
@@ -5160,6 +5447,13 @@ function cancelActiveBuildOperation(): boolean {
         cancelWallSelection()
         activeBuildTool.value = null
       }
+      handled = true
+      break
+    case 'road':
+      if (roadBuildSession) {
+        cancelRoadBuildSession()
+      }
+      activeBuildTool.value = null
       handled = true
       break
     default:
@@ -7118,6 +7412,9 @@ watch(activeBuildTool, (tool) => {
     cancelWallDrag()
     clearWallBuildSession()
     restoreOrbitAfterWallBuild()
+  }
+  if (tool !== 'road') {
+    clearRoadBuildSession()
   }
 })
 

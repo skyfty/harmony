@@ -53,6 +53,7 @@ import type {
   SceneNodeType,
   Vector3Like,
   WallDynamicMesh,
+  RoadDynamicMesh,
 } from '@harmony/schema'
 import { normalizeLightNodeType } from '@/types/light'
 import type { NodePrefabData } from '@/types/node-prefab'
@@ -129,6 +130,7 @@ import {
   type ModelInstanceGroup,
 } from '@schema/modelObjectCache'
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
+import { createRoadGroup } from '@schema/roadMesh'
 import { computeBlobHash, blobToDataUrl, dataUrlToBlob, inferBlobFilename, extractExtension, ensureExtension } from '@/utils/blob'
 import {
   buildBehaviorPrefabFilename,
@@ -165,10 +167,12 @@ import type {
   VehicleComponentProps,
   ViewPointComponentProps,
   WallComponentProps,
+  RoadComponentProps,
   WarpGateComponentProps,
 } from '@schema/components'
 import {
   WALL_COMPONENT_TYPE,
+  ROAD_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
   WARP_GATE_COMPONENT_TYPE,
@@ -187,6 +191,9 @@ import {
   WALL_MIN_WIDTH,
   clampWallProps,
   cloneWallComponentProps,
+  ROAD_DEFAULT_WIDTH,
+  ROAD_MIN_WIDTH,
+  resolveRoadComponentPropsFromMesh,
   clampGuideboardComponentProps,
   cloneGuideboardComponentProps,
   createGuideboardComponentState,
@@ -1267,6 +1274,74 @@ function buildWallDynamicMeshFromWorldSegments(
   return { center, definition }
 }
 
+function normalizeRoadWidth(value: unknown): number {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) {
+    return ROAD_DEFAULT_WIDTH
+  }
+  return Math.max(ROAD_MIN_WIDTH, numeric)
+}
+
+function buildRoadWorldPoints(points: Vector3Like[]): Vector3[] {
+  const out: Vector3[] = []
+  points.forEach((p) => {
+    if (!p) {
+      return
+    }
+    const x = Number(p.x)
+    const z = Number(p.z)
+    if (!Number.isFinite(x) || !Number.isFinite(z)) {
+      return
+    }
+    const vec = new Vector3(x, 0, z)
+    const prev = out[out.length - 1]
+    if (prev && prev.distanceToSquared(vec) <= 1e-10) {
+      return
+    }
+    out.push(vec)
+  })
+  return out
+}
+
+function computeRoadCenter(points: Vector3[]): Vector3 {
+  const min = new Vector3(Number.POSITIVE_INFINITY, 0, Number.POSITIVE_INFINITY)
+  const max = new Vector3(Number.NEGATIVE_INFINITY, 0, Number.NEGATIVE_INFINITY)
+
+  points.forEach((p) => {
+    min.x = Math.min(min.x, p.x)
+    min.z = Math.min(min.z, p.z)
+    max.x = Math.max(max.x, p.x)
+    max.z = Math.max(max.z, p.z)
+  })
+
+  if (!Number.isFinite(min.x) || !Number.isFinite(max.x)) {
+    return new Vector3(0, 0, 0)
+  }
+
+  return new Vector3((min.x + max.x) * 0.5, 0, (min.z + max.z) * 0.5)
+}
+
+function buildRoadDynamicMeshFromWorldPoints(
+  points: Vector3Like[],
+  width?: number,
+): { center: Vector3; definition: RoadDynamicMesh } | null {
+  const worldPoints = buildRoadWorldPoints(points)
+  if (worldPoints.length < 2) {
+    return null
+  }
+
+  const center = computeRoadCenter(worldPoints)
+  const normalizedWidth = normalizeRoadWidth(width)
+
+  const definition: RoadDynamicMesh = {
+    type: 'Road',
+    width: normalizedWidth,
+    points: worldPoints.map((p) => [p.x - center.x, p.z - center.z]),
+  }
+
+  return { center, definition }
+}
+
 function applyDisplayBoardComponentPropsToNode(
   node: SceneNode,
   props: DisplayBoardComponentProps,
@@ -1585,6 +1660,29 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
             : DEFAULT_WALL_WIDTH,
           thickness: Number.isFinite(segment.thickness) ? segment.thickness : DEFAULT_WALL_THICKNESS,
         })),
+      }
+    }
+    case 'Road': {
+      const roadMesh = mesh as RoadDynamicMesh
+      const pointsRaw = Array.isArray(roadMesh.points) ? roadMesh.points : []
+      const points = pointsRaw
+        .map((p) => {
+          if (!Array.isArray(p) || p.length < 2) {
+            return null
+          }
+          const x = Number(p[0])
+          const y = Number(p[1])
+          if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            return null
+          }
+          return [x, y] as [number, number]
+        })
+        .filter((p): p is [number, number] => !!p)
+
+      return {
+        type: 'Road',
+        width: Number.isFinite(roadMesh.width) ? Math.max(ROAD_MIN_WIDTH, roadMesh.width) : ROAD_DEFAULT_WIDTH,
+        points,
       }
     }
     default:
@@ -2961,7 +3059,7 @@ function ensureDynamicMeshRuntime(node: SceneNode): boolean {
   }
 
   const meshType = normalizeDynamicMeshType(meshDefinition.type)
-  if (meshType !== 'Wall') {
+  if (meshType !== 'Wall' && meshType !== 'Road') {
     return false
   }
 
@@ -2970,7 +3068,9 @@ function ensureDynamicMeshRuntime(node: SceneNode): boolean {
   }
 
   try {
-    const runtime = createWallGroup(meshDefinition as WallDynamicMesh)
+    const runtime = meshType === 'Road'
+      ? createRoadGroup(meshDefinition as RoadDynamicMesh)
+      : createWallGroup(meshDefinition as WallDynamicMesh)
     runtime.name = node.name ?? runtime.name
     prepareRuntimeObjectForNode(runtime)
     tagObjectWithNodeId(runtime, node.id)
@@ -2979,7 +3079,7 @@ function ensureDynamicMeshRuntime(node: SceneNode): boolean {
     componentManager.syncNode(node)
     return true
   } catch (error) {
-    console.warn('Failed to rebuild wall mesh runtime', node.id, error)
+    console.warn('Failed to rebuild dynamic mesh runtime', node.id, error)
     return false
   }
 }
@@ -10633,6 +10733,38 @@ export const useSceneStore = defineStore('scene', {
       const nextIndex = (fallback[fallback.length - 1] ?? 0) + 1
       return `${prefix}${nextIndex.toString().padStart(2, '0')}`
     },
+
+    generateRoadNodeName() {
+      const prefix = 'Road '
+      const pattern = /^Road\s(\d{2})$/
+      const taken = new Set<string>()
+      const collectNames = (nodes: SceneNode[]) => {
+        nodes.forEach((node) => {
+          if (typeof node.name === 'string' && node.name.startsWith(prefix)) {
+            taken.add(node.name)
+          }
+          if (node.children?.length) {
+            collectNames(node.children)
+          }
+        })
+      }
+      collectNames(this.nodes)
+      for (let index = 1; index < 1000; index += 1) {
+        const candidate = `${prefix}${index.toString().padStart(2, '0')}`
+        if (!taken.has(candidate)) {
+          return candidate
+        }
+      }
+      const fallback = Array.from(taken)
+        .map((name) => {
+          const match = name.match(pattern)
+          return match ? Number(match[1]) : Number.NaN
+        })
+        .filter((value) => Number.isFinite(value))
+        .sort((a, b) => a - b)
+      const nextIndex = (fallback[fallback.length - 1] ?? 0) + 1
+      return `${prefix}${nextIndex.toString().padStart(2, '0')}`
+    },
     ensureStaticRigidbodyComponent(nodeId: string): SceneNodeComponentState<RigidbodyComponentProps> | null {
       const target = findNodeById(this.nodes, nodeId)
       if (!target) {
@@ -10712,6 +10844,52 @@ export const useSceneStore = defineStore('scene', {
           }
         }
       }
+      return node
+    },
+
+    createRoadNode(payload: {
+      points: Vector3Like[]
+      width?: number
+      name?: string
+      bodyAssetId?: string | null
+    }): SceneNode | null {
+      const build = buildRoadDynamicMeshFromWorldPoints(payload.points, payload.width)
+      if (!build) {
+        return null
+      }
+
+      const roadGroup = createRoadGroup(build.definition)
+      const nodeName = payload.name ?? this.generateRoadNodeName()
+      const node = this.addSceneNode({
+        nodeType: 'Mesh',
+        object: roadGroup,
+        name: nodeName,
+        position: createVector(build.center.x, build.center.y, build.center.z),
+        rotation: createVector(0, 0, 0),
+        scale: createVector(1, 1, 1),
+        dynamicMesh: build.definition,
+      })
+
+      if (node) {
+        this.ensureStaticRigidbodyComponent(node.id)
+
+        const bodyAssetId = typeof payload.bodyAssetId === 'string' && payload.bodyAssetId.trim().length
+          ? payload.bodyAssetId
+          : null
+
+        const existing = node.components?.[ROAD_COMPONENT_TYPE] as
+          | SceneNodeComponentState<RoadComponentProps>
+          | undefined
+        const component = existing ?? (this.addNodeComponent(node.id, ROAD_COMPONENT_TYPE) as SceneNodeComponentState<RoadComponentProps> | null)
+
+        if (component) {
+          this.updateNodeComponentProps(node.id, component.id, {
+            ...resolveRoadComponentPropsFromMesh(build.definition),
+            bodyAssetId,
+          })
+        }
+      }
+
       return node
     },
     updateWallNodeGeometry(nodeId: string, payload: {

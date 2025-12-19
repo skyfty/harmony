@@ -16,6 +16,7 @@ import type {
   SceneOutlineMeshMap,
   GroundDynamicMesh,
   WallDynamicMesh,
+  RoadDynamicMesh,
   SceneResourceSummaryEntry,
   SceneMaterialTextureSlot,
 } from '@harmony/schema';
@@ -42,8 +43,11 @@ import { createFileFromEntry } from '@schema/modelAssetLoader'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { createGroundMesh, updateGroundMesh } from './groundMesh'
 import { createWallRenderGroup } from './wallMesh'
+import { createRoadRenderGroup } from './roadMesh'
 import type { WallComponentProps } from './components/definitions/wallComponent'
 import { WALL_COMPONENT_TYPE, clampWallProps } from './components/definitions/wallComponent'
+import type { RoadComponentProps } from './components/definitions/roadComponent'
+import { ROAD_COMPONENT_TYPE, clampRoadProps } from './components/definitions/roadComponent'
 
 type SceneNodeWithExtras = SceneNode & {
   light?: {
@@ -817,6 +821,9 @@ class SceneGraphBuilder {
     if (meshInfo?.type === 'Wall') {
       return this.buildWallMesh(meshInfo, node);
     }
+    if (meshInfo?.type === 'Road') {
+      return this.buildRoadMesh(meshInfo as RoadDynamicMesh, node);
+    }
 
     const outlineMesh = this.resolveOutlineMeshForNode(node);
 
@@ -1108,6 +1115,31 @@ class SceneGraphBuilder {
 
     const group = createWallRenderGroup(meshInfo, { bodyObject, jointObject });
     group.name = node.name ?? (group.name || 'Wall');
+    const materials = await this.resolveNodeMaterials(node);
+    const materialAssignment = this.pickMaterialAssignment(materials);
+    if (materialAssignment) {
+      group.traverse((child: THREE.Object3D) => {
+        const mesh = child as THREE.Mesh;
+        if ((mesh as any)?.isMesh) {
+          mesh.material = materialAssignment;
+        }
+      });
+    }
+    this.applyTransform(group, node);
+    this.applyVisibility(group, node);
+    return group;
+  }
+
+  private async buildRoadMesh(meshInfo: RoadDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const roadState = node.components?.[ROAD_COMPONENT_TYPE] as
+      | SceneNodeComponentState<RoadComponentProps>
+      | undefined;
+    const roadProps = clampRoadProps(roadState?.props as Partial<RoadComponentProps> | null | undefined);
+
+    const bodyObject = roadProps.bodyAssetId ? await this.loadAssetMesh(roadProps.bodyAssetId) : null;
+
+    const group = createRoadRenderGroup(meshInfo, { bodyObject });
+    group.name = node.name ?? (group.name || 'Road');
     const materials = await this.resolveNodeMaterials(node);
     const materialAssignment = this.pickMaterialAssignment(materials);
     if (materialAssignment) {

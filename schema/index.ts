@@ -758,7 +758,7 @@ export type EnvironmentSettingsPatch = Partial<EnvironmentSettings> & {
   background?: Partial<EnvironmentBackgroundSettings>
   environmentMap?: Partial<EnvironmentMapSettings>
 }
-export type DynamicMeshType = 'Ground' | 'Wall'
+export type DynamicMeshType = 'Ground' | 'Wall' | 'Road'
 
 export interface GroundHeightMap {
   [key: string]: number
@@ -823,7 +823,19 @@ export interface WallDynamicMesh {
   segments: WallSegment[]
 }
 
-export type SceneDynamicMesh = GroundDynamicMesh | WallDynamicMesh
+export interface RoadDynamicMesh {
+  type: 'Road'
+  /**
+   * Road polyline vertices projected onto the ground.
+   * Each entry is a 2D point: [x, y] where y maps to world-space z.
+   * Height is implicitly 0.
+   */
+  points: Array<[number, number]>
+  /** Default road width in meters. */
+  width: number
+}
+
+export type SceneDynamicMesh = GroundDynamicMesh | WallDynamicMesh | RoadDynamicMesh
 
 export interface ClipboardEntry {
   sourceId: string

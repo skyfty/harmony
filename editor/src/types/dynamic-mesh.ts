@@ -3,7 +3,8 @@ import  {type DynamicMeshType } from '@harmony/schema'
 
 const LEGACY_DYNAMIC_MESH_TYPE_MAP: Record<string, DynamicMeshType> = {
   ground: 'Ground',
-  wall: 'Wall'
+  wall: 'Wall',
+  road: 'Road',
 }
 
 export function normalizeDynamicMeshType(input: DynamicMeshType | string | null | undefined): DynamicMeshType {
