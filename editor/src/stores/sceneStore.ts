@@ -44,8 +44,6 @@ import type {
   LightNodeProperties,
   LightNodeType,
   NodeComponentType,
-  PlatformDynamicMesh,
-  SurfaceDynamicMesh,
   SceneBehavior,
   SceneDynamicMesh,
   SceneNode,
@@ -131,7 +129,6 @@ import {
   type ModelInstanceGroup,
 } from '@schema/modelObjectCache'
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
-import { createSurfaceMesh } from '@schema/surfaceMesh'
 import { computeBlobHash, blobToDataUrl, dataUrlToBlob, inferBlobFilename, extractExtension, ensureExtension } from '@/utils/blob'
 import {
   buildBehaviorPrefabFilename,
@@ -1270,94 +1267,6 @@ function buildWallDynamicMeshFromWorldSegments(
   return { center, definition }
 }
 
-const SURFACE_POINT_MIN_DISTANCE = 1e-3
-
-function buildSurfaceDynamicMeshFromWorldPoints(points: Vector3Like[]): { center: Vector3; definition: SurfaceDynamicMesh } | null {
-  if (!Array.isArray(points) || points.length < 3) {
-    return null
-  }
-
-  const sanitized: Vector3[] = []
-  const minDistanceSq = SURFACE_POINT_MIN_DISTANCE * SURFACE_POINT_MIN_DISTANCE
-  points.forEach((point) => {
-    if (!point) {
-      return
-    }
-    const vec = createVector(
-      Number.isFinite(point.x) ? point.x : 0,
-      Number.isFinite(point.y) ? point.y : 0,
-      Number.isFinite(point.z) ? point.z : 0,
-    )
-    const previous = sanitized[sanitized.length - 1] ?? null
-    if (previous && previous.distanceToSquared(vec) <= minDistanceSq) {
-      return
-    }
-    sanitized.push(vec)
-  })
-
-  if (sanitized.length >= 2) {
-    const first = sanitized[0] ?? null
-    const last = sanitized[sanitized.length - 1] ?? null
-    if (first && last && first.distanceToSquared(last) <= minDistanceSq) {
-      sanitized.pop()
-    }
-  }
-
-  if (sanitized.length < 3) {
-    return null
-  }
-
-  let twiceArea = 0
-  for (let index = 0; index < sanitized.length; index += 1) {
-    const current = sanitized[index]!
-    const next = sanitized[(index + 1) % sanitized.length]!
-    twiceArea += current.x * next.z - next.x * current.z
-  }
-
-  if (Math.abs(twiceArea) <= 1e-4) {
-    return null
-  }
-
-  if (twiceArea < 0) {
-    sanitized.reverse()
-    twiceArea *= -1
-  }
-
-  const first = sanitized[0]!
-  const second = sanitized[1]!
-  const third = sanitized[2]!
-  const edgeA = second.clone().sub(first)
-  const edgeB = third.clone().sub(first)
-  const normal = new Vector3().crossVectors(edgeA, edgeB)
-  if (normal.lengthSq() <= 1e-6) {
-    return null
-  }
-  normal.normalize()
-  if (normal.y < 0) {
-    normal.multiplyScalar(-1)
-  }
-
-  const center = new Vector3()
-  sanitized.forEach((vector) => {
-    center.add(vector)
-  })
-  center.multiplyScalar(1 / sanitized.length)
-
-  const localPoints = sanitized.map<Vector3Like>((vector) => ({
-    x: vector.x - center.x,
-    y: vector.y - center.y,
-    z: vector.z - center.z,
-  }))
-
-  const definition: SurfaceDynamicMesh = {
-    type: 'Surface',
-    points: localPoints.map(cloneDynamicMeshVector3),
-    normal: cloneDynamicMeshVector3({ x: normal.x, y: normal.y, z: normal.z }),
-  }
-
-  return { center, definition }
-}
-
 function applyDisplayBoardComponentPropsToNode(
   node: SceneNode,
   props: DisplayBoardComponentProps,
@@ -1676,23 +1585,6 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
             : DEFAULT_WALL_WIDTH,
           thickness: Number.isFinite(segment.thickness) ? segment.thickness : DEFAULT_WALL_THICKNESS,
         })),
-      }
-    }
-    case 'Platform': {
-      const platformMesh = mesh as PlatformDynamicMesh
-      return {
-        type: 'Platform',
-        footprint: platformMesh.footprint.map(cloneDynamicMeshVector3),
-        height: platformMesh.height,
-      }
-    }
-    case 'Surface': {
-      const surfaceMesh = mesh as SurfaceDynamicMesh
-      const normal = surfaceMesh.normal ? cloneDynamicMeshVector3(surfaceMesh.normal) : cloneDynamicMeshVector3({ x: 0, y: 1, z: 0 })
-      return {
-        type: 'Surface',
-        points: (surfaceMesh.points ?? []).map(cloneDynamicMeshVector3),
-        normal,
       }
     }
     default:
@@ -10741,35 +10633,6 @@ export const useSceneStore = defineStore('scene', {
       const nextIndex = (fallback[fallback.length - 1] ?? 0) + 1
       return `${prefix}${nextIndex.toString().padStart(2, '0')}`
     },
-    generateSurfaceNodeName() {
-      const prefix = 'Surface '
-      const taken = new Set<string>()
-      const collect = (nodes: SceneNode[]) => {
-        nodes.forEach((node) => {
-          if (typeof node.name === 'string' && node.name.startsWith(prefix)) {
-            taken.add(node.name)
-          }
-          if (Array.isArray(node.children) && node.children.length) {
-            collect(node.children)
-          }
-        })
-      }
-      collect(this.nodes)
-      for (let index = 1; index < 1000; index += 1) {
-        const candidate = `${prefix}${index.toString().padStart(2, '0')}`
-        if (!taken.has(candidate)) {
-          return candidate
-        }
-      }
-      let nextIndex = 1
-      taken.forEach((name) => {
-        const parsed = Number.parseInt(name.slice(prefix.length), 10)
-        if (Number.isFinite(parsed) && parsed >= nextIndex) {
-          nextIndex = parsed + 1
-        }
-      })
-      return `${prefix}${nextIndex.toString().padStart(2, '0')}`
-    },
     ensureStaticRigidbodyComponent(nodeId: string): SceneNodeComponentState<RigidbodyComponentProps> | null {
       const target = findNodeById(this.nodes, nodeId)
       if (!target) {
@@ -10849,24 +10712,6 @@ export const useSceneStore = defineStore('scene', {
           }
         }
       }
-      return node
-    },
-    createSurfaceNode(payload: { points: Vector3Like[]; name?: string }): SceneNode | null {
-      const build = buildSurfaceDynamicMeshFromWorldPoints(payload.points)
-      if (!build) {
-        return null
-      }
-      const mesh = createSurfaceMesh(build.definition)
-      mesh.name = payload.name ?? 'Surface'
-      const node = this.addSceneNode({
-        nodeType: 'Mesh',
-        object: mesh,
-        name: payload.name ?? this.generateSurfaceNodeName(),
-        position: createVector(build.center.x, build.center.y, build.center.z),
-        rotation: createVector(0, 0, 0),
-        scale: createVector(1, 1, 1),
-        dynamicMesh: build.definition,
-      })
       return node
     },
     updateWallNodeGeometry(nodeId: string, payload: {

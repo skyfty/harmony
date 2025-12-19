@@ -45,7 +45,6 @@ export type ConvertPlanningToSceneOptions = {
       dimensions?: { height?: number; width?: number; thickness?: number }
       name?: string
     }) => SceneNode | null
-    createSurfaceNode: (payload: { points: Array<{ x: number; y: number; z: number }>; name?: string }) => SceneNode | null
     moveNode: (payload: { nodeId: string; targetId: string | null; position: 'before' | 'after' | 'inside' }) => boolean
     removeSceneNodes: (ids: string[]) => void
     updateNodeDynamicMesh: (nodeId: string, dynamicMesh: any) => void
@@ -284,57 +283,6 @@ function pointInPolygon(point: PlanningPoint, polygon: PlanningPoint[]): boolean
     if (intersect) inside = !inside
   }
   return inside
-}
-
-function polylineToStripPolygon(points: PlanningPoint[], width: number): PlanningPoint[] | null {
-  if (points.length < 2) return null
-  const half = Math.max(0.01, width * 0.5)
-
-  const left: PlanningPoint[] = []
-  const right: PlanningPoint[] = []
-
-  const n = points.length
-  const getDir = (a: PlanningPoint, b: PlanningPoint) => {
-    const dx = b.x - a.x
-    const dy = b.y - a.y
-    const len = Math.hypot(dx, dy) || 1e-12
-    return { x: dx / len, y: dy / len }
-  }
-  const getNormal = (dir: { x: number; y: number }) => ({ x: -dir.y, y: dir.x })
-
-  for (let i = 0; i < n; i += 1) {
-    const p = points[i]!
-    const dirPrev = i > 0 ? getDir(points[i - 1]!, p) : null
-    const dirNext = i < n - 1 ? getDir(p, points[i + 1]!) : null
-
-    const normalPrev = dirPrev ? getNormal(dirPrev) : null
-    const normalNext = dirNext ? getNormal(dirNext) : null
-
-    let nx: number
-    let ny: number
-
-    if (normalPrev && normalNext) {
-      nx = normalPrev.x + normalNext.x
-      ny = normalPrev.y + normalNext.y
-      const len = Math.hypot(nx, ny) || 1e-12
-      nx /= len
-      ny /= len
-    } else if (normalPrev) {
-      nx = normalPrev.x
-      ny = normalPrev.y
-    } else if (normalNext) {
-      nx = normalNext.x
-      ny = normalNext.y
-    } else {
-      nx = 0
-      ny = 1
-    }
-
-    left.push({ x: p.x + nx * half, y: p.y + ny * half })
-    right.push({ x: p.x - nx * half, y: p.y - ny * half })
-  }
-
-  return [...left, ...right.reverse()]
 }
 
 function ensureScatterStore(groundNodeId: string, snapshot: any | null | undefined): TerrainScatterStore {
@@ -661,12 +609,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
     if (kind === 'building') {
       for (const poly of group.polygons) {
-        const footprint = poly.points.map((p) => toWorldPoint(p, groundWidth, groundDepth, 0.01))
-        const surface = sceneStore.createSurfaceNode({ points: footprint, name: poly.name?.trim() || 'Building Footprint' })
-        if (surface) {
-          sceneStore.moveNode({ nodeId: surface.id, targetId: root.id, position: 'inside' })
-        }
-
         const segments = polygonEdges(poly.points).map((edge) => ({
           start: toWorldPoint(edge.start, groundWidth, groundDepth, 0),
           end: toWorldPoint(edge.end, groundWidth, groundDepth, 0),
@@ -683,14 +625,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       }
     } else if (kind === 'road') {
       for (const line of group.polylines) {
-        const strip = polylineToStripPolygon(line.points, 4)
-        if (strip) {
-          const points = strip.map((p) => toWorldPoint(p, groundWidth, groundDepth, 0.005))
-          const road = sceneStore.createSurfaceNode({ points, name: line.name?.trim() || 'Road' })
-          if (road) {
-            sceneStore.moveNode({ nodeId: road.id, targetId: root.id, position: 'inside' })
-          }
-        }
         updateProgressForUnit(`Converting road: ${line.name?.trim() || line.id}`)
       }
     } else if (kind === 'green') {
@@ -892,11 +826,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       }
     } else if (kind === 'terrain') {
       for (const poly of group.polygons) {
-        const points = poly.points.map((p) => toWorldPoint(p, groundWidth, groundDepth, 0.002))
-        const surface = sceneStore.createSurfaceNode({ points, name: poly.name?.trim() || 'Terrain Area' })
-        if (surface) {
-          sceneStore.moveNode({ nodeId: surface.id, targetId: root.id, position: 'inside' })
-        }
         updateProgressForUnit(`Converting terrain: ${poly.name?.trim() || poly.id}`)
       }
     }
