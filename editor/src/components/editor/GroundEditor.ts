@@ -1013,14 +1013,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (applyScatterPlacementCluster(targetPoint)) {
 				scatterSession.lastPoint = targetPoint.clone()
 			}
-				.addScaledVector(scatterDirectionHelper, stepDistance * index)
-			paintScatterStamp(scatterPlacementHelper)
 		}
-		const remainder = distance - steps * stepDistance
-		if (remainder >= stepDistance * 0.4) {
-			paintScatterStamp(targetPoint)
-		}
-		scatterSession.lastPoint = targetPoint.clone()
 	}
 
 	function beginScatterPlacement(event: PointerEvent): boolean {
@@ -1051,8 +1044,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			? options.scatterSpacing.value
 			: preset.spacing
 		const effectiveSpacing = Math.min(2, Math.max(0.1, customSpacing))
-		const customRadius = Number.isFinite(options.scatterRadius.value)
-			? options.scatterRadius.value
+		const customRadius = Number.isFinite(options.scatterBrushRadius.value)
+			? options.scatterBrushRadius.value
 			: 0.5
 		const effectiveRadius = Math.min(2, Math.max(0.1, customRadius))
 		scatterSession = {
@@ -1451,8 +1444,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function resolveScatterPaintRadius(): number {
-		const candidate = Number.isFinite(options.scatterRadius.value)
-			? options.scatterRadius.value
+		const candidate = Number.isFinite(options.scatterBrushRadius.value)
+			? options.scatterBrushRadius.value
 			: 0.5
 		return Math.min(2, Math.max(0.1, candidate))
 	}
