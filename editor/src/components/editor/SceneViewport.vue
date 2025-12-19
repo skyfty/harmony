@@ -45,7 +45,6 @@ import {
   getCachedModelObject,
   getOrLoadModelObject,
   subscribeInstancedMeshes,
-  getModelInstanceBindingsForNode,
   getModelInstanceBindingById,
   findBindingIdForInstance,
   findNodeIdForInstance,
@@ -125,6 +124,7 @@ import { usePlaceholderOverlayController } from './placeholderOverlayController'
 import { useToolbarPositioning } from './useToolbarPositioning'
 import { useScenePicking } from './useScenePicking'
 import { createPickProxyManager } from './PickProxyManager'
+import { createInstancedOutlineManager } from './InstancedOutlineManager'
 import { createWallRenderer } from './WallRenderer'
 import {
   type VectorCoordinates,
@@ -253,22 +253,25 @@ instancedMeshGroup.name = 'InstancedMeshGroup'
 const instancedOutlineGroup = new THREE.Group()
 instancedOutlineGroup.name = 'InstancedOutlineGroup'
 
-type InstancedOutlineEntry = {
-  group: THREE.Group
-  proxies: Map<string, THREE.Mesh>
+const instancedOutlineManager = createInstancedOutlineManager({ outlineGroup: instancedOutlineGroup })
+const createInstancedOutlineProxy = instancedOutlineManager.createInstancedProxy
+const updateInstancedOutlineEntry = instancedOutlineManager.updateInstancedOutlineEntry
+const syncInstancedOutlineEntryTransform = (nodeId: string) => {
+  const object = objectMap.get(nodeId) ?? null
+  const { needsRebuild } = instancedOutlineManager.syncInstancedOutlineEntryTransform(nodeId, object)
+  if (needsRebuild) {
+    updateOutlineSelectionTargets()
+  }
 }
-
-const instancedOutlineEntries = new Map<string, InstancedOutlineEntry>()
-const instancedOutlineMatrixHelper = new THREE.Matrix4()
-const instancedOutlineWorldMatrixHelper = new THREE.Matrix4()
-const instancedOutlineBaseMaterial = new THREE.MeshBasicMaterial({
-  color: 0xffffff,
-  transparent: true,
-  opacity: 0,
-  depthWrite: false,
-  depthTest: false,
-})
-instancedOutlineBaseMaterial.toneMapped = false
+const releaseInstancedOutlineEntry = (nodeId: string, shouldUpdateOutline = true) => {
+  instancedOutlineManager.releaseInstancedOutlineEntry(nodeId)
+  if (shouldUpdateOutline) {
+    updateOutlineSelectionTargets()
+  }
+}
+const clearInstancedOutlineEntries = () => {
+  instancedOutlineManager.clearInstancedOutlineEntries()
+}
 
 const instancedHoverMaterial = new THREE.MeshBasicMaterial({
   color: 0x4dd0e1,
@@ -780,9 +783,7 @@ function updateRepairHoverHighlight(event: PointerEvent): boolean {
       }
 
       slot.mesh.updateWorldMatrix(true, false)
-      slot.mesh.getMatrixAt(slot.index, instancedOutlineMatrixHelper)
-      instancedOutlineWorldMatrixHelper.multiplyMatrices(slot.mesh.matrixWorld, instancedOutlineMatrixHelper)
-      proxy.matrix.copy(instancedOutlineWorldMatrixHelper)
+      instancedOutlineManager.syncProxyMatrixFromSlot(proxy, slot.mesh, slot.index)
       proxy.visible = true
     })
 
@@ -3920,177 +3921,6 @@ function collectVisibleMeshesForOutline(
   }
 }
 
-// Maintains transparent proxy meshes per instanced node so OutlinePass can highlight individual instances.
-function getOutlineProxyMaterial(source: THREE.Material | THREE.Material[]): THREE.Material | THREE.Material[] {
-  if (Array.isArray(source)) {
-    return source.map(() => instancedOutlineBaseMaterial)
-  }
-  return instancedOutlineBaseMaterial
-}
-
-function createInstancedOutlineProxy(template: THREE.InstancedMesh): THREE.Mesh {
-  const proxyMaterial = getOutlineProxyMaterial(template.material as THREE.Material | THREE.Material[])
-  const proxy = new THREE.Mesh(template.geometry, proxyMaterial)
-  proxy.matrixAutoUpdate = false
-  proxy.visible = false
-  proxy.frustumCulled = false
-  proxy.renderOrder = 9999
-  return proxy
-}
-
-function ensureInstancedOutlineEntry(nodeId: string): InstancedOutlineEntry {
-  let entry = instancedOutlineEntries.get(nodeId)
-  if (!entry) {
-    const group = new THREE.Group()
-    group.name = `InstancedOutline:${nodeId}`
-    instancedOutlineGroup.add(group)
-    entry = {
-      group,
-      proxies: new Map<string, THREE.Mesh>(),
-    }
-    instancedOutlineEntries.set(nodeId, entry)
-  } else if (entry.group.parent !== instancedOutlineGroup) {
-    instancedOutlineGroup.add(entry.group)
-  }
-  entry.group.visible = true
-  return entry
-}
-
-function updateInstancedOutlineEntry(nodeId: string, object: THREE.Object3D | null): THREE.Mesh[] {
-  const bindings = getModelInstanceBindingsForNode(nodeId)
-  if (!bindings.length) {
-    releaseInstancedOutlineEntry(nodeId, false)
-    return []
-  }
-
-  const entry = ensureInstancedOutlineEntry(nodeId)
-  const activeHandles = new Set<string>()
-  const proxies: THREE.Mesh[] = []
-  const isVisible = object?.visible !== false
-
-  bindings.forEach((binding) => {
-    binding.slots.forEach((slot) => {
-      const { handleId, mesh, index } = slot
-      const proxyKey = `${binding.bindingId}:${handleId}`
-      let proxy = entry.proxies.get(proxyKey)
-      if (!proxy) {
-        proxy = createInstancedOutlineProxy(mesh)
-        entry.proxies.set(proxyKey, proxy)
-        entry.group.add(proxy)
-      } else {
-        if (proxy.geometry !== mesh.geometry) {
-          proxy.geometry = mesh.geometry
-        }
-        if (Array.isArray(mesh.material)) {
-          const current = Array.isArray(proxy.material) ? proxy.material : null
-          if (!current || current.length !== mesh.material.length) {
-            proxy.material = getOutlineProxyMaterial(mesh.material)
-          }
-        } else if (Array.isArray(proxy.material)) {
-          proxy.material = instancedOutlineBaseMaterial
-        }
-        if (proxy.parent !== entry.group) {
-          entry.group.add(proxy)
-        }
-      }
-
-      mesh.updateWorldMatrix(true, false)
-      mesh.getMatrixAt(index, instancedOutlineMatrixHelper)
-      instancedOutlineWorldMatrixHelper.multiplyMatrices(mesh.matrixWorld, instancedOutlineMatrixHelper)
-      proxy.matrix.copy(instancedOutlineWorldMatrixHelper)
-      proxy.visible = isVisible && mesh.visible !== false
-      proxies.push(proxy)
-      activeHandles.add(proxyKey)
-    })
-  })
-
-  const unusedHandles: string[] = []
-  entry.proxies.forEach((_proxy, proxyKey) => {
-    if (!activeHandles.has(proxyKey)) {
-      unusedHandles.push(proxyKey)
-    }
-  })
-
-  unusedHandles.forEach((proxyKey) => {
-    const proxy = entry.proxies.get(proxyKey)
-    if (!proxy) {
-      return
-    }
-    proxy.visible = false
-    proxy.parent?.remove(proxy)
-    entry.proxies.delete(proxyKey)
-  })
-
-  entry.group.visible = proxies.some((proxy) => proxy.visible)
-  return proxies.filter((proxy) => proxy.visible)
-}
-
-function syncInstancedOutlineEntryTransform(nodeId: string) {
-  const entry = instancedOutlineEntries.get(nodeId)
-  if (!entry) {
-    return
-  }
-
-  const bindings = getModelInstanceBindingsForNode(nodeId)
-  const object = objectMap.get(nodeId) ?? null
-  if (!bindings.length || !object) {
-    releaseInstancedOutlineEntry(nodeId, false)
-    updateOutlineSelectionTargets()
-    return
-  }
-
-  let needsRebuild = false
-  const isVisible = object.visible !== false
-
-  bindings.forEach((binding) => {
-    binding.slots.forEach((slot) => {
-      const proxyKey = `${binding.bindingId}:${slot.handleId}`
-      const proxy = entry.proxies.get(proxyKey)
-      if (!proxy) {
-        needsRebuild = true
-        return
-      }
-      const { mesh, index } = slot
-      mesh.updateWorldMatrix(true, false)
-      mesh.getMatrixAt(index, instancedOutlineMatrixHelper)
-      instancedOutlineWorldMatrixHelper.multiplyMatrices(mesh.matrixWorld, instancedOutlineMatrixHelper)
-      proxy.matrix.copy(instancedOutlineWorldMatrixHelper)
-      proxy.visible = isVisible && mesh.visible !== false
-    })
-  })
-
-  if (needsRebuild) {
-    updateOutlineSelectionTargets()
-    return
-  }
-
-  entry.group.visible = Array.from(entry.proxies.values()).some((proxy) => proxy.visible)
-}
-
-function releaseInstancedOutlineEntry(nodeId: string, shouldUpdateOutline = true) {
-  const entry = instancedOutlineEntries.get(nodeId)
-  if (!entry) {
-    return
-  }
-  entry.proxies.forEach((proxy) => {
-    proxy.visible = false
-    proxy.parent?.remove(proxy)
-  })
-  entry.proxies.clear()
-  entry.group.clear()
-  entry.group.visible = false
-  entry.group.removeFromParent()
-  instancedOutlineEntries.delete(nodeId)
-  if (shouldUpdateOutline) {
-    updateOutlineSelectionTargets()
-  }
-}
-
-function clearInstancedOutlineEntries() {
-  const nodeIds = Array.from(instancedOutlineEntries.keys())
-  nodeIds.forEach((nodeId) => releaseInstancedOutlineEntry(nodeId, false))
-}
-
 function updateOutlineSelectionTargets() {
   const meshSet = new Set<THREE.Object3D>()
   const activeInstancedNodeIds = new Set<string>()
@@ -4112,7 +3942,7 @@ function updateOutlineSelectionTargets() {
   })
 
   const releaseCandidates: string[] = []
-  instancedOutlineEntries.forEach((_entry, nodeId) => {
+  instancedOutlineManager.getEntryNodeIds().forEach((nodeId) => {
     if (!activeInstancedNodeIds.has(nodeId)) {
       releaseCandidates.push(nodeId)
     }
