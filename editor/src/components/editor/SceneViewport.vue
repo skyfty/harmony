@@ -4784,24 +4784,6 @@ async function handlePointerDown(event: PointerEvent) {
     return
   }
 
-  if (activeBuildTool.value === 'surface') {
-    if (button === 0) {
-      pointerTrackingState = null
-      handleSurfacePlacementClick(event)
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
-      return
-    }
-    if (button === 2) {
-      pointerTrackingState = null
-      cancelSurfaceBuildSession()
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
-      return
-    }
-  }
 
   if (activeBuildTool.value === 'wall') {
     if (button === 0) {
@@ -5279,22 +5261,6 @@ function handleCanvasDoubleClick(event: MouseEvent) {
   if (transformControls?.dragging) {
     return
   }
-  if (activeBuildTool.value === 'surface') {
-    if (surfaceBuildSession && surfaceBuildSession.points.length >= 3) {
-      const finalized = finalizeSurfaceBuildSession()
-      if (finalized) {
-        event.preventDefault()
-        event.stopPropagation()
-        return
-      }
-    }
-    if (surfaceBuildSession) {
-      cancelSurfaceBuildSession()
-      event.preventDefault()
-      event.stopPropagation()
-      return
-    }
-  }
   const hit = pickNodeAtPointer(event)
   if (!hit) {
     return
@@ -5534,157 +5500,6 @@ function clearWallBuildSession(options: { disposePreview?: boolean } = {}) {
   wallBuildSession = null
   wallPreviewSignature = null
   wallPlacementSuppressedPointerId = null
-}
-
-const SURFACE_POINT_MIN_DISTANCE = 1e-3
-
-function ensureSurfaceBuildSession(): SurfaceBuildSession {
-  if (surfaceBuildSession) {
-    return surfaceBuildSession
-  }
-  surfaceBuildSession = {
-    points: [],
-    previewGroup: null,
-  }
-  return surfaceBuildSession
-}
-
-function disposeSurfacePreviewGroup(group: THREE.Group) {
-  const children = [...group.children]
-  children.forEach((child) => {
-    group.remove(child)
-    const mesh = child as THREE.Mesh
-    if (mesh?.isMesh) {
-      mesh.geometry?.dispose?.()
-      return
-    }
-    const line = child as THREE.Line
-    if (line?.isLine) {
-      line.geometry?.dispose?.()
-    }
-  })
-}
-
-function clearSurfacePreview() {
-  if (!surfaceBuildSession?.previewGroup) {
-    return
-  }
-  const preview = surfaceBuildSession.previewGroup
-  preview.removeFromParent()
-  disposeSurfacePreviewGroup(preview)
-  surfaceBuildSession.previewGroup = null
-}
-
-function updateSurfacePreview() {
-  if (!scene || !surfaceBuildSession) {
-    return
-  }
-  const { points } = surfaceBuildSession
-  if (!points.length) {
-    clearSurfacePreview()
-    return
-  }
-
-  const preview = surfaceBuildSession.previewGroup ?? (() => {
-    const group = new THREE.Group()
-    group.name = 'SurfacePreview'
-    surfaceBuildSession!.previewGroup = group
-    rootGroup.add(group)
-    return group
-  })()
-
-  disposeSurfacePreviewGroup(preview)
-
-  const center = new THREE.Vector3()
-  points.forEach((point) => {
-    center.add(point)
-  })
-  center.multiplyScalar(1 / points.length)
-  preview.position.copy(center)
-
-  if (points.length >= 2) {
-    const outlineGeometry = new THREE.BufferGeometry()
-    const outlinePositions = new Float32Array(points.length * 3)
-    points.forEach((point, index) => {
-      const local = point.clone().sub(center)
-      outlinePositions[index * 3 + 0] = local.x
-      outlinePositions[index * 3 + 1] = local.y
-      outlinePositions[index * 3 + 2] = local.z
-    })
-    outlineGeometry.setAttribute('position', new THREE.BufferAttribute(outlinePositions, 3))
-    const outline = new THREE.LineLoop(outlineGeometry, surfacePreviewLineMaterial)
-    preview.add(outline)
-  }
-
-  if (points.length >= 3) {
-    const shape = new THREE.Shape()
-    const firstLocal = points[0]!.clone().sub(center)
-    shape.moveTo(firstLocal.x, firstLocal.z)
-    for (let index = 1; index < points.length; index += 1) {
-      const local = points[index]!.clone().sub(center)
-      shape.lineTo(local.x, local.z)
-    }
-    const shapeGeometry = new THREE.ShapeGeometry(shape)
-    shapeGeometry.rotateX(-Math.PI / 2)
-    shapeGeometry.computeVertexNormals()
-    const mesh = new THREE.Mesh(shapeGeometry, surfacePreviewFillMaterial)
-    const averageLocalY = points.reduce((sum, point) => sum + (point.y - center.y), 0) / points.length
-    mesh.position.set(0, averageLocalY, 0)
-    preview.add(mesh)
-  }
-
-  if (!rootGroup.children.includes(preview)) {
-    rootGroup.add(preview)
-  }
-}
-
-function clearSurfaceBuildSession() {
-  if (!surfaceBuildSession) {
-    return
-  }
-  clearSurfacePreview()
-  surfaceBuildSession = null
-}
-
-function cancelSurfaceBuildSession() {
-  clearSurfaceBuildSession()
-}
-
-function handleSurfacePlacementClick(event: PointerEvent): boolean {
-  if (!activeBuildTool.value || activeBuildTool.value !== 'surface') {
-    return false
-  }
-  if (!raycastGroundPoint(event, groundPointerHelper)) {
-    return false
-  }
-  const snapped = snapVectorToMajorGrid(groundPointerHelper.clone())
-  const session = ensureSurfaceBuildSession()
-  const lastPoint = session.points[session.points.length - 1] ?? null
-  if (lastPoint && lastPoint.distanceToSquared(snapped) <= SURFACE_POINT_MIN_DISTANCE * SURFACE_POINT_MIN_DISTANCE) {
-    return false
-  }
-  session.points.push(snapped)
-  updateSurfacePreview()
-  return true
-}
-
-function finalizeSurfaceBuildSession(): boolean {
-  if (!surfaceBuildSession) {
-    return false
-  }
-  const { points } = surfaceBuildSession
-  if (points.length < 3) {
-    cancelSurfaceBuildSession()
-    return false
-  }
-  const payload = points.map((point) => ({ x: point.x, y: point.y, z: point.z }))
-  const created = sceneStore.createSurfaceNode({ points: payload })
-  if (!created) {
-    return false
-  }
-  sceneStore.setSelection([created.id], { primaryId: created.id })
-  clearSurfaceBuildSession()
-  return true
 }
 
 function ensureWallBuildSession(): WallBuildSession {
@@ -5961,18 +5776,6 @@ function cancelActiveBuildOperation(): boolean {
         finalizeWallBuildSession()
       } else {
         cancelWallSelection()
-        activeBuildTool.value = null
-      }
-      handled = true
-      break
-    case 'platform':
-      activeBuildTool.value = null
-      handled = true
-      break
-    case 'surface':
-      if (surfaceBuildSession) {
-        cancelSurfaceBuildSession()
-      } else {
         activeBuildTool.value = null
       }
       handled = true
@@ -7963,9 +7766,6 @@ watch(activeBuildTool, (tool) => {
     cancelWallDrag()
     clearWallBuildSession()
     restoreOrbitAfterWallBuild()
-  }
-  if (tool !== 'surface') {
-    cancelSurfaceBuildSession()
   }
 })
 
