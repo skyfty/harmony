@@ -10,7 +10,6 @@ import { OutlinePass } from 'three/examples/jsm/postprocessing/OutlinePass.js'
 import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js'
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
-import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js'
 
 // @ts-ignore - local plugin has no .d.ts declaration file
 import { TransformControls } from '@/utils/transformControls.js'
@@ -125,6 +124,7 @@ import { createEffectPlaybackManager } from './effectPlaybackManager'
 import { usePlaceholderOverlayController } from './placeholderOverlayController'
 import { useToolbarPositioning } from './useToolbarPositioning'
 import { useScenePicking } from './useScenePicking'
+import { createPickProxyManager } from './PickProxyManager'
 import { createWallRenderer } from './WallRenderer'
 import {
   type VectorCoordinates,
@@ -279,27 +279,7 @@ const instancedHoverMaterial = new THREE.MeshBasicMaterial({
 })
 instancedHoverMaterial.toneMapped = false
 
-const instancedPickProxyGeometry = new THREE.BoxGeometry(1, 1, 1)
-const instancedPickProxyMaterial = new THREE.MeshBasicMaterial({
-  color: 0xffffff,
-  transparent: true,
-  opacity: 0,
-  depthWrite: false,
-  depthTest: false,
-})
-instancedPickProxyMaterial.colorWrite = false
-instancedPickProxyMaterial.toneMapped = false
-const instancedPickBoundsMinHelper = new THREE.Vector3()
-const instancedPickBoundsMaxHelper = new THREE.Vector3()
-const instancedPickBoundsSizeHelper = new THREE.Vector3()
-const instancedPickBoundsCenterHelper = new THREE.Vector3()
-const instancedPickProxyWorldInverseHelper = new THREE.Matrix4()
-const instancedPickProxyInstanceMatrixHelper = new THREE.Matrix4()
-const instancedPickProxyWorldMatrixHelper = new THREE.Matrix4()
-const instancedPickProxyLocalMatrixHelper = new THREE.Matrix4()
-const instancedPickProxyAssetBoundsHelper = new THREE.Box3()
-const instancedPickProxyPointsBoundsHelper = new THREE.Box3()
-const instancedPickProxyCornerHelpers = Array.from({ length: 8 }, () => new THREE.Vector3())
+const { ensureInstancedPickProxy, removeInstancedPickProxy } = createPickProxyManager()
 
 let scene: THREE.Scene | null = null
 let renderer: THREE.WebGLRenderer | null = null
@@ -3938,216 +3918,6 @@ function collectVisibleMeshesForOutline(
       collectVisibleMeshesForOutline(child, collector, activeInstancedNodeIds)
     }
   }
-}
-
-type InstancedBoundsPayload = { min: [number, number, number]; max: [number, number, number] }
-
-function isInstancedBoundsPayload(value: unknown): value is InstancedBoundsPayload {
-  if (!value || typeof value !== 'object') {
-    return false
-  }
-  const payload = value as Partial<InstancedBoundsPayload>
-  return Array.isArray(payload.min) && payload.min.length === 3 && Array.isArray(payload.max) && payload.max.length === 3
-}
-
-function extractInstancedBounds(node: SceneNode, object: THREE.Object3D): InstancedBoundsPayload | null {
-  const nodeUserData = node.userData as Record<string, unknown> | undefined
-  const nodeBoundsCandidate = nodeUserData?.instancedBounds
-  if (isInstancedBoundsPayload(nodeBoundsCandidate)) {
-    return nodeBoundsCandidate
-  }
-  const objectBoundsCandidate = object.userData?.instancedBounds
-  if (isInstancedBoundsPayload(objectBoundsCandidate)) {
-    return objectBoundsCandidate
-  }
-  return null
-}
-
-function ensureInstancedPickProxy(object: THREE.Object3D, node: SceneNode) {
-  let proxy = object.userData?.instancedPickProxy as THREE.Mesh | undefined
-  if (!proxy) {
-    proxy = new THREE.Mesh(instancedPickProxyGeometry, instancedPickProxyMaterial)
-    proxy.name = `${object.name ?? node.name ?? 'Instanced'}:PickProxy`
-    proxy.userData = {
-      ...(proxy.userData ?? {}),
-      nodeId: node.id,
-      instancedPickProxy: true,
-      excludeFromOutline: true,
-    }
-    proxy.renderOrder = -9999
-    proxy.frustumCulled = false
-    object.add(proxy)
-    const userData = object.userData ?? (object.userData = {})
-    userData.instancedPickProxy = proxy
-  } else {
-    proxy.userData.nodeId = node.id
-  }
-
-  // Build a pick volume that covers *all* instanced bindings of this node.
-  // This makes clicking/dragging any instance select & transform around the correct center.
-  const bindings = getModelInstanceBindingsForNode(node.id)
-
-  const restoreProxyToUnitBox = (center: THREE.Vector3, size: THREE.Vector3) => {
-    if (proxy!.geometry !== instancedPickProxyGeometry) {
-      proxy!.geometry.dispose()
-      proxy!.geometry = instancedPickProxyGeometry
-    }
-    const eps = 1e-4
-    proxy!.position.copy(center)
-    proxy!.scale.set(
-      Math.max(size.x, eps),
-      Math.max(size.y, eps),
-      Math.max(size.z, eps),
-    )
-    proxy!.visible = true
-    proxy!.updateMatrixWorld(true)
-  }
-
-  // If we can't see any bindings, fall back to serialized bounds if available.
-  if (!bindings.length) {
-    const fallback = extractInstancedBounds(node, object)
-    if (!fallback) {
-      removeInstancedPickProxy(object)
-      return
-    }
-    instancedPickBoundsMinHelper.fromArray(fallback.min)
-    instancedPickBoundsMaxHelper.fromArray(fallback.max)
-    instancedPickBoundsSizeHelper.subVectors(instancedPickBoundsMaxHelper, instancedPickBoundsMinHelper)
-    instancedPickBoundsCenterHelper
-      .addVectors(instancedPickBoundsMinHelper, instancedPickBoundsMaxHelper)
-      .multiplyScalar(0.5)
-    restoreProxyToUnitBox(instancedPickBoundsCenterHelper, instancedPickBoundsSizeHelper)
-    return
-  }
-
-  // Determine the asset-local bounds (single instance) from the binding's submesh geometries.
-  instancedPickProxyAssetBoundsHelper.makeEmpty()
-  const firstBinding = bindings[0]
-  if (firstBinding) {
-    firstBinding.slots.forEach(({ mesh }) => {
-    const geometry = mesh.geometry as THREE.BufferGeometry
-    if (!geometry.boundingBox) {
-      geometry.computeBoundingBox()
-    }
-    if (geometry.boundingBox) {
-      instancedPickProxyAssetBoundsHelper.union(geometry.boundingBox)
-    }
-    })
-  }
-
-  if (instancedPickProxyAssetBoundsHelper.isEmpty()) {
-    const bounds = extractInstancedBounds(node, object)
-    if (bounds) {
-      instancedPickProxyAssetBoundsHelper.min.fromArray(bounds.min)
-      instancedPickProxyAssetBoundsHelper.max.fromArray(bounds.max)
-    }
-  }
-
-  if (instancedPickProxyAssetBoundsHelper.isEmpty()) {
-    removeInstancedPickProxy(object)
-    return
-  }
-
-  // Precompute the 8 corners of the asset bounds.
-  const min = instancedPickProxyAssetBoundsHelper.min
-  const max = instancedPickProxyAssetBoundsHelper.max
-  instancedPickProxyCornerHelpers[0]!.set(min.x, min.y, min.z)
-  instancedPickProxyCornerHelpers[1]!.set(max.x, min.y, min.z)
-  instancedPickProxyCornerHelpers[2]!.set(min.x, max.y, min.z)
-  instancedPickProxyCornerHelpers[3]!.set(max.x, max.y, min.z)
-  instancedPickProxyCornerHelpers[4]!.set(min.x, min.y, max.z)
-  instancedPickProxyCornerHelpers[5]!.set(max.x, min.y, max.z)
-  instancedPickProxyCornerHelpers[6]!.set(min.x, max.y, max.z)
-  instancedPickProxyCornerHelpers[7]!.set(max.x, max.y, max.z)
-
-  object.updateMatrixWorld(true)
-  instancedPickProxyWorldInverseHelper.copy(object.matrixWorld).invert()
-
-  const points: THREE.Vector3[] = []
-  const MAX_PICK_POINTS = 4096
-
-  for (const binding of bindings) {
-    const slot = binding.slots[0]
-    if (!slot) {
-      continue
-    }
-    const mesh = slot.mesh
-    mesh.updateMatrixWorld(true)
-
-    mesh.getMatrixAt(slot.index, instancedPickProxyInstanceMatrixHelper)
-    instancedPickProxyWorldMatrixHelper.multiplyMatrices(mesh.matrixWorld, instancedPickProxyInstanceMatrixHelper)
-    instancedPickProxyLocalMatrixHelper.multiplyMatrices(
-      instancedPickProxyWorldInverseHelper,
-      instancedPickProxyWorldMatrixHelper,
-    )
-
-    for (let i = 0; i < 8; i += 1) {
-      const corner = instancedPickProxyCornerHelpers[i]
-      if (!corner) {
-        continue
-      }
-      points.push(corner.clone().applyMatrix4(instancedPickProxyLocalMatrixHelper))
-      if (points.length >= MAX_PICK_POINTS) {
-        break
-      }
-    }
-    if (points.length >= MAX_PICK_POINTS) {
-      break
-    }
-  }
-
-  if (points.length < 4) {
-    instancedPickProxyPointsBoundsHelper.makeEmpty().setFromPoints(points)
-    if (instancedPickProxyPointsBoundsHelper.isEmpty()) {
-      removeInstancedPickProxy(object)
-      return
-    }
-    instancedPickProxyPointsBoundsHelper.getCenter(instancedPickBoundsCenterHelper)
-    instancedPickProxyPointsBoundsHelper.getSize(instancedPickBoundsSizeHelper)
-    restoreProxyToUnitBox(instancedPickBoundsCenterHelper, instancedPickBoundsSizeHelper)
-    return
-  }
-
-  // If the point cloud is large, prefer a fast bounds proxy over an expensive hull.
-  if (points.length >= MAX_PICK_POINTS) {
-    instancedPickProxyPointsBoundsHelper.makeEmpty().setFromPoints(points)
-    instancedPickProxyPointsBoundsHelper.getCenter(instancedPickBoundsCenterHelper)
-    instancedPickProxyPointsBoundsHelper.getSize(instancedPickBoundsSizeHelper)
-    restoreProxyToUnitBox(instancedPickBoundsCenterHelper, instancedPickBoundsSizeHelper)
-    return
-  }
-
-  try {
-    const geometry = new ConvexGeometry(points)
-    geometry.computeBoundingBox()
-
-    if (proxy.geometry !== instancedPickProxyGeometry) {
-      proxy.geometry.dispose()
-    }
-    proxy.geometry = geometry
-    proxy.position.set(0, 0, 0)
-    proxy.scale.set(1, 1, 1)
-    proxy.visible = true
-    proxy.updateMatrixWorld(true)
-  } catch {
-    instancedPickProxyPointsBoundsHelper.makeEmpty().setFromPoints(points)
-    if (instancedPickProxyPointsBoundsHelper.isEmpty()) {
-      removeInstancedPickProxy(object)
-      return
-    }
-    instancedPickProxyPointsBoundsHelper.getCenter(instancedPickBoundsCenterHelper)
-    instancedPickProxyPointsBoundsHelper.getSize(instancedPickBoundsSizeHelper)
-    restoreProxyToUnitBox(instancedPickBoundsCenterHelper, instancedPickBoundsSizeHelper)
-  }
-}
-
-function removeInstancedPickProxy(object: THREE.Object3D) {
-  const proxy = object.userData?.instancedPickProxy as THREE.Mesh | undefined
-  if (!proxy) {
-    return
-  }
-  proxy.removeFromParent()
-  delete object.userData.instancedPickProxy
 }
 
 // Maintains transparent proxy meshes per instanced node so OutlinePass can highlight individual instances.
