@@ -4,15 +4,12 @@ import { hashString, stableSerialize } from '@schema/stableSerialize'
 import {
   getCachedModelObject,
   getOrLoadModelObject,
-  ensureInstancedMeshesRegistered,
-  allocateModelInstanceBinding,
   releaseModelInstancesForNode,
-  updateModelInstanceBindingMatrix,
-  getModelInstanceBindingsForNode,
 } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 import { WALL_COMPONENT_TYPE, type WallComponentProps } from '@schema/components'
+import { syncInstancedModelCommittedLocalMatrices } from '@schema/continuousInstancedModel'
 
 export function computeWallDynamicMeshSignature(definition: WallDynamicMesh): string {
   const serialized = stableSerialize(definition.segments ?? [])
@@ -50,10 +47,7 @@ function disposeWallGroupResources(group: THREE.Group): void {
   })
 }
 
-const wallSyncNodeMatrixHelper = new THREE.Matrix4()
-const wallSyncInstanceMatrixHelper = new THREE.Matrix4()
 const wallSyncPosHelper = new THREE.Vector3()
-const wallSyncQuatHelper = new THREE.Quaternion()
 const wallSyncScaleHelper = new THREE.Vector3(1, 1, 1)
 const wallSyncStartHelper = new THREE.Vector3()
 const wallSyncEndHelper = new THREE.Vector3()
@@ -67,9 +61,6 @@ const wallSyncLocalMatrixHelper = new THREE.Matrix4()
 const wallSyncIncomingHelper = new THREE.Vector3()
 const wallSyncOutgoingHelper = new THREE.Vector3()
 const wallSyncBisectorHelper = new THREE.Vector3()
-const wallSyncNodePos = new THREE.Vector3()
-const wallSyncNodeEuler = new THREE.Euler()
-const wallSyncNodeScale = new THREE.Vector3()
 
 function wallDirectionToQuaternion(direction: THREE.Vector3, baseAxis: 'x' | 'z' = 'x'): THREE.Quaternion {
   const base = baseAxis === 'x' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1)
@@ -104,6 +95,108 @@ function resolveWallBodyLengthAxis(
 export function createWallRenderer(options: WallRendererOptions) {
   const wallModelRequestCache = new Map<string, Promise<void>>()
 
+  function computeWallBodyLocalMatrices(definition: WallDynamicMesh, bounds: THREE.Box3): THREE.Matrix4[] {
+    const matrices: THREE.Matrix4[] = []
+    const baseSize = bounds.getSize(wallSyncScaleHelper)
+
+    definition.segments.forEach((segment) => {
+      wallSyncLocalStartHelper.set(segment.start.x, segment.start.y, segment.start.z)
+      wallSyncLocalEndHelper.set(segment.end.x, segment.end.y, segment.end.z)
+      wallSyncLocalDirHelper.subVectors(wallSyncLocalEndHelper, wallSyncLocalStartHelper)
+      wallSyncLocalDirHelper.y = 0
+
+      const lengthLocal = wallSyncLocalDirHelper.length()
+      if (lengthLocal <= 1e-6) {
+        return
+      }
+
+      const lengthAxis = resolveWallBodyLengthAxis(baseSize, segment.width)
+      const baseAxisForQuaternion: 'x' | 'z' = lengthAxis
+      const tileLengthLocal = Math.max(
+        1e-4,
+        lengthAxis === 'x' ? Math.abs(baseSize.x) : Math.abs(baseSize.z),
+      )
+      const minAlongAxis = lengthAxis === 'x' ? bounds.min.x : bounds.min.z
+
+      wallSyncLocalUnitDirHelper.copy(wallSyncLocalDirHelper).normalize()
+
+      const instanceCount = lengthLocal <= tileLengthLocal + 1e-6
+        ? 1
+        : Math.max(1, Math.ceil(lengthLocal / tileLengthLocal))
+      const totalCoveredLocal = instanceCount * tileLengthLocal
+      const startOffsetLocal = (lengthLocal - totalCoveredLocal) * 0.5
+
+      const quatLocal = wallDirectionToQuaternion(wallSyncLocalDirHelper, baseAxisForQuaternion)
+
+      for (let instanceIndex = 0; instanceIndex < instanceCount; instanceIndex += 1) {
+        const along = startOffsetLocal + instanceIndex * tileLengthLocal
+        wallSyncLocalMinPointHelper.copy(wallSyncLocalStartHelper).addScaledVector(wallSyncLocalUnitDirHelper, along)
+
+        // Place the model so that its local min face along the length axis matches the desired min point.
+        wallSyncLocalOffsetHelper.set(
+          lengthAxis === 'x' ? minAlongAxis : 0,
+          0,
+          lengthAxis === 'z' ? minAlongAxis : 0,
+        )
+        wallSyncLocalOffsetHelper.applyQuaternion(quatLocal)
+        wallSyncPosHelper.copy(wallSyncLocalMinPointHelper).sub(wallSyncLocalOffsetHelper)
+
+        wallSyncScaleHelper.set(1, 1, 1)
+        wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quatLocal, wallSyncScaleHelper)
+        matrices.push(new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
+      }
+    })
+
+    return matrices
+  }
+
+  function computeWallJointLocalMatrices(definition: WallDynamicMesh): THREE.Matrix4[] {
+    const matrices: THREE.Matrix4[] = []
+    if (definition.segments.length < 2) {
+      return matrices
+    }
+
+    for (let i = 0; i < definition.segments.length - 1; i += 1) {
+      const current = definition.segments[i]!
+      const next = definition.segments[i + 1]!
+
+      wallSyncStartHelper.set(current.start.x, current.start.y, current.start.z)
+      wallSyncEndHelper.set(current.end.x, current.end.y, current.end.z)
+      wallSyncIncomingHelper.subVectors(wallSyncEndHelper, wallSyncStartHelper)
+      wallSyncIncomingHelper.y = 0
+
+      wallSyncStartHelper.set(next.start.x, next.start.y, next.start.z)
+      wallSyncEndHelper.set(next.end.x, next.end.y, next.end.z)
+      wallSyncOutgoingHelper.subVectors(wallSyncEndHelper, wallSyncStartHelper)
+      wallSyncOutgoingHelper.y = 0
+
+      if (wallSyncIncomingHelper.lengthSq() < 1e-6 || wallSyncOutgoingHelper.lengthSq() < 1e-6) {
+        continue
+      }
+      wallSyncIncomingHelper.normalize()
+      wallSyncOutgoingHelper.normalize()
+
+      const dot = THREE.MathUtils.clamp(wallSyncIncomingHelper.dot(wallSyncOutgoingHelper), -1, 1)
+      const angle = Math.acos(dot)
+      if (!Number.isFinite(angle) || angle < 1e-3) {
+        continue
+      }
+
+      wallSyncBisectorHelper.copy(wallSyncIncomingHelper).add(wallSyncOutgoingHelper)
+      if (wallSyncBisectorHelper.lengthSq() < 1e-6) {
+        wallSyncBisectorHelper.copy(wallSyncOutgoingHelper)
+      }
+
+      const quat = wallDirectionToQuaternion(wallSyncBisectorHelper, 'x')
+      wallSyncScaleHelper.set(1, 1, 1)
+      wallSyncPosHelper.set(current.end.x, current.end.y, current.end.z)
+      wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
+      matrices.push(new THREE.Matrix4().copy(wallSyncLocalMatrixHelper))
+    }
+
+    return matrices
+  }
+
   function scheduleWallAssetLoad(assetId: string, nodeId: string) {
     if (wallModelRequestCache.has(assetId)) {
       return
@@ -124,7 +217,6 @@ export function createWallRenderer(options: WallRendererOptions) {
           group = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file))
           options.assetCacheStore.releaseInMemoryBlob(assetId)
         }
-        ensureInstancedMeshesRegistered(assetId)
 
         const node = options.getNodeById(nodeId)
         const object = options.getObjectById(nodeId)
@@ -192,13 +284,9 @@ export function createWallRenderer(options: WallRendererOptions) {
     const userData = container.userData ?? (container.userData = {})
 
     if (!wantsInstancing) {
-      if (userData.wallInstancingActive) {
-        releaseModelInstancesForNode(node.id)
-        delete userData.wallInstancingActive
-        delete userData.wallInstancingSignature
-        delete userData.instancedAssetId
-        options.removeInstancedPickProxy(container)
-      }
+      releaseModelInstancesForNode(node.id)
+      delete userData.instancedAssetId
+      options.removeInstancedPickProxy(container)
 
       const wallGroup = ensureWallGroup(container, node, signatureKey)
       wallGroup.visible = true
@@ -223,151 +311,51 @@ export function createWallRenderer(options: WallRendererOptions) {
     }
 
     const definition = node.dynamicMesh as WallDynamicMesh
-    const meshSignature = computeWallDynamicMeshSignature(definition)
-    const nextSignature = `${meshSignature}|body:${bodyAssetId ?? ''}|joint:${jointAssetId ?? ''}`
+    const primaryAssetId = bodyAssetId ?? jointAssetId
+    userData.instancedAssetId = primaryAssetId
 
-    const bindings = getModelInstanceBindingsForNode(node.id)
-    const shouldRebuild = userData.wallInstancingSignature !== nextSignature || bindings.length === 0
-    if (shouldRebuild) {
-      releaseModelInstancesForNode(node.id)
-    }
+    let hasBindings = false
 
-    userData.wallInstancingActive = true
-    userData.wallInstancingSignature = nextSignature
-    userData.instancedAssetId = bodyAssetId ?? jointAssetId
-
-    // Compose node transform.
-    wallSyncNodePos.set(node.position.x, node.position.y, node.position.z)
-    wallSyncNodeEuler.set(node.rotation.x, node.rotation.y, node.rotation.z)
-    wallSyncNodeScale.set(node.scale.x, node.scale.y, node.scale.z)
-    wallSyncQuatHelper.setFromEuler(wallSyncNodeEuler)
-    wallSyncNodeMatrixHelper.compose(wallSyncNodePos, wallSyncQuatHelper, wallSyncNodeScale)
-
-    // Body instances: one per segment, aligned to segment direction.
     if (bodyAssetId) {
       const group = getCachedModelObject(bodyAssetId)
       if (group) {
-        ensureInstancedMeshesRegistered(bodyAssetId)
-        const baseBounds = group.boundingBox
-        const baseSize = baseBounds.getSize(wallSyncScaleHelper)
-
-        definition.segments.forEach((segment, segmentIndex) => {
-          wallSyncLocalStartHelper.set(segment.start.x, segment.start.y, segment.start.z)
-          wallSyncLocalEndHelper.set(segment.end.x, segment.end.y, segment.end.z)
-          wallSyncLocalDirHelper.subVectors(wallSyncLocalEndHelper, wallSyncLocalStartHelper)
-          wallSyncLocalDirHelper.y = 0
-
-          const lengthLocal = wallSyncLocalDirHelper.length()
-          if (lengthLocal <= 1e-6) {
-            return
-          }
-
-          const lengthAxis = resolveWallBodyLengthAxis(baseSize, segment.width)
-          const baseAxisForQuaternion: 'x' | 'z' = lengthAxis
-          const tileLengthLocal = Math.max(
-            1e-4,
-            lengthAxis === 'x' ? Math.abs(baseSize.x) : Math.abs(baseSize.z),
-          )
-          const minAlongAxis = lengthAxis === 'x' ? baseBounds.min.x : baseBounds.min.z
-
-          wallSyncLocalUnitDirHelper.copy(wallSyncLocalDirHelper).normalize()
-
-          const instanceCount = lengthLocal <= tileLengthLocal + 1e-6
-            ? 1
-            : Math.max(1, Math.ceil(lengthLocal / tileLengthLocal))
-          const totalCoveredLocal = instanceCount * tileLengthLocal
-          const startOffsetLocal = (lengthLocal - totalCoveredLocal) * 0.5
-
-          const quatLocal = wallDirectionToQuaternion(wallSyncLocalDirHelper, baseAxisForQuaternion)
-
-          for (let instanceIndex = 0; instanceIndex < instanceCount; instanceIndex += 1) {
-            const along = startOffsetLocal + instanceIndex * tileLengthLocal
-            wallSyncLocalMinPointHelper.copy(wallSyncLocalStartHelper).addScaledVector(wallSyncLocalUnitDirHelper, along)
-
-            // Place the model so that its local min face along the length axis matches the desired min point.
-            wallSyncLocalOffsetHelper.set(
-              lengthAxis === 'x' ? minAlongAxis : 0,
-              0,
-              lengthAxis === 'z' ? minAlongAxis : 0,
-            )
-            wallSyncLocalOffsetHelper.applyQuaternion(quatLocal)
-            wallSyncPosHelper.copy(wallSyncLocalMinPointHelper).sub(wallSyncLocalOffsetHelper)
-
-            wallSyncScaleHelper.set(1, 1, 1)
-            wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quatLocal, wallSyncScaleHelper)
-            wallSyncInstanceMatrixHelper.copy(wallSyncLocalMatrixHelper).premultiply(wallSyncNodeMatrixHelper)
-
-            const bindingId = `wall:${node.id}:body:${segmentIndex}:${instanceIndex}`
-            if (shouldRebuild) {
-              allocateModelInstanceBinding(bodyAssetId, bindingId, node.id)
-            }
-            updateModelInstanceBindingMatrix(bindingId, wallSyncInstanceMatrixHelper)
-          }
-        })
-      }
-    }
-
-    // Joint instances: place at turns (between consecutive segments), aligned to the bisector direction.
-    if (jointAssetId) {
-      const group = getCachedModelObject(jointAssetId)
-      if (group) {
-        ensureInstancedMeshesRegistered(jointAssetId)
-        let jointIndex = 0
-        for (let i = 0; i < definition.segments.length - 1; i += 1) {
-          const current = definition.segments[i]!
-          const next = definition.segments[i + 1]!
-
-          wallSyncStartHelper
-            .set(current.start.x, current.start.y, current.start.z)
-            .applyMatrix4(wallSyncNodeMatrixHelper)
-          wallSyncEndHelper
-            .set(current.end.x, current.end.y, current.end.z)
-            .applyMatrix4(wallSyncNodeMatrixHelper)
-          wallSyncIncomingHelper.subVectors(wallSyncEndHelper, wallSyncStartHelper)
-          wallSyncIncomingHelper.y = 0
-
-          const nextStart = wallSyncStartHelper
-            .set(next.start.x, next.start.y, next.start.z)
-            .applyMatrix4(wallSyncNodeMatrixHelper)
-          const nextEnd = wallSyncEndHelper
-            .set(next.end.x, next.end.y, next.end.z)
-            .applyMatrix4(wallSyncNodeMatrixHelper)
-          wallSyncOutgoingHelper.subVectors(nextEnd, nextStart)
-          wallSyncOutgoingHelper.y = 0
-
-          if (wallSyncIncomingHelper.lengthSq() < 1e-6 || wallSyncOutgoingHelper.lengthSq() < 1e-6) {
-            continue
-          }
-          wallSyncIncomingHelper.normalize()
-          wallSyncOutgoingHelper.normalize()
-
-          const dot = THREE.MathUtils.clamp(wallSyncIncomingHelper.dot(wallSyncOutgoingHelper), -1, 1)
-          const angle = Math.acos(dot)
-          if (!Number.isFinite(angle) || angle < 1e-3) {
-            continue
-          }
-
-          wallSyncBisectorHelper.copy(wallSyncIncomingHelper).add(wallSyncOutgoingHelper)
-          if (wallSyncBisectorHelper.lengthSq() < 1e-6) {
-            wallSyncBisectorHelper.copy(wallSyncOutgoingHelper)
-          }
-
-          const quat = wallDirectionToQuaternion(wallSyncBisectorHelper, 'x')
-          wallSyncScaleHelper.set(1, 1, 1)
-          wallSyncPosHelper.copy(wallSyncEndHelper)
-          wallSyncInstanceMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
-
-          const bindingId = `wall:${node.id}:joint:${jointIndex}`
-          if (shouldRebuild) {
-            allocateModelInstanceBinding(jointAssetId, bindingId, node.id)
-          }
-          updateModelInstanceBindingMatrix(bindingId, wallSyncInstanceMatrixHelper)
-          jointIndex += 1
+        const localMatrices = computeWallBodyLocalMatrices(definition, group.boundingBox)
+        if (localMatrices.length > 0) {
+          syncInstancedModelCommittedLocalMatrices({
+            nodeId: node.id,
+            assetId: bodyAssetId,
+            object: container,
+            localMatrices,
+            bindingIdPrefix: `inst:${node.id}:`,
+            useNodeIdForIndex0: true,
+          })
+          hasBindings = true
         }
       }
     }
 
-    options.ensureInstancedPickProxy(container, node)
+    if (jointAssetId) {
+      // If there is no body asset, map index 0 to nodeId so pick-proxy and transform behavior stays consistent.
+      const useNodeIdForIndex0 = !bodyAssetId
+      const localMatrices = computeWallJointLocalMatrices(definition)
+      if (localMatrices.length > 0) {
+        syncInstancedModelCommittedLocalMatrices({
+          nodeId: node.id,
+          assetId: jointAssetId,
+          object: container,
+          localMatrices,
+          bindingIdPrefix: `wall-joint:${node.id}:`,
+          useNodeIdForIndex0,
+        })
+        hasBindings = hasBindings || localMatrices.length > 0
+      }
+    }
+
+    if (hasBindings) {
+      options.ensureInstancedPickProxy(container, node)
+    } else {
+      options.removeInstancedPickProxy(container)
+    }
   }
 
   return {

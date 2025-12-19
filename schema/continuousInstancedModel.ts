@@ -250,6 +250,80 @@ export function syncContinuousInstancedModelCommitted(params: {
   }
 }
 
+export function syncInstancedModelCommittedLocalMatrices(params: {
+  nodeId: string
+  assetId: string
+  object: Object3D
+  localMatrices: Matrix4[]
+  bindingIdPrefix: string
+  useNodeIdForIndex0?: boolean
+}): void {
+  const { nodeId, assetId, object, localMatrices, bindingIdPrefix } = params
+  if (!nodeId || !assetId) {
+    return
+  }
+  if (!Array.isArray(localMatrices) || localMatrices.length === 0) {
+    return
+  }
+
+  const useNodeIdForIndex0 = params.useNodeIdForIndex0 !== false
+
+  ensureInstancedMeshesRegistered(assetId)
+  object.updateMatrixWorld(true)
+
+  const isVisible = object.visible !== false
+  if (isVisible) {
+    tempBase.copy(object.matrixWorld)
+  } else {
+    ;(object.matrixWorld as Matrix4).decompose(tempPos, tempQuat, tempScale)
+    tempScale.setScalar(0)
+    tempBase.compose(tempPos, tempQuat, tempScale)
+  }
+
+  const count = localMatrices.length
+
+  // Release stale bindings under the provided prefix.
+  const existingBindings = getModelInstanceBindingsForNode(nodeId)
+  const liveBindings = new Set<string>()
+  for (let i = 0; i < count; i += 1) {
+    if (useNodeIdForIndex0 && i === 0) {
+      continue
+    }
+    liveBindings.add(`${bindingIdPrefix}${i}`)
+  }
+
+  existingBindings.forEach((binding) => {
+    if (useNodeIdForIndex0 && binding.bindingId === nodeId) {
+      return
+    }
+    if (!binding.bindingId.startsWith(bindingIdPrefix)) {
+      return
+    }
+    if (!liveBindings.has(binding.bindingId)) {
+      releaseModelInstanceBinding(binding.bindingId)
+    }
+  })
+
+  for (let i = 0; i < count; i += 1) {
+    const local = localMatrices[i]
+    if (!local) {
+      continue
+    }
+
+    if (useNodeIdForIndex0 && i === 0) {
+      allocateModelInstance(assetId, nodeId)
+      tempInstance.multiplyMatrices(tempBase, local)
+      updateModelInstanceMatrix(nodeId, tempInstance)
+      continue
+    }
+
+    const bindingId = `${bindingIdPrefix}${i}`
+    allocateModelInstanceBinding(assetId, bindingId, nodeId)
+    tempInstance.multiplyMatrices(tempBase, local)
+    updateModelInstanceBindingMatrix(bindingId, tempInstance)
+  }
+}
+
 export function syncContinuousInstancedModelPreviewRange(params: {
   nodeId: string
   assetId: string
