@@ -45,7 +45,7 @@ export type ConvertPlanningToSceneOptions = {
       dimensions?: { height?: number; width?: number; thickness?: number }
       name?: string
     }) => SceneNode | null
-    createSurfaceNode: (payload: { points: Array<{ x: number; y: number; z: number }>; name?: string }) => SceneNode | null
+    createFloorNode: (payload: { points: Array<{ x: number; y: number; z: number }>; name?: string; assetId?: string | null }) => SceneNode | null
     moveNode: (payload: { nodeId: string; targetId: string | null; position: 'before' | 'after' | 'inside' }) => boolean
     removeSceneNodes: (ids: string[]) => void
     updateNodeDynamicMesh: (nodeId: string, dynamicMesh: any) => void
@@ -662,9 +662,9 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     if (kind === 'building') {
       for (const poly of group.polygons) {
         const footprint = poly.points.map((p) => toWorldPoint(p, groundWidth, groundDepth, 0.01))
-        const surface = sceneStore.createSurfaceNode({ points: footprint, name: poly.name?.trim() || 'Building Footprint' })
-        if (surface) {
-          sceneStore.moveNode({ nodeId: surface.id, targetId: root.id, position: 'inside' })
+        const floor = sceneStore.createFloorNode({ points: footprint, name: poly.name?.trim() || 'Building Footprint', assetId: null })
+        if (floor) {
+          sceneStore.moveNode({ nodeId: floor.id, targetId: root.id, position: 'inside' })
         }
 
         const segments = polygonEdges(poly.points).map((edge) => ({
@@ -686,7 +686,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         const strip = polylineToStripPolygon(line.points, 4)
         if (strip) {
           const points = strip.map((p) => toWorldPoint(p, groundWidth, groundDepth, 0.005))
-          const road = sceneStore.createSurfaceNode({ points, name: line.name?.trim() || 'Road' })
+          const road = sceneStore.createFloorNode({ points, name: line.name?.trim() || 'Road', assetId: null })
           if (road) {
             sceneStore.moveNode({ nodeId: road.id, targetId: root.id, position: 'inside' })
           }
@@ -893,9 +893,9 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     } else if (kind === 'terrain') {
       for (const poly of group.polygons) {
         const points = poly.points.map((p) => toWorldPoint(p, groundWidth, groundDepth, 0.002))
-        const surface = sceneStore.createSurfaceNode({ points, name: poly.name?.trim() || 'Terrain Area' })
-        if (surface) {
-          sceneStore.moveNode({ nodeId: surface.id, targetId: root.id, position: 'inside' })
+        const floor = sceneStore.createFloorNode({ points, name: poly.name?.trim() || 'Terrain Area', assetId: null })
+        if (floor) {
+          sceneStore.moveNode({ nodeId: floor.id, targetId: root.id, position: 'inside' })
         }
         updateProgressForUnit(`Converting terrain: ${poly.name?.trim() || poly.id}`)
       }

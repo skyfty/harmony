@@ -758,7 +758,7 @@ export type EnvironmentSettingsPatch = Partial<EnvironmentSettings> & {
   background?: Partial<EnvironmentBackgroundSettings>
   environmentMap?: Partial<EnvironmentMapSettings>
 }
-export type DynamicMeshType = 'Ground' | 'Wall' | 'Platform' | 'Surface' | 'Floor'
+export type DynamicMeshType = 'Ground' | 'Wall' | 'Floor'
 
 export interface GroundHeightMap {
   [key: string]: number
@@ -823,24 +823,6 @@ export interface WallDynamicMesh {
   segments: WallSegment[]
 }
 
-export interface PlatformDynamicMesh {
-  type: 'Platform'
-  /**
-   * Placeholder polygon footprint described in clockwise order.
-   */
-  footprint: Vector3Like[]
-  height: number
-}
-
-export interface SurfaceDynamicMesh {
-  type: 'Surface'
-  /**
-   * Polygon footprint described in clockwise order, relative to the node origin.
-   */
-  points: Vector3Like[]
-  normal: Vector3Like
-}
-
 export interface FloorDynamicMesh {
   type: 'Floor'
   /**
@@ -850,7 +832,7 @@ export interface FloorDynamicMesh {
   points: Vector2Like[]
 }
 
-export type SceneDynamicMesh = GroundDynamicMesh | WallDynamicMesh | PlatformDynamicMesh | SurfaceDynamicMesh | FloorDynamicMesh
+export type SceneDynamicMesh = GroundDynamicMesh | WallDynamicMesh | FloorDynamicMesh
 
 export interface ClipboardEntry {
   sourceId: string

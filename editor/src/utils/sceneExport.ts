@@ -19,8 +19,8 @@ import {
   buildCylinderShapeFromObject,
 } from '@/utils/rigidbodyCollider'
 import { createGroundMesh } from '@schema/groundMesh'
-import { createSurfaceMesh } from '@schema/surfaceMesh'
 import { createWallGroup } from '@schema/wallMesh'
+import { createFloorMesh } from '@schema/floorMesh'
 import {
   RIGIDBODY_COMPONENT_TYPE,
   type RigidbodyComponentProps,
@@ -739,10 +739,10 @@ function buildDynamicMeshObject(node: SceneNode): THREE.Object3D | null {
   switch (mesh.type) {
     case 'Ground':
       return createGroundMesh(mesh).clone(true)
-    case 'Surface':
-      return createSurfaceMesh(mesh).clone(true)
     case 'Wall':
       return createWallGroup(mesh).clone(true)
+    case 'Floor':
+      return createFloorMesh(mesh).clone(true)
     default:
       return null
   }

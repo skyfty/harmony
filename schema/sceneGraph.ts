@@ -18,7 +18,6 @@ import type {
   WallDynamicMesh,
   SceneResourceSummaryEntry,
   SceneMaterialTextureSlot,
-  SurfaceDynamicMesh,
   FloorDynamicMesh,
 } from '@harmony/schema';
 import {
@@ -43,7 +42,6 @@ import {
 import { createFileFromEntry } from '@schema/modelAssetLoader'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { createGroundMesh, updateGroundMesh } from './groundMesh'
-import { createSurfaceMesh, updateSurfaceMesh } from './surfaceMesh'
 import { createFloorRenderGroup } from './floorMesh'
 import { createWallRenderGroup } from './wallMesh'
 import type { WallComponentProps } from './components/definitions/wallComponent'
@@ -823,9 +821,6 @@ class SceneGraphBuilder {
     if (meshInfo?.type === 'Wall') {
       return this.buildWallMesh(meshInfo, node);
     }
-    if (meshInfo?.type === 'Surface') {
-      return this.buildSurfaceMesh(meshInfo as SurfaceDynamicMesh, node);
-    }
     if (meshInfo?.type === 'Floor') {
       return this.buildFloorMesh(meshInfo as FloorDynamicMesh, node);
     }
@@ -1103,32 +1098,6 @@ class SceneGraphBuilder {
         this.assignTextureToMaterial(resolvedMaterial, groundTexture);
       }
     }
-    this.applyTransform(mesh, node);
-    this.applyVisibility(mesh, node);
-    this.recordMeshStatistics(mesh);
-    return mesh;
-  }
-
-  private async buildSurfaceMesh(meshInfo: SurfaceDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
-    const base = createSurfaceMesh(meshInfo);
-    const geometry = base.geometry ? base.geometry.clone() : new THREE.BufferGeometry();
-    const defaultMaterial = this.cloneMaterial(base.material);
-    const materials = await this.resolveNodeMaterials(node);
-    const materialAssignment = this.pickMaterialAssignment(materials) ?? defaultMaterial ?? new THREE.MeshStandardMaterial({
-      color: '#9ea7ad',
-      roughness: 0.85,
-      metalness: 0.05,
-      side: THREE.DoubleSide,
-    });
-    const mesh = new THREE.Mesh(geometry, materialAssignment);
-    mesh.name = node.name ?? (base.name || 'Surface');
-    mesh.castShadow = base.castShadow;
-    mesh.receiveShadow = base.receiveShadow;
-    mesh.userData = {
-      ...(base.userData ?? {}),
-      dynamicMeshType: 'Surface',
-    };
-    updateSurfaceMesh(mesh, meshInfo);
     this.applyTransform(mesh, node);
     this.applyVisibility(mesh, node);
     this.recordMeshStatistics(mesh);

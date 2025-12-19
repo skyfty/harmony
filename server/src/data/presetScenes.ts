@@ -230,26 +230,42 @@ const createStraightWallNode = (
   },
 })
 
-const createPlatformNode = (
+const createFootprintBoxNode = (
   id: string,
   name: string,
   options: { footprint: Array<[number, number]>; height: number; position?: Vector3LikeLiteral; color: string; roughness?: number },
 ) => ({
   id,
   name,
-  nodeType: 'Mesh',
-  position: options.position ?? vec3(0, 0, 0),
+  nodeType: 'Box',
+  position: (() => {
+    const position = options.position ?? vec3(0, 0, 0)
+    const xs = options.footprint.map(([x]) => x)
+    const zs = options.footprint.map(([, z]) => z)
+    const minX = Math.min(...xs)
+    const maxX = Math.max(...xs)
+    const minZ = Math.min(...zs)
+    const maxZ = Math.max(...zs)
+    const centerX = (minX + maxX) * 0.5
+    const centerZ = (minZ + maxZ) * 0.5
+    return vec3(position.x + centerX, position.y + options.height * 0.5, position.z + centerZ)
+  })(),
   rotation: vec3(0, 0, 0),
-  scale: vec3(1, 1, 1),
+  scale: (() => {
+    const xs = options.footprint.map(([x]) => x)
+    const zs = options.footprint.map(([, z]) => z)
+    const minX = Math.min(...xs)
+    const maxX = Math.max(...xs)
+    const minZ = Math.min(...zs)
+    const maxZ = Math.max(...zs)
+    const width = Math.max(1e-6, maxX - minX)
+    const depth = Math.max(1e-6, maxZ - minZ)
+    return vec3(width, options.height, depth)
+  })(),
   offset: vec3(0, 0, 0),
   visible: true,
   locked: false,
   materials: [createNodeMaterial(`${id}-material`, options.color, { name: `${name} 材质`, roughness: options.roughness ?? 0.6 })],
-  dynamicMesh: {
-    type: 'Platform',
-    footprint: options.footprint.map(([x, z]) => vec3(x, 0, z)),
-    height: options.height,
-  },
 })
 
 const createLightNode = (
@@ -298,7 +314,7 @@ const createGroupNode = (id: string, name: string, children: unknown[]) => ({
 })
 
 const createTreeGroup = (id: string, name: string, position: Vector3LikeLiteral) => {
-  const trunk = createPlatformNode(`${id}-trunk`, `${name} 树干`, {
+  const trunk = createFootprintBoxNode(`${id}-trunk`, `${name} 树干`, {
     footprint: [
       [-1, -1],
       [1, -1],
@@ -311,7 +327,7 @@ const createTreeGroup = (id: string, name: string, position: Vector3LikeLiteral)
     roughness: 0.9,
   })
 
-  const canopy = createPlatformNode(`${id}-canopy`, `${name} 树冠`, {
+  const canopy = createFootprintBoxNode(`${id}-canopy`, `${name} 树冠`, {
     footprint: [
       [-3, -3],
       [3, -3],
@@ -328,7 +344,7 @@ const createTreeGroup = (id: string, name: string, position: Vector3LikeLiteral)
 }
 
 const createFlowerPatch = (id: string, name: string, position: Vector3LikeLiteral, color: string) =>
-  createPlatformNode(id, name, {
+  createFootprintBoxNode(id, name, {
     footprint: [
       [-1.6, -1.6],
       [1.6, -1.6],
@@ -342,7 +358,7 @@ const createFlowerPatch = (id: string, name: string, position: Vector3LikeLitera
   })
 
 const createUmbrellaGroup = (id: string, name: string, position: Vector3LikeLiteral, canopyColor: string) => {
-  const pole = createPlatformNode(`${id}-pole`, `${name} 立柱`, {
+  const pole = createFootprintBoxNode(`${id}-pole`, `${name} 立柱`, {
     footprint: [
       [-0.4, -0.4],
       [0.4, -0.4],
@@ -355,7 +371,7 @@ const createUmbrellaGroup = (id: string, name: string, position: Vector3LikeLite
     roughness: 0.75,
   })
 
-  const canopy = createPlatformNode(`${id}-canopy`, `${name} 伞篷`, {
+  const canopy = createFootprintBoxNode(`${id}-canopy`, `${name} 伞篷`, {
     footprint: [
       [-4, -4],
       [4, -4],
@@ -372,7 +388,7 @@ const createUmbrellaGroup = (id: string, name: string, position: Vector3LikeLite
 }
 
 const createLoungeChair = (id: string, name: string, position: Vector3LikeLiteral) =>
-  createPlatformNode(id, name, {
+  createFootprintBoxNode(id, name, {
     footprint: [
       [-3, -1.2],
       [3, -1.2],
@@ -477,7 +493,7 @@ export const PRESET_SCENES: PresetSceneDetail[] = [
             thickness: 0.35,
             color: '#d8d1c3',
           }),
-          createPlatformNode('room-ceiling', '天花板', {
+          createFootprintBoxNode('room-ceiling', '天花板', {
             footprint: [
               [-60, -40],
               [60, -40],
@@ -533,7 +549,7 @@ export const PRESET_SCENES: PresetSceneDetail[] = [
             thickness: 0.3,
             color: '#f0f0f0',
           }),
-          createPlatformNode('exhibition-stage', '前景平台', {
+          createFootprintBoxNode('exhibition-stage', '前景平台', {
             footprint: [
               [-20, -12],
               [20, -12],
@@ -658,7 +674,7 @@ export const PRESET_SCENES: PresetSceneDetail[] = [
       name: '户外沙滩',
       nodes: [
         createGroundNode(240, 160, '#d9c39a'),
-        createPlatformNode('beach-waterline', '海水边界', {
+        createFootprintBoxNode('beach-waterline', '海水边界', {
           footprint: [
             [-120, -70],
             [120, -70],

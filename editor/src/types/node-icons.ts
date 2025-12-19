@@ -42,7 +42,7 @@ type NodeIconParams = {
 
 const GROUND_ICON = 'mdi-grass'
 const WALL_ICON = 'mdi-wall'
-const SURFACE_ICON = 'mdi-vector-polygon'
+const FLOOR_ICON = 'mdi-floor-plan'
 const MULTIUSER_ICON = 'mdi-network'
 
 export function getNodeIcon({ nodeType, lightType, hasChildren, nodeId, dynamicMeshType }: NodeIconParams): string {
@@ -58,8 +58,8 @@ export function getNodeIcon({ nodeType, lightType, hasChildren, nodeId, dynamicM
     return WALL_ICON
   }
 
-  if (dynamicMeshType === 'Surface') {
-    return SURFACE_ICON
+  if (dynamicMeshType === 'Floor') {
+    return FLOOR_ICON
   }
 
   if (nodeType === 'Light') {
