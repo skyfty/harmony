@@ -67,7 +67,7 @@ export type GroundEditorOptions = {
 	brushRadius: Ref<number>
 	brushStrength: Ref<number>
 	brushShape: Ref<TerrainBrushShape | undefined>
-	brushOperation: Ref<GroundSculptOperation | null>
+	brushOperation: Ref<GroundSculptOperation>
 	groundPanelTab: Ref<GroundPanelTab>
 	scatterCategory: Ref<TerrainScatterCategory>
 	scatterAsset: Ref<ProjectAsset | null>
@@ -922,6 +922,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			placed = applyScatterPlacement(point) || placed
 		}
 		return placed
+	}
+	
 	function paintScatterStamp(worldCenterPoint: THREE.Vector3): void {
 		if (!scatterSession || !scatterSession.layer || !scatterSession.modelGroup) {
 			return
