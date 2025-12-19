@@ -57,8 +57,13 @@ const wallSyncQuatHelper = new THREE.Quaternion()
 const wallSyncScaleHelper = new THREE.Vector3(1, 1, 1)
 const wallSyncStartHelper = new THREE.Vector3()
 const wallSyncEndHelper = new THREE.Vector3()
-const wallSyncMidHelper = new THREE.Vector3()
-const wallSyncDirHelper = new THREE.Vector3()
+const wallSyncLocalStartHelper = new THREE.Vector3()
+const wallSyncLocalEndHelper = new THREE.Vector3()
+const wallSyncLocalDirHelper = new THREE.Vector3()
+const wallSyncLocalUnitDirHelper = new THREE.Vector3()
+const wallSyncLocalMinPointHelper = new THREE.Vector3()
+const wallSyncLocalOffsetHelper = new THREE.Vector3()
+const wallSyncLocalMatrixHelper = new THREE.Matrix4()
 const wallSyncIncomingHelper = new THREE.Vector3()
 const wallSyncOutgoingHelper = new THREE.Vector3()
 const wallSyncBisectorHelper = new THREE.Vector3()
@@ -66,8 +71,8 @@ const wallSyncNodePos = new THREE.Vector3()
 const wallSyncNodeEuler = new THREE.Euler()
 const wallSyncNodeScale = new THREE.Vector3()
 
-function wallDirectionToQuaternion(direction: THREE.Vector3): THREE.Quaternion {
-  const base = new THREE.Vector3(1, 0, 0)
+function wallDirectionToQuaternion(direction: THREE.Vector3, baseAxis: 'x' | 'z' = 'x'): THREE.Quaternion {
+  const base = baseAxis === 'x' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1)
   const target = direction.clone()
   target.y = 0
   if (target.lengthSq() < 1e-6) {
@@ -75,6 +80,25 @@ function wallDirectionToQuaternion(direction: THREE.Vector3): THREE.Quaternion {
   }
   target.normalize()
   return new THREE.Quaternion().setFromUnitVectors(base, target)
+}
+
+function resolveWallBodyLengthAxis(
+  baseSize: THREE.Vector3,
+  wallWidth: number,
+): 'x' | 'z' {
+  const width = Math.max(1e-6, Math.abs(wallWidth))
+  const dx = Math.abs(Math.abs(baseSize.x) - width)
+  const dz = Math.abs(Math.abs(baseSize.z) - width)
+
+  // If one horizontal axis closely matches the wall width, treat that as thickness.
+  // The remaining horizontal axis becomes the length axis.
+  if (dx < dz) {
+    return 'z'
+  }
+  if (dz < dx) {
+    return 'x'
+  }
+  return 'x'
 }
 
 export function createWallRenderer(options: WallRendererOptions) {
@@ -226,30 +250,59 @@ export function createWallRenderer(options: WallRendererOptions) {
         ensureInstancedMeshesRegistered(bodyAssetId)
         const baseBounds = group.boundingBox
         const baseSize = baseBounds.getSize(wallSyncScaleHelper)
-        const baseLength = Math.max(1e-4, Math.abs(baseSize.x) || 1)
 
-        definition.segments.forEach((segment, index) => {
-          wallSyncStartHelper
-            .set(segment.start.x, segment.start.y, segment.start.z)
-            .applyMatrix4(wallSyncNodeMatrixHelper)
-          wallSyncEndHelper
-            .set(segment.end.x, segment.end.y, segment.end.z)
-            .applyMatrix4(wallSyncNodeMatrixHelper)
-          wallSyncDirHelper.subVectors(wallSyncEndHelper, wallSyncStartHelper)
-          const length = wallSyncDirHelper.length()
-          if (length <= 1e-6) {
+        definition.segments.forEach((segment, segmentIndex) => {
+          wallSyncLocalStartHelper.set(segment.start.x, segment.start.y, segment.start.z)
+          wallSyncLocalEndHelper.set(segment.end.x, segment.end.y, segment.end.z)
+          wallSyncLocalDirHelper.subVectors(wallSyncLocalEndHelper, wallSyncLocalStartHelper)
+          wallSyncLocalDirHelper.y = 0
+
+          const lengthLocal = wallSyncLocalDirHelper.length()
+          if (lengthLocal <= 1e-6) {
             return
           }
-          wallSyncMidHelper.addVectors(wallSyncStartHelper, wallSyncEndHelper).multiplyScalar(0.5)
-          const quat = wallDirectionToQuaternion(wallSyncDirHelper)
-          wallSyncScaleHelper.set(length / baseLength, 1, 1)
-          wallSyncInstanceMatrixHelper.compose(wallSyncMidHelper, quat, wallSyncScaleHelper)
 
-          const bindingId = `wall:${node.id}:body:${index}`
-          if (shouldRebuild) {
-            allocateModelInstanceBinding(bodyAssetId, bindingId, node.id)
+          const lengthAxis = resolveWallBodyLengthAxis(baseSize, segment.width)
+          const baseAxisForQuaternion: 'x' | 'z' = lengthAxis
+          const tileLengthLocal = Math.max(
+            1e-4,
+            lengthAxis === 'x' ? Math.abs(baseSize.x) : Math.abs(baseSize.z),
+          )
+          const minAlongAxis = lengthAxis === 'x' ? baseBounds.min.x : baseBounds.min.z
+
+          wallSyncLocalUnitDirHelper.copy(wallSyncLocalDirHelper).normalize()
+
+          const instanceCount = lengthLocal <= tileLengthLocal + 1e-6
+            ? 1
+            : Math.max(1, Math.ceil(lengthLocal / tileLengthLocal))
+          const totalCoveredLocal = instanceCount * tileLengthLocal
+          const startOffsetLocal = (lengthLocal - totalCoveredLocal) * 0.5
+
+          const quatLocal = wallDirectionToQuaternion(wallSyncLocalDirHelper, baseAxisForQuaternion)
+
+          for (let instanceIndex = 0; instanceIndex < instanceCount; instanceIndex += 1) {
+            const along = startOffsetLocal + instanceIndex * tileLengthLocal
+            wallSyncLocalMinPointHelper.copy(wallSyncLocalStartHelper).addScaledVector(wallSyncLocalUnitDirHelper, along)
+
+            // Place the model so that its local min face along the length axis matches the desired min point.
+            wallSyncLocalOffsetHelper.set(
+              lengthAxis === 'x' ? minAlongAxis : 0,
+              0,
+              lengthAxis === 'z' ? minAlongAxis : 0,
+            )
+            wallSyncLocalOffsetHelper.applyQuaternion(quatLocal)
+            wallSyncPosHelper.copy(wallSyncLocalMinPointHelper).sub(wallSyncLocalOffsetHelper)
+
+            wallSyncScaleHelper.set(1, 1, 1)
+            wallSyncLocalMatrixHelper.compose(wallSyncPosHelper, quatLocal, wallSyncScaleHelper)
+            wallSyncInstanceMatrixHelper.copy(wallSyncLocalMatrixHelper).premultiply(wallSyncNodeMatrixHelper)
+
+            const bindingId = `wall:${node.id}:body:${segmentIndex}:${instanceIndex}`
+            if (shouldRebuild) {
+              allocateModelInstanceBinding(bodyAssetId, bindingId, node.id)
+            }
+            updateModelInstanceBindingMatrix(bindingId, wallSyncInstanceMatrixHelper)
           }
-          updateModelInstanceBindingMatrix(bindingId, wallSyncInstanceMatrixHelper)
         })
       }
     }
@@ -299,7 +352,7 @@ export function createWallRenderer(options: WallRendererOptions) {
             wallSyncBisectorHelper.copy(wallSyncOutgoingHelper)
           }
 
-          const quat = wallDirectionToQuaternion(wallSyncBisectorHelper)
+          const quat = wallDirectionToQuaternion(wallSyncBisectorHelper, 'x')
           wallSyncScaleHelper.set(1, 1, 1)
           wallSyncPosHelper.copy(wallSyncEndHelper)
           wallSyncInstanceMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
