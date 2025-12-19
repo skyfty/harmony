@@ -49,10 +49,6 @@ import {
   subscribeInstancedMeshes,
   getModelInstanceBindingsForNode,
   getModelInstanceBindingById,
-  ensureInstancedMeshesRegistered,
-  allocateModelInstanceBinding,
-  releaseModelInstancesForNode,
-  updateModelInstanceBindingMatrix,
   findBindingIdForInstance,
   findNodeIdForInstance,
 } from '@schema/modelObjectCache'
@@ -130,6 +126,7 @@ import { createEffectPlaybackManager } from './effectPlaybackManager'
 import { usePlaceholderOverlayController } from './placeholderOverlayController'
 import { useToolbarPositioning } from './useToolbarPositioning'
 import { useScenePicking } from './useScenePicking'
+import { createWallRenderer } from './WallRenderer'
 import {
   type VectorCoordinates,
   cloneVectorCoordinates,
@@ -498,10 +495,7 @@ function computeGroundDynamicMeshSignature(definition: GroundDynamicMesh): strin
   return hashString(serialized)
 }
 
-function computeWallDynamicMeshSignature(definition: WallDynamicMesh): string {
-  const serialized = stableSerialize(definition.segments ?? [])
-  return hashString(serialized)
-}
+
 
 const {
   resolveNodeIdFromIntersection,
@@ -583,6 +577,14 @@ const hasInstancedMeshes = computed(() => {
 })
 
 const canUseScatterEraseTool = computed(() => selectedNodeIsGround.value || hasInstancedMeshes.value)
+
+const wallRenderer = createWallRenderer({
+  assetCacheStore,
+  getNodeById: (nodeId) => findSceneNode(sceneStore.nodes, nodeId),
+  getObjectById: (nodeId) => objectMap.get(nodeId) ?? null,
+  ensureInstancedPickProxy,
+  removeInstancedPickProxy,
+})
 
 type RepairClickState = { pointerId: number; startX: number; startY: number; moved: boolean }
 let repairClickState: RepairClickState | null = null
@@ -6638,17 +6640,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
       }
     }
   } else if (node.dynamicMesh?.type === 'Wall') {
-    const wallGroup = userData.wallGroup as THREE.Group | undefined
-    if (wallGroup) {
-      const groupData = wallGroup.userData ?? (wallGroup.userData = {})
-      const nextSignature = computeWallDynamicMeshSignature(node.dynamicMesh as WallDynamicMesh)
-      if (groupData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
-        updateWallGroup(wallGroup, node.dynamicMesh as WallDynamicMesh)
-        groupData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
-      }
-    }
-
-    syncWallInstancedRendering(object, node)
+    wallRenderer.syncWallContainer(object, node, DYNAMIC_MESH_SIGNATURE_KEY)
   } 
 
   if (node.materials && node.materials.length) {
@@ -6670,223 +6662,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   }
 }
 
-const wallModelRequestCache = new Map<string, Promise<void>>()
-const wallSyncNodeMatrixHelper = new THREE.Matrix4()
-const wallSyncInstanceMatrixHelper = new THREE.Matrix4()
-const wallSyncPosHelper = new THREE.Vector3()
-const wallSyncQuatHelper = new THREE.Quaternion()
-const wallSyncScaleHelper = new THREE.Vector3(1, 1, 1)
-const wallSyncStartHelper = new THREE.Vector3()
-const wallSyncEndHelper = new THREE.Vector3()
-const wallSyncMidHelper = new THREE.Vector3()
-const wallSyncDirHelper = new THREE.Vector3()
-const wallSyncIncomingHelper = new THREE.Vector3()
-const wallSyncOutgoingHelper = new THREE.Vector3()
-const wallSyncBisectorHelper = new THREE.Vector3()
-const wallSyncNodePos = new THREE.Vector3()
-const wallSyncNodeEuler = new THREE.Euler()
-const wallSyncNodeScale = new THREE.Vector3()
 
-function wallDirectionToQuaternion(direction: THREE.Vector3): THREE.Quaternion {
-  const base = new THREE.Vector3(1, 0, 0)
-  const target = direction.clone()
-  target.y = 0
-  if (target.lengthSq() < 1e-6) {
-    return new THREE.Quaternion()
-  }
-  target.normalize()
-  return new THREE.Quaternion().setFromUnitVectors(base, target)
-}
-
-function scheduleWallAssetLoad(assetId: string, nodeId: string) {
-  if (wallModelRequestCache.has(assetId)) {
-    return
-  }
-
-  const promise = (async () => {
-    try {
-      let group = getCachedModelObject(assetId)
-      if (!group) {
-        let file = assetCacheStore.createFileFromCache(assetId)
-        if (!file) {
-          await assetCacheStore.loadFromIndexedDb(assetId)
-          file = assetCacheStore.createFileFromCache(assetId)
-        }
-        if (!file) {
-          return
-        }
-        group = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file))
-        assetCacheStore.releaseInMemoryBlob(assetId)
-      }
-      ensureInstancedMeshesRegistered(assetId)
-      // After the asset is ready, refresh wall instancing immediately.
-      const node = findSceneNode(sceneStore.nodes, nodeId)
-      const object = objectMap.get(nodeId) ?? null
-      if (node && object) {
-        syncWallInstancedRendering(object, node)
-      }
-    } catch (error) {
-      console.warn('Failed to load wall model asset', assetId, error)
-    }
-  })()
-
-  wallModelRequestCache.set(assetId, promise)
-}
-
-function syncWallInstancedRendering(container: THREE.Object3D, node: SceneNode) {
-  if (node.dynamicMesh?.type !== 'Wall') {
-    return
-  }
-
-  const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as
-    | SceneNodeComponentState<WallComponentProps>
-    | undefined
-
-  const bodyAssetId = wallComponent?.props?.bodyAssetId ?? null
-  const jointAssetId = wallComponent?.props?.jointAssetId ?? null
-  const wantsInstancing = Boolean(bodyAssetId || jointAssetId)
-
-  const userData = container.userData ?? (container.userData = {})
-  const wallGroup = userData.wallGroup as THREE.Group | undefined
-  if (!wallGroup) {
-    return
-  }
-
-  if (!wantsInstancing) {
-    if (userData.wallInstancingActive) {
-      releaseModelInstancesForNode(node.id)
-      delete userData.wallInstancingActive
-      delete userData.wallInstancingSignature
-      delete userData.instancedAssetId
-      removeInstancedPickProxy(container)
-    }
-    wallGroup.visible = true
-    return
-  }
-
-  // Ensure assets are loaded; if not, fall back to dynamic wall rendering.
-  const needsBodyLoad = bodyAssetId && !getCachedModelObject(bodyAssetId)
-  const needsJointLoad = jointAssetId && !getCachedModelObject(jointAssetId)
-  if (bodyAssetId && needsBodyLoad) {
-    scheduleWallAssetLoad(bodyAssetId, node.id)
-  }
-  if (jointAssetId && needsJointLoad) {
-    scheduleWallAssetLoad(jointAssetId, node.id)
-  }
-  if (needsBodyLoad || needsJointLoad) {
-    wallGroup.visible = true
-    return
-  }
-
-  const definition = node.dynamicMesh as WallDynamicMesh
-  const meshSignature = computeWallDynamicMeshSignature(definition)
-  const nextSignature = `${meshSignature}|body:${bodyAssetId ?? ''}|joint:${jointAssetId ?? ''}`
-
-  const bindings = getModelInstanceBindingsForNode(node.id)
-  const shouldRebuild = userData.wallInstancingSignature !== nextSignature || bindings.length === 0
-  if (shouldRebuild) {
-    releaseModelInstancesForNode(node.id)
-  }
-
-  userData.wallInstancingActive = true
-  userData.wallInstancingSignature = nextSignature
-  userData.instancedAssetId = bodyAssetId ?? jointAssetId
-  wallGroup.visible = false
-
-  // Compose node transform.
-  wallSyncNodePos.set(node.position.x, node.position.y, node.position.z)
-  wallSyncNodeEuler.set(node.rotation.x, node.rotation.y, node.rotation.z)
-  wallSyncNodeScale.set(node.scale.x, node.scale.y, node.scale.z)
-  wallSyncQuatHelper.setFromEuler(wallSyncNodeEuler)
-  wallSyncNodeMatrixHelper.compose(wallSyncNodePos, wallSyncQuatHelper, wallSyncNodeScale)
-
-  // Body instances: one per segment, aligned to segment direction.
-  if (bodyAssetId) {
-    const group = getCachedModelObject(bodyAssetId)
-    if (group) {
-      ensureInstancedMeshesRegistered(bodyAssetId)
-      const baseBounds = group.boundingBox
-      const baseSize = baseBounds.getSize(wallSyncScaleHelper)
-      const baseLength = Math.max(1e-4, Math.abs(baseSize.x) || 1)
-
-      definition.segments.forEach((segment, index) => {
-        wallSyncStartHelper.set(segment.start.x, segment.start.y, segment.start.z).applyMatrix4(wallSyncNodeMatrixHelper)
-        wallSyncEndHelper.set(segment.end.x, segment.end.y, segment.end.z).applyMatrix4(wallSyncNodeMatrixHelper)
-        wallSyncDirHelper.subVectors(wallSyncEndHelper, wallSyncStartHelper)
-        const length = wallSyncDirHelper.length()
-        if (length <= 1e-6) {
-          return
-        }
-        wallSyncMidHelper.addVectors(wallSyncStartHelper, wallSyncEndHelper).multiplyScalar(0.5)
-        const quat = wallDirectionToQuaternion(wallSyncDirHelper)
-        wallSyncScaleHelper.set(length / baseLength, 1, 1)
-        wallSyncInstanceMatrixHelper.compose(wallSyncMidHelper, quat, wallSyncScaleHelper)
-
-        const bindingId = `wall:${node.id}:body:${index}`
-        if (shouldRebuild) {
-          allocateModelInstanceBinding(bodyAssetId, bindingId, node.id)
-        }
-        updateModelInstanceBindingMatrix(bindingId, wallSyncInstanceMatrixHelper)
-      })
-    }
-  }
-
-  // Joint instances: place at turns (between consecutive segments), aligned to the bisector direction.
-  if (jointAssetId) {
-    const group = getCachedModelObject(jointAssetId)
-    if (group) {
-      ensureInstancedMeshesRegistered(jointAssetId)
-      let jointIndex = 0
-      for (let i = 0; i < definition.segments.length - 1; i += 1) {
-        const current = definition.segments[i]!
-        const next = definition.segments[i + 1]!
-
-        wallSyncStartHelper.set(current.start.x, current.start.y, current.start.z).applyMatrix4(wallSyncNodeMatrixHelper)
-        wallSyncEndHelper.set(current.end.x, current.end.y, current.end.z).applyMatrix4(wallSyncNodeMatrixHelper)
-        wallSyncIncomingHelper.subVectors(wallSyncEndHelper, wallSyncStartHelper)
-        wallSyncIncomingHelper.y = 0
-
-        const nextStart = wallSyncStartHelper.set(next.start.x, next.start.y, next.start.z).applyMatrix4(wallSyncNodeMatrixHelper)
-        const nextEnd = wallSyncEndHelper.set(next.end.x, next.end.y, next.end.z).applyMatrix4(wallSyncNodeMatrixHelper)
-        wallSyncOutgoingHelper.subVectors(nextEnd, nextStart)
-        wallSyncOutgoingHelper.y = 0
-
-        if (wallSyncIncomingHelper.lengthSq() < 1e-6 || wallSyncOutgoingHelper.lengthSq() < 1e-6) {
-          continue
-        }
-        wallSyncIncomingHelper.normalize()
-        wallSyncOutgoingHelper.normalize()
-
-        const dot = THREE.MathUtils.clamp(wallSyncIncomingHelper.dot(wallSyncOutgoingHelper), -1, 1)
-        const angle = Math.acos(dot)
-        if (!Number.isFinite(angle) || angle < 1e-3) {
-          continue
-        }
-
-        wallSyncBisectorHelper.copy(wallSyncIncomingHelper).add(wallSyncOutgoingHelper)
-        if (wallSyncBisectorHelper.lengthSq() < 1e-6) {
-          wallSyncBisectorHelper.copy(wallSyncOutgoingHelper)
-        }
-
-        const quat = wallDirectionToQuaternion(wallSyncBisectorHelper)
-        wallSyncScaleHelper.set(1, 1, 1)
-        // Place at the shared vertex (current end). If segments are not continuous, this is still a reasonable corner proxy.
-        wallSyncPosHelper.copy(wallSyncEndHelper)
-        wallSyncInstanceMatrixHelper.compose(wallSyncPosHelper, quat, wallSyncScaleHelper)
-
-        const bindingId = `wall:${node.id}:joint:${jointIndex}`
-        if (shouldRebuild) {
-          allocateModelInstanceBinding(jointAssetId, bindingId, node.id)
-        }
-        updateModelInstanceBindingMatrix(bindingId, wallSyncInstanceMatrixHelper)
-        jointIndex += 1
-      }
-    }
-  }
-
-  // Ensure selection/picking helpers are present for instanced walls.
-  ensureInstancedPickProxy(container, node)
-}
 
 // Ensures editor-only view point markers keep a consistent world-space scale.
 function applyViewPointScaleConstraint(object: THREE.Object3D, node: SceneNode) {
@@ -7456,13 +7232,8 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       containerData.groundMesh = groundMesh
       containerData.dynamicMeshType = 'Ground'
     } else if (node.dynamicMesh?.type === 'Wall') {
-      const wallDefinition = node.dynamicMesh as WallDynamicMesh
-      const wallGroup = createWallGroup(wallDefinition)
-      wallGroup.userData.nodeId = node.id
-      wallGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeWallDynamicMeshSignature(wallDefinition)
-      container.add(wallGroup)
-      containerData.wallGroup = wallGroup
       containerData.dynamicMeshType = 'Wall'
+      wallRenderer.syncWallContainer(container, node, DYNAMIC_MESH_SIGNATURE_KEY)
     } else {
       const runtimeObject = getRuntimeObject(node.id)
       if (runtimeObject) {

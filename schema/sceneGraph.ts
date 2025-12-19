@@ -43,7 +43,9 @@ import { createFileFromEntry } from '@schema/modelAssetLoader'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { createGroundMesh, updateGroundMesh } from './groundMesh'
 import { createSurfaceMesh, updateSurfaceMesh } from './surfaceMesh'
-import { createWallGroup } from './wallMesh'
+import { createWallRenderGroup } from './wallMesh'
+import type { WallComponentProps } from './components/definitions/wallComponent'
+import { WALL_COMPONENT_TYPE, clampWallProps } from './components/definitions/wallComponent'
 
 type SceneNodeWithExtras = SceneNode & {
   light?: {
@@ -381,6 +383,18 @@ class SceneGraphBuilder {
       }
       if (typeof node.sourceAssetId === 'string' && node.sourceAssetId) {
         ids.add(node.sourceAssetId);
+      }
+      const wallState = node.components?.[WALL_COMPONENT_TYPE] as
+        | SceneNodeComponentState<WallComponentProps>
+        | undefined;
+      if (wallState?.enabled !== false) {
+        const props = clampWallProps(wallState?.props as Partial<WallComponentProps> | null | undefined);
+        if (props.bodyAssetId) {
+          ids.add(props.bodyAssetId);
+        }
+        if (props.jointAssetId) {
+          ids.add(props.jointAssetId);
+        }
       }
       if (Array.isArray(node.children) && node.children.length) {
         stack.push(...(node.children as SceneNodeWithExtras[]));
@@ -1115,7 +1129,15 @@ class SceneGraphBuilder {
   }
 
   private async buildWallMesh(meshInfo: WallDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
-    const group = createWallGroup(meshInfo);
+    const wallState = node.components?.[WALL_COMPONENT_TYPE] as
+      | SceneNodeComponentState<WallComponentProps>
+      | undefined;
+    const wallProps = clampWallProps(wallState?.props as Partial<WallComponentProps> | null | undefined);
+
+    const bodyObject = wallProps.bodyAssetId ? await this.loadAssetMesh(wallProps.bodyAssetId) : null;
+    const jointObject = wallProps.jointAssetId ? await this.loadAssetMesh(wallProps.jointAssetId) : null;
+
+    const group = createWallRenderGroup(meshInfo, { bodyObject, jointObject });
     group.name = node.name ?? (group.name || 'Wall');
     const materials = await this.resolveNodeMaterials(node);
     const materialAssignment = this.pickMaterialAssignment(materials);
