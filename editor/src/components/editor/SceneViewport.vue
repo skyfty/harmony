@@ -4747,6 +4747,11 @@ async function handlePointerDown(event: PointerEvent) {
       event.stopImmediatePropagation()
       return
     }
+    // Wall build uses middle click for placement; keep left/right available for camera controls.
+    if (button === 0) {
+      pointerTrackingState = null
+      return
+    }
     if (button === 2) {
       pointerTrackingState = null
       return
@@ -5043,18 +5048,16 @@ function handlePointerUp(event: PointerEvent) {
       }
       return
     } else if (event.button === 2) {
+      // Right click cancels an active wall build session; otherwise leave it to camera controls.
       if (overrideActive) {
         return
       }
-      const hadWallSession = Boolean(wallBuildSession)
-      if (hadWallSession) {
+      if (wallBuildSession) {
         finalizeWallBuildSession()
-      } else {
-        handleBuildToolChange(null)
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
       }
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
       return
     } else {
       return
