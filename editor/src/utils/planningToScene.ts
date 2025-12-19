@@ -16,6 +16,7 @@ import { sampleGroundHeight, sampleGroundNormal } from '@schema/groundMesh'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
 import { generateUuid } from '@/utils/uuid'
+import { sampleUniformPointInPolygon } from '@/utils/polygonSampling'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 
 export type PlanningConversionProgress = {
@@ -397,6 +398,11 @@ function buildRandom(seed: number) {
 }
 
 function samplePointInPolygon(polygon: PlanningPoint[], random: () => number): PlanningPoint | null {
+  const uniform = sampleUniformPointInPolygon(polygon, random)
+  if (uniform) return uniform
+
+  // Fallback: rejection sampling within bounding box.
+  // This is still uniform over the polygon area (conditional on acceptance), but can be slower for thin shapes.
   let minX = Number.POSITIVE_INFINITY
   let minY = Number.POSITIVE_INFINITY
   let maxX = Number.NEGATIVE_INFINITY
@@ -416,6 +422,21 @@ function samplePointInPolygon(polygon: PlanningPoint[], random: () => number): P
     if (pointInPolygon(p, polygon)) return p
   }
   return null
+}
+
+function takeRandomSubset<T>(items: T[], count: number, random: () => number): T[] {
+  if (count <= 0) return []
+  if (items.length <= count) return items.slice()
+  const arr = items.slice()
+  // Partial Fisher–Yates shuffle.
+  for (let i = 0; i < count; i += 1) {
+    const j = i + Math.floor(random() * (arr.length - i))
+    const tmp = arr[i]
+    arr[i] = arr[j]!
+    arr[j] = tmp!
+  }
+  arr.length = count
+  return arr
 }
 
 function computeBoundingBox(points: PlanningPoint[]): { minX: number; minY: number; maxX: number; maxY: number } | null {
@@ -750,14 +771,19 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             const seedBase = layerParams.seed != null
               ? Math.floor(Number(layerParams.seed))
               : hashSeedFromString(`${PLANNING_CONVERSION_SOURCE}:${layer.id}:${poly.id}`)
-            const random = buildRandom(seedBase)
+            const randomPoints = buildRandom(seedBase)
+            const randomProps = buildRandom(hashSeedFromString(`${seedBase}:props`))
 
             const candidates = poissonSampleInPolygon(
               poly.points,
               minDistance,
-              random,
+              randomPoints,
               Math.min(MAX_SCATTER_INSTANCES_PER_POLYGON, Math.max(1, Math.ceil(targetCount * 1.6))),
             )
+
+            // If we generated more than we need, choose a random subset.
+            // This avoids biases from consuming the Poisson sequence in generation order.
+            const selected = takeRandomSubset(candidates, targetCount, randomPoints)
 
             const minScale = minScaleForCapacity
             const maxScale = maxScaleForCapacity
@@ -782,8 +808,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             })
 
             const additions: TerrainScatterInstance[] = []
-            for (const sample of candidates) {
-              if (additions.length >= targetCount) break
+            for (const sample of selected) {
               const localXZ = toWorldPoint(sample, groundWidth, groundDepth, 0)
               const height = groundDefinition ? sampleGroundHeight(groundDefinition, localXZ.x, localXZ.z) : 0
               if (height < minHeight || height > maxHeight) {
@@ -795,14 +820,14 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
                 continue
               }
 
-              const yaw = randomYawEnabled ? (random() * Math.PI * 2) : 0
-              const scaleFactor = THREE.MathUtils.lerp(minScale, maxScale, random())
+              const yaw = randomYawEnabled ? (randomProps() * Math.PI * 2) : 0
+              const scaleFactor = THREE.MathUtils.lerp(minScale, maxScale, randomProps())
               additions.push({
                 id: generateUuid(),
                 assetId: scatter.assetId,
                 layerId: layer.id,
                 profileId: layer.profileId ?? scatter.assetId,
-                seed: Math.floor(random() * Number.MAX_SAFE_INTEGER),
+                seed: Math.floor(randomProps() * Number.MAX_SAFE_INTEGER),
                 localPosition: { x: localXZ.x, y: height, z: localXZ.z },
                 localRotation: { x: 0, y: yaw, z: 0 },
                 localScale: { x: scaleFactor, y: scaleFactor, z: scaleFactor },
