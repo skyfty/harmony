@@ -25,6 +25,8 @@ import type {
   SceneNodeMaterial,
   SceneSkyboxSettings,
   GroundDynamicMesh,
+  FloorDynamicMesh,
+  Vector2Like,
   
 } from '@harmony/schema'
 import {
@@ -78,6 +80,7 @@ import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracki
 import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-viewport-transform-group'
 import type { BuildTool } from '@/types/build-tool'
 import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache } from '@schema/groundMesh'
+import { createFloorMesh, updateFloorMesh } from '@schema/floorMesh'
 import { useTerrainStore } from '@/stores/terrainStore'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
@@ -1358,10 +1361,226 @@ type WallBuildSession = {
 }
 let wallBuildSession: WallBuildSession | null = null
 
+type FloorBuildSession = {
+  pointerId: number
+  points: THREE.Vector3[]
+  currentPoint: THREE.Vector3 | null
+  previewMesh: THREE.Mesh | null
+  previewCenter: THREE.Vector3 | null
+}
+
+let floorBuildSession: FloorBuildSession | null = null
+
 const wallPreviewRenderer = createWallPreviewRenderer({
   rootGroup,
   normalizeWallDimensionsForViewport,
 })
+
+const FLOOR_POINT_MIN_DISTANCE = Math.max(GRID_SNAP_SPACING, 1e-3)
+const FLOOR_POINT_MIN_DISTANCE_SQ = FLOOR_POINT_MIN_DISTANCE * FLOOR_POINT_MIN_DISTANCE
+
+function disposeFloorPreviewMesh(mesh: THREE.Mesh) {
+  const geometry = mesh.geometry
+  if (geometry) {
+    geometry.dispose()
+  }
+  const material = mesh.material
+  if (Array.isArray(material)) {
+    material.forEach((entry) => entry.dispose())
+  } else if (material) {
+    material.dispose()
+  }
+}
+
+function applyFloorPreviewStyling(mesh: THREE.Mesh) {
+  const material = mesh.material as THREE.Material & { opacity?: number; transparent?: boolean; depthWrite?: boolean }
+  if ('opacity' in material) {
+    material.opacity = 0.45
+    material.transparent = true
+    material.depthWrite = false
+  }
+  mesh.layers.enableAll()
+  mesh.renderOrder = 998
+}
+
+function clearFloorBuildSession() {
+  if (floorBuildSession?.previewMesh) {
+    const preview = floorBuildSession.previewMesh
+    preview.removeFromParent()
+    disposeFloorPreviewMesh(preview)
+  }
+  floorBuildSession = null
+}
+
+function buildFloorPreviewDefinition(points: THREE.Vector3[]): { center: THREE.Vector3; definition: FloorDynamicMesh } | null {
+  if (!points.length || points.length < 3) {
+    return null
+  }
+
+  const sanitized: THREE.Vector3[] = []
+  points.forEach((point) => {
+    const previous = sanitized[sanitized.length - 1] ?? null
+    if (previous && previous.distanceToSquared(point) <= FLOOR_POINT_MIN_DISTANCE_SQ) {
+      return
+    }
+    sanitized.push(point.clone())
+  })
+
+  if (sanitized.length >= 2) {
+    const first = sanitized[0] ?? null
+    const last = sanitized[sanitized.length - 1] ?? null
+    if (first && last && first.distanceToSquared(last) <= FLOOR_POINT_MIN_DISTANCE_SQ) {
+      sanitized.pop()
+    }
+  }
+
+  if (sanitized.length < 3) {
+    return null
+  }
+
+  let twiceArea = 0
+  for (let index = 0; index < sanitized.length; index += 1) {
+    const current = sanitized[index]!
+    const next = sanitized[(index + 1) % sanitized.length]!
+    twiceArea += current.x * next.z - next.x * current.z
+  }
+
+  if (Math.abs(twiceArea) <= 1e-4) {
+    return null
+  }
+
+  if (twiceArea < 0) {
+    sanitized.reverse()
+  }
+
+  const center = new THREE.Vector3()
+  sanitized.forEach((vector) => center.add(vector))
+  center.multiplyScalar(1 / sanitized.length)
+  center.y = 0
+
+  const localPoints: Vector2Like[] = sanitized.map((vector) => ({
+    x: vector.x - center.x,
+    y: vector.z - center.z,
+  }))
+
+  return {
+    center,
+    definition: {
+      type: 'Floor',
+      points: localPoints,
+    },
+  }
+}
+
+function updateFloorPreview() {
+  if (!scene || !floorBuildSession) {
+    return
+  }
+
+  const points = [...floorBuildSession.points]
+  const current = floorBuildSession.currentPoint
+  const lastCommitted = points[points.length - 1] ?? null
+  if (current && (!lastCommitted || lastCommitted.distanceToSquared(current) > FLOOR_POINT_MIN_DISTANCE_SQ)) {
+    points.push(current)
+  }
+
+  const build = buildFloorPreviewDefinition(points)
+  if (!build) {
+    if (floorBuildSession.previewMesh) {
+      floorBuildSession.previewMesh.visible = false
+    }
+    return
+  }
+
+  if (!floorBuildSession.previewMesh) {
+    const mesh = createFloorMesh(build.definition)
+    applyFloorPreviewStyling(mesh)
+    mesh.userData.isFloorPreview = true
+    floorBuildSession.previewMesh = mesh
+    rootGroup.add(mesh)
+  } else {
+    updateFloorMesh(floorBuildSession.previewMesh, build.definition)
+    floorBuildSession.previewMesh.visible = true
+  }
+
+  floorBuildSession.previewCenter = build.center
+  floorBuildSession.previewMesh.position.copy(build.center)
+  floorBuildSession.previewMesh.position.y = 0
+  floorBuildSession.previewMesh.updateMatrixWorld(true)
+}
+
+function beginFloorBuildSession(event: PointerEvent): boolean {
+  if (isAltOverrideActive) {
+    return false
+  }
+  if (!raycastGroundPoint(event, groundPointerHelper)) {
+    return false
+  }
+  const rawPointer = groundPointerHelper.clone()
+  const snapped = snapVectorToMajorGrid(rawPointer.clone())
+
+  floorBuildSession = {
+    pointerId: event.pointerId,
+    points: [snapped.clone()],
+    currentPoint: snapped.clone(),
+    previewMesh: null,
+    previewCenter: null,
+  }
+  updateFloorPreview()
+  return true
+}
+
+function updateFloorBuildSession(event: PointerEvent) {
+  if (!floorBuildSession || event.pointerId !== floorBuildSession.pointerId) {
+    return
+  }
+  if (isAltOverrideActive) {
+    return
+  }
+  const isMiddleDown = (event.buttons & 4) !== 0
+  if (!isMiddleDown) {
+    return
+  }
+  if (!raycastGroundPoint(event, groundPointerHelper)) {
+    return
+  }
+  const rawPointer = groundPointerHelper.clone()
+  const snapped = snapVectorToMajorGrid(rawPointer.clone())
+
+  floorBuildSession.currentPoint = snapped.clone()
+
+  const last = floorBuildSession.points[floorBuildSession.points.length - 1] ?? null
+  if (!last || last.distanceToSquared(snapped) > FLOOR_POINT_MIN_DISTANCE_SQ) {
+    floorBuildSession.points.push(snapped.clone())
+  }
+
+  updateFloorPreview()
+}
+
+function commitFloorBuildSession(): boolean {
+  if (!floorBuildSession) {
+    return false
+  }
+  const points = [...floorBuildSession.points]
+  const current = floorBuildSession.currentPoint
+  const last = points[points.length - 1] ?? null
+  if (current && (!last || last.distanceToSquared(current) > FLOOR_POINT_MIN_DISTANCE_SQ)) {
+    points.push(current.clone())
+  }
+
+  clearFloorBuildSession()
+
+  if (points.length < 3) {
+    return false
+  }
+
+  const created = sceneStore.createFloorNode({
+    points: points.map((p) => ({ x: p.x, y: 0, z: p.z })),
+    assetId: null,
+  })
+
+  return Boolean(created)
+}
 
 
 function normalizeWallDimensionsForViewport(values: { height?: number; width?: number; thickness?: number }): {
@@ -4295,7 +4514,13 @@ async function handlePointerDown(event: PointerEvent) {
   }
 
   // Middle mouse triggers continuous instanced creation (allows left/right for camera pan/rotate).
-  if (!scatterEraseModeActive.value && event.button === 1 && props.activeTool === 'select' && activeBuildTool.value !== 'wall') {
+  if (
+    !scatterEraseModeActive.value &&
+    event.button === 1 &&
+    props.activeTool === 'select' &&
+    activeBuildTool.value !== 'wall' &&
+    activeBuildTool.value !== 'floor'
+  ) {
     const nodeId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
     if (nodeId && !sceneStore.isNodeSelectionLocked(nodeId)) {
       const node = findSceneNode(sceneStore.nodes, nodeId)
@@ -4356,6 +4581,33 @@ async function handlePointerDown(event: PointerEvent) {
       return
     }
     // Wall build uses middle click for placement; keep left/right available for camera controls.
+    if (button === 0) {
+      pointerTrackingState = null
+      return
+    }
+    if (button === 2) {
+      pointerTrackingState = null
+      return
+    }
+  }
+
+  if (activeBuildTool.value === 'floor') {
+    if (button === 1 && !isAltOverrideActive) {
+      pointerTrackingState = null
+      const started = beginFloorBuildSession(event)
+      if (started) {
+        try {
+          canvasRef.value.setPointerCapture(event.pointerId)
+        } catch {
+          /* noop */
+        }
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+      }
+      return
+    }
+    // Floor build uses middle mouse hold; keep left/right available for camera controls.
     if (button === 0) {
       pointerTrackingState = null
       return
@@ -4540,6 +4792,14 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
 
+  if (activeBuildTool.value === 'floor' && floorBuildSession && event.pointerId === floorBuildSession.pointerId) {
+    updateFloorBuildSession(event)
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
   if (isAltOverrideActive) {
     return
   }
@@ -4640,6 +4900,25 @@ function handlePointerUp(event: PointerEvent) {
   const overrideActive = isAltOverrideActive
 
   if (handleGroundEditorPointerUp(event)) {
+    return
+  }
+
+  if (activeBuildTool.value === 'floor') {
+    if (event.button === 1) {
+      if (overrideActive) {
+        return
+      }
+      if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
+        canvasRef.value.releasePointerCapture(event.pointerId)
+      }
+      const committed = commitFloorBuildSession()
+      if (committed) {
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+      }
+      return
+    }
     return
   }
 
@@ -4766,6 +5045,19 @@ function handlePointerCancel(event: PointerEvent) {
 
   if (handleGroundEditorPointerCancel(event)) {
     return
+  }
+
+  if (activeBuildTool.value === 'floor') {
+    if (floorBuildSession && event.pointerId === floorBuildSession.pointerId) {
+      clearFloorBuildSession()
+      if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
+        canvasRef.value.releasePointerCapture(event.pointerId)
+      }
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
   }
 
   if (activeBuildTool.value === 'wall') {
@@ -5158,6 +5450,14 @@ function cancelActiveBuildOperation(): boolean {
         finalizeWallBuildSession()
       } else {
         cancelWallSelection()
+        activeBuildTool.value = null
+      }
+      handled = true
+      break
+    case 'floor':
+      if (floorBuildSession) {
+        clearFloorBuildSession()
+      } else {
         activeBuildTool.value = null
       }
       handled = true
@@ -7118,6 +7418,9 @@ watch(activeBuildTool, (tool) => {
     cancelWallDrag()
     clearWallBuildSession()
     restoreOrbitAfterWallBuild()
+  }
+  if (tool !== 'floor') {
+    clearFloorBuildSession()
   }
 })
 

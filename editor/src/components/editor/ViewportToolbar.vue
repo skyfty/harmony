@@ -419,6 +419,7 @@ const alignButtons = [
 ] satisfies Array<{ mode: AlignMode; icon: string; title: string }>
 const buildToolButtons = [
   { id: 'wall', icon: 'mdi-wall', label: 'Wall Tool (Middle Mouse)' },
+  { id: 'floor', icon: 'mdi-floor-plan', label: 'Floor Tool (Middle Mouse Hold)' },
 ] satisfies Array<{ id: BuildTool; icon: string; label: string }>
 
 const cameraModeTitle = computed(() =>

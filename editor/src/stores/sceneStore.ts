@@ -45,6 +45,7 @@ import type {
   LightNodeType,
   NodeComponentType,
   PlatformDynamicMesh,
+  FloorDynamicMesh,
   SurfaceDynamicMesh,
   SceneBehavior,
   SceneDynamicMesh,
@@ -53,6 +54,7 @@ import type {
   SceneNodeComponentState,
   SceneNodeEditorFlags,
   SceneNodeType,
+  Vector2Like,
   Vector3Like,
   WallDynamicMesh,
 } from '@harmony/schema'
@@ -132,6 +134,7 @@ import {
 } from '@schema/modelObjectCache'
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 import { createSurfaceMesh } from '@schema/surfaceMesh'
+import { createFloorMesh, updateFloorMesh } from '@schema/floorMesh'
 import { computeBlobHash, blobToDataUrl, dataUrlToBlob, inferBlobFilename, extractExtension, ensureExtension } from '@/utils/blob'
 import {
   buildBehaviorPrefabFilename,
@@ -163,6 +166,7 @@ import type {
   DisplayBoardComponentProps,
   EffectComponentProps,
   GuideboardComponentProps,
+  FloorComponentProps,
   ProtagonistComponentProps,
   RigidbodyComponentProps,
   VehicleComponentProps,
@@ -172,6 +176,7 @@ import type {
 } from '@schema/components'
 import {
   WALL_COMPONENT_TYPE,
+  FLOOR_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
   WARP_GATE_COMPONENT_TYPE,
@@ -1068,6 +1073,12 @@ function cloneDynamicMeshVector3(vec: Vector3Like): Vector3Like {
   return { x, y, z }
 }
 
+function cloneDynamicMeshVector2(vec: Vector2Like): Vector2Like {
+  const x = Number.isFinite(vec.x) ? vec.x : 0
+  const y = Number.isFinite(vec.y) ? vec.y : 0
+  return { x, y }
+}
+
 function cloneGroundGenerationSettings(settings?: GroundGenerationSettings | null): GroundGenerationSettings | undefined {
   if (!settings) {
     return undefined
@@ -1353,6 +1364,78 @@ function buildSurfaceDynamicMeshFromWorldPoints(points: Vector3Like[]): { center
     type: 'Surface',
     points: localPoints.map(cloneDynamicMeshVector3),
     normal: cloneDynamicMeshVector3({ x: normal.x, y: normal.y, z: normal.z }),
+  }
+
+  return { center, definition }
+}
+
+const FLOOR_POINT_MIN_DISTANCE = 1e-3
+
+function buildFloorDynamicMeshFromWorldPoints(points: Vector3Like[]): { center: Vector3; definition: FloorDynamicMesh } | null {
+  if (!Array.isArray(points) || points.length < 3) {
+    return null
+  }
+
+  const sanitized: Vector3[] = []
+  const minDistanceSq = FLOOR_POINT_MIN_DISTANCE * FLOOR_POINT_MIN_DISTANCE
+  points.forEach((point) => {
+    if (!point) {
+      return
+    }
+    const vec = createVector(
+      Number.isFinite(point.x) ? point.x : 0,
+      0,
+      Number.isFinite(point.z) ? point.z : 0,
+    )
+    const previous = sanitized[sanitized.length - 1] ?? null
+    if (previous && previous.distanceToSquared(vec) <= minDistanceSq) {
+      return
+    }
+    sanitized.push(vec)
+  })
+
+  if (sanitized.length >= 2) {
+    const first = sanitized[0] ?? null
+    const last = sanitized[sanitized.length - 1] ?? null
+    if (first && last && first.distanceToSquared(last) <= minDistanceSq) {
+      sanitized.pop()
+    }
+  }
+
+  if (sanitized.length < 3) {
+    return null
+  }
+
+  let twiceArea = 0
+  for (let index = 0; index < sanitized.length; index += 1) {
+    const current = sanitized[index]!
+    const next = sanitized[(index + 1) % sanitized.length]!
+    twiceArea += current.x * next.z - next.x * current.z
+  }
+
+  if (Math.abs(twiceArea) <= 1e-4) {
+    return null
+  }
+
+  if (twiceArea < 0) {
+    sanitized.reverse()
+  }
+
+  const center = new Vector3()
+  sanitized.forEach((vector) => {
+    center.add(vector)
+  })
+  center.multiplyScalar(1 / sanitized.length)
+  center.y = 0
+
+  const localPoints2d = sanitized.map<Vector2Like>((vector) => ({
+    x: vector.x - center.x,
+    y: vector.z - center.z,
+  }))
+
+  const definition: FloorDynamicMesh = {
+    type: 'Floor',
+    points: localPoints2d.map(cloneDynamicMeshVector2),
   }
 
   return { center, definition }
@@ -1693,6 +1776,13 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
         type: 'Surface',
         points: (surfaceMesh.points ?? []).map(cloneDynamicMeshVector3),
         normal,
+      }
+    }
+    case 'Floor': {
+      const floorMesh = mesh as FloorDynamicMesh
+      return {
+        type: 'Floor',
+        points: (floorMesh.points ?? []).map(cloneDynamicMeshVector2),
       }
     }
     default:
@@ -10770,6 +10860,36 @@ export const useSceneStore = defineStore('scene', {
       })
       return `${prefix}${nextIndex.toString().padStart(2, '0')}`
     },
+
+    generateFloorNodeName() {
+      const prefix = 'Floor '
+      const taken = new Set<string>()
+      const collect = (nodes: SceneNode[]) => {
+        nodes.forEach((node) => {
+          if (typeof node.name === 'string' && node.name.startsWith(prefix)) {
+            taken.add(node.name)
+          }
+          if (Array.isArray(node.children) && node.children.length) {
+            collect(node.children)
+          }
+        })
+      }
+      collect(this.nodes)
+      for (let index = 1; index < 1000; index += 1) {
+        const candidate = `${prefix}${index.toString().padStart(2, '0')}`
+        if (!taken.has(candidate)) {
+          return candidate
+        }
+      }
+      let nextIndex = 1
+      taken.forEach((name) => {
+        const parsed = Number.parseInt(name.slice(prefix.length), 10)
+        if (Number.isFinite(parsed) && parsed >= nextIndex) {
+          nextIndex = parsed + 1
+        }
+      })
+      return `${prefix}${nextIndex.toString().padStart(2, '0')}`
+    },
     ensureStaticRigidbodyComponent(nodeId: string): SceneNodeComponentState<RigidbodyComponentProps> | null {
       const target = findNodeById(this.nodes, nodeId)
       if (!target) {
@@ -10869,6 +10989,40 @@ export const useSceneStore = defineStore('scene', {
       })
       return node
     },
+
+    createFloorNode(payload: { points: Vector3Like[]; name?: string; assetId?: string | null }): SceneNode | null {
+      const build = buildFloorDynamicMeshFromWorldPoints(payload.points)
+      if (!build) {
+        return null
+      }
+      const mesh = createFloorMesh(build.definition)
+      mesh.name = payload.name ?? 'Floor'
+      const node = this.addSceneNode({
+        nodeType: 'Mesh',
+        object: mesh,
+        name: payload.name ?? this.generateFloorNodeName(),
+        position: createVector(build.center.x, build.center.y, build.center.z),
+        rotation: createVector(0, 0, 0),
+        scale: createVector(1, 1, 1),
+        dynamicMesh: build.definition,
+      })
+      if (node) {
+        const assetId = typeof payload.assetId === 'string' && payload.assetId.trim().length
+          ? payload.assetId
+          : null
+        if (assetId) {
+          const component = node.components?.[FLOOR_COMPONENT_TYPE] as
+            | SceneNodeComponentState<FloorComponentProps>
+            | undefined
+          if (component) {
+            this.updateNodeComponentProps(node.id, component.id, {
+              assetId,
+            })
+          }
+        }
+      }
+      return node
+    },
     updateWallNodeGeometry(nodeId: string, payload: {
       segments: Array<{ start: Vector3Like; end: Vector3Like }>
       dimensions?: { height?: number; width?: number; thickness?: number }
@@ -10901,6 +11055,54 @@ export const useSceneStore = defineStore('scene', {
       if (runtime) {
         updateWallGroup(runtime, build.definition)
       }
+      return true
+    },
+
+    updateFloorNodeGeometry(nodeId: string, payload: { points: Vector3Like[] }): boolean {
+      const node = findNodeById(this.nodes, nodeId)
+      if (!node || node.dynamicMesh?.type !== 'Floor') {
+        return false
+      }
+
+      const build = buildFloorDynamicMeshFromWorldPoints(payload.points)
+      if (!build) {
+        return false
+      }
+
+      const parentMap = buildParentMap(this.nodes)
+      const parentId = parentMap.get(nodeId) ?? null
+
+      this.captureHistorySnapshot()
+      node.position = createVector(build.center.x, build.center.y, build.center.z)
+      node.dynamicMesh = build.definition
+
+      const floorComponent = node.components?.[FLOOR_COMPONENT_TYPE] as SceneNodeComponentState<FloorComponentProps> | undefined
+      if (floorComponent) {
+        this.updateNodeComponentProps(nodeId, floorComponent.id, {
+          points: build.definition.points.map(cloneDynamicMeshVector2),
+        })
+      }
+
+      const recentered = parentId
+        ? this.recenterGroupAncestry(parentId, { captureHistory: false, parentMap })
+        : false
+      if (!recentered) {
+        this.nodes = [...this.nodes]
+      }
+      commitSceneSnapshot(this)
+
+      const runtime = getRuntimeObject(nodeId)
+      if (runtime) {
+        if ((runtime as any).isMesh) {
+          updateFloorMesh(runtime as unknown as THREE.Mesh, build.definition)
+        } else {
+          const mesh = runtime.children.find((child) => (child as any)?.isMesh && child.userData?.dynamicMeshType === 'Floor') as THREE.Mesh | undefined
+          if (mesh) {
+            updateFloorMesh(mesh, build.definition)
+          }
+        }
+      }
+
       return true
     },
     setWallNodeDimensions(nodeId: string, dimensions: { height?: number; width?: number; thickness?: number }): boolean {

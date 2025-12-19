@@ -19,6 +19,7 @@ import type {
   SceneResourceSummaryEntry,
   SceneMaterialTextureSlot,
   SurfaceDynamicMesh,
+  FloorDynamicMesh,
 } from '@harmony/schema';
 import {
   createPrimitiveGeometry,
@@ -43,9 +44,12 @@ import { createFileFromEntry } from '@schema/modelAssetLoader'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { createGroundMesh, updateGroundMesh } from './groundMesh'
 import { createSurfaceMesh, updateSurfaceMesh } from './surfaceMesh'
+import { createFloorRenderGroup } from './floorMesh'
 import { createWallRenderGroup } from './wallMesh'
 import type { WallComponentProps } from './components/definitions/wallComponent'
 import { WALL_COMPONENT_TYPE, clampWallProps } from './components/definitions/wallComponent'
+import type { FloorComponentProps } from './components/definitions/floorComponent'
+import { FLOOR_COMPONENT_TYPE, clampFloorProps } from './components/definitions/floorComponent'
 
 type SceneNodeWithExtras = SceneNode & {
   light?: {
@@ -822,6 +826,9 @@ class SceneGraphBuilder {
     if (meshInfo?.type === 'Surface') {
       return this.buildSurfaceMesh(meshInfo as SurfaceDynamicMesh, node);
     }
+    if (meshInfo?.type === 'Floor') {
+      return this.buildFloorMesh(meshInfo as FloorDynamicMesh, node);
+    }
 
     const outlineMesh = this.resolveOutlineMeshForNode(node);
 
@@ -1152,6 +1159,32 @@ class SceneGraphBuilder {
     this.applyTransform(group, node);
     this.applyVisibility(group, node);
     return group;
+  }
+
+  private async buildFloorMesh(meshInfo: FloorDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const floorState = node.components?.[FLOOR_COMPONENT_TYPE] as
+      | SceneNodeComponentState<FloorComponentProps>
+      | undefined;
+    const floorProps = clampFloorProps(floorState?.props as Partial<FloorComponentProps> | null | undefined);
+
+    const surfaceObject = floorProps.assetId ? await this.loadAssetMesh(floorProps.assetId) : null;
+    const object = createFloorRenderGroup(meshInfo, { surfaceObject });
+    object.name = node.name ?? (object.name || 'Floor');
+
+    const materials = await this.resolveNodeMaterials(node);
+    const materialAssignment = this.pickMaterialAssignment(materials);
+    if (materialAssignment) {
+      object.traverse((child: THREE.Object3D) => {
+        const mesh = child as THREE.Mesh;
+        if ((mesh as any)?.isMesh) {
+          mesh.material = materialAssignment;
+        }
+      });
+    }
+
+    this.applyTransform(object, node);
+    this.applyVisibility(object, node);
+    return object;
   }
 
   private cloneMaterial(material: THREE.Material | THREE.Material[] | null | undefined): THREE.Material | THREE.Material[] | null {
