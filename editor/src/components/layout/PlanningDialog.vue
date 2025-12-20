@@ -148,14 +148,16 @@ type DragState =
   }
   | { type: 'move-align-marker'; pointerId: number; imageId: string }
 
+interface LineContinuation {
+  lineId: string
+  anchorIndex: number
+  direction: 'prepend' | 'append'
+}
+
 interface LineDraft {
+  lineId: string
   layerId: string
-  points: PlanningPoint[]
-  continuation?: {
-    lineId: string
-    anchorIndex: number
-    direction: 'prepend' | 'append'
-  }
+  continuation?: LineContinuation
 }
 
 const layerPresets: PlanningLayer[] = [
@@ -933,7 +935,7 @@ function resetPlanningState() {
   polygons.value = []
   polylines.value = []
   polygonDraftPoints.value = []
-  lineDraft.value = null
+  clearLineDraft()
   selectedFeature.value = null
   activeImageId.value = null
   layers.value = layerPresets.map((layer) => ({ ...layer }))
@@ -1189,11 +1191,13 @@ function scheduleRafFlush() {
     }
 
     if (pendingLineHoverClient) {
+      const line = getDraftLine()
+      const anchor = getDraftAnchorPoint(line, lineDraft.value)
       if (
         dialogOpen.value
         && dragState.value.type === 'idle'
         && currentTool.value === 'line'
-        && lineDraft.value?.points.length
+        && anchor
       ) {
         const nextHover = screenToWorld({
           clientX: pendingLineHoverClient.x,
@@ -1482,10 +1486,8 @@ watch(
       polygonDraftHoverPoint.value = null
       pendingLassoHoverClient = null
     }
-    if (previous === 'line' && tool !== 'line' && lineDraft.value) {
-      lineDraft.value = null
-      lineDraftHoverPoint.value = null
-      pendingLineHoverClient = null
+    if (previous === 'line' && tool !== 'line') {
+      finalizeLineDraft()
     }
   },
 )
@@ -1630,11 +1632,12 @@ const activeVertexHighlight = computed(() => {
     return { x: point.x, y: point.y, layerId: activeLayerId.value, r: 2.2 }
   }
 
-  if (currentTool.value === 'line' && lineDraft.value?.points.length) {
-    const draft = lineDraft.value
-    const point = draft.points[draft.points.length - 1]
-    if (!point) return null
-    return { x: point.x, y: point.y, layerId: draft.layerId, r: 2.2 }
+  if (currentTool.value === 'line') {
+    const line = getDraftLine()
+    const anchor = getDraftAnchorPoint(line, lineDraft.value)
+    if (anchor) {
+      return { x: anchor.x, y: anchor.y, layerId: lineDraft.value?.layerId ?? activeLayerId.value, r: 2.2 }
+    }
   }
 
   return null
@@ -1642,11 +1645,12 @@ const activeVertexHighlight = computed(() => {
 
 const selectedVertexHighlight = computed(() => {
   // While drawing, the "selected" vertex should follow the last draft point.
-  if (currentTool.value === 'line' && lineDraft.value?.points.length) {
-    const draft = lineDraft.value
-    const point = draft.points[draft.points.length - 1]
-    if (!point) return null
-    return { x: point.x, y: point.y, layerId: draft.layerId, r: 2.0 }
+  if (currentTool.value === 'line') {
+    const line = getDraftLine()
+    const anchor = getDraftAnchorPoint(line, lineDraft.value)
+    if (anchor) {
+      return { x: anchor.x, y: anchor.y, layerId: lineDraft.value?.layerId ?? activeLayerId.value, r: 2.0 }
+    }
   }
 
   const selection = selectedVertex.value
@@ -2360,8 +2364,6 @@ function startLineDraft(point: PlanningPoint) {
   const reuse = findNearbyPolylineVertexInLayer(point, targetLayerId)
   const reusePoint = reuse?.point
 
-  // Branching: when a polyline vertex is selected, clicking elsewhere adds a new vertex
-  // and connects it to the selected vertex with a new segment (new polyline).
   if (!lineDraft.value && selectedVertex.value?.feature === 'polyline') {
     const sourceLine = polylines.value.find((item) => item.id === selectedVertex.value?.targetId)
     const sourcePoint = sourceLine?.points[selectedVertex.value.vertexIndex]
@@ -2380,80 +2382,82 @@ function startLineDraft(point: PlanningPoint) {
       activeLayerId.value = sourceLine.layerId
       selectFeature({ type: 'polyline', id: newLine.id })
       selectedVertex.value = { feature: 'polyline', targetId: newLine.id, vertexIndex: 1 }
+      lineDraft.value = { lineId: newLine.id, layerId: sourceLine.layerId }
+      lineDraftHoverPoint.value = null
+      pendingLineHoverClient = null
       markPlanningDirty()
       return
     }
   }
 
-  if (!lineDraft.value) {
-    lineDraft.value = {
+  const nextPoint = reusePoint ?? createVertexPoint(point)
+  const draftLine = getDraftLine()
+  if (!draftLine) {
+    const newLine: PlanningPolyline = {
+      id: createId('line'),
+      name: `${getLayerName(targetLayerId)} 线段 ${lineCounter.value++}`,
       layerId: targetLayerId,
-      points: [reusePoint ?? createVertexPoint(point)],
+      points: [nextPoint],
     }
+    polylines.value = [...polylines.value, newLine]
+    lineDraft.value = { lineId: newLine.id, layerId: targetLayerId }
+    lineDraftHoverPoint.value = null
+    pendingLineHoverClient = null
+    markPlanningDirty()
     return
   }
 
-  const last = lineDraft.value.points.length ? lineDraft.value.points[lineDraft.value.points.length - 1] : undefined
-  const nextPoint = reusePoint ?? createVertexPoint(point)
-  if (last && (nextPoint === last || (last.id && nextPoint.id && last.id === nextPoint.id))) {
-    return
+  const anchor = getDraftAnchorPoint(draftLine, lineDraft.value)
+  if (anchor) {
+    const samePoint = anchor.id && nextPoint.id && anchor.id === nextPoint.id
+    const samePosition = anchor.x === nextPoint.x && anchor.y === nextPoint.y
+    if (samePoint || samePosition) {
+      return
+    }
   }
-  lineDraft.value = {
-    ...lineDraft.value,
-    points: [...lineDraft.value.points, nextPoint],
+
+  if (lineDraft.value?.continuation?.direction === 'prepend') {
+    draftLine.points.unshift(nextPoint)
+  } else {
+    draftLine.points.push(nextPoint)
   }
+  lineDraftHoverPoint.value = null
+  pendingLineHoverClient = null
+  markPlanningDirty()
 }
 
 function finalizeLineDraft() {
   const draft = lineDraft.value
-  if (!draft || draft.points.length < 2) {
-    lineDraft.value = null
-    lineDraftHoverPoint.value = null
+  if (!draft) {
     return
   }
-  if (draft.continuation) {
-    const line = polylines.value.find((item) => item.id === draft.continuation?.lineId)
-    if (line) {
-      const newPoints = draft.points.slice(1)
-      if (newPoints.length) {
-        if (draft.continuation.direction === 'append') {
-          line.points.push(...newPoints)
-        } else {
-          newPoints.reverse()
-          line.points.unshift(...newPoints)
-        }
-        selectFeature({ type: 'polyline', id: line.id })
-      }
-    }
-    lineDraft.value = null
-    lineDraftHoverPoint.value = null
-    markPlanningDirty()
+  const line = getDraftLine()
+  if (!line) {
+    clearLineDraft({ keepLine: false })
     return
   }
-  const newLine: PlanningPolyline = {
-    id: createId('line'),
-    name: `${getLayerName(draft.layerId)} 线段 ${lineCounter.value++}`,
-    layerId: draft.layerId,
-    points: draft.points,
+  if (line.points.length < 2) {
+    polylines.value = polylines.value.filter((item) => item.id !== line.id)
+    clearLineDraft({ keepLine: true })
+    return
   }
-  polylines.value = [...polylines.value, newLine]
-  selectFeature({ type: 'polyline', id: newLine.id })
-  lineDraft.value = null
-  lineDraftHoverPoint.value = null
+  selectFeature({ type: 'polyline', id: line.id })
+  clearLineDraft({ keepLine: true })
   markPlanningDirty()
 }
 
 const lineDraftPreviewPath = computed(() => {
   const draft = lineDraft.value
-  if (!draft || !draft.points.length) {
+  const line = getDraftLine()
+  const hover = lineDraftHoverPoint.value
+  if (!draft || !line || !hover) {
     return ''
   }
-  const hover = lineDraftHoverPoint.value
-  if (!hover) {
-    return getPolylinePath(draft.points)
+  const anchor = getDraftAnchorPoint(line, draft)
+  if (!anchor) {
+    return ''
   }
-  const previewPoints = draft.points.length === 1 ? [draft.points[0]!, hover] : [...draft.points, hover]
-  return getPolylinePath(previewPoints)
+  return `M ${anchor.x} ${anchor.y} L ${hover.x} ${hover.y}`
 })
 
 const lineDraftPreviewStroke = computed(() => {
@@ -2477,6 +2481,8 @@ const lineDraftPreviewVectorEffect = computed(() => {
   const layerId = lineDraft.value?.layerId ?? activeLayerId.value
   return getPolylineVectorEffect(layerId)
 })
+
+const lineDraftPoints = computed(() => getDraftLine()?.points ?? [])
 
 function selectFeature(feature: SelectedFeature) {
   if (!feature) {
@@ -2816,7 +2822,8 @@ function handleEditorContextMenu(event: MouseEvent) {
   }
   const rectangleActive = dragState.value.type === 'rectangle'
   const polygonDraftActive = polygonDraftPoints.value.length > 0
-  const lineDraftActive = !!(lineDraft.value && lineDraft.value.points.length > 0)
+  const draftLine = getDraftLine()
+  const lineDraftActive = !!(draftLine && draftLine.points.length > 0)
   if (!rectangleActive && !polygonDraftActive && !lineDraftActive) {
     return
   }
@@ -2842,10 +2849,13 @@ function handlePointerMove(event: PointerEvent) {
     dialogOpen.value
     && dragState.value.type === 'idle'
     && currentTool.value === 'line'
-    && lineDraft.value?.points.length
   ) {
-    pendingLineHoverClient = { x: event.clientX, y: event.clientY }
-    scheduleRafFlush()
+    const line = getDraftLine()
+    const anchor = getDraftAnchorPoint(line, lineDraft.value)
+    if (anchor) {
+      pendingLineHoverClient = { x: event.clientX, y: event.clientY }
+      scheduleRafFlush()
+    }
   }
 
   const state = dragState.value
@@ -3054,8 +3064,7 @@ function handleWheel(event: WheelEvent) {
 function cancelActiveDrafts() {
   polygonDraftPoints.value = []
   polygonDraftHoverPoint.value = null
-  lineDraft.value = null
-  lineDraftHoverPoint.value = null
+  clearLineDraft()
   dragState.value = { type: 'idle' }
 }
 
@@ -3101,10 +3110,11 @@ function handleKeydown(event: KeyboardEvent) {
       finalizePolygonDraft()
       return
     }
-    if (currentTool.value === 'line' && lineDraft.value?.points.length && lineDraft.value.points.length >= 2) {
-      event.preventDefault()
-      finalizeLineDraft()
-    }
+      const draftLine = getDraftLine()
+      if (currentTool.value === 'line' && draftLine && draftLine.points.length >= 2) {
+        event.preventDefault()
+        finalizeLineDraft()
+      }
   }
 }
 
@@ -3325,14 +3335,16 @@ function startLineContinuation(lineId: string, vertexIndex: number) {
   }
   activeLayerId.value = line.layerId
   lineDraft.value = {
+    lineId,
     layerId: line.layerId,
-    points: [point],
     continuation: {
       lineId,
       anchorIndex: vertexIndex,
       direction: vertexIndex === 0 ? 'prepend' : 'append',
     },
   }
+  lineDraftHoverPoint.value = null
+  pendingLineHoverClient = null
 }
 
 function handleUploadClick() {
@@ -3723,6 +3735,41 @@ function getLineSegments(line: PlanningPolyline) {
     }
   }
   return segments
+}
+
+function getDraftLine() {
+  const draft = lineDraft.value
+  if (!draft) {
+    return null
+  }
+  return polylines.value.find((line) => line.id === draft.lineId) ?? null
+}
+
+function getDraftAnchorPoint(line: PlanningPolyline | null, draft: LineDraft | null) {
+  if (!line || !line.points.length || !draft) {
+    return null
+  }
+  if (draft.continuation?.direction === 'prepend') {
+    return line.points[0]
+  }
+  return line.points[line.points.length - 1]
+}
+
+function clearLineDraft(options?: { keepLine?: boolean }) {
+  const draft = lineDraft.value
+  const keepLine = options?.keepLine ?? false
+  if (!draft) {
+    lineDraftHoverPoint.value = null
+    pendingLineHoverClient = null
+    return
+  }
+  const line = getDraftLine()
+  if (!keepLine && line && line.points.length < 2) {
+    polylines.value = polylines.value.filter((item) => item.id !== line.id)
+  }
+  lineDraft.value = null
+  lineDraftHoverPoint.value = null
+  pendingLineHoverClient = null
 }
 
 function resizeCursor(direction: 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw') {
@@ -4329,7 +4376,7 @@ onBeforeUnmount(() => {
 
                   <!-- 线段绘制预览 -->
                   <path
-                    v-if="lineDraft?.points?.length"
+                    v-if="lineDraftPreviewPath"
                     class="planning-line-draft"
                     :d="lineDraftPreviewPath"
                     :stroke="lineDraftPreviewStroke"
@@ -4340,9 +4387,9 @@ onBeforeUnmount(() => {
                   />
 
                   <!-- 线段绘制中：显示顶点位置 -->
-                  <g v-if="lineDraft?.points?.length">
+                  <g v-if="lineDraftPoints.length">
                     <circle
-                      v-for="(p, idx) in lineDraft!.points"
+                      v-for="(p, idx) in lineDraftPoints"
                       :key="`line-draft-v-${idx}-${p.id ?? ''}`"
                       class="vertex-handle"
                       :cx="p.x"
