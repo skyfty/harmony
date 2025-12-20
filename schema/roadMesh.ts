@@ -7,6 +7,9 @@ export type RoadRenderAssetObjects = {
 
 const DEFAULT_COLOR = 0x4b4f55
 
+// Lift the road surface slightly above the ground plane to avoid z-fighting.
+const ROAD_SURFACE_Y_OFFSET = 0.01
+
 function disposeObject3D(object: THREE.Object3D) {
   object.traverse((child: THREE.Object3D) => {
     const mesh = child as THREE.Mesh
@@ -107,6 +110,19 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh) {
   })
 }
 
+function ensureRoadContentGroup(root: THREE.Group): THREE.Group {
+  const existing = root.getObjectByName('__RoadContent')
+  if (existing && (existing as THREE.Group).isGroup) {
+    return existing as THREE.Group
+  }
+
+  const content = new THREE.Group()
+  content.name = '__RoadContent'
+  content.position.y = ROAD_SURFACE_Y_OFFSET
+  root.add(content)
+  return content
+}
+
 function collectInstancableMeshes(object: THREE.Object3D): Array<THREE.Mesh> {
   const meshes: Array<THREE.Mesh> = []
   object.traverse((child: THREE.Object3D) => {
@@ -191,18 +207,20 @@ export function createRoadRenderGroup(definition: RoadDynamicMesh, assets: RoadR
   group.name = 'RoadGroup'
   group.userData.dynamicMeshType = 'Road'
 
+  const content = ensureRoadContentGroup(group)
+
   let hasInstances = false
   if (assets.bodyObject) {
     const matrices = computeRoadBodyInstanceMatrices(definition, assets.bodyObject)
     const instancedGroup = buildInstancedMeshesFromTemplate(assets.bodyObject, matrices, { namePrefix: 'RoadBody' })
     if (instancedGroup) {
       hasInstances = true
-      group.add(instancedGroup)
+      content.add(instancedGroup)
     }
   }
 
   if (!hasInstances) {
-    rebuildRoadGroup(group, definition)
+    rebuildRoadGroup(content, definition)
   }
 
   return group
@@ -212,7 +230,8 @@ export function createRoadGroup(definition: RoadDynamicMesh): THREE.Group {
   const group = new THREE.Group()
   group.name = 'RoadGroup'
   group.userData.dynamicMeshType = 'Road'
-  rebuildRoadGroup(group, definition)
+  const content = ensureRoadContentGroup(group)
+  rebuildRoadGroup(content, definition)
   return group
 }
 
@@ -221,6 +240,8 @@ export function updateRoadGroup(object: THREE.Object3D, definition: RoadDynamicM
   if (!group || !group.isGroup) {
     return false
   }
-  rebuildRoadGroup(group, definition)
+
+  const content = ensureRoadContentGroup(group)
+  rebuildRoadGroup(content, definition)
   return true
 }
