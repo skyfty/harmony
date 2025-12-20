@@ -617,6 +617,67 @@ const effectiveCanvasSize = computed(() => frozenCanvasSize.value ?? canvasSize.
 
 const renderScale = computed(() => viewTransform.scale * BASE_PIXELS_PER_METER)
 
+type ScaleBarSpec = { meters: number; pixels: number; label: string }
+
+const SCALE_BAR_TARGET_PX = 120
+const SCALE_BAR_MIN_PX = 72
+const SCALE_BAR_MAX_PX = 170
+
+function formatScaleDistance(meters: number): string {
+  if (!Number.isFinite(meters) || meters <= 0) {
+    return ''
+  }
+  if (meters >= 1000) {
+    const km = meters / 1000
+    const rounded = km >= 10 ? Math.round(km) : Math.round(km * 10) / 10
+    return `${rounded} km`
+  }
+  if (meters >= 10) {
+    return `${Math.round(meters)} m`
+  }
+  if (meters >= 1) {
+    const rounded = Math.round(meters * 10) / 10
+    return `${rounded} m`
+  }
+  const rounded = Math.round(meters * 100) / 100
+  return `${rounded} m`
+}
+
+function computeScaleBar(ppm: number): ScaleBarSpec {
+  if (!Number.isFinite(ppm) || ppm <= 1e-6) {
+    return { meters: 0, pixels: 0, label: '' }
+  }
+
+  const targetMeters = SCALE_BAR_TARGET_PX / ppm
+  const targetExp = Math.floor(Math.log10(Math.max(1e-12, targetMeters)))
+  const candidates: number[] = []
+  for (let exp = targetExp - 2; exp <= targetExp + 2; exp += 1) {
+    const base = 10 ** exp
+    candidates.push(1 * base, 2 * base, 5 * base)
+  }
+
+  const scored = candidates
+    .map((meters) => ({ meters, pixels: meters * ppm }))
+    .filter((c) => Number.isFinite(c.pixels) && c.pixels > 0)
+
+  const within = scored.filter((c) => c.pixels >= SCALE_BAR_MIN_PX && c.pixels <= SCALE_BAR_MAX_PX)
+  const pool = within.length ? within : scored
+  const best = pool.reduce(
+    (acc, cur) => {
+      const accDelta = Math.abs(acc.pixels - SCALE_BAR_TARGET_PX)
+      const curDelta = Math.abs(cur.pixels - SCALE_BAR_TARGET_PX)
+      return curDelta < accDelta ? cur : acc
+    },
+    pool[0] ?? { meters: 1, pixels: ppm },
+  )
+
+  const pixels = Math.round(best.pixels)
+  const meters = best.meters
+  return { meters, pixels, label: formatScaleDistance(meters) }
+}
+
+const scaleBarSpec = computed(() => computeScaleBar(renderScale.value))
+
 function computeFitViewScale(rect: Pick<DOMRect, 'width' | 'height'>, options?: { paddingPx?: number }): number {
   const paddingPx = options?.paddingPx ?? 24
   const availableW = Math.max(1, rect.width - paddingPx * 2)
@@ -1252,14 +1313,6 @@ const canUseAreaTools = computed(() => {
 })
 
 const canDeleteSelection = computed(() => !!selectedFeature.value)
-
-const layerFeatureTotals = computed(() =>
-  layers.value.map((layer) => {
-    const polygonCount = polygons.value.filter((item) => item.layerId === layer.id).length
-    const lineCount = polylines.value.filter((item) => item.layerId === layer.id).length
-    return { id: layer.id, polygons: polygonCount, lines: lineCount }
-  }),
-)
 
 const scatterTabs = computed(() =>
   (Object.keys(terrainScatterPresets) as TerrainScatterCategory[]).map((key) => ({
@@ -4492,6 +4545,16 @@ onBeforeUnmount(() => {
 
               <div class="canvas-boundary-overlay" :style="canvasBoundaryStyle" />
             </div>
+
+            <div v-if="scaleBarSpec.label" class="scale-bar-overlay" aria-hidden="true">
+              <div class="scale-bar">
+                <div class="scale-bar__label">{{ scaleBarSpec.label }}</div>
+                <div class="scale-bar__ruler" :style="{ width: `${scaleBarSpec.pixels}px` }">
+                  <div class="scale-bar__tick scale-bar__tick--left" />
+                  <div class="scale-bar__tick scale-bar__tick--right" />
+                </div>
+              </div>
+            </div>
           </div>
         </main>
 
@@ -5309,6 +5372,53 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
+.scale-bar-overlay {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 6500;
+  pointer-events: none;
+}
+
+.scale-bar {
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(18, 22, 30, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(2px);
+  color: rgba(244, 246, 251, 0.92);
+  font-variant-numeric: tabular-nums;
+}
+
+.scale-bar__label {
+  font-size: 0.78rem;
+  line-height: 1.1;
+  margin-bottom: 6px;
+  opacity: 0.92;
+}
+
+.scale-bar__ruler {
+  position: relative;
+  height: 10px;
+  border-bottom: 2px solid rgba(244, 246, 251, 0.92);
+}
+
+.scale-bar__tick {
+  position: absolute;
+  bottom: -1px;
+  width: 2px;
+  height: 8px;
+  background: rgba(244, 246, 251, 0.92);
+}
+
+.scale-bar__tick--left {
+  left: 0;
+}
+
+.scale-bar__tick--right {
+  right: 0;
+}
+
 .planning-polygon,
 .planning-line,
 .planning-line-segment,
@@ -5321,9 +5431,6 @@ onBeforeUnmount(() => {
   stroke-linecap: round;
   stroke-linejoin: round;
   cursor: pointer;
-}
-
-.planning-line.selected {
 }
 
 .planning-line-segment {
