@@ -44,6 +44,10 @@ interface PlanningLayer {
   locked: boolean
   /** Road layer width in meters (only used when kind === 'road'). */
   roadWidthMeters?: number
+  /** Wall layer height in meters (only used when kind === 'wall'). */
+  wallHeightMeters?: number
+  /** Wall layer thickness in meters (only used when kind === 'wall'). */
+  wallThicknessMeters?: number
 }
 
 interface PlanningPoint {
@@ -159,7 +163,7 @@ const layerPresets: PlanningLayer[] = [
   { id: 'terrain-layer', name: 'Terrain', kind: 'terrain', visible: true, color: '#2E7D32', locked: false },
   { id: 'building-layer', name: 'Building', kind: 'building', visible: true, color: '#C62828', locked: false },
   { id: 'road-layer', name: 'Road', kind: 'road', visible: true, color: '#F9A825', locked: false, roadWidthMeters: 2 },
-  { id: 'wall-layer', name: 'Wall', kind: 'wall', visible: true, color: '#5E35B1', locked: false },
+  { id: 'wall-layer', name: 'Wall', kind: 'wall', visible: true, color: '#5E35B1', locked: false, wallHeightMeters: 3, wallThicknessMeters: 0.15 },
 ]
 
 const imageAccentPalette = layerPresets.map((layer) => layer.color)
@@ -628,6 +632,8 @@ function buildPlanningSnapshot() {
       visible: layer.visible,
       locked: layer.locked,
       roadWidthMeters: layer.roadWidthMeters,
+      wallHeightMeters: layer.wallHeightMeters,
+      wallThicknessMeters: layer.wallThicknessMeters,
     })),
     viewTransform: {
       scale: viewTransform.scale,
@@ -909,7 +915,15 @@ function loadPlanningFromScene() {
             roadWidthMeters:
               typeof (raw as any).roadWidthMeters === 'number'
                 ? Number((raw as any).roadWidthMeters)
-                : ((kind ?? preset?.kind) === 'road' ? 6 : undefined),
+                : ((kind ?? preset?.kind) === 'road' ? 2 : undefined),
+            wallHeightMeters:
+              typeof (raw as any).wallHeightMeters === 'number'
+                ? Number((raw as any).wallHeightMeters)
+                : ((kind ?? preset?.kind) === 'wall' ? 3 : undefined),
+            wallThicknessMeters:
+              typeof (raw as any).wallThicknessMeters === 'number'
+                ? Number((raw as any).wallThicknessMeters)
+                : ((kind ?? preset?.kind) === 'wall' ? 0.15 : undefined),
           } as PlanningLayer
         })
     } else {
@@ -1213,6 +1227,42 @@ const roadWidthMetersModel = computed({
     const next = Number(value)
     if (!Number.isFinite(next)) return
     layer.roadWidthMeters = Math.min(10, Math.max(0.1, next))
+    markPlanningDirty()
+  },
+})
+
+const wallHeightMetersModel = computed({
+  get: () => {
+    const layer = selectedScatterTarget.value?.layer
+    if (!layer || layer.kind !== 'wall') return 3
+    const raw = Number(layer.wallHeightMeters ?? 3)
+    return Number.isFinite(raw) && raw > 0 ? raw : 3
+  },
+  set: (value: number) => {
+    if (propertyPanelDisabled.value) return
+    const layer = selectedScatterTarget.value?.layer
+    if (!layer || layer.kind !== 'wall') return
+    const next = Number(value)
+    if (!Number.isFinite(next)) return
+    layer.wallHeightMeters = Math.min(100, Math.max(0.1, next))
+    markPlanningDirty()
+  },
+})
+
+const wallThicknessMetersModel = computed({
+  get: () => {
+    const layer = selectedScatterTarget.value?.layer
+    if (!layer || layer.kind !== 'wall') return 0.15
+    const raw = Number(layer.wallThicknessMeters ?? 0.15)
+    return Number.isFinite(raw) && raw > 0 ? raw : 0.15
+  },
+  set: (value: number) => {
+    if (propertyPanelDisabled.value) return
+    const layer = selectedScatterTarget.value?.layer
+    if (!layer || layer.kind !== 'wall') return
+    const next = Number(value)
+    if (!Number.isFinite(next)) return
+    layer.wallThicknessMeters = Math.min(10, Math.max(0.01, next))
     markPlanningDirty()
   },
 })
@@ -1588,6 +1638,8 @@ function addPlanningLayer(kind: LayerKind) {
     color: getDefaultLayerColor(kind),
     locked: false,
     roadWidthMeters: kind === 'road' ? 2 : undefined,
+    wallHeightMeters: kind === 'wall' ? 3 : undefined,
+    wallThicknessMeters: kind === 'wall' ? 0.15 : undefined,
   }
 
   // 新建图层置顶（列表靠前）
@@ -4383,6 +4435,40 @@ onBeforeUnmount(() => {
                     min="0.1"
                     max="10"
                     step="0.1"
+                    density="compact"
+                    variant="underlined"
+                    hide-details
+                    suffix="m"
+                  />
+                </div>
+              </div>
+            </template>
+
+            <template v-else-if="propertyPanelLayerKind === 'wall'">
+              <div class="property-panel__density">
+                <div class="property-panel__density-title">墙高</div>
+                <div class="property-panel__density-row">
+                  <v-text-field
+                    v-model.number="wallHeightMetersModel"
+                    type="number"
+                    min="0.1"
+                    max="100"
+                    step="0.1"
+                    density="compact"
+                    variant="underlined"
+                    hide-details
+                    suffix="m"
+                  />
+                </div>
+
+                <div class="property-panel__spacing-title">墙厚</div>
+                <div class="property-panel__density-row">
+                  <v-text-field
+                    v-model.number="wallThicknessMetersModel"
+                    type="number"
+                    min="0.01"
+                    max="10"
+                    step="0.01"
                     density="compact"
                     variant="underlined"
                     hide-details

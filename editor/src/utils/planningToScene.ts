@@ -252,6 +252,32 @@ function resolveRoadWidthFromPlanningData(planningData: PlanningSceneData, layer
   return 2
 }
 
+function resolveWallHeightFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
+  const raw = (planningData as any)?.layers
+  if (Array.isArray(raw)) {
+    const found = raw.find((item: any) => item && item.id === layerId)
+    const heightRaw = found?.wallHeightMeters
+    const height = typeof heightRaw === 'number' ? heightRaw : Number(heightRaw)
+    if (Number.isFinite(height)) {
+      return Math.min(100, Math.max(0.1, height))
+    }
+  }
+  return 3
+}
+
+function resolveWallThicknessFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
+  const raw = (planningData as any)?.layers
+  if (Array.isArray(raw)) {
+    const found = raw.find((item: any) => item && item.id === layerId)
+    const thicknessRaw = found?.wallThicknessMeters
+    const thickness = typeof thicknessRaw === 'number' ? thicknessRaw : Number(thicknessRaw)
+    if (Number.isFinite(thickness)) {
+      return Math.min(10, Math.max(0.01, thickness))
+    }
+  }
+  return 0.15
+}
+
 function computeRoadCenterFromWorldXZ(points: Array<{ x: number; z: number }>): { x: number; z: number } {
   let minX = Infinity
   let maxX = -Infinity
@@ -971,6 +997,9 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         updateProgressForUnit(`Converting greenery: ${poly.name?.trim() || poly.id}`)
       }
     } else if (kind === 'wall') {
+      const wallHeight = resolveWallHeightFromPlanningData(planningData, layerId)
+      const wallThickness = resolveWallThicknessFromPlanningData(planningData, layerId)
+
       for (const line of group.polylines) {
         const segments = [] as Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number } }>
         for (let i = 0; i < line.points.length - 1; i += 1) {
@@ -982,7 +1011,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         if (segments.length) {
           const wall = sceneStore.createWallNode({
             segments,
-            dimensions: { height: 3, thickness: 0.15, width: 0.25 },
+            dimensions: { height: wallHeight, thickness: wallThickness, width: 0.25 },
             name: line.name?.trim() || 'Wall',
           })
           if (wall) {
@@ -1000,7 +1029,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         if (segments.length) {
           const wall = sceneStore.createWallNode({
             segments,
-            dimensions: { height: 3, thickness: 0.15, width: 0.25 },
+            dimensions: { height: wallHeight, thickness: wallThickness, width: 0.25 },
             name: poly.name?.trim() || 'Wall',
           })
           if (wall) {

@@ -50,6 +50,10 @@ export interface PlanningLayerState {
   locked?: boolean
   /** Optional; currently used by road layers. */
   roadWidthMeters?: number
+  /** Optional; currently used by wall layers. */
+  wallHeightMeters?: number
+  /** Optional; currently used by wall layers. */
+  wallThicknessMeters?: number
 }
 
 export interface PlanningSceneData {
