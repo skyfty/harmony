@@ -1242,6 +1242,11 @@ const canUseLineTool = computed(() => {
   return kind === 'road' || kind === 'wall'
 })
 
+const canUseAreaTools = computed(() => {
+  const kind = activeLayer.value?.kind
+  return kind !== 'road' && kind !== 'wall'
+})
+
 const canDeleteSelection = computed(() => !!selectedFeature.value)
 
 const layerFeatureTotals = computed(() =>
@@ -1465,6 +1470,10 @@ watch(
   currentTool,
   (tool, previous) => {
     if (tool === 'line' && !canUseLineTool.value) {
+      currentTool.value = 'select'
+      return
+    }
+    if ((tool === 'rectangle' || tool === 'lasso') && !canUseAreaTools.value) {
       currentTool.value = 'select'
       return
     }
@@ -2564,6 +2573,9 @@ function handleToolSelect(tool: PlanningTool) {
   if (tool === 'line' && !canUseLineTool.value) {
     return
   }
+  if ((tool === 'rectangle' || tool === 'lasso') && !canUseAreaTools.value) {
+    return
+  }
   currentTool.value = tool
 }
 
@@ -2587,6 +2599,9 @@ function handleLayerLockToggle(layerId: string) {
 function handleLayerSelection(layerId: string) {
   activeLayerId.value = layerId
   if (currentTool.value === 'line' && !canUseLineTool.value) {
+    currentTool.value = 'select'
+  }
+  if ((currentTool.value === 'rectangle' || currentTool.value === 'lasso') && !canUseAreaTools.value) {
     currentTool.value = 'select'
   }
   ensureSelectionWithinActiveLayer()
@@ -3735,6 +3750,18 @@ const toolbarButtons: Array<{ tool: PlanningTool; icon: string; tooltip: string 
   { tool: 'align-marker', icon: 'mdi-crosshairs-gps', tooltip: 'Align marker' },
 ]
 
+const visibleToolbarButtons = computed(() => {
+  return toolbarButtons.filter((button) => {
+    if (button.tool === 'line') {
+      return canUseLineTool.value
+    }
+    if (button.tool === 'rectangle' || button.tool === 'lasso') {
+      return canUseAreaTools.value
+    }
+    return true
+  })
+})
+
 const deleteButtonTooltip = ' Delete selected objects (Del)'
 
 const resizeDirections = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const
@@ -4044,7 +4071,7 @@ onBeforeUnmount(() => {
           <div class="toolbar">
             <div class="tool-buttons">
               <v-tooltip
-                v-for="button in toolbarButtons"
+                v-for="button in visibleToolbarButtons"
                 :key="button.tool"
                 :text="button.tooltip"
                 location="bottom"
@@ -4056,7 +4083,6 @@ onBeforeUnmount(() => {
                     variant="tonal"
                     density="comfortable"
                     class="tool-button"
-                    :disabled="button.tool === 'line' && !canUseLineTool"
                     @click="handleToolSelect(button.tool)"
                   >
                     <v-icon>{{ button.icon }}</v-icon>
