@@ -25,6 +25,7 @@ import type {
   SceneNodeMaterial,
   SceneSkyboxSettings,
   GroundDynamicMesh,
+  RoadDynamicMesh,
   
 } from '@harmony/schema'
 import {
@@ -78,6 +79,7 @@ import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracki
 import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-viewport-transform-group'
 import type { BuildTool } from '@/types/build-tool'
 import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache } from '@schema/groundMesh'
+import { createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
 import { useTerrainStore } from '@/stores/terrainStore'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
@@ -476,6 +478,14 @@ function computeGroundDynamicMeshSignature(definition: GroundDynamicMesh): strin
   const serialized = stableSerialize({
     heightMap: definition.heightMap ?? {}
   })
+  return hashString(serialized)
+}
+
+function computeRoadDynamicMeshSignature(definition: RoadDynamicMesh): string {
+  const serialized = stableSerialize([
+    Array.isArray(definition.points) ? definition.points : [],
+    Number.isFinite(definition.width) ? definition.width : null,
+  ])
   return hashString(serialized)
 }
 
@@ -6354,6 +6364,23 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     }
   } else if (node.dynamicMesh?.type === 'Wall') {
     wallRenderer.syncWallContainer(object, node, DYNAMIC_MESH_SIGNATURE_KEY)
+  } else if (node.dynamicMesh?.type === 'Road') {
+    const roadDefinition = node.dynamicMesh as RoadDynamicMesh
+    let roadGroup = userData.roadGroup as THREE.Group | undefined
+    if (!roadGroup) {
+      roadGroup = createRoadGroup(roadDefinition)
+      roadGroup.userData.nodeId = node.id
+      roadGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeRoadDynamicMeshSignature(roadDefinition)
+      object.add(roadGroup)
+      userData.roadGroup = roadGroup
+    } else {
+      const groupData = roadGroup.userData ?? (roadGroup.userData = {})
+      const nextSignature = computeRoadDynamicMeshSignature(roadDefinition)
+      if (groupData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
+        updateRoadGroup(roadGroup, roadDefinition)
+        groupData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
+      }
+    }
   } 
 
   if (node.materials && node.materials.length) {
@@ -6947,6 +6974,15 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     } else if (node.dynamicMesh?.type === 'Wall') {
       containerData.dynamicMeshType = 'Wall'
       wallRenderer.syncWallContainer(container, node, DYNAMIC_MESH_SIGNATURE_KEY)
+    } else if (node.dynamicMesh?.type === 'Road') {
+      containerData.dynamicMeshType = 'Road'
+      const roadDefinition = node.dynamicMesh as RoadDynamicMesh
+      const roadGroup = createRoadGroup(roadDefinition)
+      roadGroup.removeFromParent()
+      roadGroup.userData.nodeId = node.id
+      roadGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeRoadDynamicMeshSignature(roadDefinition)
+      container.add(roadGroup)
+      containerData.roadGroup = roadGroup
     } else {
       const runtimeObject = getRuntimeObject(node.id)
       if (runtimeObject) {
