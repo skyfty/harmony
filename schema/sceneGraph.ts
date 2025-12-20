@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { AssetCacheEntry } from './assetCache';
-import { SceneMaterialFactory, MATERIAL_TEXTURE_SLOTS } from './material';
+import { SceneMaterialFactory, MATERIAL_TEXTURE_SLOTS, MATERIAL_CONFIG_ID_KEY } from './material';
 import type { SceneMaterialFactoryOptions } from './material';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import ResourceCache from './ResourceCache';
@@ -1140,16 +1140,38 @@ class SceneGraphBuilder {
 
     const group = createRoadRenderGroup(meshInfo, { bodyObject });
     group.name = node.name ?? (group.name || 'Road');
-    const materials = await this.resolveNodeMaterials(node);
-    const materialAssignment = this.pickMaterialAssignment(materials);
-    if (materialAssignment) {
-      group.traverse((child: THREE.Object3D) => {
-        const mesh = child as THREE.Mesh;
-        if ((mesh as any)?.isMesh) {
-          mesh.material = materialAssignment;
+
+    const nodeMaterialConfigs = Array.isArray(node.materials) ? (node.materials as SceneNodeMaterial[]) : [];
+    const resolvedMaterials = await this.resolveNodeMaterials(node);
+    const defaultMaterialAssignment = this.pickMaterialAssignment(resolvedMaterials);
+
+    if (defaultMaterialAssignment) {
+      const materialByConfigId = new Map<string, THREE.Material>();
+      nodeMaterialConfigs.forEach((config, index) => {
+        const configId = typeof config?.id === 'string' ? config.id.trim() : '';
+        const material = resolvedMaterials[index];
+        if (configId && material) {
+          materialByConfigId.set(configId, material);
         }
       });
+
+      group.traverse((child: THREE.Object3D) => {
+        const mesh = child as THREE.Mesh & { isMesh?: boolean };
+        if (!mesh?.isMesh) {
+          return;
+        }
+
+        const selectorRaw = mesh.userData?.[MATERIAL_CONFIG_ID_KEY] as unknown;
+        const selectorId = typeof selectorRaw === 'string' ? selectorRaw.trim() : '';
+        if (selectorId && materialByConfigId.has(selectorId)) {
+          mesh.material = materialByConfigId.get(selectorId)!;
+          return;
+        }
+
+        mesh.material = defaultMaterialAssignment;
+      });
     }
+
     this.applyTransform(group, node);
     this.applyVisibility(group, node);
     return group;
