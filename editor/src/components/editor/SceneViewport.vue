@@ -4832,7 +4832,7 @@ function handlePointerMove(event: PointerEvent) {
     if (!raycastGroundPoint(event, groundPointerHelper)) {
       return
     }
-    const snapped = snapVectorToMajorGrid(groundPointerHelper.clone())
+    const snapped = groundPointerHelper.clone()
     snapped.y = 0
 
     const local = state.containerObject.worldToLocal(new THREE.Vector3(snapped.x, 0, snapped.z))
@@ -4993,7 +4993,11 @@ function handlePointerUp(event: PointerEvent) {
 
     if (state.moved) {
       sceneStore.updateNodeDynamicMesh(state.nodeId, state.workingDefinition)
+      // Runtime road group sync happens via reactive scene graph reconciliation; rebuild handles after that.
       ensureRoadVertexHandlesForSelectedNode()
+      void nextTick(() => {
+        ensureRoadVertexHandlesForSelectedNode()
+      })
       event.preventDefault()
       event.stopPropagation()
       event.stopImmediatePropagation()
@@ -5694,9 +5698,8 @@ function updateRoadCursorPreview(event: PointerEvent) {
   }
 
   const rawPointer = groundPointerHelper.clone()
-  const snapped = snapVectorToMajorGrid(rawPointer.clone())
-  snapped.y = 0
-  const next = snapRoadPointToVertices(snapped, roadBuildSession.snapVertices)
+  rawPointer.y = 0
+  const next = snapRoadPointToVertices(rawPointer, roadBuildSession.snapVertices)
 
   const previous = roadBuildSession.previewEnd
   if (previous && previous.equals(next)) {
@@ -5718,8 +5721,7 @@ function handleRoadPlacementClick(event: PointerEvent): boolean {
     return false
   }
 
-  const rawPointer = groundPointerHelper.clone()
-  const snapped = snapVectorToMajorGrid(rawPointer.clone())
+  const snapped = groundPointerHelper.clone()
   snapped.y = 0
 
   const session = ensureRoadBuildSession()
@@ -5828,6 +5830,10 @@ function finalizeRoadBuildSession() {
   // Keep editing: select the newly created road so vertex handles show immediately.
   if (created?.dynamicMesh?.type === 'Road') {
     sceneStore.selectNode(created.id)
+    ensureRoadVertexHandlesForSelectedNode()
+    void nextTick(() => {
+      ensureRoadVertexHandlesForSelectedNode()
+    })
   }
 
   clearRoadBuildSession()
@@ -6778,6 +6784,14 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
       if (groupData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
         updateRoadGroup(roadGroup, roadDefinition)
         groupData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
+      }
+    }
+
+    // Keep road vertex handles stable through dynamic mesh updates.
+    if (activeBuildTool.value === 'road') {
+      const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+      if (selectedId === node.id) {
+        ensureRoadVertexHandlesForSelectedNode()
       }
     }
   } 
