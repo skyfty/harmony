@@ -4083,10 +4083,6 @@ onBeforeUnmount(() => {
                       {{ layer.name }}
                     </template>
                   </div>
-                  <div class="layer-meta">
-                    <span>Areas {{ layerFeatureTotals.find((item) => item.id === layer.id)?.polygons ?? 0 }}</span>
-                    <span>Lines {{ layerFeatureTotals.find((item) => item.id === layer.id)?.lines ?? 0 }}</span>
-                  </div>
                 </div>
                 <template #append>
                   <v-btn
@@ -4218,7 +4214,7 @@ onBeforeUnmount(() => {
             @pointerdown="handleEditorPointerDown"
             @dblclick="handleEditorDoubleClick"
             @wheel.prevent="handleWheel"
-            @contextmenu="handleEditorContextMenu"
+            @contextmenu.prevent="handleEditorContextMenu"
           >
             <div class="canvas-viewport">
               <div class="canvas-stage" :style="stageStyle">
