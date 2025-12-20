@@ -1402,6 +1402,34 @@ function getPolylineStrokeWidth(layerId: string, isSelected = false) {
   return isSelected ? base * selectedScale : base
 }
 
+function getPolylineVisibleStrokeWidthWorld(layerId: string, isSelected = false) {
+  const width = getPolylineStrokeWidth(layerId, isSelected)
+  const vectorEffect = getPolylineVectorEffect(layerId)
+  if (vectorEffect === 'non-scaling-stroke') {
+    // When non-scaling-stroke is used, the stroke thickness stays constant in screen space.
+    // Convert that thickness to world units for hit-testing.
+    return width / Math.max(1e-6, renderScale.value)
+  }
+  return width
+}
+
+function isClickOnVisiblePolylineSegment(
+  line: PlanningPolyline,
+  segmentIndex: number,
+  world: PlanningPoint,
+  isSelected = false,
+) {
+  const segments = getLineSegments(line)
+  const segment = segments[segmentIndex]
+  if (!segment) {
+    return false
+  }
+  const strokeWidthWorld = getPolylineVisibleStrokeWidthWorld(line.layerId, isSelected)
+  const half = Math.max(0.0001, strokeWidthWorld / 2)
+  const distSq = distancePointToSegmentSquared(world, segment.start, segment.end)
+  return distSq <= half * half
+}
+
 function getPolylineVectorEffect(layerId: string) {
   // Road width should represent world meters, so it should scale with zoom.
   // Walls/others keep constant screen width for readability.
@@ -3026,11 +3054,21 @@ function handleLineSegmentPointerDown(lineId: string, segmentIndex: number, even
     return
   }
   const world = screenToWorld(event)
-  const picked = pickTopmostActivePolyline(world)
-  const line = picked?.line ?? polylines.value.find((item) => item.id === lineId)
+  const line = polylines.value.find((item) => item.id === lineId)
   if (!line || !isActiveLayer(line.layerId)) {
     return
   }
+
+  const isCurrentlySelected =
+    (selectedFeature.value?.type === 'polyline' && selectedFeature.value.id === line.id)
+    || (selectedFeature.value?.type === 'segment' && selectedFeature.value.lineId === line.id)
+
+  // Only allow splitting when the click is actually on the visible stroke.
+  // This prevents adding vertices when clicking near (but not on) a segment.
+  if (!isClickOnVisiblePolylineSegment(line, segmentIndex, world, isCurrentlySelected)) {
+    return
+  }
+
   const effectiveTool = currentTool.value === 'rectangle' || currentTool.value === 'lasso' || currentTool.value === 'line' ? 'select' : currentTool.value
   event.stopPropagation()
   event.preventDefault()
@@ -3045,8 +3083,7 @@ function handleLineSegmentPointerDown(lineId: string, segmentIndex: number, even
     return
   }
   const skipSplit = event.ctrlKey || event.metaKey
-  const targetSegmentIndex = picked?.segmentIndex ?? segmentIndex
-  splitSegmentAt(line.id, targetSegmentIndex, world, skipSplit)
+  splitSegmentAt(line.id, segmentIndex, world, skipSplit)
 }
 
 function splitSegmentAt(lineId: string, segmentIndex: number, point: PlanningPoint, skipSplit = false) {
@@ -3982,7 +4019,12 @@ onBeforeUnmount(() => {
                       :x2="seg.end.x"
                       :y2="seg.end.y"
                       stroke="transparent"
-                      stroke-width="14"
+                      :vector-effect="getPolylineVectorEffect(line.layerId)"
+                      :stroke-width="getPolylineStrokeWidth(
+                        line.layerId,
+                        (selectedFeature?.type === 'polyline' && selectedFeature.id === line.id)
+                          || (selectedFeature?.type === 'segment' && selectedFeature.lineId === line.id),
+                      )"
                       stroke-linecap="round"
                       @pointerdown="handleLineSegmentPointerDown(line.id, segIndex, $event as PointerEvent)"
                     />
@@ -4005,7 +4047,7 @@ onBeforeUnmount(() => {
                       class="line-endpoint-hit"
                       :cx="line.points[0]!.x"
                       :cy="line.points[0]!.y"
-                      r="10"
+                      r="6"
                       fill="transparent"
                       @pointerdown="handleLineVertexPointerDown(line.id, 0, $event as PointerEvent)"
                     />
@@ -4014,7 +4056,7 @@ onBeforeUnmount(() => {
                       class="line-endpoint-hit"
                       :cx="line.points[line.points.length - 1]!.x"
                       :cy="line.points[line.points.length - 1]!.y"
-                      r="10"
+                      r="6"
                       fill="transparent"
                       @pointerdown="handleLineVertexPointerDown(line.id, line.points.length - 1, $event as PointerEvent)"
                     />
@@ -4088,10 +4130,11 @@ onBeforeUnmount(() => {
                       class="vertex-handle"
                       :cx="p.x"
                       :cy="p.y"
-                      r="1"
+                      r="0.75"
                       :fill="getLayerColor(selectedPolygon.layerId, 0.95)"
                       stroke="rgba(255,255,255,0.9)"
-                      stroke-width="1"
+                      stroke-width="0.6"
+                      pointer-events="visibleFill"
                       @pointerdown="handlePolygonVertexPointerDown(selectedPolygon.id, idx, $event as PointerEvent)"
                     />
                   </g>
@@ -4104,10 +4147,11 @@ onBeforeUnmount(() => {
                       class="vertex-handle"
                       :cx="p.x"
                       :cy="p.y"
-                      r="1"
+                      r="0.75"
                       :fill="getLayerColor(selectedPolyline.layerId, 0.95)"
                       stroke="rgba(255,255,255,0.9)"
-                      stroke-width="1"
+                      stroke-width="0.6"
+                      pointer-events="visibleFill"
                       @pointerdown="handleLineVertexPointerDown(selectedPolyline.id, idx, $event as PointerEvent)"
                     />
                   </g>
@@ -4928,6 +4972,7 @@ onBeforeUnmount(() => {
 
 .vertex-handle {
   cursor: grab;
+  pointer-events: visibleFill;
 }
 
 .align-marker {
