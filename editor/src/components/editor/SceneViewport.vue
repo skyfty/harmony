@@ -1401,7 +1401,8 @@ type RoadVertexDragState = {
   startX: number
   startY: number
   moved: boolean
-  runtimeObject: THREE.Object3D
+  containerObject: THREE.Object3D
+  roadGroup: THREE.Object3D
   baseDefinition: RoadDynamicMesh
   workingDefinition: RoadDynamicMesh
 }
@@ -1451,6 +1452,7 @@ function createRoadVertexHandleMaterial(): THREE.MeshBasicMaterial {
     opacity: 0.9,
     side: THREE.DoubleSide,
     depthWrite: false,
+    depthTest: false,
   })
   material.polygonOffset = true
   material.polygonOffsetFactor = -2
@@ -4629,6 +4631,14 @@ async function handlePointerDown(event: PointerEvent) {
         const node = findSceneNode(sceneStore.nodes, handleHit.nodeId)
         const runtime = objectMap.get(handleHit.nodeId) ?? null
         if (node?.dynamicMesh?.type === 'Road' && runtime) {
+          const roadGroupCandidate = (runtime.userData?.roadGroup as THREE.Object3D | undefined) ?? runtime.getObjectByName('RoadGroup') ?? null
+          if (!roadGroupCandidate) {
+            pointerTrackingState = null
+            event.preventDefault()
+            event.stopPropagation()
+            event.stopImmediatePropagation()
+            return
+          }
           roadVertexDragState = {
             pointerId: event.pointerId,
             nodeId: handleHit.nodeId,
@@ -4636,7 +4646,8 @@ async function handlePointerDown(event: PointerEvent) {
             startX: event.clientX,
             startY: event.clientY,
             moved: false,
-            runtimeObject: runtime,
+            containerObject: runtime,
+            roadGroup: roadGroupCandidate,
             baseDefinition: node.dynamicMesh,
             workingDefinition: JSON.parse(JSON.stringify(node.dynamicMesh)) as RoadDynamicMesh,
           }
@@ -4824,7 +4835,7 @@ function handlePointerMove(event: PointerEvent) {
     const snapped = snapVectorToMajorGrid(groundPointerHelper.clone())
     snapped.y = 0
 
-    const local = state.runtimeObject.worldToLocal(new THREE.Vector3(snapped.x, 0, snapped.z))
+    const local = state.containerObject.worldToLocal(new THREE.Vector3(snapped.x, 0, snapped.z))
     const working = state.workingDefinition
     const vertices = Array.isArray(working.vertices) ? working.vertices : []
     if (!vertices[state.vertexIndex]) {
@@ -4833,10 +4844,10 @@ function handlePointerMove(event: PointerEvent) {
     vertices[state.vertexIndex] = [local.x, local.z]
     working.vertices = vertices
 
-    updateRoadGroup(state.runtimeObject, working)
+    updateRoadGroup(state.roadGroup, working)
 
     // Update handle mesh position if present.
-    const handles = state.runtimeObject.getObjectByName('__RoadVertexHandles') as THREE.Group | null
+    const handles = state.containerObject.getObjectByName('__RoadVertexHandles') as THREE.Group | null
     if (handles?.isGroup) {
       const mesh = handles.children.find((child) => child?.userData?.roadVertexIndex === state.vertexIndex) as THREE.Object3D | undefined
       if (mesh) {
@@ -5809,10 +5820,15 @@ function finalizeRoadBuildSession() {
     }
   }
 
-  sceneStore.createRoadNode({
+  const created = sceneStore.createRoadNode({
     points: committed.map((p) => ({ x: p.x, y: 0, z: p.z })),
     width: session.width,
   })
+
+  // Keep editing: select the newly created road so vertex handles show immediately.
+  if (created?.dynamicMesh?.type === 'Road') {
+    sceneStore.selectNode(created.id)
+  }
 
   clearRoadBuildSession()
 }
