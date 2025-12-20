@@ -1595,7 +1595,7 @@ function getPolylineVectorEffect(layerId: string) {
 
 function canEditPolylineGeometry(layerId: string): boolean {
   const kind = getLayerKind(layerId)
-  if (kind !== 'road') {
+  if (kind !== 'road' && kind !== 'wall') {
     return true
   }
   return currentTool.value === 'line'
@@ -1692,11 +1692,13 @@ function getFeatureLayerId(feature: SelectedFeature | null): string | null {
 function ensureSelectionWithinActiveLayer() {
   const feature = selectedFeature.value
   if (!feature) {
+    selectedVertex.value = null
     return
   }
   const layerId = getFeatureLayerId(feature)
   if (!layerId || !isActiveLayer(layerId)) {
     selectedFeature.value = null
+    selectedVertex.value = null
   }
 }
 
@@ -3012,7 +3014,9 @@ function handlePointerUp(event: PointerEvent) {
     lineVertexClickState.value.pointerId === event.pointerId &&
     !lineVertexClickState.value.moved
   ) {
-    startLineContinuation(lineVertexClickState.value.lineId, lineVertexClickState.value.vertexIndex)
+    if (currentTool.value === 'line') {
+      startLineContinuation(lineVertexClickState.value.lineId, lineVertexClickState.value.vertexIndex)
+    }
   }
   lineVertexClickState.value = null
 
@@ -3305,6 +3309,9 @@ function splitSegmentAt(lineId: string, segmentIndex: number, point: PlanningPoi
 }
 
 function startLineContinuation(lineId: string, vertexIndex: number) {
+  if (currentTool.value !== 'line') {
+    return
+  }
   const line = polylines.value.find((item) => item.id === lineId)
   if (!line) {
     return
@@ -3316,7 +3323,6 @@ function startLineContinuation(lineId: string, vertexIndex: number) {
   if (!point) {
     return
   }
-  currentTool.value = 'line'
   activeLayerId.value = line.layerId
   lineDraft.value = {
     layerId: line.layerId,
