@@ -47,6 +47,7 @@ interface PlanningLayer {
 }
 
 interface PlanningPoint {
+  id?: string
   x: number
   y: number
 }
@@ -108,6 +109,10 @@ type SelectedFeature =
   | { type: 'segment'; lineId: string; segmentIndex: number }
   | null
 
+type SelectedVertex =
+  | { feature: 'polygon' | 'polyline'; targetId: string; vertexIndex: number }
+  | null
+
 type DragState =
   | { type: 'idle' }
   | { type: 'rectangle'; pointerId: number; start: PlanningPoint; current: PlanningPoint; layerId: string }
@@ -166,6 +171,7 @@ const polylines = ref<PlanningPolyline[]>([])
 const polygonCounter = ref(1)
 const lineCounter = ref(1)
 const selectedFeature = ref<SelectedFeature>(null)
+const selectedVertex = ref<SelectedVertex>(null)
 const selectedName = ref('')
 const polygonDraftPoints = ref<PlanningPoint[]>([])
 const polygonDraftHoverPoint = ref<PlanningPoint | null>(null)
@@ -648,7 +654,7 @@ function buildPlanningSnapshot() {
       id: line.id,
       name: line.name,
       layerId: line.layerId,
-      points: line.points.map((p) => ({ x: p.x, y: p.y })),
+      points: line.points.map((p) => ({ id: p.id, x: p.x, y: p.y })),
       scatter: line.scatter
         ? {
           providerAssetId: line.scatter.providerAssetId,
@@ -949,14 +955,39 @@ function loadPlanningFromScene() {
     }))
     : []
 
+  const polylinePointPool = new Map<string, PlanningPoint>()
+
   polylines.value = Array.isArray(data.polylines)
-    ? data.polylines.map((line) => ({
-      id: line.id,
-      name: line.name,
-      layerId: line.layerId,
-      points: line.points.map((p) => ({ x: p.x, y: p.y })),
-      scatter: normalizeScatterAssignment((line as Record<string, unknown>).scatter),
-    }))
+    ? data.polylines.map((line) => {
+      const points = Array.isArray(line.points)
+        ? line.points.map((raw) => {
+          const x = Number((raw as any).x)
+          const y = Number((raw as any).y)
+          const id = typeof (raw as any).id === 'string' ? String((raw as any).id) : createId('v')
+          const pooled = polylinePointPool.get(id)
+          if (pooled) {
+            if (Number.isFinite(x)) pooled.x = x
+            if (Number.isFinite(y)) pooled.y = y
+            return pooled
+          }
+          const p: PlanningPoint = {
+            id,
+            x: Number.isFinite(x) ? x : 0,
+            y: Number.isFinite(y) ? y : 0,
+          }
+          polylinePointPool.set(id, p)
+          return p
+        })
+        : []
+
+      return {
+        id: line.id,
+        name: line.name,
+        layerId: line.layerId,
+        points,
+        scatter: normalizeScatterAssignment((line as Record<string, unknown>).scatter),
+      }
+    })
     : []
 
   planningImages.value = Array.isArray(data.images)
@@ -1386,6 +1417,74 @@ function canEditPolylineGeometry(layerId: string): boolean {
   return currentTool.value === 'line'
 }
 
+const activeVertexHighlight = computed(() => {
+  const state = dragState.value
+  if (state.type === 'drag-vertex') {
+    if (state.feature === 'polygon') {
+      const polygon = polygons.value.find((item) => item.id === state.targetId)
+      const point = polygon?.points[state.vertexIndex]
+      if (polygon && point) {
+        return { x: point.x, y: point.y, layerId: polygon.layerId, r: 2.2 }
+      }
+      return null
+    }
+    const line = polylines.value.find((item) => item.id === state.targetId)
+    const point = line?.points[state.vertexIndex]
+    if (line && point) {
+      return { x: point.x, y: point.y, layerId: line.layerId, r: 2.2 }
+    }
+    return null
+  }
+
+  if (state.type === 'rectangle') {
+    return { x: state.current.x, y: state.current.y, layerId: state.layerId, r: 2.2 }
+  }
+
+  if (currentTool.value === 'lasso' && polygonDraftPoints.value.length) {
+    const point = polygonDraftPoints.value[polygonDraftPoints.value.length - 1]
+    if (!point) return null
+    return { x: point.x, y: point.y, layerId: activeLayerId.value, r: 2.2 }
+  }
+
+  if (currentTool.value === 'line' && lineDraft.value?.points.length) {
+    const draft = lineDraft.value
+    const point = draft.points[draft.points.length - 1]
+    if (!point) return null
+    return { x: point.x, y: point.y, layerId: draft.layerId, r: 2.2 }
+  }
+
+  return null
+})
+
+const selectedVertexHighlight = computed(() => {
+  // While drawing, the "selected" vertex should follow the last draft point.
+  if (currentTool.value === 'line' && lineDraft.value?.points.length) {
+    const draft = lineDraft.value
+    const point = draft.points[draft.points.length - 1]
+    if (!point) return null
+    return { x: point.x, y: point.y, layerId: draft.layerId, r: 2.0 }
+  }
+
+  const selection = selectedVertex.value
+  if (!selection) {
+    return null
+  }
+  if (selection.feature === 'polygon') {
+    const polygon = polygons.value.find((item) => item.id === selection.targetId)
+    const point = polygon?.points[selection.vertexIndex]
+    if (polygon && point) {
+      return { x: point.x, y: point.y, layerId: polygon.layerId, r: 2.0 }
+    }
+    return null
+  }
+  const line = polylines.value.find((item) => item.id === selection.targetId)
+  const point = line?.points[selection.vertexIndex]
+  if (line && point) {
+    return { x: point.x, y: point.y, layerId: line.layerId, r: 2.0 }
+  }
+  return null
+})
+
 function isActiveLayer(layerId: string | null | undefined) {
   return !!layerId && layerId === activeLayerId.value
 }
@@ -1589,6 +1688,14 @@ function handleLayerItemDragEnd() {
 
 function clonePoint(point: PlanningPoint): PlanningPoint {
   return { x: Number(point.x.toFixed(2)), y: Number(point.y.toFixed(2)) }
+}
+
+function createVertexPoint(point: PlanningPoint): PlanningPoint {
+  return {
+    id: createId('v'),
+    x: Number(point.x.toFixed(2)),
+    y: Number(point.y.toFixed(2)),
+  }
 }
 
 function getImageRect(image: PlanningImage) {
@@ -2027,16 +2134,39 @@ function startLineDraft(point: PlanningPoint) {
   if (!canUseLineTool.value) {
     return
   }
+
+  // Branching: when a polyline vertex is selected, clicking elsewhere adds a new vertex
+  // and connects it to the selected vertex with a new segment (new polyline).
+  if (!lineDraft.value && selectedVertex.value?.feature === 'polyline') {
+    const sourceLine = polylines.value.find((item) => item.id === selectedVertex.value?.targetId)
+    const sourcePoint = sourceLine?.points[selectedVertex.value.vertexIndex]
+    if (sourceLine && sourcePoint) {
+      const newPoint = createVertexPoint(point)
+      const newLine: PlanningPolyline = {
+        id: createId('line'),
+        name: `${getLayerName(sourceLine.layerId)} 线段 ${lineCounter.value++}`,
+        layerId: sourceLine.layerId,
+        points: [sourcePoint, newPoint],
+      }
+      polylines.value = [...polylines.value, newLine]
+      activeLayerId.value = sourceLine.layerId
+      selectFeature({ type: 'polyline', id: newLine.id })
+      selectedVertex.value = { feature: 'polyline', targetId: newLine.id, vertexIndex: 1 }
+      markPlanningDirty()
+      return
+    }
+  }
+
   if (!lineDraft.value) {
     lineDraft.value = {
       layerId: activeLayer.value?.id ?? layers.value[0]?.id ?? 'terrain-layer',
-      points: [point],
+      points: [createVertexPoint(point)],
     }
     return
   }
   lineDraft.value = {
     ...lineDraft.value,
-    points: [...lineDraft.value.points, point],
+    points: [...lineDraft.value.points, createVertexPoint(point)],
   }
 }
 
@@ -2050,7 +2180,7 @@ function finalizeLineDraft() {
   if (draft.continuation) {
     const line = polylines.value.find((item) => item.id === draft.continuation?.lineId)
     if (line) {
-      const newPoints = clonePoints(draft.points.slice(1))
+      const newPoints = draft.points.slice(1)
       if (newPoints.length) {
         if (draft.continuation.direction === 'append') {
           line.points.push(...newPoints)
@@ -2070,7 +2200,7 @@ function finalizeLineDraft() {
     id: createId('line'),
     name: `${getLayerName(draft.layerId)} 线段 ${lineCounter.value++}`,
     layerId: draft.layerId,
-    points: clonePoints(draft.points),
+    points: draft.points,
   }
   polylines.value = [...polylines.value, newLine]
   selectFeature({ type: 'polyline', id: newLine.id })
@@ -2117,14 +2247,34 @@ const lineDraftPreviewVectorEffect = computed(() => {
 function selectFeature(feature: SelectedFeature) {
   if (!feature) {
     selectedFeature.value = null
+    selectedVertex.value = null
     return
   }
   const layerId = getFeatureLayerId(feature)
   if (!layerId || !isActiveLayer(layerId)) {
     selectedFeature.value = null
+    selectedVertex.value = null
     return
   }
   selectedFeature.value = feature
+
+  if (!selectedVertex.value) {
+    return
+  }
+  const keepSelectedVertex =
+    (feature.type === 'polygon'
+      && selectedVertex.value.feature === 'polygon'
+      && selectedVertex.value.targetId === feature.id)
+    || (feature.type === 'polyline'
+      && selectedVertex.value.feature === 'polyline'
+      && selectedVertex.value.targetId === feature.id)
+    || (feature.type === 'segment'
+      && selectedVertex.value.feature === 'polyline'
+      && selectedVertex.value.targetId === feature.lineId)
+
+  if (!keepSelectedVertex) {
+    selectedVertex.value = null
+  }
 }
 
 function deleteSelectedFeature() {
@@ -2135,6 +2285,7 @@ function deleteSelectedFeature() {
   if (feature.type === 'polygon') {
     polygons.value = polygons.value.filter((item) => item.id !== feature.id)
     selectedFeature.value = null
+    selectedVertex.value = null
     markPlanningDirty()
     return
   }
@@ -2156,6 +2307,7 @@ function deleteSelectedFeature() {
   if (feature.type === 'polyline') {
     polylines.value = polylines.value.filter((item) => item.id !== feature.id)
     selectedFeature.value = null
+    selectedVertex.value = null
     markPlanningDirty()
     return
   }
@@ -2167,12 +2319,14 @@ function deleteSelectedFeature() {
   if (line.points.length <= 2) {
     polylines.value = polylines.value.filter((item) => item.id !== feature.lineId)
     selectedFeature.value = null
+    selectedVertex.value = null
     markPlanningDirty()
     return
   }
   const removeIndex = Math.min(feature.segmentIndex + 1, line.points.length - 1)
   line.points.splice(removeIndex, 1)
   selectedFeature.value = null
+  selectedVertex.value = null
   markPlanningDirty()
 }
 
@@ -2489,10 +2643,13 @@ function handlePointerMove(event: PointerEvent) {
     const dy = world.y - state.anchor.y
     const line = polylines.value.find((item) => item.id === state.lineId)
     if (line) {
-      line.points = state.startPoints.map((point) => ({
-        x: point.x + dx,
-        y: point.y + dy,
-      }))
+      for (let i = 0; i < line.points.length; i += 1) {
+        const start = state.startPoints[i]
+        const target = line.points[i]
+        if (!start || !target) continue
+        target.x = start.x + dx
+        target.y = start.y + dy
+      }
     }
     return
   }
@@ -2500,13 +2657,17 @@ function handlePointerMove(event: PointerEvent) {
     const world = screenToWorld(event)
     if (state.feature === 'polygon') {
       const polygon = polygons.value.find((item) => item.id === state.targetId)
-      if (polygon?.points[state.vertexIndex]) {
-        polygon.points[state.vertexIndex] = clonePoint(world)
+      const target = polygon?.points[state.vertexIndex]
+      if (target) {
+        target.x = world.x
+        target.y = world.y
       }
     } else {
       const line = polylines.value.find((item) => item.id === state.targetId)
-      if (line?.points[state.vertexIndex]) {
-        line.points[state.vertexIndex] = clonePoint(world)
+      const target = line?.points[state.vertexIndex]
+      if (target) {
+        target.x = world.x
+        target.y = world.y
       }
       if (
         lineVertexClickState.value &&
@@ -2772,6 +2933,7 @@ function handlePolygonVertexPointerDown(polygonId: string, vertexIndex: number, 
   event.stopPropagation()
   event.preventDefault()
   selectFeature({ type: 'polygon', id: polygonId })
+  selectedVertex.value = { feature: 'polygon', targetId: polygonId, vertexIndex }
   if (effectiveTool !== 'select') {
     return
   }
@@ -2833,6 +2995,7 @@ function handleLineVertexPointerDown(lineId: string, vertexIndex: number, event:
   event.stopPropagation()
   event.preventDefault()
   selectFeature({ type: 'polyline', id: lineId })
+  selectedVertex.value = { feature: 'polyline', targetId: lineId, vertexIndex }
   if (!canEditPolylineGeometry(line.layerId)) {
     return
   }
@@ -2898,7 +3061,7 @@ function splitSegmentAt(lineId: string, segmentIndex: number, point: PlanningPoi
   if (segmentIndex < 0 || segmentIndex >= line.points.length - 1) {
     return
   }
-  line.points.splice(segmentIndex + 1, 0, clonePoint(point))
+  line.points.splice(segmentIndex + 1, 0, createVertexPoint(point))
   selectFeature({ type: 'segment', lineId, segmentIndex })
   markPlanningDirty()
 }
@@ -2919,7 +3082,7 @@ function startLineContinuation(lineId: string, vertexIndex: number) {
   activeLayerId.value = line.layerId
   lineDraft.value = {
     layerId: line.layerId,
-    points: [clonePoint(point)],
+    points: [point],
     continuation: {
       lineId,
       anchorIndex: vertexIndex,
@@ -3732,6 +3895,16 @@ onBeforeUnmount(() => {
                   :height="effectiveCanvasSize.height"
                   :viewBox="`0 0 ${effectiveCanvasSize.width} ${effectiveCanvasSize.height}`"
                 >
+                  <defs>
+                    <filter id="vertex-glow" x="-60%" y="-60%" width="220%" height="220%">
+                      <feGaussianBlur in="SourceGraphic" stdDeviation="1.25" result="blur" />
+                      <feMerge>
+                        <feMergeNode in="blur" />
+                        <feMergeNode in="SourceGraphic" />
+                      </feMerge>
+                    </filter>
+                  </defs>
+
                   <!-- 已绘制多边形区域 -->
                   <g v-for="poly in visiblePolygons" :key="poly.id">
                     <path
@@ -3877,6 +4050,34 @@ onBeforeUnmount(() => {
                     :stroke-dasharray="lineDraftPreviewDasharray"
                     :vector-effect="lineDraftPreviewVectorEffect"
                     fill="none"
+                  />
+
+                  <!-- 顶点/当前操作点荧光高亮 -->
+                  <circle
+                    v-if="activeVertexHighlight"
+                    class="vertex-highlight"
+                    :cx="activeVertexHighlight.x"
+                    :cy="activeVertexHighlight.y"
+                    :r="activeVertexHighlight.r"
+                    fill="none"
+                    :stroke="getLayerColor(activeVertexHighlight.layerId, 0.95)"
+                    stroke-width="0.45"
+                    filter="url(#vertex-glow)"
+                    pointer-events="none"
+                  />
+
+                  <!-- 选中顶点荧光高亮 -->
+                  <circle
+                    v-if="selectedVertexHighlight"
+                    class="vertex-highlight vertex-highlight--selected"
+                    :cx="selectedVertexHighlight.x"
+                    :cy="selectedVertexHighlight.y"
+                    :r="selectedVertexHighlight.r"
+                    fill="none"
+                    :stroke="getLayerColor(selectedVertexHighlight.layerId, 0.85)"
+                    stroke-width="0.35"
+                    filter="url(#vertex-glow)"
+                    pointer-events="none"
                   />
 
                   <!-- 选中多边形顶点 -->
@@ -4718,6 +4919,10 @@ onBeforeUnmount(() => {
 .planning-rectangle-preview,
 .planning-polygon-draft,
 .planning-line-draft {
+  pointer-events: none;
+}
+
+.vertex-highlight {
   pointer-events: none;
 }
 

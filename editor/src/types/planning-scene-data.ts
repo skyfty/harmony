@@ -1,4 +1,6 @@
 export interface PlanningPoint {
+  /** Optional stable vertex id; used to reconstruct shared vertices across polylines. */
+  id?: string
   x: number
   y: number
 }
