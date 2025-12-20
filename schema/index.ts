@@ -848,12 +848,6 @@ export interface RoadDynamicMesh {
 
   /** Connections between vertices. Supports branching roads. */
   segments: RoadSegment[]
-
-  /**
-   * Legacy polyline representation.
-   * When present, consumers should treat it as a single chain in order.
-   */
-  points?: RoadVertex2D[]
 }
 
 export type SceneDynamicMesh = GroundDynamicMesh | WallDynamicMesh | RoadDynamicMesh

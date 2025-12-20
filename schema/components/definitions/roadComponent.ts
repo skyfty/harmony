@@ -81,9 +81,7 @@ export function resolveRoadComponentPropsFromMesh(mesh: RoadDynamicMesh | undefi
     }
   }
 
-  const vertices = Array.isArray(mesh.vertices) && mesh.vertices.length
-    ? mesh.vertices
-    : (Array.isArray(mesh.points) ? mesh.points : [])
+  const vertices = Array.isArray(mesh.vertices) ? mesh.vertices : []
   const segments = Array.isArray(mesh.segments) && mesh.segments.length
     ? mesh.segments
     : (vertices.length >= 2

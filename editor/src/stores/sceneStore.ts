@@ -1341,8 +1341,6 @@ function buildRoadDynamicMeshFromWorldPoints(
     width: normalizedWidth,
     vertices,
     segments,
-    // Keep legacy points for export/backward compatibility.
-    points: vertices,
   }
 
   return { center, definition }
@@ -1687,7 +1685,11 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
         .map(normalizePoint2D)
         .filter((p): p is [number, number] => !!p)
 
-      const legacyPoints = (Array.isArray(roadMesh.points) ? roadMesh.points : [])
+      // One-time migration for older saved scenes: legacy `points` -> `vertices`.
+      const legacyPointsRaw = Array.isArray((roadMesh as any).points)
+        ? ((roadMesh as any).points as unknown[])
+        : ([] as unknown[])
+      const legacyPoints = legacyPointsRaw
         .map(normalizePoint2D)
         .filter((p): p is [number, number] => !!p)
 
@@ -1724,8 +1726,6 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
         width: Number.isFinite(roadMesh.width) ? Math.max(ROAD_MIN_WIDTH, roadMesh.width) : ROAD_DEFAULT_WIDTH,
         vertices: effectiveVertices,
         segments: effectiveSegments,
-        // Keep legacy points for export/backward compatibility.
-        points: effectiveVertices,
       }
     }
     default:

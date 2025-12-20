@@ -483,7 +483,8 @@ function computeGroundDynamicMeshSignature(definition: GroundDynamicMesh): strin
 
 function computeRoadDynamicMeshSignature(definition: RoadDynamicMesh): string {
   const serialized = stableSerialize([
-    Array.isArray(definition.points) ? definition.points : [],
+    Array.isArray(definition.vertices) ? definition.vertices : [],
+    Array.isArray(definition.segments) ? definition.segments : [],
     Number.isFinite(definition.width) ? definition.width : null,
   ])
   return hashString(serialized)
@@ -5284,7 +5285,7 @@ function collectRoadSnapVertices(): THREE.Vector3[] {
       if (node.dynamicMesh?.type === 'Road') {
         const originX = node.position?.x ?? 0
         const originZ = node.position?.z ?? 0
-        const points = Array.isArray(node.dynamicMesh.points) ? node.dynamicMesh.points : []
+        const points = Array.isArray(node.dynamicMesh.vertices) ? node.dynamicMesh.vertices : []
         points.forEach((p) => {
           if (!Array.isArray(p) || p.length < 2) {
             return

@@ -153,8 +153,6 @@ function buildRoadPreviewDefinition(points: THREE.Vector3[], previewEnd: THREE.V
     width: normalizedWidth,
     vertices,
     segments,
-    // Keep legacy points for export/backward compatibility.
-    points: vertices,
   }
 
   return { center, definition }
