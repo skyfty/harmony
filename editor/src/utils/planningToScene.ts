@@ -49,6 +49,7 @@ export type ConvertPlanningToSceneOptions = {
     moveNode: (payload: { nodeId: string; targetId: string | null; position: 'before' | 'after' | 'inside' }) => boolean
     removeSceneNodes: (ids: string[]) => void
     updateNodeDynamicMesh: (nodeId: string, dynamicMesh: any) => void
+    setNodeLocked: (nodeId: string, locked: boolean) => void
     refreshRuntimeState: (options?: { showOverlay?: boolean; refreshViewport?: boolean; skipComponentSync?: boolean }) => Promise<void>
   }
   planningData: PlanningSceneData
@@ -1016,6 +1017,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           })
           if (wall) {
             sceneStore.moveNode({ nodeId: wall.id, targetId: root.id, position: 'inside' })
+            sceneStore.setNodeLocked(wall.id, true)
           }
         }
         updateProgressForUnit(`Converting wall: ${line.name?.trim() || line.id}`)
@@ -1034,6 +1036,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           })
           if (wall) {
             sceneStore.moveNode({ nodeId: wall.id, targetId: root.id, position: 'inside' })
+            sceneStore.setNodeLocked(wall.id, true)
           }
         }
         updateProgressForUnit(`Converting wall: ${poly.name?.trim() || poly.id}`)

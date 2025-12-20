@@ -615,6 +615,97 @@ const effectiveCanvasSize = computed(() => frozenCanvasSize.value ?? canvasSize.
 
 const renderScale = computed(() => viewTransform.scale * BASE_PIXELS_PER_METER)
 
+function computeFitViewScale(rect: Pick<DOMRect, 'width' | 'height'>, options?: { paddingPx?: number }): number {
+  const paddingPx = options?.paddingPx ?? 24
+  const availableW = Math.max(1, rect.width - paddingPx * 2)
+  const availableH = Math.max(1, rect.height - paddingPx * 2)
+
+  const canvasW = Math.max(1e-6, effectiveCanvasSize.value.width)
+  const canvasH = Math.max(1e-6, effectiveCanvasSize.value.height)
+
+  // Stage pixel size is (canvasSize * renderScale). renderScale = viewScale * BASE_PIXELS_PER_METER.
+  const fitRenderScale = Math.min(availableW / canvasW, availableH / canvasH)
+  const fitViewScale = fitRenderScale / BASE_PIXELS_PER_METER
+  if (!Number.isFinite(fitViewScale) || fitViewScale <= 0) {
+    return 1
+  }
+  return fitViewScale
+}
+
+function fitViewToCanvas(options?: { markDirty?: boolean }) {
+  const rect = editorRef.value?.getBoundingClientRect() ?? editorRect.value
+  if (!rect) {
+    return
+  }
+  const nextScale = computeFitViewScale(rect, { paddingPx: 24 })
+  viewTransform.scale = nextScale
+  viewTransform.offset.x = 0
+  viewTransform.offset.y = 0
+  if (options?.markDirty) {
+    markPlanningDirty()
+  }
+}
+
+function getFitScaleForViewport(rect: Pick<DOMRect, 'width' | 'height'>) {
+  const fitScale = computeFitViewScale(rect, { paddingPx: 24 })
+  return Number.isFinite(fitScale) && fitScale > 0 ? fitScale : 1
+}
+
+function applyZoomToView(options: { nextViewScale: number; rect: DOMRect; anchorClientX: number; anchorClientY: number }) {
+  const { nextViewScale, rect, anchorClientX, anchorClientY } = options
+  const previousViewScale = viewTransform.scale
+  if (!Number.isFinite(nextViewScale) || nextViewScale <= 0 || nextViewScale === previousViewScale) {
+    return
+  }
+
+  // Keep the world point under the anchor (mouse/canvas center) stable.
+  const previousRenderScale = previousViewScale * BASE_PIXELS_PER_METER
+  const centerBefore = computeStageCenterOffset(rect, previousRenderScale)
+  const sx = anchorClientX - rect.left
+  const sy = anchorClientY - rect.top
+  const worldX = (sx - centerBefore.x) / previousRenderScale - viewTransform.offset.x
+  const worldY = (sy - centerBefore.y) / previousRenderScale - viewTransform.offset.y
+
+  const nextRenderScale = nextViewScale * BASE_PIXELS_PER_METER
+  const nextCenter = computeStageCenterOffset(rect, nextRenderScale)
+  viewTransform.scale = nextViewScale
+  viewTransform.offset.x = (sx - nextCenter.x) / nextRenderScale - worldX
+  viewTransform.offset.y = (sy - nextCenter.y) / nextRenderScale - worldY
+}
+
+const zoomPercentModel = computed({
+  get: () => {
+    const rect = editorRect.value
+    const fitScale = rect ? getFitScaleForViewport(rect) : 1
+    const percent = (viewTransform.scale / Math.max(1e-6, fitScale)) * 100
+    if (!Number.isFinite(percent)) {
+      return 100
+    }
+    return Math.round(Math.min(400, Math.max(10, percent)))
+  },
+  set: (value: number) => {
+    if (!dialogOpen.value) {
+      return
+    }
+    const rect = editorRef.value?.getBoundingClientRect() ?? editorRect.value
+    if (!rect) {
+      return
+    }
+    const fitScale = getFitScaleForViewport(rect)
+    const nextPercent = Math.min(400, Math.max(10, Number(value)))
+    const nextViewScale = fitScale * (nextPercent / 100)
+
+    // Anchor zoom to viewport center when using the slider.
+    applyZoomToView({
+      nextViewScale,
+      rect,
+      anchorClientX: rect.left + rect.width / 2,
+      anchorClientY: rect.top + rect.height / 2,
+    })
+    markPlanningDirty()
+  },
+})
+
 let planningDirty = false
 function markPlanningDirty() {
   planningDirty = true
@@ -884,6 +975,8 @@ function loadPlanningFromScene() {
   const data = sceneStore.planningData
   resetPlanningState()
   if (!data) {
+    // When there's no saved planning data (or no saved transform), default to fitting the whole canvas.
+    void nextTick(() => fitViewToCanvas({ markDirty: false }))
     planningDirty = false
     return
   }
@@ -958,6 +1051,9 @@ function loadPlanningFromScene() {
     if (Number.isFinite(oy)) {
       viewTransform.offset.y = oy
     }
+  } else {
+    // Legacy/empty snapshots might not have a transform; ensure the full canvas is visible.
+    void nextTick(() => fitViewToCanvas({ markDirty: false }))
   }
 
   polygons.value = Array.isArray(data.polygons)
@@ -2922,26 +3018,17 @@ function handleWheel(event: WheelEvent) {
   }
   const delta = event.deltaY > 0 ? -0.1 : 0.1
   const previousViewScale = viewTransform.scale
-  const nextViewScale = Math.min(8, Math.max(0.1, previousViewScale + delta * previousViewScale))
+
+  const fitScale = getFitScaleForViewport(rect)
+  const minViewScale = fitScale * 0.1
+  const maxViewScale = fitScale * 4
+
+  const nextViewScale = Math.min(maxViewScale, Math.max(minViewScale, previousViewScale + delta * previousViewScale))
   if (nextViewScale === previousViewScale) {
     return
   }
 
-  // 以鼠标指针为中心缩放：保持“指针下的世界坐标点”在缩放前后不变。
-  const previousRenderScale = previousViewScale * BASE_PIXELS_PER_METER
-  const centerBefore = computeStageCenterOffset(rect, previousRenderScale)
-  const sx = event.clientX - rect.left
-  const sy = event.clientY - rect.top
-  const worldX = (sx - centerBefore.x) / previousRenderScale - viewTransform.offset.x
-  const worldY = (sy - centerBefore.y) / previousRenderScale - viewTransform.offset.y
-
-  // 预计算缩放后的居中偏移（使用 nextScale），保持指针所指世界坐标不变。
-  const nextRenderScale = nextViewScale * BASE_PIXELS_PER_METER
-  const nextCenter = computeStageCenterOffset(rect, nextRenderScale)
-
-  viewTransform.scale = nextViewScale
-  viewTransform.offset.x = (sx - nextCenter.x) / nextRenderScale - worldX
-  viewTransform.offset.y = (sy - nextCenter.y) / nextRenderScale - worldY
+  applyZoomToView({ nextViewScale, rect, anchorClientX: event.clientX, anchorClientY: event.clientY })
   markPlanningDirty()
 }
 
@@ -3322,9 +3409,7 @@ function loadPlanningImage(file: File) {
 }
 
 function handleResetView() {
-  viewTransform.scale = 1
-  viewTransform.offset = { x: 0, y: 0 }
-  markPlanningDirty()
+  fitViewToCanvas({ markDirty: true })
 }
 
 function handleImageLayerToggle(imageId: string) {
@@ -4010,6 +4095,35 @@ onBeforeUnmount(() => {
                 </template>
               </v-tooltip>
 
+            </div>
+
+            <div class="toolbar-right">
+              <div class="zoom-control">
+                <v-slider
+                  v-model="zoomPercentModel"
+                  min="10"
+                  max="400"
+                  step="1"
+                  density="compact"
+                  hide-details
+                  class="zoom-slider"
+                />
+                <div class="zoom-value">{{ zoomPercentModel }}%</div>
+              </div>
+
+              <v-tooltip text="重置视图" location="bottom">
+                <template #activator="{ props }">
+                  <v-btn
+                    v-bind="props"
+                    variant="tonal"
+                    density="comfortable"
+                    class="tool-button"
+                    @click="handleResetView"
+                  >
+                    <v-icon>mdi-fit-to-screen-outline</v-icon>
+                  </v-btn>
+                </template>
+              </v-tooltip>
             </div>
           </div>
 
@@ -4941,14 +5055,41 @@ onBeforeUnmount(() => {
   padding: 12px 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .tool-buttons {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  flex: 1 1 auto;
+}
+
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.zoom-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.zoom-slider {
+  width: 140px;
+}
+
+.zoom-value {
+  font-size: 0.85rem;
+  opacity: 0.75;
+  min-width: 44px;
+  text-align: right;
 }
 
 .tool-button {
