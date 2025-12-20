@@ -77,7 +77,11 @@ function applyRoadPreviewStyling(group: THREE.Group) {
         color?: { setHex?: (hex: number) => void }
         emissive?: { setHex?: (hex: number) => void }
         emissiveIntensity?: number
+        toneMapped?: boolean
+        needsUpdate?: boolean
       }
+
+      const ROAD_PREVIEW_COLOR = 0x8fd3ff
 
       if ('opacity' in material) {
         material.opacity = 0.75
@@ -85,10 +89,15 @@ function applyRoadPreviewStyling(group: THREE.Group) {
       }
 
       // Make the preview clearly visible against the ground.
-      material.color?.setHex?.(0x4dd0e1)
-      material.emissive?.setHex?.(0x4dd0e1)
+      material.color?.setHex?.(ROAD_PREVIEW_COLOR)
+      material.emissive?.setHex?.(ROAD_PREVIEW_COLOR)
       if (typeof material.emissiveIntensity === 'number') {
-        material.emissiveIntensity = 0.35
+        material.emissiveIntensity = 1
+      }
+
+      // Disable tone mapping so the highlight stays bright even without scene lights.
+      if (typeof material.toneMapped === 'boolean') {
+        material.toneMapped = false
       }
 
       // Reduce z-fighting / depth artifacts when close to the ground.
@@ -99,6 +108,10 @@ function applyRoadPreviewStyling(group: THREE.Group) {
         material.polygonOffset = true
         material.polygonOffsetFactor = -1
         material.polygonOffsetUnits = -1
+      }
+
+      if (typeof material.needsUpdate === 'boolean') {
+        material.needsUpdate = true
       }
     }
 
