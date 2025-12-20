@@ -35,13 +35,26 @@ const availableNodeMaterials = computed(() => {
 })
 
 const localMaterialId = ref<string | null>(null)
+const localWidth = ref<number>(2)
 const isSyncingFromScene = ref(false)
 
 watch(
   () => ({ mesh: roadDynamicMesh.value, segmentIndex: selectedSegmentIndex.value }),
   ({ mesh, segmentIndex }) => {
     isSyncingFromScene.value = true
-    if (!mesh || segmentIndex === null || segmentIndex < 0 || segmentIndex >= mesh.segments.length) {
+    if (!mesh) {
+      localWidth.value = 2
+      localMaterialId.value = null
+      nextTick(() => {
+        isSyncingFromScene.value = false
+      })
+      return
+    }
+
+    const width = Number((mesh as RoadDynamicMesh).width)
+    localWidth.value = Number.isFinite(width) ? Math.max(0.2, width) : 2
+
+    if (segmentIndex === null || segmentIndex < 0 || segmentIndex >= mesh.segments.length) {
       localMaterialId.value = null
       nextTick(() => {
         isSyncingFromScene.value = false
@@ -55,6 +68,32 @@ watch(
   },
   { immediate: true, deep: false },
 )
+
+function applyWidthUpdate(rawValue: unknown) {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const nodeId = selectedNodeId.value
+  const mesh = roadDynamicMesh.value
+  if (!nodeId || !mesh) {
+    return
+  }
+
+  const nextWidth = typeof rawValue === 'number' ? rawValue : Number(rawValue)
+  if (!Number.isFinite(nextWidth)) {
+    return
+  }
+
+  const clamped = Math.max(0.2, nextWidth)
+  const currentWidth = Number(mesh.width)
+  if (Number.isFinite(currentWidth) && Math.abs(currentWidth - clamped) < 1e-6) {
+    return
+  }
+
+  const nextMesh = JSON.parse(JSON.stringify(mesh)) as RoadDynamicMesh
+  nextMesh.width = clamped
+  sceneStore.updateNodeDynamicMesh(nodeId, nextMesh)
+}
 
 function applyMaterialIdUpdate(nextMaterialId: string | null) {
   if (isSyncingFromScene.value) {
@@ -92,12 +131,24 @@ function applyMaterialIdUpdate(nextMaterialId: string | null) {
       </div>
     </v-expansion-panel-title>
     <v-expansion-panel-text>
-      <div v-if="selectedSegmentIndex === null" class="road-panel-empty">
-        Select a road segment in the viewport to edit it.
-      </div>
+      <div class="road-field-grid">
+        <v-text-field
+          :model-value="localWidth"
+          type="number"
+          label="Width (m)"
+          density="compact"
+          variant="underlined"
+          min="0.2"
+          step="0.1"
+          @update:modelValue="(v) => { localWidth = Number(v); applyWidthUpdate(v) }"
+        />
 
-      <div v-else class="road-field-grid">
+        <div v-if="selectedSegmentIndex === null" class="road-panel-empty">
+          Select a road segment in the viewport to edit it.
+        </div>
+
         <v-select
+          v-else
           :items="[{ title: 'None', value: null }, ...availableNodeMaterials]"
           :model-value="localMaterialId"
           label="Segment Material"

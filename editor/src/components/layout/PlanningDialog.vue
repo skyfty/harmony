@@ -25,6 +25,16 @@ const uiStore = useUiStore()
 type PlanningTool = 'select' | 'pan' | 'rectangle' | 'lasso' | 'line' | 'align-marker'
 type LayerKind = 'terrain' | 'building' | 'road' | 'green' | 'wall'
 
+const layerKindLabels: Record<LayerKind, string> = {
+  terrain: 'Terrain',
+  building: 'Building',
+  road: 'Road',
+  green: 'Green',
+  wall: 'Wall',
+}
+
+const addableLayerKinds: LayerKind[] = ['terrain', 'building', 'road', 'green', 'wall']
+
 interface PlanningLayer {
   id: string
   name: string
@@ -32,6 +42,8 @@ interface PlanningLayer {
   visible: boolean
   color: string
   locked: boolean
+  /** Road layer width in meters (only used when kind === 'road'). */
+  roadWidthMeters?: number
 }
 
 interface PlanningPoint {
@@ -138,11 +150,11 @@ interface LineDraft {
 }
 
 const layerPresets: PlanningLayer[] = [
-  { id: 'green-layer', name: 'Greenery Layer', kind: 'green', visible: true, color: '#00897B', locked: false },
-  { id: 'terrain-layer', name: 'Terrain Layer', kind: 'terrain', visible: true, color: '#2E7D32', locked: false },
-  { id: 'building-layer', name: 'Building Layer', kind: 'building', visible: true, color: '#C62828', locked: false },
-  { id: 'road-layer', name: 'Road Layer', kind: 'road', visible: true, color: '#F9A825', locked: false },
-  { id: 'wall-layer', name: 'Wall Layer', kind: 'wall', visible: true, color: '#5E35B1', locked: false },
+  { id: 'green-layer', name: 'Greenery', kind: 'green', visible: true, color: '#00897B', locked: false },
+  { id: 'terrain-layer', name: 'Terrain', kind: 'terrain', visible: true, color: '#2E7D32', locked: false },
+  { id: 'building-layer', name: 'Building', kind: 'building', visible: true, color: '#C62828', locked: false },
+  { id: 'road-layer', name: 'Road', kind: 'road', visible: true, color: '#F9A825', locked: false, roadWidthMeters: 2 },
+  { id: 'wall-layer', name: 'Wall', kind: 'wall', visible: true, color: '#5E35B1', locked: false },
 ]
 
 const imageAccentPalette = layerPresets.map((layer) => layer.color)
@@ -183,6 +195,13 @@ const activeToolbarTool = computed<PlanningTool>(() => (temporaryPanActive.value
 
 const convertingTo3DScene = ref(false)
 
+const addLayerMenuOpen = ref(false)
+const draggingLayerId = ref<string | null>(null)
+const dragOverLayerId = ref<string | null>(null)
+const renamingLayerId = ref<string | null>(null)
+const renamingLayerDraft = ref('')
+const renameFieldElByLayerId = new Map<string, HTMLElement>()
+
 const activeLayer = computed(() => layers.value.find((layer) => layer.id === activeLayerId.value) ?? layers.value[0])
 
 const sceneGroundSize = computed(() => {
@@ -194,8 +213,40 @@ const sceneGroundSize = computed(() => {
   }
 })
 const visibleLayerIds = computed(() => new Set(layers.value.filter((layer) => layer.visible).map((layer) => layer.id)))
-const visiblePolygons = computed(() => polygons.value.filter((poly) => visibleLayerIds.value.has(poly.layerId)))
-const visiblePolylines = computed(() => polylines.value.filter((line) => visibleLayerIds.value.has(line.layerId)))
+
+// 图层列表置顶（更靠前）= 更上层；SVG 后绘制的元素在更上层。
+// 因此绘制顺序应当反向遍历 layers。
+const layerRenderOrderIds = computed(() => [...layers.value].reverse().map((layer) => layer.id))
+
+const visiblePolygons = computed(() => {
+  const visible = visibleLayerIds.value
+  const order = layerRenderOrderIds.value
+  const buckets = new Map<string, PlanningPolygon[]>()
+  order.forEach((id) => buckets.set(id, []))
+  const orphan: PlanningPolygon[] = []
+  polygons.value.forEach((poly) => {
+    if (!visible.has(poly.layerId)) return
+    const bucket = buckets.get(poly.layerId)
+    if (bucket) bucket.push(poly)
+    else orphan.push(poly)
+  })
+  return [...order.flatMap((id) => buckets.get(id) ?? []), ...orphan]
+})
+
+const visiblePolylines = computed(() => {
+  const visible = visibleLayerIds.value
+  const order = layerRenderOrderIds.value
+  const buckets = new Map<string, PlanningPolyline[]>()
+  order.forEach((id) => buckets.set(id, []))
+  const orphan: PlanningPolyline[] = []
+  polylines.value.forEach((line) => {
+    if (!visible.has(line.layerId)) return
+    const bucket = buckets.get(line.layerId)
+    if (bucket) bucket.push(line)
+    else orphan.push(line)
+  })
+  return [...order.flatMap((id) => buckets.get(id) ?? []), ...orphan]
+})
 
 type ScatterThumbPlacement = { x: number; y: number; size: number }
 
@@ -562,7 +613,15 @@ function buildPlanningSnapshot() {
   return {
     version: 1 as const,
     activeLayerId: activeLayerId.value,
-    layers: layers.value.map((layer) => ({ id: layer.id, visible: layer.visible, locked: layer.locked })),
+    layers: layers.value.map((layer) => ({
+      id: layer.id,
+      name: layer.name,
+      kind: layer.kind,
+      color: layer.color,
+      visible: layer.visible,
+      locked: layer.locked,
+      roadWidthMeters: layer.roadWidthMeters,
+    })),
     viewTransform: {
       scale: viewTransform.scale,
       offset: { x: viewTransform.offset.x, y: viewTransform.offset.y },
@@ -820,18 +879,50 @@ function loadPlanningFromScene() {
     activeLayerId.value = data.activeLayerId
   }
   if (Array.isArray(data.layers)) {
-    const layerMap = new Map(data.layers.map((item) => [item.id, item]))
-    layers.value.forEach((layer) => {
-      const raw = layerMap.get(layer.id) as { visible?: boolean; locked?: boolean } | undefined
-      if (raw) {
-        if (typeof raw.visible === 'boolean') {
-          layer.visible = raw.visible
-        }
-        if (typeof raw.locked === 'boolean') {
-          layer.locked = raw.locked
-        }
-      }
+    const hasDefinitions = data.layers.some((item) => {
+      const anyItem = item as Record<string, unknown>
+      return typeof anyItem.name === 'string' || typeof anyItem.kind === 'string' || typeof anyItem.color === 'string'
     })
+
+    if (hasDefinitions) {
+      layers.value = data.layers
+        .filter((item) => item && typeof (item as any).id === 'string')
+        .map((raw) => {
+          const id = String((raw as any).id)
+          const kindRaw = (raw as any).kind
+          const kind = (typeof kindRaw === 'string' ? kindRaw : null) as LayerKind | null
+          const preset = kind ? layerPresets.find((l) => l.kind === kind) : undefined
+          return {
+            id,
+            name: typeof (raw as any).name === 'string' ? String((raw as any).name) : preset?.name ?? 'Layer',
+            kind: (kind ?? preset?.kind ?? 'terrain') as LayerKind,
+            visible: typeof (raw as any).visible === 'boolean' ? Boolean((raw as any).visible) : true,
+            color: typeof (raw as any).color === 'string' ? String((raw as any).color) : preset?.color ?? '#ffffff',
+            locked: typeof (raw as any).locked === 'boolean' ? Boolean((raw as any).locked) : false,
+            roadWidthMeters:
+              typeof (raw as any).roadWidthMeters === 'number'
+                ? Number((raw as any).roadWidthMeters)
+                : ((kind ?? preset?.kind) === 'road' ? 6 : undefined),
+          } as PlanningLayer
+        })
+    } else {
+      const layerMap = new Map(data.layers.map((item) => [item.id, item]))
+      layers.value.forEach((layer) => {
+        const raw = layerMap.get(layer.id) as { visible?: boolean; locked?: boolean } | undefined
+        if (raw) {
+          if (typeof raw.visible === 'boolean') {
+            layer.visible = raw.visible
+          }
+          if (typeof raw.locked === 'boolean') {
+            layer.locked = raw.locked
+          }
+        }
+      })
+    }
+
+    if (!layers.value.find((l) => l.id === activeLayerId.value)) {
+      activeLayerId.value = layers.value[0]?.id ?? activeLayerId.value
+    }
   }
   if (data.viewTransform) {
     const s = Number(data.viewTransform.scale)
@@ -1072,6 +1163,28 @@ const propertyPanelDisabledReason = computed(() => {
 
 const propertyPanelDisabled = computed(() => propertyPanelDisabledReason.value !== null)
 
+const propertyPanelLayerKind = computed<LayerKind | null>(() => {
+  return selectedScatterTarget.value?.layer?.kind ?? null
+})
+
+const roadWidthMetersModel = computed({
+  get: () => {
+    const layer = selectedScatterTarget.value?.layer
+    if (!layer || layer.kind !== 'road') return 2
+    const raw = Number(layer.roadWidthMeters ?? 2)
+    return Number.isFinite(raw) && raw >= 0.1 ? raw : 2
+  },
+  set: (value: number) => {
+    if (propertyPanelDisabled.value) return
+    const layer = selectedScatterTarget.value?.layer
+    if (!layer || layer.kind !== 'road') return
+    const next = Number(value)
+    if (!Number.isFinite(next)) return
+    layer.roadWidthMeters = Math.min(10, Math.max(0.1, next))
+    markPlanningDirty()
+  },
+})
+
 const editorBackgroundStyle = computed(() => {
   return {
     backgroundImage:
@@ -1242,6 +1355,37 @@ function getPolylineStroke(layerId: string) {
   return getLayerColor(layerId, alpha)
 }
 
+function getPolylineStrokeWidth(layerId: string, isSelected = false) {
+  const kind = getLayerKind(layerId)
+  const selectedScale = 1.52
+  if (kind === 'road') {
+    const layer = layers.value.find((item) => item.id === layerId)
+    const width = Number(layer?.roadWidthMeters ?? 2)
+    if (!Number.isFinite(width) || width <= 0) {
+      return isSelected ? 2 * selectedScale : 2
+    }
+    const clamped = Math.min(10, Math.max(0.1, width))
+    return isSelected ? clamped * selectedScale : clamped
+  }
+  const base = 1.05
+  return isSelected ? base * selectedScale : base
+}
+
+function getPolylineVectorEffect(layerId: string) {
+  // Road width should represent world meters, so it should scale with zoom.
+  // Walls/others keep constant screen width for readability.
+  const kind = getLayerKind(layerId)
+  return kind === 'road' ? undefined : 'non-scaling-stroke'
+}
+
+function canEditPolylineGeometry(layerId: string): boolean {
+  const kind = getLayerKind(layerId)
+  if (kind !== 'road') {
+    return true
+  }
+  return currentTool.value === 'line'
+}
+
 function isActiveLayer(layerId: string | null | undefined) {
   return !!layerId && layerId === activeLayerId.value
 }
@@ -1284,6 +1428,163 @@ function hexToRgba(hex: string, alpha: number) {
 
 function createId(prefix: string) {
   return `${prefix}-${generateUuid().slice(0, 8)}`
+}
+
+function getDefaultLayerColor(kind: LayerKind): string {
+  return layerPresets.find((l) => l.kind === kind)?.color ?? '#ffffff'
+}
+
+function nextLayerNumber(kind: LayerKind): number {
+  const base = layerKindLabels[kind]
+  let max = 0
+  layers.value.forEach((layer) => {
+    if (layer.kind !== kind) return
+    const match = new RegExp(`^${base}\\s*(\\d+)$`, 'i').exec(layer.name.trim())
+    const num = match ? Number(match[1]) : NaN
+    if (Number.isFinite(num)) {
+      max = Math.max(max, num)
+    }
+  })
+  return max + 1
+}
+
+function addPlanningLayer(kind: LayerKind) {
+  const label = layerKindLabels[kind]
+  const number = nextLayerNumber(kind)
+  const id = createId(`${kind}-layer`)
+  const layer: PlanningLayer = {
+    id,
+    name: `${label} ${number}`,
+    kind,
+    visible: true,
+    color: getDefaultLayerColor(kind),
+    locked: false,
+    roadWidthMeters: kind === 'road' ? 2 : undefined,
+  }
+
+  // 新建图层置顶（列表靠前）
+  layers.value = [layer, ...layers.value]
+  activeLayerId.value = id
+  addLayerMenuOpen.value = false
+  markPlanningDirty()
+}
+
+function handleLayerDelete(layerId: string) {
+  if (layers.value.length <= 1) return
+
+  polygons.value = polygons.value.filter((poly) => poly.layerId !== layerId)
+  polylines.value = polylines.value.filter((line) => line.layerId !== layerId)
+
+  const removedActive = activeLayerId.value === layerId
+  layers.value = layers.value.filter((l) => l.id !== layerId)
+
+  if (selectedFeature.value && getFeatureLayerId(selectedFeature.value) === layerId) {
+    selectedFeature.value = null
+  }
+
+  if (removedActive) {
+    activeLayerId.value = layers.value[0]?.id ?? ''
+  }
+  markPlanningDirty()
+}
+
+function setRenameFieldRef(layerId: string, el: unknown) {
+  if (!el) {
+    renameFieldElByLayerId.delete(layerId)
+    return
+  }
+  if (el instanceof HTMLElement) {
+    renameFieldElByLayerId.set(layerId, el)
+    return
+  }
+  const anyEl = el as any
+  if (anyEl?.$el instanceof HTMLElement) {
+    renameFieldElByLayerId.set(layerId, anyEl.$el)
+  }
+}
+
+async function beginLayerRename(layerId: string) {
+  const layer = layers.value.find((l) => l.id === layerId)
+  if (!layer) return
+  renamingLayerId.value = layerId
+  renamingLayerDraft.value = layer.name
+  await nextTick()
+  const root = renameFieldElByLayerId.get(layerId)
+  const input = root?.querySelector('input') as HTMLInputElement | null
+  if (input) {
+    input.focus()
+    input.select()
+  }
+}
+
+function cancelLayerRename() {
+  renamingLayerId.value = null
+  renamingLayerDraft.value = ''
+}
+
+function commitLayerRename(layerId: string) {
+  const layer = layers.value.find((l) => l.id === layerId)
+  if (!layer) {
+    cancelLayerRename()
+    return
+  }
+  const nextName = renamingLayerDraft.value.trim()
+  if (nextName) {
+    layer.name = nextName
+    markPlanningDirty()
+  }
+  cancelLayerRename()
+}
+
+function reorderPlanningLayersByListOrder(fromId: string, toId: string) {
+  const fromIndex = layers.value.findIndex((l) => l.id === fromId)
+  const toIndex = layers.value.findIndex((l) => l.id === toId)
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
+    return
+  }
+  const nextList = [...layers.value]
+  const [item] = nextList.splice(fromIndex, 1)
+  if (!item) return
+  nextList.splice(toIndex, 0, item)
+  layers.value = nextList
+  markPlanningDirty()
+}
+
+function handleLayerItemDragStart(layerId: string, event: DragEvent) {
+  event.stopPropagation()
+  if (!event.dataTransfer) return
+  draggingLayerId.value = layerId
+  dragOverLayerId.value = null
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/x-harmony-planning-layer-id', layerId)
+}
+
+function handleLayerItemDragOver(overLayerId: string, event: DragEvent) {
+  event.preventDefault()
+  const draggedId = event.dataTransfer?.getData('text/x-harmony-planning-layer-id')
+  if (!draggedId || draggedId === overLayerId) {
+    dragOverLayerId.value = null
+    return
+  }
+  dragOverLayerId.value = overLayerId
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'move'
+  }
+}
+
+function handleLayerItemDrop(targetLayerId: string, event: DragEvent) {
+  event.preventDefault()
+  const draggedId = event.dataTransfer?.getData('text/x-harmony-planning-layer-id')
+  if (!draggedId) return
+  event.stopPropagation()
+  reorderPlanningLayersByListOrder(draggedId, targetLayerId)
+  draggingLayerId.value = null
+  dragOverLayerId.value = null
+}
+
+function handleLayerItemDragEnd() {
+  draggingLayerId.value = null
+  dragOverLayerId.value = null
 }
 
 function clonePoint(point: PlanningPoint): PlanningPoint {
@@ -1803,6 +2104,16 @@ const lineDraftPreviewDasharray = computed(() => {
   return getPolylineStrokeDasharray(layerId)
 })
 
+const lineDraftPreviewStrokeWidth = computed(() => {
+  const layerId = lineDraft.value?.layerId ?? activeLayerId.value
+  return getPolylineStrokeWidth(layerId)
+})
+
+const lineDraftPreviewVectorEffect = computed(() => {
+  const layerId = lineDraft.value?.layerId ?? activeLayerId.value
+  return getPolylineVectorEffect(layerId)
+})
+
 function selectFeature(feature: SelectedFeature) {
   if (!feature) {
     selectedFeature.value = null
@@ -1827,6 +2138,21 @@ function deleteSelectedFeature() {
     markPlanningDirty()
     return
   }
+
+  if (feature.type === 'polyline') {
+    const layerId = polylines.value.find((item) => item.id === feature.id)?.layerId
+    if (layerId && !canEditPolylineGeometry(layerId)) {
+      return
+    }
+  }
+
+  if (feature.type === 'segment') {
+    const layerId = polylines.value.find((item) => item.id === feature.lineId)?.layerId
+    if (layerId && !canEditPolylineGeometry(layerId)) {
+      return
+    }
+  }
+
   if (feature.type === 'polyline') {
     polylines.value = polylines.value.filter((item) => item.id !== feature.id)
     selectedFeature.value = null
@@ -2476,6 +2802,9 @@ function handlePolylinePointerDown(lineId: string, event: PointerEvent) {
   event.stopPropagation()
   event.preventDefault()
   selectFeature({ type: 'polyline', id: line.id })
+  if (!canEditPolylineGeometry(line.layerId)) {
+    return
+  }
   if (effectiveTool !== 'select') {
     return
   }
@@ -2504,6 +2833,9 @@ function handleLineVertexPointerDown(lineId: string, vertexIndex: number, event:
   event.stopPropagation()
   event.preventDefault()
   selectFeature({ type: 'polyline', id: lineId })
+  if (!canEditPolylineGeometry(line.layerId)) {
+    return
+  }
   if (effectiveTool !== 'select') {
     return
   }
@@ -2539,6 +2871,13 @@ function handleLineSegmentPointerDown(lineId: string, segmentIndex: number, even
   const effectiveTool = currentTool.value === 'rectangle' || currentTool.value === 'lasso' || currentTool.value === 'line' ? 'select' : currentTool.value
   event.stopPropagation()
   event.preventDefault()
+
+  // Always allow selecting the road polyline in select tool, but prevent geometry edits.
+  selectFeature({ type: 'polyline', id: line.id })
+  if (!canEditPolylineGeometry(line.layerId)) {
+    return
+  }
+
   if (effectiveTool !== 'select') {
     return
   }
@@ -3206,24 +3545,91 @@ onBeforeUnmount(() => {
           </section>
           <section class="layer-panel">
             <header>
-              <h3>Layer Management</h3>
+              <div class="panel-header">
+                <h3>Layer Management</h3>
+                <v-menu
+                  v-model="addLayerMenuOpen"
+                  location="bottom end"
+                >
+                  <template #activator="{ props: menuProps }">
+                    <v-btn
+                      v-bind="menuProps"
+                      icon
+                      size="small"
+                      variant="text"
+                      color="primary"
+                      title="Add layer"
+                    >
+                      <v-icon>mdi-plus</v-icon>
+                    </v-btn>
+                  </template>
+                  <v-list density="compact">
+                    <v-list-item
+                      v-for="kind in addableLayerKinds"
+                      :key="kind"
+                      @click="addPlanningLayer(kind)"
+                    >
+                      <v-list-item-title>{{ layerKindLabels[kind] }}</v-list-item-title>
+                    </v-list-item>
+                  </v-list>
+                </v-menu>
+              </div>
             </header>
             <v-list density="compact" class="layer-list">
               <v-list-item
                 v-for="layer in layers"
                 :key="layer.id"
-                :class="['layer-item', { active: activeLayerId === layer.id }]"
+                :class="[
+                  'layer-item',
+                  {
+                    active: activeLayerId === layer.id,
+                    dragging: draggingLayerId === layer.id,
+                    'drag-over': dragOverLayerId === layer.id,
+                  },
+                ]"
                 :style="getLayerListItemStyle(layer)"
+                draggable="true"
+                @dragstart="handleLayerItemDragStart(layer.id, $event as DragEvent)"
+                @dragover="handleLayerItemDragOver(layer.id, $event as DragEvent)"
+                @drop="handleLayerItemDrop(layer.id, $event as DragEvent)"
+                @dragend="handleLayerItemDragEnd"
                 @click="handleLayerSelection(layer.id)"
               >
                 <div class="layer-content">
-                  <div class="layer-name">{{ layer.name }}</div>
+                  <div class="layer-name" @dblclick.stop="beginLayerRename(layer.id)">
+                    <v-text-field
+                      v-if="renamingLayerId === layer.id"
+                      :ref="(el) => setRenameFieldRef(layer.id, el)"
+                      v-model="renamingLayerDraft"
+                      density="compact"
+                      variant="underlined"
+                      hide-details
+                      class="layer-rename-input"
+                      @click.stop
+                      @keydown.enter.prevent="commitLayerRename(layer.id)"
+                      @keydown.esc.prevent="cancelLayerRename"
+                      @blur="commitLayerRename(layer.id)"
+                    />
+                    <template v-else>
+                      {{ layer.name }}
+                    </template>
+                  </div>
                   <div class="layer-meta">
                     <span>Areas {{ layerFeatureTotals.find((item) => item.id === layer.id)?.polygons ?? 0 }}</span>
                     <span>Lines {{ layerFeatureTotals.find((item) => item.id === layer.id)?.lines ?? 0 }}</span>
                   </div>
                 </div>
                 <template #append>
+                  <v-btn
+                    icon
+                    size="small"
+                    variant="text"
+                    color="error"
+                    :disabled="layers.length <= 1"
+                    @click.stop="handleLayerDelete(layer.id)"
+                  >
+                    <v-icon>mdi-delete-outline</v-icon>
+                  </v-btn>
                   <v-btn
                     icon
                     size="small"
@@ -3384,8 +3790,12 @@ onBeforeUnmount(() => {
                       :d="getPolylinePath(line.points)"
                       :stroke="getPolylineStroke(line.layerId)"
                       :stroke-dasharray="getPolylineStrokeDasharray(line.layerId)"
-                      vector-effect="non-scaling-stroke"
-                      stroke-width="1.05"
+                      :vector-effect="getPolylineVectorEffect(line.layerId)"
+                      :stroke-width="getPolylineStrokeWidth(
+                        line.layerId,
+                        (selectedFeature?.type === 'polyline' && selectedFeature.id === line.id)
+                          || (selectedFeature?.type === 'segment' && selectedFeature.lineId === line.id),
+                      )"
                       fill="none"
                       @pointerdown="handlePolylinePointerDown(line.id, $event as PointerEvent)"
                     />
@@ -3463,9 +3873,9 @@ onBeforeUnmount(() => {
                     class="planning-line-draft"
                     :d="lineDraftPreviewPath"
                     :stroke="lineDraftPreviewStroke"
-                    stroke-width="1.5"
+                    :stroke-width="lineDraftPreviewStrokeWidth"
                     :stroke-dasharray="lineDraftPreviewDasharray"
-                    vector-effect="non-scaling-stroke"
+                    :vector-effect="lineDraftPreviewVectorEffect"
                     fill="none"
                   />
 
@@ -3546,7 +3956,7 @@ onBeforeUnmount(() => {
               </span>
             </div>
             <v-btn
-              v-if="!propertyPanelDisabled && selectedScatterTarget && selectedScatterTarget.shape.scatter"
+              v-if="!propertyPanelDisabled && selectedScatterTarget && propertyPanelLayerKind === 'green' && selectedScatterTarget.shape.scatter"
               icon
               size="small"
               variant="text"
@@ -3562,96 +3972,121 @@ onBeforeUnmount(() => {
             <span>{{ propertyPanelDisabledReason }}</span>
           </div>
           <template v-else>
-            <div class="property-panel__scatter-preview">
-              <div class="scatter-preview__thumbnail">
-                <img
-                  v-if="selectedScatterPreview && selectedScatterPreview.thumbnail"
-                  :src="selectedScatterPreview.thumbnail"
-                  :alt="selectedScatterPreview.name"
-                  loading="lazy"
-                  draggable="false"
+            <template v-if="propertyPanelLayerKind === 'green'">
+              <div class="property-panel__scatter-preview">
+                <div class="scatter-preview__thumbnail">
+                  <img
+                    v-if="selectedScatterPreview && selectedScatterPreview.thumbnail"
+                    :src="selectedScatterPreview.thumbnail"
+                    :alt="selectedScatterPreview.name"
+                    loading="lazy"
+                    draggable="false"
+                  >
+                  <div v-else class="scatter-preview__placeholder">
+                    <v-icon icon="mdi-image-outline" size="20" />
+                  </div>
+                </div>
+                <div class="scatter-preview__meta">
+                  <div class="scatter-preview__name">
+                    {{ selectedScatterPreview ? selectedScatterPreview.name : '未设置 Scatter 预设' }}
+                  </div>
+                  <div class="scatter-preview__category" :class="{ 'scatter-preview__category--empty': !selectedScatterPreview }">
+                    <template v-if="selectedScatterPreview">
+                      <v-icon :icon="selectedScatterPreview.categoryIcon" size="16" />
+                      <span>{{ selectedScatterPreview.categoryLabel }}</span>
+                    </template>
+                    <template v-else>
+                      <span>Select a preset below to apply to the current shape</span>
+                    </template>
+                  </div>
+                </div>
+              </div>
+
+              <div class="property-panel__density">
+                <div class="property-panel__density-title">密集度</div>
+                <div class="property-panel__density-row">
+                  <v-slider
+                    v-model="scatterDensityPercentModel"
+                    min="0"
+                    max="100"
+                    step="1"
+                    density="compact"
+                    hide-details
+                    :disabled="!scatterDensityEnabled"
+                  />
+                  <div class="property-panel__density-value">{{ scatterDensityPercentModel }}%</div>
+                </div>
+
+                <div class="property-panel__spacing-title">分布间隔</div>
+                <div class="property-panel__density-row">
+                  <v-slider
+                    v-model="scatterMinSpacingMetersModel"
+                    min="0"
+                    max="10"
+                    step="0.1"
+                    density="compact"
+                    hide-details
+                    :disabled="!scatterMinSpacingEnabled"
+                  />
+                  <div class="property-panel__density-value">{{ scatterMinSpacingMetersModel }}m</div>
+                </div>
+              </div>
+
+              <v-tabs
+                v-model="propertyScatterTab"
+                density="compact"
+                :transition="false"
+                class="property-panel__tabs"
+              >
+                <v-tab
+                  v-for="tab in scatterTabs"
+                  :key="tab.key"
+                  :value="tab.key"
+                  :title="tab.label"
                 >
-                <div v-else class="scatter-preview__placeholder">
-                  <v-icon icon="mdi-image-outline" size="20" />
+                  <v-icon :icon="tab.icon" size="16" />
+                </v-tab>
+              </v-tabs>
+
+              <v-window v-model="propertyScatterTab" :transition="false" class="property-panel__window">
+                <v-window-item
+                  v-for="tab in scatterTabs"
+                  :key="`scatter-panel-${tab.key}`"
+                  :value="tab.key"
+                >
+                  <GroundAssetPainter
+                    v-if="propertyScatterTab === tab.key"
+                    :category="tab.key"
+                    :update-terrain-selection="false"
+                    :selected-provider-asset-id="selectedScatterAssignment ? selectedScatterAssignment.providerAssetId : null"
+                    @asset-select="handleScatterAssetSelect"
+                  />
+                </v-window-item>
+              </v-window>
+            </template>
+
+            <template v-else-if="propertyPanelLayerKind === 'road'">
+              <div class="property-panel__density">
+                <div class="property-panel__density-title">道路宽度</div>
+                <div class="property-panel__density-row">
+                  <v-text-field
+                    v-model.number="roadWidthMetersModel"
+                    type="number"
+                    min="0.1"
+                    max="10"
+                    step="0.1"
+                    density="compact"
+                    variant="underlined"
+                    hide-details
+                    suffix="m"
+                  />
                 </div>
               </div>
-              <div class="scatter-preview__meta">
-                <div class="scatter-preview__name">
-                  {{ selectedScatterPreview ? selectedScatterPreview.name : '未设置 Scatter 预设' }}
-                </div>
-                <div class="scatter-preview__category" :class="{ 'scatter-preview__category--empty': !selectedScatterPreview }">
-                  <template v-if="selectedScatterPreview">
-                    <v-icon :icon="selectedScatterPreview.categoryIcon" size="16" />
-                    <span>{{ selectedScatterPreview.categoryLabel }}</span>
-                  </template>
-                  <template v-else>
-                    <span>Select a preset below to apply to the current shape</span>
-                  </template>
-                </div>
-              </div>
-            </div>
+            </template>
 
-            <div class="property-panel__density">
-              <div class="property-panel__density-title">密集度</div>
-              <div class="property-panel__density-row">
-                <v-slider
-                  v-model="scatterDensityPercentModel"
-                  min="0"
-                  max="100"
-                  step="1"
-                  density="compact"
-                  hide-details
-                  :disabled="!scatterDensityEnabled"
-                />
-                <div class="property-panel__density-value">{{ scatterDensityPercentModel }}%</div>
-              </div>
-
-              <div class="property-panel__spacing-title">分布间隔</div>
-              <div class="property-panel__density-row">
-                <v-slider
-                  v-model="scatterMinSpacingMetersModel"
-                  min="0"
-                  max="10"
-                  step="0.1"
-                  density="compact"
-                  hide-details
-                  :disabled="!scatterMinSpacingEnabled"
-                />
-                <div class="property-panel__density-value">{{ scatterMinSpacingMetersModel }}m</div>
-              </div>
-            </div>
-
-            <v-tabs
-              v-model="propertyScatterTab"
-              density="compact"
-              :transition="false"
-              class="property-panel__tabs"
-            >
-              <v-tab
-                v-for="tab in scatterTabs"
-                :key="tab.key"
-                :value="tab.key"
-                :title="tab.label"
-              >
-                <v-icon :icon="tab.icon" size="16" />
-              </v-tab>
-            </v-tabs>
-
-            <v-window v-model="propertyScatterTab" :transition="false" class="property-panel__window">
-              <v-window-item
-                v-for="tab in scatterTabs"
-                :key="`scatter-panel-${tab.key}`"
-                :value="tab.key"
-              >
-                <GroundAssetPainter
-                  v-if="propertyScatterTab === tab.key"
-                  :category="tab.key"
-                  :update-terrain-selection="false"
-                  :selected-provider-asset-id="selectedScatterAssignment ? selectedScatterAssignment.providerAssetId : null"
-                  @asset-select="handleScatterAssetSelect"
-                />
-              </v-window-item>
-            </v-window>
+            <template v-else>
+              <!-- terrain/building/wall: empty for now -->
+            </template>
           </template>
         </aside>
 
@@ -3731,6 +4166,19 @@ onBeforeUnmount(() => {
 
 .layer-item.active .layer-name {
   font-weight: 700;
+}
+
+.layer-item.dragging {
+  opacity: 0.65;
+}
+
+.layer-item.drag-over {
+  outline: 1px dashed rgba(255, 255, 255, 0.35);
+  outline-offset: 2px;
+}
+
+.layer-rename-input {
+  width: 100%;
 }
 
 .property-panel__density {
@@ -4255,14 +4703,12 @@ onBeforeUnmount(() => {
 }
 
 .planning-line {
-  stroke-width: 1.05;
   stroke-linecap: round;
   stroke-linejoin: round;
   cursor: pointer;
 }
 
 .planning-line.selected {
-  stroke-width: 1.6;
 }
 
 .planning-line-segment {

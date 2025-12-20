@@ -187,8 +187,43 @@ function layerKindFromId(layerId: string): LayerKind | null {
     case 'wall-layer':
       return 'wall'
     default:
-      return null
+      break
   }
+
+  // Support dynamic layer ids like "road-layer-1a2b3c4d".
+  const match = /^(terrain|building|road|green|wall)-layer\b/i.exec(layerId)
+  if (match && match[1]) {
+    return match[1].toLowerCase() as LayerKind
+  }
+  return null
+}
+
+function resolveLayerOrderFromPlanningData(planningData: PlanningSceneData): string[] {
+  const raw = (planningData as any)?.layers
+  if (Array.isArray(raw) && raw.length) {
+    const ids = raw
+      .map((item: any) => (item && typeof item.id === 'string' ? item.id : null))
+      .filter((id: any): id is string => typeof id === 'string' && id.trim().length > 0)
+    if (ids.length) {
+      return ids
+    }
+  }
+  return ['terrain-layer', 'building-layer', 'road-layer', 'green-layer', 'wall-layer']
+}
+
+function resolveLayerKindFromPlanningData(planningData: PlanningSceneData, layerId: string): LayerKind | null {
+  const raw = (planningData as any)?.layers
+  if (Array.isArray(raw)) {
+    const found = raw.find((item: any) => item && item.id === layerId)
+    const kind = found?.kind
+    if (typeof kind === 'string') {
+      const normalized = kind.toLowerCase()
+      if (normalized === 'terrain' || normalized === 'building' || normalized === 'road' || normalized === 'green' || normalized === 'wall') {
+        return normalized as LayerKind
+      }
+    }
+  }
+  return layerKindFromId(layerId)
 }
 
 function findGroundNode(nodes: SceneNode[]): SceneNode | null {
@@ -567,7 +602,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   const polygons = (Array.isArray((planningData as any).polygons) ? (planningData as any).polygons : []) as PlanningPolygonAny[]
   const polylines = (Array.isArray((planningData as any).polylines) ? (planningData as any).polylines : []) as PlanningPolylineAny[]
 
-  const layerOrder: string[] = ['terrain-layer', 'building-layer', 'road-layer', 'green-layer', 'wall-layer']
+  const layerOrder: string[] = resolveLayerOrderFromPlanningData(planningData)
 
   const featuresByLayer = new Map<string, { polygons: PlanningPolygonAny[]; polylines: PlanningPolylineAny[] }>()
   layerOrder.forEach((id) => featuresByLayer.set(id, { polygons: [], polylines: [] }))
@@ -602,7 +637,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
   // Convert layer-by-layer
   for (const layerId of layerOrder) {
-    const kind = layerKindFromId(layerId)
+    const kind = resolveLayerKindFromPlanningData(planningData, layerId)
     if (!kind) continue
 
     const group = featuresByLayer.get(layerId)!

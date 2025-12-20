@@ -33,9 +33,21 @@ export interface PlanningImageData {
   alignMarker?: { x: number; y: number }
 }
 
+export type PlanningLayerKind = 'terrain' | 'building' | 'road' | 'green' | 'wall'
+
 export interface PlanningLayerState {
   id: string
+  /** Optional; older snapshots may not include it. */
+  name?: string
+  /** Optional; older snapshots may not include it. */
+  kind?: PlanningLayerKind
+  /** Optional; older snapshots may not include it. */
+  color?: string
   visible: boolean
+  /** Optional; older snapshots may not include it. */
+  locked?: boolean
+  /** Optional; currently used by road layers. */
+  roadWidthMeters?: number
 }
 
 export interface PlanningSceneData {
