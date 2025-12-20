@@ -143,12 +143,7 @@ function applyMaterialIdUpdate(nextMaterialId: string | null) {
           @update:modelValue="(v) => { localWidth = Number(v); applyWidthUpdate(v) }"
         />
 
-        <div v-if="selectedSegmentIndex === null" class="road-panel-empty">
-          Select a road segment in the viewport to edit it.
-        </div>
-
         <v-select
-          v-else
           :items="[{ title: 'None', value: null }, ...availableNodeMaterials]"
           :model-value="localMaterialId"
           label="Segment Material"
