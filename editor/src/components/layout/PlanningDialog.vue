@@ -597,6 +597,7 @@ const selectedPolyline = computed(() => {
 })
 const BASE_PIXELS_PER_METER = 10
 const POLYLINE_HIT_RADIUS_SQ = 1.5 * 1.5
+const LINE_VERTEX_SNAP_RADIUS_PX = 6
 
 const canvasSize = computed(() => ({
   width: sceneGroundSize.value.width,
@@ -1898,6 +1899,39 @@ function distancePointToSegmentSquared(point: PlanningPoint, start: PlanningPoin
   return distX * distX + distY * distY
 }
 
+function distancePointToPointSquared(a: PlanningPoint, b: PlanningPoint) {
+  const dx = a.x - b.x
+  const dy = a.y - b.y
+  return dx * dx + dy * dy
+}
+
+function findNearbyPolylineVertexInLayer(world: PlanningPoint, layerId: string) {
+  const radiusWorld = LINE_VERTEX_SNAP_RADIUS_PX / Math.max(1e-6, renderScale.value)
+  const radiusSq = radiusWorld * radiusWorld
+  for (let i = polylines.value.length - 1; i >= 0; i -= 1) {
+    const line = polylines.value[i]
+    if (!line) {
+      continue
+    }
+    if (line.layerId !== layerId) {
+      continue
+    }
+    if (!visibleLayerIds.value.has(line.layerId)) {
+      continue
+    }
+    for (let index = 0; index < line.points.length; index += 1) {
+      const point = line.points[index]
+      if (!point) {
+        continue
+      }
+      if (distancePointToPointSquared(world, point) <= radiusSq) {
+        return { line, point, vertexIndex: index }
+      }
+    }
+  }
+  return null
+}
+
 function hitTestPolygon(point: PlanningPoint): PlanningPolygon | null {
   for (let i = polygons.value.length - 1; i >= 0; i -= 1) {
     const polygon = polygons.value[i]
@@ -2163,13 +2197,20 @@ function startLineDraft(point: PlanningPoint) {
     return
   }
 
+  const targetLayerId = lineDraft.value?.layerId ?? activeLayer.value?.id ?? layers.value[0]?.id ?? 'terrain-layer'
+  const reuse = findNearbyPolylineVertexInLayer(point, targetLayerId)
+  const reusePoint = reuse?.point
+
   // Branching: when a polyline vertex is selected, clicking elsewhere adds a new vertex
   // and connects it to the selected vertex with a new segment (new polyline).
   if (!lineDraft.value && selectedVertex.value?.feature === 'polyline') {
     const sourceLine = polylines.value.find((item) => item.id === selectedVertex.value?.targetId)
     const sourcePoint = sourceLine?.points[selectedVertex.value.vertexIndex]
     if (sourceLine && sourcePoint) {
-      const newPoint = createVertexPoint(point)
+      const newPoint = reusePoint ?? createVertexPoint(point)
+      if (newPoint === sourcePoint) {
+        return
+      }
       const newLine: PlanningPolyline = {
         id: createId('line'),
         name: `${getLayerName(sourceLine.layerId)} 线段 ${lineCounter.value++}`,
@@ -2187,14 +2228,20 @@ function startLineDraft(point: PlanningPoint) {
 
   if (!lineDraft.value) {
     lineDraft.value = {
-      layerId: activeLayer.value?.id ?? layers.value[0]?.id ?? 'terrain-layer',
-      points: [createVertexPoint(point)],
+      layerId: targetLayerId,
+      points: [reusePoint ?? createVertexPoint(point)],
     }
+    return
+  }
+
+  const last = lineDraft.value.points.length ? lineDraft.value.points[lineDraft.value.points.length - 1] : undefined
+  const nextPoint = reusePoint ?? createVertexPoint(point)
+  if (last && (nextPoint === last || (last.id && nextPoint.id && last.id === nextPoint.id))) {
     return
   }
   lineDraft.value = {
     ...lineDraft.value,
-    points: [...lineDraft.value.points, createVertexPoint(point)],
+    points: [...lineDraft.value.points, nextPoint],
   }
 }
 
@@ -4093,6 +4140,22 @@ onBeforeUnmount(() => {
                     :vector-effect="lineDraftPreviewVectorEffect"
                     fill="none"
                   />
+
+                  <!-- 线段绘制中：显示顶点位置 -->
+                  <g v-if="lineDraft?.points?.length">
+                    <circle
+                      v-for="(p, idx) in lineDraft!.points"
+                      :key="`line-draft-v-${idx}-${p.id ?? ''}`"
+                      class="vertex-handle"
+                      :cx="p.x"
+                      :cy="p.y"
+                      r="0.75"
+                      :fill="getLayerColor(lineDraft!.layerId, 0.95)"
+                      stroke="rgba(255,255,255,0.9)"
+                      stroke-width="0.6"
+                      pointer-events="none"
+                    />
+                  </g>
 
                   <!-- 顶点/当前操作点荧光高亮 -->
                   <circle
