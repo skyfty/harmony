@@ -5583,6 +5583,9 @@ function updateRoadCursorPreview(event: PointerEvent) {
     return
   }
 
+  // Keep snap targets fresh so subsequent points can snap too.
+  roadBuildSession.snapVertices = collectRoadSnapVertices()
+
   const rawPointer = groundPointerHelper.clone()
   rawPointer.y = 0
   const { position: next } = snapRoadPointToVertices(rawPointer, roadBuildSession.snapVertices)
@@ -5611,6 +5614,8 @@ function handleRoadPlacementClick(event: PointerEvent): boolean {
   snapped.y = 0
 
   const session = ensureRoadBuildSession()
+  // Refresh snap targets on every placement to ensure up-to-date snapping.
+  session.snapVertices = collectRoadSnapVertices()
   const snappedResult = snapRoadPointToVertices(snapped, session.snapVertices)
   const point = snappedResult.position
 
@@ -5633,7 +5638,8 @@ function handleRoadPlacementClick(event: PointerEvent): boolean {
   }
 
   const last = session.points[session.points.length - 1]!
-  if (last.distanceToSquared(point) <= 1e-8) {
+  // Treat very small movements as the same vertex to avoid duplicates.
+  if (last.distanceToSquared(point) <= 1e-6) {
     session.previewEnd = point.clone()
     updateRoadPreview()
     return true
@@ -5684,7 +5690,8 @@ function finalizeRoadBuildSession() {
         segments,
       }
 
-      const EPS2 = 1e-8
+      // Epsilon for reusing existing vertices (world->local introduces float jitter).
+      const EPS2 = 1e-6
       const findExistingVertexIndex = (x: number, z: number): number => {
         for (let i = 0; i < next.vertices.length; i += 1) {
           const v = next.vertices[i]!
