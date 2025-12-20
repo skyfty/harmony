@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { GroundDynamicMesh, SceneNode } from '@harmony/schema'
+import type { GroundDynamicMesh, RoadDynamicMesh, SceneNode } from '@harmony/schema'
 import {
   ensureTerrainScatterStore,
   getTerrainScatterStore,
@@ -13,6 +13,7 @@ import {
   type TerrainScatterStore,
 } from '@harmony/schema/terrain-scatter'
 import { sampleGroundHeight, sampleGroundNormal } from '@schema/groundMesh'
+import { createRoadGroup } from '@schema/roadMesh'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'
 import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
 import { generateUuid } from '@/utils/uuid'
@@ -75,7 +76,7 @@ const POISSON_CANDIDATES_PER_ACTIVE = 24
 
 type LayerKind = 'terrain' | 'building' | 'road' | 'green' | 'wall'
 
-type PlanningPoint = { x: number; y: number }
+type PlanningPoint = { id?: string; x: number; y: number }
 
 type PlanningPolygonAny = {
   id: string
@@ -224,6 +225,127 @@ function resolveLayerKindFromPlanningData(planningData: PlanningSceneData, layer
     }
   }
   return layerKindFromId(layerId)
+}
+
+function resolveLayerNameFromPlanningData(planningData: PlanningSceneData, layerId: string): string | null {
+  const raw = (planningData as any)?.layers
+  if (Array.isArray(raw)) {
+    const found = raw.find((item: any) => item && item.id === layerId)
+    const name = found?.name
+    if (typeof name === 'string' && name.trim()) {
+      return name.trim()
+    }
+  }
+  return null
+}
+
+function resolveRoadWidthFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
+  const raw = (planningData as any)?.layers
+  if (Array.isArray(raw)) {
+    const found = raw.find((item: any) => item && item.id === layerId)
+    const widthRaw = found?.roadWidthMeters
+    const width = typeof widthRaw === 'number' ? widthRaw : Number(widthRaw)
+    if (Number.isFinite(width)) {
+      return Math.min(10, Math.max(0.2, width))
+    }
+  }
+  return 2
+}
+
+function computeRoadCenterFromWorldXZ(points: Array<{ x: number; z: number }>): { x: number; z: number } {
+  let minX = Infinity
+  let maxX = -Infinity
+  let minZ = Infinity
+  let maxZ = -Infinity
+  points.forEach((p) => {
+    minX = Math.min(minX, p.x)
+    maxX = Math.max(maxX, p.x)
+    minZ = Math.min(minZ, p.z)
+    maxZ = Math.max(maxZ, p.z)
+  })
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
+    return { x: 0, z: 0 }
+  }
+  return { x: (minX + maxX) * 0.5, z: (minZ + maxZ) * 0.5 }
+}
+
+function buildRoadDynamicMeshFromPlanningPolylines(options: {
+  polylines: PlanningPolylineAny[]
+  groundWidth: number
+  groundDepth: number
+  widthMeters: number
+}): { center: { x: number; y: number; z: number }; definition: RoadDynamicMesh } | null {
+  const { polylines, groundWidth, groundDepth, widthMeters } = options
+  if (!Array.isArray(polylines) || polylines.length === 0) {
+    return null
+  }
+
+  const vertexIndexByKey = new Map<string, number>()
+  const worldVertices: Array<{ x: number; z: number }> = []
+  const segments: RoadDynamicMesh['segments'] = []
+  const segmentKeys = new Set<string>()
+
+  const getVertexKey = (point: PlanningPoint) => {
+    const rawId = typeof point.id === 'string' ? point.id.trim() : ''
+    if (rawId) {
+      return `id:${rawId}`
+    }
+    // Fallback for legacy snapshots: use rounded coordinates in planning space.
+    return `xy:${Number(point.x).toFixed(2)},${Number(point.y).toFixed(2)}`
+  }
+
+  const ensureVertexIndex = (point: PlanningPoint) => {
+    const key = getVertexKey(point)
+    const existing = vertexIndexByKey.get(key)
+    if (existing != null) {
+      return existing
+    }
+    const world = toWorldPoint(point, groundWidth, groundDepth, 0)
+    const index = worldVertices.length
+    worldVertices.push({ x: world.x, z: world.z })
+    vertexIndexByKey.set(key, index)
+    return index
+  }
+
+  polylines.forEach((line) => {
+    const pts = Array.isArray(line.points) ? line.points : []
+    if (pts.length < 2) {
+      return
+    }
+    for (let i = 0; i < pts.length - 1; i += 1) {
+      const aPoint = pts[i]!
+      const bPoint = pts[i + 1]!
+      const a = ensureVertexIndex(aPoint)
+      const b = ensureVertexIndex(bPoint)
+      if (a === b) {
+        continue
+      }
+      const lo = Math.min(a, b)
+      const hi = Math.max(a, b)
+      const key = `${lo}-${hi}`
+      if (segmentKeys.has(key)) {
+        continue
+      }
+      segmentKeys.add(key)
+      segments.push({ a, b, materialId: null })
+    }
+  })
+
+  if (worldVertices.length < 2 || segments.length === 0) {
+    return null
+  }
+
+  const centerXZ = computeRoadCenterFromWorldXZ(worldVertices)
+  const vertices: RoadDynamicMesh['vertices'] = worldVertices.map((v) => [v.x - centerXZ.x, v.z - centerXZ.z])
+
+  const definition: RoadDynamicMesh = {
+    type: 'Road',
+    width: Number.isFinite(widthMeters) ? Math.min(10, Math.max(0.2, widthMeters)) : 2,
+    vertices,
+    segments,
+  }
+
+  return { center: { x: centerXZ.x, y: 0, z: centerXZ.z }, definition }
 }
 
 function findGroundNode(nodes: SceneNode[]): SceneNode | null {
@@ -661,6 +783,34 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     } else if (kind === 'road') {
       for (const line of group.polylines) {
         updateProgressForUnit(`Converting road: ${line.name?.trim() || line.id}`)
+      }
+
+      const widthMeters = resolveRoadWidthFromPlanningData(planningData, layerId)
+      const build = buildRoadDynamicMeshFromPlanningPolylines({
+        polylines: group.polylines,
+        groundWidth,
+        groundDepth,
+        widthMeters,
+      })
+
+      if (build) {
+        const roadObject = createRoadGroup(build.definition)
+        const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
+        const roadNode = sceneStore.addSceneNode({
+          nodeType: 'Mesh',
+          object: roadObject,
+          name: layerName ? `${layerName} Road` : 'Planning Road',
+          position: build.center,
+          rotation: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+          userData: {
+            source: PLANNING_CONVERSION_SOURCE,
+            planningLayerId: layerId,
+            kind: 'road',
+          },
+        })
+        sceneStore.moveNode({ nodeId: roadNode.id, targetId: root.id, position: 'inside' })
+        sceneStore.updateNodeDynamicMesh(roadNode.id, build.definition)
       }
     } else if (kind === 'green') {
       for (const poly of group.polygons) { 
