@@ -54,6 +54,7 @@ import type {
   Vector3Like,
   WallDynamicMesh,
   RoadDynamicMesh,
+  FloorDynamicMesh,
 } from '@harmony/schema'
 import { normalizeLightNodeType } from '@/types/light'
 import type { NodePrefabData } from '@/types/node-prefab'
@@ -131,6 +132,7 @@ import {
 } from '@schema/modelObjectCache'
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 import { createRoadGroup } from '@schema/roadMesh'
+import { createFloorGroup } from '@schema/floorMesh'
 import { computeBlobHash, blobToDataUrl, dataUrlToBlob, inferBlobFilename, extractExtension, ensureExtension } from '@/utils/blob'
 import {
   buildBehaviorPrefabFilename,
@@ -1341,6 +1343,75 @@ function buildRoadDynamicMeshFromWorldPoints(
     width: normalizedWidth,
     vertices,
     segments,
+  }
+
+  return { center, definition }
+}
+
+function buildFloorWorldPoints(points: Vector3Like[]): Vector3[] {
+  const out: Vector3[] = []
+  points.forEach((p) => {
+    if (!p) {
+      return
+    }
+    const x = Number(p.x)
+    const z = Number(p.z)
+    if (!Number.isFinite(x) || !Number.isFinite(z)) {
+      return
+    }
+    const vec = new Vector3(x, 0, z)
+    const prev = out[out.length - 1]
+    if (prev && prev.distanceToSquared(vec) <= 1e-10) {
+      return
+    }
+    out.push(vec)
+  })
+
+  // Drop a closing point if it repeats the first.
+  if (out.length >= 3) {
+    const first = out[0]!
+    const last = out[out.length - 1]!
+    if (first.distanceToSquared(last) <= 1e-10) {
+      out.pop()
+    }
+  }
+
+  return out
+}
+
+function computeFloorCenter(points: Vector3[]): Vector3 {
+  const min = new Vector3(Number.POSITIVE_INFINITY, 0, Number.POSITIVE_INFINITY)
+  const max = new Vector3(Number.NEGATIVE_INFINITY, 0, Number.NEGATIVE_INFINITY)
+
+  points.forEach((p) => {
+    min.x = Math.min(min.x, p.x)
+    min.z = Math.min(min.z, p.z)
+    max.x = Math.max(max.x, p.x)
+    max.z = Math.max(max.z, p.z)
+  })
+
+  if (!Number.isFinite(min.x) || !Number.isFinite(max.x)) {
+    return new Vector3(0, 0, 0)
+  }
+
+  return new Vector3((min.x + max.x) * 0.5, 0, (min.z + max.z) * 0.5)
+}
+
+function buildFloorDynamicMeshFromWorldPoints(
+  points: Vector3Like[],
+): { center: Vector3; definition: FloorDynamicMesh } | null {
+  const worldPoints = buildFloorWorldPoints(points)
+  if (worldPoints.length < 3) {
+    return null
+  }
+
+  const center = computeFloorCenter(worldPoints)
+  const vertices = worldPoints.map((p) => [p.x - center.x, p.z - center.z] as [number, number])
+
+  const definition: FloorDynamicMesh = {
+    type: 'Floor',
+    vertices,
+    materialId: null,
   }
 
   return { center, definition }
@@ -3102,7 +3173,7 @@ function ensureDynamicMeshRuntime(node: SceneNode): boolean {
   }
 
   const meshType = normalizeDynamicMeshType(meshDefinition.type)
-  if (meshType !== 'Wall' && meshType !== 'Road') {
+  if (meshType !== 'Wall' && meshType !== 'Road' && meshType !== 'Floor') {
     return false
   }
 
@@ -3113,7 +3184,9 @@ function ensureDynamicMeshRuntime(node: SceneNode): boolean {
   try {
     const runtime = meshType === 'Road'
       ? createRoadGroup(meshDefinition as RoadDynamicMesh)
-      : createWallGroup(meshDefinition as WallDynamicMesh)
+      : meshType === 'Floor'
+        ? createFloorGroup(meshDefinition as FloorDynamicMesh)
+        : createWallGroup(meshDefinition as WallDynamicMesh)
     runtime.name = node.name ?? runtime.name
     prepareRuntimeObjectForNode(runtime)
     tagObjectWithNodeId(runtime, node.id)
@@ -10829,6 +10902,38 @@ export const useSceneStore = defineStore('scene', {
       const nextIndex = (fallback[fallback.length - 1] ?? 0) + 1
       return `${prefix}${nextIndex.toString().padStart(2, '0')}`
     },
+
+    generateFloorNodeName() {
+      const prefix = 'Floor '
+      const pattern = /^Floor\s(\d{2})$/
+      const taken = new Set<string>()
+      const collectNames = (nodes: SceneNode[]) => {
+        nodes.forEach((node) => {
+          if (typeof node.name === 'string' && node.name.startsWith(prefix)) {
+            taken.add(node.name)
+          }
+          if (node.children?.length) {
+            collectNames(node.children)
+          }
+        })
+      }
+      collectNames(this.nodes)
+      for (let index = 1; index < 1000; index += 1) {
+        const candidate = `${prefix}${index.toString().padStart(2, '0')}`
+        if (!taken.has(candidate)) {
+          return candidate
+        }
+      }
+      const fallback = Array.from(taken)
+        .map((name) => {
+          const match = name.match(pattern)
+          return match ? Number(match[1]) : Number.NaN
+        })
+        .filter((value) => Number.isFinite(value))
+        .sort((a, b) => a - b)
+      const nextIndex = (fallback[fallback.length - 1] ?? 0) + 1
+      return `${prefix}${nextIndex.toString().padStart(2, '0')}`
+    },
     ensureStaticRigidbodyComponent(nodeId: string): SceneNodeComponentState<RigidbodyComponentProps> | null {
       const target = findNodeById(this.nodes, nodeId)
       if (!target) {
@@ -10952,6 +11057,34 @@ export const useSceneStore = defineStore('scene', {
             bodyAssetId,
           })
         }
+      }
+
+      return node
+    },
+
+    createFloorNode(payload: {
+      points: Vector3Like[]
+      name?: string
+    }): SceneNode | null {
+      const build = buildFloorDynamicMeshFromWorldPoints(payload.points)
+      if (!build) {
+        return null
+      }
+
+      const floorGroup = createFloorGroup(build.definition)
+      const nodeName = payload.name ?? this.generateFloorNodeName()
+      const node = this.addSceneNode({
+        nodeType: 'Mesh',
+        object: floorGroup,
+        name: nodeName,
+        position: createVector(build.center.x, build.center.y, build.center.z),
+        rotation: createVector(0, 0, 0),
+        scale: createVector(1, 1, 1),
+        dynamicMesh: build.definition,
+      })
+
+      if (node) {
+        this.ensureStaticRigidbodyComponent(node.id)
       }
 
       return node

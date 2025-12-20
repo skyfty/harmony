@@ -758,7 +758,7 @@ export type EnvironmentSettingsPatch = Partial<EnvironmentSettings> & {
   background?: Partial<EnvironmentBackgroundSettings>
   environmentMap?: Partial<EnvironmentMapSettings>
 }
-export type DynamicMeshType = 'Ground' | 'Wall' | 'Road'
+export type DynamicMeshType = 'Ground' | 'Wall' | 'Road' | 'Floor'
 
 export interface GroundHeightMap {
   [key: string]: number
@@ -850,7 +850,21 @@ export interface RoadDynamicMesh {
   segments: RoadSegment[]
 }
 
-export type SceneDynamicMesh = GroundDynamicMesh | WallDynamicMesh | RoadDynamicMesh
+export type FloorVertex2D = [number, number]
+
+export interface FloorDynamicMesh {
+  type: 'Floor'
+  /**
+   * Floor polygon vertices projected onto the ground.
+   * Each entry is a 2D point: [x, y] where y maps to world-space z.
+   * Height is implicitly 0.
+   */
+  vertices: FloorVertex2D[]
+  /** Optional material assignment token (editor-defined). */
+  materialId?: string | null
+}
+
+export type SceneDynamicMesh = GroundDynamicMesh | WallDynamicMesh | RoadDynamicMesh | FloorDynamicMesh
 
 export interface ClipboardEntry {
   sourceId: string

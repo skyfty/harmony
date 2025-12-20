@@ -17,6 +17,7 @@ import type {
   GroundDynamicMesh,
   WallDynamicMesh,
   RoadDynamicMesh,
+  FloorDynamicMesh,
   SceneResourceSummaryEntry,
   SceneMaterialTextureSlot,
 } from '@harmony/schema';
@@ -44,6 +45,7 @@ import { loadObjectFromFile } from '@schema/assetImport'
 import { createGroundMesh, updateGroundMesh } from './groundMesh'
 import { createWallRenderGroup } from './wallMesh'
 import { createRoadRenderGroup } from './roadMesh'
+import { createFloorRenderGroup } from './floorMesh'
 import type { WallComponentProps } from './components/definitions/wallComponent'
 import { WALL_COMPONENT_TYPE, clampWallProps } from './components/definitions/wallComponent'
 import type { RoadComponentProps } from './components/definitions/roadComponent'
@@ -824,6 +826,9 @@ class SceneGraphBuilder {
     if (meshInfo?.type === 'Road') {
       return this.buildRoadMesh(meshInfo as RoadDynamicMesh, node);
     }
+    if (meshInfo?.type === 'Floor') {
+      return this.buildFloorMesh(meshInfo as FloorDynamicMesh, node);
+    }
 
     const outlineMesh = this.resolveOutlineMeshForNode(node);
 
@@ -1140,6 +1145,46 @@ class SceneGraphBuilder {
 
     const group = createRoadRenderGroup(meshInfo, { bodyObject });
     group.name = node.name ?? (group.name || 'Road');
+
+    const nodeMaterialConfigs = Array.isArray(node.materials) ? (node.materials as SceneNodeMaterial[]) : [];
+    const resolvedMaterials = await this.resolveNodeMaterials(node);
+    const defaultMaterialAssignment = this.pickMaterialAssignment(resolvedMaterials);
+
+    if (defaultMaterialAssignment) {
+      const materialByConfigId = new Map<string, THREE.Material>();
+      nodeMaterialConfigs.forEach((config, index) => {
+        const configId = typeof config?.id === 'string' ? config.id.trim() : '';
+        const material = resolvedMaterials[index];
+        if (configId && material) {
+          materialByConfigId.set(configId, material);
+        }
+      });
+
+      group.traverse((child: THREE.Object3D) => {
+        const mesh = child as THREE.Mesh & { isMesh?: boolean };
+        if (!mesh?.isMesh) {
+          return;
+        }
+
+        const selectorRaw = mesh.userData?.[MATERIAL_CONFIG_ID_KEY] as unknown;
+        const selectorId = typeof selectorRaw === 'string' ? selectorRaw.trim() : '';
+        if (selectorId && materialByConfigId.has(selectorId)) {
+          mesh.material = materialByConfigId.get(selectorId)!;
+          return;
+        }
+
+        mesh.material = defaultMaterialAssignment;
+      });
+    }
+
+    this.applyTransform(group, node);
+    this.applyVisibility(group, node);
+    return group;
+  }
+
+  private async buildFloorMesh(meshInfo: FloorDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const group = createFloorRenderGroup(meshInfo, {});
+    group.name = node.name ?? (group.name || 'Floor');
 
     const nodeMaterialConfigs = Array.isArray(node.materials) ? (node.materials as SceneNodeMaterial[]) : [];
     const resolvedMaterials = await this.resolveNodeMaterials(node);

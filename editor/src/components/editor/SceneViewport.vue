@@ -86,6 +86,7 @@ import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
 import { TerrainGridHelper } from './TerrainGridHelper'
 import { createWallPreviewRenderer } from './WallPreviewRenderer'
 import { createRoadPreviewRenderer } from './RoadPreviewRenderer'
+import { createFloorBuildTool } from './FloorBuildTool'
 import {
   createRoadVertexRenderer,
   ROAD_VERTEX_HANDLE_GROUP_NAME,
@@ -1455,6 +1456,16 @@ const wallPreviewRenderer = createWallPreviewRenderer({
 
 const roadPreviewRenderer = createRoadPreviewRenderer({
   rootGroup,
+})
+
+const floorBuildTool = createFloorBuildTool({
+  activeBuildTool,
+  sceneStore,
+  rootGroup,
+  raycastGroundPoint,
+  snapPoint: (point) => snapVectorToMajorGrid(point.clone()),
+  isAltOverrideActive: () => isAltOverrideActive,
+  clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
 })
 
 
@@ -3607,6 +3618,7 @@ function animate() {
 
   wallPreviewRenderer.flushIfNeeded(scene, wallBuildSession)
   roadPreviewRenderer.flushIfNeeded(scene, roadBuildSession)
+  floorBuildTool.flushPreviewIfNeeded(scene)
   updatePlaceholderOverlayPositions()
   if (sky) {
     sky.position.copy(camera.position)
@@ -4429,7 +4441,8 @@ async function handlePointerDown(event: PointerEvent) {
     event.button === 1 &&
     props.activeTool === 'select' &&
     activeBuildTool.value !== 'wall' &&
-    activeBuildTool.value !== 'road'
+    activeBuildTool.value !== 'road' &&
+    activeBuildTool.value !== 'floor'
   ) {
     const nodeId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
     if (nodeId && !sceneStore.isNodeSelectionLocked(nodeId)) {
@@ -4491,6 +4504,26 @@ async function handlePointerDown(event: PointerEvent) {
       return
     }
     // Wall build uses middle click for placement; keep left/right available for camera controls.
+    if (button === 0) {
+      pointerTrackingState = null
+      return
+    }
+    if (button === 2) {
+      pointerTrackingState = null
+      return
+    }
+  }
+
+  if (activeBuildTool.value === 'floor') {
+    floorBuildTool.handlePointerDown(event)
+    if (button === 1 && !isAltOverrideActive) {
+      pointerTrackingState = null
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+    // Floor build uses middle click for placement; keep left/right available for camera controls.
     if (button === 0) {
       pointerTrackingState = null
       return
@@ -4782,6 +4815,10 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
 
+  if (floorBuildTool.handlePointerMove(event)) {
+    return
+  }
+
   if (roadRightClickState && event.pointerId === roadRightClickState.pointerId && !roadRightClickState.moved) {
     const dx = event.clientX - roadRightClickState.startX
     const dy = event.clientY - roadRightClickState.startY
@@ -4978,6 +5015,16 @@ function handlePointerUp(event: PointerEvent) {
     }
   }
 
+  if (activeBuildTool.value === 'floor') {
+    const handled = floorBuildTool.handlePointerUp(event)
+    if (handled) {
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+    }
+    return
+  }
+
   if (activeBuildTool.value === 'road') {
     if (event.button === 1) {
       if (overrideActive) {
@@ -5101,6 +5148,15 @@ function handlePointerCancel(event: PointerEvent) {
 
   if (handleGroundEditorPointerCancel(event)) {
     return
+  }
+
+  if (activeBuildTool.value === 'floor') {
+    if (floorBuildTool.handlePointerCancel(event)) {
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
   }
 
   if (activeBuildTool.value === 'wall') {
@@ -5769,6 +5825,13 @@ function cancelActiveBuildOperation(): boolean {
       }
       handled = true
       break
+    case 'floor':
+      if (floorBuildTool.cancel()) {
+        // keep tool active? match road behavior: exit tool after cancel
+      }
+      activeBuildTool.value = null
+      handled = true
+      break
     case 'road':
       if (roadBuildSession) {
         cancelRoadBuildSession()
@@ -5788,6 +5851,9 @@ function cancelActiveBuildOperation(): boolean {
 }
 
 function handleBuildToolChange(tool: BuildTool | null) {
+  if (activeBuildTool.value === 'floor' && tool !== 'floor') {
+    floorBuildTool.cancel()
+  }
   if (tool === 'ground') {
     exitScatterEraseMode()
     cancelGroundEditorScatterPlacement()
