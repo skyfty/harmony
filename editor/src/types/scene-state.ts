@@ -21,6 +21,9 @@ export interface SceneState {
   materials: SceneMaterial[]
   selectedNodeId: string | null
   selectedNodeIds: string[]
+
+  /** Optional sub-selection for road editing (segment-level). */
+  selectedRoadSegment: { nodeId: string; segmentIndex: number } | null
   activeTool: EditorTool
   projectTree: ProjectDirectory[]
   assetCatalog: Record<string, ProjectAsset[]>

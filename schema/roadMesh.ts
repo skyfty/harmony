@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import type { RoadDynamicMesh } from '@harmony/schema'
+import { MATERIAL_CONFIG_ID_KEY } from './material'
 
 export type RoadRenderAssetObjects = {
   bodyObject?: THREE.Object3D | null
@@ -52,11 +53,35 @@ function directionToQuaternionFromXAxis(direction: THREE.Vector3): THREE.Quatern
 
 function forEachRoadSegment(
   definition: RoadDynamicMesh,
-  visit: (segment: { start: THREE.Vector3; end: THREE.Vector3; width: number }, index: number) => void,
+  visit: (
+    segment: { start: THREE.Vector3; end: THREE.Vector3; width: number; materialId: string | null },
+    index: number,
+  ) => void,
 ): void {
+  const vertices = Array.isArray(definition.vertices) ? definition.vertices : []
+  const segments = Array.isArray(definition.segments) ? definition.segments : []
   const points = Array.isArray(definition.points) ? definition.points : []
   const width = Number.isFinite(definition.width) ? Math.max(1e-3, definition.width) : 2
 
+  if (vertices.length && segments.length) {
+    segments.forEach((segment, index) => {
+      const a = vertices[segment.a]
+      const b = vertices[segment.b]
+      if (!a || !b || a.length < 2 || b.length < 2) {
+        return
+      }
+      const start = new THREE.Vector3(a[0] ?? 0, 0, a[1] ?? 0)
+      const end = new THREE.Vector3(b[0] ?? 0, 0, b[1] ?? 0)
+      if (start.distanceToSquared(end) <= ROAD_EPSILON) {
+        return
+      }
+      const rawMaterialId = typeof segment.materialId === 'string' ? segment.materialId.trim() : ''
+      visit({ start, end, width, materialId: rawMaterialId || null }, index)
+    })
+    return
+  }
+
+  // Legacy polyline fallback.
   for (let i = 0; i < points.length - 1; i += 1) {
     const a = points[i]
     const b = points[i + 1]
@@ -70,7 +95,7 @@ function forEachRoadSegment(
       continue
     }
 
-    visit({ start, end, width }, i)
+    visit({ start, end, width, materialId: null }, i)
   }
 }
 
@@ -80,7 +105,7 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh) {
 
   const material = createSegmentMaterial()
 
-  forEachRoadSegment(definition, ({ start, end, width }, index) => {
+  forEachRoadSegment(definition, ({ start, end, width, materialId }, index) => {
     const direction = end.clone().sub(start)
     const length = direction.length()
     if (length <= ROAD_EPSILON) {
@@ -105,6 +130,7 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh) {
     segmentGroup.name = `RoadSegmentGroup_${index + 1}`
     segmentGroup.userData.roadSegmentIndex = index
     mesh.userData.roadSegmentIndex = index
+    mesh.userData[MATERIAL_CONFIG_ID_KEY] = materialId
     segmentGroup.add(mesh)
     group.add(segmentGroup)
   })
@@ -162,6 +188,8 @@ function buildInstancedMeshesFromTemplate(
     instanced.name = `${options.namePrefix}_${index + 1}`
     instanced.castShadow = template.castShadow
     instanced.receiveShadow = template.receiveShadow
+    // For road bodies, instanceId aligns with segment index.
+    instanced.userData.roadSegmentIndexMode = 'instanceId'
     for (let i = 0; i < instanceMatrices.length; i += 1) {
       instanced.setMatrixAt(i, instanceMatrices[i]!)
     }

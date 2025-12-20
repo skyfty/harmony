@@ -16,6 +16,35 @@ export function useScenePicking(
 ) {
   const sceneStore = useSceneStore()
 
+  function resolveRoadSegmentIndexFromObject(object: THREE.Object3D | null): number | null {
+    let current: THREE.Object3D | null = object
+    while (current) {
+      const raw = current.userData?.roadSegmentIndex
+      if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) {
+        return raw
+      }
+      current = current.parent ?? null
+    }
+    return null
+  }
+
+  function resolveRoadSegmentIndexFromIntersection(intersection: THREE.Intersection): number | null {
+    const instanceId = typeof intersection.instanceId === 'number' ? intersection.instanceId : null
+    const object = intersection.object as THREE.Object3D
+
+    // Road instanced bodies use the instanceId as the segment index.
+    if (
+      instanceId !== null &&
+      instanceId >= 0 &&
+      object &&
+      object.userData?.roadSegmentIndexMode === 'instanceId'
+    ) {
+      return instanceId
+    }
+
+    return resolveRoadSegmentIndexFromObject(object)
+  }
+
   function resolveNodeIdFromObject(object: THREE.Object3D | null): string | null {
     let current: THREE.Object3D | null = object
     while (current) {
@@ -121,10 +150,13 @@ export function useScenePicking(
       if (!isObjectWorldVisible(baseObject)) {
         continue
       }
+
+      const roadSegmentIndex = resolveRoadSegmentIndexFromIntersection(intersection)
       return {
         nodeId,
         object: baseObject,
         point: intersection.point.clone(),
+        roadSegmentIndex,
       }
     }
 

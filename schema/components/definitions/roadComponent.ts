@@ -1,7 +1,7 @@
 import type { Object3D } from 'three'
 import { Component, type ComponentRuntimeContext } from '../Component'
 import { componentManager, type ComponentDefinition } from '../componentManager'
-import type { RoadDynamicMesh, SceneNodeComponentState, SceneNode } from '../../index'
+import type { RoadDynamicMesh, RoadSegment, SceneNodeComponentState, SceneNode } from '../../index'
 
 export const ROAD_COMPONENT_TYPE = 'road'
 export const ROAD_DEFAULT_WIDTH = 2
@@ -10,7 +10,8 @@ export const ROAD_MIN_WIDTH = 0.2
 export type RoadPoint2D = [number, number]
 
 export interface RoadComponentProps {
-  points: RoadPoint2D[]
+  vertices: RoadPoint2D[]
+  segments: RoadSegment[]
   width: number
   bodyAssetId?: string | null
 }
@@ -30,17 +31,41 @@ function normalizePoint(value: unknown): RoadPoint2D | null {
 export function clampRoadProps(props: Partial<RoadComponentProps> | null | undefined): RoadComponentProps {
   const width = Number.isFinite(props?.width) ? Math.max(ROAD_MIN_WIDTH, props!.width!) : ROAD_DEFAULT_WIDTH
 
-  const pointsRaw = Array.isArray((props as RoadComponentProps | undefined)?.points)
-    ? (props as RoadComponentProps).points
+  const verticesRaw = Array.isArray((props as RoadComponentProps | undefined)?.vertices)
+    ? (props as RoadComponentProps).vertices
     : []
-  const points = pointsRaw.map(normalizePoint).filter((p): p is RoadPoint2D => !!p)
+  const vertices = verticesRaw.map(normalizePoint).filter((p): p is RoadPoint2D => !!p)
+
+  const segmentsRaw = Array.isArray((props as RoadComponentProps | undefined)?.segments)
+    ? (props as RoadComponentProps).segments
+    : []
+  const segments = segmentsRaw
+    .map((segment): RoadSegment | null => {
+      if (!segment || typeof segment !== 'object') {
+        return null
+      }
+      const a = Math.trunc(Number((segment as any).a))
+      const b = Math.trunc(Number((segment as any).b))
+      if (!Number.isFinite(a) || !Number.isFinite(b) || a < 0 || b < 0) {
+        return null
+      }
+      return {
+        a,
+        b,
+        materialId: typeof (segment as any).materialId === 'string' && (segment as any).materialId.trim().length
+          ? String((segment as any).materialId)
+          : null,
+      } as RoadSegment
+    })
+    .filter((segment): segment is RoadSegment => segment !== null)
 
   const normalizeAssetId = (value: unknown): string | null => {
     return typeof value === 'string' && value.trim().length ? value : null
   }
 
   return {
-    points,
+    vertices,
+    segments,
     width,
     bodyAssetId: normalizeAssetId((props as RoadComponentProps | undefined)?.bodyAssetId),
   }
@@ -49,22 +74,32 @@ export function clampRoadProps(props: Partial<RoadComponentProps> | null | undef
 export function resolveRoadComponentPropsFromMesh(mesh: RoadDynamicMesh | undefined | null): RoadComponentProps {
   if (!mesh) {
     return {
-      points: [],
+      vertices: [],
+      segments: [],
       width: ROAD_DEFAULT_WIDTH,
       bodyAssetId: null,
     }
   }
 
-  const points = Array.isArray(mesh.points) ? mesh.points : []
+  const vertices = Array.isArray(mesh.vertices) && mesh.vertices.length
+    ? mesh.vertices
+    : (Array.isArray(mesh.points) ? mesh.points : [])
+  const segments = Array.isArray(mesh.segments) && mesh.segments.length
+    ? mesh.segments
+    : (vertices.length >= 2
+      ? Array.from({ length: vertices.length - 1 }, (_value, index) => ({ a: index, b: index + 1 }))
+      : [])
   return clampRoadProps({
-    points: points as any,
+    vertices: vertices as any,
+    segments: segments as any,
     width: mesh.width,
   })
 }
 
 export function cloneRoadComponentProps(props: RoadComponentProps): RoadComponentProps {
   return {
-    points: props.points.map((p) => [p[0], p[1]]),
+    vertices: props.vertices.map((p) => [p[0], p[1]]),
+    segments: props.segments.map((s) => ({ a: s.a, b: s.b, materialId: s.materialId ?? null })),
     width: props.width,
     bodyAssetId: props.bodyAssetId ?? null,
   }
@@ -116,7 +151,8 @@ export function createRoadComponentState(
 ): SceneNodeComponentState<RoadComponentProps> {
   const defaults = roadComponentDefinition.createDefaultProps(node)
   const merged = clampRoadProps({
-    points: overrides?.points ?? defaults.points,
+    vertices: overrides?.vertices ?? defaults.vertices,
+    segments: overrides?.segments ?? defaults.segments,
     width: overrides?.width ?? defaults.width,
     bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,
   })

@@ -1333,10 +1333,16 @@ function buildRoadDynamicMeshFromWorldPoints(
   const center = computeRoadCenter(worldPoints)
   const normalizedWidth = normalizeRoadWidth(width)
 
+  const vertices = worldPoints.map((p) => [p.x - center.x, p.z - center.z] as [number, number])
+  const segments = Array.from({ length: vertices.length - 1 }, (_value, index) => ({ a: index, b: index + 1, materialId: null }))
+
   const definition: RoadDynamicMesh = {
     type: 'Road',
     width: normalizedWidth,
-    points: worldPoints.map((p) => [p.x - center.x, p.z - center.z]),
+    vertices,
+    segments,
+    // Keep legacy points for export/backward compatibility.
+    points: vertices,
   }
 
   return { center, definition }
@@ -1664,25 +1670,62 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
     }
     case 'Road': {
       const roadMesh = mesh as RoadDynamicMesh
-      const pointsRaw = Array.isArray(roadMesh.points) ? roadMesh.points : []
-      const points = pointsRaw
-        .map((p) => {
-          if (!Array.isArray(p) || p.length < 2) {
-            return null
-          }
-          const x = Number(p[0])
-          const y = Number(p[1])
-          if (!Number.isFinite(x) || !Number.isFinite(y)) {
-            return null
-          }
-          return [x, y] as [number, number]
-        })
+
+      const normalizePoint2D = (p: unknown): [number, number] | null => {
+        if (!Array.isArray(p) || p.length < 2) {
+          return null
+        }
+        const x = Number(p[0])
+        const y = Number(p[1])
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+          return null
+        }
+        return [x, y]
+      }
+
+      const vertices = (Array.isArray(roadMesh.vertices) ? roadMesh.vertices : [])
+        .map(normalizePoint2D)
         .filter((p): p is [number, number] => !!p)
+
+      const legacyPoints = (Array.isArray(roadMesh.points) ? roadMesh.points : [])
+        .map(normalizePoint2D)
+        .filter((p): p is [number, number] => !!p)
+
+      const effectiveVertices = vertices.length ? vertices : legacyPoints
+      const segmentsRaw = Array.isArray((roadMesh as any).segments) ? (roadMesh as any).segments : []
+      const segments = segmentsRaw
+        .map((segment: any) => {
+          if (!segment || typeof segment !== 'object') {
+            return null
+          }
+          const a = Math.trunc(Number(segment.a))
+          const b = Math.trunc(Number(segment.b))
+          if (!Number.isFinite(a) || !Number.isFinite(b) || a < 0 || b < 0) {
+            return null
+          }
+          return {
+            a,
+            b,
+            materialId: typeof segment.materialId === 'string' && segment.materialId.trim().length
+              ? String(segment.materialId)
+              : null,
+          }
+        })
+        .filter((segment: any): segment is { a: number; b: number; materialId: string | null } => !!segment)
+
+      const effectiveSegments = segments.length
+        ? segments
+        : (effectiveVertices.length >= 2
+          ? Array.from({ length: effectiveVertices.length - 1 }, (_value, index) => ({ a: index, b: index + 1, materialId: null }))
+          : [])
 
       return {
         type: 'Road',
         width: Number.isFinite(roadMesh.width) ? Math.max(ROAD_MIN_WIDTH, roadMesh.width) : ROAD_DEFAULT_WIDTH,
-        points,
+        vertices: effectiveVertices,
+        segments: effectiveSegments,
+        // Keep legacy points for export/backward compatibility.
+        points: effectiveVertices,
       }
     }
     default:
@@ -6451,6 +6494,7 @@ export const useSceneStore = defineStore('scene', {
       materials: cloneSceneMaterials(initialSceneDocument.materials),
       selectedNodeId: initialSceneDocument.selectedNodeId,
       selectedNodeIds: cloneSelection(initialSceneDocument.selectedNodeIds),
+      selectedRoadSegment: null,
       activeTool: 'select',
       assetCatalog,
       assetIndex,
@@ -6969,7 +7013,27 @@ export const useSceneStore = defineStore('scene', {
       }
       this.selectedNodeIds = normalized
       this.selectedNodeId = nextPrimary
+
+      if (this.selectedRoadSegment && (normalized.length !== 1 || normalized[0] !== this.selectedRoadSegment.nodeId)) {
+        this.selectedRoadSegment = null
+      }
       return true
+    },
+    setSelectedRoadSegment(nodeId: string, segmentIndex: number | null) {
+      const normalizedNodeId = typeof nodeId === 'string' ? nodeId.trim() : ''
+      const normalizedIndex = typeof segmentIndex === 'number' && Number.isFinite(segmentIndex)
+        ? Math.max(0, Math.floor(segmentIndex))
+        : null
+      if (!normalizedNodeId || normalizedIndex === null) {
+        this.selectedRoadSegment = null
+        return
+      }
+      this.selectedRoadSegment = { nodeId: normalizedNodeId, segmentIndex: normalizedIndex }
+    },
+    clearSelectedRoadSegment() {
+      if (this.selectedRoadSegment) {
+        this.selectedRoadSegment = null
+      }
     },
     isGroupExpanded(nodeId: string): boolean {
       const node = findNodeById(this.nodes, nodeId)

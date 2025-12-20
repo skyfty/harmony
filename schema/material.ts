@@ -53,10 +53,12 @@ const MATERIAL_ORIGINAL_KEY = '__harmonyMaterialOriginal';
 const TEXTURE_SLOT_STATE_KEY = '__harmonyTextureSlots';
 const TEXTURE_SLOT_OVERRIDES_KEY = '__harmonyTextureOverrides';
 const MATERIAL_OVERRIDE_STATE_KEY = '__harmonyMaterialOverrideState';
+export const MATERIAL_CONFIG_ID_KEY = '__harmonyMaterialConfigId';
 
 type MaterialOverrideState = {
   signature: string;
   materialUUIDs: string[];
+  selectorId?: string | null;
 };
 
 export const DEFAULT_TEXTURE_SETTINGS: SceneMaterialTextureSettings = {
@@ -991,10 +993,13 @@ export function applyMaterialOverrides(
     }
 
     const previousState = (mesh.userData?.[MATERIAL_OVERRIDE_STATE_KEY] ?? null) as MaterialOverrideState | null;
+    const requestedSelectorIdRaw = mesh.userData?.[MATERIAL_CONFIG_ID_KEY] as unknown;
+    const requestedSelectorId = typeof requestedSelectorIdRaw === 'string' ? requestedSelectorIdRaw.trim() : '';
     const currentMaterialUUIDs = collectMaterialUUIDs(currentMaterial);
     if (
       previousState &&
       previousState.signature === overrideSignature &&
+      (previousState.selectorId ?? null) === (requestedSelectorId || null) &&
       arraysShallowEqual(previousState.materialUUIDs, currentMaterialUUIDs)
     ) {
       return;
@@ -1011,10 +1016,13 @@ export function applyMaterialOverrides(
     }
 
     const materials = Array.isArray(resolvedMaterial) ? resolvedMaterial : [resolvedMaterial];
+    const configById = requestedSelectorId
+      ? (configs.find((entry) => typeof entry?.id === 'string' && entry.id === requestedSelectorId) ?? null)
+      : null;
     const disposables: Array<(() => void) | undefined> = [];
     let replaced = false;
     materials.forEach((materialRef, index) => {
-      const config = configs.length === 1 ? configs[0] : configs[index] ?? null;
+      const config = configById ?? (configs.length === 1 ? configs[0] : configs[index] ?? null);
       if (config) {
         const { material: ensured, replaced: didReplace, dispose } = ensureMaterialType(materialRef, config.type);
         if (didReplace) {
@@ -1040,6 +1048,7 @@ export function applyMaterialOverrides(
     }
     mesh.userData[MATERIAL_OVERRIDE_STATE_KEY] = {
       signature: overrideSignature,
+      selectorId: requestedSelectorId || null,
       materialUUIDs: collectMaterialUUIDs(mesh.material),
     };
   });

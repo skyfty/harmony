@@ -823,16 +823,37 @@ export interface WallDynamicMesh {
   segments: WallSegment[]
 }
 
+export type RoadVertex2D = [number, number]
+
+export type RoadSegment = {
+  /** Index into `vertices`. */
+  a: number
+  /** Index into `vertices`. */
+  b: number
+  /** Optional material assignment token (editor-defined). */
+  materialId?: string | null
+}
+
 export interface RoadDynamicMesh {
   type: 'Road'
+  /** Default road width in meters. */
+  width: number
+
   /**
-   * Road polyline vertices projected onto the ground.
+   * Road graph vertices projected onto the ground.
    * Each entry is a 2D point: [x, y] where y maps to world-space z.
    * Height is implicitly 0.
    */
-  points: Array<[number, number]>
-  /** Default road width in meters. */
-  width: number
+  vertices: RoadVertex2D[]
+
+  /** Connections between vertices. Supports branching roads. */
+  segments: RoadSegment[]
+
+  /**
+   * Legacy polyline representation.
+   * When present, consumers should treat it as a single chain in order.
+   */
+  points?: RoadVertex2D[]
 }
 
 export type SceneDynamicMesh = GroundDynamicMesh | WallDynamicMesh | RoadDynamicMesh

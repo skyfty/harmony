@@ -4242,7 +4242,23 @@ function handleClickSelection(event: PointerEvent, trackingState: PointerTrackin
   const currentSelection = sceneStore.selectedNodeIds
   const allowDeselectOnReselect = options?.allowDeselectOnReselect ?? true
 
+  // Road segment sub-selection: only in select tool mode, left click, no modifiers.
+  if (
+    props.activeTool === 'select' &&
+    hit &&
+    typeof hit.roadSegmentIndex === 'number' &&
+    Number.isFinite(hit.roadSegmentIndex) &&
+    hit.roadSegmentIndex >= 0 &&
+    !isToggle &&
+    !isRange
+  ) {
+    sceneStore.setSelectedRoadSegment(hit.nodeId, hit.roadSegmentIndex)
+    emitSelectionChange([hit.nodeId])
+    return
+  }
+
   if (!hit) {
+    sceneStore.clearSelectedRoadSegment()
     if (!isToggle && !isRange) {
       emitSelectionChange([])
     }
@@ -4251,6 +4267,9 @@ function handleClickSelection(event: PointerEvent, trackingState: PointerTrackin
 
   const nodeId = hit.nodeId
   const alreadySelected = currentSelection.includes(nodeId)
+
+  // Clicking anything else clears road segment selection.
+  sceneStore.clearSelectedRoadSegment()
 
   if (isToggle || isRange) {
     if (alreadySelected) {
