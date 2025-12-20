@@ -3265,7 +3265,9 @@ function handleLineSegmentPointerDown(lineId: string, segmentIndex: number, even
   if (tryBeginMiddlePan(event)) {
     return
   }
-  if (event.button !== 0) {
+  const isPrimary = event.button === 0
+  const isSecondary = event.button === 2
+  if (!isPrimary && !isSecondary) {
     return
   }
   const world = screenToWorld(event)
@@ -3295,6 +3297,9 @@ function handleLineSegmentPointerDown(lineId: string, segmentIndex: number, even
   }
 
   if (effectiveTool !== 'select') {
+    return
+  }
+  if (!isSecondary) {
     return
   }
   const skipSplit = event.ctrlKey || event.metaKey
