@@ -1377,9 +1377,188 @@ type RoadBuildSession = {
   previewGroup: THREE.Group | null
   width: number
   snapVertices: THREE.Vector3[]
+
+  /** When set, edits an existing Road node (branch build). */
+  targetNodeId: string | null
+  /** Vertex index in the target node to branch from. */
+  startVertexIndex: number | null
 }
 
 let roadBuildSession: RoadBuildSession | null = null
+
+type RoadVertexHandleState = {
+  nodeId: string
+  group: THREE.Group
+  signature: string
+}
+
+let roadVertexHandleState: RoadVertexHandleState | null = null
+
+type RoadVertexDragState = {
+  pointerId: number
+  nodeId: string
+  vertexIndex: number
+  startX: number
+  startY: number
+  moved: boolean
+  runtimeObject: THREE.Object3D
+  baseDefinition: RoadDynamicMesh
+  workingDefinition: RoadDynamicMesh
+}
+
+let roadVertexDragState: RoadVertexDragState | null = null
+
+const ROAD_VERTEX_HANDLE_Y_OFFSET = 0.03
+const ROAD_VERTEX_HANDLE_RENDER_ORDER = 1001
+
+function disposeRoadVertexHandleGroup(group: THREE.Group) {
+  group.traverse((child) => {
+    const mesh = child as THREE.Mesh
+    if (mesh?.isMesh) {
+      mesh.geometry?.dispose?.()
+      const mat = mesh.material
+      if (Array.isArray(mat)) {
+        mat.forEach((entry) => entry?.dispose?.())
+      } else {
+        mat?.dispose?.()
+      }
+    }
+  })
+}
+
+function clearRoadVertexHandles() {
+  if (!roadVertexHandleState) {
+    return
+  }
+  const existing = roadVertexHandleState
+  roadVertexHandleState = null
+  existing.group.removeFromParent()
+  disposeRoadVertexHandleGroup(existing.group)
+}
+
+function computeRoadVertexHandleSignature(definition: RoadDynamicMesh): string {
+  const serialized = stableSerialize([
+    Array.isArray(definition.vertices) ? definition.vertices : [],
+    Number.isFinite(definition.width) ? definition.width : null,
+  ])
+  return hashString(serialized)
+}
+
+function createRoadVertexHandleMaterial(): THREE.MeshBasicMaterial {
+  const material = new THREE.MeshBasicMaterial({
+    color: 0xffc107,
+    transparent: true,
+    opacity: 0.9,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  })
+  material.polygonOffset = true
+  material.polygonOffsetFactor = -2
+  material.polygonOffsetUnits = -2
+  return material
+}
+
+function ensureRoadVertexHandlesForSelectedNode() {
+  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  const shouldShow = activeBuildTool.value === 'road' && !!selectedId
+  if (!shouldShow || !selectedId) {
+    clearRoadVertexHandles()
+    return
+  }
+
+  const node = findSceneNode(sceneStore.nodes, selectedId)
+  if (!node || node.dynamicMesh?.type !== 'Road') {
+    clearRoadVertexHandles()
+    return
+  }
+  if (sceneStore.isNodeSelectionLocked(selectedId)) {
+    clearRoadVertexHandles()
+    return
+  }
+
+  const runtimeObject = objectMap.get(selectedId) ?? null
+  if (!runtimeObject) {
+    clearRoadVertexHandles()
+    return
+  }
+
+  const signature = computeRoadVertexHandleSignature(node.dynamicMesh)
+  if (roadVertexHandleState && roadVertexHandleState.nodeId === selectedId && roadVertexHandleState.signature === signature) {
+    // Ensure it stays attached.
+    if (!runtimeObject.children.includes(roadVertexHandleState.group)) {
+      runtimeObject.add(roadVertexHandleState.group)
+    }
+    return
+  }
+
+  clearRoadVertexHandles()
+
+  const group = new THREE.Group()
+  group.name = '__RoadVertexHandles'
+  group.userData.isRoadVertexHandles = true
+
+  const width = Number.isFinite(node.dynamicMesh.width) ? Math.max(0.2, node.dynamicMesh.width) : 2
+  const radius = Math.max(0.1, width * 0.5)
+  const geometry = new THREE.CircleGeometry(radius, 32)
+  geometry.rotateX(-Math.PI / 2)
+  const material = createRoadVertexHandleMaterial()
+
+  const vertices = Array.isArray(node.dynamicMesh.vertices) ? node.dynamicMesh.vertices : []
+  vertices.forEach((v, index) => {
+    if (!Array.isArray(v) || v.length < 2) {
+      return
+    }
+    const x = Number(v[0])
+    const z = Number(v[1])
+    if (!Number.isFinite(x) || !Number.isFinite(z)) {
+      return
+    }
+    const mesh = new THREE.Mesh(geometry.clone(), material.clone())
+    mesh.name = `RoadVertexHandle_${index + 1}`
+    mesh.position.set(x, ROAD_VERTEX_HANDLE_Y_OFFSET, z)
+    mesh.renderOrder = ROAD_VERTEX_HANDLE_RENDER_ORDER
+    mesh.layers.enableAll()
+    mesh.userData.isRoadVertexHandle = true
+    mesh.userData.nodeId = selectedId
+    mesh.userData.roadVertexIndex = index
+    group.add(mesh)
+  })
+
+  runtimeObject.add(group)
+  roadVertexHandleState = { nodeId: selectedId, group, signature }
+}
+
+function pickRoadVertexHandleAtPointer(event: PointerEvent): { nodeId: string; vertexIndex: number; point: THREE.Vector3 } | null {
+  if (!roadVertexHandleState || !camera || !canvasRef.value) {
+    return null
+  }
+  const rect = canvasRef.value.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) {
+    return null
+  }
+
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  raycaster.setFromCamera(pointer, camera)
+
+  roadVertexHandleState.group.updateWorldMatrix(true, true)
+  const intersections = raycaster.intersectObjects(roadVertexHandleState.group.children, true)
+  intersections.sort((a, b) => a.distance - b.distance)
+  const first = intersections[0]
+  if (!first) {
+    return null
+  }
+  const target = first.object as THREE.Object3D
+  const nodeId = typeof target.userData?.nodeId === 'string' ? target.userData.nodeId : ''
+  const vertexIndexRaw = target.userData?.roadVertexIndex
+  const vertexIndex = typeof vertexIndexRaw === 'number' && Number.isFinite(vertexIndexRaw)
+    ? Math.max(0, Math.floor(vertexIndexRaw))
+    : -1
+  if (!nodeId || vertexIndex < 0) {
+    return null
+  }
+  return { nodeId, vertexIndex, point: first.point.clone() }
+}
 
 let roadRightClickState: {
   pointerId: number
@@ -2502,6 +2681,20 @@ watch(isEnvironmentNodeSelected, () => {
   updateFogForSelection()
   applyRendererShadowSetting()
 }, { immediate: true })
+
+watch(
+  [
+    () => activeBuildTool.value,
+    () => sceneStore.selectedNodeId,
+    () => props.selectedNodeId,
+    // Road edits mutate nodes; keep handles rebuilt.
+    () => sceneStore.nodes,
+  ],
+  () => {
+    ensureRoadVertexHandlesForSelectedNode()
+  },
+  { deep: false, immediate: true },
+)
 
 function resetCameraView() {
   if (!camera || !orbitControls) return
@@ -4429,6 +4622,37 @@ async function handlePointerDown(event: PointerEvent) {
 
   if (activeBuildTool.value === 'road') {
     if (button === 1 && !isAltOverrideActive) {
+      // If a road vertex handle is under the cursor, begin vertex interaction (click to branch / drag to move).
+      ensureRoadVertexHandlesForSelectedNode()
+      const handleHit = pickRoadVertexHandleAtPointer(event)
+      if (handleHit) {
+        const node = findSceneNode(sceneStore.nodes, handleHit.nodeId)
+        const runtime = objectMap.get(handleHit.nodeId) ?? null
+        if (node?.dynamicMesh?.type === 'Road' && runtime) {
+          roadVertexDragState = {
+            pointerId: event.pointerId,
+            nodeId: handleHit.nodeId,
+            vertexIndex: handleHit.vertexIndex,
+            startX: event.clientX,
+            startY: event.clientY,
+            moved: false,
+            runtimeObject: runtime,
+            baseDefinition: node.dynamicMesh,
+            workingDefinition: JSON.parse(JSON.stringify(node.dynamicMesh)) as RoadDynamicMesh,
+          }
+          try {
+            canvasRef.value.setPointerCapture(event.pointerId)
+          } catch {
+            /* noop */
+          }
+          pointerTrackingState = null
+          event.preventDefault()
+          event.stopPropagation()
+          event.stopImmediatePropagation()
+          return
+        }
+      }
+
       pointerTrackingState = null
       event.preventDefault()
       event.stopPropagation()
@@ -4582,6 +4806,46 @@ async function handlePointerDown(event: PointerEvent) {
 }
 
 function handlePointerMove(event: PointerEvent) {
+  if (roadVertexDragState && event.pointerId === roadVertexDragState.pointerId) {
+    const state = roadVertexDragState
+    const dx = event.clientX - state.startX
+    const dy = event.clientY - state.startY
+    if (!state.moved && Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
+      state.moved = true
+    }
+
+    const isMiddleDown = (event.buttons & 4) !== 0
+    if (!isMiddleDown) {
+      return
+    }
+    if (!raycastGroundPoint(event, groundPointerHelper)) {
+      return
+    }
+    const snapped = snapVectorToMajorGrid(groundPointerHelper.clone())
+    snapped.y = 0
+
+    const local = state.runtimeObject.worldToLocal(new THREE.Vector3(snapped.x, 0, snapped.z))
+    const working = state.workingDefinition
+    const vertices = Array.isArray(working.vertices) ? working.vertices : []
+    if (!vertices[state.vertexIndex]) {
+      return
+    }
+    vertices[state.vertexIndex] = [local.x, local.z]
+    working.vertices = vertices
+
+    updateRoadGroup(state.runtimeObject, working)
+
+    // Update handle mesh position if present.
+    const handles = state.runtimeObject.getObjectByName('__RoadVertexHandles') as THREE.Group | null
+    if (handles?.isGroup) {
+      const mesh = handles.children.find((child) => child?.userData?.roadVertexIndex === state.vertexIndex) as THREE.Object3D | undefined
+      if (mesh) {
+        mesh.position.set(local.x, ROAD_VERTEX_HANDLE_Y_OFFSET, local.z)
+      }
+    }
+    return
+  }
+
   if (updateContinuousInstancedCreate(event)) {
     return
   }
@@ -4709,6 +4973,48 @@ function handlePointerMove(event: PointerEvent) {
 }
 
 function handlePointerUp(event: PointerEvent) {
+  if (roadVertexDragState && event.pointerId === roadVertexDragState.pointerId && event.button === 1) {
+    const state = roadVertexDragState
+    roadVertexDragState = null
+    if (canvasRef.value && canvasRef.value.hasPointerCapture(event.pointerId)) {
+      canvasRef.value.releasePointerCapture(event.pointerId)
+    }
+
+    if (state.moved) {
+      sceneStore.updateNodeDynamicMesh(state.nodeId, state.workingDefinition)
+      ensureRoadVertexHandlesForSelectedNode()
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+
+    // Click (no drag): start a branch build session from this vertex.
+    const node = findSceneNode(sceneStore.nodes, state.nodeId)
+    if (node?.dynamicMesh?.type === 'Road') {
+      const v = Array.isArray(node.dynamicMesh.vertices) ? node.dynamicMesh.vertices[state.vertexIndex] : null
+      if (v && Array.isArray(v) && v.length >= 2) {
+        const runtime = objectMap.get(state.nodeId) ?? null
+        if (runtime) {
+          const world = runtime.localToWorld(new THREE.Vector3(Number(v[0]) || 0, 0, Number(v[1]) || 0))
+          const session = ensureRoadBuildSession()
+          session.points = [world.clone()]
+          session.previewEnd = world.clone()
+          session.width = Number.isFinite(node.dynamicMesh.width) ? node.dynamicMesh.width : session.width
+          session.snapVertices = collectRoadSnapVertices()
+          session.targetNodeId = state.nodeId
+          session.startVertexIndex = state.vertexIndex
+          updateRoadPreview({ immediate: true })
+          event.preventDefault()
+          event.stopPropagation()
+          event.stopImmediatePropagation()
+          return
+        }
+      }
+    }
+    return
+  }
+
   if (finalizeContinuousInstancedCreate(event, false)) {
     event.preventDefault()
     event.stopPropagation()
@@ -5359,6 +5665,8 @@ function ensureRoadBuildSession(): RoadBuildSession {
     previewGroup: null,
     width: ROAD_DEFAULT_WIDTH,
     snapVertices: collectRoadSnapVertices(),
+    targetNodeId: null,
+    startVertexIndex: null,
   }
   return roadBuildSession
 }
@@ -5444,6 +5752,61 @@ function finalizeRoadBuildSession() {
   if (committed.length < 2) {
     clearRoadBuildSession()
     return
+  }
+
+  const targetNodeId = session.targetNodeId
+  const startVertexIndex = session.startVertexIndex
+  if (targetNodeId && typeof startVertexIndex === 'number' && Number.isFinite(startVertexIndex) && startVertexIndex >= 0) {
+    const node = findSceneNode(sceneStore.nodes, targetNodeId)
+    const runtime = objectMap.get(targetNodeId) ?? null
+    if (node?.dynamicMesh?.type === 'Road' && runtime) {
+      const base = node.dynamicMesh
+      const vertices = Array.isArray(base.vertices) ? base.vertices.map((v) => [Number(v[0]), Number(v[1])] as [number, number]) : []
+      const segments = Array.isArray(base.segments)
+        ? base.segments.map((s) => ({ a: Math.trunc(Number(s.a)), b: Math.trunc(Number(s.b)), materialId: typeof s.materialId === 'string' ? s.materialId : null }))
+        : []
+
+      const next: RoadDynamicMesh = {
+        type: 'Road',
+        width: Number.isFinite(base.width) ? Math.max(0.2, base.width) : session.width,
+        vertices,
+        segments,
+      }
+
+      const EPS2 = 1e-8
+      const findExistingVertexIndex = (x: number, z: number): number => {
+        for (let i = 0; i < next.vertices.length; i += 1) {
+          const v = next.vertices[i]!
+          const dx = (v[0] ?? 0) - x
+          const dz = (v[1] ?? 0) - z
+          if (dx * dx + dz * dz <= EPS2) {
+            return i
+          }
+        }
+        return -1
+      }
+
+      let prevIndex = startVertexIndex
+      for (let i = 1; i < committed.length; i += 1) {
+        const world = committed[i]!
+        const local = runtime.worldToLocal(new THREE.Vector3(world.x, 0, world.z))
+        const x = local.x
+        const z = local.z
+        let nextIndex = findExistingVertexIndex(x, z)
+        if (nextIndex < 0) {
+          nextIndex = next.vertices.length
+          next.vertices.push([x, z])
+        }
+        if (nextIndex !== prevIndex) {
+          next.segments.push({ a: prevIndex, b: nextIndex, materialId: null })
+          prevIndex = nextIndex
+        }
+      }
+
+      sceneStore.updateNodeDynamicMesh(targetNodeId, next)
+      clearRoadBuildSession()
+      return
+    }
   }
 
   sceneStore.createRoadNode({

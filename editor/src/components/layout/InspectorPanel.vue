@@ -6,6 +6,7 @@ import LightPanel from '@/components/inspector/LightPanel.vue'
 import TransformPanel from '@/components/inspector/TransformPanel.vue'
 import AssetModelPanel from '@/components/inspector/AssetModelPanel.vue'
 import WallPanel from '@/components/inspector/WallPanel.vue'
+import RoadPanel from '@/components/inspector/RoadPanel.vue'
 import GuideboardPanel from '@/components/inspector/GuideboardPanel.vue'
 import ViewPointPanel from '@/components/inspector/ViewPointPanel.vue'
 import ProtagonistPanel from '@/components/inspector/ProtagonistPanel.vue'
@@ -119,6 +120,8 @@ const showAddComponentButton = computed(() => {
 
 })
 
+const showRoadPanel = computed(() => selectedNode.value?.dynamicMesh?.type === 'Road')
+
 const nodeComponents = computed<SceneNodeComponentState[]>(() =>
   Object.values(selectedNode.value?.components ?? {}).filter(
     (entry): entry is SceneNodeComponentState => Boolean(entry),
@@ -161,6 +164,10 @@ function computeDefaultExpandedPanels() {
     !Boolean(node?.components?.[PROTAGONIST_COMPONENT_TYPE])
   if (shouldShowMaterial && node?.id !== GROUND_NODE_ID) {
     panels.push('material')
+  }
+
+  if (node?.dynamicMesh?.type === 'Road') {
+    panels.push('road')
   }
 
   Object.values(node?.components ?? {}).forEach((component) => {
@@ -386,6 +393,10 @@ watch(
       defaults.add('material')
     }
 
+    if (selectedNode.value?.dynamicMesh?.type === 'Road') {
+      defaults.add('road')
+    }
+
     defaults.forEach((key) => currentSet.add(key))
 
     if (changed) {
@@ -520,6 +531,7 @@ watch(
             @open-details="handleOpenMaterialDetails"
             @close-details="handleMaterialPanelRequestCloseDetails"
           />
+          <RoadPanel v-if="showRoadPanel" />
           <SkyPanel v-if="isSkyNode" />
           <CloudPanel v-if="isSkyNode" />
           <GroundPanel v-if="isGroundNode" />
