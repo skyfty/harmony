@@ -1377,12 +1377,14 @@ type WallBuildSession = {
 }
 let wallBuildSession: WallBuildSession | null = null
 
+type RoadSnapVertex = { position: THREE.Vector3; nodeId: string; vertexIndex: number }
+
 type RoadBuildSession = {
   points: THREE.Vector3[]
   previewEnd: THREE.Vector3 | null
   previewGroup: THREE.Group | null
   width: number
-  snapVertices: THREE.Vector3[]
+  snapVertices: RoadSnapVertex[]
 
   /** When set, edits an existing Road node (branch build). */
   targetNodeId: string | null
@@ -5476,15 +5478,15 @@ function finalizeWallBuildSession() {
 
 const ROAD_VERTEX_SNAP_DISTANCE = GRID_MAJOR_SPACING * 0.5
 
-function collectRoadSnapVertices(): THREE.Vector3[] {
-  const vertices: THREE.Vector3[] = []
+function collectRoadSnapVertices(): RoadSnapVertex[] {
+  const vertices: RoadSnapVertex[] = []
   const visit = (nodes: SceneNode[]) => {
     nodes.forEach((node) => {
       if (node.dynamicMesh?.type === 'Road') {
         const originX = node.position?.x ?? 0
         const originZ = node.position?.z ?? 0
         const points = Array.isArray(node.dynamicMesh.vertices) ? node.dynamicMesh.vertices : []
-        points.forEach((p) => {
+        points.forEach((p, vertexIndex) => {
           if (!Array.isArray(p) || p.length < 2) {
             return
           }
@@ -5493,7 +5495,11 @@ function collectRoadSnapVertices(): THREE.Vector3[] {
           if (!Number.isFinite(x) || !Number.isFinite(z)) {
             return
           }
-          vertices.push(new THREE.Vector3(originX + x, 0, originZ + z))
+          vertices.push({
+            position: new THREE.Vector3(originX + x, 0, originZ + z),
+            nodeId: node.id,
+            vertexIndex,
+          })
         })
       }
       if (node.children?.length) {
@@ -5505,13 +5511,16 @@ function collectRoadSnapVertices(): THREE.Vector3[] {
   return vertices
 }
 
-function snapRoadPointToVertices(point: THREE.Vector3, vertices: THREE.Vector3[]): THREE.Vector3 {
-  let best: THREE.Vector3 | null = null
+function snapRoadPointToVertices(
+  point: THREE.Vector3,
+  vertices: RoadSnapVertex[],
+): { position: THREE.Vector3; nodeId: string | null; vertexIndex: number | null } {
+  let best: RoadSnapVertex | null = null
   let bestDist2 = Number.POSITIVE_INFINITY
   for (let i = 0; i < vertices.length; i += 1) {
     const candidate = vertices[i]!
-    const dx = candidate.x - point.x
-    const dz = candidate.z - point.z
+    const dx = candidate.position.x - point.x
+    const dz = candidate.position.z - point.z
     const dist2 = dx * dx + dz * dz
     if (dist2 < bestDist2) {
       bestDist2 = dist2
@@ -5519,9 +5528,9 @@ function snapRoadPointToVertices(point: THREE.Vector3, vertices: THREE.Vector3[]
     }
   }
   if (best && bestDist2 <= ROAD_VERTEX_SNAP_DISTANCE * ROAD_VERTEX_SNAP_DISTANCE) {
-    return best.clone()
+    return { position: best.position.clone(), nodeId: best.nodeId, vertexIndex: best.vertexIndex }
   }
-  return point
+  return { position: point, nodeId: null, vertexIndex: null }
 }
 
 function clearRoadPreview() {
@@ -5576,7 +5585,7 @@ function updateRoadCursorPreview(event: PointerEvent) {
 
   const rawPointer = groundPointerHelper.clone()
   rawPointer.y = 0
-  const next = snapRoadPointToVertices(rawPointer, roadBuildSession.snapVertices)
+  const { position: next } = snapRoadPointToVertices(rawPointer, roadBuildSession.snapVertices)
 
   const previous = roadBuildSession.previewEnd
   if (previous && previous.equals(next)) {
@@ -5602,7 +5611,19 @@ function handleRoadPlacementClick(event: PointerEvent): boolean {
   snapped.y = 0
 
   const session = ensureRoadBuildSession()
-  const point = snapRoadPointToVertices(snapped, session.snapVertices)
+  const snappedResult = snapRoadPointToVertices(snapped, session.snapVertices)
+  const point = snappedResult.position
+
+  // If starting on an existing road vertex, branch into that road node.
+  if (
+    session.points.length === 0 &&
+    snappedResult.nodeId &&
+    typeof snappedResult.vertexIndex === 'number' &&
+    snappedResult.vertexIndex >= 0
+  ) {
+    session.targetNodeId = snappedResult.nodeId
+    session.startVertexIndex = snappedResult.vertexIndex
+  }
 
   if (session.points.length === 0) {
     session.points.push(point.clone())
