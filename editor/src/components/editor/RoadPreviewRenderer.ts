@@ -19,6 +19,7 @@ export type RoadPreviewRenderer = {
 }
 
 const ROAD_PREVIEW_SIGNATURE_PRECISION = 1000
+const ROAD_PREVIEW_Y_OFFSET = 0.01
 
 function encodeRoadPreviewNumber(value: number): string {
   return `${Math.round(value * ROAD_PREVIEW_SIGNATURE_PRECISION)}`
@@ -64,11 +65,50 @@ function applyRoadPreviewStyling(group: THREE.Group) {
     if (!mesh?.isMesh) {
       return
     }
-    const material = mesh.material as THREE.Material & { opacity?: number; transparent?: boolean }
-    if ('opacity' in material) {
-      material.opacity = 0.45
-      material.transparent = true
+
+    const applyMaterial = (source: THREE.Material) => {
+      const material = source as THREE.Material & {
+        opacity?: number
+        transparent?: boolean
+        depthWrite?: boolean
+        polygonOffset?: boolean
+        polygonOffsetFactor?: number
+        polygonOffsetUnits?: number
+        color?: { setHex?: (hex: number) => void }
+        emissive?: { setHex?: (hex: number) => void }
+        emissiveIntensity?: number
+      }
+
+      if ('opacity' in material) {
+        material.opacity = 0.75
+        material.transparent = true
+      }
+
+      // Make the preview clearly visible against the ground.
+      material.color?.setHex?.(0x4dd0e1)
+      material.emissive?.setHex?.(0x4dd0e1)
+      if (typeof material.emissiveIntensity === 'number') {
+        material.emissiveIntensity = 0.35
+      }
+
+      // Reduce z-fighting / depth artifacts when close to the ground.
+      if (typeof material.depthWrite === 'boolean') {
+        material.depthWrite = false
+      }
+      if (typeof material.polygonOffset === 'boolean') {
+        material.polygonOffset = true
+        material.polygonOffsetFactor = -1
+        material.polygonOffsetUnits = -1
+      }
     }
+
+    const meshMaterial = mesh.material
+    if (Array.isArray(meshMaterial)) {
+      meshMaterial.forEach((entry) => entry && applyMaterial(entry))
+    } else if (meshMaterial) {
+      applyMaterial(meshMaterial)
+    }
+
     mesh.layers.enableAll()
     mesh.renderOrder = 999
   })
@@ -168,6 +208,7 @@ export function createRoadPreviewRenderer(options: { rootGroup: THREE.Group }): 
     }
 
     session.previewGroup!.position.copy(build.center)
+    session.previewGroup!.position.y += ROAD_PREVIEW_Y_OFFSET
   }
 
   return {
