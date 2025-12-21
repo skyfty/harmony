@@ -44,6 +44,8 @@ interface PlanningLayer {
   locked: boolean
   /** Road layer width in meters (only used when kind === 'road'). */
   roadWidthMeters?: number
+  /** Road layer smoothing (0-1) controlling the roundedness of junctions. */
+  roadSmoothing?: number
   /** Wall layer height in meters (only used when kind === 'wall'). */
   wallHeightMeters?: number
   /** Wall layer thickness in meters (only used when kind === 'wall'). */
@@ -164,7 +166,7 @@ const layerPresets: PlanningLayer[] = [
   { id: 'green-layer', name: 'Greenery', kind: 'green', visible: true, color: '#00897B', locked: false },
   { id: 'terrain-layer', name: 'Terrain', kind: 'terrain', visible: true, color: '#2E7D32', locked: false },
   { id: 'building-layer', name: 'Building', kind: 'building', visible: true, color: '#C62828', locked: false },
-  { id: 'road-layer', name: 'Road', kind: 'road', visible: true, color: '#F9A825', locked: false, roadWidthMeters: 2 },
+  { id: 'road-layer', name: 'Road', kind: 'road', visible: true, color: '#F9A825', locked: false, roadWidthMeters: 2, roadSmoothing: 0.5 },
   { id: 'wall-layer', name: 'Wall', kind: 'wall', visible: true, color: '#5E35B1', locked: false, wallHeightMeters: 3, wallThicknessMeters: 0.15 },
 ]
 
@@ -801,6 +803,7 @@ function buildPlanningSnapshot() {
       visible: layer.visible,
       locked: layer.locked,
       roadWidthMeters: layer.roadWidthMeters,
+        roadSmoothing: layer.roadSmoothing,
       wallHeightMeters: layer.wallHeightMeters,
       wallThicknessMeters: layer.wallThicknessMeters,
     })),
@@ -1087,6 +1090,10 @@ function loadPlanningFromScene() {
               typeof (raw as any).roadWidthMeters === 'number'
                 ? Number((raw as any).roadWidthMeters)
                 : ((kind ?? preset?.kind) === 'road' ? 2 : undefined),
+            roadSmoothing:
+              typeof (raw as any).roadSmoothing === 'number'
+                ? Number((raw as any).roadSmoothing)
+                : ((kind ?? preset?.kind) === 'road' ? 0.5 : undefined),
             wallHeightMeters:
               typeof (raw as any).wallHeightMeters === 'number'
                 ? Number((raw as any).wallHeightMeters)
@@ -1400,6 +1407,25 @@ const roadWidthMetersModel = computed({
     const next = Number(value)
     if (!Number.isFinite(next)) return
     layer.roadWidthMeters = Math.min(10, Math.max(0.1, next))
+    markPlanningDirty()
+  },
+})
+
+const roadSmoothingModel = computed({
+  get: () => {
+    const layer = selectedScatterTarget.value?.layer
+    if (!layer || layer.kind !== 'road') return 0.5
+    const raw = Number(layer.roadSmoothing ?? 0.5)
+    if (!Number.isFinite(raw)) return 0.5
+    return Math.min(1, Math.max(0, raw))
+  },
+  set: (value: number) => {
+    if (propertyPanelDisabled.value) return
+    const layer = selectedScatterTarget.value?.layer
+    if (!layer || layer.kind !== 'road') return
+    const next = Number(value)
+    if (!Number.isFinite(next)) return
+    layer.roadSmoothing = Math.min(1, Math.max(0, next))
     markPlanningDirty()
   },
 })
@@ -1826,7 +1852,8 @@ function addPlanningLayer(kind: LayerKind) {
     visible: true,
     color: getDefaultLayerColor(kind),
     locked: false,
-    roadWidthMeters: kind === 'road' ? 2 : undefined,
+      roadWidthMeters: kind === 'road' ? 2 : undefined,
+      roadSmoothing: kind === 'road' ? 0.5 : undefined,
     wallHeightMeters: kind === 'wall' ? 3 : undefined,
     wallThicknessMeters: kind === 'wall' ? 0.15 : undefined,
   }
@@ -4722,6 +4749,20 @@ onBeforeUnmount(() => {
                     hide-details
                     suffix="m"
                   />
+                </div>
+                <div class="property-panel__spacing-title">连接平滑度</div>
+                <div class="property-panel__density-row">
+                  <v-slider
+                    v-model="roadSmoothingModel"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    density="compact"
+                    hide-details
+                  />
+                  <div class="property-panel__density-value">
+                    {{ Math.round(roadSmoothingModel * 100) }}%
+                  </div>
                 </div>
               </div>
             </template>

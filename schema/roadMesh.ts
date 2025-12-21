@@ -40,30 +40,27 @@ function createSegmentMaterial(): THREE.MeshStandardMaterial {
   return material
 }
 
-function createJunctionGeometry(radius: number): THREE.BufferGeometry {
-  const geometry = new THREE.CircleGeometry(radius, 24)
-  geometry.rotateX(-Math.PI / 2)
-  return geometry
-}
-
 type RoadVertexJunctionInfo = {
-  degree: number
+  neighbors: Set<number>
   materialIds: Set<string>
 }
 
-function collectRoadJunctions(definition: RoadDynamicMesh): Map<number, RoadVertexJunctionInfo> {
+function collectRoadJunctionInfo(definition: RoadDynamicMesh): Map<number, RoadVertexJunctionInfo> {
   const vertices = Array.isArray(definition.vertices) ? definition.vertices : []
   const segments = Array.isArray(definition.segments) ? definition.segments : []
 
   const junctions = new Map<number, RoadVertexJunctionInfo>()
 
-  const touch = (index: number, materialId: string | null) => {
+  const record = (index: number, neighbor: number, materialId: string | null) => {
     if (!Number.isFinite(index) || index < 0 || index >= vertices.length) {
       return
     }
+    if (!Number.isFinite(neighbor) || neighbor < 0 || neighbor >= vertices.length) {
+      return
+    }
     const existing = junctions.get(index)
-    const info = existing ?? { degree: 0, materialIds: new Set<string>() }
-    info.degree += 1
+    const info = existing ?? { neighbors: new Set<number>(), materialIds: new Set<string>() }
+    info.neighbors.add(neighbor)
     if (materialId) {
       info.materialIds.add(materialId)
     }
@@ -75,57 +72,108 @@ function collectRoadJunctions(definition: RoadDynamicMesh): Map<number, RoadVert
   segments.forEach((segment) => {
     const a = Math.trunc(Number(segment?.a))
     const b = Math.trunc(Number(segment?.b))
+    if (a === b) {
+      return
+    }
     const rawMaterialId = typeof segment?.materialId === 'string' ? segment.materialId.trim() : ''
     const materialId = rawMaterialId || null
-    touch(a, materialId)
-    touch(b, materialId)
+    record(a, b, materialId)
+    record(b, a, materialId)
   })
 
   return junctions
 }
 
-function addRoadJunctionCaps(group: THREE.Group, definition: RoadDynamicMesh, materialTemplate: THREE.MeshStandardMaterial) {
+function buildRoadTransitionMeshes(definition: RoadDynamicMesh, materialTemplate: THREE.MeshStandardMaterial): THREE.Mesh[] {
   const vertices = Array.isArray(definition.vertices) ? definition.vertices : []
-  if (!vertices.length) {
-    return
+  const junctions = collectRoadJunctionInfo(definition)
+  if (!junctions.size) {
+    return []
   }
 
   const width = Number.isFinite(definition.width) ? Math.max(1e-3, definition.width) : 2
-  const radius = Math.max(0.05, width * 0.5)
-  const junctions = collectRoadJunctions(definition)
-  if (!junctions.size) {
-    return
-  }
+  const halfWidth = width * 0.5
 
-  const geometry = createJunctionGeometry(radius)
+  const meshes: THREE.Mesh[] = []
 
   junctions.forEach((info, vertexIndex) => {
-    // Only add caps at connection points (degree >= 2) to avoid rounding all endpoints.
-    if (!info || info.degree < 2) {
+    if (!info || info.neighbors.size < 2) {
       return
     }
-    const v = vertices[vertexIndex]
-    if (!v || v.length < 2) {
+    const vertex = vertices[vertexIndex]
+    if (!vertex || vertex.length < 2) {
       return
     }
-    const x = Number(v[0])
-    const z = Number(v[1])
-    if (!Number.isFinite(x) || !Number.isFinite(z)) {
+    const center = new THREE.Vector3(Number(vertex[0]), 0, Number(vertex[1]))
+
+    type OffsetEntry = { left: THREE.Vector3; right: THREE.Vector3; angle: number }
+    const offsetEntries: OffsetEntry[] = []
+    info.neighbors.forEach((neighborIndex) => {
+      const neighbor = vertices[neighborIndex]
+      if (!neighbor || neighbor.length < 2) {
+        return
+      }
+      const direction = new THREE.Vector3(neighbor[0] - vertex[0], 0, neighbor[1] - vertex[1])
+      const length = direction.length()
+      if (length <= ROAD_EPSILON) {
+        return
+      }
+      direction.normalize()
+      const perp = new THREE.Vector3(-direction.z, 0, direction.x)
+      const left = center.clone().add(perp.clone().multiplyScalar(halfWidth))
+      const right = center.clone().sub(perp.clone().multiplyScalar(halfWidth))
+      const angle = Math.atan2(perp.z, perp.x)
+      offsetEntries.push({ left, right, angle })
+    })
+
+    if (offsetEntries.length < 2) {
       return
     }
 
-    const mesh = new THREE.Mesh(geometry.clone(), materialTemplate.clone())
-    mesh.name = `RoadJunction_${vertexIndex + 1}`
+    const orderedLeft = [...offsetEntries].sort((a, b) => a.angle - b.angle).map((entry) => entry.left)
+    const orderedRight = [...offsetEntries].sort((a, b) => a.angle - b.angle).reverse().map((entry) => entry.right)
+    const loop = [...orderedLeft, ...orderedRight]
+    const cleaned: THREE.Vector3[] = []
+    loop.forEach((point) => {
+      if (!point) {
+        return
+      }
+      const last = cleaned[cleaned.length - 1]
+      if (last && last.distanceToSquared(point) <= 1e-6) {
+        return
+      }
+      cleaned.push(point)
+    })
+    if (cleaned.length < 3) {
+      return
+    }
+
+    const shape = new THREE.Shape()
+    shape.moveTo(cleaned[0]!.x, cleaned[0]!.z)
+    for (let i = 1; i < cleaned.length; i += 1) {
+      shape.lineTo(cleaned[i]!.x, cleaned[i]!.z)
+    }
+    shape.closePath()
+
+    const geometry = new THREE.ShapeGeometry(shape)
+    geometry.rotateX(Math.PI / 2)
+
+    const mesh = new THREE.Mesh(geometry, materialTemplate.clone())
+    mesh.name = `RoadTransition_${vertexIndex + 1}`
     mesh.castShadow = false
     mesh.receiveShadow = true
-    mesh.position.set(x, 0, z)
-
-    // If all connected segments share the same materialId, use it for the cap as well.
+    mesh.userData.roadTransitionIndex = vertexIndex
     const materialId = info.materialIds.size === 1 ? Array.from(info.materialIds)[0] : null
     mesh.userData[MATERIAL_CONFIG_ID_KEY] = materialId
-
-    group.add(mesh)
+    meshes.push(mesh)
   })
+
+  return meshes
+}
+
+function addRoadTransitionMeshes(group: THREE.Group, definition: RoadDynamicMesh, materialTemplate: THREE.MeshStandardMaterial) {
+  const meshes = buildRoadTransitionMeshes(definition, materialTemplate)
+  meshes.forEach((mesh) => group.add(mesh))
 }
 
 const ROAD_EPSILON = 1e-6
@@ -203,7 +251,7 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh) {
   })
 
   // Fill junction gaps between connected segments.
-  addRoadJunctionCaps(group, definition, material)
+  addRoadTransitionMeshes(group, definition, material)
 }
 
 function ensureRoadContentGroup(root: THREE.Group): THREE.Group {
@@ -320,8 +368,8 @@ export function createRoadRenderGroup(definition: RoadDynamicMesh, assets: RoadR
   if (!hasInstances) {
     rebuildRoadGroup(content, definition)
   } else {
-    // Even when using asset instances, add simple junction caps to hide visible cracks at corners/branches.
-    addRoadJunctionCaps(content, definition, createSegmentMaterial())
+    // Even when using asset instances, add transition meshes so gaps at junctions are filled.
+    addRoadTransitionMeshes(content, definition, createSegmentMaterial())
   }
 
   return group

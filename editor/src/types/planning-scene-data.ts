@@ -50,6 +50,8 @@ export interface PlanningLayerState {
   locked?: boolean
   /** Optional; currently used by road layers. */
   roadWidthMeters?: number
+  /** Optional; controls how much road corners are rounded for this layer. */
+  roadSmoothing?: number
   /** Optional; currently used by wall layers. */
   wallHeightMeters?: number
   /** Optional; currently used by wall layers. */

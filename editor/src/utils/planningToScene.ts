@@ -253,6 +253,19 @@ function resolveRoadWidthFromPlanningData(planningData: PlanningSceneData, layer
   return 2
 }
 
+function resolveRoadSmoothingFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
+  const raw = (planningData as any)?.layers
+  if (Array.isArray(raw)) {
+    const found = raw.find((item: any) => item && item.id === layerId)
+    const smoothingRaw = found?.roadSmoothing
+    const smoothing = typeof smoothingRaw === 'number' ? smoothingRaw : Number(smoothingRaw)
+    if (Number.isFinite(smoothing)) {
+      return Math.min(1, Math.max(0, smoothing))
+    }
+  }
+  return 0.5
+}
+
 function resolveWallHeightFromPlanningData(planningData: PlanningSceneData, layerId: string): number {
   const raw = (planningData as any)?.layers
   if (Array.isArray(raw)) {
@@ -301,24 +314,31 @@ function buildRoadDynamicMeshFromPlanningPolylines(options: {
   groundWidth: number
   groundDepth: number
   widthMeters: number
+  smoothing?: number
 }): { center: { x: number; y: number; z: number }; definition: RoadDynamicMesh } | null {
-  const { polylines, groundWidth, groundDepth, widthMeters } = options
+  const { polylines, groundWidth, groundDepth, widthMeters, smoothing = 0 } = options
   if (!Array.isArray(polylines) || polylines.length === 0) {
     return null
   }
 
   const vertexIndexByKey = new Map<string, number>()
   const worldVertices: Array<{ x: number; z: number }> = []
-  const segments: RoadDynamicMesh['segments'] = []
-  const segmentKeys = new Set<string>()
+  const adjacency = new Map<number, Set<number>>()
+  const originalEdges: Array<{ a: number; b: number }> = []
+  const originalEdgeKeys = new Set<string>()
 
   const getVertexKey = (point: PlanningPoint) => {
     const rawId = typeof point.id === 'string' ? point.id.trim() : ''
     if (rawId) {
       return `id:${rawId}`
     }
-    // Fallback for legacy snapshots: use rounded coordinates in planning space.
     return `xy:${Number(point.x).toFixed(2)},${Number(point.y).toFixed(2)}`
+  }
+
+  const ensureAdjacencyEntry = (index: number) => {
+    if (!adjacency.has(index)) {
+      adjacency.set(index, new Set<number>())
+    }
   }
 
   const ensureVertexIndex = (point: PlanningPoint) => {
@@ -331,7 +351,26 @@ function buildRoadDynamicMeshFromPlanningPolylines(options: {
     const index = worldVertices.length
     worldVertices.push({ x: world.x, z: world.z })
     vertexIndexByKey.set(key, index)
+    ensureAdjacencyEntry(index)
     return index
+  }
+
+  const recordSegment = (a: number, b: number) => {
+    if (a === b) {
+      return
+    }
+    ensureAdjacencyEntry(a)
+    ensureAdjacencyEntry(b)
+    adjacency.get(a)?.add(b)
+    adjacency.get(b)?.add(a)
+    const lo = Math.min(a, b)
+    const hi = Math.max(a, b)
+    const key = `${lo}-${hi}`
+    if (originalEdgeKeys.has(key)) {
+      return
+    }
+    originalEdgeKeys.add(key)
+    originalEdges.push({ a, b })
   }
 
   polylines.forEach((line) => {
@@ -344,21 +383,160 @@ function buildRoadDynamicMeshFromPlanningPolylines(options: {
       const bPoint = pts[i + 1]!
       const a = ensureVertexIndex(aPoint)
       const b = ensureVertexIndex(bPoint)
-      if (a === b) {
-        continue
-      }
-      const lo = Math.min(a, b)
-      const hi = Math.max(a, b)
-      const key = `${lo}-${hi}`
-      if (segmentKeys.has(key)) {
-        continue
-      }
-      segmentKeys.add(key)
-      segments.push({ a, b, materialId: null })
+      recordSegment(a, b)
     }
   })
 
-  if (worldVertices.length < 2 || segments.length === 0) {
+  if (worldVertices.length < 2 || originalEdges.length === 0) {
+    return null
+  }
+
+  const clampedWidth = Number.isFinite(widthMeters) ? Math.min(10, Math.max(0.2, widthMeters)) : 2
+  const smoothingFactor = Math.min(1, Math.max(0, Number(smoothing ?? 0)))
+  const baseRadius = Math.max(clampedWidth * 0.5, 0.01)
+  const smoothingRadiusCandidate = baseRadius * smoothingFactor
+
+  type NeighborInfo = {
+    neighborIndex: number
+    dir: { x: number; z: number }
+    angle: number
+    length: number
+    trimIndex?: number
+  }
+
+  const trimmedVertexIndexByKey = new Map<string, number>()
+  const vertexSmoothingInfo = new Map<number, { trimRadius: number; neighbors: NeighborInfo[] }>()
+
+  if (smoothingFactor > 0 && smoothingRadiusCandidate > 1e-4) {
+    adjacency.forEach((neighbors, vertexIndex) => {
+      if (!neighbors || neighbors.size < 2) {
+        return
+      }
+      const vertexPos = worldVertices[vertexIndex]
+      if (!vertexPos) {
+        return
+      }
+      const infos: NeighborInfo[] = []
+      neighbors.forEach((neighborIndex) => {
+        const neighborPos = worldVertices[neighborIndex]
+        if (!neighborPos) {
+          return
+        }
+        const dx = neighborPos.x - vertexPos.x
+        const dz = neighborPos.z - vertexPos.z
+        const length = Math.hypot(dx, dz)
+        if (length <= 1e-6) {
+          return
+        }
+        const dir = { x: dx / length, z: dz / length }
+        infos.push({
+          neighborIndex,
+          dir,
+          length,
+          angle: Math.atan2(dir.z, dir.x),
+        })
+      })
+      if (infos.length < 2) {
+        return
+      }
+      const minHalf = Math.min(...infos.map((info) => info.length)) / 2
+      const trimRadius = Math.min(smoothingRadiusCandidate, minHalf)
+      if (trimRadius <= 1e-4) {
+        return
+      }
+      vertexSmoothingInfo.set(vertexIndex, { trimRadius, neighbors: infos })
+    })
+
+    vertexSmoothingInfo.forEach((info, vertexIndex) => {
+      const vertexPos = worldVertices[vertexIndex]
+      if (!vertexPos) {
+        return
+      }
+      info.neighbors.forEach((neighbor) => {
+        const key = `${vertexIndex}-${neighbor.neighborIndex}`
+        if (trimmedVertexIndexByKey.has(key)) {
+          neighbor.trimIndex = trimmedVertexIndexByKey.get(key)
+          return
+        }
+        const x = vertexPos.x + neighbor.dir.x * info.trimRadius
+        const z = vertexPos.z + neighbor.dir.z * info.trimRadius
+        const index = worldVertices.length
+        worldVertices.push({ x, z })
+        trimmedVertexIndexByKey.set(key, index)
+        neighbor.trimIndex = index
+      })
+    })
+  }
+
+  const finalSegments: RoadDynamicMesh['segments'] = []
+  const finalSegmentKeys = new Set<string>()
+  const addFinalSegment = (start: number, end: number) => {
+    if (start === end) {
+      return
+    }
+    const lo = Math.min(start, end)
+    const hi = Math.max(start, end)
+    const key = `${lo}-${hi}`
+    if (finalSegmentKeys.has(key)) {
+      return
+    }
+    finalSegmentKeys.add(key)
+    finalSegments.push({ a: start, b: end, materialId: null })
+  }
+
+  originalEdges.forEach((edge) => {
+    const from = trimmedVertexIndexByKey.get(`${edge.a}-${edge.b}`) ?? edge.a
+    const to = trimmedVertexIndexByKey.get(`${edge.b}-${edge.a}`) ?? edge.b
+    addFinalSegment(from, to)
+  })
+
+  if (smoothingFactor > 0) {
+    vertexSmoothingInfo.forEach((info, vertexIndex) => {
+      const vertexPos = worldVertices[vertexIndex]
+      if (!vertexPos) {
+        return
+      }
+      const neighbors = info.neighbors.filter((neighbor) => typeof neighbor.trimIndex === 'number')
+      if (neighbors.length < 2) {
+        return
+      }
+      const sorted = [...neighbors].sort((a, b) => a.angle - b.angle)
+      for (let i = 0; i < sorted.length; i += 1) {
+        const current = sorted[i]
+        const next = sorted[(i + 1) % sorted.length]
+        if (current.trimIndex == null || next.trimIndex == null) {
+          continue
+        }
+        let deltaAngle = next.angle - current.angle
+        if (deltaAngle <= 0) {
+          deltaAngle += Math.PI * 2
+        }
+        if (deltaAngle >= Math.PI) {
+          continue
+        }
+        const arcSteps = Math.max(
+          1,
+          Math.ceil((deltaAngle / (Math.PI / 4)) * (0.5 + smoothingFactor)),
+        )
+        const arcIndices: number[] = []
+        for (let step = 1; step <= arcSteps; step += 1) {
+          const t = step / (arcSteps + 1)
+          const angle = current.angle + t * deltaAngle
+          const x = vertexPos.x + Math.cos(angle) * info.trimRadius
+          const z = vertexPos.z + Math.sin(angle) * info.trimRadius
+          const index = worldVertices.length
+          worldVertices.push({ x, z })
+          arcIndices.push(index)
+        }
+        const chain = [current.trimIndex, ...arcIndices, next.trimIndex]
+        for (let j = 0; j < chain.length - 1; j += 1) {
+          addFinalSegment(chain[j]!, chain[j + 1]!)
+        }
+      }
+    })
+  }
+
+  if (worldVertices.length < 2 || finalSegments.length === 0) {
     return null
   }
 
@@ -367,9 +545,9 @@ function buildRoadDynamicMeshFromPlanningPolylines(options: {
 
   const definition: RoadDynamicMesh = {
     type: 'Road',
-    width: Number.isFinite(widthMeters) ? Math.min(10, Math.max(0.2, widthMeters)) : 2,
+    width: clampedWidth,
     vertices,
-    segments,
+    segments: finalSegments,
   }
 
   return { center: { x: centerXZ.x, y: 0, z: centerXZ.z }, definition }
@@ -818,6 +996,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         groundWidth,
         groundDepth,
         widthMeters,
+        smoothing: resolveRoadSmoothingFromPlanningData(planningData, layerId),
       })
 
       if (build) {
