@@ -3619,6 +3619,7 @@ function animate() {
   wallPreviewRenderer.flushIfNeeded(scene, wallBuildSession)
   roadPreviewRenderer.flushIfNeeded(scene, roadBuildSession)
   floorBuildTool.flushPreviewIfNeeded(scene)
+  roadVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 10 })
   updatePlaceholderOverlayPositions()
   if (sky) {
     sky.position.copy(camera.position)

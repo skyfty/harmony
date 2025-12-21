@@ -23,6 +23,11 @@ export type RoadVertexRenderer = {
     resolveRoadDefinition: (nodeId: string) => RoadDynamicMesh | null
     resolveRuntimeObject: (nodeId: string) => THREE.Object3D | null
   }): void
+  updateScreenSize(options: {
+    camera: THREE.Camera | null
+    canvas: HTMLCanvasElement | null
+    diameterPx?: number
+  }): void
   pick(options: {
     camera: THREE.Camera | null
     canvas: HTMLCanvasElement | null
@@ -44,6 +49,32 @@ export type RoadVertexRenderer = {
 const ROAD_VERTEX_HANDLE_Y_OFFSET = 0.03
 const ROAD_VERTEX_HANDLE_RENDER_ORDER = 1001
 const HANDLE_GROUP_NAME = '__RoadVertexHandles'
+const ROAD_VERTEX_HANDLE_SCREEN_DIAMETER_PX = 10
+
+function computeWorldUnitsPerPixel(options: {
+  camera: THREE.Camera
+  distance: number
+  viewportHeightPx: number
+}): number {
+  const { camera, distance, viewportHeightPx } = options
+  const safeHeight = Math.max(1, viewportHeightPx)
+
+  if ((camera as THREE.PerspectiveCamera).isPerspectiveCamera) {
+    const perspective = camera as THREE.PerspectiveCamera
+    const vFovRad = THREE.MathUtils.degToRad(perspective.fov)
+    const worldHeight = 2 * Math.max(1e-6, distance) * Math.tan(vFovRad / 2)
+    return worldHeight / safeHeight
+  }
+
+  if ((camera as THREE.OrthographicCamera).isOrthographicCamera) {
+    const ortho = camera as THREE.OrthographicCamera
+    const worldHeight = Math.abs((ortho.top - ortho.bottom) / Math.max(1e-6, ortho.zoom))
+    return worldHeight / safeHeight
+  }
+
+  // Fallback: approximate with distance.
+  return Math.max(1e-6, distance) / safeHeight
+}
 
 function disposeRoadVertexHandleGroup(group: THREE.Group) {
   group.traverse((child) => {
@@ -85,6 +116,7 @@ function createRoadVertexHandleMaterial(): THREE.MeshBasicMaterial {
 
 export function createRoadVertexRenderer(): RoadVertexRenderer {
   let state: RoadVertexHandleState | null = null
+  const tmpWorldPos = new THREE.Vector3()
 
   function clear() {
     if (!state) {
@@ -168,6 +200,7 @@ export function createRoadVertexRenderer(): RoadVertexRenderer {
       mesh.userData.isRoadVertexHandle = true
       mesh.userData.nodeId = selectedNodeId
       mesh.userData.roadVertexIndex = index
+      mesh.userData.baseDiameter = radius * 2
       group.add(mesh)
     })
 
@@ -238,11 +271,49 @@ export function createRoadVertexRenderer(): RoadVertexRenderer {
     return { nodeId, vertexIndex, point: first.point.clone() }
   }
 
+  function updateScreenSize(options: {
+    camera: THREE.Camera | null
+    canvas: HTMLCanvasElement | null
+    diameterPx?: number
+  }) {
+    if (!state || !options.camera || !options.canvas) {
+      return
+    }
+
+    const diameterPx =
+      typeof options.diameterPx === 'number' && Number.isFinite(options.diameterPx) && options.diameterPx > 0
+        ? options.diameterPx
+        : ROAD_VERTEX_HANDLE_SCREEN_DIAMETER_PX
+
+    const viewportHeightPx = Math.max(1, options.canvas.getBoundingClientRect().height)
+
+    state.group.updateWorldMatrix(true, false)
+    for (const child of state.group.children) {
+      const mesh = child as THREE.Mesh
+      if (!mesh?.isMesh) {
+        continue
+      }
+
+      const baseDiameterRaw = mesh.userData?.baseDiameter
+      const baseDiameter =
+        typeof baseDiameterRaw === 'number' && Number.isFinite(baseDiameterRaw) && baseDiameterRaw > 1e-6
+          ? baseDiameterRaw
+          : 1
+
+      mesh.getWorldPosition(tmpWorldPos)
+      const distance = Math.max(1e-6, tmpWorldPos.distanceTo(options.camera.position))
+      const unitsPerPx = computeWorldUnitsPerPixel({ camera: options.camera, distance, viewportHeightPx })
+      const desiredWorldDiameter = Math.max(1e-6, diameterPx * unitsPerPx)
+      const scale = THREE.MathUtils.clamp(desiredWorldDiameter / baseDiameter, 1e-4, 1e6)
+      mesh.scale.setScalar(scale)
+    }
+  }
+
   function getState() {
     return state
   }
 
-  return { clear, ensure, forceRebuild, pick, getState }
+  return { clear, ensure, updateScreenSize, forceRebuild, pick, getState }
 }
 
 export const ROAD_VERTEX_HANDLE_GROUP_NAME = HANDLE_GROUP_NAME

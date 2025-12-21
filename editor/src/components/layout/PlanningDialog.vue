@@ -604,6 +604,11 @@ const selectedPolyline = computed(() => {
 const BASE_PIXELS_PER_METER = 10
 const POLYLINE_HIT_RADIUS_SQ = 1.5 * 1.5
 const LINE_VERTEX_SNAP_RADIUS_PX = 6
+const VERTEX_HANDLE_DIAMETER_PX = 10
+const VERTEX_HANDLE_RADIUS_PX = VERTEX_HANDLE_DIAMETER_PX / 2
+const VERTEX_HANDLE_STROKE_PX = 1
+const VERTEX_HIGHLIGHT_EXTRA_RADIUS_PX = 2
+const VERTEX_HIGHLIGHT_STROKE_PX = 1
 
 const canvasSize = computed(() => ({
   width: sceneGroundSize.value.width,
@@ -616,6 +621,16 @@ const frozenCanvasSize = ref<{ width: number; height: number } | null>(null)
 const effectiveCanvasSize = computed(() => frozenCanvasSize.value ?? canvasSize.value)
 
 const renderScale = computed(() => viewTransform.scale * BASE_PIXELS_PER_METER)
+
+function pxToWorld(px: number): number {
+  return Number(px) / Math.max(1e-6, renderScale.value)
+}
+
+const vertexHandleRadiusWorld = computed(() => pxToWorld(VERTEX_HANDLE_RADIUS_PX))
+const vertexHandleHitRadiusWorld = computed(() => pxToWorld(VERTEX_HANDLE_RADIUS_PX))
+const vertexHandleStrokeWidthWorld = computed(() => pxToWorld(VERTEX_HANDLE_STROKE_PX))
+const vertexHighlightRadiusWorld = computed(() => pxToWorld(VERTEX_HANDLE_RADIUS_PX + VERTEX_HIGHLIGHT_EXTRA_RADIUS_PX))
+const vertexHighlightStrokeWidthWorld = computed(() => pxToWorld(VERTEX_HIGHLIGHT_STROKE_PX))
 
 type ScaleBarSpec = { meters: number; pixels: number; label: string }
 
@@ -1663,33 +1678,38 @@ const activeVertexHighlight = computed(() => {
       const polygon = polygons.value.find((item) => item.id === state.targetId)
       const point = polygon?.points[state.vertexIndex]
       if (polygon && point) {
-        return { x: point.x, y: point.y, layerId: polygon.layerId, r: 2.2 }
+        return { x: point.x, y: point.y, layerId: polygon.layerId, r: vertexHighlightRadiusWorld.value }
       }
       return null
     }
     const line = polylines.value.find((item) => item.id === state.targetId)
     const point = line?.points[state.vertexIndex]
     if (line && point) {
-      return { x: point.x, y: point.y, layerId: line.layerId, r: 2.2 }
+      return { x: point.x, y: point.y, layerId: line.layerId, r: vertexHighlightRadiusWorld.value }
     }
     return null
   }
 
   if (state.type === 'rectangle') {
-    return { x: state.current.x, y: state.current.y, layerId: state.layerId, r: 2.2 }
+    return { x: state.current.x, y: state.current.y, layerId: state.layerId, r: vertexHighlightRadiusWorld.value }
   }
 
   if (currentTool.value === 'lasso' && polygonDraftPoints.value.length) {
     const point = polygonDraftPoints.value[polygonDraftPoints.value.length - 1]
     if (!point) return null
-    return { x: point.x, y: point.y, layerId: activeLayerId.value, r: 2.2 }
+    return { x: point.x, y: point.y, layerId: activeLayerId.value, r: vertexHighlightRadiusWorld.value }
   }
 
   if (currentTool.value === 'line') {
     const line = getDraftLine()
     const anchor = getDraftAnchorPoint(line, lineDraft.value)
     if (anchor) {
-      return { x: anchor.x, y: anchor.y, layerId: lineDraft.value?.layerId ?? activeLayerId.value, r: 2.2 }
+      return {
+        x: anchor.x,
+        y: anchor.y,
+        layerId: lineDraft.value?.layerId ?? activeLayerId.value,
+        r: vertexHighlightRadiusWorld.value,
+      }
     }
   }
 
@@ -1702,7 +1722,12 @@ const selectedVertexHighlight = computed(() => {
     const line = getDraftLine()
     const anchor = getDraftAnchorPoint(line, lineDraft.value)
     if (anchor) {
-      return { x: anchor.x, y: anchor.y, layerId: lineDraft.value?.layerId ?? activeLayerId.value, r: 2.0 }
+      return {
+        x: anchor.x,
+        y: anchor.y,
+        layerId: lineDraft.value?.layerId ?? activeLayerId.value,
+        r: vertexHighlightRadiusWorld.value,
+      }
     }
   }
 
@@ -1714,14 +1739,14 @@ const selectedVertexHighlight = computed(() => {
     const polygon = polygons.value.find((item) => item.id === selection.targetId)
     const point = polygon?.points[selection.vertexIndex]
     if (polygon && point) {
-      return { x: point.x, y: point.y, layerId: polygon.layerId, r: 2.0 }
+      return { x: point.x, y: point.y, layerId: polygon.layerId, r: vertexHighlightRadiusWorld.value }
     }
     return null
   }
   const line = polylines.value.find((item) => item.id === selection.targetId)
   const point = line?.points[selection.vertexIndex]
   if (line && point) {
-    return { x: point.x, y: point.y, layerId: line.layerId, r: 2.0 }
+    return { x: point.x, y: point.y, layerId: line.layerId, r: vertexHighlightRadiusWorld.value }
   }
   return null
 })
@@ -4393,7 +4418,7 @@ onBeforeUnmount(() => {
                       class="line-endpoint-hit"
                       :cx="line.points[0]!.x"
                       :cy="line.points[0]!.y"
-                      r="6"
+                      :r="vertexHandleHitRadiusWorld"
                       fill="transparent"
                       @pointerdown="handleLineVertexPointerDown(line.id, 0, $event as PointerEvent)"
                     />
@@ -4402,7 +4427,7 @@ onBeforeUnmount(() => {
                       class="line-endpoint-hit"
                       :cx="line.points[line.points.length - 1]!.x"
                       :cy="line.points[line.points.length - 1]!.y"
-                      r="6"
+                      :r="vertexHandleHitRadiusWorld"
                       fill="transparent"
                       @pointerdown="handleLineVertexPointerDown(line.id, line.points.length - 1, $event as PointerEvent)"
                     />
@@ -4448,10 +4473,10 @@ onBeforeUnmount(() => {
                       class="vertex-handle"
                       :cx="p.x"
                       :cy="p.y"
-                      r="0.75"
+                      :r="vertexHandleRadiusWorld"
                       :fill="getLayerColor(lineDraft!.layerId, 0.95)"
                       stroke="rgba(255,255,255,0.9)"
-                      stroke-width="0.6"
+                      :stroke-width="vertexHandleStrokeWidthWorld"
                       pointer-events="none"
                     />
                   </g>
@@ -4465,7 +4490,7 @@ onBeforeUnmount(() => {
                     :r="activeVertexHighlight.r"
                     fill="none"
                     :stroke="getLayerColor(activeVertexHighlight.layerId, 0.95)"
-                    stroke-width="0.45"
+                    :stroke-width="vertexHighlightStrokeWidthWorld"
                     filter="url(#vertex-glow)"
                     pointer-events="none"
                   />
@@ -4479,7 +4504,7 @@ onBeforeUnmount(() => {
                     :r="selectedVertexHighlight.r"
                     fill="none"
                     :stroke="getLayerColor(selectedVertexHighlight.layerId, 0.85)"
-                    stroke-width="0.35"
+                    :stroke-width="vertexHighlightStrokeWidthWorld"
                     filter="url(#vertex-glow)"
                     pointer-events="none"
                   />
@@ -4492,10 +4517,10 @@ onBeforeUnmount(() => {
                       class="vertex-handle"
                       :cx="p.x"
                       :cy="p.y"
-                      r="0.75"
+                      :r="vertexHandleRadiusWorld"
                       :fill="getLayerColor(selectedPolygon.layerId, 0.95)"
                       stroke="rgba(255,255,255,0.9)"
-                      stroke-width="0.6"
+                      :stroke-width="vertexHandleStrokeWidthWorld"
                       pointer-events="visibleFill"
                       @pointerdown="handlePolygonVertexPointerDown(selectedPolygon.id, idx, $event as PointerEvent)"
                     />
@@ -4509,10 +4534,10 @@ onBeforeUnmount(() => {
                       class="vertex-handle"
                       :cx="p.x"
                       :cy="p.y"
-                      r="0.75"
+                      :r="vertexHandleRadiusWorld"
                       :fill="getLayerColor(selectedPolyline.layerId, 0.95)"
                       stroke="rgba(255,255,255,0.9)"
-                      stroke-width="0.6"
+                      :stroke-width="vertexHandleStrokeWidthWorld"
                       pointer-events="visibleFill"
                       @pointerdown="handleLineVertexPointerDown(selectedPolyline.id, idx, $event as PointerEvent)"
                     />
