@@ -370,6 +370,7 @@ import {
   effectComponentDefinition,
   rigidbodyComponentDefinition,
   vehicleComponentDefinition,
+  waterComponentDefinition,
   protagonistComponentDefinition,
   onlineComponentDefinition,
   WARP_GATE_RUNTIME_REGISTRY_KEY,
@@ -839,6 +840,7 @@ previewComponentManager.registerDefinition(effectComponentDefinition);
 previewComponentManager.registerDefinition(behaviorComponentDefinition);
 previewComponentManager.registerDefinition(rigidbodyComponentDefinition);
 previewComponentManager.registerDefinition(vehicleComponentDefinition);
+previewComponentManager.registerDefinition(waterComponentDefinition);
 previewComponentManager.registerDefinition(protagonistComponentDefinition);
 previewComponentManager.registerDefinition(onlineComponentDefinition);
 

@@ -164,6 +164,7 @@ class WaterComponent extends Component<WaterComponentProps> {
   }
 
   onUpdate(deltaTime: number): void {
+    console.log('WaterComponent onUpdate called');
     if (!this.waterInstance) {
       return
     }

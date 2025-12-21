@@ -57,6 +57,7 @@ const localState = reactive({
 const syncing = ref(false)
 const dropActive = ref(false)
 const dropFeedback = ref<string | null>(null)
+const colorMenuOpen = ref(false)
 
 const assignedNormalsAssetId = computed(() => localState.waterNormals)
 const assignedNormalsAsset = computed(() => {
@@ -296,6 +297,13 @@ function handleColorInput(value: string | null) {
     return
   }
   applyWaterPatch({ color: numeric })
+}
+
+function handleColorPickerInput(value: string | null) {
+  if (!value) {
+    return
+  }
+  handleColorInput(value)
 }
 
 function normalizeColorString(value: string, fallback: string): string {
@@ -583,15 +591,44 @@ function clearWaterNormals() {
             />
           </div>
         </div>
-        <v-text-field
-          :model-value="localState.color"
-          label="Water Color"
-          density="compact"
-          variant="underlined"
-          hide-details
-          :disabled="!componentEnabled"
-          @update:modelValue="handleColorInput"
-        />
+        <div class="color-input">
+          <v-text-field
+            :model-value="localState.color"
+            label="Water Color"
+            density="compact"
+            variant="underlined"
+            hide-details
+            :disabled="!componentEnabled"
+            @update:modelValue="handleColorInput"
+          />
+          <v-menu
+            v-model="colorMenuOpen"
+            :close-on-content-click="false"
+            transition="scale-transition"
+            location="bottom start"
+          >
+            <template #activator="{ props: menuProps }">
+              <button
+                type="button"
+                class="color-swatch"
+                v-bind="menuProps"
+                :disabled="!componentEnabled"
+                :style="{ backgroundColor: localState.color }"
+              >
+                <span class="sr-only">Choose water color</span>
+              </button>
+            </template>
+            <div class="color-picker">
+              <v-color-picker
+                :model-value="localState.color"
+                mode="hex"
+                :modes="['hex']"
+                hide-inputs
+                @update:model-value="handleColorPickerInput"
+              />
+            </div>
+          </v-menu>
+        </div>
       </div>
       <div class="water-normals-section">
         <div class="texture-item">
@@ -752,5 +789,34 @@ function clearWaterNormals() {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.color-input {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.color-swatch {
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+.color-picker {
+  padding: 0.65rem;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
 }
 </style>

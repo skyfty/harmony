@@ -76,6 +76,7 @@ import {
 	effectComponentDefinition,
 	rigidbodyComponentDefinition,
 	vehicleComponentDefinition,
+	waterComponentDefinition,
 	protagonistComponentDefinition,
 	GUIDEBOARD_COMPONENT_TYPE,
 	GUIDEBOARD_RUNTIME_REGISTRY_KEY,
@@ -362,6 +363,7 @@ previewComponentManager.registerDefinition(warpGateComponentDefinition)
 previewComponentManager.registerDefinition(effectComponentDefinition)
 previewComponentManager.registerDefinition(rigidbodyComponentDefinition)
 previewComponentManager.registerDefinition(vehicleComponentDefinition)
+previewComponentManager.registerDefinition(waterComponentDefinition)
 previewComponentManager.registerDefinition(behaviorComponentDefinition)
 previewComponentManager.registerDefinition(protagonistComponentDefinition)
 
