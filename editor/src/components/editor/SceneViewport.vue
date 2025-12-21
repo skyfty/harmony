@@ -80,7 +80,7 @@ import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-vie
 import type { BuildTool } from '@/types/build-tool'
 import { createGroundMesh, updateGroundMesh, releaseGroundMeshCache } from '@schema/groundMesh'
 import { createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
-import { updateFloorGroup } from '@schema/floorMesh'
+import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { useTerrainStore } from '@/stores/terrainStore'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
@@ -504,23 +504,12 @@ function computeRoadDynamicMeshSignature(definition: RoadDynamicMesh): string {
   return hashString(serialized)
 }
 
-function ensureGroundMeshInContainer(container: THREE.Group, node: SceneNode): boolean {
-  const definition = node.dynamicMesh?.type === 'Ground' ? (node.dynamicMesh as GroundDynamicMesh) : null
-  if (!definition) {
-    return false
-  }
-
-  const groundMesh = createGroundMesh(definition)
-  groundMesh.removeFromParent()
-  groundMesh.userData.nodeId = node.id
-  groundMesh.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeGroundDynamicMeshSignature(definition)
-
-  const containerData = container.userData ?? (container.userData = {})
-  containerData.groundMesh = groundMesh
-  containerData.dynamicMeshType = 'Ground'
-
-  container.add(groundMesh)
-  return true
+function computeFloorDynamicMeshSignature(definition: FloorDynamicMesh): string {
+  const serialized = stableSerialize([
+    Array.isArray(definition.vertices) ? definition.vertices : [],
+    typeof definition.materialId === 'string' ? definition.materialId : null,
+  ])
+  return hashString(serialized)
 }
 
 
@@ -6939,6 +6928,30 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
         ensureRoadVertexHandlesForSelectedNode()
       }
     }
+  } else if (node.dynamicMesh?.type === 'Floor') {
+    const floorDefinition = node.dynamicMesh as FloorDynamicMesh
+    let floorGroup = userData.floorGroup as THREE.Group | undefined
+    if (!floorGroup) {
+      floorGroup = createFloorGroup(floorDefinition)
+      floorGroup.userData.nodeId = node.id
+      floorGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeFloorDynamicMeshSignature(floorDefinition)
+      object.add(floorGroup)
+      userData.floorGroup = floorGroup
+    } else {
+      const groupData = floorGroup.userData ?? (floorGroup.userData = {})
+      const nextSignature = computeFloorDynamicMeshSignature(floorDefinition)
+      if (groupData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
+        updateFloorGroup(floorGroup, floorDefinition)
+        groupData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
+      }
+    }
+
+    if (activeBuildTool.value === 'floor') {
+      const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+      if (selectedId === node.id) {
+        ensureFloorVertexHandlesForSelectedNode()
+      }
+    }
   } 
 
   if (node.materials && node.materials.length) {
@@ -7541,6 +7554,15 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       roadGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeRoadDynamicMeshSignature(roadDefinition)
       container.add(roadGroup)
       containerData.roadGroup = roadGroup
+    } else if (node.dynamicMesh?.type === 'Floor') {
+      containerData.dynamicMeshType = 'Floor'
+      const floorDefinition = node.dynamicMesh as FloorDynamicMesh
+      const floorGroup = createFloorGroup(floorDefinition)
+      floorGroup.removeFromParent()
+      floorGroup.userData.nodeId = node.id
+      floorGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeFloorDynamicMeshSignature(floorDefinition)
+      container.add(floorGroup)
+      containerData.floorGroup = floorGroup
     } else {
       const runtimeObject = getRuntimeObject(node.id)
       if (runtimeObject) {
