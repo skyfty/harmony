@@ -12,6 +12,7 @@ const DEFAULT_COLOR = 0x4b4f55
 const FLOOR_SURFACE_Y_OFFSET = 0.01
 
 const FLOOR_EPSILON = 1e-6
+const FLOOR_CORNER_EPSILON = 1e-8
 
 function disposeObject3D(object: THREE.Object3D) {
   object.traverse((child: THREE.Object3D) => {
@@ -94,6 +95,89 @@ function sanitizeVertices(vertices: unknown): Array<[number, number]> {
   return out
 }
 
+function clampFloorSmooth(value: unknown): number {
+  const raw = typeof value === 'number' && Number.isFinite(value) ? value : 0
+  if (raw <= 0) {
+    return 0
+  }
+  if (raw >= 1) {
+    return 1
+  }
+  return raw
+}
+
+function createFloorShapeFromPolygon(points: THREE.Vector2[], smooth: number): THREE.Shape {
+  const shape = new THREE.Shape()
+  if (!points.length) {
+    return shape
+  }
+
+  if (smooth <= Number.EPSILON) {
+    shape.moveTo(points[0]!.x, points[0]!.y)
+    for (let i = 1; i < points.length; i += 1) {
+      shape.lineTo(points[i]!.x, points[i]!.y)
+    }
+    shape.closePath()
+    return shape
+  }
+
+  type CornerInfo = {
+    vertex: THREE.Vector2
+    enter: THREE.Vector2
+    exit: THREE.Vector2
+  }
+
+  const cornerInfos: CornerInfo[] = points.map((vertex, index) => {
+    const prev = points[(index - 1 + points.length) % points.length]!
+    const next = points[(index + 1) % points.length]!
+    const directionToPrev = prev.clone().sub(vertex)
+    const directionToNext = next.clone().sub(vertex)
+    const lenPrev = directionToPrev.length()
+    const lenNext = directionToNext.length()
+
+    if (lenPrev <= FLOOR_EPSILON || lenNext <= FLOOR_EPSILON) {
+      return {
+        vertex: vertex.clone(),
+        enter: vertex.clone(),
+        exit: vertex.clone(),
+      }
+    }
+
+    const maxOffset = Math.min(lenPrev, lenNext) * 0.5
+    const radius = smooth * maxOffset
+    if (radius <= FLOOR_EPSILON) {
+      return {
+        vertex: vertex.clone(),
+        enter: vertex.clone(),
+        exit: vertex.clone(),
+      }
+    }
+
+    const enter = vertex.clone()
+      .add(directionToPrev.clone().normalize().multiplyScalar(radius))
+    const exit = vertex.clone()
+      .add(directionToNext.clone().normalize().multiplyScalar(radius))
+
+    return {
+      vertex: vertex.clone(),
+      enter,
+      exit,
+    }
+  })
+
+  shape.moveTo(cornerInfos[0]!.enter.x, cornerInfos[0]!.enter.y)
+  for (let i = 0; i < cornerInfos.length; i += 1) {
+    const current = cornerInfos[i]!
+    const next = cornerInfos[(i + 1) % cornerInfos.length]!
+    shape.quadraticCurveTo(current.vertex.x, current.vertex.y, current.exit.x, current.exit.y)
+    if (current.exit.distanceToSquared(next.enter) > FLOOR_CORNER_EPSILON) {
+      shape.lineTo(next.enter.x, next.enter.y)
+    }
+  }
+  shape.closePath()
+  return shape
+}
+
 function isPolygonAreaPositive(vertices: Array<[number, number]>): boolean {
   // Signed area (shoelace). Positive => CCW.
   let sum = 0
@@ -119,7 +203,7 @@ function buildFloorGeometry(definition: FloorDynamicMesh): THREE.BufferGeometry 
     points.reverse()
   }
 
-  const shape = new THREE.Shape(points)
+  const shape = createFloorShapeFromPolygon(points, clampFloorSmooth(definition.smooth))
   const geometry = new THREE.ShapeGeometry(shape)
   geometry.rotateX(-Math.PI / 2)
   geometry.computeBoundingBox()

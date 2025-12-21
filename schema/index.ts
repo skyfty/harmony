@@ -862,6 +862,8 @@ export interface FloorDynamicMesh {
   vertices: FloorVertex2D[]
   /** Optional material assignment token (editor-defined). */
   materialId?: string | null
+  /** Controls how rounded the floor corners are. */
+  smooth?: number
 }
 
 export type SceneDynamicMesh = GroundDynamicMesh | WallDynamicMesh | RoadDynamicMesh | FloorDynamicMesh

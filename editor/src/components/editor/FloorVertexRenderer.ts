@@ -53,7 +53,10 @@ const FLOOR_VERTEX_HANDLE_COLOR = 0xff4081
 
 function computeFloorVertexHandleSignature(definition: FloorDynamicMesh): string {
   const vertices = Array.isArray(definition.vertices) ? definition.vertices : []
-  const serialized = stableSerialize(vertices)
+  const serialized = stableSerialize([
+    vertices,
+    Number.isFinite(definition.smooth) ? definition.smooth : null,
+  ])
   return hashString(serialized)
 }
 

@@ -7,6 +7,7 @@ import TransformPanel from '@/components/inspector/TransformPanel.vue'
 import AssetModelPanel from '@/components/inspector/AssetModelPanel.vue'
 import WallPanel from '@/components/inspector/WallPanel.vue'
 import RoadPanel from '@/components/inspector/RoadPanel.vue'
+import FloorPanel from '@/components/inspector/FloorPanel.vue'
 import GuideboardPanel from '@/components/inspector/GuideboardPanel.vue'
 import ViewPointPanel from '@/components/inspector/ViewPointPanel.vue'
 import ProtagonistPanel from '@/components/inspector/ProtagonistPanel.vue'
@@ -40,6 +41,7 @@ import {
   EFFECT_COMPONENT_TYPE,
   componentManager,
   type RigidbodyColliderType,
+  FLOOR_COMPONENT_TYPE,
 } from '@schema/components'
 
 type BehaviorDetailsPayload = {
@@ -557,6 +559,7 @@ watch(
                 @close-wheel-details="handleVehiclePanelRequestCloseWheelDetails"
                 @open-suspension-editor="handleOpenVehicleSuspensionEditor"
               />
+              <FloorPanel v-else-if="component.type === FLOOR_COMPONENT_TYPE" />
               <WallPanel v-else-if="component.type === WALL_COMPONENT_TYPE" />
               <BehaviorPanel
                 v-else-if="component.type === BEHAVIOR_COMPONENT_TYPE"

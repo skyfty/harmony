@@ -502,8 +502,8 @@ function buildRoadDynamicMeshFromPlanningPolylines(options: {
       }
       const sorted = [...neighbors].sort((a, b) => a.angle - b.angle)
       for (let i = 0; i < sorted.length; i += 1) {
-        const current = sorted[i]
-        const next = sorted[(i + 1) % sorted.length]
+        const current = sorted[i]!
+        const next = sorted[(i + 1) % sorted.length]!
         if (current.trimIndex == null || next.trimIndex == null) {
           continue
         }

@@ -502,6 +502,7 @@ function computeFloorDynamicMeshSignature(definition: FloorDynamicMesh): string 
   const serialized = stableSerialize([
     Array.isArray(definition.vertices) ? definition.vertices : [],
     typeof definition.materialId === 'string' ? definition.materialId : null,
+    Number.isFinite(definition.smooth) ? definition.smooth : null,
   ])
   return hashString(serialized)
 }

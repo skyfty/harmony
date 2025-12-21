@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { FloorDynamicMesh } from '@harmony/schema'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
+import { FLOOR_DEFAULT_SMOOTH } from '@schema/components'
 
 export type FloorPreviewSession = {
   points: THREE.Vector3[]
@@ -78,13 +79,20 @@ function getPreviewVertices(points: THREE.Vector3[], previewEnd: THREE.Vector3 |
   }
 
   if (points.length === 1 && previewEnd) {
-    return buildTwoPointPreviewPoints(points[0], previewEnd)
+    const first = points[0]
+    if (first) {
+      return buildTwoPointPreviewPoints(first, previewEnd)
+    }
   }
 
-  if (points.length === 2 && previewEnd && previewEnd.equals(points[1])) {
-    const rectangle = buildRectanglePreviewPoints(points[0], points[1])
-    if (rectangle.length) {
-      return rectangle
+  if (points.length === 2 && previewEnd) {
+    const first = points[0]
+    const second = points[1]
+    if (first && second && previewEnd.equals(second)) {
+      const rectangle = buildRectanglePreviewPoints(first, second)
+      if (rectangle.length) {
+        return rectangle
+      }
     }
   }
 
@@ -226,6 +234,7 @@ function buildFloorPreviewDefinition(vertices: THREE.Vector3[], center: THREE.Ve
     type: 'Floor',
     vertices: normalizedVertices,
     materialId: null,
+    smooth: FLOOR_DEFAULT_SMOOTH,
   }
 
   return { center, definition }

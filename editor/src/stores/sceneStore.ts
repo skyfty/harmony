@@ -132,7 +132,7 @@ import {
 } from '@schema/modelObjectCache'
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 import { createRoadGroup } from '@schema/roadMesh'
-import { createFloorGroup } from '@schema/floorMesh'
+import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { computeBlobHash, blobToDataUrl, dataUrlToBlob, inferBlobFilename, extractExtension, ensureExtension } from '@/utils/blob'
 import {
   buildBehaviorPrefabFilename,
@@ -170,6 +170,7 @@ import type {
   ViewPointComponentProps,
   WallComponentProps,
   RoadComponentProps,
+  FloorComponentProps,
   WarpGateComponentProps,
 } from '@schema/components'
 import {
@@ -216,6 +217,11 @@ import {
   cloneVehicleComponentProps,
   componentManager,
   resolveWallComponentPropsFromMesh,
+  FLOOR_COMPONENT_TYPE,
+  clampFloorComponentProps,
+  cloneFloorComponentProps,
+  resolveFloorComponentPropsFromMesh,
+  FLOOR_DEFAULT_SMOOTH,
 } from '@schema/components'
 
 export { ASSETS_ROOT_DIRECTORY_ID, buildPackageDirectoryId, extractProviderIdFromPackageDirectoryId } from './assetCatalog'
@@ -610,6 +616,41 @@ function normalizeNodeComponents(
     normalized[WALL_COMPONENT_TYPE] = {
       id: existing?.id && existing.id.trim().length ? existing.id : generateUuid(),
       type: WALL_COMPONENT_TYPE,
+      enabled: existing?.enabled ?? true,
+      props: nextProps,
+      metadata: clonedMetadata,
+    }
+  }
+
+  if (node.dynamicMesh?.type === 'Floor') {
+    const baseProps = resolveFloorComponentPropsFromMesh(node.dynamicMesh as FloorDynamicMesh)
+    const existing = normalized[FLOOR_COMPONENT_TYPE] as
+      | SceneNodeComponentState<FloorComponentProps>
+      | undefined
+    const existingProps = existing?.props as FloorComponentProps | undefined
+    const nextProps = cloneFloorComponentProps(
+      clampFloorComponentProps({
+        smooth: existingProps?.smooth ?? baseProps.smooth,
+      }),
+    )
+
+    let clonedMetadata: Record<string, unknown> | undefined
+    if (existing?.metadata) {
+      try {
+        clonedMetadata = structuredClone(existing.metadata)
+      } catch (_error) {
+        try {
+          clonedMetadata = JSON.parse(JSON.stringify(existing.metadata)) as Record<string, unknown>
+        } catch (_jsonError) {
+          console.warn('Failed to deeply clone floor component metadata, using shallow copy', _jsonError)
+          clonedMetadata = { ...existing.metadata }
+        }
+      }
+    }
+
+    normalized[FLOOR_COMPONENT_TYPE] = {
+      id: existing?.id && existing.id.trim().length ? existing.id : generateUuid(),
+      type: FLOOR_COMPONENT_TYPE,
       enabled: existing?.enabled ?? true,
       props: nextProps,
       metadata: clonedMetadata,
@@ -1412,6 +1453,7 @@ function buildFloorDynamicMeshFromWorldPoints(
     type: 'Floor',
     vertices,
     materialId: null,
+    smooth: FLOOR_DEFAULT_SMOOTH,
   }
 
   return { center, definition }
@@ -1471,6 +1513,31 @@ function refreshDisplayBoardGeometry(node: SceneNode | null | undefined): void {
     return
   }
   applyDisplayBoardComponentPropsToNode(node, componentState.props as DisplayBoardComponentProps)
+}
+
+function applyFloorComponentPropsToNode(node: SceneNode, props: FloorComponentProps): boolean {
+  if (node.dynamicMesh?.type !== 'Floor') {
+    return false
+  }
+  const normalized = clampFloorComponentProps(props)
+  const currentSmooth = Number.isFinite(node.dynamicMesh.smooth ?? Number.NaN)
+    ? (node.dynamicMesh.smooth as number)
+    : FLOOR_DEFAULT_SMOOTH
+  if (Math.abs(currentSmooth - normalized.smooth) <= 1e-6) {
+    return false
+  }
+
+  const nextMesh: FloorDynamicMesh = {
+    ...node.dynamicMesh,
+    smooth: normalized.smooth,
+  }
+  node.dynamicMesh = nextMesh
+
+  const runtime = getRuntimeObject(node.id)
+  if (runtime) {
+    updateFloorGroup(runtime, nextMesh)
+  }
+  return true
 }
 
 const DISPLAY_BOARD_GEOMETRY_EPSILON = 1e-4
@@ -1810,6 +1877,7 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
         materialId: typeof floorMesh.materialId === 'string' && floorMesh.materialId.trim().length
           ? floorMesh.materialId
           : null,
+        smooth: Number.isFinite(floorMesh.smooth) ? floorMesh.smooth : FLOOR_DEFAULT_SMOOTH,
       }
     }
     default:
@@ -11054,8 +11122,6 @@ export const useSceneStore = defineStore('scene', {
       })
 
       if (node) {
-        this.ensureStaticRigidbodyComponent(node.id)
-
         const bodyAssetId = typeof payload.bodyAssetId === 'string' && payload.bodyAssetId.trim().length
           ? payload.bodyAssetId
           : null
@@ -11098,7 +11164,13 @@ export const useSceneStore = defineStore('scene', {
       })
 
       if (node) {
-        this.ensureStaticRigidbodyComponent(node.id)
+        const component = this.addNodeComponent(node.id, FLOOR_COMPONENT_TYPE) as
+          | SceneNodeComponentState<FloorComponentProps>
+          | null
+        if (component) {
+          const nextProps = resolveFloorComponentPropsFromMesh(build.definition)
+          this.updateNodeComponentProps(node.id, component.id, { smooth: nextProps.smooth })
+        }
       }
 
       return node
@@ -11268,6 +11340,8 @@ export const useSceneStore = defineStore('scene', {
               node,
               componentState.props as unknown as DisplayBoardComponentProps,
             )
+          } else if (componentState.type === FLOOR_COMPONENT_TYPE) {
+            applyFloorComponentPropsToNode(node, componentState.props as FloorComponentProps)
           }
         })
         node.components = nextComponents
@@ -11369,6 +11443,7 @@ export const useSceneStore = defineStore('scene', {
         | WallComponentProps
         | DisplayBoardComponentProps
         | WarpGateComponentProps
+        | FloorComponentProps
         | EffectComponentProps
         | RigidbodyComponentProps
         | VehicleComponentProps
@@ -11446,6 +11521,19 @@ export const useSceneStore = defineStore('scene', {
           return false
         }
         nextProps = cloneWarpGateComponentProps(merged)
+      } else if (type === FLOOR_COMPONENT_TYPE) {
+        const currentProps = component.props as FloorComponentProps
+        const typedPatch = patch as Partial<FloorComponentProps>
+        const hasPatch = Object.prototype.hasOwnProperty.call(typedPatch, 'smooth')
+        const targetSmooth = hasPatch
+          ? (typedPatch.smooth ?? FLOOR_DEFAULT_SMOOTH)
+          : (Number.isFinite(currentProps.smooth) ? currentProps.smooth : FLOOR_DEFAULT_SMOOTH)
+        const merged = clampFloorComponentProps({ smooth: targetSmooth })
+        const currentSmooth = Number.isFinite(currentProps.smooth) ? currentProps.smooth : FLOOR_DEFAULT_SMOOTH
+        if (Math.abs(currentSmooth - merged.smooth) <= 1e-6) {
+          return false
+        }
+        nextProps = cloneFloorComponentProps(merged)
       } else if (type === EFFECT_COMPONENT_TYPE) {
         const currentProps = clampEffectComponentProps(component.props as EffectComponentProps)
         const typedPatch = patch as Partial<EffectComponentProps>
@@ -11540,6 +11628,8 @@ export const useSceneStore = defineStore('scene', {
           applyWallComponentPropsToNode(node, nextProps as WallComponentProps)
         } else if (currentType === DISPLAY_BOARD_COMPONENT_TYPE) {
           applyDisplayBoardComponentPropsToNode(node, nextProps as DisplayBoardComponentProps)
+        } else if (currentType === FLOOR_COMPONENT_TYPE) {
+          applyFloorComponentPropsToNode(node, nextProps as FloorComponentProps)
         }
       })
 
